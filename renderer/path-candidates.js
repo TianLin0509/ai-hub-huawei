@@ -1,0 +1,423 @@
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { fileURLToPath } = require('url');
+
+const ABS_PATH_RE = /(?:[A-Za-z]:[\\/]|\\\\[^\\/:*?"<>|\r\n\s]+\\|~[\\/])(?:[^\\/:*?"<>|\r\n\s]+[\\/])*[^\\/:*?"<>|\r\n\s]+\.[A-Za-z0-9]{1,8}(?![A-Za-z0-9])/g;
+// Codex 偶尔会把 Windows 路径写成 C:\\Users\\...、C:Users\...，或输出
+// 含空格的绝对路径。原 ABS_PATH_RE 对这些都会漏掉。这个补充表达式只负责
+// Windows drive 路径；匹配范围仍以“文件扩展名”收口，避免把整段普通句子吞掉。
+const WINDOWS_FILE_PATH_RE = /(?<![A-Za-z0-9])(?:[\\/]?[A-Za-z]:(?:[\\/]+|(?=[^\\/\s'"`<>|]+[\\/])))(?:[^\\/:*?"<>|'`\r\n]+[\\/]+)*[^\\/:*?"<>|'`\r\n]+\.[A-Za-z0-9]{1,8}(?![A-Za-z0-9])/g;
+const WINDOWS_PATH_TOKEN_RE = /(?<![A-Za-z0-9])(?:[\\/]?[A-Za-z]:(?:[\\/]+|(?=[^\\/\s'"`<>|]+[\\/])))(?:[^\\/:*?"<>|'`\s()[\],;!]+[\\/]+)*[^\\/:*?"<>|'`\s()[\],;!]+[\\/]?/g;
+// Full-width colon is a frequent Chinese prose separator ("路径：docs/a.md"),
+// not part of the relative path. Excluding it prevents the regex from greedily
+// starting at the label and resolving a nonexistent "路径：docs/..." token.
+const REL_PATH_RE = /(?<![^:*?"<>|\r\n\s：])(?:\.{1,2}[\\/])?(?:[^\\/:*?"<>|\r\n\s：]+[\\/])+[^\\/:*?"<>|\r\n\s：]+\.[A-Za-z0-9]{1,8}(?![A-Za-z0-9])/g;
+const ABS_DIR_RE = /(?:[A-Za-z]:[\\/]|\\\\[^\\/:*?"<>|\r\n\s]+\\|~[\\/])(?:[^\\/:*?"<>|\r\n]+[\\/])+[^\\/:*?"<>|\r\n]+[\\/]?/g;
+const REL_DIR_RE = /(?<![^:*?"<>|\r\n：])(?:\.{1,2}[\\/])?(?:[^\\/:*?"<>|\r\n：]+[\\/]){1,}[^\\/:*?"<>|\r\n：]+[\\/]?/g;
+const REL_BARE_RE = /(?<![^\\/:*?"<>|\r\n\s])[^\\/:*?"<>|\r\n\s]+\.[A-Za-z0-9]{1,8}(?![\w.-])|(?<![^\\/:*?"<>|\r\n\s])[^\\/:*?"<>|\r\n\s.]{2,}(?![\w.-])/g;
+const URL_RE = /\bhttps?:\/\/[\w\-.~]+(?::\d+)?(?:[\/?#][^\s<>"'`\\]*)?/g;
+const FILE_URL_RE = /\bfile:\/\/[^\s<>"'`]+/gi;
+const PREVIEW_PATH_RE = /\.(?:html?|md|markdown|png|jpe?g|gif|webp|bmp|svg|pdf|csv|tsv|json|jsonl|js|ts|jsx|tsx|mjs|cjs|py|go|rs|java|c|cpp|h|hpp|cs|txt|log|ya?ml|toml|ini|cfg|conf|sh|bat|ps1|xml|sql|r|rb|php|swift|kt|lua|zig|asm|css|scss|less)$/i;
+const HUB_IMG_PATH_RE = /(?:[A-Za-z]:)?[\\/][^\s]*[\\/]\.ai-hub-community[\\/]images[\\/][^\s]+?\.(?:png|jpe?g|gif|webp|bmp)/gi;
+// 文件名里允许空格和中文，Windows 路径的匹配是贪心的：「…设计-claude1.html（v1.1，开着…」会把「v1.1」里的 .1
+// 当成扩展名，链接吞掉后面的文字、点开打不开（2026-10-16 用户截图）。匹配串中间出现常见扩展名、后面还跟着别的字时，
+// 收口规则：整串在磁盘上存在就保留；否则从长到短找第一个存在的「到某个常见扩展名为止」；都不存在时，
+// 在第一个后面紧跟中文、全角标点或空白的常见扩展名处收口。网络路径不在这里同步查磁盘（会卡界面）。
+const KNOWN_EXT_SOURCE = PREVIEW_PATH_RE.source.slice(PREVIEW_PATH_RE.source.indexOf('(?:') + 3, PREVIEW_PATH_RE.source.lastIndexOf(')'))
+  + '|zip|7z|rar|gz|tar|docx?|pptx?|xlsx?|exe|msi|mp4|mov|mp3|wav|ipynb|mat|npy|npz|h5|pkl|pt|onnx|db|sqlite|epub';
+const KNOWN_EXT_END_RE = new RegExp(`\\.(?:${KNOWN_EXT_SOURCE})(?![A-Za-z0-9_-])`, 'gi');
+
+const REL_PATH_CACHE = new Map();
+const REL_PATH_CACHE_MAX = 256;
+const REL_PATH_CACHE_TTL_MS = 5000;
+
+function _cleanPathCandidate(raw) {
+  let s = String(raw || '').replace(/[\r\n]+/g, '').trim();
+  s = s.replace(/^[`'"\u201c\u201d\u2018\u2019(<\[]+/, '');
+  s = s.replace(/[`'"\u201c\u201d\u2018\u2019)>.,;:!\]]+$/, '');
+  return s;
+}
+
+function _expandHomePath(filePath) {
+  if (/^~[\\/]/.test(filePath)) {
+    try { return path.join(os.homedir(), filePath.slice(2)); } catch {}
+  }
+  return filePath;
+}
+
+function _decodePathCandidate(value) {
+  const raw = String(value || '');
+  if (!/%[0-9A-Fa-f]{2}/.test(raw)) return raw;
+  try { return decodeURIComponent(raw); } catch { return raw; }
+}
+
+// 修正 AI 常见的“看起来像 Windows 绝对路径、但分隔符写错”情形。
+// 只在 drive/UNC 形态上动刀；普通相对路径保持原样，避免改变用户真实语义。
+function _repairLocalPathCandidate(raw) {
+  let s = _cleanPathCandidate(_decodePathCandidate(raw));
+  if (!s) return s;
+
+  // Markdown/file URL 有时会留下 /C:/... 形态。
+  s = s.replace(/^[\\/](?=[A-Za-z]:[\\/])/, '');
+
+  if (/^[A-Za-z]:/.test(s)) {
+    // C:Users\me\a.md 在 Hub 的使用语境里几乎总是漏了根分隔符，而不是
+    // 有意使用 Windows 的 drive-relative 语义。仅当后文仍有分隔符时修正。
+    if (/^[A-Za-z]:[^\\/]/.test(s) && /[\\/]/.test(s.slice(2))) {
+      s = s.slice(0, 2) + '\\' + s.slice(2);
+    }
+    s = s.slice(0, 2) + s.slice(2).replace(/[\\/]+/g, '\\');
+    try { return path.win32.normalize(s); } catch { return s; }
+  }
+
+  if (/^[\\/]{2,}/.test(s)) {
+    const rest = s.replace(/^[\\/]+/, '').replace(/[\\/]+/g, '\\');
+    try { return path.win32.normalize('\\\\' + rest); } catch { return '\\\\' + rest; }
+  }
+  return s;
+}
+
+function _isAbsLocalPath(filePath) {
+  return /^[A-Za-z]:[\\/]/.test(filePath)
+    || /^\\\\[^\\/:*?"<>|\r\n\s]+\\/.test(filePath)
+    || /^~[\\/]/.test(filePath);
+}
+
+// Network (UNC) paths are never stat'ed synchronously here: this module runs on
+// the renderer's main thread while cards render, and an unreachable share made
+// fs.statSync wait for the SMB timeout. 2026-10-09 live Hub: one card mentioning
+// \\100.100.97.83\cellDT\... froze the whole window for 24 s. They are resolved
+// on libuv's thread pool instead, cached, and listeners re-run link wrapping
+// when a path turns out to exist. One probe per share at a time, and a share
+// that timed out is skipped for a minute instead of being re-probed per path.
+const NETWORK_TTL_MS = 60000;
+const NETWORK_CACHE_MAX = 500;
+const networkStats = new Map();   // lower-cased path -> { st, at }
+const networkShares = new Map();  // \\host\share -> { down, at }
+const networkPending = new Map(); // lower-cased path -> Promise
+const networkShareGate = new Map(); // \\host\share -> Promise (first probe)
+const networkListeners = new Set();
+
+function _isNetworkPath(filePath) {
+  const s = String(filePath || '');
+  return /^\\\\[^\\/]/.test(s) || /^\/\/[^/]/.test(s);
+}
+
+function _networkShareKey(filePath) {
+  const m = String(filePath || '').replace(/\//g, '\\').match(/^\\\\([^\\]+)(?:\\([^\\]*))?/);
+  return m ? ('\\\\' + m[1] + '\\' + (m[2] || '')).toLowerCase() : '';
+}
+
+function _rememberNetworkStat(key, st) {
+  networkStats.delete(key);
+  networkStats.set(key, { st, at: Date.now() });
+  while (networkStats.size > NETWORK_CACHE_MAX) networkStats.delete(networkStats.keys().next().value);
+}
+
+function _statNetworkAsync(filePath) {
+  const key = String(filePath).toLowerCase();
+  const cached = networkStats.get(key);
+  if (cached && Date.now() - cached.at < NETWORK_TTL_MS) return Promise.resolve(cached.st);
+  if (networkPending.has(key)) return networkPending.get(key);
+  const share = _networkShareKey(filePath);
+  const state = networkShares.get(share);
+  if (state && state.down && Date.now() - state.at < NETWORK_TTL_MS) return Promise.resolve(null);
+  const gate = networkShareGate.get(share);
+  const run = () => fs.promises.stat(filePath).then(
+    st => { networkShares.set(share, { down: false, at: Date.now() }); return st; },
+    error => {
+      // A missing entry on a reachable share is not an outage.
+      if (!['ENOENT', 'ENOTDIR'].includes(error && error.code)) networkShares.set(share, { down: true, at: Date.now() });
+      else networkShares.set(share, { down: false, at: Date.now() });
+      return null;
+    });
+  // While the share's first probe is in flight, wait for its verdict rather
+  // than queueing more SMB timeouts on the thread pool.
+  const promise = (gate ? gate.then(() => {
+    const verdict = networkShares.get(share);
+    return verdict && verdict.down ? null : run();
+  }) : run()).then(st => {
+    networkPending.delete(key);
+    _rememberNetworkStat(key, st);
+    if (st) for (const listener of networkListeners) { try { listener(filePath); } catch {} }
+    return st;
+  });
+  if (!gate) {
+    networkShareGate.set(share, promise);
+    promise.finally(() => { if (networkShareGate.get(share) === promise) networkShareGate.delete(share); });
+  }
+  networkPending.set(key, promise);
+  return promise;
+}
+
+// Called when a network path that was unknown at render time turns out to exist.
+function onNetworkPathResolved(listener) {
+  networkListeners.add(listener);
+  return () => networkListeners.delete(listener);
+}
+
+// 调用方可传 opts.statBudget = { remaining: N }：这一次解析最多做 N 次同步本地磁盘查询，用完后其余候选
+// 直接跳过（当作查不到，且不写缓存）。终端链接识别每次悬停都会调用，在杀软较重的电脑上每次查询可能很慢
+// （2026-10-19）；卡片等其他调用方不传，行为不变。
+function _spendStat(opts) {
+  const budget = opts && opts.statBudget;
+  if (!budget) return true;
+  if (!(budget.remaining > 0)) { budget.skipped = (budget.skipped || 0) + 1; return false; }
+  budget.remaining -= 1;
+  return true;
+}
+
+function _statPathQuiet(filePath, opts = {}) {
+  if (_isNetworkPath(filePath)) {
+    const cached = networkStats.get(String(filePath).toLowerCase());
+    if (cached && Date.now() - cached.at < NETWORK_TTL_MS) return cached.st;
+    _statNetworkAsync(filePath);
+    if (typeof opts.onNetworkPending === 'function') opts.onNetworkPending(filePath);
+    return null;
+  }
+  if (!_spendStat(opts)) return null;
+  try { return fs.statSync(filePath); } catch { return null; }
+}
+
+function _existsQuiet(filePath, opts = {}) {
+  if (_isNetworkPath(filePath)) return !!_statPathQuiet(filePath, opts);
+  if (!_spendStat(opts)) return false;
+  return fs.existsSync(filePath);
+}
+
+async function _isDirectoryPathAsync(filePath) {
+  if (_isNetworkPath(filePath)) {
+    const st = await _statNetworkAsync(filePath);
+    return !!(st && st.isDirectory());
+  }
+  return _isDirectoryPath(filePath);
+}
+
+function _normalizeLocalPathForOpen(openPath, cwd, requireExistsForRel = true) {
+  let p = _repairLocalPathCandidate(openPath);
+  if (!p) return null;
+  p = _expandHomePath(p);
+  if (_isAbsLocalPath(p)) return p;
+  if (!cwd) return null;
+  let abs = null;
+  try { abs = path.resolve(cwd, p); } catch { return null; }
+  if (requireExistsForRel && !_existsQuiet(abs)) return null;
+  return abs;
+}
+
+function classifyLocalPathHref(href, cwd = null) {
+  let displayPath = _cleanPathCandidate(_decodePathCandidate(href));
+  if (!displayPath) return null;
+  if (/^(?:https?:|mailto:|data:|javascript:|#)/i.test(displayPath)) return null;
+
+  if (/^file:/i.test(displayPath)) {
+    try {
+      const openPath = _repairLocalPathCandidate(fileURLToPath(displayPath));
+      return openPath ? { displayPath, openPath } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  const repaired = _repairLocalPathCandidate(displayPath);
+  if (_isAbsLocalPath(repaired)) {
+    return { displayPath, openPath: repaired };
+  }
+
+  // Markdown 的相对 href 没有 URL scheme。仅把明确的本地路径形态升级，
+  // 普通网页相对链接/锚点继续保留 marked 的默认行为。
+  const looksRelative = /^\.{1,2}[\\/]/.test(displayPath)
+    || /[\\/]/.test(displayPath)
+    || PREVIEW_PATH_RE.test(displayPath);
+  if (!looksRelative || /^[\\/]/.test(displayPath)) return null;
+  const openPath = cwd
+    ? _normalizeLocalPathForOpen(displayPath, cwd, false)
+    : displayPath;
+  return openPath ? { displayPath, openPath } : null;
+}
+
+function _isDirectoryPath(filePath, opts = {}) {
+  const st = _statPathQuiet(filePath, opts);
+  return !!(st && st.isDirectory());
+}
+
+function _resolveRelPathIfExists(cwd, relPath, opts = {}) {
+  // A share path keeps its own cache: a not-yet-known answer must not be
+  // remembered here as missing, or the re-wrap after it resolves finds nothing.
+  let resolved = null;
+  try { resolved = path.resolve(cwd, relPath); } catch { return null; }
+  if (_isNetworkPath(resolved)) return _existsQuiet(resolved, opts) ? resolved : null;
+  const key = `${cwd}|${relPath}`;
+  const now = Date.now();
+  const hit = REL_PATH_CACHE.get(key);
+  if (hit && now - hit.ts < REL_PATH_CACHE_TTL_MS) {
+    REL_PATH_CACHE.delete(key);
+    REL_PATH_CACHE.set(key, hit);
+    return hit.absPath;
+  }
+  if (!_spendStat(opts)) return null;
+  let absPath = null;
+  try {
+    const candidate = path.resolve(cwd, relPath);
+    if (fs.existsSync(candidate)) absPath = candidate;
+  } catch {}
+  REL_PATH_CACHE.set(key, { absPath, ts: now });
+  if (REL_PATH_CACHE.size > REL_PATH_CACHE_MAX) {
+    const oldestKey = REL_PATH_CACHE.keys().next().value;
+    REL_PATH_CACHE.delete(oldestKey);
+  }
+  return absPath;
+}
+
+// 一段 Windows 路径匹配实际该收到哪里（见 KNOWN_EXT_END_RE 的说明）。返回保留的字符数。
+function _windowsPathLength(match, opts = {}) {
+  const cuts = [];
+  KNOWN_EXT_END_RE.lastIndex = 0;
+  let k;
+  while ((k = KNOWN_EXT_END_RE.exec(match))) {
+    const end = k.index + k[0].length;
+    if (end < match.length) cuts.push(end);
+  }
+  if (!cuts.length) return match.length;
+  const local = value => {
+    const p = _repairLocalPathCandidate(_cleanPathCandidate(value));
+    return p && !_isNetworkPath(p) ? p : null;
+  };
+  const full = local(match);
+  if (!full) return match.length;
+  if (_existsQuiet(full, opts)) return match.length;
+  for (let i = cuts.length - 1; i >= 0; i -= 1) {
+    const p = local(match.slice(0, cuts[i]));
+    if (p && _existsQuiet(p, opts)) return cuts[i];
+  }
+  const prose = cuts.find(end => /^[\s　-〿＀-￯一-鿿]/.test(match.slice(end)));
+  return prose || match.length;
+}
+
+function _addCandidate(candidates, start, end, openPath, isUrl = false) {
+  if (!openPath || end < start) return;
+  const overlapsExisting = candidates.some(c => !(end < c.start || start > c.end));
+  if (overlapsExisting) return;
+  candidates.push({ start, end, openPath, isUrl });
+}
+
+function collectPathCandidates(text, cwd = null, opts = {}) {
+  const candidates = [];
+  text = String(text || '');
+  let m;
+  FILE_URL_RE.lastIndex = 0;
+  while ((m = FILE_URL_RE.exec(text))) {
+    const trimmed = m[0].replace(/[.,;:!?)\]]+$/, '');
+    try {
+      const openPath = _repairLocalPathCandidate(fileURLToPath(trimmed));
+      if (openPath) _addCandidate(candidates, m.index, m.index + trimmed.length - 1, openPath);
+    } catch {
+      // A malformed file URL is not upgraded into a clickable local path.
+    }
+  }
+  URL_RE.lastIndex = 0;
+  while ((m = URL_RE.exec(text))) {
+    const trimmed = m[0].replace(/[.,;:!?)\]]+$/, '');
+    if (trimmed.length >= 'http://x'.length) {
+      _addCandidate(candidates, m.index, m.index + trimmed.length - 1, trimmed, true);
+    }
+  }
+
+  WINDOWS_FILE_PATH_RE.lastIndex = 0;
+  while ((m = WINDOWS_FILE_PATH_RE.exec(text))) {
+    const length = _windowsPathLength(m[0], opts);
+    const raw = _cleanPathCandidate(m[0].slice(0, length));
+    const repaired = _repairLocalPathCandidate(raw);
+    if (repaired) {
+      _addCandidate(candidates, m.index, m.index + length - 1, repaired);
+    }
+  }
+
+  ABS_PATH_RE.lastIndex = 0;
+  while ((m = ABS_PATH_RE.exec(text))) {
+    _addCandidate(candidates, m.index, m.index + m[0].length - 1, _repairLocalPathCandidate(m[0]));
+  }
+
+  if (opts.includeDirectories !== false) {
+    WINDOWS_PATH_TOKEN_RE.lastIndex = 0;
+    while ((m = WINDOWS_PATH_TOKEN_RE.exec(text))) {
+      const raw = _cleanPathCandidate(m[0]);
+      const fullPath = _repairLocalPathCandidate(raw);
+      if (fullPath && _isDirectoryPath(fullPath, opts)) {
+        _addCandidate(candidates, m.index, m.index + m[0].length - 1, fullPath);
+      }
+    }
+
+    ABS_DIR_RE.lastIndex = 0;
+    while ((m = ABS_DIR_RE.exec(text))) {
+      const raw = _cleanPathCandidate(m[0]);
+      const fullPath = _normalizeLocalPathForOpen(raw, cwd, false);
+      if (fullPath && _isDirectoryPath(fullPath, opts)) {
+        _addCandidate(candidates, m.index, m.index + m[0].length - 1, fullPath);
+      }
+    }
+  }
+
+  if (cwd) {
+    REL_PATH_RE.lastIndex = 0;
+    while ((m = REL_PATH_RE.exec(text))) {
+      const raw = _cleanPathCandidate(m[0]);
+      const absPath = _resolveRelPathIfExists(cwd, raw, opts);
+      if (absPath) _addCandidate(candidates, m.index, m.index + m[0].length - 1, absPath);
+    }
+
+    if (opts.includeDirectories !== false) {
+      REL_DIR_RE.lastIndex = 0;
+      while ((m = REL_DIR_RE.exec(text))) {
+        const raw = _cleanPathCandidate(m[0]);
+        if (PREVIEW_PATH_RE.test(raw)) continue;
+        const absPath = _resolveRelPathIfExists(cwd, raw, opts);
+        if (absPath && _isDirectoryPath(absPath, opts)) {
+          _addCandidate(candidates, m.index, m.index + m[0].length - 1, absPath);
+        }
+      }
+    }
+
+    REL_BARE_RE.lastIndex = 0;
+    while ((m = REL_BARE_RE.exec(text))) {
+      const raw = _cleanPathCandidate(m[0]);
+      const absPath = _resolveRelPathIfExists(cwd, raw, opts);
+      if (!absPath) continue;
+      const st = _statPathQuiet(absPath, opts);
+      if (!st) continue;
+      if (st.isDirectory() || PREVIEW_PATH_RE.test(absPath)) {
+        _addCandidate(candidates, m.index, m.index + m[0].length - 1, absPath);
+      }
+    }
+  }
+
+  return candidates.sort((a, b) => a.start - b.start);
+}
+
+module.exports = {
+  ABS_PATH_RE,
+  WINDOWS_FILE_PATH_RE,
+  WINDOWS_PATH_TOKEN_RE,
+  REL_PATH_RE,
+  ABS_DIR_RE,
+  REL_DIR_RE,
+  REL_BARE_RE,
+  URL_RE,
+  FILE_URL_RE,
+  PREVIEW_PATH_RE,
+  HUB_IMG_PATH_RE,
+  collectPathCandidates,
+  _cleanPathCandidate,
+  _repairLocalPathCandidate,
+  _expandHomePath,
+  _isAbsLocalPath,
+  _statPathQuiet,
+  _normalizeLocalPathForOpen,
+  classifyLocalPathHref,
+  _isDirectoryPath,
+  _isDirectoryPathAsync,
+  _isNetworkPath,
+  _resolveRelPathIfExists,
+  onNetworkPathResolved,
+};

@@ -1,0 +1,139 @@
+/* =========================================================================
+   左侧栏分组入口（2026-10-24）
+   =========================================================================
+   「规则 / 资源 / 账号 / 回顾」和「投研 / 学习 / 写作 / 无线」各自收成一个入口，
+   在 rail 上只占一行；鼠标悬停（或键盘进入）时从 rail 右缘水平滑出一条 dock，
+   四个成员各占一格，点谁进谁。
+
+   两条硬约束，改之前先看清楚：
+   1. 入口本身仍是 .btn-shell-nav，外观、选中态、悬停全部沿用普通入口那套样式，
+      这里只补「组内有当前页」的提示点，不另起一套皮肤。
+   2. 展开条用 position:fixed。它写在 .rail-navigation 里，而那是 overflow-y:auto
+      的滚动容器、#scene-rail 自己也常常 overflow:hidden；只有 fixed 不受这两层
+      裁剪。所以 left/top 由 renderer/rail-groups.js 按入口的 rect 现算，别在这里
+      写死坐标。
+   ========================================================================= */
+
+.rail-group {
+  position: relative;
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+}
+
+/* 组内有当前页时，入口给出和其他导航项一致的底色，外加图标右下角一个小点：
+   底色说明「这条有东西»,小点说明「不是第一个」。 */
+:root body #scene-rail .rail-group-trigger.rail-group-current {
+  background: var(--brand-tint) !important;
+  color: var(--brand-text) !important;
+}
+:root body #scene-rail .rail-group-trigger .btn-icon { position: relative; }
+:root body #scene-rail .rail-group-trigger.rail-group-current .btn-icon::after {
+  content: '';
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 6px;
+  height: 6px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  background: var(--brand);
+  box-shadow: 0 0 0 1.5px var(--surface-sunken);
+  pointer-events: none;
+}
+:root body #scene-rail .rail-group-trigger[aria-expanded='true'] {
+  background: var(--surface-hover) !important;
+  color: var(--fg-strong) !important;
+}
+/* 图标换人时轻轻落一下。换图标是重新写 innerHTML，新节点自然会跑这条动画；
+   没换人就一次都不会重播。 */
+:root body #scene-rail .rail-group-trigger.rail-group-current .btn-icon > img,
+:root body #scene-rail .rail-group-trigger.rail-group-current .btn-icon > svg {
+  animation: rail-group-icon-in 160ms ease-out;
+}
+
+/* 展开条：横向 dock。4 格 × 54px + 间距 + 内边距 ≈ 234px。 */
+.rail-group-menu {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 1210;
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 6px;
+  box-sizing: border-box;
+  background: var(--surface-overlay);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  animation: rail-group-dock-in 120ms ease-out;
+}
+.rail-group-menu[hidden] { display: none; }
+/* 展开条与 rail 之间留 4px；这段空白也算展开条的一部分，鼠标扫过去不会把它关掉。 */
+.rail-group-menu::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: -6px;
+  bottom: -6px;
+  width: 8px;
+}
+.rail-group-menu > .btn-shell-nav[hidden] { display: none; }
+
+/* 成员格：和 rail 上的入口同构（图标在上、短标签在下），只是变窄、横排。 */
+:root body #scene-rail .rail-group-menu > .btn-shell-nav {
+  width: 54px;
+  min-width: 54px;
+  height: 58px;
+  min-height: 58px;
+  padding: 6px 2px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border-radius: 8px;
+  text-align: center;
+}
+:root body #scene-rail .rail-group-menu > .btn-shell-nav .btn-label {
+  display: block !important;
+  visibility: visible;
+  opacity: 1;
+  flex: none;
+  max-width: 100%;
+  overflow: visible;
+  font-size: 11px;
+  line-height: 15px;
+  white-space: nowrap;
+}
+:root body #scene-rail .rail-group-menu > .btn-shell-nav .btn-icon { width: 26px; height: 26px; }
+:root body #scene-rail .rail-group-menu > .btn-shell-nav .rail-artwork { border-radius: 7px; }
+:root body #scene-rail .rail-group-menu > #btn-rail-accounts > #accounts-attention {
+  top: 4px;
+  right: 4px;
+}
+
+@keyframes rail-group-dock-in {
+  from { opacity: 0; transform: translateX(-6px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes rail-group-icon-in {
+  from { opacity: 0.35; transform: scale(0.86); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rail-group-menu { animation: none; }
+  :root body #scene-rail .rail-group-trigger.rail-group-current .btn-icon > img,
+  :root body #scene-rail .rail-group-trigger.rail-group-current .btn-icon > svg { animation: none; }
+}
+
+/* 矮窗口里 rail 会压缩入口高度，dock 的成员格同步收一点，保持同一行文字。 */
+@media (max-height: 620px) {
+  :root body #scene-rail .rail-group-menu > .btn-shell-nav { height: 50px; min-height: 50px; }
+  :root body #scene-rail .rail-group-menu > .btn-shell-nav .btn-icon { width: 22px; height: 22px; }
+}

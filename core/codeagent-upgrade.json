@@ -1,0 +1,5 @@
+{
+  "$comment": "2026-10-27 公司回执 Q-1027-12：CodeAgent CLI 官方下载页（CSOP 软件中心），版本过旧提醒里的「打开下载页」用；2026-10-28 用户提供的最新版云盘直链（黄区专用），提醒里的「下载最新版（黄区专用）」用",
+  "downloadPage": "https://his.huawei.com/csop/index.html#/ToolInfo?samType=his&toolId=2033742101810335745",
+  "yellowZoneDownload": "https://clouddrive.huawei.com/p/03750389f12665c844dc9e710793bdc7"
+}

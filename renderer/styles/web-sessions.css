@@ -1,0 +1,73 @@
+/* AI 网页会话（2026-10-25）：侧栏「网页」分组、主区网页面板、启动中心「AI 网页」页。 */
+
+/* 侧栏：「网页」点亮时只显示网页会话列表 */
+.web-session-list { display: none; flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 6px 8px 10px; }
+body.sidebar-web-mode #session-list { display: none !important; }
+body.sidebar-web-mode .web-session-list { display: block; }
+.ws-new { width: 100%; margin: 2px 0 8px; padding: 7px 10px; border: 1px dashed var(--border-mid); border-radius: 8px; background: transparent; color: var(--fg-muted); font: 13px var(--font-sans); cursor: pointer; text-align: left; }
+.ws-new:hover { border-color: var(--brand); color: var(--brand-text); background: var(--brand-tint); }
+.ws-empty { margin: 8px 4px; color: var(--fg-muted); font-size: 12px; line-height: 1.7; }
+.ws-item { position: relative; display: flex; align-items: center; gap: 9px; padding: 7px 8px; border-radius: 8px; cursor: pointer; color: var(--fg-default); }
+.ws-item:hover { background: var(--surface-overlay, rgba(127,127,127,.08)); }
+.ws-item.active { background: var(--brand-tint); }
+.ws-item.dormant .ws-logo, .ws-item.dormant .ws-title { opacity: .55; }
+.ws-item:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
+.ws-logo { flex: none; width: 22px; height: 22px; margin: 0; border-radius: 6px; background-size: 18px 18px; background-position: center; background-repeat: no-repeat; }
+.ws-logo-text { display: inline-flex; align-items: center; justify-content: center; background: var(--brand-tint); color: var(--brand-text); font: 600 12px var(--font-sans); }
+.ws-text { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; line-height: 1.35; }
+.ws-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.ws-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--fg-muted); }
+.ws-rename { width: 100%; box-sizing: border-box; padding: 2px 6px; border: 1px solid var(--brand); border-radius: 5px; background: var(--surface-card); color: var(--fg-default); font: 13px var(--font-sans); }
+.ws-mark { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+.ws-mark.unread { background: #3478f6; }
+.ws-mark.running { background: #3478f6; animation: ws-pulse 1.2s ease-in-out infinite; }
+.ws-mark.loading { background: #9aa6b8; animation: ws-pulse 1.2s ease-in-out infinite; }
+.ws-mark.error { background: #d64545; }
+@keyframes ws-pulse { 50% { opacity: .3; } }
+.ws-row-actions { display: none; gap: 2px; }
+.ws-item:hover .ws-row-actions { display: flex; }
+.ws-item:hover .ws-mark:not(.unread):not(.running) { display: none; }
+.ws-row-actions button { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--fg-muted); cursor: pointer; font-size: 12px; }
+.ws-row-actions button:hover { background: var(--surface-card); color: var(--fg-default); }
+.ws-row-actions svg { width: 14px; height: 14px; }
+.ws-tab-count { display: inline-block; min-width: 15px; margin-left: 4px; padding: 0 4px; border-radius: 8px; background: #3478f6; color: #fff; font-size: 10px; line-height: 15px; text-align: center; font-weight: 600; }
+.ws-tab-run { display: inline-block; width: 6px; height: 6px; margin-left: 4px; border-radius: 50%; background: #3478f6; vertical-align: middle; animation: ws-pulse 1.2s ease-in-out infinite; }
+
+/* 主区面板：盖在终端区上；网页本体是主进程放在 .ws-slot 位置的原生视图 */
+.web-session-panel { position: fixed; z-index: 60; display: flex; flex-direction: column; background: var(--surface-canvas, #fff); color: var(--fg-default); -webkit-app-region: no-drag; }
+.web-session-panel[hidden] { display: none; }
+.ws-bar { flex: none; display: flex; align-items: center; gap: 10px; height: 38px; padding: 0 10px 0 12px; border-bottom: 1px solid var(--border-subtle); }
+.ws-who { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.ws-who strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.ws-who span:not(.ws-logo) { flex: none; color: var(--fg-muted); font-size: 12px; }
+.ws-tools { flex: none; display: flex; gap: 2px; }
+.ws-tools button { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--fg-muted); cursor: pointer; }
+.ws-tools button:hover { background: var(--surface-overlay, rgba(127,127,127,.1)); color: var(--fg-default); }
+.ws-tools svg { width: 16px; height: 16px; }
+.ws-status { flex: none; padding: 4px 12px; font-size: 12px; color: var(--fg-muted); border-bottom: 1px solid var(--border-subtle); }
+.ws-status.bad { color: #d64545; }
+.ws-slot { flex: 1 1 auto; min-height: 0; background: var(--surface-canvas, #fff); }
+
+/* 启动中心「AI 网页」 */
+#launch-center-web-host { display: flex; flex-direction: column; gap: 14px; }
+.ws-identity { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; color: var(--fg-muted); }
+.ws-identity button { padding: 4px 14px; border: 1px solid var(--border-mid); border-radius: 6px; background: var(--surface-card); color: var(--fg-default); font: 13px var(--font-sans); cursor: pointer; }
+.ws-identity button[aria-checked='true'] { border-color: var(--brand); background: var(--brand-tint); color: var(--brand-text); font-weight: 600; }
+.ws-identity small { flex-basis: 100%; font-size: 12px; }
+.ws-site-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.ws-site { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--surface-card); color: var(--fg-default); text-align: left; cursor: pointer; font: 13px var(--font-sans); }
+.ws-site:hover { border-color: var(--brand); }
+.ws-site:disabled { opacity: .6; cursor: progress; }
+.ws-site .ws-logo { width: 28px; height: 28px; background-size: 22px 22px; }
+.ws-site > span:not(.ws-logo) { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.ws-site small { color: var(--fg-muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws-site em { flex: none; font-style: normal; font-size: 11px; color: var(--fg-muted); }
+.ws-launch-note { margin: 0; font-size: 12px; line-height: 1.7; color: var(--fg-muted); }
+
+/* 网页面板盖住终端区时，终端区自己的浮动按钮（如「通知」）不再透出来 */
+body.web-session-open #terminal-panel { visibility: hidden; }
+/* 范围按钮多了「网页」一项：收紧间距，窄侧栏里五个按钮放得下 */
+.session-range-tabs:has(> [data-session-days='web']) { gap: 2px; padding-left: 8px; padding-right: 8px; }
+.session-range-tabs:has(> [data-session-days='web']) > button { padding: 6px 7px; }
+
+.ws-owner-note { margin: 2px 2px 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface-overlay, rgba(127,127,127,.08)); color: var(--fg-muted); font-size: 12px; line-height: 1.6; }

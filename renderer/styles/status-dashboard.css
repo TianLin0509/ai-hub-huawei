@@ -1,0 +1,149 @@
+/* One footer row: equipment, remaining quota + reset, and network routes.
+   All readings and actions remain available; narrow windows open details. */
+:root { --hub-footer-height:34px; }
+:root body #hub-system-footer {
+  gap:14px; padding:0 14px; color:var(--fg-default);
+  background:var(--surface-raised); border-top:1px solid var(--border-subtle);
+  font-variant-numeric:tabular-nums; overflow:hidden; scrollbar-width:none;
+}
+:root body #hub-system-footer #sidebar-strip .strip-resources {
+  gap:6px; align-items:center;
+}
+:root body #hub-system-footer #sidebar-strip .strip-resource {
+  display:inline-flex; flex-direction:row; justify-content:center; align-items:center;
+  box-sizing:border-box; height:24px; gap:4px; padding:0;
+  font-size:10px; line-height:16px; border-radius:6px; color:var(--fg-muted);
+}
+:root body #hub-system-footer #sidebar-strip .strip-resource b {
+  font-size:11px; line-height:16px; font-weight:650;
+}
+:root body #hub-system-footer :is(#rail-usage,#rail-codeagent-quota) {
+  padding:0 10px; align-items:center; height:24px;
+}
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota { gap:10px; }
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota::before {
+  content:'余量'; white-space:nowrap; line-height:16px; color:var(--fg-muted); font-size:10px;
+}
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-provider {
+  height:26px; padding:0 3px; gap:5px; border-radius:5px;
+  box-sizing:border-box; transition:background-color .15s;
+}
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-provider:hover {
+  background:var(--brand-tint);
+}
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-icon {
+  display:inline-block; flex:0 0 12px; width:12px; height:12px;
+  border-radius:3px; opacity:.85; margin-right:0;
+}
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .token-plan-icon {
+  text-align:center; font:600 9px/12px var(--font-sans); color:var(--brand); background:var(--brand-tint);
+}
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-name {
+  font-size:11px; line-height:16px; font-weight:500; color:var(--fg-muted);
+}
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-metrics { gap:10px; }
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-reading {
+  display:inline-flex; flex-direction:row; align-items:baseline; justify-content:center; gap:4px; flex-wrap:nowrap;
+}
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-value {
+  font-size:11px; line-height:16px; font-weight:650;
+}
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-period {
+  font-size:10px; line-height:16px; font-weight:400; color:var(--fg-muted);
+}
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-metric[data-reset-state='due'] .sidebar-quota-period {
+  color:var(--status-warning);
+}
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-provider[data-state='loading'] .sidebar-quota-name {
+  color:var(--brand);
+}
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-provider[data-state='error'] .sidebar-quota-name {
+  color:var(--status-warning);
+}
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .rail-usage-button {
+  width:20px; height:24px; border-radius:5px; border:0; margin-left:0;
+}
+:root body #hub-system-footer #sidebar-strip .strip-network {
+  align-items:center; justify-content:flex-start; gap:12px; border:0;
+}
+:root body #hub-system-footer #sidebar-strip .strip-route-row {
+  gap:4px; height:24px; border-radius:5px; font-size:11px;
+}
+:root body #hub-system-footer #sidebar-strip .strip-route-foreign {
+  padding:0 3px; min-height:24px;
+}
+:root body #hub-system-footer #sidebar-strip .strip-route-foreign:hover {
+  background:var(--surface-hover);
+}
+:root body #hub-system-footer #sidebar-strip .strip-route-dot {
+  flex-basis:6px; height:6px;
+}
+:root body #hub-system-footer #sidebar-strip .strip-delay {
+  margin-left:2px; padding:0; color:var(--fg-muted); font-size:11px; font-weight:500;
+}
+:root body #hub-system-footer #sidebar-strip .strip-delay[data-state='timeout'] { color:var(--status-warning); }
+:root body #hub-system-footer #sidebar-strip .strip-delay small { margin-left:1px; font-size:9px; }
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-metric[hidden] { display:none; }
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-period:empty { display:none; }
+:root body #hub-system-footer #sidebar-strip .strip-transfer {
+  margin-left:auto; gap:8px; font-size:11px;
+}
+@media(max-width:1100px) {
+  :root body #hub-system-footer { gap:8px; padding-inline:8px; }
+  :root body #hub-system-footer :is(#rail-usage,#rail-codeagent-quota) { padding-inline:8px; }
+  #hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota { gap:6px; }
+  #hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-provider { padding-inline:4px; }
+  :root body #hub-system-footer #sidebar-strip .strip-network { gap:8px; }
+}
+@media(prefers-reduced-motion:reduce) {
+  #hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-provider { transition:none; }
+}
+
+/* User decision 2026-10-24: exactly one line, all accounts and both 5h/7d windows.
+   Scroll the quota strip only when necessary; keep the node delay fixed on the right. */
+:root body #hub-system-footer { flex-wrap:nowrap; }
+:root body #hub-system-footer :is(#rail-usage,#rail-codeagent-quota) { flex:1 1 auto; min-width:0; overflow-x:auto; overflow-y:hidden; scrollbar-width:thin; }
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota { width:max-content; flex:0 0 auto; flex-wrap:nowrap; gap:8px; }
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota::before { content:none; }
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) :is(.sidebar-quota-claude,.sidebar-quota-pair,.sidebar-quota-codex) { display:flex; flex:0 0 auto; flex-wrap:nowrap; align-items:center; gap:8px; }
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-name { display:none; }
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-icon { display:inline-block; }
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) :is(.sidebar-quota-account,.sidebar-quota-window) { font-size:10px; line-height:16px; color:var(--fg-muted); }
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-account:empty { display:none; }
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) :is(.sidebar-quota-metrics,.sidebar-quota-reading) { flex-wrap:nowrap; flex-direction:row; }
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-provider[data-state='error'] .sidebar-quota-icon { outline:1px solid var(--status-warning); }
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-provider[data-state='loading'] .sidebar-quota-icon { opacity:.5; }
+:root body #hub-system-footer #sidebar-strip .strip-network { min-width:0; flex:0 0 auto; margin-left:auto; }
+#footer-status-details { order:3; flex:none; width:24px; height:24px; border:0; border-radius:5px; background:transparent; color:var(--fg-muted); cursor:pointer; font:600 16px var(--font-sans); }
+#footer-status-details:hover { color:var(--brand); background:var(--brand-tint); }
+:root body #hub-system-footer:not([data-density='full']) { gap:6px; padding-inline:6px; }
+:root body #hub-system-footer:not([data-density='full']) :is(#rail-usage,#rail-codeagent-quota) { padding-inline:6px; }
+#hub-system-footer:not([data-density='full']) :is(#rail-usage,#rail-codeagent-quota) :is(.sidebar-quota,.sidebar-quota-metrics,.sidebar-quota-claude,.sidebar-quota-pair,.sidebar-quota-codex) { gap:6px; }
+#hub-system-footer:not([data-density='full']) :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-provider { padding:0; gap:3px; }
+/* User decision 2026-10-25: the footer keeps one details entry (far-right ⋯); the sidebar-only
+   details button and the sidebar row padding/divider must not leave a ⋯ and a gap after the last Claude account. */
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .rail-usage-button { display:none; }
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-claude { padding-right:0; border-bottom:0; }
+:root body #hub-system-footer:not([data-density='full']) #sidebar-strip :is(.strip-resources,.strip-network) { gap:6px; }
+:root body #hub-system-footer:not([data-density='full']) #sidebar-strip :is(.strip-transfer,.strip-route-domestic) { display:none; }
+:root body #hub-system-footer[data-density='minimal'] #sidebar-strip :is(.strip-location,.strip-gpu,.strip-disk) { display:none; }
+:root body #hub-system-footer #sidebar-strip .strip-delay { flex:none; white-space:nowrap; }
+#footer-status-popover { position:fixed; z-index:2200; bottom:42px; right:8px; width:400px; max-width:calc(100vw - 16px); max-height:calc(100vh - 100px); box-sizing:border-box; overflow-y:auto; border:1px solid var(--border-mid); border-radius:10px; padding:14px; background:var(--surface-overlay); color:var(--fg-default); box-shadow:0 8px 26px rgba(20,35,55,.12); font:12px/1.7 var(--font-sans); }
+#footer-status-popover[hidden] { display:none; }
+#footer-status-popover > strong { display:block; margin-bottom:8px; }
+#footer-status-popover p { margin:3px 0; }
+#footer-status-popover button { display:block; width:100%; border:0; background:transparent; color:inherit; padding:6px 0; text-align:left; font:inherit; cursor:pointer; }
+#footer-status-popover button:hover { background:var(--surface-hover); }
+#footer-status-popover [data-level='danger'], .footer-quota-summary[data-level='danger'] { color:var(--status-danger); }
+#footer-status-popover [data-level='warn'], .footer-quota-summary[data-level='warn'] { color:var(--status-warning); }
+@media(max-width:600px) {
+  :root body #hub-system-footer #sidebar-strip .strip-resources { display:none; }
+}
+/* 底栏账号序号与会话栏一致：挪到 logo 右下角，不再单独占一格。 */
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-provider { position:relative; }
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-account:not(:empty) {
+  position:absolute; left:11px; bottom:2px; min-width:9px; height:9px; padding:0 1px; box-sizing:border-box; border-radius:5px;
+  font:700 7.5px/9px var(--font-sans); text-align:center; color:#fff; background:var(--fg-muted);
+  box-shadow:0 0 0 1px var(--surface-raised); pointer-events:none;
+}
+#hub-system-footer :is(#rail-usage,#rail-codeagent-quota) .sidebar-quota-account[data-no='2'] { background:var(--brand); }

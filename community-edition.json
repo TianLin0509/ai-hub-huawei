@@ -1,0 +1,48 @@
+{
+  "edition": "community",
+  "target": "company",
+  "repo": "TianLin0509/ai-hub-huawei",
+  "features": {
+    "assistant": false,
+    "quotaBar": false,
+    "accounts": false,
+    "companyAssistant": true,
+    "companyForum": true,
+    "devGroupScene": false,
+    "memberUpgrade": true
+  },
+  "rulesChannel": "company",
+  "kinds": [
+    "codeagent",
+    "powershell"
+  ],
+  "productName": "AI HUB-Huawei",
+  "editionBadge": "内测先锋版",
+  "update": {
+    "sources": [
+      {
+        "id": "github",
+        "name": "GitHub",
+        "manifest": "https://github.com/TianLin0509/ai-hub-huawei/releases/latest/download/latest.json",
+        "files": "https://github.com/TianLin0509/ai-hub-huawei/releases/download/v{version}/"
+      },
+      {
+        "id": "aliyun",
+        "name": "阿里云",
+        "manifest": "https://me.lt-stockpartner.tech/hub-update/company/latest.json",
+        "files": "https://me.lt-stockpartner.tech/hub-update/company/v{version}/"
+      }
+    ],
+    "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
+  },
+  "releaseNotes": [
+    "发出的消息偶尔卡在 CodeAgent 输入框里没发出去：现在能认出这种情况并自动补按一次回车，仍不行会提示你。",
+    "会话里点模型名，只列出这个账号能用的模型（例如 GLM-5.2 和 DeepSeek），可以直接切换。",
+    "AI 群聊不再需要选场景，默认通用场景和默认工作目录。",
+    "CodeAgent 版本过旧的提醒里，加了最新版安装包的下载链接（黄区专用）。"
+  ],
+  "version": "5.3.0",
+  "upstreamVersion": "1.6.660",
+  "upstreamCommit": "1ad5ef3300426a9da567978d274174ee09b177dd",
+  "upstreamDirty": false
+}

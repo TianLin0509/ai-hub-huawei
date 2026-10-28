@@ -1,0 +1,68 @@
+/* 「进展」视图（2026-10-27）：左侧栏「进展」页、会话顶部进展条、会话行状态点。配色跟随 Hub 主题变量。 */
+:root {
+  --pg-ok: var(--status-success, #2f9e6b);
+  --pg-risk: var(--status-warning, #c98a0b);
+  --pg-stuck: var(--status-danger, #d14b4b);
+  --pg-done: var(--fg-faint, #8a94a3);
+  --pg-ask: #e06c0b;
+  --pg-ask-tint: color-mix(in srgb, #e06c0b 9%, var(--surface-raised, #fff));
+}
+.pg-dot, .pg-row-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--pg-done); }
+.pg-ok { background: var(--pg-ok); } .pg-risk, .pg-stale { background: var(--pg-risk); } .pg-stuck { background: var(--pg-stuck); }
+.pg-done { background: var(--pg-done); } .pg-unknown { background: transparent; box-shadow: inset 0 0 0 1.5px var(--pg-done); }
+.pg-decide { background: var(--pg-ask); }
+
+/* ③ 会话行：标题前的状态点 / 待拍板标签 */
+#session-list .pg-row-dot { width: 7px; height: 7px; margin-right: 5px; vertical-align: 1px; }
+#session-list .pg-row-ask { display: inline-block; margin-right: 4px; padding: 0 4px; border-radius: 4px; background: var(--pg-ask); color: #fff; font-size: 10px; line-height: 15px; vertical-align: 1px; }
+
+/* ② 会话顶部进展条：只在卡片视图显示；卡片层顶部按它的实际高度让开（--progress-strip-h 由 progress-view.js 量出） */
+#session-progress-strip { position: absolute; z-index: 52; left: 16px; right: 48px;   /* 右侧让开「问题目录」按钮 */
+  top: calc(var(--term-header-h, 43px) + 10px);
+  border: 1px solid var(--border-mid, #d8dfe8); border-radius: 10px; background: var(--surface-raised, #fff); color: var(--fg-default, #303b4b);
+  font-size: 13px; max-height: 46vh; overflow: auto; }
+#session-progress-strip[hidden], #terminal-panel:not(.card-view-active) > #session-progress-strip { display: none; }
+#terminal-panel.card-view-active:has(> #session-progress-strip:not([hidden])) > #msg-overlay { top: calc(var(--term-header-h, 43px) + var(--progress-strip-h, 0px) + 14px); }
+#session-progress-strip.pg-asking { border-color: color-mix(in srgb, var(--pg-ask) 45%, transparent); background: var(--pg-ask-tint); }
+.pg-bar { display: flex; align-items: center; gap: 10px; padding: 9px 14px; cursor: pointer; min-width: 0; }
+.pg-bar:focus-visible { outline: 1px solid var(--brand, #3065bd); outline-offset: -1px; border-radius: 10px; }
+.pg-caret { color: var(--fg-muted, #637084); font-size: 11px; width: 10px; }
+.pg-chip { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border: 1px solid var(--border-mid, #d8dfe8); border-radius: 10px; font-size: 12px; white-space: nowrap; background: var(--surface-raised, #fff); }
+.pg-ask { padding: 1px 8px; border-radius: 4px; background: var(--pg-ask); color: #fff; font-size: 12px; white-space: nowrap; }
+.pg-line { flex: 1; min-width: 0; color: var(--fg-strong, #222a36); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pg-ghost-tag { font-weight: 400; color: #8a5a00; margin-right: 2px; }
+.pg-prog { display: inline-flex; align-items: center; gap: 6px; color: var(--fg-muted, #637084); font-size: 12px; white-space: nowrap; }
+.pg-track { width: 80px; height: 6px; border-radius: 3px; background: var(--surface-sunken, #f1f4f7); overflow: hidden; }
+.pg-fill { display: block; height: 100%; background: var(--brand, #3065bd); }
+.pg-when { color: var(--fg-muted, #637084); font-size: 12px; white-space: nowrap; }
+.pg-late { color: var(--pg-stuck) !important; }
+.pg-detail { border-top: 1px solid var(--border-subtle, #e5e9ee); padding: 10px 16px 12px; line-height: 1.75; }
+.pg-detail dl { display: grid; grid-template-columns: 64px 1fr; gap: 2px 10px; margin: 0; }
+.pg-detail dt { color: var(--fg-muted, #637084); } .pg-detail dd { margin: 0; overflow-wrap: anywhere; }
+.pg-ghost { margin-bottom: 8px; padding: 5px 10px; border: 1px solid #f1dca0; border-radius: 6px; background: #fff8e5; color: #8a5a00; font-size: 12px; }
+.pg-decide-box { margin-top: 10px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--pg-ask) 45%, transparent); border-radius: 8px; background: var(--surface-raised, #fff); }
+.pg-q { font-weight: 600; color: var(--fg-strong, #222a36); }
+.pg-acts { display: flex; gap: 8px; margin-top: 8px; }
+.pg-btn { font: inherit; font-size: 12px; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--border-mid, #d8dfe8); background: var(--surface-raised, #fff); color: var(--fg-default, #303b4b); cursor: pointer; }
+.pg-btn.pg-pri { background: var(--brand, #3065bd); border-color: var(--brand, #3065bd); color: #fff; }
+.pg-links { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; margin-top: 8px; font-size: 12px; color: var(--fg-muted, #637084); }
+.pg-link { font: inherit; border: 0; background: none; padding: 0; color: var(--link, #3065bd); cursor: pointer; }
+.pg-path { overflow-wrap: anywhere; user-select: text; }
+
+/* ① 「进展」页 */
+#progress-panel { display: none; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow: auto; padding: 18px 24px 24px;
+  background: var(--surface-canvas, #fbfcfd); color: var(--fg-default, #303b4b); }
+.pg-head h2 { margin: 0 0 4px; font-size: 17px; color: var(--fg-strong, #222a36); }
+.pg-head p { margin: 0 0 16px; font-size: 12.5px; color: var(--fg-muted, #637084); }
+.pg-cols { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; align-items: start; }
+.pg-col h3 { display: flex; align-items: center; gap: 6px; margin: 0 0 8px; font-size: 12.5px; font-weight: 500; color: var(--fg-muted, #637084); }
+.pg-card { margin-bottom: 10px; padding: 10px 12px; border: 1px solid var(--border-subtle, #e5e9ee); border-radius: 10px; background: var(--surface-raised, #fff); line-height: 1.6; cursor: pointer; }
+.pg-card:hover, .pg-card:focus-visible { border-color: var(--brand-tint-border, #cbd9ef); outline: none; }
+.pg-ct { font-size: 13px; font-weight: 600; color: var(--fg-strong, #222a36); overflow-wrap: anywhere; }
+.pg-cl { margin: 4px 0; font-size: 12.5px; overflow-wrap: anywhere; }
+.pg-cq { margin-top: 6px; padding: 6px 8px; border-radius: 6px; background: var(--pg-ask-tint); color: #8a3d00; font-size: 12px; }
+.pg-cm { display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px; color: var(--fg-muted, #637084); }
+.pg-empty { padding: 6px 2px; font-size: 12px; color: var(--fg-faint, #778395); }
+#btn-progress { position: relative; }
+#btn-progress .pg-nav-count { position: absolute; top: 4px; right: 8px; min-width: 16px; padding: 0 4px; border-radius: 9px; background: var(--pg-ask); color: #fff; font-size: 10.5px; line-height: 16px; text-align: center; }
+#btn-progress .pg-nav-count[hidden] { display: none; }

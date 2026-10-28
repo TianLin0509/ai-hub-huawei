@@ -1,0 +1,235 @@
+/* Meeting A: two-column evidence and understanding workspace. */
+#btn-company-meeting .btn-icon svg{display:block;color:#52627b}
+#btn-company-meeting.active .btn-icon svg,#btn-company-meeting.cw-current .btn-icon svg{color:#3478f6}
+.company-meeting-page-open #session-sidebar,.company-meeting-page-open #toolbar-actions,.company-meeting-page-open #toolbar-crumb,.company-meeting-page-open #btn-expand-sidebar{visibility:hidden}
+.company-meeting-page{position:fixed;right:0;z-index:880;overflow:hidden;background:#f4f6f9;-webkit-app-region:no-drag}
+.company-meeting-page[hidden],.company-meeting[hidden],.company-meeting [hidden]{display:none!important}
+
+/* Base */
+.company-meeting{--m-blue:#3478f6;--m-blue-soft:#edf3fe;--m-line:#e3e8ef;--m-text:#1f2a3c;--m-sub:#5b6a80;--m-muted:#8a96a8;--m-red:#e5484d;position:absolute;inset:0;display:flex;flex-direction:column;overflow:auto;padding:0 24px;color:var(--m-text);background:#f4f6f9;font:14px/1.6 'Microsoft YaHei','PingFang SC',system-ui,sans-serif}
+.company-meeting h2,.company-meeting h3,.company-meeting p{margin:0}
+.company-meeting h3{font-size:14px;font-weight:600;color:var(--m-text)}
+.company-meeting button{font:inherit;cursor:pointer}
+.company-meeting svg{flex:none}
+.company-meeting .ca-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;box-sizing:border-box;border:1px solid #d9e0ea;background:#fff;color:#33425a;border-radius:8px;padding:0 12px;white-space:nowrap;font-size:13px;transition:background .15s,border-color .15s,color .15s}
+.company-meeting .ca-btn:hover:not(:disabled){background:#f3f7fe;border-color:#b9cff8;color:#1f5fd6}
+.company-meeting .ca-btn.primary{color:#fff;background:var(--m-blue);border-color:var(--m-blue)}
+.company-meeting .ca-btn.primary:hover:not(:disabled){background:#2a6ae6;border-color:#2a6ae6;color:#fff}
+.company-meeting button:disabled{cursor:default;opacity:.42}
+.company-meeting button:focus-visible,.company-meeting input:focus-visible,.company-meeting textarea:focus-visible,.company-meeting select:focus-visible{outline:2px solid rgba(52,120,246,.55);outline-offset:1px}
+.company-meeting input:not([type=checkbox]):not([type=range]),.company-meeting select,.company-meeting textarea{font:inherit;font-size:13px;height:32px;padding:0 10px;border:1px solid #d9e0ea;border-radius:8px;background:#fff;color:var(--m-text);max-width:100%;box-sizing:border-box;min-width:0}
+.company-meeting textarea{height:auto;padding:8px 10px}
+.company-meeting input::placeholder,.company-meeting textarea::placeholder{color:#a3adbd}
+.company-meeting input:focus,.company-meeting select:focus,.company-meeting textarea:focus{border-color:#9dbcf6}
+.meeting-tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.meeting-empty{margin:0;padding:14px;font-size:12.5px;color:var(--m-muted);background:#f7f9fc;border:1px dashed #dde3ec;border-radius:8px;width:100%;box-sizing:border-box}
+
+/* Phase-driven visibility: idle → setup, live → controls, review → export/new */
+.company-meeting:not([data-phase=live]) .meeting-when-live,.company-meeting:not([data-phase=live]) .meeting-mark-bar{display:none}
+.company-meeting:not([data-phase=review]) .meeting-when-review{display:none}
+.company-meeting:not([data-phase=idle]) .meeting-setup-card{display:none}
+.company-meeting[data-phase=idle] .meeting-replay,.company-meeting[data-phase=idle] .meeting-record-state,.company-meeting[data-phase=live] [data-m=history]{display:none}
+
+/* Top bar */
+.meeting-topbar{display:flex;align-items:center;gap:18px;flex:none;padding:16px 0 14px}
+.meeting-session-name{flex:1;min-width:0}
+.meeting-eyebrow{display:block;font-size:12px;color:var(--m-muted);letter-spacing:.04em}
+.meeting-session-name h3{font-size:20px;font-weight:700;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.meeting-session-name>span[data-m=source-label]{display:block;font-size:12.5px;color:var(--m-sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.meeting-record-state{display:flex;align-items:center;gap:8px;height:34px;padding:0 14px;border:1px solid var(--m-line);border-radius:999px;background:#fff;font-size:13px;white-space:nowrap}
+.meeting-record-state strong{font-weight:600}
+.meeting-record-state>span{font:600 15px/1 Consolas,'Cascadia Mono',monospace;font-variant-numeric:tabular-nums;color:var(--m-text)}
+.meeting-record-state i,.meeting-footer-state i{width:8px;height:8px;border-radius:50%;background:#a8b2c1;flex:none}
+.meeting-record-state i[data-state=recording],.meeting-footer-state i[data-state=recording]{background:var(--m-red);box-shadow:0 0 0 0 rgba(229,72,77,.45);animation:meeting-pulse 1.6s ease-out infinite}
+.meeting-record-state i[data-state=paused],.meeting-footer-state i[data-state=paused]{background:#e8a33d}
+.meeting-record-state i[data-state=ended],.meeting-footer-state i[data-state=ended]{background:#34a46b}
+.meeting-footer-state i[data-state=error]{background:var(--m-red)}
+@keyframes meeting-pulse{70%{box-shadow:0 0 0 6px rgba(229,72,77,0)}100%{box-shadow:0 0 0 0 rgba(229,72,77,0)}}
+.meeting-levels{display:flex;gap:14px}.meeting-levels:empty{display:none}
+.meeting-meter{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--m-sub);white-space:nowrap}
+.meeting-meter i{display:inline-flex;align-items:flex-end;gap:2px;height:14px}
+.meeting-meter b{width:3px;border-radius:2px;background:#d6deea;transition:background .1s}
+.meeting-meter b:nth-child(1){height:5px}.meeting-meter b:nth-child(2){height:7px}.meeting-meter b:nth-child(3){height:9px}.meeting-meter b:nth-child(4){height:11px}.meeting-meter b:nth-child(5){height:14px}
+.meeting-meter b.on{background:var(--m-blue)}
+.meeting-actions{display:flex;align-items:center;gap:8px}
+.meeting-actions select{width:190px;color:var(--m-sub)}
+.company-meeting .meeting-stop{color:#fff;background:var(--m-red);border-color:var(--m-red)}
+.company-meeting .meeting-stop:hover:not(:disabled){color:#fff;background:#d63a40;border-color:#d63a40}
+.company-meeting [data-act=pause].is-paused{color:#1f5fd6;border-color:#b9cff8;background:var(--m-blue-soft)}
+
+/* Setup card (idle only) */
+.meeting-setup-card{flex:none;background:#fff;border:1px solid var(--m-line);border-radius:12px;padding:14px 18px 10px;margin-bottom:4px}
+.meeting-setup{display:flex;align-items:flex-end;gap:18px;flex-wrap:wrap}
+.meeting-field{display:flex;flex-direction:column;gap:6px;min-width:0}
+.meeting-field>span:first-child{font-size:12px;color:var(--m-sub)}
+.meeting-inline{display:flex;align-items:center;gap:8px}
+.meeting-field-source{flex:1 1 260px;max-width:380px}.meeting-field-source select{flex:1}
+.meeting-field-title{flex:1 1 200px;max-width:300px}
+.company-meeting .meeting-icon-btn{width:32px;padding:0}
+.meeting-chip{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border:1px solid #d9e0ea;border-radius:999px;font-size:13px;color:var(--m-sub);background:#fff;cursor:pointer;user-select:none;white-space:nowrap}
+.meeting-chip input{position:absolute;opacity:0;pointer-events:none}
+.meeting-chip:has(input:checked){color:#1f5fd6;border-color:#b9cff8;background:var(--m-blue-soft)}
+.meeting-chip:has(input:focus-visible){outline:2px solid rgba(52,120,246,.55)}
+.meeting-chip:has(input:disabled){opacity:.5;cursor:default}
+.company-meeting .meeting-start{height:36px;padding:0 20px;font-size:14px;font-weight:600;margin-left:auto;border-radius:9px}
+.meeting-start i{width:8px;height:8px;border-radius:50%;background:#fff}
+.meeting-advanced{margin-top:10px;font-size:12px;color:var(--m-sub)}
+.meeting-advanced summary{cursor:pointer;width:max-content;color:var(--m-muted)}
+.meeting-advanced summary:hover{color:var(--m-blue)}
+.meeting-region-row{display:flex;gap:18px;padding:12px 0 4px;align-items:flex-start}
+.meeting-region-row img{width:200px;max-height:130px;object-fit:contain;border:1px solid var(--m-line);border-radius:6px;background:#f4f6f9}
+.meeting-region-row img:not([src]),.meeting-region-row img[src=""]{display:none}
+.meeting-region-row>div{display:flex;flex-direction:column;gap:8px}
+.meeting-crop{display:flex;gap:12px;flex-wrap:wrap}.meeting-crop label{display:inline-flex;align-items:center;gap:4px}
+.company-meeting .meeting-crop input{width:64px;height:28px}
+.meeting-asr{color:var(--m-sub)}
+
+/* Notice strip */
+.meeting-notice{display:flex;align-items:center;gap:8px;flex:none;margin-top:8px;padding:6px 8px 6px 12px;border-radius:8px;background:#eef4fe;border:1px solid #d6e4fc}
+.meeting-notice:has(p:empty):has([data-act=retry-save][hidden]){display:none}
+.meeting-message{flex:1;font-size:12.5px;color:#2f4a78;overflow-wrap:anywhere}
+.meeting-notice-close{display:inline-flex;border:0;background:none;color:#7c8aa0;padding:4px;border-radius:5px}
+.meeting-notice-close:hover{background:#dde8fc;color:#1f5fd6}
+
+/* Columns */
+.meeting-columns{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(340px,1fr);gap:16px;flex:1;min-height:520px;padding:10px 0}
+.meeting-evidence-pane{min-width:0;min-height:0;display:grid;grid-template-rows:minmax(250px,1fr) auto minmax(124px,24%);gap:10px}
+.meeting-viewer,.meeting-frames,.meeting-transcripts,.meeting-understanding{background:#fff;border:1px solid var(--m-line);border-radius:12px;min-width:0}
+.meeting-section-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:32px}
+.meeting-section-heading>span{font-size:12px;color:var(--m-muted)}
+.meeting-section-heading small{font-size:12px;color:var(--m-muted);font-weight:400;margin-left:6px}
+
+/* Viewer + replay */
+.meeting-viewer{display:flex;flex-direction:column;overflow:hidden;min-height:0}
+.meeting-viewer>.meeting-section-heading{padding:8px 12px 8px 16px;border-bottom:1px solid #eef1f5}
+.meeting-stage{position:relative;flex:1;min-height:120px;background:#f1f4f8;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.meeting-stage>video,.meeting-stage>[data-m=evidence]{display:none;width:100%;height:100%;object-fit:contain}
+.meeting-stage[data-view=live]>[data-m=live],.meeting-stage[data-view=replay]>[data-m=player]{display:block;background:#1d2430}
+.meeting-stage[data-view=evidence]>[data-m=evidence]{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;overflow:auto;padding:12px;box-sizing:border-box}
+.meeting-stage>[data-m=evidence] p{font-size:15px;line-height:1.8;max-width:min(640px,80%);color:var(--m-text);text-align:center}
+.meeting-stage>[data-m=evidence] .meeting-slide{width:100%;height:100%;min-height:0;max-height:100%;object-fit:contain;flex:none;border-radius:4px}
+.meeting-stage>[data-m=evidence]:has(.meeting-slide) p{display:none}
+.meeting-stage>[data-m=evidence]:has(.meeting-slide)>.ca-btn{position:absolute;bottom:12px;right:14px;box-shadow:0 2px 8px rgba(20,35,60,.12)}
+.meeting-stage>[data-m=evidence] audio{width:min(420px,90%)}
+.meeting-stage-empty{display:flex;align-items:center;flex-direction:column;gap:8px;color:var(--m-muted);text-align:center;padding:20px}
+.meeting-stage-empty strong{font-size:16px;color:#3a4c66;font-weight:600}
+.meeting-stage-empty span{font-size:13px;color:var(--m-sub)}
+.meeting-stage-empty small{font-size:12px}
+.meeting-stage-empty svg{width:60px;height:45px;fill:none;stroke:#9db8e6;stroke-width:1.6;margin-bottom:6px}
+.meeting-stage:not([data-view=empty]) .meeting-stage-empty{display:none}
+.meeting-replay{padding:8px 14px 8px;border-top:1px solid #eef1f5;flex:none}
+.meeting-replay-row{display:flex;align-items:center;gap:12px}
+.meeting-play{position:relative;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:50%;border:0;background:var(--m-blue);color:#fff;flex:none}
+.meeting-play:hover:not(:disabled){background:#2a6ae6}
+.meeting-play svg{margin-left:2px;fill:currentColor}
+.meeting-play.is-playing svg{display:none}
+.meeting-play.is-playing::before,.meeting-play.is-playing::after{content:'';width:3px;height:11px;border-radius:1px;background:#fff;margin:0 2px}
+.meeting-play-time{font:12px/1 Consolas,'Cascadia Mono',monospace;color:var(--m-sub);white-space:nowrap;font-variant-numeric:tabular-nums}
+.meeting-replay input[type=range]{flex:1;min-width:80px;accent-color:var(--m-blue);height:16px;margin:0}
+.meeting-replay .ca-btn{height:28px;padding:0 10px;font-size:12px}
+.meeting-replay-note{display:flex;gap:12px;flex-wrap:wrap;font-size:11.5px;color:var(--m-muted);margin-top:4px!important}
+.meeting-replay-note:empty{display:none}
+.meeting-gaps{color:#a1671b}
+
+/* Filmstrip */
+.meeting-frames{padding:4px 14px 8px}
+.meeting-filmstrip{display:flex;overflow-x:auto;gap:8px;padding:2px 1px 3px;scrollbar-width:thin;min-height:62px}
+.meeting-frame{position:relative;flex:0 0 116px;border:1.5px solid #e1e6ee;background:#fff;border-radius:8px;padding:0;overflow:hidden;text-align:left;color:#52627b;transition:border-color .15s,box-shadow .15s}
+.meeting-frame:hover{border-color:#9dbcf6}
+.meeting-frame.is-active{border-color:var(--m-blue);box-shadow:0 0 0 2px rgba(52,120,246,.18)}
+.meeting-frame img{width:100%;aspect-ratio:16/9;object-fit:contain;background:#f1f4f8;display:block;font-size:11px}
+.meeting-frame>span{position:absolute;left:6px;bottom:6px;padding:1px 6px;border-radius:4px;background:rgba(24,34,52,.72);color:#fff;font-size:11px;font-variant-numeric:tabular-nums}
+.meeting-frame.is-active>span{background:var(--m-blue)}
+
+/* Transcript */
+.meeting-transcripts{display:flex;flex-direction:column;min-height:0;padding:8px 14px 6px}
+.meeting-transcripts>.meeting-section-heading{flex:none;margin-bottom:4px}
+.meeting-mark-bar{display:flex;gap:8px;flex:0 1 380px;min-width:0}
+.meeting-mark-bar input{flex:1;height:30px!important}
+.meeting-mark-bar .ca-btn{height:30px;color:#a1671b;border-color:#efd9b5;background:#fffaf1}
+.meeting-mark-bar .ca-btn:hover:not(:disabled){color:#8a5510;border-color:#e6c48c;background:#fff4e0}
+.meeting-transcript-list{flex:1;min-height:0;overflow:auto;scrollbar-width:thin}
+.meeting-transcript-list .meeting-empty{margin-top:4px}
+.meeting-event{display:grid;grid-template-columns:52px 70px minmax(0,1fr);gap:10px;align-items:baseline;width:100%;padding:7px 8px;border:0;border-radius:6px;background:transparent;color:#2c3a50;text-align:left;font-size:13px!important;line-height:1.7}
+.meeting-event:hover{background:#f3f7fe}
+.meeting-event.is-active{background:var(--m-blue-soft)}
+.meeting-event time{color:var(--m-blue);font-size:12px;font-family:Consolas,'Cascadia Mono',monospace;font-variant-numeric:tabular-nums}
+.meeting-event b{font-size:12px;font-weight:500;color:var(--m-sub)}
+.meeting-event>span{overflow-wrap:anywhere}
+.meeting-event.is-mark{background:#fffaf1}
+.meeting-event.is-mark b{color:#a1671b;font-weight:600}
+
+/* Understanding pane */
+.meeting-understanding{display:flex;flex-direction:column;overflow:hidden;min-height:0}
+.meeting-tabs{display:flex;gap:22px;padding:0 14px 0 18px;border-bottom:1px solid var(--m-line);align-items:center;flex:none}
+.meeting-tabs>[role=tab]{background:none;border:0;padding:13px 0 11px;color:var(--m-sub);font-size:14px;border-bottom:2px solid transparent;white-space:nowrap}
+.meeting-tabs>[role=tab]:hover{color:var(--m-text)}
+.meeting-tabs>[aria-selected=true]{color:var(--m-blue);border-bottom-color:var(--m-blue);font-weight:600}
+.meeting-tabs>.ca-btn{height:28px;font-size:12px;padding:0 10px}
+.meeting-understanding-status{padding:8px 18px;color:var(--m-muted);font-size:12px;background:#fafbfd;border-bottom:1px solid #f0f2f6;flex:none}
+.meeting-summary-scroll{overflow:auto;flex:1;padding:14px 20px 16px;scrollbar-width:thin;min-height:100px}
+.meeting-summary-scroll article{font-size:14px;line-height:1.85;overflow-wrap:anywhere;color:#26344a}
+.meeting-summary-scroll article h1,.meeting-summary-scroll article h2{font-size:17px;margin:14px 0 8px;font-weight:700}
+.meeting-summary-scroll article h3{font-size:15px;margin:16px 0 6px;padding-left:9px;border-left:3px solid var(--m-blue);line-height:1.4}
+.meeting-summary-scroll article>:first-child{margin-top:0}
+.meeting-summary-scroll article p{margin:6px 0}
+.meeting-summary-scroll article ul,.meeting-summary-scroll article ol{padding-left:22px;margin:6px 0}
+.meeting-summary-scroll article li{margin:3px 0}
+.meeting-summary-scroll article li::marker{color:#93a4bd}
+.meeting-summary-scroll article table{border-collapse:collapse;width:100%;font-size:12.5px;margin:8px 0}
+.meeting-summary-scroll article td,.meeting-summary-scroll article th{padding:6px 8px;border:1px solid var(--m-line)}
+.meeting-summary-scroll article th{background:#f6f8fb;font-weight:600}
+.meeting-summary-scroll .ca-link{display:inline-block;color:var(--m-blue);font-size:12px;line-height:1.5;border:0;background:var(--m-blue-soft);padding:0 6px;margin:0 2px;border-radius:4px;font-variant-numeric:tabular-nums;vertical-align:1px}
+.meeting-summary-scroll .ca-link:hover{background:#dbe7fd}
+.meeting-summary-empty{display:flex;flex-direction:column;gap:8px;padding:28px 6px;color:var(--m-sub)}
+.meeting-summary-empty strong{font-size:15px;color:#33445e}
+.meeting-summary-empty small{color:var(--m-muted)}
+.meeting-summary-scroll details{padding:10px 2px;border-bottom:1px solid #eef1f5}
+.meeting-summary-scroll details summary{cursor:pointer;font-weight:600;color:var(--m-text)}
+.meeting-summary-scroll details[open] summary{margin-bottom:6px;color:var(--m-blue)}
+
+/* Meeting agent bar (2026-10-25): state, speed tier, auto interval */
+.meeting-agent-bar{display:flex;align-items:center;gap:10px;padding:8px 14px 8px 18px;border-bottom:1px solid #f0f2f6;flex:none;flex-wrap:wrap}
+.meeting-agent-state{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--m-sub);margin-right:auto;white-space:nowrap}
+.meeting-agent-state i{width:7px;height:7px;border-radius:50%;background:#a8b2c1}
+.meeting-agent-state[data-state=ready] i{background:#34a46b}
+.meeting-agent-state[data-state=starting] i,.meeting-agent-state[data-state=busy] i{background:var(--m-blue);animation:meeting-pulse-blue 1.4s ease-out infinite}
+.meeting-agent-state[data-state=error] i{background:var(--m-red)}
+@keyframes meeting-pulse-blue{0%{box-shadow:0 0 0 0 rgba(52,120,246,.45)}70%{box-shadow:0 0 0 5px rgba(52,120,246,0)}100%{box-shadow:0 0 0 0 rgba(52,120,246,0)}}
+.meeting-speed{display:inline-flex;border:1px solid #d9e0ea;border-radius:8px;overflow:hidden;background:#fff}
+.meeting-speed button{border:0;background:none;padding:0 10px;height:26px;font-size:12px;color:var(--m-sub)}
+.meeting-speed button+button{border-left:1px solid #e3e8ef}
+.meeting-speed button[aria-checked=true]{background:var(--m-blue-soft);color:#1f5fd6;font-weight:600}
+.meeting-speed button:hover:not(:disabled):not([aria-checked=true]){background:#f5f8fe}
+.meeting-interval{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--m-sub)}
+.company-meeting .meeting-interval select{height:28px;font-size:12px;padding:0 6px;width:auto}
+.meeting-tabs>.meeting-open-agent{margin-left:auto}
+.meeting-tabs>.meeting-open-agent+.ca-btn{margin-left:6px}
+/* Collapsible transcript (2026-10-25): one slim row until there is speech */
+.meeting-collapse{display:inline-flex;align-items:center;gap:6px;border:0;background:none;padding:0;color:var(--m-text)}
+.meeting-collapse svg{transition:transform .15s;color:var(--m-muted)}
+.meeting-transcripts[data-collapsed=true] .meeting-collapse svg{transform:rotate(-90deg)}
+.meeting-transcripts[data-collapsed=true] .meeting-transcript-list{display:none}
+.meeting-transcripts[data-collapsed=true]{padding-bottom:8px}
+.meeting-evidence-pane.transcripts-collapsed{grid-template-rows:minmax(250px,1fr) auto auto}
+
+/* Ask box */
+.meeting-chat{padding:12px 14px 14px;border-top:1px solid var(--m-line);flex:none}
+.meeting-ask-box{display:flex;align-items:flex-end;gap:8px;padding:6px 6px 6px 4px;border:1px solid #d9e0ea;border-radius:10px;background:#fff}
+.meeting-ask-box:focus-within{border-color:#9dbcf6;box-shadow:0 0 0 3px rgba(52,120,246,.1)}
+.company-meeting .meeting-ask-box textarea{flex:1;border:0;resize:none;min-height:44px;max-height:140px;font-size:13px;background:transparent;outline:none}
+.meeting-send{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:8px;border:0;background:var(--m-blue);color:#fff;flex:none}
+.meeting-send:hover:not(:disabled){background:#2a6ae6}
+.meeting-quick{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.meeting-quick button{height:26px;padding:0 10px;border:1px solid #dfe5ee;border-radius:999px;background:#fff;color:var(--m-sub);font-size:12px}
+.meeting-quick button:hover{border-color:#b9cff8;color:#1f5fd6;background:#f5f8fe}
+
+/* Footer */
+.meeting-footer{display:flex;gap:15px;align-items:center;justify-content:space-between;border-top:1px solid var(--m-line);padding:7px 0;font-size:12px;color:var(--m-sub);flex:none}
+.meeting-footer-state{display:inline-flex;align-items:center;gap:8px;min-width:0}
+.meeting-footer [data-m=recording-status]{color:var(--m-muted);text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+@media(max-width:1180px){.meeting-actions select{width:150px}.meeting-levels{display:none}.meeting-topbar{gap:12px}}
+@media(max-width:1100px){.company-meeting{padding:0 14px}.meeting-columns{gap:12px;grid-template-columns:minmax(0,1.4fr) minmax(300px,1fr)}.meeting-session-name h3{font-size:17px}.meeting-footer{flex-wrap:wrap;gap:3px 12px}.meeting-tabs{gap:14px;padding:0 12px}.meeting-actions .ca-btn span{display:none}.meeting-actions .ca-btn{width:32px;padding:0}}
+@media(max-width:850px){.meeting-topbar{flex-wrap:wrap}.meeting-session-name{flex-basis:100%}.meeting-columns{display:flex;flex-direction:column;overflow:visible;flex:none}.meeting-evidence-pane{display:flex;flex-direction:column}.meeting-stage{min-height:240px}.meeting-transcript-list{max-height:320px}.meeting-understanding{min-height:500px}.meeting-region-row{flex-direction:column}.meeting-summary-scroll{max-height:500px}.meeting-footer{position:sticky;bottom:0;background:#f4f6f9}}
+@media(max-height:760px){.meeting-evidence-pane{grid-template-rows:minmax(210px,1fr) auto minmax(110px,24%)}.meeting-topbar{padding:10px 0 8px}}
