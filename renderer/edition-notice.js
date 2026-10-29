@@ -55,7 +55,34 @@
     dialog.querySelector('[data-edn="code"]').focus();
   }
 
+  // 停手半秒后用这次敲的字母核对一次；对了就改更新地址并打开一键更新窗口，错了不出声。没开通过的电脑也能用这个入口。
+  function watchSettings() {
+    let typed = '', timer = null, busy = false;
+    const inField = el => !!el?.closest?.('input, textarea, select, [contenteditable=""], [contenteditable="true"], .xterm');
+    const menuOpen = () => { const m = document.getElementById('options-menu'); return !!m && m.style.display !== 'none' && m.getClientRects().length > 0; };
+    const tryCode = async () => {
+      const code = typed; typed = ''; // 每次停手只核对这一段：前面敲错的不会粘到后面
+      if (busy || code.length < 6 || !menuOpen()) return;
+      busy = true;
+      const r = await ipcRenderer.invoke('edition:switch', { code }).catch(() => null);
+      busy = false;
+      if (!r || !r.ok) { if (r && r.reason !== 'wrong' && r.reason !== 'format') console.warn('[edition] 口令核对失败：', r.message); return; }
+      document.removeEventListener('keydown', onKey, true);
+      document.getElementById('options-menu')?.style.setProperty('display', 'none');
+      window.__appUpdate?.open?.();
+    };
+    const onKey = e => {
+      if (!menuOpen()) { typed = ''; return; }
+      if (e.ctrlKey || e.altKey || e.metaKey || e.isComposing || typeof e.key !== 'string' || !/^[a-z]$/i.test(e.key)) return;
+      if (inField(e.target) || inField(document.activeElement)) return;
+      typed = (typed + e.key.toLowerCase()).slice(-32);
+      clearTimeout(timer); timer = setTimeout(() => void tryCode(), 500);
+    };
+    document.addEventListener('keydown', onKey, true);
+  }
+
   window.__editionNotice = { show };
+  ipcRenderer.invoke('edition:state').then(s => { if (s && s.enabled && !s.switched) watchSettings(); }).catch(() => {});
   setTimeout(async () => {
     const s = await ipcRenderer.invoke('edition:state').catch(() => null);
     if (!s || !s.enabled || !s.unlocked || s.switched || snoozed()) return;
