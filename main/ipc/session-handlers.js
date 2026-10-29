@@ -569,6 +569,20 @@ function registerSessionIpc(ipcMain, deps) {
       // 2026-10-22 起手动新建的会话也按这个模型启动（session-manager 的启动核对），所以这里和启动口径一致地把「默认」那一项写成它，
       // 用户开之前就能看到会用什么模型；清单有多个或未知时仍为空，界面照旧写「沿用 CodeAgent 当前模型」。
       try { defaultModel = require('../../core/codeagent-model-route').personalModels({ dataDir: getHubDataDir(), personalDir, single: true }).defaultModel || ''; } catch { defaultModel = ''; }
+      // 多个模型时（2026-10-29）：和新建会话的启动判断（core/codeagent-launch-model.js）同一口径算出不选模型时会用哪个——
+      // CodeAgent 记着的、或这个号上次选的；只能「选菜单第一个」时说不出名字，留空。
+      if (!defaultModel) {
+        try {
+          const launchModel = require('../../core/codeagent-launch-model');
+          const known = pool.accountModels(personalDir, undefined, pool.personalModelsFile(getHubDataDir()));
+          const last = launchModel.lastEntry(getHubDataDir(), 'personal');
+          let settingsAt = 0;
+          try { settingsAt = require('fs').statSync(require('path').join(personalDir, 'settings.json')).mtimeMs; } catch { settingsAt = 0; }
+          const choice = launchModel.chooseLaunchModel({ models: known.models, authoritative: known.authoritative, current: pool.readSettingsModel(personalDir),
+            currentNewer: settingsAt > last.at, last: last.model, first: require('../../core/codeagent-model-picker').FIRST_MENU_MODEL });
+          if (choice.model && !require('../../core/codeagent-model-picker').isFirstMenuModel(choice.model)) defaultModel = choice.model;
+        } catch { /* 说不定就留空，界面写「自动」 */ }
+      }
       // 个人账号：一键获取过模型权限就用读到的菜单，否则沿用原来的清单
       const probed = require('../../core/codeagent-model-probe').readProbed(pool.personalModelsFile(getHubDataDir()));
       if (probed) return { options: asOptions(probed.models), defaultModel: sameCase(probed.models, defaultModel) };

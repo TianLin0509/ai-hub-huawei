@@ -42,6 +42,11 @@ function windowsOf(provider, row, now) {
   return { w5h, w7d: row.usage7d || null };
 }
 
+function wholePercent(window) {
+  const pct = remainingPercent(window);
+  return pct === null ? null : Math.round(pct);
+}
+
 function viewRows(provider, snapshot, currentProfileId, now) {
   const rows = snapshot?.accounts?.[provider];
   if (!Array.isArray(rows)) return [];
@@ -50,7 +55,8 @@ function viewRows(provider, snapshot, currentProfileId, now) {
     const view = {
       provider, no: index + 1, profileId: row.profileId || '',
       label: row.profileLabel || row.profileId || ('账号' + (index + 1)),
-      remain5h: remainingPercent(w5h), remain7d: remainingPercent(w7d), reset5h: resetAt(w5h), reset7d: resetAt(w7d),
+      // 看板只显示整数（2026-10-29 用户：Gemini 返回的是带小数的用量，显示成 60.1668…%）。
+      remain5h: wholePercent(w5h), remain7d: wholePercent(w7d), reset5h: resetAt(w5h), reset7d: resetAt(w7d),
       has5h: provider === 'claude' || !!w5h,
       egress: provider === 'claude' ? (row.egressIp || '') : '', apiKey: !!row.apiKey,
       error: row.error || '', inFlight: !!row.inFlight, selected: !!row.selected,

@@ -36,12 +36,11 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "工作目录路径里带中文时，CodeAgent 会话后台回答正常、卡片却显示不出来：已修复。",
-    "新建 CodeAgent 会话不再每次卡在 /model 选模型：只有一个模型的账号直接用；多个模型的账号沿用你最近一次选的模型（后台 /model 或在 AI HUB 里切换都算）。",
-    "兼容新版 CodeAgent（1.2615.02.02 起）的模型清单存法；不再误报「没能自动选中 CodeAgent 模型菜单里的第一个模型」。"
+    "又能选 CodeAgent 的模型了：启动中心的模型下拉、输入框旁的模型按钮都已恢复；选过的模型会记成 CodeAgent 的默认，下次新建直接用，不用再等 /model。",
+    "解压版（不用安装器）第一次启动会自动在桌面放一个快捷方式；删掉后不会再自动生成。"
   ],
-  "version": "5.3.3",
-  "upstreamVersion": "1.6.679",
-  "upstreamCommit": "10ed72ba9f85dbcf82c19ba9db34f7281e825f41",
+  "version": "5.3.4",
+  "upstreamVersion": "1.6.684",
+  "upstreamCommit": "b06c1f42fdc5a9ec5800e31a957741a34a18dae6",
   "upstreamDirty": false
 }

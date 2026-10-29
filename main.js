@@ -660,7 +660,11 @@ const codexAccountSwitch = require('./main/codex-account-switch').createCodexAcc
   profiles:() => {
     const config = require('./core/codex-global-account').currentConfig();
     return config.codexSubscriptionProfiles.map(profile => {
-      const resolved = require('./core/codex-global-account').resolveAccount({...config,codexSubscriptionProfile:profile.id});
+      // One unusable account (e.g. a built-in home outside an isolated test root)
+      // is listed as unavailable; it must not make every send in the Hub fail.
+      let resolved;
+      try { resolved = require('./core/codex-global-account').resolveAccount({...config,codexSubscriptionProfile:profile.id}); }
+      catch (error) { return {id:profile.id,label:profile.label,home:'',available:false,reason:error.message}; }
       let available = false;
       try {
         const auth = JSON.parse(fs.readFileSync(path.join(resolved.home,'auth.json'),'utf8').replace(/^\uFEFF/,''));
@@ -4327,6 +4331,20 @@ app.whenReady().then(async () => {
         }
       } catch (error) {
         console.warn('[windows-shell] 快捷方式图标更新失败：', error.message);
+      }
+    }
+
+    // 发行版的免安装包（zip 解压即用）第一次打开时在桌面建快捷方式（core/portable-desktop-shortcut.js）。
+    // 隔离的测试实例（发版验收会启动免安装包）不碰真实桌面。
+    if (HUB_IS_PACKAGED && require('./core/distribution').community && !isIsolatedHub()) {
+      try {
+        const r = require('./core/portable-desktop-shortcut').ensurePortableDesktopShortcut({
+          shell, execPath: process.execPath, desktopDir: app.getPath('desktop'), dataDir: getHubDataDir(),
+          name: require('./core/distribution').productName, iconPath: hubIconPath !== process.execPath ? hubIconPath : '',
+        });
+        if (r.action !== 'skipped') console.log(`[portable-shortcut] ${r.action}：${r.linkPath}`);
+      } catch (error) {
+        console.warn('[portable-shortcut] 桌面快捷方式没建成：', error.message);
       }
     }
 

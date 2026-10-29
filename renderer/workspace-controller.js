@@ -1122,7 +1122,7 @@
     const nativeCodeagentOption = selectedKind === 'codeagent'
       ? (codeagentDefault
         ? `<option value="" title="${escapeHtml(codeagentDefault + ' · 这个号的默认模型，启动后不切换')}">${escapeHtml(codeagentModelLabel(codeagentDefault) + '（默认）')}</option>`
-        : '<option value="">沿用 CodeAgent 当前模型</option>') : '';
+        : '<option value="">自动（菜单里第一个模型）</option>') : '';
     const listed = codeagentDefault ? options.filter(option => option.id.toLowerCase() !== codeagentDefault.toLowerCase()) : options;
     const wanted = nativeCodeagentOption + listed.map(option => `${option.id}\u0000${option.label}`).join('|');
     if (modelSelect.dataset.builtFor !== wanted) {
@@ -1133,11 +1133,10 @@
     }
     // 之前点选过的模型正好是这个号的默认模型：按「沿用」处理（不切换，免得启动后再走一遍 /model 菜单）。
     if (codeagentDefault && modelTouchedByUser && String(selectedModel || '').toLowerCase() === codeagentDefault.toLowerCase()) modelTouchedByUser = false;
-    // CodeAgent 一个账号固定一个模型（2026-10-20 用户：「1个账号就默认1个模型，用户要切换就自己手动切换」）：
-    // 不显示模型选项、启动后不切换；要换模型在后台 CLI 里自己输 /model。
+    // CodeAgent 的模型选项（2026-10-20 隐藏，2026-10-29 用户要恢复）：默认一项是这个号启动会用的模型（main codeagent:models 的
+    // defaultModel，和启动判断同一口径），不切换、不等；选别的模型启动时开一次 /model，选中的留作默认，下次就不用再等。
     const modelField = document.getElementById('new-session-model-field');
-    if (modelField) modelField.hidden = selectedKind === 'codeagent';
-    if (selectedKind === 'codeagent') modelTouchedByUser = false;
+    if (modelField) modelField.hidden = false;
     modelSelect.value = selectedKind === 'codeagent' && !modelTouchedByUser ? '' : selectedModel;
 
     const effortLabel = document.getElementById('new-session-effort-label');
@@ -1191,7 +1190,10 @@
 
     if (note) {
       const lines = [];
-      if (selectedKind === 'codeagent') lines.push('一个账号固定用它自己的模型；要换模型，开起来后在后台输入 /model 切换。');
+      if (selectedKind === 'codeagent') lines.push(modelTouchedByUser
+        ? '启动后会在 CodeAgent 的模型菜单里切到所选模型（第一次要多等一会），之后这个号默认就用它。'
+        : codeagentDefaultModel ? `用这个号的默认模型 ${codeagentModelLabel(codeagentDefaultModel)}，启动后不切换。`
+        : '启动后在模型菜单里选第一个模型，之后这个号默认就用它。');
       // fast 有真实代价，别只写"更快"就完事：2026-06-11 实测 fastMode 交互式会话
       // 不落盘 transcript jsonl，卡片视图因此收不到回复。用户有权在勾之前知道。
       if (showFast && selectedFastMode) lines.push('fast 更快出字，但交互式会话可能不落 transcript，卡片视图收不到回复时可关掉它。');
@@ -1347,7 +1349,7 @@
   function tuningTag() {
     const options = modelOptionsFor(selectedKind);
     if (options.length === 0) return '';
-    if (selectedKind === 'codeagent') return codeagentDefaultModel ? `${codeagentModelLabel(codeagentDefaultModel)} · ${selectedEffort}` : selectedEffort;
+    if (selectedKind === 'codeagent' && !modelTouchedByUser) return codeagentDefaultModel ? `${codeagentModelLabel(codeagentDefaultModel)} · ${selectedEffort}` : selectedEffort;
     const model = options.find(option => option.id === selectedModel);
     const modelLabel = model ? model.label : selectedModel;
     if (selectedKind === 'codex') {

@@ -7452,7 +7452,9 @@ const accountUsageController = createAccountUsageController({
 const renderAccountUsage = accountUsageController.render;
 {
   const panelRoot = document.getElementById('account-quota-panel');
-  if (panelRoot) {
+  // 发行版一个 Claude / Codex / Gemini 都没开放（公司版只有 CodeAgent，2026-10-29 用户）就不建看板。
+  const quotaKinds = ['claude', 'codex', 'gemini'].filter(require('../core/distribution').kindAllowed);
+  if (panelRoot && quotaKinds.length) {
     claudeQuotaPanel = require('./account-quota-panel.js').createAccountQuotaPanel({
       document, root: panelRoot, footerRoot: document.getElementById('rail-usage'), escapeHtml, storage: window.localStorage,
       getSnapshot: () => accountUsageController.getSnapshot(),
