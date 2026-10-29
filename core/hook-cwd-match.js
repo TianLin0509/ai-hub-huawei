@@ -25,10 +25,18 @@ function sameWorkDir(a, b) {
 }
 
 // 记录文件放在 <配置目录>/projects/<工作目录 slug>/ 下；slug 可能按短名或长名生成。
+// 中文等非 ASCII 字符：Claude Code 换成「-」，公司 CodeAgent 原样保留（2026-10-29 同事自检：
+// D:\CodeAgent\工作区 的记录在 D--CodeAgent-工作区，Hub 算出来是 D--CodeAgent----，认领一直对不上，
+// 回答写好了、Stop 也报了，卡片还是空白）。比对前把记录目录名里的非 ASCII 字母数字也换成「-」，两种写法都认；
+// 工作目录本身由 sameWorkDir 逐字核对，不会因此把别的目录当成本人。
 function transcriptBucketMatches(transcriptPath, cwd) {
   if (!transcriptPath || !cwd) return false;
   const bucket = path.basename(path.dirname(String(transcriptPath))).toLowerCase();
-  return dirForms(cwd).some((p) => projectSlug(p).toLowerCase() === bucket);
+  const asciiBucket = bucket.replace(/[^a-z0-9]/g, '-');
+  return dirForms(cwd).some((p) => {
+    const slug = projectSlug(p).toLowerCase();
+    return slug === bucket || slug === asciiBucket;
+  });
 }
 
 module.exports = { sameWorkDir, transcriptBucketMatches };

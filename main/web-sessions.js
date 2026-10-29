@@ -131,6 +131,8 @@ function createWebSessions({ dataDir, getWindow, WebContentsView, BrowserWindow,
     try { const saved = JSON.parse(fs.readFileSync(file, 'utf8')); if (Array.isArray(saved?.items)) items = saved.items.filter(i => i && typeof i.id === 'string' && SITES[i.site] && IDENTITIES[i.identity]); } catch {}
   }
   const configured = new Set();
+  // 网页圆桌正在替用户提问的网页（main/web-page-agent.js）：回答完成不弹桌面通知、不标未读，也不因闲置被休眠。
+  const automated = new Set();
   let shownId = null, attachedTo = null, visible = true, lastBounds = null, timer = null, emitTimer = null, disposed = false;
 
   function persist() {
@@ -197,7 +199,8 @@ function createWebSessions({ dataDir, getWindow, WebContentsView, BrowserWindow,
     const partition = partitionFor(item);
     const site = SITES[item.site];
     const ses = configure(partition, site);
-    const view = new WebContentsView({ webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, spellcheck: false } });
+    // backgroundThrottling 关掉：网页圆桌会让没在显示的网页在后台答题，默认的后台节流会拖慢它的计时器和渲染。
+    const view = new WebContentsView({ webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, spellcheck: false, backgroundThrottling: false } });
     // 网站第一帧画出来之前显示白底，不露出窗口底下的黑色。
     view.setBackgroundColor('#ffffff');
     l = { view, phase: 'loading', error: '', generating: false, stopStreak: 0, runStreak: 0 };
@@ -347,6 +350,50 @@ function createWebSessions({ dataDir, getWindow, WebContentsView, BrowserWindow,
     emit();
     return state();
   }
+  // 网页圆桌用：在后台唤醒网页（不切到前台），挂在窗口上但隐藏，等网页加载完再交给自动提问脚本。
+  // fresh=先回到网站首页开新对话；url=回到指定的对话（命令行 AI 接着同一对话追问）。网页已经在显示时位置不动。
+  async function pageFor(id, { fresh = false, url = '' } = {}) {
+    const item = find(id);
+    if (!item) throw new Error('这个网页会话已不存在');
+    const l = wake(item);
+    mount(id, l);
+    ensureTimer();
+    item.lastActiveAt = now();
+    emit();
+    const wc = l.view.webContents;
+    await settle(l, wc);
+    const target = fresh ? siteUrl(item.site) : url && sameOrigin(url, item.site) && url !== wc.getURL() ? url : '';
+    if (target) {
+      await wc.loadURL(target).catch(e => { if (e.code !== 'ERR_ABORTED') throw new Error('网页未能打开：' + e.message); });
+      await settle(l, wc);
+    }
+    return { wc, item };
+  }
+  async function settle(l, wc) {
+    const t0 = Date.now();
+    for (;;) {
+      if (wc.isDestroyed()) throw new Error('网页已关闭');
+      if (l.phase === 'error') throw new Error(l.error || '网页未能打开');
+      const url = wc.getURL();
+      if (url && url !== 'about:blank' && !wc.isLoading()) return;
+      if (Date.now() - t0 > 60000) throw new Error('网页 60 秒内没有打开完成，请打开原网页查看网络或登录');
+      await new Promise(r => setTimeout(r, 300));
+    }
+  }
+  function mount(id, l) {
+    const win = getWindow();
+    if (!win || win.isDestroyed()) return;
+    if (attachedTo && attachedTo !== win && !attachedTo.isDestroyed()) for (const other of live.values()) attachedTo.contentView.removeChildView(other.view);
+    attachedTo = win;
+    if (!win.contentView.children.includes(l.view)) win.contentView.addChildView(l.view);
+    if (id === shownId) return;
+    // 隐藏的网页也要有正常大小，网站才会按电脑宽度排版（lite 脚本只认看得见位置的按钮和输入框）。
+    const [width, height] = win.getContentSize();
+    l.view.setVisible(false);
+    l.view.setBounds({ x: 0, y: 0, width: Math.max(1024, width), height: Math.max(700, height) });
+  }
+  function sameOrigin(url, site) { try { return new URL(url).origin === new URL(siteUrl(site)).origin; } catch { return false; } }
+  function setAutomation(id, on) { if (on) automated.add(id); else automated.delete(id); }
   function markRead(id) { const item = find(id); if (item?.unread) { item.unread = false; persist(); emit(); } return state(); }
 
   async function poll() {
@@ -367,13 +414,14 @@ function createWebSessions({ dataDir, getWindow, WebContentsView, BrowserWindow,
         else if (l.generating && l.stopStreak >= 2) {
           l.generating = false;
           item.lastCompletedAt = t; item.lastActiveAt = t;
-          const watching = shownId === id && visible && focused;
-          if (!watching) item.unread = true;
+          const watching = shownId === id && visible && focused, auto = automated.has(id);
+          if (!watching && !auto) item.unread = true;
           persist();
-          emit({ completed: { id, title: publicItem(item).displayTitle, siteName: SITES[item.site].name, notify: !watching } });
+          emit({ completed: { id, title: publicItem(item).displayTitle, siteName: SITES[item.site].name, notify: !watching && !auto } });
         }
         if (l.generating || (id === shownId && visible && focused)) item.lastActiveAt = t;
       }
+      if (automated.has(id)) item.lastActiveAt = t;
       if (id !== shownId && !l.generating && t - (item.lastActiveAt || 0) > IDLE_MS) suspend(id, 'idle');
     }
     if (!live.size) { clearInterval(timer); timer = null; }
@@ -397,7 +445,7 @@ function createWebSessions({ dataDir, getWindow, WebContentsView, BrowserWindow,
     const attached = !!(l && win && !win.isDestroyed() && win.contentView.children.includes(l.view) && l.view.getVisible());
     return state({ view: l ? { bounds: l.view.getBounds(), attached } : null });
   }
-  return { list, create, show, setBounds, setVisible, hide, suspend: id => suspend(id), close, rename, navigate, markRead, dispose, state };
+  return { list, create, show, setBounds, setVisible, hide, suspend: id => suspend(id), close, rename, navigate, markRead, dispose, state, pageFor, setAutomation };
 }
 
 function registerWebSessionsIpc(ipcMain, { web, getWindow }) {

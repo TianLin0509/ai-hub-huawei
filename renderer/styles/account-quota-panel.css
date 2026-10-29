@@ -1,0 +1,86 @@
+/* 右侧账号看板（2026-10-28 方案 C；10-29 加 Codex / Gemini、去双环）：紧凑卡片按 AI 分段；
+   1440×900 下 8 Claude + 3 Codex + 2 Gemini 不滚动；收起为 40px 编号细栏。只用主题变量，浅色 / 深色共用。 */
+.account-quota-panel {
+  flex: 0 0 264px; width: 264px; min-width: 0; height: 100%; min-height: 0;
+  display: flex; flex-direction: column; overflow: hidden;
+  border-left: 1px solid var(--border-subtle);
+  background: var(--surface-canvas, var(--bg-secondary));
+  color: var(--fg-default); font-size: 12px;
+}
+.account-quota-panel[hidden] { display: none !important; }
+.account-quota-panel.is-collapsed { flex-basis: 40px; width: 40px; }
+body.session-immersive-active .account-quota-panel,
+body.preview-immersive-active .account-quota-panel { display: none !important; }
+
+.account-quota-panel button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+.account-quota-panel button:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; border-radius: 6px; }
+
+.cq-head { flex: none; display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 6px 0 12px; }
+.cq-head strong { font-size: 12.5px; color: var(--fg-strong, var(--fg-default)); white-space: nowrap; }
+.cq-logo { width: 13px; height: 13px; flex: none; }
+.cq-count { font-size: 10.5px; color: var(--fg-muted); white-space: nowrap; font-weight: 400; font-variant-numeric: tabular-nums; margin-left: auto; }
+.cq-count b { color: var(--status-success); font-weight: 600; }
+.cq-collapse { margin-left: auto; width: 20px; height: 22px; color: var(--fg-muted); font-size: 13px; border-radius: 5px; }
+.cq-collapse:hover { background: var(--surface-hover); color: var(--fg-default); }
+
+.cq-list { flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 6px; display: flex; flex-direction: column; gap: 4px; scrollbar-width: thin; }
+.cq-group { display: flex; flex-direction: column; gap: 2px; }
+.cq-group h3 { display: flex; align-items: center; gap: 5px; margin: 1px 2px 0; line-height: 18px; font-size: 11.5px; font-weight: 600; color: var(--fg-default); }
+.cq-card {
+  display: grid; grid-template-columns: 18px minmax(0,1fr); gap: 7px; align-items: start; text-align: left;
+  padding: 3px 7px 3px 6px; border-radius: 7px; border: 1px solid var(--border-subtle) !important;
+  background: var(--surface-raised, var(--bg-primary)) !important; flex: none;
+}
+.cq-card:hover { border-color: var(--border-mid, var(--fg-muted)) !important; }
+.cq-card.is-current { border-color: var(--brand-tint-border, var(--brand)) !important; background: var(--brand-tint) !important; }
+.cq-card.is-loading { opacity: .7; cursor: wait; }
+
+/* 编号圆点：颜色即有效剩余的档位，替代原来的双环 */
+.cq-no { width: 18px; height: 18px; margin-top: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+  font-size: 10.5px; font-weight: 700; color: #fff; background: currentColor; font-variant-numeric: tabular-nums; }
+.cq-no.cq-ok { background: var(--status-success); color: #fff; }
+.cq-no.cq-warn { background: var(--status-warning); color: #fff; }
+.cq-no.cq-bad { background: var(--status-danger); color: #fff; }
+.cq-no.cq-off { background: transparent; color: var(--fg-muted); box-shadow: inset 0 0 0 1.2px var(--fg-muted); }
+
+.cq-main { min-width: 0; display: grid; gap: 0; }
+.cq-title { display: flex; align-items: baseline; gap: 5px; min-width: 0; line-height: 15px; white-space: nowrap; }
+.cq-name { font-weight: 600; font-size: 12px; color: var(--fg-strong, var(--fg-default)); overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+.cq-cur { flex: none; font-size: 10px; color: var(--brand); }
+.cq-ip { margin-left: auto; flex: none; font-size: 10px; color: var(--fg-muted); font-family: "Segoe UI", sans-serif; font-variant-numeric: tabular-nums; }
+.cq-loc { flex: none; font-size: 10px; color: var(--fg-muted); }
+.cq-card.is-error .cq-name { text-decoration: underline dotted var(--status-warning); }
+.cq-nodata { font-size: 10.5px; color: var(--fg-muted); line-height: 14px; }
+
+.cq-bar { display: grid; grid-template-columns: 16px minmax(0,1fr) 30px 54px; gap: 4px; align-items: center; height: 12px; font-size: 10.5px; }
+.cq-win { color: var(--fg-muted); font-size: 10px; }
+.cq-bar i { display: block; height: 4px; border-radius: 2px; background: var(--border-subtle); overflow: hidden; }
+.cq-bar u { display: block; height: 100%; border-radius: 2px; background: currentColor; text-decoration: none; }
+.cq-bar b { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+.cq-reset { text-align: right; color: var(--fg-muted); font-size: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cq-reset.is-back { color: var(--status-danger); font-weight: 600; }
+.cq-ok { color: var(--status-success); }
+.cq-warn { color: var(--status-warning); }
+.cq-bad { color: var(--status-danger); }
+.cq-off { color: var(--fg-muted); }
+
+/* 收起态：编号细栏，按 AI 分组 */
+.cq-rail { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 6px 0; overflow-y: auto; min-height: 0; scrollbar-width: none; }
+.cq-expand { width: 26px; height: 22px; border-radius: 5px; color: var(--fg-muted); font-size: 13px; }
+.cq-expand:hover, .cq-rail-item:hover { filter: brightness(1.08); }
+.cq-rail-group { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.cq-rail-item { position: relative; width: 22px; height: 22px; border-radius: 50%; font-size: 11px; font-weight: 700; color: #fff !important; display: inline-flex; align-items: center; justify-content: center; }
+.cq-rail-item.cq-ok { background: var(--status-success) !important; }
+.cq-rail-item.cq-warn { background: var(--status-warning) !important; }
+.cq-rail-item.cq-bad { background: var(--status-danger) !important; }
+.cq-rail-item.cq-off { color: var(--fg-muted) !important; box-shadow: inset 0 0 0 1.2px var(--fg-muted); }
+.cq-rail-item.is-current { box-shadow: 0 0 0 2px var(--surface-canvas, var(--bg-secondary)), 0 0 0 3.5px var(--brand); }
+
+/* 底栏：看板显示时，看板里有的那几家逐号格子各收成一格汇总 */
+#rail-usage[data-panel-providers~="claude"] .sidebar-quota-provider[data-provider="claude"],
+#rail-usage[data-panel-providers~="codex"] .sidebar-quota-provider[data-provider="codex"],
+#rail-usage[data-panel-providers~="antigravity"] .sidebar-quota-provider[data-provider="antigravity"] { display: none !important; }
+#rail-usage .cq-footer-summary[hidden] { display: none !important; }
+#rail-usage .cq-footer-summary { display: inline-flex; align-items: center; gap: 4px; width: auto; }
+#rail-usage .cq-footer-summary .cq-summary-text { font-size: 11px; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+#rail-usage .cq-footer-summary .cq-summary-text b { color: var(--status-success); font-weight: 600; }

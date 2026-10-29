@@ -3,7 +3,7 @@ const jobs=require('./jobs'),store=require('./store'),adapters=require('./provid
 const {providerClient}=require('./rpc');
 const {exportReport}=require('./report');
 async function start(args){
-  jobs.text(args.prompt);const providers=args.providers||Object.keys(adapters.providers);
+  jobs.text(args.prompt);const providers=args.providers||adapters.defaultProviders;
   if(!Array.isArray(providers)||providers.length<1||providers.length>6||new Set(providers).size!==providers.length)throw Error('Choose 1..6 distinct providers');providers.forEach(adapters.get);
   const rounds=args.rounds??2;if(!Number.isInteger(rounds)||rounds<1||rounds>3)throw Error('rounds must be 1..3');
   const synthesizer=args.synthesizer===null?null:args.synthesizer||providers[0];if(synthesizer&&!providers.includes(synthesizer))throw Error('synthesizer must be a participant or null');

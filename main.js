@@ -2539,6 +2539,17 @@ try {
   });
   require('./main/web-sessions').registerWebSessionsIpc(ipcMain, { web: webSessions, getWindow: () => mainWindow });
 } catch (error) { console.error('[web-sessions] AI 网页未启动：', error.message); }
+// 网页圆桌（2026-10-28）：用「AI 网页」里登录好的网页同题提问、互评、队长汇总。设计见 main/web-page-agent.js。
+let webRoundtable = null;
+if (webSessions) {
+  try {
+    webRoundtable = require('./main/web-page-agent').createWebRoundtable({
+      dataDir: getHubDataDir(), web: webSessions,
+      onChanged: state => sendToRenderer('web-roundtable:changed', state),
+    });
+    require('./main/web-page-agent').registerWebRoundtableIpc(ipcMain, { roundtable: webRoundtable, getWindow: () => mainWindow });
+  } catch (error) { console.error('[web-roundtable] 网页圆桌未启动：', error.message); }
+}
 let companyWebAi = null;
 // 公司版「论坛」（2026-10-18）：每天同步稼先社区、心声社区的热门帖子并附 AI 摘要，数据只留在本机 Hub 数据目录。
 // 只在公司版启用（core/company-forum/gate.js）。取数用 Hub 自己的隐藏浏览器窗口（main/company-forum-browser.js）。
@@ -3041,9 +3052,11 @@ const hookServer = http.createServer((req, res) => {
   const isResearchAccount = false;
   // 2026-05-16 maintainer：防卡死 — 外部 HTTP 救援入口，tools/hub-escape.ps1 调
   const isEscapeHome = req.method === 'POST' && req.url === '/api/escape-home';
+  // 网页圆桌 MCP（core/web-roundtable）经这里用「AI 网页」的登录提问（2026-10-28）。令牌在 Hub 控制文件里，只有本机同一用户能读。
+  const isWebAsk = req.method === 'POST' && ['/api/web-ask', '/api/web-ask-status', '/api/web-ask-collect'].includes(req.url);
   const isResearchFetch = false;
   // plan 2026-05-05 阶段 0: 群聊记忆 MCP 回调（loopback）。
-  if (!isHook && !isStatus && !isResearchFetch && !isEscapeHome && !isNativeOwnership && !isResearchAccount) {
+  if (!isHook && !isStatus && !isResearchFetch && !isEscapeHome && !isNativeOwnership && !isResearchAccount && !isWebAsk) {
     res.writeHead(404); res.end('{}'); return;
   }
 
@@ -3065,7 +3078,8 @@ const hookServer = http.createServer((req, res) => {
       rawChunks.push(c);
       return;
     }
-    if (body.length + c.length > 16384) { tooBig = true; return; }
+    // 网页提问的问题最长 12 万字，单独放宽到 1MB。
+    if (body.length + c.length > (isWebAsk ? 1024 * 1024 : 16384)) { tooBig = true; return; }
     body += c;
   });
   req.on('end', async () => {
@@ -3080,6 +3094,17 @@ const hookServer = http.createServer((req, res) => {
       if (!parsed) { res.writeHead(200); res.end('{}'); return; }
     } else {
       try { parsed = JSON.parse(body || '{}'); } catch { parsed = {}; }
+    }
+    if (isWebAsk) {
+      if (parsed.token !== HOOK_TOKEN) { res.writeHead(403); res.end('{}'); return; }
+      if (!webRoundtable) { res.writeHead(503); res.end(JSON.stringify({ error: 'AI 网页没有启动' })); return; }
+      try {
+        const result = req.url === '/api/web-ask' ? webRoundtable.askOne({ provider: String(parsed.provider || ''), prompt: parsed.prompt, url: String(parsed.url || ''), member: String(parsed.member || '') })
+          : req.url === '/api/web-ask-collect' ? await webRoundtable.askCollect({ id: String(parsed.id || ''), force: parsed.force === true })
+          : webRoundtable.askStatus({ id: String(parsed.id || '') });
+        res.writeHead(200); res.end(JSON.stringify(result));
+      } catch (e) { res.writeHead(e && e.code === 'WEB_OWNER' ? 409 : 400); res.end(JSON.stringify({ error: String((e && e.message) || e), code: e && e.code })); }
+      return;
     }
     if (isNativeOwnership) {
       if (parsed.token !== HOOK_TOKEN) { res.writeHead(403); res.end('{}'); return; }
@@ -3710,6 +3735,8 @@ const accountProfileUsage = require('./main/usage/account-profile-usage').create
   refreshAntigravity: antigravityProfilesUsage.refresh,
   claudeProfiles: () => require('./core/claude-subscription-profiles').normalizeProfiles(getHubConfig().claudeSubscriptionProfiles),
   claudeScope: currentClaudeScope, claudeCached: claudeCache,
+  // 共享出口 IP：账号页「出口一致性」记下的基线（claude-egress-baseline.json），专线号用自己配置的 IP。
+  claudeSharedIp: () => { try { return JSON.parse(fs.readFileSync(path.join(getHubDataDir(), 'claude-egress-baseline.json'), 'utf8')).shared || ''; } catch { return ''; } },
   refreshClaude: scope => claudeRefresher(scope).refresh(),
   codexScope: currentCodexUsageScope,
   codexCached: () => loadUsageCacheForCurrentConfig().codex,
@@ -3720,6 +3747,15 @@ const accountProfileUsage = require('./main/usage/account-profile-usage').create
 });
 ipcMain.handle('account-profile-usage', () => accountProfileUsage.list());
 ipcMain.handle('refresh-account-profile-usage', (_event, options = {}) => accountProfileUsage.refresh(options));
+// 账号看板的出口地点：每个 IP 查一次并缓存（main/usage/ip-location-cache.js）；E2E 用夹具，不发网络请求。
+const ipLocationCache = require('./main/usage/ip-location-cache').createIpLocationCache({
+  dataDir: getHubDataDir(), getProxy: () => getHubConfig().proxy,
+  ...(process.env.CLAUDE_HUB_E2E === '1' && process.env.CLAUDE_HUB_IP_LOCATION_FIXTURE ? { probeFactory: ({ endpoints }) => async () => {
+    const ip = endpoints[0].url.split('/').pop(), hit = JSON.parse(process.env.CLAUDE_HUB_IP_LOCATION_FIXTURE)[ip];
+    return hit ? { ok: true, ...hit } : { ok: false };
+  } } : {}),
+});
+ipcMain.handle('ip-location:get', (_event, ips) => ipLocationCache.get(ips));
 
 async function refreshAntigravityUsage(force = false) {
   const scope = antigravityProfilesUsage.scope();
@@ -4524,6 +4560,7 @@ async function runFinalShutdownCleanup() {
   capture('dev-workbench', () => devWorkbench?.dispose());
   capture('progress-cards', () => progressCards?.stop());
   capture('hub-assistant', () => assistantService?.close());
+  capture('web-roundtable', () => webRoundtable?.dispose());
   capture('web-sessions', () => webSessions?.dispose());
   capture('company-assistant', () => companyAssistantService?.close());
   capture('company-ai', () => companyAiTasks?.close());

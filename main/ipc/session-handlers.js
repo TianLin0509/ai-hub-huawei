@@ -828,6 +828,8 @@ function registerSessionIpc(ipcMain, deps) {
     // 菜单回车（CodeAgent 写）和改回原值（Hub 写）都是这次选择引起的：先登记，看护看到时认得出来源，这里自己记日志。
     guard.noteHubWrite(configDir, before, `picker-restore:${reason}`, { logged: true, session: String(sessionId).slice(0, 8) });
     // 开一次模型菜单选中 want（同一个会话可能要开两次：第一次的目标不在权限清单里时改选清单里的模型，见下面的兜底）
+    // 手动会话（启动、原地重拉、界面上切换）选中的模型留作这个号的默认模型，下次新建直接用（2026-10-28 用户）；
+    const keepDefault = !isAutomaticCodeAgent(session) && ['launch', 'relaunch', 'switch'].includes(reason);
     const driveMenu = async want => {
       guard.noteHubWrite(configDir, want, `codeagent-menu-enter:${reason}`, { logged: true, session: String(sessionId).slice(0, 8) });
       try {
@@ -835,12 +837,40 @@ function registerSessionIpc(ipcMain, deps) {
           configDir, allowedModels: permitted.authoritative ? permitted.models : null,
           // 启动和原地重拉：等 CLI 画出普通输入框再敲 /model（太早敲回车会丢，见 pickModel 的 readyFirstMs）
           readyFirstMs: reason === 'launch' || reason === 'relaunch' ? 45000 : 0,
+          keepDefault,
           onDefaultChange: change => guard.recordChange(dataDir, { account, session: String(sessionId).slice(0, 8), before: change.restoredTo || '', after: change.written || '',
             source: `codeagent-menu-enter:${reason}`, extra: { file: change.file, restoredTo: change.restoredTo || '(空)', restoreOk: change.ok, ...(change.error ? { restoreError: change.error } : {}) } }, { persist: false }),
           sendToPty: require('../../core/group-chat-watcher').sendToPty });
       } catch (error) { return { ok: false, message: error && error.message ? error.message : String(error) }; }
     };
+    // 清单里的模型一个都不在这次读到的完整菜单里 = 记着的清单过期（启动、重拉时才判）。
+    const atLaunchPick = isAutomaticCodeAgent(session) || reason === 'launch' || reason === 'relaunch';
+    const staleAgainstMenu = res => atLaunchPick && permitted.authoritative && permitted.models.length > 0 && Array.isArray(res && res.menu) && res.menu.length > 0
+      && !permitted.models.some(m => res.menu.some(label => String(label || '').trim().toLowerCase() === String(m).toLowerCase()));
+    // 用菜单更新这个号记着的清单（菜单名被截断成「…」时不写回），记一行日志。
+    const refreshStaleList = (res, model) => {
+      const probe = require('../../core/codeagent-model-probe');
+      const live = res.menu.map(label => String(label || '').trim()).filter(Boolean);
+      const truncated = live.some(label => /(\.\.\.|…)$/.test(label));
+      const models = truncated ? [] : live.map(probe.cleanModelId).filter(Boolean);
+      let refreshed = false;
+      if (models.length) {
+        try {
+          const file = session.codeagentPoolAccount ? require('path').join(configDir, probe.MODELS_FILE) : require('../../core/codeagent-pool').personalModelsFile(dataDir);
+          probe.writeProbed(file, { models, defaultModel: '' });
+          refreshed = true;
+        } catch (error) { console.warn('[codeagent] 用模型菜单更新权限清单失败：' + error.message); }
+      }
+      codeagentModels.appendModelLog(dataDir, { event: 'permission-list-stale', session: String(sessionId).slice(0, 8), account: account.replace(/\s+/g, ''), reason,
+        model, note: `记着的清单（${permitted.models.join('、')}）都不在 CodeAgent 此刻的菜单里（${live.join('、')}），按菜单为准不改选${refreshed ? '，已用菜单更新清单' : truncated ? '（菜单名被截断，没写回）' : ''}` });
+    };
     let result = await driveMenu(modelId);
+    // 冲着清单里的模型去开菜单（例如配置里写的不在清单里、启动时改选清单那个），菜单里却没有它：同样是清单过期，
+    // 按 CLI 当前模型照常用，不报「没能切到」（输入框能用时；菜单没关掉的照旧报）。
+    if (!result.ok && !codeagentPicker.isFirstMenuModel(modelId) && (result.inputReady || result.inputUsable) && staleAgainstMenu(result)) {
+      refreshStaleList(result, modelId);
+      result = { ...result, staleList: true };
+    }
     // 选菜单第一个（手动新建、没明确选模型，2026-10-25）：实际选中的是菜单第 1 行那个模型。
     const pickFirst = codeagentPicker.isFirstMenuModel(modelId);
     let picked = pickFirst ? (result.ok && result.picked) || '' : modelId;
@@ -852,8 +882,11 @@ function registerSessionIpc(ipcMain, deps) {
     // 改选只在菜单这次确实能用（result.ok）时做：菜单本来就选不动时再开一次只会更耽误这一轮，照旧走「能发就发、报错后修正」。
     const atLaunch = automatic || reason === 'launch' || reason === 'relaunch';
     const willUse = result.ok ? picked : before;
-    const offPermission = atLaunch && permitted.authoritative && permitted.models.length && willUse
+    let offPermission = atLaunch && permitted.authoritative && permitted.models.length && willUse
       && !permitted.models.some(m => String(m).toLowerCase() === String(willUse).toLowerCase());
+    // 记着的权限清单过期（2026-10-28 同事：清单里只有 Qwen3.6-27B-VL，CodeAgent 此刻的菜单里只有 DeepSeek，Hub 回菜单找 Qwen 失败并报错）：
+    // 菜单是 CodeAgent 按账号此刻的权限列的，比 Hub 记的准。选菜单第一个后发现「不在清单里」时，清单里的模型一个都不在菜单里就不改选。
+    if (offPermission && result.ok && staleAgainstMenu(result)) { offPermission = false; refreshStaleList(result, willUse); }
     if (offPermission && result.ok) {
       // 清单里的第一个（号池的号通常只有一个模型）。菜单里的实际条目以 permitted.models 为准，不按配置里的默认模型猜。
       const target = String(permitted.models[0]);
@@ -884,7 +917,7 @@ function registerSessionIpc(ipcMain, deps) {
     // 自动会话没人守着：菜单没选上，但菜单已关、输入行可以用（认得出普通输入框，或旧版画面认不出、但已没有菜单和「/model」残留），
     // 就按 CLI 当前模型照常把问题发出去，失败只记在 pick 日志里，不卡住这一轮；回执里的模型按实际作答的模型（company.js 读原生记录）。
     // 选菜单第一个也是 Hub 自己替用户做的：没选上但输入框能用时同样照常发，第一条消息不被退回（会话里提示一句，见下面的 codeagent-model-pick 监听）。
-    const fallback = !result.ok && (automatic || pickFirst) && (result.inputReady || result.inputUsable);
+    const fallback = !result.ok && (automatic || pickFirst || result.staleList) && (result.inputReady || result.inputUsable);
     if (!result.ok && automatic && !fallback) {
       result = { ...result, message: `自动选模型没成功，模型菜单也没能关掉，为了不把问题打进菜单，这一轮没有发出去（原因：${result.message || '未知'}）` };
     }
@@ -910,6 +943,11 @@ function registerSessionIpc(ipcMain, deps) {
     // 自动会话没人守着：菜单没选上但普通输入框已恢复时，照旧按 CLI 当前模型把活发出去（和改动前一样），失败只记在上面的 pick 日志里，不卡住这一轮。
     if (fallback) {
       return { ...result, ok: true, fallback: 'cli-default-model' };
+    }
+    // 留作默认的这次选择同时记成这个号的「上次」（带时间），下次新建和 CodeAgent 配置文件比先后（core/codeagent-launch-model.js）。
+    if (result.ok && result.keptDefault && picked && !codeagentPicker.isFirstMenuModel(picked)) {
+      try { require('../../core/codeagent-launch-model').rememberModel(dataDir, session.codeagentPoolAccount || 'personal', picked); }
+      catch (error) { console.warn('[codeagent] 记住这次选的模型失败：' + error.message); }
     }
     if (result.ok) {
       const updated = sessionManager.updateSessionMeta(sessionId, { currentModel: { id: picked, displayName: codeagentModels.modelLabel(picked) }, codeagentRequestedModel: undefined, codeagentModelPick: false,

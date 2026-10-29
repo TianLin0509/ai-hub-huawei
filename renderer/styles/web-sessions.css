@@ -71,3 +71,78 @@ body.web-session-open #terminal-panel { visibility: hidden; }
 .session-range-tabs:has(> [data-session-days='web']) > button { padding: 6px 7px; }
 
 .ws-owner-note { margin: 2px 2px 8px; padding: 8px 10px; border-radius: 8px; background: var(--surface-overlay, rgba(127,127,127,.08)); color: var(--fg-muted); font-size: 12px; line-height: 1.6; }
+
+/* 网页圆桌（2026-10-28）：主区一页，盖在终端区上；成员回答并排卡片，底部输入区 */
+.ws-new-roundtable { margin-top: -4px; }
+body.web-roundtable-open #terminal-panel { visibility: hidden; }
+.web-roundtable-panel { position: fixed; z-index: 60; display: flex; flex-direction: column; background: var(--surface-canvas, #f6f7f9); color: var(--fg-default); font: 13px var(--font-sans); -webkit-app-region: no-drag; }
+.web-roundtable-panel[hidden] { display: none; }
+.wrt-bar { flex: none; display: flex; align-items: center; gap: 10px; height: 42px; padding: 0 10px 0 16px; border-bottom: 1px solid var(--border-subtle); }
+.wrt-bar strong { font-size: 14px; }
+.wrt-pick { max-width: 320px; padding: 4px 8px; border: 1px solid var(--border-mid); border-radius: 6px; background: var(--surface-card); color: var(--fg-default); font: 13px var(--font-sans); }
+.wrt-spacer { flex: 1; }
+.wrt-btn, .wrt-primary, .wrt-chip, .wrt-card footer button { padding: 5px 12px; border: 1px solid var(--border-mid); border-radius: 6px; background: var(--surface-card); color: var(--fg-default); font: 13px var(--font-sans); cursor: pointer; white-space: nowrap; }
+.wrt-btn:hover, .wrt-chip:hover, .wrt-card footer button:hover { border-color: var(--brand); color: var(--brand-text); }
+.wrt-btn.small { padding: 2px 8px; font-size: 12px; }
+.wrt-primary { border-color: var(--brand); background: var(--brand); color: #fff; font-weight: 600; }
+.wrt-primary:hover { filter: brightness(1.06); }
+button:disabled.wrt-btn, button:disabled.wrt-primary { opacity: .45; cursor: not-allowed; filter: none; }
+.wrt-icon { width: 30px; height: 30px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-muted); font-size: 20px; line-height: 1; cursor: pointer; }
+.wrt-icon:hover { background: var(--surface-overlay, rgba(127,127,127,.1)); color: var(--fg-default); }
+.wrt-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 14px 18px 18px; }
+.wrt-empty, .wrt-note { color: var(--fg-muted); line-height: 1.7; }
+.wrt-setup { max-width: 760px; }
+.wrt-setup h2 { margin: 4px 0 6px; font-size: 16px; }
+.wrt-cands { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; margin: 12px 0; }
+.wrt-cand { display: flex; align-items: center; gap: 9px; padding: 9px 10px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--surface-card); cursor: pointer; }
+.wrt-cand.on { border-color: var(--brand); background: var(--brand-tint); }
+.wrt-cand input { margin: 0; accent-color: var(--brand); }
+.wrt-cand span:last-child { display: flex; flex-direction: column; min-width: 0; }
+.wrt-cand small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); font-size: 12px; }
+.wrt-quick { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0 12px; color: var(--fg-muted); }
+.wrt-quick small { flex-basis: 100%; }
+.wrt-row { display: flex; align-items: center; gap: 10px; margin: 10px 0; flex-wrap: wrap; }
+.wrt-row small { color: var(--fg-muted); }
+.wrt-row select, .wrt-actions select { padding: 4px 6px; border: 1px solid var(--border-mid); border-radius: 6px; background: var(--surface-card); color: var(--fg-default); font: 13px var(--font-sans); }
+.wrt-members { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.wrt-member { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 4px; border: 1px solid var(--border-subtle); border-radius: 14px; background: var(--surface-card); }
+.wrt-member .ws-logo { width: 20px; height: 20px; }
+.wrt-member.gone { opacity: .5; text-decoration: line-through; }
+.wrt-tag { margin-left: 4px; padding: 0 5px; border-radius: 4px; background: var(--brand-tint); color: var(--brand-text); font-style: normal; font-size: 11px; }
+.wrt-round { margin: 0 0 18px; }
+.wrt-round-head { display: flex; align-items: baseline; gap: 10px; margin: 0 0 8px; }
+.wrt-round-head b { flex: none; font-size: 13px; }
+.wrt-round-head span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--fg-muted); }
+.wrt-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 10px; align-items: start; }
+.wrt-grid.one { grid-template-columns: minmax(340px, 900px); }
+.wrt-card { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--surface-card); }
+.wrt-card > header { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--border-subtle); }
+.wrt-card > header small { color: var(--fg-muted); font-size: 11px; }
+.wrt-state { margin-left: auto; font-size: 12px; color: var(--fg-muted); }
+.wrt-card.s-streaming .wrt-state, .wrt-card.s-sent .wrt-state, .wrt-card.s-preparing .wrt-state, .wrt-card.s-sending .wrt-state, .wrt-card.s-unconfirmed .wrt-state, .wrt-card.s-queued .wrt-state { color: #3478f6; }
+.wrt-card.s-attention .wrt-state { color: #b7791f; }
+.wrt-card.s-error .wrt-state { color: #d64545; }
+.wrt-card.s-done .wrt-state { color: #2f855a; }
+.wrt-err { margin: 8px 10px 0; padding: 6px 8px; border-radius: 6px; background: rgba(214,69,69,.07); color: #b83232; font-size: 12px; line-height: 1.6; }
+.wrt-card.s-attention .wrt-err { background: rgba(183,121,31,.08); color: #8a5a12; }
+.wrt-md { max-height: 460px; overflow-y: auto; padding: 4px 12px 8px; line-height: 1.7; user-select: text; overflow-wrap: anywhere; }
+.wrt-md pre { overflow-x: auto; padding: 8px; border-radius: 6px; background: var(--surface-overlay, rgba(127,127,127,.08)); }
+.wrt-md table { border-collapse: collapse; } .wrt-md th, .wrt-md td { padding: 3px 8px; border: 1px solid var(--border-subtle); }
+.wrt-wait { color: var(--fg-muted); }
+.wrt-card footer { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--border-subtle); }
+.wrt-card footer button { padding: 2px 9px; font-size: 12px; }
+.wrt-composer { flex: none; padding: 10px 18px 12px; border-top: 1px solid var(--border-subtle); background: var(--surface-card); }
+.wrt-composer[hidden] { display: none; }
+.wrt-composer textarea { box-sizing: border-box; width: 100%; min-height: 64px; max-height: 220px; padding: 8px 10px; border: 1px solid var(--border-mid); border-radius: 8px; background: var(--surface-canvas, #fff); color: var(--fg-default); font: 13px/1.6 var(--font-sans); resize: vertical; }
+.wrt-composer textarea:focus { outline: none; border-color: var(--brand); }
+.wrt-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.wrt-check { display: inline-flex; align-items: center; gap: 4px; color: var(--fg-muted); }
+.wrt-check input { accent-color: var(--brand); }
+.wrt-sep { width: 1px; height: 18px; background: var(--border-subtle); }
+.wrt-round-head .wrt-btn { margin-left: auto; flex: none; }
+.wrt-picker { position: absolute; z-index: 5; width: 330px; max-height: 360px; overflow-y: auto; padding: 6px; border: 1px solid var(--border-mid); border-radius: 8px; background: var(--surface-card); box-shadow: 0 8px 24px rgba(20,30,50,.14); }
+.wrt-picker-head { padding: 4px 8px 6px; color: var(--fg-muted); font-size: 12px; }
+.wrt-picker button { display: flex; flex-direction: column; align-items: flex-start; width: 100%; padding: 6px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-default); font: 13px var(--font-sans); text-align: left; cursor: pointer; }
+.wrt-picker button:hover { background: var(--brand-tint); }
+.wrt-picker button strong { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.wrt-picker button small { color: var(--fg-muted); font-size: 11px; }

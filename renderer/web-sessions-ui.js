@@ -11,6 +11,7 @@ const ICON = {
   external: '<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>',
   sleep: '<path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5Z"/>',
   close: '<path d="m6 6 12 12M18 6 6 18"/>',
+  roundtable: '<circle cx="12" cy="12" r="4"/><circle cx="12" cy="3.5" r="1.6"/><circle cx="20.5" cy="12" r="1.6"/><circle cx="12" cy="20.5" r="1.6"/><circle cx="3.5" cy="12" r="1.6"/>',
 };
 const svg = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[name]}</svg>`;
 
@@ -28,7 +29,7 @@ function relTime(ms) {
   return Math.floor(d / 86400e3) + ' 天前';
 }
 
-function createWebSessionsUi({ document, window, ipcRenderer, beforeShow = () => {}, openLaunchCenter = () => {}, closeLaunchCenter = () => {}, showToast = () => {} }) {
+function createWebSessionsUi({ document, window, ipcRenderer, beforeShow = () => {}, openLaunchCenter = () => {}, closeLaunchCenter = () => {}, showToast = () => {}, openRoundtable = null }) {
   let data = { items: [], sites: [], identities: { main: '主', alt: '副' }, shownId: null };
   let panelError = '';
   let shownId = null, identity = 'main', occluded = false, occludeStreak = 0, watch = null, editingId = null;
@@ -48,6 +49,7 @@ function createWebSessionsUi({ document, window, ipcRenderer, beforeShow = () =>
   const panel = document.createElement('section');
   panel.id = 'web-session-panel'; panel.className = 'web-session-panel'; panel.hidden = true; panel.setAttribute('aria-label', 'AI 网页');
   panel.innerHTML = `<header class="ws-bar"><div class="ws-who"></div><div class="ws-tools">
+      ${openRoundtable ? `<button type="button" data-ws-act="roundtable" title="网页圆桌：把同一个问题发给多个网页 AI">${svg('roundtable')}</button>` : ''}
       <button type="button" data-ws-nav="back" title="后退">${svg('back')}</button>
       <button type="button" data-ws-nav="reload" title="刷新">${svg('reload')}</button>
       <button type="button" data-ws-nav="home" title="回到首页（新对话）">${svg('home')}</button>
@@ -135,6 +137,7 @@ function createWebSessionsUi({ document, window, ipcRenderer, beforeShow = () =>
     const nav = event.target.closest('[data-ws-nav]'), act = event.target.closest('[data-ws-act]');
     if (!shownId) return;
     if (nav) void call('web-sessions:navigate', { id: shownId, action: nav.dataset.wsNav }).then(accept).catch(report);
+    if (act?.dataset.wsAct === 'roundtable') { const id = shownId; hidePanel({ notify: true }); openRoundtable({ focus: id }); return; }
     if (act?.dataset.wsAct === 'suspend') { const id = shownId; hidePanel({ notify: false }); void call('web-sessions:suspend', { id }).then(accept).catch(report); window.__webSessionAfterLeave?.(); }
     if (act?.dataset.wsAct === 'close') { const id = shownId; hidePanel({ notify: false }); void call('web-sessions:close', { id }).then(accept).catch(report); window.__webSessionAfterLeave?.(); }
   });
@@ -161,7 +164,7 @@ function createWebSessionsUi({ document, window, ipcRenderer, beforeShow = () =>
     }).join('');
     const ownerNote = data.owner && !data.owner.self && data.owner.otherPid
       ? `<p class="ws-owner-note">这些网页正在另一个 Hub 窗口（PID ${esc(data.owner.otherPid)}）里使用。登录信息同一时间只能由一个窗口读写，请到那个窗口打开。</p>` : '';
-    listEl.innerHTML = `${ownerNote}<button type="button" class="ws-new" data-ws-new>＋ 打开 AI 网页</button>${rows || '<p class="ws-empty">还没有网页会话。点上面的按钮，选一个网站打开；第一次需要在网页里登录。</p>'}`;
+    listEl.innerHTML = `${ownerNote}<button type="button" class="ws-new" data-ws-new>＋ 打开 AI 网页</button>${openRoundtable ? '<button type="button" class="ws-new ws-new-roundtable" data-ws-roundtable>◎ 网页圆桌：一个问题问多家</button>' : ''}${rows || '<p class="ws-empty">还没有网页会话。点上面的按钮，选一个网站打开；第一次需要在网页里登录。</p>'}`;
     const input = listEl.querySelector('.ws-rename');
     if (input) { input.focus(); input.select(); }
   }
@@ -172,6 +175,7 @@ function createWebSessionsUi({ document, window, ipcRenderer, beforeShow = () =>
   }
   listEl?.addEventListener('click', event => {
     if (event.target.closest('[data-ws-new]')) { openLaunchCenter('web'); return; }
+    if (event.target.closest('[data-ws-roundtable]')) { if (shownId) hidePanel({ notify: true }); openRoundtable({}); return; }
     const row = event.target.closest('[data-ws-id]');
     if (!row || event.target.closest('.ws-rename')) return;
     const id = row.dataset.wsId, action = event.target.closest('[data-ws-row]')?.dataset.wsRow;

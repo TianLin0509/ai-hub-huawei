@@ -91,6 +91,7 @@ function withCredentialLocks(home, work, options) {
 function createClaudeCredentialBroker({ request, stateDir, now = Date.now, onUsage = () => {} }) {
   const pending = new Map();
   const usageBlockedUntil = new Map();
+  const usageStrikes = new Map();
   async function call(profile, url, options) {
     if (typeof request !== 'function') throw fail('CLAUDE_AUTH_OFFLINE', 'Claude 账号服务尚未就绪');
     try { return await request(url, options, profile); }
@@ -213,10 +214,17 @@ function createClaudeCredentialBroker({ request, stateDir, now = Date.now, onUsa
       const response = await call(profile, 'https://api.anthropic.com/api/oauth/usage', {
         headers: { Authorization: `Bearer ${credentials.claudeAiOauth.accessToken}`, 'anthropic-beta': 'oauth-2025-04-20' },
       });
+      logRefresh(profile, 'usage', { status: response.status });
       if (response.status !== 200 || !response.data || typeof response.data !== 'object') {
-        if (response.status === 429) usageBlockedUntil.set(profile.id, now() + Math.max(60_000, Number(response.retryAfterMs) || 0));
+        // Repeated 429s double the pause (2, 4, 8 … up to 30 minutes); one success resets it.
+        if (response.status === 429) {
+          const strikes = (usageStrikes.get(profile.id) || 0) + 1;
+          usageStrikes.set(profile.id, strikes);
+          usageBlockedUntil.set(profile.id, now() + Math.max(Number(response.retryAfterMs) || 0, Math.min(30 * 60_000, 120_000 * 2 ** (strikes - 1))));
+        }
         throw fail(response.status === 429 ? 'CLAUDE_USAGE_RATE_LIMIT' : 'CLAUDE_USAGE_UNAVAILABLE', '暂时无法确认 Claude 账号额度，本次未换号');
       }
+      usageStrikes.delete(profile.id);
       const snapshot = { id: profile.id, ready: true, usage: response.data, observedAt: now() };
       onUsage(profile, snapshot);
       return snapshot;

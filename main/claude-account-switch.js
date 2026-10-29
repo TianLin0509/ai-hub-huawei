@@ -4,8 +4,16 @@ const path = require('node:path');
 const { atomicJson, readJson, fail } = require('../core/claude-account-credentials');
 const { installAccount, mirrorAccess, ensureRuntimeIdentity, MARKER } = require('../core/claude-account-runtime');
 const { isConfirmedQuotaWall, selectQuotaAccount, quotaReading, CONTINUE_AFTER_SWITCH } = require('../core/claude-quota-switch-policy');
-const USAGE_EVERY_MS = 90_000;
+// 额度查询按需触发（2026-10-29 用户）：不按时钟轮询；账号有回合结束时才考虑查，
+// 离额度越远间隔越长。额度用完换号前的那次查询不受影响，照常立即查。
+// 原先每 90–120 秒查一次，Anthropic 的额度接口常回 429。
 const USAGE_SPREAD_MS = 30_000;
+function usageGapMs(usage) {
+  const used = ['five_hour', 'seven_day'].map(k => usage?.[k]?.utilization).filter(v => typeof v === 'number' && Number.isFinite(v));
+  if (!used.length) return 10 * 60_000;
+  const max = Math.max(...used);
+  return max >= 80 ? 5 * 60_000 : max >= 50 ? 15 * 60_000 : 30 * 60_000;
+}
 const hookTurnKey = event => event.promptId ? `prompt:${event.promptId}` : event.turnId ? `turn:${event.turnId}` : null;
 
 function createClaudeAccountSwitch({ sessionManager, broker, profiles, scopeFor,
@@ -15,6 +23,22 @@ function createClaudeAccountSwitch({ sessionManager, broker, profiles, scopeFor,
   const manualEpoch = new Map();
   const restored = new Set();
   const nextUsage = new Map();
+  // An account is checked only after one of its turns ends, never on a clock.
+  function usageAfterTurn(session) {
+    if (!managed(session)) return;
+    const profileId = session.claudeProfile;
+    if ((nextUsage.get(profileId) || 0) > now()) return;
+    nextUsage.set(profileId, now() + 10 * 60_000);
+    const handle = later(() => void Promise.resolve().then(() => broker.usage(account(profileId))).then(snapshot => {
+      nextUsage.set(profileId, now() + usageGapMs(snapshot?.usage));
+    }).catch(error => {
+      // 例行查询失败与换号无关：说清是额度没刷新、不影响当前会话。
+      publish(session.id, 'usage-unavailable', error?.code === 'CLAUDE_USAGE_RATE_LIMIT'
+        ? '额度暂未刷新（Anthropic 限流），稍后自动再查；不影响当前会话'
+        : '额度暂未刷新，稍后自动再查；不影响当前会话');
+    }), Math.floor(random() * USAGE_SPREAD_MS));
+    handle?.unref?.();
+  }
   const observedTurns = new Map();
   const manualRequests = new Map();
   const activeTurns = new Map();
@@ -419,6 +443,7 @@ function createClaudeAccountSwitch({ sessionManager, broker, profiles, scopeFor,
     },
     onCompleted(event) {
       event = { ...event, turnId: hookTurnKey(event) };
+      usageAfterTurn(sessionManager.getSession(event.sessionId));
       if (deferredFailures.get(event.sessionId)?.turn === event.turnId) deferredFailures.delete(event.sessionId);
       if (endTurn(event)) return;
       const id = event.sessionId;
@@ -440,18 +465,6 @@ function createClaudeAccountSwitch({ sessionManager, broker, profiles, scopeFor,
         for (const session of sessionManager.getAllSessions()) {
           if (!managed(session) || pending.has(session.id)) continue;
           void refresh(session).catch(error => publish(session.id, 'attention', error.message));
-          if ((nextUsage.get(session.claudeProfile) || 0) <= now()) {
-            // 2026-10-27: one timer used to query every open account in the same
-            // tick, so their usage requests reached Anthropic together, from
-            // different exits, every 90 s. Each account now waits its own random
-            // 0–30 s inside the tick and its next turn is 90–120 s away.
-            const profileId = session.claudeProfile;
-            nextUsage.set(profileId, now() + USAGE_EVERY_MS + Math.floor(random() * USAGE_SPREAD_MS));
-            const handle = later(() => void Promise.resolve().then(() => broker.usage(account(profileId))).catch(error => {
-              publish(session.id, 'usage-unavailable', error.message);
-            }), Math.floor(random() * USAGE_SPREAD_MS));
-            handle?.unref?.();
-          }
         }
       }, 30_000);
       timer.unref?.();

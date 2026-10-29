@@ -77,6 +77,7 @@
   <link rel="stylesheet" href="styles/session-immersive.css">
 <link rel="stylesheet" href="styles/zoom-label.css">
   <link rel="stylesheet" href="styles/appearance.css">
+  <link rel="stylesheet" href="styles/account-quota-panel.css">
   <link rel="stylesheet" href="styles/controls.css" id="controls-layer">
 </head>
 <body>
@@ -558,6 +559,8 @@
       </div>
       <div class="memo-list" id="memo-list"></div>
     </div>
+    <!-- 账号看板（2026-10-28 Claude；10-29 加 Codex / Gemini）：最右侧常驻，可收起成编号细栏；骨架由 renderer/account-quota-panel.js 构建。 -->
+    <aside class="account-quota-panel" id="account-quota-panel" aria-label="账号额度" hidden></aside>
     <div class="modal-overlay" id="resume-modal" style="display:none">
       <div class="modal">
         <div class="modal-header">

@@ -36,6 +36,8 @@ function createAccountProfileUsage(deps) {
         const scope = deps.claudeScope(profile.id);
         return publicRow('claude', profile, deps.claudeCached(scope), {
           scope, selected: scope === deps.claudeScope(), error: errors.get(scope) || '',
+          // Dedicated exit from the account's own config, else the recorded shared exit. No VPS call.
+          egressIp: profile.network?.expectedIp || deps.claudeSharedIp?.() || '',
         });
       } catch (error) { return publicRow('claude', profile, null, { error: error.message }); }
     });

@@ -227,6 +227,8 @@ const sessions = new Map();
 const nativeSessionBootstrap = require('./native-session-bootstrap').createNativeSessionBootstrap();
 const _runtimeTruthExpiryTimers = new Map();
 let activeSessionId = null;
+// 右侧账号看板（renderer/account-quota-panel.js：Claude / Codex / Gemini），在 accountUsageController 之后创建。
+let claudeQuotaPanel = null;
 let sessionSplit = null;
 function getFocusedSessionId() { return sessionSplit?.focusedId() || activeSessionId; }
 let completionNotificationToggle = null;
@@ -1168,6 +1170,7 @@ function renderSessionSurfacesNow() {
   sessionReadyNotifier.scan();
   renderSessionListNow();
   if (homeWorkbench) homeWorkbench.render();
+  if (claudeQuotaPanel) claudeQuotaPanel.render();
 }
 // 150 ms still reads as live, and halves full sidebar rebuilds while many
 // agents stream status at once.
@@ -1372,7 +1375,7 @@ async function selectMeeting(meetingId, opts = {}) {
   if (terminalPanelEl) terminalPanelEl.classList.remove('home-active');
   if (window.__xresearchHide) window.__xresearchHide(); // 2026-07-23 投研面板互斥
   if (window.__studyHide) window.__studyHide(); // 2026-09-01 学习面板互斥
-  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.();
+  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
   window.__rulesHide?.(); // 2026-10-12 规则面板互斥
   if (window.__ranHide) window.__ranHide(); // 2026-09-04 RAN 工作台面板互斥
@@ -1973,6 +1976,7 @@ function paintAppToolbarForView(label) {
   if (label !== '云端') window.__cloudHide?.();
   if (label !== '团队') window.__teamHide?.();
   if (label !== 'AI 网页') window.__webSessionHide?.();
+  if (label !== '网页圆桌') window.__webRoundtableHide?.();
   if (!toolbarCrumbEl || !toolbarActionsEl) return;
   toolbarCrumbEl.dataset.mode = 'view';
   toolbarCrumbEl.title = '';
@@ -2110,7 +2114,7 @@ document.addEventListener('bridge-threads-updated', () => {
 });
 
 function currentAppToolbarView() {
-  for (const [id, label] of [['web-session-panel', 'AI 网页'], ['team-page', '团队'], ['cloud-page', '云端'], ['assistant-page', '助理'], ['wireless-page', '无线'], ['account-page', '账号'], ['hub-workspace', '资源与回顾'], ['memo-panel', '速记']]) {
+  for (const [id, label] of [['web-session-panel', 'AI 网页'], ['web-roundtable-panel', '网页圆桌'], ['team-page', '团队'], ['cloud-page', '云端'], ['assistant-page', '助理'], ['wireless-page', '无线'], ['account-page', '账号'], ['hub-workspace', '资源与回顾'], ['memo-panel', '速记']]) {
     if (panelIsVisible(document.getElementById(id))) return label;
   }
   for (const view of APP_TOOLBAR_VIEWS) {
@@ -5849,7 +5853,7 @@ async function selectSession(id, opts = {}) {
   }
   if (window.__xresearchHide) window.__xresearchHide(); // 2026-07-23 投研面板互斥
   if (window.__studyHide) window.__studyHide(); // 2026-09-01 学习面板互斥
-  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.();
+  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
   window.__rulesHide?.(); // 2026-10-12 规则面板互斥
   if (window.__ranHide) window.__ranHide(); // 2026-09-04 RAN 工作台面板互斥
@@ -7443,8 +7447,30 @@ const accountUsageController = createAccountUsageController({
   escapeHtml,
   isMemoOpen: () => memoPanel.isOpen(),
   onAccountsChanged: () => renderSessionList(),
+  onRender: () => { if (claudeQuotaPanel) claudeQuotaPanel.render(); },
 });
 const renderAccountUsage = accountUsageController.render;
+{
+  const panelRoot = document.getElementById('account-quota-panel');
+  if (panelRoot) {
+    claudeQuotaPanel = require('./account-quota-panel.js').createAccountQuotaPanel({
+      document, root: panelRoot, footerRoot: document.getElementById('rail-usage'), escapeHtml, storage: window.localStorage,
+      getSnapshot: () => accountUsageController.getSnapshot(),
+      // 当前会话是这家 AI 时高亮它的号；否则高亮这家新会话默认的号（快照里 selected）。
+      getCurrentProfileId: provider => {
+        const s = activeSessionId ? sessions.get(activeSessionId) : null;
+        const kind = String(s?.kind || '').replace(/-resume$/, '');
+        if (provider === 'claude' && kind === 'claude') return s.claudeProfile || 'default';
+        if (provider === 'codex' && kind === 'codex') return s.codexProfile || '';
+        if (provider === 'antigravity' && kind === 'gemini') return s.antigravityProfile || '';
+        return '';
+      },
+      refresh: (provider, profileId) => accountUsageController.refreshUsageNow(provider, profileId),
+      lookupLocations: ips => ipcRenderer.invoke('ip-location:get', ips),
+    });
+    claudeQuotaPanel.render();
+  }
+}
 // CodeAgent 额度条：每轮回答结束读屏幕 Stats 面板的 Credit（applyCodeAgentScreenContext），每个账号一行。
 const codeagentQuotaBar = require('./codeagent-quota-bar.js').createCodeAgentQuotaBar({ document, storage: window.localStorage, escapeHtml });
 codeagentQuotaBar.render();
@@ -8729,7 +8755,7 @@ function escapeToHome() {
   window.hubWorkspaces?.close();
   if (window.__xresearchHide) window.__xresearchHide();
   if (window.__studyHide) window.__studyHide();
-  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.();
+  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
   window.__rulesHide?.(); // 2026-10-12 规则面板互斥
   if (window.__ranHide) window.__ranHide(); // 2026-09-04 RAN 工作台面板互斥
@@ -8826,6 +8852,27 @@ async function openSessionById(sessionId) {
   await selectSession(sessionId, { forceScrollBottom: true, splitBypass: true });
 }
 window.__hubOpenSession = openSessionById;
+// 网页圆桌「发到会话」（2026-10-28）：把网页 AI 的回答放进某个会话的输入框（不自动发送），打开那个会话让用户改完再发。
+// 走和亲手打字同一条草稿保存路径，切走再回来草稿还在。
+async function appendToSessionDraft(sessionId, text) {
+  await openSessionById(sessionId);
+  const selector = `.floating-input-bar[data-session-id="${CSS.escape(sessionId)}"] .floating-input-box`;
+  let box = null;
+  for (let i = 0; i < 30 && !(box = document.querySelector(selector)); i++) await new Promise(r => setTimeout(r, 100));
+  if (!box) throw new Error('这个会话没有输入框（只读或群聊成员），请换一个会话');
+  const current = readContenteditablePlainText(box);
+  const combined = current.trim() ? current.replace(/\s+$/, '') + '\n\n' + text : text;
+  replaceContenteditableText(box, combined);
+  saveFloatingInputDraft(sessionId, box);
+  box.focus();
+  placeCaretAtContenteditableEnd(box);
+}
+function sessionsForDraft() {
+  return [...sessions.values()]
+    .filter(s => s && s.id && !s.readOnly && !String(s.title || '').startsWith('[Team] ') && !/powershell|terminal/i.test(String(s.kind || '')))
+    .map(s => ({ id: s.id, title: s.title || s.name || s.id, kind: String(s.kind || ''), at: Number(s.lastActivityAt || s.lastOutputAt || s.updatedAt || s.createdAt || 0), active: s.id === activeSessionId }))
+    .sort((a, b) => (b.active - a.active) || (b.at - a.at)).slice(0, 30);
+}
 window.__hubToast = message => showToast(message);
 // 公司版「助理」页（2026-10-16）：每日简报 + 对话 + 提醒；只在公司版启用（core/company-assistant/gate.js）。
 if (require('../core/company-assistant/gate').companyAssistantEnabled()) {
@@ -8864,13 +8911,30 @@ if (require('../core/company-forum/gate').companyForumEnabled()) {
 }
 // AI 网页会话（2026-10-25）：启动中心「AI 网页」、侧栏「网页」分组、主区内嵌官网。打开前先回到主页收起其他视图。
 try {
+  // 网页圆桌（2026-10-28）：用已登录的 AI 网页同题提问、互评、队长汇总；从侧栏「网页」分组或网页顶栏的圆桌按钮进入。
+  let webRoundtableUi = null;
   const webSessionsUi = require('./web-sessions-ui').createWebSessionsUi({
     document, window, ipcRenderer,
     beforeShow: () => { escapeToHome(); setShellNavActive(null); },
     openLaunchCenter: intent => launchCenter.open(intent),
     closeLaunchCenter: () => launchCenter.close(),
     showToast: message => showToast(message),
+    openRoundtable: options => webRoundtableUi?.open(options),
   });
+  try {
+    webRoundtableUi = require('./web-roundtable-ui').createWebRoundtableUi({
+      document, window, ipcRenderer,
+      beforeShow: () => { escapeToHome(); setShellNavActive(null); },
+      afterShow: () => refreshAppToolbar(),
+      afterLeave: () => { setShellNavActive('home'); refreshAppToolbar(); },
+      openWebSession: id => void webSessionsUi.open(id),
+      showToast: message => showToast(message),
+      copyText: text => clipboardController.copyText(text),
+      listSessions: () => sessionsForDraft(),
+      sendToSession: (id, text) => appendToSessionDraft(id, text),
+    });
+    window.__webRoundtableHide = () => webRoundtableUi.close();
+  } catch (error) { console.warn('[web-roundtable] 网页圆桌未启动：', error.message); }
   window.__webSessionHide = () => webSessionsUi.hidePanel();
   window.__webSessionAfterShow = () => refreshAppToolbar();
   window.__webSessionAfterLeave = () => { setShellNavActive('home'); refreshAppToolbar(); };
@@ -9129,7 +9193,7 @@ ipcRenderer.on('session-created', async (_e, { session }) => {
   // 2026-09-02：session-created 会直接亮出终端面板，但此前只隐藏了群聊面板。
   // 主区是 flex 容器，学习面板若还开着就会和终端并排各占一半。
   if (window.__studyHide) window.__studyHide();
-  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.();
+  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
   window.__rulesHide?.(); // 2026-10-12 规则面板互斥
   if (window.__ranHide) window.__ranHide(); // 2026-09-04 RAN 工作台面板互斥
@@ -10548,7 +10612,7 @@ if (process && process.env && process.env.CLAUDE_HUB_E2E === '1') {
           currentView = 'card';
           _cardHistoryHydratedSid = sessionId;
           if (window.__studyHide) window.__studyHide();   // 同上：别和学习面板并排
-          if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.();
+          if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
           if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
           window.__rulesHide?.(); // 2026-10-12 规则面板互斥
           if (window.__ranHide) window.__ranHide(); // 2026-09-04 RAN 工作台面板互斥

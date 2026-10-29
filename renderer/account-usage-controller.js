@@ -42,6 +42,7 @@ function createAccountUsageController({
   nowFn = Date.now,
   isMemoOpen = () => false,
   onAccountsChanged = () => {},
+  onRender = () => {},
 }) {
   if (!document) throw new Error('document is required');
   if (!ipcRenderer) throw new Error('ipcRenderer is required');
@@ -505,6 +506,7 @@ function createAccountUsageController({
       claude: { ...providerRefreshStates.claude, error: profileUsageError },
       codex: { ...providerRefreshStates.codex, error: profileUsageError },
     } : providerRefreshStates);
+    try { onRender(); } catch (error) { console.warn('[account-usage] render listener failed:', error && error.message); }
     const tightest = pickTightestWindow(snapshot);
     const lastSeen = tightest ? snapshot[tightest.provider]?.lastSeen : 0;
     const freshness = usageFreshnessClass(lastSeen);

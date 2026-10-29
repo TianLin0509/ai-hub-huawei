@@ -1771,11 +1771,17 @@ class SessionManager extends EventEmitter {
         const known = codeagentPool
           ? { models: codeagentPool.account.models || [], authoritative: !!codeagentPool.account.modelsAuthoritative }
           : require('./codeagent-pool').accountModels(codeagentConfig.configDir, undefined, require('./codeagent-pool').personalModelsFile(getHubDataDir()));
-        const choice = launchModel.chooseLaunchModel({ models: known.models, authoritative: known.authoritative,
-          last: launchModel.lastModel(getHubDataDir(), codeagentPool ? codeagentPool.account.id : 'personal'), first: codeagentPickTarget });
+        // CodeAgent 这次启动会用的模型：号池号是启动前同步定下的，个人号是它配置目录里记着的。
+        const current = (codeagentPool && codeagentPool.model) || require('./codeagent-pool').readSettingsModel(codeagentConfig.configDir);
+        const last = launchModel.lastEntry(getHubDataDir(), codeagentPool ? codeagentPool.account.id : 'personal');
+        let settingsAt = 0;
+        try { settingsAt = fs.statSync(path.join(codeagentConfig.configDir, 'settings.json')).mtimeMs; } catch { settingsAt = 0; }
+        const choice = launchModel.chooseLaunchModel({ models: known.models, authoritative: known.authoritative, current, currentNewer: settingsAt > last.at,
+          last: last.model, first: codeagentPickTarget });
         if (!choice.open) {
           codeagentPickFirst = false;
-          try { require('./codeagent-models').appendModelLog(getHubDataDir(), { event: 'pick-skipped', session: String(id).slice(0, 8), account: codeagentPool ? '号池' : '个人', model: choice.model, reason: choice.reason, note: '这个号只有一个模型，新会话不开模型菜单' }); } catch { /* 只是日志 */ }
+          const note = choice.reason === 'cli-remembered' ? `CodeAgent 记着的默认模型 ${choice.model} 在这个号的清单里，新会话直接用它，不开模型菜单` : '这个号只有一个模型，新会话不开模型菜单';
+          try { require('./codeagent-models').appendModelLog(getHubDataDir(), { event: 'pick-skipped', session: String(id).slice(0, 8), account: codeagentPool ? '号池' : '个人', model: choice.model, reason: choice.reason, note }); } catch { /* 只是日志 */ }
         } else codeagentPickTarget = choice.model;
       } catch (error) { console.warn('[codeagent] 新会话选模型判断出错，照旧选菜单第一个：' + error.message); }
     }

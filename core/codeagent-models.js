@@ -106,9 +106,31 @@ function readConfigFile(full, fsModule) {
 // 每项一个 value（用户的账号只有 GLM-5.2-WX-Auto 与 MiniMax-M2.7）。GLM-5.2-WX、Qwen3.6-27B-CodeAgent-VL 只是
 // GLM Auto 那一项里的分档配置（tieredModelConfig），不能单独选；之前在模型段里见名就收，把它们也列了出来。
 // 有这份清单时只认清单里的 value；没有（老版本 CodeAgent）才退回在模型段里找名字。
+// 2026-10-28 同事 1.2615.02.02 自检报告：没有 enterpriseModelOptionsCache，清单在 enterpriseModelOptionsCacheV3_5（base64 编码的 JSON），
+// 同文件还有 enterpriseModelOptionsCacheV2 / enterpriseModelOptionsNewCache。按「越新越先」取第一个能解出数组的；值可能是数组、JSON 文本或 base64 的 JSON。
+const ENTERPRISE_KEYS = ['enterpriseModelOptionsCacheV3_5', 'enterpriseModelOptionsCacheV2', 'enterpriseModelOptionsNewCache', 'enterpriseModelOptionsCache'];
+function decodeOptionList(value, depth = 0) {
+  if (Array.isArray(value)) return value;
+  if (depth > 3 || value == null) return null;
+  if (typeof value === 'object') {
+    for (const key of ['options', 'models', 'data', 'list', 'items', 'value']) { const inner = decodeOptionList(value[key], depth + 1); if (inner) return inner; }
+    return null;
+  }
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const text = value.trim();
+  try { return decodeOptionList(JSON.parse(text), depth + 1); } catch { /* 不是 JSON，试 base64 */ }
+  if (/^[A-Za-z0-9+/=_\s-]+$/.test(text)) {
+    try { return decodeOptionList(JSON.parse(Buffer.from(text.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')), depth + 1); } catch { /* 解不开就算没有 */ }
+  }
+  return null;
+}
+function enterpriseOptionList(data) {
+  if (!data || typeof data !== 'object') return null;
+  for (const key of ENTERPRISE_KEYS) { const list = decodeOptionList(data[key]); if (list && list.length) return list; }
+  return null;
+}
 function enterpriseModels(data) {
-  let list = data && data.enterpriseModelOptionsCache;
-  if (typeof list === 'string') { try { list = JSON.parse(list); } catch { list = null; } }
+  const list = enterpriseOptionList(data);
   if (!Array.isArray(list)) return null;
   const ids = [];
   for (const item of list.slice(0, 100)) {
@@ -121,8 +143,7 @@ function enterpriseModels(data) {
 
 // 账号清单里每个模型的上下文上限（contextWindow，公司真机：GLM-5.2-WX-Auto 202752、MiniMax-M2.7 192000）。
 function enterpriseWindows(data) {
-  let list = data && data.enterpriseModelOptionsCache;
-  if (typeof list === 'string') { try { list = JSON.parse(list); } catch { list = null; } }
+  const list = enterpriseOptionList(data);
   const windows = {};
   if (!Array.isArray(list)) return windows;
   for (const item of list.slice(0, 100)) {
@@ -155,15 +176,21 @@ function collectModelNames(node, inModelSection, out, depth = 0) {
   }
 }
 
-// authoritative=true：模型来自 CodeAgent 自己的账号清单（enterpriseModelOptionsCache），界面只列这些。
+// authoritative=true：模型来自 CodeAgent 自己的账号清单（enterpriseModelOptionsCache 及其新版字段，见 ENTERPRISE_KEYS），界面只列这些。
 function configuredModels(configDir, fsModule = fs) {
   if (!configDir) return { models: [], defaultModel: '', authoritative: false };
   const names = new Set();
   let defaultModel = '';
   let enterprise = null;
-  for (const file of ['settings.json', '.cac.json']) {
+  // 个人默认目录 ~/.cac：CodeAgent 不带配置目录变量启动时，账号状态写在用户目录根下的 ~/.cac.json（同 Claude Code 的 ~/.claude.json），
+  // 同事 1.2615.02.02 的模型清单就只在那里（~/.cac/.cac.json 只有 4 个键）。目录里的 .cac.json 有清单时优先用目录里的。
+  const files = [path.join(configDir, 'settings.json'), path.join(configDir, '.cac.json')];
+  if (path.basename(path.resolve(configDir)).toLowerCase() === '.cac') files.push(path.join(path.dirname(path.resolve(configDir)), '.cac.json'));
+  for (const full of files) {
+    const file = path.basename(full);
     try {
-      const result = readConfigFile(path.join(configDir, file), fsModule);
+      if (enterprise && file === '.cac.json') continue;
+      const result = readConfigFile(full, fsModule);
       if (file === 'settings.json' && result.defaultModel) defaultModel = result.defaultModel;
       if (result.enterprise) enterprise = result.enterprise;
       for (const name of result.names) names.add(name);
@@ -317,7 +344,15 @@ const DEFAULT_CONTEXT_WINDOW = 200000;
 
 function contextWindowFor(configDir, modelIds = [], fsModule = fs) {
   let windows = {};
-  if (configDir) { try { windows = readConfigFile(path.join(configDir, '.cac.json'), fsModule).windows || {}; } catch { windows = {}; } }
+  if (configDir) {
+    // 同 configuredModels：目录里的 .cac.json 没有清单时，个人默认目录再看用户目录根下的 ~/.cac.json
+    const candidates = [path.join(configDir, '.cac.json')];
+    if (path.basename(path.resolve(configDir)).toLowerCase() === '.cac') candidates.push(path.join(path.dirname(path.resolve(configDir)), '.cac.json'));
+    for (const file of candidates) {
+      try { windows = readConfigFile(file, fsModule).windows || {}; } catch { windows = {}; }
+      if (Object.keys(windows).length) break;
+    }
+  }
   for (const id of modelIds) {
     const key = clean(id).toLowerCase();
     if (key && windows[key]) return { window: windows[key], source: 'account' };

@@ -359,7 +359,9 @@ async function waitForEcho(manager, sid, mark, timeoutMs, screen) {
 // guardMs：回车后看住默认模型多久；onDefaultChange(change)：每次发现被改、改回时回调（调用方记日志）。
 // readyFirstMs：先等 CLI 画出普通输入框并稳定下来再敲 /model（自动会话启动时用；2026-10-20 发布闸门 no-choice：
 // 启动后马上敲，/model 的回车有时没被执行，输入行停在「❯ /model」，第一条题目发不出去）。
-async function pickModel({ manager, sid, kind, modelId, configDir, allowedModels = null, sendToPty, screenTimeoutMs = 8000, guardMs = 3500, onDefaultChange = null, env = process.env, readyFirstMs = 0 }) {
+// keepDefault（2026-10-28 用户「记住最新的选择作为默认」）：手动会话这次选的模型留作 CodeAgent 的默认模型——按回车存成默认、不改回原值，
+// 下次新建会话 CodeAgent 直接用它起，不再开菜单（core/codeagent-launch-model.js 的 cli-remembered）。自动会话不传，照旧只改本会话、事后改回。
+async function pickModel({ manager, sid, kind, modelId, configDir, allowedModels = null, sendToPty, screenTimeoutMs = 8000, guardMs = 3500, onDefaultChange = null, env = process.env, readyFirstMs = 0, keepDefault = false }) {
   if (!modelAllowed(modelId, allowedModels)) {
     return { ok: false, notAllowed: true, inputReady: true,
       message: `${modelId} 不在这个账号的模型权限清单里（可选：${allowedModels.join('、')}），没有打开模型菜单` };
@@ -418,10 +420,10 @@ async function pickModel({ manager, sid, kind, modelId, configDir, allowedModels
       await sleep(150);
     }
     await sleep(300);
-    const restoreSnapshot = dir ? snapshotDefaults(dir) : [];
-    const mode = picker.sessionKey ? 'session' : 'default';
+    const restoreSnapshot = dir && !keepDefault ? snapshotDefaults(dir) : [];
+    const mode = picker.sessionKey && !keepDefault ? 'session' : 'default';
     const mark = typeof manager.getSessionOutputMark === 'function' ? manager.getSessionOutputMark(sid) : null;
-    manager.writeToSession(sid, picker.sessionKey || '\r');
+    manager.writeToSession(sid, mode === 'session' ? picker.sessionKey : '\r');
     const echo = mark == null ? null : await waitForEcho(manager, sid, mark, screenTimeoutMs, screen);
     // CLI 可能在回显之后才把默认模型写进配置：看住一段时间，被改就改回，最后核对（按 s 只改本会话时也看，防菜单行为变化）。
     let restored = [];
@@ -441,7 +443,7 @@ async function pickModel({ manager, sid, kind, modelId, configDir, allowedModels
     }
     const ready = await waitForInput(screen);
     if (!ready.value) return { ...(await fail('选中后未确认恢复普通输入框')), restored, defaults };
-    return { ok: true, mode, confirmed: !!echo, restored, defaults, ...(first ? { picked: label } : {}) };
+    return { ok: true, mode, confirmed: !!echo, restored, defaults, ...(keepDefault ? { keptDefault: true } : {}), ...(first ? { picked: label } : {}) };
   }
   try {
     result = await choose();

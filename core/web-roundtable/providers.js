@@ -5,7 +5,12 @@ const providers = {
   deepseek:{ name:'DeepSeek', url:'https://chat.deepseek.com/', conversation:'^/a/chat/s/[a-zA-Z0-9-]+$', composer:'textarea[placeholder="Message DeepSeek"]', answer:'.ds-assistant-message-main-content', container:'[data-virtual-list-item-key]', done:'[aria-label="Read aloud"],[aria-label="朗读"]', send:'[role="button"].ds-button--primary.ds-button--circle' },
   kimi:{ name:'Kimi', url:'https://www.kimi.com/', conversation:'^/chat/[a-zA-Z0-9-]+$', composer:'.chat-input-editor[contenteditable="true"]', auth:'[data-testid="sidebar-user-menu-trigger"] .user-name', quota:'.chat-input-bar-content', answer:'.segment-assistant', content:'.markdown', exclude:'.thinking-container,.toolcall-content', done:'.segment-assistant-actions .icon-button' },
   qwen:{ name:'千问', url:'https://www.qianwen.com/', conversation:'^/chat/[a-zA-Z0-9-]+$', composer:'[role="textbox"][data-slate-editor="true"]', answer:'.answer-common-card .qk-markdown', doneSelf:'qk-markdown-complete', send:'button[aria-label="发送消息"]' },
+  chatgpt:{ name:'ChatGPT', url:'https://chatgpt.com/', conversation:'^/c/[a-zA-Z0-9-]+$' },
+  gemini:{ name:'Gemini', url:'https://gemini.google.com/app', conversation:'^/app/[a-zA-Z0-9]+$' },
+  doubao:{ name:'豆包', url:'https://www.doubao.com/chat/', conversation:'^/chat/[0-9]+$' },
 };
+// 不指定成员时的默认圆桌（沿用 2026-10 以前的三家）。
+const defaultProviders=['deepseek','kimi','qwen'];
 function get(provider) { if(!Object.hasOwn(providers,provider))throw Error('Unsupported web provider: '+provider); return providers[provider]; }
 function validUrl(provider,url) { try { const p=get(provider),u=new URL(url); return u.origin===new URL(p.url).origin && !u.username && !u.password && new RegExp(p.conversation).test(u.pathname); } catch { return false; } }
 // Executed inside the official page, with no credential access.
@@ -36,4 +41,4 @@ async function snapshot(page,provider,prompt) { const value=await page.evaluate(
 async function focus(page,provider) { const selector=get(provider).composer; await page.evaluate(`(()=>{const a=[...document.querySelectorAll(${JSON.stringify(selector)})].filter(e=>e.getClientRects().length);if(a.length!==1)throw Error('Composer changed');const c=a[0].cloneNode(true);c.querySelectorAll('[data-slate-placeholder],[data-slate-zero-width]').forEach(e=>e.remove());if((a[0].value||c.textContent||'').trim())throw Error('Composer contains a draft');a[0].focus();return true})()`); }
 async function send(page,provider) { const p=get(provider); if(p.send){await page.evaluate(`(()=>{const a=[...document.querySelectorAll(${JSON.stringify(p.send)})].filter(e=>e.getClientRects().length&&!e.disabled&&e.getAttribute('aria-disabled')!=='true');if(a.length!==1)throw Error('Send button unavailable');a[0].click();return true})()`);}else{await page.call('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,text:'\r'});await page.call('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13});} }
 async function dismissPromo(page,provider) { if(provider==='qwen')await page.evaluate(`(()=>{for(const d of document.querySelectorAll('[role="dialog"]')){if(d.innerText.includes('工作助理再升级')){const b=[...d.querySelectorAll('button')].find(e=>e.getAttribute('aria-label')==='关闭'||e.innerText.trim()==='关闭');b?.click();}}return true})()`); }
-module.exports={providers,get,validUrl,inspectPage,expression,snapshot,focus,send,dismissPromo};
+module.exports={providers,defaultProviders,get,validUrl,inspectPage,expression,snapshot,focus,send,dismissPromo};

@@ -35,7 +35,7 @@ async function schedule(job,mode='run',launch=spawnWorker){
   });
   if(launchNeeded)try{await launch(job.id,mode);}catch(e){store.write(job.id,{...queued,state:'failed',error:e.message});throw e;}return queued;
 }
-async function collect(id,provider){return store.locked('create-'+id,async()=>{const job=status(id);if(job.kind!=='web'||job.input.provider!==provider)throw Error('Provider task mismatch');if(job.state==='succeeded')return job;if(store.cancelled(id)||require('./recovery').parentCancelled(id))throw Error('Cancelled tasks are not resumed');if(!terminal.has(job.state))return job;if(!job.submissionAttempted||!adapters.validUrl(provider,job.url))throw Error('No known submitted conversation to collect; inspect the official website before creating another task');return schedule(job,'collect');});}
+async function collect(id,provider){return store.locked('create-'+id,async()=>{const job=status(id);if(job.kind!=='web'||job.input.provider!==provider)throw Error('Provider task mismatch');if(job.state==='succeeded')return job;if(store.cancelled(id)||require('./recovery').parentCancelled(id))throw Error('Cancelled tasks are not resumed');if(!terminal.has(job.state))return job;if(!job.submissionAttempted||(!adapters.validUrl(provider,job.url)&&!job.hubAsk?.id))throw Error('No known submitted conversation to collect; inspect the official website before creating another task');return schedule(job,'collect');});}
 async function resumeWeb(id,provider){
   const job=status(id);if(job.kind!=='web'||job.input.provider!==provider)throw Error('Provider task mismatch');
   if(store.cancelled(id)||require('./recovery').parentCancelled(id))throw Error('Cancelled tasks are not resumed');
@@ -47,6 +47,8 @@ async function resumeWeb(id,provider){
 }
 async function runWeb(job,save,mode,runtime={}){
   const provider=job.input.provider, adapters=runtime.adapters||require('./providers'),p=adapters.get(provider),open=runtime.open||require('./cdp').open;
+  // 2026-10-28 用户拍板：改用 Hub「AI 网页」的登录。Hub 在运行就经它提问；只有 Hub 没开、且这家还有旧浏览器适配时才走专用 Chrome。
+  if(!runtime.open){const bridge=runtime.bridge||require('./hub-web-bridge');if(bridge.available(store.dataDir())||!p.composer)return runViaHub(job,save,mode,bridge);}
   let release,browser;
   const checkCancel=()=>{if(store.cancelled(job.id)||require('./recovery').parentCancelled(job.id))throw Object.assign(Error('Cancelled; a submitted website response may continue remotely'),{cancelled:true});};
   try{
@@ -124,4 +126,43 @@ async function runWeb(job,save,mode,runtime={}){
     save({state:e.cancelled?'cancelled':job.submissionAttempted||e.attention?'needs_attention':'failed',error:e.message,...(e.errorCode?{errorCode:e.errorCode}:{}),...(e.recovery?{recovery:{reason:e.recovery,accountId:'web-'+provider,instruction:e.recovery==='extension_pairing'?'在账号 Tab 普通浏览器配对官方扩展后继续原任务；不会转用其他浏览器':'在 AI Hub 账号页打开此账号，完成验证后让原工具继续此任务；原任务 ID 保留，已发送问题只补收。'}}:{}),...(browser?.page.networkErrors?.length?{networkErrors:browser.page.networkErrors}:{})});}
   finally{if(browser)try{await browser.close();}catch(e){save({cleanupError:e.message});}if(release)release();}
 }
-module.exports={terminal,text,status,create,ask,collect,resumeWeb,spawnWorker,runWeb,schedule};
+const HUB_ACTIVE=new Set(['queued','preparing','sending','sent','streaming','unconfirmed']);
+async function runViaHub(job,save,mode,bridge,{pollMs=1000}={}){
+  const provider=job.input.provider,dir=store.dataDir(),name=require('./providers').get(provider).name;
+  const checkCancel=()=>{if(store.cancelled(job.id)||require('./recovery').parentCancelled(job.id))throw Object.assign(Error('Cancelled; a submitted website response may continue remotely'),{cancelled:true});};
+  const loginHelp=`在 AI Hub 侧栏「网页」分组打开 ${name}（「命令行代问」那一项）完成登录或验证，然后用 web_resume 继续原任务；已发出的问题只补收，不会重发。`;
+  try{
+    checkCancel();save({state:'opening',transport:'hub-ai-web'});
+    let ask;
+    if(mode==='collect'){
+      if(!job.hubAsk?.id)throw Object.assign(Error('这个任务不是经 AI 网页发出的，无法在 Hub 里补收'),{attention:true});
+      ask=job.hubAsk;await bridge.collect(dir,ask.id);
+    }else{
+      const parent=job.input.reply_to?status(job.input.reply_to):null;
+      if(parent&&!parent.hubAsk?.member)throw Error('reply_to 的原任务不是经 AI 网页完成的，无法在同一对话里追问');
+      const r=await bridge.ask(dir,{provider,prompt:job.input.prompt,url:parent?.url||'',member:parent?.hubAsk?.member||''});
+      ask={id:r.id,member:r.member};save({hubAsk:ask});
+    }
+    const hardEnd=Date.now()+ANSWER_MAX_MS;
+    for(;;){
+      checkCancel();
+      const st=await bridge.status(dir,ask.id);
+      if(st.phase==='attempted'&&!job.submissionAttempted)save({state:'waiting',submissionAttempted:true});
+      if(st.url&&st.url!==job.url&&require('./providers').validUrl(provider,st.url))save({url:st.url});
+      if(st.status==='done'){save({state:'succeeded',submissionConfirmed:true,answer:st.text,error:null,completionEvidence:'Hub AI 网页（lite 网页脚本）：本轮提问归属核对 + 网站结束信号',completedAt:new Date().toISOString()});return;}
+      if(st.status==='unknown')throw Object.assign(Error(st.error),{attention:true});
+      if(st.status==='stopped')throw Object.assign(Error('Hub 里停止了这次提问'),{cancelled:true});
+      if(!HUB_ACTIVE.has(st.status)){
+        const login=/尚未登录|要求登录|人机验证/.test(st.error||'');
+        throw Object.assign(Error(st.error||'网页没有完成回答'),{attention:st.status==='attention'||login,partial:st.text||'',...(login?{recovery:/人机验证/.test(st.error)?'human_verification':'login_required',errorCode:'login_required'}:{}),...(/额度/.test(st.error||'')?{errorCode:'quota_exhausted'}:{})});
+      }
+      if(Date.now()>hardEnd)throw Object.assign(Error('No verified complete answer before deadline. Use web_collect on the same task; never resend blindly.'),{attention:true});
+      await store.sleep(pollMs);
+    }
+  }catch(e){
+    if(e.code==='HUB_NOT_RUNNING'||e.code==='WEB_OWNER'||e.code==='HUB_TOO_OLD')e.attention=!!job.submissionAttempted;
+    save({state:e.cancelled?'cancelled':job.submissionAttempted||e.attention?'needs_attention':'failed',error:e.message,...(e.partial?{partialAnswer:e.partial}:{}),...(e.errorCode?{errorCode:e.errorCode}:{}),
+      ...(e.recovery?{recovery:{reason:e.recovery,accountId:'web-'+provider,instruction:loginHelp}}:{})});
+  }
+}
+module.exports={terminal,runViaHub,text,status,create,ask,collect,resumeWeb,spawnWorker,runWeb,schedule};
