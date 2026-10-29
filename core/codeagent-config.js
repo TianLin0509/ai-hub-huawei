@@ -19,6 +19,7 @@ const os = require('os');
 const path = require('path');
 
 const DEFAULT_COMMAND = 'codeagent';
+const LEGACY_COMMAND = 'cac';
 const DEFAULT_CONFIG_ENV = 'CODEAGENT3_CONFIG_DIR';
 const STATE_FILE = '.cac.json';
 // 已知模型；公司内部还有 deepseek… 等名字，按字符校验放行（见 core/codeagent-models.js）。
@@ -60,7 +61,9 @@ function configDirEnvName(env = process.env, provider = hubProviderConfig()) {
 // 注册表读不出来、出错时一律忽略：宁可落到 ~/.cac，也不回到号 1。
 // 变量名本身照旧用：启动 CodeAgent 时由 Hub 把真正的配置目录显式写进这个变量。
 function resolveCodeAgentConfig(env = process.env, provider = hubProviderConfig(), { decision = inheritedDecision } = {}) {
-  const command = cleanString(env.AI_HUB_CODEAGENT_COMMAND) || cleanString(provider.command) || DEFAULT_COMMAND;
+  const explicitCommand = cleanString(env.AI_HUB_CODEAGENT_COMMAND) || cleanString(provider.command);
+  // 1.2605.01-IN（3.0 首版）的启动命令叫 cac，之后改名 codeagent（公司回执 Q-1028-06，FAQ 原文）。没指定命令、PATH 里没有 codeagent 但有 cac 时用 cac。
+  const command = explicitCommand || (!commandOnPath(DEFAULT_COMMAND, env) && commandOnPath(LEGACY_COMMAND, env) ? LEGACY_COMMAND : DEFAULT_COMMAND);
   const configDirEnv = configDirEnvName(env, provider);
   if (/[\r\n"`$;&|<>]/.test(command)) throw new Error('CodeAgent 命令包含不允许的字符');
   const home = env.USERPROFILE || env.HOME || os.homedir();
@@ -238,17 +241,20 @@ function commandHead(command) {
 }
 
 // 只查文件、不启动进程：命令是完整路径就看文件在不在；否则按 PATH + Windows 可执行扩展名找。
-// 用于界面默认选中 CodeAgent（公司电脑），不作为能否登录或调用模型的证据。
-function isCodeAgentInstalled(env = process.env, provider = hubProviderConfig()) {
-  const fs = require('fs');
-  let command;
-  try { ({ command } = resolveCodeAgentConfig(env, provider)); } catch { return false; }
+function commandOnPath(command, env = process.env) {
   const exists = file => { try { return fs.statSync(file).isFile(); } catch { return false; } };
   if (path.isAbsolute(command)) return exists(command);
   const pathKey = Object.keys(env).find(k => k.toLowerCase() === 'path') || 'PATH';
   const dirs = String(env[pathKey] || '').split(path.delimiter).filter(Boolean);
   const exts = process.platform === 'win32' ? ['.exe', '.cmd', '.bat'] : [''];
   return dirs.some(dir => exts.some(ext => exists(path.join(dir.replace(/^"|"$/g, ''), command + ext))));
+}
+
+// 用于界面默认选中 CodeAgent（公司电脑），不作为能否登录或调用模型的证据。
+function isCodeAgentInstalled(env = process.env, provider = hubProviderConfig()) {
+  let command;
+  try { ({ command } = resolveCodeAgentConfig(env, provider)); } catch { return false; }
+  return commandOnPath(command, env);
 }
 
 function normalizeCodeAgentModel(model) {
@@ -270,6 +276,8 @@ module.exports = {
   DEFAULT_MODEL,
   EFFORTS,
   HOOK_EVENTS,
+  LEGACY_COMMAND,
+  commandOnPath,
   resolveCodeAgentConfig,
   configDirEnvName,
   configDirSource,

@@ -10,6 +10,35 @@ function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, conf
   let authTarget = '', returnToLaunch = false;
   // The one inline add / rename / remove form open in the Claude / Codex account cards.
   let accountEdit = null;
+  // Claude 登录环境（VPS 远程浏览器）的快照：SSH 一次约 2–5 秒，只在打开账号页和操作后读取。
+  let vps = null, vpsFlight = null;
+  async function refreshVps() {
+    if (vpsFlight) return vpsFlight;
+    if (!vps) vps = { loading: true };
+    vpsFlight = ipcRenderer.invoke('vps-login:state').then(r => { vps = r?.ok ? r.data : { ...(vps?.loading ? {} : vps), error: r?.error || '未响应' }; })
+      .catch(e => { vps = { error: e.message }; }).finally(() => { vpsFlight = null; if (!page.hidden && view === 'list') renderTools(); });
+    return vpsFlight;
+  }
+  async function envAction(name, profileId) {
+    if (busy) return;
+    busy = 'env-' + name; error = ''; notice = name === 'open' ? '正在打开登录窗口…' : '正在关闭登录窗口…'; renderStatus();
+    const ticket = epoch;
+    try {
+      let r = await ipcRenderer.invoke('vps-login:' + name, { profileId });
+      if (r?.ok && r.data?.needsConfirmation) {
+        const ask = `登录环境「${r.data.others.join('、')}」还开着。
+切换会关闭它（登录资料保留，未发送的草稿可能丢失）。
+
+确认切换吗？`;
+        if (!window.confirm(ask)) { notice = '已取消，原来的登录窗口保持运行'; return; }
+        r = await ipcRenderer.invoke('vps-login:' + name, { profileId, confirmed: true });
+      }
+      if (!r?.ok) throw Error(r?.error || '登录环境未响应');
+      if (ticket === epoch) notice = r.data.message || '';
+    } catch (e) { if (ticket === epoch) { notice = ''; error = e.message; } }
+    finally { busy = ''; if (ticket === epoch) renderStatus(); void refreshVps(); }
+  }
+  ipcRenderer.on?.('vps-login-progress', (_e, p) => { if (busy.startsWith('env-') || busy === 'account-edit') { notice = p?.message || notice; renderStatus(); } });
   // Sidebar badge: accounts whose login or human check needs the person (main process count).
   function setBadge(n) {
     const count = document.getElementById('accounts-attention');
@@ -61,7 +90,7 @@ function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, conf
     if (!state) { body.innerHTML = '<p class="ac-empty">正在读取账号…</p>'; return renderStatus(); }
     const expanded = [...body.querySelectorAll('details[open]')].map(d => d.dataset.details);
     body.innerHTML = tab === 'ai' ? aiHtml(state, search.value, esc) : tab === 'cli' ? cliHtml(state, search.value, esc) : servicesHtml(toolAccounts, tab, search.value, state, esc, toolAccountsError);
-    if (tab === 'ai' && !search.value) body.innerHTML=codexQuotaHtml(state,esc,accountEdit)+body.innerHTML;
+    if (tab === 'ai' && !search.value) body.innerHTML=codexQuotaHtml(state,esc,accountEdit,vps)+body.innerHTML;
     if (tab === 'ai' && state.tools?.some(tool => tool.tool === 'images' && tool.state === 'changed')) {
       body.innerHTML = '<p class="ac-connection-notice" role="status">生图工具连接配置已变化，生图记录暂不能归入共享账号。请在下方「工具连接」核对。</p>' + body.innerHTML;
     }
@@ -180,13 +209,23 @@ function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, conf
     busy = 'account-edit'; renderStatus();
     const ticket = epoch;
     try {
+      if (edit.mode === 'bind') {
+        notice = edit.loginEnv === 'new' || !edit.loginEnv ? '正在 VPS 上新建登录环境并核对出口（约 15–45 秒）…' : '正在绑定登录环境…'; renderStatus();
+        const b = await ipcRenderer.invoke('vps-login:bind', { profileId: edit.profileId, loginEnv: edit.loginEnv || 'new' });
+        if (!b?.ok) throw Error(b?.error || '绑定未完成');
+        if (ticket !== epoch) return;
+        accountEdit = null; notice = b.data.message; await refreshVps(); return;
+      }
       const channel = { add: 'accounts:add-subscription', rename: 'accounts:rename-subscription', remove: 'accounts:remove-subscription' }[edit.mode];
-      const r = await ipcRenderer.invoke(channel, { kind: edit.kind, profileId: edit.profileId, label: edit.value });
+      const exit = edit.mode === 'add' && edit.kind === 'claude' && vps?.routes ? { route: edit.route || vps.routes.find(r => r.runnable)?.id, loginEnv: edit.loginEnv || 'new' } : {};
+      if (exit.route) { notice = exit.loginEnv === 'new' ? '正在 VPS 上新建登录环境并核对出口（约 15–45 秒）…' : '正在核对出口与登录环境…'; renderStatus(); }
+      const r = await ipcRenderer.invoke(channel, { kind: edit.kind, profileId: edit.profileId, label: edit.value, ...exit });
       if (!r?.ok) throw Error(r?.error || '账号操作未完成');
       if (ticket !== epoch) return;
       accountEdit = null;
       notice = edit.mode === 'add' ? `已新建「${r.profile.label}」，正在打开官方授权…` : edit.mode === 'rename' ? `已改名为「${r.profile.label}」` : `已从列表移除「${r.profile.label}」，账号目录保留在本机`;
       await refresh();
+      if (edit.kind === 'claude') void refreshVps();
       if (edit.mode === 'add') { busy = ''; await authorize(edit.kind === 'codex' ? 'codex:' + r.profile.id : r.connection); }
     } catch (e) { if (ticket === epoch && accountEdit) editAccount({ ...accountEdit, error: e.message }); }
     finally { busy = ''; if (ticket === epoch) renderStatus(); }
@@ -203,7 +242,7 @@ function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, conf
     epoch++; clearTimeout(timer); previousFocus = document.activeElement;
     page.hidden = false; document.body.classList.add('accounts-open');
     document.getElementById('btn-rail-accounts')?.setAttribute('aria-expanded', 'true');
-    view = 'list'; error = ''; notice = ''; render(); await refresh();
+    view = 'list'; error = ''; notice = ''; render(); void refreshVps(); await refresh();
     void refreshToolAccounts();
     if (provider && !page.hidden) await configure(provider);
   }
@@ -232,6 +271,9 @@ function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, conf
     }
     else if (a === 'account-remove') editAccount({ mode: 'remove', kind: b.dataset.kind, profileId: b.dataset.profile });
     else if (a === 'account-cancel') editAccount(null);
+    else if (a === 'env-open') void envAction('open', b.dataset.profile);
+    else if (a === 'env-stop') void envAction('stop', b.dataset.profile);
+    else if (a === 'env-bind') editAccount({ mode: 'bind', kind: 'claude', profileId: b.dataset.profile, loginEnv: 'new' });
     else if (a === 'account-save') void saveAccountEdit();
     else if (a === 'codex-quota') void switchCodexQuota(b.dataset.profile);
     else if (a === 'claude-quota') void switchCodexQuota(b.dataset.profile,'claude');
@@ -254,7 +296,12 @@ function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, conf
     else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); editAccount(null); }
   }, true);
   tabs.addEventListener('keydown', e => { const i = TABS.findIndex(t => t.id === tab); const next = ({ArrowRight: (i+1)%TABS.length, ArrowLeft: (i+TABS.length-1)%TABS.length, Home: 0, End: TABS.length-1})[e.key]; if (next !== undefined) { e.preventDefault(); selectTab(TABS[next].id); } });
-  page.addEventListener('change', e => { if (e.target.dataset.toolChoice) toolChoices[e.target.dataset.toolChoice] = e.target.value; });
+  page.addEventListener('change', e => {
+    if (e.target.dataset.toolChoice) toolChoices[e.target.dataset.toolChoice] = e.target.value;
+    // Another exit lists other free environments, so the choice starts over at「新建」.
+    if (e.target.matches?.('[data-account-route]') && accountEdit) { accountEdit = { ...accountEdit, route: e.target.value, loginEnv: 'new' }; renderTools(); }
+    if (e.target.matches?.('[data-account-env]') && accountEdit) accountEdit.loginEnv = e.target.value;
+  });
   document.addEventListener('click', e => {
     if (e.target.closest('#btn-rail-accounts')) { if (page.hidden) void open(); else close(); }
     else if (e.target.closest('#scene-rail button') && !page.hidden) close();

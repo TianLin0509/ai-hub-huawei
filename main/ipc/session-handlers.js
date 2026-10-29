@@ -160,6 +160,9 @@ function registerSessionIpc(ipcMain, deps) {
         return createResolvedSession(kind, opts);
       });
     }
+    // 社区版：缺少 CLI 先说清楚，再查登录（2026-10-28：没装 Claude 时，账号凭据检查先报「Claude 登录或配置文件无法读取」，
+    // 盖过了「未找到 Claude Code CLI」，用户以为是登录问题）。session-manager 创建前同样检查一次。
+    require('../../core/community-provider').assertProviderAvailable(kind || 'powershell');
     if (ensureLaunchAuth) {
       const started = Date.now();
       let checked = started;

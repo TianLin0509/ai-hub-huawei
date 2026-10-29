@@ -563,7 +563,15 @@ function buildCodeAgentPtyLaunch(id, kind, opts, cwd, env, config, auth = null) 
   }
   // 其余情况（含「有 id 但没有落盘记录」）都是全新会话：不能用 --continue，它会接上这个目录里最近的别人的对话。
   const quote = value => /^[A-Za-z0-9_.:=\/\\-]+$/.test(String(value)) ? String(value) : quotePowerShellLiteral(value);
-  const cmd = ' ' + commandHead(config.command) + ' ' + [...identity, ...args].map(quote).join(' ') + '\r\n';
+  // 老版本 CodeAgent（如 1.2605）不认的启动参数不传；读不到 --help 时原样（core/codeagent-capabilities.js）。
+  let launchArgs = [...identity, ...args];
+  let droppedFlags = [];
+  try {
+    const caps = require('./codeagent-capabilities');
+    ({ args: launchArgs, dropped: droppedFlags } = caps.filterArgs(launchArgs, caps.readHelp(config.command)));
+    if (droppedFlags.length) console.warn(`[codeagent] ${String(id || '').slice(0, 8)} 本机 CodeAgent 不认这些参数，已不传：${droppedFlags.join(' ')}`);
+  } catch (error) { console.warn('[codeagent] 参数兼容检查出错，原样启动：' + error.message); launchArgs = [...identity, ...args]; droppedFlags = []; }
+  const cmd = ' ' + commandHead(config.command) + ' ' + launchArgs.map(quote).join(' ') + '\r\n';
   // 账号代称（个人 / 号N）：默认模型看护按启动记录找「改写前后启动了哪些会话」（core/codeagent-default-model-guard.js）。
   let account = '个人';
   try {
@@ -579,6 +587,7 @@ function buildCodeAgentPtyLaunch(id, kind, opts, cwd, env, config, auth = null) 
     ...(memberMcp.skipped && memberMcp.skipped.length ? { nativeMcpSkipped: memberMcp.skipped.join(',') } : {}) } : {}),
     ...(auth ? { auth: auth.source, inheritedAuthIgnored: auth.ignoredForNewSessions } : {}),
     ...(codeAgentRouteModel(opts) ? { route: codeAgentRouteModel(opts) } : {}),
+    ...(droppedFlags.length ? { droppedFlags: droppedFlags.join(' ') } : {}),
   });
   // 学习去重要用（core/codeagent-member-mcp.js learnNativeMcp）：这次写进去的、按记录跳过的
   const memberMcpLearn = bridgeTrim || (memberMcp && !memberMcp.error && (memberMcp.file || (memberMcp.skipped && memberMcp.skipped.length)))
@@ -1911,7 +1920,10 @@ class SessionManager extends EventEmitter {
     let claudeProfile = null;
     if (isClaude && getConfig().claudeBackend !== 'api') {
       const profileTools = require('./claude-subscription-profiles');
-      const managedAccount = opts.claudeAutoSwitch === true || opts.claudeAccountSwitchable === true || !!opts.claudeRuntimeHome;
+      // 这台电脑还没有任何 Claude 账号登录过、用的是默认账号：按普通 Claude 启动，让 CLI 自己走登录流程（自动换号此时无号可换）
+      // （2026-10-28：新装用户的第一个会话在准备独立运行目录时就报「Claude 登录或配置文件无法读取」，建不出来）。专用账号、自动换号照旧。
+      const defaultNeverLoggedIn = profileTools.firstLoginExempt(opts, getConfig());
+      const managedAccount = !defaultNeverLoggedIn && (opts.claudeAutoSwitch === true || opts.claudeAccountSwitchable === true || !!opts.claudeRuntimeHome);
       if (managedAccount && require('./agent-runtime-mode').agentRuntimeMode() !== 'pty') {
         throw new Error('Claude 自动换号会话需要原生 PTY 模式，未切换后端');
       }

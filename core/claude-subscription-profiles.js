@@ -11,7 +11,9 @@ function normalizeProfiles(profiles, home = process.env.CLAUDE_HUB_HOME_DIR || o
   ]);
   for (const p of Array.isArray(profiles) ? profiles : []) {
     if (!p || !/^[\w-]{1,64}$/.test(p.id || '')) continue;
-    rows.set(p.id, { id: p.id, label: String(p.label || p.id), home: String(p.home || ''), ...(p.network ? { network: { ...p.network } } : {}) });
+    rows.set(p.id, { id: p.id, label: String(p.label || p.id), home: String(p.home || ''), ...(p.network ? { network: { ...p.network } } : {}),
+      // VPS 登录环境（core/vps-login-env.js）：账号的网页登录与官方授权都在这个远程浏览器里完成。
+      ...(/^(?:[abcd]|u[0-9a-f]{8})$/.test(p.loginEnv || '') ? { loginEnv: p.loginEnv } : {}) });
   }
   return [...rows.values()];
 }
@@ -96,4 +98,45 @@ function sharedNetworkEnv(config, env = process.env) {
   return out;
 }
 
-module.exports = { normalizeProfiles, resolveProfile, connectionId, profileForSession, accountLabel, usageScope, applyNetworkEnv, sharedNetworkEnv };
+// 这台电脑上还没有任何 Claude 账号登录过（各账号目录都没有 .credentials.json）：新装用户的第一个会话。
+// 这时没有可换的号、也没有可核对的凭据，按普通 Claude 启动，让 CLI 自己走登录流程（2026-10-28）。
+// 只要有一个账号登录过、或者有账号目录解析不了（拿不准就当登录过），就照旧走账号管理与严格核对。
+// CLAUDE_CONFIG_DIR 指到别处时，标准位置 ~/.claude 里的旧登录也要算（Codex 复审）。
+function noClaudeLoginYet(config, env = process.env) {
+  const userHome = env.CLAUDE_HUB_HOME_DIR || env.USERPROFILE || env.HOME || os.homedir();
+  if (fs.existsSync(path.join(userHome, '.claude', '.credentials.json'))) return false;
+  for (const p of normalizeProfiles(config && config.claudeSubscriptionProfiles)) {
+    let home = '';
+    try { home = resolveProfile(config || {}, p.id, env).home; } catch { return false; }
+    if (!home || fs.existsSync(path.join(home, '.credentials.json'))) return false;
+  }
+  return true;
+}
+
+const samePath = (a, b) => {
+  const x = path.resolve(a).replace(/[\\/]+$/, ''), y = path.resolve(b).replace(/[\\/]+$/, '');
+  return process.platform === 'win32' ? x.toLowerCase() === y.toLowerCase() : x === y;
+};
+const insideDir = (dir, file) => {
+  const rel = path.relative(process.platform === 'win32' ? dir.toLowerCase() : dir, process.platform === 'win32' ? path.resolve(file).toLowerCase() : path.resolve(file));
+  return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+};
+
+// 首次使用豁免（2026-10-28，两轮 Codex 审核后收紧）：用默认账号、没有运行目录、这台电脑上还没有任何 Claude 账号登录过。
+// 接历史（恢复、分支、继续、选历史）时必须有证据表明历史在默认账号目录里：带了原账号目录就必须是默认账号目录，
+// 带了会话记录路径就必须都在默认账号的 projects 下，两样都没带就不豁免。主进程登录检查和会话管理器用同一条判断。
+function firstLoginExempt(opts = {}, config = {}, env = process.env) {
+  if (opts.claudeRuntimeHome) return false;
+  if ((opts.claudeProfile || config.claudeSubscriptionProfile || 'default') !== 'default') return false;
+  if (!noClaudeLoginYet(config, env)) return false;
+  let home = '';
+  try { home = resolveProfile(config, 'default', env).home; } catch { return false; }
+  if (opts.claudeConfigDir && !samePath(opts.claudeConfigDir, home)) return false;
+  const transcripts = [opts.transcriptPath, opts.resumeTranscriptPath].filter(Boolean);
+  if (transcripts.some(t => !insideDir(path.join(home, 'projects'), t))) return false;
+  const history = opts.useResume || opts.resumeCCSessionId || opts.forkCCSessionId || opts.ccSessionId || opts.useContinue || opts.resumePicker;
+  if (history && !opts.claudeConfigDir && !transcripts.length) return false;
+  return true;
+}
+
+module.exports = { noClaudeLoginYet, firstLoginExempt, normalizeProfiles, resolveProfile, connectionId, profileForSession, accountLabel, usageScope, applyNetworkEnv, sharedNetworkEnv };

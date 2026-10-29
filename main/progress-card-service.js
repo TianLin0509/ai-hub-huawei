@@ -80,6 +80,32 @@ function recentDialogue(text, { maxItems = 30, maxChars = 500 } = {}) {
   return items.slice(-maxItems).join('\n');
 }
 
+// 用户亲手发的最后一条消息的时间（2026-10-28）：晚于卡的最后一次更新，就当「等你拍板」已经回复过了，
+// 不再标橙——Agent 常常回复完就继续干活，忘了回卡上把「等你拍板」改回「无」。
+// Claude 记录里人发的消息带 origin.kind=human；Codex 的用户消息里混着 AGENTS.md、环境信息这类自动注入，按开头排除。
+const INJECTED = /^\s*(?:<|#\s*AGENTS\.md|（Hub 提示|【(?:上下文|额度|压缩|引用)|\[Request interrupted)/;
+function humanMessageTimes(text) {
+  let last = 0;
+  for (const line of String(text || '').split('\n')) {
+    if (!line.includes('"user') || !line.includes('"timestamp"')) continue;
+    let rec; try { rec = JSON.parse(line); } catch { continue; }
+    let human = false;
+    if (rec.type === 'user' && rec.message && !rec.isMeta && !rec.isSidechain) {
+      const c = rec.message.content;
+      const text = typeof c === 'string' ? c : Array.isArray(c) && !c.some(x => x && x.type === 'tool_result') ? c.filter(x => x && x.type === 'text').map(x => x.text).join('\n') : '';
+      human = Boolean(text) && (rec.origin && rec.origin.kind ? rec.origin.kind === 'human' : !INJECTED.test(text));
+    } else if (rec.type === 'response_item' && rec.payload && rec.payload.type === 'message' && rec.payload.role === 'user') {
+      const text = (rec.payload.content || []).filter(x => x && typeof x.text === 'string').map(x => x.text).join('\n');
+      human = Boolean(text.trim()) && !INJECTED.test(text);
+    } else if (rec.type === 'event_msg' && rec.payload && rec.payload.type === 'user_message') {
+      human = Boolean(String(rec.payload.message || '').trim()) && !INJECTED.test(String(rec.payload.message));
+    }
+    const at = human ? Date.parse(rec.timestamp) : NaN;
+    if (Number.isFinite(at) && at > last) last = at;
+  }
+  return last;
+}
+
 const GHOST_PROMPT = (card, dialogue) => `你在帮一位不看代码的负责人了解一个正在运行的 AI 长任务。下面是任务的进展卡（可能过期）和最近的对话。
 用中文写一句话（不超过 60 个字）说明这个任务现在在做什么、有没有卡住；只输出这一句，不加标题、符号、引号或前缀。
 
@@ -175,11 +201,15 @@ function createProgressCardService({
   function entryFor(session, t) {
     if (!t.cardPath || !t.parsed) return null;
     const running = isRunning(session);
-    const { group, stale } = classifyCard({ plain: t.parsed.plain, mtimeMs: t.mtimeMs, running, now: now(), staleMs });
+    // 卡更新之后用户又发过消息：拍板按「已回复」处理，分栏照没有拍板时的状态排。
+    const answeredAt = t.parsed.plain && t.parsed.plain.decision && t.lastHumanAt > t.mtimeMs + 3000 ? t.lastHumanAt : 0;
+    const plainForGroup = answeredAt ? { ...t.parsed.plain, decision: null } : t.parsed.plain;
+    const { group, stale } = classifyCard({ plain: plainForGroup, mtimeMs: t.mtimeMs, running, now: now(), staleMs });
     const ghost = t.ghost && t.ghost.forMtime === t.mtimeMs ? t.ghost : null;
     return { sessionId: session.id, title: session.title || '', kind: session.kind || '', cardPath: t.cardPath, mtimeMs: t.mtimeMs,
       running, group: group === 'unknown' && ghost ? (stale ? 'risk' : 'ok') : group, stale,
       cardTitle: t.parsed.title, goal: t.parsed.goal, done: t.parsed.done, total: t.parsed.total, plain: t.parsed.plain,
+      decisionAnsweredAt: answeredAt || null,
       ghost: ghost ? { line: ghost.line, at: ghost.at } : null };
   }
 
@@ -221,7 +251,7 @@ function createProgressCardService({
 
   function publish(force = false) {
     const cards = snapshot();
-    const key = JSON.stringify(cards.map(c => [c.sessionId, c.cardPath, c.mtimeMs, c.group, c.stale, c.running, c.title, c.ghost && c.ghost.at]));
+    const key = JSON.stringify(cards.map(c => [c.sessionId, c.cardPath, c.mtimeMs, c.group, c.stale, c.running, c.title, c.ghost && c.ghost.at, c.decisionAnsweredAt]));
     if (!force && key === lastSent) return cards;
     lastSent = key;
     sendToRenderer('progress-cards:changed', { cards, at: now() });
@@ -244,7 +274,10 @@ function createProgressCardService({
         }
         const [chunk, used] = readNew(t, budget);
         budget -= used;
-        if (chunk) for (const p of [...writtenCardPaths(chunk, s.cwd), ...cardsInOwnDirectory(chunk, s.cwd)]) addCard(t, p);
+        if (chunk) {
+          for (const p of [...writtenCardPaths(chunk, s.cwd), ...cardsInOwnDirectory(chunk, s.cwd)]) addCard(t, p);
+          t.lastHumanAt = Math.max(t.lastHumanAt || 0, humanMessageTimes(chunk));
+        }
         const card = newestCard(t);
         if (!card) { t.cardPath = null; t.parsed = null; continue; }
         if (card.path !== t.cardPath || card.mtimeMs !== t.mtimeMs) {
@@ -272,4 +305,4 @@ function createProgressCardService({
   return { start, stop, tick, snapshot, registerIpc, setRunning, _tracked: tracked };
 }
 
-module.exports = { createProgressCardService, writtenCardPaths, cardsInOwnDirectory, recentDialogue, tidyGhost, haikuSummarizer, GHOST_PROMPT };
+module.exports = { createProgressCardService, writtenCardPaths, cardsInOwnDirectory, humanMessageTimes, recentDialogue, tidyGhost, haikuSummarizer, GHOST_PROMPT };

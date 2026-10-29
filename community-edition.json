@@ -36,13 +36,11 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "发出的消息偶尔卡在 CodeAgent 输入框里没发出去：现在能认出这种情况并自动补按一次回车，仍不行会提示你。",
-    "会话里点模型名，只列出这个账号能用的模型（例如 GLM-5.2 和 DeepSeek），可以直接切换。",
-    "AI 群聊不再需要选场景，默认通用场景和默认工作目录。",
-    "CodeAgent 版本过旧的提醒里，加了最新版安装包的下载链接（黄区专用）。"
+    "在公司网络里输入完整版口令只显示 fetch failed：口令核对现在和一键更新一样走系统代理。",
+    "更新时优先从确实有这一版的源下载，不再先报一次「源上没有这个文件」。"
   ],
-  "version": "5.3.0",
-  "upstreamVersion": "1.6.660",
-  "upstreamCommit": "1ad5ef3300426a9da567978d274174ee09b177dd",
+  "version": "5.3.1",
+  "upstreamVersion": "1.6.669",
+  "upstreamCommit": "e765d8fb6b371362701284c5dee0df9c64ed32d1",
   "upstreamDirty": false
 }

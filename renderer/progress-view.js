@@ -19,8 +19,27 @@
   }
   const minutes = ms => Math.max(0, Math.round((Date.now() - ms) / 60000));
   function activeId() { try { return typeof activeSessionId !== 'undefined' ? activeSessionId : null; } catch { return null; } }  // renderer.js 的全局
+  // 手动操作（2026-10-28）：「已处理」消掉这条拍板，「收起」把进展条收成小标签。都只对这一版卡有效，
+  // 卡一更新（修改时间变了）就自动失效、重新显示。存在本机 localStorage，重启 Hub 仍记得。
+  const DISMISS_KEY = 'hub.progress.dismiss.v1';
+  let dismissed = {};
+  try { dismissed = JSON.parse(localStorage.getItem(DISMISS_KEY) || '{}') || {}; } catch { dismissed = {}; }
+  function dismissOf(c) { const d = dismissed[c.cardPath]; return d && d.mtimeMs === c.mtimeMs ? d : {}; }
+  function setDismiss(c, patch) {
+    dismissed[c.cardPath] = { ...dismissOf(c), ...patch, mtimeMs: c.mtimeMs };
+    for (const k of Object.keys(dismissed)) if (!dismissed[k].decision && !dismissed[k].strip) delete dismissed[k];
+    const keys = Object.keys(dismissed); if (keys.length > 200) for (const k of keys.slice(0, keys.length - 200)) delete dismissed[k];
+    try { localStorage.setItem(DISMISS_KEY, JSON.stringify(dismissed)); } catch {}
+    refreshAll();
+  }
+  // 还在等你拍板：卡上有拍板，你在卡更新后没回复过（主进程按对话记录判断），也没手动标记处理。
+  const pending = c => Boolean(c.plain && c.plain.decision && !c.decisionAnsweredAt && !dismissOf(c).decision);
+  function handledNote(c) {
+    if (!c.plain || !c.plain.decision || pending(c)) return '';
+    return c.decisionAnsweredAt ? `你 ${ago(c.decisionAnsweredAt)}已在对话里回复，等 AI 更新进展卡` : '你已标记为处理过';
+  }
   function statusOf(c) {
-    if (c.plain && c.plain.decision) return { cls: 'decide', label: '待拍板' };
+    if (pending(c)) return { cls: 'decide', label: '待拍板' };
     if (c.stale) return { cls: 'stale', label: '久未更新' };
     const s = c.plain && c.plain.status;
     return s ? { cls: { 顺利: 'ok', 有风险: 'risk', 卡住: 'stuck', 已完成: 'done' }[s], label: s } : { cls: 'unknown', label: '未写白话' };
@@ -39,7 +58,7 @@
     const c = cards.get(sessionId);
     if (!c) return null;
     const st = statusOf(c), line = lineOf(c);
-    const tip = `进展：${st.label} · ${line.ghost ? '［系统代写］' : ''}${line.text}${c.plain && c.plain.decision ? ` · 等你拍板：${c.plain.decision.question}` : ''} · ${whenText(c)}`;
+    const tip = `进展：${st.label} · ${line.ghost ? '［系统代写］' : ''}${line.text}${pending(c) ? ` · 等你拍板：${c.plain.decision.question}` : ''} · ${whenText(c)}`;
     const html = st.cls === 'decide'
       ? `<span class="pg-row-ask" title="${esc(tip)}">待拍板</span>`
       : `<span class="pg-row-dot pg-${st.cls}" title="${esc(tip)}"></span>`;
@@ -62,21 +81,28 @@
     if (panel && strip) panel.style.setProperty('--progress-strip-h', `${strip.hidden ? 0 : strip.offsetHeight}px`);
   }
   function stripHtml(c) {
-    const st = statusOf(c), line = lineOf(c), open = stripOpen.has(c.sessionId), d = c.plain && c.plain.decision;
+    const st = statusOf(c), line = lineOf(c), open = stripOpen.has(c.sessionId), d = pending(c) ? c.plain.decision : null;
+    if (dismissOf(c).strip) {
+      return `<button type="button" class="pg-mini" data-pg-action="unmini" title="展开进展条">${st.cls === 'decide' ? '<span class="pg-ask">待拍板</span>' : `<i class="pg-dot pg-${st.cls}"></i>`}进展 ▸</button>`;
+    }
     const pct = c.total ? Math.round(100 * (c.done || 0) / c.total) : 0;
     const head = `<div class="pg-bar" data-pg-action="toggle" role="button" tabindex="0" aria-expanded="${open}">
         <span class="pg-caret">${open ? '▾' : '▸'}</span>
         ${st.cls === 'decide' ? '<span class="pg-ask">待你拍板</span>' : `<span class="pg-chip"><i class="pg-dot pg-${st.cls}"></i>${esc(st.label)}</span>`}
         <span class="pg-line">${line.ghost ? '<b class="pg-ghost-tag">［系统代写］</b>' : ''}${esc(d ? d.question : line.text)}</span>
         ${c.total ? `<span class="pg-prog"><span class="pg-track"><span class="pg-fill" style="width:${pct}%"></span></span>${esc(countText(c))}</span>` : ''}
-        <span class="pg-when${c.stale ? ' pg-late' : ''}">${esc(whenText(c))}</span></div>`;
+        <span class="pg-when${c.stale ? ' pg-late' : ''}">${esc(whenText(c))}</span>
+        ${d ? '<button type="button" class="pg-tool" data-pg-action="dismiss-decision" title="这条拍板已经处理过了，不再标橙；卡更新后若还有拍板会重新出现">已处理</button>' : ''}
+        <button type="button" class="pg-tool" data-pg-action="mini" title="收起进展条；卡更新后自动重新展开" aria-label="收起进展条">收起</button></div>`;
     if (!open) return head;
     const rows = [['目标', c.goal], ['现状', c.plain && c.plain.line], ['进度', c.plain && c.plain.progress], ['新发现', c.plain && c.plain.finding]]
       .filter(([, v]) => v).map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('');
     const ghost = line.ghost ? `<div class="pg-ghost">Agent 已 ${minutes(c.mtimeMs)} 分钟没更新进展卡。上面这句是 Hub 用低档模型读进展卡和最近的对话代写的，可能不准；Agent 下次更新卡后自动换回它写的版本。</div>` : '';
+    const handled = handledNote(c);
+    const decideDone = handled ? `<div class="pg-decide-box pg-handled"><div>拍板：${esc(c.plain.decision.question)}</div><div class="pg-handled-note">✓ ${esc(handled)}</div></div>` : '';
     const decide = d ? `<div class="pg-decide-box"><div class="pg-q">等你拍板：${esc(d.question)}</div>${d.recommendation ? `<div>推荐：${esc(d.recommendation)}</div>` : ''}
         <div class="pg-acts">${d.recommendation ? '<button type="button" class="pg-btn pg-pri" data-pg-action="reply-rec">按推荐回复</button>' : ''}<button type="button" class="pg-btn" data-pg-action="reply-own">我自己回复</button></div></div>` : '';
-    return `${head}<div class="pg-detail">${ghost}<dl>${rows || '<dt>现状</dt><dd>这张进展卡还没有「给用户看」白话块。</dd>'}</dl>${decide}
+    return `${head}<div class="pg-detail">${ghost}<dl>${rows || '<dt>现状</dt><dd>这张进展卡还没有「给用户看」白话块。</dd>'}</dl>${decide}${decideDone}
       <div class="pg-links"><button type="button" class="pg-link" data-pg-action="open-card">打开进展卡</button><button type="button" class="pg-link" data-pg-action="open-folder">打开所在文件夹</button><span class="pg-path">${esc(c.cardPath)}</span></div></div>`;
   }
   function renderStrip(force = false) {
@@ -86,7 +112,8 @@
     const html = c ? stripHtml(c) : '';
     if (!force && shownFor === id && el._html === html) return;
     shownFor = id; el._html = html;
-    el.classList.toggle('pg-asking', Boolean(c && c.plain && c.plain.decision));
+    el.classList.toggle('pg-asking', Boolean(c && pending(c) && !dismissOf(c).strip));
+    el.classList.toggle('pg-minimized', Boolean(c && dismissOf(c).strip));
     el.innerHTML = html;
     el.hidden = !c;
     syncStripHeight();
@@ -107,6 +134,9 @@
     if (!btn || !c) return;
     const a = btn.dataset.pgAction, d = c.plain && c.plain.decision;
     if (a === 'toggle') { stripOpen.has(id) ? stripOpen.delete(id) : stripOpen.add(id); renderStrip(true); }
+    else if (a === 'dismiss-decision') setDismiss(c, { decision: true });
+    else if (a === 'mini') setDismiss(c, { strip: true });
+    else if (a === 'unmini') setDismiss(c, { strip: false });
     else if (a === 'reply-rec' && d) fillComposer(id, `按推荐：${d.recommendation}`);
     else if (a === 'reply-own') fillComposer(id, d ? `关于「${d.question}」：` : '');
     else if (a === 'open-card') void shell.openPath(c.cardPath);
@@ -120,13 +150,26 @@
     { key: 'ok', title: '进行中', cls: 'ok' },
     { key: 'done', title: '已完成，待验收', cls: 'done' },
   ];
-  const groupOf = c => (c.group === 'unknown' ? 'ok' : c.group);
+  function groupOf(c) {
+    if (c.group === 'decide' && !pending(c)) {          // 手动标了处理：按卡上的状态重新归栏
+      const s = c.plain && c.plain.status;
+      return s === '已完成' ? 'done' : (c.stale || s === '有风险' || s === '卡住') ? 'risk' : 'ok';
+    }
+    return c.group === 'unknown' ? 'ok' : c.group;
+  }
+  // 超过 24 小时没更新、会话也没在跑的卡收进「较早」（还在等你拍板的除外）。
+  const OLDER_MS = 24 * 3600 * 1000;
+  const isOlder = c => !c.running && !pending(c) && Date.now() - c.mtimeMs > OLDER_MS;
+  let olderOpen = false;
   function build() {
     if (root) return true;
     root = document.getElementById('progress-panel');
     if (!root) return false;
     root.innerHTML = `<header class="pg-head"><h2>进展</h2><p id="pg-subtitle"></p></header><div class="pg-cols" id="pg-cols"></div>`;
+    root.addEventListener('toggle', e => { if (e.target.matches && e.target.matches('.pg-older')) olderOpen = e.target.open; }, true);
     root.addEventListener('click', e => {
+      const done = e.target.closest('[data-pg-dismiss]');
+      if (done) { e.stopPropagation(); const c = cards.get(done.dataset.pgDismiss); if (c) setDismiss(c, { decision: true }); return; }
       const card = e.target.closest('[data-pg-session]');
       if (!card) return;
       const id = card.dataset.pgSession;
@@ -137,30 +180,32 @@
     return true;
   }
   function boardCard(c) {
-    const line = lineOf(c), d = c.plain && c.plain.decision;
+    const line = lineOf(c), d = pending(c) ? c.plain.decision : null, handled = handledNote(c);
     return `<div class="pg-card" data-pg-session="${esc(c.sessionId)}" role="button" tabindex="0">
       <div class="pg-ct">${esc(c.title || c.cardTitle || '未命名会话')}</div>
       <div class="pg-cl">${line.ghost ? '<b class="pg-ghost-tag">［系统代写］</b>' : ''}${esc(line.text)}</div>
-      ${d ? `<div class="pg-cq">${esc(d.question)}${d.recommendation ? `<br>推荐：${esc(d.recommendation)}` : ''}</div>` : ''}
+      ${d ? `<div class="pg-cq">${esc(d.question)}${d.recommendation ? `<br>推荐：${esc(d.recommendation)}` : ''}<button type="button" class="pg-tool pg-cq-done" data-pg-dismiss="${esc(c.sessionId)}" title="这条拍板已经处理过了">已处理</button></div>` : ''}
+      ${handled ? `<div class="pg-handled-note">✓ ${esc(handled)}</div>` : ''}
       <div class="pg-cm"><span>${esc([countText(c), c.running ? '运行中' : '未运行'].filter(Boolean).join(' · '))}</span><span class="${c.stale ? 'pg-late' : ''}">${esc(c.stale ? whenText(c) : ago(c.mtimeMs))}</span></div></div>`;
   }
   function renderBoard() {
     if (!opened || !build()) return;
-    const all = [...cards.values()].sort((a, b) => b.mtimeMs - a.mtimeMs);
+    const every = [...cards.values()].sort((a, b) => b.mtimeMs - a.mtimeMs);
+    const older = every.filter(isOlder), all = every.filter(c => !isOlder(c));
     const by = k => all.filter(c => groupOf(c) === k);
     const ask = by('decide').length, risk = by('risk').length;
     root.querySelector('#pg-subtitle').textContent = all.length
-      ? `${all.length} 个会话在维护进展卡 · ${ask} 件等你拍板 · ${risk} 个有风险或久未更新。每张卡是 Agent 最近写的白话；点卡片进入会话。`
-      : '还没有会话在维护进展卡。连续跑 30 分钟以上的任务，Agent 会在任务目录建一张进展卡，这里就会出现。';
+      ? `${all.length} 个会话在维护进展卡 · ${ask} 件等你拍板 · ${risk} 个有风险或久未更新${older.length ? ` · 另有 ${older.length} 张较早的卡收在下面` : ''}。每张卡是 Agent 最近写的白话；点卡片进入会话。`
+      : older.length ? `眼下没有活跃的进展卡，${older.length} 张较早的卡收在下面。` : '还没有会话在维护进展卡。连续跑 30 分钟以上的任务，Agent 会在任务目录建一张进展卡，这里就会出现。';
     root.querySelector('#pg-cols').innerHTML = GROUPS.map(g => {
       const xs = by(g.key);
       return `<section class="pg-col" data-pg-group="${g.key}"><h3><i class="pg-dot pg-${g.cls}"></i>${esc(g.title)}（${xs.length}）</h3>${xs.map(boardCard).join('') || '<div class="pg-empty">暂无</div>'}</section>`;
-    }).join('');
+    }).join('') + (older.length ? `<details class="pg-older"${olderOpen ? ' open' : ''}><summary>较早的进展卡（${older.length}）· 超过 24 小时没更新、会话也没在跑</summary><div class="pg-older-list">${older.map(boardCard).join('')}</div></details>` : '');
   }
   function setNavCount() {
     const nav = document.getElementById('btn-progress');
     if (!nav) return;
-    const n = [...cards.values()].filter(c => c.plain && c.plain.decision).length;
+    const n = [...cards.values()].filter(pending).length;
     let b = nav.querySelector('.pg-nav-count');
     if (!b) { b = document.createElement('b'); b.className = 'pg-nav-count'; nav.appendChild(b); }
     b.textContent = n ? String(n) : ''; b.hidden = !n;
@@ -182,6 +227,10 @@
     }
   }
 
+  function refreshAll() {
+    if (typeof scheduleSessionListRender === 'function') scheduleSessionListRender();
+    setNavCount(); renderStrip(true); renderBoard();
+  }
   function accept(list) {
     const next = new Map();
     for (const c of Array.isArray(list) ? list : []) if (c && typeof c.sessionId === 'string') next.set(c.sessionId, c);

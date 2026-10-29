@@ -2302,6 +2302,9 @@ const sessionOperations = registerSessionIpc(ipcMain, {
       && getHubConfig().claudeBackend !== 'api') {
       const profile = require('./core/claude-subscription-profiles').profileForSession(
         opts.claudeRuntimeHome ? { ...opts, claudeConfigDir: undefined } : opts, getHubConfig());
+      // 这台电脑还没有任何 Claude 账号登录过：交给 Claude CLI 自己的登录流程，不在这里拦（2026-10-28：
+      // 新装 Claude 的用户点新建会话只看到「Claude 登录或配置文件无法读取」，会话建不出来）。专用账号照旧严格核对。
+      if (profile.id === 'default' && require('./core/claude-subscription-profiles').firstLoginExempt(opts, getHubConfig())) return;
       await claudeAccountBroker.getCredentials(profile);
     }
   },
@@ -3739,7 +3742,11 @@ registerUsageIpc(ipcMain, {
   scanAgentSessions,
 });
 
+// 账号页 · Claude 登录环境（VPS 远程浏览器，2026-10-28 由桌面启动台并入）。
+const vpsLogin = require('./main/ipc/vps-login-handlers').registerVpsLoginIpc(ipcMain, { sendToRenderer, clearSessionManagerConfigCache });
 registerConfigIpc(ipcMain, {
+  prepareNewClaudeAccount: payload => vpsLogin.enabled() ? vpsLogin.prepareNew(payload) : Promise.resolve({}),
+  requireClaudeExit: () => vpsLogin.enabled(),
   ensureLaunchAuth:async(kind,opts)=>{await launchAuth.ensure(kind,opts);await ensureCodexAccountNamespace(kind,opts);},
   attachCodexUsageScope,
   clearCodexJsonlCache: () => _codexJsonlCachedByRoot.clear(),
@@ -3843,7 +3850,7 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
         switched: memberUpgrade && !!editionChannel.readChannel(getHubDataDir()) }));
       ipcMain.handle('edition:switch', async (_e, payload = {}) => {
         if (!memberUpgrade) return { ok: false, message: '这个版本不需要' };
-        const r = await editionChannel.verify(typeof payload.code === 'string' ? payload.code : '');
+        const r = await editionChannel.verify(typeof payload.code === 'string' ? payload.code : '', { fetchImpl: (...args) => require('electron').net.fetch(...args) });
         if (!r.ok) return r;
         editionChannel.writeChannel(getHubDataDir(), r.id);
         appUpdate.useConfig(editionChannel.updateConfig(distribution.updateConfig, getHubDataDir()));

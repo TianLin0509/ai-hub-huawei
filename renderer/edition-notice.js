@@ -1,6 +1,7 @@
 'use strict';
 // 「以后再说」3 天内不再弹。没开通过、已经改过、或不是公司公开版，都不出现。
 (() => {
+  if (require('../core/distribution').target !== 'company') return;
   const { ipcRenderer } = require('electron');
   const SNOOZE_KEY = 'hub:editionSwitchSnooze';
   const SNOOZE_MS = 3 * 24 * 3600 * 1000;

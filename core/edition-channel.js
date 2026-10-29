@@ -71,7 +71,7 @@ async function verify(code, { fetchImpl = globalThis.fetch, timeoutMs = 15000 } 
     if (!manifest || typeof manifest.version !== 'string') return { ok: false, reason: 'blocked', message: '读到的不是更新清单，可能被公司网络拦截，请先在浏览器里打开一次该地址放行', url };
     return { ok: true, id, version: manifest.version };
   } catch (error) {
-    return { ok: false, reason: 'network', message: `更新地址暂时连不上：${error.name === 'AbortError' ? '15 秒没响应' : error.message}` };
+    return { ok: false, reason: 'network', message: `更新地址暂时连不上：${error.name === 'AbortError' ? '15 秒没响应' : error.message === 'fetch failed' ? '网络请求没有发出去，请检查网络或代理' : error.message}` };
   } finally { clearTimeout(timer); }
 }
 

@@ -28,7 +28,9 @@ function environment(profile) {
   const p = policy(profile);
   if (!p) return null;
   return { ...Object.fromEntries(PROXY_KEYS.map(k => [k, p.proxy])), NO_PROXY: '', no_proxy: '', BROWSER: p.browserCommand,
-    NODE_EXTRA_CA_CERTS: p.proxyCaFile, NODE_TLS_REJECT_UNAUTHORIZED: '1' };
+    NODE_EXTRA_CA_CERTS: p.proxyCaFile, NODE_TLS_REJECT_UNAUTHORIZED: '1',
+    // Hub 的登录转发程序按它把授权链接送进这个账号的 VPS 登录环境。
+    ...(profile.loginEnv ? { CLAUDE_HUB_LOGIN_ENV: profile.loginEnv } : {}) };
 }
 
 // The dedicated egress is for Claude's own traffic. Claude Code sources

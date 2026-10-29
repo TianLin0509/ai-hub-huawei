@@ -66,3 +66,19 @@
 #btn-progress { position: relative; }
 #btn-progress .pg-nav-count { position: absolute; top: 4px; right: 8px; min-width: 16px; padding: 0 4px; border-radius: 9px; background: var(--pg-ask); color: #fff; font-size: 10.5px; line-height: 16px; text-align: center; }
 #btn-progress .pg-nav-count[hidden] { display: none; }
+
+/* 2026-10-28：手动处理与收起 */
+.pg-tool { flex: none; font: inherit; font-size: 11.5px; padding: 1px 8px; border-radius: 5px; border: 1px solid var(--border-mid, #d8dfe8);
+  background: var(--surface-raised, #fff); color: var(--fg-muted, #637084); cursor: pointer; }
+.pg-tool:hover { color: var(--fg-strong, #222a36); border-color: var(--border-strong, #b0bccd); }
+#session-progress-strip.pg-minimized { left: auto; border: 0; background: transparent; overflow: visible; }
+.pg-mini { display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 12px;
+  border: 1px solid var(--border-mid, #d8dfe8); background: var(--surface-raised, #fff); color: var(--fg-muted, #637084); cursor: pointer; }
+.pg-mini .pg-ask { font-size: 11px; padding: 0 5px; }
+.pg-handled { border-color: var(--border-subtle, #e5e9ee) !important; color: var(--fg-muted, #637084); }
+.pg-handled-note { color: var(--status-success, #2f9e6b); font-size: 12px; margin-top: 2px; }
+.pg-cq { position: relative; padding-right: 58px !important; }
+.pg-cq-done { position: absolute; right: 6px; top: 6px; }
+.pg-older { margin-top: 18px; border-top: 1px solid var(--border-subtle, #e5e9ee); padding-top: 10px; }
+.pg-older summary { cursor: pointer; font-size: 12.5px; color: var(--fg-muted, #637084); }
+.pg-older-list { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 14px; margin-top: 10px; }

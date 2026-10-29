@@ -46,7 +46,7 @@ function newId(taken, random = () => crypto.randomBytes(3).toString('hex')) {
 
 // `normalized` is the list the Hub actually shows (built-in rows included), used
 // to refuse duplicates against rows that are not written in the raw file.
-function addAccount(raw, kind, label, { homeDir, normalized = [], now = () => new Date().toISOString(), random } = {}) {
+function addAccount(raw, kind, label, { homeDir, normalized = [], now = () => new Date().toISOString(), random, network, loginEnv } = {}) {
   const meta = kindOf(kind);
   const name = cleanLabel(label);
   const rows = rowsOf(raw, kind);
@@ -57,6 +57,10 @@ function addAccount(raw, kind, label, { homeDir, normalized = [], now = () => ne
   // A Codex login opens in its own Chrome profile, so this account's ChatGPT
   // cookies never mix with the main or second account's.
   if (kind === 'codex') profile.browserIdentity = 'codex-' + id;
+  // A Claude account may be born on a dedicated exit and with its VPS login environment, so its
+  // first sign-in already leaves from the IP it will use every day (2026-10-28).
+  if (kind === 'claude' && network) profile.network = { ...network };
+  if (kind === 'claude' && loginEnv) profile.loginEnv = loginEnv;
   return { raw: withRows(raw, kind, [...rows, profile]), profile };
 }
 
@@ -74,6 +78,19 @@ function renameAccount(raw, kind, id, label, { normalized = [] } = {}) {
   if (index < 0) next.push({ id, label: name, home: shown.home || '' });
   else next[index] = { ...rows[index], label: name };
   return { raw: withRows(raw, kind, next), profile: next.find(r => r.id === id) };
+}
+
+// Binds a Claude account to its VPS login environment. The exit itself is not changed here.
+function bindLoginEnv(raw, id, loginEnv, { normalized = [] } = {}) {
+  if (!/^(?:[abcd]|u[0-9a-f]{8})$/.test(loginEnv || '')) throw new Error('登录环境标识无效');
+  const shown = normalized.find(r => r.id === id);
+  const rows = rowsOf(raw, 'claude');
+  const index = rows.findIndex(r => r.id === id);
+  if (index < 0 && !shown) throw new Error('Claude账号不存在，请刷新账号页');
+  const next = rows.slice();
+  if (index < 0) next.push({ id, label: shown.label, home: shown.home || '', loginEnv });
+  else next[index] = { ...rows[index], loginEnv };
+  return { raw: withRows(raw, 'claude', next), profile: next.find(r => r.id === id) };
 }
 
 function removeAccount(raw, kind, id, { selectedId = 'default', sessionsUsing = 0 } = {}) {
@@ -100,4 +117,4 @@ function countSessionsUsing(sessions, kind, id) {
   return count;
 }
 
-module.exports = { KINDS, BUILT_IN, addAccount, renameAccount, removeAccount, countSessionsUsing, cleanLabel };
+module.exports = { KINDS, BUILT_IN, addAccount, renameAccount, removeAccount, bindLoginEnv, countSessionsUsing, cleanLabel };

@@ -49,12 +49,41 @@ function authorizeButton(c, esc) {
 // one inline form the account panel has open: {mode:'add'|'rename'|'remove', kind, profileId, value, error}.
 const EDITABLE = new Set(['claude', 'codex']);
 const BUILT_IN_ACCOUNTS = new Set(['default', 'second']);
-function accountFormHtml(edit, esc, label = '') {
+function accountFormHtml(edit, esc, label = '', vps = null) {
   if (edit.mode === 'remove') {
     return `<div class="ac-account-form" role="group" aria-label="移除账号"><p>${esc(`从列表移除「${label}」？账号目录、登录和历史都留在本机，也不会退出登录。`)}</p>${edit.error ? `<p class="ac-item-error" role="alert">${esc(edit.error)}</p>` : ''}<div class="ac-row-actions"><button class="ac-open" data-ac="account-save">确认移除</button><button class="ac-text-btn" data-ac="account-cancel">取消</button></div></div>`;
   }
   const title = edit.mode === 'add' ? '新账号名称' : '账号名称';
-  return `<div class="ac-account-form" role="group" aria-label="${title}"><label><span>${title}</span><input class="ac-account-input" data-account-input maxlength="40" spellcheck="false" placeholder="如：Codex 账号3" value="${esc(edit.value || '')}"></label>${edit.error ? `<p class="ac-item-error" role="alert">${esc(edit.error)}</p>` : ''}<div class="ac-row-actions"><button class="ac-open" data-ac="account-save">${edit.mode === 'add' ? '新建并去授权' : '保存名称'}</button><button class="ac-text-btn" data-ac="account-cancel">取消</button></div>${edit.mode === 'add' ? '<p class="ac-tool-help">会在本机新建一个独立的账号目录，接着打开官方授权页' + (edit.kind === 'codex' ? '（用这个账号专属的浏览器身份，不和其他账号混用登录）' : '') + '。</p>' : ''}</div>`;
+  return `<div class="ac-account-form" role="group" aria-label="${title}"><label><span>${title}</span><input class="ac-account-input" data-account-input maxlength="40" spellcheck="false" placeholder="${edit.kind === 'claude' ? '如：Claude 账号6' : '如：Codex 账号3'}" value="${esc(edit.value || '')}"></label>${edit.mode === 'add' ? newClaudeExitHtml(edit, vps, esc) : ''}${edit.error ? `<p class="ac-item-error" role="alert">${esc(edit.error)}</p>` : ''}<div class="ac-row-actions"><button class="ac-open" data-ac="account-save">${edit.mode === 'add' ? '新建并去授权' : '保存名称'}</button><button class="ac-text-btn" data-ac="account-cancel">取消</button></div>${edit.mode === 'add' ? '<p class="ac-tool-help">会在本机新建一个独立的账号目录，接着打开官方授权页' + (edit.kind === 'codex' ? '（用这个账号专属的浏览器身份，不和其他账号混用登录）' : '') + '。</p>' : ''}</div>`;
+}
+// Claude 登录环境（VPS 远程浏览器，2026-10-28）：出口 IP、登录环境与运行出口一致才可打开。
+const ENV_STATE = { active: '运行中', activating: '正在启动', deactivating: '正在关闭', reloading: '正在启动', failed: '上次启动失败' };
+function freeEnvs(vps, ip) { return (vps?.envs || []).filter(e => e.ip === ip && !e.boundTo && e.ready); }
+function envOptionsHtml(vps, ip, chosen, esc) {
+  return `<option value="new" ${chosen === 'new' ? 'selected' : ''}>新建登录环境</option>` + freeEnvs(vps, ip)
+    .map(e => `<option value="${esc(e.id)}" ${chosen === e.id ? 'selected' : ''}>${esc('沿用「' + e.name + '」' + (e.email ? '（' + e.email + '）' : ''))}</option>`).join('');
+}
+function loginEnvHtml(c, vps, esc, edit) {
+  if (!vps || vps.enabled === false) return '';
+  if (vps.loading) return '<p class="ac-login-env">登录环境：正在读取 VPS…</p>';
+  if (vps.error) return `<p class="ac-login-env ac-item-error">${esc('登录环境：读取失败，' + vps.error)}</p>`;
+  const id = c.profileId || 'default', row = (vps.accounts || []).find(a => a.profileId === id);
+  if (!row) return '';
+  const exit = row.runIp ? '出口 ' + row.runIp : '出口未记录';
+  if (edit && edit.mode === 'bind' && edit.profileId === id) {
+    return `<div class="ac-account-form" role="group" aria-label="绑定登录环境"><label><span>登录环境</span><select data-account-env>${envOptionsHtml(vps, row.runIp, edit.loginEnv || 'new', esc)}</select></label><p class="ac-tool-help">${esc('只列出出口同为 ' + row.runIp + ' 的环境；绑定后网页登录、官方授权和日常使用都走这个 IP，之后不在这里更换。')}</p>${edit.error ? `<p class="ac-item-error" role="alert">${esc(edit.error)}</p>` : ''}<div class="ac-row-actions"><button class="ac-open" data-ac="account-save">确认绑定</button><button class="ac-text-btn" data-ac="account-cancel">取消</button></div></div>`;
+  }
+  if (!row.envId) return `<p class="ac-login-env">${esc(exit + ' · 还没有登录环境')}<button class="ac-text-btn" data-ac="env-bind" data-profile="${esc(id)}">绑定登录环境</button></p>`;
+  if (!row.consistent) return `<p class="ac-login-env ac-item-error" role="alert">${esc(exit + ' · ' + row.problem + '，已停用登录窗口')}</p>`;
+  const running = ['active', 'activating', 'reloading'].includes(row.envState);
+  return `<p class="ac-login-env"><span class="ac-env-ok" aria-hidden="true"></span>${esc(exit + ' · 登录环境「' + row.envName + '」与运行出口一致 · ' + (ENV_STATE[row.envState] || '未运行'))}<button class="ac-text-btn" data-ac="env-open" data-profile="${esc(id)}">打开登录窗口 ↗</button>${running ? `<button class="ac-text-btn" data-ac="env-stop" data-profile="${esc(id)}">关闭</button>` : ''}</p>`;
+}
+function newClaudeExitHtml(edit, vps, esc) {
+  if (edit.kind !== 'claude' || !vps || vps.enabled === false) return '';
+  if (vps.loading || vps.error) return `<p class="ac-tool-help">${esc(vps.error ? '登录环境读取失败：' + vps.error + '；可刷新后再建' : '正在读取可用出口…')}</p>`;
+  const routes = (vps.routes || []).filter(r => r.runnable), route = routes.find(r => r.id === edit.route) || routes[0];
+  if (!route) return '';
+  return `<label><span>出口</span><select data-account-route>${routes.map(r => `<option value="${esc(r.id)}" ${r.id === route.id ? 'selected' : ''}>${esc((r.shared ? '共享出口' : r.name) + ' · ' + r.ip)}</option>`).join('')}</select></label><label><span>登录环境</span><select data-account-env>${envOptionsHtml(vps, route.ip, edit.loginEnv || 'new', esc)}</select></label><p class="ac-tool-help">${esc('出口建好后不再更换：这个账号的网页登录、官方授权和日常 Claude 都走 ' + route.ip + '。')}</p>`;
 }
 function accountMenuHtml(kind, c, esc) {
   if (!EDITABLE.has(kind)) return '';
@@ -64,7 +93,7 @@ function accountMenuHtml(kind, c, esc) {
     : `<button data-ac="account-remove" data-kind="${kind}" data-profile="${esc(id)}">移除账号</button>`;
   return `<details class="ac-more" data-details="account-${kind}-${esc(id)}"><summary aria-label="${esc(c.label || id)} 更多操作">···</summary><div><button data-ac="account-rename" data-kind="${kind}" data-profile="${esc(id)}">改名</button>${remove}</div></details>`;
 }
-function codexQuotaHtml(state, esc, edit = null) {
+function codexQuotaHtml(state, esc, edit = null, vps = null) {
   return ['codex','claude','gemini'].map(kind => {
     const rows=(state.clis || []).filter(c=>c.kind===kind).map(c=>kind==='gemini'?{...c,profileId:c.profileId||'default',label:c.label||'主账号'}:c);
     if (!rows.length) return '';
@@ -75,8 +104,8 @@ function codexQuotaHtml(state, esc, edit = null) {
     return `<article class="ac-company ac-codex-quota" data-account-kind="${kind}" aria-label="${name} 用量账号"><header><h2>${name} 用量账号</h2><span class="ac-count">${rows.length} 个账号</span>${add}</header><p class="ac-tool-help">${help}</p>${rows.map(c=>{
       const id=c.profileId || 'default';
       const editing = mine && edit.mode !== 'add' && edit.profileId === id;
-      return `<div class="ac-account" data-account-profile="${esc(id)}"><div class="ac-account-title"><strong>${esc(c.label || c.profileId)}</strong><span class="ac-account-name">${esc(c.account || '账号未确认')} · ${authLabel(c.state)}</span>${c.isDefault?'<span class="ac-default">后续使用</span>':''}</div><div class="ac-row-actions">${authorizeButton(c,esc)}<button class="ac-open" data-ac="${kind}-quota" data-profile="${esc(c.profileId)}" ${c.isDefault?'disabled aria-pressed="true"':'aria-pressed="false"'}>${c.isDefault?'当前用量账号':'使用此账号额度'}</button>${accountMenuHtml(kind,c,esc)}</div>${editing ? accountFormHtml(edit, esc, c.label || id) : ''}</div>`;
-    }).join('')}${mine && edit.mode === 'add' ? `<div class="ac-account ac-account-new">${accountFormHtml(edit, esc)}</div>` : ''}</article>`;
+      return `<div class="ac-account" data-account-profile="${esc(id)}"><div class="ac-account-title"><strong>${esc(c.label || c.profileId)}</strong><span class="ac-account-name">${esc(c.account || '账号未确认')} · ${authLabel(c.state)}</span>${c.isDefault?'<span class="ac-default">后续使用</span>':''}</div><div class="ac-row-actions">${authorizeButton(c,esc)}<button class="ac-open" data-ac="${kind}-quota" data-profile="${esc(c.profileId)}" ${c.isDefault?'disabled aria-pressed="true"':'aria-pressed="false"'}>${c.isDefault?'当前用量账号':'使用此账号额度'}</button>${accountMenuHtml(kind,c,esc)}</div>${kind==='claude'?loginEnvHtml(c,vps,esc,edit&&edit.kind==='claude'?edit:null):''}${editing && edit.mode !== 'bind' ? accountFormHtml(edit, esc, c.label || id) : ''}</div>`;
+    }).join('')}${mine && edit.mode === 'add' ? `<div class="ac-account ac-account-new">${accountFormHtml(edit, esc, '', vps)}</div>` : ''}</article>`;
   }).join('');
 }
 function usageHtml(value, esc, tools = '', detail = '') {

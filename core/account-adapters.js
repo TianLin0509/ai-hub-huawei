@@ -55,6 +55,7 @@ function createAccountAdapters({dataDir,homeDir=os.homedir(),env=process.env,run
    if(row.claudeDefaultHome)delete e.CLAUDE_CONFIG_DIR;else e.CLAUDE_CONFIG_DIR=row.home;
    const proxy=getConfig().proxy;if(proxy){for(const k of ['HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','http_proxy','https_proxy','all_proxy'])e[k]=proxy;}
    require('./claude-subscription-profiles').applyNetworkEnv(e,getConfig(),{...env,USERPROFILE:homeDir,HOME:homeDir},row.profileId||'default');
+   loginEnvBrowser(e,row);
   }
   if(row.provider==='kimi')e.KIMI_CODE_HOME=row.home;
   if(isolated){e.HOME=homeDir;e.USERPROFILE=homeDir;e.BAILIAN_CONFIG_DIR=path.join(homeDir,'.bailian');}
@@ -63,6 +64,18 @@ function createAccountAdapters({dataDir,homeDir=os.homedir(),env=process.env,run
   if(row.provider==='gemini')return require('./antigravity-config').cliEnv(
    require('./antigravity-subscription-profiles').applyProfileEnv(e,profile||antigravityProfile(row)),getConfig().proxy);
   return e;
+ }
+ // 2026-10-28：官方授权在账号自己的 VPS 登录环境里完成（与它跑 Claude 的出口同一 IP），不再用本机浏览器。
+ // 专线账号的 BROWSER 由出口配置给出；共享出口账号只在这个登录终端里设，不进日常会话的工具环境。
+ function loginEnvBrowser(e,row){
+  if(isolated&&!env.AI_HUB_VPS_LOGIN_TEST)return;
+  const vps=require('./vps-login-env');if(!vps.available(vps.settings(env)))return;
+  const profile=require('./claude-subscription-profiles').resolveProfile(getConfig(),row.profileId||'default',{...env,USERPROFILE:homeDir,HOME:homeDir},homeDir);
+  // 没有登录环境就不授权：退回本机浏览器会让授权那一下走另一个 IP（2026-10-28 用户：不跳 IP 很重要）。
+  const id=vps.bindingFor(profile);if(!id)throw Error('这个 Claude 账号还没有绑定登录环境；为保证授权和日常使用同一个 IP，请先在账号页点「绑定登录环境」，未打开任何浏览器');
+  const ours=vps.loginBrowserPath(dataDir);
+  if(profile.network&&path.resolve(profile.network.browserCommand||'').toLowerCase()!==ours.toLowerCase())return;
+  e.BROWSER=vps.ensureLoginBrowser(dataDir);e.CLAUDE_HUB_LOGIN_ENV=id;
  }
  function claudeArgs(row,args){const config=getConfig();const profile=require('./claude-subscription-profiles').resolveProfile(config,row.profileId||'default',{...env,USERPROFILE:homeDir,HOME:homeDir},homeDir);const fixed=require('./claude-account-network').environment(profile);if(!fixed)return args;const file=require('./claude-native-launch').prepareClaudeSettingsOverlay([],{directory:path.join(dataDir,'account-network-settings'),sessionId:'auth-'+require('crypto').createHash('sha256').update(profile.home).digest('hex').slice(0,20),overrides:{env:fixed}});return ['--settings',file,...args];}
  async function tool(tool,action,accountId){external();const root=tool==='images'?toolsRoot:bridgeRoot;if(!fs.existsSync(root))throw Error('原工具未安装');return jsonResult(await runImpl(python,[path.resolve(__dirname,'../scripts/account-tool-adapter.py'),tool,action,root,...(accountId?[accountId]:[])],cleanEnv,45000));}

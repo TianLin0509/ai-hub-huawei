@@ -43,6 +43,8 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   const releasePage = (config && config.releasePage) || '';
   let state = { phase: 'idle', current: currentVersion, sources: sources.map(s => ({ id: s.id, name: s.name })), releasePage, canApply: isPackaged || env.AI_HUB_UPDATE_FORCE_APPLY === '1' };
   let manifest = null, plan = null, abort = null, checkAbort = null, staged = null, checking = null, lastResult = null, timer = null;
+  // 查版本时清单里就是这一版的源：下载先走它们，查不到或版本不同的源只留作后备，免得先报一次 404（旧 GitHub 库改私有后实测，2026-10-28）。
+  let confirmedIds = [];
 
   try { lastResult = takeLastResult(dataDir); } catch (error) { logger.warn?.('[app-update] 读取上次结果失败：', error.message); }
   if (lastResult) state.lastResult = lastResult;
@@ -66,6 +68,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       if (!best) return emit({ phase: silent ? 'idle' : 'error', checks, checkedAt: new Date().toISOString(),
         error: '所有更新源都连不上，暂时查不到新版本', silentFailure: silent });
       manifest = best.manifest;
+      confirmedIds = results.filter(r => r.ok && compareVersions(r.manifest.version, manifest.version) === 0).map(r => r.id);
       // 能核对本机文件时才走小包（开发运行、没打包又没指定 resources 时无从核对）。
       const resDir = isPackaged || env.AI_HUB_UPDATE_RESOURCES ? (env.AI_HUB_UPDATE_RESOURCES || resourcesPath) : null;
       let runtime;
@@ -102,7 +105,8 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     abort = new AbortController();
     emit({ phase: 'downloading', attempts: [], progress: { received: 0, total: asset.bytes }, error: null });
     let lastEmit = 0;
-    const result = await downloadWithFallback({ sources, version: manifest.version, expect: asset, dest, fetchImpl: resolveFetch(fetchImpl), signal: abort.signal,
+    const ordered = [...sources.filter(s => confirmedIds.includes(s.id)), ...sources.filter(s => !confirmedIds.includes(s.id))];
+    const result = await downloadWithFallback({ sources: ordered, version: manifest.version, expect: asset, dest, fetchImpl: resolveFetch(fetchImpl), signal: abort.signal,
       onAttempt: attempts => emit({ attempts }),
       onProgress: progress => { const now = Date.now(); if (now - lastEmit > 200 || progress.received === progress.total) { lastEmit = now; emit({ progress }); } } });
     abort = null;
@@ -151,7 +155,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   function useConfig(next) {
     if (['downloading', 'ready'].includes(state.phase)) throw new Error('正在下载或已下载好别的版本，先完成或取消再换');
     sources = resolveSources(next, env); allowSame = !!(next && next.switchEdition);
-    manifest = null; plan = null;
+    manifest = null; plan = null; confirmedIds = [];
     return emit({ phase: 'idle', sources: sources.map(s => ({ id: s.id, name: s.name })), latest: null, plan: null, error: null });
   }
   function startBackgroundChecks() {
