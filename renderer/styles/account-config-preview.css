@@ -292,6 +292,10 @@
 .model-picker-check { width: 12px; color: var(--brand-text); text-align: center; }
 .model-picker-label { flex: 1; font-weight: 500; }
 .model-picker-id { color: var(--mark-slate); font-size: 10px; font-family: var(--font-mono, ui-monospace, monospace); }
+/* CodeAgent 模型旁的今日用量（≥50% 橙、≥80% 红），renderer/model-ui.js codeagentUsageSpan */
+.codeagent-model-usage { flex: none; color: var(--fg-muted); font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.codeagent-model-usage[data-level='warn'] { color: var(--status-warning); }
+.codeagent-model-usage[data-level='danger'] { color: var(--status-danger); }
 .model-picker-note {
   padding: 8px 10px;
   margin-bottom: 4px;

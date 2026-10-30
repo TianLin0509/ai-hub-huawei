@@ -224,19 +224,25 @@ function createCardQuestionNavigator(options = {}) {
     );
     if (next < 0) return next;
     const changed = activeIndex !== next;
+    // 长会话性能（2026-10-30 实测：300 轮滚动时这里占 54% CPU）：只在高亮变化或目录刚重建时改按钮，
+    // 每帧都重写全部按钮会让下一帧读位置时整页重算样式。
+    const rebuilt = entries.some(entry => entry.button.dataset.navSynced !== '1');
     activeIndex = next;
-    entries.forEach((entry, index) => {
+    if (changed || rebuilt) entries.forEach((entry, index) => {
       const active = index === activeIndex;
-      entry.button.classList.toggle('active', active);
-      entry.button.tabIndex = active ? 0 : -1;
-      if (active) entry.button.setAttribute('aria-current', 'true');
-      else entry.button.removeAttribute('aria-current');
+      entry.button.dataset.navSynced = '1';
+      if (entry.button.classList.contains('active') !== active) entry.button.classList.toggle('active', active);
+      if (entry.button.tabIndex !== (active ? 0 : -1)) entry.button.tabIndex = active ? 0 : -1;
+      if (active) { if (entry.button.getAttribute('aria-current') !== 'true') entry.button.setAttribute('aria-current', 'true'); }
+      else if (entry.button.hasAttribute('aria-current')) entry.button.removeAttribute('aria-current');
     });
     const counter = root.querySelector('.question-directory-count');
-    if (counter) counter.textContent = `${activeIndex + 1}/${entries.length}`;
+    const count = `${activeIndex + 1}/${entries.length}`;
+    if (counter && counter.textContent !== count) counter.textContent = count;
     for (const b of root.querySelectorAll('[data-directory-action]')) {
       const action = b.dataset.directoryAction;
-      b.disabled = action === 'top' ? overlay.scrollTop < 2 : action === 'latest' ? atBottom : answerTarget(action).index < 0;
+      const disabled = action === 'top' ? overlay.scrollTop < 2 : action === 'latest' ? atBottom : answerTarget(action).index < 0;
+      if (b.disabled !== disabled) b.disabled = disabled;
     }
     if (changed && keepMarkerVisible) keepActiveButtonVisible(entries[activeIndex]?.button);
     return activeIndex;

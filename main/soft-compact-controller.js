@@ -14,8 +14,16 @@
 //      2026-10-24 实测：提醒被写进压缩摘要，AI 压缩后每条回复都留标记，冷却一过就在 8.5 万时被连压两次。
 //   7. 额度预压缩（2026-10-26，main/claude-quota-precompact.js）：账号额度快用完且已找到可换的账号时，
 //      门槛改用计划给的「窗口 30%」；压缩完成后先换号，再发「继续」，新账号只需读压缩后的摘要。
+//   8. CodeAgent（2026-10-29）：没有提醒钩子、也不留标记，Stop 时直接读屏幕右侧 Stats 面板的
+//      「Context 32.7k (16%)」（core/codeagent-screen-stats.js），占用到同一条 60% 软线（Claude 是 60 万 / 100 万窗口）
+//      且会话空闲就发 /compact。参考公司 CodeAgentWeb：只在空闲时触发、两次之间冷却 60 秒、压完复查。
+//      CodeAgent 的 /compact 回显未经真机取证：有 PreCompact / SessionStart(compact) 确认就用，
+//      否则看 Stats 面板百分比明显下降（降到发前的七成以内）或屏幕新出现压缩提示；占用读不到又没有任何确认就记
+//      「结果未知」，不重复发。复查没降下来算失败，冷却后再试；同一会话连续失败 2 次停手并提示一次。
+//      占用回落到软线以下（用户手动压过等）就恢复自动压缩。群聊成员与 Claude 一样不自动压缩。
 const { readLastTerminalAssistantTextFromClaudeTranscript } = require('../core/transcript-tap');
 const { observeClaudeLocalCommand } = require('../core/claude-identity-switch');
+const { parseCodeAgentContext } = require('../core/codeagent-screen-stats');
 const fs = require('fs');
 
 const MARKER_RE = /\[\[hub:compact(-continue)?\]\]/;
@@ -24,6 +32,17 @@ const SKIP_CONTINUE_PROMPT = '（Hub 提示：额度情况已变化，这次不�
 // 与提醒钩子同一条软线；端到端测试经同名环境变量压低。
 const SOFT_TOKENS = Number(process.env.SOFT_COMPACT_SOFT_TOKENS) || 600_000;
 const TAIL_BYTES = 4 * 1024 * 1024;
+// CodeAgent 用同一条软线，换算成百分比（Stats 面板只给百分比，窗口大小随后端变）。
+const CODEAGENT_SOFT_PCT = Math.round(SOFT_TOKENS / 1_000_000 * 100);
+// 压缩完成的屏幕提示：Claude Code 是「Conversation compacted」，CodeAgent 衍生自它，另认中文写法。
+const CODEAGENT_COMPACT_HINT_RE = /Conversation compacted|Compacted conversation|上下文已压缩|已压缩上下文|压缩完成/gi;
+const CODEAGENT_MAX_FAILURES = 2;
+
+// 屏幕上压缩提示出现的次数；发前发后对比，只认新出现的。
+function countCompactHints(rows) {
+  const text = (Array.isArray(rows) ? rows : [String(rows || '')]).join('\n');
+  return (text.match(CODEAGENT_COMPACT_HINT_RE) || []).length;
+}
 
 // 与提醒钩子同一算法：transcript 末尾最后一条主线 assistant 的 usage 合计。读不到返回 null。
 async function readClaudeContextTokens(transcriptPath) {
@@ -74,10 +93,25 @@ function createSoftCompactController(deps = {}) {
     settleMs = 1500,
     timeoutMs = 15 * 60 * 1000,
     cooldownMs = 10 * 60 * 1000,
+    // CodeAgent：读当前屏幕行（main.js 用 PTY 缓冲经无界面 xterm 回放）；读不到返回 null。
+    readCodeAgentRows = async () => null,
+    codeagentPct = CODEAGENT_SOFT_PCT,
+    codeagentCooldownMs = 60 * 1000,
+    codeagentAckMs = 3000,
+    codeagentPollMs = 10 * 1000,
+    codeagentVerifyMs = 5 * 60 * 1000,
+    codeagentDropRatio = 0.7,
+    sleep = ms => new Promise(resolve => { const t = setTimeout(resolve, ms); t.unref?.(); }),
   } = deps;
   if (!sessionManager) throw new Error('soft-compact-controller 缺少 sessionManager');
   const compacting = new Map();
   const lastDone = new Map();
+  // CodeAgent 每个会话：{ failures 连续失败次数, lastEnd 上次尝试结束时间, halted 已停手, meetingNoticed }
+  const codeagentState = new Map();
+  const caState = id => {
+    if (!codeagentState.has(id)) codeagentState.set(id, { failures: 0, lastEnd: -Infinity, halted: false, meetingNoticed: false });
+    return codeagentState.get(id);
+  };
   const short = id => String(id).slice(0, 8);
   const notice = (sessionId, message, level = 'info') => {
     try { notify?.(sessionId, message, level); } catch {}
@@ -92,6 +126,7 @@ function createSoftCompactController(deps = {}) {
   async function onStop(sessionId, { transcriptPath, lastAssistantMessage } = {}) {
     if (!sessionId || compacting.has(sessionId)) return null;
     const session = sessionManager.getSession?.(sessionId);
+    if (session && /^codeagent/.test(String(session.kind || '')) && session.agentRuntime === 'pty') return onCodeAgentStop(sessionId, session);
     if (!session || !/^claude/.test(String(session.kind || '')) || session.agentRuntime !== 'pty') return null;
     let text = null;
     if (transcriptPath) { try { text = await readFinalText(transcriptPath); } catch {} }
@@ -161,9 +196,111 @@ function createSoftCompactController(deps = {}) {
     return mode;
   }
 
+  async function readCodeAgentScreen(sessionId) {
+    let rows = null;
+    try { rows = await readCodeAgentRows(sessionId); } catch {}
+    if (!Array.isArray(rows)) return { rows: null, context: null, hints: 0 };
+    return { rows, context: parseCodeAgentContext(rows), hints: countCompactHints(rows) };
+  }
+
+  // CodeAgent：Stop 时看 Stats 面板占用，到软线且空闲就压；返回 'success' | 'failed' | 'unknown' | null（没发）。
+  async function onCodeAgentStop(sessionId, session) {
+    const state = caState(sessionId);
+    const before = await readCodeAgentScreen(sessionId);
+    const pct = before.context?.contextPct;
+    if (pct == null) return null;
+    if (pct < codeagentPct) {
+      // 占用已在软线以下（压缩生效或用户手动压过）：失败计数清零，停手的会话恢复自动压缩。
+      if (state.halted || state.failures) logger.log(`[soft-compact] ${short(sessionId)} codeagent re-armed at ${pct}%`);
+      state.halted = false; state.failures = 0;
+      return null;
+    }
+    if (state.halted) return null;
+    if (now() - state.lastEnd < codeagentCooldownMs) return null;
+    if (session.meetingId) {
+      if (!state.meetingNoticed) notice(sessionId, '群聊成员不自动压缩上下文，需要时手动输入 /compact。');
+      state.meetingNoticed = true;
+      return null;
+    }
+    const entry = { mode: 'wait', codeagent: true, startedAt: now(), timer: null, hookStarted: false, hookEnded: false };
+    compacting.set(sessionId, entry);
+    // 等 TUI 收完这一轮；期间用户发了新消息就不压，留给下一次空闲。
+    await sleep(settleMs);
+    if (isBusy(sessionId)) {
+      finish(sessionId, entry);
+      logger.log(`[soft-compact] ${short(sessionId)} codeagent skipped: new turn already running`);
+      return null;
+    }
+    logger.log(`[soft-compact] ${short(sessionId)} codeagent context ${pct}% >= ${codeagentPct}%; sending /compact`);
+    notice(sessionId, `CodeAgent 上下文占用 ${pct}%，已到 ${codeagentPct}% 软线，正在自动压缩。`);
+    // PreCompact 确认只短等一下：CodeAgent 有没有这个钩子没取证，没确认不算失败，交给下面的复查判定；
+    // 同时让 sendToPty 按「本地命令」收尾，不会因为没开工而补发回车。
+    let ticket = null;
+    try { ticket = observeCompact(sessionId); } catch {}
+    const observer = {
+      async wait() {
+        let confirmed = false;
+        try { confirmed = !!ticket && (await ticket.wait(codeagentAckMs)).ok; } catch {}
+        entry.hookStarted = confirmed;
+        return { ok: true, message: confirmed ? null : 'CodeAgent 未回压缩开始确认，改看 Stats 面板' };
+      },
+    };
+    let sendError = null;
+    try {
+      const receipt = await sendToPty(sessionId, '/compact', session.kind, {
+        requireReady: false, localCommandObserver: observer,
+        clientSubmissionId: `soft-compact-${entry.startedAt}`,
+      });
+      if (!receipt || receipt.ok === false) sendError = receipt?.message || '未知原因';
+    } catch (error) { sendError = error.message; }
+    let result = null;
+    let after = null;
+    if (sendError) {
+      result = 'failed';
+    } else {
+      // 复查：压缩结束钩子、屏幕新出现压缩提示、或占用明显下降，任一出现即成功。
+      const rounds = Math.max(1, Math.ceil(codeagentVerifyMs / codeagentPollMs));
+      for (let i = 0; i < rounds && !result; i++) {
+        await sleep(codeagentPollMs);
+        if (entry.hookEnded) { result = 'success'; break; }
+        const screen = await readCodeAgentScreen(sessionId);
+        if (screen.context) after = screen.context.contextPct;
+        if (after != null && after <= pct * codeagentDropRatio) result = 'success';
+        else if (screen.rows && screen.hints > before.hints) result = 'success';
+      }
+      if (!result) result = entry.hookEnded ? 'success' : after == null && !entry.hookStarted ? 'unknown' : 'failed';
+    }
+    try { ticket?.dispose?.(); } catch {}
+    finish(sessionId, entry);
+    state.lastEnd = now();
+    const seconds = Math.round((now() - entry.startedAt) / 1000);
+    const change = `${pct}%${after != null ? ` → ${after}%` : ''}`;
+    logger.log(`[soft-compact] ${short(sessionId)} codeagent compact ${result} in ${seconds}s (${change})${sendError ? ' error=' + sendError : ''}`);
+    if (result === 'success') {
+      state.failures = 0;
+      notice(sessionId, `上下文已自动压缩（${change}，用时 ${seconds} 秒）。`);
+    } else if (result === 'unknown') {
+      // 判断不了是否压成：不重复发，等占用回落到软线以下再恢复。
+      state.halted = true;
+      notice(sessionId, '已发送 /compact，但读不到 Stats 面板的占用，无法确认是否压缩成功；本会话暂停自动压缩，请看一下终端。', 'warning');
+    } else {
+      state.failures += 1;
+      const why = sendError ? `发送失败：${sendError}` : `占用没有明显下降（${change}）`;
+      if (state.failures >= CODEAGENT_MAX_FAILURES) {
+        state.halted = true;
+        notice(sessionId, `自动压缩连续 ${state.failures} 次没有生效（${why}），本会话不再自动压缩；需要时手动输入 /compact。`, 'warning');
+      } else {
+        notice(sessionId, `自动压缩没有生效（${why}），${Math.round(codeagentCooldownMs / 1000)} 秒后会话空闲时再试一次。`, 'warning');
+      }
+    }
+    return result;
+  }
+
   async function onCompactEnd(sessionId) {
     const entry = compacting.get(sessionId);
     if (!entry) return;
+    // CodeAgent 由 onCodeAgentStop 的复查收尾，这里只记下「收到压缩结束」。
+    if (entry.codeagent) { entry.hookEnded = true; return; }
     finish(sessionId, entry);
     lastDone.set(sessionId, now());
     const seconds = Math.round((now() - entry.startedAt) / 1000);
@@ -200,9 +337,10 @@ function createSoftCompactController(deps = {}) {
     const entry = compacting.get(sessionId);
     if (entry) finish(sessionId, entry);
     lastDone.delete(sessionId);
+    codeagentState.delete(sessionId);
   }
 
   return { start, onStop, onCompactEnd, forget, isCompacting: id => compacting.has(id) };
 }
 
-module.exports = { createSoftCompactController, findMarker, readClaudeContextTokens, CONTINUE_PROMPT, SKIP_CONTINUE_PROMPT };
+module.exports = { createSoftCompactController, findMarker, readClaudeContextTokens, countCompactHints, CONTINUE_PROMPT, SKIP_CONTINUE_PROMPT, CODEAGENT_SOFT_PCT };

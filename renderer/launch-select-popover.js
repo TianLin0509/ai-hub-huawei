@@ -68,6 +68,14 @@ function installSelectPopover({ document, window, root }) {
       item.setAttribute('role', 'option');
       item.dataset.value = option.value;
       item.textContent = option.textContent;
+      // 选项附带的一小段灰字（CodeAgent 模型的今日用量，renderer/workspace-controller.js 写在 data-usage 上）
+      if (option.dataset && option.dataset.usage) {
+        const usage = document.createElement('span');
+        usage.className = 'codeagent-model-usage';
+        usage.dataset.level = option.dataset.usageLevel || '';
+        usage.textContent = option.dataset.usage;
+        item.appendChild(usage);
+      }
       if (option.title) item.title = option.title;
       const selected = option.value === select.value;
       item.setAttribute('aria-selected', String(selected));

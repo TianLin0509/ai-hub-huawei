@@ -1119,15 +1119,25 @@
     // CodeAgent：「沿用」一项（值为空，不切换模型）知道所选账号的默认模型时就写成它，清单里不再重复列它。
     const codeagentDefault = selectedKind === 'codeagent' && codeagentDefaultModel
       && options.some(option => option.id.toLowerCase() === codeagentDefaultModel.toLowerCase()) ? codeagentDefaultModel : '';
+    // CodeAgent：每个模型旁一小段今日用量（/model 菜单里读到的，core/codeagent-usage-menu.js），画在下拉列表里（launch-select-popover.js 读 data-usage）。
+    // 号池自动路由创建时才定号，没有对应的号就不显示。
+    const usageKey = selectedKind !== 'codeagent' ? '' : !codeagentUsesPool() ? 'personal' : codeagentManualPick();
+    const usageEntry = usageKey && globalThis.codeagentQuotaBar && typeof globalThis.codeagentQuotaBar.usageFor === 'function' ? globalThis.codeagentQuotaBar.usageFor(usageKey) : null;
+    const usageAttrs = modelId => {
+      if (!usageEntry || !modelId) return '';
+      const usageMenu = require('../core/codeagent-usage-menu.js');
+      const hint = usageMenu.usageHint(usageMenu.modelUsage(usageEntry, modelId));
+      return hint ? ` data-usage="${escapeHtml(hint.text)}" data-usage-level="${hint.level}"` : '';
+    };
     const nativeCodeagentOption = selectedKind === 'codeagent'
       ? (codeagentDefault
-        ? `<option value="" title="${escapeHtml(codeagentDefault + ' · 这个号的默认模型，启动后不切换')}">${escapeHtml(codeagentModelLabel(codeagentDefault) + '（默认）')}</option>`
+        ? `<option value="" title="${escapeHtml(codeagentDefault + ' · 这个号的默认模型，启动后不切换')}"${usageAttrs(codeagentDefault)}>${escapeHtml(codeagentModelLabel(codeagentDefault) + '（默认）')}</option>`
         : '<option value="">自动（菜单里第一个模型）</option>') : '';
     const listed = codeagentDefault ? options.filter(option => option.id.toLowerCase() !== codeagentDefault.toLowerCase()) : options;
-    const wanted = nativeCodeagentOption + listed.map(option => `${option.id}\u0000${option.label}`).join('|');
+    const wanted = nativeCodeagentOption + listed.map(option => `${option.id}\u0000${option.label}${usageAttrs(option.id)}`).join('|');
     if (modelSelect.dataset.builtFor !== wanted) {
       modelSelect.innerHTML = nativeCodeagentOption + listed
-        .map(option => `<option value="${escapeHtml(option.id)}">${escapeHtml(option.label)}</option>`)
+        .map(option => `<option value="${escapeHtml(option.id)}"${usageAttrs(option.id)}>${escapeHtml(option.label)}</option>`)
         .join('');
       modelSelect.dataset.builtFor = wanted;
     }

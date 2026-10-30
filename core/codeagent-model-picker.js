@@ -371,7 +371,7 @@ async function pickModel({ manager, sid, kind, modelId, configDir, allowedModels
   const dir = normalizeConfigDir(configDir);
   let defaults = null;
   const screen = await openSessionScreen(manager, sid);
-  let attempted = false, result, menu = null;
+  let attempted = false, result, menu = null, usage = null;
   // 失败时把当时的画面带回去，写进数据目录方便排查（公司电脑上的菜单长相我们看不到）。
   const fail = async message => ({ ok: false, message, screen: await screen.lines().catch(() => []) });
   async function choose() {
@@ -405,6 +405,8 @@ async function pickModel({ manager, sid, kind, modelId, configDir, allowedModels
     const opened = await waitFor(screen, parsePicker, screenTimeoutMs);
     if (!opened.value) return fail('当前 CodeAgent 模型菜单的布局无法自动识别，未完成模型切换');
     let picker = opened.value;
+    // 菜单上方的 Credit 用量和每个模型的 Token 用量：只读屏解析，不影响下面的选择（core/codeagent-usage-menu.js）
+    try { usage = require('./codeagent-usage-menu').parseCodeAgentUsageMenu(opened.lines); } catch { usage = null; }
     // 只有认出 CodeAgent 自己的菜单外框、且从第 1 项列起时才当完整清单（替身菜单、滚动过的菜单不算）。
     if (picker.codeagentFrame && (picker.rows[0].number ?? 1) === 1) menu = picker.rows.map(row => row.label);
     // 选第一个：认出的第一行得是菜单的第 1 项（滚动过的菜单看不到第 1 项，不猜）。光标不一定停在第 1 项（会停在上次的模型上），照常按方向键挪过去。
@@ -472,6 +474,8 @@ async function pickModel({ manager, sid, kind, modelId, configDir, allowedModels
     }
   }
   // 菜单里实际列出的模型：调用方记下来，新建会话的模型下拉以它为准（core/codeagent-models.js 的 recordMenu）。
+  // 读到的用量表：调用方按账号记快照（core/codeagent-usage-menu.js recordUsage），额度条和模型下拉显示。
+  if (usage) result = { ...result, usage };
   return menu ? { ...result, menu } : result;
 }
 

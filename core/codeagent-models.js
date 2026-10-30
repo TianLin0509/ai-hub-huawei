@@ -95,6 +95,7 @@ function readConfigFile(full, fsModule) {
   else scanModelNamesInText(text, names);
   const defaultModel = data && isSafeModelId(data.model) ? String(data.model).trim() : '';
   const result = { names: [...names], defaultModel, parsed: !!data, enterprise: data ? enterpriseModels(data) : null,
+    enterpriseRank: data ? (enterpriseOptionEntry(data) || { rank: -1 }).rank : -1,
     windows: data ? enterpriseWindows(data) : {} };
   configFileCache.set(full, { mtimeMs: stat.mtimeMs, size: stat.size, result });
   return result;
@@ -121,12 +122,26 @@ function decodeOptionList(value, depth = 0) {
   try { return decodeOptionList(JSON.parse(text), depth + 1); } catch { /* 不是 JSON，试 base64 */ }
   if (/^[A-Za-z0-9+/=_\s-]+$/.test(text)) {
     try { return decodeOptionList(JSON.parse(Buffer.from(text.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')), depth + 1); } catch { /* 解不开就算没有 */ }
+    // 2026-10-29 公司真机（Q-1029-12）：V3_5 是两段 base64 拼在一起——前段 `Q2FjaGVWXzU=` 解出来是标签 CacheV_5，
+    // 后段才是清单。Node 解 base64 遇到中间的 = 就停，整段解只得到标签。按 = 结尾切段，逐段解，取能解出清单的那段。
+    const segments = text.replace(/\s+/g, '').split(/(?<==)(?=[A-Za-z0-9+/_-])/);
+    for (const segment of segments.length > 1 ? segments : []) {
+      try {
+        const inner = decodeOptionList(JSON.parse(Buffer.from(segment.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')), depth + 1);
+        if (inner) return inner;
+      } catch { /* 这一段不是清单 */ }
+    }
   }
   return null;
 }
 function enterpriseOptionList(data) {
+  const found = enterpriseOptionEntry(data);
+  return found ? found.list : null;
+}
+// rank：ENTERPRISE_KEYS 里的位置，越小存法越新。两个文件都有清单时按它比新旧（configuredModels、contextWindowFor）。
+function enterpriseOptionEntry(data) {
   if (!data || typeof data !== 'object') return null;
-  for (const key of ENTERPRISE_KEYS) { const list = decodeOptionList(data[key]); if (list && list.length) return list; }
+  for (const [rank, key] of ENTERPRISE_KEYS.entries()) { const list = decodeOptionList(data[key]); if (list && list.length) return { list, rank }; }
   return null;
 }
 function enterpriseModels(data) {
@@ -183,17 +198,20 @@ function configuredModels(configDir, fsModule = fs) {
   let defaultModel = '';
   let enterprise = null;
   // 个人默认目录 ~/.cac：CodeAgent 不带配置目录变量启动时，账号状态写在用户目录根下的 ~/.cac.json（同 Claude Code 的 ~/.claude.json），
-  // 同事 1.2615.02.02 的模型清单就只在那里（~/.cac/.cac.json 只有 4 个键）。目录里的 .cac.json 有清单时优先用目录里的。
+  // 同事 1.2615.02.02 的模型清单就只在那里（~/.cac/.cac.json 只有 4 个键）。
+  // 两个文件都有清单时取存法更新的（ENTERPRISE_KEYS 越靠前越新），一样新才用目录里的。2026-10-29 公司真机（Q-1029-12）：
+  // ~/.cac/.cac.json 还留着老版本写的 enterpriseModelOptionsCache（GLM + MiniMax），新清单在 ~/.cac.json 的 V3_5，
+  // 原来「目录里有就不看根下」一直读到旧清单。
   const files = [path.join(configDir, 'settings.json'), path.join(configDir, '.cac.json')];
   if (path.basename(path.resolve(configDir)).toLowerCase() === '.cac') files.push(path.join(path.dirname(path.resolve(configDir)), '.cac.json'));
+  let enterpriseRank = Infinity;
   for (const full of files) {
     const file = path.basename(full);
     try {
-      if (enterprise && file === '.cac.json') continue;
       const result = readConfigFile(full, fsModule);
       if (file === 'settings.json' && result.defaultModel) defaultModel = result.defaultModel;
-      if (result.enterprise) enterprise = result.enterprise;
-      for (const name of result.names) names.add(name);
+      if (result.enterprise && result.enterpriseRank < enterpriseRank) { enterprise = result.enterprise; enterpriseRank = result.enterpriseRank; }
+      if (!enterprise) for (const name of result.names) names.add(name);
     } catch { /* 没有或读不了就跳过 */ }
   }
   if (enterprise) return { models: enterprise, defaultModel, authoritative: true };
@@ -348,9 +366,14 @@ function contextWindowFor(configDir, modelIds = [], fsModule = fs) {
     // 同 configuredModels：目录里的 .cac.json 没有清单时，个人默认目录再看用户目录根下的 ~/.cac.json
     const candidates = [path.join(configDir, '.cac.json')];
     if (path.basename(path.resolve(configDir)).toLowerCase() === '.cac') candidates.push(path.join(path.dirname(path.resolve(configDir)), '.cac.json'));
+    // 和 configuredModels 同一口径：取存法更新的那份清单里的上限；一样新时目录里的优先
+    let best = Infinity;
     for (const file of candidates) {
-      try { windows = readConfigFile(file, fsModule).windows || {}; } catch { windows = {}; }
-      if (Object.keys(windows).length) break;
+      let result = null;
+      try { result = readConfigFile(file, fsModule); } catch { result = null; }
+      if (result && result.enterpriseRank >= 0 && result.enterpriseRank < best && Object.keys(result.windows || {}).length) {
+        windows = result.windows; best = result.enterpriseRank;
+      }
     }
   }
   for (const id of modelIds) {

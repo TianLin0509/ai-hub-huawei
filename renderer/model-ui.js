@@ -297,6 +297,13 @@ function createModelUiController({
     return note;
   }
 
+  function codeagentUsageSpan(entry, modelId) {
+    if (!entry) return '';
+    const usageMenu = require('../core/codeagent-usage-menu.js');
+    const hint = usageMenu.usageHint(usageMenu.modelUsage(entry, modelId));
+    return hint ? `<span class="codeagent-model-usage" data-level="${hint.level}" title="${escapeHtml(`读自 CodeAgent /model 菜单 · ${usageMenu.formatAge(Date.now() - entry.at)}`)}">${escapeHtml(hint.text)}</span>` : '';
+  }
+
   function renderModelPicker(menu, badgeEl, sessionId, message = null) {
     if (!menu || menu._removed) return;
     const session = sessions.get(sessionId);
@@ -363,6 +370,9 @@ function createModelUiController({
       }
     }
 
+    // CodeAgent：每个模型旁的今日用量、负载、Credit 系数（/model 菜单里读到的，core/codeagent-usage-menu.js）；没数据不显示。
+    const usageEntry = /^codeagent/.test(String(kind)) && globalThis.codeagentQuotaBar && typeof globalThis.codeagentQuotaBar.usageFor === 'function'
+      ? globalThis.codeagentQuotaBar.usageFor(session.codeagentPoolAccount || 'personal') : null;
     options.forEach((opt) => {
       const item = document.createElement('div');
       item.className = 'model-picker-item';
@@ -380,6 +390,7 @@ function createModelUiController({
         : (opt.description || opt.id);
       item.innerHTML = `<span class="model-picker-check">${current ? '✓' : ''}</span>`
         + `<span class="model-picker-label">${escapeHtml(opt.label)}</span>`
+        + codeagentUsageSpan(usageEntry, opt.id)
         + `<span class="model-picker-id">${escapeHtml(
           opt.disabled && opt.upgradeTo ? `需 ${opt.upgradeTo}+` : opt.id,
         )}</span>`;

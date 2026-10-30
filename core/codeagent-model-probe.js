@@ -101,9 +101,12 @@ async function probeModels({ command, configDirEnv, configDir, cwd, env = proces
     if (!menu.hit) return { ok: false, error: '没有读到模型菜单' };
     const result = modelsFromPicker(menu.hit);
     if (!result.models.length) return { ok: false, error: '模型菜单是空的' };
+    // 同一屏上的用量表顺手解析（只读屏，core/codeagent-usage-menu.js），调用方按这个号记快照
+    let usage = null;
+    try { usage = require('./codeagent-usage-menu').parseCodeAgentUsageMenu(menu.lines); } catch { usage = null; }
     proc.write('\x1b');
     await sleep(300);
-    return { ok: true, ...result };
+    return { ok: true, ...result, ...(usage ? { usage } : {}) };
   } finally {
     let killFailed = false;
     try { if (!exited) proc.kill(); } catch { killFailed = true; }

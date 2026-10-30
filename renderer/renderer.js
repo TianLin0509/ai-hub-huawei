@@ -7477,6 +7477,13 @@ const renderAccountUsage = accountUsageController.render;
 const codeagentQuotaBar = require('./codeagent-quota-bar.js').createCodeAgentQuotaBar({ document, storage: window.localStorage, escapeHtml });
 codeagentQuotaBar.render();
 window.codeagentQuotaBar = codeagentQuotaBar;
+// /model 菜单里读到的用量（Credit 三档 + 每个模型的 Token 用量，core/codeagent-usage-menu.js）：启动取一次，主进程记了新快照再取。
+function refreshCodeAgentUsage() {
+  if (typeof ipcRenderer.invoke !== 'function') return;
+  ipcRenderer.invoke('codeagent:usage').then(r => { if (r && r.accounts) codeagentQuotaBar.setUsage(r.accounts); }).catch(() => {});
+}
+refreshCodeAgentUsage();
+ipcRenderer.on('codeagent-usage-changed', () => refreshCodeAgentUsage());
 // 欢迎页只提供创建入口；项目数据按需由现有创建面板加载。
 homeWorkbench = createHomeWorkbench({
   document,
@@ -8334,6 +8341,9 @@ function applyCodeAgentScreenContext(session, sessionId) {
     // 同一面板里的额度：按会话用的账号（号池账号或个人账号）记一行（renderer/codeagent-quota-bar.js）。
     const credit = stats.parseCodeAgentCredit(lines);
     if (credit && typeof codeagentQuotaBar !== 'undefined') codeagentQuotaBar.update(credit, { account: session.codeagentPoolLabel || '个人账号' });
+    // 用户自己在终端开着 /model 菜单时，菜单上方的用量表也记下来（不为取数主动发 /model）。
+    const usage = require('../core/codeagent-usage-menu').parseCodeAgentUsageMenu(lines);
+    if (usage) ipcRenderer.invoke('codeagent:usage-record', { key: session.codeagentPoolAccount || 'personal', label: session.codeagentPoolLabel || '个人账号', usage }).catch(() => {});
   } catch { context = null; }
   if (!context) return;
   session.contextUsed = context.contextUsed;

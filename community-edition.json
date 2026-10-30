@@ -36,11 +36,14 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "又能选 CodeAgent 的模型了：启动中心的模型下拉、输入框旁的模型按钮都已恢复；选过的模型会记成 CodeAgent 的默认，下次新建直接用，不用再等 /model。",
-    "解压版（不用安装器）第一次启动会自动在桌面放一个快捷方式；删掉后不会再自动生成。"
+    "设置菜单新增「一键反馈」：写一句遇到了什么，连同版本、系统和最近的日志（已自动隐去密钥、口令、邮箱和用户目录）直接发给维护人；发不出去会存一份到「下载」文件夹。",
+    "公司网络要求重新放行时，检查更新和一键反馈会在后台自动放行一次，不弹窗、不用手动点。",
+    "CodeAgent 额度条多了「闲时」一档和「闲时 2 折还有多久」；模型下拉里每个模型后面显示今日用量、负载和消耗系数（打开过 /model 菜单后才有数据）。",
+    "CodeAgent 会话上下文占到 60% 时，会在空闲时自动压缩；会话里派出子任务时，底部显示「N 个子任务进行中 · 最近一步」。",
+    "长会话滚动更顺：300 轮的会话从头滚到尾耗时减少约一半，卡顿明显减少。"
   ],
-  "version": "5.3.4",
-  "upstreamVersion": "1.6.684",
-  "upstreamCommit": "b06c1f42fdc5a9ec5800e31a957741a34a18dae6",
+  "version": "5.3.6",
+  "upstreamVersion": "1.6.696",
+  "upstreamCommit": "fe0d1aed77c860f7c21e7b7dbcf5e2be7df017af",
   "upstreamDirty": false
 }

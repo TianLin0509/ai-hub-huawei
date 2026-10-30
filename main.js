@@ -2067,6 +2067,13 @@ try {
   progressCards.start();
 } catch (error) { console.error('[progress-cards] initialization failed:', error.message); }
 
+// 子 Agent 进度一行字（2026-10-29）：只盯卡片视图正在看的会话，读子 Agent 记录，推「2 个子任务进行中 · 最近一步：…」。
+try {
+  require('./main/subagent-progress-service.js').createSubagentProgressService({
+    getSession: id => sessionManager.getSession(id), sendToRenderer, logger: console,
+  }).registerIpc(ipcMain);
+} catch (error) { console.error('[subagent-progress] initialization failed:', error.message); }
+
 const devChatHistory = require('./core/dev-chat-history').createHistoryService({
   getOrchestrator: id => groupchat.getOrchestrator(getHubDataDir(),id),
   onChanged: (meetingId,orch) => sendToRenderer('dev-workbench:progress',{meetingId,revision:orch.state.revision}),
@@ -2685,6 +2692,13 @@ try {
     afterQuotaCompact: sessionId => claudeQuotaPrecompact?.afterCompact(sessionId),
     quotaSkipped: async sessionId => claudeQuotaPrecompact?.skippedMarker(sessionId) === true,
     notify: (sessionId, message, level) => sendToRenderer('session-notice', { sessionId, message, level }),
+    // CodeAgent 的上下文占用只在屏幕右侧 Stats 面板上：PTY 缓冲经无界面 xterm 回放成当前一屏。
+    readCodeAgentRows: async sessionId => {
+      const entry = sessionManager.sessions?.get?.(sessionId);
+      const text = sessionManager.getSessionBuffer(sessionId);
+      if (text == null) return null;
+      return require('./core/hub-phone/session-chat').renderRows({ text, cols: Number(entry?.pty?.cols) || 120, rows: Number(entry?.pty?.rows) || 30 });
+    },
   });
   softCompact.start();
 } catch (error) { console.error('[soft-compact] unavailable:', error.message); }
@@ -3881,11 +3895,43 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
       const { createAppUpdateController, registerAppUpdateIpc } = require('./main/app-update-controller');
       const memberUpgrade = distribution.target === 'company' && distribution.featureEnabled('memberUpgrade');
       const editionChannel = require('./core/edition-channel');
+      // 自家阿里云被公司网络放行页拦住时自动放行（2026-10-29 用户选「默认开、无感」）：检查更新与一键反馈共用一个放行器，
+      // 只对更新配置里的自家主机生效，在看不见的窗口里打开自家的放行小页面点一次，不弹窗、不抢焦点。
+      const ownHosts = require('./core/own-hosts');
+      const netUnblock = require('./core/net-unblock');
+      // 测试把更新源换成本机服务（AI_HUB_UPDATE_SOURCES）时，自家主机与反馈地址跟着换，和一键更新同一口径。
+      const ownConfig = (() => { try { return process.env.AI_HUB_UPDATE_SOURCES ? { sources: JSON.parse(process.env.AI_HUB_UPDATE_SOURCES) } : distribution.updateConfig; } catch { return distribution.updateConfig; } })();
+      const ownUnblocker = new netUnblock.GatePasser({ logDir: path.join(getHubDataDir(), 'logs'), logName: 'net-unblock',
+        open: () => netUnblock.openHiddenGateWindow(BrowserWindow, ownHosts.unblockPage(ownConfig)) });
+      // 检查更新和反馈同时被拦时只开一个放行窗口：进行中的那次结果大家共用。
+      let unblocking = null;
+      const unblockOwn = async url => {
+        if (!ownHosts.isOwnUrl(url, ownConfig) || !ownHosts.unblockPage(ownConfig)) return false;
+        if (!unblocking) unblocking = ownUnblocker.attempt(url).finally(() => { unblocking = null; });
+        return unblocking;
+      };
       const appUpdate = createAppUpdateController({ app, config: memberUpgrade ? editionChannel.updateConfig(distribution.updateConfig, getHubDataDir()) : distribution.updateConfig, dataDir: getHubDataDir(),
         currentVersion: distribution.editionVersion || app.getVersion(), sendToRenderer, prepareLaunch: prepareHubLaunchClean,
+        unblock: unblockOwn, isOwnUrl: url => ownHosts.isOwnUrl(url, ownConfig),
         restartWait: () => companyHubAdmin()?.restartWaitView?.() || null });
       registerAppUpdateIpc(ipcMain, appUpdate, { gate: { apply: opts => { const admin = companyHubAdmin(); return admin && typeof admin.localApply === 'function' ? admin.localApply(opts) : null; } } });
       appUpdateControllerRef = appUpdate;
+      // 一键反馈（2026-10-29）：设置菜单「一键反馈」→ 脱敏诊断包提交到自家阿里云；被拦自动放行，发不出就存到「下载」。
+      try {
+        const { createHubFeedbackService, registerHubFeedbackIpc } = require('./main/hub-feedback-service');
+        registerHubFeedbackIpc(ipcMain, createHubFeedbackService({
+          endpoint: ownHosts.feedbackEndpoint(ownConfig), logsDir: path.join(getHubDataDir(), 'logs'), unblock: unblockOwn,
+          downloadsDir: () => app.getPath('downloads'),
+          info: () => ({ productName: distribution.productName, edition: distribution.editionBadge || distribution.target || '',
+            version: distribution.editionVersion || app.getVersion(), electron: process.versions.electron, platform: `${process.platform} ${require('os').release()}`,
+            // 运行快照（借鉴同类工具的诊断包）：会话数、各类会话数、主进程内存、系统剩余内存、已运行时长。
+            runtime: (() => { try {
+              const list = [...(sessionManager?.sessions?.values?.() || [])];
+              const kinds = {}; for (const e of list) { const k = e?.info?.kind || e?.kind || '?'; kinds[k] = (kinds[k] || 0) + 1; }
+              const os = require('os'), mb = n => Math.round(n / 1048576);
+              return `会话 ${list.length} 个（${Object.entries(kinds).map(([k, n]) => `${k} ${n}`).join('、') || '无'}）· 主进程内存 ${mb(process.memoryUsage().rss)} MB · 系统剩余 ${mb(os.freemem())}/${mb(os.totalmem())} MB · 已运行 ${Math.round(process.uptime() / 60)} 分钟`;
+            } catch (e) { return '读取失败：' + e.message; } })() }) }));
+      } catch (e) { console.warn('[hub-feedback] 一键反馈初始化失败：', e && e.message); }
       ipcMain.handle('edition:state', () => ({ enabled: memberUpgrade, unlocked: memberUpgrade && editionChannel.wasUnlocked(getHubDataDir()),
         switched: memberUpgrade && !!editionChannel.readChannel(getHubDataDir()) }));
       ipcMain.handle('edition:switch', async (_e, payload = {}) => {

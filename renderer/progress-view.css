@@ -82,3 +82,15 @@
 .pg-older { margin-top: 18px; border-top: 1px solid var(--border-subtle, #e5e9ee); padding-top: 10px; }
 .pg-older summary { cursor: pointer; font-size: 12.5px; color: var(--fg-muted, #637084); }
 .pg-older-list { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 14px; margin-top: 10px; }
+
+/* 子 Agent 进度一行字（2026-10-29，renderer/subagent-progress-view.js）：卡片视图底部、输入栏上方，只在当前会话派出子 Agent 时出现 */
+#subagent-progress-line { position: absolute; z-index: 66; left: 16px; max-width: min(620px, calc(100% - 64px));
+  bottom: calc(var(--fi-bar-h, 60px) + var(--card-session-status-h, 0px) + 8px);
+  display: flex; align-items: center; gap: 7px; padding: 4px 11px; box-sizing: border-box;
+  border: 1px solid var(--border-mid, #d8dfe8); border-radius: 12px; background: var(--surface-raised, #fff);
+  color: var(--fg-muted, #637084); font-size: 12px; line-height: 1.5; pointer-events: auto; }
+#subagent-progress-line[hidden], #terminal-panel:not(.card-view-active) > #subagent-progress-line { display: none; }
+#subagent-progress-line .sap-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#subagent-progress-line .sap-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--pg-done); }
+#subagent-progress-line.sap-running .sap-dot { background: var(--pg-ok); animation: sap-pulse 1.6s ease-in-out infinite; }
+@keyframes sap-pulse { 50% { opacity: .35; } }

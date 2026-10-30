@@ -34,6 +34,9 @@ function resolveSources(config, env) {
 }
 
 function createAppUpdateController({ app, config, dataDir, currentVersion, sendToRenderer = () => {}, logger = console,
+  // 自家阿里云被公司网络放行页拦住时：在看不见的窗口里自动放行一次再重试（core/net-unblock.js，2026-10-29 用户选默认开、无感）。
+  // unblock(url) → 是否点到了放行按钮；isOwnUrl(url) → 是不是自家地址（GitHub 被拦不碰）。
+  unblock = null, isOwnUrl = () => false,
   env = process.env, fetchImpl, resourcesPath = process.resourcesPath, isPackaged = !!(app && app.isPackaged), spawnImpl = spawn,
   // 拉起新程序用的干净环境与工作目录（core/clean-launch-env.js，2026-10-19）：main.js 传入；没传时按当前环境现算。
   prepareLaunch = () => require('../core/clean-launch-env').prepareHubLaunch({ env, isPackaged, appRoot: app && typeof app.getAppPath === 'function' ? app.getAppPath() : undefined }),
@@ -60,8 +63,13 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       if (!silent) emit({ phase: 'checking', error: null });
       const fetchFn = resolveFetch(fetchImpl);
       checkAbort = new AbortController();
-      const results = await checkManifests({ sources, fetchImpl: fetchFn, validate: validateManifest, signal: checkAbort.signal });
+      let results = await checkManifests({ sources, fetchImpl: fetchFn, validate: validateManifest, signal: checkAbort.signal });
       if (checkAbort.signal.aborted) return emit({ phase: 'idle', error: null });
+      const blockedOwn = results.find(r => r.blocked && !r.ok && isOwnUrl(r.url));
+      if (blockedOwn && unblock && await tryUnblock(blockedOwn.url)) {
+        results = await checkManifests({ sources, fetchImpl: fetchFn, validate: validateManifest, signal: checkAbort.signal });
+        if (checkAbort.signal.aborted) return emit({ phase: 'idle', error: null });
+      }
       const checks = results.map(r => ({ id: r.id, name: r.name, ok: r.ok, version: r.ok ? r.manifest.version : null, reason: r.reason || null,
         ...(r.blocked ? { blocked: true, url: r.url } : {}) }));
       const best = results.filter(r => r.ok).sort((a, b) => compareVersions(b.manifest.version, a.manifest.version))[0];
@@ -96,6 +104,11 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     return checking;
   }
 
+  async function tryUnblock(url) {
+    try { return !!(await unblock(url)); }
+    catch (error) { logger.warn?.('[app-update] 自动放行出错：', error.message); return false; }
+  }
+
   async function download() {
     if (!manifest || !plan || plan.kind === 'none') throw new Error('还没有可下载的新版本，请先检查更新');
     if (state.phase === 'downloading') return state;
@@ -106,9 +119,12 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     emit({ phase: 'downloading', attempts: [], progress: { received: 0, total: asset.bytes }, error: null });
     let lastEmit = 0;
     const ordered = [...sources.filter(s => confirmedIds.includes(s.id)), ...sources.filter(s => !confirmedIds.includes(s.id))];
-    const result = await downloadWithFallback({ sources: ordered, version: manifest.version, expect: asset, dest, fetchImpl: resolveFetch(fetchImpl), signal: abort.signal,
+    const runDownload = () => downloadWithFallback({ sources: ordered, version: manifest.version, expect: asset, dest, fetchImpl: resolveFetch(fetchImpl), signal: abort.signal,
       onAttempt: attempts => emit({ attempts }),
       onProgress: progress => { const now = Date.now(); if (now - lastEmit > 200 || progress.received === progress.total) { lastEmit = now; emit({ progress }); } } });
+    let result = await runDownload();
+    const blockedOwn = !result.ok && !result.cancelled && (result.attempts || []).find(a => a.blocked && isOwnUrl(a.url));
+    if (blockedOwn && unblock && await tryUnblock(blockedOwn.url)) result = await runDownload();
     abort = null;
     if (!result.ok) {
       return emit({ phase: result.cancelled ? 'available' : 'error', attempts: result.attempts,
