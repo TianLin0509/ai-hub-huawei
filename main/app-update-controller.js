@@ -136,7 +136,8 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       if (plan.kind === 'incremental') {
         if (!state.canApply) return emit({ phase: 'error', attempts: result.attempts, error: '开发运行的 Hub 不能自动替换程序文件，请用安装版' });
         staged = stageIncremental({ dataDir, payloadFile: dest, resourcesDir: env.AI_HUB_UPDATE_RESOURCES || resourcesPath, version: manifest.version, from: currentVersion,
-          exe: process.execPath, args: process.argv.slice(1), simulateFailure: env.AI_HUB_UPDATE_SIMULATE_FAILURE || null });
+          exe: process.execPath, args: process.argv.slice(1), simulateFailure: env.AI_HUB_UPDATE_SIMULATE_FAILURE || null,
+          elevateMode: env.AI_HUB_UPDATE_ELEVATE_MODE || null });
         fs.rmSync(dest, { force: true });
       } else {
         staged = { installer: dest };
@@ -147,7 +148,8 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
         error: `本机程序文件在下载期间被改动过（${error.stale?.[0]?.path || '未知文件'}），请重新检查更新，这次会自动改用完整更新包` });
       return emit({ phase: 'error', attempts: result.attempts, error: `更新包解开或校验失败：${error.message}` });
     }
-    return emit({ phase: 'ready', attempts: result.attempts, readySource: result.source.name });
+    // 装在 Program Files 这类目录时，重启那一步 Windows 会弹一次管理员确认框：界面提前说一声（2026-10-30）。
+    return emit({ phase: 'ready', attempts: result.attempts, readySource: result.source.name, needsAdmin: !!(staged && staged.needsAdmin) });
   }
 
   function cancel() { if (abort) abort.abort(); if (checkAbort) checkAbort.abort(); return state; }

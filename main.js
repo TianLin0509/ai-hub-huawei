@@ -3812,6 +3812,8 @@ const accountProfileUsage = require('./main/usage/account-profile-usage').create
   refreshOtherCodex: options => codexOtherUsage.refresh(options),
 });
 ipcMain.handle('account-profile-usage', () => accountProfileUsage.list());
+ipcMain.handle('claude:launch-ranking', () => require('./core/claude-launch-recommend').rankClaudeAccounts({
+  accounts: accountProfileUsage.list().claude, sessions: sessionManager.getAllSessions() }));
 ipcMain.handle('refresh-account-profile-usage', (_event, options = {}) => accountProfileUsage.refresh(options));
 // 账号看板的出口地点：每个 IP 查一次并缓存（main/usage/ip-location-cache.js）；E2E 用夹具，不发网络请求。
 const ipLocationCache = require('./main/usage/ip-location-cache').createIpLocationCache({

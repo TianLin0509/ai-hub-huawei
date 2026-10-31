@@ -23,6 +23,7 @@
     "powershell"
   ],
   "productName": "AI HUB-Huawei",
+  "shortcutName": "AI Hub",
   "editionBadge": "内测先锋版",
   "update": {
     "sources": [
@@ -42,6 +43,7 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
+    "修复装在 C 盘 Program Files 等受保护目录时一键更新失败（原来误报「文件被占用」）：现在只在替换文件那一步弹一次 Windows 管理员确认框，点「是」即可，Hub 本身仍以普通权限运行；更新失败时如实写明是没有权限、文件被占用还是取消了授权。",
     "Hub 更省电脑资源：AI 工作时的「运行中」标记改成静态（原来的循环小动画会让 Hub 不停重画画面，实测显卡和界面各占三四成）；其余状态动画只闪约 2 秒就停。",
     "全文搜索不再常驻后台：第一次搜索时才启动，闲置 10 分钟自动退出，平时少占几百 MB 内存。",
     "会话多时更顺：刷新左侧会话列表、保存会话列表的耗时减少一半以上。",
@@ -51,8 +53,8 @@
     "会话自动起名改成本地即时生成；启动中心更简洁，思考强度固定为高档。",
     "一键反馈遇到公司代理的风险提醒页会在后台自动放行并重试，不再一次就判失败。"
   ],
-  "version": "5.4.0",
-  "upstreamVersion": "1.6.715",
-  "upstreamCommit": "a37dfec42bbb482f393e8753343e5c30188f3484",
+  "version": "5.4.1",
+  "upstreamVersion": "1.6.718",
+  "upstreamCommit": "3602a6747fbedb1e1ce694cbae89bb1d8a93b9af",
   "upstreamDirty": false
 }

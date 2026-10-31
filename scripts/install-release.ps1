@@ -1,7 +1,7 @@
 # Windows PowerShell 5.1+. No Node, Git, admin rights or existing Hub required.
 [CmdletBinding()]
 param(
-  [ValidatePattern('^v?\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$')][string]$Version = 'v5.4.0',
+  [ValidatePattern('^v?\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$')][string]$Version = 'v5.4.1',
   [string]$Destination = (Join-Path $env:LOCALAPPDATA 'Programs\AIHubCommunity'),
   [string]$PackagePath,
   [string]$ChecksumPath,
@@ -154,13 +154,15 @@ try {
   if (-not $NoShortcut) {
     $desktop = [Environment]::GetFolderPath('Desktop')
     $wsh = New-Object -ComObject WScript.Shell
-    $shortcut = $wsh.CreateShortcut((Join-Path $desktop 'AI HUB-Huawei.lnk'))
+    $shortcut = $wsh.CreateShortcut((Join-Path $desktop 'AI Hub.lnk'))
     $shortcut.TargetPath=$exe; $shortcut.WorkingDirectory=$target; if ($gpuArgs) { $shortcut.Arguments=$gpuArgs }; $shortcut.Save()
     # 发行版改了显示名时，旧名字、且指向本安装目录下旧版本的桌面快捷方式一并移除，免得桌面上两个入口。
-    $oldLink = Join-Path $desktop 'AI Hub Community.lnk'
-    if ('AI HUB-Huawei' -ne 'AI Hub Community' -and (Test-Path -LiteralPath $oldLink)) {
-      $oldTarget = $wsh.CreateShortcut($oldLink).TargetPath
-      if ($oldTarget -and $oldTarget.StartsWith($base, [StringComparison]::OrdinalIgnoreCase)) { Remove-Item -LiteralPath $oldLink -Force }
+    foreach ($oldName in @('AI Hub Community', 'AI HUB-Huawei')) {
+      $oldLink = Join-Path $desktop ($oldName + '.lnk')
+      if ($oldName -ne 'AI Hub' -and (Test-Path -LiteralPath $oldLink)) {
+        $oldTarget = $wsh.CreateShortcut($oldLink).TargetPath
+        if ($oldTarget -and $oldTarget.StartsWith($base, [StringComparison]::OrdinalIgnoreCase)) { Remove-Item -LiteralPath $oldLink -Force }
+      }
     }
   }
   $launched = $false

@@ -137,6 +137,10 @@
   }
   let accountSaving = false;
   let pendingAccountId = '';
+  // Per-launch pick from the launch ranking; the saved default stays untouched
+  // until the user chooses an account by hand.
+  let claudeRanking = null;
+  let claudeAccountTouched = false;
   let accountReadError = '';
   let accountNotice = '';
   let configReadRevision = 0;
@@ -324,6 +328,31 @@
     };
   }
 
+  function launchClaudeAccountId() {
+    const open = menuEl?.style.display === 'flex';
+    const recommended = claudeRanking?.recommendedId;
+    return open && !claudeAccountTouched && claudeAccounts.some(p => p.id === recommended) ? recommended : claudeAccountId;
+  }
+  function rankedClaudeAccounts() {
+    if (!claudeRanking) return claudeAccounts;
+    const { accountHint } = require('../core/claude-launch-recommend');
+    const rows = new Map(claudeRanking.rows.map((row, index) => [row.id, { row, index }]));
+    return claudeAccounts.map(p => ({ ...p, hint: rows.has(p.id) ? accountHint(rows.get(p.id).row) : '',
+      recommended: p.id === claudeRanking.recommendedId })).sort((a, b) =>
+      (rows.get(a.id)?.index ?? rows.size) - (rows.get(b.id)?.index ?? rows.size));
+  }
+  function claudeRecommendationNote() {
+    const row = claudeRanking?.rows.find(item => item.id === claudeRanking.recommendedId);
+    if (!row || claudeAccountTouched) return '';
+    return `已按额度余量和在用会话推荐：${require('../core/claude-launch-recommend').accountHint(row)}。`;
+  }
+  function loadClaudeRanking(revision) {
+    void ipcRenderer.invoke('claude:launch-ranking').then(ranking => {
+      if (revision !== modalRevision) return;
+      claudeRanking = ranking;
+      paint();
+    }).catch(() => {});
+  }
   function buildSessionTuningOpts(kind, modelId, selection = {}) {
     const tuning = resolveSessionTuning(kind, modelId, selection);
     const opts = {};
@@ -354,7 +383,7 @@
     if (DEEPSEEK_ROUTE_KINDS.has(kind)) opts.deepseekRoute = tuning.deepseekRoute;
     if (kind === 'gemini') opts.antigravityProfile = tuning.antigravityProfile;
     if (kind === 'claude' && claudeBackend !== 'api') {
-      opts.claudeProfile = selection.claudeProfile || claudeAccountId;
+      opts.claudeProfile = selection.claudeProfile || launchClaudeAccountId();
       opts.claudeAccountSwitchable = true;
       if (selection.claudeAutoSwitch === true) opts.claudeAutoSwitch = true;
     }
@@ -1058,8 +1087,8 @@
     const accountNote=document.getElementById('new-session-account-note');
     const isClaudeAccount=selectedKind === 'claude';
     const isAntigravityAccount=selectedKind === 'gemini';
-    const accounts=isAntigravityAccount ? antigravityAccounts : isClaudeAccount ? claudeAccounts : codexAccounts;
-    const selectedAccount=isAntigravityAccount ? antigravityAccountId : isClaudeAccount ? claudeAccountId : codexAccountId;
+    const accounts=isAntigravityAccount ? antigravityAccounts : isClaudeAccount ? rankedClaudeAccounts() : codexAccounts;
+    const selectedAccount=isAntigravityAccount ? antigravityAccountId : isClaudeAccount ? launchClaudeAccountId() : codexAccountId;
     const showAccount=isAntigravityAccount || selectedKind === 'codex' && codexBackend !== 'api' || isClaudeAccount && claudeBackend !== 'api';
     if (accountField) accountField.hidden=!showAccount;
     const autoSwitchField = document.getElementById('new-session-claude-auto-switch-field');
@@ -1069,14 +1098,14 @@
     if (accountNote) {
       accountNote.hidden=!showAccount;
       accountNote.textContent=accountReadError || (accountSaving ? '正在切换用量账号…' : accountNotice)
-        || (isAntigravityAccount ? '新建会话使用所选 Antigravity 账号；已有会话保持原账号。首次使用请到账号页完成此账号授权。' : isClaudeAccount ? '新建会话使用所选账号；已有会话恢复、重启仍用原账号。首次使用请到账号页完成此账号授权。' : '新建会话使用所选账号；此会话随后独立换号，恢复和重启仍用会话自己的账号。');
+        || (isAntigravityAccount ? '新建会话使用所选 Antigravity 账号；已有会话保持原账号。首次使用请到账号页完成此账号授权。' : isClaudeAccount ? claudeRecommendationNote()+'新建会话使用所选账号；已有会话恢复、重启仍用原账号。首次使用请到账号页完成此账号授权。' : '新建会话使用所选账号；此会话随后独立换号，恢复和重启仍用会话自己的账号。');
     }
     if (accountSelect) {
       const signature=JSON.stringify(accounts);
       if (accountSelect.dataset.accounts !== signature) {
         // The hand-typed label has been wrong before; lead with the account the profile is
         // actually logged into and keep the label as the secondary hint.
-        accountSelect.innerHTML=accounts.map(p=>`<option value="${escapeHtml(p.id)}">${escapeHtml(p.email ? `${p.email}（${p.label || p.id}）` : `${p.label || p.id} · 账号未确认`)}</option>`).join('');
+        accountSelect.innerHTML=accounts.map(p=>`<option value="${escapeHtml(p.id)}">${escapeHtml(`${p.recommended ? '推荐 · ' : ''}${p.email ? `${p.email}（${p.label || p.id}）` : `${p.label || p.id} · 账号未确认`}${p.hint ? ` · ${p.hint}` : ''}`)}</option>`).join('');
         accountSelect.dataset.accounts=signature;
       }
       accountSelect.value=pendingAccountId || selectedAccount;
@@ -1438,6 +1467,8 @@
       return;
     }
     const revision = ++modalRevision;
+    claudeAccountTouched = false;
+    loadClaudeRanking(revision);
     const codexAutoSwitch = document.getElementById('new-session-codex-auto-switch');
     if (codexAutoSwitch) codexAutoSwitch.checked = false;
     tuningMemory.clear();
@@ -1710,6 +1741,7 @@
       if (accountSaving) return;
       const profileId=event.target.value;
       const accountKind=selectedKind;
+      if (accountKind === 'claude') claudeAccountTouched=true;
       accountSaving=true;pendingAccountId=profileId;configReadRevision++;accountNotice='';setError('');paint();
       try {
         if (!(accountKind === 'gemini' ? antigravityAccounts : accountKind === 'claude' ? claudeAccounts : codexAccounts).some(p => p.id === profileId)) throw new Error('所选账号不可用，请重新选择');

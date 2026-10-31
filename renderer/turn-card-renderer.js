@@ -556,7 +556,9 @@ function renderTurnCard(turn) {
   const body = (isProgress && !emptyNative ? require('./conversation-message-view').renderProgressRow(turn,
     {escapeHtml,renderMarkdown:renderMarkdownPreservingLocalPaths,foldLong:false,actions:renderCardActions(turn)})
     : emptyNative ? `<span class="turn-native-outcome">${escapeHtml(emptyNative)}</span>`
-    : require('./conversation-message-view').renderMessageBody(turn.assistantContext?.userText ?? turn.text,
+    : (!isUser && require('./conversation-message-view').renderReplySegments(turn,
+      {collapseLong:turn.source==='antigravity-cli',escapeHtml,renderMarkdown:renderMarkdownPreservingLocalPaths}))
+      || require('./conversation-message-view').renderMessageBody(turn.assistantContext?.userText ?? turn.text,
       {isUser,collapseLong:turn.source==='antigravity-cli',escapeHtml,renderMarkdown:renderMarkdownPreservingLocalPaths}));
   const attachments = isUser ? renderImageAttachments(turn.attachments, { escapeHtml, cwd: turn.attachmentCwd }) : '';
   const assistantContext = isUser && turn.assistantContext
@@ -989,6 +991,7 @@ function turnRenderSignature(turn) {
     nativeOutcome: turn.nativeOutcome || null,
     text: turn.text || '',
     ts: turn.ts || null,
+    replySegments: (turn.replySegments || []).map(segment => segment.ts),
     model: turn.model || '',
     kind: turn.kind || '',
     thinking: turn.thinking || '',

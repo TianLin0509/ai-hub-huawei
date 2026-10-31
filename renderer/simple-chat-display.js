@@ -39,6 +39,10 @@ function mergeReply(group) {
     // The same anchor survives a tools-only start, progress and the final reply.
     id: first.logicalTurnId,
     text: body.length ? body.map(m => m.text).join('\n\n') : result.text || '',
+    // One card can hold replies sent hours apart (background work resuming the
+    // turn); each keeps its own send time. `text` stays the copy/resend source.
+    replySegments: body.length && body.every(m => Number.isFinite(m.ts) && m.ts > 0)
+      ? body.map(m => ({ id: m.id, text: m.text, ts: m.ts })) : null,
     phase: finals.length ? 'final_answer' : result.phase,
     simpleChat: true,
     chatProcessMessages: (body.length ? progress : progress.filter(m => m !== result))

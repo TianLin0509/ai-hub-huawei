@@ -12,10 +12,12 @@ const {
 } = require('../../core/branch-transcript-inheritance.js');
 const { compactTurnsToolOutputs } = require('../../core/transcript-tool-compact.js');
 const { readToolResultFromTranscriptFile } = require('../../core/claude-tool-details.js');
+const lineage = require('../../core/claude-transcript-lineage.js');
 
 // 增量刷新（turn-complete 回填）用 limit:1 只取最新一条回答，合并前置历史后再切尾
 // 结果完全一样，白搭一次父 transcript 解析。除此之外的窗口都照常继承。
 const BRANCH_INHERITANCE_MIN_LIMIT = 2;
+const ANCESTOR_OVERLAP_TURNS = 8;
 
 function defaultDefer() {
   return new Promise(resolve => setImmediate(resolve));
@@ -322,6 +324,25 @@ async function parseProviderTranscript(args = {}, deps) {
       return { turns: require('../../core/dsh-cli-session').readDshCliTranscript(transcriptPath, parseOpts),
         transcriptPath, source: 'provider-cli', error: null };
     }
+    // Cards and native sessions share one projection; legacy DeepSeek-Claude keeps its parser.
+    const nativeProjection = typeof deps.parseClaudeTranscriptToNativeTurns === 'function'
+      && !/^deepseek-legacy/.test(String(runtimeKind || ''));
+    // Cards show a preview of each tool result and read the rest on demand;
+    // screenshots and long outputs stay in the transcript (transcript-tool-compact).
+    const parseClaudeFile = (file, options) => nativeProjection
+      ? runTranscriptParser(deps, 'claude-native', file, { ...options, compactToolOutputs: true }, deps.parseClaudeTranscriptToNativeTurns)
+      : runTranscriptParser(deps, 'claude', file, options, parseClaudeTranscriptToTurns);
+    // Account switch: until the fork writes its file, the conversation so far
+    // is the previous one. The binding stays on the fork's own path.
+    const runtimeHome = lineage.runtimeHomeOf(transcriptPath)
+      || (lineage.isRuntimeHome(record?.claudeConfigDir) ? record.claudeConfigDir : null);
+    if (runtimeHome && !(transcriptPath && require('fs').existsSync(transcriptPath))) {
+      const resting = lineage.restingTranscript(runtimeHome, transcriptPath);
+      if (resting) {
+        const parsed = await parseClaudeFile(resting, parseOpts);
+        return { turns: await withAncestorTurns(parsed.turns, resting, parseOpts, parseClaudeFile), transcriptPath, error: null };
+      }
+    }
     if (!transcriptPath) {
       // 还没发过消息的分支：卡片先显示分支之前的对话（来自源会话），而不是空白。
       if (isUnsubmittedBranch(record)) {
@@ -340,17 +361,10 @@ async function parseProviderTranscript(args = {}, deps) {
       return { turns: await withInheritedBranchTurns(args, deps, session, [], parseOpts, transcriptPath), transcriptPath, error: null };
     }
     const parseStartedAt = Date.now();
-    // Claude 卡片与原生会话走同一套投影（claude-disk-transcript）：过程/结果分段、
-    // 工具状态与耗时都对齐。旧 DeepSeek-Claude 兼容会话保持原解析器。
-    const nativeProjection = typeof deps.parseClaudeTranscriptToNativeTurns === 'function'
-      && !/^deepseek-legacy/.test(String(runtimeKind || ''));
-    // Cards show a preview of each tool result and read the rest on demand;
-    // screenshots and long outputs stay in the transcript (transcript-tool-compact).
-    const parsed = nativeProjection
-      ? await runTranscriptParser(deps, 'claude-native', transcriptPath, { ...parseOpts, compactToolOutputs: true }, deps.parseClaudeTranscriptToNativeTurns)
-      : await runTranscriptParser(deps, 'claude', transcriptPath, parseOpts, parseClaudeTranscriptToTurns);
+    const parsed = await parseClaudeFile(transcriptPath, parseOpts);
+    const turns = await withAncestorTurns(parsed.turns, transcriptPath, parseOpts, parseClaudeFile);
     return {
-      turns: await withInheritedBranchTurns(args, deps, session, parsed.turns, parseOpts, transcriptPath),
+      turns: await withInheritedBranchTurns(args, deps, session, turns, parseOpts, transcriptPath),
       transcriptPath,
       parseMs: typeof parsed.meta.parseMs === 'number' ? parsed.meta.parseMs : Date.now() - parseStartedAt,
       parseCacheHit: !!parsed.meta.cacheHit,
@@ -365,6 +379,23 @@ async function parseProviderTranscript(args = {}, deps) {
     }
     return { turns: [], transcriptPath, error: err && err.message ? err.message : String(err) };
   }
+}
+
+// A switched session's earlier conversation lives in the files before the
+// fork. Same conversation, so no 分支前 mark. Only as much as the window needs.
+async function withAncestorTurns(turns, transcriptPath, parseOpts, parseFile) {
+  const limit = Number(parseOpts.limit);
+  const bounded = Number.isFinite(limit) && parseOpts.fromTail !== false;
+  if (Number.isFinite(limit) && limit < BRANCH_INHERITANCE_MIN_LIMIT) return turns;
+  if (bounded && turns.length >= limit) return turns;
+  let merged = turns;
+  for (const file of lineage.ancestorTranscripts(transcriptPath).reverse()) {
+    if (bounded && merged.length >= limit) break;
+    // The preserved tail appears in both files, so ask for more than the gap.
+    const parsed = await parseFile(file, bounded ? { ...parseOpts, limit: limit - merged.length + ANCESTOR_OVERLAP_TURNS } : parseOpts);
+    merged = lineage.prependAncestorTurns(parsed.turns || [], merged);
+  }
+  return applyTailLimit(merged, limit, parseOpts.fromTail);
 }
 
 async function parseSessionTranscript(args = {}, deps) {

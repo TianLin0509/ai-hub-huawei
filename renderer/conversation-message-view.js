@@ -24,6 +24,32 @@ function renderMessageBody(text, {isUser=false, plainProgress=false, foldLong=tr
     + `<div class="conversation-full-text">${body}</div></details>`
     + `<div class="conversation-long-preview" data-copy-exclude>${body}</div></div>`;
 }
+function gapLabel(ms) {
+  const minutes = Math.floor(ms / 60000);
+  if (minutes < 1) return '';
+  if (minutes < 60) return `隔 ${minutes} 分`;
+  const hours = Math.floor(minutes / 60), rest = minutes % 60;
+  return `隔 ${hours} 小时${rest ? ` ${rest} 分` : ''}`;
+}
+function replyStamp(segment, previous, latest, escapeHtml) {
+  const time = require('../core/beijing-time');
+  const gap = previous ? gapLabel(segment.ts - previous.ts) : '';
+  return `<div class="reply-stamp" data-copy-exclude><time title="${escapeHtml(time.formatBeijingDateTime(segment.ts))}">${escapeHtml(time.formatAbsoluteTime(segment.ts))} 发出</time>`
+    + (gap ? `<span class="reply-stamp-gap">${escapeHtml(gap)}</span>` : '')
+    + (latest ? '<span class="reply-stamp-latest">最新</span>' : '') + '</div>';
+}
+// The card head shows when the turn started. Every answer states its own send
+// time, unless a lone answer went out in the minute the head already shows.
+function renderReplySegments(turn, options) {
+  const segments = turn.replySegments || [];
+  const time = require('../core/beijing-time');
+  const single = segments.length === 1
+    && time.formatAbsoluteTime(segments[0].ts) === time.formatAbsoluteTime(turn.ts);
+  if (!segments.length || single) return null;
+  return segments.map((segment, index) => `<section class="reply-segment" data-message-id="${options.escapeHtml(segment.id || '')}">`
+    + replyStamp(segment, segments[index - 1], segments.length > 1 && index === segments.length - 1, options.escapeHtml)
+    + renderMessageBody(segment.text, options) + '</section>').join('');
+}
 function phaseLabel(phase) {
   return ({commentary:'进展',final_answer:'结果',final:'结果',activity:'活动记录'})[phase] || '消息';
 }
@@ -179,4 +205,4 @@ function patchConversationArticle(existing, next) {
       if(r.toString()===savedSelection.text){selection.removeAllRanges();selection.addRange(r);}}
   }
 }
-module.exports={syncProgressClamp,renderMessageBody,renderMessageSequence,renderSequenceActivity,renderProgressRow,sameResponse,syncResponseNeighbors,syncResponseGroups,responseCards,phaseLabel,patchConversationArticle,plainProgressText};
+module.exports={syncProgressClamp,renderMessageBody,renderMessageSequence,renderSequenceActivity,renderReplySegments,renderProgressRow,sameResponse,syncResponseNeighbors,syncResponseGroups,responseCards,phaseLabel,patchConversationArticle,plainProgressText};

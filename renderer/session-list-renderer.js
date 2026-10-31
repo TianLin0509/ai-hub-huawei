@@ -1009,7 +1009,7 @@ sessionListEl.addEventListener('keydown', event => {
     const dormantCls = isDormant ? ' dormant' : '';
     const showWaiting = runtimeTruth.state === RUNTIME_WAITING;
     const unreadCount = Math.max(0, Number(s.unreadCount) || 0);
-    const showUnread = classify(s).unread || unreadMemberIds.has(s.id);
+    const showUnread = sessionHasCompletedUnread(s) || unreadMemberIds.has(s.id);
     // 已确认异常和待核对断连优先，不能被未读或选中状态掩盖。
     const dotCls = issue ? 'error' : s._resumePending ? 'start' : (child
       ? partitionSidebarSessions([s], { sessionMap, activeSessionId: getActiveSessionId(), groupMemberIds: new Set([s.id]) }).states.get(s.id)

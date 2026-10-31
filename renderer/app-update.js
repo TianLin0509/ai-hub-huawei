@@ -168,7 +168,7 @@
         + `<ul class="au-sources">${sourceRows()}</ul>`;
       foot = '<button class="au-btn" data-au="cancel">取消</button>';
     } else if (s.phase === 'ready') {
-      body += `<div class="au-msg ok">新版本已从「${esc(s.readySource)}」下载并校验通过。${plan && plan.kind === 'incremental' ? '点「立即重启」后约 5 秒完成替换并自动重新打开；替换失败会自动恢复旧版本。' : '点「立即安装」会打开安装程序，并关闭当前窗口。'}</div>`
+      body += `<div class="au-msg ok">新版本已从「${esc(s.readySource)}」下载并校验通过。${plan && plan.kind === 'incremental' ? '点「立即重启」后约 5 秒完成替换并自动重新打开；替换失败会自动恢复旧版本。' : '点「立即安装」会打开安装程序，并关闭当前窗口。'}${plan && plan.kind === 'incremental' && s.needsAdmin ? '<br>程序装在受保护的目录里，重启时 Windows 会弹出确认框，请点「是」授权这一次替换；Hub 本身仍以普通权限运行。' : ''}</div>`
         + `<ul class="au-sources">${sourceRows()}</ul>`;
       foot = `<button class="au-btn" data-au="close">稍后</button><button class="au-btn primary" data-au="apply">${plan && plan.kind === 'incremental' ? '立即重启' : '立即安装'}</button>`;
     } else if (s.phase === 'applying') {

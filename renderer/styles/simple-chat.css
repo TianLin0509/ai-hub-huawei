@@ -103,3 +103,8 @@
   .turn-speed-detail, .turn-speed-unit { display: none; }
   .turn-speed { font-size: 10px; }
 }
+
+/* One card can hold answers sent at different times; each states its own. */
+.msg-overlay .reply-segment + .reply-segment { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
+.msg-overlay .reply-stamp { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 11px; line-height: 1.4; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
+.msg-overlay .reply-stamp-latest { padding: 0 6px; border-radius: 8px; background: var(--brand-tint); color: var(--brand-text); font-weight: 600; }

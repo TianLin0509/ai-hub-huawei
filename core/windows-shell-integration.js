@@ -4,9 +4,9 @@ const fs = require('fs');
 const path = require('path');
 
 const HUB_APP_USER_MODEL_ID = 'com.ai-hub.community';
-const HUB_SHORTCUT_NAME = `${require('./distribution').productName}.lnk`;
-// 公司版改了显示名（2026-10-13）：旧版本在开始菜单留下的同名快捷方式只在指向本程序时才移除。
-const RENAMED_SHORTCUT_NAMES = ['AI Hub Community.lnk'].filter(name => name !== HUB_SHORTCUT_NAME);
+const HUB_SHORTCUT_NAME = `${require('./distribution').shortcutName}.lnk`;
+// 公司版改了显示名（2026-10-13）、快捷方式改叫「AI Hub」（2026-10-30）：旧名字的快捷方式只在指向本程序时才处理。
+const RENAMED_SHORTCUT_NAMES = [...new Set(['AI Hub Community.lnk', `${require('./distribution').productName}.lnk`])].filter(name => name !== HUB_SHORTCUT_NAME);
 const LEGACY_ELECTRON_SHORTCUT_NAME = 'Electron.lnk';
 const LEGACY_DESKTOP_SHORTCUT_NAME = 'AI Group Chat Hub.lnk';
 
@@ -276,6 +276,13 @@ function ensureWindowsShellIntegration({
         if (fsModule.existsSync(oldPath) && shortcutLaunchMatches(shell.readShortcutLink(oldPath), expected)) {
           fsModule.rmSync(oldPath, { force: true });
           (result.renamedShortcutsRemoved = result.renamedShortcutsRemoved || []).push(oldPath);
+        }
+        // 桌面上旧名字、指向本程序的快捷方式改成新名字（新名字已被占用就不动）。
+        const oldDesk = path.join(path.dirname(desktopLegacyPath), name);
+        const newDesk = path.join(path.dirname(desktopLegacyPath), HUB_SHORTCUT_NAME);
+        if (fsModule.existsSync(oldDesk) && !fsModule.existsSync(newDesk) && shortcutLaunchMatches(shell.readShortcutLink(oldDesk), expected)) {
+          fsModule.renameSync(oldDesk, newDesk);
+          (result.renamedDesktopShortcuts = result.renamedDesktopShortcuts || []).push(newDesk);
         }
       } catch (error) {
         result.errors.push(`旧名快捷方式清理失败：${error.message}`);
