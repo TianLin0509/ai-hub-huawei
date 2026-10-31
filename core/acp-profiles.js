@@ -198,12 +198,13 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
     } } });
   }
   // Credentials/history remain isolated; personal rules use the same source.
-  require('./agent-user-context').syncNativeUserContext({kind,
+  const userContext = require('./agent-user-context').syncNativeUserContext({kind,
     nativeHome:path.join(home,{qwen:'.qwen','deepseek-acp':'.dsh',glm:'.zcode'}[kind]),
     env:baseEnv,dataDir});
   // DeepSeek 线路只提供 high / max；套餐 flash 档的 low 等档位换线路后不存在，交给外壳默认，免得启动时被拒。
   const effort = deepseekRoute && !['high', 'max'].includes(opts.effort) ? undefined : opts.effort;
   return { id: opts.id, kind, cwd: opts.cwd, profileId, tokenPlanRoute: route.route,
+    userContextWarning: userContext?.warning || null,
     tokenPlanWait: route.waitForReset ? { missingKey: route.missingKey } : null, model, effort,mcpServers,
     permissionPolicy: 'bypass',
     defaultMode: {qwen:'yolo','deepseek-acp':'danger-full-access',glm:'yolo'}[kind],

@@ -1,5 +1,5 @@
 'use strict';
-const {resolveCommand,cliEnv}=require('./antigravity-config');
+const {resolveCommand,cliEnv,runCli}=require('./antigravity-config');
 const crypto=require('node:crypto');
 // `agy models` starts a full language server and refreshes OAuth (5-15 s). The
 // new-session dialog asks on open and again on submit, so share one call.
@@ -31,7 +31,11 @@ async function fetchModelCatalog({env,runImpl}){
     return {ok:true,models,source:'agy models',observedAt:Date.now()};
   }catch(error){return {ok:false,models:[],error:error.message};}
 }
-function readModelCatalog({env=process.env,runImpl=require('./account-adapters').run,force=false,now=Date.now,
+// account-adapters' gemini check passes its own default runner (plain execFile of
+// agy.exe), which flashes a Windows Terminal window from Electron; swap that one
+// for runCli. Injected test doubles pass through unchanged.
+function backgroundRunner(runImpl){return !runImpl||runImpl===require('./account-adapters').run?runCli:runImpl;}
+function readModelCatalog({env=process.env,runImpl=runCli,force=false,now=Date.now,
   profileId='default',home='',authScope=''}={}){
   let effectiveEnv,key;
   try {effectiveEnv=cliEnv(env);key=namespaceKey({profileId,home,authScope,env:effectiveEnv});}
@@ -39,11 +43,11 @@ function readModelCatalog({env=process.env,runImpl=require('./account-adapters')
   const entry=cached.get(key);
   if(!force&&entry&&now()-entry.at<(entry.value.ok?SUCCESS_TTL_MS:FAILURE_TTL_MS))return Promise.resolve(entry.value);
   if(inflight.has(key))return inflight.get(key);
-  const task=fetchModelCatalog({env:effectiveEnv,runImpl}).then(value=>{
+  const task=fetchModelCatalog({env:effectiveEnv,runImpl:backgroundRunner(runImpl)}).then(value=>{
     if(inflight.get(key)===task)cached.set(key,{at:now(),value});return value;
   }).finally(()=>{if(inflight.get(key)===task)inflight.delete(key);});
   inflight.set(key,task);
   return task;
 }
 function resetModelCatalogCache(){cached.clear();inflight.clear();}
-module.exports={parseModels,readModelCatalog,resetModelCatalogCache};
+module.exports={parseModels,readModelCatalog,resetModelCatalogCache,backgroundRunner};

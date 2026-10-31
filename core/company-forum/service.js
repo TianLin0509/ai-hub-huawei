@@ -92,7 +92,9 @@ class CompanyForum {
     return Object.values(this.bases()).some(b => { try { return new URL(b).host === u.host; } catch { return false; } });
   }
 
+  // 可选功能开关（core/optional-features.js）：关着时 main.js 不调 start()；用到一半关掉走 close()，再开再 start()。
   start() {
+    if (this.timers.length) return;
     fs.mkdirSync(this.workspace, { recursive: true });
     fs.writeFileSync(path.join(this.workspace, 'CLAUDE.md'), '# 公司论坛热帖整理\n\n' + INSTRUCTIONS + '\n', 'utf8');
     // 重启前没写完的摘要：标出来，下次同步或点「重新整理」再来。

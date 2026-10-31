@@ -21,14 +21,16 @@ function readProbed(file) {
   try {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
     const models = (Array.isArray(raw.models) ? raw.models : []).map(cleanModelId).filter(Boolean);
-    return models.length ? { models, defaultModel: cleanModelId(raw.defaultModel), at: raw.at || null } : null;
+    // source：serve = 经 CodeAgent serve 接口读的（core/codeagent-serve.js），menu = 读 /model 屏幕
+    return models.length ? { models, defaultModel: cleanModelId(raw.defaultModel), at: raw.at || null, source: raw.source || 'menu' } : null;
   } catch { return null; }
 }
 
 function writeProbed(file, result) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify({ schema: 1, models: result.models, defaultModel: result.defaultModel || '', at: new Date().toISOString() }, null, 2) + '\n', 'utf8');
+  fs.writeFileSync(tmp, JSON.stringify({ schema: 1, models: result.models, defaultModel: result.defaultModel || '', at: new Date().toISOString(),
+    source: result.source || 'menu' }, null, 2) + '\n', 'utf8');
   fs.renameSync(tmp, file);
 }
 

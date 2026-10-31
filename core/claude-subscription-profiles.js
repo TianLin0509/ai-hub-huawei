@@ -59,15 +59,26 @@ function profileForSession(opts, config, env = process.env) {
   return profile;
 }
 
-function accountLabel(home) {
+function readOauthAccount(home) {
   try {
     // The default CLI stores identity beside .claude, not inside it. A stale
     // nested file from an old explicit CLAUDE_CONFIG_DIR must never shadow it.
     const file = path.basename(home) === '.claude'
       ? path.join(path.dirname(home), '.claude.json') : path.join(home, '.claude.json');
-    const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return String(data.oauthAccount?.emailAddress || '');
-  } catch { return ''; }
+    return JSON.parse(fs.readFileSync(file, 'utf8')).oauthAccount || {};
+  } catch { return {}; }
+}
+
+function accountLabel(home) {
+  return String(readOauthAccount(home).emailAddress || '');
+}
+
+// 看板悬停用：邮箱、套餐、订阅起始日。官方 CLI 本地不记到期日，只有起始日。
+function accountInfo(home) {
+  const o = readOauthAccount(home);
+  const str = v => (typeof v === 'string' ? v : '');
+  return { email: str(o.emailAddress), plan: str(o.organizationType), billing: str(o.billingType),
+    subscribedAt: Date.parse(o.subscriptionCreatedAt) || 0 };
 }
 
 function usageScope(config, id, env = process.env) {
@@ -139,4 +150,4 @@ function firstLoginExempt(opts = {}, config = {}, env = process.env) {
   return true;
 }
 
-module.exports = { noClaudeLoginYet, firstLoginExempt, normalizeProfiles, resolveProfile, connectionId, profileForSession, accountLabel, usageScope, applyNetworkEnv, sharedNetworkEnv };
+module.exports = { noClaudeLoginYet, firstLoginExempt, normalizeProfiles, resolveProfile, connectionId, profileForSession, accountLabel, accountInfo, usageScope, applyNetworkEnv, sharedNetworkEnv };

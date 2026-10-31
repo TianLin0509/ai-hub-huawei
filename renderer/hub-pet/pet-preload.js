@@ -18,4 +18,5 @@ contextBridge.exposeInMainWorld('hubPet', {
   onState: (fn) => on('hub-pet:state', fn),
   onMotion: (fn) => on('hub-pet:motion', fn),
   onPanel: (fn) => on('hub-pet:panel', fn),
+  onProbe: (fn) => on('hub-pet:probe', fn),
 });

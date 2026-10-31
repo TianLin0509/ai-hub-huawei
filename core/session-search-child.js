@@ -4,6 +4,7 @@ const { SessionSearchEngine } = require('./session-search-engine.js');
 
 let engine = null;
 let closing = false;
+let activeRefreshes = 0;
 
 function withRuntime(status) {
   const memory = process.memoryUsage();
@@ -14,6 +15,7 @@ function withRuntime(status) {
       rss: memory.rss,
       heapUsed: memory.heapUsed,
       external: memory.external,
+      busy: activeRefreshes > 0,
     },
   };
 }
@@ -32,6 +34,20 @@ async function handle(message = {}) {
   if (message.type === 'init') {
     if (engine) return withRuntime(engine.status());
     engine = new SessionSearchEngine(message.options || {}, status => send({ type: 'status', status: withRuntime(status) }));
+    // search() can schedule a refresh after its response has already returned.
+    // In particular a silent rescan has refreshing=false: report actual writer
+    // activity as well so the parent cannot retire a still-running writer.
+    const refresh = engine.refresh.bind(engine);
+    engine.refresh = async (...args) => {
+      activeRefreshes += 1;
+      send({ type: 'status', status: withRuntime(engine.status()) });
+      try { return await refresh(...args); }
+      finally {
+        activeRefreshes -= 1;
+        send({ type: 'status', status: withRuntime(engine.status()) });
+      }
+    };
+    send({ type: 'status', status: withRuntime(engine.status()) });
     return withRuntime(engine.status());
   }
   if (message.type === 'close') {

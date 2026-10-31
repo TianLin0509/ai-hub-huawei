@@ -37,12 +37,14 @@ function syncNativeUserContext({kind, nativeHome, env=process.env, dataDir, inst
     const relative=path.relative(path.dirname(path.resolve(dataDir)),path.resolve(nativeHome));
     if(relative==='..'||relative.startsWith('..'+path.sep)||path.isAbsolute(relative))throw new Error('原生规则目标超出隔离 Hub 目录，未同步');
   }
-  let ruleFile=null;
+  let ruleFile=null, ruleDigest=source.digest, warning;
   if (instructions !== false) {
     const filename = kind === 'claude' ? 'CLAUDE.md' : kind === 'gemini' ? 'GEMINI.md' : kind === 'qwen' ? 'QWEN.md' : 'AGENTS.md';
     const file = path.join(nativeHome,filename), receipt = path.join(nativeHome,'.hub-user-context.json');
     const old = fs.existsSync(file) ? fs.readFileSync(file,'utf8') : null;
-    if (old !== source.content) {
+    let preserve = fs.existsSync(file) && fs.lstatSync(file).isSymbolicLink();
+    if (preserve) warning = '个人规则是链接，已保留现有内容并继续启动；请核对：' + file;
+    if (old !== source.content && !preserve) {
       let previous;
       try { previous = JSON.parse(fs.readFileSync(receipt,'utf8')); }
       catch(e) { if(e.code !== 'ENOENT') throw e; }
@@ -54,13 +56,19 @@ function syncNativeUserContext({kind, nativeHome, env=process.env, dataDir, inst
           if(target?.last_sha256) previous={digest:target.last_sha256};
         }
       }
-      if (old !== null && hash(old) !== previous?.digest) throw new Error('个人规则存在独立修改，未覆盖：' + file);
-      if(fs.existsSync(file) && fs.lstatSync(file).isSymbolicLink()) throw new Error('个人规则为链接，未覆盖：'+file);
-      writeAtomic(file,source.content);
+      // A difference is evidence to show, not a reason to block a conversation.
+      // Never mark an unknown edit as synchronized: the next launch must still warn.
+      if (old !== null && hash(old) !== previous?.digest) {
+        preserve = true;
+        warning = '个人规则与统一源有差异，已保留现有内容并继续启动；请核对：' + file;
+      } else writeAtomic(file,source.content);
     }
-    const record={source:source.source,digest:source.digest};
-    const serialized=JSON.stringify(record,null,2)+'\n';
-    if(!fs.existsSync(receipt)||fs.readFileSync(receipt,'utf8')!==serialized) writeAtomic(receipt,serialized);
+    if (preserve) ruleDigest = old === null ? null : hash(old);
+    else {
+      const record={source:source.source,digest:source.digest};
+      const serialized=JSON.stringify(record,null,2)+'\n';
+      if(!fs.existsSync(receipt)||fs.readFileSync(receipt,'utf8')!==serialized) writeAtomic(receipt,serialized);
+    }
     ruleFile=file;
   }
   if(kind==='codex'){
@@ -92,7 +100,7 @@ function syncNativeUserContext({kind, nativeHome, env=process.env, dataDir, inst
       if(!fs.existsSync(hookReceipt)||fs.readFileSync(hookReceipt,'utf8')!==saved)writeAtomic(hookReceipt,saved);
     }
   }
-  return {path:ruleFile,digest:source.digest};
+  return {path:ruleFile,digest:ruleDigest,...(warning ? {warning} : {})};
 }
 function readPolicy(env,dataDir) {
   const home=contextHome(env,dataDir);

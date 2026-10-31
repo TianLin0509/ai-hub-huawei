@@ -72,10 +72,19 @@ function prepareRuntime({ root, sessionId, profile, currentProfile = profile, op
   const settings = readJson(path.join(profile.home, 'settings.json'), true);
   validateSettings(settings);
   const global = readJson(globalConfigPath(profile.home), true) || {};
+  // Authentication belongs to an account; personal instructions belong to the person.
+  // Seed a fresh managed copy (and its receipt), never the account's stale CLAUDE.md.
+  // Clean installs without an opted-in person source retain their native configuration.
+  const context = require('./agent-user-context');
+  const person = !require('./session-scenes').isCleanPurpose(opts.purpose) && context.loadUserContext(env, root);
   const staging = home + '.preparing';
   if (fs.existsSync(staging)) throw fail('CLAUDE_RUNTIME_INCOMPLETE', '上次运行目录准备未完成，已保留现场');
   fs.mkdirSync(staging, { recursive: true });
-  for (const item of SHARED_CONFIG_ITEMS) copyIfPresent(path.join(profile.home, item), path.join(staging, item));
+  for (const item of SHARED_CONFIG_ITEMS) {
+    if (person && item === 'CLAUDE.md') continue;
+    copyIfPresent(path.join(profile.home, item), path.join(staging, item));
+  }
+  if (person) context.syncNativeUserContext({kind:'claude',nativeHome:staging,env,dataDir:root});
   for (const item of ['installed_plugins.json', 'known_marketplaces.json', 'config.json', 'blocklist.json']) {
     copyIfPresent(path.join(profile.home, 'plugins', item), path.join(staging, 'plugins', item));
   }

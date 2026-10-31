@@ -135,3 +135,14 @@
 .ac-login-env .ac-text-btn{font-size:12px}
 .ac-env-ok{width:7px;height:7px;border-radius:50%;background:#3aa55d;flex:none}
 .ac-account-form select{min-width:260px;height:30px;padding:0 8px;border:1px solid #d6dde8;border-radius:6px;background:#fff;color:#28364e;font:inherit;font-size:12px}
+
+/* Claude 账号邮箱保管（2026-10-30）：登录环境下方一行；密码只显示「是否已存」 */
+.ac-mailbox{grid-column:1/-1;display:flex;align-items:center;flex-wrap:wrap;gap:4px 10px;margin:-4px 0 0;font-size:12px;line-height:1.7;color:#5d6d85}
+.ac-mailbox .ac-text-btn{font-size:12px}
+.ac-mail-label{color:#8a97aa}
+.ac-mail-item{display:inline-flex;align-items:center;gap:8px;color:#33425a}
+.ac-mail-item small{color:#8a97aa;font-size:12px}
+.ac-mail-note{color:#6b7a90;max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ac-mail-form label>span{flex:none;width:84px}
+.ac-codex-quota>header .ac-mail-import{margin-left:auto;font-size:12px;color:#3478f6}
+.ac-codex-quota>header .ac-mail-import+[data-ac="account-add"]{margin-left:14px}

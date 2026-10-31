@@ -5,7 +5,7 @@
 // 某个站没登录时，在它那一栏显示「登录」按钮（弹出 Hub 自己的浏览器窗口，登录一次以后自动同步）。
 // 写法同助理页：盖在主区域上的一层，点左侧其他按钮自动关闭。左侧按钮只在公司版（gate.js）插入。
 function createCompanyForumPage({ document, window, ipcRenderer, closeOtherPanels = () => {}, showMessage }) {
-  let page = null, data = null, timer = null, panelOpen = false;
+  let page = null, data = null, timer = null, panelOpen = false, gate = null;
   const tab = {}; // 每个站当前看哪个榜
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const pad = n => String(n).padStart(2, '0');
@@ -53,6 +53,9 @@ function createCompanyForumPage({ document, window, ipcRenderer, closeOtherPanel
         <p class="cf-foot">数据只留在这台电脑 · 点标题用系统浏览器打开原帖 · 摘要由 CodeAgent 依据标题和正文摘录写成，每条都对过帖子出处</p>
       </div></div>`;
     document.body.append(page);
+    // 可选功能（默认关，renderer/optional-feature-gate.js）：关着时整页提示开启，开着时标题栏有「已开启 · 关闭」。
+    gate = require('./optional-feature-gate').createFeatureGate({ document, window, id: 'forum', page, showMessage,
+      badgeSlot: badge => page.querySelector('[data-cf="sync"]').before(badge), onEnabled: () => { void startData(); } });
     page.addEventListener('click', event => {
       const b = event.target.closest('[data-cf]');
       if (b) { event.preventDefault(); void action(b.dataset.cf, b).catch(e => showMessage?.(e.message)); }
@@ -176,6 +179,11 @@ function createCompanyForumPage({ document, window, ipcRenderer, closeOtherPanel
     page.hidden = false; document.body.classList.add('company-forum-page-open'); place();
     nav()?.classList.add('active');
     window.addEventListener('resize', onResize);
+    clearInterval(timer); timer = null;
+    if (await gate.check()) await startData();
+  }
+  async function startData() {
+    if (!page || page.hidden) return;
     clearInterval(timer); timer = setInterval(() => { void load().catch(() => {}); }, 15000);
     try { data = await call('ensure-today'); render(); } catch (error) { showMessage?.('论坛状态读取失败：' + error.message); }
   }

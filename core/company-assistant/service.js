@@ -213,7 +213,11 @@ class CompanyAssistant {
     return result;
   }
 
+  // 可选功能开关（core/optional-features.js）：关着时 main.js 不调 start()，后台什么都不跑；
+  // 用到一半关掉走 pause()（停定时取数、会议与会议室轮询、手机推送），再开走 resume()。会话工具接口不停，开销可忽略。
   start() {
+    if (this.started) { this.resume(); return; }
+    this.started = true;
     this.meetings.start();
     fs.mkdirSync(this.workspace, { recursive: true });
     const st = this.state();
@@ -228,12 +232,31 @@ class CompanyAssistant {
     this.phone.start();
     this.rooms.start();
     if (!this.deps.noTimer) void this.ppt.refresh().catch(e => console.warn('[company-assistant] ppt', e.message));
-    if (this.deps.noTimer) return;
+    this.startTimers();
+  }
+  startTimers() {
+    if (this.deps.noTimer || this.timers.length) return;
     this.timers.push(setInterval(() => { void this.tick().catch(e => console.warn('[company-assistant] tick', e.message)); }, 60000));
     this.timers.push(setInterval(() => { void this.collectJob().catch(e => console.warn('[company-assistant] collect', e.message)); }, 4000));
     const first = setTimeout(() => { void this.tick().catch(() => {}); }, 15000); this.timers.push(first);
   }
-  close() { for (const t of this.timers) { clearInterval(t); clearTimeout(t); } this.timers = []; this.meetings.close(); this.loginStop?.abort(); this.auth.close(); this.phone.close(); this.ppt.close?.(); this.rooms.close(); this.tools?.close(); }
+  stopTimers() { for (const t of this.timers) { clearInterval(t); clearTimeout(t); } this.timers = []; }
+  // 有会议正在采集时不让关：停了会议轮询，采集就断了。
+  canPause() { return !this.meetings.list().some(m => ['recording', 'paused'].includes(m.state)); }
+  pause() {
+    if (!this.started || this.paused) return;
+    this.paused = true;
+    this.stopTimers();
+    clearInterval(this.meetings.timer); this.meetings.timer = null;
+    this.phone.close(); this.rooms.close();
+  }
+  resume() {
+    if (!this.paused) return;
+    this.paused = false;
+    this.meetings.start(); this.phone.start(); this.rooms.start();
+    this.startTimers();
+  }
+  close() { this.stopTimers(); this.meetings.close(); this.loginStop?.abort(); this.auth.close(); this.phone.close(); this.ppt.close?.(); this.rooms.close(); this.tools?.close(); }
   // 给助理会话挂会话工具（main.js 注册的 extraMcpProvider 调用）：只挂给 purpose=company-assistant 的会话。
   // 不等本机接口开始监听（v3.1.1）：mcp.js 每次调用工具时才读接口文件，挂载时用不到地址。以前要求地址已有，
   // 会话若先于接口建好（启动时恢复、或接口还没开始监听），这一整个会话都不带会话工具，也没有任何提示。

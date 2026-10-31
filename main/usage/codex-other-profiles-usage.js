@@ -43,6 +43,7 @@ function createCodexOtherProfilesUsage({ getConfig, currentScope, resolveScope, 
       // A value read under another login of the same profile is not this account's quota.
       const own = entry && entry.scopeKey === scope.scopeKey ? entry : null;
       return { profileId: scope.profileId, profileLabel: scope.profileLabel, scopeKey: scope.scopeKey, accountEmail: scope.accountEmail || '',
+        planType: scope.planType || '', subscriptionUntilMs: scope.subscriptionUntilMs || 0, subscriptionCheckedMs: scope.subscriptionCheckedMs || 0,
         apiKey: authMode(scope.home) === 'apikey', usage5h: own?.usage5h || null, usage7d: own?.usage7d || null,
         observedAt: own?.observedAt || 0, error: own?.error || '', checkedAt: own?.checkedAt || 0 };
     });

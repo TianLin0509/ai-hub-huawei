@@ -5,9 +5,10 @@
 // 60 万上下文的这一轮约等于平时 20 轮。先在旧账号上压缩（读的是现成缓存），新账号只写摘要。
 //
 // 流程：
-//   1. 账号用量一到（broker.onUsage：账号有回合结束时按需查询，离额度越近越勤，最勤 5 分钟一次），看该账号上的 Claude 会话：
+//   1. 账号用量一到（每回合状态栏免费带回的读数，或 broker.onUsage 的兜底查询；2026-10-29 起），看该账号上的 Claude 会话：
 //      最紧窗口剩余 < 10%，且这个窗口不会在 30 分钟内重置 → 进入判定。
-//   2. 开了「额度耗尽自动换号」的会话：现查所有同出口账号（包括没有会话在用的），
+//   2. 开了「额度耗尽自动换号」的会话：看其他账号的最近读数（2026-10-29 起不限出口，换号前实测目标出口；包括没有会话在用的；账号只在 Hub 里用，
+//      读数过了重置时间按已重置算，从没读过的账号才现查），
 //      挑 5 小时剩余 > 50% 且所有 7 天窗口剩余 > 20% 的，选最宽裕的。
 //      挑到 → 计划「压缩后换号」；确认挑不到（或没开自动换号）→ 只提醒一次更新进展卡，不压缩、不换号；
 //      有账号没查到（限流等）→ 5 分钟后重判。
@@ -125,7 +126,8 @@ function createClaudeQuotaPrecompact({
     for (const profile of profiles() || []) {
       if (profile.id === current.id || !sameRoute(current, profile)) continue;
       try {
-        const windows = allWindows((await broker.usage(profile))?.usage);
+        // 候选账号沿用上次读数（账号只在 Hub 里用，过了重置时间按已重置算），不再逐个查询。
+        const windows = allWindows((await broker.usage(profile, { maxAgeMs: Infinity, why: 'precompact-target' }))?.usage);
         if (qualifies(windows, { min5h, min7d })) rows.push({ profile, slack: Math.min(...windows.map(w => w.remaining)) });
       } catch (error) {
         failed++;
@@ -135,7 +137,7 @@ function createClaudeQuotaPrecompact({
     rows.sort((a, b) => b.slack - a.slack || a.profile.id.localeCompare(b.profile.id));
     if (rows[0]) return { target: rows[0] };
     if (failed) return { transient: true }; // 有账号没查到：不能断定「没有候选」，稍后重判
-    return { reason: `同出口的其他账号都不满足「5 小时剩余 > ${min5h}%、7 天剩余 > ${min7d}%」` };
+    return { reason: `其他账号都不满足「5 小时剩余 > ${min5h}%、7 天剩余 > ${min7d}%」` };
   }
 
   async function evaluate(session, snapshot) {
@@ -206,13 +208,13 @@ function createClaudeQuotaPrecompact({
       if (!target || !source || !stillValid(sessionId, plan)) return gone('plan-invalid');
       const session = sessionManager.getSession(sessionId);
       const model = session.currentModel?.id || session.model || '';
-      const sourceWindows = remainingWindows((await broker.usage(source))?.usage, model);
+      const sourceWindows = remainingWindows((await broker.usage(source, { maxAgeMs: 5 * 60_000, why: 'precompact-source' }))?.usage, model);
       if (!stillValid(sessionId, plan)) return gone('plan-invalid');
       if (sourceWindows && Math.min(...sourceWindows.map(w => w.remaining)) >= triggerRemaining) {
         say(sessionId, '上下文已压缩；当前账号额度已经恢复，不换号。');
         return gone('source-recovered');
       }
-      const targetWindows = allWindows((await broker.usage(target))?.usage);
+      const targetWindows = allWindows((await broker.usage(target, { maxAgeMs: Infinity, why: 'precompact-target' }))?.usage);
       if (!stillValid(sessionId, plan)) return gone('plan-invalid');
       if (!qualifies(targetWindows, { min5h, min7d })) {
         say(sessionId, `上下文已压缩；${plan.targetLabel} 的额度已不再满足换号条件，保持当前账号。`, 'warning');

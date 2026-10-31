@@ -28,14 +28,26 @@ function positiveTimestamp(value) {
  * 有意不看终端原始输出时间戳：那会让任何刷屏的会话不停顶到最上面。
  */
 const ACTIVITY_FIELDS = ['lastCompletedAt', 'lastMessageTime', 'runStartedAt', 'lastRunStartedAt', 'createdAt'];
+const activityCache = new WeakMap();
 
 function latestActivityTime(item, fallback = 0) {
   if (!item || typeof item !== 'object') return positiveTimestamp(fallback);
+  const completed = item.lastCompletedAt, message = item.lastMessageTime, started = item.runStartedAt,
+    lastStarted = item.lastRunStartedAt, created = item.createdAt;
+  const previous = activityCache.get(item);
+  if (previous && previous.completed === completed && previous.message === message && previous.started === started
+      && previous.lastStarted === lastStarted && previous.created === created) return previous.best || positiveTimestamp(fallback);
   let best = 0;
-  for (const field of ACTIVITY_FIELDS) {
-    const value = positiveTimestamp(item[field]);
+  const values = [completed, message, started, lastStarted, created];
+  for (const input of values) {
+    const value = positiveTimestamp(input);
     if (value > best) best = value;
   }
+  // Timestamps are normally numbers/strings. Unusual mutable valueOf/Date
+  // objects keep the uncached conversion path, preserving the old semantics.
+  if (!values.some(value => value && (typeof value === 'object' || typeof value === 'function'))) {
+    activityCache.set(item, { completed, message, started, lastStarted, created, best });
+  } else activityCache.delete(item);
   return best || positiveTimestamp(fallback);
 }
 

@@ -93,7 +93,11 @@ function pinDedicatedAccountDirs({ profiles, runtimeRoot, sharedEnv = null, onDr
       const home = path.join(runtimeRoot, name);
       let marker;
       try { marker = JSON.parse(fs.readFileSync(path.join(home, '.hub-account.json'), 'utf8')); } catch { continue; }
-      const id = owners.has(marker.profile) ? marker.profile : owners.has(marker.contextProfile) ? marker.contextProfile : null;
+      // The route follows the account currently logged in. Since 2026-10-29 a
+      // session can switch across exits, so its original (context) account no
+      // longer says which exit it uses; it is only a fallback for old markers.
+      const id = marker.profile ? (owners.has(marker.profile) ? marker.profile : null)
+        : owners.has(marker.contextProfile) ? marker.contextProfile : null;
       if (id) pinOne(id, home, owners.get(id));
       else if (sharedIds.has(marker.profile)) restoreShared(marker.profile, home);
     }
@@ -103,25 +107,62 @@ function pinDedicatedAccountDirs({ profiles, runtimeRoot, sharedEnv = null, onDr
     catch (error) { onDrift({ profile: id, home, error: error.message }); }
   }
   function restoreShared(id, home) {
-    const file = path.join(home, 'settings.json');
     try {
-      if (!fs.existsSync(file)) return;
-      const settings = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));
-      const env = settings?.env || {};
-      if (!Object.values(env).some(value => dedicatedProxies.has(value))) return;
-      if (!sharedProxyEnv || Object.values(sharedProxyEnv).some(value => dedicatedProxies.has(value))) {
-        onDrift({ profile: id, home, error: '共享账号指向了专线，但主账号代理不可用，未自动修复' });
-        return;
-      }
-      const next = { ...env, ...sharedProxyEnv };
-      for (const key of [...PROXY_KEYS, 'NO_PROXY', 'no_proxy']) if (!(key in sharedProxyEnv)) delete next[key];
-      delete next.NODE_EXTRA_CA_CERTS; delete next.BROWSER;
-      const temporary = `${file}.${process.pid}.pin.tmp`;
-      fs.writeFileSync(temporary, JSON.stringify({ ...settings, env: next }, null, 2), 'utf8');
-      fs.renameSync(temporary, file);
-      onDrift({ profile: id, home, repinned: true });
+      const result = restoreSharedSettings(home, sharedProxyEnv, dedicatedProxies);
+      if (result === 'repinned') onDrift({ profile: id, home, repinned: true });
+      if (result === 'blocked') onDrift({ profile: id, home, error: '共享账号指向了专线，但主账号代理不可用，未自动修复' });
     } catch (error) { onDrift({ profile: id, home, error: error.message }); }
   }
+}
+
+// A shared-exit account dir must not keep a dedicated route in settings.json
+// (e.g. a session that switched from Claude 3 to the main account): put the
+// shared proxy back. 'unchanged' | 'repinned' | 'blocked' (shared exit unknown).
+function restoreSharedSettings(home, sharedProxyEnv, dedicatedProxies) {
+  const file = path.join(home, 'settings.json');
+  if (!fs.existsSync(file)) return 'unchanged';
+  const settings = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));
+  const env = settings?.env || {};
+  if (!Object.values(env).some(value => dedicatedProxies.has(value))) return 'unchanged';
+  if (!sharedProxyEnv || Object.values(sharedProxyEnv).some(value => dedicatedProxies.has(value))) return 'blocked';
+  const next = { ...env, ...sharedProxyEnv };
+  for (const key of [...PROXY_KEYS, 'NO_PROXY', 'no_proxy']) if (!(key in sharedProxyEnv)) delete next[key];
+  delete next.NODE_EXTRA_CA_CERTS; delete next.BROWSER;
+  const temporary = `${file}.${process.pid}.pin.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify({ ...settings, env: next }, null, 2), 'utf8');
+  fs.renameSync(temporary, file);
+  return 'repinned';
+}
+
+// Bring one session runtime dir in line with the account now logged in, before
+// Claude starts there: dedicated → pin its route; shared → drop any dedicated
+// route left by an earlier login. Throws when the exit cannot be made certain.
+function alignRuntimeEgress({ home, profile, profiles, sharedEnv }) {
+  const strictEnv = environment(profile);
+  if (strictEnv) return pinSettingsEgress(home, strictEnv);
+  const dedicated = new Set();
+  for (const other of profiles || []) { try { const env = environment(other); if (env) dedicated.add(env.HTTPS_PROXY); } catch {} }
+  const sharedProxyEnv = sharedEnv && Object.fromEntries([...PROXY_KEYS, 'NO_PROXY', 'no_proxy']
+    .filter(key => typeof sharedEnv[key] === 'string').map(key => [key, sharedEnv[key]]));
+  const result = restoreSharedSettings(home, sharedProxyEnv && Object.keys(sharedProxyEnv).length ? sharedProxyEnv : null, dedicated);
+  if (result === 'blocked') throw new Error('会话目录里还留着专线设置，主账号代理又不可用，无法确定出口');
+  return result === 'repinned';
+}
+
+// Before a session moves to another exit: ask through the target's own route
+// which IP the world sees. Dedicated routes must show their configured IP;
+// the shared exit must match its recorded baseline (if one exists).
+async function verifyRoute(profile, { sharedProxy = null, sharedBaseline = null, request = requestViaProxy } = {}) {
+  const p = policy(profile);
+  if (p) {
+    const [result] = await checkDedicatedEgress([profile], request);
+    return result?.state === 'ok' ? { ok: true, ip: result.ip }
+      : { ok: false, reason: result?.state === 'mismatch' ? `专线出口 IP 是 ${result.ip}，应为 ${result.expected}` : '专线连不上' };
+  }
+  if (!sharedProxy) return { ok: false, reason: '主账号代理未设置，无法确认出口' };
+  const shared = await checkSharedEgress(sharedProxy, sharedBaseline, request);
+  return shared.state === 'ok' ? { ok: true, ip: shared.ip }
+    : { ok: false, reason: shared.state === 'mismatch' ? `共享出口 IP 是 ${shared.ip}，原为 ${shared.expected}` : '共享出口连不上' };
 }
 
 // Ask, through each dedicated route itself, which IP the world sees. The VPS
@@ -263,4 +304,4 @@ function createAccountFetch({ legacyFetch, sharedProxy = () => null }) {
   };
 }
 
-module.exports = { policy, environment, sameRoute, assertSameRoute, requestViaProxy, createAccountFetch, sharedRouteProxy, childShellScript, prepareChildShellEnv, pinSettingsEgress, pinDedicatedAccountDirs, checkDedicatedEgress, checkSharedEgress, PROXY_KEYS };
+module.exports = { policy, environment, sameRoute, assertSameRoute, restoreSharedSettings, alignRuntimeEgress, verifyRoute, requestViaProxy, createAccountFetch, sharedRouteProxy, childShellScript, prepareChildShellEnv, pinSettingsEgress, pinDedicatedAccountDirs, checkDedicatedEgress, checkSharedEgress, PROXY_KEYS };

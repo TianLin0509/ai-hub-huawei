@@ -84,9 +84,11 @@ function createAutoTitleManager(deps) {
     const system = scope === 'meeting'
       ? '你是房间命名器。根据用户在 AI 群聊中的第一句话生成中文短标题，8到16个汉字或等长短语，不要引号，不要解释。'
       : '你是会话命名器。根据用户第一句话生成中文短标题，8到16个汉字或等长短语，不要引号，不要解释。';
+    // 公司版：本地规则起名（core/local-session-title.js），不再为一个标题开一个 CodeAgent 会话（2026-10-30 用户：
+    // 那个会话 30–90 秒、几百 MB、出现在侧栏，CodeAgent 记着的模型名不对时还报「模型不存在」）。
     if (require('../core/company-ai-policy').companyOnly()) {
-      const answer = await deps.runCompanyAi({system, text:prompt, label:'会话标题'});
-      return String(answer.text || '').replace(/["'“”‘’\r\n]/g, '').trim().slice(0, 30);
+      const title = require('../core/local-session-title').titleFromPrompt(prompt);
+      return scope === 'meeting' && title ? `群聊 · ${title}` : title;
     }
     // 2026-10-13 起用 V4.1 Flash 的官方新名 deepseek-flash。它默认开思考，40 个 token 会被推理吃掉、
     // 标题变空；旧名 deepseek-chat 是不开思考的同一模型，所以这里显式关掉思考，行为与原来一致。

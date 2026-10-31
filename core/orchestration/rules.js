@@ -19,7 +19,7 @@ function rulesFor(dataDir, meeting, memberId) {
   const tools = lead ? ['orch_status', 'orch_propose_plan', 'orch_send_message', 'orch_allow_peer', 'orch_decide_peer', 'orch_start_workflow', 'orch_control_workflow', 'orch_restart_member', 'orch_report']
     : ['orch_status', 'orch_send_message', 'orch_request_peer'];
   const preload = `工具需要先加载（ToolSearch）时，一次加载全部：select:${tools.map(t => 'mcp__hub_orchestrator__' + t).join(',')}。`;
-  const communication = command ? `\n## 群内通信入口\n${preload}可直接使用已挂载的 orch_* 工具；也可把参数写入 UTF-8 JSON 文件，用本机终端调用：\nPowerShell：& '${command.replace(/'/g, "''")}' --tool orch_status --args-file '<参数文件路径>'\n先用空对象 {} 调用 orch_status 获取真实成员编号。工具清单：& '${command.replace(/'/g, "''")}' --list\n${usage}身份由 Hub 绑定，你只需指定收件人。\n` : '';
+  const communication = command ? `\n## 群内通信入口\n${preload}直接调用 orch_*；PowerShell 兜底（参数存 UTF-8 JSON）：\n& '${command.replace(/'/g, "''")}' --tool orch_status --args-file '<参数文件路径>'\norch_status 用 {} 查真实成员编号；同一入口用 --list 列工具。\n${usage}Hub 绑定身份，只指定收件人。\n` : '';
   const briefFile = Brief.ensureBrief(dataDir, meeting);
   if (lead) {
     let ledgerFile = '';

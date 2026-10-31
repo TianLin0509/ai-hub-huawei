@@ -38,7 +38,42 @@ function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, conf
     } catch (e) { if (ticket === epoch) { notice = ''; error = e.message; } }
     finally { busy = ''; if (ticket === epoch) renderStatus(); void refreshVps(); }
   }
-  ipcRenderer.on?.('vps-login-progress', (_e, p) => { if (busy.startsWith('env-') || busy === 'account-edit') { notice = p?.message || notice; renderStatus(); } });
+  // Claude 账号邮箱保管（2026-10-30）：只含邮箱地址、备注和「是否存了密码」，读本机文件，随账号页打开读取。
+  let mail = null;
+  async function refreshMail() {
+    try { const r = await ipcRenderer.invoke('mailbox:list'); mail = r?.ok ? { accounts: r.data } : { error: r?.error || '未响应' }; }
+    catch (e) { mail = { error: e.message }; }
+    if (!page.hidden && view === 'list') renderTools();
+  }
+  async function mailAction(name, payload) {
+    if (busy) return;
+    busy = 'mail-' + name; error = ''; notice = name === 'open' ? '正在打开该账号的登录窗口并进入邮箱…' : ''; renderStatus();
+    const ticket = epoch;
+    try {
+      let r = await ipcRenderer.invoke('mailbox:' + name, payload);
+      if (name === 'open' && r?.ok && r.data?.needsConfirmation) {
+        if (!window.confirm(`登录环境「${r.data.others.join('、')}」还开着。\n切换会关闭它（登录资料保留，未发送的草稿可能丢失）。\n\n确认切换吗？`)) { notice = '已取消，原来的登录窗口保持运行'; return; }
+        r = await ipcRenderer.invoke('mailbox:open', { ...payload, confirmed: true });
+      }
+      if (!r?.ok) throw Error(r?.error || '邮箱操作未完成');
+      if (ticket === epoch) notice = r.data.message || '';
+    } catch (e) { if (ticket === epoch) { notice = ''; error = e.message; } }
+    finally { busy = ''; if (ticket === epoch) renderStatus(); if (name === 'open') void refreshVps(); if (name === 'import') void refreshMail(); }
+  }
+  async function saveMail() {
+    const edit = accountEdit;
+    if (!edit || edit.mode !== 'mail' || busy) return;
+    busy = 'account-edit'; renderStatus();
+    const ticket = epoch;
+    try {
+      const r = await ipcRenderer.invoke('mailbox:save', { profileId: edit.profileId, ...edit.mail });
+      if (!r?.ok) throw Error(r?.error || '邮箱资料未保存');
+      if (ticket !== epoch) return;
+      accountEdit = null; notice = r.data.message; await refreshMail();
+    } catch (e) { if (ticket === epoch && accountEdit) editAccount({ ...accountEdit, error: e.message }); }
+    finally { busy = ''; if (ticket === epoch) renderStatus(); }
+  }
+  ipcRenderer.on?.('vps-login-progress',(_e, p) => { if (busy.startsWith('env-') || busy === 'account-edit') { notice = p?.message || notice; renderStatus(); } });
   // Sidebar badge: accounts whose login or human check needs the person (main process count).
   function setBadge(n) {
     const count = document.getElementById('accounts-attention');
@@ -89,8 +124,9 @@ function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, conf
     body.setAttribute('aria-labelledby', 'ac-tab-' + tab);
     if (!state) { body.innerHTML = '<p class="ac-empty">正在读取账号…</p>'; return renderStatus(); }
     const expanded = [...body.querySelectorAll('details[open]')].map(d => d.dataset.details);
+    const mailFocus = body.contains(document.activeElement) ? document.activeElement.dataset?.mailField : '';
     body.innerHTML = tab === 'ai' ? aiHtml(state, search.value, esc) : tab === 'cli' ? cliHtml(state, search.value, esc) : servicesHtml(toolAccounts, tab, search.value, state, esc, toolAccountsError);
-    if (tab === 'ai' && !search.value) body.innerHTML=codexQuotaHtml(state,esc,accountEdit,vps)+body.innerHTML;
+    if (tab === 'ai' && !search.value) body.innerHTML=codexQuotaHtml(state,esc,accountEdit,vps,mail)+body.innerHTML;
     if (tab === 'ai' && state.tools?.some(tool => tool.tool === 'images' && tool.state === 'changed')) {
       body.innerHTML = '<p class="ac-connection-notice" role="status">生图工具连接配置已变化，生图记录暂不能归入共享账号。请在下方「工具连接」核对。</p>' + body.innerHTML;
     }
@@ -100,7 +136,8 @@ function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, conf
     if (state.progress?.status === 'running') body.innerHTML += `<p class="ac-connection-notice" role="status">${esc('正在后台确认登录（' + state.progress.done + '/' + state.progress.total + '），不影响打开网页')}</p>`;
     else if (!state.progress?.auto && (state.progress?.error || state.progress?.warnings?.length)) body.innerHTML += `<p class="ac-item-error">${esc(state.progress.error || state.progress.warnings.join(' / '))}</p>`;
     for (const d of body.querySelectorAll('details')) d.open = expanded.includes(d.dataset.details);
-    const input = body.querySelector('[data-account-input]');
+    // The mail form keeps the caret in the field being typed when a periodic refresh redraws the page.
+    const input = body.querySelector('[data-account-input]:not([data-mail-field])') || (accountEdit?.mode === 'mail' ? body.querySelector(`[data-mail-field="${mailFocus || 'email'}"]`) : null);
     if (input) { input.focus({ preventScroll: true }); input.setSelectionRange(input.value.length, input.value.length); }
     if (authTarget) {
       const target = [...body.querySelectorAll('[data-ac="authorize"]')].find(b => b.dataset.id === authTarget);
@@ -242,7 +279,7 @@ function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, conf
     epoch++; clearTimeout(timer); previousFocus = document.activeElement;
     page.hidden = false; document.body.classList.add('accounts-open');
     document.getElementById('btn-rail-accounts')?.setAttribute('aria-expanded', 'true');
-    view = 'list'; error = ''; notice = ''; render(); void refreshVps(); await refresh();
+    view = 'list'; error = ''; notice = ''; render(); void refreshVps(); void refreshMail(); await refresh();
     void refreshToolAccounts();
     if (provider && !page.hidden) await configure(provider);
   }
@@ -275,6 +312,14 @@ function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, conf
     else if (a === 'env-stop') void envAction('stop', b.dataset.profile);
     else if (a === 'env-bind') editAccount({ mode: 'bind', kind: 'claude', profileId: b.dataset.profile, loginEnv: 'new' });
     else if (a === 'account-save') void saveAccountEdit();
+    else if (a === 'mail-edit') {
+      const m = mail?.accounts?.[b.dataset.profile], row = state?.clis?.find(c => c.kind === 'claude' && (c.profileId || 'default') === b.dataset.profile);
+      editAccount({ mode: 'mail', kind: 'claude', profileId: b.dataset.profile, mail: { email: m?.email || (/@/.test(row?.account || '') ? row.account : ''), recoveryEmail: m?.recoveryEmail || '', note: m?.note || '', password: '', recoveryPassword: '', totpSecret: '' } });
+    }
+    else if (a === 'mail-save') void saveMail();
+    else if (a === 'mail-import') void mailAction('import', {});
+    else if (a === 'mail-copy') void mailAction('copy', { profileId: b.dataset.profile, which: b.dataset.which });
+    else if (a === 'mail-open') void mailAction('open', { profileId: b.dataset.profile, which: b.dataset.which });
     else if (a === 'codex-quota') void switchCodexQuota(b.dataset.profile);
     else if (a === 'claude-quota') void switchCodexQuota(b.dataset.profile,'claude');
     else if (a === 'gemini-quota') void switchCodexQuota(b.dataset.profile,'gemini');
@@ -289,10 +334,13 @@ function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, conf
     }
   });
   search.addEventListener('input', renderTools);
-  page.addEventListener('input', e => { if (e.target.matches?.('[data-account-input]') && accountEdit) accountEdit.value = e.target.value; });
+  page.addEventListener('input', e => {
+    if (e.target.dataset?.mailField && accountEdit?.mode === 'mail') accountEdit.mail = { ...accountEdit.mail, [e.target.dataset.mailField]: e.target.value };
+    else if (e.target.matches?.('[data-account-input]') && accountEdit) accountEdit.value = e.target.value;
+  });
   page.addEventListener('keydown', e => {
-    if (!e.target.matches?.('[data-account-input]') || e.isComposing) return;
-    if (e.key === 'Enter') { e.preventDefault(); void saveAccountEdit(); }
+    if (!e.target.matches?.('[data-account-input],[data-mail-field]') || e.isComposing) return;
+    if (e.key === 'Enter') { e.preventDefault(); void (accountEdit?.mode === 'mail' ? saveMail() : saveAccountEdit()); }
     else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); editAccount(null); }
   }, true);
   tabs.addEventListener('keydown', e => { const i = TABS.findIndex(t => t.id === tab); const next = ({ArrowRight: (i+1)%TABS.length, ArrowLeft: (i+TABS.length-1)%TABS.length, Home: 0, End: TABS.length-1})[e.key]; if (next !== undefined) { e.preventDefault(); selectTab(TABS[next].id); } });

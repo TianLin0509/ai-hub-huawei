@@ -12,6 +12,8 @@ const { isPtyAgentSession } = require('../core/agent-runtime-mode.js');
 const { installHiddenRenderGuard } = require('./xterm-hidden-render-guard.js');
 const { setBehindCardsPaused } = require('./xterm-card-pause.js');
 const { installSharedWidthCache } = require('./xterm-shared-width-cache.js');
+// 无限循环动画只动一小会儿就停（整窗按刷新率重画的根源，见 animation-budget.js）。
+try { require('./animation-budget.js').installAnimationBudget(); } catch (error) { console.warn('[animation-budget]', error && error.message); }
 // 公司版默认回到 9 月的「后台」路径：终端按实际尺寸常驻在卡片下面，点后台只藏卡片层（见 core/backstage-path.js）。
 const BACKSTAGE_KEEPS_TERMINAL = require('../core/backstage-path.js').keepsTerminalBehindCards();
 // 主面板的终端此刻是否「收起」：10 月路径下卡片视图里终端不显示、不调尺寸；9 月路径下它一直在卡片下面活着。
@@ -5083,13 +5085,14 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     const hookWarning = session.hookIntegrationWarning ? '状态信号降级（hook 未部署）：' + session.hookIntegrationWarning : '';
     // 写作成员没能用上写作专用配置时同样要让人看见（core/session-manager.js 的写作目录准备）
     const writingWarning = session.writingContextWarning ? (/^scene-/.test(session.purpose || '') ? '场景降级：' : '写作上下文降级：') + session.writingContextWarning : '';
+    const userContextWarning = session.userContextWarning || '';
     // 后台任务不在工具行里滚动，只靠 job/registered → job/settled 这对事件说明
     // 「现在还有活没干完」。没有这条，长命令期间的状态行只在走秒，看着像卡住。
     const runningJobs = Array.isArray(session.backgroundJobs?.running) ? session.backgroundJobs.running : [];
     const jobsText = runningJobs.length
       ? `后台 ${runningJobs.length} 个：${runningJobs.map(job => job.label || job.kind || '任务').join('、')}`
       : '';
-    const detailText = [localHealth, status.detail, jobsText, hookWarning, writingWarning, session.claudeSwitchStatus?.message].filter(Boolean).join(' · ');
+    const detailText = [localHealth, status.detail, jobsText, hookWarning, writingWarning, userContextWarning, session.claudeSwitchStatus?.message].filter(Boolean).join(' · ');
     const detail = detailText ? `· ${detailText}` : '';
     if (statusDetail.textContent !== detail) statusDetail.textContent = detail;
     statusDetail.hidden = !detail;
@@ -5101,7 +5104,8 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       statusAction.hidden = true;
       statusAction.dataset.actionKind = '';
     }
-    if (statusRow.title !== status.runtime.title) statusRow.title = status.runtime.title;
+    const statusTitle = [status.runtime.title, userContextWarning].filter(Boolean).join('\n');
+    if (statusRow.title !== statusTitle) statusRow.title = statusTitle;
     ptyAttention.update(session, runtime);
 
     // Keep the exact second-level status/question/connection checks. A clock
@@ -9655,6 +9659,11 @@ const PERSIST_DELAY_MS = 400;
 const PERSIST_MIN_INTERVAL_MS = 2000;
 let persistDebounceTimer = null;
 let lastPersistSentAt = 0;
+const { createSessionProjectionCache } = require('../core/session-sidebar-state');
+const cachePersistedSession = createSessionProjectionCache();
+const cachePersistedMeeting = createSessionProjectionCache();
+let previousPersistedSessions = null;
+let previousPersistedMeetings = null;
 function schedulePersist() {
   if (persistDebounceTimer) return;
   const delay = Math.max(PERSIST_DELAY_MS, lastPersistSentAt + PERSIST_MIN_INTERVAL_MS - Date.now());
@@ -9667,7 +9676,7 @@ function persistWorkscene(flush = false) {
     for (const s of sessions.values()) {
       // 持久化白名单：AI 群聊会议 + 所有 AI kind（含 -resume 变体）。新增 AI 由 ai-kinds.js 单一真理源覆盖。
       if (!s.meetingId && !isAiKind(s.kind) && s.kind !== 'claude-resume' && !(typeof s.kind === 'string' && s.kind.endsWith('-resume'))) continue;
-      list.push({
+      const project = s => ({
         hubId: s.id,
         title: s.title,
         kind: s.kind,
@@ -9760,18 +9769,22 @@ function persistWorkscene(flush = false) {
         hiddenFromSidebar: !!s.hiddenFromSidebar,
         completionNotificationEnabled: s.completionNotificationEnabled === true,
       });
+      // Keep the legacy Date.now() fallback live for records without an activity
+      // timestamp; ordinary restored sessions reuse their persisted projection.
+      list.push(s.lastMessageTime ? cachePersistedSession(s, project) : project(s));
     }
         //   slotSpecs/covenantText 全被剥掉 → 写残 state.json → 重启后 restoreMeeting fallback
     //   scene='general'，所有 AI 群聊退化为通用场景（投研 ResearchAgent MCP 不挂入）。
     //   修：补全所有 createMeeting 写入 + setMeetingContext 维护的持久化字段。
     //   main.js persist-sessions handler 端加了 fallback 兜底，但渲染端先把字段补全是第一道防线。
-    const meetingList = Object.values(meetings).map(m => ({
+    const meetingList = Object.values(meetings).map(m => cachePersistedMeeting(m, m => ({
       id: m.id, type: 'meeting', title: m.title, subSessions: m.subSessions,
       layout: m.layout, focusedSub: m.focusedSub, syncContext: m.syncContext,
       sendTarget: m.sendTarget, createdAt: m.createdAt, lastMessageTime: m.lastMessageTime,
       lastCompletedAt: typeof m.lastCompletedAt === 'number' ? m.lastCompletedAt : null,
       pinned: !!m.pinned, bottomed: !!m.bottomed && !m.pinned, lastScene: m.lastScene || null,
       scene: m.scene, mode: m.mode,
+      ...require('../core/group-scene-hint').sceneHintFields(m.sceneHint),
       userRenamed: !!m.userRenamed,
       autoTitlePending: !!m.autoTitlePending,
       autoTitleGenerated: !!m.autoTitleGenerated,
@@ -9783,9 +9796,15 @@ function persistWorkscene(flush = false) {
       serialWorkflow: (m.serialWorkflow && typeof m.serialWorkflow === 'object') ? m.serialWorkflow : null,
       orchestration: (m.orchestration && typeof m.orchestration === 'object') ? m.orchestration : null,
       completionNotificationEnabled: m.completionNotificationEnabled === true,
-    }));
+    })));
     if (flush) return ipcRenderer.invoke('persist-sessions:flush', list, meetingList);
+    if (previousPersistedSessions && meetingList.length === previousPersistedMeetings.length
+        && meetingList.every((row, i) => row === previousPersistedMeetings[i])
+        && list.length === previousPersistedSessions.length
+        && list.every((row, i) => row === previousPersistedSessions[i])) return;
     ipcRenderer.send('persist-sessions', list, meetingList);
+    previousPersistedSessions = list;
+    previousPersistedMeetings = meetingList;
 }
 // 暴露给 meeting-room.js 等 renderer 子模块：配置变更后可主动落 state.json
 window.schedulePersist = schedulePersist;

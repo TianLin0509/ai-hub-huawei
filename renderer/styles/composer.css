@@ -217,18 +217,14 @@
 
 .composer[data-state='working'] .composer-status-dot {
   background: var(--brand);
-  box-shadow: 0 0 0 3px rgba(var(--rgb-brand), .18);
-  animation: composer-status-breathe 1.6s ease-in-out infinite;
+  /* 2026-10-30 静态外环：呼吸动画改阴影，每帧都要重画（实测界面 24% + 显卡 24%）。 */
+  box-shadow: 0 0 0 3px rgba(var(--rgb-brand), .22);
 }
 .composer[data-state='waiting'] .composer-status { color: var(--status-warning); }
 .composer[data-state='waiting'] .composer-status-dot { background: var(--status-warning); }
 .composer[data-state='dead'] .composer-status { color: var(--status-danger); }
 .composer[data-state='dead'] .composer-status-dot { background: var(--status-danger); }
 
-@keyframes composer-status-breathe {
-  0%, 100% { box-shadow: 0 0 0 2px rgba(var(--rgb-brand), .12); }
-  50% { box-shadow: 0 0 0 4px rgba(var(--rgb-brand), .26); }
-}
 
 /* ── 快捷答复 ─────────────────────────────────────────────────────────── */
 .composer-quick-replies {

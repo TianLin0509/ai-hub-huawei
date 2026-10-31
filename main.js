@@ -49,7 +49,6 @@ const {
   resolveHubLaunchExePath,
 } = require('./core/hub-exe-branding.js');
 const { isPackagedHubRuntime } = require('./core/electron-runtime-mode.js');
-const { acquireLockAsync, releaseLockAsync } = require('./core/file-lock.js');
 const {
   ensureClaudeHookIntegration,
   startClaudeHookIntegrationWatchdog,
@@ -218,8 +217,9 @@ const sessionSearchService = new SessionSearchService({
   // 每个会话一份只含对话的 md 聊天记录，供分享路径与造梦阅读；由索引派生，可重建。
   transcriptDir: require('./core/data-dir').getHubTranscriptDir(),
   refreshTtlMs: Number(process.env.HUB_SESSION_SEARCH_REFRESH_TTL_MS) || 60_000,
-  // Production warms the persistent index after the latency-sensitive boot
-  // path. Isolated Hubs stay opt-in so an unrelated E2E can never scan the
+  // Production watches for indexing work after the latency-sensitive boot
+  // path; unchanged inventories do not allocate a search child. Isolated Hubs
+  // stay opt-in so an unrelated E2E can never scan the
   // user's real native transcript roots merely because it launched the app.
   prewarmEnabled: process.env.HUB_SESSION_SEARCH_PREWARM === '1'
     || (process.env.HUB_SESSION_SEARCH_PREWARM !== '0' && !isIsolatedHub()),
@@ -605,6 +605,8 @@ const claudeAccountBroker = require('./core/claude-account-credentials').createC
     return { status: response.status, data, retryAfterMs: /^\d+$/.test(retryAfter || '')
       ? Number(retryAfter) * 1000 : Math.max(0, Date.parse(retryAfter) - Date.now()) || 0 };
   },
+  // Request-free readings (status line, earlier answers) for the same account.
+  cachedUsage: profile => claudeCache(currentClaudeScope(profile.id)),
   onUsage: (profile, snapshot) => {
     const window = value => value && typeof value.utilization === 'number'
       ? { pct: value.utilization, resetsAt: Date.parse(value.resets_at) || 0 } : null;
@@ -627,6 +629,14 @@ const claudeAccountSwitch = require('./main/claude-account-switch').createClaude
   prefreshEnabled: () => getHubConfig().claudeBackend !== 'api',
   // 换号后在新进程里接着原对话，并换一个新的原生会话编号（2026-10-28）。
   relaunch: (id, guard) => relaunchClaudeAfterAccountSwitch(id, guard),
+  // 跨出口换号前经目标线路实测出口 IP（2026-10-29）：专线对配置 IP，共享出口对已记录的基线。
+  verifyRoute: profile => {
+    const tools = require('./core/claude-subscription-profiles'), network = require('./core/claude-account-network');
+    let sharedProxy = null, sharedBaseline = null;
+    try { sharedProxy = network.sharedRouteProxy(tools.sharedNetworkEnv(getHubConfig()).HTTPS_PROXY); } catch {}
+    try { sharedBaseline = JSON.parse(fs.readFileSync(path.join(getHubDataDir(), 'claude-egress-baseline.json'), 'utf8')).shared || null; } catch {}
+    return network.verifyRoute(profile, { sharedProxy, sharedBaseline });
+  },
 });
 function relaunchClaudeAfterAccountSwitch(id, guard) {
   return sessionOperations.restartSession(id, { claudeForkOnResume: true }, { reason: 'account-switch', guard });
@@ -640,7 +650,8 @@ try {
       const config = getHubConfig();
       return tools.normalizeProfiles(config.claudeSubscriptionProfiles).map(p => tools.resolveProfile(config, p.id));
     },
-    sameRoute: (a, b) => require('./core/claude-account-network').sameRoute(a, b),
+    // 2026-10-29 起可跨出口换号：候选不再限同出口，出口核对在换号那一步做。
+    sameRoute: () => true,
     requestAccount: (id, profileId) => claudeAccountSwitch.requestAccount(id, profileId),
     notify: (sessionId, message, level) => sendToRenderer('session-notice', { sessionId, message, level }),
   });
@@ -2455,6 +2466,40 @@ function companyHubAdmin() { return null; }
 // 公司版「助理」（2026-10-16）：每日简报 + 对话 + 6 条提醒，只读 WeLink，数据只留在本机 Hub 数据目录。
 let companyAssistantService = null;
 const teamAccess = { assert() { throw new Error('该功能未启用'); } };
+// 可选功能（2026-10-30，core/optional-features.js）：助理、论坛、桌宠默认关，设置菜单「可选功能」与各自页面里开关。
+// 关着时助理、论坛的服务照样建好（页面能显示「未开启」和开关），但不调 start()，后台不取数、不开窗口。
+const optionalFeatures = require('./core/optional-features').createOptionalFeatures({
+  dataDir: getHubDataDir(),
+  defaults: process.env.CLAUDE_HUB_DATA_DIR ? { assistant: process.env.CLAUDE_HUB_COMPANY_ASSISTANT === '1', forum: process.env.CLAUDE_HUB_COMPANY_FORUM === '1' } : {},
+});
+function optionalFeatureList() {
+  const { CATALOG } = require('./core/optional-features');
+  const out = [];
+  if (companyAssistantService) out.push({ id: 'assistant', ...CATALOG.assistant, on: optionalFeatures.get('assistant') });
+  if (companyForumService) out.push({ id: 'forum', ...CATALOG.forum, on: optionalFeatures.get('forum') });
+  if (hubPetController && require('./core/distribution').featureEnabled('hubPet')) out.push({ id: 'pet', ...CATALOG.pet, on: !!hubPetController.getSettings().enabled });
+  return out;
+}
+ipcMain.handle('optional-features:list', () => optionalFeatureList());
+ipcMain.handle('optional-features:set', (_event, request = {}) => {
+  try {
+    const id = String(request.id || ''), on = request.on === true;
+    if (id === 'pet') {
+      if (!hubPetController) throw new Error('这个版本没有桌宠');
+      hubPetController.setSettings({ enabled: on });
+    } else if (id === 'assistant' && companyAssistantService) {
+      if (!on && !companyAssistantService.canPause()) throw new Error('有会议正在采集，先在助理页结束会议再关');
+      optionalFeatures.set('assistant', on);
+      if (on) companyAssistantService.start(); else companyAssistantService.pause();
+    } else if (id === 'forum' && companyForumService) {
+      optionalFeatures.set('forum', on);
+      if (on) companyForumService.start(); else companyForumService.close();
+    } else throw new Error('这个版本没有这项功能');
+    const list = optionalFeatureList();
+    sendToRenderer('optional-features:changed', list);
+    return { ok: true, list };
+  } catch (error) { return { ok: false, error: error.message }; }
+});
 try {
   if (require('./core/company-assistant/gate').companyAssistantEnabled()) {
     const { CompanyAssistant } = require('./core/company-assistant/service');
@@ -2515,7 +2560,7 @@ try {
       // 点通知打开助理页（页面认这个固定编号），不直接跳进会话。
       try { void desktopNotificationController?.show({ sessionId: 'company-assistant', title: notice.title, body: notice.text, kind: 'assistant' }); } catch (error) { console.warn('[company-assistant] notification', error.message); }
     });
-    companyAssistantService.start();
+    if (optionalFeatures.get('assistant')) companyAssistantService.start();
     const bridgeMcpPlan = sessionManager.extraMcpProvider;
     sessionManager.setExtraMcpProvider(request => companyAssistantService.sessionPlan(request) || (bridgeMcpPlan ? bridgeMcpPlan(request) : null));
     require('./main/ipc/company-assistant-handlers').registerCompanyAssistantIpc(ipcMain, companyAssistantService);
@@ -2590,7 +2635,7 @@ try {
       readFinals: meta => { const r = live.read({ ...meta, id: meta.id || meta.hubId, kind: 'claude' }); return r && r.available ? r.records : []; },
       onChanged: () => sendToRenderer('company-forum:changed', {}),
     });
-    companyForumService.start();
+    if (optionalFeatures.get('forum')) companyForumService.start();
     require('./main/ipc/company-forum-handlers').registerCompanyForumIpc(ipcMain, companyForumService, { shell, browser: companyForumBrowser });
   }
 } catch (error) { console.error('[company-forum] 论坛未启动：', error.message); }
@@ -2937,19 +2982,8 @@ const sessionSearchPrewarmTimer = setTimeout(() => {
     await waitForSearchFirstBuildIdle();
     await waitForSearchIdle();
     sessionSearchService.startMaintenance(buildSessionSearchSnapshot);
-    const lockPath = path.join(getHubDataDir(), 'cache', 'session-search-prewarm.lock');
-    try { fs.mkdirSync(path.dirname(lockPath), { recursive: true }); } catch {}
-    const lock = await acquireLockAsync(lockPath, { retries: 0, staleMs: 30 * 60 * 1000 });
-    if (!lock) return;
-    try {
-      await sessionSearchService.prewarm(buildSessionSearchSnapshot());
-    } catch (error) {
-      console.warn('[session-search] background prewarm failed:', error && error.message);
-    } finally {
-      await releaseLockAsync(lock, lockPath);
-    }
   })().catch(error => {
-    console.warn('[session-search] background prewarm lock failed:', error && error.message);
+    console.warn('[session-search] background maintenance failed:', error && error.message);
   });
 }, sessionSearchPrewarmDelayMs);
 sessionSearchPrewarmTimer.unref?.();
@@ -3422,9 +3456,14 @@ const hookServer = http.createServer((req, res) => {
         const statusSession = parsed.sessionId ? sessionManager.getSession(parsed.sessionId) : null;
         const deepseekStatus = statusSession && !/^claude(?:-resume)?$/.test(statusSession.kind);
         const statusScope = statusSession?.claudeUsageScope || currentClaudeScope(statusSession?.claudeProfile || 'default');
-        // The CLI may retain old account quota in its status-line input after
-        // auth changes. Managed accounts use credential-bound API readings.
-        const staleAccountUsage = !!statusSession?.claudeRuntimeHome;
+        // Every reply brings the account quota for free (2026-10-29). A process
+        // that was already running when its account changed may still hold the
+        // old account's figures, so managed sessions only count readings from
+        // the current native process and login generation.
+        const managedStatus = !!statusSession?.claudeRuntimeHome;
+        const staleAccountUsage = managedStatus && !claudeAccountSwitch.acceptsPassiveUsage({
+          sessionId: parsed.sessionId, nativeSessionId: parsed.nativeSessionId,
+          generation: parsed.claudeAuthGeneration, scope: parsed.claudeScope });
         const filtered = deepseekStatus || staleAccountUsage
           ? { usage5h: null, usage7d: null, anyAccepted: false }
           : claudeFilter(statusScope).filter(parsed.usage5h, parsed.usage7d);
@@ -3445,6 +3484,14 @@ const hookServer = http.createServer((req, res) => {
           linesRemoved: parsed.linesRemoved,
         });
         if (filtered.anyAccepted) cacheAccountUsage({ usage5h: filtered.usage5h, usage7d: filtered.usage7d }, statusScope);
+        if (filtered.anyAccepted && managedStatus) {
+          try {
+            const tools = require('./core/claude-subscription-profiles');
+            const profile = tools.resolveProfile(getHubConfig(), statusSession.claudeProfile || 'default');
+            const snapshot = profile && claudeAccountBroker.cached(profile);
+            if (snapshot) claudeQuotaPrecompact?.onUsage(profile, snapshot);
+          } catch (error) { console.warn('[quota-precompact] passive usage failed:', error.message); }
+        }
       }
     }
     res.writeHead(200); res.end('{}');
@@ -3753,6 +3800,7 @@ const accountProfileUsage = require('./main/usage/account-profile-usage').create
   refreshAntigravity: antigravityProfilesUsage.refresh,
   claudeProfiles: () => require('./core/claude-subscription-profiles').normalizeProfiles(getHubConfig().claudeSubscriptionProfiles),
   claudeScope: currentClaudeScope, claudeCached: claudeCache,
+  claudeAccount: id => { const tools = require('./core/claude-subscription-profiles'); return tools.accountInfo(tools.resolveProfile(getHubConfig(), id).home); },
   // 共享出口 IP：账号页「出口一致性」记下的基线（claude-egress-baseline.json），专线号用自己配置的 IP。
   claudeSharedIp: () => { try { return JSON.parse(fs.readFileSync(path.join(getHubDataDir(), 'claude-egress-baseline.json'), 'utf8')).shared || ''; } catch { return ''; } },
   refreshClaude: scope => claudeRefresher(scope).refresh(),
@@ -3781,7 +3829,7 @@ async function refreshAntigravityUsage(force = false) {
   if (value && scope===antigravityProfilesUsage.scope()) {
     sendToRenderer('agent-usage', {antigravity:value,accounts:accountProfileUsage.list()});
   }
-  return value;
+  return value ? { ...value, authScope: scope } : value;
 }
 registerUsageIpc(ipcMain, {
   clearCodexJsonlCache: () => _codexJsonlCachedByRoot.clear(),
@@ -3798,6 +3846,15 @@ registerUsageIpc(ipcMain, {
 
 // 账号页 · Claude 登录环境（VPS 远程浏览器，2026-10-28 由桌面启动台并入）。
 const vpsLogin = require('./main/ipc/vps-login-handlers').registerVpsLoginIpc(ipcMain, { sendToRenderer, clearSessionManagerConfigCache });
+// 账号页 · Claude 账号邮箱保管（2026-10-30）：密码 safeStorage 加密，邮箱在该账号的登录环境里打开（同一出口）。
+require('./main/ipc/mailbox-handlers').registerMailboxIpc(ipcMain, {
+  safeStorage: require('electron').safeStorage, clipboard,
+  pickFile: async defaultPath => {
+    const r = await dialog.showOpenDialog(BrowserWindow.getFocusedWindow() || undefined, { title: '导入 Claude 账号邮箱资料', defaultPath: defaultPath || undefined, properties: ['openFile'], filters: [{ name: '账号资料', extensions: ['json'] }] });
+    return r.canceled ? '' : r.filePaths[0] || '';
+  },
+  openInLoginEnv: payload => vpsLogin.enabled() ? vpsLogin.open(payload) : Promise.reject(new Error('本机没有接入 VPS 登录环境，无法在账号自己的出口打开邮箱')),
+});
 registerConfigIpc(ipcMain, {
   prepareNewClaudeAccount: payload => vpsLogin.enabled() ? vpsLogin.prepareNew(payload) : Promise.resolve({}),
   requireClaudeExit: () => vpsLogin.enabled(),
@@ -3912,7 +3969,7 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
       };
       const appUpdate = createAppUpdateController({ app, config: memberUpgrade ? editionChannel.updateConfig(distribution.updateConfig, getHubDataDir()) : distribution.updateConfig, dataDir: getHubDataDir(),
         currentVersion: distribution.editionVersion || app.getVersion(), sendToRenderer, prepareLaunch: prepareHubLaunchClean,
-        unblock: unblockOwn, isOwnUrl: url => ownHosts.isOwnUrl(url, ownConfig),
+        unblock: unblockOwn, isOwnUrl: url => ownHosts.isOwnUrl(url, ownConfig), unblockPassed: () => ownUnblocker.passed(),
         restartWait: () => companyHubAdmin()?.restartWaitView?.() || null });
       registerAppUpdateIpc(ipcMain, appUpdate, { gate: { apply: opts => { const admin = companyHubAdmin(); return admin && typeof admin.localApply === 'function' ? admin.localApply(opts) : null; } } });
       appUpdateControllerRef = appUpdate;
@@ -3920,7 +3977,9 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
       try {
         const { createHubFeedbackService, registerHubFeedbackIpc } = require('./main/hub-feedback-service');
         registerHubFeedbackIpc(ipcMain, createHubFeedbackService({
-          endpoint: ownHosts.feedbackEndpoint(ownConfig), logsDir: path.join(getHubDataDir(), 'logs'), unblock: unblockOwn,
+          endpoint: ownHosts.feedbackEndpoint(ownConfig), logsDir: path.join(getHubDataDir(), 'logs'), unblock: unblockOwn, onPassed: () => ownUnblocker.passed(),
+          // 放行后提交仍被拦：在看不见的窗口里直接提交（走浏览器网络栈，拦截页出现在窗口里就点放行），见 core/net-unblock.js postInHiddenWindow。
+          windowPost: (url, body) => ownHosts.isOwnUrl(url, ownConfig) ? netUnblock.postInHiddenWindow(BrowserWindow, url, body) : Promise.resolve({ error: '不是自家地址' }),
           downloadsDir: () => app.getPath('downloads'),
           info: () => ({ productName: distribution.productName, edition: distribution.editionBadge || distribution.target || '',
             version: distribution.editionVersion || app.getVersion(), electron: process.versions.electron, platform: `${process.platform} ${require('os').release()}`,

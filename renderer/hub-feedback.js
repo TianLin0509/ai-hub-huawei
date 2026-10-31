@@ -76,10 +76,13 @@
     sending = true;
     const btn = dialog.querySelector('[data-hf="send"]');
     btn.disabled = true; btn.textContent = '正在发送…';
-    message('info', '正在发送，公司网络需要放行时会自动处理，最多约一分钟');
+    message('info', '正在发送，公司网络需要放行时会自动处理，最多约两分钟');
+    const onProgress = (_e, p) => { if (p && p.click) message('info', p.phase === 'unblocking' ? `公司网络要求放行，正在后台自动放行（第 ${p.click}/${p.maxClicks} 次）…` : p.phase === 'window' ? `改用后台窗口直接提交（第 ${p.click} 次）…` : `已点放行，正在重发（第 ${p.click}/${p.maxClicks} 轮）…`); };
+    ipcRenderer.on('hub-feedback:progress', onProgress);
     let r;
     try { r = await ipcRenderer.invoke('hub-feedback:send', { description: desc, contact: dialog.querySelector('[data-hf="contact"]').value }); }
     catch (error) { r = { ok: false, reason: error.message }; }
+    finally { ipcRenderer.removeListener('hub-feedback:progress', onProgress); }
     sending = false;
     if (r && r.ok) {
       btn.textContent = '已发送';

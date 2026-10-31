@@ -87,6 +87,7 @@ class MeetingRoomManager {
       status: 'idle',
       lastScene: 'free_discussion',
       scene: MEETING_MODES.includes(mode) ? mode : 'general',
+      ...require('./group-scene-hint').sceneHintFields(opts.sceneHint),
       covenantText: '',
       groupChat: true,
       groupMode: typeof opts.groupMode === 'string' ? opts.groupMode : 'deliberation',
@@ -364,7 +365,8 @@ class MeetingRoomManager {
       } else {
         scene = 'general';
       }
-    } else if (scene === 'general' && typeof meetingData.title === 'string') {
+    } else if (scene === 'general' && !Object.hasOwn(meetingData, 'sceneHint') && typeof meetingData.title === 'string') {
+      // 新通用群用 sceneHint 空值表示自动话题，名称中的「投研/开发」不再触发旧数据修复。
       // 2026-05-05 maintainer：scene-title 不一致检测 — 上次 fix（line 上方）的 title 兜底
       //   只在 scene 字段缺失时生效，但用户既存 state.json 里 scene 已被旧版错写为 'general'，
       //   兜底救不到。补一道：scene='general' 但 title 含 '投研'/'开发' 视为旧版数据迁移
@@ -407,6 +409,7 @@ class MeetingRoomManager {
       status: 'dormant',
       lastScene: meetingData.lastScene || 'free_discussion',
       scene,
+      ...require('./group-scene-hint').sceneHintFields(meetingData.sceneHint),
       covenantText: meetingData.covenantText || meetingData['general' + 'Round' + 'tableCovenant'] || '',
       groupChat: true,
       groupMode: meetingData.groupMode || 'deliberation',

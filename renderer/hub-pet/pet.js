@@ -436,6 +436,9 @@
   }
   document.addEventListener('mousemove', e => { if (!pressing) setHit(!!hitTarget(e.clientX, e.clientY)); });
   document.addEventListener('mouseleave', () => { if (!pressing) setHit(false); });
+  // 窗口点穿时收不到 mousemove：主进程看到光标进了窗口方框，就把位置发过来问一次（不再用全局鼠标钩子）。
+  // 接住时总要回报：主进程可能已因光标出框自行改回点穿，这时 hitNow 还是旧值。
+  api.onProbe?.(p => { if (pressing || !p) return; const v = !!hitTarget(Number(p.x) || 0, Number(p.y) || 0); hitNow = v; if (v) api.hit(true); });
   document.addEventListener('pointerdown', e => {
     if (e.button !== 0) return;
     const target = hitTarget(e.clientX, e.clientY);

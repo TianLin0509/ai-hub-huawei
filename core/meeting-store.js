@@ -56,6 +56,7 @@ function _buildMeetingPayload(id, data) {
     // ── v2 新增：完整 meeting metadata（用于 boot 自我修复） ──
     title: typeof data.title === 'string' ? data.title : null,
     scene: typeof data.scene === 'string' ? data.scene : null,
+    ...require('./group-scene-hint').sceneHintFields(data.sceneHint),
     createdAt: typeof data.createdAt === 'number' ? data.createdAt : null,
     subSessions: Array.isArray(data.subSessions) ? data.subSessions : [],
     layout: typeof data.layout === 'string' ? data.layout : 'focus',

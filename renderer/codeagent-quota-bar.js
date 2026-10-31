@@ -84,7 +84,7 @@ function createCodeAgentQuotaBar({ document, storage = null, now = () => Date.no
       const name = rows.length > 1 ? `CA ${account}` : 'CodeAgent';
       const label = metrics.map((m, i) => `${i ? '' : `CodeAgent ${account} `}${m.bucket}剩余 ${m.pct}%（${m.detail}）`).join(' · ')
         + (hint ? ` · ${hint.full}` : '');
-      const sources = [r ? `Stats 面板 · ${ago(now() - r.at)}` : '', u && u.credit ? `/model 菜单 · ${ago(now() - u.at)}` : ''].filter(Boolean);
+      const sources = [r ? `Stats 面板 · ${ago(now() - r.at)}` : '', u && u.credit ? `${u.source === 'serve' ? 'CodeAgent 接口' : '/model 菜单'} · ${ago(now() - u.at)}` : ''].filter(Boolean);
       const title = `${label}\n读自 CodeAgent 界面 ${sources.join('；')}`;
       return `<div class="sidebar-quota-provider" data-provider="codeagent" data-freshness="${stale ? 'stale' : 'fresh'}" aria-label="${escapeHtml(label)}" title="${escapeHtml(title)}">`
         + '<span class="sidebar-quota-icon ai-logo logo-codeagent" aria-hidden="true"></span>'

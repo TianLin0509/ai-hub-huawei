@@ -52,6 +52,10 @@ function registerSessionIpc(ipcMain, deps) {
     // 登录窗口打开后多久看一次凭证（单测可缩短）；获取模型权限的实现（单测可替换）。
     codeagentLoginPollMs = 3000,
     codeagentProbeModels = null,
+    // 经 CodeAgent serve 读模型清单与额度的实现（单测可替换，core/codeagent-serve.js readAccount）
+    codeagentServeRead = null,
+    // 开 Hub 后多久在后台补读模型清单（单测可缩短）
+    codeagentStartupProbeMs = 20000,
   } = deps;
   require('./codex-backstage-handlers').registerCodexBackstageIpc(ipcMain, { sessionManager });
   require('../../core/codex-fast-command').registerCodexSpeedIpc(ipcMain,{sessionManager,sendToRenderer});
@@ -566,7 +570,7 @@ function registerSessionIpc(ipcMain, deps) {
       if (payload && payload.account === 'pool' && payload.poolAccount) {
         const account = codeagentPoolAccounts().find(a => a.id === payload.poolAccount);
         if (!account) return { options: [] };
-        if (account.state === 'ready' && !account.sameAsPersonal && !account.duplicateOf && codeagentProbeStale(account.modelsProbedAt)) {
+        if (account.state === 'ready' && !account.sameAsPersonal && !account.duplicateOf && codeagentProbeStale(account.modelsProbedAt, account.modelsSource, { opening: true })) {
           try { autoProbeCodeAgentAccount(account.id); } catch { /* 只影响下次 */ }
         }
         return { options: asOptions(account.models), defaultModel: sameCase(account.models, pool.plannedModel(account.dir, { idle: !account.activeSessions })) };
@@ -600,7 +604,7 @@ function registerSessionIpc(ipcMain, deps) {
       // 个人账号：一键获取过模型权限就用读到的菜单，否则沿用原来的清单
       const probed = require('../../core/codeagent-model-probe').readProbed(pool.personalModelsFile(getHubDataDir()));
       // 记着的清单太旧：后台重新获取一次，这次照旧列旧的，下次打开下拉就是新的
-      if (probed && codeagentProbeStale(probed.at)) { try { autoProbeCodeAgentAccount('personal'); } catch { /* 只影响下次 */ } }
+      if (probed && codeagentProbeStale(probed.at, probed.source, { opening: true })) { try { autoProbeCodeAgentAccount('personal'); } catch { /* 只影响下次 */ } }
       if (probed) return { options: asOptions(probed.models), defaultModel: sameCase(probed.models, defaultModel) };
       const options = require('../../core/codeagent-config').localModelOptions(getHubDataDir());
       return { options, defaultModel: sameCase(options.map(o => o.id), defaultModel) };
@@ -656,7 +660,7 @@ function registerSessionIpc(ipcMain, deps) {
       personal: { accountLabel: pool.maskAccountId(personal.accountId), method: personal.method || null, present: !!personal.present,
         // 登录状态（2026-10-19）：ready / expired / login-required / unreadable；启动中心据此提示「个人账号要重新登录」
         state: pool.accountState(personal), expiresAt: personal.expiresAt || null, ...(personal.detail ? { credentialsNote: personal.detail } : {}),
-        activeSessions: personalActive, models: personalModels.models, modelsProbedAt: personalModels.probedAt || null, ...quotaOf('personal'),
+        activeSessions: personalActive, models: personalModels.models, modelsProbedAt: personalModels.probedAt || null, modelsSource: personalModels.probedSource || null, ...quotaOf('personal'),
         ...(personalCheck && personalCheck.configMismatch ? { configNote: require('../../core/codeagent-model-route').describeMismatch(personalCheck.configMismatch) } : {}) } };
   }
   // 一键获取模型权限：后台起这个账号的 CodeAgent 读 /model 菜单（core/codeagent-model-probe.js），一次只跑一个。
@@ -671,7 +675,9 @@ function registerSessionIpc(ipcMain, deps) {
       if (entry) sendToRenderer('codeagent-usage-changed', { key });
     } catch { /* 只影响用量显示 */ }
   }
-  const codeagentAutoTried = new Set();
+  const codeagentAutoTried = new Map(); // 号 → { at: 上次自动获取的时间, serveOk: 那次是否经 serve 读成功 }
+  const codeagentLastSource = new Map(); // 号 → 上次获取成功走的路（serve / menu）
+  const codeagentServeEnabled = dataDir => require('../../core/codeagent-serve').serveEnabled(dataDir);
   function probeCodeAgentAccount(id) {
     const run = async () => {
       codeagentProbing.add(id);
@@ -689,10 +695,29 @@ function registerSessionIpc(ipcMain, deps) {
           if (account.state !== 'ready') throw new Error('这个号需要先重新登录');
           configDir = account.dir; file = require('path').join(account.dir, probe.MODELS_FILE);
         }
-        const result = await (codeagentProbeModels || probe.probeModels)({ command: config.command, configDirEnv: config.configDirEnv, configDir, cwd: pool.probeCwd(dataDir) });
+        const probeOptions = { command: config.command, configDirEnv: config.configDirEnv, configDir, cwd: pool.probeCwd(dataDir) };
+        // 2026-10-30 用户：先用 CodeAgent 自带的 serve 接口读（约 3 秒，还带额度和每个模型的配额），读不到再开 CodeAgent 读 /model 屏幕。
+        // AI_HUB_CODEAGENT_SERVE=1 强制打开、=0 强制关掉。
+        let result = null;
+        if (codeagentServeEnabled(dataDir)) {
+          const served = await (codeagentServeRead || require('../../core/codeagent-serve').readAccount)({ ...probeOptions, readyTimeoutMs: 20000 });
+          const models = require('../../core/codeagent-models');
+          if (served && served.ok) {
+            const current = pool.readSettingsModel(configDir);
+            // 用量换成 /model 菜单用量快照的格式（core/codeagent-usage-menu.js），额度条和模型下拉照原样显示
+            result = { ok: true, models: served.models, source: 'serve',
+              defaultModel: served.models.find(m => m.toLowerCase() === String(current || '').toLowerCase()) || '',
+              usage: require('../../core/codeagent-serve').toUsageSnapshot(served) };
+            models.appendModelLog(dataDir, { event: 'serve-read', account: id, ok: true, ms: served.readyMs, models: served.models.join('+') });
+          } else {
+            models.appendModelLog(dataDir, { event: 'serve-read', account: id, ok: false, error: (served && served.error) || '未知', fallback: 'menu' });
+          }
+        }
+        if (!result) result = await (codeagentProbeModels || probe.probeModels)(probeOptions);
         if (!result.ok) throw new Error(result.error);
         probe.writeProbed(file, result);
-        if (result.usage) recordCodeAgentUsage(id, result.usage, { label: id === 'personal' ? '个人账号' : '', source: 'probe' });
+        codeagentLastSource.set(id, result.source === 'serve' ? 'serve' : 'menu');
+        if (result.usage) recordCodeAgentUsage(id, result.usage, { label: id === 'personal' ? '个人账号' : '', source: result.source === 'serve' ? 'serve' : 'probe' });
         return result.models;
       } finally { codeagentProbing.delete(id); }
     };
@@ -700,18 +725,24 @@ function registerSessionIpc(ipcMain, deps) {
     codeagentProbeChain = next.catch(() => {});
     return next;
   }
+  // 清单 3 天一过就后台补读。经 serve 读到的（约 3 秒、读完即关）在打开模型下拉时 10 分钟就再读一次，让用量接近实时；
+  // 不常驻、不定时轮询（2026-10-30 用户：常驻 serve 不划算）。
   const CODEAGENT_PROBE_MAX_AGE_MS = 3 * 24 * 3600 * 1000;
-  function codeagentProbeStale(at) {
+  const CODEAGENT_SERVE_MAX_AGE_MS = 10 * 60 * 1000;
+  function codeagentProbeStale(at, source, { opening = false } = {}) {
     const time = at ? Date.parse(at) : NaN;
-    return !Number.isFinite(time) || Date.now() - time > CODEAGENT_PROBE_MAX_AGE_MS;
+    return !Number.isFinite(time) || Date.now() - time > (opening && source === 'serve' ? CODEAGENT_SERVE_MAX_AGE_MS : CODEAGENT_PROBE_MAX_AGE_MS);
   }
+  // 自动获取：上次经 serve 读成功的号隔 10 分钟才再读；失败过（或走了读屏）的号本次运行 Hub 不再自动试，免得反复开 CodeAgent 读屏。
   function autoProbeCodeAgentAccount(id) {
-    if (codeagentAutoTried.has(id) || codeagentProbing.has(id)) return;
-    codeagentAutoTried.add(id);
+    const last = codeagentAutoTried.get(id);
+    if ((last && !(last.serveOk && Date.now() - last.at >= CODEAGENT_SERVE_MAX_AGE_MS)) || codeagentProbing.has(id)) return;
+    const tried = { at: Date.now(), serveOk: false };
+    codeagentAutoTried.set(id, tried);
     codeagentProbing.add(id);
     sendToRenderer('codeagent-pool:changed', { id, probing: true });
     probeCodeAgentAccount(id)
-      .then(models => sendToRenderer('codeagent-pool:changed', { id, ok: true, models, auto: true }))
+      .then(models => { tried.serveOk = codeagentLastSource.get(id) === 'serve'; sendToRenderer('codeagent-pool:changed', { id, ok: true, models, auto: true }); })
       .catch(error => sendToRenderer('codeagent-pool:changed', { id, ok: false, error: error.message, auto: true }));
   }
   // 号主在登录窗口里登录完成前凭证文件还不存在：每 3 秒看一次，最多 10 分钟，出现了就自动获取模型权限。
@@ -735,11 +766,14 @@ function registerSessionIpc(ipcMain, deps) {
   }
   // 列表里从没获取过、或获取已超过 3 天的号（含个人账号）自动补一次（每次运行 Hub 每个号最多一次）。
   // 2026-10-29 公司真机（Q-1029-12）：个人账号 10-16 获取的清单只有 GLM，后来账号加了 DeepSeek，模型下拉一直只列 GLM。
-  function autoProbeMissing(status) {
+  // 装上就能看到 serve 真跑了；读到的是 CodeAgent 自己的模型名，启动时只传 --model 就够，见 session-manager 的 cli-flag）。
+  function autoProbeMissing(status, { startup = false } = {}) {
     if (!status || status.ok === false) return;
-    if (status.personal && status.personal.present && codeagentProbeStale(status.personal.modelsProbedAt)) autoProbeCodeAgentAccount('personal');
+    const serveOn = startup && codeagentServeEnabled(require('../../core/data-dir').getHubDataDir());
+    const due = (at, source) => codeagentProbeStale(at, source) || (serveOn && source !== 'serve');
+    if (status.personal && status.personal.present && due(status.personal.modelsProbedAt, status.personal.modelsSource)) autoProbeCodeAgentAccount('personal');
     for (const a of status.accounts || []) {
-      if (a.state === 'ready' && !a.sameAsPersonal && !a.duplicateOf && codeagentProbeStale(a.modelsProbedAt)) autoProbeCodeAgentAccount(a.id);
+      if (a.state === 'ready' && !a.sameAsPersonal && !a.duplicateOf && due(a.modelsProbedAt, a.modelsSource)) autoProbeCodeAgentAccount(a.id);
     }
   }
   ipcMain.handle('codeagent-pool:probe', (_event, payload) => {
@@ -753,7 +787,7 @@ function registerSessionIpc(ipcMain, deps) {
   // 隔离实例（设了 CLAUDE_HUB_DATA_DIR）和单测里不做，免得测试里多起一个 CLI；要测它时设 CLAUDE_HUB_CODEAGENT_STARTUP_PROBE=1。
   if (process.env.CLAUDE_HUB_CODEAGENT_STARTUP_PROBE === '1'
     || (!process.env.CLAUDE_HUB_DATA_DIR && process.env.CLAUDE_HUB_E2E !== '1' && !process.env.NODE_TEST_CONTEXT)) {
-    setTimeout(() => { try { autoProbeMissing(codeagentPoolStatus()); } catch { /* 下次打开启动中心或号池页再补 */ } }, 20000).unref?.();
+    setTimeout(() => { try { autoProbeMissing(codeagentPoolStatus(), { startup: true }); } catch { /* 下次打开启动中心或号池页再补 */ } }, codeagentStartupProbeMs).unref?.();
   }
   ipcMain.handle('codeagent-pool:list', () => {
     try { const status = codeagentPoolStatus(); autoProbeMissing(status); return { ...status, probing: [...codeagentProbing] }; }
@@ -926,6 +960,7 @@ function registerSessionIpc(ipcMain, deps) {
       const before = probe.readProbed(file);
       const key = list => list.map(m => String(m).toLowerCase()).sort().join('\n');
       if (before && key(before.models) === key(models)) return;
+      // 用量是 serve 读的，和菜单无关：保留（模型变了的那几项下次 serve 读时再更新）
       probe.writeProbed(file, { models, defaultModel: before ? before.defaultModel : '' });
       codeagentModels.appendModelLog(dataDir, { event: 'permission-list-sync', session: String(sessionId).slice(0, 8), account: account.replace(/\s+/g, ''), reason,
         before: before ? before.models.join('+') : '(无)', after: models.join('+') });
@@ -1081,6 +1116,18 @@ function registerSessionIpc(ipcMain, deps) {
     if (!requested || modelId.toLowerCase() !== requested.toLowerCase()) return { ok: false, error: 'invalid-model', message: `模型名不能用：${requested}` };
     if (session.status === 'running') return { ok: false, error: 'busy', message: '当前回答仍在运行，请结束后再切换' };
     if (codeagentPicker.isPicking(sessionId)) return { ok: false, error: 'busy', message: '正在切换模型，请稍候' };
+    // 用 --settings 文件启动的会话（2026-10-30 5.3.12）：先把它自己的设置文件改成新模型，再照常在菜单里选。
+    // 会话每次请求都重读配置；--settings 优先级最高，不改它的话菜单选的可能被它压回去。只在能换成 CodeAgent 自己的写法时改。
+    try {
+      const dataDir = require('../../core/data-dir').getHubDataDir();
+      const file = require('path').join(dataDir, 'codeagent-launch', `${String(sessionId).replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
+      if (require('fs').existsSync(file)) {
+        const poolId = (session.info && session.info.codeagentPoolAccount) || session.codeagentPoolAccount || '';
+        const account = poolId ? require('../../core/codeagent-pool').listAccounts(dataDir).find(a => a.id === poolId) : null;
+        const spelled = require('../../core/session-manager')._private.codeagentLaunchModel(modelId, { dataDir, pool: account ? { account } : null });
+        if (spelled) require('../../core/session-manager')._private.writeCodeAgentLaunchSettings(dataDir, sessionId, spelled);
+      }
+    } catch (error) { console.warn('[codeagent] 切换模型时改会话设置文件失败，只用菜单：' + error.message); }
     const result = await codeagentPicker.schedulePick(sessionId, () => runCodeAgentPick(sessionId, modelId, 'switch'));
     if (!result || !result.ok) return { ok: false, error: 'pick-failed', message: (result && result.message) || 'CodeAgent 没能切换模型' };
     // 记住这个号上次手动切到的模型，下次新建会话默认用它（core/codeagent-launch-model.js）。

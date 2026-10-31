@@ -1,4 +1,5 @@
 'use strict';
+const { createJunctionSync } = require('./fs-junction');
 // A stopped PTY can change its access credential without changing its context
 // home. The canonical account remains the sole refresh-token owner. Callers
 // must stop and await the old native writer before preparing this home.
@@ -283,7 +284,8 @@ function prepareRuntime(options) {
   try {
     for (const name of files) fs.copyFileSync(path.join(context.home, name), path.join(stage, name), fs.constants.COPYFILE_EXCL);
     fs.writeFileSync(path.join(stage, 'config.toml'), config, { flag: 'wx', mode: 0o600 });
-    for (const [name, source] of Object.entries(resources)) fs.symlinkSync(source, path.join(stage, name), process.platform === 'win32' ? 'junction' : 'dir');
+    // Windows briefly rejects a junction next to just-written files (EBUSY); core/fs-junction waits it out.
+    for (const [name, source] of Object.entries(resources)) createJunctionSync(source, path.join(stage, name));
     const marker = { version: 1, sessionId, home, contextProfile: context.id, contextHomeHash: context.homeHash,
       profile: profile.id, canonicalHomeHash: profile.homeHash, historyHome, sqliteHome,
       generation: 1, credentialFingerprint: credential.credentialFingerprint, resources };

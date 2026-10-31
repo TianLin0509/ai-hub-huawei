@@ -21,6 +21,7 @@ function initToolbarMore({ document, zoom }) {
   item('缩小界面', 'A−', () => zoom(-1));
   item('重置缩放', '1:1', () => zoom(0));
   const notify = item('完成通知', '', () => notification()?.click());
+  if (!require('../core/distribution').featureEnabled('completionNotification')) notify.control.style.display = 'none';
   notify.control.className = 'ho-notify';
   notify.control.setAttribute('role', 'menuitemcheckbox');
   function syncNotification() {

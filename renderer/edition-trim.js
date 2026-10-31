@@ -44,6 +44,41 @@
       strong.after(badge);
     }
   }
+  const hide = [];
+  if (!featureEnabled('launchEffort')) {
+    // 副标题和文案同一开关：公司版不讲「提供方」「工作根」。
+    const setText = (selector, text) => { const el = document.querySelector(selector); if (el) el.textContent = text; };
+    setText('#launch-intent-group small', '多个 AI 一起讨论、分工');
+    setText('#launch-intent-resume small', '接着聊以前的会话');
+    setText('#launch-center-group-panel .launch-center-panel-head span', '选好成员和工作目录，就能开始');
+    setText('#launch-center-resume-panel .launch-center-panel-head span', '点一下，在原来的文件夹里接着聊');
+    setText('[data-resume-kind="codeagent-resume"] small', '列出电脑上所有 CodeAgent 历史');
+    setText('.launch-center-panel-footer > span', '');
+    setText('[data-workspace-mode="default"] small', '开在默认文件夹，各会话的文件互相可见');
+    setText('[data-workspace-mode="scratch"] small', '新建一个空文件夹，和其他任务互不影响');
+    setText('[data-workspace-mode="existing"] small', '选择电脑上已有的文件夹');
+    hide.push('.launch-center-resume-note', '#new-session-tuning-details');
+    // 「昨日之我」同事猜不出是搜索，公司版改个直白的名字（2026-10-30 用户同意）。
+    setText('#btn-global-search span', '搜索历史');
+    setText('#session-search-title', '搜索历史');
+    document.getElementById('btn-global-search')?.setAttribute('title', '搜索历史 (Ctrl+Shift+F)');
+    document.getElementById('btn-rail-memo')?.setAttribute('title', '回顾 · 备忘与搜索历史');
+  }
+  if (!featureEnabled('projectLibrary')) hide.push('.session-projects');
+  // 筛选控件从页面上去掉，侧栏就按「全部」显示，升级前选过的筛选也不会留下来挡住会话。
+  if (!featureEnabled('sessionFilters')) {
+    document.getElementById('session-model-filter')?.closest('label')?.remove();
+    document.getElementById('session-project-filter')?.closest('label')?.remove();
+    hide.push('label[for="session-search-project"]');
+  }
+  if (!featureEnabled('completionNotification')) hide.push('#completion-notification-toggle', '.config-notification-title', '#config-notification-card');
+  if (!featureEnabled('desktopOrganizer')) hide.push('#btn-desktop-organizer');
+  if (!featureEnabled('multiInstance')) hide.push('#btn-new-hub');
+  if (hide.length) {
+    const style = document.createElement('style');
+    style.textContent = hide.join(',') + '{display:none!important}';
+    document.head.appendChild(style);
+  }
   // 底部状态栏的「余量」：各家 AI 账号的剩余额度，CodeAgent 没有。
   if (!featureEnabled('quotaBar')) document.getElementById('rail-usage')?.remove();
   // 左侧「账号」：各家 AI 网页与命令行账号；按钮留在页面里（别处会程序化点击它来关账号页），只是不显示。

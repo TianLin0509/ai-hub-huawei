@@ -1127,29 +1127,23 @@
   margin: 0 0 0 6px;
   border: 1px solid rgba(var(--rgb-success), .34);
   border-radius: var(--radius-pill);
-  background: rgba(35, 134, 54, .11);
+  background: rgba(35, 134, 54, .14);
   color: var(--mark-green);
   font-size: 10px;
   font-weight: 650;
   line-height: 1;
   vertical-align: middle;
-  animation: streaming-breathe 2.4s ease-in-out infinite;
+  /* 2026-10-30 静态：原呼吸边框 + 转圈两个无限动画让整窗每秒重画上百次（实测界面 31% + 显卡 44%），改为实心绿点 + 常驻文字。 */
+  border-color: rgba(var(--rgb-success), .5);
 }
 .streaming-indicator .spinner-icon {
-  width: 9px;
-  height: 9px;
-  border: 1.5px solid currentColor;
-  border-top-color: transparent;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   display: inline-block;
-  animation: streaming-spin 1s linear infinite;
-  opacity: 0.9;
+  background: currentColor;
+  box-shadow: 0 0 0 2px rgba(var(--rgb-success), .22);
   flex-shrink: 0;
-}
-@keyframes streaming-spin { to { transform: rotate(360deg); } }
-@keyframes streaming-breathe {
-  0%, 100% { background-color: rgba(35, 134, 54, .08); border-color: rgba(var(--rgb-success), .25); box-shadow: 0 0 0 rgba(var(--rgb-success), 0); }
-  50% { background-color: rgba(35, 134, 54, .2); border-color: rgba(var(--rgb-success), .65); box-shadow: 0 0 7px rgba(var(--rgb-success), .16); }
 }
 .streaming-indicator::after {
   content: attr(data-label);

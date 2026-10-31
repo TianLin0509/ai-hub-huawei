@@ -47,19 +47,31 @@ function wholePercent(window) {
   return pct === null ? null : Math.round(pct);
 }
 
+// Claude 只在 Hub 里用（2026-10-30 用户确认）：Hub 每 2 分钟给有在线会话的号读一次额度，
+// 过了重置时间记录仍没更新，说明重置后没在 Hub 用过，这个窗口就是满的，按 100% 算，不再写「待刷新」。
+// 刷新报错的号（有在线会话却没读到）拿不准，Codex、Gemini 可能在 Hub 外用，都照旧写「待刷新」。
+function windowView(provider, window, now, failed) {
+  const pct = wholePercent(window), at = resetAt(window);
+  const assumed = provider === 'claude' && !failed && pct !== null && Number.isFinite(at) && at <= now;
+  return { pct: assumed ? 100 : pct, at, assumed };
+}
+
 function viewRows(provider, snapshot, currentProfileId, now) {
   const rows = snapshot?.accounts?.[provider];
   if (!Array.isArray(rows)) return [];
   return rows.map((row, index) => {
     const { w5h, w7d } = windowsOf(provider, row, now);
+    const v5 = windowView(provider, w5h, now, !!row.error), v7 = windowView(provider, w7d, now, !!row.error);
     const view = {
       provider, no: index + 1, profileId: row.profileId || '',
       label: row.profileLabel || row.profileId || ('账号' + (index + 1)),
       // 看板只显示整数（2026-10-29 用户：Gemini 返回的是带小数的用量，显示成 60.1668…%）。
-      remain5h: wholePercent(w5h), remain7d: wholePercent(w7d), reset5h: resetAt(w5h), reset7d: resetAt(w7d),
+      remain5h: v5.pct, remain7d: v7.pct, reset5h: v5.at, reset7d: v7.at, assumed5h: v5.assumed, assumed7d: v7.assumed,
       has5h: provider === 'claude' || !!w5h,
       egress: provider === 'claude' ? (row.egressIp || '') : '', apiKey: !!row.apiKey,
       error: row.error || '', inFlight: !!row.inFlight, selected: !!row.selected,
+      email: row.email || '', plan: row.plan || '', billing: row.billing || '', subscribedAt: row.subscribedAt || 0,
+      subscriptionUntil: row.subscriptionUntil || 0, subscriptionChecked: row.subscriptionChecked || 0,
     };
     view.eff = effective(view);
     view.current = currentProfileId ? view.profileId === currentProfileId : view.selected;
@@ -71,6 +83,47 @@ function viewRows(provider, snapshot, currentProfileId, now) {
     }
     return view;
   });
+}
+
+const ymd = ms => { const d = new Date(ms); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+const PLAN_NAMES = { claude_pro: 'Pro', claude_max: 'Max', claude_team: 'Team', claude_enterprise: 'Enterprise', plus: 'Plus', pro: 'Pro', team: 'Team', free: 'Free' };
+const BILLING_NAMES = { apple_subscription: 'Apple 订阅', stripe_subscription: '网页订阅', google_play_subscription: 'Google Play 订阅' };
+
+// 按月订阅的下一个续费日：从订阅起始日每月同一天往后推，取第一个晚于现在的（月底日按当月最后一天）。
+function nextMonthlyRenewal(startMs, now) {
+  const start = new Date(startMs);
+  for (let i = 1; i < 600; i++) {
+    const y = start.getFullYear(), m = start.getMonth() + i;
+    const last = new Date(y, m + 1, 0).getDate();
+    const at = new Date(y, m, Math.min(start.getDate(), last), start.getHours(), start.getMinutes()).getTime();
+    if (at > now) return at;
+  }
+  return 0;
+}
+
+// 悬停里的套餐行。Claude 本地只记起始日，续费日按月推算；Codex 凭证里有已付到期日，但只在凭证刷新时更新。
+function subscriptionText(row, now) {
+  const plan = PLAN_NAMES[row.plan] || row.plan;
+  if (row.provider === 'claude') {
+    if (!plan && !row.subscribedAt) return '';
+    const billing = BILLING_NAMES[row.billing] || '';
+    const parts = ['套餐：' + (plan || '未知') + (billing ? '（' + billing + '）' : '')];
+    if (row.subscribedAt) {
+      const next = nextMonthlyRenewal(row.subscribedAt, now);
+      parts.push('订阅始于 ' + ymd(row.subscribedAt) + (next ? '，按月推算下次续费约 ' + ymd(next) : ''));
+    }
+    return parts.join(' · ');
+  }
+  if (row.provider === 'codex') {
+    if (!plan && !row.subscriptionUntil) return '';
+    let text = '套餐：' + (plan || '未知');
+    if (row.subscriptionUntil) {
+      text += ' · 已付至 ' + ymd(row.subscriptionUntil) + (row.subscriptionChecked ? '（' + ymd(row.subscriptionChecked) + ' 核对）' : '');
+      if (row.subscriptionUntil <= now) text += '，之后登录凭证没再核对，可能已自动续费';
+    }
+    return text;
+  }
+  return '';
 }
 
 function locationText(loc) {
@@ -112,11 +165,15 @@ function createAccountQuotaPanel({
   function tooltip(row, now) {
     const p = PROVIDERS.find(x => x.id === row.provider);
     const lines = [p.name + ' ' + row.no + ' · ' + row.label + (row.current ? '（当前）' : '')];
+    if (row.email) lines.push('邮箱：' + row.email);
+    const sub = subscriptionText(row, now);
+    if (sub) lines.push(sub);
     if (row.provider === 'claude') lines.push('出口：' + (row.egress ? row.egress + (locationText(locations[row.egress]) ? ' · ' + locationText(locations[row.egress]) : '') : '未知'));
-    const win = (name, pct, at) => name + ' 剩余 ' + (pct === null ? '未知' : pct + '%')
-      + (Number.isFinite(at) ? (at > now ? ' · ' + formatResetCountdown(at, now) + ' 后重置' : ' · 待刷新') : '');
-    if (row.has5h) lines.push(win('5h', row.remain5h, row.reset5h));
-    lines.push(win('7d', row.remain7d, row.reset7d));
+    const win = (name, pct, at, assumed) => name + ' 剩余 ' + (pct === null ? '未知' : pct + '%')
+      + (assumed ? '（已过重置时间，重置后没在 Hub 用过，按满额算）'
+        : Number.isFinite(at) ? (at > now ? ' · ' + formatResetCountdown(at, now) + ' 后重置' : ' · 待刷新') : '');
+    if (row.has5h) lines.push(win('5h', row.remain5h, row.reset5h, row.assumed5h));
+    lines.push(win('7d', row.remain7d, row.reset7d, row.assumed7d));
     if (row.blockedBy) lines.push('现在被 ' + row.blockedBy + ' 卡住' + (row.backIn ? '，' + row.backIn + ' 后回血' : ''));
     if (row.error) lines.push('刷新失败：' + row.error);
     lines.push(row.inFlight ? '刷新中…' : '点击刷新这个账号的额度');
@@ -125,7 +182,8 @@ function createAccountQuotaPanel({
 
   function bar(row, name, pct, at, now) {
     const blocked = row.blockedBy === name;
-    const reset = !Number.isFinite(at) ? '' : at <= now ? '待刷新' : formatResetCountdown(at, now) + (blocked ? ' 回血' : '');
+    const assumed = name === '5h' ? row.assumed5h : row.assumed7d;
+    const reset = !Number.isFinite(at) ? '' : assumed ? '已重置' : at <= now ? '待刷新' : formatResetCountdown(at, now) + (blocked ? ' 回血' : '');
     return `<div class="cq-bar cq-${level(pct)}"><span class="cq-win">${name}</span><i><u style="width:${pct ?? 0}%"></u></i>`
       + `<b>${pct === null ? '—' : pct + '%'}</b><span class="cq-reset${blocked ? ' is-back' : ''}">${reset}</span></div>`;
   }
@@ -222,4 +280,4 @@ function createAccountQuotaPanel({
   return { render, getState: () => ({ ...state }) };
 }
 
-module.exports = { createAccountQuotaPanel, viewRows, effective, locationText, PROVIDERS };
+module.exports = { createAccountQuotaPanel, viewRows, effective, locationText, nextMonthlyRenewal, subscriptionText, PROVIDERS };

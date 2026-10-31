@@ -36,6 +36,9 @@ const PARENT_CONTROL_ENV_KEYS = new Set([
   'AI_TEAM_HUB_CALLBACK_URL',
   'CODEX_THREAD_ID',
   'CODEX_SESSION_ID',
+  // 在 Hub 的 Claude 会话里跑测试时，它指向本会话的账号运行目录，带进隔离 Hub 会被判越界、启动失败
+  // （2026-10-30）。测试要用就经 extraEnv 显式传，仍须在测试根目录内。
+  'CLAUDE_CONFIG_DIR',
 ]);
 
 function scrubParentControlEnv(baseEnv = {}) {

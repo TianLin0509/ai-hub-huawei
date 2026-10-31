@@ -65,7 +65,7 @@ function createAccountUsageController({
   let profileFlightKey = '';
   const pendingProfileRefreshes = new Map();
   function loadProfileUsage(options = {}) {
-    const key = `${options.provider || '*'}:${options.profileId || '*'}:${!!options.force}`;
+    const key = `${options.provider || '*'}:${options.profileId || '*'}:${!!options.force}:${options.reuseAntigravityScope || ''}`;
     if (profileFlight) {
       if (!options.force || key === profileFlightKey) return profileFlight;
       if (!pendingProfileRefreshes.has(key)) pendingProfileRefreshes.set(key, profileFlight.then(() => { pendingProfileRefreshes.delete(key); return loadProfileUsage(options); }));
@@ -334,7 +334,9 @@ function createAccountUsageController({
       .then((result) => {
         if (selectionRevision !== claudeSelectionRevision) return null;
         void loadOtherCodex(true);
-        void loadProfileUsage({ force: true });
+        // The bulk request already queried this exact credential scope. Other
+        // accounts still refresh immediately; this reader may reuse its TTL.
+        void loadProfileUsage({ force: true, reuseAntigravityScope: result?.providerResults?.antigravity?.authScope });
         usageRefreshState.providerResults = result && result.providerResults || null;
         usageRefreshState.error = ['claude', 'codex', 'deepseek'].flatMap(provider => {
           const status = usageRefreshState.providerResults?.[provider];

@@ -7,6 +7,8 @@ const { isConfirmedQuotaWall, selectQuotaAccount, quotaReading, CONTINUE_AFTER_S
 // 额度查询按需触发（2026-10-29 用户）：不按时钟轮询；账号有回合结束时才考虑查，
 // 离额度越远间隔越长。额度用完换号前的那次查询不受影响，照常立即查。
 // 原先每 90–120 秒查一次，Anthropic 的额度接口常回 429。
+// 同日起每回合的状态栏已免费带回额度：读数够新就不再发请求，这里只是兜底。
+// 账号只在 Hub 里用，候选账号沿用上次读数（过了重置时间按已重置算）。
 const USAGE_SPREAD_MS = 30_000;
 function usageGapMs(usage) {
   const used = ['five_hour', 'seven_day'].map(k => usage?.[k]?.utilization).filter(v => typeof v === 'number' && Number.isFinite(v));
@@ -18,7 +20,7 @@ const hookTurnKey = event => event.promptId ? `prompt:${event.promptId}` : event
 
 function createClaudeAccountSwitch({ sessionManager, broker, profiles, scopeFor,
   sendToPty, drainSubmission = () => Promise.resolve(), saveSession, now = Date.now, prefreshEnabled = () => false,
-  random = Math.random, later = (fn, ms) => setTimeout(fn, ms), relaunch = null }) {
+  random = Math.random, later = (fn, ms) => setTimeout(fn, ms), relaunch = null, verifyRoute = null }) {
   const pending = new Map();
   const manualEpoch = new Map();
   const restored = new Set();
@@ -29,7 +31,10 @@ function createClaudeAccountSwitch({ sessionManager, broker, profiles, scopeFor,
     const profileId = session.claudeProfile;
     if ((nextUsage.get(profileId) || 0) > now()) return;
     nextUsage.set(profileId, now() + 10 * 60_000);
-    const handle = later(() => void Promise.resolve().then(() => broker.usage(account(profileId))).then(snapshot => {
+    const handle = later(() => void Promise.resolve().then(() => {
+      const profile = account(profileId);
+      return broker.usage(profile, { maxAgeMs: usageGapMs(broker.cached?.(profile)?.usage), why: 'after-turn' });
+    }).then(snapshot => {
       nextUsage.set(profileId, now() + usageGapMs(snapshot?.usage));
     }).catch(error => {
       // 例行查询失败与换号无关：说清是额度没刷新、不影响当前会话。
@@ -46,6 +51,10 @@ function createClaudeAccountSwitch({ sessionManager, broker, profiles, scopeFor,
   const deferredFailures = new Map();
   // Sessions being stopped and reopened by an account switch: their suspension is ours.
   const relaunching = new Set();
+  // Native id that was running when a session's account changed. That process
+  // may still hold the old account's quota, so its status-line readings are
+  // never credited to the new account.
+  const preSwitchNative = new Map();
   let timer;
   const fileFor = session => path.join(session.claudeRuntimeHome, '.hub-switch.json');
   const managed = session => session?.claudeRuntimeHome
@@ -80,6 +89,17 @@ function createClaudeAccountSwitch({ sessionManager, broker, profiles, scopeFor,
       publish(session.id, 'attention', '上次换号或续跑结果未确认，请核对任务后手动继续');
     }
     restored.add(session.id);
+  }
+  // 跨出口换号（2026-10-29 用户放开）：换号会重开进程，新进程按新账号的出口启动，
+  // 每个账号仍只从自己的 IP 出网。前提是有重开进程的能力，且换之前经目标线路实测出口 IP 无误。
+  const network = () => require('../core/claude-account-network');
+  const crossRouteAllowed = () => typeof relaunch === 'function' && typeof verifyRoute === 'function';
+  async function routeReady(from, to) {
+    if (network().sameRoute(from, to)) return;
+    if (!crossRouteAllowed()) throw fail('CLAUDE_ROUTE_LOCKED', '这两个账号绑定不同网络出口，当前不能跨出口换号；请用目标账号新建会话');
+    let result;
+    try { result = await verifyRoute(to); } catch (error) { result = { ok: false, reason: error.message }; }
+    if (!result?.ok) throw fail('CLAUDE_ROUTE_UNVERIFIED', `${to.label || to.id} 的出口核对未通过（${result?.reason || '原因未知'}），保持原账号`);
   }
   function account(id) {
     const profile = profiles().find(p => p.id === id);
@@ -171,7 +191,7 @@ function createClaudeAccountSwitch({ sessionManager, broker, profiles, scopeFor,
         const oauth = readJson(path.join(profile.home, '.credentials.json')).claudeAiOauth;
         available = !!oauth?.accessToken && (Number(oauth.expiresAt) > now() || !!oauth.refreshToken);
       } catch { /* A missing account is shown explicitly as unavailable. */ }
-      const routeCompatible = require('../core/claude-account-network').sameRoute(account(session.claudeProfile || 'default'), profile);
+      const routeCompatible = crossRouteAllowed() || network().sameRoute(account(session.claudeProfile || 'default'), profile);
       return { id: profile.id, label: profile.label || profile.id, current: profile.id === session.claudeProfile,
         available: available && routeCompatible, reason: !routeCompatible ? '绑定不同出口，请用该账号新建会话' : available ? '' : '此账号尚未登录或登录已过期' };
     });
@@ -201,9 +221,9 @@ function createClaudeAccountSwitch({ sessionManager, broker, profiles, scopeFor,
       await submissions;
       if (!valid()) return interrupted();
       const profile = account(request.profileId);
-      require('../core/claude-account-network').assertSameRoute(account(initial.claudeProfile), profile);
+      await routeReady(account(initial.claudeProfile), profile);
       publish(id, 'manual-switching', `正在切换到${request.label}…`, { targetProfile: profile.id, targetLabel: request.label });
-      const snapshot = await broker.usage(profile);
+      const snapshot = await broker.usage(profile, { maxAgeMs: Infinity, why: 'manual-target' });
       const reading = quotaReading(snapshot, initial.currentModel?.id || initial.model || '', now());
       if (!reading || reading.exhausted) throw fail('CLAUDE_ACCOUNT_NO_QUOTA', reading ? '所选账号当前模型的额度已耗尽，保持原账号' : '暂时无法确认所选账号额度，保持原账号');
       const credentials = await broker.getCredentials(profile);
@@ -216,6 +236,7 @@ function createClaudeAccountSwitch({ sessionManager, broker, profiles, scopeFor,
         record(initial, { ...intent, phase: 'cancelled' });
         return interrupted();
       }
+      preSwitchNative.set(id, nativeId);
       const updated = sessionManager.updateSessionMeta(id, { claudeProfile: profile.id, claudeProfileLabel: profile.label,
         claudeUsageScope: marker.scope, claudeAuthGeneration: marker.generation });
       if (!updated) throw fail('CLAUDE_SESSION_CLOSED', '会话已经关闭');
@@ -256,8 +277,9 @@ function createClaudeAccountSwitch({ sessionManager, broker, profiles, scopeFor,
     if (!managed(session)) return { ok: false, message: '此旧会话未启用独立账号切换，请新建 Claude 订阅会话后使用' };
     let profile;
     try { profile = account(profileId); } catch (error) { return { ok: false, message: error.message }; }
-    try { require('../core/claude-account-network').assertSameRoute(account(session.claudeProfile), profile); }
-    catch (error) { return { ok: false, message: error.message }; }
+    if (!crossRouteAllowed() && !network().sameRoute(account(session.claudeProfile), profile)) {
+      return { ok: false, message: '这两个账号绑定不同网络出口，当前不能跨出口换号；请用目标账号新建会话' };
+    }
     manualEpoch.set(id, (manualEpoch.get(id) || 0) + 1);
     if (profile.id === session.claudeProfile) {
       const cancelled = manualRequests.delete(id);
@@ -324,26 +346,38 @@ function createClaudeAccountSwitch({ sessionManager, broker, profiles, scopeFor,
     const transaction = (async () => {
       await submittedBeforeFailure;
       if (!unchanged()) return;
-      const current = await broker.usage(account(activeId));
+      const current = await broker.usage(account(activeId), { why: 'wall-current' });
       if (!isConfirmedQuotaWall({ ...event, snapshot: current, model, now: now() })) return;
       publish(session.id, 'checking', '额度已耗尽，正在确认其他账号的可用额度…');
       const attempted = [...new Set([...(previous?.attempted || []), activeId])];
       const candidates = [];
       for (const profile of profiles()) {
         if (attempted.includes(profile.id)) continue;
-        if (!require('../core/claude-account-network').sameRoute(account(activeId), profile)) continue;
-        try { candidates.push(await broker.usage(profile)); }
+        if (!crossRouteAllowed() && !network().sameRoute(account(activeId), profile)) continue;
+        try { candidates.push(await broker.usage(profile, { maxAgeMs: Infinity, why: 'wall-candidate' })); }
         catch (error) { candidates.push({ id: profile.id, ready: false, error: error.code }); }
       }
       if (!unchanged()) return;
-      const target = selectQuotaAccount({ currentId: activeId, candidates, attempted, model, now: now() });
+      // 跨出口的候选先实测出口；核对不过就换下一个候选，不记入 attempted（下次撞墙还能再试）。
+      const unverified = [];
+      let target = selectQuotaAccount({ currentId: activeId, candidates, attempted, model, now: now() });
+      while (target) {
+        try { await routeReady(account(activeId), account(target.id)); break; }
+        catch (error) {
+          console.warn(`[claude-switch] ${target.id} 未通过出口核对：${error.message}`);
+          unverified.push(target.id);
+          target = selectQuotaAccount({ currentId: activeId, candidates, attempted: [...attempted, ...unverified], model, now: now() });
+        }
+      }
+      if (!unchanged()) return;
       if (!target) {
         record(session, { eventKey, phase: 'waiting', attempted, at: now() });
-        publish(session.id, 'waiting', '没有已确认可用的账号；保持当前会话，可稍后手动继续');
+        publish(session.id, 'waiting', unverified.length
+          ? '有额度的账号出口核对未通过，没有换号；保持当前会话，可稍后手动继续'
+          : '没有已确认可用的账号；保持当前会话，可稍后手动继续');
         return;
       }
       const profile = account(target.id);
-      require('../core/claude-account-network').assertSameRoute(account(activeId), profile);
       const credentials = await broker.getCredentials(profile);
       if (!unchanged()) return;
       const intent = { eventKey, phase: 'switching', attempted, from: activeId, to: target.id, at: now() };
@@ -356,6 +390,7 @@ function createClaudeAccountSwitch({ sessionManager, broker, profiles, scopeFor,
         publish(session.id, 'cancelled', '检测到新消息或会话变化，已取消本次自动换号');
         return;
       }
+      preSwitchNative.set(session.id, event.nativeSessionId);
       const updated = sessionManager.updateSessionMeta(session.id, { claudeProfile: target.id,
         claudeProfileLabel: profile.label, claudeUsageScope: marker.scope, claudeAuthGeneration: marker.generation });
       if (!updated) throw fail('CLAUDE_SESSION_CLOSED', '会话已经关闭，未自动继续');
@@ -427,6 +462,15 @@ function createClaudeAccountSwitch({ sessionManager, broker, profiles, scopeFor,
   return {
     beforeSend, beginSubmission, onFailure, accountOptions, requestAccount,
     manages: id => !!managed(sessionManager.getSession(id)),
+    // A status-line quota reading counts for the session's account only when it
+    // comes from the current native process, under the current login generation.
+    acceptsPassiveUsage({ sessionId, nativeSessionId, generation, scope }) {
+      const session = sessionManager.getSession(sessionId);
+      if (!session?.claudeRuntimeHome || !nativeSessionId || nativeSessionId !== session.ccSessionId) return false;
+      if (Number(generation ?? -1) !== (session.claudeAuthGeneration || 0)) return false;
+      if (scope && session.claudeUsageScope && scope !== session.claudeUsageScope) return false;
+      return preSwitchNative.get(sessionId) !== nativeSessionId;
+    },
     onPrompt(event) {
       event = { ...event, turnId: hookTurnKey(event) };
       const session = sessionManager.getSession(event.sessionId);
@@ -471,7 +515,7 @@ function createClaudeAccountSwitch({ sessionManager, broker, profiles, scopeFor,
     },
     stop() { clearInterval(timer); timer = null; },
     isSwitching(id) { return relaunching.has(id); },
-    forget(id) { manualEpoch.set(id, (manualEpoch.get(id) || 0) + 1); restored.delete(id); observedTurns.delete(id); activeTurns.delete(id); manualRequests.delete(id); admissions.delete(id); deferredFailures.delete(id); },
+    forget(id) { manualEpoch.set(id, (manualEpoch.get(id) || 0) + 1); restored.delete(id); observedTurns.delete(id); activeTurns.delete(id); manualRequests.delete(id); admissions.delete(id); deferredFailures.delete(id); preSwitchNative.delete(id); },
   };
 }
 

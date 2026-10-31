@@ -8,7 +8,7 @@
 // Hub 会传的参数各带几个值：0 = 开关；1 = 一个值；'many' = 后面跟到下一个 -- 参数为止（--mcp-config 可以给多个文件）。
 const ARITY = Object.freeze({
   '--disable-update': 0, '--skip-safe-check': 0, '--strict-mcp-config': 0, '--fork-session': 0,
-  '--setting-sources': 1, '--model': 1, '--effort': 1, '--permission-mode': 1, '--append-system-prompt-file': 1,
+  '--setting-sources': 1, '--settings': 1, '--model': 1, '--effort': 1, '--permission-mode': 1, '--append-system-prompt-file': 1,
   '--disabled-mcp-servers': 1, '--add-dir': 1, '--session-id': 1,
   '--mcp-config': 'many',
 });

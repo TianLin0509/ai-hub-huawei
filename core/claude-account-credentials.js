@@ -88,10 +88,30 @@ function withCredentialLocks(home, work, options) {
   return withDirectoryLocks([path.join(home, '.oauth_refresh.lock'), fs.realpathSync(home) + '.lock'], work, options);
 }
 
-function createClaudeCredentialBroker({ request, stateDir, now = Date.now, onUsage = () => {} }) {
+// Hub cache rows are { usage5h: { pct, resetsAt(ms) }, usage7d, ts }; the
+// switch policy reads the API shape { five_hour: { utilization, resets_at } }.
+function apiWindow(row) {
+  return row && typeof row.pct === 'number' && Number.isFinite(row.pct)
+    ? { utilization: row.pct, resets_at: Number(row.resetsAt) > 0 ? new Date(Number(row.resetsAt)).toISOString() : null } : null;
+}
+// The accounts are used only inside this Hub (2026-10-29 用户), so an idle
+// account changes only when a window reaches its reset time.
+function afterResets(usage, at) {
+  const out = {};
+  for (const [key, value] of Object.entries(usage || {})) {
+    const reset = Date.parse(value?.resets_at || '');
+    out[key] = value && typeof value === 'object' && Number.isFinite(reset) && reset <= at ? { ...value, utilization: 0, resets_at: null } : value;
+  }
+  return out;
+}
+
+function createClaudeCredentialBroker({ request, stateDir, now = Date.now, onUsage = () => {}, cachedUsage = () => null }) {
   const pending = new Map();
   const usageBlockedUntil = new Map();
   const usageStrikes = new Map();
+  const usageFlights = new Map();
+  // Last full API answer per account: it alone carries per-model weekly windows.
+  const lastApi = new Map();
   async function call(profile, url, options) {
     if (typeof request !== 'function') throw fail('CLAUDE_AUTH_OFFLINE', 'Claude 账号服务尚未就绪');
     try { return await request(url, options, profile); }
@@ -204,30 +224,60 @@ function createClaudeCredentialBroker({ request, stateDir, now = Date.now, onUsa
     }
     return null;
   }
+  async function fetchUsage(profile, why) {
+    if ((usageBlockedUntil.get(profile.id) || 0) > now()) throw fail('CLAUDE_USAGE_RATE_LIMIT', 'Claude 额度查询正在退避，稍后再试');
+    const credentials = await getCredentials(profile);
+    const response = await call(profile, 'https://api.anthropic.com/api/oauth/usage', {
+      headers: { Authorization: `Bearer ${credentials.claudeAiOauth.accessToken}`, 'anthropic-beta': 'oauth-2025-04-20' },
+    });
+    logRefresh(profile, 'usage', { status: response.status, ...(why ? { why } : {}) });
+    if (response.status !== 200 || !response.data || typeof response.data !== 'object') {
+      // Repeated 429s double the pause (2, 4, 8 … up to 30 minutes); one success resets it.
+      if (response.status === 429) {
+        const strikes = (usageStrikes.get(profile.id) || 0) + 1;
+        usageStrikes.set(profile.id, strikes);
+        usageBlockedUntil.set(profile.id, now() + Math.max(Number(response.retryAfterMs) || 0, Math.min(30 * 60_000, 120_000 * 2 ** (strikes - 1))));
+      }
+      throw fail(response.status === 429 ? 'CLAUDE_USAGE_RATE_LIMIT' : 'CLAUDE_USAGE_UNAVAILABLE', '暂时无法确认 Claude 账号额度，本次未换号');
+    }
+    usageStrikes.delete(profile.id);
+    const snapshot = { id: profile.id, ready: true, usage: response.data, observedAt: now() };
+    lastApi.set(profile.id, { usage: response.data, observedAt: snapshot.observedAt });
+    onUsage(profile, snapshot);
+    return snapshot;
+  }
+  function cachedSnapshot(profile) {
+    const row = cachedUsage(profile) || null;
+    const api = lastApi.get(profile.id) || null;
+    const rowAt = Number(row?.observedAt || row?.ts) || 0;
+    const five = apiWindow(row?.usage5h), seven = apiWindow(row?.usage7d);
+    if (!api && !five && !seven) return null;
+    const useRow = rowAt >= (api?.observedAt || 0);
+    const usage = { ...(api?.usage || {}),
+      ...(useRow && five ? { five_hour: five } : {}), ...(useRow && seven ? { seven_day: seven } : {}) };
+    return { id: profile.id, ready: true, usage: afterResets(usage, now()), observedAt: Math.max(rowAt, api?.observedAt || 0) };
+  }
   return {
     getCredentials,
     prefresh,
     prefreshLead,
-    async usage(profile) {
-      if ((usageBlockedUntil.get(profile.id) || 0) > now()) throw fail('CLAUDE_USAGE_RATE_LIMIT', 'Claude 额度查询正在退避，稍后再试');
-      const credentials = await getCredentials(profile);
-      const response = await call(profile, 'https://api.anthropic.com/api/oauth/usage', {
-        headers: { Authorization: `Bearer ${credentials.claudeAiOauth.accessToken}`, 'anthropic-beta': 'oauth-2025-04-20' },
-      });
-      logRefresh(profile, 'usage', { status: response.status });
-      if (response.status !== 200 || !response.data || typeof response.data !== 'object') {
-        // Repeated 429s double the pause (2, 4, 8 … up to 30 minutes); one success resets it.
-        if (response.status === 429) {
-          const strikes = (usageStrikes.get(profile.id) || 0) + 1;
-          usageStrikes.set(profile.id, strikes);
-          usageBlockedUntil.set(profile.id, now() + Math.max(Number(response.retryAfterMs) || 0, Math.min(30 * 60_000, 120_000 * 2 ** (strikes - 1))));
-        }
-        throw fail(response.status === 429 ? 'CLAUDE_USAGE_RATE_LIMIT' : 'CLAUDE_USAGE_UNAVAILABLE', '暂时无法确认 Claude 账号额度，本次未换号');
+    // Best known reading without a request: the Hub cache (fed for free by every
+    // reply's status line, and by earlier requests) plus model windows from the
+    // last API answer, with windows past their reset time counted as reset.
+    cached: cachedSnapshot,
+    // maxAgeMs > 0 accepts a cached reading at most that old (Infinity: any).
+    // A reused reading is reported as of now, so freshness checks downstream
+    // apply to the request-free source too; cachedAt keeps the real time.
+    async usage(profile, { maxAgeMs = 0, why = '' } = {}) {
+      if (maxAgeMs > 0) {
+        const hit = cachedSnapshot(profile);
+        if (hit?.usage.five_hour && hit.usage.seven_day && now() - hit.observedAt <= maxAgeMs) return { ...hit, observedAt: now(), cachedAt: hit.observedAt };
       }
-      usageStrikes.delete(profile.id);
-      const snapshot = { id: profile.id, ready: true, usage: response.data, observedAt: now() };
-      onUsage(profile, snapshot);
-      return snapshot;
+      // Callers asking at the same moment share one request.
+      if (usageFlights.has(profile.id)) return usageFlights.get(profile.id);
+      const flight = fetchUsage(profile, why).finally(() => { if (usageFlights.get(profile.id) === flight) usageFlights.delete(profile.id); });
+      usageFlights.set(profile.id, flight);
+      return flight;
     },
   };
 }

@@ -9,6 +9,7 @@ const { getHubDataDir } = require('../../core/data-dir');
 const vps = require('../../core/vps-login-env');
 const profilesTool = require('../../core/claude-subscription-profiles');
 const registry = require('../../core/subscription-account-registry');
+const { isMailUrl } = require('../../core/claude-mailbox-vault');
 
 function sharedIp(dataDir = getHubDataDir()) {
   try { return JSON.parse(fs.readFileSync(path.join(dataDir, 'claude-egress-baseline.json'), 'utf8')).shared || ''; } catch { return ''; }
@@ -57,18 +58,26 @@ function createVpsLoginService({ dataDir = getHubDataDir(), env = process.env, r
       if (!flight) flight = snapshot().finally(() => { flight = null; });
       return flight;
     },
-    async open({ profileId, confirmed = false }) {
+    // url: only the account's own webmail (claude-mailbox-vault), so a sign-in link clicked there stays on this exit.
+    async open({ profileId, confirmed = false, url = '' }) {
       const p = profileOf(profileId), id = vps.bindingFor(p);
       if (!id) throw new Error('这个账号还没有登录环境，请先绑定');
+      if (url && !isMailUrl(url)) throw new Error('只能在登录环境里打开账号邮箱');
       const view = await snapshot();
       const row = view.accounts.find(a => a.profileId === profileId);
       if (!row.consistent) throw new Error(row.problem + '；为保证同一 IP，未打开');
-      const result = await service.open(id, { confirmed, onProgress: message => sendToRenderer('vps-login-progress', { profileId, message }) });
+      let result;
+      try { result = await service.open(id, { confirmed, url, onProgress: message => sendToRenderer('vps-login-progress', { profileId, message }) }); }
+      catch (error) {
+        // VPS manager before 1.1.2 refuses webmail pages; the window itself is already up by then.
+        if (url && /仅支持打开 Claude 官方页面或出口检测页面/.test(error.message)) throw new Error('登录窗口已打开，但 VPS 端还是旧版，不允许直接打开邮箱：请在登录窗口地址栏输入邮箱网址，或先把 VPS 端更新到 1.1.2');
+        throw error;
+      }
       if (result.needsConfirmation) {
         const names = view.envs.reduce((m, e) => ({ ...m, [e.id]: e.boundTo ? (profiles().find(x => x.id === e.boundTo)?.label || e.name) : e.name }), {});
         return { needsConfirmation: true, others: result.others.map(o => names[o] || o) };
       }
-      return { ...result, message: `已打开「${p.label}」的登录窗口，出口 ${result.ip}` };
+      return { ...result, message: url ? `已在「${p.label}」的登录窗口打开邮箱，出口 ${result.ip}` : `已打开「${p.label}」的登录窗口，出口 ${result.ip}` };
     },
     async stop({ profileId }) {
       const id = vps.bindingFor(profileOf(profileId));

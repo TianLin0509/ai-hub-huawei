@@ -6,7 +6,7 @@
 // 同一份白名单也给 CodeAgent 用的只读包装脚本（welink-ro.js），它在助理会话里只能通过包装脚本调 welink-cli。
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawn, execFileSync } = require('node:child_process');
+const { spawn, execFile } = require('node:child_process');
 
 const READ_ONLY = Object.freeze({
   im: ['query-recent-conversation', 'query-history-message', 'query-group-member'],
@@ -43,7 +43,7 @@ function checkArgs(args, { allowSetup = false, sendGroup = '' } = {}) {
 
 // 找 welink-cli（2026-10-19 扩大范围：用户在一台新电脑上装了，Hub 却说没找到——每个人的 npm 全局目录不一样，
 // 有人改到 D:\nodejs\node_global，有人用 nvm；装完没重启 Hub 时，Hub 的 PATH 也还是旧的）。
-// 快速查找（同步、只看文件在不在）：环境变量（测试用假程序）→ 设置里记住的路径 → 各个 npm 全局目录 → where。
+// 快速查找只看文件和缓存：环境变量 → 设置 → npm / PATH 目录；where 在后台补查。
 // 还找不到就交给 findCliDeep 在后台全盘找，找到后记进设置，下次直接用。
 const PKG_EXE = ['node_modules', '@welink', 'welink-cli', 'welink-cli.exe'];
 function cliUnder(dir, fsModule = fs) {
@@ -69,23 +69,39 @@ function npmPrefixes(env = process.env, fsModule = fs) {
   add(env.VOLTA_HOME && path.join(env.VOLTA_HOME, 'bin'));
   return out;
 }
-// 快速查找没找到时，一分钟内不再跑 where（where 是同步的，会卡住主进程；状态每 20 秒查一次）。
-let missCache = 0;
-function resolveCli({ env = process.env, configured = '', fsModule = fs, now = Date.now } = {}) {
+// 同步调用方只读路径，不等待 where；按环境隔离缓存，在途去重，未找到一分钟后可再试。
+const cliCaches = new WeakMap();
+function resolveCli({ env = process.env, configured = '', fsModule = fs, now = Date.now, execFileImpl = execFile } = {}) {
   const pick = [env.CLAUDE_HUB_WELINK_CLI, configured].find(p => p && fsModule.existsSync(p));
   if (pick) return pick;
   for (const dir of npmPrefixes(env, fsModule)) { const hit = cliUnder(dir, fsModule); if (hit) return hit; }
-  const real = env === process.env && fsModule === fs;
-  if (real && now() - missCache < 60000) return null;
-  try {
-    const found = execFileSync('where', ['welink-cli'], { encoding: 'utf8', windowsHide: true, timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'], env }).split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  // 保留单次运行的只读包装能力：PATH 上的 exe 或 npm cmd 的兄弟 exe 可立即找到。
+  for (const dir of String(env.PATH || env.Path || '').split(path.delimiter).filter(Boolean)) {
+    const hit = cliUnder(dir.replace(/^"|"$/g, ''), fsModule);
+    if (hit) return hit;
+  }
+  let caches = cliCaches.get(env);
+  if (!caches) { caches = new WeakMap(); cliCaches.set(env, caches); }
+  let cache = caches.get(fsModule);
+  if (!cache) { cache = { path: null, pending: false, at: -Infinity }; caches.set(fsModule, cache); }
+  if (cache.path && fsModule.existsSync(cache.path)) return cache.path;
+  cache.path = null;
+  if (cache.pending || now() - cache.at < 60000) return null;
+  cache.pending = true;
+  const finish = (error, stdout) => {
+    cache.pending = false;
+    cache.at = now();
+    if (error) return;
+    const found = String(stdout || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     for (const f of found) {
       const sibling = cliUnder(path.dirname(f), fsModule);
-      if (sibling) return sibling;
-      if (/\.exe$/i.test(f)) return f;
+      if (sibling) { cache.path = sibling; break; }
+      try { if (/\.exe$/i.test(f) && fsModule.existsSync(f)) { cache.path = f; break; } } catch { /* 查询结束前路径变得不可读 */ }
     }
-  } catch { /* 没装，或不在 PATH 里 */ }
-  if (real) missCache = now();
+  };
+  try {
+    execFileImpl('where', ['welink-cli'], { encoding: 'utf8', windowsHide: true, timeout: 5000, env }, finish);
+  } catch (error) { finish(error); }
   return null;
 }
 

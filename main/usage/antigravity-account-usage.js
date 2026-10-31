@@ -1,6 +1,5 @@
 'use strict';
-const { resolveCommand, cliEnv } = require('../../core/antigravity-config');
-const { run } = require('../../core/account-adapters');
+const { resolveCommand, cliEnv, runCli } = require('../../core/antigravity-config');
 
 function parseUsage(payload, observedAt) {
   if (payload?.status !== 'SUCCESS' || payload.num_turns !== 0 || payload.command?.name !== 'usage') throw Error('Antigravity 未返回有效的只读用量结果');
@@ -18,7 +17,7 @@ function parseUsage(payload, observedAt) {
   const tightest = key => groups.map(g=>g[key]).filter(Boolean).sort((a,b)=>b.pct-a.pct)[0] || null;
   return { groups, usage5h: tightest('usage5h'), usage7d: tightest('usage7d'), observedAt, source: 'antigravity-cli' };
 }
-function createAntigravityUsage({ env = process.env, runImpl = run, now = Date.now, ttlMs = 300000 } = {}) {
+function createAntigravityUsage({ env = process.env, runImpl = runCli, now = Date.now, ttlMs = 300000 } = {}) {
   let cached = null, inflight = null, lastAttempt = -Infinity;
   async function query(name) {
     const childEnv = cliEnv(env);

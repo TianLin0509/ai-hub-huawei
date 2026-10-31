@@ -1005,6 +1005,7 @@ function createGroupChatDispatcher(deps) {
     const targets = targetMembers.map(member => {
       const systemPromptText = groupchat.buildSystemPromptText(member.displayName, meeting.scene, {
         kind: member.kind,
+        sceneHint: meeting.sceneHint, dataDir: getHubDataDir(),
       });
       return {
         sid: member.sid,
@@ -1500,6 +1501,7 @@ function createGroupChatDispatcher(deps) {
       const targets = targetMembers.map(member => {
         const systemPromptText = groupchat.buildSystemPromptText(member.displayName, meeting.scene, {
           kind: member.kind,
+          sceneHint: meeting.sceneHint, dataDir: getHubDataDir(),
           // 产物写进本群聊的 workspace，而不是 home 下的公共 artifacts 目录。
           workspace: meeting.workspace || null,
           extraRules: OrchestrationRules.rulesFor(getHubDataDir(), meeting, member.memberId),

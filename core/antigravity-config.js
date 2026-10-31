@@ -170,4 +170,44 @@ function installHooks(env, dataDir, id) {
   env.AI_HUB_ANTIGRAVITY_SESSION_ID = id;
   return {eventsFile:file, configFile};
 }
-module.exports = {ENGINE, UUID, DEFAULT_MODEL, home, configRoot, resolveCommand, cliEnv, ensureWorkspaceTrusted, latestConversation, isAntigravity, launchArgs, launchCommand, eventsFile, receiptsFile, migrateConfiguration, installHooks};
+// Background agy queries (usage every 5 min, model list) must not flash a window.
+// 2026-10-29 reproduced on Windows 11 with Windows Terminal as the default console:
+// a console-less Node parent (Electron) running agy.exe directly with windowsHide
+// still opens a "Terminal" window, while git the same way, or agy through a hidden
+// cmd.exe, opens none. So on Windows agy goes through cmd /d /s /c. The argv is a
+// fixed set of plain tokens; anything cmd could interpret is refused, not escaped.
+function windowsCmdLine(command, args) {
+  if (/["%^&|<>\r\n]/.test(String(command))) throw Error('Antigravity 命令路径含有不支持的字符');
+  for (const arg of args) if (!/^[\w./:=@-]+$/.test(String(arg))) throw Error('Antigravity 后台查询参数含有不支持的字符');
+  return '"' + ['"' + command + '"', ...args].join(' ') + '"';
+}
+// Same contract as account-adapters.run: resolves {code, stdout, stderr} for any exit
+// code, rejects on spawn failure / timeout. Through cmd a missing agy is cmd's exit 1
+// "not recognized", so that is turned back into ENOENT; on timeout the whole tree
+// (cmd and agy, which boots a language server) is killed, not just cmd.
+const NOT_FOUND = /is not recognized as an internal or external command|不是内部或外部命令/i;
+function runCli(command, args, env, timeout = 15000, {platform = process.platform, execFileImpl = require('child_process').execFile,
+  killTree = pid => require('child_process').execFile('taskkill', ['/T', '/F', '/PID', String(pid)], {windowsHide: true}, () => {})} = {}) {
+  return new Promise((resolve, reject) => {
+    const viaCmd = platform === 'win32';
+    const file = viaCmd ? (env.ComSpec || env.COMSPEC || 'cmd.exe') : command;
+    const argv = viaCmd ? ['/d', '/s', '/c', windowsCmdLine(command, args)] : args;
+    let timedOut = false, timer = null;
+    const child = execFileImpl(file, argv,
+      {env, windowsHide: true, windowsVerbatimArguments: viaCmd, timeout: viaCmd ? 0 : timeout, maxBuffer: 1024 * 1024, encoding: 'utf8'},
+      (error, stdout, stderr) => {
+        clearTimeout(timer);
+        if (timedOut) return reject(Object.assign(Error('Antigravity 查询超时'), {code: 'ETIMEDOUT', killed: true}));
+        if (error && (!Number.isInteger(error.code) || error.killed)) return reject(error);
+        if (viaCmd && error?.code === 1 && NOT_FOUND.test(String(stderr)))
+          return reject(Object.assign(Error('找不到 Antigravity 命令：' + command), {code: 'ENOENT'}));
+        resolve({code: error?.code || 0, stdout, stderr});
+      });
+    if (viaCmd && timeout > 0) timer = setTimeout(() => {
+      timedOut = true;
+      if (child?.pid) killTree(child.pid);
+      setTimeout(() => { try { child?.kill(); } catch {} }, 3000).unref?.();  // taskkill 失败时至少停掉 cmd，回调一定会到
+    }, timeout);
+  });
+}
+module.exports = {ENGINE, UUID, DEFAULT_MODEL, home, configRoot, resolveCommand, cliEnv, runCli, windowsCmdLine, ensureWorkspaceTrusted, latestConversation, isAntigravity, launchArgs, launchCommand, eventsFile, receiptsFile, migrateConfiguration, installHooks};

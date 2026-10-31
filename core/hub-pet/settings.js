@@ -1,4 +1,6 @@
 'use strict';
+// 桌宠设置存在 Hub 数据目录的 hub-pet.json。两个版本都默认关，用户在「可选功能」里自己开（2026-10-30 用户：公司版原来默认开，
+// 不用的人也白付开销）。公司版老用户升级时统一关一次（optInV 记已关过），之后以用户自己的选择为准。
 // 角色合不合法看 roleOk（2026-10-17 起形象可在线下载：以「这台电脑上装没装」为准，没装的回落小猫）。
 const fs = require('fs');
 const path = require('path');
@@ -9,8 +11,9 @@ const SCALE_MIN = 0.6, SCALE_MAX = 1.6;
 const BOX_MAX = 0.45;          // 透明边最多占身体框的比例，防止一张奇怪的图把限位算坏
 const BOX_ROLES_MAX = 24;
 
-function defaults({ company = false } = {}) {
-  return { enabled: !!company, role: '01-cat', mode: 'gentle', position: null, quietUntil: 0, silentDate: '', peekOnFullscreen: true, scale: 1, bodyBoxes: {} };
+const OPT_IN_V = 1;
+function defaults() {
+  return { enabled: false, role: '01-cat', mode: 'gentle', position: null, quietUntil: 0, silentDate: '', peekOnFullscreen: true, scale: 1, bodyBoxes: {} };
 }
 
 // 大小（2026-10-18）：身体是原大小的 0.6–1.6 倍，按 0.01 取整。认数字和「数字样子的字符串」（手改文件时常见），
@@ -59,22 +62,27 @@ function normalize(raw, base, roleOk = builtinRole) {
 
 function createSettingsStore({ dataDir, company = false, logger = console, roleOk = builtinRole } = {}) {
   const file = path.join(dataDir, FILE);
-  const base = defaults({ company });
+  const base = defaults();
   let value = base;
   let dirty = false;
-  try { value = normalize(JSON.parse(fs.readFileSync(file, 'utf8')), base, roleOk); }
+  let raw = null;
+  try { raw = JSON.parse(fs.readFileSync(file, 'utf8')); value = normalize(raw, base, roleOk); }
   catch (error) { if (error.code !== 'ENOENT') logger.warn?.('[hub-pet] settings unreadable, using defaults:', error.message); }
+  // 公司版以前默认开：没经过这次改动的设置文件，开着的一律关一次。
+  const migrate = company && raw && typeof raw === 'object' && raw.optInV !== OPT_IN_V;
+  if (migrate) value = { ...value, enabled: false };
 
   function save() {
     dirty = false;
     try {
       fs.mkdirSync(dataDir, { recursive: true });
       const tmp = file + '.' + process.pid + '.tmp';
-      fs.writeFileSync(tmp, JSON.stringify(value, null, 1) + '\n', 'utf8');
+      fs.writeFileSync(tmp, JSON.stringify({ ...value, optInV: OPT_IN_V }, null, 1) + '\n', 'utf8');
       fs.renameSync(tmp, file);
     } catch (error) { logger.warn?.('[hub-pet] settings save failed:', error.message); }
   }
 
+  if (migrate) save();
   return {
     file,
     get: () => ({ ...value, bodyBoxes: { ...value.bodyBoxes } }),

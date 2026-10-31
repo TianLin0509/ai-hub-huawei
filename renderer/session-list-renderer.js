@@ -15,7 +15,7 @@ const DOMESTIC_ROUTE_KINDS = ['kimi', 'deepseek', 'deepseek-acp', 'deepseek-clau
 function showDomesticRoute(kindAllowed = require('../core/distribution').kindAllowed) {
   return DOMESTIC_ROUTE_KINDS.some(kind => kindAllowed(kind));
 }
-const {compareSidebarPlacement,sortBySidebarPlacement,sidebarItemClassification,isPinnedToBottom,sidebarItemHasUnread,isSidebarMemberWorking,partitionSidebarSessions,_meetingRuntimeAggregate,buildSidebarView}=require('../core/session-sidebar-state');
+const {createSessionProjectionCache,createSidebarClassifier,compareSidebarPlacement,sortBySidebarPlacement,sidebarItemClassification,isPinnedToBottom,sidebarItemHasUnread,isSidebarMemberWorking,partitionSidebarSessions,_meetingRuntimeAggregate,buildSidebarView}=require('../core/session-sidebar-state');
 const {sidebarRelativeTime}=require('./sidebar-relative-time');
 const {createSessionViewPublisher}=require('../core/hub-assistant/session-state');
 const {reconcileSidebarDom}=require('./sidebar-dom-reconciler');
@@ -149,6 +149,11 @@ function createSessionListRenderer(options = {}) {
     const ipc=options.ipcRenderer || (typeof process!=='undefined'&&process.type==='renderer'?require('electron').ipcRenderer:null);
     ipc?.send?.('assistant:session-view',packet);
   });
+  const classifySession = createSidebarClassifier();
+  const cacheMeetingItem = createSessionProjectionCache();
+  const cachePresentation = createSessionProjectionCache();
+  let previousSidebarView = null;
+  let previousPresentation = null;
   const sectionKeys = ['sec-failed', 'sec-active', 'sec-today'];
   let collapsedSections = new Set();
   let recentDays = 1;
@@ -212,8 +217,33 @@ function createSessionListRenderer(options = {}) {
     syncRangeControls(); renderSessionList();
   });
   function sidebarView(items, sessionMap = getSessions(), days = recentDays, { now = Date.now(), classify = null } = {}) {
+    // Membership/order still comes from the live filters. Reuse only the pure
+    // partition/sort projection; rows, badges, details and DOM reconciliation
+    // continue to read live data on every render. Time buckets are explicit so
+    // a quiet session still crosses the 24/72-hour boundary without an event.
+    let inputs = null;
+    if (classify) {
+      inputs = items.map(item => {
+        const at = latestActivityTime(item), age = at ? now - at : 0;
+        return { item, id: item.id, pinned: item.pinned, bottomed: item.bottomed,
+          at, createdAt: item.createdAt, classification: classify(item),
+          fresh: age < 86400000, inRange: age < (days === 3 ? 3 : 1) * 86400000 };
+      });
+      const previous = previousSidebarView;
+      if (previous && previous.days === days && previous.pinnedOnly === pinnedOnly && inputs.length === previous.inputs.length
+          && inputs.every((input, i) => {
+            const old = previous.inputs[i], a = input.classification, b = old.classification;
+            return input.item === old.item && input.id === old.id && input.pinned === old.pinned && input.bottomed === old.bottomed
+              && input.at === old.at && input.createdAt === old.createdAt && input.fresh === old.fresh && input.inRange === old.inRange
+              && (a === b || (a.state === b.state && a.dormant === b.dormant && a.waiting === b.waiting
+                && a.error === b.error && a.working === b.working && a.unread === b.unread));
+          })) return previous.result;
+    }
     const parts = partitionSidebarSessions(items, { now, classify, sessionMap, activeSessionId: getActiveSessionId(), activeMeetingId: getActiveMeetingId() });
-    return buildSidebarView(parts, { now, days, pinnedOnly, excludePinned: !pinnedOnly, sessionMap, hasUnread: sidebarItemHasUnread });
+    const result = buildSidebarView(parts, { now, days, pinnedOnly, excludePinned: !pinnedOnly, sessionMap,
+      hasUnread: classify ? item => classify(item).unread : sidebarItemHasUnread });
+    if (inputs) previousSidebarView = { inputs, days, pinnedOnly, result };
+    return result;
   }
   const modelControl = doc.getElementById?.('session-model-filter');
   if (modelControl) {
@@ -665,36 +695,39 @@ sessionListEl.addEventListener('keydown', event => {
 // their own literal last section so age/status buckets cannot move below them.
 // Tree shape: meeting entries optionally expand to show their child sub-sessions.
 // Top-level regular sessions (no meetingId) sit alongside meetings in the same sort order.
-  function collectSidebarItems(sessionMap = getSessions()) {
+  function collectSidebarItems(sessionMap = getSessions(), sorted = true) {
     const memberIds = new Set(Object.values(getMeetings()).flatMap(m => m.subSessions || []));
     const regularSessions = Array.from(sessionMap.values())
     .filter(s => !s.meetingId && !memberIds.has(s.id) && s.kind !== 'xresearch-run' && !s.hiddenFromSidebar && s.purpose !== 'xresearch-research'
       // 关掉助理的发行版（公司版）：旧版本留下的助理会话不再出现在侧栏（它跑不起来，只会显示运行异常）。
       && !(s.purpose === 'hub-assistant' && !require('../core/distribution').featureEnabled('assistant')));
 
-  const meetingItems = Object.values(getMeetings()).map(m => ({
-    id: m.id,
-    title: m.title,
-    lastMessageTime: m.lastMessageTime,
-    lastCompletedAt: m.lastCompletedAt,
-    createdAt: m.createdAt,
-    lastOutputPreview: m.groupChat
-      ? `AI 群聊 · ${(m.participants || m.subSessions || []).length}/${(m.subSessions || []).length} 已选`
-      : `${m.subSessions.length} 个子会话`,
-    status: m.status || 'idle',
-    unreadAnsweredSize: getMeetingUnreadMemberIds(m, sessionMap).size,
-    pinned: m.pinned,
-    bottomed: m.bottomed,
+  const meetingItems = Object.values(getMeetings()).map(m => {
+    const unreadAnsweredSize = getMeetingUnreadMemberIds(m, sessionMap).size;
+    return cacheMeetingItem(m, input => ({
+    id: input.id,
+    title: input.title,
+    lastMessageTime: input.lastMessageTime,
+    lastCompletedAt: input.lastCompletedAt,
+    createdAt: input.createdAt,
+    lastOutputPreview: input.groupChat
+      ? `AI 群聊 · ${(input.participants || input.subSessions || []).length}/${(input.subSessions || []).length} 已选`
+      : `${input.subSessions.length} 个子会话`,
+    status: input.status || 'idle',
+    unreadAnsweredSize,
+    pinned: input.pinned,
+    bottomed: input.bottomed,
     _isMeeting: true,
     _meeting: m,
-  }));
+  }), unreadAnsweredSize);
+  });
 
   const all = regularSessions.concat(meetingItems);
 
-  const sorted = sortBySidebarPlacement(all);
+  const ordered = sorted ? sortBySidebarPlacement(all) : all;
 
   // Hide any leftover legacy background PTY sessions from the removed room path.
-  const everything = sorted.filter(s => !s.title || !s.title.startsWith('[Team] '));
+  const everything = ordered.filter(s => !s.title || !s.title.startsWith('[Team] '));
 
     return everything;
   }
@@ -717,8 +750,8 @@ sessionListEl.addEventListener('keydown', event => {
     if (typeof options.openSearch === 'function') return options.openSearch(detail);
     doc.dispatchEvent(new doc.defaultView.CustomEvent('sidebar:open-search', { detail }));
   }
-  function filteredSidebarItems(sessionMap = getSessions()) {
-    return collectSidebarItems(sessionMap).filter(item => item.purpose !== RESIDENT_PURPOSE && sideFilterPasses(item) && projectFilter.matches(item) && (modelFilter === 'all' || sessionFamilies(item, sessionMap).has(modelFilter)));
+  function filteredSidebarItems(sessionMap = getSessions(), sorted = true) {
+    return collectSidebarItems(sessionMap, sorted).filter(item => item.purpose !== RESIDENT_PURPOSE && sideFilterPasses(item) && projectFilter.matches(item) && (modelFilter === 'all' || sessionFamilies(item, sessionMap).has(modelFilter)));
   }
   // 常驻的助理会话：同用途里最近活动的那个。
   function residentAssistant(sessionMap = getSessions()) {
@@ -806,7 +839,7 @@ sessionListEl.addEventListener('keydown', event => {
     const classifications = new Map();
     const classify = item => {
       let result = classifications.get(item);
-      if (!result) { result = sidebarItemClassification(item, { now: renderNow, sessionMap: renderSessions }); classifications.set(item, result); }
+      if (!result) { result = classifySession(item, { now: renderNow, sessionMap: renderSessions }); classifications.set(item, result); }
       return result;
     };
   publishSessionViews([...renderSessions.values()], { now: renderNow, classify });
@@ -818,15 +851,57 @@ sessionListEl.addEventListener('keydown', event => {
       sidebarPhaseInitialized=true;
     }
     const sessionMap = renderSessions;
-  const visible = filteredSidebarItems(sessionMap);
+  // partitionSidebarSessions applies the same stable placement sort. Filtering
+  // preserves input order, so sorting both before and after it is redundant.
+  const visible = filteredSidebarItems(sessionMap, false);
   const sections = sidebarView(visible, sessionMap, recentDays, { now: renderNow, classify });
   if (sideMode && wirelessControl) {
     const hidden = sideOnly ? [] : collectSidebarItems(sessionMap).filter(isSideSession);
     const failed = hidden.length ? new Set(partitionSidebarSessions(hidden, { now: renderNow, classify, sessionMap }).failed.map(x => x.id)) : new Set();
-    const attention = hidden.filter(x => failed.has(x.id) || sidebarItemHasUnread(x, sessionMap)).length;
+    const attention = hidden.filter(x => failed.has(x.id) || classify(x).unread).length;
     const label = String(attention || '');
     if (wirelessControl.textContent !== label) wirelessControl.textContent = label;
     wirelessControl.dataset.attention = attention ? (failed.size ? 'failed' : 'unread') : '';
+  }
+  const assistantOn = companyAssistantOn();
+  const resident = assistantOn ? residentAssistant(sessionMap) : null;
+  const unreadMemberIds = new Set(Object.values(getMeetings()).flatMap(m => [...getMeetingUnreadMemberIds(m, sessionMap)]));
+  // Grouping is unchanged only if every session's runtime/recency projection
+  // still matches. For the actual visible rows also compare *all* source
+  // metadata, external badges and exact time labels. Opaque/circular terminal
+  // objects deliberately miss the cache. Check the live HTML too: another UI
+  // owner (or hover styling) may have edited it since our last commit.
+  let presentation = null;
+  let presentationUnchanged = false;
+  const previous = previousPresentation;
+  try {
+    const sources = new Set([...sections.failed, ...sections.active, ...sections.today, ...(resident ? [resident] : [])]);
+    for (const item of [...sources]) if (item._isMeeting) {
+      for (const id of item._meeting.subSessions || []) if (sessionMap.has(id)) sources.add(sessionMap.get(id));
+    }
+    const context = JSON.stringify([getActiveSessionId(), getActiveMeetingId(), detailsEnabled, modelFilter,
+      [...collapsedSections], [...collapsedDetailsMeetings], [..._expandedMeetings], assistantOn]);
+    const rows = [...sources].map(item => {
+      const at = latestActivityTime(item);
+      const external = JSON.stringify([formatTime?.(at), sidebarRelativeTime(at),
+        item._isMeeting ? null : accountBadge(item), item._isMeeting ? null : subscriptionAccount(item),
+        item._isMeeting ? null : bridgeBadge(item.id),
+        !item._isMeeting && typeof window !== 'undefined' ? window.__progressBadgeFor?.(item.id) : null,
+        item.currentModel ? modelShort(item.currentModel) : null, unreadMemberIds.has(item.id),
+        item._isMeeting ? null : sessionDisplayTitle(item, KIND_LABELS, getMeetings()[item.meetingId])]);
+      return cachePresentation(item, input => { Object.assign({}, input); return {}; }, external);
+    });
+    presentation = { sections, context, rows };
+    presentationUnchanged = previous && previous.sections === sections && previous.context === context && rows.length === previous.rows.length
+        && rows.every((row, i) => row === previous.rows[i]) && previous.html === sessionListEl.innerHTML;
+  } catch { /* Custom metadata/badges keep the full renderer path. */ }
+  if (presentationUnchanged) {
+    renderSidebarStrip(sessionMap);
+    if (afterRender) afterRender();
+    if (detailsEnabled && options.requestSessionUsage) options.requestSessionUsage(previous.detailSessionIds);
+    releaseHoveredMeeting();
+    recordRenderCost();
+    return;
   }
   // Preserve scroll position across rebuilds — without this, any re-render
   // (every status-event, silence-timer, or session-updated) snaps the list
@@ -848,7 +923,6 @@ sessionListEl.addEventListener('keydown', event => {
 
   // 单条渲染（会话/会议），供「置顶 recent + 时间组」复用。
   const detailSessionIds = new Set();
-  const unreadMemberIds = new Set(Object.values(getMeetings()).flatMap(m => [...getMeetingUnreadMemberIds(m, sessionMap)]));
   function appendItem(s, child = false, target = renderTarget) {
     if (s._isMeeting) {
       const meeting = s._meeting;
@@ -856,7 +930,7 @@ sessionListEl.addEventListener('keydown', event => {
       const isActive = getActiveMeetingId() === s.id;
       const isDormant = s.status === 'dormant';
       const unreadMembers = getMeetingUnreadMemberIds(meeting, sessionMap);
-      const hasUnread = sidebarItemHasUnread(s, sessionMap);
+      const hasUnread = classify(s).unread;
       const runtime = _meetingRuntimeAggregate(meeting, sessionMap);
       const dotCls = sections.states.get(s.id) || 'idle';
       const group = doc.createElement('div');
@@ -935,7 +1009,7 @@ sessionListEl.addEventListener('keydown', event => {
     const dormantCls = isDormant ? ' dormant' : '';
     const showWaiting = runtimeTruth.state === RUNTIME_WAITING;
     const unreadCount = Math.max(0, Number(s.unreadCount) || 0);
-    const showUnread = sessionHasCompletedUnread(s) || unreadMemberIds.has(s.id);
+    const showUnread = classify(s).unread || unreadMemberIds.has(s.id);
     // 已确认异常和待核对断连优先，不能被未读或选中状态掩盖。
     const dotCls = issue ? 'error' : s._resumePending ? 'start' : (child
       ? partitionSidebarSessions([s], { sessionMap, activeSessionId: getActiveSessionId(), groupMemberIds: new Set([s.id]) }).states.get(s.id)
@@ -1015,8 +1089,7 @@ sessionListEl.addEventListener('keydown', event => {
     if (!collapsed) for (const item of items) appendItem(item);
   }
   // 「助理」一栏：常驻最上面，不受筛选影响；会话还没打开时放一行「点击打开」。
-  if (companyAssistantOn()) {
-    const resident = residentAssistant(sessionMap);
+  if (assistantOn) {
     const h = doc.createElement('div');
     h.className = 'session-sec-header sec-resident';
     h.dataset.sidebarRenderKey = 'section:sec-resident';
@@ -1037,7 +1110,7 @@ sessionListEl.addEventListener('keydown', event => {
   if (sections.failed.length) appendSecHeader('异常', sections.failed, 'sec-failed');
   if (sections.active.length) appendSecHeader('活跃', sections.active, 'sec-active');
   appendSecHeader(pinnedOnly ? '置顶' : recentDays === 3 ? '3 天内' : '今天', sections.today, 'sec-today', !pinnedOnly && sections.today.length ? '休眠' : '', archiveToday);
-  if (markAllSessionsRead && visible.some(item => sidebarItemHasUnread(item, sessionMap))) {
+  if (markAllSessionsRead && visible.some(item => classify(item).unread)) {
     const read = doc.createElement('button'); read.type = 'button'; read.className = 'sidebar-mark-read';
     read.textContent = '全部已读'; read.addEventListener('click', markAllSessionsRead); renderTarget.appendChild(read);
     read.dataset.sidebarRenderKey='mark-all-read';
@@ -1063,15 +1136,20 @@ sessionListEl.addEventListener('keydown', event => {
   if (afterRender) afterRender();
   if (detailsEnabled && options.requestSessionUsage) options.requestSessionUsage([...detailSessionIds]);
 
+  previousPresentation = presentation ? { ...presentation, html: sessionListEl.innerHTML, detailSessionIds: [...detailSessionIds] } : null;
+
   sessionListEl.scrollTop = savedScrollTop;
   // Whole-list updates must preserve a stationary pointer's expanded group.
   // If sorting moved that group away, release it at its new geometry.
-  if (hoverPoint && hoveredMeetingId && sessionListEl.querySelectorAll) {
-    const group = [...sessionListEl.querySelectorAll('.sidebar-group')].find(el => el.dataset.sidebarGroup === hoveredMeetingId);
-    const rect = group?.getBoundingClientRect();
-    if (!rect || hoverPoint.x < rect.left || hoverPoint.x > rect.right || hoverPoint.y < rect.top || hoverPoint.y > rect.bottom) {
-      hoveredMeetingId = null;
-      group?.classList.remove('hover-open');
+  releaseHoveredMeeting();
+  function releaseHoveredMeeting() {
+    if (hoverPoint && hoveredMeetingId && sessionListEl.querySelectorAll) {
+      const group = [...sessionListEl.querySelectorAll('.sidebar-group')].find(el => el.dataset.sidebarGroup === hoveredMeetingId);
+      const rect = group?.getBoundingClientRect();
+      if (!rect || hoverPoint.x < rect.left || hoverPoint.x > rect.right || hoverPoint.y < rect.top || hoverPoint.y > rect.bottom) {
+        hoveredMeetingId = null;
+        group?.classList.remove('hover-open');
+      }
     }
   }
   if (hadListFocus && focusId) {
@@ -1081,11 +1159,14 @@ sessionListEl.addEventListener('keydown', event => {
   if (hadListFocus && focusControl) {
     [...sessionListEl.querySelectorAll('[data-sidebar-control]')].find(control => control.dataset.sidebarControl === focusControl)?.focus({ preventScroll: true });
   }
-  const elapsed = Math.max(0, nowMs() - renderStartedAt);
-  renderStats.renders += 1;
-  renderStats.lastMs = elapsed;
-  renderStats.maxMs = Math.max(renderStats.maxMs, elapsed);
-  if (elapsed >= 50) renderStats.slowRenders += 1;
+  recordRenderCost();
+  function recordRenderCost() {
+    const elapsed = Math.max(0, nowMs() - renderStartedAt);
+    renderStats.renders += 1;
+    renderStats.lastMs = elapsed;
+    renderStats.maxMs = Math.max(renderStats.maxMs, elapsed);
+    if (elapsed >= 50) renderStats.slowRenders += 1;
+  }
 }
 
 // --- Session card hover light-tracking + click ripple (event delegation) ---

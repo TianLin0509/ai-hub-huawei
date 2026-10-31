@@ -44,7 +44,7 @@ function entryFor({ dataDir, meetingId, turnNum, memberId, speaker, workflowRun 
 }
 function instruction(entry) {
   if (entry.kind !== 'plain') return '';
-  return `【本轮回答】把要发到群聊的完整回答写入 ${entry.ready}（UTF-8 Markdown），写完回读确认。群聊卡片只显示这个文件，所以只写最终回答，不要先写「正在查阅」之类的进度；之后要补充或更正，直接修改它。聊天里一句话说明已写好即可，不必重复全文。`;
+  return `【本轮回答】把本轮最终回答写入 ${entry.ready}（UTF-8 Markdown），只写最终回答，补充或更正直接改此文件；聊天里的最终回复写本轮结论摘要（3–5 行），不要写「已写入某文件」这类话。`;
 }
 
 function readText(file) {

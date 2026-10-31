@@ -41,6 +41,8 @@
   // Codex 与新版 DeepSeek（同一条 codex runtime）走 -c model_reasoning_effort。
   // 两边的合法枚举不一样：Claude 是固定表，Codex 按模型目录取值（部分模型有 ultra）。
   const EFFORT_KINDS = new Set(['claude', 'codex', 'deepseek', 'codeagent', 'deepseek-claude']);
+  const EFFORT_PICKER = require('../core/distribution').featureEnabled('launchEffort');
+  const PROJECT_LIBRARY = require('../core/distribution').featureEnabled('projectLibrary');
   // CodeAgent 不在内：它的 CLI 挡不住用户级 MCP（2026-10-15 公司真机实测 --strict-mcp-config 无效），
   // 选「精简 / 无」只会把 Hub 自己的工具关掉，用户级 MCP 照样全部加载；所以不给它这个下拉，一律按完整挂载。
   const MCP_KINDS = new Set(['claude', 'codex', 'deepseek', 'deepseek-claude']);
@@ -286,7 +288,8 @@
     const fallbackEffort = effortOptions.some(([value]) => value === kindDefaultEffort)
       ? kindDefaultEffort
       : (effortOptions[0] ? effortOptions[0][0] : kindDefaultEffort);
-    const effort = effortOptions.some(([value]) => value === selection.effort)
+    // 不给选思考强度的发行版（公司版）：固定用默认档，升级前存过的默认值也不再生效。
+    const effort = EFFORT_PICKER && effortOptions.some(([value]) => value === selection.effort)
       ? selection.effort
       : fallbackEffort;
     const mcpOptions = MCP_KINDS.has(kind) ? mcpOptionsFor(kind) : [];
@@ -303,6 +306,7 @@
       model,
       modelOptions,
       showEffort: EFFORT_KINDS.has(kind),
+      effortVisible: EFFORT_KINDS.has(kind) && EFFORT_PICKER,
       effort,
       effortOptions,
       showMcp: MCP_KINDS.has(kind),
@@ -876,6 +880,7 @@
   }
 
   async function loadPreparedProjects() {
+    if (!PROJECT_LIBRARY) return;
     const loadId = ++projectLoadId;
     const list = document.getElementById('new-session-project-library');
     if (!list) return;
@@ -1004,10 +1009,10 @@
     const defaults = launchSelection(selectedKind, resolveSessionTuning(selectedKind, ''));
     const already = JSON.stringify(currentLaunchSelection()) === JSON.stringify(defaults);
     button.disabled = already || defaultsSaving || accountSaving || submitting || (selectedKind === 'codex' && !!accountReadError);
-    button.textContent = defaultsSaving ? '正在保存…' : already ? '整组默认 ✓' : '将整组设为默认';
+    button.textContent = defaultsSaving ? '正在保存…' : already ? (EFFORT_PICKER ? '整组默认 ✓' : '默认 ✓') : (EFFORT_PICKER ? '将整组设为默认' : '设为默认');
     button.title = already
       ? '下次新建会话将沿用这组配置'
-      : '保存模型、思考强度、速度和 MCP 等配置；用量账号切换后立即保存';
+      : (EFFORT_PICKER ? '保存模型、思考强度、速度和 MCP 等配置；用量账号切换后立即保存' : '下次新建会话默认用这个模型');
     const status = document.getElementById('new-session-default-status');
     if (status) status.textContent = defaultsSaving ? '正在保存整组配置' : already
       ? '新建会话将沿用这组配置' : '模型等配置仅用于本次 · 保存后下次沿用';
@@ -1157,7 +1162,7 @@
     const codexTierField = document.getElementById('new-session-codex-tier-field');
     const codexTierSelect = document.getElementById('new-session-codex-tier');
 
-    const showEffort = EFFORT_KINDS.has(selectedKind);
+    const showEffort = EFFORT_KINDS.has(selectedKind) && EFFORT_PICKER;
     const showMcp = MCP_KINDS.has(selectedKind);
     const showFast = FAST_KINDS.has(selectedKind);
     const showCodexTier = CODEX_TIER_KINDS.has(selectedKind);
@@ -1359,13 +1364,14 @@
   function tuningTag() {
     const options = modelOptionsFor(selectedKind);
     if (options.length === 0) return '';
-    if (selectedKind === 'codeagent' && !modelTouchedByUser) return codeagentDefaultModel ? `${codeagentModelLabel(codeagentDefaultModel)} · ${selectedEffort}` : selectedEffort;
+    const effortTag = EFFORT_PICKER ? ` · ${selectedEffort}` : '';
+    if (selectedKind === 'codeagent' && !modelTouchedByUser) return codeagentDefaultModel ? `${codeagentModelLabel(codeagentDefaultModel)}${effortTag}` : (EFFORT_PICKER ? selectedEffort : '');
     const model = options.find(option => option.id === selectedModel);
     const modelLabel = model ? model.label : selectedModel;
     if (selectedKind === 'codex') {
       return `${modelLabel} · ${selectedEffort} · ${MCP_PROFILE_LABELS[selectedMcpProfile] || 'No MCP'} · ${selectedCodexTier}`;
     }
-    if (EFFORT_KINDS.has(selectedKind)) return `${modelLabel} · ${selectedEffort}`;
+    if (EFFORT_KINDS.has(selectedKind)) return `${modelLabel}${effortTag}`;
     return modelLabel;
   }
 

@@ -122,7 +122,7 @@ function listAccounts(dataDir, { activeCounts = {}, personalAccountId = '', now 
       models: configured.models, modelsAuthoritative: configured.authoritative, defaultModel: configured.defaultModel || '',
       // 号自己 settings.json 写的模型与严格判定的说明（账号即模型，号表和直查标「默认模型未知 / 写的不在清单里」）
       ...(() => { const written = readSettingsModel(dir, fsModule); const d = strictDefaultModel(written, configured.models, { authoritative: configured.authoritative }); return { configModel: written, ...(d.note ? { defaultNote: describeDefaultNote(d.note, written) } : {}) }; })(),
-      modelsProbedAt: configured.probedAt || null,
+      modelsProbedAt: configured.probedAt || null, modelsSource: configured.probedSource || null,
       routeSwitched: fileExists(path.join(dir, ROUTE_MARKER), fsModule),
       activeSessions: Number(activeCounts[a.id]) || 0,
       sameAsPersonal: !!(creds.accountId && personalAccountId && creds.accountId === personalAccountId),
@@ -148,7 +148,7 @@ function poolDirMatch(dataDir, dir, { fsModule = fs } = {}) {
 function accountModels(dir, fsModule = fs, probedFile = null) {
   const probe = require('./codeagent-model-probe');
   const probed = probe.readProbed(probedFile || path.join(dir, probe.MODELS_FILE));
-  if (probed) return { models: probed.models, defaultModel: probed.defaultModel, authoritative: true, probedAt: probed.at };
+  if (probed) return { models: probed.models, defaultModel: probed.defaultModel, authoritative: true, probedAt: probed.at, probedSource: probed.source };
   const configured = require('./codeagent-models').configuredModels(dir, fsModule);
   return { ...configured, probedAt: null };
 }

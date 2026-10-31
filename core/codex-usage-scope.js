@@ -67,6 +67,8 @@ function readCodexAuthInfo(home) {
     const name = typeof idPayload.name === 'string' ? idPayload.name.trim() : '';
     const subject = typeof idPayload.sub === 'string' ? idPayload.sub.trim() : '';
     const lastRefreshMs = parseDateMs(raw && raw.last_refresh);
+    // 套餐与已付到期日：官方登录凭证自带，反映的是凭证上次刷新时的核对结果。
+    const openai = idPayload['https://api.openai.com/auth'] || {};
     const mtimeMs = stat && Number.isFinite(stat.mtimeMs) ? stat.mtimeMs : 0;
     const accountKey = normalizeAccountKey(accountId || subject || email);
     return {
@@ -79,6 +81,9 @@ function readCodexAuthInfo(home) {
       authLastRefreshMs: lastRefreshMs,
       authMtimeMs: mtimeMs,
       authSinceMs: lastRefreshMs || mtimeMs || 0,
+      planType: typeof openai.chatgpt_plan_type === 'string' ? openai.chatgpt_plan_type : '',
+      subscriptionUntilMs: parseDateMs(openai.chatgpt_subscription_active_until),
+      subscriptionCheckedMs: parseDateMs(openai.chatgpt_subscription_last_checked),
     };
   } catch {
     return {
@@ -150,6 +155,9 @@ function resolveCodexUsageScope(config = {}, opts = {}) {
     authLastRefreshMs: auth.authLastRefreshMs,
     authMtimeMs: auth.authMtimeMs,
     authSinceMs: auth.authSinceMs,
+    planType: auth.planType || '',
+    subscriptionUntilMs: auth.subscriptionUntilMs || 0,
+    subscriptionCheckedMs: auth.subscriptionCheckedMs || 0,
     scopeKey: `subscription:${profile.id}:${normalizeKey(sessionsRoot)}${authScope}`,
   };
 }

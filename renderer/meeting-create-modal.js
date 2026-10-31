@@ -2,7 +2,6 @@
 
 (function () {
 const { ipcRenderer } = require('electron');
-const { checkDevWorkspace } = require('./dev-workspace-guard.js');
 const { KIND_LABELS, GROUP_MEMBER_KINDS } = require('../core/ai-kinds.js');
 const { MODEL_OPTIONS_BY_KIND, modelOptionsFor } = require('../core/model-options.js');
 
@@ -22,22 +21,13 @@ const DEFAULT_SLOTS = [
 // member rather than a cost/latency-bearing default in every room.
 const DEFAULT_GROUP_MEMBERS = DEFAULT_SLOTS.slice(0, 2).map(x => ({ ...x }));
 const SLOT_NAMES = ['一号位', '二号位', '三号位'];
-// 场景是这一页唯一的任务分类维度。
-// 2026-09-05：原来在成员配置上方还有一排四张任务模板卡，每张卡实际只做两件事 ——
-// 选一个场景 + 换一句房名 placeholder，和这里的三个场景完全重叠。两处并存必然出现
-// 「模板卡选了投研，底下场景还停在通用」这种自相矛盾状态，故删卡、只留场景。
-// 发行目标可以关掉开发场景（target.json 的 features.devGroupScene；2026-10-28 公司版：同事大多没装
-// project-prep skill，开发场景要求的项目整理是额外负担）。关掉后只剩一个场景时不显示场景选择，
-// 建群默认通用场景 + 默认工作目录。
-const DEV_SCENE_ENABLED = require('../core/distribution').featureEnabled('devGroupScene');
-const SCENES = [
-  { id: 'dev', label: '开发', placeholder: '例如：实现这个需求，完成验证与合并' },
-  { id: 'general',  label: '通用', placeholder: '例如：帮我拆解这个问题，给出可执行方案' },
-].filter(scene => DEV_SCENE_ENABLED || scene.id !== 'dev');
-const DEFAULT_SCENE = DEV_SCENE_ENABLED ? 'dev' : 'general';
+// 新群统一通用；可选场景只提示成员按需读文件，不改变会话启动配置。
+const PROJECT_LIBRARY = require('../core/distribution').featureEnabled('projectLibrary');
+const PLAIN_COPY = !require('../core/distribution').featureEnabled('launchEffort');
+let _sceneHints = [];
+let _sceneHintLoad = 0;
 
 let _modalEl = null;
-let _currentMode = DEFAULT_SCENE;
 let _isGroupChat = true;
 let _groupSlots = DEFAULT_GROUP_MEMBERS.map(x => ({ ...x }));
 let _escListener = null;
@@ -83,6 +73,7 @@ function _paintWorkspace(workspace) {
 // 用户的原话：「AI HUB 就应该作为一个选项，我点击就行，不需要我自己输入路径去找」。
 // 数据源是主进程的 workspace:prepared-projects（core/prepared-project-library.js）。
 async function _loadProjectLibrary(force = false) {
+  if (!PROJECT_LIBRARY) return [];
   if (_projectLibraryLoading) return _projectLibraryLoading;
   // Refresh every open; no stale enrollment cache.
   _projectLibraryLoading = (async () => {
@@ -257,59 +248,31 @@ function _cloneSlots(slots) {
   return (slots || require('./codeagent-preference').defaultGroupMembers(DEFAULT_GROUP_MEMBERS)).map(x => _normalizeSlotSpec(x));
 }
 
-function _renderSceneChoices(activeId = 'general') {
-  return SCENES.map(scene => `
-    <label class="mcm-scene-choice${scene.id === activeId ? ' selected' : ''}" data-mcm-scene="${_escapeHtml(scene.id)}">
-      <input type="radio" name="mcm-scene" value="${_escapeHtml(scene.id)}"${scene.id === activeId ? ' checked' : ''}>
-      ${_escapeHtml(scene.label)}
-    </label>
-  `).join('');
-}
-
-// 场景说明只认 _currentMode，不认「刚才点了哪个 radio」。
-// 2026-09-05 合并位打回的那个泄漏就出在这里：说明原来画在 radio 的 change 里，
-// 而重开弹窗走的是 _applyScene —— 场景已经回到通用、工作目录也回到默认，
-// 屏幕上却还留着「开发场景…已切到选择已有路径」。凡是能被重开路径绕过的
-// UI 状态，就必须挂在负责重置状态的那个函数上。
-function _paintSceneHint() {
-  const hint = _modalEl && _modalEl.querySelector('#mcm-scene-hint');
-  if (!hint) return;
-  if (_currentMode === 'dev') {
-    hint.textContent = '从「项目库」选择项目，或选择已有文件夹。至少保留两位成员。建好后直接输入任务，Hub 安排第一位开题与实现、第二位独立审查与合并。单人开发直接用普通会话。';
-    hint.style.display = '';
-  } else {
-    hint.textContent = '';
-    hint.style.display = 'none';
+async function _loadSceneHints() {
+  const load = ++_sceneHintLoad;
+  _sceneHints = [];
+  const row = _modalEl.querySelector('#mcm-scene-row');
+  const select = _modalEl.querySelector('#mcm-scene-hint');
+  row.hidden = true;
+  select.innerHTML = '<option value="">按话题自动</option>';
+  try {
+    const result = await ipcRenderer.invoke('session-scenes:snapshot');
+    if (load !== _sceneHintLoad) return;
+    _sceneHints = (result?.data?.scenes || []).filter(s => s.id !== 'coding' && s.file);
+    select.innerHTML = '<option value="">按话题自动</option>' + _sceneHints.map(s =>
+      `<option value="${_escapeHtml(s.id)}">${_escapeHtml(s.label)}</option>`).join('');
+    row.hidden = !_sceneHints.length;
+  } catch (error) {
+    console.warn('[meeting-create] 场景库读取失败:', error && error.message);
   }
 }
 
-// 场景切换保留已选成员、模型与调优。
-function _applyScene(sceneId, opts = {}) {
-  const scene = SCENES.find(s => s.id === sceneId) || SCENES[0];
-  _currentMode = scene.id;
-  if (opts.resetSlots) {
-    // 装了 CodeAgent 的电脑默认两名 CodeAgent 成员（GLM + MiniMax），见 renderer/codeagent-preference.js。
-    _groupSlots = _cloneSlots(require('./codeagent-preference').defaultGroupMembers(DEFAULT_GROUP_MEMBERS));
-    _renderSlots();
-  }
-  const titleInput = _modalEl && _modalEl.querySelector('#mcm-title-input');
-  if (titleInput) {
-    if (opts.clearTitle) titleInput.value = '';
-    titleInput.placeholder = scene.placeholder || '留空则自动编号：AI 群聊 #N';
-  }
-  if (_currentMode === 'dev') {
-    _meetingWorkspaceMode = 'existing';
-    _paintWorkspace();
-  }
-  if (!_modalEl) return;
-  const sceneRadio = _modalEl.querySelector(`input[name="mcm-scene"][value="${_currentMode}"]`);
-  if (sceneRadio) sceneRadio.checked = true;
-  _modalEl.querySelectorAll('.mcm-scene-choice').forEach(el => {
-    const input = el.querySelector('input[name="mcm-scene"]');
-    el.classList.toggle('selected', !!input && input.value === _currentMode);
-  });
+function _resetMembers() {
+  _groupSlots = _cloneSlots(require('./codeagent-preference').defaultGroupMembers(DEFAULT_GROUP_MEMBERS));
   _renderSlots();
-  _paintSceneHint();
+  const input = _modalEl.querySelector('#mcm-title-input');
+  input.value = '';
+  input.placeholder = '例如：帮我拆解这个问题，给出可执行方案';
 }
 
 function _slotHtml(i, spec, isGroup) {
@@ -325,10 +288,10 @@ function _slotHtml(i, spec, isGroup) {
   const label = !isGroup ? `Slot ${i + 1} · ${SLOT_NAMES[i]}`
     : orchLead ? '成员 1 · 负责人'
     : _orchestrationOn ? `成员 ${i + 1} · 工作成员` : `成员 ${i + 1}`;
-  const removeBtn = isGroup && i >= 1 && (_orchestrationOn || _currentMode !== 'dev' || _groupSlots.length > 2)
+  const removeBtn = isGroup && i >= 1
     ? `<button type="button" class="mcm-remove-member" data-remove-member="${i}" title="移除此成员">×</button>`
     : '';
-  const effortField = tuning.showEffort ? `
+  const effortField = tuning.effortVisible ? `
       <label class="mcm-tuning-field"><span class="mcm-slot-field-name">思考强度</span>
         <select class="mcm-effort-select">${_selectOptions(tuning.effortOptions, tuning.effort)}</select>
       </label>` : '';
@@ -353,7 +316,7 @@ function _slotHtml(i, spec, isGroup) {
         <div><div class="mcm-slot-label">${_escapeHtml(label)}</div><strong>${_escapeHtml(avatarAlt)}</strong></div>
       </div>
       <div class="mcm-slot-fields">
-        <label><span class="mcm-slot-field-name">AI</span><select class="mcm-ai-select">${aiOptions}</select></label>
+        <label${(aiOptions.match(/<option/g) || []).length <= 1 ? ' style="display:none"' : ''}><span class="mcm-slot-field-name">AI</span><select class="mcm-ai-select">${aiOptions}</select></label>
         ${def.kind === 'deepseek-claude' ? _deepseekRouteHtml(def.deepseekRoute) : ''}
         <label><span class="mcm-slot-field-name">模型</span><select class="mcm-model-select">${_modelOptions(def.kind, def.model)}</select></label>
         ${effortField}
@@ -454,7 +417,7 @@ function _renderSlots() {
     btn.addEventListener('click', () => {
       _syncGroupSlotsFromDom();
       const idx = parseInt(btn.getAttribute('data-remove-member'), 10);
-      if ((_currentMode !== 'dev' || _groupSlots.length > 2) && Number.isInteger(idx) && idx >= 0 && idx < _groupSlots.length) {
+      if (Number.isInteger(idx) && idx >= 0 && idx < _groupSlots.length) {
         _groupSlots.splice(idx, 1);
         _renderSlots();
       }
@@ -488,20 +451,19 @@ function _ensureModal() {
                  placeholder="留空则自动编号：AI 群聊 #N" autocomplete="off">
         </div>
         <div class="mcm-workspace-block">
-          <span class="mcm-workspace-caption">Workspace</span>
+          <span class="mcm-workspace-caption">${PLAIN_COPY ? '工作目录' : 'Workspace'}</span>
           <div class="mcm-workspace-choices" role="radiogroup" aria-label="选择群聊 workspace 方式">
-            <button type="button" class="mcm-workspace-choice selected" data-mcm-workspace-mode="default" role="radio" aria-checked="true"><strong>默认工作目录</strong><small>全员开在工作根，跨会话文件互相可见</small></button>
-            <button type="button" class="mcm-workspace-choice" data-mcm-workspace-mode="scratch" role="radio" aria-checked="false"><strong>临时目录</strong><small>随机新建一次性目录，全员共用</small></button>
-            <button type="button" class="mcm-workspace-choice" data-mcm-workspace-mode="existing" role="radio" aria-checked="false"><strong>选择已有路径</strong><small>可选项目、领域或外部目录</small></button>
+            <button type="button" class="mcm-workspace-choice selected" data-mcm-workspace-mode="default" role="radio" aria-checked="true"><strong>默认工作目录</strong><small>${PLAIN_COPY ? '开在默认文件夹，各会话的文件互相可见' : '全员开在工作根，跨会话文件互相可见'}</small></button>
+            <button type="button" class="mcm-workspace-choice" data-mcm-workspace-mode="scratch" role="radio" aria-checked="false"><strong>临时目录</strong><small>${PLAIN_COPY ? '新建一个空文件夹，全员共用' : '随机新建一次性目录，全员共用'}</small></button>
+            <button type="button" class="mcm-workspace-choice" data-mcm-workspace-mode="existing" role="radio" aria-checked="false"><strong>选择已有路径</strong><small>${PLAIN_COPY ? '选择电脑上已有的文件夹' : '可选项目、领域或外部目录'}</small></button>
           </div>
-          <div class="mcm-workspace-existing" id="mcm-workspace-existing" hidden><code id="mcm-workspace-path">尚未选择</code><button type="button" class="mcm-workspace-button" id="mcm-project-library-button" aria-haspopup="listbox" aria-expanded="false" aria-controls="mcm-project-library" title="已整理过的项目，按最近活跃排序，点一下即选">项目库 ▾</button><button type="button" class="mcm-workspace-button" id="mcm-workspace-button">选择文件夹…</button></div>
+          <div class="mcm-workspace-existing" id="mcm-workspace-existing" hidden><code id="mcm-workspace-path">尚未选择</code><button type="button" class="mcm-workspace-button" id="mcm-project-library-button" aria-haspopup="listbox" aria-expanded="false" aria-controls="mcm-project-library" title="已整理过的项目，按最近活跃排序，点一下即选"${PROJECT_LIBRARY ? '' : ' style="display:none"'}>项目库 ▾</button><button type="button" class="mcm-workspace-button" id="mcm-workspace-button">选择文件夹…</button></div>
           <div class="mcm-project-library" id="mcm-project-library" role="listbox" aria-label="项目库" hidden></div>
         </div>
-        <div class="mcm-scene" id="mcm-scene-row"${SCENES.length > 1 ? '' : ' style="display:none"'}>
-          <span class="mcm-scene-caption">场景</span>
-          ${_renderSceneChoices(DEFAULT_SCENE)}
+        <div class="mcm-scene" id="mcm-scene-row" hidden>
+          <label class="mcm-scene-caption" for="mcm-scene-hint">场景</label>
+          <select id="mcm-scene-hint" aria-label="群聊场景"><option value="">按话题自动</option></select>
         </div>
-        <div class="mcm-scene-hint" id="mcm-scene-hint" style="display:none; font-size:12px; color:#888; margin:-6px 0 12px; line-height:1.6;"></div>
         <div class="mcm-orch-row" id="mcm-orch-row"${ORCHESTRATOR_KINDS.some(require('../core/distribution').kindAllowed) ? '' : ' style="display:none"'}>
           <label class="mcm-orch-switch"><input type="checkbox" id="mcm-orch-toggle" role="switch"><span class="mcm-orch-track" aria-hidden="true"></span><strong>负责人</strong></label>
           <span class="mcm-orch-hint" id="mcm-orch-hint">打开后成员 1 当负责人：你只和它对话，它像懂技术的领导一样拆解任务、给成员分工、审查交付并核实关键证据；具体实现交给成员。目标与停止条件直接用自然语言说明。</span>
@@ -511,7 +473,7 @@ function _ensureModal() {
         </div>
         <div class="mcm-member-caption">
           <strong>成员配置</strong>
-          <span>${DEV_SCENE_ENABLED ? '开发群聊第一位实现、第二位独立验证与合并。' : ''}${require('../core/distribution').kindAllowed('deepseek') ? '需要第三视角时再添加 DeepSeek。' : ''}可继续加人，同一种 AI 也能多开。每位成员可独立选择模型、思考强度、速度与 MCP。</span>
+          <span>${require('../core/distribution').kindAllowed('deepseek') ? '需要第三视角时再添加 DeepSeek。' : ''}可继续加人，同一种 AI 也能多开。${PLAIN_COPY ? '每位成员可以选不同的模型。' : '每位成员可独立选择模型、思考强度、速度与 MCP。'}</span>
         </div>
         <div class="mcm-slots"></div>
         <button type="button" class="mcm-add-member" id="mcm-add-member">+ 添加成员</button>
@@ -543,7 +505,8 @@ function _setOrchestration(on) {
       : caption.dataset.plainText;
   }
   const hint = _modalEl.querySelector('#mcm-orch-hint');
-  if (hint) hint.textContent = _orchestrationOn
+  if (hint && PLAIN_COPY && !_orchestrationOn) hint.textContent = '打开后成员 1 当负责人：你只和它对话，它来拆任务、分工和审查。';
+  else if (hint) hint.textContent = _orchestrationOn
     ? '已开启：成员 1 当负责人。它亲自定方案、分工、审查与核实，具体实现交给你选好的成员；成员间交流由它安排。'
     : '打开后成员 1 当负责人：你只和它对话，它像懂技术的领导一样拆解任务、给成员分工、审查交付并核实关键证据；具体实现交给成员。目标与停止条件直接用自然语言说明。';
   _renderSlots();
@@ -600,15 +563,6 @@ function _bindEvents() {
     _syncGroupSlotsFromDom();
     _setOrchestration(event.target.checked);
   });
-  _modalEl.querySelectorAll('input[name="mcm-scene"]').forEach(radio => {
-    radio.addEventListener('change', () => {
-      if (!radio.checked) return;
-      // 场景高亮、房名提示、场景说明都归 _applyScene 管，这里不重复画。
-      _applyScene(radio.value);
-      // 预热项目库；用户仍可手动改选工作目录方式。
-      if (radio.value === 'dev') void _loadProjectLibrary();
-    });
-  });
   _modalEl.addEventListener('click', (e) => {
     if (!_presentation.embedded && e.target === _modalEl) closeMeetingCreateModal();
   });
@@ -645,72 +599,28 @@ async function _onCreate() {
       };
     });
     if (!slots.length) throw new Error('请至少保留一个群聊成员');
-    const sceneInput = _modalEl.querySelector('input[name="mcm-scene"]:checked');
-    const scene = sceneInput ? sceneInput.value : 'general';
     const orchestration = _orchestrationPayload();
     if (orchestration && slots.length < 2) throw new Error('编排群至少需要负责人和一位工作成员；请先选择成员');
-    if (!orchestration && scene === 'dev' && slots.length < 2) throw new Error('开发群聊至少需要两位成员；单人开发直接用普通会话。');
-    // createMeeting 的 scene 实际取自 mode（过 MEETING_MODES 白名单），scene 字段只是透传
-    const mode = (scene === 'research' || scene === 'dev') ? scene : 'general';
+    const sceneHint = _modalEl.querySelector('#mcm-scene-hint').value;
     const titleInput = _modalEl.querySelector('#mcm-title-input');
     const title = titleInput ? titleInput.value.trim() : '';
 
-    let workspace = await _syncWorkspace();
-    // 开发场景开在平铺工作根上：放行，但 prompt 里要带项目库让 AI 自己定位项目根。
-    let atWorkRoot = scene === 'dev' && _meetingWorkspaceMode === 'default' && !!(workspace && workspace.flat);
-    let fellBackToWorkRoot = false;
-    let devProjects = [];
-    if (scene === 'dev') {
-      // 挡在建群这一刻。落错目录的代价是几分钟后才看得出来的一次空转，
-      // 而这里只要一行判断。见 renderer/dev-workspace-guard.js 的注释。
-      // 工作根总是要问一次：失效目录的兜底落脚点就是它（任务书第七节第 8 条）。
-      // 只读查询，没有副作用。
-      let workRootPath = atWorkRoot && workspace ? workspace.path : '';
-      if (!workRootPath) {
-        try {
-          const info = await ipcRenderer.invoke('workspace:work-root');
-          if (info && info.flat && info.root) workRootPath = info.root;
-        } catch (error) { console.warn('[meeting-create] 取工作根失败：', error && error.message); }
-      }
-      const verdict = checkDevWorkspace(workspace && workspace.path, { workRoot: workRootPath });
-      if (!verdict.ok) throw new Error(verdict.message);
-      // 用户选中的是仓库**子目录**时，闸门会把仓库根算出来。必须按仓库根建群 ——
-      // 合同里那些仓库内相对路径（.agents/AUTHOR.md、scripts/merge_task.py）
-      // 在子目录里是找不到的。
-      if ((verdict.reason === 'ready-subdir' || verdict.reason === 'ready-fallback') && verdict.resolvedRoot) {
-        workspace = { ...workspace, path: verdict.resolvedRoot };
-      }
-      // 路径被纠正过（原来那个已经不存在）时告诉用户一声 —— 建房照常继续，
-      // 不要求他回去重新选一次（任务书第七节：唯一确认就自主继续）。
-      if (verdict.reason === 'ready-fallback' && verdict.message) {
-        console.warn('[meeting-create] 工作目录已纠正：' + verdict.message);
-      }
-      // 退到工作根时，这个房就是「不在项目根上」——项目库和定位说明要跟着进来，
-      // 否则 AI 到了那儿既没有合同也没有线索。
-      if (verdict.reason === 'ready-fallback' && verdict.atWorkRoot) fellBackToWorkRoot = true;
-      if (fellBackToWorkRoot) atWorkRoot = true;
-      if (atWorkRoot) {
-        createBtn.textContent = '正在读取项目库...';
-        devProjects = await _loadProjectLibrary(true);
-        if (_projectLibraryError) throw _projectLibraryError;
-      }
-    }
-    // 编排群的工作流由负责人按计划配置，建群时不预置。
-    const serialWorkflow = orchestration ? null : _buildDefaultDevWorkflow(scene, slots, { atWorkRoot, projects: devProjects });
+    const workspace = await _syncWorkspace();
     createBtn.textContent = '正在创建成员会话...';
     const meeting = await ipcRenderer.invoke('create-meeting', {
-      mode,
-      scene,
+      mode: 'general',
+      scene: 'general',
+      sceneHint: _sceneHints.some(s => s.id === sceneHint) ? sceneHint : '',
       slots,
       title,
       groupChat: _isGroupChat,
       groupMode: _isGroupChat ? 'deliberation' : null,
       groupRecentRawN: 5,
-      participants: _isGroupChat ? (orchestration || scene === 'dev' ? [slots[0].index] : slots.map((_, i) => i)) : null,
+      participants: _isGroupChat ? (orchestration ? [slots[0].index] : slots.map((_, i) => i)) : null,
       workspace: workspace.path,
       workspaceLabel: workspace.label,
       workspaceDraft: !!workspace.draft,
-      serialWorkflow,
+      serialWorkflow: null,
       ...(orchestration ? { orchestration } : {}),
     });
     if (!meeting || !meeting.id) throw new Error('create-meeting returned empty meeting');
@@ -729,48 +639,6 @@ async function _onCreate() {
     createBtn.removeAttribute('aria-busy');
     createBtn.textContent = '创建群聊';
   }
-}
-
-// 开发场景默认就配好「工作位 ↔ 合并位」循环，用户不用再点一次工作流配置。
-//
-// 为什么放在建群这一刻：发送按钮已经会看 serialWorkflow.loop.enabled 决定跑循环还是
-// 普通提问（meeting-room.js 的 doSend 三岔路）。所以只要建群时把它写好，用户后面
-// 就只剩「打一句话 + 回车」这一个动作 —— 零配置界面。
-//
-// 想随便问一句而不跑流程？关掉工作流开关即可，走的还是原来那条普通群聊路径。
-// memberId 是位置约定：loop-engine 的 sidOf() 把 m1 解析成 subSessions[0]。
-//
-// 开在工作根（默认工作目录）时，workspaceHint 带上项目库快照，预设 prompt 前面会多一段
-// 「先按任务定位项目根」—— 这是「允许选默认目录」的代价，由 prompt 而不是用户承担。
-//
-// devPhase 是起手方式：双席位一律先落 'discuss'（循环配置照样写好，只是发送先走普通群聊）。
-// 用户在群里点「开题」→ 阶段翻成 'kickoff'，指定执笔者写任务书；
-// 双席位报告交付后自动开工；单人开发使用普通会话。
-function _buildDefaultDevWorkflow(scene, slots, workspaceHint = {}) {
-  if (scene !== 'dev') return null;
-  const WT = window.WorkflowTemplates;
-  if (!WT || typeof WT.createTemplateConfig !== 'function') throw new Error('开发工作流尚未加载，请重试创建');
-  if (!Array.isArray(slots) || slots.length < 2) throw new Error('开发群聊至少需要两位成员');
-  const members = slots.map((s, i) => ({ memberId: `m${i + 1}`, kind: s.kind }));
-  const templateId = 'dev-task';
-  const config = WT.createTemplateConfig(templateId, members, {
-    workspace: {
-      atWorkRoot: !!(workspaceHint && workspaceHint.atWorkRoot),
-      projects: (workspaceHint && workspaceHint.projects) || [],
-    },
-    devPhase: 'discuss',
-  });
-  if (!config) throw new Error('无法生成默认开发工作流，请重试创建');
-  // 2026-09-28: new rooms run on the delivery engine only; the legacy template
-  // above is used just for its project-locator fields.
-  const delivery = require('../core/workflow-settings').createDeliveryConfig('development', members, {
-    ...(config.projectLocator ? { projectLocator: config.projectLocator } : {}),
-    ...(config.projectLibrary ? { projectLibrary: config.projectLibrary } : {}),
-    workRoot: !!config.workRoot,
-  });
-  // Submit with create-meeting: the first creation event and response must
-  // already contain the workflow, before the room constructs its controls.
-  return delivery;
 }
 
 function _showError(text) {
@@ -795,8 +663,6 @@ function openMeetingCreateModal(mode = 'general', options = {}) {
   } else {
     _isGroupChat = true;
   }
-  // 每次进入默认开发场景，并让用户选择已有项目路径；关掉开发场景的发行版默认通用场景 + 默认工作目录。
-  _currentMode = DEFAULT_SCENE;
   _ensureModal();
   const embeddedHost = options.embedded === true && options.host && typeof options.host.appendChild === 'function'
     ? options.host
@@ -816,8 +682,9 @@ function openMeetingCreateModal(mode = 'general', options = {}) {
   _clearError();
   _orchestrationOn = false;
   _setOrchestration(false);
-  _applyScene(DEFAULT_SCENE, { clearTitle: true, resetSlots: true });
-  _meetingWorkspaceMode = DEV_SCENE_ENABLED ? 'existing' : 'default';
+  _resetMembers();
+  void _loadSceneHints();
+  _meetingWorkspaceMode = 'default';
   _meetingWorkspace = null;
   _projectLibraryOpen = false;
   _paintWorkspace();

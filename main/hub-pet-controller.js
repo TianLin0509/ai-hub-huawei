@@ -22,6 +22,9 @@ const EDGE_CUT_MAX = 120;                // 告诉渲染端「窗口伸出屏幕
 const PEEK_VISIBLE = 0.42;               // 躲边时露出身体的比例
 const POLL_MS = 4000;                    // 看助理忙不忙、有没有离开电脑
 const DRAG_TICK_MS = 16;
+// 鼠标是否落在桌宠身上：每 100ms 看一次光标位置，只有光标进了桌宠窗口的方框才问渲染端「点到身体没有」。
+// 以前用 setIgnoreMouseEvents 的 forward（Windows 上是全局低级鼠标钩子）：Hub 主进程一忙，全系统鼠标都卡顿、漂移（2026-10-30 同事反馈）。
+const HOVER_TICK_MS = 100;
 const CLICK_SLOP = 4;
 const MODE_LABELS = { lively: '活泼', gentle: '温和', quiet: '安静' };
 const MODE_HINTS = { lively: '提醒之外，早上问候、久坐提醒', gentle: '只说助理的提醒', quiet: '不说话，只亮小圆点' };
@@ -83,6 +86,7 @@ function createHubPetController({
   const enabled = () => available && !disposed && settings.get().enabled;
   const alive = () => !!(win && !win.isDestroyed());
   const send = (channel, payload) => { if (alive()) win.webContents.send(channel, payload); };
+  let ignoring = null, hoverTimer = null, lastProbe = ''; // 点穿状态，见 setIgnore / hoverTick
 
   const scaleNow = () => parseScale(settings.get().scale) ?? 1;
   // 某个大小、某组透明边下的几何：身体边长、窗口高、身体相对窗口的边距。改大小或量出透明边时，新旧两套都要算。
@@ -194,7 +198,7 @@ function createHubPetController({
     win.setMenuBarVisibility?.(false);
     win.webContents.setWindowOpenHandler?.(() => ({ action: 'deny' }));
     win.webContents.on('will-navigate', event => event.preventDefault());
-    win.setIgnoreMouseEvents(true, { forward: true });
+    ignoring = null; setIgnore(true);
     const pos = initialPosition();
     place(pos);
     dock = dockOf({ position: pos, area: areaAt(pos), size: winSize(), inset: inset() });
@@ -319,6 +323,25 @@ function createHubPetController({
   }
 
   // ---------- 拖动 ----------
+  // ---------- 点穿与接住（不挂全局鼠标钩子） ----------
+  function setIgnore(v) {
+    if (!alive() || ignoring === v) return;
+    ignoring = v;
+    win.setIgnoreMouseEvents(v);
+  }
+  function hoverTick() {
+    if (!alive() || drag || !win.isVisible?.()) return;
+    const c = cursor(), b = win.getBounds();
+    const inside = c.x >= b.x && c.x < b.x + b.width && c.y >= b.y && c.y < b.y + b.height;
+    if (!inside) { lastProbe = ''; if (ignoring === false) setIgnore(true); return; }
+    if (ignoring === false) return; // 已接住：离开身体由渲染端的 mousemove / mouseleave 报
+    const key = `${Math.round(c.x)},${Math.round(c.y)},${b.x},${b.y}`;
+    if (key === lastProbe) return;
+    lastProbe = key;
+    send('hub-pet:probe', { x: c.x - b.x, y: c.y - b.y });
+  }
+  function startHover() { if (!hoverTimer) { hoverTimer = setInterval(hoverTick, HOVER_TICK_MS); hoverTimer.unref?.(); } }
+  function stopHover() { if (hoverTimer) clearInterval(hoverTimer); hoverTimer = null; lastProbe = ''; }
   function cursor() {
     if (overrides.cursor) return overrides.cursor; // 隔离测试不动真鼠标，用注入的位置模拟拖动
     try { return screen.getCursorScreenPoint(); } catch (_) { return { x: 0, y: 0 }; }
@@ -329,7 +352,7 @@ function createHubPetController({
     const c = cursor();
     const pos = currentPos();
     drag = { target: target || 'pet', start: c, offset: { x: c.x - pos.x, y: c.y - pos.y }, moved: false, samples: [{ t: Date.now(), x: pos.x, y: pos.y }], startedAt: Date.now(), last: pos };
-    win.setIgnoreMouseEvents(false);
+    setIgnore(false);
     moveTimer = setInterval(dragTick, DRAG_TICK_MS);
   }
   function dragTick() {
@@ -509,7 +532,7 @@ function createHubPetController({
   const fromMain = event => { const m = getMainWindow?.(); return !!(event && m && !m.isDestroyed?.() && event.sender === m.webContents); };
   const handlers = {
     'hub-pet:ready': (event) => { if (fromPet(event)) { lastSent = ''; evaluate(); } },
-    'hub-pet:hit': (event, hit) => { if (fromPet(event) && !drag) win.setIgnoreMouseEvents(!hit, { forward: true }); },
+    'hub-pet:hit': (event, hit) => { if (fromPet(event) && !drag) setIgnore(!hit); },
     'hub-pet:press': (event, payload) => { if (fromPet(event)) onPress(payload && payload.target); },
     'hub-pet:release': (event) => { if (fromPet(event)) onRelease(); },
     'hub-pet:menu': (event) => { if (fromPet(event)) { if (drag) { drag = null; stopMove(); } popupMenu(); } },
@@ -727,6 +750,7 @@ function createHubPetController({
     ensureWindow();
     noticeBus?.on?.('notice', onNotice);
     pollTimer = setInterval(evaluate, POLL_MS);
+    startHover();
     if (watchFullscreen && overrides.fullscreen == null) fsWatch.start();
     scheduleRoleRestore();
     return true;
@@ -737,6 +761,7 @@ function createHubPetController({
     noticeBus?.removeListener?.('notice', onNotice);
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = null;
+    stopHover();
     if (deadlineTimer) clearTimeout(deadlineTimer);
     deadlineTimer = null;
     if (autoRoleTimer) clearTimeout(autoRoleTimer);

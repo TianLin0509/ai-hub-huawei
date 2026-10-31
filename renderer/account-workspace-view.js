@@ -78,6 +78,24 @@ function loginEnvHtml(c, vps, esc, edit) {
   const running = ['active', 'activating', 'reloading'].includes(row.envState);
   return `<p class="ac-login-env"><span class="ac-env-ok" aria-hidden="true"></span>${esc(exit + ' · 登录环境「' + row.envName + '」与运行出口一致 · ' + (ENV_STATE[row.envState] || '未运行'))}<button class="ac-text-btn" data-ac="env-open" data-profile="${esc(id)}">打开登录窗口 ↗</button>${running ? `<button class="ac-text-btn" data-ac="env-stop" data-profile="${esc(id)}">关闭</button>` : ''}</p>`;
 }
+// Claude 账号邮箱保管（2026-10-30）：界面只知道「存没存密码」；打开邮箱走该账号的登录环境（同一出口）。
+const MAIL_KIND = { outlook: 'Outlook', gmail: 'Gmail', mailcom: 'mail.com', onet: 'Onet', other: '其他邮箱' };
+function mailFieldHtml(name, label, value, esc, { type = 'text', placeholder = '' } = {}) {
+  return `<label><span>${label}</span><input class="ac-account-input" data-mail-field="${name}" type="${type}" autocomplete="off" spellcheck="false" maxlength="${name === 'note' ? 300 : 254}" placeholder="${esc(placeholder)}" value="${esc(value || '')}"></label>`;
+}
+function mailboxHtml(c, mail, esc, edit) {
+  if (!mail) return '';
+  if (mail.error) return `<p class="ac-mailbox ac-item-error">${esc('邮箱资料读取失败：' + mail.error)}</p>`;
+  const id = c.profileId || 'default', m = mail.accounts?.[id];
+  if (edit && edit.mode === 'mail' && edit.profileId === id) {
+    const v = edit.mail || {};
+    return `<div class="ac-account-form ac-mail-form" role="group" aria-label="邮箱资料">${mailFieldHtml('email', '登录邮箱', v.email, esc, { placeholder: 'Outlook / Gmail 地址' })}${mailFieldHtml('password', '邮箱密码', v.password, esc, { type: 'password', placeholder: m?.hasPassword ? '已保存，留空不改' : '可不填' })}${mailFieldHtml('recoveryEmail', '辅助邮箱', v.recoveryEmail, esc, { placeholder: '可不填' })}${mailFieldHtml('recoveryPassword', '辅助邮箱密码', v.recoveryPassword, esc, { type: 'password', placeholder: m?.hasRecoveryPassword ? '已保存，留空不改' : '可不填' })}${mailFieldHtml('totpSecret', '2FA 密钥', v.totpSecret, esc, { type: 'password', placeholder: m?.hasTotp ? '已保存，留空不改' : '可不填；填了能一键复制 6 位验证码' })}${mailFieldHtml('note', '备注', v.note, esc, { placeholder: '如：购买渠道、质保到期日' })}<p class="ac-tool-help">密码用 Windows 账户加密存在本机，界面和 AI 都看不到明文；只在你点「复制密码」时放进剪贴板，45 秒后自动清除。</p>${edit.error ? `<p class="ac-item-error" role="alert">${esc(edit.error)}</p>` : ''}<div class="ac-row-actions"><button class="ac-open" data-ac="mail-save">保存</button><button class="ac-text-btn" data-ac="account-cancel">取消</button></div></div>`;
+  }
+  const edit_ = `<button class="ac-text-btn" data-ac="mail-edit" data-profile="${esc(id)}">${m ? '编辑' : '登记邮箱'}</button>`;
+  if (!m) return `<p class="ac-mailbox"><span class="ac-mail-label">邮箱</span>${esc('未登记，密码和辅助邮箱可以存在这里')}${edit_}</p>`;
+  const part = (email, kind, canOpen, hasPassword, which) => email ? `<span class="ac-mail-item">${esc(email + (kind ? '（' + (MAIL_KIND[kind] || kind) + '）' : ''))}${canOpen ? `<button class="ac-text-btn" data-ac="mail-open" data-profile="${esc(id)}" data-which="${which}">打开邮箱 ↗</button>` : ''}${hasPassword ? `<button class="ac-text-btn" data-ac="mail-copy" data-profile="${esc(id)}" data-which="${which}">复制密码</button>` : '<small>未存密码</small>'}</span>` : '';
+  return `<p class="ac-mailbox"><span class="ac-mail-label">邮箱</span>${part(m.email, m.provider, m.canOpen, m.hasPassword, 'main') || '<span class="ac-mail-item">未填登录邮箱</span>'}${m.hasTotp ? `<button class="ac-text-btn" data-ac="mail-copy" data-profile="${esc(id)}" data-which="totp">复制 2FA 码</button>` : ''}${m.recoveryEmail ? '<span class="ac-mail-label">辅助</span>' + part(m.recoveryEmail, m.recoveryProvider, m.canOpenRecovery, m.hasRecoveryPassword, 'recovery') : ''}${m.note ? `<span class="ac-mail-note">${esc(m.note)}</span>` : ''}${edit_}</p>`;
+}
 function newClaudeExitHtml(edit, vps, esc) {
   if (edit.kind !== 'claude' || !vps || vps.enabled === false) return '';
   if (vps.loading || vps.error) return `<p class="ac-tool-help">${esc(vps.error ? '登录环境读取失败：' + vps.error + '；可刷新后再建' : '正在读取可用出口…')}</p>`;
@@ -93,18 +111,18 @@ function accountMenuHtml(kind, c, esc) {
     : `<button data-ac="account-remove" data-kind="${kind}" data-profile="${esc(id)}">移除账号</button>`;
   return `<details class="ac-more" data-details="account-${kind}-${esc(id)}"><summary aria-label="${esc(c.label || id)} 更多操作">···</summary><div><button data-ac="account-rename" data-kind="${kind}" data-profile="${esc(id)}">改名</button>${remove}</div></details>`;
 }
-function codexQuotaHtml(state, esc, edit = null, vps = null) {
+function codexQuotaHtml(state, esc, edit = null, vps = null, mail = null) {
   return ['codex','claude','gemini'].map(kind => {
     const rows=(state.clis || []).filter(c=>c.kind===kind).map(c=>kind==='gemini'?{...c,profileId:c.profileId||'default',label:c.label||'主账号'}:c);
     if (!rows.length) return '';
     const name=kind==='gemini'?'Antigravity':kind==='claude'?'Claude':'Codex';
     const help=kind==='gemini'?'新建会话使用所选账号；已有会话继续使用原账号。各模型额度与重置时间见底栏。':kind==='claude'?'新建会话使用所选账号；已有会话恢复、重启仍用原账号。':'切换后，新建、恢复和重启会话使用所选账号额度。已打开的会话继续使用原账号。';
     const mine = edit && edit.kind === kind;
-    const add = EDITABLE.has(kind) ? `<button class="ac-text-btn" data-ac="account-add" data-kind="${kind}">+ 添加账号</button>` : '';
+    const add = (kind === 'claude' && mail ? '<button class="ac-text-btn ac-mail-import" data-ac="mail-import">导入邮箱资料</button>' : '') + (EDITABLE.has(kind) ? `<button class="ac-text-btn" data-ac="account-add" data-kind="${kind}">+ 添加账号</button>` : '');
     return `<article class="ac-company ac-codex-quota" data-account-kind="${kind}" aria-label="${name} 用量账号"><header><h2>${name} 用量账号</h2><span class="ac-count">${rows.length} 个账号</span>${add}</header><p class="ac-tool-help">${help}</p>${rows.map(c=>{
       const id=c.profileId || 'default';
       const editing = mine && edit.mode !== 'add' && edit.profileId === id;
-      return `<div class="ac-account" data-account-profile="${esc(id)}"><div class="ac-account-title"><strong>${esc(c.label || c.profileId)}</strong><span class="ac-account-name">${esc(c.account || '账号未确认')} · ${authLabel(c.state)}</span>${c.isDefault?'<span class="ac-default">后续使用</span>':''}</div><div class="ac-row-actions">${authorizeButton(c,esc)}<button class="ac-open" data-ac="${kind}-quota" data-profile="${esc(c.profileId)}" ${c.isDefault?'disabled aria-pressed="true"':'aria-pressed="false"'}>${c.isDefault?'当前用量账号':'使用此账号额度'}</button>${accountMenuHtml(kind,c,esc)}</div>${kind==='claude'?loginEnvHtml(c,vps,esc,edit&&edit.kind==='claude'?edit:null):''}${editing && edit.mode !== 'bind' ? accountFormHtml(edit, esc, c.label || id) : ''}</div>`;
+      return `<div class="ac-account" data-account-profile="${esc(id)}"><div class="ac-account-title"><strong>${esc(c.label || c.profileId)}</strong><span class="ac-account-name">${esc(c.account || '账号未确认')} · ${authLabel(c.state)}</span>${c.isDefault?'<span class="ac-default">后续使用</span>':''}</div><div class="ac-row-actions">${authorizeButton(c,esc)}<button class="ac-open" data-ac="${kind}-quota" data-profile="${esc(c.profileId)}" ${c.isDefault?'disabled aria-pressed="true"':'aria-pressed="false"'}>${c.isDefault?'当前用量账号':'使用此账号额度'}</button>${accountMenuHtml(kind,c,esc)}</div>${kind==='claude'?loginEnvHtml(c,vps,esc,edit&&edit.kind==='claude'?edit:null)+mailboxHtml(c,mail,esc,edit&&edit.kind==='claude'?edit:null):''}${editing && edit.mode !== 'bind' && edit.mode !== 'mail' ? accountFormHtml(edit, esc, c.label || id) : ''}</div>`;
     }).join('')}${mine && edit.mode === 'add' ? `<div class="ac-account ac-account-new">${accountFormHtml(edit, esc, '', vps)}</div>` : ''}</article>`;
   }).join('');
 }
@@ -207,4 +225,4 @@ function toolConnections(data, esc, activity, now = Date.now()) {
   if (!data) return '';
   return data.services.filter(s => ['images', 'bridge', 'roundtable'].includes(s.id)).map(s => `<div class="ac-connection"><span>${esc(s.name)}</span><span>${esc(BINDING[s.status])}</span><small>${s.identities.map(i => (i.identity === 'main' ? '账号 1' : '账号 2')).join('、')}${lastToolStep(activity, s.id, now) ? ' · ' + esc(lastToolStep(activity, s.id, now)) : ''}${s.id === 'roundtable' ? ' · 支持 DeepSeek、Kimi、千问；Claude/Codex 新会话选「浏览器」或「全部」加载 MCP，运行中的旧会话需重新创建' : ''}</small></div>`).join('');
 }
-module.exports = { TABS, relativeTime, usage, toolsNote, healthView, imageServiceHtml, aiHtml, cliHtml, servicesHtml, toolConnections, codexQuotaHtml };
+module.exports = { TABS, relativeTime, usage, toolsNote, healthView, imageServiceHtml, aiHtml, cliHtml, servicesHtml, toolConnections, codexQuotaHtml, mailboxHtml };

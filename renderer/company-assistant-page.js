@@ -8,7 +8,7 @@
 function createCompanyAssistantPage({ document, window, ipcRenderer, openSession, closeOtherPanels = () => {}, showMessage, openMeeting }) {
   const { ASSISTANT_AVATAR_SRC, USER_AVATAR_SRC } = require('./chat-avatar');
   const { connectionState } = require('./company-assistant-connection');
-  let page = null, data = null, timer = null, briefOpen = false, sending = false, pptEntry = false;
+  let page = null, data = null, timer = null, briefOpen = false, sending = false, pptEntry = false, gate = null;
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const pad = n => String(n).padStart(2, '0');
   const clock = at => { if (!at) return '—'; const d = new Date(at); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
@@ -79,6 +79,9 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
         <div class="ca-foot-note"><span data-slot="job"></span><span>Enter 发送 · Shift+Enter 换行</span></div>
       </footer></main>`;
     document.body.append(page);
+    // 可选功能（默认关，renderer/optional-feature-gate.js）：关着时整页提示开启，开着时左栏底部有「已开启 · 关闭」。
+    gate = require('./optional-feature-gate').createFeatureGate({ document, window, id: 'assistant', page, showMessage,
+      badgeSlot: badge => page.querySelector('.ca-side-bottom').prepend(badge), onEnabled: () => { void startData(); } });
     // Esc 关掉盖在上面的设置。
     page.addEventListener('keydown', event => {
       const panel = page.querySelector('[data-slot="panel"]');
@@ -359,8 +362,11 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
   // 否则把 prompt 填进输入框（输入框里已有内容不覆盖）；noticeId 对应的提醒展开并滚到眼前。
   async function fromPet(detail = {}) {
     await open();
-    // 桌宠右键「桌宠设置…」「更多形象…」：直接打开设置的对应分页。
-    if (detail.settingsTab) { openSettings(String(detail.settingsTab)); return; }
+    // 桌宠右键「桌宠设置…」「更多形象…」：直接打开设置的对应分页。助理没开时只揭开设置，不启动助理。
+    if (detail.settingsTab) {
+      if (gate && !gate.isOn()) { gate.peek(); await load().catch(() => {}); }
+      openSettings(String(detail.settingsTab)); return;
+    }
     const input = page.querySelector('[data-slot="form"] textarea');
     const chip = detail.action ? (data?.chips || []).find(c => c.action === detail.action) : null;
     if (chip && !(chip.fill && input.value.trim())) await useChip(chip);
@@ -798,6 +804,11 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     page.hidden = false; document.body.classList.add('company-assistant-page-open'); place();
     const btn = nav(); btn?.classList.add('active'); btn?.classList.remove('has-unread');
     window.addEventListener('resize', onResize);
+    clearInterval(timer); timer = null;
+    if (await gate.check()) await startData();
+  }
+  async function startData() {
+    if (!page || page.hidden) return;
     clearInterval(timer); timer = setInterval(() => { void load().catch(() => {}); }, 20000);
     try {
       await load();

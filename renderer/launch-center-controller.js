@@ -8,6 +8,12 @@ const INTENT_COPY = Object.freeze({
   resume: '按提供方恢复原生历史会话',
 });
 
+// 公司版面向不熟悉命令行的同事，副标题不提提供方、原生历史这些词。
+const PLAIN_INTENT_COPY = require('../core/distribution').featureEnabled('launchEffort') ? null : Object.freeze({
+  group: '选择成员、模型与工作目录',
+  resume: '接着聊以前的 CodeAgent 会话',
+});
+
 function normalizeLaunchIntent(value) {
   return LAUNCH_INTENTS.includes(value) ? value : 'session';
 }
@@ -82,7 +88,7 @@ function createLaunchCenterController({
     for (const panel of panels) {
       panel.hidden = panel.dataset.launchPanel !== activeIntent;
     }
-    if (subtitleEl) subtitleEl.textContent = INTENT_COPY[activeIntent];
+    if (subtitleEl) subtitleEl.textContent = (PLAIN_INTENT_COPY && PLAIN_INTENT_COPY[activeIntent]) || INTENT_COPY[activeIntent];
     if (activeIntent === 'group' && !groupPrepared && typeof prepareGroupPanel === 'function') {
       try {
         prepareGroupPanel();

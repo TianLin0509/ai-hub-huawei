@@ -3,6 +3,7 @@
 const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs');
+const { createHash } = require('node:crypto');
 const { fork } = require('node:child_process');
 const {
   DEFAULT_MAX_CANDIDATE_SESSIONS,
@@ -13,6 +14,9 @@ const {
   DEFAULT_MAX_SOURCES,
   sqlitePathForLegacyCache,
 } = require('./session-search-config.js');
+
+const DEFAULT_RECONCILE_MS = 30 * 60_000;
+const RECONCILE_YIELD_EVERY = 200;
 
 class SessionSearchService {
   constructor(options = {}) {
@@ -41,6 +45,24 @@ class SessionSearchService {
     };
     this._childMemoryLimitMb = Math.max(256, Number(options.childMemoryLimitMb) || 768);
     this._requestTimeoutMs = Math.max(50, Number(options.requestTimeoutMs) || 180_000);
+    const idleMs = Number(options.idleMs ?? process.env.HUB_SESSION_SEARCH_IDLE_MS ?? 600_000);
+    this._idleMs = Number.isFinite(idleMs) && idleMs > 0 ? idleMs : 600_000;
+    this._idleTimer = null;
+    this._idleStopping = null;
+    this._childBusy = false;
+    this._reconcileBusy = false;
+    const reconcileMs = Number(options.reconcileMs ?? process.env.HUB_SESSION_SEARCH_RECONCILE_MS ?? DEFAULT_RECONCILE_MS);
+    this._reconcileMs = Number.isFinite(reconcileMs) && reconcileMs > 0 ? reconcileMs : DEFAULT_RECONCILE_MS;
+    // A disposable watcher checkpoint, separate from the SQLite index. It lets
+    // boot reconciliation detect offline edits/deletions without loading SQLite.
+    this._maintenanceStatePath = this._childData.databasePath
+      ? `${this._childData.databasePath}.maintenance.json` : null;
+    this._sourceSignature = null;
+    this._syncedSourceSignature = null;
+    try {
+      const saved = JSON.parse(fs.readFileSync(this._maintenanceStatePath, 'utf8'));
+      if (saved.version === 1 && fs.existsSync(this._childData.databasePath)) this._syncedSourceSignature = saved.signature;
+    } catch {}
     // Background syncs start at most this often. Every live agent appends to
     // its transcript several times a second, and each sync walks every source
     // root and re-parses each changed transcript in full; unthrottled, the
@@ -56,6 +78,7 @@ class SessionSearchService {
     this._queuedSnapshot = null;
     this._lastSyncStartedAt = 0;
     this._maintenanceTimer = null;
+    this._reconcileTimer = null;
     this._queueTimer = null;
     this._maintenanceBusy = false;
     this._status = {
@@ -103,9 +126,31 @@ class SessionSearchService {
     for (const [id, pending] of this._pending) this._armRequestTimeout(id, pending);
   }
 
+  _armIdleTimer() {
+    clearTimeout(this._idleTimer);
+    this._idleTimer = null;
+    if (this._closed || !this._child || this._idleStopping || this._pending.size
+        || this._maintenanceBusy || this._queuedSnapshot || this._status.refreshing || this._childBusy) return;
+    this._idleTimer = setTimeout(() => {
+      this._idleTimer = null;
+      if (this._closed || this._pending.size || this._maintenanceBusy || this._queuedSnapshot
+          || this._status.refreshing || this._childBusy) return;
+      const child = this._child;
+      this._child = null;
+      this._setStatus({ ...this._status, runtime: undefined });
+      this._idleStopping = this._stopChild(child).catch(error => {
+        this._setStatus({ ...this._status, lastError: error.message });
+      }).finally(() => { this._idleStopping = null; });
+    }, this._idleMs);
+    this._idleTimer.unref?.();
+  }
+
   _ensureChild() {
     if (this._closed) throw new Error('Session search service is closed');
     if (this._child) return this._child;
+    if (this._closingChild) throw new Error('历史索引进程尚未确认退出，请稍后重试');
+    this._childBusy = false;
+    this._setStatus({ ...this._status, phase: 'discovering', refreshing: true, lastError: null });
     this._stderrTail = [];
     const child = this._fork(this._childPath, [], {
       // Do not set cwd to __dirname: in packaged builds it points inside
@@ -122,7 +167,7 @@ class SessionSearchService {
     if (Number.isInteger(child.pid) && Number.isInteger(backgroundPriority)) {
       try { os.setPriority(child.pid, backgroundPriority); } catch {}
     }
-    child.on('message', message => this._handleMessage(message));
+    child.on('message', message => { if (this._child === child) this._handleMessage(message); });
     child.on('error', error => this._handleFailure(error, child));
     child.on('exit', (code, signal) => {
       if (this._child !== child) return;
@@ -152,7 +197,9 @@ class SessionSearchService {
   _handleMessage(message) {
     if (message && message.type === 'status') {
       this._setStatus({ ...this._status, ...(message.status || {}) });
+      this._childBusy = message.status?.runtime?.busy === true;
       this._touchPendingRequests();
+      this._armIdleTimer();
       return;
     }
     if (message && message.type === 'fatal') {
@@ -165,6 +212,7 @@ class SessionSearchService {
     clearTimeout(pending.timer);
     if (message.error) {
       pending.reject(new Error(message.error));
+      this._armIdleTimer();
       return;
     }
     this._stats.completed += 1;
@@ -174,6 +222,7 @@ class SessionSearchService {
       this._setStatus({ ...this._status, ...message.result.status });
     }
     pending.resolve(message.result);
+    this._armIdleTimer();
   }
 
   _handleFailure(error, child) {
@@ -184,6 +233,8 @@ class SessionSearchService {
       try { if (failedChild.connected) failedChild.kill(); } catch {}
     }
     this._child = null;
+    clearTimeout(this._idleTimer);
+    this._childBusy = false;
     this._stats.failures += 1;
     this._setStatus({ ...this._status, ready: false, refreshing: false, phase: 'child_error', lastError: error.message });
     for (const pending of this._pending.values()) {
@@ -194,6 +245,8 @@ class SessionSearchService {
   }
 
   _request(type, payload = {}) {
+    if (this._idleStopping) return this._idleStopping.then(() => this._request(type, payload));
+    clearTimeout(this._idleTimer);
     const id = ++this._nextId;
     return new Promise((resolve, reject) => {
       const pending = { type, resolve, reject, timer: null };
@@ -234,6 +287,7 @@ class SessionSearchService {
   // not on each of the many file events that coalesce into that sync.
   queueRefresh(snapshot = {}, source = 'reconcile') {
     if(this._closed) return;
+    clearTimeout(this._idleTimer);
     this._queuedSnapshot = snapshot;
     this._queuedSources.add(String(source || 'reconcile'));
     if(this._backgroundHeld || this._queueTimer || this._maintenanceBusy) return;
@@ -251,11 +305,23 @@ class SessionSearchService {
     this._maintenanceBusy=true;
     this._lastSyncStartedAt=Date.now();
     const queued=this._queuedSnapshot;this._queuedSnapshot=null;this._queuedSources.clear();
+    const signature = this._sourceSignature;
     let snapshot=queued,retry=false;
     try {
       if(typeof queued==='function') snapshot=queued();
       const status=await this.refresh(snapshot,{immediate:true});
       retry=status?.phase==='waiting_writer';
+      if (!retry && status?.ready && !status?.lastError && !status?.staleSources && signature) {
+        this._syncedSourceSignature = signature;
+        if (this._maintenanceStatePath) {
+          // Cache loss only causes an extra reconciliation, never lost content.
+          const temporary = `${this._maintenanceStatePath}.${process.pid}.tmp`;
+          try {
+            await fs.promises.writeFile(temporary, JSON.stringify({ version: 1, signature }), 'utf8');
+            await fs.promises.rename(temporary, this._maintenanceStatePath);
+          } catch { try { await fs.promises.unlink(temporary); } catch {} }
+        }
+      }
     } catch(error) {
       retry=true;
       this._setStatus({...this._status,phase:this._status.ready?'ready_with_errors':'error',refreshing:false,lastError:error.message});
@@ -264,31 +330,121 @@ class SessionSearchService {
       this._maintenanceBusy=false;
       if(retry && !this._queuedSnapshot) this._queuedSnapshot=queued;
       if(!this._closed && !this._backgroundHeld && this._queuedSnapshot) this._scheduleQueueFlush(retry?2000:400);
+      this._armIdleTimer();
     }
   }
 
   startMaintenance(getSnapshot) {
     if(this._closed || this._maintenanceTimer || !this._prewarmEnabled) return;
-    const reconcile=()=>{
-      const roots=[...this._childData.claudeRoots,...this._childData.codexRoots,...this._childData.kimiRoots,...this._childData.geminiRoots,this._childData.meetingDir].filter(Boolean);
-      for(const root of new Set(roots)) {
-        if(this._watchers.has(root) || !fs.existsSync(root)) continue;
-        try {
-          const watcher=fs.watch(root,{recursive:true,persistent:false},(_event,file)=>{
-            if(!file || /\.(jsonl|json)$/i.test(String(file))) this.queueRefresh(getSnapshot,path.join(root,String(file||'')));
-          });
-          watcher.on('error',error=>{
-            watcher.close();this._watchers.delete(root);
-            this._status={...this._status,watchError:error.message};
-            console.warn('[session-search] source watcher failed; periodic reconciliation remains active:',error.message);
-          });
-          this._watchers.set(root,watcher);
-        } catch(error) {this._status={...this._status,watchError:error.message};console.warn('[session-search] watch unavailable:',error.message);}
-      }
-      this.queueRefresh(getSnapshot);
+    // The minute tick must stay disk-free: thousands of awaited stat calls
+    // still consume main-thread CPU. Only recover already queued increments.
+    this._maintenanceTimer = setInterval(() => {
+      if (!this._closed && !this._backgroundHeld && this._queuedSnapshot
+          && !this._queueTimer && !this._maintenanceBusy) this._scheduleQueueFlush(400);
+    }, 60_000);
+    this._maintenanceTimer.unref?.();
+    const reconcile = () => {
+      if (this._closed || this._reconcileBusy) return;
+      // Watcher setup/recovery may touch disk, so it shares the infrequent
+      // full reconciliation schedule rather than the minute queue check.
+      this._watchSourceRoots(this._sourceRoots(), getSnapshot);
+      void this._reconcileSources(getSnapshot);
     };
-    this._maintenanceTimer=setInterval(reconcile,60000);this._maintenanceTimer.unref?.();
+    this._reconcileTimer = setInterval(reconcile, this._reconcileMs);
+    this._reconcileTimer.unref?.();
     reconcile();
+  }
+
+  _watchSourceRoots(roots, getSnapshot) {
+    for (const root of roots) {
+      if (this._watchers.has(root) || !fs.existsSync(root)) continue;
+      try {
+        const watcher = fs.watch(root, { recursive: true, persistent: false }, (_event, file) => {
+          if (!file || /\.(jsonl|json)$/i.test(String(file))) this.queueRefresh(getSnapshot, path.join(root, String(file || '')));
+        });
+        watcher.on('error', error => {
+          watcher.close(); this._watchers.delete(root);
+          this._status = { ...this._status, watchError: error.message };
+          console.warn('[session-search] source watcher failed; periodic reconciliation remains active:', error.message);
+        });
+        this._watchers.set(root, watcher);
+      } catch (error) {
+        this._status = { ...this._status, watchError: error.message };
+        console.warn('[session-search] watch unavailable:', error.message);
+      }
+    }
+  }
+
+  _sourceRoots(snapshot = {}) {
+    return [...new Set([
+      ...this._childData.claudeRoots, ...this._childData.codeagentRoots,
+      ...this._childData.codexRoots, ...this._childData.kimiRoots,
+      ...this._childData.geminiRoots,
+      ...this._childData.geminiRoots.map(root => path.join(path.dirname(root), 'antigravity-cli', 'brain')),
+      this._childData.meetingDir,
+      ...(snapshot.sessions || []).map(s => s.codexSessionsRoot),
+    ].filter(Boolean))];
+  }
+
+  async _reconcileSources(getSnapshot) {
+    if (this._closed || this._reconcileBusy) return;
+    this._reconcileBusy = true;
+    try {
+      const snapshot = getSnapshot();
+      const roots = this._sourceRoots(snapshot);
+      const files = new Map();
+      let processedFiles = 0;
+      const scan = async file => {
+        let stat;
+        try { stat = await fs.promises.stat(file); }
+        catch (error) { if (error.code === 'ENOENT') return; throw error; }
+        if (stat.isDirectory()) {
+          const entries = await fs.promises.readdir(file, { withFileTypes: true });
+          // Follow a configured root junction, matching engine discovery, but
+          // do not follow nested symlinks into cycles or unrelated directories.
+          for (const entry of entries) {
+            if (this._closed) return;
+            if (entry.isDirectory() || (entry.isFile() && /\.(jsonl|json)$/i.test(entry.name))) await scan(path.join(file, entry.name));
+          }
+        } else if (stat.isFile() && /\.(jsonl|json)$/i.test(file)) {
+          files.set(path.resolve(file), `${stat.size}:${stat.mtimeMs}`);
+          if (++processedFiles % RECONCILE_YIELD_EVERY === 0) {
+            await new Promise(resolve => setImmediate(resolve));
+          }
+        }
+      };
+      for (const root of roots) await scan(root);
+      for (const session of snapshot.sessions || []) {
+        const file = session.transcriptPath || session.resumeTranscriptPath;
+        if (file) await scan(file);
+      }
+      // Match searchable metadata, excluding volatile runtime/status fields.
+      const metadata = rows => (rows || []).map(row => Object.fromEntries([
+        'hubId', 'id', 'title', 'cwd', 'transcriptPath', 'resumeTranscriptPath',
+        'workspaceLabel', 'kind', 'workspace', 'subSessions', 'slotSpecs', 'groupChat',
+        'meetingId', 'currentModel', 'model', 'codexSessionsRoot', 'codexProfile',
+        'antigravityProfile', 'antigravityProfileHome', 'antigravityProfileLabel',
+        'lastMessageTime', 'lastCompletedAt', 'lastOutputPreview', 'ccSessionId',
+        'codexSid', 'createdAt', 'updatedAt',
+      ].map(key => [key, row[key] ?? null]))).sort((a, b) => String(a.hubId || a.id).localeCompare(String(b.hubId || b.id)));
+      const signature = createHash('sha256').update(JSON.stringify({
+        build: require('../package.json').version,
+        options: this._childData, roots: roots.sort(), files: [...files].sort(([a], [b]) => a.localeCompare(b)),
+        sessions: metadata(snapshot.sessions), meetings: metadata(snapshot.meetings),
+      })).digest('hex');
+      if (this._closed) return;
+      this._sourceSignature = signature;
+      // No sources and no prior index means there is no indexing work at boot.
+      const hasWork = files.size || snapshot.sessions?.length || snapshot.meetings?.length
+        || (this._childData.databasePath && fs.existsSync(this._childData.databasePath));
+      if (hasWork && signature !== this._syncedSourceSignature) this.queueRefresh(getSnapshot);
+    } catch (error) {
+      if (!this._closed) {
+        this._status = { ...this._status, watchError: error.message };
+        // A failed metadata probe must not disable the existing recovery path.
+        this.queueRefresh(getSnapshot, 'reconcile-error');
+      }
+    } finally { this._reconcileBusy = false; }
   }
 
   status() {
@@ -299,12 +455,8 @@ class SessionSearchService {
     // 但 this._status 本来就是**实时**的：子进程在 indexing 过程中会主动 push
     // {type:'status'}（见 _handleChildMessage）。直接返回缓存即可，永远不会被阻塞。
     //
-    // 唯一的例外：子进程还没起来过（关了 prewarm 的隔离实例、或刚启动还没搜过），
-    // 这时缓存里是初始占位值，会一直显示「未就绪 / 0 个会话」。所以**顺手异步问
-    // 一次**，不 await —— 本次仍然立刻返回缓存，下一次轮询就是真实数据。
-    if (!this._child) {
-      this._request('status').catch(() => {});
-    }
+    // Status polling is observational: it must never start or keep a worker alive.
+    // The first actual query/refresh reports discovering through the existing UI.
     return Promise.resolve({ ...this._status });
   }
 
@@ -329,6 +481,8 @@ class SessionSearchService {
     if (this._closed && !this._closingChild) return;
     this._closed = true;
     clearInterval(this._maintenanceTimer);clearTimeout(this._queueTimer);
+    clearInterval(this._reconcileTimer);
+    clearTimeout(this._idleTimer);
     for(const watcher of this._watchers.values()) watcher.close();
     this._watchers.clear();this._queuedSources.clear();this._queuedSnapshot=null;
     const error = new Error('Session search service closed');
@@ -337,8 +491,14 @@ class SessionSearchService {
       pending.reject(error);
     }
     this._pending.clear();
+    if (this._idleStopping) await this._idleStopping;
     const child = this._closingChild || this._child;
     this._child = null;
+    if (!child) return;
+    await this._stopChild(child);
+  }
+
+  async _stopChild(child) {
     if (!child) return;
     this._closingChild = child;
     if (child.exitCode !== null && child.exitCode !== undefined) { this._closingChild = null; return; }

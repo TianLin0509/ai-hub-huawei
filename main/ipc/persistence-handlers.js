@@ -138,9 +138,11 @@ function buildMeetingsForState(meetingList, meetingManager) {
     if (!rendererMeeting || !rendererMeeting.id) return rendererMeeting;
     const authoritative = meetingManager.getMeeting(rendererMeeting.id);
     if (!authoritative) return rendererMeeting;
+    const { sceneHint: _rendererSceneHint, ...rendererFields } = rendererMeeting;
     return {
-      ...rendererMeeting,
+      ...rendererFields,
       scene: rendererMeeting.scene || authoritative.scene,
+      ...require('../../core/group-scene-hint').sceneHintFields(authoritative.sceneHint),
       mode: rendererMeeting.mode || authoritative.mode,
       groupChat: typeof rendererMeeting.groupChat === 'boolean'
         ? rendererMeeting.groupChat

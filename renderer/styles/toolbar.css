@@ -266,7 +266,8 @@
   background: var(--mark-green, #3fb950);
   opacity: 1;
 }
-.terminal-crumb-dot.running { animation: crumb-dot-pulse 1.6s ease-in-out infinite; }
+/* 2026-10-30 静态：无限循环动画会让整个窗口按屏幕刷新率不停重画（实测单这一个点界面 9% + 显卡 20%），运行中改为绿点加浅绿环。 */
+.terminal-crumb-dot.running { box-shadow: 0 0 0 2px color-mix(in srgb, var(--mark-green, #3fb950) 28%, transparent); }
 .terminal-crumb-dot.waiting {
   background: var(--mark-amber, #d29922);
   opacity: 1;
@@ -274,13 +275,6 @@
 .terminal-crumb-dot.failed {
   background: var(--mark-red, #f85149);
   opacity: 1;
-}
-@keyframes crumb-dot-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: .35; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .terminal-crumb-dot.running { animation: none; }
 }
 
 /* Application identity stays in the normal flow so it cannot cover controls. */

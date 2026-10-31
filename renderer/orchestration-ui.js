@@ -199,9 +199,10 @@ function isOrchestratorMessage(meeting, message) {
   const memberId = message?.memberId || memberIdForSid(meeting, message?.sid);
   return !!memberId && memberId === orchestratorMemberId(meeting);
 }
-// 成员卡片默认折叠成一行（负责人的卡片照常展开）。
+// 成员卡片与负责人处理 Hub 通知的回复折叠成一行，其余负责人卡片展开。
 function defaultMinimized(meeting, message) {
-  return active(meeting) && message?.role === 'assistant' && !isOrchestratorMessage(meeting, message);
+  return active(meeting) && message?.role === 'assistant'
+    && (!isOrchestratorMessage(meeting, message) || message.dispatch?.kind === 'orch-notice');
 }
 function peek(meeting, message, escapeHtml) {
   if (!defaultMinimized(meeting, message)) return '';

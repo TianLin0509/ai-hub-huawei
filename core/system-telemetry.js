@@ -47,6 +47,7 @@ function createSystemTelemetry(options = {}) {
   // nvidia-smi is a separate process. A 10 s cache still feels live while
   // avoiding a process spawn on every 3 s renderer resource tick.
   const gpuTtlMs = Math.max(1_000, Number(options.gpuTtlMs) || 10_000);
+  const gpuFailureTtlMs = 10 * 60_000;
   const diskTtlMs = Math.max(5_000, Number(options.diskTtlMs) || 60_000);
   let gpuCache = null;
   let diskCache = null;
@@ -55,7 +56,7 @@ function createSystemTelemetry(options = {}) {
 
   async function sampleGpu(force = false) {
     const at = now();
-    if (!force && gpuCache && at - gpuCache.sampledAt < gpuTtlMs) return gpuCache.value;
+    if (!force && gpuCache && at - gpuCache.sampledAt < (gpuCache.value ? gpuTtlMs : gpuFailureTtlMs)) return gpuCache.value;
     if (gpuPending) return gpuPending;
     gpuPending = (async () => {
       let value = null;

@@ -41,10 +41,12 @@ function main() {
   if (process.env.CLAUDE_HUB_ACCOUNT_STATE) {
     try { accountState = JSON.parse(fs.readFileSync(process.env.CLAUDE_HUB_ACCOUNT_STATE, 'utf8')); } catch {}
   }
-  // Cached rate_limits in Claude's input can predate the account switch. The
-  // Hub reads managed-account quota with that account's actual credential.
-  const h5 = !process.env.CLAUDE_HUB_ACCOUNT_STATE && data.rate_limits && data.rate_limits.five_hour;
-  const d7 = !process.env.CLAUDE_HUB_ACCOUNT_STATE && data.rate_limits && data.rate_limits.seven_day;
+  // rate_limits come free with every reply. Managed accounts forward them with
+  // the native session id; the Hub drops readings from a process that was
+  // already running before its account changed (2026-10-29).
+  const h5 = data.rate_limits && data.rate_limits.five_hour;
+  const d7 = data.rate_limits && data.rate_limits.seven_day;
+  const nativeSessionId = typeof data.session_id === 'string' ? data.session_id : null;
   const claudeScope = accountState?.scope || process.env.CLAUDE_HUB_CLAUDE_SCOPE || null;
   const usage5Sig = h5 ? `${h5.used_percentage}:${h5.resets_at}` : '';
   const usage7Sig = d7 ? `${d7.used_percentage}:${d7.resets_at}` : '';
@@ -85,6 +87,7 @@ function main() {
     sessionId,
     claudeScope,
     claudeAuthGeneration: accountState?.generation ?? null,
+    nativeSessionId,
     token,
     contextPct: ctxPct,
     contextUsed: ctxUsed,
@@ -124,8 +127,10 @@ function main() {
     name: sessionName,
     usage5Sig,
     usage7Sig,
-    usage5h: h5 ? { pct: h5.used_percentage, resetsAt: toMs(h5.resets_at) } : null,
-    usage7d: d7 ? { pct: d7.used_percentage, resetsAt: toMs(d7.resets_at) } : null,
+    // The cache file is read without the Hub's account check, so managed
+    // accounts keep their quota out of it; only the validated POST counts.
+    usage5h: h5 && !process.env.CLAUDE_HUB_ACCOUNT_STATE ? { pct: h5.used_percentage, resetsAt: toMs(h5.resets_at) } : null,
+    usage7d: d7 && !process.env.CLAUDE_HUB_ACCOUNT_STATE ? { pct: d7.used_percentage, resetsAt: toMs(d7.resets_at) } : null,
   };
   try {
     fs.mkdirSync(path.dirname(CACHE_FILE), { recursive: true });

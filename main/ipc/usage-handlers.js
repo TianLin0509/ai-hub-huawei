@@ -72,6 +72,7 @@ function registerUsageIpc(ipcMain, deps) {
       const value = { ...data, observedAt };
       return { cache: { [provider]: value }, agentData: {}, refreshedAt: Date.now(),
         providerResults: { [provider]: { ok: true,
+          ...(provider === 'antigravity' ? { authScope: data.authScope } : {}),
           changed: provider === 'claude' ? didClaudeSnapshotAdvance(before, value)
             : provider === 'deepseek' ? deepSeekBalanceChanged(before, value) : usageChanged(before, value),
           fresh: observedAt > observed(before), observedAt,
@@ -83,6 +84,7 @@ function registerUsageIpc(ipcMain, deps) {
       const retained = scopeChanged() ? null : latestAntigravity || before;
       return { cache: retained ? { [provider]: retained } : {}, agentData: {}, refreshedAt: Date.now(),
         providerResults: { [provider]: { ok: false, fresh: false, changed: false,
+          ...(provider === 'antigravity' && latestAntigravity ? { authScope: latestAntigravity.authScope } : {}),
           observedAt: observed(before), mode: 'snapshot', error: errorText(error, '刷新失败') } } };
     }
   }

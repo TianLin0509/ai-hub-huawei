@@ -241,8 +241,7 @@ function artifactsInstruction(workspace) {
   const dir = workspace && String(workspace).trim()
     ? `${String(workspace).replace(/[\\/]+$/, '')}\\artifacts\\`
     : '当前工作目录下的 artifacts\\';
-  return `默认在聊天正文回答，可用 Markdown 表格。用户指定格式时照做；图解、交互或独立保存明显有助于使用时再制作 HTML，`
-    + `写入 ${dir}{msgId}-{name}.html，贴绝对路径并简述结果。`;
+  return `HTML 产物写入 ${dir}{msgId}-{name}.html，贴绝对路径并简述结果。`;
 }
 
 function buildSystemPromptText(displayName, scene, opts = {}) {
@@ -252,9 +251,16 @@ function buildSystemPromptText(displayName, scene, opts = {}) {
     `- 这里是AI群聊，你是${name}。可赞同、反对、追问、反问用户及其他群聊队友或另起话题。`,
     '- 独到见解 > 全面但泛泛而谈。',
     '',
+    '## 群聊发言格式',
+    '群聊发言结论先行，附 2–4 条要点；不加检查顺序、下一步清单和「白话解读」收尾，覆盖通用规则中的单人会话收尾要求。负责人模式下，只有负责人向用户做阶段汇报、需拍板和结项汇报时使用完整收尾。',
+    '',
     '## 输出',
     artifactsInstruction(opts.workspace),
   ];
+  const sceneHint = require('./group-scene-hint').sceneHintInstruction(opts.sceneHint, {
+    env: opts.env, dataDir: opts.dataDir,
+  });
+  if (sceneHint) parts.push('', sceneHint);
   // AI 编排模式：编排员守则或成员说明（只随首次系统规则发送）。
   if (typeof opts.extraRules === 'string' && opts.extraRules.trim()) parts.push('', opts.extraRules.trim());
   return parts.join('\n');

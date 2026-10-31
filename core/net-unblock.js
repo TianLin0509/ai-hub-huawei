@@ -73,6 +73,40 @@ async function openHiddenGateWindow(BrowserWindow, url, { loadTimeoutMs = 20000,
   return result;
 }
 
+// 在看不见的窗口里直接 POST 一份 JSON（2026-10-30 公司真机：放行页的 GET 早已放行、只拿到自家页面，反馈的 POST 仍被拦成网页，
+// 打开放行页的办法管不到提交本身）。走的是浏览器网络栈，被拦时拦截页就显示在这个窗口里：找到放行按钮点一下，返回让调用方隔一会儿再提交。
+// 返回 { json, clicked, text, candidates, title, html, status, error }：json 不为空就是服务端的回答。
+async function postInHiddenWindow(BrowserWindow, url, body, { loadTimeoutMs = 30000, settleMs = 5000, ownTitles = OWN_PAGE_TITLES } = {}) {
+  const result = { json: null, clicked: false, text: null, candidates: [], title: null, html: null, error: null };
+  if (!/^https?:\/\//i.test(String(url || ''))) return { ...result, error: '提交地址无效' };
+  const win = new BrowserWindow({ show: false, skipTaskbar: true, focusable: false, width: 1100, height: 780,
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  const js = (code, ms = 5000) => timeout(win.webContents.executeJavaScript(code, true), ms, '读取提交结果');
+  try {
+    win.webContents.once('did-navigate', (_e, _url, code) => { result.status = code; });
+    const postData = [{ type: 'rawData', bytes: Buffer.from(JSON.stringify(body), 'utf8') }];
+    try { await timeout(win.loadURL(url, { postData, extraHeaders: 'Content-Type: application/json\n' }), loadTimeoutMs, '提交'); }
+    catch (error) { result.loadError = error.message; if (win.webContents.isLoading()) await timeout(new Promise(r => win.webContents.once('did-stop-loading', r)), loadTimeoutMs, '提交').catch(() => {}); }
+    const page = await js('({ title: document.title || "", text: document.body ? document.body.innerText : "", html: document.documentElement ? document.documentElement.outerHTML : "" })');
+    result.title = String(page?.title || '').slice(0, 120);
+    result.html = String(page?.html || '');
+    try { const parsed = JSON.parse(String(page?.text || '').trim()); if (parsed && typeof parsed === 'object') result.json = parsed; } catch {}
+    if (!result.json) {
+      const clicked = await js(gateClickScript(ownTitles));
+      Object.assign(result, { clicked: !!clicked?.clicked, text: clicked?.text || null, candidates: clicked?.candidates || [] });
+      if (result.clicked) {
+        await new Promise(resolve => {
+          const done = () => { clearTimeout(timer); resolve(); };
+          const timer = setTimeout(done, settleMs);
+          win.webContents.once('did-navigate', () => win.webContents.once('did-stop-loading', done));
+        });
+      }
+    }
+  } catch (error) { result.error = error.message; }
+  finally { if (!win.isDestroyed()) win.destroy(); }
+  return result;
+}
+
 class GatePasser {
   // open(url) → openHiddenGateWindow 的结果；logDir 放日志和放行页样本。
   constructor({ open, logDir, now, notify, manualHint, logName = 'company-gate' }) {
@@ -117,4 +151,4 @@ class GatePasser {
 }
 function hostOf(url) { try { return new URL(url).host; } catch { return null; } }
 
-module.exports = { OWN_PAGE_TITLES, GatePasser, pickGateButton, gateClickScript, openHiddenGateWindow, GATE_WORDS, MAX_TRIES, COOLDOWN_MS };
+module.exports = { OWN_PAGE_TITLES, GatePasser, pickGateButton, gateClickScript, openHiddenGateWindow, postInHiddenWindow, GATE_WORDS, MAX_TRIES, COOLDOWN_MS };

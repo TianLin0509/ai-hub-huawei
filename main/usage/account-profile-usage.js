@@ -34,7 +34,10 @@ function createAccountProfileUsage(deps) {
     const claude = deps.claudeProfiles().map(profile => {
       try {
         const scope = deps.claudeScope(profile.id);
+        let account = {};
+        try { account = deps.claudeAccount?.(profile.id) || {}; } catch {}
         return publicRow('claude', profile, deps.claudeCached(scope), {
+          email: account.email || '', plan: account.plan || '', billing: account.billing || '', subscribedAt: account.subscribedAt || 0,
           scope, selected: scope === deps.claudeScope(), error: errors.get(scope) || '',
           // Dedicated exit from the account's own config, else the recorded shared exit. No VPS call.
           egressIp: profile.network?.expectedIp || deps.claudeSharedIp?.() || '',
@@ -43,17 +46,19 @@ function createAccountProfileUsage(deps) {
     });
     const current = deps.codexScope();
     const currentRow = publicRow('codex', { id: current.profileId, label: current.profileLabel }, deps.codexCached(),
-      { scope: current.scopeKey, selected: true, apiKey: current.backend === 'api', error: errors.get(current.scopeKey) || '' });
+      { scope: current.scopeKey, selected: true, apiKey: current.backend === 'api', error: errors.get(current.scopeKey) || '',
+        email: current.accountEmail || '', plan: current.planType || '', subscriptionUntil: current.subscriptionUntilMs || 0, subscriptionChecked: current.subscriptionCheckedMs || 0 });
     const order = deps.codexOrder();
     let otherRows;
     try { otherRows = deps.otherCodex(); }
     catch (error) { otherRows = order.filter(id => id !== current.profileId).map(profileId => ({ profileId, error: error.message })); }
     const others = otherRows.map(row => publicRow('codex', { id: row.profileId, label: row.profileLabel }, row,
-      { scope: row.scopeKey, selected: false, apiKey: !!row.apiKey, error: row.error || otherError }));
+      { scope: row.scopeKey, selected: false, apiKey: !!row.apiKey, error: row.error || otherError,
+        email: row.accountEmail || '', plan: row.planType || '', subscriptionUntil: row.subscriptionUntilMs || 0, subscriptionChecked: row.subscriptionCheckedMs || 0 }));
     const rank = row => { const at = order.indexOf(row.profileId); return at < 0 ? order.length : at; };
     return { claude, codex: [currentRow, ...others].sort((a,b) => rank(a)-rank(b)),antigravity:antigravityRows() };
   }
-  async function refreshOnce({ provider, profileId, force = false } = {}) {
+  async function refreshOnce({ provider, profileId, force = false, reuseAntigravityScope } = {}) {
     if (provider && !['claude', 'codex', 'antigravity'].includes(provider)) throw new Error('不支持的账号类型');
     const rows = list();
     if (profileId && !rows[provider]?.some(row => row.profileId === profileId)) throw new Error('账号不存在，请刷新账号列表');
@@ -94,7 +99,9 @@ function createAccountProfileUsage(deps) {
         checked.set(key,now());
         try {
           if(typeof deps.refreshAntigravity!=='function')throw new Error('Antigravity 账号用量读取尚未就绪');
-          const result=await deps.refreshAntigravity(row.scope,force);
+          // A bulk action already queried this credential scope. Let its reader
+          // enforce TTL; every other account keeps the explicit forced refresh.
+          const result=await deps.refreshAntigravity(row.scope,force && row.scope!==reuseAntigravityScope);
           // A failed reader may return its previous successful observation.
           // Preserve its age and other accounts; never treat that as a recovery.
           if(result && (result.usage5h || result.usage7d || result.groups?.some(g=>g.usage5h||g.usage7d)))
@@ -115,7 +122,7 @@ function createAccountProfileUsage(deps) {
       const rows=list();
       const selected=(options.provider ? rows[options.provider] || [] : Object.values(rows).flat())
         .filter(row=>!options.profileId || row.profileId===options.profileId);
-      key=JSON.stringify([options.provider || '*',options.profileId || '*',!!options.force,
+      key=JSON.stringify([options.provider || '*',options.profileId || '*',!!options.force,options.reuseAntigravityScope || '',
         selected.map(row=>[row.provider,row.profileId,row.scope])]);
     } catch(error) {return Promise.reject(error);}
     if (flight) {

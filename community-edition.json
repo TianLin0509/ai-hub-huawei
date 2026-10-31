@@ -9,7 +9,13 @@
     "companyAssistant": true,
     "companyForum": true,
     "devGroupScene": false,
-    "memberUpgrade": true
+    "memberUpgrade": true,
+    "launchEffort": false,
+    "projectLibrary": false,
+    "sessionFilters": false,
+    "completionNotification": false,
+    "desktopOrganizer": false,
+    "multiInstance": false
   },
   "rulesChannel": "company",
   "kinds": [
@@ -36,14 +42,17 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "设置菜单新增「一键反馈」：写一句遇到了什么，连同版本、系统和最近的日志（已自动隐去密钥、口令、邮箱和用户目录）直接发给维护人；发不出去会存一份到「下载」文件夹。",
-    "公司网络要求重新放行时，检查更新和一键反馈会在后台自动放行一次，不弹窗、不用手动点。",
-    "CodeAgent 额度条多了「闲时」一档和「闲时 2 折还有多久」；模型下拉里每个模型后面显示今日用量、负载和消耗系数（打开过 /model 菜单后才有数据）。",
-    "CodeAgent 会话上下文占到 60% 时，会在空闲时自动压缩；会话里派出子任务时，底部显示「N 个子任务进行中 · 最近一步」。",
-    "长会话滚动更顺：300 轮的会话从头滚到尾耗时减少约一半，卡顿明显减少。"
+    "Hub 更省电脑资源：AI 工作时的「运行中」标记改成静态（原来的循环小动画会让 Hub 不停重画画面，实测显卡和界面各占三四成）；其余状态动画只闪约 2 秒就停。",
+    "全文搜索不再常驻后台：第一次搜索时才启动，闲置 10 分钟自动退出，平时少占几百 MB 内存。",
+    "会话多时更顺：刷新左侧会话列表、保存会话列表的耗时减少一半以上。",
+    "没有 NVIDIA 显卡的电脑不再每 10 秒尝试读取显卡信息；助理查找 WeLink 不再卡住 Hub。",
+    "（5.3.7 起的更新一并带上）助理、论坛、桌宠改为「可选功能」默认关闭，设置菜单「🧩 可选功能」里按需打开；桌宠不再挂全局鼠标钩子，修复部分电脑鼠标一顿一顿漂移。",
+    "CodeAgent 选模型更可靠：新建会话和群聊成员启动时就是所选模型，群聊里各成员不再互相串模型；修复部分任务报「模型不存在」。",
+    "会话自动起名改成本地即时生成；启动中心更简洁，思考强度固定为高档。",
+    "一键反馈遇到公司代理的风险提醒页会在后台自动放行并重试，不再一次就判失败。"
   ],
-  "version": "5.3.6",
-  "upstreamVersion": "1.6.696",
-  "upstreamCommit": "fe0d1aed77c860f7c21e7b7dbcf5e2be7df017af",
+  "version": "5.4.0",
+  "upstreamVersion": "1.6.715",
+  "upstreamCommit": "a37dfec42bbb482f393e8753343e5c30188f3484",
   "upstreamDirty": false
 }

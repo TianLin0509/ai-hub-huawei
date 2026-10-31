@@ -96,30 +96,8 @@
   font-size: 12px;
   flex-shrink: 0;
 }
-.mcm-scene-choice {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
-  border: 1px solid var(--border, var(--border-mid));
-  border-radius: var(--radius-sm);
-  background: rgba(var(--rgb-overlay), 0.025);
-  color: var(--text, var(--fg-strong));
-  font-size: 13px;
-  cursor: pointer;
-}
-.mcm-scene-choice:hover {
-  border-color: rgba(var(--rgb-info), 0.48);
-  background: rgba(var(--rgb-info), 0.08);
-}
-.mcm-scene-choice.selected {
-  border-color: rgba(var(--rgb-info), 0.72);
-  background: rgba(var(--rgb-info), 0.13);
-}
-.mcm-scene-choice input {
-  margin: 0;
-  accent-color: var(--accent, var(--link));
-}
+.mcm-scene[hidden] { display: none; }
+.mcm-scene select { flex: 0 1 260px; max-width: 100%; }
 
 .mcm-slots {
   display: grid;
@@ -233,7 +211,8 @@
   flex: 0 0 62px;
   line-height: 1.25;
 }
-.mcm-slot select {
+.mcm-slot select,
+.mcm-scene select {
   flex: 1 1 auto;
   min-width: 0;
   background: var(--bg, var(--surface-canvas));
@@ -246,6 +225,7 @@
   font-family: inherit;
 }
 .mcm-slot select:focus-visible,
+.mcm-scene select:focus-visible,
 .mcm-fast-checkbox:focus-visible {
   outline: 2px solid var(--accent, var(--link));
   outline-offset: 1px;
