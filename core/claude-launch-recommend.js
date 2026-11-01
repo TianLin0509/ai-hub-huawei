@@ -25,10 +25,12 @@ function liveSessionsByProfile(sessions) {
 }
 
 // 推荐号规则（2026-11-01 用户，与右侧账号看板的绿框同一套）：三条同时满足才算「余量充足」——
-//   ① 活跃会话 ≤ 1；② 5h 剩余 > 70%；③ 7d 剩余高于按节奏该剩的量（一周计划用 70%，每天 10%；
-//   离重置还有 d 天时该剩 100 - 10×(7-d)，例：还有 2 天 → 该剩 50%；7d 满额直接算满足）。
+//   ① 活跃会话 ≤ 1；② 5h 剩余 > 70%；③ 7d 剩余高于按节奏该剩的量（2026-11-01 用户改为一周用满 100%，每天约 14%；
+//   离重置还有 d 天时该剩 100 - 100/7×(7-d)，例：还有 2 天 → 该剩约 29%；7d 满额直接算满足）。
+//   每个号最后 10% 是预留（RESERVE_7D）：7d 剩 ≤ 10% 不推荐，看板上节奏点直接红。
 // 满足的号排最前，按 7d 余量（实际 - 该剩）从大到小，余量相同看 5h；都不满足时沿用下面的综合余量打分。
-const WEEKLY_PLAN = 70;
+const WEEKLY_PLAN = 100;
+const RESERVE_7D = 10;
 const DAY = 86400_000;
 function expected7d(window, now) {
   const at = new Date(window?.resetsAt || 0).getTime();
@@ -46,7 +48,7 @@ function rankClaudeAccounts({ accounts, sessions, flagged = new Set(), now = Dat
     const usable = known && !account.error && Math.min(spare5h, spare7d) > 0;
     const isFlagged = flagged.has(account.profileId);
     const expected = usable ? expected7d(account.usage7d, now) : null;
-    const plenty = usable && !isFlagged && running + idle <= 1 && spare5h > 70 && (spare7d > expected || spare7d >= 100);
+    const plenty = usable && !isFlagged && running + idle <= 1 && spare5h > 70 && spare7d > RESERVE_7D && (spare7d > expected || spare7d >= 100);
     return { id: account.profileId, spare5h, spare7d, running, idle, usable, flagged: isFlagged, expected7d: expected, plenty,
       margin: plenty ? spare7d - expected : null,
       score: usable ? Math.min(spare5h, spare7d) - running * RUNNING_SESSION_COST - idle * IDLE_SESSION_COST : null };
@@ -64,4 +66,4 @@ function accountHint(row) {
   return `${quota} · ${count ? `${count} 个会话${row.running ? `（${row.running} 个在跑）` : ''}` : '无会话'}`;
 }
 
-module.exports = { IDLE_SESSION_COST, RUNNING_SESSION_COST, WEEKLY_PLAN, accountHint, expected7d, liveSessionsByProfile, rankClaudeAccounts };
+module.exports = { IDLE_SESSION_COST, RUNNING_SESSION_COST, WEEKLY_PLAN, RESERVE_7D, accountHint, expected7d, liveSessionsByProfile, rankClaudeAccounts };

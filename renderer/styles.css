@@ -1,5 +1,6 @@
 /* Hub global styles split manifest. Keep import order identical to the former styles.css. */
 @import url('./styles/base.css');
+@import url('./styles/hub-tooltip.css');
 @import url('./styles/shell-sidebar-terminal.css');
 @import url('./styles/global-session-search.css');
 @import url('./styles/account-config-preview.css');

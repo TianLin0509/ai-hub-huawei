@@ -75,4 +75,6 @@ async function verify(code, { fetchImpl = globalThis.fetch, timeoutMs = 15000 } 
   } finally { clearTimeout(timer); }
 }
 
-module.exports = { CHANNEL_FILE, channelId, channelSources, wasUnlocked, readChannel, writeChannel, updateConfig, verify };
+function manifestUrl(code) { const id = channelId(code); return id ? channelSources(id)[0].manifest : ''; }
+
+module.exports = { CHANNEL_FILE, channelId, channelSources, manifestUrl, wasUnlocked, readChannel, writeChannel, updateConfig, verify };

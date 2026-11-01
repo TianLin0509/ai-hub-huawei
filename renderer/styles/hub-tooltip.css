@@ -1,0 +1,29 @@
+/* 全局悬停卡（2026-11-01 用户选定 C：白卡片 + 指向箭头）。颜色取主题变量，浅色 / 深色共用。 */
+.hub-tip {
+  position: fixed; z-index: 10050; max-width: min(340px, calc(100vw - 16px)); box-sizing: border-box;
+  padding: 6px 10px; border-radius: 8px;
+  background: var(--surface-overlay, var(--surface-raised, #fff)); color: var(--fg-default);
+  border: 1px solid var(--border-subtle);
+  box-shadow: 0 10px 28px rgba(22, 34, 58, .13), 0 2px 6px rgba(22, 34, 58, .06);
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif; font-size: 12px; line-height: 1.5;
+  white-space: pre-wrap; overflow-wrap: anywhere; pointer-events: auto;
+  opacity: 0; transform: translateY(2px); transition: opacity .12s ease, transform .12s ease;
+}
+.hub-tip.is-on { opacity: 1; transform: none; }
+.hub-tip[hidden] { display: none !important; }
+:root[data-theme='dark'] .hub-tip { box-shadow: 0 12px 32px rgba(0, 0, 0, .45), 0 0 0 1px rgba(255, 255, 255, .04); }
+.hub-tip.is-rich { padding: 11px 13px; border-radius: 10px; width: max-content; min-width: 200px; white-space: normal; }
+.hub-tip-title { font-size: 12.5px; font-weight: 600; color: var(--fg-strong, var(--fg-default)); margin-bottom: 6px; }
+.hub-tip-kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 3px 10px; margin: 2px 0; }
+.hub-tip-kv > span { color: var(--fg-muted); white-space: nowrap; }
+.hub-tip-line { color: var(--fg-default); margin: 2px 0; }
+.hub-tip-line + .hub-tip-kv, .hub-tip-kv + .hub-tip-line { margin-top: 6px; }
+/* 指向箭头：一个旋转 45° 的小方块，颜色和边框与卡片一致。 */
+.hub-tip::before {
+  content: ''; position: absolute; width: 9px; height: 9px; box-sizing: border-box;
+  background: inherit; border: 1px solid var(--border-subtle); transform: rotate(45deg);
+}
+.hub-tip[data-side='bottom']::before { top: -5px; left: calc(var(--hub-tip-caret, 20px) - 4.5px); border-right: 0; border-bottom: 0; }
+.hub-tip[data-side='top']::before { bottom: -5px; left: calc(var(--hub-tip-caret, 20px) - 4.5px); border-left: 0; border-top: 0; }
+.hub-tip[data-side='right']::before { left: -5px; top: calc(var(--hub-tip-caret, 16px) - 4.5px); border-right: 0; border-top: 0; }
+.hub-tip[data-side='left']::before { right: -5px; top: calc(var(--hub-tip-caret, 16px) - 4.5px); border-left: 0; border-bottom: 0; }

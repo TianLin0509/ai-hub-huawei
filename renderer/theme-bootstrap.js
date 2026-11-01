@@ -27,3 +27,15 @@
     try { console.warn('[theme] bootstrap skipped:', err && err.message); } catch { /* noop */ }
   }
 })();
+
+// 全局悬停卡（2026-11-01 用户选定 C 样式）：接管系统黑底白字的 title 提示。同样包在 try 里，
+// 失败只是退回系统提示。要等 body 出现才能挂卡片节点。
+(function installHubTooltip() {
+  try {
+    const { installHubTooltip: install } = require('./hub-tooltip.js');
+    if (document.body) install(document);
+    else document.addEventListener('DOMContentLoaded', () => install(document), { once: true });
+  } catch (err) {
+    try { console.warn('[hub-tooltip] skipped:', err && err.message); } catch { /* noop */ }
+  }
+})();

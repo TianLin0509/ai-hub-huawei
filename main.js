@@ -4006,7 +4006,10 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
         switched: memberUpgrade && !!editionChannel.readChannel(getHubDataDir()) }));
       ipcMain.handle('edition:switch', async (_e, payload = {}) => {
         if (!memberUpgrade) return { ok: false, message: '这个版本不需要' };
-        const r = await editionChannel.verify(typeof payload.code === 'string' ? payload.code : '', { fetchImpl: (...args) => require('electron').net.fetch(...args) });
+        const code = typeof payload.code === 'string' ? payload.code : '';
+        const verify = () => editionChannel.verify(code, { fetchImpl: (...args) => require('electron').net.fetch(...args) });
+        let r = await verify();
+        if (!r.ok && (r.reason === 'blocked' || r.reason === 'network') && await unblockOwn(editionChannel.manifestUrl(code)).catch(() => false)) r = await verify();
         if (!r.ok) return r;
         editionChannel.writeChannel(getHubDataDir(), r.id);
         appUpdate.useConfig(editionChannel.updateConfig(distribution.updateConfig, getHubDataDir()));

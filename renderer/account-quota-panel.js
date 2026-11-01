@@ -108,20 +108,31 @@ function nextMonthlyRenewal(startMs, now) {
 
 // 推荐号（2026-11-01 用户）：三条同时满足才推荐，满足的号里只圈出 7d 余量最多的那一个（绿框）。
 //   ① 活跃会话 ≤ 1；② 5h 剩余 > 70%；③ 7d 剩余高于「按节奏该剩的量」；标了风控、读取失败、API Key 的号不参与。
-// 节奏：一周计划用掉 WEEKLY_PLAN（70%），每天 10%；离重置还有 d 天时已过 7-d 天，该剩 100 - 10×(7-d)。
-//   例：还有 2 天重置 → 该剩 50%，实际剩 > 50% 就说明余量充足。7d 满额（100%）直接算满足。
+// 节奏（2026-11-01 用户改）：一周用满 WEEKLY_PLAN（100%），每天约 14%；离重置还有 d 天时该剩 100 - 100/7×(7-d)。
+//   例：还有 2 天重置 → 该剩约 29%。7d 满额（100%）直接算满足；最后 RESERVE_7D（10%）是预留，剩 ≤ 10% 不推荐、节奏点直接红。
 // 节奏公式与启动中心的推荐排序共用一份（core/claude-launch-recommend.js），两处结果不会不一致。
-const { WEEKLY_PLAN, expected7d: paceFor } = require('../core/claude-launch-recommend');
+const { WEEKLY_PLAN, RESERVE_7D, expected7d: paceFor } = require('../core/claude-launch-recommend');
 function expected7d(row, now) {
   return paceFor({ resetsAt: Number.isFinite(row.reset7d) ? row.reset7d : 0 }, now);
 }
+// 7d 用量节奏三档（2026-11-01 用户选定「三档圆点」）：和推荐号同一条节奏线（每天约 14%）；剩 ≤ 10% 预留线直接红。
+//   实际剩余比该剩的多 ≥ 5% → 绿（用得慢）；少 ≥ 5% → 红（用得快）；±5% 以内 → 黄（刚好），避免在线附近红绿来回跳。
+const PACE_BAND = 5;
+function paceOf(row, now) {
+  if (row.apiKey || row.remain7d === null || row.remain7d === undefined) return null;
+  const expected = Math.round(expected7d(row, now)), margin = row.remain7d - expected;
+  const level = row.remain7d <= RESERVE_7D ? 'fast' : row.remain7d >= 100 || margin >= PACE_BAND ? 'good' : margin <= -PACE_BAND ? 'fast' : 'even';
+  return { expected, margin, level };
+}
+const PACE_WORDS = { good: '用得慢，余量足', even: '和节奏差不多', fast: '用得快，余量偏少', reserve: '只剩预留的 10%' };
+
 function recommendClaude(rows, now) {
   let best = null;
   for (const r of rows) {
     r.recommended = false;
     if (r.apiKey || r.error || r.risky || r.remain5h === null || r.remain7d === null || !Number.isFinite(r.sessions)) continue;
     r.expected7d = Math.round(expected7d(r, now));
-    const ok = r.sessions <= 1 && r.remain5h > 70 && (r.remain7d > r.expected7d || r.remain7d >= 100);
+    const ok = r.sessions <= 1 && r.remain5h > 70 && r.remain7d > RESERVE_7D && (r.remain7d > r.expected7d || r.remain7d >= 100);
     if (!ok) continue;
     const margin = r.remain7d - r.expected7d;
     if (!best || margin > best.margin || (margin === best.margin && r.remain5h > best.row.remain5h)) best = { row: r, margin };
@@ -214,10 +225,11 @@ function createAccountQuotaPanel({
     const p = PROVIDERS.find(x => x.id === row.provider);
     const lines = [p.name + ' ' + row.no + ' · ' + row.label + (row.current ? '（当前）' : '')];
     if (row.recommended) lines.push('★ 推荐使用：会话 ' + row.sessions + ' 个 · 5h 剩 ' + row.remain5h + '% · 7d 剩 ' + row.remain7d
-      + '%，按每周用 ' + WEEKLY_PLAN + '% 的节奏此时该剩 ' + row.expected7d + '%，余量 ' + (row.remain7d - row.expected7d >= 0 ? '+' : '') + (row.remain7d - row.expected7d) + '%');
+      + '%，按每周用满、每天约 ' + Math.round(WEEKLY_PLAN / 7) + '% 的节奏此时该剩 ' + row.expected7d + '%，余量 ' + (row.remain7d - row.expected7d >= 0 ? '+' : '') + (row.remain7d - row.expected7d) + '%');
     if (row.email) lines.push('邮箱：' + row.email);
     const sub = subscriptionText(row, now);
     if (sub) lines.push(sub);
+    if (row.renewAt) lines.push('推测续费：' + mmdd(row.renewAt) + (row.renewAt - now <= 3 * 86400_000 ? '（3 天内）' : ''));
     if (row.provider === 'claude') lines.push('出口：' + (row.egress ? row.egress + (locationText(locations[row.egress]) ? ' · ' + locationText(locations[row.egress]) : '') : '未知'));
     if (row.provider === 'claude' && Number.isFinite(row.sessions)) lines.push('活跃会话：' + row.sessions + ' 个');
     if (row.apiKey) lines.push('API Key 登录，没有订阅额度');
@@ -227,38 +239,40 @@ function createAccountQuotaPanel({
         : Number.isFinite(at) ? (at > now ? ' · ' + formatResetCountdown(at, now) + ' 后重置' : ' · 待刷新') : '');
     if (row.has5h) lines.push(win('5h', row.remain5h, row.reset5h, row.assumed5h));
     lines.push(win('7d', row.remain7d, row.reset7d, row.assumed7d));
+    const pace = paceOf(row, now);
+    if (pace) lines.push('7d 节奏：每天约 ' + Math.round(WEEKLY_PLAN / 7) + '%，此时该剩 ' + pace.expected + '%，实际剩 ' + row.remain7d + '%，'
+      + (pace.margin >= 0 ? '余量 +' + pace.margin : '超前 ' + (-pace.margin)) + '% → '
+      + PACE_WORDS[row.remain7d <= RESERVE_7D ? 'reserve' : pace.level]);
     if (row.blockedBy) lines.push('现在被 ' + row.blockedBy + ' 卡住' + (row.backIn ? '，' + row.backIn + ' 后回血' : ''));
     if (row.error) lines.push('刷新失败：' + row.error);
     lines.push(row.inFlight ? '刷新中…' : '点击刷新这个账号的额度');
     return lines.join('\n');
   }
 
-  // 胶囊：底色按剩余量填一段，里面写剩余 % 和距重置的倒计时。
-  function pill(row, name, pct, at, now) {
+  // 2026-11-01 用户定稿「细线表」：不用色块底、不给每行套卡片。每格 = 剩余 %（半粗）+ 倒计时（浅灰）
+  //   + 数字下面一根 2px 细线表示剩余量；只有接近耗尽（< 15%）的数字和细线变红。邮箱、IP、续费都进悬停。
+  function cell(row, name, pct, at, now, wide = false) {
     const assumed = name === '5h' ? row.assumed5h : row.assumed7d;
-    const lv = pct === null ? 'off' : pct >= 100 ? 'full' : level(pct);
     const wait = pct === null ? '' : pct >= 100 || assumed ? '已满' : !Number.isFinite(at) ? '' : at <= now ? '待刷新' : formatResetCountdown(at, now);
-    return `<span class="cq-pill cq-${lv}" data-cq-window="${name}"><i class="cq-fill" style="width:${pct === null ? 0 : Math.max(pct, 3)}%"></i>`
-      + `<b class="cq-value">${pct === null ? '—' : pct + '%'}</b><span class="cq-reset">${wait}</span></span>`;
+    const low = pct !== null && pct < USABLE_MIN;
+    return `<span class="cq-cell${wide ? ' cq-wide' : ''}${low ? ' is-low' : ''}" data-cq-window="${name}"><b class="cq-value">${pct === null ? '—' : pct + '%'}</b>`
+      + `<span class="cq-reset">${wait}</span><span class="cq-meter"><i style="width:${pct === null ? 0 : Math.max(pct, 2)}%"></i></span></span>`;
   }
 
   function card(r, now) {
     const empty = r.remain5h === null && r.remain7d === null;
-    const quota = r.apiKey ? '<span class="cq-pill cq-wide cq-nodata">API Key 登录</span>'
-      : empty ? `<span class="cq-pill cq-wide cq-nodata">${r.error ? '刷新失败，点击重试' : '暂无数据，点击刷新'}</span>`
-        : r.has5h ? pill(r, '5h', r.remain5h, r.reset5h, now) + pill(r, '7d', r.remain7d, r.reset7d, now)
-          : pill(r, '7d', r.remain7d, r.reset7d, now).replace('class="cq-pill ', 'class="cq-pill cq-wide ');
+    const quota = r.apiKey ? '<span class="cq-cell cq-wide cq-nodata">API Key 登录</span>'
+      : empty ? `<span class="cq-cell cq-wide cq-nodata">${r.error ? '刷新失败，点击重试' : '暂无数据，点击刷新'}</span>`
+        : r.has5h ? cell(r, '5h', r.remain5h, r.reset5h, now) + cell(r, '7d', r.remain7d, r.reset7d, now)
+          : cell(r, '7d', r.remain7d, r.reset7d, now, true);
     const sessions = r.provider === 'claude' && Number.isFinite(r.sessions)
-      ? `<span class="cq-sessions${r.sessions ? '' : ' is-zero'}" aria-hidden="true"><i></i>${r.sessions}</span>` : r.provider === 'claude' ? '<span></span>' : '';
-    const renew = r.renewAt ? `<span class="cq-renew${r.renewAt - now <= 3 * 86400_000 ? ' is-soon' : ''}">续${mmdd(r.renewAt)}</span>` : '';
-    const meta = `<span class="cq-meta"><span class="cq-user">${esc(String(r.email || r.label).split('@')[0])}</span>`
-      + (accountRisk.active(riskKind(r.provider), r.profileId) ? '<span class="cq-risk-mark">⚠ 风控</span>' : '')
-      + (r.egress ? `<span class="cq-ip">${esc(r.egress)}</span>` : '') + renew + '</span>';
+      ? `<span class="cq-sessions${r.sessions ? '' : ' is-zero'}" aria-hidden="true">${r.sessions}</span>` : r.provider === 'claude' ? '<span></span>' : '';
+    const pace = paceOf(r, now);
+    const paceDot = pace ? `<span class="cq-pace is-${pace.level}" aria-hidden="true"></span>` : '<span></span>';
     const risk = accountRisk.describe(riskKind(r.provider), r.profileId);
-    const detail = esc((risk ? `⚠ ${risk}
-` : '') + tooltip(r, now));
+    const detail = esc((risk ? '⚠ ' + risk + '\n' : '') + tooltip(r, now));
     return `<button type="button" class="cq-card${risk ? ' has-account-risk' : ''}${r.provider === 'claude' ? '' : ' no-sessions'}${r.current ? ' is-current' : ''}${r.recommended ? ' is-recommended' : ''}${r.inFlight ? ' is-loading' : ''}${r.error ? ' is-error' : ''}" data-cq-provider="${r.provider}" data-cq-profile="${esc(r.profileId)}" title="${detail}" aria-label="${detail}"${r.inFlight ? ' aria-busy="true"' : ''}>`
-      + `<span class="cq-no">${r.no}${r.error ? '<span class="cq-error-mark" aria-hidden="true">!</span>' : ''}</span>${quota}${sessions}${meta}</button>`;
+      + `<span class="cq-no">${r.no}${r.error ? '<span class="cq-error-mark" aria-hidden="true">!</span>' : ''}</span>${paceDot}${quota}${sessions}</button>`;
   }
 
   const usableOf = rows => rows.filter(r => r.eff !== null && r.eff >= USABLE_MIN).length;
@@ -274,8 +288,8 @@ function createAccountQuotaPanel({
       + `<button type="button" class="cq-collapse" data-cq-action="collapse" title="收起成细栏" aria-label="收起账号看板">»</button></header>`
       + '<div class="cq-list">' + groups.map(g => `<section class="cq-group" data-cq-group="${g.id}">`
         + `<h3 title="${g.name} ${g.rows.length} 个账号，${usableOf(g.rows)} 个可用 · 数字为剩余额度，时间为距重置的倒计时"><span class="cq-provider">${g.name}</span><span class="cq-count"><b>${usableOf(g.rows)}</b> / ${g.rows.length} 可用</span></h3>`
-        + `<div class="cq-columns${g.id === 'claude' ? '' : ' no-sessions'}"><span></span>${g.rows.some(r => r.has5h) ? '<span>5h</span><span>7d</span>' : '<span class="cq-wide">7d</span>'}${g.id === 'claude' ? '<span>会话</span>' : ''}</div>`
-        + g.rows.map(r => card(r, now)).join('') + '</section>').join('') + '</div>';
+        + `<div class="cq-columns${g.id === 'claude' ? '' : ' no-sessions'}"><span></span><span></span>${g.rows.some(r => r.has5h) ? '<span>5h 剩余</span><span>7d 剩余</span>' : '<span class="cq-wide">7d 剩余</span>'}${g.id === 'claude' ? '<span>会话</span>' : ''}</div>`
+        + '<div class="cq-rows">' + g.rows.map(r => card(r, now)).join('') + '</div></section>').join('') + '</div>';
   }
 
   function ensureSummary(provider) {
@@ -350,4 +364,4 @@ function createAccountQuotaPanel({
   return { render, getState: () => ({ ...state }) };
 }
 
-module.exports = { createAccountQuotaPanel, viewRows, effective, locationText, nextMonthlyRenewal, renewalAt, recommendClaude, expected7d, subscriptionText, PROVIDERS };
+module.exports = { createAccountQuotaPanel, viewRows, effective, locationText, nextMonthlyRenewal, renewalAt, recommendClaude, expected7d, paceOf, subscriptionText, PROVIDERS };

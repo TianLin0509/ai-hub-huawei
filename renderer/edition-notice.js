@@ -66,16 +66,25 @@
       busy = true;
       const r = await ipcRenderer.invoke('edition:switch', { code }).catch(() => null);
       busy = false;
-      if (!r || !r.ok) { if (r && r.reason !== 'wrong' && r.reason !== 'format') console.warn('[edition] 口令核对失败：', r.message); return; }
+      // 敲错不出声；连不上更新地址要说出来（2026-11-01 绿区机敲对了也没反应，看不出是网络问题）
+      if (!r || !r.ok) {
+        if (r && r.reason !== 'wrong' && r.reason !== 'format') {
+          console.warn('[edition] 口令核对失败：', r.message);
+          try { require('./groupchat-fork-ui.js').showForkToast(document, '没能核对：' + r.message, 'error'); } catch {}
+        }
+        return;
+      }
       document.removeEventListener('keydown', onKey, true);
       document.getElementById('options-menu')?.style.setProperty('display', 'none');
       window.__appUpdate?.open?.();
     };
     const onKey = e => {
       if (!menuOpen()) { typed = ''; return; }
-      if (e.ctrlKey || e.altKey || e.metaKey || e.isComposing || typeof e.key !== 'string' || !/^[a-z]$/i.test(e.key)) return;
+      // 中文输入法开着时 key 是 Process，按物理键位 code（KeyW）取字母
+      const letter = /^[a-z]$/i.test(e.key || '') ? e.key.toLowerCase() : /^Key[A-Z]$/.test(e.code || '') ? e.code.slice(3).toLowerCase() : '';
+      if (e.ctrlKey || e.altKey || e.metaKey || !letter) return;
       if (inField(e.target) || inField(document.activeElement)) return;
-      typed = (typed + e.key.toLowerCase()).slice(-32);
+      typed = (typed + letter).slice(-32);
       clearTimeout(timer); timer = setTimeout(() => void tryCode(), 500);
     };
     document.addEventListener('keydown', onKey, true);
