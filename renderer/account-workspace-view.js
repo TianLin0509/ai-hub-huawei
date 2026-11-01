@@ -1,6 +1,7 @@
 'use strict';
 const { companyCards, cliChip } = require('./account-center-view');
-const TABS = [{ id: 'ai', name: 'AI 网页' }, { id: 'work', name: '工作平台' }, { id: 'content', name: '内容平台' }, { id: 'cli', name: '命令行授权' }, { id: 'api', name: 'API 与服务' }];
+const accountRisk = require('./account-risk-state');
+const TABS = [{ id: 'claude', name: 'Claude' }, { id: 'ai', name: 'AI 网页' }, { id: 'work', name: '工作平台' }, { id: 'content', name: '内容平台' }, { id: 'cli', name: '命令行授权' }, { id: 'api', name: 'API 与服务' }];
 const GROUP = { github: 'work', social: 'content', mediaPublish: 'content', aliyunConsole: 'api' };
 const NATIVE = { signed_in: ['已登录', 'ok'], signed_out: ['未登录', 'warn'], unknown: ['登录状态未确认', 'idle'] };
 const BINDING = { shared: '共享专属 Chrome', bound: '已连接', changed: '连接配置已变化', pending: '尚未共享登录', native: '独立授权', host: '客户端授权' };
@@ -103,26 +104,69 @@ function newClaudeExitHtml(edit, vps, esc) {
   if (!route) return '';
   return `<label><span>出口</span><select data-account-route>${routes.map(r => `<option value="${esc(r.id)}" ${r.id === route.id ? 'selected' : ''}>${esc((r.shared ? '共享出口' : r.name) + ' · ' + r.ip)}</option>`).join('')}</select></label><label><span>登录环境</span><select data-account-env>${envOptionsHtml(vps, route.ip, edit.loginEnv || 'new', esc)}</select></label><p class="ac-tool-help">${esc('出口建好后不再更换：这个账号的网页登录、官方授权和日常 Claude 都走 ' + route.ip + '。')}</p>`;
 }
+// 账号风控标记（2026-10-31）：观察期内整行醒目提示；结束后留一行灰字记录。
+const RISK_DAYS = [[7, '7 天'], [14, '14 天'], [30, '30 天'], [0, '一直到手动解除']];
+const DEFAULT_RISK_DAYS = 14;
+function fullTime(at) {
+  const d = new Date(at), pad = n => String(n).padStart(2, '0');
+  return `${d.getMonth() + 1}-${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function dateTimeLocal(at) {
+  const d = new Date(at), pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function riskFormValues(flag, now = Date.now()) {
+  const span = flag?.until == null ? 0 : Math.round((flag.until - flag.flaggedAt) / 86400000);
+  return { value: flag ? flag.note : '被提示登出', at: dateTimeLocal(flag ? flag.flaggedAt : now),
+    days: !flag ? DEFAULT_RISK_DAYS : RISK_DAYS.some(([days]) => days === span) ? span : DEFAULT_RISK_DAYS };
+}
+function riskHtml(kind, c, esc, edit, now = Date.now()) {
+  const id = c.profileId || 'default', attrs = `data-kind="${kind}" data-profile="${esc(id)}"`;
+  if (edit && edit.mode === 'risk' && edit.kind === kind && edit.profileId === id) {
+    return `<div class="ac-account-form ac-risk-form" role="group" aria-label="标记风控"><label><span>发生时间</span><input type="datetime-local" class="ac-account-input" data-risk-field="at" value="${esc(edit.at || '')}"></label><label><span>观察期</span><select data-risk-field="days">${RISK_DAYS.map(([days, name]) => `<option value="${days}" ${Number(edit.days) === days ? 'selected' : ''}>${name}</option>`).join('')}</select></label><label><span>情况说明</span><input class="ac-account-input" data-account-input maxlength="200" spellcheck="false" placeholder="如：被提示登出" value="${esc(edit.value || '')}"></label><p class="ac-tool-help">观察期内这个账号仍可手动使用，但不再被推荐，自动换号也会跳过它；账号标签和启动中心都会显示提醒。</p>${edit.error ? `<p class="ac-item-error" role="alert">${esc(edit.error)}</p>` : ''}<div class="ac-row-actions"><button class="ac-open" data-ac="account-save">保存标记</button><button class="ac-text-btn" data-ac="account-cancel">取消</button></div></div>`;
+  }
+  const active = accountRisk.active(kind, id, now);
+  if (active) {
+    const left = active.until == null ? '一直到手动解除' : `到 ${fullTime(active.until)}（还剩 ${Math.ceil((active.until - now) / 86400000)} 天）`;
+    const asDefault = c.isDefault ? ' · 它还是后续新建会话的账号，建议改用其他账号' : '';
+    return `<p class="ac-risk is-active" role="status"><strong>⚠ 风控观察中</strong>${esc(` · ${fullTime(active.flaggedAt)} 发生 · ${left}${active.note ? ' · ' + active.note : ''} · 不推荐使用，自动换号会跳过${asDefault}`)}<button class="ac-text-btn" data-ac="risk-edit" ${attrs}>修改</button><button class="ac-text-btn" data-ac="risk-clear" ${attrs}>解除标记</button></p>`;
+  }
+  const last = accountRisk.entry(kind, id)?.last;
+  return last ? `<p class="ac-risk">${esc(`上次风控：${fullTime(last.flaggedAt)}${last.note ? ' · ' + last.note : ''} · ${fullTime(last.endedAt)} 结束`)}</p>` : '';
+}
 function accountMenuHtml(kind, c, esc) {
-  if (!EDITABLE.has(kind)) return '';
   const id = c.profileId || 'default';
+  const riskItem = accountRisk.active(kind, id) ? '' : `<button data-ac="risk-edit" data-kind="${kind}" data-profile="${esc(id)}">标记风控</button>`;
+  if (!EDITABLE.has(kind)) return riskItem ? `<details class="ac-more" data-details="account-${kind}-${esc(id)}"><summary aria-label="${esc(c.label || id)} 更多操作">···</summary><div>${riskItem}</div></details>` : '';
   const remove = BUILT_IN_ACCOUNTS.has(id) ? '' : c.isDefault
     ? '<button disabled title="当前用量账号不能移除，请先切到别的账号">移除账号</button>'
     : `<button data-ac="account-remove" data-kind="${kind}" data-profile="${esc(id)}">移除账号</button>`;
-  return `<details class="ac-more" data-details="account-${kind}-${esc(id)}"><summary aria-label="${esc(c.label || id)} 更多操作">···</summary><div><button data-ac="account-rename" data-kind="${kind}" data-profile="${esc(id)}">改名</button>${remove}</div></details>`;
+  return `<details class="ac-more" data-details="account-${kind}-${esc(id)}"><summary aria-label="${esc(c.label || id)} 更多操作">···</summary><div>${riskItem}<button data-ac="account-rename" data-kind="${kind}" data-profile="${esc(id)}">改名</button>${remove}</div></details>`;
 }
-function codexQuotaHtml(state, esc, edit = null, vps = null, mail = null) {
-  return ['codex','claude','gemini'].map(kind => {
+// 「检查出口」结果（2026-10-31）：每个出口一行，名称取 VPS 线路名，延迟是三次完整请求（含建隧道与 TLS）的中位数。
+const EXIT_STATE = { ok: '连通', mismatch: '出口 IP 不符', unreachable: '连不上', unwired: '本机未接通' };
+function exitCheckHtml(exits, vps, esc) {
+  if (!exits) return '';
+  if (exits.loading) return '<p class="ac-tool-help ac-exit-check" role="status">正在检查各出口（每个出口连续请求 3 次，约 5–20 秒）…</p>';
+  if (exits.error) return `<p class="ac-item-error ac-exit-check" role="alert">${esc('出口检查未完成：' + exits.error)}</p>`;
+  const name = e => e.shared ? '共享出口' : ((vps?.routes || []).find(r => r.ip === e.expected)?.name || '专用出口');
+  const rows = exits.list.map(e => `<tr data-exit-state="${esc(e.state)}"><td>${esc(name(e))}</td><td>${esc(e.ip || e.expected || '—')}</td><td class="ac-exit-${e.state === 'ok' ? 'ok' : 'bad'}">${esc(EXIT_STATE[e.state] || e.state)}${e.state === 'mismatch' ? esc('（应为 ' + e.expected + '）') : ''}${e.failed ? esc(' · 失败 ' + e.failed + ' 次') : ''}</td><td>${e.median == null ? '—' : esc((e.median / 1000).toFixed(2) + ' 秒')}</td><td>${esc(e.accounts.length + ' 个账号')}</td></tr>`).join('');
+  return `<div class="ac-exit-check" role="region" aria-label="出口检查结果"><table><thead><tr><th>出口</th><th>出口 IP</th><th>状态</th><th>延迟</th><th>使用</th></tr></thead><tbody>${rows}</tbody></table><p class="ac-tool-help">${esc('检查时间 ' + new Date(exits.at).toLocaleTimeString() + '；延迟为经该出口完整请求一次的耗时（3 次中位数，含建隧道与加密握手），走的就是 Claude 实际使用的本机通道。')}</p></div>`;
+}
+
+// Claude 有自己的页签（2026-11-01 B 方案，account-claude-view.js）；AI 网页页签只传 codex、gemini。
+function codexQuotaHtml(state, esc, edit = null, vps = null, mail = null, exits = null, kinds = ['codex','claude','gemini']) {
+  return kinds.map(kind => {
     const rows=(state.clis || []).filter(c=>c.kind===kind).map(c=>kind==='gemini'?{...c,profileId:c.profileId||'default',label:c.label||'主账号'}:c);
     if (!rows.length) return '';
     const name=kind==='gemini'?'Antigravity':kind==='claude'?'Claude':'Codex';
     const help=kind==='gemini'?'新建会话使用所选账号；已有会话继续使用原账号。各模型额度与重置时间见底栏。':kind==='claude'?'新建会话使用所选账号；已有会话恢复、重启仍用原账号。':'切换后，新建、恢复和重启会话使用所选账号额度。已打开的会话继续使用原账号。';
     const mine = edit && edit.kind === kind;
-    const add = (kind === 'claude' && mail ? '<button class="ac-text-btn ac-mail-import" data-ac="mail-import">导入邮箱资料</button>' : '') + (EDITABLE.has(kind) ? `<button class="ac-text-btn" data-ac="account-add" data-kind="${kind}">+ 添加账号</button>` : '');
-    return `<article class="ac-company ac-codex-quota" data-account-kind="${kind}" aria-label="${name} 用量账号"><header><h2>${name} 用量账号</h2><span class="ac-count">${rows.length} 个账号</span>${add}</header><p class="ac-tool-help">${help}</p>${rows.map(c=>{
+    const add = (kind === 'claude' && vps && vps.enabled !== false ? `<button class="ac-text-btn ac-exit-btn" data-ac="exit-check" ${exits?.loading ? 'disabled' : ''}>检查出口</button>` : '') + (kind === 'claude' && mail ? '<button class="ac-text-btn ac-mail-import" data-ac="mail-import">导入邮箱资料</button>' : '') + (EDITABLE.has(kind) ? `<button class="ac-text-btn" data-ac="account-add" data-kind="${kind}">+ 添加账号</button>` : '');
+    return `<article class="ac-company ac-codex-quota" data-account-kind="${kind}" aria-label="${name} 用量账号"><header><h2>${name} 用量账号</h2><span class="ac-count">${rows.length} 个账号</span>${add}</header><p class="ac-tool-help">${help}</p>${kind==='claude'?exitCheckHtml(exits,vps,esc):''}${rows.map(c=>{
       const id=c.profileId || 'default';
       const editing = mine && edit.mode !== 'add' && edit.profileId === id;
-      return `<div class="ac-account" data-account-profile="${esc(id)}"><div class="ac-account-title"><strong>${esc(c.label || c.profileId)}</strong><span class="ac-account-name">${esc(c.account || '账号未确认')} · ${authLabel(c.state)}</span>${c.isDefault?'<span class="ac-default">后续使用</span>':''}</div><div class="ac-row-actions">${authorizeButton(c,esc)}<button class="ac-open" data-ac="${kind}-quota" data-profile="${esc(c.profileId)}" ${c.isDefault?'disabled aria-pressed="true"':'aria-pressed="false"'}>${c.isDefault?'当前用量账号':'使用此账号额度'}</button>${accountMenuHtml(kind,c,esc)}</div>${kind==='claude'?loginEnvHtml(c,vps,esc,edit&&edit.kind==='claude'?edit:null)+mailboxHtml(c,mail,esc,edit&&edit.kind==='claude'?edit:null):''}${editing && edit.mode !== 'bind' && edit.mode !== 'mail' ? accountFormHtml(edit, esc, c.label || id) : ''}</div>`;
+      return `<div class="ac-account" data-account-profile="${esc(id)}"><div class="ac-account-title"><strong>${esc(c.label || c.profileId)}</strong><span class="ac-account-name">${esc(c.account || '账号未确认')} · ${authLabel(c.state)}</span>${c.isDefault?'<span class="ac-default">后续使用</span>':''}</div><div class="ac-row-actions">${authorizeButton(c,esc)}<button class="ac-open" data-ac="${kind}-quota" data-profile="${esc(c.profileId)}" ${c.isDefault?'disabled aria-pressed="true"':'aria-pressed="false"'}>${c.isDefault?'当前用量账号':'使用此账号额度'}</button>${accountMenuHtml(kind,c,esc)}</div>${riskHtml(kind,c,esc,edit)}${kind==='claude'?loginEnvHtml(c,vps,esc,edit&&edit.kind==='claude'?edit:null)+mailboxHtml(c,mail,esc,edit&&edit.kind==='claude'?edit:null):''}${editing && edit.mode !== 'bind' && edit.mode !== 'mail' && edit.mode !== 'risk' ? accountFormHtml(edit, esc, c.label || id) : ''}</div>`;
     }).join('')}${mine && edit.mode === 'add' ? `<div class="ac-account ac-account-new">${accountFormHtml(edit, esc, '', vps)}</div>` : ''}</article>`;
   }).join('');
 }
@@ -225,4 +269,5 @@ function toolConnections(data, esc, activity, now = Date.now()) {
   if (!data) return '';
   return data.services.filter(s => ['images', 'bridge', 'roundtable'].includes(s.id)).map(s => `<div class="ac-connection"><span>${esc(s.name)}</span><span>${esc(BINDING[s.status])}</span><small>${s.identities.map(i => (i.identity === 'main' ? '账号 1' : '账号 2')).join('、')}${lastToolStep(activity, s.id, now) ? ' · ' + esc(lastToolStep(activity, s.id, now)) : ''}${s.id === 'roundtable' ? ' · 支持 DeepSeek、Kimi、千问；Claude/Codex 新会话选「浏览器」或「全部」加载 MCP，运行中的旧会话需重新创建' : ''}</small></div>`).join('');
 }
-module.exports = { TABS, relativeTime, usage, toolsNote, healthView, imageServiceHtml, aiHtml, cliHtml, servicesHtml, toolConnections, codexQuotaHtml, mailboxHtml };
+module.exports = { riskFormValues, riskHtml, TABS, relativeTime, usage, toolsNote, healthView, imageServiceHtml, aiHtml, cliHtml, servicesHtml, toolConnections, codexQuotaHtml, mailboxHtml, exitCheckHtml,
+  authLabel, authorizeButton, accountFormHtml, accountMenuHtml, loginEnvHtml, envOptionsHtml, freeEnvs, EXIT_STATE, MAIL_KIND };

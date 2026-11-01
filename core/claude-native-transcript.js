@@ -190,6 +190,14 @@ function claudeTranscriptTurns(records) {
   for (const group of groupClaudeRecords(records)) {
     const head = projectClaudeRecord(group.record);
     if (head.user) cards.push(head.user);
+    // Mid-turn human commands belong to this answer without creating a second
+    // model turn. Persist their own cards while preserving tool/result pairing.
+    for (const record of [group.record, ...group.continuations]) {
+      for (const supplement of record.userSupplements || []) {
+        const user = projectClaudeRecord(supplement).user;
+        if (user) cards.push(user);
+      }
+    }
     const continuations = group.continuations.map(record => ({ record, assistant: projectClaudeRecord(record).assistant }));
     if (head.assistant) cards.push(mergeContinuations(head.assistant, continuations));
     else for (const { assistant } of continuations) if (assistant) cards.push(assistant);

@@ -1,4 +1,6 @@
 'use strict';
+const accountRisk = require('./account-risk-state');
+const { autoSwitchItem } = require('./composer-account-auto');
 
 function eligible(session) {
   return !!session && /^claude(?:-resume)?$/.test(session.kind || '')
@@ -45,6 +47,7 @@ function mountClaudeAccountChip({ document: doc, tuningControls, sessionId, getS
     note.setAttribute('role', 'status');
     note.dataset.state = feedback?.state || (status?.status === 'manual-failed' ? 'error' : 'pending');
     note.textContent = feedback?.message || (!options?.canSwitch && options?.reason) || status?.message || options?.reason
+      || (accountRisk.active('claude', session?.claudeProfile) ? '当前账号风控观察中：尽量少用，新任务建议用其他账号新建会话。' : '')
       || (options ? '选择此会话使用的账号；工作中会等本轮结束后切换。' : '正在读取账号…');
     for (const account of options?.accounts || []) {
       const current = account.id === session?.claudeProfile;
@@ -60,10 +63,14 @@ function mountClaudeAccountChip({ document: doc, tuningControls, sessionId, getS
       button.textContent = `${current ? '✓ ' : ''}${account.label || account.id}`
         + (cancelPending ? ' · 当前账号（取消待切换）' : current ? ' · 当前账号' : '')
         + (account.id === pending ? ' · 待切换' : '')
-        + (!account.available && !current && account.reason ? ` · ${account.reason}` : '');
+        + (!account.available && !current && account.reason ? ` · ${account.reason}` : '')
+        + (accountRisk.optionNote('claude', account.id) ? ` · ${accountRisk.optionNote('claude', account.id)}` : '');
       button.title = !options.canSwitch ? options.reason || '此会话暂不能切换账号' : account.reason || '';
       button.addEventListener('click', () => void select(account.id));
       menu.append(button);
+    }
+    if (options?.canSwitch && options.accounts?.length > 1) {
+      menu.append(autoSwitchItem({ document: doc, enabled: options.autoSwitch === true, disabled: inFlight, onToggle: () => void toggleAuto() }));
     }
     menu.append(note);
     position();
@@ -82,11 +89,12 @@ function mountClaudeAccountChip({ document: doc, tuningControls, sessionId, getS
     chip.hidden = !eligible(session);
     if (chip.hidden) { close(); return; }
     const label = session.claudeProfileLabel || session.claudeProfile;
-    chip.textContent = `账号 · ${label} ▾`;
+    chip.textContent = `账号 · ${label}${accountRisk.chipSuffix('claude', session.claudeProfile)}${session.claudeAutoSwitch === true ? ' · 自动换号' : ''} ▾`;
+    chip.dataset.accountRisk = accountRisk.active('claude', session.claudeProfile) ? '1' : '';
     chip.setAttribute('aria-label', `Claude 账号：${label}`);
     chip.dataset.profileId = session.claudeProfile;
     chip.dataset.status = session.claudeSwitchStatus?.status || '';
-    chip.title = feedback?.message || session.claudeSwitchStatus?.message || '选择当前会话使用的 Claude 订阅账号';
+    chip.title = accountRisk.describe('claude', session.claudeProfile) || feedback?.message || session.claudeSwitchStatus?.message || '选择当前会话使用的 Claude 订阅账号';
     paintMenu();
   }
 
@@ -114,6 +122,25 @@ function mountClaudeAccountChip({ document: doc, tuningControls, sessionId, getS
       if (disposed || ticket !== request || getSession() !== session) return;
       feedback = { state: 'error', message: error.message || String(error) };
       paintMenu();
+    }
+  }
+
+  async function toggleAuto() {
+    if (disposed || inFlight || !options) return;
+    const enabled = options.autoSwitch !== true, shown = options;
+    inFlight = true;
+    feedback = null;
+    paintMenu();
+    try {
+      const result = await ipcRenderer.invoke('session:set-claude-auto-switch', { sessionId, enabled });
+      if (!result?.ok) throw new Error(result?.message || '自动换号设置失败');
+      shown.autoSwitch = result.enabled === true;
+      feedback = { state: 'success', message: result.enabled ? '已开启：这个会话额度用完时会自动换号' : '已关闭自动换号' };
+    } catch (error) {
+      feedback = { state: 'error', message: error.message || String(error) };
+    } finally {
+      inFlight = false;
+      if (!disposed) paintMenu();
     }
   }
 

@@ -281,6 +281,15 @@
 }
 .composer-chip:hover,
 .composer-chip:focus-visible { color: var(--fg-strong); outline: none; }
+/* 当前账号风控观察中：标签本身要能一眼看出 */
+:root body .composer .composer-chip[data-account-risk="1"],
+:root body .composer .composer-chip[data-account-risk="1"]:hover,
+:root body .terminal-panel .composer .composer-chip[data-account-risk="1"],
+:root body .terminal-panel .composer .composer-chip[data-account-risk="1"]:hover { color: #b45309; font-weight: 600; background: #fff6e8; border-color: #f0c48a; }
+:root[data-theme='dark'] body .terminal-panel .composer .composer-chip[data-account-risk="1"],
+:root[data-theme='dark'] body .terminal-panel .composer .composer-chip[data-account-risk="1"]:hover { color: #f5b35a; background: rgba(245, 179, 90, .12); border-color: rgba(245, 179, 90, .4); }
+#new-session-account-note[data-account-risk="1"] { color: #b45309; font-weight: 600; }
+:root[data-theme='dark'] #new-session-account-note[data-account-risk="1"] { color: #f5b35a; }
 .composer-chip svg { width: 13px; height: 13px; }
 .composer-chip-icon { width: 26px; padding: 0; justify-content: center; }
 .composer-chip-caret { opacity: .6; }

@@ -615,8 +615,11 @@ const claudeAccountBroker = require('./core/claude-account-credentials').createC
     catch (error) { console.warn('[quota-precompact] onUsage failed:', error.message); }
   },
 });
+// 账号风控标记（2026-10-31）：观察期内不推荐，自动换号不选；手动使用不受限。
+const accountRiskStore = require('./core/account-risk-flags').createAccountRiskStore({ dataDir: getHubDataDir() });
 const claudeAccountSwitch = require('./main/claude-account-switch').createClaudeAccountSwitch({
   sessionManager, broker: claudeAccountBroker,
+  isRiskFlagged: id => accountRiskStore.isFlagged('claude', id),
   profiles: () => {
     const tools = require('./core/claude-subscription-profiles');
     const config = getHubConfig();
@@ -645,6 +648,7 @@ sessionManager.claudeAccountSwitch = claudeAccountSwitch;
 try {
   claudeQuotaPrecompact = require('./main/claude-quota-precompact').createClaudeQuotaPrecompact({
     sessionManager, broker: claudeAccountBroker,
+    isRiskFlagged: id => accountRiskStore.isFlagged('claude', id),
     profiles: () => {
       const tools = require('./core/claude-subscription-profiles');
       const config = getHubConfig();
@@ -656,6 +660,7 @@ try {
     notify: (sessionId, message, level) => sendToRenderer('session-notice', { sessionId, message, level }),
   });
 } catch (error) { console.error('[quota-precompact] unavailable:', error.message); }
+ipcMain.handle('session:set-claude-auto-switch', (_event, payload = {}) => claudeAccountSwitch.setAutoSwitch(payload.sessionId, payload.enabled));
 ipcMain.handle('session:claude-account-options', (_event, payload = {}) => claudeAccountSwitch.accountOptions(payload.sessionId));
 ipcMain.handle('session:set-claude-account', (_event, payload = {}) => claudeAccountSwitch.requestAccount(payload.sessionId, payload.profileId));
 const restartCodexAccount = require('./main/codex-account-restart').createCodexAccountRestart({
@@ -668,6 +673,7 @@ const restartCodexAccount = require('./main/codex-account-restart').createCodexA
 const codexCredentialBackoff = new Map();
 const codexAccountSwitch = require('./main/codex-account-switch').createCodexAccountSwitch({
   sessionManager,
+  isRiskFlagged: id => accountRiskStore.isFlagged('codex', id),
   profiles:() => {
     const config = require('./core/codex-global-account').currentConfig();
     return config.codexSubscriptionProfiles.map(profile => {
@@ -710,6 +716,7 @@ const codexAccountSwitch = require('./main/codex-account-switch').createCodexAcc
   saveSession:session => sessionStore.saveSessionFile(session.id,session),
 });
 sessionManager.codexAccountSwitch = codexAccountSwitch;
+ipcMain.handle('session:set-codex-auto-switch', (_event,payload={}) => codexAccountSwitch.setAutoSwitch(payload.sessionId,payload.enabled));
 ipcMain.handle('session:codex-account-options', (_event,payload={}) => codexAccountSwitch.accountOptions(payload.sessionId));
 ipcMain.handle('session:set-codex-account', (_event,payload={}) => codexAccountSwitch.requestAccount(payload.sessionId,payload.profileId));
 function codexAccountTurnEvent(ev) {
@@ -3813,7 +3820,9 @@ const accountProfileUsage = require('./main/usage/account-profile-usage').create
 });
 ipcMain.handle('account-profile-usage', () => accountProfileUsage.list());
 ipcMain.handle('claude:launch-ranking', () => require('./core/claude-launch-recommend').rankClaudeAccounts({
-  accounts: accountProfileUsage.list().claude, sessions: sessionManager.getAllSessions() }));
+  accounts: accountProfileUsage.list().claude, sessions: sessionManager.getAllSessions(),
+  flagged: new Set(accountProfileUsage.list().claude.map(a => a.profileId).filter(id => accountRiskStore.isFlagged('claude', id))) }));
+require('./main/ipc/account-risk-handlers').registerAccountRiskIpc(ipcMain, { store: accountRiskStore, sendToRenderer });
 ipcMain.handle('refresh-account-profile-usage', (_event, options = {}) => accountProfileUsage.refresh(options));
 // 账号看板的出口地点：每个 IP 查一次并缓存（main/usage/ip-location-cache.js）；E2E 用夹具，不发网络请求。
 const ipLocationCache = require('./main/usage/ip-location-cache').createIpLocationCache({

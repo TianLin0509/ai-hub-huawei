@@ -1,9 +1,14 @@
 'use strict';
 const { companyCards } = require('./account-center-view');
-const { TABS, aiHtml, cliHtml, servicesHtml, toolConnections, codexQuotaHtml } = require('./account-workspace-view');
-function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, configModal, closeOtherPanels = () => {}, openLoginSession = () => {}, resumeLaunch = () => {}, hasLaunchDraft = () => false, notify = () => {} }) {
+const { TABS, aiHtml, cliHtml, servicesHtml, toolConnections, codexQuotaHtml, riskFormValues } = require('./account-workspace-view');
+const accountRisk = require('./account-risk-state');
+const { claudeWorkspaceHtml, nextLabel } = require('./account-claude-view');
+// 远程浏览器里能直接打开的固定页面（VPS 端白名单同样只放行这两个，scripts/vps-login/manager.py FIXED_URLS）。
+const ENV_PAGES = { claude: 'https://claude.ai/', ip: 'https://api.ipify.org/' };
+function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, configModal, closeOtherPanels = () => {}, openLoginSession = () => {}, resumeLaunch = () => {}, hasLaunchDraft = () => false, notify = () => {}, getClaudeQuota = null }) {
   const page = document.getElementById('account-page'), body = page.querySelector('.ac-content');
-  let tab = 'ai';
+  // 2026-11-01 B 方案：Claude 单独成第一个页签，左列表选账号、右侧看详情或走新建四步。
+  let tab = 'claude', claudeSelected = '', claudeFilter = false, wizard = null;
   const search = page.querySelector('.ac-search'), tabs = page.querySelector('.ac-tabs');
   let state = null, signature = '', view = 'list', error = '', notice = '', busy = '', timer, previousFocus, epoch = 0, request = 0;
   let toolGroups = null;
@@ -19,25 +24,44 @@ function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, conf
       .catch(e => { vps = { error: e.message }; }).finally(() => { vpsFlight = null; if (!page.hidden && view === 'list') renderTools(); });
     return vpsFlight;
   }
-  async function envAction(name, profileId) {
+  async function envAction(name, profileId, url = '') {
     if (busy) return;
-    busy = 'env-' + name; error = ''; notice = name === 'open' ? '正在打开登录窗口…' : '正在关闭登录窗口…'; renderStatus();
+    busy = 'env-' + name; error = ''; notice = name === 'open' ? (url ? '正在打开远程浏览器并跳转…' : '正在打开登录窗口…') : '正在关闭登录窗口…'; renderStatus();
     const ticket = epoch;
     try {
-      let r = await ipcRenderer.invoke('vps-login:' + name, { profileId });
+      let r = await ipcRenderer.invoke('vps-login:' + name, url ? { profileId, url } : { profileId });
       if (r?.ok && r.data?.needsConfirmation) {
         const ask = `登录环境「${r.data.others.join('、')}」还开着。
 切换会关闭它（登录资料保留，未发送的草稿可能丢失）。
 
 确认切换吗？`;
         if (!window.confirm(ask)) { notice = '已取消，原来的登录窗口保持运行'; return; }
-        r = await ipcRenderer.invoke('vps-login:' + name, { profileId, confirmed: true });
+        r = await ipcRenderer.invoke('vps-login:' + name, { profileId, url, confirmed: true });
       }
       if (!r?.ok) throw Error(r?.error || '登录环境未响应');
       if (ticket === epoch) notice = r.data.message || '';
     } catch (e) { if (ticket === epoch) { notice = ''; error = e.message; } }
     finally { busy = ''; if (ticket === epoch) renderStatus(); void refreshVps(); }
   }
+  // 「检查出口」（2026-10-31）：只在点按钮时测，结果留在页面上直到再测。
+  let exits = null;
+  async function checkExits() {
+    if (exits?.loading) return;
+    exits = { loading: true }; renderTools();
+    try { const r = await ipcRenderer.invoke('vps-login:check-exits'); exits = r?.ok ? { list: r.data, at: Date.now() } : { error: r?.error || '未响应' }; }
+    catch (e) { exits = { error: e.message }; }
+    if (!page.hidden && view === 'list') renderTools();
+  }
+  // Claude 页签的额度条（2026-11-01）：读主进程的逐号额度缓存（右侧账号看板同一来源，Hub 每 2 分钟刷新），随账号页刷新一起读。
+  let claudeQuota = {};
+  async function refreshClaudeQuota() {
+    try {
+      const cached = await ipcRenderer.invoke('account-profile-usage');
+      const rows = require('./account-quota-panel.js').viewRows('claude', { accounts: { claude: cached?.claude || [] } }, '', Date.now());
+      claudeQuota = Object.fromEntries(rows.map(r => [r.profileId || 'default', r]));
+    } catch {}
+  }
+  const quotaFor = () => { if (getClaudeQuota) { try { return getClaudeQuota() || {}; } catch { return {}; } } return claudeQuota; };
   // Claude 账号邮箱保管（2026-10-30）：只含邮箱地址、备注和「是否存了密码」，读本机文件，随账号页打开读取。
   let mail = null;
   async function refreshMail() {
@@ -72,6 +96,17 @@ function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, conf
       accountEdit = null; notice = r.data.message; await refreshMail();
     } catch (e) { if (ticket === epoch && accountEdit) editAccount({ ...accountEdit, error: e.message }); }
     finally { busy = ''; if (ticket === epoch) renderStatus(); }
+  }
+  accountRisk.subscribe(() => { if (!page.hidden && view === 'list') renderTools(); });
+  async function clearRisk(kind, profileId) {
+    if (busy) return;
+    busy = 'account-edit'; renderStatus();
+    try {
+      const r = await ipcRenderer.invoke('account-risk:clear', { kind, profileId });
+      if (!r?.ok) throw Error(r?.error || '风控标记未解除');
+      accountRisk.publish(r.data); notice = '已解除风控标记，记录保留为历史'; error = '';
+    } catch (e) { error = e.message; }
+    finally { busy = ''; renderStatus(); }
   }
   ipcRenderer.on?.('vps-login-progress',(_e, p) => { if (busy.startsWith('env-') || busy === 'account-edit') { notice = p?.message || notice; renderStatus(); } });
   // Sidebar badge: accounts whose login or human check needs the person (main process count).
@@ -124,9 +159,17 @@ function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, conf
     body.setAttribute('aria-labelledby', 'ac-tab-' + tab);
     if (!state) { body.innerHTML = '<p class="ac-empty">正在读取账号…</p>'; return renderStatus(); }
     const expanded = [...body.querySelectorAll('details[open]')].map(d => d.dataset.details);
-    const mailFocus = body.contains(document.activeElement) ? document.activeElement.dataset?.mailField : '';
+    const mailFocus = body.contains(document.activeElement) ? (document.activeElement.dataset?.mailField || document.activeElement.dataset?.wizField) : '';
+    if (tab === 'claude') {
+      const quota = quotaFor();
+      body.innerHTML = claudeWorkspaceHtml(state, esc, { edit: accountEdit, vps, mail, exits, quota, selected: claudeSelected, filter: claudeFilter, query: search.value, wizard, busy: !!busy });
+      for (const d of body.querySelectorAll('details')) d.open = expanded.includes(d.dataset.details);
+      const field = wizard ? body.querySelector(`[data-wiz-field="${mailFocus || ''}"]`) || body.querySelector('[data-account-input]') : body.querySelector('[data-account-input]:not([data-mail-field])') || (accountEdit?.mode === 'mail' ? body.querySelector(`[data-mail-field="${mailFocus || 'email'}"]`) : null);
+      if (field && (!wizard || mailFocus || wizard.step === 1)) { field.focus({ preventScroll: true }); field.setSelectionRange?.(field.value.length, field.value.length); }
+      return renderStatus();
+    }
     body.innerHTML = tab === 'ai' ? aiHtml(state, search.value, esc) : tab === 'cli' ? cliHtml(state, search.value, esc) : servicesHtml(toolAccounts, tab, search.value, state, esc, toolAccountsError);
-    if (tab === 'ai' && !search.value) body.innerHTML=codexQuotaHtml(state,esc,accountEdit,vps,mail)+body.innerHTML;
+    if (tab === 'ai' && !search.value) body.innerHTML=codexQuotaHtml(state,esc,accountEdit,vps,mail,exits,['codex','gemini'])+body.innerHTML;
     if (tab === 'ai' && state.tools?.some(tool => tool.tool === 'images' && tool.state === 'changed')) {
       body.innerHTML = '<p class="ac-connection-notice" role="status">生图工具连接配置已变化，生图记录暂不能归入共享账号。请在下方「工具连接」核对。</p>' + body.innerHTML;
     }
@@ -173,6 +216,7 @@ function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, conf
   }
   async function refresh() {
     const ticket = epoch, seq = ++request;
+    if (tab === 'claude') await refreshClaudeQuota();
     try { const next = await call('state'); if (ticket === epoch && seq === request && !page.hidden) {
       const newlyConnected = next.setupProgress?.status === 'complete' && state?.setupProgress?.status !== 'complete';
       apply(next); if (newlyConnected) void refreshToolAccounts();
@@ -246,6 +290,14 @@ function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, conf
     busy = 'account-edit'; renderStatus();
     const ticket = epoch;
     try {
+      if (edit.mode === 'risk') {
+        const r = await ipcRenderer.invoke('account-risk:flag', { kind: edit.kind, profileId: edit.profileId, note: edit.value,
+          at: new Date(edit.at).getTime(), days: Number(edit.days) || null });
+        if (!r?.ok) throw Error(r?.error || '风控标记未保存');
+        if (ticket !== epoch) return;
+        accountEdit = null; notice = '已标记风控：观察期内不再推荐，自动换号会跳过这个账号';
+        accountRisk.publish(r.data); return;
+      }
       if (edit.mode === 'bind') {
         notice = edit.loginEnv === 'new' || !edit.loginEnv ? '正在 VPS 上新建登录环境并核对出口（约 15–45 秒）…' : '正在绑定登录环境…'; renderStatus();
         const b = await ipcRenderer.invoke('vps-login:bind', { profileId: edit.profileId, loginEnv: edit.loginEnv || 'new' });
@@ -267,6 +319,55 @@ function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, conf
     } catch (e) { if (ticket === epoch && accountEdit) editAccount({ ...accountEdit, error: e.message }); }
     finally { busy = ''; if (ticket === epoch) renderStatus(); }
   }
+  // 新建 Claude 账号四步（2026-11-01）：第 ① 步就把账号和远程浏览器建好，后面三步都在这个账号上做。
+  const claudeRow = id => state?.clis?.find(c => c.kind === 'claude' && (c.profileId || 'default') === id);
+  // render() 把光标放进当前步骤的输入框；renderTools() 会把焦点还给刚点的按钮，名称框就打不进字。
+  function setWizard(next) { wizard = next; error = ''; const top = body.scrollTop; render(); body.scrollTop = top; }
+  function startWizard() {
+    const rows = (state?.clis || []).filter(c => c.kind === 'claude');
+    accountEdit = null; notice = '';
+    setWizard({ step: 1, value: nextLabel(rows), route: '', loginEnv: 'new' });
+    void refreshVps();
+  }
+  function resumeWizard(profileId) {
+    const c = claudeRow(profileId), m = mail?.accounts?.[profileId];
+    if (!c) return;
+    accountEdit = null;
+    setWizard({ step: m?.email ? 3 : 2, profileId, connection: c.id, value: c.label || profileId, mail: { email: m?.email || (/@/.test(c.account || '') ? c.account : ''), recoveryEmail: m?.recoveryEmail || '' } });
+  }
+  async function createFromWizard() {
+    const w = wizard;
+    const withVps = vps?.enabled !== false;
+    if (!w || busy || (withVps && !w.route)) return;
+    busy = 'account-edit'; notice = !withVps ? '正在新建账号…' : (w.loginEnv || 'new') === 'new' ? '正在新建账号，并在 VPS 上新建远程浏览器、核对出口（约 15–45 秒）…' : '正在新建账号并核对出口与远程浏览器…'; renderTools();
+    const ticket = epoch;
+    try {
+      const r = await ipcRenderer.invoke('accounts:add-subscription', withVps ? { kind: 'claude', label: w.value, route: w.route, loginEnv: w.loginEnv || 'new' } : { kind: 'claude', label: w.value });
+      if (!r?.ok) throw Error(r?.error || '账号未建成');
+      if (ticket !== epoch || wizard !== w) return;
+      wizard = { ...w, step: 2, profileId: r.profile.id, connection: r.connection, value: r.profile.label, error: '', mail: {} };
+      claudeSelected = r.profile.id; notice = `已新建「${r.profile.label}」和它的远程浏览器`;
+      await refresh(); void refreshVps(); void refreshMail();
+    } catch (e) { if (ticket === epoch && wizard === w) { notice = ''; wizard = { ...w, error: e.message }; } }
+    finally { busy = ''; if (ticket === epoch) renderTools(); }
+  }
+  async function saveWizardMail() {
+    const w = wizard;
+    if (!w?.profileId || busy) return;
+    const v = w.mail || {};
+    if (!v.email && !v.recoveryEmail && !v.password && !v.recoveryPassword) { setWizard({ ...w, step: 3 }); return; }
+    busy = 'account-edit'; renderStatus();
+    const ticket = epoch;
+    try {
+      // 备注不在这一步填：原样带回，避免保存时被清空。
+      const r = await ipcRenderer.invoke('mailbox:save', { profileId: w.profileId, email: v.email || '', password: v.password || '', recoveryEmail: v.recoveryEmail || '', recoveryPassword: v.recoveryPassword || '', note: mail?.accounts?.[w.profileId]?.note || '' });
+      if (!r?.ok) throw Error(r?.error || '邮箱资料未保存');
+      if (ticket !== epoch || wizard !== w) return;
+      notice = r.data.message; wizard = { ...w, step: 3, error: '', mail: { email: v.email, recoveryEmail: v.recoveryEmail } };
+      await refreshMail();
+    } catch (e) { if (ticket === epoch && wizard === w) wizard = { ...w, error: e.message }; }
+    finally { busy = ''; if (ticket === epoch) renderTools(); }
+  }
   function close() {
     if (page.hidden) return;
     page.hidden = true; epoch++; clearTimeout(timer);
@@ -279,7 +380,7 @@ function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, conf
     epoch++; clearTimeout(timer); previousFocus = document.activeElement;
     page.hidden = false; document.body.classList.add('accounts-open');
     document.getElementById('btn-rail-accounts')?.setAttribute('aria-expanded', 'true');
-    view = 'list'; error = ''; notice = ''; render(); void refreshVps(); void refreshMail(); await refresh();
+    view = 'list'; error = ''; notice = ''; render(); void refreshVps(); void refreshMail(); void accountRisk.refresh(ipcRenderer); await refresh();
     void refreshToolAccounts();
     if (provider && !page.hidden) await configure(provider);
   }
@@ -302,11 +403,25 @@ function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, conf
     else if (a === 'authorize') void authorize(b.dataset.id);
     else if (a === 'return-launch') { close(); resumeLaunch(); }
     else if (a === 'account-add') editAccount({ mode: 'add', kind: b.dataset.kind, value: '' });
+    else if (a === 'acb-select') { claudeSelected = b.dataset.profile; wizard = null; accountEdit = null; renderTools(); body.querySelector('.acb-detail')?.scrollTo?.(0, 0); }
+    else if (a === 'acb-filter') { claudeFilter = !claudeFilter; renderTools(); }
+    else if (a === 'acb-new') startWizard();
+    else if (a === 'acb-resume') resumeWizard(b.dataset.profile);
+    else if (a === 'acb-route') setWizard({ ...wizard, route: b.dataset.route, loginEnv: 'new', error: '' });
+    else if (a === 'acb-create') void createFromWizard();
+    else if (a === 'acb-mail-save') void saveWizardMail();
+    else if (a === 'acb-skip' || a === 'acb-next') setWizard({ ...wizard, step: wizard.step + 1, error: '' });
+    else if (a === 'acb-back') setWizard({ ...wizard, step: Math.max(wizard.profileId ? 2 : 1, wizard.step - 1), error: '' });
+    else if (a === 'acb-cancel') { wizard = null; renderTools(); }
+    else if (a === 'acb-authorize') { const id = b.dataset.id; claudeSelected = wizard?.profileId || claudeSelected; wizard = null; void authorize(id); }
+    else if (a === 'env-url' && ENV_PAGES[b.dataset.page]) void envAction('open', b.dataset.profile, ENV_PAGES[b.dataset.page]);
     else if (a === 'account-rename') {
       const row = state?.clis?.find(c => c.kind === b.dataset.kind && (c.profileId || 'default') === b.dataset.profile);
       editAccount({ mode: 'rename', kind: b.dataset.kind, profileId: b.dataset.profile, value: row?.label || '' });
     }
     else if (a === 'account-remove') editAccount({ mode: 'remove', kind: b.dataset.kind, profileId: b.dataset.profile });
+    else if (a === 'risk-edit') editAccount({ mode: 'risk', kind: b.dataset.kind, profileId: b.dataset.profile, ...riskFormValues(accountRisk.active(b.dataset.kind, b.dataset.profile)) });
+    else if (a === 'risk-clear') void clearRisk(b.dataset.kind, b.dataset.profile);
     else if (a === 'account-cancel') editAccount(null);
     else if (a === 'env-open') void envAction('open', b.dataset.profile);
     else if (a === 'env-stop') void envAction('stop', b.dataset.profile);
@@ -318,6 +433,7 @@ function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, conf
     }
     else if (a === 'mail-save') void saveMail();
     else if (a === 'mail-import') void mailAction('import', {});
+    else if (a === 'exit-check') void checkExits();
     else if (a === 'mail-copy') void mailAction('copy', { profileId: b.dataset.profile, which: b.dataset.which });
     else if (a === 'mail-open') void mailAction('open', { profileId: b.dataset.profile, which: b.dataset.which });
     else if (a === 'codex-quota') void switchCodexQuota(b.dataset.profile);
@@ -335,11 +451,15 @@ function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, conf
   });
   search.addEventListener('input', renderTools);
   page.addEventListener('input', e => {
-    if (e.target.dataset?.mailField && accountEdit?.mode === 'mail') accountEdit.mail = { ...accountEdit.mail, [e.target.dataset.mailField]: e.target.value };
+    if (e.target.dataset?.riskField && accountEdit?.mode === 'risk') accountEdit[e.target.dataset.riskField] = e.target.value;
+    else if (e.target.dataset?.wizField && wizard) wizard.mail = { ...wizard.mail, [e.target.dataset.wizField]: e.target.value };
+    else if (e.target.matches?.('[data-account-input]') && wizard) wizard.value = e.target.value;
+    else if (e.target.dataset?.mailField && accountEdit?.mode === 'mail') accountEdit.mail = { ...accountEdit.mail, [e.target.dataset.mailField]: e.target.value };
     else if (e.target.matches?.('[data-account-input]') && accountEdit) accountEdit.value = e.target.value;
   });
   page.addEventListener('keydown', e => {
     if (!e.target.matches?.('[data-account-input],[data-mail-field]') || e.isComposing) return;
+    if (wizard) { if (e.key === 'Enter') e.preventDefault(); return; }
     if (e.key === 'Enter') { e.preventDefault(); void (accountEdit?.mode === 'mail' ? saveMail() : saveAccountEdit()); }
     else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); editAccount(null); }
   }, true);
@@ -348,7 +468,8 @@ function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, conf
     if (e.target.dataset.toolChoice) toolChoices[e.target.dataset.toolChoice] = e.target.value;
     // Another exit lists other free environments, so the choice starts over at「新建」.
     if (e.target.matches?.('[data-account-route]') && accountEdit) { accountEdit = { ...accountEdit, route: e.target.value, loginEnv: 'new' }; renderTools(); }
-    if (e.target.matches?.('[data-account-env]') && accountEdit) accountEdit.loginEnv = e.target.value;
+    if (e.target.matches?.('[data-account-env]') && wizard) wizard.loginEnv = e.target.value;
+    else if (e.target.matches?.('[data-account-env]') && accountEdit) accountEdit.loginEnv = e.target.value;
   });
   document.addEventListener('click', e => {
     if (e.target.closest('#btn-rail-accounts')) { if (page.hidden) void open(); else close(); }

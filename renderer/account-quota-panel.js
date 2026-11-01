@@ -1,12 +1,16 @@
 'use strict';
 
 // 右侧账号看板（2026-10-28 方案 C；10-29 扩到 Codex、Gemini）：按 Claude → Codex → Gemini 分段，
-// 每个号一张紧凑卡片：状态色编号 + 名字（Claude 另写出口 IP 与地点）+ 5h/7d 余量与倒计时；被卡住的窗口标红写「回血」。
+// 2026-10-31 用户选定 A：每号一行，只留编号 + 5h 已用/重置 + 7d 待恢复/重置；全名与详情放悬停。
+// 2026-11-01 用户改选「填充胶囊」C：每号两行。第一行 5h、7d 两个按剩余量填色的胶囊（数字为剩余 %）+ 活跃会话数；
+// 第二行灰字：邮箱名、出口 IP、推测续费日。没有 5h 的号（Codex）一个 7d 胶囊占满两格。
 // 可收起成编号细栏。看板显示时，底栏里这三家的逐号格子各收成一格「可用/总数」，点它开关看板。
 // 数据只读 accountUsageController 的快照，不另取额度；IP 地点经 main 的缓存查询（每个 IP 查一次）。
 
 const { remainingPercent, formatResetCountdown } = require('./sidebar-account-usage.js');
 
+const accountRisk = require('./account-risk-state');
+const riskKind = provider => (provider === 'antigravity' ? 'gemini' : provider);
 const STORAGE_KEY = 'hubClaudeQuotaPanel';
 const USABLE_MIN = 15;
 const PROVIDERS = [
@@ -85,6 +89,7 @@ function viewRows(provider, snapshot, currentProfileId, now) {
   });
 }
 
+const mmdd = ms => { const d = new Date(ms); return String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
 const ymd = ms => { const d = new Date(ms); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
 const PLAN_NAMES = { claude_pro: 'Pro', claude_max: 'Max', claude_team: 'Team', claude_enterprise: 'Enterprise', plus: 'Plus', pro: 'Pro', team: 'Team', free: 'Free' };
 const BILLING_NAMES = { apple_subscription: 'Apple 订阅', stripe_subscription: '网页订阅', google_play_subscription: 'Google Play 订阅' };
@@ -98,6 +103,37 @@ function nextMonthlyRenewal(startMs, now) {
     const at = new Date(y, m, Math.min(start.getDate(), last), start.getHours(), start.getMinutes()).getTime();
     if (at > now) return at;
   }
+  return 0;
+}
+
+// 推荐号（2026-11-01 用户）：三条同时满足才推荐，满足的号里只圈出 7d 余量最多的那一个（绿框）。
+//   ① 活跃会话 ≤ 1；② 5h 剩余 > 70%；③ 7d 剩余高于「按节奏该剩的量」；标了风控、读取失败、API Key 的号不参与。
+// 节奏：一周计划用掉 WEEKLY_PLAN（70%），每天 10%；离重置还有 d 天时已过 7-d 天，该剩 100 - 10×(7-d)。
+//   例：还有 2 天重置 → 该剩 50%，实际剩 > 50% 就说明余量充足。7d 满额（100%）直接算满足。
+// 节奏公式与启动中心的推荐排序共用一份（core/claude-launch-recommend.js），两处结果不会不一致。
+const { WEEKLY_PLAN, expected7d: paceFor } = require('../core/claude-launch-recommend');
+function expected7d(row, now) {
+  return paceFor({ resetsAt: Number.isFinite(row.reset7d) ? row.reset7d : 0 }, now);
+}
+function recommendClaude(rows, now) {
+  let best = null;
+  for (const r of rows) {
+    r.recommended = false;
+    if (r.apiKey || r.error || r.risky || r.remain5h === null || r.remain7d === null || !Number.isFinite(r.sessions)) continue;
+    r.expected7d = Math.round(expected7d(r, now));
+    const ok = r.sessions <= 1 && r.remain5h > 70 && (r.remain7d > r.expected7d || r.remain7d >= 100);
+    if (!ok) continue;
+    const margin = r.remain7d - r.expected7d;
+    if (!best || margin > best.margin || (margin === best.margin && r.remain5h > best.row.remain5h)) best = { row: r, margin };
+  }
+  if (best) best.row.recommended = true;
+  return best ? best.row : null;
+}
+
+// 第二行的推测续费日：Claude 从订阅起始日按月推；Codex 已付到期日还没过就用它，过了就从它按月往后推。
+function renewalAt(row, now) {
+  if (row.provider === 'claude') return row.subscribedAt ? nextMonthlyRenewal(row.subscribedAt, now) : 0;
+  if (row.provider === 'codex' && row.subscriptionUntil) return row.subscriptionUntil > now ? row.subscriptionUntil : nextMonthlyRenewal(row.subscriptionUntil, now);
   return 0;
 }
 
@@ -131,9 +167,21 @@ function locationText(loc) {
   return [loc.countryZh, loc.cityZh].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(' ');
 }
 
+// 2026-11-01 用户：Claude 号显示活跃会话数 = 用这个号、没休眠的 Claude 会话（含群聊成员）。
+// 和进度视图、会议室一样直接读 renderer 的全局会话表；读不到时返回 null，不显示。
+function activeClaudeSessions(provider, profileId) {
+  if (provider !== 'claude' || typeof sessions === 'undefined' || !sessions || typeof sessions.values !== 'function') return null;
+  let n = 0;
+  for (const s of sessions.values()) {
+    if (String(s?.kind || '').replace(/-resume$/, '') !== 'claude' || s.status === 'dormant') continue;
+    if ((s.claudeProfile || 'default') === profileId) n++;
+  }
+  return n;
+}
+
 function createAccountQuotaPanel({
   document, root, footerRoot = null, getSnapshot, getCurrentProfileId = () => '', refresh = async () => {},
-  lookupLocations = async () => ({}), escapeHtml, storage = null, nowFn = Date.now, setIntervalFn = setInterval, setTimeoutFn = setTimeout,
+  lookupLocations = async () => ({}), getActiveSessionCount = activeClaudeSessions, escapeHtml, storage = null, nowFn = Date.now, setIntervalFn = setInterval, setTimeoutFn = setTimeout,
 }) {
   if (!document || !root) throw new Error('account quota panel needs document and root');
   const esc = typeof escapeHtml === 'function' ? escapeHtml : s => String(s);
@@ -165,11 +213,16 @@ function createAccountQuotaPanel({
   function tooltip(row, now) {
     const p = PROVIDERS.find(x => x.id === row.provider);
     const lines = [p.name + ' ' + row.no + ' · ' + row.label + (row.current ? '（当前）' : '')];
+    if (row.recommended) lines.push('★ 推荐使用：会话 ' + row.sessions + ' 个 · 5h 剩 ' + row.remain5h + '% · 7d 剩 ' + row.remain7d
+      + '%，按每周用 ' + WEEKLY_PLAN + '% 的节奏此时该剩 ' + row.expected7d + '%，余量 ' + (row.remain7d - row.expected7d >= 0 ? '+' : '') + (row.remain7d - row.expected7d) + '%');
     if (row.email) lines.push('邮箱：' + row.email);
     const sub = subscriptionText(row, now);
     if (sub) lines.push(sub);
     if (row.provider === 'claude') lines.push('出口：' + (row.egress ? row.egress + (locationText(locations[row.egress]) ? ' · ' + locationText(locations[row.egress]) : '') : '未知'));
-    const win = (name, pct, at, assumed) => name + ' 剩余 ' + (pct === null ? '未知' : pct + '%')
+    if (row.provider === 'claude' && Number.isFinite(row.sessions)) lines.push('活跃会话：' + row.sessions + ' 个');
+    if (row.apiKey) lines.push('API Key 登录，没有订阅额度');
+    const win = (name, pct, at, assumed) => name + (name === '5h' ? ' 已用 ' : ' 待恢复 ')
+      + (pct === null ? '未知' : (100 - pct) + '%') + ' · 剩余 ' + (pct === null ? '未知' : pct + '%')
       + (assumed ? '（已过重置时间，重置后没在 Hub 用过，按满额算）'
         : Number.isFinite(at) ? (at > now ? ' · ' + formatResetCountdown(at, now) + ' 后重置' : ' · 待刷新') : '');
     if (row.has5h) lines.push(win('5h', row.remain5h, row.reset5h, row.assumed5h));
@@ -180,27 +233,32 @@ function createAccountQuotaPanel({
     return lines.join('\n');
   }
 
-  function bar(row, name, pct, at, now) {
-    const blocked = row.blockedBy === name;
+  // 胶囊：底色按剩余量填一段，里面写剩余 % 和距重置的倒计时。
+  function pill(row, name, pct, at, now) {
     const assumed = name === '5h' ? row.assumed5h : row.assumed7d;
-    const reset = !Number.isFinite(at) ? '' : assumed ? '已重置' : at <= now ? '待刷新' : formatResetCountdown(at, now) + (blocked ? ' 回血' : '');
-    return `<div class="cq-bar cq-${level(pct)}"><span class="cq-win">${name}</span><i><u style="width:${pct ?? 0}%"></u></i>`
-      + `<b>${pct === null ? '—' : pct + '%'}</b><span class="cq-reset${blocked ? ' is-back' : ''}">${reset}</span></div>`;
+    const lv = pct === null ? 'off' : pct >= 100 ? 'full' : level(pct);
+    const wait = pct === null ? '' : pct >= 100 || assumed ? '已满' : !Number.isFinite(at) ? '' : at <= now ? '待刷新' : formatResetCountdown(at, now);
+    return `<span class="cq-pill cq-${lv}" data-cq-window="${name}"><i class="cq-fill" style="width:${pct === null ? 0 : Math.max(pct, 3)}%"></i>`
+      + `<b class="cq-value">${pct === null ? '—' : pct + '%'}</b><span class="cq-reset">${wait}</span></span>`;
   }
 
   function card(r, now) {
-    let meta = '';
-    if (r.provider === 'claude' && r.egress) {
-      const loc = locationText(locations[r.egress]);
-      meta = `<span class="cq-ip">${esc(r.egress)}</span>${loc ? `<span class="cq-loc">${esc(loc)}</span>` : ''}`;
-    }
     const empty = r.remain5h === null && r.remain7d === null;
-    const body = r.apiKey ? '<div class="cq-nodata">API Key 登录，没有订阅额度</div>'
-      : empty ? `<div class="cq-nodata">${r.error ? '刷新失败，点击重试' : '暂无额度数据，点击刷新'}</div>`
-        : (r.has5h ? bar(r, '5h', r.remain5h, r.reset5h, now) : '') + bar(r, '7d', r.remain7d, r.reset7d, now);
-    return `<button type="button" class="cq-card${r.current ? ' is-current' : ''}${r.inFlight ? ' is-loading' : ''}${r.error ? ' is-error' : ''}" data-cq-provider="${r.provider}" data-cq-profile="${esc(r.profileId)}" title="${esc(tooltip(r, now))}">`
-      + `<span class="cq-no cq-${level(r.apiKey ? null : r.eff)}">${r.no}</span>`
-      + `<span class="cq-main"><span class="cq-title"><span class="cq-name">${esc(r.label)}</span>${r.current ? '<span class="cq-cur">当前</span>' : ''}${meta}</span>${body}</span></button>`;
+    const quota = r.apiKey ? '<span class="cq-pill cq-wide cq-nodata">API Key 登录</span>'
+      : empty ? `<span class="cq-pill cq-wide cq-nodata">${r.error ? '刷新失败，点击重试' : '暂无数据，点击刷新'}</span>`
+        : r.has5h ? pill(r, '5h', r.remain5h, r.reset5h, now) + pill(r, '7d', r.remain7d, r.reset7d, now)
+          : pill(r, '7d', r.remain7d, r.reset7d, now).replace('class="cq-pill ', 'class="cq-pill cq-wide ');
+    const sessions = r.provider === 'claude' && Number.isFinite(r.sessions)
+      ? `<span class="cq-sessions${r.sessions ? '' : ' is-zero'}" aria-hidden="true"><i></i>${r.sessions}</span>` : r.provider === 'claude' ? '<span></span>' : '';
+    const renew = r.renewAt ? `<span class="cq-renew${r.renewAt - now <= 3 * 86400_000 ? ' is-soon' : ''}">续${mmdd(r.renewAt)}</span>` : '';
+    const meta = `<span class="cq-meta"><span class="cq-user">${esc(String(r.email || r.label).split('@')[0])}</span>`
+      + (accountRisk.active(riskKind(r.provider), r.profileId) ? '<span class="cq-risk-mark">⚠ 风控</span>' : '')
+      + (r.egress ? `<span class="cq-ip">${esc(r.egress)}</span>` : '') + renew + '</span>';
+    const risk = accountRisk.describe(riskKind(r.provider), r.profileId);
+    const detail = esc((risk ? `⚠ ${risk}
+` : '') + tooltip(r, now));
+    return `<button type="button" class="cq-card${risk ? ' has-account-risk' : ''}${r.provider === 'claude' ? '' : ' no-sessions'}${r.current ? ' is-current' : ''}${r.recommended ? ' is-recommended' : ''}${r.inFlight ? ' is-loading' : ''}${r.error ? ' is-error' : ''}" data-cq-provider="${r.provider}" data-cq-profile="${esc(r.profileId)}" title="${detail}" aria-label="${detail}"${r.inFlight ? ' aria-busy="true"' : ''}>`
+      + `<span class="cq-no">${r.no}${r.error ? '<span class="cq-error-mark" aria-hidden="true">!</span>' : ''}</span>${quota}${sessions}${meta}</button>`;
   }
 
   const usableOf = rows => rows.filter(r => r.eff !== null && r.eff >= USABLE_MIN).length;
@@ -209,12 +267,14 @@ function createAccountQuotaPanel({
     if (state.collapsed) {
       return `<div class="cq-rail"><button type="button" class="cq-expand" data-cq-action="expand" title="展开账号看板" aria-label="展开账号看板">«</button>`
         + groups.map(g => `<div class="cq-rail-group"><span class="ai-logo logo-${g.logo} cq-logo" title="${g.name} ${usableOf(g.rows)}/${g.rows.length} 可用" aria-hidden="true"></span>`
-          + g.rows.map(r => `<button type="button" class="cq-rail-item cq-${level(r.apiKey ? null : r.eff)}${r.current ? ' is-current' : ''}" data-cq-provider="${r.provider}" data-cq-profile="${esc(r.profileId)}" title="${esc(tooltip(r, now))}">${r.no}</button>`).join('')
+          + g.rows.map(r => `<button type="button" class="cq-rail-item cq-${level(r.apiKey ? null : r.eff)}${r.current ? ' is-current' : ''}${r.recommended ? ' is-recommended' : ''}" data-cq-provider="${r.provider}" data-cq-profile="${esc(r.profileId)}" title="${esc(tooltip(r, now))}">${r.no}</button>`).join('')
           + '</div>').join('') + '</div>';
     }
     return `<header class="cq-head"><strong>账号额度</strong>`
       + `<button type="button" class="cq-collapse" data-cq-action="collapse" title="收起成细栏" aria-label="收起账号看板">»</button></header>`
-      + '<div class="cq-list">' + groups.map(g => `<section class="cq-group" data-cq-group="${g.id}"><h3><span class="ai-logo logo-${g.logo} cq-logo" aria-hidden="true"></span>${g.name}<span class="cq-count"><b>${usableOf(g.rows)}</b>/${g.rows.length} 可用</span></h3>`
+      + '<div class="cq-list">' + groups.map(g => `<section class="cq-group" data-cq-group="${g.id}">`
+        + `<h3 title="${g.name} ${g.rows.length} 个账号，${usableOf(g.rows)} 个可用 · 数字为剩余额度，时间为距重置的倒计时"><span class="cq-provider">${g.name}</span><span class="cq-count"><b>${usableOf(g.rows)}</b> / ${g.rows.length} 可用</span></h3>`
+        + `<div class="cq-columns${g.id === 'claude' ? '' : ' no-sessions'}"><span></span>${g.rows.some(r => r.has5h) ? '<span>5h</span><span>7d</span>' : '<span class="cq-wide">7d</span>'}${g.id === 'claude' ? '<span>会话</span>' : ''}</div>`
         + g.rows.map(r => card(r, now)).join('') + '</section>').join('') + '</div>';
   }
 
@@ -240,6 +300,15 @@ function createAccountQuotaPanel({
     const groups = PROVIDERS.map(p => {
       let rows = [];
       try { rows = viewRows(p.id, snapshot, getCurrentProfileId(p.id), now); } catch {}
+      for (const r of rows) {
+        r.renewAt = renewalAt(r, now);
+        if (p.id === 'claude') { try { r.sessions = getActiveSessionCount(p.id, r.profileId); } catch { r.sessions = null; } }
+      }
+      if (p.id === 'claude') {
+        // 标了风控的号不推荐（2026-11-01：避免绿框落在「⚠ 风控」的号上）。
+        for (const r of rows) { try { r.risky = !!accountRisk.active(riskKind(p.id), r.profileId); } catch { r.risky = false; } }
+        recommendClaude(rows, now);
+      }
       return { ...p, rows };
     }).filter(g => g.rows.length);
     const total = groups.reduce((n, g) => n + g.rows.length, 0);
@@ -277,7 +346,8 @@ function createAccountQuotaPanel({
   });
   // 倒计时按分钟走；没有新数据时 html 不变，不重建 DOM。
   setIntervalFn(render, 60000);
+  accountRisk.subscribe(render);
   return { render, getState: () => ({ ...state }) };
 }
 
-module.exports = { createAccountQuotaPanel, viewRows, effective, locationText, nextMonthlyRenewal, subscriptionText, PROVIDERS };
+module.exports = { createAccountQuotaPanel, viewRows, effective, locationText, nextMonthlyRenewal, renewalAt, recommendClaude, expected7d, subscriptionText, PROVIDERS };

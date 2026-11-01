@@ -1,6 +1,13 @@
 // webUtils.getPathForFile 是 Electron 32+ 取代 File.path 的唯一入口（41 里 File.path
 // 已经是 undefined）。粘贴剪贴板文件要靠它拿绝对路径。
 const { ipcRenderer, clipboard, nativeImage, shell, webFrame, webUtils } = require('electron');
+const accountRisk = require('./account-risk-state');
+accountRisk.subscribe(() => {
+  for (const bar of document.querySelectorAll('.floating-input-bar')) {
+    bar._paintClaudeAccount?.(); bar._paintCodexAccount?.(); bar._paintAntigravityAccount?.();
+  }
+});
+void accountRisk.connect(ipcRenderer);
 // Isolated E2E only: keep test copies/pastes off the user's system clipboard.
 if (process.env.CLAUDE_HUB_E2E_FAKE_CLIPBOARD_ACTIVE === '1') {
   require('./e2e-fake-clipboard.js').installRendererFakeClipboard({ electron: require('electron'), navigator });
@@ -4973,10 +4980,12 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     const current = sessions.get(sessionId);
     antigravityAccountChip.hidden = !/^gemini(?:-resume)?$/.test(current?.kind || '') || !current.antigravityProfile;
     const label = current?.antigravityProfileLabel || current?.antigravityProfile || '';
-    antigravityAccountChip.textContent = '账号 · ' + label;
+    const antigravityRisk = accountRisk.describe('gemini', current?.antigravityProfile);
+    antigravityAccountChip.textContent = '账号 · ' + label + accountRisk.chipSuffix('gemini', current?.antigravityProfile);
+    antigravityAccountChip.dataset.accountRisk = antigravityRisk ? '1' : '';
     antigravityAccountChip.dataset.profileId = current?.antigravityProfile || '';
     antigravityAccountChip.setAttribute('aria-label', 'Antigravity 账号：' + label);
-    antigravityAccountChip.title = '此会话使用的 Antigravity 账号';
+    antigravityAccountChip.title = antigravityRisk || '此会话使用的 Antigravity 账号';
   };
   bar._paintAntigravityAccount();
   composerRail.prepend(tuningControls);
@@ -6935,9 +6944,7 @@ function applyPtyRuntimeObservation(session, runtime, observedAt = Date.now()) {
     // fabricate transcript text or unread counts; a delayed authoritative Stop
     // hook/task_complete can still enrich the card afterwards.
     if (!wasRunning) return false;
-    if (runtime.state === 'idle'
-        && Array.isArray(session._claudeBackgroundTasks)
-        && session._claudeBackgroundTasks.length > 0) {
+    if (runtime.state === 'idle' && claudeBackgroundKeepsRunning(session._claudeBackgroundTasks)) {
       return false;
     }
     if (runtime.state === 'idle' && !ptyInputReadyIsStable(session, runtime, at)) return false;
@@ -8128,9 +8135,8 @@ function onReplyCompleteFromTranscriptEvent(payload) {
     // counting unread when Stop arrives as well. Native stream-json has no Stop
     // hook and must use the ordered completion reducer below.
     const at = normalizeEventTime(completedAt, Date.now());
-    // 这一轮的文字写完了，但 Stop 报告后台还有 Shell / Monitor 在跑：Claude 等它们
-    // 有动静还会自己续跑，会话仍是活跃的。只记下这条回复，不关这一轮。
-    if (activeClaudeBackgroundTasks(session._claudeBackgroundTasks).length > 0) {
+    // 多个后台任务或代理工作仍保持活跃；单个常驻 shell 不阻止前台回复收尾。
+    if (claudeBackgroundKeepsRunning(session._claudeBackgroundTasks)) {
       session._lastTranscriptReadySig = sig;
       session.lastMessageTime = Math.max(Number(session.lastMessageTime) || 0, at);
       session.lastOutputPreview = preview;
@@ -8334,6 +8340,11 @@ function activeClaudeBackgroundTasks(tasks) {
   });
 }
 
+function claudeBackgroundKeepsRunning(tasks) {
+  const active = activeClaudeBackgroundTasks(tasks);
+  return active.length > 1 || active.some(task => !['shell', 'local_bash'].includes(String(task.type || '').toLowerCase()));
+}
+
 // CodeAgent 的上下文圆环：公司 GLM 写进记录的 token 用量全是 0，按用量算不出来；
 // CodeAgent 自己在屏幕右侧 Stats 面板一直显示「Context 32.7k (16%)」，每轮结束时读一次（core/codeagent-screen-stats.js）。
 function applyCodeAgentScreenContext(session, sessionId) {
@@ -8393,7 +8404,7 @@ function onReplyCompleteFromHook(sessionId, completedAt = Date.now(), options = 
   );
   const backgroundTasks = activeClaudeBackgroundTasks(options.backgroundTasks);
   const needsInput = !!w.waiting;
-  const backgroundActive = backgroundTasks.length > 0 && !needsInput;
+  const backgroundActive = claudeBackgroundKeepsRunning(backgroundTasks) && !needsInput;
   let liveRuntime = null;
   try {
     liveRuntime = terminalActivityMonitor

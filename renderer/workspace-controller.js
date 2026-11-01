@@ -2,6 +2,7 @@
 
 (function () {
   const { ipcRenderer } = require('electron');
+  const accountRisk = require('./account-risk-state');
   const path = require('path');
   const {
     modelOptionsFor,
@@ -42,6 +43,7 @@
   // 两边的合法枚举不一样：Claude 是固定表，Codex 按模型目录取值（部分模型有 ultra）。
   const EFFORT_KINDS = new Set(['claude', 'codex', 'deepseek', 'codeagent', 'deepseek-claude']);
   const EFFORT_PICKER = require('../core/distribution').featureEnabled('launchEffort');
+  const LAUNCH_LAYOUT_C = require('../core/distribution').featureEnabled('accounts');
   const PROJECT_LIBRARY = require('../core/distribution').featureEnabled('projectLibrary');
   // CodeAgent 不在内：它的 CLI 挡不住用户级 MCP（2026-10-15 公司真机实测 --strict-mcp-config 无效），
   // 选「精简 / 无」只会把 Hub 自己的工具关掉，用户级 MCP 照样全部加载；所以不给它这个下拉，一律按完整挂载。
@@ -344,7 +346,10 @@
   function claudeRecommendationNote() {
     const row = claudeRanking?.rows.find(item => item.id === claudeRanking.recommendedId);
     if (!row || claudeAccountTouched) return '';
-    return `已按额度余量和在用会话推荐：${require('../core/claude-launch-recommend').accountHint(row)}。`;
+    const hint = require('../core/claude-launch-recommend').accountHint(row);
+    return claudeRanking.plenty
+      ? `推荐：会话 ≤ 1、5h 剩余 > 70%、7d 高于每周用 70% 的节奏（此时该剩 ${row.expected7d}%，余量 +${row.margin}%）；${hint}。`
+      : `没有号同时满足「会话 ≤ 1、5h > 70%、7d 高于节奏」，按综合余量推荐：${hint}。`;
   }
   function loadClaudeRanking(revision) {
     void ipcRenderer.invoke('claude:launch-ranking').then(ranking => {
@@ -378,14 +383,13 @@
     if (kind === 'codex' && codexBackend !== 'api' && tuning.codexProfile) {
       opts.codexProfile = tuning.codexProfile;
       opts.codexAccountPinned = true;
-      opts.codexAutoSwitch = selection.codexAutoSwitch === true;
+      opts.codexAutoSwitch = false;
     }
     if (DEEPSEEK_ROUTE_KINDS.has(kind)) opts.deepseekRoute = tuning.deepseekRoute;
     if (kind === 'gemini') opts.antigravityProfile = tuning.antigravityProfile;
     if (kind === 'claude' && claudeBackend !== 'api') {
       opts.claudeProfile = selection.claudeProfile || launchClaudeAccountId();
       opts.claudeAccountSwitchable = true;
-      if (selection.claudeAutoSwitch === true) opts.claudeAutoSwitch = true;
     }
     return opts;
   }
@@ -1081,20 +1085,27 @@
       : '号池 · 自动路由：创建时挑一个没有进行中会话的号，整段会话固定用它，模型就是那个号自己的模型。';
   }
 
+  let launchConfigLayout = null, launchAccountCtx = null;
+  // 2026-11-01 用户选定 C：左栏账号、右栏参数，少选项的下拉框画成分段按钮；原 <select> 仍是取值来源。
+  function paintLaunchLayout() {
+    if (!LAUNCH_LAYOUT_C) return;
+    try {
+      if (!launchConfigLayout) launchConfigLayout = require('./launch-config-layout.js').createLaunchConfigLayout({ document, ipcRenderer, escapeHtml });
+      launchConfigLayout.paint(launchAccountCtx || { kind: selectedKind, showAccount: false });
+    } catch (error) { globalThis.__launchLayoutError = error.stack || error.message; console.warn('[launch-center] 启动配置布局未生效：' + error.message); }
+  }
   function paintTuning() {
     const accountField=document.getElementById('new-session-account-field');
     const accountSelect=document.getElementById('new-session-account');
     const accountNote=document.getElementById('new-session-account-note');
     const isClaudeAccount=selectedKind === 'claude';
     const isAntigravityAccount=selectedKind === 'gemini';
-    const accounts=isAntigravityAccount ? antigravityAccounts : isClaudeAccount ? rankedClaudeAccounts() : codexAccounts;
+    const accountKind=isAntigravityAccount ? 'gemini' : isClaudeAccount ? 'claude' : 'codex';
+    const accounts=(isAntigravityAccount ? antigravityAccounts : isClaudeAccount ? rankedClaudeAccounts() : codexAccounts)
+      .map(p => ({ ...p, risk: accountRisk.optionNote(accountKind, p.id) }));
     const selectedAccount=isAntigravityAccount ? antigravityAccountId : isClaudeAccount ? launchClaudeAccountId() : codexAccountId;
     const showAccount=isAntigravityAccount || selectedKind === 'codex' && codexBackend !== 'api' || isClaudeAccount && claudeBackend !== 'api';
     if (accountField) accountField.hidden=!showAccount;
-    const autoSwitchField = document.getElementById('new-session-claude-auto-switch-field');
-    if (autoSwitchField) autoSwitchField.hidden = !isClaudeAccount || !showAccount || accounts.length < 2;
-    const codexAutoSwitchField = document.getElementById('new-session-codex-auto-switch-field');
-    if (codexAutoSwitchField) codexAutoSwitchField.hidden = selectedKind !== 'codex' || !showAccount || accounts.length < 2;
     if (accountNote) {
       accountNote.hidden=!showAccount;
       accountNote.textContent=accountReadError || (accountSaving ? '正在切换用量账号…' : accountNotice)
@@ -1105,12 +1116,19 @@
       if (accountSelect.dataset.accounts !== signature) {
         // The hand-typed label has been wrong before; lead with the account the profile is
         // actually logged into and keep the label as the secondary hint.
-        accountSelect.innerHTML=accounts.map(p=>`<option value="${escapeHtml(p.id)}">${escapeHtml(`${p.recommended ? '推荐 · ' : ''}${p.email ? `${p.email}（${p.label || p.id}）` : `${p.label || p.id} · 账号未确认`}${p.hint ? ` · ${p.hint}` : ''}`)}</option>`).join('');
+        accountSelect.innerHTML=accounts.map(p=>`<option value="${escapeHtml(p.id)}">${escapeHtml(`${p.risk ? p.risk + ' · ' : p.recommended ? '推荐 · ' : ''}${p.email ? `${p.email}（${p.label || p.id}）` : `${p.label || p.id} · 账号未确认`}${p.hint ? ` · ${p.hint}` : ''}`)}</option>`).join('');
         accountSelect.dataset.accounts=signature;
       }
       accountSelect.value=pendingAccountId || selectedAccount;
       accountSelect.disabled=accountSaving || submitting || !accounts.length || !!accountReadError;
     }
+    if (accountNote && showAccount) {
+      const risk = accountRisk.describe(accountKind, pendingAccountId || selectedAccount);
+      accountNote.dataset.accountRisk = risk ? '1' : '';
+      if (risk) accountNote.textContent = '⚠ 所选账号' + risk + '。建议换一个账号。';
+    }
+    // C 布局（launch-config-layout.js）左栏账号列表用的同一份数据。
+    launchAccountCtx={kind:selectedKind,showAccount,accounts,selectedId:pendingAccountId || selectedAccount,disabled:accountSaving || submitting || !accounts.length || !!accountReadError,ranking:isClaudeAccount ? claudeRanking : null};
     paintCodeagentAccount();
     const label = document.getElementById('new-session-tuning-label');
     const grid = document.getElementById('new-session-tuning');
@@ -1327,6 +1345,8 @@
     });
 
     paintTuning();
+    // 账号下拉一更新就同步左栏：后面的代码偶尔在启动早期出错时，左栏也不会停在旧状态（2026-11-01 实测 5 次 1 次）。
+    paintLaunchLayout();
 
     const routeField = document.getElementById('new-session-deepseek-route-field');
     const showRoute = DEEPSEEK_ROUTE_KINDS.has(selectedKind);
@@ -1354,6 +1374,7 @@
           ? 'DeepSeek 使用 DSH；Token Plan 消耗套餐额度，API 使用 DeepSeek 官方 API 计费。'
           : `${deepseekProfile.ROUTES[deepseekRoute].label}不可用：${routeStatus.reason}。请改选另一种接入方式，Hub 不会自动替换。`;
     }
+    paintLaunchLayout();
     const existingRow = document.getElementById('new-session-existing-path');
     menuEl.querySelectorAll('[data-project-path]').forEach(button => {
       const selected = workspacePathKey(existingWorkspace?.path) === workspacePathKey(button.dataset.projectPath);
@@ -1469,8 +1490,6 @@
     const revision = ++modalRevision;
     claudeAccountTouched = false;
     loadClaudeRanking(revision);
-    const codexAutoSwitch = document.getElementById('new-session-codex-auto-switch');
-    if (codexAutoSwitch) codexAutoSwitch.checked = false;
     tuningMemory.clear();
     accountNotice = '';
     tuningTouchedByUser = false;
@@ -1667,8 +1686,6 @@
   // 省略等于沿用 session-manager 的默认值，所以只在"确实有这一档"时才传。
   function tuningOpts() {
     const opts = buildSessionTuningOpts(selectedKind, selectedModel, {
-      claudeAutoSwitch: document.getElementById('new-session-claude-auto-switch')?.checked === true,
-      codexAutoSwitch: document.getElementById('new-session-codex-auto-switch')?.checked === true,
       effort: selectedEffort,
       mcpProfile: selectedMcpProfile,
       fastMode: selectedFastMode,

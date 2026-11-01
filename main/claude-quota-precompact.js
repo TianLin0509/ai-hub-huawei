@@ -58,7 +58,7 @@ function qualifies(windows, { min5h, min7d }) {
 }
 
 function createClaudeQuotaPrecompact({
-  sessionManager, broker, profiles, sameRoute, requestAccount, notify = () => {},
+  sessionManager, broker, profiles, sameRoute, requestAccount, notify = () => {}, isRiskFlagged = () => false,
   stateDir = STATE_DIR, now = Date.now, logger = console,
   triggerRemaining = 10, contextShare = 0.3, min5h = 50, min7d = 20, resetGraceMs = 30 * 60 * 1000,
   retries = 5, retryMs = 2000, transientRetryMs = 5 * 60 * 1000, skipWindowMs = 2 * 3600 * 1000,
@@ -122,9 +122,10 @@ function createClaudeQuotaPrecompact({
     const current = account(session.claudeProfile);
     if (!current) return { reason: '当前账号配置缺失' };
     const rows = [];
-    let failed = 0;
+    let failed = 0, skippedRisk = 0;
     for (const profile of profiles() || []) {
       if (profile.id === current.id || !sameRoute(current, profile)) continue;
+      if (isRiskFlagged(profile.id)) { skippedRisk++; continue; }
       try {
         // 候选账号沿用上次读数（账号只在 Hub 里用，过了重置时间按已重置算），不再逐个查询。
         const windows = allWindows((await broker.usage(profile, { maxAgeMs: Infinity, why: 'precompact-target' }))?.usage);
@@ -137,7 +138,7 @@ function createClaudeQuotaPrecompact({
     rows.sort((a, b) => b.slack - a.slack || a.profile.id.localeCompare(b.profile.id));
     if (rows[0]) return { target: rows[0] };
     if (failed) return { transient: true }; // 有账号没查到：不能断定「没有候选」，稍后重判
-    return { reason: `其他账号都不满足「5 小时剩余 > ${min5h}%、7 天剩余 > ${min7d}%」` };
+    return { reason: `其他账号都不满足「5 小时剩余 > ${min5h}%、7 天剩余 > ${min7d}%」${skippedRisk ? `（已跳过 ${skippedRisk} 个风控观察中的账号）` : ''}` };
   }
 
   async function evaluate(session, snapshot) {

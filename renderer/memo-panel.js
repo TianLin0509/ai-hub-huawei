@@ -3,12 +3,14 @@
 const fs = require('fs');
 const path = require('path');
 const { formatAbsoluteTime } = require('../core/beijing-time.js');
+const { getHubDataDir } = require('../core/data-dir.js');
 
 const MEMO_OPEN_KEY = 'claude-hub-memo-open';
 
 function createMemoPanel(deps) {
   const {
     baseDir,
+    dataDir = getHubDataDir(),
     clipboard,
     document,
     getActiveSessionId,
@@ -17,7 +19,10 @@ function createMemoPanel(deps) {
     scheduleRefit,
   } = deps;
 
-  const memoFile = path.join(baseDir, '..', 'memo.json');
+  // 备忘存数据目录（2026-11-01）：以前存在程序目录旁，安装版在 app.asar / Program Files 里写不进去，
+  // 失败又被吞掉，表现为「输入后记录消失」。旧位置的文件只在数据目录还没有备忘时读一次并搬过来。
+  const memoFile = path.join(dataDir, 'memo.json');
+  const legacyMemoFile = path.join(baseDir, '..', 'memo.json');
 
   function escapeMemoHtml(text) {
     const div = document.createElement('div');
@@ -26,11 +31,24 @@ function createMemoPanel(deps) {
   }
 
   function loadItems() {
-    try { return JSON.parse(fs.readFileSync(memoFile, 'utf8')); } catch { return []; }
+    try { return JSON.parse(fs.readFileSync(memoFile, 'utf8')); } catch {}
+    if (fs.existsSync(memoFile)) return [];
+    let legacy;
+    try { legacy = JSON.parse(fs.readFileSync(legacyMemoFile, 'utf8')); } catch { return []; }
+    if (!Array.isArray(legacy)) return [];
+    saveItems(legacy);
+    return legacy;
   }
 
   function saveItems(items) {
-    try { fs.writeFileSync(memoFile, JSON.stringify(items, null, 2)); } catch {}
+    try {
+      fs.mkdirSync(dataDir, { recursive: true });
+      fs.writeFileSync(memoFile, JSON.stringify(items, null, 2));
+      return true;
+    } catch (error) {
+      console.warn('[memo] 备忘保存失败：', memoFile, error && error.message);
+      return false;
+    }
   }
 
   function formatMemoTime(ts) {

@@ -7,7 +7,7 @@
  *
  * Filters out:
  *   - tool_result entries (type='user' but content is array of {type:'tool_result',...})
- *   - non user/assistant entries (queue-operation, attachment, last-prompt,
+ *   - non user/assistant entries (except human queued-command attachments), e.g. queue-operation, last-prompt,
  *     custom-title, agent-name, ...)
  *   - corrupt JSONL lines (skipped, not thrown)
  *
@@ -19,6 +19,7 @@
 
 const fs = require('node:fs');
 const { isSyntheticUserEntry, displayUserText, hubAttachedFields } = require('./synthetic-user-filter.js');
+const { withQueuedHumanInputs } = require('./claude-queued-input');
 
 function isToolResultEntry(entry) {
   return !!(
@@ -325,7 +326,7 @@ function parseClaudeTranscriptEntries(entries, opts = {}) {
   const excludeEntryIds = new Set(opts.excludeEntryIds || []);
   const excludeMessageIds = new Set(opts.excludeMessageIds || []);
 
-  for (const entry of entries) {
+  for (const entry of withQueuedHumanInputs(entries)) {
     if (!entry || typeof entry !== 'object') continue;
     if (excludeEntryIds.has(entry.uuid) || excludeMessageIds.has(entry.message?.id)) {
       // Keep the conversational boundary even when the live projection already

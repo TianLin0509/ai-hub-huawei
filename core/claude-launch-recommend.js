@@ -24,19 +24,38 @@ function liveSessionsByProfile(sessions) {
   return counts;
 }
 
-function rankClaudeAccounts({ accounts, sessions, now = Date.now() }) {
+// 推荐号规则（2026-11-01 用户，与右侧账号看板的绿框同一套）：三条同时满足才算「余量充足」——
+//   ① 活跃会话 ≤ 1；② 5h 剩余 > 70%；③ 7d 剩余高于按节奏该剩的量（一周计划用 70%，每天 10%；
+//   离重置还有 d 天时该剩 100 - 10×(7-d)，例：还有 2 天 → 该剩 50%；7d 满额直接算满足）。
+// 满足的号排最前，按 7d 余量（实际 - 该剩）从大到小，余量相同看 5h；都不满足时沿用下面的综合余量打分。
+const WEEKLY_PLAN = 70;
+const DAY = 86400_000;
+function expected7d(window, now) {
+  const at = new Date(window?.resetsAt || 0).getTime();
+  const daysLeft = Number.isFinite(at) && at > now ? Math.min(7, (at - now) / DAY) : 7;
+  return Math.round(Math.max(0, 100 - (WEEKLY_PLAN / 7) * (7 - daysLeft)));
+}
+
+// flagged: 风控观察中的账号 id。额度再多也不推荐，并排到最后。
+function rankClaudeAccounts({ accounts, sessions, flagged = new Set(), now = Date.now() }) {
   const live = liveSessionsByProfile(sessions);
   const rows = (accounts || []).map(account => {
     const spare5h = spare(account.usage5h, now), spare7d = spare(account.usage7d, now);
     const { running = 0, idle = 0 } = live.get(account.profileId) || {};
     const known = spare5h !== null && spare7d !== null;
     const usable = known && !account.error && Math.min(spare5h, spare7d) > 0;
-    return { id: account.profileId, spare5h, spare7d, running, idle, usable,
+    const isFlagged = flagged.has(account.profileId);
+    const expected = usable ? expected7d(account.usage7d, now) : null;
+    const plenty = usable && !isFlagged && running + idle <= 1 && spare5h > 70 && (spare7d > expected || spare7d >= 100);
+    return { id: account.profileId, spare5h, spare7d, running, idle, usable, flagged: isFlagged, expected7d: expected, plenty,
+      margin: plenty ? spare7d - expected : null,
       score: usable ? Math.min(spare5h, spare7d) - running * RUNNING_SESSION_COST - idle * IDLE_SESSION_COST : null };
   });
-  const tier = row => row.usable ? 0 : row.spare5h === null || row.spare7d === null ? 1 : 2;
-  rows.sort((a, b) => tier(a) - tier(b) || (b.score ?? 0) - (a.score ?? 0) || a.running + a.idle - b.running - b.idle);
-  return { recommendedId: rows[0]?.usable ? rows[0].id : null, rows };
+  const tier = row => row.flagged ? 4 : row.plenty ? 0 : row.usable ? 1 : row.spare5h === null || row.spare7d === null ? 2 : 3;
+  rows.sort((a, b) => tier(a) - tier(b)
+    || (a.plenty ? (b.margin - a.margin) || (b.spare5h - a.spare5h) : 0)
+    || (b.score ?? 0) - (a.score ?? 0) || a.running + a.idle - b.running - b.idle);
+  return { recommendedId: rows[0]?.usable && !rows[0].flagged ? rows[0].id : null, plenty: !!rows[0]?.plenty, rows };
 }
 
 function accountHint(row) {
@@ -45,4 +64,4 @@ function accountHint(row) {
   return `${quota} · ${count ? `${count} 个会话${row.running ? `（${row.running} 个在跑）` : ''}` : '无会话'}`;
 }
 
-module.exports = { IDLE_SESSION_COST, RUNNING_SESSION_COST, accountHint, liveSessionsByProfile, rankClaudeAccounts };
+module.exports = { IDLE_SESSION_COST, RUNNING_SESSION_COST, WEEKLY_PLAN, accountHint, expected7d, liveSessionsByProfile, rankClaudeAccounts };

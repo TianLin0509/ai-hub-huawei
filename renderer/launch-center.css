@@ -419,3 +419,53 @@
 .launch-select-option .codeagent-model-usage { margin-left: 8px; color: var(--fg-muted); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
 .launch-select-option .codeagent-model-usage[data-level='warn'] { color: var(--status-warning); }
 .launch-select-option .codeagent-model-usage[data-level='danger'] { color: var(--status-danger); }
+
+/* 启动配置 C 布局（2026-11-01 用户选定）：左栏用量账号、右栏参数；少选项的下拉框画成分段按钮（launch-config-layout.js） */
+.session-config-section.lcc .lcc-body { display: block; }
+.session-config-section.lcc .lcc-body.has-accounts { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 18px; align-items: start; }
+.lcc-body.has-accounts #new-session-account-field { display: none; }
+.lcc-accounts { display: grid; gap: 4px; padding-right: 16px; border-right: 1px solid var(--border-subtle); }
+.lcc-accounts[hidden] { display: none; }
+.lcc-h { font-size: 11px; color: var(--fg-muted); margin: 0 0 4px 2px; }
+.lcc-acct { display: grid; gap: 4px; width: 100%; padding: 8px 10px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--fg-default); font: inherit; text-align: left; cursor: pointer; }
+.lcc-acct:hover:not(:disabled) { background: var(--surface-card); }
+.lcc-acct[aria-selected='true'] { border-color: var(--brand-tint-border, var(--brand)); background: var(--brand-tint); }
+.lcc-acct:disabled { cursor: wait; opacity: .7; }
+.lcc-acct-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.lcc-acct-top b { font-size: 13px; font-weight: 650; color: var(--fg-strong); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.lcc-tag { margin-left: auto; flex: none; padding: 0 7px; border-radius: 6px; background: var(--brand-tint); color: var(--brand-text); font-size: 11px; font-weight: 600; line-height: 18px; }
+.lcc-sessions { margin-left: auto; flex: none; color: var(--fg-muted); font-size: 11px; }
+.lcc-acct-mail { color: var(--fg-muted); font-size: 11px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.lcc-pills { display: flex; gap: 5px; }
+.lcc-pill { position: relative; flex: 1; height: 18px; overflow: hidden; border-radius: 5px; background: var(--surface-raised, #eef0f4); font-size: 11px; line-height: 18px; text-align: center; color: var(--fg-default); font-variant-numeric: tabular-nums; }
+.lcc-pill i { position: absolute; inset: 0 auto 0 0; background: color-mix(in srgb, var(--brand) 22%, transparent); }
+.lcc-pill.warn i { background: color-mix(in srgb, #d98a1c 30%, transparent); }
+.lcc-pill.bad i { background: color-mix(in srgb, #d4483f 30%, transparent); }
+.lcc-pill.off { color: var(--fg-muted); }
+.lcc-pill span { position: relative; }
+.session-config-section select.lcc-hidden { display: none; }
+.lcc-seg { display: flex; flex-wrap: wrap; gap: 2px; padding: 3px; border-radius: 8px; background: var(--surface-raised, #f0f1f4); }
+.lcc-seg[hidden] { display: none; }
+.lcc-seg button { min-height: 30px; padding: 4px 11px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-muted); font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.lcc-seg button small { margin-left: 4px; font-size: 11px; opacity: .8; }
+.lcc-seg button:hover:not(:disabled) { color: var(--fg-strong); }
+.lcc-seg button[aria-checked='true'] { background: var(--surface-canvas); color: var(--fg-strong); font-weight: 650; box-shadow: 0 1px 2px rgba(0, 0, 0, .1); }
+.lcc-seg button:disabled { opacity: .45; cursor: not-allowed; }
+.session-config-section.lcc .session-tuning-note { padding: 0; background: transparent; color: var(--fg-muted); line-height: 1.7; }
+.session-config-section.lcc .session-tuning-note:is(label):not([hidden]) { display: flex; align-items: center; gap: 6px; }
+/* 一项一行、标签在左（mock C）：分段按钮有足够宽度，不折行 */
+.session-config-section.lcc .session-tuning-grid,
+.session-config-section.lcc .session-tuning-grid[data-kind='codex'] { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.session-config-section.lcc .session-tuning-grid > .session-tuning-field,
+.session-config-section.lcc #new-session-deepseek-route-field { display: grid; grid-template-columns: 76px minmax(0, 1fr); align-items: center; gap: 10px; grid-column: auto; }
+.session-config-section.lcc .session-tuning-grid > .session-tuning-field[hidden],
+.session-config-section.lcc #new-session-deepseek-route-field[hidden] { display: none; }
+.session-config-section.lcc .session-tuning-field > span { min-height: 0; }
+.session-config-section.lcc .lcc-seg { justify-self: start; max-width: 100%; }
+.session-config-section.lcc .session-tuning-check { justify-self: start; height: 32px; min-height: 32px; }
+@media (max-width: 760px) { .session-config-section.lcc .lcc-body.has-accounts { grid-template-columns: 1fr; } .lcc-accounts { padding-right: 0; border-right: 0; } }
+.session-config-section.lcc .session-tuning-note[data-state='error'] { color: #c2410c; }
+/* Codex 旧规则用 :is(#id…) 让模型、账号字段跨 3 列；单列布局里会撑出多余的列，这里同样带 id 盖掉 */
+.session-config-section.lcc .session-tuning-grid > :is(#new-session-model-field, #new-session-account-field, .session-tuning-field) { grid-column: auto; }
+.lcc-tag.soft { background: var(--surface-raised, #eef0f4); color: var(--fg-muted); }
+.lcc-tag.risk { background: color-mix(in srgb, #d4483f 14%, transparent); color: #b42318; }

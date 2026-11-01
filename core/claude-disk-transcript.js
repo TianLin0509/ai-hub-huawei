@@ -17,6 +17,7 @@
 
 const fs = require('node:fs');
 const { isSyntheticUserEntry } = require('./synthetic-user-filter.js');
+const { withQueuedHumanInputs } = require('./claude-queued-input');
 const { claudeTranscriptTurns } = require('./claude-native-transcript.js');
 const { isToolResultEntry, claudeAssistantContentHasAnswerText, isClaudeTurnStopReasonTerminal } = require('./claude-transcript-parser.js');
 
@@ -78,7 +79,7 @@ function claudeDiskRecords(entries) {
   const records = [];
   const scheduledFires = new Set();
   let current = null;
-  for (const entry of entries) {
+  for (const entry of withQueuedHumanInputs(entries)) {
     if (!entry || typeof entry !== 'object' || entry.isSidechain) continue;
     const at = toMs(entry.timestamp);
     // A native scheduled wakeup starts an independent background turn. Its
@@ -100,6 +101,15 @@ function claudeDiskRecords(entries) {
       const scheduled = entry.isMeta === true && scheduledFires.has(entry.parentUuid);
       if (!notification && !scheduled && isSyntheticUserEntry(entry, text)) continue;
       if (!notification && !text.trim() && !(entry.message?.content || []).some?.(b => b && b.type === 'image')) continue;
+      if (entry.isQueuedSupplement && current) {
+        // This input steers the existing turn. Keep its running tools and their
+        // eventual results together instead of inventing an interrupted turn.
+        const supplement = newRecord(entry, text, false);
+        supplement.status = 'accepted';
+        supplement.accepted = true;
+        (current.userSupplements ||= []).push(supplement);
+        continue;
+      }
       if (current) settle(current, current.finalText ? 'completed' : 'interrupted');
       current = newRecord(entry, text, notification || scheduled,
         scheduled ? { kind: 'scheduled-task', triggerId: entry.parentUuid } : null);

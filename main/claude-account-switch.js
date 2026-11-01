@@ -20,7 +20,7 @@ const hookTurnKey = event => event.promptId ? `prompt:${event.promptId}` : event
 
 function createClaudeAccountSwitch({ sessionManager, broker, profiles, scopeFor,
   sendToPty, drainSubmission = () => Promise.resolve(), saveSession, now = Date.now, prefreshEnabled = () => false,
-  random = Math.random, later = (fn, ms) => setTimeout(fn, ms), relaunch = null, verifyRoute = null }) {
+  random = Math.random, later = (fn, ms) => setTimeout(fn, ms), relaunch = null, verifyRoute = null, isRiskFlagged = () => false }) {
   const pending = new Map();
   const manualEpoch = new Map();
   const restored = new Set();
@@ -180,6 +180,14 @@ function createClaudeAccountSwitch({ sessionManager, broker, profiles, scopeFor,
     catch (error) { release({ notSent: true }); throw error; }
     return release;
   }
+  // 自动换号只由用户在账号下拉里逐个会话开启（2026-10-31）。
+  function setAutoSwitch(id, enabled) {
+    const session = sessionManager.getSession(id);
+    if (!managed(session)) return { ok: false, message: '此会话不能开启自动换号' };
+    const updated = sessionManager.updateSessionMeta(id, { claudeAutoSwitch: enabled === true });
+    if (updated) saveSession(updated);
+    return { ok: true, enabled: enabled === true };
+  }
   function accountOptions(id) {
     const session = sessionManager.getSession(id);
     if (!session || !/^claude(?:-resume)?$/.test(session.kind)) return { ok: false, message: '此会话不是 Claude 订阅会话' };
@@ -195,7 +203,7 @@ function createClaudeAccountSwitch({ sessionManager, broker, profiles, scopeFor,
       return { id: profile.id, label: profile.label || profile.id, current: profile.id === session.claudeProfile,
         available: available && routeCompatible, reason: !routeCompatible ? '绑定不同出口，请用该账号新建会话' : available ? '' : '此账号尚未登录或登录已过期' };
     });
-    return { ok: true, currentProfile: session.claudeProfile || 'default', canSwitch, accounts,
+    return { ok: true, currentProfile: session.claudeProfile || 'default', canSwitch, accounts, autoSwitch: session.claudeAutoSwitch === true,
       reason: canSwitch ? '' : '此旧会话未启用独立账号切换；新建 Claude 订阅会话后即可使用',
       pendingProfile: request?.profileId || null, pendingLabel: request?.label || null };
   }
@@ -352,7 +360,7 @@ function createClaudeAccountSwitch({ sessionManager, broker, profiles, scopeFor,
       const attempted = [...new Set([...(previous?.attempted || []), activeId])];
       const candidates = [];
       for (const profile of profiles()) {
-        if (attempted.includes(profile.id)) continue;
+        if (attempted.includes(profile.id) || isRiskFlagged(profile.id)) continue;
         if (!crossRouteAllowed() && !network().sameRoute(account(activeId), profile)) continue;
         try { candidates.push(await broker.usage(profile, { maxAgeMs: Infinity, why: 'wall-candidate' })); }
         catch (error) { candidates.push({ id: profile.id, ready: false, error: error.code }); }
@@ -460,6 +468,7 @@ function createClaudeAccountSwitch({ sessionManager, broker, profiles, scopeFor,
     }
   }
   return {
+    setAutoSwitch,
     beforeSend, beginSubmission, onFailure, accountOptions, requestAccount,
     manages: id => !!managed(sessionManager.getSession(id)),
     // A status-line quota reading counts for the session's account only when it

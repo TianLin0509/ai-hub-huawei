@@ -24,7 +24,7 @@ function quotaFailure(event) {
 }
 
 function createCodexAccountSwitch({ sessionManager, profiles, readUsage, switchAccount, sendToPty,
-  prepareCredentials = null, saveSession = () => {}, now = Date.now }) {
+  prepareCredentials = null, saveSession = () => {}, now = Date.now, isRiskFlagged = () => false }) {
   const pending = new Map(), requests = new Map(), epochs = new Map(), turns = new Map();
   const admissions = new Map(), deferred = new Map(), checked = new Set(), switchedAt = new Map();
   const restarting = new Set(), preparing = new Set(), waitingInputs = new Map();
@@ -59,10 +59,17 @@ function createCodexAccountSwitch({ sessionManager, profiles, readUsage, switchA
       || ['running', 'waiting', 'starting'].includes(s?.cliRuntime?.state);
   }
   const find = id => profiles().find(p => p.id === id);
+  function setAutoSwitch(id, enabled) {
+    const s = get(id);
+    if (!switchable(s)) return { ok: false, message: '此会话不能开启自动换号' };
+    const updated = sessionManager.updateSessionMeta(id, { codexAutoSwitch: enabled === true });
+    saveSession(updated || get(id));
+    return { ok: true, enabled: enabled === true };
+  }
   function accountOptions(id) {
     const s = get(id);
     if (!managed(s)) return { ok: false, canSwitch: false, message: '此会话不是可切换账号的 Codex 订阅终端会话' };
-    return { ok: true, canSwitch: switchable(s),
+    return { ok: true, canSwitch: switchable(s), autoSwitch: s.codexAutoSwitch === true,
       reason: switchable(s) ? '' : '此旧会话尚未启用独立账号运行目录，请新建会话后切换账号', currentProfile: s.codexProfile,
       pendingProfile: requests.get(id)?.profile.id || null, pendingLabel: requests.get(id)?.profile.label || null,
       accounts: profiles().map(p => ({ id: p.id, label: p.label || p.id, current: p.id === s.codexProfile,
@@ -282,7 +289,7 @@ function createCodexAccountSwitch({ sessionManager, profiles, readUsage, switchA
       if (!quota(await readUsage(find(initial.codexProfile)), now())?.exhausted || !valid()) return;
       const candidates = [];
       for (const profile of profiles()) {
-        if (attempted.includes(profile.id) || profile.available === false || profile.ready === false) continue;
+        if (attempted.includes(profile.id) || isRiskFlagged(profile.id) || profile.available === false || profile.ready === false) continue;
         try { const reading = quota(await readUsage(profile), now()); if (reading && !reading.exhausted) candidates.push({ profile, reading }); } catch {}
       }
       if (!valid()) return;
@@ -324,7 +331,7 @@ function createCodexAccountSwitch({ sessionManager, profiles, readUsage, switchA
       && (event.generation == null || event.generation === generation(s))
       && (!Number.isFinite(event.at) || event.at >= Math.max(switchedAt.get(s.id) || 0, turnAt));
   }
-  return { manages: id => managed(get(id)) || pending.has(id), isSwitching: id => pending.has(id), accountOptions, requestAccount, beginSubmission, onFailure,
+  return { setAutoSwitch, manages: id => managed(get(id)) || pending.has(id), isSwitching: id => pending.has(id), accountOptions, requestAccount, beginSubmission, onFailure,
     onRuntimeChanged(id) { if (managed(get(id))) replay(id); },
     // Hook prompt ids and native task_started turn ids are different domains.
     // Hooks cancel stale work immediately; native events bind completion ids.

@@ -10,13 +10,17 @@ const vps = require('../../core/vps-login-env');
 const profilesTool = require('../../core/claude-subscription-profiles');
 const registry = require('../../core/subscription-account-registry');
 const { isMailUrl } = require('../../core/claude-mailbox-vault');
+const exitCheck = require('../../core/claude-exit-check');
+const network = require('../../core/claude-account-network');
 
+// 账号页「打开 Claude 官网」「看远程浏览器出口」（2026-11-01）；与 VPS 端 manager.py 的 FIXED_URLS 一致。
+const ENV_PAGES = new Set(['https://claude.ai/', 'https://api.ipify.org/']);
 function sharedIp(dataDir = getHubDataDir()) {
   try { return JSON.parse(fs.readFileSync(path.join(dataDir, 'claude-egress-baseline.json'), 'utf8')).shared || ''; } catch { return ''; }
 }
 function profiles() { return profilesTool.normalizeProfiles(getConfig().claudeSubscriptionProfiles); }
 
-function createVpsLoginService({ dataDir = getHubDataDir(), env = process.env, remote, sendToRenderer = () => {}, clearSessionManagerConfigCache = () => {} } = {}) {
+function createVpsLoginService({ dataDir = getHubDataDir(), env = process.env, remote, sendToRenderer = () => {}, clearSessionManagerConfigCache = () => {}, exitRequest = null } = {}) {
   const service = new vps.VpsLoginEnv({ dataDir, remote, settings: vps.settings(env) });
   const enabled = () => !!remote || service.available();
   let flight = null;
@@ -28,7 +32,7 @@ function createVpsLoginService({ dataDir = getHubDataDir(), env = process.env, r
     for (const e of view.envs) labels[e.id] = e.boundTo ? (list.find(p => p.id === e.boundTo)?.label || e.name) : e.name;
     service.writeNames(labels);
     // The account page needs the exits a new account may use (with 是否接通本机), not describe()'s plain list.
-    return { ...view, enabled: true, sharedIp: ip, routes: vps.routeTemplates(list, status, ip) };
+    return { ...view, enabled: true, sharedIp: ip, routes: vps.routeTemplates(list, status, ip, vps.wiredRoutes(dataDir)).map(({ network, ...r }) => r) };
   }
   function profileOf(id) {
     const p = profiles().find(x => x.id === id);
@@ -40,7 +44,7 @@ function createVpsLoginService({ dataDir = getHubDataDir(), env = process.env, r
     const route = Object.values(status.routes || {}).find(r => r.ip === runIp);
     if (!route) throw new Error(`VPS 上没有出口 IP 为 ${runIp} 的线路，无法建立一致的登录环境`);
     if (loginEnv === 'new') {
-      onProgress('正在 VPS 上新建登录环境并核对出口（约 15–45 秒）');
+      onProgress('正在 VPS 上新建登录环境、核对出口并预热浏览器（约 1–2 分钟）');
       return (await service.create(route.id)).id;
     }
     const env = status.accounts?.[loginEnv];
@@ -58,11 +62,11 @@ function createVpsLoginService({ dataDir = getHubDataDir(), env = process.env, r
       if (!flight) flight = snapshot().finally(() => { flight = null; });
       return flight;
     },
-    // url: only the account's own webmail (claude-mailbox-vault), so a sign-in link clicked there stays on this exit.
+    // url: the account's own webmail (claude-mailbox-vault), claude.ai or the exit-IP page, so everything opened there stays on this exit.
     async open({ profileId, confirmed = false, url = '' }) {
       const p = profileOf(profileId), id = vps.bindingFor(p);
       if (!id) throw new Error('这个账号还没有登录环境，请先绑定');
-      if (url && !isMailUrl(url)) throw new Error('只能在登录环境里打开账号邮箱');
+      if (url && !isMailUrl(url) && !ENV_PAGES.has(url)) throw new Error('只能在登录环境里打开账号邮箱、Claude 官网或出口检测页');
       const view = await snapshot();
       const row = view.accounts.find(a => a.profileId === profileId);
       if (!row.consistent) throw new Error(row.problem + '；为保证同一 IP，未打开');
@@ -77,7 +81,8 @@ function createVpsLoginService({ dataDir = getHubDataDir(), env = process.env, r
         const names = view.envs.reduce((m, e) => ({ ...m, [e.id]: e.boundTo ? (profiles().find(x => x.id === e.boundTo)?.label || e.name) : e.name }), {});
         return { needsConfirmation: true, others: result.others.map(o => names[o] || o) };
       }
-      return { ...result, message: url ? `已在「${p.label}」的登录窗口打开邮箱，出口 ${result.ip}` : `已打开「${p.label}」的登录窗口，出口 ${result.ip}` };
+      const what = url === 'https://claude.ai/' ? 'Claude 官网' : url === 'https://api.ipify.org/' ? '出口检测页（页面上显示的就是远程浏览器的出口 IP）' : '邮箱';
+      return { ...result, message: url ? `已在「${p.label}」的登录窗口打开${what}，出口 ${result.ip}` : `已打开「${p.label}」的登录窗口，出口 ${result.ip}` };
     },
     async stop({ profileId }) {
       const id = vps.bindingFor(profileOf(profileId));
@@ -98,18 +103,23 @@ function createVpsLoginService({ dataDir = getHubDataDir(), env = process.env, r
       sendToRenderer('subscription-accounts-changed', { kind: 'claude', profileId });
       return { loginEnv: id, message: `已绑定登录环境，出口 ${runIp}` };
     },
+    // 「检查出口」：本机每个出口连通、IP、延迟。不走 SSH，也不需要 VPS 管理程序在线。
+    async checkExits() {
+      let sharedProxy = null;
+      try { sharedProxy = network.sharedRouteProxy(profilesTool.sharedNetworkEnv(getConfig()).HTTPS_PROXY); } catch {}
+      return exitCheck.checkExits({ profiles: profiles(), sharedProxy, sharedIp: sharedIp(dataDir), wired: vps.wiredRoutes(dataDir) }, exitRequest ? { request: exitRequest } : {});
+    },
     // For accounts:add-subscription: the exit and login environment a new Claude account is born with.
     async prepareNew({ route, loginEnv }) {
       const status = await service.status(), list = profiles(), ip = sharedIp(dataDir);
-      const choice = vps.routeTemplates(list, status, ip).find(r => r.id === route);
+      const choice = vps.routeTemplates(list, status, ip, vps.wiredRoutes(dataDir)).find(r => r.id === route);
       if (!choice) throw new Error('请选择出口');
       if (!choice.runnable) throw new Error('这个出口还没有接到本机，Claude 无法使用它');
       let network;
       if (!choice.shared) {
-        const template = list.find(p => p.id === choice.template);
-        network = { ...template.network, browserCommand: vps.ensureLoginBrowser(dataDir) };
+        network = { ...choice.network, browserCommand: vps.ensureLoginBrowser(dataDir) };
       }
-      const id = await resolveEnvironment({ runIp: choice.ip, loginEnv: loginEnv || 'new', status });
+      const id = await resolveEnvironment({ runIp: choice.ip, loginEnv: loginEnv || 'new', status, onProgress: message => sendToRenderer('vps-login-progress', { profileId: '', message }) });
       return { network, loginEnv: id };
     },
   };
@@ -127,6 +137,7 @@ function registerVpsLoginIpc(ipcMain, deps = {}) {
   ipcMain.handle('vps-login:open', wrap(p => service.open(p)));
   ipcMain.handle('vps-login:stop', wrap(p => service.stop(p)));
   ipcMain.handle('vps-login:bind', wrap(p => service.bind(p)));
+  ipcMain.handle('vps-login:check-exits', wrap(() => service.checkExits()));
   return service;
 }
 
