@@ -5,6 +5,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { AssistantBridge } = require('../hub-assistant/bridge');
+const { isCodeAgentKind } = require('../ai-kinds');
 
 const SPECIAL = new Set(['company-assistant', 'company-forum', 'hub-assistant', 'hub-photo-assistant']);
 const KEYS = { enter: '\r', esc: '\x1b', up: '\x1b[A', down: '\x1b[B', tab: '\t', space: ' ', y: 'y', n: 'n',
@@ -13,6 +14,8 @@ const LABELS = { stuck: '卡住了，在等你确认或选择', running: '运行
 const TEXT_MAX = 20000;
 const short = (s, n) => { s = String(s ?? '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n) + '…' : s; };
 const baseKind = k => String(k || '').replace(/-resume$/, '');
+const ordinaryCodeAgent = s => !!s && isCodeAgentKind(s.kind) && !s.purpose && !s.meetingId && !s.autonomous
+  && !['closed', 'dormant', 'suspending'].includes(s.status);
 
 class HubTools {
   constructor(assistant, deps = {}) {
@@ -33,6 +36,13 @@ class HubTools {
   mcpEntry(sessionId) {
     return { name: 'hub_sessions', command: this.deps.nodeExecutable || process.execPath, args: [path.join(__dirname, 'mcp.js')],
       env: { ELECTRON_RUN_AS_NODE: '1', HUB_COMPANY_TOOLS_ENDPOINT: this.endpointFile, HUB_COMPANY_ASSISTANT_SESSION_ID: String(sessionId || '') } };
+  }
+  petSessionPlan({ kind, opts = {}, id } = {}, earlierPlan = null) {
+    if (this.deps.isPetMcpEnabled?.() !== true || !(opts.id || id) || !ordinaryCodeAgent({ ...opts, kind }) || this.a.sessionPlan({ opts, id })) return earlierPlan;
+    const entry = { name: 'pet_reminder', command: this.deps.nodeExecutable || process.execPath, args: [path.join(__dirname, 'pet-mcp.js')],
+      env: { ELECTRON_RUN_AS_NODE: '1', HUB_COMPANY_TOOLS_ENDPOINT: this.endpointFile, HUB_PET_SESSION_ID: String(opts.id || id || '') } };
+    const earlier = earlierPlan?.mcp ? (Array.isArray(earlierPlan.mcp) ? earlierPlan.mcp : [earlierPlan.mcp]) : [];
+    return { ...earlierPlan, mcp: [...earlier, entry] };
   }
 
   // ---- 会话状态（Hub 侧栏同一套事实：CLI hook 上报的运行与等待） ----
@@ -80,6 +90,14 @@ class HubTools {
   seenFor(sessionId) { return (sessionId && this.seen?.get(sessionId)) || null; }
 
   async invoke({ name, arguments: args = {}, callerSessionId }) {
+    if (name === 'pet_remind_create') {
+      const session = this.deps.getSession?.(callerSessionId);
+      if (!callerSessionId || !ordinaryCodeAgent(session) || (session.id || session.hubId) !== callerSessionId
+        || this.a.sessionPlan({ opts: session, id: callerSessionId })) throw new Error('只有 Hub 当前打开的普通 CodeAgent 会话能创建提醒');
+      if (!args || typeof args !== 'object' || Array.isArray(args) || Object.keys(args).some(key => !['title', 'detail', 'at', 'sticky'].includes(key))) throw new Error('普通会话只能创建提醒，不支持 list、cancel 或其他参数');
+      const title = short(session.title || session.name || '未命名会话', 100).replace(/[\u0000-\u001f\u007f]/g, '');
+      return this.a.petReminders.execute({ ...args, op: 'add' }, { id: callerSessionId, title });
+    }
     if (name === '__hello') { this.noteSeen(callerSessionId, 'hello'); return { ok: true }; }
     const me = this.a.state().sessionId;
     if (!me || callerSessionId !== me) throw new Error('只有公司助理会话能用这些工具');
@@ -88,6 +106,7 @@ class HubTools {
     if (name === 'welink_message') return this.a.query.message(args);
     if (name === 'welink_meetings') return this.a.query.meetings(args);
     if (name === 'assistant_memory') return this.a.memory.execute(args);
+    if (name === 'pet_remind') return this.a.petReminders.execute(args);
     if (name === 'ppt_find') return this.a.ppt.find(args);
     if (name === 'ppt_read') return this.a.ppt.read(args);
     if (name === 'ppt_library') return this.a.ppt.execute(args.op || 'status', args);

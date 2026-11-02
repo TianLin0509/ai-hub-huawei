@@ -1508,11 +1508,11 @@ class SessionManager extends EventEmitter {
     try { plan = this.extraMcpProvider({ kind, opts, id: opts.id }); } catch (error) { console.warn('[extra-mcp]', error.message); }
     // 提供者返回 { mcp, env }：env 给会话里的命令行工具用（例如凭会话通行证调用 Hub 的本机接口）。
     if (plan && plan.env && typeof plan.env === 'object') opts = { ...opts, extraEnv: { ...(opts.extraEnv || {}), ...plan.env } };
-    const entry = plan && plan.mcp;
-    if (!entry || !entry.name) return opts;
+    const entries = (Array.isArray(plan?.mcp) ? plan.mcp : [plan?.mcp]).filter(entry => entry?.name);
+    if (!entries.length) return opts;
     const base = String(kind || '').replace(/-resume$/, '');
     if (isCodexCliKind(base)) {
-      return { ...opts, codexPinnedMcpEntries: [...(opts.codexPinnedMcpEntries || []).filter(e => e && e.name !== entry.name), entry] };
+      return { ...opts, codexPinnedMcpEntries: [...(opts.codexPinnedMcpEntries || []).filter(e => e && !entries.some(entry => entry.name === e.name)), ...entries] };
     }
     // 跑在 Claude Code 上的 DeepSeek（deepseek-claude、旧的 deepseek-legacy）同样认 --mcp-config（2026-10-20 补漏）。
     const claudeCli = base === 'claude' || base === 'deepseek-legacy' || deepseekClaude.isDeepSeekClaudeKind(base);
@@ -1521,7 +1521,7 @@ class SessionManager extends EventEmitter {
       if (typeof opts.mcpConfigFile === 'string' && opts.mcpConfigFile) {
         try { const parsed = JSON.parse(fs.readFileSync(opts.mcpConfigFile, 'utf8')); if (parsed && typeof parsed === 'object') config = { ...parsed, mcpServers: { ...(parsed.mcpServers || {}) } }; } catch {}
       }
-      config.mcpServers[entry.name] = { command: entry.command, args: entry.args || [], env: entry.env || {} };
+      for (const entry of entries) config.mcpServers[entry.name] = { command: entry.command, args: entry.args || [], env: entry.env || {} };
       const dir = path.join(getHubDataDir(), 'extra-mcp');
       fs.mkdirSync(dir, { recursive: true });
       const file = path.join(dir, `${base === 'claude' ? 'claude' : claudeCli ? base : 'codeagent'}-${opts.id}.json`);

@@ -5,7 +5,7 @@
   "main": "main-bootstrap.js",
   "scripts": {
     "start": "electron .",
-    "test": "node --test tests/unit-community.test.js tests/unit-community-onboarding.test.js tests/unit-community-hooks.test.js tests/unit-company-assistant-query-status.test.js",
+    "test": "node --test tests/unit-community.test.js tests/unit-community-onboarding.test.js tests/unit-community-hooks.test.js tests/unit-company-assistant-query-status.test.js tests/unit-pet-reminder.test.js",
     "dist": "electron-builder --win --publish never",
     "doctor": "node scripts/doctor.js",
     "audit": "node scripts/audit-public.js"

@@ -243,7 +243,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
   function noticesStrip() {
     const list = data.notices || [];
     if (!list.length) return '';
-    const NAMES = { brief: '简报', 'meeting-prep': '会前准备', 'awaiting-reply': '等你回复', 'commitment-due': '答应的事', overbooked: '会议太满', 'day-summary': '下班小结', keyword: '关注词' };
+    const NAMES = { reminder: '重要提醒', brief: '简报', 'meeting-prep': '会前准备', 'awaiting-reply': '等你回复', 'commitment-due': '答应的事', overbooked: '会议太满', 'day-summary': '下班小结', keyword: '关注词' };
     return `<details class="ca-notices"><summary>今天的提醒 ${list.length} 条 · 最新：${esc(list[0].title)}</summary>
       ${list.map(n => `<div class="ca-notice" data-notice-id="${esc(n.id)}"><span class="ca-chip">${NAMES[n.kind] || n.kind}</span><b>${esc(n.title)}</b><span class="ca-time">${when(n.at)}</span><div class="ca-notice-text">${esc(n.text).replace(/\n/g, '<br>')}</div>${n.detail?.source ? `<button type="button" class="ca-link" data-ca="source:${esc(n.detail.source)}">查看出处</button>` : ''}</div>`).join('')}</details>`;
   }
