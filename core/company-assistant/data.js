@@ -208,7 +208,12 @@ function recordsAt(raw, keys) {
   }
   return null;
 }
-const messageRecords = raw => recordsAt(raw, ['chatInfo', 'messages', 'message_list', 'msgList', 'history', 'msgs', 'data']);
+const messageRecords = raw => {
+  // 1.0.19 真机：增量无新消息时省略 chatInfo；只接受已核实成功码且明确为零的总数。
+  if ([0, '0'].includes(raw?.resultCode) && raw.respData && typeof raw.respData === 'object' && !Array.isArray(raw.respData)
+    && !Object.prototype.hasOwnProperty.call(raw.respData, 'chatInfo') && raw.respData.msgTotalCount === 0 && raw.respData.maxMsgId === 0) return [];
+  return recordsAt(raw, ['chatInfo', 'messages', 'message_list', 'msgList', 'history', 'msgs', 'data']);
+};
 const conversationRecords = raw => recordsAt(raw, ['conversation_info', 'conversations', 'data']);
 const messageId = m => first(m, ['msgId', 'msg_id', 'message_id', 'messageId', 'id']);
 const explicitBoolean = v => v === true || v === 1 || (typeof v === 'string' && /^(true|1)$/i.test(v.trim()));
@@ -247,7 +252,7 @@ function mails(raw) {
     const from = first(m, ['from', 'sender', 'From', 'fromName', 'from_name']);
     return { sourceId: 'mail:' + id, id, subject: String(first(m, ['subject', 'Subject', 'title']) ?? '（无主题）'),
       from: typeof from === 'object' ? String(first(from, ['name', 'Name', 'address', 'email']) ?? '') : String(from ?? ''),
-      at: toMs(first(m, ['receivedTime', 'received', 'date', 'time', 'sendTime', 'DateTimeReceived'])),
+      at: toMs(first(m, ['receivedTime', 'received', 'date', 'time', 'sendTime', 'DateTimeReceived', 'dateTimeReceived'])),
       preview: short(textOf(first(m, ['preview', 'summary', 'bodyPreview', 'body', 'content'])), 200),
       important: /high|重要|urgent/i.test(String(first(m, ['importance', 'Importance', 'priority']) ?? '')) };
   });

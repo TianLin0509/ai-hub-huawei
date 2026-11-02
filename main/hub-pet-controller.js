@@ -63,6 +63,7 @@ function createHubPetController({
   let moveTimer = null;
   let drag = null;
   let lastSent = '';
+  let reminderSyncWarned = false;
   let pose = 'idle';
   let fullscreen = false;        // 正在躲边（全屏且设置里开着「全屏时躲边」）
   let screenFull = false;        // 前台程序是不是全屏（关了躲边也照样不说话）
@@ -225,8 +226,8 @@ function createHubPetController({
     if (typeof overrides.busy === 'boolean') return overrides.busy;
     try { return !!isAssistantBusy(); } catch (_) { return false; }
   }
-  function gate(spokenAt) {
-    return speakGate(settings.get(), { now: clock(), pose, fullscreen: fullscreen || screenFull }, spokenAt);
+  function gate(spokenAt, item) {
+    return speakGate(settings.get(), { now: clock(), pose, fullscreen: fullscreen || screenFull }, spokenAt, item);
   }
 
   function evaluate() {
@@ -251,7 +252,7 @@ function createHubPetController({
     const role = currentRole();
     const state = {
       pose, role, assetBase: roles.assetBase(role), mode: s.mode, dock: fullscreen ? 'right' : dock, peeking: fullscreen, scale: scaleNow(),
-      bubble: snap.bubble ? { id: snap.bubble.id, title: snap.bubble.title, kind: snap.bubble.kind } : null,
+      bubble: snap.bubble ? { id: snap.bubble.id, title: snap.bubble.title, kind: snap.bubble.kind, sticky: snap.bubble.sticky } : null,
       dots: snap.dots, quiet: !gate([]).ok, sequences: (roles.meta(role) && roles.meta(role).sequences) || [], clipped: (roles.meta(role) && roles.meta(role).clipped) || {},
       night: pose === 'sleep', edge: edgeCut(),
     };
@@ -271,6 +272,18 @@ function createHubPetController({
   function onNotice(notice) {
     if (!notice || !notice.id) return;
     if (speech.push(notice)) evaluate();
+  }
+  function syncReminders() {
+    let items = [];
+    try { items = noticeBus?.reminders?.() || []; }
+    catch { if (!reminderSyncWarned) { reminderSyncWarned = true; logger.warn?.('[hub-pet] 提醒存储不可用，暂不恢复提醒'); } }
+    speech.syncReminders(items); evaluate();
+  }
+  function confirmReminders(items) {
+    const ids = items.filter(item => item.kind === 'reminder').map(item => item.id);
+    if (!ids.length) return true;
+    try { noticeBus?.acknowledgeReminders?.(ids); return true; }
+    catch (error) { syncReminders(); logger.warn?.('[hub-pet] reminder confirmation failed:', error.message); return false; }
   }
 
   // ---------- 全屏躲边 ----------
@@ -413,10 +426,10 @@ function createHubPetController({
     pettedAt = clock();
     if (target === 'bubble') {
       const item = speech.takeCurrent();
-      if (item) send('hub-pet:panel', { items: [item] });
+      if (item && confirmReminders([item])) send('hub-pet:panel', { items: [item] });
     } else if (target === 'dot') {
       const items = speech.takeDots();
-      if (items.length) send('hub-pet:panel', { items });
+      if (items.length && confirmReminders(items)) send('hub-pet:panel', { items });
     } else {
       send('hub-pet:motion', { phase: 'poke' });
       openAssistant({});
@@ -547,6 +560,7 @@ function createHubPetController({
     'hub-pet-menu:act': (event, payload) => { if (fromMenu(event)) menuAct(payload || {}); },
     'hub-pet:open-notice': (event, item) => {
       if (!fromPet(event) || !item) return;
+      if (!confirmReminders([item])) return;
       // 「形象没下载下来」的提示：直接打开「助理 → 设置 → 桌宠」。
       if (/^pet-role-missing-/.test(String(item.id || ''))) { openAssistant({ settingsTab: 'pet' }); return; }
       openAssistant({ noticeId: String(item.id || '').slice(0, 160), sessionId: item.sessionId ? String(item.sessionId).slice(0, 160) : undefined });
@@ -749,6 +763,8 @@ function createHubPetController({
     started = true;
     ensureWindow();
     noticeBus?.on?.('notice', onNotice);
+    noticeBus?.on?.('reminders-changed', syncReminders);
+    syncReminders();
     pollTimer = setInterval(evaluate, POLL_MS);
     startHover();
     if (watchFullscreen && overrides.fullscreen == null) fsWatch.start();
@@ -759,6 +775,7 @@ function createHubPetController({
     if (!started) return;
     started = false;
     noticeBus?.removeListener?.('notice', onNotice);
+    noticeBus?.removeListener?.('reminders-changed', syncReminders);
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = null;
     stopHover();
@@ -799,7 +816,7 @@ function createHubPetController({
     if (debug) ipcMain.removeHandler?.('hub-pet:debug');
   }
 
-  return { start, stop, dispose, setSignal, setSettings, roleList, getWindow: () => win, getSettings: () => settings.get(), _evaluate: evaluate, _speech: speech, _roles: roles,
+  return { start, stop, dispose, setSignal, setSettings, roleList, isActive: () => enabled() && started && alive(), getWindow: () => win, getSettings: () => settings.get(), _evaluate: evaluate, _speech: speech, _roles: roles,
     _restoreRememberedRole: restoreRememberedRole, _autoRole: () => ({ ...autoRole }) };
 }
 

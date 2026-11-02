@@ -18,6 +18,7 @@ const READ_ONLY = Object.freeze({
   onebox: ['user-info', 'folder-list', 'file-info', 'node-search'],
   auth: ['status'],
   version: [''],
+  '--version': [''],
 });
 // Hub 可自动维护登录、初始化日历；会话只读包装不开放这两条。
 const SETUP = Object.freeze({ auth: ['login'], mail: ['autodiscover'] });
@@ -34,7 +35,7 @@ function checkArgs(args, { allowSetup = false, sendGroup = '' } = {}) {
   const list = Array.isArray(args) ? args.map(String) : [];
   const [group, sub = ''] = list;
   if (sendAllowed(list, sendGroup)) return list; // 发出的文字可以有换行
-  const ok = (READ_ONLY[group] || []).includes(group === 'version' ? '' : sub)
+  const ok = group === '--version' ? list.length === 1 : (READ_ONLY[group] || []).includes(group === 'version' ? '' : sub)
     || (allowSetup && (SETUP[group] || []).includes(sub));
   if (!ok) throw Object.assign(new Error(`助理只能用 welink-cli 的查询命令，拒绝执行：${[group, sub].filter(Boolean).join(' ') || '（空）'}`), { code: 'WELINK_NOT_ALLOWED' });
   if (list.some(a => /[\r\n]/.test(a))) throw Object.assign(new Error('welink-cli 参数里不能有换行'), { code: 'WELINK_BAD_ARG' });
