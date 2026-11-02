@@ -28,6 +28,7 @@ const { AssistantQuery } = require('./query-tool');
 const { PPT_INSTRUCTIONS } = require('./ppt-instructions');
 
 const PURPOSE = 'company-assistant';
+const QUERY_DIAGNOSTIC_SEEN = new Set();
 // 助理会话的工具或说明有变化时加 1：旧会话启动时没挂这些工具，下一次提问时换一个新会话（旧会话留在历史里）。
 const TOOLS_VERSION = 3;
 const INSTRUCTIONS_VERSION = 8;
@@ -70,10 +71,37 @@ const FRESH_MS = 3 * 60000;
 // 每页取 100 条（welink-cli 的上限）；一个会话最多往回翻 30 页，只为防止翻页死循环，正常回看时间内远到不了。
 const HISTORY_PAGE = 100;
 const MAX_PAGES = 30;
+const BACKGROUND_HISTORY_INTERVAL_MS = 5000;
+const BACKGROUND_HISTORY_REQUEST_LIMIT = 12;
+const BACKGROUND_RECENT_REQUEST_LIMIT = 6;
+const BACKGROUND_PINNED_REQUEST_LIMIT = 3;
+const MESSAGE_BUDGET_EXHAUSTED = 'WELINK_MESSAGE_BUDGET_EXHAUSTED';
 const LOOKBACK_CHOICES = [12, 24, 36, 48, 72];
 const CONVERSATION_LIMIT = 100; // 帮助写50，但公司1.0.14实测可返回100；旧CLI失败时兼容50。
 // 消息编号比大小：真机是长整数（BigInt 比），测试数据可能是普通字符串。
 const idCmp = (a, b) => { try { const x = BigInt(a), y = BigInt(b); return x < y ? -1 : x > y ? 1 : 0; } catch { return String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0; } };
+const historyKnown = cached => !!(cached?.hasFetched || cached?.coverage?.status === 'complete' || cached?.messages?.length);
+function conversationOrderChanges(previousOrder, currentOrder, previousPinnedHead = 0) {
+  const ranks = new Map(previousOrder.map((id, i) => [id, i]));
+  const movedIndexes = new Set();
+  let minimum = Infinity;
+  // 有新消息只能往前移：当前名次越过了后方的旧名次才算 moved，新会话直接加入。
+  for (let i = currentOrder.length - 1; i >= 0; i -= 1) {
+    const rank = ranks.get(currentOrder[i]);
+    if (rank === undefined || rank > minimum) movedIndexes.add(i);
+    if (rank !== undefined) minimum = Math.min(minimum, rank);
+  }
+  const moved = currentOrder.map((id, index) => ({ id, index })).filter(x => movedIndexes.has(x.index));
+  const pinnedHead = moved.length ? moved[0].index : Number.isSafeInteger(previousPinnedHead) && previousPinnedHead >= 0 ? Math.min(previousPinnedHead, currentOrder.length) : 0;
+  const changed = new Set();
+  for (const item of moved) {
+    changed.add(item.index);
+    if (item.index + 1 < currentOrder.length && !movedIndexes.has(item.index + 1)) changed.add(item.index + 1);
+  }
+  if (!moved.length && pinnedHead < currentOrder.length) changed.add(pinnedHead);
+  return { moved: moved.map(x => x.id), changed: currentOrder.filter((id, index) => changed.has(index)), pinnedHead };
+}
+const changedConversationIds = (previousOrder, currentOrder) => conversationOrderChanges(previousOrder, currentOrder).changed;
 
 class CompanyAssistant {
   constructor(deps) {
@@ -204,13 +232,71 @@ class CompanyAssistant {
   rawWelink(args, opts = {}) { return (this.deps.welinkRun || ((a, o) => welink.run(a, { cli: this.cli(), ...o })))(args, opts); }
   async welink(args, opts = {}) {
     if (args[0] !== 'auth' && this.auth.pending) await this.auth.pending;
+    if (opts.beforeRun) await opts.beforeRun();
     const result = await this.rawWelink(args, opts);
     if (args[0] !== 'auth' && authFailure(result.stdout + '\n' + result.stderr)) {
       const maintained = await this.auth.check({ force: true, refresh: false });
       // Only replay read queries. A send/setup command may already have taken effect.
-      if (maintained.login?.ok && !opts.sendGroup && !opts.allowSetup) return this.rawWelink(args, opts);
+      if (maintained.login?.ok && !opts.sendGroup && !opts.allowSetup) {
+        if (opts.beforeRun) await opts.beforeRun();
+        return this.rawWelink(args, opts);
+      }
     }
     return result;
+  }
+  async backgroundWelink(args, budget) {
+    if (args[0] !== 'im' || args[1] !== 'query-history-message') return this.welink(args);
+    // 放在实际执行前；登录维护后的只读重放也必须占用预算和间隔。
+    return this.welink(args, { beforeRun: async () => {
+      if (budget.requests >= BACKGROUND_HISTORY_REQUEST_LIMIT || budget.remaining <= 0)
+        throw Object.assign(new Error('本轮消息请求预算已用完'), { code: MESSAGE_BUDGET_EXHAUSTED });
+      budget.requests += 1; budget.remaining -= 1;
+      const delay = BACKGROUND_HISTORY_INTERVAL_MS - (this.now() - (this.lastBackgroundHistoryAt ?? -Infinity));
+      if (delay > 0) await (this.deps.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms))))(delay);
+      this.lastBackgroundHistoryAt = this.now();
+    } });
+  }
+  async diagnoseQuery(command, raw, { tableFormat } = {}) {
+    // 反馈只收集 logs/；只写结构元数据，不能写 CLI 原文、命令参数或字段值。
+    try {
+      const cli = this.cli();
+      if (!this.queryDiagnosticVersion || this.queryDiagnosticVersion.cli !== cli) {
+        this.queryDiagnosticVersion = { cli, value: Promise.resolve().then(() => this.rawWelink(['--version'], { timeoutMs: 5000 })).then(result => {
+          const match = result.code === 0 && String(result.stdout || '').trim().match(/^(?:welink-cli(?:\s+version)?\s*[:v]?\s*)?v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)$/i);
+          return match ? match[1] : 'unknown';
+        }).catch(() => 'unknown') };
+      }
+      const typeOf = value => value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value;
+      const keys = raw && typeof raw === 'object' && !Array.isArray(raw) ? Object.entries(raw).map(([key, value]) => ({
+        key: /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/.test(key) ? key : '<非标准键名>', type: typeOf(value),
+      })).sort((a, b) => a.key.localeCompare(b.key) || a.type.localeCompare(b.type)) : [];
+      const codes = [raw?.code, raw?.resultCode, raw?.error?.error_code].filter(code => code !== undefined).map(code =>
+        typeof code === 'number' && Number.isFinite(code) || typeof code === 'string' && /^(?:-?\d+|[A-Z]{1,12}[.-]\d+(?:[.-]\d+)*)$/.test(code) ? code : `<${typeOf(code)}>`);
+      const logs = path.join(this.deps.dataDir, 'logs');
+      const safeTableFormat = tableFormat && {
+        totalRows: Number.isSafeInteger(tableFormat.totalRows) && tableFormat.totalRows >= 0 ? tableFormat.totalRows : 0,
+        parsedRows: Number.isSafeInteger(tableFormat.parsedRows) && tableFormat.parsedRows >= 0 ? tableFormat.parsedRows : 0,
+        invalidRows: Number.isSafeInteger(tableFormat.invalidRows) && tableFormat.invalidRows >= 0 ? tableFormat.invalidRows : 0,
+        separators: [...new Set((Array.isArray(tableFormat.separators) ? tableFormat.separators : []).filter(x => ['single-space', 'multi-space', 'pipe'].includes(x)))].sort(),
+        timeFormats: [...new Set((Array.isArray(tableFormat.timeFormats) ? tableFormat.timeFormats : []).filter(x => typeof x === 'string' && /^#{4}-#{2}-#{2}(?:[T ]#{2}:#{2}(?::#{2}(?:\.#{1,3})?)?)?(?:Z|[+-]#{2}:#{2})?$/.test(x)))].sort(),
+      };
+      const signature = JSON.stringify([logs, command, keys, codes, safeTableFormat]);
+      const cliVersion = await this.queryDiagnosticVersion.value;
+      if (QUERY_DIAGNOSTIC_SEEN.has(signature)) return;
+      fs.mkdirSync(logs, { recursive: true });
+      fs.appendFileSync(path.join(logs, 'company-assistant-query.log'), JSON.stringify({ at: new Date(this.now()).toISOString(), command, cliVersion, keys, businessCodes: codes,
+        ...(safeTableFormat ? { tableFormat: safeTableFormat } : {}),
+        ...(Number.isFinite(raw?.respData?.msgTotalCount) ? { msgTotalCount: raw.respData.msgTotalCount } : {}) }) + '\n', 'utf8');
+      QUERY_DIAGNOSTIC_SEEN.add(signature);
+    } catch { /* 诊断写入失败不影响取数 */ }
+  }
+  logMessageChanges(changedCount) {
+    if (!Number.isSafeInteger(changedCount) || changedCount < 0) return;
+    try {
+      const logs = path.join(this.deps.dataDir, 'logs');
+      fs.mkdirSync(logs, { recursive: true });
+      fs.appendFileSync(path.join(logs, 'company-assistant-message-refresh.log'), JSON.stringify({ at: new Date(this.now()).toISOString(), changedCount }) + '\n', 'utf8');
+    } catch { /* 诊断写入失败不影响取数 */ }
   }
 
   // 可选功能开关（core/optional-features.js）：关着时 main.js 不调 start()，后台什么都不跑；
@@ -416,9 +502,10 @@ class CompanyAssistant {
   async collectQueryUnlocked(kind, range) {
     const now = this.now(), s = { ...this.settings(), lookbackHours: Math.max(1, (now - range.start) / 3600000), maxConversations: 0 };
     const snap = { at: now, day: D.dayKey(now), messages: {}, conversations: [], meetings: [], calendar: [], errors: [] };
+    const diagnose = (command, raw, metadata) => this.diagnoseQuery(command, raw, metadata);
     const runJson = async (label, args) => {
-      try { return await Q.readJson(a => this.welink(a), args); }
-      catch (error) { snap.errors.push({ label, text: D.short(error.message, 200) }); return null; }
+      try { return await Q.readJson(a => this.welink(a), args, { diagnose }); }
+      catch (error) { if (error.code === Q.CALENDAR_NON_JSON || error.code === Q.MESSAGE_RATE_LIMITED) throw error; snap.errors.push({ label, text: D.short(error.message, 200) }); return null; }
     };
     try {
       const status = await this.welink(['auth', 'status']);
@@ -427,13 +514,15 @@ class CompanyAssistant {
     } catch (error) { snap.login = { ok: false }; snap.errors.push({ label: 'WeLink', text: error.message }); }
     if (!snap.login?.ok) { snap.errors.push({ label: 'WeLink', text: '登录状态尚未恢复，本次查询未完成' }); return snap; }
     if (kind === 'meetings') {
-      const result = await Q.collectMeetingAgenda(runJson, range.start, { range });
+      const result = await Q.collectMeetingAgenda(runJson, range.start, { range, diagnose });
       snap.meetings = result.meetings; snap.meetingCoverage = result.coverage;
-      const calendar = await Q.collectCalendar(runJson, range);
+      const calendar = await Q.collectCalendar(runJson, range, { diagnose });
       snap.calendar = calendar.events; snap.calendarCoverage = calendar.coverage;
+      if (calendar.coverage.reason === 'non-json') snap.errors.push({ label: '日程', text: calendar.coverage.reasonLabel });
     } else {
       const raw = await this.recentConversations(snap, runJson);
       if (!raw || D.conversationRecords(raw) === null) {
+        if (raw) await diagnose('im query-recent-conversation', raw);
         snap.scope = { stale: true, partial: 1 };
         snap.errors.push({ label: '最近会话', text: '本次会话目录未取到，无法判断消息范围' });
       } else {
@@ -446,11 +535,13 @@ class CompanyAssistant {
   }
   async collect() {
     const s = this.settings(), now = this.now(), day = D.dayKey(now), errors = [];
+    const messageBudget = { requests: 0, remaining: BACKGROUND_RECENT_REQUEST_LIMIT };
     const snap = { at: now, day, login: null, calendarNeedsSetup: false, meetings: [], calendar: [], conversations: [], messages: {}, mails: [], errors };
+    const diagnose = (command, raw, metadata) => this.diagnoseQuery(command, raw, metadata);
     const runJson = async (label, args) => {
       try {
-        return await Q.readJson(args => this.welink(args), args);
-      } catch (error) { errors.push({ label, text: D.short(error.message, 200), calendar: welink.calendarNeedsSetup(error.message) }); return null; }
+        return await Q.readJson(args => this.backgroundWelink(args, messageBudget), args, { diagnose });
+      } catch (error) { if ([Q.CALENDAR_NON_JSON, Q.MESSAGE_RATE_LIMITED, MESSAGE_BUDGET_EXHAUSTED].includes(error.code)) throw error; errors.push({ label, text: D.short(error.message, 200), calendar: welink.calendarNeedsSetup(error.message) }); return null; }
     };
     try {
       const st = await this.welink(['auth', 'status']);
@@ -462,12 +553,12 @@ class CompanyAssistant {
     }
     if (snap.login.ok) {
       if (!s.email) await this.accountEmail(s);
-      const meetingResult = await Q.collectMeetingAgenda(runJson, now);
+      const meetingResult = await Q.collectMeetingAgenda(runJson, now, { diagnose });
       snap.meetings = meetingResult.meetings; snap.meetingCoverage = meetingResult.coverage;
       if (meetingResult.coverage.status !== 'complete' && meetingResult.coverage.reason !== 'query-failed') errors.push({ label: '会议', text: meetingResult.coverage.reasonLabel });
       const queryCalendar = async () => {
         const start = Date.parse(day + 'T00:00:00+08:00');
-        const cal = await Q.collectCalendar(runJson, { start, end: start + 86400000 });
+        const cal = await Q.collectCalendar(runJson, { start, end: start + 86400000 }, { diagnose });
         snap.calendar = cal.events; snap.calendarCoverage = cal.coverage;
         if (cal.coverage.status !== 'complete' && cal.coverage.reason !== 'query-failed') errors.push({ label: '日程', text: cal.coverage.reasonLabel });
       };
@@ -482,8 +573,9 @@ class CompanyAssistant {
       const convRaw = await this.recentConversations(snap, runJson);
       if (convRaw && D.conversationRecords(convRaw) !== null) {
         this.setConversationDirectory(snap, convRaw);
-        await this.collectMessages(snap, s, now, runJson);
+        await this.collectMessages(snap, s, now, runJson, { budget: messageBudget });
       } else {
+        if (convRaw) await diagnose('im query-recent-conversation', convRaw);
         if (convRaw) errors.push({ label: '最近会话', text: '无法识别会话列表结构，保留此前记录' });
         // 会话目录失败不能把此前已取得的聊天覆盖成空结果；身份不明或换号时不复用。
         const previous = snap.login.uid && this.snapshotDays().map(d => this.snapshot(d)).find(p => p?.login?.uid === snap.login.uid);
@@ -493,12 +585,11 @@ class CompanyAssistant {
         }
         const coverage = (previous?.scope?.conversations || []).map(c => ({ ...c, status: 'partial', reason: 'query-failed', reasonLabel: '最近会话查询失败，显示上次取得的记录' }));
         snap.scope = { ...(previous?.scope || {}), lookbackHours: previous?.scope?.lookbackHours || s.lookbackHours,
-          fetched: 0, messages: Object.values(snap.messages).reduce((n, rows) => n + rows.length, 0),
+          fetched: 0, completed: 0, rateLimited: false, rotating: false, messages: Object.values(snap.messages).reduce((n, rows) => n + rows.length, 0),
           stale: true, capturedAt: previous?.scope?.capturedAt || previous?.at || null,
           partial: Math.max(1, coverage.length), conversations: coverage };
       }
-      const mailRaw = await runJson('未读邮件', ['mail', 'list', '--is-read', '0', '--max', '20']);
-      const mailResult = Q.mailResult(mailRaw);
+      const mailResult = await Q.collectMails(runJson, { diagnose });
       snap.mails = mailResult.mails; snap.mailCoverage = mailResult.coverage;
       if (mailResult.coverage.status !== 'complete' && mailResult.coverage.reason !== 'query-failed') errors.push({ label: '未读邮件', text: mailResult.coverage.reasonLabel });
       snap.calendarNeedsSetup = errors.some(e => e.calendar);
@@ -531,10 +622,11 @@ class CompanyAssistant {
   }
   // 消息：最近会话里每个会话在回看时间内的全部消息，按会话列表原顺序（最近的在前）。
   // 已缓存的会话只补拉比缓存里最新那条更新的消息；第一次取时从最新一页往回翻，翻到早于回看时间为止。
-  // 会话列表没有时间字段，没法预先跳过安静的会话：每次刷新每个会话都要查一次（约 2 秒一次，50 个约 2 分钟，在后台跑）。
+  // 会话列表没有时间字段，没法预先跳过安静的会话；后台请求间隔见 BACKGROUND_HISTORY_INTERVAL_MS。
   async collectMessages(snap, s, now, runJson, options = {}) {
     const cutoff = options.cutoff ?? now - s.lookbackHours * 3600000, me = snap.login.uid, phoneGroup = s.phone?.groupId || '';
     const listed = snap.directoryRawCount ?? snap.conversations.length;
+    const directoryOrder = snap.conversations.map(c => c.id), recentIds = new Set(directoryOrder);
     const catalog = this.read('conversation-catalog.json', {});
     const remembered = catalog.identity === me ? (catalog.conversations || []).filter(c => c.seenAt >= now - 90 * 86400000) : [];
     const directory = new Map();
@@ -544,19 +636,69 @@ class CompanyAssistant {
     snap.conversations = [...directory.values()];
     let list = snap.conversations.filter(c => c.id !== phoneGroup); // 手机对话的专用群不进简报
     const limited = s.maxConversations > 0 && list.length > s.maxConversations;
-    if (limited) list = list.slice(0, s.maxConversations);
     const stored = this.read('message-cache.json', {}), previous = this.snapshot(snap.day);
     const sameOwner = !!me && (stored.identity === me || (!stored.identity && !stored.version && previous?.login?.uid === me));
     const cache = sameOwner ? (stored.version >= 2 ? stored.conversations || {} : stored) : {};
-    const next = { version: 3, identity: me || null, conversations: {} }, names = D.namesOf(snap.conversations);
-    const coverage = [];
-    for (const conv of list) {
+    const deferred = sameOwner && Array.isArray(stored.deferred) ? [...new Set(stored.deferred)].filter(id => list.some(c => c.id === id)) : [];
+    const rank = new Map(deferred.map((id, i) => [id, i]));
+    if (!options.budget) list.sort((a, b) => (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity));
+    if (limited) list = list.slice(0, s.maxConversations);
+    const comparedOrder = sameOwner && Array.isArray(stored.directoryOrder) && stored.directoryOrder.every(id => typeof id === 'string');
+    const orderChanges = conversationOrderChanges(comparedOrder ? stored.directoryOrder : [], directoryOrder, sameOwner ? stored.pinnedHead : 0), changed = orderChanges.changed;
+    const pinnedIds = new Set(options.budget ? directoryOrder.slice(0, orderChanges.pinnedHead) : []);
+    const priorPriority = sameOwner && Array.isArray(stored.priorityDeferred) ? [...new Set(stored.priorityDeferred)].filter(id => list.some(c => c.id === id)) : [];
+    const byId = new Map(list.map(c => [c.id, c]));
+    const priority = comparedOrder ? [...new Set([...priorPriority.filter(id => recentIds.has(id) && !pinnedIds.has(id)), ...changed])].map(id => byId.get(id)).filter(Boolean) : list.slice(0, BACKGROUND_RECENT_REQUEST_LIMIT);
+    const next = { version: 4, identity: me || null, conversations: {}, deferred: deferred.filter(id => !list.some(c => c.id === id)) }, names = D.namesOf(snap.conversations);
+    if (options.budget) { next.directoryOrder = directoryOrder; next.pinnedHead = orderChanges.pinnedHead; this.logMessageChanges(changed.length); }
+    else if (sameOwner && stored.directoryOrder) next.directoryOrder = stored.directoryOrder;
+    if (!options.budget && sameOwner && Number.isSafeInteger(stored.pinnedHead) && stored.pinnedHead >= 0) next.pinnedHead = stored.pinnedHead;
+    for (const id of next.deferred) if (cache[id]) next.conversations[id] = cache[id];
+    const coverage = [], results = new Map(), complete = new Set();
+    let rateLimited = false, fetched = 0, pinnedRequests = 0;
+    const query = async conv => {
+      const requests = options.budget?.requests;
       const got = await this.conversationHistory(conv, cache[conv.id], cutoff, me, s.myName, runJson, names);
+      results.set(conv.id, got);
+      if (got.coverage.pages || options.budget && options.budget.requests > requests) {
+        fetched += 1;
+        if (options.budget) got.cache.lastQueriedAt = this.now();
+      }
+      if (!options.budget && Number.isFinite(cache[conv.id]?.lastQueriedAt)) got.cache.lastQueriedAt = cache[conv.id].lastQueriedAt;
+      if (got.coverage.status === 'complete') complete.add(conv.id);
+      if (got.coverage.reason === 'rate-limited') rateLimited = true;
+      if (got.coverage.status !== 'complete' && !['query-failed', 'rate-limited', 'rotation'].includes(got.coverage.reason)) snap.errors.push({ label: `消息（${conv.name}）`, text: `只取到部分消息：${got.coverage.reasonLabel}` });
+    };
+    if (options.budget) {
+      // 优先核对顺序有变化的会话；用不完的优先预算交给轮转，翻页/重试仍按请求计数。
+      for (const stage of ['priority', 'pinned', 'rotation']) {
+        const remaining = BACKGROUND_HISTORY_REQUEST_LIMIT - options.budget.requests, startRequests = options.budget.requests;
+        options.budget.remaining = stage === 'priority' ? Math.min(BACKGROUND_RECENT_REQUEST_LIMIT, remaining) : stage === 'pinned' ? Math.min(BACKGROUND_PINNED_REQUEST_LIMIT, remaining) : remaining;
+        const lastQuery = id => Number.isFinite(cache[id]?.lastQueriedAt) ? cache[id].lastQueriedAt : -Infinity;
+        const phase = stage === 'priority' ? priority : stage === 'pinned' ? list.filter(c => pinnedIds.has(c.id)).sort((a, b) => lastQuery(a.id) - lastQuery(b.id))
+          : list.filter(c => !pinnedIds.has(c.id)).sort((a, b) => Number(recentIds.has(b.id)) - Number(recentIds.has(a.id)) || (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity));
+        for (const conv of phase) {
+          if (rateLimited || options.budget.remaining <= 0 || options.budget.requests >= BACKGROUND_HISTORY_REQUEST_LIMIT) break;
+          if (!results.has(conv.id)) await query(conv);
+        }
+        if (stage === 'pinned') pinnedRequests = options.budget.requests - startRequests;
+        if (rateLimited) break;
+      }
+    } else {
+      for (const conv of list) { await query(conv); if (rateLimited) break; }
+    }
+    const queue = [...new Set([...deferred, ...list.map(c => c.id)])];
+    next.deferred = [...queue.filter(id => !results.has(id)), ...queue.filter(id => ['rotation', 'rate-limited'].includes(results.get(id)?.coverage.reason))];
+    next.priorityDeferred = options.budget ? [...new Set([...(comparedOrder ? priority.map(c => c.id) : []), ...priorPriority])].filter(id => !results.has(id) || ['rotation', 'rate-limited'].includes(results.get(id).coverage.reason))
+      : priorPriority.filter(id => !complete.has(id));
+    next.deferred = [...new Set([...next.priorityDeferred, ...next.deferred])];
+    for (const conv of list) {
+      const got = results.get(conv.id) || await this.conversationHistory(conv, cache[conv.id], cutoff, me, s.myName, runJson, names, { deferReason: rateLimited ? 'deferred' : 'rotation' });
       next.conversations[conv.id] = got.cache;
       if (got.messages.length) snap.messages[conv.id] = got.messages;
       coverage.push({ id: conv.id, name: conv.name, ...got.coverage });
-      if (got.coverage.status !== 'complete' && got.coverage.reason !== 'query-failed') snap.errors.push({ label: `消息（${conv.name}）`, text: `只取到部分消息：${got.coverage.reasonLabel}` });
     }
+    if (rateLimited) snap.errors.push({ label: '消息', text: `WeLink 限流，已取 ${complete.size} 个会话，其余下轮继续` });
     for (const m of Object.values(snap.messages).flat()) if (!m.nameSource && !m.mine && m.sender && m.sender !== m.account) names.set(m.account, m.senderName || m.sender);
     const resolution = await Identity.resolveNames({ run: (args, opts) => this.welink(args, opts), cacheDir: this.dir, identity: me,
       accounts: Object.values(snap.messages).flat().map(m => m.account), seeds: names, now });
@@ -568,30 +710,43 @@ class CompanyAssistant {
       this.write('message-cache.json', next);
     }
     const all = Object.values(snap.messages);
-    snap.scope = { lookbackHours: s.lookbackHours, since: cutoff, listed, known: snap.conversations.length, fetched: list.length, limited, maxConversations: s.maxConversations,
+    snap.scope = { lookbackHours: s.lookbackHours, since: cutoff, listed, known: snap.conversations.length, fetched, completed: complete.size, rateLimited,
+      ...(options.budget ? { changed: changed.length, comparedOrder, pinnedHead: orderChanges.pinnedHead, pinnedRequests, priorityPending: next.priorityDeferred.length } : {}),
+      rotating: coverage.some(c => c.reason === 'rotation'), scheduled: list.length, neverFetched: list.filter(c => !historyKnown(next.conversations[c.id])).length,
+      requests: options.budget?.requests, deferred: next.deferred.length, limited, maxConversations: s.maxConversations,
       withMessages: all.length, messages: all.reduce((n, l) => n + l.length, 0), p2p: Object.keys(snap.messages).filter(id => !snap.conversations.find(c => c.id === id)?.group).length,
       requested: snap.directoryRequested || CONVERSATION_LIMIT, listCap: listed === 50 ? 50 : snap.directoryLimit || CONVERSATION_LIMIT,
       listFull: listed >= (snap.directoryLimit || CONVERSATION_LIMIT) || listed === 50, directoryFallback: !!snap.directoryFallback,
       directoryRawCount: listed, directoryInvalid: snap.directoryInvalid || 0,
-      partial: coverage.filter(c => c.status !== 'complete').length, conversations: coverage, migrated: sameOwner && stored.version !== 3 };
+      partial: coverage.filter(c => !['complete', 'rotating'].includes(c.status)).length, conversations: coverage, migrated: sameOwner && stored.version !== 4 };
   }
-  async conversationHistory(conv, cached, cutoff, me, myName, runJson, names = null) {
+  async conversationHistory(conv, cached, cutoff, me, myName, runJson, names = null, options = {}) {
     // 老缓存曾截断正文，必须重新拉；部分失败也要补齐旧页，不能只向前增量。
-    const incremental = cached?.version === 3 && cached.coverage?.status === 'complete' && cached.since <= cutoff && cached.newest;
+    const resume = cached?.version === 3 && cached.resume?.since <= cutoff && typeof cached.resume.cursor === 'string'
+      && typeof cached.resume.incremental === 'boolean' ? cached.resume : null;
+    const incremental = resume ? resume.incremental : cached?.version === 3 && cached.coverage?.status === 'complete' && cached.since <= cutoff && cached.newest;
     const since = cutoff; // 输出缓存已经裁到 cutoff，覆盖起点必须同步，扩大窗口才能触发回填。
     const base = ['im', 'query-history-message', conv.group ? '--group-id' : '--user-account', conv.id, '--query-count', String(HISTORY_PAGE)];
     const label = `消息（${conv.name}）`;
     const norm = raw => D.messages(raw, conv, me, { myName, names });
     const keep = new Map((cached?.messages || []).filter(m => !m.at || m.at >= cutoff).map(m => [m.key, cached.version === 3 ? m : { ...m, contentComplete: false }]));
     const add = list => { for (const m of list) keep.set(m.key, m); };
-    const coverage = { status: 'partial', reason: 'page-limit', pages: 0, rawCount: 0, since: cutoff };
-    let cursor = incremental ? cached.newest : null;
-    for (let i = 0; i < MAX_PAGES; i += 1) {
-      const raw = await runJson(label, cursor ? [...base, '--message-id', cursor, '--query-direction', incremental ? '1' : '0'] : base);
+    const coverage = { status: options.deferReason === 'rotation' ? 'rotating' : 'partial', reason: options.deferReason || 'page-limit', pages: 0, rawCount: 0, since: cutoff };
+    let hasFetched = historyKnown(cached);
+    let cursor = resume?.cursor || (incremental ? cached.newest : null);
+    for (let i = 0; !options.deferReason && i < MAX_PAGES; i += 1) {
+      let raw;
+      try { raw = await runJson(label, cursor ? [...base, '--message-id', cursor, '--query-direction', incremental ? '1' : '0'] : base); }
+      catch (error) {
+        if (error.code === MESSAGE_BUDGET_EXHAUSTED) { coverage.status = 'rotating'; coverage.reason = 'rotation'; break; }
+        if (error.code !== Q.MESSAGE_RATE_LIMITED) throw error;
+        coverage.pages += 1; coverage.reason = 'rate-limited'; break;
+      }
       coverage.pages += 1;
       if (!raw) { coverage.status = keep.size ? 'partial' : 'failed'; coverage.reason = 'query-failed'; coverage.failedPage = i + 1; break; }
       const original = D.messageRecords(raw);
-      if (original === null) { coverage.status = keep.size ? 'partial' : 'failed'; coverage.reason = 'invalid-shape'; break; }
+      if (original === null) { await this.diagnoseQuery('im query-history-message', raw); coverage.status = keep.size ? 'partial' : 'failed'; coverage.reason = 'invalid-shape'; break; }
+      hasFetched = true;
       const page = norm(raw);
       add(page); coverage.rawCount += original.length;
       const ids = original.map(D.messageId).filter(id => id !== undefined && id !== null && id !== '').map(String);
@@ -603,7 +758,15 @@ class CompanyAssistant {
       if (cursor && (incremental ? idCmp(next, cursor) <= 0 : idCmp(next, cursor) >= 0)) { coverage.reason = 'repeated-cursor'; break; }
       cursor = next;
     }
-    return this.historyResult(keep, conv, cutoff, cached?.newest, since, coverage);
+    const result = this.historyResult(keep, conv, cutoff, cached?.newest, since, coverage);
+    result.cache.hasFetched = hasFetched;
+    // 请求预算或限流在翻页中途打断时，下轮接着翻；扩大回看窗口时上面的 since 检查会放弃旧游标。
+    if (cursor && ['rotation', 'rate-limited'].includes(coverage.reason)) result.cache.resume = { cursor, incremental: !!incremental, since };
+    if (options.deferReason && cached) result.cache = cached;
+    if (options.deferReason === 'rotation' && ['partial', 'failed'].includes(cached?.coverage?.status) && !['rotation', 'rate-limited', 'deferred'].includes(cached.coverage.reason)) {
+      result.coverage.status = 'partial'; result.coverage.reasonLabel += `；上次：${cached.coverage.reasonLabel || '查询未完成'}`;
+    }
+    return result;
   }
   historyResult(keep, conv, cutoff, previousNewest, since, coverage) {
     const messages = [...keep.values()].filter(m => !m.at || m.at >= cutoff).sort((a, b) => (a.at || 0) - (b.at || 0) || idCmp(a.key, b.key));
@@ -615,7 +778,7 @@ class CompanyAssistant {
     coverage.incompleteText = messages.filter(m => m.contentComplete === false).length;
     if (coverage.incompleteText && coverage.status === 'complete') { coverage.status = 'partial'; coverage.reason = 'legacy-text'; }
     coverage.reasonLabel = { 'page-limit': '已到本轮 30 页上限，所选范围未取全', 'query-failed': '某页查询失败，保留已取到的记录', 'missing-cursor': '返回记录缺少翻页编号',
-      'repeated-cursor': '服务端重复返回同一页', 'invalid-shape': '无法识别消息返回结构，保留此前记录', 'legacy-text': '部分旧记录仍是截断内容', exhausted: '已到查询结果末尾', 'window-reached': '已覆盖所选回看时间' }[coverage.reason];
+      'repeated-cursor': '服务端重复返回同一页', 'invalid-shape': '无法识别消息返回结构，保留此前记录', 'rate-limited': 'WeLink 消息查询限流，保留记录，下轮继续', deferred: '因 WeLink 限流延后至下轮查询，保留此前记录', rotation: '本轮暂未更新，轮转时继续取数', 'legacy-text': '部分旧记录仍是截断内容', exhausted: '已到查询结果末尾', 'window-reached': '已覆盖所选回看时间' }[coverage.reason];
     return { messages, coverage, cache: { version: 3, newest, since, messages, coverage } };
   }
   agentSnapshot(snap) {
@@ -1023,4 +1186,4 @@ class CompanyAssistant {
   }
 }
 
-module.exports = { CompanyAssistant, PURPOSE, TOOLS_VERSION, TOOLS_HELLO_GRACE_MS, DEFAULT_SETTINGS, BUILTIN_CHIPS, INSTRUCTIONS };
+module.exports = { CompanyAssistant, changedConversationIds, conversationOrderChanges, PURPOSE, TOOLS_VERSION, TOOLS_HELLO_GRACE_MS, DEFAULT_SETTINGS, BUILTIN_CHIPS, INSTRUCTIONS, BACKGROUND_HISTORY_INTERVAL_MS, BACKGROUND_HISTORY_REQUEST_LIMIT, BACKGROUND_RECENT_REQUEST_LIMIT, BACKGROUND_PINNED_REQUEST_LIMIT };

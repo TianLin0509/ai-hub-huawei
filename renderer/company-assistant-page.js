@@ -8,6 +8,7 @@
 function createCompanyAssistantPage({ document, window, ipcRenderer, openSession, closeOtherPanels = () => {}, showMessage, openMeeting }) {
   const { ASSISTANT_AVATAR_SRC, USER_AVATAR_SRC } = require('./chat-avatar');
   const { connectionState } = require('./company-assistant-connection');
+  const { messageCoverage: coverageOfMessages, queryRows, refreshNotice } = require('./company-assistant-query-status');
   let page = null, data = null, timer = null, briefOpen = false, sending = false, pptEntry = false, gate = null;
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const pad = n => String(n).padStart(2, '0');
@@ -144,12 +145,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       + (t.reason ? `<p class="ca-next ca-side-copy ca-tools-reason">原因：${esc(t.reason)}</p>` : '');
   }
   function messageCoverage() {
-    const scope = data.scope;
-    if (!scope) return null;
-    const reasons = [scope.stale ? '最近会话查询失败，显示上次记录' : '', scope.partial ? `${scope.partial} 个会话未取全` : '',
-      scope.listFull ? `最近会话返回 ${scope.listed || scope.listCap} 个，可能达到接口上限，未知会话仍可能遗漏` : '', scope.directoryFallback ? '已退回兼容查询，覆盖待核对' : '', scope.limited ? `按设置只查询最近 ${scope.maxConversations} 个会话` : '',
-      scope.directoryInvalid ? `${scope.directoryInvalid} 条会话目录记录无法解析` : '', (scope.conversations || []).some(c => c.unknownTime) ? '部分消息缺少时间，无法确认是否覆盖所选时段' : ''].filter(Boolean);
-    return { status: reasons.length ? 'partial' : 'complete', reasonLabel: reasons.join('；') };
+    return coverageOfMessages(data.scope);
   }
   function capabilities() {
     const r = data.rooms || {}, p = data.ppt || {};
@@ -394,7 +390,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       const label = text.replace(/\s+/g, ' ').slice(0, 10);
       await call('set-settings', { chips: [...data.settings.chips, { label, text }] }); showMessage?.('已存为常用：' + label); await load(); return;
     }
-    if (verb === 'refresh') { button.disabled = true; data = await call('refresh'); render(); if (data.errors?.length) showMessage?.('有 ' + data.errors.length + ' 项没取到：' + data.errors.map(e => e.label).join('、')); return; }
+    if (verb === 'refresh') { button.disabled = true; data = await call('refresh'); render(); const notice = refreshNotice(data); if (notice) showMessage?.(notice); return; }
     if (verb === 'brief-now') { button.disabled = true; briefOpen = true; data = await call('brief-now'); render(); return; }
     if (verb === 'done') { await call('mark-done', { source: arg }); await load(); return; }
     if (verb === 'source') return openSource(arg, button.dataset.sourceDay);
@@ -541,11 +537,8 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       : connection.kind === 'online' ? `<span class="ca-chip ok">已登录</span><span class="ca-note">账号 ${esc(d.auth.login.uid || '')}</span>`
         : `<span class="ca-chip warn">${esc(connection.title)}</span><span class="ca-note">${esc(connection.detail)}</span>${connection.action ? `<button type="button" class="ca-btn small primary" data-ca="${connection.action}">${esc(connection.label)}</button>` : ''}`;
     const from = s.emailFrom === 'welink' ? '从 WeLink 账号自动读到' : s.email ? '你填写的' : '';
-    const errs = d.errors || [];
-    const errOf = label => errs.find(e => e.label === label || e.label.startsWith(label));
-    const snapRows = [['会议', d.counts?.meetings, d.meetingCoverage], ['日程', d.counts?.calendar, d.calendarCoverage], ['消息', d.counts?.messages, messageCoverage()], ['未读邮件', d.counts?.mails, d.mailCoverage]].map(([label, n, coverage]) => {
-      const e = errOf(label);
-      return `<div class="ca-src-row"><span>${label}</span>${e || coverage?.status === 'failed' ? `<span class="ca-chip warn">查询失败</span><span class="ca-note">${esc(e?.text || coverage.reasonLabel)}</span>` : coverage?.status === 'partial' ? `<span class="ca-chip warn">未取全</span><span class="ca-note">${esc(coverage.reasonLabel || '')}</span>` : coverage?.status === 'complete' ? `<span class="ca-chip ok">已取到 ${n ?? 0} 条</span>` : '<span class="ca-note">尚未确认</span>'}</div>`;
+    const snapRows = queryRows(d).map(status => {
+      return `<div class="ca-src-row"><span>${status.name}</span>${status.label ? `<span class="ca-chip ${status.color}">${esc(status.label)}</span>` : ''}${status.detail ? `<span class="ca-note">${esc(status.detail)}</span>` : ''}</div>`;
     }).join('');
     const VIA = { path: '系统路径里找到的', npm: 'npm 全局目录里找到的', disk: '在硬盘里找到的', manual: '你手动选的' };
     const cliLine = d.cliFound ? `<fieldset class="col"><legend>welink-cli 位置</legend><div class="ca-row"><span class="ca-chip ok">已找到</span><span class="ca-note" title="${esc(d.cliPath)}">${esc(d.cliPath)}${VIA[d.cliSearch?.via] ? '（' + VIA[d.cliSearch.via] + '）' : ''}</span></div>
