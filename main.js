@@ -1573,9 +1573,12 @@ function createWindow() {
   if (hubPetController) {
     // 桌宠跟着主窗口走：主窗口加载完才出现；主窗口关掉时先收起桌宠，
     // 否则这个小窗会让 Electron 等不到 window-all-closed、Hub 退不干净。
-    mainWindow.webContents.once('did-finish-load', () => { try { hubPetController?.start(); } catch (error) { console.warn('[hub-pet] start failed:', error && error.message); } });
     mainWindow.once('closed', () => { try { hubPetController?.stop(); } catch (_) {} });
   }
+  mainWindow.webContents.once('did-finish-load', () => {
+    try { hubPetController?.start(); } catch (error) { console.warn('[hub-pet] start failed:', error && error.message); }
+    companyAssistantService?.petReminders.start();
+  });
   // index.html 的 <title>AI Hub Community</title> 在页面加载完成后会触发 page-title-updated 覆盖
   // BrowserWindow.title — preventDefault 阻止覆盖，保留带 PID 的标题
   mainWindow.on('page-title-updated', (e) => { e.preventDefault(); });
@@ -2520,6 +2523,8 @@ try {
       assertTeamAccess: () => teamAccess.assert(),
       dataDir: getHubDataDir(),
       noTimer: process.env.CLAUDE_HUB_ASSISTANT_TIMER === '0',
+      isPetEnabled: () => hubPetController?.isActive() === true,
+      isPetMcpEnabled: () => hubPetController?.getSettings().enabled === true,
       createSession: (kind, opts) => sessionOperations.createSession({ kind, opts }),
       sendPrompt: (sessionId, text, clientSubmissionId) => promptOperations.submitPrompt(null, { sessionId, text, clientSubmissionId, waitForCliReady: true }),
       getSession: id => sessionManager.getSession(id),
@@ -2567,9 +2572,11 @@ try {
       // 点通知打开助理页（页面认这个固定编号），不直接跳进会话。
       try { void desktopNotificationController?.show({ sessionId: 'company-assistant', title: notice.title, body: notice.text, kind: 'assistant' }); } catch (error) { console.warn('[company-assistant] notification', error.message); }
     });
+    companyAssistantService.startTools();
     if (optionalFeatures.get('assistant')) companyAssistantService.start();
     const bridgeMcpPlan = sessionManager.extraMcpProvider;
-    sessionManager.setExtraMcpProvider(request => companyAssistantService.sessionPlan(request) || (bridgeMcpPlan ? bridgeMcpPlan(request) : null));
+    sessionManager.setExtraMcpProvider(request => companyAssistantService.sessionPlan(request)
+      || companyAssistantService.tools.petSessionPlan(request, bridgeMcpPlan ? bridgeMcpPlan(request) : null));
     require('./main/ipc/company-assistant-handlers').registerCompanyAssistantIpc(ipcMain, companyAssistantService);
   }
 } catch (error) { console.error('[company-assistant] 公司助理未启动：', error.message); }

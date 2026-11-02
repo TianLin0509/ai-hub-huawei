@@ -57,15 +57,15 @@ function decidePose(ctx = {}) {
 
 // 现在能不能开口；不能就只亮小圆点。返回 { ok, reason }。
 // settings：{ mode, quietUntil, silentDate }；ctx：{ now, pose, fullscreen }
-function speakGate(settings = {}, ctx = {}, spokenAt = []) {
+function speakGate(settings = {}, ctx = {}, spokenAt = [], item = null) {
   const now = Number(ctx.now) || Date.now();
   if (settings.mode === 'quiet') return { ok: false, reason: 'quiet-mode' };
   if (Number(settings.quietUntil) > now) return { ok: false, reason: 'quiet-hour' };
   if (settings.silentDate && settings.silentDate === localDateKey(now)) return { ok: false, reason: 'silent-today' };
   if (ctx.fullscreen) return { ok: false, reason: 'fullscreen' };
-  if (ctx.pose === 'sleep') return { ok: false, reason: 'sleeping' };
+  if (ctx.pose === 'sleep' && !item?.sticky) return { ok: false, reason: 'sleeping' };
   const recent = spokenAt.filter(t => now - t < 3600000).length;
-  if (recent >= MAX_PER_HOUR) return { ok: false, reason: 'hourly-cap' };
+  if (recent >= MAX_PER_HOUR && !item?.sticky) return { ok: false, reason: 'hourly-cap' };
   return { ok: true, reason: '' };
 }
 
@@ -92,7 +92,7 @@ class SpeechQueue {
     const title = cleanText(item && item.title, 80);
     if (!id || !title || this.seen.has(id)) return false;
     this.seen.add(id);
-    this.pending.push({ id, kind: cleanText(item.kind, 32), title, text: String(item.text == null ? '' : item.text).slice(0, 4000), sessionId: cleanText(item.sessionId, 160) || null });
+    this.pending.push({ id, kind: cleanText(item.kind, 32), title, text: String(item.text == null ? '' : item.text).slice(0, 4000), sessionId: cleanText(item.sessionId, 160) || null, sticky: item.sticky === true });
     return true;
   }
 
@@ -100,30 +100,42 @@ class SpeechQueue {
   tick(gate) {
     const now = this.now();
     let changed = false;
-    if (this.current && now >= this.current.until) {
+    if (this.current && (!this.current.sticky && now >= this.current.until || this.current.sticky && typeof gate === 'function' && !gate(this.spokenAt, this.current)?.ok)) {
       this.toDot(this.current);
       this.current = null;
       changed = true;
     }
     while (!this.current && this.pending.length) {
       const next = this.pending.shift();
-      const verdict = typeof gate === 'function' ? gate(this.spokenAt) : { ok: true };
+      const verdict = typeof gate === 'function' ? gate(this.spokenAt, next) : { ok: true };
       if (verdict && verdict.ok) {
-        this.spokenAt.push(now);
+        if (!next.sticky) this.spokenAt.push(now);
         this.spokenAt = this.spokenAt.filter(t => now - t < 3600000);
-        this.current = { ...next, at: now, until: now + this.showMs };
+        this.current = { ...next, at: now, until: next.sticky ? null : now + this.showMs };
       } else {
         this.toDot(next);
       }
       changed = true;
     }
+    // 常驻气泡挡住队列时，后续提醒保留在圆点中，不丢弃也不忙等。
+    if (this.current?.sticky) while (this.pending.length) { this.toDot(this.pending.shift()); changed = true; }
     return changed;
   }
 
   toDot(item) {
     const { until, at, ...rest } = item;
     this.dots.push(rest);
-    if (this.dots.length > this.keepDots) this.dots.splice(0, this.dots.length - this.keepDots);
+    while (this.dots.filter(item => item.kind !== 'reminder').length > this.keepDots) this.dots.splice(this.dots.findIndex(item => item.kind !== 'reminder'), 1);
+  }
+
+  // 持久化存储是提醒的事实来源：取消/确认后移除；窗口重建或错过总线事件时补回。
+  syncReminders(items) {
+    const active = new Map(items.map(item => [item.id, item]));
+    const keep = item => item.kind !== 'reminder' || active.has(item.id);
+    this.pending = this.pending.filter(keep); this.dots = this.dots.filter(keep);
+    if (this.current && !keep(this.current)) this.current = null;
+    const present = new Set([...this.pending, ...this.dots, ...(this.current ? [this.current] : [])].map(item => item.id));
+    for (const item of active.values()) if (!present.has(item.id)) { this.seen.delete(item.id); this.push(item); }
   }
 
   // 用户点了气泡：提前收起，内容交给展开面板；不算进小圆点。
@@ -143,13 +155,13 @@ class SpeechQueue {
   }
 
   nextDeadline() {
-    if (this.current) return this.current.until;
+    if (this.current) return this.current.sticky ? null : this.current.until;
     return this.pending.length ? this.now() : null;
   }
 
   snapshot() {
     return {
-      bubble: this.current ? { id: this.current.id, kind: this.current.kind, title: this.current.title, until: this.current.until } : null,
+      bubble: this.current ? { id: this.current.id, kind: this.current.kind, title: this.current.title, until: this.current.until, sticky: this.current.sticky } : null,
       dots: this.dots.length,
       pending: this.pending.length,
     };
