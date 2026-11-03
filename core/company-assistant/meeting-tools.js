@@ -8,18 +8,21 @@ class MeetingTools {
   constructor(m) {
     this.m = m; this.tokens = new Map(); this.bridge = new AssistantBridge(r => this.invoke(r), { resolveIdentity: auth => this.tokens.get(auth) || null });
   }
-  endpoint(id) { return path.join(this.m.dir(id), 'meeting-tools-endpoint.json'); }
+  endpoint(id, question = false) { return path.join(this.m.dir(id), question ? 'meeting-question-tools-endpoint.json' : 'meeting-tools-endpoint.json'); }
   start() { this.closed=false; return this.ready ||= this.bridge.start().then(() => { if(this.closed){this.bridge.close();return;} for (const id of this.m.ids()) { const m=this.m.load(id); if(m.sessionId)this.bind(m); } }).catch(e => { this.ready=null; throw e; }); }
   bind(m) {
+    for (const [sid, question] of [[m.sessionId, false], [m.questionSessionId, true]]) {
+    if (!sid) continue;
     let token;
-    try { const old=JSON.parse(fs.readFileSync(this.endpoint(m.id),'utf8')); token=old.token; } catch {}
+    try { const old=JSON.parse(fs.readFileSync(this.endpoint(m.id, question),'utf8')); token=old.token; } catch {}
     if(!/^[a-f0-9]{64}$/.test(token||''))token=randomBytes(32).toString('hex');
-    this.tokens.set('Bearer '+token,m.sessionId);
-    fs.writeFileSync(this.endpoint(m.id), JSON.stringify({url:this.bridge.url,token}),{mode:0o600});
+    this.tokens.set('Bearer '+token,sid);
+    fs.writeFileSync(this.endpoint(m.id, question), JSON.stringify({url:this.bridge.url,token}),{mode:0o600});
+    }
   }
-  entry(sessionId) { const id=this.m.ids().find(id=>this.m.load(id).sessionId===sessionId); if(!id)throw new Error('会议会话不存在');return {name:'meeting',command:this.m.deps.nodeExecutable||process.execPath,args:[path.join(__dirname,'meeting-mcp.js')],env:{ELECTRON_RUN_AS_NODE:'1',HUB_MEETING_ENDPOINT:this.endpoint(id)}}; }
+  entry(sessionId) { const id=this.m.ids().find(id=>{const m=this.m.load(id);return m.sessionId===sessionId||m.questionSessionId===sessionId;}); if(!id)throw new Error('会议会话不存在');return {name:'meeting',command:this.m.deps.nodeExecutable||process.execPath,args:[path.join(__dirname,'meeting-mcp.js')],env:{ELECTRON_RUN_AS_NODE:'1',HUB_MEETING_ENDPOINT:this.endpoint(id,this.m.load(id).questionSessionId===sessionId)}}; }
   async invoke(r) {
-    const id=this.m.ids().find(id=>this.m.load(id).sessionId===r.callerSessionId);if(!id||!r.callerSessionId)throw new Error('工具仅供所属会议会话使用');
+    const id=this.m.ids().find(id=>{const m=this.m.load(id);return m.sessionId===r.callerSessionId||m.questionSessionId===r.callerSessionId;});if(!id||!r.callerSessionId)throw new Error('工具仅供所属会议会话使用');
     const a=r.arguments||{},m=this.m.load(id);
     if (r.name === 'meeting_index') {
       const index=this.m.recording.index(id),offset=Number(a.offset||0);if(!Number.isInteger(offset)||offset<0)throw new Error('分页位置无效');

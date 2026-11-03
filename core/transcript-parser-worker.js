@@ -32,7 +32,7 @@ function antigravitySiblingSignature(kind, transcriptPath) {
     + '|' + (agy.UUID.test(match[1]) ? sig(agy.receiptsFile(match[1])) : 'none');
 }
 
-function parseTask(message) {
+async function parseTask(message) {
   const { id, kind, transcriptPath, opts = {} } = message || {};
   if (!id || !transcriptPath) throw new Error('Invalid transcript worker request');
   const stat = fs.statSync(transcriptPath);
@@ -48,7 +48,9 @@ function parseTask(message) {
   }
 
   const startedAt = Date.now();
-  const turns = parserForKind(kind)(transcriptPath, opts);
+  const turns = kind === 'claude-aligned'
+    ? [await require('./claude-turn-alignment').readClaudeTurn(transcriptPath,opts)]
+    : parserForKind(kind)(transcriptPath, opts);
   // Compacted here, before caching and before postMessage, so neither the
   // cache budget nor the main thread ever holds the full tool output.
   const normalizedTurns = Array.isArray(turns)
@@ -67,9 +69,9 @@ function parseTask(message) {
   };
 }
 
-parentPort.on('message', (message) => {
+parentPort.on('message', async (message) => {
   try {
-    parentPort.postMessage(parseTask(message));
+    parentPort.postMessage(await parseTask(message));
   } catch (error) {
     parentPort.postMessage({
       id: message && message.id,

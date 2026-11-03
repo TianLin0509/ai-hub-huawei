@@ -537,6 +537,22 @@ function registerSessionIpc(ipcMain, deps) {
   // 公司电脑上装了 CodeAgent 时，新建会话 / 群聊默认用它（只查文件是否存在，不代表已登录）。
   // CodeAgent 模型菜单：已知模型 + 本机回答里实际出现过的模型（core/codeagent-models.js）。
   ipcMain.handle('codeagent:models', (_event, payload) => codeagentModelList(payload));
+  ipcMain.handle('codeagent:skills', async (_event, payload = {}) => {
+    try {
+      const session = sessionManager.getSession(payload.sessionId);
+      if (!session || !require('../../core/ai-kinds').isCodeAgentKind(session.kind)) throw new Error('当前会话不是可用的 CodeAgent 会话');
+      const dataDir = require('../../core/data-dir').getHubDataDir();
+      const configDir = require('../../core/codeagent-default-model-guard').sessionConfigDir(session, { dataDir });
+      const inventory = await new Promise((resolve, reject) => setImmediate(() => {
+        try { resolve(require('../../core/capability-catalog').scanCodeAgentSkills(configDir)); } catch (error) { reject(error); }
+      }));
+      return { ok: true, ...inventory };
+    } catch (error) { return { ok: false, error: '读取技能失败：' + error.message, skills: [] }; }
+  });
+  ipcMain.handle('codeagent:commands-open', async (_event, payload = {}) => {
+    try { return await require('../../core/group-chat-watcher').openCodeAgentCommands(payload.sessionId); }
+    catch (error) { return { ok: false, error: error.message }; }
+  });
   // /model 菜单用量快照（core/codeagent-usage-menu.js）：界面取全部；界面每轮结束读屏读到菜单时交回来记。
   ipcMain.handle('codeagent:usage', () => {
     try { return { ok: true, accounts: require('../../core/codeagent-usage-menu').readUsage(require('../../core/data-dir').getHubDataDir()) }; }
@@ -545,6 +561,10 @@ function registerSessionIpc(ipcMain, deps) {
   ipcMain.handle('codeagent:usage-record', (_event, payload = {}) => {
     const key = typeof payload.key === 'string' && /^[\w.-]{1,80}$/.test(payload.key) ? payload.key : '';
     if (!key || !payload.usage || typeof payload.usage !== 'object') return { ok: false };
+    if (!require('../../core/codeagent-usage-menu').hasModelTokens(payload.usage)) {
+      const diagnostic = require('../../core/codeagent-usage-menu').appendUsageDiagnostic(require('../../core/data-dir').getHubDataDir(), payload.menuLines, { source: 'screen' });
+      payload.usage.modelsRead = { status: 'unrecognized', diagnostic };
+    }
     recordCodeAgentUsage(key, payload.usage, { label: typeof payload.label === 'string' ? payload.label.slice(0, 80) : '', source: 'screen' });
     return { ok: true };
   });
@@ -678,8 +698,32 @@ function registerSessionIpc(ipcMain, deps) {
   const codeagentAutoTried = new Map(); // 号 → { at: 上次自动获取的时间, serveOk: 那次是否经 serve 读成功 }
   const codeagentLastSource = new Map(); // 号 → 上次获取成功走的路（serve / menu）
   const codeagentServeEnabled = dataDir => require('../../core/codeagent-serve').serveEnabled(dataDir);
+  const codeagentProbePending = new Map();
+  const { createUsageRefresher, CODEAGENT_SERVE_MAX_AGE_MS } = require('../../core/codeagent-usage-menu');
+  const usageRefresher = createUsageRefresher({
+    read: key => require('../../core/codeagent-usage-menu').readUsage(require('../../core/data-dir').getHubDataDir())[key],
+    probe: key => probeCodeAgentAccount(key),
+  });
+  ipcMain.handle('codeagent:usage-refresh', async (_event, payload = {}) => {
+    let result;
+    try {
+      const pool = require('../../core/codeagent-pool');
+      const accounts = codeagentPoolAccounts();
+      const key = typeof payload.key === 'string' && payload.key ? payload.key
+        : payload.label === '个人账号' ? 'personal'
+          : accounts.find(account => pool.label(account) === payload.label)?.id;
+      if (key !== 'personal' && !accounts.some(account => account.id === key)) throw new Error('找不到这个 CodeAgent 账号');
+      result = { ...await usageRefresher.refresh(key), key };
+    } catch (error) { result = { ok: false, outcome: 'failed', reason: error.message, error: error.message }; }
+    require('../../core/codeagent-models').appendModelLog(require('../../core/data-dir').getHubDataDir(), {
+      event: 'usage-refresh', result: result.outcome || (result.ok ? 'read' : 'failed'), reason: result.reason || '',
+    });
+    return result;
+  });
   function probeCodeAgentAccount(id) {
+    if (codeagentProbePending.has(id)) return codeagentProbePending.get(id);
     const run = async () => {
+      usageRefresher.noteAttempt(id);
       codeagentProbing.add(id);
       try {
         const { getHubDataDir } = require('../../core/data-dir');
@@ -687,15 +731,16 @@ function registerSessionIpc(ipcMain, deps) {
         const probe = require('../../core/codeagent-model-probe');
         const config = require('../../core/codeagent-config').resolveCodeAgentConfig(process.env);
         const dataDir = getHubDataDir();
-        let configDir, file;
+        let configDir, file, label = '个人账号';
         if (id === 'personal') { configDir = config.configDir; file = pool.personalModelsFile(dataDir); }
         else {
           const account = codeagentPoolAccounts().find(a => a.id === id);
           if (!account) throw new Error('号池里没有这个账号');
           if (account.state !== 'ready') throw new Error('这个号需要先重新登录');
           configDir = account.dir; file = require('path').join(account.dir, probe.MODELS_FILE);
+          label = pool.label(account);
         }
-        const probeOptions = { command: config.command, configDirEnv: config.configDirEnv, configDir, cwd: pool.probeCwd(dataDir) };
+        const probeOptions = { command: config.command, configDirEnv: config.configDirEnv, configDir, dataDir, cwd: pool.probeCwd(dataDir) };
         // 2026-10-30 用户：先用 CodeAgent 自带的 serve 接口读（约 3 秒，还带额度和每个模型的配额），读不到再开 CodeAgent 读 /model 屏幕。
         // AI_HUB_CODEAGENT_SERVE=1 强制打开、=0 强制关掉。
         let result = null;
@@ -717,18 +762,19 @@ function registerSessionIpc(ipcMain, deps) {
         if (!result.ok) throw new Error(result.error);
         probe.writeProbed(file, result);
         codeagentLastSource.set(id, result.source === 'serve' ? 'serve' : 'menu');
-        if (result.usage) recordCodeAgentUsage(id, result.usage, { label: id === 'personal' ? '个人账号' : '', source: result.source === 'serve' ? 'serve' : 'probe' });
+        if (result.usage) recordCodeAgentUsage(id, result.usage, { label, source: result.source === 'serve' ? 'serve' : 'probe' });
         return result.models;
       } finally { codeagentProbing.delete(id); }
     };
     const next = codeagentProbeChain.then(run, run);
     codeagentProbeChain = next.catch(() => {});
-    return next;
+    const tracked = next.finally(() => codeagentProbePending.delete(id));
+    codeagentProbePending.set(id, tracked);
+    return tracked;
   }
   // 清单 3 天一过就后台补读。经 serve 读到的（约 3 秒、读完即关）在打开模型下拉时 10 分钟就再读一次，让用量接近实时；
   // 不常驻、不定时轮询（2026-10-30 用户：常驻 serve 不划算）。
   const CODEAGENT_PROBE_MAX_AGE_MS = 3 * 24 * 3600 * 1000;
-  const CODEAGENT_SERVE_MAX_AGE_MS = 10 * 60 * 1000;
   function codeagentProbeStale(at, source, { opening = false } = {}) {
     const time = at ? Date.parse(at) : NaN;
     return !Number.isFinite(time) || Date.now() - time > (opening && source === 'serve' ? CODEAGENT_SERVE_MAX_AGE_MS : CODEAGENT_PROBE_MAX_AGE_MS);
@@ -736,6 +782,7 @@ function registerSessionIpc(ipcMain, deps) {
   // 自动获取：上次经 serve 读成功的号隔 10 分钟才再读；失败过（或走了读屏）的号本次运行 Hub 不再自动试，免得反复开 CodeAgent 读屏。
   function autoProbeCodeAgentAccount(id) {
     const last = codeagentAutoTried.get(id);
+    if (usageRefresher.nextRefreshAt(id) > Date.now()) return;
     if ((last && !(last.serveOk && Date.now() - last.at >= CODEAGENT_SERVE_MAX_AGE_MS)) || codeagentProbing.has(id)) return;
     const tried = { at: Date.now(), serveOk: false };
     codeagentAutoTried.set(id, tried);
@@ -919,7 +966,7 @@ function registerSessionIpc(ipcMain, deps) {
       guard.noteHubWrite(configDir, want, `codeagent-menu-enter:${reason}`, { logged: true, session: String(sessionId).slice(0, 8) });
       try {
         return await codeagentPicker.pickModel({ manager: sessionManager, sid: sessionId, kind: session.kind, modelId: want,
-          configDir, allowedModels: permitted.authoritative ? permitted.models : null,
+          configDir, dataDir, allowedModels: permitted.authoritative ? permitted.models : null,
           // 启动和原地重拉：等 CLI 画出普通输入框再敲 /model（太早敲回车会丢，见 pickModel 的 readyFirstMs）
           readyFirstMs: reason === 'launch' || reason === 'relaunch' ? 45000 : 0,
           keepDefault,

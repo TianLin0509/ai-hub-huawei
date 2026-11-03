@@ -24,6 +24,7 @@ const SLOT_NAMES = ['一号位', '二号位', '三号位'];
 // 新群统一通用；可选场景只提示成员按需读文件，不改变会话启动配置。
 const PROJECT_LIBRARY = require('../core/distribution').featureEnabled('projectLibrary');
 const PLAIN_COPY = !require('../core/distribution').featureEnabled('launchEffort');
+const ADVANCED_GROUP = require('../core/distribution').featureEnabled('advancedGroupChat');
 let _sceneHints = [];
 let _sceneHintLoad = 0;
 
@@ -464,7 +465,7 @@ function _ensureModal() {
           <label class="mcm-scene-caption" for="mcm-scene-hint">场景</label>
           <select id="mcm-scene-hint" aria-label="群聊场景"><option value="">按话题自动</option></select>
         </div>
-        <div class="mcm-orch-row" id="mcm-orch-row"${ORCHESTRATOR_KINDS.some(require('../core/distribution').kindAllowed) ? '' : ' style="display:none"'}>
+        <div class="mcm-orch-row" id="mcm-orch-row"${ADVANCED_GROUP && ORCHESTRATOR_KINDS.some(require('../core/distribution').kindAllowed) ? '' : ' style="display:none"'}>
           <label class="mcm-orch-switch"><input type="checkbox" id="mcm-orch-toggle" role="switch"><span class="mcm-orch-track" aria-hidden="true"></span><strong>负责人</strong></label>
           <span class="mcm-orch-hint" id="mcm-orch-hint">打开后成员 1 当负责人：你只和它对话，它像懂技术的领导一样拆解任务、给成员分工、审查交付并核实关键证据；具体实现交给成员。目标与停止条件直接用自然语言说明。</span>
           <div class="mcm-orch-options" id="mcm-orch-options" hidden>
@@ -490,7 +491,7 @@ function _ensureModal() {
 }
 
 function _setOrchestration(on) {
-  _orchestrationOn = !!on;
+  _orchestrationOn = ADVANCED_GROUP && !!on;
   if (!_modalEl) return;
   const toggle = _modalEl.querySelector('#mcm-orch-toggle');
   if (toggle) toggle.checked = _orchestrationOn;

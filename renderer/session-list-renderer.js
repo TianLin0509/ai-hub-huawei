@@ -1,6 +1,10 @@
 // 纯函数：按最新 AI 回答时间年龄分桶。pinned 永远进 recent（置顶不折叠）。
 //   recent: <24h（保持现状 UI 置顶）· mid: 24-72h · old: ≥72h
 const { isGroupChatMemberRunning } = require('../core/groupchat-running-state.js');
+// 负责人组队的侧栏标签与批准弹窗（renderer/team-ui.js）随侧栏一起加载：只在真实界面里加载，单测的无 DOM 环境跳过。
+if (typeof window !== 'undefined' && typeof document !== 'undefined' && !window.__teamUi) {
+  try { require('./team-ui.js'); } catch (error) { console.warn('[team-ui] 未加载：', error && error.message); }
+}
 const { getMeetingUnreadMemberIds } = require('./meeting-unread');
 const { compareLatestActivityDesc, latestActivityTime } = require('../core/session-recency.js');
 const {
@@ -88,7 +92,15 @@ function familyOfKind(kind) {
 // 一个家族的话，切到另一个页签时它会凭空消失，而它确实有那边的成员在跑。
 function sessionFamilies(item, sessionMap) {
   if (!item) return new Set();
-  if (!item._isMeeting) return new Set([familyOfKind(item.kind)]);
+  if (!item._isMeeting) {
+    const families = new Set([familyOfKind(item.kind)]);
+    const ids = typeof window !== 'undefined' ? window.__teamUi?.membersOf(item.id, sessionMap) || [] : [];
+    for (const id of ids) {
+      const member = sessionMap?.get(id);
+      if (member) families.add(familyOfKind(member.kind));
+    }
+    return families;
+  }
   const ids = (item._meeting && item._meeting.subSessions) || [];
   const families = new Set();
   for (const id of ids) {
@@ -697,8 +709,9 @@ sessionListEl.addEventListener('keydown', event => {
 // Top-level regular sessions (no meetingId) sit alongside meetings in the same sort order.
   function collectSidebarItems(sessionMap = getSessions(), sorted = true) {
     const memberIds = new Set(Object.values(getMeetings()).flatMap(m => m.subSessions || []));
+    const teamMemberIds = (typeof window !== 'undefined' && window.__teamUi?.memberIdSet(sessionMap, getMeetings())) || new Set();
     const regularSessions = Array.from(sessionMap.values())
-    .filter(s => !s.meetingId && !memberIds.has(s.id) && s.kind !== 'xresearch-run' && !s.hiddenFromSidebar && s.purpose !== 'xresearch-research'
+    .filter(s => !s.meetingId && !memberIds.has(s.id) && !teamMemberIds.has(s.id) && s.kind !== 'xresearch-run' && !s.hiddenFromSidebar && s.purpose !== 'xresearch-research'
       // 关掉助理的发行版（公司版）：旧版本留下的助理会话不再出现在侧栏（它跑不起来，只会显示运行异常）。
       && !(s.purpose === 'hub-assistant' && !require('../core/distribution').featureEnabled('assistant')));
 
@@ -876,8 +889,10 @@ sessionListEl.addEventListener('keydown', event => {
   const previous = previousPresentation;
   try {
     const sources = new Set([...sections.failed, ...sections.active, ...sections.today, ...(resident ? [resident] : [])]);
-    for (const item of [...sources]) if (item._isMeeting) {
-      for (const id of item._meeting.subSessions || []) if (sessionMap.has(id)) sources.add(sessionMap.get(id));
+    for (const item of [...sources]) {
+      const ids = item._isMeeting ? item._meeting.subSessions || []
+        : typeof window !== 'undefined' ? window.__teamUi?.membersOf(item.id, sessionMap, getMeetings()) || [] : [];
+      for (const id of ids) if (sessionMap.has(id)) sources.add(sessionMap.get(id));
     }
     const context = JSON.stringify([getActiveSessionId(), getActiveMeetingId(), detailsEnabled, modelFilter,
       [...collapsedSections], [...collapsedDetailsMeetings], [..._expandedMeetings], assistantOn]);
@@ -888,7 +903,8 @@ sessionListEl.addEventListener('keydown', event => {
         item._isMeeting ? null : bridgeBadge(item.id),
         !item._isMeeting && typeof window !== 'undefined' ? window.__progressBadgeFor?.(item.id) : null,
         item.currentModel ? modelShort(item.currentModel) : null, unreadMemberIds.has(item.id),
-        item._isMeeting ? null : sessionDisplayTitle(item, KIND_LABELS, getMeetings()[item.meetingId])]);
+        item._isMeeting ? null : sessionDisplayTitle(item, KIND_LABELS, getMeetings()[item.meetingId]),
+        item._isMeeting || typeof window === 'undefined' ? null : window.__teamUi?.signature(item.id, sessionMap, getMeetings()) || null]);
       return cachePresentation(item, input => { Object.assign({}, input); return {}; }, external);
     });
     presentation = { sections, context, rows };
@@ -923,7 +939,29 @@ sessionListEl.addEventListener('keydown', event => {
 
   // 单条渲染（会话/会议），供「置顶 recent + 时间组」复用。
   const detailSessionIds = new Set();
-  function appendItem(s, child = false, target = renderTarget) {
+  function appendItem(s, child = false, target = renderTarget, teamWrapped = false) {
+    // 负责人组队：负责人行和它招的成员放进同一个分组，成员用群聊成员同款缩进子行，点开就是普通会话。
+    const teamUi = !child && !teamWrapped && !s._isMeeting && typeof window !== 'undefined' ? window.__teamUi : null;
+    const teamMembers = teamUi ? teamUi.membersOf(s.id, sessionMap, getMeetings()) : [];
+    if (teamMembers.length) {
+      const group = doc.createElement('div');
+      group.className = 'sidebar-group team-group' + (teamMembers.includes(getActiveSessionId()) ? ' has-active-member' : '');
+      group.dataset.sidebarGroup = s.id;
+      group.dataset.sidebarRenderKey = 'team:' + s.id;
+      group.dataset.sidebarRenderTree = 'true';
+      target.appendChild(group);
+      appendItem(s, false, group, true);
+      const children = doc.createElement('div');
+      children.className = 'sidebar-group-children';
+      children.dataset.sidebarRenderKey = 'team-members:' + s.id;
+      children.dataset.sidebarRenderTree = 'true';
+      group.appendChild(children);
+      for (const id of teamMembers) {
+        const member = sessionMap.get(id);
+        if (member && (modelFilter === 'all' || familyOfKind(member.kind) === modelFilter)) appendItem(member, true, children);
+      }
+      return;
+    }
     if (s._isMeeting) {
       const meeting = s._meeting;
       const memberIds = meeting.subSessions || [];
@@ -1054,6 +1092,11 @@ sessionListEl.addEventListener('keydown', event => {
       // 悬停标题显示全名（2026-10-24 用户：会话栏宽度有限，长名字被省略号截断）。
       + '<span class="sl-title" title="' + escapeHtml(displayTitle + (progress ? '\n' + progress.tip : '')) + '">' + _warningHtml(anyWarning) + (progress ? progress.html : '') + accountHtml + bridgeHtml + escapeHtml(displayTitle) + '</span>'
       + timeHtml(s, showUnread ? Math.max(1, unreadCount) : 0);
+    const teamTag = typeof window !== 'undefined' ? window.__teamUi?.rowTagHtml(s.id) : '';
+    if (teamTag) {
+      const titleEl = div.querySelector?.('.sl-title');
+      if (titleEl) titleEl.insertAdjacentHTML('afterbegin', teamTag); // 放标题前：长标题被省略号截断时标签仍看得见
+    }
     if (child) div.className += ' child';
     if (detailsEnabled) {
       div.className += ' has-details';

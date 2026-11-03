@@ -254,7 +254,7 @@ function attemptEventMatches(attempt, event = {}, options = {}) {
     return { ok: false, reason: 'before_attempt_boundary', eventAt, floor };
   }
 
-  if ((family === 'codex' || acp) && expectedTurn && !actualTurn && options.requireProviderTurn !== false) {
+  if ((family === 'codex' || family === 'claude' || acp) && expectedTurn && !actualTurn && options.requireProviderTurn !== false) {
     return { ok: false, reason: 'missing_provider_turn_id', expectedTurn };
   }
 

@@ -1,6 +1,6 @@
 'use strict';
 
-const { isCodexCliKind } = require('../../core/ai-kinds.js');
+const { isCodexCliKind, isClaudeFamily } = require('../../core/ai-kinds.js');
 
 function registerGroupchatRecoveryIpc(ipcMain, deps) {
   const {
@@ -47,6 +47,19 @@ function registerGroupchatRecoveryIpc(ipcMain, deps) {
         return { ok: false, reason: 'meeting_state_unavailable', detail: '群聊状态不可用（meeting 不存在或状态文件读取失败），无法定位轮次写回。' };
       }
     }
+    if(orch && require('../../core/group-answer-files').enabled(meeting)) {
+      const n=requestedTurn || orch.state.currentTurn;
+      const entry=orch.answerFileFor?.(n,sid);
+      if(entry) {
+        delete entry.sig;
+        require('../../core/group-answer-files').reconcile(orch);
+        sendToRenderer('groupchat:answer-file',{meetingId,revision:orch.state.revision});
+        if(entry.readError)return {ok:false,reason:'answer_file_unreadable',detail:`回答文件暂时读不到：${entry.readError}。已保留上次读到的原文，可再次重新提取。`};
+        const message=orch.state.messages.find(m=>m.sid===sid && Number(m.turnNum)===Number(n) && m.role==='assistant');
+        if(!message?.content?.trim())return {ok:false,reason:'answer_file_missing',detail:'本轮回答文件还没有内容，未重新发送任务。'};
+        return {ok:true,text:message.content,source:'answer_file',mode:'answer_file_recollect'};
+      }
+    }
     if (orch && require('../../core/dev-file-workflow').enabled(meeting)) {
       const n=requestedTurn || orch.state.currentTurn;
       const receipts=Object.values(orch.state.devChatHistory?.receipts || {});
@@ -88,7 +101,7 @@ function registerGroupchatRecoveryIpc(ipcMain, deps) {
 
     // 非 Codex 后端只能读"最新回答"，对旧轮重提取会拿到最新轮内容 → 张冠李戴。
     //   诚实拒绝，提示用户用「原文」核对旧轮，而不是静默写错数据。
-    if (!isLatestTurn && !isCodexCliKind(runtimeKind) && !isNativeClaude && !isNativeCodex) {
+    if (!isLatestTurn && !isCodexCliKind(runtimeKind) && !isClaudeFamily(runtimeKind) && !isNativeClaude && !isNativeCodex) {
       return {
         ok: false,
         reason: 'old_turn_resync_unsupported',
@@ -139,13 +152,24 @@ function registerGroupchatRecoveryIpc(ipcMain, deps) {
       } catch (error) { return {ok:false,reason:'extract_failed',detail:error.message}; }
     } else {
       try {
-        extracted = await transcriptTap.extractLatestTurn(sid, effectiveSince, { untilTs });
+        const n=requestedTurn || orchCurrentTurn;
+        const turn=orch?.state.turns?.find(t=>t.n===n);
+        const pending=orch?.state.pendingPrompts?.[n]?.[sid];
+        const attemptId=turn?.attemptIdBy?.[sid] || pending?.attemptId;
+        const attempt=attemptId && orch?.getAttempt?.(attemptId);
+        const providerTurnId=turn?.providerTurnIdBy?.[sid] || attempt?.providerTurnId || pending?.providerTurnId;
+        const userRecordId=attempt?.userRecordId || pending?.userRecordId;
+        const prompt=pending?.prompt || attempt?.prompt;
+        extracted = await transcriptTap.extractLatestTurn(sid, effectiveSince, {
+          untilTs, ...(providerTurnId ? {providerTurnId} : {}),
+          ...(userRecordId ? {userRecordId} : {}), ...(prompt ? {prompt} : {}),
+        });
       } catch (err) {
         return { ok: false, reason: 'extract_failed', detail: err.message };
       }
       if (!extracted || !extracted.text) {
         // PTY/streaming 兜底只对"最新轮"有意义：旧轮内容早已不在流式缓冲里。
-        if (isLatestTurn) {
+        if (isLatestTurn && !isClaudeFamily(runtimeKind)) {
           try {
             const fromPty = groupChatWatcher.extractStreamingText(sid, runtimeKind);
             if (fromPty && fromPty.text && fromPty.text.trim().length > 0) {
@@ -186,10 +210,12 @@ function registerGroupchatRecoveryIpc(ipcMain, deps) {
     //   orch 存在但 currentTurn 无效（如投委会 internal 阶段 currentTurn=0）时，带 turnNum
     //   的请求不放行 watcher（internal watcher 不属于任何编号轮），走 patch 路径。
     const watcher = getActiveWatchers().get(sid);
+    const pendingConfirmation = isClaudeFamily(runtimeKind) && !isNativeClaude
+      && extracted.extractMode !== 'final_answer';
     const freshCurrentTurn = readCurrentTurn();
     const watcherOwnsRequestedTurn = requestedTurn === null
       || (freshCurrentTurn !== null ? requestedTurn === freshCurrentTurn : !orch);
-    if (watcher && watcherOwnsRequestedTurn) {
+    if (watcher && watcherOwnsRequestedTurn && !pendingConfirmation) {
       watcher.manualExtract(extracted.text);
       return { ok: true, text: extracted.text, source: extracted.source, mode: 'watcher_settle', extractMode: extracted.extractMode || null };
     }
@@ -206,7 +232,8 @@ function registerGroupchatRecoveryIpc(ipcMain, deps) {
             const providerTurnId = targetTurn.providerTurnIdBy?.[sid] || extracted.providerTurnId;
             const patched = orch.patchTurnResult(targetTurn.n, sid, {
               text: extracted.text,
-              status: 'manual_extracted',
+              status: pendingConfirmation ? 'awaiting_final_text' : 'manual_extracted',
+              ...(pendingConfirmation ? {finality:'pending_confirmation'} : {}),
               ...(attemptId ? { attemptId } : {}),
               ...(targetTurn.runId ? { runId: targetTurn.runId } : {}),
               ...(providerTurnId ? { providerTurnId } : {}),
@@ -248,7 +275,8 @@ function registerGroupchatRecoveryIpc(ipcMain, deps) {
               && orch.state.pendingPrompts[String(recoverTurnNum)][sid];
             const patched = orch.patchTurnResult(recoverTurnNum, sid, {
               text: extracted.text,
-              status: 'manual_extracted',
+              status: pendingConfirmation ? 'awaiting_final_text' : 'manual_extracted',
+              ...(pendingConfirmation ? {finality:'pending_confirmation'} : {}),
               memberId: memberIndex >= 0 ? ((memberSpec && memberSpec.memberId) || `m${memberIndex + 1}`) : undefined,
               speaker: session?.title || session?.kind || 'AI',
               ...(pendingReceipt && pendingReceipt.attemptId ? { attemptId: pendingReceipt.attemptId } : {}),

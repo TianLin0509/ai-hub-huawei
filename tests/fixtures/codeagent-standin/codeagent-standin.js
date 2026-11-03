@@ -100,6 +100,6 @@ try {
 const command = env.CODEAGENT_STANDIN_CLAUDE || 'claude';
 // Let the child own Ctrl+C, like the real CLI does.
 process.on('SIGINT', () => {});
-const child = spawn(command, args, { stdio: 'inherit', env, windowsHide: false });
+const child = spawn(command, args, { stdio: 'inherit', env, windowsHide: true });
 child.on('exit', code => process.exit(code == null ? 1 : code));
 child.on('error', error => { console.error(`codeagent stand-in: cannot start ${command}: ${error.message}`); process.exit(1); });

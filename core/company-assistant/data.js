@@ -170,9 +170,11 @@ function meetings(raw) {
   }).filter(m => m.id);
 }
 
+function isCancelledCalendarEvent(event) { return event?.isCancelled === true || event?.isCancelled === 'true'; }
 function calendarEvents(raw) {
   const anonymous = new Map();
   return listIn(raw, ['events', 'items', 'value', 'calendars']).map((e, i) => {
+    if (isCancelledCalendarEvent(e)) return null;
     const stableId = first(e, ['id', 'eventId', 'itemId', 'uid']);
     const id = String(stableId ?? i), hash = recordHash(e);
     // 无编号时不把数组下标当作跨刷新身份，也不合并两条内容相同的记录。
@@ -180,7 +182,7 @@ function calendarEvents(raw) {
     const base = stableId != null ? 'cal:' + id : `cal:anon:${hash}:${ordinal}`;
     const times = eventTimes(e, ['start', 'startTime', 'Start', 'begin'], ['end', 'endTime', 'End']);
     return { ...eventSource(base, e, times.timeEvidence.start), id, subject: String(first(e, ['subject', 'Subject', 'title', 'summary']) ?? '（无标题）'), ...times, location: textOf(first(e, ['location', 'Location'])) };
-  });
+  }).filter(Boolean);
 }
 
 // 会话列表（im query-recent-conversation --count 50）：真机每个会话只有 8 个字段，没有最后消息时间、免打扰、置顶、未读数（Q-1018-10），
@@ -208,7 +210,12 @@ function recordsAt(raw, keys) {
   }
   return null;
 }
-const messageRecords = raw => recordsAt(raw, ['chatInfo', 'messages', 'message_list', 'msgList', 'history', 'msgs', 'data']);
+const messageRecords = raw => {
+  // 1.0.19 真机：增量无新消息时省略 chatInfo；只接受已核实成功码且明确为零的总数。
+  if ([0, '0'].includes(raw?.resultCode) && raw.respData && typeof raw.respData === 'object' && !Array.isArray(raw.respData)
+    && !Object.prototype.hasOwnProperty.call(raw.respData, 'chatInfo') && raw.respData.msgTotalCount === 0 && raw.respData.maxMsgId === 0) return [];
+  return recordsAt(raw, ['chatInfo', 'messages', 'message_list', 'msgList', 'history', 'msgs', 'data']);
+};
 const conversationRecords = raw => recordsAt(raw, ['conversation_info', 'conversations', 'data']);
 const messageId = m => first(m, ['msgId', 'msg_id', 'message_id', 'messageId', 'id']);
 const explicitBoolean = v => v === true || v === 1 || (typeof v === 'string' && /^(true|1)$/i.test(v.trim()));
@@ -247,7 +254,7 @@ function mails(raw) {
     const from = first(m, ['from', 'sender', 'From', 'fromName', 'from_name']);
     return { sourceId: 'mail:' + id, id, subject: String(first(m, ['subject', 'Subject', 'title']) ?? '（无主题）'),
       from: typeof from === 'object' ? String(first(from, ['name', 'Name', 'address', 'email']) ?? '') : String(from ?? ''),
-      at: toMs(first(m, ['receivedTime', 'received', 'date', 'time', 'sendTime', 'DateTimeReceived'])),
+      at: toMs(first(m, ['receivedTime', 'received', 'date', 'time', 'sendTime', 'DateTimeReceived', 'dateTimeReceived'])),
       preview: short(textOf(first(m, ['preview', 'summary', 'bodyPreview', 'body', 'content'])), 200),
       important: /high|重要|urgent/i.test(String(first(m, ['importance', 'Importance', 'priority']) ?? '')) };
   });
@@ -319,4 +326,4 @@ function eventInRange(m, range) {
   return true;
 }
 
-module.exports = { DISPLAY_ZONE, dayKey, clock, displayTime, dateParts, timeValue, toMs, explicitBoolean, listIn, textOf, short, namesOf, messageRecords, conversationRecords, messageId, meetings, calendarEvents, conversations, messages, mails, awaiting, relatedGroups, sourceIndex, todaysMeetings, unresolvedMeetings, eventTimeUnknown, eventInRange };
+module.exports = { DISPLAY_ZONE, dayKey, clock, displayTime, dateParts, timeValue, toMs, explicitBoolean, listIn, textOf, short, namesOf, messageRecords, conversationRecords, messageId, meetings, calendarEvents, isCancelledCalendarEvent, conversations, messages, mails, awaiting, relatedGroups, sourceIndex, todaysMeetings, unresolvedMeetings, eventTimeUnknown, eventInRange };

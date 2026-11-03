@@ -35,6 +35,7 @@
 .gc-journal-actions svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
 .gc-journal-actions > button,.gc-journal-menu > summary { display:grid; place-items:center; width:28px; min-height:28px; padding:4px; border:0; border-radius:6px; background:transparent; color:var(--journal-member); cursor:pointer; margin:0; opacity:1; pointer-events:auto; transform:none; }
 .gc-journal-actions > .mr-gc-retry-btn { width:auto; padding-inline:8px; }
+.gc-journal-actions > .mr-gc-recollect-btn { width:auto; min-width:64px; padding-inline:8px; white-space:nowrap; flex-shrink:0; }
 .gc-journal-menu > summary { list-style:none; }
 .gc-journal-menu > summary::-webkit-details-marker { display:none; }
 .gc-journal-actions > button:hover,.gc-journal-menu > summary:hover { background:color-mix(in srgb,var(--journal-member) 10%,transparent); }

@@ -17,7 +17,15 @@ function queuedHumanEntry(entry) {
   const uuid = a.source_uuid || a.delivery_id || entry.uuid;
   if (typeof uuid !== 'string' || !uuid) return null;
   return {type:'user',uuid,timestamp:a.timestamp || entry.timestamp,
-    message:{role:'user',content},isQueuedSupplement:true};
+    message:{role:'user',content},isQueuedSupplement:true,
+    ...(typeof (a.promptId ?? entry.promptId) === 'string' ? {promptId:a.promptId ?? entry.promptId} : {})};
+}
+
+function promptAlias(user) {
+  const { isSyntheticUserEntry } = require('./synthetic-user-filter');
+  if (Array.isArray(user?.message?.content) && user.message.content.some(block => block?.type === 'tool_result')) return null;
+  return user?.type === 'user' && typeof user.promptId === 'string' && user.promptId && !isSyntheticUserEntry(user)
+    ? 'prompt:' + user.promptId : null;
 }
 
 function* withQueuedHumanInputs(entries) {
@@ -26,6 +34,8 @@ function* withQueuedHumanInputs(entries) {
     const user = queuedHumanEntry(entry);
     if (user) {
       const aliases = ['source:' + user.uuid];
+      const prompt = promptAlias(user);
+      if (prompt) aliases.push(prompt);
       if (entry.attachment.delivery_id) aliases.push('delivery:' + entry.attachment.delivery_id);
       if (entry.uuid) aliases.push('attachment:' + entry.uuid);
       const duplicate = aliases.some(id => seen.has(id));
@@ -33,9 +43,11 @@ function* withQueuedHumanInputs(entries) {
       if (!duplicate) yield user;
     } else {
       if (entry?.type === 'user' && entry.uuid) {
-        const id = 'source:' + entry.uuid;
-        if (seen.has(id)) continue;
-        seen.add(id);
+        const aliases = ['source:' + entry.uuid], prompt = promptAlias(entry);
+        if (prompt) aliases.push(prompt);
+        const duplicate = aliases.some(id => seen.has(id));
+        aliases.forEach(id => seen.add(id));
+        if (duplicate) continue;
       }
       yield entry;
     }

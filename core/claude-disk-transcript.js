@@ -16,7 +16,7 @@
 //   最后一组没有终态 → 仍在运行，工具显示 running
 
 const fs = require('node:fs');
-const { isSyntheticUserEntry } = require('./synthetic-user-filter.js');
+const { isSyntheticUserEntry, skillCommandText } = require('./synthetic-user-filter.js');
 const { withQueuedHumanInputs } = require('./claude-queued-input');
 const { claudeTranscriptTurns } = require('./claude-native-transcript.js');
 const { isToolResultEntry, claudeAssistantContentHasAnswerText, isClaudeTurnStopReasonTerminal } = require('./claude-transcript-parser.js');
@@ -92,14 +92,14 @@ function claudeDiskRecords(entries) {
       continue;
     }
     if (entry.type === 'user' && !isToolResultEntry(entry)) {
-      const text = userText(entry.message);
+      const rawText = userText(entry.message), text = skillCommandText(rawText) ?? rawText;
       if (isInterruptMarker(text)) {
         if (current) { if (at) current.lastAt = at; settle(current, 'interrupted'); }
         continue;
       }
       const notification = isTaskNotification(entry, text);
       const scheduled = entry.isMeta === true && scheduledFires.has(entry.parentUuid);
-      if (!notification && !scheduled && isSyntheticUserEntry(entry, text)) continue;
+      if (!notification && !scheduled && isSyntheticUserEntry(entry, rawText)) continue;
       if (!notification && !text.trim() && !(entry.message?.content || []).some?.(b => b && b.type === 'image')) continue;
       if (entry.isQueuedSupplement && current) {
         // This input steers the existing turn. Keep its running tools and their

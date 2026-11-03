@@ -37,6 +37,7 @@ if (typeof document !== 'undefined') (function () {
   } = require('./dispatch-card.js');
   // 开发群聊「先讨论再开工」的阶段判断与收敛文本，和主进程 dispatcher 共用同一份。
   const DevDiscuss = require('../core/dev-discuss.js');
+  const ADVANCED_GROUP = require('../core/distribution').featureEnabled('advancedGroupChat');
   const DevFile = require('../core/dev-file-workflow.js');
   const GroupAnswers = require('../core/group-answer-files.js');
   const Delivery = require('../core/delivery-workflow.js');
@@ -1404,7 +1405,7 @@ if (typeof document !== 'undefined') (function () {
       superseded: '已被新问题覆盖',
       soft_alert: '等待中…',
       awaiting_binding: '已开工 · 等待绑定记录',
-      awaiting_final_text: '已结束 · 正在收取答案',
+      awaiting_final_text: '待确认 · 正在核对本轮答案',
       recovering: '正在恢复本轮',
       send_stuck: '⚠ 输入卡顿，请点 📤 发送',
       errored: '错误',
@@ -1795,7 +1796,7 @@ if (typeof document !== 'undefined') (function () {
       timeout: '超时',
       soft_alert: '等待中',
       awaiting_binding: '等待绑定记录',
-      awaiting_final_text: '正在收取答案',
+      awaiting_final_text: '待确认',
       recovering: '恢复中',
       send_stuck: '输入卡住',
       interrupted: '已中断',
@@ -2331,7 +2332,7 @@ if (typeof document !== 'undefined') (function () {
     // Unregistered messages (history before the switch, legacy fallbacks) keep their stored text;
     // registered members only ever get content from their file.
     const answer = message.answer || null, text = String(message.content || '');
-    const badge = !answer ? '' : answer.state === 'draft' ? '草稿' : answer.outcome === 'rework' ? '需返工' : answer.outcome === 'blocked' ? '阻塞' : '';
+    const badge = !answer ? '' : answer.readError ? '待确认 · 读取失败' : answer.state === 'draft' ? '草稿' : answer.outcome === 'rework' ? '需返工' : answer.outcome === 'blocked' ? '阻塞' : '';
     const body = text.trim()
       ? `<div class="mr-gc-md">${require('./conversation-message-view').renderMessageBody(text, { isUser: false, escapeHtml,
         renderMarkdown: t => _renderMarkdown(t, session?.cwd || meeting.workspace || _activeMeetingCwd()), foldLong: false })}</div>`
@@ -2344,13 +2345,14 @@ if (typeof document !== 'undefined') (function () {
     // Missing output is not proof of failed submission. Default to inspection;
     // the existing explicit resend for completed answers stays in 更多.
     const resend = message.sid ? `<button type="button" class="mr-gc-retry-btn" data-gc-resend-member="${escapeHtml(message.sid)}" data-gc-retry-turn="${escapeHtml(message.turnNum || '')}" title="把本轮问题重新发给这位成员；它写好回答文件后卡片自动更新">重新发送</button>` : '';
-    const inspect = message.sid ? `${message.sourcePrompt ? `<button type="button" data-gc-copy-prompt="${escapeHtml(message.id || '')}">复制本轮 Prompt</button>` : ''}<button type="button" data-gc-open-cli="${escapeHtml(message.sid)}">打开 ${escapeHtml(slot?.displayLabel || slot?.kind || message.speaker || '成员')} CLI</button>` : '';
+    const recollect = answer?.readError && message.sid ? `<button type="button" class="mr-gc-recollect-btn" data-gc-sync-answer="${escapeHtml(message.sid)}" data-gc-sync-turn="${escapeHtml(message.turnNum || '')}" title="只重新读取本轮回答文件，不重发任务">重新提取</button>` : '';
+    const inspect = message.sid ? `${recollect}${message.sourcePrompt ? `<button type="button" data-gc-copy-prompt="${escapeHtml(message.id || '')}">复制本轮 Prompt</button>` : ''}<button type="button" data-gc-open-cli="${escapeHtml(message.sid)}">打开 ${escapeHtml(slot?.displayLabel || slot?.kind || message.speaker || '成员')} CLI</button>` : '';
     const unread = !!text.trim() && answer?.state !== 'draft';
     return `
       <article ${journal.attributes(meeting, message, escapeHtml, { defaultMinimized: OrchUI.defaultMinimized(meeting, message) })} class="mr-gc-msg ai${slot ? ` slot-${(slot.slotIndex || 0) + 1}` : ''}${text.trim() ? '' : ' answer-missing'}" data-gc-msg-id="${escapeHtml(message.id || '')}" data-user-question="false" data-source-sid="${escapeHtml(message.sid || '')}" data-read-turn="${escapeHtml(message.turnNum || '')}" data-unread-answer="${unread}" data-phase="message" data-answer-state="${escapeHtml(answer ? answer.state : 'none')}">
         ${_renderGroupAvatar(slot, false)}
         <div class="mr-gc-msg-body">
-          <div class="mr-gc-meta"><span class="mr-gc-name${kindCls}">${escapeHtml(message.speaker || (slot && slot.displayLabel) || 'AI')}</span>${OrchUI.roleBadge(meeting, message, escapeHtml)}${badge ? `<span class="mr-gc-to-badge">${escapeHtml(badge)}</span>` : ''}${time ? `<span>${escapeHtml(time)}</span>` : ''}${OrchUI.peek(meeting, message, escapeHtml)}${journal.actions({ copy, prompt, retry: text.trim() ? resend : '', submit: text.trim() ? '' : inspect, minimize: true })}</div>
+          <div class="mr-gc-meta"><span class="mr-gc-name${kindCls}">${escapeHtml(message.speaker || (slot && slot.displayLabel) || 'AI')}</span>${OrchUI.roleBadge(meeting, message, escapeHtml)}${badge ? `<span class="mr-gc-to-badge" title="${escapeHtml(answer?.readError || '')}">${escapeHtml(badge)}</span>` : ''}${time ? `<span>${escapeHtml(time)}</span>` : ''}${OrchUI.peek(meeting, message, escapeHtml)}${journal.actions({ copy, prompt, retry: text.trim() ? resend : '', submit: text.trim() ? recollect : inspect, minimize: true })}</div>
           <div class="mr-gc-bubble-row"><div class="mr-gc-bubble"><div class="gc-journal-reading">${journal.disclosure()}<div class="gc-journal-text">${body}</div></div></div></div>
         </div>
       </article>`;
@@ -2409,14 +2411,14 @@ if (typeof document !== 'undefined') (function () {
       : failureCode === 'rate_limited' ? '限流中断'
         : failureCode === 'network_interrupted' ? '网络中断'
           : failureCode === 'auth_required' ? '登录失效'
-            : failureCode === 'response_timeout' ? '等待超时'
+            : failureCode === 'response_timeout' ? '待确认 · 等待超时'
               : failureCode === 'runtime_exited' ? '运行退出'
                 : '本轮失败';
     const statusText = sendStuck ? '输入未提交'
       : status === 'errored' ? failureStatusText
       : cancelling ? '正在停止'
       : status === 'awaiting_binding' ? '已开工 · 等绑定'
-      : status === 'awaiting_final_text' ? '已结束 · 收取中'
+      : status === 'awaiting_final_text' ? '待确认'
       : status === 'recovering' ? '恢复中'
       : status === 'queued' ? '排队中'
       : status === 'accepted' ? '已收到 · 等待执行'
@@ -2436,7 +2438,7 @@ if (typeof document !== 'undefined') (function () {
     const syncAction = (failureCode === 'submission_unknown' && !nativeResultReady && !isUser && message.sid)
       ? `<button type="button" class="mr-gc-sync-btn" data-gc-open-session="${escapeHtml(message.sid)}">核对消息</button>`
       : (!isUser && !message.sourceMessage && message.sid && !message.committeeAct && !_syncSettled)
-      ? `<button type="button" class="mr-gc-sync-btn" data-gc-sync-answer="${escapeHtml(message.sid)}" data-gc-sync-turn="${escapeHtml(message.turnNum || '')}" title="按本轮身份从该 AI 的原始记录同步回答">同步</button>`
+      ? `<button type="button" class="mr-gc-sync-btn" data-gc-sync-answer="${escapeHtml(message.sid)}" data-gc-sync-turn="${escapeHtml(message.turnNum || '')}" title="按本轮身份从该 AI 的原始记录同步回答">${status === 'awaiting_final_text' || failureCode === 'response_timeout' ? '重新提取' : '同步'}</button>`
       : '';
     // 2026-07-12 maintainer：空内容的非成功态消息不再渲染成"空气泡+裸图标排"（截图血泪），
     //   按 status 给占位文案 + 失败原因，让用户知道发生了什么、下一步点哪里。
@@ -2455,7 +2457,7 @@ if (typeof document !== 'undefined') (function () {
         : status === 'awaiting_binding'
         ? 'Agent 已开始工作，正在等待 transcript/rollout 完成绑定；不会自动重复发送 Prompt。'
         : status === 'awaiting_final_text'
-          ? '已收到结束信号，正在从 transcript 收取同一轮最终答案。'
+          ? '本轮答案尚待确认，正在核对消息编号和最终记录。可点「重新提取」再次读取。'
           : status === 'recovering'
             ? 'Hub 正在按本轮凭证恢复，不会重复发送 Prompt。'
             : '思考中...';
@@ -4432,6 +4434,11 @@ if (typeof document !== 'undefined') (function () {
   function _updateWorkflowBtnState(meeting) {
     const btn = document.getElementById('mr-workflow-btn');
     if (!btn) return;
+    if(!ADVANCED_GROUP) {
+      btn.style.display='none';
+      const controls=document.getElementById('mr-workflow-controls');if(controls)controls.hidden=true;
+      return;
+    }
     // File workflows use the same settings entry; their protocol stays attached.
     // 2026-07-20 maintainer [修#7d]：非群聊会议隐藏 workflow 按钮。
     btn.style.display = (meeting && meeting.groupChat) ? '' : 'none';
@@ -5456,7 +5463,8 @@ if (typeof document !== 'undefined') (function () {
     _updateInputTuning(meeting);
     const row = _ensureInputPreflightRow();
     if (!row) return;
-    const current = meeting || meetingData[activeMeetingId];
+    const source = meeting || meetingData[activeMeetingId];
+    const current = !ADVANCED_GROUP && source ? {...source,serialWorkflow:null,orchestration:null,scene:'general'} : source;
     row.dataset.deliveryMeeting=current?.id || '';
     if (!current) {
       row.style.display = 'none';
@@ -7431,6 +7439,7 @@ if (typeof document !== 'undefined') (function () {
     const workflowBtn = document.getElementById('mr-workflow-btn');
     if (workflowBtn) {
       workflowBtn.addEventListener('click', async () => {
+        if(!ADVANCED_GROUP)return;
         const m = meetingData[activeMeetingId];
         if (!m || !m.groupChat) return;
         // Creation emits intermediate seat snapshots; settings must bind to the

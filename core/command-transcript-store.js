@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { DatabaseSync } = require('node:sqlite');
 const { getHubDataDir } = require('./data-dir');
+const CODEAGENT_COMMAND_CLOCK_SKEW_MS = 5000;
 
 // User input belongs in history even when the provider executes it locally and
 // never creates a model turn. This journal is presentation, never runtime truth.
@@ -44,13 +45,65 @@ function commandTranscriptStore() {
   if (!stores.has(root)) stores.set(root, new CommandTranscriptStore(root));
   return stores.get(root);
 }
+function commandName(text) {
+  const raw = String(text || '');
+  const restored = require('./synthetic-user-filter').skillCommandText(raw) ?? raw;
+  return restored.trimStart().match(/^\/\S+/)?.[0].toLowerCase() || '';
+}
+function pairCodeAgentCommands(turns, commands, opts) {
+  const pairs = new Map();
+  const identified = new Set(turns.filter(turn => turn.role === 'user' && turn.clientSubmissionId).map(turn => turn.clientSubmissionId));
+  const candidates = turns.filter(turn => turn.role === 'user' && !turn.clientSubmissionId && Number.isFinite(turn.ts));
+  const eligible = commands.filter(command => {
+    const result = command.commandResult;
+    // stuck/unconfirmed are uncertain submissions, not proof of non-delivery.
+    const failed = result?.notSent === true || (result?.ok === false && !result.unconfirmed && result.sendStatus !== 'stuck');
+    return commandName(command.text) && Number.isFinite(command.ts) && !identified.has(command.clientSubmissionId) && !failed;
+  });
+  if (opts.fromTail !== false && !opts.offset) {
+    // The provider is already tail-limited. Align each command's visible echoes
+    // with the latest journal sends, never with the beginning of its history.
+    const groups = new Map();
+    for (const echo of candidates) {
+      const name = commandName(echo.text);
+      if (!name) continue;
+      if (!groups.has(name)) groups.set(name, []);
+      groups.get(name).push(echo);
+    }
+    for (const [name, echoes] of groups) {
+      const recent = eligible.filter(command => commandName(command.text) === name).slice(-echoes.length);
+      recent.forEach((command, index) => {
+        if (echoes[index].ts >= command.ts - CODEAGENT_COMMAND_CLOCK_SKEW_MS) pairs.set(command, echoes[index]);
+      });
+    }
+    return pairs;
+  }
+  // Forward/offset pages cannot safely align a full journal with a partial
+  // provider prefix. Only use FIFO when the normal parse proved it complete.
+  if (!opts.codeagentComplete) return pairs;
+  let nextCli = 0;
+  for (const command of eligible) {
+    const name = commandName(command.text);
+    for (let index = nextCli; index < candidates.length; index += 1) {
+      const echo = candidates[index];
+      if (echo.ts < command.ts - CODEAGENT_COMMAND_CLOCK_SKEW_MS || commandName(echo.text) !== name) continue;
+      pairs.set(command, echo); nextCli = index + 1; break;
+    }
+  }
+  return pairs;
+}
 function mergeCommandTurns(turns, commands, opts = {}) {
   // Correlate by submission identity, never collapse repeated identical commands.
   const ids = new Set(commands.map(c => c.clientSubmissionId));
+  const pairs = opts.codeagent === true ? pairCodeAgentCommands(turns, commands, opts) : new Map();
+  const echoes = new Set(pairs.values());
   const unmatched = [...commands];
   const kept = turns.filter(turn => {
     if (turn.role !== 'user') return true;
     if (ids.has(turn.clientSubmissionId)) return false;
+    if (echoes.has(turn)) return false;
+    // CodeAgent slash echoes use only the FIFO pairing above, never a second matcher.
+    if (opts.codeagent === true && commandName(turn.text)) return true;
     // Legacy PTY transcripts have no submission IDs. Match each echo once by
     // exact text and nearby provider timestamp; repeated inputs remain separate.
     if (!turn.clientSubmissionId && turn.ts) {
@@ -60,8 +113,15 @@ function mergeCommandTurns(turns, commands, opts = {}) {
     }
     return true;
   });
-  const merged = [...kept, ...commands]
-    .sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  const order = new Map(turns.map((turn, index) => [turn, index]));
+  const projected = commands.map((command, index) => {
+    const echo = pairs.get(command);
+    const turn = echo ? { ...command, ts: echo.ts } : command;
+    order.set(turn, echo ? order.get(echo) : turns.length + index);
+    return turn;
+  });
+  const merged = [...kept, ...projected]
+    .sort((a, b) => (a.ts || 0) - (b.ts || 0) || (pairs.size ? order.get(a) - order.get(b) : 0));
   const limit = opts.limit === undefined ? 50 : opts.limit;
   return Number.isFinite(limit) && limit >= 0
     ? (opts.fromTail === false ? merged.slice(0, limit) : limit === 0 ? [] : merged.slice(-limit)) : merged;

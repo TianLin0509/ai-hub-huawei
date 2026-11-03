@@ -99,6 +99,7 @@
 .session-turn-speed { flex: 0 1 auto; max-width: 260px; overflow: hidden; text-overflow: ellipsis; -webkit-app-region: no-drag; }
 .session-turn-speed[hidden] { display: none; }
 .turn-speed { flex-shrink: 1; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.turn-model-load { color: var(--fg-muted); font-size: 11px; white-space: nowrap; }
 @container hub-card-view (max-width: 520px) {
   .turn-speed-detail, .turn-speed-unit { display: none; }
   .turn-speed { font-size: 10px; }

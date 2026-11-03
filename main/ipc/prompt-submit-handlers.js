@@ -214,6 +214,7 @@ function registerPromptSubmitIpc(ipcMain, deps) {
     if (!sessionId || !text) return { ok: false, error: 'bad-request' };
     const kind = resolveKind(sessionId);
     if (!kind) return { ok: false, error: 'no-session' };
+    const originalPrompt = text;
     // Host-provided context preparation happens before receipt fingerprints and
     // before the first PTY write, for both the UI and assistant tool callers.
     // Local commands retain their native meaning and do not receive context.
@@ -263,6 +264,10 @@ function registerPromptSubmitIpc(ipcMain, deps) {
     latestRequestBySid.set(sessionId, clientSubmissionId);
     lastPromptBySid.set(sessionId, text);
     return enqueue(sessionId, async () => {
+      if (require('../../core/ai-kinds').isCodeAgentKind(kind)) {
+        const input = await groupChatWatcher.codeAgentInputAction(sessionId, 'check', { discardToken: request.codeagentDiscardToken });
+        if (!input.ok) return input;
+      }
       const native = sessionManager.getNativeCodex?.(sessionId);
       try {
         await native?.prepareForNewPrompt?.();
@@ -285,6 +290,8 @@ function registerPromptSubmitIpc(ipcMain, deps) {
         const result = await sendWithMemory(request, sessionId, text, kind, {
           requireReady: request.waitForCliReady === true || sessionManager.getSession(sessionId)?.purpose === 'hub-assistant', submissionReceipt: receipt,
           clientSubmissionId, attachments:request.attachments,
+          originalPrompt, codeagentSkill: request.codeagentSkill,
+          codeagentInteractiveCommand: request.codeagentInteractiveCommand === true && require('../../core/ai-kinds').isCodeAgentKind(kind) && /^\s*\/\S+/.test(text),
           ...(clearObserver ? { localCommandObserver: clearObserver } : {}),
         });
         if (receipt) receipts.finish(receipt, result || { ok: false });
@@ -310,8 +317,11 @@ function registerPromptSubmitIpc(ipcMain, deps) {
           ...(typeof result.commandOutput === 'string' ? { commandOutput: result.commandOutput } : {}),
           ...(result.message ? {message:result.message} : {}),
           ...(result.error ? {error:result.error} : {}),
+          ...(result.code ? {code:result.code} : {}),
+          ...(result.input ? {input:result.input} : {}),
           // 明确没执行（例如 Codex 收尾中拒绝斜杠命令）：渲染层据此退回原文、不亮「补发」。
           ...(result.notSent ? {notSent:true} : {}),
+          ...(result.stopped ? {stopped:true} : {}),
           // 千问 / GLM 超时报 {ok:false,unconfirmed:true}：结果未知，不能被渲染层当成失败。
           ...(result.unconfirmed ? {unconfirmed:true} : {}),
           ...(result.threadId ? {threadId:result.threadId,turnId:result.turnId} : {}),
@@ -350,6 +360,10 @@ function registerPromptSubmitIpc(ipcMain, deps) {
   const assistantSubmissions = new Set();
   const submitPrompt = async (event, request = {}) => {
     const session = sessionManager.getSession(request.sessionId);
+    if (require('../../core/ai-kinds').isCodeAgentKind(session?.kind)) {
+      const input = await groupChatWatcher.codeAgentInputAction(request.sessionId, 'check', { discardToken: request.codeagentDiscardToken });
+      if (!input.ok) return input;
+    }
     const native = session && (['codex-app-server', 'claude-stream-json', 'acp'].includes(session.runtimeBackend)
       || sessionManager.getNativeSession?.(request.sessionId) || sessionManager.getNativeCodex?.(request.sessionId)
       || sessionManager.getNativeClaude?.(request.sessionId));
@@ -370,7 +384,8 @@ function registerPromptSubmitIpc(ipcMain, deps) {
     try {
       store = deps.commandTranscriptStore || require('../../core/command-transcript-store').commandTranscriptStore();
       const record = store.begin(request.sessionId, id, request.text);
-      if (record.duplicate) return record.result || { ok: false, sendStatus: 'stuck', message: '命令提交结果待确认，未重复执行' };
+      if (record.duplicate && !(require('../../core/ai-kinds').isCodeAgentKind(session.kind)
+          && record.result?.code === 'codeagent-input-residual' && request.codeagentDiscardToken)) return record.result || { ok: false, sendStatus: 'stuck', message: '命令提交结果待确认，未重复执行' };
     } catch (error) { return { ok: false, error: 'command-history-failed', message: '命令未发送：' + error.message }; }
     const notify = () => {
       try { sendToRenderer('session:command-updated', { sessionId: request.sessionId }); }
@@ -380,12 +395,32 @@ function registerPromptSubmitIpc(ipcMain, deps) {
     let result;
     try { result = await sendPrompt(event, { ...request, clientSubmissionId: id }); }
     catch (error) { result = { ok: false, error: 'command-failed', message: error.message }; }
-    try { store.finish(request.sessionId, id, result); }
+    try {
+      const storedResult = { ...result };
+      if (require('../../core/ai-kinds').isCodeAgentKind(session.kind)) delete storedResult.input;
+      store.finish(request.sessionId, id, storedResult);
+    }
     catch (error) { result = { ...result, ok: false, message: '命令已提交，但结果保存失败；请核对后再操作：' + error.message }; }
     notify();
     return result;
   };
   ipcMain.handle('session:send-prompt', submitPrompt);
+  ipcMain.handle('codeagent:stop-diagnostic', (_event, request = {}) => {
+    require('../../core/codeagent-stop-log').recordCodeAgentStop({
+      at: new Date().toISOString(), stopId: require('node:crypto').randomUUID(), sessionId: request.sessionId,
+      event: 'rejected', branch: request.branch, rendererState: request.rendererState,
+      mainState: require('../../core/session-runtime-truth').getSessionRuntimeTruth(sessionManager.getSession(request.sessionId)).state,
+    });
+    return { ok: true };
+  });
+  for (const action of ['stop', 'inspect', 'clear']) {
+    ipcMain.handle('codeagent:input-' + action, async (_event, request = {}) => {
+      try { return await groupChatWatcher.codeAgentInputAction(request.sessionId, action, {
+        token: request.token, branch: request.branch, rendererState: request.rendererState,
+      }); }
+      catch { return { ok: false, message: '无法操作 CodeAgent 终端输入，请到终端确认' }; }
+    });
+  }
 
   // PTY Claude 的推理档：经同一提交闭环发 /effort，以 transcript 确认后才落到会话元数据。
   ipcMain.handle('claude-pty:set-effort', async (_event, request = {}) => {

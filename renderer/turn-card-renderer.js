@@ -14,6 +14,7 @@ const { renderImageAttachments, createCardDetailControls } = require('./card-det
 const { parseCardMarkdown } = require('./card-markdown.js');
 const { chatAvatarSrc, USER_AVATAR_SRC } = require('./chat-avatar');
 const { isCodeAgentKind } = require('../core/ai-kinds');
+const { currentTurnModelLoad, patchTurnModelLoad } = require('./codeagent-turn-load');
 
 // 回合没带 kind 时用会话的 kind。CodeAgent 落盘是 Claude 格式，解析出的回合带 kind:'claude'，
 // 头像和名字仍以会话本身（CodeAgent）为准。
@@ -57,6 +58,35 @@ function createTurnCardRenderer(options = {}) {
   const getSessionContext = typeof options.getSessionContext === 'function' ? options.getSessionContext : () => null;
   const onTurnPresentation = typeof options.onTurnPresentation === 'function' ? options.onTurnPresentation : null;
   const updateStreamingIndicator = typeof options.updateStreamingIndicator === 'function' ? options.updateStreamingIndicator : null;
+  const getCodeAgentUsage = options.getCodeAgentUsage || (key => win.codeagentQuotaBar?.usageFor(key));
+  const modelLoadNow = options.now || Date.now;
+  const setModelLoadTimeout = options.setTimeout || setTimeout;
+  const clearModelLoadTimeout = options.clearTimeout || clearTimeout;
+  let modelLoadTimer = null, modelLoadQueued = false, disposed = false;
+
+  function refreshModelLoads() {
+    clearModelLoadTimeout(modelLoadTimer); modelLoadTimer = null;
+    if (disposed) return;
+    const container = overlay();
+    const cards = Array.from(container?.querySelectorAll(':scope > .turn-card') || []);
+    const latest = cards.at(-1);
+    for (const card of cards) if (card !== latest) patchTurnModelLoad(card, null, doc);
+    if (!latest) return;
+    const session = getSessionContext(latest.dataset.sessionId);
+    const turn = state._sessionTurns?.get(latest.dataset.turnId);
+    const hint = currentTurnModelLoad({ session, turn, isLatest: true,
+      entry: isCodeAgentKind(session?.kind) ? getCodeAgentUsage(session.codeagentPoolAccount || 'personal') : null, now: modelLoadNow() });
+    patchTurnModelLoad(latest, hint, doc);
+    if (hint) {
+      modelLoadTimer = setModelLoadTimeout(refreshModelLoads, Math.max(1, hint.expiresAt - modelLoadNow() + 1));
+      modelLoadTimer?.unref?.();
+    }
+  }
+  function scheduleModelLoads() {
+    if (modelLoadQueued || disposed) return;
+    modelLoadQueued = true;
+    queueMicrotask(() => { modelLoadQueued = false; refreshModelLoads(); });
+  }
 
   function prepareTurnForRender(sessionId, turn, opts = {}) {
     const session = opts.session || getSessionContext(sessionId) || null;
@@ -426,6 +456,7 @@ function rerenderTurn(turnId) {
   if (newCard) {
     patchTurnCardInPlace(card, newCard, card.dataset.sessionId || getActiveSessionId());
     publishTurnPresentation(card.dataset.sessionId || getActiveSessionId(), turn);
+    scheduleModelLoads();
   }
 }
 
@@ -636,6 +667,37 @@ let _codeFoldThreshold = 30;
 const _foldedCodesState = new Map();
 const _bodyFoldState = new Map(); // turnId -> true(expanded) / false(folded)
 const _turnRenderSigs = new Map(); // turnId -> compact content signature
+const reconciledUserIds = new Set();
+
+function reconcileOptimisticUserCards(sessionId, turns, { container = overlay(), kind } = {}) {
+  if (!container) return;
+  const sid = String(sessionId || '');
+  const codeagent = isCodeAgentKind(kind || getSessionContext(sessionId)?.kind);
+  const normalize = require('../core/conversation-display').userTextIdentity;
+  for (const turn of turns) {
+    if (turn?.role !== 'user' || !turn.id) continue;
+    const key = JSON.stringify([sid, turn.id]);
+    if (reconciledUserIds.has(key)) continue;
+    reconciledUserIds.add(key);
+    if (reconciledUserIds.size > 2000) reconciledUserIds.delete(reconciledUserIds.values().next().value);
+    const raw = String(turn.text || '').trim();
+    if (!raw) continue;
+    const text = normalize(raw);
+    const candidates = Array.from(container.querySelectorAll('.turn-card.user[data-optimistic="true"]')).filter(card => {
+      if (card.dataset.sessionId !== sid) return false;
+      const receipt = card.dataset.clientSubmissionId;
+      if (turn.clientSubmissionId || receipt) {
+        if (turn.clientSubmissionId && receipt) return turn.clientSubmissionId === receipt;
+        if (!codeagent) return false;
+      }
+      const sentAt = Number(card.dataset.submittedAt);
+      return (!sentAt || Number(turn.ts) >= sentAt - 1000) && normalize(card.dataset.optimisticText) === text;
+    });
+    // 一次发送的同回执副本一起移除；没有回执时仍只认领一张，不能按相同文字合并两次发送。
+    const first = candidates[0], receipt = first?.dataset.clientSubmissionId;
+    for (const card of candidates) if (card === first || receipt && card.dataset.clientSubmissionId === receipt) card.remove();
+  }
+}
 
 function postProcessCardMath(cardEl) {
   if (!cardEl || !renderMathInElement) return false;
@@ -869,6 +931,7 @@ function mountTurnCard(container, turn) {
   if (turn.id) state._sessionTurns.set(turn.id, turn);
   _postProcessTurnCard(cardEl, getActiveSessionId());
   publishTurnPresentation(getActiveSessionId(), turn);
+  scheduleModelLoads();
   return cardEl;
 }
 if (!options.root) win._mountTurnCard = mountTurnCard;
@@ -918,6 +981,11 @@ function _isCardOverlayAtBottom(el) {
 function mountOptimisticUserCard(sessionId, text, kind, options = {}) {
   const container = overlay();
   if (!container) return null;
+  if (options.clientSubmissionId) {
+    const existing = Array.from(container.querySelectorAll('.turn-card.user[data-optimistic="true"]'))
+      .find(card => card.dataset.sessionId === String(sessionId || '') && card.dataset.clientSubmissionId === options.clientSubmissionId);
+    if (existing) return existing;
+  }
   // 隐藏 placeholder 而非删除 — 后续 turn-complete-event / applyViewMode
   // 仍需通过 _cardHistoryHydratedSid 判是否需要全量重载，但保留 DOM 节点做 fallback
   const placeholder = container.querySelector('.msg-overlay-placeholder');
@@ -949,6 +1017,7 @@ function mountOptimisticUserCard(sessionId, text, kind, options = {}) {
   const streamingTail = container.querySelector(':scope > .streaming-indicator');
   if (streamingTail) container.insertBefore(cardEl, streamingTail);
   else container.appendChild(cardEl);
+  scheduleModelLoads();
   postProcessCardMath(cardEl);
   if (updateStreamingIndicator) updateStreamingIndicator(sessionId);
 
@@ -1038,23 +1107,8 @@ function mountSessionTurnCard(sessionId, turn, opts = {}) {
 
   // optimistic user-card dedup：真 user turn 从 transcript 进来时，扫现存
   //   optimistic 占位卡，文本相同则删掉（让真卡片接替）。trim 比较两端容差。
-  if (turn.role === 'user' && !container.querySelector(`.turn-card[data-turn-id="${cssEscape(turn.id)}"]`)) {
-    const sidStr = String(sessionId || '');
-    const realText = (turn.text || '').trim();
-    if (realText) {
-      const opts2 = container.querySelectorAll('.turn-card.user[data-optimistic="true"]');
-      const normalize = require('../core/conversation-display').userTextIdentity;
-      const candidates = Array.from(opts2).filter(opt => {
-        if (opt.dataset.sessionId !== sidStr) return false;
-        if (turn.clientSubmissionId || opt.dataset.clientSubmissionId) return turn.clientSubmissionId === opt.dataset.clientSubmissionId;
-        const sentAt = Number(opt.dataset.submittedAt);
-        return (!sentAt || (Number(turn.ts) >= sentAt - 1000))
-          && normalize(opt.dataset.optimisticText) === normalize(realText);
-      });
-      // One receipt claims one placeholder, never every repeated prompt.
-      if (candidates[0]) candidates[0].remove();
-    }
-  }
+  if (turn.role === 'user' && !opts.deferOptimisticReconcile && !container.querySelector(`.turn-card[data-turn-id="${cssEscape(turn.id)}"]`))
+    reconcileOptimisticUserCards(sessionId, [turn], { container, kind: opts.kind });
 
   // provisional assistant-card dedup：turn-complete 时 transcript 常常还没落盘，
   //   renderer 会先用合成 id（turn-<时间戳>）挂一张兜底卡。随后的 backfill 用真实
@@ -1090,6 +1144,8 @@ function mountSessionTurnCard(sessionId, turn, opts = {}) {
     if (prevSig === nextSig) {
       state._sessionTurns.set(turn.id, turnForRender2);
       _turnRenderSigs.set(turn.id, nextSig);
+      // 负载不参与正文签名；相同回答也要更新这个独立节点。
+      scheduleModelLoads();
       publishTurnPresentation(sessionId, turnForRender2);
       if (typeof updateStreamingIndicator === 'function') updateStreamingIndicator(sessionId);
       return existing;
@@ -1108,6 +1164,7 @@ function mountSessionTurnCard(sessionId, turn, opts = {}) {
     if (!patchedCard) return null;
     state._sessionTurns.set(turn.id, turnForRender2);
     _turnRenderSigs.set(turn.id, nextSig);
+    scheduleModelLoads();
     publishTurnPresentation(sessionId, turnForRender2);
     if (patchedCard.classList?.contains?.('bridge-msg')) bridgeThreads.schedule(container);
     return patchedCard;
@@ -1161,6 +1218,7 @@ function mountSessionTurnCard(sessionId, turn, opts = {}) {
   // Use turnForRender (kind merged) so rerenderTurn won't lose kind on fold/unfold
   state._sessionTurns.set(turn.id, turnForRender);
   _turnRenderSigs.set(turn.id, turnRenderSignature(turnForRender));
+  scheduleModelLoads();
   publishTurnPresentation(sessionId, turnForRender);
 
   // 9. autoScroll — 2026-05-06 maintainer scroll-respect-user:仅当用户原本在底部时才滚
@@ -1262,7 +1320,8 @@ listen('click', (e) => {
       postProcessCardMath(root);
       return root;
     },
-    dispose() { for (const [type, handler] of listeners) root.removeEventListener(type, handler); detailControls.dispose(); },
+    dispose() { disposed = true; clearModelLoadTimeout(modelLoadTimer); for (const [type, handler] of listeners) root.removeEventListener(type, handler); detailControls.dispose(); reconciledUserIds.clear(); },
+    refreshModelLoads,
     renderToolCluster,
     confirmCardResend,
     renderTurnCard,
@@ -1274,6 +1333,7 @@ listen('click', (e) => {
     mountTurnCard,
     isCardOverlayAtBottom: _isCardOverlayAtBottom,
     mountOptimisticUserCard,
+    reconcileOptimisticUserCards,
     turnRenderSignature,
     mountSessionTurnCard,
     setCodeFoldThreshold,

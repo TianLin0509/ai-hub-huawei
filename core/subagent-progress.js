@@ -11,6 +11,7 @@
 // 本文件是纯解析 + 带缓存的读取器（fs 可注入），主进程轮询见 main/subagent-progress-service.js。
 const fs = require('node:fs');
 const path = require('node:path');
+const { skillCommandText } = require('./synthetic-user-filter');
 
 const MAIN_TAIL_BYTES = 256 * 1024;
 const SUB_TAIL_BYTES = 64 * 1024;
@@ -43,7 +44,7 @@ function tsOf(record) {
 }
 // 用户真正发出的一句话（这一轮的起点）。工具结果、系统注入（isMeta）、后台任务完成通知都不算。
 function isHumanPrompt(record) {
-  if (!record || record.type !== 'user' || record.isMeta || record.isSidechain) return false;
+  if (!record || record.type !== 'user' || record.isSidechain) return false;
   const c = record.message && record.message.content;
   let text = '';
   if (typeof c === 'string') text = c;
@@ -52,6 +53,9 @@ function isHumanPrompt(record) {
     text = c.filter(b => b && b.type === 'text').map(b => b.text || '').join('');
   }
   text = text.trim();
+  const command = skillCommandText(text);
+  if (record.isMeta && command === null) return false;
+  text = command ?? text;
   if (!text) return false;
   return !/^<(task-notification|local-command|command-name|system-reminder)/.test(text);
 }

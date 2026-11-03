@@ -14,6 +14,7 @@ const os = require('node:os');
 const { spawn } = require('node:child_process');
 const { parseProgressCard, classifyCard, STALE_MS } = require('../core/progress-card');
 const { getSessionRuntimeTruth } = require('../core/session-runtime-truth');
+const { skillCommandText } = require('../core/synthetic-user-filter');
 
 const POLL_MS = 15000;
 const CHUNK_BYTES = 1024 * 1024;          // 每次轮询每个会话最多读这么多新记录，长记录分几轮读完
@@ -72,7 +73,9 @@ function recentDialogue(text, { maxItems = 30, maxChars = 500 } = {}) {
     if (typeof content === 'string') parts.push(content);
     else if (Array.isArray(content)) for (const c of content) if (c && typeof c.text === 'string' && /text/.test(c.type || 'text')) parts.push(c.text);
     if (typeof msg.message === 'string') parts.push(msg.message);
-    const t = parts.join('\n').replace(/\s+/g, ' ').trim();
+    const raw = parts.join('\n'), command = rec.type === 'user' ? skillCommandText(raw) : null;
+    if (rec.type === 'user' && rec.isMeta && command === null) continue;
+    const t = (command ?? raw).replace(/\s+/g, ' ').trim();
     if (!t || /^<(?:system-reminder|command-|local-command)/.test(t)) continue;
     const who = /user/.test(role) ? '用户' : /assistant|agent/.test(role) ? 'AI' : null;
     if (who) items.push(`${who}：${t.slice(0, maxChars)}`);
@@ -90,10 +93,11 @@ function humanMessageTimes(text) {
     if (!line.includes('"user') || !line.includes('"timestamp"')) continue;
     let rec; try { rec = JSON.parse(line); } catch { continue; }
     let human = false;
-    if (rec.type === 'user' && rec.message && !rec.isMeta && !rec.isSidechain) {
+    if (rec.type === 'user' && rec.message && !rec.isSidechain) {
       const c = rec.message.content;
-      const text = typeof c === 'string' ? c : Array.isArray(c) && !c.some(x => x && x.type === 'tool_result') ? c.filter(x => x && x.type === 'text').map(x => x.text).join('\n') : '';
-      human = Boolean(text) && (rec.origin && rec.origin.kind ? rec.origin.kind === 'human' : !INJECTED.test(text));
+      const raw = typeof c === 'string' ? c : Array.isArray(c) && !c.some(x => x && x.type === 'tool_result') ? c.filter(x => x && x.type === 'text').map(x => x.text).join('\n') : '';
+      const command = skillCommandText(raw), text = command ?? raw;
+      human = (!rec.isMeta || command !== null) && Boolean(text) && (rec.origin && rec.origin.kind ? rec.origin.kind === 'human' : !INJECTED.test(text));
     } else if (rec.type === 'response_item' && rec.payload && rec.payload.type === 'message' && rec.payload.role === 'user') {
       const text = (rec.payload.content || []).filter(x => x && typeof x.text === 'string').map(x => x.text).join('\n');
       human = Boolean(text.trim()) && !INJECTED.test(text);

@@ -32,7 +32,7 @@ const { createCodexNativeControls } = require('./codex-native-controls.js');
 const pasteChips = require('./composer-paste-chips.js');
 const { createCodexBackstage } = require('./codex-backstage.js');
 const path = require('path');
-const { isClaudeFamily, isAiKind, isPasteSensitive, isCodexSessionKind: isCodexKind, isKimiCliKind } = require('../core/ai-kinds.js');
+const { isClaudeFamily, isAiKind, isPasteSensitive, isCodexSessionKind: isCodexKind, isKimiCliKind, isCodeAgentKind } = require('../core/ai-kinds.js');
 const {
   buildSessionResumeMeta,
   claudeSessionAccountMeta,
@@ -615,14 +615,23 @@ function attachNativeDraft(sessionId, inputBox) {
 function restoreComposerText(sessionId, inputBox, text) {
   if (readContenteditablePlainText(inputBox) === text) return;
   const raw = rawComposerDrafts.get(sessionId);
+  let skill = null;
+  try { skill = require('./composer-codeagent-skills').loadSkillDraft(localStorage, sessionId, text, sessions.get(sessionId)); }
+  catch (error) { showToast('技能草稿读取失败：' + error.message, 'error'); }
   // 没有原始记录（例如重启后）且草稿够大时，整段收成一个块，别把几千行铺回 DOM。
-  pasteChips.renderComposerValue(inputBox, raw && raw.text === text ? raw.raw : text, { document });
+  let value = raw && raw.text === text ? raw.raw : text;
+  if (skill) value = value.slice(('/' + skill.name).length).replace(/^ /, '');
+  pasteChips.renderComposerValue(inputBox, value, { document });
+  if (skill) require('./composer-codeagent-skills').insertSkillTag(inputBox, skill, { document, window, session: sessions.get(sessionId), focus: false,
+    onChange: () => { saveFloatingInputDraft(sessionId, inputBox); inputBox.dispatchEvent(new Event('input', { bubbles: true })); } });
 }
 
 function saveFloatingInputDraft(sessionId, inputBox) {
   if (!sessionId || !inputBox) return;
   const raw = readContenteditableRawText(inputBox);
   const text = pasteChips.expandPasteMarkers(raw);
+  try { require('./composer-codeagent-skills').saveSkillDraft(localStorage, sessionId, inputBox, text, sessions.get(sessionId)); }
+  catch (error) { showToast('技能草稿保存失败：' + error.message, 'error'); }
   if (pasteChips.hasPasteMarkers(raw)) rawComposerDrafts.set(sessionId, { raw, text });
   else rawComposerDrafts.delete(sessionId);
   if (text) floatingInputDrafts.set(sessionId, text);
@@ -632,6 +641,10 @@ function saveFloatingInputDraft(sessionId, inputBox) {
 }
 
 function clearFloatingInputDraft(sessionId) {
+  if (sessionId) {
+    try { require('./composer-codeagent-skills').clearSkillDraft(localStorage, sessionId); }
+    catch (error) { showToast('技能草稿清理失败：' + error.message, 'error'); }
+  }
   if (sessionId) floatingInputDrafts.delete(sessionId);
   if (sessionId) rawComposerDrafts.delete(sessionId);
   nativeDraftControllers.get(sessionId)?.change('');
@@ -1386,7 +1399,7 @@ async function selectMeeting(meetingId, opts = {}) {
   if (window.__studyHide) window.__studyHide(); // 2026-09-01 学习面板互斥
   if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
-  window.__rulesHide?.(); // 2026-10-12 规则面板互斥
+  window.__rulesHide?.(); // 独立页面互斥
   if (window.__ranHide) window.__ranHide(); // 2026-09-04 RAN 工作台面板互斥
   setShellNavActive(null);
   if (emptyStateEl) emptyStateEl.style.display = 'none';
@@ -3138,7 +3151,7 @@ async function loadSessionHistoryToOverlayUnserialized(sessionId, opts = {}) {
         && window._sessionTurns.get(turn.id) !== turnsBeforeMount.get(turn.id)) continue;
     const existing = staging && container.querySelector(`:scope > .turn-card[data-turn-id="${CSS.escape(turn.id)}"]`);
     const cardEl = mountSessionTurnCard(sessionId, turn, { kind: mountKind, container: existing ? container : staging || container,
-      before: staging ? null : insertBeforeById.get(turn.id) || null });
+      before: staging ? null : insertBeforeById.get(turn.id) || null, deferOptimisticReconcile: !!staging });
     if (cardEl) {
       mounted++;
       lastCardEl = cardEl;
@@ -3160,6 +3173,8 @@ async function loadSessionHistoryToOverlayUnserialized(sessionId, opts = {}) {
     const fragment = document.createDocumentFragment(); fragment.append(...staging.children);
     container.insertBefore(fragment, container.querySelector(':scope > .turn-card,:scope > .streaming-indicator'));
     removeLoadingPlaceholder();
+    // staging 内看不到主界面的临时卡；提交成功后再认领，concurrentExtraCards 就不会把它留回去。
+    turnCardRenderer.reconcileOptimisticUserCards(sessionId, turns, { container, kind: mountKind });
   }
   if(nextPageState)Object.assign(pageState,nextPageState);
   cardHistoryPager.render(sessionId, container);
@@ -4096,6 +4111,7 @@ function _updateStreamingIndicator(sessionId) {
 // remember=false 用于「按会话恢复视图」这种回放场景：那不是用户在表达偏好，
 // 不该反过来覆盖记忆。用户点切换按钮走默认的 remember=true。
 function applyViewMode(mode, { remember = true, skipPreviousCardCapture = false } = {}) {
+  if (mode !== 'card') for (const bar of document.querySelectorAll('.floating-input-bar')) bar._codeagentSkills?.close();
   sessionSplit?.leaveBackstage();
   // A native Claude session has a read-only backstage like Codex: engine output
   // is delivered to its terminal, input still goes through the composer
@@ -4142,6 +4158,9 @@ function applyViewMode(mode, { remember = true, skipPreviousCardCapture = false 
   // 主动 trigger load — 用 _cardHistoryHydratedSid 状态标记而非 DOM 检测，
   // 因为 turn-complete-event 可能已在 overlay 留了单张卡但历史并未 hydrate。
   if (mode === 'card' && overlay && typeof loadSessionHistoryToOverlay === 'function' && activeSessionId && !skipPreviousCardCapture) {
+    if (previousView !== 'card') for (const bar of document.querySelectorAll('.floating-input-bar')) {
+      if (bar.dataset.sessionId === activeSessionId) void bar._codeagentSkills?.refresh();
+    }
     if (_cardHistoryHydratedSid !== activeSessionId || previousView !== 'card') {
       // PTY output does not update the hidden card DOM. Refresh on return,
       // preserving existing cards and the user's scroll intent.
@@ -4686,6 +4705,34 @@ function composerSupportedEfforts(session) {
   return efforts;
 }
 
+function openCodeAgentSkillsMenu(sessionId, pane = {}, command = '/skills') {
+  const options = {
+    session: sessions.get(sessionId), state: getSessionRuntimeTruth(sessions.get(sessionId)).state,
+    openTerminal: async () => {
+      if (pane.openTerminal) pane.openTerminal();
+      else { if (activeSessionId !== sessionId) await selectSession(sessionId); applyViewMode('pty'); }
+    },
+    send: text => {
+      const request = { sessionId, text, clientSubmissionId: require('node:crypto').randomUUID(), waitForCliReady: true, codeagentInteractiveCommand: true };
+      const submit = async codeagentDiscardToken => {
+        const result = await ipcRenderer.invoke('session:send-prompt', { ...request, ...(codeagentDiscardToken ? { codeagentDiscardToken } : {}) });
+        if (result?.code === 'codeagent-input-residual') {
+          for (const bar of document.querySelectorAll('.floating-input-bar')) if (bar.dataset.sessionId === sessionId) bar._codeagentInputRecovery?.show(result, submit);
+        }
+        else if (codeagentDiscardToken && result?.ok) {
+          for (const bar of document.querySelectorAll('.floating-input-bar')) if (bar.dataset.sessionId === sessionId) bar._codeagentInputRecovery?.submitted(text);
+        }
+        return result;
+      };
+      return submit();
+    },
+    writePrefix: () => ipcRenderer.invoke('codeagent:commands-open', { sessionId }),
+    notify: showToast,
+  };
+  const skills = require('./composer-codeagent-skills');
+  return command === '/' ? skills.openCommandList(options) : command === '/skills' ? skills.openSkillsMenu(options) : skills.openTerminalCommand({ ...options, text: command });
+}
+
 function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   const bar = document.createElement('div');
   bar.className = 'floating-input-bar';
@@ -4724,6 +4771,12 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   inputBox.className = 'floating-input-box';
   inputBox.contentEditable = 'true';
   inputBox.setAttribute('data-placeholder', '输入消息…');
+  if (!floatingInputDrafts.has(sessionId)) {
+    try {
+      const draft = require('./composer-codeagent-skills').readSkillDraft(localStorage, sessionId, sessions.get(sessionId));
+      if (draft) floatingInputDrafts.set(sessionId, draft.text);
+    } catch (error) { showToast('技能草稿读取失败：' + error.message, 'error'); }
+  }
   if ((isNativeSession(sessions.get(sessionId)) || isPtyAgentSession(sessions.get(sessionId))) && !floatingInputDrafts.has(sessionId)) {
     try { const saved=localStorage.getItem('codex-native-draft:'+sessionId);if(saved)floatingInputDrafts.set(sessionId,saved); }
     catch(error){console.warn('[codex-draft] read failed:',error.message);}
@@ -4737,6 +4790,22 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   if (floatingInputDrafts.has(sessionId)) {
     restoreComposerText(sessionId, inputBox, floatingInputDrafts.get(sessionId));
   }
+  let recoveryHost = bar;
+  function ensureCodeAgentInputRecovery() {
+    if (bar._codeagentInputRecovery) return bar._codeagentInputRecovery;
+    if (!isCodeAgentKind(sessions.get(sessionId)?.kind)) return null;
+    const recovery = require('./composer-codeagent-input');
+    bar._codeagentInputRecovery = recovery.createCodeAgentInputRecovery({
+      document, host: recoveryHost, notify: showToast,
+      invoke: (channel, payload) => ipcRenderer.invoke(channel, { ...payload, sessionId }),
+      readDraft: () => require('./composer-codeagent-skills').skillPrompt(inputBox, readContenteditablePlainText(inputBox), sessions.get(sessionId)),
+      restoreDraft: value => recovery.restoreRecoveredPrompt(inputBox, value, { document, window, session: sessions.get(sessionId), onChange: () => saveFloatingInputDraft(sessionId, inputBox) }),
+      isRunning: () => recovery.codeAgentCanStop(sessions.get(sessionId), getSessionRuntimeTruth(sessions.get(sessionId)).state),
+      confirmReplace: message => window.confirm(message),
+    });
+    return bar._codeagentInputRecovery;
+  }
+  ensureCodeAgentInputRecovery();
 
   const bridgeToolbar = document.createElement('div');
   bridgeToolbar.className = 'fi-bridge-toolbar';
@@ -4922,6 +4991,31 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       return;
     }
     const stopTarget = sessions.get(sessionId);
+    if (isCodeAgentKind(stopTarget?.kind) && stopTarget.agentRuntime === 'pty') {
+      const rendererState = getSessionRuntimeTruth(stopTarget).state;
+      if (rendererState !== RUNTIME_RUNNING) {
+        void ipcRenderer.invoke?.('codeagent:stop-diagnostic', { sessionId, rendererState, branch: bar._codeagentInputRecovery ? 'existing' : 'direct' })?.catch(() => {});
+        showToast('回答已结束', 'info'); return;
+      }
+      stopBtn.disabled = true; stopBtn.dataset.stopping = 'true'; stopBtn.textContent = '正在停止…';
+      try {
+        const existed = !!bar._codeagentInputRecovery;
+        let recovery = bar._codeagentInputRecovery;
+        if (!recovery) {
+          try { recovery = ensureCodeAgentInputRecovery(); }
+          catch { /* A missing recovery panel must never swallow Stop. */ }
+        }
+        const diagnostic = { branch: existed ? 'existing' : recovery ? 'created' : 'direct', rendererState: RUNTIME_RUNNING };
+        if (recovery) await recovery.stop(diagnostic);
+        else {
+          const result = await ipcRenderer.invoke('codeagent:input-stop', { sessionId, ...diagnostic });
+          showToast(result?.ok ? '停止指令已发送，请到终端核对未发送内容' : result?.message || '停止失败，请到终端确认', result?.ok ? 'info' : 'warning');
+        }
+      }
+      catch { showToast('停止失败，请到终端确认', 'warning'); }
+      finally { stopBtn.disabled = false; delete stopBtn.dataset.stopping; stopBtn.textContent = '停止'; }
+      return;
+    }
     if (stopTarget?.agentRuntime === 'pty' && (isClaudeFamily(stopTarget.kind) || isCodexKind(stopTarget.kind) || require('../core/acp-profiles').isAcpKind(stopTarget.kind))) {
       // Ctrl+C 连点会让 CLI 退出；PTY Claude / Codex 用 Esc，只在运行时发一次（见 pty-interrupt.js）。
       require('./pty-interrupt').sendPtyAgentInterrupt(stopTarget, { state: getSessionRuntimeTruth(stopTarget).state,
@@ -4961,6 +5055,16 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   const tuningControls = document.createElement('div');
   tuningControls.className = 'composer-tuning-controls';
   tuningControls.append(attachBtn, secondaryActions, modelChip, thinkingChip, speedChip);
+  const codeagentSkills = require('./composer-codeagent-skills').mountCodeAgentSkillPicker({
+    document, window, input: inputBox, host: tuningControls, before: speedChip, sessionId,
+    getSession: () => sessions.get(sessionId), ipcRenderer,
+    readText: () => readContenteditablePlainText(inputBox), replaceText: text => replaceContenteditableText(inputBox, text),
+    saveDraft: () => saveFloatingInputDraft(sessionId, inputBox),
+    openMenu: () => openCodeAgentSkillsMenu(sessionId, pane),
+    openCommands: () => openCodeAgentSkillsMenu(sessionId, pane, '/'),
+    openCommand: command => openCodeAgentSkillsMenu(sessionId, pane, command), storage: localStorage,
+  });
+  bar._codeagentSkills = codeagentSkills;
   const claudeAccountChip = require('./composer-claude-account').mountClaudeAccountChip({
     document, tuningControls, sessionId, getSession: () => sessions.get(sessionId), ipcRenderer,
   });
@@ -5064,6 +5168,8 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     },
   });
   contentStack.append(nativeControls.element, ptyAttention.element, composer);
+  if (bar._codeagentInputRecovery) contentStack.insertBefore(bar._codeagentInputRecovery.panel, composer);
+  recoveryHost = contentStack;
   bar.append(contentStack);
   bar.classList.add('visible');
   require('./composer-collapse').mountComposerCollapse({ document, host: bar, before: sendBtn, input: inputBox,
@@ -5150,12 +5256,15 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     // A quota wait is not a running turn, so composerStopAllowed (which demands
     // authoritative evidence of work in flight) must not gate cancelling it.
     const quotaCancel = status.stopIntent === 'quota-cancel' && status.canStop;
-    const canStop = quotaCancel || (status.canStop && composerStopAllowed(session, status.runtime));
+    const codeagentStop = require('./composer-codeagent-input').codeAgentCanStop(session, getSessionRuntimeTruth(session).state);
+    const canStop = isCodeAgentKind(session?.kind) ? codeagentStop : quotaCancel || (status.canStop && composerStopAllowed(session, status.runtime));
+    stopBtn.classList.toggle('codeagent-stop', isCodeAgentKind(session?.kind));
+    if (isCodeAgentKind(session?.kind) && !stopBtn.dataset.stopping) stopBtn.textContent = '停止';
     stopBtn.classList.toggle('visible', canStop);
     stopBtn.dataset.intent = quotaCancel ? 'quota-cancel' : 'interrupt';
-    stopBtn.title = quotaCancel ? '取消额度恢复后自动继续' : '中断当前 AI';
+    stopBtn.title = quotaCancel ? '取消额度恢复后自动继续' : codeagentStop ? '停止 CodeAgent 并取回提示词' : '中断当前 AI';
     stopBtn.setAttribute('aria-label', stopBtn.title);
-    stopBtn.disabled = !quotaCancel && session.nativeRuntime?.cancellation?.status === 'pending';
+    stopBtn.disabled = !!stopBtn.dataset.stopping || (!quotaCancel && session.nativeRuntime?.cancellation?.status === 'pending');
     sendBtn.hidden = false;
     sendBtn.title = canStop && session.runtimeBackend === 'acp'
       ? '加入待发送队列 · 当前轮结束后发送'
@@ -5244,9 +5353,20 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   //   （main/ipc/prompt-submit-handlers.js → core/group-chat-watcher.sendToPty），
   //   与群聊派发同一条实现；渲染进程只负责清 UI 和展示"没提交"这件事。
 
-  function sendInput() {
-    const userText = readContenteditablePlainText(inputBox);
+  function sendInput(retry = null) {
+    const skillComposer = require('./composer-codeagent-skills');
+    const userText = skillComposer.skillPrompt(inputBox, readContenteditablePlainText(inputBox), sessions.get(sessionId));
+    const submittedSkill = skillComposer.selectedSkill(inputBox);
+    const skillAccount = { kind: sessions.get(sessionId)?.kind, codeagentPoolAccount: sessions.get(sessionId)?.codeagentPoolAccount };
     if (!userText || !userText.trim()) return;
+    if (!skillComposer.selectedSkill(inputBox) && skillComposer.isSkillsMenuCommand(sessions.get(sessionId), userText)) {
+      void openCodeAgentSkillsMenu(sessionId, pane).then(result => {
+        if (result?.ok && readContenteditablePlainText(inputBox) === userText) { replaceContenteditableText(inputBox, ''); clearFloatingInputDraft(sessionId); }
+      });
+      return;
+    }
+    const skillWarning = skillComposer.installationWarning(skillComposer.selectedSkill(inputBox), sessions.get(sessionId));
+    if (skillWarning) showToast(skillWarning, 'warning');
     const acpSession=sessions.get(sessionId);
     if(acpSession?.runtimeBackend==='acp') {
       try {const {imagePaths,validateImages}=require('../core/acp-attachments');
@@ -5264,7 +5384,9 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     // 清空必须走 replaceContenteditableText（execCommand）：直接赋 textContent 会
     // 清掉原生撤销栈，误发之后 Ctrl+Z 拿不回原文。
     let session, kind, wasRunning, optimisticCard = null;
-    const clientSubmissionId = require('node:crypto').randomUUID();
+    const previousRuntimeTruth = sessions.get(sessionId)?.runtimeTruth;
+    let optimisticRuntimeTruth = null;
+    const clientSubmissionId = retry?.clientSubmissionId || require('node:crypto').randomUUID();
     const discardUnsentOptimisticCard = () => {
       // 只撤回本次尚未落盘的临时卡；权威历史以及送达未知的消息保持原样。
       if (optimisticCard?.dataset.optimistic === 'true'
@@ -5284,10 +5406,11 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       else terminal.focus();
       kind = session && session.kind ? session.kind : null;
       wasRunning = session && getSessionRuntimeTruth(session).state === RUNTIME_RUNNING;
-      // PTY 会话里的斜杠命令（/compact、/model…）是 CLI 本地命令，不一定开新的一轮，
+      // PTY 的已知本地斜杠命令（/compact、/model…）不一定开新的一轮，
       // 也就没有完成信号来收尾。乐观地标「运行中」会一直挂着（2026-09-25 真机：Codex /compact
       // 卡运行 3 分钟）。真开了一轮时 hook / rollout 会自己把状态推到运行。
-      const ptyCommand = !nativeCommand && session?.agentRuntime === 'pty' && text.trimStart().startsWith('/');
+      // CodeAgent 未知 slash 可能是技能，按普通发送跟踪，用 STARTING 的 15s TTL 兜底。
+      const ptyCommand = !nativeCommand && require('../core/codeagent-command-policy').isPtyLocalCommand(session, text);
       if (!nativeCommand && !ptyCommand) {
         clearSessionWaitingState(sessionId);
         if (!wasRunning) armPtyBurstFallback(sessionId);
@@ -5312,7 +5435,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       //   凡是卡片视图能渲染的 kind 都该立刻出卡，判据统一走这两个 helper。
       const cardCapableKind = !!kind && (isClaudeFamily(kind) || isTranscriptCliKind(kind));
       const acpQueueing = session?.runtimeBackend === 'acp' && ['running','waiting'].includes(session.nativeRuntime?.state);
-      const optimisticReceipt = isNativeAgent(session) || isDshCliSession(session)
+      const optimisticReceipt = isNativeAgent(session) || isDshCliSession(session) || isCodeAgentKind(kind)
         || (session?.purpose === 'hub-assistant' && !nativeCommand && !ptyCommand)
         ? { clientSubmissionId } : {};
       if ((pane.isCard ? pane.isCard() : currentView === 'card') && cardCapableKind && !acpQueueing && typeof mountOptimisticUserCard === 'function') {
@@ -5345,8 +5468,53 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       return;
     }
     const delivery = nativeCommand ? null : beginPromptDelivery(clientSubmissionId);
+    optimisticRuntimeTruth = session?.runtimeTruth;
     if (delivery) floatingPromptDeliveries.set(sessionId, delivery);
-    Promise.resolve().then(() => ipcRenderer.invoke('session:send-prompt', { sessionId, text, clientSubmissionId, memoryIndex: true })).then((result) => {
+    Promise.resolve().then(() => ipcRenderer.invoke('session:send-prompt', { sessionId, text, clientSubmissionId, memoryIndex: true,
+      ...(submittedSkill ? { codeagentSkill: submittedSkill } : {}), ...(retry?.token ? { codeagentDiscardToken: retry.token } : {}) })).then((result) => {
+      if (isCodeAgentKind(kind) && result?.stopped) {
+        if (result.notSent) discardUnsentOptimisticCard();
+        else if (optimisticCard) {
+          optimisticCard.dataset.deliveryStatus = 'stopped';
+          const head = optimisticCard.querySelector?.('.turn-head');
+          if (head && !head.querySelector('.turn-stopped-chip')) {
+            const chip = document.createElement('span');
+            chip.className = 'turn-branch-chip turn-stopped-chip'; chip.textContent = '已停止';
+            head.append(chip);
+          }
+        }
+        if (delivery) { delivery.dismissed = true; delivery.status = 'stopped'; }
+        if (!wasRunning && session.runtimeTruth === optimisticRuntimeTruth && session.runtimeTruth?.state === RUNTIME_STARTING) session.runtimeTruth = previousRuntimeTruth;
+        if (result.notSent && !readContenteditablePlainText(inputBox) && !skillComposer.selectedSkill(inputBox)) {
+          require('./composer-codeagent-input').restoreRecoveredPrompt(inputBox, { text, skill: submittedSkill }, { document, window, session, onChange: () => saveFloatingInputDraft(sessionId, inputBox) });
+        }
+        clearFloatingInputStuck(bar);
+        showToast('已停止，可取回提示词继续编辑', 'info');
+        return;
+      }
+      if (isCodeAgentKind(kind) && result?.code === 'codeagent-input-residual') {
+        discardUnsentOptimisticCard();
+        if (delivery) delivery.dismissed = true;
+        if (!wasRunning && session.runtimeTruth === optimisticRuntimeTruth && session.runtimeTruth?.state === RUNTIME_STARTING) session.runtimeTruth = previousRuntimeTruth;
+        if (!readContenteditablePlainText(inputBox) && !skillComposer.selectedSkill(inputBox)) {
+          if (bar._codeagentInputRecovery) require('./composer-codeagent-input').restoreRecoveredPrompt(inputBox, { text, skill: submittedSkill }, { document, window, session, onChange: () => saveFloatingInputDraft(sessionId, inputBox) });
+          else { replaceContenteditableText(inputBox, text); saveFloatingInputDraft(sessionId, inputBox); }
+        }
+        bar._codeagentInputRecovery?.show(result, async token => {
+          if (skillComposer.skillPrompt(inputBox, readContenteditablePlainText(inputBox), session) !== text) {
+            const cleared = await ipcRenderer.invoke('codeagent:input-clear', { sessionId, token });
+            showToast(cleared?.ok ? '终端残留已丢弃，草稿已变化，请重新发送' : cleared?.message || '终端输入未清空', 'warning');
+            return;
+          }
+          sendInput({ clientSubmissionId, token });
+        });
+        clearFloatingInputStuck(bar);
+        return;
+      }
+      if (submittedSkill) {
+        try { skillComposer.recordSkillUse(localStorage, skillAccount, submittedSkill, result); }
+        catch (error) { showToast('最近使用的技能保存失败：' + error.message, 'warning'); }
+      }
       if (result?.notSent) discardUnsentOptimisticCard();
       if (nativeCommand) {
         if (feedbackSequence !== commandFeedbackSequence) return;
@@ -5447,6 +5615,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     // 不放行就会出现:中文按回车选词被当作"发送"+清空输入框,数字纯 ASCII 不受影响。
     // ↑/↓ 同理：候选词翻页也用方向键，抢过来会让中文输入没法选词。
     if (e.isComposing || e.keyCode === 229) return;
+    if (codeagentSkills?.onKeyDown(e)) return;
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendInput();
@@ -5556,6 +5725,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       voiceInput.dispose();
       composerTools.dispose();
       composerScene.dispose();
+      codeagentSkills?.dispose();
       claudeAccountChip.dispose();
       codexAccountChip.dispose();
       promptPolish.dispose();
@@ -5846,6 +6016,7 @@ ipcRenderer.on('session-persistence-error', (_event, error) => {
   require('./ui-feedback').showHubAlert('会话信息未保存：' + error.message);
 });
 async function selectSession(id, opts = {}) {
+  for (const bar of document.querySelectorAll('.floating-input-bar')) bar._codeagentSkills?.close();
   window.hubWorkspaces?.close();
   if (!opts.splitBypass && sessionSplit?.routesSelection()) return sessionSplit.route(id, undefined, opts);
   sessionSplit?.usePrimary();
@@ -5868,7 +6039,7 @@ async function selectSession(id, opts = {}) {
   if (window.__studyHide) window.__studyHide(); // 2026-09-01 学习面板互斥
   if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
-  window.__rulesHide?.(); // 2026-10-12 规则面板互斥
+  window.__rulesHide?.(); // 独立页面互斥
   if (window.__ranHide) window.__ranHide(); // 2026-09-04 RAN 工作台面板互斥
   setShellNavActive(null);
   const mrp = document.getElementById('meeting-room-panel');
@@ -7485,13 +7656,17 @@ const renderAccountUsage = accountUsageController.render;
   }
 }
 // CodeAgent 额度条：每轮回答结束读屏幕 Stats 面板的 Credit（applyCodeAgentScreenContext），每个账号一行。
-const codeagentQuotaBar = require('./codeagent-quota-bar.js').createCodeAgentQuotaBar({ document, storage: window.localStorage, escapeHtml });
+const codeagentQuotaBar = require('./codeagent-quota-bar.js').createCodeAgentQuotaBar({ document, ipcRenderer, storage: window.localStorage, escapeHtml });
 codeagentQuotaBar.render();
 window.codeagentQuotaBar = codeagentQuotaBar;
 // /model 菜单里读到的用量（Credit 三档 + 每个模型的 Token 用量，core/codeagent-usage-menu.js）：启动取一次，主进程记了新快照再取。
 function refreshCodeAgentUsage() {
   if (typeof ipcRenderer.invoke !== 'function') return;
-  ipcRenderer.invoke('codeagent:usage').then(r => { if (r && r.accounts) codeagentQuotaBar.setUsage(r.accounts); }).catch(() => {});
+  ipcRenderer.invoke('codeagent:usage').then(r => { if (r && r.accounts) {
+    codeagentQuotaBar.setUsage(r.accounts);
+    turnCardRenderer.refreshModelLoads();
+    sessionSplit?.secondary()?.renderer.refreshModelLoads();
+  } }).catch(() => {});
 }
 refreshCodeAgentUsage();
 ipcRenderer.on('codeagent-usage-changed', () => refreshCodeAgentUsage());
@@ -8358,7 +8533,8 @@ function applyCodeAgentScreenContext(session, sessionId) {
     if (credit && typeof codeagentQuotaBar !== 'undefined') codeagentQuotaBar.update(credit, { account: session.codeagentPoolLabel || '个人账号' });
     // 用户自己在终端开着 /model 菜单时，菜单上方的用量表也记下来（不为取数主动发 /model）。
     const usage = require('../core/codeagent-usage-menu').parseCodeAgentUsageMenu(lines);
-    if (usage) ipcRenderer.invoke('codeagent:usage-record', { key: session.codeagentPoolAccount || 'personal', label: session.codeagentPoolLabel || '个人账号', usage }).catch(() => {});
+    if (usage) ipcRenderer.invoke('codeagent:usage-record', { key: session.codeagentPoolAccount || 'personal', label: session.codeagentPoolLabel || '个人账号', usage,
+      ...(!require('../core/codeagent-usage-menu').hasModelTokens(usage) ? { menuLines: require('../core/codeagent-usage-menu').usageMenuLines(lines) } : {}) }).catch(() => {});
   } catch { context = null; }
   if (!context) return;
   session.contextUsed = context.contextUsed;
@@ -8784,7 +8960,7 @@ function escapeToHome() {
   if (window.__studyHide) window.__studyHide();
   if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
-  window.__rulesHide?.(); // 2026-10-12 规则面板互斥
+  window.__rulesHide?.(); // 独立页面互斥
   if (window.__ranHide) window.__ranHide(); // 2026-09-04 RAN 工作台面板互斥
   if (fileManagerPanel) fileManagerPanel.close();
   shellController.escapeToHome();
@@ -8907,13 +9083,14 @@ if (require('../core/company-assistant/gate').companyAssistantEnabled()) {
   const oldAssistantNav = document.getElementById('btn-assistant');
   if (oldAssistantNav) oldAssistantNav.style.display = 'none';
   try {
-    let companyMeetingPage;
+    let companyMeetingPage, companyPptPage;
     const companyAssistantPage = require('./company-assistant-page').createCompanyAssistantPage({
       document, window, ipcRenderer,
       closeOtherPanels: () => { window.hubWorkspaces?.close(); memoryPanel.close(); capabilityPanel.close(); accountCenterPanel.close(); },
       showMessage: message => showToast(message),
       openSession: openSessionById,
       openMeeting: () => companyMeetingPage.open(),
+      openPpt: () => companyPptPage.open(),
     });
     companyMeetingPage = require('./company-meeting-layout').createMeetingLayout({
       document, window, ipcRenderer,
@@ -8923,6 +9100,12 @@ if (require('../core/company-assistant/gate').companyAssistantEnabled()) {
     });
     window.__companyMeetingHide = () => companyMeetingPage.close();
     window.__companyAssistantHide = () => companyAssistantPage.close();
+    companyPptPage = require('./company-ppt-page').createCompanyPptPage({
+      document, window, ipcRenderer,
+      closeOtherPanels: () => { window.hubWorkspaces?.close(); memoryPanel.close(); capabilityPanel.close(); accountCenterPanel.close(); },
+      showMessage: message => showToast(message),
+    });
+    window.__companyPptHide = () => companyPptPage.close();
   } catch (error) { console.warn('[company-assistant] 助理页未启动：', error.message); }
 }
 // 公司版「论坛」页（2026-10-18）：稼先社区、心声社区今天的热帖 + AI 摘要；只在公司版启用（core/company-forum/gate.js）。
@@ -9222,7 +9405,7 @@ ipcRenderer.on('session-created', async (_e, { session }) => {
   if (window.__studyHide) window.__studyHide();
   if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
-  window.__rulesHide?.(); // 2026-10-12 规则面板互斥
+  window.__rulesHide?.(); // 独立页面互斥
   if (window.__ranHide) window.__ranHide(); // 2026-09-04 RAN 工作台面板互斥
   if (terminalPanelEl) terminalPanelEl.style.display = '';
   ipcRenderer.send('focus-session', { sessionId: session.id });
@@ -9971,6 +10154,8 @@ function createSecondarySessionView(sessionId, panel, options = {}) {
         return {
           resize,
           setMode(mode, visible) {
+            if (mode !== 'card' || !visible) host.querySelector('.floating-input-bar')?._codeagentSkills?.close();
+            if (visible && mode === 'card' && viewMode !== 'card') void host.querySelector('.floating-input-bar')?._codeagentSkills?.refresh();
             viewMode = mode; shown = visible;
             cached._codexBackstage?.setVisible(visible && mode === 'pty');
             if (visible && mode === 'pty' && !cached._backstageReadable) loadGpuRenderer(cached); else unloadGpuRenderer(cached);
@@ -10656,7 +10841,7 @@ if (process && process.env && process.env.CLAUDE_HUB_E2E === '1') {
           if (window.__studyHide) window.__studyHide();   // 同上：别和学习面板并排
           if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
           if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
-          window.__rulesHide?.(); // 2026-10-12 规则面板互斥
+          window.__rulesHide?.(); // 独立页面互斥
           if (window.__ranHide) window.__ranHide(); // 2026-09-04 RAN 工作台面板互斥
           terminalPanelEl.style.display = '';
           terminalPanelEl.classList.remove('home-active');

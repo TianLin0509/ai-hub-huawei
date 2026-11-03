@@ -29,7 +29,8 @@ function createMeetingLayout({ document, window, ipcRenderer, closeOtherPanels, 
   async function open() {
     if (!host) { host = document.createElement('section'); host.id = 'company-meeting-page'; host.className = 'company-meeting-page'; host.hidden = true; document.body.append(host); }
     closeOtherPanels();
-    for (const key of ['__companyAssistantHide','__companyForumHide','__assistantHide','__teamHide','__cloudHide','__wirelessHide','__rulesHide','__writingHide','__xresearchHide','__studyHide','__ranHide']) window[key]?.();
+    for (const key of [
+    '__companyAssistantHide','__companyForumHide','__assistantHide','__teamHide','__cloudHide','__wirelessHide','__rulesHide','__writingHide','__xresearchHide','__studyHide','__ranHide']) window[key]?.();
     host.hidden = false; document.body.classList.add('company-meeting-page-open'); nav.classList.add('active');
     place(); window.addEventListener('resize', place);
     await meeting.open(host);

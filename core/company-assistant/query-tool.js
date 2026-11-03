@@ -108,14 +108,18 @@ class AssistantQuery {
         .filter(x => !args.categories || !x.group && args.categories.includes('私聊') || x.group && (args.categories.includes('全部群消息') || x.atMe && args.categories.includes('@我') || x.atAll && args.categories.includes('@所有人')))
         .filter(x => match(args.person, [x.sender, x.senderName, x.account, !x.group && x.convName]) && match(args.group, [x.group && x.conv, x.group && x.convName]));
       const memories = this.a.memory?.active() || [], priority = createPriorityMatcher(memories);
+      const sources = new Map((snap.scope?.conversations || []).map(conv => [conv.id, conv]));
       items = prioritize(selected.sort((a, b) => a.at - b.at || a.sourceId.localeCompare(b.sourceId)), memories)
-        .map(x => ({ ...x, priority: priority(x), timeDisplay: D.displayTime(x.at) }));
+        .map(x => ({ ...x, priority: priority(x), timeDisplay: D.displayTime(x.at), dataSource: sources.get(x.conv)?.dataSource,
+          capturedAt: sources.get(x.conv)?.capturedAt ?? null, cachedAt: sources.get(x.conv)?.cachedAt ?? null }));
       counts = { all: all.length, private: all.filter(x => !x.group).length, atMe: all.filter(x => x.group && x.atMe).length, atAll: all.filter(x => x.group && x.atAll).length };
       const sc = snap.scope || {}, unknownTime = (sc.conversations || []).reduce((n, c) => n + (c.unknownTime || 0), 0);
-      const complete = snap.login?.ok && !sc.partial && !sc.listFull && !sc.limited && !sc.stale && !sc.directoryInvalid && !sc.directoryFallback && !unknownTime;
+      const complete = snap.login?.ok && !sc.partial && !sc.neverFetched && !sc.priorityPending && !sc.limited && (!sc.stale || sc.cached) && !sc.directoryInvalid && !sc.directoryFallback && !unknownTime;
       coverage = { status: complete ? 'complete' : 'partial', discovery: sc.listFull ? 'recent-list-capped' : sc.stale ? 'failed' : 'available-conversations',
         knownConversations: sc.known || sc.listed || 0, scanned: sc.fetched || 0, unknownTime, partialConversations: sc.partial || 0, directoryInvalid: sc.directoryInvalid || 0,
-        limitation: (sc.listFull ? `本轮最近会话返回 ${sc.listed || sc.listCap} 个，可能达到接口上限；已补查历史已知会话，但从未发现的会话无法保证覆盖。` : '')
+        realtime: sc.realtime || 0, fromCache: sc.fromCache || 0,
+        limitation: (sc.queryFallback ? '后台缓存为空，本次改为查询全部可发现会话。' : sc.fromCache ? `本次实时补查变化和置顶会话，其余 ${sc.fromCache} 个会话沿用后台缓存，时间见各会话来源。` : '')
+          + (sc.listFull ? `本轮最近会话返回 ${sc.listed || sc.listCap} 个，可能达到接口上限；目录外从未发现的会话无法保证覆盖。` : '')
           + (sc.directoryFallback ? '较大范围查询失败，已退回兼容查询，覆盖仍待核对。' : '')
           + (sc.directoryInvalid ? `${sc.directoryInvalid} 条会话目录记录无法识别，未覆盖对应会话。` : ''),
         details: sc.conversations || [], errors: snap.errors || [] };
@@ -152,13 +156,13 @@ class AssistantQuery {
     const page = await this.execute({ ...args, op: 'list', kind: 'messages', scope, categories: scopes, period: 'custom',
       start: args.since ? this.localTime(args.since) : new Date(endAt - hours * HOUR).toISOString(), end });
     const { coverage: c, range: r } = page;
-    const header = `覆盖：${r.startDisplay} 至 ${r.endDisplay}（终点不含，上海时间）；已查 ${c.scanned} 个会话；${c.status === 'complete' ? '可发现会话的消息已翻页覆盖' : '可能不全'}。${c.limitation || ''}${c.partialConversations ? ` ${c.partialConversations} 个会话未取全。` : ''}${c.unknownTime ? ` ${c.unknownTime} 条时间未确认。` : ''}`;
+    const header = `覆盖：${r.startDisplay} 至 ${r.endDisplay}（终点不含，上海时间）；已查 ${c.scanned} 个会话；${c.status === 'complete' ? c.fromCache ? '已取得实时及缓存结果，缓存部分本次未实时核对' : '可发现会话的消息已翻页覆盖' : '可能不全'}。${c.limitation || ''}${c.partialConversations ? ` ${c.partialConversations} 个会话未取全。` : ''}${c.unknownTime ? ` ${c.unknownTime} 条时间未确认。` : ''}`;
     this.captureCoverage(page.queryId, [header, `本次筛选已取到 ${page.total} 条；私聊 ${page.counts.private} 条，群 @我 ${page.counts.atMe} 条，@所有人 ${page.counts.atAll} 条。`]);
     const priority = row => row.priority ? '★ ' : '';
-    const lines = page.items.map(m => `${priority(m)}${m.group ? (m.atMe ? '群 @我' : m.atAll ? '群 @所有人' : '群聊') : '私聊'}「${m.convName}」 ${m.timeDisplay} ${m.sender}：${m.preview} [${m.sourceId}]${m.readRequired ? '（需读全文）' : ''}`);
+    const lines = page.items.map(m => `${priority(m)}${m.group ? (m.atMe ? '群 @我' : m.atAll ? '群 @所有人' : '群聊') : '私聊'}「${m.convName}」 ${m.timeDisplay} ${m.sender}：${m.preview} [${m.sourceId}]${m.dataSource ? `（${m.dataSource === 'realtime' ? '实时取数' : m.dataSource === 'mixed' ? '实时及缓存' : '缓存'}；采集时间 ${Number.isFinite(m.capturedAt) ? D.displayTime(m.capturedAt) : '未知'}）` : ''}${m.readRequired ? '（需读全文）' : ''}`);
     this.a.memory?.touch(JSON.stringify({ person: args.person, group: args.group }));
     return { text: [header, `已取到：私聊 ${page.counts.private} 条，群 @我 ${page.counts.atMe} 条、@所有人 ${page.counts.atAll} 条；本次筛选共 ${page.total} 条，本页 ${page.items.length} 条。`, ...lines, ...c.errors.map(e => `取数问题：${e.label} ${e.text}`)].join('\n'),
-      queryId: page.queryId, nextCursor: page.nextCursor, total: page.total, note: page.note };
+      queryId: page.queryId, nextCursor: page.nextCursor, total: page.total, conversations: c.details.map(conv => ({ id: conv.id, name: conv.name, dataSource: conv.dataSource, capturedAt: conv.capturedAt, cachedAt: conv.cachedAt })), note: page.note };
   }
   async meetings(args = {}) {
     const date = args.date || '今天', today = D.dayKey(this.a.now());

@@ -145,7 +145,7 @@ async function runTempServe({ command, configDirEnv, configDir, cwd, env = proce
 //   creditUsage:{ quotas:[{ type:'CPM'|'CPD_Peak'|'CPD_Valley', used, total, remaining, usageRatio, resetAt }] } }
 // /api/v2/model/<模型>/quota → { quotas:[{ type:'TPD'|'TPH'|'TPM', used_quota:'0', total_quota:'400000000', remaining_quota, reset_at }] }
 // 或 null（模型名大小写不对时，要用清单里的 id）。
-const num = value => { const n = Number(value); return Number.isFinite(n) ? n : null; };
+const num = value => { const n = value == null || value === '' ? NaN : Number(value); return Number.isFinite(n) ? n : null; };
 const text = value => (typeof value === 'string' ? value.trim() : '');
 
 function parseProviders(data) {
@@ -197,7 +197,7 @@ async function readAccount(options) {
 const CREDIT_KEY = { CPM: 'monthly', CPD_Peak: 'busyDay', CPD_Valley: 'idleDay' };
 const WINDOW_KEY = { TPD: 'day', TPH: 'hour', TPM: 'min' };
 const round2 = n => Math.round(n * 100) / 100;
-const pctOf = (used, total) => (total > 0 ? round2(((used || 0) / total) * 100) : null);
+const pctOf = (used, total) => (Number.isFinite(used) && total > 0 ? round2((used / total) * 100) : null);
 function tokens(n) {
   if (!Number.isFinite(n)) return '';
   for (const [unit, size] of [['B', 1e9], ['M', 1e6], ['K', 1e3]]) if (Math.abs(n) >= size) return `${round2(n / size)}${unit}`;
@@ -208,14 +208,14 @@ function toUsageSnapshot(read) {
   const credit = {};
   for (const q of read.credit || []) {
     const key = CREDIT_KEY[q.type];
-    if (key && q.total > 0) credit[key] = { used: String(round2(q.used || 0)), total: String(round2(q.total)), pct: pctOf(q.used, q.total) };
+    if (key && q.total > 0) credit[key] = { used: Number.isFinite(q.used) ? String(round2(q.used)) : null, total: String(round2(q.total)), pct: pctOf(q.used, q.total) };
   }
   const discount = /(\d+(?:\.\d+)?)\s*折/.exec(read.discount || '');
   const models = (read.details || []).map(m => {
     const out = { name: m.id, factor: m.coefficient || null, load: m.load || null, day: null, hour: null, min: null };
     for (const q of (read.quotas && read.quotas[m.id]) || []) {
       const key = WINDOW_KEY[q.type];
-      if (key && q.total > 0) out[key] = { used: tokens(q.used || 0), total: tokens(q.total), pct: pctOf(q.used, q.total) };
+      if (key && q.total > 0) out[key] = { used: tokens(q.used), total: tokens(q.total), pct: pctOf(q.used, q.total) };
     }
     return out;
   });

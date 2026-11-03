@@ -458,6 +458,8 @@ const HOOK_PORT_CANDIDATES = [
 // Random per-launch token; hook POSTs must carry it. Stops any other local
 // process from forging unread bumps.
 const HOOK_TOKEN = crypto.randomBytes(16).toString('hex');
+const TEAM_SECRET = crypto.randomBytes(32);
+const teamTokenFor = hubSessionId => crypto.createHmac('sha256', TEAM_SECRET).update(hubSessionId).digest('hex');
 
 let hookPort = null;  // set after listen() succeeds
 let claudeHookWatchdog = null;
@@ -1250,6 +1252,7 @@ transcriptTap.on('session-bound', (ev) => {
 });
 
 sessionManager.hookToken = HOOK_TOKEN;  // port set after listen
+sessionManager.teamTokenFor = teamTokenFor;
 
 // Pin a stable AppUserModelID before creating the window so Windows keeps Hub's
 // taskbar identity independent from electron.exe. Native toast notifications are
@@ -1573,9 +1576,12 @@ function createWindow() {
   if (hubPetController) {
     // 桌宠跟着主窗口走：主窗口加载完才出现；主窗口关掉时先收起桌宠，
     // 否则这个小窗会让 Electron 等不到 window-all-closed、Hub 退不干净。
-    mainWindow.webContents.once('did-finish-load', () => { try { hubPetController?.start(); } catch (error) { console.warn('[hub-pet] start failed:', error && error.message); } });
     mainWindow.once('closed', () => { try { hubPetController?.stop(); } catch (_) {} });
   }
+  mainWindow.webContents.once('did-finish-load', () => {
+    try { hubPetController?.start(); } catch (error) { console.warn('[hub-pet] start failed:', error && error.message); }
+    companyAssistantService?.petReminders.start();
+  });
   // index.html 的 <title>AI Hub Community</title> 在页面加载完成后会触发 page-title-updated 覆盖
   // BrowserWindow.title — preventDefault 阻止覆盖，保留带 PID 的标题
   mainWindow.on('page-title-updated', (e) => { e.preventDefault(); });
@@ -2398,6 +2404,11 @@ if (require('./core/distribution').featureEnabled('assistant')) try {
       const native = sessionManager.getNativeSession?.(id) || sessionManager.getNativeCodex?.(id);
       if (native?.interrupt) { await native.interrupt(); return { via: 'native' }; }
       if (sessionManager.getNativeClaude?.(id)) { sessionManager.writeToSession(id, '\u0003'); return { via: 'claude-native' }; }
+      if (require('./core/ai-kinds').isCodeAgentKind(s.kind)) {
+        const stopped = await require('./core/group-chat-watcher').codeAgentInputAction(id, 'stop');
+        if (!stopped.ok) throw new Error(stopped.message);
+        return stopped;
+      }
       // 与电脑上的停止键同一规则（renderer/pty-interrupt.js）：Esc；Qwen 草稿里 Esc 无效，用 Ctrl+C。
       sessionManager.writeToSession(id, String(s.kind || '').replace(/-resume$/, '') === 'qwen' ? '\x03' : '\x1b');
       return { via: 'pty' };
@@ -2520,7 +2531,10 @@ try {
       assertTeamAccess: () => teamAccess.assert(),
       dataDir: getHubDataDir(),
       noTimer: process.env.CLAUDE_HUB_ASSISTANT_TIMER === '0',
+      isPetEnabled: () => hubPetController?.isActive() === true,
+      isPetMcpEnabled: () => hubPetController?.getSettings().enabled === true,
       createSession: (kind, opts) => sessionOperations.createSession({ kind, opts }),
+      closeSession: id => require('./core/company-ai-tasks').closeOwnedSession(sessionManager, id),
       sendPrompt: (sessionId, text, clientSubmissionId) => promptOperations.submitPrompt(null, { sessionId, text, clientSubmissionId, waitForCliReady: true }),
       getSession: id => sessionManager.getSession(id),
       getSessionMetadata: loadMeta,
@@ -2551,9 +2565,15 @@ try {
       },
       // 与电脑上的停止键同一规则（renderer/pty-interrupt.js）：终端会话按 Esc。
       interruptSession: async id => {
-        if (!sessionManager.getSession(id)) throw new Error('会话未打开');
+        const session = sessionManager.getSession(id);
+        if (!session) throw new Error('会话未打开');
         const native = sessionManager.getNativeSession?.(id) || sessionManager.getNativeCodex?.(id);
         if (native?.interrupt) { await native.interrupt(); return; }
+        if (require('./core/ai-kinds').isCodeAgentKind(session.kind)) {
+          const stopped = await require('./core/group-chat-watcher').codeAgentInputAction(id, 'stop');
+          if (!stopped.ok) throw new Error(stopped.message);
+          return stopped;
+        }
         sessionManager.writeToSession(id, sessionManager.getNativeClaude?.(id) ? '\u0003' : '\x1b');
       },
       // 电脑前有没有人：键盘鼠标多少秒没动（「其他会话卡住」只在人不在电脑前时推到手机）。
@@ -2567,9 +2587,11 @@ try {
       // 点通知打开助理页（页面认这个固定编号），不直接跳进会话。
       try { void desktopNotificationController?.show({ sessionId: 'company-assistant', title: notice.title, body: notice.text, kind: 'assistant' }); } catch (error) { console.warn('[company-assistant] notification', error.message); }
     });
+    companyAssistantService.startTools();
     if (optionalFeatures.get('assistant')) companyAssistantService.start();
     const bridgeMcpPlan = sessionManager.extraMcpProvider;
-    sessionManager.setExtraMcpProvider(request => companyAssistantService.sessionPlan(request) || (bridgeMcpPlan ? bridgeMcpPlan(request) : null));
+    sessionManager.setExtraMcpProvider(request => companyAssistantService.sessionPlan(request)
+      || companyAssistantService.tools.petSessionPlan(request, bridgeMcpPlan ? bridgeMcpPlan(request) : null));
     require('./main/ipc/company-assistant-handlers').registerCompanyAssistantIpc(ipcMain, companyAssistantService);
   }
 } catch (error) { console.error('[company-assistant] 公司助理未启动：', error.message); }
@@ -2666,6 +2688,33 @@ try {
   require('./main/ipc/orchestration-handlers').registerOrchestrationIpc(ipcMain, () => global.__orchestrationService);
   global.__orchestrationService.start().catch(error => console.error('[orchestration] start failed:', error.message));
 } catch (error) { console.error('[orchestration] service unavailable:', error.message); }
+// 负责人组队：用户在侧栏批准后创建 CodeAgent 成员，命令安装在当前用户数据目录。
+if (require('./core/distribution').featureEnabled('leadTeam')) try {
+  const teamCommand = path.join(getHubDataDir(), 'team', process.platform === 'win32' ? 'hub-team.cmd' : 'hub-team.sh');
+  global.__teamService = require('./main/team/service').createTeamService({
+    getHubDataDir, sessionManager, sendToRenderer, logger: console,
+    createSession: request => sessionOperations.createSession(request),
+    submitPrompt: (sessionId, text) => promptOperations.submitPrompt(null, { sessionId, text, waitForCliReady: true }),
+    injectPrompt: createRunningInjector({ sessionManager, transcriptTap, groupChatWatcher: groupChatDispatcher.getGroupChatWatcher() }),
+    restartSession: id => sessionOperations.restartSession(id),
+    listAccounts: () => require('./main/team/codeagent-accounts').listTeamAccounts({ dataDir: getHubDataDir(), sessionManager }),
+    commandPath: () => teamCommand,
+    // 收件人休眠时叫醒：只认侧栏登记为休眠的会话（用户关掉的会话不复活）。
+    wakeSession: async id => {
+      if (!require('./main/team/wake').canWakeTeamSession(id, lastPersistedSessions, sessionManager.getSession(id))) return false;
+      const meta = require('./core/session-store').loadSessionFile(id, { strict: true });
+      if (!meta) return false;
+      await resumeSession({ ...meta, hubId: id });
+      return true;
+    },
+  });
+  require('./main/team/command-shim').writeTeamCommand(teamCommand, {
+    nodeExecutable: process.versions.electron ? process.execPath : 'node', runAsNode: !!process.versions.electron,
+    script: path.join(__dirname, 'scripts', 'hub-team.js'),
+  });
+  require('./main/ipc/team-handlers').registerTeamIpc(ipcMain, () => global.__teamService);
+  global.__teamService.start();
+} catch (error) { console.error('[team] service unavailable:', error.message); }
 // 原生 Claude 额度看门狗。同样依赖 sendToPty 的 _deps，所以排在这之后。
 claudeQuotaResume.start();
 claudeAccountSwitch.start();
@@ -3107,6 +3156,7 @@ const hookServer = http.createServer((req, res) => {
   if (rawHookEvent) req.url = '/api/hook/' + rawHookEvent;
   const isHook = req.method === 'POST' && req.url.startsWith('/api/hook/');
   const isStatus = req.method === 'POST' && req.url === '/api/status';
+  const isTeam = req.method === 'POST' && req.url === '/api/team';
   const isNativeOwnership = req.method === 'POST' && req.url === '/api/native-ownership';
   const isResearchAccount = false;
   // 2026-05-16 maintainer：防卡死 — 外部 HTTP 救援入口，tools/hub-escape.ps1 调
@@ -3115,7 +3165,7 @@ const hookServer = http.createServer((req, res) => {
   const isWebAsk = req.method === 'POST' && ['/api/web-ask', '/api/web-ask-status', '/api/web-ask-collect'].includes(req.url);
   const isResearchFetch = false;
   // plan 2026-05-05 阶段 0: 群聊记忆 MCP 回调（loopback）。
-  if (!isHook && !isStatus && !isResearchFetch && !isEscapeHome && !isNativeOwnership && !isResearchAccount && !isWebAsk) {
+  if (!isTeam && !isHook && !isStatus && !isResearchFetch && !isEscapeHome && !isNativeOwnership && !isResearchAccount && !isWebAsk) {
     res.writeHead(404); res.end('{}'); return;
   }
 
@@ -3153,6 +3203,11 @@ const hookServer = http.createServer((req, res) => {
       if (!parsed) { res.writeHead(200); res.end('{}'); return; }
     } else {
       try { parsed = JSON.parse(body || '{}'); } catch { parsed = {}; }
+    }
+    if (isTeam) {
+      const response = await require('./main/team/route').handleTeamRequest({ parsed, hookToken: HOOK_TOKEN, teamTokenFor, service: global.__teamService });
+      res.writeHead(response.statusCode); res.end(JSON.stringify(response.body));
+      return;
     }
     if (isWebAsk) {
       if (parsed.token !== HOOK_TOKEN) { res.writeHead(403); res.end('{}'); return; }
@@ -3385,14 +3440,16 @@ const hookServer = http.createServer((req, res) => {
         // when the Stop hook is delayed or missing.
         if (!isSubagentContext && event !== 'stop' && parsed.transcriptPath) {
           void transcriptTap.watchClaudeTranscript(parsed.sessionId, parsed.transcriptPath, {
-            turnId: parsed.turnId || null,
+            turnId: parsed.turnId || parsed.promptId || null,
+            prompt: latestUserMessage,
+            at: eventAt,
             newTurn: event === 'prompt',
           });
         }
         if (!isSubagentContext && event === 'stop' && parsed.transcriptPath) {
           claudeAccountSwitch.onCompleted({ sessionId: parsed.sessionId, nativeSessionId: incomingClaudeSessionId,
             promptId: parsed.promptId || null, turnId: parsed.turnId || null, at: eventAt });
-          void transcriptTap.notifyClaudeStop(parsed.sessionId, parsed.transcriptPath, { turnId: parsed.turnId || null });
+          void transcriptTap.notifyClaudeStop(parsed.sessionId, parsed.transcriptPath, { turnId: parsed.turnId || parsed.promptId || null });
           if (isCodeAgentKind(hookTargetSession.kind)) void observeCodeAgentModel(parsed.sessionId, {}, parsed.transcriptPath, 'stop-hook');
           if (softCompact) void softCompact.onStop(parsed.sessionId, { transcriptPath: parsed.transcriptPath, lastAssistantMessage: parsed.lastAssistantMessage })
             .catch(error => console.warn('[soft-compact] stop failed:', error && error.message));
@@ -3418,7 +3475,7 @@ const hookServer = http.createServer((req, res) => {
               startedAt: eventAt,
               signalSource: 'claude-user-prompt-submit',
               prompt: latestUserMessage,
-              turnId: parsed.turnId || null,
+              turnId: parsed.turnId || parsed.promptId || null,
             });
           } catch (error) {
             console.warn('[claude prompt] main-process lifecycle note failed:', error && error.message);
@@ -4704,6 +4761,7 @@ async function runFinalShutdownCleanup() {
   capture('company-web-ai', () => companyWebAi?.close());
   capture('company-forum', () => { companyForumService?.close(); companyForumBrowser?.close(); });
   capture('hub-orchestration', () => global.__orchestrationService?.stop());
+  capture('hub-team', () => global.__teamService?.stop());
   capture('hub-phone', () => phoneService?.close());
   clearTimeout(sessionSearchPrewarmTimer);
   const workerResults = await Promise.allSettled([
@@ -4814,7 +4872,7 @@ function beginGracefulHubShutdown(reason, { beforeQuit } = {}) {
 
   shutdownDrainState = 'draining';
   global.__deliveryEngine?.freeze();
-  global.__orchestrationService?.freeze();
+  global.__orchestrationService?.freeze(); global.__teamService?.freeze();
   console.log(`[shutdown] draining PTYs before Electron teardown (${reason})`);
   // Freeze Agent League dispatch before SessionManager starts terminating PTYs.
   // Active tasks remain durable/orphan-recoverable and the phase lease is only
@@ -4831,7 +4889,7 @@ function beginGracefulHubShutdown(reason, { beforeQuit } = {}) {
         shutdownDrainPromise = null;
         console.error('[shutdown] PTY drain did not reach a safe state; close was cancelled and may be retried', result);
         restoreWindowAfterFailedShutdown();
-        global.__deliveryEngine?.startWatching(); global.__orchestrationService?.unfreeze();
+        global.__deliveryEngine?.startWatching(); global.__orchestrationService?.unfreeze(); global.__teamService?.unfreeze();
         return result;
       }
       closeHookServerForShutdown();
@@ -4860,7 +4918,7 @@ function beginGracefulHubShutdown(reason, { beforeQuit } = {}) {
       shutdownDrainPromise = null;
       console.error('[shutdown] PTY drain failed; refusing unsafe Electron teardown:', error && error.stack || error);
       restoreWindowAfterFailedShutdown();
-      global.__deliveryEngine?.startWatching(); global.__orchestrationService?.unfreeze();
+      global.__deliveryEngine?.startWatching(); global.__orchestrationService?.unfreeze(); global.__teamService?.unfreeze();
       return { safeToQuit: false, error: error && error.message ? error.message : String(error) };
     });
   return shutdownDrainPromise;

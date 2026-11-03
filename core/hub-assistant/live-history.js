@@ -7,6 +7,7 @@ const {codexLineFilter,inspectCodexEnvelope}=require('../codex-rollout-reader');
 const {isUsableCodexRolloutPath}=require('../codex-transcript-parser');
 const {codexAgentMessageEventFromRecord}=require('../transcript-payload-utils');
 const aiKinds=require('../ai-kinds'),acpProfiles=require('../acp-profiles');
+const {skillCommandText,textFromContent}=require('../synthetic-user-filter');
 const hash=value=>createHash('sha256').update(value).digest('hex');
 function nativeId(meta){
   const kind=String(meta?.kind||'').replace(/-resume$/,'');
@@ -22,8 +23,9 @@ function claudeHeaderMatches(file,identity){const fd=fs.openSync(file,'r');try{c
 function claudeUserSubmission(row,identity){
   // Claude emits image dimensions as a user-shaped, meta turn companion.
   // It belongs to the current request, including when cold-scanning backwards.
-  if(row.sessionId!==identity||row.type!=='user'||row.isSidechain||row.isMeta||row.turnCompanion)return false;
+  if(row.sessionId!==identity||row.type!=='user'||row.isSidechain||row.turnCompanion)return false;
   const body=row.message?.content;
+  if(row.isMeta&&skillCommandText(textFromContent(body))===null)return false;
   return typeof body==='string'||Array.isArray(body)&&body.some(c=>c.type==='text')&&!body.some(c=>c.type==='tool_result');
 }
 function readFinals(meta,{cursor=null,tailBytes=1024*1024,maxReadBytes=8*1024*1024,startOffset}={}){

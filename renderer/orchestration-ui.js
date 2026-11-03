@@ -25,7 +25,7 @@ ipcRenderer.on('orchestration:changed', (_event, payload = {}) => {
   onChange(payload.meetingId);
 });
 
-function enabled(meeting) { return !!(meeting && meeting.groupChat && meeting.orchestration && meeting.orchestration.enabled === true); }
+function enabled(meeting) { return require('../core/distribution').featureEnabled('advancedGroupChat') && !!(meeting && meeting.groupChat && meeting.orchestration && meeting.orchestration.enabled === true); }
 // Display preference only: never change participants, messages or dispatch routes.
 function onlyOrchestrator(meeting) {
   if (!enabled(meeting)) return false;

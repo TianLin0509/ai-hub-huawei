@@ -1596,16 +1596,17 @@ class GroupChatOrchestrator {
     this._saveState('answer_file_registered', { turnNum, sid });
   }
   answerFileFor(turnNum, sid) { return this.state.answerFiles?.[String(Number(turnNum))]?.[sid] || null; }
-  applyAnswerFile(turnNum, sid, { state, outcome = null, text, hash }) {
+  applyAnswerFile(turnNum, sid, { state, outcome = null, text, hash, readError = null }) {
     const entry = this.answerFileFor(turnNum, sid);
-    if (!entry || (entry.hash === hash && entry.state === state && entry.outcome === outcome)) return false;
-    Object.assign(entry, { hash, state, outcome, appliedAt: Date.now() });
+    if (!entry || (entry.hash === hash && entry.state === state && entry.outcome === outcome && (entry.readError || null) === readError)) return false;
+    Object.assign(entry, { hash, state, outcome, readError, appliedAt: Date.now() });
     let msg = this.state.messages.find(m => m && Number(m.turnNum) === Number(turnNum)
       && m.role === 'assistant' && m.sid === sid && !m.supplementReply && !isProgressUpdateMessage(m));
     if (!msg) {
       msg = this._appendMessage({ id: `a${turnNum}-${entry.memberId || sid.slice(0, 8)}`, turnNum, role: 'assistant', sid,
         memberId: entry.memberId || sid, speaker: entry.speaker || 'AI', content: '', status: 'handed_off' });
     }
+    if(state==='unreadable')text=String(msg.content || '');
     // A changed answer gets a new seq so peers whose cursor already passed it
     // (late file, correction after rescue) receive it in their next delta.
     if (msg.content !== text && String(msg.content || '').length + String(text).length > 0) {
@@ -1613,7 +1614,7 @@ class GroupChatOrchestrator {
       this.state.nextMessageSeq = msg.seq + 1;
     }
     msg.content = text;
-    msg.answer = { state, outcome, at: entry.appliedAt };
+    msg.answer = { state, outcome, at: entry.appliedAt, ...(readError ? {readError} : {}) };
     msg.updatedAt = entry.appliedAt;
     const turn = this.state.turns.find(t => t.n === Number(turnNum));
     if (turn) (turn.by || (turn.by = {}))[sid] = text;

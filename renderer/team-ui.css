@@ -1,0 +1,25 @@
+/* 负责人组队（2026-11-01，renderer/team-ui.js）：侧栏标签与批准弹窗。沿用 Hub 浅色界面与 sl-orch-tag 的橙色。 */
+.team-pending-badge { margin-right: 4px; padding: 0 6px; border-radius: 999px; font-size: 10px; line-height: 15px; color: #fff; background: #e08a00; border: 0; cursor: pointer; vertical-align: 1px; }
+.team-pending-badge:hover { background: #c77600; }
+.team-member-tag { display: inline-block; margin-right: 4px; padding: 0 4px; border-radius: 4px; font-size: 10px; line-height: 14px; color: #3478f6; border: 1px solid #c9dafc; background: #f3f7ff; vertical-align: 1px; }
+.team-member-tag.dismissed { color: #999; border-color: #ddd; background: #f5f5f5; text-decoration: line-through; }
+.team-modal-backdrop { position: fixed; inset: 0; z-index: 9000; background: rgba(20, 24, 31, 0.32); display: flex; align-items: center; justify-content: center; }
+.team-modal { width: min(980px, 92vw); max-height: 86vh; overflow: auto; background: #fff; color: #1f2329; border-radius: 10px; padding: 18px 20px; font-family: "Microsoft YaHei", sans-serif; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18); }
+.team-modal h3 { margin: 0 0 6px; font-size: 16px; }
+.team-goal { margin: 0 0 12px; color: #4e5969; font-size: 13px; white-space: pre-wrap; }
+.team-plan { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.team-plan th { text-align: left; color: #86909c; font-weight: normal; border-bottom: 1px solid #e5e6eb; padding: 6px 8px; }
+.team-plan td { vertical-align: top; border-bottom: 1px solid #f0f1f3; padding: 8px; }
+.team-plan select { max-width: 330px; font-size: 12px; font-family: inherit; color: inherit; background: #fff; border: 1px solid #d0d3d9; border-radius: 6px; padding: 5px 8px; }
+.team-plan select:focus { outline: 2px solid rgba(52, 120, 246, 0.2); outline-offset: 1px; border-color: #3478f6; }
+.team-col-no { color: #86909c; width: 20px; }
+.team-sub { color: #86909c; font-size: 11.5px; }
+.team-task { white-space: pre-wrap; max-width: 360px; }
+.team-note { display: block; margin-top: 12px; font-size: 12px; color: #4e5969; }
+.team-note textarea { display: block; width: 100%; box-sizing: border-box; margin-top: 4px; font-family: inherit; }
+.team-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.team-actions button { padding: 5px 14px; border-radius: 6px; border: 1px solid #d0d3d9; background: #fff; cursor: pointer; }
+.team-actions button.primary { background: #3478f6; border-color: #3478f6; color: #fff; }
+.team-actions button:disabled { opacity: 0.6; cursor: default; }
+.team-error { margin-top: 8px; color: #d4380d; font-size: 12px; }
+.sl-title > .sl-orch-tag:first-child { margin-left: 0; margin-right: 4px; }

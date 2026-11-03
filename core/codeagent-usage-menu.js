@@ -32,7 +32,7 @@ const windowRe = name => new RegExp(`\\b${name}\\s+${UNIT}\\s*/\\s*${UNIT}\\s*\\
 const DAY_RE = windowRe('Day');
 const HOUR_RE = windowRe('Hour');
 const MIN_RE = windowRe('Min');
-const FACTOR_RE = /(?:^|\s)(\d+(?:\.\d+)?\s*[xX×])(?=\s|$)/;
+const FACTOR_RE = /(?:^|\s)(\d+(?:\.\d+)?(?:\s*-\s*\d+(?:\.\d+)?)?\s*[xX×])(?=\s|$)/;
 const LOAD_RE = /●\s*([^\s●│┃]+)/;
 const MENU_END = /Navigate\s*↑\s*↓|^\s*[─━]{20,}/;
 
@@ -70,6 +70,8 @@ function creditField(rows, at, field) {
 
 function idleCountdown(rows, at) {
   const line = rows[at];
+  const active = /闲\s*时\s*(\d+(?:\.\d+)?)\s*折\s*进行中/.exec(line);
+  if (active) return { found: true, text: null, discount: `${active[1]}折`, active: true };
   const m = IDLE_RE.exec(line);
   if (!m) return { found: false };
   let text = compact(m[2] || '');
@@ -141,11 +143,76 @@ function parseCodeAgentUsageMenu(screenLines) {
   }
   if (Object.keys(fields).length) {
     credit = { monthly: fields.monthly || null, busyDay: fields.busyDay || null, idleDay: fields.idleDay || null,
-      idleDiscountIn: idle.found ? idle.text : null, idleDiscount: idle.found ? idle.discount : null };
+      idleDiscountIn: idle.found ? idle.text : null, idleDiscount: idle.found ? idle.discount : null,
+      ...(idle.active ? { idleDiscountActive: true } : {}) };
   }
   const models = parseModels(rows);
   if (!credit && !models.length) return null;
   return { credit, models };
+}
+
+const PICKER_USAGE_WAIT_MS = 1500;
+const PROBE_USAGE_WAIT_MS = 5000;
+const USAGE_LOG_MAX_BYTES = 256 * 1024;
+const diagnosticSeen = new Map();
+const hasModelTokens = usage => !!usage?.models?.some(model => model.day);
+
+// Only the usage menu, never the prompt/history surrounding it. Keep its original spacing.
+function usageMenuLines(lines) {
+  const rows = Array.isArray(lines) ? lines.map(String) : String(lines || '').split(/\r?\n/);
+  const start = rows.findIndex(line => /Credit\s*用量/.test(line));
+  if (start < 0) return [];
+  const out = [];
+  for (const line of rows.slice(start, start + 40)) {
+    if (MENU_END.test(line) || /^\s*(?:[│┃]\s*)?[❯›>]/.test(line) && !MODEL_ROW.test(line)) break;
+    out.push(line);
+  }
+  return out;
+}
+
+function appendUsageDiagnostic(dataDir, lines, { source = 'screen', now = Date.now() } = {}) {
+  const rows = usageMenuLines(lines);
+  if (!dataDir || !rows.length) return false;
+  const file = path.join(dataDir, 'logs', 'codeagent-usage-menu.log');
+  const content = rows.join('\n');
+  const hash = require('node:crypto').createHash('sha256').update(content).digest('hex');
+  const seen = diagnosticSeen.get(file) || new Set();
+  if (seen.has(hash)) return true;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const entry = JSON.stringify({ at: new Date(now).toISOString(), source, lineCount: rows.length }) + '\n' + content + '\n';
+    if (Buffer.byteLength(entry) > USAGE_LOG_MAX_BYTES) return false;
+    if (fs.existsSync(file) && fs.statSync(file).size + Buffer.byteLength(entry) > USAGE_LOG_MAX_BYTES) {
+      if (fs.existsSync(file + '.1')) fs.unlinkSync(file + '.1');
+      fs.renameSync(file, file + '.1');
+    }
+    fs.appendFileSync(file, entry, 'utf8');
+    seen.add(hash);
+    // Bound deduplication memory as well as disk usage.
+    if (seen.size > 256) seen.delete(seen.values().next().value);
+    diagnosticSeen.set(file, seen);
+    return true;
+  } catch { return false; }
+}
+
+async function readUsageMenu(lines, { readLines, timeoutMs, dataDir, source,
+  now = Date.now, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
+  let usage = parseCodeAgentUsageMenu(lines);
+  if (usage?.credit && !hasModelTokens(usage) && readLines) {
+    const deadline = now() + timeoutMs;
+    while (now() < deadline) {
+      await sleep(Math.min(80, deadline - now()));
+      const next = await readLines();
+      if (!usageMenuLines(next).length) break; // the user closed the menu
+      lines = next;
+      usage = parseCodeAgentUsageMenu(lines) || usage;
+      if (hasModelTokens(usage)) break;
+    }
+  }
+  if (!usage && usageMenuLines(lines).length) usage = { credit: null, models: [] };
+  if (usage) usage.modelsRead = { status: hasModelTokens(usage) ? 'read' : 'unrecognized',
+    diagnostic: !hasModelTokens(usage) && appendUsageDiagnostic(dataDir, lines, { source, now: now() }) };
+  return { usage, lines };
 }
 
 // ---------------------------------------------------------------- 快照：按账号存最近一次读数
@@ -153,6 +220,7 @@ function parseCodeAgentUsageMenu(screenLines) {
 // 主进程（Hub 选模型时）和界面进程（每轮结束读屏）都会写：读的时候按文件修改时间刷新内存副本。
 const FILE = 'codeagent-usage.json';
 const cache = new Map(); // file → { mtimeMs, data }
+const CODEAGENT_SERVE_MAX_AGE_MS = 10 * 60 * 1000;
 
 function usageFile(dataDir) { return path.join(dataDir, 'codeagent-pool', FILE); }
 
@@ -170,11 +238,35 @@ function readUsage(dataDir, { fsModule = fs } = {}) {
 }
 
 function recordUsage(dataDir, key, usage, { label = '', source = '', now = Date.now(), fsModule = fs } = {}) {
-  if (!dataDir || !key || !usage || (!usage.credit && !(usage.models || []).length)) return null;
+  if (!dataDir || !key || !usage || (!usage.credit && !(usage.models || []).length && !usage.modelsRead)) return null;
   const accounts = { ...readUsage(dataDir, { fsModule }) };
   const prev = accounts[key] || {};
+  const credit = usage.credit || prev.credit;
+  const mergedCredit = credit ? { ...credit } : null;
+  if (mergedCredit) {
+    const incoming = durationMinutes(usage.credit && usage.credit.idleDiscountIn);
+    const previous = durationMinutes(prev.credit && prev.credit.idleDiscountIn);
+    const until = incoming != null ? now + incoming * 60000
+      : prev.credit?.idleDiscountUntil ?? ((prev.creditAt ?? prev.at) + previous * 60000);
+    if (!usage.credit?.idleDiscountActive && Number.isFinite(until) && until > now && (incoming != null || previous != null)) {
+      mergedCredit.idleDiscountUntil = until;
+      if (incoming == null) {
+        mergedCredit.idleDiscountIn = prev.credit.idleDiscountIn;
+        mergedCredit.idleDiscount = prev.credit.idleDiscount;
+      }
+    } else {
+      mergedCredit.idleDiscountIn = null;
+      mergedCredit.idleDiscountUntil = null;
+    }
+  }
   // 只读到一半（例如画面上半截被裁、只有模型行）：没读到的部分沿用上一次
-  const entry = { credit: usage.credit || prev.credit || null, models: (usage.models || []).length ? usage.models : (prev.models || []),
+  const tokens = hasModelTokens(usage);
+  const entry = { credit: mergedCredit, models: tokens ? usage.models : hasModelTokens(prev) ? prev.models : (usage.models?.length ? usage.models : prev.models || []),
+    creditAt: usage.credit ? now : (prev.creditAt ?? prev.at),
+    creditSource: usage.credit ? source : (prev.creditSource ?? prev.source),
+    modelsAt: tokens ? now : (hasModelTokens(prev) ? prev.modelsAt ?? prev.at : null),
+    modelsSource: tokens ? source : (hasModelTokens(prev) ? prev.modelsSource ?? prev.source : null),
+    modelsRead: { ...(usage.modelsRead || { status: tokens ? 'read' : 'unrecognized', diagnostic: false }), at: now, source },
     label: label || prev.label || '', source, at: now };
   accounts[key] = entry;
   const file = usageFile(dataDir);
@@ -192,7 +284,57 @@ const squash = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 function modelUsage(entry, modelId) {
   if (!entry || !Array.isArray(entry.models) || !modelId) return null;
   const want = squash(modelId);
-  return entry.models.find(m => squash(m.name) === want) || null;
+  const exact = entry.models.find(m => !/(?:\.{3}|…)\s*$/.test(m.name) && squash(m.name) === want);
+  if (exact) return exact;
+  const normalize = value => String(value).toLowerCase().replace(/[^a-z0-9.]+/g, '');
+  const matches = entry.models.filter(m => {
+    if (!/(?:\.{3}|…)\s*$/.test(m.name)) return false;
+    const prefix = String(m.name).replace(/(?:\.{3}|…)\s*$/, '');
+    const version = /\d+(?:\.\d+)*/.exec(prefix);
+    const requestedVersion = /\d+(?:\.\d+)*/.exec(modelId);
+    if (requestedVersion && version?.[0] !== requestedVersion[0]) return false;
+    return !!normalize(prefix) && normalize(modelId).startsWith(normalize(prefix));
+  });
+  return matches.length === 1 ? matches[0] : null;
+}
+
+// 面板刷新与已有模型探测共用尝试时间；失败也限速，连续打开面板不会反复起 CLI。
+function createUsageRefresher({ read, probe, now = Date.now }) {
+  const attempts = new Map();
+  const pending = new Map();
+  const errors = new Map();
+  function noteAttempt(key) { attempts.set(key, now()); errors.delete(key); }
+  function nextRefreshAt(key, entry = read(key)) {
+    const last = attempts.get(key) ?? (['serve', 'probe'].includes(entry?.source) ? entry.at : null);
+    return Number.isFinite(last) ? last + CODEAGENT_SERVE_MAX_AGE_MS : 0;
+  }
+  function refresh(key) {
+    if (pending.has(key)) return pending.get(key);
+    const before = read(key);
+    const retryAt = nextRefreshAt(key, before);
+    if (now() < retryAt) {
+      return Promise.resolve({ ok: !errors.has(key), error: errors.get(key), outcome: 'skipped', reason: '10 分钟冷却', cached: true, entry: before || null, nextRefreshAt: retryAt });
+    }
+    noteAttempt(key);
+    const task = Promise.resolve().then(async () => {
+      try {
+        await probe(key);
+        const entry = read(key);
+        if (!entry || entry === before) throw new Error('本次未读到新的模型用量');
+        if (entry.modelsRead?.status === 'unrecognized') {
+          errors.set(key, '菜单格式未能识别');
+          return { ok: false, outcome: 'failed', reason: '菜单格式未能识别', error: '菜单格式未能识别', entry };
+        }
+        return { ok: true, outcome: 'read', entry };
+      } catch (error) {
+        errors.set(key, error.message);
+        return { ok: false, outcome: 'failed', reason: error.message, error: error.message, entry: read(key) || before || null };
+      } finally { pending.delete(key); }
+    }).then(result => ({ ...result, nextRefreshAt: attempts.get(key) + CODEAGENT_SERVE_MAX_AGE_MS }));
+    pending.set(key, task);
+    return task;
+  }
+  return { refresh, noteAttempt, nextRefreshAt };
 }
 
 // 模型下拉旁的灰字「今日 7.29% · 低负载 · 0x」和颜色档（≥80% 红、≥50% 橙）；没数据返回 null。
@@ -230,4 +372,5 @@ function formatAge(ms) {
   return m < 1 ? '刚刚' : m < 60 ? `${m} 分钟前` : m < 2880 ? `${Math.round(m / 60)} 小时前` : `${Math.round(m / 1440)} 天前`;
 }
 
-module.exports = { parseCodeAgentUsageMenu, recordUsage, readUsage, usageFile, modelUsage, usageHint, durationMinutes, formatMinutes, formatAge, displayCol };
+module.exports = { parseCodeAgentUsageMenu, recordUsage, readUsage, usageFile, modelUsage, usageHint, durationMinutes, formatMinutes, formatAge, displayCol, createUsageRefresher, CODEAGENT_SERVE_MAX_AGE_MS,
+  hasModelTokens, readUsageMenu, usageMenuLines, appendUsageDiagnostic, PICKER_USAGE_WAIT_MS, PROBE_USAGE_WAIT_MS, USAGE_LOG_MAX_BYTES };

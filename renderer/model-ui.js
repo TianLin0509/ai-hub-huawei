@@ -11,6 +11,11 @@ const { EFFORT_DESCRIPTIONS } = require('../core/codex-model-catalog.js');
 const { compareCliVersions } = require('../core/claude-model-discovery.js');
 const { speedControl } = require('../core/session-speed.js');
 
+function modelPickerIdText(option) {
+  if (option.disabled && option.upgradeTo) return `需 ${option.upgradeTo}+`;
+  return String(option.label).toLowerCase() === String(option.id).toLowerCase() ? '' : option.id;
+}
+
 // Map a model id to a CSS family class for badge coloring.
 function modelClass(id) {
   if (!id) return '';
@@ -388,12 +393,11 @@ function createModelUiController({
       item.title = opt.disabled && opt.upgradeTo
         ? `${opt.description || opt.id} · 需要 Claude Code ${opt.upgradeTo}+`
         : (opt.description || opt.id);
+      const idText = modelPickerIdText(opt);
       item.innerHTML = `<span class="model-picker-check">${current ? '✓' : ''}</span>`
         + `<span class="model-picker-label">${escapeHtml(opt.label)}</span>`
         + codeagentUsageSpan(usageEntry, opt.id)
-        + `<span class="model-picker-id">${escapeHtml(
-          opt.disabled && opt.upgradeTo ? `需 ${opt.upgradeTo}+` : opt.id,
-        )}</span>`;
+        + (idText ? `<span class="model-picker-id">${escapeHtml(idText)}</span>` : '');
       if (strategy && !opt.disabled && !(session && session._modelSwitchPending)) {
         item.addEventListener('click', (event) => {
           event.stopPropagation();
@@ -1008,6 +1012,7 @@ module.exports = {
   compatibleEffort,
   createModelUiController,
   modelClass,
+  modelPickerIdText,
   modelSelectionMatches,
   modelShort,
   parseCodexAdvancedReasoningPicker,

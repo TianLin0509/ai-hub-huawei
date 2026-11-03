@@ -411,7 +411,14 @@ async function parseSessionTranscript(args = {}, deps) {
   if (!deps.commandTranscriptStore && !fs.existsSync(path.join(require('../../core/data-dir').getHubDataDir(), 'command-transcript.sqlite'))) return result;
   const commands = (deps.commandTranscriptStore || commandTranscriptStore()).read(args.hubSessionId);
   if (!commands.length) return result;
-  return { ...result, turns: mergeCommandTurns(result.turns || [], commands, args.opts || {}) };
+  const kind = lookupSessionRecord(args.hubSessionId, deps)?.record.kind || args.kind;
+  const limit = args.opts?.limit ?? 50;
+  // A short result exhausted the provider history. Otherwise earlier pages
+  // lack the suffix counts needed to align the complete command journal.
+  const codeagentComplete = !args.opts?.offset && (limit === Infinity
+    || (Number.isFinite(limit) && (result.turns?.length || 0) < limit));
+  return { ...result, turns: mergeCommandTurns(result.turns || [], commands,
+    { ...args.opts, codeagent: require('../../core/ai-kinds').isCodeAgentKind(kind), codeagentComplete }) };
 }
 
 function registerTranscriptIpc(ipcMain, deps) {

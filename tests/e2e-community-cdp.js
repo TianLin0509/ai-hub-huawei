@@ -160,7 +160,6 @@ async function main() {
     for (let i = 0; i < 200 && !traceText().includes('Stop exit=0'); i++) await sleep(200);
     assert.match(traceText(), /prompt: 社区版端到端 hello/, 'the prompt reached the CLI through the PTY');
     assert.match(traceText(), /UserPromptSubmit exit=0[\s\S]*Stop exit=0/, 'prompt and stop hooks ran');
-    // The reply is on the real terminal, and the composer status turns to "completed" from the relayed hooks.
     await until(`(async()=>String(await ipcRenderer.invoke("get-ring-buffer",${JSON.stringify(id)})).includes("FAKE-REPLY: 社区版端到端 hello"))()`, 'reply on the terminal');
     await until(`document.querySelector(${JSON.stringify(composer)})?.innerText.includes("完成")`, 'composer shows the turn completed');
     await shot('03-reply');

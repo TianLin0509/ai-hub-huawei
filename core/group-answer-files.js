@@ -4,7 +4,8 @@
 // reads the file whenever it changes — before or after an interruption, and
 // whether or not the Hub dispatched that turn. Card states: content or none.
 //
-// Plain group chats: <data>/task-docs/<meetingId>/answers/turn-<n>/<memberId>/回答.md
+// Plain group chats: <data>/task-docs/<meetingId>/answers/turn-<n>/<runId>/<memberId>/回答.md
+// Legacy files without the runId directory remain readable.
 // Delivery workflow turns reuse that step's delivery files (draft shown as 草稿).
 const fs = require('node:fs');
 const path = require('node:path');
@@ -23,9 +24,11 @@ function legacyWorkflow(w) {
 // the extraction machinery testable.
 function enabled(meeting) { return !!meeting?.groupChat && meeting.answerSource !== 'transcript' && !legacyWorkflow(meeting.serialWorkflow); }
 
-function plainEntry(dataDir, meetingId, turnNum, memberId) {
+function plainEntry(dataDir, meetingId, turnNum, memberId, answerId) {
   if (!SAFE.test(String(meetingId)) || !SAFE.test(String(memberId)) || !Number.isSafeInteger(Number(turnNum))) throw new Error('回答文件路径身份无效');
-  const dir = path.join(dataDir, 'task-docs', String(meetingId), 'answers', `turn-${Number(turnNum)}`, String(memberId));
+  if(answerId && !SAFE.test(String(answerId)))throw new Error('回答文件消息身份无效');
+  const dir = path.join(dataDir, 'task-docs', String(meetingId), 'answers', `turn-${Number(turnNum)}`,
+    ...(answerId ? [String(answerId)] : []), String(memberId));
   return { kind: 'plain', dir, ready: path.join(dir, '回答.md') };
 }
 function deliveryEntry(dataDir, meetingId, workflowRun, memberId) {
@@ -38,8 +41,8 @@ function deliveryEntry(dataDir, meetingId, workflowRun, memberId) {
   return { kind: 'delivery', dir: p.dir, draft: p.draft, ready: p.ready, rework: p.rework, blocked: p.blocked };
 }
 /** The answer file(s) for one member in one dispatched turn. */
-function entryFor({ dataDir, meetingId, turnNum, memberId, speaker, workflowRun }) {
-  const base = workflowRun?.kind === 'delivery' ? deliveryEntry(dataDir, meetingId, workflowRun, memberId) : plainEntry(dataDir, meetingId, turnNum, memberId);
+function entryFor({ dataDir, meetingId, turnNum, memberId, speaker, workflowRun, answerId }) {
+  const base = workflowRun?.kind === 'delivery' ? deliveryEntry(dataDir, meetingId, workflowRun, memberId) : plainEntry(dataDir, meetingId, turnNum, memberId, answerId);
   return { ...base, memberId, speaker: speaker || memberId, at: Date.now() };
 }
 function instruction(entry) {
@@ -50,10 +53,14 @@ function instruction(entry) {
 function readText(file) {
   try {
     const st = fs.lstatSync(file);
-    if (!st.isFile() || st.size > MAX_BYTES) return '';
+    if (!st.isFile())throw new Error('回答路径不是文件');
+    if (st.size > MAX_BYTES)throw new Error('回答文件超过 2 MB，尚未完整读取');
     // Drop BOM and the delivery ticket line; they are protocol, not content.
     return fs.readFileSync(file, 'utf8').replace(/^﻿/, '').replace(/^<!-- hub-delivery:[0-9a-f]+ -->\r?\n/, '').trim();
-  } catch { return ''; }
+  } catch(error) {
+    if(error.code==='ENOENT')return '';
+    throw error;
+  }
 }
 /** Current answer: { state: 'delivered'|'draft', outcome, text, hash } or null. */
 function read(entry) {
@@ -119,11 +126,17 @@ function reconcile(orch,{changedPaths=null}={}) {
       } catch { continue; } // Retry on the next scan; never cache a failed read.
       // Skip unchanged files cheaply: size + mtime of every candidate path.
       const sig = signature(entry);
-      if (sig === entry.sig) continue;
-      const got = read(entry);
-      if (got && orch.applyAnswerFile(turnNum, sid, got)) changed = true;
-      else if (!got && entry.hash && orch.applyAnswerFile(turnNum, sid, { state: 'missing', outcome: null, text: '', hash: null })) changed = true;
-      entry.sig = sig;
+      if (sig === entry.sig && !entry.readError) continue;
+      try {
+        const got = read(entry);
+        if (got && orch.applyAnswerFile(turnNum, sid, got)) changed = true;
+        else if (!got && (entry.hash || entry.readError) && orch.applyAnswerFile(turnNum, sid, { state: 'missing', outcome: null, text: '', hash: null })) changed = true;
+        entry.sig = sig;
+      } catch(error) {
+        // Keep the last readable answer. Do not cache a failed read: the same
+        // size/mtime can become readable after a temporary file lock clears.
+        if(orch.applyAnswerFile(turnNum,sid,{state:'unreadable',readError:error.message,hash:entry.hash,outcome:entry.outcome}))changed=true;
+      }
     }
   }
   return changed;

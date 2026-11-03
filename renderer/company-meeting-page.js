@@ -1,11 +1,12 @@
 'use strict';
 const { MeetingCapture } = require('./meeting-capture');
 const { meetingTemplate } = require('./company-meeting-template');
+const { flowEntries, meetingNavigation } = require('./company-meeting-flow');
 function createCompanyMeetingPage({ document, window, call, markdown, openSession }) {
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const time = ms => `${String(Math.floor((ms || 0) / 60000)).padStart(2, '0')}:${String(Math.floor((ms || 0) / 1000) % 60).padStart(2, '0')}`;
   let root, id = null, capture, state, poll, sourceList = [], playback = null, playRequest = 0;
-  let busy = false, refreshing = false, evidenceRequest = 0, thumbsObserver, tab = 'summary', meterTimer, activeSeq = null;
+  let busy = false, refreshing = false, evidenceRequest = 0, thumbsObserver, meterTimer, activeSeq = null, revealQuestion = false;
   const thumbCache = new Map();
   function message(s) { if (root) root.querySelector('[data-m="message"]').textContent = s; }
   const EMPTY_SUMMARY = '<div class="meeting-summary-empty"><strong>讨论的脉络，在这里慢慢清晰</strong><p>结论、待确认的问题与行动项会随理解更新；点击来源标记，回到对应画面和原话。</p><small>理解与问答需要 CodeAgent；未安装也可先采集和回看。</small></div>';
@@ -28,16 +29,76 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
   const shortDate = t => { const d = new Date(t), p = n => String(n).padStart(2, '0'); return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
   const el = name => root.querySelector(`[data-m="${name}"]`);
   function view(mode, label) {
+    root.querySelector('.meeting-viewer > .meeting-ppt-results')?.remove();
     root.querySelector('.meeting-stage').dataset.view = mode;
+    setViewerExpanded(mode === 'evidence' || mode === 'replay');
     el('viewer-label').textContent = label || ({ live:'共享画面 · 实时', replay:'会议录像回放', evidence:'会议出处', empty:'共享画面' })[mode];
     root.querySelector('[data-act="live"]').hidden = !capture?.running || mode === 'live';
     if (mode !== 'replay') el('player').pause();
     if (mode !== 'evidence') el('evidence').querySelector('audio')?.pause();
   }
-  function switchTab(value) {
-    tab = value;
-    root.querySelectorAll('.meeting-tabs [data-tab]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === tab)));
-    root.querySelectorAll('[data-panel]').forEach(p => { p.hidden = p.dataset.panel !== tab; });
+  function setViewerExpanded(expanded) {
+    root.querySelector('.meeting-viewer').classList.toggle('is-expanded', expanded);
+    const button = root.querySelector('[data-act-local="expand-viewer"]');
+    button.setAttribute('aria-pressed', String(expanded)); button.textContent = expanded ? '收起' : '放大';
+  }
+  function updateFollowButton() {
+    const list = el('timeline');
+    root.querySelector('[data-act-local="latest"]').hidden = list.scrollHeight - list.clientHeight - list.scrollTop < 64;
+  }
+  function renderFlow(meeting) {
+    const list = el('timeline'), entries = flowEntries(meeting), stamp = JSON.stringify([id, entries]);
+    if (list.dataset.stamp === stamp) return;
+    const follow = list.scrollHeight - list.clientHeight - list.scrollTop < 64;
+    const anchor = [...list.children].find(n => n.getBoundingClientRect().bottom > list.getBoundingClientRect().top);
+    const anchorTop = anchor?.getBoundingClientRect().top;
+    const existing = new Map([...list.querySelectorAll(':scope > [data-flow-key]')].map(n => [n.dataset.flowKey, n]));
+    list.querySelector(':scope > .meeting-empty')?.remove();
+    for (const [index, entry] of entries.entries()) {
+      let row = existing.get(entry.key); existing.delete(entry.key);
+      if (!row) { row = document.createElement('div'); row.dataset.flowKey = entry.key; }
+      row.className = `meeting-flow-event is-${entry.kind}`;
+      row.dataset.at = entry.at === null ? '' : String(entry.at);
+      const version = JSON.stringify(entry);
+      if (row.dataset.version !== version) {
+        const expanded = row.querySelector('details')?.open ?? true;
+        const label = entry.afterMeeting ? '会后' : entry.at === null ? '未记录' : time(entry.at);
+        let content;
+        if (entry.kind === 'question') {
+          const q = entry.question, status = {queued:'排队中',running:'回答中',done:'已回答',error:'失败，可重试'}[q.state] || q.state;
+          content = `<details class="meeting-flow-answer" data-answer="${esc(q.id)}"${expanded ? ' open' : ''}><summary><b>问</b> ${esc(q.q)} <small>${esc(status)}</small></summary><div class="meeting-answer-body">${markdown(q.answer || q.error || '正在根据本场会议的材料回答…')}</div>${q.state === 'error' ? `<button class="ca-btn" data-retry-question="${esc(q.id)}">重试问题</button>` : ''}</details>`;
+        } else {
+          const e = entry.event;
+          content = e.kind === 'slide' ? `<div class="meeting-frame-item"><button class="meeting-frame" data-event="${e.seq}" aria-label="查看 ${time(e.at)} 的截图"><img data-thumb="${e.seq}" alt="会议截图"></button><div><strong>共享画面${e.revisit ? ' · 再次展示' : ''}</strong><p>${e.forced ? '手动截图' : '自动精选'}</p><button class="ca-link" data-find-ppt="${e.seq}">找原稿</button></div></div>`
+            : `<button class="meeting-event ${e.kind === 'mark' ? 'is-mark' : ''}" data-event="${e.seq}"><b>${e.kind === 'mark' ? '★ 重点' : e.track === 'mic' ? '麦克风' : '系统声音'}</b><span>${esc(e.text)}</span></button>`;
+        }
+        row.innerHTML = `<time>${label}</time><div class="meeting-flow-content">${content}</div>`;
+        citations(row); row.dataset.version = version;
+      }
+      if (list.children[index] !== row) list.insertBefore(row, list.children[index] || null);
+    }
+    for (const node of existing.values()) node.remove();
+    if (!entries.length) list.innerHTML = '<p class="meeting-empty">开始后，截图、原话、重点和问答会按时间显示在这里。</p>';
+    list.dataset.stamp = stamp; thumbnails(); markActive();
+    el('flow-count').textContent = `${entries.filter(e => e.kind === 'slide').length} 张画面 · ${entries.filter(e => ['transcript','mark'].includes(e.kind)).length} 条原话与重点 · ${meeting?.answers?.length || 0} 条问答`;
+    if (revealQuestion) {
+      const answer = [...list.querySelectorAll('[data-answer]')].at(-1);
+      if (answer) { answer.open = true; answer.scrollIntoView({ block: 'nearest' }); }
+      revealQuestion = false;
+    } else if (follow) list.scrollTop = list.scrollHeight;
+    else if (anchor?.isConnected) list.scrollTop += anchor.getBoundingClientRect().top - anchorTop;
+    updateFollowButton();
+  }
+  function renderNavigation(meeting) {
+    const nav = meetingNavigation(meeting), box = el('topics');
+    const stamp = JSON.stringify([id, nav]);
+    if (box.dataset.stamp !== stamp) {
+      el('topics-label').textContent = nav.kind === 'topics' ? '议题' : '时间定位';
+      el('topics-hint').textContent = nav.kind === 'topics' ? '来自纪要，点击回到出处' : '议题尚未整理，先按画面与重点回看';
+      box.innerHTML = nav.items.map((t, i) => `<button class="meeting-topic" data-topic="${t.seq}" data-event="${t.seq}"><span>${i + 1}. ${esc(t.title)}</span><small>${time(t.at)}</small></button>`).join('') || '<p class="meeting-empty">采集开始后，这里会逐步留下定位入口。</p>';
+      box.dataset.stamp = stamp;
+    }
+    markActive();
   }
   function thumbnails() {
     thumbsObserver?.disconnect();
@@ -83,6 +144,15 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       el('record-dot').dataset.state = capture?.running && !capture.paused ? 'recording' : capture?.running ? 'paused' : m ? 'ended' : 'idle';
       el('footer-dot').dataset.state = m?.state === 'interrupted' || capture?.saveError ? 'error' : el('record-dot').dataset.state;
       root.dataset.phase = capture?.running ? 'live' : m ? 'review' : 'idle';
+      root.dataset.recording = String(!!capture?.running && !capture.paused);
+      root.dataset.thinking = String([m?.job, m?.questionJob].some(j => ['understand', 'question'].includes(j?.kind) && j.state !== 'error'));
+      const reviewing = root.dataset.phase === 'review', exportButton = root.querySelector('[data-act="export"]');
+      const exportParent = root.querySelector(reviewing ? '.meeting-actions' : '.meeting-summary-heading');
+      if (exportButton.parentElement !== exportParent) {
+        if (reviewing) exportParent.prepend(exportButton); else exportParent.append(exportButton);
+      }
+      exportButton.classList.toggle('primary', reviewing);
+      exportButton.querySelector('span').hidden = !reviewing;
       el('duration').textContent = time(m?.capturedMs);
       meters();
       el('clock').textContent = time(capture?.running ? capture.elapsed() : m?.capturedMs);
@@ -98,10 +168,12 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       root.querySelector('[data-act="retry-save"]').hidden = !(capture?.saveError || capture?.recorder?.queue.length || capture?.queue.length);
       el('history').disabled = busy || !!capture?.running;
       for (const name of ['source','title','system','mic']) el(name).disabled = !!capture?.running;
+      root.querySelectorAll('[data-crop]').forEach(input => { input.disabled = !!capture?.running; });
       const rec = m?.recording, ready = rec?.segments.filter(s => s.status === 'ready') || [];
+      root.querySelector('[data-act="open-full"]').disabled = !rec?.full?.bytes || rec.full.status === 'writing';
       for (const op of ['play','extract']) root.querySelector(`[data-act="${op}"]`).disabled = !ready.length;
       el('seek').max = String(Math.max(0, (m?.capturedMs || 0) / 1000));
-      el('recording-status').textContent = rec ? `本地录像已保存至 ${time(rec.savedThrough)} · ${(rec.bytes / 1024 / 1024).toFixed(1)} MB · ${ready.length} 个可回放片段${rec.segments.some(s=>s.status==='writing') ? ' · 当前片段保存中' : ''}` : m ? '此会议没有录像，仍可查看截图与录音' : '材料仅保存到本机';
+      el('recording-status').textContent = rec ? `本地录像已保存至 ${time(rec.savedThrough)} · ${rec.full?.bytes ? `完整 ${(rec.full.bytes / 1024 / 1024).toFixed(1)} MB · ` : ''}分段 ${(Math.max(0, rec.bytes - (rec.full?.bytes || 0)) / 1024 / 1024).toFixed(1)} MB · ${ready.length} 个可回放片段${rec.segments.some(s=>s.status==='writing') ? ' · 当前片段保存中' : ''}` : m ? '此会议没有录像，仍可查看截图与录音' : '材料仅保存到本机';
       el('gaps').textContent = [...(rec?.gaps || []), ...(rec?.openGap ? [{...rec.openGap,end:null}] : [])].map(g => `${time(g.at)}—${g.end==null || g.open ? '未恢复' : time(g.end)} ${g.reason}`).join('；');
       const waited = m?.job?.sentAt ? Math.max(0, Math.round((Date.now() - m.job.sentAt) / 1000)) : 0;
       const jobText = !m?.job ? '' : m.job.state === 'error' ? (m.job.kind === 'question' ? '回答失败，可重试' : '理解失败，可重试')
@@ -115,26 +187,19 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       if (document.activeElement !== el('interval')) el('interval').value = String(m ? (m.autoUnderstand === false ? 0 : (m.autoIntervalMin ?? 1)) : 3);
       el('interval').disabled = !m;
       root.querySelector('[data-act-local="open-agent"]').disabled = !m?.sessionId || !openSession;
-      if (m?.error || m?.asrError) message(m.error || m.asrError);
-      const events = (m?.events || []).filter(e => ['slide','transcript','mark'].includes(e.kind)).sort((a,b) => a.at-b.at || a.seq-b.seq);
-      const slides = events.filter(e => e.kind === 'slide'), speech = events.filter(e => e.kind !== 'slide');
-      el('frame-count').textContent = `${slides.length} 张`;
-      el('transcript-count').textContent = speech.length ? `${speech.length} 条记录` : asr.ready ? '等待发言' : '本地转写未就绪';
-      // 转写区默认收起，只留一行（2026-10-25 用户：基本没用到）；出现转写或重点后自动展开，用户手动开合后按用户的来。
-      const section = root.querySelector('.meeting-transcripts');
-      if (!section.dataset.userToggled) setTranscriptOpen(speech.length > 0);
-      const stamp = `${id}:${events.length}:${events.at(-1)?.seq || 0}`;
-      if (el('timeline').dataset.stamp !== stamp) {
-        const list = el('timeline'), scroll = list.scrollLeft;
-        list.dataset.stamp = stamp;
-        list.innerHTML = slides.map(e => `<button class="meeting-frame" data-event="${e.seq}" aria-label="查看 ${time(e.at)} 的截图"><img data-thumb="${e.seq}" alt="会议截图"><span>${time(e.at)}${e.revisit ? ' · 再次展示' : ''}</span></button>`).join('') || '<p class="meeting-empty">翻页后自动留下清晰截图，也可以手动补截图。</p>';
-        list.scrollLeft = scroll; thumbnails(); markActive();
-        el('transcript').innerHTML = speech.map(e => `<button class="meeting-event ${e.kind==='mark'?'is-mark':''}" data-event="${e.seq}"><time>${time(e.at)}</time><b>${e.kind==='mark'?'★ 重点':e.track==='mic'?'麦克风':'系统声音'}</b><span>${esc(e.text)}</span></button>`).join('') || '<p class="meeting-empty">本地识别完成后，发言按时间显示；没有 CodeAgent 也能保留这些材料。</p>';
+      const modelSelect = el('fast-model');
+      const modelHtml = `<option value="">自动${state.defaultFastModel ? ' · ' + esc(state.defaultFastModel) : ' · 沿用当前模型'}</option>` + (state.models || []).map(x => `<option value="${esc(x.id)}">${esc(x.label || x.id)}</option>`).join('');
+      if (modelSelect.dataset.html !== modelHtml) { modelSelect.innerHTML = modelHtml; modelSelect.dataset.html = modelHtml; }
+      if (document.activeElement !== modelSelect) modelSelect.value = m?.fastModel || ''; modelSelect.disabled = !m;
+      root.querySelector('[data-act-local="open-question-agent"]').disabled = !m?.questionSessionId || !openSession;
+      if (m?.questionJob) {
+        const qj = m.questionJob, elapsed = Number.isFinite(qj.sentAt) ? `（${Math.max(0, Math.round((Date.now() - qj.sentAt) / 1000))} 秒）` : '';
+        el('understanding-status').textContent += ` · 问答${qj.state === 'error' ? '失败，可重试' : `独立${qj.kind === 'prime' ? '预热中' : '处理'}${elapsed}`}`;
       }
+      if (state.recordingError || m?.error || m?.questionError || m?.asrError || rec?.full?.durationError) message(state.recordingError || m.error || m.questionError || m.asrError || rec?.full?.durationError);
+      renderFlow(m); renderNavigation(m);
       const summary = el('summary'), html = m?.summary ? markdown(m.summary) : EMPTY_SUMMARY;
       if (summary.dataset.html !== html) { summary.innerHTML = html; citations(summary); summary.dataset.html = html; }
-      const answers = (m?.answers || []).map(q => `<details data-answer="${esc(q.id)}"><summary>${esc(q.q)} · ${{queued:'排队中',running:'回答中',done:'已回答',error:'失败，可重试'}[q.state] || esc(q.state)}</summary>${markdown(q.answer || '等待 CodeAgent 回答')}</details>`).join('') || '<p class="meeting-empty">围绕本场会议提问，回答会保留在这里。</p>';
-      if (el('answers').dataset.html !== answers) { const opened = new Set([...el('answers').querySelectorAll('details[open]')].map(d=>d.dataset.answer)); el('answers').innerHTML=answers;el('answers').dataset.html=answers;el('answers').querySelectorAll('details').forEach(d=>{d.open=opened.has(d.dataset.answer);});citations(el('answers')); }
     } finally { refreshing = false; }
   }
   async function action(op) {
@@ -157,10 +222,11 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
     else if (op === 'snap') await capture.frame(true);
     else if (op === 'mark') { if (capture.paused) throw new Error('请先继续采集'); capture.enqueue({ kind: 'mark', at: capture.elapsed(), text: root.querySelector('[data-m="note"]').value || '重点' }); root.querySelector('[data-m="note"]').value = ''; await capture.frame(true); }
     else if (op === 'export') { if (!id) throw new Error('先选择会议'); await call('meeting-export', { id }); }
+    else if (op === 'open-full') { if (!id) throw new Error('先选择会议'); await call('meeting-open-full', { id }); }
     else if (op === 'play' && playback && !el('player').paused) { el('player').pause(); return; }
     else if (op === 'play') { const first=state.meeting?.recording?.segments.find(s=>s.status==='ready'); await playAt(Number(root.querySelector('[data-m="seek-seconds"]').value)*1000 || first?.at || 0,true); }
-    else if (op === 'extract') { const at=playback ? playback.segment.at+root.querySelector('[data-m="player"]').currentTime*1000 : Number(root.querySelector('[data-m="seek-seconds"]').value)*1000; const requested = id; const result=await call('meeting-frames',{id,timesMs:[Math.round(at)]}); if(requested!==id)return; view('evidence', '录像回查'); const frame=result.frames[0]; root.querySelector('[data-m="evidence"]').innerHTML=`<p>录像回查 · ${time(frame.at)}</p><img class="meeting-slide" src="data:image/jpeg;base64,${frame.data}" alt="从录像提取的画面">`; }
-    else if (op === 'ask') { const input = root.querySelector('[data-m="question"]'); if (!id) throw new Error('先选择会议'); await call('meeting-control', { id, op: 'ask', value: input.value }); input.value = ''; switchTab('answers'); }
+    else if (op === 'extract') { const at=playback ? playback.segment.at+root.querySelector('[data-m="player"]').currentTime*1000 : Number(root.querySelector('[data-m="seek-seconds"]').value)*1000; const requested = id; const result=await call('meeting-frames',{id,timesMs:[Math.round(at)]}); if(requested!==id)return; view('evidence', '录像回查'); const frame=result.frames[0]; root.querySelector('[data-m="evidence"]').innerHTML=`<p>录像回查 · ${time(frame.at)}</p><img class="meeting-slide" src="data:image/jpeg;base64,${frame.data}" alt="从录像提取的画面">`; addPptLookup(frame.path); }
+    else if (op === 'ask') { const input = root.querySelector('[data-m="question"]'); if (!id) throw new Error('先选择会议'); await call('meeting-control', { id, op: 'ask', value: input.value }); input.value = ''; revealQuestion = true; }
     else { if (!id) throw new Error('先选择会议'); await call('meeting-control', { id, op }); }
     await refresh();
   }
@@ -170,18 +236,34 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       root = document.createElement('section'); root.className = 'company-meeting'; root.dataset.phase = 'idle'; root.innerHTML = meetingTemplate();
       root.addEventListener('click', e => {
         const button = e.target.closest('[data-act]'); if (button && !button.disabled && !busy) { busy = true; el('history').disabled = true; button.disabled = true; void action(button.dataset.act).catch(e => message(e.message)).finally(() => { busy = false; button.disabled = false; void refresh().catch(e => message(e.message)); }); }
-        const tabButton = e.target.closest('.meeting-tabs [data-tab]'); if (tabButton) switchTab(tabButton.dataset.tab);
+        if (!e.target.closest('.meeting-more')) el('more').open = false;
         if (e.target.closest('[data-act-local="dismiss"]')) message('');
-        if (e.target.closest('[data-act-local="toggle-transcript"]')) { const s = root.querySelector('.meeting-transcripts'); s.dataset.userToggled = '1'; setTranscriptOpen(s.dataset.collapsed === 'true'); }
+        const transcriptToggle = e.target.closest('[data-act-local="toggle-transcript"]');
+        if (transcriptToggle) { const hide = root.dataset.hideTranscripts !== 'true'; root.dataset.hideTranscripts = String(hide); transcriptToggle.setAttribute('aria-pressed', String(hide)); transcriptToggle.textContent = hide ? '显示时间流中的原话' : '隐藏时间流中的原话'; }
+        if (e.target.closest('[data-act-local="expand-viewer"]')) setViewerExpanded(!root.querySelector('.meeting-viewer').classList.contains('is-expanded'));
+        if (e.target.closest('[data-act-local="latest"]')) el('timeline').scrollTop = el('timeline').scrollHeight;
         if (e.target.closest('[data-act-local="open-agent"]') && state?.meeting?.sessionId && openSession) void openSession(state.meeting.sessionId).catch(err => message(err.message));
+        if (e.target.closest('[data-act-local="open-question-agent"]') && state?.meeting?.questionSessionId && openSession) void openSession(state.meeting.questionSessionId).catch(err => message(err.message));
+        const retry = e.target.closest('[data-retry-question]'); if (retry && id) void call('meeting-control', { id, op: 'retry-question', value: retry.dataset.retryQuestion }).then(() => refresh()).catch(err => message(err.message));
+        const findPpt = e.target.closest('[data-find-ppt]'); if (findPpt) void showEvidence(Number(findPpt.dataset.findPpt)).then(file => file && lookupPpt(file)).catch(err => message(err.message));
+        const findImage = e.target.closest('[data-find-image]'); if (findImage) void lookupPpt(findImage.dataset.findImage).catch(err => message(err.message));
+        const openPpt = e.target.closest('[data-ppt-open]'); if (openPpt) void call('ppt-open', { id: openPpt.dataset.pptOpen }).then(r => { if (r.pageFocused === false) message('原文件已打开，请手动切到候选页面。'); }).catch(err => message(err.message));
         const speedButton = e.target.closest('[data-speed]'); if (speedButton && id && !speedButton.disabled) void call('meeting-control', { id, op: 'speed', value: speedButton.dataset.speed }).then(() => refresh()).catch(err => message(err.message));
-        const quick = e.target.closest('[data-quick]'); if (quick) { el('question').value = quick.dataset.quick; el('question').focus(); const ask = root.querySelector('[data-act="ask"]'); if (!ask.disabled) ask.click(); }
-        const event = e.target.closest('[data-event]'); if (event) void showEvidence(Number(event.dataset.event)).catch(e => message(e.message));
+        const quick = e.target.closest('[data-quick]'); if (quick) { el('more').open = false; el('question').value = quick.dataset.quick; el('question').focus(); const ask = root.querySelector('[data-act="ask"]'); if (!ask.disabled) ask.click(); }
+        const event = e.target.closest('[data-event]'); if (event) {
+          const seq = Number(event.dataset.event), entry = state.meeting?.events.find(x => x.seq === seq);
+          if (event.dataset.topic) { const row = [...el('timeline').children].find(n => n.dataset.flowKey === `event-${seq}`); row?.scrollIntoView({ block: 'center' }); }
+          if (entry && event.closest('.meeting-flow') && entry.kind !== 'slide' && !capture?.running && state.meeting.recording?.segments.some(s => s.status === 'ready' && s.at <= entry.at && s.end > entry.at)) { activeSeq = seq; markActive(); void playAt(entry.at, true).catch(e => message(e.message)); }
+          else void showEvidence(seq).catch(e => message(e.message));
+        }
         const frame=e.target.closest('[data-play-at]');if(frame)void playAt(Number(frame.dataset.playAt),true).catch(e=>message(e.message));
       });
       root.querySelector('[data-m="source"]').addEventListener('change', preview);
+      root.addEventListener('keydown', e => { if (e.key === 'Escape' && el('more').open) { el('more').open = false; el('more').querySelector('summary').focus(); } });
+      el('timeline').addEventListener('scroll', updateFollowButton, { passive: true });
       root.querySelector('[data-m="history"]').addEventListener('change', e => selectMeeting(e.target.value));
       el('interval').addEventListener('change', e => { if (id) void call('meeting-control', { id, op: 'interval', value: Number(e.target.value) }).then(() => refresh()).catch(err => message(err.message)); });
+      el('fast-model').addEventListener('change', e => { if (id) void call('meeting-control', { id, op: 'fast-model', value: e.target.value }).then(() => refresh()).catch(err => message(err.message)); });
       el('note').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); root.querySelector('[data-act="mark"]').click(); } });
       el('question').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); root.querySelector('[data-act="ask"]').click(); } });
       const player = el('player'), playIcon = () => root.querySelector('.meeting-play').classList.toggle('is-playing', !player.paused);
@@ -199,20 +281,34 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
     const request = ++evidenceRequest, meetingId = id;
     const target = el('evidence');
     activeSeq = seq; markActive();
-    if (e.kind === 'slide') { const r = await call('meeting-asset', { id, seq }); if(request!==evidenceRequest || meetingId!==id)return; view('evidence', '精选画面 · ' + time(e.at)); target.innerHTML = `<p>事件 ${seq} · ${time(e.at)}</p><img class="meeting-slide" src="data:image/jpeg;base64,${r.data}" alt="会议页面">`; }
+    let imagePath;
+    if (e.kind === 'slide') { const r = await call('meeting-asset', { id, seq }); if(request!==evidenceRequest || meetingId!==id)return; view('evidence', '精选画面 · ' + time(e.at)); target.innerHTML = `<p>事件 ${seq} · ${time(e.at)}</p><img class="meeting-slide" src="data:image/jpeg;base64,${r.data}" alt="会议页面">`; imagePath = r.path; addPptLookup(imagePath); }
     else if (e.audioSeq) { const r = await call('meeting-asset', { id, seq: e.audioSeq }), audio = state.meeting.events.find(x => x.seq === e.audioSeq); if(request!==evidenceRequest || meetingId!==id)return; view('evidence','原音回查 · ' + time(e.at)); target.innerHTML = `<p>${esc(e.text)}</p><audio controls src="data:audio/wav;base64,${r.data}"></audio>`; target.querySelector('audio').currentTime = Math.max(0, (e.at - audio.at) / 1000); }
     else { view('evidence', '会议重点 · ' + time(e.at)); target.innerHTML = `<p>${esc(e.text)}</p>`; }
     if(state.meeting?.recording?.segments.some(s=>s.status==='ready'&&s.at<=e.at&&s.end>e.at)){const b=document.createElement('button');b.className='ca-btn';b.dataset.playAt=String(e.at);b.textContent='回放此处';target.append(b);}
+    return imagePath;
   }
-  function setTranscriptOpen(open) {
-    const section = root.querySelector('.meeting-transcripts');
-    section.dataset.collapsed = String(!open); section.querySelector('[data-act-local="toggle-transcript"]').setAttribute('aria-expanded', String(open));
-    root.querySelector('.meeting-evidence-pane').classList.toggle('transcripts-collapsed', !open);
+  function addPptLookup(file) {
+    if (!file) return;
+    const button = document.createElement('button'); button.className = 'ca-btn meeting-find-original'; button.dataset.findImage = file; button.textContent = '找原稿'; el('evidence').append(button);
   }
-  function markActive() { root.querySelectorAll('[data-m="timeline"] [data-event], [data-m="transcript"] [data-event]').forEach(b => b.classList.toggle('is-active', Number(b.dataset.event) === activeSeq)); }
+  async function lookupPpt(imagePath) {
+    const meetingId = id, request = ++evidenceRequest, target = root.querySelector('.meeting-viewer');
+    target.querySelector('.meeting-ppt-results')?.remove();
+    const box = document.createElement('section'); box.className = 'meeting-ppt-results'; box.setAttribute('role', 'status'); box.textContent = '正在识别此页并查找原稿…'; target.append(box);
+    try {
+      const result = await call('ppt-lookup-frame', { imagePath, limit: 5 }); if (request !== evidenceRequest || meetingId !== id || !box.isConnected) return;
+      if (result.ok === false) throw new Error(result.error || '原稿查找失败，请重试');
+      box.innerHTML = '<strong>候选原稿 · 请核对画面</strong>' + (result.candidates?.length ? result.candidates.map(c => `<div><button class="ca-link" data-ppt-open="${esc(c.id)}">${esc(c.ref?.name || c.title || '候选文件')} · 第 ${esc(c.ref?.page || '?')} 页</button><span>${esc(c.snippet || c.title || '')}</span></div>`).join('') : '<div>本次没有找到匹配文字的素材。</div>');
+    } catch (error) {
+      if (request !== evidenceRequest || meetingId !== id || !box.isConnected) return;
+      box.innerHTML = `<strong>${esc(error.message)}</strong><button class="ca-btn" data-find-image="${esc(imagePath)}">重试找原稿</button>`;
+    }
+  }
+  function markActive() { root.querySelectorAll('[data-m="timeline"] [data-event], [data-m="topics"] [data-event]').forEach(b => { const active = Number(b.dataset.event) === activeSeq; b.classList.toggle('is-active', active); if (b.dataset.topic) b.setAttribute('aria-current', String(active)); }); }
   function selectMeeting(value) {
-    id = value || null; activeSeq = null; evidenceRequest++; resetPlayer(); view('empty'); message('');
-    el('history').value = value || ''; el('timeline').dataset.stamp = ''; el('evidence').innerHTML = '';
+    id = value || null; activeSeq = null; revealQuestion = false; evidenceRequest++; resetPlayer(); view('empty'); message(''); el('more').open = false;
+    el('history').value = value || ''; el('timeline').dataset.stamp = ''; el('timeline').innerHTML = ''; el('evidence').innerHTML = '';
     void refresh().catch(e => message(e.message));
   }
   function resetPlayer(){playRequest++;playback=null;const p=root.querySelector('[data-m="player"]');p.pause();p.removeAttribute('src');p.load();root.querySelector('[data-m="seek-seconds"]').value='0';root.querySelector('[data-m="seek"]').value='0';}

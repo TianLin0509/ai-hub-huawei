@@ -2,7 +2,7 @@
 // CodeAgent / Claude 会话记录所在目录（2026-10-30 从公司联动的回执读取里抽出，子任务进度等公共功能共用）：
 // 绑定的记录所在目录，加上「号的配置目录\projects\<工作目录 slug>」（工作目录的真实路径不同就两种都查）。
 const fs = require('node:fs');
-function projectSlugOf(cwd) { return require('node:path').resolve(String(cwd || '')).replace(/[^A-Za-z0-9]/g, '-'); }
+function projectSlugOf(cwd) { return require('node:path').resolve(String(cwd || '')).replace(/[^\p{L}\p{N}]/gu, '-'); }
 function transcriptDirs(meta, fsModule = fs) {
   const path = require('node:path');
   const dirs = [];
@@ -11,7 +11,11 @@ function transcriptDirs(meta, fsModule = fs) {
   if (configDir && meta?.cwd) {
     const forms = [path.resolve(String(meta.cwd))];
     try { const real = fsModule.realpathSync.native ? fsModule.realpathSync.native(forms[0]) : fsModule.realpathSync(forms[0]); if (real && real.toLowerCase() !== forms[0].toLowerCase()) forms.push(real); } catch { /* 目录不在了：只按原写法 */ }
-    for (const form of forms) dirs.push(path.join(configDir, 'projects', projectSlugOf(form)));
+    for (const form of forms) {
+      dirs.push(path.join(configDir, 'projects', projectSlugOf(form)));
+      // Older Claude-based releases used an ASCII-only bucket.
+      dirs.push(path.join(configDir, 'projects', form.replace(/[^A-Za-z0-9]/g, '-')));
+    }
   }
   const seen = new Set();
   return dirs.filter(d => { const k = d.toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });

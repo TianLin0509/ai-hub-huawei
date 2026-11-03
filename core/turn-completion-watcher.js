@@ -39,7 +39,7 @@ function createTurnCompletionWatcher(opts) {
     //   由调用方在 PTY exit 时调 watcher 的 markProcessExit() 钩子。
     onProcessExit = null, // eslint-disable-line no-unused-vars
     onTurnPatched = null,                   // 新增（2026-05-03）
-    patchWindowMs = PATCH_WINDOW_MS,        // 新增（测试可注入更短的窗口）
+    patchWindowMs = null,
     attempt = null,
     kind = null,
     nativeOnly = false,
@@ -58,13 +58,16 @@ function createTurnCompletionWatcher(opts) {
   let onTurnComplete = null;
   let onTurnError = null;
   let onTurnAborted = null;
+  let onTurnPending = null;
   const providerAdapter = createGroupChatProviderAdapter(kind || (attempt && attempt.kind), {nativeOnly});
 
   // patch-after-settle 状态（2026-05-03）
   let patchListener = null;
   let patchWindowTimer = null;
   let settledText = '';
+  let settledAt = 0;
   let patchCancelled = false;
+  let effectivePatchWindowMs = PATCH_WINDOW_MS;
 
   const cleanup = () => {
     if (t1Timer) { clearTimeout(t1Timer); t1Timer = null; }
@@ -72,6 +75,7 @@ function createTurnCompletionWatcher(opts) {
     if (onTurnComplete) { transcriptTap.removeListener('turn-complete', onTurnComplete); onTurnComplete = null; }
     if (onTurnError) { transcriptTap.removeListener('turn-error', onTurnError); onTurnError = null; }
     if (onTurnAborted) { transcriptTap.removeListener('turn-aborted', onTurnAborted); onTurnAborted = null; }
+    if (onTurnPending) { transcriptTap.removeListener('turn-pending', onTurnPending); onTurnPending = null; }
   };
 
   const _cleanupPatch = () => {
@@ -89,6 +93,7 @@ function createTurnCompletionWatcher(opts) {
     settled = true;
     cleanup();
     settledText = result.text || '';
+    settledAt = Number(result.completedAt) || 0;
     // 2026-05-04 codex equiv (Spec S6/B1.7)：partial→final patch 适用范围扩展。
     //   - status: completed（claude/codex 自动完成）+ manual_extracted（用户先点提取拿 partial，
     //     codex 后续 task_complete 来时把 final 覆盖回来，否则卡片永久停在 partial）
@@ -115,11 +120,8 @@ function createTurnCompletionWatcher(opts) {
         }
         if (!PATCHABLE_SIGNAL_SOURCES.has(evt.signalSource)) return;
         if (!evt.text || evt.text === settledText) return;
-        // 2026-07-20 maintainer [修#1]：手动提取可能抓到上一轮旧答案（提取方曾无时间窗），
-        //   其 settled 文本可信度低——final 无论长短都允许覆盖纠正；completed 仍要求
-        //   "更长"，防短 emit 把真答案截断。此前一刀切"更长才 patch"，真实答案更短时
-        //   误抓的旧答案会永久留在卡片与 state.turns。
-        if (result.status !== 'manual_extracted' && evt.text.length <= settledText.length) return;
+        // 同轮权威终态可以比上一版短；只拒绝时间更旧的快照。
+        if (settledAt && Number(evt.completedAt) && Number(evt.completedAt) < settledAt) return;
         try {
           // patch 后状态统一标 'completed'：partial 是过渡，final 才是真完成
           onTurnPatched({
@@ -130,11 +132,13 @@ function createTurnCompletionWatcher(opts) {
             attemptId: attempt && attempt.attemptId,
             runId: attempt && attempt.runId,
             providerTurnId: decision.identity && decision.identity.providerTurnId,
+            userRecordId: evt.userRecordId || null,
             failure: decision.failure || null,
             signalSource: evt.signalSource,
             finality: 'provider_final',
           });
           settledText = evt.text;  // 仅成功后更新基线（spec 防 silent failure）
+          settledAt = Number(evt.completedAt) || settledAt;
         } catch (e) {
           console.warn('[watcher] onTurnPatched threw:', e && e.message);
           // 不更新 settledText——下次更长 emit 仍可重试此 patch
@@ -142,7 +146,9 @@ function createTurnCompletionWatcher(opts) {
         }
       };
       transcriptTap.on('turn-complete', patchListener);
-      patchWindowTimer = setTimeout(_cleanupPatch, patchWindowMs);
+      const taskDuration = Date.now() - (Number(attempt?.dispatchAt || attempt?.acceptedAt || attempt?.startedAt) || Date.now());
+      effectivePatchWindowMs = patchWindowMs == null ? Math.max(PATCH_WINDOW_MS, taskDuration * 2) : patchWindowMs;
+      patchWindowTimer = setTimeout(_cleanupPatch, effectivePatchWindowMs);
       if (patchWindowTimer.unref) patchWindowTimer.unref();
     }
     if (resolveFn) resolveFn(result);
@@ -168,6 +174,14 @@ function createTurnCompletionWatcher(opts) {
 
       return new Promise((resolve) => {
         resolveFn = resolve;
+        onTurnPending = evt => {
+          if(evt.hubSessionId!==hubSessionId)return;
+          const identity=providerAdapter.match(attempt,evt,{requireProviderTurn:false});
+          if(!identity.ok)return;
+          try { onAwaitingFinalText({event:evt,attempt,reason:evt.reason || 'terminal_without_final_text'}); }
+          catch(error) { console.warn('[watcher] pending notification failed:',error.message); }
+        };
+        transcriptTap.on('turn-pending',onTurnPending);
         try { onAttemptEvent({ type: 'waiting', attempt }); }
         catch (error) { console.warn('[watcher] onAttemptEvent(waiting) threw:', error && error.message); }
 
@@ -196,6 +210,7 @@ function createTurnCompletionWatcher(opts) {
             signalSource: evt.signalSource || 'unknown',
             completedAt: evt.completedAt || Date.now(),
             providerTurnId: decision.identity && decision.identity.providerTurnId,
+            userRecordId: evt.userRecordId || null,
             finality: 'provider_final',
           });
         };
@@ -283,6 +298,8 @@ function createTurnCompletionWatcher(opts) {
         completedAt: details.completedAt || Date.now(),
         turnId: details.turnId || details.providerTurnId || null,
         attemptId: details.attemptId || null,
+        userRecordId: details.userRecordId || null,
+        extractMode: details.extractMode,
       };
       const decision = providerAdapter.completion(attempt, event);
       if (!decision.accepted) {
@@ -304,6 +321,7 @@ function createTurnCompletionWatcher(opts) {
         signalSource,
         completedAt: event.completedAt,
         providerTurnId: decision.identity && decision.identity.providerTurnId,
+        userRecordId: event.userRecordId,
         finality: 'provider_final',
       });
       return true;
@@ -425,21 +443,23 @@ function createTurnCompletionWatcher(opts) {
       });
     },
 
-    markTimedOut(reason = 'response_timeout') {
+    markTimedOut(reason = 'response_timeout', text = '') {
       const decision = providerAdapter.error(attempt, { hubSessionId, reason, signalSource: 'hard_timeout' });
       settle({
         sid: hubSessionId,
         label,
         status: 'errored',
-        text: '',
+        text,
         reason: attempt ? (decision.reason || reason) : reason,
         failure: decision.failure || null,
         signalSource: 'hard_timeout',
+        finality: 'pending_confirmation',
         completedAt: Date.now(),
       });
     },
 
     isSettled() { return settled; },
+    getPatchWindowMs() { return effectivePatchWindowMs; },
 
     getAttemptIdentity() {
       return attempt ? {

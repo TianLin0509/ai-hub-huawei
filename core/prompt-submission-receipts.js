@@ -56,6 +56,12 @@ class PromptSubmissionReceipts {
   }
 
   finish(receipt, result) {
+    if (receipt.status === 'stopped') return;
+    if (result?.stopped) {
+      this.unresolved.set(receipt.sessionId, (this.unresolved.get(receipt.sessionId) || []).filter(item => item !== receipt));
+      if (!receipt.resolved) { receipt.status = 'stopped'; this.onUpdate(this.snapshot(receipt)); }
+      return;
+    }
     if (this.get(receipt.sessionId) !== receipt || receipt.resolved) return;
     // A generic PTY/activity success cannot identify this particular message.
     // 原文离开了输入框且屏幕在跑：记「已送达」——不是已确认（仍可被逐字回报升级），也不提示补发。

@@ -3,6 +3,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
+const { parallelQueries, queriesFor } = require('./ppt-search');
+const { PptDoctor } = require('./ppt-doctor');
 
 const OPS = new Set(['status', 'catalog', 'search', 'read', 'report']);
 const FILES = ['readonly.py', 'index.py', ...['__init__', 'library', 'text', 'selection', 'report', 'assessment', 'view', 'terminal'].map(n => `pptutor_core/${n}.py`)];
@@ -14,6 +16,8 @@ class PptLibrary {
     this.a = assistant; this.deps = deps; this.env = deps.pptEnv || process.env;
     this.current = { available: false, files: 0, error: '', checkedAt: null };
     this.reading = null; this.materialized = '';
+    this.doctor = deps.pptDoctor || new PptDoctor(assistant, deps);
+    this.imgtext = new (require('./ppt-imgtext').PptImgtext)(this);
     this.references = new Map();
     this.taskResults = new Map(); this.taskReports = new Map(); this.taskEvidence = new Map(); this.activeTask = null; this.indexJob = null; this.indexChild = null;
     try { this.indexState = JSON.parse(fs.readFileSync(path.join(this.a.dir, 'ppt-index-state.json'), 'utf8')); }
@@ -21,6 +25,8 @@ class PptLibrary {
     if (this.indexState.state === 'indexing') this.indexState = { ...this.indexState, state: 'interrupted', error: '上次更新被中断，可继续更新' };
   }
   config() { return this.a.settings().ppt || {}; }
+  legacy() { return this.config().legacyPython === true; }
+  lookupFrame(args) { return require('./ppt-imgtext').lookupFrame(this, args); }
   db() {
     return this.config().db || this.env.PPTUTOR_DB || (this.env.PPTX_FINDER_DATA_DIR && path.join(this.env.PPTX_FINDER_DATA_DIR, 'index.db'))
       || path.join(this.env.LOCALAPPDATA || path.join(require('node:os').homedir(), 'AppData', 'Local'), 'pptx-finder', 'index.db');
@@ -31,7 +37,11 @@ class PptLibrary {
     const seen = new Set();
     return entries.filter(s => { const key = normalizedPath(s.db); if (seen.has(key) || !fs.existsSync(s.db)) return false; seen.add(key); return true; }).map(s => ({ ...s, id: sourceId(s.db) }));
   }
-  status() { return { ...this.current, db: this.db(), roots: this.config().roots || [], sources: this.current.sources || this.sources(), indexing: this.indexState }; }
+  status() {
+    const roots = this.config().roots || [];
+    const folders = [...new Set([...roots, ...[...(this.documents?.values() || [])].map(d => path.dirname(d.path))])].sort();
+    return { ...this.current, db: this.db(), roots, folders, sources: this.current.sources || this.sources(), indexing: this.indexState };
+  }
   beginTask(id) { this.activeTask = id; this.taskResults.delete(id); this.taskReports.delete(id); this.taskEvidence.clear(); }
   takeTaskReport(id) { const report = this.taskReports.get(id) || ''; this.taskReports.delete(id); return report; }
   takeTaskResult(id) { const result = this.taskResults.get(id) || []; this.taskResults.delete(id); if (this.activeTask === id) { this.activeTask = null; this.taskEvidence.clear(); } return result; }
@@ -50,6 +60,10 @@ class PptLibrary {
   }
   async execute(op, args = {}) {
     if (!OPS.has(op)) throw new Error('PPT 素材库只支持搜索、读页和汇总，不能移动文件');
+    if (!this.legacy()) {
+      const doctor = await this.doctor.status();
+      if (!doctor.ok) throw Object.assign(new Error(doctor.error), { code: doctor.code, downloadUrl: doctor.downloadUrl });
+    }
     if (op === 'read') return this.read(args);
     if (op === 'report') {
       const taskId = this.activeTask;
@@ -68,21 +82,21 @@ class PptLibrary {
         while (this.taskReports.size > 40) this.taskReports.delete(this.taskReports.keys().next().value);
       }
       if (taskId && this.activeTask === taskId) this.taskResults.set(taskId, (args.decision?.results || []).filter(r => eligible.has(r.id)).map(r => {
-        const page = pages.get(r.id); return { id: r.id, name: page.ref.name, path: page.ref.path, page: page.ref.page, reason: r.reason, sourceState: page.source_state };
+        const page = pages.get(r.id); return { id: r.id, name: page.ref.name, path: page.ref.path, page: page.ref.page, thumbnail: page.thumbnail, reason: r.reason, sourceState: page.source_state };
       }));
       return result;
     }
     const sources = this.sources();
-    if (!sources.length) throw new Error('还没有 PPT 文字索引。请在助理设置 → PPT 素材库选择 1–3 个素材文件夹，或选择已有的 PPT Doctor 索引。');
+    if (!sources.length) throw new Error('还没有 PPT 文字索引。请在 PPT 页选择 1–3 个素材文件夹并更新索引，或选择已有的 PPT Doctor 索引。');
     if (op === 'status') {
       const documents = new Map(), results = [], errors = [];
-      for (const source of sources) {
+      await Promise.all(sources.map(async source => {
         try {
           const value = await this.runPython({ op, db: source.db, includePaths: true });
           for (const d of value.documents || []) if (!documents.has(normalizedPath(d.path))) documents.set(normalizedPath(d.path), d);
           const { documents: _paths, ...status } = value; results.push({ ...source, ...status });
         } catch (error) { errors.push({ source: source.label, message: error.message }); }
-      }
+      }));
       if (!results.length) throw new Error(errors.map(e => `${e.source}：${e.message}`).join('；'));
       // 缓存“文稿 → 页数”，给回答后的出处核对用（只读，不额外调用 Python）。
       this.documents = new Map([...documents.values()].map(d => [normalizedPath(d.path), { name: path.basename(d.path), path: d.path, pages: Number(d.page_count) || 0 }]));
@@ -93,27 +107,47 @@ class PptLibrary {
       const selected = args.sourceId ? sources.filter(s => s.id === args.sourceId) : sources;
       if (!selected.length) throw new Error('这个索引来源目前不可用，请重新检索');
       if (args.fileId != null && selected.length > 1) throw new Error('多个索引可能有相同文稿编号，请同时传 sourceId');
-      const results = await Promise.all(selected.map(async source => {
+      const settled = await Promise.allSettled(selected.map(async source => {
         const value = await this.runPython({ ...args, op, db: source.db });
         return { ...value, sourceId: source.id, source: source.label, items: value.items.map(item => ({ ...item, sourceId: source.id })) };
       }));
-      return { ok: true, sources: results, items: results.flatMap(r => r.items), has_more: results.some(r => r.has_more), next_offset: results.length === 1 ? results[0].next_offset : undefined };
+      const results = settled.filter(r => r.status === 'fulfilled').map(r => r.value), errors = settled.flatMap((r, i) => r.status === 'rejected' ? [{ source: selected[i].label, message: r.reason.message }] : []);
+      if (!results.length) throw new Error(errors.map(e => `${e.source}：${e.message}`).join('；'));
+      return { ok: true, sources: results, errors, items: results.flatMap(r => r.items), has_more: results.some(r => r.has_more), next_offset: results.length === 1 ? results[0].next_offset : undefined };
     }
-    const limit = args.limit ?? 30, results = [], errors = [];
+    const limit = args.limit ?? 30;
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('候选数量 limit 应为 1–100');
-    for (const source of sources) {
-      try { results.push({ source, result: await this.runPython({ ...args, op, db: source.db, limit: 100 }) }); }
-      catch (error) { errors.push({ source: source.label, message: error.message }); }
+    let results, errors;
+    if (this.legacy()) {
+      ({ successes: results, errors } = await parallelQueries(sources, args, (source, query) =>
+        this.runPython({ ...args, query: undefined, plan: { intent: args.plan?.intent, queries: [query] }, op, db: source.db, limit: 100 })));
+    } else {
+      // One Doctor startup per index. Doctor parallelizes queries inside its
+      // bundled runtime; launching the entire app for each term is slower.
+      // Search box, frame lookup and Agent plans share Doctor's query limits.
+      const plan = { ...args.plan, queries: queriesFor(args) };
+      delete plan.query; // queriesFor already included the bounded original once.
+      const settled = await Promise.allSettled(sources.map(async source => ({ source, result: await this.runDoctor({ ...args, query: undefined, plan, op, db: source.db, limit: 100 }) })));
+      results = settled.filter(r => r.status === 'fulfilled').map(r => r.value);
+      errors = settled.flatMap((r, i) => r.status === 'rejected' ? [{ source: sources[i].label, message: r.reason.message }] : []);
+      if (!results.length) throw new Error(errors.map(e => `${e.source}：${e.message}`).join('；'));
+      errors.push(...results.flatMap(({ source, result }) => (result.errors || []).map(e => ({ source: source.label, ...e }))));
     }
-    if (!results.length) throw new Error(errors.map(e => `${e.source}：${e.message}`).join('；'));
     const byPage = new Map();
     for (const { source, result } of results) for (const item of result.candidates) {
       const ref = { ...item.ref, source_id: source.id }, id = `${source.id}:${item.id}`, key = normalizedPath(ref.path) + ':' + ref.page;
       this.references.set(id, ref);
       if (!byPage.has(key)) byPage.set(key, { ...item, id, ref, source: source.label });
       else {
-        const old = byPage.get(key); old.duplicate_refs.push(ref);
-        if (old.ref.page_hash === ref.page_hash) old.matched_queries = [...old.matched_queries, ...item.matched_queries];
+        const old = byPage.get(key);
+        if (old.ref.source_id !== ref.source_id) old.duplicate_refs.push(ref);
+        if (old.ref.page_hash === ref.page_hash) {
+          const known = new Set(old.matched_queries.map(q => `${q.query}\0${q.kind}`));
+          for (const match of item.matched_queries) if (!known.has(`${match.query}\0${match.kind}`)) {
+            old.matched_queries.push(match); old.retrieval_score += (match.kind === 'body' ? 1 : 0.25) / (60 + match.rank);
+            known.add(`${match.query}\0${match.kind}`);
+          }
+        }
       }
     }
     while (this.references.size > 2000) this.references.delete(this.references.keys().next().value);
@@ -131,6 +165,7 @@ class PptLibrary {
     return { ...result, question, candidates: result.candidates.map(c => ({ ...c, snippet: c.snippet.slice(0, 120), snippet_truncated: c.snippet_truncated || c.snippet.length > 120 })) };
   }
   async read(args = {}) {
+    const taskId = args.recordEvidence === false ? null : this.activeTask;
     const sources = this.sources(), groups = new Map();
     const requested = args.refs || (args.ids || []).map(id => this.references.get(String(id)) || { id: String(id) });
     if (!requested.length || requested.length > 40) throw new Error('每次读取 1–40 个主页面');
@@ -148,13 +183,14 @@ class PptLibrary {
       for (const item of value.pages) {
         const id = `${source.id}:${item.id}`, ref = { ...item.ref, source_id: source.id };
         const page = { ...item, id, ref, source: source.label };
-        pages.push(page); this.references.set(id, ref); if (this.activeTask) this.taskEvidence.set(id, page);
+        pages.push(page); this.references.set(id, ref); if (taskId && this.activeTask === taskId) this.taskEvidence.set(id, page);
       }
       missing.push(...value.missing.map(m => ({ ...m, sourceId: source.id }))); scopes.push(value.scope);
     }
     return { ok: true, pages, missing, truncated: false, scope: { read_only: true, sources: scopes }, visual_inspection: 'not performed' };
   }
   async runPython(request, options = {}) {
+    if (!this.legacy()) return this.runDoctor(request, options);
     const script = options.index ? path.join(path.dirname(this.runtime()), 'index.py') : this.runtime();
     const configured = this.config().python || this.env.CLAUDE_HUB_PPT_PYTHON;
     const candidates = configured ? [[configured, []]] : process.platform === 'win32' ? [['python', []], ['py', ['-3']]] : [['python3', []]];
@@ -165,6 +201,18 @@ class PptLibrary {
     }
     if (!result) throw new Error('未找到 Python 3，素材文件没有改动。安装 Python 3 后重试。');
     if (result.ok === false) throw Object.assign(new Error(result.error?.message || 'PPT 索引读取失败'), { code: result.error?.code });
+    return result;
+  }
+  async runDoctor(request, options = {}) {
+    const action = options.index ? 'index' : request.op;
+    const { op: _op, roots, ...payload } = request;
+    if (roots) payload.folders = roots;
+    const result = await this.doctor.call(action, payload, options);
+    // Doctor already prefixes source ids; the legacy merger does that once.
+    const local = item => ({ ...item, id: String(item.id).split(':').slice(-2).join(':') });
+    if (action === 'search') return { ...result, candidates: result.candidates.map(local) };
+    if (action === 'read') return { ...result, pages: result.pages.map(local) };
+    if (action === 'index') return { ...result, ...result.summary, complete: result.complete ?? !(result.summary?.failed || result.summary?.errors?.length) };
     return result;
   }
   process(command, args, request, options = {}) {
@@ -197,6 +245,20 @@ class PptLibrary {
   refresh({ force = false } = {}) {
     if (this.reading) return this.reading;
     if (!force && this.current.checkedAt && this.a.now() - this.current.checkedAt < 10 * 60000) return Promise.resolve(this.status());
+    if (!this.legacy()) {
+      this.reading = this.doctor.status({ force }).then(async doctor => {
+        if (!doctor.ok || !doctor.available) {
+          this.current = { ...doctor, available: false, files: 0, pages: 0, checkedAt: this.a.now() }; this.documents = new Map();
+          return this.status();
+        }
+        const result = await this.execute('status');
+        this.current = { ...doctor, available: true, files: result.indexed_files, pages: result.indexed_pages, sources: result.sources,
+          warnings: result.warnings, error: result.errors.map(e => `${e.source}：${e.message}`).join('；'), checkedAt: this.a.now() };
+        return this.status();
+      }).catch(error => { this.current = { available: false, files: 0, pages: 0, code: error.code, error: error.message, checkedAt: this.a.now() }; this.documents = new Map(); return this.status(); })
+        .finally(() => { this.reading = null; this.a.changed(); });
+      return this.reading;
+    }
     if ((this.config().roots || []).length && !this.indexJob && this.a.now() - (this.indexState.completedAt || this.indexState.startedAt || 0) > 10 * 60000) this.startIndex();
     if (!this.sources().length) { this.current = { available: false, files: 0, pages: 0, error: '', checkedAt: this.a.now() }; this.documents = new Map(); return Promise.resolve(this.status()); }
     this.reading = this.execute('status').then(result => {
@@ -213,7 +275,7 @@ class PptLibrary {
     if (!Array.isArray(roots) || roots.length < 1 || roots.length > 3 || roots.some(r => typeof r !== 'string' || !path.isAbsolute(r))) throw new Error('请先选择 1–3 个素材文件夹');
     this.indexState = { state: 'indexing', startedAt: this.a.now(), scanned: 0, indexed: 0, unchanged: 0, failed: 0, skippedPpt: 0 };
     this.a.changed();
-    this.indexJob = this.runPython({ db: this.ownedDb(), roots }, { index: true, onProgress: p => { this.indexState = { ...this.indexState, ...p }; this.a.changed(); } })
+    this.indexJob = this.runPython({ db: this.legacy() ? this.ownedDb() : this.db(), roots }, { index: true, onProgress: p => { this.indexState = { ...this.indexState, ...p, state: 'indexing' }; this.a.changed(); } })
       .then(result => { this.indexState = { ...this.indexState, ...result, state: result.complete ? 'done' : 'partial', completedAt: this.a.now() }; })
       .catch(error => { this.indexState = { ...this.indexState, state: 'error', error: error.message, completedAt: this.a.now() }; })
       .finally(async () => {
@@ -224,7 +286,7 @@ class PptLibrary {
       });
     return this.status();
   }
-  close() { this.indexChild?.kill(); this.indexChild = null; }
+  close() { this.indexChild?.kill(); this.indexChild = null; this.doctor.close(); }
   // 回答后的出处核对（v3.1.2）：模型没调用 ppt_library op=report 时，按索引里的文稿与页数
   // 核对回答里写的「文件名 + 第 N 页」。没有索引、没有 Python 或没有引用时一句都不加。
   async citationNote(text) {
@@ -235,12 +297,34 @@ class PptLibrary {
     if (!this.documents || !this.documents.size) return '';
     return renderCitationCheck(checkCitations(citations, this.documents));
   }
-  async open(id) {
-    const result = await this.execute('read', { ids: [id] }), ref = result.pages?.[0];
+  async resolvePage(id) {
+    const result = await this.execute('read', { ids: [id], recordEvidence: false }), ref = result.pages?.[0];
     if (!ref || ref.source_state === 'source_unavailable') throw new Error('索引中的源文件目前不可用');
     if (ref.source_state === 'source_metadata_changed') throw new Error('源文件已更新，原页码可能变化。请先在 PPT 素材库设置里更新索引，再重新查找');
     const file = ref.ref.path;
     if (!/\.(pptx?|pdf)$/i.test(file)) throw new Error('只打开索引中的演示文稿');
+    return ref;
+  }
+  async showFolder(id) {
+    const page = await this.resolvePage(id);
+    await (this.deps.showPptInFolder || (file => require('electron').shell.showItemInFolder(file)))(page.ref.path);
+    return { ok: true, path: path.dirname(page.ref.path) };
+  }
+  async copy(id) {
+    if (this.copying) throw new Error('正在复制页面，请等本次完成');
+    this.copying = true;
+    try {
+      const page = await this.resolvePage(id);
+      return await (this.deps.copyPptSlide || require('./ppt-open').copySlide)(page.ref.path, page.ref.page);
+    } finally { this.copying = false; }
+  }
+  async convertPage(id) {
+    const page = await this.resolvePage(id);
+    if (!page.thumbnail) throw new Error('这页暂无缓存图片，请先打开原稿截图，再用「图片转可编辑」');
+    return this.imgtext.start(page.thumbnail);
+  }
+  async open(id) {
+    const ref = await this.resolvePage(id), file = ref.ref.path;
     const focused = !this.deps.openPpt && await (this.deps.openPptSlide || require('./ppt-open').openSlide)(file, ref.ref.page);
     if (focused) return { ok: true, path: file, page: ref.ref.page, pageFocused: true };
     const error = await (this.deps.openPpt || (p => require('electron').shell.openPath(p)))(file);

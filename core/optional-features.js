@@ -10,7 +10,7 @@ const FILE = 'optional-features.json';
 
 // 设置菜单「可选功能」里每一项的说明：用来做什么、开着有什么开销。
 const CATALOG = Object.freeze({
-  assistant: { name: '助理', desc: '每日简报、WeLink 消息提醒、对话问答、会议与会议室', cost: '开着时工作日每 10 分钟后台读一次 WeLink，每分钟检查一次登录' },
+  assistant: { name: '助理', desc: '每日简报、WeLink 消息提醒、对话问答与会议', cost: '开着时工作日每 10 分钟后台读一次 WeLink，每分钟检查一次登录' },
   forum: { name: '论坛', desc: '稼先社区、心声社区今天的热帖与 AI 摘要', cost: '开着时工作日早上在后台打开一个隐藏的浏览器窗口取帖子，没登录会每 30 分钟重试' },
   pet: { name: '桌宠', desc: '桌面角落的小猫，提醒会话进度', cost: '开着时一直有一个置顶的小窗口，每 0.1 秒看一次光标是否碰到它' },
 });

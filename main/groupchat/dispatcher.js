@@ -428,12 +428,13 @@ function createGroupChatDispatcher(deps) {
           warn('[group-chat] persist awaiting-final-text failed:', error && error.message);
         }
       },
-      onTurnPatched: ({ sid: patchedSid, text, status, attemptId, runId, providerTurnId, failure, signalSource, finality }) => {
+      onTurnPatched: ({ sid: patchedSid, text, status, attemptId, runId, providerTurnId, userRecordId, failure, signalSource, finality }) => {
         try {
           if (silent) return;
           const turn = orch.state.turns.find(t => t.n === turnNum);
           const currentStatus = turn?.byStatus?.[patchedSid];
           const finalStatus = (currentStatus === 'manual_extracted') ? 'manual_extracted' : status;
+          if(attemptId && userRecordId)orch.updateAttempt(attemptId,{userRecordId},'attempt_user_record_bound');
           orch.patchTurnResult(turnNum, patchedSid, {
             text, status: finalStatus, attemptId, runId, providerTurnId,
             failure, signalSource, finality,
@@ -542,8 +543,15 @@ function createGroupChatDispatcher(deps) {
             armHardTimeout(nextDelay);
             return;
           }
-          warn(`[group-chat] transitional hard timeout (${Math.round(elapsed / 60000)}min) hit for ${label}(${sid.slice(0, 8)}), forcing skip`);
-          watcher.markTimedOut('response_timeout');
+          warn(`[group-chat] answer confirmation timed out after ${Math.round(elapsed / 60000)}min for ${label}(${sid.slice(0, 8)})`);
+          let available = '';
+          try {
+            const r=await transcriptTap.extractLatestTurn(sid,Number(opts.promptSubmittedAt) || promptSubmitSinceTs, {
+              providerTurnId:attempt?.providerTurnId, prompt:opts.prompt,
+            });
+            if(r?.aligned)available=r.text || '';
+          } catch(error) { warn('[group-chat] timeout source read failed:',error.message); }
+          watcher.markTimedOut('response_timeout',available);
         }, delayMs);
         hardTimeout.unref?.();
       };
@@ -640,7 +648,9 @@ function createGroupChatDispatcher(deps) {
         if (autoExtractBusy) return;
         autoExtractBusy = true;
         try {
-          const extracted = await transcriptTap.extractLatestTurn(sid, sincePromptTs);
+          const extracted = await transcriptTap.extractLatestTurn(sid, promptSubmittedAt || sincePromptTs, {
+            providerTurnId:attempt?.providerTurnId, prompt:opts.prompt,
+          });
           const isCodexFinal = isCodexBaseKind(waitKind)
             && extracted?.extractMode === 'final_answer';
           const claudeAnswerFloor = Math.max(promptSubmittedAt, agentTurnStartedAt);
@@ -660,8 +670,10 @@ function createGroupChatDispatcher(deps) {
             log(`[group-chat] ${waitKind} auto-extract final answer for ${label}(${sid.slice(0, 8)}) ${extracted.text.length} chars`);
             watcher.completeFromTranscript(extracted.text, signalSource, {
               completedAt: extracted.completedAt || Date.now(),
-              turnId: extracted.turnId || extracted.providerTurnId || (attempt && attempt.providerTurnId) || null,
+              turnId: extracted.turnId || extracted.providerTurnId || null,
               attemptId: opts.attemptId || null,
+              userRecordId: extracted.userRecordId,
+              extractMode: extracted.extractMode,
             });
           }
         } catch (e) {
@@ -672,7 +684,7 @@ function createGroupChatDispatcher(deps) {
       }, CODEX_AUTO_EXTRACT_INTERVAL_MS);
       codexAutoExtractTimer.unref?.();
 
-      if (isCodexBaseKind(waitKind) && opts.prompt && transcriptTap && typeof transcriptTap.on === 'function') {
+      if ((isCodexBaseKind(waitKind) || isClaudeFamily(waitKind)) && opts.prompt && transcriptTap && typeof transcriptTap.on === 'function') {
         onCodexPromptSubmitted = (ev) => {
           if (!ev || ev.hubSessionId !== sid) return;
           const submittedAt = Number(ev.submittedAt) || Date.now();
@@ -688,6 +700,7 @@ function createGroupChatDispatcher(deps) {
                   status: ATTEMPT_RUNNING,
                   acceptedAt: submittedAt,
                   providerTurnId: ev.turnId || null,
+                  userRecordId: ev.userRecordId || null,
                   signalSource: ev.signalSource || 'prompt_submitted',
                 }, 'attempt_prompt_observed');
                 if (!silent) publishAttempt(meetingId, orch, next);
@@ -893,7 +906,7 @@ function createGroupChatDispatcher(deps) {
       if (!native) setTimeout(() => {
         try { unregisterPatchListener(sid, watcher); }
         catch (e) { warn('[patch] unregisterPatchListener throw:', e && e.message); }
-      }, 305_000).unref?.();
+      }, watcher.getPatchWindowMs() + 5000).unref?.();
 
       const elapsedMs = Date.now() - startTs;
       result.thinkSec = Math.round(elapsedMs / 100) / 10;
@@ -904,6 +917,7 @@ function createGroupChatDispatcher(deps) {
       // 这样后续成员卡住、Hub 崩溃/重启或用户立即点“同步”时，已得到的答案都不会丢。
       if (!silent && meetingId && turnNum) {
         try {
+          if(opts.attemptId && result.userRecordId)orch.updateAttempt(opts.attemptId,{userRecordId:result.userRecordId},'attempt_user_record_bound');
           orch.patchTurnResult(turnNum, sid, {
             text: result.text,
             status: result.status,
@@ -1544,7 +1558,8 @@ function createGroupChatDispatcher(deps) {
       if (!silent && GroupAnswers.enabled(meeting)) {
         for (const t of targets) {
           try {
-            const entry = GroupAnswers.entryFor({ dataDir: getHubDataDir(), meetingId, turnNum, memberId: t.member?.memberId || t.sid, speaker: t.label, workflowRun });
+            const entry = orch.answerFileFor(turnNum,t.sid) || GroupAnswers.entryFor({ dataDir: getHubDataDir(), meetingId, turnNum,
+              memberId: t.member?.memberId || t.sid, speaker: t.label, workflowRun, answerId:runId });
             require('node:fs').mkdirSync(entry.dir, { recursive: true });
             orch.registerAnswerFile(turnNum, t.sid, entry);
             const note = GroupAnswers.instruction(entry);
@@ -1974,7 +1989,9 @@ function createGroupChatDispatcher(deps) {
             }
             continue;
           }
-          const extracted = await transcriptTap.extractLatestTurn(receipt.sid, floor);
+          const extracted = await transcriptTap.extractLatestTurn(receipt.sid, floor, {
+            providerTurnId:receipt.providerTurnId, userRecordId:receipt.userRecordId, prompt:receipt.prompt,
+          });
           const codexFinal = isCodexBaseKind(receipt.kind) && extracted && extracted.extractMode === 'final_answer';
           // 与上面 auto-extract 同一条判据：恢复路径同样不能把未完成的开场白
           //   写成本轮最终答案（重启后它还会顺带 completeTurn 整轮）。

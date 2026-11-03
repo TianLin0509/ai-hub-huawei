@@ -361,7 +361,7 @@ async function waitForEcho(manager, sid, mark, timeoutMs, screen) {
 // 启动后马上敲，/model 的回车有时没被执行，输入行停在「❯ /model」，第一条题目发不出去）。
 // keepDefault（2026-10-28 用户「记住最新的选择作为默认」）：手动会话这次选的模型留作 CodeAgent 的默认模型——按回车存成默认、不改回原值，
 // 下次新建会话 CodeAgent 直接用它起，不再开菜单（core/codeagent-launch-model.js 的 cli-remembered）。自动会话不传，照旧只改本会话、事后改回。
-async function pickModel({ manager, sid, kind, modelId, configDir, allowedModels = null, sendToPty, screenTimeoutMs = 8000, guardMs = 3500, onDefaultChange = null, env = process.env, readyFirstMs = 0, keepDefault = false }) {
+async function pickModel({ manager, sid, kind, modelId, configDir, dataDir, allowedModels = null, sendToPty, screenTimeoutMs = 8000, guardMs = 3500, onDefaultChange = null, env = process.env, readyFirstMs = 0, keepDefault = false }) {
   if (!modelAllowed(modelId, allowedModels)) {
     return { ok: false, notAllowed: true, inputReady: true,
       message: `${modelId} 不在这个账号的模型权限清单里（可选：${allowedModels.join('、')}），没有打开模型菜单` };
@@ -406,7 +406,11 @@ async function pickModel({ manager, sid, kind, modelId, configDir, allowedModels
     if (!opened.value) return fail('当前 CodeAgent 模型菜单的布局无法自动识别，未完成模型切换');
     let picker = opened.value;
     // 菜单上方的 Credit 用量和每个模型的 Token 用量：只读屏解析，不影响下面的选择（core/codeagent-usage-menu.js）
-    try { usage = require('./codeagent-usage-menu').parseCodeAgentUsageMenu(opened.lines); } catch { usage = null; }
+    try {
+      const menuUsage = require('./codeagent-usage-menu');
+      ({ usage } = await menuUsage.readUsageMenu(opened.lines, { readLines: () => screen.lines(),
+        timeoutMs: menuUsage.PICKER_USAGE_WAIT_MS, dataDir, source: 'picker' }));
+    } catch { usage = null; }
     // 只有认出 CodeAgent 自己的菜单外框、且从第 1 项列起时才当完整清单（替身菜单、滚动过的菜单不算）。
     if (picker.codeagentFrame && (picker.rows[0].number ?? 1) === 1) menu = picker.rows.map(row => row.label);
     // 选第一个：认出的第一行得是菜单的第 1 项（滚动过的菜单看不到第 1 项，不猜）。光标不一定停在第 1 项（会停在上次的模型上），照常按方向键挪过去。

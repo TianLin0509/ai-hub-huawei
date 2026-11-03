@@ -414,7 +414,27 @@ async function waitCliReady(sid, kind, maxMs = 60000) {
 //   普通会话的输入框就摆在用户面前，CLI 显然已经在跑；再等一次 60s 的 ready 轮询
 //   只会把"打完字立刻发出去"变成有时要等几十秒。群聊派发默认仍为 true。
 const promptSubmissionQueues = new Map();
+const codeAgentSubmissions = new Map();
+const codeAgentStops = new Map();
+function assertCodeAgentSubmission(options) {
+  const ticket = options.codeagentSubmission;
+  if (ticket?.cancelled) throw Object.assign(new Error('已请求停止，未继续写入终端'), {
+    code: 'codeagent-stop-requested', notSent: !ticket.submitted,
+  });
+}
+function awaitCodeAgentSubmission(operation, options) {
+  const ticket = options.codeagentSubmission;
+  return ticket ? Promise.race([operation, ticket.stopped.then(() => assertCodeAgentSubmission(options))]) : operation;
+}
 async function sendToPty(sid, prompt, kind, options = {}) {
+  const ticket = isCodeAgentKind(kind) ? { cancelled: false, submitted: false } : null;
+  if (ticket) {
+    ticket.stopped = new Promise(resolve => { ticket.stop = resolve; });
+    if (!codeAgentSubmissions.has(sid)) codeAgentSubmissions.set(sid, new Set());
+    codeAgentSubmissions.get(sid).add(ticket);
+    options = { ...options, codeagentSubmission: ticket };
+  }
+  try {
   // CodeAgent 新会话启动后先在 /model 菜单里选好模型（core/codeagent-model-picker.js），再发第一条，
   // 否则第一轮还是 CLI 的默认模型。选模型自己发的 /model 带 codeagentModelPick，不等自己。
   // 没有在选模型时不能多等一拍：下面「同步进入第一次提交」的约定要求同一拍里就登记（关会话能取消它）。
@@ -442,21 +462,126 @@ async function sendToPty(sid, prompt, kind, options = {}) {
   // Enter the first submission synchronously so native cancellation registers
   // its intent before a caller can close the session in this same tick.
   const submit = () => {
-    const prepared = releaseAccount?.started?.();
-    return prepared?.then ? prepared.then(() => sendToPtyImpl(sid,prompt,kind,options))
-      : sendToPtyImpl(sid,prompt,kind,options);
+    const start = () => {
+      if (ticket) ticket.active = true;
+      const prepared = releaseAccount?.started?.();
+      return prepared?.then ? prepared.then(() => sendToPtyImpl(sid,prompt,kind,options))
+        : sendToPtyImpl(sid,prompt,kind,options);
+    };
+    const stop = ticket && codeAgentStops.get(sid);
+    return stop ? stop.catch(() => {}).then(start) : start();
   };
   const task=previous ? previous.catch(()=>{}).then(submit) : submit();
   promptSubmissionQueues.set(sid,task);
   let receipt;
-  try { receipt = await task; return receipt; }
-  catch (error) { receipt = error?.notSent ? {notSent:true} : null; throw error; }
+  try {
+    receipt = await task;
+    if (isCodeAgentKind(kind) && receipt?.ok && !receipt.notSent && !receipt.unconfirmed
+        && !['stuck', 'content-mismatch', 'rejected', 'stopped'].includes(receipt.sendStatus) && !options.codeagentModelPick) {
+      require('./codeagent-input-guard').codeAgentInputGuard(_deps.sessionManager)
+        .remember(sid, options.originalPrompt ?? prompt, options.codeagentSkill);
+    }
+    return receipt;
+  }
+  catch (error) {
+    if (error?.code === 'codeagent-stop-requested') {
+      receipt = { ok: true, stopped: true, sendStatus: 'stopped', notSent: !ticket.submitted,
+        enterAttempts: ticket.submitted ? 1 : 0, message: '已停止' };
+      if (ticket.submitted) require('./codeagent-input-guard').codeAgentInputGuard(_deps.sessionManager)
+        .remember(sid, options.originalPrompt ?? prompt, options.codeagentSkill);
+      return receipt;
+    }
+    receipt = error?.notSent ? {notSent:true} : null; throw error;
+  }
   finally {
+    if (ticket) ticket.active = false;
     if(promptSubmissionQueues.get(sid)===task)promptSubmissionQueues.delete(sid);
     releaseAccount?.(receipt);
   }
+  } finally {
+    if (ticket) {
+      const pending = codeAgentSubmissions.get(sid);
+      pending?.delete(ticket);
+      if (!pending?.size) codeAgentSubmissions.delete(sid);
+    }
+  }
 }
+async function codeAgentInputAction(sid, action, options = {}) {
+  if (action === 'stop') {
+    if (codeAgentStops.has(sid)) return codeAgentStops.get(sid);
+    // Stop is a key action, not a submission. Never wait for readiness or an
+    // acknowledgement. Prevent the old sender from typing/recovering Enter later.
+    const previous = promptSubmissionQueues.get(sid);
+    const task = require('./codeagent-input-guard').codeAgentInputGuard(_deps.sessionManager)
+      .stop(sid, { ...options, queuePending: !!previous, beforeEsc() {
+        const ticket = [...(codeAgentSubmissions.get(sid) || [])].find(item => item.active);
+        if (ticket) { ticket.cancelled = true; ticket.endPaste?.(); ticket.stop(); }
+      } });
+    codeAgentStops.set(sid, task);
+    const release = () => { if (codeAgentStops.get(sid) === task) codeAgentStops.delete(sid); };
+    task.then(release, release);
+    // Future edits/clears still wait for the old writer and the stop observation.
+    const barrier = Promise.allSettled([previous, task]);
+    promptSubmissionQueues.set(sid, barrier);
+    barrier.then(() => { if (promptSubmissionQueues.get(sid) === barrier) promptSubmissionQueues.delete(sid); });
+    return task;
+  }
+  const run = () => {
+    const guard = require('./codeagent-input-guard').codeAgentInputGuard(_deps.sessionManager);
+    if (action === 'clear') return guard.clear(sid, options.token);
+    if (action === 'check') return guard.check(sid, options);
+    return guard.inspect(sid);
+  };
+  const previous = promptSubmissionQueues.get(sid);
+  const task = previous ? previous.catch(() => {}).then(run) : run();
+  promptSubmissionQueues.set(sid, task);
+  try { return await task; }
+  finally { if (promptSubmissionQueues.get(sid) === task) promptSubmissionQueues.delete(sid); }
+}
+
+async function checkCodeAgentPromptTarget(manager, sid, options) {
+  try { await require('./codeagent-model-picker').beforePrompt(manager, sid, options); }
+  catch (error) {
+    if (error.code !== 'codeagent-input-check-failed') throw error;
+    // Reading a screen is diagnostic, not a new failure/retry policy for sends.
+    require('./codeagent-input-guard').codeAgentInputGuard(manager).diagnose('input-read-failed');
+  }
+}
+async function openCodeAgentCommands(sid) {
+  const { sessionManager } = _deps;
+  const run = async () => {
+    const checkSession = () => {
+      const session = sessionManager.getSession(sid);
+      if (!session || !isCodeAgentKind(session.kind)) throw new Error('当前会话不是可用的 CodeAgent 会话');
+      if (session.status === 'waiting' || ['starting', 'running', 'waiting'].includes(require('./session-runtime-truth').getSessionRuntimeTruth(session).state)) throw new Error('请等当前回答或交互结束后再打开内置命令');
+      return session;
+    };
+    checkSession();
+    const picker = require('./codeagent-model-picker');
+    if (picker.isPicking(sid)) throw new Error('请等模型选择完成后再打开内置命令');
+    const screen = await picker.openSessionScreen(sessionManager, sid);
+    try {
+      const lines = await screen.lines();
+      const session = checkSession();
+      const inputState = codeAgentInputState(lines, '');
+      const blocked = require('./group-chat-cli-ready-detector').BLOCKERS.codeagent.some(re => re.test(lines.join('\n')));
+      if (blocked || classifyTerminalRuntime(session.kind, lines).state === RUNTIME_RUNNING || !picker.promptInputAvailable(lines)
+        || !(inputState === 'empty' || inputState === 'unknown' && picker.promptInputReady(lines))) {
+        throw new Error('终端输入行已有内容或尚未确认空白，请先在终端处理');
+      }
+      sessionManager.writeToSession(sid, '/');
+      return { ok: true, mode: 'command-list' };
+    } finally { screen.dispose(); }
+  };
+  const previous = promptSubmissionQueues.get(sid);
+  const task = previous ? previous.catch(() => {}).then(run) : run();
+  promptSubmissionQueues.set(sid, task);
+  try { return await task; }
+  finally { if (promptSubmissionQueues.get(sid) === task) promptSubmissionQueues.delete(sid); }
+}
+
 async function sendToPtyImpl(sid, prompt, kind, options = {}) {
+  assertCodeAgentSubmission(options);
   if(options.shouldSubmit && !options.shouldSubmit())return {ok:false,notSent:true,reason:'派工已暂停或取消，本条未发送'};
   if (require('./session-speed').pendingSpeedSwitches.has(sid) && !options.localCommandObserver) {
     throw new Error('正在确认当前会话的速度设置，请完成后再发送');
@@ -512,7 +637,7 @@ async function sendToPtyImpl(sid, prompt, kind, options = {}) {
   if (isCodeAgentKind(kind) && !options.codeagentModelPick) {
     // 启动前屏幕可能还没画完，先拦明确菜单/pending；真正写正文前再要求
     // 当前普通输入区的正向证据，不能把这里的早期检查当作持久许可。
-    await require('./codeagent-model-picker').beforePrompt(sessionManager, sid, { allowUnready: true });
+    await checkCodeAgentPromptTarget(sessionManager, sid, { allowUnready: true });
   }
   const FAST_PATH_QUIET_MS = 250;       // 连续 250ms 无 PTY 数据 → 视为 paste 接收完
   const FAST_PATH_MAX_WAIT_MS = 3000;   // 上限：极大 prompt 也不无限等
@@ -551,7 +676,7 @@ async function sendToPtyImpl(sid, prompt, kind, options = {}) {
 
   // 冷启动：仅首次或 ready 被重置后（requireReady=false 的调用方整段跳过）
   if (requireReady && !sessionManager.getGroupChatReady(sid)) {
-    const ready = await waitCliReady(sid, kind, 60000);
+    const ready = await awaitCodeAgentSubmission(waitCliReady(sid, kind, 60000), options);
     // CLI 完全没启动 → prompt 都没写，可以正当放弃
     if (!ready) {
       const buf = sessionManager.getSessionBuffer(sid) || '';
@@ -641,10 +766,14 @@ async function sendToPtyImpl(sid, prompt, kind, options = {}) {
     if (isCodeAgentKind(kind) && !options.codeagentModelPick) {
       // 冷启动等待期间可能才出现 /model；检查必须在所有等待之后、首个
       // payload 之前。队列内只拒绝 pending，不等它，避免 /model 自锁。
-      await require('./codeagent-model-picker').beforePrompt(sessionManager, sid, {
+      await checkCodeAgentPromptTarget(sessionManager, sid, {
         // 当前屏幕上有没有 CodeAgent 的选择框（升级提醒、信任确认、↑↓ 选择底栏）：有就别把正文打进去、回车替人选。
         isChoiceDialog: text => (require('./group-chat-cli-ready-detector').BLOCKERS.codeagent || []).some(re => re.test(text)),
       });
+    }
+    if (isCodeAgentKind(kind)) {
+      const input = await require('./codeagent-input-guard').codeAgentInputGuard(sessionManager).check(sid);
+      if (!input.ok) return input;
     }
     const beforeBufferLength = String(sessionManager.getSessionBuffer(sid) || '').length;
     const beforeWrite = sessionManager.getGroupChatLastActivity(sid);
@@ -660,11 +789,25 @@ async function sendToPtyImpl(sid, prompt, kind, options = {}) {
       const dropped = require('./codeagent-clipboard-guard').dropImage(clipboard);
       if (dropped.cleared) console.log(`[group-chat] codeagent(${sid.slice(0, 8)}) cleared a clipboard image before paste${dropped.keptText ? ' (text kept)' : ''}`);
     }
-    if (!usedCodexEditorInput) await writeBracketedPaste(sessionManager, sid, prompt, {
+    assertCodeAgentSubmission(options);
+    const ticket = options.codeagentSubmission;
+    let pasteOpen = false, pasteTail = '';
+    const pasteManager = ticket ? { writeToSession(id, data) {
+      assertCodeAgentSubmission(options);
+      sessionManager.writeToSession(id, data);
+      pasteTail = (pasteTail + data).slice(-6);
+      pasteOpen = !pasteTail.endsWith('\x1b[201~');
+    } } : sessionManager;
+    if (ticket) ticket.endPaste = () => {
+      if (pasteOpen) { sessionManager.writeToSession(sid, '\x1b[201~'); pasteOpen = false; }
+    };
+    try {
+    if (!usedCodexEditorInput) await writeBracketedPaste(pasteManager, sid, prompt, {
       inlinePieces: isClaudeFamily(kind), // 不让 Claude 把整段标成 <pasted_content>（见 pty-prompt-submit）
       chunkSize: Number(_deps && _deps.bracketedPasteChunkSize) || undefined,
       gapMs: Number(_deps && _deps.bracketedPasteChunkGapMs) || undefined,
     });
+    } finally { if (ticket) delete ticket.endPaste; }
     const codexPasteFlushed = usedCodexEditorInput || require('./codex-pty-input').flushCodexPasteInput(sessionManager,sid,kind,prompt);
     noteSubmittedPrompt(sid, kind, prompt); // codex 记录原始 prompt 供 transcript 提交校验（claude no-op）
     // BP_END 紧贴 \r 时 Ink 把 \r 当 paste 尾巴忽略，所以必须隔开再发。
@@ -695,8 +838,16 @@ async function sendToPtyImpl(sid, prompt, kind, options = {}) {
     // semantic work-start acknowledgement, rather than being fired blindly.
     // This mirrors the normal-session runtime truth and avoids accidental
     // empty submissions after a prompt already started.
+    assertCodeAgentSubmission(options);
+    if (ticket) ticket.submitted = true;
     sessionManager.writeToSession(sid, '\r');
     let enterAttempts = 1;
+    if (require('./codeagent-command-policy').isSkillsMenuCommand(kind, String(prompt || ''))
+      || options.codeagentInteractiveCommand === true && isCodeAgentKind(kind) && /^\s*\/\S+/.test(String(prompt || ''))) {
+      // This interactive command has no agent-turn acknowledgement. The user
+      // operates the visible terminal; never retry Enter into an unknown menu.
+      return { ok: true, sendStatus: 'ok', mode: 'interactive-command', enterAttempts, acknowledgementSource: null };
+    }
     if (modelCommand) {
       const deadline = Date.now() + 12000;
       const probe = {};
@@ -772,7 +923,7 @@ async function sendToPtyImpl(sid, prompt, kind, options = {}) {
         ? Math.max(0, Math.min(2, configuredRetryMax))
         : 1;
       probeState = { baselineLength: beforeBufferLength, liveCandidate: null, ringCandidate: null };
-      acknowledgement = await waitForAgentWorkStart(turnStart, sessionManager, sid, kind, firstAckMs, probeState, livePtyObserver);
+      acknowledgement = await awaitCodeAgentSubmission(waitForAgentWorkStart(turnStart, sessionManager, sid, kind, firstAckMs, probeState, livePtyObserver), options);
       let recoveryAttempts = 0;
       // PTY activity alone is not proof of submission: Codex redraws the input
       // box while a `[Pasted Content …]` block is still waiting for Enter. A
@@ -798,6 +949,7 @@ async function sendToPtyImpl(sid, prompt, kind, options = {}) {
       let observedRunningWithClearInput = false;
       let cliExitedDuringAck = false;
       for (let attempt = 0; !acknowledgement && attempt < retryMax;) {
+        assertCodeAgentSubmission(options);
         // A slash command or CLI crash can return to PowerShell during the
         // acknowledgement wait. Recovery Enter must never reach that shell.
         if (require('./host-shell-detector').detectHostShellTakeover(sessionManager.getSessionBuffer(sid))) { cliExitedDuringAck = true; break; }
@@ -815,15 +967,16 @@ async function sendToPtyImpl(sid, prompt, kind, options = {}) {
           }
           runningExtends += 1;
           console.warn(`[group-chat] ${kind} work-start unconfirmed for ${sid.slice(0, 8)} but the screen already reads running; extending the wait ${runningExtends}/${maxRunningExtends} instead of pressing Enter`);
-          acknowledgement = await waitForAgentWorkStart(turnStart, sessionManager, sid, kind, recoveryAckMs, probeState, livePtyObserver);
+          acknowledgement = await awaitCodeAgentSubmission(waitForAgentWorkStart(turnStart, sessionManager, sid, kind, recoveryAckMs, probeState, livePtyObserver), options);
           continue;
         }
         attempt += 1;
         recoveryAttempts += 1;
         enterAttempts += 1;
         console.warn(`[group-chat] ${kind} prompt has no agent work-start acknowledgement for ${sid.slice(0, 8)}${pasteStillPending ? ' and pending text is still sitting in the input box' : ''}; sending late Enter recovery ${attempt}/${retryMax}`);
+        assertCodeAgentSubmission(options);
         sessionManager.writeToSession(sid, '\r');
-        acknowledgement = await waitForAgentWorkStart(turnStart, sessionManager, sid, kind, recoveryAckMs, probeState, livePtyObserver);
+        acknowledgement = await awaitCodeAgentSubmission(waitForAgentWorkStart(turnStart, sessionManager, sid, kind, recoveryAckMs, probeState, livePtyObserver), options);
       }
       // 「屏幕跑过 + 输入框是空的」本身就是提交成功的证据（2026-09-03）。
       //   实测现场：新建 Codex 会话的**第一轮**，rollout 还没绑定所以 task_started 迟到，
@@ -1226,6 +1379,8 @@ module.exports = {
   init,
   waitCliReady,
   sendToPty,
+  openCodeAgentCommands,
+  codeAgentInputAction,
   extractStreamingText,
   cleanBufLen,
   checkHostShellTakeover,

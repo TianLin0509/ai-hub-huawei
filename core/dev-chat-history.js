@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const { JsonlTail } = require('./jsonl-tail');
 const { promptFingerprint, normalizeProviderFamily } = require('./groupchat-attempt-protocol');
 const { codexUserMessageEventFromRecord, codexAgentMessageEventFromRecord } = require('./transcript-payload-utils');
+const { skillCommandText } = require('./synthetic-user-filter');
 const hash = value => crypto.createHash('sha256').update(String(value)).digest('hex');
 async function requireSourceFile(sourcePath) {
   const stat=await fs.promises.stat(sourcePath);
@@ -46,6 +47,7 @@ function createHistoryReader({ orch, sid, kind, sourcePath, speaker = 'Agent', o
   hydrateReceipts(orch,sid);
   const family = normalizeProviderFamily(kind), ancestors = new Map(), turns = new Map();
   const deferred = new Map();
+  const skillPrompts = new Set();
   let currentTurn = null, current = null;
   const error = reason => {
     const state=ledger(orch);
@@ -120,9 +122,12 @@ function createHistoryReader({ orch, sid, kind, sourcePath, speaker = 'Agent', o
     if(family==='claude') {
       const parent=obj.parentUuid ? ancestors.get(obj.parentUuid) : current;
       if(obj.type==='user') {
-        const text=textBlocks(obj.message?.content);
+        const raw=textBlocks(obj.message?.content), command=skillCommandText(raw), text=command ?? raw;
         const tool=Array.isArray(obj.message?.content) && obj.message.content.some(b=>b.type==='tool_result');
         if(tool) { if(obj.uuid)ancestors.set(obj.uuid,parent || null); return; }
+        if(command!==null && typeof obj.promptId==='string')skillPrompts.add(obj.promptId);
+        // 同一次技能发送的正文继承命令回合，不能覆盖已经按真实输入绑定的任务凭据。
+        if(obj.isMeta && command===null && skillPrompts.has(obj.promptId)) { if(obj.uuid)ancestors.set(obj.uuid,parent || null); return; }
         current=text ? bind(text,rawKey,obj.uuid,at) || {unresolved:true,text,key:rawKey,turnId:obj.uuid,at} : null;
         if(obj.uuid)ancestors.set(obj.uuid,current); return;
       }

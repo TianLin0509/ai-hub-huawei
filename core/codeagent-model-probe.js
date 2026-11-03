@@ -47,7 +47,7 @@ function modelsFromPicker(picker) {
 }
 
 // command/configDirEnv 来自 core/codeagent-config.js；cwd 必须是一个下面没有 .cac 凭证的目录（否则会认成别的号）。
-async function probeModels({ command, configDirEnv, configDir, cwd, env = process.env, ptyModule = null,
+async function probeModels({ command, configDirEnv, configDir, cwd, dataDir, env = process.env, ptyModule = null,
   readyTimeoutMs = 40000, menuTimeoutMs = 15000, exitTimeoutMs = 5000, cols = 160, rows = 60 } = {}) {
   if (activeProbe) return { ok: false, cleanupPending: true, error: '上一次模型探测的临时进程尚未确认退出，暂不启动新探测；退出后可重新获取' };
   const picker = require('./codeagent-model-picker');
@@ -105,7 +105,11 @@ async function probeModels({ command, configDirEnv, configDir, cwd, env = proces
     if (!result.models.length) return { ok: false, error: '模型菜单是空的' };
     // 同一屏上的用量表顺手解析（只读屏，core/codeagent-usage-menu.js），调用方按这个号记快照
     let usage = null;
-    try { usage = require('./codeagent-usage-menu').parseCodeAgentUsageMenu(menu.lines); } catch { usage = null; }
+    try {
+      const menuUsage = require('./codeagent-usage-menu');
+      ({ usage } = await menuUsage.readUsageMenu(menu.lines, { readLines: () => screen.lines(),
+        timeoutMs: menuUsage.PROBE_USAGE_WAIT_MS, dataDir, source: 'probe' }));
+    } catch { usage = null; }
     proc.write('\x1b');
     await sleep(300);
     return { ok: true, ...result, ...(usage ? { usage } : {}) };

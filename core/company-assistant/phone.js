@@ -1,6 +1,6 @@
 'use strict';
 // 手机 WeLink 对话（2026-10-18 用户定）：手机上永远只和公司「助理」说话，助理用 hub-tools.js 的工具去管其他会话。
-//   收：每 3 秒查一次这个群的新消息。welink-cli 没有推送，只能查；公司实测 2–5 秒一次、66 次全成功不限频（Q-1018-04）。
+//   收：每 6 秒查一次这个群的新消息，与其他 Hub 请求共用队列，避免叠加请求触发限流。
 //   发：Hub 只往这个群发文字（welink.js 的 sendAllowed 只放行选定的群号）；助理会话本身仍然只读、不发消息。
 //   防误触发（借鉴同事的 WeRemoteControl）：只认本人账号发的；Hub 自己发的都带「【助理】」开头并记下，不当成指令；
 //     同一条只处理一次；超过 120 秒的旧消息不执行（Hub 重启时不补跑积压）；每分钟最多 20 条。
@@ -10,7 +10,7 @@ const welink = require('./welink');
 
 const PREFIX = '【助理】';
 const DEFAULT_PHONE = Object.freeze({ enabled: false, groupId: '', groupName: '', pushWatched: true, pushStuck: true, since: 0 });
-const POLL_MS = 3000, WATCH_TICK_MS = 10000;
+const POLL_MS = 6000, WATCH_TICK_MS = 10000;
 const FRESH_MS = 120000, RATE_PER_MIN = 20, CHUNK = 1500, ACK_MS = 20000, AT_DESK_S = 300, WATCH_TTL_MS = 24 * 3600000;
 const PHONE_NOTE = '（这句是我在手机 WeLink 上发的，你的回答会由 Hub 发回我手机：先说结论，尽量 300 字以内，不用表格。）';
 const WELCOME = '手机对话已接通。在这个群里直接跟我说话就行，例如「现在有哪些会话在跑？」「让某某会话接着做，做完告诉我」。会话做完或卡住时我也会在这里提醒你。';
@@ -66,7 +66,7 @@ class PhoneChannel {
     if (snap?.login?.ok && snap.login.uid) return snap.login.uid;
     const st = this.state();
     if (st.me && this.now() - st.meAt < 3600000) return st.me;
-    const r = await this.a.welink(['auth', 'status']);
+    const r = await this.a.welink(['auth', 'status'], { priority: 'phone' });
     const login = welink.loginState(r.stdout + '\n' + r.stderr);
     if (!login.ok || !login.uid) throw new Error('WeLink 没登录或登录过期，手机对话暂停；在助理页扫码登录后自动恢复');
     this.save({ me: login.uid, meAt: this.now() });
@@ -85,7 +85,7 @@ class PhoneChannel {
       const args = ['im', 'query-history-message', '--group-id', p.groupId, '--query-count', fresh ? '10' : '30'];
       // help 里写 0 是更新的，公司实测正好相反：1 才是「比这条更新的」（Q-1018-04 第 2 轮）。
       if (!fresh) args.push('--message-id', st.cursor, '--query-direction', '1');
-      const r = await this.a.welink(args, { timeoutMs: 20000 });
+      const r = await this.a.welink(args, { timeoutMs: 20000, priority: 'phone' });
       const list = welink.groupMessages(r.stdout);
       if (list == null) throw new Error(short(r.stderr || r.stdout || 'welink-cli 没有输出', 160));
       const cursor = fresh ? null : BigInt(st.cursor);
@@ -131,7 +131,7 @@ class PhoneChannel {
       for (let i = 0; i < parts.length; i += 1) {
         const body = PREFIX + (parts.length > 1 ? `（${i + 1}/${parts.length}）` : '') + parts[i];
         try {
-          const r = await this.a.welink(['im', 'send-to-group', '--group-id', p.groupId, '--text', body], { sendGroup: p.groupId, timeoutMs: 30000 });
+          const r = await this.a.welink(['im', 'send-to-group', '--group-id', p.groupId, '--text', body], { sendGroup: p.groupId, timeoutMs: 30000, priority: 'phone' });
           if (r.code !== 0) throw new Error(short(r.stderr || r.stdout || '发送命令失败', 160));
           const receipt = welink.parseJson(r.stdout), code = receipt?.code ?? receipt?.resultCode ?? receipt?.error?.error_code;
           if (receipt?.ok === false || receipt?.success === false || code !== undefined && !['0', '200'].includes(String(code)))
@@ -209,7 +209,7 @@ class PhoneChannel {
   // ---- 设置页用 ----
   async checkGroup(groupId = this.settings().groupId) {
     if (!groupId) throw new Error('请先填群 ID');
-    const r = await this.a.welink(['im', 'query-group-member', '--group-id', String(groupId)], { timeoutMs: 20000 });
+    const r = await this.a.welink(['im', 'query-group-member', '--group-id', String(groupId)], { timeoutMs: 20000, priority: 'phone' });
     const members = welink.groupMembers(r.stdout);
     if (!members.length && r.code !== 0) throw new Error(short(r.stderr || r.stdout || '没查到群成员', 160));
     let me = ''; try { me = await this.me(); } catch { /* 没登录也能看成员 */ }
@@ -226,4 +226,4 @@ class PhoneChannel {
   }
 }
 
-module.exports = { PhoneChannel, DEFAULT_PHONE, PREFIX, PHONE_NOTE, WELCOME, plain, chunks };
+module.exports = { POLL_MS, PhoneChannel, DEFAULT_PHONE, PREFIX, PHONE_NOTE, WELCOME, plain, chunks };

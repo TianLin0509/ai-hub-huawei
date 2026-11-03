@@ -24,23 +24,30 @@ class MeetingRecorder {
     try { while (this.queue.length) { await this.save(this.queue[0]); this.queue.shift(); } }
     catch (e) { this.fail(e); } finally { this.saving = false; }
   }
-  part() {
+  part(full = false) {
     const recorder = new this.w.MediaRecorder(this.stream, { mimeType: this.mime, videoBitsPerSecond: 2500000, audioBitsPerSecond: 96000 });
     const key = this.w.crypto.randomUUID(), at = this.elapsed(); let offset = 0, finish;
     const settings = this.stream.getVideoTracks()[0].getSettings();
-    const part = { recorder, done: new Promise(r => { finish = r; }) }; this.active.add(part);
-    this.push({ kind: 'recording-start', key, at, mime: this.mime, width: settings.width, height: settings.height });
+    const part = { recorder, full, mediaMs: 0, resumedAt: at, done: new Promise(r => { finish = r; }) }; this.active.add(part);
+    const duration = () => part.mediaMs + (part.resumedAt == null ? 0 : Math.max(0, this.elapsed() - part.resumedAt));
+    this.push({ kind: 'recording-start', key, full, at, mime: this.mime, width: settings.width, height: settings.height });
     recorder.ondataavailable = event => {
       const end = this.elapsed();
-      this.pending = this.pending.then(async () => { if (event.data.size) { const b = Buffer.from(await event.data.arrayBuffer()); this.push({ kind: 'recording-chunk', key, at: end, offset, data: b.toString('base64') }); offset += b.length; } }).catch(e => this.fail(e));
+      const durationMs = duration();
+      this.pending = this.pending.then(async () => { if (event.data.size) { const b = Buffer.from(await event.data.arrayBuffer()); this.push({ kind: 'recording-chunk', key, at: end, durationMs, offset, data: b.toString('base64') }); offset += b.length; } }).catch(e => this.fail(e));
     };
     recorder.onerror = e => this.fail(new Error(e.error?.message || '视频编码失败'));
-    recorder.onstop = () => { const end = this.elapsed(); this.active.delete(part); this.pending = this.pending.then(() => this.push({ kind: 'recording-finish', key, at: end })); finish(); };
+    recorder.onstop = () => { const end = this.elapsed(), durationMs = duration(); this.active.delete(part); this.pending = this.pending.then(() => this.push({ kind: 'recording-finish', key, at: end, durationMs })); finish(); };
     try { recorder.start(1000); } catch(e) { this.active.delete(part); finish(); throw e; } return part;
   }
   start() {
     if (this.running) return;
-    if (this.error) throw new Error(this.error); this.running = true; try { this.current = this.part(); this.schedule(); } catch(e) { this.fail(e); throw e; }
+    if (this.error) throw new Error(this.error); this.running = true;
+    try {
+      if (!this.full) this.full = this.part(true);
+      else if (this.full.recorder.state === 'paused') { this.full.resumedAt = this.elapsed(); this.full.recorder.resume(); }
+      this.current = this.part(); this.schedule();
+    } catch(e) { this.fail(e); throw e; }
   }
   schedule() {
     this.timer = setTimeout(() => {
@@ -52,12 +59,21 @@ class MeetingRecorder {
     }, this.segmentMs);
   }
   async pause() {
-    this.running = false; clearTimeout(this.timer); const parts = [...this.active];
+    this.running = false; clearTimeout(this.timer); const parts = [...this.active].filter(p => !p.full);
+    const full = this.full; let paused;
+    if (full?.recorder.state === 'recording') {
+      full.mediaMs += Math.max(0, this.elapsed() - full.resumedAt); full.resumedAt = null;
+      paused = new Promise(resolve => { full.recorder.onpause = resolve; });
+      full.recorder.requestData(); full.recorder.pause();
+    }
     for (const p of parts) if (p.recorder.state !== 'inactive') p.recorder.stop();
-    await Promise.all(parts.map(p => p.done)); await this.pending; await this.flush();
+    await Promise.all([...parts.map(p => p.done), paused]); await this.pending; await this.flush();
   }
   async flush() { while (this.saving) await new Promise(r => setTimeout(r, 25)); await this.drain(); if (this.queue.length || this.error) throw new Error(this.error || '视频尚未保存'); }
   async retry() { this.error = ''; await this.flush(); }
-  async close() { try { await this.pause(); } finally { for (const n of this.sources || []) { n.source.disconnect(); n.gain.disconnect(); } if (this.ctx) await this.ctx.close(); } }
+  async close() {
+    try { await this.pause(); if (this.full?.recorder.state !== 'inactive' && this.full) { this.full.recorder.stop(); await this.full.done; } await this.pending; await this.flush(); }
+    finally { for (const n of this.sources || []) { n.source.disconnect(); n.gain.disconnect(); } if (this.ctx && this.ctx.state !== 'closed') await this.ctx.close(); }
+  }
 }
 module.exports = { MeetingRecorder };

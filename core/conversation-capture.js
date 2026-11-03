@@ -77,7 +77,7 @@ function captureConversationMessages({native,kind,sourcePath,providerTurnId,clie
     turns=require('./codex-transcript-parser').parseCodexRolloutToTurns(sourcePath,{limit:Infinity});
     owned=ownedTurns(turns,expected,since);
   }
-  else if (/^claude/.test(kind || '')) owned=claudeOwnedTurns(sourcePath,expected,since);
+  else if (require('./ai-kinds').isClaudeFamily(kind)) owned=claudeOwnedTurns(sourcePath,expected,since);
   else return [];
   if(!owned)return [];
   return displayTurns(owned).filter(m=>m.role==='assistant' && (m.text || m.toolCalls?.length));

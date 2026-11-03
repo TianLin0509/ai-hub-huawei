@@ -1,5 +1,4 @@
 'use strict';
-// The PowerShell hook relay forwards the CLI's hook payload byte for byte, and
 // the Hub extracts the fields it needs. Runs without Python or Node on PATH.
 const test = require('node:test');
 const assert = require('node:assert/strict');

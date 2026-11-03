@@ -20,6 +20,17 @@ function textFromContent(content) {
   return '';
 }
 
+// CodeAgent 技能发送的第一条 user：命令回显是真实输入，后面的 isMeta 技能正文仍是材料。
+// Claude 的 <command-name> 开头本地命令不符合这个包装，继续按原规则隐藏。
+function skillCommandText(text) {
+  const source = String(text || '').trimStart();
+  if (!source.startsWith('<command-message>')) return null;
+  const name = source.match(/<command-name>\s*(\/[^\s<>]+)\s*<\/command-name>/);
+  if (!name) return null;
+  const args = source.match(/<command-args>([\s\S]*?)<\/command-args>/)?.[1].trim() || '';
+  return name[1] + (args ? ' ' + args : '');
+}
+
 function isSyntheticUserText(text) {
   const t = String(text || '').trimStart();
   if (!t) return false;
@@ -111,7 +122,7 @@ function splitHubEnvelopes(text) {
 function displayUserText(text) {
   const own = splitHubEnvelopes(text);
   if (own.attached.length && !own.text) return null;
-  text = own.text;
+  text = skillCommandText(own.text) ?? own.text;
   if (isSyntheticUserText(text)) return null;
   const groupChat = extractGroupChatUserInput(text);
   if (groupChat === null) return String(text || '');
@@ -122,7 +133,7 @@ function displayUserText(text) {
 function isSyntheticUserEntry(entry, text) {
   if (!entry || typeof entry !== 'object') return false;
   const candidate = text !== undefined ? text : textFromContent(entry.message?.content ?? entry.payload?.content ?? entry.payload?.message);
-  if (entry.isMeta === true || entry.isCompactSummary === true || entry.isVisibleInTranscriptOnly === true) return true;
+  if ((entry.isMeta === true && skillCommandText(candidate) === null) || entry.isCompactSummary === true || entry.isVisibleInTranscriptOnly === true) return true;
   if (entry.origin && entry.origin.kind === 'task-notification') return true;
   if (entry.promptSource === 'system' && (entry.origin || isSyntheticUserText(candidate))) return true;
   return isSyntheticUserText(candidate);
@@ -189,6 +200,7 @@ module.exports = {
   splitHubEnvelopes,
   hubAttachedFields,
   textFromContent,
+  skillCommandText,
   isSyntheticUserText,
   isSyntheticUserEntry,
   extractGroupChatUserInput,

@@ -27,7 +27,7 @@ const {
 } = require('./deepseek-codex-profile.js');
 const { ensureMemoryLink } = require('./claude-memory-link.js');
 const deepseekClaude = require('./deepseek-claude-profile.js');
-const { isSyntheticUserEntry, textFromContent } = require('./synthetic-user-filter.js');
+const { isSyntheticUserEntry, textFromContent, skillCommandText } = require('./synthetic-user-filter.js');
 const { TerminalSnapshot } = require('./terminal-snapshot.js');
 const { CodexXtermScrollbackRewriter } = require('./codex-xterm-scrollback-rewriter.js');
 const { PtyOutputDelivery } = require('./pty-output-delivery.js');
@@ -1404,6 +1404,16 @@ class SessionManager extends EventEmitter {
   // Injected by main: the chosen hook HTTP port + per-launch auth token.
   hookPort = null;
   hookToken = null;
+  teamTokenFor = null;
+
+  _applyHubSessionEnv(sessionEnv, id) {
+    sessionEnv.CLAUDE_HUB_SESSION_ID = id;
+    const teamToken = this.teamTokenFor?.(id);
+    if (teamToken) sessionEnv.CLAUDE_HUB_TEAM_TOKEN = teamToken;
+    else delete sessionEnv.CLAUDE_HUB_TEAM_TOKEN;
+    if (this.hookPort) sessionEnv.CLAUDE_HUB_PORT = String(this.hookPort);
+    if (this.hookToken) sessionEnv.CLAUDE_HUB_TOKEN = this.hookToken;
+  }
 
   constructor() {
     super();
@@ -1508,11 +1518,11 @@ class SessionManager extends EventEmitter {
     try { plan = this.extraMcpProvider({ kind, opts, id: opts.id }); } catch (error) { console.warn('[extra-mcp]', error.message); }
     // 提供者返回 { mcp, env }：env 给会话里的命令行工具用（例如凭会话通行证调用 Hub 的本机接口）。
     if (plan && plan.env && typeof plan.env === 'object') opts = { ...opts, extraEnv: { ...(opts.extraEnv || {}), ...plan.env } };
-    const entry = plan && plan.mcp;
-    if (!entry || !entry.name) return opts;
+    const entries = (Array.isArray(plan?.mcp) ? plan.mcp : [plan?.mcp]).filter(entry => entry?.name);
+    if (!entries.length) return opts;
     const base = String(kind || '').replace(/-resume$/, '');
     if (isCodexCliKind(base)) {
-      return { ...opts, codexPinnedMcpEntries: [...(opts.codexPinnedMcpEntries || []).filter(e => e && e.name !== entry.name), entry] };
+      return { ...opts, codexPinnedMcpEntries: [...(opts.codexPinnedMcpEntries || []).filter(e => e && !entries.some(entry => entry.name === e.name)), ...entries] };
     }
     // 跑在 Claude Code 上的 DeepSeek（deepseek-claude、旧的 deepseek-legacy）同样认 --mcp-config（2026-10-20 补漏）。
     const claudeCli = base === 'claude' || base === 'deepseek-legacy' || deepseekClaude.isDeepSeekClaudeKind(base);
@@ -1521,7 +1531,7 @@ class SessionManager extends EventEmitter {
       if (typeof opts.mcpConfigFile === 'string' && opts.mcpConfigFile) {
         try { const parsed = JSON.parse(fs.readFileSync(opts.mcpConfigFile, 'utf8')); if (parsed && typeof parsed === 'object') config = { ...parsed, mcpServers: { ...(parsed.mcpServers || {}) } }; } catch {}
       }
-      config.mcpServers[entry.name] = { command: entry.command, args: entry.args || [], env: entry.env || {} };
+      for (const entry of entries) config.mcpServers[entry.name] = { command: entry.command, args: entry.args || [], env: entry.env || {} };
       const dir = path.join(getHubDataDir(), 'extra-mcp');
       fs.mkdirSync(dir, { recursive: true });
       const file = path.join(dir, `${base === 'claude' ? 'claude' : claudeCli ? base : 'codeagent'}-${opts.id}.json`);
@@ -1841,9 +1851,7 @@ class SessionManager extends EventEmitter {
       const cv = getConfigValues();
       applyClaudeSessionEnv(sessionEnv, cv);
       // Attribution + auth for the Stop/UserPromptSubmit hook script (both modes)
-      sessionEnv.CLAUDE_HUB_SESSION_ID = id;
-      if (this.hookPort) sessionEnv.CLAUDE_HUB_PORT = String(this.hookPort);
-      if (this.hookToken) sessionEnv.CLAUDE_HUB_TOKEN = this.hookToken;
+      this._applyHubSessionEnv(sessionEnv, id);
       // 软压缩：用户目录的提醒钩子看到它，才让 AI 在断点结束本轮留标记（main/soft-compact-controller.js 只管 PTY）。
       if (require('./agent-runtime-mode').agentRuntimeMode() !== 'native') sessionEnv.CLAUDE_HUB_SOFT_COMPACT = '1';
       // Propagate data-dir override so the statusline script writes its cache
@@ -1859,9 +1867,7 @@ class SessionManager extends EventEmitter {
       for (const key of Object.keys(sessionEnv)) {
         if (/^CODEAGENT_HUB_/.test(key) || key === 'CODEAGENT3_LAUNCHER_PID') delete sessionEnv[key];
       }
-      sessionEnv.CLAUDE_HUB_SESSION_ID = id;
-      if (this.hookPort) sessionEnv.CLAUDE_HUB_PORT = String(this.hookPort);
-      if (this.hookToken) sessionEnv.CLAUDE_HUB_TOKEN = this.hookToken;
+      this._applyHubSessionEnv(sessionEnv, id);
       if (process.env.CLAUDE_HUB_DATA_DIR) sessionEnv.CLAUDE_HUB_DATA_DIR = process.env.CLAUDE_HUB_DATA_DIR;
       // 它的界面框架（opentui）只看 WT_SESSION 是否非空来判断「推荐终端」，空就一直挂一条
       // 「当前终端非推荐终端」黄条（2026-10-09 公司真机）。Hub 的终端是完整的 ConPTY + 真彩色，补一个占位值；
@@ -1887,9 +1893,7 @@ class SessionManager extends EventEmitter {
       } else if (planRoute && planRoute.waitForReset) {
         deepseekClaudeLaunch.notice = require('./token-plan-fallback').waitNotice(getHubDataDir(), { missingKey: planRoute.missingKey });
       }
-      sessionEnv.CLAUDE_HUB_SESSION_ID = id;
-      if (this.hookPort) sessionEnv.CLAUDE_HUB_PORT = String(this.hookPort);
-      if (this.hookToken) sessionEnv.CLAUDE_HUB_TOKEN = this.hookToken;
+      this._applyHubSessionEnv(sessionEnv, id);
       if (process.env.CLAUDE_HUB_DATA_DIR) sessionEnv.CLAUDE_HUB_DATA_DIR = process.env.CLAUDE_HUB_DATA_DIR;
     } else if (isDeepSeekLegacy) {
       const cv = getConfigValues();
@@ -1899,9 +1903,7 @@ class SessionManager extends EventEmitter {
       delete sessionEnv.ANTHROPIC_API_KEY;
       delete sessionEnv.ANTHROPIC_API_BASE_URL;
       sessionEnv.CLAUDE_CONFIG_DIR = path.join(process.env.USERPROFILE || process.env.HOME || os.homedir(), '.claude-deepseek');
-      sessionEnv.CLAUDE_HUB_SESSION_ID = id;
-      if (this.hookPort) sessionEnv.CLAUDE_HUB_PORT = String(this.hookPort);
-      if (this.hookToken) sessionEnv.CLAUDE_HUB_TOKEN = this.hookToken;
+      this._applyHubSessionEnv(sessionEnv, id);
       if (process.env.CLAUDE_HUB_DATA_DIR) sessionEnv.CLAUDE_HUB_DATA_DIR = process.env.CLAUDE_HUB_DATA_DIR;
     } else if (webRoute) {
       clearProxyEnv(sessionEnv);
@@ -2252,12 +2254,10 @@ class SessionManager extends EventEmitter {
     if (isCodexRuntime) {
 
       for (const key of ['CODEX_THREAD_ID','CODEX_SESSION_ID','CLAUDE_HUB_SESSION_ID',
-        'CLAUDE_HUB_PORT','CLAUDE_HUB_TOKEN','AI_TEAM_HUB_CALLBACK_URL']) delete sessionEnv[key];
+        'CLAUDE_HUB_PORT','CLAUDE_HUB_TOKEN','CLAUDE_HUB_TEAM_TOKEN','AI_TEAM_HUB_CALLBACK_URL']) delete sessionEnv[key];
       if (!isNativeCodex) {
         // PTY Codex 的状态与卡片绑定都靠 hook：session-hub-hook.py 只认这三个变量。
-        sessionEnv.CLAUDE_HUB_SESSION_ID = id;
-        if (this.hookPort) sessionEnv.CLAUDE_HUB_PORT = String(this.hookPort);
-        if (this.hookToken) sessionEnv.CLAUDE_HUB_TOKEN = this.hookToken;
+        this._applyHubSessionEnv(sessionEnv, id);
         if (process.env.CLAUDE_HUB_DATA_DIR) sessionEnv.CLAUDE_HUB_DATA_DIR = process.env.CLAUDE_HUB_DATA_DIR;
       }
     }
@@ -4587,7 +4587,7 @@ async function readTranscriptTail(kind, sourcePath, n = 10, opts = {}) {
         // Claude and migration-only deepseek-legacy share one JSONL shape.
         if (obj.type === 'user' && obj.message?.content) {
           const userText = typeof obj.message.content === 'string' ? obj.message.content : textFromContent(obj.message.content);
-          if (!isSyntheticUserEntry(obj, userText)) out.push(`USER: ${userText}`);
+          if (!isSyntheticUserEntry(obj, userText)) out.push(`USER: ${skillCommandText(userText) ?? userText}`);
         }
         if (obj.type === 'assistant' && Array.isArray(obj.message?.content)) {
           const txt = obj.message.content.filter(c => c.type === 'text').map(c => c.text).join('');

@@ -46,6 +46,7 @@ const {
   timestampToMs,
 } = require('./transcript-payload-utils.js');
 const { KimiTap } = require('./kimi-transcript-tap.js');
+const { readClaudeTurn, isHumanClaudeRecord } = require('./claude-turn-alignment.js');
 
 // ---------------------------------------------------------------------------
 // JsonlTail — 共用工具：监听 JSONL 文件增长，按行回调 JSON.parse 后的对象
@@ -60,7 +61,7 @@ const { KimiTap } = require('./kimi-transcript-tap.js');
 // ---------------------------------------------------------------------------
 // Claude Code 的 transcript 由 CC CLI 自己写入；每个 hook 都携带路径。Hub 在
 // UserPromptSubmit 时从 EOF 开始监听，终态 stop_reason 可独立闭环；Stop hook 到达时
-// 仍会直接读取末轮作为低延迟快路径。
+// 仍按同一 user UUID 校验终态；未对齐时显示待确认。
 
 // Card optimization Task 1（2026-05-01）— ClaudeTap 升级流式 tail：
 //   旧实现：只在 Stop hook 触发时一次性读 transcript 末尾的 last assistant；renderer 看不到 thinking/tool_use。
@@ -91,6 +92,10 @@ const _CLAUDE_STOP_REASON_DEBOUNCE_MS = 200;
 //   兜底场景：transcript 写入异常 / Stop hook 没触发 / stop_reason 字段缺失。
 //   15s 取舍：足够等待 transcript 异步刷盘 + fs.watch 漂移，又不至于让用户卡得明显。
 const _CLAUDE_IDLE_EMIT_MS = 15 * 1000;
+// Direct CLI input is written before UserPromptSubmit reaches the Hub. Only
+// that path gets hook-arrival tolerance; Hub dispatches keep their real lower
+// bound. Exact native promptId/UUID matching remains the preferred identity.
+const _CLAUDE_DIRECT_HOOK_LAG_MS = 10 * 1000;
 
 // 2026-05-02 Gemini 兜底：与 ClaudeTap 同套 idle-timer 思路。用户血泪反馈：
 //   "第一轮 Gemini 子 session 输出后没快速提取，手动提取后流程继续"。
@@ -152,59 +157,74 @@ class ClaudeTap extends EventEmitter {
     return e?.lastText || null;
   }
 
-  notePrompt(hubSessionId) {
+  notePrompt(hubSessionId, prompt) {
     const entry = this._bound.get(hubSessionId);
     if (!entry) return;
     // A new Hub dispatch is a real local turn boundary even when the Claude
     // UserPromptSubmit hook is missing. Never let the previous hook turn id be
     // reused by a later stop_reason event.
     entry.currentTurnId = null;
+    entry.currentUserRecordId = null;
+    entry.expectedPrompt = prompt || '';
+    entry.awaitingPromptHook = true;
+    entry.generation = (entry.generation || 0) + 1;
     entry.promptNotedAt = Date.now();
     entry.lastText = null;
     this._cancelIdleEmit(hubSessionId);
     this._cancelStopReasonEmit(hubSessionId);
   }
 
-  // 2026-05-02 Bug 修复：扩展手动提取支持 Claude/DeepSeek/GLM。
-  //   旧版本仅 GeminiTap 有 extractLatestGeminiTurn → 用户对 Claude/DeepSeek/GLM 卡片点
-  //   "一键提取"永远拿到 null，UI 显"提取失败"——按钮形同虚设。
-  //   新版本：复用 parseClaudeTranscriptToTurns 读 transcript 末尾的合并 turn，并按
-  //   sincePromptTs 做时间窗下界过滤（见下方 2026-07-20 修复说明）。
-  //   返回 { text, source } 与 GeminiTap 同形；transcriptPath 未知（hook/scan 都未拿到）→ null。
-  //
-  // 2026-05-14 maintainer：切到合并版 readLastAssistantTurnMergedTextFromClaudeTranscript，
-  //   修群聊只拿到 [3] recap 段的 bug（plan 段在首条 entry，旧函数只读末条）。
-  //
-  // 2026-07-20 maintainer [修#1]：补上 sincePromptTs 时间窗下界。旧版忽略该参数 —— AI 卡住
-  //   /思考中时 transcript 最后一个完整 turn 是「上一轮」的答案，一键提取会把它抓进
-  //   本轮（张冠李戴）。现在末轮完成时间早于本轮 prompt 5s 以上 → 视为旧答案拒绝提取。
-  async extractLatestTurn(hubSessionId, sincePromptTs = 0) {
+  // 手动、Stop、idle 共用消息编号对齐。未知 hook ID 只能通过本轮正文与
+  // 严格时间下界建立别名，不允许放宽时间窗口猜上一轮。
+  async extractLatestTurn(hubSessionId, sincePromptTs = 0, opts = {}) {
     const entry = this._bound.get(hubSessionId);
     if (!entry || !entry.transcriptPath) return null;
-    let last = null;
-    try {
-      const turns = this._parserService
-        ? (await this._parserService.parse('claude', entry.transcriptPath, { limit: 1, fromTail: true })).turns
-        : parseClaudeTranscriptToTurns(entry.transcriptPath, { limit: 1, fromTail: true });
-      last = turns[turns.length - 1];
-    } catch { return null; }
-    if (!last || last.role !== 'assistant') return null;
-    const turnEndMs = last.tsEnd || last.ts || 0;
-    if (sincePromptTs && turnEndMs && turnEndMs < sincePromptTs - 5000) return null;
-    const text = typeof last.text === 'string' ? last.text.trim() : '';
-    if (!text) return null;
-    // 2026-09-06：带上终态证据。手动「一键提取/同步」是用户主动要"现在有什么给我什么"，
-    //   拿到 partial_commentary 也照样用；但自动路径（群聊 auto-extract / 重启恢复）
-    //   必须只认 final_answer —— 否则 stop_reason='tool_use' 的开场白会被当成最终答案。
-    //   词汇与 CodexTap.extractLatestCodexTurn 对齐，调用方两家共用一套判据。
-    const isFinal = isClaudeTurnStopReasonTerminal(last.stopReason);
-    return {
-      text,
-      source: 'manual_claude_transcript',
-      completedAt: turnEndMs || null,
-      stopReason: last.stopReason || null,
-      extractMode: isFinal ? 'final_answer' : 'partial_commentary',
+    const explicit = !!(opts.userRecordId || opts.providerTurnId || opts.turnId || opts.untilTs);
+    const providerTurnId = opts.providerTurnId || opts.turnId || (!explicit && entry.currentTurnId) || null;
+    const known = entry.turnUsers?.get(providerTurnId);
+    const generation = entry.generation;
+    const alignmentOptions = {
+      ...opts, providerTurnId,
+      userRecordId:opts.userRecordId || known || (!explicit && entry.currentUserRecordId) || null,
+      prompt:opts.prompt || (!explicit && entry.expectedPrompt) || '',
+      since:Number(sincePromptTs) || (!explicit && entry.promptNotedAt) || 0,
     };
+    const result = this._parserService
+      ? (await this._parserService.parse('claude-aligned',entry.transcriptPath,alignmentOptions)).turns[0]
+      : await readClaudeTurn(entry.transcriptPath,alignmentOptions);
+    if (result?.aligned && generation === entry.generation && (!explicit || providerTurnId === entry.currentTurnId)) {
+      entry.turnUsers ||= new Map();
+      entry.turnUsers.set(providerTurnId || result.turnId,result.userRecordId);
+      if(entry.turnUsers.size>64)entry.turnUsers.delete(entry.turnUsers.keys().next().value);
+      if(!providerTurnId || !entry.currentTurnId || providerTurnId===entry.currentTurnId)entry.currentUserRecordId=result.userRecordId;
+      if(entry.lastPromptRecordId!==result.userRecordId) {
+        entry.lastPromptRecordId=result.userRecordId;
+        entry.lastPromptSubmittedAt=result.submittedAt;
+        this.emit('prompt-submitted',{hubSessionId,text:result.promptText,submittedAt:result.submittedAt,
+          turnId:result.turnId,userRecordId:result.userRecordId,signalSource:'claude_user_record'});
+      }
+    }
+    return result;
+  }
+
+  async _emitAligned(hubSessionId, signalSource) {
+    const entry=this._bound.get(hubSessionId);
+    if(!entry)return;
+    const generation=entry.generation;
+    const result=await this.extractLatestTurn(hubSessionId);
+    if(this._bound.get(hubSessionId)!==entry || generation!==entry.generation)return;
+    if(!result?.aligned || !['final_answer','provider_error'].includes(result.extractMode)) {
+      this.emit('turn-pending',{hubSessionId,...result,signalSource});
+      return;
+    }
+    const key=JSON.stringify([result.userRecordId,result.recordId,result.completedAt,result.text]);
+    if(entry.lastCompletionUser===result.userRecordId && Number(result.completedAt)<Number(entry.lastCompletionAt))return;
+    if(key===entry.lastCompletionKey)return;
+    entry.lastCompletionKey=key;entry.lastText=result.text;
+    entry.lastCompletionUser=result.userRecordId;entry.lastCompletionAt=result.completedAt;
+    if(result.extractMode==='provider_error') {
+      this.emit('turn-error',{...result,hubSessionId,signalSource,message:result.text});
+    } else this.emit('turn-complete',{...result,hubSessionId,signalSource,modelId:entry.lastModel || null,usage:entry.lastUsage || null});
   }
 
   getStreamingText(hubSessionId) {
@@ -232,8 +252,17 @@ class ClaudeTap extends EventEmitter {
       });
     }
     const entry = this._bound.get(hubSessionId);
+    if (options.turnId && !options.newTurn && entry.currentTurnId && String(options.turnId)!==entry.currentTurnId) return;
     if (options.newTurn === true) {
       entry.currentTurnId = options.turnId ? String(options.turnId) : null;
+      entry.currentUserRecordId = null;
+      entry.expectedPrompt = options.prompt || (entry.awaitingPromptHook && entry.expectedPrompt) || '';
+      if(!entry.awaitingPromptHook) {
+        const hookAt=Number(options.at) || Date.now();
+        entry.promptNotedAt=Math.max(0,hookAt-_CLAUDE_DIRECT_HOOK_LAG_MS,Number(entry.lastCompletionAt) || 0);
+      }
+      entry.awaitingPromptHook = false;
+      entry.generation = (entry.generation || 0) + 1;
       entry.lastText = null;
       this._cancelIdleEmit(hubSessionId);
       this._cancelStopReasonEmit(hubSessionId);
@@ -282,6 +311,21 @@ class ClaudeTap extends EventEmitter {
               turnId: entry.currentTurnId || null,
               signalSource: 'claude-interrupt-marker',
             });
+          } else if (isHumanClaudeRecord(obj)) {
+            // Direct CLI input may have no Hub dispatch or hook. A newer human
+            // UUID is its own boundary; a delayed old row cannot move it back.
+            if (entry.currentUserRecordId && obj.uuid !== entry.currentUserRecordId
+                && timestampToMs(obj.timestamp) > Number(entry.lastPromptSubmittedAt || 0)) {
+              entry.currentTurnId = null;
+              entry.currentUserRecordId = obj.uuid;
+              entry.expectedPrompt = text;
+              entry.promptNotedAt = timestampToMs(obj.timestamp);
+              entry.generation = (entry.generation || 0) + 1;
+              entry.lastText = null;
+              this._cancelIdleEmit(hubSessionId);
+              this._cancelStopReasonEmit(hubSessionId);
+            }
+            void this.extractLatestTurn(hubSessionId).catch(error=>console.warn('[claude-tap] user record binding failed:',error.message));
           }
           return;
         }
@@ -348,7 +392,7 @@ class ClaudeTap extends EventEmitter {
         const stopReason = obj.message.stop_reason;
         const isTerminal = (stopReason === 'end_turn' || stopReason === 'max_tokens' || stopReason === 'refusal')
           && claudeAssistantContentHasAnswerText(content);
-        if (isTerminal) {
+        if (isTerminal || obj.isApiErrorMessage===true || obj.error) {
           this._scheduleStopReasonEmit(hubSessionId);
         } else {
           // tool_use / null：取消任何 pending stop_reason emit，启动 90s 兜底 idle
@@ -373,19 +417,10 @@ class ClaudeTap extends EventEmitter {
     // 2026-05-14 maintainer：用合并版读，避免群聊丢失 [1] plan 段（多 entry 合并 bug 修复）
     this._cancelIdleEmit(hubSessionId);
     this._cancelStopReasonEmit(hubSessionId);
-    const text = await readLastAssistantTurnMergedTextFromClaudeTranscript(transcriptPath);
-    if (text && text !== entry.lastText) {
-      entry.lastText = text;
-      this.emit('turn-complete', {
-        hubSessionId,
-        text,
-        completedAt: Date.now(),
-        signalSource: 'stop_hook',
-        // T13: 附带 model + usage 给卡片视图显示真实模型名 + token chip
-        modelId: entry.lastModel || null,
-        usage: entry.lastUsage || null,
-        turnId: options.turnId || entry.currentTurnId || null,
-      });
+    try { await this._emitAligned(hubSessionId, 'stop_hook'); }
+    catch(error) {
+      console.warn('[claude-tap] Stop source read failed:',error.message);
+      this.emit('turn-pending',{hubSessionId,turnId:entry.currentTurnId,reason:'transcript_read_failed',signalSource:'stop_hook'});
     }
   }
 
@@ -428,20 +463,7 @@ class ClaudeTap extends EventEmitter {
       if (!entry.transcriptPath) return;
       try {
         // 终态过滤：transcript 末尾必须有 terminal stop_reason 行才 emit
-        const result = await readLastTerminalAssistantTextFromClaudeTranscript(entry.transcriptPath);
-        if (!result || !result.text || !result.text.trim()) return;
-        if (result.text === entry.lastText) return; // 已 emit 过相同内容
-        entry.lastText = result.text;
-        this.emit('turn-complete', {
-          hubSessionId,
-          text: result.text,
-          completedAt: Date.now(),
-          signalSource: 'idle_timer_terminal',
-          // T13: 附带 model + usage 给卡片视图显示真实模型名 + token chip
-          modelId: entry.lastModel || null,
-          usage: entry.lastUsage || null,
-          turnId: entry.currentTurnId || null,
-        });
+        await this._emitAligned(hubSessionId, 'idle_timer_terminal');
       } catch (e) {
         console.warn('[claude-tap] idle-emit read failed:', e.message);
       }
@@ -474,21 +496,7 @@ class ClaudeTap extends EventEmitter {
         // 2026-09-06：改用带终态过滤的读取 —— 与 idle 兜底同一套判据。防抖这 200ms 里
         //   Claude 可能又写了一条 stop_reason='tool_use'，此时本轮并没有结束，
         //   不带过滤的读取会把中间正文当成最终答复送出去。
-        const result = await readLastTerminalAssistantTextFromClaudeTranscript(entry.transcriptPath);
-        const text = result && result.text;
-        if (!text || !text.trim()) return;
-        if (text === entry.lastText) return; // 已 emit 过相同内容（如 Stop hook 抢先）
-        entry.lastText = text;
-        this.emit('turn-complete', {
-          hubSessionId,
-          text,
-          completedAt: Date.now(),
-          signalSource: 'stop_reason_terminal',
-          // T13: 附带 model + usage 给卡片视图显示真实模型名 + token chip
-          modelId: entry.lastModel || null,
-          usage: entry.lastUsage || null,
-          turnId: entry.currentTurnId || null,
-        });
+        await this._emitAligned(hubSessionId, 'stop_reason_terminal');
       } catch (e) {
         console.warn('[claude-tap] stop_reason emit read failed:', e.message);
       }
@@ -2149,6 +2157,7 @@ class TranscriptTap extends EventEmitter {
     this._kimi = new KimiTap({ parserService: opts.parserService });
     for (const b of [this._claude, this._codex, this._gemini, this._kimi]) {
       b.on('turn-complete', (ev) => this.emit('turn-complete', ev));
+      b.on('turn-pending', (ev) => this.emit('turn-pending', ev));
       b.on('progress-update', (ev) => this.emit('progress-update', ev));
       b.on('turn-started', (ev) => this.emit('turn-started', ev));
       b.on('turn-aborted', (ev) => this.emit('turn-aborted', ev));
@@ -2262,7 +2271,8 @@ class TranscriptTap extends EventEmitter {
     // 一个 sid 只属于一个 backend。按注册归属路由，避免 Claude 未绑定
     // transcriptPath 时继续落到 Codex 并返回 no_rollout_bound 空结果。
     if (this._claude.hasSession(hubSessionId)) {
-      try { return await this._claude.extractLatestTurn(hubSessionId, sincePromptTs); } catch { return null; }
+      try { return await this._claude.extractLatestTurn(hubSessionId, sincePromptTs, opts); }
+      catch (error) { console.warn('[claude-tap] aligned extraction failed:', error.message); return {text:'',extractMode:'read_failed',reason:error.message}; }
     }
     if (this._gemini.hasSession(hubSessionId)) {
       try { return await this._gemini.extractLatestGeminiTurn(hubSessionId, sincePromptTs); } catch { return null; }

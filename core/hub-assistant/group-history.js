@@ -99,10 +99,20 @@ function readGroupHistory(options = {}) {
     if (turns.length > answers.RECENT_TURNS) result.truncated = true;
     for (const turn of turns.slice(0, answers.RECENT_TURNS)) {
       const turnNum = Number(turn.slice(5));
-      for (const member of directories(path.join(answerRoot, turn), 32)) {
-        if (!SAFE.test(member) || !Number.isSafeInteger(turnNum)) { result.skipped.unsafe++; continue; }
-        const entry = answers.entryFor({ dataDir: root, meetingId: id, turnNum, memberId: member });
-        enqueue(entry, { ...meta, memberId: member, turn: turnNum, sourceType: 'group-answer-file' });
+      for (const child of directories(path.join(answerRoot, turn), 32)) {
+        if (!SAFE.test(child) || !Number.isSafeInteger(turnNum)) { result.skipped.unsafe++; continue; }
+        const legacy = answers.entryFor({ dataDir: root, meetingId: id, turnNum, memberId: child });
+        if (fs.existsSync(legacy.ready)) {
+          enqueue(legacy, { ...meta, memberId: child, turn: turnNum, sourceType: 'group-answer-file' });
+          continue;
+        }
+        // New dispatches add a run identity between turn and member. Reuse the
+        // bounded, junction-safe directory reader for both schema generations.
+        for (const member of directories(path.join(answerRoot, turn, child), 32)) {
+          if (!SAFE.test(member)) { result.skipped.unsafe++; continue; }
+          const entry = answers.entryFor({ dataDir: root, meetingId: id, turnNum, memberId: member, answerId: child });
+          enqueue(entry, { ...meta, memberId: member, turn: turnNum, answerId: child, sourceType: 'group-answer-file' });
+        }
       }
     }
     const dbase = delivery.directory(root, id);
@@ -148,7 +158,8 @@ function readGroupHistory(options = {}) {
       if (terms.length && !terms.every(term => haystack.includes(term))) continue;
       const remaining = Math.min(3500, maxChars - result.selectedChars);
       const text = got.text.length <= remaining ? got.text : got.text.slice(0, remaining);
-      const eventId = [meta.sourceType, meta.groupId, meta.runId || `turn-${meta.turn}`, meta.step || '', meta.memberId].join(':');
+      const eventId = [meta.sourceType, meta.groupId, meta.runId || `turn-${meta.turn}`,
+        ...(meta.answerId ? [meta.answerId] : []), meta.step || '', meta.memberId].join(':');
       const ref = 'E' + createHash('sha256').update(JSON.stringify([eventId, got.hash, got.state, got.outcome])).digest('hex').slice(0, 16);
       result.sources.push({ ref, sessionKey: `meeting:${meta.groupId}`, eventId, sessionId: null, provider: 'meeting', role: 'assistant',
         ...meta, text, originalChars: got.text.length, truncated: text.length < got.text.length,

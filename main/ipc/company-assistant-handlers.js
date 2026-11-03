@@ -4,7 +4,7 @@
 function registerCompanyAssistantIpc(ipcMain, service) {
   const handlers = {
     status: () => service.status(),
-    refresh: async () => { await service.refresh({ force: true }); return service.status(); },
+    refresh: async () => { await service.refresh({ force: true, priority: 'user' }); return service.status(); },
     'brief-now': async () => { await service.generateBrief({ force: true }); return service.status(); },
     ask: request => ({ ok: true, item: service.ask(String(request?.text || ''), { entry: request?.entry === 'ppt' ? 'ppt' : '' }) }),
     'retry-chat': request => ({ ok: true, item: service.retryChat(String(request?.id || '')) }),
@@ -30,17 +30,6 @@ function registerCompanyAssistantIpc(ipcMain, service) {
     'ppt-status': async () => ({ ok: true, ppt: await service.ppt.refresh({ force: true }) }),
     'ppt-query': request => service.ppt.execute(request?.op || 'status', request || {}),
     'ppt-open': request => service.ppt.open(String(request?.id || '')),
-    'room-status': async () => { await service.rooms.tick(); return { ok: true, rooms: service.rooms.status() }; },
-    'room-command': request => service.rooms.command(request?.op, request?.rules || {}, { user: true }),
-    'room-connect': async () => ({ ok: true, rooms: await service.rooms.ensure({ user: true }) }),
-    'room-discover': async () => ({ ok: true, rooms: await service.rooms.discover() }),
-    'room-install': async () => ({ ok: true, rooms: await service.rooms.install() }),
-    'room-pick': async () => {
-      const { dialog } = require('electron');
-      const r = await dialog.showOpenDialog({ title: '选择秘书终结者', properties: ['openFile'], filters: [{ name: '秘书终结者', extensions: ['exe'] }] });
-      if (r.canceled || !r.filePaths[0]) return { ok: true, canceled: true };
-      return { ok: true, rooms: service.rooms.useExecutable(r.filePaths[0]) };
-    },
     'ppt-pick-index': async () => {
       const { dialog } = require('electron');
       const r = await dialog.showOpenDialog({ title: '选择 PPT Doctor 文字索引', properties: ['openFile'], filters: [{ name: 'SQLite 索引', extensions: ['db', 'sqlite', 'sqlite3'] }] });

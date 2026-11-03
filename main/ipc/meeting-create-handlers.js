@@ -247,6 +247,10 @@ function registerMeetingCreateIpc(ipcMain, deps) {
   ipcMain.handle('create-meeting', async (_e, opts) => {
     const safe = { ...(opts || {}) };
     safe.groupChat = true;
+    if(!require('../../core/distribution').featureEnabled('advancedGroupChat')
+        && (safe.mode==='dev' || safe.scene==='dev' || safe.orchestration?.enabled || safe.serialWorkflow?.enabled)) {
+      throw Error('公司版只提供普通群聊；需要负责人分工时，请在 CodeAgent 会话中使用组队。');
+    }
     const devSlots = Array.isArray(safe.slots) ? safe.slots : safe.slotSpecs;
     if (ensureLaunchAuth) {
       // Members with different accounts are checked together; the same account is

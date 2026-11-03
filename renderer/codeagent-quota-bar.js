@@ -23,20 +23,27 @@ const shortDuration = min => {
   return h ? `${h}时${m % 60 ? (m % 60) + '分' : ''}` : `${m}分`;
 };
 
-function createCodeAgentQuotaBar({ document, storage = null, now = () => Date.now(), escapeHtml = s => String(s) } = {}) {
+function createCodeAgentQuotaBar({ document, ipcRenderer, storage = null, now = () => Date.now(), escapeHtml = s => String(s) } = {}) {
   let readings = {};
   let usage = {}; // personal / 号池编号 → recordUsage 的快照（主进程 codeagent:usage 取回）
+  let usagePanel = null;
+  function openUsage(key, label) {
+    usagePanel ||= require('./codeagent-usage-panel').createCodeAgentUsagePanel({ document, ipcRenderer, usageFor, now, escapeHtml });
+    return usagePanel.open({ key, label, stats: readings[label] });
+  }
   try { readings = JSON.parse(storage?.getItem(STORE_KEY) || '{}') || {}; } catch { readings = {}; }
   const el = () => document.getElementById('rail-codeagent-quota');
   function save() { try { storage?.setItem(STORE_KEY, JSON.stringify(readings)); } catch { /* 存不了只影响重启后的显示 */ } }
   // 「距离闲时 2 折还有 1小时56分钟」按读到之后过去的时间往下减；减到 0 就不再提示（闲时已开始，或数据太旧）。
   function idleHint(u) {
     const c = u && u.credit;
+    if (c?.idleDiscountActive && c.idleDiscount) return { full: `闲时${c.idleDiscount}进行中`, short: `闲时${c.idleDiscount}进行中` };
     if (!c || !c.idleDiscountIn) return null;
     const { durationMinutes, formatMinutes } = require('../core/codeagent-usage-menu.js');
     const total = durationMinutes(c.idleDiscountIn);
     if (total == null) return null;
-    const left = total - (now() - u.at) / 60000;
+    const left = Number.isFinite(c.idleDiscountUntil) ? (c.idleDiscountUntil - now()) / 60000
+      : total - (now() - (u.creditAt ?? u.at)) / 60000;
     if (!(left > 0)) return null;
     const discount = c.idleDiscount ? String(c.idleDiscount).replace(/折$/, ' 折') : '优惠';
     return { full: `距离闲时 ${discount}还有${formatMinutes(left)}`, short: `${c.idleDiscount || ''}还有${shortDuration(left)}` };
@@ -46,12 +53,13 @@ function createCodeAgentQuotaBar({ document, storage = null, now = () => Date.no
     const out = [];
     const fromStats = () => ({ bucket: r.bucket, short: r.bucket, pct: r.pct, detail: `${fmt(r.remaining)}${r.total ? ' / ' + fmt(r.total) : ''}`, stale: now() - r.at > STALE_MS, at: r.at });
     if (u && u.credit) {
-      const usageStale = now() - u.at > USAGE_STALE_MS;
+      const creditAt = u.creditAt ?? u.at;
+      const usageStale = now() - creditAt > USAGE_STALE_MS;
       for (const [bucket, field, short] of CREDIT_BUCKETS) {
         const f = u.credit[field];
         if (!f || !Number.isFinite(f.pct)) continue;
-        if (r && r.bucket === bucket && r.at >= u.at) out.push({ ...fromStats(), short });
-        else out.push({ bucket, short, pct: round1(100 - f.pct), detail: `已用 ${f.used} / ${f.total}`, stale: usageStale, at: u.at });
+        if (r && r.bucket === bucket && r.at >= creditAt) out.push({ ...fromStats(), short });
+        else out.push({ bucket, short, pct: round1(100 - f.pct), detail: `已用 ${f.used} / ${f.total}`, stale: usageStale, at: creditAt });
       }
       // 当前生效那一档放第一格（底栏摘要按第一格的读数挑最紧张的一家）
       const first = r ? out.findIndex(m => m.bucket === r.bucket) : -1;
@@ -65,11 +73,11 @@ function createCodeAgentQuotaBar({ document, storage = null, now = () => Date.no
     if (!host) return;
     // 按界面上的账号名对行：Stats 读数按账号名记，菜单快照里带同样的账号名（label）
     const byAccount = new Map();
-    for (const r of Object.values(readings)) byAccount.set(r.account, { account: r.account, r, u: null });
-    for (const u of Object.values(usage)) {
-      if (!u || !u.label || !u.credit) continue;
+    for (const r of Object.values(readings)) byAccount.set(r.account, { account: r.account, key: '', r, u: null });
+    for (const [key, u] of Object.entries(usage)) {
+      if (!u || !u.label || (!u.credit && !u.models?.length)) continue;
       const row = byAccount.get(u.label) || { account: u.label, r: null, u: null };
-      row.u = u;
+      row.u = u; row.key = key;
       byAccount.set(u.label, row);
     }
     const rows = [...byAccount.values()].map(row => ({ ...row, at: Math.max(row.r?.at || 0, row.u?.at || 0) }))
@@ -77,16 +85,16 @@ function createCodeAgentQuotaBar({ document, storage = null, now = () => Date.no
     host.hidden = rows.length === 0;
     // 结构与「余量」各家的行一致（底栏的紧凑/摘要排版、「⋯」全部状态弹窗都按这套类名读）：
     // 读数格只放百分比，底栏摘要按它挑「最紧张」的一家；剩余点数和总额放在悬停说明里。
-    host.innerHTML = rows.length ? `<div class="sidebar-quota">${rows.map(({ account, r, u }) => {
+    host.innerHTML = rows.length ? `<div class="sidebar-quota">${rows.map(({ account, key, r, u }) => {
       const metrics = metricsFor(r, u);
       const hint = idleHint(u);
       const stale = metrics.every(m => m.stale);
       const name = rows.length > 1 ? `CA ${account}` : 'CodeAgent';
       const label = metrics.map((m, i) => `${i ? '' : `CodeAgent ${account} `}${m.bucket}剩余 ${m.pct}%（${m.detail}）`).join(' · ')
         + (hint ? ` · ${hint.full}` : '');
-      const sources = [r ? `Stats 面板 · ${ago(now() - r.at)}` : '', u && u.credit ? `${u.source === 'serve' ? 'CodeAgent 接口' : '/model 菜单'} · ${ago(now() - u.at)}` : ''].filter(Boolean);
-      const title = `${label}\n读自 CodeAgent 界面 ${sources.join('；')}`;
-      return `<div class="sidebar-quota-provider" data-provider="codeagent" data-freshness="${stale ? 'stale' : 'fresh'}" aria-label="${escapeHtml(label)}" title="${escapeHtml(title)}">`
+      const sources = [r ? `Stats 面板 · ${ago(now() - r.at)}` : '', u && u.credit ? `${(u.creditSource ?? u.source) === 'serve' ? 'CodeAgent 接口' : '/model 菜单'} · ${ago(now() - (u.creditAt ?? u.at))}` : ''].filter(Boolean);
+      const title = `${label}\n读自 CodeAgent 界面 ${sources.join('；')}\n点击查看模型用量`;
+      return `<div class="sidebar-quota-provider" data-provider="codeagent" data-usage-key="${escapeHtml(key)}" data-usage-label="${escapeHtml(account)}" role="button" tabindex="0" aria-haspopup="dialog" style="cursor:pointer" data-freshness="${stale ? 'stale' : 'fresh'}" aria-label="${escapeHtml(label || 'CodeAgent ' + account)}，查看模型用量" title="${escapeHtml(title)}">`
         + '<span class="sidebar-quota-icon ai-logo logo-codeagent" aria-hidden="true"></span>'
         + `<span class="sidebar-quota-name">${escapeHtml(name)}</span>`
         + `<span class="sidebar-quota-metrics">${metrics.map(m => {
@@ -97,8 +105,20 @@ function createCodeAgentQuotaBar({ document, storage = null, now = () => Date.no
             + `<span class="sidebar-quota-reading"><b class="sidebar-quota-value">${m.pct}%</b>`
             + `<span class="sidebar-quota-period">${escapeHtml(period)}</span></span>`
             + `<span class="sidebar-quota-track" aria-hidden="true"><i style="width:${Math.max(0, Math.min(100, m.pct))}%"></i></span></span>`;
-        }).join('')}</span></div>`;
+        }).join('') || '<span class="sidebar-quota-period">模型用量</span>'}</span></div>`;
     }).join('')}</div>` : '';
+    if (!host._usagePanelBound) {
+      host._usagePanelBound = true;
+      const activate = event => {
+        if (event.type === 'keydown' && !['Enter', ' '].includes(event.key)) return;
+        const row = event.target.closest('[data-usage-label]');
+        if (!row || !host.contains(row)) return;
+        event.preventDefault();
+        void openUsage(row.dataset.usageKey, row.dataset.usageLabel);
+      };
+      host.addEventListener('click', activate);
+      host.addEventListener('keydown', activate);
+    }
   }
   // reading：parseCodeAgentCredit 的结果 + { account }（个人账号 / 号池账号的脱敏名）。
   function update(reading, { account = '个人账号' } = {}) {
@@ -111,10 +131,11 @@ function createCodeAgentQuotaBar({ document, storage = null, now = () => Date.no
   function setUsage(accounts) {
     usage = accounts && typeof accounts === 'object' ? { ...accounts } : {};
     render();
+    usagePanel?.update();
   }
   // 模型下拉用：这个号（personal / 号池编号）最近一次菜单快照，没有返回 null。
   function usageFor(key) { return (key && usage[key]) || null; }
-  return { update, render, setUsage, usageFor, readings: () => ({ ...readings }) };
+  return { update, render, setUsage, usageFor, openUsage, readings: () => ({ ...readings }) };
 }
 
 module.exports = { createCodeAgentQuotaBar };

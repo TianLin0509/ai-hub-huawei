@@ -34,6 +34,55 @@ function tomlFlags(text) {
 // CodeAgent 插件清单所在的目录名没在真机上见过：Claude 的写法优先，再试改名后的两种。
 const CODEAGENT_PLUGIN_FOLDERS = ['.claude-plugin', '.cac-plugin', '.codeagent-plugin'];
 
+function skillEntries(root, { entries, text, warning }) {
+  const out = [];
+  for (const entry of entries(root)) {
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+    const dir = path.join(root, entry.name), file = path.join(dir, 'SKILL.md');
+    const s = text(file);
+    if (s === null) continue;
+    const front = s.match(/^---\s*\r?\n([\s\S]*?)\r?\n---/);
+    if (!front) { warning(`${file}：缺少技能元数据`); continue; }
+    const field = name => {
+      const m = front[1].match(new RegExp('^' + name + ':\\s*([^\\r\\n]*)(?:\\r?\\n((?:[ \\t]+[^\\r\\n]*\\r?\\n?)*))?', 'm'));
+      if (!m) return '';
+      return (/^[>|][+-]?$/.test(m[1]) ? m[2] || '' : m[1]).trim().replace(/^(['"])([\s\S]*)\1$/, '$2').replace(/\s+/g, ' ');
+    };
+    out.push({ name: field('name') || entry.name, description: field('description'), argumentHint: field('argument-hint'),
+      dir, file, origin: field('origin'), hash: createHash('sha256').update(s.replace(/\r\n/g, '\n')).digest('hex') });
+  }
+  return out;
+}
+
+// A session-scoped inventory: do not scan other accounts, projects or CLI homes.
+function scanCodeAgentSkills(configDir, { fsModule = fs } = {}) {
+  if (!configDir) throw new Error('未找到这个会话的 CodeAgent 配置目录');
+  const warnings = [], skills = [], root = path.join(configDir, 'skills');
+  const entries = dir => {
+    try { return fsModule.readdirSync(dir, { withFileTypes: true }).filter(e => !e.name.startsWith('.')); }
+    catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+  };
+  const text = file => {
+    try {
+      if (fsModule.statSync(file).size > 2 * 1024 * 1024) throw new Error('技能文件超过 2 MB，未读取');
+      return fsModule.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
+    } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  };
+  const scan = dir => {
+    for (const item of skillEntries(dir, { entries, text, warning: message => warnings.push(message) })) {
+      if (!/^[\p{L}\p{N}_.:-]+$/u.test(item.name)) { warnings.push(`${item.file}：技能名称不能用于斜杠命令`); continue; }
+      skills.push({ name: item.name, description: item.description, ...(item.argumentHint ? { 'argument-hint': item.argumentHint } : {}),
+        directory: item.dir, installedAt: fsModule.statSync(item.dir).mtimeMs });
+    }
+  };
+  scan(root);
+  for (const entry of entries(root)) {
+    const dir = path.join(root, entry.name);
+    if ((entry.isDirectory() || entry.isSymbolicLink()) && !fsModule.existsSync(path.join(dir, 'SKILL.md'))) scan(dir);
+  }
+  return { skills: skills.sort((a, b) => a.name.localeCompare(b.name)), warnings };
+}
+
 function collectCapabilities({ homeDir, dataDir, projects = [], codeagentConfigDir = null }) {
   const rows = new Map(), warnings = [], scanned = new Set();
   const warn = (file, e) => { if (!['ENOENT', 'ENOTDIR'].includes(e.code)) warnings.push(`${file}：${e.message}`); };
@@ -54,22 +103,9 @@ function collectCapabilities({ homeDir, dataDir, projects = [], codeagentConfigD
     const key = `${root}:${agents.join(',')}:${scope}:${extra.plugin || ''}`;
     if (scanned.has(key)) return;
     scanned.add(key);
-    for (const entry of entries(root)) {
-      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
-      const dir = path.join(root, entry.name), file = path.join(dir, 'SKILL.md');
-      const s = text(file);
-      if (s === null) continue;
-      const front = s.match(/^---\s*\r?\n([\s\S]*?)\r?\n---/);
-      if (!front) { warnings.push(`${file}：缺少技能元数据`); continue; }
-      const field = name => {
-        const m = front[1].match(new RegExp('^' + name + ':\\s*([^\\r\\n]*)(?:\\r?\\n((?:[ \\t]+[^\\r\\n]*\\r?\\n?)*))?', 'm'));
-        if (!m) return '';
-        return (/^[>|][+-]?$/.test(m[1]) ? m[2] || '' : m[1]).trim().replace(/^(['"])([\s\S]*)\1$/, '$2').replace(/\s+/g, ' ');
-      };
-      const name = field('name') || entry.name;
-      for (const agent of agents) add('skill', name, field('description'), {agent,scope,path:file,realPath:real(file), enabled:true,...extra,
-        declaredOrigin:['self','external'].includes(field('origin'))?field('origin'):undefined,
-        hash:createHash('sha256').update(s.replace(/\r\n/g,'\n')).digest('hex')});
+    for (const item of skillEntries(root, { entries, text, warning: message => warnings.push(message) })) {
+      for (const agent of agents) add('skill', item.name, item.description, {agent,scope,path:item.file,realPath:real(item.file), enabled:true,...extra,
+        declaredOrigin:['self','external'].includes(item.origin)?item.origin:undefined, hash:item.hash});
     }
   }
   function mcpEntries(d, file, agent, scope, extra = {}) {
@@ -257,4 +293,4 @@ if (!isMainThread) {
   try { parentPort.postMessage({ok:true,data:collectCapabilities(workerData)}); }
   catch(error) { parentPort.postMessage({ok:false,error:error.message}); }
 }
-module.exports = { collectCapabilities, tomlFlags };
+module.exports = { collectCapabilities, tomlFlags, scanCodeAgentSkills };

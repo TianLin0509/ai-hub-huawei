@@ -23,7 +23,7 @@ class GroupChatProviderAdapter {
       kind: this.kind,
       // Codex exposes a real turn id. Once an attempt has bound one, refusing
       // an unscoped completion is safer than attaching it to the wrong turn.
-      requireProviderTurn: this.family === 'codex' || this.nativeSource === 'acp',
+      requireProviderTurn: this.family === 'codex' || this.family === 'claude' || this.nativeSource === 'acp',
       ...options,
     });
   }
@@ -39,7 +39,10 @@ class GroupChatProviderAdapter {
     if (event.signalSource === this.nativeSource) {
       return {accepted:true,status:'completed',text,identity,emptyResult:!text};
     }
-    const failure = classifyProviderFailure({ text, fromAssistantText: true });
+    // Only error/system envelopes are failure evidence. An assistant can
+    // legitimately explain HTTP 429, authentication, or service outages.
+    const failure = event.errorInfo || event.error || event.type === 'system'
+      ? classifyProviderFailure({ message:event.error || text, errorInfo:event.errorInfo, force:true }) : null;
     if (failure) {
       return {
         accepted: true,
@@ -50,7 +53,7 @@ class GroupChatProviderAdapter {
         identity,
       };
     }
-    if (!text) {
+    if (!text || (event.extractMode && event.extractMode !== 'final_answer')) {
       return {
         accepted: false,
         reason: 'terminal_without_final_text',

@@ -62,7 +62,9 @@ function displayTurns(turns) {
 // Hub 自己附带的块（规则、工作区规则、记忆索引）也不算用户的话：同一条消息在原生记录里
 // 常有两份（Codex 的 message + item_completed），卡片那份已剥掉附带块，比对前两边都剥。
 function userTextIdentity(text) {
-  return require('./synthetic-user-filter').splitHubEnvelopes(text).text
+  const { splitHubEnvelopes, skillCommandText } = require('./synthetic-user-filter');
+  const raw = splitHubEnvelopes(text).text;
+  return (skillCommandText(raw) ?? raw)
     .replace(/<image\b(?=[^>]*\bname=)(?=[^>]*\bpath=)[^>]*>\s*<\/image>/gi, ' ')
     .replace(/<image\b[^>]*\b(?:name|path)=[^>]*>/gi, ' ')
     .replace(/\s+/g, ' ').trim();
