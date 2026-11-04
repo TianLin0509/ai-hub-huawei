@@ -197,7 +197,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
         el('understanding-status').textContent += ` · 问答${qj.state === 'error' ? '失败，可重试' : `独立${qj.kind === 'prime' ? '预热中' : '处理'}${elapsed}`}`;
       }
       if (state.recordingError || m?.error || m?.questionError || m?.asrError || rec?.full?.durationError) message(state.recordingError || m.error || m.questionError || m.asrError || rec?.full?.durationError);
-      renderFlow(m); renderNavigation(m);
+      renderFlow(m); renderNavigation(m); renderReviewHero(m);
       const summary = el('summary'), html = m?.summary ? markdown(m.summary) : EMPTY_SUMMARY;
       if (summary.dataset.html !== html) { summary.innerHTML = html; citations(summary); summary.dataset.html = html; }
     } finally { refreshing = false; }
@@ -205,7 +205,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
   async function action(op) {
     if (op === 'live') { evidenceRequest++; view('live'); return; }
     if (op === 'new') { selectMeeting(''); el('title').value = ''; el('title').focus(); return; }
-    if (op === 'sources') { const r = await call('meeting-sources'); sourceList = r.sources; root.querySelector('[data-m="source"]').innerHTML = sourceList.map(s => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join(''); preview(); return; }
+    if (op === 'sources') { const r = await call('meeting-sources'); sourceList = r.sources; root.querySelector('[data-m="source"]').innerHTML = sourceList.map(s => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join(''); renderSourceGrid(); preview(); return; }
     if (op === 'install') { await call('meeting-asr-install'); await refresh(); return; }
     if (op === 'start') {
       const selected = root.querySelector('[data-m="source"]').value; if (!selected) throw new Error('先刷新并选择共享窗口');
@@ -230,7 +230,25 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
     else { if (!id) throw new Error('先选择会议'); await call('meeting-control', { id, op }); }
     await refresh();
   }
-  function preview() { const s = sourceList.find(s => s.id === root.querySelector('[data-m="source"]').value); root.querySelector('[data-m="preview"]').src = s?.thumbnail || ''; }
+  function preview() {
+    const s = sourceList.find(s => s.id === root.querySelector('[data-m="source"]').value); root.querySelector('[data-m="preview"]').src = s?.thumbnail || '';
+    root.querySelectorAll('[data-source-id]').forEach(b => { const on = b.dataset.sourceId === s?.id; b.classList.toggle('is-on', on); b.setAttribute('aria-checked', String(on)); });
+  }
+  // 共享窗口缩略图网格：只是原下拉框的另一种选法，选中后同步下拉框（2026-11-04 定稿 C）。
+  function renderSourceGrid() {
+    el('source-grid').innerHTML = sourceList.map(s => `<button type="button" class="meeting-source" role="radio" data-source-id="${esc(s.id)}" title="${esc(s.name)}">${s.thumbnail ? `<img src="${esc(s.thumbnail)}" alt="">` : '<img alt="">'}<span>${esc(s.name)}</span></button>`).join('');
+  }
+  // 会后大卡片的头部：会议名、版本与时长等真实读数（纯展示）。
+  function renderReviewHero(m) {
+    const box = el('review-hero'); if (!box) return;
+    if (!m) { if (box.dataset.html) { box.innerHTML = ''; box.dataset.html = ''; } return; }
+    const slides = (m.events || []).filter(e => e.kind === 'slide').length, minutes = Math.round((m.capturedMs || 0) / 60000);
+    const ready = !!m.summary && !(m.job && m.job.state !== 'error' && m.job.kind !== 'prime');
+    const html = `<div class="hw-row"><span class="hw-tag ${ready ? 'green' : 'amber'}">${ready ? '纪要已生成' : '纪要整理中'}</span><span class="hw-meta">${esc(shortDate(m.startedAt))} · 第 ${esc(m.revision ?? 0)} 版</span></div>`
+      + `<h2>${esc(m.title || '本地会议记录')}</h2>`
+      + `<div class="hw-facts"><div><b>${minutes}<span> 分钟</span></b><small>会议时长</small></div><div><b>${slides}</b><small>张画面</small></div><div><b>${(m.events || []).filter(e => e.kind === 'mark').length}</b><small>条重点</small></div><div><b>${m.answers?.length || 0}</b><small>条问答</small></div></div>`;
+    if (box.dataset.html !== html) { box.innerHTML = html; box.dataset.html = html; }
+  }
   async function open(parent) {
     if (!root) {
       root = document.createElement('section'); root.className = 'company-meeting'; root.dataset.phase = 'idle'; root.innerHTML = meetingTemplate();
@@ -256,6 +274,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
           if (entry && event.closest('.meeting-flow') && entry.kind !== 'slide' && !capture?.running && state.meeting.recording?.segments.some(s => s.status === 'ready' && s.at <= entry.at && s.end > entry.at)) { activeSeq = seq; markActive(); void playAt(entry.at, true).catch(e => message(e.message)); }
           else void showEvidence(seq).catch(e => message(e.message));
         }
+        const sourceTile = e.target.closest('[data-source-id]'); if (sourceTile && !capture?.running) { const select = el('source'); select.value = sourceTile.dataset.sourceId; select.dispatchEvent(new window.Event('change', { bubbles: true })); }
         const frame=e.target.closest('[data-play-at]');if(frame)void playAt(Number(frame.dataset.playAt),true).catch(e=>message(e.message));
       });
       root.querySelector('[data-m="source"]').addEventListener('change', preview);

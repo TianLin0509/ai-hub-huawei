@@ -1,25 +1,55 @@
-/* 负责人组队（2026-11-01，renderer/team-ui.js）：侧栏标签与批准弹窗。沿用 Hub 浅色界面与 sl-orch-tag 的橙色。 */
-.team-pending-badge { margin-right: 4px; padding: 0 6px; border-radius: 999px; font-size: 10px; line-height: 15px; color: #fff; background: #e08a00; border: 0; cursor: pointer; vertical-align: 1px; }
-.team-pending-badge:hover { background: #c77600; }
-.team-member-tag { display: inline-block; margin-right: 4px; padding: 0 4px; border-radius: 4px; font-size: 10px; line-height: 14px; color: #3478f6; border: 1px solid #c9dafc; background: #f3f7ff; vertical-align: 1px; }
-.team-member-tag.dismissed { color: #999; border-color: #ddd; background: #f5f5f5; text-decoration: line-through; }
-.team-modal-backdrop { position: fixed; inset: 0; z-index: 9000; background: rgba(20, 24, 31, 0.32); display: flex; align-items: center; justify-content: center; }
-.team-modal { width: min(980px, 92vw); max-height: 86vh; overflow: auto; background: #fff; color: #1f2329; border-radius: 10px; padding: 18px 20px; font-family: "Microsoft YaHei", sans-serif; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18); }
-.team-modal h3 { margin: 0 0 6px; font-size: 16px; }
-.team-goal { margin: 0 0 12px; color: #4e5969; font-size: 13px; white-space: pre-wrap; }
-.team-plan { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-.team-plan th { text-align: left; color: #86909c; font-weight: normal; border-bottom: 1px solid #e5e6eb; padding: 6px 8px; }
-.team-plan td { vertical-align: top; border-bottom: 1px solid #f0f1f3; padding: 8px; }
-.team-plan select { max-width: 330px; font-size: 12px; font-family: inherit; color: inherit; background: #fff; border: 1px solid #d0d3d9; border-radius: 6px; padding: 5px 8px; }
-.team-plan select:focus { outline: 2px solid rgba(52, 120, 246, 0.2); outline-offset: 1px; border-color: #3478f6; }
-.team-col-no { color: #86909c; width: 20px; }
-.team-sub { color: #86909c; font-size: 11.5px; }
-.team-task { white-space: pre-wrap; max-width: 360px; }
-.team-note { display: block; margin-top: 12px; font-size: 12px; color: #4e5969; }
-.team-note textarea { display: block; width: 100%; box-sizing: border-box; margin-top: 4px; font-family: inherit; }
-.team-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
-.team-actions button { padding: 5px 14px; border-radius: 6px; border: 1px solid #d0d3d9; background: #fff; cursor: pointer; }
-.team-actions button.primary { background: #3478f6; border-color: #3478f6; color: #fff; }
-.team-actions button:disabled { opacity: 0.6; cursor: default; }
-.team-error { margin-top: 8px; color: #d4380d; font-size: 12px; }
-.sl-title > .sl-orch-tag:first-child { margin-left: 0; margin-right: 4px; }
+
+/* CDCCBCC C: approval keeps the existing whole-plan actions. */
+.team-pending-badge { margin-right:4px; padding:0 6px; border-radius:var(--hw-r-pill); font-size:10px; line-height:15px; color:var(--hw-text-on); background:var(--hw-amber); border:0; cursor:pointer; vertical-align:1px; }
+.team-pending-badge:hover { filter:brightness(.94); }
+.team-member-tag { display:inline-block; margin-right:4px; padding:0 4px; border-radius:var(--hw-r-xs); font-size:10px; line-height:14px; color:var(--hw-brand); background:var(--hw-brand-soft); vertical-align:1px; }
+.team-member-tag.dismissed { color:var(--hw-text-3); background:var(--hw-surface-3); text-decoration:line-through; }
+.team-modal-backdrop { position:fixed; inset:0; z-index:9000; background:rgba(24,36,49,.28); backdrop-filter:blur(2px); font-family:var(--hw-font); color:var(--hw-text-1); -webkit-app-region:no-drag; }
+.team-modal-backdrop * { box-sizing:border-box; }
+.team-modal { position:absolute; right:12px; top:12px; bottom:12px; width:560px; max-width:calc(100% - 24px); display:flex; flex-direction:column; background:var(--hw-surface); border-radius:var(--hw-r-xl); box-shadow:var(--hw-e3); overflow:hidden; animation:hw-team-slide var(--hw-t-slow) var(--hw-ease); }
+.team-modal [hidden] { display:none!important; }
+.team-modal-head { display:flex; align-items:flex-start; gap:12px; padding:24px 26px 8px; flex:none; }
+.team-modal-head > div { flex:1; min-width:0; }
+.team-modal h3 { margin:0; font-size:19px; font-weight:600; line-height:var(--hw-lh); }
+.team-goal { margin:4px 0; color:var(--hw-text-2); font-size:var(--hw-fs-13); white-space:pre-wrap; overflow-wrap:anywhere; }
+.team-modal-head .team-sub { margin:4px 0 0; }
+.team-close { width:30px; height:30px; flex:none; display:grid; place-items:center; border:0; border-radius:var(--hw-r-pill); background:transparent; color:var(--hw-text-2); font:22px/1 var(--hw-font); cursor:pointer; }
+.team-close:hover { background:var(--hw-surface-3); color:var(--hw-text-1); }
+.team-modal-body { padding:12px 26px 20px; flex:1; min-height:0; overflow:auto; scrollbar-gutter:stable; }
+.team-plan-summary { flex:none; margin:8px 26px 0; padding:12px 14px; border:1px solid var(--hw-line); border-radius:var(--hw-r-md); background:var(--hw-surface-2); font-size:var(--hw-fs-12); }
+.team-plan-summary > div { display:flex; align-items:center; gap:14px; color:var(--hw-text-2); }
+.team-plan-summary b { color:var(--hw-text-1); font-weight:600; }
+.team-plan-summary p { margin:6px 0 0; color:var(--hw-text-3); font-size:var(--hw-fs-12); line-height:var(--hw-lh); overflow-wrap:anywhere; }
+.team-plan { display:flex; flex-direction:column; gap:10px; }
+.team-member { padding:16px; border-radius:var(--hw-r-md); background:var(--hw-surface-2); display:flex; flex-direction:column; gap:12px; }
+.team-member-head { display:flex; align-items:center; gap:10px; }
+.team-member-icon { display:grid; place-items:center; width:28px; height:28px; border-radius:var(--hw-r-sm); background:var(--team-accent); color:var(--hw-text-on); flex:none; }
+.team-member-icon svg { width:16px; height:16px; }
+.team-member-heading { flex:1; min-width:0; }
+.team-member-heading b { font-size:var(--hw-fs-14); font-weight:600; overflow-wrap:anywhere; }
+.team-col-no { color:var(--hw-text-3); font-family:var(--hw-font-num); font-size:var(--hw-fs-12); }
+.team-sub { color:var(--hw-text-3); font-size:12.5px; line-height:var(--hw-lh); overflow-wrap:anywhere; }
+.team-task { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12.5px; color:var(--hw-text-2); line-height:var(--hw-lh); }
+.team-task .team-sub { margin-top:4px; }
+.team-task strong { color:var(--hw-text-1); font-weight:600; }
+.team-workdir { color:var(--hw-text-3); font-size:var(--hw-fs-12); line-height:var(--hw-lh); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.team-member-fields { display:grid; grid-template-columns:minmax(0,3fr) minmax(0,2fr); gap:10px; }
+.team-member-fields label { min-width:0; display:flex; flex-direction:column; gap:6px; font-size:var(--hw-fs-13); color:var(--hw-text-2); }
+.team-plan select { width:100%; min-width:0; height:36px; padding:0 10px; color:var(--hw-text-1); background:var(--hw-surface); border:1px solid var(--hw-line); border-radius:var(--hw-r-sm); font:var(--hw-fs-13)/var(--hw-lh) var(--hw-font); text-overflow:ellipsis; }
+.team-plan select:focus-visible,.team-note textarea:focus-visible { outline:0; border-color:var(--hw-brand); box-shadow:0 0 0 4px var(--hw-brand-soft); }
+.team-plan select option:disabled { color:var(--hw-text-3); }
+.team-modal-foot { flex:none; border-top:1px solid var(--hw-line); background:var(--hw-surface); }
+.team-modal-foot .team-error { margin:8px 26px 0; }
+.team-note { display:block; margin:14px 26px 0; font-size:var(--hw-fs-13); color:var(--hw-text-2); }
+.team-note textarea { display:block; width:100%; margin-top:6px; padding:10px 12px; min-height:78px; resize:vertical; color:var(--hw-text-1); background:var(--hw-surface-3); border:1px solid transparent; border-radius:var(--hw-r-sm); font:var(--hw-fs-13)/var(--hw-lh) var(--hw-font); }
+.team-actions { display:flex; justify-content:flex-end; gap:10px; padding:14px 26px 22px; flex:none; background:var(--hw-surface); }
+.team-actions button { height:36px; padding:0 18px; border:0; border-radius:var(--hw-r-pill); color:var(--hw-text-1); background:var(--hw-surface-3); cursor:pointer; font:var(--hw-fs-13)/1 var(--hw-font); }
+.team-actions button:hover { filter:brightness(.97); }
+.team-actions button.primary { background:var(--hw-brand); color:var(--hw-text-on); box-shadow:var(--hw-e1); }
+.team-actions button.primary:hover { background:var(--hw-brand-hover); }
+.team-actions button:disabled { opacity:.45; cursor:default; box-shadow:none; }
+.team-actions button:focus-visible,.team-close:focus-visible { outline:2px solid var(--hw-brand); outline-offset:2px; }
+.team-error { margin-top:8px; color:var(--hw-red); font-size:var(--hw-fs-12); line-height:var(--hw-lh); overflow-wrap:anywhere; }
+.sl-title > .sl-orch-tag:first-child { margin-left:0; margin-right:4px; }
+@keyframes hw-team-slide { from { transform:translateX(30px); opacity:0; } }
+@media (prefers-reduced-motion:reduce) { .team-modal { animation:none; } }

@@ -1,12 +1,14 @@
 'use strict';
 // Real isolated Electron, real approval clicks, production hub-team CLI and
 // session-bound identity. CodeAgent is a local protocol fixture, not a model.
-// Run against the member edition with isolated user data; never replace its marker.
+// Run against a company edition with isolated user data; never replace its marker.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const net = require('node:net');
+const { createHash } = require('node:crypto');
+const { execFileSync } = require('node:child_process');
 const { launchIsolatedHub, gracefulQuit } = require('./helpers/hub-launcher');
 const { connectFirstPage } = require('./helpers/cdp-client');
 const pool = require('../core/codeagent-pool');
@@ -14,11 +16,22 @@ const quota = require('../core/codeagent-quota');
 const { writeProbed } = require('../core/codeagent-model-probe');
 
 const REPO = path.resolve(__dirname, '..');
+const options = { entry: REPO };
+for (let i = 2; i < process.argv.length; i++) {
+  const flag = process.argv[i];
+  if (['--entry', '--out'].includes(flag) && process.argv[i + 1] && !process.argv[i + 1].startsWith('--')) options[flag.slice(2)] = process.argv[++i];
+  else throw Error('Expected --entry/--out value');
+}
+const ENTRY = path.resolve(options.entry);
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'm4-company-team-'));
 const DATA = path.join(ROOT, 'data'), WORK = path.join(ROOT, 'work'), PERSONAL = path.join(ROOT, 'personal');
 const CONTROL = path.join(ROOT, 'fixture-control'), LOG = path.join(ROOT, 'fixture.jsonl');
-const ART = process.env.HUB_E2E_ARTIFACT_DIR || path.join(REPO, 'artifacts', `company-team-${Date.now()}`);
-const marker = path.join(REPO, 'community-edition.json');
+const ART = path.resolve(options.out || process.env.HUB_E2E_ARTIFACT_DIR || path.join(REPO, 'artifacts', `company-team-${Date.now()}`));
+const marker = path.join(ENTRY, 'community-edition.json');
+const edition = JSON.parse(fs.readFileSync(marker, 'utf8'));
+// Account navigation probes missing model permissions and would consume the
+// original approval fixture's deliberately unverified account.
+const NAV = { button: '#btn-company-ppt', page: '#company-ppt-page', label: 'PPT' };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const freePort = () => new Promise((resolve, reject) => { const s = net.createServer(); s.once('error', reject); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(e => e ? reject(e) : resolve(p)); }); });
 async function wait(fn, label, ms = 30000) { const end = Date.now() + ms; let last; while (Date.now() < end) { try { const v = await fn(); if (v) return v; } catch (e) { last = e; } await sleep(200); } throw Error(`Timeout ${label}${last ? ': ' + last.message : ''}`); }
@@ -29,6 +42,16 @@ function seed(dir, accountId, model, authoritative = true) {
   fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ model }));
   if (authoritative) writeProbed(path.join(dir, 'hub-models.json'), { models: [model], defaultModel: model, source: 'test-fixture' });
 }
+function entryIdentity() {
+  const sourceHashes = {};
+  for (const file of ['renderer/meeting-create-modal.js', 'renderer/team-ui.js', 'community-edition.json']) {
+    sourceHashes[file] = createHash('sha256').update(fs.readFileSync(path.join(ENTRY, file))).digest('hex');
+  }
+  try {
+    const git = args => execFileSync('git', args, { cwd: ENTRY, windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return { sha: git(['rev-parse', 'HEAD']), dirty: !!git(['status', '--porcelain']), sourceHashes };
+  } catch { return { sha: null, dirty: null, sourceHashes, note: 'exported source tree without Git metadata' }; }
+}
 async function run() {
   const markerText = fs.readFileSync(marker, 'utf8');
   assert.equal(JSON.parse(markerText).target, 'company', 'Run in the company edition');
@@ -38,9 +61,10 @@ async function run() {
   seed(PERSONAL, 'p-fixture', glm);
   const a = pool.addAccount(DATA, { note: '研发夹具' });
   seed(pool.accountDir(DATA, a), 'a-fixture', glm);
-  const evidence = { checks: [], root: ROOT, artifacts: ART, model: 'none; local CodeAgent protocol fixture' };
+  const evidence = { checks: [], root: ROOT, artifacts: ART, entry: ENTRY, entryIdentity: entryIdentity(), navigation: NAV,
+    scriptSha256: createHash('sha256').update(fs.readFileSync(__filename)).digest('hex'), model: 'none; local CodeAgent protocol fixture' };
   const ok = (label, condition = true) => { assert(condition, label); evidence.checks.push(label); console.log('PASS ' + label); };
-  let hub, cdp, seq = 0;
+  let hub, cdp, failure, seq = 0;
   const invoke = (channel, args) => cdp.eval(`require('electron').ipcRenderer.invoke(${JSON.stringify(channel)},${JSON.stringify(args)})`);
   const click = async selector => {
     const p = await wait(() => cdp.eval(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)return null;e.scrollIntoView({block:'center'});const r=e.getBoundingClientRect();return r.width&&r.height?{x:r.left+r.width/2,y:r.top+r.height/2}:null})()`), selector);
@@ -62,15 +86,51 @@ async function run() {
       .some(r => r.type === 'user' && r.message?.content?.includes(needle));
   });
   try {
-    hub = await launchIsolatedHub({ dataDir: DATA, port: await freePort(), windowMode: 'hidden', extraEnv: {
+    hub = await launchIsolatedHub({ entryPath: ENTRY, cwd: ENTRY, dataDir: DATA, port: await freePort(), windowMode: 'hidden', extraEnv: {
+      HUB_SESSION_SEARCH_DISABLE_NATIVE: '1',
       AI_HUB_WORKSPACE_ROOT: WORK, AI_HUB_CODEAGENT_COMMAND: path.join(REPO, 'tests/fixtures/codeagent-pool-fake/codeagent.cmd'),
       AI_HUB_CODEAGENT_CONFIG_DIR: PERSONAL, CODEAGENT_POOL_FAKE_LOG: LOG, CODEAGENT_TEAM_FAKE_CONTROL_DIR: CONTROL,
       AI_HUB_CODEAGENT_POOL_SCAN_ROOT: path.join(ROOT, 'empty-scan'), CLAUDE_CONFIG_DIR: path.join(ROOT, 'claude'), CODEX_HOME: path.join(ROOT, 'codex'),
     } });
     cdp = await connectFirstPage(hub, t => /index\.html/.test(t.url));
     await wait(() => cdp.eval('!!window.__teamUi && !!window.openMeetingCreateModal'), 'renderer ready');
-    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+    await cdp.eval("window.__teamViewportEvents=[];window.addEventListener('resize',()=>window.__teamViewportEvents.push({width:innerWidth,height:innerHeight}))");
+    const setViewport = async (width, height) => {
+      const before = await cdp.eval('({width:innerWidth,height:innerHeight,eventCount:window.__teamViewportEvents.length})');
+      await cdp.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+      if (before.width !== width || before.height !== height) {
+        // Flush the hidden compositor before pointer input. CSS dimensions can
+        // update before hit testing and the actual resize event catch up.
+        await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false });
+        await wait(() => cdp.eval(`window.__teamViewportEvents.slice(${before.eventCount}).some(e=>e.width===${width}&&e.height===${height})`), 'viewport resize event');
+      }
+    };
+    await setViewport(1440, 900);
     ok('公司发行标记生效，组队已开启', await cdp.eval("require('../core/distribution').target==='company' && require('../core/distribution').featureEnabled('leadTeam')"));
+    await cdp.eval(`window.__teamScrimNavClicks=0;document.querySelector(${JSON.stringify(NAV.button)}).addEventListener('click',()=>window.__teamScrimNavClicks++)`);
+    const checkScrim = async (kind, selector, reopen) => {
+      for (const viewport of [{ width: 1440, height: 900 }, { width: 1280, height: 800 }]) {
+        await setViewport(viewport.width, viewport.height);
+        await reopen();
+        await wait(() => cdp.eval(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});return e&&e.getBoundingClientRect().height>0})()`), kind + ' open');
+        await shot(`scrim-${kind}-${viewport.width}`);
+        const bounds = await cdp.eval(`(()=>{const e=document.querySelector(${JSON.stringify(selector)}),r=e.getBoundingClientRect(),n=document.querySelector(${JSON.stringify(NAV.button)}).getBoundingClientRect();return {left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:innerWidth,height:innerHeight,coversRail:document.elementFromPoint(n.x+n.width/2,n.y+n.height/2)===e}})()`);
+        evidence.scrims ||= []; evidence.scrims.push({ kind, ...viewport, ...bounds });
+        ok(`${kind} ${viewport.width} 整屏遮罩覆盖导航区域`, bounds.left === 0 && bounds.top === 0 && bounds.right === bounds.width && bounds.bottom === bounds.height && bounds.coversRail);
+        const before = await cdp.eval('window.__teamScrimNavClicks');
+        // Send a real pointer click at the underlying navigation button's
+        // coordinates. Its first click must hit the backdrop, not the button.
+        await click(NAV.button);
+        await wait(() => cdp.eval(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});return !e||e.getBoundingClientRect().height===0})()`), kind + ' dismissed');
+        ok(`${kind} ${viewport.width} 点击左栏位置只关闭弹窗且不穿透导航`, await cdp.eval(`window.__teamScrimNavClicks===${before}&&(!document.querySelector(${JSON.stringify(NAV.page)})||document.querySelector(${JSON.stringify(NAV.page)}).hidden)`));
+        await click(NAV.button);
+        await wait(() => cdp.eval(`!!document.querySelector(${JSON.stringify(NAV.page)})&&!document.querySelector(${JSON.stringify(NAV.page)}).hidden`), 'navigation after dismissal');
+        ok(`${kind} ${viewport.width} 弹窗关闭后第二次点击正常进入${NAV.label}`, await cdp.eval('window.__teamScrimNavClicks') === before + 1);
+        await click('#btn-home');
+      }
+      await setViewport(1440, 900);
+    };
+    await checkScrim('group', '#meeting-create-modal', () => cdp.eval("window.openMeetingCreateModal('general')"));
     await click('#home-create-group');
     await wait(() => cdp.eval("!!document.querySelector('.mcm-dialog')"), 'group modal');
     ok('建群弹窗只留普通群聊：负责人开关和场景均不可见', await cdp.eval("['#mcm-orch-row','#mcm-scene-row'].every(s=>{const e=document.querySelector(s);return !e||!e.getBoundingClientRect().height})"));
@@ -115,10 +175,23 @@ async function run() {
     // the user opens it. The unavailable choice must be visible before approval.
     quota.markModelAvoid(DATA, b, { model: ds });
     await click(`[data-team-approve="${lead.id}"]`);
-    await wait(() => cdp.eval(`(()=>{const s=document.querySelector('[data-team-account="1"]');return s?.selectedOptions[0]?.textContent.includes('暂停中')})()`), 'paused approval loaded');
+    await wait(() => cdp.eval(`(()=>{const s=document.querySelector('[data-team-account="1"]');return !!s?.selectedOptions[0]?.textContent.includes('暂停中')})()`), 'paused approval loaded');
     ok('审批保留原选号但标暂停且禁批准', await cdp.eval(`(()=>{const s=document.querySelector('[data-team-account="1"]');return s.value===${JSON.stringify(b)} && s.selectedOptions[0].disabled && document.querySelector('[data-team-act="approve"]').disabled})()`));
+    // Escape is shared by the baseline dialog and the reskinned drawer.
+    await click('[data-team-note]');
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await wait(() => cdp.eval("!document.querySelector('.team-modal')"), 'close approval before navigation checks');
+    const reopenApproval = async () => {
+      await cdp.eval(`selectSession(${JSON.stringify(lead.id)})`);
+      await click(`[data-team-approve="${lead.id}"]`);
+      // CDP represents undefined as an object; wait predicates must be boolean.
+      await wait(() => cdp.eval("!!document.querySelector('[data-team-account=\"1\"]')?.selectedOptions[0]?.textContent.includes('暂停中')"), 'paused accounts loaded');
+    };
+    await checkScrim('team', '.team-modal-backdrop', reopenApproval);
+    await reopenApproval();
     await shot('02a-model-paused-approval-1440');
-    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+    await setViewport(1280, 900);
     await shot('02b-model-paused-approval-1280');
     await cdp.eval(`(()=>{const s=document.querySelector('[data-team-account="1"]');s.value=${JSON.stringify(a)};s.dispatchEvent(new Event('change',{bubbles:true}))})()`);
     ok('审批换成可用号后允许批准', await cdp.eval("!document.querySelector('[data-team-act=approve]').disabled"));
@@ -128,7 +201,7 @@ async function run() {
     await wait(() => cdp.eval("!document.querySelector('.team-modal')"), 'close paused approval');
     quota.clearModelAvoid(DATA, b);
     ok('解除模型暂停后accounts恢复可用', (await command(lead.id, ['accounts'])).rows.find(r => r.id === b).usable);
-    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+    await setViewport(1440, 900);
     await click(`[data-team-approve="${lead.id}"]`);
     await wait(() => cdp.eval("!!document.querySelector('.team-modal') && !document.querySelector('[data-team-act=approve]').disabled"), 'accounts loaded');
     ok('审批界面显示号池和每人模型，不显示 Claude/Codex 额度列', await cdp.eval("(()=>{const e=document.querySelector('.team-modal');return document.querySelectorAll('[data-team-model]').length===2 && e.textContent.includes('号池账号') && !/Claude|Codex|5h|7d|\\u7530\\u54e5/.test(e.textContent)})()"));
@@ -152,18 +225,24 @@ async function run() {
     ok('负责人和成员 CLI send 双向消息进入对方原生记录');
     await wait(() => cdp.eval(`document.querySelectorAll('[data-sidebar-render-key="team:${lead.id}"] .session-item.child').length===2`), 'nested sidebar');
     await shot('03-company-team-members');
-    evidence.ok = true;
+    evidence.uiChecksPassed = true;
   } catch (e) {
-    evidence.error = e.stack || String(e); if (cdp) await shot('failure').catch(() => {}); throw e;
+    failure = e; evidence.error = e.stack || String(e); if (cdp) await shot('failure').catch(() => {});
   } finally {
+    try { if (cdp) await cdp.close(); } catch (e) { failure ||= e; evidence.cdpCloseError = e.stack; }
+    try { if (hub) evidence.exit = await gracefulQuit(hub); }
+    catch (e) { failure ||= e; evidence.exitError = e.stack; evidence.exit = { exitCode: hub?.exitCode(), exitSignal: hub?.exitSignal(), forced: !!e.termination?.forced }; }
+    finally {
+      hub?.child.stdout?.destroy(); hub?.child.stderr?.destroy(); hub?.child.stdin?.destroy();
+      if (hub) fs.writeFileSync(path.join(ART, 'hub.log'), hub.log().join('\n'), 'utf8');
+    }
+    try { assert.equal(fs.readFileSync(marker, 'utf8'), markerText, 'The edition marker must stay unchanged'); }
+    catch (e) { failure ||= e; evidence.markerError = e.message; }
+    evidence.entryIdentityAfter = entryIdentity();
+    evidence.ok = evidence.uiChecksPassed === true && !failure;
     fs.writeFileSync(path.join(ART, '20261102-company-team-evidence-m4.json'), JSON.stringify(evidence, null, 2));
-    if (cdp) await cdp.close();
-    if (hub) await gracefulQuit(hub);
-    // The Hub has exited cleanly. Release the driver's log readers as well:
-    // inherited Windows pipe handles can otherwise keep this test alive.
-    hub?.child.stdout?.destroy(); hub?.child.stderr?.destroy(); hub?.child.stdin?.destroy();
-    assert.equal(fs.readFileSync(marker, 'utf8'), markerText, 'The member edition marker must stay unchanged');
     console.log('ARTIFACTS ' + ART);
   }
+  if (failure) throw failure;
 }
 run().catch(e => { console.error(e.stack || e); process.exitCode = 1; });

@@ -1,0 +1,60 @@
+/* ============ AI HUB-Huawei 公司版 · 唯一设计令牌（定稿 CDCCBCC，2026-11-04） ============ */
+/* 全部页面只用这里的变量；实现时原样拷进 renderer/styles/hw-tokens.css */
+:root{
+  /* 字体：鸿蒙字体优先，回落雅黑；大号数字用 Segoe UI Variable 细体 */
+  --hw-font: "HarmonyOS Sans SC","HarmonyOS Sans","Microsoft YaHei UI","Microsoft YaHei","Segoe UI Variable Text","Segoe UI",sans-serif;
+  --hw-font-num: "HarmonyOS Sans","Segoe UI Variable Display","Segoe UI Variable Text","Segoe UI",sans-serif;
+
+  /* 颜色：底与面 */
+  --hw-bg: #F1F3F5;            /* 应用底色（鸿蒙浅灰） */
+  --hw-surface: #FFFFFF;       /* 一级面板 / 卡片 */
+  --hw-surface-2: #F7F8FA;     /* 卡片内的次级块 */
+  --hw-surface-3: #EDEFF2;     /* 输入框底、分段控件槽 */
+  --hw-line: rgba(24,36,49,.08);
+  --hw-line-strong: #B7C0CA; /* 勾选框、单选框描边、时间轴空心点 */
+  --hw-hit: #FFF1B8;         /* 检索命中词底色（只用于 PPT 检索） */
+  /* 文字 */
+  --hw-text-1: #182431;        /* 主文字 */
+  --hw-text-2: rgba(24,36,49,.62);
+  --hw-text-3: rgba(24,36,49,.40);
+  --hw-text-on: #FFFFFF;
+  /* 品牌与状态 */
+  --hw-brand: #0A59F7;         /* 鸿蒙蓝：主操作、选中 */
+  --hw-brand-hover: #0047D9;
+  --hw-brand-soft: #E7EFFE;    /* 选中底、轻提示 */
+  --hw-red: #CF0A2C;           /* 品牌红：只给录制、未读角标、关键告警 */
+  --hw-red-soft: #FCE8EB;
+  --hw-green: #3A9E42;  --hw-green-soft: #E6F4E7;
+  --hw-amber: #E8780C;  --hw-amber-soft: #FDF0E3;
+  /* 模块面性图标底色（服务卡片） */
+  --hw-tint-chat:#0A59F7; --hw-tint-assist:#5B5BD6; --hw-tint-meet:#0A9C8E;
+  --hw-tint-ppt:#E8780C;  --hw-tint-room:#2F80ED;   --hw-tint-forum:#8A5CD1; --hw-tint-rule:#5E6D7E; --hw-tint-acct:#3A9E42;
+
+  /* 字号阶梯（px）：说明 / 正文 / 小标题 / 标题 / 页标题 / 大数字 */
+  --hw-fs-12: 12px; --hw-fs-13: 13px; --hw-fs-14: 14px; --hw-fs-16: 16px;
+  --hw-fs-18: 18px; --hw-fs-22: 22px; --hw-fs-28: 28px; --hw-fs-44: 44px;
+  --hw-lh: 1.55;
+
+  /* 间距（4 的倍数） */
+  --hw-sp-1:4px; --hw-sp-2:8px; --hw-sp-3:12px; --hw-sp-4:16px; --hw-sp-5:20px; --hw-sp-6:24px; --hw-sp-8:32px; --hw-sp-10:40px;
+
+  /* 圆角：越大的面越圆 */
+  --hw-r-xs: 6px;   /* 标签 */
+  --hw-r-sm: 10px;  /* 输入框、小块 */
+  --hw-r-item: 12px;/* 列表行、卡内次级块 */
+  --hw-r-md: 16px;  /* 卡片 */
+  --hw-r-lg: 24px;  /* 导航岛、大卡片 */
+  --hw-r-xl: 28px;  /* 弹窗、抽屉 */
+  --hw-r-pill: 999px; /* 按钮、胶囊、分段控件 */
+
+  /* 高度（三级投影） */
+  --hw-e1: 0 1px 2px rgba(24,36,49,.04), 0 2px 8px rgba(24,36,49,.05);
+  --hw-e2: 0 2px 4px rgba(24,36,49,.04), 0 8px 24px rgba(24,36,49,.09);
+  --hw-e3: 0 4px 12px rgba(24,36,49,.08), 0 24px 56px rgba(24,36,49,.18);
+
+  /* 动效 */
+  --hw-ease: cubic-bezier(.2,.8,.2,1);
+  --hw-t-fast: 120ms; --hw-t-base: 200ms; --hw-t-slow: 320ms;
+  --hw-glow-period: 4s;   /* 录制中光环一圈 */
+  --hw-think-period: 1.4s;/* AI 思考圆点 */
+}

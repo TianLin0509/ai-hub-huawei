@@ -1,10 +1,203 @@
+/* 公司版 PPT 页 · 定稿 CDCCBCC「PPT C」（2026-11-04 d1 换皮）。颜色、圆角、阴影只引用 hw-tokens.css 的 --hw- 变量。
+   data-view：home 居中检索首屏 / results 左结果右详情 / convert 图片转可编辑；data-step：转字三步进度。 */
 .company-ppt-page-open #session-sidebar,.company-ppt-page-open #toolbar-actions,.company-ppt-page-open #toolbar-crumb,.company-ppt-page-open #btn-expand-sidebar{visibility:hidden}
-.company-ppt-page{position:fixed;right:0;z-index:880;display:flex;flex-direction:column;background:#f3f4f6;color:#1b2942;font:14px/1.7 var(--font-ui,"Microsoft YaHei",sans-serif);-webkit-app-region:no-drag}
-.company-ppt-page[hidden]{display:none}
-.pptw-head{display:flex;align-items:center;gap:18px;padding:12px 28px;background:#fff;border-bottom:1px solid #e3e7ee}
-.pptw-head h1{font-size:18px;margin:0}.pptw-head span{flex:1;color:#6b7280}.pptw-scroll{overflow:auto;flex:1}.pptw-body{max-width:1280px;margin:auto;padding:20px 28px 36px}
-.company-ppt-page button{background:#fff;border:1px solid #dfe3ea;border-radius:6px;padding:6px 12px;color:inherit;cursor:pointer;font:inherit;font-size:13px}.company-ppt-page button:hover{background:#edf2fa}.company-ppt-page button.primary{background:#3478f6;border-color:#3478f6;color:#fff}.company-ppt-page button:disabled{opacity:.5;cursor:wait}
-.pptw-status{padding-bottom:12px;border-bottom:1px solid #e3e7ee;color:#586579}.pptw-status[data-state=missing],.pptw-status[data-state=upgrade],.pptw-status[data-state=error]{color:#9f4733}.pptw-settings{margin:12px 0 24px}.pptw-settings summary{cursor:pointer;color:#586579}.pptw-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}.pptw-search label{display:block;font-size:18px;font-weight:600;margin-bottom:8px}.pptw-search>div{display:flex;gap:8px}.pptw-search input{flex:1;min-width:160px;border:1px solid #dfe3ea;border-radius:6px;padding:10px 12px;font:inherit;background:#fff;color:inherit}.pptw-notice{white-space:pre-wrap;color:#586579;margin:12px 0;overflow-wrap:anywhere}.pptw-results{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:16px}.pptw-empty{grid-column:1/-1;padding:20px 0;color:#7b8799}
-.pptw-result{background:#fff;border:1px solid #e3e7ee;border-radius:8px;overflow:hidden}.pptw-preview{aspect-ratio:16/9;background:#e9edf2;display:flex;align-items:center;justify-content:center;color:#8792a4}.pptw-preview img{width:100%;height:100%;object-fit:contain}.pptw-result-copy{padding:12px}.pptw-result h3{font-size:14px;margin:0;overflow-wrap:anywhere}.pptw-result p{font-size:12px;color:#6b7280;margin:6px 0;overflow-wrap:anywhere}.pptw-convert{margin-top:32px;padding-top:16px;border-top:1px solid #dfe3ea}.pptw-convert h2{font-size:18px}.pptw-drop{padding:24px;text-align:center;border:1px dashed #b5c1d3;border-radius:8px;background:#fff}.pptw-drop[data-drag=over]{border-color:#3478f6;background:#f0f5ff}.pptw-drop button{margin-left:8px}.pptw-drop small{display:block;color:#7b8799;margin-top:8px}.pptw-conversion-preview{display:block;max-width:min(100%,640px);max-height:360px;object-fit:contain;margin:12px 0}
-.company-ppt-page [hidden]{display:none!important}.pptw-body{max-width:none;padding:18px 24px 28px}.pptw-settings{margin:8px 0 14px;font-size:12px}.pptw-search label{font-size:14px}.pptw-search .pptw-folder-label{display:flex;align-items:center;gap:10px;font-size:12px;color:#69758a;margin:12px 0 0}.pptw-folder-label select{max-width:620px;min-width:180px;border:1px solid #dfe3ea;border-radius:6px;padding:5px 10px;background:white;color:inherit;font:inherit}.pptw-workspace{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:22px;align-items:start}.pptw-results{grid-template-columns:repeat(auto-fill,minmax(210px,1fr));align-items:start}.pptw-result.selected{border-color:#3478f6;box-shadow:0 0 0 1px #3478f6}.company-ppt-page .pptw-select{display:block;width:100%;border:0;padding:0;text-align:left;background:#fff;border-radius:0}.pptw-result-copy{display:block}.pptw-result-copy strong{display:block;font-size:13px;overflow-wrap:anywhere}.pptw-result-copy>span{display:block;font-size:12px;color:#7b8799;overflow-wrap:anywhere;margin-top:4px}.pptw-detail{background:#fff;padding:16px;border-left:1px solid #e3e7ee;min-height:360px;position:sticky;top:12px}.pptw-detail h2{font-size:15px;overflow-wrap:anywhere;margin:14px 0 8px}.pptw-detail dl{display:grid;grid-template-columns:38px minmax(0,1fr);gap:5px 8px;font-size:12px}.pptw-detail dt{color:#7b8799}.pptw-detail dd{margin:0;overflow-wrap:anywhere}.pptw-snippet{font-size:12px;color:#586579;overflow-wrap:anywhere;white-space:pre-wrap}.pptw-detail-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:16px}.pptw-detail-actions>.primary,.pptw-detail-actions>[data-ppt=convert-page]{grid-column:1/-1}.pptw-hint{font-size:12px;color:#7b8799}.pptw-notice{font-size:12px;max-height:180px;overflow:auto}.pptw-section-head{display:flex;justify-content:space-between;align-items:center}.pptw-convert{margin-top:0;border-top:0;padding-top:0}.pptw-convert h2{font-size:17px}.pptw-convert [data-ppt-conversion]{max-width:920px}.pptw-drop{padding:48px 24px}
-.pptw-report{margin:8px 0 18px;font-size:13px}.pptw-report summary{cursor:pointer;color:#3478f6}.pptw-report-body{max-height:420px;overflow:auto;overflow-wrap:anywhere;padding:12px 0}.pptw-report-body table{border-collapse:collapse;min-width:640px;width:100%;font-size:12px}.pptw-report-body td,.pptw-report-body th{padding:8px;text-align:left;vertical-align:top;border-bottom:1px solid #dfe3ea}.pptw-report-body p{margin:8px 0}.pptw-detail-actions>[data-ppt=show-folder]{grid-column:1/-1}
+.company-ppt-page{position:fixed;right:0;z-index:880;display:flex;flex-direction:column;padding:0 12px;background:var(--hw-bg);color:var(--hw-text-1);font:var(--hw-fs-14)/var(--hw-lh) var(--hw-font);-webkit-app-region:no-drag}
+.company-ppt-page[hidden],.company-ppt-page [hidden]{display:none!important}
+.company-ppt-page *{box-sizing:border-box}
+.pptw-sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+
+/* 按钮：胶囊，四档（主要 / 次要 / 文字 / 默认次要） */
+.company-ppt-page button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 14px;border:0;border-radius:var(--hw-r-pill);background:var(--hw-surface-3);color:var(--hw-text-1);font:500 var(--hw-fs-13)/1 var(--hw-font);white-space:nowrap;cursor:pointer;transition:background var(--hw-t-fast) var(--hw-ease),transform var(--hw-t-fast)}
+.company-ppt-page button:hover{background:color-mix(in srgb,var(--hw-surface-3),var(--hw-text-1) 5%)}
+.company-ppt-page button:active{transform:scale(.97)}
+.company-ppt-page button:focus-visible{outline:2px solid var(--hw-brand);outline-offset:2px}
+.company-ppt-page button:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.company-ppt-page .pptw-btn.pri{background:var(--hw-brand);color:var(--hw-text-on);box-shadow:0 4px 12px -4px color-mix(in srgb,var(--hw-brand) 60%,transparent)}
+.company-ppt-page .pptw-btn.pri:hover{background:var(--hw-brand-hover)}
+.company-ppt-page .pptw-btn.sec{background:var(--hw-surface-3)}
+.company-ppt-page .pptw-btn.ghost{background:transparent;color:var(--hw-brand);padding:0 10px}
+.company-ppt-page .pptw-btn.ghost:hover{background:var(--hw-brand-soft)}
+.company-ppt-page .pptw-btn.sm{height:30px;padding:0 13px}
+.pptw-tag{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:var(--hw-r-xs);background:var(--hw-surface-3);color:var(--hw-text-2);font-size:var(--hw-fs-12);font-weight:400;white-space:nowrap}
+.pptw-tag.amber{background:var(--hw-amber-soft);color:var(--hw-amber)}
+
+/* 页头：页标题 + 副标题，右侧素材库设置与 Doctor 状态胶囊 */
+.pptw-head{display:flex;align-items:center;gap:16px;min-height:58px;padding:6px 8px 14px;background:none;border:0}
+.pptw-head h1{margin:0;font-size:var(--hw-fs-22);font-weight:600;letter-spacing:.2px;white-space:nowrap}
+.pptw-head .pptw-sub{min-width:0;font-size:var(--hw-fs-13);color:var(--hw-text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pptw-head-right{position:relative;margin-left:auto;display:flex;align-items:center;gap:8px;flex:none}
+.pptw-status:not(.pptw-guide){display:inline-flex;align-items:center;gap:6px;min-height:32px;max-width:520px;padding:6px 12px;white-space:nowrap;border-radius:var(--hw-r-pill);background:var(--hw-surface);box-shadow:var(--hw-e1);font-size:12.5px;line-height:1.4;color:var(--hw-text-2)}
+.pptw-status:not(.pptw-guide):empty{display:none}
+.pptw-status:not(.pptw-guide)>span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.pptw-status[data-state=indexing]:not(.pptw-guide){white-space:normal}
+.pptw-dot{width:7px;height:7px;flex:none;border-radius:50%;background:var(--hw-green)}
+.pptw-status:is([data-state=indexing],[data-state=missing]) .pptw-dot{background:var(--hw-amber)}
+.pptw-settings{position:relative}
+.pptw-settings summary{display:inline-flex;align-items:center;height:32px;padding:0 12px;border-radius:var(--hw-r-pill);font-size:var(--hw-fs-13);color:var(--hw-text-2);cursor:pointer;list-style:none;user-select:none}
+.pptw-settings summary::-webkit-details-marker{display:none}
+.pptw-settings summary:hover,.pptw-settings[open] summary{background:var(--hw-surface);color:var(--hw-text-1)}
+.pptw-settings summary:focus-visible{outline:2px solid var(--hw-brand);outline-offset:2px}
+.pptw-settings-pop{position:absolute;right:0;top:40px;z-index:30;width:440px;padding:16px;border-radius:var(--hw-r-md);background:var(--hw-surface);box-shadow:var(--hw-e3);font-size:var(--hw-fs-13)}
+.pptw-settings-pop b{display:block;font-weight:600;margin-bottom:4px}
+.pptw-settings-pop [data-ppt-roots]{color:var(--hw-text-2);overflow-wrap:anywhere}
+.pptw-hint{margin:8px 0 0;font-size:var(--hw-fs-12);color:var(--hw-text-3)}
+.pptw-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+
+.pptw-scroll{flex:1;min-height:0;overflow:auto}
+.pptw-body{display:flex;flex-direction:column;min-height:100%;padding:0 0 12px}
+.pptw-notice{margin:0 4px 10px;font-size:12.5px;color:var(--hw-text-2);white-space:pre-wrap;overflow-wrap:anywhere}
+.pptw-notice:empty{display:none}
+
+/* Doctor 引导卡：缺失、需升级或出错时出现在正文顶部 */
+.pptw-status.pptw-guide{display:grid;grid-template-columns:56px minmax(0,1fr);gap:6px 18px;width:min(960px,100%);margin:0 auto 12px;padding:24px 28px;border-radius:var(--hw-r-xl);background:var(--hw-surface);box-shadow:var(--hw-e1)}
+.pptw-guide-ico{grid-row:span 2;width:56px;height:56px;border-radius:var(--hw-r-md);background:var(--hw-tint-ppt);display:grid;place-items:center;box-shadow:0 10px 24px -8px color-mix(in srgb,var(--hw-tint-ppt) 60%,transparent)}
+.pptw-guide-ico svg{width:28px;height:28px;fill:var(--hw-text-on)}
+.pptw-guide-ico .cut{fill:none;stroke:var(--hw-tint-ppt);stroke-width:1.8;stroke-linecap:round}
+.pptw-guide-copy strong{display:block;font-size:var(--hw-fs-18);font-weight:600;line-height:1.4;color:var(--hw-text-1)}
+.pptw-guide-copy p{margin:4px 0 0;font-size:var(--hw-fs-13);color:var(--hw-text-2)}
+.pptw-guide-actions{grid-column:2;display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:12px}
+.pptw-guide-actions .pptw-btn.ghost{margin-left:auto}
+
+/* 检索结果：左边一张大白卡（检索条、操作、结果网格），右边详情卡 */
+.pptw-workspace{flex:1;min-height:440px;display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:12px}
+.pptw-main,.pptw-detail{min-height:0;display:flex;flex-direction:column;border-radius:var(--hw-r-lg);background:var(--hw-surface);box-shadow:var(--hw-e1);overflow:hidden}
+.pptw-hero{display:none}
+.pptw-search{padding:14px 16px 0}
+.pptw-bar{display:flex;align-items:center;gap:10px;height:44px;padding:0 6px 0 16px;border:1.5px solid transparent;border-radius:var(--hw-r-xl);background:var(--hw-surface-2);transition:border-color var(--hw-t-base),box-shadow var(--hw-t-base)}
+.pptw-bar:focus-within{border-color:var(--hw-brand);box-shadow:0 0 0 4px var(--hw-brand-soft)}
+.pptw-bar-ico{width:18px;height:18px;flex:none;fill:none;stroke:var(--hw-text-2);stroke-width:2;stroke-linecap:round}
+.pptw-bar input{flex:1;min-width:120px;height:100%;border:0;outline:none;background:none;color:var(--hw-text-1);font:var(--hw-fs-14) var(--hw-font)}
+.pptw-bar input::placeholder{color:var(--hw-text-3)}
+.pptw-folder-label{display:flex;flex:none;min-width:0}
+.pptw-folder-label select{max-width:200px;height:32px;padding:0 28px 0 12px;border:0;border-radius:var(--hw-r-md);background-color:var(--hw-surface);color:var(--hw-text-2);font:var(--hw-fs-13) var(--hw-font);text-overflow:ellipsis;appearance:none;cursor:pointer;outline:none}
+.pptw-folder-label select{background-image:linear-gradient(45deg,transparent 50%,var(--hw-text-3) 50%),linear-gradient(135deg,var(--hw-text-3) 50%,transparent 50%);background-position:right 15px center,right 11px center;background-size:4px 4px;background-repeat:no-repeat}
+.pptw-folder-label select:focus-visible{outline:2px solid var(--hw-brand)}
+.pptw-modes{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:10px}
+.pptw-modes button{height:30px;padding:0 13px;background:var(--hw-surface-3);color:var(--hw-text-2)}
+.pptw-modes button:hover{color:var(--hw-text-1)}
+.pptw-report{margin:10px 16px 0;padding:10px 14px;border-radius:var(--hw-r-item);background:var(--hw-surface-2);font-size:var(--hw-fs-13)}
+.pptw-report summary{color:var(--hw-brand);cursor:pointer}
+.pptw-report-body{margin-top:8px;color:var(--hw-text-1);overflow-wrap:anywhere}
+.pptw-report-body table{border-collapse:collapse;margin:8px 0;font-size:var(--hw-fs-12)}
+.pptw-report-body :is(th,td){border:1px solid var(--hw-line);padding:6px 8px;text-align:left;vertical-align:top}
+.pptw-results{flex:1;min-height:0;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(188px,1fr));gap:12px;align-content:start;padding:14px 16px 16px}
+.pptw-empty{grid-column:1/-1;margin:0;padding:20px 4px;color:var(--hw-text-3);font-size:var(--hw-fs-13)}
+.pptw-result{min-width:0;border:1.5px solid transparent;border-radius:var(--hw-r-item);transition:background var(--hw-t-fast)}
+.pptw-result:hover{background:var(--hw-surface-2)}
+.pptw-result.selected{background:var(--hw-brand-soft);border-color:var(--hw-brand)}
+.company-ppt-page .pptw-select{display:block;width:100%;height:auto;padding:6px 6px 9px;border-radius:var(--hw-r-item);background:transparent;text-align:left;font-weight:400;line-height:var(--hw-lh);white-space:normal}
+.company-ppt-page .pptw-select:hover{background:transparent}
+.company-ppt-page .pptw-select:active{transform:none}
+.pptw-preview{display:flex;align-items:center;justify-content:center;aspect-ratio:16/9;overflow:hidden;border-radius:var(--hw-r-sm);background:var(--hw-surface-2);box-shadow:inset 0 0 0 1px var(--hw-line);color:var(--hw-text-3);font-size:var(--hw-fs-12)}
+.pptw-preview img{width:100%;height:100%;object-fit:contain}
+.pptw-result-copy{display:block;margin:7px 3px 0}
+.pptw-result-copy strong{display:block;font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pptw-result-copy>span{display:block;font-size:11.5px;color:var(--hw-text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pptw-detail>.pptw-empty{padding:24px 20px}
+.pptw-detail>.pptw-preview{flex:none;margin:16px 16px 0;border-radius:var(--hw-r-item)}
+.pptw-dt-body{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:12px;padding:14px 18px}
+.pptw-tags{display:flex;gap:6px}
+.pptw-dt-body h2{margin:0;font-size:15.5px;font-weight:600;line-height:1.45;overflow-wrap:anywhere}
+.pptw-dt-body dl{display:grid;grid-template-columns:52px minmax(0,1fr);gap:6px 10px;margin:0;font-size:12.5px}
+.pptw-dt-body dt{color:var(--hw-text-3)}
+.pptw-dt-body dd{margin:0;overflow-wrap:anywhere}
+.pptw-snippet{margin:0;padding:10px 12px;border-radius:var(--hw-r-item);background:var(--hw-surface-2);font-size:12.5px;line-height:1.7;color:var(--hw-text-2);overflow-wrap:anywhere}
+.pptw-detail-actions{flex:none;display:flex;flex-direction:column;gap:8px;padding:0 18px 18px}
+.pptw-detail-actions>button{width:100%;height:36px}
+.pptw-row{display:flex;gap:8px}
+.pptw-row>button{flex:1;min-width:0;height:36px;padding:0 10px}
+
+/* 首屏：还没检索过时只有居中的大检索框 */
+.company-ppt-page[data-view=home] .pptw-workspace{display:block;min-height:0}
+.company-ppt-page[data-view=home] .pptw-main{background:none;box-shadow:none;overflow:visible;align-items:center;padding:6vh 24px 24px}
+.company-ppt-page[data-view=home] :is(.pptw-detail,.pptw-results,.pptw-report){display:none!important}
+.company-ppt-page[data-view=home] .pptw-hero{display:block;text-align:center}
+.pptw-hero h2{margin:0;font-size:30px;font-weight:600;letter-spacing:.5px}
+.pptw-hero p{margin:8px 0 0;color:var(--hw-text-2)}
+.company-ppt-page[data-view=home] .pptw-search{width:min(720px,100%);margin-top:26px;padding:0}
+.company-ppt-page[data-view=home] .pptw-bar{height:60px;padding:0 8px 0 22px;background:var(--hw-surface);box-shadow:var(--hw-e2)}
+.company-ppt-page[data-view=home] .pptw-bar:focus-within{box-shadow:var(--hw-e2),0 0 0 5px var(--hw-brand-soft)}
+.company-ppt-page[data-view=home] .pptw-bar-ico{width:20px;height:20px}
+.company-ppt-page[data-view=home] .pptw-bar input{font-size:var(--hw-fs-16)}
+.company-ppt-page[data-view=home] .pptw-folder-label select{height:36px;background-color:var(--hw-surface-2)}
+.company-ppt-page[data-view=home] .pptw-bar .pptw-btn.pri{height:40px;padding:0 20px;font-size:var(--hw-fs-14)}
+.company-ppt-page[data-view=home] .pptw-modes{justify-content:center;margin-top:16px}
+.company-ppt-page[data-view=home] .pptw-notice{width:min(720px,100%);margin:0 auto 10px;text-align:center}
+
+/* 图片转可编辑：左卡三步 + 拖放 / 画面，右卡处理进展或复核项 */
+.pptw-convert{flex:1;min-height:440px;display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:12px}
+.pptw-conv-card,.pptw-conv-side{min-height:0;border-radius:var(--hw-r-lg);background:var(--hw-surface);box-shadow:var(--hw-e1)}
+.pptw-conv-card{display:flex;flex-direction:column;overflow:auto;padding-bottom:20px}
+.pptw-section-head{display:flex;align-items:center;gap:12px;padding:16px 22px 0}
+.pptw-section-head h2{margin:0;font-size:var(--hw-fs-16);font-weight:600}
+.pptw-section-head button{margin-left:auto}
+.pptw-stepper{display:flex;align-items:center;margin:0;padding:14px 22px 4px;list-style:none}
+.pptw-stepper li[data-n]{display:flex;align-items:center;gap:8px;font-size:var(--hw-fs-13);color:var(--hw-text-3);white-space:nowrap}
+.pptw-stepper li[data-n] span{width:24px;height:24px;border-radius:50%;background:var(--hw-surface-3);display:grid;place-items:center;font:var(--hw-fs-12) var(--hw-font-num)}
+.pptw-stp-line{flex:1;min-width:20px;height:2px;margin:0 10px;background:var(--hw-surface-3)}
+.pptw-convert[data-step="1"] li[data-n="1"],.pptw-convert[data-step="2"] li[data-n="2"],.pptw-convert[data-step="3"] li[data-n="3"]{color:var(--hw-brand);font-weight:600}
+.pptw-convert[data-step="1"] li[data-n="1"] span,.pptw-convert[data-step="2"] li[data-n="2"] span,.pptw-convert[data-step="3"] li[data-n="3"] span{background:var(--hw-brand);color:var(--hw-text-on);box-shadow:0 0 0 4px var(--hw-brand-soft)}
+.pptw-convert:is([data-step="2"],[data-step="3"]) li[data-n="1"],.pptw-convert[data-step="3"] li[data-n="2"]{color:var(--hw-text-1)}
+.pptw-convert:is([data-step="2"],[data-step="3"]) li[data-n="1"] span,.pptw-convert[data-step="3"] li[data-n="2"] span{background:var(--hw-green);color:var(--hw-text-on);font-size:0}
+.pptw-convert:is([data-step="2"],[data-step="3"]) li[data-n="1"] span::before,.pptw-convert[data-step="3"] li[data-n="2"] span::before{content:'✓';font-size:var(--hw-fs-12)}
+.pptw-convert:is([data-step="2"],[data-step="3"]) li[data-n="1"]+.pptw-stp-line,.pptw-convert[data-step="3"] li[data-n="2"]+.pptw-stp-line{background:var(--hw-green)}
+.pptw-convert[data-failed][data-step="2"] li[data-n="2"]{color:var(--hw-red)}
+.pptw-convert[data-failed][data-step="2"] li[data-n="2"] span{background:var(--hw-red);box-shadow:0 0 0 4px var(--hw-red-soft)}
+.pptw-drop{flex:1;min-height:300px;margin:18px 22px 0;padding:40px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center;border:2px dashed var(--hw-line-strong);border-radius:var(--hw-r-lg);background:var(--hw-surface-2);transition:border-color var(--hw-t-base),background var(--hw-t-base)}
+.pptw-drop:hover,.pptw-drop[data-drag=over]{border-color:var(--hw-brand);background:var(--hw-brand-soft)}
+.pptw-drop:focus-visible{outline:2px solid var(--hw-brand);outline-offset:2px}
+.pptw-drop-ico{width:72px;height:72px;margin-bottom:12px;border-radius:var(--hw-r-lg);background:var(--hw-surface);box-shadow:var(--hw-e2);display:grid;place-items:center}
+.pptw-drop-ico svg{width:32px;height:32px;fill:none;stroke:var(--hw-brand);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.pptw-drop-title{font-size:var(--hw-fs-18);font-weight:600}
+.pptw-drop button{margin-top:10px}
+.pptw-drop small{display:block;margin-top:6px;font-size:12.5px;color:var(--hw-text-2)}
+.pptw-convert:is([data-step="2"],[data-step="3"]) .pptw-drop{flex:none;min-height:0;flex-direction:row;gap:10px;margin:12px 22px 0;padding:8px 10px 8px 16px;border-width:1.5px;border-radius:var(--hw-r-item)}
+.pptw-convert:is([data-step="2"],[data-step="3"]) .pptw-drop :is(.pptw-drop-ico,small){display:none}
+.pptw-convert:is([data-step="2"],[data-step="3"]) .pptw-drop-title{font-size:var(--hw-fs-13);font-weight:400;color:var(--hw-text-2)}
+.pptw-convert:is([data-step="2"],[data-step="3"]) .pptw-drop button{margin:0;height:30px;padding:0 13px}
+.pptw-conversion{padding:0 22px;font-size:var(--hw-fs-13);color:var(--hw-text-2)}
+.pptw-conversion:not(:empty){margin-top:14px}
+.pptw-conv-main{display:flex;flex-direction:column;gap:12px;color:var(--hw-text-1)}
+.pptw-conv-stage{position:relative;display:grid;place-items:center;min-height:200px;padding:16px;border-radius:var(--hw-r-item);background:var(--hw-surface-2);overflow:hidden}
+.pptw-conversion-preview{display:block;max-width:min(100%,720px);max-height:min(420px,40vh);object-fit:contain;border-radius:var(--hw-r-sm);box-shadow:var(--hw-e2);background:var(--hw-surface)}
+.pptw-conv-status b{display:block;font-size:13.5px;font-weight:500}
+.pptw-conv-status b.is-error{color:var(--hw-red)}
+.pptw-conv-status span{display:block;margin-top:2px;font-size:12.5px;color:var(--hw-text-2)}
+.pptw-conv-status span.is-warn{color:var(--hw-amber)}
+.pptw-conv-actions{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.pptw-conv-actions:empty{display:none}
+.pptw-conv-actions button{height:36px;padding:0 18px;font-size:var(--hw-fs-14)}
+.pptw-conv-note{flex-basis:100%;margin:0;font-size:12.5px;color:var(--hw-text-2)}
+.pptw-conv-side{display:flex;flex-direction:column;gap:10px;padding:18px;overflow:auto}
+.pptw-conv-side h3{display:flex;align-items:center;gap:8px;margin:0;font-size:15px;font-weight:600}
+.pptw-conv-side>p{margin:0;padding:14px;border-radius:var(--hw-r-item);background:var(--hw-surface-2);font-size:12.5px;line-height:1.7;color:var(--hw-text-2);overflow-wrap:anywhere}
+.pptw-reviews{display:flex;flex-direction:column;gap:8px;margin:0;padding:0;list-style:none}
+.pptw-reviews li{display:flex;gap:10px;padding:12px 14px;border-radius:var(--hw-r-item);background:var(--hw-surface-2);font-size:var(--hw-fs-13);line-height:1.6;overflow-wrap:anywhere}
+.pptw-reviews i{flex:none;width:22px;height:22px;border-radius:50%;background:var(--hw-amber-soft);color:var(--hw-amber);display:grid;place-items:center;font:700 var(--hw-fs-12) var(--hw-font-num);font-style:normal}
+.pptw-phases{margin:4px 0 0;padding:0;list-style:none}
+.pptw-phases li{position:relative;padding:0 0 16px 24px}
+.pptw-phases li::before{content:'';position:absolute;left:0;top:4px;width:10px;height:10px;border-radius:50%;border:2px solid var(--hw-line-strong);background:var(--hw-surface)}
+.pptw-phases li:not(:last-child)::after{content:'';position:absolute;left:6px;top:18px;bottom:2px;width:2px;background:var(--hw-surface-3)}
+.pptw-phases li.done::before{border-color:var(--hw-green);background:var(--hw-green)}
+.pptw-phases li.done::after{background:var(--hw-green)}
+.pptw-phases li.now::before{border-color:var(--hw-brand);box-shadow:0 0 0 3px var(--hw-brand-soft)}
+.pptw-phases b{display:block;font-size:13.5px;font-weight:500}
+.pptw-phases li:not(.done):not(.now) b{color:var(--hw-text-3)}
+.pptw-phases small{display:block;font-size:var(--hw-fs-12);color:var(--hw-text-3)}
+
+/* 流光只用于 AI 思考中：转字处理中画面底部一道扫光 + 标题旁三个呼吸点 */
+.pptw-thinking::after{content:'';position:absolute;left:0;right:0;bottom:0;height:3px;background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--hw-brand) 0%,transparent) 20%,color-mix(in srgb,var(--hw-brand) 55%,transparent) 50%,color-mix(in srgb,var(--hw-red) 35%,transparent) 65%,transparent 85%);background-size:200% 100%;animation:pptw-sweep var(--hw-think-period) linear infinite}
+@keyframes pptw-sweep{from{background-position:100% 0}to{background-position:-100% 0}}
+.pptw-dots{display:inline-flex;gap:4px;margin-left:auto}
+.pptw-dots i{width:6px;height:6px;border-radius:50%;background:var(--hw-brand);animation:pptw-breath var(--hw-think-period) ease-in-out infinite}
+.pptw-dots i:nth-child(2){animation-delay:.18s}.pptw-dots i:nth-child(3){animation-delay:.36s}
+@keyframes pptw-breath{0%,100%{opacity:.2;transform:scale(.8)}50%{opacity:1;transform:scale(1)}}
+@media (prefers-reduced-motion:reduce){.pptw-thinking::after,.pptw-dots i{animation:none}.company-ppt-page button{transition:none}}
+
+/* 1280 一档 */
+@media (max-width:1360px){
+  .pptw-workspace{grid-template-columns:minmax(0,1fr) 320px}
+  .pptw-convert{grid-template-columns:minmax(0,1fr) 300px}
+  .pptw-results{grid-template-columns:repeat(auto-fill,minmax(168px,1fr))}
+  .pptw-status:not(.pptw-guide){max-width:420px}
+}

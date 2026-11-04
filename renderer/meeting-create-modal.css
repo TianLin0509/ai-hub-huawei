@@ -426,3 +426,79 @@
 .mcm-orch-note { color: var(--text-dim, var(--fg-muted)); }
 .mcm-slot.mcm-orch-lead { border-color: rgba(var(--rgb-warning, 255, 159, 10), 0.6); background: rgba(var(--rgb-warning, 255, 159, 10), 0.06); }
 .mcm-slot.mcm-orch-lead .mcm-slot-label { color: #a76200; font-weight: 600; }
+
+/* 定稿 C：仅作用于新建群聊；其他复用 mcm 骨架的窗口保持原有布局。 */
+#meeting-create-modal{font:13px/var(--hw-lh) var(--hw-font);color:var(--hw-text-1)}
+#meeting-create-modal:not(.mcm-embedded){background:rgba(24,36,49,.28);backdrop-filter:blur(2px)}
+#meeting-create-modal *{box-sizing:border-box}
+#meeting-create-modal .mcm-dialog{background:var(--hw-surface);color:var(--hw-text-1);border:0;border-radius:var(--hw-r-xl);box-shadow:var(--hw-e3)}
+#meeting-create-modal:not(.mcm-embedded) .mcm-dialog{width:520px;max-width:calc(100% - 40px);max-height:calc(100% - 40px);animation:mcm-c-pop var(--hw-t-slow) var(--hw-ease)}
+@keyframes mcm-c-pop{from{opacity:0;transform:translateY(15px) scale(.97)}}
+#meeting-create-modal .mcm-header{padding:24px 26px 8px;align-items:flex-start;border:0;gap:12px}
+#meeting-create-modal .mcm-title{font-size:19px;font-weight:600}
+#meeting-create-modal .mcm-close{width:30px;height:30px;display:grid;place-items:center;border-radius:var(--hw-r-pill);color:var(--hw-text-2);padding:0}
+#meeting-create-modal .mcm-close:hover{background:var(--hw-surface-3)}
+#meeting-create-modal .mcm-body{padding:12px 26px;min-height:0}
+#meeting-create-modal .mcm-name-row{align-items:stretch;flex-direction:column;gap:6px;margin-bottom:16px}
+#meeting-create-modal .mcm-name-label,#meeting-create-modal .mcm-scene-caption{font-size:12px;color:var(--hw-text-2)}
+#meeting-create-modal .mcm-title-input{min-width:0;min-height:40px;flex:auto;padding:0 12px;border:1px solid transparent;background:var(--hw-surface-3);border-radius:var(--hw-r-item);font:13px var(--hw-font);color:var(--hw-text-1)}
+#meeting-create-modal .mcm-title-input::placeholder{color:var(--hw-text-3);opacity:1}
+#meeting-create-modal .mcm-title-input:focus{border-color:var(--hw-brand);box-shadow:0 0 0 4px var(--hw-brand-soft);background:var(--hw-surface)}
+#meeting-create-modal .mcm-workspace-block{margin-bottom:16px;gap:6px}
+#meeting-create-modal .mcm-workspace-caption{font-size:12px;font-weight:400;letter-spacing:0;color:var(--hw-text-2)}
+#meeting-create-modal .mcm-workspace-choices{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+#meeting-create-modal .mcm-workspace-choice{padding:8px 10px;min-height:70px;border:1px solid transparent;border-radius:var(--hw-r-item);background:var(--hw-surface-2);color:var(--hw-text-1);font-family:inherit}
+#meeting-create-modal .mcm-workspace-choice:hover{background:var(--hw-surface-3)}
+#meeting-create-modal .mcm-workspace-choice.selected{background:var(--hw-brand-soft);border-color:var(--hw-brand);color:var(--hw-brand)}
+#meeting-create-modal .mcm-workspace-choice strong{font-size:12px;font-weight:500}
+#meeting-create-modal .mcm-workspace-choice small{font-size:12px;line-height:1.4;color:var(--hw-text-3)}
+#meeting-create-modal .mcm-workspace-existing{border:0;border-radius:var(--hw-r-sm);background:var(--hw-surface-2);gap:6px}
+#meeting-create-modal .mcm-workspace-existing code{min-width:0;font:12px var(--hw-font-num);color:var(--hw-text-2)}
+#meeting-create-modal .mcm-workspace-button{height:30px;padding:0 10px;border:0;border-radius:var(--hw-r-pill);color:var(--hw-brand);font:12px var(--hw-font)}
+#meeting-create-modal .mcm-workspace-button:hover{background:var(--hw-brand-soft)}
+#meeting-create-modal .mcm-member-caption{gap:4px;align-items:flex-start;flex-direction:column;margin:0 0 8px}
+#meeting-create-modal .mcm-member-caption strong{font-size:13px;font-weight:500;color:var(--hw-text-2)}
+#meeting-create-modal .mcm-member-caption span{font-size:12px;color:var(--hw-text-3)}
+#meeting-create-modal:not(.mcm-embedded) .mcm-slots{grid-template-columns:1fr;gap:8px;margin-bottom:10px}
+#meeting-create-modal .mcm-slot{padding:12px;border:0;border-radius:var(--hw-r-item);background:var(--hw-brand-soft);gap:8px;min-width:0}
+#meeting-create-modal .mcm-slot-head{min-height:30px;gap:10px;padding-right:20px}
+#meeting-create-modal .mcm-avatar{width:30px;height:30px;border-radius:50%;background:var(--hw-surface);padding:5px}
+#meeting-create-modal .mcm-slot-head strong{font-size:13.5px;font-weight:500;color:var(--hw-text-1)}
+#meeting-create-modal .mcm-slot-label{font-size:12px;letter-spacing:0;color:var(--hw-text-2)}
+#meeting-create-modal .mcm-slot label{font-size:12px;color:var(--hw-text-2)}
+#meeting-create-modal .mcm-slot-field-name{flex-basis:62px}
+#meeting-create-modal .mcm-slot select,#meeting-create-modal .mcm-scene select{height:36px;padding:0 10px;border:1px solid var(--hw-line);border-radius:var(--hw-r-sm);background:var(--hw-surface);color:var(--hw-text-1);font:13px var(--hw-font);min-width:0}
+#meeting-create-modal .mcm-remove-member{top:10px;right:10px;border:0;background:transparent;color:var(--hw-text-2)}
+#meeting-create-modal .mcm-remove-member:hover{background:var(--hw-surface);color:var(--hw-red)}
+#meeting-create-modal .mcm-add-member{display:flex;height:32px;margin:0 0 12px;padding:0 12px;border:0;border-radius:var(--hw-r-pill);background:var(--hw-surface-3);color:var(--hw-text-1);font:12px var(--hw-font)}
+#meeting-create-modal .mcm-add-member:hover{background:var(--hw-brand-soft);color:var(--hw-brand)}
+#meeting-create-modal .mcm-tuning-field{border-color:var(--hw-line)}
+#meeting-create-modal .mcm-check{color:var(--hw-text-2)}
+#meeting-create-modal .mcm-fast-checkbox{accent-color:var(--hw-brand)}
+#meeting-create-modal .mcm-footer{border:0;padding:14px 26px 22px;gap:10px}
+#meeting-create-modal .mcm-footer button{height:36px;padding:0 18px;border:0;border-radius:var(--hw-r-pill);font:13px var(--hw-font)}
+#meeting-create-modal .mcm-cancel{background:var(--hw-surface-3);color:var(--hw-text-1)}
+#meeting-create-modal .mcm-cancel:hover{background:var(--hw-line)}
+/* 旧启动中心的通用 !important 按钮色必须在此局部覆盖。 */
+#meeting-create-modal .mcm-create.mcm-primary{border-color:var(--hw-brand)!important;background:var(--hw-brand)!important;color:var(--hw-text-on)!important;box-shadow:var(--hw-e1);font-weight:500}
+#meeting-create-modal .mcm-create.mcm-primary:hover:not(:disabled){background:var(--hw-brand-hover)!important;filter:none}
+#meeting-create-modal .mcm-error{margin:0 26px 8px;border:0;border-radius:var(--hw-r-sm);background:var(--hw-red-soft);color:var(--hw-red)}
+#meeting-create-modal .mcm-project-library{border:0;border-radius:var(--hw-r-item);background:var(--hw-surface-2)}
+#meeting-create-modal .mcm-project-library-item{border-radius:var(--hw-r-sm);border-color:transparent}
+#meeting-create-modal .mcm-project-library-item:hover,#meeting-create-modal .mcm-project-library-item.selected{background:var(--hw-brand-soft);border-color:transparent}
+#meeting-create-modal .mcm-project-library-item small,#meeting-create-modal .mcm-project-library-item span,#meeting-create-modal .mcm-project-library-empty{font-size:12px;color:var(--hw-text-3)}
+#meeting-create-modal .mcm-orch-row{border:0;background:var(--hw-surface-2);border-radius:var(--hw-r-item)}
+#meeting-create-modal .mcm-orch-row.on,#meeting-create-modal .mcm-slot.mcm-orch-lead{background:var(--hw-amber-soft);border-color:var(--hw-amber)}
+#meeting-create-modal .mcm-orch-switch,#meeting-create-modal .mcm-orch-options{color:var(--hw-text-1)}
+#meeting-create-modal .mcm-orch-hint,#meeting-create-modal .mcm-orch-note{color:var(--hw-text-2)}
+#meeting-create-modal .mcm-orch-track{background:var(--hw-line-strong)}
+#meeting-create-modal .mcm-orch-track::after{background:var(--hw-surface);box-shadow:var(--hw-e1)}
+#meeting-create-modal .mcm-orch-switch input:checked+.mcm-orch-track{background:var(--hw-brand)}
+#meeting-create-modal .mcm-orch-options input[type="number"]{border-color:var(--hw-line);border-radius:var(--hw-r-xs);background:var(--hw-surface)}
+#meeting-create-modal .mcm-slot.mcm-orch-lead .mcm-slot-label{color:var(--hw-amber)}
+#meeting-create-modal :is(button,select,input):focus-visible{outline:2px solid var(--hw-brand);outline-offset:2px}
+/* 嵌入启动中心仍使用原来的容器和列数，避免改变建群入口。 */
+#meeting-create-modal.mcm-embedded .mcm-dialog{border-radius:0;box-shadow:none;background:transparent}
+#meeting-create-modal.mcm-embedded .mcm-body{padding:0 20px 16px}
+#meeting-create-modal.mcm-embedded .mcm-footer{padding:14px 20px 0}
+@media(prefers-reduced-motion:reduce){#meeting-create-modal *{animation:none!important;transition:none!important}}

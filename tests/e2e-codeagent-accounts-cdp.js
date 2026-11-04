@@ -5,16 +5,26 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const net = require('node:net');
+const { createHash } = require('node:crypto');
+const { execFileSync } = require('node:child_process');
 const { launchIsolatedHub, gracefulQuit } = require('./helpers/hub-launcher');
 const { connectFirstPage } = require('./helpers/cdp-client');
 const pool = require('../core/codeagent-pool');
 const quota = require('../core/codeagent-quota');
 const { writeProbed } = require('../core/codeagent-model-probe');
 const REPO = path.resolve(__dirname, '..');
-const MEMBER = require('../community-edition.json').repo.endsWith('-member');
+const options = { entry: REPO, verifyFilters: false };
+for (let i = 2; i < process.argv.length; i++) {
+  const flag = process.argv[i];
+  if (flag === '--verify-filters') options.verifyFilters = true;
+  else if (['--entry', '--out'].includes(flag) && process.argv[i + 1] && !process.argv[i + 1].startsWith('--')) options[flag.slice(2)] = process.argv[++i];
+  else throw Error('Expected --entry/--out value or --verify-filters');
+}
+const ENTRY = path.resolve(options.entry);
+const MEMBER = JSON.parse(fs.readFileSync(path.join(ENTRY, 'community-edition.json'), 'utf8')).repo.endsWith('-member');
 const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'accounts-page-m1-'));
 const DATA = path.join(ROOT, 'data'), WORK = path.join(ROOT, 'work'), PERSONAL = path.join(ROOT, 'personal'), SCAN = path.join(ROOT, 'scan');
-const ART = process.env.HUB_E2E_ARTIFACT_DIR || path.join(REPO, 'artifacts', `20261103-accounts-${Date.now()}-m1`);
+const ART = path.resolve(options.out || process.env.HUB_E2E_ARTIFACT_DIR || path.join(REPO, 'artifacts', `20261103-accounts-${Date.now()}-m1`));
 const MODEL = 'GLM-5.2-WX-Auto', LOG = path.join(ROOT, 'fixture.jsonl');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const freePort = () => new Promise(resolve => { const s = net.createServer(); s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
@@ -25,12 +35,19 @@ function seed(dir, accountId, expiry = Date.now() + 72 * 3600e3) {
   fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ model: MODEL }));
   writeProbed(path.join(dir, 'hub-models.json'), { models: [MODEL, 'deepseek-v4-flash-0731', 'MiniMax-M2.5'], defaultModel: MODEL, source: 'test-fixture' });
 }
+function entryIdentity() {
+  try {
+    const git = args => execFileSync('git', args, { cwd: ENTRY, windowsHide: true, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return { sha: git(['rev-parse', 'HEAD']), dirty: !!git(['status', '--porcelain']) };
+  } catch { return { sha: null, dirty: null, note: 'exported source tree without Git metadata' }; }
+}
 async function run() {
   for (const dir of [DATA, WORK, SCAN, ART]) fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(WORK, '.aiwork-root'), ''); seed(PERSONAL, 'personal-fixture');
-  const evidence = { root: ROOT, artifacts: ART, checks: [], model: 'local protocol fixture; no remote login or inference' };
+  const evidence = { root: ROOT, artifacts: ART, entry: ENTRY, entryIdentity: entryIdentity(), verifyFilters: options.verifyFilters,
+    scriptSha256: createHash('sha256').update(fs.readFileSync(__filename)).digest('hex'), checks: [], model: 'local protocol fixture; no remote login or inference' };
   const ok = (label, condition = true) => { assert(condition, label); evidence.checks.push(label); console.log('PASS ' + label); };
-  let hub, cdp;
+  let hub, cdp, failure;
   const invoke = (name, payload) => cdp.eval(`require('electron').ipcRenderer.invoke(${JSON.stringify(name)},${JSON.stringify(payload)})`);
   const click = async selector => {
     let prior;
@@ -46,10 +63,11 @@ async function run() {
   const open = async () => { await click('#btn-rail-accounts'); await wait(() => cdp.eval("!!document.querySelector('[data-ca-account=personal]') && !document.getElementById('codeagent-accounts-page').hidden"), 'accounts open'); };
   const refresh = async () => { await click('[data-ca=refresh]'); await wait(() => cdp.eval("!document.querySelector('[data-ca=refresh]').disabled"), 'accounts refreshed'); };
   try {
-    hub = await launchIsolatedHub({ dataDir: DATA, port: await freePort(), windowMode: 'hidden', extraEnv: {
+    hub = await launchIsolatedHub({ entryPath: ENTRY, cwd: ENTRY, dataDir: DATA, port: await freePort(), windowMode: 'hidden', extraEnv: {
       AI_HUB_WORKSPACE_ROOT: WORK, AI_HUB_CODEAGENT_COMMAND: path.join(REPO, 'tests/fixtures/codeagent-pool-fake/codeagent.cmd'), AI_HUB_CODEAGENT_CONFIG_DIR: PERSONAL,
       CODEAGENT_POOL_FAKE_LOG: LOG, AI_HUB_CODEAGENT_POOL_SCAN_ROOT: SCAN, AI_HUB_CODEAGENT_POOL_LOGIN_FIXTURE: 'accountstest',
       CLAUDE_CONFIG_DIR: path.join(ROOT, 'claude'), CODEX_HOME: path.join(ROOT, 'codex'),
+      HUB_SESSION_SEARCH_DISABLE_NATIVE: '1',
     } });
     cdp = await connectFirstPage(hub, t => /renderer[\\/]index\.html/.test(t.url));
     await wait(() => cdp.eval('!!window.__codeagentAccountsOpen && !!window.WorkspaceController'), 'renderer ready');
@@ -79,6 +97,32 @@ async function run() {
     const quotaView = await cdp.eval("({column:[...document.querySelectorAll('.caa-list-head>span')].some(e=>e.textContent==='额度'),foot:!!document.querySelector('.caa-footnote'),text:document.getElementById('codeagent-accounts-page').textContent})");
     ok(MEMBER ? '成员版保留额度列和现有自动暂停说明' : '公开版无读数时无额度列、脚注及会话后读数承诺', MEMBER
       ? quotaView.column && quotaView.foot : !quotaView.column && !quotaView.foot && !/会话运行后显示|自动暂停/.test(quotaView.text));
+    if (options.verifyFilters) {
+      // Required for the reskinned account page: missing controls must fail,
+      // never silently skip the new behavior on an unintended older entry.
+      assert(await cdp.eval("document.querySelectorAll('.caa-counts [data-ca=filter]').length===3"), '--verify-filters requires the account page with all/usable/needs controls');
+      const mutations = () => cdp.eval("window.__accountCalls.filter(c=>/^codeagent-pool:(add|import|login|personal-login|pause|resume|remove)$/.test(c[0])).length");
+      const beforeFilterMutations = await mutations();
+      await click('[data-ca=filter][data-filter=usable]');
+      ok('筛选可用仅显示可选号的号池账号，个人账号仍独立显示', await cdp.eval("document.querySelectorAll('.caa-list>[data-ca-account]').length===1&&!!document.querySelector('.caa-me-card>[data-ca-account=personal]')"));
+      ok('筛选计数始终基于完整号池，选中态可访问', await cdp.eval("[...document.querySelectorAll('.caa-counts button')].map(e=>e.textContent).join('|')==='全部 4|可用 1|需处理 3'&&document.querySelector('.caa-counts [data-filter=usable]').getAttribute('aria-pressed')==='true'"));
+      await click('[data-ca=filter][data-filter=needs]');
+      ok('需处理筛选包含暂停与过期账号', await cdp.eval("document.querySelectorAll('.caa-list>[data-ca-account]').length===3&&!document.querySelector('.caa-list [data-ca=session]')"));
+      await refresh();
+      ok('刷新后保留需处理筛选和计数', await cdp.eval("document.querySelector('.caa-counts [data-filter=needs]').getAttribute('aria-pressed')==='true'&&document.querySelectorAll('.caa-list>[data-ca-account]').length===3"));
+      await click('[data-ca=filter][data-filter=all]');
+      ok('全部筛选恢复完整列表且不发账号写入请求', await cdp.eval("document.querySelectorAll('.caa-list>[data-ca-account]').length===4") && await mutations() === beforeFilterMutations);
+      quota.markAvoid(DATA, good, { source: 'manual', reason: 'empty filter fixture', until: null });
+      try {
+        await refresh();
+        await click('[data-ca=filter][data-filter=usable]');
+        ok('无可用账号时显示筛选空态和查看全部入口', await cdp.eval("!!document.querySelector('.caa-filter-empty')&&document.querySelector('.caa-filter-empty').textContent.includes('暂无可用的号池账号')&&!!document.querySelector('.caa-filter-empty [data-filter=all]')"));
+        await shot('20261104-accounts-filter-empty');
+        await click('.caa-filter-empty [data-filter=all]');
+        ok('空筛选态返回全部时复用现有状态，不改变号池', await cdp.eval("document.querySelectorAll('.caa-list>[data-ca-account]').length===4") && await mutations() === beforeFilterMutations);
+      } finally { quota.clearAvoid(DATA, good, { by: 'local' }); }
+      await refresh();
+    }
     for (const width of [1440, 1280]) {
       await cdp.send('Emulation.setDeviceMetricsOverride', { width, height: 960, deviceScaleFactor: 1, mobile: false });
       ok(`${width}模型仅首项加余数，完整名称可见于title且采用省略显示`, await cdp.eval(`(()=>{const row=document.querySelector('[data-ca-account="${good}"]'),chips=row.querySelectorAll('.caa-chips>.caa-chip'),s=getComputedStyle(chips[0]);return chips.length===2&&chips[0].title===${JSON.stringify(MODEL)}&&chips[1].textContent==='+2'&&s.textOverflow==='ellipsis'&&s.display==='block'})()`));
@@ -226,13 +270,21 @@ async function run() {
     ok('更多菜单真实移出未被会话使用的账号');
     await click('#btn-home');
     ok('切回会话关闭账号页并恢复导航', await cdp.eval("document.getElementById('codeagent-accounts-page').hidden && !document.body.classList.contains('codeagent-accounts-page-open')"));
-    evidence.ok = true;
-  } catch (error) { evidence.error = error.stack; if (cdp) { await shot('20261103-accounts-failure-m1').catch(() => {}); evidence.failureUi = await cdp.eval("({intent:window.LaunchCenter?.getActiveIntent(), calls:window.__accountCalls, message:document.getElementById('new-session-error')?.textContent, selected:document.getElementById('new-session-codeagent-pool')?.value})").catch(() => null); } throw error; }
+    evidence.uiChecksPassed = true;
+  } catch (error) { failure = error; evidence.error = error.stack; if (cdp) { await shot('20261103-accounts-failure-m1').catch(() => {}); evidence.failureUi = await cdp.eval("({intent:window.LaunchCenter?.getActiveIntent(), calls:window.__accountCalls, message:document.getElementById('new-session-error')?.textContent, selected:document.getElementById('new-session-codeagent-pool')?.value})").catch(() => null); } }
   finally {
+    try { if (cdp) await cdp.close(); } catch (error) { failure ||= error; evidence.cdpCloseError = error.stack; }
+    try { if (hub) evidence.hubExit = await gracefulQuit(hub); }
+    catch (error) { failure ||= error; evidence.teardownError = error.stack; evidence.hubExit = { exitCode: hub?.exitCode(), exitSignal: hub?.exitSignal(), forced: !!error.termination?.forced }; }
+    finally {
+      hub?.child.stdout?.destroy(); hub?.child.stderr?.destroy(); hub?.child.stdin?.destroy();
+      if (hub) fs.writeFileSync(path.join(ART, 'hub.log'), hub.log().join('\n'), 'utf8');
+    }
+    evidence.ok = evidence.uiChecksPassed === true && !failure;
+    evidence.entryIdentityAfter = entryIdentity();
     fs.writeFileSync(path.join(ART, '20261103-accounts-evidence-m1.json'), JSON.stringify(evidence, null, 2));
-    if (cdp) await cdp.close(); if (hub) await gracefulQuit(hub);
-    hub?.child.stdout?.destroy(); hub?.child.stderr?.destroy(); hub?.child.stdin?.destroy();
     console.log('ARTIFACTS ' + ART);
   }
+  if (failure) throw failure;
 }
 run().catch(error => { console.error(error.stack); process.exitCode = 1; });

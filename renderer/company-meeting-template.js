@@ -21,12 +21,12 @@ const QUICK_QUESTIONS = ['目前确定了哪些结论？', '还有哪些问题�
 
 function meetingTemplate() {
   return `<header class="meeting-topbar">
-    <div class="meeting-session-name"><h3 data-m="session-title">会议伴侣</h3><span data-m="source-label">截图、原话和问答，按时间留下来</span></div>
-    <div class="meeting-levels" data-m="levels"></div>
     <div class="meeting-record-state"><i data-m="record-dot"></i><strong data-m="record-label">尚未开始</strong><span data-m="clock">00:00</span></div>
+    <div class="meeting-levels" data-m="levels"></div>
+    <div class="meeting-session-name"><h3 data-m="session-title">会议伴侣</h3><span data-m="source-label">截图、原话和问答，按时间留下来</span></div>
     <div class="meeting-actions">
       <button class="ca-btn meeting-when-live" data-act="pause" disabled>${icon(ICONS.pause)}<span>暂停</span></button>
-      <button class="ca-btn meeting-stop meeting-when-live" data-act="stop" disabled>${icon(ICONS.stop)}<span>结束</span></button>
+      <button class="ca-btn meeting-stop meeting-when-live" data-act="stop" disabled>${icon(ICONS.stop)}<span>结束会议</span></button>
       <button class="ca-btn meeting-when-review" data-act="open-full" disabled>${icon(ICONS.play)}<span>完整录像</span></button>
       <button class="ca-btn meeting-when-review" data-act="new">${icon(ICONS.plus)}<span>新会议</span></button>
       <details class="meeting-more" data-m="more"><summary class="ca-btn" aria-label="更多会议操作" title="更多会议操作">${icon(ICONS.more)}<span>更多</span></summary><div class="meeting-more-panel">
@@ -44,15 +44,15 @@ function meetingTemplate() {
   <div class="meeting-columns">
     <nav class="meeting-topic-pane" aria-label="会议议题与时间定位"><h3 data-m="topics-label">议题</h3><p class="meeting-topic-hint" data-m="topics-hint">有出处的议题会显示在这里</p><div data-m="topics"></div></nav>
     <main class="meeting-evidence-pane">
-      <section class="meeting-setup-card" data-m="setup"><h3>准备开始一场会议</h3><p>开始后，截图和原话会排进同一条时间流。</p><div class="meeting-setup">
-        <label class="meeting-field"><span>共享窗口</span><select data-m="source" aria-label="共享窗口"></select></label>
-        <div class="meeting-field"><span>采集声音</span><span class="meeting-inline"><label class="meeting-chip"><input type="checkbox" data-m="system" checked>${icon(ICONS.speaker,15)}系统声音</label><label class="meeting-chip"><input type="checkbox" data-m="mic" checked>${icon(ICONS.mic,15)}麦克风</label></span></div>
+      <section class="meeting-setup-card" data-m="setup"><div class="meeting-setup-main"><h3>准备开始一场会议</h3><p>选好共享窗口和声音来源。录像和声音只留在本机，CodeAgent 只读取提炼后的图文。</p><div class="meeting-setup">
         <label class="meeting-field"><span>会议名称</span><input data-m="title" aria-label="会议名称" placeholder="可选，例如：无线算法周例会"></label>
-        <button class="ca-btn primary meeting-start" data-act="start"><i></i><span>开始会议</span></button>
-      </div></section>
+        <div class="meeting-field"><span>采集声音</span><span class="meeting-inline"><label class="meeting-chip"><input type="checkbox" data-m="system" checked>${icon(ICONS.speaker,15)}系统声音</label><label class="meeting-chip"><input type="checkbox" data-m="mic" checked>${icon(ICONS.mic,15)}麦克风</label></span></div>
+      </div><div class="meeting-setup-go"><button class="ca-btn primary meeting-start" data-act="start"><i></i><span>开始会议</span></button><small>开始后可随时暂停</small></div></div>
+      <div class="meeting-setup-sources"><div class="meeting-setup-sources-head"><h3>共享哪个窗口</h3><button class="ca-btn" data-act="sources">刷新</button></div><select data-m="source" aria-label="共享窗口"></select><div class="meeting-source-grid" data-m="source-grid" role="radiogroup" aria-label="选择共享窗口"></div></div></section>
       <section class="meeting-viewer">
         <div class="meeting-stage" data-view="empty"><video data-m="live" muted playsinline aria-label="正在采集的共享画面"></video><video data-m="player" preload="metadata" aria-label="会议录像回放"></video><div data-m="evidence"></div><div class="meeting-stage-empty">选择时间流中的一处，回看对应画面</div></div>
         <div class="meeting-viewer-controls"><div class="meeting-section-heading"><h3 data-m="viewer-label">共享画面</h3><button class="ca-btn" data-act="live" hidden>返回实时</button><button class="ca-btn meeting-viewer-size" data-act-local="expand-viewer" aria-pressed="false">放大</button></div>
+          <p class="meeting-viewer-hint">点时间流里的截图，可在这里回看当时画面</p>
           <div class="meeting-mark-bar"><button class="ca-btn" data-act="snap" disabled>${icon(ICONS.camera,14)}<span>截图</span></button><input data-m="note" placeholder="记下重点，回车保存" aria-label="重点备注"><button class="ca-btn" data-act="mark" disabled>${icon(ICONS.star,14)}<span>记重点</span></button></div>
           <div class="meeting-replay"><div class="meeting-replay-row"><button class="meeting-play" data-act="play" disabled aria-label="回放">${icon(ICONS.play,14)}</button><span class="meeting-play-time"><span data-m="play-time">00:00</span> / <span data-m="duration">00:00</span></span><button class="ca-btn" data-act="extract" disabled>${icon(ICONS.camera,14)}<span>截取此帧</span></button></div><input data-m="seek" type="range" min="0" max="0" value="0" step="0.1" aria-label="会议时间轴"><input data-m="seek-seconds" type="number" min="0" value="0" step="1" hidden aria-label="跳转到会议秒数"><p class="meeting-gaps" data-m="gaps"></p></div>
         </div>
@@ -60,7 +60,7 @@ function meetingTemplate() {
       <div class="meeting-flow-heading"><h3>时间流</h3><span data-m="flow-count">截图、原话与问答</span><button class="ca-link" data-act-local="latest" hidden>回到最新</button></div>
       <div class="meeting-flow" data-m="timeline" aria-label="截图、原话、重点与问答时间流"></div>
     </main>
-    <aside class="meeting-understanding"><div class="meeting-summary-heading"><h3>纪要</h3><span class="meeting-speed" role="radiogroup" aria-label="理解速度">${[['fast','快速'],['normal','中等'],['deep','深入']].map(([v,l])=>`<button type="button" role="radio" data-speed="${v}">${l}</button>`).join('')}</span><button class="ca-btn" data-act="understand" disabled title="更新理解">${icon(ICONS.spark,14)}<span>更新</span></button><button class="ca-btn" data-act="export" title="导出纪要" aria-label="导出纪要">${icon(ICONS.export,14)}<span hidden>导出纪要</span></button></div>
+    <aside class="meeting-understanding"><div class="meeting-review-hero" data-m="review-hero"></div><div class="meeting-summary-heading"><h3>纪要</h3><span class="meeting-speed" role="radiogroup" aria-label="理解速度">${[['fast','快速'],['normal','中等'],['deep','深入']].map(([v,l])=>`<button type="button" role="radio" data-speed="${v}">${l}</button>`).join('')}</span><button class="ca-btn" data-act="understand" disabled title="更新理解">${icon(ICONS.spark,14)}<span>更新</span></button><button class="ca-btn" data-act="export" title="导出纪要" aria-label="导出纪要">${icon(ICONS.export,14)}<span hidden>导出纪要</span></button></div>
       <div class="meeting-understanding-status" role="status" data-m="understanding-status">开始采集后，再逐步整理讨论内容</div>
       <div class="meeting-summary-scroll"><article data-m="summary"></article></div>
       <div class="meeting-chat"><div class="meeting-ask-box"><textarea id="meeting-question" data-m="question" rows="2" placeholder="问这场会议，问答会插回时间流" aria-label="会议问题"></textarea><button class="meeting-send" data-act="ask" disabled title="问 CodeAgent（Ctrl+Enter）" aria-label="问 CodeAgent">${icon(ICONS.send,16)}</button></div></div>

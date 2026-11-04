@@ -21,6 +21,7 @@ function installColdwhiteShell(doc = globalThis.document) {
   if (codeagentQuota) footer.append(codeagentQuota);
   app.append(footer);
   require('./status-footer-layout').installStatusFooterLayout(doc);
+  installHwShell(doc);
   const panelIds = ['team-page', 'cloud-page', 'hub-workspace', 'rules-panel', 'writing-panel', 'account-page', 'codeagent-accounts-page', 'xresearch-panel', 'study-panel', 'progress-panel'];
   const watched = new Set();
   const navigation = ['btn-home','btn-rules','btn-assistant','btn-company-assistant','btn-company-meeting','btn-company-ppt',
@@ -87,4 +88,27 @@ function installColdwhiteShell(doc = globalThis.document) {
   discover();
 }
 
-module.exports = { installColdwhiteShell };
+// 公司版外壳换皮（定稿 CDCCBCC，样式见 styles/hw-shell.css）。只加外观钩子：
+// data-hw-shell 打开换皮；分组标题是不可聚焦的说明节点；data-hw-rail 按导航实际宽度切换宽 / 窄两种排版。
+// 不移动、不替换任何按钮，顺序靠 CSS order。
+const HW_NAV_CAPS = [['work', '工作'], ['tools', '工具'], ['community', '社区']];
+function installHwShell(doc, target = require('../core/distribution').target) {
+  if (target !== 'company') return false;
+  const root = doc.documentElement, rail = doc.getElementById('scene-rail');
+  root.dataset.hwShell = '1';
+  const list = rail?.querySelector('.rail-navigation');
+  if (list && !list.querySelector('.hw-nav-cap')) {
+    for (const [key, text] of HW_NAV_CAPS) {
+      const cap = doc.createElement('div');
+      cap.className = 'hw-nav-cap'; cap.dataset.cap = key; cap.setAttribute('aria-hidden', 'true'); cap.textContent = text;
+      list.append(cap);
+    }
+  }
+  const mode = () => { root.dataset.hwRail = (rail?.getBoundingClientRect().width || 0) >= 150 ? 'wide' : 'narrow'; };
+  mode();
+  const View = doc.defaultView;
+  if (rail && View?.ResizeObserver) new View.ResizeObserver(mode).observe(rail);
+  return true;
+}
+
+module.exports = { installColdwhiteShell, installHwShell };

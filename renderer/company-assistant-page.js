@@ -5,8 +5,7 @@
 // 设置分四页（2026-10-17 起三页，10-18 加「手机」）：简报与提醒 / WeLink 与邮箱 / 手机 / 桌宠。邮箱 Hub 先从 WeLink 账号自动读、自动配好，
 // 读不到才在「WeLink 与邮箱」页请用户填一次——不让助理在对话里问。
 // 写法同无线页：盖在主区域上的一层，点左侧其他按钮自动关闭。左侧按钮只在公司版（gate.js）插入。
-function createCompanyAssistantPage({ document, window, ipcRenderer, openSession, closeOtherPanels = () => {}, showMessage, openMeeting, openPpt,
-}) {
+function createCompanyAssistantPage({ document, window, ipcRenderer, openSession, closeOtherPanels = () => {}, showMessage, openMeeting, openPpt }) {
   const { ASSISTANT_AVATAR_SRC, USER_AVATAR_SRC } = require('./chat-avatar');
   const { connectionState } = require('./company-assistant-connection');
   const { messageCoverage: coverageOfMessages, queryRows, refreshNotice } = require('./company-assistant-query-status');
@@ -31,6 +30,16 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     } catch { return esc(text).replace(/\n/g, '<br>'); }
   };
 
+  const svg = d => `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+  const ICON = {
+    open: svg('<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>'),
+    gear: svg('<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M21.5 12h-3M5.5 12h-3M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1M18.7 18.7l-2.1-2.1M7.4 7.4 5.3 5.3"/>'),
+    send: svg('<path d="M4 12 20 4l-6 16-3-7z"/>'),
+    meet: svg('<rect x="3" y="5" width="13" height="14" rx="3"/><path d="m16 10 5-3v10l-5-3"/>'),
+    ppt: svg('<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M12 16v4M8 20h8"/>'),
+    phone: svg('<rect x="7" y="2.5" width="10" height="19" rx="2.5"/><path d="M11 18h2"/>'),
+  };
+  const WEEK = '日一二三四五六';
   function nav() {
     let btn = document.getElementById('btn-company-assistant');
     if (btn) return btn;
@@ -50,39 +59,40 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
   function build() {
     if (page) return;
     page = document.createElement('section'); page.className = 'company-assistant-page'; page.id = 'company-assistant-page'; page.hidden = true; page.setAttribute('aria-label', '助理');
-    page.innerHTML = `<aside class="ca-sidebar" aria-label="助理导航">
-        <div class="ca-identity" title="助理 · 只读 WeLink"><img src="${ASSISTANT_AVATAR_SRC}" alt="助理"><div class="ca-side-copy"><h1>助理 <small>v3.1</small></h1><span data-slot="model">工作助理 · 只读 WeLink</span></div></div>
-        <div class="ca-side-heading">连接</div>
-        <div class="ca-status" aria-label="状态"></div>
-        <div class="ca-side-heading">能力</div>
-        <nav class="ca-capabilities" aria-label="助理能力"></nav>
-        <div class="ca-side-bottom">
-          <button type="button" class="ca-side-button" data-ca="settings" title="助理设置"><span class="ca-side-icon">⚙</span><span class="ca-side-copy">设置</span></button>
-          <button type="button" class="ca-side-button" data-ca="open-session" title="打开助理会话"><span class="ca-side-icon">↗</span><span class="ca-side-copy">打开会话</span></button>
-        </div>
-      </aside><main class="ca-main">
+    // 2026-11-04 定稿 CDCCBCC（D 稿纸版式）：页头放连接胶囊、打开会话和设置；正文是一张纸，简报按真实分组逐段排；右侧窄栏放常用入口和批注。
+    page.innerHTML = `<header class="ca-head">
+        <div class="ca-head-title"><h1>助理</h1><span>每日简报与对话 · 只读 WeLink，数据只留本机</span></div>
+        <div class="ca-head-right"><span class="ca-conn" data-slot="conn" aria-label="连接状态"></span><span data-slot="conn-action"></span>
+          <button type="button" class="ca-btn" data-ca="open-session" title="打开助理会话">${ICON.open}<span>打开会话</span></button>
+          <button type="button" class="ca-icon-btn" data-ca="settings" title="助理设置：简报与提醒 / WeLink 与邮箱 / 手机 / PPT 素材库 / 桌宠" aria-label="助理设置">${ICON.gear}</button></div>
+      </header><main class="ca-main">
       <div class="ca-panel" data-slot="panel" hidden></div>
-      <div class="ca-scroll"><div class="ca-convo">
+      <div class="ca-scroll"><div class="ca-sheet"><div class="ca-convo">
         <div data-slot="action-error" role="alert" hidden></div>
         <div data-slot="onboarding"></div>
         <div data-slot="setup"></div>
-        <div data-slot="coverage"></div>
+        <h1 class="ca-doc-title" data-slot="title"></h1>
         <div data-slot="brief"></div>
+        <div data-slot="props"></div>
+        <div data-slot="coverage"></div>
+        <div class="ca-rule" aria-hidden="true"></div>
         <div data-slot="notices"></div>
+        <div data-slot="sections"></div>
+        <h2 class="ca-h">问助理</h2>
         <div data-slot="chat"></div>
-      </div></div>
-      <footer class="ca-foot">
+      </div><aside class="ca-margin" data-slot="margin" aria-label="常用入口与批注"></aside></div></div>
+      <footer class="ca-foot"><div class="ca-foot-col">
         <div class="ca-chips" data-slot="chips"></div>
         <form class="ca-input" data-slot="form">
           <textarea rows="2" placeholder="问助理任何事，例如「把某个群今天的讨论整理成三点」（Enter 发送，Shift+Enter 换行）" aria-label="问助理"></textarea>
-          <button type="submit" class="ca-btn primary">发送</button>
+          <button type="submit" class="ca-send" aria-label="发送" title="发送">${ICON.send}</button>
         </form>
         <div class="ca-foot-note"><span data-slot="job"></span><span>Enter 发送 · Shift+Enter 换行</span></div>
-      </footer></main>`;
+      </div></footer></main>`;
     document.body.append(page);
     // 可选功能（默认关，renderer/optional-feature-gate.js）：关着时整页提示开启，开着时左栏底部有「已开启 · 关闭」。
     gate = require('./optional-feature-gate').createFeatureGate({ document, window, id: 'assistant', page, showMessage,
-      badgeSlot: badge => page.querySelector('.ca-side-bottom').prepend(badge), onEnabled: () => { void startData(); } });
+      badgeSlot: badge => page.querySelector('.ca-head-right').prepend(badge), onEnabled: () => { void startData(); } });
     // Esc 关掉盖在上面的设置。
     page.addEventListener('keydown', event => {
       const panel = page.querySelector('[data-slot="panel"]');
@@ -121,43 +131,52 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     const coverages = [['会议', d.meetingCoverage], ['日程', d.calendarCoverage], ['邮件', d.mailCoverage]];
     const mailText = coverages.map(([name, c]) => name + ({ complete: '已查', partial: '未取全', failed: '失败' }[c?.status] || '待查')).join(' · ');
     const loginText = online ? (auth.lastRenewAt ? '自动续期 · 上次 ' + clock(auth.lastRenewAt) : '在线 · 自动维护登录') : connection.title;
-    const row = (icon, title, detail, color, action, extra = '') => `<div class="ca-connection" title="${esc(title + ' · ' + detail)}"><button type="button" class="ca-connection-main" data-ca="${action}"><span class="ca-side-icon">${icon}<i class="ca-dot ${color}"></i></span><span class="ca-side-copy"><b>${title}</b><small>${esc(detail)}</small></span></button>${extra}</div>`;
-    return row('W', 'WeLink', loginText, renewing ? 'run' : online ? 'ok' : 'warn', d.cliFound && auth.state === 'needs-scan' ? 'login' : 'settings-tab:welink',
-      connection.action && !online ? `<button class="ca-link ca-side-copy" data-ca="${connection.action}">${esc(connection.label)}</button>` : '')
-      + row('✉', '会议、日程与邮件', mailText, coverages.every(([, c]) => c?.status === 'complete') ? 'ok' : coverages.some(([, c]) => ['failed', 'partial'].includes(c?.status)) ? 'warn' : '', 'settings-tab:welink')
-      + row('▣', '手机群', !p.groupId ? '填入群 ID 即可接通' : phone.lastError ? phone.lastError : !p.enabled ? '已暂停' : (p.groupName || '群 ' + p.groupId.slice(-6)), p.enabled && p.groupId && !phone.lastError ? 'ok' : '', 'settings-tab:phone')
-      + toolsRow(row)
-      + row('↻', '数据更新时间', d.refreshing ? '正在刷新…' : d.refreshedAt ? when(d.refreshedAt) : '还没取过数据', d.refreshedAt ? 'ok' : '', 'refresh', '<button class="ca-link ca-side-copy" data-ca="refresh" title="刷新数据">刷新</button>')
-      + `<p class="ca-next ca-side-copy">下一份简报 · ${d.nextBriefAt ? when(d.nextBriefAt) : '—'}</p>`;
+    // 页头连接胶囊：WeLink / 邮件日历 / 手机群三个点，会话工具没接上时多一个点；点哪段就去对应设置（离线时 WeLink 段直接写原因）。
+    const seg = (label, title, color, action) => `<button type="button" class="ca-conn-seg" data-ca="${action}" title="${esc(title)}"><i class="ca-conn-dot ${color}"></i><span>${esc(label)}</span></button>`;
+    const phoneText = !p.groupId ? '填入群 ID 即可接通' : phone.lastError ? phone.lastError : !p.enabled ? '已暂停' : (p.groupName || '群 ' + p.groupId.slice(-6));
+    return seg(online ? 'WeLink' : loginText, 'WeLink · ' + loginText, renewing ? 'run' : online ? 'ok' : 'warn', d.cliFound && auth.state === 'needs-scan' ? 'login' : 'settings-tab:welink')
+      + seg('邮件日历', '会议、日程与邮件 · ' + mailText, coverages.every(([, c]) => c?.status === 'complete') ? 'ok' : coverages.some(([, c]) => ['failed', 'partial'].includes(c?.status)) ? 'warn' : '', 'settings-tab:welink')
+      + seg('手机群', '手机群 · ' + phoneText, p.enabled && p.groupId && !phone.lastError ? 'ok' : '', 'settings-tab:phone')
+      + toolsSeg(seg);
   }
-  // 会话工具（v3.1.1）：助理会话里查、管其他会话的 hub_sessions 接没接上。没接上时写原因猜测，附「重开助理会话」。
+  function connectionAction() {
+    const connection = connectionState(data);
+    return connection.action && connection.kind !== 'online' ? `<button type="button" class="ca-btn primary" data-ca="${connection.action}">${esc(connection.label)}</button>` : '';
+  }
+  // 会话工具（v3.1.1）：助理会话里查、管其他会话的 hub_sessions 接没接上。没接上时胶囊多一个橙点，右侧批注写原因猜测并附「重开助理会话」。
   let toolsTimer = null;
-  function toolsRow(row) {
+  function toolsSeg(seg) {
     const t = data.tools;
     clearTimeout(toolsTimer);
     if (!t) return '';
     // 「正在接通」到期（会话起来满 90 秒）时重新取一次状态，到点翻成「未接上」。
     if (t.state === 'starting' && t.checkAt) toolsTimer = setTimeout(() => { void load().catch(() => {}); }, Math.max(1000, t.checkAt - (data.now || Date.now()) + 500));
-    const color = { linked: 'ok', starting: 'run', missing: 'warn' }[t.state] || '';
-    if (t.state !== 'missing') return row('⇄', '会话工具', t.label, color, 'open-session');
-    // 原因单独一行（沿用「下一份简报」那行的小字样式），侧栏窄也能读全
-    return row('⇄', '会话工具', t.label, color, 'open-session', '<button class="ca-link ca-side-copy" data-ca="reopen-session">重开助理会话</button>')
-      + (t.reason ? `<p class="ca-next ca-side-copy ca-tools-reason">原因：${esc(t.reason)}</p>` : '');
+    if (t.state === 'linked') return '';
+    const color = { starting: 'run', missing: 'warn' }[t.state] || '';
+    return seg('会话工具', '会话工具 · ' + t.label, color, 'open-session');
+  }
+  function toolsNote() {
+    const t = data.tools;
+    if (t?.state !== 'missing') return '';
+    return `<div class="ca-note-card amber"><b>会话工具没接上</b>${esc(t.label)}${t.reason ? `<p>原因：${esc(t.reason)}</p>` : ''}<button type="button" class="ca-link" data-ca="reopen-session">重开助理会话</button></div>`;
   }
   function messageCoverage() {
     return coverageOfMessages(data.scope);
   }
   function capabilities() {
     const p = data.ppt || {};
-    return [['▤', '今日简报', data.brief ? '已更新' : '待生成', 'brief'],
-      ['◉', '会议伴侣', '采集 · 转写 · 持续理解', 'meeting'],
-      ['▧', 'PPT 素材库', p.indexing?.state === 'indexing' ? `正在更新 · ${p.indexing.scanned || 0} 份` : p.available ? `${p.files ?? 0} 份 / ${p.pages ?? 0} 页` : '选择素材目录', 'ppt'],
-      ['▣', '手机对话', data.phone?.settings?.enabled ? '已开启' : '待接通', 'phone']]
-      .map(([icon, name, detail, tab]) => `<button class="ca-side-button" data-ca="${tab === 'meeting' ? 'meeting' : tab === 'ppt' ? 'ppt-assist' : 'settings-tab:' + tab}" title="${name} · ${tab === 'ppt' ? '告诉助理你想讲清什么' : detail}"><span class="ca-side-icon">${icon}</span><span class="ca-side-copy">${name}<small>${detail}</small></span></button>`).join('');
+    const entry = (icon, name, detail, action, title) => `<button type="button" class="ca-entry" data-ca="${action}" title="${esc(title)}"><span class="ca-entry-icon">${icon}</span><span class="ca-entry-copy"><b>${name}</b><small>${esc(detail)}</small></span></button>`;
+    return `<div class="ca-margin-h">常用</div>`
+      + entry(ICON.meet, '会议伴侣', '采集 · 转写 · 持续理解', 'meeting', '打开会议伴侣')
+      + entry(ICON.ppt, 'PPT 素材库', p.indexing?.state === 'indexing' ? `正在更新 · ${p.indexing.scanned || 0} 份` : p.available ? `${p.files ?? 0} 份 / ${p.pages ?? 0} 页` : '选择素材目录', 'ppt-assist', 'PPT 素材库 · 告诉助理你想讲清什么')
+      + entry(ICON.phone, '手机对话', data.phone?.settings?.enabled ? '已开启' : '待接通', 'settings-tab:phone', '手机对话设置');
   }
-  function assistantMessage(html, extra = '') {
-    return `<div class="ca-message-row assistant ${extra}"><img class="ca-avatar" src="${ASSISTANT_AVATAR_SRC}" alt="助理"><div class="ca-message-content">${html}</div></div>`;
+  function margin() {
+    const b = data.brief;
+    const note = b?.note && b.by !== 'none' ? `<div class="ca-note-card"><b>助理批注</b>${esc(b.note)}</div>` : '';
+    return `<div class="ca-margin-stick">${capabilities()}${toolsNote()}${note}</div>`;
   }
+
 
   // welink-cli 没找到时（2026-10-19）：后台在全盘找就显示进度；找完还没有就给「再找一次」「手动选择…」。
   const CLI_STAGE = { path: '看系统路径', npm: '问 npm 全局目录', disk: '在各个硬盘里找' };
@@ -215,40 +234,41 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
 
   function briefCard() {
     const b = data.brief;
-    if (!b) return `<article class="ca-brief empty"><div class="ca-card-head"><b>助理 · 今日简报</b></div><p class="ca-note">今天的简报还没生成。<button type="button" class="ca-btn small primary" data-ca="brief-now">现在生成</button></p></article>`;
-    const counts = b.sections.map(s => `<span class="ca-chip${s.key === 'awaiting' ? ' warn' : ''}">${esc(s.title)} ${s.items.length}</span>`).join('');
+    if (!b) return `<p class="ca-lede">今天的简报还没生成。</p><dl class="ca-props"><dt>今日简报</dt><dd><button type="button" class="ca-btn small primary" data-ca="brief-now">现在生成</button></dd></dl>`;
     const firstItems = b.sections.flatMap(s => s.items.slice(0, 1).map(i => i.text)).slice(0, 2);
     const complete = [data.meetingCoverage, data.calendarCoverage, data.mailCoverage, messageCoverage()].every(c => c?.status === 'complete');
-    const headline = data.updating?.length ? '数据正在更新，暂显示上次完成的简报。' : b.by === 'none' ? esc(b.note || '') : firstItems.length ? '📌 ' + esc(firstItems.join('；')) : data.errors?.length || !complete ? '本次数据尚未取全，已取到的内容里没有待处理事项。' : '已查询的范围内没有需要你处理的会议、消息和邮件。';
-    const more = b.total > 10 ? `<p class="ca-note">另有 ${b.total - 10} 条在下面「其余」里。</p>` : '';
-    const row = i => `<div class="ca-item"><div class="ca-item-text">${esc(i.text)}${i.guess ? '<span class="ca-guess">推测</span>' : ''}${i.due ? `<span class="ca-due">截止 ${esc(i.due)}</span>` : ''}</div>
-        ${i.preparation ? `<p class="ca-note ca-preparation">会前准备建议：${esc(i.preparation)}</p>` : ''}
-        <div class="ca-src"><button type="button" class="ca-link ca-source-link" data-ca="source:${esc(i.source)}" data-source-day="${esc(b.day || data.day)}" title="查看原文和前后消息">${esc(i.sourceLabel || '查看出处')}</button><button type="button" class="ca-link" data-ca="done:${esc(i.source)}" title="点了以后不再出现在简报里">处理了</button></div></div>`;
-    const top = b.sections.map(s => { const items = s.items.filter(i => i.top); return items.length ? `<div class="ca-sec">${esc(s.title)}（${s.items.length}）</div>${items.map(row).join('')}` : ''; }).join('');
-    const rest = b.sections.flatMap(s => s.items.filter(i => !i.top).map(i => ({ ...i, title: s.title })));
-    const restHtml = rest.length ? `<details class="ca-rest"><summary>其余 ${rest.length} 条</summary>${rest.map(i => `<div class="ca-sec small">${esc(i.title)}</div>${row(i)}`).join('')}</details>` : '';
+    const headline = data.updating?.length ? '数据正在更新，暂显示上次完成的简报。' : b.by === 'none' ? esc(b.note || '') : firstItems.length ? esc(firstItems.join('；')) : data.errors?.length || !complete ? '本次数据尚未取全，已取到的内容里没有待处理事项。' : '已查询的范围内没有需要你处理的会议、消息和邮件。';
     const tag = b.by === 'ai' ? '助理整理' : b.by === 'list' ? '按规则排的清单' : '';
-    return `<article class="ca-brief${briefOpen ? ' open' : ''}">
-        <button type="button" class="ca-brief-sum" data-ca="toggle-brief" aria-expanded="${briefOpen}">
-          <div class="ca-card-head"><b>助理 · 今日简报</b><span class="ca-time">${clock(b.generatedAt)}</span>${tag ? `<span class="ca-chip">${tag}</span>` : ''}${b.organizing ? '<span class="ca-chip run">AI 正在挑重点…</span>' : ''}${counts}</div>
-          <div class="ca-headline">${headline}</div>
-          ${b.total ? `<span class="ca-more">${briefOpen ? '收起 ▴' : '展开全文 ▾'}</span>` : ''}
-        </button>
-        <div class="ca-brief-full"${briefOpen ? '' : ' hidden'}>${b.note && b.by !== 'none' ? `<p class="ca-note">${esc(b.note)}</p>` : ''}${top}${more}${restHtml}
-          <div class="ca-row"><button type="button" class="ca-btn small" data-ca="brief-now">重新生成</button></div></div>
-      </article>`;
+    const counts = b.sections.map(s => `${esc(s.title)} ${s.items.length}`).join(' · ');
+    return `<p class="ca-lede">${headline}</p>
+      <dl class="ca-props"><dt>今日简报</dt><dd>${clock(b.generatedAt)} 生成${tag ? ' · ' + tag : ''}${b.total ? ` · 共 ${b.total} 条` : ''}${b.organizing ? ' · <span class="ca-tag blue">AI 正在挑重点…</span>' : ''}<button type="button" class="ca-link" data-ca="brief-now">重新生成</button>${counts ? `<small class="ca-counts">${counts}</small>` : ''}</dd></dl>`;
   }
-
+  // 简报正文：按数据给的分组逐段排（不硬造固定三段）；每条带出处、推测、截止和会前准备建议。
+  function briefSections() {
+    const b = data.brief;
+    if (!b || !b.total) return '';
+    const row = i => `<div class="ca-item"><p class="ca-item-text">${esc(i.text)}${i.guess ? '<span class="ca-tag guess">推测</span>' : ''}</p>
+        ${i.preparation ? `<p class="ca-preparation">会前准备建议：${esc(i.preparation)}</p>` : ''}
+        <div class="ca-src"><button type="button" class="ca-link ca-source-link" data-ca="source:${esc(i.source)}" data-source-day="${esc(b.day || data.day)}" title="查看原文和前后消息">${esc(i.sourceLabel || '查看出处')}</button><button type="button" class="ca-link quiet" data-ca="done:${esc(i.source)}" title="点了以后不再出现在简报里">处理了</button>${i.due ? `<span class="ca-due">截止 ${esc(i.due)}</span>` : ''}</div></div>`;
+    const top = b.sections.map(s => { const items = s.items.filter(i => i.top); return items.length ? `<section class="ca-sec"><h2 class="ca-h">${esc(s.title)}<small>${s.items.length} 条</small></h2>${items.map(row).join('')}</section>` : ''; }).join('');
+    const rest = b.sections.flatMap(s => s.items.filter(i => !i.top).map(i => ({ ...i, title: s.title })));
+    const restHtml = rest.length ? `<details class="ca-rest"><summary>其余 ${rest.length} 条</summary>${rest.map(i => `<div class="ca-sec-small">${esc(i.title)}</div>${row(i)}`).join('')}</details>` : '';
+    return top + restHtml;
+  }
+  function docProps() {
+    return `<dl class="ca-props"><dt>下一份简报</dt><dd>${data.nextBriefAt ? when(data.nextBriefAt) : '—'}</dd>
+      <dt>数据更新</dt><dd>${data.refreshing ? '正在刷新…' : data.refreshedAt ? when(data.refreshedAt) : '还没取过数据'}<button type="button" class="ca-link" data-ca="refresh" title="刷新数据">刷新</button></dd></dl>`;
+  }
   function noticesStrip() {
     const list = data.notices || [];
     if (!list.length) return '';
     const NAMES = { reminder: '重要提醒', brief: '简报', 'meeting-prep': '会前准备', 'awaiting-reply': '等你回复', 'commitment-due': '答应的事', overbooked: '会议太满', 'day-summary': '下班小结', keyword: '关注词' };
-    return `<details class="ca-notices"><summary>今天的提醒 ${list.length} 条 · 最新：${esc(list[0].title)}</summary>
-      ${list.map(n => `<div class="ca-notice" data-notice-id="${esc(n.id)}"><span class="ca-chip">${NAMES[n.kind] || n.kind}</span><b>${esc(n.title)}</b><span class="ca-time">${when(n.at)}</span><div class="ca-notice-text">${esc(n.text).replace(/\n/g, '<br>')}</div>${n.detail?.source ? `<button type="button" class="ca-link" data-ca="source:${esc(n.detail.source)}">查看出处</button>` : ''}</div>`).join('')}</details>`;
+    const COLOR = { reminder: 'red', 'meeting-prep': 'blue', 'awaiting-reply': 'amber', 'commitment-due': '', overbooked: 'amber', keyword: 'blue' };
+    return `<section class="ca-notices"><h2 class="ca-h">今天的提醒<small>${list.length} 条</small></h2>
+      ${list.map(n => `<div class="ca-notice" data-notice-id="${esc(n.id)}"><span class="ca-tag ${COLOR[n.kind] || ''}">${NAMES[n.kind] || n.kind}</span><b>${esc(n.title)}</b><time>${when(n.at)}</time>${n.text && n.text !== n.title ? `<div class="ca-notice-text">${esc(n.text).replace(/\n/g, '<br>')}</div>` : ''}${n.detail?.source ? `<button type="button" class="ca-link" data-ca="source:${esc(n.detail.source)}">查看出处</button>` : ''}</div>`).join('')}</section>`;
   }
-
   function coverageNote() {
-    if (data.updating?.length) return `<details class="ca-coverage"><summary>数据正在分批更新</summary><div>${querySnapshotRows(data)}</div></details>`;
+    if (data.updating?.length) return `<dl class="ca-props"><dt>数据覆盖</dt><dd><details class="ca-coverage"><summary>数据正在分批更新</summary><div>${querySnapshotRows(data)}</div></details></dd></dl>`;
     const s = data.scope, errors = data.errors || [], names = data.nameResolution;
     const queryRows = [['会议', data.meetingCoverage, data.counts?.meetings], ['日程', data.calendarCoverage, data.counts?.calendar], ['未读邮件', data.mailCoverage, data.counts?.mails]];
     if (!s && !errors.length && queryRows.every(([, c]) => !c)) return '';
@@ -257,7 +277,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     const issues = [messageScope?.status === 'partial' ? '消息范围未取全' : '', errors.length ? `${errors.length} 项查询异常` : '', names?.unresolved ? `${names.unresolved} 个发言人姓名未确认` : ''].filter(Boolean);
     const rows = (s?.conversations || []).map(c => `<li><b>${esc(c.name)}</b> · ${c.status === 'cached' ? '后台缓存' : c.status === 'complete' ? '实时读取完成' : '部分结果'}${c.capturedAt ? ' · 采集于 ' + when(c.capturedAt) : ''} · ${esc(c.reasonLabel || '')}${c.oldestAt ? ' · 最早 ' + when(c.oldestAt) : ''}${c.newestAt ? '，最新 ' + when(c.newestAt) : ''}${c.unknownTime ? ` · ${c.unknownTime} 条缺少时间` : ''}</li>`).join('');
     const queries = [...queryRows, ['消息', messageScope, data.counts?.messages]].map(([name, c, n]) => `<li><b>${name}</b> · ${({ complete: '查询完成', partial: '部分结果', failed: '查询失败' })[c?.status] || '尚未确认'}${c?.status === 'complete' && Number.isInteger(n) ? ` · ${n} 条` : ''}${c?.reasonLabel ? ' · ' + esc(c.reasonLabel) : ''}</li>`).join('');
-    return `<details class="ca-coverage"><summary>${esc(counts)}${issues.length ? ' · ' + esc(issues.join('，')) : ''}</summary><ul>${queries}</ul>${s?.stale ? `<p class="ca-note bad">最近会话查询失败。${s.capturedAt ? '以下消息取自 ' + esc(new Date(s.capturedAt).toLocaleString('zh-CN', { hour12: false })) + '，可能已过期。' : '尚无可复用的当前账号聊天记录。'}</p>` : ''}${s ? `<p class="ca-note">本轮列出 ${s.listed || 0} 个最近会话，结合历史目录共检查 ${s.fetched || 0} 个${s.limited ? '（已按设置限制数量）' : ''}；专用手机群不参与简报。查询失败时保留已取到的内容，未覆盖范围会单独提示。</p>` : ''}${errors.map(e => `<p class="ca-note bad">${esc(e.label)}：${esc(e.text)}</p>`).join('')}${rows ? `<ul>${rows}</ul>` : ''}</details>`;
+    return `<dl class="ca-props"><dt>数据覆盖</dt><dd><details class="ca-coverage"><summary>${esc(counts)}${issues.length ? ' · ' + esc(issues.join('，')) : ''}</summary><ul>${queries}</ul>${s?.stale ? `<p class="ca-note bad">最近会话查询失败。${s.capturedAt ? '以下消息取自 ' + esc(new Date(s.capturedAt).toLocaleString('zh-CN', { hour12: false })) + '，可能已过期。' : '尚无可复用的当前账号聊天记录。'}</p>` : ''}${s ? `<p class="ca-note">本轮列出 ${s.listed || 0} 个最近会话，结合历史目录共检查 ${s.fetched || 0} 个${s.limited ? '（已按设置限制数量）' : ''}；专用手机群不参与简报。查询失败时保留已取到的内容，未覆盖范围会单独提示。</p>` : ''}${errors.map(e => `<p class="ca-note bad">${esc(e.label)}：${esc(e.text)}</p>`).join('')}${rows ? `<ul>${rows}</ul>` : ''}</details></dd></dl>`;
   }
 
   async function openSource(source, day) {
@@ -288,20 +308,21 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
   }
 
   function chatList() {
+    if (!(data.chat || []).length) return '<p class="ca-empty-chat">还没有提问。下面输入框可以直接问，或点一个常用问题。</p>';
     return (data.chat || []).map(c => {
       const pptLinks = (c.pptResults || []).map(p => `<div class="ca-ppt-reference"><span>${esc(p.name)} · 第 ${esc(p.page)} 页</span><button type="button" class="ca-link" data-ca="ppt-open:${esc(p.id)}">打开到第 ${esc(p.page)} 页</button></div>`).join('');
       const answer = c.state === 'done' ? `<div class="ca-md">${markdown(c.a)}</div>${pptLinks}`
         : c.state === 'error' ? `<p class="ca-note bad">${esc(c.error || '没答上')}<button type="button" class="ca-link" data-ca="retry:${esc(c.id)}">重问</button></p>`
-          : `<p class="ca-note run">${c.state === 'queued' ? '排队中…' : '助理正在查…'}</p>`;
-      return `<div class="ca-message-row user"><img class="ca-avatar" src="${USER_AVATAR_SRC}" alt="我"><div class="ca-message-content"><div class="ca-card-head"><b>我</b>${c.via === 'phone' ? '<span class="ca-chip">手机</span>' : ''}<span class="ca-time">${when(c.askedAt)}</span></div><div class="ca-msg user"><div class="ca-body">${esc(c.q).replace(/\n/g, '<br>')}</div></div></div></div>
-        ${assistantMessage(`<div class="ca-card-head"><b>助理</b>${c.answeredAt ? `<span class="ca-time">${when(c.answeredAt)}</span>` : ''}</div><div class="ca-msg">${answer}</div>`)}`;
+          : `<p class="ca-note run"><span class="ca-dots"><i></i><i></i><i></i></span>${c.state === 'queued' ? '排队中…' : '助理正在查…'}</p>`;
+      return `<div class="ca-cmt user"><img class="ca-avatar" src="${USER_AVATAR_SRC}" alt="我"><div class="ca-cmt-body"><div class="ca-cmt-name">我${c.via === 'phone' ? '<span class="ca-tag">手机</span>' : ''}<time>${when(c.askedAt)}</time></div><div class="ca-body">${esc(c.q).replace(/\n/g, '<br>')}</div></div></div>
+        <div class="ca-cmt assistant${c.state === 'done' || c.state === 'error' ? '' : ' is-thinking'}"><img class="ca-avatar" src="${ASSISTANT_AVATAR_SRC}" alt="助理"><div class="ca-cmt-body"><div class="ca-cmt-name">助理${c.answeredAt ? `<time>${when(c.answeredAt)}</time>` : ''}</div>${answer}</div></div>`;
     }).join('');
   }
 
   function render() {
     if (!page || !data) return;
-    page.querySelector('.ca-status').innerHTML = status();
-    page.querySelector('.ca-capabilities').innerHTML = capabilities();
+    page.querySelector('[data-slot="conn"]').innerHTML = status();
+    page.querySelector('[data-slot="conn-action"]').innerHTML = connectionAction();
     const panel = page.querySelector('[data-slot="panel"]');
     if (!panel.dataset.kind || panel.dataset.kind === 'login') { const html = loginPanel(); panel.innerHTML = html; panel.hidden = !html; panel.dataset.kind = html ? 'login' : ''; }
     const querySlot = panel.querySelector('[data-slot="query-rows"]');
@@ -316,11 +337,16 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       el.innerHTML = html; el.dataset.html = html;
       el.querySelectorAll('details').forEach((d, i) => { if (opened[i]) d.open = true; });
     };
+    const today = new Date();
+    setHtml('title', `<span class="ca-num">${today.getMonth() + 1} 月 ${today.getDate()} 日</span>，周${WEEK[today.getDay()]}`);
     setHtml('onboarding', onboarding());
     setHtml('setup', setupCard());
+    setHtml('brief', briefCard());
+    setHtml('props', docProps());
     setHtml('coverage', coverageNote());
-    setHtml('brief', assistantMessage(briefCard(), 'ca-brief-row'));
     setHtml('notices', noticesStrip());
+    setHtml('sections', briefSections());
+    setHtml('margin', margin());
     const scroll = page.querySelector('.ca-scroll');
     const atBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 40;
     const chat = page.querySelector('[data-slot="chat"]'), html = chatList();
@@ -439,8 +465,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     } catch (error) { if (msg) msg.textContent = '没成功：' + error.message; } finally { if (button) button.disabled = false; }
   }
 
-  const TABS = [['brief', '简报与提醒'], ['welink', 'WeLink 与邮箱'], ['phone', '手机'],
-    ['ppt', 'PPT 素材库'], ['pet', '桌宠']];
+  const TABS = [['brief', '简报与提醒'], ['welink', 'WeLink 与邮箱'], ['phone', '手机'], ['ppt', 'PPT 素材库'], ['pet', '桌宠']];
   let petTab = null, phoneTimer = null, phoneData = null;
 
   // 「手机」页（2026-10-18）：在手机 WeLink 的专用群里和助理对话。群由用户自己在手机上建，这里只选群、开关和看往来。
@@ -615,7 +640,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     if (busy) setTimeout(() => { if (body.isConnected && !panel.hidden && panel.dataset.tab === 'ppt') void mountPptTab(panel); }, 1500);
   }
 
-  // 保留旧会议室设置入口，跳转到独立页面，使用同一份配置与控制状态。
+  // 会议室已是左栏独立页面（2026-11-04 起助理页不再放会议室状态、消息和设置页签）。
   function openSettings(tab) {
     const panel = page.querySelector('[data-slot="panel"]');
     const current = TABS.some(([k]) => k === tab) ? tab : (panel.dataset.kind === 'settings' && panel.dataset.tab) || 'brief';

@@ -1,0 +1,168 @@
+/* 公司版外壳换皮（定稿 CDCCBCC · 外壳 C「鸿图」，2026-11-04 d1）
+   只改外观：按钮节点、id、事件、键盘操作与显示参数都不动。颜色、圆角、阴影只引用 hw-tokens.css 的 --hw- 变量。
+   开关：coldwhite-shell.js 在公司版给 <html> 加 data-hw-shell；导航宽窄由它按实际宽度写 data-hw-rail。 */
+:root[data-hw-shell] {
+  --shell-ico-chat: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Cpath d=%22M4 5h16v11H9l-5 4z%22/%3E%3C/svg%3E");
+  --shell-ico-acct: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Ccircle cx=%228%22 cy=%2212%22 r=%224.2%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22/%3E%3Cpath d=%22M12 12h9M17.5 12v3.5M20.5 12v2.5%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22/%3E%3C/svg%3E");
+  --shell-ico-assist: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Cpath d=%22M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4z%22/%3E%3C/svg%3E");
+  --shell-ico-meet: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Crect x=%223%22 y=%226%22 width=%2212%22 height=%2212%22 rx=%223%22/%3E%3Cpath d=%22M16 10l5-3v10l-5-3z%22/%3E%3C/svg%3E");
+  --shell-ico-flag: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Cpath d=%22M5 21V4h12l-2.5 4.5L17 13H7v8z%22/%3E%3C/svg%3E");
+  --shell-ico-ppt: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Crect x=%223%22 y=%224%22 width=%2218%22 height=%2213%22 rx=%222.5%22/%3E%3Cpath d=%22M12 17v4M8 21h8%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22/%3E%3C/svg%3E");
+  --shell-ico-room: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Cpath d=%22M4 21V5a2 2 0 012-2h8a2 2 0 012 2v16M2 21h20M16 9h3a1 1 0 011 1v11%22 stroke=%22%23000%22 stroke-width=%222%22 fill=%22none%22 stroke-linecap=%22round%22/%3E%3Ccircle cx=%2212.5%22 cy=%2212%22 r=%221.3%22/%3E%3C/svg%3E");
+  --shell-ico-forum: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Cpath d=%22M3 4h12v9H7l-4 3zM9 15v1h8l4 3V8h-4%22/%3E%3C/svg%3E");
+  --shell-ico-rule: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Cpath d=%22M6 3h9l4 4v14H6z%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linejoin=%22round%22/%3E%3Cpath d=%22M9 11h7M9 15h5%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22/%3E%3C/svg%3E");
+  --shell-ico-box: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Cpath d=%22M12 3l8 4.5v9L12 21l-8-4.5v-9z%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linejoin=%22round%22/%3E%3Cpath d=%22M4 7.5l8 4.5 8-4.5M12 12v9%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22/%3E%3C/svg%3E");
+  --shell-ico-clock: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Ccircle cx=%2212%22 cy=%2212%22 r=%228.5%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22/%3E%3Cpath d=%22M12 7.5V12l3 2%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22/%3E%3C/svg%3E");
+  --shell-ico-palette: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Cpath d=%22M12 3a9 9 0 100 18c1.2 0 1.8-.8 1.8-1.7 0-1.3-1-1.6-1-2.6 0-.9.7-1.6 1.7-1.6H17a4 4 0 004-4C21 6.6 17 3 12 3z%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22/%3E%3Ccircle cx=%227.5%22 cy=%2211%22 r=%221.4%22/%3E%3Ccircle cx=%2210.5%22 cy=%227.2%22 r=%221.4%22/%3E%3Ccircle cx=%2215%22 cy=%227.6%22 r=%221.4%22/%3E%3C/svg%3E");
+  --shell-ico-set: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Ccircle cx=%2212%22 cy=%2212%22 r=%223.2%22 stroke=%22%23000%22 stroke-width=%222%22 fill=%22none%22/%3E%3Cpath d=%22M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22/%3E%3C/svg%3E");
+}
+
+/* ---------- 宽度：电脑预设默认用定稿导航岛宽度；用户在「显示参数」里调过就用用户的值 ---------- */
+:root[data-hw-shell]:not([data-display-mode="phone"]):not(.hub-rail-preview):not(.hub-rail-hidden):not(.hub-rail-unpinned) {
+  --hub-rail-slot: var(--display-rail-width, 248px); --hub-rail-open: var(--display-rail-width, 248px);
+}
+@media (max-width: 1360px) {
+  :root[data-hw-shell]:not([data-display-mode="phone"]):not(.hub-rail-preview):not(.hub-rail-hidden):not(.hub-rail-unpinned) {
+    --hub-rail-slot: var(--display-rail-width, 232px); --hub-rail-open: var(--display-rail-width, 232px);
+  }
+}
+
+/* ---------- 底色：窗口、标题栏、状态栏同一层浅灰，导航岛浮在上面 ---------- */
+:root[data-hw-shell] body, :root[data-hw-shell] body #app-container, :root[data-hw-shell] body #app-body { background: var(--hw-bg); font-family: var(--hw-font); }
+
+/* ---------- 导航岛 ---------- */
+:root[data-hw-shell] body #app-body #scene-rail,
+:root[data-hw-shell] body .app-container.rail-pinned #app-body #scene-rail,
+:root[data-hw-shell] body #app-body #scene-rail:is(:hover,:has(:focus-visible)) {
+  background: var(--hw-bg) !important; border-right: 0; box-shadow: none !important;
+}
+:root[data-hw-shell][data-hw-rail="wide"] body #app-body #scene-rail,
+:root[data-hw-shell][data-hw-rail="wide"] body .app-container.rail-pinned #app-body #scene-rail,
+:root[data-hw-shell][data-hw-rail="wide"] body #app-body #scene-rail:is(:hover,:has(:focus-visible)) {
+  left: 12px; top: 4px; bottom: 8px; width: calc(var(--hub-rail-slot) - 24px); min-width: 0;
+  background: var(--hw-surface) !important; border-radius: var(--hw-r-lg); box-shadow: var(--hw-e1) !important;
+  padding: 8px 12px 12px; display: flex; flex-direction: column;
+}
+:root[data-hw-shell][data-hw-rail="wide"] body #app-body #scene-rail .rail-drawer-head { height: 30px; padding: 0; justify-content: flex-end; }
+:root[data-hw-shell] body #app-body #scene-rail .rail-pin { width: 26px; height: 26px; border: 0; border-radius: var(--hw-r-pill); background: transparent; color: var(--hw-text-3); }
+:root[data-hw-shell] body #app-body #scene-rail .rail-pin:hover { background: var(--hw-surface-2); color: var(--hw-text-2); }
+:root[data-hw-shell] body #rail-pin[aria-pressed='true'] { background: transparent; color: var(--hw-text-3); }
+:root[data-hw-shell] body #app-body #scene-rail .rail-navigation { padding: 0; gap: 2px; overflow-x: visible; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-navigation { padding: 0 4px; }
+
+/* 分组标题：节点由 coldwhite-shell.js 插入（只读、aria-hidden），顺序用 order 排，不移动原按钮 */
+:root[data-hw-shell] body #app-body #scene-rail .hw-nav-cap { font-size: var(--hw-fs-12); line-height: 18px; color: var(--hw-text-3); padding: 12px 10px 6px; }
+:root[data-hw-shell] body #app-body #scene-rail .hw-nav-cap[data-cap="work"] { padding-top: 0; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .hw-nav-cap { display: none; }
+:root[data-hw-shell] body #app-body #scene-rail .hw-nav-cap[data-cap="work"] { order: 0; }
+:root[data-hw-shell] body #app-body #scene-rail #btn-home { order: 1; }
+:root[data-hw-shell] body #app-body #scene-rail #btn-rail-accounts { order: 2; }
+:root[data-hw-shell] body #app-body #scene-rail #btn-company-assistant { order: 3; }
+:root[data-hw-shell] body #app-body #scene-rail #btn-company-meeting { order: 4; }
+:root[data-hw-shell] body #app-body #scene-rail #btn-progress { order: 5; }
+:root[data-hw-shell] body #app-body #scene-rail .hw-nav-cap[data-cap="tools"] { order: 10; }
+:root[data-hw-shell] body #app-body #scene-rail #btn-company-ppt { order: 11; }
+:root[data-hw-shell] body #app-body #scene-rail #btn-company-rooms { order: 12; }
+:root[data-hw-shell] body #app-body #scene-rail .hw-nav-cap[data-cap="community"] { order: 20; }
+:root[data-hw-shell] body #app-body #scene-rail #btn-company-forum { order: 21; }
+:root[data-hw-shell] body #app-body #scene-rail #rail-group-rules { order: 22; }
+:root[data-hw-shell] body #app-body #scene-rail .rail-navigation > :not(.hw-nav-cap):not(#btn-home):not(#btn-rail-accounts):not(#btn-company-assistant):not(#btn-company-meeting):not(#btn-progress):not(#btn-company-ppt):not(#btn-company-rooms):not(#btn-company-forum):not(#rail-group-rules) { order: 30; }
+
+/* 导航行：图标方块 + 文字；选中 = 浅蓝底 + 蓝字，图标方块填模块色 */
+:root[data-hw-shell] body #app-body #scene-rail .btn-shell-nav,
+:root[data-hw-shell] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options) {
+  --tint: var(--hw-brand);
+  width: 100%; height: 40px; min-height: 40px; flex-direction: row; justify-content: flex-start; align-items: center;
+  gap: 10px; padding: 0 10px; border: 0; border-radius: var(--hw-r-item);
+  background: transparent !important; color: var(--hw-text-1) !important; font: 400 var(--hw-fs-14)/20px var(--hw-font);
+  box-shadow: none; text-align: left; transition: background var(--hw-t-fast) var(--hw-ease);
+}
+:root[data-hw-shell] body #app-body #scene-rail .btn-shell-nav:hover,
+:root[data-hw-shell] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options):hover { background: var(--hw-surface-2) !important; color: var(--hw-text-1) !important; }
+:root[data-hw-shell] body #app-body #scene-rail :is(.btn-shell-nav.cw-current, .rail-group-trigger.rail-group-current) { background: var(--hw-brand-soft) !important; color: var(--hw-brand) !important; font-weight: 600; }
+:root[data-hw-shell] body #app-body #scene-rail .btn-shell-nav:focus-visible,
+:root[data-hw-shell] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options):focus-visible { outline: 2px solid var(--hw-brand); outline-offset: 1px; }
+:root[data-hw-shell] body #app-body #scene-rail .btn-shell-nav .btn-label { font: inherit; font-size: var(--hw-fs-14); line-height: 20px; max-width: none; }
+:root[data-hw-shell] body #app-body #scene-rail .btn-shell-nav .btn-icon {
+  position: relative; width: 26px; height: 26px; flex: none; margin: 0; transform: none; display: grid; place-items: center;
+  border-radius: var(--hw-r-sm); background: var(--hw-surface-3) !important; color: var(--hw-text-2);
+  transition: background var(--hw-t-base) var(--hw-ease), color var(--hw-t-base) var(--hw-ease);
+}
+:root[data-hw-shell] body #app-body #scene-rail .btn-shell-nav .btn-icon > :is(img,svg) { display: none !important; }
+:root[data-hw-shell] body #app-body #scene-rail .btn-shell-nav .btn-icon::before {
+  content: ''; width: 16px; height: 16px; background: currentColor;
+  -webkit-mask: var(--ico, var(--shell-ico-chat)) center / contain no-repeat; mask: var(--ico, var(--shell-ico-chat)) center / contain no-repeat;
+}
+:root[data-hw-shell] body #app-body #scene-rail .rail-group-trigger .btn-icon::after { display: none; }
+:root[data-hw-shell] body #app-body #scene-rail :is(.btn-shell-nav.cw-current, .rail-group-trigger.rail-group-current) .btn-icon {
+  background: var(--tint) !important; color: var(--hw-text-on); box-shadow: 0 3px 8px -2px var(--tint);
+}
+/* 每个入口的图标与模块色 */
+:root[data-hw-shell] body #app-body #scene-rail #btn-home { --ico: var(--shell-ico-chat); --tint: var(--hw-tint-chat); }
+:root[data-hw-shell] body #app-body #scene-rail #btn-rail-accounts { --ico: var(--shell-ico-acct); --tint: var(--hw-tint-acct); }
+:root[data-hw-shell] body #app-body #scene-rail #btn-company-assistant { --ico: var(--shell-ico-assist); --tint: var(--hw-tint-assist); }
+:root[data-hw-shell] body #app-body #scene-rail #btn-company-meeting { --ico: var(--shell-ico-meet); --tint: var(--hw-tint-meet); }
+:root[data-hw-shell] body #app-body #scene-rail #btn-progress { --ico: var(--shell-ico-flag); --tint: var(--hw-tint-chat); }
+:root[data-hw-shell] body #app-body #scene-rail #btn-company-ppt { --ico: var(--shell-ico-ppt); --tint: var(--hw-tint-ppt); }
+:root[data-hw-shell] body #app-body #scene-rail #btn-company-rooms { --ico: var(--shell-ico-room); --tint: var(--hw-tint-room); }
+:root[data-hw-shell] body #app-body #scene-rail #btn-company-forum { --ico: var(--shell-ico-forum); --tint: var(--hw-tint-forum); }
+:root[data-hw-shell] body #app-body #scene-rail :is(#btn-rail-group-rules, #btn-rules) { --ico: var(--shell-ico-rule); --tint: var(--hw-tint-rule); }
+:root[data-hw-shell] body #app-body #scene-rail #btn-rail-capabilities { --ico: var(--shell-ico-box); --tint: var(--hw-tint-rule); }
+:root[data-hw-shell] body #app-body #scene-rail #btn-rail-memo { --ico: var(--shell-ico-clock); --tint: var(--hw-tint-rule); }
+
+/* 提醒徽标：红底白字，靠右，只表示待处理数量 */
+:root[data-hw-shell] body #app-body #scene-rail #btn-rail-accounts > #accounts-attention:not([hidden]) {
+  position: static; margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--hw-r-sm);
+  background: var(--hw-red); color: var(--hw-text-on); font: 600 11px/18px var(--hw-font-num); text-align: center; box-shadow: none;
+}
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail #btn-rail-accounts > #accounts-attention:not([hidden]) { position: absolute; top: 2px; right: 2px; margin: 0; }
+
+/* 规则分组：触发行与普通行一致；展开的横排菜单只换图标与配色 */
+:root[data-hw-shell] body #app-body #scene-rail .rail-group { width: 100%; }
+:root[data-hw-shell] body #app-body #scene-rail .rail-group-menu { background: var(--hw-surface); border: 0; border-radius: var(--hw-r-md); box-shadow: var(--hw-e3); padding: 6px; }
+:root[data-hw-shell] body #app-body #scene-rail .rail-group-menu > .btn-shell-nav { width: auto; min-width: 96px; height: 40px; min-height: 40px; }
+:root[data-hw-shell] body #app-body #scene-rail .rail-group-menu > .btn-shell-nav .btn-label { font-size: var(--hw-fs-13); }
+
+/* 底部：主题、设置也是导航行；图标方块用伪元素画 */
+:root[data-hw-shell][data-hw-rail="wide"] body #app-body #scene-rail .rail-utilities { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 2px; padding: 8px 0 0; border-top: 1px solid var(--hw-line); }
+:root[data-hw-shell][data-hw-rail="wide"] body #app-body #scene-rail .rail-utilities > div { width: 100%; }
+:root[data-hw-shell] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options) { position: relative; background-image: none; }
+:root[data-hw-shell] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options) > img { display: none !important; }
+:root[data-hw-shell] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options)::before { content: ''; width: 26px; height: 26px; flex: none; border-radius: var(--hw-r-sm); background: var(--hw-surface-3); }
+:root[data-hw-shell] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options)::after {
+  content: ''; position: absolute; left: 15px; top: 12px; width: 16px; height: 16px; background: var(--hw-text-2);
+  -webkit-mask: var(--ico) center / contain no-repeat; mask: var(--ico) center / contain no-repeat;
+}
+:root[data-hw-shell] body #app-body #scene-rail #btn-theme { --ico: var(--shell-ico-palette); }
+:root[data-hw-shell] body #app-body #scene-rail #btn-options { --ico: var(--shell-ico-set); }
+:root[data-hw-shell] body #app-body #scene-rail .rail-utility-label { display: block; font-size: var(--hw-fs-14); line-height: 20px; color: inherit; }
+:root[data-hw-shell] body #app-body #scene-rail :is(.theme-menu,.options-menu) { background: var(--hw-surface); border: 0; border-radius: var(--hw-r-md); box-shadow: var(--hw-e3); }
+
+/* 窄导航（未固定、手机预设或用户调窄）：只留图标方块，居中 */
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail :is(.btn-shell-nav, #btn-theme, #btn-options) { justify-content: center; padding: 0; gap: 0; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail :is(.btn-label, .rail-utility-label) { display: none !important; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-group-menu > .btn-shell-nav { justify-content: flex-start; padding: 0 10px; gap: 10px; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-group-menu > .btn-shell-nav .btn-label { display: block !important; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options)::after { left: 50%; margin-left: -8px; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities { flex-direction: column; align-items: stretch; padding: 8px 4px; gap: 2px; }
+
+/* ---------- 顶栏（窗口标题栏）：与底色同层，无分隔线 ---------- */
+:root[data-hw-shell] body #app-toolbar { background: var(--hw-bg) !important; border-bottom: 0 !important; box-shadow: none !important; color: var(--hw-text-1); }
+:root[data-hw-shell] body #hub-identity strong { font: 600 var(--hw-fs-14)/20px var(--hw-font); color: var(--hw-text-1); letter-spacing: .2px; }
+:root[data-hw-shell] body .hub-edition-badge { font: 600 11.5px/18px var(--hw-font); padding: 0 8px; border: 0; border-radius: var(--hw-r-xs); background: var(--hw-brand-soft); color: var(--hw-brand); }
+:root[data-hw-shell] body .hub-edition-badge.has-update { background: var(--hw-green-soft); color: var(--hw-green); border: 0; }
+:root[data-hw-shell] body .hub-edition-badge.has-update::before { background: var(--hw-green); animation: none; box-shadow: none; }
+:root[data-hw-shell] body #hub-version { border: 0; padding: 0; background: transparent; color: var(--hw-text-3); font: 12px/18px var(--hw-font-num); }
+:root[data-hw-shell] body .hub-pid { color: var(--hw-text-3); font: 11px/18px var(--hw-font-num); }
+:root[data-hw-shell] body #app-toolbar :is(#btn-toggle-navigation, #btn-expand-sidebar, #btn-toolbar-more) { border: 0; border-radius: var(--hw-r-pill); background: transparent; color: var(--hw-text-2); }
+:root[data-hw-shell] body #app-toolbar :is(#btn-toggle-navigation, #btn-expand-sidebar, #btn-toolbar-more):hover { background: var(--hw-surface); color: var(--hw-text-1); }
+:root[data-hw-shell] body #app-toolbar .touch-tools { background: var(--hw-surface); border-radius: var(--hw-r-pill); box-shadow: var(--hw-e1); padding: 2px 4px; }
+:root[data-hw-shell] body #app-toolbar .touch-tools button { border-radius: var(--hw-r-pill); color: var(--hw-text-2); }
+:root[data-hw-shell] body #app-toolbar .touch-tools button:hover { background: var(--hw-surface-2); color: var(--hw-text-1); }
+:root[data-hw-shell] body #app-toolbar #btn-session-immersive { border: 0; border-radius: var(--hw-r-pill); background: transparent; color: var(--hw-text-2); font-size: var(--hw-fs-13); }
+:root[data-hw-shell] body #app-toolbar #btn-session-immersive:hover { background: var(--hw-surface); color: var(--hw-text-1); }
+:root[data-hw-shell] body #app-toolbar .terminal-crumb { color: var(--hw-text-1); font-family: var(--hw-font); }
+
+/* ---------- 状态栏：说明字号、三级灰字，数字用数字字体 ---------- */
+:root[data-hw-shell] body #hub-system-footer { background: var(--hw-bg) !important; border-top: 0 !important; box-shadow: none !important; color: var(--hw-text-3); font: var(--hw-fs-12)/18px var(--hw-font); }
+:root[data-hw-shell] body #hub-system-footer :is(b, strong, .strip-value, .strip-ip) { color: var(--hw-text-2); font-family: var(--hw-font-num); }

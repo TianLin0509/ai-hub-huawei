@@ -61,6 +61,12 @@ function clipboardFilePathFromNative(clipboard) {
   }
 }
 
+// 复制图片时，剪贴板常附带一段只有换行、空格或零宽字符的 text/plain 或 text/html。
+// 这段内容没有可读文字，不能让它抢走图片分支。
+function isBlankPasteText(text) {
+  return !String(text || '').replace(/[\s\u200b-\u200d\u2060\ufeff\ufffc]/g, '');
+}
+
 function formatPastedFilePaths(paths) {
   // 多个文件用换行分隔：路径里可以有空格，空格分隔会让 CLI 把一条路径拆成两条。
   return (Array.isArray(paths) ? paths : []).join('\n');
@@ -175,6 +181,7 @@ function createTerminalInputController({ document, window, ipcRenderer, clipboar
 
       // Text wins over image so copied HTML selections become plain prompts.
       let plainText = getPastePlainText(e);
+      if (isBlankPasteText(plainText) && hasClipboardImage(e)) plainText = '';
       if (plainText) {
         e.preventDefault();
         if (inspectPasteText(plainText)) {

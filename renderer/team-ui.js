@@ -94,6 +94,28 @@
   function accountText(a) {
     return `${a.label || a.id} · ${a.activeSessions || 0} 个会话${a.usable ? '' : ' · ' + (a.unavailableReason || '暂不可用')}`;
   }
+  function accountShortText(a) {
+    const label = String(a.label || a.id);
+    const parts = label.match(/^(.*?)（(.*)）$/);
+    const who = parts ? parts[1] : label;
+    const tail = who.includes('*') ? (who.replace(/^.*\*+/, '') || who.slice(-4)) : who.slice(-4);
+    return `${parts ? parts[2] + ' · ' : ''}${tail} · ${a.usable ? '可用' : (a.unavailableReason || '不可用')}`;
+  }
+
+  function updatePlanSummary(opened, accountOptions = []) {
+    const selected = [...opened.querySelectorAll('[data-team-account]')].map(sel => sel.value).filter(Boolean);
+    const models = new Map();
+    opened.querySelectorAll('[data-team-model]').forEach(sel => {
+      const account = opened.querySelector(`[data-team-account="${sel.dataset.teamModel}"]`)?.value;
+      const model = sel.value || accountOptions.find(a => a.id === account)?.defaultModel || '沿用账号模型';
+      models.set(model, (models.get(model) || 0) + 1);
+    });
+    const items = [...models].map(([model, count]) => `${model} × ${count}`);
+    opened.querySelector('[data-team-summary-accounts]').textContent = `${new Set(selected).size} 个账号`;
+    const modelSummary = opened.querySelector('[data-team-summary-models]');
+    modelSummary.textContent = items.join(' / ');
+    modelSummary.title = items.join('\n');
+  }
 
   function closeModal() { if (modal) { modal.remove(); modal = null; } }
   async function openApproval(leadSid) {
@@ -106,28 +128,29 @@
     modal.dataset.leadSid = leadSid;
     const memberRows = plan.members.map((m, i) => {
       const options = m.account ? `<option value="${esc(m.account)}" selected>${esc(m.account)}（正在读取账号…）</option>` : '';
-      return `<tr>
-        <td class="team-col-no">${i + 1}</td>
-        <td><b>${esc(m.title)}</b><div class="team-sub">${esc(m.role)}</div></td>
-        <td>${m.kind === 'codeagent' ? 'CodeAgent' : esc(m.kind)}</td>
-        <td><select data-team-account="${i}" data-team-kind="${esc(m.kind)}">${options}</select></td>
-        <td><select data-team-model="${i}"><option value="${esc(m.model || '')}">${esc(m.model || '沿用账号模型')}</option></select><div class="team-sub" data-team-model-hint="${i}" hidden>模型权限未核实</div></td>
-        <td class="team-task"><div class="team-sub">${esc(m.cwd || '与负责人相同目录')}</div>${esc(m.task)}</td>
-      </tr>`;
+      const [firstTask, ...taskRest] = String(m.task || '').split(/\r?\n/);
+      return `<section class="team-member" style="--team-accent:var(${['--hw-brand', '--hw-tint-meet', '--hw-tint-assist'][i % 3]})">
+        <div class="team-member-head"><span class="team-member-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5" fill="currentColor"/><circle cx="17" cy="9" r="2.6" fill="currentColor"/><path d="M2 20c0-4 3-6 7-6s7 2 7 6zM16 14c3 0 6 1.6 6 5h-4" fill="currentColor"/></svg></span>
+          <div class="team-member-heading"><b>${esc(m.role || m.title)}</b><div class="team-sub">${m.title && m.title !== m.role ? esc(m.title) + ' · ' : ''}${m.kind === 'codeagent' ? 'CodeAgent' : esc(m.kind)}</div></div><span class="team-col-no">${i + 1}</span></div>
+        <div class="team-task"><strong>${esc(firstTask)}</strong>${taskRest.length ? '\n' + esc(taskRest.join('\n')) : ''}</div>
+        <div class="team-workdir" title="${esc(m.cwd || '与负责人相同目录')}">${esc(m.cwd || '与负责人相同目录')}</div>
+        <div class="team-member-fields"><label><span>号池账号</span><select data-team-account="${i}" data-team-kind="${esc(m.kind)}">${options}</select></label>
+          <label><span>模型</span><select data-team-model="${i}"><option value="${esc(m.model || '')}">${esc(m.model || '沿用账号模型')}</option></select><div class="team-sub" data-team-model-hint="${i}" hidden>模型权限未核实</div></label></div>
+      </section>`;
     }).join('');
     modal.innerHTML = `<div class="team-modal" role="dialog" aria-modal="true" aria-label="批准招人计划">
-      <h3>「${esc(leadTitle)}」要组队：${plan.members.length} 个会话</h3>
-      <p class="team-goal">${esc(plan.goal)}</p>
-      <table class="team-plan"><thead><tr><th>#</th><th>分工</th><th>类型</th><th>号池账号</th><th>模型</th><th>目录与开工任务</th></tr></thead><tbody>${memberRows}</tbody></table>
-      <label class="team-note">备注（可选，会转给负责人）<textarea rows="2" data-team-note></textarea></label>
+      <header class="team-modal-head"><div><h3>负责人想招 ${plan.members.length} 位成员</h3><p class="team-goal">${esc(plan.goal)}</p><p class="team-sub" title="${esc(leadTitle)}">${esc(leadTitle)} · 批准后按下面的账号和模型开会话</p></div><button type="button" class="team-close" data-team-close aria-label="关闭审批">×</button></header>
+      <div class="team-plan-summary" aria-label="计划摘要"><div><b>${plan.members.length} 位成员</b><span data-team-summary-accounts></span></div><p data-team-summary-models></p></div>
+      <div class="team-modal-body"><div class="team-plan">${memberRows}</div></div>
+      <div class="team-modal-foot"><label class="team-note">备注（可选，会转给负责人）<textarea rows="2" data-team-note></textarea></label><div class="team-error" hidden></div>
       <div class="team-actions">
         <button type="button" data-team-act="reject">驳回</button>
         <button type="button" class="primary" data-team-act="approve">批准并建 ${plan.members.length} 个会话</button>
-      </div>
-      <div class="team-error" hidden></div>
+      </div></div>
     </div>`;
     modal.addEventListener('click', async event => {
       if (event.target === modal) { closeModal(); return; }
+      if (event.target.closest?.('[data-team-close]')) { closeModal(); return; }
       const act = event.target.closest && event.target.closest('[data-team-act]');
       if (!act) return;
       const approve = act.dataset.teamAct === 'approve';
@@ -144,6 +167,7 @@
     modal.addEventListener('keydown', event => { if (event.key === 'Escape') closeModal(); });
     document.body.appendChild(modal);
     const opened = modal;
+    updatePlanSummary(opened);
     modal.querySelector('[data-team-act="approve"]').disabled=true;
     accounts().then(accountOptions => {
       if (modal !== opened) return;
@@ -151,18 +175,20 @@
       const updateApproval = () => {
         opened.querySelector('[data-team-act="approve"]').disabled = [...opened.querySelectorAll('select[data-team-account]')]
           .some(sel => !accountOptions.some(a => a.id === sel.value && a.usable));
+        updatePlanSummary(opened, accountOptions);
       };
       modal.querySelectorAll('select[data-team-account]').forEach(sel => {
         const rows = accountOptions;
         if (!rows) return;
         const keep = sel.value;
-        sel.innerHTML = rows.map(a => `<option value="${esc(a.id)}"${!a.usable?' disabled':''}>${esc(accountText(a))}</option>`).join('');
+        sel.innerHTML = rows.map(a => `<option value="${esc(a.id)}" title="${esc(accountText(a))}"${!a.usable?' disabled':''}>${esc(accountShortText(a))}</option>`).join('');
         if (keep && !rows.some(a => a.id === keep)) sel.insertAdjacentHTML('beforeend', `<option value="${esc(keep)}">${esc(keep)}（看板里没有这个账号）</option>`);
         sel.value = keep;
         {
           const model=modal.querySelector(`[data-team-model="${sel.dataset.teamAccount}"]`);
           const fill=initial=>{
             const row=rows.find(a=>a.id===sel.value),chosen=initial?model.value:'';
+            sel.title = row ? accountText(row) : sel.value;
             modal.querySelector(`[data-team-model-hint="${sel.dataset.teamAccount}"]`).hidden=!row || row.modelsAuthoritative===true;
             const available=row?.models || [];
             model.innerHTML=`<option value="">沿用账号模型${row?.defaultModel?' · '+esc(row.defaultModel):''}</option>`+available.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join('');
@@ -170,6 +196,7 @@
             model.value=chosen;
           };
           fill(true);sel.addEventListener('change',()=>{fill(false);updateApproval();});
+          model.addEventListener('change', () => updatePlanSummary(opened, accountOptions));
         }
       });
       updateApproval();

@@ -13,7 +13,7 @@ async function accountCommand(ipcRenderer, action, { id, note, dir, hours } = {}
 }
 function createCodeagentAccountsPage({ document, window = document.defaultView, ipcRenderer, configModal, closeOtherPanels = () => {}, openSession = () => {}, notify = () => {} }) {
   let page, pool = null, timer, revision = 0, disposed = false, pending = null;
-  const state = { local: [], probing: new Set(), queue: [], drawer: false, note: '', menu: '', sub: false, loading: false, busy: false, message: '' };
+  const state = { local: [], probing: new Set(), queue: [], drawer: false, note: '', menu: '', sub: false, filter: 'all', loading: false, busy: false, message: '' };
   function render() {
     if (!page || page.hidden || disposed) return;
     const next = document.createElement('template');
@@ -80,6 +80,13 @@ function createCodeagentAccountsPage({ document, window = document.defaultView, 
   }
   async function act(action, element) {
     const id = element?.dataset?.id;
+    if (action === 'filter') {
+      const filter = element?.dataset?.filter;
+      if (!['all', 'usable', 'needs'].includes(filter)) return;
+      state.filter = filter; state.menu = ''; render();
+      page.querySelector(`.caa-counts [data-filter="${filter}"]`)?.focus();
+      return;
+    }
     if (action === 'menu') { state.menu = state.menu === id ? '' : id; state.sub = false; render(); return; }
     if (action === 'pause-menu') { state.sub = !state.sub; render(); return; }
     if (action === 'drawer' || action === 'close-drawer') { state.drawer = action === 'drawer'; state.menu = ''; render(); if (state.drawer) page.querySelector('#ca-note')?.focus(); return; }
