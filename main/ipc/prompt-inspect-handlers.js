@@ -113,7 +113,7 @@ function registerPromptInspectIpc(ipcMain, deps) {
     if (!session) return { ok: false, code: 'NO_SESSION', error: '找不到这个会话（可能已经关闭）' };
     const { cwd, kind } = resolveTarget({ sessionId: req.sessionId });
     let systemRules = null;
-    // 自动派活会话的系统提示文件另有版本（fileVersion，含「不出选择题」那段）
+    // 自动分配任务会话的系统提示文件另有版本（fileVersion，含「不出选择题」那段）
     const systemVersion = session.hubRulesSystem && (session.hubRulesSystem.fileVersion || session.hubRulesSystem.version);
     if (systemVersion) {
       let text = null;

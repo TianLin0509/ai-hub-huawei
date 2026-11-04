@@ -20,13 +20,20 @@ function installSelectPopover({ document, window, root }) {
   // 只接管下拉式的 <select>：多选、列表式（size > 1）本来就画在页面里，不动。
   const dropdown = select => !select.multiple && !(Number(select.size) > 1);
 
+  // A rich account button can retain the hidden select's value/change protocol.
+  function controlFor(target) {
+    const anchor = target?.closest?.('button[data-select-for],select');
+    const select = anchor?.tagName === 'SELECT' ? anchor : document.getElementById(anchor?.dataset.selectFor || '');
+    return select && anchor && root.contains(select) && root.contains(anchor) ? { select, anchor } : {};
+  }
+
   function visibleOptions(select) {
     return [...select.options].filter(option => !option.hidden);
   }
 
   function place() {
     if (!pop) return;
-    const rect = pop.select.getBoundingClientRect();
+    const rect = pop.anchor.getBoundingClientRect();
     const el = pop.el;
     el.style.minWidth = Math.round(rect.width) + 'px';
     el.style.maxHeight = '';
@@ -48,11 +55,11 @@ function installSelectPopover({ document, window, root }) {
     if (!pop) return;
     pop.items.forEach((item, index) => item.classList.toggle('active', index === pop.active));
     const item = pop.items[pop.active];
-    // 焦点一直在 <select> 上：高亮项的引用写在它身上，读屏才跟得上（审核 2026-10-19）
+    // 焦点留在触发控件：高亮项的引用写在它身上，读屏才跟得上。
     if (item) {
-      pop.select.setAttribute('aria-activedescendant', item.id);
+      pop.anchor.setAttribute('aria-activedescendant', item.id);
       item.scrollIntoView({ block: 'nearest' });
-    } else pop.select.removeAttribute('aria-activedescendant');
+    } else pop.anchor.removeAttribute('aria-activedescendant');
   }
 
   function build() {
@@ -62,12 +69,28 @@ function installSelectPopover({ document, window, root }) {
     pop.items = [];
     const options = visibleOptions(select);
     options.forEach((option, index) => {
+      if (select.dataset.accountList === '1' && (option.dataset.accountSection || option.dataset.accountDivider)) {
+        const separator = document.createElement('div');
+        separator.className = 'caa-menu-sep'; separator.setAttribute('role', 'separator'); el.appendChild(separator);
+        if (option.dataset.accountSection) {
+          const heading = document.createElement('div'); heading.className = 'caa-menu-cap'; heading.textContent = option.dataset.accountSection; el.appendChild(heading);
+        }
+      }
       const item = document.createElement('div');
       item.className = 'launch-select-option';
       item.id = `${el.id}-opt-${index}`;
       item.setAttribute('role', 'option');
       item.dataset.value = option.value;
+      item.dataset.searchLabel = option.textContent;
       item.textContent = option.textContent;
+      if (select.dataset.accountList === '1' && option.dataset.accountInfo) {
+        try {
+          item.innerHTML = require('./codeagent-accounts-view').renderAccountOption(JSON.parse(option.dataset.accountInfo));
+          item.classList.add('caa-opt');
+          if (option.value === 'manage-accounts') item.classList.add('caa-dd-foot');
+          if (option.disabled) item.classList.add('caa-off');
+        } catch { /* Metadata is optional; the original option text remains usable. */ }
+      }
       // 选项附带的一小段灰字（CodeAgent 模型的今日用量，renderer/workspace-controller.js 写在 data-usage 上）
       if (option.dataset && option.dataset.usage) {
         const usage = document.createElement('span');
@@ -92,13 +115,13 @@ function installSelectPopover({ document, window, root }) {
 
   function close({ refocus = false } = {}) {
     if (!pop) return;
-    const { select, el, observer } = pop;
+    const { anchor, el, observer } = pop;
     pop = null;
     try { observer.disconnect(); } catch { /* 已断开 */ }
     el.remove();
-    select.setAttribute('aria-expanded', 'false');
-    select.removeAttribute('aria-activedescendant');
-    if (refocus && select.isConnected) select.focus({ preventScroll: true });
+    anchor.setAttribute('aria-expanded', 'false');
+    anchor.removeAttribute('aria-activedescendant');
+    if (refocus && anchor.isConnected) anchor.focus({ preventScroll: true });
   }
 
   function choose(index) {
@@ -115,13 +138,14 @@ function installSelectPopover({ document, window, root }) {
     select.dispatchEvent(new window.Event('change', { bubbles: true }));
   }
 
-  function open(select) {
+  function open(select, anchor = select) {
     close();
     const el = document.createElement('div');
     el.className = 'launch-select-popover';
     el.id = `launch-select-popover-${select.id || 'select'}`;
     el.setAttribute('role', 'listbox');
     el.dataset.for = select.id || '';
+    if (select.dataset.accountList === '1') el.dataset.accountList = '1';
     const label = select.closest('label')?.querySelector('span')?.textContent || select.getAttribute('aria-label') || '';
     if (label) el.setAttribute('aria-label', label);
     el.style.position = 'fixed';
@@ -132,9 +156,9 @@ function installSelectPopover({ document, window, root }) {
     // 控件被禁用时收起列表。
     const observer = new window.MutationObserver(() => { if (!pop || pop.select !== select) return; if (select.disabled) close(); else build(); });
     observer.observe(select, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled', 'hidden', 'label'] });
-    pop = { select, el, items: [], active: -1, observer, typed: '', typedAt: 0 };
-    select.setAttribute('aria-expanded', 'true');
-    select.setAttribute('aria-controls', el.id);
+    pop = { select, anchor, el, items: [], active: -1, observer, typed: '', typedAt: 0 };
+    anchor.setAttribute('aria-expanded', 'true');
+    anchor.setAttribute('aria-controls', el.id);
     build();
   }
 
@@ -165,22 +189,22 @@ function installSelectPopover({ document, window, root }) {
       const index = (start + step) % pop.items.length;
       const item = pop.items[index];
       if (item.classList.contains('disabled')) continue;
-      if (item.textContent.trim().toLowerCase().startsWith(prefix)) { pop.active = index; paintActive(); return; }
+      if ((item.dataset.searchLabel || item.textContent).trim().toLowerCase().startsWith(prefix)) { pop.active = index; paintActive(); return; }
     }
   }
 
   root.addEventListener('mousedown', event => {
-    const select = event.target && event.target.closest ? event.target.closest('select') : null;
+    const { select, anchor } = controlFor(event.target);
     if (!select || !root.contains(select) || event.button !== 0 || !dropdown(select)) return;
     event.preventDefault(); // 不弹系统选项框
     if (select.disabled) return;
-    select.focus({ preventScroll: true });
+    anchor.focus({ preventScroll: true });
     if (pop && pop.select === select) close();
-    else open(select);
+    else open(select, anchor);
   }, true);
 
   root.addEventListener('keydown', event => {
-    const select = event.target && event.target.tagName === 'SELECT' ? event.target : null;
+    const { select, anchor } = controlFor(event.target);
     if (pop && select === pop.select) {
       const keys = { ArrowDown: () => move(1), ArrowUp: () => move(-1), Home: () => { pop.active = 0; move(0); }, End: () => { pop.active = pop.items.length - 1; move(0); },
         Enter: () => choose(pop.active), ' ': () => choose(pop.active), Escape: () => close({ refocus: true }) };
@@ -197,10 +221,10 @@ function installSelectPopover({ document, window, root }) {
       return;
     }
     if (!select || !root.contains(select) || select.disabled || !dropdown(select)) return;
-    if (event.key === 'F4' || (event.altKey && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) || event.key === ' ' || event.key === 'Enter') {
+    if (event.key === 'F4' || (event.altKey && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) || event.key === ' ' || event.key === 'Enter' || (anchor !== select && ['ArrowDown', 'ArrowUp'].includes(event.key))) {
       event.preventDefault();
       event.stopPropagation();
-      open(select);
+      open(select, anchor);
     }
   }, true);
 
@@ -214,7 +238,7 @@ function installSelectPopover({ document, window, root }) {
       if (item) choose(pop.items.indexOf(item));
       return;
     }
-    if (event.target === pop.select) return;
+    if (pop.anchor.contains(event.target)) return;
     close();
   }, true);
   document.addEventListener('mousemove', event => {
@@ -224,11 +248,11 @@ function installSelectPopover({ document, window, root }) {
     if (index >= 0 && index !== pop.active && !item.classList.contains('disabled')) { pop.active = index; paintActive(); }
   });
   // 启动中心里滚动、窗口大小变化：跟着控件走；启动中心关掉、控件被藏起来：收起。
-  root.addEventListener('scroll', () => { if (pop) { if (pop.select.getClientRects().length) place(); else close(); } }, true);
+  root.addEventListener('scroll', () => { if (pop) { if (pop.anchor.getClientRects().length) place(); else close(); } }, true);
   window.addEventListener('resize', () => close());
   window.addEventListener('blur', () => close());
   window.addEventListener('launch-center:closed', () => close());
-  new window.MutationObserver(() => { if (pop && (root.style.display === 'none' || !pop.select.getClientRects().length)) close(); })
+  new window.MutationObserver(() => { if (pop && (root.style.display === 'none' || !pop.anchor.getClientRects().length)) close(); })
     .observe(root, { attributes: true, attributeFilter: ['style', 'hidden'], subtree: true });
 
   return { close, isOpen: () => !!pop, current: () => (pop ? pop.select : null) };

@@ -324,7 +324,7 @@ function createOrchestrationService(deps) {
     const reason = Ledger.overBudget(ledger);
     if (!reason) return false;
     const runActive = run && !terminalRun(run);
-    // 工作流已结束且没有在途工作时不打断；下一次派活会被额度拦下。
+    // 工作流已结束且没有在途工作时不打断；下一次分配任务会被额度拦下。
     if (!runActive && !ledger.asks.some(a => a.status === 'pending')) return false;
     const label = reason === 'budget_rounds'
       ? `已用 ${ledger.budget.roundsUsed}/${ledger.budget.roundCap} 轮`
@@ -815,7 +815,7 @@ function createOrchestrationService(deps) {
     return { endpointFile };
   }
   function stop() { clearInterval(timer); timer = null; bridge?.close(); bridge = null; }
-  // 关机排空期间不再唤醒编排员、不再派活；关机取消时恢复。
+  // 关机排空期间不再唤醒编排员、不再分配任务；关机取消时恢复。
   function freeze() { frozen = true; }
   function unfreeze() { frozen = false; }
 

@@ -1,0 +1,97 @@
+'use strict';
+const { accountState, canStartAccount, pauseReason } = require('./codeagent-account-state');
+const { icon } = require('./codeagent-accounts-icons');
+const automaticQuota = false;
+const scopedIcon = (name, size = 'sm') => icon(name, size).replace(/class="([^"]*)"/g, (_, names) => `class="${names.split(/\s+/).filter(Boolean).map(name => 'caa-' + name).join(' ')}"`);
+const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const clock = value => value && Number.isFinite(new Date(value).getTime()) ? new Date(value).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }) : '—';
+const method = a => a.method === 'idaas' ? '账号密码登录' : a.method === 'devuc' ? '浏览器登录' : '';
+const canImport = a => !a.isPersonal && !a.sameAsPersonal && !a.alreadyInPool && a.state === 'ready';
+const hasCredit = a => a.credit?.pct != null && a.credit?.remaining != null && Number.isFinite(Number(a.credit.pct)) && Number.isFinite(Number(a.credit.remaining));
+const button = (action, label, cls = 'btn btn-secondary', attrs = '', ico = '') => `<button type="button" class="${cls}" data-ca="${action}" ${attrs}>${ico ? icon(ico, 'sm') : ''}${label}</button>`;
+const idAttr = id => `data-id="${esc(id)}"`;
+
+function modelsCell(a, state) {
+  if (state.probing?.has(a.id) || state.pool?.probing?.includes(a.id)) return '<div class="cell"><span class="shimmer w1"></span><div class="cell-sub probe-state"><span class="spin"></span>正在读取模型菜单 · 约 10–20 秒</div></div>';
+  if (state.queue?.includes(a.id)) return '<div class="cell"><span class="shimmer w2"></span><div class="cell-sub">排队中</div></div>';
+  if (a.state !== 'ready') return '<div class="cell"><span class="empty-val">登录后可获取</span></div>';
+  const models = a.models || [], attrs = idAttr(a.id);
+  const chip = models.length ? `<span class="chip" title="${esc(models[0])}">${esc(models[0])}</span>` : '';
+  return `<div class="cell">${models.length ? `<div class="chips">${chip}${models.length > 1 ? `<span class="chip more" title="${esc(models.join('、'))}">+${models.length - 1}</span>` : ''}</div>` : '<span class="empty-val">未获取</span>'}<div class="cell-sub">${models.length ? `${clock(a.modelsProbedAt)} 获取 · ` : ''}${button('probe', models.length ? '重新获取' : '获取', 'link quiet', attrs)}${models.length ? '' : ' · 约 10–20 秒'}</div>${a.configNote ? `<div class="cell-sub warn" title="${esc(a.configNote)}">${esc(a.configNote)}</div>` : ''}</div>`;
+}
+function quotaCell(a) {
+  const credit = a.credit, valid = hasCredit(a);
+  const pct = valid ? Math.max(0, Math.min(100, Number(credit.pct))) : 0;
+  const reading = valid ? `<div class="meter"><span class="meter-bar${pct < 20 ? ' low' : ''}"><i style="width:${pct}%"></i></span><span class="meter-text num">剩 ${esc(credit.remaining)} · ${esc(credit.pct)}%</span></div>` : '<span class="empty-val">未读取</span>';
+  return `<div class="cell">${reading}<div class="cell-sub${a.avoid ? ' warn' : ''}" title="${esc(pauseReason(a.avoid))}">${esc(a.avoid ? pauseReason(a.avoid) : valid ? credit.bucket || 'Credit 余量' : automaticQuota ? '会话运行后显示' : '')}</div></div>`;
+}
+function menu(a, sub) {
+  const attrs = idAttr(a.id);
+  const pause = sub ? `<div class="menu submenu" role="menu" aria-label="暂停多久"><div class="menu-cap">暂停多久</div>${[1, 2, 4, 24].map(h => button('pause', `${h} 小时${h === 2 ? '<span class="hint">常用</span>' : ''}`, 'menu-item', `${attrs} data-hours="${h}" role="menuitem"`)).join('')}<div class="menu-sep"></div>${button('pause', '直到手动恢复', 'menu-item', `${attrs} role="menuitem"`)}</div>` : '';
+  const availability = a.id === 'personal' && a.avoid ? button('resume', '<span class="grow">恢复使用</span>', 'menu-item', `${attrs} role="menuitem"`, 'play')
+    : `<div class="pause-menu">${button('pause-menu', `<span class="grow">暂停使用</span>${icon('right', 'sm')}`, 'menu-item', `${attrs} role="menuitem" aria-haspopup="menu" aria-expanded="${!!sub}"`, 'pause')}${pause}</div>`;
+  return `<div class="menu" role="menu" aria-label="账号操作">${button('probe', '<span class="grow">获取模型权限</span>', 'menu-item', `${attrs} role="menuitem"${a.state !== 'ready' ? ' disabled' : ''}`, 'layers')}${button('login', '<span class="grow">重新登录</span>', 'menu-item', `${attrs} role="menuitem"`, 'login')}${availability}${a.id !== 'personal' ? `<div class="menu-sep"></div>${button('remove', '<span class="grow">移出号池</span>', 'menu-item danger', `${attrs} role="menuitem"`, 'trash')}` : ''}</div>`;
+}
+function row(a, state) {
+  const personal = a.id === 'personal', status = accountState(a, { personal }), attrs = idAttr(a.id), opened = state.menu === a.id;
+  const title = personal ? '我的账号' : a.note || '未备注账号';
+  const detail = status.detail || a.credentialsNote || (a.expiresAt ? `${clock(a.expiresAt)} 到期` : '');
+  const primary = canStartAccount(a, { personal }) ? button('session', '用这个号新建会话', 'btn btn-soft', attrs, 'plus')
+    : a.state === 'ready' && a.avoid ? button('resume', '恢复使用', 'btn btn-secondary', attrs, 'play')
+    : a.state !== 'ready' ? button('login', '重新登录', 'btn btn-primary', attrs, 'login')
+    : button('session', '不参与选号', 'btn btn-secondary', `${attrs} disabled`);
+  return `<div class="row${status.usable ? '' : ' is-dim'}${opened ? ' menu-open' : ''}" data-ca-account="${esc(a.id)}"><div class="who"><span class="avatar${personal ? ' me' : ''}">${personal ? '我' : esc([...title][0])}</span><div class="who-text"><div class="who-name">${esc(title)}${personal ? '<span class="tag accent">默认</span>' : ''}</div><div class="who-id" title="${esc(a.accountLabel)}">${a.accountLabel ? `<span class="mono">${esc(a.accountLabel)}</span> · ${esc(method(a))}` : '还没登录'}</div></div></div><div class="cell"><span class="pill ${status.tone === 'muted' ? 'mute' : status.tone}">${esc(status.label)}</span><div class="cell-sub" title="${esc(detail)}">${esc(detail)}</div></div>${modelsCell(a, state)}${state.showQuota ? quotaCell(a) : ''}<div class="sessions${a.activeSessions ? '' : ' zero'}">${Number(a.activeSessions) || 0}</div><div class="actions">${primary}${button('menu', icon('more'), 'btn btn-icon' + (opened ? ' on' : ''), `${attrs} aria-label="更多操作" aria-haspopup="menu" aria-expanded="${opened}"`)}${opened ? menu(a, state.sub) : ''}</div></div>`;
+}
+function empty(local) {
+  return `<div class="empty"><div class="empty-art"><div class="c c1"><i></i><b></b></div><div class="c c2"><i></i><b></b></div><div class="c c3"><i></i><b></b></div><span class="plus">${icon('plus', 'sm')}</span></div><h3>号池里还没有账号</h3><p>把同事的 CodeAgent 账号登录到这台电脑，新建会话时就能换着号用，额度多一份是一份。Hub 不保存密码。</p><div class="cta">${button('drawer', '添加号池账号', 'btn btn-primary', '', 'plus')}${button('drawer', `导入本机已登录的号<span class="tag">${local.filter(canImport).length}</span>`, 'btn btn-secondary', '', 'download')}</div><div class="steps-inline"><span><em>1</em>填一个备注，例如 张工</span><span><em>2</em>号主在弹出的窗口里登录一次</span><span><em>3</em>新建会话时选这个号</span></div></div>`;
+}
+function summary(all, pool) {
+  const usable = all.filter(a => accountState(a, { personal: a.id === 'personal' }).usable), paused = all.filter(a => a.avoid), needs = all.filter(a => !accountState(a, { personal: a.id === 'personal' }).usable && !a.avoid);
+  const item = (label, value, note, tone = '', total = '') => `<div class="stat"><div class="stat-label"><span class="dot ${tone}"></span>${label}</div><div class="stat-value">${value}${total ? `<small>/ ${total}</small>` : ''}</div><div class="stat-note" title="${esc(note)}">${esc(note)}</div></div>`;
+  return `<section class="summary" aria-label="概览">${item('可用账号', usable.length, `个人 ${usable.some(a => a.id === 'personal') ? 1 : 0} + 号池 ${usable.filter(a => a.id !== 'personal').length}，新建会话可直接选`, 'ok', all.length)}${item('进行中会话', all.reduce((n, a) => n + (Number(a.activeSessions) || 0), 0), `刷新于 ${clock(pool.checkedAt)} · 休眠的不算`)}${item('暂停中', paused.length, paused.map(a => `${a.note || '个人账号'} · ${pauseReason(a.avoid)}`).join('；') || '没有暂停中的账号', 'warn')}${item('需要处理', needs.length, needs.map(a => `${a.note || '个人账号'} · ${accountState(a).label}`).join('；') || '所有账号均已就绪', 'info')}</section>`;
+}
+function drawer(state, local) {
+  return `<div class="scrim" data-ca="close-drawer"></div><aside class="drawer" role="dialog" aria-modal="true" aria-label="添加号池账号"><div class="drawer-head"><div class="grow"><h2>添加号池账号</h2><p>号主在这台电脑上登录一次，之后新建会话就能选这个号。</p></div>${button('close-drawer', icon('x'), 'btn btn-icon', 'aria-label="关闭"')}</div><div class="drawer-body"><label class="field-label" for="ca-note">备注 · 这是谁的号</label><input id="ca-note" class="input" value="${esc(state.note)}" maxlength="24" placeholder="例如 张工"><div class="field-help">只在本机显示，方便你在列表和新建会话里认出来。</div><ol class="steps"><li class="cur"><em>1</em><div><b>点「打开登录窗口」</b><span>会弹出一个命令行窗口。</span></div></li><li><em>2</em><div><b>号主输入 W3 用户名和密码</b><span>Hub 不保存密码，只用本机这份登录凭证。</span></div></li><li><em>3</em><div><b>登录成功后自动出现在列表里</b><span>状态从「需登录」变成「可用」，不用手动刷新。</span></div></li></ol><div class="callout">${icon('alert', 'sm')}<div><b>号池里的号不要执行退出登录。</b>退出会注销服务器上的这次登录，所有用它的会话一起掉线。要停用请用「移出号池」，号主那边不受影响。</div></div><div class="divider-label">或者，导入本机已登录的号</div><div class="local">${local.length ? local.map(a => `<div class="local-row">${icon('folder')}<div class="grow"><div class="t mono">${esc(a.name)}</div><div class="s">${esc(a.accountLabel)} · ${esc(method(a))}</div></div>${canImport(a) ? button('import', '导入', 'btn btn-sm btn-secondary', `data-dir="${esc(a.dir)}"`) : `<span class="why">${a.isPersonal || a.sameAsPersonal ? '个人账号，不放进号池' : a.alreadyInPool ? '已在号池里' : '需重新登录'}</span>`}</div>`).join('') : '<div class="local-row">未发现本机可导入的账号</div>'}</div><div class="field-help">同一台电脑上已登录的号可以直接导入，不用重新登录。导入后别在原目录执行退出登录。</div></div><div class="drawer-foot">${button('close-drawer', '取消', 'btn btn-ghost')}${button('add', '打开登录窗口', 'btn btn-primary', state.busy ? 'disabled' : '', 'terminal')}</div></aside>`;
+}
+function renderAccounts(pool, state = {}) {
+  const local = state.local || [], personal = { ...(pool?.personal || {}), id: 'personal' };
+  personal.state ||= personal.present ? 'ready' : 'login-required';
+  const accounts = pool?.accounts || [], all = [personal, ...accounts];
+  const showQuota = automaticQuota || all.some(hasCredit);
+  const probing = state.probing?.size || state.queue?.length;
+  const head = `<header class="page-head"><div><h1 class="page-title">账号</h1><p class="page-sub">本机登录的 CodeAgent 账号。新建会话时可以指定用哪个号，把同事的额度也用起来。</p></div><div class="head-actions">${button('refresh', '刷新会话数', 'btn btn-ghost', state.loading ? 'disabled' : '', 'refresh')}${button('probe-all', probing ? '<span class="spin"></span>获取中…' : icon('layers', 'sm') + '获取全部模型权限', 'btn btn-secondary', probing ? 'disabled' : '')}${button('drawer', '添加号池账号', 'btn btn-primary', '', 'plus')}</div></header>`;
+  const notice = state.message || (!pool ? '正在读取账号状态…' : pool.ok === false ? '账号状态读取失败：' + pool.error : '');
+  const newLocal = local.filter(canImport);
+  const importer = newLocal.length ? `<div class="notice"><span class="ico">${icon('download', 'sm')}</span><div class="grow">本机还有 ${newLocal.length} 个已登录的号没导入 <span class="muted">· ${esc(newLocal.map(a => a.name).join('、'))}</span></div>${button('drawer', '查看并导入', 'btn btn-sm btn-ghost')}</div>` : '';
+  const progress = probing ? `<div class="notice"><span class="ico">${icon('layers', 'sm')}</span><div class="grow">正在后台获取模型权限 <span class="muted">· 每个号约 10–20 秒，只读模型菜单，不发消息、不耗额度</span></div><span class="num muted">${state.completed || 0} / ${state.total || 1}</span></div>` : importer;
+  const rules = pool?.quotaRules;
+  const foot = automaticQuota ? `<div class="footnote">${icon('info', 'sm')}<div><b>额度规则：</b>识别到额度用完或限流的报错、或 Credit 余量低于阈值时，这个号自动暂停；读不到恢复时间就 1 小时后再试，Credit 恢复后提前解除。也可以在「更多」里手动暂停。已在跑的会话不受影响。${rules ? `额度报错识别规则 ${Number(rules.count) || 0} 条${rules.file ? '，' + button('rules', '打开规则文件', 'link quiet') : ''}。${rules.errors?.length ? esc('规则错误：' + rules.errors.join('；')) : ''}` : ''}</div></div>` : '';
+  const html = `<main class="main"><div class="page">${head}${accounts.length ? summary(all, pool) : ''}<div class="notice warn" role="status" aria-live="polite" ${notice ? '' : 'hidden'}>${esc(notice)}</div>${progress}${pool && pool.ok !== false ? `<section class="list${showQuota ? '' : ' no-quota'}" aria-label="账号列表"><div class="list-head"><span>账号</span><span>状态</span><span>模型权限</span>${showQuota ? '<span>额度</span>' : ''}<span class="r">会话</span><span></span></div><div class="group"><b>个人账号</b></div>${row(personal, { ...state, pool, showQuota })}<div class="group"><b>号池</b><span class="num">${accounts.length} 个号</span><span class="grow"></span><span>号池自动挑号会跳过暂停或需登录的号；也可以在「更多」里手动暂停</span></div>${accounts.length ? accounts.map(a => row(a, { ...state, pool, showQuota })).join('') : empty(local)}</section>${foot}` : ''}</div></main>${state.drawer ? drawer(state, local) : ''}`;
+  // Namespace prototype classes so its controls cannot affect existing pages.
+  return html.replace(/class="([^"]*)"/g, (_, names) => `class="${names.split(/\s+/).filter(Boolean).map(name => 'caa-' + name).join(' ')}"`);
+}
+function renderAccountOption({ type, account = {}, available = 0 }) {
+  if (type === 'manage') return `${scopedIcon('users')}<span>管理账号…</span>`;
+  const personal = type === 'personal', status = accountState(account, { personal });
+  let avatar = `<span class="avatar${personal ? ' me' : ''}">${personal ? '我' : esc([...(account.note || '号')][0])}</span>`;
+  let title = personal ? '个人账号' : esc(account.note || '未备注账号');
+  let sub = [account.accountLabel, account.avoid ? pauseReason(account.avoid) : status.detail, hasCredit(account) ? `剩 ${account.credit.remaining} · ${account.credit.pct}%` : ''].filter(Boolean).join(' · ');
+  let badge = `<span class="pill ${status.tone === 'muted' ? 'mute' : status.tone}">${esc(status.label)}</span>`;
+  let count = `<span class="meta num">${Number(account.activeSessions) || 0} 个会话</span>`;
+  if (['auto', 'manual', 'manage'].includes(type)) {
+    avatar = `<span class="auto-ico">${icon(type === 'auto' ? 'sparkle' : 'users', 'sm')}</span>`;
+    title = { auto: '号池自动挑号', manual: '号池 · 手动选择', manage: '去「账号」页添加…' }[type];
+    sub = { auto: '挑会话最少的可用号，跳过暂停或需登录的号', manual: '指定一个账号，整段会话固定使用', manage: '登录、导入或恢复使用账号' }[type];
+    badge = type === 'manage' ? '' : `<span class="tag accent">可用 ${Number(available) || 0}</span>`; count = '';
+  }
+  return `${avatar}<span class="grow"><span class="t">${title}${badge}</span><span class="s">${esc(sub)}</span></span>${count}<span class="check">${icon('check', 'sm')}</span>`.replace(/class="([^"]*)"/g, (_, names) => `class="${names.split(/\s+/).filter(Boolean).map(name => 'caa-' + name).join(' ')}"`);
+}
+function renderAccountControl({ type, account = {}, available = 0 }) {
+  const personal = type === 'personal', automatic = type === 'auto';
+  const name = automatic ? '号池自动挑号' : personal ? '个人账号' : account.note || '未备注账号';
+  const avatar = automatic ? `<span class="caa-auto-ico">${scopedIcon('sparkle')}</span>` : `<span class="caa-avatar${personal ? ' caa-me' : ''}">${personal ? '我' : esc([...name][0])}</span>`;
+  const state = accountState(account, { personal });
+  return `${avatar}<span class="caa-grow">${esc(name)}</span>${automatic ? `<span class="caa-control-note">可用 ${Number(available) || 0}</span>` : `<span class="caa-pill ${'caa-' + (state.tone === 'muted' ? 'mute' : state.tone)}">${esc(state.label)}</span>`}${scopedIcon('down')}`;
+}
+
+module.exports = { renderAccounts, renderAccountOption, renderAccountControl, canImport };

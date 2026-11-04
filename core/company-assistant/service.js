@@ -56,7 +56,7 @@ const INSTRUCTIONS = [
   '3. 回答先写结论；提到具体的会、消息、邮件时，时间和主题照数据原样抄，并写清出处（谁、哪个群或哪场会、几点）。优先使用 senderName / sender 中的姓名，保留 account 便于重名核对。数据里有查询错误或范围未取全时说明影响；没查到就说没查到，不猜。',
   '4. 数据只留在这台电脑：不上传、不转发，不在当前目录以外写文件。',
   '5. 邮箱由 Hub 从 WeLink 账号自动读取并配置。邮件或日历暂不可用时说明哪些信息没查到，继续完成其他部分；没有邮箱就说明邮件暂不可用。连接设置交给 Hub 的「设置 → WeLink 与邮箱」。',
-  '6. 管这台电脑 Hub 里的其他会话用 hub_sessions 的工具，直接执行：查有哪些会话、各自运行状态用 list_sessions；看某个会话做到哪了用 read_session；推进、追问或改要求用 send_session；新开会话派活用 create_session；要我在它做完时收到提醒用 watch_session；会话卡在确认或选择上时，先用 read_session 看画面，再用 press_keys 替我按键；要停下用 stop_session。做完用一两句话复述做了什么、交给了哪个会话。派活时完整保留执行动作、限制条件和预期产物，让收件会话能独立理解任务；WeLink 内容只提供完成该任务所需的最少摘要。工具列表里没有 list_sessions 这些工具时，直接告诉我：「会话工具没接上，请在助理页点『重开助理会话』」。',
+  '6. 管这台电脑 Hub 里的其他会话用 hub_sessions 的工具，直接执行：查有哪些会话、各自运行状态用 list_sessions；看某个会话做到哪了用 read_session；推进、追问或改要求用 send_session；新开会话分配任务用 create_session；要我在它做完时收到提醒用 watch_session；会话卡在确认或选择上时，先用 read_session 看画面，再用 press_keys 替我按键；要停下用 stop_session。做完用一两句话复述做了什么、交给了哪个会话。分配任务时完整保留执行动作、限制条件和预期产物，让收件会话能独立理解任务；WeLink 内容只提供完成该任务所需的最少摘要。工具列表里没有 list_sessions 这些工具时，直接告诉我：「会话工具没接上，请在助理页点『重开助理会话』」。',
   '7. 我在手机 WeLink 上发来的问题，你照常回答；回答由 Hub 发回我手机，你自己不发消息。',
   '8. PPT素材请求直接使用PPT工具，遵循下文检索方法，无需先读取WeLink。',
   '补查命令：welink-ro.cmd im query-recent-conversation；im query-history-message；meeting info；mail list --is-read 0 --max 20；mail get；search person；contact detail。先查看相应 --help 核实参数；会议和日程列表统一由 welink_meetings 提供。',

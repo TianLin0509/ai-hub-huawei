@@ -1557,9 +1557,10 @@ class SessionManager extends EventEmitter {
     const pool = require('./codeagent-pool');
     const dataDir = getHubDataDir();
     const personal = pool.readCredentials(personalConfig.configDir);
-    const accounts = pool.listAccounts(dataDir, { activeCounts: this.codeagentPoolActiveCounts(), personalAccountId: personal.accountId });
+    let accounts = pool.listAccounts(dataDir, { activeCounts: this.codeagentPoolActiveCounts(), personalAccountId: personal.accountId });
     let account;
     const bridge = codeAgentReadOnly(opts);
+    if (!bridge && !opts.codeagentPoolAccount) accounts = pool.withPauseStatus(dataDir, accounts);
     const who = a => (bridge ? '号池里的一个号' : `号池账号 ${pool.label(a)}`);
     if (opts.codeagentPoolAccount) {
       account = accounts.find(a => a.id === opts.codeagentPoolAccount);
@@ -1571,10 +1572,11 @@ class SessionManager extends EventEmitter {
       if (!account) throw new Error('选的号池账号已不在号池里，请重新选择');
       if (account.state !== 'ready') throw new Error(`${who(account)} 需要号主重新登录，未启动会话`);
       if (account.sameAsPersonal || account.duplicateOf) throw new Error(`${who(account)} 和别的号重复，不能单独使用`);
+      if (account.avoid) throw new Error(`${who(account)} 已暂停使用，请在左栏「账号」恢复后再新建会话`);
     } else {
-      if (!accounts.length) throw new Error('号池里还没有账号');
+      if (!accounts.length) throw new Error('号池里还没有账号：请到左栏「账号」添加');
       account = pool.pickAccount(accounts, { model: opts.codeagentModelPick === true ? opts.model : '' });
-      if (!account) throw new Error('号池里暂时没有可用的号（需要号主重新登录，或没有所选模型的权限），未启动会话');
+      if (!account) throw new Error('号池里暂时没有可用的号（已暂停、需要重新登录或没有所选模型的权限），未启动会话');
     }
     const cwd = opts.cwd || process.env.USERPROFILE || process.env.HOME || '';
     const override = pool.projectCredentialsOverride(cwd);
@@ -1729,7 +1731,7 @@ class SessionManager extends EventEmitter {
     // Hub 自己的进程环境里若带着（例如从某个会话里启动了测试 Hub），不能原样传给每个新会话，否则新会话会顶着别人的身份（2026-10-20）。
     for (const key of Object.keys(sessionEnv)) if (/^HUB_BRIDGE_/i.test(key)) delete sessionEnv[key];
     applyInteractiveTerminalEnv(sessionEnv, { truecolor: isPtyAgent && (isClaude || isDeepSeekClaude || isCodexRuntime || isCodeAgent) });
-    // 自动派活的 CodeAgent 会话：给 ask-gate hook 的标记（拒绝提问工具，core/auto-dispatch-rules.js）；其余会话去掉继承来的标记。
+    // 自动分配任务的 CodeAgent 会话：给 ask-gate hook 的标记（拒绝提问工具，core/auto-dispatch-rules.js）；其余会话去掉继承来的标记。
     require('./auto-dispatch-rules').applySessionEnv(sessionEnv, isCodeAgent ? opts.purpose : null);
     let codexProfile = null;
     let codeagentConfig = isCodeAgent ? require('./codeagent-config').resolveCodeAgentConfig(process.env) : null;

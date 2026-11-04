@@ -90,9 +90,13 @@
   let claudeAccountId = 'default';
   let claudeBackend = 'subscription';
   let codexAccountId = '';
-  // CodeAgent 号池（core/codeagent-pool.js）：号池里有可用的号时才显示「用量账号」，普通同事看到的和以前一样。
+  // CodeAgent accounts share availability and labels with the company account page.
+  const companyAccounts = require('../core/distribution').target === 'company';
+  const { accountState, accountOptionLabel, usableAccounts, accountChoiceValue, accountChoiceSelection } = require('./codeagent-account-state');
+  const { renderAccountControl } = require('./codeagent-accounts-view');
   const CODEAGENT_ACCOUNT_KEY = 'hub.codeagent.account';
   let codeagentPool = { usable: 0, accounts: [], personal: {} };
+  let codeagentPoolError = '';
   // 三种：personal 个人账号；pool 号池自动挑号；pool-manual 号池里手动选一个号（2026-10-16 用户要求）。
   const CODEAGENT_POOL_PICK_KEY = 'hub.codeagent.poolPick';
   let codeagentAccount = (() => { try { const v = localStorage.getItem(CODEAGENT_ACCOUNT_KEY); return v === 'pool' || v === 'pool-manual' ? v : 'personal'; } catch { return 'personal'; } })();
@@ -105,15 +109,17 @@
   let codeagentDefaultModel = '';
   const codeagentModelLabel = id => { try { return require('../core/codeagent-models').modelLabel(id); } catch { return id; } };
   // 个人账号的登录状态（号池列表里的 personal.state）：不是 ready 时在账号下拉和说明里写出来。
-  const PERSONAL_STATE_TEXT = { expired: '登录已过期', 'login-required': '还没登录', unreadable: '登录凭证读不懂' };
-  const personalStateText = () => PERSONAL_STATE_TEXT[(codeagentPool.personal || {}).state] || '';
-  const usablePoolAccounts = () => (codeagentPool.accounts || []).filter(a => a.state === 'ready' && !a.sameAsPersonal && !a.duplicateOf);
-  const codeagentUsesPool = () => (codeagentAccount === 'pool' || codeagentAccount === 'pool-manual') && codeagentPool.usable > 0;
+  const personalStateText = () => accountState(codeagentPool.personal, { personal: true }).detail || '';
+  const usablePoolAccounts = () => usableAccounts(codeagentPool.accounts);
+  const codeagentPoolRequested = () => codeagentAccount === 'pool' || codeagentAccount === 'pool-manual';
+  const codeagentUsesPool = () => codeagentPoolRequested() && usablePoolAccounts().length > 0;
   const codeagentManualPick = () => {
     if (codeagentAccount !== 'pool-manual' || !codeagentUsesPool()) return '';
     const list = usablePoolAccounts();
-    return (list.find(a => a.id === codeagentPoolPick) || list[0] || {}).id || '';
+    return (codeagentPoolPick ? list.find(a => a.id === codeagentPoolPick) : list[0])?.id || '';
   };
+  const codeagentSelectionUnavailable = () => selectedKind === 'codeagent' && codeagentPoolRequested()
+    && (!codeagentUsesPool() || (codeagentAccount === 'pool-manual' && !codeagentManualPick()));
   let codexBackend = 'subscription';
   // DeepSeek 接入：上次选的方式（Hub 配置记住，默认 Token Plan）+ 两条线各自是否有 Key。
   let deepseekRoute = deepseekProfile.DEFAULT_ROUTE;
@@ -1054,35 +1060,60 @@
   function paintCodeagentAccount() {
     const field = document.getElementById('new-session-codeagent-account-field');
     const select = document.getElementById('new-session-codeagent-account');
+    const control = document.getElementById('new-session-codeagent-choice');
     const note = document.getElementById('new-session-codeagent-account-note');
-    const show = selectedKind === 'codeagent' && codeagentPool.usable > 0;
+    const show = selectedKind === 'codeagent' && (companyAccounts || codeagentPool.usable > 0);
     const pickField = document.getElementById('new-session-codeagent-pool-field');
     const pickSelect = document.getElementById('new-session-codeagent-pool');
     if (field) field.hidden = !show;
+    field?.classList.toggle('caa-account-field', companyAccounts);
+    if (select) select.hidden = companyAccounts;
+    if (control) control.hidden = !companyAccounts;
+    if (field?.querySelector('span')) field.querySelector('span').textContent = companyAccounts ? '账号' : '用量账号';
     if (note) note.hidden = !show;
     const manual = show && codeagentAccount === 'pool-manual';
-    if (pickField) pickField.hidden = !manual;
+    if (pickField) pickField.hidden = !manual || companyAccounts;
     if (!show || !select) return;
     const personal = codeagentPool.personal || {};
-    const modelsText = list => (list && list.length ? list.join('、') : '模型未获取');
-    const personalIssue = personalStateText();
-    const html = `<option value="personal">${escapeHtml('个人账号' + (personal.accountLabel ? ' · ' + personal.accountLabel : '') + (personalIssue ? `（${personalIssue}）` : ''))}</option>`
-      + `<option value="pool">${escapeHtml(`号池 · 自动路由（${codeagentPool.usable} 个号，优先没有会话的号）`)}</option>`
-      + `<option value="pool-manual">${escapeHtml('号池 · 手动选择')}</option>`;
+    const personalIssue = codeagentPoolError || personalStateText();
+    const available = usablePoolAccounts().length;
+    const metadata = (type, account = {}) => companyAccounts ? ` data-account-info="${escapeHtml(JSON.stringify({ type, account, available }))}"` : '';
+    select.dataset.accountList = companyAccounts ? '1' : '';
+    const manage = companyAccounts ? `<option value="manage-accounts" data-account-divider="1"${metadata('manage')}>管理账号…</option>` : '';
+    let html = `<option value="personal"${metadata('personal', personal)}>${escapeHtml('个人账号 · ' + accountOptionLabel(personal, { personal: true }))}</option>`
+      + `<option value="pool"${metadata('auto')}${available ? '' : ' disabled'}>${escapeHtml(`号池自动挑号（${available} 个可用号，优先没有会话的号）`)}</option>`;
+    const chosenId = codeagentPoolPick || codeagentManualPick();
+    if (companyAccounts) {
+      const accounts = codeagentPool.accounts || [];
+      const missing = manual && !accounts.some(a => a.id === chosenId);
+      if (missing) html += `<option value="${escapeHtml(accountChoiceValue('pool-manual', chosenId))}" data-account-section="指定号池账号" disabled>原账号不可用，请重新选择</option>`;
+      html += accounts.map((a, index) => `<option value="${escapeHtml(accountChoiceValue('pool-manual', a.id))}"${!index && !missing ? ' data-account-section="指定号池账号"' : ''}${metadata('account', a)}${accountState(a).usable ? '' : ' disabled'}>${escapeHtml(accountOptionLabel(a))}</option>`).join('') + manage;
+    } else html += `<option value="pool-manual"${available ? '' : ' disabled'}>号池 · 手动选择</option>`;
     if (select.dataset.built !== html) { select.innerHTML = html; select.dataset.built = html; }
-    select.value = codeagentUsesPool() ? codeagentAccount : 'personal';
+    select.value = companyAccounts ? accountChoiceValue(codeagentAccount, chosenId) : codeagentAccount;
     select.disabled = submitting;
-    if (manual && pickSelect) {
-      const options = usablePoolAccounts().map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(`${a.accountLabel}${a.note ? '（' + a.note + '）' : ''} · ${modelsText(a.models)} · ${a.activeSessions || 0} 个会话`)}</option>`).join('');
+    if (companyAccounts && control) {
+      const account = manual ? (codeagentPool.accounts || []).find(a => a.id === chosenId) || { note: '原账号不可用', state: 'login-required' } : personal;
+      const content = renderAccountControl({ type: manual ? 'account' : codeagentAccount === 'pool' ? 'auto' : 'personal', account, available });
+      if (control.innerHTML !== content) control.innerHTML = content;
+      control.disabled = submitting;
+      control.title = select.selectedOptions[0]?.textContent || '选择账号';
+    }
+    if (manual && pickSelect && !companyAccounts) {
+      pickSelect.dataset.accountList = companyAccounts ? '1' : '';
+      const missing = codeagentPoolPick && !(codeagentPool.accounts || []).some(a => a.id === codeagentPoolPick);
+      const options = (missing ? `<option value="${escapeHtml(codeagentPoolPick)}" disabled>原账号已移出，请重新选择</option>` : '') + (codeagentPool.accounts || []).map(a => `<option value="${escapeHtml(a.id)}"${metadata('account', a)}${accountState(a).usable ? '' : ' disabled'}>${escapeHtml(accountOptionLabel(a))}</option>`).join('') + manage;
       if (pickSelect.dataset.built !== options) { pickSelect.innerHTML = options; pickSelect.dataset.built = options; }
-      pickSelect.value = codeagentManualPick();
+      pickSelect.value = codeagentPoolPick || codeagentManualPick();
       pickSelect.disabled = submitting;
     }
-    if (note) note.textContent = !codeagentUsesPool()
-      ? (personalIssue ? `个人账号${personalIssue}：新会话可能停在 CodeAgent 的登录提示上。可在「账号与号池」里点「重新登录」，或在会话「后台」按提示登录；也可以先改用号池里的号。` : '个人账号：用你自己登录的 CodeAgent，和以前一样。')
+    if (note) note.textContent = codeagentSelectionUnavailable()
+      ? '当前账号不可用，请到「账号」页登录、恢复使用或添加账号。'
+      : !codeagentUsesPool()
+      ? (personalIssue ? `个人账号提示：${personalIssue}。仍可创建会话，在会话「后台」按提示处理。` : '个人账号：用你自己登录的 CodeAgent，和以前一样。')
       // 一个号固定一个模型（2026-10-20 用户）：启动中心不再有 CodeAgent 模型菜单，这里不再提它。
-      : manual ? '号池 · 手动选择：用你在右边选的号，整段会话固定用它，模型就是这个号自己的模型。'
-      : '号池 · 自动路由：创建时挑一个没有进行中会话的号，整段会话固定用它，模型就是那个号自己的模型。';
+      : manual ? '指定账号：整段会话固定使用这个号及其默认模型。'
+      : '号池自动挑号会跳过暂停或需登录的号；整段会话固定使用选中的账号。';
   }
 
   let launchConfigLayout = null, launchAccountCtx = null;
@@ -1398,6 +1429,7 @@
     }
     const submit = document.getElementById('new-session-submit');
     if (submit) submit.disabled = submitting || accountSaving || (selectedKind === 'codex' && !!accountReadError)
+      || codeagentSelectionUnavailable()
       || (DEEPSEEK_ROUTE_KINDS.has(selectedKind) && !routeStatus.available)
       || (workspaceMode === 'existing' && !existingWorkspace);
   }
@@ -1480,6 +1512,7 @@
   }
 
   function openNewSessionModal(options = {}) {
+    window.__codeagentAccountsHide?.();
     if (!menuEl) return;
     if (options.preserveDraft) {
       submitting = false; setError(''); paint(); menuEl.style.display = 'flex';
@@ -1499,6 +1532,11 @@
     const { kindAllowed } = require('../core/distribution');
     selectedKind = [panelKind(options.kind), panelKind(require('./codeagent-preference').preferredKind(Object.keys(KIND_LABELS).filter(kindAllowed)))]
       .find(kind => kind && kindAllowed(kind)) || require('./codeagent-preference').preferredKind(Object.keys(KIND_LABELS).filter(kindAllowed));
+    if (selectedKind === 'codeagent' && (options.codeagentPoolPick || options.codeagentAccount === 'personal')) {
+      codeagentAccount = options.codeagentPoolPick ? 'pool-manual' : 'personal';
+      codeagentPoolPick = options.codeagentPoolPick || '';
+      try { localStorage.setItem(CODEAGENT_ACCOUNT_KEY, codeagentAccount); localStorage.setItem(CODEAGENT_POOL_PICK_KEY, codeagentPoolPick); } catch { /* optional persistence */ }
+    }
     deepseekRouteTouched = false;
     const requestedWorkspace = options.workspace && typeof options.workspace.path === 'string'
       ? { ...options.workspace }
@@ -1663,8 +1701,13 @@
     if (base === 'claude') return loadClaudeModelCatalog(options);
     // CodeAgent：已知模型 + 本机回答里实际出现过的模型（如公司的 deepseek… 内部名）。
     if (base === 'codeagent') return ipcRenderer.invoke('codeagent-pool:list').then(status => {
-      if (status && status.ok !== false) codeagentPool = status;
-    }).catch(() => {}).then(() => ipcRenderer.invoke('codeagent:models', { account: codeagentUsesPool() ? 'pool' : 'personal', poolAccount: codeagentManualPick() || undefined })).then(result => {
+      if (status && status.ok !== false) { codeagentPool = status; codeagentPoolError = ''; }
+      else codeagentPoolError = '账号状态暂时读取失败';
+    }).catch(() => { codeagentPoolError = '账号状态暂时读取失败'; }).then(() => {
+      const unavailable = codeagentPoolRequested() && (!codeagentUsesPool() || (codeagentAccount === 'pool-manual' && !codeagentManualPick()));
+      if (unavailable) { setRuntimeModelOptions('codeagent', []); return null; }
+      return ipcRenderer.invoke('codeagent:models', { account: codeagentUsesPool() ? 'pool' : 'personal', poolAccount: codeagentManualPick() || undefined });
+    }).then(result => {
       if (result && Array.isArray(result.options) && result.options.length) setRuntimeModelOptions('codeagent', result.options);
       codeagentDefaultModel = result && typeof result.defaultModel === 'string' ? result.defaultModel : '';
       return result;
@@ -1693,7 +1736,7 @@
     });
     if (DEEPSEEK_ROUTE_KINDS.has(selectedKind)) opts.deepseekRoute = deepseekRoute;
     if (selectedKind === 'codeagent') opts.codeagentModelPick = modelTouchedByUser;
-    if (selectedKind === 'codeagent' && codeagentUsesPool()) {
+    if (selectedKind === 'codeagent' && codeagentPoolRequested()) {
       opts.codeagentAccount = 'pool';
       const pick = codeagentManualPick();
       if (pick) opts.codeagentPoolPick = pick;
@@ -1724,6 +1767,7 @@
       // Antigravity 的清单只增加可选模型，默认模型始终有效；`agy models` 要起完整服务、
       // 刷新登录（5–15 秒），创建会话不等它。
       if (selectedKind !== 'gemini') await loadModelCatalog(selectedKind);
+      if (codeagentSelectionUnavailable()) throw new Error('所选账号当前不可用，请到「账号」页登录或恢复使用后再试');
       paintTuning();
       if (submit) submit.textContent = '准备目录…';
       if (workspaceMode === 'scratch') workspace = await createScratch('未命名任务');
@@ -1832,6 +1876,7 @@
       paint();
     });
     document.getElementById('new-session-codeagent-pool')?.addEventListener('change', event => {
+      if (event.target.value === 'manage-accounts') { paint(); window.__codeagentAccountsOpen?.(); return; }
       codeagentPoolPick = event.target.value;
       try { localStorage.setItem(CODEAGENT_POOL_PICK_KEY, codeagentPoolPick); } catch { /* 隐私模式 */ }
       // 换了号：模型回到这个号的默认（上一个号点选的模型这个号未必有权限）
@@ -1841,8 +1886,13 @@
       void loadModelCatalog('codeagent').then(paint);
     });
     document.getElementById('new-session-codeagent-account')?.addEventListener('change', event => {
-      codeagentAccount = ['pool', 'pool-manual'].includes(event.target.value) ? event.target.value : 'personal';
-      try { localStorage.setItem(CODEAGENT_ACCOUNT_KEY, codeagentAccount); } catch { /* 隐私模式 */ }
+      if (event.target.value === 'manage-accounts') { paint(); window.__codeagentAccountsOpen?.(); return; }
+      if (companyAccounts) {
+        const choice = accountChoiceSelection(event.target.value);
+        codeagentAccount = choice.mode;
+        if (choice.mode === 'pool-manual') codeagentPoolPick = choice.pick;
+      } else codeagentAccount = ['pool', 'pool-manual'].includes(event.target.value) ? event.target.value : 'personal';
+      try { localStorage.setItem(CODEAGENT_ACCOUNT_KEY, codeagentAccount); localStorage.setItem(CODEAGENT_POOL_PICK_KEY, codeagentPoolPick); } catch { /* 隐私模式 */ }
       modelTouchedByUser = false; codeagentDefaultModel = '';
       setError('');
       paint();

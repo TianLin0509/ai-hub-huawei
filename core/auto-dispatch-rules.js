@@ -1,5 +1,5 @@
 'use strict';
-// 自动派活会话「不出选择题」（2026-10-19 用户：CodeAgent 有时弹出选择题，要在后台终端里选，自动派活的轮次就一直卡着）。
+// 自动分配任务会话「不出选择题」（2026-10-19 用户：CodeAgent 有时弹出选择题，要在后台终端里选，自动分配任务的轮次就一直卡着）。
 // 两层，规则文字都只在这里：
 //   说明层：NO_CHOICE_RULE 写进这三类会话启动时的系统提示（session-manager hubRulesSystemPrompt → --append-system-prompt-file，
 //           2026-10-13 公司真机实测 CodeAgent 认这个参数）。不往任何代码目录写规则文件：公司电脑必须保持原样。
@@ -14,10 +14,10 @@ const { createHash } = require('node:crypto');
 const AUTO_PURPOSES = Object.freeze(['company-assistant', 'company-forum', 'company-ai']);
 const isAutoDispatchPurpose = purpose => AUTO_PURPOSES.includes(String(purpose || ''));
 
-const RULE_LABEL = '自动派活规则';
+const RULE_LABEL = '自动分配任务规则';
 const NO_CHOICE_RULE = [
-  '## 自动派活会话的工作方式',
-  '这个会话由 AI Hub 自动派活，终端前没有人值守，你的回答会原样转给发问方。请这样工作：',
+  '## 自动分配任务会话的工作方式',
+  '这个会话由 AI Hub 自动分配任务，终端前没有人值守，你的回答会原样转给发问方。请这样工作：',
   '1. 一次做完：遇到需要确认、或要在几种做法里选一种的地方，按最合理的假设继续做下去，直到给出完整回答。',
   '2. 沟通都写在回答正文里：需要对方定夺的事项，用文字写进回答，由对方读完后追问。',
   '3. 回答末尾单列「假设与备选」：逐条写出这次采用的假设，以及每条对应的备选做法和适用情形，方便对方追问纠正。',
@@ -35,7 +35,7 @@ const ENV_FLAG = 'AI_HUB_NO_CHOICE';
 const ENV_REASON = 'AI_HUB_NO_CHOICE_REASON';
 const ENV_TOOLS = 'AI_HUB_NO_CHOICE_TOOLS';
 const DEFAULT_TOOLS = Object.freeze(['AskUserQuestion']);
-const DENY_REASON = '这个会话是自动派活的，没人能回答选择题：请按最合理的假设继续，并在回答里写明假设';
+const DENY_REASON = '这个会话是自动分配任务的，没人能回答选择题：请按最合理的假设继续，并在回答里写明假设';
 const TOOL_NAME = /^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/;
 
 function providerConfig() {
@@ -59,7 +59,7 @@ function gateConfig(env = process.env, provider = providerConfig()) {
 function gateMatcher(config = gateConfig()) {
   return config.enabled ? config.tools.join('|') : null;
 }
-// 会话终端的环境变量：先去掉继承来的（Hub 可能是从某个自动派活会话的进程树里启动的），再只给这三类会话设上。
+// 会话终端的环境变量：先去掉继承来的（Hub 可能是从某个自动分配任务会话的进程树里启动的），再只给这三类会话设上。
 function applySessionEnv(sessionEnv, purpose, config = gateConfig()) {
   for (const key of [ENV_FLAG, ENV_REASON, ENV_TOOLS]) delete sessionEnv[key];
   if (!config.enabled || !isAutoDispatchPurpose(purpose)) return false;

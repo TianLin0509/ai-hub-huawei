@@ -147,9 +147,9 @@ function budgetCheck(ledger) {
     + (ok ? (tight ? '，没有返工余量。' : '。') : `，不够；建议额度至少 ${ledger.budget.roundsUsed + minRounds} 轮，或缩减计划。`);
   return { minRounds, available, ok, text: message };
 }
-// 能否派活：未暂停、未结束。查询类工具不受影响；派工还要匹配当前计划（见 service.startWorkflow）。
+// 能否分配任务：未暂停、未结束。查询类工具不受影响；派工还要匹配当前计划（见 service.startWorkflow）。
 function canDispatch(ledger) {
-  if (ledger.status === 'ended') return { ok: false, reason: '编排已结束；用户恢复编排前不能派活' };
+  if (ledger.status === 'ended') return { ok: false, reason: '编排已结束；用户恢复编排前不能分配任务' };
   if (ledger.status === 'finished') return { ok: false, reason: '任务已结项；用户提出新要求后再提交新计划' };
   if (ledger.status === 'halted') {
     const budget = /^budget_/.test(ledger.halt?.reason || '');

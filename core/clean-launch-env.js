@@ -23,9 +23,9 @@ const SESSION_VARS = {
   CLAUDE_HUB_TOKEN: 'Hub 会话的 hook 口令：属于启动它的那个 Hub',
   CLAUDE_HUB_SOFT_COMPACT: 'Hub 会话的软压缩标记：带着它，提醒钩子会让 AI 结束本轮等启动它的那个 Hub 来压缩',
   CODEAGENT3_LAUNCHER_PID: 'CodeAgent 启动器标记：说明 Hub 是从某个 CodeAgent 会话里拉起的',
-  // 「禁止选择题」分支（fix/no-choice-prompt）给自动派活会话设的会话内部标记，hook 靠它判断要不要拦；
+  // 「禁止选择题」分支（fix/no-choice-prompt）给自动分配任务会话设的会话内部标记，hook 靠它判断要不要拦；
   // 用户不会持久设置这个开关，所以无条件清掉（审核 2026-10-19 确认）。
-  AI_HUB_NO_CHOICE: '自动派活会话的「禁止选择题」内部标记：带着它，Hub 里所有会话都会被当成自动派活会话拦选择题',
+  AI_HUB_NO_CHOICE: '自动分配任务会话的「禁止选择题」内部标记：带着它，Hub 里所有会话都会被当成自动分配任务会话拦选择题',
 };
 const SESSION_PREFIXES = {
   CODEAGENT_HUB_: 'CodeAgent / CodeTeam 会话的 hook 标记：带着它，会话事件会投给别的程序',

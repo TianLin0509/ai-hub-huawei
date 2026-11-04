@@ -852,9 +852,11 @@ function registerSessionIpc(ipcMain, deps) {
     try {
       const { getHubDataDir } = require('../../core/data-dir');
       const pool = require('../../core/codeagent-pool');
-      const id = pool.addAccount(getHubDataDir(), { note: payload && payload.note });
-      pool.openLoginWindow(getHubDataDir(), id, require('../../core/codeagent-config').resolveCodeAgentConfig(process.env));
+      const config = require('../../core/codeagent-config').resolveCodeAgentConfig(process.env);
+      const id = pool.addAccount(getHubDataDir(), { note: payload && payload.note, personalDir: config.configDir });
+      pool.openLoginWindow(getHubDataDir(), id, config);
       autoProbeAfterLogin(id);
+      sendToRenderer('codeagent-pool:changed', {});
       return { ...codeagentPoolStatus(), added: id };
     } catch (error) { return { ok: false, error: error.message }; }
   });
@@ -871,6 +873,7 @@ function registerSessionIpc(ipcMain, deps) {
       const personalDir = require('../../core/codeagent-config').resolveCodeAgentConfig(process.env).configDir;
       const id = require('../../core/codeagent-pool').importLocal(getHubDataDir(), payload?.dir, { note: payload?.note, personalDir });
       autoProbeCodeAgentAccount(id);
+      sendToRenderer('codeagent-pool:changed', {});
       return { ...codeagentPoolStatus(), added: id, probing: [...codeagentProbing] };
     } catch (error) { return { ok: false, error: error.message }; }
   });
@@ -881,6 +884,7 @@ function registerSessionIpc(ipcMain, deps) {
       if (!pool.readRegistry(getHubDataDir()).accounts.some(a => a.id === payload?.id)) throw new Error('号池里没有这个账号');
       pool.openLoginWindow(getHubDataDir(), payload.id, require('../../core/codeagent-config').resolveCodeAgentConfig(process.env));
       autoProbeAfterLogin(payload.id);
+      sendToRenderer('codeagent-pool:changed', {});
       return codeagentPoolStatus();
     } catch (error) { return { ok: false, error: error.message }; }
   });
@@ -891,6 +895,7 @@ function registerSessionIpc(ipcMain, deps) {
       require('../../core/codeagent-pool').openLoginWindow(getHubDataDir(), 'personal', require('../../core/codeagent-config').resolveCodeAgentConfig(process.env), { personal: true });
       // 凭证出现后推送 codeagent-pool:changed（账号与号池、启动中心据此刷新），并重新获取模型权限
       autoProbeAfterLogin('personal');
+      sendToRenderer('codeagent-pool:changed', {});
       return codeagentPoolStatus();
     } catch (error) { return { ok: false, error: error.message }; }
   });
@@ -898,10 +903,11 @@ function registerSessionIpc(ipcMain, deps) {
     try {
       const { getHubDataDir } = require('../../core/data-dir');
       require('../../core/codeagent-pool').setNote(getHubDataDir(), payload?.id, payload?.note);
+      sendToRenderer('codeagent-pool:changed', {});
       return codeagentPoolStatus();
     } catch (error) { return { ok: false, error: error.message }; }
   });
-  // 手动暂停 / 恢复派活给一个号（额度感知，2026-10-18）：暂停 = 标「避让中」（hours 小时后自动恢复，不填 = 直到手动恢复）；
+  // 手动暂停 / 恢复使用给一个号（额度感知，2026-10-18）：暂停 = 标「避让中」（hours 小时后自动恢复，不填 = 直到手动恢复）；
   ipcMain.handle('codeagent-pool:pause', (_event, payload) => {
     try {
       const { getHubDataDir } = require('../../core/data-dir');
@@ -911,6 +917,7 @@ function registerSessionIpc(ipcMain, deps) {
       if (hours != null && !(hours >= 0.25 && hours <= 72)) throw new Error('暂停时长只能是 0.25–72 小时');
       require('../../core/codeagent-quota').markAvoid(getHubDataDir(), id, { source: 'manual', reason: '在这台电脑上手动暂停', until: hours ? Date.now() + hours * 3600000 : null });
       sendToRenderer('bridge:changed', {});
+      sendToRenderer('codeagent-pool:changed', {});
       return codeagentPoolStatus();
     } catch (error) { return { ok: false, error: error.message }; }
   });
@@ -919,6 +926,7 @@ function registerSessionIpc(ipcMain, deps) {
       const { getHubDataDir } = require('../../core/data-dir');
       require('../../core/codeagent-quota').clearAvoid(getHubDataDir(), String(payload?.id || ''), { by: 'local' });
       sendToRenderer('bridge:changed', {});
+      sendToRenderer('codeagent-pool:changed', {});
       return codeagentPoolStatus();
     } catch (error) { return { ok: false, error: error.message }; }
   });
@@ -928,6 +936,7 @@ function registerSessionIpc(ipcMain, deps) {
       const active = sessionManager.codeagentPoolActiveCounts()[payload?.id] || 0;
       if (active) throw new Error(`还有 ${active} 个会话在用这个号，先关掉或让它们休眠再移出`);
       require('../../core/codeagent-pool').removeAccount(getHubDataDir(), payload?.id);
+      sendToRenderer('codeagent-pool:changed', {});
       return codeagentPoolStatus();
     } catch (error) { return { ok: false, error: error.message }; }
   });

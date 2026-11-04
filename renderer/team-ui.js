@@ -148,6 +148,10 @@
     accounts().then(accountOptions => {
       if (modal !== opened) return;
       if(!accountOptions.length)throw Error('号池里还没有账号，请先在账号管理里添加账号。');
+      const updateApproval = () => {
+        opened.querySelector('[data-team-act="approve"]').disabled = [...opened.querySelectorAll('select[data-team-account]')]
+          .some(sel => !accountOptions.some(a => a.id === sel.value && a.usable));
+      };
       modal.querySelectorAll('select[data-team-account]').forEach(sel => {
         const rows = accountOptions;
         if (!rows) return;
@@ -165,10 +169,10 @@
             if(chosen&&!available.includes(chosen))model.insertAdjacentHTML('beforeend',`<option value="${esc(chosen)}">${esc(chosen)}（需核对权限）</option>`);
             model.value=chosen;
           };
-          fill(true);sel.addEventListener('change',()=>fill(false));
+          fill(true);sel.addEventListener('change',()=>{fill(false);updateApproval();});
         }
       });
-      modal.querySelector('[data-team-act="approve"]').disabled=false;
+      updateApproval();
     }).catch(error=>{if(modal!==opened)return;const e=modal.querySelector('.team-error');e.hidden=false;e.textContent=`${error.message} 处理后重新打开这份计划即可继续。`;});
     modal.querySelector('[data-team-act="approve"]').focus();
   }

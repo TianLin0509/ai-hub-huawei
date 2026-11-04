@@ -117,7 +117,7 @@ function setPersonalModel({ dataDir, personalDir, model = '', restore = false, f
   } else {
     const want = String(model || '').trim();
     if (!MODEL_ID.test(want)) throw fail('bad-model', 'model 要是模型名（如 GLM-5.2-WX-Auto）');
-    if (!allowed.length) throw fail('list-unknown', '个人账号的模型权限清单未知，不改；请在公司 Hub「账号与号池」里点「获取模型权限」');
+    if (!allowed.length) throw fail('list-unknown', '个人账号的模型权限清单未知，不改；请在公司 Hub 左栏「账号」里点「获取模型权限」');
     target = allowed.find(m => m.toLowerCase() === want.toLowerCase());
     if (!target) throw fail('not-in-list', `${want} 不在个人账号的权限清单里，可选：${allowed.join('、')}`);
     if (list.authoritative) verifiedBy = list.source;

@@ -195,6 +195,18 @@ function pickerFixture({ kind = 'codeagent', storage = memoryStorage(), account 
   return { ...f, controller, calls, storage };
 }
 
+test('the composer lists the automatically installed company-team skill and inserts its invocation', async t => {
+  const configDir = temp(t);
+  require('../core/codeagent-bundled-skills').syncCompanyTeamSkill(configDir);
+  const f = pickerFixture({ inventory: async () => ({ ok: true, ...scanCodeAgentSkills(configDir) }) });
+  t.after(() => f.controller.dispose());
+  f.controller.button.dispatchEvent(event('click')); await new Promise(setImmediate);
+  const popup = f.document.body.querySelector('.fi-skill-picker');
+  assert.match(popup.textContent, /company-team/);
+  popup.querySelector('.fi-skill-option').dispatchEvent(event('click'));
+  assert.equal(skills.skillPrompt(f.input, f.input.textContent, session), '/company-team');
+});
+
 test('toolbar list rescans each open, shows descriptions/hints, replaces the tag and keeps the AgentCenter entry', async () => {
   const f = pickerFixture();
   f.controller.button.dispatchEvent(event('click')); await new Promise(setImmediate);

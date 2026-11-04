@@ -4607,6 +4607,9 @@ app.whenReady().then(async () => {
       } catch (error) { console.warn('[codeagent-config] 核对继承的配置目录失败：' + error.message); }
     });
     const allowed = isIsolatedHub() ? !!process.env.AI_HUB_CODEAGENT_CONFIG_DIR : true;
+    require('./core/codeagent-bundled-skills').syncCompanyTeamSkills({
+      dataDir: getHubDataDir(), personalDir: allowed ? codeagentConfig.configDir : null,
+    });
     if (allowed && fs.existsSync(codeagentConfig.configDir)) {
       // choiceGateMatcher：自动派活会话拒绝提问工具的 hook（core/auto-dispatch-rules.js，可关）。
       const settingsOptions = { events: require('./core/codeagent-config').HOOK_EVENTS,

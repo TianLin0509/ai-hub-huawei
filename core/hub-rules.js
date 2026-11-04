@@ -279,7 +279,7 @@ function createHubRulesStore(options = {}) {
 
   // Claude 启动时用 --append-system-prompt-file 读的文件。按内容命名、写后不改，
   // 多个会话同时启动也互不干扰；目录只留最近 20 份。
-  // extra：某类会话额外带的一段（自动派活会话的规则，core/auto-dispatch-rules.js）。带了就按整份内容的校验值命名；
+  // extra：某类会话额外带的一段（自动分配任务会话的规则，core/auto-dispatch-rules.js）。带了就按整份内容的校验值命名；
   // rules 可以为空（规则页全关时，这类会话仍带那一段）。
   function systemPromptFile(rules, { extra = null } = {}) {
     const dir = path.join(root, 'system');

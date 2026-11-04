@@ -46,7 +46,7 @@ function readSettings(settingsPath, fsModule) {
 // events / manageStatusLine / managePermissionMode：同形态的其他 CLI（公司 Code Agent）共用这套合并，
 // 但只登记它实测支持的事件，不接管状态栏、不改全局权限模式（那份 settings.json 同事的其他工具也在用）。
 // choiceGateMatcher：另登记一条只匹配提问工具的同步 PreToolUse（ask-gate，core/auto-dispatch-rules.js）；
-// 只有 Hub 给自动派活会话设了标记时它才拒绝，其余会话直接放行。
+// 只有 Hub 给自动分配任务会话设了标记时它才拒绝，其余会话直接放行。
 function ensureManagedSettings(claudeDir, { fsModule = fs, logger = console, events = null,
   manageStatusLine = true, managePermissionMode = true, choiceGateMatcher = null } = {}) {
   const settingsPath = path.join(claudeDir, 'settings.json');

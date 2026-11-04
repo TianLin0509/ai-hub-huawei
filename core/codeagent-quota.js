@@ -223,7 +223,7 @@ function markAvoid(dataDir, key, { source = 'error', kind = 'quota', reason = ''
 function clearAvoid(dataDir, key, { by = 'manual' } = {}, now = Date.now(), fsModule = fs) {
   const state = readState(dataDir, fsModule);
   const prev = state.accounts[key];
-  // 「恢复派活」统统解除：整号避让和这个号的模型配置避让
+  // 「恢复使用」统统解除：整号避让和这个号的模型配置避让
   const models = state.models[key] && Object.keys(state.models[key]).length ? state.models[key] : null;
   delete state.accounts[key];
   delete state.models[key];
@@ -236,7 +236,7 @@ function prune(state, now) { for (const [k, e] of Object.entries(state.accounts)
 // ---- 模型配置避让（2026-10-19，样本见内置规则 codeagent-model-config-v1）----
 // 键：号（personal / 号池编号）→ 被请求的模型（小写；'*' = 报错里没写模型，按这个号请求的任何模型算）。
 // 没有自动到期：配置不变就一直会报。probeAt 之前避让；到了 probeAt 放行一次试探（noteModelProbe 把下一次推后 6 小时），
-// 试探又报同样的错就重新开始计 6 小时；这个号用这个模型正常答出来（quota-watch 从原生记录看到）、手动恢复派活、
+// 试探又报同样的错就重新开始计 6 小时；这个号用这个模型正常答出来（quota-watch 从原生记录看到）、手动恢复使用、
 // 远程修正了个人账号默认模型时解除。
 const modelKey = m => String(m || '').trim().toLowerCase() || '*';
 function markModelAvoid(dataDir, key, { model = '', reason = '', sample = '', ruleId = null, session = null, have = [], probeMs = MODEL_PROBE_MS, fix = null } = {}, now = Date.now(), fsModule = fs) {
@@ -388,7 +388,7 @@ function modelConfigHint(entry) {
   if (!entry || entry.kind !== 'model-config') return '';
   const have = Array.isArray(entry.have) ? entry.have : [];
   if (entry.account === 'personal') return `；可用 set-personal-model 改成 ${have.length === 1 ? have[0] : '权限清单里的模型'}`;
-  return '；请在「账号与号池」里核对这个号的模型配置';
+  return '；请在左栏「账号」里核对这个号的模型配置';
 }
 function describeAvoid(entry, now = Date.now()) {
   if (!entry) return '';

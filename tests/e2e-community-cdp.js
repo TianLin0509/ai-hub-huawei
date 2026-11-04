@@ -23,7 +23,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const exeIndex = process.argv.indexOf('--executable');
 const customExecutable = exeIndex >= 0 ? path.resolve(process.argv[exeIndex + 1]) : null;
 const packaged = process.argv.includes('--packaged') || !!customExecutable;
-const out = path.resolve(packaged ? 'artifacts/community-packaged-gui' : 'artifacts/community-gui');
+const out = path.resolve(process.env.HUB_E2E_ARTIFACT_DIR || (packaged ? 'artifacts/community-packaged-gui' : 'artifacts/community-gui'));
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -35,8 +35,8 @@ function freePort() {
 
 function windowTitle(pid) {
   try {
-    return execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
-      `[Console]::OutputEncoding = [Text.Encoding]::UTF8; (Get-Process -Id ${Number(pid)} -ErrorAction SilentlyContinue).MainWindowTitle`], { encoding: 'utf8', windowsHide: true }).trim();
+    return execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
+      path.join(__dirname, 'helpers/window-title.ps1'), '-TargetPid', String(Number(pid))], { encoding: 'utf8', windowsHide: true }).trim();
   } catch { return ''; }
 }
 
@@ -111,7 +111,30 @@ async function main() {
       assert.deepEqual(offered, kinds, 'launch center offers only the allowed kinds');
       assert.equal(await cdp.eval(`!!document.querySelector('[data-launch-intent="resume"]')`), kinds.some(k => ['claude', 'codex', 'gemini', 'deepseek', 'kimi', 'codeagent'].includes(k)), 'resume entry follows kinds that can resume (CodeAgent: global resume since 1.6.457)');
       if (marker.features && marker.features.quotaBar === false) assert.equal(await cdp.eval('!!document.getElementById("rail-usage")'), false, 'no quota strip');
-      if (marker.features && marker.features.accounts === false) assert.equal(await cdp.eval('document.getElementById("btn-rail-accounts").getBoundingClientRect().width'), 0, 'accounts entry hidden');
+      if (marker.target === 'company') {
+        assert.ok(await cdp.eval('document.getElementById("btn-rail-accounts").getBoundingClientRect().width > 0'), 'company accounts entry is visible');
+        await click(`.new-session-option[data-kind="${kinds[0]}"]`);
+        await until('!document.getElementById("new-session-submit").disabled && document.getElementById("new-session-codeagent-account-note").textContent.includes("仍可创建")', 'personal login status only warns');
+        await click('#new-session-submit');
+        await until('document.querySelector("#new-session-error")?.innerText.includes("未找到 CodeAgent CLI")', 'missing CLI message is visible in the launcher');
+        assert.equal(await cdp.eval('sessions.size'), 0);
+        await shot('02-company-missing-cli-guidance');
+        await click('#new-session-cancel');
+        await click('#btn-rail-accounts');
+        await until('!document.getElementById("codeagent-accounts-page")?.hidden && !!document.querySelector("[data-ca-account=personal]")', 'standalone company accounts page opens');
+        assert.ok(await cdp.eval('document.getElementById("codeagent-accounts-page").textContent.includes("号池里还没有账号")'), 'clean machine has an empty pool');
+        assert.ok(await cdp.eval('document.getElementById("account-page").hidden'), 'the home account center stays hidden');
+        assert.equal(await cdp.eval('document.querySelector("[data-ca-account=personal] [data-ca=session]")?.disabled'), false, 'personal account can proceed to CLI even without recognized credentials');
+        await shot('03-company-accounts-empty');
+        await click('#btn-home');
+        await until('document.getElementById("codeagent-accounts-page").hidden', 'returning home closes the company account page');
+        assert.equal(await cdp.eval('sessions.size'), 0);
+        report.checks.push('Company accounts page opens; personal login state warns without disabling creation; actual launcher submit shows the missing CLI guidance and creates no session; navigation closes the page');
+        assert.ok(hub.log().some(line => line.includes('hook server listening')), 'hook listener must start');
+        report.passed = true;
+        return;
+      }
+      if (marker.features && marker.features.accounts === false) assert.equal(await cdp.eval('document.getElementById("btn-rail-accounts").getBoundingClientRect().width'), 0, 'accounts entry hidden for other editions');
       await click(`.new-session-option[data-kind="${kinds[0]}"]`);
       await click('#new-session-submit');
       await until('document.querySelector("#new-session-error")?.innerText.includes("未找到")', 'missing CLI message');

@@ -13,7 +13,7 @@ function orchestratorBlock({ledgerFile='', briefFile=''}={}) {
     briefFile ? `项目档案：${briefFile}。接任务先读，缺失信息亲自查关键代码或派成员摸底后审定；结项更新架构、约定、教训和决定，保持简明。` : '',
     'orch_status 查真实编号与状态；orch_propose_plan 的 summary 写完整方案、分工和完成标准，team 写角色。',
     '可并行、串行、辩论或交叉复核。无需中途判断优先 orch_start_workflow：development、filework、research、roundtable、custom；否则逐步派发。',
-    'orch_send_message(to, message) 派活、追问或返工；改变对方当前工作时加 interrupt=true，否则排队。用户新要求及时同步成员。',
+    'orch_send_message(to, message) 分配任务、追问或返工；改变对方当前工作时加 interrupt=true，否则排队。用户新要求及时同步成员。',
     'orch_allow_peer 开放交流，orch_decide_peer 审批 orch_request_peer；交流抄送但不唤醒你。',
     '交付摘要逐条核对方案与验收标准；疑点让成员复核、亲自查代码或验证，拿不准请另一成员交叉复核。结项前至少亲自核实一处关键证据，不只转发结论。',
     '轮次、时长、重试依用户要求判断，Hub 不设固定上限。用户新消息优先；需他决定且影响推进时用 orch_report(kind=need_decision) 暂停并给推荐，否则继续；用户可随时暂停或结束。',
@@ -42,7 +42,7 @@ function memberBlock({ role = '', orchestratorName = '负责人', briefFile = ''
 function noticeText(items, { halted = null } = {}) {
   const lines = ['【Hub 通知】'];
   for (const item of items) lines.push(`- ${item.state === 'uncertain' ? '（Hub 重启前可能已送达，补发）' : ''}${item.text}`);
-  if (halted) lines.push('', `Hub 已暂停派活（${halted}）。请在回复里向用户说明现状、选项和你的推荐（需要时用 orch_report(kind=need_decision) 记录），等他在输入框回话。`);
+  if (halted) lines.push('', `Hub 已暂停分配任务（${halted}）。请在回复里向用户说明现状、选项和你的推荐（需要时用 orch_report(kind=need_decision) 记录），等他在输入框回话。`);
   else lines.push('', '按负责人守则审查交付并推进，仅在阶段进展、需拍板或结项时向用户发言。');
   return lines.join('\n');
 }

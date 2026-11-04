@@ -10,6 +10,7 @@ const net = require('node:net');
 const { launchIsolatedHub, gracefulQuit } = require('./helpers/hub-launcher');
 const { connectFirstPage } = require('./helpers/cdp-client');
 const pool = require('../core/codeagent-pool');
+const quota = require('../core/codeagent-quota');
 const { writeProbed } = require('../core/codeagent-model-probe');
 
 const REPO = path.resolve(__dirname, '..');
@@ -100,9 +101,34 @@ async function run() {
       { kind: 'codeagent', account: a, model: glm, title: '研发成员', role: '实现', task: '核对功能并汇报' },
       { kind: 'codeagent', account: b, model: ds, title: '审查成员', role: '审查', task: '独立审查并汇报' },
     ] }));
+    quota.markModelAvoid(DATA, b, { model: ds });
+    const paused = await command(lead.id, ['accounts']);
+    const pausedRow = paused.rows.find(r => r.id === b);
+    ok('accounts 标记当前模型暂停并从推荐中排除', !pausedRow.usable && pausedRow.unavailableReason === '暂停中' && paused.recommendedId !== b);
+    ok('模型暂停在提交计划时即拒绝，不创建成员', /账号不可用/.test(await command(lead.id, ['propose', '--plan-file', planFile], true))
+      && (await invoke('team:list')).result.every(t => t.members.length === 0));
+    quota.clearModelAvoid(DATA, b);
     const plan = await command(lead.id, ['propose', '--plan-file', planFile]);
     ok('propose 仅提交待批准计划', plan.status === 'pending' && (await invoke('team:list')).result[0].members.length === 0);
     await wait(() => cdp.eval(`!!document.querySelector('[data-team-approve="${lead.id}"]')`), 'approval badge');
+    // The pending plan was valid when proposed; a model pause can arrive before
+    // the user opens it. The unavailable choice must be visible before approval.
+    quota.markModelAvoid(DATA, b, { model: ds });
+    await click(`[data-team-approve="${lead.id}"]`);
+    await wait(() => cdp.eval(`(()=>{const s=document.querySelector('[data-team-account="1"]');return s?.selectedOptions[0]?.textContent.includes('暂停中')})()`), 'paused approval loaded');
+    ok('审批保留原选号但标暂停且禁批准', await cdp.eval(`(()=>{const s=document.querySelector('[data-team-account="1"]');return s.value===${JSON.stringify(b)} && s.selectedOptions[0].disabled && document.querySelector('[data-team-act="approve"]').disabled})()`));
+    await shot('02a-model-paused-approval-1440');
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+    await shot('02b-model-paused-approval-1280');
+    await cdp.eval(`(()=>{const s=document.querySelector('[data-team-account="1"]');s.value=${JSON.stringify(a)};s.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+    ok('审批换成可用号后允许批准', await cdp.eval("!document.querySelector('[data-team-act=approve]').disabled"));
+    await click('[data-team-note]'); // Give the modal keyboard focus before Escape.
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await wait(() => cdp.eval("!document.querySelector('.team-modal')"), 'close paused approval');
+    quota.clearModelAvoid(DATA, b);
+    ok('解除模型暂停后accounts恢复可用', (await command(lead.id, ['accounts'])).rows.find(r => r.id === b).usable);
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
     await click(`[data-team-approve="${lead.id}"]`);
     await wait(() => cdp.eval("!!document.querySelector('.team-modal') && !document.querySelector('[data-team-act=approve]').disabled"), 'accounts loaded');
     ok('审批界面显示号池和每人模型，不显示 Claude/Codex 额度列', await cdp.eval("(()=>{const e=document.querySelector('.team-modal');return document.querySelectorAll('[data-team-model]').length===2 && e.textContent.includes('号池账号') && !/Claude|Codex|5h|7d|\\u7530\\u54e5/.test(e.textContent)})()"));

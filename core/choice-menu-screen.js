@@ -1,5 +1,5 @@
 'use strict';
-// 从会话屏幕被动认出「停在选择菜单上等人选」（2026-10-19，自动派活会话不出选择题的兜底，见 core/auto-dispatch-rules.js）。
+// 从会话屏幕被动认出「停在选择菜单上等人选」（2026-10-19，自动分配任务会话不出选择题的兜底，见 core/auto-dispatch-rules.js）。
 // 只读终端缓冲（经无界面 xterm 回放成最后一屏，core/hub-phone/session-chat.js renderRows），从不发按键、不替它选。
 //
 // 依据 Claude Code 公开的选择菜单样式（AskUserQuestion 提问、权限确认等共用）：

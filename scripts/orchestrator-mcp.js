@@ -42,7 +42,7 @@ const tools = [
     description: '兼容旧工具调用：本群已无固定轮次或时长上限，按用户自然语言要求推进。',
     inputSchema: schema({ rounds: { type: 'integer', minimum: 1 }, minutes: { type: 'number', minimum: 1 }, sourceQuote: string }, ['sourceQuote']) },
   { name: 'orch_report',
-    description: '记录汇报。progress=阶段进展；need_decision=需要用户取舍才能往下走，Hub 暂停派活，等他在输入框回话后自动解除；final=当前完整计划所有段满足验收且有审核或收口证据。用白话说明结果、缺项、阻塞与建议，附交付路径。',
+    description: '记录汇报。progress=阶段进展；need_decision=需要用户取舍才能往下走，Hub 暂停分配任务，等他在输入框回话后自动解除；final=当前完整计划所有段满足验收且有审核或收口证据。用白话说明结果、缺项、阻塞与建议，附交付路径。',
     inputSchema: schema({ kind: { type: 'string', enum: ['progress', 'need_decision', 'final'] }, summary: string }, ['kind', 'summary']) },
 ];
 async function handle(request) {

@@ -1,5 +1,5 @@
 'use strict';
-// 发行目标的界面裁剪（公司纯净版：只留 CodeAgent，不要额度条和账号页）。
+// 发行目标的界面裁剪（公司版只留 CodeAgent；账号页管理本机号池）。
 // 在 index.html 里排在 workspace-controller.js 之前，各控制器初始化时看到的已经是裁剪后的界面。
 // 主仓库与公开社区版没有这些设置，这里什么也不做。
 (() => {
@@ -82,8 +82,12 @@
   // 底部状态栏的「余量」：各家 AI 账号的剩余额度，CodeAgent 没有。
   if (!featureEnabled('quotaBar')) document.getElementById('rail-usage')?.remove();
   // 左侧「账号」：各家 AI 网页与命令行账号；按钮留在页面里（别处会程序化点击它来关账号页），只是不显示。
-  if (!featureEnabled('accounts')) {
+  if (!featureEnabled('accounts') && require('../core/distribution').target !== 'company') {
     const button = document.getElementById('btn-rail-accounts');
     if (button) button.style.display = 'none';
+  }
+  if (require('../core/distribution').target === 'company') {
+    const button = document.getElementById('btn-rail-accounts');
+    if (button) document.querySelector('#scene-rail .rail-navigation')?.append(button);
   }
 })();

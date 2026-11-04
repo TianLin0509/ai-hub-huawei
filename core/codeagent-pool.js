@@ -97,7 +97,7 @@ function readCredentials(configDir, fsModule = fs) {
 
 // 浏览器方式（devuc）由 CodeAgent 自己续期。账号密码（idaas）方式：令牌（xAuthExpires）过点不等于登录失效——
 // 凭证里有 mtoken 时，CodeAgent 启动就会自己换新令牌（2026-10-25 公司实测，过期两天的号照样续上）。
-// 原来按令牌到期判「登录过期」并停止派活，用得少的号令牌一过点就再也轮不到、也就再也续不上，号池逐个「过期」。
+// 原来按令牌到期判「登录过期」并停止分配任务，用得少的号令牌一过点就再也轮不到、也就再也续不上，号池逐个「过期」。
 // 现在只有没有续期材料（mtoken）的账号密码登录，令牌过点才算登录过期。
 function accountState(creds, now = Date.now()) {
   if (!creds.present) return creds.reason === 'missing' ? 'login-required' : 'unreadable';
@@ -164,7 +164,7 @@ function label(account) {
 // 挑号：只在可用的号里挑；指定了模型时优先挑明确有这个模型的号（清单未知的号排在后面）；
 // 然后没有进行中会话的优先，其次会话最少的，最后按上次分配时间轮转。
 function pickAccount(accounts, { model = '' } = {}) {
-  const usable = accounts.filter(a => a.state === 'ready' && !a.sameAsPersonal && !a.duplicateOf);
+  const usable = accounts.filter(a => a.state === 'ready' && !a.sameAsPersonal && !a.duplicateOf && !a.avoid);
   if (!usable.length) return null;
   const wanted = String(model || '').toLowerCase();
   const fit = a => !wanted ? (a.modelsAuthoritative && a.models.length ? 0 : 1)
@@ -176,6 +176,16 @@ function pickAccount(accounts, { model = '' } = {}) {
     || switchedBusy(x) - switchedBusy(y)
     || x.activeSessions - y.activeSessions
     || x.lastAssignedAt - y.lastAssignedAt)[0];
+}
+
+// New interactive sessions use the same pause state shown in the account page.
+// Existing sessions keep their bound identity when resumed.
+function withPauseStatus(dataDir, accounts) {
+  const quota = require('./codeagent-quota');
+  const paused = quota.activeAvoid(dataDir), models = quota.modelAvoidAll(dataDir);
+  const switched = require('./codeagent-model-route').routeSwitchEnabled();
+  return accounts.map(account => ({ ...account, avoid: paused[account.id]
+    || quota.modelAvoidEntry(models, account.id, switched ? effectiveModel(account.dir) : readSettingsModel(account.dir)) || null }));
 }
 
 function markAssigned(dataDir, id, now = Date.now()) {
@@ -201,13 +211,14 @@ function markPersonalAssigned(dataDir, now = Date.now()) {
   fs.renameSync(tmp, file);
 }
 
-function addAccount(dataDir, { note = '' } = {}) {
+function addAccount(dataDir, { note = '', personalDir = null } = {}) {
   const registry = readRegistry(dataDir);
   let id;
   do { id = crypto.randomBytes(5).toString('hex'); } while (registry.accounts.some(a => a.id === id));
   fs.mkdirSync(accountDir(dataDir, id), { recursive: true });
   registry.accounts.push({ id, note: cleanNote(note), createdAt: new Date().toISOString(), lastAssignedAt: 0 });
   writeRegistry(dataDir, registry);
+  require('./codeagent-bundled-skills').syncCompanyTeamSkill(accountDir(dataDir, id), { personalDir, allowLegacy: true });
   return id;
 }
 
@@ -267,7 +278,7 @@ function personalDefaultModel(own, known, { single = false } = {}) {
   return (known && known.probedAt ? pick(known.defaultModel) : '') || pick(require('./codeagent-models').DEFAULT_MODEL);
 }
 // 号池号的默认模型（账号即模型、切号开关关着时，2026-10-19 审核）：和个人号一样严格——settings.json 写了 model、且在清单里
-// （分档名 GLM-5.2-WX 算清单里的 GLM-5.2-WX-Auto）才算已知；没写、清单未知或写的不在清单里都算未知，不参与按模型派活，
+// （分档名 GLM-5.2-WX 算清单里的 GLM-5.2-WX-Auto）才算已知；没写、清单未知或写的不在清单里都算未知，不参与按模型分配任务，
 // 免得「判断是 DS、实际启动退回 CodeAgent 自己的默认 GLM」（2.1.8 修过的问题）。note：missing / not-in-list。
 // 例外（2026-10-20 公司真机：CodeAgent 启动时自己把默认模型写回 deepseek，只有 GLM 权限的个人号和新号都被判成未知）：
 // authoritative（探测过的清单）且只有一个模型时就是它——给自动会话和手动新建会话的挑号与启动选型用：它们在 /model 菜单里选中它（2.1.20 起），
@@ -438,9 +449,21 @@ function syncSharedConfig(personalDir, targetDir, fsModule = fs, { routeModel = 
   }
   for (const name of SHARED_DIRS) {
     const src = path.join(personalDir, name);
-    try { if (fsModule.existsSync(src)) fsModule.cpSync(src, path.join(targetDir, name), { recursive: true, force: true }); }
+    try {
+      const bundled = require('./codeagent-bundled-skills');
+      if (fsModule.existsSync(src)) fsModule.cpSync(src, path.join(targetDir, name), {
+        recursive: true, force: true,
+        // Each account's bundled skill has its own ownership/hash check. A
+        // regular personal-to-pool copy must not bypass user-edit protection.
+        filter: source => {
+          const first = path.relative(src, source).split(path.sep)[0];
+          return !bundled.enabled() || (process.platform === 'win32' ? first.toLowerCase() : first) !== bundled.TEAM_SKILL;
+        },
+      });
+    }
     catch (error) { errors.push(`${name}：${error.message}`); }
   }
+  require('./codeagent-bundled-skills').syncCompanyTeamSkill(targetDir, { fsModule, personalDir, allowLegacy: true });
   // model：这次启动会用的模型（显示用）；号没写默认模型时按清单推一个，只作显示，不写进配置。
   // 开关关着时只认号自己写的、在清单里的默认模型（strictDefaultModel），不猜；开关打开时沿用以前的推断。
   if (!routeSwitch) { try { model = strictDefaultModel(model, accountModels(targetDir, fsModule).models).model; } catch { model = ''; } }
@@ -523,7 +546,7 @@ function importLocal(dataDir, sourceDir, { note = '', personalDir = '', env = pr
   if (candidate.isPersonal || candidate.sameAsPersonal) throw new Error('这是个人账号，不放进号池');
   if (candidate.alreadyInPool) throw new Error('这个号已经在号池里');
   if (candidate.state !== 'ready') throw new Error('这个目录的登录已过期，请先重新登录');
-  const id = addAccount(dataDir, { note: note || candidate.name });
+  const id = addAccount(dataDir, { note: note || candidate.name, personalDir });
   const target = accountDir(dataDir, id);
   fsModule.copyFileSync(path.join(candidate.dir, '.credentials.json'), path.join(target, '.credentials.json'));
   try { if (!fsModule.existsSync(path.join(target, '.cac.json'))) fsModule.copyFileSync(path.join(candidate.dir, '.cac.json'), path.join(target, '.cac.json')); } catch { /* 没有账号清单 */ }
@@ -542,6 +565,7 @@ function importLocal(dataDir, sourceDir, { note = '', personalDir = '', env = pr
 }
 
 module.exports = {
+  withPauseStatus,
   accountModels, personalModelsFile, probeCwd,
   localCandidates, importLocal,
   openLoginWindow,

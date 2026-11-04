@@ -31,6 +31,7 @@
   <link rel="stylesheet" href="styles/company-meeting.css">
   <link rel="stylesheet" href="styles/company-forum-page.css">
   <link rel="stylesheet" href="styles/company-ppt-page.css">
+  <link rel="stylesheet" href="styles/codeagent-accounts-page.css">
   <link rel="stylesheet" href="styles/pet-settings-tab.css">
   <link rel="stylesheet" href="styles/web-sessions.css">
   <link rel="stylesheet" href="file-manager-panel.css">
@@ -233,7 +234,7 @@
                     <div class="session-tuning-note" id="new-session-deepseek-route-note" role="status" hidden></div>
                     <div class="session-tuning-grid" id="new-session-tuning">
                       <label class="session-tuning-field" id="new-session-account-field" for="new-session-account" hidden><span>用量账号</span><select id="new-session-account" aria-describedby="new-session-account-note" title="与账号页共用一个选择，切换后立即保存。新建、恢复和重启会话使用该账号；已打开的会话保持原账号。"></select></label>
-                      <label class="session-tuning-field" id="new-session-codeagent-account-field" for="new-session-codeagent-account" hidden><span>用量账号</span><select id="new-session-codeagent-account" aria-describedby="new-session-codeagent-account-note"></select></label>
+                      <label class="session-tuning-field" id="new-session-codeagent-account-field" for="new-session-codeagent-account" hidden><span>用量账号</span><select id="new-session-codeagent-account" aria-describedby="new-session-codeagent-account-note"></select><button id="new-session-codeagent-choice" class="caa-account-control" type="button" data-select-for="new-session-codeagent-account" aria-label="CodeAgent 账号" aria-haspopup="listbox" aria-expanded="false" aria-describedby="new-session-codeagent-account-note" hidden></button></label>
                       <label class="session-tuning-field" id="new-session-codeagent-pool-field" for="new-session-codeagent-pool" hidden><span>号池账号</span><select id="new-session-codeagent-pool"></select></label>
                       <label class="session-tuning-field session-model-field" id="new-session-model-field" for="new-session-model"><span>模型</span><select id="new-session-model"></select></label>
                       <label class="session-tuning-field" id="new-session-effort-field" for="new-session-effort"><span id="new-session-effort-label">思考强度</span><select id="new-session-effort"></select></label>

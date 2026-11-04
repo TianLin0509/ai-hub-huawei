@@ -8995,7 +8995,14 @@ const configModal = createConfigModalController({
 });
 // 助理桌宠：配置里的开关与角色，以及「点桌宠打开助理」的入口事件（hub-pet:open-assistant）。
 try { require('./hub-pet/hub-settings.js').mountHubPetSettings({ document, window, ipcRenderer }); } catch (error) { console.warn('[hub-pet] settings mount failed:', error && error.message); }
-const accountCenterPanel = require('./account-center-panel').createAccountCenterPanel({
+const accountCenterPanel = require('../core/distribution').target === 'company'
+  ? require('./codeagent-accounts-page').createCodeagentAccountsPage({
+    document, window, ipcRenderer, configModal,
+    closeOtherPanels: () => { launchCenter.close(); window.hubWorkspaces?.close(); window.__cloudHide?.(); memoryPanel.close(); capabilityPanel.close(); },
+    notify: message => showToast(message),
+    openSession: id => launchCenter.open('session', { kind: 'codeagent', ...(id === 'personal' ? { codeagentAccount: 'personal' } : { codeagentPoolPick: id }) }),
+  })
+  : require('./account-center-panel').createAccountCenterPanel({
   document, ipcRenderer, escapeHtml, configModal, closeOtherPanels: () => { launchCenter.close(); window.hubWorkspaces?.close(); window.__cloudHide?.(); memoryPanel.close(); capabilityPanel.close(); },
   resumeLaunch: () => launchCenter.open(launchCenter.getActiveIntent(),{preserveDraft:true}),
   hasLaunchDraft: () => launchCenter.getActiveIntent()==='session' && menuEl.style.display!=='none',
