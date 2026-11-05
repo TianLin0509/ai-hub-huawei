@@ -58,7 +58,16 @@ const {
   isGroupChatMemberRunning,
 } = require('../core/groupchat-running-state.js');
 const { acceptGroupChatEvent } = require('./groupchat-event-revision.js');
-const applyHubCardDisplaySettings = (config) => applyCardDisplaySettings(document, config);
+let _cardContentSkip = null;
+let _appliedCardFont = '';
+const applyHubCardDisplaySettings = (config) => {
+  const applied = applyCardDisplaySettings(document, config);
+  // Font changes the height of cards which are not rendered right now. The settings
+  // dialog applies on every open and close, so unchanged values must not remeasure.
+  const font = `${applied.cardFontSize}|${applied.cardFontFamily}`;
+  if (font !== _appliedCardFont) { _appliedCardFont = font; _cardContentSkip?.remeasure(); }
+  return applied;
+};
 applyHubCardDisplaySettings();
 ipcRenderer.invoke('get-hub-config-raw')
   .then(applyHubCardDisplaySettings)
@@ -3188,8 +3197,10 @@ async function loadSessionHistoryToOverlayUnserialized(sessionId, opts = {}) {
     // history. Reorder the authoritative full snapshot first, then append only
     // genuinely newer concurrent cards. Cards removed by optimistic/provisional
     // dedup are intentionally skipped here.
-    const desiredCards=turns.map(turn=>turn?.id && container.querySelector(
-      `:scope > .turn-card[data-turn-id="${CSS.escape(turn.id)}"]`)).filter(Boolean)
+    // One lookup table instead of a selector scan per card: this block runs on every older page.
+    const cardById=new Map();
+    for(const card of container.querySelectorAll(':scope > .turn-card[data-turn-id]')) if(!cardById.has(card.dataset.turnId))cardById.set(card.dataset.turnId,card);
+    const desiredCards=turns.map(turn=>turn?.id && cardById.get(turn.id)).filter(Boolean)
       .concat(concurrentExtraCards.filter(card=>card.parentNode===container));
     const currentCards=Array.from(container.querySelectorAll(':scope > .turn-card'));
     const alreadyOrdered=desiredCards.length===currentCards.length && desiredCards.every((card,i)=>card===currentCards[i]);
@@ -3208,9 +3219,7 @@ async function loadSessionHistoryToOverlayUnserialized(sessionId, opts = {}) {
     };
     for (const turn of turns) {
       if (!turn || !turn.id) continue;
-      placeBeforeStreamingTail(container.querySelector(
-        `:scope > .turn-card[data-turn-id="${CSS.escape(turn.id)}"]`
-      ));
+      placeBeforeStreamingTail(cardById.get(turn.id));
     }
     let lastConcurrentCard = null;
     for (const card of concurrentExtraCards) {
@@ -3254,6 +3263,7 @@ async function loadSessionHistoryToOverlayUnserialized(sessionId, opts = {}) {
   }
 
   require('./conversation-message-view').syncResponseGroups(container);
+  cardContentSkip().sweep();
   // Single bottom-scroll AFTER loop (don't autoScroll per mount — N reflows = jitter)
   // — 仅当 batch 开始前用户在底部才滚(scroll-respect-user)
   if (container._cardFollowController) {
@@ -3289,6 +3299,11 @@ async function loadSessionHistoryToOverlayUnserialized(sessionId, opts = {}) {
   return { mounted, error: null };
 }
 window._loadSessionHistoryToOverlay = loadSessionHistoryToOverlay;
+function cardContentSkip() {
+  if (!_cardContentSkip) _cardContentSkip = require('./card-content-skip').createCardContentSkip({ overlay: document.getElementById('msg-overlay'), window });
+  return _cardContentSkip;
+}
+window._cardContentSkip = cardContentSkip;
 const cardHistoryPager = require('./card-history-pager').createCardHistoryPager({
   document, activeId: () => activeSessionId, load: loadSessionHistoryToOverlay,
 });

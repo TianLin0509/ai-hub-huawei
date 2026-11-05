@@ -93,6 +93,8 @@ class CDPClient {
       const e = r.exceptionDetails.exception;
       throw commandError(`Eval threw: ${e && (e.description || e.value || JSON.stringify(e))}`, request);
     }
+    // CDP omits value for JS undefined; returning its descriptor makes waits truthy.
+    if (r.result?.type === 'undefined') return undefined;
     return r.result && r.result.value !== undefined ? r.result.value : r.result;
   }
 

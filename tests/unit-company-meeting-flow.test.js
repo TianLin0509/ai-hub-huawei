@@ -29,6 +29,21 @@ assert.deepEqual(topics.items, [{title:'算法取舍',seq:2,at:7000},{title:'待
 assert.equal(meetingNavigation({ ...meeting, summary: '## 结论\n继续验证 [事件 1]' }).kind, 'time');
 assert.equal(meetingNavigation({ ...meeting, summary: '## 没有出处的标题\n无法定位' }).kind, 'time');
 assert.deepEqual(flowEntries(null), []);
+const queueMeeting = { ...meeting, events: [], answers: [
+  { id: 'first', state: 'running', queuedAt: 101000 },
+  { id: 'second', state: 'queued', queuedAt: 102000 },
+  { id: 'third', state: 'queued', queuedAt: 103000 },
+], questionJob: { questionId: 'first', state: 'running' } };
+const queuePositions = () => flowEntries(queueMeeting).map(q => q.queueAhead);
+assert.deepEqual(queuePositions(), [null, 1, 2]);
+queueMeeting.answers[0].state = 'done'; queueMeeting.questionJob = null;
+assert.deepEqual(queuePositions(), [null, 0, 1], 'queued cards update when an earlier answer completes');
+queueMeeting.questionJob = { questionId: 'second', state: 'sending' };
+queueMeeting.answers[0].state = 'queued';
+assert.deepEqual(queuePositions(), [1, 0, 2], 'claimed request stays ahead of an older retried card even before its running snapshot');
+assert.deepEqual(flowEntries(queueMeeting).map(q => q.at), [1000, 2000, 3000], 'queue rank does not move original timeline positions');
+queueMeeting.answers[1].state = 'error'; queueMeeting.questionJob.state = 'error';
+assert.deepEqual(queuePositions(), [0, null, 1], 'failed answers do not count ahead');
 const { meetingAsrState } = require('../renderer/company-meeting-asr-state');
 assert.equal(meetingAsrState().setupText, '本地转写：未安装（约 500 MB）');
 assert.equal(meetingAsrState({ ready: true }).setupText, '本地转写：已就绪');

@@ -68,6 +68,30 @@ function createCardQuestionNavigator(options = {}) {
     navigationAnchor = card ? {card, sessionId:getActiveSessionId(), epoch:overlay._cardFollowController?.capture().epoch} : null;
   }
   function clearNavigationAnchor() { navigationAnchor = null; }
+  // A smooth jump targets a position computed when it started. Cards passed on the way
+  // can change height and scroll anchoring can shift the page, so once scrolling goes
+  // quiet the target is checked again and corrected. Anything the reader does to scroll
+  // clears the navigation anchor, which ends the check.
+  let settleCleanup = null;
+  function settleJumpOn(card) {
+    settleCleanup?.();
+    let timer = null, corrections = 0;
+    const SETTLE_QUIET_MS = 150, SETTLE_TOLERANCE_PX = 2, SETTLE_MAX_CORRECTIONS = 3;
+    const stop = () => { clearTimeout(timer); overlay.removeEventListener('scroll', schedule); settleCleanup = null; };
+    function schedule() { clearTimeout(timer); timer = setTimeout(check, SETTLE_QUIET_MS); }
+    function check() {
+      if (navigationAnchor?.card !== card || !card.isConnected) { stop(); return; }
+      const offset = card.getBoundingClientRect().top - overlay.getBoundingClientRect().top - 10;
+      if (Math.abs(offset) <= SETTLE_TOLERANCE_PX || corrections >= SETTLE_MAX_CORRECTIONS) { stop(); return; }
+      corrections += 1;
+      overlay.scrollTo({ top: Math.max(0, overlay.scrollTop + offset), behavior: 'instant' });
+      updateActive();
+      schedule();
+    }
+    settleCleanup = stop;
+    overlay.addEventListener('scroll', schedule, { passive: true });
+    schedule();
+  }
   function restoreNavigationAfterLayout() {
     if (!navigationAnchor || anchorFrame !== null) return;
     anchorFrame = raf(() => {
@@ -275,6 +299,7 @@ function createCardQuestionNavigator(options = {}) {
     const behavior = prefersReducedMotion() ? 'auto' : 'smooth';
     try { overlay.scrollTo({ top: targetTop, behavior }); }
     catch { overlay.scrollTop = targetTop; }
+    settleJumpOn(entry.card);
     activeIndex = index;
     entries.forEach((item, itemIndex) => {
       const active = itemIndex === index;
@@ -304,7 +329,10 @@ function createCardQuestionNavigator(options = {}) {
     const turnId = card.dataset.turnId || '';
     const turn = turnId ? getTurnById(turnId) : null;
     if (turn && typeof turn.text === 'string') return turn.assistantContext?.userText ?? turn.text;
-    return card.querySelector('.turn-body')?.innerText || '';
+    // A skipped card's innerText is empty, so this fallback must render it first.
+    const skip = win._cardContentSkip?.();
+    const read = () => card.querySelector('.turn-body')?.innerText || '';
+    return skip ? skip.withCardsRendered([card], read) : read();
   }
 
   function refresh() {

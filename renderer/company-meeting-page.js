@@ -29,11 +29,20 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
   }
   const shortDate = t => { const d = new Date(t), p = n => String(n).padStart(2, '0'); return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
   const el = name => root.querySelector(`[data-m="${name}"]`);
+  const recordingInterrupted = () => !!capture?.running && !!(capture.ending || capture.released || capture.recorder?.full?.recorder.state === 'inactive');
+  function updateLiveStatus() {
+    const status = recordingInterrupted() ? '已中断' : capture?.paused ? '已暂停' : '实时';
+    const stage = root.querySelector('.meeting-stage');
+    stage.dataset.liveStatus = status;
+    el('live').setAttribute('aria-label', '共享画面 · ' + status);
+    if (stage.dataset.view === 'live') el('viewer-label').textContent = '共享画面 · ' + status;
+  }
   function view(mode, label) {
     root.querySelector('.meeting-viewer > .meeting-ppt-results')?.remove();
     root.querySelector('.meeting-stage').dataset.view = mode;
     setViewerExpanded(mode === 'evidence' || mode === 'replay');
     el('viewer-label').textContent = label || ({ live:'共享画面 · 实时', replay:'会议录像回放', evidence:'会议出处', empty:'共享画面' })[mode];
+    updateLiveStatus();
     root.querySelector('[data-act="live"]').hidden = !capture?.running || mode === 'live';
     if (mode !== 'replay') el('player').pause();
     if (mode !== 'evidence') el('evidence').querySelector('audio')?.pause();
@@ -46,6 +55,22 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
   function updateFollowButton() {
     const list = el('timeline');
     root.querySelector('[data-act-local="latest"]').hidden = list.scrollHeight - list.clientHeight - list.scrollTop < 64;
+  }
+  function questionCard(q, expanded, queueAhead) {
+    const status = { queued: '排队中', running: '回答中', done: '已回答', error: '没答上' }[q.state] || '排队中';
+    const refs = [...new Set(String(q.answer || '').match(/\[(?:事件\s*\d+|画面\s*\d+:\d{2})\]/g) || [])];
+    const answer = String(q.answer || '').replace(/\[(?:事件\s*\d+|画面\s*\d+:\d{2})\]/g, '').trim();
+    const answerBody = `<div class="meeting-answer-body">${markdown(answer)}</div>`;
+    const error = String(q.error || '暂时没有收到回答').trim();
+    const errorSentence = error + (/[。！？.!?]$/.test(error) ? '' : '。');
+    const clipped = q.truncated ? '<p class="meeting-question-error">回答过长，仅保留部分内容。</p>' : '';
+    const sources = refs.length ? `<span class="meeting-question-sources">依据 ${refs.map(esc).join(' ')}</span>` : '';
+    const body = q.state === 'done' ? answerBody + clipped
+      : q.state === 'error' ? `<p class="meeting-question-error">没答上：${esc(errorSentence)}纪要不受影响。</p>${answer ? '<p class="meeting-question-thinking">已收到的部分回答：</p>' + answerBody + clipped : ''}`
+        : `<p class="meeting-question-thinking">${q.state === 'running' ? '<span class="meeting-question-dots" aria-hidden="true"><i></i><i></i><i></i></span>正在查阅会议内容…' : Number.isInteger(queueAhead) && queueAhead >= 0 ? `排队中 · 前面还有 ${queueAhead} 个问题，可继续提问` : '排队中 · 上一个问题答完就开始'}</p>`;
+    const actions = q.state === 'done' ? `<div class="meeting-question-actions">${sources}<span class="meeting-question-tools"><button class="meeting-question-button" data-copy-answer="${esc(q.id)}">复制</button><button class="meeting-question-button" data-followup-question="${esc(q.id)}">追问</button></span></div>`
+      : q.state === 'error' ? `<div class="meeting-question-actions">${answer ? sources : ''}<span class="meeting-question-tools"><button class="meeting-question-button primary" data-retry-question="${esc(q.id)}">重试</button></span></div>` : '';
+    return `<details class="meeting-flow-answer" data-answer="${esc(q.id)}" data-question-state="${esc(q.state || 'queued')}"${expanded ? ' open' : ''}><summary><span class="meeting-question-badge" aria-hidden="true">问</span><span class="meeting-question-title">${esc(q.q)}</span><small class="meeting-question-isolation">单独回答 · 不影响纪要</small><span class="meeting-question-state">${status}</span></summary>${body}${actions}</details>`;
   }
   function renderFlow(meeting) {
     const list = el('timeline'), entries = flowEntries(meeting), stamp = JSON.stringify([id, entries]);
@@ -66,8 +91,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
         const label = entry.afterMeeting ? '会后' : entry.at === null ? '未记录' : time(entry.at);
         let content;
         if (entry.kind === 'question') {
-          const q = entry.question, status = {queued:'排队中',running:'回答中',done:'已回答',error:'失败，可重试'}[q.state] || q.state;
-          content = `<details class="meeting-flow-answer" data-answer="${esc(q.id)}"${expanded ? ' open' : ''}><summary><b>问</b> ${esc(q.q)} <small>${esc(status)}</small></summary><div class="meeting-answer-body">${markdown(q.answer || q.error || '正在根据本场会议的材料回答…')}</div>${q.state === 'error' ? `<button class="ca-btn" data-retry-question="${esc(q.id)}">重试问题</button>` : ''}</details>`;
+          content = questionCard(entry.question, expanded, entry.queueAhead);
         } else {
           const e = entry.event;
           content = e.kind === 'slide' ? `<div class="meeting-frame-item"><button class="meeting-frame" data-event="${e.seq}" aria-label="查看 ${time(e.at)} 的截图"><img data-thumb="${e.seq}" alt="会议截图"></button><div><strong>共享画面${e.revisit ? ' · 再次展示' : ''}</strong><p>${e.forced ? '手动截图' : '自动精选'}</p><button class="ca-link" data-find-ppt="${e.seq}">找原稿</button></div></div>`
@@ -146,13 +170,14 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       el('setup-asr-install').textContent = speech.installLabel;
       root.querySelectorAll('[data-act="install"]').forEach(button => { button.disabled = speech.installing; });
       if (asr.ready) el('record-only-confirm').hidden = true;
-      const phase = m ? ({ recording: capture?.paused ? '已暂停' : '采集中', paused:'已暂停', ended:'已结束', interrupted:'采集已中断' })[m.state] : '尚未开始';
+      const phase = m ? recordingInterrupted() ? '已中断' : ({ recording: capture?.paused ? '已暂停' : '采集中', paused:'已暂停', ended:'已结束', interrupted:'采集已中断' })[m.state] : '尚未开始';
       el('record-label').textContent = phase;
+      updateLiveStatus();
       el('record-dot').dataset.state = capture?.running && !capture.paused ? 'recording' : capture?.running ? 'paused' : m ? 'ended' : 'idle';
       el('footer-dot').dataset.state = m?.state === 'interrupted' || capture?.saveError ? 'error' : el('record-dot').dataset.state;
       root.dataset.phase = capture?.running ? 'live' : m ? 'review' : 'idle';
       root.dataset.recording = String(!!capture?.running && !capture.paused);
-      root.dataset.thinking = String([m?.job, m?.questionJob].some(j => ['understand', 'question'].includes(j?.kind) && j.state !== 'error'));
+      root.dataset.thinking = String(!!m?.job && ['understand', 'question'].includes(m.job.kind) && m.job.state !== 'error');
       const reviewing = root.dataset.phase === 'review', exportButton = root.querySelector('[data-act="export"]');
       const exportParent = root.querySelector(reviewing ? '.meeting-actions' : '.meeting-summary-heading');
       if (exportButton.parentElement !== exportParent) {
@@ -167,12 +192,16 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       el('source-label').textContent = m ? m.sourceName || '本地会议记录' : '选择共享窗口，让会议内容有据可查';
       el('progress').textContent = m ? `${phase} · 已采集 ${time(m.capturedMs)} · 转写至 ${time(m.transcribedMs)} · 理解至 ${time(m.understoodMs)}` : '尚未开始采集 · 先选窗口和音源';
       for (const name of ['pause','stop']) root.querySelector(`[data-act="${name}"]`).disabled = !capture?.running;
+      const cannotResume = capture?.paused && recordingInterrupted();
+      const pauseButton = root.querySelector('[data-act="pause"]');
+      if (cannotResume) pauseButton.disabled = true;
+      pauseButton.title = cannotResume ? '这场不能再继续录了，请结束会议' : '';
       root.querySelector('[data-act="pause"]').classList.toggle('is-paused', !!capture?.paused);
       for (const name of ['mark','snap']) root.querySelector(`[data-act="${name}"]`).disabled = !capture?.running || capture.paused;
       for (const name of ['understand','ask','export','retry-asr']) root.querySelector(`[data-act="${name}"]`).disabled = !m;
       root.querySelector('[data-act="start"]').disabled = !!capture?.running || !el('record-only-confirm').hidden;
       root.querySelector('[data-act="pause"] span').textContent = capture?.paused ? '继续' : '暂停';
-      root.querySelector('[data-act="retry-save"]').hidden = !(capture?.saveError || capture?.recorder?.queue.length || capture?.queue.length);
+      root.querySelector('[data-act="retry-save"]').hidden = !(capture?.saveError || capture?.recorder?.error || capture?.recorder?.lifecycleError || capture?.recorder?.queue.length || capture?.queue.length);
       el('history').disabled = busy || !!capture?.running;
       for (const name of ['source','title','system','mic']) el(name).disabled = !!capture?.running;
       root.querySelectorAll('[data-crop]').forEach(input => { input.disabled = !!capture?.running; });
@@ -198,12 +227,14 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       const modelHtml = `<option value="">自动${state.defaultFastModel ? ' · ' + esc(state.defaultFastModel) : ' · 沿用当前模型'}</option>` + (state.models || []).map(x => `<option value="${esc(x.id)}">${esc(x.label || x.id)}</option>`).join('');
       if (modelSelect.dataset.html !== modelHtml) { modelSelect.innerHTML = modelHtml; modelSelect.dataset.html = modelHtml; }
       if (document.activeElement !== modelSelect) modelSelect.value = m?.fastModel || ''; modelSelect.disabled = !m;
-      root.querySelector('[data-act-local="open-question-agent"]').disabled = !m?.questionSessionId || !openSession;
-      if (m?.questionJob) {
-        const qj = m.questionJob, elapsed = Number.isFinite(qj.sentAt) ? `（${Math.max(0, Math.round((Date.now() - qj.sentAt) / 1000))} 秒）` : '';
-        el('understanding-status').textContent += ` · 问答${qj.state === 'error' ? '失败，可重试' : `独立${qj.kind === 'prime' ? '预热中' : '处理'}${elapsed}`}`;
-      }
-      if (state.recordingError || m?.error || m?.questionError || m?.asrError || rec?.full?.durationError) message(state.recordingError || m.error || m.questionError || m.asrError || rec?.full?.durationError);
+      const questionSessionButton = root.querySelector('[data-act-local="open-question-agent"]');
+      questionSessionButton.hidden = !m?.questionSessionId;
+      questionSessionButton.disabled = !m?.questionSessionId || !openSession;
+      const pending = (m?.answers || []).filter(q => ['queued', 'running'].includes(q.state));
+      const pendingBox = el('question-pending');
+      pendingBox.hidden = !pending.length;
+      pendingBox.innerHTML = pending.length ? `<i aria-hidden="true"></i><span>${pending.length} 个问题处理中 · 答案会插回时间流</span>` : '';
+      if (state.recordingError || m?.error || m?.asrError || rec?.full?.durationError) message(state.recordingError || m.error || m.asrError || rec?.full?.durationError);
       renderFlow(m); renderNavigation(m); renderReviewHero(m);
       const summary = el('summary'), html = m?.summary ? markdown(m.summary) : EMPTY_SUMMARY;
       if (summary.dataset.html !== html) { summary.innerHTML = html; citations(summary); summary.dataset.html = html; }
@@ -211,7 +242,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
   }
   async function action(op) {
     if (op === 'live') { evidenceRequest++; view('live'); return; }
-    if (op === 'new') { selectMeeting(''); el('title').value = ''; el('title').focus(); return; }
+    if (op === 'new') { if (capture?.running) throw new Error('请先点「结束会议」，没存完的内容会留在这一场里。'); selectMeeting(''); el('title').value = ''; el('title').focus(); return; }
     if (op === 'sources') { const r = await call('meeting-sources'); sourceList = r.sources; root.querySelector('[data-m="source"]').innerHTML = sourceList.map(s => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join(''); renderSourceGrid(); preview(); return; }
     if (op === 'install') { await call('meeting-asr-install'); await refresh(); return; }
     if (op === 'cancel-record-only') { el('record-only-confirm').hidden = true; const start = root.querySelector('[data-act="start"]'); start.disabled = false; start.focus(); return; }
@@ -227,13 +258,38 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       const crop = {}; for (const k of ['x', 'y', 'w', 'h']) crop[k] = Number(root.querySelector(`[data-crop="${k}"]`).value) / 100;
       if (Object.values(crop).some(v => !Number.isFinite(v)) || crop.x < 0 || crop.y < 0 || crop.w <= 0 || crop.h <= 0 || crop.x + crop.w > 1 || crop.y + crop.h > 1) throw new Error('截图区域应在画面范围内');
       const audio = { system: root.querySelector('[data-m="system"]').checked, mic: root.querySelector('[data-m="mic"]').checked };
-      const next = new MeetingCapture({ document, window, save: r => call('meeting-capture', { id, ...r }), status: message });
+      let captureId;
+      const next = new MeetingCapture({ document, window, save: r => call('meeting-capture', { id: captureId, ...r }), status: message });
       await next.open(selected, audio);
-      try { const r = await call('meeting-start', { title: root.querySelector('[data-m="title"]').value, sourceName: sourceList.find(s => s.id === selected)?.name, audio: Object.keys(audio).filter(k => audio[k]) }); id = r.meeting.id; resetPlayer(); capture = next; capture.start(crop); el('live').srcObject = capture.video.srcObject; await el('live').play(); view('live'); el('setup').open = false; message('已开始连续录屏。原始画面和声音本地留底，CodeAgent 默认只读取提炼图文；截图区域不裁掉原始录像。'); }
-      catch (e) { next.running = false; try { await next.dispose(); } catch (_) {} if (capture === next) { capture = null; await call('meeting-control', { id, op: 'stop' }).catch(() => {}); } throw e; }
-    } else if (op === 'retry-save') { await capture?.retry(); message('已重试保存，点击继续恢复采集。'); }
-    else if (op === 'pause') { if (capture.paused) { await call('meeting-control', { id, op: state.meeting.state === 'paused' ? 'resume' : 'auto', value: state.meeting.autoUnderstand }); capture.resume(); } else { await capture.pause(); await call('meeting-control', { id, op: 'pause' }); } }
-    else if (op === 'stop') { await capture.stop(); await call('meeting-control', { id, op: 'stop' }); el('live').srcObject = null; const latest = state.meeting?.events.filter(e => e.kind === 'slide').at(-1); if (latest) await showEvidence(latest.seq); else view('empty'); message('采集已结束，剩余转写和会后复核继续处理。'); }
+      try { const r = await call('meeting-start', { title: root.querySelector('[data-m="title"]').value, sourceName: sourceList.find(s => s.id === selected)?.name, audio: Object.keys(audio).filter(k => audio[k]) }); id = captureId = r.meeting.id; resetPlayer(); capture = next; capture.start(crop); el('live').srcObject = capture.video.srcObject; await el('live').play(); view('live'); el('setup').open = false; message('已开始连续录屏。原始画面和声音本地留底，CodeAgent 默认只读取提炼图文；截图区域不裁掉原始录像。'); }
+      catch (e) {
+        let cleanupError;
+        try { await next.dispose(); } catch (error) { cleanupError = error; }
+        if (capture === next) {
+          if (cleanupError || next.queue.length || next.saving || next.recorder?.queue.length || next.recorder?.saving) {
+            next.running = true; next.paused = true; next.ending = true;
+            throw new Error('会议没能开始：' + e.message + '。请先点「重试保存」，再点「结束会议」。');
+          }
+          try { await call('meeting-control', { id: captureId, op: 'stop' }); }
+          catch (error) { next.running = true; next.ending = true; throw error; }
+          next.running = false; capture = null;
+        }
+        throw cleanupError || e;
+      }
+    } else if (op === 'retry-save') { await capture?.retry(); message(capture?.ending || capture?.released ? '已补存好，请再点一次「结束会议」。' : capture?.recorder?.full?.recorder.state === 'inactive' ? '已补存好。录像已中断，请点「结束会议」，再新开一场。' : '已重试保存，点击继续恢复采集。'); }
+    else if (op === 'pause') { if (capture.paused) { capture.assertCanResume(); await call('meeting-control', { id, op: state.meeting.state === 'paused' ? 'resume' : 'auto', value: state.meeting.autoUnderstand }); capture.resume(); } else { await capture.pause(); await call('meeting-control', { id, op: 'pause' }); } }
+    else if (op === 'stop') {
+      await capture.stop(); capture.running = true;
+      // Keep ownership until the meeting service confirms its terminal state, including a lost reply.
+      try { await capture.wait(call('meeting-control', { id, op: 'stop' }), '会议还没结束完，请稍后再点一次「结束会议」，先别关 Hub。'); }
+      catch (error) {
+        let confirmed;
+        try { confirmed = await capture.wait(call('meeting-status', { id }), '会议还没结束完，请稍后再点一次「结束会议」，先别关 Hub。'); } catch (_) {}
+        if (confirmed?.meeting?.id !== id || confirmed.meeting.state !== 'ended') throw error;
+      }
+      capture.running = false;
+      el('live').srcObject = null; const latest = state.meeting?.events.filter(e => e.kind === 'slide').at(-1); if (latest) await showEvidence(latest.seq); else view('empty'); message('采集已结束，剩余转写和会后复核继续处理。');
+    }
     else if (op === 'snap') await capture.frame(true);
     else if (op === 'mark') { if (capture.paused) throw new Error('请先继续采集'); capture.enqueue({ kind: 'mark', at: capture.elapsed(), text: root.querySelector('[data-m="note"]').value || '重点' }); root.querySelector('[data-m="note"]').value = ''; await capture.frame(true); }
     else if (op === 'export') { if (!id) throw new Error('先选择会议'); await call('meeting-export', { id }); }
@@ -241,7 +297,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
     else if (op === 'play' && playback && !el('player').paused) { el('player').pause(); return; }
     else if (op === 'play') { const first=state.meeting?.recording?.segments.find(s=>s.status==='ready'); await playAt(Number(root.querySelector('[data-m="seek-seconds"]').value)*1000 || first?.at || 0,true); }
     else if (op === 'extract') { const at=playback ? playback.segment.at+root.querySelector('[data-m="player"]').currentTime*1000 : Number(root.querySelector('[data-m="seek-seconds"]').value)*1000; const requested = id; const result=await call('meeting-frames',{id,timesMs:[Math.round(at)]}); if(requested!==id)return; view('evidence', '录像回查'); const frame=result.frames[0]; root.querySelector('[data-m="evidence"]').innerHTML=`<p>录像回查 · ${time(frame.at)}</p><img class="meeting-slide" src="data:image/jpeg;base64,${frame.data}" alt="从录像提取的画面">`; addPptLookup(frame.path); }
-    else if (op === 'ask') { const input = root.querySelector('[data-m="question"]'); if (!id) throw new Error('先选择会议'); await call('meeting-control', { id, op: 'ask', value: input.value }); input.value = ''; revealQuestion = true; }
+    else if (op === 'ask') { const input = el('question'), value = input.value, requested = id; if (!requested) throw new Error('先选择会议'); await call('meeting-control', { id: requested, op: 'ask', value }); if (id === requested) { if (input.value === value) input.value = ''; revealQuestion = true; } }
     else { if (!id) throw new Error('先选择会议'); await call('meeting-control', { id, op }); }
     await refresh();
   }
@@ -279,7 +335,12 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
         if (e.target.closest('[data-act-local="latest"]')) el('timeline').scrollTop = el('timeline').scrollHeight;
         if (e.target.closest('[data-act-local="open-agent"]') && state?.meeting?.sessionId && openSession) void openSession(state.meeting.sessionId).catch(err => message(err.message));
         if (e.target.closest('[data-act-local="open-question-agent"]') && state?.meeting?.questionSessionId && openSession) void openSession(state.meeting.questionSessionId).catch(err => message(err.message));
-        const retry = e.target.closest('[data-retry-question]'); if (retry && id) void call('meeting-control', { id, op: 'retry-question', value: retry.dataset.retryQuestion }).then(() => refresh()).catch(err => message(err.message));
+        const retry = e.target.closest('[data-retry-question]'); if (retry && id && !retry.disabled) { retry.disabled = true; void call('meeting-control', { id, op: 'retry-question', value: retry.dataset.retryQuestion }).then(() => refresh()).catch(err => message(err.message)).finally(() => { retry.disabled = false; }); }
+        const followup = e.target.closest('[data-followup-question]'); if (followup) { const q = state?.meeting?.answers?.find(q => q.id === followup.dataset.followupQuestion); if (q) { el('question').value = q.q; el('question').focus(); } }
+        const copy = e.target.closest('[data-copy-answer]'); if (copy) {
+          const body = copy.closest('[data-answer]')?.querySelector('.meeting-answer-body');
+          if (body) { copy.disabled = true; void Promise.resolve().then(() => require('electron').clipboard.writeText(body.innerText.trim())).then(() => { copy.textContent = '已复制'; }).catch(err => message(`复制未完成：${err.message}`)).finally(() => { copy.disabled = false; }); }
+        }
         const findPpt = e.target.closest('[data-find-ppt]'); if (findPpt) void showEvidence(Number(findPpt.dataset.findPpt)).then(file => file && lookupPpt(file)).catch(err => message(err.message));
         const findImage = e.target.closest('[data-find-image]'); if (findImage) void lookupPpt(findImage.dataset.findImage).catch(err => message(err.message));
         const openPpt = e.target.closest('[data-ppt-open]'); if (openPpt) void call('ppt-open', { id: openPpt.dataset.pptOpen }).then(r => { if (r.pageFocused === false) message('原文件已打开，请手动切到候选页面。'); }).catch(err => message(err.message));
@@ -343,6 +404,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
   }
   function markActive() { root.querySelectorAll('[data-m="timeline"] [data-event], [data-m="topics"] [data-event]').forEach(b => { const active = Number(b.dataset.event) === activeSeq; b.classList.toggle('is-active', active); if (b.dataset.topic) b.setAttribute('aria-current', String(active)); }); }
   function selectMeeting(value) {
+    if (capture?.running) { el('history').value = id || ''; message('请先点「结束会议」，没存完的内容会留在这一场里。'); return; }
     el('record-only-confirm').hidden = true;
     id = value || null; activeSeq = null; revealQuestion = false; evidenceRequest++; resetPlayer(); view('empty'); message(''); el('more').open = false;
     el('history').value = value || ''; el('timeline').dataset.stamp = ''; el('timeline').innerHTML = ''; el('evidence').innerHTML = '';
@@ -356,7 +418,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
     if(playback?.segment.key!==r.segment.key){await new Promise((resolve,reject)=>{const timer=setTimeout(()=>done(new Error('回放加载超时')),15000);const ok=()=>done();const bad=()=>done(new Error('录像无法播放'));function done(e){clearTimeout(timer);video.removeEventListener('loadeddata',ok);video.removeEventListener('error',bad);e?reject(e):resolve();}video.addEventListener('loadeddata',ok,{once:true});video.addEventListener('error',bad,{once:true});video.src=r.url;video.load();});}
     if(request!==playRequest||meetingId!==id)return;playback=r;video.currentTime=r.offsetMs/1000;root.querySelector('[data-m="play-time"]').textContent=time(at);if(autoplay)await video.play();
   }
-  window.addEventListener('beforeunload', e => { if (capture?.running || capture?.queue.length) { e.preventDefault(); e.returnValue = false; } });
-  return { open, close: () => { if (root) { root.hidden = true; el('player').pause(); el('evidence').querySelector('audio')?.pause(); } }, dispose: () => { clearInterval(poll); clearInterval(meterTimer); thumbsObserver?.disconnect(); void capture?.dispose(); } };
+  window.addEventListener('beforeunload', e => { if (capture?.running || capture?.queue.length || capture?.saving || capture?.recorder?.queue.length || capture?.recorder?.saving) { e.preventDefault(); e.returnValue = false; } });
+  return { open, close: () => { if (root) { root.hidden = true; el('player').pause(); el('evidence').querySelector('audio')?.pause(); } }, dispose: () => { clearInterval(poll); clearInterval(meterTimer); thumbsObserver?.disconnect(); void capture?.dispose().catch(e => message(e.message)); } };
 }
 module.exports = { createCompanyMeetingPage };

@@ -58,3 +58,43 @@
   --hw-glow-period: 4s;   /* 录制中光环一圈 */
   --hw-think-period: 1.4s;/* AI 思考圆点 */
 }
+
+/* ============ 5.5.8 · V3 主页中间栏 / V5 字号收档 · 组件令牌（s1 设计，2026-11-05）：只引用上面的 --hw-* 变量 ============ */
+:root {
+  /* ---------- V5 字号：只用 8 档 ---------- */
+  /* 12 说明·时间·标签 | 13 次要文字·小按钮 | 14 正文·列表·按钮 | 16 卡片标题·对话正文
+     18 区块标题 | 22 页标题 | 28 大标题 | 44 大数字（只给统计数字）                         */
+  --hw-fs-caption: var(--hw-fs-12);
+  --hw-fs-meta:    var(--hw-fs-13);
+  --hw-fs-body:    var(--hw-fs-14);
+  --hw-fs-card:    var(--hw-fs-16);
+  --hw-fs-section: var(--hw-fs-18);
+  --hw-fs-page:    var(--hw-fs-22);
+  /* 并档规则（写死的值一律改成引用）：
+     10 / 10.5 / 11 / 11.5 → 12；12.5 → 13；13.5 → 14；15 / 15.5 → 16；17 → 18；
+     20 → 按角色 18（区块标题）或 22（页标题）；24 → 22；26 → 28。
+     不并：用户在「显示参数」里调的卡片字号、终端字号（它们是用户设置，不是设计值）。  */
+
+  /* ---------- 按钮：3 种尺寸 × 3 种轻重 ---------- */
+  --hw-btn-h-s: 28px; --hw-btn-h-m: 32px; --hw-btn-h-l: 36px;
+  --hw-btn-px-s: 10px; --hw-btn-px-m: 14px; --hw-btn-px-l: 18px;
+  --hw-btn-fs-s: var(--hw-fs-13); --hw-btn-fs-m: var(--hw-fs-14); --hw-btn-fs-l: var(--hw-fs-14);
+  /* 轻重：主 = 蓝底白字 600；次 = surface-3 底、text-1、500；幽灵 = 透明底、text-2、400，悬停 surface-3 */
+
+  /* ---------- V3 中间栏 ---------- */
+  --hw-mid-session-w: 224px;          /* 会话栏宽（与现在一致，用户调过就用用户的 --display-session-width） */
+  --hw-mid-gap: 12px;                 /* 会话栏与对话卡、对话卡与右栏的间距 */
+  --hw-row-h: 36px;                   /* 会话行高 */
+  --hw-row-r: var(--hw-r-item);
+  --hw-row-hover: var(--hw-surface);  /* 会话栏在灰底上，悬停行变白 */
+  --hw-row-active-bg: var(--hw-brand-soft);
+  --hw-row-active-fg: var(--hw-brand);
+  --hw-chat-card-r: var(--hw-r-lg);   /* 对话区一整张白卡 */
+  --hw-bubble-user-bg: var(--hw-brand-soft);
+  --hw-bubble-r: var(--hw-r-md);
+  --hw-composer-bg: var(--hw-surface-2);
+  --hw-composer-r: var(--hw-r-md);
+  --hw-composer-focus: 0 0 0 1.5px var(--hw-brand), 0 0 0 5px var(--hw-brand-soft);
+  --hw-seg-slot: var(--hw-surface-3); /* 置顶/今天/3 天/网页 分段控件 */
+  --hw-seg-on: var(--hw-surface);
+}

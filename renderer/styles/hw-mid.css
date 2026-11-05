@@ -1,0 +1,137 @@
+/* 公司版主页中间栏换皮（V3，s1 样稿 20261105-V3中间栏样稿-s1，2026-11-05）
+   会话栏直接放在浅灰底上；对话区、首页、群聊各是一张白色大圆角卡；输入区浅灰圆角、底排按钮统一成幽灵胶囊。
+   只改外观：不动终端视图、卡片内部渲染（代码块、表格、markdown）、问题目录与跳转逻辑，不改任何节点、id 与事件。
+   */
+
+/* ---------- ① 会话栏：不套卡片，直接在灰底上 ---------- */
+:root[data-hw-shell] body #session-sidebar { background: transparent; border-right: 0; box-shadow: none; font-family: var(--hw-font); }
+:root[data-hw-shell] body #session-sidebar .sidebar-header,
+:root[data-hw-shell] body #session-sidebar .session-range-tabs,
+:root[data-hw-shell] body #session-sidebar .sidebar-filters { background: transparent; border-bottom: 0; box-shadow: none; }
+
+/* ② 启动：分体胶囊，32 高、蓝底、14 号 600；右半 ▾ 用 1px 白色 28% 透明分隔 */
+:root[data-hw-shell] body #new-session-wrapper .launch-split { height: var(--hw-btn-h-m); border-radius: var(--hw-r-pill); overflow: hidden; background: var(--hw-brand); box-shadow: none; gap: 0; }
+:root[data-hw-shell] body #new-session-wrapper #btn-new { height: var(--hw-btn-h-m); padding: 0 12px 0 14px; border: 0; border-radius: 0; background: transparent; color: var(--hw-text-on); font-family: var(--hw-font); font-size: var(--hw-fs-14); font-weight: 600; box-shadow: none; }
+:root[data-hw-shell] body #new-session-wrapper #btn-more-new,
+:root[data-hw-shell] body #new-session-wrapper #btn-new-more { height: var(--hw-btn-h-m); width: 28px; min-width: 28px; padding: 0; border: 0; border-left: 1px solid rgba(255,255,255,.28); border-radius: 0; background: transparent; color: var(--hw-text-on); box-shadow: none; }
+:root[data-hw-shell] body #new-session-wrapper #btn-new:hover,
+:root[data-hw-shell] body #new-session-wrapper #btn-new-more:hover { background: var(--hw-brand-hover); }
+
+/* ③ 搜索历史：surface-3 胶囊、无边框、13 号三级灰字 */
+:root[data-hw-shell] body #session-sidebar #btn-global-search { height: var(--hw-btn-h-m); padding: 0 12px; border: 0; border-radius: var(--hw-r-pill); background: var(--hw-surface-3); color: var(--hw-text-3); font-family: var(--hw-font); font-size: var(--hw-fs-13); font-weight: 400; box-shadow: none; }
+:root[data-hw-shell] body #session-sidebar #btn-global-search:hover { background: var(--hw-line); color: var(--hw-text-2); }
+
+/* ④ 置顶 / 今天 / 3 天 / 网页：分段控件 */
+:root[data-hw-shell] body #session-sidebar .session-range-tabs { display: flex; gap: 2px; padding: 3px; border-radius: var(--hw-r-pill); background: var(--hw-seg-slot); }
+:root[data-hw-shell] body #session-sidebar .session-range-tabs > button { flex: 1; height: 26px; padding: 0 6px; border: 0; border-radius: var(--hw-r-pill); background: transparent; color: var(--hw-text-2); font-family: var(--hw-font); font-size: var(--hw-fs-13); font-weight: 400; box-shadow: none; }
+:root[data-hw-shell] body #session-sidebar .session-range-tabs > button:hover { color: var(--hw-text-1); }
+:root[data-hw-shell] body #session-sidebar .session-range-tabs > button[aria-pressed='true'] { background: var(--hw-seg-on); color: var(--hw-text-1); font-weight: 600; box-shadow: var(--hw-e1); }
+
+/* ⑤ 会话行：36 高、12 圆角；悬停变白；当前行浅蓝底蓝字 600；时间与数量用数字字体 12 号 */
+:root[data-hw-shell] body #session-sidebar .session-item.slim { min-height: var(--hw-row-h); border: 0; border-radius: var(--hw-row-r); background: transparent; font-family: var(--hw-font); font-size: var(--hw-fs-14); box-shadow: none; }
+:root[data-hw-shell] body #session-sidebar .session-item.slim:hover { background: var(--hw-row-hover); }
+:root[data-hw-shell] body #session-sidebar .session-item.slim.selected,
+:root[data-hw-shell] body #session-sidebar .session-item.slim.selected:hover { background: var(--hw-row-active-bg); box-shadow: none; }
+:root[data-hw-shell] body #session-sidebar .session-item.slim .sl-title { font-size: var(--hw-fs-14); color: var(--hw-text-1); }
+:root[data-hw-shell] body #session-sidebar .session-item.slim.selected .sl-title { color: var(--hw-row-active-fg); font-weight: 600; }
+:root[data-hw-shell] body #session-sidebar .sl-time { font-family: var(--hw-font-num); font-size: var(--hw-fs-12); letter-spacing: 0; color: var(--hw-text-3); font-variant-numeric: tabular-nums; }
+:root[data-hw-shell] body #session-sidebar .session-item.slim.selected .sl-time { color: var(--hw-row-active-fg); }
+:root[data-hw-shell] body #session-sidebar .session-sec-header { font-family: var(--hw-font); font-size: var(--hw-fs-12); color: var(--hw-text-3); }
+:root[data-hw-shell] body #session-sidebar .session-sec-header::after { display: none; }
+:root[data-hw-shell] body #session-sidebar .sec-count { font-family: var(--hw-font-num); font-size: var(--hw-fs-12); color: var(--hw-text-3); }
+:root[data-hw-shell] body #session-sidebar .session-archive-entry { min-height: var(--hw-row-h); border: 0; border-radius: var(--hw-row-r); background: transparent; color: var(--hw-text-2); font-family: var(--hw-font); font-size: var(--hw-fs-13); }
+:root[data-hw-shell] body #session-sidebar .session-archive-entry:hover { background: var(--hw-row-hover); }
+:root[data-hw-shell] body #session-sidebar .archive-count { font-family: var(--hw-font-num); font-size: var(--hw-fs-12); color: var(--hw-text-3); }
+
+/* ---------- ② 右侧工作区：对话区 / 首页 / 群聊各是一张白卡 ---------- */
+:root[data-hw-shell] body #app-body > .session-workspace { padding: 10px 0 12px var(--hw-mid-gap); background: transparent; }
+:root[data-hw-shell] body #app-body .session-workspace .terminal-panel { border: 0; border-radius: var(--hw-chat-card-r); background: var(--hw-surface); box-shadow: var(--hw-e1); overflow: hidden; }
+:root[data-hw-shell] body #app-body > #meeting-room-panel { margin: 10px 0 12px var(--hw-mid-gap); border: 0; border-radius: var(--hw-chat-card-r); background: var(--hw-surface); box-shadow: var(--hw-e1); overflow: hidden; font-family: var(--hw-font); }
+
+/* 首页（无会话） */
+:root[data-hw-shell] body #terminal-panel .home-workbench { background: var(--hw-surface); font-family: var(--hw-font); }
+
+/* 对话区：卡内底色统一为白；用户气泡浅蓝、AI 回复无底色 */
+:root[data-hw-shell] body #terminal-panel.card-view-active .msg-overlay { background: var(--hw-surface); }
+:root[data-hw-shell] body #terminal-panel .turn-card.user .chat-message-bubble,
+:root[data-hw-shell] body #terminal-panel .turn-card.user:not(:has(.chat-message-bubble)) .turn-body { border: 0; border-radius: var(--hw-bubble-r) 6px var(--hw-bubble-r) var(--hw-bubble-r); background: var(--hw-bubble-user-bg); box-shadow: none; }
+:root[data-hw-shell] body #terminal-panel .turn-card .chat-message-bubble .turn-body { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+:root[data-hw-shell] body #terminal-panel .turn-card.assistant .chat-message-bubble,
+:root[data-hw-shell] body #terminal-panel .turn-card.assistant .turn-body { border: 0; background: transparent; box-shadow: none; }
+
+/* ---------- ⑥ 输入区：surface-2 底、16 圆角、无边框，聚焦蓝描边 + 浅蓝光晕 ---------- */
+:root[data-hw-shell] body #terminal-panel .floating-input-bar { border-top: 0; background: var(--hw-surface); box-shadow: none; padding: 8px 16px 16px; }
+:root[data-hw-shell] body #terminal-panel .floating-input-bar .composer,
+:root[data-hw-shell] body #meeting-room-panel #mr-input-row.mr-group-composer { border: 0; border-radius: var(--hw-composer-r); background: var(--hw-composer-bg); box-shadow: none; font-family: var(--hw-font); transition: box-shadow var(--hw-t-fast); }
+:root[data-hw-shell] body #terminal-panel .floating-input-bar .composer:focus-within,
+:root[data-hw-shell] body #meeting-room-panel #mr-input-row.mr-group-composer:focus-within { box-shadow: var(--hw-composer-focus); }
+:root[data-hw-shell] body #terminal-panel .floating-input-box,
+:root[data-hw-shell] body #meeting-room-panel #mr-input-box { border: 0; outline: 0; background: transparent; box-shadow: none; font-family: var(--hw-font); font-size: var(--hw-fs-14); }
+:root[data-hw-shell] body #terminal-panel .floating-input-box:focus,
+:root[data-hw-shell] body #meeting-room-panel #mr-input-box:focus { border: 0; outline: 0; box-shadow: none; }
+
+/* 底排按钮：幽灵胶囊（28 高、13 号、二级灰）；模型选择是唯一白底胶囊；发送 32 圆形蓝按钮 */
+:root[data-hw-shell] body #terminal-panel .composer-chip,
+:root[data-hw-shell] body #terminal-panel .fi-bridge-reference,
+:root[data-hw-shell] body #meeting-room-panel .mr-group-composer .composer-chip { height: var(--hw-btn-h-s); padding: 0 var(--hw-btn-px-s); border: 0; border-radius: var(--hw-r-pill); background: transparent; color: var(--hw-text-2); font-family: var(--hw-font); font-size: var(--hw-btn-fs-s); font-weight: 400; box-shadow: none; }
+:root[data-hw-shell] body #terminal-panel .composer-chip:hover,
+:root[data-hw-shell] body #terminal-panel .fi-bridge-reference:hover,
+:root[data-hw-shell] body #meeting-room-panel .mr-group-composer .composer-chip:hover { background: var(--hw-surface-3); color: var(--hw-text-1); }
+:root[data-hw-shell] body #terminal-panel .composer-chip.composer-model { background: var(--hw-surface); color: var(--hw-text-1); box-shadow: var(--hw-e1); }
+:root[data-hw-shell] body #terminal-panel .floating-input-send,
+:root[data-hw-shell] body #meeting-room-panel #mr-send-btn { width: 32px; height: 32px; min-width: 32px; padding: 0; border: 0; border-radius: 50%; background: var(--hw-brand); color: var(--hw-text-on); box-shadow: none; }
+:root[data-hw-shell] body #terminal-panel .floating-input-send:hover,
+:root[data-hw-shell] body #meeting-room-panel #mr-send-btn:hover { background: var(--hw-brand-hover); }
+
+/* 修正（第 2 轮实拍）：分段控件收在会话栏内；输入区内层行与外层栈去掉白底和描边 */
+:root[data-hw-shell] body #session-sidebar .session-range-tabs { box-sizing: border-box; width: auto; margin-left: 12px; margin-right: 12px; }
+:root[data-hw-shell] body #terminal-panel .floating-input-bar .fi-content-stack { background: transparent; }
+:root[data-hw-shell] body #terminal-panel .floating-input-bar .fi-composer-row,
+:root[data-hw-shell] body #terminal-panel .floating-input-bar .fi-composer-row:focus-within { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+
+/* 群聊：页头是卡内 52 高标题行（16 号 600），下面一条分隔线；页头按钮改幽灵胶囊；消息区与卡同白 */
+:root[data-hw-shell] body #meeting-room-panel #mr-header { min-height: 52px; padding: 8px 16px 8px 24px; border-bottom: 1px solid var(--hw-line); background: var(--hw-surface); box-shadow: none; }
+:root[data-hw-shell] body #meeting-room-panel .mr-header-title { font-family: var(--hw-font); font-size: var(--hw-fs-16); font-weight: 600; color: var(--hw-text-1); }
+:root[data-hw-shell] body #meeting-room-panel #mr-header :is(.mr-header-btn, .btn-zoom, .btn-close-session, .mr-workspace-chip) { height: var(--hw-btn-h-s); padding: 0 var(--hw-btn-px-s); border: 0; border-radius: var(--hw-r-pill); background: transparent; color: var(--hw-text-2); font-family: var(--hw-font); font-size: var(--hw-btn-fs-s); font-weight: 400; box-shadow: none; }
+:root[data-hw-shell] body #meeting-room-panel #mr-header :is(.mr-header-btn, .btn-zoom, .btn-close-session, .mr-workspace-chip):hover { background: var(--hw-surface-3); color: var(--hw-text-1); }
+:root[data-hw-shell] body #meeting-room-panel #mr-header :is(.mr-header-btn, .btn-zoom).active { background: var(--hw-brand-soft); color: var(--hw-brand); }
+:root[data-hw-shell] body #meeting-room-panel #mr-header .mr-workspace-chip { font-family: var(--hw-font-num); font-size: var(--hw-fs-12); }
+:root[data-hw-shell] body #meeting-room-panel :is(.mr-gc-panel, .mr-gc-messages) { background: var(--hw-surface); }
+:root[data-hw-shell] body #meeting-room-panel #mr-input-row.mr-group-composer { margin: 0 16px 16px; }
+
+/* ---------- V5 字号并档（主页中间栏）：10/10.5/11/11.5→12，12.5→13，13.5→14，15/15.5→16，24→22，30→28 ---------- */
+:root[data-hw-shell] body #session-sidebar #btn-global-search * { font-size: inherit; }
+:root[data-hw-shell] body #session-sidebar #btn-session-details { font-size: var(--hw-fs-12); }
+:root[data-hw-shell] body #session-sidebar :is(.sec-action, .sl-acct) { font-size: var(--hw-fs-12); }
+:root[data-hw-shell] body #session-sidebar .sl-acct { min-width: 16px; height: 16px; line-height: 14px; }
+:root[data-hw-shell] body #terminal-panel .home-welcome { font-family: var(--hw-font); }
+:root[data-hw-shell] body #terminal-panel .home-welcome-brand { font-size: var(--hw-fs-16); }
+:root[data-hw-shell] body #terminal-panel .home-welcome-brand > span { font-size: var(--hw-fs-22); }
+:root[data-hw-shell] body #terminal-panel .home-welcome-eyebrow { font-size: var(--hw-fs-12); }
+:root[data-hw-shell] body #terminal-panel #home-welcome-title { font-size: var(--hw-fs-28); }
+:root[data-hw-shell] body #terminal-panel .home-welcome-portal strong { font-size: var(--hw-fs-16); }
+:root[data-hw-shell] body #terminal-panel .home-welcome-portal .home-welcome-description,
+:root[data-hw-shell] body #terminal-panel .home-welcome-description { font-size: var(--hw-fs-13); }
+:root[data-hw-shell] body #terminal-panel #community-setup button { font-size: var(--hw-fs-13); }
+:root[data-hw-shell] body #terminal-panel .turn-head :is(.turn-meta, .turn-who, .ta-btn, .card-actions-more, .conversation-phase, .turn-branch-chip) { font-size: var(--hw-fs-12); }
+:root[data-hw-shell] body #terminal-panel .card-actions-popover .ta-btn { font-size: var(--hw-fs-13); }
+:root[data-hw-shell] body #meeting-room-panel :is(.mr-input-battle-detail, .mr-input-preflight-chip, .mr-input-preflight-chip *) { font-size: var(--hw-fs-12); }
+:root[data-hw-shell] body #terminal-panel .home-welcome-brand > span { font-size: var(--hw-fs-16); }
+:root[data-hw-shell] body #terminal-panel .composer :is(.composer-status-text, .composer-model-logo) { font-size: var(--hw-fs-12); }
+:root[data-hw-shell] body #terminal-panel .turn-card :is(.ta-btn, .card-actions-more, .turn-meta) { font-size: var(--hw-fs-12); }
+:root[data-hw-shell] body #terminal-panel .turn-card .conversation-progress-time { font-size: var(--hw-fs-12); }
+/* 群聊头像角上的「已选」小圆：原来是 12px 圆里 8 号字「OK」，改成线条勾，不再出现小于 12 号的字 */
+:root[data-hw-shell] body #meeting-room-panel .mr-free-avatar-chk-mark { position: absolute; font-size: 0; }
+:root[data-hw-shell] body #meeting-room-panel .mr-free-avatar-chk-mark::after { content: ''; position: absolute; left: 50%; top: 45%; width: 5px; height: 3px; border: solid currentColor; border-width: 0 0 1.5px 1.5px; transform: translate(-50%, -50%) rotate(-45deg); }
+
+/* 首页入口卡与「连接你的 AI」：surface-2 底、16 圆角、无描边；按钮次级胶囊 */
+:root[data-hw-shell] body #terminal-panel .home-welcome-portal :is(#home-create-session, #home-create-group),
+:root[data-hw-shell] body #terminal-panel #community-setup { border: 0; border-radius: var(--hw-r-md); background: var(--hw-surface-2); box-shadow: none; }
+:root[data-hw-shell] body #terminal-panel .home-welcome-portal :is(#home-create-session, #home-create-group):hover { background: var(--hw-surface-3); }
+:root[data-hw-shell] body #terminal-panel #community-setup button { height: var(--hw-btn-h-m); padding: 0 var(--hw-btn-px-m); border: 0; border-radius: var(--hw-r-pill); background: var(--hw-surface-3); color: var(--hw-text-1); font-weight: 500; box-shadow: none; }
+:root[data-hw-shell] body #terminal-panel #community-setup button:hover { background: var(--hw-line); }
+
+/* s1 验收必改（2026-11-05）：群聊输入区的模型选择与单会话一致——按文字自适应宽度的白底胶囊，过长时省略 */
+:root[data-hw-shell] body #meeting-room-panel .mr-group-models { gap: 4px; }
+:root[data-hw-shell] body #meeting-room-panel .mr-group-models .mr-group-model-chip { flex: 0 1 auto; width: auto; min-width: 0; max-width: 180px; height: var(--hw-btn-h-s); padding: 0 var(--hw-btn-px-s); border: 0; border-radius: var(--hw-r-pill); background: var(--hw-surface); color: var(--hw-text-1); font-size: var(--hw-btn-fs-s); box-shadow: var(--hw-e1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:root[data-hw-shell] body #meeting-room-panel .mr-group-models .mr-group-model-chip:hover { background: var(--hw-surface); color: var(--hw-brand); }

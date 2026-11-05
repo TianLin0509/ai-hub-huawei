@@ -341,6 +341,46 @@ test('CDP default teardown still refuses an unverified live child without diagno
   assert.deepEqual(signals, ['SIGTERM']); assert.equal(error.termination.forced, true);
 });
 
+test('CDP eval keeps an undefined readiness condition false until real readiness', async () => {
+  const ws = new FakeCdpSocket(), c = new (require('./helpers/cdp-client').CDPClient)(ws);
+  const replies = [{ type: 'undefined' }, { type: 'boolean', value: false }, { type: 'boolean', value: true }];
+  let attempts = 0;
+  try {
+    for (const result of replies) {
+      attempts++;
+      const pending = c.eval('window.lifecycleCapture?.running && window.lifecycleCapture.bytes > 0');
+      ws.reply(ws.sent.at(-1).id, { result });
+      if (await pending) break;
+    }
+    assert.equal(attempts, 3, 'an absent capture must not satisfy the readiness wait');
+    assert.equal(c.pending.size, 0);
+  } finally { await c.close(); }
+});
+
+test('CDP eval decodes undefined without changing other values or remote handles', async () => {
+  const ws = new FakeCdpSocket(), c = new (require('./helpers/cdp-client').CDPClient)(ws);
+  const handle = { type: 'object', objectId: 'fixture-object', description: 'Object' };
+  const special = { type: 'number', unserializableValue: 'NaN' };
+  const cases = [
+    [{ type: 'undefined' }, undefined],
+    [{ type: 'undefined' }, undefined, { returnByValue: false }],
+    [{ type: 'object', subtype: 'null', value: null }, null],
+    [{ type: 'boolean', value: false }, false],
+    [{ type: 'number', value: 0 }, 0],
+    [{ type: 'string', value: '' }, ''],
+    [{ type: 'object', value: { ready: true } }, { ready: true }],
+    [handle, handle, { returnByValue: false }],
+    [special, special],
+  ];
+  try {
+    for (const [result, expected, options] of cases) {
+      const pending = c.eval('fixtureExpression', options);
+      ws.reply(ws.sent.at(-1).id, { result });
+      assert.deepEqual(await pending, expected);
+    }
+  } finally { await c.close(); }
+});
+
 test('edition marker enables the community edition and records the upstream version', () => {
   const marker = JSON.parse(read('community-edition.json'));
   assert.equal(marker.edition, 'community');

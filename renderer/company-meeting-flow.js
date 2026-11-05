@@ -4,10 +4,16 @@
 function flowEntries(meeting) {
   const events = (meeting?.events || []).filter(e => ['slide', 'transcript', 'mark'].includes(e.kind));
   const entries = events.map(event => ({ key: `event-${event.seq}`, kind: event.kind, at: event.at, event }));
+  const pending = (meeting?.answers || []).filter(q => ['queued', 'running'].includes(q.state));
+  const active = pending.find(q => q.id === meeting?.questionJob?.questionId && meeting.questionJob.state !== 'error')
+    || pending.find(q => q.state === 'running');
+  // A retried older card keeps its timestamp, but cannot jump ahead of the claimed request.
+  const queue = active ? [active, ...pending.filter(q => q !== active)] : pending;
   for (const question of meeting?.answers || []) {
     const asked = question.queuedAt ?? question.at;
     const at = Number.isFinite(asked) && Number.isFinite(meeting.startedAt) ? Math.max(0, asked - meeting.startedAt) : null;
     entries.push({ key: `question-${question.id}`, kind: 'question', at, question,
+      queueAhead: question.state === 'queued' ? queue.indexOf(question) : null,
       afterMeeting: ['ended', 'interrupted'].includes(meeting.state) && at !== null && at > meeting.capturedMs });
   }
   return entries.sort((a, b) => (a.at ?? Infinity) - (b.at ?? Infinity) || (a.event?.seq || 0) - (b.event?.seq || 0));

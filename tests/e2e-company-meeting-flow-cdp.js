@@ -267,7 +267,7 @@ function installFixture() {
     await activity(null,prime,false,'question session prewarm');
     await activity(prime,prime,false,'both sessions prewarm');await shot('08-prime');
     await activity(understanding,prime,true,'understanding alongside question prewarm');
-    await activity(prime,question,true,'question alongside understanding prewarm');
+    await activity(prime,question,false,'question stays in its own lane alongside understanding prewarm');
     await c.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]});
     await activity(understanding,null,true,'real task with reduced motion',true);
     await c.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'no-preference'}]});
@@ -275,7 +275,7 @@ function installFixture() {
     await activity(null,null,false,'idle tasks');
     assert.ok(await c.eval(`!!document.querySelector('.meeting-summary-heading [data-act=export]')`),'live export stays in minutes');
     await click('[data-act=export]');await until('m3Fixture.calls.filter(x=>x.channel==="company-assistant:meeting-export").length===1','live export');
-    result.checks.push('prewarm in either lane stays static; real understanding/question animates even alongside prewarm; errors stop animation; live export retained');
+    result.checks.push('prewarm stays static; only real minutes work animates the minutes lane; separate questions do not animate minutes; errors stop animation; live export retained');
     await click('[data-m=more] > summary');await shot('03-more');
     for(const [name,value] of [['interval','5'],['fast-model','fixture-fast']])await c.eval(`(()=>{const e=document.querySelector('[data-m=${name}]');e.value=${JSON.stringify(value)};e.dispatchEvent(new Event('change',{bubbles:true}));})()`);
     assert.ok(await c.eval('m3Fixture.current.autoIntervalMin===5 && m3Fixture.current.fastModel==="fixture-fast"'));

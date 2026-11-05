@@ -2565,7 +2565,7 @@ if (require('./core/distribution').featureEnabled('assistant')) try {
 let appUpdateControllerRef = null;
 function companyHubAdmin() { return null; }
 // 公司版「助理」（2026-10-16）：每日简报 + 对话 + 6 条提醒，只读 WeLink，数据只留在本机 Hub 数据目录。
-let companyAssistantService = null;
+let companyAssistantService = null, askAsideService = null;
 const teamAccess = { assert() { throw new Error('该功能未启用'); } };
 // 可选功能（2026-10-30，core/optional-features.js）：助理、论坛、桌宠默认关，设置菜单「可选功能」与各自页面里开关。
 // 关着时助理、论坛的服务照样建好（页面能显示「未开启」和开关），但不调 start()，后台不取数、不开窗口。
@@ -2611,6 +2611,7 @@ try {
       return saved ? { ...saved, id: saved.hubId || id } : null;
     };
     companyAssistantService = new CompanyAssistant({
+      getMeetingAskAside: () => askAsideService,
       assertTeamAccess: () => teamAccess.assert(),
       dataDir: getHubDataDir(),
       noTimer: process.env.CLAUDE_HUB_ASSISTANT_TIMER === '0',
@@ -2774,9 +2775,10 @@ try {
 // 问一下（2026-11-04）：另起后台 codeagent --print --resume --fork-session 回答插问，不碰运行中的终端、不改原会话记录。
 if (require('./core/distribution').featureEnabled('btwAsk')) try {
   const { createAskAsideService, registerAskAsideIpc } = require('./main/ask-aside/service');
-  const askAside = createAskAsideService({ sessionManager, getHubDataDir, sendToRenderer });
-  registerAskAsideIpc(ipcMain, askAside);
-  app.on('will-quit', () => { void askAside.dispose(); });
+  askAsideService = createAskAsideService({ sessionManager, getHubDataDir, sendToRenderer,
+    getSessionMetadata: id => require('./core/session-store').loadSessionFile(id, { strict: true }) });
+  registerAskAsideIpc(ipcMain, askAsideService);
+  app.on('will-quit', () => { void askAsideService.dispose(); });
 } catch (error) { console.error('[ask-aside] service unavailable:', error.message); }
 // 负责人组队：用户在侧栏批准后创建 CodeAgent 成员，命令安装在当前用户数据目录。
 if (require('./core/distribution').featureEnabled('leadTeam')) try {

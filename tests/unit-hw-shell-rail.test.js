@@ -101,6 +101,7 @@ test('stylesheet: icon rail is the default slot and the wide slot only applies w
     assert.match(selector, /data-hw-rail-pref="wide"/, `${m[1]}px slot must be gated by the wide preference`);
   }
   assert.match(css, /data-hw-rail="narrow"[^{]*cw-current[^{]*::before\s*\{[^}]*background: var\(--hw-brand\)/, 'current page shows the blue bar in the icon rail');
+  assert.match(css, /data-hw-rail="narrow"[^{]*#btn-progress > \.pg-nav-count[^{]*\{[^}]*top: 0; right: 0;/, 'progress count sits on the button corner, not over the icon');
 });
 
 test('navigation icons are one solid family: no outline strokes or unfilled shapes', () => {
@@ -111,4 +112,13 @@ test('navigation icons are one solid family: no outline strokes or unfilled shap
     assert.doesNotMatch(svg, /stroke/, `${name} must not be drawn with strokes`);
     assert.doesNotMatch(svg, /fill=%22none%22/, `${name} must not have unfilled shapes`);
   }
+});
+
+test('icon rail shows a one-line 12px name under every icon without widening the 64px slot', () => {
+  const css = fs.readFileSync(path.join(__dirname, '../renderer/styles/hw-shell.css'), 'utf8');
+  const rule = css.match(/data-hw-rail="narrow"[^{]*> \.btn-label,[^{]*> \.rail-utility-label \{([^}]*)\}/);
+  assert.ok(rule, 'narrow rail has a label rule for nav and utility buttons');
+  for (const decl of ['display: block !important', 'var(--hw-fs-12)', 'white-space: nowrap', 'text-overflow: ellipsis']) assert.ok(rule[1].includes(decl), decl);
+  assert.match(css, /data-hw-rail="narrow"[^{]*\{\s*flex-direction: column;[^}]*width: 44px; height: 46px;/, 'buttons stack icon over name');
+  assert.match(css, /:root\[data-hw-shell\]:not\(\[data-display-mode="phone"\]\)[^{]*\{\s*--hub-rail-slot: var\(--display-rail-width, 64px\)/, 'slot stays 64px');
 });

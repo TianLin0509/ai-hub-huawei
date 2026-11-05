@@ -57,7 +57,12 @@ function createTranscriptSearch(document) {
     const previous = matches[index];
     const changed = root !== nextRoot || query !== nextQuery;
     root = nextRoot; query = nextQuery;
-    matches = collectTranscriptMatches(root, query);
+    // The match walk reads computed style per text node; on skipped cards that is
+    // over ten times slower than rendering them for the duration of the walk.
+    const skip = root?.id === 'msg-overlay' ? win._cardContentSkip?.() : null;
+    matches = skip
+      ? skip.withCardsRendered(root.querySelectorAll(':scope > .turn-card'), () => collectTranscriptMatches(root, query))
+      : collectTranscriptMatches(root, query);
     const attachedIndex = changed ? -1 : matches.findIndex(r => previous && r.startContainer === previous.startContainer && r.startOffset === previous.startOffset);
     // History hydration can replace a card between keystrokes. Keep the ordinal
     // when its Range detached instead of jumping back to the first result.

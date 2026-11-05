@@ -46,7 +46,9 @@ function extractVisibleCardText(root) {
     'position:fixed',
     'left:-100000px',
     'top:0',
-    `width:${Math.max(320, Math.round(root.getBoundingClientRect?.().width || 720))}px`,
+    // The outer card keeps its box while its content skips layout, so reading its
+    // width does not force the skipped content to render just to copy text.
+    `width:${Math.max(320, Math.round((root.closest?.('.turn-card') || root).getBoundingClientRect?.().width || 720))}px`,
     'opacity:0',
     'pointer-events:none',
     'white-space:normal',

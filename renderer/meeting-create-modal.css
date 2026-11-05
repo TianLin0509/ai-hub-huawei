@@ -435,7 +435,7 @@
 #meeting-create-modal:not(.mcm-embedded) .mcm-dialog{width:520px;max-width:calc(100% - 40px);max-height:calc(100% - 40px);animation:mcm-c-pop var(--hw-t-slow) var(--hw-ease)}
 @keyframes mcm-c-pop{from{opacity:0;transform:translateY(15px) scale(.97)}}
 #meeting-create-modal .mcm-header{padding:24px 26px 8px;align-items:flex-start;border:0;gap:12px}
-#meeting-create-modal .mcm-title{font-size:19px;font-weight:600}
+#meeting-create-modal .mcm-title{font-size:18px;font-weight:600}
 #meeting-create-modal .mcm-close{width:30px;height:30px;display:grid;place-items:center;border-radius:var(--hw-r-pill);color:var(--hw-text-2);padding:0}
 #meeting-create-modal .mcm-close:hover{background:var(--hw-surface-3)}
 #meeting-create-modal .mcm-body{padding:12px 26px;min-height:0}
@@ -463,7 +463,7 @@
 #meeting-create-modal .mcm-slot{padding:12px;border:0;border-radius:var(--hw-r-item);background:var(--hw-brand-soft);gap:8px;min-width:0}
 #meeting-create-modal .mcm-slot-head{min-height:30px;gap:10px;padding-right:20px}
 #meeting-create-modal .mcm-avatar{width:30px;height:30px;border-radius:50%;background:var(--hw-surface);padding:5px}
-#meeting-create-modal .mcm-slot-head strong{font-size:13.5px;font-weight:500;color:var(--hw-text-1)}
+#meeting-create-modal .mcm-slot-head strong{font-size:14px;font-weight:500;color:var(--hw-text-1)}
 #meeting-create-modal .mcm-slot-label{font-size:12px;letter-spacing:0;color:var(--hw-text-2)}
 #meeting-create-modal .mcm-slot label{font-size:12px;color:var(--hw-text-2)}
 #meeting-create-modal .mcm-slot-field-name{flex-basis:62px}

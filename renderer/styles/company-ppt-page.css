@@ -26,7 +26,7 @@
 .pptw-head h1{margin:0;font-size:var(--hw-fs-22);font-weight:600;letter-spacing:.2px;white-space:nowrap}
 .pptw-head .pptw-sub{min-width:0;font-size:var(--hw-fs-13);color:var(--hw-text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pptw-head-right{position:relative;margin-left:auto;display:flex;align-items:center;gap:8px;flex:none}
-.pptw-status:not(.pptw-guide){display:inline-flex;align-items:center;gap:6px;min-height:32px;max-width:520px;padding:6px 12px;white-space:nowrap;border-radius:var(--hw-r-pill);background:var(--hw-surface);box-shadow:var(--hw-e1);font-size:12.5px;line-height:1.4;color:var(--hw-text-2)}
+.pptw-status:not(.pptw-guide){display:inline-flex;align-items:center;gap:6px;min-height:32px;max-width:520px;padding:6px 12px;white-space:nowrap;border-radius:var(--hw-r-pill);background:var(--hw-surface);box-shadow:var(--hw-e1);font-size:13px;line-height:1.4;color:var(--hw-text-2)}
 .pptw-status:not(.pptw-guide):empty{display:none}
 .pptw-status:not(.pptw-guide)>span{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .pptw-status[data-state=indexing]:not(.pptw-guide){white-space:normal}
@@ -45,7 +45,7 @@
 
 .pptw-scroll{flex:1;min-height:0;overflow:auto}
 .pptw-body{display:flex;flex-direction:column;min-height:100%;padding:0 0 12px}
-.pptw-notice{margin:0 4px 10px;font-size:12.5px;color:var(--hw-text-2);white-space:pre-wrap;overflow-wrap:anywhere}
+.pptw-notice{margin:0 4px 10px;font-size:13px;color:var(--hw-text-2);white-space:pre-wrap;overflow-wrap:anywhere}
 .pptw-notice:empty{display:none}
 
 /* Doctor 引导卡：缺失、需升级或出错时出现在正文顶部 */
@@ -91,17 +91,17 @@
 .pptw-preview{display:flex;align-items:center;justify-content:center;aspect-ratio:16/9;overflow:hidden;border-radius:var(--hw-r-sm);background:var(--hw-surface-2);box-shadow:inset 0 0 0 1px var(--hw-line);color:var(--hw-text-3);font-size:var(--hw-fs-12)}
 .pptw-preview img{width:100%;height:100%;object-fit:contain}
 .pptw-result-copy{display:block;margin:7px 3px 0}
-.pptw-result-copy strong{display:block;font-size:12.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pptw-result-copy>span{display:block;font-size:11.5px;color:var(--hw-text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pptw-result-copy strong{display:block;font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pptw-result-copy>span{display:block;font-size:12px;color:var(--hw-text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pptw-detail>.pptw-empty{padding:24px 20px}
 .pptw-detail>.pptw-preview{flex:none;margin:16px 16px 0;border-radius:var(--hw-r-item)}
 .pptw-dt-body{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:12px;padding:14px 18px}
 .pptw-tags{display:flex;gap:6px}
-.pptw-dt-body h2{margin:0;font-size:15.5px;font-weight:600;line-height:1.45;overflow-wrap:anywhere}
-.pptw-dt-body dl{display:grid;grid-template-columns:52px minmax(0,1fr);gap:6px 10px;margin:0;font-size:12.5px}
+.pptw-dt-body h2{margin:0;font-size:16px;font-weight:600;line-height:1.45;overflow-wrap:anywhere}
+.pptw-dt-body dl{display:grid;grid-template-columns:52px minmax(0,1fr);gap:6px 10px;margin:0;font-size:13px}
 .pptw-dt-body dt{color:var(--hw-text-3)}
 .pptw-dt-body dd{margin:0;overflow-wrap:anywhere}
-.pptw-snippet{margin:0;padding:10px 12px;border-radius:var(--hw-r-item);background:var(--hw-surface-2);font-size:12.5px;line-height:1.7;color:var(--hw-text-2);overflow-wrap:anywhere}
+.pptw-snippet{margin:0;padding:10px 12px;border-radius:var(--hw-r-item);background:var(--hw-surface-2);font-size:13px;line-height:1.7;color:var(--hw-text-2);overflow-wrap:anywhere}
 .pptw-detail-actions{flex:none;display:flex;flex-direction:column;gap:8px;padding:0 18px 18px}
 .pptw-detail-actions>button{width:100%;height:36px}
 .pptw-row{display:flex;gap:8px}
@@ -112,7 +112,7 @@
 .company-ppt-page[data-view=home] .pptw-main{background:none;box-shadow:none;overflow:visible;align-items:center;padding:6vh 24px 24px}
 .company-ppt-page[data-view=home] :is(.pptw-detail,.pptw-results,.pptw-report){display:none!important}
 .company-ppt-page[data-view=home] .pptw-hero{display:block;text-align:center}
-.pptw-hero h2{margin:0;font-size:30px;font-weight:600;letter-spacing:.5px}
+.pptw-hero h2{margin:0;font-size:28px;font-weight:600;letter-spacing:.5px}
 .pptw-hero p{margin:8px 0 0;color:var(--hw-text-2)}
 .company-ppt-page[data-view=home] .pptw-search{width:min(720px,100%);margin-top:26px;padding:0}
 .company-ppt-page[data-view=home] .pptw-bar{height:60px;padding:0 8px 0 22px;background:var(--hw-surface);box-shadow:var(--hw-e2)}
@@ -150,7 +150,7 @@
 .pptw-drop-ico svg{width:32px;height:32px;fill:none;stroke:var(--hw-brand);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .pptw-drop-title{font-size:var(--hw-fs-18);font-weight:600}
 .pptw-drop button{margin-top:10px}
-.pptw-drop small{display:block;margin-top:6px;font-size:12.5px;color:var(--hw-text-2)}
+.pptw-drop small{display:block;margin-top:6px;font-size:13px;color:var(--hw-text-2)}
 .pptw-convert:is([data-step="2"],[data-step="3"]) .pptw-drop{flex:none;min-height:0;flex-direction:row;gap:10px;margin:12px 22px 0;padding:8px 10px 8px 16px;border-width:1.5px;border-radius:var(--hw-r-item)}
 .pptw-convert:is([data-step="2"],[data-step="3"]) .pptw-drop :is(.pptw-drop-ico,small){display:none}
 .pptw-convert:is([data-step="2"],[data-step="3"]) .pptw-drop-title{font-size:var(--hw-fs-13);font-weight:400;color:var(--hw-text-2)}
@@ -160,17 +160,17 @@
 .pptw-conv-main{display:flex;flex-direction:column;gap:12px;color:var(--hw-text-1)}
 .pptw-conv-stage{position:relative;display:grid;place-items:center;min-height:200px;padding:16px;border-radius:var(--hw-r-item);background:var(--hw-surface-2);overflow:hidden}
 .pptw-conversion-preview{display:block;max-width:min(100%,720px);max-height:min(420px,40vh);object-fit:contain;border-radius:var(--hw-r-sm);box-shadow:var(--hw-e2);background:var(--hw-surface)}
-.pptw-conv-status b{display:block;font-size:13.5px;font-weight:500}
+.pptw-conv-status b{display:block;font-size:14px;font-weight:500}
 .pptw-conv-status b.is-error{color:var(--hw-red)}
-.pptw-conv-status span{display:block;margin-top:2px;font-size:12.5px;color:var(--hw-text-2)}
+.pptw-conv-status span{display:block;margin-top:2px;font-size:13px;color:var(--hw-text-2)}
 .pptw-conv-status span.is-warn{color:var(--hw-amber)}
 .pptw-conv-actions{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
 .pptw-conv-actions:empty{display:none}
 .pptw-conv-actions button{height:36px;padding:0 18px;font-size:var(--hw-fs-14)}
-.pptw-conv-note{flex-basis:100%;margin:0;font-size:12.5px;color:var(--hw-text-2)}
+.pptw-conv-note{flex-basis:100%;margin:0;font-size:13px;color:var(--hw-text-2)}
 .pptw-conv-side{display:flex;flex-direction:column;gap:10px;padding:18px;overflow:auto}
-.pptw-conv-side h3{display:flex;align-items:center;gap:8px;margin:0;font-size:15px;font-weight:600}
-.pptw-conv-side>p{margin:0;padding:14px;border-radius:var(--hw-r-item);background:var(--hw-surface-2);font-size:12.5px;line-height:1.7;color:var(--hw-text-2);overflow-wrap:anywhere}
+.pptw-conv-side h3{display:flex;align-items:center;gap:8px;margin:0;font-size:16px;font-weight:600}
+.pptw-conv-side>p{margin:0;padding:14px;border-radius:var(--hw-r-item);background:var(--hw-surface-2);font-size:13px;line-height:1.7;color:var(--hw-text-2);overflow-wrap:anywhere}
 .pptw-reviews{display:flex;flex-direction:column;gap:8px;margin:0;padding:0;list-style:none}
 .pptw-reviews li{display:flex;gap:10px;padding:12px 14px;border-radius:var(--hw-r-item);background:var(--hw-surface-2);font-size:var(--hw-fs-13);line-height:1.6;overflow-wrap:anywhere}
 .pptw-reviews i{flex:none;width:22px;height:22px;border-radius:50%;background:var(--hw-amber-soft);color:var(--hw-amber);display:grid;place-items:center;font:700 var(--hw-fs-12) var(--hw-font-num);font-style:normal}
@@ -181,7 +181,7 @@
 .pptw-phases li.done::before{border-color:var(--hw-green);background:var(--hw-green)}
 .pptw-phases li.done::after{background:var(--hw-green)}
 .pptw-phases li.now::before{border-color:var(--hw-brand);box-shadow:0 0 0 3px var(--hw-brand-soft)}
-.pptw-phases b{display:block;font-size:13.5px;font-weight:500}
+.pptw-phases b{display:block;font-size:14px;font-weight:500}
 .pptw-phases li:not(.done):not(.now) b{color:var(--hw-text-3)}
 .pptw-phases small{display:block;font-size:var(--hw-fs-12);color:var(--hw-text-3)}
 

@@ -2,7 +2,8 @@
 
 const CARD_FONT_SIZE_MIN = 13;
 const CARD_FONT_SIZE_MAX = 22;
-const DEFAULT_CARD_FONT_SIZE = 15;
+// 对话正文默认字号：公司版按 8 档字号用 16，其余 15。只决定「没设置过」时的值，用户在显示参数里调过的照旧。
+const DEFAULT_CARD_FONT_SIZE = require('./distribution').target === 'company' ? 16 : 15;
 const DEFAULT_CARD_FONT_FAMILY = 'system';
 const CARD_FONT_FAMILY_IDS = Object.freeze(['system', 'yahei', 'serif', 'mono']);
 

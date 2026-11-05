@@ -119,7 +119,9 @@
   position: static; margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: var(--hw-r-sm);
   background: var(--hw-red); color: var(--hw-text-on); font: 600 11px/18px var(--hw-font-num); text-align: center; box-shadow: none;
 }
-:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail #btn-rail-accounts > #accounts-attention:not([hidden]) { position: absolute; top: 2px; right: 2px; margin: 0; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail #btn-rail-accounts > #accounts-attention:not([hidden]) { position: absolute; top: 0; right: 0; margin: 0; }
+/* 窄栏里进展的「等你拍板」数字贴到按钮右上角，白描边隔开，不压住图标 */
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail #btn-progress > .pg-nav-count:not([hidden]) { top: 0; right: 0; min-width: 16px; padding: 0 4px; border-radius: var(--hw-r-pill); font: 600 11px/16px var(--hw-font-num); box-shadow: 0 0 0 2px var(--hw-surface); }
 
 /* 规则分组：触发行与普通行一致；展开的横排菜单只换图标与配色 */
 :root[data-hw-shell] body #app-body #scene-rail .rail-group { width: 100%; }
@@ -174,6 +176,24 @@
 :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options) { width: 38px; height: 38px; min-height: 38px; }
 :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options)::before { display: none; }
 :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options)::after { left: 50%; top: 50%; margin: -10px 0 0 -10px; width: 20px; height: 20px; }
+
+/* 图标栏配字（5.5.8）：栏宽仍 64px；图标在上、12px 名称在下，单行，过长省略；当前页名称随图标变蓝 */
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-navigation { padding: 0 1px; gap: 2px; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities { margin: 0 1px; gap: 2px; border-top: 0; background: linear-gradient(var(--hw-line), var(--hw-line)) center top / 20px 1px no-repeat; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail :is(.rail-navigation > .btn-shell-nav, .rail-group-trigger, .rail-utilities #btn-theme, .rail-utilities #btn-options) {
+  flex-direction: column; justify-content: flex-start; width: 44px; height: 46px; min-height: 46px; padding: 3px 0 0; gap: 1px;
+}
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail :is(.rail-navigation > .btn-shell-nav, .rail-group-trigger) > .btn-label,
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options) > .rail-utility-label {
+  display: block !important; order: 2; width: 42px; margin: 0; padding: 0; font: 400 var(--hw-fs-12)/16px var(--hw-font); letter-spacing: 0;
+  color: var(--hw-text-2); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: 1; position: static; transform: none;
+}
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail :is(.rail-navigation > .btn-shell-nav, .rail-group-trigger):hover > .btn-label,
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options):hover > .rail-utility-label { color: var(--hw-text-1); }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail :is(.rail-navigation > .btn-shell-nav.cw-current, .rail-group-trigger.rail-group-current) > .btn-label { color: var(--hw-brand); font-weight: 600; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail :is(.rail-navigation > .btn-shell-nav.cw-current, .rail-group-trigger.rail-group-current)::before { left: -1px; top: 13px; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options)::after { top: 5px; margin: 0 0 0 -10px; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options) { justify-content: flex-end; padding: 0 0 3px; }
 
 /* ---------- 顶栏（窗口标题栏）：与底色同层，无分隔线 ---------- */
 :root[data-hw-shell] body #app-toolbar { background: var(--hw-bg) !important; border-bottom: 0 !important; box-shadow: none !important; color: var(--hw-text-1); }

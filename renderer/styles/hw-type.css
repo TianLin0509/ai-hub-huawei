@@ -1,0 +1,27 @@
+/*
+   */
+:root[data-hw-shell] :is(
+  .new-session-menu .session-create-head span,
+  .launch-center-intent small,
+  .launch-center-panel-head span,
+  .launch-center-resume-note,
+  .launch-center-panel-footer span,
+  .launch-center-resume-copy small,
+  .launch-center-resume-option .hint,
+  .launch-center-error,
+  .new-session-menu .menu-group-label,
+  .session-config-heading span,
+  .session-config-heading .tuning-default-btn,
+  .session-tuning-details,
+  .session-config-section .session-tuning-field > span,
+  .session-config-section .session-tuning-note,
+  .new-session-menu .session-workspace-choice small,
+  .launch-select-option .codeagent-model-usage,
+  .lcc-h, .lcc-tag, .lcc-sessions, .lcc-acct-mail, .lcc-pill, .lcc-seg button small,
+  .mcm-member-caption span,
+  .mcm-slot-label,
+  .mcm-workspace-caption,
+  .mcm-workspace-choice small,
+  .mcm-project-library-item span,
+  .mcm-project-library-empty
+) { font-size: var(--hw-fs-12); }

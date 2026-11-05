@@ -10,7 +10,20 @@ function distance(a, b) { if (!a || !b || a.length !== b.length) return Infinity
 function minorChange(a, b) { if (!a || !b || a.length !== b.length) return false; let pixels = 0; for (let i = 0; i < a.length; i++) if (Math.abs(a[i] - b[i]) > 24) pixels++; return pixels / a.length < 0.03 && distance(a, b) < 6; }
 function changed(a, b) { if (!a || !b) return true; let pixels = 0; for (let i = 0; i < a.length; i++) if (Math.abs(a[i] - b[i]) > 24) pixels++; return distance(a, b) >= 3 || pixels / a.length > 0.002; }
 class MeetingCapture {
-  constructor({ document, window, save, status }) { this.d = document; this.w = window; this.save = save; this.status = status; this.streams = []; this.nodes = []; this.queue = []; this.levels = {}; }
+  constructor({ document, window, save, status, waitMs = 10000 }) { this.d = document; this.w = window; this.save = save; this.status = status; this.waitMs = waitMs; this.streams = []; this.nodes = []; this.queue = []; this.levels = {}; }
+  async wait(promise, message, progressAt) {
+    let timer;
+    const startedAt = performance.now();
+    try { return await Promise.race([promise, new Promise((_, reject) => {
+      const check = () => {
+        const remaining = this.waitMs - (performance.now() - Math.max(startedAt, progressAt?.() || 0));
+        if (remaining > 0) { timer = setTimeout(check, remaining); return; }
+        reject(Object.assign(new Error(message), { code: 'MEETING_RECORDING_TIMEOUT' }));
+      };
+      timer = setTimeout(check, this.waitMs);
+    })]); }
+    finally { clearTimeout(timer); }
+  }
   async open(sourceId, audio) {
     try {
       const stream = await this.w.navigator.mediaDevices.getUserMedia({ audio: audio.system ? { mandatory: { chromeMediaSource: 'desktop' } } : false, video: { mandatory: { chromeMediaSource: 'desktop', chromeMediaSourceId: sourceId, maxFrameRate: 15 } } });
@@ -20,7 +33,7 @@ class MeetingCapture {
       for (const t of stream.getVideoTracks()) t.onended = () => { this.disconnected = true; void this.pause('共享画面断开').catch(e => this.status(e.message)); this.status('共享画面已断开，请结束会议并重新选择窗口'); };
       if (audio.system) this.audio(stream, 'system');
       if (audio.mic) { const mic = await this.w.navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false }); this.streams.push(mic); this.audio(mic, 'mic'); }
-      this.recorder = new MeetingRecorder({ window: this.w, streams: this.streams, elapsed: () => this.elapsed(), save: this.save, onError: message => { void this.pause('录屏保存异常').catch(() => {}); this.status(message + '；已保存文件保留，请重试保存后继续。'); } });
+      this.recorder = new MeetingRecorder({ window: this.w, streams: this.streams, elapsed: () => this.elapsed(), save: this.save, waitMs: this.waitMs, onError: message => { void this.pause('录屏保存异常').catch(() => {}); this.status('录像出错：' + message + '。已录的内容都在，请先点「重试保存」。'); } });
       await this.recorder.open();
     } catch (e) { await this.dispose(); throw e; }
   }
@@ -42,14 +55,22 @@ class MeetingCapture {
   enqueue(item) { this.queue.push(item); if (this.queue.length > 30) { this.suspendForError('材料保存积压'); this.status('保存积压，已暂停采集；点击重试保存后继续。尚未写入的片段保留在内存中。'); } void this.drain(); }
   suspendForError(reason) { if (this.paused) return; this.paused = true; this.openGap(reason); this.pausing = this.recorder?.pause(); void this.pausing?.catch(() => {}); }
   openGap(reason) { if(this.gapAt==null){this.gapAt=this.elapsed();this.gapReason=reason;this.enqueue({kind:'recording-gap-open',at:this.gapAt,reason});} }
-  async drain() {
-    if (this.saving || this.saveError) return;
+  drain() {
+    if (this.saving) return this.saveTask;
+    if (this.saveError) return Promise.resolve();
     this.saving = true;
-    try { while (this.queue.length) { await this.save(this.queue[0]); this.queue.shift(); } }
-    catch (e) { this.saveError = e.message; this.suspendForError('材料保存失败'); this.status('材料保存失败，已暂停：' + e.message + '。请重试保存，暂勿关闭 Hub。'); }
-    finally { this.saving = false; }
+    this.saveTask = Promise.resolve().then(async () => {
+      try { while (this.queue.length) { await this.save(this.queue[0]); this.queue.shift(); this.lastSavedAt = performance.now(); } }
+      catch (e) { this.saveError = e.message; this.suspendForError('材料保存失败'); this.status('材料保存失败，已暂停：' + e.message + '。请重试保存，暂勿关闭 Hub。'); }
+      finally { this.saving = false; }
+    });
+    return this.saveTask;
   }
-  async retry() { await this.pausing?.catch(()=>{}); this.saveError = ''; await this.drain(); await this.recorder?.retry(); if(this.paused)await this.flushAll(); }
+  async retry() {
+    await this.pausing?.catch(()=>{}); this.saveError = '';
+    await this.wait(this.drain(), '会议内容还没存完，已录的都在。请稍后点「重试保存」，先别关 Hub。', () => this.lastSavedAt);
+    await this.recorder?.retry(); if (this.paused) await this.flushAll();
+  }
   flush(n) {
     if (!n.length) return;
     const samples = new Float32Array(n.length); let i = 0; for (const b of n.samples) { samples.set(b, i); i += b.length; }
@@ -70,10 +91,66 @@ class MeetingCapture {
       this.enqueue({ kind: 'slide', at: this.elapsed(), data: canvas.toDataURL('image/jpeg', 0.9).split(',')[1], forced: force, minor: !force && minorChange(sig, this.saved) }); this.saved = sig;
     } finally { this.drawing = false; }
   }
-  async flushAll() { for (const n of this.nodes) this.flush(n); while (this.saving) await new Promise(r => setTimeout(r, 30)); await this.drain(); if (this.queue.length) throw new Error('还有材料未保存，请重试保存'); }
-  async pause(reason = '用户暂停') { this.paused = true; this.openGap(reason); this.pausing=this.recorder?.pause(); await this.pausing; await this.flushAll(); }
-  resume() { if (this.disconnected) throw new Error('共享来源已断开，请结束会议后重新选择'); if (this.queue.length || this.recorder?.queue.length) throw new Error('请先重试保存'); if (this.gapAt != null) { this.enqueue({ kind: 'recording-gap', at: this.gapAt, end: this.elapsed(), reason: this.gapReason }); this.gapAt = null; } this.recorder?.start(); this.paused = false; }
-  async stop() { this.paused = true; clearInterval(this.timer); await this.recorder?.pause(); if (this.gapAt != null) { this.enqueue({ kind: 'recording-gap', at: this.gapAt, end: this.elapsed(), reason: this.gapReason }); this.gapAt = null; } await this.flushAll(); this.running = false; await this.dispose(); }
-  async dispose() { clearInterval(this.timer); try { await this.recorder?.close(); } finally { for (const s of this.streams) s.getTracks().forEach(t => { t.onended = null; t.stop(); }); for (const n of this.nodes) { n.proc.disconnect(); n.src.disconnect(); await n.ctx.close(); } this.nodes = []; this.streams = []; if (this.video) this.video.srcObject = null; } }
+  async flushAll() { for (const n of this.nodes) this.flush(n); await this.wait(this.drain(), '会议内容还没存完，已录的都在。请稍后点「重试保存」，先别关 Hub。', () => this.lastSavedAt); if (this.queue.length) throw new Error('还有材料未保存，请重试保存'); }
+  async pause(reason = '用户暂停') {
+    this.paused = true; this.openGap(reason); this.pausing=this.recorder?.pause();
+    try { await this.pausing; await this.flushAll(); }
+    catch (error) {
+      if (error.code === 'MEETING_RECORDING_TIMEOUT') { try { await this.dispose(); } catch (_) { /* A timeout never discards the original pending data. */ } }
+      throw error;
+    }
+  }
+  assertCanResume() {
+    if (this.ending || this.released) throw new Error('本场已停止录制，请再点一次「结束会议」。这场不能再继续录了。');
+    if (this.disconnected) throw new Error('共享来源已断开，请结束会议后重新选择');
+    if (this.queue.length || this.recorder?.queue.length) throw new Error('请先重试保存');
+    this.recorder?.assertCanStart();
+  }
+  resume() { this.assertCanResume(); if (this.gapAt != null) { this.enqueue({ kind: 'recording-gap', at: this.gapAt, end: this.elapsed(), reason: this.gapReason }); this.gapAt = null; } this.recorder?.start(); this.paused = false; }
+  async stop() {
+    this.paused = true; this.ending = true; clearInterval(this.timer);
+    try {
+      await this.recorder?.pause();
+      if (this.gapAt != null) { this.enqueue({ kind: 'recording-gap', at: this.gapAt, end: this.elapsed(), reason: this.gapReason }); this.gapAt = null; }
+      await this.flushAll(); await this.dispose(); this.running = false;
+    } catch (error) {
+      try { await this.dispose(); } catch (_) { /* Preserve the original unresolved operation and its queued data. */ }
+      throw error;
+    }
+  }
+  async dispose() {
+    clearInterval(this.timer); this.paused = true; this.released = true;
+    let error;
+    try { await this.recorder?.close(); } catch (e) { error = e; }
+    finally {
+      this.stoppedTracks ||= new WeakSet();
+      for (const s of this.streams) for (const track of s.getTracks()) {
+        if (this.stoppedTracks.has(track)) continue;
+        try { track.onended = null; track.stop(); this.stoppedTracks.add(track); } catch (e) { error ||= e; }
+      }
+      const nodes = this.nodes;
+      this.streams = this.streams.filter(s => s.getTracks().some(track => !this.stoppedTracks.has(track)));
+      if (this.video) this.video.srcObject = null;
+      // Keep flushed and pending data owned by this capture even when the devices have been released.
+      this.detachedNodes ||= new WeakSet();
+      for (const n of nodes) {
+        try { this.flush(n); } catch (e) { error ||= e; }
+        for (const node of [n.proc, n.src]) {
+          if (this.detachedNodes.has(node)) continue;
+          try { node.disconnect(); this.detachedNodes.add(node); } catch (e) { error ||= e; }
+        }
+      }
+      try {
+        const results = await this.wait(Promise.allSettled(nodes.map(n => {
+          if (n.closed) return Promise.resolve();
+          return n.closeTask ||= Promise.resolve().then(() => n.ctx.close()).then(() => { n.closed = true; }, e => { n.closeTask = null; throw e; });
+        })), '录音设备还没关好，请稍后再点一次「结束会议」。');
+        for (const result of results) if (result.status === 'rejected') error ||= result.reason;
+      }
+      catch (e) { error ||= e; }
+      this.nodes = this.nodes.filter(n => !n.closed || n.length);
+    }
+    if (error) throw error;
+  }
 }
 module.exports = { MeetingCapture, wav, distance, changed, minorChange };

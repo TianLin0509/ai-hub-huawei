@@ -1,8 +1,8 @@
 
 /* CDCCBCC C: approval keeps the existing whole-plan actions. */
-.team-pending-badge { margin-right:4px; padding:0 6px; border-radius:var(--hw-r-pill); font-size:10px; line-height:15px; color:var(--hw-text-on); background:var(--hw-amber); border:0; cursor:pointer; vertical-align:1px; }
+.team-pending-badge { margin-right:4px; padding:0 6px; border-radius:var(--hw-r-pill); font-size:12px; line-height:16px; color:var(--hw-text-on); background:var(--hw-amber); border:0; cursor:pointer; vertical-align:1px; }
 .team-pending-badge:hover { filter:brightness(.94); }
-.team-member-tag { display:inline-block; margin-right:4px; padding:0 4px; border-radius:var(--hw-r-xs); font-size:10px; line-height:14px; color:var(--hw-brand); background:var(--hw-brand-soft); vertical-align:1px; }
+.team-member-tag { display:inline-block; margin-right:4px; padding:0 4px; border-radius:var(--hw-r-xs); font-size:12px; line-height:16px; color:var(--hw-brand); background:var(--hw-brand-soft); vertical-align:1px; }
 .team-member-tag.dismissed { color:var(--hw-text-3); background:var(--hw-surface-3); text-decoration:line-through; }
 .team-modal-backdrop { position:fixed; inset:0; z-index:9000; background:rgba(24,36,49,.28); backdrop-filter:blur(2px); font-family:var(--hw-font); color:var(--hw-text-1); -webkit-app-region:no-drag; }
 .team-modal-backdrop * { box-sizing:border-box; }
@@ -10,7 +10,7 @@
 .team-modal [hidden] { display:none!important; }
 .team-modal-head { display:flex; align-items:flex-start; gap:12px; padding:24px 26px 8px; flex:none; }
 .team-modal-head > div { flex:1; min-width:0; }
-.team-modal h3 { margin:0; font-size:19px; font-weight:600; line-height:var(--hw-lh); }
+.team-modal h3 { margin:0; font-size:18px; font-weight:600; line-height:var(--hw-lh); }
 .team-goal { margin:4px 0; color:var(--hw-text-2); font-size:var(--hw-fs-13); white-space:pre-wrap; overflow-wrap:anywhere; }
 .team-modal-head .team-sub { margin:4px 0 0; }
 .team-close { width:30px; height:30px; flex:none; display:grid; place-items:center; border:0; border-radius:var(--hw-r-pill); background:transparent; color:var(--hw-text-2); font:22px/1 var(--hw-font); cursor:pointer; }
@@ -28,8 +28,8 @@
 .team-member-heading { flex:1; min-width:0; }
 .team-member-heading b { font-size:var(--hw-fs-14); font-weight:600; overflow-wrap:anywhere; }
 .team-col-no { color:var(--hw-text-3); font-family:var(--hw-font-num); font-size:var(--hw-fs-12); }
-.team-sub { color:var(--hw-text-3); font-size:12.5px; line-height:var(--hw-lh); overflow-wrap:anywhere; }
-.team-task { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12.5px; color:var(--hw-text-2); line-height:var(--hw-lh); }
+.team-sub { color:var(--hw-text-3); font-size:13px; line-height:var(--hw-lh); overflow-wrap:anywhere; }
+.team-task { white-space:pre-wrap; overflow-wrap:anywhere; font-size:13px; color:var(--hw-text-2); line-height:var(--hw-lh); }
 .team-task .team-sub { margin-top:4px; }
 .team-task strong { color:var(--hw-text-1); font-weight:600; }
 .team-workdir { color:var(--hw-text-3); font-size:var(--hw-fs-12); line-height:var(--hw-lh); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }

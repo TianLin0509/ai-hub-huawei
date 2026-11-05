@@ -103,7 +103,7 @@
 .conversation-progress-row .conversation-long-frame { padding: 8px 10px; }
 /* 进展默认两行（2026-10-25）：超出时悬停在这一条的右下角出「展开」；展开后同一位置是「收起」。 */
 .conversation-progress-row:not(.progress-expanded) > .conversation-progress-content {
-  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; max-height: 3.1em;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; max-height: 2lh;
 }
 .conversation-progress-row:not(.progress-expanded) > .conversation-progress-content :is(p, ul, ol, pre, blockquote, table, h1, h2, h3, h4) { margin-top: 0; margin-bottom: 0; }
 .conversation-progress-expand {
