@@ -140,6 +140,7 @@ function resolveAsarUnpacked(filename) {
 function _loadConfigValues() {
   const config = getConfig();
   return {
+    COMPANY_CLI: config.companyCli === true,
     CLAUDE_PROXY: config.proxy,
     CLAUDE_BACKEND: config.claudeBackend,
     CLAUDE_API_KEY: config.claudeApiKey,
@@ -153,6 +154,7 @@ function _loadConfigValues() {
     CODEX_API_BASE_URL: config.codexApiBaseUrl,
     CODEX_API_MODEL: config.codexApiModel,
     CODEX_API_PROVIDER: config.codexApiProvider || 'openai-api',
+    CODEX_API_WIRE_API: config.codexApiWireApi || 'responses',
   };
 }
 // 惰性求值：首次使用时加载，之后缓存
@@ -393,7 +395,7 @@ function buildClaudePtyLaunch(id, kind, opts, cwd, env, cv) {
     directory: path.join(hubDataDir, 'native-agent-settings'), sessionId: id + '-' + require('crypto').randomUUID(),
     overrides: { fastMode: fast, skipDangerousModePermissionPrompt: true, ...(cliTheme ? { theme: cliTheme } : {}), ...(opts.claudeNetworkEnv ? { env: opts.claudeNetworkEnv } : {}) },
   });
-  const args = buildClaudeNativeArgs({ model: opts.model,
+  const args = buildClaudeNativeArgs({ model: opts.model, omitModel: cv.COMPANY_CLI && !opts.model,
     effort: process.env.CLAUDE_HUB_NO_EFFORT_MAX === '1' ? null
       : (CLAUDE_EFFORT_LEVELS.has(opts.effort) ? opts.effort : 'max'),
     permissionMode: opts.permissionMode || 'bypassPermissions',
@@ -643,6 +645,17 @@ function scheduleNativeMcpLearn(manager, id, rootPid, learn, delayMs = NATIVE_MC
 }
 
 function applyClaudeSessionEnv(sessionEnv, cv) {
+  if (cv.COMPANY_CLI) {
+    // Empty fields belong to the installed CLI. In particular, do not delete
+    // its existing login environment or synthesize an endpoint/model.
+    if (cv.CLAUDE_API_BASE_URL) sessionEnv.ANTHROPIC_BASE_URL = cv.CLAUDE_API_BASE_URL;
+    if (cv.CLAUDE_API_MODEL) sessionEnv.ANTHROPIC_MODEL = cv.CLAUDE_API_MODEL;
+    if (cv.CLAUDE_API_KEY) {
+      sessionEnv.ANTHROPIC_AUTH_TOKEN = cv.CLAUDE_API_KEY;
+      for (const key of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR', 'CLAUDE_CODE_SESSION_ACCESS_TOKEN']) delete sessionEnv[key];
+    }
+    return cv.CLAUDE_BACKEND;
+  }
   if (isClaudeApiBackend(cv)) {
     // Custom Claude-compatible endpoints must be reached directly. Do not
     // inherit Clash/VPS proxy env, which can cut long-running API streams.
@@ -653,6 +666,9 @@ function applyClaudeSessionEnv(sessionEnv, cv) {
       delete sessionEnv.ANTHROPIC_BASE_URL;
     }
     sessionEnv.ANTHROPIC_AUTH_TOKEN = cv.CLAUDE_API_KEY;
+    delete sessionEnv.CLAUDE_CODE_OAUTH_TOKEN;
+    delete sessionEnv.CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR;
+    delete sessionEnv.CLAUDE_CODE_SESSION_ACCESS_TOKEN;
     sessionEnv.CLAUDE_CODE_ATTRIBUTION_HEADER = '0';
     sessionEnv.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = '1';
     sessionEnv.CLAUDE_CODE_DISABLE_TERMINAL_TITLE = '1';
@@ -681,6 +697,7 @@ function applyClaudeSessionEnv(sessionEnv, cv) {
 }
 
 function resolveClaudeLaunchModel(cv, requestedModel) {
+  if (cv.COMPANY_CLI) return requestedModel || cv.CLAUDE_API_MODEL || '';
   // The meeting creator always submits the subscription default model even
   // when the user never touched its model picker. Treat that value as an
   // implicit default so switching the global backend really does make Fable
@@ -1025,15 +1042,16 @@ function getCodexApiHome() {
 function ensureCodexApiProfile(cv, projectDir) {
   const codexHome = getCodexApiHome();
   const provider = cv.CODEX_API_PROVIDER || 'openai-api';
-  const baseUrl = cv.CODEX_API_BASE_URL || 'https://api.openai.com/v1';
-  const model = cv.CODEX_API_MODEL || DEFAULT_MODEL_BY_KIND.codex;
+  const baseUrl = cv.CODEX_API_BASE_URL || (cv.COMPANY_CLI ? '' : 'https://api.openai.com/v1');
+  const model = cv.CODEX_API_MODEL || (cv.COMPANY_CLI ? '' : DEFAULT_MODEL_BY_KIND.codex);
+  if (!baseUrl) throw new Error('Codex 自有 API 请填写接口地址');
   const projectKey = path.resolve(projectDir || os.homedir());
 
   fs.mkdirSync(codexHome, { recursive: true });
   // 只接管 Hub 生成的顶层键，Codex 写下的 [hooks.state.*]、[tui] 等保留（同 DeepSeek profile）。
   require('./codex-managed-config').writeHubManagedCodexConfig(path.join(codexHome, 'config.toml'), [
     'disable_response_storage = true',
-    `model = ${tomlString(model)}`,
+    ...(model ? [`model = ${tomlString(model)}`] : []),
     `model_provider = ${tomlString(provider)}`,
     `model_reasoning_effort = ${tomlString(CODEX_REASONING_EFFORT)}`,
     'approval_policy = "never"',
@@ -1049,8 +1067,8 @@ function ensureCodexApiProfile(cv, projectDir) {
     `[model_providers.${provider}]`,
     `base_url = ${tomlString(baseUrl)}`,
     `name = ${tomlString(provider)}`,
-    'requires_openai_auth = true',
-    'wire_api = "responses"',
+    `requires_openai_auth = ${cv.CODEX_API_KEY || !cv.COMPANY_CLI ? 'true' : 'false'}`,
+    `wire_api = ${tomlString(require('./company-api-config').wireApi(cv.CODEX_API_WIRE_API || 'responses'))}`,
     '',
     `[projects.${tomlString(projectKey)}]`,
     'trust_level = "trusted"',
@@ -1063,7 +1081,12 @@ function ensureCodexApiProfile(cv, projectDir) {
 }
 
 function isCodexApiBackend(cv) {
-  return cv.CODEX_BACKEND === 'api' && !!cv.CODEX_API_KEY;
+  return cv.CODEX_BACKEND === 'api' && !!(cv.COMPANY_CLI ? cv.CODEX_API_BASE_URL : cv.CODEX_API_KEY);
+}
+
+function resolveCodexLaunchModel(cv, requestedModel) {
+  if (cv.COMPANY_CLI) return require('./company-api-config').optionalText(requestedModel || cv.CODEX_API_MODEL, '模型名称');
+  return normalizeCodexSessionModel(requestedModel || resolveDefaultCodexModel(cv));
 }
 
 function resolveDefaultCodexModel(cv) {
@@ -1501,6 +1524,7 @@ class SessionManager extends EventEmitter {
     try {
       if (lease) require('./session-store').resumeSessionWrites(id);
       require('./community-provider').assertProviderAvailable(kind);
+      require('./company-api-config').assertLaunchConfigured(kind, getConfig());
       return this._createSession(kind, this._withExtraMcp(kind, {...opts, id, hubUiTheme: this.presentationTheme}));
     }
     catch (error) {
@@ -1671,8 +1695,8 @@ class SessionManager extends EventEmitter {
     const nativeAgentRuntime = require('./agent-runtime-mode').usesNativeAgentRuntime(kind);
     const isNativeCodex = isCodex && nativeAgentRuntime;
     const isPtyAgent = isProviderCli || isCodeAgent || isDeepSeekClaude || ((isClaude || isCodex) && !nativeAgentRuntime) || (isDeepSeek && !isDeepSeekLegacy);
-    const webRoute = isCodex && require('./chatgpt-web-models').chatgptWebRoute(opts.model);
-    const followsGlobalAccount = isCodex && !webRoute && !isCodexApiBackend(getConfigValues());
+    const webRoute = isCodex && !getConfigValues().COMPANY_CLI && require('./chatgpt-web-models').chatgptWebRoute(opts.model);
+    const followsGlobalAccount = isCodex && !webRoute && !getConfigValues().COMPANY_CLI && !isCodexApiBackend(getConfigValues());
     let globalAccount = null;
     if (followsGlobalAccount) {
       const accounts=require('./codex-global-account');
@@ -1687,14 +1711,15 @@ class SessionManager extends EventEmitter {
       opts = { ...opts, effort: webRoute.effort, codexSpeedTier: 'inherit' };
     }
     if (isCodex) {
-      if (opts.model && !isCodexConversationModelId(opts.model)) throw new Error('Codex 模型名称无效，未替换成默认模型');
+      if (getConfigValues().COMPANY_CLI) resolveCodexLaunchModel(getConfigValues(), opts.model);
+      else if (opts.model && !isCodexConversationModelId(opts.model)) throw new Error('Codex 模型名称无效，未替换成默认模型');
       if (opts.effort && !CODEX_EFFORT_LEVELS.has(opts.effort)) throw new Error('Codex 思考档无效，未降低精度');
       if (opts.mcpProfile && !CODEX_MCP_PROFILES.has(opts.mcpProfile)) throw new Error('Codex MCP 配置档无效');
       if (opts.codexSpeedTier && !CODEX_SPEED_TIERS.has(opts.codexSpeedTier)) throw new Error('Codex 服务通道无效');
       if (opts.contextMax != null && !normalizeCodexContextWindow(opts.contextMax)) throw new Error('Codex 上下文配置无效');
       const nativeConfig=getConfigValues();
-      if(!webRoute && nativeConfig.CODEX_BACKEND==='api' && !nativeConfig.CODEX_API_KEY) throw new Error('Codex API 账号未配置密钥，未切换到订阅账号');
-      if(!webRoute && opts.codexProfile && resolveCodexSubscriptionProfile(nativeConfig,opts.codexProfile).id!==opts.codexProfile) throw new Error('Codex 账号配置不存在，未切换到默认账号');
+      if(!nativeConfig.COMPANY_CLI && !webRoute && nativeConfig.CODEX_BACKEND==='api' && !nativeConfig.CODEX_API_KEY) throw new Error('Codex API 账号未配置密钥，未切换到订阅账号');
+      if(!nativeConfig.COMPANY_CLI && !webRoute && opts.codexProfile && resolveCodexSubscriptionProfile(nativeConfig,opts.codexProfile).id!==opts.codexProfile) throw new Error('Codex 账号配置不存在，未切换到默认账号');
     }
     if ((isCodex || isClaude || isCodeAgent || isDeepSeekLegacy || isDeepSeekClaude) && this.sessions.has(id)) throw new Error('该 Hub 会话仍然存在，请返回原会话；不能重复接管');
     if (isCodex && opts.codexSid && opts.useResume) {
@@ -1921,7 +1946,7 @@ class SessionManager extends EventEmitter {
           // Codex API 模式必须直连，否则代理 60s idle 切长任务
         clearProxyEnv(sessionEnv);
         sessionEnv.CODEX_HOME = getCodexApiHome();
-      } else {
+      } else if (!(isCodex && cv.COMPANY_CLI)) {
         if (isCodex) {
           if (opts.meetingId && !opts.codexProfile) {
             // 群聊 Codex 统一用默认 ~/.codex/，记忆汇合到一处方便管理
@@ -1968,7 +1993,7 @@ class SessionManager extends EventEmitter {
     }
 
     let claudeProfile = null;
-    if (isClaude && getConfig().claudeBackend !== 'api') {
+    if (isClaude && !getConfig().companyCli && getConfig().claudeBackend !== 'api') {
       const profileTools = require('./claude-subscription-profiles');
       // 这台电脑还没有任何 Claude 账号登录过、用的是默认账号：按普通 Claude 启动，让 CLI 自己走登录流程（自动换号此时无号可换）
       // （2026-10-28：新装用户的第一个会话在准备独立运行目录时就报「Claude 登录或配置文件无法读取」，建不出来）。专用账号、自动换号照旧。
@@ -2139,7 +2164,7 @@ class SessionManager extends EventEmitter {
     } else if (isCodex) {
       const cv = getConfigValues();
       const selectedSubscriptionProfile = globalAccount ? { ...globalAccount,home:globalAccount.home } : codexProfile
-        || (!opts.meetingId ? resolveCodexSubscriptionProfile(cv, opts.codexProfile) : null);
+        || (!cv.COMPANY_CLI && !opts.meetingId ? resolveCodexSubscriptionProfile(cv, opts.codexProfile) : null);
       const isolatedDataDir = process.env.CLAUDE_HUB_DATA_DIR || '';
       const selectedProfileHome = selectedSubscriptionProfile && selectedSubscriptionProfile.home;
       let selectedProfileHomeAllowed = !!selectedProfileHome;
@@ -2155,6 +2180,9 @@ class SessionManager extends EventEmitter {
         // API 模式 codex 把 rollout 写到 isolated home（不写 ~/.codex/sessions）。
         // 记到 info 让 transcript-tap 注册时把这个 root 加进 CodexTap 的扫描列表。
         codexSessionsRoot = path.join(sessionEnv.CODEX_HOME, 'sessions');
+      } else if (cv.COMPANY_CLI) {
+        // The CLI's own home/login stays authoritative without an API override.
+        if (sessionEnv.CODEX_HOME) codexSessionsRoot = path.join(sessionEnv.CODEX_HOME, 'sessions');
       } else if (selectedProfileHomeAllowed) {
         codexProfile = selectedSubscriptionProfile;
         sessionEnv.CODEX_HOME = selectedProfileHome;
@@ -2408,8 +2436,8 @@ class SessionManager extends EventEmitter {
     if (isClaude) {
       // 默认走 DEFAULT_MODEL_BY_KIND.claude（当前 Opus 5 1M）；
       // AI 群聊 Modal 选 sonnet-4.5 等时透传 opts.model。
-      const mid = opts.model || DEFAULT_MODEL_BY_KIND.claude;
-      currentModel = { id: mid, displayName: mid };
+      const mid = resolveClaudeLaunchModel(getConfigValues(), opts.model);
+      currentModel = mid ? { id: mid, displayName: mid } : null;
     } else if (isGemini) {
       const mid = opts.model || require('./antigravity-config').DEFAULT_MODEL;
       currentModel = { id: mid, displayName: SessionManager.geminiDisplayName(mid) };
@@ -2418,8 +2446,8 @@ class SessionManager extends EventEmitter {
       // opts.model（modal/picker 用户选择）必须最高优先级；只有未传时才落到 backend 默认 / DEFAULT_MODEL_BY_KIND.codex。
       // 旧写法 `isCodexApiBackend ? cv.CODEX_API_MODEL : (opts.model || ...)` 在 packy api 模式下
       // 强制覆盖用户选择，AI 群聊选 5.4/5.3 实际跑出来都是 5.5。
-      const cmid = normalizeCodexSessionModel(opts.model || resolveDefaultCodexModel(cv));
-      currentModel = { id: cmid, displayName: webRoute ? webRoute.label : cmid.toUpperCase() };
+      const cmid = resolveCodexLaunchModel(cv, opts.model);
+      currentModel = cmid ? { id: cmid, displayName: webRoute ? webRoute.label : cmid } : null;
     } else if (isDeepSeekClaude) {
       const mid = deepseekClaude.normalizeModel(opts.model);
       currentModel = { id: mid, displayName: deepseekClaude.displayName(mid, deepseekClaudeLaunch.route) };
@@ -2510,6 +2538,7 @@ class SessionManager extends EventEmitter {
       ...(hubRulesSystem ? { hubRulesSystem: SessionManager.hubRulesRecord(hubRulesSystem) } : {}),
       ...(opts.researchSessionId ? { researchSessionId: String(opts.researchSessionId) } : {}),
       ...(opts.hiddenFromSidebar ? { hiddenFromSidebar: true } : {}),
+      ...(opts.openInBackground ? { openInBackground: true } : {}),
       currentModel,
       ...(typeof opts.contextPct === 'number' ? { contextPct: opts.contextPct } : {}),
       ...(typeof opts.contextUsed === 'number' ? { contextUsed: opts.contextUsed } : {}),
@@ -2973,7 +3002,8 @@ class SessionManager extends EventEmitter {
       const cv = getConfigValues();
       const codexModel = isDeepSeek
         ? normalizeDeepSeekModel(opts.model)
-        : normalizeCodexSessionModel(opts.model || resolveDefaultCodexModel(cv));
+        : resolveCodexLaunchModel(cv, opts.model);
+      const codexModelArg = codexModel ? ` --model ${quotePowerShellLiteral(codexModel)}` : '';
       // Codex 的 model_reasoning_effort 是推理深度；fast 则由下面独立的
       // service_tier 控制，两者都不能和 Claude fastMode 混为一谈。
       // 非法值一律回落 max；群聊与普通 Session 一样尊重逐成员的 effort / service_tier。
@@ -2983,26 +3013,26 @@ class SessionManager extends EventEmitter {
       const codexInstructionFile = opts.codexInstructionFile || null;
       let cmd;
       if (opts.codexForkSid) {
-        cmd = ` codex fork ${opts.codexForkSid} --dangerously-bypass-approvals-and-sandbox --model ${codexModel}${codexReasoningArg}`;
+        cmd = ` codex fork ${opts.codexForkSid} --dangerously-bypass-approvals-and-sandbox${codexModelArg}${codexReasoningArg}`;
       } else if (opts.useResume && opts.codexSid) {
         // Level 1: precise resume by sid
-        cmd = ` codex resume ${opts.codexSid} --dangerously-bypass-approvals-and-sandbox --model ${codexModel}${codexReasoningArg}`;
+        cmd = ` codex resume ${opts.codexSid} --dangerously-bypass-approvals-and-sandbox${codexModelArg}${codexReasoningArg}`;
       } else if (kind.endsWith('-resume') || opts.codexResumePicker) {
         // Native id is unknown: show the picker.  Exact ids must win even when
         // the persisted public kind is "codex-resume" or "deepseek-resume".
-        cmd = ` codex resume --dangerously-bypass-approvals-and-sandbox --model ${codexModel}${codexReasoningArg}`;
+        cmd = ` codex resume --dangerously-bypass-approvals-and-sandbox${codexModelArg}${codexReasoningArg}`;
       } else if (opts.useResume) {
         // Level 2 degradation: no sid recorded → use --last
-        cmd = ` codex resume --last --dangerously-bypass-approvals-and-sandbox --model ${codexModel}${codexReasoningArg}`;
+        cmd = ` codex resume --last --dangerously-bypass-approvals-and-sandbox${codexModelArg}${codexReasoningArg}`;
       } else {
         // Research mode：完全 bypass approvals + sandbox（含 MCP 工具调用、shell 命令、文件写）
         // 避免任何 "Allow ... ?" 弹窗阻塞投研讨论流程；
         // 安全约束完全靠 prompt/covenant 软约束（已强化"不要改代码 / 不要 git / 不要删除"）
         // opts.model 让 meeting-create-modal 选定的非默认 model（如 gpt-5.4）生效。
         if (opts.codexBypassApprovals) {
-          cmd = ` codex --dangerously-bypass-approvals-and-sandbox --model ${codexModel}${codexReasoningArg}`;
+          cmd = ` codex --dangerously-bypass-approvals-and-sandbox${codexModelArg}${codexReasoningArg}`;
         } else {
-          cmd = ` codex --dangerously-bypass-approvals-and-sandbox --model ${codexModel}${codexReasoningArg}`;
+          cmd = ` codex --dangerously-bypass-approvals-and-sandbox${codexModelArg}${codexReasoningArg}`;
         }
         // 注：曾尝试 --no-alt-screen 改善观感，实测无明显改善 + Enter 提交失效 → 撤回。
         // 渲染观感问题改由"持久化 AI 群聊面板"（直接展示干净回答预览）绕过。
@@ -4041,12 +4071,12 @@ try {
       dismissCodexUpdatePrompt(undefined, codexConfigDir);
       dismissCodexRateLimitDialog(undefined, codexConfigDir);
       // relaunch 要沿用会话自己选过的档位；群聊成员也不例外。
-      const codexRelaunchModel = modelId || DEFAULT_MODEL_BY_KIND.codex;
+      const codexRelaunchModel = resolveCodexLaunchModel(getConfigValues(), modelId);
       const codexReasoningArg = buildCodexReasoningConfigArg(normalizeCodexEffort(s.info && s.info.effort))
         + buildCodexSpeedTierArg(resolveCodexSpeedTier(runtimeKind, s.info && s.info.codexSpeedTier))
         + buildCodexContextWindowArg(resolveCodexContextWindow(codexRelaunchModel, s.info && s.info.contextMax, { configDir: codexConfigDir }));
       ensureCodexMcpEntries(codexConfigDir, [], CODEX_MANAGED_MCP_NAMES);
-      cmd = ` codex --dangerously-bypass-approvals-and-sandbox --model ${codexRelaunchModel}${codexReasoningArg}${this._sceneRelaunchFlags(s, 'codex')}`;
+      cmd = ` codex --dangerously-bypass-approvals-and-sandbox${codexRelaunchModel ? ' --model ' + quotePowerShellLiteral(codexRelaunchModel) : ''}${codexReasoningArg}${this._sceneRelaunchFlags(s, 'codex')}`;
       const relaunchMcpProfile = resolveCodexMcpProfile(runtimeKind, s.info && s.info.mcpProfile);
       const relaunchMcpEntries = relaunchMcpProfile === 'none' ? [] : s.codexMcpEntries;
       cmd += buildCodexEphemeralMcpArgs([...(relaunchMcpEntries || []), ...(s.codexPinnedMcpEntries || [])]);
@@ -4124,7 +4154,8 @@ try {
       if (s.info) s.info.hubRulesSystem = SessionManager.hubRulesRecord(relaunchRules);
       const rulesFlag = relaunchRules ? ` --append-system-prompt-file "${relaunchRules.file}"` : '';
       const addDirFlag = claudeNativeAddDirs([]).map(dir => ` --add-dir "${dir}"`).join('');
-      cmd = ` claude --model ${modelId || DEFAULT_MODEL_BY_KIND.claude}${effortFlag}${relaunchPermissionFlag}${fastFlag}${mcpFlag}${addDirFlag}${rulesFlag}${this._sceneRelaunchFlags(s, 'claude')}${isolation}\r\n`;
+      const claudeModel = resolveClaudeLaunchModel(getConfigValues(), modelId);
+      cmd = ` claude${claudeModel ? ' --model ' + quotePowerShellLiteral(claudeModel) : ''}${effortFlag}${relaunchPermissionFlag}${fastFlag}${mcpFlag}${addDirFlag}${rulesFlag}${this._sceneRelaunchFlags(s, 'claude')}${isolation}\r\n`;
     } else if (deepseekClaude.isDeepSeekClaudeKind(kind)) {
       // PTY 的环境变量（接入端点、Key、模型名、配置目录）在会话创建时已经写好，原地重拉只需同一套参数。
       const route = s.info && (s.info.deepseekActiveRoute || s.info.deepseekRoute);
@@ -4635,6 +4666,8 @@ module.exports = {
     applyInteractiveTerminalEnv,
     isClaudeApiBackend,
     isCodexApiBackend,
+    ensureCodexApiProfile,
+    resolveCodexLaunchModel,
     shouldUseClaudeFastSettings,
     claudePermissionModeArg,
     buildClaudePtyLaunch,

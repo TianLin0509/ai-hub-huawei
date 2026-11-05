@@ -17,8 +17,8 @@ function refresh(ipcRenderer) {
 
 // 只保留 CodeAgent 的发行版（公司纯净版）不必等检测结果，一律按「装了」处理默认值。
 const codeAgentOnly = (() => {
-  const { kindAllowed } = require('../core/distribution');
-  return kindAllowed('codeagent') && !kindAllowed('claude');
+  const { kindAllowed, target } = require('../core/distribution');
+  return kindAllowed('codeagent') && (target === 'company' || !kindAllowed('claude'));
 })();
 
 function isInstalled() { return codeAgentOnly || installed === true; }

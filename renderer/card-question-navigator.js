@@ -314,9 +314,11 @@ function createCardQuestionNavigator(options = {}) {
     const cardViewVisible = getCurrentView() === 'card' && !!sessionId && !overlay.classList.contains('hidden');
     const customEntries = cardViewVisible && options.getEntries ? options.getEntries() : null;
     const bridgeMessageKind = () => null;
+    const { isTeamMessage } = require('./team-notice-identity');
     const cards = customEntries ? customEntries.map(entry => entry.card) : cardViewVisible
       ? Array.from(overlay.querySelectorAll(':scope > .turn-card.user')).filter(card => (
         (!card.dataset.sessionId || card.dataset.sessionId === sessionId) && !bridgeMessageKind(questionTextForCard(card))
+        && !isTeamMessage(questionTextForCard(card))
       ))
       : [];
 

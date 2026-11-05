@@ -430,6 +430,7 @@ async function sendToPty(sid, prompt, kind, options = {}) {
   const ticket = isCodeAgentKind(kind) ? { cancelled: false, submitted: false } : null;
   if (ticket) {
     ticket.stopped = new Promise(resolve => { ticket.stop = resolve; });
+    ticket.finished = new Promise(resolve => { ticket.finish = resolve; });
     if (!codeAgentSubmissions.has(sid)) codeAgentSubmissions.set(sid, new Set());
     codeAgentSubmissions.get(sid).add(ticket);
     options = { ...options, codeagentSubmission: ticket };
@@ -500,6 +501,7 @@ async function sendToPty(sid, prompt, kind, options = {}) {
   }
   } finally {
     if (ticket) {
+      ticket.finish();
       const pending = codeAgentSubmissions.get(sid);
       pending?.delete(ticket);
       if (!pending?.size) codeAgentSubmissions.delete(sid);
@@ -512,11 +514,29 @@ async function codeAgentInputAction(sid, action, options = {}) {
     // Stop is a key action, not a submission. Never wait for readiness or an
     // acknowledgement. Prevent the old sender from typing/recovering Enter later.
     const previous = promptSubmissionQueues.get(sid);
-    const task = require('./codeagent-input-guard').codeAgentInputGuard(_deps.sessionManager)
-      .stop(sid, { ...options, queuePending: !!previous, beforeEsc() {
+    let stoppedTicket;
+    const guard = require('./codeagent-input-guard').codeAgentInputGuard(_deps.sessionManager);
+    const task = guard
+      .stop(sid, { ...options, queuePending: !!previous, cancelPending() {
+        const ticket = [...(codeAgentSubmissions.get(sid) || [])].find(item => item.active && !item.submitted);
+        if (!ticket) return false;
+        stoppedTicket = ticket;
+        ticket.cancelled = true; ticket.endPaste?.(); ticket.stop();
+        return true;
+      }, beforeEsc() {
         const ticket = [...(codeAgentSubmissions.get(sid) || [])].find(item => item.active);
+        stoppedTicket = ticket;
         if (ticket) { ticket.cancelled = true; ticket.endPaste?.(); ticket.stop(); }
-      } });
+      } }).then(async result => {
+        if (!result.ok) return result;
+        // Esc bypasses the sender; editing waits until the cancelled writer is
+        // settled so Ctrl+U cannot interleave with a pending paste chunk.
+        await stoppedTicket?.finished;
+        const latest = await guard.inspect(sid);
+        const cleared = latest.input ? await guard.clear(sid, latest.input.token)
+          : { ok: !latest.readFailed };
+        return { ...result, cleared: cleared.ok, notSent: stoppedTicket ? !stoppedTicket.submitted : false };
+      });
     codeAgentStops.set(sid, task);
     const release = () => { if (codeAgentStops.get(sid) === task) codeAgentStops.delete(sid); };
     task.then(release, release);
@@ -637,6 +657,8 @@ async function sendToPtyImpl(sid, prompt, kind, options = {}) {
   if (isCodeAgentKind(kind) && !options.codeagentModelPick) {
     // 启动前屏幕可能还没画完，先拦明确菜单/pending；真正写正文前再要求
     // 当前普通输入区的正向证据，不能把这里的早期检查当作持久许可。
+    const input = await require('./codeagent-input-guard').codeAgentInputGuard(sessionManager).check(sid);
+    if (!input.ok) return input;
     await checkCodeAgentPromptTarget(sessionManager, sid, { allowUnready: true });
   }
   const FAST_PATH_QUIET_MS = 250;       // 连续 250ms 无 PTY 数据 → 视为 paste 接收完
@@ -763,6 +785,10 @@ async function sendToPtyImpl(sid, prompt, kind, options = {}) {
       && await sessionManager.tryLoadCodexEditorInput?.(sid, prompt, { attachments: options.attachments || [] });
     if (!usedCodexEditorInput) await clearCodexInputLine(sessionManager, sid, kind);
     if (options.submissionReceipt?.resolved) return alreadySubmitted();
+    if (isCodeAgentKind(kind)) {
+      const input = await require('./codeagent-input-guard').codeAgentInputGuard(sessionManager).check(sid, { skipMenuClose: options.codeagentModelPick === true });
+      if (!input.ok) return input;
+    }
     if (isCodeAgentKind(kind) && !options.codeagentModelPick) {
       // 冷启动等待期间可能才出现 /model；检查必须在所有等待之后、首个
       // payload 之前。队列内只拒绝 pending，不等它，避免 /model 自锁。
@@ -770,10 +796,6 @@ async function sendToPtyImpl(sid, prompt, kind, options = {}) {
         // 当前屏幕上有没有 CodeAgent 的选择框（升级提醒、信任确认、↑↓ 选择底栏）：有就别把正文打进去、回车替人选。
         isChoiceDialog: text => (require('./group-chat-cli-ready-detector').BLOCKERS.codeagent || []).some(re => re.test(text)),
       });
-    }
-    if (isCodeAgentKind(kind)) {
-      const input = await require('./codeagent-input-guard').codeAgentInputGuard(sessionManager).check(sid);
-      if (!input.ok) return input;
     }
     const beforeBufferLength = String(sessionManager.getSessionBuffer(sid) || '').length;
     const beforeWrite = sessionManager.getGroupChatLastActivity(sid);

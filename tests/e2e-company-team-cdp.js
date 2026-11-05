@@ -91,6 +91,7 @@ async function run() {
       AI_HUB_WORKSPACE_ROOT: WORK, AI_HUB_CODEAGENT_COMMAND: path.join(REPO, 'tests/fixtures/codeagent-pool-fake/codeagent.cmd'),
       AI_HUB_CODEAGENT_CONFIG_DIR: PERSONAL, CODEAGENT_POOL_FAKE_LOG: LOG, CODEAGENT_TEAM_FAKE_CONTROL_DIR: CONTROL,
       AI_HUB_CODEAGENT_POOL_SCAN_ROOT: path.join(ROOT, 'empty-scan'), CLAUDE_CONFIG_DIR: path.join(ROOT, 'claude'), CODEX_HOME: path.join(ROOT, 'codex'),
+      HUB_SESSION_SEARCH_DISABLE_NATIVE: '1',
     } });
     cdp = await connectFirstPage(hub, t => /index\.html/.test(t.url));
     await wait(() => cdp.eval('!!window.__teamUi && !!window.openMeetingCreateModal'), 'renderer ready');
@@ -211,11 +212,14 @@ async function run() {
     await wait(() => cdp.eval("!document.querySelector('.team-modal')"), 'approved');
     const team = await wait(async () => { const t = (await invoke('team:list')).result[0]; return t.members.length === 2 && t.members.every(m => m.status === 'active') && t; }, 'two members', 60000);
     ok('批准后只创建两名 CodeAgent，保留指定账号和模型', team.members.every(m => m.kind === 'codeagent') && team.members[0].account === a && team.members[1].account === b && team.members[1].model === ds);
+    ok('后台创建成员不切走负责人画面', await cdp.eval(`activeSessionId===${JSON.stringify(lead.id)}`));
     for (const m of team.members) {
       await wait(() => nativeReceived(m.sid, '【组队开工'), 'kickoff received', 60000);
       ok(`${m.memberId} 从正确号池目录启动并收到开工任务`, launches().some(v => v.hubSession === m.sid && path.resolve(v.configDir) === path.resolve(pool.accountDir(DATA, m.account))));
     }
     const m1 = team.members[0].sid;
+    const liveStatus = await command(lead.id, ['status']);
+    ok('status 显示成员最近输出分钟数', liveStatus.members.filter(m=>m.memberId!=='lead').every(m=>Number.isFinite(m.runtime?.lastOutputMinAgo) && m.runtime.lastOutputMinAgo>=0));
     ok('成员不能再招人', /成员不能招人/.test(await command(m1, ['propose', '--plan-file', planFile], true)));
     ok('成员直连保持负责人审批边界', /负责人先开放/.test(await command(m1, ['send', '--to', 'm2', '--message', 'peer'], true)));
     await command(lead.id, ['send', '--to', 'm1', '--message', '负责人发来的验收消息-m4']);
@@ -225,6 +229,55 @@ async function run() {
     ok('负责人和成员 CLI send 双向消息进入对方原生记录');
     await wait(() => cdp.eval(`document.querySelectorAll('[data-sidebar-render-key="team:${lead.id}"] .session-item.child').length===2`), 'nested sidebar');
     await shot('03-company-team-members');
+    await cdp.eval(`selectSession(${JSON.stringify(lead.id)})`);
+    await cdp.eval(`sessions.get(${JSON.stringify(m1)}).unreadCount=3`);
+    const restarted = await invoke('restart-session', m1);
+    ok('成员可通过真实生命周期重启', !!restarted && restarted.ok !== false);
+    await wait(() => cdp.eval(`!!sessions.get(${JSON.stringify(m1)}) && sessions.get(${JSON.stringify(m1)}).status!=='dormant' && !sessions.get(${JSON.stringify(m1)})._resumePending`), 'member restarted', 60000);
+    ok('后台重启成员仍停在负责人且保留未读', await cdp.eval(`activeSessionId===${JSON.stringify(lead.id)} && sessions.get(${JSON.stringify(m1)}).unreadCount>=3`));
+    const suspended = await invoke('suspend-session', m1);
+    ok('成员可休眠', suspended.ok === true);
+    await wait(() => cdp.eval(`sessions.get(${JSON.stringify(m1)})?.status==='dormant'`), 'member dormant');
+    await click(`[data-sidebar-render-key="team:${lead.id}"] .session-item.child[data-session-id="${m1}"]`);
+    await wait(() => cdp.eval(`activeSessionId===${JSON.stringify(m1)} && sessions.get(${JSON.stringify(m1)})?.status!=='dormant' && !_pendingDormantResumes.has(${JSON.stringify(m1)})`), 'explicit member resume', 60000);
+    ok('用户点击休眠成员仍可进入且清除未读', await cdp.eval(`sessions.get(${JSON.stringify(m1)}).unreadCount===0`));
+    await shot('04-company-team-explicit-resume');
+    const toggle = `.session-item[data-session-id="${lead.id}"] [data-team-toggle]`;
+    const children = `[data-sidebar-render-key="team:${lead.id}"] .session-item.child`;
+    await click(toggle);
+    await wait(()=>cdp.eval(`document.querySelectorAll(${JSON.stringify(children)}).length===0`),'collapse members');
+    ok('折叠仅隐藏成员行，当前成员会话不切走', await cdp.eval(`activeSessionId===${JSON.stringify(m1)} && !!document.querySelector('.session-item[data-session-id="${lead.id}"]')`));
+    await command(lead.id,['send','--to','m1','--message','折叠期间后台仍可收消息']);
+    await wait(()=>nativeReceived(m1,'折叠期间后台仍可收消息'),'collapsed background message',60000);
+    ok('折叠期间成员后台仍正常收消息');
+    await shot('05-team-collapsed');
+    await click(toggle);
+    await wait(()=>cdp.eval(`document.querySelectorAll(${JSON.stringify(children)}).length===2`),'expand members');
+    ok('再次点击可展开成员编号', await cdp.eval(`document.querySelectorAll(${JSON.stringify(children+' .team-member-tag')}).length===2`));
+    await click(toggle);
+    await click('#btn-global-search');
+    await wait(()=>cdp.eval("!!document.querySelector('#search-query')?.getBoundingClientRect().width"),'search input');
+    await click('#search-query');
+    await cdp.send('Input.insertText',{text:'研发成员'});
+    await wait(()=>cdp.eval("[...document.querySelectorAll('.session-search-result')].some(e=>e.textContent.includes('研发成员'))"),'collapsed member search hit');
+    await cdp.eval("[...document.querySelectorAll('.session-search-result')].find(e=>e.textContent.includes('研发成员')).focus()");
+    for(const type of ['keyDown','keyUp']) await cdp.send('Input.dispatchKeyEvent',{type,key:'Enter',code:'Enter',windowsVirtualKeyCode:13,modifiers:2});
+    await wait(()=>cdp.eval(`document.querySelectorAll(${JSON.stringify(children)}).length===2 && activeSessionId===${JSON.stringify(m1)}`),'search reveals member');
+    ok('搜索命中折叠成员并自动展开所属团队');
+    await shot('06-team-search-revealed');
+    const longText='  合同原文\n'+'完整证据😀\n'.repeat(400)+'末尾验收标准  ';
+    const messageFile=path.join(ROOT,'complete-message.md');fs.writeFileSync(messageFile,longText);
+    const archived=await command(lead.id,['send','--to','m1','--message-file',messageFile]);
+    const readBack=await command(m1,['read','--id',archived.messageId]);
+    ok('真实 CLI read 返回长消息完整正文且保留首尾空白',readBack.text===longText && fs.readFileSync(archived.bodyPath,'utf8')===longText);
+    ok('非参与者不能读取该消息原文',/参与者/.test(await command(team.members[1].sid,['read','--id',archived.messageId],true)));
+    await wait(()=>nativeReceived(m1,archived.messageId),'archive notice received',60000);
+    await click(toggle);
+    await wait(()=>cdp.eval(`document.querySelectorAll(${JSON.stringify(children)}).length===0`),'collapse before reload');
+    await cdp.send('Page.reload');
+    await wait(()=>cdp.eval(`document.querySelector(${JSON.stringify(toggle)})?.getAttribute('aria-expanded')==='false'`),'collapse restored after reload',60000);
+    ok('页面刷新后仍保留折叠偏好',await cdp.eval(`document.querySelectorAll(${JSON.stringify(children)}).length===0`));
+    await shot('07-team-collapse-after-reload');
     evidence.uiChecksPassed = true;
   } catch (e) {
     failure = e; evidence.error = e.stack || String(e); if (cdp) await shot('failure').catch(() => {});

@@ -9,6 +9,26 @@ const STALE_MS = 3 * 3600 * 1000;
 const MAX_ROWS = 4;
 // 菜单用量表只在 Hub 选模型或用户自己开菜单时才读得到，超过 6 小时标出「x 小时前」。
 const USAGE_STALE_MS = 6 * 3600 * 1000;
+const TOKEN_WARN_PERCENT = 50;
+const TOKEN_DANGER_PERCENT = 80;
+
+function tokenModelForAccount(key, session, defaults) {
+  return require('../core/ai-kinds').isCodeAgentKind(session?.kind) && (session.codeagentPoolAccount || 'personal') === key
+    ? session.currentModel?.id || defaults[key] || '' : defaults[key] || '';
+}
+function tokenUsage(entry, modelId) {
+  const model = modelId ? require('../core/codeagent-usage-menu').modelUsage(entry, modelId)
+    : entry?.models?.find(item => Number.isFinite(item.day?.pct));
+  if (!Number.isFinite(model?.day?.pct)) return null;
+  const pct = model.day.pct;
+  const shortWarning = [['hour', '本小时'], ['min', '本分钟']]
+    .map(([window, label]) => ({ window, label, pct: model[window]?.pct }))
+    .filter(item => Number.isFinite(item.pct) && item.pct >= TOKEN_DANGER_PERCENT)
+    .sort((a, b) => b.pct - a.pct)[0] || null;
+  return { window: 'day', label: '今日', pct, name: modelId || model.name, shortWarning,
+    periods: { day: pct, hour: model.hour?.pct, min: model.min?.pct },
+    level: pct >= TOKEN_DANGER_PERCENT ? 'danger' : pct >= TOKEN_WARN_PERCENT ? 'warn' : '' };
+}
 const CREDIT_BUCKETS = [['今日忙时', 'busyDay', '忙时'], ['闲时', 'idleDay', '闲时'], ['月度', 'monthly', '月度']];
 
 const levelFor = pct => pct < 10 ? 'danger' : pct < 20 ? 'warn' : '';
@@ -23,10 +43,11 @@ const shortDuration = min => {
   return h ? `${h}时${m % 60 ? (m % 60) + '分' : ''}` : `${m}分`;
 };
 
-function createCodeAgentQuotaBar({ document, ipcRenderer, storage = null, now = () => Date.now(), escapeHtml = s => String(s) } = {}) {
+function createCodeAgentQuotaBar({ document, ipcRenderer, storage = null, now = () => Date.now(), escapeHtml = s => String(s), getActiveSession = () => null } = {}) {
   let readings = {};
   let usage = {}; // personal / 号池编号 → recordUsage 的快照（主进程 codeagent:usage 取回）
   let usagePanel = null;
+  let defaults = {};
   function openUsage(key, label) {
     usagePanel ||= require('./codeagent-usage-panel').createCodeAgentUsagePanel({ document, ipcRenderer, usageFor, now, escapeHtml });
     return usagePanel.open({ key, label, stats: readings[label] });
@@ -83,30 +104,27 @@ function createCodeAgentQuotaBar({ document, ipcRenderer, storage = null, now = 
     const rows = [...byAccount.values()].map(row => ({ ...row, at: Math.max(row.r?.at || 0, row.u?.at || 0) }))
       .sort((a, b) => b.at - a.at).slice(0, MAX_ROWS);
     host.hidden = rows.length === 0;
-    // 结构与「余量」各家的行一致（底栏的紧凑/摘要排版、「⋯」全部状态弹窗都按这套类名读）：
-    // 读数格只放百分比，底栏摘要按它挑「最紧张」的一家；剩余点数和总额放在悬停说明里。
-    host.innerHTML = rows.length ? `<div class="sidebar-quota">${rows.map(({ account, key, r, u }) => {
+    // 保留额度行的面板入口；底栏只展示 Token，Credit 在完整面板内查看。
+    const html = rows.length ? `<div class="sidebar-quota">${rows.map(({ account, key, r, u, at }) => {
       const metrics = metricsFor(r, u);
-      const hint = idleHint(u);
+      const token = tokenUsage(u, tokenModelForAccount(key || 'personal', getActiveSession(), defaults));
+      const tokenHtml = '<span class="ca-quota-token" data-level="' + (token?.level || '') + '">'
+        + (token ? '<span class="ca-token-reading"><span>Token</span><span class="ca-token-model" title="' + escapeHtml(token.name) + '">' + escapeHtml(token.name) + '</span><span>' + token.label + ' ' + round1(token.pct) + '%</span>'
+          + (token.shortWarning ? '<span class="ca-token-alert">⚠ ' + token.shortWarning.label + ' ' + round1(token.shortWarning.pct) + '%</span>' : '')
+          + '</span><span class="ca-token-track"><i style="width:' + Math.max(0, Math.min(100, token.pct)) + '%"></i></span>' : 'Token 未读取') + '</span>';
       const stale = metrics.every(m => m.stale);
-      const name = rows.length > 1 ? `CA ${account}` : 'CodeAgent';
-      const label = metrics.map((m, i) => `${i ? '' : `CodeAgent ${account} `}${m.bucket}剩余 ${m.pct}%（${m.detail}）`).join(' · ')
-        + (hint ? ` · ${hint.full}` : '');
-      const sources = [r ? `Stats 面板 · ${ago(now() - r.at)}` : '', u && u.credit ? `${(u.creditSource ?? u.source) === 'serve' ? 'CodeAgent 接口' : '/model 菜单'} · ${ago(now() - (u.creditAt ?? u.at))}` : ''].filter(Boolean);
-      const title = `${label}\n读自 CodeAgent 界面 ${sources.join('；')}\n点击查看模型用量`;
-      return `<div class="sidebar-quota-provider" data-provider="codeagent" data-usage-key="${escapeHtml(key)}" data-usage-label="${escapeHtml(account)}" role="button" tabindex="0" aria-haspopup="dialog" style="cursor:pointer" data-freshness="${stale ? 'stale' : 'fresh'}" aria-label="${escapeHtml(label || 'CodeAgent ' + account)}，查看模型用量" title="${escapeHtml(title)}">`
+      const label = `${account} Token ${token ? `${token.name} ${token.label} ${round1(token.pct)}%` : '未读取'}`;
+      const updated = new Date(at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
+      const periods = token ? ['今日', '本小时', '本分钟'].map((label, i) => {
+        const value = token.periods[['day', 'hour', 'min'][i]];
+        return label + ' ' + (Number.isFinite(value) ? round1(value) + '%' : '未读取');
+      }).join(' · ') : '';
+      const title = `${account} · 更新于 ${updated}\n${periods ? periods + '\n' : ''}点击查看详情`;
+      return `<div class="sidebar-quota-provider ca-quota-account" data-provider="codeagent" data-usage-key="${escapeHtml(key)}" data-usage-label="${escapeHtml(account)}" role="button" tabindex="0" aria-haspopup="dialog" style="cursor:pointer" data-freshness="${stale ? 'stale' : 'fresh'}" aria-label="${escapeHtml(label || 'CodeAgent ' + account)}，查看模型用量" title="${escapeHtml(title)}">`
         + '<span class="sidebar-quota-icon ai-logo logo-codeagent" aria-hidden="true"></span>'
-        + `<span class="sidebar-quota-name">${escapeHtml(name)}</span>`
-        + `<span class="sidebar-quota-metrics">${metrics.map(m => {
-          const period = (metrics.length > 1 ? m.short : m.bucket)
-            + (m.bucket === '闲时' && hint ? ` · ${hint.short}` : '')
-            + (m.stale ? ' · ' + ago(now() - m.at) : '');
-          return `<span class="sidebar-quota-metric" data-level="${levelFor(m.pct)}" data-window="${escapeHtml(m.bucket)}">`
-            + `<span class="sidebar-quota-reading"><b class="sidebar-quota-value">${m.pct}%</b>`
-            + `<span class="sidebar-quota-period">${escapeHtml(period)}</span></span>`
-            + `<span class="sidebar-quota-track" aria-hidden="true"><i style="width:${Math.max(0, Math.min(100, m.pct))}%"></i></span></span>`;
-        }).join('') || '<span class="sidebar-quota-period">模型用量</span>'}</span></div>`;
+        + tokenHtml + '</div>';
     }).join('')}</div>` : '';
+    if (host.innerHTML !== html) host.innerHTML = html;
     if (!host._usagePanelBound) {
       host._usagePanelBound = true;
       const activate = event => {
@@ -128,7 +146,8 @@ function createCodeAgentQuotaBar({ document, ipcRenderer, storage = null, now = 
     try { document.dispatchEvent?.(new (document.defaultView?.CustomEvent || CustomEvent)('codeagent-quota', { detail: readings[account] })); } catch { /* 桌宠等订阅方可选 */ }
   }
   // accounts：core/codeagent-usage-menu.js readUsage 的结果（主进程 codeagent:usage 取回）。
-  function setUsage(accounts) {
+  function setUsage(accounts, defaultModels = defaults) {
+    defaults = defaultModels && typeof defaultModels === 'object' ? { ...defaultModels } : {};
     usage = accounts && typeof accounts === 'object' ? { ...accounts } : {};
     render();
     usagePanel?.update();
@@ -138,4 +157,4 @@ function createCodeAgentQuotaBar({ document, ipcRenderer, storage = null, now = 
   return { update, render, setUsage, usageFor, openUsage, readings: () => ({ ...readings }) };
 }
 
-module.exports = { createCodeAgentQuotaBar };
+module.exports = { createCodeAgentQuotaBar, tokenModelForAccount, tokenUsage, TOKEN_WARN_PERCENT, TOKEN_DANGER_PERCENT };

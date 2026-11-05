@@ -3015,6 +3015,8 @@ async function loadSessionHistoryToOverlayUnserialized(sessionId, opts = {}) {
     turns=refreshed.filter(turn=>!latestIds.has(turn.id)).concat(turns);
   }
   const ipcError = (result && result.error) ? result.error : null;
+  turnCardRenderer.reconcileCommandUserCards(sessionId, result?.codeagentCommandSubmissionIds, turns,
+    { container, kind, deferDividers: true });
   // A streaming incremental result can land while this full parse is in
   // flight. Those cards are newer than the full snapshot and must survive the
   // authoritative history rebuild even when that snapshot does not contain
@@ -3176,6 +3178,8 @@ async function loadSessionHistoryToOverlayUnserialized(sessionId, opts = {}) {
     // staging 内看不到主界面的临时卡；提交成功后再认领，concurrentExtraCards 就不会把它留回去。
     turnCardRenderer.reconcileOptimisticUserCards(sessionId, turns, { container, kind: mountKind });
   }
+  turnCardRenderer.reconcileCommandUserCards(sessionId, result?.codeagentCommandSubmissionIds, turns,
+    { container, kind: mountKind });
   if(nextPageState)Object.assign(pageState,nextPageState);
   cardHistoryPager.render(sessionId, container);
 
@@ -3774,35 +3778,26 @@ document.addEventListener('click', async (e) => {
     const liveSid = groupMember ? groupMember.dataset.groupMember : card.closest('[data-split-secondary]') ? sessionSplit?.secondary()?.sessionId
       : (typeof activeSessionId !== 'undefined' && activeSessionId) || null;
     if (cardSid && liveSid && String(cardSid) !== String(liveSid)) {
-      console.warn('[edit-resend] 卡片属于会话', cardSid, '，当前激活的是', liveSid,
-        '——已跳过填入，避免把内容写进别的会话的输入框');
+      showToast('这条消息不属于当前会话', 'warning');
       return;
     }
     const inputEl = card.closest('.terminal-panel')?.querySelector('.floating-input-box')
       || document.getElementById('mr-input-box');
     if (inputEl) {
-      // 2026-05-09 maintainer：用户原则 — 输入框只能由"发送 / 手动编辑"改动；
-      // 已有内容时 edit-resend 不再覆盖（避免吞掉用户正在写的内容）。
-      const cur = (inputEl.innerText || '').trim();
-      if (cur) {
-        console.warn('[edit-resend] 输入框已有内容，跳过自动填入历史消息');
-        return;
-      }
       const group = groupMember ? MeetingRoom.getMeetingData(MeetingRoom.getActiveMeetingId()) : null;
       const memberIndex = group?.subSessions.indexOf(cardSid);
       const mention = group ? '@' + (group.slotSpecs?.[memberIndex]?.memberId || 'm' + (memberIndex + 1)) + ' ' : '';
-      inputEl.textContent = mention + (turn.assistantContext?.userText ?? turn.text ?? '');
-      inputEl.dispatchEvent(new Event('input', { bubbles:true }));
-      inputEl.focus();
-      // Place cursor at end (contenteditable doesn't have setSelectionRange)
-      try {
-        const range = document.createRange();
-        range.selectNodeContents(inputEl);
-        range.collapse(false);
-        const sel = window.getSelection();
-        sel.removeAllRanges();
-        sel.addRange(range);
-      } catch {}
+      await require('./card-edit-resend').editResend({ input: inputEl, sessionId: cardSid || liveSid,
+        session: group ? null : sessions.get(cardSid || liveSid), text: mention + (turn.assistantContext?.userText ?? turn.text ?? ''),
+        document, window, storage: localStorage, invoke: (channel, payload) => ipcRenderer.invoke(channel, payload),
+        notify: showToast, readText: readContenteditablePlainText, replaceText: replaceContenteditableText,
+        isCurrent: () => !cardSid || String(groupMember ? groupMember.dataset.groupMember : card.closest('[data-split-secondary]')
+          ? sessionSplit?.secondary()?.sessionId : activeSessionId) === String(cardSid),
+        saveDraft: saveFloatingInputDraft, historyChanged: () => {
+          const bar = inputEl.closest('.floating-input-bar');
+          if (bar?._editResendHistoryChanged) bar._editResendHistoryChanged();
+          else bar?._codeagentInputHistoryChanged?.();
+        } });
     }
     return;
   }
@@ -4581,6 +4576,7 @@ async function switchSessionScene(sessionId, sceneId, inputBox, { fresh }) {
       const result = await ipcRenderer.invoke('delete-session', sessionId);
       if (!result?.ok) console.warn('[scene] 收起空会话失败：', result?.message || result?.error);
       else {
+        require('./card-edit-resend').clearStoppedTurns(localStorage, sessionId);
         // 与右键「永久删除」相同：主进程按进程结束发来的 session-closed 会把它标成「进程已退出」留在左侧，这里一并清掉
         sessions.delete(sessionId);
         scheduleSessionListRender();
@@ -4706,6 +4702,16 @@ function composerSupportedEfforts(session) {
 }
 
 function openCodeAgentSkillsMenu(sessionId, pane = {}, command = '/skills') {
+  const composer = pane.composer || [...document.querySelectorAll('.floating-input-bar')].find(bar => bar.dataset.sessionId === sessionId);
+  if (command.toLowerCase() === '/skills') {
+    composer?._codeagentSkills?.open();
+    return Promise.resolve({ ok: !!composer?._codeagentSkills });
+  }
+  if (command.toLowerCase() === '/model') {
+    const anchor = composer?.querySelector('.composer-model');
+    if (anchor) void modelUi.showModelPicker(anchor, sessionId);
+    return Promise.resolve({ ok: !!anchor });
+  }
   const options = {
     session: sessions.get(sessionId), state: getSessionRuntimeTruth(sessions.get(sessionId)).state,
     openTerminal: async () => {
@@ -4714,23 +4720,15 @@ function openCodeAgentSkillsMenu(sessionId, pane = {}, command = '/skills') {
     },
     send: text => {
       const request = { sessionId, text, clientSubmissionId: require('node:crypto').randomUUID(), waitForCliReady: true, codeagentInteractiveCommand: true };
-      const submit = async codeagentDiscardToken => {
-        const result = await ipcRenderer.invoke('session:send-prompt', { ...request, ...(codeagentDiscardToken ? { codeagentDiscardToken } : {}) });
-        if (result?.code === 'codeagent-input-residual') {
-          for (const bar of document.querySelectorAll('.floating-input-bar')) if (bar.dataset.sessionId === sessionId) bar._codeagentInputRecovery?.show(result, submit);
-        }
-        else if (codeagentDiscardToken && result?.ok) {
-          for (const bar of document.querySelectorAll('.floating-input-bar')) if (bar.dataset.sessionId === sessionId) bar._codeagentInputRecovery?.submitted(text);
-        }
+      return ipcRenderer.invoke('session:send-prompt', request).then(result => {
+        if (result?.code === 'codeagent-input-residual') showToast('终端输入框未能清空，请到终端确认后再发送', 'warning');
         return result;
-      };
-      return submit();
+      });
     },
-    writePrefix: () => ipcRenderer.invoke('codeagent:commands-open', { sessionId }),
     notify: showToast,
   };
   const skills = require('./composer-codeagent-skills');
-  return command === '/' ? skills.openCommandList(options) : command === '/skills' ? skills.openSkillsMenu(options) : skills.openTerminalCommand({ ...options, text: command });
+  return skills.openTerminalCommand({ ...options, text: command });
 }
 
 function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
@@ -4755,7 +4753,10 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   const historyCursor = inputHistory
     ? inputHistory.createCursor(sessionId)
     : { isBrowsing: () => false, older: () => null, newer: () => null, reset() {}, invalidate() {} };
+  bar._codeagentInputHistoryChanged = () => historyCursor.invalidate();
   let applyingHistory = false;
+  let editResendHistoryReady = false;
+  bar._editResendHistoryChanged = () => { historyCursor.invalidate(); editResendHistoryReady = true; };
   function applyHistoryText(text) {
     applyingHistory = true;
     try {
@@ -4790,18 +4791,14 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   if (floatingInputDrafts.has(sessionId)) {
     restoreComposerText(sessionId, inputBox, floatingInputDrafts.get(sessionId));
   }
-  let recoveryHost = bar;
   function ensureCodeAgentInputRecovery() {
     if (bar._codeagentInputRecovery) return bar._codeagentInputRecovery;
     if (!isCodeAgentKind(sessions.get(sessionId)?.kind)) return null;
     const recovery = require('./composer-codeagent-input');
     bar._codeagentInputRecovery = recovery.createCodeAgentInputRecovery({
-      document, host: recoveryHost, notify: showToast,
+      notify: showToast,
       invoke: (channel, payload) => ipcRenderer.invoke(channel, { ...payload, sessionId }),
-      readDraft: () => require('./composer-codeagent-skills').skillPrompt(inputBox, readContenteditablePlainText(inputBox), sessions.get(sessionId)),
-      restoreDraft: value => recovery.restoreRecoveredPrompt(inputBox, value, { document, window, session: sessions.get(sessionId), onChange: () => saveFloatingInputDraft(sessionId, inputBox) }),
       isRunning: () => recovery.codeAgentCanStop(sessions.get(sessionId), getSessionRuntimeTruth(sessions.get(sessionId)).state),
-      confirmReplace: message => window.confirm(message),
     });
     return bar._codeagentInputRecovery;
   }
@@ -4998,18 +4995,23 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
         showToast('回答已结束', 'info'); return;
       }
       stopBtn.disabled = true; stopBtn.dataset.stopping = 'true'; stopBtn.textContent = '正在停止…';
+      const stoppedCard = turnCardRenderer.latestUserCard(sessionId);
       try {
         const existed = !!bar._codeagentInputRecovery;
         let recovery = bar._codeagentInputRecovery;
         if (!recovery) {
           try { recovery = ensureCodeAgentInputRecovery(); }
-          catch { /* A missing recovery panel must never swallow Stop. */ }
+          catch { /* A missing recovery controller must never swallow Stop. */ }
         }
         const diagnostic = { branch: existed ? 'existing' : recovery ? 'created' : 'direct', rendererState: RUNTIME_RUNNING };
-        if (recovery) await recovery.stop(diagnostic);
+        if (recovery) {
+          const result = await recovery.stop(diagnostic);
+          if (result?.ok && !result.notSent) turnCardRenderer.markUserStopped(sessionId, stoppedCard);
+        }
         else {
           const result = await ipcRenderer.invoke('codeagent:input-stop', { sessionId, ...diagnostic });
-          showToast(result?.ok ? '停止指令已发送，请到终端核对未发送内容' : result?.message || '停止失败，请到终端确认', result?.ok ? 'info' : 'warning');
+          if (result?.ok && !result.notSent) turnCardRenderer.markUserStopped(sessionId, stoppedCard);
+          showToast(result?.ok ? (result.cleared === false ? '终端输入框未能清空，请到终端确认后再发送' : '已停止') : result?.message || '停止失败，请到终端确认', result?.ok ? 'info' : 'warning');
         }
       }
       catch { showToast('停止失败，请到终端确认', 'warning'); }
@@ -5060,9 +5062,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     getSession: () => sessions.get(sessionId), ipcRenderer,
     readText: () => readContenteditablePlainText(inputBox), replaceText: text => replaceContenteditableText(inputBox, text),
     saveDraft: () => saveFloatingInputDraft(sessionId, inputBox),
-    openMenu: () => openCodeAgentSkillsMenu(sessionId, pane),
-    openCommands: () => openCodeAgentSkillsMenu(sessionId, pane, '/'),
-    openCommand: command => openCodeAgentSkillsMenu(sessionId, pane, command), storage: localStorage,
+    openModel: () => modelUi.showModelPicker(modelChip, sessionId), storage: localStorage, notify: showToast,
   });
   bar._codeagentSkills = codeagentSkills;
   const claudeAccountChip = require('./composer-claude-account').mountClaudeAccountChip({
@@ -5168,8 +5168,6 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     },
   });
   contentStack.append(nativeControls.element, ptyAttention.element, composer);
-  if (bar._codeagentInputRecovery) contentStack.insertBefore(bar._codeagentInputRecovery.panel, composer);
-  recoveryHost = contentStack;
   bar.append(contentStack);
   bar.classList.add('visible');
   require('./composer-collapse').mountComposerCollapse({ document, host: bar, before: sendBtn, input: inputBox,
@@ -5353,14 +5351,16 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   //   （main/ipc/prompt-submit-handlers.js → core/group-chat-watcher.sendToPty），
   //   与群聊派发同一条实现；渲染进程只负责清 UI 和展示"没提交"这件事。
 
-  function sendInput(retry = null) {
+  function sendInput() {
     const skillComposer = require('./composer-codeagent-skills');
     const userText = skillComposer.skillPrompt(inputBox, readContenteditablePlainText(inputBox), sessions.get(sessionId));
     const submittedSkill = skillComposer.selectedSkill(inputBox);
     const skillAccount = { kind: sessions.get(sessionId)?.kind, codeagentPoolAccount: sessions.get(sessionId)?.codeagentPoolAccount };
     if (!userText || !userText.trim()) return;
-    if (!skillComposer.selectedSkill(inputBox) && skillComposer.isSkillsMenuCommand(sessions.get(sessionId), userText)) {
-      void openCodeAgentSkillsMenu(sessionId, pane).then(result => {
+    if (!skillComposer.selectedSkill(inputBox)
+        && (skillComposer.isSkillsMenuCommand(sessions.get(sessionId), userText) || bar._codeagentSkills?.isCommand(userText))) {
+      const command = '/' + (bar._codeagentSkills?.isCommand(userText) || userText.trim().split(/\s/)[0].slice(1)).toLowerCase();
+      void openCodeAgentSkillsMenu(sessionId, { ...pane, composer: bar }, command === '/skills' || command === '/model' ? command : userText).then(result => {
         if (result?.ok && readContenteditablePlainText(inputBox) === userText) { replaceContenteditableText(inputBox, ''); clearFloatingInputDraft(sessionId); }
       });
       return;
@@ -5386,7 +5386,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     let session, kind, wasRunning, optimisticCard = null;
     const previousRuntimeTruth = sessions.get(sessionId)?.runtimeTruth;
     let optimisticRuntimeTruth = null;
-    const clientSubmissionId = retry?.clientSubmissionId || require('node:crypto').randomUUID();
+    const clientSubmissionId = require('node:crypto').randomUUID();
     const discardUnsentOptimisticCard = () => {
       // 只撤回本次尚未落盘的临时卡；权威历史以及送达未知的消息保持原样。
       if (optimisticCard?.dataset.optimistic === 'true'
@@ -5471,49 +5471,31 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     optimisticRuntimeTruth = session?.runtimeTruth;
     if (delivery) floatingPromptDeliveries.set(sessionId, delivery);
     Promise.resolve().then(() => ipcRenderer.invoke('session:send-prompt', { sessionId, text, clientSubmissionId, memoryIndex: true,
-      ...(submittedSkill ? { codeagentSkill: submittedSkill } : {}), ...(retry?.token ? { codeagentDiscardToken: retry.token } : {}) })).then((result) => {
+      ...(submittedSkill ? { codeagentSkill: submittedSkill } : {}) })).then((result) => {
       if (isCodeAgentKind(kind) && result?.stopped) {
         if (result.notSent) discardUnsentOptimisticCard();
-        else if (optimisticCard) {
-          optimisticCard.dataset.deliveryStatus = 'stopped';
-          const head = optimisticCard.querySelector?.('.turn-head');
-          if (head && !head.querySelector('.turn-stopped-chip')) {
-            const chip = document.createElement('span');
-            chip.className = 'turn-branch-chip turn-stopped-chip'; chip.textContent = '已停止';
-            head.append(chip);
-          }
-        }
+        else turnCardRenderer.markUserStopped(sessionId, optimisticCard);
         if (delivery) { delivery.dismissed = true; delivery.status = 'stopped'; }
         if (!wasRunning && session.runtimeTruth === optimisticRuntimeTruth && session.runtimeTruth?.state === RUNTIME_STARTING) session.runtimeTruth = previousRuntimeTruth;
-        if (result.notSent && !readContenteditablePlainText(inputBox) && !skillComposer.selectedSkill(inputBox)) {
+        if (result.notSent) {
           require('./composer-codeagent-input').restoreRecoveredPrompt(inputBox, { text, skill: submittedSkill }, { document, window, session, onChange: () => saveFloatingInputDraft(sessionId, inputBox) });
         }
         clearFloatingInputStuck(bar);
-        showToast('已停止，可取回提示词继续编辑', 'info');
+        if (result.notSent) showToast('已停止，未发送的内容已放回输入框', 'info');
         return;
       }
       if (isCodeAgentKind(kind) && result?.code === 'codeagent-input-residual') {
         discardUnsentOptimisticCard();
         if (delivery) delivery.dismissed = true;
         if (!wasRunning && session.runtimeTruth === optimisticRuntimeTruth && session.runtimeTruth?.state === RUNTIME_STARTING) session.runtimeTruth = previousRuntimeTruth;
-        if (!readContenteditablePlainText(inputBox) && !skillComposer.selectedSkill(inputBox)) {
-          if (bar._codeagentInputRecovery) require('./composer-codeagent-input').restoreRecoveredPrompt(inputBox, { text, skill: submittedSkill }, { document, window, session, onChange: () => saveFloatingInputDraft(sessionId, inputBox) });
-          else { replaceContenteditableText(inputBox, text); saveFloatingInputDraft(sessionId, inputBox); }
-        }
-        bar._codeagentInputRecovery?.show(result, async token => {
-          if (skillComposer.skillPrompt(inputBox, readContenteditablePlainText(inputBox), session) !== text) {
-            const cleared = await ipcRenderer.invoke('codeagent:input-clear', { sessionId, token });
-            showToast(cleared?.ok ? '终端残留已丢弃，草稿已变化，请重新发送' : cleared?.message || '终端输入未清空', 'warning');
-            return;
-          }
-          sendInput({ clientSubmissionId, token });
-        });
+        require('./composer-codeagent-input').restoreRecoveredPrompt(inputBox, { text, skill: submittedSkill }, { document, window, session, onChange: () => saveFloatingInputDraft(sessionId, inputBox) });
+        showToast('终端输入框未能清空，请到终端确认后再发送', 'warning');
         clearFloatingInputStuck(bar);
         return;
       }
       if (submittedSkill) {
         try { skillComposer.recordSkillUse(localStorage, skillAccount, submittedSkill, result); }
-        catch (error) { showToast('最近使用的技能保存失败：' + error.message, 'warning'); }
+        catch { console.warn('[codeagent-skills] recent-use save failed'); }
       }
       if (result?.notSent) discardUnsentOptimisticCard();
       if (nativeCommand) {
@@ -5628,13 +5610,14 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
         hasModifier,
         isBrowsing: historyCursor.isBrowsing(),
         isEmpty: !contenteditableHasText(inputBox),
-        caretAtStart: isCaretAtContenteditableStart(inputBox),
+        caretAtStart: editResendHistoryReady || isCaretAtContenteditableStart(inputBox),
       };
       const hit = historyApi.shouldRecallOlder(ctx)
         ? historyCursor.older(readContenteditablePlainText(inputBox))
         : (historyApi.shouldRecallNewer(ctx) ? historyCursor.newer() : null);
       // hit 为 null（已经翻到底）时什么都不做，让 ↑/↓ 保持原生行为，别把草稿吃掉。
       if (hit) {
+        editResendHistoryReady = false;
         e.preventDefault();
         applyHistoryText(hit.text);
         return;
@@ -5655,6 +5638,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   });
 
   inputBox.addEventListener('input', () => {
+    if (!applyingHistory) editResendHistoryReady = false;
     // 用户自己动手改了内容就退出浏览态：下一次 ↑ 从最新一条重新开始，
     // 而不是接着上次的下标往上翻（那样会跳过刚改出来的这条）。
     // 历史召回本身也是 execCommand，同样会触发 input —— 用 applyingHistory 挡掉，
@@ -5815,6 +5799,7 @@ function scheduleFloatingBarState() {
 }
 
 function updateFloatingBarState() {
+  window.codeagentQuotaBar?.render();
   sessionSplit?.sync();
   if (!activeSessionId) {
     syncTerminalRuntimeStatusTicker(null);
@@ -7634,10 +7619,23 @@ const accountUsageController = createAccountUsageController({
 const renderAccountUsage = accountUsageController.render;
 {
   const panelRoot = document.getElementById('account-quota-panel');
-  // 发行版一个 Claude / Codex / Gemini 都没开放（公司版只有 CodeAgent，2026-10-29 用户）就不建看板。
-  const quotaKinds = ['claude', 'codex', 'gemini'].filter(require('../core/distribution').kindAllowed);
-  if (panelRoot && quotaKinds.length) {
-    claudeQuotaPanel = require('./account-quota-panel.js').createAccountQuotaPanel({
+  // CodeAgent 也可创建看板；订阅额度段仍遵守发行版 quotaBar 开关。
+  const quotaPanelModule = require('./account-quota-panel.js');
+  const quotaPanelPolicy = quotaPanelModule.panelAvailability(require('../core/distribution'));
+  if (panelRoot && quotaPanelPolicy.enabled) {
+    if (quotaPanelPolicy.codeagent && !quotaPanelPolicy.providers.length) {
+      claudeQuotaPanel = require('./codeagent-quota-panel.js').createCodeAgentQuotaPanel({
+        document, root: panelRoot, ipcRenderer, storage: window.localStorage,
+        getCurrentAccountId: () => {
+          const session = activeSessionId ? sessions.get(activeSessionId) : null;
+          return String(session?.kind || '').replace(/-resume$/, '') === 'codeagent'
+            ? session.codeagentPoolAccount || 'personal' : '';
+        },
+        openAccounts: id => window.__codeagentAccountsOpen?.(id),
+      });
+      window.codeagentQuotaPanel = claudeQuotaPanel;
+    } else claudeQuotaPanel = quotaPanelModule.createAccountQuotaPanel({
+      providers: quotaPanelPolicy.providers,
       document, root: panelRoot, footerRoot: document.getElementById('rail-usage'), escapeHtml, storage: window.localStorage,
       getSnapshot: () => accountUsageController.getSnapshot(),
       // 当前会话是这家 AI 时高亮它的号；否则高亮这家新会话默认的号（快照里 selected）。
@@ -7656,20 +7654,25 @@ const renderAccountUsage = accountUsageController.render;
   }
 }
 // CodeAgent 额度条：每轮回答结束读屏幕 Stats 面板的 Credit（applyCodeAgentScreenContext），每个账号一行。
-const codeagentQuotaBar = require('./codeagent-quota-bar.js').createCodeAgentQuotaBar({ document, ipcRenderer, storage: window.localStorage, escapeHtml });
+const codeagentQuotaBar = require('./codeagent-quota-bar.js').createCodeAgentQuotaBar({ document, ipcRenderer, storage: window.localStorage, escapeHtml, getActiveSession: () => sessions.get(getFocusedSessionId()) });
 codeagentQuotaBar.render();
 window.codeagentQuotaBar = codeagentQuotaBar;
 // /model 菜单里读到的用量（Credit 三档 + 每个模型的 Token 用量，core/codeagent-usage-menu.js）：启动取一次，主进程记了新快照再取。
 function refreshCodeAgentUsage() {
   if (typeof ipcRenderer.invoke !== 'function') return;
   ipcRenderer.invoke('codeagent:usage').then(r => { if (r && r.accounts) {
-    codeagentQuotaBar.setUsage(r.accounts);
+    codeagentQuotaBar.setUsage(r.accounts, r.defaultModels);
     turnCardRenderer.refreshModelLoads();
     sessionSplit?.secondary()?.renderer.refreshModelLoads();
   } }).catch(() => {});
 }
 refreshCodeAgentUsage();
 ipcRenderer.on('codeagent-usage-changed', () => refreshCodeAgentUsage());
+ipcRenderer.on('codeagent-input-cleared', (_event, { sessionId, text }) => {
+  if (text) require('./floating-input-history').createFloatingInputHistory({ storage: window.localStorage }).push(sessionId, text);
+  for (const bar of document.querySelectorAll('.floating-input-bar')) if (bar.dataset.sessionId === sessionId) bar._codeagentInputHistoryChanged?.();
+  showToast(text ? '已清掉终端里未发送的内容，按 ↑ 可找回' : '已清掉终端里未发送的内容', 'info');
+});
 // 欢迎页只提供创建入口；项目数据按需由现有创建面板加载。
 homeWorkbench = createHomeWorkbench({
   document,
@@ -8189,6 +8192,7 @@ function ptyToolQuestionText(toolName, toolInput) {
 // renderer 里有 14 处调用 showToast，却一直没有定义（调用即 ReferenceError，
 // 之前只在少见的原生分支里，没人撞上）。复用群聊分叉已有的轻提示。
 function showToast(message, level) {
+  if (message === '已停止') return require('./composer-codeagent-input').showStopToast(document, message);
   require('./groupchat-fork-ui.js').showForkToast(document, String(message || ''), level === 'error' ? 'error' : 'info');
 }
 
@@ -9328,7 +9332,9 @@ ipcRenderer.on('session-created', async (_e, { session }) => {
       lastOutputPreview: existing.lastOutputPreview,
     });
   } else {
-    sessions.set(session.id, session);
+    sessions.set(session.id, { ...existing, ...session,
+      ...(existing ? { unreadCount: existing.unreadCount || 0, pinned: !!existing.pinned,
+        bottomed: !!existing.bottomed && !existing.pinned, lastOutputPreview: existing.lastOutputPreview } : {}) });
   }
   const createdRuntimeSession = sessions.get(session.id);
   if (createdRuntimeSession) {
@@ -9394,6 +9400,13 @@ ipcRenderer.on('session-created', async (_e, { session }) => {
       await selectSession(session.id, { forceScrollBottom: pendingResume?.forceScrollBottom === true });
     }
     scheduleSessionListRender();
+    return;
+  }
+  // Background creation/recovery only refreshes the sidebar. Explicit user resumes
+  // still mount the terminal, while other sessions retain their unread state.
+  if (!pendingResume && activeSessionId !== session.id && (session.openInBackground === true || !!existing)) {
+    scheduleSessionListRender();
+    schedulePersist();
     return;
   }
   // 普通会话的唤醒流程会直接把终端展示给用户，此刻才算真正“已读”。群聊成员

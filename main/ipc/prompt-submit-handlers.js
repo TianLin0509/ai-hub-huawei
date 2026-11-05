@@ -58,6 +58,8 @@ function registerPromptSubmitIpc(ipcMain, deps) {
     logger = console,
   } = deps;
 
+  const onInputCleared = payload => sendToRenderer('codeagent-input-cleared', payload);
+  sessionManager.on?.('codeagent-input-cleared', onInputCleared);
   let nativeDraftStore;
   for (const operation of ['read', 'save']) {
     ipcMain.handle('native-draft:' + operation, (_event, request = {}) => {
@@ -265,7 +267,7 @@ function registerPromptSubmitIpc(ipcMain, deps) {
     lastPromptBySid.set(sessionId, text);
     return enqueue(sessionId, async () => {
       if (require('../../core/ai-kinds').isCodeAgentKind(kind)) {
-        const input = await groupChatWatcher.codeAgentInputAction(sessionId, 'check', { discardToken: request.codeagentDiscardToken });
+        const input = await groupChatWatcher.codeAgentInputAction(sessionId, 'check');
         if (!input.ok) return input;
       }
       const native = sessionManager.getNativeCodex?.(sessionId);
@@ -361,7 +363,7 @@ function registerPromptSubmitIpc(ipcMain, deps) {
   const submitPrompt = async (event, request = {}) => {
     const session = sessionManager.getSession(request.sessionId);
     if (require('../../core/ai-kinds').isCodeAgentKind(session?.kind)) {
-      const input = await groupChatWatcher.codeAgentInputAction(request.sessionId, 'check', { discardToken: request.codeagentDiscardToken });
+      const input = await groupChatWatcher.codeAgentInputAction(request.sessionId, 'check');
       if (!input.ok) return input;
     }
     const native = session && (['codex-app-server', 'claude-stream-json', 'acp'].includes(session.runtimeBackend)
@@ -384,8 +386,7 @@ function registerPromptSubmitIpc(ipcMain, deps) {
     try {
       store = deps.commandTranscriptStore || require('../../core/command-transcript-store').commandTranscriptStore();
       const record = store.begin(request.sessionId, id, request.text);
-      if (record.duplicate && !(require('../../core/ai-kinds').isCodeAgentKind(session.kind)
-          && record.result?.code === 'codeagent-input-residual' && request.codeagentDiscardToken)) return record.result || { ok: false, sendStatus: 'stuck', message: '命令提交结果待确认，未重复执行' };
+      if (record.duplicate) return record.result || { ok: false, sendStatus: 'stuck', message: '命令提交结果待确认，未重复执行' };
     } catch (error) { return { ok: false, error: 'command-history-failed', message: '命令未发送：' + error.message }; }
     const notify = () => {
       try { sendToRenderer('session:command-updated', { sessionId: request.sessionId }); }
@@ -498,6 +499,7 @@ function registerPromptSubmitIpc(ipcMain, deps) {
     isAssistantSubmissionPending:sessionId=>assistantSubmissions.has(sessionId),
     dispose() {
       nativeDraftStore?.close();
+      sessionManager.removeListener?.('codeagent-input-cleared', onInputCleared);
       transcriptTap?.removeListener('prompt-submitted', onTranscriptPrompt);
       sessionManager.removeListener?.('agent-turn-started', onProviderPrompt);
       receipts.prune(() => false);

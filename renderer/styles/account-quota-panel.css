@@ -95,3 +95,114 @@ body.preview-immersive-active .account-quota-panel { display: none !important; }
 #rail-usage .cq-footer-summary { display: inline-flex; align-items: center; gap: 4px; width: auto; }
 #rail-usage .cq-footer-summary .cq-summary-text { font-size: 11px; color: var(--fg-muted); font-variant-numeric: tabular-nums; }
 #rail-usage .cq-footer-summary .cq-summary-text b { color: var(--status-success); font-weight: 600; }
+/* ============ 第二批样稿 · 号池额度右侧栏 + 「问一下」抽屉 · m5 · 2026-11-04 ============ */
+/* 只引用 --hw- 令牌（renderer/styles/hw-tokens.css）。实现时可整段拷进 renderer/styles/account-quota-panel.css / btw-ask-ui.css。 */
+/* 依赖定稿通用件：.icon-btn .btn .btn-sm .btn-ghost .btn-sec .btn-pri .tag .thinking .dots，以及 @keyframes blink/slide。 */
+
+/* ---------- ① 号池额度右侧栏：#account-quota-panel.qp ---------- */
+/* 宽屏常驻 256px 白色浮岛；窄屏（<1360）默认收成 48px 细栏，展开时浮在会话上，不挤会话区。 */
+.qp{width:256px;flex:none;margin:10px 12px 12px 12px;background:var(--hw-surface);border-radius:var(--hw-r-md);box-shadow:var(--hw-e1);display:flex;flex-direction:column;min-height:0;font-size:var(--hw-fs-13);color:var(--hw-text-1);position:relative}
+/* 真实页面用 hidden 属性开关（index.html 的 #account-quota-panel 默认 hidden），display:flex 会盖过它，必须显式写回 */
+.qp[hidden],.qp-ph[hidden]{display:none}
+.qp-h{display:flex;align-items:center;gap:2px;padding:12px 8px 4px 16px;min-height:48px}
+.qp-h h3{font-size:var(--hw-fs-14);font-weight:600;white-space:nowrap}
+.qp-h .qp-n{font-size:var(--hw-fs-12);color:var(--hw-text-3);white-space:nowrap;margin-left:8px}
+.qp-h .qp-n b{font-family:var(--hw-font-num);font-weight:600;color:var(--hw-green)}
+.qp-h .sp{flex:1}
+.qp-h .icon-btn svg{width:16px;height:16px}
+.qp-h .icon-btn[disabled]{opacity:.4;pointer-events:none}
+.qp.is-refreshing .qp-refresh svg{animation:qp-spin 1s linear infinite}
+@keyframes qp-spin{to{transform:rotate(360deg)}}
+/* 刷新结果一行（读完 4 秒后淡出） */
+.qp-note{margin:0 12px 6px;font-size:var(--hw-fs-12);color:var(--hw-text-2);display:flex;gap:6px;align-items:center}
+.qp-note .d{width:6px;height:6px;border-radius:50%;background:var(--hw-brand);flex:none}
+/* 闲时折扣倒计时：CodeAgent 全局时段，所有号一样，只放一处 */
+.qp-idle{margin:2px 12px 6px;display:flex;align-items:center;gap:8px;height:30px;padding:0 10px;border-radius:var(--hw-r-sm);background:var(--hw-surface-2);font-size:var(--hw-fs-12);color:var(--hw-text-2);white-space:nowrap}
+.qp-idle svg{width:14px;height:14px;flex:none;color:var(--hw-text-3)}
+.qp-idle b{font-family:var(--hw-font-num);font-weight:600;color:var(--hw-text-1);font-variant-numeric:tabular-nums}
+.qp-idle.on{background:var(--hw-green-soft);color:var(--hw-green)}
+.qp-idle.on svg{color:var(--hw-green)}
+/* 列头 */
+.qp-cols{display:grid;grid-template-columns:minmax(0,1fr) 54px 54px;column-gap:6px;padding:4px 18px 2px 16px;font-size:var(--hw-fs-12);color:var(--hw-text-3)}
+.qp-cols span{text-align:center;white-space:nowrap}
+.qp-list{flex:1;min-height:0;overflow:auto;padding:0 6px 6px}
+.qp-g{padding:10px 10px 4px;font-size:var(--hw-fs-12);color:var(--hw-text-3);display:flex;gap:6px;white-space:nowrap}
+/* 每个号一行：头像 · 名字 · 两枚胶囊；第二行灰字写这个号自己的情况 */
+.qp-row{position:relative;display:grid;grid-template-columns:24px minmax(0,1fr) 54px 54px;column-gap:6px;row-gap:2px;align-items:center;padding:7px 6px 7px 8px;border-radius:var(--hw-r-item);cursor:pointer;transition:background var(--hw-t-fast)}
+.qp-row:hover{background:var(--hw-surface-2)}
+.qp-row:focus-visible{outline:2px solid var(--hw-brand);outline-offset:-2px}
+.qp-av{grid-row:1/3;align-self:start;margin-top:1px;width:24px;height:24px;border-radius:var(--hw-r-xs);display:grid;place-items:center;color:var(--hw-text-on);font-size:var(--hw-fs-12);font-weight:600;background:var(--av, var(--hw-brand))}
+.qp-name{font-size:var(--hw-fs-13);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:22px}
+.qp-sub{grid-column:2/-1;display:flex;align-items:center;gap:6px;font-size:var(--hw-fs-12);line-height:18px;color:var(--hw-text-3);white-space:nowrap;min-width:0}
+.qp-sub>span:first-child{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.qp-sub .qp-at{margin-left:auto;font-family:var(--hw-font-num);font-variant-numeric:tabular-nums;flex:none}
+.qp-sub .warn{color:var(--hw-amber)}
+.qp-sub .cur{color:var(--hw-brand)}
+/* 胶囊：底色槽 + 按剩余比例铺浅色，数字写在上面 */
+.qp-cap{position:relative;height:22px;border-radius:var(--hw-r-pill);background:var(--hw-surface-2);box-shadow:inset 0 0 0 1px var(--hw-line);overflow:hidden;display:grid;place-items:center;font-family:var(--hw-font-num);font-size:var(--hw-fs-12);font-weight:600;color:var(--hw-brand);font-variant-numeric:tabular-nums;white-space:nowrap}
+.qp-cap::before{content:"";position:absolute;left:0;top:0;bottom:0;width:calc(var(--v, 0) * 1%);background:var(--hw-brand-soft)}
+.qp-cap>span{position:relative}
+.qp-cap.low{color:var(--hw-amber)}
+.qp-cap.low::before{background:var(--hw-amber-soft)}
+.qp-cap.out{color:var(--hw-text-3);font-weight:500;font-family:var(--hw-font)}
+.qp-cap.out::before{display:none}
+/* 没读数：只写字，不画空槽 */
+.qp-none{grid-column:3/5;font-size:var(--hw-fs-12);color:var(--hw-text-3);text-align:center;white-space:nowrap}
+.qp-cap.none{background:none;box-shadow:none;color:var(--hw-text-3);font-weight:400;font-family:var(--hw-font)}
+.qp-cap.none::before{display:none}
+/* 当前会话用的号：左侧一道蓝 */
+.qp-row.is-current::before{content:"";position:absolute;left:1px;top:11px;bottom:11px;width:3px;border-radius:2px;background:var(--hw-brand)}
+/* 暂停、需登录：整行变淡，原因保持橙色可读 */
+.qp-row.dim .qp-av,.qp-row.dim .qp-name,.qp-row.dim .qp-cap,.qp-row.dim .qp-none{opacity:.5}
+/* 读取中：数字变淡，第二行写「读取中」 */
+.qp-row.is-loading .qp-cap{opacity:.45}
+.qp-row.is-loading .qp-sub{color:var(--hw-text-2)}
+.qp-f{display:flex;align-items:center;gap:6px;padding:8px 10px 10px 8px;border-top:1px solid var(--hw-line)}
+.qp-f .btn svg{width:15px;height:15px}
+.qp-f small{margin-left:auto;font-size:var(--hw-fs-12);color:var(--hw-text-3);white-space:nowrap}
+
+/* 收起：48px 细栏，每个号一个圆环（今日忙时剩余），悬停出详情 */
+.qp.is-collapsed{width:48px;align-items:center;padding:8px 0 10px}
+.qp.is-collapsed>:not(.qp-rail){display:none}
+.qp-rail{display:none;flex-direction:column;align-items:center;gap:10px;height:100%;width:100%}
+.qp.is-collapsed .qp-rail{display:flex}
+.qp-rail .icon-btn svg{width:16px;height:16px}
+.qp-rail-sum{font-family:var(--hw-font-num);font-size:var(--hw-fs-12);color:var(--hw-text-3);line-height:1.2;text-align:center}
+.qp-rail-sum b{display:block;font-size:var(--hw-fs-14);color:var(--hw-green);font-weight:600}
+.qp-rail-line{width:20px;height:1px;background:var(--hw-line)}
+.qp-ring{position:relative;width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:conic-gradient(var(--c, var(--hw-brand)) calc(var(--v, 0) * 1%), var(--hw-surface-3) 0)}
+.qp-ring .qp-av{grid-row:auto;align-self:center;width:26px;height:26px;margin:0;border-radius:50%;box-shadow:0 0 0 2px var(--hw-surface)}
+.qp-ring.low{--c:var(--hw-amber)}
+.qp-ring.off{background:var(--hw-surface-3)}
+.qp-ring.off .qp-av{opacity:.5}
+.qp-ring.none{background:none}
+.qp-ring.is-current::after{content:"";position:absolute;right:-1px;bottom:-1px;width:9px;height:9px;border-radius:50%;background:var(--hw-brand);box-shadow:0 0 0 2px var(--hw-surface)}
+.qp-rail .sp{flex:1}
+/* 窄屏展开：浮在会话右侧，点外面或 » 收回 */
+.qp-ph{width:48px;flex:none;margin:10px 12px 12px 12px}
+.qp.is-overlay{position:absolute;right:0;top:10px;bottom:12px;margin:0 12px 0 0;z-index:40;box-shadow:var(--hw-e3)}
+/* 悬停提示（细栏用） */
+.qp-tip{position:absolute;right:56px;z-index:41;width:220px;padding:10px 12px;border-radius:var(--hw-r-sm);background:var(--hw-surface);box-shadow:var(--hw-e3);font-size:var(--hw-fs-12);color:var(--hw-text-2);line-height:1.6}
+.qp-tip b{display:block;font-size:var(--hw-fs-13);color:var(--hw-text-1)}
+.qp-tip span{font-family:var(--hw-font-num);color:var(--hw-text-1);font-weight:600}
+
+/* Scope the sample's common controls to CodeAgent; keep subscription rows intact. */
+.account-quota-panel.qp{flex:0 0 256px;height:auto;border:0;font-family:var(--hw-font);line-height:var(--hw-lh);overflow:hidden}
+.account-quota-panel.qp.is-collapsed{flex:0 0 48px;width:48px}
+/* Conversation cards have layers through 110; float above them and below pages (880). */
+.account-quota-panel.qp.is-overlay{z-index:800}
+.qp *,.qp-ph,.qp-tip{box-sizing:border-box}
+.qp-h h3{margin:0}
+.qp .icon-btn{width:30px;height:30px;flex:none;padding:0;border-radius:50%;display:grid;place-items:center;color:var(--hw-text-2)}
+.qp .icon-btn:hover{background:var(--hw-surface-3);color:var(--hw-text-1)}
+.qp .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:30px;padding:0 13px;border-radius:var(--hw-r-pill);font-size:var(--hw-fs-13);font-weight:500;white-space:nowrap}
+.qp .btn-ghost{color:var(--hw-brand);padding:0 10px}
+.qp .btn-ghost:hover{background:var(--hw-brand-soft)}
+.qp .qp-ring{padding:0;flex:none;background:conic-gradient(var(--c,var(--hw-brand)) calc(var(--v,0) * 1%),var(--hw-surface-3) 0)}
+.qp .qp-ring.off{background:var(--hw-surface-3)}
+.qp .qp-ring.none{background:none}
+.qp button:focus-visible{outline-color:var(--hw-brand)}
+.qp-rail{overflow-y:auto;scrollbar-width:none}
+.qp-empty{padding:10px;color:var(--hw-text-3);font-size:var(--hw-fs-12)}
+.qp-tip{font-family:var(--hw-font);pointer-events:none;z-index:810}
+body.session-immersive-active .qp-ph,body.preview-immersive-active .qp-ph{display:none!important}

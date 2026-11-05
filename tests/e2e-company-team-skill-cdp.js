@@ -91,9 +91,13 @@ async function run() {
     check('pool launch still preserves the edited account', fs.readFileSync(file(edited)).equals(editedBefore));
     check('personal custom content remains unchanged', fs.readFileSync(file(personal)).equals(personalCustom));
     if (process.platform === 'win32') {
-      const script = `$rows=Get-CimInstance Win32_Process; $ids=[System.Collections.Generic.HashSet[int]]::new(); [void]$ids.Add(${Number(hub.pid)}); do { $added=$false; foreach($row in $rows){if($ids.Contains([int]$row.ParentProcessId)-and $ids.Add([int]$row.ProcessId)){$added=$true}} } while($added); $visible=@(foreach($processId in $ids){Get-Process -Id $processId -ErrorAction SilentlyContinue | Where-Object {$_.MainWindowHandle -ne 0} | Select-Object -ExpandProperty Id}); [pscustomobject]@{ownProcessCount=$ids.Count;visibleCount=$visible.Count}|ConvertTo-Json -Compress`;
-      evidence.windows = JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-Command', script], { windowsHide: true, encoding: 'utf8', timeout: 15000 }));
-      check('own process tree has no visible windows', evidence.windows.visibleCount === 0);
+      // A MainWindowHandle may belong to the private test desktop. Use the
+      // shared audit to inspect Default and the input desktop explicitly.
+      evidence.windows = JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+        '-File', path.join(__dirname, 'helpers', 'reskin-window-audit.ps1'), '-RootProcessId', String(hub.pid)],
+      { windowsHide: true, encoding: 'utf8', timeout: 30000 }));
+      check('own process tree has no visible windows on the user desktop', evidence.windows.supported === true
+        && evidence.windows.monitoredDesktops.includes('Default') && evidence.windows.visible.length === 0);
     }
     evidence.ok = true;
   } catch (error) { evidence.ok = false; evidence.error = error.stack; evidence.logTail = error.logTail; process.exitCode = 1; }

@@ -143,14 +143,29 @@ function poolDirMatch(dataDir, dir, { fsModule = fs } = {}) {
   return dirsOverlap(dir, poolRoot(dataDir), { fsModule }) ? { id: null } : null;
 }
 
-// 一个配置目录能用的模型：优先用「一键获取模型权限」从它自己的 /model 菜单读到的（core/codeagent-model-probe.js），
-// 没获取过时退回配置文件里的账号清单。
+// 可进入真实菜单验证的名单：账号配置、权限探测和该账号完整菜单的并集。
+// 更新的完整快照优先排列；默认模型、账号状态和路由选择规则仍由原调用方判断。
 function accountModels(dir, fsModule = fs, probedFile = null) {
   const probe = require('./codeagent-model-probe');
   const probed = probe.readProbed(probedFile || path.join(dir, probe.MODELS_FILE));
-  if (probed) return { models: probed.models, defaultModel: probed.defaultModel, authoritative: true, probedAt: probed.at, probedSource: probed.source };
-  const configured = require('./codeagent-models').configuredModels(dir, fsModule);
-  return { ...configured, probedAt: null };
+  const models = require('./codeagent-models');
+  const configured = models.configuredModels(dir, fsModule);
+  // Derive identity only from Hub-owned canonical paths, never from a label.
+  let dataDir = null, key = '';
+  if (probedFile && path.basename(probedFile) === 'personal-models.json' && path.basename(path.dirname(probedFile)) === POOL_DIR) {
+    dataDir = path.dirname(path.dirname(probedFile)); key = 'personal';
+  } else if (path.basename(path.dirname(dir)) === 'accounts' && path.basename(path.dirname(path.dirname(dir))) === POOL_DIR) {
+    dataDir = path.dirname(path.dirname(path.dirname(dir))); key = path.basename(dir);
+  }
+  const menu = dataDir ? models.readMenuEntry(dataDir, key) : null;
+  const menuNewer = menu && (!probed || menu.seenAt >= (Date.parse(probed.at) || 0));
+  const lists = menuNewer ? [menu.models, probed?.models || [], configured.models] : [probed?.models || [], menu?.models || [], configured.models];
+  const union = [];
+  for (const id of lists.flat()) if (!union.some(value => value.toLowerCase() === id.toLowerCase())) union.push(id);
+  return { ...configured, models: union, defaultModel: probed ? probed.defaultModel : configured.defaultModel,
+    authoritative: !!(configured.authoritative || probed || menu?.models.length),
+    probedAt: menuNewer ? new Date(menu.seenAt).toISOString() : probed?.at || null,
+    probedSource: menuNewer ? 'menu' : probed?.source };
 }
 function personalModelsFile(dataDir) { return path.join(poolRoot(dataDir), 'personal-models.json'); }
 function probeCwd(dataDir) { return path.join(poolRoot(dataDir), 'probe-cwd'); }

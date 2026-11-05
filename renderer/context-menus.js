@@ -295,6 +295,7 @@ function createSessionContextMenuController({
                 showNotice(reasons[result?.reason] || result?.message || '删除会议室成员失败，请稍后重试。');
                 return;
               }
+              require('./card-edit-resend').clearStoppedTurns(window.localStorage, sid);
               sessions.delete(sid);
               if (getActiveSessionId() === sid) setActiveSessionId(null);
               renderSessionList();
@@ -310,6 +311,7 @@ function createSessionContextMenuController({
               showNotice(result?.message || '永久删除失败，请稍后重试。');
               return;
             }
+            require('./card-edit-resend').clearStoppedTurns(window.localStorage, sid);
             sessions.delete(sid);
             if (getActiveSessionId() === sid) setActiveSessionId(null);
             renderSessionList();
@@ -318,7 +320,7 @@ function createSessionContextMenuController({
             const result = await ipcRenderer.invoke('delete-session', sid);
             if (!result || !result.ok) {
               showNotice((result && result.message) || '永久删除失败，请稍后重试。');
-            }
+            } else require('./card-edit-resend').clearStoppedTurns(window.localStorage, sid);
           }
         }
       });

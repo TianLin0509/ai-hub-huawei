@@ -202,7 +202,8 @@ function claudeTranscriptTurns(records) {
     if (head.assistant) cards.push(mergeContinuations(head.assistant, continuations));
     else for (const { assistant } of continuations) if (assistant) cards.push(assistant);
   }
-  return cards.map(require('./turn-speed-metrics').withTurnSpeed);
+  return require('./codeagent-command-records').appendCommandRecords(
+    cards.map(require('./turn-speed-metrics').withTurnSpeed), records.codeagentCommands || []);
 }
 
 function claudeDisplayMessages(record) {

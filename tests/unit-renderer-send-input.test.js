@@ -43,13 +43,15 @@ function functionSource(code, name, indent = '') {
   return match[0];
 }
 
-function sendFixture({ code = source, kind = 'codeagent', text = '普通消息', paneOptimistic = true, purpose, skill = null, splitPane = false, result = { ok: true }, account = '', recovery = false } = {}) {
+function sendFixture({ code = source, kind = 'codeagent', text = '普通消息', paneOptimistic = true, purpose, skill = null, splitPane = false, result = { ok: true }, account = '', recovery = false, commands = [] } = {}) {
   const sessionId = 'test-session';
   const session = { id: sessionId, kind, agentRuntime: 'pty', status: 'idle', createdAt: 1000, codeagentPoolAccount: account, ...(purpose ? { purpose } : {}) };
   const saved = new Map(), storage = { getItem: key => saved.get(key), setItem: (key, value) => saved.set(key, value), removeItem: key => saved.delete(key) };
   const calls = { ipc: [], cards: [], waiting: [], bursts: [], working: [], observations: [], toasts: [], warnings: [], views: [], recoveries: [] };
   const inputBox = { text, skill, focus() {}, querySelector: () => inputBox.skill ? { dataset: { codeagentSkill: inputBox.skill.name, installedAt: String(inputBox.skill.installedAt || 0) } } : null };
   const bar = { dataset: { sessionId } };
+  bar._codeagentSkills = { open: () => calls.views.push('hub-skills'), isCommand: text => require('../renderer/composer-codeagent-skills').commandName(text, commands) };
+  bar.querySelector = () => ({ model: true });
   if (recovery) bar._codeagentInputRecovery = { show: (value, retry) => calls.recoveries.push({ value, retry }), submitted() {} };
   const mount = (cardText, cardKind, receipt, route) => {
     const card = { dataset: { optimistic: 'true', sessionId }, remove() { this.removed = true; } };
@@ -57,9 +59,11 @@ function sendFixture({ code = source, kind = 'codeagent', text = '普通消息',
     return card;
   };
   const context = vm.createContext({
-    require: name => recovery && name === './composer-codeagent-input' ? { ...rendererRequire(name), restoreRecoveredPrompt: (box, value, options) => { box.text = value.text; box.skill = value.skill; options.onChange(); } } : rendererRequire(name),
+    require: name => recovery && name === './composer-codeagent-input' ? { ...rendererRequire(name), restoreRecoveredPrompt: (box, value, options) => { box.text = box.text + (box.text ? '\n\n' : '') + value.text; box.skill ||= value.skill; options.onChange(); } } : rendererRequire(name),
     localStorage: storage,
-    document: { querySelectorAll: () => recovery ? [bar] : [] }, window: {}, updateFloatingPromptReceipt() {}, reportFloatingSendFailure() {},
+    turnCardRenderer: { markUserStopped: (_sid, card) => { if (card) card.dataset.stopped = 'true'; }, latestUserCard: () => null },
+    document: { querySelectorAll: () => [bar] }, window: {}, updateFloatingPromptReceipt() {}, reportFloatingSendFailure() {},
+    modelUi: { showModelPicker: () => calls.views.push('hub-model') },
     sessionId, sessions: new Map([[sessionId, session]]), inputBox, inputHistory: null,
     terminal: { scrollToBottom() {}, focus() {} }, bar, currentView: 'card',
     pane: { isCard: () => true, ...(splitPane ? { openTerminal: () => calls.views.push('split-pty') } : {}), ...(paneOptimistic ? { optimistic: (text, kind, receipt) => mount(text, kind, receipt, 'pane') } : {}) },
@@ -179,25 +183,33 @@ test('real sendInput warns for a late-installed tag and still submits it', async
   assert.equal(fixture.calls.toasts[0].text, '这个技能在本会话启动后才安装，若未生效请新开会话');
 });
 
-for (const splitPane of [false, true]) test(`real /skills send switches the ${splitPane ? 'split' : 'primary'} pane to terminal before dispatch, with no card`, async () => {
+for (const splitPane of [false, true]) test(`real /skills opens Hub skills in the ${splitPane ? 'split' : 'primary'} pane without submitting to CLI`, async () => {
   const fixture = sendFixture({ text: '/skills', splitPane });
   fixture.sendInput(); await new Promise(setImmediate);
-  assert.deepEqual(fixture.calls.views, [splitPane ? 'split-pty' : 'pty']);
-  assert.equal(fixture.calls.ipc[0].payload.text, '/skills');
-  assert.equal(fixture.calls.ipc[0].payload.waitForCliReady, true);
+  assert.deepEqual(fixture.calls.views, ['hub-skills']);
+  assert.equal(fixture.calls.ipc.length, 0);
   assert.equal(fixture.calls.cards.length, 0);
   assert.equal(fixture.calls.observations.length, 0);
   assert.equal(fixture.inputBox.text, '');
-  assert.match(fixture.calls.toasts[0].text, /Add from AgentCenter/);
+  assert.equal(fixture.calls.toasts.length, 0);
 });
 
-test('real /skills send while running keeps the draft and never writes to PTY', async () => {
+test('real /skills can open Hub inventory during an answer without writing to PTY', async () => {
   const fixture = sendFixture({ text: '/skills' }); fixture.session.status = 'running';
   runtime.applySessionRuntimeObservation(fixture.session, { state: runtime.RUNTIME_RUNNING, source: 'hook', confidence: runtime.CONFIDENCE_AUTHORITATIVE });
   fixture.sendInput(); await new Promise(setImmediate);
-  assert.equal(fixture.calls.ipc.length, 0); assert.equal(fixture.calls.views.length, 0);
-  assert.equal(fixture.inputBox.text, '/skills');
-  assert.match(fixture.calls.toasts[0].text, /等当前回答结束/);
+  assert.equal(fixture.calls.ipc.length, 0); assert.deepEqual(fixture.calls.views, ['hub-skills']);
+  assert.equal(fixture.inputBox.text, ''); assert.equal(fixture.calls.toasts.length, 0);
+});
+
+test('recent skill storage failure only warns and never logs the prompt or error body', async () => {
+  const f = sendFixture({ text: '/test-skill private-prompt', skill: { name: 'test-skill' } });
+  f.storage.setItem = () => { throw new Error('private-error-body'); };
+  f.sendInput(); await new Promise(setImmediate);
+  assert.equal(f.calls.ipc.length, 1);
+  assert.deepEqual(f.calls.toasts, []);
+  assert.deepEqual(f.calls.warnings, [['[codeagent-skills] recent-use save failed']]);
+  assert.doesNotMatch(JSON.stringify(f.calls.warnings), /private-prompt|private-error-body/);
 });
 
 test('real tagged sends record recent skills only after success, isolated to the submitted account', async () => {
@@ -222,46 +234,37 @@ for (const result of [{ ok: false, notSent: true }, { ok: true, sendStatus: 'stu
   });
 }
 
-test('real terminal fallback uses the explicit interactive option; builtin entry invokes only the prefix IPC', async () => {
+test('real cached commands use the explicit interactive option and model maps to Hub', async () => {
   const fixture = sendFixture();
   await vm.runInContext("openCodeAgentSkillsMenu(sessionId, pane, '/unknown')", fixture.context);
   assert.equal(fixture.calls.ipc[0].payload.text, '/unknown');
   assert.equal(fixture.calls.ipc[0].payload.codeagentInteractiveCommand, true);
   fixture.calls.ipc.length = 0;
-  await vm.runInContext("openCodeAgentSkillsMenu(sessionId, pane, '/')", fixture.context);
-  assert.equal(fixture.calls.ipc[0].channel, 'codeagent:commands-open');
-  assert.equal(fixture.calls.ipc[0].payload.text, undefined);
+  await vm.runInContext("openCodeAgentSkillsMenu(sessionId, pane, '/model')", fixture.context);
+  assert.equal(fixture.calls.ipc.length, 0); assert.equal(fixture.calls.views.at(-1), 'hub-model');
   assert.equal(fixture.calls.cards.length, 0);
+  const cached = sendFixture({ text: '/assist argument', commands: [{ name: 'help', aliases: ['assist'] }] });
+  cached.sendInput(); await new Promise(setImmediate);
+  assert.equal(cached.calls.ipc[0].payload.text, '/assist argument'); assert.equal(cached.calls.ipc[0].payload.codeagentInteractiveCommand, true);
+  assert.equal(cached.calls.cards.length, 0);
 });
 
-for (const skill of [null, { name: 'test-skill', installedAt: 1 }]) test(`residual interception restores the draft and retries the actual sendInput with the same id (${skill ? 'tagged' : 'ordinary'})`, async () => {
-  let attempt = 0;
+for (const skill of [null, { name: 'test-skill', installedAt: 1 }]) test(`failed auto-clear restores a draft without a retry route (${skill ? 'tagged' : 'ordinary'})`, async () => {
   const text = skill ? '/test-skill new requirement' : 'new requirement';
-  const f = sendFixture({ text, skill, recovery: true, result: () => ++attempt === 1 ? { ok: false, notSent: true, code: 'codeagent-input-residual', input: { token: 'residual', text: 'old requirement' } } : { ok: true, enterAttempts: 1 } });
+  const f = sendFixture({ text, skill, recovery: true, result: { ok: false, notSent: true, code: 'codeagent-input-residual' } });
   f.sendInput(); await new Promise(setImmediate);
   assert.equal(f.calls.ipc.length, 1); assert.equal(f.inputBox.text, text);
   assert.equal(f.inputBox.skill?.name, skill?.name);
-  assert.equal(f.calls.cards[0].card.removed, true); assert.equal(f.calls.recoveries.length, 1);
+  assert.equal(f.calls.cards[0].card.removed, true); assert.equal(f.calls.recoveries.length, 0);
   assert.notEqual(runtime.getSessionRuntimeTruth(f.session).state, runtime.RUNTIME_STARTING);
-  await f.calls.recoveries[0].retry('residual'); await new Promise(setImmediate);
-  assert.equal(f.calls.ipc.length, 2);
-  assert.equal(f.calls.ipc[1].payload.clientSubmissionId, f.calls.ipc[0].payload.clientSubmissionId);
-  assert.equal(f.calls.ipc[1].payload.codeagentDiscardToken, 'residual'); assert.equal(f.calls.ipc[1].payload.text, text);
-  assert.equal(f.calls.ipc[1].payload.codeagentInteractiveCommand, undefined);
-  assert.equal(f.inputBox.text, ''); assert.equal(f.calls.cards.length, 2);
-  assert.equal(f.calls.cards[1].receipt.clientSubmissionId, f.calls.ipc[0].payload.clientSubmissionId);
+  assert.equal(f.calls.ipc[0].payload.codeagentDiscardToken, undefined);
 });
 
-test('residual on an interactive command keeps the command once and uses the same interactive submit when discarded', async () => {
-  let attempt = 0;
-  const f = sendFixture({ text: '/skills', recovery: true, result: () => ++attempt === 1 ? { ok: false, notSent: true, code: 'codeagent-input-residual', input: { token: 'residual', text: 'old' } } : { ok: true, mode: 'interactive-command', enterAttempts: 1 } });
+test('failed auto-clear on an interactive command keeps the composer and submits only once', async () => {
+  const f = sendFixture({ text: '/help', commands: [{ name: 'help' }], recovery: true, result: { ok: false, notSent: true, code: 'codeagent-input-residual' } });
   f.sendInput(); await new Promise(setImmediate);
-  assert.equal(f.inputBox.text, '/skills'); assert.equal(f.calls.cards.length, 0); assert.equal(f.calls.recoveries.length, 1);
-  await f.calls.recoveries[0].retry('residual');
-  assert.equal(f.calls.ipc.length, 2);
-  assert.equal(f.calls.ipc[1].payload.clientSubmissionId, f.calls.ipc[0].payload.clientSubmissionId);
-  assert.equal(f.calls.ipc[1].payload.codeagentInteractiveCommand, true);
-  assert.equal(f.calls.ipc[1].payload.codeagentDiscardToken, 'residual');
+  assert.equal(f.inputBox.text, '/help'); assert.equal(f.calls.cards.length, 0); assert.equal(f.calls.recoveries.length, 0);
+  assert.equal(f.calls.ipc.length, 1); assert.equal(f.calls.ipc[0].payload.codeagentInteractiveCommand, true);
 });
 
 test('the real stop click rechecks running state and routes CodeAgent to the shared main action', async () => {
@@ -271,6 +274,7 @@ test('the real stop click rechecks running state and routes CodeAgent to the sha
   const body = source.slice(at + marker.length, end);
   const current = { kind: 'codeagent', agentRuntime: 'pty', status: 'idle' }, calls = [], toasts = [];
   const context = vm.createContext({ sessionId: 'test', sessions: new Map([['test', current]]),
+    turnCardRenderer: { latestUserCard: () => null, markUserStopped() {} },
     stopBtn: { dataset: {} }, bar: { _codeagentInputRecovery: { stop: async () => calls.push('shared-stop') } },
     getSessionRuntimeTruth: runtime.getSessionRuntimeTruth, RUNTIME_RUNNING: runtime.RUNTIME_RUNNING, isCodeAgentKind: aiKinds.isCodeAgentKind,
     showToast: text => toasts.push(text), ipcRenderer: { send: (...args) => calls.push(args) },
@@ -307,6 +311,7 @@ for (const unavailable of [false, true]) test(`late-arriving CodeAgent info lazi
   const ensure = functionSource(source, 'ensureCodeAgentInputRecovery', '  ');
   const sessions = new Map(), calls = [], notices = [], bar = {};
   const context = vm.createContext({ sessionId: 'test', sessions, bar, recoveryHost: {}, document: {}, window: {},
+    turnCardRenderer: { latestUserCard: () => null, markUserStopped() {} },
     stopBtn: { dataset: {} }, RUNTIME_RUNNING: runtime.RUNTIME_RUNNING, isCodeAgentKind: aiKinds.isCodeAgentKind,
     getSessionRuntimeTruth: runtime.getSessionRuntimeTruth, showToast: text => notices.push(text),
     ipcRenderer: { invoke: async (...args) => { calls.push(args); return { ok: true }; } },
@@ -331,7 +336,105 @@ for (const notSent of [false, true]) test(`real sendInput treats stopped as stop
   assert.equal(f.context.floatingPromptDeliveries.get('test-session').status, 'stopped');
   assert.equal(f.calls.cards[0].card.removed === true, notSent);
   assert.equal(f.inputBox.text, notSent ? '/test-skill body' : '');
-  assert.ok(f.calls.toasts.some(toast => /已停止/.test(toast.text)));
+  if (notSent) assert.ok(f.calls.toasts.some(toast => /已停止/.test(toast.text)));
+  else assert.equal(f.calls.toasts.length, 0, 'the Stop controller owns the optional restore toast');
+});
+
+test('an unsent Stop restores after a newly typed draft instead of overwriting it', async () => {
+  let finish;
+  const f = sendFixture({ text: '/test-skill old body', skill: { name: 'test-skill' }, recovery: true,
+    result: () => new Promise(resolve => { finish = resolve; }) });
+  f.sendInput(); await new Promise(setImmediate);
+  f.inputBox.text = 'new draft';
+  finish({ ok: true, stopped: true, notSent: true, sendStatus: 'stopped' }); await new Promise(setImmediate);
+  assert.equal(f.inputBox.text, 'new draft\n\n/test-skill old body');
+  assert.equal(f.calls.cards[0].card.removed, true); assert.equal(f.calls.ipc.length, 1);
+});
+
+test('actual residual-cleared IPC saves readable text in the same ArrowUp history and invalidates mounted cursors', () => {
+  const start = source.indexOf("ipcRenderer.on('codeagent-input-cleared',");
+  const end = source.indexOf('\n});', start) + 4;
+  const saved = new Map(), storage = { getItem: key => saved.get(key), setItem: (key, value) => saved.set(key, value) };
+  let callback, invalidated = 0; const toasts = [];
+  vm.runInNewContext(source.slice(start, end), {
+    require: rendererRequire, window: { localStorage: storage }, showToast: text => toasts.push(text),
+    ipcRenderer: { on: (_event, cb) => { callback = cb; } },
+    document: { querySelectorAll: () => [{ dataset: { sessionId: 'test' }, _codeagentInputHistoryChanged: () => { invalidated += 1; } }] },
+  });
+  const history = require('../renderer/floating-input-history').createFloatingInputHistory({ storage });
+  history.push('test', 'latest Hub send');
+  callback(null, { sessionId: 'test', text: 'terminal draft' });
+  assert.equal(history.createCursor('test').older('').text, 'terminal draft'); assert.equal(invalidated, 1);
+  assert.equal(toasts[0], '已清掉终端里未发送的内容，按 ↑ 可找回');
+  callback(null, { sessionId: 'test', text: '' });
+  assert.deepEqual(history.list('test'), ['terminal draft', 'latest Hub send']);
+  assert.equal(toasts[1], '已清掉终端里未发送的内容');
+});
+
+function editClickFixture({ draft = '', kind = 'claude', cardSid = 'test', activeSid = 'test', group = false } = {}) {
+  const marker = "  if (action === 'edit-resend') {", start = source.indexOf(marker);
+  const ending = /\r?\n    return;\r?\n  }\r?\n}\);/.exec(source.slice(start));
+  const end = ending ? start + ending.index : -1;
+  assert.ok(start >= 0 && end > start);
+  const values = new Map(), notices = [], saved = [], events = [], storage = {
+    getItem: key => values.get(key), setItem: (key, value) => values.set(key, value),
+  };
+  const history = require('../renderer/floating-input-history').createFloatingInputHistory({ storage }), cursor = history.createCursor(cardSid);
+  const input = { text: draft, isConnected: true, querySelector: () => null, focus() { this.focused = true; },
+    dispatchEvent: event => events.push(event.type), closest: () => ({ _codeagentInputHistoryChanged: () => cursor.invalidate() }) };
+  const card = { closest: selector => selector === '[data-group-member]' && group ? { dataset: { groupMember: cardSid } }
+    : selector === '.terminal-panel' && !group ? { querySelector: () => input } : null };
+  let collapsed;
+  const context = vm.createContext({ require: rendererRequire, card, turn: { text: 'original' }, sessions: new Map([[cardSid, { kind }]]),
+    getCardSessionId: () => cardSid, activeSessionId: activeSid, showToast: text => notices.push(text), localStorage: storage,
+    document: { getElementById: () => input, createRange: () => ({ selectNodeContents() {}, collapse: value => { collapsed = value; } }) },
+    window: { Event: class { constructor(type) { this.type = type; } }, getSelection: () => ({ removeAllRanges() {}, addRange() {} }) },
+    MeetingRoom: { getActiveMeetingId: () => 'room', getMeetingData: () => ({ subSessions: [cardSid], slotSpecs: [{ memberId: 'reviewer' }] }) },
+    readContenteditablePlainText: box => box.text, replaceContenteditableText: (box, text) => { box.text = text; },
+    saveFloatingInputDraft: (sid, box) => saved.push({ sid, text: box.text }), ipcRenderer: { invoke: async () => ({ skills: [] }) },
+  });
+  const click = vm.runInContext(`(async () => {${source.slice(start + marker.length, end)}\n})`, context);
+  return { click, input, saved, notices, cursor, history, events, caretAtEnd: () => collapsed === false };
+}
+
+test('the real edit-resend handler replaces drafts for every CLI and persists the replaced draft for ArrowUp', async () => {
+  for (const kind of ['codeagent', 'claude', 'codex']) for (const draft of ['', 'new draft']) {
+    const f = editClickFixture({ draft, kind }); await f.click();
+    assert.equal(f.input.text, 'original'); assert.equal(f.input.focused, true); assert.equal(f.caretAtEnd(), true);
+    assert.equal(f.saved.at(-1).sid, 'test'); assert.equal(f.saved.at(-1).text, 'original'); assert.deepEqual(f.events, ['input']);
+    assert.deepEqual(f.history.list('test'), draft ? [draft] : []);
+    if (draft) { assert.equal(f.cursor.older('original').text, draft); assert.equal(f.notices[0], '原草稿已存入历史，按 ↑ 找回'); }
+  }
+});
+
+test('the real edit-resend handler refuses cross-session cards with a notice and replaces group drafts with the member prefix', async () => {
+  const wrong = editClickFixture({ draft: 'keep', activeSid: 'other' }); await wrong.click();
+  assert.equal(wrong.input.text, 'keep'); assert.deepEqual(wrong.saved, []);
+  assert.deepEqual(wrong.notices, ['这条消息不属于当前会话']); assert.deepEqual(wrong.history.list('test'), []);
+  const group = editClickFixture({ draft: 'group draft', group: true }); await group.click();
+  assert.equal(group.input.text, '@reviewer original'); assert.equal(group.cursor.older('').text, 'group draft');
+  assert.equal(group.caretAtEnd(), true); assert.equal(group.saved.at(-1).text, '@reviewer original');
+});
+
+test('after edit-resend the actual ArrowUp path recalls the replaced draft even with the caret at the end', () => {
+  const historyApi = require('../renderer/floating-input-history'), values = new Map();
+  const history = historyApi.createFloatingInputHistory({ storage: { getItem: key => values.get(key), setItem: (key, value) => values.set(key, value) } });
+  const input = { text: 'original prompt' }, bar = {};
+  history.push('test', 'saved draft');
+  const context = vm.createContext({ bar, inputBox: input, inputHistory: history, historyCursor: history.createCursor('test'), historyApi,
+    editResendHistoryReady: false, contenteditableHasText: box => !!box.text, isCaretAtContenteditableStart: () => false,
+    readContenteditablePlainText: box => box.text, applyHistoryText: text => { input.text = text; } });
+  const ready = source.match(/bar\._editResendHistoryChanged = \(\) => \{[^\n]+\};/)[0];
+  vm.runInContext(ready, context);
+  const start = /    if \(inputHistory\) \{\r?\n      const hasModifier/.exec(source)?.index ?? -1;
+  const end = source.indexOf("    if (e.key === 'Escape')", start);
+  assert.ok(start >= 0 && end > start);
+  const onKey = vm.runInContext(`(e => {${source.slice(start, end)}\n})`, context);
+  let prevented = 0;
+  const up = { key: 'ArrowUp', preventDefault: () => { prevented++; } };
+  onKey(up); assert.equal(input.text, 'original prompt'); assert.equal(prevented, 0, 'ordinary caret-at-end navigation stays unchanged');
+  bar._editResendHistoryChanged(); onKey(up);
+  assert.equal(input.text, 'saved draft'); assert.equal(prevented, 1); assert.equal(context.editResendHistoryReady, false);
 });
 
 test('an idle Stop click records the renderer decision without sending stop keys', async () => {

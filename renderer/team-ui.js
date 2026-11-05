@@ -13,6 +13,12 @@
     document.head.appendChild(link);
   }
   const teams = new Map();   // leadSid → 主进程 publicView
+  const collapsedTeams = new Set();
+  const collapseKey = 'hubSidebarCollapsedTeams';
+  try {
+    const saved = JSON.parse(localStorage.getItem(collapseKey) || '[]');
+    if (Array.isArray(saved)) for (const id of saved) if (typeof id === 'string') collapsedTeams.add(id);
+  } catch { /* 存储不可用时，本次界面仍可展开和折叠。 */ }
   let modal = null;
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const rerender = () => { if (typeof scheduleSessionListRender === 'function') scheduleSessionListRender(); };
@@ -52,6 +58,16 @@
       return set;
     },
     isLead: leadSid => teams.has(leadSid),
+    isCollapsed: leadSid => collapsedTeams.has(leadSid),
+    setCollapsed(leadSid, collapsed) {
+      if (collapsed) collapsedTeams.add(leadSid); else collapsedTeams.delete(leadSid);
+      try { localStorage.setItem(collapseKey, JSON.stringify([...collapsedTeams])); } catch {}
+      rerender();
+    },
+    leadOf(sid, sessionMap, meetings) {
+      for (const t of teams.values()) if (this.membersOf(t.leadSid, sessionMap, meetings).includes(sid)) return t.leadSid;
+      return null;
+    },
     memberInfo(sid) {
       for (const t of teams.values()) { const m = t.members.find(x => x.sid === sid); if (m) return m; }
       return null;
@@ -59,15 +75,19 @@
     signature(id, sessionMap, meetings) {
       const t = teams.get(id);
       if (t) return 'L' + t.members.map(m => m.sid + m.status).join(',')
-        + ':' + this.membersOf(id, sessionMap, meetings).join(',') + (pendingPlan(id) ? ':P' : '');
+        + ':' + this.membersOf(id, sessionMap, meetings).join(',') + (pendingPlan(id) ? ':P' : '')
+        + (this.isCollapsed(id) ? ':C' : ':E');
       const m = this.memberInfo(id);
       return m ? 'M' + m.memberId + m.status : '';
     },
     // 负责人行标题后的标签；成员行标题前的编号。返回 HTML 片段。
-    rowTagHtml(id) {
+    rowTagHtml(id, sessionMap, meetings) {
+      const count = this.membersOf(id, sessionMap, meetings).length;
+      const collapsed = this.isCollapsed(id);
+      const toggle = count ? `<button type="button" class="team-collapse-toggle" data-team-toggle="${esc(id)}" data-sidebar-control="team:${esc(id)}" aria-expanded="${!collapsed}" aria-label="${collapsed ? '展开' : '折叠'} ${count} 个团队成员" title="${collapsed ? '展开' : '折叠'} ${count} 个成员（不影响后台工作）">${collapsed ? '▸' : '▾'}</button>` : '';
       const plan = pendingPlan(id);
-      if (plan) return `<button type="button" class="team-pending-badge" data-team-approve="${esc(id)}" title="负责人提交了招人计划（${plan.members.length} 人），点开批准或驳回">待批准</button>`;
-      if (teams.get(id)?.members.length) return '<span class="sl-orch-tag" title="负责人：下面挂着它招的成员会话">负责人</span>';
+      if (plan) return `${toggle}<button type="button" class="team-pending-badge" data-team-approve="${esc(id)}" title="负责人提交了招人计划（${plan.members.length} 人），点开批准或驳回">待批准</button>`;
+      if (teams.get(id)?.members.length) return toggle + '<span class="sl-orch-tag" title="负责人：下面挂着它招的成员会话">负责人</span>';
       const m = this.memberInfo(id);
       return m ? `<span class="team-member-tag${m.status === 'dismissed' ? ' dismissed' : ''}" title="${esc(m.role)}${m.status === 'dismissed' ? '（已离队）' : ''}">${esc(m.memberId)}</span>` : '';
     },
@@ -76,14 +96,15 @@
 
   // 侧栏在按下时捕获指针、松开时切换会话（session-list-renderer.js），点击事件就到不了角标；
   // 在捕获阶段先截住角标上的按下，侧栏不接手，随后的 click 落在角标本身。
-  for (const type of ['pointerdown', 'mousedown']) document.addEventListener(type, event => {
-    if (event.target && event.target.closest && event.target.closest('[data-team-approve]')) event.stopPropagation();
+  for (const type of ['pointerdown', 'mousedown', 'keydown']) document.addEventListener(type, event => {
+    if (event.target && event.target.closest && event.target.closest('[data-team-approve], [data-team-toggle]')) event.stopPropagation();
   }, true);
   document.addEventListener('click', event => {
-    const btn = event.target && event.target.closest && event.target.closest('[data-team-approve]');
+    const btn = event.target && event.target.closest && event.target.closest('[data-team-approve], [data-team-toggle]');
     if (!btn) return;
     event.preventDefault(); event.stopPropagation();
-    openApproval(btn.dataset.teamApprove);
+    if (btn.dataset.teamToggle) window.__teamUi.setCollapsed(btn.dataset.teamToggle, !window.__teamUi.isCollapsed(btn.dataset.teamToggle));
+    else openApproval(btn.dataset.teamApprove);
   }, true);
 
   async function accounts() {

@@ -116,7 +116,7 @@ function mergeCommandTurns(turns, commands, opts = {}) {
   const order = new Map(turns.map((turn, index) => [turn, index]));
   const projected = commands.map((command, index) => {
     const echo = pairs.get(command);
-    const turn = echo ? { ...command, ts: echo.ts } : command;
+    const turn = echo ? { ...command, ts: echo.ts, ...(echo.codeagentCommand ? { codeagentCommand: echo.codeagentCommand } : {}) } : command;
     order.set(turn, echo ? order.get(echo) : turns.length + index);
     return turn;
   });

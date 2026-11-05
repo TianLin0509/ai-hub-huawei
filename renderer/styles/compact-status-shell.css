@@ -69,3 +69,16 @@
 }
 /* CodeAgent 额度条（renderer/codeagent-quota-bar.js）与「余量」并排；它自带 CodeAgent 图标，不重复「余量」二字。 */
 :root body #hub-system-footer #rail-codeagent-quota .sidebar-quota::before { content:none; }
+
+/* CodeAgent 底栏只保留 Token，Credit 在点击后的面板内查看。 */
+#rail-codeagent-quota .ca-quota-account,
+:root body #hub-system-footer #rail-codeagent-quota .ca-quota-account { display:grid; grid-template-columns:18px minmax(0,1fr); grid-template-rows:18px; gap:0 6px; height:auto; min-height:18px; width:250px; max-width:min(100%,70vw); }
+#rail-codeagent-quota .ca-quota-account > .sidebar-quota-icon { grid-column:1; grid-row:1; }
+#rail-codeagent-quota .ca-quota-token { grid-column:2; grid-row:1; min-width:0; font-size:10px; line-height:13px; }
+#rail-codeagent-quota .ca-token-reading { display:flex; align-items:baseline; gap:4px; min-width:0; white-space:nowrap; }
+#rail-codeagent-quota .ca-token-model { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#rail-codeagent-quota .ca-token-alert { flex-shrink:0; color:var(--status-danger); font-size:9px; }
+#rail-codeagent-quota .ca-token-track { display:block; height:2px; background:var(--border-subtle); overflow:hidden; border-radius:2px; }
+#rail-codeagent-quota .ca-token-track i { display:block; height:100%; background:currentColor; }
+#rail-codeagent-quota .ca-quota-token[data-level=warn] { color:var(--status-warning); }
+#rail-codeagent-quota .ca-quota-token[data-level=danger] { color:var(--status-danger); }

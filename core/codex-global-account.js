@@ -9,6 +9,8 @@ function currentConfig() {
   // cache. Read only the account routing fields at launch/send/resume boundaries.
   // Corrupt/unreadable config must block routing, never silently select default.
   const raw=hub.readConfigJsonForUpdate();
+  const companyApi = require('./company-api-config');
+  if (companyApi.isCompany()) return companyApi.applyCompanyConfig({ ...hub.getConfig() }, raw);
   const codex=raw.providers?.codex || {};
   const routing={
     codexSubscriptionProfile:process.env.HUB_CODEX_PROFILE || codex.subscription_profile || hub.DEFAULTS.codex_subscription_profile,

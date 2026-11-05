@@ -23,6 +23,7 @@ class LaunchAuth {
   connection(kind, opts = {}) {
     const base = String(kind || '').replace(/-resume$/, '');
     const config = this.getConfig();
+    if (config.companyCli && ['claude', 'codex'].includes(base)) return null;
     if (base === 'codex') {
       if (config.codexBackend === 'api' || require('./chatgpt-web-models').isChatgptWebModel(opts.model)) return null;
       return 'codex-' + (opts.launchProfile || (opts.codexAccountPinned && opts.codexProfile) || config.codexSubscriptionProfile || 'default');

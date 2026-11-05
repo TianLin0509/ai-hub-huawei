@@ -167,6 +167,7 @@ function getConfig() {
     codexApiBaseUrl: normalizeBaseUrl(getConfigValue('codexApiBaseUrl', 'HUB_CODEX_API_BASE_URL', 'providers.codex.base_url', DEFAULTS.codex_api_base_url)),
     codexApiModel: getConfigValue('codexApiModel', 'HUB_CODEX_API_MODEL', 'providers.codex.model', DEFAULTS.codex_api_model),
     codexApiProvider: getConfigValue('codexApiProvider', 'HUB_CODEX_API_PROVIDER', 'providers.codex.provider', DEFAULTS.codex_api_provider),
+    codexApiWireApi: codexProvider.wire_api || 'responses',
     // 每个 CLI 的默认模型。对象类型，不走 getConfigValue（那条路是给标量用的）。
     defaultModels: (rawConfig.models && rawConfig.models.defaults) || DEFAULTS.models_defaults,
     launchDefaults: require('./launch-defaults').readLaunchDefaults({ launchDefaults: rawConfig.launch?.defaults }),
@@ -188,7 +189,7 @@ function getConfig() {
     operations: normalizeOperationsConfig(rawConfig.operations),
   };
 
-  return _cachedConfig;
+  return require('./company-api-config').applyCompanyConfig(_cachedConfig, rawConfig);
 }
 
 /**

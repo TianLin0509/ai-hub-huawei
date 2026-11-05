@@ -107,6 +107,7 @@ function createMeetingSubAdder(deps) {
   }
 
   return async function addMeetingSubInternal(meetingId, kind, opts = {}) {
+    require('../../core/company-ai-policy').assertTaskKind(kind);
     const meeting = meetingManager.getMeeting(meetingId);
     let sessionOpts = { ...(opts || {}), meetingId };
     if (opts && opts.model) sessionOpts.model = opts.model;
@@ -252,6 +253,10 @@ function registerMeetingCreateIpc(ipcMain, deps) {
       throw Error('公司版只提供普通群聊；需要负责人分工时，请在 CodeAgent 会话中使用组队。');
     }
     const devSlots = Array.isArray(safe.slots) ? safe.slots : safe.slotSpecs;
+    if (require('../../core/distribution').target === 'company'
+        && (Array.isArray(devSlots) ? devSlots : []).some(slot => slot?.kind !== 'codeagent')) {
+      throw new Error('公司版群聊成员只使用 CodeAgent；其他工具请从启动中心新建单会话。');
+    }
     if (ensureLaunchAuth) {
       // Members with different accounts are checked together; the same account is
       // checked once (LaunchAuth shares the flight and reuses a fresh answer).

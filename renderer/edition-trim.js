@@ -1,12 +1,20 @@
 'use strict';
-// 发行目标的界面裁剪（公司版只留 CodeAgent；账号页管理本机号池）。
+// 发行目标的界面裁剪（按发行标记保留工具；账号页管理本机 CodeAgent 号池）。
 // 在 index.html 里排在 workspace-controller.js 之前，各控制器初始化时看到的已经是裁剪后的界面。
 // 主仓库与公开社区版没有这些设置，这里什么也不做。
 (() => {
   const { allowedKinds, kindAllowed, featureEnabled } = require('../core/distribution');
   if (allowedKinds) {
     // 启动中心：只留允许的会话类型；没有可恢复的类型时，连「恢复会话」这一页一起去掉。
-    document.querySelectorAll('.new-session-option[data-kind]').forEach(button => { if (!kindAllowed(button.dataset.kind)) button.remove(); });
+    document.querySelectorAll('.new-session-option[data-kind]').forEach(button => {
+      // The existing DeepSeek card launches DSH; its historical data-kind is
+      // retained because the launch controller uses it as a presentation alias.
+      const kind = button.dataset.kind === 'deepseek' ? 'deepseek-acp' : button.dataset.kind;
+      if (!kindAllowed(kind)) button.remove();
+      else if (kind === 'deepseek-acp' && require('../core/distribution').target === 'company') {
+        button.lastChild.textContent = 'DSH';
+      }
+    });
     document.querySelectorAll('[data-resume-kind]').forEach(button => { if (!kindAllowed(button.dataset.resumeKind)) button.remove(); });
     if (!document.querySelector('[data-resume-kind]')) {
       document.querySelector('[data-launch-intent="resume"]')?.remove();

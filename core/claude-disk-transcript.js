@@ -75,11 +75,13 @@ function settle(record, status) {
   record.completedAt = record.lastAt || record.createdAt;
 }
 
-function claudeDiskRecords(entries) {
+function claudeDiskRecords(entries, opts = {}) {
+  const extracted = require('./codeagent-command-records').extractCommandRecords(entries, opts);
   const records = [];
+  if (extracted.commands.length) records.codeagentCommands = extracted.commands;
   const scheduledFires = new Set();
   let current = null;
-  for (const entry of withQueuedHumanInputs(entries)) {
+  for (const entry of withQueuedHumanInputs(extracted.entries)) {
     if (!entry || typeof entry !== 'object' || entry.isSidechain) continue;
     const at = toMs(entry.timestamp);
     // A native scheduled wakeup starts an independent background turn. Its
@@ -172,14 +174,15 @@ function readEntries(file, { fromTail = false } = {}) {
  * 与 parseClaudeTranscriptToTurns 同样的调用约定（limit / fromTail），
  * 输出原生投影的卡片 turn。
  */
-function parseClaudeTranscriptToNativeTurns(file, { limit, fromTail = false } = {}) {
+function parseClaudeTranscriptToNativeTurns(file, opts = {}) {
+  const { limit, fromTail = false } = opts;
   if (typeof limit === 'number' && limit <= 0) return [];
   let { entries, partial } = readEntries(file, { fromTail: fromTail && typeof limit === 'number' });
-  let turns = claudeTranscriptTurns(claudeDiskRecords(entries));
+  let turns = claudeTranscriptTurns(claudeDiskRecords(entries, { ...opts, codeagentFile: file, codeagentPartial: partial }));
   // 尾部窗口可能从一组提问的中间开始；凑不够就回退整文件，保证卡片 id 稳定。
   if (partial && turns.length <= limit) {
     ({ entries } = readEntries(file));
-    turns = claudeTranscriptTurns(claudeDiskRecords(entries));
+    turns = claudeTranscriptTurns(claudeDiskRecords(entries, { ...opts, codeagentFile: file }));
   } else if (partial) {
     turns = turns.slice(1);
   }

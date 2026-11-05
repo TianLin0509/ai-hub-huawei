@@ -3,16 +3,19 @@ const { displayTime } = require('../core/company-assistant/data');
 
 function messageCoverage(scope) {
   if (!scope) return null;
-  const retained = !scope.partial ? (scope.conversations || []).filter(c => c.reason === 'query-failed').length : 0;
+  const active = (scope.conversations || []).filter(c => !c.retained);
+  const retrying = scope.retrying ?? (!scope.partial ? active.filter(c => c.reason === 'query-failed').length : 0);
+  const failures = active.filter(c => c.failureCount >= 3).map(c => `${c.name}：${c.lastError || c.reason}`);
   const rotation = scope.rotating ? `${scope.priorityPending ? '可能有新消息的会话正优先更新' : '已优先核对可能有新消息的会话'}，其余定期核对（本轮更新 ${scope.completed || 0}/${scope.scheduled ?? scope.known ?? 0} 个会话）${scope.neverFetched ? `；${scope.neverFetched} 个会话尚未首次取到` : ''}` : '';
   const mode = scope.mode === 'full-check' ? '完整核对' : scope.mode === 'incremental' ? '增量更新' : scope.mode === 'query' ? '即时查询' : '';
   const audit = mode ? `${mode}；最近完整核对：${Number.isFinite(scope.lastFullCheckAt) ? displayTime(scope.lastFullCheckAt) : '尚未完成'}` : '';
   const reasons = [scope.stale ? '最近会话查询失败，显示上次记录' : '', scope.rateLimited ? `WeLink 限流，已取 ${scope.completed || 0} 个会话，其余下轮继续` : scope.partial ? `${scope.partial} 个会话未取全` : '',
-    !scope.rateLimited ? rotation : '', retained ? `${retained} 个会话查询未完成，已保留上次结果，下轮更新` : '',
+    !scope.rateLimited ? rotation : '', retrying ? `${retrying} 个会话查询失败，下轮重试` : '', failures.length ? failures.join('；') : '',
+    scope.identityMissing ? '账号编号暂未取得，沿用缓存，下轮核对' : '', scope.retained ? `${scope.retained} 个会话已掉出最近列表，仅保留回看窗口内缓存` : '',
     scope.neverFetched && !scope.partial && !rotation ? `${scope.neverFetched} 个会话尚未首次取到` : '', scope.directoryFallback ? '已退回兼容查询，覆盖待核对' : '', scope.limited ? `按设置只查询最近 ${scope.maxConversations} 个会话` : '',
-    scope.directoryInvalid ? `${scope.directoryInvalid} 条会话目录记录无法解析` : '', (scope.conversations || []).some(c => c.unknownTime) ? '部分消息缺少时间，无法确认是否覆盖所选时段' : '', audit].filter(Boolean);
-  const warning = scope.partial || scope.neverFetched || scope.priorityPending || scope.stale && !scope.cached || scope.directoryFallback || scope.directoryInvalid || scope.limited || (scope.conversations || []).some(c => c.unknownTime);
-  return { status: warning ? 'partial' : scope.rateLimited || scope.stale || retained ? 'deferred' : rotation ? 'rotating' : 'complete', ...(mode ? { mode: scope.mode } : {}), ...(scope.rateLimited ? { reason: 'rate-limited' } : rotation ? { reason: 'rotation' } : {}), reasonLabel: reasons.join('；') };
+    scope.directoryInvalid ? `${scope.directoryInvalid} 条会话目录记录无法解析` : '', active.some(c => c.unknownTime) ? '部分消息缺少时间，无法确认是否覆盖所选时段' : '', audit].filter(Boolean);
+  const warning = scope.partial || scope.neverFetched || scope.priorityPending || scope.stale && !scope.cached || scope.directoryFallback || scope.directoryInvalid || scope.limited || active.some(c => c.unknownTime);
+  return { status: warning ? 'partial' : scope.rateLimited || scope.stale || retrying || scope.identityMissing ? 'deferred' : rotation ? 'rotating' : 'complete', ...(mode ? { mode: scope.mode } : {}), ...(scope.rateLimited ? { reason: 'rate-limited' } : rotation ? { reason: 'rotation' } : {}), reasonLabel: reasons.join('；') };
 }
 
 function queryStatus(coverage, error, count) {

@@ -15,6 +15,7 @@ const { messageCoverage, queryStatus, queryRows, refreshNotice } = require('../r
 const { WelinkGate, WELINK_INTERVAL_MS, WELINK_COOLDOWN_MS, WELINK_RATE_LIMITED, MESSAGE_ROUND_EXPIRED } = require('../core/company-assistant/welink-gate');
 const { POLL_MS } = require('../core/company-assistant/phone');
 const { collectBundle } = require('../core/hub-feedback');
+const { recordMessageRound, MESSAGE_ROUND_LOG_MAX_BYTES } = require('../core/company-assistant/message-round-log');
 
 const NOW = Date.parse('2026-11-02T12:00:00+08:00');
 const RANGE = { start: Date.parse('2026-11-02T00:00:00+08:00'), end: Date.parse('2026-11-03T00:00:00+08:00') };
@@ -277,11 +278,13 @@ test('one failed conversation shows the message row summary instead of its first
     return undefined;
   });
   const snap = await a.collect();
-  assert.equal(snap.scope.partial, 1);
+  assert.equal(snap.scope.partial, 0);
   assert.equal(snap.scope.conversations.find(c => c.id === 'bad').status, 'failed');
   const error = snap.errors.find(e => e.label.startsWith('消息'));
   assert.equal(error.text, 'fixture query failed');
-  assert.deepEqual(queryStatus(messageCoverage(snap.scope), error, 0), { label: '未取全', color: 'warn', detail: '1 个会话未取全；完整核对；最近完整核对：尚未完成' });
+  const row = queryStatus(messageCoverage(snap.scope), error, 0);
+  assert.equal(row.label, '下轮更新'); assert.equal(row.color, 'ok');
+  assert.match(row.detail, /1 个会话查询失败，下轮重试/); assert.doesNotMatch(row.detail, /fixture query failed/);
 });
 
 test('coverage decides row status, with errors used only when coverage is absent or failed', () => {
@@ -684,7 +687,7 @@ test('expanding the history window drops a saved continuation cursor and perform
   assert.equal(got.cache.resume, undefined);
 });
 
-test('historical conversations run in deferred order after all directory conversations', async t => {
+test('historical conversations are retained without queries or deferred work', async t => {
   const recent = Array.from({ length: 6 }, (_, i) => 'recent-' + i), historical = Array.from({ length: 5 }, (_, i) => 'historical-' + i);
   const deferred = [historical[3], historical[1], historical[4], historical[0], historical[2]], order = [];
   const { a } = fixture(t, async args => {
@@ -695,8 +698,8 @@ test('historical conversations run in deferred order after all directory convers
   a.write('conversation-catalog.json', { identity: 'fixture-owner', conversations: historical.map(id => ({ id, name: '历史同事' + id, group: false, seenAt: NOW - 86400000 })) });
   a.write('message-cache.json', { version: 4, identity: 'fixture-owner', conversations: {}, deferred });
   const snap = await a.collect();
-  assert.deepEqual(order, [...recent, ...deferred]);
-  assert.equal(snap.scope.requests, 11);
+  assert.deepEqual(order, recent);
+  assert.equal(snap.scope.requests, 6); assert.equal(snap.scope.retained, 5);
   assert.deepEqual(a.read('message-cache.json').deferred, []);
 });
 
@@ -912,12 +915,12 @@ function orderFixture(t, ids) {
   return { ...result, order, setDirectory: ids => { directory = [...ids]; } };
 }
 
-test('unchanged incremental directory queries its first conversation plus at most ten deferred rotation conversations', async t => {
+test('unchanged incremental directory queries three ordinary heads plus five deferred rotation conversations', async t => {
   const ids = Array.from({ length: 30 }, (_, i) => 'peer-' + i);
   const { a, order, sleeps } = orderFixture(t, ids);
   a.write('message-cache.json', { version: 4, identity: 'fixture-owner', directoryOrder: ids, lastFullCheckAt: NOW - 60000, conversations: Object.fromEntries(ids.map(id => [id, { version: 3, hasFetched: true, coverage: { status: 'complete' }, messages: [] }])), deferred: [...ids.slice(10), ...ids.slice(0, 10)] });
   const snap = await a.collect();
-  assert.deepEqual(order, [ids[0], ...ids.slice(10, 20)]);
+  assert.deepEqual(order, [...ids.slice(0, 3), ...ids.slice(10, 15)]);
   assert.equal(snap.scope.requests, order.length);
   assert.equal(snap.scope.changed, 1);
   assert.equal(snap.scope.comparedOrder, true);
@@ -972,12 +975,12 @@ test('directory order and priority candidates from another identity are ignored'
   assert.ok(!JSON.stringify(a.read('message-cache.json')).includes('PRIVATE_OTHER_OWNER'));
 });
 
-test('a dropped directory conversation stays available through catalog rotation without entering the saved directory order', async t => {
+test('a dropped directory conversation stays in retained cache without entering queries or the saved directory order', async t => {
   const { a, order } = orderFixture(t, ['a', 'c']);
   a.write('conversation-catalog.json', { identity: 'fixture-owner', conversations: [{ id: 'b', name: '历史同事', group: false, seenAt: NOW - 86400000 }] });
   a.write('message-cache.json', { version: 4, identity: 'fixture-owner', directoryOrder: ['a', 'b', 'c'], conversations: {}, deferred: ['b', 'c', 'a'] });
   await a.collect();
-  assert.deepEqual(order, ['a', 'c', 'b']);
+  assert.deepEqual(order, ['a', 'c']);
   const cache = a.read('message-cache.json');
   assert.deepEqual(cache.directoryOrder, ['a', 'c']);
   assert.ok(cache.conversations.b);
@@ -1049,7 +1052,7 @@ test('a ten-conversation pinned prefix stays stable when a middle conversation o
   assert.ok(changes.changed.every(id => !pins.includes(id)), 'pinned conversations remain outside the changed-priority group');
   assert.deepEqual(conversationOrderChanges(current, current, 10), { moved: [], changed: [ordinary[5]], pinnedHead: 10 });
   const front = [ordinary[5], ...before.filter(id => id !== ordinary[5])];
-  assert.equal(conversationOrderChanges(current, front, 10).pinnedHead, 0, 'moving to the true head resets the estimate');
+  assert.equal(conversationOrderChanges(current, front, 10).pinnedHead, 10, 'moving to the true head alone cannot invalidate a known pinned estimate');
 });
 
 test('one stable boundary is added after each separate overtaking block', () => {
@@ -1239,7 +1242,7 @@ test('final meeting rate limit retains same-account prior records and uses a gre
   assert.ok(calls.some(args => args[0] === 'mail'), 'other families continue via the paused gate');
 });
 
-test('50 conversations finish in one round: changed first, full pinned group, remaining directory, then catalog', async t => {
+test('a full check queries all 50 directory conversations but never catalog-only conversations', async t => {
   const pins = ['p0', 'p1', 'p2'], peers = Array.from({ length: 47 }, (_, i) => 'peer-' + i), before = [...pins, ...peers];
   const changed = [...peers.slice(0, 12)].reverse(), current = [...pins, ...changed, ...peers.slice(12)];
   const { a, order, calls } = orderFixture(t, current);
@@ -1247,8 +1250,8 @@ test('50 conversations finish in one round: changed first, full pinned group, re
   a.write('message-cache.json', { version: 4, identity: 'fixture-owner', directoryOrder: before, conversations: {}, deferred: ['historical'] });
   const snap = await a.collect();
   const priority = conversationOrderChanges(before, current).changed;
-  assert.ok(priority.length > 6); assert.deepEqual(order, [...priority, ...pins, ...current.filter(id => !priority.includes(id) && !pins.includes(id)), 'historical']);
-  assert.equal(snap.scope.completed, 51); assert.equal(snap.scope.requests, 51); assert.equal(snap.scope.listFull, true);
+  assert.ok(priority.length > 6); assert.deepEqual(order, [...priority, ...pins, ...current.filter(id => !priority.includes(id) && !pins.includes(id))]);
+  assert.equal(snap.scope.completed, 50); assert.equal(snap.scope.requests, 50); assert.equal(snap.scope.retained, 1); assert.equal(snap.scope.listFull, true);
   assert.equal(messageCoverage(snap.scope).status, 'complete'); assert.equal(refreshNotice(snap), '');
   assert.ok(calls.findIndex(args => args[0] === 'mail') < calls.findIndex(args => args[1] === 'query-history-message'));
   assert.deepEqual(a.read('message-cache.json').deferred, []);
@@ -1390,7 +1393,7 @@ test('format retries and auth replays use the same gate without a fixed per-roun
   assert.equal(snap.scope.partial, 0); assert.deepEqual(a.read('message-cache.json').deferred, []);
 });
 
-test('large historical catalogs wait behind every directory conversation and preserve deferred caches', async t => {
+test('large historical catalogs retain cached entries without querying or deferring them', async t => {
   const recent = Array.from({ length: 50 }, (_, i) => 'recent-' + i), historical = Array.from({ length: 200 }, (_, i) => 'old-' + i);
   const { a, order } = orderFixture(t, recent);
   a.write('conversation-catalog.json', { identity: 'fixture-owner', conversations: historical.map(id => ({ id, name: '合成历史联系人', seenAt: NOW, group: false })) });
@@ -1399,9 +1402,9 @@ test('large historical catalogs wait behind every directory conversation and pre
   const first = await a.collect();
   assert.deepEqual(order.slice(0, 50), recent); assert.ok(order.slice(50).every(id => historical.includes(id)));
   assert.equal(first.scope.timedOut, false);
-  assert.equal(order.length, 60);
+  assert.equal(order.length, 50); assert.equal(first.scope.retained, 200);
   const cache = a.read('message-cache.json');
-  assert.ok(cache.deferred.length > 0); assert.ok(cache.deferred.every(id => historical.includes(id)));
+  assert.deepEqual(cache.deferred, []);
   for (const id of historical) assert.equal(cache.conversations[id].hasFetched, true);
   assert.equal(queryStatus(messageCoverage(first.scope), null, 0).color, 'ok');
 });
@@ -1422,13 +1425,13 @@ test('the entire pinned group is queried between changed and ordinary peers, inc
   assert.ok(ids.slice(0, 4).every(id => Number.isFinite(saved.conversations[id].lastQueriedAt)));
 });
 
-test('an ordinary failed cached conversation is informational while a failed first fetch warns', async t => {
+test('one ordinary failed query is informational with or without cached results', async t => {
   for (const cached of [false, true]) {
     const { a } = fixture(t, async args => args[1] === 'query-recent-conversation' ? json({ conversation_info: conversationRows(['a', 'b']) })
       : args[1] === 'query-history-message' ? args.includes('b') ? { code: 1, stdout: '', stderr: 'synthetic failed request' } : json({ chatInfo: [] }) : undefined);
     a.write('message-cache.json', { version: 4, identity: 'fixture-owner', directoryOrder: ['a', 'b'], conversations: cached ? { b: { version: 3, hasFetched: true, coverage: { status: 'complete' }, messages: [] } } : {} });
     const snap = await a.collect();
-    assert.equal(queryStatus(messageCoverage(snap.scope), null, 0).color, cached ? 'ok' : 'warn');
+    assert.equal(queryStatus(messageCoverage(snap.scope), null, 0).color, 'ok');
   }
 });
 
@@ -1495,22 +1498,22 @@ const speedScenario = () => {
   return { pins, before, current, changed: peers.slice(0, 3).reverse() };
 };
 
-test('incremental refresh queries three changed, three pinned and ten oldest directory peers only', async t => {
+test('incremental refresh queries three changed, three pinned and five oldest directory peers only', async t => {
   const { pins, before, current, changed } = speedScenario();
   const { a, order, calls, clock } = orderFixture(t, current);
   warmCache(a, before);
   const started = clock(), snap = await a.collect();
-  assert.equal(MESSAGE_ROTATION_LIMIT, 10);
-  assert.deepEqual(order, [...changed, ...pins, ...before.slice(-10).reverse()]);
-  assert.equal(snap.scope.mode, 'incremental'); assert.equal(snap.scope.requests, 16);
-  assert.equal(snap.scope.fromCache, 34); assert.equal(snap.scope.neverFetched, 0);
-  assert.equal(calls.length, 22); assert.equal(clock() - started, 57000);
+  assert.equal(MESSAGE_ROTATION_LIMIT, 5);
+  assert.deepEqual(order, [...changed, ...pins, ...before.slice(-5).reverse()]);
+  assert.equal(snap.scope.mode, 'incremental'); assert.equal(snap.scope.requests, 11);
+  assert.equal(snap.scope.fromCache, 39); assert.equal(snap.scope.neverFetched, 0);
+  assert.equal(calls.length, 17); assert.equal(clock() - started, 42000);
   assert.equal(a.read('message-cache.json').lastFullCheckAt, NOW - 60000);
   assert.match(messageCoverage(snap.scope).reasonLabel, /增量更新；最近完整核对：/);
   assert.equal(refreshNotice(snap), '');
 });
 
-test('oldest rotation keeps catalog-only peers after directory peers even when historical timestamps are older', async t => {
+test('oldest rotation ignores catalog-only peers even when their timestamps are older', async t => {
   const ids = Array.from({ length: 8 }, (_, i) => 'peer-' + i), historical = ['h0', 'h1', 'h2', 'h3'];
   const { a, order } = orderFixture(t, ids);
   const cache = warmCache(a, ids);
@@ -1518,14 +1521,14 @@ test('oldest rotation keeps catalog-only peers after directory peers even when h
   a.write('message-cache.json', cache);
   a.write('conversation-catalog.json', { identity: 'fixture-owner', conversations: historical.map(id => ({ id, name: '合成历史联系人', seenAt: NOW, group: false })) });
   const snap = await a.collect();
-  assert.deepEqual(order, [ids[0], ...ids.slice(1).reverse(), 'h3', 'h2', 'h1']);
-  assert.equal(snap.scope.requests, 11); assert.ok(snap.scope.conversations.find(conv => conv.id === 'h0').dataSource === 'cache');
+  assert.deepEqual(order, [...ids.slice(0, 3), ...ids.slice(3).reverse()]);
+  assert.equal(snap.scope.requests, 8); assert.ok(snap.scope.conversations.find(conv => conv.id === 'h0').dataSource === 'cache');
 });
 
 test('thirty-minute complete checks persist their completion time across restart without being reset by incremental rounds', async t => {
   const ids = Array.from({ length: 50 }, (_, i) => 'peer-' + i), { a, order, advance, clock } = orderFixture(t, ids);
   warmCache(a, ids);
-  await a.collect(); assert.equal(order.length, 11);
+  await a.collect(); assert.equal(order.length, 8);
   const old = a.read('message-cache.json').lastFullCheckAt;
   advance(MESSAGE_FULL_CHECK_MS - (clock() - old)); order.length = 0;
   const full = await a.collect();
@@ -1534,7 +1537,7 @@ test('thirty-minute complete checks persist their completion time across restart
   assert.deepEqual(a.read('message-cache.json').fullCheckPending, []);
   const restart = new CompanyAssistant(a.deps); restart.cli = a.cli; restart.auth.check = a.auth.check; restart.auth.status = a.auth.status;
   order.length = 0; const incremental = await restart.collect(); restart.welinkGate.flush();
-  assert.equal(incremental.scope.mode, 'incremental'); assert.equal(order.length, 11);
+  assert.equal(incremental.scope.mode, 'incremental'); assert.equal(order.length, 8);
   assert.equal(restart.read('message-cache.json').lastFullCheckAt, completed);
 });
 
@@ -1602,7 +1605,7 @@ test('the real refresh IPC passes user priority while automatic refresh uses bac
   a.deps.welinkRun = async () => json({});
   a.generateBrief = async () => {}; a.remind = () => []; a.pump = async () => {};
   const manual = handlers.get('company-assistant:refresh')({}, {}); await settle();
-  await manual; assert.deepEqual(options[0], { force: true, priority: 'user' });
+  await manual; assert.deepEqual(options[0], { force: true, priority: 'user', trigger: 'manual' });
   const automatic = a.tick(); await settle();
   assert.equal(gate.queue[0].priority, 2); assert.equal(options[1], undefined);
   await advance(3000); await automatic; gate.flush();
@@ -1706,7 +1709,7 @@ test('an incremental round interrupted at six minutes retains rotation work with
   const { a, advance } = fixture(t, async args => {
     if (args[1] === 'query-recent-conversation') return json({ conversation_info: conversationRows(current) });
     if (args[1] !== 'query-history-message') return undefined;
-    order.push(args[args.indexOf('--user-account') + 1]); if (slow) advance(30000);
+    order.push(args[args.indexOf('--user-account') + 1]); if (slow) advance(40000);
     return json({ chatInfo: [] });
   });
   const cache = warmCache(a, before), first = await a.collect(), pending = a.read('message-cache.json').deferred;
@@ -1733,8 +1736,205 @@ test('the actual brief card describes an updating batch without calling it missi
 test('cached message source details retain their original collection time after an incremental refresh', async t => {
   const ids = Array.from({ length: 25 }, (_, i) => 'peer-' + i), { a } = orderFixture(t, ids);
   const cache = warmCache(a, ids), snap = await a.collect();
-  const message = snap.messages[ids[1]][0], source = a.sourceContext(message.sourceId);
+  const message = snap.messages[ids[3]][0], source = a.sourceContext(message.sourceId);
   assert.equal(source.coverage.status, 'cached');
-  assert.equal(source.capturedAt, cache.conversations[ids[1]].capturedAt);
+  assert.equal(source.capturedAt, cache.conversations[ids[3]].capturedAt);
   assert.ok(source.capturedAt < snap.at);
+});
+
+test('a missing account number reuses identity and keeps the following identified round incremental', async t => {
+  const ids = Array.from({ length: 25 }, (_, i) => 'peer-' + i), { a, order, root } = orderFixture(t, ids);
+  const old = warmCache(a, ids);
+  a.auth.check = async () => ({ login: { ok: true } });
+  const missing = await a.collect();
+  assert.equal(missing.scope.mode, 'incremental'); assert.equal(missing.scope.identityMissing, true);
+  assert.equal(order.length, 8); assert.equal(a.read('message-cache.json').identity, 'fixture-owner');
+  assert.equal(a.read('message-cache.json').lastFullCheckAt, old.lastFullCheckAt);
+  a.auth.check = async () => ({ login: { ok: true, uid: 'fixture-owner' } });
+  order.length = 0;
+  const recovered = await a.collect(); assert.equal(recovered.scope.comparedOrder, true); assert.equal(order.length, 8);
+  const rounds = fs.readFileSync(path.join(root, 'logs/company-assistant-message-round.log'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(rounds[0].fullCheckReason, 'identity-missing'); assert.equal(rounds[0].cacheReused, true);
+  assert.equal(rounds[1].identityMissing, false);
+});
+
+test('missing identity keeps overdue audits incremental, and an unowned cache is left untouched', async t => {
+  const ids = Array.from({ length: 25 }, (_, i) => 'peer-' + i), { a, order } = orderFixture(t, ids);
+  const old = warmCache(a, ids, { lastFullCheckAt: NOW - 2 * MESSAGE_FULL_CHECK_MS });
+  a.auth.check = async () => ({ login: { ok: true } });
+  const snap = await a.collect();
+  assert.equal(snap.scope.mode, 'incremental'); assert.equal(order.length, 8);
+  assert.equal(a.read('message-cache.json').lastFullCheckAt, old.lastFullCheckAt);
+  assert.equal(a.read('message-cache.json').identity, 'fixture-owner');
+  const unknown = { ...old, identity: null }; a.write('message-cache.json', unknown); order.length = 0;
+  const skipped = await a.collect();
+  assert.equal(order.length, 0); assert.equal(skipped.scope.identityMissing, true);
+  assert.deepEqual(a.read('message-cache.json'), unknown);
+});
+
+test('missing identity and a failed directory retain the identified snapshot without changing cache identity', async t => {
+  let fail = false;
+  const ids = ['a', 'b', 'c'], { a, root } = fixture(t, async args => {
+    if (args[1] === 'query-recent-conversation') return fail ? { code: 1, stdout: '', stderr: 'synthetic directory failure' } : json({ conversation_info: conversationRows(ids) });
+    if (args[1] === 'query-history-message') return json({ chatInfo: historyRows(args[args.indexOf('--user-account') + 1]) });
+    return undefined;
+  });
+  warmCache(a, ids); const first = await a.collect(); fail = true;
+  a.auth.check = async () => ({ login: { ok: true } });
+  const snap = await a.collect();
+  assert.deepEqual(snap.messages, first.messages); assert.equal(snap.scope.identityMissing, true);
+  assert.equal(a.read('message-cache.json').identity, 'fixture-owner');
+  const logs = fs.readFileSync(path.join(root, 'logs/company-assistant-message-round.log'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(logs[1].identityMissing, true); assert.equal(logs[1].fullCheckReason, 'identity-missing');
+});
+
+test('unchanged order still fetches new messages at both partition heads', async t => {
+  const ids = Array.from({ length: 25 }, (_, i) => 'peer-' + i);
+  const { a } = fixture(t, async args => {
+    if (args[1] === 'query-recent-conversation') return json({ conversation_info: conversationRows(ids) });
+    if (args[1] === 'query-history-message') {
+      const id = args[args.indexOf('--user-account') + 1];
+      return json({ chatInfo: [{ msgId: '101', sender: id, serverSendTime: NOW, content: 'new synthetic head message' }] });
+    }
+    return undefined;
+  });
+  warmCache(a, ids, { pinnedHead: 15 });
+  const snap = await a.collect();
+  for (const id of [...ids.slice(0, 3), ...ids.slice(15, 18)]) {
+    assert.ok(snap.messages[id].some(m => m.key === '101' && m.text === 'new synthetic head message'));
+  }
+});
+
+test('version-4 null-identity caches are claimed only by the latest known snapshot owner without a catalog conflict', async t => {
+  for (const historicalOwner of ['fixture-owner', 'other-owner', null]) {
+    const ids = Array.from({ length: 25 }, (_, i) => 'peer-' + i), { a, order } = orderFixture(t, ids);
+    warmCache(a, ids, { identity: null });
+    if (historicalOwner) a.write(`raw-${D.dayKey(NOW)}.json`, { at: NOW - 1000, login: { ok: true, uid: historicalOwner } });
+    const snap = await a.collect();
+    assert.equal(order.length, historicalOwner === 'fixture-owner' ? 8 : 25);
+    assert.equal(snap.scope.comparedOrder, historicalOwner === 'fixture-owner');
+    assert.equal(a.read('message-cache.json').identity, 'fixture-owner');
+  }
+  const ids = Array.from({ length: 25 }, (_, i) => 'peer-' + i), { a, order } = orderFixture(t, ids);
+  warmCache(a, ids, { identity: null });
+  a.write(`raw-${D.dayKey(NOW)}.json`, { login: { uid: 'fixture-owner' } });
+  a.write('conversation-catalog.json', { identity: 'other-owner', conversations: [] });
+  await a.collect(); assert.equal(order.length, 25);
+});
+
+for (const boundary of [0, 3, 15]) test(`stable partition heads and five oldest peers update at boundary ${boundary}`, async t => {
+  const ids = Array.from({ length: 50 }, (_, i) => 'peer-' + i), { a, order } = orderFixture(t, ids);
+  warmCache(a, ids, { pinnedHead: boundary });
+  const snap = await a.collect();
+  const expected = boundary ? [ids[boundary], ...ids.slice(0, 3), ...ids.slice(boundary + 1, boundary + 3), ...ids.slice(-5).reverse()]
+    : [...ids.slice(0, 3), ...ids.slice(-5).reverse()];
+  assert.deepEqual(order, expected); assert.equal(snap.scope.pinnedHead, boundary);
+  assert.equal(snap.scope.partial, 0); assert.ok(snap.scope.requests <= 16);
+  assert.ok(expected.every(id => snap.scope.conversations.find(c => c.id === id).dataSource === 'realtime'));
+});
+
+test('pinned reordering at positions zero or one preserves the boundary; ordinary evidence shrinks and grows it', () => {
+  const initial = ['p0', 'p1', 'p2', 'a', 'b', 'c'];
+  assert.equal(conversationOrderChanges(initial, ['p2', 'p0', 'p1', 'a', 'b', 'c'], 3).pinnedHead, 3);
+  assert.equal(conversationOrderChanges(initial, ['p0', 'p2', 'p1', 'a', 'b', 'c'], 3).pinnedHead, 3);
+  const staleLarge = ['p0', 'p1', 'p2', ...Array.from({ length: 12 }, (_, i) => 'unpinned-' + i), 'a', 'b'];
+  const afterMessage = ['p0', 'p1', 'p2', 'b', ...staleLarge.slice(3).filter(id => id !== 'b')];
+  assert.equal(conversationOrderChanges(staleLarge, afterMessage, 15).pinnedHead, 3);
+  const ordinary = ['p0', 'p1', 'p2', 'new-pin', 'a', 'b'];
+  assert.equal(conversationOrderChanges(ordinary, ['p0', 'p1', 'p2', 'new-pin', 'b', 'a'], 3).pinnedHead, 4);
+  const addedPin = ['new-pin', ...initial];
+  assert.equal(conversationOrderChanges(initial, addedPin, 3).pinnedHead, 3, 'a new ID at zero is ambiguous');
+  assert.equal(conversationOrderChanges(addedPin, ['new-pin', 'p0', 'p1', 'p2', 'c', 'a', 'b'], 3).pinnedHead, 4);
+});
+
+test('after twelve pins are cancelled, a later ordinary arrival shrinks the remembered boundary to three', async t => {
+  const pins = Array.from({ length: 15 }, (_, i) => 'p' + i), peers = Array.from({ length: 35 }, (_, i) => 'peer-' + i);
+  const before = [...pins, ...peers], { a, order, setDirectory } = orderFixture(t, before);
+  warmCache(a, before, { pinnedHead: 15 });
+  setDirectory([pins[1], pins[0], ...pins.slice(2), ...peers]);
+  await a.collect(); assert.equal(a.read('message-cache.json').pinnedHead, 15);
+  const current = [pins[1], pins[0], pins[2], peers[20], ...pins.slice(3), ...peers.filter(id => id !== peers[20])];
+  setDirectory(current); order.length = 0;
+  const snap = await a.collect();
+  assert.equal(snap.scope.pinnedHead, 3); assert.ok(order.includes(peers[20]));
+  assert.ok(order.includes(current[4]) && order.includes(current[5]));
+});
+
+test('catalog-only records stay cached until the lookback cutoff and never contribute missing coverage', async t => {
+  const ids = Array.from({ length: 10 }, (_, i) => 'peer-' + i), { a, order } = orderFixture(t, ids);
+  const cache = warmCache(a, ids);
+  const cutoff = NOW - 36 * 3600000;
+  cache.conversations.gone = { version: 3, failureCount: 9, lastError: 'query-failed', messages: [
+    { key: 'recent', at: NOW - 60000, text: 'retained synthetic text' }, { key: 'expired', at: cutoff - 1, text: 'expired synthetic text' }], coverage: { status: 'failed' } };
+  a.write('message-cache.json', cache);
+  a.write('conversation-catalog.json', { identity: 'fixture-owner', conversations: [{ id: 'gone', name: 'synthetic gone peer', group: false, seenAt: NOW }] });
+  const snap = await a.collect();
+  assert.ok(!order.includes('gone')); assert.equal(snap.scope.retained, 1);
+  assert.equal(snap.scope.partial, 0); assert.equal(snap.scope.neverFetched, 0);
+  assert.deepEqual(snap.messages.gone.map(m => m.key), ['recent']);
+  assert.deepEqual(a.read('message-cache.json').conversations.gone.messages.map(m => m.key), ['recent']);
+  assert.equal(queryStatus(messageCoverage(snap.scope), null, 0).color, 'ok');
+});
+
+for (const invalid of [false, true]) test(`consecutive ${invalid ? 'invalid-shape' : 'query-failed'} attempts retry first, warn on three, and reset on success`, async t => {
+  const ids = Array.from({ length: 20 }, (_, i) => 'peer-' + i), target = ids[18], order = [];
+  let fail = true;
+  const { a } = fixture(t, async args => {
+    if (args[1] === 'query-recent-conversation') return json({ conversation_info: conversationRows(ids) });
+    if (args[1] !== 'query-history-message') return undefined;
+    const id = args[args.indexOf('--user-account') + 1]; order.push(id);
+    return fail && id === target ? invalid ? json({ PRIVATE_BODY: 'must not enter cache errors' }) : { code: 1, stdout: '', stderr: 'PRIVATE_MESSAGE_BODY' } : json({ chatInfo: [] });
+  });
+  warmCache(a, ids);
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    order.length = 0;
+    const snap = await a.collect();
+    const saved = a.read('message-cache.json').conversations[target];
+    assert.equal(saved.failureCount, attempt); assert.equal(saved.lastError, invalid ? 'invalid-shape' : 'query-failed');
+    assert.doesNotMatch(JSON.stringify({ failureCount: saved.failureCount, lastError: saved.lastError }), /PRIVATE/);
+    if (attempt > 1) assert.equal(order[0], target);
+    const row = queryStatus(messageCoverage(snap.scope), null, 0);
+    assert.equal(row.color, attempt < 3 ? 'ok' : 'warn');
+    if (attempt < 3) { assert.equal(snap.scope.partial, 0); assert.match(row.detail, /1 个会话查询失败，下轮重试/); }
+    else { assert.equal(snap.scope.partial, 1); assert.match(row.detail, new RegExp('同事' + target)); assert.match(row.detail, /query-failed|invalid-shape/); }
+  }
+  fail = false; order.length = 0;
+  const final = await a.collect(); assert.equal(order[0], target);
+  assert.equal(a.read('message-cache.json').conversations[target].failureCount, 0);
+  assert.equal(a.read('message-cache.json').conversations[target].lastError, '');
+  assert.equal(final.scope.partial, 0); assert.equal(final.scope.retrying, 0);
+});
+
+test('manual refresh stays incremental when due; a timer then audits only the current directory', async t => {
+  const ids = Array.from({ length: 50 }, (_, i) => 'peer-' + i), { a, order, root } = orderFixture(t, ids);
+  const old = warmCache(a, ids, { lastFullCheckAt: NOW - 2 * MESSAGE_FULL_CHECK_MS });
+  a.write('conversation-catalog.json', { identity: 'fixture-owner', conversations: [{ id: 'gone', name: 'synthetic gone', seenAt: NOW }] });
+  const manual = await a.refresh({ force: true, priority: 'user', trigger: 'manual' });
+  assert.equal(manual.scope.mode, 'incremental'); assert.equal(order.length, 8);
+  assert.equal(a.read('message-cache.json').lastFullCheckAt, old.lastFullCheckAt);
+  order.length = 0;
+  const timed = await a.refresh({ force: true });
+  assert.equal(timed.scope.mode, 'full-check'); assert.equal(order.length, 50); assert.ok(!order.includes('gone'));
+  const logs = fs.readFileSync(path.join(root, 'logs/company-assistant-message-round.log'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.equal(logs[0].trigger, 'manual'); assert.equal(logs[0].fullCheckReason, 'manual');
+  assert.equal(logs[1].trigger, 'timer'); assert.equal(logs[1].fullCheckReason, 'due');
+});
+
+test('round diagnostics include only bounded counts and flags, rotate and enter feedback logs', async t => {
+  const ids = ['PRIVATE_ID', 'b', 'c'], { a, root } = orderFixture(t, ids);
+  warmCache(a, ids); await a.collect(); await a.collectQuery('messages', RANGE);
+  const file = path.join(root, 'logs/company-assistant-message-round.log');
+  const text = fs.readFileSync(file, 'utf8'), rows = text.trim().split('\n').map(JSON.parse);
+  assert.equal(rows.length, 2); assert.equal(rows[1].trigger, 'query');
+  for (const row of rows) {
+    assert.ok(Date.parse(row.startedAt) <= Date.parse(row.endedAt)); assert.ok(row.durationMs >= 0);
+    assert.deepEqual(Object.keys(row.requests), ['changed', 'pinnedTop', 'ordinaryTop', 'rotation', 'retry', 'full']);
+    assert.equal(typeof row.failed, 'number'); assert.equal(typeof row.rateLimited, 'boolean'); assert.equal(typeof row.timedOut, 'boolean');
+  }
+  assert.doesNotMatch(text, /PRIVATE_ID|合成同事|synthetic saved record|synthetic text/);
+  assert.equal(MESSAGE_ROUND_LOG_MAX_BYTES, 256 * 1024);
+  recordMessageRound(root, { startedAt: NOW, endedAt: NOW, trigger: 'timer', requests: {}, PRIVATE_ID: 'PRIVATE_BODY' }, 1);
+  assert.ok(fs.existsSync(file + '.1')); assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /PRIVATE/);
+  const bundle = collectBundle({ logsDir: path.join(root, 'logs') });
+  assert.match(bundle.text, /company-assistant-message-round.log/);
 });

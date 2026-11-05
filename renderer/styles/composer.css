@@ -416,11 +416,6 @@
 .composer-rail .floating-input-stop.visible { display: flex; }
 .composer-rail .floating-input-stop:hover { background: rgba(var(--rgb-danger), .22); color: var(--status-danger); }
 .composer-rail .floating-input-stop.codeagent-stop { width: auto; min-width: 44px; padding: 0 8px; white-space: nowrap; }
-.codeagent-input-recovery, .codeagent-input-recovery * { -webkit-app-region: no-drag; }
-.codeagent-input-recovery { display: flex; align-items: center; gap: 8px; padding: 8px; color: var(--fg-default); font-size: 12px; }
-.codeagent-input-recovery[hidden] { display: none; }
-.codeagent-input-recovery span { flex: 1; }
-.codeagent-input-recovery button { flex: 0 0 auto; cursor: pointer; }
 
 /* 文本框：几何锁仍然由 task-presets.css 的 .fi-composer-row 那套负责，
    这里只调排版，不碰 flex 占位。 */
@@ -515,3 +510,6 @@
   color: var(--text-secondary);
   font: 11px/1.5 var(--font-sans, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif);
 }
+
+.codeagent-stop-toast, .codeagent-stop-toast * { -webkit-app-region: no-drag; }
+.codeagent-stop-toast { position:fixed; right:24px; bottom:28px; z-index:100000; display:flex; align-items:center; gap:12px; max-width:calc(100vw - 48px); padding:10px 15px; border-radius:10px; color:var(--fg-default); background:var(--surface-raised); box-shadow:0 8px 28px #0005; font-size:13px; }

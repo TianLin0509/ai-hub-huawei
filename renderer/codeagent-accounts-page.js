@@ -13,6 +13,7 @@ async function accountCommand(ipcRenderer, action, { id, note, dir, hours } = {}
 }
 function createCodeagentAccountsPage({ document, window = document.defaultView, ipcRenderer, configModal, closeOtherPanels = () => {}, openSession = () => {}, notify = () => {} }) {
   let page, pool = null, timer, revision = 0, disposed = false, pending = null;
+  let locateId = '', locateUntil = 0, locateTimer;
   const state = { local: [], probing: new Set(), queue: [], drawer: false, note: '', menu: '', sub: false, filter: 'all', loading: false, busy: false, message: '' };
   function render() {
     if (!page || page.hidden || disposed) return;
@@ -36,6 +37,19 @@ function createCodeagentAccountsPage({ document, window = document.defaultView, 
       if (local.innerHTML !== updated.innerHTML) local.innerHTML = updated.innerHTML;
       drawer.querySelector('[data-ca="add"]').disabled = !!state.busy;
     }
+    if (Date.now() < locateUntil) locatedRow()?.classList.add('is-located');
+  }
+  function locatedRow() {
+    return [...(page?.querySelectorAll('[data-ca-account]') || [])].find(row => row.dataset.caAccount === locateId);
+  }
+  function locateAccount() {
+    if (!locateId || page?.hidden || disposed) return;
+    const row = locatedRow();
+    if (!row) return;
+    clearTimeout(locateTimer); locateUntil = Date.now() + 1500;
+    row.classList.add('is-located'); row.setAttribute('tabindex', '-1');
+    row.scrollIntoView({ block: 'center' }); row.focus({ preventScroll: true });
+    locateTimer = setTimeout(() => { locatedRow()?.classList.remove('is-located'); locateId = ''; locateUntil = 0; }, 1500);
   }
   function message(text) { state.message = text; render(); notify(text); }
   function place() {
@@ -135,17 +149,22 @@ function createCodeagentAccountsPage({ document, window = document.defaultView, 
       }
     });
   }
-  async function open() {
+  async function open(accountId) {
     if (disposed) return;
+    clearTimeout(locateTimer); locatedRow()?.classList.remove('is-located');
+    locateId = typeof accountId === 'string' ? accountId : ''; locateUntil = 0;
+    if (locateId) state.filter = 'all';
     build(); configModal?.close(); closeOtherPanels();
     for (const hook of ['__companyAssistantHide', '__companyMeetingHide', '__companyRoomsHide', '__companyPptHide', '__assistantHide', '__cloudHide', '__wirelessHide', '__rulesHide', '__writingHide', '__xresearchHide', '__studyHide', '__ranHide']) window[hook]?.();
     page.hidden = false; document.body.classList.add('codeagent-accounts-page-open');
     document.getElementById('btn-rail-accounts')?.classList.add('active'); document.getElementById('btn-rail-accounts')?.setAttribute('aria-expanded', 'true'); window.setShellNavActive?.('btn-rail-accounts');
     window.addEventListener('resize', place); place(); render(); await refresh();
+    locateAccount();
   }
   function close() {
     if (!page) return;
     page.hidden = true; state.drawer = false; state.menu = ''; clearTimeout(timer); ++revision;
+    clearTimeout(locateTimer); locateId = ''; locateUntil = 0;
     state.loading = false; document.body.classList.remove('codeagent-accounts-page-open'); document.getElementById('btn-rail-accounts')?.classList.remove('active'); document.getElementById('btn-rail-accounts')?.setAttribute('aria-expanded', 'false'); window.removeEventListener('resize', place);
   }
   function onNav(event) {

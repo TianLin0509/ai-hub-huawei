@@ -4,8 +4,9 @@ const {
   DEFAULT_MODEL_BY_KIND,
 } = require("../core/model-options");
 const { ALL_AI_KINDS, getKindLabel } = require("../core/ai-kinds");
-const { kindAllowed } = require("../core/distribution");
-function dreamKinds(allowed = kindAllowed) {
+const { taskKindAllowed } = require("../core/company-ai-policy");
+// 公司版造梦只使用 CodeAgent；其他发行版仍以 Codex 打头。
+function dreamKinds(allowed = taskKindAllowed) {
   const kinds = ALL_AI_KINDS.filter(allowed);
   return kinds.includes("codex") ? ["codex", ...kinds.filter((v) => v !== "codex")] : kinds;
 }

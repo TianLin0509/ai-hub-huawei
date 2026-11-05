@@ -68,6 +68,14 @@ test('skills IPC reads the live session personal or pool directory and rescans e
     sessionManager: { getSession: id => sessions.get(id), codeagentPoolActiveCounts: () => ({}), getAllSessions: () => [] }, sendToRenderer() {},
   });
   const read = sessionId => handlers.get('codeagent:skills')(null, { sessionId });
+  assert.deepEqual((await read('personal')).commands, []);
+  fs.mkdirSync(path.join(dir, 'codeagent-pool'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'codeagent-pool', 'codeagent-commands.json'), JSON.stringify({ version: 1, accounts: {
+    personal: { version: 'fixture-version', commands: [{ name: 'cache-skill', kind: 'skill' }, { name: 'model', kind: 'command' }] },
+    testpool: { version: 'fixture-version', commands: [{ name: 'pool-cache-skill', kind: 'skill' }] },
+  } }));
+  assert.deepEqual((await read('personal')).commands.filter(row => row.kind === 'skill').map(row => row.name), ['cache-skill']);
+  assert.deepEqual((await read('pool')).commands.filter(row => row.kind === 'skill').map(row => row.name), ['pool-cache-skill']);
   assert.deepEqual((await read('personal')).skills.map(skill => skill.name), ['personal-only']);
   assert.deepEqual((await read('pool')).skills.map(skill => skill.name), ['pool-only']);
   assert.deepEqual((await read('legacy-pool')).skills.map(skill => skill.name), ['pool-only']);
@@ -90,6 +98,7 @@ class Node {
     else { this.replaceChildren(); if (String(text)) this.append(this.ownerDocument.createTextNode(String(text))); }
   }
   get innerText() { return this.textContent; }
+  get isConnected() { return this.ownerDocument.body.contains(this); }
   get nextSibling() { const nodes = this.parentNode?.childNodes || []; return nodes[nodes.indexOf(this) + 1] || null; }
   get children() { return this.childNodes.filter(node => node.nodeType === 1); }
   append(...nodes) { for (let node of nodes) { if (typeof node === 'string') node = this.ownerDocument.createTextNode(node); node.remove(); node.parentNode = this; this.childNodes.push(node); } }
@@ -148,6 +157,324 @@ test('a skill tag inserts, replaces, deletes, and sends exactly one slash comman
   assert.equal(skills.skillPrompt(f.input, '/report   indented\n  second line', session), '/report   indented\n  second line');
 });
 
+test('command cache is account and version scoped; missing caches and mismatched versions have no commands', t => {
+  const dir = temp(t), { readCommands } = require('../core/codeagent-command-cache');
+  assert.deepEqual(readCommands(dir, session), []);
+  fs.mkdirSync(path.join(dir, 'codeagent-pool'));
+  fs.writeFileSync(path.join(dir, 'codeagent-pool/codeagent-commands.json'), JSON.stringify({ version: 1, accounts: {
+    personal: { version: '1.26', commands: [{ name: '/model', aliases: ['m'], description: 'Choose model', kind: 'command' },
+      { name: 'sdd:proposal', aliases: [], description: 'Proposal', kind: 'custom-command' }, { name: 'batch', aliases: [], description: 'Plan', kind: 'skill' }] },
+    pool1: { version: '1.27', commands: [{ name: 'help', aliases: [], description: 'Help' }] },
+  } }));
+  assert.deepEqual(readCommands(dir, session).map(row => [row.name, row.kind]), [['model', 'command'], ['sdd:proposal', 'custom-command'], ['batch', 'skill']]);
+  assert.deepEqual(readCommands(dir, { codeagentPoolAccount: 'pool1' }).map(row => row.name), ['help']);
+  assert.deepEqual(readCommands(dir, { codeagentPoolAccount: 'pool1', codeagentVersion: '1.26' }), []);
+  assert.deepEqual(readCommands(dir, { codeagentPoolAccount: 'missing' }), []);
+});
+
+test('slash popup groups skills and cached commands, searches aliases and descriptions, and completes commands', async () => {
+  const commands = [{ name: 'help', aliases: ['assist'], description: 'Find answers' }, { name: 'model', aliases: ['m'], description: 'Choose model' }];
+  assert.deepEqual(skills.commandChoices(commands, 'ASSIST').map(row => row.label), ['help']);
+  assert.deepEqual(skills.commandChoices(commands, 'answers').map(row => row.label), ['help']);
+  assert.equal(skills.commandName('/ASSIST text', commands), 'help');
+  const f = pickerFixture({ inventory: async () => ({ ok: true, skills: [{ name: 'report' }], commands }) });
+  f.input.textContent = '/'; f.caret(1); f.input.dispatchEvent(event('input')); await new Promise(setImmediate);
+  const popup = f.document.body.querySelector('.fi-skill-picker');
+  assert.deepEqual(popup.querySelectorAll('.fi-skill-group').map(node => node.textContent), ['内置命令 2', '技能 1']);
+  assert.equal(popup.querySelector('.fi-skill-footer').hidden, true);
+  assert.match(f.document.getElementById('fi-codeagent-skills-style').textContent, /\.fi-skill-footer\[hidden\]\s*\{\s*display:none/);
+  f.input.textContent = '/assist'; f.caret(7); f.input.dispatchEvent(event('input'));
+  f.controller.onKeyDown(event('keydown', { key: 'Enter' }));
+  assert.equal(f.input.textContent, '/help '); assert.equal(skills.selectedSkill(f.input), null);
+  assert.equal(f.controller.isCommand('/assist details'), 'help');
+});
+
+test('model and skills choices open Hub controls; absent commands show status without terminal fallback', async () => {
+  const f = pickerFixture({ inventory: async () => ({ ok: true, skills: [], commands: [{ name: 'model' }, { name: 'skills' }] }) });
+  f.input.textContent = '/model'; f.caret(6); f.input.dispatchEvent(event('input')); await new Promise(setImmediate);
+  f.controller.onKeyDown(event('keydown', { key: 'Enter' })); assert.equal(f.calls.at(-1), 'model'); assert.equal(f.input.textContent, '');
+  f.input.textContent = '/skills'; f.caret(7); f.input.dispatchEvent(event('input')); await new Promise(setImmediate);
+  f.controller.onKeyDown(event('keydown', { key: 'Enter' }));
+  assert.equal(f.document.body.querySelector('.fi-skill-picker').hidden, false); assert.equal(f.input.textContent, '');
+  const missing = pickerFixture(); missing.input.textContent = '/not-installed'; missing.caret(4); missing.input.dispatchEvent(event('input')); await new Promise(setImmediate);
+  const popup = missing.document.body.querySelector('.fi-skill-picker');
+  assert.equal(popup.querySelectorAll('.fi-skill-option').length, 0);
+  assert.doesNotMatch(popup.textContent, /在终端执行|CodeAgent 内置命令|从 AgentCenter 添加/);
+  assert.equal(popup.querySelector('.fi-command-probe-text').textContent, '尚未读取命令列表');
+  assert.equal(popup.querySelector('.fi-command-probe-retry').textContent, '重试');
+  assert.equal(missing.controller.onKeyDown(event('keydown', { key: 'Enter' })), false);
+});
+
+test('real command kinds merge scanned skills with full metadata and keep custom and built-in commands separate', async () => {
+  const commands = [
+    { name: 'model', aliases: [], description: '切换模型', kind: 'command' },
+    { name: 'new', aliases: ['clear'], description: '新建会话', kind: 'command' },
+    { name: 'sdd:proposal', aliases: [], description: '根据要求创建提案', kind: 'custom-command' },
+    { name: 'developer-test-agent:dt', aliases: [], description: '生成单元测…', kind: 'custom-command' },
+    { name: 'batch', aliases: [], description: 'Research and plan…', kind: 'skill' },
+    { name: 'GIT-AI', aliases: [], description: 'Install, update…', kind: 'skill' },
+  ];
+  const installed = [{ name: 'git-ai', description: 'Full synthetic description', installedAt: 2000 }];
+  const merged = skills.mergedSkills(installed, commands);
+  assert.equal(merged.length, 2); assert.equal(merged.find(row => row.name === 'git-ai').description, installed[0].description);
+  assert.equal(merged.find(row => row.name === 'git-ai').installedAt, 2000);
+  assert.equal(skills.commandName('/batch request', commands), '');
+  assert.equal(skills.commandName('/clear', commands), 'new');
+  const f = pickerFixture({ inventory: async () => ({ ok: true, skills: installed, commands }) });
+  f.input.textContent = '/'; f.caret(1); f.input.dispatchEvent(event('input')); await new Promise(setImmediate);
+  assert.deepEqual(f.document.body.querySelectorAll('.fi-skill-group').map(node => node.textContent), ['内置命令 2', '技能 2', '自定义命令 2']);
+  f.input.textContent = '/batch'; f.caret(6); f.input.dispatchEvent(event('input'));
+  f.controller.onKeyDown(event('keydown', { key: 'Enter' }));
+  assert.equal(skills.selectedSkill(f.input).name, 'batch'); assert.equal(skills.skillPrompt(f.input, f.input.textContent, session), '/batch');
+});
+
+test('the command producer cache reaches the actual inventory IPC and slash popup as three groups', async t => {
+  const dir = temp(t), configDir = path.join(dir, 'personal'); install(configDir, 'local-skill');
+  const variables = { CLAUDE_HUB_DATA_DIR: dir, AI_HUB_CODEAGENT_CONFIG_DIR: configDir };
+  const before = Object.fromEntries(Object.keys(variables).map(key => [key, process.env[key]])); Object.assign(process.env, variables);
+  t.after(() => { for (const [key, value] of Object.entries(before)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
+  const producer = require('../core/codeagent-commands-probe');
+  producer.writeCommandCache(dir, 'personal', '1.26.15', ['/new (clear)    新建会话command', '/sdd:proposal    创建提案custom-command', '/batch    Plan…skill'].map(producer.parseCommandRow));
+  const handlers = new Map();
+  require('../main/ipc/session-handlers').registerSessionIpc({ handle: (name, fn) => handlers.set(name, fn), on() {} }, {
+    sessionManager: { getSession: () => ({ kind: 'codeagent', codeagentVersion: '1.26.15', codeagentConfigDir: configDir }), getAllSessions: () => [], codeagentPoolActiveCounts: () => ({}) }, sendToRenderer() {},
+  });
+  const f = pickerFixture({ inventory: (channel, payload) => handlers.get(channel)(null, payload) });
+  f.input.textContent = '/'; f.caret(1); f.input.dispatchEvent(event('input')); await new Promise(setImmediate);
+  assert.deepEqual(f.document.body.querySelectorAll('.fi-skill-group').map(node => node.textContent), ['内置命令 1', '技能 2', '自定义命令 1']);
+  f.input.textContent = '/clear'; f.caret(6); f.input.dispatchEvent(event('input'));
+  f.controller.onKeyDown(event('keydown', { key: 'Enter' })); assert.equal(f.input.textContent, '/new ');
+});
+
+test('opening slash requests one warm-up and automatically reads three groups when complete; failures cool down', async t => {
+  const dir = temp(t), configDir = path.join(dir, 'personal'); install(configDir, 'local-skill');
+  const before = { CLAUDE_HUB_DATA_DIR: process.env.CLAUDE_HUB_DATA_DIR, AI_HUB_CODEAGENT_CONFIG_DIR: process.env.AI_HUB_CODEAGENT_CONFIG_DIR };
+  process.env.CLAUDE_HUB_DATA_DIR = dir; process.env.AI_HUB_CODEAGENT_CONFIG_DIR = configDir;
+  t.after(() => { for (const [key, value] of Object.entries(before)) if (value === undefined) delete process.env[key]; else process.env[key] = value; });
+  let release, version = '1.26.15', failed = false, probes = 0;
+  const waitVersion = new Promise(resolve => { release = resolve; });
+  const producer = require('../core/codeagent-commands-probe'), handlers = new Map();
+  require('../main/ipc/session-handlers').registerSessionIpc({ handle: (name, fn) => handlers.set(name, fn), on() {} }, {
+    sessionManager: { getSession: () => ({ kind: 'codeagent', codeagentConfigDir: configDir }), getAllSessions: () => [], codeagentPoolActiveCounts: () => ({}) },
+    sendToRenderer() {}, codeagentCommandVersionProbe: async () => { await waitVersion; return version; },
+    codeagentProbeModels: async options => {
+      probes++; assert.equal(options.commandsOnly, true); assert.equal(options.configDir, configDir); assert.equal(options.accountKey, 'personal');
+      if (failed) return { ok: false, commandsProbe: { ok: false, reason: 'list-unavailable' } };
+      producer.writeCommandCache(dir, 'personal', version, ['/new (clear)    新建会话command', '/sdd:proposal    创建提案custom-command', '/batch    Plan…skill'].map(producer.parseCommandRow));
+      return { ok: true, commandsProbe: { ok: true } };
+    },
+  });
+  const timers = pickerTimers();
+  const f = pickerFixture({ timers, inventory: (channel, payload) => handlers.get(channel)(null, payload) });
+  f.input.textContent = '/'; f.caret(1); f.input.dispatchEvent(event('input'));
+  await new Promise(setImmediate); await new Promise(setImmediate);
+  assert.equal(probes, 0); assert.deepEqual(f.document.body.querySelectorAll('.fi-skill-group').map(node => node.textContent), ['技能 1']);
+  assert.equal(f.calls[0][1].probeCommands, true);
+  release(); for (let i = 0; i < 10 && probes === 0; i++) await new Promise(setImmediate);
+  await timers.advance(1000);
+  assert.deepEqual(f.calls[1][1], { sessionId: 'test' });
+  assert.equal(probes, 1); assert.deepEqual(f.document.body.querySelectorAll('.fi-skill-group').map(node => node.textContent), ['内置命令 1', '技能 2', '自定义命令 1']);
+  const file = path.join(dir, 'codeagent-pool', 'codeagent-commands.json'), saved = fs.readFileSync(file, 'utf8');
+  version = '1.26.16'; failed = true;
+  await f.controller.refresh(); await new Promise(setImmediate); await f.controller.refresh();
+  assert.equal(probes, 2); assert.equal(fs.readFileSync(file, 'utf8'), saved);
+  assert.match(fs.readFileSync(path.join(dir, 'logs', 'codeagent-model.log'), 'utf8'), /event=commands-probe result=failed reason=list-unavailable/);
+  assert.match(fs.readFileSync(path.join(dir, 'logs', 'codeagent-commands-probe.log'), 'utf8'), /list-unavailable/);
+  f.controller.dispose();
+});
+
+test('slash shows idle, reading and failed command states as plain text, then reads completed commands on reopening', async () => {
+  let status = null, completed = false;
+  const f = pickerFixture({ inventory: async () => ({ ok: true, skills: [{ name: 'sample-skill' }], commandsProbe: status,
+    commands: completed ? [{ name: 'help', kind: 'command' }] : [] }) });
+  const open = async () => { f.input.textContent = '/'; f.caret(1); f.input.dispatchEvent(event('input')); await new Promise(setImmediate); };
+  await open();
+  const popup = f.document.body.querySelector('.fi-skill-picker');
+  assert.equal(popup.querySelector('.fi-command-probe-text').textContent, '尚未读取命令列表');
+  f.controller.close(); status = { state: 'reading', at: Date.now() }; await open();
+  assert.equal(popup.querySelector('.fi-command-probe-text').textContent, '正在读取 CodeAgent 命令…');
+  assert.equal(popup.querySelector('.fi-command-probe-retry').disabled, true);
+  f.controller.close(); status = { state: 'failed', reason: '<b>queue-timeout</b>', at: Date.now() }; await open();
+  assert.match(popup.querySelector('.fi-command-probe-text').textContent, /^命令列表读取失败：<b>queue-timeout<\/b>（\d{2}:\d{2}）$/);
+  assert.equal(popup.querySelector('.fi-command-probe-status').querySelector('b'), null);
+  f.controller.close(); completed = true; status = { state: 'ready' }; await open();
+  assert.equal(popup.querySelector('.fi-command-probe-status'), null);
+  assert.deepEqual(popup.querySelectorAll('.fi-skill-group').map(node => node.textContent), ['内置命令 1', '技能 1']);
+  f.controller.dispose();
+});
+
+test('command cooldown shows remaining minutes and its retry button forces a commands-only IPC read', async t => {
+  const dir = temp(t), profile = path.join(dir, 'profile'); install(profile, 'local-skill');
+  const before = process.env.CLAUDE_HUB_DATA_DIR; process.env.CLAUDE_HUB_DATA_DIR = dir;
+  t.after(() => { if (before === undefined) delete process.env.CLAUDE_HUB_DATA_DIR; else process.env.CLAUDE_HUB_DATA_DIR = before; });
+  const handlers = new Map(), producer = require('../core/codeagent-commands-probe'); let calls = 0;
+  require('../main/ipc/session-handlers').registerSessionIpc({ handle: (name, fn) => handlers.set(name, fn), on() {} }, {
+    sessionManager: { getSession: () => ({ kind: 'codeagent', codeagentConfigDir: profile, codeagentVersion: '1.26.1' }), getAllSessions: () => [], codeagentPoolActiveCounts: () => ({}) },
+    sendToRenderer() {}, codeagentProbeModels: async options => {
+      calls++; assert.equal(options.commandsOnly, true);
+      if (calls === 1) return { commandsProbe: { ok: false, reason: 'unrecognized-list' } };
+      assert.equal(options.forceCommands, true);
+      producer.writeCommandCache(dir, 'personal', '1.26.1', [{ name: 'help', kind: 'command' }]);
+      return { commandsProbe: { ok: true } };
+    },
+  });
+  const f = pickerFixture({ inventory: (channel, payload) => handlers.get(channel)(null, payload) });
+  f.input.textContent = '/'; f.caret(1); f.input.dispatchEvent(event('input')); await new Promise(setImmediate);
+  await f.controller.refresh(); assert.equal(calls, 1);
+  const status = f.document.body.querySelector('.fi-command-probe-status');
+  assert.match(status.querySelector('.fi-command-probe-text').textContent, /unrecognized-list.*冷却剩余 30 分钟$/);
+  assert.equal(status.querySelector('.fi-command-probe-retry').disabled, false);
+  status.querySelector('.fi-command-probe-retry').dispatchEvent(event('click')); await new Promise(setImmediate);
+  assert.equal(calls, 2); assert.ok(f.calls.some(row => row[1]?.retryCommands === true));
+  await f.controller.refresh();
+  assert.deepEqual(f.document.body.querySelectorAll('.fi-skill-group').map(row => row.textContent), ['内置命令 1', '技能 1']);
+  assert.equal(f.document.body.querySelector('.fi-command-probe-status'), null);
+  const now = Date.now();
+  assert.match(skills.commandProbeText({ state: 'failed', reason: 'unrecognized-list', at: now, retryAt: now + 25 * 60000 }, now), /冷却剩余 25 分钟$/);
+  assert.doesNotMatch(skills.commandProbeText({ state: 'failed', reason: 'unrecognized-list', at: now, retryAt: now }, now), /冷却/);
+  f.controller.dispose();
+});
+
+test('an open slash popup polls read-only and automatically paints completion without losing query or selection', async () => {
+  const timers = pickerTimers(); let ready = false;
+  const f = pickerFixture({ timers, inventory: async () => ({ ok: true, skills: [{ name: 'target' }, { name: 'retarget' }],
+    commandsProbe: { state: ready ? 'ready' : 'reading' }, commands: ready ? [{ name: 'task', kind: 'command' }, { name: 'custom:task', kind: 'custom-command' }] : [] }) });
+  f.input.textContent = '/ta'; f.caret(3); f.input.dispatchEvent(event('input')); await new Promise(setImmediate);
+  const popup = f.document.body.querySelector('.fi-skill-picker'), list = popup.querySelector('.fi-skill-list');
+  assert.equal(list.children[0].className, 'fi-command-probe-status'); assert.equal(timers.pending.size, 1);
+  f.controller.onKeyDown(event('keydown', { key: 'ArrowDown' }));
+  ready = true; await timers.advance(999); assert.equal(f.calls.length, 1);
+  await timers.advance(1);
+  assert.deepEqual(f.calls[1], ['codeagent:skills', { sessionId: 'test' }]);
+  assert.equal(popup.hidden, false); assert.equal(popup.querySelector('.fi-skill-search').value, 'ta'); assert.equal(f.input.textContent, '/ta');
+  assert.deepEqual(list.querySelectorAll('.fi-skill-group').map(node => node.textContent), ['内置命令 1', '技能 2', '自定义命令 1']);
+  assert.equal(list.querySelectorAll('.fi-skill-option').find(node => node.getAttribute('aria-selected') === 'true').querySelector('.fi-skill-name').textContent, '/retarget');
+  assert.equal(list.querySelector('.fi-command-probe-status'), null); assert.equal(timers.pending.size, 0);
+  await timers.advance(10000); assert.equal(f.calls.length, 2);
+  f.controller.onKeyDown(event('keydown', { key: 'Enter' })); assert.equal(skills.selectedSkill(f.input).name, 'retarget');
+  f.controller.dispose();
+});
+
+test('polling stops on close, disposal, failure or completion without leaving timers', async () => {
+  for (const stop of ['close', 'dispose', 'failed', 'ready']) {
+    const timers = pickerTimers(); let state = 'reading';
+    const f = pickerFixture({ timers, inventory: async () => ({ ok: true, skills: [], commands: [], commandsProbe: { state, reason: 'synthetic failure', at: 0 } }) });
+    f.input.textContent = '/'; f.caret(1); f.input.dispatchEvent(event('input')); await new Promise(setImmediate);
+    assert.equal(timers.pending.size, 1);
+    if (stop === 'close' || stop === 'dispose') f.controller[stop]();
+    else { state = stop; await timers.advance(1000); }
+    assert.equal(timers.pending.size, 0);
+    if (stop === 'failed') {
+      const list = f.document.body.querySelector('.fi-skill-list'); assert.equal(list.children[0].className, 'fi-command-probe-status');
+      assert.match(list.children[0].textContent, /synthetic failure/); assert.equal(list.children[0].querySelector('button').disabled, false);
+    }
+    const calls = f.calls.length; await timers.advance(100000); assert.equal(f.calls.length, calls);
+    f.controller.dispose();
+  }
+});
+
+test('polling is bounded to ninety seconds and retry starts a fresh single timer window', async () => {
+  const timers = pickerTimers(); let state = 'reading';
+  const f = pickerFixture({ timers, inventory: async (_channel, payload) => {
+    if (payload.retryCommands) state = 'reading';
+    return { ok: true, skills: [], commandsProbe: { state, reason: 'synthetic failure', at: 0 } };
+  } });
+  f.input.textContent = '/'; f.caret(1); f.input.dispatchEvent(event('input')); await new Promise(setImmediate);
+  await timers.advance(90000); assert.equal(timers.pending.size, 0);
+  const count = f.calls.length; await timers.advance(5000); assert.equal(f.calls.length, count);
+  assert.ok(f.calls.slice(1).every(row => !('probeCommands' in row[1]) && !('retryCommands' in row[1])));
+  state = 'failed'; await f.controller.refresh();
+  f.document.body.querySelector('.fi-command-probe-retry').dispatchEvent(event('click')); await new Promise(setImmediate);
+  assert.equal(f.calls.at(-1)[1].retryCommands, true); assert.equal(timers.pending.size, 1);
+  await timers.advance(1000); assert.deepEqual(f.calls.at(-1)[1], { sessionId: 'test' }); assert.equal(timers.pending.size, 1);
+  await timers.advance(89000); assert.equal(timers.pending.size, 0);
+  const finished = f.calls.length; await timers.advance(1000); assert.equal(f.calls.length, finished);
+  f.controller.dispose();
+});
+
+test('late polling responses cannot repaint a closed or reopened popup', async () => {
+  const timers = pickerTimers(); let release, calls = 0;
+  const f = pickerFixture({ timers, inventory: async () => {
+    calls++;
+    if (calls === 2) return new Promise(resolve => { release = resolve; });
+    return { ok: true, skills: [{ name: calls === 1 ? 'old' : 'current' }], commandsProbe: { state: calls === 1 ? 'reading' : 'ready' } };
+  } });
+  f.input.textContent = '/'; f.caret(1); f.input.dispatchEvent(event('input')); await new Promise(setImmediate);
+  await timers.advance(1000); f.controller.close();
+  f.input.dispatchEvent(event('input')); await new Promise(setImmediate);
+  release({ ok: true, skills: [{ name: 'late' }], commandsProbe: { state: 'reading' } }); await new Promise(setImmediate);
+  assert.equal(f.document.body.querySelector('.fi-skill-name').textContent, '/current'); assert.equal(timers.pending.size, 0);
+  f.controller.dispose();
+});
+
+test('slash group order and stable prefix ranking include aliases while empty queries retain recent skill priority', () => {
+  const installed = [{ name: 'zeta', description: 'needle details' }, { name: 'pre-needle' }, { name: 'needle-skill' }];
+  const commands = [{ name: 'help', description: 'needle help', kind: 'command' }, { name: 'pre-needle', kind: 'command' },
+    { name: 'new', aliases: ['needle-alias'], kind: 'command' }, { name: 'needle-command', kind: 'command' },
+    { name: 'custom:other', description: 'needle docs', kind: 'custom-command' }, { name: 'needle-custom', kind: 'custom-command' }];
+  const recent = [{ name: 'zeta', at: 1 }];
+  const rows = skills.slashChoices(installed, commands, 'NEEDLE', recent);
+  assert.deepEqual(rows.map(row => row.label), ['new', 'needle-command', 'pre-needle', 'help', 'needle-skill', 'pre-needle', 'zeta', 'needle-custom', 'custom:other']);
+  assert.deepEqual(skills.slashChoices(installed, commands, '', recent).map(row => row.label), ['help', 'pre-needle', 'new', 'needle-command', 'zeta', 'needle-skill', 'pre-needle', 'custom:other', 'needle-custom']);
+});
+
+test('compact rows align names and descriptions, show aliases and highlight text without parsing HTML', async () => {
+  const f = pickerFixture({ inventory: async () => ({ ok: true, skills: [{ name: '<b>-skill', description: 'plain', 'argument-hint': '[argument]' }],
+    commands: [{ name: 'new', aliases: ['clear'], description: '<b>short description</b>', kind: 'command' }] }) });
+  f.input.textContent = '/CLE'; f.caret(4); f.input.dispatchEvent(event('input')); await new Promise(setImmediate);
+  const popup = f.document.body.querySelector('.fi-skill-picker'), item = popup.querySelector('.fi-skill-option');
+  assert.equal(item.querySelector('.fi-skill-name').textContent, '/new (clear)'); assert.equal(item.querySelector('mark').textContent, 'cle');
+  assert.equal(item.querySelector('small').textContent, '<b>short description</b>'); assert.equal(item.querySelector('b'), null);
+  const keys = popup.querySelector('.fi-skill-keys'); assert.equal(keys.hidden, false); assert.equal(keys.textContent, '↑↓ 选择 · Enter 确认 · Esc 关闭');
+  assert.equal(popup.querySelector('.fi-skill-list').contains(keys), false);
+  const style = f.document.getElementById('fi-codeagent-skills-style').textContent;
+  assert.match(style, /grid-template-columns:minmax\(130px,40%\) minmax\(0,1fr\)/); assert.match(style, /height:28px/); assert.match(style, /max-height:360px/);
+  f.controller.onKeyDown(event('keydown', { key: 'Enter' })); assert.equal(f.input.textContent, '/new ');
+  f.input.textContent = '/<b>'; f.caret(4); f.input.dispatchEvent(event('input')); await new Promise(setImmediate);
+  const skill = popup.querySelectorAll('.fi-skill-option').find(row => row.querySelector('.fi-skill-name').textContent === '/<b>-skill');
+  assert.equal(skill.querySelector('mark').textContent, '<b>'); assert.equal(skill.querySelector('b'), null);
+  assert.equal(skill.title, 'plain\n[argument]'); assert.equal(skill.querySelectorAll('small').length, 1); assert.doesNotMatch(skill.textContent, /argument/);
+  assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '../renderer/composer-codeagent-skills.js'), 'utf8'), /\.innerHTML\b/);
+  f.controller.close(); f.controller.open(); await new Promise(setImmediate); assert.equal(keys.hidden, true);
+  f.controller.dispose();
+});
+
+test('sorted default selection and the skills special Enter branch retain explicit command choices', async () => {
+  const f = pickerFixture({ inventory: async () => ({ ok: true, skills: [{ name: 'local' }],
+    commands: [{ name: 'help', description: 'skills help' }, { name: 'skills' }] }) });
+  f.input.textContent = '/'; f.caret(1); f.input.dispatchEvent(event('input')); await new Promise(setImmediate);
+  assert.equal(f.document.body.querySelectorAll('.fi-skill-option')[0].getAttribute('aria-selected'), 'true');
+  assert.equal(f.document.body.querySelector('.fi-skill-name').textContent, '/help');
+  f.input.textContent = '/skills'; f.caret(7); f.input.dispatchEvent(event('input'));
+  assert.equal(f.document.body.querySelector('.fi-skill-name').textContent, '/skills');
+  f.controller.onKeyDown(event('keydown', { key: 'Enter' })); await new Promise(setImmediate); assert.equal(f.input.textContent, '');
+  assert.equal(f.document.body.querySelector('.fi-skill-keys').hidden, true);
+  f.controller.close(); f.input.textContent = '/skills'; f.caret(7); f.input.dispatchEvent(event('input')); await new Promise(setImmediate);
+  f.controller.onKeyDown(event('keydown', { key: 'ArrowDown' })); f.controller.onKeyDown(event('keydown', { key: 'Enter' }));
+  assert.equal(f.input.textContent, '/help '); f.controller.dispose();
+});
+
+test('search composition leaves filtering and Enter untouched until composition ends', async () => {
+  const f = pickerFixture(); f.controller.button.dispatchEvent(event('click')); await new Promise(setImmediate);
+  const popup = f.document.body.querySelector('.fi-skill-picker'), search = popup.querySelector('.fi-skill-search');
+  search.dispatchEvent(event('compositionstart')); search.value = 'no-match'; search.dispatchEvent(event('input'));
+  const enter = event('keydown', { key: 'Enter' });
+  assert.equal(f.controller.onKeyDown(enter), false); assert.equal(enter.prevented, undefined);
+  assert.equal(popup.querySelectorAll('.fi-skill-option').length, 1);
+  search.dispatchEvent(event('compositionend')); assert.equal(popup.querySelectorAll('.fi-skill-option').length, 0);
+});
+
+test('slash Enter waits for inventory and never executes a footer or a missing command', async () => {
+  let resolve;
+  const f = pickerFixture({ inventory: () => new Promise(done => { resolve = done; }) });
+  f.input.textContent = '/unknown'; f.caret(8); f.input.dispatchEvent(event('input'));
+  assert.equal(f.controller.onKeyDown(event('keydown', { key: 'Enter' })), true); assert.equal(f.calls.length, 1);
+  resolve({ ok: true, skills: [] }); await new Promise(setImmediate);
+  assert.equal(f.controller.onKeyDown(event('keydown', { key: 'Enter' })), false);
+  assert.equal(f.calls.length, 1); assert.equal(f.input.textContent, '/unknown');
+});
+
+
 test('skill metadata and full text persist in localStorage and only restore for the matching session draft', () => {
   const f = dom(), data = new Map(), storage = { setItem: (key, value) => data.set(key, value), getItem: key => data.get(key), removeItem: key => data.delete(key) };
   skills.insertSkillTag(f.input, { name: 'insight-hub', installedAt: 2000 }, { ...f, session });
@@ -184,13 +511,28 @@ function memoryStorage() {
   const data = new Map();
   return { data, getItem: key => data.get(key), setItem: (key, value) => data.set(key, value), removeItem: key => data.delete(key) };
 }
-function pickerFixture({ kind = 'codeagent', storage = memoryStorage(), account = '', inventory = async () => ({ ok: true, skills: [{ name: 'insight-hub', description: '写总结', 'argument-hint': '[topic]', installedAt: 2000 }] }) } = {}) {
+function pickerTimers() {
+  let clock = 0, id = 0;
+  const pending = new Map();
+  return { now: () => clock, pending,
+    setTimer: (fn, ms) => { const key = ++id; pending.set(key, { at: clock + ms, fn }); return key; },
+    clearTimer: key => pending.delete(key),
+    async advance(ms) {
+      const end = clock + ms;
+      for (;;) {
+        const next = [...pending].sort((a, b) => a[1].at - b[1].at)[0];
+        if (!next || next[1].at > end) break;
+        clock = next[1].at; pending.delete(next[0]); next[1].fn(); await new Promise(setImmediate);
+      }
+      clock = end; await new Promise(setImmediate);
+    },
+  };
+}
+function pickerFixture({ kind = 'codeagent', storage = memoryStorage(), account = '', timers = {}, inventory = async () => ({ ok: true, skills: [{ name: 'insight-hub', description: '写总结', 'argument-hint': '[topic]', installedAt: 2000 }] }) } = {}) {
   const f = dom(), calls = [], host = f.document.createElement('div'); f.document.body.append(host);
-  const controller = skills.mountCodeAgentSkillPicker({ ...f, host, sessionId: 'test', storage, getSession: () => ({ ...session, kind, codeagentPoolAccount: account }),
-    ipcRenderer: { invoke: async (...args) => { calls.push(args); return inventory(); } },
-    readText: () => f.input.textContent, replaceText: text => { f.input.textContent = text; }, saveDraft() {}, openMenu: async () => { calls.push('open-menu'); return { ok: true }; },
-    openCommands: async () => { calls.push('commands'); return { ok: true }; },
-    openCommand: async text => { calls.push({ terminalCommand: text }); return { ok: true }; },
+  const controller = skills.mountCodeAgentSkillPicker({ ...f, ...timers, host, sessionId: 'test', storage, getSession: () => ({ ...session, kind, codeagentPoolAccount: account }),
+    ipcRenderer: { invoke: async (...args) => { calls.push(args); return inventory(...args); } },
+    readText: () => f.input.textContent, replaceText: text => { f.input.textContent = text; }, saveDraft() {}, openModel: () => calls.push('model'), notify: (...args) => calls.push({ notice: args }),
   });
   return { ...f, controller, calls, storage };
 }
@@ -207,21 +549,6 @@ test('the composer lists the automatically installed company-team skill and inse
   assert.equal(skills.skillPrompt(f.input, f.input.textContent, session), '/company-team');
 });
 
-test('toolbar list rescans each open, shows descriptions/hints, replaces the tag and keeps the AgentCenter entry', async () => {
-  const f = pickerFixture();
-  f.controller.button.dispatchEvent(event('click')); await new Promise(setImmediate);
-  const popup = f.document.body.querySelector('.fi-skill-picker');
-  assert.match(popup.textContent, /insight-hub.*写总结.*\[topic\].*从 AgentCenter 添加/);
-  popup.querySelector('.fi-skill-option').dispatchEvent(event('click'));
-  assert.equal(skills.selectedSkill(f.input).name, 'insight-hub');
-  assert.equal(popup.hidden, true);
-  f.controller.button.dispatchEvent(event('click')); await new Promise(setImmediate);
-  assert.equal(f.calls.length, 2);
-  popup.querySelector('.fi-skill-add').dispatchEvent(event('click'));
-  assert.equal(f.calls.at(-1), 'open-menu');
-  f.controller.dispose();
-  assert.equal(f.document.body.querySelector('.fi-skill-picker'), null);
-});
 
 test('skill descriptions and argument hints use single-line ellipsis with full plain-text tooltips', async () => {
   const description = '很长的技能说明，'.repeat(40), hint = '[这是很长的参数提示]'.repeat(30);
@@ -233,8 +560,8 @@ test('skill descriptions and argument hints use single-line ellipsis with full p
   assert.match(detailStyle, /overflow:\s*hidden/);
   assert.match(detailStyle, /text-overflow:\s*ellipsis/);
   const details = f.document.body.querySelector('.fi-skill-option').querySelectorAll('small');
-  assert.deepEqual(details.map(node => node.title), [description, hint]);
-  assert.deepEqual(details.map(node => node.textContent), [description, hint], 'CSS truncation must retain the original text');
+  assert.deepEqual(details.map(node => node.title), [description + '\n' + hint]);
+  assert.deepEqual(details.map(node => node.textContent), [description], 'CSS truncation must retain the original description; the hint is tooltip-only');
   f.document.body.querySelector('.fi-skill-option').dispatchEvent(event('click'));
   const chip = f.input.querySelector('[data-codeagent-skill]');
   assert.equal(chip.title, description); assert.equal(chip.textContent, '/long-skill');
@@ -246,8 +573,9 @@ test('short descriptions stay unchanged and HTML-looking descriptions and hints 
   const f = pickerFixture({ inventory: async () => ({ ok: true, skills: [{ name: 'plain', description, 'argument-hint': hint }] }) });
   f.controller.button.dispatchEvent(event('click')); await new Promise(setImmediate);
   const details = f.document.body.querySelector('.fi-skill-option').querySelectorAll('small');
-  for (const [node, text] of [[details[0], description], [details[1], hint]]) {
-    assert.equal(node.textContent, text); assert.equal(node.title, text);
+  assert.equal(details.length, 1);
+  for (const [node, text] of [[details[0], description]]) {
+    assert.equal(node.textContent, text); assert.equal(node.title, description + '\n' + hint);
     assert.equal(node.children.length, 0);
     assert.equal(node.childNodes[0].nodeType, 3);
   }
@@ -271,19 +599,6 @@ test('slash popup filters and completes a skill via Enter; IME suppresses it and
   assert.equal(f.controller.onKeyDown(event('keydown', { key: 'ArrowUp' })), false, 'closed popup must leave history keys alone');
 });
 
-test('no matching skill offers a terminal command, while /skills still opens the AgentCenter menu action', async () => {
-  const f = pickerFixture();
-  f.input.textContent = '/mod'; f.caret(4); f.input.dispatchEvent(event('input')); await new Promise(setImmediate);
-  f.controller.onKeyDown(event('keydown', { key: 'Enter' }));
-  await new Promise(setImmediate);
-  assert.deepEqual(f.calls.at(-1), { terminalCommand: '/mod' });
-  assert.equal(f.input.textContent, ''); assert.equal(skills.selectedSkill(f.input), null);
-  f.input.textContent = '/skills'; f.caret(7); f.input.dispatchEvent(event('input')); await new Promise(setImmediate);
-  f.controller.onKeyDown(event('keydown', { key: 'Enter' }));
-  await new Promise(setImmediate);
-  assert.equal(f.calls.at(-1), 'open-menu');
-  assert.equal(f.input.textContent, '');
-});
 
 test('empty and failed inventories have clear messages; other CLIs get no skill UI', async () => {
   for (const [inventory, message] of [
@@ -305,16 +620,6 @@ test('a skill installed after session start warns without blocking; old installs
   assert.equal(skills.installationWarning({ installedAt: 2000 }, { kind: 'codeagent' }), '');
 });
 
-test('AgentCenter action switches terminal before the existing send path and refuses running sessions', async () => {
-  const calls = [], notify = (message, level) => calls.push({ message, level });
-  const result = await skills.openSkillsMenu({ session, state: 'idle', openTerminal: async () => calls.push('terminal'),
-    send: async text => { calls.push(text); return { ok: true }; }, notify });
-  assert.equal(result.ok, true); assert.deepEqual(calls.slice(0, 2), ['terminal', '/skills']);
-  assert.match(calls[2].message, /Add from AgentCenter/);
-  calls.length = 0;
-  const busy = await skills.openSkillsMenu({ session, state: 'running', openTerminal: () => calls.push('terminal'), send: () => calls.push('send'), notify });
-  assert.equal(busy.ok, false); assert.equal(calls.length, 1); assert.match(calls[0].message, /等当前回答结束/);
-});
 
 function rendererFunction(name) {
   const file = path.join(__dirname, '..', 'renderer', 'renderer.js'), source = fs.readFileSync(file, 'utf8');
@@ -376,12 +681,6 @@ test('actual renderer key handler keeps IME, popup Enter/Esc, ordinary send and 
   const arrow = event('keydown', { key: 'ArrowUp' }); handle(arrow); assert.equal(arrow.prevented, undefined);
 });
 
-test('typing the full /skills command takes precedence over incidental skill description matches', async () => {
-  const f = pickerFixture({ inventory: async () => ({ ok: true, skills: [{ name: 'report', description: 'skills report' }] }) });
-  f.input.textContent = '/skills'; f.caret(7); f.input.dispatchEvent(event('input')); await new Promise(setImmediate);
-  f.controller.onKeyDown(event('keydown', { key: 'Enter' })); await new Promise(setImmediate);
-  assert.equal(f.calls.at(-1), 'open-menu'); assert.equal(skills.selectedSkill(f.input), null); assert.equal(f.input.textContent, '');
-});
 
 test('actual queued PTY sender submits /skills once without turn-ack waits or menu keys; normal skills and other CLIs retain acknowledgements', async t => {
   isolateInputDiagnostics(t);
@@ -494,23 +793,6 @@ test('recent skills are capped at five, newest first, account isolated and filte
   assert.equal(skills.recordSkillUse(storage, session, { name: 'unknown' }, { ok: true, receipt: { status: 'unconfirmed' } }), false);
 });
 
-test('search and footer stay outside a long scroll list; keyboard navigation reaches both fixed actions', async () => {
-  const f = pickerFixture({ inventory: async () => ({ ok: true, skills: Array.from({ length: 50 }, (_, n) => ({ name: 'skill-' + String(n).padStart(2, '0'), description: 'test' })) }) });
-  f.controller.button.dispatchEvent(event('click')); await new Promise(setImmediate);
-  const popup = f.document.body.querySelector('.fi-skill-picker'), list = popup.querySelector('.fi-skill-list');
-  const footer = popup.querySelector('.fi-skill-footer'), search = popup.querySelector('.fi-skill-search');
-  assert.equal(list.querySelectorAll('.fi-skill-option').length, 50);
-  assert.equal(footer.parentNode, popup); assert.equal(search.parentNode, popup);
-  assert.equal(list.contains(footer), false); assert.equal(list.contains(search), false);
-  assert.equal(footer.children.length, 2);
-  for (let n = 0; n < 50; n += 1) f.controller.onKeyDown(event('keydown', { key: 'ArrowDown' }));
-  assert.equal(footer.querySelector('.fi-skill-commands').getAttribute('aria-selected'), 'true');
-  f.controller.onKeyDown(event('keydown', { key: 'Enter' })); assert.equal(f.calls.at(-1), 'commands');
-  f.controller.button.dispatchEvent(event('click')); await new Promise(setImmediate);
-  f.controller.onKeyDown(event('keydown', { key: 'ArrowUp' }));
-  assert.equal(footer.querySelector('.fi-skill-add').getAttribute('aria-selected'), 'true');
-  f.controller.onKeyDown(event('keydown', { key: 'Enter' })); assert.equal(f.calls.at(-1), 'open-menu');
-});
 
 test('recent groups appear before alphabetic remaining skills and never show an uninstalled skill', async () => {
   const storage = memoryStorage();
@@ -519,59 +801,28 @@ test('recent groups appear before alphabetic remaining skills and never show an 
   const f = pickerFixture({ storage, inventory: async () => ({ ok: true, skills: [{ name: 'zeta' }, { name: 'beta' }, { name: 'alpha' }] }) });
   f.controller.button.dispatchEvent(event('click')); await new Promise(setImmediate);
   const list = f.document.body.querySelector('.fi-skill-list');
-  assert.deepEqual(list.querySelectorAll('.fi-skill-group').map(node => node.textContent), ['最近使用', '全部技能']);
+  assert.deepEqual(list.querySelectorAll('.fi-skill-group').map(node => node.textContent), ['最近使用 1', '全部技能 2']);
   assert.deepEqual(list.querySelectorAll('.fi-skill-option').map(node => node.textContent), ['/zeta', '/alpha', '/beta']);
   assert.doesNotMatch(list.textContent, /removed/);
 });
 
-test('search composition leaves filtering and navigation untouched until commit; focused footer actions follow keyboard selection', async () => {
-  const f = pickerFixture(); f.controller.button.dispatchEvent(event('click')); await new Promise(setImmediate);
-  const popup = f.document.body.querySelector('.fi-skill-picker'), search = popup.querySelector('.fi-skill-search');
-  search.dispatchEvent(event('compositionstart')); search.value = 'no-match'; search.dispatchEvent(event('input'));
-  const enter = event('keydown', { key: 'Enter' });
-  assert.equal(f.controller.onKeyDown(enter), false); assert.equal(enter.prevented, undefined);
-  assert.equal(popup.querySelectorAll('.fi-skill-option').length, 1);
-  search.dispatchEvent(event('compositionend'));
-  assert.equal(popup.querySelectorAll('.fi-skill-option').length, 0);
-  popup.querySelector('.fi-skill-add').dispatchEvent(event('focus'));
-  f.controller.onKeyDown(event('keydown', { key: 'Enter' })); assert.equal(f.calls.at(-1), 'open-menu');
-});
 
-test('slash Enter during inventory loading cannot accidentally execute a footer action', async () => {
-  let resolve;
-  const f = pickerFixture({ inventory: () => new Promise(done => { resolve = done; }) });
-  f.input.textContent = '/unknown'; f.caret(8); f.input.dispatchEvent(event('input'));
-  assert.equal(f.controller.onKeyDown(event('keydown', { key: 'Enter' })), true);
-  assert.equal(f.calls.length, 1);
-  resolve({ ok: true, skills: [] }); await new Promise(setImmediate);
-  f.controller.onKeyDown(event('keydown', { key: 'Enter' })); await new Promise(setImmediate);
-  assert.deepEqual(f.calls.at(-1), { terminalCommand: '/unknown' });
-});
 
-test('unmatched slash shows an explicit terminal action, including click and complete arguments', async () => {
-  const f = pickerFixture();
-  f.input.textContent = '/new-command arguments'; f.caret(5); f.input.dispatchEvent(event('input')); await new Promise(setImmediate);
-  const list = f.document.body.querySelector('.fi-skill-list');
-  assert.match(list.querySelector('.fi-skill-option').textContent, /^在终端执行 \/new-command$/);
-  list.querySelector('.fi-skill-option').dispatchEvent(event('click')); await new Promise(setImmediate);
-  assert.deepEqual(f.calls.at(-1), { terminalCommand: '/new-command arguments' });
-  assert.equal(f.input.textContent, '');
-});
 
-test('command list action only invokes prefix typing after switching terminal, and never writes while busy', async () => {
+
+test('terminal command success is silent while failures and busy refusals remain visible', async () => {
   const calls = [];
-  const options = { session, state: 'idle', openTerminal: async () => calls.push('terminal'),
-    writePrefix: async () => { calls.push('prefix'); return { ok: true }; }, notify: message => calls.push(message) };
-  assert.equal((await skills.openCommandList(options)).ok, true);
-  assert.deepEqual(calls.slice(0, 2), ['terminal', 'prefix']);
-  for (const state of ['starting', 'running', 'waiting']) {
-    calls.length = 0;
-    assert.equal((await skills.openCommandList({ ...options, state })).ok, false);
-    assert.equal(calls.includes('prefix'), false); assert.equal(calls.includes('terminal'), false);
-  }
+  const options = { session, state: 'idle', text: '/synthetic',
+    openTerminal: async () => calls.push('terminal'), send: async text => { calls.push(text); return { ok: true }; },
+    notify: message => calls.push(message) };
+  assert.equal((await skills.openTerminalCommand(options)).ok, true);
+  assert.deepEqual(calls, ['terminal', '/synthetic']);
   calls.length = 0;
-  await skills.openCommandList({ ...options, writePrefix: async () => ({ ok: false, error: '输入行已有内容' }) });
-  assert.match(calls.at(-1), /输入行已有内容/);
+  assert.equal((await skills.openTerminalCommand({ ...options, state: 'running' })).ok, false);
+  assert.deepEqual(calls, ['请等当前回答结束后再执行终端命令']);
+  calls.length = 0;
+  assert.equal((await skills.openTerminalCommand({ ...options, send: async () => ({ ok: false, error: 'synthetic failure' }) })).ok, false);
+  assert.match(calls.at(-1), /终端命令未发送：synthetic failure/);
 });
 
 function commandPrefixFixture(t) {
@@ -627,18 +878,19 @@ test('command-prefix IPC is session limited and queued prefix attempts recheck t
   assert.deepEqual(f.writes, ['/']);
 });
 
-function inputGuardFixture({ text = '', status = 'running', failRead = false } = {}) {
+function inputGuardFixture({ text = '', status = 'running', failRead = false, screenRunning = true } = {}) {
   const api = require('../core/codeagent-input-guard'), current = { kind: 'codeagent', agentRuntime: 'pty', status };
-  let clock = 1000, value = text, failed = failRead;
+  let clock = 1000, value = text, failed = failRead, running = screenRunning, customFrame = null;
   const writes = [], diagnostics = [], delays = [], stopDiagnostics = [];
   const manager = { getSession: id => id === 'test' ? current : null,
     writeToSession: (_id, data) => { writes.push({ data, at: clock }); if (data === '\x15') value = ''; } };
   const guard = api.createCodeAgentInputGuard(manager, {
     now: () => clock, sleep: async ms => { delays.push(ms); clock += ms; }, diagnose: event => diagnostics.push(event),
     stopDiagnose: row => stopDiagnostics.push(row),
-    openScreen: async () => { if (failed) throw new Error('sensitive screen failure'); return { lines: async () => [' │ > ' + (value || 'Anything I can assist you with?') + ' │', ' │ Bypass (Cycle shift+tab) | GLM │'], dispose() {} }; },
+    openScreen: async () => { if (failed) throw new Error('sensitive screen failure'); return { lines: async () => customFrame || [...(running ? ['⠋ Running…'] : []), ' │ > ' + (value || 'Anything I can assist you with?') + ' │', ' │ Bypass (Cycle shift+tab) | GLM │'], dispose() {} }; },
   });
-  return { api, guard, current, manager, writes, delays, diagnostics, stopDiagnostics, setText: text => { value = text; }, fail: () => { failed = true; }, now: () => clock };
+  return { api, guard, current, manager, writes, delays, diagnostics, stopDiagnostics, setText: text => { value = text; }, fail: () => { failed = true; }, now: () => clock,
+    setRunning: value => { running = value; }, setFrame: lines => { customFrame = lines; } };
 }
 
 test('CodeAgent stop emits exactly two Esc at least 300ms apart and observes returned input for at most 3 seconds', async () => {
@@ -648,6 +900,100 @@ test('CodeAgent stop emits exactly two Esc at least 300ms apart and observes ret
   assert.deepEqual(f.writes.map(row => row.data), ['\x1b', '\x1b']);
   assert.ok(f.writes[1].at - f.writes[0].at >= 300);
   assert.equal(f.now(), 1000 + f.api.CODEAGENT_STOP_ESC_GAP_MS + 3000);
+});
+
+test('stop checks the live screen even if the renderer still claims running', async () => {
+  for (const lines of [[' │ > Anything I can assist you with? │', ' │ Bypass (Cycle shift+tab) | GLM │']]) {
+    const f = inputGuardFixture(); f.setFrame(lines);
+    const result = await f.guard.stop('test', { rendererState: 'running' });
+    assert.equal(result.ok, false); assert.deepEqual(f.writes, []);
+    assert.equal(f.stopDiagnostics.at(-1).escSent, 0);
+    assert.equal(f.stopDiagnostics.at(-1).decision, 'screen-idle');
+    assert.equal(result.message, lines.length > 1 ? '回答已结束' : '无法确认是否在回答，请到终端操作');
+  }
+});
+
+const REWIND_MENU = ['Rewind to message', '❯ 1. Previous message', '  2. Current message', 'Enter to select · Esc to cancel'];
+test('unknown stop screens fall back to current runtime truth and still close a Rewind menu', async () => {
+  for (const connected of [true, false]) {
+    const f = inputGuardFixture({ status: 'idle' }); f.setFrame(['unrecognized screen']);
+    f.current.cliRuntime = { state: 'running', connection: connected ? 'connected' : 'disconnected' };
+    let esc = 0;
+    const write = f.manager.writeToSession;
+    f.manager.writeToSession = (sid, data) => {
+      write(sid, data);
+      if (data === '\x1b') {
+        esc++;
+        if (esc === 2) f.setFrame(REWIND_MENU);
+        if (esc === 3) f.setFrame([' │ > Anything I can assist you with? │', ' │ Bypass (Cycle shift+tab) | GLM │']);
+      }
+    };
+    const result = await f.guard.stop('test');
+    assert.equal(result.ok, connected); assert.equal(esc, connected ? 3 : 0);
+    const final = f.stopDiagnostics.at(-1);
+    assert.equal(final.preRunning, 'unknown'); assert.equal(final.decision, 'runtime-fallback');
+    assert.equal(final.escSent, connected ? 2 : 0); assert.equal(final.rewindMenuClosed, connected);
+    if (connected) assert.equal(f.writes[1].at - f.writes[0].at, 300);
+  }
+});
+
+test('a readable editor alone does not turn an unknown running screen into idle', async () => {
+  const f = inputGuardFixture(); f.setFrame([' │ > private draft │']);
+  assert.equal((await f.guard.stop('test')).ok, true);
+  assert.deepEqual(f.writes.map(row => row.data), ['\x1b', '\x1b']);
+  assert.equal(f.stopDiagnostics.at(-1).decision, 'runtime-fallback');
+});
+
+test('unreadable stop screens can use running runtime without logging the read failure text', async () => {
+  const f = inputGuardFixture({ failRead: true });
+  assert.equal((await f.guard.stop('test')).ok, true);
+  assert.deepEqual(f.writes.map(row => row.data), ['\x1b', '\x1b']);
+  assert.equal(f.stopDiagnostics.at(-1).decision, 'runtime-fallback');
+  assert.doesNotMatch(JSON.stringify(f.stopDiagnostics), /sensitive|screen failure/);
+});
+
+test('stop log decision only accepts the three known levels', t => {
+  const dir = temp(t), { recordCodeAgentStop } = require('../core/codeagent-stop-log');
+  for (const decision of ['screen-running', 'screen-idle', 'runtime-fallback', 'private body']) {
+    recordCodeAgentStop({ event: 'rejected', decision }, { dataDir: dir });
+  }
+  const rows = fs.readFileSync(path.join(dir, 'logs', 'codeagent-stop.log'), 'utf8').trim().split('\n').map(JSON.parse);
+  assert.deepEqual(rows.map(row => row.decision), ['screen-running', 'screen-idle', 'runtime-fallback', undefined]);
+});
+
+test('a Rewind menu appearing after double Esc, including a delayed frame, is closed and diagnosed', async () => {
+  for (const delayed of [false, true]) {
+    const f = inputGuardFixture(); let esc = 0;
+    const write = f.manager.writeToSession;
+    f.manager.writeToSession = (sid, data) => {
+      write(sid, data);
+      if (data === '\x1b') {
+        esc++;
+        if (esc === 2 && !delayed) f.setFrame(REWIND_MENU);
+        if (esc === 3) f.setFrame([' │ > Anything I can assist you with? │', ' │ Bypass (Cycle shift+tab) | GLM │']);
+      }
+    };
+    if (delayed) {
+      const open = f.manager.getSession;
+      f.manager.getSession = sid => { if (esc === 2 && f.now() >= 1600) f.setFrame(REWIND_MENU); return open(sid); };
+    }
+    assert.equal((await f.guard.stop('test')).ok, true);
+    assert.equal(esc, 3); assert.ok(f.stopDiagnostics.some(row => row.rewindMenuClosed));
+    const final = f.stopDiagnostics.at(-1); assert.equal(final.preRunning, 'running'); assert.equal(final.escSent, 2);
+  }
+});
+
+test('ordinary send checks close a choice menu before clearing input; a stuck menu blocks sending', async () => {
+  for (const closes of [true, false]) {
+    const f = inputGuardFixture(); f.setFrame(REWIND_MENU);
+    const write = f.manager.writeToSession;
+    f.manager.writeToSession = (sid, data) => { write(sid, data); if (closes && data === '\x1b') f.setFrame([' │ > Anything I can assist you with? │', ' │ Bypass (Cycle shift+tab) | GLM │']); };
+    const result = await f.guard.check('test');
+    assert.equal(result.ok, closes); assert.deepEqual(f.writes.map(row => row.data), ['\x1b']);
+    if (!closes) { assert.equal(result.notSent, true); assert.equal(result.message, '终端里有未关闭的菜单，请到终端确认'); }
+  }
+  const picker = inputGuardFixture(); picker.setFrame(REWIND_MENU);
+  await picker.guard.check('test', { skipMenuClose: true }); assert.deepEqual(picker.writes, []);
 });
 
 test('CodeAgent main stop refuses only a dormant or explicitly exited session', async () => {
@@ -682,10 +1028,12 @@ test('stop diagnostics record runtime completion and bounded rotating logs are i
   const current = { kind: 'codeagent', status: 'running' }, rows = [];
   const guard = require('../core/codeagent-input-guard').createCodeAgentInputGuard({ getSession: () => current, writeToSession() {} }, {
     now: () => clock, sleep: async ms => { clock += ms; if (clock >= 1800) current.status = 'idle'; },
-    openScreen: async () => ({ lines: () => [' │ > private prompt body │', ' │ Bypass (Cycle shift+tab) | GLM │'], dispose() {} }),
+    openScreen: async () => ({ lines: () => ['⠋ Running…', ' │ > private prompt body │', ' │ Bypass (Cycle shift+tab) | GLM │'], dispose() {} }),
     stopDiagnose: row => { rows.push(row); recordCodeAgentStop({ ...row, text: 'private prompt body', error: 'private account' }, { dataDir: dir, maxBytes: 1200 }); },
   });
   return guard.stop('abcdefgh-private-session', { branch: 'existing', rendererState: 'running' }).then(() => {
+    assert.equal(rows.find(row => row.event === 'esc-second').preRunning, 'running');
+    assert.equal(rows.find(row => row.event === 'esc-second').escSent, 2);
     assert.equal(rows.at(-1).runtimeBecameNonRunning, true);
     assert.equal(rows.at(-1).inputState, 'nonempty');
     for (let i = 0; i < 25; i++) recordCodeAgentStop({ ...rows[0], text: 'private prompt body' }, { dataDir: dir, maxBytes: 1200 });
@@ -694,6 +1042,7 @@ test('stop diagnostics record runtime completion and bounded rotating logs are i
     for (const target of [file, file + '.1']) {
       const text = fs.readFileSync(target, 'utf8');
       assert.doesNotMatch(text, /private|prompt body|account/); assert.equal(JSON.parse(text.trim().split('\n')[0]).sessionId, 'abcdefgh');
+      const record = JSON.parse(text.trim().split('\n')[0]); assert.equal(record.preRunning, 'unknown'); assert.equal(record.escSent, 0); assert.equal(record.rewindMenuClosed, false);
     }
     assert.ok(require('../core/hub-feedback').collectBundle({ logsDir: path.dirname(file) }).items.some(item => item.name === '日志 codeagent-stop.log'));
   });
@@ -729,8 +1078,8 @@ for (const phase of ['paste', 'ack']) test(`stop bypasses an unfinished ${phase}
   while (!f.entered()) await new Promise(setImmediate);
   const before = f.writes.length;
   const stopping = f.sender.codeAgentInputAction('test', 'stop', { branch: 'existing', rendererState: 'running' });
-  assert.equal(f.writes.at(-1).data, '\x1b', 'first Esc is synchronous, before the blocked sender resolves');
-  if (phase === 'paste') assert.equal(f.writes[before].data, '\x1b[201~', 'close the interrupted paste before Esc');
+  if (phase === 'ack') { while (!f.writes.some(row => row.data === '\x1b')) await new Promise(setImmediate); }
+  if (phase === 'paste') assert.equal(f.writes[before].data, '\x1b[201~', 'close the interrupted paste without Esc');
   f.release();
   const stopped = await sending;
   assert.equal(stopped.stopped, true); assert.equal(stopped.sendStatus, 'stopped');
@@ -738,9 +1087,30 @@ for (const phase of ['paste', 'ack']) test(`stop bypasses an unfinished ${phase}
   const next = f.sender.sendToPty('test', 'next ordinary prompt', 'codeagent', { requireReady: true });
   assert.equal((await stopping).ok, true);
   assert.equal((await next).ok, true);
-  assert.deepEqual(f.writes.slice(before).filter(row => row.data === '\x1b').map(row => row.data), ['\x1b', '\x1b']);
+  assert.deepEqual(f.writes.slice(before).filter(row => row.data === '\x1b').map(row => row.data), phase === 'paste' ? [] : ['\x1b', '\x1b']);
   assert.equal(f.writes.filter(row => row.data === '\r').length, phase === 'paste' ? 1 : 2, 'no recovery Enter from the stopped send');
   assert.equal(f.stopDiagnostics[0].queuePending, true); assert.equal(f.stopDiagnostics[0].queueWaitMs, 0);
+});
+
+test('stopping a half-written paste clears the editor without Esc and restores the original Hub skill draft', async () => {
+  const f = stopSenderFixture({ phase: 'paste' }), write = f.manager.writeToSession;
+  let editor = '', menuOpened = false;
+  f.manager.writeToSession = (sid, data) => {
+    write(sid, data);
+    if (data.startsWith('\x1b[200~')) { editor = data.slice(6); f.setText(editor); }
+    if (data === '\x15') editor = '';
+    if (data === '\x1b') menuOpened = true;
+  };
+  const original = '/test-skill complete original body';
+  const sending = f.sender.sendToPty('test', original, 'codeagent', { requireReady: true });
+  while (!f.entered()) await new Promise(setImmediate);
+  const stopping = f.sender.codeAgentInputAction('test', 'stop'); f.release();
+  const result = await sending; assert.equal(result.stopped, true); assert.equal(result.notSent, true);
+  assert.equal((await stopping).cleared, true); assert.equal(editor, ''); assert.equal(menuOpened, false);
+  assert.ok(f.writes.some(row => row.data === '\x15')); assert.ok(!f.writes.some(row => row.data === '\x1b'));
+  const d = dom(); require('../renderer/composer-codeagent-input').restoreRecoveredPrompt(d.input,
+    { text: original, skill: { name: 'test-skill' } }, { ...d, session, onChange() {} });
+  assert.equal(skills.skillPrompt(d.input, d.input.textContent, session), original);
 });
 
 test('stopped receipt is terminal, removed from late matching and never becomes unconfirmed', () => {
@@ -779,18 +1149,18 @@ test('stop also bypasses a cold-start readiness wait without ever submitting its
   const sending = f.sender.sendToPty('test', 'not yet ready prompt', 'codeagent', { requireReady: true });
   while (!f.entered()) await new Promise(setImmediate);
   const stopping = f.sender.codeAgentInputAction('test', 'stop');
-  assert.equal(f.writes[0].data, '\x1b');
+  assert.deepEqual(f.writes, []);
   const stopped = await sending;
   assert.equal(stopped.stopped, true); assert.equal(stopped.notSent, true);
   f.release(); await stopping;
-  assert.deepEqual(f.writes.map(row => row.data), ['\x1b', '\x1b']);
+  assert.deepEqual(f.writes, []);
 });
 
-test('an unreadable post-stop input is logged as unknown without logging the failure text', async () => {
-  const f = inputGuardFixture({ failRead: true });
+test('an unreadable pre-stop screen rejects Esc without logging the failure text', async () => {
+  const f = inputGuardFixture({ failRead: true, status: 'idle' });
   const result = await f.guard.stop('test');
-  assert.equal(result.ok, true); assert.equal(result.readFailed, true);
-  assert.equal(f.stopDiagnostics.at(-1).inputState, 'unknown');
+  assert.equal(result.ok, false); assert.equal(result.message, '无法确认是否在回答，请到终端操作');
+  assert.equal(f.stopDiagnostics.at(-1).preRunning, 'unknown'); assert.equal(f.stopDiagnostics.at(-1).escSent, 0); assert.deepEqual(f.writes, []);
   assert.doesNotMatch(JSON.stringify(f.stopDiagnostics), /sensitive|screen failure/);
 });
 
@@ -805,7 +1175,7 @@ test('phone and HubTools stop callbacks write both Esc immediately even while a 
     const interrupt = vm.runInNewContext(`(${callback})`, { sessionManager: f.manager,
       require: name => name === './core/ai-kinds' ? require('../core/ai-kinds') : f.sender });
     const result = interrupt('test');
-    assert.equal(f.writes.at(-1).data, '\x1b'); f.release();
+    while (!f.writes.some(row => row.data === '\x1b')) await new Promise(setImmediate); f.release();
     assert.equal((await sending).stopped, true); assert.equal((await result).ok, true);
     const esc = f.writes.filter(row => row.data === '\x1b'); assert.equal(esc.length, 2); assert.ok(esc[1].at - esc[0].at >= 300);
   }
@@ -827,7 +1197,7 @@ test('manual terminal-input and guarded stop reach pty.write with identical raw 
   let clock = 1000;
   const guard = require('../core/codeagent-input-guard').createCodeAgentInputGuard(manager, {
     now: () => clock, sleep: async ms => { clock += ms; }, stopDiagnose() {},
-    openScreen: async () => ({ lines: () => [' │ > Anything I can assist you with? │', ' │ Bypass (Cycle shift+tab) | GLM │'], dispose() {} }),
+    openScreen: async () => ({ lines: () => ['⠋ Running…', ' │ > Anything I can assist you with? │', ' │ Bypass (Cycle shift+tab) | GLM │'], dispose() {} }),
   });
   await guard.stop('test');
   assert.deepEqual(writes.slice(2), writes.slice(0, 2)); assert.deepEqual(writes, ['\x1b', '\x1b', '\x1b', '\x1b']);
@@ -907,15 +1277,26 @@ test('without a Hub original recovery returns only readable input and marks it i
   assert.deepEqual(f.writes, []);
 });
 
-test('residual check blocks without writes; discard uses Ctrl+U and rechecks; a changed residual is never erased', async () => {
-  const f = inputGuardFixture({ text: 'old request' });
-  const blocked = await f.guard.check('test');
-  assert.equal(blocked.code, 'codeagent-input-residual'); assert.equal(blocked.notSent, true); assert.deepEqual(f.writes, []);
-  f.setText('different request');
-  assert.equal((await f.guard.clear('test', blocked.input.token)).ok, false); assert.deepEqual(f.writes, []);
-  const latest = await f.guard.inspect('test');
-  assert.equal((await f.guard.check('test', { discardToken: latest.input.token })).ok, true);
+test('residual check automatically clears and confirms; changed clear tokens still refuse writes', async () => {
+  const f = inputGuardFixture({ text: 'old request' }), events = [];
+  f.manager.emit = (...args) => events.push(args);
+  assert.equal((await f.guard.check('test')).ok, true);
   assert.deepEqual(f.writes.map(row => row.data), ['\x15']);
+  assert.deepEqual(events, [['codeagent-input-cleared', { sessionId: 'test', text: 'old request' }]]);
+  f.setText('first'); const blocked = await f.guard.inspect('test'); f.setText('different');
+  assert.equal((await f.guard.clear('test', blocked.input.token)).ok, false);
+  assert.equal(f.writes.length, 1);
+});
+
+test('folded residual is cleared without saving unreadable text; failed clearing blocks the new prompt', async () => {
+  const f = inputGuardFixture({ text: '[Pasted text +20 lines]' }), events = [];
+  f.manager.emit = (...args) => events.push(args);
+  assert.equal((await f.guard.check('test')).ok, true);
+  assert.equal(events[0][1].text, '');
+  f.setText('unclearable'); f.manager.writeToSession = (_sid, data) => f.writes.push({ data });
+  const result = await f.guard.check('test');
+  assert.equal(result.ok, false); assert.equal(result.notSent, true); assert.equal(result.code, 'codeagent-input-residual');
+  assert.equal(result.message, '终端输入框未能清空，请到终端确认后再发送'); assert.equal(events.length, 1);
 });
 
 test('screen read failure is diagnostic and does not block a prompt', async () => {
@@ -933,13 +1314,13 @@ test('the current input snapshot excludes answer text, status and placeholder co
   assert.equal(inputSnapshot(['no input marker']).state, 'unknown');
 });
 
-function recoveryFixture({ draft = '', replace = true, running = true } = {}) {
+function recoveryFixture({ draft = '', running = true } = {}) {
   const f = dom(), calls = [], notices = [];
-  let value = draft, latest = { ok: false, input: { token: 'token', text: 'previous original', incomplete: false } };
+  let value = draft, latest = { ok: false, input: { token: 'token', text: 'previous original', incomplete: false }, prompt: { text: 'previous original' }, cleared: true };
   const controller = require('../renderer/composer-codeagent-input').createCodeAgentInputRecovery({
     document: f.document, host: f.document.body, readDraft: () => value,
-    restoreDraft: input => { calls.push(['restore', input]); value = input.text; }, notify: (...args) => notices.push(args),
-    isRunning: () => running, confirmReplace: async () => { calls.push(['confirm']); return replace; },
+    restoreDraft: input => { calls.push(['restore', input]); value = value + (value ? '\n\n' : '') + input.text; }, notify: (...args) => notices.push(args),
+    isRunning: () => running,
     invoke: async (channel, payload) => { calls.push([channel, payload]); return channel === 'codeagent:input-clear' ? { ok: true } : { ...latest, ok: true }; },
   });
   return { ...f, controller, calls, notices, latest, draft: () => value, setDraft: text => { value = text; } };
@@ -953,30 +1334,106 @@ test('stop visibility is CodeAgent PTY running only, including low-confidence ru
   assert.equal(codeAgentCanStop({ kind: 'codeagent', agentRuntime: 'native' }, 'running'), false);
 });
 
-test('stop auto-recovers an empty Hub draft before Ctrl+U; idle click sends nothing', async () => {
-  const f = recoveryFixture(); await f.controller.stop();
-  assert.equal(f.draft(), 'previous original');
-  assert.deepEqual(f.calls.map(row => row[0]), ['codeagent:input-stop', 'restore', 'codeagent:input-clear']);
+function editFixture({ draft = '', previousSkill, kind = 'codeagent', inventory = { skills: [] } } = {}) {
+  const f = dom(), values = new Map(), calls = [], notices = [];
+  const storage = { getItem: key => values.get(key) || null, setItem: (key, value) => values.set(key, value) };
+  const session = { kind }, history = require('../renderer/floating-input-history').createFloatingInputHistory({ storage });
+  const cursor = history.createCursor('test');
+  f.input.textContent = draft;
+  if (previousSkill) skills.insertSkillTag(f.input, previousSkill, { ...f, session });
+  const options = { input: f.input, sessionId: 'test', session, document: f.document, window: f.window, storage,
+    readText: input => input.textContent, replaceText: (input, text) => { input.textContent = text; },
+    saveDraft: () => calls.push('saved'), historyChanged: () => { cursor.invalidate(); calls.push('invalidated'); },
+    invoke: async (channel, payload) => { calls.push([channel, payload]); return inventory; }, notify: (...args) => notices.push(args) };
+  return { ...f, options, calls, notices, storage, history, cursor,
+    edit: text => require('../renderer/card-edit-resend').editResend({ ...options, text }) };
+}
+
+test('edit-resend replaces an empty composer and replaces a draft after saving it to ArrowUp history', async () => {
+  for (const draft of ['', 'new draft']) {
+    const f = editFixture({ draft }); f.cursor.older('');
+    assert.equal(await f.edit('original prompt'), true);
+    assert.equal(f.input.textContent, 'original prompt'); assert.ok(f.calls.includes('saved'));
+    assert.equal(f.document.activeElement, f.input);
+    assert.deepEqual(f.history.list('test'), draft ? [draft] : []);
+    if (draft) {
+      assert.equal(f.cursor.older(f.input.textContent).text, draft);
+      assert.equal(f.notices[0][0], '原草稿已存入历史，按 ↑ 找回');
+    } else assert.deepEqual(f.notices, []);
+  }
+});
+
+test('edit-resend replaces old skill drafts and restores installed skills before cache-only skills', async () => {
+  for (const cached of [false, true]) {
+    const inventory = { skills: cached ? [] : [{ name: 'new-skill', installedAt: 123 }],
+      commands: [{ name: 'new-skill', kind: 'skill', installedAt: 999 }, { name: 'local', kind: 'command' }] };
+    const f = editFixture({ draft: 'old body', previousSkill: { name: 'old-skill' }, inventory });
+    await f.edit('/new-skill original\nbody');
+    assert.equal(skills.selectedSkill(f.input).name, 'new-skill');
+    assert.equal(skills.selectedSkill(f.input).installedAt, cached ? 999 : 123);
+    assert.equal(f.input.textContent, '/new-skill original\nbody');
+    assert.equal(f.cursor.older('').text, '/old-skill old body');
+    assert.equal(f.calls.filter(Array.isArray)[0][0], 'codeagent:skills');
+    await f.edit('/local arguments'); assert.equal(skills.selectedSkill(f.input), null);
+    assert.equal(f.input.textContent, '/local arguments');
+  }
+});
+
+test('unknown skills and non-CodeAgent prompts stay plain; switching panes during lookup refuses replacement', async () => {
+  const unknown = editFixture(); await unknown.edit('/unknown body'); assert.equal(skills.selectedSkill(unknown.input), null);
+  const other = editFixture({ kind: 'claude', draft: 'old', inventory: { skills: [{ name: 'known' }] } });
+  await other.edit('/known body'); assert.equal(skills.selectedSkill(other.input), null); assert.equal(other.calls.filter(Array.isArray).length, 0);
+  const switched = editFixture({ draft: 'keep' }); switched.options.isCurrent = () => false;
+  assert.equal(await switched.edit('/unknown body'), false); assert.equal(switched.input.textContent, 'keep');
+  assert.deepEqual(switched.history.list('test'), []); assert.equal(switched.notices[0][0], '这条消息不属于当前会话');
+});
+
+test('stopped card IDs persist without text, obey per-session and total bounds, and clear on session deletion', () => {
+  const api = require('../renderer/card-edit-resend'), values = new Map();
+  const storage = { getItem: key => values.get(key), setItem: (key, value) => values.set(key, value) };
+  const remember = (sid, i) => api.rememberStoppedTurn(storage, sid, { id: 'turn-' + i, clientSubmissionId: 'send-' + i, text: 'private prompt body' });
+  for (let i = 0; i < 55; i++) remember('first', i);
+  assert.equal(api.isStoppedUserTurn({ role: 'user', id: 'turn-0' }, storage, 'first'), false);
+  assert.equal(api.isStoppedUserTurn({ role: 'user', id: 'turn-54' }, storage, 'first'), true);
+  for (let account = 0; account < 12; account++) for (let i = 0; i < 50; i++) remember('session-' + account, i);
+  const all = JSON.parse([...values.values()][0]);
+  assert.equal(Object.values(all).flat().length, api.STOPPED_TOTAL_LIMIT);
+  assert.ok(Object.values(all).every(rows => rows.length <= api.STOPPED_PER_SESSION_LIMIT));
+  assert.equal(all.first, undefined); assert.equal(all['session-0'], undefined);
+  assert.equal(api.isStoppedUserTurn({ role: 'user', clientSubmissionId: 'send-49' }, storage, 'session-11'), true);
+  assert.doesNotMatch(JSON.stringify(all), /private|prompt body/);
+  api.clearStoppedTurns(storage, 'session-11');
+  assert.equal(api.isStoppedUserTurn({ role: 'user', id: 'turn-49' }, storage, 'session-11'), false);
+});
+
+test('stop clears only the terminal and emits a plain stopped toast without restoring the Hub draft', async () => {
+  for (const draft of ['', 'new draft']) {
+    const f = recoveryFixture({ draft }); await f.controller.stop();
+    assert.equal(f.draft(), draft); assert.equal(f.document.body.querySelectorAll('section').length, 0);
+    assert.deepEqual(f.calls.map(row => row[0]), ['codeagent:input-stop']);
+    assert.equal(f.notices[0][0], '已停止'); assert.equal(f.notices[0][2], undefined);
+    assert.equal(f.draft(), draft);
+  }
   const idle = recoveryFixture({ running: false }); await idle.controller.stop();
   assert.deepEqual(idle.calls, []); assert.equal(idle.notices[0][0], '回答已结束');
 });
 
-test('stop keeps an existing draft and terminal editor untouched until the user chooses', async () => {
-  const f = recoveryFixture({ draft: 'new draft', replace: false }); await f.controller.stop();
-  assert.equal(f.draft(), 'new draft'); assert.equal(f.controller.panel.hidden, false);
-  assert.equal(f.calls.some(row => row[0] === 'codeagent:input-clear'), false);
-  await f.controller.takeBack(f.latest);
-  assert.equal(f.draft(), 'new draft'); assert.equal(f.calls.some(row => row[0] === 'codeagent:input-clear'), false);
-  const yes = recoveryFixture({ draft: 'new draft' }); await yes.controller.takeBack(yes.latest);
-  assert.equal(yes.draft(), 'previous original'); assert.equal(yes.calls.at(-1)[0], 'codeagent:input-clear');
+test('the stopped toast stays outside the composer, has no action and disappears after three seconds', t => {
+  const f = dom(); t.mock.timers.enable({ apis: ['setTimeout'] });
+  const toast = require('../renderer/composer-codeagent-input').showStopToast(f.document, '已停止');
+  assert.equal(toast.parentNode, f.document.body); assert.equal(toast.children[0].textContent, '已停止');
+  assert.equal(toast.querySelectorAll('button').length, 0); t.mock.timers.tick(3000); assert.equal(toast.parentNode, null);
+  const renderer = fs.readFileSync(path.join(__dirname, '..', 'renderer/renderer.js'), 'utf8');
+  assert.doesNotMatch(renderer, /contentStack\.insertBefore\(bar\._codeagentInputRecovery/);
+  assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '..', 'renderer/composer-codeagent-input.js'), 'utf8'), /confirmReplace|codeagent-input-recovery|discardToken/);
 });
 
-test('incomplete recovery says so; discard delegates once with the original residual token', async () => {
-  const f = recoveryFixture(); f.latest.input.incomplete = true;
-  await f.controller.takeBack(f.latest); assert.match(f.notices.at(-1)[0], /可能不完整/);
-  const tokens = []; f.controller.show(f.latest, async token => tokens.push(token));
-  f.controller.panel.children[2].dispatchEvent(event('click')); await new Promise(setImmediate);
-  assert.deepEqual(tokens, ['token']);
+test('shared stop clears returned editor text after its cancelled sender settles', async () => {
+  const f = stopSenderFixture(); f.setText('returned prompt');
+  f.guard.remember('test', '/test-skill original', { name: 'test-skill' });
+  const result = await f.sender.codeAgentInputAction('test', 'stop');
+  assert.equal(result.cleared, true); assert.equal(result.prompt.text, '/test-skill original');
+  assert.deepEqual(f.writes.map(row => row.data), ['\x1b', '\x1b', '\x15']);
 });
 
 test('recovery restores the skill tag and body, and its normal draft persistence still works', () => {
@@ -994,6 +1451,12 @@ test('real PTY submission guards ordinary, skill and interactive prompts; non-Co
   const vm = require('node:vm'), { createRequire } = require('node:module');
   const file = path.join(__dirname, '..', 'core', 'group-chat-watcher.js'), localRequire = createRequire(file);
   const f = commandPrefixFixture(t); f.setFrame([' │ > old terminal draft │', ' │ Bypass (Cycle shift+tab) | GLM │']);
+  const originalWrite = f.manager.writeToSession;
+  f.manager.writeToSession = (sid, data) => {
+    originalWrite(sid, data);
+    if (data === '\x15') f.setFrame([' │ > Anything I can assist you with? │', ' │ Bypass (Cycle shift+tab) | GLM │']);
+    if (data === '\x1b') f.setFrame([' │ > Anything I can assist you with? │', ' │ Bypass (Cycle shift+tab) | GLM │']);
+  };
   Object.assign(f.manager, { getGroupChatReady: () => true, getGroupChatLastActivity: () => 1,
     getSessionBuffer: () => '❯ \n? for shortcuts', getSessionOutputMark: () => 0, getNativeClaude: () => null });
   const context = vm.createContext({ module: { exports: {} }, console, process, Buffer, setTimeout: fn => { fn(); return 1; }, clearTimeout() {},
@@ -1002,17 +1465,23 @@ test('real PTY submission guards ordinary, skill and interactive prompts; non-Co
   vm.runInContext(fs.readFileSync(file, 'utf8') + `\nobserveAgentTurnStart = () => ({ dispose() {} });\nwaitForAgentWorkStart = async () => 'hook';`, context);
   const sender = context.module.exports; sender.init({ sessionManager: f.manager });
   for (const [text, interactive] of [['ordinary', false], ['/test-skill body', false], ['/unknown', true]]) {
+    f.writes.length = 0; f.setFrame([' │ > old terminal draft │', ' │ Bypass (Cycle shift+tab) | GLM │']);
     const result = await sender.sendToPty('test', text, 'codeagent', { requireReady: true, codeagentInteractiveCommand: interactive });
-    assert.equal(result.code, 'codeagent-input-residual'); assert.deepEqual(f.writes, []);
+    assert.equal(result.ok, true); assert.equal(f.writes[0], '\x15'); assert.equal(result.enterAttempts, 1);
   }
-  f.current.kind = 'claude';
+  for (const [text, interactive] of [['ordinary', false], ['/skills', true]]) {
+    f.writes.length = 0; f.setFrame(REWIND_MENU);
+    const result = await sender.sendToPty('test', text, 'codeagent', { requireReady: true, codeagentInteractiveCommand: interactive });
+    assert.equal(result.ok, true); assert.equal(f.writes[0], '\x1b'); assert.equal(result.enterAttempts, 1);
+    assert.equal(f.writes.filter(data => data === '\x1b').length, 1, 'close the old menu before the intentional command, never after opening it');
+  }
+  f.current.kind = 'claude'; f.writes.length = 0;
   await sender.sendToPty('test', 'ordinary', 'claude', { requireReady: true });
   assert.equal(f.writes.filter(data => data === '\r').length, 1);
   f.current.kind = 'codeagent'; f.writes.length = 0;
   f.setFrame([' │ > Anything I can assist you with? │', ' │ Bypass (Cycle shift+tab) | GLM │']);
   await sender.sendToPty('test', '/test-skill augmented prompt', 'codeagent', { requireReady: true, originalPrompt: '/test-skill original prompt', codeagentSkill: { name: 'test-skill' } });
   f.setFrame([' │ > [Pasted text +20 lines] │', ' │ Bypass (Cycle shift+tab) | GLM │']);
-  await sender.sendToPty('test', '/test-skill newer unsent prompt', 'codeagent', { requireReady: true });
   const saved = await sender.codeAgentInputAction('test', 'inspect');
   assert.equal(saved.input.text, '/test-skill original prompt'); assert.equal(saved.input.skill.name, 'test-skill');
   f.manager.getSessionBufferSnapshot = async () => { throw new Error('private account detail must not be logged'); };
@@ -1036,15 +1505,15 @@ test('a stalled terminal screen read times out without blocking submission', asy
   assert.equal((await checking).ok, true); assert.equal(diagnosed, 1);
 });
 
-test('real prompt IPC rejects residual before receipts/journal and discards with the same submission id', async t => {
+test('real prompt IPC auto-clears before receipts/journal; failed clear refuses dispatch', async t => {
   const { EventEmitter } = require('node:events'), { createRequire } = require('node:module'), vm = require('node:vm');
   const file = path.join(__dirname, '..', 'main', 'ipc', 'prompt-submit-handlers.js'), localRequire = createRequire(file);
   const handlers = new Map(), writes = [], journals = [], updates = [];
   const s = { kind: 'codeagent', agentRuntime: 'pty' }, manager = new EventEmitter(); manager.getSession = () => s;
-  let residual = true;
+  let residual = true, clearFailed = true;
   const context = vm.createContext({ module: { exports: {} }, console, process, Buffer, setTimeout, clearTimeout,
     require: name => name === '../../core/group-chat-watcher.js' ? {
-      codeAgentInputAction: async (_sid, _action, options) => { if (options.discardToken) { writes.push('\x15'); residual = false; } return residual ? { ok: false, notSent: true, code: 'codeagent-input-residual', input: { token: 'token', text: 'old' } } : { ok: true }; },
+      codeAgentInputAction: async () => { if (residual && !clearFailed) { writes.push('\x15'); residual = false; manager.emit('codeagent-input-cleared', { sessionId: 'test', text: 'old' }); } return residual ? { ok: false, notSent: true, code: 'codeagent-input-residual', input: { token: 'token', text: 'old' } } : { ok: true }; },
       sendToPty: async (...args) => { writes.push(args); return { ok: true, enterAttempts: 1 }; },
     } : localRequire(name),
   });
@@ -1052,13 +1521,28 @@ test('real prompt IPC rejects residual before receipts/journal and discards with
   const registration = context.module.exports.registerPromptSubmitIpc({ handle: (name, fn) => handlers.set(name, fn) }, { sessionManager: manager, sendToRenderer: (...args) => updates.push(args), commandTranscriptStore: { begin: (...args) => { journals.push(args); return { duplicate: false }; }, finish() {} } });
   t.after(() => registration.dispose());
   for (const text of ['ordinary', '/test-skill body', '/unknown']) {
-    residual = true; const request = { sessionId: 'test', text, clientSubmissionId: 'test-' + text, codeagentInteractiveCommand: text === '/unknown' };
+    residual = true; clearFailed = true; const request = { sessionId: 'test', text, clientSubmissionId: 'test-' + text, codeagentInteractiveCommand: text === '/unknown' };
     const at = writes.length, journalAt = journals.length, updatesAt = updates.length;
     const blocked = await handlers.get('session:send-prompt')(null, request);
     assert.equal(blocked.code, 'codeagent-input-residual'); assert.equal(writes.length, at); assert.equal(journals.length, journalAt); assert.equal(updates.length, updatesAt);
-    const result = await handlers.get('session:send-prompt')(null, { ...request, codeagentDiscardToken: blocked.input.token });
+    clearFailed = false;
+    const result = await handlers.get('session:send-prompt')(null, request);
     assert.equal(result.ok, true); assert.equal(writes[at], '\x15');
     assert.equal(writes.at(-1)[3].clientSubmissionId, request.clientSubmissionId); assert.equal(writes.at(-1)[3].codeagentInteractiveCommand, request.codeagentInteractiveCommand);
     assert.equal(result.enterAttempts, 1);
+    assert.ok(updates.some(([event, data]) => event === 'codeagent-input-cleared' && data.text === 'old'));
+  }
+});
+
+
+test('restoring skill B preserves a draft and its skill A, and moves the caret to the end', () => {
+  const { restoreRecoveredPrompt } = require('../renderer/composer-codeagent-input');
+  for (const tagged of [false, true]) {
+    const f = dom(); f.input.textContent = 'existing draft';
+    if (tagged) skills.insertSkillTag(f.input, { name: 'skill-a' }, { ...f, session });
+    restoreRecoveredPrompt(f.input, { text: '/skill-b body', skill: { name: 'skill-b' } }, { ...f, session, onChange() {} });
+    assert.equal(skills.selectedSkill(f.input)?.name, tagged ? 'skill-a' : undefined);
+    assert.equal(skills.skillPrompt(f.input, f.input.textContent, session), (tagged ? '/skill-a ' : '') + 'existing draft\n\n/skill-b body');
+    assert.equal(f.window.getSelection().getRangeAt(0).root, f.input);
   }
 });

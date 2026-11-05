@@ -5,6 +5,12 @@ const { isGroupChatMemberRunning } = require('../core/groupchat-running-state.js
 if (typeof window !== 'undefined' && typeof document !== 'undefined' && !window.__teamUi) {
   try { require('./team-ui.js'); } catch (error) { console.warn('[team-ui] 未加载：', error && error.message); }
 }
+// 「问一下」抽屉（renderer/ask-aside-ui.js）：CodeAgent 会话顶栏一个按钮，发行版开了 btwAsk 才挂。
+if (typeof window !== 'undefined' && typeof document !== 'undefined' && !window.__askAsideUi) {
+  const mountAskAside = () => { try { require('./ask-aside-ui.js').mountAskAsideUi(window); } catch (error) { console.warn('[ask-aside-ui] 未加载：', error && error.message); } };
+  if (document.readyState === 'loading' && typeof document.addEventListener === 'function') document.addEventListener('DOMContentLoaded', mountAskAside, { once: true });
+  else mountAskAside();
+}
 const { getMeetingUnreadMemberIds } = require('./meeting-unread');
 const { compareLatestActivityDesc, latestActivityTime } = require('../core/session-recency.js');
 const {
@@ -746,14 +752,27 @@ sessionListEl.addEventListener('keydown', event => {
   }
   sidebarSources.set(doc, () => {
     const sessionMap = getSessions();
-    const items = collectSidebarItems(sessionMap);
-    const parts = sidebarView(items, sessionMap);
+    const parents = collectSidebarItems(sessionMap);
+    const parts = sidebarView(parents, sessionMap);
     const archived = new Set(parts.archive.map(s => s.id));
+    const items = [...parents];
+    const seen = new Set(items.map(s => s.id));
+    const teamParents = new Map();
+    // 折叠只影响展示；搜索目录始终包括团队成员，命中后由 revealSearchItem 展开父队。
+    const teamUi = typeof window !== 'undefined' ? window.__teamUi : null;
+    for (const parent of parents) {
+      if (parent._isMeeting) continue;
+      for (const id of teamUi?.membersOf(parent.id, sessionMap, getMeetings()) || []) {
+        const member = sessionMap.get(id);
+        if (!member || member.hiddenFromSidebar || seen.has(id)) continue;
+        items.push(member); seen.add(id); teamParents.set(id, parent.id);
+      }
+    }
     return items.map(s => ({ ...s,
       key: (s._isMeeting ? 'live-meeting:' : 'live-session:') + s.id,
       hubSessionId: s._isMeeting ? null : s.id, meetingId: s._isMeeting ? s.id : null,
       provider: s._isMeeting ? 'meeting' : String(s.kind || '').replace(/-resume$/, '').replace(/^deepseek.*$/, 'deepseek'),
-      archived: archived.has(s.id), agentGroup: agentGroupOf(s),
+      archived: archived.has(teamParents.get(s.id) || s.id), agentGroup: agentGroupOf(s),
       updatedAt: latestActivityTime(s),
       cwd: s._isMeeting ? s._meeting.workspace : s.cwd,
       projectLabel: s._isMeeting ? s._meeting.workspaceLabel : s.workspaceLabel,
@@ -772,7 +791,9 @@ sessionListEl.addEventListener('keydown', event => {
     return list.sort((a, b) => latestActivityTime(b) - latestActivityTime(a))[0] || null;
   }
   function revealSearchItem(id, memberId = null) {
-    const item = collectSidebarItems().find(entry => entry.id === id);
+    const teamUi = typeof window !== 'undefined' ? window.__teamUi : null;
+    const teamLead = teamUi?.leadOf?.(memberId || id, getSessions(), getMeetings());
+    const item = collectSidebarItems().find(entry => entry.id === (teamLead || id));
     if (!item) return;
     if (sideMode && isSideSession(item) !== sideOnly) {
       // 只为这次定位切过去，不存：否则刷新后自己的会话整片消失（2026-10-17 审核）。
@@ -786,13 +807,15 @@ sessionListEl.addEventListener('keydown', event => {
       savePreference('hubSidebarRange',pinnedOnly ? 'pinned' : String(recentDays)); syncRangeControls();
     }
     projectFilter.reveal(item);
-    const member = memberId && item._meeting?.subSessions?.includes(memberId) ? getSessions().get(memberId) : null;
+    const member = teamLead ? getSessions().get(memberId || id)
+      : memberId && item._meeting?.subSessions?.includes(memberId) ? getSessions().get(memberId) : null;
     if (modelFilter !== 'all' && !(member ? sessionFamilies(member, getSessions()) : sessionFamilies(item, getSessions())).has(modelFilter)) {
       modelFilter = 'all';
       if (modelControl) modelControl.value = modelFilter;
       savePreference('hubSidebarModelFilter', modelFilter);
     }
-    if (member) {
+    if (teamLead) teamUi.setCollapsed(teamLead, false);
+    else if (member) {
       collapsedDetailsMeetings.delete(id);
       _expandedMeetings.add(id);
       _persistExpandedMeetings();
@@ -951,6 +974,7 @@ sessionListEl.addEventListener('keydown', event => {
       group.dataset.sidebarRenderTree = 'true';
       target.appendChild(group);
       appendItem(s, false, group, true);
+      if (teamUi.isCollapsed?.(s.id)) return;
       const children = doc.createElement('div');
       children.className = 'sidebar-group-children';
       children.dataset.sidebarRenderKey = 'team-members:' + s.id;
@@ -1092,7 +1116,7 @@ sessionListEl.addEventListener('keydown', event => {
       // 悬停标题显示全名（2026-10-24 用户：会话栏宽度有限，长名字被省略号截断）。
       + '<span class="sl-title" title="' + escapeHtml(displayTitle + (progress ? '\n' + progress.tip : '')) + '">' + _warningHtml(anyWarning) + (progress ? progress.html : '') + accountHtml + bridgeHtml + escapeHtml(displayTitle) + '</span>'
       + timeHtml(s, showUnread ? Math.max(1, unreadCount) : 0);
-    const teamTag = typeof window !== 'undefined' ? window.__teamUi?.rowTagHtml(s.id) : '';
+    const teamTag = typeof window !== 'undefined' ? window.__teamUi?.rowTagHtml(s.id, sessionMap, getMeetings()) : '';
     if (teamTag) {
       const titleEl = div.querySelector?.('.sl-title');
       if (titleEl) titleEl.insertAdjacentHTML('afterbegin', teamTag); // 放标题前：长标题被省略号截断时标签仍看得见

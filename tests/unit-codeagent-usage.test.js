@@ -10,6 +10,56 @@ const usage = require('../core/codeagent-usage-menu');
 const { usageDetailsHtml, createCodeAgentUsagePanel } = require('../renderer/codeagent-usage-panel');
 const { createCodeAgentQuotaBar } = require('../renderer/codeagent-quota-bar');
 
+test('Token bar always uses Day and warns only for short windows at or above 80 percent', () => {
+  const { tokenUsage, TOKEN_WARN_PERCENT, TOKEN_DANGER_PERCENT } = require('../renderer/codeagent-quota-bar');
+  assert.equal(TOKEN_WARN_PERCENT, 50); assert.equal(TOKEN_DANGER_PERCENT, 80);
+  const model = { name: 'GLM-5.2-WX-Auto', day: { pct: 1.7 }, hour: { pct: 0.21 }, min: { pct: 31.33 } };
+  const entry = { models: [model] };
+  assert.equal(tokenUsage(entry, model.name).window, 'day');
+  assert.equal(tokenUsage(entry, model.name).pct, 1.7); assert.equal(tokenUsage(entry, model.name).shortWarning, null);
+  assert.equal(tokenUsage(entry, model.name).level, '');
+  model.day.pct = 50; assert.equal(tokenUsage(entry, model.name).level, 'warn');
+  model.min.pct = 79.99; assert.equal(tokenUsage(entry, model.name).shortWarning, null);
+  model.min.pct = 80; assert.equal(tokenUsage(entry, model.name).shortWarning.window, 'min');
+  model.hour.pct = 90; assert.equal(tokenUsage(entry, model.name).shortWarning.window, 'hour');
+  model.day.pct = 80; assert.equal(tokenUsage(entry, model.name).level, 'danger');
+  delete model.day; assert.equal(tokenUsage(entry, model.name), null);
+  assert.equal(tokenUsage(entry, 'another-model'), null, 'never substitute another model for an explicit selection');
+  assert.equal(tokenUsage(null, ''), null);
+});
+
+test('Token account selection uses the active session model, otherwise its account default or first Day model', () => {
+  const { tokenModelForAccount, tokenUsage } = require('../renderer/codeagent-quota-bar');
+  const defaults = { personal: 'personal-default', pool1: 'pool-default' };
+  const session = { kind: 'codeagent-resume', codeagentPoolAccount: 'pool1', currentModel: { id: 'session-model' } };
+  assert.equal(tokenModelForAccount('pool1', session, defaults), 'session-model');
+  assert.equal(tokenModelForAccount('personal', session, defaults), 'personal-default');
+  assert.equal(tokenModelForAccount('pool1', null, defaults), 'pool-default');
+  assert.equal(tokenModelForAccount('personal', { kind: 'claude', currentModel: { id: 'ignored' } }, defaults), 'personal-default');
+  assert.equal(tokenUsage({ models: [{ name: 'no-Day' }, { name: 'first-Day', day: { pct: 2 } }] }, '').name, 'first-Day');
+});
+
+test('quota shows only Token and truncates long names with a full tooltip', () => {
+  const document = fakeDocument(); const host = document.createElement('div'); host.id = 'rail-codeagent-quota';
+  let active = null;
+  const bar = createCodeAgentQuotaBar({ document, getActiveSession: () => active, now: () => 1000 });
+  const model = 'A-very-long-model-name-that-must-fit-in-a-narrow-sidebar';
+  const accounts = { personal: { label: '个人账号', at: 1000, models: [{ name: model, day: { pct: 1.7 }, min: { pct: 80 } }], credit: { monthly: { used: '2', total: '100', pct: 2 } } } };
+  bar.setUsage(accounts, { personal: model });
+  assert.match(host.innerHTML, /Token<\/span><span class="ca-token-model" title="A-very-long-model-name/);
+  assert.match(host.innerHTML, /今日 1.7%/); assert.match(host.innerHTML, /width:1.7%/); assert.match(host.innerHTML, /data-level=""/);
+  assert.match(host.innerHTML, /ca-token-alert">⚠ 本分钟 80%/);
+  assert.match(host.innerHTML, /个人账号 · 更新于 [^\n]+\n今日 1.7% · 本小时 未读取 · 本分钟 80%\n点击查看详情/);
+  accounts.personal.models[0].min.pct = 79; bar.setUsage(accounts); assert.doesNotMatch(host.innerHTML, /ca-token-alert/);
+  assert.doesNotMatch(host.innerHTML, /ca-quota-credit|Credit|98%/);
+  active = { kind: 'codeagent', currentModel: { id: 'unread-model' } }; bar.render();
+  assert.match(host.innerHTML, /Token 未读取/); assert.doesNotMatch(host.innerHTML, /Credit/);
+  const css = fs.readFileSync(path.join(__dirname, '../renderer/styles/compact-status-shell.css'), 'utf8');
+  assert.match(css, /\.ca-token-model\s*\{[^}]*min-width:0;[^}]*overflow:hidden;[^}]*text-overflow:ellipsis;[^}]*white-space:nowrap/);
+  assert.match(css, /grid-template-rows:18px/);
+  assert.doesNotMatch(css, /ca-quota-credit|grid-row:1 \/ 3/);
+});
+
 // Real user-copied /model text. Preserve its original spaces (not a synthetic table).
 const REAL_USAGE = [
   'Credit用量shift + ↓ to detail',
@@ -202,7 +252,7 @@ function fakeDocument() {
   return doc;
 }
 
-test('quota row is a keyboard-accessible panel entry and preserved countdown expires without a new write', () => {
+test('quota row is a keyboard-accessible panel entry without Credit countdown text', () => {
   const document = fakeDocument();
   const host = document.createElement('div'); host.id = 'rail-codeagent-quota';
   let clock = 1000000;
@@ -211,7 +261,7 @@ test('quota row is a keyboard-accessible panel entry and preserved countdown exp
     credit: { busyDay: { used: '1', total: '99', pct: 1 }, idleDiscountIn: '1小时', idleDiscount: '2折', idleDiscountUntil: clock + 1800000 } } });
   assert.match(host.innerHTML, /role="button" tabindex="0" aria-haspopup="dialog"/);
   assert.match(host.innerHTML, /data-usage-key="personal"/);
-  assert.match(host.innerHTML, /还有30分/);
+  assert.doesNotMatch(host.innerHTML, /还有30分|Credit/);
   assert.equal(typeof host.listeners.click, 'function');
   assert.equal(typeof host.listeners.keydown, 'function');
   clock += 1800000;
@@ -223,14 +273,14 @@ test('panel separates Credit and Token, shows observed source/time, and escapes 
   const snapshot = serve.toUsageSnapshot(servedRead());
   snapshot.models[0].name = '<Example>';
   const html = usageDetailsHtml({ ...snapshot, at: 1000000, source: 'serve' });
-  assert.match(html, /Credit · 计费额度/);
-  assert.match(html, /Token · 模型用量/);
+  assert.match(html, /<h3>Credit<\/h3>/);
+  assert.match(html, /<h3>Token<\/h3>/);
   assert.match(html, /今日忙时.*0\.76 \/ 12345/);
   assert.match(html, /今日闲时.*1\.25 \/ 23456/);
   assert.match(html, /本月.*9\.5 \/ 345678/);
   assert.match(html, /35\.44M \/ 400M/);
   assert.match(html, /75K \/ 2M/);
-  assert.match(html, /读取时间：.*来源：CodeAgent serve 接口/);
+  assert.match(html, /title="CodeAgent serve 接口">更新于 \d{2}:\d{2}/);
   assert.match(html, /&lt;Example&gt;/);
   assert.doesNotMatch(html, /<Example>|共用配额/);
 });
@@ -244,11 +294,11 @@ test('opening the panel immediately paints cached data, refreshes, and retains o
     requests.push([channel, payload]); if (fail) throw new Error('连接中断'); return { ok: false, error: 'serve 与菜单均不可用', entry };
   } } });
   const opening = panel.open({ key: 'personal', label: '个人账号' });
-  const body = document.elements.find(el => el.innerHTML?.includes('Credit · 计费额度'));
+  const body = document.elements.find(el => el.innerHTML?.includes('<h3>Credit</h3>'));
   assert.match(body.innerHTML, /35\.44M \/ 400M/);
   await opening;
   const status = document.elements.find(el => el.role === 'status');
-  assert.match(status.textContent, /刷新失败.*保留上次读数及读取时间/);
+  assert.equal(status.textContent, '刷新失败：serve 与菜单均不可用');
   assert.match(body.innerHTML, /CodeAgent \/model 菜单/);
   const oldHtml = body.innerHTML;
   fail = true;
@@ -287,12 +337,12 @@ test('a late refresh for the previous account never overwrites a newly opened ac
   const panel = createCodeAgentUsagePanel({ document, ipcRenderer: { invoke: (_channel, payload) => new Promise(resolve => pending.set(payload.key, resolve)) } });
   const first = panel.open({ key: 'first', label: '第一个测试账号' });
   const second = panel.open({ key: 'second', label: '第二个测试账号' });
-  const nextEntry = { models: [{ name: 'Second-Model' }], at: 1000, source: 'screen' };
+  const nextEntry = { models: [{ name: 'Second-Model', day: { used: '1', total: '100', pct: 1 } }], at: 1000, source: 'screen' };
   pending.get('second')({ ok: true, entry: nextEntry });
   await second;
-  pending.get('first')({ ok: true, entry: { models: [{ name: 'First-Model' }], at: 2000, source: 'serve' } });
+  pending.get('first')({ ok: true, entry: { models: [{ name: 'First-Model', day: { used: '1', total: '100', pct: 1 } }], at: 2000, source: 'serve' } });
   await first;
-  const body = document.elements.find(el => el.innerHTML?.includes('Credit · 计费额度'));
+  const body = document.elements.find(el => el.innerHTML?.includes('<h3>Credit</h3>'));
   assert.match(body.innerHTML, /Second-Model/);
   assert.doesNotMatch(body.innerHTML, /First-Model/);
 });
@@ -312,6 +362,24 @@ function ipcFixture(t, { serveRead, menuRead }) {
   });
   return { dir, handlers, events };
 }
+
+test('quota IPC reads account defaults from local configuration once per cache window without probing', async t => {
+  let reads = 0;
+  const fixture = ipcFixture(t, {
+    serveRead: async () => { reads += 1; throw new Error('unexpected serve'); },
+    menuRead: async () => { reads += 1; throw new Error('unexpected menu'); },
+  });
+  const cfg = process.env.AI_HUB_CODEAGENT_CONFIG_DIR;
+  fs.mkdirSync(cfg, { recursive: true });
+  const config = id => fs.writeFileSync(path.join(cfg, '.cac.json'), JSON.stringify({ enterpriseModelOptionsCache: [id] }));
+  config('GLM-5.2');
+  usage.recordUsage(fixture.dir, 'personal', { models: [{ name: 'GLM-5.2', day: { pct: 2 } }] }, { label: '个人账号' });
+  const read = () => fixture.handlers.get('codeagent:usage')(null);
+  const first = read(); assert.equal(first.defaultModels.personal, 'GLM-5.2');
+  config('DeepSeek-V4.1');
+  const cached = read(); assert.equal(cached.defaultModels.personal, 'GLM-5.2'); assert.equal(cached.defaultModels, first.defaultModels);
+  await new Promise(setImmediate); assert.equal(reads, 0);
+});
 
 test('real usage-refresh IPC falls back from an unavailable serve to menu usage and retains per-account throttling', async t => {
   let serves = 0, menus = 0;
@@ -444,8 +512,8 @@ test('probe Token wait is capped at five seconds and a first unreadable menu dif
   const first = usage.recordUsage(dir, 'personal', result.usage, { source: 'probe', now: clock });
   assert.equal(first.modelsAt, null);
   assert.equal(first.modelsRead.at, 5000);
-  assert.match(usageDetailsHtml(first), /菜单格式未能识别，已记录诊断，可一键反馈/);
-  assert.match(usageDetailsHtml(null), /尚未读取到模型 Token 用量/);
+  assert.match(usageDetailsHtml(first), /<td colspan="5">未读取<\/td>/);
+  assert.match(usageDetailsHtml(null), /<td colspan="5">未读取<\/td>/);
 });
 
 test('usage diagnostic deduplicates across sources, caps lines, rotates, and is included by one-click feedback', t => {
@@ -466,18 +534,18 @@ test('usage diagnostic deduplicates across sources, caps lines, rotates, and is 
   assert.doesNotMatch(bundle.text, /outside/);
 });
 
-test('active idle discount clears the former countdown and appears in both usage views', t => {
+test('active idle discount clears the former countdown and remains in the full panel only', t => {
   const dir = tempData(t);
   usage.recordUsage(dir, 'personal', { credit: { idleDiscountIn: '1小时', idleDiscount: '2折' } }, { now: 1000 });
   const entry = usage.recordUsage(dir, 'personal', usage.parseCodeAgentUsageMenu(REAL_USAGE), { source: 'picker:launch', label: '个人账号', now: 2000 });
   assert.equal(entry.credit.idleDiscountUntil, null);
   assert.equal(entry.credit.idleDiscountIn, null);
   assert.match(usageDetailsHtml(entry), /闲时2折进行中/);
-  assert.match(usageDetailsHtml(entry), /来源：CodeAgent \/model 菜单/);
+  assert.match(usageDetailsHtml(entry), /title="CodeAgent \/model 菜单">更新于 \d{2}:\d{2}/);
   const document = fakeDocument(), host = document.createElement('div'); host.id = 'rail-codeagent-quota';
   const bar = createCodeAgentQuotaBar({ document, now: () => 2000 });
   bar.setUsage({ personal: entry });
-  assert.match(host.innerHTML, /闲时2折进行中/);
+  assert.doesNotMatch(host.innerHTML, /闲时2折进行中|Credit/);
 });
 
 test('every panel refresh logs read, cooldown skip, or failure without needing serve enabled', async t => {
@@ -502,16 +570,65 @@ test('panel reports a fresh read, cooldown skip and a diagnosed unrecognized men
   const document = fakeDocument();
   let result = { ok: true, outcome: 'read', entry: { ...usage.parseCodeAgentUsageMenu(REAL_USAGE), at: 1000, source: 'probe' } };
   const panel = createCodeAgentUsagePanel({ document, ipcRenderer: { invoke: async () => result }, now: () => 1000 });
-  await panel.open({ key: 'personal' });
+  const opening = panel.open({ key: 'personal' });
   const status = document.elements.find(el => el.role === 'status');
-  assert.match(status.textContent, /已读取最新可用数据/);
+  assert.equal(status.textContent, '刷新中…');
+  await opening;
+  assert.equal(status.textContent, '');
   result = { ...result, outcome: 'skipped', cached: true, reason: '10 分钟冷却' };
   await panel.open({ key: 'personal' });
-  assert.match(status.textContent, /本次跳过：10 分钟冷却/);
+  assert.equal(status.textContent, '10 分钟内已刷新');
   result = { ok: false, outcome: 'failed', entry: { ...result.entry, modelsRead: { status: 'unrecognized', diagnostic: true } } };
   await panel.open({ key: 'personal' });
-  assert.match(status.textContent, /菜单格式未能识别，已记录诊断，可一键反馈/);
-  assert.match(status.textContent, /保留上次 Token/);
+  assert.equal(status.textContent, '未识别到 Token，已记录诊断');
+  result.entry.modelsRead.diagnostic = false;
+  await panel.open({ key: 'personal' });
+  assert.equal(status.textContent, '未识别到 Token');
+});
+
+test('usage panel keeps short headings and times, with source and Stats details only on hover', async () => {
+  const entry = { ...usage.parseCodeAgentUsageMenu(REAL_USAGE), at: 1000, source: 'screen' };
+  const html = usageDetailsHtml(entry);
+  const visible = html.replace(/<[^>]*>/g, '');
+  assert.match(html, /<th>用量<\/th>/);
+  assert.match(html, /<th>今日<\/th><th>本小时<\/th>/);
+  assert.match(visible, /更新于 \d{2}:\d{2}/);
+  assert.doesNotMatch(visible, /读取时间：|来源：|CodeAgent \/model 菜单|计费额度|模型用量|已用 \/ 上限/);
+  const document = fakeDocument();
+  const panel = createCodeAgentUsagePanel({ document, ipcRenderer: { invoke: async () => ({ ok: true }) } });
+  await panel.open({ key: 'personal', stats: { bucket: '月度', remaining: 80, total: 100, at: 1000 } });
+  const body = document.elements.find(el => el.innerHTML?.includes('<h3>Credit</h3>'));
+  assert.match(body.title, /上次 Stats 面板读数：月度剩余 80 \/ 100/);
+  assert.equal(body.children.length, 0, 'the Stats reading must not add a visible paragraph');
+  assert.equal(document.elements.find(el => el.role === 'status').textContent, '');
+  const allVisible = document.elements.map(el => el.textContent || '').join('\n') + body.innerHTML.replace(/<[^>]*>/g, '');
+  assert.doesNotMatch(allVisible, /Credit 是计费额度|三档 Credit|不相加|保留上次|尚无用量快照|显示上次读数|下次可刷新|已读取最新|尚未读取到|上次 Stats/);
+});
+
+test('missing usage source omits the title attribute instead of showing a placeholder', () => {
+  for (const source of [undefined, '', 'unknown']) {
+    const html = usageDetailsHtml({ ...usage.parseCodeAgentUsageMenu(REAL_USAGE), at: 1000, source });
+    const captions = html.match(/<p class="ca-usage-meta"[^>]*>[^<]*<\/p>/g);
+    assert.equal(captions.length, 2);
+    for (const caption of captions) {
+      assert.match(caption, /更新于 \d{2}:\d{2}/);
+      assert.doesNotMatch(caption, /title=/);
+    }
+    assert.doesNotMatch(html, /来源未记录/);
+  }
+});
+
+test('quota hover contains only account, update time and details entry; no Credit countdown remains', () => {
+  const document = fakeDocument(), host = document.createElement('div'); host.id = 'rail-codeagent-quota';
+  const at = 1000000;
+  const bar = createCodeAgentQuotaBar({ document, now: () => at });
+  bar.update({ bucket: '月度', remaining: 80, total: 100, pct: 80 });
+  bar.setUsage({ personal: { label: '个人账号', at, source: 'screen', credit: { idleDay: { used: '1', total: '100', pct: 1 }, idleDiscount: '2折', idleDiscountIn: '1小时' } } });
+  const title = /aria-label="[^"]*" title="([^"]*)"/.exec(host.innerHTML)[1];
+  assert.match(title, /^个人账号 · 更新于 \d{2}:\d{2}\n点击查看详情$/);
+  assert.doesNotMatch(title, /读自 CodeAgent 界面|Stats 面板|\/model 菜单|来源|剩余/);
+  assert.doesNotMatch(host.innerHTML, /还有|Credit|ca-quota-credit/);
+  assert.match(host.innerHTML, /Token 未读取/);
 });
 
 function menuVm(file, extraRequire = {}, appended = '') {
@@ -519,8 +636,15 @@ function menuVm(file, extraRequire = {}, appended = '') {
   const filename = path.join(__dirname, '..', 'core', file), localRequire = createRequire(filename);
   const state = { clock: 1000, timers: [] };
   const DateClock = class extends Date { static now() { return state.clock; } };
+  const watchdogs = new Map(); let timerId = 0;
   const context = vm.createContext({ module: { exports: {} }, process, Buffer, Date: DateClock,
-    setTimeout: (fn, ms) => { state.clock += ms; state.timers.push(ms); fn(); return 1; }, clearTimeout() {},
+    setTimeout: (fn, ms) => {
+      const id = ++timerId; state.timers.push(ms);
+      if (ms >= require('../core/codeagent-model-probe').COMMANDS_ONLY_TIMEOUT_MS) { watchdogs.set(id, { at: state.clock + ms, fn }); return id; }
+      state.clock += ms;
+      for (const [key, timer] of watchdogs) if (timer.at <= state.clock) { watchdogs.delete(key); timer.fn(); }
+      fn(); return id;
+    }, clearTimeout: id => watchdogs.delete(id),
     require: name => name === './codeagent-usage-menu' ? { ...usage, readUsageMenu: (lines, options) => usage.readUsageMenu(lines,
       { ...options, now: () => state.clock, sleep: async ms => { state.clock += ms; } }) } : extraRequire[name] || localRequire(name),
     ...extraRequire.globals,
@@ -566,7 +690,7 @@ test('a new Day snapshot updates model data, time and source after an incomplete
   assert.equal(first.modelsAt, null);
   assert.equal(first.modelsSource, null);
   assert.equal(first.models[0].factor, '0-1x');
-  assert.match(usageDetailsHtml(first), /未读取到 Token|菜单格式未能识别/);
+  assert.match(usageDetailsHtml(first), /<td colspan="5">未读取<\/td>/);
   const second = usage.recordUsage(dir, 'personal', usage.parseCodeAgentUsageMenu(REAL_USAGE), { source: 'probe', now: 2 });
   assert.equal(second.modelsAt, 2);
   assert.equal(second.modelsSource, 'probe');
@@ -640,7 +764,7 @@ test('legacy name-only model timestamps are not reported as successful Token obs
   assert.deepEqual(entry.models, [{ name: 'Example', factor: '0x' }]);
   assert.equal(entry.modelsAt, null);
   assert.equal(entry.modelsSource, null);
-  assert.match(usageDetailsHtml(entry), /Token · 模型用量<\/h3><p class="ca-usage-meta">读取时间：未读取/);
+  assert.match(usageDetailsHtml(entry), /<h3>Token<\/h3><div class="ca-usage-table">/);
 });
 
 test('usage dialog and all its controls explicitly exclude window dragging', async () => {

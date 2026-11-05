@@ -320,13 +320,14 @@ function parseClaudeTranscriptText(raw, opts = {}) {
 // 与 parseClaudeTranscriptText 同一套规则，输入是已解析的 entry。
 // 搜索索引用它流式读完整文件，不必先把整个 transcript 拼成一个字符串。
 function parseClaudeTranscriptEntries(entries, opts = {}) {
+  const extracted = require('./codeagent-command-records').extractCommandRecords(entries, opts);
   const rawTurns = [];
   // Spec 3 · W9：tool_use_id → result 映射，用于关联 stdout 到 toolCall
   const toolResultMap = new Map();
   const excludeEntryIds = new Set(opts.excludeEntryIds || []);
   const excludeMessageIds = new Set(opts.excludeMessageIds || []);
 
-  for (const entry of withQueuedHumanInputs(entries)) {
+  for (const entry of withQueuedHumanInputs(extracted.entries)) {
     if (!entry || typeof entry !== 'object') continue;
     if (excludeEntryIds.has(entry.uuid) || excludeMessageIds.has(entry.message?.id)) {
       // Keep the conversational boundary even when the live projection already
@@ -364,7 +365,7 @@ function parseClaudeTranscriptEntries(entries, opts = {}) {
   // Spec 3 · W5：合并连续 assistant entries
   const merged = _mergeConsecutiveAssistantTurns(rawTurns);
 
-  return merged;
+  return require('./codeagent-command-records').appendCommandRecords(merged, extracted.commands);
 }
 
 function applyTurnLimit(turns, limit, fromTail) {
@@ -452,7 +453,7 @@ function parseClaudeTranscriptToTurns(jsonlPath, opts = {}) {
       // request.  If the tail cannot satisfy the requested turn count, jump
       // directly to one full read instead of replaying overlapping windows.
       const { raw } = readTailWindowText(jsonlPath, TAIL_WINDOW_INITIAL_BYTES);
-      const tailTurns = parseClaudeTranscriptText(raw, opts);
+      const tailTurns = parseClaudeTranscriptText(raw, { ...opts, codeagentFile: jsonlPath, codeagentPartial: true });
       if (isTailTurnSliceComplete(tailTurns, limit)) {
         return applyTurnLimit(tailTurns, limit, true);
       }
@@ -460,7 +461,7 @@ function parseClaudeTranscriptToTurns(jsonlPath, opts = {}) {
   }
 
   const raw = fs.readFileSync(jsonlPath, 'utf8');
-  return applyTurnLimit(parseClaudeTranscriptText(raw, opts), limit, fromTail);
+  return applyTurnLimit(parseClaudeTranscriptText(raw, { ...opts, codeagentFile: jsonlPath }), limit, fromTail);
 }
 
 module.exports = {

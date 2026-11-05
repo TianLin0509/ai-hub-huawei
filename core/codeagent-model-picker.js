@@ -30,14 +30,12 @@ const rowLabel = text => String(text || '').split(/\s{2,}|\s+·\s+/)[0].replace(
 //   「  Select model    …    ✕」、搜索框「⌕ Search…」、用量表、表头「模型名称  Credit消耗系数 …」、「  Built-in」、
 //   「  ❯  1. GLM-5.2-WX-Auto default ✓   0x  Day …」，底栏「Navigate ↑ ↓ | … | Select enter | Back esc」。
 // 账号只有一个可选模型时菜单只有一行：认出这个外框时一行也算菜单（以前至少要两行，11 次都判成菜单没出现）。
-const CODEAGENT_MENU_TITLE = /^\s*(?:[│┃]\s*)?Select model\s*(?:[✕×]\s*)?(?:[│┃]\s*)?$/;
+const CODEAGENT_MENU_TITLE = /^\s*(?:[│┃]\s*)?(?:Select model|Switch model|选择模型|切换模型)\s*(?:[✕×]\s*)?(?:[│┃]\s*)?$/i;
 const CODEAGENT_MENU_FOOTER = /Navigate\s*↑\s*↓.*Select\s+enter.*Back\s+esc/i;
 // 模型菜单的标题：公司 CodeAgent 与 Claude 替身都是「Select model」，旧版/汉化界面可能是「选择模型」「切换模型」。
 const MENU_TITLE = /Select model|Switch model|选择模型|切换模型/i;
-function codeAgentMenuTitleLine(screen) {
-  if (!screen.some(line => CODEAGENT_MENU_FOOTER.test(line))) return -1;
-  return screen.findLastIndex(line => CODEAGENT_MENU_TITLE.test(line));
-}
+const MENU_HEADER = /模型名称.*(?:Token用量|Credit消耗系数)|Model\s+name.*(?:Token|Credit)/i;
+const SCROLLED_MENU = /(?:[↑↓]\s*\d+\s*(?:more|hidden)|\b\d+\s+more\s+(?:models|items)|scroll\s+(?:for|to see)\s+more|更多模型|[↑↓]\s*更多)/i;
 
 // 测试替身（真 Claude Code）的菜单里只有 Claude 的模型名：用 AI_HUB_CODEAGENT_PICKER_LABELS
 // （JSON：{ "MiniMax-M2.7": "Haiku" }）把 Hub 的模型名对到菜单里的名字。真 CodeAgent 不需要。
@@ -54,20 +52,26 @@ function pickerLabelFor(modelId, env = process.env) {
 // rows: [{ line, cursor, number|null, text, label }]，cursor 是光标所在行的下标。
 function parsePicker(lines, { requireTitle = false } = {}) {
   const screen = Array.isArray(lines) ? lines : String(lines || '').split(/\r?\n/);
-  const titleLine = codeAgentMenuTitleLine(screen);
-  const minRows = titleLine >= 0 ? 1 : 2;
+  const titleLine = screen.findLastIndex(line => CODEAGENT_MENU_TITLE.test(line));
+  const headerLine = screen.findLastIndex(line => MENU_HEADER.test(line));
+  const startLine = Math.max(titleLine, headerLine);
+  const footerLine = screen.findIndex((line, index) => index > startLine && CODEAGENT_MENU_FOOTER.test(line));
+  const codeagentFrame = startLine >= 0 && footerLine > startLine;
+  const minRows = codeagentFrame ? 1 : 2;
   let rows = [];
   screen.forEach((line, index) => {
-    if (index <= titleLine) return;
+    if (index <= startLine || footerLine >= 0 && index >= footerLine) return;
     const m = line.match(NUMBERED_ROW);
     if (m) rows.push({ line: index, cursor: !!m[1], number: Number(m[2]), text: m[3], label: rowLabel(m[3]) });
   });
+  const numberedCount = rows.length;
   // 编号要连续，排除正文里碰巧以「1. 」开头的几行。
   if (rows.length >= minRows) {
     const runs = [];
     for (const row of rows) {
       const last = runs[runs.length - 1];
-      if (last && row.number === last[last.length - 1].number + 1 && row.line - last[last.length - 1].line <= 3) last.push(row);
+      if (last && row.number === last[last.length - 1].number + 1
+          && (startLine >= 0 || row.line - last[last.length - 1].line <= 3)) last.push(row);
       else runs.push([row]);
     }
     // 屏幕镜像里可能还留着菜单的旧画面（TUI 重绘没擦干净）：取最靠下、也就是最新的那一份。
@@ -96,12 +100,17 @@ function parsePicker(lines, { requireTitle = false } = {}) {
   // 判断「能不能发消息」时，菜单上方必须有菜单标题：回答正文里的「> 1. GLM… / 2. MiniMax…」这类编号列表
   // 也有光标符号和模型名，以前会被当成菜单，之后每条消息都以「仍在模型选择界面」退回（2026-10-16 同事反馈
   // 2.1.0 发送被弹回）。Hub 自己刚打开菜单、正在读它时不要求（替身的重绘可能把标题挤出屏幕）。
-  if (requireTitle && titleLine < 0 && !screen.slice(Math.max(0, rows[0].line - 12), rows[0].line).some(line => MENU_TITLE.test(line))) return null;
+  if (requireTitle && startLine < 0 && !screen.slice(Math.max(0, rows[0].line - 12), rows[0].line).some(line => MENU_TITLE.test(line))) return null;
   const cursor = rows.findIndex(row => row.cursor);
   if (cursor < 0) return null;
   const footer = screen.slice(rows[rows.length - 1].line + 1).join('\n');
   const sessionKey = (footer.match(SESSION_ONLY_KEY) || [])[1] || null;
-  return { rows, cursor, sessionKey, codeagentFrame: titleLine >= 0 };
+  const incompleteReason = !codeagentFrame ? 'missing-menu-boundary'
+    : rows[0].number !== 1 ? 'missing-first-row'
+      : rows.length !== numberedCount || rows.some((row, index) => row.number !== index + 1) ? 'nonconsecutive-rows'
+        : screen.slice(startLine + 1, footerLine).some(line => SCROLLED_MENU.test(line)) ? 'scroll-truncated'
+          : rows.some(row => /(?:\.\.\.|…)$/.test(row.label)) ? 'truncated-label' : '';
+  return { rows, cursor, sessionKey, codeagentFrame, complete: !incompleteReason, incompleteReason };
 }
 
 // 菜单存在与“能解析选项”是两件事。Select model 来自公司用户报告及
@@ -403,16 +412,22 @@ async function pickModel({ manager, sid, kind, modelId, configDir, dataDir, allo
       }
     }
     const opened = await waitFor(screen, parsePicker, screenTimeoutMs);
-    if (!opened.value) return fail('当前 CodeAgent 模型菜单的布局无法自动识别，未完成模型切换');
+    if (!opened.value) {
+      require('./codeagent-models').appendModelLog(dataDir, { event: 'menu-cache-skipped', reason: 'unrecognized-menu' });
+      return fail('当前 CodeAgent 模型菜单的布局无法自动识别，未完成模型切换');
+    }
     let picker = opened.value;
     // 菜单上方的 Credit 用量和每个模型的 Token 用量：只读屏解析，不影响下面的选择（core/codeagent-usage-menu.js）
     try {
       const menuUsage = require('./codeagent-usage-menu');
-      ({ usage } = await menuUsage.readUsageMenu(opened.lines, { readLines: () => screen.lines(),
-        timeoutMs: menuUsage.PICKER_USAGE_WAIT_MS, dataDir, source: 'picker' }));
+      const read = await menuUsage.readUsageMenu(opened.lines, { readLines: () => screen.lines(),
+        timeoutMs: menuUsage.PICKER_USAGE_WAIT_MS, dataDir, source: 'picker' });
+      usage = read.usage;
+      picker = parsePicker(read.lines) || picker;
     } catch { usage = null; }
-    // 只有认出 CodeAgent 自己的菜单外框、且从第 1 项列起时才当完整清单（替身菜单、滚动过的菜单不算）。
-    if (picker.codeagentFrame && (picker.rows[0].number ?? 1) === 1) menu = picker.rows.map(row => row.label);
+    // 编号从1连续到可见菜单末尾、且没有滚动截断证据时才写完整清单。
+    if (picker.complete) menu = picker.rows.map(row => row.label);
+    else require('./codeagent-models').appendModelLog(dataDir, { event: 'menu-cache-skipped', reason: picker.incompleteReason, rows: picker.rows.length });
     // 选第一个：认出的第一行得是菜单的第 1 项（滚动过的菜单看不到第 1 项，不猜）。光标不一定停在第 1 项（会停在上次的模型上），照常按方向键挪过去。
     if (first && (picker.rows[0].number ?? 1) !== 1) return fail(`模型菜单没有从第 1 项列起（第一行是 ${picker.rows[0].number}. ${picker.rows[0].label}），没有选`);
     if (first) label = picker.rows[0].label;

@@ -13,7 +13,7 @@ function literal(value, label) {
 // Inputs are resolved by SessionManager using its existing backend/profile
 // choices. No model, effort, permissions, or environment fallback occurs here.
 function buildClaudeNativeArgs(options) {
-  const args = ['--model', literal(options.model, 'model')];
+  const args = options.omitModel === true ? [] : ['--model', literal(options.model, 'model')];
   if (options.effort !== null) {
     if (!EFFORTS.has(options.effort)) throw new Error('Unsupported Claude effort');
     args.push('--effort', options.effort);

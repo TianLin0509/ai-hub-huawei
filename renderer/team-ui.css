@@ -53,3 +53,8 @@
 .sl-title > .sl-orch-tag:first-child { margin-left:0; margin-right:4px; }
 @keyframes hw-team-slide { from { transform:translateX(30px); opacity:0; } }
 @media (prefers-reduced-motion:reduce) { .team-modal { animation:none; } }
+
+/* Team member disclosure follows the frozen C tokens. */
+.team-collapse-toggle { display:inline-flex; align-items:center; justify-content:center; width:18px; height:20px; padding:0; margin:0 3px 0 0; border:0; border-radius:var(--hw-r-xs); color:var(--hw-text-2); background:transparent; font:inherit; cursor:pointer; vertical-align:-1px; }
+.team-collapse-toggle:hover { color:var(--hw-brand); background:var(--hw-surface-2); }
+.team-collapse-toggle:focus-visible { outline:2px solid var(--hw-brand); outline-offset:1px; }

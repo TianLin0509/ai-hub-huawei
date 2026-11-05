@@ -651,6 +651,23 @@
   display: flex;
   gap: 10px;
 }
+
+.msg-overlay .turn-card.command-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 8px 0;
+}
+.turn-card.command-divider::before,
+.turn-card.command-divider::after {
+  content: '';
+  flex: 1;
+  border-top: 1px solid var(--border-subtle);
+}
+.turn-stopped-action { display:flex; align-items:center; gap:4px; margin-top:6px; font-size:12px; color:var(--fg-muted); }
+.turn-stopped-action .ta-btn { color:inherit; font-size:inherit; padding:0; }
 .turn-card.user {
   background: var(--turn-bg-user);
   border-left: 3px solid var(--ui-purple-1);
@@ -1685,3 +1702,42 @@
   border-color: rgb(var(--rgb-danger));
   color: rgb(var(--rgb-danger));
 }
+
+
+/* 团队消息折成一行（2026-11-03 用户）：名字 · 摘要 · 时间同一行，点摘要展开全文；不用蓝色用户气泡。 */
+.turn-card.user.team-notice { margin-top: 4px; margin-bottom: 4px; padding-top: 2px; padding-bottom: 2px; }
+.turn-card.user.team-notice .turn-content { display: flex; flex-direction: row; align-items: center; gap: var(--hw-sp-2); min-width: 0; flex: 1 1 auto; }
+.turn-card.user.team-notice .turn-head { flex: none; margin: 0; flex-wrap: nowrap; }
+.turn-card.user.team-notice .turn-avatar { width: 20px; height: 20px; flex: none; }
+.turn-card.user.team-notice .turn-body,
+.msg-overlay .turn-card.user.team-notice .turn-body {
+  flex: 1 1 auto; min-width: 0; max-width: none; width: auto; margin: 0;
+  padding: 2px 10px; border-radius: var(--hw-r-xs); border: none;
+  background: var(--hw-surface-2); color: var(--hw-text-1);
+  font-family: var(--hw-font); font-size: var(--hw-fs-13); line-height: var(--hw-lh);
+}
+.team-notice-line { cursor: pointer; list-style: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--hw-text-2); }
+.team-notice-line::-webkit-details-marker { display: none; }
+.team-notice-line::before { content: '▸'; display: inline-block; width: 1em; color: var(--hw-text-3); }
+.team-notice-fold[open] > .team-notice-line { white-space: normal; }
+.team-notice-fold[open] > .team-notice-line::before { content: '▾'; }
+.team-notice-full { margin-top: var(--hw-sp-1); font-size: calc(var(--card-content-font-size, var(--hw-fs-14)) * var(--main-zoom, 1)); line-height: var(--hw-lh); }
+/* 展开时改回上下排列，正文占满宽度。 */
+.turn-card.user.team-notice:has(.team-notice-fold[open]) .turn-content { flex-direction: column; align-items: stretch; }
+.msg-overlay .turn-card.user.team-notice .turn-content { align-items: center; }
+.msg-overlay .turn-card.user.team-notice:has(.team-notice-fold[open]) .turn-content { align-items: stretch; }
+.msg-overlay .turn-card.user.team-notice .turn-head { flex-direction: row; margin: 0; }
+/* 折叠时只留名字、时间和摘要：「发送内容」按钮与字数角标展开后再显示。 */
+.turn-card.user.team-notice,
+.msg-overlay .turn-card.user.team-notice { padding-top: 3px; padding-bottom: 3px; align-items: center; }
+.turn-card.user.team-notice:not(:has(.team-notice-fold[open])) .turn-compose-btn,
+.turn-card.user.team-notice:not(:has(.team-notice-fold[open])) .chat-word-count,
+.turn-card.user.team-notice:not(:has(.team-notice-fold[open])) .turn-meta-pills { display: none; }
+
+/* The message layout wraps the body in a bubble; keep the same compact row there. */
+.msg-overlay .turn-card.user.team-notice[data-chat-style='message'] { margin: 4px auto; padding: 3px 0; align-items: center; }
+.msg-overlay .turn-card.user.team-notice[data-chat-style='message'] .turn-avatar { width: 20px; height: 20px; min-width: 20px; margin: 0; }
+.msg-overlay .turn-card.user.team-notice[data-chat-style='message'] .turn-content { flex: 1 1 auto; width: auto; max-width: calc(100% - 32px); align-items: center; }
+.msg-overlay .turn-card.user.team-notice[data-chat-style='message'] .turn-head { margin: 0; flex-wrap: nowrap; }
+.msg-overlay .turn-card.user.team-notice[data-chat-style='message'] .chat-message-bubble { flex: 1 1 auto; min-width: 0; padding: 0; border: 0; border-radius: var(--hw-r-xs); background: var(--hw-surface-2); box-shadow: none; }
+.msg-overlay .turn-card.user.team-notice[data-chat-style='message']:has(.team-notice-fold[open]) .turn-content { align-items: stretch; }

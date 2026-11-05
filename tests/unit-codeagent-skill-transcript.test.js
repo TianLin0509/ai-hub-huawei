@@ -176,20 +176,22 @@ test('context-tail and session search use the restored command and exclude skill
 });
 
 // 只实现卡片挂载/替换用到的 DOM 接口；调用真实 renderer，不安装 DOM 依赖。
-function cardFixture() {
+function cardFixture({ storage } = {}) {
   class Element {
     constructor() { this.dataset = {}; this.children = []; this.style = {}; this.className = ''; this.scrollHeight = 100; this.clientHeight = 100; this.scrollTop = 0;
       this.classList = { contains: value => this.className.split(' ').includes(value), add() {}, remove() {}, toggle() {} }; }
     addEventListener() {} removeEventListener() {} scrollIntoView() {}
     querySelector(selector) {
       const id = selector.match(/data-turn-id="([^"]+)"/);
-      return id ? this.children.find(child => child.dataset.turnId === id[1]) || null : null;
+      return id ? this.children.find(child => child.dataset.turnId === id[1].replace(/\\/g, '')) || null : null;
     }
     querySelectorAll(selector) {
       if (selector === '.turn-card.user[data-optimistic="true"]') return this.children.filter(child => child.dataset.optimistic === 'true');
+      if (selector === '.turn-card.user') return this.children.filter(child => child.className.split(' ').includes('user'));
       return [];
     }
     appendChild(child) { if (child.parentNode) child.remove(); child.parentNode = child.parentElement = this; this.children.push(child); }
+    insertBefore(child, before) { if (!before) return this.appendChild(child); if (child.parentNode) child.remove(); child.parentNode = child.parentElement = this; this.children.splice(this.children.indexOf(before), 0, child); }
     remove() { this.parentNode.children.splice(this.parentNode.children.indexOf(this), 1); this.parentNode = this.parentElement = null; }
     set innerHTML(html) {
       const root = new Element(); root.ownerDocument = doc;
@@ -200,11 +202,67 @@ function cardFixture() {
   }
   const doc = { addEventListener() {}, removeEventListener() {}, createElement: () => new Element() };
   const container = new Element(); container.ownerDocument = doc;
-  const renderer = require('../renderer/turn-card-renderer').createTurnCardRenderer({ document: doc, window: { requestAnimationFrame: callback => callback() },
+  const state = { requestAnimationFrame: callback => callback(), localStorage: storage };
+  const renderer = require('../renderer/turn-card-renderer').createTurnCardRenderer({ document: doc, window: state,
     root: container, container, bridgeIpc: null, formatAbsoluteTime: () => 'fixture-time', escapeHtml: value => String(value || '').replace(/</g, '&lt;'),
     getSessionContext: () => ({ kind: 'codeagent' }) });
-  return { container, renderer, doc };
+  return { container, renderer, doc, state };
 }
+
+test('only stopped submitted user cards show inline edit-resend, using the same action as the menu', () => {
+  const f = cardFixture();
+  for (const state of [{ stopped: true }, { deliveryStatus: 'interrupted' }, { commandResult: { stopped: true, notSent: false } }]) {
+    const html = f.renderer.renderTurnCard({ id: 'user', role: 'user', text: 'request', ...state });
+    assert.match(html, /turn-stopped-action.*已停止 · .*data-action="edit-resend"/);
+    assert.equal((html.match(/data-action="edit-resend"/g) || []).length, 2);
+  }
+  for (const state of [{}, { commandResult: { stopped: true, notSent: true } }]) {
+    const html = f.renderer.renderTurnCard({ id: 'normal', role: 'user', text: 'request', ...state });
+    assert.doesNotMatch(html, /turn-stopped-action/); assert.equal((html.match(/data-action="edit-resend"/g) || []).length, 1);
+  }
+  assert.notEqual(f.renderer.turnRenderSignature({ role: 'user', text: 'same' }), f.renderer.turnRenderSignature({ role: 'user', text: 'same', stopped: true }));
+  f.renderer.dispose();
+});
+
+test('a stopped optimistic user card transfers its state to the real card and survives reloading', () => {
+  const values = new Map(), storage = { getItem: key => values.get(key), setItem: (key, value) => values.set(key, value) };
+  const f = cardFixture({ storage });
+  const pending = f.renderer.mountOptimisticUserCard('hub-fixture', '/git-ai whoami', 'codeagent', { clientSubmissionId: 'stopped-send' });
+  assert.equal(f.renderer.latestUserCard('hub-fixture'), pending);
+  f.renderer.markUserStopped('hub-fixture', pending);
+  const real = { id: 'real-user', role: 'user', text: '/git-ai whoami', ts: Date.now() + 1000 };
+  f.renderer.mountSessionTurnCard('hub-fixture', real);
+  assert.equal(f.container.children.length, 1); assert.equal(pending.parentNode, null);
+  assert.equal(f.state._sessionTurns.get('real-user').stopped, true);
+  const reloaded = cardFixture({ storage }); reloaded.renderer.mountSessionTurnCard('hub-fixture', { ...real });
+  const turn = reloaded.state._sessionTurns.get('real-user');
+  assert.equal(turn.stopped, true); assert.match(reloaded.renderer.renderTurnCard(turn), /turn-stopped-action/);
+  f.renderer.dispose(); reloaded.renderer.dispose();
+});
+
+test('a CodeAgent interrupted transcript round still shows stopped editing after actual IPC reload', async t => {
+  const entries = [user('interrupted-user', 'request'),
+    { ...answer('partial', 'working', 'interrupted-user'), message: { role: 'assistant', content: [{ type: 'text', text: 'working' }], stop_reason: 'tool_use' } },
+    user('interrupt', '[Request interrupted by user]', { timestamp: new Date(NOW + 3000).toISOString() })];
+  const result = await reloadCommandFixture(t, { entries });
+  const f = cardFixture(), turn = result.turns.find(turn => turn.role === 'user');
+  assert.equal(turn.deliveryStatus, 'interrupted'); f.renderer.mountSessionTurnCard('hub-fixture', turn);
+  assert.match(f.renderer.renderTurnCard(f.state._sessionTurns.get(turn.id)), /turn-stopped-action/); f.renderer.dispose();
+});
+
+test('Stop finishing after transcript replacement marks the same submitted user card, not the next draft', () => {
+  const values = new Map(), storage = { getItem: key => values.get(key), setItem: (key, value) => values.set(key, value) };
+  const f = cardFixture({ storage });
+  const clicked = f.renderer.mountOptimisticUserCard('hub-fixture', 'original prompt', 'codeagent', { clientSubmissionId: 'stopped-send' });
+  const real = { id: 'real-ordinary', role: 'user', text: 'original prompt', ts: Date.now() + 1000 };
+  f.renderer.mountSessionTurnCard('hub-fixture', real);
+  const next = f.renderer.mountOptimisticUserCard('hub-fixture', 'next prompt', 'codeagent', { clientSubmissionId: 'next-send' });
+  f.renderer.markUserStopped('hub-fixture', clicked);
+  assert.equal(f.state._sessionTurns.get(real.id).stopped, true); assert.equal(next.dataset.stopped, undefined);
+  const reloaded = cardFixture({ storage }); reloaded.renderer.mountSessionTurnCard('hub-fixture', real);
+  assert.equal(reloaded.state._sessionTurns.get(real.id).stopped, true);
+  f.renderer.dispose(); reloaded.renderer.dispose();
+});
 
 test('real user card replaces exactly one optimistic skill card; a genuine repeated send keeps a second card', () => {
   const { container, renderer } = cardFixture();
@@ -216,6 +274,16 @@ test('real user card replaces exactly one optimistic skill card; a genuine repea
   assert.equal(container.children.filter(row => row.dataset.optimistic === 'true').length, 1);
   renderer.mountSessionTurnCard('hub-fixture', { id: 'real-second', role: 'user', text: '/git-ai whoami', ts: Date.now() + 2 });
   assert.deepEqual(container.children.map(row => row.dataset.turnId), ['real-first', 'real-second']);
+  renderer.dispose();
+});
+
+test('command dividers render a thin separator without a user or assistant card header', () => {
+  const { renderer } = cardFixture();
+  const html = renderer.renderTurnCard({ id: 'compact', role: 'divider', text: '上下文已压缩' });
+  assert.match(html, /command-divider/); assert.match(html, /role="separator"/);
+  assert.match(html, /上下文已压缩/); assert.doesNotMatch(html, /turn-head|turn-avatar|turn-card user|turn-card assistant/);
+  assert.notEqual(renderer.turnRenderSignature({ role: 'user', text: '/compact' }),
+    renderer.turnRenderSignature({ role: 'divider', text: '上下文已压缩' }));
   renderer.dispose();
 });
 
@@ -266,7 +334,146 @@ function commandEcho(name, args, at, id) {
     { ...answer(id + '-answer', '回答-' + id, id + '-body'), timestamp: new Date(at + 1000).toISOString() }];
 }
 
-async function reloadCommandFixture(t, { commands = [], entries = [], kind = 'codeagent', live = true, requestKind = 'claude', opts = {} } = {}) {
+function builtinEntry(name, id, at = NOW) {
+  return user(id, `<command-message>${name}</command-message>\n<command-name>/${name}</command-name>\n<command-args></command-args>`,
+    { isMeta: true, timestamp: new Date(at).toISOString() });
+}
+
+test('both parsers remove built-in turn boundaries while preserving skills and their answers', () => {
+  const policy = require('../core/codeagent-command-records');
+  const entries = [user('human', 'question'), answer('before', 'before', 'human'), builtinEntry('compact', 'compact', NOW + 3000),
+    answer('continued', 'continue', 'compact'), builtinEntry('model', 'model', NOW + 4000), ...skill('skill')];
+  for (const turns of [claudeTranscriptTurns(claudeDiskRecords(entries, { codeagent: true })),
+    parseClaudeTranscriptEntries(entries, { codeagent: true })]) {
+    const visible = policy.projectCommandRecords(turns);
+    assert.deepEqual(visible.filter(turn => turn.role === 'user').map(turn => turn.id), ['human', 'skill']);
+    assert.deepEqual(visible.filter(turn => turn.role === 'divider').map(turn => turn.text), ['上下文已压缩']);
+    assert.ok(visible.some(turn => turn.role === 'assistant' && /回答-skill/.test(turn.text)));
+    assert.ok(visible.filter(turn => turn.role === 'assistant').some(turn => /continue/.test(turn.text)));
+    assert.ok(!turns.some(turn => turn.role === 'assistant' && turn.userMessageId === 'compact'));
+  }
+});
+
+test('CodeAgent builtin reload shows compact once, hides model and local stdout, and logs no body', async t => {
+  const entries = [user('human', 'private question'), answer('a', 'answer', 'human'), builtinEntry('compact', 'compact', NOW + 3000),
+    user('stdout', '<local-command-stdout>private command output</local-command-stdout>', { isMeta: true }),
+    builtinEntry('model', 'model', NOW + 4000)];
+  const result = await reloadCommandFixture(t, { entries, commands: [{ text: '/compact', ts: NOW + 2500 }, { text: '/model private-model', ts: NOW + 3500 }] });
+  assert.deepEqual(result.turns.map(turn => turn.role), ['user', 'assistant', 'divider']);
+  assert.equal(result.turns.at(-1).text, '上下文已压缩');
+  assert.equal(result.logs.length, 2, 'SQLite reopen plus parser cache hit must not duplicate diagnostics');
+  assert.deepEqual(result.logs.map(row => row.command), ['compact', 'model']);
+  assert.deepEqual(result.logs.map(row => row.action), ['divider', 'hidden']);
+  for (const row of result.logs) {
+    assert.deepEqual(Object.keys(row).sort(), ['action', 'at', 'command', 'file', 'firstUserInFile', 'identitySwitch', 'sessionId'].sort());
+    assert.equal(row.sessionId, 'hub-fixt'); assert.equal(row.file, 'fixture.');
+  }
+  assert.doesNotMatch(JSON.stringify(result.logs), /private|question|command output|[\\/]/);
+});
+
+function applyCommandHistoryWire(index, fixture, result, kind = 'codeagent') {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'renderer.js'), 'utf8');
+  const calls = [...source.matchAll(/turnCardRenderer\.reconcileCommandUserCards\(sessionId,[\s\S]*?\);/g)].map(match => match[0]);
+  assert.equal(calls.length, 2);
+  require('node:vm').runInNewContext(calls[index], { turnCardRenderer: fixture.renderer, sessionId: 'hub-fixture',
+    result, turns: result.turns, container: fixture.container, kind, mountKind: kind });
+}
+
+test('real journal reload clears only exact CodeAgent builtin placeholders, including after session reload', async t => {
+  const result = await reloadCommandFixture(t, { commands: [{ text: '/model', ts: NOW }] });
+  const response = { turns: result.turns, codeagentCommandSubmissionIds: result.commandSubmissionIds };
+  assert.deepEqual(response.codeagentCommandSubmissionIds, ['submission-0']);
+  const f = cardFixture();
+  f.renderer.mountOptimisticUserCard('hub-fixture', '/model', 'codeagent', { clientSubmissionId: 'submission-0' });
+  f.renderer.mountOptimisticUserCard('hub-fixture', '/model', 'codeagent', { clientSubmissionId: 'different-send' });
+  f.renderer.mountOptimisticUserCard('hub-fixture', '/git-ai whoami', 'codeagent', { clientSubmissionId: 'skill-send' });
+  applyCommandHistoryWire(0, f, response, 'claude');
+  assert.equal(f.container.children.length, 3, 'a non-CodeAgent view must leave even a matching receipt alone');
+  applyCommandHistoryWire(0, f, response);
+  assert.deepEqual(f.container.children.map(card => card.dataset.clientSubmissionId), ['different-send', 'skill-send']);
+  applyCommandHistoryWire(0, f, response, 'claude');
+  assert.equal(f.container.children.length, 2);
+  f.renderer.mountSessionTurnCard('hub-fixture', { id: 'real-skill', role: 'user', text: '/git-ai whoami', clientSubmissionId: 'skill-send', ts: NOW });
+  assert.equal(f.container.children.length, 2); assert.equal(f.container.children.at(-1).dataset.turnId, 'real-skill');
+  const reloaded = cardFixture(); applyCommandHistoryWire(0, reloaded, response);
+  assert.deepEqual(reloaded.container.children, []);
+  reloaded.renderer.dispose(); f.renderer.dispose();
+});
+
+test('compact placeholder is kept until its divider mounts, then replaced in the same slot', async t => {
+  const result = await reloadCommandFixture(t, { commands: [{ text: '/compact', ts: NOW }] });
+  const response = { turns: result.turns, codeagentCommandSubmissionIds: result.commandSubmissionIds };
+  const f = cardFixture();
+  const placeholder = f.renderer.mountOptimisticUserCard('hub-fixture', '/compact', 'codeagent', { clientSubmissionId: 'submission-0' });
+  const later = f.renderer.mountOptimisticUserCard('hub-fixture', 'later question', 'codeagent', { clientSubmissionId: 'later' });
+  applyCommandHistoryWire(0, f, response); assert.equal(f.container.children[0], placeholder);
+  const divider = f.renderer.mountSessionTurnCard('hub-fixture', response.turns[0]);
+  applyCommandHistoryWire(1, f, response);
+  assert.deepEqual(f.container.children, [divider, later]); assert.equal(placeholder.parentNode, null);
+  assert.equal(divider.className, 'turn-card command-divider'); f.renderer.dispose();
+});
+
+test('clear and new require a first user record or a matching clear identity switch', async t => {
+  for (const name of ['clear', 'new']) {
+    const first = await reloadCommandFixture(t, { entries: [builtinEntry(name, 'first')] });
+    assert.deepEqual(first.turns.map(turn => turn.text), ['已开始新对话，之前的上下文已清空']);
+    assert.equal(first.logs[0].firstUserInFile, true);
+    const entries = [user('first', 'question'), answer('a', 'answer', 'first'), builtinEntry(name, 'middle', NOW + 3000)];
+    const middle = await reloadCommandFixture(t, { entries });
+    assert.deepEqual(middle.turns.map(turn => turn.role), ['user', 'assistant']); assert.equal(middle.logs[0].action, 'hidden');
+    for (const [source, to, at, visible] of [['clear', 'fixture', NOW + 4000, true], ['resume', 'fixture', NOW + 4000, false],
+      ['clear', 'other-file', NOW + 4000, false], ['clear', 'fixture', NOW + 90000, false]]) {
+      const switched = await reloadCommandFixture(t, { entries, identitySwitch: { source, to, at } });
+      assert.equal(switched.turns.some(turn => turn.role === 'divider'), visible);
+      assert.equal(switched.logs[0].identitySwitch, visible);
+    }
+  }
+});
+
+test('builtin journal pairing never shifts identical skills around a compact record', async t => {
+  const entries = [...commandEcho('git-ai', 'first formatted', NOW + 45000, 'first'), builtinEntry('compact', 'compact', NOW + 50000),
+    ...commandEcho('git-ai', 'second formatted', NOW + 90000, 'second')];
+  const commands = [{ text: '/git-ai first original', ts: NOW }, { text: '/compact', ts: NOW + 1000 }, { text: '/git-ai second original', ts: NOW + 2000 }];
+  const result = await reloadCommandFixture(t, { entries, commands });
+  assert.deepEqual(result.turns.map(turn => [turn.role, turn.text]), [['user', '/git-ai first original'], ['assistant', '回答-first'],
+    ['divider', '上下文已压缩'], ['user', '/git-ai second original'], ['assistant', '回答-second']]);
+  assert.equal(result.logs.length, 1);
+});
+
+test('per-account command kinds and aliases override fallback; unknown and custom skills stay visible', async t => {
+  const cache = { version: 1, accounts: { personal: { commands: [{ name: 'new', aliases: ['clear'], kind: 'command' },
+    { name: 'model', kind: 'skill' }, { name: 'compact', kind: 'custom-command' }] }, other: { commands: [{ name: 'git-ai', kind: 'command' }] } } };
+  const result = await reloadCommandFixture(t, { cache, entries: [builtinEntry('clear', 'clear'), ...commandEcho('model', 'x', NOW + 1000, 'model'),
+    ...commandEcho('compact', 'x', NOW + 4000, 'compact'), ...commandEcho('git-ai', 'x', NOW + 8000, 'git-ai')] });
+  assert.deepEqual(result.turns.filter(turn => turn.role === 'user').map(turn => turn.text), ['/model x', '/compact x', '/git-ai x']);
+  assert.equal(result.turns[0].role, 'divider');
+  const legacy = await reloadCommandFixture(t, { kind: 'claude', entries: [builtinEntry('compact', 'legacy')] });
+  assert.deepEqual(legacy.turns.map(turn => turn.text), ['/compact']);
+});
+
+test('partial transcript windows never claim a clear is the first user in the file', () => {
+  const policy = require('../core/codeagent-command-records');
+  const turns = parseClaudeTranscriptEntries([builtinEntry('clear', 'clear')], { codeagent: true, codeagentPartial: true });
+  assert.equal(turns[0].codeagentCommand.firstUserInFile, false);
+  assert.deepEqual(policy.projectCommandRecords(turns), []);
+});
+
+test('command record diagnostics rotate, deduplicate and are collected by feedback', t => {
+  const policy = require('../core/codeagent-command-records');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'command-diagnostic-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  for (let i = 0; i < 12; i++) {
+    const turns = [{ id: 'record-' + i, role: 'user', text: '/compact private-text', source: 'hub-command', ts: NOW }];
+    for (let twice = 0; twice < 2; twice++) policy.projectCommandRecords(turns, { dataDir: dir, sessionId: 'abcdefgh-private', maxBytes: 500 });
+  }
+  const file = path.join(dir, 'logs', 'codeagent-command-records.log');
+  assert.ok(fs.existsSync(file + '.1')); assert.ok(fs.statSync(file).size <= 500); assert.ok(fs.statSync(file + '.1').size <= 500);
+  const rows = [file, file + '.1'].flatMap(file => fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse));
+  assert.doesNotMatch(JSON.stringify(rows), /private|record-/);
+  assert.ok(require('../core/hub-feedback').collectBundle({ logsDir: path.dirname(file) }).items.some(item => item.name === '日志 codeagent-command-records.log'));
+});
+
+async function reloadCommandFixture(t, { commands = [], entries = [], kind = 'codeagent', live = true, requestKind = 'claude', opts = {}, cache, identitySwitch } = {}) {
   const { CommandTranscriptStore } = require('../core/command-transcript-store');
   const { TranscriptParserService } = require('../core/transcript-parser-service');
   const { registerTranscriptIpc } = require('../main/ipc/transcript-handlers');
@@ -285,15 +492,18 @@ async function reloadCommandFixture(t, { commands = [], entries = [], kind = 'co
   store.close(); store = new CommandTranscriptStore(dir); // reload from an existing journal, no migration
   fs.writeFileSync(file, entries.map(entry => JSON.stringify(entry)).join('\n') + '\n');
   const session = { id: sid, hubId: sid, kind, ccSessionId: 'fixture-native', transcriptPath: file, createdAt: NOW - 1000 };
+  if (cache) { fs.mkdirSync(path.join(dir, 'codeagent-pool')); fs.writeFileSync(path.join(dir, 'codeagent-pool', 'codeagent-commands.json'), JSON.stringify(cache)); }
+  const manager = Object.assign(new (require('node:events').EventEmitter)(), { getSession: id => live && id === sid ? session : null });
   parser = new TranscriptParserService();
   const handlers = new Map();
   registerTranscriptIpc({ handle: (name, fn) => handlers.set(name, fn) }, {
-    sessionManager: { getSession: id => live && id === sid ? session : null },
+    sessionManager: manager, dataDir: dir,
     getPersistedSessions: () => [session], transcriptParserService: parser, commandTranscriptStore: store,
     parseClaudeTranscriptToNativeTurns: require('../core/claude-disk-transcript').parseClaudeTranscriptToNativeTurns,
     parseClaudeTranscriptToTurns: require('../core/claude-transcript-parser').parseClaudeTranscriptToTurns,
     isCodexCliKind: require('../core/ai-kinds').isCodexCliKind, defer: async () => {},
   });
+  if (identitySwitch) manager.emit('claude-identity-switched', { sessionId: sid, ...identitySwitch });
   // A caller's mode flag cannot override the actual live/persisted session kind.
   const args = { hubSessionId: sid, kind: requestKind, transcriptPath: file, opts: { limit: 50, fromTail: true, ...opts, codeagent: true } };
   const read = () => handlers.get('parse-session-transcript')(null, args);
@@ -302,7 +512,9 @@ async function reloadCommandFixture(t, { commands = [], entries = [], kind = 'co
   assert.equal(first.parseCacheHit, false); assert.equal(reloaded.parseCacheHit, true);
   assert.deepEqual(reloaded.turns, first.turns);
   assert.deepEqual(store.read(sid), saved, 'reading must never alter the saved journal text, timestamps or results');
-  return { turns: reloaded.turns, saved };
+  const log = path.join(dir, 'logs', 'codeagent-command-records.log');
+  return { turns: reloaded.turns, saved, commandSubmissionIds: reloaded.codeagentCommandSubmissionIds,
+    logs: fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').map(JSON.parse) : [] };
 }
 
 for (const [label, original, echoed, name, cliName] of [
@@ -425,7 +637,7 @@ test('a local compact command without a CLI user record never advances the echo 
   const { turns } = await reloadCommandFixture(t, { commands: [{ text: '/git-ai first', ts: NOW },
     { text: '/compact', ts: NOW + 1000 }, { text: '/git-ai second', ts: NOW + 2000 }],
   entries: [...commandEcho('git-ai', 'formatted first', NOW + 45000, 'first'), ...commandEcho('git-ai', 'formatted second', NOW + 90000, 'second')] });
-  assert.deepEqual(turns.map(turn => [turn.role, turn.text]), [['user', '/compact'],
+  assert.deepEqual(turns.map(turn => [turn.role, turn.text]), [['divider', '上下文已压缩'],
     ['user', '/git-ai first'], ['assistant', '回答-first'], ['user', '/git-ai second'], ['assistant', '回答-second']]);
 });
 
@@ -465,7 +677,7 @@ test('one Hub command pairs only the first CLI echo and preserves a subsequent t
 
 test('journal-only local commands and CLI-only terminal skills both survive reload', async t => {
   const journal = await reloadCommandFixture(t, { commands: [{ text: '/model', ts: NOW }] });
-  assert.deepEqual(journal.turns.map(turn => [turn.role, turn.text]), [['user', '/model']]);
+  assert.deepEqual(journal.turns, []);
   const cli = await reloadCommandFixture(t, { entries: commandEcho('git-ai', 'direct', NOW, 'direct') });
   assert.deepEqual(cli.turns.map(turn => [turn.role, turn.text]), [['user', '/git-ai direct'], ['assistant', '回答-direct']]);
 });

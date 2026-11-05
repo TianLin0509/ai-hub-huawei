@@ -6528,16 +6528,17 @@ if (typeof document !== 'undefined') (function () {
     // 2026-10-11：新增的 DeepSeek 成员一律跑 Claude Code（接入方式沿用新建面板记住的选择）；
     // 旧的 Codex / 旧 Harness DeepSeek 只留给已有成员恢复。
     const _CLI_SUFFIX = { claude: 'Claude Code', gemini: 'Antigravity CLI', codex: 'Codex CLI', 'deepseek-claude': 'DeepSeek · Claude Code', kimi: 'Kimi Code' };
-    // 只保留部分 AI 的发行版（公司纯净版只留 CodeAgent）：只列允许的；主仓库与公开版列表不变。
-    const { allowedKinds, kindAllowed } = require('../core/distribution');
+    // 公司协作任务只用 CodeAgent；启动中心的单会话工具不影响成员列表。
+    const { allowedKinds } = require('../core/distribution');
+    const { taskKindAllowed, companyOnly } = require('../core/company-ai-policy');
     const availableKinds = (meeting.groupChat
       ? ['claude', 'codex', 'deepseek-acp', 'qwen', 'glm', 'gemini', ...(allowedKinds ? ['codeagent'] : [])]
-      : ALL_AI_KINDS.filter(k => k !== 'deepseek' && k !== 'deepseek-claude')).filter(kindAllowed);
+      : ALL_AI_KINDS.filter(k => k !== 'deepseek' && k !== 'deepseek-claude')).filter(taskKindAllowed);
     const kinds = availableKinds.map(k => ({
       kind: k,
       label: _CLI_SUFFIX[k] || getKindLabel(k),
     }));
-    if (!meeting.groupChat) kinds.push({ kind: 'powershell', label: 'PowerShell' });
+    if (!meeting.groupChat && !companyOnly()) kinds.push({ kind: 'powershell', label: 'PowerShell' });
 
     for (const { kind, label } of kinds) {
       const item = document.createElement('button');

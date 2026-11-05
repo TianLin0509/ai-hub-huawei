@@ -8,7 +8,9 @@ function requireCommand(provider, env = process.env) {
   const command = findCommand(provider, env);
   if (!command) {
     const name = PROVIDERS.find(p => p.id === provider)?.name || provider;
-    throw new Error(`未找到 ${name} CLI。请从首页「安装说明」安装 ${provider}，装好后点「重新检测」，再到账号中心登录。`);
+    const next = require('./distribution').target === 'company' && ['claude', 'codex'].includes(provider)
+      ? '可以沿用本机 CLI 配置，也可在设置 → 自有 API 填写接口。' : '再到账号中心登录。';
+    throw new Error(`未找到 ${name} CLI。请从首页「安装说明」安装 ${provider}，装好后点「重新检测」，${next}`);
   }
   return command;
 }

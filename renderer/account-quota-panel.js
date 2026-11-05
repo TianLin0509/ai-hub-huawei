@@ -19,6 +19,13 @@ const PROVIDERS = [
   { id: 'antigravity', name: 'Gemini', logo: 'gemini' },
 ];
 
+function panelAvailability({ kindAllowed, featureEnabled }) {
+  const providers = featureEnabled('quotaBar')
+    ? PROVIDERS.filter(provider => kindAllowed(riskKind(provider.id))).map(provider => provider.id) : [];
+  const codeagent = kindAllowed('codeagent');
+  return { enabled: codeagent || providers.length > 0, codeagent, providers };
+}
+
 function level(pct) {
   if (pct === null || pct === undefined) return 'off';
   if (pct < USABLE_MIN) return 'bad';
@@ -193,9 +200,11 @@ function activeClaudeSessions(provider, profileId) {
 function createAccountQuotaPanel({
   document, root, footerRoot = null, getSnapshot, getCurrentProfileId = () => '', refresh = async () => {},
   lookupLocations = async () => ({}), getActiveSessionCount = activeClaudeSessions, escapeHtml, storage = null, nowFn = Date.now, setIntervalFn = setInterval, setTimeoutFn = setTimeout,
+  providers = PROVIDERS.map(provider => provider.id),
 }) {
   if (!document || !root) throw new Error('account quota panel needs document and root');
   const esc = typeof escapeHtml === 'function' ? escapeHtml : s => String(s);
+  const enabledProviders = PROVIDERS.filter(provider => providers.includes(provider.id));
   // 2026-10-29 用户：账号不排序，固定按编号 1、2、3… 正序。
   let state = { collapsed: false };
   try { state = { ...state, ...JSON.parse(storage?.getItem(STORAGE_KEY) || '{}') }; } catch {}
@@ -311,7 +320,7 @@ function createAccountQuotaPanel({
     const now = nowFn();
     let snapshot = null;
     try { snapshot = getSnapshot(); } catch {}
-    const groups = PROVIDERS.map(p => {
+    const groups = enabledProviders.map(p => {
       let rows = [];
       try { rows = viewRows(p.id, snapshot, getCurrentProfileId(p.id), now); } catch {}
       for (const r of rows) {
@@ -334,7 +343,7 @@ function createAccountQuotaPanel({
       // 只收看板里有的那几家；单号的 AI 在看板里也有卡片，底栏同样只留汇总。
       footerRoot.dataset.panelProviders = on ? groups.map(g => g.id).join(' ') : '';
     }
-    for (const p of PROVIDERS) {
+    for (const p of enabledProviders) {
       const s = ensureSummary(p.id);
       if (!s) continue;
       const g = groups.find(x => x.id === p.id);
@@ -364,4 +373,4 @@ function createAccountQuotaPanel({
   return { render, getState: () => ({ ...state }) };
 }
 
-module.exports = { createAccountQuotaPanel, viewRows, effective, locationText, nextMonthlyRenewal, renewalAt, recommendClaude, expected7d, paceOf, subscriptionText, PROVIDERS };
+module.exports = { createAccountQuotaPanel, panelAvailability, viewRows, effective, locationText, nextMonthlyRenewal, renewalAt, recommendClaude, expected7d, paceOf, subscriptionText, PROVIDERS };

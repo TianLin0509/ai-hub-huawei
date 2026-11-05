@@ -470,7 +470,7 @@ class HubMemoryService {
     this.active.delete(j.sessionId);
   }
   async start(request) {
-    require('./company-ai-policy').assertKind(request.kind || (require('./company-ai-policy').companyOnly() ? 'codeagent' : 'codex'));
+    require('./company-ai-policy').assertTaskKind(request.kind || (require('./company-ai-policy').companyOnly() ? 'codeagent' : 'codex'));
     const source = await this.sourceFor(request),
       p = this.sessionProject(source);
     const baseVersion = this.pointer(p)?.version || null;
@@ -522,7 +522,7 @@ class HubMemoryService {
     try {
       this.saveJob(j);
       if (!isAiKind(j.kind)) throw new Error("请选择可用的 AI 类型");
-      require('./company-ai-policy').assertKind(j.kind);
+      require('./company-ai-policy').assertTaskKind(j.kind);
       const pointer = this.pointer(p);
       const processedIds = Object.fromEntries(
         [...new Set(request.keys || [])].map((key) => [

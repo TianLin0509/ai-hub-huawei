@@ -17,6 +17,7 @@ const B = require('./brief');
 const R = require('./reminders');
 const Q = require('./queries');
 const Identity = require('./identity');
+const { recordMessageRound } = require('./message-round-log');
 const { WelinkGate, sharedWelinkGate, withWelinkPriority, WELINK_RATE_LIMITED, MESSAGE_ROUND_EXPIRED } = require('./welink-gate');
 const { noticeBus } = require('./notice-bus');
 const { PhoneChannel, DEFAULT_PHONE, PHONE_NOTE } = require('./phone');
@@ -73,7 +74,9 @@ const FRESH_MS = 3 * 60000;
 const HISTORY_PAGE = 100;
 const MAX_PAGES = 30;
 const MESSAGE_REFRESH_MAX_MS = 6 * 60000;
-const MESSAGE_ROTATION_LIMIT = 10;
+const MESSAGE_ROTATION_LIMIT = 5;
+const MESSAGE_PINNED_TOP = 3;
+const MESSAGE_ORDINARY_TOP = 3;
 const MESSAGE_FULL_CHECK_MS = 30 * 60000;
 const LOOKBACK_CHOICES = [12, 24, 36, 48, 72];
 const CONVERSATION_LIMIT = 100; // 帮助写50，但公司1.0.14实测可返回100；旧CLI失败时兼容50。
@@ -91,7 +94,15 @@ function conversationOrderChanges(previousOrder, currentOrder, previousPinnedHea
     if (rank !== undefined) minimum = Math.min(minimum, rank);
   }
   const moved = currentOrder.map((id, index) => ({ id, index })).filter(x => movedIndexes.has(x.index));
-  const pinnedHead = moved.length ? moved[0].index : Number.isSafeInteger(previousPinnedHead) && previousPinnedHead >= 0 ? Math.min(previousPinnedHead, currentOrder.length) : 0;
+  const oldBoundary = Number.isSafeInteger(previousPinnedHead) && previousPinnedHead >= 0 ? previousPinnedHead : 0;
+  const oldPins = new Set(previousOrder.slice(0, oldBoundary));
+  // A pinned conversation can move inside the prefix after several arrivals;
+  // [p0,p1,p2,a] -> [p0,p2,p1,a] is not evidence for a boundary at 1.
+  // Only a previously ordinary/new conversation landing after position 0 is
+  // evidence for shrinking/expanding an established boundary. A landing at 0
+  // could instead be a newly pinned conversation, so preserve the estimate.
+  const evidence = moved.find(item => !oldPins.has(item.id) && (!oldBoundary || item.index > 0));
+  const pinnedHead = evidence ? evidence.index : Math.min(oldBoundary, currentOrder.length);
   const changed = new Set();
   for (const item of moved) {
     changed.add(item.index);
@@ -500,11 +511,11 @@ class CompanyAssistant {
   briefRunning(day) { return [this.job, ...this.queue].some(j => j && j.type === 'brief' && j.day === day); }
 
   // ---- 取数 ----
-  refresh({ force = false, priority = 'background' } = {}) {
+  refresh({ force = false, priority = 'background', trigger = priority === 'user' ? 'manual' : 'timer' } = {}) {
     if (this.refreshing) return this.refreshing;
     const day = D.dayKey(this.now()), last = this.snapshot(day);
     if (!force && last && this.now() - (last.at || 0) < FRESH_MS) return Promise.resolve(last);
-    this.refreshing = this.withCollection(() => this.collect({ priority })).finally(() => { this.refreshing = null; this.changed(); });
+    this.refreshing = this.withCollection(() => this.collect({ priority, trigger })).finally(() => { this.refreshing = null; this.changed(); });
     return this.refreshing;
   }
   withCollection(task) {
@@ -554,8 +565,14 @@ class CompanyAssistant {
       return { [key]: previous?.[key] || [], coverage: { ...previous?.[coverageKey], status: 'deferred', reason: 'rate-limited', reasonLabel: 'WeLink 限流，已保留上次结果', capturedAt: previous?.at || null } };
     }
   }
-  collectQuery(kind, range) { return withWelinkPriority('user', () => this.collectQueryUnlocked(kind, range)); }
-  async collectQueryUnlocked(kind, range) {
+  newMessageRound(trigger) { return { startedAt: this.now(), trigger, ...(trigger === 'query' ? { fullCheckReason: 'query' } : {}), requests: {}, failed: 0 }; }
+  finishMessageRound(round) { recordMessageRound(this.deps.dataDir, { ...round, endedAt: this.now() }); }
+  collectQuery(kind, range) {
+    const round = this.newMessageRound('query');
+    return withWelinkPriority('user', () => this.collectQueryUnlocked(kind, range, round))
+      .catch(error => { round.failed ||= 1; throw error; }).finally(() => this.finishMessageRound(round));
+  }
+  async collectQueryUnlocked(kind, range, round) {
     const now = this.now(), s = { ...this.settings(), lookbackHours: Math.max(1, (now - range.start) / 3600000), maxConversations: 0 };
     const snap = { at: now, day: D.dayKey(now), messages: {}, conversations: [], meetings: [], calendar: [], errors: [] };
     const diagnose = (command, raw, metadata) => this.diagnoseQuery(command, raw, metadata);
@@ -580,6 +597,7 @@ class CompanyAssistant {
       try { raw = await this.recentConversations(snap, runJson); }
       catch (error) {
         if (error.code !== WELINK_RATE_LIMITED) throw error;
+        if (round) { round.rateLimited = true; round.fullCheckReason = 'query'; }
         const previous = this.previousFor(snap);
         snap.messages = previous?.messages || {}; snap.conversations = previous?.conversations || [];
         snap.scope = { ...previous?.scope, rateLimited: true, partial: previous?.scope?.neverFetched || previous?.scope?.priorityPending || (previous ? 0 : 1), neverFetched: previous?.scope?.neverFetched || (previous ? 0 : 1), stale: false };
@@ -587,19 +605,22 @@ class CompanyAssistant {
         return snap;
       }
       if (!raw || D.conversationRecords(raw) === null) {
+        if (round) { round.failed += 1; round.fullCheckReason = 'query'; }
         if (raw) await diagnose('im query-recent-conversation', raw);
         snap.scope = { stale: true, partial: 1 };
         snap.errors.push({ label: '最近会话', text: '本次会话目录未取到，无法判断消息范围' });
       } else {
         this.setConversationDirectory(snap, raw);
-        await this.collectMessages(snap, s, now, runJson, { cutoff: range.start, persistCache: false });
+        await this.collectMessages(snap, s, now, runJson, { cutoff: range.start, persistCache: false, round });
       }
     }
     this.assertCollectionIdentity(snap);
     return snap;
   }
-  collect({ priority = 'background' } = {}) {
-    return withWelinkPriority(priority, () => this.collectUnlocked()).finally(() => { this.visibleSnapshot = null; this.changed(); });
+  collect({ priority = 'background', trigger = priority === 'user' ? 'manual' : 'timer' } = {}) {
+    const round = this.newMessageRound(trigger);
+    return withWelinkPriority(priority, () => this.collectUnlocked({ trigger, round }))
+      .catch(error => { round.failed ||= 1; throw error; }).finally(() => { this.finishMessageRound(round); this.visibleSnapshot = null; this.changed(); });
   }
   showCollection(snap, pending) {
     this.assertCollectionIdentity(snap);
@@ -612,7 +633,7 @@ class CompanyAssistant {
     this.visibleSnapshot = JSON.parse(JSON.stringify(visible));
     this.changed();
   }
-  async collectUnlocked() {
+  async collectUnlocked({ trigger = 'timer', round } = {}) {
     const s = this.settings(), now = this.now(), day = D.dayKey(now), errors = [];
     const snap = { at: now, day, login: null, calendarNeedsSetup: false, meetings: [], calendar: [], conversations: [], messages: {}, mails: [], errors };
     const diagnose = (command, raw, metadata) => this.diagnoseQuery(command, raw, metadata);
@@ -630,6 +651,7 @@ class CompanyAssistant {
       if (error.code === 'WELINK_MISSING') void this.findCli();
     }
     if (snap.login.ok) {
+      if (round) { round.identityMissing = !snap.login.uid; if (round.identityMissing) round.fullCheckReason = 'identity-missing'; }
       const pending = new Set(['meetings', 'calendar', 'mails', 'messages']);
       this.showCollection(snap, pending);
       if (!s.email) await this.accountEmail(s);
@@ -661,12 +683,14 @@ class CompanyAssistant {
       catch (error) { if (error.code !== WELINK_RATE_LIMITED) throw error; directoryLimited = true; }
       if (convRaw && D.conversationRecords(convRaw) !== null) {
         this.setConversationDirectory(snap, convRaw);
-        await this.collectMessages(snap, s, now, runJson, { background: true });
+        await this.collectMessages(snap, s, now, runJson, { background: true, trigger, round });
       } else {
+        if (round) { round.rateLimited = directoryLimited; round.failed += directoryLimited ? 0 : 1; round.fullCheckReason = snap.login.uid ? 'no-order' : 'identity-missing'; }
         if (convRaw) await diagnose('im query-recent-conversation', convRaw);
         if (convRaw) errors.push({ label: '最近会话', text: '无法识别会话列表结构，保留此前记录' });
-        // 会话目录失败不能把此前已取得的聊天覆盖成空结果；身份不明或换号时不复用。
-        const previous = snap.login.uid && this.snapshotDays().map(d => this.snapshot(d)).find(p => p?.login?.uid === snap.login.uid);
+        // 账号编号暂缺时仍沿用缓存身份；明确换号时只复用对应账号的快照。
+        const owner = snap.login.uid || this.read('message-cache.json', {}).identity;
+        const previous = owner && this.snapshotDays().map(d => this.snapshot(d)).find(p => p?.login?.uid === owner);
         if (previous) {
           snap.conversations = previous.conversations || []; snap.messages = previous.messages || {};
           snap.nameResolution = previous.nameResolution;
@@ -674,7 +698,7 @@ class CompanyAssistant {
         const coverage = (previous?.scope?.conversations || []).map(c => ({ ...c, status: 'partial', reason: 'query-failed', reasonLabel: '最近会话查询失败，显示上次取得的记录' }));
         snap.scope = { ...(previous?.scope || {}), lookbackHours: previous?.scope?.lookbackHours || s.lookbackHours,
           fetched: 0, completed: 0, rateLimited: directoryLimited, rotating: false, messages: Object.values(snap.messages).reduce((n, rows) => n + rows.length, 0),
-          stale: !directoryLimited, cached: !!previous, capturedAt: previous?.scope?.capturedAt || previous?.at || null,
+          stale: !directoryLimited, cached: !!previous, identityMissing: !snap.login.uid, capturedAt: previous?.scope?.capturedAt || previous?.at || null,
           partial: previous?.scope?.neverFetched || previous?.scope?.priorityPending || (previous ? 0 : 1), neverFetched: previous?.scope?.neverFetched || (previous ? 0 : 1), conversations: directoryLimited ? [] : coverage };
       }
       snap.calendarNeedsSetup = errors.some(e => e.calendar);
@@ -709,49 +733,73 @@ class CompanyAssistant {
   // 已缓存的会话只补拉比缓存里最新那条更新的消息；第一次取时从最新一页往回翻，翻到早于回看时间为止。
   // 所有命令共用请求队列；后台消息取数到时限后保留游标和 deferred，下轮继续。
   async collectMessages(snap, s, now, runJson, options = {}) {
-    const cutoff = options.cutoff ?? now - s.lookbackHours * 3600000, me = snap.login.uid, phoneGroup = s.phone?.groupId || '';
+    const round = options.round || this.newMessageRound(options.background ? options.trigger || 'timer' : 'query');
+    try { return await this.collectMessageRound(snap, s, now, runJson, { ...options, round }); }
+    catch (error) { round.failed += 1; throw error; }
+    finally { if (!options.round) this.finishMessageRound(round); }
+  }
+  async collectMessageRound(snap, s, now, runJson, options) {
+    const stored = this.read('message-cache.json', {}), catalog = this.read('conversation-catalog.json', {});
+    const observedOwner = snap.login.uid || null;
+    const previous = this.snapshotDays().map(day => this.snapshot(day)).find(old => old?.login?.uid);
+    const claimed = !!observedOwner && !stored.identity && previous?.login?.uid === observedOwner && (!catalog.identity || catalog.identity === observedOwner);
+    const me = observedOwner || stored.identity;
+    const sameOwner = !!me && (stored.identity === me || claimed);
+    const cutoff = options.cutoff ?? now - s.lookbackHours * 3600000, phoneGroup = s.phone?.groupId || '';
+    const round = options.round;
+    const identityMissing = !observedOwner;
+    round.identityMissing = identityMissing; round.cacheReused = sameOwner; round.identityClaimed = claimed;
+    if (identityMissing && !me) {
+      round.fullCheckReason = 'identity-missing';
+      snap.scope = { identityMissing: true, mode: options.background ? 'incremental' : 'query', partial: 0, neverFetched: 0, conversations: [] };
+      return;
+    }
     const listed = snap.directoryRawCount ?? snap.conversations.length;
     const directoryOrder = snap.conversations.map(c => c.id), recentIds = new Set(directoryOrder);
-    const catalog = this.read('conversation-catalog.json', {});
     const remembered = catalog.identity === me ? (catalog.conversations || []).filter(c => c.seenAt >= now - 90 * 86400000) : [];
     const directory = new Map();
     for (const c of snap.conversations) directory.set(c.id, { ...c, seenAt: now });
     // Map.set 不会移动已有 key；必须先放本轮最近会话，再补历史，限额才不会截掉新活跃会话。
     for (const c of remembered) if (!directory.has(c.id)) directory.set(c.id, c);
     snap.conversations = [...directory.values()];
-    let list = snap.conversations.filter(c => c.id !== phoneGroup); // 手机对话的专用群不进简报
+    let list = snap.conversations.filter(c => c.id !== phoneGroup && (!options.background || recentIds.has(c.id))); // 手机对话的专用群不进简报
     const limited = s.maxConversations > 0 && list.length > s.maxConversations;
-    const stored = this.read('message-cache.json', {}), previous = this.snapshot(snap.day);
-    const sameOwner = !!me && (stored.identity === me || (!stored.identity && !stored.version && previous?.login?.uid === me));
     const cache = sameOwner ? (stored.version >= 2 ? stored.conversations || {} : stored) : {};
     const deferred = sameOwner && Array.isArray(stored.deferred) ? [...new Set(stored.deferred)].filter(id => list.some(c => c.id === id)) : [];
     const rank = new Map(deferred.map((id, i) => [id, i]));
     if (limited) list = list.slice(0, s.maxConversations);
+    const retained = options.background ? snap.conversations.filter(conv => conv.id !== phoneGroup && !recentIds.has(conv.id)) : [];
     const comparedOrder = sameOwner && Array.isArray(stored.directoryOrder) && stored.directoryOrder.every(id => typeof id === 'string');
     const orderChanges = conversationOrderChanges(comparedOrder ? stored.directoryOrder : [], directoryOrder, sameOwner ? stored.pinnedHead : 0), changed = orderChanges.changed;
     const pinnedIds = new Set(directoryOrder.slice(0, orderChanges.pinnedHead));
     const priorPriority = sameOwner && Array.isArray(stored.priorityDeferred) ? [...new Set(stored.priorityDeferred)].filter(id => list.some(c => c.id === id)) : [];
     const byId = new Map(list.map(c => [c.id, c]));
     const priority = [...new Set([...priorPriority.filter(id => recentIds.has(id) && !pinnedIds.has(id)), ...changed])].map(id => byId.get(id)).filter(Boolean);
+    const retry = options.background ? list.filter(conv => cache[conv.id]?.failureCount > 0) : [];
     const lastFullCheckAt = sameOwner && Number.isFinite(stored.lastFullCheckAt) && stored.lastFullCheckAt <= now ? stored.lastFullCheckAt : null;
     const fullPending = sameOwner && Array.isArray(stored.fullCheckPending) ? stored.fullCheckPending.filter(id => byId.has(id) && recentIds.has(id)) : [];
-    const fullCheck = !!options.background && (!comparedOrder || !lastFullCheckAt || now - lastFullCheckAt >= MESSAGE_FULL_CHECK_MS || fullPending.length > 0);
+    const fullCheck = !!options.background && options.trigger !== 'manual' && !identityMissing && (!comparedOrder || !lastFullCheckAt || now - lastFullCheckAt >= MESSAGE_FULL_CHECK_MS || fullPending.length > 0);
+    round.mode = fullCheck ? 'full-check' : 'incremental';
+    round.fullCheckReason = identityMissing ? 'identity-missing' : observedOwner && stored.identity && stored.identity !== observedOwner ? 'owner-mismatch'
+      : !options.background ? 'query' : options.trigger === 'manual' ? 'manual' : !comparedOrder ? 'no-order' : fullPending.length ? 'pending' : !lastFullCheckAt || now - lastFullCheckAt >= MESSAGE_FULL_CHECK_MS ? 'due' : 'not-due';
+    round.changedCount = changed.length; round.pinnedHead = orderChanges.pinnedHead;
     const queryFallback = !options.background && !list.some(conv => historyKnown(cache[conv.id]));
     const lastQuery = id => Number.isFinite(cache[id]?.lastQueriedAt) ? cache[id].lastQueriedAt : -Infinity;
     const oldestFirst = rows => rows.sort((a, b) => Number(recentIds.has(b.id)) - Number(recentIds.has(a.id))
       || lastQuery(a.id) - lastQuery(b.id) || (rank.get(a.id) ?? Infinity) - (rank.get(b.id) ?? Infinity));
     const pins = list.filter(conv => pinnedIds.has(conv.id));
-    const preferredIds = new Set([...priority, ...pins].map(conv => conv.id));
+    const pinnedTop = pins.slice(0, MESSAGE_PINNED_TOP), ordinaryTop = list.filter(conv => !pinnedIds.has(conv.id)).slice(0, MESSAGE_ORDINARY_TOP);
+    const preferredIds = new Set([...priority, ...retry, ...pinnedTop, ...ordinaryTop].map(conv => conv.id));
     const rotation = oldestFirst(list.filter(conv => !preferredIds.has(conv.id) && (!fullCheck || !recentIds.has(conv.id)))).slice(0, MESSAGE_ROTATION_LIMIT);
     const fullTargets = list.filter(conv => recentIds.has(conv.id)).map(conv => conv.id);
     const phases = options.background
       ? fullCheck
-        ? [fullPending.map(id => byId.get(id)), priority, pins, fullPending.length ? [] : list.filter(conv => recentIds.has(conv.id)),
-          rotation.filter(conv => !recentIds.has(conv.id))]
-        : [priority, pins, rotation]
+        ? [fullPending.map(id => byId.get(id)), retry, priority, pins, fullPending.length ? [] : list.filter(conv => recentIds.has(conv.id))]
+        : [retry, priority, pinnedTop, ordinaryTop, rotation]
       : queryFallback ? [list] : [priority, pins];
+    const phaseNames = !options.background ? queryFallback ? ['full'] : ['changed', 'pinnedTop'] : fullCheck ? ['full', 'retry', 'changed', 'full', 'full'] : ['retry', 'changed', 'pinnedTop', 'ordinaryTop', 'rotation'];
     const selectedIds = new Set(phases.flat().map(conv => conv.id));
-    const next = { version: 4, identity: me || null, lastFullCheckAt, conversations: {}, deferred: deferred.filter(id => !list.some(c => c.id === id)) }, names = D.namesOf(snap.conversations);
+    const next = { version: 4, identity: me, lastFullCheckAt, conversations: {}, deferred: deferred.filter(id => !list.some(c => c.id === id)) }, names = D.namesOf(snap.conversations);
     if (options.background) { next.directoryOrder = directoryOrder; next.pinnedHead = orderChanges.pinnedHead; this.logMessageChanges(changed.length); }
     else if (sameOwner && stored.directoryOrder) next.directoryOrder = stored.directoryOrder;
     if (!options.background && sameOwner && Number.isSafeInteger(stored.pinnedHead) && stored.pinnedHead >= 0) next.pinnedHead = stored.pinnedHead;
@@ -759,11 +807,18 @@ class CompanyAssistant {
     const coverage = [], results = new Map(), complete = new Set();
     let rateLimited = false, fetched = 0, requests = 0, pinnedRequests = 0, timedOut = false;
     const deadline = options.background ? this.now() + MESSAGE_REFRESH_MAX_MS : undefined;
-    const historyRun = (label, args) => runJson(label, args, { deadline, beforeRun: () => { requests += 1; } });
+    let currentPhase = 'changed';
+    const historyRun = (label, args) => runJson(label, args, { deadline, beforeRun: () => { requests += 1; round.requests[currentPhase] = (round.requests[currentPhase] || 0) + 1; } });
     const query = async conv => {
       const before = requests;
       const got = await this.conversationHistory(conv, cache[conv.id], cutoff, me, s.myName, historyRun, names);
       results.set(conv.id, got);
+      const failed = ['query-failed', 'invalid-shape'].includes(got.coverage.reason);
+      if (failed) round.failed += 1;
+      if (options.background) {
+        got.cache.failureCount = failed ? (cache[conv.id]?.failureCount || 0) + 1 : got.coverage.successfulPages ? 0 : cache[conv.id]?.failureCount || 0;
+        got.cache.lastError = failed ? got.coverage.reason : got.coverage.successfulPages ? '' : cache[conv.id]?.lastError || '';
+      }
       if (got.coverage.pages || requests > before) {
         fetched += 1;
         if (options.background) got.cache.lastQueriedAt = this.now();
@@ -772,9 +827,11 @@ class CompanyAssistant {
       if (got.coverage.status === 'complete') complete.add(conv.id);
       if (got.coverage.reason === 'rate-limited') rateLimited = true;
       if (got.coverage.reason === 'rotation') timedOut = true;
-      if (got.coverage.status !== 'complete' && !['query-failed', 'rate-limited', 'rotation'].includes(got.coverage.reason)) snap.errors.push({ label: `消息（${conv.name}）`, text: `只取到部分消息：${got.coverage.reasonLabel}` });
+      if (got.coverage.status !== 'complete' && !['query-failed', 'rate-limited', 'rotation'].includes(got.coverage.reason)
+          && !(options.background && got.coverage.reason === 'invalid-shape' && got.cache.failureCount < 3)) snap.errors.push({ label: `消息（${conv.name}）`, text: `只取到部分消息：${got.coverage.reasonLabel}` });
     };
-    for (const phase of phases) {
+    for (const [phaseIndex, phase] of phases.entries()) {
+      currentPhase = phaseNames[phaseIndex];
       for (const conv of phase) {
         if (rateLimited || timedOut) break;
         if (deadline && this.now() >= deadline) { timedOut = true; break; }
@@ -786,6 +843,7 @@ class CompanyAssistant {
       }
       if (rateLimited || timedOut) break;
     }
+    round.rateLimited = rateLimited; round.timedOut = timedOut;
     const queue = [...new Set([...deferred, ...selectedIds])];
     next.deferred = [...queue.filter(id => !results.has(id)), ...queue.filter(id => ['rotation', 'rate-limited'].includes(results.get(id)?.coverage.reason))];
     next.priorityDeferred = options.background ? priority.map(c => c.id).filter(id => !results.has(id) || ['rotation', 'rate-limited'].includes(results.get(id).coverage.reason))
@@ -801,14 +859,21 @@ class CompanyAssistant {
       const live = (got.coverage.successfulPages || 0) > 0;
       const dataSource = live ? got.coverage.status === 'complete' ? 'realtime' : 'mixed' : 'cache';
       coverage.push({ id: conv.id, name: conv.name, ...got.coverage, dataSource, cachedAt, capturedAt: live ? got.cache.capturedAt : cachedAt,
+        ...(options.background ? { failureCount: got.cache.failureCount || 0, lastError: got.cache.lastError || '' } : {}),
         cacheWindowIncomplete: !live && historyKnown(cache[conv.id]) && Number.isFinite(cache[conv.id]?.since) && cache[conv.id].since > cutoff });
+    }
+    for (const conv of retained) {
+      const got = await this.conversationHistory(conv, cache[conv.id], cutoff, me, s.myName, runJson, names, { deferReason: 'cached' });
+      next.conversations[conv.id] = { ...got.cache, messages: got.messages };
+      if (got.messages.length) snap.messages[conv.id] = got.messages;
+      coverage.push({ id: conv.id, name: conv.name, ...got.coverage, retained: true, dataSource: 'cache', capturedAt: cache[conv.id]?.capturedAt ?? null });
     }
     if (options.background) {
       if (fullCheck) {
         const required = fullPending.length ? [...new Set([...fullPending, ...priority.filter(conv => recentIds.has(conv.id)).map(conv => conv.id)])] : fullTargets;
-        next.fullCheckPending = required.filter(id => !complete.has(id));
+        next.fullCheckPending = required.filter(id => !complete.has(id) && !['query-failed', 'invalid-shape'].includes(results.get(id)?.coverage.reason));
         if (!next.fullCheckPending.length) next.lastFullCheckAt = this.now();
-      } else next.fullCheckPending = [];
+      } else next.fullCheckPending = fullPending.filter(id => !complete.has(id));
     }
     if (rateLimited) snap.errors.push({ label: '消息', text: `WeLink 限流，已取 ${complete.size} 个会话，其余下轮继续` });
     for (const m of Object.values(snap.messages).flat()) if (!m.nameSource && !m.mine && m.sender && m.sender !== m.account) names.set(m.account, m.senderName || m.sender);
@@ -822,17 +887,21 @@ class CompanyAssistant {
       this.write('message-cache.json', next);
     }
     const all = Object.values(snap.messages);
+    const activeCoverage = coverage.filter(c => !c.retained);
+    const transientFailure = c => c.failureCount > 0 && c.failureCount < 3 && ['query-failed', 'invalid-shape', 'cached'].includes(c.reason);
     snap.scope = { lookbackHours: s.lookbackHours, since: cutoff, listed, known: snap.conversations.length, fetched, completed: complete.size, rateLimited,
       mode: options.background ? fullCheck ? 'full-check' : 'incremental' : 'query', lastFullCheckAt: next.lastFullCheckAt, queryFallback,
+      identityMissing, retained: retained.length,
       realtime: coverage.filter(c => c.dataSource === 'realtime').length, fromCache: coverage.filter(c => c.dataSource === 'cache').length,
       ...(options.background ? { changed: changed.length, comparedOrder, pinnedHead: orderChanges.pinnedHead, pinnedRequests, rotationSelected: rotation.length, fullCheckPending: next.fullCheckPending.length, priorityPending: next.priorityDeferred.length } : {}),
-      rotating: coverage.some(c => c.reason === 'rotation'), scheduled: list.length, neverFetched: list.filter(c => !historyKnown(next.conversations[c.id])).length,
+      ...(options.background ? { retrying: activeCoverage.filter(transientFailure).length } : {}),
+      rotating: activeCoverage.some(c => c.reason === 'rotation'), scheduled: list.length, neverFetched: activeCoverage.filter(c => !historyKnown(next.conversations[c.id]) && !transientFailure(c)).length,
       requests, timedOut, deferred: next.deferred.length, limited, maxConversations: s.maxConversations,
       withMessages: all.length, messages: all.reduce((n, l) => n + l.length, 0), p2p: Object.keys(snap.messages).filter(id => !snap.conversations.find(c => c.id === id)?.group).length,
       requested: snap.directoryRequested || CONVERSATION_LIMIT, listCap: listed === 50 ? 50 : snap.directoryLimit || CONVERSATION_LIMIT,
       listFull: listed >= (snap.directoryLimit || CONVERSATION_LIMIT) || listed === 50, directoryFallback: !!snap.directoryFallback,
       directoryRawCount: listed, directoryInvalid: snap.directoryInvalid || 0,
-      partial: coverage.filter(c => c.cacheWindowIncomplete || c.status !== 'complete' && (!historyKnown(next.conversations[c.id]) || (options.background || !queryFallback) && changed.includes(c.id))).length, conversations: coverage, migrated: sameOwner && stored.version !== 4 };
+      partial: activeCoverage.filter(c => !transientFailure(c) && (c.failureCount >= 3 || c.cacheWindowIncomplete || options.background && ['page-limit', 'missing-cursor', 'repeated-cursor', 'legacy-text'].includes(c.reason) || c.status !== 'complete' && (!historyKnown(next.conversations[c.id]) || (options.background || !queryFallback) && changed.includes(c.id)))).length, conversations: coverage, migrated: sameOwner && stored.version !== 4 };
   }
   async conversationHistory(conv, cached, cutoff, me, myName, runJson, names = null, options = {}) {
     // 老缓存曾截断正文，必须重新拉；部分失败也要补齐旧页，不能只向前增量。

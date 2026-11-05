@@ -319,6 +319,9 @@ async function parseProviderTranscript(args = {}, deps) {
     }
     const parseOpts = { limit: 50, fromTail: true, ...(opts && typeof opts === 'object' ? opts : {}) };
     const record = session || (hubSessionId ? lookupSessionRecord(hubSessionId, deps)?.record : null);
+    parseOpts.codeagent = require('../../core/ai-kinds').isCodeAgentKind(record?.kind || inKind);
+    if (parseOpts.codeagent) parseOpts.codeagentCommandNames = require('../../core/codeagent-command-records')
+      .commandNames(deps.dataDir || require('../../core/data-dir').getHubDataDir(), record?.codeagentPoolAccount || 'personal');
     if (String(record?.kind || inKind).replace(/-resume$/, '') === 'deepseek-acp'
       && transcriptPath && /[\\/]\.dsh[\\/]hub-events[\\/]/.test(transcriptPath)) {
       return { turns: require('../../core/dsh-cli-session').readDshCliTranscript(transcriptPath, parseOpts),
@@ -408,20 +411,31 @@ async function parseSessionTranscript(args = {}, deps) {
   }
   const { commandTranscriptStore, mergeCommandTurns } = require('../../core/command-transcript-store');
   const path = require('path'), fs = require('fs');
-  if (!deps.commandTranscriptStore && !fs.existsSync(path.join(require('../../core/data-dir').getHubDataDir(), 'command-transcript.sqlite'))) return result;
-  const commands = (deps.commandTranscriptStore || commandTranscriptStore()).read(args.hubSessionId);
-  if (!commands.length) return result;
+  const dataDir = deps.dataDir || require('../../core/data-dir').getHubDataDir();
+  const commands = deps.commandTranscriptStore || fs.existsSync(path.join(dataDir, 'command-transcript.sqlite'))
+    ? (deps.commandTranscriptStore || commandTranscriptStore()).read(args.hubSessionId) : [];
   const kind = lookupSessionRecord(args.hubSessionId, deps)?.record.kind || args.kind;
   const limit = args.opts?.limit ?? 50;
   // A short result exhausted the provider history. Otherwise earlier pages
   // lack the suffix counts needed to align the complete command journal.
   const codeagentComplete = !args.opts?.offset && (limit === Infinity
     || (Number.isFinite(limit) && (result.turns?.length || 0) < limit));
-  return { ...result, turns: mergeCommandTurns(result.turns || [], commands,
-    { ...args.opts, codeagent: require('../../core/ai-kinds').isCodeAgentKind(kind), codeagentComplete }) };
+  const codeagent = require('../../core/ai-kinds').isCodeAgentKind(kind);
+  let turns = commands.length ? mergeCommandTurns(result.turns || [], commands,
+    { ...args.opts, codeagent, codeagentComplete }) : result.turns;
+  const submissionIds = [];
+  if (codeagent) {
+    const record = lookupSessionRecord(args.hubSessionId, deps)?.record;
+    const policy = require('../../core/codeagent-command-records');
+    turns = policy.projectCommandRecords(turns || [], { dataDir, sessionId: args.hubSessionId,
+      transcriptPath: result.transcriptPath, manager: deps.sessionManager, submissionIds,
+      names: policy.commandNames(dataDir, record?.codeagentPoolAccount || 'personal') });
+  }
+  return { ...result, turns, ...(codeagent ? { codeagentCommandSubmissionIds: submissionIds } : {}) };
 }
 
 function registerTranscriptIpc(ipcMain, deps) {
+  require('../../core/codeagent-command-records').observeIdentitySwitches(deps.sessionManager);
   const {
     transcriptTap,
   } = deps;

@@ -1,0 +1,24 @@
+/* The shared shell owns the single hw-tokens.css loading point. */
+.company-api-dialog{box-sizing:border-box;width:min(600px,calc(100vw - 48px));max-height:calc(100vh - 48px);margin:auto;padding:var(--hw-sp-6,24px);border:0;border-radius:var(--hw-r-xl,28px);box-shadow:var(--hw-e3);background:var(--hw-surface,#fff);color:var(--hw-text-1,#182431);font:var(--hw-fs-14,14px)/var(--hw-lh,1.55) var(--hw-font,"Microsoft YaHei",sans-serif)}
+.company-api-dialog::backdrop{background:rgba(24,36,49,.36)}
+.company-api-dialog header{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--hw-sp-4,16px)}
+.company-api-dialog h2{font-size:var(--hw-fs-22,22px);margin:0}
+.company-api-dialog p{color:var(--hw-text-2,#58626d);margin:var(--hw-sp-2,8px) 0 var(--hw-sp-4,16px)}
+.company-api-dialog button,.company-api-settings-entry button{font:inherit;cursor:pointer;border:1px solid var(--hw-line,rgba(24,36,49,.08));background:var(--hw-surface-2,#f7f8fa);color:inherit;padding:var(--hw-sp-2,8px) var(--hw-sp-4,16px);border-radius:var(--hw-r-pill,999px)}
+.company-api-dialog button:focus-visible,.company-api-dialog input:focus-visible,.company-api-dialog select:focus-visible,.company-api-settings-entry button:focus-visible{outline:2px solid var(--hw-brand,#0a59f7);outline-offset:2px}
+.company-api-dialog .company-api-close{padding:4px 12px;font-size:22px}
+.company-api-dialog nav{display:flex;gap:var(--hw-sp-2,8px);margin:var(--hw-sp-4,16px) 0 var(--hw-sp-6,24px)}
+.company-api-dialog nav button{flex:1}
+.company-api-dialog nav [aria-pressed=true]{background:var(--hw-brand-soft,#e7effe);color:var(--hw-brand,#0a59f7)}
+.company-api-dialog label{display:block;margin:var(--hw-sp-4,16px) 0;color:var(--hw-text-1,#182431)}
+.company-api-dialog input,.company-api-dialog select{box-sizing:border-box;display:block;width:100%;height:44px;margin-top:var(--hw-sp-2,8px);padding:0 var(--hw-sp-3,12px);font:inherit;background:var(--hw-surface-3,#edeff2);border:1px solid transparent;border-radius:var(--hw-r-sm,10px);color:inherit}
+.company-api-dialog .company-api-note{font-size:var(--hw-fs-12,12px)}
+.company-api-dialog .company-api-message{min-height:22px;margin-bottom:var(--hw-sp-3,12px);overflow-wrap:anywhere}
+.company-api-dialog footer{display:flex;justify-content:flex-end;gap:var(--hw-sp-3,12px);margin-top:var(--hw-sp-5,20px)}
+.company-api-dialog button.primary{background:var(--hw-brand,#0a59f7);color:var(--hw-text-on,#fff);border-color:transparent}
+.company-api-dialog button:disabled{opacity:.5;cursor:wait}
+.company-api-dialog ol{padding-left:24px;line-height:2}
+.company-api-tag,.company-cli-status{color:var(--hw-amber,#e8780c);font-size:var(--hw-fs-12,12px)}
+.company-api-settings-entry{display:flex;align-items:center;justify-content:space-between;gap:var(--hw-sp-4,16px);padding:var(--hw-sp-4,16px);margin-bottom:var(--hw-sp-5,20px);border-radius:var(--hw-r-md,16px);background:var(--hw-surface-2,#f7f8fa);color:var(--hw-text-1,#182431)}
+.company-api-settings-entry p{margin:4px 0 0;color:var(--hw-text-2,#58626d);font-size:var(--hw-fs-12,12px)}
+.new-session-option .company-cli-status{display:block;grid-column:2;margin:0}

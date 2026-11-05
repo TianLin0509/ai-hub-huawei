@@ -89,7 +89,12 @@ function sessionModelId(session) {
   }
   if (!candidate) return null;
   const kind = baseKind(session.kind);
-  if (kind === 'codex') return normalizeCodexSessionModel(candidate);
+  if (kind === 'codex') {
+    if (/[\\/]codex-api-profile[\\/]sessions[\\/]?$/.test(session.codexSessionsRoot || '')) {
+      return require('./company-api-config').optionalText(candidate, '模型名称');
+    }
+    return normalizeCodexSessionModel(candidate);
+  }
   if (kind === 'deepseek' && sessionProviderFamily(session) === 'codex') {
     return normalizeDeepSeekModel(candidate);
   }

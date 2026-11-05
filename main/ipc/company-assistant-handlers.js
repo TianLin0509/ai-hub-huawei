@@ -4,7 +4,7 @@
 function registerCompanyAssistantIpc(ipcMain, service) {
   const handlers = {
     status: () => service.status(),
-    refresh: async () => { await service.refresh({ force: true, priority: 'user' }); return service.status(); },
+    refresh: async () => { await service.refresh({ force: true, priority: 'user', trigger: 'manual' }); return service.status(); },
     'brief-now': async () => { await service.generateBrief({ force: true }); return service.status(); },
     ask: request => ({ ok: true, item: service.ask(String(request?.text || ''), { entry: request?.entry === 'ppt' ? 'ppt' : '' }) }),
     'retry-chat': request => ({ ok: true, item: service.retryChat(String(request?.id || '')) }),

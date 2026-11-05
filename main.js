@@ -731,7 +731,7 @@ async function ensureCodexAccountNamespace(kind,opts={}) {
   if (!/^codex(?:-resume)?$/.test(kind) || !(opts.codexAccountPinned || opts.codexRuntimeHome)
       || require('./core/chatgpt-web-models').isChatgptWebModel(opts.model)) return;
   const config = require('./core/codex-global-account').currentConfig();
-  if (config.codexBackend === 'api') return;
+  if (config.companyCli || config.codexBackend === 'api') return;
   const context = require('./core/codex-global-account').resolveAccount({...config,
     codexSubscriptionProfile:opts.codexContextProfile || opts.codexProfile || config.codexSubscriptionProfile});
   let cwd=opts.cwd;
@@ -2326,6 +2326,9 @@ const resumeSession = createResumeSessionHandler({
   slotIds: SLOT_IDS,
 });
 
+require('./core/codeagent-commands-probe').commandStartup(getHubDataDir(), {
+  hubVersion: require('./package.json').version, dataDirOverride: !!process.env.CLAUDE_HUB_DATA_DIR,
+});
 const sessionOperations = registerSessionIpc(ipcMain, {
   ensureLaunchAuth: async (kind, opts) => {
     // Both checks are read-only; run them side by side. A login problem is
@@ -2334,7 +2337,7 @@ const sessionOperations = registerSessionIpc(ipcMain, {
     if (auth.status === 'rejected') throw auth.reason;
     if (namespace.status === 'rejected') throw namespace.reason;
     if (/^claude(?:-resume)?$/.test(kind) && (opts.claudeAccountSwitchable || opts.claudeAutoSwitch)
-      && getHubConfig().claudeBackend !== 'api') {
+      && !getHubConfig().companyCli && getHubConfig().claudeBackend !== 'api') {
       const profile = require('./core/claude-subscription-profiles').profileForSession(
         opts.claudeRuntimeHome ? { ...opts, claudeConfigDir: undefined } : opts, getHubConfig());
       // 这台电脑还没有任何 Claude 账号登录过：交给 Claude CLI 自己的登录流程，不在这里拦（2026-10-28：
@@ -2688,6 +2691,13 @@ try {
   require('./main/ipc/orchestration-handlers').registerOrchestrationIpc(ipcMain, () => global.__orchestrationService);
   global.__orchestrationService.start().catch(error => console.error('[orchestration] start failed:', error.message));
 } catch (error) { console.error('[orchestration] service unavailable:', error.message); }
+// 问一下（2026-11-04）：另起后台 codeagent --print --resume --fork-session 回答插问，不碰运行中的终端、不改原会话记录。
+if (require('./core/distribution').featureEnabled('btwAsk')) try {
+  const { createAskAsideService, registerAskAsideIpc } = require('./main/ask-aside/service');
+  const askAside = createAskAsideService({ sessionManager, getHubDataDir, sendToRenderer });
+  registerAskAsideIpc(ipcMain, askAside);
+  app.on('will-quit', () => { void askAside.dispose(); });
+} catch (error) { console.error('[ask-aside] service unavailable:', error.message); }
 // 负责人组队：用户在侧栏批准后创建 CodeAgent 成员，命令安装在当前用户数据目录。
 if (require('./core/distribution').featureEnabled('leadTeam')) try {
   const teamCommand = path.join(getHubDataDir(), 'team', process.platform === 'win32' ? 'hub-team.cmd' : 'hub-team.sh');

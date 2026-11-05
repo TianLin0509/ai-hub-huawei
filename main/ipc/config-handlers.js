@@ -66,6 +66,7 @@ function toMaskedConfig(config) {
     codexApiKeySet: !!config.codexApiKey,
     codexApiBaseUrl: config.codexApiBaseUrl,
     codexApiModel: config.codexApiModel,
+    codexApiWireApi: config.codexApiWireApi || 'responses',
     // 新建会话面板要靠它决定预选哪个模型，不含敏感信息，原样透出。
     defaultModels: config.defaultModels || {},
     launchDefaults: config.launchDefaults || {},
@@ -290,6 +291,11 @@ function buildConfigJsonUpdate(existing, newConfig) {
     } : {}),
   };
 
+  if (require('../../core/company-api-config').isCompany()) {
+    // This form only owns general UI settings in the company edition. API
+    // overrides have their own IPC; hidden legacy fields must not add defaults.
+    for (const kind of ['claude', 'codex']) merged.providers[kind] = { ...existing.providers?.[kind] };
+  }
   if (!merged.providers.claude.api_key) delete merged.providers.claude.api_key;
   if (!merged.providers.claude.base_url) delete merged.providers.claude.base_url;
   if (!merged.providers.deepseek.api_key) delete merged.providers.deepseek.api_key;
@@ -316,6 +322,28 @@ function registerConfigIpc(ipcMain, deps) {
     prepareNewClaudeAccount = async () => ({}),
     requireClaudeExit = () => false,
   } = deps;
+
+  const companyApi = require('../../core/company-api-config');
+  if (companyApi.isCompany()) {
+    ipcMain.handle('company-api:get', () => {
+      const raw = readConfigJsonForUpdate();
+      const files = [raw.acp?.nodePath, raw.acp?.providers?.['deepseek-acp']?.entryPath];
+      const dshRuntimeInstalled = files.every(file => {
+        try { return !!file && require('path').isAbsolute(file) && fs.statSync(file).isFile(); } catch { return false; }
+      });
+      return { ok: true, providers: companyApi.settings(raw), dshRuntimeInstalled };
+    });
+    ipcMain.handle('company-api:save', (_event, request = {}) => {
+      try {
+        require('../../core/company-ai-policy').assertKind(request.kind);
+        const next = companyApi.withSettings(readConfigJsonForUpdate(), request);
+        saveConfig(next);
+        clearSessionManagerConfigCache();
+        sendToRenderer('company-api:changed', { kind: request.kind });
+        return { ok: true, providers: companyApi.settings(next) };
+      } catch (error) { return { ok: false, error: error.message }; }
+    });
+  }
 
   // 账号页：新建 / 改名 / 移除 Claude、Codex 订阅账号（2026-10-27）。
   // 只改 config.json 的账号表；新建时只建一个空的账号目录，登录由账号页的「授权」完成。

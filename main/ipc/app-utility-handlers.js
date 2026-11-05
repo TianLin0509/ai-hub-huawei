@@ -82,7 +82,8 @@ function saveClipboardImage(deps) {
 }
 
 function registerAppUtilityIpc(ipcMain, deps) {
-  const writeClipboardText = require('../../core/verified-clipboard.js').createVerifiedClipboardWriter({ clipboard: deps.clipboard });
+  const writeClipboardText = require('../../core/verified-clipboard.js').createVerifiedClipboardWriter({ clipboard: deps.clipboard,
+    onRevertRepaired: info => console.info('[clipboard] 复制后被其他程序改回旧内容，已写回', info) });
   ipcMain.handle('clipboard:write-text', (_event, text, formats) => writeClipboardText(text, formats));
   ipcMain.handle('touch-tools:paste', event => { event.sender.paste(); return { ok: true }; });
   ipcMain.handle('touch-tools:screenshot', async event => {

@@ -2,6 +2,10 @@
 
 (function () {
   const { ipcRenderer } = require('electron');
+  const companyApi = require('../core/company-api-config');
+  const companyApiKind = kind => companyApi.isCompany() && companyApi.KINDS.includes(kind);
+  const companyApiModels = Object.create(null);
+  const launchModelOptions = kind => companyApiKind(kind) ? (companyApiModels[kind] || []) : modelOptionsFor(kind);
   const accountRisk = require('./account-risk-state');
   const path = require('path');
   const {
@@ -88,7 +92,7 @@
   let antigravityAccounts = [];
   let antigravityAccountId = 'default';
   let claudeAccountId = 'default';
-  let claudeBackend = 'subscription';
+  let claudeBackend = companyApi.isCompany() ? 'api' : 'subscription';
   let codexAccountId = '';
   // CodeAgent accounts share availability and labels with the company account page.
   const companyAccounts = require('../core/distribution').target === 'company';
@@ -120,7 +124,7 @@
   };
   const codeagentSelectionUnavailable = () => selectedKind === 'codeagent' && codeagentPoolRequested()
     && (!codeagentUsesPool() || (codeagentAccount === 'pool-manual' && !codeagentManualPick()));
-  let codexBackend = 'subscription';
+  let codexBackend = companyApi.isCompany() ? 'api' : 'subscription';
   // DeepSeek 接入：上次选的方式（Hub 配置记住，默认 Token Plan）+ 两条线各自是否有 Key。
   let deepseekRoute = deepseekProfile.DEFAULT_ROUTE;
   let configuredDeepseekRoute = deepseekProfile.DEFAULT_ROUTE;
@@ -289,10 +293,10 @@
   // Codex 的 effort / fast 支持会随模型目录变化，复制后迟早与单会话弹窗漂移。
   function resolveSessionTuning(kind, modelId, selection = {}) {
     selection = { ...(hubLaunchDefaults[kind] || {}), ...selection };
-    const modelOptions = modelOptionsFor(kind);
+    const modelOptions = launchModelOptions(kind);
     // 用户设过默认就用它，否则才回落出厂值；两者都不在当前可选清单里时取第一项。
     // 群聊成员走的也是这里，所以「设为默认」对群聊同样生效。
-    const model = modelOptions.some(option => option.id === modelId)
+    const model = companyApiKind(kind) ? (modelOptions[0]?.id || '') : modelOptions.some(option => option.id === modelId)
       ? modelId
       : resolveDefaultModel(kind, defaultModelConfig(), modelOptions.map(option => option.id));
     const effortOptions = EFFORT_KINDS.has(kind) ? effortOptionsFor(kind, model) : [];
@@ -358,6 +362,7 @@
       : `没有号同时满足「会话 ≤ 1、5h > 70%、7d 高于节奏」，按综合余量推荐：${hint}。`;
   }
   function loadClaudeRanking(revision) {
+    if (companyApi.isCompany()) return;
     void ipcRenderer.invoke('claude:launch-ranking').then(ranking => {
       if (revision !== modalRevision) return;
       claudeRanking = ranking;
@@ -386,14 +391,14 @@
       opts.codexSpeedTier = tuning.codexSpeedTier;
     }
     if (typeof tuning.contextMax === 'number') opts.contextMax = tuning.contextMax;
-    if (kind === 'codex' && codexBackend !== 'api' && tuning.codexProfile) {
+    if (kind === 'codex' && !companyApiKind(kind) && codexBackend !== 'api' && tuning.codexProfile) {
       opts.codexProfile = tuning.codexProfile;
       opts.codexAccountPinned = true;
       opts.codexAutoSwitch = false;
     }
     if (DEEPSEEK_ROUTE_KINDS.has(kind)) opts.deepseekRoute = tuning.deepseekRoute;
     if (kind === 'gemini') opts.antigravityProfile = tuning.antigravityProfile;
-    if (kind === 'claude' && claudeBackend !== 'api') {
+    if (kind === 'claude' && !companyApiKind(kind) && claudeBackend !== 'api') {
       opts.claudeProfile = selection.claudeProfile || launchClaudeAccountId();
       opts.claudeAccountSwitchable = true;
     }
@@ -1135,7 +1140,7 @@
     const accounts=(isAntigravityAccount ? antigravityAccounts : isClaudeAccount ? rankedClaudeAccounts() : codexAccounts)
       .map(p => ({ ...p, risk: accountRisk.optionNote(accountKind, p.id) }));
     const selectedAccount=isAntigravityAccount ? antigravityAccountId : isClaudeAccount ? launchClaudeAccountId() : codexAccountId;
-    const showAccount=isAntigravityAccount || selectedKind === 'codex' && codexBackend !== 'api' || isClaudeAccount && claudeBackend !== 'api';
+    const showAccount=!companyApiKind(selectedKind) && (isAntigravityAccount || selectedKind === 'codex' && codexBackend !== 'api' || isClaudeAccount && claudeBackend !== 'api');
     if (accountField) accountField.hidden=!showAccount;
     if (accountNote) {
       accountNote.hidden=!showAccount;
@@ -1172,7 +1177,7 @@
     grid.dataset.kind = selectedKind;
     grid.dataset.account = String(showAccount);
 
-    const options = modelOptionsFor(selectedKind);
+    const options = launchModelOptions(selectedKind);
     const hasModels = options.length > 0;
     const section = document.getElementById('new-session-config-section');
     if (section) section.hidden = !hasModels;
@@ -1197,7 +1202,7 @@
     }
 
     if (!options.some(option => option.id === selectedModel)) {
-      selectedModel = resolveDefaultModel(selectedKind, defaultModelConfig(), options.map(option => option.id));
+      selectedModel = companyApiKind(selectedKind) ? (options[0]?.id || '') : resolveDefaultModel(selectedKind, defaultModelConfig(), options.map(option => option.id));
     }
     // CodeAgent：「沿用」一项（值为空，不切换模型）知道所选账号的默认模型时就写成它，清单里不再重复列它。
     const codeagentDefault = selectedKind === 'codeagent' && codeagentDefaultModel
@@ -1217,10 +1222,10 @@
         ? `<option value="" title="${escapeHtml(codeagentDefault + ' · 这个号的默认模型，启动后不切换')}"${usageAttrs(codeagentDefault)}>${escapeHtml(codeagentModelLabel(codeagentDefault) + '（默认）')}</option>`
         : '<option value="">自动（菜单里第一个模型）</option>') : '';
     const listed = codeagentDefault ? options.filter(option => option.id.toLowerCase() !== codeagentDefault.toLowerCase()) : options;
-    const wanted = nativeCodeagentOption + listed.map(option => `${option.id}\u0000${option.label}${usageAttrs(option.id)}`).join('|');
+    const wanted = nativeCodeagentOption + listed.map(option => `${option.id}\u0000${option.label}${selectedKind === 'codeagent' ? option.description || '' : ''}${usageAttrs(option.id)}`).join('|');
     if (modelSelect.dataset.builtFor !== wanted) {
       modelSelect.innerHTML = nativeCodeagentOption + listed
-        .map(option => `<option value="${escapeHtml(option.id)}"${usageAttrs(option.id)}>${escapeHtml(option.label)}</option>`)
+        .map(option => `<option value="${escapeHtml(option.id)}"${selectedKind === 'codeagent' && option.description ? ` title="${escapeHtml(option.description)}"` : ''}${usageAttrs(option.id)}>${escapeHtml(option.label)}</option>`)
         .join('');
       modelSelect.dataset.builtFor = wanted;
     }
@@ -1380,7 +1385,7 @@
     paintLaunchLayout();
 
     const routeField = document.getElementById('new-session-deepseek-route-field');
-    const showRoute = DEEPSEEK_ROUTE_KINDS.has(selectedKind);
+    const showRoute = DEEPSEEK_ROUTE_KINDS.has(selectedKind) && !companyApiKind(selectedKind);
     if (routeField) routeField.hidden = !showRoute;
     const routeSelect = document.getElementById('new-session-deepseek-route');
     if (routeSelect && showRoute) {
@@ -1444,7 +1449,7 @@
   }
 
   function tuningTag() {
-    const options = modelOptionsFor(selectedKind);
+    const options = launchModelOptions(selectedKind);
     if (options.length === 0) return '';
     const effortTag = EFFORT_PICKER ? ` · ${selectedEffort}` : '';
     if (selectedKind === 'codeagent' && !modelTouchedByUser) return codeagentDefaultModel ? `${codeagentModelLabel(codeagentDefaultModel)}${effortTag}` : (EFFORT_PICKER ? selectedEffort : '');
@@ -1460,7 +1465,7 @@
   function summaryText() {
     const parts = [KIND_LABELS[selectedKind] || selectedKind];
     if (selectedKind === 'gemini') {const p=antigravityAccounts.find(x=>x.id===antigravityAccountId);parts.push(p?(p.email||p.label||p.id):'读取账号中');}
-    if (selectedKind === 'codex' && codexBackend !== 'api') {const p=codexAccounts.find(x=>x.id===codexAccountId);parts.push(p?(p.email||p.label||p.id):'读取账号中');}
+    if (selectedKind === 'codex' && !companyApiKind(selectedKind) && codexBackend !== 'api') {const p=codexAccounts.find(x=>x.id===codexAccountId);parts.push(p?(p.email||p.label||p.id):'读取账号中');}
     if (selectedKind === 'codeagent' && codeagentUsesPool()) {
       const pick = usablePoolAccounts().find(a => a.id === codeagentManualPick());
       parts.push(pick ? `号池 · ${pick.accountLabel}${pick.note ? '（' + pick.note + '）' : ''}` : '号池（自动挑号）');
@@ -1505,6 +1510,7 @@
   }
 
   function prepareLaunchAuth() {
+    if (companyApiKind(selectedKind)) return;
     void ipcRenderer.invoke('session:prepare-launch-auth', {
       kind: selectedKind,
       launchProfile: selectedKind === 'gemini' ? antigravityAccountId : selectedKind === 'codex' ? codexAccountId : undefined,
@@ -1612,9 +1618,21 @@
     if (DEEPSEEK_ROUTE_KINDS.has(kind)) deepseekRoute = tuning.deepseekRoute;
   }
 
+  async function loadCompanyApiCatalog(kind) {
+    const result = await ipcRenderer.invoke('company-api:get');
+    if (!result?.ok) throw new Error('自有 API 配置读取失败');
+    const model = result.providers?.[kind]?.model;
+    const models = model ? [{ id: model, label: model }] : [{ id: '', label: '沿用本机 CLI 配置' }];
+    companyApiModels[kind] = models;
+    setRuntimeModelOptions(kind, models);
+    if (selectedKind === kind) selectedModel = model || '';
+    return { ok: true, models, source: 'company-api' };
+  }
+
   // Main 优先调用 codex app-server model/list；失败再读 models_cache.json。
   // renderer 不做永久缓存，main 的短 TTL 既避免频繁拉进程，又能在 CLI 更新目录后自动刷新。
   async function loadCodexTuningCatalog(options = {}) {
+    if (companyApi.isCompany()) return loadCompanyApiCatalog('codex');
     const profileId=options.codexProfile || codexAccountId;
     if (codexCatalogInFlight.has(profileId)) return codexCatalogInFlight.get(profileId);
     const task = (async () => {
@@ -1645,6 +1663,7 @@
   }
 
   async function loadClaudeModelCatalog() {
+    if (companyApi.isCompany()) return loadCompanyApiCatalog('claude');
     if (claudeCatalogInFlight) return claudeCatalogInFlight;
     claudeCatalogInFlight = (async () => {
       try {
@@ -1669,6 +1688,7 @@
 
   function loadModelCatalog(kind, options = {}) {
     const base = String(kind || '').replace(/-resume$/, '');
+    if (companyApiKind(base)) return loadCompanyApiCatalog(base);
     if (base === 'gemini') {
       const profileId=options.antigravityProfile || antigravityAccountId;
       return ipcRenderer.invoke('antigravity:model-catalog',{profileId}).then(result=>{
@@ -1716,6 +1736,7 @@
   }
 
   function loadPrimaryModelCatalogs(options = {}) {
+    if (companyApi.isCompany()) return Promise.all(['claude', 'codex', 'deepseek-acp', 'codeagent'].map(kind => loadModelCatalog(kind)));
     return Promise.all([
       loadClaudeModelCatalog(options),
       loadCodexTuningCatalog(options),
@@ -1734,7 +1755,7 @@
       fastMode: selectedFastMode,
       codexSpeedTier: selectedCodexTier,
     });
-    if (DEEPSEEK_ROUTE_KINDS.has(selectedKind)) opts.deepseekRoute = deepseekRoute;
+    if (DEEPSEEK_ROUTE_KINDS.has(selectedKind) && !companyApiKind(selectedKind)) opts.deepseekRoute = deepseekRoute;
     if (selectedKind === 'codeagent') opts.codeagentModelPick = modelTouchedByUser;
     if (selectedKind === 'codeagent' && codeagentPoolRequested()) {
       opts.codeagentAccount = 'pool';
@@ -1790,6 +1811,9 @@
   function init() {
     menuEl = document.getElementById('new-session-menu');
     if (!menuEl) return;
+    ipcRenderer.on('company-api:changed', () => {
+      void loadHubDefaultModels({ refreshAccount: true }).then(() => loadPrimaryModelCatalogs()).then(paint).catch(error => setError(error.message));
+    });
     // 装了 CodeAgent 的电脑（公司内网）：把它排到会话类型第一位，默认选中它（见 renderer/codeagent-preference.js）。
     void require('./codeagent-preference').refresh(ipcRenderer).then(installed => {
       if (!installed) return;

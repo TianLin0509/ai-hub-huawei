@@ -158,7 +158,7 @@ function createTrustScreen({ cols = 300, rows = 100 } = {}) {
   } catch { return null; }
   return {
     write(data) { if (term) term.write(String(data || '')); },
-    lines() {
+    lines({ trimRight = true } = {}) {
       return new Promise(resolve => {
         const current = term;
         if (!current) { resolve([]); return; }
@@ -168,7 +168,7 @@ function createTrustScreen({ cols = 300, rows = 100 } = {}) {
           if (term !== current) { resolve([]); return; }
           const buffer = current.buffer.active;
           const result = [];
-          for (let i = 0; i < current.rows; i += 1) result.push(buffer.getLine(buffer.viewportY + i)?.translateToString(true) || '');
+          for (let i = 0; i < current.rows; i += 1) result.push(buffer.getLine(buffer.viewportY + i)?.translateToString(trimRight) || '');
           resolve(result);
         });
       });

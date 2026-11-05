@@ -326,29 +326,37 @@ function recordObserved(dataDir, value, now = Date.now()) {
   return true;
 }
 
-// ---------------------------------------------------------------- 模型菜单里实际能选的（本机）
+// ---------------------------------------------------------------- 模型菜单里实际能选的（按账号）
 // 2026-10-16 公司真机第 9 轮：账号清单（.cac.json）列了 GLM-5.2-WX-Auto 和 MiniMax-M2.7，CodeAgent 自己的
 // 模型菜单里却只有 GLM-5.2-WX-Auto，搜 MiniMax-M2.7 是「No results found」。菜单才是交互模式下真能选的，
-// 选模型时读到的菜单清单记下来，模型下拉以它为准；清单有变化才写盘。
-const MENU_FILE = 'codeagent-menu-models.json';
+// 只保存完整菜单；配置清单里的额外模型仍可进入真实菜单验证，界面标明尚未确认。
+// The legacy machine-wide codeagent-menu-models.json has no account identity.
+// Leave it untouched and ignore it rather than importing another account's menu.
+const MENU_FILE = 'codeagent-account-menu-models.json';
 
-function readMenu(dataDir) {
-  if (!dataDir) return [];
+function readMenuEntry(dataDir, key = 'personal') {
+  if (!dataDir) return null;
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(dataDir, MENU_FILE), 'utf8'));
-    return (Array.isArray(raw && raw.models) ? raw.models : []).map(clean).filter(isSafeModelId);
-  } catch { return []; }
+    const entry = raw?.accounts?.[key];
+    return entry?.complete === true && Array.isArray(entry.models) ? { ...entry, models: entry.models.map(clean).filter(isSafeModelId) } : null;
+  } catch { return null; }
 }
+function readMenu(dataDir, key = 'personal') { return readMenuEntry(dataDir, key)?.models || []; }
 
-function recordMenu(dataDir, labels, now = Date.now()) {
+function recordMenu(dataDir, labels, { key = 'personal', complete = false, now = Date.now() } = {}) {
   const models = [...new Set((Array.isArray(labels) ? labels : []).map(clean).filter(isSafeModelId))];
-  if (!dataDir || !models.length) return false;
-  const before = readMenu(dataDir);
-  if (before.length === models.length && before.every((id, i) => id === models[i])) return false;
+  if (!dataDir || !/^[\w.-]{1,80}$/.test(key)) return false;
+  if (!complete || !models.length || models.length !== labels.length || models.some(id => /(?:\.\.\.|…)$/.test(id))) {
+    appendModelLog(dataDir, { event: 'menu-cache-skipped', reason: complete ? 'invalid-model-label' : 'incomplete-menu', rows: models.length });
+    return false;
+  }
+  let accounts = {};
+  try { accounts = JSON.parse(fs.readFileSync(path.join(dataDir, MENU_FILE), 'utf8')).accounts || {}; } catch { /* First account snapshot. */ }
   fs.mkdirSync(dataDir, { recursive: true });
   const file = path.join(dataDir, MENU_FILE);
   const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify({ schema: 1, models, seenAt: now }, null, 2) + '\n', 'utf8');
+  fs.writeFileSync(tmp, JSON.stringify({ schema: 2, accounts: { ...accounts, [key]: { models, seenAt: now, complete: true } } }, null, 2) + '\n', 'utf8');
   fs.renameSync(tmp, file);
   return true;
 }
@@ -415,7 +423,7 @@ function appendModelLog(dataDir, fields, now = new Date()) {
 // 新建会话和模型菜单用的列表：已知的在前，本机 CodeAgent 配置里的其次，回答里见过的其他模型在后。
 // 有账号清单时只列清单里的模型（不再塞内置的两个：没有 MiniMax 权限的同事不该看到它）；
 // 没有清单时沿用内置 + 配置里找到的名字。回答里实际见过的模型都附在最后。
-function modelOptions(dataDir, { configDir = null, fsModule = fs } = {}) {
+function modelOptions(dataDir, { configDir = null, fsModule = fs, accountKey = 'personal', probedModels = [] } = {}) {
   const configured = configuredModels(configDir, fsModule);
   const options = configured.authoritative ? [] : KNOWN.map(option => ({ ...option, source: 'hub' }));
   for (const id of configured.models) {
@@ -432,14 +440,21 @@ function modelOptions(dataDir, { configDir = null, fsModule = fs } = {}) {
   // 账号清单里明确列出的照留（那是 CodeAgent 自己说这个账号能选的）。
   const ids = new Set(options.map(option => option.id.toLowerCase()));
   const listed = options.filter(option => option.source === 'account' || !ids.has(option.id.toLowerCase() + '-auto'));
-  // 读到过 CodeAgent 自己的模型菜单：只列菜单里有的，菜单里有而上面没有的补在后面。
-  const menu = readMenu(dataDir);
-  if (!menu.length) return listed;
+  // 已确认菜单优先；配置中尚未确认的模型保留在末尾，菜单额外选项照常补上。
+  const menu = readMenu(dataDir, accountKey);
+  if (!menu.length && !probedModels.length) return listed;
   const inMenu = new Set(menu.map(id => id.toLowerCase()));
+  const configuredIds = new Set(configured.models.map(id => id.toLowerCase()));
   const kept = listed.filter(option => inMenu.has(option.id.toLowerCase()));
-  for (const id of menu) {
+  for (const id of [...menu, ...probedModels].filter(isSafeModelId)) {
     if (kept.some(option => option.id.toLowerCase() === id.toLowerCase())) continue;
-    kept.push({ id, label: modelLabel(id), source: 'menu', description: `${id} · CodeAgent 模型菜单里有` });
+    if (menu.length && configuredIds.has(id.toLowerCase()) && !inMenu.has(id.toLowerCase())) continue;
+    kept.push({ id, label: modelLabel(id), source: inMenu.has(id.toLowerCase()) ? 'menu' : 'account',
+      description: `${id} · ${inMenu.has(id.toLowerCase()) ? 'CodeAgent 模型菜单里有' : '账号模型探测清单中有'}` });
+  }
+  for (const option of listed) {
+    if (!configuredIds.has(option.id.toLowerCase()) || kept.some(item => item.id.toLowerCase() === option.id.toLowerCase())) continue;
+    kept.push({ ...option, description: `${option.description} · 未在 CodeAgent 菜单中确认` });
   }
   return kept;
 }
@@ -464,6 +479,7 @@ module.exports = {
   readObserved,
   recordObserved,
   readMenu,
+  readMenuEntry,
   recordMenu,
   appendModelLog,
   modelOptions,

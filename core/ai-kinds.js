@@ -29,7 +29,8 @@ const ALL_AI_KINDS = ['claude', 'gemini', 'codex', 'deepseek', 'kimi', 'qwen', '
 // 发行目标只保留部分 AI 时（公司纯净版只留 CodeAgent），选成员时只列这些。
 // 2026-10-22：新建 DeepSeek 成员默认使用 DSH（deepseek-acp）。
 const GROUP_MEMBER_KINDS = ['claude', 'codex', 'deepseek-acp', 'qwen', 'glm', 'codeagent', 'gemini']
-  .filter(require('./distribution').kindAllowed);
+  .filter(kind => require('./distribution').kindAllowed(kind)
+    && (require('./distribution').target !== 'company' || kind === 'codeagent'));
 const WEB_STYLE_KINDS = [];
 // DeepSeek V4.1 Flash / V4 Pro 原生支持 Responses API，并适配 Codex 0.144.0+。
 // 新 DeepSeek 会话因此也属于 Codex CLI runtime；老会话恢复时

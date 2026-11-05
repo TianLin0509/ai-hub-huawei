@@ -3,16 +3,26 @@
 // cmd.exe 用 windowsVerbatimArguments 原样传命令行（同 codeagent-pool.js 的号池登录）；超时只按 PID 用 taskkill /T 结束我们自己刚起的这一个 cmd 进程树
 // ——这棵树确定是这里自己起的（2026-10-18 审核）。
 let versionCache = null;
+const CODEAGENT_VERSION_TIMEOUT_MS = 8000;
+function parseCodeAgentVersion(text) {
+  for (const line of String(text || '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').split(/\r?\n/)) {
+    if (/new version|codeagent update|新版本|升级/i.test(line)) continue;
+    const match = /^\s*(?:(?:codeagent(?:cli)?|cac)\s+(?:version\s*:?\s*|v)?|version\s*:?\s*|v)?(\d+(?:\.\d+){2,}[A-Za-z0-9.+-]*)(?:\s*\([^)]*\))?\s*$/i.exec(line);
+    if (match) return match[1];
+  }
+  return '';
+}
 function codeagentVersion(command) {
   if (versionCache && versionCache.command === command && Date.now() - versionCache.at < 10 * 60000) return versionCache.promise;
   const promise = new Promise((resolve, reject) => {
     const { execFile } = require('node:child_process');
     let timer = null, timedOut = false;
     const done = (error, stdout, stderr) => {
+      if (timedOut) return;
       clearTimeout(timer);
-      const m = /\d+\.\d+\.\d+[0-9A-Za-z.+-]*/.exec(String(stdout || '') + '\n' + String(stderr || ''));
+      const version = parseCodeAgentVersion(String(stdout || '') + '\n' + String(stderr || ''));
       // 命令行输出可能是本机代码页（中文 Windows 是 GBK），不原样带回，只说结论
-      if (m) resolve(m[0]); else reject(new Error(!error ? '版本号没读出来' : timedOut ? '8 秒没返回' : `命令没跑成（退出码 ${error.code}），可能没装 CodeAgent 或它不在 PATH 里`));
+      if (version) resolve(version); else reject(new Error(!error ? '版本号没读出来' : timedOut ? '8 秒没返回' : `命令没跑成（退出码 ${error.code}），可能没装 CodeAgent 或它不在 PATH 里`));
     };
     let child;
     const env = { ...process.env };
@@ -23,10 +33,11 @@ function codeagentVersion(command) {
     } else child = execFile(command, ['--version'], { encoding: 'utf8', env }, done);
     timer = setTimeout(() => {
       timedOut = true;
+      reject(Object.assign(new Error('8 秒没返回'), { code: 'version-timeout' }));
       const pid = child && child.pid;
       if (pid && process.platform === 'win32') execFile('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => {});
       else { try { child.kill(); } catch { /* 已退出 */ } }
-    }, 8000);
+    }, CODEAGENT_VERSION_TIMEOUT_MS);
     timer.unref?.();
   });
   versionCache = { command, at: Date.now(), promise };
@@ -34,4 +45,4 @@ function codeagentVersion(command) {
   return promise;
 }
 
-module.exports = { codeagentVersion };
+module.exports = { codeagentVersion, parseCodeAgentVersion, CODEAGENT_VERSION_TIMEOUT_MS };

@@ -8,6 +8,7 @@
 //   hub-team propose --plan-file 计划.json        计划：{"goal":"…","members":[{"role":"…","task":"…","kind":"codeagent","account":"…","model":"…","cwd":"…","title":"…"}]}
 //   hub-team send --to lead|m1 --message "…" [--no-wake] [--interrupt]
 //   hub-team send --to m1 --message-file 消息.md
+//   hub-team read --id msg-xxx                 读取完整原文；仅本队负责人和消息参与者可读
 //   hub-team allow --a m1 --b m2 [--off] [--reason "…"]
 //   hub-team restart --member m1
 //   hub-team dismiss --member m1
@@ -40,9 +41,13 @@ function buildRequest(argv) {
       if (!opt.to || typeof message !== 'string') throw Error('用法：send --to lead|m1 --message "…"（或 --message-file 文件）[--no-wake] [--interrupt]');
       return { action, args: { to: String(opt.to), message, wake: !opt['no-wake'], interrupt: !!opt.interrupt } };
     }
+    case 'read': {
+      if (typeof opt.id !== 'string' || !opt.id.trim()) throw Error('用法：read --id <消息编号>');
+      return { action, args: { messageId: opt.id } };
+    }
     case 'allow': return { action, args: { memberA: String(opt.a || ''), memberB: String(opt.b || ''), allow: !opt.off, reason: opt.reason ? String(opt.reason) : '' } };
     case 'restart': case 'dismiss': return { action, args: { memberId: String(opt.member || '') } };
-    default: throw Error('动作：status / accounts / propose / send / allow / restart / dismiss');
+    default: throw Error('动作：status / accounts / propose / send / read / allow / restart / dismiss');
   }
 }
 

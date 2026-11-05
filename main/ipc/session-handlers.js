@@ -52,8 +52,10 @@ function registerSessionIpc(ipcMain, deps) {
     // 登录窗口打开后多久看一次凭证（单测可缩短）；获取模型权限的实现（单测可替换）。
     codeagentLoginPollMs = 3000,
     codeagentProbeModels = null,
+    codeagentCommandVersionProbe = null,
     // 经 CodeAgent serve 读模型清单与额度的实现（单测可替换，core/codeagent-serve.js readAccount）
     codeagentServeRead = null,
+    codeagentQuotaNow = Date.now,
     // 开 Hub 后多久在后台补读模型清单（单测可缩短）
     codeagentStartupProbeMs = 20000,
   } = deps;
@@ -167,6 +169,7 @@ function registerSessionIpc(ipcMain, deps) {
     // 社区版：缺少 CLI 先说清楚，再查登录（2026-10-28：没装 Claude 时，账号凭据检查先报「Claude 登录或配置文件无法读取」，
     // 盖过了「未找到 Claude Code CLI」，用户以为是登录问题）。session-manager 创建前同样检查一次。
     require('../../core/community-provider').assertProviderAvailable(kind || 'powershell');
+    require('../../core/company-api-config').assertLaunchConfigured(kind || 'powershell', require('../../core/hub-config').getConfig());
     if (ensureLaunchAuth) {
       const started = Date.now();
       let checked = started;
@@ -541,12 +544,22 @@ function registerSessionIpc(ipcMain, deps) {
     try {
       const session = sessionManager.getSession(payload.sessionId);
       if (!session || !require('../../core/ai-kinds').isCodeAgentKind(session.kind)) throw new Error('当前会话不是可用的 CodeAgent 会话');
+      if (payload.probeCommands === true) void commandsProbeScheduler.request(session, { force: payload.retryCommands === true });
       const dataDir = require('../../core/data-dir').getHubDataDir();
       const configDir = require('../../core/codeagent-default-model-guard').sessionConfigDir(session, { dataDir });
       const inventory = await new Promise((resolve, reject) => setImmediate(() => {
-        try { resolve(require('../../core/capability-catalog').scanCodeAgentSkills(configDir)); } catch (error) { reject(error); }
+        try {
+          const scan = require('../../core/capability-catalog').scanCodeAgentSkills;
+          const inventory = scan(configDir);
+          if (session.cwd) {
+            const project = scan(require('node:path').join(session.cwd, '.cac'));
+            inventory.skills = [...new Map([...inventory.skills, ...project.skills].map(skill => [skill.name, skill])).values()];
+            inventory.warnings.push(...project.warnings);
+          }
+          resolve(inventory);
+        } catch (error) { reject(error); }
       }));
-      return { ok: true, ...inventory };
+      return { ok: true, ...inventory, commands: require('../../core/codeagent-command-cache').readCommands(dataDir, session), commandsProbe: commandsProbeScheduler.state(session) };
     } catch (error) { return { ok: false, error: '读取技能失败：' + error.message, skills: [] }; }
   });
   ipcMain.handle('codeagent:commands-open', async (_event, payload = {}) => {
@@ -554,8 +567,17 @@ function registerSessionIpc(ipcMain, deps) {
     catch (error) { return { ok: false, error: error.message }; }
   });
   // /model 菜单用量快照（core/codeagent-usage-menu.js）：界面取全部；界面每轮结束读屏读到菜单时交回来记。
+  const CODEAGENT_QUOTA_DEFAULT_CACHE_MS = 30000;
+  let quotaDefaults = {}, quotaDefaultsAt = 0;
   ipcMain.handle('codeagent:usage', () => {
-    try { return { ok: true, accounts: require('../../core/codeagent-usage-menu').readUsage(require('../../core/data-dir').getHubDataDir()) }; }
+    try {
+      const accounts = require('../../core/codeagent-usage-menu').readUsage(require('../../core/data-dir').getHubDataDir());
+      if (Date.now() - quotaDefaultsAt >= CODEAGENT_QUOTA_DEFAULT_CACHE_MS || Object.keys(accounts).some(key => !Object.hasOwn(quotaDefaults, key))) {
+        quotaDefaults = Object.fromEntries(Object.keys(accounts).map(key => [key, codeagentModelList(key === 'personal' ? { account: 'personal' } : { account: 'pool', poolAccount: key }, { refresh: false }).defaultModel || '']));
+        quotaDefaultsAt = Date.now();
+      }
+      return { ok: true, accounts, defaultModels: quotaDefaults };
+    }
     catch (error) { return { ok: false, accounts: {}, error: error.message }; }
   });
   ipcMain.handle('codeagent:usage-record', (_event, payload = {}) => {
@@ -580,26 +602,33 @@ function registerSessionIpc(ipcMain, deps) {
       : codeagentModelList({ account: 'personal' });
     return { ...list, automatic, account: session.codeagentPoolAccount ? 'pool' : 'personal' };
   });
-  function codeagentModelList(payload) {
+  function codeagentModelList(payload, { refresh = true } = {}) {
     try {
       const { getHubDataDir } = require('../../core/data-dir');
       const pool = require('../../core/codeagent-pool');
-      const asOptions = ids => ids.map(id => ({ id, label: require('../../core/codeagent-models').modelLabel(id), source: 'account' }));
+      const asOptions = (key, dir, ids) => require('../../core/codeagent-models').modelOptions(getHubDataDir(), {
+        accountKey: key, configDir: dir, probedModels: ids,
+      });
       // defaultModel：不选具体模型时这个号启动会用的模型（启动中心把「沿用」那一项标成它，2026-10-19 用户：选了号就默认选中该号的默认模型）。
       const sameCase = (list, id) => (list || []).find(m => String(m).toLowerCase() === String(id || '').toLowerCase()) || '';
       if (payload && payload.account === 'pool' && payload.poolAccount) {
         const account = codeagentPoolAccounts().find(a => a.id === payload.poolAccount);
         if (!account) return { options: [] };
-        if (account.state === 'ready' && !account.sameAsPersonal && !account.duplicateOf && codeagentProbeStale(account.modelsProbedAt, account.modelsSource, { opening: true })) {
+        if (refresh && account.state === 'ready' && !account.sameAsPersonal && !account.duplicateOf && codeagentProbeStale(account.modelsProbedAt, account.modelsSource, { opening: true })) {
           try { autoProbeCodeAgentAccount(account.id); } catch { /* 只影响下次 */ }
         }
-        return { options: asOptions(account.models), defaultModel: sameCase(account.models, pool.plannedModel(account.dir, { idle: !account.activeSessions })) };
+        const options = asOptions(account.id, account.dir, account.models);
+        return { options, defaultModel: sameCase(options.map(option => option.id), pool.plannedModel(account.dir, { idle: !account.activeSessions })) };
       }
       if (payload && payload.account === 'pool') {
         // 自动挑号：各个可用号的默认模型都一样时才能说定
         const usable = codeagentPoolAccounts().filter(a => a.state === 'ready' && !a.sameAsPersonal && !a.duplicateOf);
         const defaults = [...new Set(usable.map(a => sameCase(a.models, pool.plannedModel(a.dir, { idle: !a.activeSessions }))))];
-        return { options: pool.poolModelOptions(getHubDataDir(), usable), defaultModel: defaults.length === 1 ? defaults[0] : '' };
+        const options = [];
+        for (const account of usable) for (const option of asOptions(account.id, account.dir, account.models)) {
+          if (!options.some(item => item.id.toLowerCase() === option.id.toLowerCase())) options.push(option);
+        }
+        return { options, defaultModel: defaults.length === 1 ? defaults[0] : '' };
       }
       const personalDir = require('../../core/codeagent-config').resolveCodeAgentConfig(process.env).configDir;
       let defaultModel = '';
@@ -624,9 +653,8 @@ function registerSessionIpc(ipcMain, deps) {
       // 个人账号：一键获取过模型权限就用读到的菜单，否则沿用原来的清单
       const probed = require('../../core/codeagent-model-probe').readProbed(pool.personalModelsFile(getHubDataDir()));
       // 记着的清单太旧：后台重新获取一次，这次照旧列旧的，下次打开下拉就是新的
-      if (probed && codeagentProbeStale(probed.at, probed.source, { opening: true })) { try { autoProbeCodeAgentAccount('personal'); } catch { /* 只影响下次 */ } }
-      if (probed) return { options: asOptions(probed.models), defaultModel: sameCase(probed.models, defaultModel) };
-      const options = require('../../core/codeagent-config').localModelOptions(getHubDataDir());
+      if (refresh && probed && codeagentProbeStale(probed.at, probed.source, { opening: true })) { try { autoProbeCodeAgentAccount('personal'); } catch { /* 只影响下次 */ } }
+      const options = asOptions('personal', personalDir, probed?.models || []);
       return { options, defaultModel: sameCase(options.map(o => o.id), defaultModel) };
     } catch (error) { return { options: [], error: error.message }; }
   }
@@ -687,6 +715,7 @@ function registerSessionIpc(ipcMain, deps) {
   // v2.1.6（2026-10-16 用户「按计划推进」）：新添加的号登录完成、导入本机已登录的号、以及从没获取过的号（含个人账号），
   // Hub 自动在后台获取一次，不用手动点；每个号每次运行 Hub 只自动试一次，失败了仍可手动点「获取」。
   let codeagentProbeChain = Promise.resolve();
+  let codeagentProbeJobs = 0;
   const codeagentProbing = new Set();
   // CodeAgent /model 菜单里读到的用量：记快照后通知界面刷新额度条（失败只影响显示）。
   function recordCodeAgentUsage(key, usage, options = {}) {
@@ -699,7 +728,80 @@ function registerSessionIpc(ipcMain, deps) {
   const codeagentLastSource = new Map(); // 号 → 上次获取成功走的路（serve / menu）
   const codeagentServeEnabled = dataDir => require('../../core/codeagent-serve').serveEnabled(dataDir);
   const codeagentProbePending = new Map();
+  const quotaPanel = require('../../core/codeagent-quota-panel').createCodeAgentQuotaPanel({
+    now: codeagentQuotaNow,
+    getStatus: codeagentPoolStatus,
+    readUsage: () => require('../../core/codeagent-usage-menu').readUsage(require('../../core/data-dir').getHubDataDir()),
+    serveEnabled: () => codeagentServeEnabled(require('../../core/data-dir').getHubDataDir()),
+    describeError: error => require('../../core/codeagent-quota').redactSnippet(error?.message || String(error)),
+    refreshAccount: key => {
+      // Share the existing probe queue, but not its menu fallback: sidebar
+      // refresh failures keep cached readings and their original timestamps.
+      const run = async () => {
+        const dataDir = require('../../core/data-dir').getHubDataDir();
+        if (!codeagentServeEnabled(dataDir)) throw new Error('当前未启用 CodeAgent serve 读取');
+        const pool = require('../../core/codeagent-pool');
+        const config = require('../../core/codeagent-config').resolveCodeAgentConfig(process.env);
+        const account = key === 'personal' ? null : codeagentPoolAccounts().find(row => row.id === key);
+        if (key !== 'personal' && !account) throw new Error('号池里没有这个账号');
+        const configDir = account ? account.dir : config.configDir;
+        const state = account ? account.state : pool.accountState(pool.readCredentials(configDir));
+        if (state !== 'ready') throw new Error('这个账号需要先登录才能刷新额度');
+        const serve = require('../../core/codeagent-serve');
+        const served = await (codeagentServeRead || serve.readAccount)({ command: config.command,
+          configDirEnv: config.configDirEnv, configDir, dataDir, cwd: pool.probeCwd(dataDir), readyTimeoutMs: 20000 });
+        if (!served?.ok) throw new Error(served?.error || 'CodeAgent serve 读取失败');
+        const usage = serve.toUsageSnapshot(served);
+        if (!usage?.credit) throw new Error('本次未读到 Credit 额度，保留上次读数');
+        const entry = require('../../core/codeagent-usage-menu').recordUsage(dataDir, key, usage,
+          { label: account ? pool.label(account) : '个人账号', source: 'serve' });
+        if (!entry) throw new Error('本次未读到有效额度，保留上次读数');
+        sendToRenderer('codeagent-usage-changed', { key });
+      };
+      const next = codeagentProbeChain.then(run, run);
+      codeagentProbeChain = next.catch(() => {});
+      return next;
+    },
+  });
+  ipcMain.handle('codeagent:quota-panel', async (_event, payload = {}) => {
+    try {
+      if (!require('../../core/distribution').kindAllowed('codeagent')) throw new Error('当前发行版未开放 CodeAgent');
+      return await quotaPanel.snapshot(payload);
+    } catch (error) {
+      return { ok: false, rows: [], usage: {}, creditReadings: {},
+        error: require('../../core/codeagent-quota').redactSnippet(error.message) };
+    }
+  });
   const { createUsageRefresher, CODEAGENT_SERVE_MAX_AGE_MS } = require('../../core/codeagent-usage-menu');
+  const commandsProbeScheduler = require('../../core/codeagent-commands-probe').createCommandsProbeScheduler({
+    dataDir: require('../../core/data-dir').getHubDataDir(),
+    getVersion: () => {
+      const config = require('../../core/codeagent-config').resolveCodeAgentConfig(process.env);
+      return (codeagentCommandVersionProbe || require('../../core/codeagent-version-probe').codeagentVersion)(config.command);
+    },
+    probe: (session, version, { trace, force }) => {
+      const run = async () => {
+        const dataDir = require('../../core/data-dir').getHubDataDir();
+        const config = require('../../core/codeagent-config').resolveCodeAgentConfig(process.env);
+        const configDir = require('../../core/codeagent-default-model-guard').sessionConfigDir(session, { dataDir });
+        const result = await (codeagentProbeModels || require('../../core/codeagent-model-probe').probeModels)({
+          ...config, configDir, dataDir, accountKey: session.codeagentPoolAccount || 'personal', cliVersion: version,
+          cwd: require('../../core/codeagent-pool').probeCwd(dataDir), commandsOnly: true, probeTrace: trace, forceCommands: force,
+        });
+        return result.commandsProbe || { ok: false, reason: 'commands-unavailable' };
+      };
+      const previous = codeagentProbeChain;
+      const task = require('../../core/codeagent-commands-probe').queueCommandsProbe(previous, run, { trace, pending: codeagentProbeJobs > 0 });
+      codeagentProbeJobs += 1;
+      // A timed-out job never starts later. Keep the prior PTY barrier so a
+      // still-running probe cannot overlap the next account's hidden process.
+      codeagentProbeChain = Promise.all([previous.catch(() => {}), task.catch(() => {})]).then(() => {});
+      return task.finally(() => { codeagentProbeJobs -= 1; });
+    },
+    onResult: result => require('../../core/codeagent-models').appendModelLog(require('../../core/data-dir').getHubDataDir(), {
+      event: 'commands-probe', result: result.skipped ? 'skipped' : result.ok ? 'read' : 'failed', reason: result.reason || '',
+    }),
+  });
   const usageRefresher = createUsageRefresher({
     read: key => require('../../core/codeagent-usage-menu').readUsage(require('../../core/data-dir').getHubDataDir())[key],
     probe: key => probeCodeAgentAccount(key),
@@ -740,7 +842,7 @@ function registerSessionIpc(ipcMain, deps) {
           configDir = account.dir; file = require('path').join(account.dir, probe.MODELS_FILE);
           label = pool.label(account);
         }
-        const probeOptions = { command: config.command, configDirEnv: config.configDirEnv, configDir, dataDir, cwd: pool.probeCwd(dataDir) };
+        const probeOptions = { command: config.command, configDirEnv: config.configDirEnv, configDir, dataDir, accountKey: id, cwd: pool.probeCwd(dataDir) };
         // 2026-10-30 用户：先用 CodeAgent 自带的 serve 接口读（约 3 秒，还带额度和每个模型的配额），读不到再开 CodeAgent 读 /model 屏幕。
         // AI_HUB_CODEAGENT_SERVE=1 强制打开、=0 强制关掉。
         let result = null;
@@ -761,14 +863,16 @@ function registerSessionIpc(ipcMain, deps) {
         if (!result) result = await (codeagentProbeModels || probe.probeModels)(probeOptions);
         if (!result.ok) throw new Error(result.error);
         probe.writeProbed(file, result);
+        if (result.menuComplete) require('../../core/codeagent-models').recordMenu(dataDir, result.models, { key: id, complete: true });
         codeagentLastSource.set(id, result.source === 'serve' ? 'serve' : 'menu');
         if (result.usage) recordCodeAgentUsage(id, result.usage, { label, source: result.source === 'serve' ? 'serve' : 'probe' });
         return result.models;
       } finally { codeagentProbing.delete(id); }
     };
+    codeagentProbeJobs += 1;
     const next = codeagentProbeChain.then(run, run);
     codeagentProbeChain = next.catch(() => {});
-    const tracked = next.finally(() => codeagentProbePending.delete(id));
+    const tracked = next.finally(() => { codeagentProbeJobs -= 1; codeagentProbePending.delete(id); });
     codeagentProbePending.set(id, tracked);
     return tracked;
   }
@@ -1088,8 +1192,8 @@ function registerSessionIpc(ipcMain, deps) {
     codeagentModels.appendModelLog(dataDir, { event: 'pick', session: String(sessionId).slice(0, 8), account: account.replace(/\s+/g, ''), reason, model: picked || modelId,
       ok: result.ok, mode: result.mode, confirmed: result.confirmed, restored: (result.restored || []).join('+'), menu: (result.menu || []).join('+'), error: result.ok ? '' : result.message,
       fallback: fallback ? 'send-with-cli-model' : '', failures: breaker && !result.ok ? breaker.failures : '' });
-    // 菜单里实际能选的模型：新建会话的模型下拉以它为准（core/codeagent-models.js 的 modelOptions）。
-    if (result.menu) { try { codeagentModels.recordMenu(getHubDataDir(), result.menu); } catch { /* 只影响下次的模型下拉，不影响本次选择 */ } }
+    // 完整菜单按会话账号保存；下拉同时保留配置里尚未在菜单确认的模型。
+    if (result.menu) { try { codeagentModels.recordMenu(getHubDataDir(), result.menu, { key: session.codeagentPoolAccount || 'personal', complete: true }); } catch { /* 只影响下次的模型下拉，不影响本次选择 */ } }
     // 菜单上方的用量表（Credit 三档 + 每个模型的 Token 用量）：按会话用的号记快照，额度条和模型下拉显示（core/codeagent-usage-menu.js）。
     if (result.usage) recordCodeAgentUsage(session.codeagentPoolAccount || 'personal', result.usage, { label: session.codeagentPoolAccount ? (session.codeagentPoolLabel || '') : '个人账号', source: `picker:${reason}` });
     // 这个号记着的清单和刚读到的完整菜单不一样：按菜单更新（2026-10-29 公司真机 Q-1029-12：个人账号清单停在 10-16 的「只有 GLM」，
@@ -1174,6 +1278,7 @@ function registerSessionIpc(ipcMain, deps) {
     if (codeagentPicker.isPicking(sessionId)) return { ok: false, error: 'busy', message: '正在切换模型，请稍候' };
     // 用 --settings 文件启动的会话（2026-10-30 5.3.12）：先把它自己的设置文件改成新模型，再照常在菜单里选。
     // 会话每次请求都重读配置；--settings 优先级最高，不改它的话菜单选的可能被它压回去。只在能换成 CodeAgent 自己的写法时改。
+    let launchChange = null;
     try {
       const dataDir = require('../../core/data-dir').getHubDataDir();
       const file = require('path').join(dataDir, 'codeagent-launch', `${String(sessionId).replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
@@ -1181,11 +1286,34 @@ function registerSessionIpc(ipcMain, deps) {
         const poolId = (session.info && session.info.codeagentPoolAccount) || session.codeagentPoolAccount || '';
         const account = poolId ? require('../../core/codeagent-pool').listAccounts(dataDir).find(a => a.id === poolId) : null;
         const spelled = require('../../core/session-manager')._private.codeagentLaunchModel(modelId, { dataDir, pool: account ? { account } : null });
-        if (spelled) require('../../core/session-manager')._private.writeCodeAgentLaunchSettings(dataDir, sessionId, spelled);
+        if (spelled) {
+          const before = require('fs').readFileSync(file);
+          require('../../core/session-manager')._private.writeCodeAgentLaunchSettings(dataDir, sessionId, spelled);
+          launchChange = { file, before, written: Buffer.from(JSON.stringify({ model: spelled }), 'utf8') };
+        }
       }
     } catch (error) { console.warn('[codeagent] 切换模型时改会话设置文件失败，只用菜单：' + error.message); }
-    const result = await codeagentPicker.schedulePick(sessionId, () => runCodeAgentPick(sessionId, modelId, 'switch'));
-    if (!result || !result.ok) return { ok: false, error: 'pick-failed', message: (result && result.message) || 'CodeAgent 没能切换模型' };
+    const restoreLaunch = () => {
+      if (!launchChange) return;
+      const fs = require('fs'), dataDir = require('../../core/data-dir').getHubDataDir();
+      try {
+        if (!fs.readFileSync(launchChange.file).equals(launchChange.written)) {
+          models.appendModelLog(dataDir, { event: 'model-switch-restore-skipped', session: sessionId.slice(0, 8), reason: 'concurrent-write' });
+          return;
+        }
+        fs.writeFileSync(launchChange.file + '.restore.tmp', launchChange.before);
+        fs.renameSync(launchChange.file + '.restore.tmp', launchChange.file);
+      } catch {
+        models.appendModelLog(dataDir, { event: 'model-switch-restore-skipped', session: sessionId.slice(0, 8), reason: 'restore-failed' });
+      }
+    };
+    let result;
+    try { result = await codeagentPicker.schedulePick(sessionId, () => runCodeAgentPick(sessionId, modelId, 'switch')); }
+    catch (error) { restoreLaunch(); throw error; }
+    if (!result || !result.ok) {
+      restoreLaunch();
+      return { ok: false, error: 'pick-failed', message: (result && result.message) || 'CodeAgent 没能切换模型' };
+    }
     // 记住这个号上次手动切到的模型，下次新建会话默认用它（core/codeagent-launch-model.js）。
     try { require('../../core/codeagent-launch-model').rememberModel(require('../../core/data-dir').getHubDataDir(), (session.info && session.info.codeagentPoolAccount) || session.codeagentPoolAccount || 'personal', modelId); }
     catch (error) { console.warn('[codeagent] 记住上次选的模型失败：' + error.message); }

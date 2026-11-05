@@ -5,7 +5,7 @@ const { createHash, randomBytes } = require('node:crypto');
 
 // Kept inside core so full installs and app.asar updates carry the same resource.
 const TEAM_SKILL = 'company-team';
-const TEAM_SKILL_VERSION = '0.4.0';
+const TEAM_SKILL_VERSION = '0.4.1';
 const BUNDLE_FILE = path.join(__dirname, 'codeagent-skills', TEAM_SKILL, 'SKILL.md');
 const MARKER_FILE = '.hub-managed';
 const hash = content => createHash('sha256').update(content).digest('hex');

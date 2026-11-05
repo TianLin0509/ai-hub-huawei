@@ -6,6 +6,15 @@ function assertExternalAiAllowed() {
   if (companyOnly()) throw new Error('公司版 AI 任务只使用 CodeAgent；语音只使用本地识别，不调用外部 AI 服务。');
 }
 function assertKind(kind) {
-  if (companyOnly() && !['codeagent', 'powershell'].includes(String(kind).replace(/-resume$/, ''))) throw new Error('公司版只支持 CodeAgent 和 PowerShell，请选择 CodeAgent。');
+  if (!distribution.kindAllowed(kind)) throw new Error('当前发行版不支持此会话类型，请选择启动中心提供的工具。');
 }
-module.exports = { companyOnly, assertExternalAiAllowed, assertKind };
+// Single-session CLI availability does not widen company automation or group membership.
+function taskKindAllowed(kind) {
+  return distribution.kindAllowed(kind)
+    && (!companyOnly() || String(kind || '').replace(/-resume$/, '') === 'codeagent');
+}
+function assertTaskKind(kind) {
+  assertKind(kind);
+  if (!taskKindAllowed(kind)) throw new Error('公司版造梦、群聊与组队只使用 CodeAgent；其他工具请从启动中心新建单会话。');
+}
+module.exports = { companyOnly, assertExternalAiAllowed, assertKind, taskKindAllowed, assertTaskKind };
