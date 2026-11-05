@@ -46,7 +46,7 @@ function idleView(rows, now) {
   return { active: false, text: `闲时 ${discount}还有 ${time}`, at: source.creditAt };
 }
 
-function quotaView(snapshot, { now = Date.now(), currentAccountId = '', loadingKeys = new Set() } = {}) {
+function quotaView(snapshot, { now = Date.now(), currentAccountId = '', loadingKeys = new Set(), installed } = {}) {
   const rows = (snapshot?.rows || []).map((account, index) => {
     const health = accountState(account, { personal: account.personal });
     const busy = metric(account, 'busyDay'), month = metric(account, 'monthly');
@@ -70,7 +70,7 @@ function quotaView(snapshot, { now = Date.now(), currentAccountId = '', loadingK
       tint: account.personal ? 'brand' : ['tint-room', 'tint-assist', 'tint-meet', 'tint-room', 'tint-forum'][(index - 1 + 5) % 5] };
   });
   const pool = rows.filter(row => !row.personal);
-  return { rows, pool: pool.length, usable: pool.filter(row => row.usable).length,
+  return { rows, installed, pool: pool.length, usable: pool.filter(row => row.usable).length,
     idle: idleView(snapshot?.rows || [], now), at: Math.max(0, ...rows.map(row => row.at)) };
 }
 
@@ -106,6 +106,7 @@ function ringHtml(row, now) {
   return `<button type="button" class="qp-ring ${cls}${row.current ? ' is-current' : ''}" data-qp-account="${esc(row.id)}" style="--v:${row.busy?.pct || 0}" aria-label="${esc(title)}"><span class="qp-av" style="--av:var(--hw-${row.tint})">${esc(row.avatar)}</span></button>`;
 }
 function renderQuota(view, { now = Date.now(), refreshing = false, loadingCount = 0, message = '' } = {}) {
+  if (view.installed === false) return `<div class="qp-h"><h3>号池额度</h3><span class="sp"></span><button type="button" class="icon-btn qp-fold" data-qp-action="collapse" aria-label="收起额度栏">${icon('fold')}</button></div><div class="qp-note" role="status">CodeAgent 未安装</div><div class="qp-list"><div class="qp-empty">先安装 CodeAgent，再登录读取额度。</div></div><div class="qp-f"><button type="button" class="btn btn-ghost btn-sm" data-qp-action="install-guide">查看安装说明</button></div><div class="qp-rail"><button type="button" class="icon-btn" data-qp-action="expand" aria-label="展开号池额度">${icon('unfold')}</button><button type="button" class="icon-btn" data-qp-action="install-guide" title="CodeAgent 未安装 · 查看安装说明" aria-label="CodeAgent 未安装，查看安装说明">${icon('key')}</button></div>`;
   const note = refreshing ? `正在读取 ${loadingCount} 个号…` : message;
   const group = personal => `<div class="qp-g">${personal ? '个人账号' : `号池 · ${view.usable}/${view.pool} 可用`}</div>`
     + view.rows.filter(row => row.personal === personal).map(row => rowHtml(row, now)).join('');

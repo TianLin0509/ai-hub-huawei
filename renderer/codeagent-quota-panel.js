@@ -7,9 +7,13 @@ function createCodeAgentQuotaPanel({ document, root, window = document.defaultVi
   storage = null, getCurrentAccountId = () => '', openAccounts = () => {}, now = Date.now,
   setIntervalFn = setInterval, clearIntervalFn = clearInterval } = {}) {
   if (!document || !root || !ipcRenderer) throw new Error('CodeAgent quota panel needs its document, root and IPC');
-  let saved = { collapsed: false };
-  try { saved = { ...saved, ...JSON.parse(storage?.getItem(STORAGE_KEY) || '{}') }; } catch {}
-  let narrow = window.innerWidth <= 1360, collapsed = narrow || !!saved.collapsed;
+  const setup = require('./codeagent-setup').createCodeAgentSetup({ document, ipcRenderer });
+  // 宽屏默认：用户手动选过就听他的；没选过时，在第一次读到任何额度之前收成细栏，读到后自动展开一次。
+  let saved = {};
+  try { const raw = JSON.parse(storage?.getItem(STORAGE_KEY) || '{}'); if (raw && typeof raw === 'object') saved = raw; } catch {}
+  let chosen = typeof saved.collapsed === 'boolean';
+  const wideDefault = () => chosen ? saved.collapsed : !saved.seenReading;
+  let narrow = window.innerWidth <= 1360, collapsed = narrow || wideDefault();
   let snapshot = null, message = '正在读取账号状态…', lastHtml = '', revision = 0, disposed = false;
   let cachePending = null, refreshPending = null, refreshBusy = false, needsCache = false, tip = null;
   let loadingKeys = new Set();
@@ -19,7 +23,7 @@ function createCodeAgentQuotaPanel({ document, root, window = document.defaultVi
   root.classList.add('qp'); root.setAttribute('aria-label', '号池额度');
   const save = () => { try { storage?.setItem(STORAGE_KEY, JSON.stringify(saved)); } catch {} };
   const clearTip = () => { tip?.remove(); tip = null; };
-  const view = () => quotaView(snapshot, { now: now(), currentAccountId: getCurrentAccountId(), loadingKeys });
+  const view = () => quotaView(snapshot, { now: now(), currentAccountId: getCurrentAccountId(), loadingKeys, installed: setup.current?.installed });
 
   function render() {
     if (disposed) return;
@@ -41,9 +45,15 @@ function createCodeAgentQuotaPanel({ document, root, window = document.defaultVi
   }
   function fold(value, focus = false) {
     collapsed = value; clearTip();
-    if (!narrow) { saved.collapsed = value; save(); }
+    if (!narrow) { saved.collapsed = value; chosen = true; save(); }
     render();
     if (focus) root.querySelector(`[data-qp-action="${value ? 'expand' : 'collapse'}"]`)?.focus({ preventScroll: true });
+  }
+
+  function noteReading() {
+    if (saved.seenReading || !view().rows.some(row => row.busy || row.month)) return;
+    saved.seenReading = true; save();
+    if (!chosen && !narrow) { collapsed = false; clearTip(); }
   }
 
   function load() {
@@ -54,7 +64,7 @@ function createCodeAgentQuotaPanel({ document, root, window = document.defaultVi
     const operation = Promise.resolve().then(() => ipcRenderer.invoke('codeagent:quota-panel')).then(result => {
       if (disposed || generation !== revision) return;
       if (!result?.ok) throw new Error(result?.error || '账号额度暂时无法读取');
-      snapshot = result; if (now() >= messageUntil) message = ''; render();
+      snapshot = result; noteReading(); if (now() >= messageUntil) message = ''; render();
     }).catch(error => {
       if (!disposed && generation === revision) { message = snapshot ? '读取失败，显示上次读数' : error.message; render(); }
     }).finally(() => { if (cachePending === operation) cachePending = null; });
@@ -71,7 +81,7 @@ function createCodeAgentQuotaPanel({ document, root, window = document.defaultVi
     const operation = Promise.resolve().then(() => ipcRenderer.invoke('codeagent:quota-panel', { refresh: true })).then(result => {
       if (disposed) return;
       if (!result?.ok) throw new Error(result?.error || '额度读取失败');
-      snapshot = result;
+      snapshot = result; noteReading();
       const failures = result.rows.filter(row => row.refresh?.status === 'failed');
       const updated = result.rows.filter(row => row.refresh?.status === 'updated');
       const cooling = result.rows.filter(row => row.refresh?.status === 'cooldown');
@@ -96,6 +106,7 @@ function createCodeAgentQuotaPanel({ document, root, window = document.defaultVi
     if (!target || !root.contains(target) || target.disabled) return;
     event.preventDefault();
     const action = target.dataset.qpAction;
+    if (action === 'install-guide') { setup.showGuide(); return; }
     if (action === 'refresh') { void refresh(); return; }
     if (action === 'expand' || action === 'collapse') { fold(action === 'collapse', true); return; }
     clearTip(); if (narrow) fold(true);
@@ -104,7 +115,7 @@ function createCodeAgentQuotaPanel({ document, root, window = document.defaultVi
   function outside(event) { if (narrow && !collapsed && !root.contains(event.target)) fold(true); }
   function resize() {
     const next = window.innerWidth <= 1360;
-    if (next !== narrow) { narrow = next; collapsed = narrow || !!saved.collapsed; }
+    if (next !== narrow) { narrow = next; collapsed = narrow || wideDefault(); }
     clearTip(); render();
   }
   function showTip(event) {
@@ -129,16 +140,17 @@ function createCodeAgentQuotaPanel({ document, root, window = document.defaultVi
   }
   function leaveTip(event) { if (!event.relatedTarget || !event.target.closest('.qp-ring')?.contains(event.relatedTarget)) clearTip(); }
   const changed = () => { void load(); };
+  const unsubscribeSetup = setup.subscribe(() => render());
   root.addEventListener('click', activate); root.addEventListener('keydown', activate);
   root.addEventListener('pointerover', showTip); root.addEventListener('pointerout', leaveTip);
   root.addEventListener('focusin', showTip); root.addEventListener('focusout', clearTip);
   document.addEventListener('pointerdown', outside); window.addEventListener('resize', resize);
   for (const name of ['codeagent-usage-changed', 'codeagent-pool:changed']) ipcRenderer.on(name, changed);
   const tick = setIntervalFn(() => { render(); void load(); }, 60000); tick?.unref?.();
-  render(); void load();
+  render(); void load(); void setup.refresh().catch(() => {});
   return { render, refresh, reload: load, whenIdle: () => refreshPending || cachePending || Promise.resolve(),
     getState: () => ({ collapsed, narrow, refreshing: refreshBusy }), destroy() {
-      disposed = true; ++revision; clearIntervalFn(tick); clearTimeout(messageTimer); clearTip(); placeholder.remove(); root.hidden = true;
+      disposed = true; unsubscribeSetup(); ++revision; clearIntervalFn(tick); clearTimeout(messageTimer); clearTip(); placeholder.remove(); root.hidden = true;
       root.classList.remove('qp', 'is-overlay', 'is-refreshing');
       root.removeEventListener('click', activate); root.removeEventListener('keydown', activate);
       root.removeEventListener('pointerover', showTip); root.removeEventListener('pointerout', leaveTip);

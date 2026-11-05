@@ -11,12 +11,37 @@ const { spawnSync } = require('child_process');
 const { requireCommand, assertProviderAvailable } = require('../core/community-provider');
 const { inspectSetup } = require('../core/community-setup');
 
+
 function environment(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'community onboarding '));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const system = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32');
   return { root, env: { PATH: [system, path.join(system, 'WindowsPowerShell', 'v1.0')].join(';'), USERPROFILE: root, APPDATA: path.join(root, 'roaming'), LOCALAPPDATA: path.join(root, 'local') } };
 }
+
+test('CodeAgent missing install blocks real login before spawning a terminal', t => {
+  const { root, env } = environment(t);
+  let spawned = 0;
+  const config = { command: path.join(root, 'missing-codeagent.exe'), configDir: path.join(root, 'personal'), configDirEnv: 'CODEAGENT_CONFIG_DIR' };
+  assert.throws(() => require('../core/codeagent-pool').openLoginWindow(path.join(root, 'data'), 'personal', config,
+    { env, personal: true, spawnFn() { spawned++; } }), /CodeAgent 未安装/);
+  assert.equal(spawned, 0);
+});
+
+test('CodeAgent install checks share concurrent requests and broadcast changed state without stale reuse', async () => {
+  const document = {}, seen = []; let installed = false, calls = 0;
+  const ipcRenderer = { async invoke(channel) { assert.equal(channel, 'community:setup'); calls++; return { providers: [{ id: 'codeagent', installed }] }; } };
+  const { createCodeAgentSetup } = require('../renderer/codeagent-setup');
+  const setup = createCodeAgentSetup({ document, ipcRenderer });
+  assert.equal(createCodeAgentSetup({ document, ipcRenderer }), setup);
+  const unsubscribe = setup.subscribe(status => seen.push(status.installed));
+  await Promise.all([setup.refresh(), setup.refresh()]);
+  assert.equal(calls, 1); assert.deepEqual(seen, [false]);
+  installed = true; await setup.refresh();
+  assert.equal(calls, 2); assert.deepEqual(seen, [false, true]);
+  unsubscribe(); installed = false; await setup.refresh();
+  assert.equal(setup.current.installed, false); assert.deepEqual(seen, [false, true]);
+});
 
 test('the packaged app is ready with only Windows PowerShell available', t => {
   const { root, env } = environment(t);

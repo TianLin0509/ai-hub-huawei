@@ -208,7 +208,7 @@ test('a notSent delivery that later succeeds is sent once; plain failures and un
   mode = 'plain';
   const second = await h.service.invoke('lead-0001', 'send', { to: 'm1', message: 'B' });
   await h.settle();
-  assert.equal(h.readTeam().messages.find(m => m.id === second.messageId).state, 'failed', '可能已写入的失败不自动重发');
+  assert.equal(h.readTeam().messages.find(m => m.id === second.messageId).state, 'unconfirmed', '可能已写入的失败不自动重发');
   assert.equal(h.restarts.length, 0);
 });
 

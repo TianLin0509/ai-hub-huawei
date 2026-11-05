@@ -278,6 +278,83 @@ const HIDDEN_E2E_DATA_DIR_SAFE = isIsolatedHub()
 if (HIDDEN_E2E_WINDOW_REQUESTED && !HIDDEN_E2E_DATA_DIR_SAFE) {
   throw new Error('hidden E2E window mode requires a non-production CLAUDE_HUB_DATA_DIR');
 }
+// Isolated meeting diagnostics only: preserve renderer heartbeats in the main
+// process log even if the renderer later stops responding to CDP.
+let observeMeetingE2E = null;
+if (HIDDEN_E2E_WINDOW_REQUESTED && HIDDEN_E2E_DATA_DIR_SAFE
+    && process.env.CLAUDE_HUB_E2E_MEETING_DIAGNOSTICS === '1') {
+  const { performance } = require('node:perf_hooks');
+  const observe = observeMeetingE2E = (kind, details = {}) => console.log('[meeting-e2e-observe] ' + JSON.stringify({ kind, mainAt: Date.now(), mainNow: performance.now(), ...details }));
+  const rendererIdentity = contents => {
+    try { return { webContentsId: contents.id, rendererPid: contents.getOSProcessId() }; }
+    catch (error) { return { webContentsId: contents.id, rendererPidError: error.message }; }
+  };
+  app.on('child-process-gone', (_event, details) => observe('child-process-gone', {
+    type: details.type, reason: details.reason, exitCode: details.exitCode,
+    name: details.name, serviceName: details.serviceName }));
+  app.whenReady().then(() => observe('gpu-feature-status', { status: app.getGPUFeatureStatus() }))
+    .catch(error => observe('gpu-feature-status-error', { error: error.message }));
+  const finiteResource = value => Number.isFinite(value) ? value : null;
+  const cpuFields = ['percentCPUUsage', 'idleWakeupsPerSecond'];
+  const memoryFields = ['rss', 'heapTotal', 'heapUsed', 'external', 'arrayBuffers'];
+  const resourceNumbers = (value, fields) => value && typeof value === 'object'
+    ? Object.fromEntries(fields.map(key => [key, finiteResource(value[key])])) : undefined;
+  const resourceDetails = value => {
+    if (!value || typeof value !== 'object') return undefined;
+    return { sampleAt: finiteResource(value.sampleAt),
+      cpuStatus: typeof value.cpuStatus === 'string' ? value.cpuStatus.slice(0, 32) : 'unknown',
+      memoryStatus: typeof value.memoryStatus === 'string' ? value.memoryStatus.slice(0, 32) : 'unknown',
+      cpu: resourceNumbers(value.cpu, cpuFields), memory: resourceNumbers(value.memory, memoryFields),
+      cpuError: typeof value.cpuError === 'string' ? value.cpuError.slice(0, 160) : undefined,
+      memoryError: typeof value.memoryError === 'string' ? value.memoryError.slice(0, 160) : undefined };
+  };
+  // Synchronous in-process counters only: no OS process query or overlapping
+  // memory-info promises can add work to a stalled isolated test instance.
+  const resourceTimer = setInterval(() => {
+    const resources = { sampleAt: Date.now(), cpuStatus: 'unsupported', memoryStatus: 'unsupported' };
+    if (typeof process.getCPUUsage === 'function') try {
+      resources.cpu = process.getCPUUsage(); resources.cpuStatus = 'ok';
+    } catch (error) { resources.cpuStatus = 'error'; resources.cpuError = String(error?.message || error); }
+    if (typeof process.memoryUsage === 'function') try {
+      resources.memory = process.memoryUsage(); resources.memoryStatus = 'ok';
+    } catch (error) { resources.memoryStatus = 'error'; resources.memoryError = String(error?.message || error); }
+    observe('main-resources', { resources: resourceDetails(resources) });
+  }, 1000);
+  resourceTimer.unref?.();
+  app.once('will-quit', () => clearInterval(resourceTimer));
+  ipcMain.on('meeting-e2e-observe', (event, payload = {}) => {
+    if (!['heartbeat', 'step-before', 'step-after'].includes(payload?.kind)) return;
+    const details = { webContentsId: event.sender.id, step: String(payload.step || '').slice(0, 320),
+      rendererNow: finiteResource(payload.rendererNow),
+      visibility: String(payload.visibility || '').slice(0, 20), focus: payload.focus === true };
+    if (payload.kind !== 'heartbeat') {
+      if (typeof payload.shot === 'string') details.shot = payload.shot.slice(0, 120);
+      if (typeof payload.selector === 'string') details.selector = payload.selector.slice(0, 320);
+    } else {
+      details.resources = resourceDetails(payload.resources);
+      const observer = payload.longTaskObserver;
+      if (['active', 'unsupported', 'error'].includes(observer?.status)) details.longTaskObserver = {
+        status: observer.status, error: typeof observer.error === 'string' ? observer.error.slice(0, 160) : undefined };
+      if (Array.isArray(payload.longTasks)) details.longTasks = payload.longTasks.slice(0, 8)
+        .filter(task => Number.isFinite(task?.startTime) && task.startTime >= 0 && Number.isFinite(task?.duration) && task.duration >= 0)
+        .map(task => ({ startTime: task.startTime, duration: task.duration }));
+      details.longTaskDropped = Number.isInteger(payload.longTaskDropped) && payload.longTaskDropped >= 0 ? payload.longTaskDropped : null;
+    }
+    observe(payload.kind, details);
+  });
+  app.on('web-contents-created', (_event, contents) => {
+    for (const kind of ['unresponsive', 'responsive']) contents.on(kind, () => observe(kind, rendererIdentity(contents)));
+    contents.on('render-process-gone', (_event, details) => observe('render-process-gone', {
+      ...rendererIdentity(contents), reason: details.reason, exitCode: details.exitCode }));
+    contents.on('did-start-navigation', (_event, url, _inPlace, isMainFrame) => {
+      if (!isMainFrame) return;
+      let recovered = null, urlParseError;
+      try { recovered = new URL(url).searchParams.get('recovered'); } catch (error) { urlParseError = error.message; }
+      observe('navigation-start', { ...rendererIdentity(contents), recovered, urlParseError });
+    });
+    contents.on('did-finish-load', () => observe('navigation-finished', rendererIdentity(contents)));
+  });
+}
 // Background E2E: the window renders like a visible one but sits off-screen,
 // never activates and stays out of the taskbar, so a test run cannot steal the
 // keyboard from someone typing in the production Hub.
@@ -1503,7 +1580,10 @@ function createWindow() {
     require('./core/renderer-crash-recovery.js').installRendererCrashRecovery(win, {
       app, ipcMain,
       log: windowEventLog || ((event, detail) => console.warn('[window]', event, JSON.stringify(detail))),
-      reload: ({ reason }) => { hangStackOptIn?.arm(); return win.loadFile(path.join(__dirname, 'renderer', 'index.html'), { query: { recovered: String(reason || 'crashed') } }); },
+      reload: ({ reason, exitCode, attempt }) => {
+        observeMeetingE2E?.('crash-recovery-reload', { reason, exitCode, attempt, webContentsId: win.webContents.id });
+        hangStackOptIn?.arm(); return win.loadFile(path.join(__dirname, 'renderer', 'index.html'), { query: { recovered: String(reason || 'crashed') } });
+      },
       hangStacks: !!hangStackOptIn,
       // 卡死自救的秒数：AI_HUB_STALL_RESCUE_SEC=0 关掉，其余数字按秒改。
       ...(String(process.env.AI_HUB_STALL_RESCUE_SEC || '').trim() !== '' && Number.isFinite(Number(process.env.AI_HUB_STALL_RESCUE_SEC))
@@ -2704,7 +2784,8 @@ if (require('./core/distribution').featureEnabled('leadTeam')) try {
   global.__teamService = require('./main/team/service').createTeamService({
     getHubDataDir, sessionManager, sendToRenderer, logger: console,
     createSession: request => sessionOperations.createSession(request),
-    submitPrompt: (sessionId, text) => promptOperations.submitPrompt(null, { sessionId, text, waitForCliReady: true }),
+    submitPrompt: (sessionId, text) => promptOperations.submitPrompt(null, { sessionId, text, waitForCliReady: true, preserveInput: true }),
+    reconcileTurn: require('./main/team/turn-reconcile').createTeamTurnReconciler({ sessionManager, transcriptTap }),
     injectPrompt: createRunningInjector({ sessionManager, transcriptTap, groupChatWatcher: groupChatDispatcher.getGroupChatWatcher() }),
     restartSession: id => sessionOperations.restartSession(id),
     listAccounts: () => require('./main/team/codeagent-accounts').listTeamAccounts({ dataDir: getHubDataDir(), sessionManager }),

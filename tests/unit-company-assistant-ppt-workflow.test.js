@@ -56,14 +56,15 @@ test('Agent多查询保留用途和理由，规范空白后仍只调用一次Doc
 });
 
 const first16 = 'A B C D E F G H I J K L M N O P';
+const first16Quoted = first16.split(' ').map(q => `"${q}"`).join(' ');
 const queryBounds = [
   ['21词英文', 'We use it to do so as we can and it is not too bad for all of us here now', 'We use it to do so as we can and it is not too bad for'],
   ['17记号', first16 + ' Q', first16],
   ['201汉字', '调'.repeat(201), '调'.repeat(200)],
   ['恰好200字', '调'.repeat(200), '调'.repeat(200)],
   ['恰好16词', first16, first16],
-  ['连续引号短语', '"A"“B”「C」《D》"E""F""G""H""I""J""K""L""M""N""O""P""Q"', first16],
-  ['不同引号及空白', ' ＂SRS＂\t\n『信道』\u0085‘估计’\u001c\'phase\' ', 'SRS 信道 估计 phase'],
+  ['连续引号短语', '"A"“B”「C」《D》"E""F""G""H""I""J""K""L""M""N""O""P""Q"', first16Quoted],
+  ['不同引号及空白', ' ＂SRS＂\t\n『信道』\u0085‘估计’\u001c\'phase\' ', '"SRS" "信道" ‘估计’ \'phase\''],
   ['Unicode字符不截断代理对', '𠀀'.repeat(201), '𠀀'.repeat(200)]
 ];
 for (const [label, query, expected] of queryBounds) {
@@ -105,6 +106,63 @@ test('仅引号查询不发送Doctor请求，空计划仍明确拒绝', async t 
   await assert.rejects(handlers['ppt-search']({ query: ' "“”「」《》\' ' }), /每组查询/);
   await assert.rejects(ppt.execute('search', { plan: { queries: [] } }), /queries/);
   assert.equal(requests.filter(r => r.action === 'search').length, 0);
+});
+
+test('长英文尾部保留为另一组查询，搜索框和助理都只提交一次计划', async t => {
+  const { ppt, requests, handlers } = protocolLibrary(t);
+  const prefix = Array.from({ length: 16 }, (_, i) => `absent${i}`).join(' ');
+  const query = prefix + ' scheduling throughput';
+  await handlers['ppt-search']({ query });
+  await ppt.find({ question: '找调度素材', queries: [{ query, rationale: '完整原词' }, 'PF', '调度'] });
+  const searches = requests.filter(r => r.action === 'search');
+  assert.equal(searches.length, 2);
+  assert.deepEqual(searches[0].body.plan.queries.map(q => q.query), [prefix, 'scheduling throughput']);
+  assert.deepEqual(searches[1].body.plan.queries.slice(0, 2), [
+    { query: prefix, rationale: '完整原词' }, { query: 'scheduling throughput', rationale: '完整原词' }
+  ]);
+});
+
+test('英文按字符边界整词分组并去重，仍遵守Doctor总查询上限', () => {
+  const { queriesFor } = require('../core/company-assistant/ppt-search');
+  const words = Array.from({ length: 25 }, (_, i) => `mechanism${String(i).padStart(2, '0')}`);
+  const queries = queriesFor({ query: words.join(' ') });
+  assert.equal(queries.map(q => q.query).join(' '), words.join(' '));
+  assert.ok(queries.every(q => Array.from(q.query).length <= 200 && q.query.split(' ').length <= 16));
+  assert.equal(queriesFor({ plan: { queries: [words.join(' '), words.join(' ')] } }).length, queries.length);
+  assert.equal(queriesFor({ query: Array.from({ length: 300 }, (_, i) => `q${i}`).join(' ') }).length, 16);
+});
+
+test('合法短语和英文撇号保留，短语按一词计算而不拆开', async t => {
+  const { ppt, requests } = protocolLibrary(t);
+  const longPhrase = '"' + Array.from({ length: 20 }, (_, i) => `p${i}`).join(' ') + '" throughput';
+  const queries = ['"cell edge" throughput', "operator's view", longPhrase];
+  await ppt.find({ question: '查原词', queries });
+  assert.deepEqual(requests.find(r => r.action === 'search').body.plan.queries.map(q => q.query), queries);
+});
+
+test('长查询分组不会从中间截断合法短语，超长短语退为有界词组', () => {
+  const { queriesFor } = require('../core/company-assistant/ppt-search');
+  const prefix = Array.from({ length: 16 }, (_, i) => `q${i}`).join(' ');
+  const query = prefix + ' "cell edge" throughput';
+  assert.deepEqual(queriesFor({ query }).map(q => q.query), [prefix, '"cell edge" throughput']);
+  const longWords = Array.from({ length: 30 }, (_, i) => `mechanism${i}`);
+  const split = queriesFor({ query: '"' + longWords.join(' ') + '"' });
+  assert.equal(split.map(q => q.query).join(' '), longWords.join(' '));
+  assert.ok(split.every(q => !q.query.includes('"') && Array.from(q.query).length <= 200 && q.query.split(' ').length <= 16));
+});
+
+test('截图长英文按80字边界拆组，保留尾部关键词', async () => {
+  const { ppt, image } = conversion();
+  const text = Array.from({ length: 16 }, (_, i) => `absent${i}`).join(' ') + ' scheduling throughput';
+  ppt.doctor.call = async (_op, req) => {
+    fs.mkdirSync(req.workdir, { recursive: true });
+    const seed = path.join(req.workdir, 'seed.json');
+    fs.writeFileSync(seed, JSON.stringify({ elements: [{ type: 'text', text }] }));
+    return { ok: true, seed };
+  };
+  const result = await lookupFrame(ppt, { imagePath: image });
+  assert.equal(result.queries.join(' '), text);
+  assert.ok(result.queries.every(q => Array.from(q).length <= 80 && q.split(' ').length <= 16));
 });
 
 function library() {
@@ -215,7 +273,7 @@ test('会议截图反查：OCR标题进入素材查询，返回候选而非画�
   await assert.rejects(lookupFrame(ppt, { imagePath: 'https://example/image.png' }), /本机/);
 });
 
-test('截图反查的21词、17记号与引号行截短后再检索，空引号行过滤', async () => {
+test('截图反查的长行分组后再检索，空引号行过滤', async () => {
   const { ppt, image } = conversion();
   ppt.doctor.call = async (_op, req) => {
     fs.mkdirSync(req.workdir, { recursive: true });
@@ -226,7 +284,7 @@ test('截图反查的21词、17记号与引号行截短后再检索，空引号�
     return { ok: true, seed };
   };
   const result = await lookupFrame(ppt, { imagePath: image });
-  assert.deepEqual(result.queries, [queryBounds[0][2], first16, '短标题']);
+  assert.deepEqual(result.queries, [queryBounds[0][2], 'all of us here now', first16, first16Quoted, '"Q"', '短标题']);
   assert.deepEqual(result.args.plan.queries, result.queries);
 });
 
@@ -240,6 +298,86 @@ test('截图只有引号时仍提示无可检索文字，不提交空查询', as
   };
   ppt.execute = () => { throw new Error('不应执行检索'); };
   assert.equal((await lookupFrame(ppt, { imagePath: image })).code, 'OCR_NO_TEXT');
+});
+
+for (const notSent of [true, false]) {
+  test(`独立素材AI任务提交被停止：${notSent ? '明确未发送' : '可能已执行'}立即结束，提示重新开始且不自动重发`, async t => {
+    const { CompanyAiTasks } = require('../core/company-ai-tasks');
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ppt-ai-stop-'));
+    const sent = [], closed = [], states = [];
+    let finalReads = 0;
+    const tasks = new CompanyAiTasks({ dataDir, concurrency: 1, pollMs: 5,
+      createSession: async () => ({ ok: true }),
+      sendPrompt: async id => { sent.push(id); return { ok: true, stopped: true, notSent }; },
+      lastFinal: () => { finalReads++; throw Error('停止后不得继续等待答案'); },
+      closeSession: async id => { closed.push(id); },
+      onChanged: value => states.push(value)
+    });
+    t.after(() => { tasks.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+    const expectedMessage = notSent
+      ? '已停止：任务还没发给 CodeAgent，可以直接重新开始。'
+      : '已停止：停止时任务正在提交，CodeAgent 可能已经执行。需要结果请重新开始（可能会重复执行一次）；不会自动重发。';
+    await assert.rejects(tasks.run({ text: '查找素材', timeoutMs: 1000 }), error => {
+      assert.equal(error.code, notSent ? 'TASK_NOT_SENT' : 'TASK_DELIVERY_UNCONFIRMED');
+      assert.equal(error.notSent, notSent);
+      assert.equal(error.stopped, true);
+      assert.equal(error.message, expectedMessage);
+      return true;
+    });
+    assert.equal(finalReads, 0); assert.equal(sent.length, 1);
+    assert.ok(closed.includes(sent[0]));
+    assert.equal(states.at(-1).state, 'cancelled');
+    const job = JSON.parse(fs.readFileSync(path.join(dataDir, 'company-ai-tasks', states.at(-1).id, 'task.json'), 'utf8'));
+    assert.equal(job.state, 'cancelled');
+    assert.equal(job.error, expectedMessage);
+    assert.doesNotMatch(job.error, /超时/);
+  });
+}
+
+for (const receipt of [
+  { error: 'prompt-context-failed', message: '准备上下文失败：附件不存在' },
+  { error: 'native-recovery-failed', message: '原生连接恢复失败：会话记录不可用' },
+  { error: 'send-threw', message: '写入终端失败，确认尚未发送' },
+  { error: '连接未就绪，尚未发送' },
+]) {
+  test(`独立素材AI任务未发送且未停止：保留真实原因 ${receipt.error}`, async t => {
+    const { CompanyAiTasks } = require('../core/company-ai-tasks');
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ppt-ai-not-sent-'));
+    const states = [], closed = [];
+    let submissions = 0, reads = 0;
+    const tasks = new CompanyAiTasks({ dataDir, pollMs: 5,
+      createSession: async () => ({ ok: true }),
+      sendPrompt: async () => { submissions++; return { ok: false, notSent: true, ...receipt }; },
+      lastFinal: () => { reads++; throw Error('明确未发送不得等待答案'); },
+      closeSession: async id => closed.push(id), onChanged: value => states.push(value),
+    });
+    t.after(() => { tasks.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+    await assert.rejects(tasks.run({ text: '查找素材', timeoutMs: 1000 }), error => {
+      assert.equal(error.message, receipt.message || receipt.error);
+      assert.equal(error.code, 'TASK_NOT_SENT');
+      assert.equal(error.notSent, true); assert.equal(error.stopped, false);
+      assert.doesNotMatch(error.message, /已停止/);
+      return true;
+    });
+    assert.equal(submissions, 1); assert.equal(reads, 0);
+    assert.ok(closed.includes(states.at(-1).sessionId));
+    const job = JSON.parse(fs.readFileSync(path.join(dataDir, 'company-ai-tasks', states.at(-1).id, 'task.json'), 'utf8'));
+    assert.equal(job.state, 'error'); assert.equal(job.error, receipt.message || receipt.error);
+  });
+}
+
+test('独立素材AI任务正常提交仍等待本任务回执并交付正文', async t => {
+  const { CompanyAiTasks } = require('../core/company-ai-tasks');
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ppt-ai-success-'));
+  let final, reads = 0, submissions = 0;
+  const tasks = new CompanyAiTasks({ dataDir, pollMs: 5,
+    createSession: async () => ({ ok: true }),
+    sendPrompt: async (_id, prompt) => { submissions++; final = '已找到素材\n' + prompt.match(/\[任务回执:[^\]]+\]/u)[0]; return { ok: true }; },
+    lastFinal: () => { reads++; return { text: final }; }, closeSession: async () => {}
+  });
+  t.after(() => { tasks.close(); fs.rmSync(dataDir, { recursive: true, force: true }); });
+  const result = await tasks.run({ text: '查找素材' });
+  assert.equal(result.text, '已找到素材'); assert.equal(submissions, 1); assert.equal(reads, 1);
 });
 test('转字写任务中断后保留产物并阻止Agent自动重放，页面明确重试才能恢复', async () => {
   const { service, image, ppt } = conversion(), job = await service.start(image);

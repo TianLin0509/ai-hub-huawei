@@ -1,5 +1,5 @@
 'use strict';
-const { truncateQuery } = require('./ppt-search');
+const { splitQuery } = require('./ppt-search');
 const fs = require('node:fs'), path = require('node:path'), { randomUUID } = require('node:crypto');
 
 function imageFile(image) {
@@ -103,7 +103,7 @@ async function lookupFrame(ppt, { imagePath, limit = 5 } = {}) {
   const seed = await ppt.doctor.call('imgtext-seed', { image, workdir });
   const document = JSON.parse(fs.readFileSync(seed.seed, 'utf8'));
   const lines = (document.elements || []).filter(e => e.type === 'text' && typeof e.text === 'string' && e.text.trim()).sort((a, b) => (a.bbox?.[1] || 0) - (b.bbox?.[1] || 0));
-  const queries = [...new Set(lines.map(e => Array.from(truncateQuery(e.text)).slice(0, 80).join('').trim()).filter(t => t.length >= 2))].slice(0, 8);
+  const queries = [...new Set(lines.flatMap(e => splitQuery(e.text, 80)).filter(t => t.length >= 2))].slice(0, 8);
   if (!queries.length) return { ok: false, code: 'OCR_NO_TEXT', error: '截图没有识别到可检索文字，请换一张更清晰的PPT截图', imagePath };
   const result = await ppt.execute('search', { plan: { intent: '会议截图反查原页', queries }, limit });
   return { ...result, imagePath, queries, coverage: '依据截图OCR文字找候选；未确认画面一致' };

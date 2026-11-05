@@ -114,7 +114,7 @@ async function run() {
       }
     }
     fs.writeFileSync(path.join(art, 'evidence.json'), JSON.stringify(evidence, null, 2));
-    console.log(JSON.stringify({ ok: evidence.ok, checks: evidence.checks.length, art, error: evidence.error }));
+    console.log(JSON.stringify({ ok: evidence.ok, checks: evidence.checks.length, art, error: evidence.error, quitError: evidence.quitError ?? null, exit: evidence.exit ?? null }));
   }
 }
 run().catch(error => { console.error(error.stack); process.exitCode = 1; });

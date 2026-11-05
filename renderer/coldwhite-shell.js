@@ -105,10 +105,47 @@ function installHwShell(doc, target = require('../core/distribution').target) {
     }
   }
   const mode = () => { root.dataset.hwRail = (rail?.getBoundingClientRect().width || 0) >= 150 ? 'wide' : 'narrow'; };
+  // 切换宽版后立即和过渡结束后各量一次，不只依赖尺寸监听（窗口在后台时它不一定触发）。
+  installHwRailPref(doc, doc.defaultView?.localStorage, () => { mode(); doc.defaultView?.setTimeout?.(mode, 300); });
   mode();
   const View = doc.defaultView;
   if (rail && View?.ResizeObserver) new View.ResizeObserver(mode).observe(rail);
   return true;
 }
 
-module.exports = { installColdwhiteShell, installHwShell };
+// 导航默认是图标栏；「设置」菜单里可切回带文字的宽版，选择存在本机。
+const HW_RAIL_PREF_KEY = 'hub.hwRailWide';
+function readHwRailWide(storage) {
+  try { return storage?.getItem(HW_RAIL_PREF_KEY) === '1'; } catch { return false; }
+}
+function installHwRailPref(doc, storage = doc.defaultView?.localStorage, onChange = null) {
+  const root = doc.documentElement;
+  const apply = wide => {
+    if (wide) root.dataset.hwRailPref = 'wide'; else delete root.dataset.hwRailPref;
+    if (item) {
+      item.setAttribute('aria-checked', wide ? 'true' : 'false');
+      item.textContent = wide ? '☰ 导航显示文字 ✓' : '☰ 导航显示文字';
+    }
+  };
+  const menu = doc.getElementById('options-menu');
+  let item = menu?.querySelector('#options-rail-wide') || null;
+  if (menu && !item) {
+    item = doc.createElement('div');
+    item.className = 'options-item'; item.id = 'options-rail-wide';
+    item.setAttribute('role', 'menuitemcheckbox');
+    item.title = '导航栏显示图标和文字（宽版）；关掉则只显示图标';
+    item.addEventListener('click', () => {
+      const wide = !readHwRailWide(storage);
+      try { storage?.setItem(HW_RAIL_PREF_KEY, wide ? '1' : '0'); } catch {}
+      apply(wide);
+      menu.style.display = 'none';
+      onChange?.(wide);
+    });
+    const anchor = menu.querySelector('.options-divider');
+    if (anchor) menu.insertBefore(item, anchor); else menu.append(item);
+  }
+  apply(readHwRailWide(storage));
+  return item;
+}
+
+module.exports = { installColdwhiteShell, installHwShell, installHwRailPref, HW_RAIL_PREF_KEY };

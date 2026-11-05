@@ -4,6 +4,7 @@
 (() => {
   if (!require('../core/distribution').community) return;
   const { ipcRenderer, shell } = require('electron');
+  const codeagentSetup = require('./codeagent-setup').createCodeAgentSetup({ document, ipcRenderer });
   const GUIDE = 'https://github.com/TianLin0509/ai-hub-huawei/blob/main/INSTALL.md';
   function init() {
     // Own stylesheet goes before the controls layer, which must stay last.
@@ -32,7 +33,7 @@
     section.querySelector('#community-accounts').onclick = () => document.getElementById('btn-rail-accounts')?.click();
     // 没有账号页的发行版（公司纯净版）不显示这个按钮。
     if (!require('../core/distribution').featureEnabled('accounts')) section.querySelector('#community-accounts').remove();
-    section.querySelector('#community-guide').onclick = () => shell.openExternal(GUIDE);
+    section.querySelector('#community-guide').onclick = () => require('../core/distribution').target === 'company' ? codeagentSetup.showGuide() : shell.openExternal(GUIDE);
     async function refresh() {
       const target = section.querySelector('#community-providers');
       const advisory = section.querySelector('#community-advisory');
@@ -40,6 +41,7 @@
       button.disabled = true;
       try {
         const result = await ipcRenderer.invoke('community:setup');
+        codeagentSetup.accept(result);
         target.replaceChildren();
         for (const provider of result.providers) {
           const item = document.createElement('span');
@@ -52,7 +54,7 @@
             install.type = 'button';
             install.textContent = '安装';
             install.setAttribute('aria-label', '安装 ' + provider.name);
-            install.onclick = () => shell.openExternal(provider.docs);
+            install.onclick = () => provider.id === 'codeagent' ? codeagentSetup.showGuide() : shell.openExternal(provider.docs);
             item.append(' ', install);
           }
           target.append(item);
@@ -64,6 +66,10 @@
       finally { button.disabled = false; }
     }
     section.querySelector('#community-refresh').onclick = refresh;
+    codeagentSetup.subscribe(status => {
+      const item = section.querySelector('[data-provider="codeagent"]');
+      if (item && item.dataset.installed !== (status.installed ? '1' : '0')) void refresh();
+    });
     void refresh();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true }); else init();

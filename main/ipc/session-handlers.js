@@ -173,7 +173,7 @@ function registerSessionIpc(ipcMain, deps) {
     if (ensureLaunchAuth) {
       const started = Date.now();
       let checked = started;
-      return ensureLaunchAuth(kind,opts).then(()=>{ checked = Date.now(); return createResolvedSession(kind,opts); })
+      return ensureLaunchAuth(kind,opts).then(()=>require('../../core/codeagent-capabilities').prepareForKind(kind)).then(()=>{ checked = Date.now(); return createResolvedSession(kind,opts); })
         .then(session => { recordLaunchTiming({kind, checksMs:checked-started, createMs:Date.now()-checked, ok:true}); return session; },
           error => { recordLaunchTiming({kind, checksMs:Date.now()-started, ok:false, code:error?.code || null}); throw error; });
     }
@@ -190,6 +190,7 @@ function registerSessionIpc(ipcMain, deps) {
     } catch {}
   }
   ipcMain.handle('session:prepare-launch-auth', async (_event, request = {}) => {
+    void require('../../core/codeagent-capabilities').prepareForKind(request.kind);
     await prepareLaunchAuth?.(request.kind, { launchProfile: request.launchProfile });
     return { ok: true };
   });
@@ -666,7 +667,9 @@ function registerSessionIpc(ipcMain, deps) {
     return pool.listAccounts(getHubDataDir(), { activeCounts: sessionManager.codeagentPoolActiveCounts(),
       personalAccountId: pool.readCredentials(personalDir).accountId });
   }
-  function codeagentPoolStatus() {
+  // 同一次快照里，共享的模型菜单和暂停状态文件只读一次（core/read-scope.js）。
+  function codeagentPoolStatus() { return require('../../core/read-scope').withReadScope(buildCodeagentPoolStatus); }
+  function buildCodeagentPoolStatus() {
     const { getHubDataDir } = require('../../core/data-dir');
     const pool = require('../../core/codeagent-pool');
     const personalDir = require('../../core/codeagent-config').resolveCodeAgentConfig(process.env).configDir;
@@ -1329,10 +1332,11 @@ function registerSessionIpc(ipcMain, deps) {
     const config = require('../../core/codeagent-config');
     let command = null;
     try { ({ command } = config.resolveCodeAgentConfig()); } catch { /* 命令不合法时按没装处理 */ }
-    return require('../../core/codeagent-version-check').check({
-      installed: !!command && config.isCodeAgentInstalled(),
+    const installed = !!command && config.isCodeAgentInstalled();
+    return Promise.resolve(require('../../core/codeagent-version-check').check({
+      installed,
       probe: () => require('../../core/codeagent-version-probe').codeagentVersion(command),
-    });
+    })).finally(() => { if (installed) void require('../../core/codeagent-capabilities').prepare(command); });
   });
   ipcMain.handle('codeagent:open-upgrade', () => {
     if (process.platform !== 'win32') return { ok: false, message: '只支持 Windows' };

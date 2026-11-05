@@ -82,11 +82,11 @@ test('real team accounts reject paused proposals and recheck model pauses before
   const { dataDir, ids, list } = pausedPool(t), created = [];
   const { createTeamService } = require('../main/team/service');
   const service = createTeamService({ getHubDataDir: () => dataDir, listAccounts: list,
-    sessionManager: { getSession: id => id === 'lead-0001' ? { id, kind: 'codeagent' } : null },
+    sessionManager: { getSession: id => id === 'lead-0001' ? { id, kind: 'codeagent' } : null, isAgentTurnActive: () => false },
     createSession: async request => { created.push(request); return { id: 'member-0001', kind: 'codeagent' }; },
     submitPrompt: async () => ({ ok: true }),
   });
-  t.after(() => service.stop());
+  t.after(() => { service.freeze(); service.stop(); });
   const args = { goal: 'model pause regression', members: [{ account: ids[0], role: 'review', task: 'verify' }] };
   quota.markModelAvoid(dataDir, ids[0], { model: 'GLM-5.2' });
   assert.equal((await service.invoke('lead-0001', 'accounts')).rows[0].usable, false);

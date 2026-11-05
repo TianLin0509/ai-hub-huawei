@@ -38,6 +38,8 @@ function fireHook(event, name, extra = {}) {
   if (!Array.isArray(groups)) return;
   const payload = JSON.stringify({ session_id: sessionId, transcript_path: transcript, cwd, hook_event_name: event, source: resumeId ? 'resume' : 'startup', ...extra });
   for (const group of groups) for (const hook of group.hooks || []) {
+    if (group.matcher && ['PreToolUse', 'PostToolUse', 'PostToolUseFailure'].includes(event)
+        && !new RegExp(group.matcher).test(String(extra.tool_name || ''))) continue;
     if (hook.type !== 'command' || !hook.command) continue;
     const r = spawnSync(hook.command, { input: payload, shell: true, timeout: 10000, windowsHide: true, env: process.env });
     if (log) fs.appendFileSync(log, JSON.stringify({ at: Date.now(), hook: name, status: r.status, hubSession: process.env.CLAUDE_HUB_SESSION_ID || null }) + '\n');

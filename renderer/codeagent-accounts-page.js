@@ -12,13 +12,14 @@ async function accountCommand(ipcRenderer, action, { id, note, dir, hours } = {}
   return result;
 }
 function createCodeagentAccountsPage({ document, window = document.defaultView, ipcRenderer, configModal, closeOtherPanels = () => {}, openSession = () => {}, notify = () => {} }) {
-  let page, pool = null, timer, revision = 0, disposed = false, pending = null;
+  const setup = require('./codeagent-setup').createCodeAgentSetup({ document, ipcRenderer });
+  let page, pool = null, timer, revision = 0, disposed = false, pending = null, scanDue = false;
   let locateId = '', locateUntil = 0, locateTimer;
   const state = { local: [], probing: new Set(), queue: [], drawer: false, note: '', menu: '', sub: false, filter: 'all', loading: false, busy: false, message: '' };
   function render() {
     if (!page || page.hidden || disposed) return;
     const next = document.createElement('template');
-    next.innerHTML = renderAccounts(pool, state);
+    next.innerHTML = renderAccounts(pool, { ...state, installed: setup.current?.installed });
     const main = page.querySelector('.caa-main'), content = next.content.querySelector('.caa-main');
     if (main) {
       const scroll = main.scrollTop;
@@ -60,17 +61,24 @@ function createCodeagentAccountsPage({ document, window = document.defaultView, 
     clearTimeout(timer);
     if (!page?.hidden && !disposed && ((pool?.accounts || []).some(a => a.state === 'login-required') || state.waitingPersonal)) timer = setTimeout(() => void refresh(), 3000);
   }
-  async function refresh() {
+  // The local-candidate scan reads every .cac* directory and is only needed for
+  // the import prompts. It runs on page entry, manual refresh, mutations that
+  // change candidates, and while the drawer is open; status polling and change
+  // notifications skip it. scanDue survives a superseded request, so a scan that
+  // was asked for still happens. importLocal re-validates in the main process.
+  async function refresh({ scan = false } = {}) {
     if (disposed || page?.hidden) return;
+    if (scan || state.drawer) scanDue = true;
     const request = ++revision;
     state.loading = true; render();
     const operation = (async () => {
       try {
-        const [status, local] = await Promise.all([accountCommand(ipcRenderer, 'refresh'), ipcRenderer.invoke('codeagent-pool:local').catch(error => ({ ok: false, error: error.message }))]);
+        const [status, local] = await Promise.all([accountCommand(ipcRenderer, 'refresh'), scanDue ? ipcRenderer.invoke('codeagent-pool:local').catch(error => ({ ok: false, error: error.message })) : null]);
         if (request !== revision || disposed) return;
         pool = status;
+        if (local) scanDue = false;
         if (local?.ok) state.local = local.candidates || [];
-        else state.message = '本机账号扫描失败：' + (local?.error || '稍后点刷新重试');
+        else if (local) state.message = '本机账号扫描失败：' + (local?.error || '稍后点刷新重试');
         if (pool.personal?.state === 'ready') state.waitingPersonal = false;
       } catch (error) { if (request === revision) { pool = { ok: false, error: error.message }; state.message = error.message; } }
       finally { if (request === revision) { state.loading = false; render(); poll(); } }
@@ -94,6 +102,12 @@ function createCodeagentAccountsPage({ document, window = document.defaultView, 
   }
   async function act(action, element) {
     const id = element?.dataset?.id;
+    if (action === 'install-guide') { setup.showGuide(); return; }
+    if (action === 'check-install') { await setup.refresh(); await refresh({ scan: true }); return; }
+    if (['login', 'add', 'probe', 'probe-all', 'session', 'drawer'].includes(action)) {
+      await setup.refresh();
+      if (setup.current?.installed === false) { setup.showGuide(); return; }
+    }
     if (action === 'filter') {
       const filter = element?.dataset?.filter;
       if (!['all', 'usable', 'needs'].includes(filter)) return;
@@ -103,13 +117,13 @@ function createCodeagentAccountsPage({ document, window = document.defaultView, 
     }
     if (action === 'menu') { state.menu = state.menu === id ? '' : id; state.sub = false; render(); return; }
     if (action === 'pause-menu') { state.sub = !state.sub; render(); return; }
-    if (action === 'drawer' || action === 'close-drawer') { state.drawer = action === 'drawer'; state.menu = ''; render(); if (state.drawer) page.querySelector('#ca-note')?.focus(); return; }
+    if (action === 'drawer' || action === 'close-drawer') { state.drawer = action === 'drawer'; state.menu = ''; render(); if (state.drawer) { page.querySelector('#ca-note')?.focus(); void refresh({ scan: true }); } return; }
     if (action === 'session') {
       const account = id === 'personal' ? pool?.personal : pool?.accounts?.find(a => a.id === id);
       if (!canStartAccount(account, { personal: id === 'personal' })) { message('这个账号暂时不可用，请先恢复使用或重新登录'); return; }
       close(); openSession(id); return;
     }
-    if (action === 'refresh') { state.message = ''; await refresh(); return; }
+    if (action === 'refresh') { state.message = ''; await refresh({ scan: true }); return; }
     if (action === 'probe' || action === 'probe-all') {
       const personal = pool?.personal || {};
       const ids = action === 'probe' ? [id] : [...((personal.state === 'ready' || (!personal.state && personal.present)) ? ['personal'] : []), ...(pool?.accounts || []).filter(a => a.state === 'ready' && !a.sameAsPersonal && !a.duplicateOf).map(a => a.id)];
@@ -126,7 +140,7 @@ function createCodeagentAccountsPage({ document, window = document.defaultView, 
       if (action === 'login' && id === 'personal') state.waitingPersonal = true;
       const notes = { add: '已打开登录窗口，请账号主人完成登录', login: '已打开登录窗口，请完成登录', import: '已导入号池', pause: '已暂停使用，进行中的会话不受影响', resume: '已恢复使用', remove: '已移出号池' };
       message(notes[action] || '账号已更新');
-      await refresh();
+      await refresh({ scan: action === 'import' || action === 'remove' });
     } finally { state.busy = false; render(); poll(); }
   }
   function build() {
@@ -158,7 +172,9 @@ function createCodeagentAccountsPage({ document, window = document.defaultView, 
     for (const hook of ['__companyAssistantHide', '__companyMeetingHide', '__companyRoomsHide', '__companyPptHide', '__assistantHide', '__cloudHide', '__wirelessHide', '__rulesHide', '__writingHide', '__xresearchHide', '__studyHide', '__ranHide']) window[hook]?.();
     page.hidden = false; document.body.classList.add('codeagent-accounts-page-open');
     document.getElementById('btn-rail-accounts')?.classList.add('active'); document.getElementById('btn-rail-accounts')?.setAttribute('aria-expanded', 'true'); window.setShellNavActive?.('btn-rail-accounts');
-    window.addEventListener('resize', place); place(); render(); await refresh();
+    window.addEventListener('resize', place); place(); render();
+    await setup.refresh().catch(error => { state.message = '安装检测失败：' + error.message; });
+    await refresh({ scan: true });
     locateAccount();
   }
   function close() {
@@ -173,11 +189,12 @@ function createCodeagentAccountsPage({ document, window = document.defaultView, 
     else if (state.menu && !event.target.closest('.caa-actions')) { state.menu = ''; render(); }
   }
   const changed = () => { if (page && !page.hidden) void refresh(); };
+  const unsubscribeSetup = setup.subscribe(status => { if (!status.installed) { state.drawer = false; state.menu = ''; } render(); });
   document.addEventListener('click', onNav); ipcRenderer.on('codeagent-pool:changed', changed);
   document.getElementById('btn-rail-accounts')?.setAttribute('aria-controls', 'codeagent-accounts-page');
   window.__codeagentAccountsOpen = open; window.__codeagentAccountsHide = close;
   return { open, close, isOpen: () => !!page && !page.hidden, refresh, destroy() {
-    disposed = true; close(); state.queue = []; ipcRenderer.removeListener('codeagent-pool:changed', changed);
+    disposed = true; close(); unsubscribeSetup(); state.queue = []; ipcRenderer.removeListener('codeagent-pool:changed', changed);
     document.removeEventListener('click', onNav); page?.remove();
   }, whenIdle: () => pending || Promise.resolve() };
 }

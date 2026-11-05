@@ -12,7 +12,7 @@ const PROVIDERS = Object.freeze([
   { id: 'gemini', name: 'Gemini CLI', command: 'gemini', login: 'gemini', docs: 'https://github.com/google-gemini/gemini-cli' },
   { id: 'kimi', name: 'Kimi Code', command: 'kimi', login: 'kimi login', docs: 'https://github.com/MoonshotAI/kimi-cli' },
   // 公司内网的 Code Agent CLI（Claude 形态，见 docs/COMPANY-CODE-AGENT.md）；只在公司电脑上会被检测到。
-  { id: 'codeagent', name: 'CodeAgent', command: 'codeagent', login: 'codeagent auth login', docs: 'https://github.com/TianLin0509/ai-hub-huawei/blob/main/docs/COMPANY-CODE-AGENT.md' },
+  { id: 'codeagent', name: 'CodeAgent', command: 'codeagent', login: 'codeagent auth login', docs: '', bundledGuide: 'codeagent' },
 ]);
 
 function searchDirs(command, env, platform) {

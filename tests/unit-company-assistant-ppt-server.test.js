@@ -111,6 +111,7 @@ test('关闭Hub前未到达的超时结果在下次连接清理，不重放原�
   const f = fixture(t); await f.doctor.call('status');
   await assert.rejects(f.doctor.call('search', { delayMs: 400, echo: 'abandoned' }, { timeoutMs: 100 }), error => error.code === 'DOCTOR_TIMEOUT');
   f.doctor.close(); await f.doctor.server.close(); await until(() => f.rows().some(row => row.phase === 'stopped'));
+  await until(() => fs.readdirSync(path.join(f.spool(), 'responses')).length === 1);
   assert.equal(fs.readdirSync(path.join(f.spool(), 'responses')).length, 1);
   const next = fixture(t, {}, f.assistant); await next.doctor.call('status');
   await until(() => fs.readdirSync(path.join(f.spool(), 'responses')).length === 0);

@@ -6,6 +6,14 @@ const { metric, idleView, quotaView, readTime, renderQuota, metricTitle } = requ
 const now = Date.parse('2026-11-04T06:05:00Z');
 const row = overrides => ({ id: 'pool-a', state: 'ready', personal: false, label: '研发号', activeSessions: 2, ...overrides });
 
+test('未安装时额度栏统一指向安装说明，安装后恢复登录状态与读数', () => {
+  const snapshot = { rows: [row({ state: 'login-required', personal: true })] };
+  const missing = renderQuota(quotaView(snapshot, { installed: false }));
+  assert.match(missing, /CodeAgent 未安装/); assert.match(missing, /data-qp-action="install-guide"/);
+  assert.doesNotMatch(missing, /需登录|未读取/);
+  assert.match(renderQuota(quotaView(snapshot, { installed: true })), /需登录/);
+});
+
 test('usage percentages are used while Stats percentages are remaining, and buckets stay separate', () => {
   const a = row({ credit: { busyDay: { pct: 38, used: 38, total: 100 }, monthly: { pct: 12, used: 60, total: 500 } },
     creditAt: now - 1000, creditReading: { bucket: '今日忙时', pct: 45, remaining: 45, total: 100 }, creditReadingAt: now });

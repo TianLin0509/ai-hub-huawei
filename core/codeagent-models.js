@@ -337,7 +337,7 @@ const MENU_FILE = 'codeagent-account-menu-models.json';
 function readMenuEntry(dataDir, key = 'personal') {
   if (!dataDir) return null;
   try {
-    const raw = JSON.parse(fs.readFileSync(path.join(dataDir, MENU_FILE), 'utf8'));
+    const raw = JSON.parse(require('./read-scope').readTextInScope(path.join(dataDir, MENU_FILE)));
     const entry = raw?.accounts?.[key];
     return entry?.complete === true && Array.isArray(entry.models) ? { ...entry, models: entry.models.map(clean).filter(isSafeModelId) } : null;
   } catch { return null; }

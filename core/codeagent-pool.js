@@ -117,7 +117,7 @@ function listAccounts(dataDir, { activeCounts = {}, personalAccountId = '', now 
     if (creds.accountId && !seen.has(creds.accountId)) seen.set(creds.accountId, a.id);
     return {
       id: a.id, note: a.note, createdAt: a.createdAt, lastAssignedAt: a.lastAssignedAt, dir,
-      state, method: creds.method || null, accountLabel: maskAccountId(creds.accountId), expiresAt: creds.expiresAt || null,
+      state, method: creds.method || null, accountLabel: maskAccountId(creds.accountId), expiresAt: creds.expiresAt || null, renewable: !!creds.renewable || creds.method === 'devuc',
       ...(creds.detail ? { credentialsNote: creds.detail } : {}),
       models: configured.models, modelsAuthoritative: configured.authoritative, defaultModel: configured.defaultModel || '',
       // 号自己 settings.json 写的模型与严格判定的说明（账号即模型，号表和直查标「默认模型未知 / 写的不在清单里」）
@@ -511,6 +511,9 @@ function openLoginWindow(dataDir, id, config, { env = process.env, spawnFn = req
     return { fixture: true };
   }
   if (process.platform !== 'win32') throw new Error('号池登录只支持 Windows');
+  if (!require('./community-setup').findCommand('codeagent', { ...env, AI_HUB_CODEAGENT_COMMAND: config.command || env.AI_HUB_CODEAGENT_COMMAND })) {
+    throw new Error('CodeAgent 未安装，请先在 Hub 中查看安装说明，安装后重新检测');
+  }
   const childEnv = { ...env, [config.configDirEnv]: dir };
   require('./codeagent-launch-env').applyAccountEnv(childEnv, { ...config, configDir: dir });
   for (const key of Object.keys(childEnv)) if (/^CODEAGENT_HUB_/.test(key) || key === 'CODEAGENT3_LAUNCHER_PID') delete childEnv[key];

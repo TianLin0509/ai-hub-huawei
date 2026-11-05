@@ -145,10 +145,10 @@
 
   // ① 「进展」页
   const GROUPS = [
-    { key: 'decide', title: '待你拍板', cls: 'decide' },
-    { key: 'risk', title: '有风险 / 卡住 / 久未更新', cls: 'risk' },
-    { key: 'ok', title: '进行中', cls: 'ok' },
-    { key: 'done', title: '已完成，待验收', cls: 'done' },
+    { key: 'decide', title: '待你拍板', cls: 'decide', empty: 'Agent 需要你定方向时，问题和推荐会出现在这里。' },
+    { key: 'risk', title: '有风险或卡住', cls: 'risk', empty: '卡上写了有风险或卡住，或会话在跑却 40 分钟没更新时，出现在这里。' },
+    { key: 'ok', title: '进行中', cls: 'ok', empty: '长任务开跑后，Agent 每到一个阶段更新一次白话进展。' },
+    { key: 'done', title: '已完成，待验收', cls: 'done', empty: 'Agent 把卡标成已完成后放在这里，等你验收。' },
   ];
   function groupOf(c) {
     if (c.group === 'decide' && !pending(c)) {          // 手动标了处理：按卡上的状态重新归栏
@@ -165,7 +165,7 @@
     if (root) return true;
     root = document.getElementById('progress-panel');
     if (!root) return false;
-    root.innerHTML = `<header class="pg-head"><h2>进展</h2><p id="pg-subtitle"></p></header><div class="pg-cols" id="pg-cols"></div>`;
+    root.innerHTML = `<header class="pg-head"><h2>进展</h2><p id="pg-subtitle"></p></header><div class="pg-board"><div class="pg-cols" id="pg-cols"></div></div>`;
     root.addEventListener('toggle', e => { if (e.target.matches && e.target.matches('.pg-older')) olderOpen = e.target.open; }, true);
     root.addEventListener('click', e => {
       const done = e.target.closest('[data-pg-dismiss]');
@@ -199,7 +199,7 @@
       : older.length ? `眼下没有活跃的进展卡，${older.length} 张较早的卡收在下面。` : '还没有会话在维护进展卡。连续跑 30 分钟以上的任务，Agent 会在任务目录建一张进展卡，这里就会出现。';
     root.querySelector('#pg-cols').innerHTML = GROUPS.map(g => {
       const xs = by(g.key);
-      return `<section class="pg-col" data-pg-group="${g.key}"><h3><i class="pg-dot pg-${g.cls}"></i>${esc(g.title)}（${xs.length}）</h3>${xs.map(boardCard).join('') || '<div class="pg-empty">暂无</div>'}</section>`;
+      return `<section class="pg-col" data-pg-group="${g.key}"><h3><i class="pg-dot pg-${g.cls}"></i>${esc(g.title)}（${xs.length}）</h3>${xs.map(boardCard).join('') || `<div class="pg-empty">${esc(g.empty)}</div>`}</section>`;
     }).join('') + (older.length ? `<details class="pg-older"${olderOpen ? ' open' : ''}><summary>较早的进展卡（${older.length}）· 超过 24 小时没更新、会话也没在跑</summary><div class="pg-older-list">${older.map(boardCard).join('')}</div></details>` : '');
   }
   function setNavCount() {

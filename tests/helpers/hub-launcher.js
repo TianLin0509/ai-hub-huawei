@@ -192,15 +192,45 @@ function _httpCloseTarget(url, timeoutMs = 1500) {
   });
 }
 
-async function _verifyCdpPortOwner(port, expectedPid, execFile = execFileAsync) {
+async function _verifyCdpPortOwner(port, expectedPid, execFile = execFileAsync, onDiagnostic = null) {
   const numericPort = Number(port);
   const numericPid = Number(expectedPid);
+  const diagnostic = typeof onDiagnostic === 'function' ? { port: numericPort, expectedPid: numericPid, queries: [] } : null;
+  const finish = (verified, outcome) => {
+    if (!diagnostic) return verified;
+    diagnostic.verified = verified; diagnostic.outcome = outcome;
+    // Diagnostics must never relax verification or prevent the existing cleanup.
+    try { if (typeof onDiagnostic === 'function') onDiagnostic(diagnostic); } catch {}
+    return verified;
+  };
+  const queryFailed = (query, error) => {
+    if (!query) return;
+    try {
+    query.elapsedMs = Math.max(0, Date.now() - query.startedAt);
+    query.outcome = 'query-failed';
+    // execFile.message may embed the command, stdout and unrelated ports. Only
+    // retain structured execution status; never attach raw command output.
+    query.error = { name: error?.name || 'Error', code: error?.code ?? null,
+      exitCode: Number.isInteger(error?.code) ? error.code : null,
+      signal: error?.signal || null, killed: error?.killed === true,
+      timedOut: error?.code === 'ETIMEDOUT' || error?.timedOut === true
+        || (error?.killed === true && query.elapsedMs >= query.timeoutMs && error?.code !== 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') };
+    } catch { query.diagnosticError = 'Query error metadata unavailable'; }
+  };
+  const queried = (query, owners) => {
+    if (!query) return;
+    query.elapsedMs = Math.max(0, Date.now() - query.startedAt);
+    query.owners = [...new Set(owners.filter(pid => pid > 0))];
+    query.outcome = owners.includes(numericPid) ? 'matched' : query.owners.length ? 'pid-mismatch' : 'no-listener';
+  };
   if (!Number.isInteger(numericPort) || numericPort <= 0
-      || !Number.isInteger(numericPid) || numericPid <= 0) return false;
-  if (process.platform !== 'win32') return false;
+      || !Number.isInteger(numericPid) || numericPid <= 0) return finish(false, 'invalid-arguments');
+  if (process.platform !== 'win32') return finish(false, 'unsupported-platform');
   // netstat is substantially faster and less prone to transient CIM provider
   // stalls than Get-NetTCPConnection on a machine with many short-lived E2E
   // Electron processes. Parse only LISTENING rows for this exact local port.
+  const netstatQuery = diagnostic ? { method: 'netstat', startedAt: Date.now(), timeoutMs: 3000, owners: [] } : null;
+  if (diagnostic) diagnostic.queries.push(netstatQuery);
   try {
     const result = await execFile('netstat.exe', ['-ano', '-p', 'TCP'], {
       windowsHide: true,
@@ -216,14 +246,17 @@ async function _verifyCdpPortOwner(port, expectedPid, execFile = execFileAsync) 
         && String(parts[3]).toUpperCase() === 'LISTENING')
       .map(parts => Number(parts[parts.length - 1]))
       .filter(Number.isInteger);
-    if (owners.length > 0) return owners.includes(numericPid);
-  } catch {}
+    queried(netstatQuery, owners);
+    if (owners.length > 0) return finish(owners.includes(numericPid), owners.includes(numericPid) ? 'matched' : 'pid-mismatch');
+  } catch (error) { queryFailed(netstatQuery, error); }
 
   const script = [
     "$ErrorActionPreference='Stop'",
     `$owners = @(Get-NetTCPConnection -State Listen -LocalPort ${numericPort} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess)`,
     "[Console]::Out.Write(($owners -join ','))",
   ].join('; ');
+  const powershellQuery = diagnostic ? { method: 'powershell', startedAt: Date.now(), timeoutMs: 5000, owners: [] } : null;
+  if (diagnostic) diagnostic.queries.push(powershellQuery);
   try {
     const result = await execFile('powershell.exe', [
       '-NoLogo',
@@ -236,16 +269,18 @@ async function _verifyCdpPortOwner(port, expectedPid, execFile = execFileAsync) 
       .split(',')
       .map(value => Number(value.trim()))
       .filter(Number.isInteger);
-    return owners.includes(numericPid);
-  } catch {
-    return false;
+    queried(powershellQuery, owners);
+    return finish(owners.includes(numericPid), owners.includes(numericPid) ? 'matched' : owners.some(pid => pid > 0) ? 'pid-mismatch' : 'no-listener');
+  } catch (error) {
+    queryFailed(powershellQuery, error);
+    return finish(false, 'query-failed');
   }
 }
 
-async function _waitForCdpPortOwner(port, expectedPid, timeoutMs = 1500, verify = _verifyCdpPortOwner) {
+async function _waitForCdpPortOwner(port, expectedPid, timeoutMs = 1500, verify = _verifyCdpPortOwner, onDiagnostic = null) {
   const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
   do {
-    if (await verify(port, expectedPid)) return true;
+    if (await (onDiagnostic ? verify(port, expectedPid, undefined, onDiagnostic) : verify(port, expectedPid))) return true;
     if (Date.now() >= deadline) break;
     await _waitMs(100);
   } while (true);
@@ -437,7 +472,7 @@ function _assertCleanHubExit(hub, context) {
 // node-pty callbacks safely. The verifier must wait longer than that contract;
 // an 8s test timeout otherwise force-kills a healthy stress run mid-drain and
 // reports the harness timeout as a product crash.
-async function gracefulQuit(hub, { timeoutMs = 20_000, allowAlreadyExited = false } = {}) {
+async function gracefulQuit(hub, { timeoutMs = 20_000, allowAlreadyExited = false, captureDiagnostics = false } = {}) {
   if (!hub) return { exitCode: null, exitSignal: null, forced: false };
   if (!hub.isAlive || !hub.isAlive()) {
     const cleanExit = _assertCleanHubExit(hub, 'exited before teardown');
@@ -446,15 +481,41 @@ async function gracefulQuit(hub, { timeoutMs = 20_000, allowAlreadyExited = fals
     error.exit = cleanExit;
     throw error;
   }
-  if (!hub.identityVerified || !await _waitForCdpPortOwner(hub.port, hub.pid, 1000)) {
+  const ownerChecks = captureDiagnostics ? [] : null;
+  if (!hub.identityVerified || !await (captureDiagnostics
+    ? _waitForCdpPortOwner(hub.port, hub.pid, 1000, _verifyCdpPortOwner, evidence => ownerChecks.push(evidence))
+    : _waitForCdpPortOwner(hub.port, hub.pid, 1000))) {
     // The CDP listener can disappear a fraction before Electron emits `exit`.
     // Never attach to or close an unverified port, but allow the exact spawned
     // child a short window to finish a clean shutdown on its own.
     const exitDeadline = Date.now() + 1000;
     while (Date.now() < exitDeadline && hub.isAlive()) await _waitMs(100);
     if (!hub.isAlive()) return _assertCleanHubExit(hub, 'clean exit while CDP listener closed');
+    const snapshotChild = () => {
+      if (!captureDiagnostics) return null;
+      try { return { spawnedPid: hub.child?.pid ?? null, reportedAlive: hub.isAlive(),
+      childExitCode: hub.child?.exitCode ?? null, childSignal: hub.child?.signalCode ?? null,
+      observedExitCode: typeof hub.exitCode === 'function' ? hub.exitCode() : null,
+      observedExitSignal: typeof hub.exitSignal === 'function' ? hub.exitSignal() : null,
+      killed: hub.child?.killed === true }; }
+      catch { return { diagnosticError: 'Child snapshot unavailable' }; }
+    };
+    const beforeTermination = snapshotChild();
     const termination = await _terminateSpawnedChild(hub.child);
-    const error = new Error(`[${hub.label || 'hub'}] CDP identity changed; refused to close an unverified target`);
+    if (!captureDiagnostics) {
+      const error = new Error(`[${hub.label || 'hub'}] CDP identity changed; refused to close an unverified target`);
+      error.termination = termination;
+      throw error;
+    }
+    const diagnostic = { port: hub.port, expectedPid: hub.pid, initialIdentityVerified: hub.identityVerified === true,
+      outcome: ownerChecks.at(-1)?.outcome || 'initial-identity-unverified', checks: ownerChecks };
+    const childState = { beforeTermination, afterTermination: snapshotChild() };
+    let serialized;
+    try { serialized = JSON.stringify({ ...diagnostic, childState }); }
+    catch { serialized = '{"diagnosticError":"Diagnostic serialization unavailable"}'; }
+    const error = new Error(`[${hub.label || 'hub'}] CDP listener owner verification failed (${diagnostic.outcome}); refused CDP close on an unverified port; diagnostics=${serialized}`);
+    error.cdpOwnershipDiagnostics = diagnostic;
+    error.childState = childState;
     error.termination = termination;
     throw error;
   }

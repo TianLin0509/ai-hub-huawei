@@ -2,6 +2,7 @@
 const { MeetingCapture } = require('./meeting-capture');
 const { meetingTemplate } = require('./company-meeting-template');
 const { flowEntries, meetingNavigation } = require('./company-meeting-flow');
+const { meetingAsrState } = require('./company-meeting-asr-state');
 function createCompanyMeetingPage({ document, window, call, markdown, openSession }) {
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const time = ms => `${String(Math.floor((ms || 0) / 60000)).padStart(2, '0')}:${String(Math.floor((ms || 0) / 1000) % 60).padStart(2, '0')}`;
@@ -22,7 +23,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
     while ((node = walker.nextNode())) if (!node.parentElement.closest('a,button,code,pre') && /\[(?:事件\s*\d+|画面\s*\d+:\d{2})\]/.test(node.textContent)) nodes.push(node);
     for (const node of nodes) {
       const fragment = document.createDocumentFragment(), text = node.textContent; let last = 0;
-      for (const match of text.matchAll(/\[(?:事件\s*(\d+)|画面\s*(\d+):(\d{2}))\]/g)) { fragment.append(document.createTextNode(text.slice(last, match.index))); const button = document.createElement('button'); button.className = 'ca-link'; if(match[1])button.dataset.event = match[1];else button.dataset.playAt=String((Number(match[2])*60+Number(match[3]))*1000); button.textContent = match[0]; fragment.append(button); last = match.index + match[0].length; }
+      for (const match of text.matchAll(/\[(?:事件\s*(\d+)|画面\s*(\d+):(\d{2}))\]/g)) { fragment.append(document.createTextNode(text.slice(last, match.index))); const button = document.createElement('button'); button.className = 'ca-link'; if(match[1]){button.dataset.event = match[1]; const at = state.meeting?.events?.find(x => x.seq === Number(match[1]))?.at; button.textContent = '事件 ' + match[1]; button.title = Number.isFinite(at) ? '跳到 ' + time(at) : '查看事件 ' + match[1];}else{button.dataset.playAt=String((Number(match[2])*60+Number(match[3]))*1000); button.textContent = '画面 ' + match[2] + ':' + match[3]; button.title = '跳到 ' + match[2] + ':' + match[3];} fragment.append(button); last = match.index + match[0].length; }
       fragment.append(document.createTextNode(text.slice(last))); node.replaceWith(fragment);
     }
   }
@@ -139,6 +140,12 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       const history = '<option value="">历史会议…</option>' + state.meetings.map(x => `<option value="${esc(x.id)}" ${x.id === id ? 'selected' : ''}>${esc(x.title)} · ${shortDate(x.startedAt)}</option>`).join('');
       if (el('history').dataset.html !== history) { el('history').innerHTML = history; el('history').dataset.html = history; }
       el('asr').textContent = asr.error || asr.phase || (asr.ready ? '本地转写已就绪 · CPU 模式' : '首次使用可安装独立本地转写组件（模型约 500 MB）；未安装也可先录音，之后补转写。');
+      const speech = meetingAsrState(asr, m);
+      el('setup-asr').textContent = speech.setupText;
+      el('setup-asr-install').hidden = !speech.install;
+      el('setup-asr-install').textContent = speech.installLabel;
+      root.querySelectorAll('[data-act="install"]').forEach(button => { button.disabled = speech.installing; });
+      if (asr.ready) el('record-only-confirm').hidden = true;
       const phase = m ? ({ recording: capture?.paused ? '已暂停' : '采集中', paused:'已暂停', ended:'已结束', interrupted:'采集已中断' })[m.state] : '尚未开始';
       el('record-label').textContent = phase;
       el('record-dot').dataset.state = capture?.running && !capture.paused ? 'recording' : capture?.running ? 'paused' : m ? 'ended' : 'idle';
@@ -163,7 +170,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       root.querySelector('[data-act="pause"]').classList.toggle('is-paused', !!capture?.paused);
       for (const name of ['mark','snap']) root.querySelector(`[data-act="${name}"]`).disabled = !capture?.running || capture.paused;
       for (const name of ['understand','ask','export','retry-asr']) root.querySelector(`[data-act="${name}"]`).disabled = !m;
-      root.querySelector('[data-act="start"]').disabled = !!capture?.running;
+      root.querySelector('[data-act="start"]').disabled = !!capture?.running || !el('record-only-confirm').hidden;
       root.querySelector('[data-act="pause"] span').textContent = capture?.paused ? '继续' : '暂停';
       root.querySelector('[data-act="retry-save"]').hidden = !(capture?.saveError || capture?.recorder?.queue.length || capture?.queue.length);
       el('history').disabled = busy || !!capture?.running;
@@ -207,8 +214,16 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
     if (op === 'new') { selectMeeting(''); el('title').value = ''; el('title').focus(); return; }
     if (op === 'sources') { const r = await call('meeting-sources'); sourceList = r.sources; root.querySelector('[data-m="source"]').innerHTML = sourceList.map(s => `<option value="${esc(s.id)}">${esc(s.name)}</option>`).join(''); renderSourceGrid(); preview(); return; }
     if (op === 'install') { await call('meeting-asr-install'); await refresh(); return; }
-    if (op === 'start') {
+    if (op === 'cancel-record-only') { el('record-only-confirm').hidden = true; const start = root.querySelector('[data-act="start"]'); start.disabled = false; start.focus(); return; }
+    if (op === 'start' || op === 'start-without-asr') {
       const selected = root.querySelector('[data-m="source"]').value; if (!selected) throw new Error('先刷新并选择共享窗口');
+      if (op === 'start' && !state?.asr?.ready) {
+        el('record-only-confirm').hidden = false;
+        root.querySelector('[data-act="start-without-asr"]').focus();
+        return;
+      }
+      if (op === 'start-without-asr' && el('record-only-confirm').hidden) return;
+      el('record-only-confirm').hidden = true;
       const crop = {}; for (const k of ['x', 'y', 'w', 'h']) crop[k] = Number(root.querySelector(`[data-crop="${k}"]`).value) / 100;
       if (Object.values(crop).some(v => !Number.isFinite(v)) || crop.x < 0 || crop.y < 0 || crop.w <= 0 || crop.h <= 0 || crop.x + crop.w > 1 || crop.y + crop.h > 1) throw new Error('截图区域应在画面范围内');
       const audio = { system: root.querySelector('[data-m="system"]').checked, mic: root.querySelector('[data-m="mic"]').checked };
@@ -243,8 +258,10 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
     const box = el('review-hero'); if (!box) return;
     if (!m) { if (box.dataset.html) { box.innerHTML = ''; box.dataset.html = ''; } return; }
     const slides = (m.events || []).filter(e => e.kind === 'slide').length, minutes = Math.round((m.capturedMs || 0) / 60000);
-    const ready = !!m.summary && !(m.job && m.job.state !== 'error' && m.job.kind !== 'prime');
-    const html = `<div class="hw-row"><span class="hw-tag ${ready ? 'green' : 'amber'}">${ready ? '纪要已生成' : '纪要整理中'}</span><span class="hw-meta">${esc(shortDate(m.startedAt))} · 第 ${esc(m.revision ?? 0)} 版</span></div>`
+    const speech = meetingAsrState(state?.asr, m);
+    const speechAction = speech.reviewAction ? `<button class="ca-btn" data-act="${speech.reviewAction}"${speech.reviewAction === 'install' && speech.installing ? ' disabled' : ''}>${speech.reviewAction === 'install' ? esc(speech.installLabel) : '重试失败转写'}</button>` : '';
+    const html = `<div class="hw-row"><span class="hw-tag ${speech.reviewReady ? 'green' : 'amber'}">${esc(speech.reviewText)}</span>${speechAction}<span class="hw-meta">${esc(shortDate(m.startedAt))} · 第 ${esc(m.revision ?? 0)} 版</span></div>`
+      + (speech.pending && (state?.asr?.phase || state?.asr?.error) ? `<p class="meeting-asr">${esc(speech.setupText)}</p>` : '')
       + `<h2>${esc(m.title || '本地会议记录')}</h2>`
       + `<div class="hw-facts"><div><b>${minutes}<span> 分钟</span></b><small>会议时长</small></div><div><b>${slides}</b><small>张画面</small></div><div><b>${(m.events || []).filter(e => e.kind === 'mark').length}</b><small>条重点</small></div><div><b>${m.answers?.length || 0}</b><small>条问答</small></div></div>`;
     if (box.dataset.html !== html) { box.innerHTML = html; box.dataset.html = html; }
@@ -326,6 +343,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
   }
   function markActive() { root.querySelectorAll('[data-m="timeline"] [data-event], [data-m="topics"] [data-event]').forEach(b => { const active = Number(b.dataset.event) === activeSeq; b.classList.toggle('is-active', active); if (b.dataset.topic) b.setAttribute('aria-current', String(active)); }); }
   function selectMeeting(value) {
+    el('record-only-confirm').hidden = true;
     id = value || null; activeSeq = null; revealQuestion = false; evidenceRequest++; resetPlayer(); view('empty'); message(''); el('more').open = false;
     el('history').value = value || ''; el('timeline').dataset.stamp = ''; el('timeline').innerHTML = ''; el('evidence').innerHTML = '';
     void refresh().catch(e => message(e.message));

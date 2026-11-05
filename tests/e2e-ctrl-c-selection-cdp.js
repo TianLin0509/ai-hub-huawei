@@ -106,18 +106,26 @@ async function main() {
     await runExternalWriteCase('external-revert-to-old', SENTINEL, true);
     await runExternalWriteCase('external-newer-copy-wins', NEWER, false);
     for (const r of evidence.cases) assert.ok(r.ok, `${r.name}: ${JSON.stringify(r)}`);
-    evidence.passed = true;
+    evidence.uiChecksPassed = true;
   } catch (error) { evidence.error = error.stack; process.exitCode = 1;
-    if(c) evidence.viewport = await c.eval('({width:innerWidth,height:innerHeight,events:window.__copyResizeEvents,ready:!!window.__hubE2E})').catch(()=>null); }
+    if(c) {
+      evidence.viewport = await c.eval('({width:innerWidth,height:innerHeight,events:window.__copyResizeEvents,ready:!!window.__hubE2E})').catch(()=>null);
+      await c.send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false}).then(r=>fs.writeFileSync(path.join(out,'failure.png'),Buffer.from(r.data,'base64'))).catch(e=>{evidence.screenshotError=String(e);});
+    } }
   finally {
-    if (c) await c.close().catch(() => {});
-    if (hub) evidence.exit = await gracefulQuit(hub).catch(error => { evidence.quitError = String(error); });
+    if (c) await c.close().catch(error => { evidence.cdpCloseError = String(error); process.exitCode = 1; });
+    if (hub) {
+      evidence.exit = await gracefulQuit(hub).catch(error => { evidence.quitError = String(error); process.exitCode = 1; });
+      fs.writeFileSync(path.join(out,'hub.log'),hub.log().join('\n'),'utf8');
+      hub.child.stdout?.destroy(); hub.child.stderr?.destroy(); hub.child.stdin?.destroy();
+    }
     if (backedUp) {
       const files = [...testTexts].filter(Boolean).map((text, i) => { const f = path.join(root, `text-${i}.txt`); fs.writeFileSync(f, text, 'utf8'); return f; });
       try { evidence.restore = ps(['restore', backupDir, '-TextFile', files.join(';')]);
         if(evidence.restore.startsWith('RESTORED')) evidence.restoreVerified = ps(['verify', backupDir]); }
       catch (error) { evidence.restoreError = String(error); process.exitCode = 1; }
     }
+    evidence.passed = evidence.uiChecksPassed === true && !process.exitCode;
     fs.writeFileSync(path.join(out,'20261104-clipboard-evidence-m3.json'),JSON.stringify(evidence,null,2));
     console.log(JSON.stringify(evidence, null, 2));
   }

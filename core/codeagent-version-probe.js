@@ -45,4 +45,10 @@ function codeagentVersion(command) {
   return promise;
 }
 
-module.exports = { codeagentVersion, parseCodeAgentVersion, CODEAGENT_VERSION_TIMEOUT_MS };
+// 已有探测（进行中或 10 分钟内）的结果；没有，或探测早于 notBefore（程序文件之后被换过）时返回 null。不会新起进程。
+function peekCodeAgentVersion(command, { notBefore = 0 } = {}) {
+  if (!versionCache || versionCache.command !== command || versionCache.at < notBefore || Date.now() - versionCache.at >= 10 * 60000) return null;
+  return versionCache.promise;
+}
+
+module.exports = { codeagentVersion, peekCodeAgentVersion, parseCodeAgentVersion, CODEAGENT_VERSION_TIMEOUT_MS };

@@ -47,7 +47,9 @@ function meetingTemplate() {
       <section class="meeting-setup-card" data-m="setup"><div class="meeting-setup-main"><h3>准备开始一场会议</h3><p>选好共享窗口和声音来源。录像和声音只留在本机，CodeAgent 只读取提炼后的图文。</p><div class="meeting-setup">
         <label class="meeting-field"><span>会议名称</span><input data-m="title" aria-label="会议名称" placeholder="可选，例如：无线算法周例会"></label>
         <div class="meeting-field"><span>采集声音</span><span class="meeting-inline"><label class="meeting-chip"><input type="checkbox" data-m="system" checked>${icon(ICONS.speaker,15)}系统声音</label><label class="meeting-chip"><input type="checkbox" data-m="mic" checked>${icon(ICONS.mic,15)}麦克风</label></span></div>
-      </div><div class="meeting-setup-go"><button class="ca-btn primary meeting-start" data-act="start"><i></i><span>开始会议</span></button><small>开始后可随时暂停</small></div></div>
+      </div><div class="meeting-asr meeting-inline" role="status"><span data-m="setup-asr">正在检查本地转写…</span><button class="ca-btn" data-act="install" data-m="setup-asr-install" hidden>现在安装</button></div>
+      <div class="meeting-asr" data-m="record-only-confirm" role="group" aria-label="缺少本地转写，确认继续" hidden><p>先只录音，装好转写后再出纪要。共享窗口也会保存在本机。</p><div class="meeting-inline"><button class="ca-btn primary" data-act="start-without-asr">先只录音</button><button class="ca-btn" data-act="cancel-record-only">取消</button></div></div>
+      <div class="meeting-setup-go"><button class="ca-btn primary meeting-start" data-act="start"><i></i><span>开始会议</span></button><small>开始后可随时暂停</small></div></div>
       <div class="meeting-setup-sources"><div class="meeting-setup-sources-head"><h3>共享哪个窗口</h3><button class="ca-btn" data-act="sources">刷新</button></div><select data-m="source" aria-label="共享窗口"></select><div class="meeting-source-grid" data-m="source-grid" role="radiogroup" aria-label="选择共享窗口"></div></div></section>
       <section class="meeting-viewer">
         <div class="meeting-stage" data-view="empty"><video data-m="live" muted playsinline aria-label="正在采集的共享画面"></video><video data-m="player" preload="metadata" aria-label="会议录像回放"></video><div data-m="evidence"></div><div class="meeting-stage-empty">选择时间流中的一处，回看对应画面</div></div>

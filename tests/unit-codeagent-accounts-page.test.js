@@ -6,6 +6,46 @@ const { renderAccounts } = require('../renderer/codeagent-accounts-view');
 const { accountCommand } = require('../renderer/codeagent-accounts-page');
 const { renderAccountOption } = require('../renderer/codeagent-accounts-view');
 
+test('未检测到 CodeAgent 时保留已有号池与管理，安装后恢复登录和新建', () => {
+  const pool = { personal: { state: 'login-required' }, accounts: [{ id: 'saved-account', note: '已有账号甲', state: 'ready', models: ['model-one'], activeSessions: 2 }] };
+  const missing = renderAccounts(pool, { installed: false });
+  assert.match(missing, /未检测到 CodeAgent/);
+  const personalRow = missing.match(/<section class="caa-me-card"[\s\S]*?<\/section>/)[0];
+  assert.match(personalRow, /未检测到 CodeAgent/);
+  assert.doesNotMatch(personalRow, /需登录|个人账号尚未登录|还没登录/);
+  assert.match(missing, /已有账号甲/); assert.match(missing, /data-ca-account="saved-account"/);
+  assert.match(missing, /model-one/); assert.match(missing, /共 1 个/);
+  assert.match(missing, /data-ca="install-guide"/); assert.match(missing, /data-ca="check-install"/);
+  const controls = missing.match(/<button\b[^>]*>/g);
+  assert.ok(controls.filter(tag => /data-ca="(?:login|session|add|probe|probe-all|drawer)"/.test(tag)).every(tag => /\bdisabled\b/.test(tag)));
+  assert.ok(controls.some(tag => /data-ca="menu"/.test(tag) && !/\bdisabled\b/.test(tag)));
+  const menu = renderAccounts(pool, { installed: false, menu: 'saved-account' });
+  assert.match(menu, /data-ca="remove"[^>]*>/);
+  const installed = renderAccounts(pool, { installed: true });
+  assert.ok(installed.match(/<button\b[^>]*>/g).some(tag => /data-ca="session"/.test(tag) && !/\bdisabled\b/.test(tag)));
+  assert.doesNotMatch(installed, /未检测到 CodeAgent/);
+  assert.match(installed, /个人账号尚未登录/);
+});
+const { accountExpiry } = require('../renderer/codeagent-account-state');
+
+test('到期信息区分跨日日期、自动续期和24小时内提醒', () => {
+  const now = new Date(2026, 10, 5, 10, 0).getTime();
+  const later = now + 72 * 3600000;
+  assert.deepEqual(accountExpiry({ expiresAt: later }, now), { text: '11-08 10:00 到期', warning: false });
+  assert.deepEqual(accountExpiry({ expiresAt: later, renewable: true }, now), { text: '会自动续期', warning: false });
+  assert.deepEqual(accountExpiry({ expiresAt: now + 3600000 }, now), { text: '11:00 到期', warning: true });
+  assert.deepEqual(accountExpiry({ expiresAt: now - 3600000, renewable: true }, now), { text: '会自动续期', warning: false });
+  assert.deepEqual(accountExpiry({ expiresAt: now - 3600000, method: 'devuc' }, now), { text: '会自动续期', warning: false });
+  assert.deepEqual(accountExpiry({ expiresAt: 'invalid' }, now), { text: '', warning: false });
+});
+
+test('个人与号池账号都显示可续期信息，暂停原因优先保留', () => {
+  const html = renderAccounts({ personal: { state: 'ready', renewable: true }, accounts: [{ id: 'pool-renew', state: 'ready', renewable: true }] });
+  assert.equal((html.match(/>会自动续期</g) || []).length, 2);
+  const paused = renderAccounts({ personal: { state: 'ready' }, accounts: [{ id: 'paused', state: 'ready', renewable: true, avoid: { source: 'manual', until: null } }] });
+  assert.match(paused, /手动暂停 · 直到手动恢复/);
+});
+
 test('CodeAgent账号：凭证可用且未暂停的独立账号可选号', () => {
   assert.equal(accountState({ state: 'ready' }).usable, true);
   assert.equal(accountState({ state: 'ready', sameAsPersonal: true }).usable, false);
@@ -205,3 +245,19 @@ test('统一账号选项保留个人、自动与指定账号的三种内部映�
   assert.match(renderAccountOption({ type: 'manage' }), /管理账号…/);
 });
 
+
+test('号池快照透传可续期标记，不返回续期材料', t => {
+  const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+  const pool = require('../core/codeagent-pool');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'account-renewal-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const renewable = pool.addAccount(root, { note: '可续期' });
+  const fixed = pool.addAccount(root, { note: '固定到期' });
+  for (const [id, canRenew] of [[renewable, true], [fixed, false]]) {
+    fs.writeFileSync(path.join(pool.accountDir(root, id), '.credentials.json'), JSON.stringify({ idaasOAuth: { xAuthToken: 'fixture-token', accountId: id, expiresAt: Date.now() + 72 * 3600000, ...(canRenew ? { mtoken: 'fixture-renewal-secret' } : {}) } }));
+  }
+  const rows = pool.listAccounts(root);
+  assert.equal(rows.find(a => a.id === renewable).renewable, true);
+  assert.equal(rows.find(a => a.id === fixed).renewable, false);
+  assert.doesNotMatch(JSON.stringify(rows), /fixture-token|fixture-renewal-secret|mtoken/);
+});

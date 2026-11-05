@@ -19,6 +19,7 @@ const RETRY_BACKOFF_MS = [60 * 1000, 3 * 60 * 1000, 10 * 60 * 1000];
 const RESTART_COOLDOWN_MS = 30 * 60 * 1000;
 const NOWAKE_MAX_AGE_MS = 30 * 60 * 1000;
 const NOWAKE_MAX_COUNT = 8;
+const RECEIPT_WAIT_MS = 3 * 60 * 1000;
 const LEAD = 'lead';
 
 const newId = prefix => `${prefix}-${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`;
@@ -28,7 +29,7 @@ function createTeamService(deps) {
   const approver = '用户';
   const {
     getHubDataDir, sessionManager, sendToRenderer = () => {}, logger = console, now = () => Date.now(),
-    createSession, submitPrompt, injectPrompt = null, restartSession = null,
+    createSession, submitPrompt, injectPrompt = null, restartSession = null, reconcileTurn = null,
     listAccounts = () => ({ rows: [] }), commandPath = () => '', wakeSession = null,
   } = deps;
   const teams = new Map();
@@ -110,6 +111,7 @@ function createTeamService(deps) {
       members: (team.members || []).map(m => ({ memberId: m.memberId, sid: m.sid, role: m.role, kind: m.kind, account: m.account || '', title: m.title, status: m.status, ...(m.model ? {model:m.model} : {}) })),
       plans: (team.plans || []).map(p => ({ id: p.id, status: p.status, goal: p.goal, members: p.members, submittedAt: p.submittedAt, decidedAt: p.decidedAt || 0, note: p.note || '' })),
       grants: (team.grants || []).slice(),
+      messages: (team.messages || []).map(m => deliveryView(team, m)),
     };
   }
   function listTeams() { load(); return [...teams.values()].map(publicView); }
@@ -306,7 +308,9 @@ function createTeamService(deps) {
     catch (error) { if (error.code !== 'ENOENT') throw error; item = (team.messages || []).find(m => m.id === id); }
     if (!item) throw Error('本团队没有这条消息；旧版已清理的记录无法恢复');
     if (member.memberId !== LEAD && item.from !== member.memberId && item.to !== member.memberId) throw Error('只有负责人或该消息参与者能读取原文');
-    return { id: item.id, from: item.from, to: item.to, at: item.at, text: item.text, bodyPath: item.bodyPath, sourceId: item.sourceId };
+    const current = (team.messages || []).find(m => m.id === id);
+    return { id: item.id, from: item.from, to: item.to, at: item.at, text: item.text, bodyPath: item.bodyPath, sourceId: item.sourceId,
+      delivery: current ? deliveryView(team, current) : null };
   }
   const pair = (a, b) => [a, b].sort().join(':');
   function allow(callerSid, args) {
@@ -348,7 +352,7 @@ function createTeamService(deps) {
         for (const m of items) { m.state = 'sent'; m.via = 'not-ai'; m.sentAt = now(); }
         save(team); continue;
       }
-      const state = sessionState(target.sid);
+      let state = sessionState(target.sid);
       if (state === 'missing' || state === 'dormant') {
         // Hub 会让空闲会话自动休眠：有消息要送时把它叫醒（只叫侧栏里登记为休眠的会话，关掉的不复活）。
         if (typeof wakeSession === 'function' && now() - (wakeTried.get(target.sid) || 0) > 60000) {
@@ -361,28 +365,62 @@ function createTeamService(deps) {
       }
       if (state === 'running') {
         const urgent = items.find(m => m.interrupt);
-        if (urgent && typeof injectPrompt === 'function') await interruptNow(team, urgent, target);
-        continue;
+        if (urgent && typeof injectPrompt === 'function') { await interruptNow(team, urgent, target); continue; }
+        if (typeof reconcileTurn !== 'function') continue;
+        sending.add(lock);
+        const targetSid = target.sid;
+        try {
+          const evidence = await reconcileTurn(targetSid);
+          const currentTarget = memberById(team, to);
+          if (!currentTarget || currentTarget.sid !== targetSid) {
+            for (const item of items) if (item.state === 'queued') { item.state = 'failed'; item.error = '收件人已离队或会话已变化，未发送'; }
+            save(team); continue;
+          }
+          if (items.some(item => item.state !== 'queued' || !team.messages.includes(item))) continue;
+          const reason = evidence?.reason || '尚无同回合完成证据，等待核对';
+          const changed = items.some(m => m.waitReason !== reason);
+          for (const item of items) item.waitReason = reason;
+          if (changed) save(team);
+          if (frozen || !evidence?.reconciled || sessionState(target.sid) !== 'idle') continue;
+        } catch (error) {
+          for (const item of items) item.waitReason = `回合状态待核对：${String(error.message || error).slice(0, 160)}`;
+          save(team); continue;
+        } finally { sending.delete(lock); }
       }
       sending.add(lock);
       const batch = to === LEAD ? items : [items[0]];
-      batch.forEach(m => { m.state = 'sending'; });
+      batch.forEach(m => { m.state = 'sending'; m.sendingAt = now(); });
       save(team);
+      let confirmedNotSent = false;
       try {
         const text = batch.length === 1 && batch[0].kickoff ? batch[0].text : formatBatch(team, batch, to);
         const result = await submitPrompt(target.sid, text);
+        // These IPC preflight errors precede any write. Also recognize legacy
+        // receipts without notSent, but never override explicit uncertainty.
+        const preflightRejected = result?.ok === false && !result.unconfirmed && result.notSent !== false
+          && (!result.stopped || result.notSent === true) && !['stuck', 'content-mismatch'].includes(result.sendStatus)
+          && ['no-session', 'bad-request'].includes(result.error);
+        confirmedNotSent = result?.notSent === true || preflightRejected;
         // 回车后才按停止（stopped 但 notSent 不为 true）：成员可能已收到，按「待核对」处理，避免重发出两遍。
-        if (result?.unconfirmed || (result?.stopped && !result.notSent)) markUnconfirmed(team, batch, to, result.message || result.error || '发送后被停止，可能已送达');
+        if (result?.unconfirmed || (!confirmedNotSent && (result?.stopped || result?.ok === false
+            || ['stuck', 'content-mismatch'].includes(result?.sendStatus))))
+          markUnconfirmed(team, batch, to, result.message || result.error || '提交未获得明确确认，可能已送达');
         // A user stop is final even when nothing was sent. Only retry confirmed not-sent receipts.
-        else if (result?.ok === false && result.notSent === true && !result.stopped && await retryLater(team, batch, to, target, result)) { /* queued with backoff */ }
+        else if (result?.ok === false && result.notSent === true && !preflightRejected && !result.stopped && await retryLater(team, batch, to, target, result)) { /* queued with backoff */ }
         else {
           // 粘贴时按停止，CodeAgent 回 {ok:true, stopped:true, notSent:true}：算没送达。
-          if (result && (result.ok === false || result.notSent)) throw Error(result.message || result.error || '未发送（发送时被停止）');
-          batch.forEach(m => { m.state = 'sent'; m.sentAt = now(); });
+          if (result && (result.ok === false || result.notSent)) {
+            const reason = result.message || result.error || '未发送（发送时被停止）';
+            batch.forEach(m => { m.state = 'failed'; m.error = String(reason).slice(0, 300); });
+            if (to !== LEAD) enqueue(team, 'hub', LEAD, `发给 ${to} 的消息没送达：${String(reason).slice(0, 200)}。内容保留，可用 status 查看后核对。`);
+          } else if (result?.ok === true) batch.forEach(m => { m.state = 'sent'; m.sentAt = now(); });
+          else markUnconfirmed(team, batch, to, '提交未返回明确回执');
         }
       } catch (error) {
-        batch.forEach(m => { m.state = 'failed'; m.error = String(error.message || error).slice(0, 300); });
-        if (to !== LEAD) enqueue(team, 'hub', LEAD, `发给 ${to} 的消息没送达：${String(error.message || error).slice(0, 200)}。内容保留，可用 status 查看后重发。`);
+        if (confirmedNotSent) {
+          batch.forEach(m => { m.state = 'failed'; m.error = String(error.message || error).slice(0, 300); });
+          if (to !== LEAD) enqueue(team, 'hub', LEAD, `发给 ${to} 的消息没送达：${String(error.message || error).slice(0, 200)}。内容保留，可用 status 查看。`);
+        } else markUnconfirmed(team, batch, to, error.message || error);
       } finally {
         sending.delete(lock);
         save(team);
@@ -491,7 +529,7 @@ function createTeamService(deps) {
   }
   async function interruptNow(team, item, target) {
     const lock = team.leadSid + ':' + item.to;
-    sending.add(lock); item.state = 'sending'; save(team);
+    sending.add(lock); item.state = 'sending'; item.sendingAt = now(); save(team);
     try {
       const result = await injectPrompt(target.sid, `## 负责人追加指示（${item.id}）\n${item.text}\n\n按这条指示调整当前工作，不重做已完成的部分。`);
       if (result?.uncertain) markUnconfirmed(team, [item], item.to);
@@ -505,6 +543,24 @@ function createTeamService(deps) {
   }
 
   // ---- 其他动作 ----
+  function deliveryView(team, m) {
+    const target = memberById(team, m.to);
+    const waitedMs = Math.max(0, (m.sentAt || now()) - m.at);
+    const receiptOverdue = m.state === 'sending' && now() - (m.sendingAt ?? m.at) >= RECEIPT_WAIT_MS;
+    const stage = receiptOverdue ? 'unconfirmed' : m.state;
+    let reason = m.error || '';
+    if (m.state === 'sending') reason = receiptOverdue ? '暂未收到确认，送达结果待核对；不会自动重发' : '正在提交，等待送达回执';
+    else if (m.state === 'sent') reason = '提交已确认；不代表对方已阅读或完成任务';
+    else if (m.state === 'queued' && !(m.retryAt > now())) {
+      const state = target ? sessionState(target.sid) : 'missing';
+      reason = state === 'running' ? (m.waitReason || '等待对方回合结束') : state === 'dormant' ? '等待唤醒会话' : state === 'missing' ? '目标会话不可用' :
+        m.to === LEAD && m.wake === false ? '留言等待负责人唤醒或批量送达' : '等待投递';
+    }
+    return { id: m.id, from: m.from, to: m.to, targetSessionId: target?.sid || null, state: m.state, stage,
+      label: ({ queued: '排队', sending: '发送中', sent: '已送', failed: '提交失败', unconfirmed: '送达结果待核对' })[stage] || stage,
+      reason, at: m.at, sendingAt: m.sendingAt || null, sentAt: m.sentAt || null, waitedMs,
+      retryAt: m.state === 'queued' && m.retryAt > now() ? m.retryAt : null };
+  }
   function status(callerSid) {
     const found = teamOfLead(callerSid) ? { team: teamOfLead(callerSid), member: { memberId: LEAD } } : teamOfMember(callerSid);
     if (!found) return { team: null, note: `你还不在任何团队里。当负责人：先用 accounts 看可用账号，再用 propose 提交招人计划，等${approver}批准。` };
@@ -516,8 +572,9 @@ function createTeamService(deps) {
         .concat((team.members || []).map(m => ({ memberId: m.memberId, title: m.title, role: m.role, kind: m.kind, account: m.account, ...(m.model ? { model: m.model } : {}), runtime: runtimeOf(m.sid), status: m.status, state: m.status === 'dismissed' ? 'dismissed' : sessionState(m.sid) }))),
       plans: member.memberId === LEAD ? (team.plans || []).map(p => ({ id: p.id, status: p.status, size: p.members.length, note: p.note || '' })) : undefined,
       grants: team.grants,
-      pendingForYou: mine.filter(m => m.to === member.memberId && m.state === 'queued').map(m => ({ id: m.id, at: m.at, from: m.from, text: m.text, sourceId: m.sourceId, bodyPath: m.bodyPath, wake: m.wake !== false })),
-      undelivered: mine.filter(m => m.from === member.memberId && ['queued', 'failed', 'unconfirmed'].includes(m.state)).map(m => ({ id: m.id, to: m.to, state: m.state, text: m.text.slice(0, 200), error: m.error || '' })),
+      messages: mine.map(m => deliveryView(team, m)),
+      pendingForYou: mine.filter(m => m.to === member.memberId && ['queued', 'sending', 'unconfirmed'].includes(m.state)).map(m => ({ ...deliveryView(team, m), text: m.text, sourceId: m.sourceId, bodyPath: m.bodyPath, wake: m.wake !== false })),
+      undelivered: mine.filter(m => m.from === member.memberId && ['queued', 'sending', 'failed', 'unconfirmed'].includes(m.state)).map(m => ({ ...deliveryView(team, m), text: m.text.slice(0, 200), error: m.error || '' })),
     };
   }
   function runtimeOf(sid) {

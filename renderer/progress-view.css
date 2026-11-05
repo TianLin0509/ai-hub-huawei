@@ -94,3 +94,37 @@
 #subagent-progress-line .sap-dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--pg-done); }
 #subagent-progress-line.sap-running .sap-dot { background: var(--pg-ok); animation: sap-pulse 1.6s ease-in-out infinite; }
 @keyframes sap-pulse { 50% { opacity: .35; } }
+
+/* 公司版换皮（2026-11-05）：与助理、会议室、PPT 同一外框——浅灰底上的页头（22 号标题 + 同行说明），下面一张白底大圆角纸，四栏是纸上的浅灰泳道。
+   只在公司版外壳（data-hw-shell）生效，颜色、圆角、阴影、字号只引用 hw-tokens.css。 */
+:root[data-hw-shell] #progress-panel { padding: 0; overflow: hidden; background: var(--hw-bg); color: var(--hw-text-1); font-family: var(--hw-font); line-height: var(--hw-lh);
+  --pg-ok: var(--hw-green); --pg-risk: var(--hw-amber); --pg-stuck: var(--hw-red); --pg-done: var(--hw-text-3); --pg-ask: var(--hw-amber); --pg-ask-tint: var(--hw-amber-soft); }
+:root[data-hw-shell] #progress-panel .pg-head { display: flex; align-items: baseline; gap: 14px; flex: none; min-height: 58px; padding: 16px 24px 6px 28px; min-width: 0; }
+:root[data-hw-shell] #progress-panel .pg-head h2 { margin: 0; font-size: var(--hw-fs-22); font-weight: 600; line-height: 1.3; letter-spacing: .2px; white-space: nowrap; color: var(--hw-text-1); }
+:root[data-hw-shell] #progress-panel .pg-head p { margin: 0; min-width: 0; font-size: var(--hw-fs-13); color: var(--hw-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+:root[data-hw-shell] #progress-panel .pg-board { flex: 1; min-height: 0; overflow: auto; margin: 0 16px 12px; padding: 20px; border-radius: var(--hw-r-lg); background: var(--hw-surface); box-shadow: var(--hw-e1);
+  scrollbar-width: thin; scrollbar-color: var(--hw-line-strong) transparent; }
+:root[data-hw-shell] #progress-panel .pg-cols { gap: 12px; align-items: stretch; }
+:root[data-hw-shell] #progress-panel .pg-col { min-height: 160px; padding: 12px; border-radius: var(--hw-r-md); background: var(--hw-surface-2); }
+:root[data-hw-shell] #progress-panel .pg-col h3 { align-items: flex-start; gap: 8px; margin: 0 0 10px; padding: 0 2px; font-size: var(--hw-fs-13); font-weight: 600; line-height: 20px; color: var(--hw-text-1); }
+:root[data-hw-shell] #progress-panel .pg-col h3 .pg-dot { margin-top: 6px; }
+:root[data-hw-shell] #progress-panel .pg-card { margin-bottom: 8px; padding: 12px 14px; border: 0; border-radius: var(--hw-r-item); background: var(--hw-surface); box-shadow: var(--hw-e1); transition: box-shadow var(--hw-t-fast); }
+:root[data-hw-shell] #progress-panel .pg-card:hover { box-shadow: var(--hw-e2); }
+:root[data-hw-shell] #progress-panel .pg-card:focus-visible { outline: 2px solid var(--hw-brand); outline-offset: 2px; }
+:root[data-hw-shell] #progress-panel .pg-ct { font-size: var(--hw-fs-14); color: var(--hw-text-1); }
+:root[data-hw-shell] #progress-panel .pg-cl { font-size: var(--hw-fs-13); color: var(--hw-text-2); }
+:root[data-hw-shell] #progress-panel .pg-cq { padding: 8px 10px !important; border-radius: var(--hw-r-sm); background: var(--pg-ask-tint); color: var(--hw-text-1); font-size: var(--hw-fs-13); }
+:root[data-hw-shell] #progress-panel .pg-cq-done { position: static; display: block; margin-top: 6px; }
+:root[data-hw-shell] #progress-panel .pg-late { color: var(--hw-amber) !important; }
+:root[data-hw-shell] #progress-panel .pg-cm { font-size: var(--hw-fs-12); color: var(--hw-text-3); }
+:root[data-hw-shell] #progress-panel .pg-tool { height: 24px; padding: 0 10px; border: 0; border-radius: var(--hw-r-pill); background: var(--hw-surface-3); color: var(--hw-text-2); font-size: var(--hw-fs-12); }
+:root[data-hw-shell] #progress-panel .pg-tool:hover { background: var(--hw-line); color: var(--hw-text-1); }
+:root[data-hw-shell] #progress-panel .pg-empty { padding: 4px 2px; font-size: var(--hw-fs-13); line-height: 1.6; color: var(--hw-text-3); }
+:root[data-hw-shell] #progress-panel .pg-handled-note { color: var(--hw-green); font-size: var(--hw-fs-12); }
+:root[data-hw-shell] #progress-panel .pg-older { margin-top: 20px; border-top-color: var(--hw-line); }
+:root[data-hw-shell] #progress-panel .pg-older summary { font-size: var(--hw-fs-13); color: var(--hw-text-2); }
+@media (max-width: 1360px) {
+  :root[data-hw-shell] #progress-panel .pg-head { padding: 16px 16px 6px 20px; }
+  :root[data-hw-shell] #progress-panel .pg-board { padding: 16px; }
+  :root[data-hw-shell] #progress-panel .pg-cols { gap: 10px; }
+}

@@ -84,7 +84,7 @@ function createCompanyForumPage({ document, window, ipcRenderer, closeOtherPanel
   const postKey = (site, title) => site + '|' + title;
   function overviewHtml() {
     const snap = data.snapshot;
-    if (!snap) return `<article class="cf-overview empty">${data.syncing ? '正在打开两个站点取今天的热帖，第一次大约需要一分钟。' : data.domain ? '今天还没同步。点右上角「刷新」开始。' : '先在「设置」里填一次公司站点的域名（一般就是公司邮箱 @ 后面那段）。'}</article>`;
+    if (!snap) return `<article class="cf-overview empty">${data.syncing ? '正在打开两个站点取今天的热帖，第一次大约需要一分钟。' : data.domain ? '今天还没同步。点右上角「刷新」开始。' : '先在「设置」里填一次公司站点的域名（一般就是公司邮箱 @ 后面那段）。'}${!data.syncing && !data.domain ? '<button type="button" class="cf-btn primary" data-cf="settings">填写域名</button>' : ''}</article>`;
     const items = (snap.overview || []).map(o => `<li>${esc(o.text)}${(o.refs || []).map(r => `<button type="button" class="cf-ref" data-cf="jump" data-key="${esc(postKey(r.site, r.title))}" title="${esc(r.title)}">${esc(refLabel(r))}</button>`).join('')}</li>`).join('');
     const note = snap.summaryNote && !snap.summarizing ? `<p class="cf-note">${esc(snap.summaryNote)}</p>` : '';
     const redo = !snap.summarizing && !data.job && (snap.picked || []).length ? '<button type="button" class="cf-link" data-cf="summarize">重新整理</button>' : '';

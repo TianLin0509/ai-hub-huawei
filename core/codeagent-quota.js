@@ -169,7 +169,7 @@ function redactSnippet(text, { scrub = s => s } = {}) {
 // ---- 避让状态与额度读数（同一个小文件；原子写） ----
 function readState(dataDir, fsModule = fs) {
   try {
-    const raw = JSON.parse(fsModule.readFileSync(stateFile(dataDir), 'utf8'));
+    const raw = JSON.parse(require('./read-scope').readTextInScope(stateFile(dataDir), fsModule));
     const obj = v => (v && typeof v === 'object' && !Array.isArray(v) ? v : {});
     return { accounts: obj(raw && raw.accounts), credit: obj(raw && raw.credit), models: obj(raw && raw.models) };
   } catch { return { accounts: {}, credit: {}, models: {} }; }

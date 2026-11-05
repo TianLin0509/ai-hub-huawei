@@ -22,7 +22,7 @@ async function wait(fn) { const end = Date.now() + 30000; while (Date.now() < en
 async function main() {
   fs.mkdirSync(OUT, { recursive: true });
   const evidence = { root: ROOT, checks: [], widths: [], model: 'none; renderer fixtures' };
-  let hub, c;
+  let hub, c, failure;
   const ok = (label, value) => { assert(value, label); evidence.checks.push(label); };
   const shot = async name => { const r = await c.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }); fs.writeFileSync(path.join(OUT, name + '.png'), Buffer.from(r.data, 'base64')); };
   try {
@@ -66,13 +66,24 @@ async function main() {
       await click();
       ok(width + ' real click collapses again', await c.eval(`!document.querySelector('#team-notice-fixture [data-turn-id="many"] .team-notice-fold').open`));
     }
-    evidence.ok = true;
-  } catch (error) { evidence.error = error.stack; throw error; }
+    evidence.uiChecksPassed = true;
+  } catch (error) {
+    failure = error; evidence.error = error.stack;
+    if (c) await shot('failure').catch(e => { evidence.screenshotError = String(e); });
+  }
   finally {
-    c?.close();
-    if (hub) evidence.exit = await gracefulQuit(hub);
+    try { if (c) await c.close(); }
+    catch (error) { failure ||= error; evidence.cdpCloseError = String(error); }
+    try { if (hub) evidence.exit = await gracefulQuit(hub); }
+    catch (error) { failure ||= error; evidence.quitError = String(error); }
+    finally {
+      if (hub) fs.writeFileSync(path.join(OUT, 'hub.log'), hub.log().join('\n'), 'utf8');
+      hub?.child.stdout?.destroy(); hub?.child.stderr?.destroy(); hub?.child.stdin?.destroy();
+    }
+    evidence.ok = evidence.uiChecksPassed === true && !failure;
     fs.writeFileSync(path.join(OUT, '20261104-team-notice-evidence-m3.json'), JSON.stringify(evidence, null, 2));
   }
+  if (failure) throw failure;
   console.log('PASS team notice: ' + evidence.checks.length + ' checks; ' + OUT);
 }
 main().catch(error=>{ console.error(error); process.exitCode=1; });

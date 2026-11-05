@@ -241,14 +241,19 @@ function commandHead(command) {
 }
 
 // 只查文件、不启动进程：命令是完整路径就看文件在不在；否则按 PATH + Windows 可执行扩展名找。
-function commandOnPath(command, env = process.env) {
+function commandFile(command, env = process.env) {
   const exists = file => { try { return fs.statSync(file).isFile(); } catch { return false; } };
-  if (path.isAbsolute(command)) return exists(command);
+  if (path.isAbsolute(command)) return exists(command) ? command : '';
   const pathKey = Object.keys(env).find(k => k.toLowerCase() === 'path') || 'PATH';
   const dirs = String(env[pathKey] || '').split(path.delimiter).filter(Boolean);
   const exts = process.platform === 'win32' ? ['.exe', '.cmd', '.bat'] : [''];
-  return dirs.some(dir => exts.some(ext => exists(path.join(dir.replace(/^"|"$/g, ''), command + ext))));
+  for (const dir of dirs) for (const ext of exts) {
+    const file = path.join(dir.replace(/^"|"$/g, ''), command + ext);
+    if (exists(file)) return file;
+  }
+  return '';
 }
+function commandOnPath(command, env = process.env) { return !!commandFile(command, env); }
 
 // 用于界面默认选中 CodeAgent（公司电脑），不作为能否登录或调用模型的证据。
 function isCodeAgentInstalled(env = process.env, provider = hubProviderConfig()) {
@@ -297,4 +302,5 @@ module.exports = {
   normalizeCodeAgentModel,
   localModelOptions,
   isCodeAgentInstalled,
+  commandFile,
 };

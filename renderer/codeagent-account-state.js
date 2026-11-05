@@ -1,5 +1,15 @@
 'use strict';
 
+function accountExpiry(account = {}, now = Date.now()) {
+  if (account.renewable === true || account.method === 'devuc') return { text: '会自动续期', warning: false };
+  const expires = new Date(account.expiresAt), today = new Date(now);
+  if (!account.expiresAt || !Number.isFinite(expires.getTime())) return { text: '', warning: false };
+  const pad = n => String(n).padStart(2, '0');
+  const sameDay = expires.toDateString() === today.toDateString();
+  const date = sameDay ? '' : `${expires.getFullYear() === today.getFullYear() ? '' : expires.getFullYear() + '-'}${pad(expires.getMonth() + 1)}-${pad(expires.getDate())} `;
+  return { text: `${date}${pad(expires.getHours())}:${pad(expires.getMinutes())} ${expires.getTime() <= now ? '已到期' : '到期'}`, warning: expires.getTime() > now && expires.getTime() - now <= 86400000 };
+}
+
 // Keep one short explanation in the overview, table and session picker.
 function pauseReason(avoid, now = Date.now()) {
   if (!avoid) return '';
@@ -53,4 +63,4 @@ function accountChoiceSelection(value) {
     : { mode: value === 'pool' ? 'pool' : 'personal', pick: '' };
 }
 
-module.exports = { accountState, accountOptionLabel, usableAccounts, canStartAccount, pauseReason, accountChoiceValue, accountChoiceSelection };
+module.exports = { accountState, accountExpiry, accountOptionLabel, usableAccounts, canStartAccount, pauseReason, accountChoiceValue, accountChoiceSelection };

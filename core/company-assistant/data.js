@@ -162,7 +162,7 @@ function eventSource(base, raw, startEvidence) {
 function meetings(raw) {
   return listIn(raw, ['meetings', 'data']).map(m => {
     const id = String(first(m, ['meetingId', 'enMeetingId', 'id', 'confId']) ?? '');
-    const times = eventTimes(m, ['meetingStartTime', 'startTime', 'start'], ['meetingEndTime', 'endTime', 'end']);
+    const times = eventTimes(m, ['meetingStartTime', 'startTime', 'start', 'estimatedStartTime'], ['meetingEndTime', 'endTime', 'end', 'estimatedEndTime']);
     const users = Array.isArray(m.meetingUsers) ? m.meetingUsers : [];
     return { ...eventSource('meeting:' + id, m, times.timeEvidence.start), id, subject: String(first(m, ['subject', 'topic', 'title']) ?? '（无主题）'), ...times,
       location: String(first(m, ['location', 'room']) ?? ''), attendees: users.length,

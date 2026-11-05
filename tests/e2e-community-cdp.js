@@ -116,23 +116,24 @@ async function main() {
       if (marker.features && marker.features.quotaBar === false) assert.equal(await cdp.eval('!!document.getElementById("rail-usage")'), false, 'no quota strip');
       if (marker.target === 'company') {
         assert.ok(await cdp.eval('document.getElementById("btn-rail-accounts").getBoundingClientRect().width > 0'), 'company accounts entry is visible');
-        await click(`.new-session-option[data-kind="${kinds[0]}"]`);
-        await until('!document.getElementById("new-session-submit").disabled && document.getElementById("new-session-codeagent-account-note").textContent.includes("仍可创建")', 'personal login status only warns');
+        await click('.new-session-option[data-kind="codeagent"]');
+        await until('document.getElementById("new-session-submit").textContent === "查看安装说明" && document.getElementById("new-session-codeagent-account-note").textContent.includes("未安装")', 'missing installation is shown before creation');
         await click('#new-session-submit');
-        await until('document.querySelector("#new-session-error")?.innerText.includes("未找到 CodeAgent CLI")', 'missing CLI message is visible in the launcher');
+        await until('document.querySelector("#codeagent-install-guide")?.open', 'bundled install guide opens inside Hub');
         assert.equal(await cdp.eval('sessions.size'), 0);
         await shot('02-company-missing-cli-guidance');
-        await click('#new-session-cancel');
+        await click('#codeagent-install-guide .company-api-close');
+        await until('!document.querySelector("#codeagent-install-guide") && !document.getElementById("new-session-submit").getBoundingClientRect().width', 'guide and launch form are closed');
         await click('#btn-rail-accounts');
-        await until('!document.getElementById("codeagent-accounts-page")?.hidden && !!document.querySelector("[data-ca-account=personal]")', 'standalone company accounts page opens');
-        assert.ok(await cdp.eval('document.getElementById("codeagent-accounts-page").textContent.includes("号池里还没有账号")'), 'clean machine has an empty pool');
+        await until('!document.getElementById("codeagent-accounts-page")?.hidden && !!document.querySelector("[data-ca=install-guide]")', 'standalone company accounts page opens with installation guidance');
+        assert.ok(await cdp.eval('document.getElementById("codeagent-accounts-page").textContent.includes("未检测到 CodeAgent")'), 'clean machine consistently reports missing installation');
         assert.ok(await cdp.eval('document.getElementById("account-page").hidden'), 'the home account center stays hidden');
-        assert.equal(await cdp.eval('document.querySelector("[data-ca-account=personal] [data-ca=session]")?.disabled'), false, 'personal account can proceed to CLI even without recognized credentials');
+        assert.equal(await cdp.eval('document.querySelectorAll("#codeagent-accounts-page [data-ca=login]:not(:disabled),#codeagent-accounts-page [data-ca=session]:not(:disabled)").length'), 0, 'missing CLI cannot launch login or create sessions');
         await shot('03-company-accounts-empty');
         await click('#btn-home');
         await until('document.getElementById("codeagent-accounts-page").hidden', 'returning home closes the company account page');
         assert.equal(await cdp.eval('sessions.size'), 0);
-        report.checks.push('Company accounts page opens; personal login state warns without disabling creation; actual launcher submit shows the missing CLI guidance and creates no session; navigation closes the page');
+        report.checks.push('Missing CLI routes launch and account actions to the bundled guide, offers no login/session action, and creates no session; navigation closes the page');
         assert.ok(hub.log().some(line => line.includes('hook server listening')), 'hook listener must start');
         report.passed = true;
         return;
@@ -220,9 +221,16 @@ async function main() {
     throw error;
   } finally {
     if (cdp) await cdp.close().catch(() => {});
-    if (hub) { try { fs.writeFileSync(path.join(out, 'hub.log'), hub.log().join('\n')); } finally { await gracefulQuit(hub); } }
+    let teardownError;
+    if (hub) {
+      try { report.teardown = await gracefulQuit(hub); }
+      catch (error) { teardownError = error; report.teardownError = error.stack; }
+      fs.writeFileSync(path.join(out, 'hub.log'), hub.log().join('\n'));
+      if (report.error || teardownError) console.error(hub.log().slice(-40).join('\n'));
+    }
     fs.writeFileSync(path.join(out, 'report.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
+    if (teardownError) throw teardownError;
   }
 }
 

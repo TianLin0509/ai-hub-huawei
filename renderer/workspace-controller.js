@@ -2,6 +2,7 @@
 
 (function () {
   const { ipcRenderer } = require('electron');
+  const codeagentSetup = require('./codeagent-setup').createCodeAgentSetup({ document, ipcRenderer });
   const companyApi = require('../core/company-api-config');
   const companyApiKind = kind => companyApi.isCompany() && companyApi.KINDS.includes(kind);
   const companyApiModels = Object.create(null);
@@ -416,6 +417,7 @@
   let preparedProjects = [];
   let projectLoadId = 0;
   let submitting = false;
+  let checkingCodeagent = false;
   let selectedModel = '';
   let selectedEffort = defaultEffortFor('claude');
   let selectedMcpProfile = 'lean';
@@ -1078,6 +1080,12 @@
     if (note) note.hidden = !show;
     const manual = show && codeagentAccount === 'pool-manual';
     if (pickField) pickField.hidden = !manual || companyAccounts;
+    if (selectedKind === 'codeagent' && codeagentSetup.current?.installed === false) {
+      if (field) field.hidden = true;
+      if (pickField) pickField.hidden = true;
+      if (note) { note.hidden = false; note.textContent = 'CodeAgent 未安装。请先查看安装说明，安装后再选择账号与模型。'; }
+      return;
+    }
     if (!show || !select) return;
     const personal = codeagentPool.personal || {};
     const personalIssue = codeagentPoolError || personalStateText();
@@ -1373,6 +1381,11 @@
       const selected = button.dataset.kind === (DEEPSEEK_PANEL_KINDS.has(selectedKind) ? 'deepseek' : selectedKind);
       button.classList.toggle('selected', selected);
       button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+      if (button.dataset.kind === 'codeagent' && codeagentSetup.current) {
+        let badge = button.querySelector('.company-cli-status');
+        if (!badge) { badge = document.createElement('small'); badge.className = 'company-cli-status'; button.append(badge); }
+        badge.textContent = codeagentSetup.current.installed ? '' : '未安装'; badge.hidden = codeagentSetup.current.installed;
+      }
     });
     menuEl.querySelectorAll('.session-workspace-choice').forEach(button => {
       const selected = button.dataset.workspaceMode === workspaceMode;
@@ -1437,6 +1450,9 @@
       || codeagentSelectionUnavailable()
       || (DEEPSEEK_ROUTE_KINDS.has(selectedKind) && !routeStatus.available)
       || (workspaceMode === 'existing' && !existingWorkspace);
+    if (submit && !submitting && selectedKind === 'codeagent' && codeagentSetup.current?.installed === false) {
+      submit.textContent = '查看安装说明'; submit.disabled = false;
+    } else if (submit && !submitting) submit.textContent = '创建会话';
   }
 
   // The footer states where the session will actually land, so a mis-set
@@ -1518,6 +1534,7 @@
   }
 
   function openNewSessionModal(options = {}) {
+    void codeagentSetup.refresh().catch(error => setError('安装检测失败：' + error.message));
     window.__codeagentAccountsHide?.();
     if (!menuEl) return;
     if (options.preserveDraft) {
@@ -1766,7 +1783,15 @@
   }
 
   async function submitNewSession() {
-    if (submitting || accountSaving || (selectedKind === 'codex' && accountReadError)) return null;
+    if (submitting || checkingCodeagent || accountSaving || (selectedKind === 'codex' && accountReadError)) return null;
+    if (selectedKind === 'codeagent') {
+      checkingCodeagent = true;
+      try { await codeagentSetup.refresh(); }
+      catch (error) { setError('安装检测失败：' + error.message); return null; }
+      finally { checkingCodeagent = false; }
+      if (selectedKind !== 'codeagent') return null;
+      if (codeagentSetup.current?.installed === false) { codeagentSetup.showGuide(); return null; }
+    }
     if (DEEPSEEK_ROUTE_KINDS.has(selectedKind) && !deepseekRouteStatus(deepseekRoute).available) {
       setError(`${deepseekProfile.ROUTES[deepseekRoute].label}不可用：${deepseekRouteStatus(deepseekRoute).reason}`);
       return null;
@@ -1809,6 +1834,7 @@
   }
 
   function init() {
+    codeagentSetup.subscribe(() => paint());
     menuEl = document.getElementById('new-session-menu');
     if (!menuEl) return;
     ipcRenderer.on('company-api:changed', () => {

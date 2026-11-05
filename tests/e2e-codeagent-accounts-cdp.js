@@ -151,7 +151,28 @@ async function run() {
     fs.renameSync(pollingCredentials, pollingBackup);
     await refresh();
     assert.equal((await invoke('codeagent-pool:list')).accounts.find(a => a.id === expired).state, 'login-required');
+    // Status polling and change pushes must not rescan local candidates while the drawer is closed.
+    const calls = name => cdp.eval(`window.__accountCalls.filter(c=>c[0]===${JSON.stringify('codeagent-pool:' + name)}).length`);
+    await wait(() => cdp.eval("!document.querySelector('[data-ca=refresh]').disabled"), 'scan settled');
+    const scansBefore = await calls('local'), listsBefore = await calls('list');
+    await cdp.eval("require('electron').ipcRenderer.emit('codeagent-pool:changed',{})");
+    await wait(async () => (await calls('list')) >= listsBefore + 3, 'closed-drawer polling');
+    ok('抽屉关闭时轮询和推送照常刷新账号，不再扫描本机候选', (await calls('local')) === scansBefore);
+    fs.writeFileSync(pollingCredentials, JSON.stringify({ idaasOAuth: { xAuthToken: 'local-fixture-only', accountId: 'expired-fixture', expiresAt: Date.now() + 3600e3 } }));
+    await wait(async () => !/登录已过期|需登录/.test(await cdp.eval(`document.querySelector('[data-ca-account="${expired}"]').textContent`)) , 'pending login becomes usable without a scan');
+    ok('抽屉关闭时待登录号仍按时变为可用', (await calls('local')) === scansBefore);
+    fs.rmSync(pollingCredentials);
+    await refresh();
+    await cdp.eval("window.__codeagentAccountsHide();void window.__codeagentAccountsOpen();require('electron').ipcRenderer.emit('codeagent-pool:changed',{})");
+    const scansAtEntry = await calls('local');
+    await wait(async () => (await calls('local')) > scansAtEntry || (await cdp.eval("!document.querySelector('[data-ca=refresh]').disabled")), 'entry refresh');
+    ok('进页扫描不会被紧随的推送刷新吃掉，导入提示仍在', await wait(() => cdp.eval("document.querySelector('#codeagent-accounts-page').textContent.includes('已登录的号没导入')"), 'import prompt after superseded entry scan'));
+    seed(path.join(SCAN, '.cac-zlate'), 'late-fixture');
     await click('[data-ca=drawer]');
+    ok('外部新登录的目录在首次打开抽屉时出现', await wait(() => cdp.eval("document.querySelector('.caa-local')?.textContent.includes('.cac-zlate')"), 'late candidate in drawer'));
+    fs.rmSync(path.join(SCAN, '.cac-zlate'), { recursive: true });
+    await wait(() => cdp.eval("!document.querySelector('.caa-local')?.textContent.includes('.cac-zlate')"), 'drawer poll rescans');
+    ok('抽屉打开期间轮询继续更新导入候选');
     await shot('20261103-accounts-drawer-1280-m1');
     await click('#ca-note');
     await cdp.send('Input.insertText', { text: '甲乙' });

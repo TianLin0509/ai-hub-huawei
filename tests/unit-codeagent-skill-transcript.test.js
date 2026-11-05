@@ -30,6 +30,151 @@ function fileFixture(t, entries) {
   return file;
 }
 
+test('disk cards keep a late old reply under its stopped question after a new answer', () => {
+  const entries = [user('old', '旧问题'), user('stop', '[Request interrupted by user]', { parentUuid: 'old' }),
+    user('next', '新问题'), answer('new-answer', '当前回答', 'next'), answer('late-old', '迟到旧回答', 'old')];
+  const records = claudeDiskRecords(entries);
+  assert.deepEqual(records.map(r => [r.userMessageId, r.finalText]), [['old', '迟到旧回答'], ['next', '当前回答']]);
+  assert.equal(records[0].status, 'interrupted', 'late output cannot erase the explicit stop');
+  const cards = claudeTranscriptTurns(records);
+  assert.deepEqual(cards.map(c => [c.role, c.text]), [['user', '旧问题'], ['assistant', '迟到旧回答'], ['user', '新问题'], ['assistant', '当前回答']]);
+  assert.deepEqual(cards[3].displayMessages.map(m => m.text), ['当前回答']);
+});
+
+test('disk ownership follows hidden skill and tool-result chains across a later user', () => {
+  const tool = answer('old-tool', '', 'old-body');
+  tool.message.content = [{ type: 'tool_use', id: 'old-call', name: 'Read', input: {} }];
+  tool.message.stop_reason = 'tool_use';
+  const result = user('old-result', '', { parent_uuid: 'old-tool' });
+  result.message.content = [{ type: 'tool_result', tool_use_id: 'old-call', content: '旧轮工具结果' }];
+  for (const linked of [true, false]) {
+    const receipt = { ...result }; if (!linked) delete receipt.parent_uuid;
+    const entries = [user('old', wrapper(), { isMeta: true }),
+      user('old-body', 'Base directory for this skill: C:/fixture\nInstructions', { isMeta: true, parentUuid: 'old' }),
+      tool, user('new', '新问题'), answer('new-answer', '新答案', 'new'), receipt,
+      { ...answer('old-final', '旧答案', 'old-result'), parentUuid: undefined, parent_uuid: 'old-result' }];
+    const cards = claudeTranscriptTurns(claudeDiskRecords(entries));
+    assert.deepEqual(cards.filter(c => c.role === 'assistant').map(c => c.text), ['旧答案', '新答案']);
+    assert.equal(cards[1].toolCalls[0].output, '旧轮工具结果');
+    assert.equal(cards[1].toolCalls[0].status, 'completed');
+    assert.equal(cards[3].toolCalls.length, 0);
+  }
+});
+
+test('disk queued supplements keep their reply in the original round through attachment UUID aliases', () => {
+  const supplement = { type: 'attachment', uuid: 'queued-wire', timestamp: new Date(NOW + 500).toISOString(),
+    attachment: { type: 'queued_command', origin: { kind: 'human' }, humanTurn: true, commandMode: 'prompt', source_uuid: 'queued-source', prompt: '补充说明' } };
+  const records = claudeDiskRecords([user('old', '旧问题'), supplement, user('new', '新问题'),
+    answer('new-answer', '新答案', 'new'), answer('old-answer', '旧轮补充后的答案', 'queued-wire')]);
+  assert.deepEqual(records.map(r => r.finalText), ['旧轮补充后的答案', '新答案']);
+  assert.equal(records[0].userSupplements[0].text, '补充说明');
+  assert.equal(records[1].userSupplements, undefined);
+});
+
+test('disk duplicate queued deliveries retain the original owner across changed source UUIDs', () => {
+  const queued = (uuid, source) => ({ type: 'attachment', uuid, timestamp: new Date(NOW + 500).toISOString(),
+    attachment: { type: 'queued_command', origin: { kind: 'human' }, humanTurn: true, commandMode: 'prompt',
+      source_uuid: source, delivery_id: 'same-delivery', prompt: '补充说明' } });
+  const records = claudeDiskRecords([user('old', '旧问题'), queued('wire1', 'source1'), user('new', '新问题'),
+    answer('new-answer', '新答案', 'new'), queued('wire2', 'source2'), answer('late-old', '旧轮补充后的答案', 'wire2')]);
+  assert.deepEqual(records.map(r => r.finalText), ['旧轮补充后的答案', '新答案']);
+  assert.equal(records[0].userSupplements.length, 1);
+  assert.equal(records[1].userSupplements, undefined);
+  const last = claudeTranscriptTurns(records).at(-1);
+  assert.deepEqual(last.displayMessages.map(m => m.text), ['新答案']);
+  // The second replay can introduce another alias without creating a question.
+  const third = queued('wire3', 'source2'); third.attachment.delivery_id = 'later-delivery';
+  const chained = claudeDiskRecords([user('old', '旧问题'), queued('wire1', 'source1'), user('new', '新问题'),
+    answer('new-answer', '新答案', 'new'), queued('wire2', 'source2'), third, answer('late-old', '旧轮补充后的答案', 'wire3')]);
+  assert.deepEqual(chained.map(r => r.finalText), ['旧轮补充后的答案', '新答案']);
+});
+
+test('disk linked revisions and repeated UUID snapshots cannot move into the newer question or roll back', () => {
+  const revision = answer('revision', '短修订', 'old-answer'); revision.timestamp = new Date(NOW + 4000).toISOString();
+  const stale = answer('revision', '迟到但更旧的长草稿', 'old-answer'); stale.timestamp = new Date(NOW + 3000).toISOString();
+  stale.message.stop_reason = null;
+  const records = claudeDiskRecords([user('old', '旧问题'), answer('old-answer', '初版', 'old'),
+    user('new', '新问题'), answer('new-answer', '新答案', 'new'), revision, stale]);
+  assert.deepEqual(records.map(r => r.finalText), ['短修订', '新答案']);
+  assert.equal(records[0].messages.get('revision').message.content[0].text, '短修订');
+  assert.equal(records[0].messages.size, 2);
+});
+
+test('disk legacy records without parent links or with unavailable parents retain adjacency', () => {
+  const records = claudeDiskRecords([user('one', '第一问'), answer('a', '第一答'),
+    user('two', '第二问'), answer('b', '第二答', 'missing-parent')]);
+  assert.deepEqual(records.map(r => r.finalText), ['第一答', '第二答']);
+});
+
+test('disk partial windows with a missing old parent reread the full file before projecting cards', t => {
+  const rows = [user('outside-window', '窗口外旧问题'),
+    { type: 'system', note: 'x'.repeat(8 * 1024 * 1024 + 1024) }];
+  for (let i = 0; i < 4; i++) rows.push(user('new-' + i, '新问题' + i), answer('new-answer-' + i, '新答案' + i, 'new-' + i));
+  rows.push(answer('late-outside', '窗口外旧回答', 'outside-window'));
+  const file = fileFixture(t, rows);
+  const cards = require('../core/claude-disk-transcript').parseClaudeTranscriptToNativeTurns(file, { fromTail: true, limit: 4 });
+  assert.deepEqual(cards.map(c => c.text), ['新问题2', '新答案2', '新问题3', '新答案3']);
+});
+
+test('disk partial windows with an unknown tool receipt reread its old tool owner', t => {
+  const tool = answer('outside-tool', '', 'outside-user');
+  tool.message.content = [{ type: 'tool_use', id: 'outside-call', name: 'Read', input: {} }];
+  tool.message.stop_reason = 'tool_use';
+  const rows = [user('outside-user', '窗口外旧问题'), tool,
+    { type: 'system', note: 'x'.repeat(8 * 1024 * 1024 + 1024) }];
+  for (let i = 0; i < 4; i++) rows.push(user('new-' + i, '新问题' + i), answer('new-answer-' + i, '新答案' + i, 'new-' + i));
+  const receipt = user('outside-result', '');
+  receipt.message.content = [{ type: 'tool_result', tool_use_id: 'outside-call', content: '窗口外工具结果' }];
+  rows.push(receipt, answer('late-outside', '窗口外旧回答', 'outside-result'));
+  assert.equal(claudeDiskRecords(rows.slice(3), { codeagentPartial: true }).needsFullRead, true);
+  const known = answer('inside-tool', '', 'new-0');
+  known.message.content = [{ type: 'tool_use', id: 'inside-call', name: 'Read', input: {} }];
+  known.message.stop_reason = 'tool_use';
+  const mixed = { ...receipt, message: { content: [...receipt.message.content,
+    { type: 'tool_result', tool_use_id: 'inside-call', content: '窗口内结果' }] } };
+  assert.equal(claudeDiskRecords([user('new-0', '新问题'), known, mixed], { codeagentPartial: true }).needsFullRead, true);
+  const file = fileFixture(t, rows);
+  const cards = require('../core/claude-disk-transcript').parseClaudeTranscriptToNativeTurns(file, { fromTail: true, limit: 4 });
+  assert.deepEqual(cards.map(c => c.text), ['新问题2', '新答案2', '新问题3', '新答案3']);
+  const full = claudeTranscriptTurns(claudeDiskRecords(rows));
+  assert.equal(full[1].text, '窗口外旧回答');
+  assert.equal(full[1].toolCalls[0].output, '窗口外工具结果');
+});
+
+test('disk partial prefix fragments before its first question do not request a full reread', () => {
+  const orphan = answer('prefix-answer', '被截掉的问题的回答', 'outside-user');
+  const receipt = user('prefix-result', '');
+  receipt.message.content = [{ type: 'tool_result', tool_use_id: 'outside-call', content: '窗口开头旧结果' }];
+  const prefix = [orphan, receipt,
+    user('prefix-meta', 'hidden instructions', { isMeta: true, parentUuid: 'outside-user' }),
+    user('prefix-stop', '[Request interrupted by user]', { parentUuid: 'outside-user' })];
+  const records = claudeDiskRecords([...prefix, user('visible', '窗口内问题'), answer('visible-answer', '窗口内回答', 'visible')], { codeagentPartial: true });
+  assert.equal(records.needsFullRead, undefined);
+  assert.deepEqual(records.map(r => [r.userMessageId, r.finalText]), [['visible', '窗口内回答']]);
+  // Once a question exists, the same missing parent could misattribute an old
+  // answer to it. The full-read protection must still apply there.
+  const afterQuestion = claudeDiskRecords([user('visible', '窗口内问题'), orphan], { codeagentPartial: true });
+  assert.equal(afterQuestion.needsFullRead, true);
+});
+
+test('disk large-file tail parsing ignores leading orphan frames without reading the whole file', t => {
+  const rows = [user('outside-user', '窗口外问题'),
+    { type: 'system', note: 'x'.repeat(8 * 1024 * 1024 + 1024) },
+    answer('prefix-answer', '窗口开头旧回答', 'outside-user')];
+  for (let i = 0; i < 4; i++) rows.push(user('visible-' + i, '窗口内问题' + i), answer('answer-' + i, '窗口内回答' + i, 'visible-' + i));
+  const file = fileFixture(t, rows), readFile = fs.readFileSync;
+  let fullReads = 0;
+  fs.readFileSync = function(target, ...args) {
+    if (typeof target === 'string' && path.resolve(target) === path.resolve(file)) fullReads++;
+    return readFile.call(this, target, ...args);
+  };
+  let cards;
+  try { cards = require('../core/claude-disk-transcript').parseClaudeTranscriptToNativeTurns(file, { fromTail: true, limit: 4 }); }
+  finally { fs.readFileSync = readFile; }
+  assert.deepEqual(cards.map(c => c.text), ['窗口内问题2', '窗口内回答2', '窗口内问题3', '窗口内回答3']);
+  assert.equal(fullReads, 0, 'an already-discarded prefix frame must not force the entire transcript into memory');
+});
+
 test('skill command helper recognizes only command-message wrappers, including no arguments and array content', () => {
   assert.equal(S.skillCommandText(wrapper()), '/git-ai whoami');
   assert.equal(S.skillCommandText(wrapper('')), '/git-ai');

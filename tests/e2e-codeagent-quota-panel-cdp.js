@@ -54,8 +54,9 @@ async function run() {
     busyDay: busy == null ? { pct: null } : { pct: 100 - busy, used: 100 - busy, total: 100 },
     monthly: month == null ? { pct: null } : { pct: 100 - month, used: (100 - month) * 5, total: 500 }, ...extra,
   } }, { now: at, source: 'screen' });
-  setReading('personal', 84, 91); setReading(ids[0], 62, 88, { idleDiscount: '2折', idleDiscountIn: '1小时57分钟' });
-  setReading(ids[1], 16, 64); setReading(ids[2], null, 42); setReading(ids[3], 0, 40);
+  // Readings are written after launch so the first-day (all unread) rail can be observed first.
+  const seedReadings = () => { setReading('personal', 84, 91); setReading(ids[0], 62, 88, { idleDiscount: '2折', idleDiscountIn: '1小时57分钟' });
+    setReading(ids[1], 16, 64); setReading(ids[2], null, 42); setReading(ids[3], 0, 40); };
   quota.markAvoid(DATA, ids[3], { source: 'quota', kind: 'credit', reason: '额度用完', until: Date.now() + 2 * 3600e3 });
   const command = path.join(ROOT, 'quota-codeagent.cmd'), router = path.join(ROOT, 'quota-codeagent.cjs');
   fs.writeFileSync(command, `@echo off\r\n"${process.execPath}" "${router}" %*\r\n`);
@@ -116,6 +117,11 @@ async function run() {
     c = await connectFirstPage(hub);
     await wait(() => c.eval('!!window.codeagentQuotaPanel && !!window.__codeagentAccountsOpen'), 'quota panel ready');
     await c.eval("window.__quotaCalls=[];window.__quotaErrors=[];addEventListener('error',e=>__quotaErrors.push(e.message));{const ipc=require('electron').ipcRenderer,invoke=ipc.invoke.bind(ipc);ipc.invoke=(...args)=>{if(args[0]==='codeagent:quota-panel')__quotaCalls.push(args);return invoke(...args)}}");
+    await resize(1440); await reload();
+    check('first day: 1440 rail stays collapsed while every account is unread', (await state()).collapsed);
+    await shot('quota-empty', 1440);
+    seedReadings(); await reload();
+    check('first reading auto-expands the 1440 rail once', !(await state()).collapsed);
     const created = await invoke('create-session', { kind: 'codeagent', opts: { cwd: WORK, title: '额度侧栏验收', codeagentAccount: 'pool', codeagentPoolPick: ids[0] } });
     assert(created?.id, JSON.stringify(created));
     await c.eval(`selectSession(${JSON.stringify(created.id)})`); await reload();
@@ -130,6 +136,7 @@ async function run() {
       if (width === 1440) await expanded();
       await shot('quota', width);
       await collapsed();
+      if (width === 1440) check('manual 1440 collapse is remembered', await c.eval("JSON.parse(localStorage.getItem('hubClaudeQuotaPanel')).collapsed===true"));
       const hover = await c.eval(`(()=>{const r=document.querySelector('.qp-ring[data-qp-account="${ids[0]}"]').getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2}})()`);
       await c.send('Input.dispatchMouseEvent', { type:'mouseMoved', ...hover });
       await wait(()=>c.eval("!!document.querySelector('.qp-tip')"), 'rail tooltip');
@@ -179,6 +186,12 @@ async function run() {
     check('failure text is visible on the account row', await c.eval(`document.querySelector('.qp-row[data-qp-account="${failedId}"]').textContent.includes('保留上次读数')`));
     check('no renderer errors', (await c.eval('__quotaErrors')).length===0);
     evidence.requests = await c.eval('__quotaCalls'); evidence.refreshResult = result; evidence.failedResult = failed;
+    await resize(1440); await collapsed();
+    await wait(async () => (await state()).collapsed && await c.eval("JSON.parse(localStorage.getItem('hubClaudeQuotaPanel')).collapsed===true"), 'manual collapse stored');
+    await c.eval('window.__beforeReload=1'); await c.send('Page.reload', {});
+    await wait(() => c.eval('!window.__beforeReload && !!window.codeagentQuotaPanel && innerWidth===1440'), 'quota panel after reload');
+    await reload();
+    check('manual collapse survives a page reload with readings present', (await state()).collapsed);
     evidence.ok = true;
   } catch (error) { failure = error; evidence.ok = false; evidence.error = error.stack; evidence.launchLog = error.logTail; evidence.termination = error.termination; }
   finally {

@@ -23,6 +23,17 @@ module.exports = ({ sessionId, transcript, cwd, fireHook, prompt, menu }) => {
     fs.renameSync(out + '.tmp', out);
   }, 150);
 
+  const stopFixture = process.env.CODEAGENT_TEAM_STOP_FIXTURE === '1';
+  let held = null, escapeCount = 0;
+  const writeAnswer = (uuid, text) => fs.appendFileSync(transcript, JSON.stringify({ type: 'assistant', sessionId, cwd,
+    uuid: randomUUID(), parentUuid: uuid, timestamp: new Date().toISOString(), message: { role: 'assistant', model: 'fixture-no-model',
+      content: [{ type: 'text', text }], stop_reason: 'end_turn' } }) + '\n');
+  if (stopFixture) setInterval(() => {
+    const release = path.join(dir, `${sid}.release-late`);
+    if (!held || !fs.existsSync(release)) return;
+    fs.unlinkSync(release); writeAnswer(held.uuid, 'STOP_FIXTURE_OLD_LATE_ANSWER');
+    fs.writeFileSync(path.join(dir, `${sid}.late-written`), JSON.stringify(held)); held = null;
+  }, 100);
   let pending = '', typed = '', pasting = false;
   function submit() {
     const text = typed.trim(); typed = '';
@@ -32,9 +43,16 @@ module.exports = ({ sessionId, transcript, cwd, fireHook, prompt, menu }) => {
     fs.appendFileSync(transcript, JSON.stringify({ type: 'user', sessionId, cwd, uuid,
       timestamp: new Date().toISOString(), message: { role: 'user', content: text } }) + '\n');
     fireHook('UserPromptSubmit', 'prompt', { prompt: text, prompt_id: uuid });
-    fs.appendFileSync(transcript, JSON.stringify({ type: 'assistant', sessionId, cwd, uuid: randomUUID(), parentUuid: uuid,
-      timestamp: new Date().toISOString(), message: { role: 'assistant', model: 'fixture-no-model',
-        content: [{ type: 'text', text: '夹具已收到消息。' }], stop_reason: 'end_turn' } }) + '\n');
+    if (stopFixture && text.includes('STOP_FIXTURE_HOLD')) {
+      held = { uuid, text }; fs.writeFileSync(path.join(dir, `${sid}.held`), JSON.stringify(held));
+      // A real CLI puts the live activity footer at the bottom of the current
+      // screen. Draw it before its tool hook so Stop cannot race the repaint.
+      process.stdout.write('\x1b[2J\x1b[H  CodeAgent (fake)\x1b[999;1H⠋ Running');
+      fireHook('PreToolUse', 'tool-start', { tool_name: 'Bash', tool_use_id: 'fixture-wait-' + uuid,
+        tool_input: { command: 'fixture wait for cancellation' } });
+      return;
+    }
+    writeAnswer(uuid, stopFixture && text.includes('STOP_FIXTURE_NEXT') ? 'STOP_FIXTURE_CURRENT_ANSWER' : '夹具已收到消息。');
     fireHook('Stop', 'stop');
     prompt();
   }
@@ -42,6 +60,12 @@ module.exports = ({ sessionId, transcript, cwd, fireHook, prompt, menu }) => {
     pending += chunk.toString('utf8');
     while (pending.length) {
       if (pending.startsWith('\x1b')) {
+        // Synchronous hook execution may buffer both Stop keys in one chunk.
+        // Count keys after parsing, rather than treating a data event as one key.
+        if (stopFixture && !pasting && (pending.length === 1 || pending[1] !== '[')) {
+          escapeCount++; pending = pending.slice(1); typed = ''; prompt();
+          fs.writeFileSync(path.join(dir, `${sid}.escaped`), JSON.stringify({ count: escapeCount })); continue;
+        }
         if (/^\x1b(?:\[[0-9;]*)?$/.test(pending)) return;
         const sequence = pending.match(/^\x1b\[[0-9;]*[A-Za-z~]/)?.[0];
         if (sequence) {

@@ -17,7 +17,7 @@
 
 const fs = require('node:fs');
 const { isSyntheticUserEntry, skillCommandText } = require('./synthetic-user-filter.js');
-const { withQueuedHumanInputs } = require('./claude-queued-input');
+const { withQueuedHumanInputs, queuedHumanEntry } = require('./claude-queued-input');
 const { claudeTranscriptTurns } = require('./claude-native-transcript.js');
 const { isToolResultEntry, claudeAssistantContentHasAnswerText, isClaudeTurnStopReasonTerminal } = require('./claude-transcript-parser.js');
 
@@ -80,9 +80,69 @@ function claudeDiskRecords(entries, opts = {}) {
   const records = [];
   if (extracted.commands.length) records.codeagentCommands = extracted.commands;
   const scheduledFires = new Set();
+  // Keep hidden skill/tool/command nodes in the parent index. Filtering those
+  // nodes before resolving ownership disconnects otherwise valid reply chains.
+  const byId = new Map(), owners = new Map(), promptOwners = new Map(), toolOwners = new Map();
+  const queuedCanonical = new Map(), inputAliases = new Map();
+  const interrupted = new Set();
+  for (const entry of entries) {
+    if (!entry?.uuid || entry.isSidechain) continue;
+    const previous = byId.get(entry.uuid);
+    if (!previous || (toMs(entry.timestamp) || 0) >= (toMs(previous.timestamp) || 0)) byId.set(entry.uuid, entry);
+  }
+  // Mirror queued-input dedup identities before duplicates disappear. A replay
+  // may change source UUID while retaining delivery/prompt identity, and its
+  // new wire UUID still remains a valid parent of a later assistant record.
+  for (const entry of extracted.entries) {
+    const queued = queuedHumanEntry(entry), user = queued || (entry?.type === 'user' && entry.uuid ? entry : null);
+    if (!user) continue;
+    const aliases = ['source:' + user.uuid];
+    if (typeof user.promptId === 'string' && user.promptId && !isToolResultEntry(user) && !isSyntheticUserEntry(user)) aliases.push('prompt:' + user.promptId);
+    if (queued && entry.attachment.delivery_id) aliases.push('delivery:' + entry.attachment.delivery_id);
+    if (queued && entry.uuid) aliases.push('attachment:' + entry.uuid);
+    const canonical = aliases.map(alias => inputAliases.get(alias)).find(Boolean) || user.uuid;
+    for (const alias of aliases) if (!inputAliases.has(alias)) inputAliases.set(alias, canonical);
+    if (queued && entry.uuid) queuedCanonical.set(entry.uuid, canonical);
+  }
+  function bind(entry, record) {
+    if (!record) return;
+    if (entry.uuid) owners.set(entry.uuid, record);
+    if (entry.promptId) promptOwners.set(entry.promptId, record);
+  }
+  function linkedOwner(entry) {
+    // A tail can start inside an old answer/tool run. Before the first record
+    // there is no question to attach those fragments to, so they are discarded
+    // regardless of ownership. Only retained history needs a complete chain.
+    if (!records.length) return null;
+    let id = entry.parentUuid || entry.parent_uuid;
+    const seen = new Set();
+    while (id && !seen.has(id)) {
+      seen.add(id);
+      if (owners.has(id)) return owners.get(id);
+      const parent = byId.get(id);
+      if (!parent) { if (opts.codeagentPartial) records.needsFullRead = true; break; }
+      const promptId = parent.promptId || parent.attachment?.promptId;
+      if (promptId && promptOwners.has(promptId)) return promptOwners.get(promptId);
+      const sourceId = queuedCanonical.get(id) || parent.attachment?.source_uuid || parent.attachment?.delivery_id;
+      if (sourceId && owners.has(sourceId)) return owners.get(sourceId);
+      id = parent.parentUuid || parent.parent_uuid;
+    }
+    if (isToolResultEntry(entry)) {
+      const receipts = entry.message.content.filter(block => block?.type === 'tool_result');
+      // A tail window may contain a result whose tool call lives outside it.
+      // Re-read before the compatibility fallback can attach it to a new turn.
+      if (opts.codeagentPartial && receipts.some(block => block.tool_use_id && !toolOwners.has(block.tool_use_id))) records.needsFullRead = true;
+      const matches = new Set(receipts.map(block => toolOwners.get(block.tool_use_id)).filter(Boolean));
+      if (matches.size === 1) return [...matches][0];
+    }
+    return null;
+  }
   let current = null;
   for (const entry of withQueuedHumanInputs(extracted.entries)) {
     if (!entry || typeof entry !== 'object' || entry.isSidechain) continue;
+    // A repeated assistant UUID is a snapshot, not another message. Do not let
+    // an older snapshot appended later roll back a newer final response.
+    if (entry.type === 'assistant' && entry.uuid && byId.get(entry.uuid) !== entry) continue;
     const at = toMs(entry.timestamp);
     // A native scheduled wakeup starts an independent background turn. Its
     // meta prompt is not a human question, but its answer must not overwrite
@@ -96,12 +156,13 @@ function claudeDiskRecords(entries, opts = {}) {
     if (entry.type === 'user' && !isToolResultEntry(entry)) {
       const rawText = userText(entry.message), text = skillCommandText(rawText) ?? rawText;
       if (isInterruptMarker(text)) {
-        if (current) { if (at) current.lastAt = at; settle(current, 'interrupted'); }
+        const target = linkedOwner(entry) || current;
+        if (target) { if (at) target.lastAt = Math.max(target.lastAt, at); settle(target, 'interrupted'); interrupted.add(target); bind(entry, target); }
         continue;
       }
       const notification = isTaskNotification(entry, text);
       const scheduled = entry.isMeta === true && scheduledFires.has(entry.parentUuid);
-      if (!notification && !scheduled && isSyntheticUserEntry(entry, rawText)) continue;
+      if (!notification && !scheduled && isSyntheticUserEntry(entry, rawText)) { bind(entry, linkedOwner(entry) || current); continue; }
       if (!notification && !text.trim() && !(entry.message?.content || []).some?.(b => b && b.type === 'image')) continue;
       if (entry.isQueuedSupplement && current) {
         // This input steers the existing turn. Keep its running tools and their
@@ -110,35 +171,43 @@ function claudeDiskRecords(entries, opts = {}) {
         supplement.status = 'accepted';
         supplement.accepted = true;
         (current.userSupplements ||= []).push(supplement);
+        bind(entry, current);
         continue;
       }
       if (current) settle(current, current.finalText ? 'completed' : 'interrupted');
       current = newRecord(entry, text, notification || scheduled,
         scheduled ? { kind: 'scheduled-task', triggerId: entry.parentUuid } : null);
       records.push(current);
+      bind(entry, current);
       continue;
     }
-    if (!current || (entry.type !== 'assistant' && entry.type !== 'user')) continue;
-    if (at) current.lastAt = at;
+    if (entry.type !== 'assistant' && entry.type !== 'user') continue;
+    // Missing parent links retain legacy adjacency. A partial disk window is
+    // reread in full before that fallback can become the displayed history.
+    const target = linkedOwner(entry) || current;
+    if (!target) continue;
+    bind(entry, target);
+    if (at) target.lastAt = Math.max(target.lastAt, at);
     const frame = { type: entry.type, uuid: entry.uuid, message: entry.message, parent_tool_use_id: null,
-      timestamp: entry.timestamp, hubObservedAt: at || current.lastAt };
-    current.messages.set(entry.uuid || entry.message?.id, frame);
+      timestamp: entry.timestamp, hubObservedAt: at || target.lastAt };
+    target.messages.set(entry.uuid || entry.message?.id, frame);
+    for (const block of entry.message?.content || []) if (block?.type === 'tool_use') toolOwners.set(block.id, target);
     if (entry.type !== 'assistant') continue;
     if (entry.isApiErrorMessage) {
-      current.finalText = assistantText(entry.message) || current.finalText;
-      settle(current, 'failed');
+      target.finalText = assistantText(entry.message) || target.finalText;
+      settle(target, 'failed');
       continue;
     }
     // 只有「终态 + 自带正文」才算答完；空正文的 end_turn 是交错思考的过程标记。
     if (isClaudeTurnStopReasonTerminal(entry.message?.stop_reason)
         && claudeAssistantContentHasAnswerText(entry.message?.content)) {
-      current.finalText = assistantText(entry.message);
-      current.status = 'completed';
-      current.completedAt = at || current.lastAt;
-    } else if (current.status === 'completed') {
+      target.finalText = assistantText(entry.message);
+      target.status = interrupted.has(target) ? 'interrupted' : 'completed';
+      target.completedAt = at || target.lastAt;
+    } else if (target.status === 'completed') {
       // 终态之后又写了新的 assistant 帧（stop hook 续写等）：本轮其实还在继续。
-      current.status = 'running';
-      current.completedAt = null;
+      target.status = 'running';
+      target.completedAt = null;
     }
   }
   return records;
@@ -178,9 +247,10 @@ function parseClaudeTranscriptToNativeTurns(file, opts = {}) {
   const { limit, fromTail = false } = opts;
   if (typeof limit === 'number' && limit <= 0) return [];
   let { entries, partial } = readEntries(file, { fromTail: fromTail && typeof limit === 'number' });
-  let turns = claudeTranscriptTurns(claudeDiskRecords(entries, { ...opts, codeagentFile: file, codeagentPartial: partial }));
+  const records = claudeDiskRecords(entries, { ...opts, codeagentFile: file, codeagentPartial: partial });
+  let turns = claudeTranscriptTurns(records);
   // 尾部窗口可能从一组提问的中间开始；凑不够就回退整文件，保证卡片 id 稳定。
-  if (partial && turns.length <= limit) {
+  if (partial && (records.needsFullRead || turns.length <= limit)) {
     ({ entries } = readEntries(file));
     turns = claudeTranscriptTurns(claudeDiskRecords(entries, { ...opts, codeagentFile: file }));
   } else if (partial) {

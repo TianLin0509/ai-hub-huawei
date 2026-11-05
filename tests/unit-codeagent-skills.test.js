@@ -762,6 +762,61 @@ test('prompt IPC forwards interactive mode only for explicitly requested CodeAge
   } finally { registration.dispose(); }
 });
 
+test('prompt preflight rejections explicitly confirm nothing was sent', async t => {
+  const vm = require('node:vm'), { createRequire } = require('node:module'), { EventEmitter } = require('node:events');
+  const file = path.join(__dirname, '..', 'main', 'ipc', 'prompt-submit-handlers.js'), localRequire = createRequire(file);
+  let writes = 0;
+  const context = vm.createContext({ module: { exports: {} }, console, process, Buffer, setTimeout, clearTimeout,
+    require: name => name === '../../core/group-chat-watcher.js' ? {
+      codeAgentInputAction: async () => ({ ok: true }),
+      sendToPty: async () => { writes++; return { ok: true }; },
+    } : localRequire(name),
+  });
+  vm.runInContext(fs.readFileSync(file, 'utf8'), context);
+  const manager = new EventEmitter();
+  manager.getSession = id => id === 'live' ? { kind: 'codeagent' } : null;
+  manager.writeToSession = () => { writes++; };
+  const registration = context.module.exports.registerPromptSubmitIpc({ handle() {} }, { sessionManager: manager, sendToRenderer() {} });
+  t.after(() => registration.dispose());
+  for (const [request, error] of [
+    [{ sessionId: 'closed', text: 'message' }, 'no-session'],
+    [{ sessionId: '', text: 'message' }, 'bad-request'],
+    [{ sessionId: 'live', text: '' }, 'bad-request'],
+    [{ sessionId: 'live', text: 42 }, 'bad-request'],
+  ]) {
+    const result = await registration.submitPrompt(null, request);
+    assert.equal(result.ok, false); assert.equal(result.error, error);
+    assert.equal(result.notSent, true, error + ' must be a definite preflight rejection');
+    assert.equal(writes, 0);
+  }
+});
+
+test('team preservation reaches both the queued IPC input guard and the final PTY sender', async t => {
+  const vm = require('node:vm'), { createRequire } = require('node:module'), { EventEmitter } = require('node:events');
+  const file = path.join(__dirname, '..', 'main', 'ipc', 'prompt-submit-handlers.js'), localRequire = createRequire(file), calls = [], checks = [];
+  const context = vm.createContext({ module: { exports: {} }, console, process, Buffer, setTimeout, clearTimeout,
+    require: name => name === '../../core/group-chat-watcher.js' ? {
+      codeAgentInputAction: async (...args) => { checks.push(args); return { ok: true }; },
+      sendToPty: async (...args) => { calls.push(args); return { ok: true }; },
+    } : localRequire(name),
+  });
+  vm.runInContext(fs.readFileSync(file, 'utf8'), context);
+  const manager = new EventEmitter(); manager.getSession = () => ({ kind: 'codeagent' });
+  const handlers = new Map();
+  const registration = context.module.exports.registerPromptSubmitIpc({ handle: (name, fn) => handlers.set(name, fn) }, { sessionManager: manager, sendToRenderer() {} });
+  t.after(() => registration.dispose());
+  for (const preserveInput of [true, false]) {
+    checks.length = 0;
+    const result = await registration.submitPrompt(null, { sessionId: 'test', text: 'notification', preserveInput, waitForCliReady: true });
+    assert.equal(result.ok, true);
+    assert.equal(checks.length, 2);
+    assert.ok(checks.every(args => args[2].preserveInput === preserveInput));
+    assert.ok(checks.every(args => args[2].allowUnready === true));
+    assert.equal(calls.at(-1)[3].preserveInput, preserveInput);
+    assert.equal(calls.at(-1)[3].requireReady, true);
+  }
+});
+
 test('toolbar and slash skill popups share no-drag styles for the popup and every interactive descendant', async () => {
   const f = pickerFixture();
   const style = f.document.getElementById('fi-codeagent-skills-style');
@@ -892,6 +947,37 @@ function inputGuardFixture({ text = '', status = 'running', failRead = false, sc
   return { api, guard, current, manager, writes, delays, diagnostics, stopDiagnostics, setText: text => { value = text; }, fail: () => { failed = true; }, now: () => clock,
     setRunning: value => { running = value; }, setFrame: lines => { customFrame = lines; } };
 }
+
+test('team input preservation rejects drafts, menus and unknown screens without any terminal write', async () => {
+  for (const mode of ['draft', 'menu', 'unknown', 'read-failed']) {
+    const f = inputGuardFixture({ text: mode === 'draft' ? '正在编辑的草稿' : '', failRead: mode === 'read-failed' });
+    if (mode === 'menu') f.setFrame(['Rewind to message', '❯ 1. Previous message', '  2. Current message', 'Enter to select · Esc to cancel']);
+    if (mode === 'unknown') f.setFrame(['unrecognized frame']);
+    const result = await f.guard.check('test', { preserveInput: true });
+    assert.equal(result.ok, false, mode); assert.equal(result.notSent, true, mode);
+    assert.equal(result.code, 'codeagent-input-residual', mode); assert.deepEqual(f.writes, [], mode);
+  }
+  const empty = inputGuardFixture({ screenRunning: false });
+  assert.equal((await empty.guard.check('test', { preserveInput: true })).ok, true);
+  assert.deepEqual(empty.writes, []);
+});
+
+test('ordinary manual send still clears residual input when team preservation is not requested', async () => {
+  const f = inputGuardFixture({ text: '普通发送前残留', screenRunning: false });
+  assert.equal((await f.guard.check('test')).ok, true);
+  assert.deepEqual(f.writes.map(row => row.data), ['\x15']);
+});
+
+test('team cold launch reaches readiness wait but its final input check still rejects an unknown frame', async () => {
+  const f = inputGuardFixture(); f.setFrame([]);
+  assert.equal((await f.guard.check('test', { preserveInput: true, allowUnready: true })).pendingReady, true);
+  assert.equal((await f.guard.check('test', { preserveInput: true })).notSent, true);
+  f.setText('draft after launch'); f.setFrame(null);
+  assert.equal((await f.guard.check('test', { preserveInput: true, allowUnready: true })).notSent, true);
+  f.fail();
+  assert.equal((await f.guard.check('test', { preserveInput: true, allowUnready: true })).notSent, true);
+  assert.deepEqual(f.writes, []);
+});
 
 test('CodeAgent stop emits exactly two Esc at least 300ms apart and observes returned input for at most 3 seconds', async () => {
   const f = inputGuardFixture();

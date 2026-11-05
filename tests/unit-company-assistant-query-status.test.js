@@ -50,6 +50,35 @@ function fixture(t, override = async () => undefined) {
   return { a, root, calls, sleeps, clock: () => clock, advance: ms => { clock += ms; }, logFile, logs: () => fs.readFileSync(logFile, 'utf8').trim().split('\n').map(line => JSON.parse(line)) };
 }
 
+// Retained fields from the reported type=1 response; identifiers and text are placeholders.
+const ESTIMATED_MEETING = {
+  meetingId: 'fixture-meeting-id', enMeetingId: 'fixture-en-meeting-id', subject: '占位会议主题', location: '占位会议地点',
+  meetingStartTime: '', meetingEndTime: '', estimatedStartTime: 1793847600000, estimatedEndTime: 1793854800000,
+  timeZone: '(UTC+08:00)Beijing', timeZoneKey: '',
+};
+
+test('upcoming meetings use estimated epoch times despite the unrecognized display timezone', async () => {
+  const raw = { code: 200, data: { data: [ESTIMATED_MEETING], total: 1, page: 1, size: 30 } };
+  const [meeting] = D.meetings(raw);
+  assert.equal(meeting.start, 1793847600000);
+  assert.equal(meeting.end, 1793854800000);
+  assert.equal(meeting.timeStatus, 'known');
+  assert.equal(meeting.timeEvidence.start.sourceTimeZone, 'epoch');
+  assert.equal(meeting.timeEvidence.end.sourceTimeZone, 'epoch');
+  const result = await Q.collectMeetings(async () => raw, 1793847600000, { type: '1' });
+  assert.equal(result.meetings.length, 1);
+  assert.equal(result.coverage.status, 'complete');
+  assert.equal(result.coverage.reason, 'exhausted');
+});
+
+test('actual meeting start and end times still take precedence over estimated times', () => {
+  const meetingStartTime = 1793847600000 + 3600000, meetingEndTime = 1793854800000 + 3600000;
+  const [meeting] = D.meetings([{ ...ESTIMATED_MEETING, meetingStartTime, meetingEndTime }]);
+  assert.equal(meeting.start, meetingStartTime);
+  assert.equal(meeting.end, meetingEndTime);
+  assert.equal(meeting.timeStatus, 'known');
+});
+
 test('calendar table retries the same date/max arguments once with JSON format', async t => {
   const event = { id: 'event-1', subject: 'fixture event', start: '2026-11-02T09:00:00+08:00', end: '2026-11-02T10:00:00+08:00' };
   const { a, calls, logs } = fixture(t, async args => args[0] === 'calendar' ? args.includes('--format') ? json({ events: [event] }) : reply(TABLE) : undefined);

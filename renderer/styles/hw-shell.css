@@ -3,26 +3,30 @@
    开关：coldwhite-shell.js 在公司版给 <html> 加 data-hw-shell；导航宽窄由它按实际宽度写 data-hw-rail。 */
 :root[data-hw-shell] {
   --shell-ico-chat: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Cpath d=%22M4 5h16v11H9l-5 4z%22/%3E%3C/svg%3E");
-  --shell-ico-acct: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Ccircle cx=%228%22 cy=%2212%22 r=%224.2%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22/%3E%3Cpath d=%22M12 12h9M17.5 12v3.5M20.5 12v2.5%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22/%3E%3C/svg%3E");
+  --shell-ico-acct: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Cpath fill-rule=%22evenodd%22 d=%22M8 6.5a5.5 5.5 0 105.2 7.3H16v2.7h2.6v-2.7H21v-3.6h-7.8A5.5 5.5 0 008 6.5zm0 3.3a2.2 2.2 0 110 4.4 2.2 2.2 0 010-4.4z%22/%3E%3C/svg%3E");
   --shell-ico-assist: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Cpath d=%22M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4z%22/%3E%3C/svg%3E");
   --shell-ico-meet: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Crect x=%223%22 y=%226%22 width=%2212%22 height=%2212%22 rx=%223%22/%3E%3Cpath d=%22M16 10l5-3v10l-5-3z%22/%3E%3C/svg%3E");
   --shell-ico-flag: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Cpath d=%22M5 21V4h12l-2.5 4.5L17 13H7v8z%22/%3E%3C/svg%3E");
-  --shell-ico-ppt: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Crect x=%223%22 y=%224%22 width=%2218%22 height=%2213%22 rx=%222.5%22/%3E%3Cpath d=%22M12 17v4M8 21h8%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22/%3E%3C/svg%3E");
-  --shell-ico-room: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Cpath d=%22M4 21V5a2 2 0 012-2h8a2 2 0 012 2v16M2 21h20M16 9h3a1 1 0 011 1v11%22 stroke=%22%23000%22 stroke-width=%222%22 fill=%22none%22 stroke-linecap=%22round%22/%3E%3Ccircle cx=%2212.5%22 cy=%2212%22 r=%221.3%22/%3E%3C/svg%3E");
+  --shell-ico-ppt: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Cpath d=%22M5 4h14a2 2 0 012 2v9a2 2 0 01-2 2h-6v2h3v2H8v-2h3v-2H5a2 2 0 01-2-2V6a2 2 0 012-2z%22/%3E%3C/svg%3E");
+  --shell-ico-room: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Cpath fill-rule=%22evenodd%22 d=%22M6 3h8a2 2 0 012 2v4h3a2 2 0 012 2v8h1v2H2v-2h2V5a2 2 0 012-2zm1.5 4v3h2.5V7zm4.5 0v3h2.5V7zm-4.5 5v3h2.5v-3zm4.5 0v3h2.5v-3zm5.5 0v2.5h2V12z%22/%3E%3C/svg%3E");
   --shell-ico-forum: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Cpath d=%22M3 4h12v9H7l-4 3zM9 15v1h8l4 3V8h-4%22/%3E%3C/svg%3E");
-  --shell-ico-rule: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Cpath d=%22M6 3h9l4 4v14H6z%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linejoin=%22round%22/%3E%3Cpath d=%22M9 11h7M9 15h5%22 stroke=%22%23000%22 stroke-width=%221.8%22 stroke-linecap=%22round%22/%3E%3C/svg%3E");
-  --shell-ico-box: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Cpath d=%22M12 3l8 4.5v9L12 21l-8-4.5v-9z%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linejoin=%22round%22/%3E%3Cpath d=%22M4 7.5l8 4.5 8-4.5M12 12v9%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22/%3E%3C/svg%3E");
-  --shell-ico-clock: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Ccircle cx=%2212%22 cy=%2212%22 r=%228.5%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22/%3E%3Cpath d=%22M12 7.5V12l3 2%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22/%3E%3C/svg%3E");
-  --shell-ico-palette: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Cpath d=%22M12 3a9 9 0 100 18c1.2 0 1.8-.8 1.8-1.7 0-1.3-1-1.6-1-2.6 0-.9.7-1.6 1.7-1.6H17a4 4 0 004-4C21 6.6 17 3 12 3z%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%222%22/%3E%3Ccircle cx=%227.5%22 cy=%2211%22 r=%221.4%22/%3E%3Ccircle cx=%2210.5%22 cy=%227.2%22 r=%221.4%22/%3E%3Ccircle cx=%2215%22 cy=%227.6%22 r=%221.4%22/%3E%3C/svg%3E");
-  --shell-ico-set: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Ccircle cx=%2212%22 cy=%2212%22 r=%223.2%22 stroke=%22%23000%22 stroke-width=%222%22 fill=%22none%22/%3E%3Cpath d=%22M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1L7 17M17 7l2.1-2.1%22 stroke=%22%23000%22 stroke-width=%222%22 stroke-linecap=%22round%22/%3E%3C/svg%3E");
+  --shell-ico-rule: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Cpath fill-rule=%22evenodd%22 d=%22M6 2h8.5L20 7.5V20a2 2 0 01-2 2H6a2 2 0 01-2-2V4a2 2 0 012-2zm2.5 9v2h7v-2zm0 4v2h5v-2z%22/%3E%3C/svg%3E");
+  --shell-ico-box: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Cpath d=%22M12 2.5l8.5 4.6L12 11.8 3.5 7.1z%22/%3E%3Cpath d=%22M3 8.8l8 4.4v9.3l-8-4.4zM13 13.2l8-4.4v9.3l-8 4.4z%22/%3E%3C/svg%3E");
+  --shell-ico-clock: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Cpath fill-rule=%22evenodd%22 d=%22M12 2.5a9.5 9.5 0 110 19 9.5 9.5 0 010-19zM11 7v5.6l4 2.6 1.1-1.7-3.1-2V7z%22/%3E%3C/svg%3E");
+  --shell-ico-palette: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Cpath fill-rule=%22evenodd%22 d=%22M12 2.5a9.5 9.5 0 000 19c1.4 0 2.2-.9 2.2-2 0-1.3-1-1.7-1-2.7 0-1 .8-1.8 1.9-1.8H17a4.5 4.5 0 004.5-4.5C21.5 6.1 17.2 2.5 12 2.5zM7.5 9.6a1.6 1.6 0 110 3.2 1.6 1.6 0 010-3.2zm3.2-3.8a1.6 1.6 0 110 3.2 1.6 1.6 0 010-3.2zm4.6.2a1.6 1.6 0 110 3.2 1.6 1.6 0 010-3.2z%22/%3E%3C/svg%3E");
+  --shell-ico-set: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22%3E%3Cpath fill-rule=%22evenodd%22 d=%22M10.3 2h3.4l.5 2.6 1.8.8 2.2-1.5 2.4 2.4-1.5 2.2.8 1.8 2.6.5v3.4l-2.6.5-.8 1.8 1.5 2.2-2.4 2.4-2.2-1.5-1.8.8-.5 2.6h-3.4l-.5-2.6-1.8-.8-2.2 1.5-2.4-2.4 1.5-2.2-.8-1.8L2 13.7v-3.4l2.6-.5.8-1.8-1.5-2.2 2.4-2.4 2.2 1.5 1.8-.8zM12 8.8a3.2 3.2 0 100 6.4 3.2 3.2 0 000-6.4z%22/%3E%3C/svg%3E");
 }
 
-/* ---------- 宽度：电脑预设默认用定稿导航岛宽度；用户在「显示参数」里调过就用用户的值 ---------- */
+/* ---------- 宽度：默认 64px 图标栏（2026-11-05 改回小栏）；「设置 → 导航显示文字」切回定稿宽版；
+   用户在「显示参数」里调过就用用户的值 ---------- */
 :root[data-hw-shell]:not([data-display-mode="phone"]):not(.hub-rail-preview):not(.hub-rail-hidden):not(.hub-rail-unpinned) {
+  --hub-rail-slot: var(--display-rail-width, 64px); --hub-rail-open: var(--display-rail-width, 64px);
+}
+:root[data-hw-shell][data-hw-rail-pref="wide"]:not([data-display-mode="phone"]):not(.hub-rail-preview):not(.hub-rail-hidden):not(.hub-rail-unpinned) {
   --hub-rail-slot: var(--display-rail-width, 248px); --hub-rail-open: var(--display-rail-width, 248px);
 }
 @media (max-width: 1360px) {
-  :root[data-hw-shell]:not([data-display-mode="phone"]):not(.hub-rail-preview):not(.hub-rail-hidden):not(.hub-rail-unpinned) {
+  :root[data-hw-shell][data-hw-rail-pref="wide"]:not([data-display-mode="phone"]):not(.hub-rail-preview):not(.hub-rail-hidden):not(.hub-rail-unpinned) {
     --hub-rail-slot: var(--display-rail-width, 232px); --hub-rail-open: var(--display-rail-width, 232px);
   }
 }
@@ -138,13 +142,38 @@
 :root[data-hw-shell] body #app-body #scene-rail .rail-utility-label { display: block; font-size: var(--hw-fs-14); line-height: 20px; color: inherit; }
 :root[data-hw-shell] body #app-body #scene-rail :is(.theme-menu,.options-menu) { background: var(--hw-surface); border: 0; border-radius: var(--hw-r-md); box-shadow: var(--hw-e3); }
 
-/* 窄导航（未固定、手机预设或用户调窄）：只留图标方块，居中 */
+/* 窄导航 = 默认图标栏（也覆盖未固定、手机预设或用户调窄）：
+   导航岛 46px 宽浮在底色上（离会话栏约 10px）；只留图标，名字靠悬停卡（按钮自带 title）；分组之间一条短分隔线；
+   当前页 = 浅蓝底 + 蓝色图标 + 贴岛左缘的蓝色竖条。 */
+:root[data-hw-shell][data-hw-rail="narrow"]:not([data-display-mode="phone"]) body #app-body #scene-rail,
+:root[data-hw-shell][data-hw-rail="narrow"]:not([data-display-mode="phone"]) body .app-container.rail-pinned #app-body #scene-rail,
+:root[data-hw-shell][data-hw-rail="narrow"]:not([data-display-mode="phone"]) body #app-body #scene-rail:is(:hover,:has(:focus-visible)) {
+  left: 8px; top: 4px; bottom: 8px; width: calc(var(--hub-rail-slot) - 18px); min-width: 0;
+  background: var(--hw-surface) !important; border-radius: var(--hw-r-lg); box-shadow: var(--hw-e1) !important;
+  padding: 6px 0 8px; display: flex; flex-direction: column; align-items: stretch;
+}
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-drawer-head { height: 32px; padding: 0; justify-content: center; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-drawer-head strong { display: none; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-navigation { padding: 0 4px; gap: 4px; align-items: center; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .hw-nav-cap { display: block; width: 20px; height: 1px; margin: 6px auto; padding: 0; overflow: hidden; font-size: 0; background: var(--hw-line); }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .hw-nav-cap[data-cap="work"] { display: none; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail :is(.rail-navigation > .btn-shell-nav, .rail-group-trigger) { position: relative; width: 38px; height: 38px; min-height: 38px; margin: 0 auto; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-group { display: flex; justify-content: center; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .btn-shell-nav .btn-icon { width: 24px; height: 24px; background: transparent !important; color: var(--hw-text-2); box-shadow: none; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .btn-shell-nav .btn-icon::before { width: 20px; height: 20px; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .btn-shell-nav:hover .btn-icon { color: var(--hw-text-1); }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail :is(.btn-shell-nav.cw-current, .rail-group-trigger.rail-group-current) .btn-icon { background: transparent !important; color: var(--hw-brand); box-shadow: none; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail :is(.rail-navigation > .btn-shell-nav.cw-current, .rail-group-trigger.rail-group-current)::before {
+  content: ''; display: block; position: absolute; left: -4px; top: 9px; width: 3px; height: 20px; border-radius: 0 2px 2px 0; background: var(--hw-brand);
+}
 :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail :is(.btn-shell-nav, #btn-theme, #btn-options) { justify-content: center; padding: 0; gap: 0; }
 :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail :is(.btn-label, .rail-utility-label) { display: none !important; }
 :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-group-menu > .btn-shell-nav { justify-content: flex-start; padding: 0 10px; gap: 10px; }
 :root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-group-menu > .btn-shell-nav .btn-label { display: block !important; }
-:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options)::after { left: 50%; margin-left: -8px; }
-:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities { flex-direction: column; align-items: stretch; padding: 8px 4px; gap: 2px; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities { flex-direction: column; align-items: center; width: auto; padding: 8px 0 0; margin: 0 4px; gap: 4px; border-top: 1px solid var(--hw-line); }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options) { width: 38px; height: 38px; min-height: 38px; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options)::before { display: none; }
+:root[data-hw-shell][data-hw-rail="narrow"] body #app-body #scene-rail .rail-utilities :is(#btn-theme,#btn-options)::after { left: 50%; top: 50%; margin: -10px 0 0 -10px; width: 20px; height: 20px; }
 
 /* ---------- 顶栏（窗口标题栏）：与底色同层，无分隔线 ---------- */
 :root[data-hw-shell] body #app-toolbar { background: var(--hw-bg) !important; border-bottom: 0 !important; box-shadow: none !important; color: var(--hw-text-1); }

@@ -133,6 +133,18 @@ function createCodeAgentInputGuard(manager, {
     diagnose,
     async inspect(sid) { return describe(sid, await read(sid)); },
     async check(sid, options = {}) {
+      if (options.preserveInput === true) {
+        const frame = await read(sid, CODEAGENT_INPUT_READ_WAIT_MS, true);
+        // Early checks may precede the first editor frame. Only the existing
+        // readiness wait may pass this state; the final pre-write check cannot.
+        if (options.allowUnready === true && frame.state === 'unknown' && !frame.readFailed && !frame.menu)
+          return { ok: true, input: null, pendingReady: true };
+        if (frame.menu || frame.readFailed || frame.state === 'unknown') return {
+          ok: false, notSent: true, code: CODEAGENT_INPUT_RESIDUAL, error: CODEAGENT_INPUT_RESIDUAL,
+          message: '终端输入状态尚未确认或有待处理菜单，团队消息未发送；请先到会话核对',
+        };
+        return describe(sid, frame);
+      }
       let snapshot;
       if (!options.skipMenuClose) {
         const frame = await read(sid, CODEAGENT_INPUT_READ_WAIT_MS, true);

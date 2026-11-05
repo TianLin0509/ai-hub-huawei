@@ -213,9 +213,9 @@ function registerPromptSubmitIpc(ipcMain, deps) {
   const sendPrompt = async (_event, request = {}) => {
     const sessionId = typeof request.sessionId === 'string' ? request.sessionId : '';
     let text = typeof request.text === 'string' ? request.text : '';
-    if (!sessionId || !text) return { ok: false, error: 'bad-request' };
+    if (!sessionId || !text) return { ok: false, notSent: true, error: 'bad-request' };
     const kind = resolveKind(sessionId);
-    if (!kind) return { ok: false, error: 'no-session' };
+    if (!kind) return { ok: false, notSent: true, error: 'no-session' };
     const originalPrompt = text;
     // Host-provided context preparation happens before receipt fingerprints and
     // before the first PTY write, for both the UI and assistant tool callers.
@@ -267,7 +267,7 @@ function registerPromptSubmitIpc(ipcMain, deps) {
     lastPromptBySid.set(sessionId, text);
     return enqueue(sessionId, async () => {
       if (require('../../core/ai-kinds').isCodeAgentKind(kind)) {
-        const input = await groupChatWatcher.codeAgentInputAction(sessionId, 'check');
+        const input = await groupChatWatcher.codeAgentInputAction(sessionId, 'check', { preserveInput: request.preserveInput === true, allowUnready: request.waitForCliReady === true });
         if (!input.ok) return input;
       }
       const native = sessionManager.getNativeCodex?.(sessionId);
@@ -293,6 +293,7 @@ function registerPromptSubmitIpc(ipcMain, deps) {
           requireReady: request.waitForCliReady === true || sessionManager.getSession(sessionId)?.purpose === 'hub-assistant', submissionReceipt: receipt,
           clientSubmissionId, attachments:request.attachments,
           originalPrompt, codeagentSkill: request.codeagentSkill,
+          preserveInput: request.preserveInput === true,
           codeagentInteractiveCommand: request.codeagentInteractiveCommand === true && require('../../core/ai-kinds').isCodeAgentKind(kind) && /^\s*\/\S+/.test(text),
           ...(clearObserver ? { localCommandObserver: clearObserver } : {}),
         });
@@ -363,7 +364,7 @@ function registerPromptSubmitIpc(ipcMain, deps) {
   const submitPrompt = async (event, request = {}) => {
     const session = sessionManager.getSession(request.sessionId);
     if (require('../../core/ai-kinds').isCodeAgentKind(session?.kind)) {
-      const input = await groupChatWatcher.codeAgentInputAction(request.sessionId, 'check');
+      const input = await groupChatWatcher.codeAgentInputAction(request.sessionId, 'check', { preserveInput: request.preserveInput === true, allowUnready: request.waitForCliReady === true });
       if (!input.ok) return input;
     }
     const native = session && (['codex-app-server', 'claude-stream-json', 'acp'].includes(session.runtimeBackend)

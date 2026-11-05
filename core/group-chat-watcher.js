@@ -657,7 +657,7 @@ async function sendToPtyImpl(sid, prompt, kind, options = {}) {
   if (isCodeAgentKind(kind) && !options.codeagentModelPick) {
     // 启动前屏幕可能还没画完，先拦明确菜单/pending；真正写正文前再要求
     // 当前普通输入区的正向证据，不能把这里的早期检查当作持久许可。
-    const input = await require('./codeagent-input-guard').codeAgentInputGuard(sessionManager).check(sid);
+    const input = await require('./codeagent-input-guard').codeAgentInputGuard(sessionManager).check(sid, { preserveInput: options.preserveInput === true, allowUnready: requireReady });
     if (!input.ok) return input;
     await checkCodeAgentPromptTarget(sessionManager, sid, { allowUnready: true });
   }
@@ -786,7 +786,7 @@ async function sendToPtyImpl(sid, prompt, kind, options = {}) {
     if (!usedCodexEditorInput) await clearCodexInputLine(sessionManager, sid, kind);
     if (options.submissionReceipt?.resolved) return alreadySubmitted();
     if (isCodeAgentKind(kind)) {
-      const input = await require('./codeagent-input-guard').codeAgentInputGuard(sessionManager).check(sid, { skipMenuClose: options.codeagentModelPick === true });
+      const input = await require('./codeagent-input-guard').codeAgentInputGuard(sessionManager).check(sid, { skipMenuClose: options.codeagentModelPick === true, preserveInput: options.preserveInput === true });
       if (!input.ok) return input;
     }
     if (isCodeAgentKind(kind) && !options.codeagentModelPick) {

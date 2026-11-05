@@ -12,7 +12,10 @@ svg.caa-i.caa-sm{width:14px;height:14px}svg.caa-i.caa-lg{width:20px;height:20px}
 .caa-page{display:flex;flex-direction:column;gap:12px;min-height:100%;padding:12px 12px 20px}
 .caa-page-head{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:4px 8px 10px}
 .caa-page-title{margin:0;font-size:22px;line-height:1.25;font-weight:600;color:var(--hw-text-1)}
-.caa-page-sub{margin:6px 0 0;color:var(--hw-text-2);max-width:620px}
+/* 页头与助理、会议室、PPT、论坛同一写法：标题和说明同一行 */
+.caa-page-head>div:first-child{display:flex;align-items:baseline;gap:14px;min-width:0}
+.caa-page-title{white-space:nowrap}
+.caa-page-sub{margin:0;min-width:0;font-size:var(--hw-fs-13);color:var(--hw-text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .caa-head-actions{display:flex;align-items:center;gap:8px;flex:none}
 /* 按钮与状态 */
 .caa-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:36px;padding:0 16px;border-radius:var(--hw-r-pill);border:0;background:transparent;color:var(--hw-text-1);font-size:13px;white-space:nowrap;cursor:pointer;transition:background var(--hw-t-fast) var(--hw-ease),box-shadow var(--hw-t-fast) var(--hw-ease)}
