@@ -2,11 +2,12 @@
 
 const { accountState, pauseReason } = require('./codeagent-account-state');
 const { durationMinutes } = require('../core/codeagent-usage-menu');
+const { tokenUsage, TOKEN_DANGER_PERCENT } = require('./codeagent-quota-bar');
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const number = value => value == null || value === '' || !Number.isFinite(Number(value)) ? null : Number(value);
 const clamp = value => Math.max(0, Math.min(100, value));
-const BUCKETS = { busyDay: ['busyDay', '今日忙时', '忙时'], monthly: ['monthly', '月度'] };
-const LABELS = { busyDay: '今日忙时', monthly: '月度' };
+const BUCKETS = { busyDay: ['busyDay', '今日忙时', '忙时'], idleDay: ['idleDay', '闲时'], monthly: ['monthly', '月度'] };
+const LABELS = { busyDay: '今日忙时', idleDay: '闲时', monthly: '月度' };
 const fmt = value => Number(value).toLocaleString('en-US', { maximumFractionDigits: 1 });
 
 function readTime(at, now = Date.now()) {
@@ -31,6 +32,27 @@ function metric(row, bucket) {
     total, at: usageAt, source: 'usage' };
 }
 
+// 主数字：这个号当前模型的 Token 今日剩余（2026-11-05 用户定）。Credit 总额很大、比例长期接近 100%，只放悬停。
+// CodeAgent 不给重置时间（公司真机 Q-1105-04，1.2615.02.03 缓存里没有任何 reset 字段），只能按自然日、整点、整分推断读数还算不算当前窗口：
+// 昨天的读数不当今天的显示，上一个小时、上一分钟的读数不用来报警。旧缓存没有 modelsAt 时用 at。
+function tokenMetric(account, currentModel, now = Date.now()) {
+  const token = tokenUsage(account.usage, currentModel || account.defaultModel || '');
+  if (!token) return null;
+  const at = number(account.usage?.modelsAt) || number(account.usage?.at) || 0;
+  const stamp = ms => new Date(ms + 8 * 3600000).toISOString();
+  const same = length => at > 0 && stamp(at).slice(0, length) === stamp(now).slice(0, length);
+  const fresh = { day: same(10), hour: same(13), min: same(16) };
+  const warning = [['hour', '小时窗'], ['min', '分钟窗']]
+    .map(([window, label]) => ({ window, label, pct: token.periods[window] }))
+    .filter(item => fresh[item.window] && Number.isFinite(item.pct) && item.pct >= TOKEN_DANGER_PERCENT)
+    .sort((a, b) => b.pct - a.pct)[0] || null;
+  const model = account.usage?.models?.find(item => item.name === token.name) || null;
+  return { pct: fresh.day ? clamp(100 - token.pct) : null, expired: !fresh.day, name: token.name, warning, periods: token.periods, fresh, at,
+    windows: { day: model?.day || null, hour: model?.hour || null, min: model?.min || null } };
+}
+// 向下取整：用过一点就不显示 100%；还有余量时至少显示 1%，只有真的用完才写「用完」。
+const wholePct = pct => (pct > 0 ? Math.max(1, Math.floor(pct)) : 0);
+
 function idleView(rows, now) {
   const source = rows.filter(row => row.credit && (row.credit.idleDiscountActive || row.credit.idleDiscountIn || row.credit.idleDiscountUntil))
     .sort((a, b) => (b.creditAt || 0) - (a.creditAt || 0))[0];
@@ -46,31 +68,35 @@ function idleView(rows, now) {
   return { active: false, text: `闲时 ${discount}还有 ${time}`, at: source.creditAt };
 }
 
-function quotaView(snapshot, { now = Date.now(), currentAccountId = '', loadingKeys = new Set(), installed } = {}) {
-  const rows = (snapshot?.rows || []).map((account, index) => {
+function quotaView(snapshot, { now = Date.now(), currentAccountId = '', currentModel = '', loadingKeys = new Set(), installed } = {}) {
+  // 不分个人和号池：个人账号排第一，和它相同或互相重复的号只算一个，没登录的个人账号不占位。
+  const rows = (snapshot?.rows || []).map((account, index) => ({ account, index }))
+    .filter(({ account }) => !account.sameAsPersonal && !account.duplicateOf && !(account.personal && account.present === false))
+    .map(({ account, index }) => {
     const health = accountState(account, { personal: account.personal });
-    const busy = metric(account, 'busyDay'), month = metric(account, 'monthly');
+    const busy = metric(account, 'busyDay'), idle = metric(account, 'idleDay'), month = metric(account, 'monthly');
     const current = !!currentAccountId && account.id === currentAccountId;
+    const token = tokenMetric(account, current ? currentModel : '', now);
     const loading = loadingKeys.has(account.id) || account.refresh?.status === 'in-flight';
-    const count = Number(account.activeSessions) || 0;
-    let detail = current ? `本会话 · 共 ${count} 个会话` : count ? `${count} 个会话` : '无会话';
+    // 第二行（s1 样稿）：模型名 · 告警 · 读数时间；状态类的文字（暂停、需登录、读取失败）占模型名的位置。
+    let detail = token?.name || '下次读取后显示', alert = '';
     let warning = false;
     if (account.avoid) { detail = pauseReason(account.avoid, now); warning = true; }
-    else if (!health.usable) { detail = [health.label, health.detail].filter(Boolean).join(' · '); warning = true; }
+    else if (!health.usable) { detail = health.detail || health.label; warning = true; }
     else if (loading) detail = '读取中…';
-    else if (account.refresh?.status === 'failed' || account.refresh?.error) { detail = busy || month ? '读取失败，保留上次读数' : '读取失败，暂未读到额度'; warning = true; }
-    else if (account.refresh?.status === 'disabled') detail = busy || month ? '暂未开启额度读取 · 显示上次读数' : '暂未开启额度读取';
-    else if (account.nextRefreshAt > now) detail = `10 分钟内读过 · ${readTime(account.nextRefreshAt, now)} 后可再读`;
-    else if (!busy && !month) detail = '会话运行后显示';
-    const at = Math.max(busy?.at || 0, month?.at || 0);
-    const name = account.personal ? '我的个人账号' : account.label || account.note || account.accountLabel || '未备注账号';
-    return { ...account, name, busy, month, at, current, loading, warning, detail,
-      usable: health.usable, dim: !health.usable || busy?.pct === 0 || month?.pct === 0,
+    else if (account.refresh?.status === 'failed' || account.refresh?.error) { detail = token || busy || month ? '读取失败，保留上次读数' : '读取失败，暂未读到额度'; warning = true; }
+    else if (account.refresh?.status === 'disabled') detail = token || busy || month ? '暂未开启额度读取 · 显示上次读数' : '暂未开启额度读取';
+    else if (token?.pct === 0) alert = '约 00:00 恢复';
+    else if (token?.warning) alert = `${token.warning.label} ${Math.round(token.warning.pct)}%`;
+    const at = token?.at || Math.max(busy?.at || 0, month?.at || 0);
+    const name = account.personal ? '我的账号' : account.label || account.note || account.accountLabel || '未备注账号';
+    const needsLogin = account.state !== 'ready' && !account.avoid;
+    return { ...account, name, token, busy, idle, month, at, current, loading, warning, detail, alert, needsLogin, statusLabel: health.label,
+      usable: health.usable, dim: !health.usable || token?.pct === 0 || busy?.pct === 0 || month?.pct === 0,
       avatar: account.personal ? '我' : [...name][0],
       tint: account.personal ? 'brand' : ['tint-room', 'tint-assist', 'tint-meet', 'tint-room', 'tint-forum'][(index - 1 + 5) % 5] };
   });
-  const pool = rows.filter(row => !row.personal);
-  return { rows, installed, pool: pool.length, usable: pool.filter(row => row.usable).length,
+  return { rows, installed, visible: rows.length > 1, total: rows.length, usable: rows.filter(row => row.usable).length,
     idle: idleView(snapshot?.rows || [], now), at: Math.max(0, ...rows.map(row => row.at)) };
 }
 
@@ -87,39 +113,89 @@ function metricTitle(value, bucket, now) {
   const quantity = value.remaining !== null ? `剩 ${fmt(value.remaining)}${value.total !== null ? ` / ${fmt(value.total)}` : ''} · ` : '';
   return `${LABELS[bucket]}：${quantity}${Math.round(value.pct)}%${value.at ? ` · ${readTime(value.at, now)} 读取` : ' · 读取时间未记录'}`;
 }
-function capsule(value, bucket, now) {
-  if (!value) return `<span class="qp-cap none" data-qp-bucket="${bucket}" title="${metricTitle(null, bucket, now)}">未读取</span>`;
-  const classes = value.pct === 0 ? ' out' : value.pct < 20 ? ' low' : '';
-  return `<span class="qp-cap${classes}" data-qp-bucket="${bucket}" style="--v:${value.pct}" title="${esc(metricTitle(value, bucket, now))}"><span>${value.pct === 0 ? '用完' : Math.round(value.pct) + '%'}</span></span>`;
+// 悬停：Token 三个窗口 + Credit 三档，都写明是剩余还是已用。
+function tokenLines(token, now) {
+  if (!token) return ['Token：未读取'];
+  const used = (label, window) => `${label}${token.fresh[window] ? '' : '上次'}已用 ${Number.isFinite(token.periods[window]) ? `${Math.round(token.periods[window] * 10) / 10}%` : '未读取'}`;
+  return [token.expired ? `${token.name} Token 今日未读取` : `${token.name} Token 今日剩余 ${wholePct(token.pct)}%`,
+    [used('今日', 'day'), used('本小时', 'hour'), used('本分钟', 'min')].join(' · '),
+    ...(token.fresh.min ? [] : ['这份读数可能已过时：CodeAgent 不告诉重置时间，按整天、整点、整分钟估算已经换了新一轮']),
+    ...(token.at ? [`${readTime(token.at, now)} 读取`] : [])];
+}
+function quotaTitle(row, now) {
+  return [...tokenLines(row.token, now), ...[['busyDay', row.busy], ['idleDay', row.idle], ['monthly', row.month]].filter(([, value]) => value)
+    .map(([bucket, value]) => `Credit ${metricTitle(value, bucket, now)}`)].join('\n');
+}
+function capsule(row) {
+  const token = row.token;
+  if (row.needsLogin) return '<span class="qp-cap none" data-qp-bucket="token">需登录</span>';
+  if (!token) return '<span class="qp-cap none" data-qp-bucket="token">未读取</span>';
+  if (token.expired) return '<span class="qp-cap none" data-qp-bucket="token">待读取</span>';
+  const pct = wholePct(token.pct), classes = pct === 0 ? ' out' : pct <= 20 ? ' low' : '';
+  return `<span class="qp-cap${classes}" data-qp-bucket="token" style="--v:${token.pct}"><span>${pct === 0 ? '用完' : `${pct}%`}</span></span>`;
+}
+// 读数时间：今天的写时刻，超过 1 小时写「N 小时前」并标琥珀。
+function readAge(at, now) {
+  const hours = Math.floor((now - at) / 3600000);
+  if (hours < 1) return { text: readTime(at, now), old: false };
+  return { text: hours < 48 ? `${hours} 小时前` : `${Math.floor(hours / 24)} 天前`, old: true };
 }
 function rowHtml(row, now) {
-  const detail = row.warning ? `<span class="warn">${esc(row.detail)}</span>` : row.current && row.detail.startsWith('本会话')
-    ? '<span><span class="cur">本会话</span>' + esc(row.detail.slice(3)) + '</span>' : `<span>${esc(row.detail)}</span>`;
-  return `<div class="qp-row${row.current ? ' is-current' : ''}${row.dim ? ' dim' : ''}${row.loading ? ' is-loading' : ''}" data-qp-account="${esc(row.id)}" role="button" tabindex="0" title="${esc(`打开账号页并定位到「${row.name}」`)}">
-    <span class="qp-av" style="--av:var(--hw-${row.tint})">${esc(row.avatar)}</span><span class="qp-name">${esc(row.name)}</span>
-    ${!row.busy && !row.month ? '<span class="qp-none">未读取</span>' : capsule(row.busy, 'busyDay', now) + capsule(row.month, 'monthly', now)}
-    <div class="qp-sub" title="${esc(row.refresh?.error || row.detail)}">${detail}${row.at && !row.loading ? `<span class="qp-at">${readTime(row.at, now)}</span>` : ''}</div></div>`;
+  const first = row.warning ? `<span class="warn">${esc(row.detail)}</span>` : `<span>${esc(row.detail)}</span>`;
+  const alert = row.alert ? `<span class="warn">${esc(row.alert)}</span>` : '';
+  const showAt = row.at && !row.loading && !row.warning;
+  const age = showAt ? readAge(row.at, now) : null;
+  return `<div class="qp-row${row.current ? ' is-current' : ''}${row.dim ? ' dim' : ''}${row.loading ? ' is-loading' : ''}" data-qp-account="${esc(row.id)}" role="button" tabindex="0" aria-label="${esc(`打开账号页并定位到「${row.name}」`)}">
+    <span class="qp-av" style="--av:var(--hw-${row.tint})">${esc(row.avatar)}</span><span class="qp-name"><span class="qp-name-text">${esc(row.name)}</span>${row.personal ? '<i class="qp-tag">个人</i>' : ''}</span>
+    ${capsule(row)}
+    <div class="qp-sub"${row.refresh?.error ? ` title="${esc(row.refresh.error)}"` : ''}>${first}${alert}${age ? `<span class="qp-at${age.old ? ' warn' : ''}">${esc(age.text)}</span>` : ''}</div></div>`;
+}
+// 悬停卡（s1 样稿）：三档 Token + Credit，一行一项；只有已用 ≥80% 的那档标琥珀；只写读取时间，不写没实现的行为。
+function tipHtml(row, now) {
+  const token = row.token, lines = [];
+  const pctText = value => `${Math.round(value * 10) / 10}%`;
+  const tokenRow = (label, window) => {
+    const data = token.windows[window], pct = token.periods[window], fresh = token.fresh[window];
+    if (!Number.isFinite(pct)) return `<div class="tk"><span>${label}</span><em>未读取</em><span></span></div>`;
+    const right = !fresh ? `上次 ${pctText(pct)}` : window === 'day' ? `剩 ${wholePct(100 - pct)}%` : `已用 ${pctText(pct)}`;
+    return `<div class="tk${fresh && pct >= TOKEN_DANGER_PERCENT ? ' warn' : ''}"><span>${label}</span><em>${esc(data?.used ?? '')}${data?.total ? ` / ${esc(data.total)}` : ''}</em><span>${right}</span></div>`;
+  };
+  if (token) lines.push(tokenRow('今日', 'day'), tokenRow('本小时', 'hour'), tokenRow('本分钟', 'min'));
+  else lines.push('<div class="tk"><span>Token</span><em>未读取</em><span></span></div>');
+  const credits = [['monthly', row.month], ['busyDay', row.busy], ['idleDay', row.idle]].filter(([, value]) => value);
+  if (credits.length) lines.push('<hr>', ...credits.map(([bucket, value]) => `<div class="tk"><span>Credit ${LABELS[bucket]}</span><em>${value.remaining !== null ? `${fmt(value.remaining)}${value.total !== null ? ` / ${fmt(value.total)}` : ''}` : ''}</em><span>剩 ${wholePct(value.pct)}%</span></div>`));
+  const notes = [row.at ? `${readTime(row.at, now)} 读取` : '', token && !token.fresh.min ? '这份读数可能已过时：CodeAgent 不告诉重置时间，按整天、整点、整分钟估算已经换了新一轮' : '', row.warning ? row.detail : ''].filter(Boolean);
+  return `<b>${esc(row.name)}${token ? ` · ${esc(token.name)}` : ''}</b>${lines.join('')}${notes.map(text => `<p>${esc(text)}</p>`).join('')}`;
 }
 function ringHtml(row, now) {
-  const cls = row.dim ? 'off' : !row.busy ? 'none' : row.busy.pct < 20 ? 'low' : '';
-  const title = [row.name, metricTitle(row.busy, 'busyDay', now), metricTitle(row.month, 'monthly', now), row.detail].join('\n');
-  return `<button type="button" class="qp-ring ${cls}${row.current ? ' is-current' : ''}" data-qp-account="${esc(row.id)}" style="--v:${row.busy?.pct || 0}" aria-label="${esc(title)}"><span class="qp-av" style="--av:var(--hw-${row.tint})">${esc(row.avatar)}</span></button>`;
+  const cls = row.dim ? 'off' : !row.token || row.token.expired ? 'none' : row.token.pct <= 20 ? 'low' : '';
+  const title = [row.name, quotaTitle(row, now), row.detail].join('\n');
+  return `<button type="button" class="qp-ring ${cls}${row.current ? ' is-current' : ''}" data-qp-account="${esc(row.id)}" style="--v:${row.token?.pct || 0}" aria-label="${esc(title)}"><span class="qp-av" style="--av:var(--hw-${row.tint})">${esc(row.avatar)}</span></button>`;
+}
+// 底部状态栏形态：一行放下所有号，名字加今日剩余，和右侧栏同一口径。
+function renderQuotaFooter(view, { now = Date.now() } = {}) {
+  const items = view.rows.map(row => {
+    const token = row.token, pct = token && !token.expired ? wholePct(token.pct) : null;
+    const text = row.needsLogin ? '需登录' : !token ? '未读取' : token.expired ? '待读取' : pct === 0 ? '用完' : `${pct}%`;
+    const level = row.warning || row.alert || (pct !== null && pct <= 20) ? ' low' : '';
+    return `<button type="button" class="qp-foot-item${level}${row.current ? ' is-current' : ''}${row.dim ? ' dim' : ''}" data-qp-account="${esc(row.id)}" title="${esc([row.name, quotaTitle(row, now), row.detail, '点击打开账号页'].join('\n'))}">`
+      + `<span class="qp-av" style="--av:var(--hw-${row.tint})">${esc(row.avatar)}</span><span class="qp-foot-name">${esc(row.name)}</span><b>${esc(text)}</b></button>`;
+  });
+  return `<div class="qp-foot" role="group" aria-label="今日 Token 剩余">${items.join('')}</div>`;
 }
 function renderQuota(view, { now = Date.now(), refreshing = false, loadingCount = 0, message = '' } = {}) {
   if (view.installed === false) return `<div class="qp-h"><h3>号池额度</h3><span class="sp"></span><button type="button" class="icon-btn qp-fold" data-qp-action="collapse" aria-label="收起额度栏">${icon('fold')}</button></div><div class="qp-note" role="status">CodeAgent 未安装</div><div class="qp-list"><div class="qp-empty">先安装 CodeAgent，再登录读取额度。</div></div><div class="qp-f"><button type="button" class="btn btn-ghost btn-sm" data-qp-action="install-guide">查看安装说明</button></div><div class="qp-rail"><button type="button" class="icon-btn" data-qp-action="expand" aria-label="展开号池额度">${icon('unfold')}</button><button type="button" class="icon-btn" data-qp-action="install-guide" title="CodeAgent 未安装 · 查看安装说明" aria-label="CodeAgent 未安装，查看安装说明">${icon('key')}</button></div>`;
   const note = refreshing ? `正在读取 ${loadingCount} 个号…` : message;
-  const group = personal => `<div class="qp-g">${personal ? '个人账号' : `号池 · ${view.usable}/${view.pool} 可用`}</div>`
-    + view.rows.filter(row => row.personal === personal).map(row => rowHtml(row, now)).join('');
-  return `<div class="qp-h"><h3>号池额度</h3><span class="qp-n"><b>${view.usable}</b>/${view.pool} 可用</span><span class="sp"></span>
+  return `<div class="qp-h"><h3>号池额度</h3><span class="qp-n"><b>${view.usable}</b>/${view.total} 可用</span><span class="sp"></span>
     <button type="button" class="icon-btn qp-refresh" data-qp-action="refresh" title="刷新全部号的读数（同一个号 10 分钟内只读一次）" aria-label="刷新全部额度"${refreshing ? ' disabled' : ''}>${icon('refresh')}</button>
     <button type="button" class="icon-btn qp-fold" data-qp-action="collapse" title="收起成细栏" aria-label="收起额度栏">${icon('fold')}</button></div>
     ${note ? `<div class="qp-note" role="status"><i class="d"></i><span>${esc(note)}</span></div>` : ''}
     ${view.idle ? `<div class="qp-idle${view.idle.active ? ' on' : ''}" title="${esc(`按最近读数计算 · ${readTime(view.idle.at, now) || '读取时间未知'}`)}">${icon('clock')}<span>${esc(view.idle.text)}</span></div>` : ''}
-    <div class="qp-cols"><span></span><span>今日忙时</span><span>月度</span></div><div class="qp-list">${group(true)}${group(false)}${view.pool ? '' : '<div class="qp-empty">号池暂无账号</div>'}</div>
-    <div class="qp-f"><button type="button" class="btn btn-ghost btn-sm" data-qp-action="accounts">${icon('key')}打开账号页</button><small>剩余比例${view.at ? ` · ${readTime(view.at, now)} 读取` : ''}</small></div>
+    <div class="qp-cols"><span>账号 · 当前模型</span><span>今日 Token</span></div><div class="qp-list">${view.rows.map(row => rowHtml(row, now)).join('')}</div>
+    <div class="qp-f"><button type="button" class="btn btn-ghost btn-sm" data-qp-action="accounts">${icon('key')}打开账号页</button><small title="CodeAgent 不告诉重置时间，按整天估算">通常每日 00:00 重置</small></div>
     <div class="qp-rail"><button type="button" class="icon-btn" data-qp-action="expand" title="展开号池额度" aria-label="展开号池额度">${icon('unfold')}</button>
-    <div class="qp-rail-sum"><b>${view.usable}</b>/${view.pool}</div><span class="qp-rail-line"></span>${view.rows.map(row => ringHtml(row, now)).join('')}
+    <div class="qp-rail-sum"><b>${view.usable}</b>/${view.total}</div><span class="qp-rail-line"></span>${view.rows.map(row => ringHtml(row, now)).join('')}
     <span class="sp"></span><button type="button" class="icon-btn" data-qp-action="accounts" title="打开账号页" aria-label="打开账号页">${icon('key')}</button></div>`;
 }
 
-module.exports = { metric, idleView, quotaView, readTime, renderQuota, metricTitle };
+module.exports = { metric, tokenMetric, wholePct, idleView, quotaView, readTime, renderQuota, renderQuotaFooter, metricTitle, quotaTitle, tipHtml };

@@ -96,7 +96,7 @@ async function run() {
     ok('非空池区分额度暂停、手动暂停与需登录', /暂停中（额度）/.test(await text()) && /暂停中（手动）/.test(await text()) && /登录已过期/.test(await text()));
     const quotaView = await cdp.eval("({column:[...document.querySelectorAll('.caa-list-head>span')].some(e=>e.textContent==='额度'),foot:!!document.querySelector('.caa-footnote'),text:document.getElementById('codeagent-accounts-page').textContent})");
     ok(MEMBER ? '成员版保留额度列和现有自动暂停说明' : '公开版无读数时无额度列、脚注及会话后读数承诺', MEMBER
-      ? quotaView.column && quotaView.foot : !quotaView.column && !quotaView.foot && !/会话运行后显示|自动暂停/.test(quotaView.text));
+      ? quotaView.column && quotaView.foot : !quotaView.column && !quotaView.foot && !/下次读取后显示|自动暂停/.test(quotaView.text));
     if (options.verifyFilters) {
       // Required for the reskinned account page: missing controls must fail,
       // never silently skip the new behavior on an unintended older entry.
@@ -104,23 +104,24 @@ async function run() {
       const mutations = () => cdp.eval("window.__accountCalls.filter(c=>/^codeagent-pool:(add|import|login|personal-login|pause|resume|remove)$/.test(c[0])).length");
       const beforeFilterMutations = await mutations();
       await click('[data-ca=filter][data-filter=usable]');
-      ok('筛选可用仅显示可选号的号池账号，个人账号仍独立显示', await cdp.eval("document.querySelectorAll('.caa-list>[data-ca-account]').length===1&&!!document.querySelector('.caa-me-card>[data-ca-account=personal]')"));
-      ok('筛选计数始终基于完整号池，选中态可访问', await cdp.eval("[...document.querySelectorAll('.caa-counts button')].map(e=>e.textContent).join('|')==='全部 4|可用 1|需处理 3'&&document.querySelector('.caa-counts [data-filter=usable]').getAttribute('aria-pressed')==='true'"));
+      ok('筛选可用仅显示可选的号，个人账号是列表第一行', await cdp.eval("document.querySelectorAll('.caa-list>[data-ca-account]').length===2&&document.querySelector('.caa-list>[data-ca-account]').dataset.caAccount==='personal'&&!document.querySelector('.caa-me-card')"));
+      ok('筛选计数始终基于完整号池，选中态可访问', await cdp.eval("[...document.querySelectorAll('.caa-counts button')].map(e=>e.textContent).join('|')==='全部 5|可用 2|需处理 3'&&document.querySelector('.caa-counts [data-filter=usable]').getAttribute('aria-pressed')==='true'"));
       await click('[data-ca=filter][data-filter=needs]');
       ok('需处理筛选包含暂停与过期账号', await cdp.eval("document.querySelectorAll('.caa-list>[data-ca-account]').length===3&&!document.querySelector('.caa-list [data-ca=session]')"));
       await refresh();
       ok('刷新后保留需处理筛选和计数', await cdp.eval("document.querySelector('.caa-counts [data-filter=needs]').getAttribute('aria-pressed')==='true'&&document.querySelectorAll('.caa-list>[data-ca-account]').length===3"));
       await click('[data-ca=filter][data-filter=all]');
-      ok('全部筛选恢复完整列表且不发账号写入请求', await cdp.eval("document.querySelectorAll('.caa-list>[data-ca-account]').length===4") && await mutations() === beforeFilterMutations);
+      ok('全部筛选恢复完整列表且不发账号写入请求', await cdp.eval("document.querySelectorAll('.caa-list>[data-ca-account]').length===5") && await mutations() === beforeFilterMutations);
       quota.markAvoid(DATA, good, { source: 'manual', reason: 'empty filter fixture', until: null });
+      quota.markAvoid(DATA, 'personal', { source: 'manual', reason: 'empty filter fixture', until: null });
       try {
         await refresh();
         await click('[data-ca=filter][data-filter=usable]');
-        ok('无可用账号时显示筛选空态和查看全部入口', await cdp.eval("!!document.querySelector('.caa-filter-empty')&&document.querySelector('.caa-filter-empty').textContent.includes('暂无可用的号池账号')&&!!document.querySelector('.caa-filter-empty [data-filter=all]')"));
+        ok('无可用账号时显示筛选空态和查看全部入口', await cdp.eval("!!document.querySelector('.caa-filter-empty')&&document.querySelector('.caa-filter-empty').textContent.includes('暂无可用的账号')&&!!document.querySelector('.caa-filter-empty [data-filter=all]')"));
         await shot('20261104-accounts-filter-empty');
         await click('.caa-filter-empty [data-filter=all]');
-        ok('空筛选态返回全部时复用现有状态，不改变号池', await cdp.eval("document.querySelectorAll('.caa-list>[data-ca-account]').length===4") && await mutations() === beforeFilterMutations);
-      } finally { quota.clearAvoid(DATA, good, { by: 'local' }); }
+        ok('空筛选态返回全部时复用现有状态，不改变号池', await cdp.eval("document.querySelectorAll('.caa-list>[data-ca-account]').length===5") && await mutations() === beforeFilterMutations);
+      } finally { quota.clearAvoid(DATA, good, { by: 'local' }); quota.clearAvoid(DATA, 'personal', { by: 'local' }); }
       await refresh();
     }
     for (const width of [1440, 1280]) {
@@ -139,7 +140,7 @@ async function run() {
       await wait(() => cdp.eval(`document.getElementById('new-session-codeagent-account').value===${JSON.stringify('account:' + good)} && !document.getElementById('new-session-submit').disabled`), 'preselected launcher');
       ok(`${width}只显示一个富账号控件，原生与第二级号池select不可见`, await cdp.eval("document.getElementById('new-session-codeagent-choice').getClientRects().length===1&&!document.getElementById('new-session-codeagent-account').getClientRects().length&&document.getElementById('new-session-codeagent-pool-field').hidden"));
       await click('#new-session-codeagent-choice');
-      ok(`${width}统一下拉分组、状态/会话数和禁用账号正确`, await cdp.eval(`(()=>{const opts=[...document.querySelector('#new-session-codeagent-account').options];return opts.find(o=>o.value===${JSON.stringify('account:' + paused)}).disabled&&opts.find(o=>o.value===${JSON.stringify('account:' + expired)}).disabled&&opts.filter(o=>o.value.startsWith('account:')).every(o=>o.textContent.includes('个进行中会话'))&&document.querySelector('.caa-menu-cap').textContent==='指定号池账号'&&opts.at(-1).value==='manage-accounts'&&!opts.some(o=>o.value==='pool-manual')})()`));
+      ok(`${width}统一下拉分组、状态/会话数和禁用账号正确`, await cdp.eval(`(()=>{const opts=[...document.querySelector('#new-session-codeagent-account').options];return opts.find(o=>o.value===${JSON.stringify('account:' + paused)}).disabled&&opts.find(o=>o.value===${JSON.stringify('account:' + expired)}).disabled&&opts.filter(o=>o.value.startsWith('account:')).every(o=>o.textContent.includes('个进行中会话'))&&document.querySelector('.caa-menu-cap').textContent==='指定账号'&&opts.at(-1).value==='manage-accounts'&&!opts.some(o=>o.value==='pool-manual')})()`));
       await shot(`20261103-accounts-launcher-${width}-m1`);
       await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
       await click('#new-session-cancel'); await open();
@@ -221,7 +222,7 @@ async function run() {
     const blocked = await invoke('create-session', { kind: 'codeagent', opts: { cwd: WORK, codeagentAccount: 'pool', codeagentPoolPick: good } }).then(v => v, error => ({ error: error.message }));
     ok('主进程拒绝绕过界面的暂停账号新建请求', !!blocked?.error && /暂停/.test(blocked.error));
     await click('#new-session-codeagent-choice');
-    for (const key of ['Home', 'ArrowDown', 'Enter']) await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key, code: key });
+    for (const key of ['Home', 'Enter']) await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key, code: key });
     await wait(() => cdp.eval("document.getElementById('new-session-codeagent-account').value==='pool'&&!document.getElementById('new-session-submit').disabled"), 'automatic rich selection');
     await click('#new-session-submit');
     const auto = await wait(async () => (await invoke('get-sessions')).find(s => s.kind === 'codeagent' && s.id !== session.id), 'automatic session');

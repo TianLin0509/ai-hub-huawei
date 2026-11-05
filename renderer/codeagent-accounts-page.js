@@ -19,7 +19,8 @@ function createCodeagentAccountsPage({ document, window = document.defaultView, 
   function render() {
     if (!page || page.hidden || disposed) return;
     const next = document.createElement('template');
-    next.innerHTML = renderAccounts(pool, { ...state, installed: setup.current?.installed });
+    next.innerHTML = renderAccounts(pool, { ...state, installed: setup.current?.installed,
+      tokenFor: account => require('./codeagent-quota-panel-view').tokenMetric({ usage: globalThis.codeagentQuotaBar?.usageFor?.(account.id), defaultModel: account.defaultModel }) });
     const main = page.querySelector('.caa-main'), content = next.content.querySelector('.caa-main');
     if (main) {
       const scroll = main.scrollTop;

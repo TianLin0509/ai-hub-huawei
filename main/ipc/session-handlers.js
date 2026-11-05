@@ -570,14 +570,17 @@ function registerSessionIpc(ipcMain, deps) {
   // /model 菜单用量快照（core/codeagent-usage-menu.js）：界面取全部；界面每轮结束读屏读到菜单时交回来记。
   const CODEAGENT_QUOTA_DEFAULT_CACHE_MS = 30000;
   let quotaDefaults = {}, quotaDefaultsAt = 0;
+  const quotaDefaultModels = keys => {
+    if (Date.now() - quotaDefaultsAt >= CODEAGENT_QUOTA_DEFAULT_CACHE_MS || keys.some(key => !Object.hasOwn(quotaDefaults, key))) {
+      quotaDefaults = Object.fromEntries(keys.map(key => [key, codeagentModelList(key === 'personal' ? { account: 'personal' } : { account: 'pool', poolAccount: key }, { refresh: false }).defaultModel || '']));
+      quotaDefaultsAt = Date.now();
+    }
+    return quotaDefaults;
+  };
   ipcMain.handle('codeagent:usage', () => {
     try {
       const accounts = require('../../core/codeagent-usage-menu').readUsage(require('../../core/data-dir').getHubDataDir());
-      if (Date.now() - quotaDefaultsAt >= CODEAGENT_QUOTA_DEFAULT_CACHE_MS || Object.keys(accounts).some(key => !Object.hasOwn(quotaDefaults, key))) {
-        quotaDefaults = Object.fromEntries(Object.keys(accounts).map(key => [key, codeagentModelList(key === 'personal' ? { account: 'personal' } : { account: 'pool', poolAccount: key }, { refresh: false }).defaultModel || '']));
-        quotaDefaultsAt = Date.now();
-      }
-      return { ok: true, accounts, defaultModels: quotaDefaults };
+      return { ok: true, accounts, defaultModels: quotaDefaultModels(Object.keys(accounts)) };
     }
     catch (error) { return { ok: false, accounts: {}, error: error.message }; }
   });
@@ -735,14 +738,15 @@ function registerSessionIpc(ipcMain, deps) {
     now: codeagentQuotaNow,
     getStatus: codeagentPoolStatus,
     readUsage: () => require('../../core/codeagent-usage-menu').readUsage(require('../../core/data-dir').getHubDataDir()),
-    serveEnabled: () => codeagentServeEnabled(require('../../core/data-dir').getHubDataDir()),
+    serveEnabled: () => require('../../core/codeagent-serve').quotaReadEnabled(),
+    getDefaultModels: quotaDefaultModels,
     describeError: error => require('../../core/codeagent-quota').redactSnippet(error?.message || String(error)),
     refreshAccount: key => {
       // Share the existing probe queue, but not its menu fallback: sidebar
       // refresh failures keep cached readings and their original timestamps.
       const run = async () => {
         const dataDir = require('../../core/data-dir').getHubDataDir();
-        if (!codeagentServeEnabled(dataDir)) throw new Error('当前未启用 CodeAgent serve 读取');
+        if (!require('../../core/codeagent-serve').quotaReadEnabled()) throw new Error('当前未启用 CodeAgent serve 读取');
         const pool = require('../../core/codeagent-pool');
         const config = require('../../core/codeagent-config').resolveCodeAgentConfig(process.env);
         const account = key === 'personal' ? null : codeagentPoolAccounts().find(row => row.id === key);
@@ -753,9 +757,10 @@ function registerSessionIpc(ipcMain, deps) {
         const serve = require('../../core/codeagent-serve');
         const served = await (codeagentServeRead || serve.readAccount)({ command: config.command,
           configDirEnv: config.configDirEnv, configDir, dataDir, cwd: pool.probeCwd(dataDir), readyTimeoutMs: 20000 });
+        require('../../core/codeagent-models').appendModelLog(dataDir, { event: 'serve-read', account: key, ok: !!served?.ok, ms: served?.readyMs, reason: 'quota' });
         if (!served?.ok) throw new Error(served?.error || 'CodeAgent serve 读取失败');
         const usage = serve.toUsageSnapshot(served);
-        if (!usage?.credit) throw new Error('本次未读到 Credit 额度，保留上次读数');
+        if (!usage?.credit && !require('../../core/codeagent-usage-menu').hasModelTokens(usage)) throw new Error('本次未读到额度，保留上次读数');
         const entry = require('../../core/codeagent-usage-menu').recordUsage(dataDir, key, usage,
           { label: account ? pool.label(account) : '个人账号', source: 'serve' });
         if (!entry) throw new Error('本次未读到有效额度，保留上次读数');
@@ -766,6 +771,21 @@ function registerSessionIpc(ipcMain, deps) {
       return next;
     },
   });
+  // 额度低频自动读取（2026-11-05 用户定）。隔离实例和单测默认不跑，免得多起 CLI；要测时设 CLAUDE_HUB_CODEAGENT_QUOTA_AUTO_MS。
+  const quotaAutoMs = Number(process.env.CLAUDE_HUB_CODEAGENT_QUOTA_AUTO_MS) || 0;
+  let quotaAutoRefresh = null;
+  if (require('../../core/distribution').kindAllowed('codeagent') && (quotaAutoMs > 0
+    || (!process.env.CLAUDE_HUB_DATA_DIR && process.env.CLAUDE_HUB_E2E !== '1' && !process.env.NODE_TEST_CONTEXT))) {
+    quotaAutoRefresh = require('../../core/codeagent-quota-auto-refresh').createQuotaAutoRefresh({
+      run: () => quotaPanel.refreshDue(),
+      log: entry => { try { require('../../core/codeagent-models').appendModelLog(require('../../core/data-dir').getHubDataDir(), entry); } catch { /* 日志写不了不影响读取 */ } },
+      ...(quotaAutoMs > 0 ? { intervalMs: quotaAutoMs, firstDelayMs: quotaAutoMs } : {}),
+    });
+    quotaAutoRefresh.start();
+  }
+  // 真正退出时停掉自动读取，并结束正在跑的临时 serve（手动刷新、读模型清单起的也算），否则它会留在后台。
+  require('../../core/codeagent-quota-auto-refresh').installQuotaQuitCleanup({ app: require('electron').app,
+    stopAutoRefresh: () => quotaAutoRefresh?.stop(), shutdownServes: () => require('../../core/codeagent-serve').shutdownTempServes() });
   ipcMain.handle('codeagent:quota-panel', async (_event, payload = {}) => {
     try {
       if (!require('../../core/distribution').kindAllowed('codeagent')) throw new Error('当前发行版未开放 CodeAgent');

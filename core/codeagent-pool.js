@@ -193,6 +193,18 @@ function pickAccount(accounts, { model = '' } = {}) {
     || x.lastAssignedAt - y.lastAssignedAt)[0];
 }
 
+// 自动挑号（2026-11-05 用户定）：个人账号也算，但排在号池其他号之后，其他号都挑不出时才用它。
+// personal：{ state, avoid, models, modelsAuthoritative }，读不到时传 null。
+// 返回 { account }（号池的号）、{ personal: true } 或 null。个人账号自己在避让、没登录、明确没有所选模型时不挑。
+function pickAutoChoice(accounts, personal, { model = '' } = {}) {
+  const account = pickAccount(accounts, { model });
+  if (account) return { account };
+  if (!personal || personal.state !== 'ready' || personal.avoid) return null;
+  const wanted = String(model || '').toLowerCase();
+  if (wanted && personal.modelsAuthoritative && !(personal.models || []).some(m => String(m).toLowerCase() === wanted)) return null;
+  return { personal: true };
+}
+
 // New interactive sessions use the same pause state shown in the account page.
 // Existing sessions keep their bound identity when resumed.
 function withPauseStatus(dataDir, accounts) {
@@ -588,7 +600,7 @@ module.exports = {
   localCandidates, importLocal,
   openLoginWindow,
   POOL_DIR, poolRoot, accountDir, readRegistry, maskAccountId, readCredentials, accountState,
-  listAccounts, label, pickAccount, markAssigned, addAccount, setNote, removeAccount,
+  listAccounts, label, pickAccount, pickAutoChoice, markAssigned, addAccount, setNote, removeAccount,
   personalLastAssignedAt, markPersonalAssigned,
   projectCredentialsOverride, syncSharedConfig, poolModelOptions, poolDirMatch,
   chooseAccountModel, personalDefaultModel, readSettingsModel, effectiveModel, plannedModel, strictDefaultModel, describeDefaultNote, permissionSafeModel, fixPoolModel, markerRestoreDecision, ROUTE_MARKER,

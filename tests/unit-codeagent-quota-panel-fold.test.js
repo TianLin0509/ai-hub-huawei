@@ -20,14 +20,14 @@ function memoryStorage(initial = {}) {
 }
 const blank = { id: 'a1', state: 'ready', label: '号一' };
 const read = { ...blank, credit: { busyDay: { pct: 30, used: 30, total: 100 } }, creditAt: 5000 };
-function mount({ storage, rows, width = 1440 }) {
+function mount({ storage, rows, width = 1440, placement = 'right', footerRoot = null }) {
   let current = rows;
   const root = fakeEl();
   const document = { createElement: fakeEl, addEventListener() {}, removeEventListener() {}, activeElement: null, body: fakeEl() };
   const window = { innerWidth: width, innerHeight: 900, addEventListener() {}, removeEventListener() {} };
   const ipcRenderer = { invoke: async () => ({ ok: true, serveEnabled: true, rows: current }), on() {}, removeListener() {} };
   const panel = createCodeAgentQuotaPanel({ document, root, window, ipcRenderer, storage, now: () => 9000,
-    setIntervalFn: () => 0, clearIntervalFn() {} });
+    setIntervalFn: () => 0, clearIntervalFn() {}, getPlacement: () => placement, footerRoot });
   return { panel, root, setRows: next => { current = next; } };
 }
 
@@ -77,4 +77,44 @@ test('narrow windows never auto-open the overlay on the first reading', async ()
   assert.equal(panel.getState().collapsed, true);
   assert.equal(JSON.parse(storage.data.hubClaudeQuotaPanel).seenReading, true);
   panel.destroy();
+});
+
+test('the panel only shows with more than one distinct account and in the chosen place', async () => {
+  const footerRoot = fakeEl();
+  const single = mount({ storage: memoryStorage(), rows: [read, { ...blank, id: 'a2', sameAsPersonal: true }], footerRoot });
+  await single.panel.whenIdle();
+  assert.equal(single.root.hidden, true);
+  assert.equal(footerRoot.hidden, true);
+  single.setRows([read, { ...blank, id: 'a2' }]);
+  await single.panel.reload();
+  assert.equal(single.root.hidden, false);
+  assert.notEqual(single.root.innerHTML, '');
+  single.setRows([read]);
+  await single.panel.reload();
+  assert.equal(single.root.hidden, true);
+  assert.equal(single.root.innerHTML, '', 'a hidden panel keeps no stale content');
+  single.setRows([read, { ...blank, id: 'a2' }]);
+  await single.panel.reload();
+  assert.equal(footerRoot.hidden, true, 'right placement leaves the footer empty');
+  single.panel.destroy();
+  const bottom = mount({ storage: memoryStorage(), rows: [read, { ...blank, id: 'a2' }], placement: 'bottom', footerRoot });
+  await bottom.panel.whenIdle();
+  assert.equal(bottom.root.hidden, true, 'bottom placement hides the right panel');
+  assert.equal(footerRoot.hidden, false); assert.match(footerRoot.innerHTML, /qp-foot-item/);
+  bottom.panel.destroy();
+});
+
+test('placement defaults to right, survives reloads, ignores unknown values and notifies', () => {
+  const { createQuotaPlacement, STORAGE_KEY } = require('../renderer/codeagent-quota-placement');
+  const storage = memoryStorage();
+  const placement = createQuotaPlacement({ storage });
+  assert.equal(placement.get(), 'right');
+  const seen = [];
+  placement.subscribe(value => seen.push(value));
+  placement.set('elsewhere'); placement.set('right');
+  assert.deepEqual(seen, []);
+  placement.set('bottom');
+  assert.deepEqual(seen, ['bottom']);
+  assert.equal(createQuotaPlacement({ storage }).get(), 'bottom');
+  assert.equal(createQuotaPlacement({ storage: memoryStorage({ [STORAGE_KEY]: 'junk' }) }).get(), 'right');
 });

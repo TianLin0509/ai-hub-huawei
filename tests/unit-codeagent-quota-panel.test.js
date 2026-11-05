@@ -236,7 +236,7 @@ test('serve exception and incomplete Credit preserve prior readings and expose a
   read = async () => ({ ok: true, models: [], details: [], credit: [], quotas: {} });
   const incomplete = await fixture.snapshot({ refresh: true, key: 'personal' });
   assert.equal(incomplete.rows[0].refresh.status, 'failed');
-  assert.match(incomplete.rows[0].refresh.error, /未读到 Credit/);
+  assert.match(incomplete.rows[0].refresh.error, /未读到额度/);
   assert.deepEqual(incomplete.usage.personal, saved); assert.equal(fixture.menus(), 0);
   assert.equal(fixture.events.length, 0);
 });
@@ -285,4 +285,141 @@ test('company panel factory cannot render subscription accounts supplied by an o
   panel.render();
   assert.equal(root.hidden, true); assert.equal(root.innerHTML, '');
   assert.equal(footerRoot.dataset.panelProviders, ''); assert.equal(created, 0); assert.equal(lookups, 0);
+});
+
+test('automatic reading is serial, skips duplicates and single accounts, and backs off after failures', async () => {
+  const { createCodeAgentQuotaPanel } = require('../core/codeagent-quota-panel');
+  let clock = 1_000_000, active = 0, peak = 0;
+  const calls = [];
+  let failing = new Set();
+  let status = { ok: true, personal: { state: 'ready', present: true }, accounts: [
+    { id: 'a1', state: 'ready' }, { id: 'a2', state: 'login-required' }, { id: 'a3', state: 'ready', sameAsPersonal: true }, { id: 'a4', state: 'ready', duplicateOf: 'a1' }] };
+  const panel = createCodeAgentQuotaPanel({ getStatus: () => status, readUsage: () => ({}), serveEnabled: () => true, now: () => clock,
+    refreshAccount: async key => {
+      calls.push(key); active += 1; peak = Math.max(peak, active);
+      await new Promise(resolve => setImmediate(resolve));
+      active -= 1;
+      if (failing.has(key)) throw new Error('boom');
+    } });
+  assert.deepEqual(await panel.refreshDue(), { read: 2, failed: 0, waiting: 0 });
+  assert.deepEqual(calls, ['personal', 'a1']);
+  assert.equal(peak, 1);
+  // 失败后第一轮等 30 分钟，到点再试；手动刷新不受这个等待影响
+  failing = new Set(['a1']);
+  calls.length = 0; clock += 15 * 60000;
+  assert.deepEqual(await panel.refreshDue(), { read: 1, failed: 1, waiting: 0 });
+  calls.length = 0; clock += 15 * 60000;
+  assert.deepEqual(await panel.refreshDue(), { read: 1, failed: 0, waiting: 1 });
+  assert.deepEqual(calls, ['personal']);
+  calls.length = 0; clock += 15 * 60000; failing = new Set();
+  assert.deepEqual(await panel.refreshDue(), { read: 2, failed: 0, waiting: 0 });
+  // 去重后只剩一个号：不显示额度栏，也不读
+  status = { ok: true, personal: { state: 'ready', present: true }, accounts: [{ id: 'a3', state: 'ready', sameAsPersonal: true }] };
+  calls.length = 0;
+  assert.deepEqual(await panel.refreshDue(), { skipped: 'single-account' });
+  assert.deepEqual(calls, []);
+  // 没登录的个人账号不算一个号
+  status = { ok: true, personal: { state: 'login-required', present: false }, accounts: [{ id: 'a1', state: 'ready' }] };
+  assert.deepEqual(await panel.refreshDue(), { skipped: 'single-account' });
+});
+
+test('auto refresh waits for the previous round and skips a round when memory is low', { timeout: 10000 }, async () => {
+  const { createQuotaAutoRefresh } = require('../core/codeagent-quota-auto-refresh');
+  const timers = [], logs = [];
+  let free = 4e9, runs = 0, finish;
+  const auto = createQuotaAutoRefresh({ intervalMs: 100, firstDelayMs: 10, freeBytes: () => free, log: entry => logs.push(entry),
+    run: () => { runs += 1; return runs > 1 ? Promise.resolve({ read: 1 }) : new Promise(resolve => { finish = resolve; }); },
+    setTimeoutFn: (fn, delay) => { const timer = { fn, delay }; timers.push(timer); return timer; }, clearTimeoutFn: () => {} });
+  auto.start();
+  assert.equal(timers.length, 1); assert.equal(timers[0].delay, 10);
+  timers.shift().fn();
+  await new Promise(setImmediate);
+  assert.equal(runs, 1); assert.equal(timers.length, 0, 'next round is not scheduled while one is running');
+  finish({ read: 2 }); await auto.whenIdle(); await new Promise(setImmediate);
+  assert.equal(timers.length, 1); assert.equal(timers[0].delay, 100);
+  assert.equal(logs[0].read, 2);
+  free = 1e8;
+  timers.shift().fn(); await auto.whenIdle(); await new Promise(setImmediate);
+  assert.equal(runs, 1, 'a low-memory round must not start reading'); assert.equal(logs[1].skipped, 'low-memory');
+  // 内存回来后下一轮照常读
+  free = 4e9;
+  timers.shift().fn(); await auto.whenIdle(); await new Promise(setImmediate);
+  assert.equal(runs, 2); assert.equal(logs[2].read, 1);
+  auto.stop();
+  assert.equal(timers.length, 1);
+  timers.shift().fn(); await auto.whenIdle(); await new Promise(setImmediate);
+  assert.equal(timers.length, 0, 'stopped refresher does not schedule again');
+});
+
+test('automatic reading backs off up to six hours and no further', async () => {
+  const { createCodeAgentQuotaPanel } = require('../core/codeagent-quota-panel');
+  let clock = 1_000_000;
+  const calls = [];
+  const panel = createCodeAgentQuotaPanel({ getStatus: () => ({ ok: true, personal: { state: 'ready', present: true }, accounts: [{ id: 'bad', state: 'ready' }] }),
+    readUsage: () => ({}), serveEnabled: () => true, now: () => clock,
+    refreshAccount: async key => { calls.push(key); if (key === 'bad') throw new Error('boom'); } });
+  const attempts = () => calls.filter(key => key === 'bad').length;
+  const MIN = 60000, gaps = [];
+  // 每轮失败后找到下一次真正重试的间隔
+  await panel.refreshDue();
+  for (let round = 0; round < 8; round += 1) {
+    const before = attempts();
+    let waited = 0;
+    while (attempts() === before) { clock += 15 * MIN; waited += 15; await panel.refreshDue(); if (waited > 24 * 60) assert.fail('never retried'); }
+    gaps.push(waited);
+  }
+  assert.deepEqual(gaps, [30, 60, 120, 240, 360, 360, 360, 360]);
+});
+
+test('quitting ends the running temporary serve, its child and refuses new ones', { timeout: 60000 }, async t => {
+  const serve = require('../core/codeagent-serve');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-serve-quit-'));
+  t.after(() => { serve.resetTempServeShutdownForTest(); try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 进程刚退出时可能还占着 */ } });
+  const log = path.join(dir, 'fake.jsonl'), command = path.join(dir, 'fake-serve.cmd');
+  fs.writeFileSync(command, `@echo off\r\n"${process.execPath}" "${path.join(__dirname, 'fixtures/codeagent-serve-fake/codeagent-serve-fake.js')}" %*\r\n`);
+  const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const waitFor = async (check, what) => { const end = Date.now() + 20000; while (Date.now() < end) { if (await check()) return; await new Promise(r => setTimeout(r, 100)); } assert.fail(what); };
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  const running = serve.withTempServe({ command, configDirEnv: 'CODEAGENT3_CONFIG_DIR', configDir: dir, cwd: dir, env: { ...process.env, SERVE_FAKE_LOG: log } }, async () => { await held; return { ok: true }; });
+  await waitFor(() => fs.existsSync(log) && fs.readFileSync(log, 'utf8').trim(), 'temporary serve started');
+  const { pid, child, opts } = JSON.parse(fs.readFileSync(log, 'utf8').trim().split('\n')[0]);
+  assert.equal(opts.host, '127.0.0.1');
+  assert.equal(alive(pid), true); assert.equal(alive(child), true);
+  assert.equal(serve.shutdownTempServes(), 1);
+  await waitFor(() => !alive(pid), 'serve process ended');
+  await waitFor(() => !alive(child), 'serve child ended');
+  release();
+  await running;
+  assert.equal(serve.shutdownTempServes(), 0, 'nothing is left to end');
+  const refused = await serve.withTempServe({ command, configDirEnv: 'CODEAGENT3_CONFIG_DIR', configDir: dir, cwd: dir }, async () => assert.fail('must not start'));
+  assert.deepEqual(refused, { ok: false, error: 'Hub 正在退出' });
+  assert.equal(fs.readFileSync(log, 'utf8').trim().split('\n').length, 1, 'no new serve was started after quitting');
+});
+
+// main.js 的 before-quit 会先拦下做会话收尾，收尾失败时窗口恢复、Hub 继续跑（restoreWindowAfterFailedShutdown）。
+test('a failed shutdown leaves quota reading working; only will-quit stops it', { timeout: 60000 }, async t => {
+  const { EventEmitter } = require('node:events');
+  const { createCodeAgentQuotaPanel } = require('../core/codeagent-quota-panel');
+  const { installQuotaQuitCleanup } = require('../core/codeagent-quota-auto-refresh');
+  const serve = require('../core/codeagent-serve');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-serve-retry-'));
+  t.after(() => { serve.resetTempServeShutdownForTest(); try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 进程刚退出时可能还占着 */ } });
+  const command = path.join(dir, 'fake-serve.cmd');
+  fs.writeFileSync(command, `@echo off\r\n"${process.execPath}" "${path.join(__dirname, 'fixtures/codeagent-serve-fake/codeagent-serve-fake.js')}" %*\r\n`);
+  const read = () => serve.withTempServe({ command, configDirEnv: 'CODEAGENT3_CONFIG_DIR', configDir: dir, cwd: dir }, async ({ get }) => ({ ok: (await get('/api/v1/global/health')).ok }));
+  const app = new EventEmitter();
+  let stopped = 0, clock = 1000;
+  installQuotaQuitCleanup({ app, stopAutoRefresh: () => { stopped += 1; }, shutdownServes: () => serve.shutdownTempServes() });
+  const panel = createCodeAgentQuotaPanel({ getStatus: () => ({ ok: true, personal: { state: 'ready', present: true }, accounts: [] }), readUsage: () => ({}), serveEnabled: () => true, now: () => clock,
+    refreshAccount: async () => { const result = await read(); if (!result.ok) throw new Error(result.error); } });
+  // 收尾失败：before-quit 来过，will-quit 没来，刷新额度和读模型都还能用
+  app.emit('before-quit', { preventDefault() {} });
+  assert.equal(stopped, 0);
+  const after = await panel.snapshot({ refresh: true, key: 'personal' });
+  assert.equal(after.rows[0].refresh.status, 'updated', after.rows[0].refresh.error || '');
+  // 真的退出
+  app.emit('will-quit', { preventDefault() {} });
+  assert.equal(stopped, 1);
+  assert.deepEqual(await read(), { ok: false, error: 'Hub 正在退出' });
 });

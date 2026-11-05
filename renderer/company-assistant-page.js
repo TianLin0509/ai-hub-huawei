@@ -351,7 +351,11 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     const atBottom = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 40;
     const chat = page.querySelector('[data-slot="chat"]'), html = chatList();
     if (chat.dataset.html !== html) { chat.innerHTML = html; chat.dataset.html = html; if (atBottom) scroll.scrollTop = scroll.scrollHeight; }
-    page.querySelector('[data-slot="chips"]').innerHTML = data.chips.map((c, i) => `<button type="button" class="ca-chip-btn${c.custom ? ' custom' : ''}" data-ca="chip:${i}" title="${esc(c.text)}">${esc(c.label)}</button>`).join('') + '<button type="button" class="ca-chip-btn add" data-ca="save-chip" title="把输入框里的问题存成小标签">＋ 存为常用</button>';
+    const customChipStart = data.chips.length - data.settings.chips.length;
+    page.querySelector('[data-slot="chips"]').innerHTML = data.chips.map((c, i) => {
+      const chip = `<button type="button" class="ca-chip-btn${c.custom ? ' custom' : ''}" data-ca="chip:${i}" title="${esc(c.text)}">${esc(c.label)}</button>`;
+      return c.custom ? `<span class="ca-chip-wrap">${chip}<button type="button" class="ca-chip-del" data-ca="del-chip:${i - customChipStart}" title="删除常用：${esc(c.label)}" aria-label="删除常用：${esc(c.label)}">×</button></span>` : chip;
+    }).join('') + '<button type="button" class="ca-chip-btn add" data-ca="save-chip" title="把输入框里的问题存成小标签">＋ 存为常用</button>';
     const job = data.job ? (data.job.type === 'brief' ? '助理正在整理简报…' : '助理正在回答…') + (data.queued ? `（还有 ${data.queued} 个排队）` : '') : data.session ? (data.session.open ? '助理会话已就绪' : '助理会话已休息，提问时自动恢复') : '第一次提问时会打开助理会话';
     page.querySelector('[data-slot="job"]').textContent = job;
     page.querySelectorAll('[data-ca="refresh"]').forEach(b => { b.disabled = !!data.refreshing; });
@@ -415,6 +419,10 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       const text = input.value.trim(); if (!text) { showMessage?.('先在输入框里写好要存的问题'); return; }
       const label = text.replace(/\s+/g, ' ').slice(0, 10);
       await call('set-settings', { chips: [...data.settings.chips, { label, text }] }); showMessage?.('已存为常用：' + label); await load(); return;
+    }
+    if (verb === 'del-chip') {
+      const chip = data.settings.chips[Number(arg)]; if (!chip) return;
+      await call('set-settings', { chips: data.settings.chips.filter(c => c !== chip) }); showMessage?.('已删除常用：' + chip.label); await load(); return;
     }
     if (verb === 'refresh') { button.disabled = true; data = await call('refresh'); render(); const notice = refreshNotice(data); if (notice) showMessage?.(notice); return; }
     if (verb === 'brief-now') { button.disabled = true; briefOpen = true; data = await call('brief-now'); render(); return; }

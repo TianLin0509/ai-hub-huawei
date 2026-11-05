@@ -47,6 +47,7 @@ function createCodeAgentQuotaBar({ document, ipcRenderer, storage = null, now = 
   let readings = {};
   let usage = {}; // personal / 号池编号 → recordUsage 的快照（主进程 codeagent:usage 取回）
   let usagePanel = null;
+  let allowed = true; // 有号池额度栏时为 false：底栏这一块由额度栏自己画（renderer/codeagent-quota-panel.js）
   let defaults = {};
   function openUsage(key, label) {
     usagePanel ||= require('./codeagent-usage-panel').createCodeAgentUsagePanel({ document, ipcRenderer, usageFor, now, escapeHtml });
@@ -91,7 +92,7 @@ function createCodeAgentQuotaBar({ document, ipcRenderer, storage = null, now = 
   }
   function render() {
     const host = el();
-    if (!host) return;
+    if (!host || !allowed) return;
     // 按界面上的账号名对行：Stats 读数按账号名记，菜单快照里带同样的账号名（label）
     const byAccount = new Map();
     for (const r of Object.values(readings)) byAccount.set(r.account, { account: r.account, key: '', r, u: null });
@@ -103,7 +104,7 @@ function createCodeAgentQuotaBar({ document, ipcRenderer, storage = null, now = 
     }
     const rows = [...byAccount.values()].map(row => ({ ...row, at: Math.max(row.r?.at || 0, row.u?.at || 0) }))
       .sort((a, b) => b.at - a.at).slice(0, MAX_ROWS);
-    host.hidden = rows.length === 0;
+    host.hidden = !allowed || rows.length === 0;
     // 保留额度行的面板入口；底栏只展示 Token，Credit 在完整面板内查看。
     const html = rows.length ? `<div class="sidebar-quota">${rows.map(({ account, key, r, u, at }) => {
       const metrics = metricsFor(r, u);
@@ -154,7 +155,8 @@ function createCodeAgentQuotaBar({ document, ipcRenderer, storage = null, now = 
   }
   // 模型下拉用：这个号（personal / 号池编号）最近一次菜单快照，没有返回 null。
   function usageFor(key) { return (key && usage[key]) || null; }
-  return { update, render, setUsage, usageFor, openUsage, readings: () => ({ ...readings }) };
+  function setAllowed(next) { if (allowed !== !!next) { allowed = !!next; render(); } }
+  return { update, render, setUsage, setAllowed, usageFor, openUsage, readings: () => ({ ...readings }) };
 }
 
 module.exports = { createCodeAgentQuotaBar, tokenModelForAccount, tokenUsage, TOKEN_WARN_PERCENT, TOKEN_DANGER_PERCENT };

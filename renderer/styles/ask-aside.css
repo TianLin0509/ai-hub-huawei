@@ -28,8 +28,7 @@
 .ask .btn-pri{background:var(--hw-brand);color:var(--hw-text-on);box-shadow:0 4px 12px -4px rgba(10,89,247,.6)}
 .ask .btn-pri:hover{background:var(--hw-brand-hover)}
 .ask .btn[disabled]{opacity:.4;pointer-events:none}
-.ask .thinking{position:relative;overflow:hidden}
-.ask .thinking::after{content:"";position:absolute;left:0;right:0;bottom:0;height:3px;background:linear-gradient(90deg,transparent,rgba(10,89,247,0) 20%,rgba(10,89,247,.55) 50%,rgba(207,10,44,.35) 65%,transparent 85%);background-size:200% 100%;animation:ask-sweep 2.2s linear infinite}
+/* 思考中块底边的流光走公用的间歇流光（styles/hw-sweep.css + sweep-pulse.js），与卡片同为 2px、蓝→红 */
 .ask .dots{display:inline-flex;gap:4px;align-items:center;flex:none}
 .ask .dots i{width:6px;height:6px;border-radius:50%;background:var(--hw-brand);animation:ask-breath var(--hw-think-period,1.4s) ease-in-out infinite}
 .ask .dots i:nth-child(2){animation-delay:.18s}
@@ -51,34 +50,43 @@
 .ask .ask-chip{height:30px;padding:0 12px;border-radius:var(--hw-r-pill);background:var(--hw-surface);box-shadow:inset 0 0 0 1px var(--hw-line);font-size:var(--hw-fs-13);color:var(--hw-text-2);white-space:nowrap}
 .ask .ask-chip:hover{color:var(--hw-brand);background:var(--hw-brand-soft);box-shadow:none}
 
-/* 一问一答：问题是右侧浅蓝气泡，回答是正文 */
-.ask-qa{padding:14px 0 16px;border-bottom:1px solid var(--hw-line)}
-.ask-qa:last-child{border-bottom:0}
+/* 一问一答 · 思考中 · 出错 · 折叠（5.5.9 ① s1 定稿 D:/AIWork/20261105-aihubh-557/s1/design/20261105-问一下回答气泡-s1.css）：
+   问题右侧浅蓝气泡、回答左侧 surface-2 + 细描边气泡（圆角镜像）；思考中/出错同一气泡形状、固定 92%；折叠去底色留描边、回答首段两行截断；问答间不加分隔线，组间 20px。 */
+.ask-qa{padding:0;border-bottom:0}
+.ask-qa+.ask-qa{margin-top:20px}
 .ask-q{display:flex;justify-content:flex-end}
 .ask-q p{max-width:86%;padding:8px 14px;border-radius:var(--hw-r-md) var(--hw-r-md) var(--hw-r-xs) var(--hw-r-md);background:var(--hw-brand-soft);font-size:var(--hw-fs-14);line-height:1.6;white-space:pre-wrap;overflow-wrap:anywhere}
-.ask-a{margin-top:10px;font-size:var(--hw-fs-14);line-height:1.75;color:var(--hw-text-1);overflow-wrap:anywhere}
+
+/* 回答气泡 */
+.ask-a{width:fit-content;max-width:92%;margin-top:10px;padding:10px 14px;border-radius:var(--hw-r-md) var(--hw-r-md) var(--hw-r-md) var(--hw-r-xs);
+  background:var(--hw-surface-2);box-shadow:inset 0 0 0 1px var(--hw-line);font-size:var(--hw-fs-14);line-height:1.7;color:var(--hw-text-1);overflow-wrap:anywhere}
 .ask-a p{white-space:pre-wrap}
 .ask-a p+p{margin-top:8px}
-.ask-a code{font-family:"Cascadia Mono",Consolas,monospace;font-size:12.5px;padding:1px 5px;border-radius:var(--hw-r-xs);background:var(--hw-surface-3)}
-.ask-meta{display:flex;align-items:center;gap:6px;margin-top:8px;font-size:var(--hw-fs-12);color:var(--hw-text-3);white-space:nowrap}
+.ask-a code{font-family:"Cascadia Mono",Consolas,monospace;font-size:var(--hw-fs-12);padding:1px 5px;border-radius:var(--hw-r-xs);background:var(--hw-surface-3)}
+.ask-meta{display:flex;align-items:center;gap:6px;margin-top:6px;padding-left:4px;font-size:var(--hw-fs-12);color:var(--hw-text-3);white-space:nowrap}
 .ask-meta time,.ask-wait time{font-family:var(--hw-font-num, inherit);font-variant-numeric:tabular-nums}
-/* 早先的问答收成两行，被截断的才给「展开」 */
-.ask-qa.is-fold .ask-a{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:var(--hw-text-2)}
-.ask-qa.is-fold .ask-a p+p{margin-top:0}
-.ask-qa.is-fold .ask-q p{background:var(--hw-surface-2)}
-.ask .ask-more{padding:0;font-size:var(--hw-fs-12);color:var(--hw-brand)}
 
-/* 思考中 / 排队：写清在等什么、通常多久 */
-.ask-wait{margin-top:12px;padding:12px 14px 14px;border-radius:var(--hw-r-item);background:var(--hw-surface-2);display:flex;align-items:center;gap:10px;font-size:var(--hw-fs-13);color:var(--hw-text-2)}
+/* 思考中：同一气泡形状，底边流光走公用间歇流光 .hw-sweep（每 8 秒扫一遍；减少动效时只留淡蓝细线） */
+.ask-wait{width:92%;margin-top:10px;padding:12px 14px 14px;border-radius:var(--hw-r-md) var(--hw-r-md) var(--hw-r-md) var(--hw-r-xs);
+  background:var(--hw-surface-2);box-shadow:inset 0 0 0 1px var(--hw-line);display:flex;align-items:center;gap:10px;font-size:var(--hw-fs-13);color:var(--hw-text-2)}
 .ask-wait .t{flex:1;min-width:0}
 .ask-wait .t small{display:block;font-size:var(--hw-fs-12);color:var(--hw-text-3)}
 .ask-wait time{color:var(--hw-text-1);font-weight:600}
 
-/* 出错：橙色说明；刚问的那条把问题放回输入框 */
-.ask-err{margin-top:12px;padding:12px 14px;border-radius:var(--hw-r-item);background:var(--hw-amber-soft);display:flex;gap:10px;align-items:flex-start;font-size:var(--hw-fs-13);color:var(--hw-text-1)}
+/* 出错：同一气泡形状，琥珀浅底，无描边 */
+.ask-err{width:92%;margin-top:10px;padding:12px 14px;border-radius:var(--hw-r-md) var(--hw-r-md) var(--hw-r-md) var(--hw-r-xs);
+  background:var(--hw-amber-soft);display:flex;gap:10px;align-items:flex-start;font-size:var(--hw-fs-13);color:var(--hw-text-1)}
 .ask-err svg{width:16px;height:16px;flex:none;margin-top:3px;color:var(--hw-amber)}
 .ask-err .t{flex:1;min-width:0;overflow-wrap:anywhere}
 .ask-err .t small{display:block;margin-top:2px;font-size:var(--hw-fs-12);color:var(--hw-text-2)}
+
+/* 折叠的早先问答：去底色留描边，字退一级，回答两行截断 */
+.ask-qa.is-fold .ask-q p{background:transparent;box-shadow:inset 0 0 0 1px var(--hw-line);color:var(--hw-text-2)}
+.ask-qa.is-fold .ask-a{background:transparent;color:var(--hw-text-2);padding:8px 14px}
+/* 截断放在段落上：放在带内边距的气泡上，第 3 行会从底部内边距里露出半行 */
+.ask-qa.is-fold .ask-a p{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.ask-qa.is-fold .ask-a p+p{display:none}
+.ask .ask-more{padding:0;font-size:var(--hw-fs-12);color:var(--hw-brand)}
 
 /* 输入区：Enter 换行，只有「提问」按钮发送 */
 .ask-f{padding:12px 16px 16px;border-top:1px solid var(--hw-line)}
@@ -92,12 +100,11 @@
 .ask-in .row .btn{margin-left:auto}
 
 @keyframes ask-slide{from{transform:translateX(30px);opacity:0}}
-@keyframes ask-sweep{from{background-position:100% 0}to{background-position:-100% 0}}
 @keyframes ask-breath{0%,100%{opacity:.2;transform:scale(.8)}50%{opacity:1;transform:scale(1)}}
 
 @media (prefers-reduced-motion:reduce){
   .ask{animation:none}
-  .ask .thinking::after,.ask .dots i{animation:none}
+  .ask .dots i{animation:none}
 }
 @media (max-width:1360px){
   .ask{width:400px}

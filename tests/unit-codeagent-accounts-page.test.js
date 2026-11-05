@@ -10,11 +10,12 @@ test('未检测到 CodeAgent 时保留已有号池与管理，安装后恢复登
   const pool = { personal: { state: 'login-required' }, accounts: [{ id: 'saved-account', note: '已有账号甲', state: 'ready', models: ['model-one'], activeSessions: 2 }] };
   const missing = renderAccounts(pool, { installed: false });
   assert.match(missing, /未检测到 CodeAgent/);
-  const personalRow = missing.match(/<section class="caa-me-card"[\s\S]*?<\/section>/)[0];
+  assert.ok(missing.indexOf('data-ca-account="personal"') < missing.indexOf('data-ca-account="saved-account"'), 'personal is the first row');
+  const personalRow = missing.slice(missing.indexOf('data-ca-account="personal"'), missing.indexOf('data-ca-account="saved-account"'));
   assert.match(personalRow, /未检测到 CodeAgent/);
   assert.doesNotMatch(personalRow, /需登录|个人账号尚未登录|还没登录/);
   assert.match(missing, /已有账号甲/); assert.match(missing, /data-ca-account="saved-account"/);
-  assert.match(missing, /model-one/); assert.match(missing, /共 1 个/);
+  assert.match(missing, /model-one/); assert.match(missing, /共 2 个/);
   assert.match(missing, /data-ca="install-guide"/); assert.match(missing, /data-ca="check-install"/);
   const controls = missing.match(/<button\b[^>]*>/g);
   assert.ok(controls.filter(tag => /data-ca="(?:login|session|add|probe|probe-all|drawer)"/.test(tag)).every(tag => /\bdisabled\b/.test(tag)));
@@ -260,4 +261,28 @@ test('号池快照透传可续期标记，不返回续期材料', t => {
   assert.equal(rows.find(a => a.id === renewable).renewable, true);
   assert.equal(rows.find(a => a.id === fixed).renewable, false);
   assert.doesNotMatch(JSON.stringify(rows), /fixture-token|fixture-renewal-secret|mtoken/);
+});
+
+test('自动挑号：个人账号排在号池之后，其他号都不可用时才用，自己避让时不用', () => {
+  const pool = require('../core/codeagent-pool');
+  const ready = (id, extra = {}) => ({ id, state: 'ready', models: ['model-a'], modelsAuthoritative: true, activeSessions: 0, lastAssignedAt: 0, ...extra });
+  const personal = { state: 'ready', avoid: null, models: ['model-a'], modelsAuthoritative: true };
+  // 其他号可用：不挑个人号，哪怕那个号会话很多、个人号是空的
+  assert.deepEqual(pool.pickAutoChoice([ready('a', { activeSessions: 9 })], personal).account.id, 'a');
+  assert.equal(pool.pickAutoChoice([ready('a')], personal).personal, undefined);
+  // 其他号都避让：挑个人号
+  assert.deepEqual(pool.pickAutoChoice([ready('a', { avoid: { kind: 'quota' } }), ready('b', { avoid: { kind: 'rate-limit' } })], personal), { personal: true });
+  // 其他号需登录、重复、池是空的，也都轮到个人号
+  assert.deepEqual(pool.pickAutoChoice([ready('a', { state: 'expired' }), ready('b', { sameAsPersonal: true }), ready('c', { duplicateOf: 'a' })], personal), { personal: true });
+  assert.deepEqual(pool.pickAutoChoice([], personal), { personal: true });
+  // 个人号自己避让、没登录、读不到：不挑，也不硬用别的
+  const allPaused = [ready('a', { avoid: { kind: 'quota' } })];
+  assert.equal(pool.pickAutoChoice(allPaused, { ...personal, avoid: { kind: 'quota' } }), null);
+  assert.equal(pool.pickAutoChoice(allPaused, { ...personal, state: 'expired' }), null);
+  assert.equal(pool.pickAutoChoice(allPaused, null), null);
+  // 指定模型：其他号没有这个模型时，个人号有才挑；清单未知时不拦
+  const noModel = [ready('a', { models: ['model-b'] })];
+  assert.deepEqual(pool.pickAutoChoice(noModel, personal, { model: 'Model-A' }), { personal: true });
+  assert.equal(pool.pickAutoChoice(noModel, personal, { model: 'model-c' }), null);
+  assert.deepEqual(pool.pickAutoChoice(noModel, { ...personal, models: [], modelsAuthoritative: false }, { model: 'model-c' }), { personal: true });
 });

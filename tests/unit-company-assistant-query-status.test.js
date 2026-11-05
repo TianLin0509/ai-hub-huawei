@@ -1967,3 +1967,12 @@ test('round diagnostics include only bounded counts and flags, rotate and enter 
   const bundle = collectBundle({ logsDir: path.join(root, 'logs') });
   assert.match(bundle.text, /company-assistant-message-round.log/);
 });
+
+test('自己存的常用标签可悬停删除，内置标签不能删', () => {
+  const code = fs.readFileSync(path.join(__dirname, '../renderer/company-assistant-page.js'), 'utf8');
+  const css = fs.readFileSync(path.join(__dirname, '../renderer/styles/company-assistant-page.css'), 'utf8');
+  assert.match(code, /c\.custom \? `<span class="ca-chip-wrap">\$\{chip\}<button[^`]*data-ca="del-chip:\$\{i - customChipStart\}"/);
+  assert.match(code, /verb === 'del-chip'[\s\S]{0,200}call\('set-settings', \{ chips: data\.settings\.chips\.filter/);
+  assert.match(css, /\.ca-chip-del\{[^}]*opacity:0;pointer-events:none/);
+  assert.match(css, /\.ca-chip-wrap:hover \.ca-chip-del[^{]*\{opacity:1;pointer-events:auto\}/);
+});

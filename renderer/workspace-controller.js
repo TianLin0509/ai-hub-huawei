@@ -116,6 +116,9 @@
   // 个人账号的登录状态（号池列表里的 personal.state）：不是 ready 时在账号下拉和说明里写出来。
   const personalStateText = () => accountState(codeagentPool.personal, { personal: true }).detail || '';
   const usablePoolAccounts = () => usableAccounts(codeagentPool.accounts);
+  // 自动挑号的候选：号池能用的号，再加能用的个人账号（排在最后，其他号都不可用时才轮到它；主进程 pickAutoChoice 定）。
+  const personalAutoUsable = () => { const p = codeagentPool.personal || {}; return p.state === 'ready' && !p.avoid; };
+  const autoCandidateCount = () => usablePoolAccounts().length + (personalAutoUsable() ? 1 : 0);
   const codeagentPoolRequested = () => codeagentAccount === 'pool' || codeagentAccount === 'pool-manual';
   const codeagentUsesPool = () => codeagentPoolRequested() && usablePoolAccounts().length > 0;
   const codeagentManualPick = () => {
@@ -124,7 +127,7 @@
     return (codeagentPoolPick ? list.find(a => a.id === codeagentPoolPick) : list[0])?.id || '';
   };
   const codeagentSelectionUnavailable = () => selectedKind === 'codeagent' && codeagentPoolRequested()
-    && (!codeagentUsesPool() || (codeagentAccount === 'pool-manual' && !codeagentManualPick()));
+    && (codeagentAccount === 'pool' ? autoCandidateCount() === 0 : !codeagentUsesPool() || !codeagentManualPick());
   let codexBackend = companyApi.isCompany() ? 'api' : 'subscription';
   // DeepSeek 接入：上次选的方式（Hub 配置记住，默认 Token Plan）+ 两条线各自是否有 Key。
   let deepseekRoute = deepseekProfile.DEFAULT_ROUTE;
@@ -1089,18 +1092,20 @@
     if (!show || !select) return;
     const personal = codeagentPool.personal || {};
     const personalIssue = codeagentPoolError || personalStateText();
-    const available = usablePoolAccounts().length;
+    const available = autoCandidateCount();
     const metadata = (type, account = {}) => companyAccounts ? ` data-account-info="${escapeHtml(JSON.stringify({ type, account, available }))}"` : '';
     select.dataset.accountList = companyAccounts ? '1' : '';
     const manage = companyAccounts ? `<option value="manage-accounts" data-account-divider="1"${metadata('manage')}>管理账号…</option>` : '';
-    let html = `<option value="personal"${metadata('personal', personal)}>${escapeHtml('个人账号 · ' + accountOptionLabel(personal, { personal: true }))}</option>`
-      + `<option value="pool"${metadata('auto')}${available ? '' : ' disabled'}>${escapeHtml(`号池自动挑号（${available} 个可用号，优先没有会话的号）`)}</option>`;
+    // 账号列表里个人账号是第一个（2026-11-05 用户定）；取值 personal / pool-manual 不变。
+    const personalOption = section => `<option value="personal"${section ? ' data-account-section="指定账号"' : ''}${metadata('personal', personal)}>${escapeHtml('个人账号 · ' + accountOptionLabel(personal, { personal: true }))}</option>`;
+    const autoOption = `<option value="pool"${metadata('auto')}${available ? '' : ' disabled'}>${escapeHtml(`自动挑号（${available} 个可用号，优先没有会话的号，个人账号最后用）`)}</option>`;
+    let html = companyAccounts ? autoOption + personalOption(true) : personalOption(false) + autoOption;
     const chosenId = codeagentPoolPick || codeagentManualPick();
     if (companyAccounts) {
       const accounts = codeagentPool.accounts || [];
       const missing = manual && !accounts.some(a => a.id === chosenId);
-      if (missing) html += `<option value="${escapeHtml(accountChoiceValue('pool-manual', chosenId))}" data-account-section="指定号池账号" disabled>原账号不可用，请重新选择</option>`;
-      html += accounts.map((a, index) => `<option value="${escapeHtml(accountChoiceValue('pool-manual', a.id))}"${!index && !missing ? ' data-account-section="指定号池账号"' : ''}${metadata('account', a)}${accountState(a).usable ? '' : ' disabled'}>${escapeHtml(accountOptionLabel(a))}</option>`).join('') + manage;
+      if (missing) html += `<option value="${escapeHtml(accountChoiceValue('pool-manual', chosenId))}" disabled>原账号不可用，请重新选择</option>`;
+      html += accounts.map((a, index) => `<option value="${escapeHtml(accountChoiceValue('pool-manual', a.id))}"${metadata('account', a)}${accountState(a).usable ? '' : ' disabled'}>${escapeHtml(accountOptionLabel(a))}</option>`).join('') + manage;
     } else html += `<option value="pool-manual"${available ? '' : ' disabled'}>号池 · 手动选择</option>`;
     if (select.dataset.built !== html) { select.innerHTML = html; select.dataset.built = html; }
     select.value = companyAccounts ? accountChoiceValue(codeagentAccount, chosenId) : codeagentAccount;
@@ -1126,7 +1131,7 @@
       ? (personalIssue ? `个人账号提示：${personalIssue}。仍可创建会话，在会话「后台」按提示处理。` : '个人账号：用你自己登录的 CodeAgent，和以前一样。')
       // 一个号固定一个模型（2026-10-20 用户）：启动中心不再有 CodeAgent 模型菜单，这里不再提它。
       : manual ? '指定账号：整段会话固定使用这个号及其默认模型。'
-      : '号池自动挑号会跳过暂停或需登录的号；整段会话固定使用选中的账号。';
+      : '自动挑号会跳过暂停或需登录的号，其他号都不可用时才用个人账号；整段会话固定使用选中的账号。';
   }
 
   let launchConfigLayout = null, launchAccountCtx = null;

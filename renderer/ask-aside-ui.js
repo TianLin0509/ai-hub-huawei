@@ -85,7 +85,7 @@ function createAskAsideUi({ document, ipcRenderer, getSession, getTitle = s => s
     return a;
   }
   function waitBlock({ thinking, title, small, since }) {
-    const w = el('div', 'ask-wait' + (thinking ? ' thinking' : ''));
+    const w = el('div', 'ask-wait' + (thinking ? ' thinking hw-sweep' : ''));
     if (thinking) { const dots = el('span', 'dots'); dots.append(el('i'), el('i'), el('i')); w.append(dots); }
     const t = el('div', 't', title); t.append(el('small', '', small)); w.append(t);
     if (since) { const time = el('time'); time.dataset.since = since; time.textContent = elapsed(since, now()); w.append(time); }
@@ -160,8 +160,9 @@ function createAskAsideUi({ document, ipcRenderer, getSession, getTitle = s => s
     });
     // 只有真被截成两行的才给「展开」。
     for (const more of body.querySelectorAll('[data-more]')) {
-      const answer = more.closest('.ask-qa')?.querySelector('.ask-a');
-      if (answer && answer.scrollHeight > answer.clientHeight + 2) more.hidden = false;
+      // 折叠态只显示首段、首段截成两行（截断在段落上，见 ask-aside.css）：有第二段或首段被截才算被截断。
+      const paras = more.closest('.ask-qa')?.querySelectorAll('.ask-a p') || [];
+      if (paras.length > 1 || (paras[0] && paras[0].scrollHeight > paras[0].clientHeight + 2)) more.hidden = false;
     }
     if (stick || !prev.size) { stick = true; toBottom(); }
     syncTimer(data.items.some(item => item.status === 'running') || data.supported === false);

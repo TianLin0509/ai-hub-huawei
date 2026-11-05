@@ -1577,6 +1577,15 @@ class SessionManager extends EventEmitter {
     return counts;
   }
 
+  // 个人账号此刻能不能接自动挑号：登录状态、整号暂停、它当前模型上的配置避让，和号池的号同一口径。
+  _personalAutoCandidate(personalConfig, dataDir) {
+    const pool = require('./codeagent-pool'), quota = require('./codeagent-quota');
+    const personalDir = personalConfig.configDir;
+    const known = pool.accountModels(personalDir, undefined, pool.personalModelsFile(dataDir));
+    const avoid = quota.activeAvoid(dataDir).personal || quota.modelAvoidEntry(quota.modelAvoidAll(dataDir), 'personal', pool.readSettingsModel(personalDir)) || null;
+    return { state: pool.accountState(pool.readCredentials(personalDir)), avoid, models: known.models || [], modelsAuthoritative: !!known.authoritative };
+  }
+
   _resolveCodeAgentPool(opts, personalConfig) {
     const pool = require('./codeagent-pool');
     const dataDir = getHubDataDir();
@@ -1598,9 +1607,10 @@ class SessionManager extends EventEmitter {
       if (account.sameAsPersonal || account.duplicateOf) throw new Error(`${who(account)} 和别的号重复，不能单独使用`);
       if (account.avoid) throw new Error(`${who(account)} 已暂停使用，请在左栏「账号」恢复后再新建会话`);
     } else {
-      if (!accounts.length) throw new Error('号池里还没有账号：请到左栏「账号」添加');
-      account = pool.pickAccount(accounts, { model: opts.codeagentModelPick === true ? opts.model : '' });
-      if (!account) throw new Error('号池里暂时没有可用的号（已暂停、需要重新登录或没有所选模型的权限），未启动会话');
+      const choice = pool.pickAutoChoice(accounts, bridge ? null : this._personalAutoCandidate(personalConfig, dataDir), { model: opts.codeagentModelPick === true ? opts.model : '' });
+      if (choice?.personal) return { personalFallback: true };
+      if (!choice) throw new Error(accounts.length ? '暂时没有可用的账号（已暂停、需要重新登录或没有所选模型的权限），未启动会话' : '号池里还没有账号：请到左栏「账号」添加');
+      account = choice.account;
     }
     const cwd = opts.cwd || process.env.USERPROFILE || process.env.HOME || '';
     const override = pool.projectCredentialsOverride(cwd);
@@ -1765,8 +1775,14 @@ class SessionManager extends EventEmitter {
     // 号池（core/codeagent-pool.js）：新建时挑一个号，恢复/分支时回到原来那个号；换的只是配置目录。
     let codeagentPool = null;
     if (isCodeAgent && (opts.codeagentAccount === 'pool' || opts.codeagentPoolAccount)) {
-      codeagentPool = this._resolveCodeAgentPool(opts, codeagentConfig);
-      codeagentConfig = { ...codeagentConfig, configDir: codeagentPool.account.dir };
+      const resolved = this._resolveCodeAgentPool(opts, codeagentConfig);
+      if (resolved.personalFallback) {
+        console.log('[codeagent-pool] 号池没有可用的号，这次自动挑号用个人账号');
+        opts = { ...opts, codeagentAccount: 'personal' };
+      } else {
+        codeagentPool = resolved;
+        codeagentConfig = { ...codeagentConfig, configDir: codeagentPool.account.dir };
+      }
     } else if (isCodeAgent && codeAgentRouteModel(opts) && freshLaunch) {
       // 个人账号不切默认模型（号主自己日常用的配置）：此刻的默认就是指定模型才开，否则明确报错，不静默换模型。
       // 恢复的会话不核对：按个人账号此刻的默认模型照常起，不「选回」当初的模型（2026-10-19 账号即模型）。

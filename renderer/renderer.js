@@ -21,6 +21,8 @@ const { setBehindCardsPaused } = require('./xterm-card-pause.js');
 const { installSharedWidthCache } = require('./xterm-shared-width-cache.js');
 // 无限循环动画只动一小会儿就停（整窗按刷新率重画的根源，见 animation-budget.js）。
 try { require('./animation-budget.js').installAnimationBudget(); } catch (error) { console.warn('[animation-budget]', error && error.message); }
+// 「思考中 / 工作中」的流光每 8 秒扫一遍（有限次动画，不进上面的预算；见 sweep-pulse.js）。
+try { require('./sweep-pulse.js').installSweepPulse(); } catch (error) { console.warn('[sweep-pulse]', error && error.message); }
 // 公司版默认回到 9 月的「后台」路径：终端按实际尺寸常驻在卡片下面，点后台只藏卡片层（见 core/backstage-path.js）。
 const BACKSTAGE_KEEPS_TERMINAL = require('../core/backstage-path.js').keepsTerminalBehindCards();
 // 主面板的终端此刻是否「收起」：10 月路径下卡片视图里终端不显示、不调尺寸；9 月路径下它一直在卡片下面活着。
@@ -4070,7 +4072,7 @@ function _updateStreamingIndicator(sessionId) {
       //   (status running↔idle 反复切换时频繁触发的强制 scroll 是历史 bug 主因之一)
       const wasAtBottom = _isCardOverlayAtBottom(overlay);
       indicator = document.createElement('span');
-      indicator.className = 'streaming-indicator';
+      indicator.className = 'streaming-indicator hw-sweep';
       indicator.dataset.sessionId = String(sessionId);
       indicator.innerHTML = '<span class="spinner-icon" aria-hidden="true"></span>';
       targetParent.appendChild(indicator);
@@ -7634,13 +7636,21 @@ const accountUsageController = createAccountUsageController({
 const renderAccountUsage = accountUsageController.render;
 {
   const panelRoot = document.getElementById('account-quota-panel');
+  let codeagentQuotaPlacement = null;
   // CodeAgent 也可创建看板；订阅额度段仍遵守发行版 quotaBar 开关。
   const quotaPanelModule = require('./account-quota-panel.js');
   const quotaPanelPolicy = quotaPanelModule.panelAvailability(require('../core/distribution'));
   if (panelRoot && quotaPanelPolicy.enabled) {
     if (quotaPanelPolicy.codeagent && !quotaPanelPolicy.providers.length) {
+      codeagentQuotaPlacement = require('./codeagent-quota-placement.js').createQuotaPlacement({ storage: window.localStorage });
       claudeQuotaPanel = require('./codeagent-quota-panel.js').createCodeAgentQuotaPanel({
         document, root: panelRoot, ipcRenderer, storage: window.localStorage,
+        getPlacement: () => codeagentQuotaPlacement.get(),
+        footerRoot: document.getElementById('rail-codeagent-quota'),
+        getCurrentModel: () => {
+          const session = activeSessionId ? sessions.get(activeSessionId) : null;
+          return String(session?.kind || '').replace(/-resume$/, '') === 'codeagent' ? session.currentModel?.id || '' : '';
+        },
         getCurrentAccountId: () => {
           const session = activeSessionId ? sessions.get(activeSessionId) : null;
           return String(session?.kind || '').replace(/-resume$/, '') === 'codeagent'
@@ -7649,6 +7659,10 @@ const renderAccountUsage = accountUsageController.render;
         openAccounts: id => window.__codeagentAccountsOpen?.(id),
       });
       window.codeagentQuotaPanel = claudeQuotaPanel;
+      codeagentQuotaPlacement.subscribe(() => claudeQuotaPanel.render());
+      // 设置弹窗的标记排在脚本之后，要等页面解析完才绑得上
+      const bindQuotaPlacement = () => codeagentQuotaPlacement.bindSelect(document.getElementById('cfg-codeagent-quota-placement-field'), document.getElementById('cfg-codeagent-quota-placement'));
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindQuotaPlacement, { once: true }); else bindQuotaPlacement();
     } else claudeQuotaPanel = quotaPanelModule.createAccountQuotaPanel({
       providers: quotaPanelPolicy.providers,
       document, root: panelRoot, footerRoot: document.getElementById('rail-usage'), escapeHtml, storage: window.localStorage,
@@ -7670,6 +7684,8 @@ const renderAccountUsage = accountUsageController.render;
 }
 // CodeAgent 额度条：每轮回答结束读屏幕 Stats 面板的 Credit（applyCodeAgentScreenContext），每个账号一行。
 const codeagentQuotaBar = require('./codeagent-quota-bar.js').createCodeAgentQuotaBar({ document, ipcRenderer, storage: window.localStorage, escapeHtml, getActiveSession: () => sessions.get(getFocusedSessionId()) });
+// 有号池额度栏时底栏由它来画，这里只留读数（模型下拉、用量详情还在用）。
+if (window.codeagentQuotaPanel) codeagentQuotaBar.setAllowed(false);
 codeagentQuotaBar.render();
 window.codeagentQuotaBar = codeagentQuotaBar;
 // /model 菜单里读到的用量（Credit 三档 + 每个模型的 Token 用量，core/codeagent-usage-menu.js）：启动取一次，主进程记了新快照再取。

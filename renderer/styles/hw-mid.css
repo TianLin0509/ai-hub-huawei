@@ -135,3 +135,7 @@
 :root[data-hw-shell] body #meeting-room-panel .mr-group-models { gap: 4px; }
 :root[data-hw-shell] body #meeting-room-panel .mr-group-models .mr-group-model-chip { flex: 0 1 auto; width: auto; min-width: 0; max-width: 180px; height: var(--hw-btn-h-s); padding: 0 var(--hw-btn-px-s); border: 0; border-radius: var(--hw-r-pill); background: var(--hw-surface); color: var(--hw-text-1); font-size: var(--hw-btn-fs-s); box-shadow: var(--hw-e1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 :root[data-hw-shell] body #meeting-room-panel .mr-group-models .mr-group-model-chip:hover { background: var(--hw-surface); color: var(--hw-brand); }
+
+/* 5.5.9 ③ 卡片视图「工作中」（s1 定稿）：白底胶囊 + 绿点，底边间歇流光（.hw-sweep，styles/hw-sweep.css + sweep-pulse.js，每 8 秒扫一遍） */
+:root[data-hw-shell] body .msg-overlay > .streaming-indicator { height: 26px; margin: 12px 0 4px 8px; padding: 0 10px; gap: 6px; border: 0; border-radius: var(--hw-r-pill); background-color: var(--hw-surface); box-shadow: var(--hw-e1); color: var(--hw-text-2); font-size: var(--hw-fs-12); font-weight: 500; }
+:root[data-hw-shell] body .msg-overlay > .streaming-indicator .spinner-icon { width: 6px; height: 6px; background: var(--hw-green); box-shadow: 0 0 0 2px var(--hw-green-soft); }

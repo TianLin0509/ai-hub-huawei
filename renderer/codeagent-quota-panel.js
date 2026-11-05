@@ -1,10 +1,11 @@
 'use strict';
 
-const { quotaView, renderQuota, readTime } = require('./codeagent-quota-panel-view');
+const { quotaView, renderQuota, renderQuotaFooter, tipHtml } = require('./codeagent-quota-panel-view');
 const STORAGE_KEY = 'hubClaudeQuotaPanel';
 
 function createCodeAgentQuotaPanel({ document, root, window = document.defaultView, ipcRenderer,
-  storage = null, getCurrentAccountId = () => '', openAccounts = () => {}, now = Date.now,
+  storage = null, getCurrentAccountId = () => '', getCurrentModel = () => '', openAccounts = () => {}, now = Date.now,
+  getPlacement = () => 'right', footerRoot = null,
   setIntervalFn = setInterval, clearIntervalFn = clearInterval } = {}) {
   if (!document || !root || !ipcRenderer) throw new Error('CodeAgent quota panel needs its document, root and IPC');
   const setup = require('./codeagent-setup').createCodeAgentSetup({ document, ipcRenderer });
@@ -14,7 +15,7 @@ function createCodeAgentQuotaPanel({ document, root, window = document.defaultVi
   let chosen = typeof saved.collapsed === 'boolean';
   const wideDefault = () => chosen ? saved.collapsed : !saved.seenReading;
   let narrow = window.innerWidth <= 1360, collapsed = narrow || wideDefault();
-  let snapshot = null, message = '正在读取账号状态…', lastHtml = '', revision = 0, disposed = false;
+  let snapshot = null, message = '正在读取账号状态…', lastHtml = '', lastFooterHtml = '', revision = 0, disposed = false;
   let cachePending = null, refreshPending = null, refreshBusy = false, needsCache = false, tip = null;
   let loadingKeys = new Set();
   let messageUntil = 0, messageTimer;
@@ -23,16 +24,27 @@ function createCodeAgentQuotaPanel({ document, root, window = document.defaultVi
   root.classList.add('qp'); root.setAttribute('aria-label', '号池额度');
   const save = () => { try { storage?.setItem(STORAGE_KEY, JSON.stringify(saved)); } catch {} };
   const clearTip = () => { tip?.remove(); tip = null; };
-  const view = () => quotaView(snapshot, { now: now(), currentAccountId: getCurrentAccountId(), loadingKeys, installed: setup.current?.installed });
+  const view = () => quotaView(snapshot, { now: now(), currentAccountId: getCurrentAccountId(), currentModel: getCurrentModel(), loadingKeys, installed: setup.current?.installed });
 
   function render() {
     if (disposed) return;
-    root.hidden = false;
+    const current = view();
+    // 去重后多于一个号才有额度栏（含收起态）；放在底栏时右侧不显示。安装说明的入口在账号页和主页。
+    const placement = getPlacement();
+    const inFooter = !!footerRoot && current.visible && placement === 'bottom';
+    if (footerRoot) {
+      footerRoot.hidden = !inFooter;
+      const footerHtml = inFooter ? renderQuotaFooter(current, { now: now() }) : '';
+      if (footerHtml !== lastFooterHtml) { footerRoot.innerHTML = footerHtml; lastFooterHtml = footerHtml; }
+    }
+    const shown = current.visible && placement === 'right';
+    root.hidden = !shown;
+    placeholder.hidden = !(shown && narrow && !collapsed);
     root.classList.toggle('is-collapsed', collapsed);
     root.classList.toggle('is-overlay', narrow && !collapsed);
     root.classList.toggle('is-refreshing', refreshBusy);
-    placeholder.hidden = !(narrow && !collapsed);
-    const html = renderQuota(view(), { now: now(), refreshing: refreshBusy, loadingCount: loadingKeys.size, message });
+    if (!shown) { clearTip(); if (lastHtml) { root.innerHTML = ''; lastHtml = ''; } return; }
+    const html = renderQuota(current, { now: now(), refreshing: refreshBusy, loadingCount: loadingKeys.size, message });
     if (html !== lastHtml) {
       const list = root.querySelector('.qp-list'), scroll = list?.scrollTop || 0;
       const focused = root.contains(document.activeElement) ? document.activeElement : null;
@@ -51,7 +63,7 @@ function createCodeAgentQuotaPanel({ document, root, window = document.defaultVi
   }
 
   function noteReading() {
-    if (saved.seenReading || !view().rows.some(row => row.busy || row.month)) return;
+    if (saved.seenReading || !view().rows.some(row => row.token || row.busy || row.month)) return;
     saved.seenReading = true; save();
     if (!chosen && !narrow) { collapsed = false; clearTip(); }
   }
@@ -103,7 +115,7 @@ function createCodeAgentQuotaPanel({ document, root, window = document.defaultVi
   function activate(event) {
     if (event.type === 'keydown' && !['Enter', ' '].includes(event.key)) return;
     const target = event.target.closest('[data-qp-action], [data-qp-account]');
-    if (!target || !root.contains(target) || target.disabled) return;
+    if (!target || !(root.contains(target) || footerRoot?.contains(target)) || target.disabled) return;
     event.preventDefault();
     const action = target.dataset.qpAction;
     if (action === 'install-guide') { setup.showGuide(); return; }
@@ -118,41 +130,37 @@ function createCodeAgentQuotaPanel({ document, root, window = document.defaultVi
     if (next !== narrow) { narrow = next; collapsed = narrow || wideDefault(); }
     clearTip(); render();
   }
+  // 展开时悬停一行、收起时悬停圆环，都是同一张卡，放在额度栏左边。
   function showTip(event) {
-    const ring = event.target.closest('.qp-ring');
-    if (!collapsed || !ring || !root.contains(ring)) return;
+    const target = event.target.closest('.qp-ring, .qp-row');
+    if (!target || !root.contains(target)) return;
     clearTip();
-    const row = view().rows.find(item => item.id === ring.dataset.qpAccount);
+    const row = view().rows.find(item => item.id === target.dataset.qpAccount);
     if (!row) return;
     tip = document.createElement('div'); tip.className = 'qp-tip'; tip.setAttribute('role', 'tooltip');
-    const name = document.createElement('b'); name.textContent = row.name + (row.current ? ' · 本会话' : ''); tip.append(name);
-    const ratio = value => value ? `${Math.round(value.pct)}%` : '未读取';
-    const quantity = row.busy || row.month;
-    const amount = quantity?.remaining != null ? `剩 ${quantity.remaining.toLocaleString('en-US', { maximumFractionDigits: 1 })}${quantity.total != null ? ' / ' + quantity.total.toLocaleString('en-US', { maximumFractionDigits: 1 }) : ''} · ` : '';
-    const read = quantity?.at ? `${readTime(quantity.at, now())} 读取` : '读取时间未记录';
-    for (const text of [`今日忙时 ${ratio(row.busy)} · 月度 ${ratio(row.month)}`, quantity ? amount + read : '会话运行后显示', row.warning ? row.detail : '点头像打开账号页']) {
-      const line = document.createElement('div'); line.textContent = text; tip.append(line);
-    }
+    tip.innerHTML = tipHtml(row, now());
     document.body.append(tip);
-    const rect = ring.getBoundingClientRect();
-    Object.assign(tip.style, { position: 'fixed', right: 'auto', left: Math.max(8, rect.left - 230) + 'px',
+    const rect = target.getBoundingClientRect(), panel = root.getBoundingClientRect();
+    Object.assign(tip.style, { position: 'fixed', right: 'auto', left: Math.max(8, panel.left - tip.offsetWidth - 8) + 'px',
       top: Math.max(8, Math.min(rect.top, window.innerHeight - tip.offsetHeight - 8)) + 'px' });
   }
-  function leaveTip(event) { if (!event.relatedTarget || !event.target.closest('.qp-ring')?.contains(event.relatedTarget)) clearTip(); }
+  function leaveTip(event) { if (!event.relatedTarget || !event.target.closest('.qp-ring, .qp-row')?.contains(event.relatedTarget)) clearTip(); }
   const changed = () => { void load(); };
   const unsubscribeSetup = setup.subscribe(() => render());
   root.addEventListener('click', activate); root.addEventListener('keydown', activate);
+  footerRoot?.addEventListener('click', activate);
   root.addEventListener('pointerover', showTip); root.addEventListener('pointerout', leaveTip);
   root.addEventListener('focusin', showTip); root.addEventListener('focusout', clearTip);
   document.addEventListener('pointerdown', outside); window.addEventListener('resize', resize);
   for (const name of ['codeagent-usage-changed', 'codeagent-pool:changed']) ipcRenderer.on(name, changed);
   const tick = setIntervalFn(() => { render(); void load(); }, 60000); tick?.unref?.();
   render(); void load(); void setup.refresh().catch(() => {});
-  return { render, refresh, reload: load, whenIdle: () => refreshPending || cachePending || Promise.resolve(),
+  return { render, refresh, reload: load, view, whenIdle: () => refreshPending || cachePending || Promise.resolve(),
     getState: () => ({ collapsed, narrow, refreshing: refreshBusy }), destroy() {
       disposed = true; unsubscribeSetup(); ++revision; clearIntervalFn(tick); clearTimeout(messageTimer); clearTip(); placeholder.remove(); root.hidden = true;
       root.classList.remove('qp', 'is-overlay', 'is-refreshing');
       root.removeEventListener('click', activate); root.removeEventListener('keydown', activate);
+      footerRoot?.removeEventListener('click', activate); if (footerRoot) { footerRoot.hidden = true; footerRoot.innerHTML = ''; }
       root.removeEventListener('pointerover', showTip); root.removeEventListener('pointerout', leaveTip);
       root.removeEventListener('focusin', showTip); root.removeEventListener('focusout', clearTip);
       document.removeEventListener('pointerdown', outside); window.removeEventListener('resize', resize);

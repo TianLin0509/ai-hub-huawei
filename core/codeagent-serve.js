@@ -8,7 +8,7 @@
 // - 没有可用的关闭接口（/api/v1/server/shutdown 是 404），用完按进程树结束；万一 bun 打包的进程脱离父进程，再按端口结束。
 // - 模型清单和账号额度：GET /api/v2/config/providers；单个模型的分钟 / 小时 / 天配额：GET /api/v2/model/<模型>/quota。
 // 失败一律返回 { ok:false, error }，调用方回落到读 /model 屏幕（core/codeagent-model-probe.js）。
-const { spawn, execFile } = require('child_process');
+const { spawn, execFile, execFileSync } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
@@ -92,6 +92,9 @@ function spawnServe({ command, port, token, configDir, cwd, env }) {
 
 // 同一时间只起一个临时 serve：公司电脑内存紧，一个就占约 0.5 GB。
 let chain = Promise.resolve();
+// 正在跑的临时 serve（pid → 端口）。Hub 退出时 Windows 不会带走子进程，要主动结束（2026-11-05 审查）。
+const activeServes = new Map();
+let shuttingDown = false;
 
 function withTempServe(options, fn) {
   const task = () => runTempServe(options, fn);
@@ -101,15 +104,18 @@ function withTempServe(options, fn) {
 }
 
 async function runTempServe({ command, configDirEnv, configDir, cwd, env = process.env, readyTimeoutMs = 30000, spawnImpl = spawnServe } = {}, fn) {
+  if (shuttingDown) return { ok: false, error: 'Hub 正在退出' };
   if (!command || !configDir) return { ok: false, error: '缺少 CodeAgent 命令或配置目录' };
   const started = Date.now();
   const port = await freePort();
+  if (shuttingDown) return { ok: false, error: 'Hub 正在退出' };
   const token = crypto.randomBytes(32).toString('hex');
   let proc;
   // 工作目录不存在时 spawn 直接报 ENOENT（新装 Hub 的 probe-cwd 还没建过；读屏那条路会先建）
   try { fs.mkdirSync(cwd || configDir, { recursive: true }); } catch { /* 交给 spawn 报错 */ }
   try { proc = spawnImpl({ command, port, token, configDir, cwd: cwd || configDir, env: serveEnv(env, { configDirEnv, configDir }) }); }
   catch (error) { return { ok: false, error: `启动 CodeAgent serve 失败：${error.message}` }; }
+  if (proc.pid) activeServes.set(proc.pid, port);
   let exited = false, exitCode = null, spawnError = '';
   const exitPromise = new Promise(resolve => {
     proc.once('exit', code => { exited = true; exitCode = code; resolve(); });
@@ -129,6 +135,7 @@ async function runTempServe({ command, configDirEnv, configDir, cwd, env = proce
   } catch (error) {
     return { ok: false, error: error && error.message ? error.message : String(error) };
   } finally {
+    if (proc.pid) activeServes.delete(proc.pid);
     if (!exited) {
       await killTree(proc.pid);
       await Promise.race([exitPromise, new Promise(r => setTimeout(r, 5000))]);
@@ -232,4 +239,29 @@ function serveEnabled(dataDir, env = process.env) {
   try { return require('./edition-channel').wasUnlocked(dataDir); } catch { return false; }
 }
 
-module.exports = { serveEnabled, withTempServe, request, getJson, freePort, portOwner, HEALTH_PATH, parseProviders, parseQuota, readAccount, toUsageSnapshot };
+// Hub 退出时调用：不再起新的，并同步结束正在跑的（进程脱离父进程时再按端口结束）。同步是因为退出流程不会等异步的清理。
+function killServeSync(pid, port) {
+  const quiet = { windowsHide: true, timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' };
+  if (process.platform !== 'win32') { try { process.kill(pid, 'SIGKILL'); } catch { /* 已经退出 */ } return; }
+  try { execFileSync('taskkill', ['/T', '/F', '/PID', String(pid)], quiet); } catch { /* 已经退出 */ }
+  try {
+    const line = execFileSync('netstat', ['-ano', '-p', 'TCP'], quiet).split(/\r?\n/).find(l => new RegExp(`127\\.0\\.0\\.1:${port}\\s+\\S+\\s+LISTENING\\s+\\d+`, 'i').test(l));
+    const owner = line && Number(line.trim().split(/\s+/).pop());
+    if (Number.isFinite(owner) && owner > 0) execFileSync('taskkill', ['/T', '/F', '/PID', String(owner)], quiet);
+  } catch { /* 端口已经没人占 */ }
+}
+function shutdownTempServes({ killSync = killServeSync } = {}) {
+  shuttingDown = true;
+  const running = [...activeServes];
+  activeServes.clear();
+  for (const [pid, port] of running) killSync(pid, port);
+  return running.length;
+}
+// 只给测试用：同一进程里还要继续测别的。
+function resetTempServeShutdownForTest() { shuttingDown = false; }
+
+// 额度读取（2026-11-05 用户定：放开）：所有电脑都可经临时 serve 读额度，AI_HUB_CODEAGENT_SERVE=0 可关。
+// 选模型、启动传参仍跟 serveEnabled 走，不受这里影响。
+function quotaReadEnabled(env = process.env) { return env.AI_HUB_CODEAGENT_SERVE !== '0'; }
+
+module.exports = { serveEnabled, quotaReadEnabled, shutdownTempServes, resetTempServeShutdownForTest, withTempServe, request, getJson, freePort, portOwner, HEALTH_PATH, parseProviders, parseQuota, readAccount, toUsageSnapshot };

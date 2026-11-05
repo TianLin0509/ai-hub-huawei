@@ -84,6 +84,7 @@
   <link rel="stylesheet" href="styles/hw-shell.css">
   <link rel="stylesheet" href="styles/hw-mid.css">
   <link rel="stylesheet" href="styles/hw-type.css">
+  <link rel="stylesheet" href="styles/hw-sweep.css">
   <link rel="stylesheet" href="styles/ask-aside.css">
   <link rel="stylesheet" href="styles/controls.css" id="controls-layer">
 </head>
@@ -914,6 +915,14 @@
             </div>
           </div>
           <p class="config-reading-note">默认已从 13px 调到 15px；代码块仍使用等宽字体。公式由本地 KaTeX 离线渲染。</p>
+          <div class="config-field" id="cfg-codeagent-quota-placement-field" hidden>
+            <label for="cfg-codeagent-quota-placement">号池额度栏位置</label>
+            <select id="cfg-codeagent-quota-placement">
+              <option value="right">右侧栏（推荐）</option>
+              <option value="bottom">底部状态栏</option>
+            </select>
+            <p class="config-reading-note">有两个及以上账号时才显示，选择后立即生效。</p>
+          </div>
           <button type="button" class="config-btn" id="btn-config-accounts">账号登录与接入配置 → 权限</button>
         </div>
 

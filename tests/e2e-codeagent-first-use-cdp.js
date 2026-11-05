@@ -66,24 +66,23 @@ function windows(pid) {
       assert.match(await c.eval(`${q('#new-session-codeagent-account-note')}.textContent`), /CodeAgent 未安装/);
       assert.doesNotMatch(await c.eval(`${q('#new-session-codeagent-account-note')}.textContent`), /仍可创建会话|需登录/);
       await shot(`${width}-missing-launch`); await click('#new-session-submit'); await guide(); await closeGuide(); await home();
-      await wait(`${q('.qp')}?.textContent.includes('CodeAgent 未安装')`, 'missing quota');
-      const folded = await c.eval(`${q('.qp')}.classList.contains('is-collapsed')`);
-      await click(folded ? '.qp-rail [data-qp-action="install-guide"]' : '.qp-f [data-qp-action="install-guide"]'); await guide(); await closeGuide();
+      // 只有一个号时整栏不出现（s1 样稿），安装说明入口在主页和账号页
+      assert.equal(await c.eval(`${q('#account-quota-panel')}.hidden`), true);
       await click('#btn-rail-accounts'); await wait(`${q('#codeagent-accounts-page')}?.textContent.includes('未检测到 CodeAgent')`, 'missing account');
       assert.equal(await c.eval(`${q('#codeagent-accounts-page [data-ca="login"]:not(:disabled)')}`), null);
       assert.match(await c.eval(`${q('#codeagent-accounts-page')}.textContent`), /保留的测试号/);
-      assert.match(await c.eval(`${q('.caa-me-card')}.textContent`), /未检测到 CodeAgent/);
-      assert.doesNotMatch(await c.eval(`${q('.caa-me-card')}.textContent`), /需登录|个人账号尚未登录|还没登录/);
+      assert.match(await c.eval(`${q('[data-ca-account=personal]')}.textContent`), /未检测到 CodeAgent/);
+      assert.doesNotMatch(await c.eval(`${q('[data-ca-account=personal]')}.textContent`), /需登录|个人账号尚未登录|还没登录/);
       assert.equal(await c.eval(`${q('[data-ca-account="' + savedAccount + '"]')}?.dataset.caAccount`), savedAccount);
       await shot(`${width}-missing-accounts`); await click('[data-ca="install-guide"]'); await guide(); await closeGuide();
-      result.checks.push(`${width}: homepage both guide entries, launch install action, quota guide and account guide use real mouse clicks`); save();
+      result.checks.push(`${width}: homepage both guide entries, launch install action and account guide use real mouse clicks`); save();
     }
     // File appearance is the only change: the next real setup call sees it.
     fs.writeFileSync(command, '@echo off\r\necho 1.26.15\r\nexit /b 0\r\n');
     await click('[data-ca="check-install"]');
     await wait(`!${q('#codeagent-accounts-page')}?.textContent.includes('未检测到 CodeAgent') && !!${q('#codeagent-accounts-page [data-ca="login"]:not(:disabled)')}`, 'account recovery');
-    await wait(`${q('[data-provider="codeagent"]')}?.dataset.installed==='1' && !${q('.qp')}?.textContent.includes('CodeAgent 未安装')`, 'shared state recovery');
-    result.checks.push('Real file discovery changes installed status; one recheck updates homepage, accounts and quota together');
+    await wait(`${q('[data-provider="codeagent"]')}?.dataset.installed==='1'`, 'shared state recovery');
+    result.checks.push('Real file discovery changes installed status; one recheck updates homepage and accounts together');
     for (const width of [1440, 1280]) {
       await c.send('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false });
       await shot(`${width}-installed-accounts`); await home(); await shot(`${width}-installed-home`);

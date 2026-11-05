@@ -53,7 +53,8 @@ async function run() {
   const setReading = (id, busy, month, extra = {}, at = observedAt) => usage.recordUsage(DATA, id, { credit: {
     busyDay: busy == null ? { pct: null } : { pct: 100 - busy, used: 100 - busy, total: 100 },
     monthly: month == null ? { pct: null } : { pct: 100 - month, used: (100 - month) * 5, total: 500 }, ...extra,
-  } }, { now: at, source: 'screen' });
+    // 主数字来自 Token：这里让今日剩余和忙时剩余取同一个值，便于核对
+  }, models: busy == null ? [] : ['GLM-5.2-WX-Auto', 'deepseek-v4-flash-0731'].map(name => ({ name, day: { used: '1M', total: '400M', pct: 100 - busy }, hour: { used: '1M', total: '200M', pct: 5 }, min: { used: '1K', total: '1M', pct: 1 } })) }, { now: at, source: 'screen', label: id === 'personal' ? '个人账号' : id });
   // Readings are written after launch so the first-day (all unread) rail can be observed first.
   const seedReadings = () => { setReading('personal', 84, 91); setReading(ids[0], 62, 88, { idleDiscount: '2折', idleDiscountIn: '1小时57分钟' });
     setReading(ids[1], 16, 64); setReading(ids[2], null, 42); setReading(ids[3], 0, 40); };
@@ -128,8 +129,19 @@ async function run() {
     await wait(() => c.eval(`!!document.querySelector('.qp-row.is-current[data-qp-account="${ids[0]}"]')`), 'current account');
     check('current session uses the stored pool account ID');
     check('company side panel excludes subscription provider sections', await c.eval("!document.querySelector('#account-quota-panel .cq-group')"));
-    check('unknown busy bucket and empty login account remain unread', await c.eval(`document.querySelector('.qp-row[data-qp-account="${ids[2]}"] [data-qp-bucket=busyDay]').textContent==='未读取'&&!!document.querySelector('.qp-row[data-qp-account="${ids[4]}"] .qp-none')`));
-    check('pool count excludes paused and login accounts, personal stays separate', await c.eval("document.querySelector('.qp-n').textContent==='3/5 可用'&&document.querySelectorAll('.qp-g').length===2"));
+    check('an account without Token stays unread and a login account says so', await c.eval(`document.querySelector('.qp-row[data-qp-account="${ids[2]}"] [data-qp-bucket=token]').textContent==='未读取'&&document.querySelector('.qp-row[data-qp-account="${ids[4]}"] [data-qp-bucket=token]').textContent==='需登录'`));
+    check('one list counts personal, excludes paused and login accounts, personal first', await c.eval("document.querySelector('.qp-n').textContent==='4/6 可用'&&document.querySelectorAll('.qp-g').length===0&&document.querySelector('.qp-list .qp-row').dataset.qpAccount==='personal'"));
+    check('main number is Token today, not Credit', await c.eval(`document.querySelector('.qp-row[data-qp-account="${ids[0]}"] [data-qp-bucket=token]').textContent==='62%'&&!document.querySelector('[data-qp-bucket=monthly]')&&document.querySelector('.qp-row[data-qp-account="personal"] .qp-tag').textContent==='个人'`));
+    // 位置二选一：底栏时右侧隐藏、底栏出现；切回右侧恢复；刷新后记住
+    await resize(1440); await expanded();
+    await c.eval("require('electron').ipcRenderer.invoke('codeagent:usage').then(r=>{window.codeagentQuotaBar.setUsage(r.accounts,r.defaultModels);return 1})");
+    await c.eval("(()=>{const s=document.getElementById('cfg-codeagent-quota-placement');s.value='bottom';s.dispatchEvent(new Event('change'));return 1})()");
+    await wait(() => c.eval("document.getElementById('account-quota-panel').hidden&&!document.getElementById('rail-codeagent-quota').hidden"), 'bottom placement applies');
+    check('bottom placement hides the right panel and shows every account with its name and remaining', await c.eval("document.querySelectorAll('#rail-codeagent-quota .qp-foot-item').length===6&&document.querySelector('#rail-codeagent-quota .qp-foot-item').textContent.includes('84%')"));
+    await shot('quota-bottom', 1440);
+    await c.eval("(()=>{const s=document.getElementById('cfg-codeagent-quota-placement');s.value='right';s.dispatchEvent(new Event('change'));return 1})()");
+    await wait(() => c.eval("!document.getElementById('account-quota-panel').hidden&&document.getElementById('rail-codeagent-quota').hidden"), 'right placement applies');
+    check('right placement restores the panel and hides the footer rows');
     for (const width of [1440, 1280]) {
       await resize(width);
       if (width === 1280) check('1280 starts as a 48px rail', (await state()).collapsed);
