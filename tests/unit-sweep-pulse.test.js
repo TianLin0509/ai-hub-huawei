@@ -65,7 +65,9 @@ test('styles hold no CSS animation (moving an element cannot replay it) and keep
   const css = fs.readFileSync(path.join(__dirname, '../renderer/styles/hw-sweep.css'), 'utf8');
   assert.doesNotMatch(css.replace(/\/\*[\s\S]*?\*\//g, ''), /animation|@keyframes/);
   assert.match(css, /\.hw-sweep > \.hw-sweep-light\{position:absolute;[^}]*height:var\(--hw-sweep-h\)/);
-  assert.match(css, /rgba\(10,89,247,\.55\) 55%,rgba\(207,10,44,\.35\) 78%/, 'keeps the original blue-to-red sweep colours');
+  assert.match(css, /var\(--hw-sweep-a\) 55%,var\(--hw-sweep-b\) 78%/, 'sweep colours come from tokens');
+  const tokens = fs.readFileSync(path.join(__dirname, '../renderer/styles/hw-tokens.css'), 'utf8');
+  assert.match(tokens, /--hw-sweep-a: rgba\(10,89,247,\.55\); --hw-sweep-b: rgba\(207,10,44,\.35\);/, 'default theme keeps the original blue-to-red sweep');
   assert.match(css, /:root:not\(\[data-hw-shell\]\) \.hw-sweep > \.hw-sweep-light\{display:none\}/, 'home edition never shows the bar');
   const ask = fs.readFileSync(path.join(__dirname, '../renderer/styles/ask-aside.css'), 'utf8');
   assert.doesNotMatch(ask, /ask-sweep/, 'the old endless sweep is gone from the ask drawer');

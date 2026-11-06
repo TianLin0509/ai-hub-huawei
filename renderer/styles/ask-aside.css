@@ -25,7 +25,7 @@
 .ask .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:36px;padding:0 18px;border-radius:var(--hw-r-pill);font-size:var(--hw-fs-14);font-weight:500;white-space:nowrap;transition:background var(--hw-t-fast),transform var(--hw-t-fast),box-shadow var(--hw-t-base)}
 .ask .btn:active{transform:scale(.97)}
 .ask .btn-sm{height:30px;padding:0 13px;font-size:var(--hw-fs-13)}
-.ask .btn-pri{background:var(--hw-brand);color:var(--hw-text-on);box-shadow:0 4px 12px -4px rgba(10,89,247,.6)}
+.ask .btn-pri{background:var(--hw-brand);color:var(--hw-text-on);box-shadow:0 4px 12px -4px color-mix(in srgb,var(--hw-brand) 60%,transparent)}
 .ask .btn-pri:hover{background:var(--hw-brand-hover)}
 .ask .btn[disabled]{opacity:.4;pointer-events:none}
 /* 思考中块底边的流光走公用的间歇流光（styles/hw-sweep.css + sweep-pulse.js），与卡片同为 2px、蓝→红 */

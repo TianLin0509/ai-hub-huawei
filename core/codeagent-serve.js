@@ -58,10 +58,18 @@ function run(file, args) {
   return new Promise(resolve => execFile(file, args, { windowsHide: true, timeout: 10000 }, (error, stdout) => resolve({ error, stdout: String(stdout || '') })));
 }
 
-async function killTree(pid) {
+// 这时不再加长等待（退出路径不能一直卡着），另起一个不限时的 taskkill 接着做：Windows 上它不随 Hub 退出。
+function killInBackground(pid) {
+  try { spawn('taskkill', ['/T', '/F', '/PID', String(pid)], { windowsHide: true, stdio: 'ignore' }).unref(); } catch { /* 起不来就算了 */ }
+}
+const pidAlive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
+
+async function killTree(pid, { runner = run, background = killInBackground } = {}) {
   if (!pid) return;
-  if (process.platform === 'win32') await run('taskkill', ['/T', '/F', '/PID', String(pid)]);
-  else { try { process.kill(pid, 'SIGKILL'); } catch { /* 已经退出 */ } }
+  if (process.platform === 'win32') {
+    const { error } = await runner('taskkill', ['/T', '/F', '/PID', String(pid)]);
+    if (error?.killed) background(pid);
+  } else { try { process.kill(pid, 'SIGKILL'); } catch { /* 已经退出 */ } }
 }
 
 async function portOwner(port) {
@@ -240,15 +248,20 @@ function serveEnabled(dataDir, env = process.env) {
 }
 
 // Hub 退出时调用：不再起新的，并同步结束正在跑的（进程脱离父进程时再按端口结束）。同步是因为退出流程不会等异步的清理。
-function killServeSync(pid, port) {
-  const quiet = { windowsHide: true, timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' };
+// 先查端口占用者再杀：外层 cmd 一死，进程树就断了，只能靠端口找到真正的 serve。每步最多等 5 秒，超时的交给后台接着杀，退出最多卡十几秒。
+function killServeSync(pid, port, { exec = execFileSync, background = killInBackground, timeoutMs = 5000 } = {}) {
+  const quiet = { windowsHide: true, timeout: timeoutMs, stdio: ['ignore', 'pipe', 'ignore'], encoding: 'utf8' };
   if (process.platform !== 'win32') { try { process.kill(pid, 'SIGKILL'); } catch { /* 已经退出 */ } return; }
-  try { execFileSync('taskkill', ['/T', '/F', '/PID', String(pid)], quiet); } catch { /* 已经退出 */ }
+  let owner = null;
   try {
-    const line = execFileSync('netstat', ['-ano', '-p', 'TCP'], quiet).split(/\r?\n/).find(l => new RegExp(`127\\.0\\.0\\.1:${port}\\s+\\S+\\s+LISTENING\\s+\\d+`, 'i').test(l));
-    const owner = line && Number(line.trim().split(/\s+/).pop());
-    if (Number.isFinite(owner) && owner > 0) execFileSync('taskkill', ['/T', '/F', '/PID', String(owner)], quiet);
-  } catch { /* 端口已经没人占 */ }
+    const line = exec('netstat', ['-ano', '-p', 'TCP'], quiet).split(/\r?\n/).find(l => new RegExp(`127\\.0\\.0\\.1:${port}\\s+\\S+\\s+LISTENING\\s+\\d+`, 'i').test(l));
+    const found = line && Number(line.trim().split(/\s+/).pop());
+    if (Number.isFinite(found) && found > 0 && found !== pid) owner = found;
+  } catch { /* netstat 超时或端口没人占，只杀进程树 */ }
+  for (const target of owner ? [pid, owner] : [pid]) {
+    try { exec('taskkill', ['/T', '/F', '/PID', String(target)], quiet); }
+    catch (error) { if (error.code === 'ETIMEDOUT' || error.signal || pidAlive(target)) background(target); }
+  }
 }
 function shutdownTempServes({ killSync = killServeSync } = {}) {
   shuttingDown = true;
@@ -264,4 +277,4 @@ function resetTempServeShutdownForTest() { shuttingDown = false; }
 // 选模型、启动传参仍跟 serveEnabled 走，不受这里影响。
 function quotaReadEnabled(env = process.env) { return env.AI_HUB_CODEAGENT_SERVE !== '0'; }
 
-module.exports = { serveEnabled, quotaReadEnabled, shutdownTempServes, resetTempServeShutdownForTest, withTempServe, request, getJson, freePort, portOwner, HEALTH_PATH, parseProviders, parseQuota, readAccount, toUsageSnapshot };
+module.exports = { killServeSync, killTree, serveEnabled, quotaReadEnabled, shutdownTempServes, resetTempServeShutdownForTest, withTempServe, request, getJson, freePort, portOwner, HEALTH_PATH, parseProviders, parseQuota, readAccount, toUsageSnapshot };

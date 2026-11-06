@@ -13,7 +13,9 @@
 :root[data-hw-shell] body #new-session-wrapper .launch-split { height: var(--hw-btn-h-m); border-radius: var(--hw-r-pill); overflow: hidden; background: var(--hw-brand); box-shadow: none; gap: 0; }
 :root[data-hw-shell] body #new-session-wrapper #btn-new { height: var(--hw-btn-h-m); padding: 0 12px 0 14px; border: 0; border-radius: 0; background: transparent; color: var(--hw-text-on); font-family: var(--hw-font); font-size: var(--hw-fs-14); font-weight: 600; box-shadow: none; }
 :root[data-hw-shell] body #new-session-wrapper #btn-more-new,
-:root[data-hw-shell] body #new-session-wrapper #btn-new-more { height: var(--hw-btn-h-m); width: 28px; min-width: 28px; padding: 0; border: 0; border-left: 1px solid rgba(255,255,255,.28); border-radius: 0; background: transparent; color: var(--hw-text-on); box-shadow: none; }
+:root[data-hw-shell] body #new-session-wrapper #btn-new-more { height: var(--hw-btn-h-m); flex: 0 0 28px; width: 28px; min-width: 28px; padding: 0; border: 0; border-left: 1px solid color-mix(in srgb, var(--hw-text-on) 28%, transparent); border-radius: 0; background: transparent; color: var(--hw-text-on); box-shadow: none; }
+:root[data-hw-shell] body #new-session-submit { border-color: var(--hw-brand); background: var(--hw-brand); color: var(--hw-text-on); }
+:root[data-hw-shell] body #new-session-submit:hover:not(:disabled) { border-color: var(--hw-brand-hover); background: var(--hw-brand-hover); }
 :root[data-hw-shell] body #new-session-wrapper #btn-new:hover,
 :root[data-hw-shell] body #new-session-wrapper #btn-new-more:hover { background: var(--hw-brand-hover); }
 

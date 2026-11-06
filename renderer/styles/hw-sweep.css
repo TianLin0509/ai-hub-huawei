@@ -3,5 +3,5 @@
    元素被挪动（卡片区每来一张卡都会挪「工作中」）不会重播，扫完不再出帧。系统「减少动效」时脚本不扫，只留静态细线。
    光条用真实子元素而不是 ::before：元素被挪动时浏览器会重建伪元素，脚本动画会留在旧伪元素上、光在半路消失；transform 不触发重画。只在公司外壳生效。用法：元素加 .hw-sweep；可用 --hw-sweep-h 改粗细。 */
 :root[data-hw-shell] .hw-sweep{position:relative;overflow:hidden;--hw-sweep-h:2px;background-image:linear-gradient(var(--hw-brand-soft),var(--hw-brand-soft));background-size:100% var(--hw-sweep-h);background-position:0 100%;background-repeat:no-repeat}
-:root[data-hw-shell] .hw-sweep > .hw-sweep-light{position:absolute;left:0;bottom:0;width:60%;height:var(--hw-sweep-h);background:linear-gradient(90deg,transparent,rgba(10,89,247,.55) 55%,rgba(207,10,44,.35) 78%,transparent);transform:translateX(-100%);pointer-events:none;font-style:normal}
+:root[data-hw-shell] .hw-sweep > .hw-sweep-light{position:absolute;left:0;bottom:0;width:60%;height:var(--hw-sweep-h);background:linear-gradient(90deg,transparent,var(--hw-sweep-a) 55%,var(--hw-sweep-b) 78%,transparent);transform:translateX(-100%);pointer-events:none;font-style:normal}
 :root:not([data-hw-shell]) .hw-sweep > .hw-sweep-light{display:none}

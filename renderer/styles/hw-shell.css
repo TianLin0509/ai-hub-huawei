@@ -99,7 +99,7 @@
 }
 :root[data-hw-shell] body #app-body #scene-rail .rail-group-trigger .btn-icon::after { display: none; }
 :root[data-hw-shell] body #app-body #scene-rail :is(.btn-shell-nav.cw-current, .rail-group-trigger.rail-group-current) .btn-icon {
-  background: var(--tint) !important; color: var(--hw-text-on); box-shadow: 0 3px 8px -2px var(--tint);
+  background: var(--tint) !important; color: var(--hw-on-tint); box-shadow: 0 3px 8px -2px var(--tint);
 }
 /* 每个入口的图标与模块色 */
 :root[data-hw-shell] body #app-body #scene-rail #btn-home { --ico: var(--shell-ico-chat); --tint: var(--hw-tint-chat); }
@@ -143,6 +143,9 @@
 :root[data-hw-shell] body #app-body #scene-rail #btn-options { --ico: var(--shell-ico-set); }
 :root[data-hw-shell] body #app-body #scene-rail .rail-utility-label { display: block; font-size: var(--hw-fs-14); line-height: 20px; color: inherit; }
 :root[data-hw-shell] body #app-body #scene-rail :is(.theme-menu,.options-menu) { background: var(--hw-surface); border: 0; border-radius: var(--hw-r-md); box-shadow: var(--hw-e3); }
+/* 主题菜单（5.5.10）：每套主题的说明行原为 11px + --fg-faint，在 hub/claude/slate/frost 下约 3.6；选中勾用 base --brand，claude 下 3.7 */
+:root[data-hw-shell] body #app-body #scene-rail .theme-menu :is(.options-theme-copy small, .options-theme-note) { font-size: var(--hw-fs-12); color: var(--hw-text-2); }
+:root[data-hw-shell] body #app-body #scene-rail .theme-menu .options-theme-check { color: var(--hw-brand); }
 
 /* 窄导航 = 默认图标栏（也覆盖未固定、手机预设或用户调窄）：
    导航岛 46px 宽浮在底色上（离会话栏约 10px）；只留图标，名字靠悬停卡（按钮自带 title）；分组之间一条短分隔线；

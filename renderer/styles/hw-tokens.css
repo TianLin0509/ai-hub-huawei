@@ -15,9 +15,10 @@
   --hw-hit: #FFF1B8;         /* 检索命中词底色（只用于 PPT 检索） */
   /* 文字 */
   --hw-text-1: #182431;        /* 主文字 */
-  --hw-text-2: rgba(24,36,49,.62);
+  --hw-text-2: rgba(24,36,49,.66); /* 5.5.10：.62 在灰底上只有 4.3 左右，提到 .66 约 4.8（肉眼无差） */
   --hw-text-3: rgba(24,36,49,.40);
   --hw-text-on: #FFFFFF;
+  --hw-on-tint: #FFFFFF;       /* 模块色（--hw-tint-*）上的字和图标：模块色不随主题变，字始终白 */
   /* 品牌与状态 */
   --hw-brand: #0A59F7;         /* 鸿蒙蓝：主操作、选中 */
   --hw-brand-hover: #0047D9;
@@ -26,6 +27,8 @@
   --hw-red-soft: #FCE8EB;
   --hw-green: #3A9E42;  --hw-green-soft: #E6F4E7;
   --hw-amber: #E8780C;  --hw-amber-soft: #FDF0E3;
+  /* 流光两端色（问一下 / 卡片工作中）：蓝→红，各主题在文件末尾转引 */
+  --hw-sweep-a: rgba(10,89,247,.55); --hw-sweep-b: rgba(207,10,44,.35);
   /* 模块面性图标底色（服务卡片） */
   --hw-tint-chat:#0A59F7; --hw-tint-assist:#5B5BD6; --hw-tint-meet:#0A9C8E;
   --hw-tint-ppt:#E8780C;  --hw-tint-room:#2F80ED;   --hw-tint-forum:#8A5CD1; --hw-tint-rule:#5E6D7E; --hw-tint-acct:#3A9E42;
@@ -97,4 +100,84 @@
   --hw-composer-focus: 0 0 0 1.5px var(--hw-brand), 0 0 0 5px var(--hw-brand-soft);
   --hw-seg-slot: var(--hw-surface-3); /* 置顶/今天/3 天/网页 分段控件 */
   --hw-seg-on: var(--hw-surface);
+}
+
+/* ============ 5.5.10 · 新外观跟随主题（s1，2026-11-05）============
+   上面 :root 那套值就是默认主题「冷白工作室」(codex) 的样子，已验收，不动。
+   其余 5 个主题不新造配色：--hw-* 一律转引 base.css 里该主题自己的语义令牌（--surface-* / --fg-* / --border-* / --brand* / --status-* / --shadow-*）。
+   业务样式只写 var(--hw-*)，不写颜色值、不写 [data-theme] 分支；换主题只在这里加一块。 */
+
+/* 三套浅色：画布 = 5.5.6 的侧栏底（raised），卡片 = card，次级块 = canvas，输入槽 = sunken */
+:root[data-theme='hub'],
+:root[data-theme='claude'],
+:root[data-theme='slate'] {
+  --hw-bg: var(--surface-raised);
+  --hw-surface: var(--surface-card);
+  --hw-surface-2: var(--surface-canvas);
+  --hw-surface-3: var(--surface-sunken);
+  --hw-line: var(--border-subtle);
+  --hw-line-strong: var(--border-strong);
+  --hw-text-1: var(--fg-strong);
+  --hw-text-2: var(--fg-muted);
+  --hw-text-3: var(--fg-faint);
+  --hw-text-on: var(--brand-ink);
+  --hw-brand: var(--brand);
+  --hw-brand-hover: var(--brand-hover);
+  --hw-brand-soft: var(--brand-tint);
+  --hw-red: var(--status-danger);    --hw-red-soft: var(--status-danger-tint);
+  --hw-green: var(--status-success); --hw-green-soft: var(--status-success-tint);
+  --hw-amber: var(--status-warning); --hw-amber-soft: var(--status-warning-tint);
+  --hw-e1: var(--shadow-sm);
+  --hw-e2: var(--shadow-md);
+  --hw-e3: var(--shadow-lg);
+  /* 流光：保持蓝→红（已定稿的观感），蓝取该主题的信息蓝、红取危险红 */
+  --hw-sweep-a: rgba(var(--rgb-info), .55);
+  --hw-sweep-b: rgba(var(--rgb-danger), .35);
+}
+
+/* 两套深色：画布 = canvas，卡片 = raised，次级块 = overlay，输入槽在卡片上提亮一档。
+   深色下投影看不见，层级改由 1px 描边给出；说明文字（text-3）比 --fg-faint 提一档，否则在深底上读不出。 */
+:root[data-theme='dark'],
+:root[data-theme='frost'] {
+  --hw-bg: var(--surface-canvas);
+  --hw-surface: var(--surface-raised);
+  --hw-surface-2: var(--surface-overlay);
+  --hw-surface-3: color-mix(in srgb, var(--fg-strong) 7%, var(--surface-raised));
+  --hw-line: var(--border-subtle);
+  --hw-line-strong: var(--border-strong);
+  --hw-hit: rgba(var(--rgb-warning), .30);
+  --hw-text-1: var(--fg-strong);
+  --hw-text-2: var(--fg-muted);
+  --hw-text-3: color-mix(in srgb, var(--fg-muted) 60%, var(--fg-faint));
+  --hw-text-on: var(--brand-ink);
+  --hw-brand: var(--brand);
+  --hw-brand-hover: var(--brand-hover);
+  --hw-brand-soft: var(--brand-tint);
+  --hw-red: var(--status-danger);    --hw-red-soft: var(--status-danger-tint);
+  --hw-green: var(--status-success); --hw-green-soft: var(--status-success-tint);
+  --hw-amber: var(--status-warning); --hw-amber-soft: var(--status-warning-tint);
+  --hw-e1: 0 0 0 1px var(--border-subtle);
+  --hw-e2: 0 0 0 1px var(--border-mid), var(--shadow-md);
+  --hw-e3: 0 0 0 1px var(--border-mid), var(--shadow-lg);
+  /* 深底上流光要看得见但不刺眼：比浅色主题再淡一档 */
+  --hw-sweep-a: rgba(var(--rgb-info), .50);
+  --hw-sweep-b: rgba(var(--rgb-danger), .30);
+}
+
+/* 主题差值（排在共享块之后，同级靠源码顺序生效） */
+/* claude：白字在陶土 #c15f3c 上只有 4.23，主按钮改用本主题深一档的陶土 */
+:root[data-theme='claude'] {
+  --hw-brand: var(--brand-hover);
+  --hw-brand-hover: var(--brand-text);
+}
+/* slate：强调蓝 #3b6fe0 写在选中浅底上只有 4.04（左栏当前页名、标签、链接），改用本主题深一档 #2f5cc0（5.4） */
+:root[data-theme='slate'] {
+  --hw-brand: var(--brand-hover);
+  --hw-brand-hover: var(--brand-text);
+}
+/* frost：强调蓝 #6d8dff 偏亮，白字只有 3.0，按钮上的字改深色（画布色） */
+:root[data-theme='frost'] {
+  --hw-text-on: var(--surface-canvas);
+  /* 冷杉的 --fg-muted 在输入槽 / 分段控件底（surface-3）上只有 4.23，往 --fg-default 提一档到约 5.1 */
+  --hw-text-2: color-mix(in srgb, var(--fg-muted) 85%, var(--fg-default));
 }

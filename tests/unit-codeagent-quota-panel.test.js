@@ -371,17 +371,55 @@ test('automatic reading backs off up to six hours and no further', async () => {
   assert.deepEqual(gaps, [30, 60, 120, 240, 360, 360, 360, 360]);
 });
 
-test('quitting ends the running temporary serve, its child and refuses new ones', { timeout: 60000 }, async t => {
+function killLoggedServes(log) {
+  let rows = [];
+  try { rows = fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)); } catch { /* 还没起来 */ }
+  for (const pid of rows.flatMap(row => [row.pid, row.child])) {
+    if (!pid) continue;
+    try { require('node:child_process').execFileSync('taskkill', ['/T', '/F', '/PID', String(pid)], { windowsHide: true, stdio: 'ignore' }); } catch { /* 已退出 */ }
+  }
+}
+
+test('a slow taskkill hands the rest to a background kill instead of giving up', async () => {
+  const { killServeSync, killTree } = require('../core/codeagent-serve');
+  const timedOut = Object.assign(new Error('spawnSync taskkill ETIMEDOUT'), { code: 'ETIMEDOUT' });
+  const calls = [], background = [];
+  const exec = (file, args) => {
+    calls.push(`${file} ${args.at(-1)}`);
+    if (file === 'netstat') return '  TCP    127.0.0.1:5555   0.0.0.0:0   LISTENING   222\r\n';
+    throw timedOut;
+  };
+  killServeSync(111, 5555, { exec, background: pid => background.push(pid) });
+  assert.equal(calls[0], 'netstat TCP', 'the port owner is looked up before the tree is broken');
+  assert.deepEqual(background, [111, 222]);
+  // 已经退出（taskkill 报错但不是超时、进程也不在）不用再杀
+  background.length = 0;
+  killServeSync(999999, 5555, { exec: file => { if (file === 'netstat') return ''; throw new Error('not found'); }, background: pid => background.push(pid) });
+  assert.deepEqual(background, []);
+  // netstat 超时也不影响杀进程树
+  const killed = [];
+  killServeSync(111, 5555, { exec: (file, args) => { if (file === 'netstat') throw timedOut; killed.push(args.at(-1)); return ''; }, background: pid => background.push(pid) });
+  assert.deepEqual(killed, ['111']);
+  // 读完额度时的异步结束也一样
+  background.length = 0;
+  await killTree(333, { runner: async () => ({ error: { killed: true } }), background: pid => background.push(pid) });
+  assert.deepEqual(background, [333]);
+  background.length = 0;
+  await killTree(333, { runner: async () => ({ error: { killed: false } }), background: pid => background.push(pid) });
+  assert.deepEqual(background, []);
+});
+
+test('quitting ends the running temporary serve, its child and refuses new ones', { timeout: 240000 }, async t => {
   const serve = require('../core/codeagent-serve');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-serve-quit-'));
-  t.after(() => { serve.resetTempServeShutdownForTest(); try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 进程刚退出时可能还占着 */ } });
   const log = path.join(dir, 'fake.jsonl'), command = path.join(dir, 'fake-serve.cmd');
+  let release = () => {};
+  t.after(() => { release(); killLoggedServes(log); serve.resetTempServeShutdownForTest(); try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 进程刚退出时可能还占着 */ } });
   fs.writeFileSync(command, `@echo off\r\n"${process.execPath}" "${path.join(__dirname, 'fixtures/codeagent-serve-fake/codeagent-serve-fake.js')}" %*\r\n`);
   const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
-  const waitFor = async (check, what) => { const end = Date.now() + 20000; while (Date.now() < end) { if (await check()) return; await new Promise(r => setTimeout(r, 100)); } assert.fail(what); };
-  let release;
+  const waitFor = async (check, what) => { const end = Date.now() + 90000; while (Date.now() < end) { if (await check()) return; await new Promise(r => setTimeout(r, 100)); } assert.fail(what); };
   const held = new Promise(resolve => { release = resolve; });
-  const running = serve.withTempServe({ command, configDirEnv: 'CODEAGENT3_CONFIG_DIR', configDir: dir, cwd: dir, env: { ...process.env, SERVE_FAKE_LOG: log } }, async () => { await held; return { ok: true }; });
+  const running = serve.withTempServe({ command, configDirEnv: 'CODEAGENT3_CONFIG_DIR', configDir: dir, cwd: dir, readyTimeoutMs: 120000, env: { ...process.env, SERVE_FAKE_LOG: log } }, async () => { await held; return { ok: true }; });
   await waitFor(() => fs.existsSync(log) && fs.readFileSync(log, 'utf8').trim(), 'temporary serve started');
   const { pid, child, opts } = JSON.parse(fs.readFileSync(log, 'utf8').trim().split('\n')[0]);
   assert.equal(opts.host, '127.0.0.1');
@@ -398,16 +436,17 @@ test('quitting ends the running temporary serve, its child and refuses new ones'
 });
 
 // main.js 的 before-quit 会先拦下做会话收尾，收尾失败时窗口恢复、Hub 继续跑（restoreWindowAfterFailedShutdown）。
-test('a failed shutdown leaves quota reading working; only will-quit stops it', { timeout: 60000 }, async t => {
+test('a failed shutdown leaves quota reading working; only will-quit stops it', { timeout: 240000 }, async t => {
   const { EventEmitter } = require('node:events');
   const { createCodeAgentQuotaPanel } = require('../core/codeagent-quota-panel');
   const { installQuotaQuitCleanup } = require('../core/codeagent-quota-auto-refresh');
   const serve = require('../core/codeagent-serve');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-serve-retry-'));
-  t.after(() => { serve.resetTempServeShutdownForTest(); try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 进程刚退出时可能还占着 */ } });
+  const log = path.join(dir, 'fake.jsonl');
+  t.after(() => { killLoggedServes(log); serve.resetTempServeShutdownForTest(); try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 进程刚退出时可能还占着 */ } });
   const command = path.join(dir, 'fake-serve.cmd');
   fs.writeFileSync(command, `@echo off\r\n"${process.execPath}" "${path.join(__dirname, 'fixtures/codeagent-serve-fake/codeagent-serve-fake.js')}" %*\r\n`);
-  const read = () => serve.withTempServe({ command, configDirEnv: 'CODEAGENT3_CONFIG_DIR', configDir: dir, cwd: dir }, async ({ get }) => ({ ok: (await get('/api/v1/global/health')).ok }));
+  const read = () => serve.withTempServe({ command, configDirEnv: 'CODEAGENT3_CONFIG_DIR', configDir: dir, cwd: dir, readyTimeoutMs: 120000, env: { ...process.env, SERVE_FAKE_LOG: log } }, async ({ get }) => ({ ok: (await get('/api/v1/global/health')).ok }));
   const app = new EventEmitter();
   let stopped = 0, clock = 1000;
   installQuotaQuitCleanup({ app, stopAutoRefresh: () => { stopped += 1; }, shutdownServes: () => serve.shutdownTempServes() });
@@ -422,4 +461,24 @@ test('a failed shutdown leaves quota reading working; only will-quit stops it', 
   app.emit('will-quit', { preventDefault() {} });
   assert.equal(stopped, 1);
   assert.deepEqual(await read(), { ok: false, error: 'Hub 正在退出' });
+});
+
+test('a real serve still ends when every synchronous kill times out', { timeout: 240000 }, async t => {
+  const serve = require('../core/codeagent-serve');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-serve-starved-'));
+  const log = path.join(dir, 'fake.jsonl'), command = path.join(dir, 'fake-serve.cmd');
+  let release = () => {};
+  t.after(() => { release(); killLoggedServes(log); serve.resetTempServeShutdownForTest(); try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 进程刚退出时可能还占着 */ } });
+  fs.writeFileSync(command, `@echo off\r\n"${process.execPath}" "${path.join(__dirname, 'fixtures/codeagent-serve-fake/codeagent-serve-fake.js')}" %*\r\n`);
+  const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const waitFor = async (check, what) => { const end = Date.now() + 90000; while (Date.now() < end) { if (await check()) return; await new Promise(r => setTimeout(r, 100)); } assert.fail(what); };
+  const held = new Promise(resolve => { release = resolve; });
+  const running = serve.withTempServe({ command, configDirEnv: 'CODEAGENT3_CONFIG_DIR', configDir: dir, cwd: dir, readyTimeoutMs: 120000, env: { ...process.env, SERVE_FAKE_LOG: log } }, async () => { await held; return { ok: true }; });
+  await waitFor(() => fs.existsSync(log) && fs.readFileSync(log, 'utf8').trim(), 'temporary serve started');
+  const { pid, child } = JSON.parse(fs.readFileSync(log, 'utf8').trim().split('\n')[0]);
+  assert.equal(serve.shutdownTempServes({ killSync: (target, port) => serve.killServeSync(target, port, { timeoutMs: 1 }) }), 1);
+  await waitFor(() => !alive(pid), 'serve process ended by the background kill');
+  await waitFor(() => !alive(child), 'serve child ended by the background kill');
+  release();
+  await running;
 });

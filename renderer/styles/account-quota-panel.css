@@ -132,7 +132,7 @@ body.preview-immersive-active .account-quota-panel { display: none !important; }
 .qp-row{position:relative;display:grid;grid-template-columns:24px minmax(0,1fr) 64px;column-gap:8px;row-gap:2px;align-items:center;padding:7px 8px;border-radius:var(--hw-r-item);cursor:pointer;transition:background var(--hw-t-fast)}
 .qp-row:hover{background:var(--hw-surface-2)}
 .qp-row:focus-visible{outline:2px solid var(--hw-brand);outline-offset:-2px}
-.qp-av{grid-row:1/3;align-self:start;margin-top:1px;width:24px;height:24px;border-radius:var(--hw-r-xs);display:grid;place-items:center;color:var(--hw-text-on);font-size:var(--hw-fs-12);font-weight:600;background:var(--av, var(--hw-brand))}
+.qp-av{grid-row:1/3;align-self:start;margin-top:1px;width:24px;height:24px;border-radius:var(--hw-r-xs);display:grid;place-items:center;color:var(--hw-on-tint);font-size:var(--hw-fs-12);font-weight:600;background:var(--av, var(--hw-brand))}
 .qp-name{display:flex;align-items:center;gap:6px;min-width:0;font-size:var(--hw-fs-13);font-weight:600;white-space:nowrap;line-height:22px}
 .qp-name-text{overflow:hidden;text-overflow:ellipsis;min-width:0}
 .qp-tag{flex:none;font-style:normal;height:18px;padding:0 6px;border-radius:var(--hw-r-pill);background:var(--hw-surface-3);font-size:var(--hw-fs-12);font-weight:400;line-height:18px;color:var(--hw-text-2)}

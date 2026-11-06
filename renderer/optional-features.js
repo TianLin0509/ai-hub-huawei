@@ -14,6 +14,7 @@
   .optional-features-dialog .of-name { font-weight: 600; font-size: 14px; }
   .optional-features-dialog .of-state { margin-left: 8px; font-size: 12px; color: var(--fg-muted, #6b7080); font-weight: 400; }
   .optional-features-dialog .of-state.on { color: #3478f6; }
+  :root[data-hw-shell] .optional-features-dialog .of-state.on { color: var(--hw-brand); }
   .optional-features-dialog .of-desc { font-size: 12.5px; margin-top: 3px; }
   .optional-features-dialog .of-cost { font-size: 12px; margin-top: 3px; color: var(--fg-muted, #6b7080); }
   .optional-features-dialog .of-err { color: #c0392b; font-size: 12px; margin-top: 8px; }

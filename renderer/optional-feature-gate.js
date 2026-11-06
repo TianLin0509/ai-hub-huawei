@@ -16,7 +16,13 @@ const CSS = `
 .of-gate-box .of-gate-err { color: #c0392b; font-size: 12px; }
 .of-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-muted, #6b7080); white-space: nowrap; }
 .of-badge b { color: #3478f6; font-weight: 500; }
-.of-badge button { border: 0; background: none; padding: 0; color: var(--fg-muted, #6b7080); text-decoration: underline; cursor: pointer; font: inherit; font-size: 12px; }`;
+.of-badge button { border: 0; background: none; padding: 0; color: var(--fg-muted, #6b7080); text-decoration: underline; cursor: pointer; font: inherit; font-size: 12px; }
+:root[data-hw-shell] .of-gate { background: var(--hw-bg); }
+:root[data-hw-shell] .of-gate-box { background: var(--hw-surface); border-color: var(--hw-line); color: var(--hw-text-1); }
+:root[data-hw-shell] .of-gate-box .of-gate-state, :root[data-hw-shell] .of-gate-box .of-gate-cost, :root[data-hw-shell] .of-badge, :root[data-hw-shell] .of-badge button { color: var(--hw-text-2); }
+:root[data-hw-shell] .of-gate-box .of-gate-err { color: var(--hw-red); }
+:root[data-hw-shell] .of-gate-box button { border-color: var(--hw-brand); background: var(--hw-brand); color: var(--hw-text-on); }
+:root[data-hw-shell] .of-badge b { color: var(--hw-brand); }`;
 
 function createFeatureGate({ document, window, id, page, badgeSlot, onEnabled = () => {}, showMessage }) {
   if (!document.getElementById('of-gate-style')) {

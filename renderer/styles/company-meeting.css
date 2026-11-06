@@ -86,12 +86,12 @@
 .company-meeting[data-phase=live] .meeting-session-name{flex-direction:column;align-items:flex-start;gap:3px}
 .company-meeting[data-phase=live] .meeting-session-name>[data-m=source-label]{max-width:100%}
 .company-meeting[data-phase=live] .meeting-actions [data-act=pause]{height:40px}
-.company-meeting[data-phase=live] .meeting-actions .meeting-stop{height:40px;padding:0 22px;box-shadow:0 4px 12px -4px rgba(207,10,44,.55)}
+.company-meeting[data-phase=live] .meeting-actions .meeting-stop{height:40px;padding:0 22px;box-shadow:0 4px 12px -4px color-mix(in srgb,var(--hw-red) 55%,transparent)}
 
 /* 录制中：计时卡旋转光环（只在采集进行且未暂停时） */
 @property --hw-meeting-ang{syntax:'<angle>';inherits:false;initial-value:0deg}
-.company-meeting[data-recording=true] .meeting-topbar{box-shadow:0 10px 32px -12px rgba(10,89,247,.38),0 4px 14px -8px rgba(207,10,44,.25)}
-.company-meeting[data-recording=true] .meeting-topbar::before{content:"";position:absolute;inset:-2px;border-radius:calc(var(--hw-r-lg) + 2px);padding:2px;z-index:-1;pointer-events:none;background:conic-gradient(from var(--hw-meeting-ang),rgba(10,89,247,0) 0deg,rgba(10,89,247,.85) 60deg,rgba(207,10,44,.8) 120deg,rgba(207,10,44,0) 180deg,rgba(10,89,247,0) 360deg);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;animation:hw-meeting-spin var(--hw-glow-period) linear infinite}
+.company-meeting[data-recording=true] .meeting-topbar{box-shadow:0 10px 32px -12px color-mix(in srgb,var(--hw-brand) 38%,transparent),0 4px 14px -8px color-mix(in srgb,var(--hw-red) 25%,transparent)}
+.company-meeting[data-recording=true] .meeting-topbar::before{content:"";position:absolute;inset:-2px;border-radius:calc(var(--hw-r-lg) + 2px);padding:2px;z-index:-1;pointer-events:none;background:conic-gradient(from var(--hw-meeting-ang),color-mix(in srgb,var(--hw-brand) 0%,transparent) 0deg,color-mix(in srgb,var(--hw-brand) 85%,transparent) 60deg,color-mix(in srgb,var(--hw-red) 80%,transparent) 120deg,color-mix(in srgb,var(--hw-red) 0%,transparent) 180deg,color-mix(in srgb,var(--hw-brand) 0%,transparent) 360deg);-webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;animation:hw-meeting-spin var(--hw-glow-period) linear infinite}
 @keyframes hw-meeting-spin{to{--hw-meeting-ang:360deg}}
 @keyframes hw-meeting-pulse{50%{opacity:.35}}
 
@@ -157,7 +157,7 @@
 .meeting-chip:has(input:checked){color:var(--hw-brand);background:var(--hw-brand-soft)}
 .meeting-chip:has(input:focus-visible){outline:2px solid var(--hw-brand)}
 .meeting-setup-go{display:flex;align-items:center;gap:12px;margin-top:auto;padding-top:28px}
-.company-meeting .meeting-start{height:44px;padding:0 26px;font-size:16px;box-shadow:0 4px 12px -4px rgba(10,89,247,.6)}
+.company-meeting .meeting-start{height:44px;padding:0 26px;font-size:16px;box-shadow:0 4px 12px -4px color-mix(in srgb,var(--hw-brand) 60%,transparent)}
 .meeting-start i{width:8px;height:8px;border-radius:50%;background:var(--hw-text-on)}
 .meeting-setup-go>small{font-size:13px;color:var(--hw-text-3)}
 .meeting-setup-sources{align-self:start;padding:16px 18px 18px;border-radius:var(--hw-r-lg);background:var(--hw-surface);box-shadow:var(--hw-e1);min-width:0}
@@ -190,6 +190,8 @@
 .meeting-stage-empty{padding:18px;font-size:var(--hw-fs-12);color:rgba(255,255,255,.62);text-align:center}
 .meeting-stage:not([data-view=empty])>.meeting-stage-empty{display:none}
 .meeting-stage[data-view=evidence]{background:var(--hw-surface-2)}
+/* 画框底色借主文字色（浅色主题里是深色视频底）；深色主题里主文字色是近白，改用最深一档面板色 */
+:root:is([data-theme='dark'],[data-theme='frost']) .meeting-stage:not([data-view=evidence]){background:var(--hw-surface-3)}
 .meeting-stage[data-view=evidence]>[data-m=evidence]{display:flex;flex-direction:column;align-items:center;gap:8px;overflow:auto;padding:10px}
 .meeting-stage>[data-m=evidence] p{font-size:var(--hw-fs-13);line-height:1.8;max-width:95%;color:var(--hw-text-1)}
 .meeting-stage>[data-m=evidence] .meeting-slide{width:100%;max-height:calc(100% - 44px);min-height:90px;object-fit:contain;flex:1;border-radius:var(--hw-r-xs)}
@@ -317,8 +319,8 @@
 
 /* AI 思考中：纪要卡底部一条扫光 + 状态行下划扫光（只在理解或问答真正进行时） */
 .company-meeting[data-thinking=true] .meeting-understanding-status{color:var(--hw-brand)}
-.company-meeting[data-thinking=true] .meeting-understanding-status::after{content:'';position:absolute;left:0;right:0;bottom:2px;height:2px;border-radius:2px;pointer-events:none;background:linear-gradient(90deg,transparent,rgba(10,89,247,.55) 50%,rgba(207,10,44,.35) 65%,transparent) 0 0/200% 100%;animation:meeting-ai-flow 2.2s linear infinite}
-.company-meeting[data-thinking=true] .meeting-understanding::after{content:'';position:absolute;left:0;right:0;bottom:0;height:3px;pointer-events:none;background:linear-gradient(90deg,transparent,rgba(10,89,247,0) 20%,rgba(10,89,247,.55) 50%,rgba(207,10,44,.35) 65%,transparent 85%) 0 0/200% 100%;animation:meeting-ai-flow 2.2s linear infinite}
+.company-meeting[data-thinking=true] .meeting-understanding-status::after{content:'';position:absolute;left:0;right:0;bottom:2px;height:2px;border-radius:2px;pointer-events:none;background:linear-gradient(90deg,transparent,var(--hw-sweep-a) 50%,var(--hw-sweep-b) 65%,transparent) 0 0/200% 100%;animation:meeting-ai-flow 2.2s linear infinite}
+.company-meeting[data-thinking=true] .meeting-understanding::after{content:'';position:absolute;left:0;right:0;bottom:0;height:3px;pointer-events:none;background:linear-gradient(90deg,transparent,color-mix(in srgb,var(--hw-brand) 0%,transparent) 20%,var(--hw-sweep-a) 50%,var(--hw-sweep-b) 65%,transparent 85%) 0 0/200% 100%;animation:meeting-ai-flow 2.2s linear infinite}
 @keyframes meeting-ai-flow{from{background-position:100% 0}to{background-position:-100% 0}}
 
 /* ---------- 会后：左边大卡纪要，右栏回放器 + 时间流 ---------- */

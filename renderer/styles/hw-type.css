@@ -23,5 +23,9 @@
   .mcm-workspace-caption,
   .mcm-workspace-choice small,
   .mcm-project-library-item span,
-  .mcm-project-library-empty
+  .mcm-project-library-empty,
+  .launch-center-shortcuts
 ) { font-size: var(--hw-fs-12); }
+/* 启动中心快捷键说明、底栏网速箭头：原取说明档/状态色/品牌色，浅色主题下不够读，公司外壳统一用次要文字色 */
+:root[data-hw-shell] .launch-center-shortcuts,
+:root[data-hw-shell] #sidebar-strip :is(.strip-download, .strip-upload) .strip-transfer-label { color: var(--hw-text-2); font-size: var(--hw-fs-12); }
