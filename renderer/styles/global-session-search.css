@@ -97,6 +97,9 @@
 .session-search-result-summary {flex:1;min-width:0;font-size:11px;color:#8a7f97;}
 .session-search-result-summary>span:last-child:empty {display:none;}
 .session-search-result-summary>span:last-child {display:block;font-size:10px;}
+.session-search-widen {flex:none;border:0;border-radius:5px;background:transparent;color:#6f5ea8;padding:4px 6px;font-size:11px;cursor:pointer;white-space:nowrap;}
+.session-search-widen:hover {background:#f3f0fa;}
+.session-search-widen[hidden] {display:none;}
 .session-search-selects {display:flex;flex-wrap:wrap;gap:10px;min-width:0;}
 .session-search-filter {display:flex;align-items:center;gap:6px;min-width:0;font-size:11px;color:#8a7f97;}
 .session-search-filter select {min-width:0;max-width:160px;outline:0;border:0;border-radius:5px;background:#f8f6fb;color:#77698d;padding:5px 3px;font-size:11px;text-overflow:ellipsis;cursor:pointer;}

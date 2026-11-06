@@ -321,6 +321,7 @@ function registerConfigIpc(ipcMain, deps) {
     ensureLaunchAuth,
     listSessionsForAccounts = () => [],
     prepareClaudeAccountDir = () => {},
+    companyProxyService = null,
     prepareNewClaudeAccount = async () => ({}),
     requireClaudeExit = () => false,
   } = deps;
@@ -333,7 +334,21 @@ function registerConfigIpc(ipcMain, deps) {
       const dshRuntimeInstalled = files.every(file => {
         try { return !!file && require('path').isAbsolute(file) && fs.statSync(file).isFile(); } catch { return false; }
       });
-      return { ok: true, providers: companyApi.settings(raw), dshRuntimeInstalled };
+      let dshCliReady = false;
+      try { require('../../core/dsh-cli-profile').resolveDshCliRuntime(raw.acp?.providers?.['deepseek-acp']); dshCliReady = true; } catch { dshCliReady = false; }
+      return { ok: true, providers: companyApi.settings(raw), dshRuntimeInstalled, dshCliReady,
+        proxy: companyProxyService ? companyProxyService.status() : null };
+    });
+    ipcMain.handle('company-proxy:status', () => ({ ok: true, proxy: companyProxyService ? companyProxyService.status() : null }));
+    ipcMain.handle('company-proxy:restart', async () => {
+      if (!companyProxyService) return { ok: false, error: '反代服务不可用' };
+      try { return { ok: true, proxy: await companyProxyService.restart() }; }
+      catch (error) { return { ok: false, error: error.message, proxy: companyProxyService.status() }; }
+    });
+    ipcMain.handle('company-proxy:set-zone', async (_event, request = {}) => {
+      if (!companyProxyService) return { ok: false, error: '反代服务不可用' };
+      try { return { ok: true, proxy: await companyProxyService.setZone(request.zone) }; }
+      catch (error) { return { ok: false, error: error.message, proxy: companyProxyService.status() }; }
     });
     ipcMain.handle('company-api:save', (_event, request = {}) => {
       try {
@@ -342,7 +357,9 @@ function registerConfigIpc(ipcMain, deps) {
         saveConfig(next);
         clearSessionManagerConfigCache();
         sendToRenderer('company-api:changed', { kind: request.kind });
-        return { ok: true, providers: companyApi.settings(next) };
+        // 选了或取消了「公司模型」：反代随之启动或停下（不等它就绪，状态在弹窗里刷新）。
+        if (companyProxyService) void companyProxyService.syncWithConfig();
+        return { ok: true, providers: companyApi.settings(next), proxy: companyProxyService ? companyProxyService.status() : null };
       } catch (error) { return { ok: false, error: error.message }; }
     });
   }

@@ -1,0 +1,64 @@
+/* 启动中心「模型卡」（renderer/launch-model-cards.js，2026-11-06）：公司版选 Claude Code / Codex / DSH 后的一排模型。
+   沿用公司版换皮的 hw-tokens：白卡、细线、鸿蒙蓝选中；状态点四色（绿可用 / 琥珀准备中或要处理 / 红出错 / 灰未启动）。 */
+.session-model-cards-wrap { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.session-model-cards-wrap[hidden] { display: none; }
+.session-model-cards-label { min-height: 16px; line-height: 16px; font-size: 11px; color: var(--hw-text-2, var(--fg-muted)); }
+.session-model-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.session-model-card {
+  position: relative; display: flex; flex-direction: column; align-items: stretch; gap: 6px; min-width: 0; min-height: 76px;
+  box-sizing: border-box; padding: 11px 12px 10px; text-align: left; cursor: pointer; font-family: inherit;
+  border: 1px solid var(--hw-line-strong, var(--border-mid)); border-radius: 8px;
+  background: var(--hw-surface, var(--surface-card)); color: var(--hw-text-1, var(--fg-default));
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.session-model-card:hover:not(:disabled) { border-color: var(--hw-brand, #0A59F7); }
+.session-model-card[aria-checked="true"] {
+  border-color: var(--hw-brand, #0A59F7); background: var(--hw-brand-soft, #E7EFFE);
+  box-shadow: inset 0 0 0 1px var(--hw-brand, #0A59F7);
+}
+.session-model-card:focus-visible { outline: 2px solid var(--hw-brand, #0A59F7); outline-offset: 2px; }
+.session-model-card:disabled { cursor: default; opacity: .7; }
+.smc-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
+.smc-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; line-height: 20px; }
+.smc-source {
+  flex: none; padding: 0 6px; border-radius: 4px; font-size: 11px; line-height: 18px;
+  background: var(--hw-surface-3, var(--surface-hover)); color: var(--hw-text-2, var(--fg-muted));
+}
+.smc-source[data-source="company"] { background: var(--hw-brand-soft, #E7EFFE); color: var(--hw-brand, #0A59F7); }
+.session-model-card[aria-checked="true"] .smc-source[data-source="company"] { background: var(--hw-surface, #fff); }
+.smc-detail { margin-top: -4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; line-height: 16px; color: var(--hw-text-3, var(--fg-muted)); }
+.smc-status { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; line-height: 16px; color: var(--hw-text-2, var(--fg-muted)); }
+.smc-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--hw-text-3, #9aa3ad); }
+.session-model-card[data-state="ready"] .smc-dot { background: var(--hw-green, #3A9E42); }
+.session-model-card[data-state="busy"] .smc-dot,
+.session-model-card[data-state="needs"] .smc-dot { background: var(--hw-amber, #E8780C); }
+.session-model-card[data-state="error"] .smc-dot { background: var(--hw-red, #CF0A2C); }
+.session-model-card[data-state="needs"] .smc-status,
+.session-model-card[data-state="error"] .smc-status { color: var(--hw-text-1, var(--fg-default)); }
+.session-model-cards-note {
+  margin: 2px 0 0; padding: 8px 10px; border-radius: 6px; font-size: 11px; line-height: 1.6;
+  background: var(--hw-amber-soft, #FDF0E3); color: var(--hw-text-1, var(--fg-default));
+}
+.session-model-cards-note[data-state="error"] { background: var(--hw-red-soft, #FCE8EB); }
+.session-model-cards-note[hidden] { display: none; }
+@media (max-width: 720px) { .session-model-cards { grid-template-columns: 1fr; } }
+
+/* 会话卡片与标题栏：这个会话的模型走哪条线路、用的哪个号（renderer/company-route-view.js）。 */
+.sl-route {
+  flex: none; max-width: 96px; margin-left: 6px; padding: 0 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border-radius: 4px; font-size: 10.5px; line-height: 16px;
+  background: var(--hw-surface-3, var(--surface-hover)); color: var(--hw-text-2, var(--fg-muted));
+}
+.sl-route[data-route="proxy"] { background: var(--hw-brand-soft, #E7EFFE); color: var(--hw-brand, #0A59F7); }
+.crumb-model-route {
+  flex: 0 1 auto; min-width: 0; max-width: 360px; margin-left: 8px; padding: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border-radius: 4px; font-size: 11.5px; line-height: 20px;
+  background: var(--hw-surface-3, var(--surface-hover)); color: var(--hw-text-2, var(--fg-muted));
+}
+.crumb-model-route[data-route="proxy"] { background: var(--hw-brand-soft, #E7EFFE); color: var(--hw-brand, #0A59F7); }
+/* 会话行是三列网格（图标 / 标题 / 时间，display-presets.css 的规则很强）：有线路标签时加一列，标签不换行、不挤掉时间。 */
+#session-list .session-item.slim:has(> .sl-route),
+#session-list .session-item.slim > .sl-line1:has(> .sl-route),
+#session-list .sidebar-group .session-item.slim.child:has(> .sl-route) { grid-template-columns: minmax(20px, max-content) minmax(0, 1fr) auto auto !important; }
+#session-list .session-item.slim .sl-route { align-self: center; }
+.crumb-model-route { flex: none; }

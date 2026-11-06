@@ -111,7 +111,12 @@ class SessionSearchEngine {
     // 查询 65ms。放进 setImmediate：既不挡构造，也不挡第一次查询。
     // 后台写线程（prewarmOnOpen:false）不预热：查询走主线程与只读连接，写线程的这次全扫
     // 只是把同一批页再映射进本进程一遍（mmap 页按连接各算一次工作集），纯开销。
+    // 查询进程（非写线程）启动后先把会话目录和最近 8 天的提问装进内存（实测 ~200ms），
+    // 第一次搜索就不用现装；写线程每次提交后再增量同步，见 _scheduleCatalogSync。
+    this._queryCatalog = options.prewarmOnOpen !== false;
+    this._catalogTimer = null;
     if (options.prewarmOnOpen !== false) {
+      setImmediate(() => { try { this.index.queryStore?.syncCatalog(); } catch { /* 搜索时会再同步 */ } });
       setImmediate(() => { try { this.index.prewarmShortTermScopes(); } catch { /* 预热失败无所谓 */ } });
     }
     this.refreshPromise = null;
@@ -269,6 +274,7 @@ class SessionSearchEngine {
       this.writer = writer;
       writer.on('message', message => {
         this.index.statsCache = null;
+        this._scheduleCatalogSync();
         if(message.type === 'status') {this.statusValue={...this.statusValue,...message.status};this.emitStatus({...this.statusValue});return;}
         const pending=this.writerRequest;
         if(!pending || message.id!==pending.id) return;
@@ -293,6 +299,17 @@ class SessionSearchEngine {
       this.writer.postMessage({id,type:'refresh',snapshot,options});
     }).finally(()=>{this.refreshPromise=null;});
     return this.refreshPromise;
+  }
+
+  // 写线程提交后把内存目录的增量同步提前做掉（合并 300ms 内的多次提交），搜索路径上就只剩
+  // 「没有变化」的两次 PRAGMA 读取。
+  _scheduleCatalogSync(delayMs = 300) {
+    if (!this._queryCatalog || this._catalogTimer) return;
+    this._catalogTimer = setTimeout(() => {
+      this._catalogTimer = null;
+      try { this.index.queryStore?.syncCatalog(); } catch { /* 搜索时会再同步 */ }
+    }, delayMs);
+    this._catalogTimer.unref?.();
   }
 
   async refresh(snapshot = {}, { force = false, immediate = false } = {}) {
@@ -550,6 +567,7 @@ class SessionSearchEngine {
   }
 
   close() {
+    clearTimeout(this._catalogTimer); this._catalogTimer=null; this._queryCatalog=false;
     const writer=this.writer;
     if(writer) {
       return Promise.resolve(this.refreshPromise).catch(error => {

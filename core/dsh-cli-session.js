@@ -331,7 +331,7 @@ class DshCliSession extends EventEmitter {
     try {
       if (changed && changed !== 'model.json') throw new Error('unchanged');
       const pref = JSON.parse(fs.readFileSync(path.join(this.options.home, '.dsh-tui/model.json'), 'utf8'));
-      if (pref.provider === 'bailian-tpp' && pref.model && pref.model !== this.currentModel) {
+      if (pref.provider === this.routeProvider() && pref.model && pref.model !== this.currentModel) {
         this.currentModel = pref.model; this.emit('bound', { threadId: this.threadId, model: pref.model, configOptions: this.configOptions });
       }
     } catch {}
@@ -352,7 +352,7 @@ class DshCliSession extends EventEmitter {
     if (effort !== undefined && !Object.hasOwn(target.reasoningEfforts || {}, effort)) throw new Error('该模型不支持此思考强度');
     this.configurePending = true;
     try {
-      for (const [key, value, command] of [['model', model, '/model bailian-tpp/'], ['effort', effort, '/effort ']]) {
+      for (const [key, value, command] of [['model', model, '/model ' + this.routeProvider() + '/'], ['effort', effort, '/effort ']]) {
         if (value === undefined || value === (key === 'model' ? this.currentModel : this.currentEffort)) continue;
         const file = path.join(this.options.home, '.dsh-tui', key + '.json');
         const revision = fs.existsSync(file) ? fs.statSync(file, { bigint: true }).mtimeNs : null;
@@ -370,9 +370,12 @@ class DshCliSession extends EventEmitter {
         effort: this.currentEffort, appliesOn: 'next-turn', confirmationSource: 'native-settings-write' };
     } finally { this.configurePending = false; }
   }
+  // 模型路由由 Hub 写进启动补丁：套餐是 bailian-tpp，公司模型是 company-proxy（core/company-model-proxy.js）。
+  routePatch() { return JSON.parse(fs.readFileSync(this.options.launch.args.at(-1), 'utf8')); }
+  routeProvider(patch = this.routePatch()) { return patch.find(p => p.id === 'agent-default-model')?.config?.provider || 'bailian-tpp'; }
   routeModels() {
-    const patch = JSON.parse(fs.readFileSync(this.options.launch.args.at(-1), 'utf8'));
-    return patch.find(p => p.id === 'llm-pi-ai').config.providers['bailian-tpp'].models;
+    const patch = this.routePatch();
+    return patch.find(p => p.id === 'llm-pi-ai').config.providers[this.routeProvider(patch)].models;
   }
   get configOptions() {
     let choices = [];

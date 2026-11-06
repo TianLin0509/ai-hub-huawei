@@ -1421,7 +1421,8 @@ test('new-session CodeAgent without reliable models retains the default option, 
   }
   const context = vm.createContext({ document, selectedKind: 'codeagent', showAccount: false, selectedModel: '', modelTouchedByUser: false,
     launchModelOptions: () => [], companyApiKind: () => false, resolveDefaultModel: () => '', defaultModelConfig: () => ({}),
-    codeagentDefaultModel: '', codeagentUsesPool: () => false, codeagentManualPick: () => '', usageAttrs: () => '', escapeHtml: String });
+    codeagentDefaultModel: '', codeagentUsesPool: () => false, codeagentManualPick: () => '', usageAttrs: () => '', escapeHtml: String,
+    companyProvider: {}, paintModelCards: () => {} });
   const start = source.indexOf("    const label = document.getElementById('new-session-tuning-label');"), end = source.indexOf("    const effortLabel =", start);
   vm.runInContext(`(() => {${source.slice(start, end)}\n})()`, context);
   assert.equal(elements.get('new-session-tuning').hidden, false); assert.equal(elements.get('new-session-config-section').hidden, false);

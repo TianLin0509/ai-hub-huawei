@@ -9,6 +9,24 @@ const { projectPathKey, projectFilterFor, projectForCwd, matchesProjectFilter } 
 const { AGENT_SESSION_GROUPS, agentGroupOf, getSidebarSearchEntries } = require('./session-list-renderer.js');
 
 const FACET_STORAGE_KEY = 'hub.search.facets';
+// 2026-11-05 定：默认只搜「我的提问 + 最近 7 天」（这档走搜索进程里的常驻内存，毫秒级），
+// 用户改过的范围和时间记住，下次打开沿用。
+const SCOPE_STORAGE_KEY = 'hub.search.scope';
+const TIME_STORAGE_KEY = 'hub.search.timeRange';
+const DEFAULT_SEARCH_SCOPE = 'user';
+const DEFAULT_SEARCH_TIME = '7d';
+const REMEMBERED_SCOPES = Object.freeze(['all', 'dialogue', 'title', 'user', 'assistant']);
+// 这几档由内存直接回答，防抖缩短；其余档走全文库，保持原来的 160ms。
+const FAST_TIME_RANGES = Object.freeze(['24h', '3d', '7d']);
+function rememberedSearchScope(storage) {
+  try { const value = storage.getItem(SCOPE_STORAGE_KEY); return REMEMBERED_SCOPES.includes(value) ? value : DEFAULT_SEARCH_SCOPE; } catch { return DEFAULT_SEARCH_SCOPE; }
+}
+function rememberedSearchTime(storage, select) {
+  try {
+    const value = storage.getItem(TIME_STORAGE_KEY);
+    return value && [...select.options].some(option => option.value === value) ? value : DEFAULT_SEARCH_TIME;
+  } catch { return DEFAULT_SEARCH_TIME; }
+}
 function loadSearchFacets(storage) {
   try {
     const value = JSON.parse(storage.getItem(FACET_STORAGE_KEY) || '{}');
@@ -220,7 +238,8 @@ function createGlobalSessionSearch(options) {
   const savedFacets = loadSearchFacets(window.localStorage);
   let activeProvider = savedFacets.provider;
   let activeAgent = savedFacets.agent;
-  let activeScope = 'dialogue';
+  let activeScope = rememberedSearchScope(window.localStorage);
+  timeSelect.value = rememberedSearchTime(window.localStorage, timeSelect);
   let results = [];
   let activeIndex = -1;
   let activePreview = null;
@@ -590,6 +609,30 @@ function createGlobalSessionSearch(options) {
     return button;
   }
 
+  // 摘要行第二行写明当前范围，让「只搜了最近 7 天的提问」一眼可见；窄范围时给一个「扩大搜索」。
+  function scopeSummary() {
+    if (browsingCatalogue()) return '';
+    const scopeLabel = activeScope === 'user' || activeScope === 'assistant' || activeScope === 'title' ? SCOPE_LABELS[activeScope]
+      : activeScope === 'all' ? '全部内容' : '对话内容';
+    const timeLabel = timeSelect.selectedOptions[0]?.textContent || '不限时间';
+    return `范围：${scopeLabel} · ${timeLabel}`;
+  }
+  let widenButton = null;
+  function updateWidenButton() {
+    const narrow = !browsingCatalogue() && (activeScope === 'user' || activeScope === 'title' || activeScope === 'assistant' || timeSelect.value !== 'all');
+    if (!narrow) { if (widenButton) widenButton.hidden = true; return; }
+    if (!widenButton) {
+      widenButton = document.createElement('button');
+      widenButton.type = 'button'; widenButton.id = 'session-search-widen'; widenButton.className = 'session-search-widen';
+      widenButton.textContent = '扩大到全部时间与 AI 回答';
+      widenButton.title = '本次改搜全部时间的提问和 AI 回答（走全文库，稍慢）；默认范围不变';
+      // 一次性扩大：不写进记住的范围，下次打开仍是默认的「我的提问 + 最近 7 天」。
+      widenButton.addEventListener('click', () => { setScope('dialogue'); timeSelect.value = 'all'; scheduleSearch(); });
+      summaryRoot.after(widenButton);
+    }
+    widenButton.hidden = false;
+  }
+
   function renderResults(response) {
     const selected=results[activeIndex], previousPreview=activePreview;
     lastResponse=response;
@@ -602,7 +645,8 @@ function createGlobalSessionSearch(options) {
     const total=Number(response.totalSessions)||results.length;
     const partial=response.state==='partial'||response.pendingFullText||response.indexing;
     summaryRoot.firstElementChild.textContent=`${queryInput.value.trim()?'搜索结果':'最近的对话'} · ${partial?'至少 ':''}${total}${partial?' · 继续检索中':''}`;
-    summaryRoot.lastElementChild.textContent=preliminary?'标题预备结果':'';
+    summaryRoot.lastElementChild.textContent=preliminary?'标题预备结果':scopeSummary();
+    updateWidenButton();
     summaryRoot.title=`${Number(response.queryMs)||0} ms · ${preliminary?'标题预备结果':'条件已生效'}`;
     if(conditions && lastRequest) {
       const r=lastRequest;
@@ -673,7 +717,8 @@ function createGlobalSessionSearch(options) {
     if(!request.query && browsingCatalogue() && !lastStatus?.ready) lastTitleHits=entries.map(catalogueHit);
     if(!immediate) {
       renderResults({results:[],totalSessions:0,pendingFullText:true});
-      searchTimer=setTimeoutFn(()=>performSearch({immediate:true}),160);return;
+      const fast=activeScope==='user' && FAST_TIME_RANGES.includes(timeSelect.value);
+      searchTimer=setTimeoutFn(()=>performSearch({immediate:true}),fast?60:160);return;
     }
     try {
       let cursor=null;
@@ -805,7 +850,7 @@ function createGlobalSessionSearch(options) {
   }
 
   function updateAdvancedFilters() {
-    const count=Number(activeAgent!=='all')+Number(activeScope!=='dialogue')+Number(timeField.value!=='eventTime')+
+    const count=Number(activeAgent!=='all')+Number(activeScope!==DEFAULT_SEARCH_SCOPE)+Number(timeField.value!=='eventTime')+
       Number(sortSelect.value!==(queryInput.value.trim()?'relevance':'conversationTime'))+
       Number(ADVANCED_PROVIDERS.includes(activeProvider));
     filterToggle.textContent=count?`筛选 · ${count}`:'筛选';
@@ -903,11 +948,11 @@ function createGlobalSessionSearch(options) {
     searchSequence += 1;
     previewSequence += 1;
     if (searchTimer) { clearTimeoutFn(searchTimer); searchTimer = null; }
-    setScope(scope || 'dialogue');
+    setScope(scope || rememberedSearchScope(window.localStorage));
     if (scope === 'dormant' || scope === 'pinned') {
       queryInput.value = ''; setProvider('all'); setAgent('all');
       timeSelect.value = 'all'; projectSelect.value = '';
-    }
+    } else timeSelect.value = rememberedSearchTime(window.localStorage, timeSelect);
     if (typeof query === 'string' && query.trim()) queryInput.value = query.trim();
     returnFocusElement = document.activeElement && typeof document.activeElement.focus === 'function'
       ? document.activeElement
@@ -983,8 +1028,10 @@ function createGlobalSessionSearch(options) {
     const button = event.target.closest('[data-scope]');
     if (!button) return;
     setScope(button.dataset.scope);
+    if (REMEMBERED_SCOPES.includes(activeScope)) { try { window.localStorage.setItem(SCOPE_STORAGE_KEY, activeScope); } catch { /* Optional UI preference. */ } }
     scheduleSearch();
   });
+  timeSelect.addEventListener('change', () => { try { window.localStorage.setItem(TIME_STORAGE_KEY, timeSelect.value); } catch { /* Optional UI preference. */ } });
   for (const select of [timeSelect, projectSelect, sortSelect, timeField].filter(Boolean)) select.addEventListener('change', () => { if(queryInput.value.trim()) {try { window.localStorage.setItem('hub.search.sort',sortSelect.value); } catch {}} scheduleSearch(); });
   projectSelect.addEventListener('change', renderProjectLibrary);
   sortSelect.addEventListener('change',()=>{directionSelect.value=sortSelect.value==='title'?'asc':'desc';directionSelect.disabled=sortSelect.value==='relevance';});

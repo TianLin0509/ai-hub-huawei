@@ -124,7 +124,10 @@ test('blank key preserves a saved key and a new empty form uses the installed CL
   assert.equal(next.providers.claude.api_key, 'fixture-api-key');
   assert.equal(api.withSettings({}, request('claude', { apiKey: '' })).providers.claude.api_key, '');
   const local = api.withSettings(saved, { kind: 'claude', useLocal: true });
-  assert.deepEqual(api.settings(local).claude, { baseURL: '', apiKeySet: false, model: '' });
+  const { companyModels, own, ...connection } = api.settings(local).claude;
+  assert.deepEqual(connection, { backend: 'local', baseURL: '', apiKeySet: false, model: '' });
+  assert.deepEqual(own, { backend: 'local', model: '' }); // launch center: the own-source card
+  assert.equal(companyModels.length, 2);
 });
 test('Codex protocol defaults to responses and explicitly accepts chat', () => {
   assert.equal(api.withSettings({}, request('codex')).providers.codex.wire_api, 'responses');
@@ -188,7 +191,7 @@ test('DSH form data is separate from the token-plan credential while its runtime
   assert.deepEqual(next.acp.providers, raw.acp.providers);
   assert.equal(next.acp.companyApi.apiKey, 'fixture-api-key');
   assert.equal(api.settings(next)['deepseek-acp'].apiKeySet, true);
-  assert.throws(() => api.assertLaunchConfigured('deepseek-acp', { acp: next.acp }), /尚未完成接入/);
+  assert.throws(() => api.assertLaunchConfigured('deepseek-acp', { acp: next.acp }), /公司模型/);
 });
 
 test('Claude launch applies the selected API endpoint and token without inherited API or proxy credentials', () => {

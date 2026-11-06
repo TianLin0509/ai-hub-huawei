@@ -185,7 +185,7 @@ test('the fake CodeAgent prints its version and exits, like the real CLI', { tim
       if (firstOutputAt) return;
       firstOutputAt = Date.now();
       clearTimeout(startLimit);
-      setTimeout(() => resolve('still running 2 seconds after its first output'), 2000);
+      setTimeout(() => resolve('still running 15 seconds after its first output'), 15000); // 机器忙时 2 秒会误报（2026-11-06 CI 42255589421）
     });
     child.on('exit', code => resolve(code));
   });

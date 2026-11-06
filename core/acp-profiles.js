@@ -27,31 +27,37 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
   if (!isAcpKind(kind)) throw new Error('未知 ACP Harness');
   const profile = config.acp || {};
   const entry = profile.providers?.[kind];
+  // 公司版 DSH 选了「公司模型」：经本机反代用 CodeAgent 账号（core/company-model-proxy.js），不走套餐和 DeepSeek 备用线路。
+  const companyRoute = kind === 'deepseek-acp' && config.companyCli && config.dshBackend === 'proxy'
+    ? require('./company-model-proxy').dshRoute({ dataDir, sessionId: opts.id, model: opts.model || config.dshApiModel }) : null;
   // 套餐额度用完且配了 DeepSeek Key 时，DeepSeek 旧 Harness 整条会话改走 DeepSeek 官方 API；千问 / GLM 等重置（core/token-plan-fallback.js）。
   const fallback = require('./token-plan-fallback');
   const requestedRoute = kind === 'deepseek-acp' ? opts.deepseekRoute : undefined;
   if (requestedRoute != null && !['tokenplan', 'api'].includes(requestedRoute)) throw new Error('DeepSeek 消费通道无效');
-  const route = requestedRoute === 'api'
+  const route = companyRoute ? { route: 'company' } : requestedRoute === 'api'
     ? { route: 'deepseek', apiKey: String(config.deepseekApiKey || '').trim() }
     : fallback.resolveRoute({ config, dataDir, kind });
   if (requestedRoute === 'api' && !route.apiKey) throw new Error('请先配置 DeepSeek API Key');
   const deepseekRoute = route.route === 'deepseek';
-  const key = deepseekRoute ? route.apiKey : profile.apiKey || baseEnv.AI_HUB_TOKEN_PLAN_KEY;
+  const key = companyRoute ? companyRoute.key : deepseekRoute ? route.apiKey : profile.apiKey || baseEnv.AI_HUB_TOKEN_PLAN_KEY;
   if (!key) throw new Error('请先配置套餐专属 Key');
-  if (!entry?.entryPath || !profile.nodePath || !entry.model) throw new Error('请配置原生 Harness 路径、Node 路径和套餐模型');
-  for (const file of [entry.entryPath, profile.nodePath]) {
+  const nodePath = profile.nodePath || (companyRoute ? require('./company-model-proxy').findNodeOnPath(baseEnv) : '');
+  if (companyRoute && !nodePath) throw new Error('DSH 需要本机的 Node.js：请先安装 Node.js 22 或更新版本');
+  if (!entry?.entryPath || !nodePath || (!entry.model && !companyRoute)) throw new Error('请配置原生 Harness 路径、Node 路径和套餐模型');
+  for (const file of [entry.entryPath, nodePath]) {
     if (!path.isAbsolute(file) || !fs.statSync(file).isFile()) throw new Error('Harness 可执行文件不存在或不是绝对路径');
   }
   const catalog = require('./acp-model-catalog');
-  let model = opts.model || entry.model;
+  let model = companyRoute ? companyRoute.model : opts.model || entry.model;
   // 备用期间按原档位换成 DeepSeek（flash 对 flash，其余对 pro）；回到套餐时按原档位换回
   // （Flash 回到套餐上的 V4.1 Flash），该外壳的套餐目录里没有对应模型时才用配置模型。
   if (deepseekRoute) model = fallback.fallbackModel(model);
-  else if (fallback.isApiModel(model) && !catalog.acpModelOptions(kind).some(m => m.id === model)) {
+  else if (!companyRoute && fallback.isApiModel(model) && !catalog.acpModelOptions(kind).some(m => m.id === model)) {
     const back = fallback.tokenPlanModel(model);
     model = catalog.acpModelOptions(kind).some(m => m.id === back) ? back : entry.model;
   }
-  const models = deepseekRoute ? fallback.FALLBACK_MODELS.map(id => ({ id, label: id, source: 'deepseek-api' }))
+  const models = companyRoute ? require('./company-model-proxy').MODELS.map(m => ({ ...m, source: 'company-proxy' }))
+    : deepseekRoute ? fallback.FALLBACK_MODELS.map(id => ({ id, label: id, source: 'deepseek-api' }))
     : catalog.acpModelOptions(kind, model);
   if(!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(model))throw new Error('请填写套餐模型 ID，不可切到其他供应商命名空间');
   let mcpServers=[];
@@ -77,10 +83,10 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
       } else throw new Error('MCP 传输类型无效：'+s.name);
     }
   }
-  const baseURL = deepseekRoute ? fallback.DEEPSEEK_API_BASE : profile.baseURL || PLAN_BASE_URL;
+  const baseURL = companyRoute ? companyRoute.baseURL : deepseekRoute ? fallback.DEEPSEEK_API_BASE : profile.baseURL || PLAN_BASE_URL;
   // A shared subscription credential must never be routed to an unrelated host.
-  if (!deepseekRoute && baseURL.replace(/\/$/, '') !== PLAN_BASE_URL) throw new Error('套餐 profile 只允许已核对的阿里云 Token Plan 端点');
-  const profileId = (deepseekRoute ? fallback.DEEPSEEK_ROUTE_PREFIX : fallback.TOKEN_PLAN_ROUTE_PREFIX) + kind;
+  if (!companyRoute && !deepseekRoute && baseURL.replace(/\/$/, '') !== PLAN_BASE_URL) throw new Error('套餐 profile 只允许已核对的阿里云 Token Plan 端点');
+  const profileId = companyRoute ? 'company-proxy:' + kind : (deepseekRoute ? fallback.DEEPSEEK_ROUTE_PREFIX : fallback.TOKEN_PLAN_ROUTE_PREFIX) + kind;
   const sessionRoot = path.join(dataDir, 'acp', createHash('sha256').update(opts.id).digest('hex'));
   const home = path.join(sessionRoot, 'home');
   if (opts.acpFork) {
@@ -113,11 +119,18 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
     if (process.platform === 'win32') args.unshift('--require', path.join(__dirname, 'dsh-windows-link-retry.cjs'));
     if(!opts.dshCliRuntime && !entry.bridgePath)throw new Error('DeepSeek 完整交互需要配置 ACP 扩展包目录');
     env.DSH_HOME = path.join(home, '.dsh');
-    env.BAILIAN_API_KEY = key;
+    const providerId = companyRoute ? companyRoute.providerId : 'bailian-tpp';
+    if (companyRoute) {
+      env[companyRoute.keyEnv] = key;
+      require('./company-model-proxy').applyNoProxy(env);
+    } else env.BAILIAN_API_KEY = key;
     // authenticate persists the native provider credential in this isolated
     // profile. DSH rejects that write if the same key is injected read-only
     // through BAILIAN_TPP_API_KEY. The model adapter uses BAILIAN_API_KEY.
-    const settings = {
+    const settings = companyRoute ? {
+      'agent-default-model': { provider: providerId, model },
+      'llm-pi-ai': { providers: { [providerId]: companyRoute.providerConfig } },
+    } : {
       'agent-default-model': { provider: 'bailian-tpp', model },
       'llm-pi-ai': { providers: { 'bailian-tpp': { api: 'openai-completions', baseURL,
         apiKeyEnv: 'BAILIAN_API_KEY', models: models.map(({id}) => ({ id,
@@ -128,7 +141,8 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
     const patch = path.join(sessionRoot, opts.dshCliRuntime ? 'cli-route.yaml' : 'acp-route.yaml');
     const routePatches = [{ id: 'llm-pi-ai', config: settings['llm-pi-ai'] },
       { id: 'agent-default-model', config: settings['agent-default-model'] },
-      { id: 'acp', config: { provider: 'bailian-tpp', model } }];
+      { id: 'acp', config: { provider: providerId, model } }];
+    if (companyRoute) routePatches.unshift(...companyRoute.disabledPatches, { id: 'tools', config: { mode: 'native' } });
     if (opts.dshCliRuntime) {
       args[args.indexOf(entry.entryPath)] = path.join(__dirname, 'dsh-cli-launch.mjs');
       env.AI_HUB_DSH_CLI_ENTRY = entry.entryPath;
@@ -144,12 +158,12 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
       if (opts.acpSid || opts.acpFork?.sessionId) env.DSH_TUI_RESUME_SESSION = opts.acpFork?.sessionId || opts.acpSid;
       // Hub already owns credential, model and workspace onboarding.
       writeJson(path.join(home, '.dsh-tui/onboarding.json'), { completed: true, version: 1 });
-      writeJson(path.join(home, '.dsh-tui/model.json'), { provider: 'bailian-tpp', model });
+      writeJson(path.join(home, '.dsh-tui/model.json'), { provider: providerId, model });
       routePatches.pop();
       routePatches.push({ insert: [{ id: 'hub-cli-observer', name: path.join(__dirname, 'dsh-cli-observer.mjs') }] });
       routePatches.push({ id: 'dsh-tui', inject: ['hubCliObserver', 'agents', 'workspaceRegistry',
         'tuiWorkspaces', 'tuiScenes', 'tuiPanels', 'tuiDialogs', 'tuiStatus', 'tuiShortcuts', 'tuiRenderers', 'tuiThemes'],
-        config: { provider: 'bailian-tpp', model, backend: 'dsh', fullscreen: true, launchpad: false,
+        config: { provider: providerId, model, backend: 'dsh', fullscreen: true, launchpad: false,
           workspace: opts.cwd, sessionId: env.DSH_TUI_RESUME_SESSION,
           effort: deepseekRoute && !['high', 'max'].includes(opts.effort) ? undefined : opts.effort,
           modes: [{ id: 'default', plan: false, sandbox: 'danger-full-access', approval: 'never' }] } });
@@ -210,6 +224,6 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
     defaultMode: {qwen:'yolo','deepseek-acp':'danger-full-access',glm:'yolo'}[kind],
     resumeId: opts.acpFork?.sessionId || opts.acpSid, forkCli:opts.acpFork?.forkCli===true, restoredRuntime: opts.nativeRuntime, forkHistory: opts.acpFork?.history,
     storeDir: path.join(dataDir, 'acp-history'), home, authMethod, authMeta,
-    launch: { command: profile.nodePath, args, cwd: opts.cwd, env, secrets: [key] } };
+    launch: { command: nodePath, args, cwd: opts.cwd, env, secrets: [key] } };
 }
 module.exports = { ACP_KINDS, LABELS, PLAN_BASE_URL, isAcpKind, buildAcpOptions, linkWithRetry };

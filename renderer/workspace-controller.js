@@ -6,6 +6,19 @@
   const companyApi = require('../core/company-api-config');
   const companyApiKind = kind => companyApi.isCompany() && companyApi.KINDS.includes(kind);
   const companyApiModels = Object.create(null);
+  const companyApiBackend = Object.create(null);
+  // 启动中心模型卡（renderer/launch-model-cards.js）：每个工具保存的来源、本次打开里点选的卡、反代状态。
+  const modelCards = require('./launch-model-cards');
+  const companyProvider = Object.create(null);
+  const companyPick = Object.create(null);
+  let companyProxyStatus = null;
+  const companyPickModel = kind => {
+    const pick = companyPick[kind];
+    if (!pick) return '';
+    if (pick.source === 'company') return pick.model;
+    const own = companyProvider[kind]?.own;
+    return own && own.backend === 'api' ? own.model || '' : '';
+  };
   const launchModelOptions = kind => companyApiKind(kind) ? (companyApiModels[kind] || []) : modelOptionsFor(kind);
   const accountRisk = require('./account-risk-state');
   const path = require('path');
@@ -301,7 +314,7 @@
     const modelOptions = launchModelOptions(kind);
     // 用户设过默认就用它，否则才回落出厂值；两者都不在当前可选清单里时取第一项。
     // 群聊成员走的也是这里，所以「设为默认」对群聊同样生效。
-    const model = companyApiKind(kind) ? (modelOptions[0]?.id || '') : modelOptions.some(option => option.id === modelId)
+    const model = companyApiKind(kind) ? (modelOptions.some(option => option.id === modelId) ? modelId : modelOptions[0]?.id || '') : modelOptions.some(option => option.id === modelId)
       ? modelId
       : resolveDefaultModel(kind, defaultModelConfig(), modelOptions.map(option => option.id));
     const effortOptions = EFFORT_KINDS.has(kind) ? effortOptionsFor(kind, model) : [];
@@ -1144,6 +1157,37 @@
       launchConfigLayout.paint(launchAccountCtx || { kind: selectedKind, showAccount: false });
     } catch (error) { globalThis.__launchLayoutError = error.stack || error.message; console.warn('[launch-center] 启动配置布局未生效：' + error.message); }
   }
+  function paintModelCards(show = companyApiKind(selectedKind) && !!companyProvider[selectedKind]) {
+    const wrap = document.getElementById('new-session-model-cards-wrap');
+    const list = document.getElementById('new-session-model-cards');
+    const note = document.getElementById('new-session-model-cards-note');
+    if (!wrap || !list) return;
+    wrap.hidden = !show;
+    if (!show) return;
+    const kind = selectedKind;
+    const cards = modelCards.cardsFor(kind, companyProvider[kind], companyProxyStatus, companyPick[kind]);
+    const html = modelCards.renderCards(cards, escapeHtml);
+    if (list.dataset.built !== html) { list.innerHTML = html; list.dataset.built = html; }
+    list.dataset.kind = kind;
+    list.querySelectorAll('.session-model-card').forEach(card => { card.disabled = submitting; });
+    // 选中的是公司模型、但反代还不能用：卡下面用一句话讲原因和怎么办。
+    const picked = cards.find(card => card.checked);
+    const explain = picked && picked.source === 'company' && ['needs', 'error', 'busy'].includes(picked.state) ? picked.tip : '';
+    if (note) { note.hidden = !explain; note.textContent = explain; note.dataset.state = picked?.state || ''; }
+  }
+
+  function pickModelCard(card) {
+    const kind = selectedKind;
+    if (!card || !companyApiKind(kind) || submitting) return;
+    const id = card.dataset.modelCard;
+    companyPick[kind] = id === 'own' ? { source: 'own', model: '' } : { source: 'company', model: id };
+    selectedModel = companyPickModel(kind);
+    modelTouchedByUser = true;
+    tuningTouchedByUser = true;
+    paint();
+    document.querySelector(`#new-session-model-cards [data-model-card="${CSS.escape(id)}"]`)?.focus();
+  }
+
   function paintTuning() {
     const accountField=document.getElementById('new-session-account-field');
     const accountSelect=document.getElementById('new-session-account');
@@ -1249,8 +1293,10 @@
     // CodeAgent 的模型选项（2026-10-20 隐藏，2026-10-29 用户要恢复）：默认一项是这个号启动会用的模型（main codeagent:models 的
     // defaultModel，和启动判断同一口径），不切换、不等；选别的模型启动时开一次 /model，选中的留作默认，下次就不用再等。
     const modelField = document.getElementById('new-session-model-field');
-    if (modelField) modelField.hidden = false;
+    const useCards = companyApiKind(selectedKind) && !!companyProvider[selectedKind];
+    if (modelField) modelField.hidden = useCards;
     modelSelect.value = selectedKind === 'codeagent' && !modelTouchedByUser ? '' : selectedModel;
+    paintModelCards(useCards);
 
     const effortLabel = document.getElementById('new-session-effort-label');
     const fastField = document.getElementById('new-session-fast-field');
@@ -1470,7 +1516,7 @@
     const submit = document.getElementById('new-session-submit');
     if (submit) submit.disabled = submitting || accountSaving || (selectedKind === 'codex' && !!accountReadError)
       || codeagentSelectionUnavailable()
-      || (DEEPSEEK_ROUTE_KINDS.has(selectedKind) && !routeStatus.available)
+      || (DEEPSEEK_ROUTE_KINDS.has(selectedKind) && !companyApiKind(selectedKind) && !routeStatus.available)
       || (workspaceMode === 'existing' && !existingWorkspace);
     if (submit && !submitting && selectedKind === 'codeagent' && codeagentSetup.current?.installed === false) {
       submit.textContent = '查看安装说明'; submit.disabled = false;
@@ -1508,7 +1554,13 @@
       const pick = usablePoolAccounts().find(a => a.id === codeagentManualPick());
       parts.push(pick ? `号池 · ${pick.accountLabel}${pick.note ? '（' + pick.note + '）' : ''}` : '号池（自动挑号）');
     }
-    if (DEEPSEEK_ROUTE_KINDS.has(selectedKind)) parts.push(deepseekProfile.ROUTES[deepseekRoute].label);
+    // 公司版 DSH 走「自有 API」里的设置（公司模型或自有接口），不走 Token Plan / DeepSeek 线路。
+    if (DEEPSEEK_ROUTE_KINDS.has(selectedKind) && !companyApiKind(selectedKind)) parts.push(deepseekProfile.ROUTES[deepseekRoute].label);
+    if (companyApiKind(selectedKind)) {
+      const pick = companyPick[selectedKind];
+      const own = companyProvider[selectedKind]?.own;
+      parts.push(!pick ? (companyApiBackend[selectedKind] === 'proxy' ? '公司模型' : '') : pick.source === 'company' ? '公司模型' : own?.backend === 'api' ? '自有接口' : 'CLI 默认');
+    }
     const tuning = tuningTag();
     if (tuning) parts.push(tuning);
     const target = targetPathPreview();
@@ -1569,6 +1621,7 @@
     claudeAccountTouched = false;
     loadClaudeRanking(revision);
     tuningMemory.clear();
+    for (const kind of Object.keys(companyPick)) delete companyPick[kind];
     accountNotice = '';
     tuningTouchedByUser = false;
     modelTouchedByUser = false;
@@ -1660,11 +1713,20 @@
   async function loadCompanyApiCatalog(kind) {
     const result = await ipcRenderer.invoke('company-api:get');
     if (!result?.ok) throw new Error('自有 API 配置读取失败');
-    const model = result.providers?.[kind]?.model;
-    const models = model ? [{ id: model, label: model }] : [{ id: '', label: '沿用本机 CLI 配置' }];
+    const provider = result.providers?.[kind] || {};
+    companyApiBackend[kind] = provider.backend || 'local';
+    companyProvider[kind] = provider;
+    if (result.proxy !== undefined) companyProxyStatus = result.proxy;
+    // 模型卡：两个公司模型（经本机反代）+ 这个工具自己的来源（自有接口的模型，或沿用本机 CLI 配置）。
+    // 隐藏的模型下拉跟着卡片走（其余代码和测试仍读它）。
+    const own = kind === 'deepseek-acp' ? null : (provider.own || { backend: provider.backend === 'api' ? 'api' : 'local', model: provider.model || '' });
+    const models = [...modelCards.companyModels(provider),
+      ...(own ? [own.backend === 'api' ? { id: own.model || '', label: own.model ? own.model + '（自有接口）' : '自有接口默认模型' } : { id: '', label: '沿用本机 CLI 配置' }] : [])];
     companyApiModels[kind] = models;
     setRuntimeModelOptions(kind, models);
-    if (selectedKind === kind) selectedModel = model || '';
+    // 本次打开里没点过卡：默认选保存的来源和模型（也就是上次选的）。点过就保留点选，不被重新读配置冲掉。
+    if (!companyPick[kind]) companyPick[kind] = modelCards.defaultPick(kind, provider);
+    if (selectedKind === kind) selectedModel = companyPickModel(kind);
     return { ok: true, models, source: 'company-api' };
   }
 
@@ -1815,7 +1877,7 @@
       if (selectedKind !== 'codeagent') return null;
       if (codeagentSetup.current?.installed === false) { codeagentSetup.showGuide(); return null; }
     }
-    if (DEEPSEEK_ROUTE_KINDS.has(selectedKind) && !deepseekRouteStatus(deepseekRoute).available) {
+    if (DEEPSEEK_ROUTE_KINDS.has(selectedKind) && !companyApiKind(selectedKind) && !deepseekRouteStatus(deepseekRoute).available) {
       setError(`${deepseekProfile.ROUTES[deepseekRoute].label}不可用：${deepseekRouteStatus(deepseekRoute).reason}`);
       return null;
     }
@@ -1831,6 +1893,15 @@
     const submit = document.getElementById('new-session-submit');
     if (submit) submit.textContent = '读取模型…';
     try {
+      // 模型卡选的来源和保存的不同：先写回「自有 API」里这个工具的设置（反代随之启动），下次打开默认就是它。
+      if (companyApiKind(selectedKind)) {
+        const request = modelCards.saveRequest(selectedKind, companyProvider[selectedKind], companyPick[selectedKind]);
+        if (request) {
+          if (submit) submit.textContent = '切换模型来源…';
+          const saved = await ipcRenderer.invoke('company-api:save', request);
+          if (!saved || !saved.ok) throw new Error((saved && saved.error) || '模型来源保存失败');
+        }
+      }
       // 与群聊成员同一条准确性门：提交前等真实 Codex 模型目录并重新归一化，
       // 避免快速点击把 fallback 中该模型不支持的 effort 送进 PTY。
       // Antigravity 的清单只增加可选模型，默认模型始终有效；`agy models` 要起完整服务、
@@ -1860,6 +1931,24 @@
     codeagentSetup.subscribe(() => paint());
     menuEl = document.getElementById('new-session-menu');
     if (!menuEl) return;
+    const cardList = document.getElementById('new-session-model-cards');
+    cardList?.addEventListener('click', event => pickModelCard(event.target.closest?.('.session-model-card')));
+    cardList?.addEventListener('keydown', event => {
+      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+      const cards = [...cardList.querySelectorAll('.session-model-card')];
+      const at = cards.indexOf(document.activeElement);
+      if (at < 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const step = event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1;
+      pickModelCard(cards[(at + step + cards.length) % cards.length]);
+    });
+    if (companyApi.isCompany()) {
+      ipcRenderer.on('company-proxy:status', (_event, status) => {
+        companyProxyStatus = status || null;
+        if (menuEl && menuEl.style.display !== 'none' && companyApiKind(selectedKind)) paintModelCards();
+      });
+    }
     ipcRenderer.on('company-api:changed', () => {
       void loadHubDefaultModels({ refreshAccount: true }).then(() => loadPrimaryModelCatalogs()).then(paint).catch(error => setError(error.message));
     });

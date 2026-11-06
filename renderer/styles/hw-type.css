@@ -29,3 +29,10 @@
 /* 启动中心快捷键说明、底栏网速箭头：原取说明档/状态色/品牌色，浅色主题下不够读，公司外壳统一用次要文字色 */
 :root[data-hw-shell] .launch-center-shortcuts,
 :root[data-hw-shell] #sidebar-strip :is(.strip-download, .strip-upload) .strip-transfer-label { color: var(--hw-text-2); font-size: var(--hw-fs-12); }
+/* 昨日之我（5.5.15）：默认只搜「我的提问 + 最近 7 天」，范围说明和「扩大」按钮是用户唯一的提示，
+   */
+:root[data-hw-shell] .session-search-result-summary,
+:root[data-hw-shell] .session-search-result-summary>span:last-child { font-size: var(--hw-fs-12); }
+:root[data-hw-shell] .session-search-widen { font-size: var(--hw-fs-12); color: var(--hw-brand); padding: 4px 8px; border-radius: 6px; }
+:root[data-hw-shell] .session-search-widen:hover { background: var(--hw-brand-soft); color: var(--hw-brand-hover); }
+:root[data-hw-shell] .session-search-widen:focus-visible { outline: 2px solid var(--hw-brand); outline-offset: 1px; }

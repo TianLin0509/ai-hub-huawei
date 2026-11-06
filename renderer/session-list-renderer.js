@@ -928,6 +928,7 @@ sessionListEl.addEventListener('keydown', event => {
         item._isMeeting ? null : bridgeBadge(item.id),
         !item._isMeeting && typeof window !== 'undefined' ? window.__progressBadgeFor?.(item.id) : null,
         item.currentModel ? modelShort(item.currentModel) : null, unreadMemberIds.has(item.id),
+        item._isMeeting ? null : require('./company-route-view').routeInfo(item)?.title || null,
         item._isMeeting ? null : sessionDisplayTitle(item, KIND_LABELS, getMeetings()[item.meetingId]),
         item._isMeeting || typeof window === 'undefined' ? null : window.__teamUi?.signature(item.id, sessionMap, getMeetings()) || null]);
       return cachePresentation(item, input => { Object.assign({}, input); return {}; }, external);
@@ -1095,8 +1096,12 @@ sessionListEl.addEventListener('keydown', event => {
       : '';
     const displayTitle = sessionDisplayTitle(s, KIND_LABELS, getMeetings()[s.meetingId]);
     const account = accountBadge(s);
+    // 公司版：模型走哪条线路、用的哪个号（renderer/company-route-view.js），例如「GLM · 号 2」。
+    const route = require('./company-route-view').routeInfo(s);
+    const routeHtml = route && route.chip ? `<span class="sl-route" data-route="${escapeHtml(route.route)}" title="${escapeHtml(route.title)}">${escapeHtml(route.chip)}</span>` : '';
     const accessibleSummary = [displayTitle,
       account ? account.title : '',
+      route ? route.text : '',
       s.currentModel ? (s.currentModel.displayName || s.currentModel.id) : '',
       ctxPct != null ? `Ctx ${ctxPct}%` : '',
       anyWarning,
@@ -1117,6 +1122,7 @@ sessionListEl.addEventListener('keydown', event => {
     div.innerHTML = _sessionKindHtml(s.kind, modelTxt, isDormant && !isResumePending && !issue ? 'dorm' : dotCls, dormantStateTip || runtimeTruthSummary(runtimeTruth), require('../core/codeagent-models').iconModelId(s), '', subscriptionAccount(s))
       // 悬停标题显示全名（2026-10-24 用户：会话栏宽度有限，长名字被省略号截断）。
       + '<span class="sl-title" title="' + escapeHtml(displayTitle + (progress ? '\n' + progress.tip : '')) + '">' + _warningHtml(anyWarning) + (progress ? progress.html : '') + accountHtml + bridgeHtml + escapeHtml(displayTitle) + '</span>'
+      + routeHtml
       + timeHtml(s, showUnread ? Math.max(1, unreadCount) : 0);
     const teamTag = typeof window !== 'undefined' ? window.__teamUi?.rowTagHtml(s.id, sessionMap, getMeetings()) : '';
     if (teamTag) {

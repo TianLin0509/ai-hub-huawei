@@ -45,8 +45,12 @@ class SessionSearchService {
     };
     this._childMemoryLimitMb = Math.max(256, Number(options.childMemoryLimitMb) || 768);
     this._requestTimeoutMs = Math.max(50, Number(options.requestTimeoutMs) || 180_000);
-    const idleMs = Number(options.idleMs ?? process.env.HUB_SESSION_SEARCH_IDLE_MS ?? 600_000);
-    this._idleMs = Number.isFinite(idleMs) && idleMs > 0 ? idleMs : 600_000;
+    // 2026-11-05 定：搜索进程在 Hub 运行期间常驻，不再空闲 10 分钟就退出。退出后下一次
+    // 搜索要重新拉起进程、装内存目录、预热短词档（冷启动 1 秒以上），正是「隔一会儿再搜要等很久」
+    // 的主因；常驻多占的内存（最近 8 天提问约 16MB + SQLite 缓存）用户已同意。
+    // 仍可用 idleMs / HUB_SESSION_SEARCH_IDLE_MS 设一个正数恢复空闲退出（测试用）。
+    const idleMs = Number(options.idleMs ?? process.env.HUB_SESSION_SEARCH_IDLE_MS ?? 0);
+    this._idleMs = Number.isFinite(idleMs) && idleMs > 0 ? idleMs : 0;
     this._idleTimer = null;
     this._idleStopping = null;
     this._childBusy = false;
@@ -129,7 +133,7 @@ class SessionSearchService {
   _armIdleTimer() {
     clearTimeout(this._idleTimer);
     this._idleTimer = null;
-    if (this._closed || !this._child || this._idleStopping || this._pending.size
+    if (!this._idleMs || this._closed || !this._child || this._idleStopping || this._pending.size
         || this._maintenanceBusy || this._queuedSnapshot || this._status.refreshing || this._childBusy) return;
     this._idleTimer = setTimeout(() => {
       this._idleTimer = null;

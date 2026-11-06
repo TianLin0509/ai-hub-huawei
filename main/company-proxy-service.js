@@ -1,0 +1,288 @@
+'use strict';
+
+// 公司模型反代的起停（随 Hub 起停）：独立的 ELECTRON_RUN_AS_NODE 子进程、隐藏窗口、只听 127.0.0.1。
+// - 「自有 API」里任一工具选了「公司模型」才启动；Hub 退出时先请它自己停，再兜底结束进程。
+// - 进程意外退出自动拉起一次；再退出就停下，在界面上用人话说明原因，日志在 diagnostics/company-model-proxy.log。
+// - 每 5 秒读一次状态：号被限流时同步到账号页的「避让」。
+// - 换号、退回个人号的提示是要手动关掉的常驻提示条（2.6 秒的轻提示来不及看），同一类原因本次 Hub 运行只弹第一次，
+//   之后的换号照常记在日志和账号页，不再打扰。
+const fs = require('node:fs');
+const path = require('node:path');
+const { spawn } = require('node:child_process');
+
+const POLL_MS = 5_000;
+const READY_TIMEOUT_MS = 15_000;
+const DRAIN_POLL_MS = 2_000;
+const DRAIN_MAX_MS = 10 * 60_000;
+
+function serverScript() {
+  const file = path.join(__dirname, '..', 'core', 'company-proxy', 'server.mjs');
+  // 打包后 ESM 模块放在 app.asar.unpacked（package.json asarUnpack），子进程直接从磁盘加载。
+  return file.replace(/app\.asar([\\/])/, 'app.asar.unpacked$1');
+}
+
+// 公司内网的 HTTPS 证书由公司根证书签发，只在 Windows 系统证书库里，Node 自带的证书表没有。
+// 反代进程（Electron 内置 Node，ELECTRON_RUN_AS_NODE）用 --use-system-ca 读系统证书库（Electron 41 / Node 24 已实测支持）；
+// 运行时不认这个参数时不加，由 server.mjs 启动时把系统根证书并进默认证书表兜底。
+function systemCaArgs(flags = process.allowedNodeEnvironmentFlags) {
+  try { return flags && flags.has('--use-system-ca') ? ['--use-system-ca'] : []; } catch { return []; }
+}
+
+const NOTICE = {
+  fallback_personal: e => e.reason === 'model'
+    ? `公司模型：号池里没有对 ${e.model || '这个模型'} 有权限的号（各号能用的模型见「账号」页），这个会话已改用你的个人 CodeAgent 账号。`
+    : '公司模型：号池里的号暂时都用不了，这个会话已改用你的个人 CodeAgent 账号。',
+  credential_failed: e => e.account === 'personal' ? '公司模型：你自己的 CodeAgent 登录读不出来（可能已过期），请打开 CodeAgent 命令行登录一下，登录后自动恢复。'
+    : `公司模型：号池账号 ${e.account} 的登录信息读不出来（可能已过期），已换号；请到「账号」页重新登录这个号。`,
+  rate_limited: e => `公司模型：${e.account === 'personal' ? '个人账号' : '号池账号 ' + e.account} 被限流，冷却后再用，会话已自动换号。`,
+};
+
+// 「同一类」：限流换号一类；退回个人号按原因分（缺模型权限再按模型分）；登录读不出按号分。
+function noticeKey(event) {
+  if (event.type === 'fallback_personal') return `fallback:${event.reason === 'model' ? 'model:' + String(event.model || '').toLowerCase() : 'pool'}`;
+  if (event.type === 'credential_failed') return `credential:${event.account || ''}`;
+  return event.type;
+}
+
+class CompanyProxyService {
+  constructor({ dataDir, isEnabled, onNotice = () => {}, onStatus = () => {}, logger = console, mock = process.env.AI_HUB_COMPANY_PROXY_MOCK === '1' } = {}) {
+    this.dataDir = dataDir;
+    this.isEnabled = isEnabled;
+    this.onNotice = onNotice;
+    this.onStatus = onStatus;
+    this.logger = logger;
+    this.mock = mock;
+    this.child = null;
+    this.state = 'stopped';
+    this.message = '';
+    this.restarts = 0;
+    this.stopping = false;
+    this.starting = null;
+    this.timer = null;
+    this.seenEvents = new Set();
+    this.noticeKeys = new Set();
+    this.lastStatus = null;
+    this.draining = null;
+    this.drainCancelled = false;
+  }
+
+  proxy() { return require('../core/company-model-proxy'); }
+  logPath() { return path.join(this.dataDir, 'diagnostics', 'company-model-proxy.log'); }
+
+  status() {
+    const s = this.lastStatus;
+    return { state: this.state, message: this.message, pid: this.child?.pid || null, port: this.proxy().readEndpoint(this.dataDir)?.port || null,
+      mock: this.mock, restarts: this.restarts, accounts: s?.router?.accounts || [], events: (s?.router?.events || []).slice(-10),
+      stats: s?.stats || null, log: this.logPath(), code: s?.code || null,
+      zone: s?.zone || null, chosenZone: this.proxy().chosenZone(this.dataDir), firstInit: s?.firstInit || null,
+      sessionAccounts: this.sessionAccounts(s?.router?.assignments) };
+  }
+
+  // session tag -> account alias（个人 / 号 N，same numbering as the account page; never the account id）.
+  sessionAccounts(assignments) {
+    if (!assignments || typeof assignments !== 'object') return {};
+    let aliases = new Map();
+    try { aliases = require('../core/codeagent-quota').aliasMap(this.dataDir); } catch { aliases = new Map(); }
+    const out = {};
+    for (const [tag, id] of Object.entries(assignments)) out[tag] = aliases.get(id) || (id === 'personal' ? '个人' : '号池账号');
+    return out;
+  }
+
+  // 设置里选区域（'' = 自动识别）：写进 upstream.json，再重启反代让它按新区域拼上游地址。
+  async setZone(zone) {
+    this.proxy().setUpstreamZone(this.dataDir, zone);
+    let enabled = false;
+    try { enabled = !!this.isEnabled(); } catch { enabled = false; }
+    return enabled ? this.restart() : this.status();
+  }
+
+  setState(state, message = '') {
+    this.state = state; this.message = message;
+    try { this.onStatus(this.status()); } catch { /* UI only */ }
+  }
+
+  async syncWithConfig() {
+    let enabled = false;
+    try { enabled = !!this.isEnabled(); } catch { enabled = false; }
+    if (enabled) {
+      this.cancelDrain();
+      return this.ensureRunning().catch(error => { this.logger.warn?.('[company-proxy] ' + error.message); return this.status(); });
+    }
+    if (this.child) await this.stopWhenIdle();
+    return this.status();
+  }
+
+  // The last tool using the company model was switched off: requests already on their way finish first, then the
+  // proxy stops. Sessions opened earlier with the company model stop answering afterwards, which the notice says.
+  async stopWhenIdle({ pollMs = DRAIN_POLL_MS, maxMs = DRAIN_MAX_MS } = {}) {
+    if (this.draining) return this.draining;
+    const inFlight = async () => {
+      try { const s = await this.request('/admin/status'); this.lastStatus = s; return Number(s?.stats?.inFlight || 0) + Number(s?.stats?.queued || 0); }
+      catch { return 0; }
+    };
+    let busy = await inFlight();
+    if (!busy) { await this.stop(); return this.status(); }
+    const deadline = Date.now() + maxMs;
+    this.drainCancelled = false;
+    this.setState('draining', `已没有工具选「公司模型」：等正在进行的 ${busy} 个公司模型请求结束后再停下反代。之前用公司模型开的会话之后再发消息会失败，需要时请在「自有 API」里重新选回公司模型。`);
+    try { this.onNotice({ type: 'proxy_draining', text: this.message, persistent: true }); } catch { /* UI only */ }
+    this.draining = (async () => {
+      while (!this.drainCancelled && busy && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, pollMs));
+        busy = await inFlight();
+      }
+      if (!this.drainCancelled) await this.stop();
+      return this.status();
+    })().finally(() => { this.draining = null; });
+    return this.draining;
+  }
+
+  cancelDrain() {
+    if (!this.draining) return;
+    this.drainCancelled = true;
+    if (this.child) this.setState('running', '公司模型反代运行中');
+  }
+
+  async ensureRunning() {
+    // 已在跑（含「上游未就绪」）就不再起第二个进程；要重读上游配置请用 restart()。
+    if (this.child && (this.state === 'running' || this.state === 'not-ready')) return this.status();
+    if (this.starting) return this.starting;
+    this.starting = this.start().finally(() => { this.starting = null; });
+    return this.starting;
+  }
+
+  async start() {
+    this.stopping = false;
+    const endpoint = this.proxy().ensureEndpoint(this.dataDir);
+    fs.mkdirSync(path.dirname(this.logPath()), { recursive: true });
+    const stateFile = path.join(this.proxy().proxyDir(this.dataDir), 'proxy-state.json');
+    try { fs.rmSync(stateFile, { force: true }); } catch { /* stale */ }
+    const logFd = fs.openSync(this.logPath(), 'a');
+    const env = { ...process.env, AI_HUB_COMPANY_PROXY_KEY: endpoint.key };
+    if (process.versions.electron) env.ELECTRON_RUN_AS_NODE = '1';
+    delete env.NODE_OPTIONS;
+    this.proxy().applyNoProxy(env);
+    const args = [...systemCaArgs(), serverScript(), '--data-dir', this.dataDir, '--port', String(endpoint.port || 0), '--parent-pid', String(process.pid)];
+    if (this.mock) args.push('--mock-upstream');
+    this.setState('starting', '公司模型反代正在启动…');
+    let child;
+    try {
+      child = spawn(process.execPath, args, { env, windowsHide: true, detached: false, stdio: ['ignore', logFd, logFd] });
+    } finally { fs.closeSync(logFd); }
+    this.child = child;
+    child.once('error', error => this.logger.warn?.('[company-proxy] launch failed: ' + error.message));
+    child.once('exit', (code, signal) => this.onExit(child, code, signal));
+    const ready = await this.waitForState(child, stateFile);
+    if (!ready) {
+      // Stopped while starting (stop() or the setting switched off): stay "stopped", it is not a failure.
+      if (this.stopping) return this.status();
+      // Our own kill of a process that never came up is not an "unexpected exit": no automatic restart for it.
+      if (this.child === child) { this.child = null; try { child.kill(); } catch { /* gone */ } }
+      this.setState('failed', '公司模型反代没能启动，详情见日志：' + this.logPath());
+      throw new Error(this.message);
+    }
+    if (this.stopping || this.child !== child) return this.status();
+    this.proxy().setEndpointPort(this.dataDir, ready.port);
+    await this.poll();
+    if (!this.timer) { this.timer = setInterval(() => void this.poll(), POLL_MS); this.timer.unref?.(); }
+    return this.status();
+  }
+
+  async waitForState(child, stateFile) {
+    const deadline = Date.now() + READY_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      if (child.exitCode !== null || this.child !== child) return null;
+      try {
+        const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+        if (state.pid === child.pid && state.port) return state;
+      } catch { /* not yet */ }
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    return null;
+  }
+
+  onExit(child, code, signal) {
+    if (this.child !== child) return;
+    this.child = null;
+    if (this.stopping) { this.setState('stopped'); return; }
+    this.logger.warn?.(`[company-proxy] exited unexpectedly (code ${code}, signal ${signal})`);
+    if (this.restarts < 1) {
+      this.restarts++;
+      this.setState('starting', '公司模型反代意外退出，正在自动重启…');
+      void this.ensureRunning().catch(() => {});
+      return;
+    }
+    this.setState('failed', '公司模型反代反复退出，已停止自动重启。请在「自有 API」里点「重新启动反代」；详情见日志：' + this.logPath());
+  }
+
+  async request(pathname, { method = 'GET', timeoutMs = 3000 } = {}) {
+    const endpoint = this.proxy().readEndpoint(this.dataDir);
+    if (!endpoint?.port) throw new Error('no endpoint');
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`http://127.0.0.1:${endpoint.port}${pathname}`, { method, signal: controller.signal,
+        headers: { authorization: `Bearer ${endpoint.key}` } });
+      return await response.json();
+    } finally { clearTimeout(timer); }
+  }
+
+  async poll() {
+    if (!this.child) return;
+    let status;
+    try { status = await this.request('/admin/status'); }
+    catch { return; }
+    this.lastStatus = status;
+    if (this.draining) { /* keep the draining message */ }
+    else if (!status.ready) this.setState('not-ready', status.message || '公司模型反代已启动，但公司上游还没准备好');
+    else this.setState('running', status.mock ? '公司模型反代运行中（模拟上游，仅用于测试）' : '公司模型反代运行中');
+    for (const event of status.router?.events || []) {
+      const id = `${event.at}:${event.type}:${event.account || event.to || ''}:${event.session || ''}`;
+      if (this.seenEvents.has(id)) continue;
+      this.seenEvents.add(id);
+      if (this.seenEvents.size > 500) this.seenEvents = new Set([...this.seenEvents].slice(-200));
+      if (event.type === 'rate_limited' && event.account) {
+        try {
+          require('../core/codeagent-quota').markAvoid(this.dataDir, event.account, { source: 'error', kind: 'rate-limit',
+            reason: '公司模型反代：上游限流（HTTP 429）', until: event.until || undefined });
+        } catch { /* account page only */ }
+      }
+      const text = NOTICE[event.type]?.(event);
+      const key = noticeKey(event);
+      if (text && !this.noticeKeys.has(key)) {
+        this.noticeKeys.add(key);
+        try { this.onNotice({ type: event.type, text, account: event.account || event.to || null, persistent: true }); } catch { /* UI only */ }
+      }
+    }
+  }
+
+  async restart() {
+    this.restarts = 0;
+    await this.stop();
+    return this.ensureRunning();
+  }
+
+  async stop() {
+    this.stopping = true;
+    if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    const child = this.child;
+    if (!child) { this.setState('stopped'); return; }
+    try { await this.request('/admin/shutdown', { method: 'POST', timeoutMs: 1500 }); } catch { /* fall through to kill */ }
+    await new Promise(resolve => {
+      if (child.exitCode !== null) return resolve();
+      const timer = setTimeout(() => { try { child.kill(); } catch { /* gone */ } resolve(); }, 2500);
+      child.once('exit', () => { clearTimeout(timer); resolve(); });
+    });
+    if (this.child === child) this.child = null;
+    this.setState('stopped');
+  }
+
+  // Synchronous last resort for process exit paths.
+  killNow() {
+    this.stopping = true;
+    if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    try { this.child?.kill(); } catch { /* gone */ }
+  }
+}
+
+module.exports = { CompanyProxyService, serverScript, systemCaArgs, noticeKey, NOTICE };

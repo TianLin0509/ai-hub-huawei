@@ -146,6 +146,8 @@ function _buildSessionPayload(hubId, data) {
     // 号池会话用的是号池里哪个号（core/codeagent-pool.js）；恢复时回到同一个号的配置目录。
     codeagentPoolAccount: typeof data.codeagentPoolAccount === 'string' ? data.codeagentPoolAccount : null,
     codeagentPoolLabel: typeof data.codeagentPoolLabel === 'string' ? data.codeagentPoolLabel : null,
+    // 公司版：这个会话的模型走哪条线路（proxy 公司模型 / api 自有接口 / local CLI 默认），卡片和标题栏显示。
+    companyRoute: ['proxy', 'api', 'local'].includes(data.companyRoute) ? data.companyRoute : null,
     effort: typeof data.effort === 'string' ? data.effort : null,
     contextPct: typeof data.contextPct === 'number' ? data.contextPct : null,
     contextUsed: typeof data.contextUsed === 'number' ? data.contextUsed : null,

@@ -10,6 +10,101 @@ const DIALOGUE = ['title', 'user', 'assistant'];
 // 工具 doc 不在全文索引里，所以它不是一个可检索范围；老请求里的 tool 直接忽略。
 const ALL_SCOPES = [...DIALOGUE];
 const quote = value => '"' + value.replace(/"/g, '""') + '"';
+// 「我的提问 + 最近 N 天」常驻内存（2026-11-05 定为 7 天）。多留 1 天余量，
+// 让「最近 7 天」的起点在缓存刷新之间往前漂移时仍被完整覆盖。
+const RECENT_USER_WINDOW_MS = 8 * 24 * 60 * 60 * 1000;
+// 会话表「最近对话时间」平时按新增行增量合并；隔一段时间整表重算一次，纠正删改留下的偏差。
+const CATALOG_FULL_RECOMPUTE_MS = 10 * 60 * 1000;
+const LAST_CONVERSATION_SQL = `SELECT s.*, (SELECT MAX(timestamp) FROM docs d WHERE d.session_key=s.key AND d.scope IN ('user','assistant') AND d.event_id<>'last-output-preview') AS last_conversation_at FROM sessions s`;
+
+/**
+ * 每次搜索都要的两样东西原来是现查的：全部会话及其最近对话时间（实测 ~75ms）、
+ * 时间范围内有对话的会话（~50ms）；「我的提问 + 7 天」本身还要走一遍 SQL。
+ * 这里把会话目录和最近 8 天的提问正文留在搜索进程里，库有提交时按行号增量同步
+ * （改动的行会删掉重插、换新 rowid，见 _updateSourceInPlace），没变化时同步只读两个 PRAGMA。
+ */
+class SearchCatalogCache {
+  constructor(owner, { now = () => Date.now() } = {}) {
+    this.owner = owner; this.now = now;
+    this.key = null; this.sessions = null; this.lastConversation = new Map();
+    this.maxDocId = 0; this.fullAt = 0; this.unknownTimeSources = 0;
+    this.recent = new Map(); this.recentList = null; this.recentCutoff = null;
+  }
+  get ready() { return !!this.sessions; }
+  _changeKey(db) {
+    const version = db.prepare('PRAGMA data_version').get().data_version;
+    const own = db.prepare('SELECT total_changes() AS c').get().c;
+    return `${version}:${own}`;
+  }
+  _buildSessions(rows) {
+    const sessions = new Map();
+    let unknown = 0;
+    for (const row of rows) {
+      const last = this.lastConversation.get(row.key);
+      const session = sessionFrom({ ...row, last_conversation_at: last ?? null });
+      if (!session.lastConversationAt) unknown++;
+      sessions.set(row.key, session);
+    }
+    this.sessions = sessions; this.unknownTimeSources = unknown;
+  }
+  sync() {
+    const db = this.owner && this.owner.db;
+    if (!db) return false;
+    const now = this.now();
+    const key = this._changeKey(db);
+    const full = !this.sessions || now - this.fullAt >= CATALOG_FULL_RECOMPUTE_MS;
+    const drift = this.recentCutoff == null || now - RECENT_USER_WINDOW_MS - this.recentCutoff >= 60_000;
+    if (!full && !drift && key === this.key) return true;
+    const maxDocId = Number(db.prepare('SELECT MAX(id) AS m FROM docs').get().m) || 0;
+    if (full) {
+      const rows = db.prepare(LAST_CONVERSATION_SQL).all();
+      this.lastConversation = new Map(rows.map(row => [row.key, row.last_conversation_at == null ? null : Number(row.last_conversation_at)]));
+      this._buildSessions(rows);
+      this.fullAt = now;
+    } else if (key !== this.key) {
+      if (maxDocId > this.maxDocId) {
+        const added = db.prepare(`SELECT session_key, MAX(timestamp) AS m FROM docs WHERE id>? AND scope IN ('user','assistant') AND event_id<>'last-output-preview' GROUP BY session_key`).all(this.maxDocId);
+        for (const row of added) {
+          const value = Number(row.m) || 0;
+          if (value > (Number(this.lastConversation.get(row.session_key)) || 0)) this.lastConversation.set(row.session_key, value);
+        }
+      }
+      this._buildSessions(db.prepare('SELECT * FROM sessions').all());
+    }
+    this.maxDocId = maxDocId;
+    if (full || drift || key !== this.key) this._syncRecent(db, now);
+    this.key = key;
+    return true;
+  }
+  _syncRecent(db, now) {
+    const cutoff = now - RECENT_USER_WINDOW_MS;
+    const ids = db.prepare("SELECT id FROM docs WHERE scope='user' AND timestamp>=?").all(cutoff).map(row => Number(row.id));
+    const wanted = new Set(ids);
+    let changed = this.recentList == null;
+    for (const id of this.recent.keys()) if (!wanted.has(id)) { this.recent.delete(id); changed = true; }
+    const missing = ids.filter(id => !this.recent.has(id));
+    const fetch = db.prepare(`SELECT id,session_key,scope,role,speaker,ordinal,timestamp,event_id,text,normalized_text FROM docs WHERE id IN (SELECT value FROM json_each(?))`);
+    for (let i = 0; i < missing.length; i += 500) {
+      for (const row of fetch.all(JSON.stringify(missing.slice(i, i + 500)))) {
+        this.recent.set(Number(row.id), { ...row, id: Number(row.id), timestamp: Number(row.timestamp) || 0, ordinal: row.ordinal });
+        changed = true;
+      }
+    }
+    // 查询快照持有的是旧数组；这里只换新数组，不原地改，翻页期间结果不会变。
+    if (changed) this.recentList = [...this.recent.values()].sort((a, b) => a.id - b.id);
+    this.recentCutoff = cutoff;
+  }
+  covers(request) {
+    return !!this.recentList
+      && request.scopes.length === 1 && request.scopes[0] === 'user'
+      && request.time.field === 'eventTime' && request.time.from != null && request.time.from >= this.recentCutoff;
+  }
+  stats() {
+    let chars = 0;
+    if (this.recentList) for (const doc of this.recentList) chars += doc.text.length + doc.normalized_text.length;
+    return { sessions: this.sessions ? this.sessions.size : 0, recentUserDocs: this.recentList ? this.recentList.length : 0, recentUserChars: chars, recentCutoff: this.recentCutoff };
+  }
+}
 
 function normalizeRequest(request, now = Date.now()) {
   if (String(request.query || '').length > 512) throw new Error('搜索关键词过长（最多 512 个字符）');
@@ -40,6 +135,15 @@ function normalizeRequest(request, now = Date.now()) {
     limit:Math.min(200,Math.max(1,Number(request.limit || request.pageSize)||50)), now };
 }
 
+// 与 SQL 的 substr(text, MAX(1, instr(normalized,term)-100), 500) 逐字一致：SQLite 按字符
+// （码点）计数，JS 按 UTF-16 计数，含 emoji 等代理对时两者会差一位，所以只在这种情况换算。
+const SURROGATE = /[\uD800-\uDFFF]/;
+function sqliteSnippet(text, normalized, hitUnits) {
+  if (!SURROGATE.test(text) && !SURROGATE.test(normalized.slice(0, hitUnits))) return text.substr(Math.max(0, hitUnits - 100), 500);
+  const start = Math.max(0, Array.from(normalized.slice(0, hitUnits)).length - 100);
+  return Array.from(text).slice(start, start + 500).join('');
+}
+
 function sessionFrom(row) {
   return { key:row.key, sessionKey:row.key, provider:row.provider, nativeFamily:row.native_family,
     kind:row.kind, title:row.title || '未命名会话', cwd:row.cwd, projectLabel:row.project_label,
@@ -52,21 +156,33 @@ function sessionFrom(row) {
 // One read transaction per live query. Incremental writes can commit while a
 // user pages through this frozen snapshot; no missing/repeated rows on refresh.
 class QuerySnapshot {
-  constructor(owner, request) {
+  constructor(owner, request, catalog = null) {
     this.id = randomUUID(); this.request = request; this.lastUsed = Date.now(); this.done = false;
     this.groups = new Map(); this.seen = new Set(); this.users = new Map();
     this.terms = termsFor(request.query).sort((a,b)=>b.length-a.length);
     this.termIndex = 0; this.afterId = 0; this.scanned = 0; this.db = null;
+    const cached = !!(catalog && catalog.ready);
+    // 内存路径：命中「我的提问 + 最近 7 天以内」时直接扫常驻内存的提问，不走 SQL 正文扫描。
+    this.memoryDocs = cached && catalog.covers(request) ? catalog.recentList : null;
+    // 摘要（问题/回答前 600 字）只给当前这一页取，不再为全部命中会话逐个回库。
+    this.pendingExcerpts = new Map();
+    this.path = this.memoryDocs ? 'memory' : cached ? 'sqlite+catalog' : 'sqlite';
     try {
       this.db = new DatabaseSync(owner.databasePath, {readOnly:true});
       this.db.exec('PRAGMA query_only=ON; PRAGMA cache_size=-8192; PRAGMA busy_timeout=5000; BEGIN');
       this.db.function('search_features', {deterministic:true}, (text,scope)=>JSON.stringify(documentRank({normalized_text:text,scope},request.query,this.terms)));
-      const rows = this.db.prepare(`SELECT s.*, (SELECT MAX(timestamp) FROM docs d WHERE d.session_key=s.key AND d.scope IN ('user','assistant') AND d.event_id<>'last-output-preview') AS last_conversation_at FROM sessions s`).all();
-      this.sessions = new Map(rows.map(row=>[row.key,sessionFrom(row)]));
-      this.unknownTimeSources = rows.filter(row=>!row.last_conversation_at).length;
+      if (cached) {
+        this.sessions = catalog.sessions;
+        this.unknownTimeSources = catalog.unknownTimeSources;
+      } else {
+        const rows = this.db.prepare(LAST_CONVERSATION_SQL).all();
+        this.sessions = new Map(rows.map(row=>[row.key,sessionFrom(row)]));
+        this.unknownTimeSources = rows.filter(row=>!row.last_conversation_at).length;
+      }
       const {from,to,field} = request.time;
       this.timed = from != null || to != null;
-      this.rangeSessions = this.timed ? new Set(this.db.prepare(`SELECT DISTINCT session_key FROM docs WHERE scope IN ('user','assistant') AND event_id<>'last-output-preview' AND timestamp>0 AND timestamp>=? AND timestamp<=?`).all(from ?? 0,to ?? Number.MAX_SAFE_INTEGER).map(r=>r.session_key)) : null;
+      this.rangeSessions = this.timed ? (cached ? this.rangeFromCatalog(from ?? 0, to ?? Number.MAX_SAFE_INTEGER)
+        : new Set(this.db.prepare(`SELECT DISTINCT session_key FROM docs WHERE scope IN ('user','assistant') AND event_id<>'last-output-preview' AND timestamp>0 AND timestamp>=? AND timestamp<=?`).all(from ?? 0,to ?? Number.MAX_SAFE_INTEGER).map(r=>r.session_key))) : null;
       this.allowed = new Set([...this.sessions.values()].filter(s=>
         matchesSearchProvider(s.provider, request.providers)
         && (!request.project || normalize(`${s.projectLabel||''} ${s.cwd||''}`).includes(request.project))
@@ -76,9 +192,12 @@ class QuerySnapshot {
       ).map(s=>s.key));
       this.allAllowed = this.allowed.size === this.sessions.size;
       this.auxReady = JSON.parse(this.db.prepare("SELECT value FROM meta WHERE key='cjkAuxReady'").get()?.value || 'null') === '1';
-      this.userStatement = this.db.prepare("SELECT ordinal, event_id FROM docs WHERE session_key=? AND scope='user' ORDER BY ordinal,id");
-      this.questionStatement = this.db.prepare("SELECT substr(text,1,600) AS text FROM docs WHERE session_key=? AND scope='user' AND ordinal=? LIMIT 1");
-      this.answerStatement = this.db.prepare("SELECT substr(text,1,600) AS text FROM docs WHERE session_key=? AND scope='assistant' AND ordinal>=? AND ordinal<? ORDER BY ordinal DESC LIMIT 1");
+      // ordinal 在表里排在整段正文之后：按 (session_key, scope, timestamp) 索引取行再读 ordinal，
+      // 要把每条长消息的溢出页全读一遍（实测 50 个会话 30~70ms）。固定走 (session_key, ordinal)
+      // 索引，ordinal 直接从索引拿，scope/event_id 在正文前面，不碰溢出页。
+      this.userStatement = this.db.prepare("SELECT ordinal, event_id FROM docs INDEXED BY idx_docs_session WHERE session_key=? AND scope='user' ORDER BY ordinal,id");
+      this.questionStatement = this.db.prepare("SELECT substr(text,1,600) AS text FROM docs INDEXED BY idx_docs_session WHERE session_key=? AND scope='user' AND ordinal=? LIMIT 1");
+      this.answerStatement = this.db.prepare("SELECT substr(text,1,600) AS text FROM docs INDEXED BY idx_docs_session WHERE session_key=? AND scope='assistant' AND ordinal>=? AND ordinal<? ORDER BY ordinal DESC LIMIT 1");
       if (request.query && request.scopes.includes('title')) {
         for (const key of this.allowed) {
           const session = this.sessions.get(key);
@@ -94,16 +213,34 @@ class QuerySnapshot {
         const eventPredicate=this.timed && field==='eventTime'
           ? ` AND ((scope<>'title' AND event_id<>'last-output-preview' AND timestamp>0 AND timestamp>=? AND timestamp<=?) OR (scope='title' AND session_key IN (SELECT value FROM json_each(?))))` : '';
         const eventArgs=eventPredicate?[from??0,to??Number.MAX_SAFE_INTEGER,JSON.stringify([...this.rangeSessions])]:[];
-        const scoped=new Set(this.db.prepare(`SELECT DISTINCT session_key FROM docs WHERE scope IN (${request.scopes.map(()=>'?')})${eventPredicate}`).all(...request.scopes,...eventArgs).map(r=>r.session_key));
-        this.finalResults = [...this.allowed].filter(key=>scoped.has(key)).map(key=>({
-          ...this.sessions.get(key), matchCount:0, titleOnly:true, indexed:true, newestMatchedEventAt:null,
-          rank:{tier:4,distance:0,field:0}, matchReasons:['最近对话'],
-          bestMatch:{scope:'title',role:'title',eventId:'title',timestamp:null,text:this.sessions.get(key).title},
-          ...this.excerpts(key,Number.MAX_SAFE_INTEGER),
-        })).sort((a,b)=>compareResults(a,b,request.sort,request.direction));
-        this.done=true; this.close();
+        const scoped=this.memoryDocs
+          ? new Set(this.memoryDocs.filter(d=>d.timestamp>0 && d.timestamp>=(from??0) && d.timestamp<=(to??Number.MAX_SAFE_INTEGER) && d.event_id!=='last-output-preview').map(d=>d.session_key))
+          : new Set(this.db.prepare(`SELECT DISTINCT session_key FROM docs WHERE scope IN (${request.scopes.map(()=>'?')})${eventPredicate}`).all(...request.scopes,...eventArgs).map(r=>r.session_key));
+        this.finalResults = [...this.allowed].filter(key=>scoped.has(key)).map(key=>{
+          const row={...this.sessions.get(key), matchCount:0, titleOnly:true, indexed:true, newestMatchedEventAt:null,
+            rank:{tier:4,distance:0,field:0}, matchReasons:['最近对话'],
+            bestMatch:{scope:'title',role:'title',eventId:'title',timestamp:null,text:this.sessions.get(key).title},
+            questionExcerpt:'', answerExcerpt:''};
+          this.pendingExcerpts.set(row,{key,ordinal:Number.MAX_SAFE_INTEGER});
+          return row;
+        }).sort((a,b)=>compareResults(a,b,request.sort,request.direction));
+        this.done=true;
       }
     } catch(error) { this.close(); throw error; }
+  }
+  // 「时间范围内有对话的会话」：最近对话时间落在范围内的必然有；早于起点的必然没有；
+  // 晚于终点的（正在聊、时钟偏差）才逐个回库确认。与原 DISTINCT 全量查询结果一致。
+  rangeFromCatalog(from, to) {
+    const range = new Set();
+    let check = null;
+    for (const [key, session] of this.sessions) {
+      const last = Number(session.lastConversationAt) || 0;
+      if (!last || last < from) continue;
+      if (last <= to) { range.add(key); continue; }
+      check ||= this.db.prepare(`SELECT 1 FROM docs WHERE session_key=? AND scope IN ('user','assistant') AND event_id<>'last-output-preview' AND timestamp>0 AND timestamp>=? AND timestamp<=? LIMIT 1`);
+      if (check.get(key, from, to)) range.add(key);
+    }
+    return range;
   }
   close() { if(this.db) { try { this.db.close(); } finally { this.db=null; } } }
   userBounds(key, ordinal) {
@@ -113,8 +250,17 @@ class QuerySnapshot {
     while(lo<hi) { const mid=(lo+hi)>>1; if(users[mid].ordinal<=ordinal) lo=mid+1; else hi=mid; }
     return {start:lo?users[lo-1].ordinal:null,end:lo<users.length?users[lo].ordinal:Number.MAX_SAFE_INTEGER};
   }
+  // 摘要只要命中位置前后最近的两条提问：已经缓存过整列提问位置就二分，否则只查这两行，
+  // 不为一条摘要把长会话的几千条提问位置全部读出来。结果与 userBounds 完全相同。
+  boundsAt(key,ordinal) {
+    if(this.users.has(key)) return this.userBounds(key,ordinal);
+    this.prevUserStatement ||= this.db.prepare("SELECT ordinal FROM docs INDEXED BY idx_docs_session WHERE session_key=? AND ordinal<=? AND scope='user' ORDER BY ordinal DESC LIMIT 1");
+    this.nextUserStatement ||= this.db.prepare("SELECT ordinal FROM docs INDEXED BY idx_docs_session WHERE session_key=? AND ordinal>? AND scope='user' ORDER BY ordinal ASC LIMIT 1");
+    const prev=this.prevUserStatement.get(key,ordinal), next=this.nextUserStatement.get(key,ordinal);
+    return {start:prev?prev.ordinal:null,end:next?next.ordinal:Number.MAX_SAFE_INTEGER};
+  }
   excerpts(key,ordinal) {
-    const bounds=this.userBounds(key,ordinal);
+    const bounds=this.boundsAt(key,ordinal);
     return { questionExcerpt:bounds.start==null?'':this.questionStatement.get(key,bounds.start)?.text||'',
       answerExcerpt:this.answerStatement.get(key,bounds.start??-1,bounds.end)?.text||'' };
   }
@@ -144,8 +290,10 @@ class QuerySnapshot {
   consume(row) {
     if(this.seen.has(row.id)) return;
     this.seen.add(row.id);
-    const feature=JSON.parse(row.features);
+    const feature=typeof row.features==='string'?JSON.parse(row.features):row.features;
     if(!feature.covered.length) return;
+    // 会话目录来自缓存时，缓存同步之后才提交的新会话这一轮还没有元数据，下一次搜索就有了。
+    if(!this.sessions.has(row.session_key)) return;
     let group=this.groups.get(row.session_key);
     if(!group) {
       group={session:this.sessions.get(row.session_key),covered:new Set(),episodes:new Map(),best:null,count:0,newest:null,scopes:new Set(),matchedEventIds:[]};
@@ -156,8 +304,9 @@ class QuerySnapshot {
     if(row.scope!=='title' && row.event_id!=='last-output-preview') group.newest=Math.max(group.newest||0,Number(row.timestamp)||0)||null;
     if(group.matchedEventIds.length<30) group.matchedEventIds.push(row.event_id);
     if(row.scope!=='title') {
-      const bounds=this.userBounds(row.session_key,row.ordinal);
-      const key=bounds.start==null?`event:${row.event_id}`:`user:${bounds.start}`;
+      // 命中的本身就是一条提问时，它所在的「这一轮」就从它自己开始，不必回库查全部提问的位置。
+      const start=row.scope==='user'?row.ordinal:this.userBounds(row.session_key,row.ordinal).start;
+      const key=start==null?`event:${row.event_id}`:`user:${start}`;
       let episode=group.episodes.get(key);
       if(!episode) { episode={covered:new Set(),best:null}; group.episodes.set(key,episode); }
       feature.covered.forEach(i=>episode.covered.add(i));
@@ -168,8 +317,26 @@ class QuerySnapshot {
         timestamp:row.scope==='title'?null:Number(row.timestamp)||null,ordinal:row.ordinal,text:row.snippet};
     }
   }
+  // 内存路径一次扫完（7 天约 3300 条、350 万字，实测 1~2ms），结果与 SQL 路径同一套
+  // documentRank / consume：命中判定、排名、摘要起点（命中词前 100 字）都一致。
+  stepMemory() {
+    const r=this.request, from=r.time.from??0, to=r.time.to??Number.MAX_SAFE_INTEGER;
+    if(this.allowed.size) for(const doc of this.memoryDocs) {
+      if(doc.timestamp<=0 || doc.timestamp<from || doc.timestamp>to || doc.event_id==='last-output-preview') continue;
+      if(!this.allAllowed && !this.allowed.has(doc.session_key)) continue;
+      const text=doc.normalized_text;
+      let hit=-1;
+      for(const term of this.terms) { hit=text.indexOf(term); if(hit>=0) break; }
+      if(hit<0) continue;
+      this.consume({...doc,features:documentRank({normalized_text:text,scope:doc.scope},r.query,this.terms),
+        snippet:sqliteSnippet(doc.text,text,hit)});
+    }
+    this.scanned+=this.memoryDocs.length;
+    this.termIndex=this.terms.length;
+  }
   step(maxDocs) {
     if(this.done) return;
+    if(this.memoryDocs) this.stepMemory();
     const started=Date.now(); let processed=0, chars=0;
     while(this.termIndex<this.terms.length && processed<maxDocs && chars<8*1024*1024 && Date.now()-started<160) {
       if(!this.allowed.size || (this.termIndex && !this.groups.size)) { this.termIndex=this.terms.length; break; }
@@ -185,11 +352,13 @@ class QuerySnapshot {
     if(this.termIndex>=this.terms.length) {
       this.done=true;
       this.finalResults=this.resultRows();
-      this.close(); this.seen.clear(); this.groups.clear(); this.users.clear();
+      // 连接留到最后一页的摘要取完（或快照过期）再关。
+      this.seen.clear(); this.groups.clear();
     }
   }
   resultRows() {
     if(this.finalResults) return this.finalResults;
+    this.pendingExcerpts.clear(); // 部分结果每轮重建行对象，旧一轮未显示的行不必再记
     const groups=[...this.groups.values()].filter(g=>g.covered.size===this.terms.length);
     const results=groups.map(g=>{
       let best=g.best;
@@ -204,15 +373,26 @@ class QuerySnapshot {
       }
       const titleOnly=g.scopes.size===1 && g.scopes.has('title');
       const {rank:_rank,docId,...bestMatch}=best;
-      if(g.excerptId!==docId) {g.excerptId=docId;g.excerpts=this.excerpts(g.session.key,best.scope==='title'?Number.MAX_SAFE_INTEGER:best.ordinal);}
-      return {...g.session,indexed:true,matchCount:g.count,newestMatchedEventAt:g.newest,
+      const row={...g.session,indexed:true,matchCount:g.count,newestMatchedEventAt:g.newest,
         titleOnly,rank,matchReasons:g.exactId?['会话 ID 精确匹配',...(this.timed?['范围内有对话']:[])]:rankReason(rank,titleOnly,this.timed),matchedEventIds:g.matchedEventIds,
-        bestMatch, ...g.excerpts};
+        bestMatch, questionExcerpt:'', answerExcerpt:'', ...(g.excerptId===docId?g.excerpts:{})};
+      if(g.excerptId!==docId) this.pendingExcerpts.set(row,{key:g.session.key,ordinal:best.scope==='title'?Number.MAX_SAFE_INTEGER:best.ordinal,group:g,docId});
+      return row;
     });
     return results.sort((a,b)=>compareResults(a,b,this.request.sort,this.request.direction));
   }
   response(offset=0) {
     const results=this.resultRows(), r=this.request, shown=results.slice(offset,offset+r.limit);
+    for(const row of shown) {
+      const pending=this.pendingExcerpts.get(row);
+      if(!pending) continue;
+      this.pendingExcerpts.delete(row);
+      if(!this.db) continue;
+      const excerpts=this.excerpts(pending.key,pending.ordinal);
+      Object.assign(row,excerpts);
+      if(pending.group) {pending.group.excerptId=pending.docId;pending.group.excerpts=excerpts;}
+    }
+    if(this.done && offset+r.limit>=results.length) {this.close();this.users.clear();this.pendingExcerpts.clear();}
     const providers={},scopes={},projects=new Map();
     for(const result of results) {
       providers[result.provider]=(providers[result.provider]||0)+1;
@@ -227,14 +407,20 @@ class QuerySnapshot {
       partialReason:this.done?null:'仍在检索同一快照中的其余记录',scannedDocuments:this.scanned,
       continuationCursor:this.done?null:cursor('scan',0),
       nextPageCursor:this.done && offset+r.limit<results.length?cursor('page',offset+r.limit):null,
-      coverage:{unknownTimeSources:this.unknownTimeSources},
+      coverage:{unknownTimeSources:this.unknownTimeSources},searchPath:this.path,
       facets:{providers,scopes,projects:[...projects].map(([label,count])=>({label,count})).sort((a,b)=>b.count-a.count)},
     };
   }
 }
 
 class SearchCursorStore {
-  constructor(owner) { this.owner=owner; this.snapshots=new Map(); this.timer=setInterval(()=>this.expire(),30000); this.timer.unref?.(); }
+  constructor(owner) { this.owner=owner; this.snapshots=new Map(); this.timer=setInterval(()=>this.expire(),30000); this.timer.unref?.(); this.catalog=new SearchCatalogCache(owner); this.catalogError=null; }
+  // 搜索前同步一次（没变化时只读两个 PRAGMA）；后台写入后由引擎提前调用，把同步挪出搜索路径。
+  // 同步失败不影响搜索：本次退回原来的现查路径。
+  syncCatalog() {
+    try { const ok=this.catalog.sync(); this.catalogError=null; return ok; }
+    catch(error) { this.catalogError=error.message; this.catalog=new SearchCatalogCache(this.owner); return false; }
+  }
   expire() { for(const [id,s] of this.snapshots) if(Date.now()-s.lastUsed>120000) { s.close(); this.snapshots.delete(id); } }
   search(request) {
     const started=Date.now(); this.expire(); let snapshot;
@@ -248,7 +434,8 @@ class SearchCursorStore {
         if(!['scan','page'].includes(cursor.kind) || !Number.isInteger(cursor.offset) || cursor.offset<0 || (cursor.kind==='page' && !snapshot.done)) throw new Error('搜索游标无效');
       } else {
         if(this.snapshots.size>=4) { const [id,old]=this.snapshots.entries().next().value; old.close(); this.snapshots.delete(id); }
-        snapshot=new QuerySnapshot(this.owner,normalizeRequest(request)); this.snapshots.set(snapshot.id,snapshot);
+        const normalized=normalizeRequest(request);
+        snapshot=new QuerySnapshot(this.owner,normalized,this.syncCatalog()?this.catalog:null); this.snapshots.set(snapshot.id,snapshot);
       }
       snapshot.lastUsed=Date.now(); snapshot.step(this.owner.maxQueryDocs);
       return {...snapshot.response(cursor?.kind==='page'?cursor.offset:0),requestId:request.requestId,queryMs:Date.now()-started,index:this.owner.getStats()};
@@ -259,4 +446,4 @@ class SearchCursorStore {
   }
   close() { clearInterval(this.timer); for(const snapshot of this.snapshots.values()) snapshot.close(); this.snapshots.clear(); }
 }
-module.exports={SearchCursorStore,normalizeRequest,QuerySnapshot};
+module.exports={SearchCursorStore,SearchCatalogCache,normalizeRequest,QuerySnapshot,RECENT_USER_WINDOW_MS};

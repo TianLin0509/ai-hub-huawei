@@ -2084,6 +2084,7 @@ function paintAppToolbarForSession(sessionId, session, cached) {
   paintTerminalRuntimeStatus(statusDot, session);
 
   crumb.append(workspaceBtn, crumbSep, titleSpan, statusDot);
+  paintCrumbModelRoute(session);
   paintCrumbBridge(sessionId);
 
   const closeBtn = document.createElement('button');
@@ -2112,6 +2113,31 @@ function paintAppToolbarForSession(sessionId, session, cached) {
   headerActions.append(filesBtn, closeBtn);
   window.__assistantSync?.(session);
 }
+
+// 公司版：标题栏写这个会话的模型、线路和号（renderer/company-route-view.js），例如「GLM-5.2-WX · 公司模型 · 号 2」。
+const companyRouteView = require('./company-route-view');
+function paintCrumbModelRoute(session) {
+  if (!toolbarCrumbEl) return;
+  let chip = toolbarCrumbEl.querySelector('#toolbar-model-route');
+  const info = companyRouteView.routeInfo(session);
+  if (!info || !info.text) { chip?.remove(); return; }
+  if (!chip) {
+    chip = document.createElement('span');
+    chip.id = 'toolbar-model-route';
+    chip.className = 'crumb-model-route';
+    toolbarCrumbEl.appendChild(chip);
+  }
+  chip.dataset.route = info.route;
+  chip.textContent = info.text;
+  chip.title = info.title;
+}
+try {
+  if (require('../core/distribution').target === 'company') {
+    ipcRenderer.on('company-proxy:status', (_event, status) => { companyRouteView.updateStatus(status); });
+    ipcRenderer.invoke('company-proxy:status').then(r => companyRouteView.updateStatus(r && r.proxy)).catch(() => {});
+    companyRouteView.onChange(() => { renderSessionList(); scheduleAppToolbarRefresh(); });
+  }
+} catch { /* 只影响显示 */ }
 
 function paintCrumbBridge(sessionId) {
   if (!toolbarCrumbEl || toolbarCrumbEl.dataset.signature !== 'session:' + sessionId) return;
@@ -8241,7 +8267,10 @@ ipcRenderer.on('codeagent-models-changed', (_event, payload = {}) => {
 ipcRenderer.on('session-notice', (_event, payload = {}) => {
   if (!payload || !payload.message) return;
   const session = payload.sessionId ? sessions.get(payload.sessionId) : null;
-  showToast(`${session && session.title ? session.title + '：' : ''}${payload.message}`, payload.level);
+  const text = `${session && session.title ? session.title + '：' : ''}${payload.message}`;
+  // persistent：要手动关的常驻提示条（公司模型换号、退回个人号、反代没就绪），见 sticky-notice.js。
+  if (payload.persistent === true) require('./sticky-notice.js').showStickyNotice(document, text, payload.level);
+  else showToast(text, payload.level);
 });
 
 // PermissionRequest 不带工具参数（hook 边界的既有约定）；同一次调用的 PreToolUse
@@ -9820,6 +9849,7 @@ ipcRenderer.on('session-updated', (_e, { session }) => {
   if (typeof session.codeagentModelPick === 'boolean') local.codeagentModelPick = session.codeagentModelPick;
   if (session.codeagentForkSourceSessionId) local.codeagentForkSourceSessionId = session.codeagentForkSourceSessionId;
   if (session.codeagentPoolAccount) { local.codeagentPoolAccount = session.codeagentPoolAccount; local.codeagentPoolLabel = session.codeagentPoolLabel || ''; }
+  if (session.companyRoute) local.companyRoute = session.companyRoute;
   let persistModel = false;
   if (session.currentModel && session.currentModel.id) {
     const previousModelId = local.currentModel && local.currentModel.id;
@@ -9969,6 +9999,7 @@ function persistWorkscene(flush = false) {
         ...(s.codeagentRouteModel ? { codeagentRouteModel: s.codeagentRouteModel } : {}),
         ...(s.codeagentForkSourceSessionId ? { codeagentForkSourceSessionId: s.codeagentForkSourceSessionId } : {}),
         ...(s.codeagentPoolAccount ? { codeagentPoolAccount: s.codeagentPoolAccount, codeagentPoolLabel: s.codeagentPoolLabel || '' } : {}),
+        ...(s.companyRoute ? { companyRoute: s.companyRoute } : {}),
         effort: s.effort || null,
         contextPct: typeof s.contextPct === 'number' ? s.contextPct : null,
         contextUsed: typeof s.contextUsed === 'number' ? s.contextUsed : null,
@@ -10391,6 +10422,7 @@ sessionImmersive = require('./session-immersive').createSessionImmersiveControll
         ...(meta.codeagentRouteModel ? { codeagentRouteModel: meta.codeagentRouteModel } : {}),
         ...(meta.codeagentForkSourceSessionId ? { codeagentForkSourceSessionId: meta.codeagentForkSourceSessionId } : {}),
         ...(meta.codeagentPoolAccount ? { codeagentPoolAccount: meta.codeagentPoolAccount, codeagentPoolLabel: meta.codeagentPoolLabel || '' } : {}),
+        ...(meta.companyRoute ? { companyRoute: meta.companyRoute } : {}),
         effort: meta.effort || null,
         contextPct: typeof meta.contextPct === 'number' ? meta.contextPct : null,
         contextUsed: typeof meta.contextUsed === 'number' ? meta.contextUsed : null,

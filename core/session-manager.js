@@ -644,7 +644,12 @@ function scheduleNativeMcpLearn(manager, id, rootPid, learn, delayMs = NATIVE_MC
   return null;
 }
 
-function applyClaudeSessionEnv(sessionEnv, cv) {
+function applyClaudeSessionEnv(sessionEnv, cv, launch = {}) {
+  if (cv.COMPANY_CLI && cv.CLAUDE_BACKEND === 'proxy') {
+    // 公司模型：经本机反代用 CodeAgent 账号（core/company-model-proxy.js），会话 Key 带会话标识以便粘号。
+    require('./company-model-proxy').applyClaudeEnv(sessionEnv, { dataDir: getHubDataDir(), sessionId: launch.sessionId, model: launch.model || cv.CLAUDE_API_MODEL });
+    return 'proxy';
+  }
   if (cv.COMPANY_CLI) {
     // Empty fields belong to the installed CLI. In particular, do not delete
     // its existing login environment or synthesize an endpoint/model.
@@ -697,6 +702,7 @@ function applyClaudeSessionEnv(sessionEnv, cv) {
 }
 
 function resolveClaudeLaunchModel(cv, requestedModel) {
+  if (cv.COMPANY_CLI && cv.CLAUDE_BACKEND === 'proxy') return require('./company-model-proxy').launchModel(requestedModel || cv.CLAUDE_API_MODEL);
   if (cv.COMPANY_CLI) return requestedModel || cv.CLAUDE_API_MODEL || '';
   // The meeting creator always submits the subscription default model even
   // when the user never touched its model picker. Treat that value as an
@@ -1085,6 +1091,7 @@ function isCodexApiBackend(cv) {
 }
 
 function resolveCodexLaunchModel(cv, requestedModel) {
+  if (cv.COMPANY_CLI && cv.CODEX_BACKEND === 'proxy') return require('./company-model-proxy').launchModel(requestedModel || cv.CODEX_API_MODEL);
   if (cv.COMPANY_CLI) return require('./company-api-config').optionalText(requestedModel || cv.CODEX_API_MODEL, '模型名称');
   return normalizeCodexSessionModel(requestedModel || resolveDefaultCodexModel(cv));
 }
@@ -1892,7 +1899,7 @@ class SessionManager extends EventEmitter {
 
     if (isClaude) {
       const cv = getConfigValues();
-      applyClaudeSessionEnv(sessionEnv, cv);
+      applyClaudeSessionEnv(sessionEnv, cv, { sessionId: id, model: opts.model });
       // Attribution + auth for the Stop/UserPromptSubmit hook script (both modes)
       this._applyHubSessionEnv(sessionEnv, id);
       // 软压缩：用户目录的提醒钩子看到它，才让 AI 在断点结束本轮留标记（main/soft-compact-controller.js 只管 PTY）。
@@ -2191,7 +2198,12 @@ class SessionManager extends EventEmitter {
           || (!relative.startsWith('..') && !path.isAbsolute(relative));
         if(!selectedProfileHomeAllowed && opts.codexProfile) throw new Error('选定 Codex 账号不在隔离目录内，未替换账号或启动会话');
       }
-      if (isCodexApiBackend(cv)) {
+      if (cv.COMPANY_CLI && cv.CODEX_BACKEND === 'proxy') {
+        // 公司模型：独立的 Codex home，提供方指向本机反代；Key 放在会话环境变量里，按会话粘号。
+        require('./company-model-proxy').applyCodexEnv(sessionEnv, { dataDir: getHubDataDir(), sessionId: id,
+          model: resolveCodexLaunchModel(cv, opts.model), projectDir: spawnCwd });
+        codexSessionsRoot = path.join(sessionEnv.CODEX_HOME, 'sessions');
+      } else if (isCodexApiBackend(cv)) {
         sessionEnv.CODEX_HOME = ensureCodexApiProfile(cv, spawnCwd);
         // API 模式 codex 把 rollout 写到 isolated home（不写 ~/.codex/sessions）。
         // 记到 info 让 transcript-tap 注册时把这个 root 加进 CodexTap 的扫描列表。
@@ -2556,6 +2568,14 @@ class SessionManager extends EventEmitter {
       ...(opts.hiddenFromSidebar ? { hiddenFromSidebar: true } : {}),
       ...(opts.openInBackground ? { openInBackground: true } : {}),
       currentModel,
+      // Company edition: where this session's model calls go - proxy (公司模型), api (自有接口) or local (CLI 默认).
+      // Session card and title bar show it; the pool account per session comes from the proxy status.
+      ...((() => {
+        const cv = getConfigValues();
+        if (!cv.COMPANY_CLI) return {};
+        const route = isClaude ? cv.CLAUDE_BACKEND : isCodex ? cv.CODEX_BACKEND : isDshCli ? (getConfig().dshBackend === 'proxy' ? 'proxy' : null) : null;
+        return ['proxy', 'api', 'local'].includes(route) ? { companyRoute: route } : {};
+      })()),
       ...(typeof opts.contextPct === 'number' ? { contextPct: opts.contextPct } : {}),
       ...(typeof opts.contextUsed === 'number' ? { contextUsed: opts.contextUsed } : {}),
       ...(opts.sessionUsage ? { sessionUsage: opts.sessionUsage } : {}),

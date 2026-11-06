@@ -2416,9 +2416,39 @@ const resumeSession = createResumeSessionHandler({
 require('./core/codeagent-commands-probe').commandStartup(getHubDataDir(), {
   hubVersion: require('./package.json').version, dataDirOverride: !!process.env.CLAUDE_HUB_DATA_DIR,
 });
+// 公司模型反代（2026-11-06，5.5.12）：「自有 API」里任一工具选了「公司模型」才启动，随 Hub 起停；
+// 新建这类会话前先确认它已就绪。见 main/company-proxy-service.js、core/company-model-proxy.js。
+let companyProxyFailureShown = '';
+const companyProxyService = new (require('./main/company-proxy-service').CompanyProxyService)({
+  dataDir: getHubDataDir(),
+  isEnabled: () => getHubConfig().companyCli === true && getHubConfig().companyProxyEnabled === true,
+  // 换号、退回个人号、反代起不来：用会话提示条讲给用户听（renderer.js 的 session-notice）。
+  // 换号/退回个人号是常驻提示条，用户手动关（只在每类第一次时弹，见 company-proxy-service）。
+  onNotice: notice => sendToRenderer('session-notice', { message: notice.text, level: 'warning', persistent: notice.persistent === true }),
+  onStatus: status => {
+    sendToRenderer('company-proxy:status', status);
+    if (status.state === 'failed' && status.message !== companyProxyFailureShown) {
+      companyProxyFailureShown = status.message;
+      sendToRenderer('session-notice', { message: status.message, level: 'error' });
+    } else if (status.state === 'not-ready' && status.code !== 'INITIALIZING' && status.message && status.message !== companyProxyFailureShown) {
+      // INITIALIZING（准备上游、首次签名初始化）是几秒到几十秒的过渡状态，只在设置弹窗里显示，不弹常驻提示条。
+      // 上游没就绪（比如签名缓存不在）：原因和处理办法较长，用常驻提示条讲清楚，不让它一闪而过。
+      companyProxyFailureShown = status.message;
+      sendToRenderer('session-notice', { message: status.message, level: 'error', persistent: true });
+    } else if (status.state === 'running') companyProxyFailureShown = '';
+  },
+});
+app.whenReady().then(() => companyProxyService.syncWithConfig());
+// 退出时先请反代自己收尾（删状态文件、关连接）；来不及的由 will-quit 兜底结束进程。
+app.on('before-quit', () => { void companyProxyService.stop().catch(() => {}); });
+app.on('will-quit', () => companyProxyService.killNow());
 const sessionOperations = registerSessionIpc(ipcMain, {
   app,
   ensureLaunchAuth: async (kind, opts) => {
+    if (require('./core/company-model-proxy').usesProxy(kind, getHubConfig())) {
+      const status = await companyProxyService.ensureRunning();
+      if (status.state === 'failed' || status.state === 'not-ready') throw new Error(status.message || '公司模型反代还没准备好');
+    }
     // Both checks are read-only; run them side by side. A login problem is
     // reported ahead of a config problem, as when they ran one after another.
     const [auth, namespace] = await Promise.allSettled([launchAuth.ensure(kind, opts), ensureCodexAccountNamespace(kind,opts)]);
@@ -4025,6 +4055,7 @@ require('./main/ipc/mailbox-handlers').registerMailboxIpc(ipcMain, {
   openInLoginEnv: payload => vpsLogin.enabled() ? vpsLogin.open(payload) : Promise.reject(new Error('本机没有接入 VPS 登录环境，无法在账号自己的出口打开邮箱')),
 });
 registerConfigIpc(ipcMain, {
+  companyProxyService,
   prepareNewClaudeAccount: payload => vpsLogin.enabled() ? vpsLogin.prepareNew(payload) : Promise.resolve({}),
   requireClaudeExit: () => vpsLogin.enabled(),
   ensureLaunchAuth:async(kind,opts)=>{await launchAuth.ensure(kind,opts);await ensureCodexAccountNamespace(kind,opts);},
