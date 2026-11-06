@@ -888,12 +888,14 @@ async function observeCodeAgentModel(hubSessionId, ev, transcriptPath, source = 
     const requestedModel = before.currentModel?.id;
     const codeAgentModels = require('./core/codeagent-models');
     let modelId = ev.modelId || null;
+    let modelAt = Date.now();
     let usage = ev.usage && typeof ev.usage === 'object' ? ev.usage : null;
     const file = before.transcriptPath || transcriptPath || ev.transcriptPath;
     if (file) {
       const last = await require('./core/read-last-assistant').readLastAssistantMessage(file);
       if (last) {
         modelId = last.model || null;
+        modelAt = last.ts;
         usage = last.usage || null;
       }
     }
@@ -913,7 +915,7 @@ async function observeCodeAgentModel(hubSessionId, ev, transcriptPath, source = 
         sendToRenderer('status-event', { sessionId: hubSessionId, ...context });
       }
     }
-    const observed = session && modelId ? codeAgentModels.observeModel(session, modelId) : null;
+    const observed = session && modelId ? codeAgentModels.observeModel(session, modelId, { at: modelAt }) : null;
     if (observed || !modelId) {
       codeAgentModels.appendModelLog(getHubDataDir(), {
         event: 'observe', via: source, session: String(hubSessionId || '').slice(0, 8),
@@ -922,12 +924,16 @@ async function observeCodeAgentModel(hubSessionId, ev, transcriptPath, source = 
       });
     }
     if (!observed) return;
-    const updated = sessionManager.updateSessionMeta(hubSessionId, observed.fields);
+    if (observed.settingsOnlyVerification) codeAgentModels.appendModelLog(getHubDataDir(), { event: 'switch-settings-only-verified',
+      session: String(hubSessionId).slice(0, 8), ...observed.settingsOnlyVerification });
+    const updated = Object.keys(observed.fields).length ? sessionManager.updateSessionMeta(hubSessionId, observed.fields) : null;
     if (updated) {
       sessionStore.markDirty(hubSessionId, updated);
       sendToRenderer('session-updated', { session: updated });
     }
     if (observed.mismatch) {
+      codeAgentModels.appendModelLog(getHubDataDir(), { event: 'switch-mismatch', session: String(hubSessionId).slice(0, 8),
+        requested: observed.mismatch.requested, actual: observed.mismatch.actual });
       sendToRenderer('session-notice', { sessionId: hubSessionId, message: codeAgentModels.mismatchNotice(observed.mismatch), level: 'warning' });
     }
     if (codeAgentModels.recordObserved(getHubDataDir(), modelId)) {
@@ -959,6 +965,7 @@ transcriptTap.on('turn-complete', (ev) => {
     }
   }
   if (session && /^codeagent(?:-resume)?$/.test(String(session.kind || ''))) {
+    require('./core/codeagent-usage-menu').markUsageDirty(getHubDataDir(), session.codeagentPoolAccount || 'personal');
     void observeCodeAgentModel(hubSessionId, ev || {}, session.transcriptPath);
   }
   Promise.resolve(completionNotifier.handleTurnComplete(ev || {}, session)).catch((error) => {
@@ -2410,6 +2417,7 @@ require('./core/codeagent-commands-probe').commandStartup(getHubDataDir(), {
   hubVersion: require('./package.json').version, dataDirOverride: !!process.env.CLAUDE_HUB_DATA_DIR,
 });
 const sessionOperations = registerSessionIpc(ipcMain, {
+  app,
   ensureLaunchAuth: async (kind, opts) => {
     // Both checks are read-only; run them side by side. A login problem is
     // reported ahead of a config problem, as when they ran one after another.

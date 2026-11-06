@@ -305,7 +305,7 @@ test('opening the panel immediately paints cached data, refreshes, and retains o
   await panel.open({ key: 'personal', label: '个人账号' });
   assert.equal(body.innerHTML, oldHtml);
   assert.match(status.textContent, /连接中断/);
-  assert.deepEqual(requests[0], ['codeagent:usage-refresh', { key: 'personal', label: '个人账号' }]);
+  assert.deepEqual(requests[0], ['codeagent:usage-refresh', { key: 'personal', label: '个人账号', open: true }]);
   assert.equal(document.elements.filter(el => el.tagName === 'DIALOG').length, 1);
 });
 
@@ -329,7 +329,7 @@ test('clicking a quota row or pressing Enter opens the panel for that row accoun
   host.listeners.keydown({ type: 'keydown', key: 'Enter', target, preventDefault() {} });
   await new Promise(setImmediate);
   assert.equal(requests.length, 2);
-  assert.deepEqual(requests[0], ['codeagent:usage-refresh', { key: 'pool-example', label: '测试账号' }]);
+  assert.deepEqual(requests[0], ['codeagent:usage-refresh', { key: 'pool-example', label: '测试账号', open: true }]);
 });
 
 test('a late refresh for the previous account never overwrites a newly opened account', async () => {
@@ -375,9 +375,9 @@ test('quota IPC reads account defaults from local configuration once per cache w
   config('GLM-5.2');
   usage.recordUsage(fixture.dir, 'personal', { models: [{ name: 'GLM-5.2', day: { pct: 2 } }] }, { label: '个人账号' });
   const read = () => fixture.handlers.get('codeagent:usage')(null);
-  const first = read(); assert.equal(first.defaultModels.personal, 'GLM-5.2');
+  const first = read(); assert.equal(first.defaultModels.personal, '');
   config('DeepSeek-V4.1');
-  const cached = read(); assert.equal(cached.defaultModels.personal, 'GLM-5.2'); assert.equal(cached.defaultModels, first.defaultModels);
+  const cached = read(); assert.equal(cached.defaultModels.personal, ''); assert.equal(cached.defaultModels, first.defaultModels);
   await new Promise(setImmediate); assert.equal(reads, 0);
 });
 
@@ -487,12 +487,13 @@ test('picker timeout diagnoses only the menu and retains previous Token data and
   assert.equal(result.usage.modelsRead.diagnostic, true);
   const entry = usage.recordUsage(dir, 'personal', result.usage, { source: 'picker:launch', now: clock });
   assert.deepEqual(entry.models, old.models);
-  assert.equal(entry.modelsAt, 100);
+  assert.equal(entry.modelsAt, old.modelsAt);
+  assert.equal(entry.models[0].at, 100);
   assert.equal(entry.creditAt, 2500);
   assert.equal(entry.modelsRead.status, 'unrecognized');
   const nameOnly = usage.recordUsage(dir, 'personal', { models: [{ name: 'Incomplete' }] }, { now: 3000 });
   assert.deepEqual(nameOnly.models, old.models);
-  assert.equal(nameOnly.modelsAt, 100);
+  assert.equal(nameOnly.modelsAt, old.modelsAt);
   const diagnostic = fs.readFileSync(path.join(dir, 'logs', 'codeagent-usage-menu.log'), 'utf8');
   assert.doesNotMatch(diagnostic, /private prompt|private answer|Navigate/);
   const [header, ...rawLines] = diagnostic.split('\n').slice(0, -1);
@@ -655,12 +656,13 @@ function menuVm(file, extraRequire = {}, appended = '') {
 
 test('actual picker waits for the Day frame before selecting, with the original cursor movement preserved', async t => {
   const dir = tempData(t), writes = [];
-  let selected = false, vmFixture;
+  let selected = false, vmFixture, moved = false;
   const menu = complete => ['Select model', ...(complete ? REAL_USAGE : EARLY_USAGE),
     '   2. DeepSeek-V4.1-Flash', MENU_FOOTER];
-  const screen = { lines: async () => selected ? ['❯ ', '? for shortcuts'] : menu(vmFixture.state.clock >= 1240), dispose() {} };
+  const screen = { lines: async () => selected ? ['❯ ', '? for shortcuts'] : menu(vmFixture.state.clock >= 1240)
+    .map(line => moved ? line.replace(/^❯/, ' ').replace(/^   2\./, '❯  2.') : line), dispose() {} };
   vmFixture = menuVm('codeagent-model-picker.js', { globals: { testScreen: screen } }, '\nopenSessionScreen = async () => testScreen;');
-  const manager = { writeToSession: (_sid, key) => { writes.push([key, vmFixture.state.clock]); if (key === '\r') selected = true; } };
+  const manager = { writeToSession: (_sid, key) => { writes.push([key, vmFixture.state.clock]); if (key === '\x1b[B') moved = true; if (key === '\r') selected = true; } };
   const result = await vmFixture.api.pickModel({ manager, sid: 'fake-session', kind: 'codeagent', modelId: 'DeepSeek-V4.1-Flash', dataDir: dir,
     sendToPty: () => { throw new Error('menu already open'); } });
   assert.equal(result.ok, true);
@@ -692,8 +694,9 @@ test('a new Day snapshot updates model data, time and source after an incomplete
   assert.equal(first.models[0].factor, '0-1x');
   assert.match(usageDetailsHtml(first), /<td colspan="5">未读取<\/td>/);
   const second = usage.recordUsage(dir, 'personal', usage.parseCodeAgentUsageMenu(REAL_USAGE), { source: 'probe', now: 2 });
-  assert.equal(second.modelsAt, 2);
-  assert.equal(second.modelsSource, 'probe');
+  assert.equal(second.modelsAt, null);
+  assert.equal(second.modelsSource, null);
+  assert.equal(second.models[0].at, 2);
   assert.equal(second.modelsRead.status, 'read');
   assert.equal(second.models[0].day.used, '6.78M');
 });
@@ -711,7 +714,8 @@ test('actual picker timeout still selects normally, records diagnostics and reta
   assert.deepEqual(writes, [['\r', 2800]]); // 1500 ms usage wait, then the existing 300 ms selection pause
   const next = usage.recordUsage(dir, 'personal', result.usage, { source: 'picker:launch', now: fixture.state.clock });
   assert.deepEqual(next.models, old.models);
-  assert.equal(next.modelsAt, 1);
+  assert.equal(next.modelsAt, old.modelsAt);
+  assert.equal(next.models[0].at, 1);
   assert.equal(next.modelsRead.diagnostic, true);
   assert.match(fs.readFileSync(path.join(dir, 'logs', 'codeagent-usage-menu.log'), 'utf8'), /"source":"picker"/);
 });
@@ -723,7 +727,8 @@ test('screen recording sends only the menu section to diagnostics and leaves exi
     menuLines: usage.usageMenuLines(['secret previous message', ...EARLY_USAGE, MENU_FOOTER, 'secret following message']) });
   assert.equal(result.ok, true);
   const entry = usage.readUsage(fixture.dir).personal;
-  assert.equal(entry.modelsAt, 1);
+  assert.equal(entry.modelsAt, null);
+  assert.equal(entry.models[0].at, 1);
   assert.equal(entry.modelsRead.diagnostic, true);
   const raw = fs.readFileSync(path.join(fixture.dir, 'logs', 'codeagent-usage-menu.log'), 'utf8');
   assert.match(raw, /"source":"screen"/);
@@ -741,7 +746,8 @@ test('an unrecognized fresh probe is a visible failure, not success with preserv
   const result = await refresh(null, { key: 'personal' });
   assert.equal(result.ok, false);
   assert.equal(result.outcome, 'failed');
-  assert.equal(result.entry.modelsAt, 1);
+  assert.equal(result.entry.modelsAt, null);
+  assert.equal(result.entry.models[0].at, 1);
   assert.equal(result.entry.modelsRead.diagnostic, true);
   const second = await refresh(null, { key: 'personal' });
   assert.equal(second.outcome, 'skipped');
@@ -777,4 +783,145 @@ test('usage dialog and all its controls explicitly exclude window dragging', asy
   const close = document.elements.find(element => element.tagName === 'BUTTON' && element.textContent === '关闭');
   close.listeners.click();
   assert.equal(dialog.open, false);
+});
+
+test('partial model reads merge case-insensitively and retain other models, timestamps and full-table time', t => {
+  const dir = tempData(t), day = pct => ({ used: String(pct), total: '100', pct });
+  const full = usage.recordUsage(dir, 'personal', { modelsComplete: true, models: [{ name: 'Model-A', day: day(1) }, { name: 'Model-B', day: day(2) }] }, { now: 100, source: 'serve' });
+  const partial = usage.recordUsage(dir, 'personal', { models: [{ name: 'model-b', day: day(3) }] }, { now: 200, source: 'picker:switch' });
+  assert.deepEqual(partial.models.map(model => model.name), ['Model-A', 'model-b']);
+  assert.deepEqual(partial.models[0], full.models[0]); assert.equal(partial.models[1].at, 200);
+  assert.equal(partial.modelsAt, 100); assert.equal(partial.fullModelsAt, 100); assert.equal(partial.modelsRead.complete, false);
+  const rawServe = usage.recordUsage(dir, 'personal', { models: [{ name: 'Model-C', day: day(4) }] }, { now: 300, source: 'serve' });
+  assert.equal(rawServe.models.length, 3, 'source alone cannot certify a full table'); assert.equal(rawServe.fullModelsAt, 100);
+  const replacement = usage.recordUsage(dir, 'personal', { modelsComplete: true, models: [{ name: 'Model-C', day: day(5) }] }, { now: 400, source: 'probe' });
+  assert.deepEqual(replacement.models.map(model => model.name), ['Model-C']); assert.equal(replacement.fullModelsAt, 400);
+  assert.equal(replacement.modelsAt, 400); assert.equal(replacement.models[0].at, 400);
+  const firstPartial = usage.recordUsage(dir, 'pool-partial', { models: [{ name: 'Model-A', day: day(1) }] }, { now: 500 });
+  assert.equal(firstPartial.fullModelsAt, null); assert.match(usageDetailsHtml(firstPartial), /<h3>Token<\/h3><div class="ca-usage-table">/);
+});
+
+test('partial serve quota failure retains each missing model value and time, flags it and leaves the table dirty', t => {
+  const dir = tempData(t), first = servedRead(), id = first.models[0], other = 'Another-Model';
+  first.models.push(other); first.details.push({ id: other, load: '中负载' }); first.quotas[other] = first.quotas[id];
+  const old = usage.recordUsage(dir, 'personal', serve.toUsageSnapshot(first), { source: 'serve', now: 100 });
+  usage.markUsageDirty(dir, 'personal');
+  const partial = { ...first, quotas: { [id]: first.quotas[id] } };
+  const entry = usage.recordUsage(dir, 'personal', serve.toUsageSnapshot(partial), { source: 'serve', now: 200 });
+  const kept = usage.modelUsage(entry, other);
+  assert.deepEqual(kept.day, old.models[1].day); assert.equal(kept.at, 100); assert.equal(kept.quotaUnavailable, true);
+  assert.equal(usage.modelUsage(entry, id).at, 200); assert.equal(entry.fullModelsAt, 100);
+  assert.ok(entry.dirtyVersion > entry.cleanVersion); assert.equal(entry.modelsRead.status, 'partial');
+  const html = usageDetailsHtml(entry); assert.match(html, /Another-Model<small> · 额度暂时读不到/); assert.match(html, /35.44M \/ 400M/);
+  const repaired = usage.recordUsage(dir, 'personal', serve.toUsageSnapshot(first), { source: 'serve', now: 300 });
+  assert.equal(repaired.dirtyVersion, repaired.cleanVersion); assert.equal(usage.modelUsage(repaired, other).quotaUnavailable, undefined);
+});
+
+test('dirty versions persist and a reply during a full read cannot be cleared by that older read', t => {
+  const dir = tempData(t), snapshot = serve.toUsageSnapshot(servedRead());
+  usage.recordUsage(dir, 'personal', snapshot, { now: 100 }); usage.markUsageDirty(dir, 'personal');
+  const version = usage.readUsage(dir).personal.dirtyVersion;
+  usage.markUsageDirty(dir, 'personal');
+  const entry = usage.recordUsage(dir, 'personal', snapshot, { now: 200, cleanVersion: version });
+  assert.equal(entry.dirtyVersion, 2); assert.equal(entry.cleanVersion, 1);
+  assert.equal(JSON.parse(fs.readFileSync(usage.usageFile(dir), 'utf8')).accounts.personal.dirtyVersion, 2);
+  assert.equal(usage.readUsage(dir).personal.models[0].at, 200);
+});
+
+test('opening dirty, missing or expired usage refreshes once per account per minute; manual reads bypass that limit', async t => {
+  const dir = tempData(t), snapshot = serve.toUsageSnapshot(servedRead()), id = snapshot.models[0].name;
+  let clock = 1000000, release; const calls = [];
+  const service = usage.createUsageRefresher({ now: () => clock, read: key => usage.readUsage(dir)[key], probe: async key => {
+    calls.push(key); const cleanVersion = usage.readUsage(dir)[key]?.dirtyVersion || 0;
+    if (release) await release;
+    usage.recordUsage(dir, key, snapshot, { now: clock, source: 'serve', cleanVersion });
+  } });
+  usage.recordUsage(dir, 'personal', snapshot, { now: clock - 120000, source: 'serve' });
+  usage.markUsageDirty(dir, 'personal'); assert.deepEqual(calls, [], 'marking dirty never starts a read');
+  let finish; release = new Promise(resolve => { finish = resolve; });
+  const first = service.open('personal', { models: [id] }); assert.equal(service.open('personal'), first);
+  finish(); release = null; assert.equal((await first).outcome, 'read'); assert.deepEqual(calls, ['personal']);
+  assert.equal((await service.open('personal')).outcome, 'current');
+  usage.markUsageDirty(dir, 'personal'); clock += 59999;
+  assert.equal((await service.open('personal')).reason, '1 分钟内已刷新'); assert.equal(calls.length, 1);
+  assert.equal((await service.open('pool-account')).ok, true); assert.deepEqual(calls, ['personal', 'pool-account']);
+  clock++; assert.equal((await service.open('personal')).ok, true); assert.equal(calls.length, 3);
+  assert.equal((await service.open('personal', { force: true })).ok, true); assert.equal(calls.length, 4);
+  clock += 60000; assert.equal((await service.open('personal', { models: [id, 'missing-model'] })).ok, true); assert.equal(calls.length, 5);
+  clock += usage.CODEAGENT_SERVE_MAX_AGE_MS; assert.equal((await service.open('personal')).ok, true); assert.equal(calls.length, 6);
+});
+
+test('a partial quota read remains eligible for a serve retry after sixty seconds, without demanding screen fallback', async t => {
+  const dir = tempData(t), snapshot = serve.toUsageSnapshot(servedRead()); let clock = 1000000, calls = 0;
+  usage.recordUsage(dir, 'personal', snapshot, { now: clock - 120000 });
+  const read = { ...servedRead(), quotas: {} };
+  const service = usage.createUsageRefresher({ now: () => clock, read: key => usage.readUsage(dir)[key], probe: async key => {
+    calls++; usage.recordUsage(dir, key, serve.toUsageSnapshot(read), { now: clock, source: 'serve' });
+  } });
+  assert.equal((await service.open('personal', { force: true })).outcome, 'partial'); assert.equal(calls, 1);
+  assert.equal((await service.open('personal')).outcome, 'skipped');
+  clock += 60000; assert.equal((await service.open('personal')).outcome, 'partial'); assert.equal(calls, 2);
+  assert.equal(usage.readUsage(dir).personal.fullModelsAt, 880000);
+});
+
+test('real open IPC refreshes dirty usage, deduplicates opens and keeps manual reads and pool accounts independent', async t => {
+  let clock = 1000000, calls = 0; t.mock.method(Date, 'now', () => clock);
+  const fixture = ipcFixture(t, { serveRead: async () => { calls++; return servedRead(); }, menuRead: () => assert.fail('quota reads succeeded') });
+  const pool = require('../core/codeagent-pool'), key = 'abcdef12', cfg = pool.accountDir(fixture.dir, key);
+  fs.mkdirSync(cfg, { recursive: true }); fs.writeFileSync(path.join(pool.poolRoot(fixture.dir), 'pool.json'), JSON.stringify({ accounts: [{ id: key }] }));
+  fs.writeFileSync(path.join(cfg, '.credentials.json'), JSON.stringify({ idaasOAuth: { accountId: key, xAuthToken: 'synthetic', expiresAt: clock + 86400000 } }));
+  const read = payload => fixture.handlers.get('codeagent:usage-refresh')(null, payload);
+  usage.markUsageDirty(fixture.dir, 'personal');
+  const first = read({ key: 'personal', open: true }), second = read({ key: 'personal', open: true }); await Promise.all([first, second]); assert.equal(calls, 1);
+  assert.equal(usage.readUsage(fixture.dir).personal.cleanVersion, 1);
+  usage.markUsageDirty(fixture.dir, 'personal'); assert.equal(calls, 1);
+  assert.equal((await read({ key: 'personal', open: true })).outcome, 'skipped');
+  assert.equal((await read({ key, open: true })).outcome, 'read'); assert.equal(calls, 2);
+  assert.equal((await read({ key: 'personal', force: true })).outcome, 'read'); assert.equal(calls, 3);
+  assert.equal((await read({ key: 'personal', open: true })).outcome, 'current');
+  clock += usage.CODEAGENT_SERVE_MAX_AGE_MS;
+  assert.equal((await read({ key: 'personal', open: true })).outcome, 'read'); assert.equal(calls, 4);
+  assert.ok(fixture.events.some(([name]) => name === 'codeagent-usage-changed'));
+});
+
+test('the completion hook marks personal, pool and meeting-member usage dirty without reading quotas', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8').replace(/\r\n/g, '\n');
+  const mark = source.indexOf('.markUsageDirty(getHubDataDir(), session.codeagentPoolAccount');
+  const start = source.lastIndexOf("  if (session && /^codeagent(?:-resume)?$/.test(String(session.kind || ''))) {", mark);
+  const end = source.indexOf('\n  Promise.resolve(completionNotifier', start), calls = [];
+  assert.ok(start > 0 && end > start);
+  for (const session of [{ kind: 'codeagent' }, { kind: 'codeagent-resume', codeagentPoolAccount: 'pool-a' }, { kind: 'codeagent', codeagentPoolAccount: 'pool-b', meetingId: 'group' }, { kind: 'claude' }]) {
+    require('node:vm').runInNewContext(source.slice(start, end), { session, hubSessionId: 'synthetic', ev: {}, getHubDataDir: () => 'data', observeCodeAgentModel() {},
+      require: name => { assert.equal(name, './core/codeagent-usage-menu'); return { markUsageDirty: (_dir, key) => calls.push(key) }; } });
+  }
+  assert.deepEqual(calls, ['personal', 'pool-a', 'pool-b']);
+});
+
+test('the open usage panel updates cached rows and its manual button sends an unthrottled request', async () => {
+  const document = fakeDocument(), snapshot = serve.toUsageSnapshot(servedRead()); let entry = { ...snapshot, at: 100 }, calls = [];
+  const panel = createCodeAgentUsagePanel({ document, usageFor: () => entry, ipcRenderer: { invoke: async (_channel, payload) => {
+    calls.push(payload); return { ok: true, outcome: 'current', entry };
+  } } });
+  await panel.open({ key: 'personal' });
+  const body = document.elements.find(el => el.innerHTML?.includes('<h3>Credit</h3>'));
+  entry = { ...entry, models: [{ ...entry.models[0], day: { used: '99M', total: '400M' }, at: 200 }] }; panel.update();
+  assert.match(body.innerHTML, /99M \/ 400M/);
+  document.elements.find(el => el.textContent === '重新读取').listeners.click(); await new Promise(setImmediate);
+  assert.equal(calls[0].open, true); assert.equal(calls[1].force, true);
+});
+
+test('real card refresh treats missing quotas as partial success and never launches a hidden screen for them', async t => {
+  let calls = 0, clock = 1000000; t.mock.method(Date, 'now', () => clock);
+  const initial = servedRead(), id = initial.models[0], other = 'Another-Model';
+  initial.models.push(other); initial.details.push({ id: other }); initial.quotas[other] = initial.quotas[id];
+  const fixture = ipcFixture(t, { serveRead: async () => { calls++; return { ...initial, quotas: { [id]: initial.quotas[id] } }; },
+    menuRead: () => assert.fail('a missing quota must not open a hidden CLI') });
+  usage.recordUsage(fixture.dir, 'personal', serve.toUsageSnapshot(initial), { now: clock - 120000 });
+  usage.markUsageDirty(fixture.dir, 'personal');
+  const refresh = payload => fixture.handlers.get('codeagent:usage-refresh')(null, { key: 'personal', ...payload });
+  const first = await refresh({ open: true }); assert.equal(first.outcome, 'partial'); assert.equal(first.ok, true);
+  assert.equal(usage.modelUsage(first.entry, other).at, 880000); assert.ok(first.entry.dirtyVersion > first.entry.cleanVersion);
+  assert.equal((await refresh({ open: true })).outcome, 'skipped'); assert.equal(calls, 1);
+  assert.equal((await refresh({ force: true })).outcome, 'partial'); assert.equal(calls, 2);
+  clock += 60000; assert.equal((await refresh({ open: true })).outcome, 'partial'); assert.equal(calls, 3);
 });

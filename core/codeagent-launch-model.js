@@ -1,6 +1,6 @@
 'use strict';
 // 手动新建的 CodeAgent 会话启动时用哪个模型（2026-10-28 用户选 A）：
-//   - 这个号的模型清单是权威的（CodeAgent 自己的 enterpriseModelOptionsCache 或探测过的 /model 菜单）且只有 1 个：
+//   - 这个号的模型清单来自可靠后台探测，且只有 1 个：
 //     不开 /model 菜单，直接用（开菜单会让第一条消息卡住约 1 分钟，多数同事一个号一个模型）；
 //   - 有多个模型：选这个号上次在 Hub 里手动切到的模型（还在清单里才算），没有就选菜单第一个；
 //   - 清单未知：照旧选菜单第一个（2026-10-25 的做法）。
@@ -42,9 +42,9 @@ function rememberModel(dataDir, account, model, now = Date.now()) {
 
 // 返回 { open: false, reason } 表示不开菜单；{ open: true, model, reason } 表示开菜单选 model（first 为菜单第一个的占位）。
 // current：CodeAgent 这次启动会用的模型；currentNewer：它的配置文件比 Hub 记的「上次」改得晚。
-function chooseLaunchModel({ models, authoritative, last, first, current = '', currentNewer = false }) {
+function chooseLaunchModel({ models, authoritative, singleModelReliable = false, last, first, current = '', currentNewer = false }) {
   const list = Array.isArray(models) ? models.filter(Boolean) : [];
-  if (authoritative && list.length === 1) return { open: false, reason: 'single-model', model: list[0] };
+  if (authoritative && singleModelReliable && list.length === 1) return { open: false, reason: 'single-model', model: list[0] };
   if (authoritative && list.length > 1) {
     const remembered = current && list.find(m => eq(m, current));
     const hit = last && list.find(m => eq(m, last));

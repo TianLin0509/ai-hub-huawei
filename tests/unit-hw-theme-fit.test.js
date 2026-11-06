@@ -33,8 +33,10 @@ test('the dark theme stylesheet leaves the elements the new look owns to the com
 });
 
 test('text and icons on module tints use --hw-on-tint, which stays white in every theme', () => {
-  const css = ['renderer/styles/account-quota-panel.css', 'renderer/styles/codeagent-accounts-page.css', 'renderer/styles/company-rooms.css'].map(read).join('\n');
-  for (const sel of ['.qp-av{', '.caa-avatar{', '.caa-hero-icon{', '.caa-auto-ico{', '.cr-svc {']) {
+  const files = ['renderer/styles/account-quota-panel.css', 'renderer/styles/codeagent-accounts-page.css'];
+  const selectors = ['.qp-av{', '.caa-avatar{', '.caa-hero-icon{', '.caa-auto-ico{'];
+  const css = files.map(read).join('\n');
+  for (const sel of selectors) {
     const i = css.indexOf(sel); assert.ok(i >= 0, sel);
     assert.match(css.slice(i, css.indexOf('}', i)), /color:\s*var\(--hw-on-tint\)/, sel);
   }

@@ -8,7 +8,8 @@ const MODEL_LOAD_MAX_AGE_MS = 15 * 60 * 1000;
 function currentTurnModelLoad({ session, turn, isLatest, entry, now = Date.now() }) {
   if (!isLatest || !isCodeAgentKind(session?.kind) || turn?.role !== 'assistant'
       || turn.inherited || turn.searchReadonly || !turn.model) return null;
-  const at = entry?.modelsAt ?? entry?.at;
+  const model = modelUsage(entry, turn.model);
+  const at = model?.at ?? entry?.modelsAt ?? entry?.at;
   if (!Number.isFinite(at) || at > now || now - at > MODEL_LOAD_MAX_AGE_MS) return null;
   const active = sessionRuntimeIsActive(session, { now });
   const turnAt = turn.tsEnd || turn.ts;
@@ -16,7 +17,6 @@ function currentTurnModelLoad({ session, turn, isLatest, entry, now = Date.now()
   if (active && Number.isFinite(startedAt) && (!Number.isFinite(turn.ts) || turn.ts < startedAt)) return null;
   // 重开旧会话的最后一张卡也是历史；只给正在进行或刚结束的最新回复标当前读数。
   if (!active && (!Number.isFinite(turnAt) || turnAt > now || now - turnAt > MODEL_LOAD_MAX_AGE_MS)) return null;
-  const model = modelUsage(entry, turn.model);
   if (!['低负载', '中负载', '高负载'].includes(model?.load)) return null;
   return { text: model.load, at, expiresAt: Math.min(at + MODEL_LOAD_MAX_AGE_MS, active ? Infinity : turnAt + MODEL_LOAD_MAX_AGE_MS) };
 }

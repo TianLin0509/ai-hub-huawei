@@ -123,6 +123,8 @@ function listAccounts(dataDir, { activeCounts = {}, personalAccountId = '', now 
       // 号自己 settings.json 写的模型与严格判定的说明（账号即模型，号表和直查标「默认模型未知 / 写的不在清单里」）
       ...(() => { const written = readSettingsModel(dir, fsModule); const d = strictDefaultModel(written, configured.models, { authoritative: configured.authoritative }); return { configModel: written, ...(d.note ? { defaultNote: describeDefaultNote(d.note, written) } : {}) }; })(),
       modelsProbedAt: configured.probedAt || null, modelsSource: configured.probedSource || null,
+      modelsParserVersion: configured.probedParserVersion,
+      modelsProbeReliable: configured.probeReliable,
       routeSwitched: fileExists(path.join(dir, ROUTE_MARKER), fsModule),
       activeSessions: Number(activeCounts[a.id]) || 0,
       sameAsPersonal: !!(creds.accountId && personalAccountId && creds.accountId === personalAccountId),
@@ -158,14 +160,20 @@ function accountModels(dir, fsModule = fs, probedFile = null) {
     dataDir = path.dirname(path.dirname(path.dirname(dir))); key = path.basename(dir);
   }
   const menu = dataDir ? models.readMenuEntry(dataDir, key) : null;
-  const menuNewer = menu && (!probed || menu.seenAt >= (Date.parse(probed.at) || 0));
-  const lists = menuNewer ? [menu.models, probed?.models || [], configured.models] : [probed?.models || [], menu?.models || [], configured.models];
+  const reliable = !!(probed && (probed.source === 'serve' || probed.source === 'menu' && probed.parserVersion === models.MODEL_MENU_PARSER_VERSION));
+  const menuNewer = menu && (!reliable || menu.seenAt >= (Date.parse(probed.at) || 0));
+  // 升级前留下的读屏清单不再可信，但在一次成功读取替换它之前继续可用：只拿配置里的模型会把其余模型当成没权限，指定模型开会话直接失败。
+  // 它可能不全（旧版读屏读不到被折叠的模型），所以不算权威：清单外的模型不因此被拒绝。
+  const staleMenuProbe = !!probed && !reliable && probed.source === 'menu';
+  const lists = reliable ? [probed.models] : menuNewer ? [menu.models] : [probed?.models || [], configured.models];
   const union = [];
   for (const id of lists.flat()) if (!union.some(value => value.toLowerCase() === id.toLowerCase())) union.push(id);
   return { ...configured, models: union, defaultModel: probed ? probed.defaultModel : configured.defaultModel,
-    authoritative: !!(configured.authoritative || probed || menu?.models.length),
-    probedAt: menuNewer ? new Date(menu.seenAt).toISOString() : probed?.at || null,
-    probedSource: menuNewer ? 'menu' : probed?.source };
+    authoritative: !!(configured.authoritative || (probed && !staleMenuProbe) || menu?.models.length),
+    probedAt: reliable ? probed.at : menuNewer ? new Date(menu.seenAt).toISOString() : probed?.at || null,
+    probedSource: reliable ? probed.source : menuNewer ? 'menu' : probed?.source,
+    probedParserVersion: reliable ? probed.parserVersion : menuNewer ? menu.parserVersion : probed?.parserVersion,
+    probeReliable: reliable || !!menuNewer };
 }
 function personalModelsFile(dataDir) { return path.join(poolRoot(dataDir), 'personal-models.json'); }
 function probeCwd(dataDir) { return path.join(poolRoot(dataDir), 'probe-cwd'); }

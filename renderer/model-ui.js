@@ -305,8 +305,8 @@ function createModelUiController({
   function codeagentUsageSpan(entry, modelId) {
     if (!entry) return '';
     const usageMenu = require('../core/codeagent-usage-menu.js');
-    const hint = usageMenu.usageHint(usageMenu.modelUsage(entry, modelId));
-    return hint ? `<span class="codeagent-model-usage" data-level="${hint.level}" title="${escapeHtml(`读自 CodeAgent /model 菜单 · ${usageMenu.formatAge(Date.now() - entry.at)}`)}">${escapeHtml(hint.text)}</span>` : '';
+    const model = usageMenu.modelUsage(entry, modelId), hint = usageMenu.usageHint(model);
+    return hint ? `<span class="codeagent-model-usage" data-level="${hint.level}" title="${escapeHtml(`读自 CodeAgent /model 菜单 · ${usageMenu.formatAge(Date.now() - (model.at ?? entry.modelsAt ?? entry.at))}`)}">${escapeHtml(hint.text)}</span>` : '';
   }
 
   function renderModelPicker(menu, badgeEl, sessionId, message = null) {
@@ -314,7 +314,7 @@ function createModelUiController({
     const session = sessions.get(sessionId);
     const kind = session && session.kind ? session.kind : '';
     // CodeAgent：用打开菜单时取回的这个会话所在号的清单（showModelPicker → codeagent:session-models），取不到才用共用列表。
-    const ownList = session && Array.isArray(session._codeagentModelOptions) && session._codeagentModelOptions.length ? session._codeagentModelOptions : null;
+    const ownList = session && Array.isArray(session._codeagentModelOptions) ? session._codeagentModelOptions : null;
     const options = ownList || getModelOptions(require('../core/chatgpt-web-models').isChatgptWebModel(session?.currentModel?.id) ? 'chatgpt' : kind);
     const automaticCodeAgent = !!(session && session._codeagentAutomatic);
     const strategy = automaticCodeAgent ? null : modelSwitchStrategy(kind);
@@ -322,15 +322,34 @@ function createModelUiController({
     const hasExactCurrent = options.some(option => String(option.id).toLowerCase() === String(currentId).toLowerCase());
     menu.innerHTML = '';
     if (message) menuNote(menu, message.text, message.state);
+    if (/^codeagent(?:-resume)?$/.test(kind)) {
+      const catalog = session?._codeagentModelCatalog;
+      const state = catalog?.state || (options.length ? 'ready' : 'loading');
+      if (state === 'loading') menuNote(menu, '正在读取…', 'pending');
+      else if (catalog?.error || state === 'failed') {
+        menuNote(menu, `读取失败：${catalog.error || '未知错误'}`, 'warning');
+        const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'model-picker-item'; retry.textContent = '重新读取';
+        retry.addEventListener('click', async () => {
+          session._codeagentModelCatalog = { ...catalog, state: 'loading', error: '' };
+          renderModelPicker(menu, badgeEl, sessionId);
+          try { await ipcRenderer.invoke('codeagent-pool:probe', { id: session.codeagentPoolAccount || 'personal' }); await reloadCodeagentCatalog(sessionId); }
+          catch (error) {
+            session._codeagentModelCatalog = { ...catalog, state: 'failed', error: error.message };
+            renderModelPicker(menu, badgeEl, sessionId);
+          }
+        });
+        menu.appendChild(retry);
+      }
+    }
     if (options.length === 0) {
       const empty = document.createElement('div');
       empty.className = 'model-picker-empty';
-      empty.textContent = '该会话类型没有可用模型目录';
+      empty.textContent = /^codeagent(?:-resume)?$/.test(kind) ? '沿用 CLI 当前模型' : '该会话类型没有可用模型目录';
       menu.appendChild(empty);
       return;
     }
     if (automaticCodeAgent) {
-      menuNote(menu, 'ℹ 这是 Hub 自动建的会话（通道、助理、论坛或 AI 任务），固定用这个号自己的模型，不在会话中途切换。', 'warning');
+      menu.title = 'Hub 自动创建的会话使用账号自己的模型';
     } else if (!canSwitchInSession(kind)) {
       menuNote(menu, 'ℹ 该 CLI 暂不支持从 Hub 原地切换；请在新建会话时选择', 'warning');
     } else if (require('../core/chatgpt-web-models').isChatgptWebModel(currentId)) {
@@ -349,7 +368,7 @@ function createModelUiController({
     } else if (strategy === 'acp-native') {
       menuNote(menu,'阿里云套餐模型 · 选择后由原生 Harness 确认，再更新显示。');
     } else if (strategy === 'codeagent-picker') {
-      menuNote(menu, `${session && session._codeagentModelAccount === 'pool' ? '这个号池号' : (ownList ? '个人账号' : '本机 CodeAgent')}可用的模型 · 选择后 Hub 在 CodeAgent 的 /model 菜单里替你选中，几秒内生效，对话不中断；回答进行中不能切换。`);
+      menu.title = session?._codeagentModelCatalog?.message || '';
     } else if (strategy === 'agy-inline') {
       menuNote(menu, '当前 Google 账号的 Antigravity 模型 · 在 CLI 内原地切换，收到“Model set to”回执后更新显示。');
     } else if (strategy === 'codex-picker') {
@@ -418,7 +437,7 @@ function createModelUiController({
     const onDocClick = (e) => { if (!menu.contains(e.target)) closeModelPicker(); };
     // defer so the triggering click doesn't immediately close the menu
     setTimeoutFn(() => document.addEventListener('click', onDocClick), 0);
-    openModelPicker = { el: menu, badge: badgeEl, onDocClick };
+    openModelPicker = { el: menu, badge: badgeEl, onDocClick, sessionId };
     menuNote(menu, '正在刷新当前账号的模型目录…', 'pending');
     const session = sessions.get(sessionId);
     try {
@@ -428,6 +447,7 @@ function createModelUiController({
           session._codeagentModelOptions = Array.isArray(own.options) ? own.options : [];
           session._codeagentAutomatic = !!own.automatic;
           session._codeagentModelAccount = own.account || '';
+          session._codeagentModelCatalog = own.catalog || null;
         }
       }
       const web = require('../core/chatgpt-web-models').isChatgptWebModel(session?.currentModel?.id);
@@ -662,7 +682,9 @@ function createModelUiController({
         delete session._modelSwitchPending;
         delete current._modelSwitchPending;
         updateActiveModelChip();
-        renderModelPicker(menu, badgeEl, sessionId, { text: `✓ 已在 CodeAgent 里换成 ${result.model.displayName}，下一条回答起生效（回答后会核对实际模型）`, state: 'success' });
+        renderModelPicker(menu, badgeEl, sessionId, { text: result.mode === 'settings-only'
+          ? '已改这个会话的设置，下一条回答起生效（回答后核对实际模型）'
+          : `✓ 已在 CodeAgent 里换成 ${result.model.displayName}，下一条回答起生效（回答后会核对实际模型）`, state: 'success' });
         await sleep(900);
         if (openModelPicker && openModelPicker.el === menu) closeModelPicker();
         return { ok: true, model: current.currentModel };
@@ -912,6 +934,19 @@ function createModelUiController({
     } finally { endCommandScreen(sessionId, commandScreen); }
   }
 
+  async function reloadCodeagentCatalog(sessionId) {
+    const session = sessions.get(sessionId);
+    if (!session) return;
+    const own = await ipcRenderer.invoke('codeagent:session-models', { sessionId });
+    if (!own || own.error) throw new Error(own?.error || '模型清单读取失败');
+    session._codeagentModelOptions = Array.isArray(own.options) ? own.options : [];
+    session._codeagentModelCatalog = own.catalog || null;
+    if (openModelPicker?.sessionId === sessionId) {
+      renderModelPicker(openModelPicker.el, openModelPicker.badge, sessionId);
+      placeMenu(openModelPicker.el, openModelPicker.badge);
+    }
+  }
+
   function closeModelPicker() {
     if (!openModelPicker) return;
     document.removeEventListener('click', openModelPicker.onDocClick);
@@ -995,6 +1030,14 @@ function createModelUiController({
       if (openModelPicker?.el === menu) paint('目录刷新失败：'+error.message,'error');
     }
   }
+
+  ipcRenderer.on?.('codeagent-pool:changed', (_event, change) => {
+    if (change?.probing || !openModelPicker?.sessionId) return;
+    const session = sessions.get(openModelPicker.sessionId);
+    if (/^codeagent(?:-resume)?$/.test(String(session?.kind || ''))) {
+      void reloadCodeagentCatalog(openModelPicker.sessionId).catch(error => console.warn('[codeagent-models]', error.message));
+    }
+  });
 
   return {
     attachModelPickerHandler,

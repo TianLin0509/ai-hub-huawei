@@ -130,7 +130,7 @@ function parseModels(rows) {
 
 // 屏幕行 → { credit, models }；两样都认不出返回 null。
 function parseCodeAgentUsageMenu(screenLines) {
-  const rows = (Array.isArray(screenLines) ? screenLines : String(screenLines || '').split(/\r?\n/)).map(line => String(line || ''));
+  const rows = (Array.isArray(screenLines) ? screenLines : String(screenLines || '').split(/\r?\n/)).map(line => String(line || '').replace(/[\u2580-\u259f]/g, ''));
   let credit = null;
   const start = rows.findIndex(line => /Credit\s*用量/.test(line));
   // 从「Credit用量」标题往下几行找三档；没有标题（画面上半截被裁掉）时全屏找
@@ -221,6 +221,7 @@ async function readUsageMenu(lines, { readLines, timeoutMs, dataDir, source,
 const FILE = 'codeagent-usage.json';
 const cache = new Map(); // file → { mtimeMs, data }
 const CODEAGENT_SERVE_MAX_AGE_MS = 10 * 60 * 1000;
+const CODEAGENT_USAGE_OPEN_MIN_INTERVAL_MS = 60 * 1000;
 
 function usageFile(dataDir) { return path.join(dataDir, 'codeagent-pool', FILE); }
 
@@ -237,7 +238,25 @@ function readUsage(dataDir, { fsModule = fs } = {}) {
   return data;
 }
 
-function recordUsage(dataDir, key, usage, { label = '', source = '', now = Date.now(), fsModule = fs } = {}) {
+function writeUsage(dataDir, accounts, fsModule = fs) {
+  const file = usageFile(dataDir);
+  try {
+    fsModule.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.tmp`;
+    fsModule.writeFileSync(tmp, JSON.stringify({ version: 1, accounts }, null, 2), 'utf8');
+    fsModule.renameSync(tmp, file);
+    cache.set(file, { mtimeMs: fsModule.statSync(file).mtimeMs, data: accounts });
+  } catch { cache.set(file, { mtimeMs: -1, data: accounts }); /* 写不了只影响重启后的显示，内存里仍有 */ }
+}
+
+function markUsageDirty(dataDir, key) {
+  if (!dataDir || !key) return;
+  const accounts = { ...readUsage(dataDir) }, previous = accounts[key] || {};
+  accounts[key] = { ...previous, dirtyVersion: (previous.dirtyVersion || 0) + 1 };
+  writeUsage(dataDir, accounts);
+}
+
+function recordUsage(dataDir, key, usage, { label = '', source = '', now = Date.now(), fsModule = fs, cleanVersion } = {}) {
   if (!dataDir || !key || !usage || (!usage.credit && !(usage.models || []).length && !usage.modelsRead)) return null;
   const accounts = { ...readUsage(dataDir, { fsModule }) };
   const prev = accounts[key] || {};
@@ -261,22 +280,35 @@ function recordUsage(dataDir, key, usage, { label = '', source = '', now = Date.
   }
   // 只读到一半（例如画面上半截被裁、只有模型行）：没读到的部分沿用上一次
   const tokens = hasModelTokens(usage);
-  const entry = { credit: mergedCredit, models: tokens ? usage.models : hasModelTokens(prev) ? prev.models : (usage.models?.length ? usage.models : prev.models || []),
+  const complete = usage.modelsComplete === true && tokens;
+  const previousModels = (prev.models || []).map(model => model.day && !Number.isFinite(model.at)
+    ? { ...model, at: prev.modelsAt ?? prev.at } : model);
+  const models = complete ? [] : [...previousModels];
+  for (const model of usage.models || []) {
+    const index = models.findIndex(old => String(old.name).toLowerCase() === String(model.name).toLowerCase());
+    if (!model.day) {
+      if (model.quotaUnavailable) {
+        if (index < 0) models.push(model); else models[index] = { ...models[index], quotaUnavailable: true };
+      } else if (index < 0 && !tokens && !hasModelTokens(prev)) models.push(model);
+      continue;
+    }
+    const old = index < 0 ? {} : models[index];
+    const next = { ...old, ...model, hour: model.hour || old.hour || null, min: model.min || old.min || null, at: now };
+    delete next.quotaUnavailable;
+    if (index < 0) models.push(next); else models[index] = next;
+  }
+  const entry = { credit: mergedCredit, models,
     creditAt: usage.credit ? now : (prev.creditAt ?? prev.at),
     creditSource: usage.credit ? source : (prev.creditSource ?? prev.source),
-    modelsAt: tokens ? now : (hasModelTokens(prev) ? prev.modelsAt ?? prev.at : null),
-    modelsSource: tokens ? source : (hasModelTokens(prev) ? prev.modelsSource ?? prev.source : null),
-    modelsRead: { ...(usage.modelsRead || { status: tokens ? 'read' : 'unrecognized', diagnostic: false }), at: now, source },
+    modelsAt: complete ? now : (hasModelTokens(prev) ? prev.modelsAt !== undefined ? prev.modelsAt : prev.at : null),
+    modelsSource: complete ? source : (hasModelTokens(prev) ? prev.modelsSource !== undefined ? prev.modelsSource : prev.source : null),
+    fullModelsAt: complete ? now : prev.fullModelsAt ?? null,
+    dirtyVersion: prev.dirtyVersion || 0,
+    cleanVersion: complete ? cleanVersion ?? prev.dirtyVersion ?? 0 : prev.cleanVersion || 0,
+    modelsRead: { ...(usage.modelsRead || { status: tokens ? 'read' : 'unrecognized', diagnostic: false }), complete, at: now, source },
     label: label || prev.label || '', source, at: now };
   accounts[key] = entry;
-  const file = usageFile(dataDir);
-  try {
-    fsModule.mkdirSync(path.dirname(file), { recursive: true });
-    const tmp = `${file}.${process.pid}.tmp`;
-    fsModule.writeFileSync(tmp, JSON.stringify({ version: 1, accounts }, null, 2), 'utf8');
-    fsModule.renameSync(tmp, file);
-    cache.set(file, { mtimeMs: fsModule.statSync(file).mtimeMs, data: accounts });
-  } catch { cache.set(file, { mtimeMs: -1, data: accounts }); /* 写不了只影响重启后的显示，内存里仍有 */ }
+  writeUsage(dataDir, accounts, fsModule);
   return entry;
 }
 
@@ -334,7 +366,36 @@ function createUsageRefresher({ read, probe, now = Date.now }) {
     pending.set(key, task);
     return task;
   }
-  return { refresh, noteAttempt, nextRefreshAt };
+  function open(key, { models = [], force = false } = {}) {
+    if (pending.has(key)) return pending.get(key);
+    const before = read(key);
+    const needsRefresh = !Number.isFinite(before?.fullModelsAt) || now() - before.fullModelsAt >= CODEAGENT_SERVE_MAX_AGE_MS
+      || (before.dirtyVersion || 0) > (before.cleanVersion || 0)
+      || before.models?.some(model => model.quotaUnavailable)
+      || models.some(id => !modelUsage(before, id)?.day);
+    if (!force && !needsRefresh) return Promise.resolve({ ok: true, outcome: 'current', entry: before });
+    const last = attempts.get(key) ?? before?.fullModelsAt;
+    if (!force && Number.isFinite(last) && now() - last < CODEAGENT_USAGE_OPEN_MIN_INTERVAL_MS) {
+      return Promise.resolve({ ok: !errors.has(key), error: errors.get(key), outcome: 'skipped', reason: '1 分钟内已刷新', cached: true,
+        entry: before || null, nextRefreshAt: last + CODEAGENT_USAGE_OPEN_MIN_INTERVAL_MS });
+    }
+    noteAttempt(key);
+    const task = Promise.resolve().then(async () => {
+      try {
+        await probe(key);
+        const entry = read(key);
+        if (entry !== before && entry?.modelsRead?.status === 'partial') return { ok: true, outcome: 'partial', entry };
+        if (!entry || entry === before || !entry.modelsRead?.complete) throw new Error(entry?.modelsRead?.error || '本次未读到完整模型用量');
+        return { ok: true, outcome: 'read', entry };
+      } catch (error) {
+        errors.set(key, error.message);
+        return { ok: false, outcome: 'failed', reason: error.message, error: error.message, entry: read(key) || before || null };
+      } finally { pending.delete(key); }
+    }).then(result => ({ ...result, nextRefreshAt: attempts.get(key) + CODEAGENT_USAGE_OPEN_MIN_INTERVAL_MS }));
+    pending.set(key, task);
+    return task;
+  }
+  return { refresh, open, noteAttempt, nextRefreshAt };
 }
 
 // 模型下拉旁的灰字「今日 7.29% · 低负载 · 0x」和颜色档（≥80% 红、≥50% 橙）；没数据返回 null。
@@ -372,5 +433,5 @@ function formatAge(ms) {
   return m < 1 ? '刚刚' : m < 60 ? `${m} 分钟前` : m < 2880 ? `${Math.round(m / 60)} 小时前` : `${Math.round(m / 1440)} 天前`;
 }
 
-module.exports = { parseCodeAgentUsageMenu, recordUsage, readUsage, usageFile, modelUsage, usageHint, durationMinutes, formatMinutes, formatAge, displayCol, createUsageRefresher, CODEAGENT_SERVE_MAX_AGE_MS,
+module.exports = { parseCodeAgentUsageMenu, recordUsage, readUsage, usageFile, markUsageDirty, modelUsage, usageHint, durationMinutes, formatMinutes, formatAge, displayCol, createUsageRefresher, CODEAGENT_SERVE_MAX_AGE_MS, CODEAGENT_USAGE_OPEN_MIN_INTERVAL_MS,
   hasModelTokens, readUsageMenu, usageMenuLines, appendUsageDiagnostic, PICKER_USAGE_WAIT_MS, PROBE_USAGE_WAIT_MS, USAGE_LOG_MAX_BYTES };

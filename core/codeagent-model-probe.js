@@ -24,7 +24,8 @@ function readProbed(file) {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
     const models = (Array.isArray(raw.models) ? raw.models : []).map(cleanModelId).filter(Boolean);
     // source：serve = 经 CodeAgent serve 接口读的（core/codeagent-serve.js），menu = 读 /model 屏幕
-    return models.length ? { models, defaultModel: cleanModelId(raw.defaultModel), at: raw.at || null, source: raw.source || 'menu' } : null;
+    // Keep old model values usable while the caller refreshes stale menu evidence.
+    return models.length ? { models, defaultModel: cleanModelId(raw.defaultModel), at: raw.at || null, source: raw.source || 'menu', parserVersion: raw.parserVersion } : null;
   } catch { return null; }
 }
 
@@ -32,7 +33,7 @@ function writeProbed(file, result) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify({ schema: 1, models: result.models, defaultModel: result.defaultModel || '', at: new Date().toISOString(),
-    source: result.source || 'menu' }, null, 2) + '\n', 'utf8');
+    source: result.source || 'menu', ...((result.source || 'menu') === 'menu' ? { parserVersion: require('./codeagent-models').MODEL_MENU_PARSER_VERSION } : {}) }, null, 2) + '\n', 'utf8');
   fs.renameSync(tmp, file);
 }
 
@@ -51,7 +52,7 @@ function modelsFromPicker(picker) {
 // command/configDirEnv 来自 core/codeagent-config.js；cwd 必须是一个下面没有 .cac 凭证的目录（否则会认成别的号）。
 async function probeModels({ command, configDirEnv, configDir, cwd, dataDir, env = process.env, ptyModule = null,
   accountKey, cliVersion, versionProbe, commandsOnly = false, probeTrace, forceCommands = false, commandsTimeoutMs = COMMANDS_ONLY_TIMEOUT_MS, modelTimeoutMs = MODEL_PROBE_TIMEOUT_MS,
-  readyTimeoutMs = 40000, menuTimeoutMs = 15000, exitTimeoutMs = 5000, cols = 160, rows = 60 } = {}) {
+  readyTimeoutMs = 40000, menuTimeoutMs = 15000, exitTimeoutMs = 5000, cols = 160, rows = 160 } = {}) {
   const trace = probeTrace || require('./codeagent-commands-probe').createCommandTrace(dataDir, { accountKey });
   let commandsAttempted = false, modelResult = null;
   if (!probeTrace && accountKey) { trace('requested', { hasSessionVersion: !!cliVersion }); trace('probe-start'); }
@@ -153,7 +154,7 @@ async function probeModels({ command, configDirEnv, configDir, cwd, dataDir, env
     write('/model');
     await sleep(500);
     write('\r');
-    const menu = await waitFor(lines => picker.parsePicker(lines), menuTimeoutMs);
+    const menu = await waitFor(lines => picker.parsePicker(lines, { allowNoCursor: true }), menuTimeoutMs);
     let result;
     if (!menu.hit) {
       require('./codeagent-models').appendModelLog(dataDir, { event: 'menu-cache-skipped', reason: 'unrecognized-menu' });
@@ -161,29 +162,28 @@ async function probeModels({ command, configDirEnv, configDir, cwd, dataDir, env
     }
     // 同一屏上的用量表顺手解析（只读屏，core/codeagent-usage-menu.js），调用方按这个号记快照
     let usage = null;
-    let parsed = menu.hit;
+    let parsed = menu.hit, menuLines = menu.lines;
     try {
       if (!menu.hit) throw new Error('menu-unavailable');
       const menuUsage = require('./codeagent-usage-menu');
-      const read = await guarded(menuUsage.readUsageMenu(menu.lines, { readLines,
+      const read = await guarded(menuUsage.readUsageMenu(picker.modelMenuLines(menu.lines), { readLines: async () => picker.modelMenuLines(await readLines()),
         timeoutMs: menuUsage.PROBE_USAGE_WAIT_MS, dataDir, source: 'probe' }));
       usage = read.usage;
-      parsed = picker.parsePicker(read.lines) || parsed;
+      menuLines = read.lines;
+      parsed = picker.parsePicker(read.lines, { allowNoCursor: true }) || parsed;
     } catch { usage = null; }
     if (timedOut) throw new Error('timeout');
-    if (parsed && !parsed.complete) {
-      require('./codeagent-models').appendModelLog(dataDir, { event: 'menu-cache-skipped', reason: parsed.incompleteReason, rows: parsed.rows.length });
-      result = { ok: false, error: '模型菜单未完整显示，已保留上次清单，请展开完整菜单后重试', ...(usage ? { usage } : {}) };
-    }
-    if (parsed?.complete) {
-      const models = modelsFromPicker(parsed);
-      result = models.models.length ? { ok: true, ...models, menuComplete: true, ...(usage ? { usage } : {}) }
-        : { ok: false, error: '模型菜单是空的' };
+    if (parsed) {
+      const collected = await guarded(picker.collectModelMenu({ lines: menuLines, readLines, write, revision: () => screenRevision, pause: sleep, now: Date.now }));
+      require('./codeagent-models').appendModelLog(dataDir, { event: 'menu-scroll', ok: collected.ok, steps: collected.steps,
+        reason: collected.reason, atNumber: collected.atNumber });
+      result = collected.ok ? { ...collected, usage: { ...usage, ...collected.usage, credit: collected.usage?.credit || usage?.credit || null, models: collected.usage?.models || usage?.models || [] } }
+        : { ok: false, error: `模型菜单未完整读取：${collected.reason}`, ...(usage ? { usage } : {}) };
     }
     if (!result.ok && !accountKey) return result;
     modelResult = result;
-    write('\x1b');
-    await sleep(300);
+    const closed = await guarded(picker.closeModelMenu({ readLines, write, pause: sleep, now: Date.now }));
+    if (!closed.ok) return { ...result, commandsProbe: { ok: false, reason: closed.reason } };
     if (accountKey) result.commandsProbe = await readCommands(ready.lines);
     if (timedOut) throw new Error('timeout');
     return result;

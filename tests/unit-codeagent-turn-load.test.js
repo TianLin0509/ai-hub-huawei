@@ -38,6 +38,12 @@ test('Token model observation time wins over a newer Credit-only update time', (
   assert.equal(hint({ entry: { ...entry, at: NOW, modelsAt: NOW - MODEL_LOAD_MAX_AGE_MS - 1 } }), null);
 });
 
+test('individual model timestamps keep partial reads from refreshing other model loads', () => {
+  const stale = NOW - MODEL_LOAD_MAX_AGE_MS - 1;
+  assert.equal(hint({ entry: { at: NOW, modelsAt: NOW, models: [{ name: turn.model, load: '低负载', at: stale }] } }), null);
+  assert.equal(hint({ entry: { at: NOW, modelsAt: stale, models: [{ name: turn.model, load: '中负载', at: NOW - 1 }] } }).text, '中负载');
+});
+
 test('historical, inherited, read-only, user and non-CodeAgent cards never display current model load', () => {
   assert.equal(hint({ isLatest: false }), null);
   assert.equal(hint({ turn: { ...turn, tsEnd: NOW - MODEL_LOAD_MAX_AGE_MS - 1 } }), null);

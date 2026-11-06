@@ -232,19 +232,22 @@ function toUsageSnapshot(read) {
       const key = WINDOW_KEY[q.type];
       if (key && q.total > 0) out[key] = { used: tokens(q.used), total: tokens(q.total), pct: pctOf(q.used, q.total) };
     }
+    if (!out.day) out.quotaUnavailable = true;
     return out;
   });
   const hasCredit = Object.keys(credit).length > 0;
   if (!hasCredit && !models.length) return null;
-  return { credit: hasCredit ? { monthly: credit.monthly || null, busyDay: credit.busyDay || null, idleDay: credit.idleDay || null,
+  return { modelsComplete: !!read.models?.length && read.models.every(id => models.some(model => model.name === id && model.day)),
+    ...(models.some(model => model.quotaUnavailable) ? { modelsRead: { status: 'partial', diagnostic: false } } : {}),
+    credit: hasCredit ? { monthly: credit.monthly || null, busyDay: credit.busyDay || null, idleDay: credit.idleDay || null,
     idleDiscountIn: null, idleDiscount: discount ? `${discount[1]}折` : null } : null, models };
 }
 
-// AI_HUB_CODEAGENT_SERVE=1 强制打开、=0 强制关掉。启动选模型时「只传 --model、不开 /model」也跟这个开关走。
+// 模型目录和额度默认走本机临时 serve；环境变量 =0 仍可关闭。
 function serveEnabled(dataDir, env = process.env) {
   const flag = env.AI_HUB_CODEAGENT_SERVE;
   if (flag === '0' || flag === '1') return flag === '1';
-  try { return require('./edition-channel').wasUnlocked(dataDir); } catch { return false; }
+  return true;
 }
 
 // Hub 退出时调用：不再起新的，并同步结束正在跑的（进程脱离父进程时再按端口结束）。同步是因为退出流程不会等异步的清理。

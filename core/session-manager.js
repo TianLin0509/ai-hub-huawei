@@ -1862,14 +1862,14 @@ class SessionManager extends EventEmitter {
       try {
         const launchModel = require('./codeagent-launch-model');
         const known = codeagentPool
-          ? { models: codeagentPool.account.models || [], authoritative: !!codeagentPool.account.modelsAuthoritative }
+          ? { models: codeagentPool.account.models || [], authoritative: !!codeagentPool.account.modelsAuthoritative, probeReliable: !!codeagentPool.account.modelsProbeReliable }
           : require('./codeagent-pool').accountModels(codeagentConfig.configDir, undefined, require('./codeagent-pool').personalModelsFile(getHubDataDir()));
         // CodeAgent 这次启动会用的模型：号池号是启动前同步定下的，个人号是它配置目录里记着的。
         const current = (codeagentPool && codeagentPool.model) || require('./codeagent-pool').readSettingsModel(codeagentConfig.configDir);
         const last = launchModel.lastEntry(getHubDataDir(), codeagentPool ? codeagentPool.account.id : 'personal');
         let settingsAt = 0;
         try { settingsAt = fs.statSync(path.join(codeagentConfig.configDir, 'settings.json')).mtimeMs; } catch { settingsAt = 0; }
-        const choice = launchModel.chooseLaunchModel({ models: known.models, authoritative: known.authoritative, current, currentNewer: settingsAt > last.at,
+        const choice = launchModel.chooseLaunchModel({ models: known.models, authoritative: known.authoritative, singleModelReliable: known.probeReliable, current, currentNewer: settingsAt > last.at,
           last: last.model, first: codeagentPickTarget });
         if (!choice.open) {
           codeagentPickFirst = false;

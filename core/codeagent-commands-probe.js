@@ -334,6 +334,6 @@ function createCommandsProbeScheduler({ dataDir, getVersion, probe, now = Date.n
   };
 }
 
-module.exports = { parseCommandRow, suggestionRegion, commandFrame, commandsNeedProbe, writeCommandCache, commandDiagnostic,
+module.exports = { parseCommandRow, mainColumn, suggestionRegion, commandFrame, commandsNeedProbe, writeCommandCache, commandDiagnostic,
   createCommandTrace, commandStartup, recoveredCommandState, queueCommandsProbe, collectCommands, probeCommands, createCommandsProbeScheduler,
   COMMAND_QUEUE_WAIT_MS, COMMAND_VERSION_WAIT_MS, COMMAND_PROBE_RETRY_MS, COMMAND_MAX_ITEMS, COMMAND_MAX_SCREENS, COMMAND_FRAME_WAIT_MS, COMMAND_SLASH_WAIT_MS, COMMAND_LIST_EMPTY_WAIT_MS, COMMAND_LOG_MAX_BYTES };

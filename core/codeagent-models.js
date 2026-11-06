@@ -269,29 +269,55 @@ function iconModelId(session) {
 // - 实际模型和请求的不是同一家（或认不出是同一家）：说明请求没生效（常见原因是没有该模型权限），
 //   当前模型改成实际的那个，恢复会话时也按它启动；原来请求的记在 codeagentRequestedModel；
 // - 同一家（例如 Auto 在大小模型间分流）：保留用户选的，避免 Auto 被钉成某个具体模型。
-function observeModel(session, value) {
+const pendingModelSwitches = new Map();
+const pendingSettingsOnly = new Map();
+function expectModelSwitch(sessionId, modelId, { settingsOnly = false } = {}) {
+  if (!sessionId) return;
+  const id = normalizeModel(modelId);
+  if (settingsOnly) pendingSettingsOnly.set(sessionId, { model: id, after: Date.now() });
+  else pendingSettingsOnly.delete(sessionId);
+  if (/(?:^|[-_.])auto(?:$|[-_.])/i.test(id)) pendingModelSwitches.delete(sessionId);
+  else pendingModelSwitches.set(sessionId, { model: id, after: Date.now() });
+}
+
+function observeModel(session, value, { at = Date.now() } = {}) {
   if (!isCodeAgentSession(session)) return null;
   const id = clean(value);
   if (!isSafeModelId(id)) return null;
+  const sessionId = session.id || session.hubId;
+  const pending = pendingModelSwitches.get(sessionId);
+  const settingsOnly = pendingSettingsOnly.get(sessionId);
+  // A local /model stop hook can still read the previous answer. It cannot
+  // consume this request or replace the model before the next real answer.
+  if (pending && (!Number.isFinite(at) || at < pending.after)) return null;
+  if (settingsOnly && (!Number.isFinite(at) || at < settingsOnly.after)) return null;
+  const settingsOnlyVerification = settingsOnly ? { requested: settingsOnly.model, actual: id,
+    result: settingsOnly.model.toLowerCase() === normalizeModel(id).toLowerCase() ? 'match' : 'mismatch' } : null;
+  pendingSettingsOnly.delete(sessionId);
   const current = session.currentModel && typeof session.currentModel === 'object' ? session.currentModel : {};
   const currentId = clean(current.id);
   const fields = {};
   if (session.codeagentActualModel !== id) fields.codeagentActualModel = id;
   const sameId = currentId.toLowerCase() === id.toLowerCase();
   const sameFamily = !!modelFamily(id) && modelFamily(id) === modelFamily(currentId);
+  const expected = pending?.model;
+  pendingModelSwitches.delete(sessionId);
+  const switchMismatch = expected && expected.toLowerCase() !== normalizeModel(id).toLowerCase();
   let mismatch = null;
-  if (!sameId && !sameFamily) {
+  if (switchMismatch || !sameId && !sameFamily) {
     fields.currentModel = { id, displayName: modelLabel(id) };
-    if (currentId) {
-      fields.codeagentRequestedModel = currentId;
-      mismatch = { requested: currentId, requestedLabel: modelLabel(currentId), actual: id };
+    const requested = switchMismatch ? expected : currentId;
+    if (requested) {
+      fields.codeagentRequestedModel = requested;
+      mismatch = { requested, requestedLabel: modelLabel(requested), actual: id, ...(switchMismatch ? { manualSwitch: true } : {}) };
     }
   }
-  return Object.keys(fields).length ? { fields, mismatch } : null;
+  return Object.keys(fields).length || settingsOnlyVerification ? { fields, mismatch, ...(settingsOnlyVerification ? { settingsOnlyVerification } : {}) } : null;
 }
 
 function mismatchNotice(mismatch) {
   if (!mismatch) return '';
+  if (mismatch.manualSwitch) return `模型切换没有生效，实际仍是 ${mismatch.actual}`;
   return `选的是 ${mismatch.requestedLabel}，CodeAgent 实际用的是 ${mismatch.actual}（可能没有所选模型的权限）。`
     + '界面已按实际模型显示，之后恢复这个会话也用它；新建会话时请在模型下拉里改选有权限的模型。';
 }
@@ -333,12 +359,22 @@ function recordObserved(dataDir, value, now = Date.now()) {
 // The legacy machine-wide codeagent-menu-models.json has no account identity.
 // Leave it untouched and ignore it rather than importing another account's menu.
 const MENU_FILE = 'codeagent-account-menu-models.json';
+// Only snapshots read after clipped-menu detection was fixed are complete evidence.
+const MODEL_MENU_PARSER_VERSION = 2;
+const staleMenusLogged = new Set();
 
 function readMenuEntry(dataDir, key = 'personal') {
   if (!dataDir) return null;
   try {
     const raw = JSON.parse(require('./read-scope').readTextInScope(path.join(dataDir, MENU_FILE)));
     const entry = raw?.accounts?.[key];
+    if (entry && entry.parserVersion !== MODEL_MENU_PARSER_VERSION) {
+      const logKey = `${path.resolve(dataDir)}\0${key}`;
+      if (!staleMenusLogged.has(logKey)) {
+        if (appendModelLog(dataDir, { event: 'menu-cache-stale-ignored', account: key, parserVersion: entry.parserVersion ?? 'missing' })) staleMenusLogged.add(logKey);
+      }
+      return null;
+    }
     return entry?.complete === true && Array.isArray(entry.models) ? { ...entry, models: entry.models.map(clean).filter(isSafeModelId) } : null;
   } catch { return null; }
 }
@@ -356,8 +392,9 @@ function recordMenu(dataDir, labels, { key = 'personal', complete = false, now =
   fs.mkdirSync(dataDir, { recursive: true });
   const file = path.join(dataDir, MENU_FILE);
   const tmp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify({ schema: 2, accounts: { ...accounts, [key]: { models, seenAt: now, complete: true } } }, null, 2) + '\n', 'utf8');
+  fs.writeFileSync(tmp, JSON.stringify({ schema: 2, accounts: { ...accounts, [key]: { models, seenAt: now, complete: true, parserVersion: MODEL_MENU_PARSER_VERSION } } }, null, 2) + '\n', 'utf8');
   fs.renameSync(tmp, file);
+  staleMenusLogged.delete(`${path.resolve(dataDir)}\0${key}`);
   return true;
 }
 
@@ -420,43 +457,28 @@ function appendModelLog(dataDir, fields, now = new Date()) {
   } catch { return false; }
 }
 
-// 新建会话和模型菜单用的列表：已知的在前，本机 CodeAgent 配置里的其次，回答里见过的其他模型在后。
-// 有账号清单时只列清单里的模型（不再塞内置的两个：没有 MiniMax 权限的同事不该看到它）；
-// 没有清单时沿用内置 + 配置里找到的名字。回答里实际见过的模型都附在最后。
-function modelOptions(dataDir, { configDir = null, fsModule = fs, accountKey = 'personal', probedModels = [] } = {}) {
-  const configured = configuredModels(configDir, fsModule);
-  const options = configured.authoritative ? [] : KNOWN.map(option => ({ ...option, source: 'hub' }));
-  for (const id of configured.models) {
-    if (options.some(option => option.id.toLowerCase() === id.toLowerCase())) continue;
-    options.push({ id, label: modelLabel(id), source: configured.authoritative ? 'account' : 'configured',
-      description: configured.authoritative ? `${id} · 本机 CodeAgent 账号可用的模型` : `${id} · 本机 CodeAgent 配置里有这个模型` });
-  }
-  for (const entry of dataDir ? readObserved(dataDir) : []) {
-    if (options.some(option => option.id.toLowerCase() === entry.id.toLowerCase())) continue;
-    options.push({ id: entry.id, label: modelLabel(entry.id), source: 'observed', description: `${entry.id} · 本机 CodeAgent 实际用过` });
-  }
+function readModelCatalog(dataDir, { configDir = null, accountKey = 'personal' } = {}) {
+  if (!dataDir) return null;
+  const probe = require('./codeagent-model-probe');
+  const file = accountKey === 'personal' ? path.join(dataDir, 'codeagent-pool', 'personal-models.json') : configDir && path.join(configDir, probe.MODELS_FILE);
+  const entry = file ? probe.readProbed(file) : null;
+  if (entry && (entry.source === 'serve' || entry.source === 'menu' && entry.parserVersion === MODEL_MENU_PARSER_VERSION)) return entry;
+  const menu = readMenuEntry(dataDir, accountKey);
+  return menu ? { models: menu.models, at: new Date(menu.seenAt).toISOString(), source: 'menu' } : null;
+}
+
+// 目录只来自成功的账号读取；KNOWN 仅供 modelLabel 取显示名，不冒充权限。
+function modelOptions(dataDir, { configDir = null, accountKey = 'personal' } = {}) {
+  const catalog = readModelCatalog(dataDir, { configDir, accountKey });
+  if (!catalog) return [];
+  const configured = configuredModels(configDir);
+  const options = catalog.models.filter(isSafeModelId).map(id => ({ id, label: modelLabel(id), source: catalog.source }));
   // Auto 路由背后的具体模型不能直接选：2026-10-16 公司真机 `--model GLM-5.2-WX` 报 401「未识别到用户认证信息」，
   // 只有 GLM-5.2-WX-Auto 能用。它出现在回答记录（实际模型）和分档配置里，列出来用户一选就失败，所以有「名字-Auto」时去掉它。
   // 账号清单里明确列出的照留（那是 CodeAgent 自己说这个账号能选的）。
   const ids = new Set(options.map(option => option.id.toLowerCase()));
-  const listed = options.filter(option => option.source === 'account' || !ids.has(option.id.toLowerCase() + '-auto'));
-  // 已确认菜单优先；配置中尚未确认的模型保留在末尾，菜单额外选项照常补上。
-  const menu = readMenu(dataDir, accountKey);
-  if (!menu.length && !probedModels.length) return listed;
-  const inMenu = new Set(menu.map(id => id.toLowerCase()));
-  const configuredIds = new Set(configured.models.map(id => id.toLowerCase()));
-  const kept = listed.filter(option => inMenu.has(option.id.toLowerCase()));
-  for (const id of [...menu, ...probedModels].filter(isSafeModelId)) {
-    if (kept.some(option => option.id.toLowerCase() === id.toLowerCase())) continue;
-    if (menu.length && configuredIds.has(id.toLowerCase()) && !inMenu.has(id.toLowerCase())) continue;
-    kept.push({ id, label: modelLabel(id), source: inMenu.has(id.toLowerCase()) ? 'menu' : 'account',
-      description: `${id} · ${inMenu.has(id.toLowerCase()) ? 'CodeAgent 模型菜单里有' : '账号模型探测清单中有'}` });
-  }
-  for (const option of listed) {
-    if (!configuredIds.has(option.id.toLowerCase()) || kept.some(item => item.id.toLowerCase() === option.id.toLowerCase())) continue;
-    kept.push({ ...option, description: `${option.description} · 未在 CodeAgent 菜单中确认` });
-  }
-  return kept;
+  return options.filter(option => configured.authoritative && configured.models.some(id => id.toLowerCase() === option.id.toLowerCase())
+    || !ids.has(option.id.toLowerCase() + '-auto'));
 }
 
 module.exports = {
@@ -473,6 +495,7 @@ module.exports = {
   isCodeAgentSession,
   dormantDisplayModel,
   observeModel,
+  expectModelSwitch,
   mismatchNotice,
   configuredModels,
   scanModelNamesInText,
@@ -481,8 +504,10 @@ module.exports = {
   readMenu,
   readMenuEntry,
   recordMenu,
+  MODEL_MENU_PARSER_VERSION,
   appendModelLog,
   modelOptions,
+  readModelCatalog,
   contextWindowFor,
   contextFromUsage,
   DEFAULT_CONTEXT_WINDOW,

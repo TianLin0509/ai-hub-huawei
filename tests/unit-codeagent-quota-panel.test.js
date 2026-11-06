@@ -126,11 +126,11 @@ test('invalid request or account fails before starting any refresh', async () =>
   }
 });
 
-function ipcFixture(t, { serveRead = async () => servedRead(), enabled = '1', now = Date.now } = {}) {
+function ipcFixture(t, { serveRead = async () => servedRead(), enabled = '1', now = Date.now, app = null, autoMs = 0 } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-quota-panel-'));
   const personal = path.join(dir, 'fake-cli');
   const vars = { CLAUDE_HUB_DATA_DIR: dir, AI_HUB_CODEAGENT_CONFIG_DIR: personal,
-    AI_HUB_CODEAGENT_SERVE: enabled, CLAUDE_HUB_CODEAGENT_STARTUP_PROBE: '0' };
+    AI_HUB_CODEAGENT_SERVE: enabled, CLAUDE_HUB_CODEAGENT_STARTUP_PROBE: '0', CLAUDE_HUB_CODEAGENT_QUOTA_AUTO_MS: String(autoMs) };
   const previous = Object.fromEntries(Object.keys(vars).map(key => [key, process.env[key]]));
   Object.assign(process.env, vars);
   t.after(() => {
@@ -158,6 +158,7 @@ function ipcFixture(t, { serveRead = async () => servedRead(), enabled = '1', no
   const handlers = new Map(), events = [], calls = [];
   let menus = 0;
   require('../main/ipc/session-handlers').registerSessionIpc({ handle: (name, fn) => handlers.set(name, fn), on() {} }, {
+    app,
     sessionManager: { codeagentPoolActiveCounts: () => ({}), getAllSessions: () => [{ kind: 'codeagent', status: 'idle' }] },
     sendToRenderer: (...args) => events.push(args),
     codeagentServeRead: async args => { calls.push(args); return serveRead(args); },
@@ -264,6 +265,137 @@ test('real IPC overlapping refreshes share each account and serialize the probe 
   const results = await Promise.all([fixture.snapshot({ refresh: true }), fixture.snapshot({ refresh: true })]);
   assert.equal(fixture.calls.length, 2); assert.equal(maximum, 1);
   assert.ok(results.every(result => result.rows.every(row => row.refresh.status === 'updated')));
+});
+
+function timerFixture(t) {
+  const auto = require('../core/codeagent-quota-auto-refresh');
+  const create = auto.createQuotaAutoRefresh, timers = [], instances = [];
+  t.mock.method(auto, 'createQuotaAutoRefresh', options => {
+    const instance = create({ ...options, freeBytes: () => 4e9,
+      setTimeoutFn: (fn, delay) => { const timer = { fn, delay }; timers.push(timer); return timer; },
+      clearTimeoutFn: timer => { const index = timers.indexOf(timer); if (index >= 0) timers.splice(index, 1); } });
+    instances.push(instance);
+    return instance;
+  });
+  t.after(() => instances.forEach(instance => instance.stop()));
+  return { timers, instances };
+}
+
+function tableRead() {
+  return { ...servedRead(), models: ['Example-A', 'Example-B'],
+    details: [{ id: 'Example-A' }, { id: 'Example-B' }],
+    quotas: { 'Example-A': [{ type: 'TPD', used: 10, total: 100 }], 'Example-B': [{ type: 'TPD', used: 20, total: 100 }] } };
+}
+
+for (const first of ['timer', 'popup']) test(`real timer and popup share queued serve reads and publish once (${first} first)`, async t => {
+  const timer = timerFixture(t);
+  let release, started;
+  const held = new Promise(resolve => { release = resolve; });
+  const reading = new Promise(resolve => { started = resolve; });
+  let active = 0, maximum = 0;
+  const fixture = ipcFixture(t, { autoMs: 10, serveRead: async args => {
+    maximum = Math.max(maximum, ++active);
+    if (args.configDir === fixture.personal) { started(); await held; }
+    active--;
+    return tableRead();
+  } });
+  t.after(release);
+  const id = fixture.add();
+  for (const key of ['personal', id]) {
+    usage.recordUsage(fixture.dir, key, serve.toUsageSnapshot(tableRead()), { now: 1000, source: 'serve' });
+    usage.markUsageDirty(fixture.dir, key);
+  }
+  const open = () => fixture.handlers.get('codeagent:usage-refresh')(null, { key: 'personal', open: true, force: true });
+  let popup;
+  if (first === 'timer') { timer.timers.shift().fn(); await reading; popup = open(); }
+  else { popup = open(); await reading; timer.timers.shift().fn(); }
+  const sidebar = fixture.snapshot({ key: 'personal', refresh: true });
+  await new Promise(setImmediate);
+  assert.equal(fixture.calls.length, 1, 'queued and running reads for the same account must be shared');
+  release();
+  const [opened, side] = await Promise.all([popup, sidebar, timer.instances[0].whenIdle()]);
+  assert.equal(opened.ok, true); assert.equal(side.rows[0].refresh.status, 'updated');
+  assert.equal(fixture.calls.length, 2); assert.equal(maximum, 1, 'different accounts remain serial');
+  const cached = usage.readUsage(fixture.dir);
+  for (const key of ['personal', id]) {
+    assert.equal(cached[key].cleanVersion, cached[key].dirtyVersion);
+    assert.ok(cached[key].fullModelsAt > 1000);
+    assert.deepEqual(cached[key].models.map(model => model.name), ['Example-A', 'Example-B']);
+    assert.equal(fixture.events.filter(([event, data]) => event === 'codeagent-usage-changed' && data.key === key).length, 1);
+  }
+  assert.deepEqual(require('../core/codeagent-models').readModelCatalog(fixture.dir, { configDir: fixture.personal }).models, tableRead().models);
+  assert.equal((await fixture.handlers.get('codeagent:usage-refresh')(null, { key: 'personal', open: true })).outcome, 'current');
+  assert.equal(fixture.calls.length, 2, 'a timer read also satisfies a later popup open');
+  assert.equal(fixture.menus(), 0);
+});
+
+for (const partial of [false, true]) test(`timer quotas preserve a reply completed during the read (partial=${partial})`, async t => {
+  const timer = timerFixture(t);
+  let release, started;
+  const held = new Promise(resolve => { release = resolve; });
+  const reading = new Promise(resolve => { started = resolve; });
+  const fixture = ipcFixture(t, { autoMs: 10, serveRead: async args => {
+    if (args.configDir !== fixture.personal) return tableRead();
+    started(); await held;
+    const result = tableRead();
+    if (partial) delete result.quotas['Example-B'];
+    return result;
+  } });
+  t.after(release); fixture.add();
+  const saved = usage.recordUsage(fixture.dir, 'personal', serve.toUsageSnapshot(tableRead()), { now: 1000, source: 'serve' });
+  usage.markUsageDirty(fixture.dir, 'personal');
+  timer.timers.shift().fn(); await reading;
+  usage.markUsageDirty(fixture.dir, 'personal');
+  release(); await timer.instances[0].whenIdle();
+  const cached = usage.readUsage(fixture.dir).personal;
+  assert.equal(cached.dirtyVersion, 2); assert.equal(cached.cleanVersion, partial ? 0 : 1);
+  assert.deepEqual(cached.models[1].day, saved.models[1].day);
+  if (partial) {
+    assert.equal(cached.fullModelsAt, saved.fullModelsAt);
+    assert.equal(cached.models[1].at, saved.models[1].at); assert.equal(cached.models[1].quotaUnavailable, true);
+  } else {
+    assert.ok(cached.fullModelsAt > saved.fullModelsAt);
+    assert.ok(cached.models[1].at > saved.models[1].at);
+  }
+  const logs = fs.readFileSync(path.join(fixture.dir, 'logs', 'codeagent-model.log'), 'utf8').trim().split('\n');
+  assert.ok(logs.some(line => /event=serve-read\b/.test(line) && /account=personal\b/.test(line) && /reason=quota\b/.test(line)));
+  assert.equal((await fixture.handlers.get('codeagent:usage-refresh')(null, { key: 'personal', open: true })).outcome, 'skipped');
+  assert.equal(fixture.calls.length, 2); assert.equal(fixture.menus(), 0);
+});
+
+test('a manual popup refresh joins the same account while its sidebar read is still queued', async t => {
+  let release, started;
+  const held = new Promise(resolve => { release = resolve; });
+  const reading = new Promise(resolve => { started = resolve; });
+  const fixture = ipcFixture(t, { serveRead: async args => {
+    if (args.configDir !== fixture.personal) { started(); await held; }
+    return tableRead();
+  } });
+  t.after(release);
+  const id = fixture.add();
+  const poolRead = fixture.snapshot({ key: id, refresh: true });
+  await reading;
+  const sidebar = fixture.snapshot({ key: 'personal', refresh: true });
+  const popup = fixture.handlers.get('codeagent:usage-refresh')(null, { key: 'personal', force: true });
+  await new Promise(setImmediate);
+  assert.equal(fixture.calls.length, 1);
+  release();
+  const [, side, opened] = await Promise.all([poolRead, sidebar, popup]);
+  assert.equal(side.rows[0].refresh.status, 'updated'); assert.equal(opened.ok, true);
+  assert.equal(fixture.calls.length, 2, 'one pool read and one shared personal read');
+  assert.equal(fixture.events.filter(([event, data]) => event === 'codeagent-usage-changed' && data.key === 'personal').length, 1);
+});
+
+test('registered quota cleanup uses the supplied app and waits until will-quit', t => {
+  const timer = timerFixture(t), app = new (require('node:events').EventEmitter)();
+  let shutdowns = 0;
+  t.mock.method(serve, 'shutdownTempServes', () => { shutdowns++; });
+  ipcFixture(t, { app, autoMs: 10 });
+  assert.equal(timer.timers.length, 1);
+  app.emit('before-quit');
+  assert.equal(timer.timers.length, 1); assert.equal(shutdowns, 0);
+  app.emit('will-quit');
+  assert.equal(timer.timers.length, 0); assert.equal(shutdowns, 1);
 });
 
 test('CodeAgent creates a panel while company subscription quota remains closed even with native CLI kinds', () => {

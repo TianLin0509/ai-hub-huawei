@@ -24,18 +24,32 @@ const SESSION_ONLY_KEY = /(?:^|[\s·|])([a-z])\s+to\s+use\s+(?:this|for this)\s+
 
 const squash = value => String(value || '').toLowerCase().replace(/[^a-z0-9一-鿿]+/g, '');
 // 行里第一段（两个以上空格或「·」之前）是模型名，后面是说明。CodeAgent 在当前默认模型后面标「default ✓」。
-const rowLabel = text => String(text || '').split(/\s{2,}|\s+·\s+/)[0].replace(/\s*[✔✓]\s*$/, '').replace(/\s+default$/, '').trim();
+const rowLabel = text => String(text || '').replace(/[\u2580-\u259f]/g, '').split(/\s{2,}|\s+·\s+/)[0].replace(/\s*[✔✓]\s*$/, '').replace(/\s+default$/, '').trim();
 
 // 公司 CodeAgent 1.2615.02.01 的模型菜单（2026-10-16 公司真机 Q-1016-01 第 9 轮逐行原文，见单测）：
 //   「  Select model    …    ✕」、搜索框「⌕ Search…」、用量表、表头「模型名称  Credit消耗系数 …」、「  Built-in」、
 //   「  ❯  1. GLM-5.2-WX-Auto default ✓   0x  Day …」，底栏「Navigate ↑ ↓ | … | Select enter | Back esc」。
 // 账号只有一个可选模型时菜单只有一行：认出这个外框时一行也算菜单（以前至少要两行，11 次都判成菜单没出现）。
 const CODEAGENT_MENU_TITLE = /^\s*(?:[│┃]\s*)?(?:Select model|Switch model|选择模型|切换模型)\s*(?:[✕×]\s*)?(?:[│┃]\s*)?$/i;
-const CODEAGENT_MENU_FOOTER = /Navigate\s*↑\s*↓.*Select\s+enter.*Back\s+esc/i;
+const CODEAGENT_MENU_FOOTER = /Navigate\s*↑\s*↓.*(?:Select\s+enter.*Back\s+esc|Clear\s+esc.*Select\s+enter)/i;
 // 模型菜单的标题：公司 CodeAgent 与 Claude 替身都是「Select model」，旧版/汉化界面可能是「选择模型」「切换模型」。
 const MENU_TITLE = /Select model|Switch model|选择模型|切换模型/i;
 const MENU_HEADER = /模型名称.*(?:Token用量|Credit消耗系数)|Model\s+name.*(?:Token|Credit)/i;
 const SCROLLED_MENU = /(?:[↑↓]\s*\d+\s*(?:more|hidden)|\b\d+\s+more\s+(?:models|items)|scroll\s+(?:for|to see)\s+more|更多模型|[↑↓]\s*更多)/i;
+const SCROLLBAR_ROW = /[\u2580-\u259f]\s*$/;
+const MODEL_SEARCH_WAIT_MS = 1500;
+const MODEL_SCROLL_LIMIT = 60;
+const MODEL_FRAME_STABLE_MS = 320;
+const MODEL_COLLECT_TIMEOUT_MS = 45000;
+
+function modelMenuLines(lines) {
+  const screen = Array.isArray(lines) ? lines : String(lines || '').split(/\r?\n/);
+  const titleAt = screen.findLastIndex(line => MENU_TITLE.test(line));
+  const border = titleAt < 0 ? null : screen.slice(titleAt + 1).find(line => /^\s*╭[─━]+╮/.test(line));
+  return border ? screen.map(line => require('./codeagent-commands-probe').mainColumn(line, border.indexOf('╮') + 1)) : screen;
+}
+const searchText = lines => (modelMenuLines(lines).findLast(line => /⌕/.test(line)) || '').replace(/^.*⌕\s*/, '').replace(/\s*[│┃]\s*$/, '').trim();
+const searchEmpty = lines => !searchText(lines) || /^Search(?:…|\.\.\.)?$/i.test(searchText(lines));
 
 // 测试替身（真 Claude Code）的菜单里只有 Claude 的模型名：用 AI_HUB_CODEAGENT_PICKER_LABELS
 // （JSON：{ "MiniMax-M2.7": "Haiku" }）把 Hub 的模型名对到菜单里的名字。真 CodeAgent 不需要。
@@ -50,8 +64,8 @@ function pickerLabelFor(modelId, env = process.env) {
 
 // 解析屏幕上的模型菜单。认不出返回 null。
 // rows: [{ line, cursor, number|null, text, label }]，cursor 是光标所在行的下标。
-function parsePicker(lines, { requireTitle = false } = {}) {
-  const screen = Array.isArray(lines) ? lines : String(lines || '').split(/\r?\n/);
+function parsePicker(lines, { requireTitle = false, allowNoCursor = false } = {}) {
+  const screen = modelMenuLines(lines);
   const titleLine = screen.findLastIndex(line => CODEAGENT_MENU_TITLE.test(line));
   const headerLine = screen.findLastIndex(line => MENU_HEADER.test(line));
   const startLine = Math.max(titleLine, headerLine);
@@ -75,7 +89,7 @@ function parsePicker(lines, { requireTitle = false } = {}) {
       else runs.push([row]);
     }
     // 屏幕镜像里可能还留着菜单的旧画面（TUI 重绘没擦干净）：取最靠下、也就是最新的那一份。
-    rows = runs.filter(run => run.length >= minRows && run.some(r => r.cursor)).pop() || [];
+    rows = runs.filter(run => run.length >= minRows && (run.some(r => r.cursor) || allowNoCursor && codeagentFrame)).pop() || [];
   } else rows = [];
   // 没有编号的菜单：以光标行为准，向上下收集同一缩进、光标列为空白的相邻行。
   if (rows.length < minRows) {
@@ -102,22 +116,26 @@ function parsePicker(lines, { requireTitle = false } = {}) {
   // 2.1.0 发送被弹回）。Hub 自己刚打开菜单、正在读它时不要求（替身的重绘可能把标题挤出屏幕）。
   if (requireTitle && startLine < 0 && !screen.slice(Math.max(0, rows[0].line - 12), rows[0].line).some(line => MENU_TITLE.test(line))) return null;
   const cursor = rows.findIndex(row => row.cursor);
-  if (cursor < 0) return null;
+  if (cursor < 0 && !(allowNoCursor && codeagentFrame)) return null;
   const footer = screen.slice(rows[rows.length - 1].line + 1).join('\n');
   const sessionKey = (footer.match(SESSION_ONLY_KEY) || [])[1] || null;
-  const incompleteReason = !codeagentFrame ? 'missing-menu-boundary'
+  const incompleteReason = !searchEmpty(screen) ? 'filtered-menu' : !codeagentFrame ? 'missing-menu-boundary'
     : rows[0].number !== 1 ? 'missing-first-row'
       : rows.length !== numberedCount || rows.some((row, index) => row.number !== index + 1) ? 'nonconsecutive-rows'
-        : screen.slice(startLine + 1, footerLine).some(line => SCROLLED_MENU.test(line)) ? 'scroll-truncated'
+        : screen.slice(startLine + 1, footerLine).some(line => SCROLLED_MENU.test(line) || SCROLLBAR_ROW.test(line)) ? 'scroll-truncated'
           : rows.some(row => /(?:\.\.\.|…)$/.test(row.label)) ? 'truncated-label' : '';
-  return { rows, cursor, sessionKey, codeagentFrame, complete: !incompleteReason, incompleteReason };
+  const totalMatch = screen.slice(startLine + 1, footerLine >= 0 ? footerLine + 1 : undefined).join('\n')
+    .match(/\b(\d+)\s+(?:models|items)\b|(?:共|总计)\s*(\d+)\s*(?:个)?模型/i);
+  const total = totalMatch ? Number(totalMatch[1] || totalMatch[2]) : null;
+  const reason = !incompleteReason && total && total !== rows.length ? 'scroll-truncated' : incompleteReason;
+  return { rows, cursor, sessionKey, codeagentFrame, complete: !reason, incompleteReason: reason, total };
 }
 
 // 菜单存在与“能解析选项”是两件事。Select model 来自公司用户报告及
 // 2026-10-14 Claude 替身实录；不能把未知布局当成菜单已经关闭。
 function modelDialogVisible(lines) {
   const text = (Array.isArray(lines) ? lines : String(lines || '').split(/\r?\n/)).join('\n');
-  return !!parsePicker(lines, { requireTitle: true }) || /^\s*(?:[│┃]\s*)?Select model\s*(?:[✕×]\s*)?(?:[│┃])?\s*$/im.test(text)
+  return !!parsePicker(lines, { requireTitle: true, allowNoCursor: true }) || /^\s*(?:[│┃]\s*)?Select model\s*(?:[✕×]\s*)?(?:[│┃])?\s*$/im.test(text)
     || !!require('./cli-model-command').parseClaudeModelSwitchConfirmation(text);
 }
 
@@ -334,6 +352,175 @@ async function waitForInput(screen, timeoutMs = 3000) {
   }, timeoutMs);
 }
 
+const exactLabel = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+const pickerSignature = picker => picker ? JSON.stringify(picker.rows.map(row => [row.number, row.label, row.cursor])) : '';
+
+// Poll the model rows, not changing Stats/history text beside the menu. A key
+// must change the rows/cursor and remain stable through split focus/move frames.
+async function waitForPickerChange(screen, before, timeoutMs) {
+  let previous = '', stableSince = 0;
+  return waitFor(screen, lines => {
+    const picker = parsePicker(lines), signature = pickerSignature(picker);
+    if (!signature || signature === before) { previous = ''; return false; }
+    if (signature !== previous) { previous = signature; stableSince = Date.now(); }
+    return Date.now() - stableSince >= MODEL_FRAME_STABLE_MS ? picker : false;
+  }, timeoutMs);
+}
+
+async function closeModelMenu({ readLines, write, pause = sleep, now = Date.now, timeoutMs = 3000 }) {
+  const deadline = now() + timeoutMs;
+  let phase = 'start', readySince = null;
+  while (now() < deadline) {
+    const lines = await readLines();
+    if (!modelDialogVisible(lines) && promptInputReady(lines)) {
+      if (readySince === null) readySince = now();
+      if (now() - readySince >= MODEL_FRAME_STABLE_MS) return { ok: true, lines };
+    } else {
+      readySince = null;
+      if (phase === 'start' && !modelDialogVisible(lines)) { write('\x1b'); phase = 'closing'; }
+      if (modelDialogVisible(lines) && (phase === 'start' || phase === 'clearing' && searchEmpty(lines))) {
+        phase = searchEmpty(lines) ? 'closing' : 'clearing';
+        write('\x1b');
+      }
+    }
+    await pause(80);
+  }
+  return { ok: false, reason: 'menu-close-unconfirmed' };
+}
+
+// Only the hidden background probe may promote a traversed list to complete.
+async function collectModelMenu({ lines, readLines, write, revision, pause = sleep, now = Date.now, timeoutMs = MODEL_COLLECT_TIMEOUT_MS }) {
+  let picker = parsePicker(lines, { allowNoCursor: true });
+  const deadline = now() + timeoutMs, seen = new Map(), tokens = new Map();
+  let credit = null, steps = 0;
+  const number = frame => frame.rows[frame.cursor]?.number ?? frame.rows[0]?.number;
+  const failed = reason => ({ ok: false, reason, atNumber: picker ? number(picker) : null, steps });
+  if (!picker || !searchEmpty(lines)) return failed('menu-unrecognized');
+  const take = () => {
+    for (const row of picker.rows) {
+      if (!row.number || seen.has(row.number) && !exactLabel(seen.get(row.number).label, row.label)) return false;
+      seen.set(row.number, row);
+    }
+    const usage = require('./codeagent-usage-menu').parseCodeAgentUsageMenu(modelMenuLines(lines));
+    if (usage?.credit) credit = usage.credit;
+    for (const model of usage?.models || []) {
+      const previous = tokens.get(model.name.toLowerCase());
+      tokens.set(model.name.toLowerCase(), { ...model, hour: model.hour || previous?.hour || null, min: model.min || previous?.min || null });
+    }
+    return true;
+  };
+  const step = async key => {
+    const beforeRevision = revision(), before = pickerSignature(picker);
+    write(key); steps++;
+    let previous = '', since = 0, fresh = false;
+    const turnDeadline = Math.min(deadline, now() + MODEL_SEARCH_WAIT_MS);
+    while (now() < turnDeadline) {
+      const nextLines = await readLines(), next = parsePicker(nextLines, { allowNoCursor: true });
+      fresh = revision() > beforeRevision;
+      if (fresh && next) {
+        const signature = pickerSignature(next) + JSON.stringify(require('./codeagent-usage-menu').parseCodeAgentUsageMenu(modelMenuLines(nextLines)));
+        if (signature !== previous) { previous = signature; since = now(); }
+        if (now() - since >= MODEL_FRAME_STABLE_MS) { lines = nextLines; picker = next; return { ok: true, changed: pickerSignature(next) !== before }; }
+      }
+      await pause(80);
+    }
+    return { ok: false, reason: fresh ? 'menu-scroll-unstable' : 'menu-scroll-no-frame' };
+  };
+  if (!picker.complete) {
+    if (!['scroll-truncated', 'missing-first-row'].includes(picker.incompleteReason)) return failed(picker.incompleteReason);
+    while (number(picker) !== 1 && steps < MODEL_SCROLL_LIMIT && now() < deadline) {
+      const moved = await step('\x1b[A');
+      if (!moved.ok) return failed(moved.reason);
+      if (!moved.changed) return failed('menu-first-unconfirmed');
+    }
+    if (number(picker) !== 1) return failed('menu-first-unconfirmed');
+    let unchanged = 0, completed = false;
+    while (steps < MODEL_SCROLL_LIMIT * 2 && now() < deadline) {
+      if (!take()) return failed('menu-number-conflict');
+      const beforeNumber = number(picker), moved = await step('\x1b[B');
+      if (!moved.ok) return failed(moved.reason);
+      unchanged = moved.changed ? 0 : unchanged + 1;
+      if (number(picker) === 1 && beforeNumber !== 1 || unchanged >= 2) { completed = true; break; }
+    }
+    if (!completed) return failed('menu-scroll-limit');
+  }
+  if (!take()) return failed('menu-number-conflict');
+  const rows = [...seen.values()].sort((a, b) => a.number - b.number);
+  if (!rows.length || rows.some((row, i) => row.number !== i + 1) || picker.total && picker.total !== rows.length) return failed('menu-number-gap');
+  return { ok: true, ...require('./codeagent-model-probe').modelsFromPicker({ rows }), menuComplete: true,
+    usage: { credit, models: rows.map(row => tokens.get(row.label.toLowerCase())).filter(Boolean),
+      modelsComplete: rows.every(row => tokens.get(row.label.toLowerCase())?.day) }, steps };
+}
+
+async function findOffscreenTarget({ picker, screen, manager, sid, label, log, reopenMenu, onSearchFrame }) {
+  const initial = modelMenuLines(await screen.lines());
+  if (initial.some(line => /⌕/.test(line))) {
+    const oldSearch = searchText(initial);
+    if (!/^Search(?:…|\.\.\.)?$/i.test(oldSearch) && oldSearch) manager.writeToSession(sid, '\x7f'.repeat(oldSearch.length));
+    manager.writeToSession(sid, label);
+    let previous = '';
+    const stable = await waitFor(screen, lines => {
+      const text = modelMenuLines(lines).join('\n');
+      if (text === initial.join('\n')) { previous = ''; return false; }
+      if (text === previous) return { picker: parsePicker(lines, { allowNoCursor: true }) };
+      previous = text; return false;
+    }, MODEL_SEARCH_WAIT_MS);
+    onSearchFrame(stable.lines);
+    let searched = { value: stable.value?.picker || null };
+    let found = searched.value && searched.value.rows.findIndex(row => exactLabel(row.label, label));
+    if (Number.isInteger(found) && found >= 0) {
+      picker = searched.value;
+      let searchSteps = 0;
+      while (picker.cursor !== found && searchSteps++ < MODEL_SCROLL_LIMIT) {
+        const prior = pickerSignature(picker), down = found > picker.cursor;
+        manager.writeToSession(sid, down ? '\x1b[B' : '\x1b[A');
+        searched = await waitForPickerChange(screen, prior, MODEL_SEARCH_WAIT_MS);
+        if (!searched.value) break;
+        picker = searched.value;
+        found = picker.rows.findIndex(row => exactLabel(row.label, label));
+        if (found < 0) break;
+      }
+      if (exactLabel(picker.rows[picker.cursor]?.label, label)) {
+        log({ event: 'switch-search', result: 'found' }); return { picker, target: picker.cursor };
+      }
+    }
+    // Focused empty search boxes omit their placeholder. Read the box contents,
+    // not the placeholder; never scroll a list which may still be filtered.
+    manager.writeToSession(sid, '\x1b');
+    const cleared = await waitFor(screen, lines => searchEmpty(lines) && parsePicker(lines, { allowNoCursor: true }), MODEL_SEARCH_WAIT_MS);
+    log({ event: 'switch-search', result: cleared.value ? 'scroll-fallback' : 'clear-failed' });
+    if (!cleared.value) {
+      const reopened = await reopenMenu();
+      if (!reopened.value) return { error: '搜索未能清空，退出并重开模型菜单失败' };
+      picker = reopened.value;
+    } else picker = cleared.value;
+  } else log({ event: 'switch-search', result: 'unavailable' });
+  // A focused search box may hide the list cursor. One Down can move focus,
+  // but selection is permitted only if the next frame exposes a real cursor.
+  if (picker.cursor < 0) {
+    manager.writeToSession(sid, '\x1b[B');
+    const focused = await waitForPickerChange(screen, pickerSignature(picker), MODEL_SEARCH_WAIT_MS);
+    if (!focused.value) return { error: '无法确认模型列表的选中项，没有选择模型' };
+    picker = focused.value;
+  }
+  const seen = new Set(), limit = picker.total || MODEL_SCROLL_LIMIT;
+  let steps = 0;
+  while (steps < limit) {
+    const row = picker.rows[picker.cursor], identity = JSON.stringify([row.number, row.label]);
+    if (exactLabel(row.label, label)) { log({ event: 'switch-scroll', steps, result: 'found' }); return { picker, target: picker.cursor }; }
+    if (seen.has(identity)) break;
+    seen.add(identity);
+    const before = pickerSignature(picker);
+    manager.writeToSession(sid, '\x1b[B'); steps++;
+    const next = await waitForPickerChange(screen, before, MODEL_SEARCH_WAIT_MS);
+    if (!next.value) break;
+    picker = next.value;
+  }
+  if (exactLabel(picker.rows[picker.cursor]?.label, label)) { log({ event: 'switch-scroll', steps, result: 'found' }); return { picker, target: picker.cursor }; }
+  log({ event: 'switch-scroll', steps, result: 'not-found' });
+  return { picker, target: -1 };
+}
+
 // 选中之后 CLI 打印的「Set model to <模型>」：从原始输出里找，不依赖屏幕重绘。界面框架用光标移动代替空格，
 // 去掉控制序列后单词会粘在一起，所以压成小写字母数字再比。返回回显里模型名开头的一段（已压缩），没有返回 null。
 // 会话里已经聊过时，选中后还会弹「Switch model? … ❯ 1. Yes, switch to X / 2. No, go back」（提醒换模型后历史要重读）。
@@ -363,18 +550,14 @@ async function waitForEcho(manager, sid, mark, timeoutMs, screen) {
 }
 
 // 在已经打开的会话里选模型。返回 { ok, mode: 'session'|'default', confirmed, restored, message }。
-// allowedModels：这个账号的模型权限清单（调用方只在清单权威时传）；目标不在清单里就不打开菜单，直接拒绝。
+// 账号旧清单不拒绝选择；目标是否能选以这次 CodeAgent 菜单为准。
 // configDir：CodeAgent 这个会话实际用的配置目录（回车会写它的 settings.json）；先规范化，快照、写回、核对都用同一个。
 // guardMs：回车后看住默认模型多久；onDefaultChange(change)：每次发现被改、改回时回调（调用方记日志）。
 // readyFirstMs：先等 CLI 画出普通输入框并稳定下来再敲 /model（自动会话启动时用；2026-10-20 发布闸门 no-choice：
 // 启动后马上敲，/model 的回车有时没被执行，输入行停在「❯ /model」，第一条题目发不出去）。
 // keepDefault（2026-10-28 用户「记住最新的选择作为默认」）：手动会话这次选的模型留作 CodeAgent 的默认模型——按回车存成默认、不改回原值，
 // 下次新建会话 CodeAgent 直接用它起，不再开菜单（core/codeagent-launch-model.js 的 cli-remembered）。自动会话不传，照旧只改本会话、事后改回。
-async function pickModel({ manager, sid, kind, modelId, configDir, dataDir, allowedModels = null, sendToPty, screenTimeoutMs = 8000, guardMs = 3500, onDefaultChange = null, env = process.env, readyFirstMs = 0, keepDefault = false }) {
-  if (!modelAllowed(modelId, allowedModels)) {
-    return { ok: false, notAllowed: true, inputReady: true,
-      message: `${modelId} 不在这个账号的模型权限清单里（可选：${allowedModels.join('、')}），没有打开模型菜单` };
-  }
+async function pickModel({ manager, sid, kind, modelId, configDir, dataDir, sendToPty, screenTimeoutMs = 8000, guardMs = 3500, onDefaultChange = null, env = process.env, readyFirstMs = 0, keepDefault = false }) {
   const first = isFirstMenuModel(modelId);
   let label = first ? '' : pickerLabelFor(modelId, env);
   const dir = normalizeConfigDir(configDir);
@@ -383,6 +566,24 @@ async function pickModel({ manager, sid, kind, modelId, configDir, dataDir, allo
   let attempted = false, result, menu = null, usage = null;
   // 失败时把当时的画面带回去，写进数据目录方便排查（公司电脑上的菜单长相我们看不到）。
   const fail = async message => ({ ok: false, message, screen: await screen.lines().catch(() => []) });
+  async function openMenu() {
+    let sent = await sendToPty(sid, '/model', kind, { codeagentModelPick: true });
+    // 补全只接受了命令文本时可补回车，菜单已开则绝不补。
+    if (sent && sent.sendStatus === 'stuck') {
+      const lines = await screen.lines();
+      const promptLine = lines[lines.findLastIndex(line => /^[\s─]*[❯›>]\s*/.test(line))] || '';
+      if (modelDialogVisible(lines) || await waitFor(screen, modelDialogVisible, 1500).then(r => r.value)) sent = { ...sent, sendStatus: 'ok' };
+      else if (/^[\s─]*[❯›>]\s*\/model\s*$/.test(promptLine)) {
+        manager.writeToSession(sid, '\r');
+        if ((await waitFor(screen, modelDialogVisible, screenTimeoutMs)).value) sent = { ...sent, sendStatus: 'ok' };
+      }
+    }
+    if (!sent || sent.ok === false || sent.notSent || sent.sendStatus && sent.sendStatus !== 'ok') {
+      if (sent?.notSent) attempted = false;
+      return fail((sent && sent.message) || 'CodeAgent 没有确认打开模型菜单');
+    }
+    return null;
+  }
   async function choose() {
     // 已有菜单时不要再把 /model 填进搜索框。明确的模型切换可接手当前菜单。
     let existingMenu = modelDialogVisible(await screen.lines());
@@ -394,24 +595,10 @@ async function pickModel({ manager, sid, kind, modelId, configDir, dataDir, allo
     }
     attempted = true;
     if (!existingMenu) {
-      let sent = await sendToPty(sid, '/model', kind, { codeagentModelPick: true });
-      // 回车只接受了补全、命令没执行（2026-10-20 发布闸门与本机 e2e 实录：输入行停在「❯ /model」，菜单没开）：
-      // 菜单确实没开、输入行就是「/model」时再按一次回车。菜单开着时不补（会选中高亮项）。
-      if (sent && sent.sendStatus === 'stuck') {
-        const lines = await screen.lines();
-        const promptLine = lines[lines.findLastIndex(line => /^[\s─]*[❯›>]\s*/.test(line))] || '';
-        if (modelDialogVisible(lines) || await waitFor(screen, modelDialogVisible, 1500).then(r => r.value)) sent = { ...sent, sendStatus: 'ok' };
-        else if (/^[\s─]*[❯›>]\s*\/model\s*$/.test(promptLine)) {
-          manager.writeToSession(sid, '\r');
-          if ((await waitFor(screen, modelDialogVisible, screenTimeoutMs)).value) sent = { ...sent, sendStatus: 'ok' };
-        }
-      }
-      if (!sent || sent.ok === false || sent.notSent || sent.sendStatus && sent.sendStatus !== 'ok') {
-        if (sent?.notSent) attempted = false;
-        return fail((sent && sent.message) || 'CodeAgent 没有确认打开模型菜单');
-      }
+      const failed = await openMenu();
+      if (failed) return failed;
     }
-    const opened = await waitFor(screen, parsePicker, screenTimeoutMs);
+    const opened = await waitFor(screen, lines => parsePicker(lines, { allowNoCursor: true }), screenTimeoutMs);
     if (!opened.value) {
       require('./codeagent-models').appendModelLog(dataDir, { event: 'menu-cache-skipped', reason: 'unrecognized-menu' });
       return fail('当前 CodeAgent 模型菜单的布局无法自动识别，未完成模型切换');
@@ -420,27 +607,62 @@ async function pickModel({ manager, sid, kind, modelId, configDir, dataDir, allo
     // 菜单上方的 Credit 用量和每个模型的 Token 用量：只读屏解析，不影响下面的选择（core/codeagent-usage-menu.js）
     try {
       const menuUsage = require('./codeagent-usage-menu');
-      const read = await menuUsage.readUsageMenu(opened.lines, { readLines: () => screen.lines(),
+      const read = await menuUsage.readUsageMenu(modelMenuLines(opened.lines), { readLines: async () => modelMenuLines(await screen.lines()),
         timeoutMs: menuUsage.PICKER_USAGE_WAIT_MS, dataDir, source: 'picker' });
       usage = read.usage;
-      picker = parsePicker(read.lines) || picker;
+      picker = parsePicker(read.lines, { allowNoCursor: true }) || picker;
     } catch { usage = null; }
-    // 编号从1连续到可见菜单末尾、且没有滚动截断证据时才写完整清单。
+    // 初始完整菜单只作为诊断返回；会话内搜索、翻页与选择都不写清单。
     if (picker.complete) menu = picker.rows.map(row => row.label);
     else require('./codeagent-models').appendModelLog(dataDir, { event: 'menu-cache-skipped', reason: picker.incompleteReason, rows: picker.rows.length });
     // 选第一个：认出的第一行得是菜单的第 1 项（滚动过的菜单看不到第 1 项，不猜）。光标不一定停在第 1 项（会停在上次的模型上），照常按方向键挪过去。
     if (first && (picker.rows[0].number ?? 1) !== 1) return fail(`模型菜单没有从第 1 项列起（第一行是 ${picker.rows[0].number}. ${picker.rows[0].label}），没有选`);
     if (first) label = picker.rows[0].label;
-    const target = first ? 0 : findTarget(picker, label);
+    let target = first ? 0 : findTarget(picker, label);
+    if (target < 0 && !first) {
+      const found = await findOffscreenTarget({ picker, screen, manager, sid, label,
+        reopenMenu: async () => {
+          if (!(await closeModelMenu({ readLines: () => screen.lines(), write: key => manager.writeToSession(sid, key) })).ok) return { value: null };
+          if (await openMenu()) return { value: null };
+          return waitFor(screen, lines => searchEmpty(lines) && parsePicker(lines, { allowNoCursor: true }), screenTimeoutMs);
+        },
+        onSearchFrame: lines => {
+          const read = require('./codeagent-usage-menu').parseCodeAgentUsageMenu(modelMenuLines(lines));
+          if (read?.models.some(model => model.day)) {
+            const byName = new Map((usage?.models || []).map(model => [model.name.toLowerCase(), model]));
+            for (const model of read.models) byName.set(model.name.toLowerCase(), model);
+            usage = { credit: read.credit || usage?.credit || null, models: [...byName.values()] };
+          }
+          if (!dataDir) return;
+          try {
+            const file = path.join(dataDir, 'logs', 'codeagent-model-picker-search.txt');
+            fs.mkdirSync(path.dirname(file), { recursive: true });
+            fs.writeFileSync(file, `${new Date().toISOString()} switch-search ${modelId}\n\n${lines.join('\n')}\n`, 'utf8');
+          } catch { /* 搜索画面附件失败不影响本次选择。 */ }
+        },
+        log: fields => require('./codeagent-models').appendModelLog(dataDir, { session: String(sid).slice(0, 8), model: modelId, ...fields }) });
+      if (found.error) return fail(found.error);
+      picker = found.picker; target = found.target;
+    }
     if (target < 0) return fail(`模型菜单里没有 ${modelId}（菜单里有：${picker.rows.map(row => row.label).join('、')}）` );
-    // 方向键按第一帧算好的格数逐个按。这类界面只重画变化的几行，镜像和真实终端稍有出入，后面几帧就会读乱
-    // （2026-10-14 替身实测：光标其实已经移到目标，镜像里还停在原处）；所以不逐帧核对，最终以 CLI 自己的回显为准。
+    if (picker.cursor < 0) {
+      manager.writeToSession(sid, '\x1b[B');
+      const focused = await waitForPickerChange(screen, pickerSignature(picker), MODEL_SEARCH_WAIT_MS);
+      if (!focused.value) return fail('无法确认模型列表的选中项，没有选择模型');
+      picker = focused.value; target = findTarget(picker, label);
+      if (target < 0) return fail(`模型菜单里没有 ${modelId}`);
+    }
+    // 可见目标仍沿用行号差逐键移动；跨屏搜索/翻页已逐步确认。选择键之前再读一次光标，
+    // 镜像尚未更新时不猜选中项，之后仍以 CLI 自己的回显核对结果。
     const steps = target - picker.cursor;
     for (let i = 0; i < Math.abs(steps); i += 1) {
       manager.writeToSession(sid, steps > 0 ? '\x1b[B' : '\x1b[A');
       await sleep(150);
     }
     await sleep(300);
+    const selectedLabel = picker.rows[target].label;
+    const checked = parsePicker(await screen.lines());
+    if (!checked || !exactLabel(checked.rows[checked.cursor]?.label, selectedLabel)) return fail(`未确认光标已移到 ${selectedLabel}，没有选择模型`);
     const restoreSnapshot = dir && !keepDefault ? snapshotDefaults(dir) : [];
     const mode = picker.sessionKey && !keepDefault ? 'session' : 'default';
     const mark = typeof manager.getSessionOutputMark === 'function' ? manager.getSessionOutputMark(sid) : null;
@@ -474,8 +696,8 @@ async function pickModel({ manager, sid, kind, modelId, configDir, dataDir, allo
   } finally {
     // 发过 /model 即须负责退出，不能等“解析成功”后才承担清理责任。
     try {
-      if (attempted && !promptInputReady(await screen.lines())) manager.writeToSession(sid, '\x1b');
-      let ready = await waitForInput(screen);
+      const closed = attempted ? await closeModelMenu({ readLines: () => screen.lines(), write: key => manager.writeToSession(sid, key) }) : null;
+      let ready = closed?.ok ? { value: true } : await waitForInput(screen);
       // Esc 只关掉补全列表时，「/model」还留在输入行里（2026-10-20 发布闸门实录）：没有菜单时退格清掉，再确认一次。
       if (!ready.value && attempted && !modelDialogVisible(await screen.lines())) {
         for (let i = 0; i < 12; i += 1) { manager.writeToSession(sid, '\x7f'); await sleep(30); }
@@ -492,9 +714,13 @@ async function pickModel({ manager, sid, kind, modelId, configDir, dataDir, allo
       screen.dispose();
     }
   }
-  // 菜单里实际列出的模型：调用方记下来，新建会话的模型下拉以它为准（core/codeagent-models.js 的 recordMenu）。
+  // 会话内菜单仅供诊断，调用方不得据此改写后台探测清单或菜单缓存。
   // 读到的用量表：调用方按账号记快照（core/codeagent-usage-menu.js recordUsage），额度条和模型下拉显示。
   if (usage) result = { ...result, usage };
+  if (!result.ok) {
+    require('./codeagent-models').appendModelLog(dataDir, { event: 'pick-menu-failed', session: String(sid).slice(0, 8), model: modelId, error: result.message });
+    result = { ...result, technicalReason: result.message, message: `这个账号在 CodeAgent 模型菜单里选不了 ${modelId}` };
+  }
   return menu ? { ...result, menu } : result;
 }
 
@@ -617,6 +843,9 @@ module.exports = {
   FIRST_MENU_MODEL,
   isFirstMenuModel,
   parsePicker,
+  modelMenuLines,
+  closeModelMenu,
+  collectModelMenu,
   modelDialogVisible,
   promptInputReady,
   promptInputAvailable,

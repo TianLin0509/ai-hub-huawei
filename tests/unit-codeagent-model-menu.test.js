@@ -13,6 +13,7 @@ const pool = require('../core/codeagent-pool');
 const probe = require('../core/codeagent-model-probe');
 const usage = require('../core/codeagent-usage-menu');
 const IDS = ['GLM-5.2-Auto', 'GLM-5.2', 'DeepSeek-V4.1-Auto', 'DeepSeek-V4.1'];
+const ALL_IDS = [...models.KNOWN.map(row => row.id), ...IDS];
 const FOOTER = 'Navigate ↑ ↓ | Select enter | Back esc';
 const commandsProbe = require('../core/codeagent-commands-probe');
 const opentui = require('./fixtures/codeagent-commands-opentui.json');
@@ -477,10 +478,10 @@ test('the ordinary model watchdog releases a stalled hidden process before the n
     const proc = { onData: () => ({ dispose() {} }), onExit: fn => { exit = fn; },
       write: key => { assert.equal(phase, 'version'); if (key === '\r') menuOpen = true; if (key === '\x1b') menuOpen = false; }, kill: () => { killed++; exit(); } };
     const fixture = menuVm('codeagent-model-probe.js', { './claude-trust-dialog': { createTrustScreen: () => screen },
-      globals: { setTimeout: timers.setTimer, clearTimeout: timers.clearTimer } });
+      globals: { setTimeout: timers.setTimer, clearTimeout: timers.clearTimer, Date: class extends Date { static now() { return timers.now(); } } } });
     const oldProbe = fixture.api.probeModels({ command: 'fake', configDirEnv: 'FAKE_CONFIG', configDir: path.join(dir, 'cfg'), cwd: path.join(dir, 'cwd'), dataDir: dir,
       accountKey: 'personal', versionProbe: () => { versionWaiting = true; return new Promise(() => {}); }, ptyModule: { spawn: () => proc } });
-    if (phase === 'version') { for (let i = 0; i < 40 && !versionWaiting; i++) { await Promise.resolve(); timers.advance(500); } assert.equal(versionWaiting, true); }
+    if (phase === 'version') { for (let i = 0; i < 40 && !versionWaiting; i++) { await new Promise(setImmediate); timers.advance(500); } assert.equal(versionWaiting, true); }
     timers.advance(60000 - timers.now());
     const next = commandsProbe.queueCommandsProbe(oldProbe, async () => { commandStarted++; assert.equal(killed, 1); return { ok: true }; }, timers);
     assert.equal(commandStarted, 0); timers.advance(probe.MODEL_PROBE_TIMEOUT_MS - timers.now());
@@ -578,39 +579,39 @@ test('account menu snapshots replace rather than accumulate and never import or 
   assert.equal(models.readMenuEntry(dir).seenAt, 3000); assert.equal(fs.readFileSync(legacy, 'utf8'), before);
 });
 
-test('configured models remain visible at the end with an unconfirmed note, and menu-only models are added', t => {
+test('model options use reliable account catalogs and never fall back to known or configured candidates', t => {
   const dir = temp(t), cfg = path.join(dir, 'personal'); config(cfg, IDS);
   json(path.join(dir, 'codeagent-menu-models.json'), { models: IDS.slice(0, 2) });
-  assert.deepEqual(models.modelOptions(dir, { configDir: cfg }).map(row => row.id), IDS);
+  assert.deepEqual(models.modelOptions(dir, { configDir: cfg }).map(row => row.id), []);
   models.recordMenu(dir, [...IDS.slice(0, 2), 'Qwen-Menu-Only'], { complete: true });
   models.recordMenu(dir, ['Kimi-Pool-Only'], { key: 'abcdef12', complete: true });
   const options = models.modelOptions(dir, { configDir: cfg, probedModels: IDS.slice(0, 2) });
-  assert.deepEqual(options.map(row => row.id), [IDS[0], IDS[1], 'Qwen-Menu-Only', IDS[2], IDS[3]]);
-  assert.ok(options.slice(-2).every(row => row.description.includes('未在 CodeAgent 菜单中确认')));
+  assert.deepEqual(options.map(row => row.id), [...IDS.slice(0, 2), 'Qwen-Menu-Only']);
+  assert.ok(options.every(row => !row.description?.includes('未在 CodeAgent 菜单中确认')));
   assert.ok(!options.some(row => row.id === 'Kimi-Pool-Only'));
   const fallback = path.join(dir, 'fallback'); json(path.join(fallback, 'settings.json'), { model: 'GLM-5.2-WX', models: ['GLM-5.2-WX-Auto'] });
   assert.ok(!models.modelOptions(null, { configDir: fallback }).some(row => row.id === 'GLM-5.2-WX'), 'unlisted concrete Auto backends stay hidden');
 });
 
-test('permission guard and launch routing share the three-source union, with newest complete snapshot first', t => {
+test('permission guard and launch routing prefer reliable catalogs over incomplete configuration or old probe values', t => {
   const dir = temp(t), cfg = path.join(dir, 'personal'); config(cfg, [IDS[0], IDS[2]]);
   const file = pool.personalModelsFile(dir);
   json(file, { models: [IDS[0]], defaultModel: IDS[0], at: new Date(1000).toISOString(), source: 'menu' });
   models.recordMenu(dir, ['Qwen-Menu-Only', IDS[0]], { key: 'personal', complete: true, now: 2000 });
   const known = pool.accountModels(cfg, fs, file);
-  assert.deepEqual(known.models, ['Qwen-Menu-Only', IDS[0], IDS[2]]); assert.equal(known.probedAt, new Date(2000).toISOString());
+  assert.deepEqual(known.models, ['Qwen-Menu-Only', IDS[0]]); assert.equal(known.probedAt, new Date(2000).toISOString());
   assert.equal(known.defaultModel, IDS[0]);
   const permitted = require('../core/codeagent-default-model-guard').permittedModels({}, cfg, { dataDir: dir });
   assert.deepEqual(permitted.models, known.models); assert.equal(permitted.authoritative, true);
-  assert.ok(picker.modelAllowed(IDS[2], permitted.models)); assert.equal(picker.modelAllowed('Unknown-Not-Listed', permitted.models), false);
+  assert.equal(picker.modelAllowed(IDS[2], permitted.models), false); assert.equal(picker.modelAllowed('Unknown-Not-Listed', permitted.models), false);
   assert.deepEqual(require('../core/codeagent-model-route').personalModels({ dataDir: dir, personalDir: cfg }).models, known.models);
   const poolDir = pool.accountDir(dir, 'abcdef12'); config(poolDir, ['DeepSeek-Config-2']);
   json(path.join(poolDir, probe.MODELS_FILE), { models: ['DeepSeek-Probed-2'], at: new Date(3000).toISOString() });
   models.recordMenu(dir, ['DeepSeek-Menu-2'], { key: 'abcdef12', complete: true, now: 4000 });
-  assert.deepEqual(pool.accountModels(poolDir).models, ['DeepSeek-Menu-2', 'DeepSeek-Probed-2', 'DeepSeek-Config-2']);
+  assert.deepEqual(pool.accountModels(poolDir).models, ['DeepSeek-Menu-2']);
   assert.ok(!pool.accountModels(poolDir).models.some(id => id.startsWith('GLM')));
   json(file, { models: [IDS[0]], at: new Date(5000).toISOString(), source: 'menu' });
-  assert.equal(pool.accountModels(cfg, fs, file).probedAt, new Date(5000).toISOString());
+  assert.equal(pool.accountModels(cfg, fs, file).probedAt, new Date(2000).toISOString());
 });
 
 function menuVm(filename, extra = {}, appended = '') {
@@ -632,23 +633,139 @@ function menuVm(filename, extra = {}, appended = '') {
   return { api: context.module.exports, state };
 }
 
+for (const parserVersion of [undefined, 1, models.MODEL_MENU_PARSER_VERSION + 1]) test(`stale account menus are ignored without changing the file and log once (${parserVersion ?? 'missing'})`, t => {
+  const dir = temp(t), cfg = path.join(dir, 'personal'); config(cfg, IDS);
+  const file = path.join(dir, 'codeagent-account-menu-models.json');
+  json(file, { schema: 2, accounts: { personal: { models: [IDS[0]], complete: true, parserVersion } } });
+  const before = fs.readFileSync(file);
+  assert.equal(models.readMenuEntry(dir), null); assert.deepEqual(models.readMenu(dir), []);
+  assert.deepEqual(models.modelOptions(dir, { configDir: cfg }).map(row => row.id), []);
+  assert.deepEqual(fs.readFileSync(file), before);
+  const log = fs.readFileSync(path.join(dir, 'logs', 'codeagent-model.log'), 'utf8');
+  assert.equal((log.match(/event=menu-cache-stale-ignored/g) || []).length, 1);
+  assert.equal(models.recordMenu(dir, IDS, { complete: true }), true);
+  assert.equal(models.readMenuEntry(dir).parserVersion, models.MODEL_MENU_PARSER_VERSION);
+  assert.deepEqual(models.readMenu(dir), IDS);
+});
+
+test('a current account menu does not certify another account left in the old format', t => {
+  const dir = temp(t), file = path.join(dir, 'codeagent-account-menu-models.json');
+  const old = { models: [IDS[0]], complete: true, seenAt: 1000 };
+  json(file, { schema: 2, accounts: { personal: old, abcdef12: old } });
+  models.recordMenu(dir, IDS, { complete: true });
+  assert.deepEqual(models.readMenu(dir), IDS); assert.equal(models.readMenuEntry(dir, 'abcdef12'), null);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).accounts.abcdef12, old);
+});
+
+test('personal and pool probe files retain old model values but stamp new menu reads, leaving serve independent', t => {
+  const dir = temp(t);
+  for (const file of [pool.personalModelsFile(dir), path.join(pool.accountDir(dir, 'abcdef12'), probe.MODELS_FILE)]) {
+    json(file, { models: [IDS[0]], at: new Date().toISOString() });
+    assert.deepEqual(probe.readProbed(file).models, [IDS[0]]);
+    assert.equal(probe.readProbed(file).source, 'menu'); assert.equal(probe.readProbed(file).parserVersion, undefined);
+    probe.writeProbed(file, { models: IDS, menuComplete: true });
+    assert.equal(probe.readProbed(file).parserVersion, models.MODEL_MENU_PARSER_VERSION);
+    assert.deepEqual(probe.readProbed(file).models, IDS);
+    probe.writeProbed(file, { models: IDS, source: 'serve' });
+    assert.equal(probe.readProbed(file).source, 'serve'); assert.equal(probe.readProbed(file).parserVersion, undefined);
+  }
+});
+
+function staleProbeIpc(t, { key = 'personal', source = 'menu', parserVersion, configured = IDS } = {}) {
+  const dir = temp(t), personalDir = path.join(dir, 'personal');
+  const cfg = key === 'personal' ? personalDir : pool.accountDir(dir, key);
+  if (configured) config(cfg, configured);
+  json(path.join(cfg, '.credentials.json'), { idaasOAuth: { accountId: 'synthetic-account', xAuthToken: 'fixture', expiresAt: Date.now() + 86400000 } });
+  if (key !== 'personal') json(path.join(pool.poolRoot(dir), 'pool.json'), { accounts: [{ id: key }] });
+  const file = key === 'personal' ? pool.personalModelsFile(dir) : path.join(cfg, probe.MODELS_FILE);
+  json(file, { models: [IDS[0]], source, parserVersion, at: new Date().toISOString() });
+  json(path.join(dir, 'codeagent-account-menu-models.json'), { schema: 2, accounts: { [key]: { models: [IDS[0]], complete: true } } });
+  const vars = { CLAUDE_HUB_DATA_DIR: dir, AI_HUB_CODEAGENT_CONFIG_DIR: personalDir, AI_HUB_CODEAGENT_SERVE: '0' };
+  const previous = Object.fromEntries(Object.keys(vars).map(name => [name, process.env[name]])); Object.assign(process.env, vars);
+  t.after(() => { for (const [name, value] of Object.entries(previous)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; } });
+  const handlers = new Map(), calls = [];
+  let release, completed;
+  const waiting = new Promise(resolve => { release = resolve; });
+  const done = new Promise(resolve => { completed = resolve; });
+  require('../main/ipc/session-handlers').registerSessionIpc({ handle: (name, fn) => handlers.set(name, fn), on() {} }, {
+    sessionManager: { getAllSessions: () => [], codeagentPoolActiveCounts: () => ({}) },
+    sendToRenderer: (name, payload) => { if (name === 'codeagent-pool:changed' && payload.auto) completed(payload); },
+    codeagentProbeModels: options => { calls.push(options); return waiting; },
+  });
+  return { dir, cfg, file, key, handlers, calls, done, release,
+    options: () => handlers.get('codeagent:models')(null, key === 'personal' ? { account: 'personal' } : { account: 'pool', poolAccount: key }).options };
+}
+
+for (const key of ['personal', 'abcdef12']) for (const parserVersion of [undefined, 0]) test(`old menu probes refresh in the background without restricting dropdowns (${key}, ${parserVersion ?? 'missing'})`, async t => {
+  const fixture = staleProbeIpc(t, { key, parserVersion });
+  const before = fs.readFileSync(fixture.file);
+  assert.deepEqual(fixture.options().map(row => row.id), []);
+  assert.ok(fixture.options().every(row => !row.description?.includes('未在 CodeAgent 菜单中确认')));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(fixture.calls.length, 1); assert.equal(fixture.calls[0].configDir, fixture.cfg);
+  assert.deepEqual(fs.readFileSync(fixture.file), before, 'pending refresh leaves the old probe file untouched');
+  fixture.release({ ok: true, models: IDS, menuComplete: true });
+  assert.equal((await fixture.done).ok, true);
+  assert.equal(probe.readProbed(fixture.file).parserVersion, models.MODEL_MENU_PARSER_VERSION);
+  assert.deepEqual(models.readMenu(fixture.dir, key), IDS);
+  const status = fixture.handlers.get('codeagent-pool:list')(null);
+  const account = key === 'personal' ? status.personal : status.accounts.find(entry => entry.id === key);
+  assert.equal(account.modelsParserVersion, models.MODEL_MENU_PARSER_VERSION);
+  fixture.options(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(fixture.calls.length, 1);
+});
+
+test('an unreliable old probe exposes no invented candidates while its replacement is pending', async t => {
+  const fixture = staleProbeIpc(t, { configured: null });
+  models.recordObserved(fixture.dir, 'DeepSeek-Observed');
+  const ids = fixture.options().map(row => row.id);
+  assert.deepEqual(ids, []);
+  assert.equal(fixture.options().length, 0);
+  await new Promise(resolve => setImmediate(resolve));
+  fixture.release({ ok: true, models: IDS, menuComplete: true }); await fixture.done;
+});
+
+for (const key of ['personal', 'abcdef12']) test(`account-list refresh notices stale parser evidence without opening a model dropdown (${key})`, async t => {
+  const fixture = staleProbeIpc(t, { key });
+  fixture.handlers.get('codeagent-pool:list')(null);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(fixture.calls.length, 1); assert.equal(fixture.calls[0].accountKey, key);
+  fixture.release({ ok: true, models: IDS, menuComplete: true });
+  assert.equal((await fixture.done).ok, true);
+});
+
+for (const key of ['personal', 'abcdef12']) for (const source of ['menu', 'serve']) test(`fresh probe evidence keeps its normal cooldown (${key}, ${source})`, async t => {
+  const parserVersion = source === 'menu' ? models.MODEL_MENU_PARSER_VERSION : undefined;
+  const fixture = staleProbeIpc(t, { key, source, parserVersion });
+  const before = fs.readFileSync(fixture.file);
+  assert.deepEqual(fixture.options().map(row => row.id), [IDS[0]]);
+  fixture.handlers.get('codeagent-pool:list')(null);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(fixture.calls.length, 0); assert.deepEqual(fs.readFileSync(fixture.file), before);
+});
+
 for (const cursor of [1, 4]) test(`actual picker moves across groups by model number from cursor ${cursor}`, async t => {
-  const dir = temp(t), writes = []; let closed = false;
-  const screen = { lines: async () => closed ? ['❯ ', '? for shortcuts'] : menu({ grouped: true, cursor }), dispose() {} };
+  const dir = temp(t), writes = []; let closed = false, at = cursor;
+  const screen = { lines: async () => closed ? ['❯ ', '? for shortcuts'] : menu({ grouped: true, cursor: at }), dispose() {} };
   const fixture = menuVm('codeagent-model-picker.js', { globals: { screen } }, '\nopenSessionScreen = async () => screen;');
   const target = cursor === 1 ? IDS[3] : IDS[0];
-  const result = await fixture.api.pickModel({ manager: { writeToSession: (_id, key) => { writes.push(key); if (key === '\r' || key === '\x1b') closed = true; } },
+  const result = await fixture.api.pickModel({ manager: { writeToSession: (_id, key) => {
+    writes.push(key); if (key === '\x1b[B') at++; if (key === '\x1b[A') at--;
+    if (key === '\r' || key === '\x1b') closed = true;
+  } },
     sid: 'synthetic', kind: 'codeagent', modelId: target, dataDir: dir });
   assert.equal(result.ok, true); assert.deepEqual(Array.from(result.menu), IDS);
   assert.deepEqual(writes, [...Array(3).fill(cursor === 1 ? '\x1b[B' : '\x1b[A'), '\r']);
 });
 
 test('picker records the later complete grouped frame after waiting for Day data', async t => {
-  const dir = temp(t); let closed = false, fixture;
+  const dir = temp(t); let closed = false, fixture, cursor = 1;
   const early = menu({ ids: IDS.slice(0, 2) }).map(line => line.replace(/Day .*$/, ''));
-  const screen = { lines: async () => closed ? ['❯ ', '? for shortcuts'] : fixture.state.clock < 1160 ? early : menu({ grouped: true }), dispose() {} };
+  const screen = { lines: async () => closed ? ['❯ ', '? for shortcuts'] : fixture.state.clock < 1160 ? early : menu({ grouped: true, cursor }), dispose() {} };
   fixture = menuVm('codeagent-model-picker.js', { globals: { screen } }, '\nopenSessionScreen = async () => screen;');
-  const result = await fixture.api.pickModel({ manager: { writeToSession: (_sid, key) => { if (key === '\r' || key === '\x1b') closed = true; } },
+  const result = await fixture.api.pickModel({ manager: { writeToSession: (_sid, key) => {
+    if (key === '\x1b[B') cursor++; if (key === '\r' || key === '\x1b') closed = true;
+  } },
     sid: 'synthetic', kind: 'codeagent', modelId: IDS[3], dataDir: dir });
   assert.equal(result.ok, true); assert.deepEqual(Array.from(result.menu), IDS);
 });
@@ -657,10 +774,10 @@ test('new-session model option tooltips retain the unconfirmed description and u
   const source = fs.readFileSync(path.join(__dirname, '..', 'renderer/workspace-controller.js'), 'utf8');
   const start = source.indexOf('    const wanted = nativeCodeagentOption + listed.map');
   const end = source.indexOf('\n    }', start) + 6;
-  const select = { dataset: {}, innerHTML: '' }, listed = [{ id: IDS[2], label: IDS[2], description: '未在 CodeAgent 菜单中确认' }];
+  const select = { dataset: {}, innerHTML: '' }, listed = [{ id: IDS[2], label: IDS[2], description: '账号模型探测清单中有' }];
   const context = vm.createContext({ modelSelect: select, listed, selectedKind: 'codeagent', nativeCodeagentOption: '', usageAttrs: () => '', escapeHtml: String });
   vm.runInContext(`{${source.slice(start, end)}\n}`, context);
-  assert.match(select.innerHTML, /title="未在 CodeAgent 菜单中确认"/);
+  assert.match(select.innerHTML, /title="账号模型探测清单中有"/);
   const before = select.dataset.builtFor; listed[0].description = 'CodeAgent 模型菜单里有';
   vm.runInContext(`{${source.slice(start, end)}\n}`, context);
   assert.notEqual(select.dataset.builtFor, before); assert.match(select.innerHTML, /title="CodeAgent 模型菜单里有"/);
@@ -671,16 +788,16 @@ test('a config-only model passes an old GLM-only permission snapshot, but a miss
   json(pool.personalModelsFile(dir), { models: [IDS[0]], at: new Date().toISOString() });
   const allowed = require('../core/codeagent-default-model-guard').permittedModels({}, cfg, { dataDir: dir }).models;
   for (const present of [true, false]) {
-    let closed = false, currentModel = IDS[0]; const writes = [];
-    const lines = menu({ ids: present ? [IDS[0], IDS[2]] : [IDS[0]], cursor: 1 });
-    const screen = { lines: async () => closed ? ['❯ ', '? for shortcuts'] : lines, dispose() {} };
+    let closed = false, currentModel = IDS[0], cursor = 1; const writes = [];
+    const screen = { lines: async () => closed ? ['❯ ', '? for shortcuts'] : menu({ ids: present ? [IDS[0], IDS[2]] : [IDS[0]], cursor }), dispose() {} };
     const fixture = menuVm('codeagent-model-picker.js', { globals: { screen } }, '\nopenSessionScreen = async () => screen;');
     const result = await fixture.api.pickModel({ manager: { writeToSession: (_id, key) => {
       writes.push(key); if (key === '\r') { currentModel = IDS[2]; closed = true; } if (key === '\x1b') closed = true;
+      if (key === '\x1b[B' && present) cursor++;
     } }, sid: 'synthetic', kind: 'codeagent', modelId: IDS[2], allowedModels: allowed, dataDir: dir });
     assert.equal(result.ok, present);
     if (present) assert.equal(currentModel, IDS[2]);
-    else { assert.match(result.message, /模型菜单里没有 DeepSeek/); assert.equal(currentModel, IDS[0]); assert.equal(result.inputReady, true); assert.deepEqual(writes, ['\x1b']); }
+    else { assert.equal(result.message, `这个账号在 CodeAgent 模型菜单里选不了 ${IDS[2]}`); assert.match(result.technicalReason, /模型菜单里没有 DeepSeek/); assert.equal(currentModel, IDS[0]); assert.equal(result.inputReady, true); assert.deepEqual(writes, ['\x1b[B', '\x1b']); }
   }
 });
 
@@ -704,12 +821,12 @@ test('actual model-list IPC merges config with the selected account cache and pr
   const vars = { CLAUDE_HUB_DATA_DIR: dir, AI_HUB_CODEAGENT_CONFIG_DIR: cfg, AI_HUB_CODEAGENT_SERVE: '0' };
   const previous = Object.fromEntries(Object.keys(vars).map(key => [key, process.env[key]])); Object.assign(process.env, vars);
   t.after(() => { for (const [key, value] of Object.entries(previous)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
-  json(pool.personalModelsFile(dir), { models: IDS.slice(0, 2), at: new Date().toISOString(), source: 'menu' });
+  json(pool.personalModelsFile(dir), { models: IDS.slice(0, 2), at: new Date().toISOString(), source: 'menu', parserVersion: models.MODEL_MENU_PARSER_VERSION });
   models.recordMenu(dir, IDS.slice(0, 2), { complete: true });
   const id = 'abcdef12', accountDir = pool.accountDir(dir, id); config(accountDir, ['DeepSeek-Config-2']);
   json(path.join(pool.poolRoot(dir), 'pool.json'), { accounts: [{ id }] });
   json(path.join(accountDir, '.credentials.json'), { idaasOAuth: { accountId: 'synthetic-account', xAuthToken: 'fixture', expiresAt: Date.now() + 86400000 } });
-  json(path.join(accountDir, probe.MODELS_FILE), { models: ['DeepSeek-Config-2'], at: new Date().toISOString(), source: 'menu' });
+  json(path.join(accountDir, probe.MODELS_FILE), { models: ['DeepSeek-Config-2'], at: new Date().toISOString(), source: 'menu', parserVersion: models.MODEL_MENU_PARSER_VERSION });
   models.recordMenu(dir, ['DeepSeek-Config-2'], { key: id, complete: true });
   const handlers = new Map();
   require('../main/ipc/session-handlers').registerSessionIpc({ handle: (name, fn) => handlers.set(name, fn), on() {} }, {
@@ -717,11 +834,12 @@ test('actual model-list IPC merges config with the selected account cache and pr
     sendToRenderer() {}, codeagentProbeModels: async () => ({ ok: true, models: IDS, menuComplete: true, usage: usage.parseCodeAgentUsageMenu(menu()) }),
   });
   const get = payload => handlers.get('codeagent:models')(null, payload).options;
-  assert.deepEqual(get({ account: 'personal' }).map(row => row.id), IDS);
-  assert.ok(get({ account: 'personal' }).slice(-2).every(row => row.description.includes('未在 CodeAgent 菜单中确认')));
-  assert.deepEqual(get({ account: 'pool', poolAccount: id }).map(row => row.id), ['DeepSeek-Config-2']);
-  assert.deepEqual(handlers.get('codeagent:session-models')(null, { sessionId: 'pool' }).options.map(row => row.id), ['DeepSeek-Config-2']);
-  assert.deepEqual(handlers.get('codeagent:session-models')(null, { sessionId: 'personal' }).options.map(row => row.id), IDS);
+  assert.deepEqual(get({ account: 'personal' }).map(row => row.id), IDS.slice(0, 2));
+  assert.ok(get({ account: 'personal' }).every(row => !row.description?.includes('未在 CodeAgent 菜单中确认')));
+  const poolIds = ['DeepSeek-Config-2'];
+  assert.deepEqual(get({ account: 'pool', poolAccount: id }).map(row => row.id), poolIds);
+  assert.deepEqual(handlers.get('codeagent:session-models')(null, { sessionId: 'pool' }).options.map(row => row.id), poolIds);
+  assert.deepEqual(handlers.get('codeagent:session-models')(null, { sessionId: 'personal' }).options.map(row => row.id), IDS.slice(0, 2));
   assert.equal((await handlers.get('codeagent:usage-refresh')(null, { key: 'personal' })).ok, true);
   assert.deepEqual(models.readMenu(dir), IDS);
   assert.deepEqual(probe.readProbed(pool.personalModelsFile(dir)).models, IDS);
@@ -729,8 +847,9 @@ test('actual model-list IPC merges config with the selected account cache and pr
   assert.deepEqual(models.readMenu(dir, id), ['DeepSeek-Config-2']);
 });
 
-for (const scenario of ['existing', 'concurrent', 'concurrent-after-write', 'absent']) test(`real switch-model IPC preserves the original model after an absent menu target (${scenario} launch file)`, async t => {
+for (const scenario of ['existing', 'concurrent', 'concurrent-after-write', 'absent']) test(`real switch-model IPC retains written settings after an absent menu target (${scenario} launch file)`, async t => {
   const dir = temp(t), cfg = path.join(dir, 'personal'), sid = 'synthetic-switch'; config(cfg, [IDS[0], IDS[2]]);
+  json(path.join(dir, 'codeagent-last-model.json'), { personal: { model: IDS[0], at: new Date().toISOString() } });
   json(pool.personalModelsFile(dir), { models: [IDS[0]], at: new Date().toISOString() });
   const file = path.join(dir, 'codeagent-launch', sid + '.json');
   const original = JSON.stringify({ model: IDS[0], preserve: true }, null, 2) + '\n';
@@ -740,6 +859,7 @@ for (const scenario of ['existing', 'concurrent', 'concurrent-after-write', 'abs
   const pickerFixture = menuVm('codeagent-model-picker.js', { globals: { screen } }, '\nopenSessionScreen = async () => screen;');
   const current = { id: sid, kind: 'codeagent', agentRuntime: 'pty', status: 'idle', codeagentConfigDir: cfg, currentModel: { id: IDS[0], displayName: IDS[0] } };
   const manager = { getSession: () => ({ ...current }), getAllSessions: () => [current], codeagentPoolActiveCounts: () => ({}),
+    getSessionBufferSnapshot: async () => ({}),
     updateSessionMeta: (_sid, patch) => Object.assign(current, patch), writeToSession: (_sid, key) => {
       if (key === '\x1b') { closed = true; if (scenario === 'concurrent') json(file, { model: 'external-change' }); }
       assert.notEqual(key, '\r', 'missing target must never be selected');
@@ -759,14 +879,629 @@ for (const scenario of ['existing', 'concurrent', 'concurrent-after-write', 'abs
   const handlers = new Map();
   context.module.exports.registerSessionIpc({ handle: (name, fn) => handlers.set(name, fn), on() {} }, { sessionManager: manager, sendToRenderer() {} });
   const result = await handlers.get('codeagent:switch-model')(null, { sessionId: sid, modelId: IDS[2] });
-  assert.equal(result.ok, false); assert.match(result.message, /模型菜单里没有 DeepSeek/);
-  assert.equal(current.currentModel.id, IDS[0]); assert.equal(closed, true);
-  if (scenario === 'existing') { assert.equal(writes, 1); assert.equal(fs.readFileSync(file, 'utf8'), original); }
+  assert.equal(result.ok, scenario !== 'absent'); assert.equal(result.message, `这个账号在 CodeAgent 模型菜单里选不了 ${IDS[2]}`);
+  assert.equal(current.currentModel.id, scenario === 'absent' ? IDS[0] : IDS[2]); assert.equal(closed, true);
+  assert.equal(require('../core/codeagent-launch-model').lastModel(dir, 'personal'), IDS[0], 'settings-only changes this session, not future sessions');
+  if (scenario !== 'absent') {
+    assert.equal(result.mode, 'settings-only'); assert.equal(result.confirmed, false);
+    assert.match(fs.readFileSync(path.join(dir, 'logs/codeagent-model.log'), 'utf8'), /event=switch-settings-only/);
+    await pickerFixture.api.waitForPick(sid);
+    await pickerFixture.api.beforePrompt(manager, sid);
+  }
+  if (scenario === 'existing') { assert.equal(writes, 1); assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { model: IDS[2] }); }
   if (scenario === 'absent') { assert.equal(writes, 0); assert.equal(fs.existsSync(file), false); }
   if (scenario.startsWith('concurrent')) {
     assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).model, 'external-change');
     const log = fs.readFileSync(path.join(dir, 'logs/codeagent-model.log'), 'utf8');
-    assert.match(log, /event=model-switch-restore-skipped.*reason=concurrent-write/);
+    assert.doesNotMatch(log, /event=model-switch-restore-skipped/);
     assert.doesNotMatch(log, /external-change/);
   }
+});
+
+const SCROLL_CAPTURE = fs.readFileSync(path.join(__dirname, 'fixtures/codeagent-model-picker-scroll.txt'), 'utf8').split(/\r?\n/);
+const SCROLL_TARGET = 'deepseek-v4.1-flash-1017';
+function scrollingPicker(t, { searchWorks = false, ids = ['GLM-5.2-WX-Auto', 'MiniMax-M2.7', 'GLM-5.2', SCROLL_TARGET],
+  filterIds = [SCROLL_TARGET], wrap = false, paintDelay = 240, drift = false,
+  clearFails = false, blankSearch = false, hideCursor = false, focusWorks = true, focusFirst = true, splitFocus = false, showScrollbar = true } = {}) {
+  const dir = temp(t), writes = [], rowIndex = SCROLL_CAPTURE.findIndex(line => /❯\s+1\./.test(line));
+  let cursor = 0, nextCursor = 0, paintAt = 0, query = '', closed = false, selected = null, fixture, filteredReads = 0, cursorShown = !hideCursor, cursorShownAt = Infinity, failedClearOnce = false;
+  const viewIds = () => query && searchWorks ? filterIds : ids;
+  const screen = { dispose() {}, lines: async () => {
+    if (closed) return ['❯ ', '? for shortcuts'];
+    if (fixture.state.clock >= paintAt) cursor = nextCursor;
+    if (fixture.state.clock >= cursorShownAt) cursorShown = true;
+    const visible = viewIds();
+    const filtered = query && searchWorks;
+    if (filtered) filteredReads++;
+    const list = filtered ? visible : [visible[cursor]];
+    const rows = list.map((id, index) => {
+      const at = filtered ? index : cursor;
+      const name = drift && filteredReads >= 3 ? 'GLM-5.2-WX-Auto' : id;
+      return SCROLL_CAPTURE[rowIndex].replace(/❯\s+1\. GLM-5\.2-WX-Auto default ✓/, `${at === cursor && cursorShown ? '❯' : ' '}  ${at + 1}. ${name}`);
+    });
+    const lines = SCROLL_CAPTURE.map(line => line.includes('⌕') ? line.replace('Search…', query || (blankSearch ? '' : 'Search…')) : showScrollbar ? line : line.replace(/█/g, ''));
+    lines.splice(rowIndex, 1, ...rows);
+    return showScrollbar ? lines : lines.map(line => line.replace(/█/g, ''));
+  } };
+  const manager = { writeToSession: (_sid, key) => {
+    writes.push([key, fixture.state.clock]);
+    if (key === '\x1b') {
+      if (query) {
+        if (clearFails && !failedClearOnce) { failedClearOnce = true; return; }
+        query = ''; cursor = 0; nextCursor = 0; paintAt = 0;
+      } else closed = true;
+      return;
+    }
+    if (key === '\r') { selected = viewIds()[cursor]; closed = true; return; }
+    if (/^\x7f+$/.test(key)) { if (!clearFails) query = ''; cursor = 0; nextCursor = 0; paintAt = 0; return; }
+    if (key === '\x1b[B' || key === '\x1b[A') {
+      if (!cursorShown && focusWorks) {
+        if (focusFirst) { cursorShown = true; return; }
+        if (splitFocus) cursorShown = true;
+        else cursorShownAt = fixture.state.clock + paintDelay;
+      }
+      const length = viewIds().length, delta = key === '\x1b[B' ? 1 : -1;
+      nextCursor = wrap ? (cursor + delta + length) % length : Math.max(0, Math.min(length - 1, cursor + delta));
+      paintAt = fixture.state.clock + paintDelay;
+      return;
+    }
+    query = key; cursor = 0; nextCursor = 0; paintAt = 0;
+  } };
+  const sendToPty = async (_sid, text) => {
+    assert.equal(text, '/model'); writes.push([text, fixture.state.clock]);
+    closed = false; query = ''; cursor = 0; nextCursor = 0; paintAt = 0;
+    return { ok: true, sendStatus: 'ok' };
+  };
+  fixture = menuVm('codeagent-model-picker.js', { globals: { screen } }, '\nopenSessionScreen = async () => screen;');
+  return { dir, writes, manager, sendToPty, api: fixture.api, selected: () => selected,
+    run: extra => fixture.api.pickModel({ manager, sid: 'scroll-session', kind: 'codeagent', modelId: SCROLL_TARGET, dataDir: dir, sendToPty, ...extra }) };
+}
+
+test('captured single-model viewport is incomplete because its scrollbar is visible', () => {
+  const parsed = picker.parsePicker(SCROLL_CAPTURE);
+  assert.equal(parsed.rows.length, 1); assert.equal(parsed.rows[0].label, 'GLM-5.2-WX-Auto');
+  assert.equal(parsed.complete, false); assert.equal(parsed.incompleteReason, 'scroll-truncated');
+  const counted = SCROLL_CAPTURE.map(line => line.replace(/█/g, ''));
+  counted.splice(counted.findIndex(line => line.includes('Navigate')), 0, '4 models');
+  assert.equal(picker.parsePicker(counted).complete, false);
+});
+
+test('one visible model can be searched without writing a partial full-list cache', async t => {
+  const f = scrollingPicker(t, { searchWorks: true });
+  models.recordMenu(f.dir, ['GLM-5.2-WX-Auto', SCROLL_TARGET], { complete: true });
+  const result = await f.run();
+  assert.equal(result.ok, true); assert.equal(f.selected(), SCROLL_TARGET); assert.equal(result.menu, undefined);
+  assert.deepEqual(f.writes.map(([key]) => key), [SCROLL_TARGET, '\r']);
+  assert.deepEqual(models.readMenu(f.dir), ['GLM-5.2-WX-Auto', SCROLL_TARGET]);
+  assert.match(fs.readFileSync(path.join(f.dir, 'logs/codeagent-model.log'), 'utf8'), /event=switch-search.*result=found/);
+});
+
+test('filtered search moves to an exact row rather than accepting the highlighted partial match', async t => {
+  const f = scrollingPicker(t, { searchWorks: true, filterIds: [SCROLL_TARGET + '-extra', SCROLL_TARGET] });
+  const result = await f.run();
+  assert.equal(result.ok, true); assert.equal(f.selected(), SCROLL_TARGET);
+  assert.deepEqual(f.writes.map(([key]) => key), [SCROLL_TARGET, '\x1b[B', '\r']);
+});
+
+test('an ineffective search is cleared before scrolling three delayed model frames to the target', async t => {
+  const f = scrollingPicker(t), result = await f.run();
+  assert.equal(result.ok, true); assert.equal(f.selected(), SCROLL_TARGET);
+  assert.deepEqual(f.writes.map(([key]) => key), [SCROLL_TARGET, '\x1b', ...Array(3).fill('\x1b[B'), '\r']);
+  const arrows = f.writes.filter(([key]) => key === '\x1b[B');
+  assert.ok(arrows.every(([, at], index) => !index || at - arrows[index - 1][1] >= 240));
+  assert.match(fs.readFileSync(path.join(f.dir, 'logs/codeagent-model.log'), 'utf8'), /event=switch-scroll.*steps=3.*result=found/);
+});
+
+for (const wrap of [false, true]) test(`a missing model is rejected after reaching the end or wrapping (${wrap})`, async t => {
+  const f = scrollingPicker(t, { ids: ['GLM-5.2-WX-Auto', 'MiniMax-M2.7', 'GLM-5.2'], wrap }), result = await f.run();
+  assert.equal(result.ok, false); assert.equal(result.message, `这个账号在 CodeAgent 模型菜单里选不了 ${SCROLL_TARGET}`); assert.match(result.technicalReason, /模型菜单里没有/);
+  assert.equal(f.selected(), null); assert.equal(f.writes.some(([key]) => key === '\r'), false);
+  assert.equal(f.writes.filter(([key]) => key === '\x1b[B').length, 3);
+});
+
+test('a final cursor read refuses a drifted row instead of submitting the wrong model', async t => {
+  const f = scrollingPicker(t, { searchWorks: true, drift: true }), result = await f.run();
+  assert.equal(result.ok, false); assert.equal(result.message, `这个账号在 CodeAgent 模型菜单里选不了 ${SCROLL_TARGET}`); assert.match(result.technicalReason, /未确认光标已移到/);
+  assert.equal(f.selected(), null); assert.equal(f.writes.some(([key]) => key === '\r'), false);
+});
+
+const CLEARED_CAPTURE = fs.readFileSync(path.join(__dirname, 'fixtures/codeagent-model-picker-search-cleared.txt'), 'utf8').split(/\r?\n/);
+test('the real focused empty search box has no inferred selection and Stats are cropped by display column', () => {
+  assert.equal(picker.parsePicker(CLEARED_CAPTURE), null, 'no cursor means no confirmed selection');
+  const parsed = picker.parsePicker(CLEARED_CAPTURE, { allowNoCursor: true });
+  assert.equal(parsed.cursor, -1); assert.equal(parsed.rows[0].label, 'GLM-5.2-WX-Auto');
+  assert.equal(parsed.complete, false); assert.equal(parsed.incompleteReason, 'scroll-truncated');
+  const main = picker.modelMenuLines(CLEARED_CAPTURE);
+  assert.doesNotMatch(main.join('\n'), /SESSION|VERSION|Update detected/);
+  const read = usage.parseCodeAgentUsageMenu(main);
+  assert.equal(read.models[0].name, 'GLM-5.2-WX-Auto');
+  assert.equal(read.models[0].day.used, '54.56M'); assert.equal(read.models[0].hour.used, '824.44K');
+  assert.equal(read.models[0].min.used, '225.02K');
+});
+
+test('nonempty search results never count as a complete account model snapshot', () => {
+  const frame = menu(); frame.splice(1, 0, `⌕ ${SCROLL_TARGET}`);
+  const parsed = picker.parsePicker(frame);
+  assert.equal(parsed.complete, false); assert.equal(parsed.incompleteReason, 'filtered-menu');
+});
+
+for (const filtered of [false, true]) test(`background model evidence is read before navigation and rejects filtered screens (${filtered})`, async t => {
+  const dir = temp(t), keys = []; let opened = false, exit;
+  const frame = menu().map(line => line.replace('❯', ' '));
+  if (filtered) frame.splice(1, 0, `⌕ ${SCROLL_TARGET}`);
+  const screen = { write() {}, lines: async () => opened ? frame : ['❯ ', '? for shortcuts'], dispose() {} };
+  const proc = { onData: () => ({ dispose() {} }), onExit: fn => { exit = fn; },
+    write: key => { keys.push(key); if (key === '\r') opened = true; if (key === '\x1b') opened = false; }, kill: () => exit() };
+  const fixture = menuVm('codeagent-model-probe.js', { './claude-trust-dialog': { createTrustScreen: () => screen } });
+  const result = await fixture.api.probeModels({ command: 'synthetic-codeagent', configDirEnv: 'SYNTHETIC_CONFIG_DIR',
+    configDir: path.join(dir, 'cfg'), cwd: path.join(dir, 'cwd'), dataDir: dir, ptyModule: { spawn: () => proc } });
+  assert.equal(result.ok, !filtered);
+  if (filtered) { assert.equal(result.menuComplete, undefined); assert.equal(result.models, undefined); }
+  else { assert.equal(result.menuComplete, true); assert.deepEqual(Array.from(result.models), IDS); }
+  assert.deepEqual(keys.slice(0, 2), ['/model', '\r']);
+  assert.ok(keys.slice(2).every(key => key === '\x1b'), 'no search or navigation before collecting the snapshot');
+});
+
+test('a cleared search without a placeholder falls back to scrolling without reopening', async t => {
+  const f = scrollingPicker(t, { blankSearch: true });
+  const result = await f.run({ allowedModels: ['GLM-5.2-WX-Auto'] });
+  assert.equal(result.ok, true); assert.equal(f.selected(), SCROLL_TARGET);
+  assert.ok(!f.writes.some(([key]) => key === '/model'));
+  assert.equal(f.writes.filter(([key]) => key === '\x1b[B').length, 3);
+  const snapshot = fs.readFileSync(path.join(f.dir, 'logs/codeagent-model-picker-search.txt'), 'utf8');
+  assert.match(snapshot, /switch-search/); assert.match(snapshot, new RegExp(SCROLL_TARGET));
+});
+
+test('failed search clearing exits, confirms empty input, reopens and scrolls without searching twice', async t => {
+  const f = scrollingPicker(t, { clearFails: true });
+  const result = await f.run();
+  assert.equal(result.ok, true); assert.equal(f.selected(), SCROLL_TARGET);
+  assert.deepEqual(f.writes.map(([key]) => key), [SCROLL_TARGET, '\x1b', '\x1b', '\x1b', '/model', ...Array(3).fill('\x1b[B'), '\r']);
+  const esc = f.writes.find(([key]) => key === '\x1b')[1], reopen = f.writes.find(([key]) => key === '/model')[1];
+  assert.ok(reopen - esc >= 320, 'the ordinary input must settle before /model is sent');
+});
+
+for (const focusFirst of [true, false]) test(`a hidden cursor must become visible after Down before the target is selected (focusFirst=${focusFirst})`, async t => {
+  const f = scrollingPicker(t, { hideCursor: true, blankSearch: true, focusFirst });
+  assert.equal((await f.run()).ok, true); assert.equal(f.selected(), SCROLL_TARGET);
+  assert.equal(f.writes.filter(([key]) => key === '\x1b[B').length, focusFirst ? 4 : 3);
+});
+
+test('an intermediate cursor-only frame settles through the delayed move before another Down is sent', async t => {
+  const f = scrollingPicker(t, { hideCursor: true, blankSearch: true, focusFirst: false, splitFocus: true, paintDelay: 240 });
+  assert.equal((await f.run()).ok, true); assert.equal(f.selected(), SCROLL_TARGET);
+  const arrows = f.writes.filter(([key]) => key === '\x1b[B');
+  assert.equal(arrows.length, 3);
+  assert.ok(arrows[1][1] - arrows[0][1] >= 240 + 320, 'the marker-only frame must not trigger a second arrow');
+});
+
+test('a menu which never exposes a selected row is not submitted', async t => {
+  const f = scrollingPicker(t, { hideCursor: true, focusWorks: false });
+  const result = await f.run();
+  assert.equal(result.ok, false); assert.equal(result.message, `这个账号在 CodeAgent 模型菜单里选不了 ${SCROLL_TARGET}`);
+  assert.match(result.technicalReason, /无法确认模型列表的选中项/);
+  assert.equal(f.selected(), null); assert.ok(!f.writes.some(([key]) => key === '\r'));
+});
+
+test('a serve catalog is displayed exactly and is not expanded by config, observations or menu snapshots', t => {
+  const dir = temp(t), cfg = path.join(dir, 'personal'); config(cfg, ['Config-Only', 'GLM-5.2-WX-Auto']);
+  models.recordObserved(dir, 'Observed-Only');
+  probe.writeProbed(pool.personalModelsFile(dir), { models: ['Serve-Only', 'Probe-Only', 'Probe-Only-Auto'], source: 'serve' });
+  const options = () => models.modelOptions(dir, { configDir: cfg });
+  const before = options().map(row => row.id);
+  assert.deepEqual(before, ['Serve-Only', 'Probe-Only-Auto']);
+  models.recordMenu(dir, ['GLM-5.2-WX-Auto', 'Menu-Only'], { complete: true });
+  assert.deepEqual(options().map(row => row.id), before);
+  assert.ok(options().every(row => row.source === 'serve'));
+  assert.ok(options().every(row => !/未确认|未在 CodeAgent 菜单/.test(row.description || '')));
+});
+
+for (const key of ['personal', 'abcdef12']) test(`v1 data alone remains unavailable until a reliable catalog is read (${key})`, async t => {
+  const fixture = staleProbeIpc(t, { key, parserVersion: 1 });
+  models.recordObserved(fixture.dir, 'DeepSeek-Observed');
+  const all = fixture.options().map(row => row.id);
+  assert.deepEqual(all, []);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(fixture.calls.length, 1);
+  fixture.release({ ok: false, error: 'synthetic-menu-unavailable' }); await fixture.done;
+  assert.deepEqual(fixture.options().map(row => row.id), all);
+});
+
+for (const evidence of ['config', 'v1-menu', 'current-menu', 'serve']) test(`single-model launch shortcut requires reliable background evidence (${evidence})`, t => {
+  const dir = temp(t), cfg = path.join(dir, 'personal'), file = pool.personalModelsFile(dir); config(cfg, [IDS[0]]);
+  if (evidence !== 'config') json(file, { models: [IDS[0]], source: evidence === 'serve' ? 'serve' : 'menu',
+    parserVersion: evidence === 'current-menu' ? models.MODEL_MENU_PARSER_VERSION : 1, at: new Date().toISOString() });
+  const known = pool.accountModels(cfg, fs, file);
+  const reliable = evidence === 'current-menu' || evidence === 'serve';
+  assert.equal(known.probeReliable, reliable);
+  const choice = require('../core/codeagent-launch-model').chooseLaunchModel({ models: known.models, authoritative: known.authoritative,
+    singleModelReliable: known.probeReliable, first: picker.FIRST_MENU_MODEL });
+  assert.equal(choice.open, !reliable);
+  assert.equal(choice.reason, reliable ? 'single-model' : 'unknown-list');
+});
+
+function pickerSessionIpc(t, f) {
+  const cfg = path.join(f.dir, 'personal'), sid = 'scroll-session'; config(cfg, ['GLM-5.2-WX-Auto', SCROLL_TARGET]);
+  probe.writeProbed(pool.personalModelsFile(f.dir), { models: ['GLM-5.2-WX-Auto', SCROLL_TARGET] });
+  models.recordMenu(f.dir, ['GLM-5.2-WX-Auto', SCROLL_TARGET], { complete: true });
+  const vars = { CLAUDE_HUB_DATA_DIR: f.dir, AI_HUB_CODEAGENT_CONFIG_DIR: cfg, AI_HUB_CODEAGENT_SERVE: '0' };
+  const previous = Object.fromEntries(Object.keys(vars).map(name => [name, process.env[name]])); Object.assign(process.env, vars);
+  t.after(() => { for (const [name, value] of Object.entries(previous)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; } });
+  const session = { id: sid, kind: 'codeagent', status: 'idle', agentRuntime: 'pty', codeagentConfigDir: cfg };
+  const manager = { ...f.manager, getSession: () => ({ ...session }), getAllSessions: () => [session], codeagentPoolActiveCounts: () => ({}),
+    updateSessionMeta: (_sid, fields) => Object.assign(session, fields), on: (name, fn) => listeners.set(name, fn) };
+  const handlers = new Map(), listeners = new Map(), notices = [];
+  const file = path.join(__dirname, '..', 'main/ipc/session-handlers.js'), localRequire = createRequire(file);
+  const context = vm.createContext({ module: { exports: {} }, console, process, Buffer, setTimeout, clearTimeout, setImmediate,
+    require: name => name === '../../core/codeagent-model-picker' ? f.api : name === '../../core/group-chat-watcher' ? { sendToPty: f.sendToPty } : localRequire(name) });
+  vm.runInContext(fs.readFileSync(file, 'utf8'), context);
+  context.module.exports.registerSessionIpc({ handle: (name, fn) => handlers.set(name, fn), on() {} }, { sessionManager: manager, sendToRenderer: (name, payload) => { if (name === 'session-notice') notices.push(payload); } });
+  return { handlers, listeners, notices, session };
+}
+
+for (const reason of ['switch', 'launch']) for (const present of [true, false]) test(`session ${reason} never rewrites menu or permission files after failed search clearing (${present})`, async t => {
+  const ids = ['GLM-5.2-WX-Auto', 'MiniMax-M2.7', 'GLM-5.2', ...(present ? [SCROLL_TARGET] : [])];
+  const f = scrollingPicker(t, { clearFails: true, ids, showScrollbar: false }), ipc = pickerSessionIpc(t, f);
+  const files = [pool.personalModelsFile(f.dir), path.join(f.dir, 'codeagent-account-menu-models.json')];
+  const before = files.map(file => fs.readFileSync(file));
+  if (reason === 'switch') assert.equal((await ipc.handlers.get('codeagent:switch-model')(null, { sessionId: 'scroll-session', modelId: SCROLL_TARGET })).ok, present);
+  else {
+    ipc.listeners.get('codeagent-model-pick')({ sessionId: 'scroll-session', modelId: SCROLL_TARGET, reason: 'launch' });
+    if (present) assert.equal((await f.api.waitForPick('scroll-session')).ok, true);
+    else {
+      await assert.rejects(f.api.waitForPick('scroll-session'), /这个账号在 CodeAgent 模型菜单里选不了/);
+      assert.equal(ipc.notices[0].message, `这个账号在 CodeAgent 模型菜单里选不了 ${SCROLL_TARGET}`);
+    }
+  }
+  files.forEach((file, index) => assert.deepEqual(fs.readFileSync(file), before[index]));
+  assert.equal(f.selected(), present ? SCROLL_TARGET : null);
+  const log = fs.readFileSync(path.join(f.dir, 'logs/codeagent-model.log'), 'utf8');
+  assert.match(log, /event=switch-search.*result=clear-failed/);
+  assert.doesNotMatch(log, /event=permission-list-sync|event=permission-list-stale/);
+});
+
+for (const reason of ['switch', 'launch']) test(`a successful ${reason} is accepted even when the saved permission list only contains GLM`, async t => {
+  const f = scrollingPicker(t, { searchWorks: true }), ipc = pickerSessionIpc(t, f);
+  config(path.join(f.dir, 'personal'), ['GLM-5.2-WX-Auto']);
+  probe.writeProbed(pool.personalModelsFile(f.dir), { models: ['GLM-5.2-WX-Auto'] });
+  models.recordMenu(f.dir, ['GLM-5.2-WX-Auto'], { complete: true });
+  if (reason === 'switch') assert.equal((await ipc.handlers.get('codeagent:switch-model')(null, { sessionId: 'scroll-session', modelId: SCROLL_TARGET })).ok, true);
+  else {
+    ipc.listeners.get('codeagent-model-pick')({ sessionId: 'scroll-session', modelId: SCROLL_TARGET, reason: 'launch' });
+    assert.equal((await f.api.waitForPick('scroll-session')).ok, true);
+  }
+  assert.equal(f.selected(), SCROLL_TARGET); assert.equal(ipc.session.currentModel.id, SCROLL_TARGET);
+  assert.equal(f.writes.filter(([key]) => key === '\r').length, 1, 'no second selection may revert to GLM');
+});
+
+test('explicit non-Auto switches compare once, normalize case, and supersede the old target without changing Auto routing', () => {
+  const session = { id: 'switch-verify', kind: 'codeagent', currentModel: { id: SCROLL_TARGET }, codeagentActualModel: 'DeepSeek-V4.1' };
+  models.expectModelSwitch(session.id, 'DeepSeek-V4.1-Flash-1017');
+  assert.equal(models.observeModel(session, SCROLL_TARGET).mismatch, null);
+  models.expectModelSwitch(session.id, 'DeepSeek-V4.1');
+  models.expectModelSwitch(session.id, SCROLL_TARGET);
+  assert.equal(models.observeModel(session, 'DeepSeek-V4.1', { at: 1 }), null, 'a previous answer cannot consume the new request');
+  const mismatch = models.observeModel(session, 'DeepSeek-V4.1');
+  assert.equal(mismatch.mismatch.requested, SCROLL_TARGET);
+  assert.equal(models.mismatchNotice(mismatch.mismatch), '模型切换没有生效，实际仍是 DeepSeek-V4.1');
+  assert.equal(models.observeModel(session, 'DeepSeek-V4.1'), null, 'pending explicit target is consumed once');
+  session.currentModel.id = 'DeepSeek-V4.1-Auto';
+  models.expectModelSwitch(session.id, session.currentModel.id);
+  assert.equal(models.observeModel(session, 'DeepSeek-V4.1'), null, 'Auto still permits its own concrete model');
+});
+
+test('the real model observation path emits a mismatch notice and switch-mismatch log without retrying a switch', async () => {
+  const file = path.join(__dirname, '..', 'main.js'), source = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+  const start = source.indexOf('async function observeCodeAgentModel('), end = source.indexOf('\n}\n', start) + 2;
+  const session = { id: 'observe-switch', kind: 'codeagent', currentModel: { id: SCROLL_TARGET } }, events = [], logs = [], writer = {};
+  models.expectModelSwitch(session.id, SCROLL_TARGET);
+  const context = vm.createContext({ console, codeAgentModelObservations: new WeakMap(), getHubDataDir: () => 'synthetic',
+    sessionManager: { sessions: new Map([[session.id, writer]]), getSession: () => session,
+      updateSessionMeta: (_sid, patch) => Object.assign(session, patch) }, sessionStore: { markDirty() {} },
+    sendToRenderer: (name, value) => events.push({ name, value }),
+    require: name => { assert.equal(name, './core/codeagent-models'); return { ...models,
+      appendModelLog: (_dir, fields) => logs.push(fields), recordObserved: () => false }; },
+  });
+  vm.runInContext(source.slice(start, end), context);
+  await context.observeCodeAgentModel(session.id, { modelId: 'DeepSeek-V4.1' });
+  assert.equal(events.find(event => event.name === 'session-notice').value.message, '模型切换没有生效，实际仍是 DeepSeek-V4.1');
+  assert.equal(logs.find(row => row.event === 'switch-mismatch').actual, 'DeepSeek-V4.1');
+});
+
+test('settings-only gets a distinct model-picker success message', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'renderer/model-ui.js'), 'utf8').replace(/\r\n/g, '\n');
+  const start = source.indexOf("renderModelPicker(menu, badgeEl, sessionId, { text: result.mode === 'settings-only'");
+  const end = source.indexOf('await sleep(900)', start), states = [];
+  const context = vm.createContext({ result: { mode: 'settings-only' }, menu: {}, badgeEl: {}, sessionId: 'test',
+    renderModelPicker: (_menu, _badge, _sid, state) => states.push(state) });
+  vm.runInContext(source.slice(start, end), context);
+  assert.equal(states[0].text, '已改这个会话的设置，下一条回答起生效（回答后核对实际模型）');
+});
+
+test('serve is enabled without an unlock record and can still be explicitly disabled', t => {
+  const serve = require('../core/codeagent-serve'), dir = temp(t);
+  assert.equal(serve.serveEnabled(dir, {}), true);
+  assert.equal(serve.serveEnabled(dir, { AI_HUB_CODEAGENT_SERVE: '0' }), false);
+  assert.equal(serve.serveEnabled(dir, { AI_HUB_CODEAGENT_SERVE: '1' }), true);
+});
+
+function catalogIpc(t, { key = 'personal', previous, serveRead, menuRead } = {}) {
+  const dir = temp(t), personal = path.join(dir, 'personal'), cfg = key === 'personal' ? personal : pool.accountDir(dir, key);
+  config(cfg, ['Config-Only', 'MiniMax-M2.7', ...IDS]);
+  json(path.join(cfg, '.credentials.json'), { idaasOAuth: { accountId: key, xAuthToken: 'fixture', expiresAt: Date.now() + 86400000 } });
+  if (key !== 'personal') json(path.join(pool.poolRoot(dir), 'pool.json'), { accounts: [{ id: key }] });
+  const file = key === 'personal' ? pool.personalModelsFile(dir) : path.join(cfg, probe.MODELS_FILE);
+  if (previous) json(file, previous);
+  const vars = { CLAUDE_HUB_DATA_DIR: dir, AI_HUB_CODEAGENT_CONFIG_DIR: personal, AI_HUB_CODEAGENT_SERVE: '1' };
+  const old = Object.fromEntries(Object.keys(vars).map(name => [name, process.env[name]])); Object.assign(process.env, vars);
+  t.after(() => { for (const [name, value] of Object.entries(old)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; } });
+  const handlers = new Map(), calls = [], events = [];
+  require('../main/ipc/session-handlers').registerSessionIpc({ handle: (name, fn) => handlers.set(name, fn), on() {} }, {
+    sessionManager: { getAllSessions: () => [], codeagentPoolActiveCounts: () => ({}) },
+    sendToRenderer: (name, value) => events.push({ name, value }),
+    codeagentServeRead: async options => { calls.push(['serve', options]); return serveRead(options); },
+    codeagentProbeModels: async options => { calls.push(['menu', options]); return menuRead(options); },
+  });
+  return { dir, cfg, file, calls, handlers, events,
+    read: () => handlers.get('codeagent:models')(null, key === 'personal' ? { account: 'personal' } : { account: 'pool', poolAccount: key }),
+    refresh: () => handlers.get('codeagent-pool:probe')(null, { id: key }) };
+}
+
+for (const key of ['personal', 'abcdef12']) test(`providers are the exact reliable catalog and quota source for ${key}`, async t => {
+  const ids = ['GLM-5.2-WX-Auto', 'DeepSeek-V4.1-Flash-1017'];
+  const f = catalogIpc(t, { key, serveRead: async () => ({ ok: true, models: ids, details: ids.map(id => ({ id, load: '低负载' })),
+    quotas: Object.fromEntries(ids.map(id => [id, [{ type: 'TPD', used: 25, total: 100 }]])) }), menuRead: () => assert.fail('serve succeeded') });
+  assert.deepEqual(f.read().options, []); assert.equal(f.read().catalog.state, 'loading');
+  const result = await f.refresh(); assert.equal(result.ok, true);
+  assert.deepEqual(f.read().options.map(row => row.id), ids);
+  assert.ok(f.read().options.every(row => row.source === 'serve'));
+  assert.equal(f.read().catalog.source, 'serve'); assert.equal(f.read().catalog.state, 'ready');
+  assert.match(f.read().catalog.message, /更新于 \d{2}:\d{2}/);
+  assert.deepEqual(f.calls.map(row => row[0]), ['serve']); assert.equal(f.calls[0][1].configDir, f.cfg);
+  assert.equal(pool.accountModels(f.cfg, fs, f.file).probeReliable, true);
+  const snapshot = usage.readUsage(f.dir)[key]; assert.equal(snapshot.models[1].day.pct, 25);
+  assert.equal(snapshot.source, 'serve'); assert.equal(f.read().options.some(row => row.id === 'MiniMax-M2.7'), false);
+});
+
+test('a rejected serve read falls back to the complete screen catalog and quotas', async t => {
+  const f = catalogIpc(t, { serveRead: async () => { throw new Error('synthetic serve unavailable'); },
+    menuRead: async () => ({ ok: true, models: IDS, menuComplete: true, usage: usage.parseCodeAgentUsageMenu(menu()) }) });
+  assert.equal((await f.refresh()).ok, true);
+  assert.deepEqual(f.calls.map(row => row[0]), ['serve', 'menu']); assert.deepEqual(f.read().options.map(row => row.id), IDS);
+  assert.equal(f.read().catalog.source, 'menu'); assert.equal(usage.readUsage(f.dir).personal.models.length, 4);
+});
+
+test('failure retains the last reliable catalog and timestamp; no catalog triggers once and manual retry recovers', async t => {
+  for (const hasPrevious of [true, false]) {
+    let succeeds = false;
+    const previous = hasPrevious ? { models: IDS, source: 'serve', at: '2000-01-01T00:00:00.000Z' } : undefined;
+    const f = catalogIpc(t, { previous, serveRead: async () => succeeds ? { ok: true, models: IDS } : { ok: false, error: 'serve unavailable' },
+      menuRead: async () => ({ ok: false, error: 'menu-scroll-no-frame' }) });
+    const before = hasPrevious && fs.readFileSync(f.file);
+    const initial = f.read(); assert.equal(initial.catalog.state, 'loading');
+    assert.deepEqual(initial.options.map(row => row.id), hasPrevious ? IDS : []);
+    await new Promise(setImmediate);
+    const failed = f.read(); assert.equal(failed.catalog.state, 'failed'); assert.match(failed.catalog.message, /本次读取失败：.*menu-scroll-no-frame/);
+    if (hasPrevious) { assert.deepEqual(fs.readFileSync(f.file), before); assert.equal(failed.catalog.at, previous.at); }
+    else { assert.equal(fs.existsSync(f.file), false); assert.deepEqual(failed.options, []); }
+    f.read(); f.read(); await new Promise(setImmediate); assert.equal(f.calls.length, 2, 'failed automatic attempt is not repeated');
+    succeeds = true; assert.equal((await f.refresh()).ok, true);
+    assert.deepEqual(f.read().options.map(row => row.id), IDS); assert.equal(f.read().catalog.state, 'ready'); assert.equal(f.read().catalog.error, '');
+  }
+});
+
+function modelPages({ wrap = true, noFrames = false, start = 1, count = 4 } = {}) {
+  let clock = 0, revision = 1, at = start;
+  const ids = IDS.slice(0, count), writes = [];
+  const lines = () => ['Select model', '⌕ Search…', 'Credit用量', '月度: 1/400000', '模型名称  Credit消耗系数  Token用量/配额',
+    `❯ ${at}. ${ids[at - 1]}   0x   Day 1M/400M (0.25%)   ● 低负载█`, 'Hour 100K/200M (0.05%) ▐', 'Min 1K/1M (0.1%) ▒', FOOTER];
+  return { writes, lines, now: () => clock, revision: () => revision, pause: async ms => { clock += ms; },
+    write(key) { writes.push(key); if (key === '\x1b[A') at = Math.max(1, at - 1);
+      else at = wrap ? at % ids.length + 1 : Math.min(ids.length, at + 1); if (!noFrames) revision++; },
+    readLines: async () => lines() };
+}
+
+for (const wrap of [true, false]) test(`multi-screen menus collect all three Token windows by number (${wrap ? 'wrap' : 'two fresh unchanged frames'})`, async () => {
+  const f = modelPages({ wrap, start: 3 });
+  const result = await picker.collectModelMenu({ ...f, lines: f.lines() });
+  assert.equal(result.ok, true); assert.equal(result.menuComplete, true); assert.deepEqual(result.models, IDS);
+  assert.ok(result.usage.models.every(row => row.day && row.hour && row.min && row.load === '低负载'));
+  assert.deepEqual(f.writes.slice(0, 2), ['\x1b[A', '\x1b[A']);
+  assert.equal(f.writes.filter(key => key === '\x1b[B').length, wrap ? 4 : 5);
+});
+
+test('a missing navigation frame cannot certify a partial list or replace a reliable catalog', async t => {
+  const dir = temp(t), f = modelPages({ noFrames: true }), file = pool.personalModelsFile(dir);
+  probe.writeProbed(file, { models: IDS, source: 'serve' }); const before = fs.readFileSync(file);
+  const result = await picker.collectModelMenu({ ...f, lines: f.lines() });
+  assert.equal(result.ok, false); assert.equal(result.reason, 'menu-scroll-no-frame'); assert.equal(result.atNumber, 1);
+  assert.equal(result.models, undefined); assert.deepEqual(fs.readFileSync(file), before);
+});
+
+test('the actual hidden probe uses a taller window, collects pages and leaves an empty input', async t => {
+  const dir = temp(t), pages = modelPages(); let menuOpen = false, onData, onExit, spawnOptions;
+  const screen = { write() {}, dispose() {}, lines: async () => menuOpen ? pages.lines() : ['❯ ', '? for shortcuts'] };
+  const writes = [], proc = { onData: fn => { onData = fn; return { dispose() {} }; }, onExit: fn => { onExit = fn; }, kill: () => onExit(),
+    write: key => { writes.push(key); if (key === '\r') menuOpen = true; if (key === '\x1b') menuOpen = false;
+      if (key === '\x1b[B' || key === '\x1b[A') pages.write(key); onData('frame'); } };
+  const f = menuVm('codeagent-model-probe.js', { './claude-trust-dialog': { createTrustScreen: () => screen } });
+  const result = await f.api.probeModels({ command: 'fake', configDirEnv: 'FAKE_CONFIG', configDir: path.join(dir, 'cfg'), cwd: path.join(dir, 'cwd'), dataDir: dir,
+    ptyModule: { spawn: (_command, _args, options) => { spawnOptions = options; return proc; } } });
+  assert.equal(result.ok, true); assert.deepEqual(Array.from(result.models), IDS); assert.equal(result.usage.models.length, 4);
+  assert.equal(spawnOptions.rows, 160); assert.equal(menuOpen, false); assert.equal(writes.at(-1), '\x1b');
+  assert.match(fs.readFileSync(path.join(dir, 'logs/codeagent-model.log'), 'utf8'), /event=menu-scroll ok=true/);
+});
+
+test('captured filtered DeepSeek screen parses quotas without a cursor and never certifies a full catalog', () => {
+  const lines = require('./fixtures/codeagent-model-search-result.json').lines;
+  const parsed = picker.parsePicker(lines, { allowNoCursor: true });
+  assert.equal(parsed.rows[0].label, 'DeepSeek-V4.1-Flash-1017'); assert.equal(parsed.cursor, -1);
+  assert.equal(parsed.complete, false); assert.equal(parsed.incompleteReason, 'filtered-menu');
+  const tokens = usage.parseCodeAgentUsageMenu(picker.modelMenuLines(lines)).models[0];
+  assert.equal(tokens.name, 'DeepSeek-V4.1-Flash-1017'); assert.equal(tokens.factor, '0.05x'); assert.equal(tokens.load, '中负载');
+  assert.deepEqual([tokens.day.total, tokens.hour.total, tokens.min.total], ['400M', '200M', '5M']);
+  assert.deepEqual([tokens.day.pct, tokens.hour.pct, tokens.min.pct], [0, 0, 0]);
+});
+
+test('scrollbar block characters are removed from every parsed usage field', () => {
+  const tokens = usage.parseCodeAgentUsageMenu(menu().map(line => line.replace('GLM-5.2-Auto', 'GLM-█5.2-Auto')
+    .replace('低负载', '低█▐▌▀▄░▒▓负载').replace('400M', '400█M').replace('0-1x', '0-█1x'))).models[0];
+  assert.equal(tokens.name, IDS[0]); assert.equal(tokens.load, '低负载'); assert.equal(tokens.factor, '0-1x'); assert.equal(tokens.day.total, '400M');
+  assert.doesNotMatch(JSON.stringify(tokens), /[\u2580-\u259f]/);
+});
+
+for (const filtered of [true, false]) test(`Esc ${filtered ? 'clears search, then closes' : 'closes an empty search'} and confirms idle`, async () => {
+  let clock = 0, query = filtered, open = true; const writes = [];
+  const result = await picker.closeModelMenu({ now: () => clock, pause: async ms => { clock += ms; },
+    readLines: async () => open ? ['Select model', query ? '⌕ DeepSeek' : '⌕ Search…', ...menu().slice(1)] : ['❯ ', '? for shortcuts'],
+    write: key => { writes.push(key); if (query) query = false; else open = false; } });
+  assert.equal(result.ok, true); assert.deepEqual(writes, Array(filtered ? 2 : 1).fill('\x1b')); assert.equal(open, false); assert.ok(clock >= 320);
+});
+
+test('the close deadline allows two one-second repaint delays and the stable-input barrier', async () => {
+  let clock = 0, open = true, query = true, pending = null;
+  const writes = [], result = await picker.closeModelMenu({ now: () => clock, pause: async ms => { clock += ms; }, readLines: async () => {
+    clock += 40; if (pending && clock >= pending.at) { if (query) query = false; else open = false; pending = null; }
+    return open ? ['Select model', query ? '⌕ DeepSeek' : '⌕ Search…', ...menu().slice(1)] : ['❯ ', '? for shortcuts'];
+  }, write: key => { writes.push(key); pending = { at: clock + 1000 }; } });
+  assert.equal(result.ok, true); assert.equal(writes.length, 2); assert.ok(clock < 3000); assert.ok(clock >= 2320);
+});
+
+test('settings-only next-answer verification records match and mismatch once without consuming old answers', () => {
+  for (const actual of ['deepseek-v4.1-flash-1017', 'GLM-5.2-Auto']) {
+    const s = { id: `settings-${actual}`, kind: 'codeagent', currentModel: { id: SCROLL_TARGET }, codeagentActualModel: actual };
+    models.expectModelSwitch(s.id, SCROLL_TARGET, { settingsOnly: true });
+    assert.equal(models.observeModel(s, actual, { at: 1 }), null);
+    const result = models.observeModel(s, actual);
+    assert.equal(result.settingsOnlyVerification.result, actual.startsWith('deepseek') ? 'match' : 'mismatch');
+    assert.equal(models.observeModel(s, actual)?.settingsOnlyVerification, undefined);
+  }
+  const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
+  assert.match(source, /event: 'switch-settings-only-verified'/);
+});
+
+test('empty CodeAgent catalogs render a visible loading/failure state and a working retry in the active picker', async () => {
+  const elements = [], listeners = new Map(), calls = []; let ready = false;
+  const document = { createElement() {
+    const element = { children: [], dataset: {}, style: {}, className: '', handlers: {}, ownerDocument: document,
+      addEventListener(name, fn) { this.handlers[name] = fn; }, setAttribute() {}, appendChild(child) { this.children.push(child); },
+      getBoundingClientRect: () => ({ top: 0, bottom: 20, left: 0, width: 200, height: 20 }) };
+    element.classList = { add: name => { element.className += ' ' + name; } };
+    Object.defineProperty(element, 'innerHTML', { get() { return this.markup; }, set(value) { this.markup = value; this.children = []; } });
+    elements.push(element); return element;
+  }, body: { children: [], appendChild(child) { this.children.push(child); } } };
+  const session = { kind: 'codeagent', currentModel: { id: 'previous' } };
+  const ui = require('../renderer/model-ui').createModelUiController({ document, terminalPanelEl: {}, sessions: new Map([['test', session]]),
+    getActiveSessionId: () => 'test', escapeHtml: String, setTimeoutFn() {}, ipcRenderer: {
+      on: (name, fn) => listeners.set(name, fn), invoke: async (name, payload) => {
+        calls.push([name, payload]); if (name === 'codeagent-pool:probe') { ready = true; return { ok: true }; }
+        return { options: ready ? [{ id: IDS[0], label: IDS[0], source: 'serve' }] : [], catalog: ready
+          ? { state: 'ready', message: '更新于 12:30' } : { state: 'failed', error: 'offline', message: '本次读取失败：offline' } };
+      } } });
+  await ui.showModelPicker(document.createElement('span'), 'test');
+  const menu = document.body.children[0];
+  assert.ok(menu.children.some(child => child.textContent === '沿用 CLI 当前模型'));
+  assert.ok(menu.children.some(child => child.textContent === '读取失败：offline'));
+  assert.equal(menu.children.filter(child => child.dataset.modelId).length, 0);
+  await menu.children.find(child => child.textContent === '重新读取').handlers.click();
+  assert.deepEqual(calls.find(([name]) => name === 'codeagent-pool:probe')[1], { id: 'personal' });
+  assert.deepEqual(menu.children.filter(child => child.dataset.modelId).map(child => child.dataset.modelId), [IDS[0]]);
+  assert.ok(!menu.children.some(child => child.className === 'model-picker-note' || child.textContent === '重新读取'));
+  ready = false; listeners.get('codeagent-pool:changed')(null, { id: 'personal', ok: false }); await new Promise(setImmediate);
+  assert.ok(menu.children.some(child => child.textContent === '读取失败：offline'));
+});
+
+test('new-session CodeAgent without reliable models retains the default option, status and manual retry; other CLIs keep their lists', () => {
+  const shared = require('../core/model-options'); assert.deepEqual(shared.MODEL_OPTIONS_BY_KIND.codeagent, []);
+  assert.ok(shared.MODEL_OPTIONS_BY_KIND.claude.length); assert.ok(shared.MODEL_OPTIONS_BY_KIND.codex.length);
+  const source = fs.readFileSync(path.join(__dirname, '../renderer/workspace-controller.js'), 'utf8').replace(/\r\n/g, '\n');
+  const elements = new Map(), document = { createElement: () => ({ addEventListener() {} }), getElementById: id => elements.get(id) || null };
+  for (const id of ['new-session-tuning', 'new-session-model', 'new-session-config-section', 'new-session-tuning-label', 'new-session-tuning-note']) {
+    elements.set(id, { dataset: {}, hidden: true, appendChild(child) { (this.children ||= []).push(child); } });
+  }
+  const context = vm.createContext({ document, selectedKind: 'codeagent', showAccount: false, selectedModel: '', modelTouchedByUser: false,
+    launchModelOptions: () => [], companyApiKind: () => false, resolveDefaultModel: () => '', defaultModelConfig: () => ({}),
+    codeagentDefaultModel: '', codeagentUsesPool: () => false, codeagentManualPick: () => '', usageAttrs: () => '', escapeHtml: String });
+  const start = source.indexOf("    const label = document.getElementById('new-session-tuning-label');"), end = source.indexOf("    const effortLabel =", start);
+  vm.runInContext(`(() => {${source.slice(start, end)}\n})()`, context);
+  assert.equal(elements.get('new-session-tuning').hidden, false); assert.equal(elements.get('new-session-config-section').hidden, false);
+  assert.equal(elements.get('new-session-model').innerHTML, '<option value="">沿用 CLI 当前模型</option>');
+  const statusStart = source.indexOf("      if (selectedKind === 'codeagent') {\n        const status = document.createElement('span');");
+  const statusEnd = source.indexOf('\n      }', statusStart) + 8;
+  context.note = elements.get('new-session-tuning-note'); context.codeagentCatalog = { state: 'failed', message: '本次读取失败：offline' };
+  vm.runInContext(source.slice(statusStart, statusEnd), context);
+  assert.equal(context.note.hidden, false); assert.equal(context.note.children[0].textContent, '本次读取失败：offline');
+  assert.equal(context.note.children[1].textContent, '重新读取'); assert.equal(context.note.children[1].disabled, false);
+});
+
+test('a switch reads the searched model quotas and writes session settings using serve spelling before menu selection', async t => {
+  const f = scrollingPicker(t, { searchWorks: true, hideCursor: true }), ipc = pickerSessionIpc(t, f);
+  const spelled = 'DeepSeek-V4.1-Flash-1017', file = path.join(f.dir, 'codeagent-launch/scroll-session.json');
+  json(file, { model: 'GLM-5.2-WX-Auto' }); probe.writeProbed(pool.personalModelsFile(f.dir), { models: [spelled], source: 'serve' });
+  const result = await ipc.handlers.get('codeagent:switch-model')(null, { sessionId: 'scroll-session', modelId: SCROLL_TARGET });
+  assert.equal(result.ok, true); assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).model, spelled);
+  assert.equal(f.selected(), SCROLL_TARGET, 'settings do not skip the actual menu selection');
+  const direct = scrollingPicker(t, { searchWorks: true }); const picked = await direct.run();
+  const model = picked.usage.models.find(row => row.name.toLowerCase() === SCROLL_TARGET);
+  assert.ok(model.day && model.hour && model.min); assert.doesNotMatch(model.load, /[\u2580-\u259f]/);
+});
+
+test('the actual answer observer logs settings-only match evidence even when model metadata did not change', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8').replace(/\r\n/g, '\n');
+  const start = source.indexOf('async function observeCodeAgentModel('), end = source.indexOf('\n}\n', start) + 2;
+  const session = { id: 'settings-only-answer', kind: 'codeagent', currentModel: { id: SCROLL_TARGET }, codeagentActualModel: SCROLL_TARGET }, logs = [];
+  models.expectModelSwitch(session.id, SCROLL_TARGET, { settingsOnly: true });
+  const context = vm.createContext({ console, codeAgentModelObservations: new WeakMap(), getHubDataDir: () => 'synthetic',
+    sessionManager: { sessions: new Map([[session.id, {}]]), getSession: () => session, updateSessionMeta: () => assert.fail('no metadata changed') },
+    sessionStore: { markDirty: () => assert.fail('no metadata changed') }, sendToRenderer() {},
+    require: () => ({ ...models, appendModelLog: (_dir, fields) => logs.push(fields), recordObserved: () => false }) });
+  vm.runInContext(source.slice(start, end), context);
+  await context.observeCodeAgentModel(session.id, { modelId: SCROLL_TARGET });
+  assert.equal(logs.find(row => row.event === 'switch-settings-only-verified').result, 'match');
+});
+
+test('CodeAgent menu headers are empty when ready, short while loading and actionable only on failure', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../renderer/model-ui.js'), 'utf8');
+  const start = source.indexOf("    if (/^codeagent(?:-resume)?$/.test(kind)) {", source.indexOf('function renderModelPicker'));
+  const end = source.indexOf('    if (options.length === 0)', start);
+  for (const state of ['ready', 'loading', 'failed']) {
+    const notes = [], buttons = [], context = vm.createContext({ kind: 'codeagent', options: [{ id: IDS[0] }],
+      session: { _codeagentModelCatalog: { state, error: state === 'failed' ? 'offline' : '', message: '更新于 12:00 · 来源 serve' } },
+      menu: { appendChild: button => buttons.push(button) }, menuNote: (_menu, text) => notes.push(text),
+      document: { createElement: () => ({ addEventListener() {} }) } });
+    vm.runInContext(source.slice(start, end), context);
+    assert.deepEqual(notes, state === 'ready' ? [] : [state === 'loading' ? '正在读取…' : '读取失败：offline']);
+    assert.deepEqual(buttons.map(button => button.textContent), state === 'failed' ? ['重新读取'] : []);
+  }
+});
+
+test('only a fully traversed model table certifies Token completeness', async () => {
+  const f = modelPages(), result = await picker.collectModelMenu({ ...f, lines: f.lines() });
+  assert.equal(result.usage.modelsComplete, true);
+  assert.equal(usage.parseCodeAgentUsageMenu(f.lines()).modelsComplete, undefined);
+});
+
+test('an old menu cache stays usable until a successful read replaces it', t => {
+  const dir = temp(t), accountDir = pool.accountDir(dir, 'abcdef12');
+  json(path.join(accountDir, 'settings.json'), { model: IDS[0] });
+  const file = path.join(accountDir, probe.MODELS_FILE);
+  json(file, { models: [IDS[0], IDS[2]], defaultModel: IDS[0], source: 'menu', at: new Date().toISOString() });
+  const rowOf = known => ({ id: 'abcdef12', state: 'ready', models: known.models, modelsAuthoritative: known.authoritative, activeSessions: 0, lastAssignedAt: 0 });
+
+  const stale = pool.accountModels(accountDir);
+  assert.deepEqual(stale.models, [IDS[0], IDS[2]]);
+  assert.equal(stale.authoritative, false);
+  assert.equal(stale.probeReliable, false);
+  assert.equal(pool.pickAccount([rowOf(stale)], { model: IDS[2] })?.id, 'abcdef12');
+  assert.equal(pool.pickAccount([rowOf(stale)], { model: 'Not-In-The-Old-List' })?.id, 'abcdef12', 'an incomplete old list refuses nothing');
+  const personal = { state: 'ready', avoid: null, models: stale.models, modelsAuthoritative: stale.authoritative };
+  assert.deepEqual(pool.pickAutoChoice([], personal, { model: IDS[2] }), { personal: true });
+
+  // A successful read is the only thing that narrows the list.
+  json(file, { models: [IDS[0]], defaultModel: IDS[0], source: 'serve', at: new Date().toISOString() });
+  const read = pool.accountModels(accountDir);
+  assert.deepEqual(read.models, [IDS[0]]);
+  assert.equal(read.authoritative, true);
+  assert.equal(pool.pickAccount([rowOf(read)], { model: IDS[2] }), null);
+  assert.equal(pool.pickAutoChoice([], { ...personal, models: read.models, modelsAuthoritative: read.authoritative }, { model: IDS[2] }), null);
 });

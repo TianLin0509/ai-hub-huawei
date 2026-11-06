@@ -33,7 +33,7 @@ function seed(dir, accountId, expiry = Date.now() + 72 * 3600e3) {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, '.credentials.json'), JSON.stringify({ idaasOAuth: { xAuthToken: 'local-fixture-only', accountId, expiresAt: expiry } }));
   fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ model: MODEL }));
-  writeProbed(path.join(dir, 'hub-models.json'), { models: [MODEL, 'deepseek-v4-flash-0731', 'MiniMax-M2.5'], defaultModel: MODEL, source: 'test-fixture' });
+  writeProbed(path.join(dir, 'hub-models.json'), { models: [MODEL, 'deepseek-v4-flash-0731', 'MiniMax-M2.5'], defaultModel: MODEL, source: 'serve' });
 }
 function entryIdentity() {
   try {

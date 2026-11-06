@@ -112,6 +112,7 @@
   // 启动中心按它启动（session-manager），所以这东西同时是「摘要里写哪个模型」的来源（tuningTag）和「启动用哪个模型」的承诺，
   // 两处必须同一口径——摘要写空就是不承诺，那也确实是按配置里写的起。
   let codeagentDefaultModel = '';
+  let codeagentCatalog = null;
   const codeagentModelLabel = id => { try { return require('../core/codeagent-models').modelLabel(id); } catch { return id; } };
   // 个人账号的登录状态（号池列表里的 personal.state）：不是 ready 时在账号下拉和说明里写出来。
   const personalStateText = () => accountState(codeagentPool.personal, { personal: true }).detail || '';
@@ -1191,7 +1192,7 @@
     grid.dataset.account = String(showAccount);
 
     const options = launchModelOptions(selectedKind);
-    const hasModels = options.length > 0;
+    const hasModels = options.length > 0 || selectedKind === 'codeagent';
     const section = document.getElementById('new-session-config-section');
     if (section) section.hidden = !hasModels;
     if (label) label.hidden = !hasModels;
@@ -1217,6 +1218,7 @@
     if (!options.some(option => option.id === selectedModel)) {
       selectedModel = companyApiKind(selectedKind) ? (options[0]?.id || '') : resolveDefaultModel(selectedKind, defaultModelConfig(), options.map(option => option.id));
     }
+    if (selectedKind === 'codeagent' && !options.length) selectedModel = '';
     // CodeAgent：「沿用」一项（值为空，不切换模型）知道所选账号的默认模型时就写成它，清单里不再重复列它。
     const codeagentDefault = selectedKind === 'codeagent' && codeagentDefaultModel
       && options.some(option => option.id.toLowerCase() === codeagentDefaultModel.toLowerCase()) ? codeagentDefaultModel : '';
@@ -1233,7 +1235,7 @@
     const nativeCodeagentOption = selectedKind === 'codeagent'
       ? (codeagentDefault
         ? `<option value="" title="${escapeHtml(codeagentDefault + ' · 这个号的默认模型，启动后不切换')}"${usageAttrs(codeagentDefault)}>${escapeHtml(codeagentModelLabel(codeagentDefault) + '（默认）')}</option>`
-        : '<option value="">自动（菜单里第一个模型）</option>') : '';
+        : '<option value="">沿用 CLI 当前模型</option>') : '';
     const listed = codeagentDefault ? options.filter(option => option.id.toLowerCase() !== codeagentDefault.toLowerCase()) : options;
     const wanted = nativeCodeagentOption + listed.map(option => `${option.id}\u0000${option.label}${selectedKind === 'codeagent' ? option.description || '' : ''}${usageAttrs(option.id)}`).join('|');
     if (modelSelect.dataset.builtFor !== wanted) {
@@ -1348,6 +1350,21 @@
       if (selectedKind === 'claude' && selectedMcpProfile === 'full') lines.push('Full 会加载全局 MCP，开多个会话时可换 Lean 减少常驻进程。');
       note.hidden = lines.length === 0;
       note.textContent = lines.join(' ');
+      if (selectedKind === 'codeagent') {
+        const status = document.createElement('span');
+        status.textContent = codeagentCatalog?.message || '正在读取 CodeAgent 模型清单…';
+        note.appendChild(status); note.hidden = false;
+        const retry = document.createElement('button'); retry.type = 'button'; retry.textContent = '重新读取';
+        retry.disabled = codeagentCatalog?.state === 'loading';
+        retry.addEventListener('click', async () => {
+          retry.disabled = true;
+          const keys = codeagentUsesPool() ? (codeagentManualPick() ? [codeagentManualPick()] : (codeagentPool?.accounts || [])
+            .filter(account => account.state === 'ready' && !account.sameAsPersonal && !account.duplicateOf).map(account => account.id)) : ['personal'];
+          try { for (const id of keys) await ipcRenderer.invoke('codeagent-pool:probe', { id }); }
+          finally { await loadModelCatalog('codeagent'); paint(); }
+        });
+        note.appendChild(retry);
+      }
     }
 
     paintDefaultModelButton();
@@ -1750,7 +1767,8 @@
       if (unavailable) { setRuntimeModelOptions('codeagent', []); return null; }
       return ipcRenderer.invoke('codeagent:models', { account: codeagentUsesPool() ? 'pool' : 'personal', poolAccount: codeagentManualPick() || undefined });
     }).then(result => {
-      if (result && Array.isArray(result.options) && result.options.length) setRuntimeModelOptions('codeagent', result.options);
+      if (result && Array.isArray(result.options)) setRuntimeModelOptions('codeagent', result.options);
+      codeagentCatalog = result?.catalog || null;
       codeagentDefaultModel = result && typeof result.defaultModel === 'string' ? result.defaultModel : '';
       return result;
     }).catch(error => { console.warn('[codeagent-models]', error.message); return null; });

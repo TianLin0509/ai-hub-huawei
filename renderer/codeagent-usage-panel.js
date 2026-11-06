@@ -21,7 +21,7 @@ function quotaText(quota) {
 function usageDetailsHtml(entry, { escapeHtml = esc } = {}) {
   const credit = entry?.credit;
   const models = Array.isArray(entry?.models) ? entry.models : [];
-  const tokens = models.some(model => model.day);
+  const tokens = models.some(model => model.day || model.quotaUnavailable);
   const caption = (at, source) => Number.isFinite(at) ? `<p class="ca-usage-meta"${sourceText(source) ? ` title="${escapeHtml(sourceText(source))}"` : ''}>更新于 ${escapeHtml(readingTime(at))}</p>` : '';
   return '<section><h3>Credit</h3>'
     + caption(credit ? entry.creditAt ?? entry.at : undefined, credit ? entry.creditSource ?? entry.source : undefined)
@@ -29,9 +29,9 @@ function usageDetailsHtml(entry, { escapeHtml = esc } = {}) {
     + CREDIT_ROWS.map(([label, key]) => `<tr><th scope="row">${label}</th><td>${escapeHtml(quotaText(credit?.[key]))}</td></tr>`).join('')
     + '</tbody></table></section><section><h3>Token</h3>'
     + (credit?.idleDiscountActive ? `<p>${escapeHtml(`闲时${credit.idleDiscount}进行中`)}</p>` : '')
-    + caption(tokens ? entry.modelsAt ?? entry.at : undefined, tokens ? entry.modelsSource ?? entry.source : undefined)
+    + caption(tokens ? Object.hasOwn(entry, 'fullModelsAt') ? entry.fullModelsAt : entry.modelsAt ?? entry.at : undefined, tokens ? entry.modelsSource ?? entry.source : undefined)
     + '<div class="ca-usage-table"><table><thead><tr><th>模型</th><th>今日</th><th>本小时</th><th>系数</th><th>负载</th></tr></thead><tbody>'
-    + (tokens ? models.map(model => `<tr><th scope="row">${escapeHtml(model.name)}</th>`
+    + (tokens ? models.map(model => `<tr${Number.isFinite(model.at) ? ` title="更新于 ${escapeHtml(readingTime(model.at))}"` : ''}><th scope="row">${escapeHtml(model.name)}${model.quotaUnavailable ? '<small> · 额度暂时读不到</small>' : ''}</th>`
       + `<td>${escapeHtml(quotaText(model.day))}</td><td>${escapeHtml(quotaText(model.hour))}</td>`
       + `<td>${escapeHtml(valueText(model.factor))}</td><td>${escapeHtml(valueText(model.load))}</td></tr>`).join('')
       : '<tr><td colspan="5">未读取</td></tr>')
@@ -56,7 +56,7 @@ const CSS = `
 `;
 
 function createCodeAgentUsagePanel({ document, ipcRenderer, usageFor = () => null, now = Date.now, escapeHtml = esc }) {
-  let dialog, body, status, account, entry, selected, generation = 0;
+  let dialog, body, status, account, entry, selected, retry, generation = 0;
   function paint() {
     account.textContent = selected.label || entry?.label || 'CodeAgent';
     body.innerHTML = usageDetailsHtml(entry, { escapeHtml });
@@ -78,7 +78,9 @@ function createCodeAgentUsagePanel({ document, ipcRenderer, usageFor = () => nul
     const close = document.createElement('button');
     close.type = 'button'; close.textContent = '关闭';
     close.addEventListener('click', () => dialog.close());
-    header.append(title, close);
+    retry = document.createElement('button'); retry.type = 'button'; retry.textContent = '重新读取';
+    retry.addEventListener('click', () => void refresh({ force: true }));
+    header.append(title, retry, close);
     account = document.createElement('p');
     body = document.createElement('div');
     status = document.createElement('p');
@@ -94,19 +96,23 @@ function createCodeAgentUsagePanel({ document, ipcRenderer, usageFor = () => nul
     ensureUi();
     selected = { ...selection };
     entry = usageFor(selected.key);
-    const requestGeneration = ++generation;
     paint();
     if (!dialog.open) dialog.showModal();
+    return refresh({ open: true });
+  }
+  async function refresh(options) {
+    const requestGeneration = ++generation;
+    retry.disabled = true;
     status.textContent = '刷新中…';
     let result;
     try {
       if (!ipcRenderer?.invoke) throw new Error('刷新接口不可用');
-      result = await ipcRenderer.invoke('codeagent:usage-refresh', { key: selected.key, label: selected.label });
+      result = await ipcRenderer.invoke('codeagent:usage-refresh', { key: selected.key, label: selected.label, ...options });
       if (requestGeneration !== generation) return result;
       if (result?.key) selected.key = result.key;
       if (result?.entry) entry = result.entry;
       status.textContent = result?.outcome === 'skipped' || result?.cached
-        ? '10 分钟内已刷新'
+        ? result.reason === '1 分钟内已刷新' ? result.reason : '10 分钟内已刷新'
         : result?.entry?.modelsRead?.status === 'unrecognized'
           ? tokenReadText(entry)
           : result?.ok
@@ -116,6 +122,7 @@ function createCodeAgentUsagePanel({ document, ipcRenderer, usageFor = () => nul
       if (requestGeneration !== generation) return;
       status.textContent = `刷新失败：${error.message}`;
     }
+    retry.disabled = false;
     paint();
     return result;
   }

@@ -69,10 +69,7 @@ const MODEL_OPTIONS_BY_KIND = {
     { id: 'kimi-code/k3', label: 'Kimi K3' },
   ],
   // 公司内部 Code Agent（core/codeagent-config.js）；Auto 由 CLI 自动在大小模型间分流。
-  codeagent: [
-    { id: 'GLM-5.2-WX-Auto', label: 'GLM-5.2 Auto' },
-    { id: 'MiniMax-M2.7', label: 'MiniMax M2.7' },
-  ],
+  codeagent: [],
 };
 
 // Renderer-side catalogs can be refreshed from each CLI's own account cache.
