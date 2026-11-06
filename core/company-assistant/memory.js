@@ -32,8 +32,9 @@ class AssistantMemory {
       .slice(0, Math.max(1, Math.min(20, Number(limit) || 6))).map(x => this.public(x.item));
   }
   context(query) {
-    const matches = this.search(query, 6);
-    const selected = [...matches, ...this.active().filter(x => x.kind === 'preference').sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 2)];
+    // 偏好和例行安排条数少、每问都该照着来（2026-11-07）：全部放前面；人和群按问题匹配。
+    const prefs = this.active().filter(x => x.kind === 'preference' || x.kind === 'routine').sort((a, b) => b.updatedAt - a.updatedAt);
+    const selected = [...prefs, ...this.search(query, 6)];
     const ids = new Set(); let text = '';
     for (const item of selected) {
       if (ids.has(item.id)) continue;

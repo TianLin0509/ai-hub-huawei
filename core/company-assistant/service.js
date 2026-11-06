@@ -28,6 +28,7 @@ const { AssistantMemory } = require('./memory');
 const { AssistantQuery } = require('./query-tool');
 const { PPT_INSTRUCTIONS } = require('./ppt-instructions');
 const { PetReminders } = require('./pet-reminders');
+const AC = require('./answer-context');
 
 const PURPOSE = 'company-assistant';
 const QUERY_DIAGNOSTIC_SEEN = new Set();
@@ -38,7 +39,7 @@ const TOOLS_HELLO_GRACE_MS = 90000;
 const DEFAULT_SETTINGS = Object.freeze({
   enabled: true, briefTime: '08:20', summaryTime: '18:00', waitHours: 4, prepMinutes: 15, maxPerHour: 3, refreshMinutes: 10,
   watchGroups: [], keywords: [], myName: '', workdays: [1, 2, 3, 4, 5], cliPath: '', email: '', emailFrom: '', chips: [], phone: DEFAULT_PHONE,
-  lookbackHours: 36, maxConversations: 0,
+  lookbackHours: 36, maxConversations: 0, answerStyle: 'guided',
 });
 // 输入框上方的常用问题（设计稿 B）。fill=true 的只填进输入框，等补全再发。
 const BUILTIN_CHIPS = Object.freeze([
@@ -183,6 +184,7 @@ class CompanyAssistant {
     const s = this.settings(), next = { ...s };
     const hhmm = v => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(v)) ? String(v) : null;
     if ('enabled' in patch) next.enabled = !!patch.enabled;
+    if (['guided', 'classic'].includes(patch.answerStyle)) next.answerStyle = patch.answerStyle;
     if (hhmm(patch.briefTime)) next.briefTime = hhmm(patch.briefTime);
     if (hhmm(patch.summaryTime)) next.summaryTime = hhmm(patch.summaryTime);
     if ('lookbackHours' in patch && LOOKBACK_CHOICES.includes(Number(patch.lookbackHours))) next.lookbackHours = Number(patch.lookbackHours);
@@ -531,6 +533,9 @@ class CompanyAssistant {
     const cli = this.cli();
     const lines = ['@echo off', 'set ELECTRON_RUN_AS_NODE=1', `set "CLAUDE_HUB_ASSISTANT_DIR=${this.dir}"`, cli ? `set "CLAUDE_HUB_WELINK_CLI=${cli}"` : '', `"${exe}" "${script}" %*`].filter(Boolean);
     fs.writeFileSync(path.join(this.workspace, 'welink-ro.cmd'), lines.join('\r\n') + '\r\n', 'utf8');
+    // 作答对照评测（只读本机快照，用 CodeAgent 无头模式比较现版与新版提问；结果只留本机，summary.json 只有数字）。
+    const bench = ['@echo off', 'set ELECTRON_RUN_AS_NODE=1', `set "CLAUDE_HUB_ASSISTANT_DIR=${this.dir}"`, `"${exe}" "${path.join(__dirname, 'answer-bench.js')}" %*`];
+    fs.writeFileSync(path.join(this.workspace, 'assistant-bench.cmd'), bench.join('\r\n') + '\r\n', 'utf8');
     const ppt = this.pptWorkspace;
     fs.mkdirSync(path.join(ppt, 'skills'), { recursive: true });
     fs.writeFileSync(path.join(ppt, 'skills', 'ppt-search.md'), PPT_INSTRUCTIONS + '\n', 'utf8');
@@ -541,8 +546,11 @@ class CompanyAssistant {
   instructions(toolset = 'desk') {
     if (toolset === 'ppt') return PPT_RULES;
     if (toolset === 'brief') return BRIEF_RULES;
-    return toolset === 'phone' ? DESK_RULES + '\n' + PHONE_RULES : DESK_RULES;
+    const desk = this.guided() ? AC.ASK_RULES.replace('{{TOOLS}}', AC.WELINK_TOOLS) : DESK_RULES;
+    return toolset === 'phone' ? desk + '\n' + PHONE_RULES : desk;
   }
+  // 5.5.14（2026-11-07）：默认按「作答手册 + Hub 备好的材料」作答；设置里 answerStyle='classic' 回到 5.5.13 的写法。
+  guided() { return this.settings().answerStyle !== 'classic'; }
 
   // ---- 定时 ----
   async tick() {
@@ -1353,7 +1361,28 @@ class CompanyAssistant {
     return ['最近的对话（Hub 附上，方便你接着上一问回答；里面的事实可能已过时，要用请重新查）：',
       ...picked.map(c => `问（${D.clock(c.askedAt)}）：${D.short(c.q, 300)}\n答：${D.short(answer(c), 400)}${c.coverage?.line ? '\n查询范围：' + c.coverage.line : ''}`)].join('\n');
   }
+  // 新版提问：固定规则 + 手册「通用」在最前（每问相同，能命中缓存）；按问题类型的手册节、时间、记忆、Hub 备好的材料、最近两轮在后。
+  composeGuided(job, toolset) {
+    try { this.memory.seedDefaults?.(); } catch { /* 记忆文件写不了不影响回答 */ }
+    const now = this.now(), day = D.dayKey(now), snap = this.snapshot(day), s = this.settings();
+    const digest = this.todayDigest();
+    job.digest = digest.coverage;
+    let material = { intents: [], text: digest.text };
+    if (snap?.login?.ok) {
+      try {
+        const intents = AC.classify(job.prompt, { snapshot: snap }).intents;
+        const days = intents.includes('weekly') ? this.snapshotDays().slice(0, 7).map(d => ({ day: d, snapshot: d === day ? snap : this.snapshot(d) })).filter(x => x.snapshot?.login?.uid === snap.login.uid) : [];
+        material = AC.buildMaterial(job.prompt, snap, { now, settings: s, memory: this.memory.active(), commitments: this.state().commitments, digest: digest.text, days });
+      } catch (error) { console.warn('[company-assistant] material', error.message); }
+    }
+    job.intents = material.intents;
+    const book = AC.playbook(material.intents), cut = book.indexOf('\n\n作答手册 · ');
+    const general = cut < 0 ? book : book.slice(0, cut), specific = cut < 0 ? '' : book.slice(cut + 2);
+    const parts = [specific, `当前时间（上海）：${D.displayTime(now)}`, this.memory.context(job.prompt), material.text, this.recentHistory(job)].filter(Boolean);
+    return [this.instructions(toolset), general, '---', ...parts, '---', job.prompt].join('\n\n');
+  }
   composePrompt(job, toolset) {
+    if ((toolset === 'desk' || toolset === 'phone') && this.guided()) return this.composeGuided(job, toolset);
     const parts = [`当前时间（上海）：${D.displayTime(this.now())}`];
     if (toolset === 'desk' || toolset === 'phone') {
       try { this.memory.seedDefaults?.(); } catch { /* 记忆文件写不了不影响回答 */ }

@@ -75,7 +75,7 @@ function briefPrompt(snapshot, { day, now = Date.now(), settings = {}, commitmen
     '要求：',
     '1. 只根据下面的数据写，不编造；每条必须带且只带一个出处编号（原样抄方括号里的编号）。',
     '2. meetings 只写 preparation 会前准备建议，时间和主题由 Hub 从结构化事实显示；awaiting 私聊待回与@我（群里回复关联不明时标待核对）；commitments 我答应过但未完成的事（due 为明确的截止日期，否则留空）；groups 群里与我相关的要点；mail 需要处理的邮件。',
-    '3. 建议每条 40 字以内，重点优先，推断加 "guess": true。首屏最多显示 10 条，Hub 会补齐已采集的会议和待回/@清单；空栏给空数组。',
+    '3. 每条 40 字以内，写成「事 → 建议我做什么」，有截止写截止；要我行动的、有截止的放前面，只是知会的少写；推断加 "guess": true。首屏最多显示 10 条，Hub 会补齐已采集的会议和待回/@清单；空栏给空数组。',
     `4. 只输出 JSON 代码块：{"meetings":[{"source":"…","preparation":"…"}],"awaiting":[],"commitments":[{"text":"…","source":"…","due":"${day}"}],"groups":[],"mail":[]}`,
     '',
     carry.lines.length ? '未到期承诺预览（仍未完成就保留，出处照抄）：\n' + carry.lines.join('\n') + '\n' : '',

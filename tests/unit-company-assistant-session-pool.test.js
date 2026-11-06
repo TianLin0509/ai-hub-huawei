@@ -11,6 +11,9 @@ const B = require('../core/company-assistant/brief');
 const { CompanyAssistant, DESK_RULES, PHONE_RULES, PPT_RULES } = require('../core/company-assistant/service');
 const { HubTools } = require('../core/company-assistant/hub-tools');
 const { TOOLSETS, toolsFor, allTools } = require('../core/company-assistant/mcp');
+const AC = require('../core/company-assistant/answer-context');
+// 5.5.14 起默认按「作答手册 + Hub 备好的材料」提问：固定规则换成新版。
+const GUIDED_RULES = AC.ASK_RULES.replace('{{TOOLS}}', AC.WELINK_TOOLS);
 
 const NOW = Date.parse('2026-11-05T15:20:00+08:00');
 const DAY = '2026-11-05';
@@ -60,8 +63,10 @@ test('每个问题用一个新会话：提问带固定规则、今天摘要；�
   await f.settle();
   assert.equal(f.prompts.length, 1);
   const p1 = f.prompts[0];
-  assert.ok(p1.text.startsWith(DESK_RULES), '规则放在最前面，各会话前缀一致');
-  assert.match(p1.text, /今天摘要（Hub 后台快照/);
+  assert.ok(p1.text.startsWith(GUIDED_RULES + '\n\n作答手册 · 通用'), '规则和手册通用部分放在最前面，各会话前缀一致');
+  assert.match(p1.text, /作答手册 · 今天的会/, '按问题类型带对应手册');
+  assert.match(p1.text, /Hub 备好的材料[\s\S]*【今天的会 · 1 场】/);
+  assert.match(p1.text, /今天摘要/);
   assert.match(p1.text, /SRS 周期配置评审[^\n]*WeLink \+ 日历[^\n]*\[mtg:1\]/, '摘要里的会议已合并');
   assert.doesNotMatch(p1.text, /最近的对话/);
   assert.equal(f.a.toolsetFor(p1.id), 'desk');
@@ -99,7 +104,7 @@ test('上一问答完超过 30 分钟就不再附最近对话；手机的问题�
   f.a.ask('现在有哪些会话在跑', { via: 'phone' }); await f.settle();
   const phone = f.prompts[2];
   assert.equal(f.a.toolsetFor(phone.id), 'phone');
-  assert.ok(phone.text.startsWith(DESK_RULES + '\n' + PHONE_RULES));
+  assert.ok(phone.text.startsWith(GUIDED_RULES + '\n' + PHONE_RULES));
 });
 
 test('PPT 页的提问走自己的队列和会话，不挡住助理提问，也不出现在助理页', async t => {
@@ -108,7 +113,7 @@ test('PPT 页的提问走自己的队列和会话，不挡住助理提问，也�
   const chat = f.a.ask('今天有哪些会');
   await f.settle();
   assert.equal(f.prompts.length, 2, '两条队列同时发出');
-  const pptPrompt = f.prompts.find(p => p.text.startsWith(PPT_RULES)), chatPrompt = f.prompts.find(p => p.text.startsWith(DESK_RULES));
+  const pptPrompt = f.prompts.find(p => p.text.startsWith(PPT_RULES)), chatPrompt = f.prompts.find(p => p.text.startsWith(GUIDED_RULES));
   assert.ok(pptPrompt && chatPrompt);
   assert.equal(f.a.toolsetFor(pptPrompt.id), 'ppt');
   assert.equal(f.sessions.get(pptPrompt.id).cwd, f.a.pptWorkspace);
