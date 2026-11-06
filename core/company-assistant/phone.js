@@ -152,7 +152,7 @@ class PhoneChannel {
   settle(item) {
     if (!item || !this.state().pending[item.id]) return;
     this.update(cur => { const pending = { ...cur.pending }; delete pending[item.id]; return { pending }; });
-    if (item.state === 'done') void this.send(item.a, 'answer');
+    if (item.state === 'done') void this.send(item.phoneText || item.a, 'answer');
     else void this.send('这句没答上：' + short(item.error || '原因不明', 120) + '。可以再说一次。', 'error');
   }
 

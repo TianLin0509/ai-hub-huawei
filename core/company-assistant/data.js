@@ -311,6 +311,25 @@ function todaysMeetings(snapshot, day) {
 function unresolvedMeetings(snapshot) {
   return [...(snapshot.meetings || []), ...(snapshot.calendar || [])].filter(m => !Number.isFinite(m.start) && !(m.allDay && m.timeStatus === 'date-only' && m.startDate));
 }
+// 同一场会的合并显示（2026-11-05 用户定「2 合并」）：WeLink 会议与邮箱日程主题相同（忽略空白和标点）、
+// 开始与结束时间相差都不超过 1 分钟的，合成一条，标「WeLink + 日历」；两条原始记录的出处都保留在 sources 里。
+// 只影响显示与交给模型的行，不改快照里的原始记录。
+const meetingKey = subject => String(subject || '').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+const sameTime = (a, b) => Number.isFinite(a) && Number.isFinite(b) ? Math.abs(a - b) <= 60000 : !Number.isFinite(a) && !Number.isFinite(b);
+function mergeMeetings(rows) {
+  const out = [], used = new Set();
+  const isCal = m => String(m.sourceId || '').startsWith('cal:');
+  rows.forEach((m, i) => {
+    if (used.has(i)) return;
+    const key = meetingKey(m.subject);
+    const j = key && Number.isFinite(m.start) ? rows.findIndex((x, k) => k > i && !used.has(k) && isCal(x) !== isCal(m) && meetingKey(x.subject) === key && sameTime(x.start, m.start) && sameTime(x.end, m.end)) : -1;
+    if (j < 0) { out.push(m); return; }
+    used.add(j);
+    const other = rows[j], welinkRow = isCal(m) ? other : m, cal = isCal(m) ? m : other;
+    out.push({ ...welinkRow, location: welinkRow.location || cal.location, merged: true, mergedLabel: 'WeLink + 日历', sources: [welinkRow.sourceId, cal.sourceId] });
+  });
+  return out;
+}
 // 日期型全天日程不伪装成瞬间；未知时间仍留在查询里并由 coverage 提示待核对。
 function eventTimeUnknown(m) {
   if (m.timeStatus === 'unknown') return true;
@@ -326,4 +345,4 @@ function eventInRange(m, range) {
   return true;
 }
 
-module.exports = { DISPLAY_ZONE, dayKey, clock, displayTime, dateParts, timeValue, toMs, explicitBoolean, listIn, textOf, short, namesOf, messageRecords, conversationRecords, messageId, meetings, calendarEvents, isCancelledCalendarEvent, conversations, messages, mails, awaiting, relatedGroups, sourceIndex, todaysMeetings, unresolvedMeetings, eventTimeUnknown, eventInRange };
+module.exports = { DISPLAY_ZONE, dayKey, clock, displayTime, dateParts, timeValue, toMs, explicitBoolean, listIn, textOf, short, namesOf, messageRecords, conversationRecords, messageId, meetings, calendarEvents, isCancelledCalendarEvent, conversations, messages, mails, awaiting, relatedGroups, sourceIndex, todaysMeetings, unresolvedMeetings, eventTimeUnknown, eventInRange, mergeMeetings };

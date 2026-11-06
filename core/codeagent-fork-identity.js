@@ -75,7 +75,7 @@ function verifyExactChild(file, expectedId, cwd, fsModule = fs) {
   }
 }
 
-function exactNativeHistory(sessionId, cwd, deps, reason) {
+function exactNativeHistory(sessionId, cwd, deps, reason, session) {
   const env = deps.env || process.env;
   try {
     const config = require('./codeagent-config').resolveCodeAgentConfig(env);
@@ -106,14 +106,14 @@ function recoverCodeAgentFork(meta, deps = {}) {
     if (rejection) throw unresolved(rejection);
     // A bound child must also remain resumable. Resolve by its exact native id
     // so an old archived path does not turn a valid child into a false failure.
-    next.transcriptPath = exactNativeHistory(current, meta.cwd, deps, 'child-native-history-unavailable');
+    next.transcriptPath = exactNativeHistory(current, meta.cwd, deps, 'child-native-history-unavailable', meta);
     return { ...unchanged, meta: next, sourceId };
   }
   if (candidate && candidate !== sourceId) {
     verifyExactChild(meta.transcriptPath, candidate, meta.cwd, deps.fsModule);
     // A proven file outside the CLI's current history root cannot be resumed by
     // id. Keep the retained record instead of letting the launcher start fresh.
-    exactNativeHistory(candidate, meta.cwd, deps, 'child-native-history-unavailable');
+    exactNativeHistory(candidate, meta.cwd, deps, 'child-native-history-unavailable', meta);
     return { meta: { ...next, ccSessionId: candidate, codeagentIdentityPending: false }, forkCCSessionId: null, repaired: true, sourceId };
   }
   // A fresh pending fork has never owned a child. Re-run the original fork so it
@@ -129,7 +129,7 @@ function recoverCodeAgentFork(meta, deps = {}) {
     // The launcher treats a missing fork history as a fresh session. That is
     // acceptable for a first empty-source fork, but never for reopening a saved
     // pending branch: it would silently discard the requested source context.
-    const sourcePath = exactNativeHistory(sourceId, meta.cwd, deps, 'fork-source-history-unavailable');
+    const sourcePath = exactNativeHistory(sourceId, meta.cwd, deps, 'fork-source-history-unavailable', meta);
     verifyExactChild(sourcePath, sourceId, meta.cwd, deps.fsModule);
     return { meta: { ...next, ccSessionId: null, transcriptPath: null, codeagentIdentityPending: true }, forkCCSessionId: sourceId, repaired: false, sourceId };
   }

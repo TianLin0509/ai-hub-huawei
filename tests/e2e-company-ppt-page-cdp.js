@@ -75,9 +75,11 @@ async function main() {
       result.checks.push('真实复制按钮：当前第1页后插入SRS第2页；目标3→4页，源文件和目标磁盘文件未改写');
       } else { assert.equal(await c.eval('document.querySelector("[data-ppt=copy]").hidden'), true); result.checks.push('复制候选尚未完成真实验收，入口隐藏'); }
     }
-    await click('#btn-company-assistant'); await wait('!!document.querySelector("[data-ca=ppt-assist]")', 'assistant button');
-    await click('[data-ca="ppt-assist"]'); await wait('!document.getElementById("company-ppt-page").hidden', 'assistant redirect');
-    result.checks.push('助理PPT素材库按钮跳独立页；返回检索仍保留');
+    // 5.5.11 起助理页不再放 PPT 素材库入口（左栏已有 PPT 页）：确认没有入口，再从左栏回到 PPT 页。
+    await click('#btn-company-assistant'); await wait('!document.getElementById("company-assistant-page").hidden', 'assistant page');
+    assert.equal(await c.eval('!!document.querySelector("#company-assistant-page [data-ca=ppt-assist]")'), false);
+    await click('#btn-company-ppt'); await wait('!document.getElementById("company-ppt-page").hidden', 'rail back to PPT');
+    result.checks.push('助理页没有PPT素材库入口；从左栏回到PPT页，检索仍保留');
     // Exercise final report layout without issuing another paid model request.
     // The separate real-Agent smoke validates actual MCP find/read/report.
     const reportFixture = { id: 'ui-report-fixture', state: 'done', a: '**已核验 1 页**\n\n| 原页 | 原文 |\n|---|---|\n| SRS 第2页 | 保留复数信道相位 |', pptResults: [{ id, name: ref.name, path: file, page: 2, reason: '原文包含信道相位' }] };

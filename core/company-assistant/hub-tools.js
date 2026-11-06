@@ -33,9 +33,10 @@ class HubTools {
   close() { this.bridge.close(); }
   listening() { return !!this.bridge.server?.listening && !!this.bridge.url; }
   // 挂给助理会话的 MCP（session-manager 的 extraMcpProvider 调用）。Hub 程序以 Node 方式运行 mcp.js（公司版脚本在 app.asar 里）。
-  mcpEntry(sessionId) {
+  // toolset（5.5.11）：desk / phone / ppt / brief，决定 mcp.js 列出哪些工具；Hub 这边调用时再按同一张表核对一次。
+  mcpEntry(sessionId, toolset = '') {
     return { name: 'hub_sessions', command: this.deps.nodeExecutable || process.execPath, args: [path.join(__dirname, 'mcp.js')],
-      env: { ELECTRON_RUN_AS_NODE: '1', HUB_COMPANY_TOOLS_ENDPOINT: this.endpointFile, HUB_COMPANY_ASSISTANT_SESSION_ID: String(sessionId || '') } };
+      env: { ELECTRON_RUN_AS_NODE: '1', HUB_COMPANY_TOOLS_ENDPOINT: this.endpointFile, HUB_COMPANY_ASSISTANT_SESSION_ID: String(sessionId || ''), ...(toolset ? { HUB_COMPANY_TOOLSET: toolset } : {}) } };
   }
   petSessionPlan({ kind, opts = {}, id } = {}, earlierPlan = null) {
     if (this.deps.isPetMcpEnabled?.() !== true || !(opts.id || id) || !ordinaryCodeAgent({ ...opts, kind }) || this.a.sessionPlan({ opts, id })) return earlierPlan;
@@ -54,7 +55,7 @@ class HubTools {
     return { id, title: String(s.title || s.name || '未命名会话').slice(0, 100), kind: baseKind(s.kind), cwd: s.cwd || '', open, state, label: LABELS[state],
       waitingText: state === 'stuck' ? short(s.waitingText || '', 300) : '', lastActiveAt: Number(s.lastOutputAt) || Number(s.updatedAt) || Number(s.createdAt) || null };
   }
-  manageable(s) { return !!s && !!(s.id || s.hubId) && !SPECIAL.has(s.purpose) && !s.meetingId && (s.id || s.hubId) !== this.a.state().sessionId; }
+  manageable(s) { return !!s && !!(s.id || s.hubId) && !SPECIAL.has(s.purpose) && !s.meetingId && !this.a.toolsetFor?.(s.id || s.hubId) && (s.id || s.hubId) !== this.a.state().sessionId; }
   rows({ closed = 20 } = {}) {
     const live = (this.deps.getAllSessions?.() || []).filter(s => this.manageable(s)).map(s => this.row(s, true));
     const seen = new Set(live.map(r => r.id));
@@ -99,12 +100,19 @@ class HubTools {
       return this.a.petReminders.execute({ ...args, op: 'add' }, { id: callerSessionId, title });
     }
     if (name === '__hello') { this.noteSeen(callerSessionId, 'hello'); return { ok: true }; }
-    const me = this.a.state().sessionId;
-    if (!me || callerSessionId !== me) throw new Error('只有公司助理会话能用这些工具');
+    // 5.5.11 起每个问题一个会话：认的是 Hub 登记过的助理会话（含预开的那个），并且只放行它那一组里的工具。
+    const toolset = callerSessionId ? this.a.toolsetFor?.(callerSessionId) : null;
+    const legacy = !toolset && callerSessionId && callerSessionId === this.a.state().sessionId;
+    if (!toolset && !legacy) throw new Error('只有公司助理会话能用这些工具');
+    const allowed = toolset && require('./mcp').TOOLSETS[toolset];
+    if (allowed && !allowed.includes(name)) throw new Error('这个会话没有挂这个工具：' + name);
+    const me = callerSessionId, ctx = { sessionId: me };
     this.noteSeen(me, 'call', name);
-    if (name === 'welink_inbox') return this.a.query.inbox(args);
+    if (name === 'welink_find') return this.a.query.find(args, ctx);
+    if (name === 'welink_mail') return this.a.query.mail(args, ctx);
+    if (name === 'welink_inbox') return this.a.query.inbox(args, ctx);
     if (name === 'welink_message') return this.a.query.message(args);
-    if (name === 'welink_meetings') return this.a.query.meetings(args);
+    if (name === 'welink_meetings') return this.a.query.meetings(args, ctx);
     if (name === 'assistant_memory') return this.a.memory.execute(args);
     if (name === 'pet_remind') return this.a.petReminders.execute(args);
     if (name === 'ppt_find') return this.a.ppt.find(args);

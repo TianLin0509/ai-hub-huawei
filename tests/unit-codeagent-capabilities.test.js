@@ -168,3 +168,27 @@ test('prepareForKind 只处理 CodeAgent', async () => {
   await caps.prepareForKind('powershell', { exec: () => { throw new Error('不应探测'); } });
   assert.equal(caps._helpCache.size, 0);
 });
+
+// 夹具不退出的话，每次 Hub 探测版本都可能留下一个 node 进程（全机曾累计 200 多个）。
+// 2 秒从第一次输出算起：机器很忙时 node 启动本身可能就超过 2 秒，那不是这条要抓的问题。
+test('the fake CodeAgent prints its version and exits, like the real CLI', { timeout: 60000 }, async t => {
+  const { spawn } = require('node:child_process');
+  const { parseCodeAgentVersion } = require('../core/codeagent-version-probe');
+  const fixture = path.join(__dirname, 'fixtures', 'codeagent-pool-fake', 'codeagent-fake.js');
+  const child = spawn(process.execPath, [fixture, '--version'], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  t.after(() => child.kill());
+  let stdout = '', firstOutputAt = 0;
+  const result = await new Promise(resolve => {
+    const startLimit = setTimeout(() => resolve('no output in 30 seconds'), 30000);
+    child.stdout.on('data', chunk => {
+      stdout += chunk;
+      if (firstOutputAt) return;
+      firstOutputAt = Date.now();
+      clearTimeout(startLimit);
+      setTimeout(() => resolve('still running 2 seconds after its first output'), 2000);
+    });
+    child.on('exit', code => resolve(code));
+  });
+  assert.equal(result, 0);
+  assert.equal(parseCodeAgentVersion(stdout), '1.2615.02.01');
+});

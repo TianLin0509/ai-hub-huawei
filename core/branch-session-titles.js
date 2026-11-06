@@ -180,7 +180,7 @@ function healPersistedBranchSessionTitles(state, {
       const branchIndex = assigned.get(session);
       if (!canEditSession(session)) continue;
       const baseTitle = stripBranchTitlePrefix(session.title) || '待命名';
-      const expectedTitle = formatBranchSessionTitle(baseTitle, '会话', branchIndex);
+      let expectedTitle = formatBranchSessionTitle(baseTitle, '会话', branchIndex);
       const indexChanged = session.branchIndex !== branchIndex;
       const titleChanged = session.userRenamed !== true && session.title !== expectedTitle;
       if (!indexChanged && !titleChanged) continue;

@@ -117,7 +117,8 @@ async function run() {
         await shot(`scrim-${kind}-${viewport.width}`);
         const bounds = await cdp.eval(`(()=>{const e=document.querySelector(${JSON.stringify(selector)}),r=e.getBoundingClientRect(),n=document.querySelector(${JSON.stringify(NAV.button)}).getBoundingClientRect();return {left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:innerWidth,height:innerHeight,coversRail:document.elementFromPoint(n.x+n.width/2,n.y+n.height/2)===e}})()`);
         evidence.scrims ||= []; evidence.scrims.push({ kind, ...viewport, ...bounds });
-        ok(`${kind} ${viewport.width} 整屏遮罩覆盖导航区域`, bounds.left === 0 && bounds.top === 0 && bounds.right === bounds.width && bounds.bottom === bounds.height && bounds.coversRail);
+        // 布局取整会留下万分之一像素的浮点误差（如 right=1440.0001），按半像素以内算贴满。
+        ok(`${kind} ${viewport.width} 整屏遮罩覆盖导航区域`, Math.abs(bounds.left) < 0.5 && Math.abs(bounds.top) < 0.5 && Math.abs(bounds.right - bounds.width) < 0.5 && Math.abs(bounds.bottom - bounds.height) < 0.5 && bounds.coversRail);
         const before = await cdp.eval('window.__teamScrimNavClicks');
         // Send a real pointer click at the underlying navigation button's
         // coordinates. Its first click must hit the backdrop, not the button.

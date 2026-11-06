@@ -337,7 +337,7 @@ async function parseProviderTranscript(args = {}, deps) {
       : runTranscriptParser(deps, 'claude', file, options, parseClaudeTranscriptToTurns);
     // Account switch: until the fork writes its file, the conversation so far
     // is the previous one. The binding stays on the fork's own path.
-    const runtimeHome = lineage.runtimeHomeOf(transcriptPath)
+    let runtimeHome = lineage.runtimeHomeOf(transcriptPath)
       || (lineage.isRuntimeHome(record?.claudeConfigDir) ? record.claudeConfigDir : null);
     if (runtimeHome && !(transcriptPath && require('fs').existsSync(transcriptPath))) {
       const resting = lineage.restingTranscript(runtimeHome, transcriptPath);

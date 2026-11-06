@@ -8,6 +8,9 @@ const MAIL_PAGE_SIZE = 100;
 const MAIL_MAX = 500;
 const CALENDAR_NON_JSON = 'WELINK_CALENDAR_NON_JSON';
 const CALENDAR_TABLE_UPGRADE = 'welink-cli 返回了无法解析的表格，请升级：npm install -g @welink/welink-cli@latest（1.0.19 已验证正常）';
+const FORMAT_UNSUPPORTED = 'WELINK_FORMAT_UNSUPPORTED';
+const formatRejected = r => !!r && Number(r.code) !== 0 && (Number(r.code) === 109
+  || /arguments?\s+were\s+not\s+expected|unrecognized\s+(?:option|argument)|no\s+such\s+option|unknown\s+option/i.test(String(r.stderr || '') + String(r.stdout || '')));
 const meetingPageSize = value => Number.isFinite(Number(value)) ? Math.max(1, Math.min(MEETING_PAGE_MAX, Math.floor(Number(value)))) : MEETING_PAGE_MAX;
 
 const calendarTableHeader = lines => lines.findIndex((line, i) => ['Subject', 'Start', 'End', 'ItemId'].every(key => new RegExp(`\\b${key}\\b`, 'i').test(line))
@@ -65,7 +68,11 @@ async function readJson(run, args, { diagnose = async () => {} } = {}) {
         checkExit(retry); result = retry; data = W.parseJsonBig(result.stdout);
       } catch (error) { if (error.code === WELINK_RATE_LIMITED) throw error; /* 不支持 --format 时解析首次表格 */ }
     } else {
-      result = await run([...args, '--format', 'json']); checkExit(result); data = W.parseJsonBig(result.stdout);
+      // 1.0.20 删掉了 mail / calendar 的 --format（传了就退出码 109「arguments were not expected」，Q-1106-06）：
+      // 说清楚是新版格式还没适配，不把英文原文抛给用户。
+      const retry = await run([...args, '--format', 'json']);
+      if (formatRejected(retry)) throw Object.assign(new Error(`${command} 的输出格式这一版 Hub 还没适配（welink-cli 新版去掉了 --format），这一项暂时取不到`), { code: FORMAT_UNSUPPORTED });
+      result = retry; checkExit(result); data = W.parseJsonBig(result.stdout);
     }
   }
   if (command === 'calendar list' && [0, '0'].includes(result.code) && String(result.stdout || '').trim() === 'No events found.') return [];

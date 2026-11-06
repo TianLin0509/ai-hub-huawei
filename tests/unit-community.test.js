@@ -11,12 +11,103 @@ const path = require('path');
 const root = path.join(__dirname, '..');
 const read = rel => fs.readFileSync(path.join(root, rel), 'utf8');
 
+test('CDP HTTP helpers bound partial responses and settle aborted bodies', async () => {
+  const http = require('node:http'), vm = require('node:vm'), { createRequire } = require('node:module');
+  const filename = path.join(__dirname, 'helpers/hub-launcher.js');
+  const context = vm.createContext({ module: { exports: {} }, __dirname: path.dirname(filename),
+    require: createRequire(filename), process, console, Buffer, setTimeout, clearTimeout });
+  vm.runInContext(fs.readFileSync(filename, 'utf8') + '\nmodule.exports.httpProbe = { _httpGetJson, _httpCloseTarget };', context);
+  const { _httpGetJson: getJson, _httpCloseTarget: closeTarget } = context.module.exports.httpProbe;
+  const sockets = new Set(), timers = new Set(), faultConnections = [];
+  const server = http.createServer((req, res) => {
+    if (req.url === '/ok') { res.end('{"ready":true}'); return; }
+    faultConnections.push({ route: req.url, closed: new Promise(resolve => req.socket.once('close', () => resolve(true))) });
+    res.writeHead(200, { 'Content-Type': 'application/json' }); res.write('[');
+    if (req.url === '/abort') { setImmediate(() => res.destroy()); return; }
+    const timer = setInterval(() => res.write(' '), 10); timers.add(timer);
+    res.on('close', () => { clearInterval(timer); timers.delete(timer); });
+  });
+  server.on('connection', socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const bounded = async promise => {
+    let timer;
+    try { return await Promise.race([promise, new Promise(resolve => { timer = setTimeout(() => resolve({ watchdog: true }), 1000); })]); }
+    finally { clearTimeout(timer); }
+  };
+  const assertFaultClosed = async (route, operation) => {
+    const connection = faultConnections.shift();
+    assert.ok(connection, operation + ' must reach the fault server');
+    assert.equal(connection.route, route);
+    assert.equal(await bounded(connection.closed), true, route + ' ' + operation + ' must close its socket before fallback cleanup');
+  };
+  try {
+    assert.equal((await getJson(base + '/ok', 5000)).ready, true);
+    for (const route of ['/trickle', '/abort']) {
+      assert.equal(await bounded(getJson(base + route, 100)), null, route + ' JSON must settle');
+      await assertFaultClosed(route, 'JSON');
+      const error = await bounded(closeTarget(base + route, 100).catch(error => error));
+      assert.equal(error instanceof Error || error?.name === 'Error', true, route + ' close must reject');
+      assert.match(error.message, /timed out|aborted|closed|reset/i);
+      await assertFaultClosed(route, 'close');
+    }
+  } finally {
+    for (const timer of timers) clearInterval(timer);
+    for (const socket of sockets) socket.destroy();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+test('CDP initial target query obeys its wait budget even when HTTP never responds', async () => {
+  const http = require('node:http'), sockets = new Set();
+  let connectionClosed;
+  const server = http.createServer(req => { connectionClosed = new Promise(resolve => req.socket.once('close', () => resolve(true))); });
+  server.on('connection', socket => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  let timer;
+  try {
+    const outcome = await Promise.race([
+      require('./helpers/cdp-client').connectFirstPage({ cdpHttpBase: `http://127.0.0.1:${server.address().port}`, label: 'unresponsive fixture' }, () => true, { waitMainMs: 100 }).catch(error => error),
+      new Promise(resolve => { timer = setTimeout(() => resolve({ watchdog: true }), 1000); }),
+    ]);
+    assert.equal(outcome instanceof Error, true, 'target query must fail within its budget');
+    assert.match(outcome.message, /No matching CDP target/);
+    clearTimeout(timer);
+    assert.ok(connectionClosed, 'target query must reach the unresponsive server');
+    assert.equal(await Promise.race([
+      connectionClosed,
+      new Promise(resolve => { timer = setTimeout(() => resolve(false), 1000); }),
+    ]), true, 'target query must close its socket before fallback cleanup');
+  } finally {
+    clearTimeout(timer);
+    for (const socket of sockets) socket.destroy();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
 class FakeCdpSocket extends require('node:events').EventEmitter {
   constructor() { super(); this.sent = []; }
   send(text) { this.sent.push(JSON.parse(text)); }
   close() { this.emit('close', 1000, Buffer.from('closed')); }
   reply(id, result = {}) { this.emit('message', Buffer.from(JSON.stringify({ id, result }))); }
 }
+
+test('CDP HTTP deadline destroys a late response without consuming its body', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { EventEmitter } = require('node:events');
+  const { requestCdpHttp } = require('./helpers/cdp-http');
+  const request = new EventEmitter(), response = new EventEmitter();
+  let onResponse, requestDestroyed = 0, responseDestroyed = 0;
+  request.destroy = () => { requestDestroyed++; };
+  response.destroy = () => { responseDestroyed++; response.emit('error', Error('late transport error')); };
+  const pending = requestCdpHttp({ get(_url, callback) { onResponse = callback; return request; } }, 'http://fixture', 100).catch(error => error);
+  t.mock.timers.tick(100);
+  assert.match((await pending).message, /timed out/);
+  onResponse(response);
+  assert.equal(requestDestroyed, 1);
+  assert.equal(responseDestroyed, 1);
+  assert.equal(response.listenerCount('data'), 0);
+});
 
 test('CDP default timeout remains 30 seconds and cleans pending without replay', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
@@ -99,7 +190,8 @@ test('CDP connection entry points forward budgets and reject connection loss', a
   vm.runInContext(fs.readFileSync(filename, 'utf8'), context);
   const { connectCDP, connectFirstPage } = context.module.exports;
   for (const create of [() => connectCDP('ws://fixture', { commandTimeoutMs: 60000 }),
-    () => connectFirstPage({ cdpHttpBase: 'http://fixture' }, null, { commandTimeoutMs: 60000 })]) {
+    () => connectFirstPage({ cdpHttpBase: 'http://fixture' }, null, { commandTimeoutMs: 60000 }),
+    () => connectFirstPage({ cdpHttpBase: 'http://fixture' }, null, { waitMainMs: 0, commandTimeoutMs: 60000 })]) {
     const c = await create(), ws = sockets.at(-1), pending = c.send('Page.enable').catch(e => e);
     t.mock.timers.tick(31000); ws.reply(1, { alive: true }); assert.equal((await pending).alive, true);
     await c.close();

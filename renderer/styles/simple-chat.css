@@ -83,6 +83,9 @@
 .msg-overlay .turn-card[data-chat-style='message'].conversation-response-continuation > .turn-avatar { visibility: visible; }
 .msg-overlay .turn-card[data-chat-style='message'].conversation-response-continuation .turn-who { display: inline; }
 .msg-overlay .turn-card[data-chat-style='message']:focus-within .turn-actions { opacity: 1; }
+.msg-overlay .turn-card.tc-prefix-branch-action .turn-actions { opacity: 1; }
+.prefix-fork-fallback { display: flex; flex-wrap: wrap; align-self: stretch; gap: 6px; margin-top: 8px; max-width: 560px; white-space: normal; overflow-wrap: anywhere; }
+.prefix-fork-fallback > span { flex-basis: 100%; }
 @container hub-card-view (max-width: 520px) {
   .msg-overlay .turn-card[data-chat-style='message'] { gap: 8px; margin-bottom: 20px; }
   .msg-overlay .turn-card[data-chat-style='message'] .turn-avatar { width: 26px; height: 26px; min-width: 26px; }

@@ -1,7 +1,14 @@
 'use strict';
 const W = require('./welink');
 const CHECK_MS = 5 * 60000, RETRY_MS = 10 * 60000, SCAN_LIMIT = 2;
-const authFailure = text => /(?:token|session)\s*(?:is\s*)?(?:expired|invalid)|unauthenticated|not\s+logged\s*in|未登录|登录(?:已)?(?:过期|失效)|no\s+token|\buser\s+token\s+not\s+found\b/i.test(String(text || ''));
+// 已提示扫码后仍每 30 分钟悄悄试一次（2026-11-06）：夜里 WeLink 桌面端没开、早上开了，Hub 自己就续上，不用等人点。
+// 一出二维码就立刻停，不打扰；提示只发一次。
+const SLOW_RETRY_MS = 30 * 60000;
+// 认不出登录状态时（Q-1106-07：1.0.20 自动刷新令牌那一瞬间可能只输出进度行，如「Token refresh complete」）：
+// 隔 1.5 秒再查一次；仍认不出、而 10 分钟内确认过在线，就先按在线继续取数，1 分钟后再核对——不因一句没见过的输出停掉整轮取数。
+const UNKNOWN_RETRY_MS = 1500, ONLINE_GRACE_MS = 10 * 60000;
+// 和 welink.js 共用一张「要重新登录」的说法表（含 1.0.20 的 Not logged in / Token expired and refresh token invalid）。
+const authFailure = text => W.AUTH_FAILURE.test(String(text || ''));
 // 只保留失败诊断，不把状态输出中的凭据带到 auth.json 或界面。
 const safeDiagnostic = text => String(text || '').replace(/((?:token|ticket|secret|password|authorization)\w*["']?\s*[:=]\s*)[^\r\n]+/gi, '$1***')
   .replace(/\bBearer\s+\S+/gi, 'Bearer ***').trim().slice(0, 300);
@@ -20,11 +27,12 @@ class AuthKeeper {
     if (['online', 'renewing'].includes(this.current.state)) this.current.state = 'unknown';
     this.current.login = null;
     this.current.lastCheckAt = 0;
+    this.current.lastOkUid = null; // 重启后不拿旧的在线记录兜底
   }
   status() { return { ...this.current }; }
   set(patch) { if (this.closed) return; this.current = { ...this.current, ...patch }; this.a.write('auth.json', this.current); this.a.changed(); }
   online(login, renewed = false) {
-    this.set({ state: 'online', login, error: '', lastCheckAt: this.a.now(), scanAttempts: 0, notified: false, noticeId: '',
+    this.set({ state: 'online', login, error: '', lastCheckAt: this.a.now(), scanAttempts: 0, notified: false, noticeId: '', lastOkAt: this.a.now(), lastOkUid: login?.uid || this.current.lastOkUid || null,
       ...(renewed ? { lastRenewAt: this.a.now() } : {}) });
   }
   manualSucceeded(login) { this.online(login); }
@@ -46,10 +54,21 @@ class AuthKeeper {
     const now = this.a.now();
     let login;
     try {
-      const result = known || await this.a.rawWelink(['auth', 'status']);
+      let result = known || await this.a.rawWelink(['auth', 'status']);
       if (this.closed) return this.status();
-      const text = result.stdout + '\n' + result.stderr;
+      let text = result.stdout + '\n' + result.stderr;
       login = { ...W.loginState(text), checkedAt: now, exitCode: result.code };
+      if (login.reason === 'unknown' && result.code === 0) {
+        await new Promise(r => setTimeout(r, this.a.unknownRetryMs ?? UNKNOWN_RETRY_MS));
+        if (this.closed) return this.status();
+        result = await this.a.rawWelink(['auth', 'status']);
+        text = result.stdout + '\n' + result.stderr;
+        login = { ...W.loginState(text), checkedAt: this.a.now(), exitCode: result.code };
+      }
+      if (login.reason === 'unknown' && result.code === 0 && this.current.lastOkUid && now - (this.current.lastOkAt || 0) < ONLINE_GRACE_MS) {
+        this.set({ state: 'online', login: { ok: true, uid: this.current.lastOkUid, checkedAt: now, unverified: true }, error: '', lastCheckAt: now - CHECK_MS + 60000 });
+        return this.status();
+      }
       if (result.code !== 0 && login.reason !== 'expired') login = { ...login, ok: false, reason: 'error',
         error: `登录状态查询失败（退出码 ${result.code}）${safeDiagnostic(result.stderr || result.stdout) ? '：' + safeDiagnostic(result.stderr || result.stdout) : ''}` };
       else if (login.reason === 'unknown') login.error = '无法识别 WeLink 登录状态输出，稍后自动重查';
@@ -65,8 +84,10 @@ class AuthKeeper {
       // A network/parse failure is not proof of expiry and must not launch login.
       if (!login.ok && login.reason !== 'expired') { this.set({ state: 'unknown', error: login.error || '暂时无法确认 WeLink 登录，稍后自动重查' }); return this.status(); }
       if (!login.ok && this.current.scanAttempts >= SCAN_LIMIT) this.set({ state: 'needs-scan', error: '' });
-      if (this.current.scanAttempts >= SCAN_LIMIT || (this.current.lastAttemptAt && now - this.current.lastAttemptAt < RETRY_MS)) { this.notifyScan(); return this.status(); }
-      this.set({ state: 'renewing', lastAttemptAt: now, error: '' });
+      const since = this.current.lastAttemptAt ? now - this.current.lastAttemptAt : Infinity;
+      if (this.current.scanAttempts >= SCAN_LIMIT ? since < SLOW_RETRY_MS : since < RETRY_MS) { this.notifyScan(); return this.status(); }
+      // 已在提示扫码时的悄悄重试不改界面状态，「扫码登录」一行照常显示。
+      this.set({ state: this.current.state === 'needs-scan' ? 'needs-scan' : 'renewing', lastAttemptAt: now, error: '' });
       this.controller = new AbortController();
       let scan = false, timedOut = false;
       let resultLogin;
@@ -116,4 +137,4 @@ class AuthKeeper {
     return this.status();
   }
 }
-module.exports = { AuthKeeper, CHECK_MS, RETRY_MS, SCAN_LIMIT, authFailure, needsScan };
+module.exports = { AuthKeeper, CHECK_MS, RETRY_MS, SCAN_LIMIT, SLOW_RETRY_MS, authFailure, needsScan };

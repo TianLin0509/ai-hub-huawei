@@ -68,7 +68,8 @@ function projectClaudeRecord(record) {
   const id = record.userMessageId;
   const user = record.nativeActivity ? null : { id, role: 'user', text: displayUserText(record.text), ts: record.createdAt,
     source, clientSubmissionId: record.submissionId, deliveryStatus: record.status, receiptAccepted: record.accepted === true,
-    attachments: (record.content || []).filter(block => block.type !== 'text'), ...hubAttachedFields(record.text) };
+    attachments: (record.content || []).filter(block => block.type !== 'text'),
+    ...(record.queuedSupplement ? { queuedSupplement: true } : {}), ...hubAttachedFields(record.text) };
   const frames = [...(record.messages?.values() || []), ...(record.streams?.values() || [])];
   const toolCalls = new Map();
   const results = new Map();
@@ -145,6 +146,7 @@ function projectClaudeRecord(record) {
     role: 'assistant', kind: 'claude', text: answer, thinking: thinking.join('\n\n'),
     toolCalls: [...toolCalls.values()], ts: record.createdAt, tsEnd: record.completedAt || null,
     source, displayMessages, clientSubmissionId: record.submissionId, userMessageId: id,
+    ...(record.queuedSupplement ? { queuedSupplement: true } : {}),
     ...require('./claude-turn-metrics').claudeTurnMetrics(record, frames),
     nativeActivity: record.nativeActivity || false, nativeOrigin: record.origin || null,
     stopReason: terminal ? record.status : null, nativeOutcome: terminal ? record.status : null } : null;

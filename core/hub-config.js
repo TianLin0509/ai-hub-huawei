@@ -146,6 +146,7 @@ function getConfig() {
   const codexSubscriptionProfiles = normalizeCodexSubscriptionProfiles(codexProvider.subscription_profiles);
 
   _cachedConfig = {
+    codeagentPrefixBranch: rawConfig.experiments?.codeagentPrefixBranch === true,
     acp: rawConfig.acp || {},
     proxy: getConfigValue('proxy', 'CLAUDE_PROXY', 'proxy.http', DEFAULTS.proxy),
     claudeBackend: getConfigValue('claudeBackend', 'HUB_CLAUDE_BACKEND', 'providers.claude.backend', DEFAULTS.claude_backend),

@@ -197,11 +197,22 @@ function parseJson(text) {
 }
 
 // 登录与日历状态：auth status 里 Token EXPIRED 或没登录 → 要扫码；日历报 Exchange 域名没找到 → 要初始化。
+const LOGIN_NEEDED = /EXPIRED|INVALID|REVOKED|credentials\s+corrupted|未登录|已失效|已过期|not\s+logged\s*in|not\s+authenticated|unauthenticated|no\s+token|\buser\s+token\s+not\s+found\b|refresh\s+token\s+invalid|run:?\s*['"`]?welink-cli\s+auth\s+login/i;
+// 1.0.20 自动刷新令牌时夹带的进度行（Q-1106-07 从 exe 里读到）：不是登录状态，判断前先去掉——
+// 尤其「Sign data expired …」里的 expired 会被误当成令牌过期，平白去跑一次 auth login。
+const PROGRESS_LINE = /^.*(?:sign\s+data\s+expired|obtaining\s+sign|token\s+refresh(?:ed|ing)?\s+complete|refreshing\s+token|token\s+will\s+auto-refresh).*$/gim;
 function loginState(statusText) {
-  const s = String(statusText || '');
-  const uid = (s.match(/UID\s*[:：]\s*([A-Za-z0-9_-]+)/i) || [])[1] || null;
-  if (/EXPIRED|未登录|not\s+logged\s*in|no\s+token|\buser\s+token\s+not\s+found\b/i.test(s)) return { ok: false, reason: 'expired', uid };
-  if (/Token\s*[:：]\s*(?:VALID|OK|有效)|已登录|logged\s*in/i.test(s) || uid) return { ok: true, uid };
+  const s = String(statusText || '').replace(PROGRESS_LINE, '');
+  // 1.0.20 的在线输出可能把账号写在 Account / User ID 行（只从 exe 字符串里看到，待真机核对）：没有 UID 行时用它们兜底。
+  const uid = (s.match(/\bUID\s*[:：]\s*([A-Za-z0-9_-]+)/i) || s.match(/\b(?:User\s*ID|Account)\s*[:：]\s*([A-Za-z0-9_-]+)/i) || [])[1] || null;
+  // 有「User Token: …」这一行时只看这一行（1.0.14 / 1.0.20 都有）：别的行（如 refresh token）写着 expired 不算数。
+  const line = (s.match(/User\s+Token\s*[:：]\s*([^\r\n]*)/i) || [])[1];
+  if (line != null) return /^\s*(?:VALID|OK|有效)\b/i.test(line) ? { ok: true, uid } : { ok: false, reason: 'expired', uid };
+  // 2026-11-06：INVALID / REVOKED 也按过期处理——以前只要读到 UID 就算已登录，令牌作废了还照常去取数。
+  // 1.0.20 未登录改成「Status: not authenticated」、退出码 0（Q-1106-06）；旧正则认不出，Hub 判成「无法识别」，既不续期也不提示扫码。
+  // 兜底：输出里只要叫人去跑 auth login，就按要登录处理——以后措辞再变也不至于卡死。
+  if (LOGIN_NEEDED.test(s)) return { ok: false, reason: 'expired', uid };
+  if (/Token\s*[:：]\s*(?:VALID|OK|有效)|已登录|\blogged\s*in|Status\s*[:：]\s*authenticated/i.test(s) || uid) return { ok: true, uid };
   return { ok: false, reason: 'unknown', uid };
 }
 // 同 parseJson，但先把长整数的消息编号改成字符串（JSON.parse 会把它们舍入成同一个数，相邻两条消息就分不清了）。
@@ -365,5 +376,24 @@ function loginNeedsScan(text) {
   return !!qrFromLoginOutput(s) || SCAN_PROMPT.test(s) || /^\s*\+-{21,}\+\s*$/m.test(s);
 }
 
+// 用户看到的报错说人话（2026-11-06）：CLI 原文只进日志，界面和回答里给原因和下一步。认不出的保持原样。
+// 启动失败（exe 正被 npm 升级替换、被占用、一时不存在）的错误码：Hub 隔 2 秒自动重试一次。
+const SPAWN_RETRY = new Set(['EBUSY', 'EPERM', 'EACCES', 'ENOENT', 'UNKNOWN']);
+const AUTH_FAILURE = /(?:token|session)\s*(?:is\s*)?(?:expired|invalid)|unauthenticated|not\s+authenticated|not\s+logged\s*in|未登录|登录(?:已)?(?:过期|失效)|no\s+token|\buser\s+token\s+not\s+found\b|refresh\s+token\s+invalid|run:?\s*['"`]?welink-cli\s+auth\s+login/i;
+const FRIENDLY = [
+  [e => e.code === 'WELINK_MISSING', () => '没找到 welink-cli：请在公司电脑上安装（npm 全局包 @welink/welink-cli），装好后 Hub 会自动找到'],
+  [e => e.syscall === 'spawn' || SPAWN_RETRY.has(e.code), () => 'welink-cli 暂时打不开（可能正在升级或被占用），Hub 稍后自动重试'],
+  [e => e.code === 'WELINK_TIMEOUT', e => { const s = /(\d+)\s*秒/.exec(e.message || ''); return `WeLink 这次响应太慢${s ? `（超过 ${s[1]} 秒）` : ''}，已跳过，稍后自动重试`; }],
+  [e => e.code === 'WELINK_CLEANUP_TIMEOUT', () => 'WeLink 上一条查询还没退出，稍后自动重试'],
+  [e => AUTH_FAILURE.test(e.message || ''), () => 'WeLink 登录已过期，Hub 正在自动续期；续上后再问一次即可'],
+  [e => /\b(?:ECONNRESET|ETIMEDOUT|ECONNREFUSED|ENOTFOUND|EAI_AGAIN)\b|socket hang up|network error/i.test(e.message || ''), () => 'WeLink 网络暂时不通，Hub 稍后自动重试'],
+  [e => /internal server error|service unavailable|bad gateway|gateway timeout|\bstatus\s+5\d\d\b/i.test(e.message || ''), () => 'WeLink 服务端暂时出错，稍后自动重试'],
+];
+function friendlyError(error) {
+  const e = typeof error === 'string' ? { message: error } : error || {};
+  for (const [hit, say] of FRIENDLY) if (hit(e)) return say(e);
+  return String(e.message || '');
+}
+
 module.exports = { READ_ONLY, SETUP, checkArgs, resolveCli, findCliDeep, npmPrefixes, cliUnder, run, parseJson, parseJsonBig, groupMessages, groupMembers, loginState, calendarNeedsSetup,
-  qrFromLoginOutput, qrMatrixFromBlocks, qrBlocksFromMatrix, qrSvgDataUri, loginOutputGarbled, loginUrlFromOutput, loginProgress, loginNeedsScan };
+  qrFromLoginOutput, qrMatrixFromBlocks, qrBlocksFromMatrix, qrSvgDataUri, loginOutputGarbled, loginUrlFromOutput, loginProgress, loginNeedsScan, friendlyError, SPAWN_RETRY, AUTH_FAILURE };

@@ -11,6 +11,13 @@ const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 
 const args = process.argv.slice(2);
+// 真 CLI 读完版本就退出。以前这里也进交互循环，Hub 探测版本后没收掉就留下 node 进程，全机累计 200 多个。
+// 版本和公司实录同格式，正好等于 Hub 的最低版本：不弹升级提醒，也不会再去读 --help。
+// Windows 上管道写入是异步的，写完再退出，否则版本号可能被截掉。
+if (args[0] === '--version') {
+  process.stdout.write('1.2615.02.01 (codeAgentCLI)\n', () => process.exit(0));
+  return;
+}
 const configDir = process.env.CODEAGENT3_CONFIG_DIR || '';
 const log = process.env.CODEAGENT_POOL_FAKE_LOG;
 const resumeAt = args.indexOf('--resume');

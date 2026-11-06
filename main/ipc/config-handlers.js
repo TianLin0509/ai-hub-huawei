@@ -32,6 +32,7 @@ function toMaskedConfig(config) {
   const notifications = normalizeNotificationConfig(config.notifications || {});
   const operations = normalizeOperationsConfig(config.operations || {});
   return {
+    codeagentPrefixBranch: config.codeagentPrefixBranch === true,
     proxy: config.proxy,
     claudeBackend: config.claudeBackend,
     claudeSubscriptionProfile: config.claudeSubscriptionProfile || 'default',
@@ -89,6 +90,7 @@ function toEditableConfig(config) {
   const notifications = normalizeNotificationConfig(config.notifications || {});
   const operations = normalizeOperationsConfig(config.operations || {});
   return {
+    codeagentPrefixBranch: config.codeagentPrefixBranch === true,
     proxy: config.proxy,
     claudeBackend: config.claudeBackend,
     claudeApiKey: config.claudeApiKey || '',

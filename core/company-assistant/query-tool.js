@@ -4,6 +4,7 @@ const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const D = require('./data');
 const { createPriorityMatcher, prioritize } = require('./memory-priority');
+const { withWelinkPriority } = require('./welink-gate');
 const HOUR = 3600000;
 const TTL = HOUR;
 function queryRange(args, now) {
@@ -21,18 +22,25 @@ function queryRange(args, now) {
   return { start, end, timeZone: 'Asia/Shanghai', startDisplay: D.displayTime(start), endDisplay: D.displayTime(end), endExclusive: true, period };
 }
 class AssistantQuery {
-  constructor(assistant) { this.a = assistant; this.dir = path.join(assistant.dir, 'queries'); this.pending = null; this.activeTask = null; this.taskCoverage = new Map(); }
-  beginTask(id) { this.activeTask = id; this.taskCoverage.clear(); }
-  captureCoverage(queryId, lines) {
-    if (this.activeTask && this.a.job?.id === this.activeTask) this.taskCoverage.set(queryId, lines);
+  // 查询范围按会话记（5.5.11）：每个问题一个会话，几条队列可能同时在答；工具调用带着调用方会话编号，记到对应的任务上。
+  constructor(assistant) { this.a = assistant; this.dir = path.join(assistant.dir, 'queries'); this.pending = null; this.tasks = new Map(); }
+  beginTask(id, sessionId) { if (sessionId) this.tasks.set(sessionId, { id, coverage: new Map() }); }
+  captureCoverage(queryId, lines, ctx = {}, summary = null) {
+    const task = ctx.sessionId && this.tasks.get(ctx.sessionId);
+    if (task) task.coverage.set(queryId, { lines, ok: summary ? summary.ok !== false : true, line: summary?.line || '' });
   }
-  finishAnswer(id, text = '') {
-    if (this.activeTask !== id) return { text, coverage: [] };
-    const coverage = [...this.taskCoverage.values()].flat();
-    this.activeTask = null; this.taskCoverage.clear();
-    // This prefix is produced from actual collection results, shared by desktop
-    // and phone replies. Scope remains visible even if a model omits it.
-    return { text: coverage.length ? ['> **Hub 核实的查询范围**', ...coverage.map(line => '> ' + line), '', text].join('\n') : text, coverage };
+  // 回答不再插「Hub 核实的查询范围」前缀（5.5.11，用户拍板 L1）：范围由页面显示在气泡底部一行；没取全时这一行变橙、不折叠。
+  // 手机回答没有页面，由服务在末尾补一句范围。
+  finishAnswer(id, text = '', sessionId = null) {
+    const key = sessionId || [...this.tasks.entries()].find(([, t]) => t.id === id)?.[0];
+    const task = key && this.tasks.get(key);
+    if (!task || task.id !== id) return { text, coverage: null, lines: [] };
+    this.tasks.delete(key);
+    const entries = [...task.coverage.values()];
+    if (!entries.length) return { text, coverage: null, lines: [] };
+    const ok = entries.every(x => x.ok), lines = entries.flatMap(x => x.lines);
+    const shortLines = [...new Set(entries.filter(x => ok || !x.ok).map(x => x.line).filter(Boolean))];
+    return { text, lines, coverage: { ok, line: shortLines.slice(0, 2).join('；') || (ok ? '已查询' : '部分数据没取全'), details: lines } };
   }
   file(id) { if (!/^[a-f0-9-]{36}$/.test(String(id))) throw new Error('查询编号无效'); return path.join(this.dir, id + '.json'); }
   owner() { return this.a.auth ? this.a.auth.status()?.login?.uid || null : this.a.snapshot()?.login?.uid || null; }
@@ -67,7 +75,7 @@ class AssistantQuery {
     return { queryId: data.id, kind: data.kind, scope: data.scope, range: data.range, capturedAt: data.capturedAt,
       coverage: data.coverage, counts: data.counts, total: data.items.length, offset, items,
       nextCursor: next < data.items.length ? `${data.id}:${next}` : null,
-      note: 'nextCursor 非空须继续翻页；total 是本次已取到的条数，是否查全以 coverage 为准。会议时间照 startDisplay/endDisplay 引用；长消息用 read。' };
+      note: 'nextCursor 非空且需要更多时再翻页；是否查全以 coverage 为准。' };
   }
   async execute(args = {}) {
     const op = args.op || 'list';
@@ -143,7 +151,7 @@ class AssistantQuery {
     if (/^\d{4}-\d\d-\d\d(?:[ T]\d\d:\d\d(?::\d\d)?)?$/.test(text)) return text.slice(0, 10) + 'T' + (text.slice(11) || '00:00:00') + '+08:00';
     return text;
   }
-  async inbox(args = {}) {
+  async inbox(args = {}, ctx = {}) {
     let scope = 'private_mentions';
     const scopes = Array.isArray(args.scope) ? args.scope : ['私聊', '@我', '@所有人'];
     if (scopes.includes('全部群消息')) scope = 'all';
@@ -156,36 +164,100 @@ class AssistantQuery {
     const page = await this.execute({ ...args, op: 'list', kind: 'messages', scope, categories: scopes, period: 'custom',
       start: args.since ? this.localTime(args.since) : new Date(endAt - hours * HOUR).toISOString(), end });
     const { coverage: c, range: r } = page;
-    const header = `覆盖：${r.startDisplay} 至 ${r.endDisplay}（终点不含，上海时间）；已查 ${c.scanned} 个会话；${c.status === 'complete' ? c.fromCache ? '已取得实时及缓存结果，缓存部分本次未实时核对' : '可发现会话的消息已翻页覆盖' : '可能不全'}。${c.limitation || ''}${c.partialConversations ? ` ${c.partialConversations} 个会话未取全。` : ''}${c.unknownTime ? ` ${c.unknownTime} 条时间未确认。` : ''}`;
-    this.captureCoverage(page.queryId, [header, `本次筛选已取到 ${page.total} 条；私聊 ${page.counts.private} 条，群 @我 ${page.counts.atMe} 条，@所有人 ${page.counts.atAll} 条。`]);
-    const priority = row => row.priority ? '★ ' : '';
-    const lines = page.items.map(m => `${priority(m)}${m.group ? (m.atMe ? '群 @我' : m.atAll ? '群 @所有人' : '群聊') : '私聊'}「${m.convName}」 ${m.timeDisplay} ${m.sender}：${m.preview} [${m.sourceId}]${m.dataSource ? `（${m.dataSource === 'realtime' ? '实时取数' : m.dataSource === 'mixed' ? '实时及缓存' : '缓存'}；采集时间 ${Number.isFinite(m.capturedAt) ? D.displayTime(m.capturedAt) : '未知'}）` : ''}${m.readRequired ? '（需读全文）' : ''}`);
+    const complete = c.status === 'complete';
+    const header = `覆盖：${r.startDisplay} 至 ${r.endDisplay}（终点不含，上海时间）；已查 ${c.scanned} 个会话；${complete ? c.fromCache ? '已取得实时及缓存结果，缓存部分本次未实时核对' : '可发现会话的消息已翻页覆盖' : '可能不全'}。${c.limitation || ''}${c.partialConversations ? ` ${c.partialConversations} 个会话未取全。` : ''}${c.unknownTime ? ` ${c.unknownTime} 条时间未确认。` : ''}`;
+    const counts = `本次筛选已取到 ${page.total} 条；私聊 ${page.counts.private} 条，群 @我 ${page.counts.atMe} 条，@所有人 ${page.counts.atAll} 条。`;
+    const span = args.since ? `${r.startDisplay} 起` : `最近 ${hours} 小时`;
+    const errors = c.errors.map(e => `取数问题：${e.label} ${e.text}`);
+    this.captureCoverage(page.queryId, [header, counts, ...errors], ctx, complete
+      ? { ok: true, line: `${span} · ${c.scanned} 个会话 · ${page.total} 条` }
+      : { ok: false, line: c.partialConversations ? `有 ${c.partialConversations} 个会话没取全，可能漏了消息` : `${span}的消息可能不全` });
+    // 每条一行，不再附整份会话清单（5.5.11：每页省 1–2 万字）；采集方式和时间在范围说明里。
+    const lines = page.items.map(m => `${m.priority ? '★ ' : ''}${m.group ? (m.atMe ? '群@我' : m.atAll ? '群@所有人' : '群') : '私聊'}「${D.short(m.convName, 20)}」${D.clock(m.at)} ${m.sender}：${D.short(m.preview, 100)} [${m.sourceId}]${m.dataSource && m.dataSource !== 'realtime' ? `（缓存；采集时间 ${Number.isFinite(m.capturedAt) ? D.clock(m.capturedAt) : '未知'}）` : ''}${m.readRequired ? '（长，需读全文）' : ''}`);
     this.a.memory?.touch(JSON.stringify({ person: args.person, group: args.group }));
-    return { text: [header, `已取到：私聊 ${page.counts.private} 条，群 @我 ${page.counts.atMe} 条、@所有人 ${page.counts.atAll} 条；本次筛选共 ${page.total} 条，本页 ${page.items.length} 条。`, ...lines, ...c.errors.map(e => `取数问题：${e.label} ${e.text}`)].join('\n'),
-      queryId: page.queryId, nextCursor: page.nextCursor, total: page.total, conversations: c.details.map(conv => ({ id: conv.id, name: conv.name, dataSource: conv.dataSource, capturedAt: conv.capturedAt, cachedAt: conv.cachedAt })), note: page.note };
+    return { text: [header, counts, ...lines, ...errors].join('\n'), queryId: page.queryId, nextCursor: page.nextCursor, total: page.total };
   }
-  async meetings(args = {}) {
+  async meetings(args = {}, ctx = {}) {
     const date = args.date || '今天', today = D.dayKey(this.a.now());
     const day = date === '今天' ? today : date === '明天' ? D.dayKey(Date.parse(today + 'T00:00:00+08:00') + 24 * HOUR) : date;
     const start = this.localTime(args.from || day), startMs = D.timeValue(start).at;
     if (!Number.isFinite(startMs)) throw new Error('会议查询日期无效，请使用今天、明天或实际 YYYY-MM-DD 日期');
     const end = args.to ? this.localTime(args.to) : new Date(startMs + 24 * HOUR).toISOString();
-    const page = await this.execute({ ...args, op: 'list', kind: 'meetings', period: 'custom', start, end });
+    const page = await this.execute({ ...args, op: 'list', kind: 'meetings', period: 'custom', start, end, limit: 50 });
     const c = page.coverage;
-    const sourceStatus = (label, value) => `${label}：${value.status === 'complete' ? '已完成当前条件下的查询' : '未取全'}${value.reasonLabel ? '（' + value.reasonLabel + '）' : ''}${value.queryType ? `；查询类型=${value.queryType}` : ''}`;
+    const sourceStatus = (label, value) => `${label}：${value.status === 'complete' ? '已完成当前条件下的查询' : '未取全'}${value.reasonLabel ? '（' + value.reasonLabel + '）' : ''}`;
     const queryTypes = c.meeting.queryTypes || String(c.meeting.queryType || '').split(',').filter(Boolean);
     const category = type => ({ '1': '待参加', '2': '已结束' })[type] || `类型 ${type}`;
-    const meetingSource = m => {
-      const types = m.queryTypes || queryTypes;
-      return types.length ? `WeLink ${types.map(category).join('及')}会议` : 'WeLink 会议';
-    };
-    const lines = page.items.map(m => `${m.displayRange || m.display || `${m.startDisplay || '时间待核对'} – ${m.endDisplay || '结束时间待核对'}`} · ${m.subject} · ${m.location || '地点未提供'} · ${m.sourceId.startsWith('cal:') ? 'Exchange 日程' : meetingSource(m)} [${m.sourceId}]`);
-    const summary = [`覆盖：${page.range.startDisplay} 至 ${page.range.endDisplay}（上海时间）；${sourceStatus('WeLink 会议', c.meeting)}；${sourceStatus('Exchange 日程', c.calendar)}。`,
-      `范围说明：WeLink 当前${queryTypes.length ? '只查询' + queryTypes.map(category).join('及') + '会议（类型 ' + queryTypes.join('、') + '）' : '查询类型未确认'}，其他会议类型未纳入本次查询；下列数量仅代表本次查询已取到的记录。`,
-      `在本次查询范围内找到 ${page.total} 条记录：WeLink ${page.counts.meetings} 条、Exchange ${page.counts.calendar} 条${c.unknownTime ? `，其中 ${c.unknownTime} 条时间待核对` : ''}。两源可能记录同一场会，尚无共享身份依据，分别保留。`];
-    this.captureCoverage(page.queryId, summary);
-    return { text: [...summary, ...lines, ...c.errors.map(e => `取数问题：${e.label} ${e.text}`)].join('\n'),
-      queryId: page.queryId, nextCursor: page.nextCursor, total: page.total, note: '先写“在本次查询范围内找到 N 条会议/日程记录”，分别列 WeLink 和 Exchange 条数，并保留覆盖与范围说明。每条记录将上面的“完整时间范围 · 主题 · 地点 · 来源 [出处]”整行原样引用，起止时间保持在同一行；分析另起一段。合计按记录计数；跨源同名可能是同一场。请翻完 nextCursor；失败、时间未知的条目单列待核对。' };
+    // 同名同时段的 WeLink 会议与日历合成一行（用户 11-05 定「2 合并」）。
+    const rows = D.mergeMeetings(page.items), merged = rows.filter(m => m.merged).length;
+    const lines = rows.map(m => `${m.displayRange || m.display || `${m.startDisplay || '时间待核对'} – ${m.endDisplay || '结束时间待核对'}`} ${m.subject}${m.location ? ' · ' + m.location : ''} · ${m.merged ? 'WeLink + 日历' : m.sourceId.startsWith('cal:') ? '日历' : 'WeLink'} [${m.sourceId}]`);
+    const complete = c.status === 'complete';
+    const summary = [`覆盖：${page.range.startDisplay} 至 ${page.range.endDisplay}（上海时间）；${sourceStatus('WeLink 会议', c.meeting)}；${sourceStatus('邮箱日程', c.calendar)}。`,
+      `范围说明：WeLink ${queryTypes.length ? '只含' + queryTypes.map(category).join('和') + '会议' : '会议类型未确认'}，其他类型不在本次范围。`,
+      `找到 ${page.total} 条记录：WeLink ${page.counts.meetings} 条、日历 ${page.counts.calendar} 条${merged ? `；主题和时间相同的 ${merged} 场已合并成一行，两条原始记录都保留在出处里` : ''}${c.unknownTime ? `；${c.unknownTime} 条时间待核对` : ''}。`];
+    const label = args.from ? '指定时段' : date === '今天' || date === '明天' ? date : day;
+    const errors = c.errors.map(e => `取数问题：${e.label} ${e.text}`);
+    this.captureCoverage(page.queryId, [...summary, ...errors], ctx, complete
+      ? { ok: true, line: `${label} · WeLink 会议 ${page.counts.meetings} 条、日历 ${page.counts.calendar} 条${merged ? `，同一场会已合并 ${merged} 场` : ''}` }
+      : { ok: false, line: `${label}的会议或日历没取全${c.unknownTime ? `，${c.unknownTime} 条时间待核对` : ''}` });
+    return { text: [...summary, ...lines, ...errors].join('\n'), queryId: page.queryId, nextCursor: page.nextCursor, total: page.total,
+      note: '时间和主题照上面的行写；时间待核对的单列。' };
+  }
+  // 在后台快照里找消息（5.5.11 新增）：welink-cli 不能按关键字或时间搜消息，只能逐个会话翻；
+  // 快照每 10 分钟更新一次，按人、群、关键字在本机筛，几毫秒出结果。更早的或要实时的，用 welink_inbox。
+  async find(args = {}, ctx = {}) {
+    const person = String(args.person || '').trim(), group = String(args.group || '').trim(), keyword = String(args.keyword || '').trim();
+    if (!person && !group && !keyword) throw new Error('至少给一个条件：person（人）、group（群）或 keyword（关键字）');
+    const snap = this.ownSnapshot(), now = this.a.now(), settings = this.a.settings?.() || {};
+    const lookback = Number(settings.lookbackHours) || 36;
+    const hours = Math.max(1, Math.min(168, Number(args.hours) || lookback));
+    const endAt = args.until ? D.timeValue(this.localTime(args.until)).at : now;
+    const startAt = args.since ? D.timeValue(this.localTime(args.since)).at : endAt - hours * HOUR;
+    if (!Number.isFinite(startAt) || !Number.isFinite(endAt) || endAt <= startAt) throw new Error('时间范围无效，请用上海时间 YYYY-MM-DD HH:mm');
+    const has = (q, values) => !q || values.some(v => String(v || '').toLowerCase().includes(q.toLowerCase()));
+    const rows = Object.values(snap.messages || {}).flat().filter(m => Number.isFinite(m.at) && m.at >= startAt && m.at < endAt)
+      .filter(m => has(person, [m.sender, m.senderName, m.account, !m.group && m.convName]) && has(group, [m.group && m.convName, m.group && m.conv]) && has(keyword, [m.text, m.preview]));
+    const limit = Math.max(1, Math.min(20, Math.floor(Number(args.limit) || 12)));
+    const picked = [...rows].sort((a, b) => b.at - a.at).slice(0, limit).sort((a, b) => a.at - b.at);
+    const sc = snap.scope || {}, fresh = now - (snap.at || 0) <= 30 * 60000;
+    const partial = !!(sc.partial || sc.neverFetched || sc.limited);
+    const older = startAt < (snap.at || now) - lookback * HOUR;
+    const desc = [person && `人「${person}」`, group && `群「${group}」`, keyword && `关键字「${keyword}」`].filter(Boolean).join('、');
+    const details = [`在后台快照里按${desc}查找：${D.displayTime(startAt)} 至 ${D.displayTime(endAt)}；快照采集于 ${D.displayTime(snap.at)}，覆盖 ${sc.fetched || (snap.conversations || []).length} 个会话。`,
+      `命中 ${rows.length} 条，列出最近 ${picked.length} 条。`,
+      ...(partial ? [`快照里有 ${sc.partial || 1} 个会话没取全，可能漏消息；要现场查用 welink_inbox。`] : []),
+      ...(older ? [`起点早于快照的回看范围（${lookback} 小时），更早的消息要用 welink_inbox 现场查。`] : []),
+      ...(!fresh ? ['快照已超过 30 分钟没更新，最新消息可能没包含。'] : [])];
+    const ok = !partial && fresh && !older;
+    this.captureCoverage(`find:${now}:${desc}`, details, ctx, { ok, line: ok ? `快照 ${D.clock(snap.at)} · ${desc} · 命中 ${rows.length} 条`
+      : partial ? `快照里有会话没取全，${desc}可能漏了消息` : older ? '更早的消息不在快照里' : '快照不是最新的，最新消息可能没包含' });
+    const lines = picked.map(m => `${m.group ? '群「' + D.short(m.convName, 20) + '」' : '私聊「' + D.short(m.convName, 20) + '」'}${D.displayTime(m.at)} ${m.mine ? '我' : m.sender}：${D.short(m.text || m.preview, 150)} [${m.sourceId}]`);
+    return { text: [...details, ...lines].join('\n'), total: rows.length, note: '要读全文或前后文用 welink_message({ids:[出处编号]})。' };
+  }
+  // 邮件（5.5.11 新增）：未读直接读快照；关键字用 welink-cli 的 mail list --query（公司 1.0.14 实测可用，Q-1105-05）。
+  async mail(args = {}, ctx = {}) {
+    const limit = Math.max(1, Math.min(20, Math.floor(Number(args.limit) || 10))), query = String(args.query || '').trim();
+    let mails, details, ok = true, line;
+    if (!query) {
+      const snap = this.ownSnapshot(), cov = snap.mailCoverage || {}, all = snap.mails || [];
+      mails = all.slice(0, limit);
+      ok = cov.status === 'complete';
+      details = [`未读邮件来自后台快照（采集于 ${D.displayTime(snap.at)}）：共 ${all.length} 封，列出 ${mails.length} 封。${ok ? '' : '未读邮件没取全' + (cov.reasonLabel ? '（' + cov.reasonLabel + '）' : '') + '。'}`];
+      line = ok ? `未读邮件 ${all.length} 封 · 快照 ${D.clock(snap.at)}` : '未读邮件没取全';
+    } else {
+      if (query.length > 200 || /[\r\n]/.test(query)) throw new Error('搜索词太长或含换行');
+      const Q = require('./queries');
+      let raw = null, error = '';
+      try { raw = await withWelinkPriority('user', () => Q.readJson(a => this.a.welink(a), ['mail', 'list', '--query', query, '--max', String(limit)], {})); }
+      catch (e) { error = e.message; }
+      mails = raw ? D.mails(raw).slice(0, limit) : [];
+      ok = !!raw;
+      details = [raw ? `按「${query}」搜邮件（welink-cli mail list --query，实时）：找到 ${mails.length} 封。` : `按「${query}」搜邮件失败：${D.short(error, 160)}`];
+      line = raw ? `邮件搜索「${D.short(query, 20)}」· ${mails.length} 封` : '邮件搜索失败';
+    }
+    this.captureCoverage(`mail:${this.a.now()}:${query}`, details, ctx, { ok, line });
+    const lines = mails.map(m => `${m.at ? D.displayTime(m.at) : '时间未知'} ${m.from || '发件人未知'}：${m.subject}${m.important ? '（重要）' : ''}${m.preview ? ' —— ' + D.short(m.preview, 150) : ''} [${m.sourceId}]`);
+    return { text: [...details, ...lines].join('\n'), total: mails.length };
   }
   async message(args = {}) {
     const ids = Array.isArray(args.ids) ? args.ids.map(String) : [];

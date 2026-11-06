@@ -72,7 +72,9 @@ const applyHubCardDisplaySettings = (config) => {
 };
 applyHubCardDisplaySettings();
 ipcRenderer.invoke('get-hub-config-raw')
-  .then(applyHubCardDisplaySettings)
+  .then(config => {
+    applyHubCardDisplaySettings(config);
+  })
   .catch(() => {});
 // ── Bug 修复（2026-06-21 maintainer）：marked 默认透传裸 HTML，AI/用户消息正文里的字面
 //    <script>/<style>/未闭合 <tag>（含数学 a<b、泛型 List<String>）会被浏览器 HTML
@@ -3689,6 +3691,7 @@ document.addEventListener('click', async (e) => {
   const turn = getTurnFromCard(card);
   if (!turn) return;
   const action = btn.dataset.action;
+
 
   if (action === 'copy') {
     // 复制用户实际看到的回答正文，不复制 markdown 围栏、toolCalls 原始块，
@@ -9709,6 +9712,7 @@ ipcRenderer.on('session-closed', (_e, { sessionId, exitInfo, requested }) => {
 });
 
 ipcRenderer.on('session-updated', (_e, { session }) => {
+  queueMicrotask(() => turnCardRenderer.refreshCardActions());
   nativeSessionBootstrap.record(session);
   if (!sessions.has(session.id)) return;
   const local = sessions.get(session.id);

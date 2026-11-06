@@ -54,6 +54,7 @@ function newRecord(entry, text, nativeActivity, origin = null) {
   const content = Array.isArray(entry.message?.content) ? entry.message.content : [{ type: 'text', text }];
   return {
     userMessageId: entry.uuid,
+    queuedSupplement: entry.isQueuedSupplement === true,
     submissionId: null,
     text,
     content,

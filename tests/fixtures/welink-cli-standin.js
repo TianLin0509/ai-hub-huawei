@@ -25,7 +25,19 @@ function addPhoneMessage(sender, content, at = Date.now()) {
 }
 const needExchange = () => { process.stderr.write('Error: Exchange server domain not found. Please run first: welink-cli mail autodiscover --email <your-email>\n'); process.exitCode = 1; };
 
-if (group === '__test' && sub === 'say') {
+// WELINK_STANDIN_VERSION=1.0.20：模拟新版（Q-1106-06 实测）——未登录时 auth status 退出码 0、写「Status: not authenticated」，
+// 查询报「Not logged in」，mail / calendar 不再认 --format（退出码 109）。
+const v120 = process.env.WELINK_STANDIN_VERSION === '1.0.20';
+if (group === '--version') {
+  out((process.env.WELINK_STANDIN_VERSION || '1.0.14') + '\n');
+} else if (v120 && args.includes('--format') && ['mail', 'calendar'].includes(group)) {
+  process.stderr.write('The following arguments were not expected: json --format\n'); process.exitCode = 109;
+} else if (v120 && !loggedIn() && !(group === 'auth') && !(group === '__test')) {
+  process.stderr.write('Error: Not logged in. Please run: welink-cli auth login\n'); process.exitCode = 1;
+} else if (v120 && group === 'auth' && sub === 'status') {
+  out(loggedIn() ? 'Account: ***\nUID: user001\nUser Token: valid (expires in 29m)\n' : // 未登录原文：Q-1106-03 第 2 轮（1.0.20 真机，值已打码）。在线格式取自 exe 字符串，未实测。
+    'Configuration:\n  Environment:  pro\n\nCredentials:\n  Status:       not authenticated\n  Hint:         Run \'welink-cli auth login\' to authenticate.\n');
+} else if (group === '__test' && sub === 'say') {
   // 测试用：模拟在手机上往专用群里发一句（发件人默认本人 user001）。
   addPhoneMessage(arg('--sender') || 'user001', arg('--text') || '', arg('--at') ? Number(arg('--at')) : Date.now()); // --at：模拟旧消息
 } else if (group === 'auth' && sub === 'status') {

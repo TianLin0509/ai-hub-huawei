@@ -181,7 +181,8 @@ function createResumeSessionHandler(deps) {
     // Resume metadata may point at a pre-archive path.  Provider-native ids are
     // the authority: when discovery succeeds, prefer it even if a persisted
     // transcriptPath is present instead of letting an old card source win.
-    if (isClaudeCliResumable && meta.ccSessionId) {
+    let discoverClaudeHistory = isClaudeCliResumable && meta.ccSessionId;
+    if (discoverClaudeHistory) {
       try {
         const discovered = findTranscriptByCCSessionId(meta.ccSessionId);
         if (discovered) resumeTranscriptPath = discovered;

@@ -125,14 +125,13 @@ async function connectCDP(wsUrl, { commandTimeoutMs = 30000 } = {}) {
 //   不给 filter：优先主窗口 renderer/index.html；Hub 启动后桌宠等小窗口可能排在 CDP 页面清单第一个
 //   （2026-10-17 发布分身报：连到了桌宠），主窗口一时没出现就稍等，最多等 waitMainMs 再退回第一个 page。
 const isMainWindow = t => t.type === 'page' && /renderer[\\/]index\.html/i.test(String(t.url || ''));
-async function listTargets(hub) {
+async function listTargets(hub, timeoutMs = 5000) {
   const http = require('http');
-  return new Promise((resolve) => {
-    http.get(`${hub.cdpHttpBase}/json/list`, (res) => {
-      let buf = ''; res.on('data', c => buf += c);
-      res.on('end', () => { try { resolve(JSON.parse(buf)); } catch { resolve([]); } });
-    }).on('error', () => resolve([]));
-  });
+  try {
+    const response = await require('./cdp-http').requestCdpHttp(http, `${hub.cdpHttpBase}/json/list`, timeoutMs);
+    const targets = JSON.parse(response.body);
+    return Array.isArray(targets) ? targets : [];
+  } catch { return []; }
 }
 
 // Independent browser HTTP diagnostics: never use the possibly hung renderer
@@ -172,13 +171,17 @@ async function snapshotPageTargets(hub) {
 
 async function connectFirstPage(hub, filter = null, { waitMainMs = 5000, commandTimeoutMs = 30000 } = {}) {
   validateTimeout(commandTimeoutMs);
-  let targets = await listTargets(hub);
+  if (!Number.isInteger(waitMainMs) || waitMainMs < 0 || waitMainMs > 2147483647) throw new RangeError('CDP target wait must be a non-negative integer');
+  const end = Date.now() + waitMainMs;
+  // A zero wait skips polling, but still permits one bounded discovery request.
+  let targets = await listTargets(hub, waitMainMs || 1500);
   let t = null;
   if (typeof filter === 'function') t = targets.find(filter);
   else {
-    for (const end = Date.now() + waitMainMs; !(t = targets.find(isMainWindow)) && Date.now() < end;) {
-      await new Promise(r => setTimeout(r, 250));
-      targets = await listTargets(hub);
+    while (!(t = targets.find(isMainWindow)) && Date.now() < end) {
+      await new Promise(r => setTimeout(r, Math.min(250, end - Date.now())));
+      if (Date.now() >= end) break;
+      targets = await listTargets(hub, Math.max(1, end - Date.now()));
     }
     t = t || targets.find(x => x.type === 'page');
   }

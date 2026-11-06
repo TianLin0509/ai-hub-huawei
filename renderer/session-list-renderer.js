@@ -786,9 +786,11 @@ sessionListEl.addEventListener('keydown', event => {
     return collectSidebarItems(sessionMap, sorted).filter(item => item.purpose !== RESIDENT_PURPOSE && sideFilterPasses(item) && projectFilter.matches(item) && (modelFilter === 'all' || sessionFamilies(item, sessionMap).has(modelFilter)));
   }
   // 常驻的助理会话：同用途里最近活动的那个。
+  // 5.5.11 起每个问题一个助理会话，还会预开一个空的：常驻位放最近真正答过问题的那个；简报、PPT 页、团队分析的会话不放。
   function residentAssistant(sessionMap = getSessions()) {
-    const list = collectSidebarItems(sessionMap).filter(item => item.purpose === RESIDENT_PURPOSE);
-    return list.sort((a, b) => latestActivityTime(b) - latestActivityTime(a))[0] || null;
+    const list = collectSidebarItems(sessionMap).filter(item => item.purpose === RESIDENT_PURPOSE && !['PPT 素材助理', '公司助理 · 简报', '团队关注分析'].includes(item.title));
+    const used = list.filter(item => item.lastCompletedAt || item.runStartedAt || item.lastRunStartedAt || item.lastMessageTime);
+    return (used.length ? used : list).sort((a, b) => latestActivityTime(b) - latestActivityTime(a))[0] || null;
   }
   function revealSearchItem(id, memberId = null) {
     const teamUi = typeof window !== 'undefined' ? window.__teamUi : null;

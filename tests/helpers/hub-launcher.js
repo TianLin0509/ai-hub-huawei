@@ -160,15 +160,8 @@ function _waitMs(ms) {
 }
 
 function _httpGetJson(url, timeoutMs = 1500) {
-  return new Promise((resolve) => {
-    const req = http.get(url, { timeout: timeoutMs }, (res) => {
-      let buf = '';
-      res.on('data', c => buf += c);
-      res.on('end', () => { try { resolve(JSON.parse(buf)); } catch { resolve(null); } });
-    });
-    req.on('error', () => resolve(null));
-    req.on('timeout', () => { req.destroy(); resolve(null); });
-  });
+  return require('./cdp-http').requestCdpHttp(http, url, timeoutMs)
+    .then(response => JSON.parse(response.body)).catch(() => null);
 }
 
 async function _waitForCDP(port, timeoutMs = 30000) {
@@ -182,14 +175,8 @@ async function _waitForCDP(port, timeoutMs = 30000) {
 }
 
 function _httpCloseTarget(url, timeoutMs = 1500) {
-  return new Promise((resolve, reject) => {
-    const req = http.get(url, { timeout: timeoutMs }, (res) => {
-      res.resume();
-      res.on('end', () => resolve(res.statusCode >= 200 && res.statusCode < 300));
-    });
-    req.on('error', reject);
-    req.on('timeout', () => req.destroy(new Error('CDP close request timed out')));
-  });
+  return require('./cdp-http').requestCdpHttp(http, url, timeoutMs)
+    .then(response => response.statusCode >= 200 && response.statusCode < 300);
 }
 
 async function _verifyCdpPortOwner(port, expectedPid, execFile = execFileAsync, onDiagnostic = null) {

@@ -21,7 +21,7 @@ const INLINE_CHARS = 4200; // 首次只给紧凑预览，完整范围与原文�
 const lookback = settings => Math.max(1, Number(settings?.lookbackHours) || 36);
 const when = at => D.displayTime(at);
 const lineOf = (m, full = false) => `[${m.sourceId}] ${m.group ? '群「' + m.convName + '」' : '私聊「' + m.convName + '」'} ${m.mine ? '我' : m.sender}${m.account ? '（账号 ' + m.account + '）' : ''} ${when(m.at)}${m.atMe ? '（@我）' : m.atAll ? '（@所有人）' : ''}：${full ? (m.text || m.preview || '［消息正文为空］') : D.short(m.text || m.preview, 200)}`;
-const meetingRows = (snapshot, day) => [...D.todaysMeetings(snapshot, day), ...D.unresolvedMeetings(snapshot)];
+const meetingRows = (snapshot, day) => D.mergeMeetings([...D.todaysMeetings(snapshot, day), ...D.unresolvedMeetings(snapshot)]);
 function meetingText(m) {
   if (m.displayRange) return `${m.displayRange} ${m.subject}${m.location ? ' · ' + m.location : ''}`;
   const start = Number.isFinite(m.start) ? D.displayTime(m.start) : '日期/时间待核对';
@@ -38,7 +38,9 @@ function budgetLines(lines, budget) {
 function fallbackBrief(snapshot, { day, now = Date.now(), settings = {}, commitments = [], done = new Set(), memory = [] } = {}) {
   const index = D.sourceIndex(snapshot);
   const item = (source, text, extra = {}) => ({ source, text, sourceLabel: index.get(source)?.label || '', ...extra });
-  const meetings = meetingRows(snapshot, day).map(m => item(m.sourceId, meetingText(m), { timeStatus: m.timeStatus || (Number.isFinite(m.start) ? 'known' : 'unknown') }));
+  const meetings = meetingRows(snapshot, day).map(m => item(m.sourceId, meetingText(m), { timeStatus: m.timeStatus || (Number.isFinite(m.start) ? 'known' : 'unknown'),
+    ...(Number.isFinite(m.start) ? { start: m.start, when: `${D.clock(m.start)}${Number.isFinite(m.end) && D.dayKey(m.end) === D.dayKey(m.start) ? '–' + D.clock(m.end) : ''}` } : {}), ...(Number.isFinite(m.end) ? { end: m.end } : {}),
+    subject: m.subject, ...(m.location ? { location: m.location } : {}), ...(m.merged ? { merged: true, mergedLabel: m.mergedLabel, sources: m.sources } : {}) }));
   const awaiting = D.awaiting(snapshot, settings).map(m => {
     const elapsed = Number.isFinite(m.since) ? `已过 ${Math.max(1, Math.round((now - m.since) / 3600000))} 小时` : '时间待核对';
     return item(m.sourceId, `${m.sender}${m.group ? '（' + m.convName + '）@你，处理情况待核对' : '发来的私聊待回复'}，${elapsed}：${D.short(m.text, 30)}`, { ...(m.needsReplyReview ? { needsReplyReview: true } : {}) });
@@ -58,7 +60,7 @@ function fallbackBrief(snapshot, { day, now = Date.now(), settings = {}, commitm
 
 // 给 CodeAgent 的整理请求：原始数据逐条带出处编号；要求只输出 JSON。
 function briefPrompt(snapshot, { day, now = Date.now(), settings = {}, commitments = [], memory = [] } = {}) {
-  const meetings = budgetLines(meetingRows(snapshot, day).map(m => `[${m.sourceId}] 会议 ${meetingText(m)}${m.attendees ? ' 参会 ' + m.attendees + ' 人' : ''}${m.hasFiles ? ' 有材料' : ''}`), 1500);
+  const meetings = budgetLines(meetingRows(snapshot, day).map(m => `[${m.sourceId}] 会议 ${meetingText(m)}${m.merged ? '（WeLink 与日历同一场）' : ''}${m.attendees ? ' 参会 ' + m.attendees + ' 人' : ''}${m.hasFiles ? ' 有材料' : ''}`), 1500);
   const picked = inlineMessages(snapshot, { now, settings: { ...settings, day }, memory });
   const mails = budgetLines(prioritize(snapshot.mails || [], memory).map(m => `[${m.sourceId}] 未读邮件 ${m.from}：${m.subject}${m.important ? '（标了重要）' : ''}${m.preview ? ' —— ' + D.short(m.preview, 120) : ''}`), 1000);
   const carry = budgetLines(commitments.filter(c => !c.due || c.due >= day).map(c => `- ${c.text}（截止 ${c.due || '未定'}，出处 ${c.source}）`), 600);
@@ -124,15 +126,17 @@ function parseAgentBrief(text, snapshot, { day, now = Date.now(), done = new Set
   const facts = fallbackBrief(snapshot, { day, now, settings, commitments, done, memory });
   const factsBySection = new Map(facts.sections.map(s => [s.key, s.items]));
   const meetingsBySource = new Map((factsBySection.get('meetings') || []).map(x => [x.source, x]));
+  // 合并显示的会：AI 引用日历那条的出处也算同一场，会前准备记到合并后的那条上。
+  const meetingAlias = new Map([...meetingsBySource.values()].flatMap(x => (x.sources || [x.source]).map(id => [id, x.source])));
   const preparation = new Map();
   for (const { key } of SECTIONS) {
     const list = Array.isArray(parsed[key]) ? parsed[key] : [];
     sections[key] = list.map(x => {
       const source = String(x?.source || '').replace(/^\[|\]$/g, '').trim();
       if (key === 'meetings') {
-        const sourceInfo = index.get(source), fact = meetingsBySource.get(source);
+        const sourceInfo = index.get(source), fact = meetingsBySource.get(meetingAlias.get(source) || source);
         if (!sourceInfo || !['meeting', 'calendar'].includes(sourceInfo.kind) || (!fact && !done.has(source))) { dropped += 1; return null; }
-        if (typeof x?.preparation === 'string' && x.preparation.trim()) preparation.set(source, D.short(x.preparation, 160));
+        if (typeof x?.preparation === 'string' && x.preparation.trim()) preparation.set(meetingAlias.get(source) || source, D.short(x.preparation, 160));
         return null; // 时间与主题只取事实；旧版本 AI 的 text 也不会覆盖会议。
       }
       const textOk = typeof x?.text === 'string' && x.text.trim();

@@ -1599,7 +1599,8 @@ test('an empty assistant cache fetches the full directory with an explicit fallb
   const ids = Array.from({ length: 20 }, (_, i) => 'peer-' + i), { a, order } = orderFixture(t, ids);
   const result = await a.query.inbox({ scope: ['私聊'] });
   assert.deepEqual(order, ids); assert.match(result.text, /后台缓存为空，本次改为查询全部可发现会话/);
-  assert.equal(result.conversations.length, 20); assert.ok(result.conversations.every(conv => conv.dataSource === 'realtime' && conv.capturedAt >= NOW));
+  // 5.5.11：返回里不再附整份会话清单（每页省 1–2 万字），实时取到的消息行也不再逐条标注。
+  assert.equal(result.conversations, undefined); assert.doesNotMatch(result.text, /缓存；采集时间/);
   assert.equal(a.read('message-cache.json', null), null);
 });
 
@@ -1610,7 +1611,7 @@ test('inbox result text and per-message records expose cache time while preservi
   assert.equal(page.items.find(item => item.conv === 'b').dataSource, 'cache');
   assert.equal(page.items.find(item => item.conv === 'b').capturedAt, cache.conversations.b.capturedAt);
   const inbox = await a.query.inbox({ scope: ['私聊'] });
-  assert.match(inbox.text, /缓存；采集时间/); assert.match(inbox.text, /实时取数；采集时间/);
+  assert.match(inbox.text, /缓存；采集时间/); assert.doesNotMatch(inbox.text, /实时取数；采集时间/);
   assert.match(inbox.text, /缓存部分本次未实时核对/);
   assert.deepEqual(a.read('message-cache.json'), cache);
 });
@@ -1752,14 +1753,13 @@ test('an incremental round interrupted at six minutes retains rotation work with
 });
 
 test('the actual brief card describes an updating batch without calling it missing data', () => {
-  const code = fs.readFileSync(path.join(__dirname, '../renderer/company-assistant-page.js'), 'utf8');
-  const source = code.slice(code.indexOf('  function briefCard('), code.indexOf('  function noticesStrip('));
-  const renderBrief = require('node:vm').runInNewContext(source + '\nbriefCard', {
-    data: { updating: ['messages'], brief: { sections: [], total: 0, by: 'list', generatedAt: NOW }, errors: [] },
-    esc: String, clock: String, briefOpen: false, messageCoverage: () => ({ status: 'partial' }),
-  });
-  const html = renderBrief(); assert.match(html, /数据正在更新，暂显示上次完成的简报/);
-  assert.ok(!html.includes('本次数据尚未取全'));
+  // 5.5.11 起简报在右栏「今天」：标题下的状态句与空列表说明由 todayStatus 给出。
+  const { todayStatus } = require('../renderer/company-assistant-page');
+  const status = todayStatus({ updating: ['messages'], brief: { sections: [], total: 0, by: 'list', generatedAt: NOW }, errors: [{ label: '消息', text: '部分会话未取全' }] }, String);
+  const text = status.up + '\n' + status.empty;
+  assert.match(status.up, /数据正在更新，暂显示上次完成的简报/); assert.match(status.empty, /数据正在更新，暂显示上次完成的简报/);
+  assert.ok(!text.includes('本次数据尚未取全'));
+  assert.match(todayStatus({ brief: { sections: [], by: 'list' }, errors: [{}] }).empty, /本次数据尚未取全/, 'a finished round with errors still says so');
 });
 
 test('cached message source details retain their original collection time after an incremental refresh', async t => {
@@ -1975,4 +1975,16 @@ test('自己存的常用标签可悬停删除，内置标签不能删', () => {
   assert.match(code, /verb === 'del-chip'[\s\S]{0,200}call\('set-settings', \{ chips: data\.settings\.chips\.filter/);
   assert.match(css, /\.ca-chip-del\{[^}]*opacity:0;pointer-events:none/);
   assert.match(css, /\.ca-chip-wrap:hover \.ca-chip-del[^{]*\{opacity:1;pointer-events:auto\}/);
+});
+
+test('用户点刷新时后台定时这一轮在会话之间让路：没轮到的会话留到下一轮，不丢', async t => {
+  const ids = Array.from({ length: 30 }, (_, i) => 'peer-' + i), { a, order } = orderFixture(t, ids);
+  a.yieldToUser = true;
+  await a.collect();
+  assert.equal(order.length, 0);
+  const cache = a.read('message-cache.json');
+  assert.ok(ids.every(id => cache.deferred.includes(id)));
+  a.yieldToUser = false;
+  await a.refresh({ force: true, priority: 'user', trigger: 'manual' });
+  assert.ok(order.length > 0);
 });

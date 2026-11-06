@@ -223,16 +223,18 @@ function registerSessionIpc(ipcMain, deps) {
     ];
   }
 
-  ipcMain.handle('fork-session', (_e, request) => {
+  const forkSession = (request, verifiedSource = null) => {
     const sourceSessionId = request && typeof request === 'object'
       ? request.sourceSessionId
       : request;
     const rendererTitle = request && typeof request === 'object'
       ? request.sourceTitle
       : null;
-    const source = typeof sourceSessionId === 'string'
+    // Only internal callers can pass an already verified persisted source.
+    // The public IPC below still accepts just its original request argument.
+    const source = verifiedSource || (typeof sourceSessionId === 'string'
       ? sessionManager.getSession(sourceSessionId)
-      : null;
+      : null);
     const plan = planSessionFork({
       source,
       siblingPool: forkSiblingPool(),
@@ -263,7 +265,9 @@ function registerSessionIpc(ipcMain, deps) {
         .catch(error => ({ ok: false, error: 'codex-fork-failed', message: error.message }));
     }
     return createFork();
-  });
+  };
+  ipcMain.handle('fork-session', (_e, request) => forkSession(request));
+
 
   ipcMain.handle('close-session', async (_e, sessionId) => {
     if (typeof sessionId !== 'string' || !sessionId) {

@@ -62,6 +62,13 @@ function createTurnCardRenderer(options = {}) {
   const modelLoadNow = options.now || Date.now;
   const setModelLoadTimeout = options.setTimeout || setTimeout;
   const clearModelLoadTimeout = options.clearTimeout || clearTimeout;
+  function refreshCardActions() {
+    if (options.root) return;
+    const cards = Array.from(overlay()?.querySelectorAll(':scope > .turn-card') || []);
+  }
+  function cardActionContext(container, sessionId) {
+    return { sessionId, mainCard: !options.root && container === overlay() && !getSessionContext(sessionId)?.meetingId };
+  }
   let modelLoadTimer = null, modelLoadQueued = false, disposed = false;
 
   function refreshModelLoads() {
@@ -452,12 +459,13 @@ function rerenderTurn(turnId) {
   const turn = prepareTurnForRender(card.dataset.sessionId || getActiveSessionId(), state._sessionTurns.get(turnId));
   if (!turn) return;
   const tmp = doc.createElement('div');
-  tmp.innerHTML = renderTurnCard(turn);
+  tmp.innerHTML = renderTurnCard(turn, cardActionContext(card.parentElement, card.dataset.sessionId || getActiveSessionId()));
   const newCard = tmp.firstElementChild;
   if (newCard) {
     patchTurnCardInPlace(card, newCard, card.dataset.sessionId || getActiveSessionId());
     publishTurnPresentation(card.dataset.sessionId || getActiveSessionId(), turn);
     scheduleModelLoads();
+    refreshCardActions();
   }
 }
 
@@ -528,16 +536,17 @@ function renderTurnSpeed(turn) {
 }
 
 // === Spec 1 v0.9.0 · turn 卡片渲染 ===
-function renderCardActions(turn) {
+function renderCardActions(turn, context = {}) {
   const user = turn.role === 'user', activity = turn.phase === 'activity';
   const copy = activity ? '' : '<button class="ta-btn" data-action="copy" title="复制" aria-label="复制这条消息">复制</button>';
   const multi = '<button class="ta-btn ta-multi" data-action="multi-select">多选</button>';
+  let fork = '';
   const secondary = user
     ? '<button class="ta-btn" data-action="resend">重发这条消息</button><button class="ta-btn" data-action="edit-resend">编辑重发</button><button class="ta-btn" data-action="prompt-inspect">查看完整 Prompt</button>'
       : ''
       + (!activity && turn.phase !== 'commentary' ? '<button class="ta-btn" data-action="regen" title="先查看待重发正文">重新生成…</button>' : '');
   return copy + '<details class="card-actions-menu"><summary class="card-actions-more" aria-label="更多消息操作">更多</summary>'
-    + '<div class="card-actions-popover">' + multi + secondary + '</div></details>';
+    + '<div class="card-actions-popover">' + multi + secondary + fork + '</div></details>';
 }
 
 function stoppedEditAction(turn) {
@@ -578,7 +587,7 @@ function confirmCardResend({ text, sessionLabel }) {
   });
 }
 
-function renderTurnCard(turn) {
+function renderTurnCard(turn, context = {}) {
   if (turn.role === 'divider') return `<div class="turn-card command-divider" data-turn-id="${escapeHtml(turn.id)}" role="separator"><span>${escapeHtml(turn.text)}</span></div>`;
   // turn = { id, role: 'user'|'assistant', text, ts, model?, kind?, toolCalls? }
   const isUser = turn.role === 'user';
@@ -614,7 +623,7 @@ function renderTurnCard(turn) {
   const nativeChip = turn.nativeActivity && !isProgress
     ? `<span class="turn-branch-chip turn-native-chip" title="Claude 自行发起的回合${turn.nativeOrigin?.kind ? '：' + escapeHtml(turn.nativeOrigin.kind) : ''}">后台</span>` : '';
   const body = (isProgress && !emptyNative ? require('./conversation-message-view').renderProgressRow(turn,
-    {escapeHtml,renderMarkdown:renderMarkdownPreservingLocalPaths,foldLong:false,actions:renderCardActions(turn)})
+    {escapeHtml,renderMarkdown:renderMarkdownPreservingLocalPaths,foldLong:false,actions:renderCardActions(turn, context)})
     : emptyNative ? `<span class="turn-native-outcome">${escapeHtml(emptyNative)}</span>`
     : (!isUser && require('./conversation-message-view').renderReplySegments(turn,
       {collapseLong:turn.source==='antigravity-cli',escapeHtml,renderMarkdown:renderMarkdownPreservingLocalPaths}))
@@ -682,7 +691,7 @@ function renderTurnCard(turn) {
         ${isSimple && isUser ? _renderMetaPills(turn, true) : ''}
         ${processHtml}
         <div class="turn-actions">
-          ${isProgress && !isSimple ? '<button class="conversation-response-copy" data-action="conversation-response-copy" title="复制本轮当前已收到的完整回复">复制本轮</button>' : renderCardActions(turn)}
+          ${isProgress && !isSimple ? '<button class="conversation-response-copy" data-action="conversation-response-copy" title="复制本轮当前已收到的完整回复">复制本轮</button>' : renderCardActions(turn, context)}
         </div>
       </div>
       ${isSimple ? `${progressHtml ? `<div class="chat-progress-timeline" aria-label="本轮进展">${progressHtml}</div>` : ''}<div class="chat-message-bubble">${primaryHtml}${deliveryHtml}</div>` : `${thinkingHtml}${primaryHtml}${deliveryHtml}${toolHtml}${_renderMetaPills(turn)}`}${stoppedEditAction(turn)}
@@ -983,10 +992,11 @@ listen('click', (e) => {
 function mountTurnCard(container, turn) {
   turn = prepareTurnForRender(getActiveSessionId(), turn);
   const tmp = doc.createElement('div');
-  tmp.innerHTML = renderTurnCard(turn);
+  tmp.innerHTML = renderTurnCard(turn, cardActionContext(container, getActiveSessionId()));
   const cardEl = tmp.firstElementChild;
   container.insertBefore(cardEl, container.querySelector(':scope > .streaming-indicator'));
   if (turn.id) state._sessionTurns.set(turn.id, turn);
+  refreshCardActions();
   _postProcessTurnCard(cardEl, getActiveSessionId());
   publishTurnPresentation(getActiveSessionId(), turn);
   scheduleModelLoads();
@@ -1055,7 +1065,7 @@ function mountOptimisticUserCard(sessionId, text, kind, options = {}) {
   let cardEl;
   try {
     const tmp = doc.createElement('div');
-    tmp.innerHTML = renderTurnCard(turn);
+    tmp.innerHTML = renderTurnCard(turn, cardActionContext(container, sessionId));
     cardEl = tmp.firstElementChild;
   } catch (err) {
     console.warn('[mountOptimisticUserCard] renderTurnCard threw:', err);
@@ -1075,6 +1085,7 @@ function mountOptimisticUserCard(sessionId, text, kind, options = {}) {
   const streamingTail = container.querySelector(':scope > .streaming-indicator');
   if (streamingTail) container.insertBefore(cardEl, streamingTail);
   else container.appendChild(cardEl);
+  refreshCardActions();
   scheduleModelLoads();
   postProcessCardMath(cardEl);
   if (updateStreamingIndicator) updateStreamingIndicator(sessionId);
@@ -1111,6 +1122,9 @@ function turnRenderSignature(turn) {
   const raw = JSON.stringify({
     role: turn.role || '',
     stopped: turn.stopped === true,
+    nativeUserRecordId: turn.nativeUserRecordId || '',
+    queuedSupplement: turn.queuedSupplement === true,
+    inherited: turn.inherited === true,
     logicalTurnId: turn.logicalTurnId || '',
     phase: turn.phase || '',
     attachments: turn.attachments || null,
@@ -1205,6 +1219,7 @@ function mountSessionTurnCard(sessionId, turn, opts = {}) {
       _turnRenderSigs.set(turn.id, nextSig);
       // 负载不参与正文签名；相同回答也要更新这个独立节点。
       scheduleModelLoads();
+      refreshCardActions();
       publishTurnPresentation(sessionId, turnForRender2);
       if (typeof updateStreamingIndicator === 'function') updateStreamingIndicator(sessionId);
       return existing;
@@ -1212,7 +1227,7 @@ function mountSessionTurnCard(sessionId, turn, opts = {}) {
     let newCard = null;
     try {
       const tmp2 = doc.createElement('div');
-      tmp2.innerHTML = renderTurnCard(turnForRender2);
+      tmp2.innerHTML = renderTurnCard(turnForRender2, cardActionContext(container, sessionId));
       newCard = tmp2.firstElementChild;
     } catch (err) {
       console.warn('[mountSessionTurnCard replace] renderTurnCard threw:', err);
@@ -1222,6 +1237,7 @@ function mountSessionTurnCard(sessionId, turn, opts = {}) {
     const patchedCard = patchTurnCardInPlace(existing, newCard, sessionId);
     if (!patchedCard) return null;
     state._sessionTurns.set(turn.id, turnForRender2);
+    refreshCardActions();
     _turnRenderSigs.set(turn.id, nextSig);
     scheduleModelLoads();
     publishTurnPresentation(sessionId, turnForRender2);
@@ -1236,7 +1252,7 @@ function mountSessionTurnCard(sessionId, turn, opts = {}) {
   let cardEl = null;
   try {
     const tmp = doc.createElement('div');
-    tmp.innerHTML = renderTurnCard(turnForRender);
+    tmp.innerHTML = renderTurnCard(turnForRender, cardActionContext(container, sessionId));
     cardEl = tmp.firstElementChild;
   } catch (err) {
     console.warn('[mountSessionTurnCard] renderTurnCard threw:', err);
@@ -1276,6 +1292,7 @@ function mountSessionTurnCard(sessionId, turn, opts = {}) {
   // 8. register in _sessionTurns (turnId → turn) — keep spec1 Map shape
   // Use turnForRender (kind merged) so rerenderTurn won't lose kind on fold/unfold
   state._sessionTurns.set(turn.id, turnForRender);
+  refreshCardActions();
   _turnRenderSigs.set(turn.id, turnRenderSignature(turnForRender));
   scheduleModelLoads();
   publishTurnPresentation(sessionId, turnForRender);
@@ -1386,6 +1403,7 @@ listen('click', (e) => {
     renderToolCluster,
     confirmCardResend,
     renderTurnCard,
+    refreshCardActions,
     rerenderTurn,
     postProcessCardCodeBlocks,
     postProcessCardMath,
