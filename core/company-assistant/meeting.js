@@ -8,11 +8,11 @@ const { MeetingFrames } = require('./meeting-frames');
 const { MeetingTools } = require('./meeting-tools');
 const { compactEvents, modelOptions, fastModel, selectedModel } = require('./meeting-context');
 const ACTIVE = new Set(['recording', 'paused']);
-// 理解速度三档（2026-10-25 用户：强调实时性）：每轮最多带几张新截图、回答写多长、是否鼓励回查录像。
+// 理解速度三档（2026-10-25 用户：强调实时性）：每轮最多带几张新截图、回答写多长、是否鼓励回查。
 const SPEEDS = {
   fast: { label: '快速', slides: 2, words: 300, note: '这是快速档：只看本轮新增文字和最新截图，写要点式更新（300 字以内），非必要不调用会议工具回查。' },
   normal: { label: '中等', slides: 5, words: 700, note: '这是中等档：结合新增文字和代表截图，写完整但精炼的更新（700 字以内），只在关键处回查。' },
-  deep: { label: '深入', slides: 120, words: 0, note: '这是深入档：逐项核对，必要时用会议工具回查录像与截图，写完整更新。' },
+  deep: { label: '深入', slides: 120, words: 0, note: '这是深入档：逐项核对，必要时用会议工具回查转写与截图，写完整更新。' },
 };
 const INTERVALS = [0, 1, 3, 5, 10];
 const DEFAULT_INTERVAL_MIN = 3;
@@ -252,7 +252,7 @@ class MeetingCompanion {
       const sent = batch.filter(e => e.kind !== 'slide' || keep.has(e.seq)), omitted = slides.filter(e => !keep.has(e.seq));
       const input = [ `会议：${m.title}；速度：${speed.label}`, '上一版理解：', m.summary || '暂无', '本轮新增事件（[序号] mm:ss 说话轨 文本；同一行多个编号表示双音轨重复）：', compactEvents(sent),
         omitted.length ? '另有截图（按需回查）：' + omitted.map(e => `[${e.seq}] ${Math.floor(e.at / 1000)}s`).join('；') : '',
-        `待转写音频：${m.events.filter(e => e.kind === 'audio' && e.asr !== 'done').length} 段；录像已保存至 ${m.recording?.savedThrough || 0} ms`,
+        `待转写音频：${m.events.filter(e => e.kind === 'audio' && e.asr !== 'done').length} 段`,
         `暂停或异常缺口：${JSON.stringify(m.recording?.gaps || [])}；当前暂停：${JSON.stringify(m.recording?.openGap || null)}` ].filter(Boolean).join('\n');
       const file = `input-${m.revision + 1}-${randomUUID().slice(0, 8)}.txt`; fs.writeFileSync(path.join(this.dir(m.id), file), input, 'utf8');
       const job = this.newJob(m, 'understand', slot, { from: m.cursor, to, final: !!final && to === m.events.length, speed: m.speed || 'normal', inputChars: input.length });
@@ -290,7 +290,7 @@ class MeetingCompanion {
     const lane = this.lane(slot), job = this.newJob(m, 'prime', slot);
     m[slot] = job; m[lane.prime] = false; m[lane.agent] = { state: 'starting', at: this.now() }; this.save(m);
     const prompt = [`你是这场会议的${lane.title}助手。会议名称：${m.title}。`,
-      '现在只做准备：读取 skills/meeting-companion/SKILL.md，了解 meeting_index、meeting_read、meeting_frames 的用法；不要读取录像。之后根据本轮提供的摘要与增量工作，不再重复读取技能。',
+      '现在只做准备：读取 skills/meeting-companion/SKILL.md，了解 meeting_index、meeting_read、meeting_slides 的用法。之后根据本轮提供的摘要与增量工作，不再重复读取技能。',
       `准备好后只回复「已就绪」，最后一行原样写：[会议回执:${job.token}]`].join('\n');
     await this.send(m.id, job, prompt, slot);
   }
@@ -301,7 +301,7 @@ class MeetingCompanion {
     const recent = m.events.filter(e => ['transcript', 'mark'].includes(e.kind)).slice(-40);
     const speed = SPEEDS[m.speed] || SPEEDS.normal;
     const context = ['当前会议理解：', m.summary || '尚未整理出理解', '最近 40 条转写与重点（[序号] mm:ss 说话轨 文本）：', compactEvents(recent)].join('\n');
-    const responseHint = `先给结论再给依据，中文${speed.words ? `、${Math.min(speed.words, 700)} 字以内` : '、逐项核对'}；关键结论附 [事件 N] 或 [画面 mm:ss] 出处；找不到就说明，不重写整份会议理解。`;
+    const responseHint = `先给结论再给依据，中文${speed.words ? `、${Math.min(speed.words, 700)} 字以内` : '、逐项核对'}；关键结论附 [事件 N] 出处；找不到就说明，不重写整份会议理解。`;
     try {
       const service = this.deps.getMeetingAskAside?.();
       if (!service) throw new Error('会议问答后台尚未就绪，请稍后重试');
@@ -432,6 +432,11 @@ class MeetingCompanion {
     }
   }
 
+  slide(id, seq) {
+    const e = this.load(id).events.find(x => x.seq === seq && x.kind === 'slide');
+    if (!e?.file || path.basename(e.file) !== e.file) throw new Error(`事件 ${seq} 不是截图`);
+    return { at: e.at, data: fs.readFileSync(path.join(this.dir(id), e.file)).toString('base64') };
+  }
   export(id) {
     const m = this.load(id), text = `# ${m.title}\n\n${m.summary || '尚未生成理解'}\n\n## 转写与标记\n\n` + m.events.filter(e => ['transcript', 'mark'].includes(e.kind)).map(e => `[事件 ${e.seq}] ${(e.at / 1000).toFixed(1)}s ${e.track || ''} ${e.text}`).join('\n\n');
     const file = path.join(this.dir(id), '会议纪要.md'); fs.writeFileSync(file, text, 'utf8'); return file;

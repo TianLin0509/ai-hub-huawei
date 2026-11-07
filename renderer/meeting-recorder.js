@@ -1,8 +1,10 @@
 'use strict';
-// Each recorder owns a complete WebM. Time-slice blobs are appended, never treated as separate videos.
+// One recorder writes the one video people watch. Time-slice blobs are appended to it, never kept as separate videos.
+// MP4 first: it opens in ordinary players. WebM stays as the fallback for machines whose encoder refuses MP4.
+const MIMES = ['video/mp4;codecs=avc1.42E01F,mp4a.40.2', 'video/webm;codecs=vp8,opus', 'video/webm;codecs=vp8', 'video/webm'];
 class MeetingRecorder {
-  constructor({ window, streams, elapsed, save, onError, segmentMs = 30000, waitMs = 10000 }) {
-    Object.assign(this, { w: window, streams, elapsed, save, onError, segmentMs, waitMs }); this.active = new Set(); this.queue = []; this.pending = Promise.resolve(); this.error = ''; this.running = false;
+  constructor({ window, streams, elapsed, save, onError, waitMs = 10000 }) {
+    Object.assign(this, { w: window, streams, elapsed, save, onError, waitMs }); this.active = new Set(); this.mimes = []; this.queue = []; this.pending = Promise.resolve(); this.error = ''; this.running = false;
   }
   async wait(promise, message, progressAt) {
     let timer;
@@ -22,7 +24,7 @@ class MeetingRecorder {
   progressAt(stage) { return Math.max(stage?.at || 0, stage?.phase === 'saving' ? this.lastSavedAt || 0 : 0); }
   async open() {
     const MR = this.w.MediaRecorder;
-    this.mime = ['video/webm;codecs=vp8,opus', 'video/webm;codecs=vp8', 'video/webm'].find(x => MR?.isTypeSupported(x));
+    this.mimes = MIMES.filter(x => MR?.isTypeSupported(x)); this.mime = this.mimes[0];
     if (!this.mime) throw new Error('本机不支持会议视频编码，无法开始连续录制');
     const tracks = this.streams[0].getVideoTracks();
     this.ctx = new this.w.AudioContext(); this.destination = this.ctx.createMediaStreamDestination(); this.sources = [];
@@ -34,7 +36,7 @@ class MeetingRecorder {
     await this.ctx.resume();
   }
   push(item) { this.queue.push(item); if (this.queue.length > 45) this.fail(new Error('录屏保存积压，已暂停；请重试保存')); void this.drain(); }
-  fail(e) { if (!this.error) { this.error = e.message; this.running = false; clearTimeout(this.timer); this.onError(e.message); } }
+  fail(e) { if (!this.error) { this.error = e.message; this.running = false; this.onError(e.message); } }
   drain() {
     if (this.saving) return this.saveTask;
     if (this.error) return Promise.resolve();
@@ -45,27 +47,51 @@ class MeetingRecorder {
     });
     return this.saveTask;
   }
-  part(full = false) {
-    const recorder = new this.w.MediaRecorder(this.stream, { mimeType: this.mime, videoBitsPerSecond: 2500000, audioBitsPerSecond: 96000 });
-    const key = this.w.crypto.randomUUID(), at = this.elapsed(); let offset = 0, finish;
+  // recording-start is sent with the first bytes, so an encoder that fails before producing any can
+  // still fall back to the next format without leaving a file of the wrong type behind.
+  // MP4 only reaches disk at key frames. Without a short interval a still slide stays in memory until stop,
+  // so a crash would lose it; 2 s keeps the possible loss near 2 s (measured on a still window).
+  part() {
+    const recorder = new this.w.MediaRecorder(this.stream, { mimeType: this.mime, videoBitsPerSecond: 2500000, audioBitsPerSecond: 96000, videoKeyFrameIntervalDuration: 2000 });
+    const key = this.w.crypto.randomUUID(), at = this.elapsed(), mime = this.mime; let offset = 0, finish, announced = false;
     const settings = this.stream.getVideoTracks()[0].getSettings();
-    const part = { recorder, full, mediaMs: 0, resumedAt: at, done: new Promise(r => { finish = r; }) }; this.active.add(part);
+    const part = { recorder, full: true, key, mediaMs: 0, resumedAt: at, done: new Promise(r => { finish = r; }) }; this.active.add(part);
     const duration = () => part.mediaMs + (part.resumedAt == null ? 0 : Math.max(0, this.elapsed() - part.resumedAt));
-    this.push({ kind: 'recording-start', key, full, at, mime: this.mime, width: settings.width, height: settings.height });
+    const announce = () => { if (!announced) { announced = true; this.push({ kind: 'recording-start', key, full: true, at, mime, width: settings.width, height: settings.height }); } };
     recorder.ondataavailable = event => {
+      if (part.abandoned) return;
       const end = this.elapsed();
       const durationMs = duration();
-      this.pending = this.pending.then(async () => { if (event.data.size) { const b = Buffer.from(await event.data.arrayBuffer()); this.push({ kind: 'recording-chunk', key, at: end, durationMs, offset, data: b.toString('base64') }); offset += b.length; } }).catch(e => this.fail(e));
+      if (event.data.size) part.hasData = true;
+      this.pending = this.pending.then(async () => { if (event.data.size) { const b = Buffer.from(await event.data.arrayBuffer()); announce(); this.push({ kind: 'recording-chunk', key, at: end, durationMs, offset, data: b.toString('base64') }); offset += b.length; } }).catch(e => this.fail(e));
     };
-    recorder.onerror = e => this.fail(new Error(e.error?.message || '视频编码失败'));
+    recorder.onerror = e => {
+      if (!part.hasData && this.fallback(part)) return;
+      this.fail(new Error(e.error?.message || '视频编码失败'));
+    };
     recorder.onstop = () => {
       if (part.finished) return;
       part.finished = true;
       const end = this.elapsed(), durationMs = duration(); this.active.delete(part);
-      this.pending = this.pending.then(() => this.push({ kind: 'recording-finish', key, at: end, durationMs }));
+      if (!part.abandoned) this.pending = this.pending.then(() => { announce(); this.push({ kind: 'recording-finish', key, at: end, durationMs }); });
       part.paused?.(); finish();
     };
-    try { recorder.start(1000); } catch(e) { this.active.delete(part); finish(); throw e; } return part;
+    try { recorder.start(1000); } catch(e) { this.active.delete(part); part.finished = true; finish(); throw e; } return part;
+  }
+  fallback(part) {
+    const next = this.mimes[this.mimes.indexOf(this.mime) + 1];
+    if (!next || this.full !== part) return false;
+    part.abandoned = true; part.paused?.();
+    try { if (part.recorder.state !== 'inactive') part.recorder.stop(); } catch {}
+    this.mime = next;
+    try { this.full = this.firstPart(); } catch (e) { this.fail(e); }
+    return true;
+  }
+  firstPart() {
+    for (;;) {
+      try { return this.part(); }
+      catch (e) { const next = this.mimes[this.mimes.indexOf(this.mime) + 1]; if (!next) throw e; this.mime = next; }
+    }
   }
   assertCanStart() {
     if (this.full?.recorder.state === 'inactive') throw new Error('录像已中断，已录的内容都在。请点「结束会议」，再新开一场。');
@@ -77,35 +103,19 @@ class MeetingRecorder {
     if (this.running) return;
     if (this.error) throw new Error(this.error); this.running = true;
     try {
-      if (!this.full) this.full = this.part(true);
+      if (!this.full) this.full = this.firstPart();
       else if (this.full.recorder.state === 'paused') { this.full.pauseDone = null; this.full.resumedAt = this.elapsed(); this.full.recorder.resume(); }
-      this.current = this.part(); this.schedule();
     } catch(e) { this.fail(e); throw e; }
   }
-  schedule() {
-    this.timer = setTimeout(() => {
-      if (!this.running) return;
-      const old = this.current; try { this.current = this.part(); } catch(e) { this.fail(e); return; }
-      // Overlap avoids intentionally dropping frames between independently playable segments.
-      setTimeout(() => { if (old.recorder.state !== 'inactive') old.recorder.stop(); }, 500);
-      this.schedule();
-    }, this.segmentMs);
-  }
   async pauseRecording(stage) {
-    this.running = false; clearTimeout(this.timer); const parts = [...this.active].filter(p => !p.full);
-    const full = this.full; let paused;
+    this.running = false;
+    const full = this.full;
     if (full?.recorder.state === 'recording') {
       full.mediaMs += Math.max(0, this.elapsed() - full.resumedAt); full.resumedAt = null;
       full.pauseDone = new Promise(resolve => { full.paused = resolve; full.recorder.onpause = resolve; });
       full.recorder.requestData(); full.recorder.pause();
     }
-    paused = full?.pauseDone;
-    let stopError;
-    for (const p of parts) if (p.recorder.state !== 'inactive') {
-      try { p.recorder.stop(); } catch (error) { stopError ||= error; }
-    }
-    if (stopError) throw stopError;
-    await Promise.all([...parts.map(p => p.done), paused]);
+    await full?.pauseDone;
     Object.assign(stage, { phase: 'pending', at: performance.now() }); await this.pending;
     Object.assign(stage, { phase: 'saving', at: performance.now() }); await this.flush();
   }
@@ -142,7 +152,7 @@ class MeetingRecorder {
     Object.assign(stage, { phase: 'saving', at: performance.now() }); await this.flush();
   }
   async close() {
-    this.running = false; this.closing = true; clearTimeout(this.timer);
+    this.running = false; this.closing = true;
     if (!this.closeTask) {
       this.closeStage = { phase: 'native', at: performance.now() };
       const task = this.finishRecording(this.closeStage); this.closeTask = task;

@@ -57,9 +57,11 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "「问问 Agent」开出的排查会话改在专属的空目录里：之前偶尔会在排查会话里先显示同一工作区另一个会话的对话记录，现已修复"
+    "会议录像改成一个完整的 MP4：一场会只有一个视频文件，能直接播放；新增「保存视频」，默认按日期和会议名命名。",
+    "会议回放不再每 30 秒换一次片，暂停过的会议时间也能对上；录制占用的硬盘和 CPU 都明显减少。",
+    "会议伴侣不再读录像，只用转写和截图，回看历史截图时按需读取，上下文更省。"
   ],
-  "version": "5.5.27",
+  "version": "5.5.28",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

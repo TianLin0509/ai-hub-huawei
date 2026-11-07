@@ -102,7 +102,7 @@ function installFixture() {
     }
     if (op === 'meeting-asset') return {ok:true,data:image,path:'D:/fixture/meeting-slide.jpg'};
     if (op === 'meeting-frames') return {ok:true,frames:[{at:args.timesMs[0],data:image,path:'D:/fixture/extracted.jpg'}]};
-    if (op === 'meeting-playback') {const segment=m.recording.segments.find(p=>p.status==='ready'&&p.at<=args.at&&p.end>args.at)||m.recording.segments.find(p=>p.status==='ready');if(!segment)throw Error('没有可播放片段');return {ok:true,segment,url:segment.url,offsetMs:100};}
+    if (op === 'meeting-playback') {const segment=m.recording.full;if(segment?.status!=='ready')throw Error('没有可播放录像');return {ok:true,segment,spans:[{at:segment.at,mediaAt:0}],url:segment.url,offsetMs:100};}
     if (op === 'ppt-lookup-frame') {if(fixture.failPpt)throw Error('Doctor不可用夹具');return {ok:true,candidates:[{id:'fixture-ppt',ref:{name:'算法评审.pptx',page:3},snippet:'候选原稿，请核对画面'}]};}
     if (op === 'ppt-open') return {ok:true,pageFocused:false};
     return {ok:true};

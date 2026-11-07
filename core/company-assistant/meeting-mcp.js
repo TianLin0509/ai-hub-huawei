@@ -2,9 +2,9 @@
 const fs=require('node:fs'),readline=require('node:readline');
 const number={type:'number',minimum:0},schema=(properties,required=[])=>({type:'object',properties,required,additionalProperties:false});
 const tools=[
- {name:'meeting_index',description:'本场会议材料与录制覆盖索引，含保存范围和缺口；nextOffset非空可分页，不返回整场视频。',inputSchema:schema({offset:{type:'integer',minimum:0}})},
+ {name:'meeting_index',description:'本场会议材料与录制覆盖索引，含保存范围和缺口；nextOffset非空可分页，不含视频。',inputSchema:schema({offset:{type:'integer',minimum:0}})},
  {name:'meeting_read',description:'按会议相对时间读取转写、重点和截图索引，每次最多15分钟；nextOffset非空可继续取。',inputSchema:schema({startMs:number,endMs:number,offset:{type:'integer',minimum:0}})},
- {name:'meeting_frames',description:'从本场已保存录像中按时间抽取1至6张图片，可裁切；返回图片和实际时间，不上传视频。',inputSchema:schema({timesMs:{type:'array',items:number,minItems:1,maxItems:6},crop:schema({x:number,y:number,w:number,h:number},['x','y','w','h']),detail:{type:'string',enum:['normal','high']}},['timesMs'])}
+ {name:'meeting_slides',description:'按事件序号读取本场已保存的截图，每次1至4张；序号来自meeting_read或meeting_index。',inputSchema:schema({seqs:{type:'array',items:{type:'integer',minimum:1},minItems:1,maxItems:4}},['seqs'])}
 ].map(t=>({...t,annotations:{readOnlyHint:true}}));
 async function handle(r){
  if(r.method==='initialize')return {protocolVersion:r.params?.protocolVersion||'2024-11-05',capabilities:{tools:{}},serverInfo:{name:'meeting',version:'4.1.0'}};

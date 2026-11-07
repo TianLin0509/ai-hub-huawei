@@ -28,6 +28,7 @@ function meetingTemplate() {
       <button class="ca-btn meeting-when-live" data-act="pause" disabled>${icon(ICONS.pause)}<span>暂停</span></button>
       <button class="ca-btn meeting-stop meeting-when-live" data-act="stop" disabled>${icon(ICONS.stop)}<span>结束会议</span></button>
       <button class="ca-btn meeting-when-review" data-act="open-full" disabled>${icon(ICONS.play)}<span>完整录像</span></button>
+      <button class="ca-btn meeting-when-review" data-act="save-video" disabled>${icon(ICONS.play)}<span>保存视频</span></button>
       <button class="ca-btn meeting-when-review" data-act="new">${icon(ICONS.plus)}<span>新会议</span></button>
       <details class="meeting-more" data-m="more"><summary class="ca-btn" aria-label="更多会议操作" title="更多会议操作">${icon(ICONS.more)}<span>更多</span></summary><div class="meeting-more-panel">
         <label class="meeting-menu-field">历史会议<select data-m="history" aria-label="历史会议"></select></label>

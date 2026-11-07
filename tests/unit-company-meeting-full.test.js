@@ -30,15 +30,15 @@ async function main() {
     const meeting = m.create({ title: '完整录像' }); clearInterval(m.timer); m.timer = 1;
     recorder = new MeetingRecorder({ window: { MediaRecorder: FakeRecorder, crypto: { randomUUID } }, streams: [], elapsed: () => now, save: async r => { saved.push(r); m.capture(meeting.id, r); }, onError: e => { throw Error(e); } });
     recorder.mime = 'video/webm'; recorder.stream = { getVideoTracks: () => [{ getSettings: () => ({ width: 100, height: 60 }) }] }; recorder.schedule = () => {};
-    recorder.start(); recorder.start(); assert.equal(instances.length, 2);
-    now = 4000; await recorder.pause(); assert.equal(instances[0].state, 'paused'); assert.equal(instances[1].state, 'inactive');
-    const before = m.load(meeting.id); assert.equal(before.recording.full.status, 'writing'); assert.equal(before.recording.segments.length, 1); assert.equal(before.recording.full.durationMs, 4000);
-    now = 7000; recorder.start(); assert.equal(instances.length, 3, 'resume retains original full recorder'); assert.equal(instances[0].state, 'recording');
+    recorder.start(); recorder.start(); assert.equal(instances.length, 1);
+    now = 4000; await recorder.pause(); assert.equal(instances[0].state, 'paused');
+    const before = m.load(meeting.id); assert.equal(before.recording.full.status, 'writing'); assert.equal(before.recording.segments.length, 0); assert.equal(before.recording.full.durationMs, 4000);
+    now = 7000; recorder.start(); assert.equal(instances.length, 1, 'resume retains original full recorder'); assert.equal(instances[0].state, 'recording');
     now = 11000; await recorder.close(); await m.recording.repairs.get(meeting.id);
     const ended = m.load(meeting.id), full = ended.recording.full;
     assert.equal(full.status, 'ready'); assert.equal(full.durationMs, 8000, 'duration excludes paused wall time'); assert.equal(full.durationFixed, true);
     assert.equal(duration(fs.readFileSync(m.recording.full(meeting.id).file)), 8000);
-    assert.equal(ended.recording.segments.length, 2); assert.notEqual(m.recording.locate(meeting.id, 1000).segment.file, 'recording-full.webm');
+    assert.equal(ended.recording.segments.length, 0); assert.equal(m.recording.locate(meeting.id, 1000).segment.file, 'recording-full.webm');
     assert.equal(saved.filter(r => r.kind === 'recording-start' && r.full).length, 1); assert.equal(saved.filter(r => r.kind === 'recording-finish' && r.key === full.key).length, 1);
     const interrupted = m.load(meeting.id); interrupted.recording.full.status = 'writing'; interrupted.recording.full.durationFixed = false; m.save(interrupted);
     m.recording.recover(interrupted); m.save(interrupted); await m.recording.repairs.get(meeting.id); assert.equal(m.load(meeting.id).recording.full.status, 'interrupted'); assert.equal(m.load(meeting.id).recording.full.durationFixed, true);
@@ -125,7 +125,7 @@ test('stop事件丢失时close有界报错并释放ctx，晚到或重复stop最�
     for (const instance of h.instances) { instance.emitStop(); instance.emitStop(); }
     await turn(); await h.recorder.pending; await bounded(h.recorder.retry());
     const starts = h.saved.filter(record => record.kind === 'recording-start');
-    assert.equal(starts.length, 2);
+    assert.equal(starts.length, 1);
     for (const record of starts) assert.equal(h.saved.filter(x => x.kind === 'recording-finish' && x.key === record.key).length, 1, 'late/duplicate stop must not duplicate finish');
     assert.equal(h.recorder.active.size, 0);
   } finally { await h.releaseNative(); }
@@ -137,7 +137,7 @@ test('录制中直接close不发pause请求，stop正常即可保存完整结束
     h.recorder.start(); h.advance(500); await bounded(h.recorder.close());
     assert.equal(h.instances[0].pauseCalls, 0, 'close must not depend on a native pause acknowledgement');
     assert.ok(h.instances.every(instance => instance.stopCalls === 1));
-    assert.equal(h.saved.filter(record => record.kind === 'recording-finish').length, 2);
+    assert.equal(h.saved.filter(record => record.kind === 'recording-finish').length, 1);
     assert.equal(h.closed, 1);
   } finally { await h.releaseNative(); }
 });
@@ -303,7 +303,7 @@ test('Blob读取迟到时close超时不提前finish，重试按同key连续offse
     gate.resolve(); await turn(); await bounded(h.recorder.retry()); await bounded(h.recorder.close());
     assert.equal(h.recorder.queue.length, 0);
     const starts = h.saved.filter(record => record.kind === 'recording-start');
-    assert.equal(starts.length, 2);
+    assert.equal(starts.length, 1);
     for (const start of starts) {
       const records = h.saved.filter(record => record.key === start.key), chunks = records.filter(record => record.kind === 'recording-chunk');
       assert.equal(chunks.length, start.full ? 3 : 1, 'all data requests remain attached to the original key');
@@ -396,7 +396,7 @@ for (const method of ['pause', 'close', 'retry']) test('recorder ' + method + '�
   progressClock(t); const steps = saveSteps(), h = recorderFaults({ waitMs: 1000, save: record => steps.save(record) });
   try {
     if (method === 'retry') for (let n = 0; n < 5; n++) h.recorder.push({ kind: 'recording-chunk', key: 'original-full', offset: n });
-    else h.recorder.start();
+    else { h.recorder.start(); for (let n = 0; n < 5; n++) h.recorder.push({ kind: 'recording-chunk', key: 'original-full', offset: n }); }
     const outcome = watch(h.recorder[method]());
     await driveProgress(t, outcome, [steps]);
     assert.equal(h.recorder.queue.length, 0);
@@ -463,7 +463,8 @@ for (const method of ['pause', 'close']) test('save持续确认不能延长recor
   progressClock(t); const steps = saveSteps();
   const h = recorderFaults({ holdPause: method === 'pause', holdStop: method === 'close', waitMs: 1000, save: record => steps.save(record) });
   try {
-    h.recorder.start(); const outcome = watch(h.recorder[method]()); await turn();
+    h.recorder.start(); for (let n = 0; n < 4; n++) h.recorder.push({ kind: 'recording-chunk', key: 'original-full', offset: n });
+    const outcome = watch(h.recorder[method]()); await turn();
     for (let n = 0; n < 3; n++) {
       await advanceClock(t, 300); assert.equal(outcome.state, 'pending'); assert.equal(steps.acknowledge(), true); await turn();
     }

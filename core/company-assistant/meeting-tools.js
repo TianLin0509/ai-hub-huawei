@@ -26,8 +26,8 @@ class MeetingTools {
     const a=r.arguments||{},m=this.m.load(id);
     if (r.name === 'meeting_index') {
       const index=this.m.recording.index(id),offset=Number(a.offset||0);if(!Number.isInteger(offset)||offset<0)throw new Error('分页位置无效');
-      const segments=index.recording.segments,pages=m.events.filter(e=>e.kind==='slide');
-      return {content:[text({title:m.title,durationMs:m.capturedMs,transcribedMs:m.transcribedMs,understoodMs:m.understoodMs,recording:{bytes:index.recording.bytes,savedThrough:index.recording.savedThrough,openGap:index.recording.openGap||null,gaps:index.recording.gaps.slice(offset,offset+60),totalGaps:index.recording.gaps.length,segments:segments.slice(offset,offset+60),totalSegments:segments.length},pages:pages.slice(offset,offset+60).map(({seq,at,file})=>({seq,at,file})),totalPages:pages.length,nextOffset:offset+60<Math.max(segments.length,pages.length,index.recording.gaps.length)?offset+60:null,skill:'skills/meeting-companion/SKILL.md'})]};
+      const pages=m.events.filter(e=>e.kind==='slide');
+      return {content:[text({title:m.title,durationMs:m.capturedMs,transcribedMs:m.transcribedMs,understoodMs:m.understoodMs,recording:{bytes:index.recording.bytes,savedThrough:index.recording.savedThrough,openGap:index.recording.openGap||null,gaps:index.recording.gaps.slice(offset,offset+60),totalGaps:index.recording.gaps.length},pages:pages.slice(offset,offset+60).map(({seq,at,file})=>({seq,at,file})),totalPages:pages.length,nextOffset:offset+60<Math.max(pages.length,index.recording.gaps.length)?offset+60:null,skill:'skills/meeting-companion/SKILL.md'})]};
     }
     if (r.name === 'meeting_read') {
       const start=this.m.time(a.startMs??0),end=this.m.time(a.endMs??m.capturedMs);if(end<start||end-start>15*60000)throw new Error('每次读取最多15分钟');
@@ -35,9 +35,9 @@ class MeetingTools {
       const all=m.events.filter(e=>['transcript','mark','slide'].includes(e.kind)&&e.at<=end&&(e.end??e.at)>=start).sort((a,b)=>a.at-b.at||a.seq-b.seq),rows=all.slice(offset,offset+60);
       return {content:[text({startMs:start,endMs:end,total:all.length,events:rows,nextOffset:offset+rows.length<all.length?offset+rows.length:null,gaps:(m.recording?.gaps||[]).filter(g=>g.at<=end&&g.end>=start),transcribedMs:m.transcribedMs})]};
     }
-    if (r.name === 'meeting_frames') {
-      const frames=await this.m.frames.extract(id,a);
-      return {content:frames.flatMap(({data,...meta})=>[text(meta),{type:'image',mimeType:'image/jpeg',data}])};
+    if (r.name === 'meeting_slides') {
+      const seqs=a.seqs;if(!Array.isArray(seqs)||!seqs.length||seqs.length>4)throw new Error('每次指定1至4个截图序号');
+      return {content:seqs.flatMap(seq=>{const asset=this.m.slide(id,seq);return [text({seq,at:asset.at}),{type:'image',mimeType:'image/jpeg',data:asset.data}];})};
     }
     throw new Error('未知会议工具');
   }

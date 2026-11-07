@@ -302,7 +302,7 @@ function installLifecycleFixture() {
     await liveCopy('已暂停', '已暂停'); await snap('00-normal-paused', [1440]);
     // A successful pause has no visible retry control; exercise the same public retry method directly.
     await c.eval('lifecycleCapture.retry()'); await click('[data-act="pause"]'); await until('!lifecycleCapture.paused&&lifecycleCapture.recorder.full.recorder.state==="recording"', 'normal resume');
-    const resumed = await captureState(); assert.equal(resumed.fullKey, normal.fullKey); assert.equal(resumed.starts, normal.starts + 1, 'resume adds one segment, no second full');
+    const resumed = await captureState(); assert.equal(resumed.fullKey, normal.fullKey); assert.equal(resumed.starts, normal.starts, 'resume keeps the one video, no new recorder');
     const normalFull = await stopAndOpen(); assert.equal(normalFull.key, normal.fullKey);
     result.normal = { before: normal, resumed, playable: normalFull }; result.checks.push('normal pause/retry/resume/stop retains one full recorder; encoded full opens and decodes'); record();
 
@@ -323,7 +323,7 @@ function installLifecycleFixture() {
     result.inactiveFull = { before: failed, beforeRejected, rejected, button: inactiveButton, defense: inactiveDefense, playable: failedFull }; result.checks.push('inactive full + native error cannot resume after retry; disabled UI and assertCanResume defense; no backend resume or extra segment; old full bytes remain and final stop succeeds'); record();
 
     const held = await next(); await c.eval('m3Fixture.holdStops()'); await click('[data-act="stop"]');
-    await until(`lifecycleCapture.released&&lifecycleCapture.testTracks.every(t=>t.readyState==='ended')&&!${q('[data-act="stop"]')}.disabled&&${q('[data-m="message"]')}.textContent==='已停止录制，但暂停没能完成，已录的内容都在。请点「结束会议」。'`, 'stop deadline releases UI and devices');
+    await until(`lifecycleCapture.released&&lifecycleCapture.testTracks.every(t=>t.readyState==='ended')&&!${q('[data-act="stop"]')}.disabled&&${q('[data-m="message"]')}.textContent==='录像还没收尾，已录的内容都在。请再点一次「结束会议」，先别关 Hub。'`, 'stop deadline releases UI and devices');
     const timedOut = await captureState(); assert.equal(timedOut.running, true, 'old capture remains owned until save settles'); assert.equal(timedOut.id, held.id); assert.ok(timedOut.bytes >= held.bytes);
     assert.ok(await c.eval(`${q('[data-m="history"]')}.disabled`), 'history cannot switch while old capture owns pending data');
     // The new-meeting button is hidden during live capture; also test its defensive handler without changing CSS.

@@ -19,7 +19,7 @@ class MeetingFrames {
         for (const at of times) {
           const located = this.m.recording.locate(id, at);
           const result = await win.webContents.executeJavaScript(`window.extractMeetingFrame(${JSON.stringify({url:located.url,seconds:located.offsetMs/1000,crop,maxWidth:args.detail === 'high' ? 1920 : 1280})})`);
-          const actualAt = located.segment.at + Math.round(result.seconds * 1000);
+          const actualAt = at + Math.round(result.seconds * 1000 - located.offsetMs);
           const suffix = createHash('sha256').update(JSON.stringify({at,crop,detail:args.detail})).digest('hex').slice(0,16);
           const file = `frame-${suffix}.jpg`; fs.writeFileSync(path.join(this.m.dir(id),file),Buffer.from(result.data,'base64'));
           frames.push({ requestedMs:at,at:actualAt,file,path:path.join(this.m.dir(id),file),width:result.width,height:result.height,data:result.data });
