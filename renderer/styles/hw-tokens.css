@@ -31,7 +31,7 @@
   --hw-sweep-a: rgba(10,89,247,.55); --hw-sweep-b: rgba(207,10,44,.35);
   /* 模块面性图标底色（服务卡片） */
   --hw-tint-chat:#0A59F7; --hw-tint-assist:#5B5BD6; --hw-tint-meet:#0A9C8E;
-  --hw-tint-ppt:#E8780C;  --hw-tint-room:#2F80ED;   --hw-tint-forum:#8A5CD1; --hw-tint-rule:#5E6D7E; --hw-tint-acct:#3A9E42;
+  --hw-tint-ppt:#E8780C;  --hw-tint-room:#2F80ED;   --hw-tint-forum:#8A5CD1; --hw-tint-rule:#5E6D7E; --hw-tint-acct:#3A9E42; --hw-tint-attend:#1F7A8C;
 
   /* 字号阶梯（px）：说明 / 正文 / 小标题 / 标题 / 页标题 / 大数字 */
   --hw-fs-12: 12px; --hw-fs-13: 13px; --hw-fs-14: 14px; --hw-fs-16: 16px;

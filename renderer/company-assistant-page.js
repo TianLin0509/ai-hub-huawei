@@ -796,7 +796,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
   const onResize = () => place();
   async function open() {
     build(); closeOtherPanels();
-    window.__companyMeetingHide?.(); window.__assistantHide?.(); window.__wirelessHide?.(); window.__companyForumHide?.();
+    window.__companyMeetingHide?.(); window.__assistantHide?.(); window.__wirelessHide?.(); window.__companyForumHide?.(); window.__companyAttendanceHide?.();
     // 规则、写作、研究等整页面板也关掉（同云端页），不然从这些页切过来会叠在一起。
     for (const name of ['__rulesHide', '__writingHide', '__xresearchHide', '__studyHide', '__ranHide']) window[name]?.(); window.setShellNavActive?.('company-assistant');
     const wasHidden = page.hidden;

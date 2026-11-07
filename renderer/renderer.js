@@ -9236,6 +9236,17 @@ if (require('../core/company-forum/gate').companyForumEnabled()) {
     window.__companyForumHide = () => companyForumPage.close();
   } catch (error) { console.warn('[company-forum] 论坛页未启动：', error.message); }
 }
+// 公司版「考勤」页（2026-11-07）：打卡记录、加班统计、80 小时红线与年度统计；只在公司版启用（core/company-attendance/gate.js），默认关、可选功能里开。
+if (require('../core/company-attendance/gate').companyAttendanceEnabled()) {
+  try {
+    const companyAttendancePage = require('./company-attendance-page').createCompanyAttendancePage({
+      document, window, ipcRenderer,
+      closeOtherPanels: () => { window.hubWorkspaces?.close(); memoryPanel.close(); capabilityPanel.close(); accountCenterPanel.close(); },
+      showMessage: message => showToast(message),
+    });
+    window.__companyAttendanceHide = () => companyAttendancePage.close();
+  } catch (error) { console.warn('[company-attendance] 考勤页未启动：', error.message); }
+}
 // AI 网页会话（2026-10-25）：启动中心「AI 网页」、侧栏「网页」分组、主区内嵌官网。打开前先回到主页收起其他视图。
 try {
   // 网页圆桌（2026-10-28）：用已登录的 AI 网页同题提问、互评、队长汇总；从侧栏「网页」分组或网页顶栏的圆桌按钮进入。

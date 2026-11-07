@@ -215,7 +215,7 @@ function createCompanyPptPage({ document, window, ipcRenderer, closeOtherPanels 
   function lastConversionId() { return page.querySelector('[data-ppt-conversion]').dataset.jobId; }
   async function open() {
     build(); closeOtherPanels();
-    for (const name of ['__companyAssistantHide', '__companyMeetingHide', '__companyForumHide', '__assistantHide', '__cloudHide', '__wirelessHide', '__rulesHide', '__writingHide', '__xresearchHide', '__studyHide', '__ranHide']) window[name]?.();
+    for (const name of ['__companyAssistantHide', '__companyMeetingHide', '__companyForumHide', '__companyAttendanceHide', '__assistantHide', '__cloudHide', '__wirelessHide', '__rulesHide', '__writingHide', '__xresearchHide', '__studyHide', '__ranHide']) window[name]?.();
     page.hidden = false; document.body.classList.add('company-ppt-page-open'); nav()?.classList.add('active'); window.setShellNavActive?.('company-ppt'); place(); window.addEventListener('resize', place);
     try { renderStatus((await call('ppt-status')).ppt); poll(); } catch (error) { notice(error.message); }
   }

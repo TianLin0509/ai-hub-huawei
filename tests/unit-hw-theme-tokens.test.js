@@ -136,7 +136,7 @@ for (const theme of IDS) {
     const r = ratio(parseColor('var(--hw-text-on)', vars), brand);
     assert.ok(r >= 4.5, `${theme} --hw-text-on on --hw-brand = ${r.toFixed(2)}`);
     const onTint = parseColor('var(--hw-on-tint)', vars);
-    for (const tint of ['chat', 'assist', 'meet', 'room', 'forum', 'acct']) {
+    for (const tint of ['chat', 'assist', 'meet', 'room', 'forum', 'acct', 'attend']) {
       const t = ratio(onTint, parseColor(`var(--hw-tint-${tint})`, vars));
       assert.ok(t >= 3, `${theme} --hw-on-tint on --hw-tint-${tint} = ${t.toFixed(2)}`);
     }

@@ -2676,13 +2676,14 @@ const teamAccess = { assert() { throw new Error('该功能未启用'); } };
 // 关着时助理、论坛的服务照样建好（页面能显示「未开启」和开关），但不调 start()，后台不取数、不开窗口。
 const optionalFeatures = require('./core/optional-features').createOptionalFeatures({
   dataDir: getHubDataDir(),
-  defaults: process.env.CLAUDE_HUB_DATA_DIR ? { assistant: process.env.CLAUDE_HUB_COMPANY_ASSISTANT === '1', forum: process.env.CLAUDE_HUB_COMPANY_FORUM === '1' } : {},
+  defaults: process.env.CLAUDE_HUB_DATA_DIR ? { assistant: process.env.CLAUDE_HUB_COMPANY_ASSISTANT === '1', forum: process.env.CLAUDE_HUB_COMPANY_FORUM === '1', attendance: process.env.CLAUDE_HUB_COMPANY_ATTENDANCE === '1' } : {},
 });
 function optionalFeatureList() {
   const { CATALOG } = require('./core/optional-features');
   const out = [];
   if (companyAssistantService) out.push({ id: 'assistant', ...CATALOG.assistant, on: optionalFeatures.get('assistant') });
   if (companyForumService) out.push({ id: 'forum', ...CATALOG.forum, on: optionalFeatures.get('forum') });
+  if (companyAttendanceService) out.push({ id: 'attendance', ...CATALOG.attendance, on: optionalFeatures.get('attendance') });
   if (hubPetController && require('./core/distribution').featureEnabled('hubPet')) out.push({ id: 'pet', ...CATALOG.pet, on: !!hubPetController.getSettings().enabled });
   return out;
 }
@@ -2700,6 +2701,9 @@ ipcMain.handle('optional-features:set', (_event, request = {}) => {
     } else if (id === 'forum' && companyForumService) {
       optionalFeatures.set('forum', on);
       if (on) companyForumService.start(); else companyForumService.close();
+    } else if (id === 'attendance' && companyAttendanceService) {
+      optionalFeatures.set('attendance', on);
+      if (on) companyAttendanceService.start(); else companyAttendanceService.close();
     } else throw new Error('这个版本没有这项功能');
     const list = optionalFeatureList();
     sendToRenderer('optional-features:changed', list);
@@ -2869,6 +2873,25 @@ try {
     require('./main/ipc/company-forum-handlers').registerCompanyForumIpc(ipcMain, companyForumService, { shell, browser: companyForumBrowser });
   }
 } catch (error) { console.error('[company-forum] 论坛未启动：', error.message); }
+// 公司版「考勤」（2026-11-07）：每天后台读一次自己的打卡记录（最近 8 天），按日期拼成完整历史，页面算加班与 80 小时红线。
+// 默认关闭（可选功能 attendance），关着时不访问考勤系统。取数先用 Hub 的隐藏窗口（和论坛共用登录分区），拿不到再用无头 Edge。
+let companyAttendanceService = null, companyAttendanceBrowser = null;
+try {
+  if (require('./core/company-attendance/gate').companyAttendanceEnabled()) {
+    const { CompanyAttendance } = require('./core/company-attendance/service');
+    companyAttendanceBrowser = companyForumBrowser || require('./main/company-forum-browser').createForumBrowser({ BrowserWindow, BaseWindow, session: require('electron').session });
+    companyAttendanceService = new CompanyAttendance({
+      dataDir: getHubDataDir(),
+      noTimer: process.env.CLAUDE_HUB_ATTENDANCE_TIMER === '0',
+      browser: companyAttendanceBrowser,
+      edgeCapture: process.env.CLAUDE_HUB_ATTENDANCE_EDGE === '0' ? null : opts => require('./main/company-attendance-edge').captureWithEdge(opts),
+      accountEmail: () => { try { return JSON.parse(require('fs').readFileSync(require('path').join(getHubDataDir(), 'company-assistant', 'settings.json'), 'utf8')).email || ''; } catch { return ''; } },
+      onChanged: () => sendToRenderer('company-attendance:changed', {}),
+    });
+    if (optionalFeatures.get('attendance')) companyAttendanceService.start();
+  }
+} catch (error) { console.error('[company-attendance] 考勤未启动：', error.message); }
+require('./main/ipc/company-attendance-handlers').registerCompanyAttendanceIpc(ipcMain, () => (optionalFeatures.get('attendance') ? companyAttendanceService : null));
 // AI 编排模式（2026-10-04）：编排员通过 hub_orchestrator 工具驱动群聊与交付工作流。
 try {
   global.__orchestrationService = require('./main/orchestration/service').createOrchestrationService({
@@ -5027,6 +5050,7 @@ async function runFinalShutdownCleanup() {
   capture('company-ai', () => companyAiTasks?.close());
   capture('company-web-ai', () => companyWebAi?.close());
   capture('company-forum', () => { companyForumService?.close(); companyForumBrowser?.close(); });
+  capture('company-attendance', () => { companyAttendanceService?.close(); if (companyAttendanceBrowser !== companyForumBrowser) companyAttendanceBrowser?.close(); });
   capture('hub-orchestration', () => global.__orchestrationService?.stop());
   capture('hub-team', () => global.__teamService?.stop());
   capture('hub-phone', () => phoneService?.close());
