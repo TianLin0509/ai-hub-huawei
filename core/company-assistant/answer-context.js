@@ -8,6 +8,7 @@ const D = require('./data');
 const { createPriorityMatcher } = require('./memory-priority');
 
 const SKILL_FILE = path.join(__dirname, 'assistant-skill.md');
+const NL = String.fromCharCode(10);
 const TITLES = Object.freeze({ priority: '今天优先', meetings: '今天的会', prep: '会前准备', awaiting: '谁在等我回', group: '群要点', person: '某人找我',
   commitments: '我答应的事', mail: '邮件分拣', weekly: '周报', draft: '回复草稿', search: '查找' });
 const ACTION_INTENTS = Object.freeze({ 'meetings-today': ['meetings'], 'meeting-prep': ['prep'], 'awaiting-reply': ['awaiting'], 'group-summary': ['group'],
@@ -38,11 +39,13 @@ function skillSections(file = SKILL_FILE) {
   cached = { file, mtime: stat.mtimeMs, map };
   return map;
 }
+const DEFER_LINE = '以上分节是我没说时的默认做法；问题里明确要求的排序、格式、条数、范围，以问题为准。';
 // 通用一节每问都放（固定前缀，能命中缓存）；按类型的几节跟在后面。
 function playbook(intents = [], file) {
   const map = skillSections(file);
   const parts = [`作答手册 · 通用：\n${map.get('通用') || ''}`];
   for (const key of intents) { const title = TITLES[key]; if (title && map.has(title)) parts.push(`作答手册 · ${title}：\n${map.get(title)}`); }
+  if (parts.length > 1) parts.push(DEFER_LINE);
   return parts.join('\n\n');
 }
 
@@ -111,21 +114,29 @@ function looksLike(text) {
   const t = String(text || '').trim();
   if (/^(好的|好滴|收到|谢谢|感谢|ok|okay|嗯+|👍|多谢|辛苦)[!！。.~～\s]*$/i.test(t)) return '像是已了结';
   if (/[？?]|吗[。！!]?$|能不能|可不可以|是否|请你|请帮|麻烦|帮忙|确认一下|给我|发我|看下|看一下|有空|方便|什么时候|啥时候/.test(t)) return '像是在问你/要你做事';
-  return '像是知会';
+  if (/截止|还没(?:报|交|填|提交|回|给|确认|发)|记得|别忘|尽快|抓紧|报名|填一下|填写|提交一下|审批|批一下|签一下|反馈一下/.test(t)) return '像是在问你/要你做事';
+  // 其余拿不准，不打标签，让模型看原话判断。
+  return '';
 }
+// 公司真机评测（Q-1107-22）：265 个会话时等我回的材料塞满 10 条、每条带 3 句前文，GLM 逐条判断状态想了很久（新版这题 118.7 秒，现版 48.5 秒）。
+// 现在只列最要紧的 8 条、前文 2 句；像是已说完、群里我已回过的往后排，没列出的只报条数。
 function awaitingBlock(snapshot, { now, settings, priority }) {
-  const rows = D.awaiting(snapshot, settings).map(m => {
+  const all = D.awaiting(snapshot, settings).map(m => {
     const list = (snapshot.messages || {})[m.conv] || [], i = list.findIndex(x => x.sourceId === m.sourceId);
-    const repliedLater = m.group && list.slice(i + 1).some(x => x.mine);
-    return { m, list, i, repliedLater, score: priority(m) * 4 + (m.group ? 0 : 2) + (m.atMe ? 1 : 0) + Math.min(3, (now - (m.since || now)) / (6 * 3600000)) - (repliedLater ? 5 : 0) };
-  }).sort((a, b) => b.score - a.score).slice(0, 10);
-  const lines = rows.map(({ m, list, i, repliedLater }) => {
-    const tail = list.slice(Math.max(0, i - 3), i).map(x => '    ' + msgLine(x, 100));
+    const repliedLater = m.group && list.slice(i + 1).some(x => x.mine), tag = looksLike(m.text);
+    return { m, list, i, repliedLater, tag, score: priority(m) * 4 + (m.group ? 0 : 2) + (m.atMe ? 1 : 0) + Math.min(3, (now - (m.since || now)) / (6 * 3600000)) - (repliedLater ? 5 : 0) - (tag === '像是已了结' ? 8 : 0) };
+  }).sort((a, b) => b.score - a.score);
+  const rows = all.slice(0, 8), rest = all.slice(8);
+  const lines = rows.map(({ m, list, i, repliedLater, tag }) => {
+    const tail = list.slice(Math.max(0, i - 2), i).map(x => '    ' + msgLine(x, 90));
     const mine = list.filter(x => x.mine).length;
-    return [`- ${convLabel(m)} · ${m.sender} · ${ago(now, m.since)} · ${looksLike(m.text)}${mine ? ` · 你在这里说过 ${mine} 句` : ''}${repliedLater ? ' · 你之后在群里说过话' : ''}${priority(m) ? ' · 优先的人/群' : ''}`, ...tail, '    ' + msgLine(m, 260)].join('\n');
+    return [`- ${convLabel(m)} · ${m.sender} · ${ago(now, m.since)}${tag ? ' · ' + tag : ''}${mine ? ` · 你在这里说过 ${mine} 句` : ''}${repliedLater ? ' · 你之后在群里说过话' : ''}${priority(m) ? ' · 优先的人/群' : ''}`, ...tail, '    ' + msgLine(m, 220)].join(NL);
   });
   const f = fit(lines, BUDGET.awaiting);
-  return f.lines.length ? `【等我回复 · ${rows.length} 条，含最近的上下文】\n${f.lines.join('\n')}` : '【等我回复】没有最后一句是对方发的私聊，也没有群里 @我 的消息。';
+  const settled = rest.filter(r => r.tag === '像是已了结' || r.repliedLater).length;
+  const more = rest.length ? `另有 ${rest.length} 条没列出（较早或较次要${settled ? `，其中 ${settled} 条像是已说完或你已回过` : ''}）。` : '';
+  const head = `【等我回复 · ${all.length} 条，下面是最要紧的 ${f.lines.length} 条，含最近的上下文】`;
+  return f.lines.length ? [head, ...(more ? [more] : []), ...f.lines].join(NL) : '【等我回复】没有最后一句是对方发的私聊，也没有群里 @我 的消息。';
 }
 function groupBlock(snapshot, conv, { now, settings, words }) {
   const since = sinceOf(now, settings), list = ((snapshot.messages || {})[conv.id] || []).filter(m => !m.at || m.at >= since);
@@ -189,15 +200,23 @@ function commitmentsBlock(snapshot, { now, settings, commitments }) {
   const lines = [...stored, ...mine.map(m => `- ${convLabel(m)} ` + msgLine(m, 160))];
   return lines.length ? `【我答应过的事 · Hub 记下的 ${stored.length} 条 + 我说过的 ${mine.length} 句】\n${fit(lines, BUDGET.commitments).lines.join('\n')}` : '【我答应过的事】没找到我答应别人的话。';
 }
+// 周报：每天的会、每天简报里 AI 挑过的要点（群里和我有关的、我答应的事、要处理的邮件）、我说过的话。
+// 公司真机评测（Q-1107-22）：只有会和我说的话时，新版周报还调了 15 次工具去翻消息；简报要点是写「本周进展」最省事的来源。
+const BRIEF_PICKS = { groups: '群', commitments: '答应的事', mail: '邮件' };
 function weeklyBlock(days, { now }) {
-  const out = [], seenMeet = new Set(), seenMsg = new Set();
-  for (const { day, snapshot } of days) {
+  const out = [], seenMeet = new Set(), seenMsg = new Set(), seenBrief = new Set();
+  for (const { day, snapshot, brief } of days) {
     const meets = meetingRows(snapshot, day).filter(m => !seenMeet.has(m.sourceId) && seenMeet.add(m.sourceId)).map(m => `${D.clock(m.start)} ${m.subject}`);
+    const picks = [];
+    for (const sec of brief?.sections || []) {
+      if (!BRIEF_PICKS[sec.key]) continue;
+      for (const it of (sec.items || []).slice(0, 3)) if (it.source && it.text && !seenBrief.has(it.source) && seenBrief.add(it.source)) picks.push(`  简报·${BRIEF_PICKS[sec.key]}：${D.short(it.text, 70)} [${it.source}]`);
+    }
     const mine = allMessages(snapshot).filter(m => m.mine && D.dayKey(m.at) === day && !seenMsg.has(m.sourceId) && seenMsg.add(m.sourceId) && String(m.text || '').length >= 8);
-    if (!meets.length && !mine.length) continue;
-    out.push(`${day}：会 ${meets.length} 场${meets.length ? '（' + D.short(meets.join('；'), 220) + '）' : ''}`, ...mine.slice(-8).map(m => `  ${convLabel(m)} ` + msgLine(m, 90)));
+    if (!meets.length && !mine.length && !picks.length) continue;
+    out.push(`${day}：会 ${meets.length} 场${meets.length ? '（' + D.short(meets.join('；'), 220) + '）' : ''}`, ...picks, ...mine.slice(-6).map(m => `  ${convLabel(m)} ` + msgLine(m, 90)));
   }
-  return out.length ? `【近一周 · 每天的会和我说过的话（从本机快照汇总，截至 ${D.displayTime(now)}）】\n${fit(out, BUDGET.weekly).lines.join('\n')}` : '【近一周】本机没有近一周的快照。';
+  return out.length ? `【近一周 · 每天的会、简报要点和我说过的话（从本机快照和每天的简报汇总，截至 ${D.displayTime(now)}）】${NL}${fit(out, BUDGET.weekly).lines.join(NL)}` : '【近一周】本机没有近一周的快照。';
 }
 function searchBlock(snapshot, q, { now, settings }) {
   const ws = terms(q.replace(/[「“"『][^」”"』]*[」”"』]/g, m => ' ' + m.slice(1, -1) + ' '));
@@ -244,4 +263,4 @@ function buildMaterial(question, snapshot, { action = '', now = Date.now(), sett
   return { intents: c.intents, group: c.group?.name || null, person: c.person?.name || null, text, chars: text.length };
 }
 
-module.exports = { ASK_RULES, WELINK_TOOLS, TITLES, ACTION_INTENTS, classify, playbook, skillSections, buildMaterial, terms, matchGroup, matchPerson };
+module.exports = { ASK_RULES, WELINK_TOOLS, TITLES, ACTION_INTENTS, classify, playbook, skillSections, buildMaterial, terms, matchGroup, matchPerson, looksLike };

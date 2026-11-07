@@ -8,6 +8,7 @@
 // 「关注群要点」改成「群里和你相关」：不用手动勾群，按 @ 你、关注词、你参与讨论自动挑。
 const D = require('./data');
 const { createPriorityMatcher, prioritize } = require('./memory-priority');
+const { looksLike } = require('./answer-context');
 
 const SECTIONS = Object.freeze([
   { key: 'meetings', title: '今天的会' },
@@ -42,8 +43,13 @@ function fallbackBrief(snapshot, { day, now = Date.now(), settings = {}, commitm
     ...(Number.isFinite(m.start) ? { start: m.start, when: `${D.clock(m.start)}${Number.isFinite(m.end) && D.dayKey(m.end) === D.dayKey(m.start) ? '–' + D.clock(m.end) : ''}` } : {}), ...(Number.isFinite(m.end) ? { end: m.end } : {}),
     subject: m.subject, ...(m.location ? { location: m.location } : {}), ...(m.merged ? { merged: true, mergedLabel: m.mergedLabel, sources: m.sources } : {}) }));
   const awaiting = D.awaiting(snapshot, settings).map(m => {
-    const elapsed = Number.isFinite(m.since) ? `已过 ${Math.max(1, Math.round((now - m.since) / 3600000))} 小时` : '时间待核对';
-    return item(m.sourceId, `${m.sender}${m.group ? '（' + m.convName + '）@你，处理情况待核对' : '发来的私聊待回复'}，${elapsed}：${D.short(m.text, 30)}`, { ...(m.needsReplyReview ? { needsReplyReview: true } : {}) });
+    const hours = Number.isFinite(m.since) ? Math.max(1, Math.round((now - m.since) / 3600000)) : null;
+    const elapsed = hours ? `已过 ${hours} 小时` : '时间待核对';
+    // 像是已经说完的（对方最后只回了「好的」「收到」）、群里 @我 之后我在群里说过话的：照样列出，但排到这一栏最后（2026-11-07）。
+    const list = (snapshot.messages || {})[m.conv] || [], at = list.findIndex(x => x.sourceId === m.sourceId);
+    const settledLabel = looksLike(m.text) === '像是已了结' ? '像是已说完' : m.group && at >= 0 && list.slice(at + 1).some(x => x.mine) ? '你之后在群里说过话' : '';
+    return item(m.sourceId, `${m.sender}${m.group ? '（' + m.convName + '）@你，处理情况待核对' : '发来的私聊待回复'}，${elapsed}：${D.short(m.text, 30)}`,
+      { ...(m.needsReplyReview ? { needsReplyReview: true } : {}), ...(hours ? { hours } : {}), ...(settledLabel ? { settledLabel } : {}) });
   });
   const hours = lookback(settings), since = now - hours * 3600000;
   const allMentions = Object.values(snapshot.messages || {}).flat().filter(m => m.group && !m.mine && m.atAll && (!Number.isFinite(m.at) || m.at >= since));
@@ -74,7 +80,7 @@ function briefPrompt(snapshot, { day, now = Date.now(), settings = {}, commitmen
     '',
     '要求：',
     '1. 只根据下面的数据写，不编造；每条必须带且只带一个出处编号（原样抄方括号里的编号）。',
-    '2. meetings 只写 preparation 会前准备建议，时间和主题由 Hub 从结构化事实显示；awaiting 私聊待回与@我（群里回复关联不明时标待核对）；commitments 我答应过但未完成的事（due 为明确的截止日期，否则留空）；groups 群里与我相关的要点；mail 需要处理的邮件。',
+    '2. meetings 只写 preparation 会前准备建议，时间和主题由 Hub 从结构化事实显示；awaiting 还在等我回的私聊与 @我，写成「谁要什么 → 建议怎么回」，对方只是告知或已说完的不写（群里回复关联不明时标待核对）；commitments 我答应过但未完成的事（due 为明确的截止日期，否则留空）；groups 群里与我相关的要点；mail 需要处理的邮件。',
     '3. 每条 40 字以内，写成「事 → 建议我做什么」，有截止写截止；要我行动的、有截止的放前面，只是知会的少写；推断加 "guess": true。首屏最多显示 10 条，Hub 会补齐已采集的会议和待回/@清单；空栏给空数组。',
     `4. 只输出 JSON 代码块：{"meetings":[{"source":"…","preparation":"…"}],"awaiting":[],"commitments":[{"text":"…","source":"…","due":"${day}"}],"groups":[],"mail":[]}`,
     '',
@@ -146,15 +152,29 @@ function parseAgentBrief(text, snapshot, { day, now = Date.now(), done = new Set
     }).filter(Boolean);
   }
   sections.meetings = [...meetingsBySource.values()].map(m => ({ ...m, ...(preparation.has(m.source) ? { preparation: preparation.get(m.source) } : {}) }));
-  // 确定性必备项不依赖 AI 是否挑中；事实放前，finish 去重并保留用户的「处理了」。
-  sections.awaiting = [...(factsBySection.get('awaiting') || []), ...sections.awaiting];
+  // 确定性必备项不依赖 AI 是否挑中；finish 去重并保留用户的「处理了」。
+  // 等我回复：AI 挑中的按 AI 的先后放前面，用它写的「事 → 建议」，补上已等多久；没挑中的事实照旧补在后面（2026-11-07；以前事实放前，同一出处 AI 的写法总被去重丢掉）。
+  const factAwaiting = factsBySection.get('awaiting') || [], factBySource = new Map(factAwaiting.map(x => [x.source, x])), picked = new Set();
+  const aiAwaiting = sections.awaiting.map(x => {
+    const fact = factBySource.get(x.source);
+    if (!fact || picked.has(x.source)) return x;
+    picked.add(x.source);
+    const { settledLabel, ...rest } = fact;
+    return { ...rest, text: x.text, ...(x.guess ? { guess: true } : {}), ...(fact.hours ? { waited: `已等 ${fact.hours} 小时` } : {}) };
+  });
+  sections.awaiting = [...aiAwaiting, ...factAwaiting.filter(x => !picked.has(x.source))];
   sections.groups = [...(factsBySection.get('groups') || []).filter(x => x.mandatory), ...sections.groups];
   sections.commitments = [...sections.commitments, ...(factsBySection.get('commitments') || [])];
   return finish({ day, generatedAt: now, by: 'ai', sections: prioritizedSections(sections, index, memory), dropped, done });
 }
 
 function prioritizedSections(sections, index, memory) {
-  return Object.fromEntries(Object.entries(sections).map(([key, items]) => [key, key === 'meetings' ? items : prioritize(items, memory, x => index.get(x.source)?.item)]));
+  return Object.fromEntries(Object.entries(sections).map(([key, items]) => {
+    if (key === 'meetings') return [key, items];
+    const sorted = prioritize(items, memory, x => index.get(x.source)?.item);
+    // 像是已说完的放这一栏最后，优先的人也一样（2026-11-07）。
+    return [key, key === 'awaiting' ? [...sorted.filter(x => !x.settledLabel), ...sorted.filter(x => x.settledLabel)] : sorted];
+  }));
 }
 
 // 去掉点过「处理了」的；同一出处只留一条；标出首屏（前 10 条）。

@@ -39,7 +39,7 @@ const TOOLS_HELLO_GRACE_MS = 90000;
 const DEFAULT_SETTINGS = Object.freeze({
   enabled: true, briefTime: '08:20', summaryTime: '18:00', waitHours: 4, prepMinutes: 15, maxPerHour: 3, refreshMinutes: 10,
   watchGroups: [], keywords: [], myName: '', workdays: [1, 2, 3, 4, 5], cliPath: '', email: '', emailFrom: '', chips: [], phone: DEFAULT_PHONE,
-  lookbackHours: 36, maxConversations: 0, answerStyle: 'guided',
+  lookbackHours: 36, maxConversations: 0, answerStyle: 'guided', answerEffort: '',
 });
 // 输入框上方的常用问题（设计稿 B）。fill=true 的只填进输入框，等补全再发。
 const BUILTIN_CHIPS = Object.freeze([
@@ -185,6 +185,7 @@ class CompanyAssistant {
     const hhmm = v => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(v)) ? String(v) : null;
     if ('enabled' in patch) next.enabled = !!patch.enabled;
     if (['guided', 'classic'].includes(patch.answerStyle)) next.answerStyle = patch.answerStyle;
+    if (['', 'low', 'medium', 'high', 'max'].includes(patch.answerEffort)) next.answerEffort = patch.answerEffort;
     if (hhmm(patch.briefTime)) next.briefTime = hhmm(patch.briefTime);
     if (hhmm(patch.summaryTime)) next.summaryTime = hhmm(patch.summaryTime);
     if ('lookbackHours' in patch && LOOKBACK_CHOICES.includes(Number(patch.lookbackHours))) next.lookbackHours = Number(patch.lookbackHours);
@@ -1266,7 +1267,9 @@ class CompanyAssistant {
     // 先登记：建会话时 extraMcpProvider 就要按用途挂工具。
     this.pool.set(id, { toolset, createdAt: this.now() });
     let created;
-    try { created = await this.deps.createSession('codeagent', { id, cwd: this.workspaceFor(toolset), title: TITLES[toolset] || TITLES.desk, purpose: PURPOSE, autonomous: true, noInheritCursor: true }); }
+    // 助理问答的思考档（2026-11-07）：公司 GLM 一问要 45–60 秒，大半花在想上；设置 answerEffort（low/medium/high/max）时开会话带 --effort，空 = 账号默认。
+    const effort = toolset === 'desk' || toolset === 'phone' ? this.settings().answerEffort : '';
+    try { created = await this.deps.createSession('codeagent', { id, cwd: this.workspaceFor(toolset), title: TITLES[toolset] || TITLES.desk, purpose: PURPOSE, autonomous: true, noInheritCursor: true, ...(effort ? { effort } : {}) }); }
     catch (error) { this.pool.delete(id); throw error; }
     if (!created || created.id !== id) { this.pool.delete(id); throw new Error('助理会话没能打开'); }
     return id;
@@ -1371,11 +1374,12 @@ class CompanyAssistant {
     if (snap?.login?.ok) {
       try {
         const intents = AC.classify(job.prompt, { snapshot: snap }).intents;
-        const days = intents.includes('weekly') ? this.snapshotDays().slice(0, 7).map(d => ({ day: d, snapshot: d === day ? snap : this.snapshot(d) })).filter(x => x.snapshot?.login?.uid === snap.login.uid) : [];
+        const days = intents.includes('weekly') ? this.snapshotDays().slice(0, 7).map(d => ({ day: d, snapshot: d === day ? snap : this.snapshot(d), brief: this.brief(d) })).filter(x => x.snapshot?.login?.uid === snap.login.uid) : [];
         material = AC.buildMaterial(job.prompt, snap, { now, settings: s, memory: this.memory.active(), commitments: this.state().commitments, digest: digest.text, days });
       } catch (error) { console.warn('[company-assistant] material', error.message); }
     }
     job.intents = material.intents;
+    job.materialItems = (String(material.text || '').match(/\[(?:msg|mail|mtg|meeting|cal):/g) || []).length;
     const book = AC.playbook(material.intents), cut = book.indexOf('\n\n作答手册 · ');
     const general = cut < 0 ? book : book.slice(0, cut), specific = cut < 0 ? '' : book.slice(cut + 2);
     const parts = [specific, `当前时间（上海）：${D.displayTime(now)}`, this.memory.context(job.prompt), material.text, this.recentHistory(job)].filter(Boolean);
@@ -1440,6 +1444,8 @@ class CompanyAssistant {
       this.verifyTeamOwner(job);
       if (job.teamOwner && this.sessionBusy(id)) { lane.queue.unshift(job); lane.job = null; return; }
       const prompt = job.teamOwner ? job.prompt : this.composePrompt(job, toolset);
+      // 等回答时让用户看到：按哪类问题作答、Hub 已备好几条材料（体感更快，也知道它在干什么）。
+      if (job.type === 'chat' && job.intents?.length) this.patchChat(job.chatId, { guide: { kinds: job.intents.map(k => AC.TITLES[k]).filter(Boolean), items: job.materialItems || 0 } });
       job.baseline = this.lastFinal(id)?.id || null;
       job.sessionId = id;
       job.toolset = toolset;

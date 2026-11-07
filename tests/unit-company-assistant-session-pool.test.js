@@ -70,6 +70,9 @@ test('每个问题用一个新会话：提问带固定规则、今天摘要；�
   assert.match(p1.text, /SRS 周期配置评审[^\n]*WeLink \+ 日历[^\n]*\[mtg:1\]/, '摘要里的会议已合并');
   assert.doesNotMatch(p1.text, /最近的对话/);
   assert.equal(f.a.toolsetFor(p1.id), 'desk');
+  const waiting = f.a.chat().find(c => c.id === first.id);
+  assert.deepEqual(waiting.guide, { kinds: ['今天的会'], items: waiting.guide.items }, '等回答时页面能显示按哪类问题作答');
+  assert.ok(waiting.guide.items >= 1, '备好的材料条数');
   f.answer(p1.id, '今天 1 场会：14:30 SRS 周期配置评审 [mtg:1]。');
   await f.a.collectJob('chat');
   const done = f.a.chat().find(c => c.id === first.id);
@@ -182,4 +185,23 @@ test('简报走自己的队列，不挡提问', async t => {
   const brief = f.prompts.find(p => p.text.includes('请整理今天的工作简报'));
   assert.equal(f.a.toolsetFor(brief.id), 'brief');
   assert.ok(f.a.briefRunning(DAY));
+});
+
+test('助理思考档：默认不带，设成 low 后新开的问答会话带上；PPT 会话不受影响', async t => {
+  const f = fixture(t, { prewarm: false });
+  f.a.ask('今天有哪些会');
+  await f.settle();
+  const first = f.sessions.get(f.prompts[0].id);
+  assert.equal(first.effort, undefined, '默认用账号自己的思考档');
+  f.a.setSettings({ answerEffort: 'low' });
+  assert.equal(f.a.settings().answerEffort, 'low');
+  f.a.setSettings({ answerEffort: 'turbo' });
+  assert.equal(f.a.settings().answerEffort, 'low', '不认识的值不改');
+  f.answer(f.prompts[0].id, '今天 1 场会。');
+  await f.a.collectJob('chat');
+  f.a.ask('谁在等我回复');
+  await f.settle();
+  assert.equal(f.sessions.get(f.prompts[1].id).effort, 'low');
+  const id = await f.a.openPooled('ppt');
+  assert.equal(f.sessions.get(id).effort, undefined);
 });

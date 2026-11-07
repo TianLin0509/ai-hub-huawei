@@ -78,7 +78,7 @@ test('我答应的事：从我说过的话里找「我来/下班前给」这类�
 test('周报汇总近几天的会和我说过的话；没认出类型时用今天摘要 + 关键词检索兜底', () => {
   const s = snapshot();
   const w = AC.buildMaterial('起草一份周报', s, opts({ action: 'weekly-report', days: [{ day: DAY, snapshot: s }] }));
-  assert.match(w.text, /【近一周 · 每天的会和我说过的话/); assert.match(w.text, /2026-11-06：会 1 场（14:30 SRS 周期配置评审）/);
+  assert.match(w.text, /【近一周 · 每天的会、简报要点和我说过的话/); assert.match(w.text, /2026-11-06：会 1 场（14:30 SRS 周期配置评审）/);
   const g = AC.buildMaterial('20ms 周期的开销谁提过', s, opts());
   assert.match(g.text, /今天摘要（Hub 后台快照/); assert.match(g.text, /\[msg:g2:8\]/);
 });
@@ -99,4 +99,63 @@ test('评测工具随 Hub 发布：助理工作目录写出 assistant-bench.cmd�
   assert.match(bench, /CLAUDE_HUB_ASSISTANT_DIR/);
   assert.doesNotMatch(bench, /skip-safe-check/, '默认不带跳过信任检查的参数');
   assert.doesNotMatch(bench, /writeFileSync\(path\.join\(DIR/, '不往助理数据目录写东西');
+});
+
+test('手册分节后提醒「问题里的明确要求优先」；只有通用一节时不加', () => {
+  assert.match(AC.playbook(['awaiting']), /以上分节是我没说时的默认做法；问题里明确要求的排序、格式、条数、范围，以问题为准。$/);
+  assert.doesNotMatch(AC.playbook([]), /以上分节/);
+  assert.match(AC.skillSections().get('谁在等我回'), /问题里要每条给草稿，就每条下面跟一段「草稿：」/);
+});
+
+test('简报「等我回复」：AI 挑中的用它写的「事 → 建议」并补已等多久；没挑中的照旧补上，像是已说完的排最后（优先的人也一样）', () => {
+  const B = require('../core/company-assistant/brief');
+  const s = snapshot(), memory = opts().memory, settings = { lookbackHours: 36 };
+  const fb = B.fallbackBrief(s, { day: DAY, now: NOW, settings, memory });
+  const fa = fb.sections.find(x => x.key === 'awaiting').items;
+  assert.deepEqual(fa.map(x => x.source), ['msg:g1:5', 'msg:p1:1', 'msg:p2:4']);
+  assert.equal(fa[2].settledLabel, '像是已说完'); assert.match(fa[1].text, /周工发来的私聊待回复，已过 4 小时/);
+  const ai = '```json\n' + JSON.stringify({ meetings: [], awaiting: [{ source: 'msg:p1:1', text: '周工要分档门限，评审要用 → 先回今天 14:10 前给' }], commitments: [], groups: [], mail: [] }) + '\n```';
+  const pa = B.parseAgentBrief(ai, s, { day: DAY, now: NOW, settings, memory }).sections.find(x => x.key === 'awaiting').items;
+  assert.deepEqual(pa.map(x => x.source), ['msg:p1:1', 'msg:g1:5', 'msg:p2:4']);
+  assert.equal(pa[0].text, '周工要分档门限，评审要用 → 先回今天 14:10 前给'); assert.equal(pa[0].waited, '已等 4 小时');
+  assert.equal(pa[2].settledLabel, '像是已说完');
+  assert.match(B.briefPrompt(s, { day: DAY, now: NOW, settings }), /对方只是告知或已说完的不写/);
+});
+
+test('按字面猜状态：催办（截止、还没报）算要我做事；拿不准不打标签，留给模型看原话', () => {
+  assert.equal(AC.looksLike('团建报名今天中午截止，你还没报'), '像是在问你/要你做事');
+  assert.equal(AC.looksLike('收到'), '像是已了结');
+  assert.equal(AC.looksLike('升级包我放共享盘了'), '');
+});
+
+test('等我回复材料只列最要紧的 8 条，像是已说完的往后排，没列出的报条数', () => {
+  const s = snapshot();
+  for (let n = 0; n < 9; n += 1) {
+    const id = 'q' + n, name = '同事' + n;
+    s.conversations.push({ id, name, group: false });
+    s.messages[id] = [{ sourceId: `msg:${id}:1`, conv: id, convName: name, group: false, key: '1', sender: name, account: name, mine: false, atMe: false, atAll: false, text: n < 2 ? '好的' : `第 ${n} 件事你看一下？`, at: at('11:0' + n) }];
+  }
+  const r = AC.buildMaterial('现在谁在等我回复？', s, opts({ action: 'awaiting-reply' }));
+  assert.match(r.text, /【等我回复 · 12 条，下面是最要紧的 8 条，含最近的上下文】\n另有 4 条没列出（较早或较次要，其中 3 条像是已说完或你已回过）。/);
+  assert.doesNotMatch(r.text, /同事0 · 同事0/, '只回了「好的」的排到列出范围外');
+});
+
+test('周报材料带上每天简报里 AI 挑过的要点（群、答应的事、邮件），带出处', () => {
+  const s = snapshot();
+  const brief = { sections: [{ key: 'groups', items: [{ source: 'msg:g2:8', text: '孙七问 20ms 周期开销能降多少' }] }, { key: 'mail', items: [{ source: 'mail:e1', text: 'Q4 预算材料周一前交' }] }, { key: 'awaiting', items: [{ source: 'msg:p1:1', text: '周工等分档门限' }] }] };
+  const w = AC.buildMaterial('起草一份周报', s, opts({ action: 'weekly-report', days: [{ day: DAY, snapshot: s, brief }] }));
+  assert.match(w.text, /简报·群：孙七问 20ms 周期开销能降多少 \[msg:g2:8\]/);
+  assert.match(w.text, /简报·邮件：Q4 预算材料周一前交 \[mail:e1\]/);
+  assert.doesNotMatch(w.text, /简报·[^\n]*周工等分档门限/, '等我回复不进周报');
+});
+
+test('评测回传的路径抹掉用户名，临时目录是 8.3 短名时也一样', () => {
+  const bench = fs.readFileSync(path.join(__dirname, '../core/company-assistant/answer-bench.js'), 'utf8');
+  assert.match(bench, /out: maskPath\(OUT\)/);
+  const src = bench.match(/const maskPath = (p => [\s\S]+?);\r?\n/)[1];
+  const W = (...parts) => parts.join(String.fromCharCode(92)); // Windows 路径，避开反斜杠转义
+  const maskPath = new Function('os', 'HOME', 'return ' + src)({ tmpdir: () => W('C:', 'Users', 'abcdef123', 'AppData', 'Local', 'Temp') }, W('C:', 'Users', 'abcdef123'));
+  assert.equal(maskPath(W('C:', 'Users', 'ABCDEF~1', 'AppData', 'Local', 'Temp', 'assistant-bench-x')), W('%TEMP%', 'assistant-bench-x'));
+  assert.equal(maskPath(W('C:', 'Users', 'abcdef123', 'AppData', 'Local', 'Temp', 'b')), W('%TEMP%', 'b'));
+  assert.equal(maskPath(W('C:', 'Users', 'abcdef123', '.ai-hub-community')), W('%USERPROFILE%', '.ai-hub-community'));
 });

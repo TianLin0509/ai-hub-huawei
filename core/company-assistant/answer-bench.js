@@ -4,20 +4,32 @@
 const fs = require('fs'), path = require('path'), os = require('os'), { spawn, execFileSync } = require('child_process');
 const D = require('./data'), B = require('./brief'), A = require('./answer-context');
 
-const argv = process.argv.slice(2), opt = (k, d) => { const i = argv.indexOf('--' + k); return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[i + 1] : d; }, flag = k => argv.includes('--' + k);
+// 参数写成「--名字 值」或「--名字=值」都行（值以 -- 开头时只能用后一种，如 --extra=--foo）。
+const argv = process.argv.slice(2), opt = (k, d) => {
+  const eq = argv.find(a => a.startsWith('--' + k + '=')); if (eq) return eq.slice(k.length + 3);
+  const i = argv.indexOf('--' + k); return i >= 0 && argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[i + 1] : d;
+}, flag = k => argv.includes('--' + k);
 const HOME = process.env.USERPROFILE || os.homedir();
 const DIR = opt('dir', process.env.CLAUDE_HUB_ASSISTANT_DIR || path.join(HOME, '.ai-hub-community', 'company-assistant'));
 const CLI = opt('cli', 'codeagent');
-const MODELS = opt('models', CLI === 'claude' ? 'haiku,haiku' : 'GLM-5.2-WX-Auto,deepseek-v4.1-flash-1017').split(',');
-const JUDGE = opt('judge-model', MODELS[0]);
-const VARIANTS = opt('variants', 'A,B,C').split(',');
+// 预检后会改：账号上没有的模型自动换成能用的（公司 CodeAgent 会话开在只有 DeepSeek 的号上时，GLM 会报「不存在」）。
+let MODELS = opt('models', CLI === 'claude' ? 'haiku,haiku' : 'GLM-5.2-WX-Auto,deepseek-v4.1-flash-1017').split(',').filter(Boolean);
+let JUDGE = opt('judge-model', MODELS[0]);
+let VARIANTS = opt('variants', 'A,B,C').split(',');
 const PAR = Math.max(1, Number(opt('parallel', 2)));
 const PICK = opt('questions', 'all');
 const OUT = opt('out', path.join(os.tmpdir(), 'assistant-bench-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)));
 const TIMEOUT = Number(opt('timeout', 240)) * 1000;
 const EXTRA = (opt('extra', '') || '').split(' ').filter(Boolean);
+// 思考档（CodeAgent 的 --effort：low / medium / high / max）。--effort 管全部调用；--c-effort、--c-model 只管 C，
+// 例如 --c-effort low：C 和 B 用同一个模型、同一份提问，只把思考档调低，比速度和质量（公司 GLM 起步慢，主要花在想上）。
+const EFFORT = opt('effort', ''), C_EFFORT = opt('c-effort', ''), C_MODEL = opt('c-model', '');
+let C_CFG = null; // 预检后定：{ model, effort }
 
 const log = (...a) => console.error('[bench]', ...a);
+// 回传的路径不带用户名：临时目录可能是 8.3 短名（C:\Users\ABCDEF~1\…），和 USERPROFILE 对不上，按目录结构一起抹（Q-1107-22 带回过短名）。
+const maskPath = p => String(p || '').replace(os.tmpdir(), '%TEMP%').replace(HOME, '%USERPROFILE%')
+  .replace(/^[A-Za-z]:[\\/]Users[\\/][^\\/]+[\\/]AppData[\\/]Local[\\/]Temp/i, '%TEMP%').replace(/^[A-Za-z]:[\\/]Users[\\/][^\\/]+/i, '%USERPROFILE%');
 
 // ---- 现版（5.5.13）规则原文；第 3 条的工具换成读本地文件（评测里两版用同一套兜底，公平） ----
 const DESK_RULES = [
@@ -39,7 +51,7 @@ const newRules = () => A.ASK_RULES.replace('{{TOOLS}}', FILES);
 // ---- 数据 ----
 const readJson = (f, d) => { try { return JSON.parse(fs.readFileSync(path.join(DIR, f), 'utf8')); } catch { return d; } };
 const raws = fs.readdirSync(DIR).filter(f => /^raw-\d{4}-\d\d-\d\d\.json$/.test(f)).sort();
-if (!raws.length) { console.log(JSON.stringify({ ok: false, error: '没有找到 raw-日期.json 快照', dir: DIR.replace(HOME, '%USERPROFILE%') })); process.exit(1); }
+if (!raws.length) { console.log(JSON.stringify({ ok: false, error: '没有找到 raw-日期.json 快照', dir: maskPath(DIR) })); process.exit(1); }
 const full = readJson(raws[raws.length - 1]);
 const DAY = raws[raws.length - 1].slice(4, 14);
 // 模拟「现在」：今天 13:00 之后开始的第一场会前 40 分钟（会前准备才有意义）；没有就用快照时间。之后的消息和邮件截掉。
@@ -55,7 +67,7 @@ const settings = { lookbackHours: 36, keywords: [], ...readJson('settings.json',
 const owner = snap.login?.uid || 'local';
 const memory = (readJson('memory.json', { items: [] }).items || []).filter(x => !x.deletedAt && (!x.owner || x.owner === owner) && (!x.expiresAt || x.expiresAt > NOW));
 const commitments = (readJson('state.json', {}).commitments || []);
-const days = raws.slice(-7).reverse().map(f => ({ day: f.slice(4, 14), snapshot: f === raws[raws.length - 1] ? snap : readJson(f, null) })).filter(d => d.snapshot);
+const days = raws.slice(-7).reverse().map(f => ({ day: f.slice(4, 14), snapshot: f === raws[raws.length - 1] ? snap : readJson(f, null), brief: readJson(`brief-${f.slice(4, 14)}.json`, null) })).filter(d => d.snapshot);
 
 // 记忆（现版：问题匹配 6 条 + 最新偏好 2 条，≤1120 字）
 const mterms = t => { const s = String(t || '').toLowerCase(); const tk = s.match(/[a-z0-9_]{2,}|[㐀-鿿]+/g) || []; return [...new Set(tk.flatMap(x => /^[㐀-鿿]+$/.test(x) && x.length > 2 ? [x, ...Array.from({ length: x.length - 1 }, (_, i) => x.slice(i, i + 2))] : [x]))]; };
@@ -110,25 +122,47 @@ function prompt(variant, item) {
 // ---- 运行 CodeAgent / Claude ----
 let HELP = '';
 const supports = f => !HELP || HELP.includes(f);
-function cliArgs(model, maxTurns) {
+function cliArgs(model, maxTurns, effort = EFFORT) {
   const a = ['-p'];
   if (supports('--output-format')) a.push('--output-format', HELP && !HELP.includes('stream-json') ? 'json' : 'stream-json');
   if (supports('--verbose')) a.push('--verbose');
   a.push('--model', model);
   if (supports('--max-turns')) a.push('--max-turns', String(maxTurns));
+  if (effort && supports('--effort')) a.push('--effort', effort);
   if (supports('--allowedTools')) a.push('--allowedTools', 'Read,Grep,Glob');
   return [...a, ...EXTRA.filter(supports)];
 }
 async function preflight() {
   try { HELP = execFileSync(CLI, ['--help'], { encoding: 'utf8', shell: process.platform === 'win32', windowsHide: true, timeout: 60000 }); } catch (e) { HELP = String(e.stdout || ''); }
-  const r = await run('只回复两个字母：OK', MODELS[0], path.join(OUT, 'ws'), 1);
-  return { ok: r.ok && /ok/i.test(r.text), wallS: r.wallS, text: D.short(r.text, 40), error: r.error, args: cliArgs(MODELS[0], 1).join(' '),
-    flags: ['--output-format', 'stream-json', '--verbose', '--max-turns', '--allowedTools'].filter(f => HELP.includes(f)) };
+  // 每个要用的模型（和 C 的思考档）都先试一次：能用的留下，不能用的换掉，而不是第一个不能用就整场退出。
+  const key = (m, e) => m + '|' + (e || ''), combos = new Map();
+  for (const m of [...MODELS, JUDGE]) combos.set(key(m, EFFORT), { m, e: EFFORT });
+  // C：指定了 --c-model 用它；只指定 --c-effort 时和 B 同一个模型；都没指定时用第二个模型。
+  const cWant = { m: C_MODEL || (C_EFFORT ? MODELS[0] : MODELS[1] || MODELS[0]), e: C_EFFORT || EFFORT };
+  if (VARIANTS.includes('C')) combos.set(key(cWant.m, cWant.e), cWant);
+  const tried = {};
+  for (const { m, e } of combos.values()) { const r = await run('只回复两个字母：OK', m, path.join(OUT, 'ws'), 1, e); tried[key(m, e)] = { ok: r.ok && /ok/i.test(r.text), wallS: r.wallS, text: D.short(r.text, 40), error: r.error }; }
+  const okm = m => !!tried[key(m, EFFORT)]?.ok;
+  const usable = [...new Set([...MODELS, JUDGE])].filter(okm), [c0] = combos.values(), first = tried[key(c0.m, c0.e)];
+  const res = { ok: usable.length > 0, wallS: first.wallS, text: first.text, error: first.error, args: cliArgs(c0.m, 1, c0.e).join(' '), usable,
+    unavailable: [...combos.values()].filter(x => !tried[key(x.m, x.e)].ok).map(x => ({ model: x.m, effort: x.e || '', text: tried[key(x.m, x.e)].text, error: D.short(tried[key(x.m, x.e)].error, 120) })),
+    flags: ['--output-format', 'stream-json', '--verbose', '--max-turns', '--effort', '--allowedTools'].filter(f => HELP.includes(f)) };
+  if (!res.ok) return res;
+  const pickedA = usable.includes(MODELS[0]) ? MODELS[0] : usable[0];
+  if (pickedA !== MODELS[0]) log(`模型 ${MODELS[0]} 在本账号不可用，A/B 改用 ${pickedA}`);
+  if (VARIANTS.includes('C')) {
+    const cOk = !!tried[key(cWant.m, cWant.e)]?.ok, same = cWant.m === pickedA && (cWant.e || '') === (EFFORT || '');
+    if (cOk && !same) C_CFG = { model: cWant.m, effort: cWant.e || '' };
+    else { VARIANTS = VARIANTS.filter(v => v !== 'C'); log(cOk ? 'C 和 B 的模型、思考档都一样，跳过 C' : `C（${cWant.m}${cWant.e ? ' · 思考档 ' + cWant.e : ''}）不可用，跳过 C`); }
+  }
+  MODELS = [pickedA];
+  if (!usable.includes(JUDGE)) JUDGE = pickedA;
+  return res;
 }
-function run(text, model, cwd, maxTurns = 8) {
+function run(text, model, cwd, maxTurns = 8, effort = EFFORT) {
   return new Promise(resolve => {
     const t0 = Date.now(); let buf = '', raw = '', ttft = null, tools = 0, result = null, lastText = '', err = '';
-    const child = spawn(CLI, cliArgs(model, maxTurns), { cwd, shell: process.platform === 'win32', windowsHide: true, env: { ...process.env } });
+    const child = spawn(CLI, cliArgs(model, maxTurns, effort), { cwd, shell: process.platform === 'win32', windowsHide: true, env: { ...process.env } });
     const timer = setTimeout(() => { try { process.platform === 'win32' ? execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }) : child.kill('SIGKILL'); } catch {} }, TIMEOUT);
     child.stdout.on('data', d => {
       buf += d; raw += d; let i;
@@ -195,9 +229,9 @@ function parseJudge(t) { const m = String(t).match(/\{[\s\S]*\}/); try { return 
   if (!pre.ok) { console.log(JSON.stringify({ ok: false, stage: 'preflight', pre })); process.exit(2); }
   for (const it of QUESTIONS) it.material =A.buildMaterial(it.q, snap, { action: it.action, now: NOW, settings, memory, commitments, digest: DIGEST, days }).text;
   const plan = [];
-  for (const it of QUESTIONS) for (const v of VARIANTS) plan.push({ it, v, model: v === 'C' ? (MODELS[1] || MODELS[0]) : MODELS[0] });
+  for (const it of QUESTIONS) for (const v of VARIANTS) plan.push({ it, v, model: v === 'C' ? C_CFG.model : MODELS[0], effort: v === 'C' ? C_CFG.effort : EFFORT });
   log(`快照 ${raws[raws.length - 1]}，模拟时间 ${D.displayTime(NOW)}，问题 ${QUESTIONS.length} 个 × 版本 ${VARIANTS.join('/')}，并行 ${PAR}`);
-  const runs = await pool(plan.map(p => async () => { const text = prompt(p.v, p.it); const r = await run(text, p.model, path.join(OUT, 'ws')); log(p.it.id, p.v, r.wallS + 's', r.ok ? '' : r.error); return { ...p, promptChars: text.length, r, m: metrics(p.it, r) }; }), PAR);
+  const runs = await pool(plan.map(p => async () => { const text = prompt(p.v, p.it); const r = await run(text, p.model, path.join(OUT, 'ws'), 8, p.effort); log(p.it.id, p.v, r.wallS + 's', r.ok ? '' : r.error); return { ...p, promptChars: text.length, r, m: metrics(p.it, r) }; }), PAR);
   // 盲评：每题 A↔B、B↔C 各正反两次
   const judgePlan = [];
   for (const it of QUESTIONS) for (const [x, y] of [['A', 'B'], ['B', 'C']]) {
@@ -208,7 +242,7 @@ function parseJudge(t) { const m = String(t).match(/\{[\s\S]*\}/); try { return 
   const judges = await pool(judgePlan.map(j => async () => { const r = await run(judgePrompt(j.it, j.a.r.text, j.b.r.text), JUDGE, path.join(OUT, 'ws'), 1); const p = parseJudge(r.text); return { ...j, p, wallS: r.wallS }; }), PAR);
   // 汇总（只数字）
   const med = xs => { const a = xs.filter(Number.isFinite).sort((p, q) => p - q); return a.length ? a[Math.floor((a.length - 1) / 2)] : null; };
-  const byVar = Object.fromEntries(VARIANTS.map(v => { const rs = runs.filter(r => r.v === v); return [v, { model: rs[0]?.model, n: rs.length, ok: rs.filter(r => r.r.ok).length,
+  const byVar = Object.fromEntries(VARIANTS.map(v => { const rs = runs.filter(r => r.v === v); return [v, { model: rs[0]?.model, effort: rs[0]?.effort || '', n: rs.length, ok: rs.filter(r => r.r.ok).length,
     wallMedS: med(rs.map(r => r.r.wallS)), wallMaxS: Math.max(...rs.map(r => r.r.wallS)), ttftMedS: med(rs.map(r => r.r.ttftS)), toolsAvg: +(rs.reduce((s, r) => s + r.r.tools, 0) / Math.max(1, rs.length)).toFixed(2),
     promptCharsMed: med(rs.map(r => r.promptChars)), inTokMed: med(rs.map(r => r.r.inTok)), outTokMed: med(rs.map(r => r.r.outTok)), charsMed: med(rs.map(r => r.m.chars)),
     badCites: rs.reduce((s, r) => s + r.m.badCites, 0), cites: rs.reduce((s, r) => s + r.m.cites, 0), conclusionFirst: rs.filter(r => r.m.conclusionFirst).length,
@@ -225,13 +259,13 @@ function parseJudge(t) { const m = String(t).match(/\{[\s\S]*\}/); try { return 
   for (const s of Object.values(pairs)) for (const k of Object.keys(s.scores)) s.scores[k] = s.scores[k].length ? +(s.scores[k].reduce((a, b) => a + b, 0) / s.scores[k].length).toFixed(1) : null;
   const perQ = QUESTIONS.map(it => ({ id: it.id, intents: (it.intents || []).join('+'), ...Object.fromEntries(runs.filter(r => r.it === it).map(r => [r.v, { s: r.r.wallS, tools: r.r.tools, chars: r.m.chars, cov: r.m.coverage, bad: r.m.badCites, first: r.m.conclusionFirst ? 1 : 0 }])),
     judge: judges.filter(j => j.it === it).map(j => j.pair + j.order + ':' + (j.p ? (j.p.better === 'tie' ? 'tie' : j.p.better === 'A' ? (j.order === 'xy' ? j.pair[0] : j.pair[1]) : (j.order === 'xy' ? j.pair[1] : j.pair[0])) : '?')).join(' ') }));
-  const summary = { ok: true, pre: { wallS: pre.wallS, args: pre.args }, snapshot: raws[raws.length - 1], simNow: D.displayTime(NOW), data: { convs: (snap.conversations || []).length, msgs: Object.values(snap.messages || {}).flat().length, meetings: dayMeetings.length, mails: (snap.mails || []).length, memory: memory.length, groupChosen: !!GROUP },
-    variants: byVar, judge: pairs, perQuestion: perQ, out: OUT.replace(HOME, '%USERPROFILE%') };
+  const summary = { ok: true, pre: { wallS: pre.wallS, args: pre.args, models: MODELS, judge: JUDGE, effort: EFFORT, c: C_CFG, unavailable: pre.unavailable.map(x => x.model + (x.effort ? '·' + x.effort : '')) }, snapshot: raws[raws.length - 1], simNow: D.displayTime(NOW), data: { convs: (snap.conversations || []).length, msgs: Object.values(snap.messages || {}).flat().length, meetings: dayMeetings.length, mails: (snap.mails || []).length, memory: memory.length, groupChosen: !!GROUP },
+    variants: byVar, judge: pairs, perQuestion: perQ, out: maskPath(OUT) };
   fs.writeFileSync(path.join(OUT, 'summary.json'), JSON.stringify(summary, null, 1), 'utf8');
   // 本机对照页（完整回答，只留在这台电脑）
   const esc = s => String(s || '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
   const html = `<!doctype html><meta charset="utf-8"><title>助理作答对照</title><style>body{font:14px/1.6 "Microsoft YaHei",sans-serif;background:#f4f5f7;color:#1f2329;margin:24px}h2{margin-top:32px}.row{display:grid;grid-template-columns:repeat(${VARIANTS.length},1fr);gap:12px}.c{background:#fff;border:1px solid #e3e5e8;border-radius:8px;padding:12px;white-space:pre-wrap}.m{color:#646a73;font-size:12px;margin-bottom:6px}</style>
-<h1>助理作答对照（${esc(raws[raws.length - 1])}，模拟时间 ${esc(D.displayTime(NOW))}）</h1><p>A = 现版提示；B = 作答手册 + Hub 备好的材料（${esc(MODELS[0])}）；C = 同 B，模型 ${esc(MODELS[1] || MODELS[0])}。</p>` +
+<h1>助理作答对照（${esc(raws[raws.length - 1])}，模拟时间 ${esc(D.displayTime(NOW))}）</h1><p>A = 现版提示；B = 作答手册 + Hub 备好的材料（${esc(MODELS[0])}）${C_CFG ? `；C = 同 B，模型 ${esc(C_CFG.model)}${C_CFG.effort ? '，思考档 ' + esc(C_CFG.effort) : ''}` : ''}。</p>` +
     QUESTIONS.map(it => `<h2>${esc(it.q)}</h2><div class="row">${VARIANTS.map(v => { const r = runs.find(x => x.it === it && x.v === v); return `<div class="c"><div class="m">${v} · ${r.r.wallS}s · 工具 ${r.r.tools} 次 · ${r.m.chars} 字${r.r.ok ? '' : ' · 失败：' + esc(r.r.error)}</div>${esc(r.r.text)}</div>`; }).join('')}</div>`).join('');
   fs.writeFileSync(path.join(OUT, 'report.html'), html, 'utf8');
   console.log(JSON.stringify(summary));

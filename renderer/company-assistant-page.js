@@ -304,10 +304,12 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
   }
   function todayItem(i, key, day, state) {
     const tags = [state === 'next' ? '<span class="ca-ti-tag next">下一场</span>' : state === 'live' ? '<span class="ca-ti-tag next">进行中</span>' : '',
-      i.merged ? `<span class="ca-ti-tag">${esc(i.mergedLabel || 'WeLink + 日历')}</span>` : '', i.guess ? '<span class="ca-ti-tag amber">推测</span>' : '', i.due ? `<span class="ca-ti-tag red">截止 ${esc(i.due)}</span>` : ''].join('');
+      i.merged ? `<span class="ca-ti-tag">${esc(i.mergedLabel || 'WeLink + 日历')}</span>` : '', i.guess ? '<span class="ca-ti-tag amber">推测</span>' : '', i.due ? `<span class="ca-ti-tag red">截止 ${esc(i.due)}</span>` : '',
+      i.settledLabel ? `<span class="ca-ti-tag">${esc(i.settledLabel)}</span>` : ''].join('');
     // 会议行的出处标签（「会议 · 04:08 方案评审」）和正文重复，不再列。
     const label = i.sourceLabel && i.sourceLabel !== '查看出处' && !(key === 'meetings' && /^(会议|日程) · /.test(i.sourceLabel)) ? i.sourceLabel : '';
-    const sub = [label ? esc(label) : '', state === 'past' ? '已结束' : ''].filter(Boolean).join(' · ');
+    // 等我回复用了 AI 的「事 → 建议」写法时，已等多久放在小字里（2026-11-07）。
+    const sub = [label ? esc(label) : '', i.waited ? esc(i.waited) : '', state === 'past' ? '已结束' : ''].filter(Boolean).join(' · ');
     // 会议行：后端给了紧凑字段（when / subject / location）就排成「时间加粗 + 主题」一行、地点小字一行；没有就退回整段 text（去掉日期与时区）。
     const compact = key === 'meetings' && i.subject && i.when;
     const text = key === 'meetings' ? shortMeetingText(i.text) : i.text;
@@ -392,7 +394,8 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
         answer = `<div class="ca-turn-error"><span>没答上：${esc(c.error || '原因未知')}</span><button type="button" class="ca-btn small" data-ca="retry:${esc(id)}">重问</button></div>`;
         meta = c.askedAt ? `<time>${when(c.askedAt)}</time>` : '';
       } else {
-        const label = c.state === 'queued' ? '排队中' : '正在查…';
+        const guide = c.state === 'running' && c.guide?.kinds?.length ? `按「${c.guide.kinds.join('、')}」作答${c.guide.items ? ` · 已备好材料 ${c.guide.items} 条` : ''} · 正在写…` : '';
+        const label = c.state === 'queued' ? '排队中' : esc(guide) || '正在查…';
         const from = c.state === 'running' && c.startedAt ? c.startedAt : c.askedAt;
         const since = from ? `<span>${c.state === 'queued' ? '已等' : '已用'} <span data-since="${Number(from)}">${secondsText(Date.now() - from)}</span></span>` : '';
         answer = `<div class="ca-think"><span class="ca-dots"><i></i><i></i><i></i></span>${label}</div>`;
