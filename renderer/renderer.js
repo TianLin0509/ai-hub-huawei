@@ -2704,6 +2704,8 @@ function syncTurnPresentationToSession(sessionId, presentation, turn) {
 const { createCardFollowScroll } = require('./card-follow-scroll');
 const cardFollowScroll = createCardFollowScroll({ element: document.getElementById('msg-overlay'), window, document });
 require('./turn-error-help').install({ document, window, ipcRenderer });
+// 统一错误卡与一键求助（5.5.24）：window.HubErrorCard / window.HubAssist，见 hub-error-card.js。
+require('./hub-error-card').install({ document, window, ipcRenderer, sessionKind: id => sessions.get(id)?.kind });
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => require('./composer-enter-key').bindSetting({ document, storage: localStorage }), { once: true });
 else require('./composer-enter-key').bindSetting({ document, storage: localStorage });
 const turnCardRenderer = createTurnCardRenderer({
@@ -7713,6 +7715,7 @@ const renderAccountUsage = accountUsageController.render;
       claudeQuotaPanel = require('./codeagent-quota-panel.js').createCodeAgentQuotaPanel({
         document, root: panelRoot, ipcRenderer, storage: window.localStorage,
         getPlacement: () => codeagentQuotaPlacement.get(),
+        setPlacement: value => codeagentQuotaPlacement.set(value),
         footerRoot: document.getElementById('rail-codeagent-quota'),
         getCurrentModel: () => {
           const session = activeSessionId ? sessions.get(activeSessionId) : null;
@@ -8289,9 +8292,11 @@ function ptyToolQuestionText(toolName, toolInput) {
 
 // renderer 里有 14 处调用 showToast，却一直没有定义（调用即 ReferenceError，
 // 之前只在少见的原生分支里，没人撞上）。复用群聊分叉已有的轻提示。
+// 错误类（5.5.24）：2.6 秒来不及读，改成停留 8 秒、悬停不消失，带「详情」可展开成错误卡（含求助按钮）。
 function showToast(message, level) {
   if (message === '已停止') return require('./composer-codeagent-input').showStopToast(document, message);
-  require('./groupchat-fork-ui.js').showForkToast(document, String(message || ''), level === 'error' ? 'error' : 'info');
+  if (level === 'error') return require('./hub-error-card').showErrorToast(document, String(message || ''));
+  require('./groupchat-fork-ui.js').showForkToast(document, String(message || ''), 'info');
 }
 
 // CodeAgent 回答里出现了新的模型名（例如公司的 deepseek… 内部名）：加进模型菜单和新建会话的选项。

@@ -5,7 +5,7 @@ const STORAGE_KEY = 'hubClaudeQuotaPanel';
 
 function createCodeAgentQuotaPanel({ document, root, window = document.defaultView, ipcRenderer,
   storage = null, getCurrentAccountId = () => '', getCurrentModel = () => '', openAccounts = () => {}, now = Date.now,
-  getPlacement = () => 'right', footerRoot = null,
+  getPlacement = () => 'right', setPlacement = () => {}, footerRoot = null,
   setIntervalFn = setInterval, clearIntervalFn = clearInterval } = {}) {
   if (!document || !root || !ipcRenderer) throw new Error('CodeAgent quota panel needs its document, root and IPC');
   const setup = require('./codeagent-setup').createCodeAgentSetup({ document, ipcRenderer });
@@ -29,9 +29,11 @@ function createCodeAgentQuotaPanel({ document, root, window = document.defaultVi
   function render() {
     if (disposed) return;
     const current = view();
-    // 去重后多于一个号才有额度栏（含收起态）；放在底栏时右侧不显示。安装说明的入口在账号页和主页。
+    // 去重后多于一个号才有右侧额度栏（含收起态）；放在底栏时右侧不显示。安装说明的入口在账号页和主页。
+    // 只有 1 个号时没有右侧栏，底栏照样显示它的三档额度（2026-11-07），否则单号用户哪里都看不到额度。
     const placement = getPlacement();
-    const inFooter = !!footerRoot && current.visible && placement === 'bottom';
+    const single = !current.visible && current.rows.length === 1 && current.installed !== false;
+    const inFooter = !!footerRoot && (single || (current.visible && placement === 'bottom'));
     if (footerRoot) {
       footerRoot.hidden = !inFooter;
       const footerHtml = inFooter ? renderQuotaFooter(current, { now: now() }) : '';
@@ -122,6 +124,8 @@ function createCodeAgentQuotaPanel({ document, root, window = document.defaultVi
     if (action === 'install-guide') { setup.showGuide(); return; }
     if (action === 'refresh') { void refresh(); return; }
     if (action === 'expand' || action === 'collapse') { fold(action === 'collapse', true); return; }
+    // 「移到底栏 / 移回右侧」和设置页的下拉是同一个开关（codeagent-quota-placement）。
+    if (action === 'to-bottom' || action === 'to-right') { clearTip(); setPlacement(action === 'to-bottom' ? 'bottom' : 'right'); render(); return; }
     clearTip(); if (narrow) fold(true);
     void openAccounts(snapshot?.shared ? undefined : target.dataset.qpAccount || undefined);
   }

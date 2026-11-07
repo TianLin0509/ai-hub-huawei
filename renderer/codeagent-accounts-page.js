@@ -13,6 +13,9 @@ async function accountCommand(ipcRenderer, action, { id, note, dir, hours } = {}
 }
 function createCodeagentAccountsPage({ document, window = document.defaultView, ipcRenderer, configModal, closeOtherPanels = () => {}, openSession = () => {}, notify = () => {} }) {
   const setup = require('./codeagent-setup').createCodeAgentSetup({ document, ipcRenderer });
+  // 本机装了多个版本的 CodeAgent（2026-11-07）：页头下方一行提示，点开是版本选择器（renderer/tool-version-picker.js）。
+  const toolPicker = require('./tool-version-picker').createToolVersionPicker({ document, ipcRenderer });
+  document.addEventListener('tool-version-changed', e => { if (e.detail?.tool === 'codeagent') { state.toolChoice = e.detail.summary; void setup.refresh().then(() => refresh()); } });
   let page, pool = null, timer, revision = 0, disposed = false, pending = null, scanDue = false;
   let locateId = '', locateUntil = 0, locateTimer;
   const state = { local: [], probing: new Set(), queue: [], drawer: false, note: '', menu: '', sub: false, filter: 'all', loading: false, busy: false, message: '' };
@@ -39,6 +42,9 @@ function createCodeagentAccountsPage({ document, window = document.defaultView, 
       if (local.innerHTML !== updated.innerHTML) local.innerHTML = updated.innerHTML;
       drawer.querySelector('[data-ca="add"]').disabled = !!state.busy;
     }
+    const hint = toolPicker.hintHtml(state.toolChoice);
+    page.querySelector('[data-tvp-slot]')?.remove();
+    if (hint) page.querySelector('.caa-page-head')?.insertAdjacentHTML('afterend', `<div data-tvp-slot>${hint}</div>`);
     if (Date.now() < locateUntil) locatedRow()?.classList.add('is-located');
     // 号池内网共享卡片（renderer/lan-pool-settings.js）：主机看同事用量，同事看共享号额度。
     window.__lanPoolMountAccount?.(page.querySelector('.caa-page'));
@@ -76,7 +82,9 @@ function createCodeagentAccountsPage({ document, window = document.defaultView, 
     state.loading = true; render();
     const operation = (async () => {
       try {
-        const [status, local] = await Promise.all([accountCommand(ipcRenderer, 'refresh'), scanDue ? ipcRenderer.invoke('codeagent-pool:local').catch(error => ({ ok: false, error: error.message })) : null]);
+        const [status, local, choice] = await Promise.all([accountCommand(ipcRenderer, 'refresh'), scanDue ? ipcRenderer.invoke('codeagent-pool:local').catch(error => ({ ok: false, error: error.message })) : null,
+          ipcRenderer.invoke('tool-discovery:list', { tool: 'codeagent' }).catch(() => null)]);
+        if (choice && choice.ok !== false) state.toolChoice = choice;
         if (request !== revision || disposed) return;
         pool = status;
         if (local) scanDue = false;

@@ -48,7 +48,7 @@ test('单次写调用失去完整回执时保留部分产物标记，已确认�
 });
 test('Doctor 缺失时明确安装入口，不调用 Python', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-ppt-missing-'));
-  const doctor = new PptDoctor({ dir, settings: () => ({ ppt: { doctorExe: path.join(dir, 'missing.exe') } }) }, { pptDoctorSpawn() { throw new Error('must not spawn'); } });
+  const doctor = new PptDoctor({ dir, settings: () => ({ ppt: { doctorExe: path.join(dir, 'missing.exe') } }) }, { pptDoctorCandidates: [], pptDoctorSpawn() { throw new Error('must not spawn'); } });
   const status = await doctor.status(); assert.equal(status.state, 'missing'); assert.match(status.error, /安装/); assert.match(status.downloadUrl, /^https:/);
 });
 

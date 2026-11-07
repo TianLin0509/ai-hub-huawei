@@ -4,6 +4,15 @@ function createCompanyPptPage({ document, window, ipcRenderer, closeOtherPanels 
   const { pathToFileURL } = require('node:url');
   let page, status, timer, conversionId, chatId, md, searching = false, converting = false, candidates = [], selectedId = '', searched = false;
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  // 装了多个版本的 PPT Doctor（2026-11-07）：页头下方一行提示，点开是版本选择器（renderer/tool-version-picker.js）。
+  const toolPicker = require('./tool-version-picker').createToolVersionPicker({ document, ipcRenderer });
+  async function toolHint() {
+    const slot = page?.querySelector('[data-ppt-tool-hint]');
+    if (!slot) return;
+    try { const s = await ipcRenderer.invoke('tool-discovery:list', { tool: 'ppt-doctor' }); slot.innerHTML = s?.ok === false ? '' : toolPicker.hintHtml(s); }
+    catch { slot.innerHTML = ''; }
+  }
+  document.addEventListener('tool-version-changed', e => { if (e.detail?.tool === 'ppt-doctor' && page && !page.hidden) void call('ppt-status').then(r => renderStatus(r.ppt)).catch(error => notice(error.message)); });
   const fileUrl = file => file && require('node:path').isAbsolute(file) ? pathToFileURL(file).href : '';
   const call = async (action, data) => {
     const r = await ipcRenderer.invoke('company-assistant:' + action, data);
@@ -32,6 +41,7 @@ function createCompanyPptPage({ document, window, ipcRenderer, closeOtherPanels 
     page.innerHTML = `<header class="pptw-head"><h1>PPT</h1><span class="pptw-sub">查原稿，把图片变成可编辑页</span><div class="pptw-head-right" data-ppt-head-slot><details class="pptw-settings"><summary>素材库设置</summary><div class="pptw-settings-pop"><b>素材文件夹</b><div data-ppt-roots></div><p class="pptw-hint">旧的 Hub 索引保留可查；新增素材文件夹后，请点「更新索引」。</p><div class="pptw-actions"><button type="button" data-ppt="folders">选择素材文件夹…</button><button type="button" data-ppt="index">更新索引</button><button type="button" data-ppt="refresh">重新检查</button><button type="button" data-ppt="doctor">选择 Doctor 程序…</button><button type="button" data-ppt="pick-index">选择已有索引…</button><button type="button" data-ppt="download">镜像下载 / 升级 Doctor</button><button type="button" data-ppt="download-backup">GitHub 备用</button></div></div></details><div class="pptw-status" data-ppt-status role="status"></div></div></header>
       <div class="pptw-scroll"><div class="pptw-body">
       <div class="pptw-guide-slot" data-ppt-guide-slot></div>
+      <div class="pptw-tool-hint" data-ppt-tool-hint></div>
       <p data-ppt-notice class="pptw-notice" role="status" aria-live="polite"></p>
       <section class="pptw-workspace" data-ppt-search-panel><div class="pptw-main">
         <div class="pptw-hero"><h2>找一页讲过的 PPT</h2><p>搜标题、正文，或者直接描述“这页要讲清什么”</p></div>
@@ -76,13 +86,14 @@ function createCompanyPptPage({ document, window, ipcRenderer, closeOtherPanels 
     statusEl.classList.toggle('pptw-guide', !!p.error);
     if (p.error) statusEl.removeAttribute('title');
     const download = ['missing', 'upgrade'].includes(p.state);
-    statusEl.innerHTML = p.error ? `<span class="pptw-guide-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l9 5v8l-9 5-9-5V8z"/><path d="M12 8v8M8 10v4M16 10v4" class="cut"/></svg></span><div class="pptw-guide-copy"><strong>${esc(p.error)}</strong><p>PPT 检索和图片转可编辑都靠 PPT Doctor 在本机运行。</p></div>${download ? '<div class="pptw-guide-actions"><button type="button" class="pptw-btn pri" data-ppt="download">镜像下载 / 升级 Doctor</button><button type="button" class="pptw-btn sec" data-ppt="download-backup">GitHub 备用</button><button type="button" class="pptw-btn ghost" data-ppt="doctor">已有程序，手动指定</button></div>' : ''}` : `<i class="pptw-dot" aria-hidden="true"></i><span>${p.doctorVersion ? 'PPT Doctor ' + esc(p.doctorVersion) : 'PPT Doctor'} · ${p.available ? `${p.files || 0}份文稿 / ${p.pages || 0}页 · 索引更新 ${esc(at)}` : '请选择素材文件夹并更新索引'}${busy ? `<br>${esc(p.indexing.message || '正在更新索引…')}` : ''}</span>`;
+    statusEl.innerHTML = p.error ? `<span class="pptw-guide-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l9 5v8l-9 5-9-5V8z"/><path d="M12 8v8M8 10v4M16 10v4" class="cut"/></svg></span><div class="pptw-guide-copy"><strong>${esc(p.error)}</strong><p>PPT 检索和图片转可编辑都靠 PPT Doctor 在本机运行。</p></div>${window.HubErrorCard ? window.HubErrorCard.knownHtml({ area: 'ppt-doctor', title: p.error, details: p.detail || p.error }) + window.HubErrorCard.assistHtml({ area: 'ppt-doctor', title: p.error, details: p.detail || p.error }) : ''}${download ? '<div class="pptw-guide-actions"><button type="button" class="pptw-btn pri" data-ppt="download">镜像下载 / 升级 Doctor</button><button type="button" class="pptw-btn sec" data-ppt="download-backup">GitHub 备用</button><button type="button" class="pptw-btn ghost" data-ppt="doctor">已有程序，手动指定</button></div>' : ''}` : `<i class="pptw-dot" aria-hidden="true"></i><span>${p.doctorVersion ? 'PPT Doctor ' + esc(p.doctorVersion) : 'PPT Doctor'} · ${p.available ? `${p.files || 0}份文稿 / ${p.pages || 0}页 · 索引更新 ${esc(at)}` : '请选择素材文件夹并更新索引'}${busy ? `<br>${esc(p.indexing.message || '正在更新索引…')}` : ''}</span>`;
     page.querySelector('[data-ppt-roots]').textContent = (p.roots || []).join('；') || '尚未指定素材文件夹';
     page.querySelector('[data-ppt="index"]').disabled = busy || !p.roots?.length;
     page.querySelector('[data-ppt="folders"]').disabled = busy;
     const select = page.querySelector('[data-ppt-folder]'), previous = select.value, folders = [...new Set([...(p.folders || p.roots || []), ...(previous ? [previous] : [])])];
     select.innerHTML = '<option value="">全部素材文件夹</option>' + folders.map(folder => `<option value="${esc(folder)}">${esc(folder)}</option>`).join(''); select.value = previous;
     if (!p.error) statusEl.title = statusEl.textContent.trim();
+    void toolHint();
   }
   const folder = () => page.querySelector('[data-ppt-folder]').value;
   function inFolder(c) {

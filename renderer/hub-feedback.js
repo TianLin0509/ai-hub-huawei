@@ -53,13 +53,21 @@
     if (link) link.addEventListener('click', () => shell.showItemInFolder(link.dataset.hfOpen));
   }
 
-  async function open() {
+  // prefill.description：从错误卡「一键反馈」进来时预填现象、功能区和原始报错（5.5.24），用户可以改了再发。
+  // 正在发送时不覆盖；用户已经写了内容且没发出去时也不覆盖，只把新的报错接在后面。
+  async function open(prefill) {
     ensureDialog();
-    dialog.querySelector('[data-hf="send"]').disabled = false;
-    dialog.querySelector('[data-hf="send"]').textContent = '发送';
-    message('', '');
+    if (!sending) {
+      dialog.querySelector('[data-hf="send"]').disabled = false;
+      dialog.querySelector('[data-hf="send"]').textContent = '发送';
+      message('', '');
+    }
+    const desc = dialog.querySelector('[data-hf="desc"]');
+    const text = prefill && typeof prefill.description === 'string' ? prefill.description.trim() : '';
+    if (text && !sending) desc.value = desc.value.trim() && !desc.value.includes(text) ? desc.value.trimEnd() + '\n\n' + text : text;
     if (!dialog.open) dialog.showModal();
-    dialog.querySelector('[data-hf="desc"]').focus();
+    desc.focus();
+    if (text) { const at = desc.value.indexOf('（可以在这里补一句'); if (at >= 0) desc.setSelectionRange(at, desc.value.indexOf('）', at) + 1); }
     try {
       const p = await ipcRenderer.invoke('hub-feedback:preview', {});
       const items = (p && p.items) || [];

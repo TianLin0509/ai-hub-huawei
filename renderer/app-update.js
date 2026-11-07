@@ -179,7 +179,11 @@
     } else if (s.phase === 'applying') {
       body += '<div class="au-msg info">正在关闭并替换程序文件，完成后会自动重新打开…</div>';
     } else if (s.phase === 'error') {
-      body += `<div class="au-msg bad">${esc(s.error || '更新失败')}</div>`;
+      // 5.5.24：命中已知问题（如安装包校验失败、被公司网络拦截）直接给解法和一键按钮；悬停这条出现「问问 Agent」「一键反馈」。
+      const card = window.HubErrorCard;
+      const reasons = [...(s.attempts || []), ...(s.checks || [])].filter(a => a && a.reason).map(a => `${a.name || a.id || '更新源'}：${a.reason}`);
+      const ctx = { area: 'app-update', title: '一键更新没有完成', symptom: s.error || '更新失败', details: [s.error || '更新失败', ...reasons].join('\n') };
+      body += `<div class="au-msg bad">${card ? card.assistHtml(ctx) : ''}${esc(s.error || '更新失败')}</div>${card ? card.knownHtml(ctx) : ''}`;
       if (s.attempts && s.attempts.length) body += `<div class="au-section">各下载源的结果</div><ul class="au-sources">${sourceRows()}</ul>`;
       else if (s.checks && s.checks.length) body += `<div class="au-section">更新源</div><ul class="au-sources">${checkRows()}</ul>`;
       body += allowBox();

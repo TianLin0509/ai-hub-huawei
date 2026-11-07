@@ -1,0 +1,83 @@
+/* 统一错误卡与一键求助按钮（renderer/hub-error-card.js）。颜色走主题变量，深浅主题都能用；不做渐变和粗边框。 */
+.hub-err-card {
+  position: relative; margin: 6px 0; padding: 12px 14px 12px 15px; border-radius: var(--hw-r-sm, 10px);
+  border: 1px solid var(--border-subtle, rgba(24,36,49,.12)); border-left: 3px solid var(--hw-red, #cf0a2c);
+  background: var(--surface-raised, var(--hw-surface, #fff)); color: var(--fg-strong, inherit);
+  font-size: 13px; line-height: 1.6; text-align: left;
+}
+.hub-err-card[data-severity="warning"] { border-left-color: var(--hw-amber, #e8780c); }
+.hub-err-card[data-severity="info"] { border-left-color: var(--hw-brand, #0a59f7); }
+.hub-err-title { padding-right: 168px; font-size: 14px; font-weight: 600; color: var(--fg-strong, inherit); }
+.hub-err-cause { margin-top: 4px; color: var(--fg-muted, #5e6d7e); }
+.hub-err-steps { margin: 6px 0 0; padding-left: 20px; color: var(--fg-strong, inherit); }
+.hub-err-steps li { margin: 2px 0; }
+.hub-err-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.hub-err-btn { height: 28px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--border-subtle, rgba(24,36,49,.16));
+  background: transparent; color: var(--fg-strong, inherit); font: inherit; font-size: 12px; cursor: pointer; }
+.hub-err-btn.primary { background: var(--hw-brand, var(--brand, #0a59f7)); border-color: transparent; color: #fff; }
+.hub-err-btn:hover { border-color: var(--hw-brand, var(--brand, #0a59f7)); }
+.hub-err-btn:focus-visible, .hub-err-assist-btn:focus-visible, .hub-err-copy:focus-visible { outline: 2px solid var(--hw-brand, #0a59f7); outline-offset: 1px; }
+.hub-err-details { margin-top: 8px; font-size: 12px; color: var(--fg-muted, #5e6d7e); }
+.hub-err-details > summary { cursor: pointer; user-select: none; width: max-content; }
+.hub-err-details-body { position: relative; margin-top: 6px; }
+.hub-err-details pre { margin: 0; max-height: 220px; overflow: auto; padding: 8px 10px; padding-right: 56px; border-radius: 6px;
+  background: var(--surface-sunken, rgba(24,36,49,.05)); color: var(--fg-muted, #5e6d7e);
+  font: 12px/1.5 Consolas, "Cascadia Mono", monospace; white-space: pre-wrap; word-break: break-all; user-select: text; }
+.hub-err-copy { position: absolute; top: 6px; right: 6px; padding: 1px 8px; border-radius: 6px; border: 1px solid var(--border-subtle, rgba(24,36,49,.16));
+  background: var(--surface-raised, var(--hw-surface, #fff)); color: var(--fg-muted, #5e6d7e); font: inherit; font-size: 12px; cursor: pointer; }
+
+/* 求助按钮：平时看不见，悬停或键盘聚焦到这条报错时淡入；触屏没有悬停，直接常显。 */
+.hub-err-assist { display: inline-flex; gap: 2px; opacity: 0; transition: opacity var(--hw-t-base, 200ms) ease; }
+.hub-err-card > .hub-err-assist { position: absolute; top: 8px; right: 8px; }
+.hub-err-card:hover > .hub-err-assist, .hub-err-card:focus-within > .hub-err-assist,
+.hub-err-assist-host:hover .hub-err-assist, .hub-err-assist-host:focus-within .hub-err-assist,
+[data-hub-err-hover]:has(> :hover) .hub-err-assist { opacity: 1; }
+@media (hover: none) { .hub-err-assist { opacity: 1; } }
+.hub-err-assist-btn { padding: 2px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--hw-brand, var(--brand, #0a59f7));
+  font: inherit; font-size: 12px; line-height: 20px; cursor: pointer; white-space: nowrap; }
+.hub-err-assist-btn:hover:not(:disabled) { background: var(--hw-brand-soft, rgba(10,89,247,.1)); }
+.hub-err-assist-btn:disabled { color: var(--fg-muted, #8a96a3); cursor: not-allowed; opacity: .7; }
+.hub-err-assist-host { display: inline-flex; }
+
+/* 嵌在现有提示里的位置 */
+.hub-dialog .hub-err-assist-host { position: absolute; top: 14px; right: 14px; }
+.hub-dialog[data-hub-err-hover] { position: relative; }
+.turn-error-help { position: relative; }
+.turn-error-help .teh-title { padding-right: 168px; }
+.turn-error-help > .hub-err-assist-host { position: absolute; top: 8px; right: 8px; }
+.turn-error-help:hover .hub-err-assist, .turn-error-help:focus-within .hub-err-assist { opacity: 1; }
+.au-msg.bad { position: relative; }
+.au-msg.bad > .hub-err-assist-host { float: right; margin: -2px -4px 0 8px; }
+.au-msg.bad:hover .hub-err-assist, .au-msg.bad:focus-within .hub-err-assist { opacity: 1; }
+.hub-sticky-notice:hover .hub-err-assist, .hub-sticky-notice:focus-within .hub-err-assist { opacity: 1; }
+.hub-sticky-notice .hub-err-assist-host { display: flex; margin-top: 4px; }
+#new-session-error .hub-err-card { margin: 0; }
+#new-session-error:has(.hub-err-card) { padding: 0; border: 0; background: transparent; }
+
+/* 错误轻提示：底部居中，停留 8 秒、悬停时不消失；「详情」展开成错误卡。 */
+.hub-err-toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 100000; width: max-content; max-width: min(560px, 92vw);
+  padding: 10px 12px 10px 15px; border-radius: 10px; background: var(--hw-surface, #fff); color: var(--fg-strong, #182431);
+  border-left: 3px solid var(--hw-red, #cf0a2c); box-shadow: 0 8px 28px rgba(0,0,0,.18); font: 13px/1.55 var(--hw-font, "Microsoft YaHei", sans-serif); }
+.hub-err-toast-row { display: flex; align-items: flex-start; gap: 8px; }
+.hub-err-toast-text { flex: 1; white-space: pre-line; overflow-wrap: anywhere; max-height: 30vh; overflow: auto; }
+.hub-err-toast-btn { flex: none; padding: 0 8px; border: 1px solid var(--border-subtle, rgba(24,36,49,.16)); border-radius: 6px; background: transparent;
+  color: var(--fg-muted, #5e6d7e); font: inherit; font-size: 12px; line-height: 22px; cursor: pointer; }
+.hub-err-toast.expanded { width: min(560px, 92vw); }
+.hub-err-toast.expanded .hub-err-toast-text { display: none; }
+.hub-err-toast.expanded .hub-err-toast-row { justify-content: flex-end; }
+.hub-err-toast .hub-err-card { margin: 4px 0 0; }
+
+/* 已知问题：标题下直接给解法（core/known-issues.js），浅蓝底一行，能一键做的按钮跟在后面。 */
+.hub-err-known { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin-top: 6px; padding: 7px 10px; border-radius: 8px;
+  background: var(--hw-brand-soft, rgba(10,89,247,.08)); color: var(--fg-strong, inherit); font-size: 13px; line-height: 1.6; text-align: left; }
+.hub-err-known-tag { flex: none; font-size: 12px; font-weight: 600; color: var(--hw-brand, var(--brand, #0a59f7)); }
+.hub-err-known-text { flex: 1 1 240px; }
+.hub-err-known-actions { flex: none; }
+.hub-dialog .hub-err-known { margin: 0 0 12px; }
+.au-msg.bad + .hub-err-known, .hub-sticky-notice .hub-err-known { margin-top: 6px; }
+.pptw-guide:hover .hub-err-assist, .pptw-guide:focus-within .hub-err-assist,
+.ca-onboarding:hover .hub-err-assist, .ca-onboarding:focus-within .hub-err-assist { opacity: 1; }
+.pptw-guide { position: relative; }
+.pptw-guide > .hub-err-assist-host, .ca-onboarding > .hub-err-assist-host { position: absolute; top: 10px; right: 10px; }
+.ca-onboarding { position: relative; }
+.pptw-guide > .hub-err-known { flex-basis: 100%; }

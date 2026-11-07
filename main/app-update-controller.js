@@ -312,7 +312,14 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
 
   function dismissLastResult() { delete state.lastResult; return state; }
 
-  return { check, download, cancel, apply, applyOnQuit, setQuietEnabled, getState: () => state, view, startBackgroundChecks, useConfig, dismissLastResult, lastResult: () => lastResult,
+  // 环境体检用（5.5.24）：只看各更新源连不连得上、清单读不读得出，不改更新状态、不触发下载、不弹放行窗口。
+  async function probeSources({ timeoutMs = 7000 } = {}) {
+    const results = await checkManifests({ sources, fetchImpl: resolveFetch(fetchImpl), validate: validateManifest, timeoutMs });
+    return { current: currentVersion, sources: results.map(r => ({ id: r.id, name: r.name, ok: r.ok, version: r.ok ? r.manifest.version : null,
+      reason: r.reason || null, blocked: !!r.blocked })) };
+  }
+
+  return { check, probeSources, download, cancel, apply, applyOnQuit, setQuietEnabled, getState: () => state, view, startBackgroundChecks, useConfig, dismissLastResult, lastResult: () => lastResult,
     dispose: () => { clearTimeout(timer); if (abort) abort.abort(); if (checkAbort) checkAbort.abort(); } };
 }
 

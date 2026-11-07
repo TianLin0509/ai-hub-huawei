@@ -60,10 +60,13 @@ function configDirEnvName(env = process.env, provider = hubProviderConfig()) {
 // 有的同事在用户级 / 系统级环境变量里把它指向自己的 CodeAgent 目录（不在号池里），这种照旧采用（审核 2026-10-19）。
 // 注册表读不出来、出错时一律忽略：宁可落到 ~/.cac，也不回到号 1。
 // 变量名本身照旧用：启动 CodeAgent 时由 Hub 把真正的配置目录显式写进这个变量。
-function resolveCodeAgentConfig(env = process.env, provider = hubProviderConfig(), { decision = inheritedDecision } = {}) {
+function resolveCodeAgentConfig(env = process.env, provider = hubProviderConfig(), { decision = inheritedDecision, discovered = discoveredCommand } = {}) {
   const explicitCommand = cleanString(env.AI_HUB_CODEAGENT_COMMAND) || cleanString(provider.command);
   // 1.2605.01-IN（3.0 首版）的启动命令叫 cac，之后改名 codeagent（公司回执 Q-1028-06，FAQ 原文）。没指定命令、PATH 里没有 codeagent 但有 cac 时用 cac。
-  const command = explicitCommand || (!commandOnPath(DEFAULT_COMMAND, env) && commandOnPath(LEGACY_COMMAND, env) ? LEGACY_COMMAND : DEFAULT_COMMAND);
+  const onPath = !commandOnPath(DEFAULT_COMMAND, env) && commandOnPath(LEGACY_COMMAND, env) ? LEGACY_COMMAND : DEFAULT_COMMAND;
+  // 指定的是完整路径但文件已经不在（被卸载 / 移动）：不再一直报错，回到自动发现的结果（2026-11-07）。
+  const explicitUsable = explicitCommand && (!path.isAbsolute(explicitCommand) || commandFile(explicitCommand, env));
+  const command = explicitUsable ? explicitCommand : discoveredFor(discovered, onPath, env) || explicitCommand || onPath;
   const configDirEnv = configDirEnvName(env, provider);
   if (/[\r\n"`$;&|<>]/.test(command)) throw new Error('CodeAgent 命令包含不允许的字符');
   const home = env.USERPROFILE || env.HOME || os.homedir();
@@ -255,6 +258,20 @@ function commandFile(command, env = process.env) {
 }
 function commandOnPath(command, env = process.env) { return !!commandFile(command, env); }
 
+// 自动发现选定的 CodeAgent（core/tool-discovery：PATH、npm 全局目录、注册表里最新的 PATH、常见安装目录，多个版本时默认最新或用户选的那份）。
+// 主进程扫描完成后写进来；单元测试和没扫描过时是 null，行为和以前一样只看 PATH。
+// 选中的恰好就是 PATH 上那一个时仍用命令名（与以前完全一致），只有不同才换成完整路径。
+let discoveredCommand = null;
+function setDiscoveredCommand(file) { discoveredCommand = cleanString(file) || null; }
+function getDiscoveredCommand() { return discoveredCommand; }
+function discoveredFor(discovered, onPath, env) {
+  const file = cleanString(discovered);
+  if (!file || !path.isAbsolute(file) || !commandFile(file, env)) return '';
+  if (/[\r\n"`$;&|<>]/.test(file)) return '';
+  const viaPath = commandFile(onPath, env);
+  return viaPath && sameDir(viaPath, file) ? onPath : file;
+}
+
 // 用于界面默认选中 CodeAgent（公司电脑），不作为能否登录或调用模型的证据。
 function isCodeAgentInstalled(env = process.env, provider = hubProviderConfig()) {
   let command;
@@ -303,4 +320,6 @@ module.exports = {
   localModelOptions,
   isCodeAgentInstalled,
   commandFile,
+  setDiscoveredCommand,
+  getDiscoveredCommand,
 };

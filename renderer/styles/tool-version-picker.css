@@ -1,0 +1,41 @@
+/* 外部工具版本选择器（2026-11-07，5.5.24，renderer/tool-version-picker.js）：只用 --hw-* 令牌，深浅主题自动跟随。 */
+.tvp-dialog{box-sizing:border-box;width:min(640px,calc(100vw - 48px));max-height:calc(100vh - 48px);margin:auto;padding:var(--hw-sp-6,24px);border:0;border-radius:var(--hw-r-xl,28px);box-shadow:var(--hw-e3);background:var(--hw-surface,#fff);color:var(--hw-text-1,#182431);font:var(--hw-fs-14,14px)/var(--hw-lh,1.55) var(--hw-font,"Microsoft YaHei",sans-serif);display:flex;flex-direction:column}
+.tvp-dialog:not([open]){display:none}
+.tvp-dialog::backdrop{background:rgba(24,36,49,.36)}
+.tvp-dialog header{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--hw-sp-4,16px)}
+.tvp-dialog h2{font-size:var(--hw-fs-20,20px);margin:0;font-weight:600}
+.tvp-dialog .tvp-sub{color:var(--hw-text-2,#58626d);margin:var(--hw-sp-2,8px) 0 var(--hw-sp-4,16px)}
+.tvp-dialog button{font:inherit;cursor:pointer;color:inherit}
+.tvp-dialog button:focus-visible,.tvp-option:has(input:focus-visible){outline:2px solid var(--hw-brand,#0a59f7);outline-offset:2px}
+.tvp-close{border:0;background:transparent;padding:2px 10px;font-size:22px;line-height:1;border-radius:var(--hw-r-pill,999px);color:var(--hw-text-2,#58626d)}
+.tvp-close:hover{background:var(--hw-surface-2,#f7f8fa)}
+.tvp-list{display:flex;flex-direction:column;gap:var(--hw-sp-2,8px);overflow:auto;min-height:0}
+.tvp-option{display:flex;align-items:flex-start;gap:var(--hw-sp-3,12px);padding:var(--hw-sp-3,12px) var(--hw-sp-4,16px);border:1px solid var(--hw-line,rgba(24,36,49,.08));border-radius:var(--hw-r-md,16px);background:var(--hw-surface-2,#f7f8fa);cursor:pointer}
+.tvp-option:hover{border-color:var(--hw-line-strong,rgba(24,36,49,.16))}
+.tvp-option.is-selected{background:var(--hw-brand-soft,#e7effe);border-color:var(--hw-brand,#0a59f7)}
+.tvp-option input{margin:3px 0 0;accent-color:var(--hw-brand,#0a59f7);flex:none}
+.tvp-option-body{display:flex;flex-direction:column;gap:2px;min-width:0}
+.tvp-option-top{display:flex;align-items:center;gap:var(--hw-sp-2,8px);flex-wrap:wrap}
+.tvp-version{font-weight:600;font-variant-numeric:tabular-nums}
+.tvp-tag{display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:var(--hw-r-pill,999px);font-size:var(--hw-fs-12,12px);background:var(--hw-surface-3,#edeff2);color:var(--hw-text-2,#58626d)}
+.tvp-tag-rec{background:var(--hw-green-soft,#e3f5ec);color:var(--hw-green,#1a9e5c)}
+.tvp-path{font:var(--hw-fs-12,12px)/1.5 var(--hw-mono,Consolas,"Cascadia Mono",monospace);color:var(--hw-text-2,#58626d);overflow-wrap:anywhere}
+.tvp-via{font-size:var(--hw-fs-12,12px);color:var(--hw-text-3,#8a939d)}
+.tvp-message{min-height:20px;margin:var(--hw-sp-3,12px) 0 0;font-size:var(--hw-fs-12,12px);color:var(--hw-text-2,#58626d);overflow-wrap:anywhere}
+.tvp-dialog footer{display:flex;align-items:center;gap:var(--hw-sp-3,12px);margin-top:var(--hw-sp-4,16px)}
+.tvp-grow{flex:1}
+.tvp-btn{border:1px solid var(--hw-line,rgba(24,36,49,.08));background:var(--hw-surface-2,#f7f8fa);padding:var(--hw-sp-2,8px) var(--hw-sp-4,16px);border-radius:var(--hw-r-pill,999px)}
+.tvp-btn:hover{border-color:var(--hw-line-strong,rgba(24,36,49,.16))}
+.tvp-btn.tvp-ghost{background:transparent;border-color:transparent;color:var(--hw-text-2,#58626d)}
+.tvp-btn.tvp-ghost:hover{background:var(--hw-surface-2,#f7f8fa)}
+.tvp-btn.tvp-primary{background:var(--hw-brand,#0a59f7);color:var(--hw-text-on,#fff);border-color:transparent}
+.tvp-btn.tvp-primary:hover{background:var(--hw-brand-hover,#0047d6)}
+.tvp-btn:disabled{opacity:.5;cursor:default}
+/* 页面里的一行提示：不抢眼，跟正文同字号，左侧一个小圆点 */
+.tvp-hint{display:flex;align-items:center;gap:var(--hw-sp-2,8px);flex-wrap:wrap;padding:6px var(--hw-sp-3,12px);border-radius:var(--hw-r-sm,10px);background:var(--hw-surface-2,#f7f8fa);color:var(--hw-text-2,#58626d);font-size:var(--hw-fs-13,13px);line-height:1.5}
+.tvp-hint-dot{width:6px;height:6px;border-radius:50%;background:var(--hw-brand,#0a59f7);flex:none}
+.tvp-link{border:0;background:transparent;padding:0;font:inherit;color:var(--hw-brand,#0a59f7);cursor:pointer}
+.tvp-link:hover{text-decoration:underline}
+.tvp-link:focus-visible{outline:2px solid var(--hw-brand,#0a59f7);outline-offset:2px;border-radius:4px}
+/* 页面里放提示的那一格（账号页等），与下方内容留出间距 */
+[data-tvp-slot]{margin:0 0 12px}

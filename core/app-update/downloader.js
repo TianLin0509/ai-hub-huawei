@@ -6,6 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 const { createHash } = require('crypto');
+const { retryOnce } = require('../transient-retry');
 
 const IDLE_TIMEOUT_MS = 20000;
 const CONNECT_TIMEOUT_MS = 15000;
@@ -64,7 +65,7 @@ async function openResponse(fetchImpl, url, signal, timeoutMs) {
 }
 
 // 查版本：各源并行取清单，返回每个源的结果和版本最高的那份。
-async function checkManifests({ sources, fetchImpl, validate, timeoutMs = MANIFEST_TIMEOUT_MS, signal }) {
+async function checkManifests({ sources, fetchImpl, validate, timeoutMs = MANIFEST_TIMEOUT_MS, signal, retry = null }) {
   const results = await Promise.all(sources.map(async source => {
     const startedAt = Date.now(), controller = new AbortController();
     let response, timer, timedOut = false, rejectStop;
@@ -81,10 +82,15 @@ async function checkManifests({ sources, fetchImpl, validate, timeoutMs = MANIFE
     }, timeoutMs);
     try {
       // 清单期限覆盖响应头、正文和校验；不能在刚收到响应头时就撤掉计时器。
-      const manifest = await Promise.race([stopped, (async () => {
+      // 偶发错误（连接被重置、HTTP 502/503/504/429）在同一期限内自动再取一次（core/transient-retry.js）：
+      // 取清单是只读 GET，重复取没有副作用；404、拦截网页、清单无效都不重试。
+      const manifest = await Promise.race([stopped, retryOnce(async () => {
         assertActive();
         response = await fetchImpl(source.manifest, { signal: controller.signal, cache: 'no-store', redirect: 'follow' });
-        if (!response.ok) throw fail(response.status === 404 ? '源上还没有版本清单（HTTP 404）' : `服务器返回 HTTP ${response.status}`);
+        if (!response.ok) {
+          try { void response.body?.cancel().catch(() => {}); } catch (_) {}
+          throw Object.assign(fail(response.status === 404 ? '源上还没有版本清单（HTTP 404）' : `服务器返回 HTTP ${response.status}`), { status: response.status });
+        }
         const text = await response.text();
         assertActive();
         if (looksLikeWebPage(response.headers && response.headers.get && response.headers.get('content-type'), Buffer.from(text.slice(0, 256)))) throw blockedFail(`收到的是网页（${fmtBytes(Buffer.byteLength(text))}）而不是版本清单，可能被公司代理拦截`);
@@ -92,7 +98,7 @@ async function checkManifests({ sources, fetchImpl, validate, timeoutMs = MANIFE
         try { checked = await validate(JSON.parse(text)); } catch (error) { throw fail(`版本清单无效：${error.message}`); }
         assertActive();
         return checked;
-      })()]);
+      }, { label: 'manifest:' + source.id, budgetMs: timeoutMs, signal: controller.signal, ...(retry || {}) })]);
       return { id: source.id, name: source.name, ok: true, manifest, ms: Date.now() - startedAt };
     } catch (error) {
       return { id: source.id, name: source.name, ok: false, reason: signal?.aborted ? '已取消' : timedOut ? `版本清单读取超时（${timeoutMs / 1000} 秒内未完成）` : reasonOf(error), blocked: !!error.blocked, url: source.manifest, ms: Date.now() - startedAt };

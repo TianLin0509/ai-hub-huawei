@@ -224,8 +224,38 @@ body.session-immersive-active .qp-ph,body.preview-immersive-active .qp-ph{displa
 .qp-foot-item .qp-av{width:16px;height:16px;font-size:10px}
 .qp-foot-name{max-width:64px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .qp-foot-item b{font-family:var(--hw-font-num);font-variant-numeric:tabular-nums;font-weight:600;color:var(--hw-text-1)}
-.qp-foot-item.low b{color:var(--hw-amber)}
+.qp-foot-item.low .qp-foot-name{color:var(--hw-amber)}
 .qp-foot-item.is-current .qp-foot-name{color:var(--hw-brand)}
 .qp-foot-item.dim{opacity:.55}
 /* 窄屏放不下所有名字：只留头像和数字，全名在悬停里 */
 @media(max-width:1360px){.qp-foot-name{display:none}}
+/* 三档 Token（2026-11-07）：右侧每个号第三行放 1 小时、1 分钟两枚小胶囊，样式同今日胶囊，只是更矮更窄 */
+.qp-wins{grid-column:2/-1;display:flex;align-items:center;gap:8px;min-width:0;line-height:16px}
+.qp-win{display:inline-flex;align-items:center;gap:4px;flex:none;font-size:var(--hw-fs-12);color:var(--hw-text-3)}
+.qp-win>i{font-style:normal;white-space:nowrap}
+.qp-mini{position:relative;width:46px;height:16px;border-radius:var(--hw-r-pill);background:var(--hw-surface-2);box-shadow:inset 0 0 0 1px var(--hw-line);overflow:hidden;display:grid;place-items:center;font-family:var(--hw-font-num);font-size:var(--hw-fs-12);font-weight:600;color:var(--hw-brand);font-variant-numeric:tabular-nums;white-space:nowrap}
+.qp-mini::before{content:"";position:absolute;left:0;top:0;bottom:0;width:calc(var(--v, 0) * 1%);background:var(--hw-brand-soft)}
+.qp-mini>span{position:relative}
+.qp-win.low .qp-mini{color:var(--hw-amber)}
+.qp-win.low .qp-mini::before{background:var(--hw-amber-soft)}
+.qp-win.out .qp-mini{color:var(--hw-text-3);font-weight:500;font-family:var(--hw-font)}
+.qp-win.out .qp-mini::before,.qp-win.none .qp-mini::before{display:none}
+.qp-win.none .qp-mini{background:none;box-shadow:none;color:var(--hw-text-3);font-weight:400}
+.qp-win.stale .qp-mini{color:var(--hw-text-3);font-weight:500}
+.qp-win.stale .qp-mini::before{background:var(--hw-surface-3)}
+.qp-row.dim .qp-wins,.qp-row.is-loading .qp-wins{opacity:.5}
+/* 标题行「移到底栏」：图标按钮；只有 1 个号时带两个字的提示 */
+.qp .qp-move.with-text{width:auto;padding:0 8px 0 6px;gap:3px;display:inline-flex;align-items:center;border-radius:var(--hw-r-pill);font-size:var(--hw-fs-12);color:var(--hw-text-3);white-space:nowrap}
+/* 底栏一行：今日 62% · 时 80% · 分 95%，多号时后面写 +N，悬停看全部 */
+.qp-foot-w{display:inline-flex;align-items:baseline;gap:3px;color:var(--hw-text-3);white-space:nowrap}
+.qp-foot-w+.qp-foot-w::before{content:"·";margin-right:3px;color:var(--hw-text-3)}
+/* 底栏的 <b> 被 hw-shell 的 #hub-system-footer b 统一成灰色，这里要同样带上 id 才盖得过 */
+:root body #hub-system-footer .qp-foot-item .qp-foot-w b{color:var(--hw-text-1)}
+:root body #hub-system-footer .qp-foot-item .qp-foot-w:is(.low,.out) b{color:var(--hw-amber)}
+:root body #hub-system-footer .qp-foot-item .qp-foot-w:is(.stale,.none) b{color:var(--hw-text-3);font-weight:500}
+.qp-foot-more{margin-left:2px;padding:0 5px;border-radius:var(--hw-r-pill);background:var(--hw-surface-2);color:var(--hw-text-3);font-size:var(--hw-fs-12);line-height:16px;font-family:var(--hw-font-num)}
+.qp-foot-move{display:grid;place-items:center;flex:none;width:22px;height:22px;padding:0;border:0;border-radius:var(--hw-r-item);background:none;color:var(--hw-text-3);cursor:pointer;opacity:0}
+.qp-foot-move svg{width:14px;height:14px}
+.qp-foot:hover .qp-foot-move,.qp-foot-move:focus-visible{opacity:1}
+.qp-foot-move:hover{background:var(--hw-surface-2);color:var(--hw-text-1)}
+.qp-foot-move:focus-visible{outline:2px solid var(--hw-brand);outline-offset:-2px}

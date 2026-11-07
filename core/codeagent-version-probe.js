@@ -51,4 +51,7 @@ function peekCodeAgentVersion(command, { notBefore = 0 } = {}) {
   return versionCache.promise;
 }
 
-module.exports = { codeagentVersion, peekCodeAgentVersion, parseCodeAgentVersion, CODEAGENT_VERSION_TIMEOUT_MS };
+// 自动发现换了一份 CodeAgent（core/tool-discovery）：丢掉旧的版本缓存，下次重新读。
+function forgetCodeAgentVersion() { versionCache = null; }
+
+module.exports = { forgetCodeAgentVersion, codeagentVersion, peekCodeAgentVersion, parseCodeAgentVersion, CODEAGENT_VERSION_TIMEOUT_MS };

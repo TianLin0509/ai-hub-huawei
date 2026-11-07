@@ -2706,6 +2706,13 @@ ipcMain.handle('optional-features:set', (_event, request = {}) => {
     return { ok: true, list };
   } catch (error) { return { ok: false, error: error.message }; }
 });
+// 外部工具自动发现与多版本选择（2026-11-07，5.5.24）：CodeAgent 在这里注册，welink-cli / PPT Doctor 由公司助理注册。
+let toolDiscovery = null;
+try {
+  const handlers = require('./main/ipc/tool-discovery-handlers');
+  toolDiscovery = handlers.createHubToolDiscovery({ dataDir: getHubDataDir(), onChanged: tool => sendToRenderer('tool-discovery:changed', { tool }) });
+  handlers.registerToolDiscoveryIpc(ipcMain, toolDiscovery);
+} catch (error) { console.error('[tool-discovery] 自动发现未启动：', error.message); }
 try {
   if (require('./core/company-assistant/gate').companyAssistantEnabled()) {
     const { CompanyAssistant } = require('./core/company-assistant/service');
@@ -2717,6 +2724,7 @@ try {
     };
     companyAssistantService = new CompanyAssistant({
       getMeetingAskAside: () => askAsideService,
+      toolDiscovery,
       assertTeamAccess: () => teamAccess.assert(),
       dataDir: getHubDataDir(),
       noTimer: process.env.CLAUDE_HUB_ASSISTANT_TIMER === '0',
@@ -3341,6 +3349,25 @@ registerWorkbenchOperationsIpc(ipcMain, {
 
 registerPathIpc(ipcMain);
 ipcMain.handle('community:setup', () => require('./core/community-setup').inspectSetupAsync({ packaged: app.isPackaged }));
+// 环境体检（5.5.24，main/ipc/env-check-handlers.js）：设置菜单「环境体检」一屏列出各外部工具与本机条件；各服务按需取，没有的项自动不出。
+require('./main/ipc/env-check-handlers').registerEnvCheckIpc(ipcMain, {
+  dataDir: getHubDataDir,
+  version: () => require('./core/distribution').editionVersion || app.getVersion(),
+  isCompany: () => require('./core/company-api-config').isCompany(),
+  assistant: () => companyAssistantService,
+  ...(require('./core/company-api-config').isCompany() ? {
+    proxy: () => {
+      let enabled = false;
+      try { enabled = !!companyProxyService.isEnabled(); } catch { enabled = false; }
+      return { enabled, status: lanPoolService.clientProxyStatus() || companyProxyService.status() };
+    },
+    proxyRestart: () => lanPoolService.client()?.enabled ? lanPoolService.snapshot({ force: true }) : companyProxyService.restart(),
+  } : {}),
+  ...(require('./core/distribution').updateConfig ? { appUpdate: () => appUpdateControllerRef } : {}),
+  getConfig: () => require('./core/hub-config').getConfig(),
+  openExternal: url => shell.openExternal(url),
+  openPath: dir => shell.openPath(dir),
+});
 
 // --- Hook HTTP server ---
 // Receives POSTs from ~/.claude/scripts/session-hub-hook.py when Claude Code

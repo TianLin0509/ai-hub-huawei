@@ -96,7 +96,9 @@ test('hour or minute at 80% warns; rounding never claims full or empty wrongly',
   const hot = { ...REAL, models: [{ ...REAL.models[0], min: { pct: 85 } }] };
   const view = quotaView({ rows: [withUsage(hot), row({ id: 'b' })] }, { now });
   assert.equal(view.rows[0].alert, '分钟窗 85%'); assert.equal(view.rows[0].detail, 'GLM-5.2-WX-Auto');
-  assert.match(renderQuota(view, { now }), /class="warn">分钟窗 85%/);
+  // 右侧栏由「1 分钟」小胶囊变琥珀表达（剩 15%），第二行不再写「已用 85%」免得和胶囊打架
+  assert.match(renderQuota(view, { now }), /class="qp-win low" data-qp-window="min"[^>]*>.*?<span>15%<\/span>/);
+  assert.doesNotMatch(renderQuota(view, { now }), /class="warn">分钟窗 85%/);
   const calm = quotaView({ rows: [withUsage(REAL), row({ id: 'b' })] }, { now });
   assert.equal(calm.rows[0].alert, ''); assert.equal(calm.rows[0].detail, 'GLM-5.2-WX-Auto');
   assert.deepEqual([100, 99.9, 98.3, 0.2, 0].map(wholePct), [100, 99, 98, 1, 0]);

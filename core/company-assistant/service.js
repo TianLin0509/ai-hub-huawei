@@ -178,6 +178,20 @@ class CompanyAssistant {
     this.petReminders = new PetReminders(this);
     this.digest = new AssistantDigest(this);
     this.toolsReady = null;
+    // 自动发现与多版本选择（2026-11-07，core/tool-discovery）：welink-cli、PPT Doctor 装了多份时按版本选，页面上可切换。
+    const discovery = deps.toolDiscovery;
+    if (discovery) {
+      const tools = require('../tool-discovery/tools');
+      discovery.register('welink', tools.welinkAdapter(this)).register('ppt-doctor', tools.pptDoctorAdapter(this));
+      discovery.subscribe?.(() => this.changed());
+    }
+  }
+  // welink-cli 的版本选择摘要（给页面出「找到 N 个版本」提示用）。没扫过时在后台扫一次，不等结果。
+  cliChoice() {
+    const discovery = this.deps.toolDiscovery;
+    if (!discovery?.has?.('welink')) return null;
+    void discovery.list('welink').catch(() => {});
+    return discovery.summary('welink');
   }
 
   // 旧代码里的 this.queue / this.job 指问答队列。
@@ -249,7 +263,12 @@ class CompanyAssistant {
   snapshot(day = D.dayKey(this.now())) { return this.read(`raw-${day}.json`, null); }
   brief(day = D.dayKey(this.now())) { return this.read(`brief-${day}.json`, null); }
   changed() { try { this.deps.onChanged?.(); } catch { /* 界面没开 */ } }
-  cli() { return (this.deps.resolveCli || welink.resolveCli)({ configured: this.settings().cliPath }); }
+  // 用户指定的路径还在就用它；不在了（被卸载 / 移动）或没指定，用自动发现选中的那份（多个版本时默认最新）；再不行走原来的快速查找。
+  cli() {
+    const configured = this.settings().cliPath;
+    const usable = configured && fs.existsSync(configured) ? configured : this.deps.toolDiscovery?.pick?.('welink') || configured;
+    return (this.deps.resolveCli || welink.resolveCli)({ configured: usable });
+  }
   // welink-cli 版本（2026-11-06）：按「路径 + 文件修改时间」记一次，原地 npm 升级后不用重启 Hub 也会重读；只在设置页显示和写诊断。
   cliVersion() {
     const cli = this.cli();
@@ -273,11 +292,17 @@ class CompanyAssistant {
     if (!force && s.state === 'notfound' && this.now() - s.at < 6 * 3600000) return Promise.resolve(s);
     this.cliSearch = { state: 'searching', at: this.now(), stage: 'path' };
     this.changed();
-    const find = this.deps.findCliDeep || welink.findCliDeep;
+    // 有自动发现时（2026-11-07）：常见位置 + 全盘找的结果全部交给版本选择，只有 1 份 / 同版本时它自己写回设置，多个版本先用最新的、等用户在页面上选。
+    const discovery = this.deps.toolDiscovery?.has?.('welink') ? this.deps.toolDiscovery : null;
+    const find = discovery ? async ({ onStage }) => {
+      this.onCliStage = onStage;
+      try { const s = await discovery.list('welink', { force: true, deep: true }); return s.current ? { path: s.current.path, via: s.current.via, viaDiscovery: true } : { path: null, via: null }; }
+      finally { this.onCliStage = null; }
+    } : this.deps.findCliDeep || welink.findCliDeep;
     this.cliSearching = Promise.resolve().then(() => find({ onStage: stage => { this.cliSearch = { ...this.cliSearch, stage }; this.changed(); } }))
       .then(found => {
         if (found && found.path) {
-          this.setSettings({ cliPath: found.path });
+          if (!found.viaDiscovery) this.setSettings({ cliPath: found.path });
           this.prepareWorkspace();
           this.cliSearch = { state: 'found', at: this.now(), path: found.path, via: found.via };
           // 找到了：马上取数；今天的简报还是「没找到 welink-cli」的空简报就重新生成。
@@ -303,6 +328,7 @@ class CompanyAssistant {
     this.setSettings({ cliPath: exe });
     this.prepareWorkspace();
     this.cliSearch = { state: 'found', at: this.now(), path: exe, via: 'manual' };
+    if (this.deps.toolDiscovery?.has?.('welink')) void this.deps.toolDiscovery.list('welink', { force: true }).catch(() => {});
     void this.refresh({ force: true }).then(() => { const b = this.brief(); if (!b || b.by === 'none') return this.generateBrief(); }).catch(() => {});
     return { ok: true, path: exe };
   }
@@ -1717,7 +1743,7 @@ class CompanyAssistant {
     const next = this.nextBriefAt(s, now);
     const sid = st.sessionId || null;
     return { ok: true, enabled: s.enabled, now, day, settings: s, chips: [...BUILTIN_CHIPS, ...s.chips.map(c => ({ ...c, custom: true }))],
-      cliFound: !!this.cli(), cliPath: this.cli() || '', cliVersion: this.cliVersion(), cliSearch: this.cliSearch || { state: 'idle' }, auth: this.auth.status(), login: this.auth.status().login || snap?.login || null, loginFlow: this.loginFlow, calendarNeedsSetup: !!snap?.calendarNeedsSetup, mailSetup: snap?.mailSetup || null,
+      cliFound: !!this.cli(), cliPath: this.cli() || '', cliVersion: this.cliVersion(), cliChoice: this.cliChoice(), cliSearch: this.cliSearch || { state: 'idle' }, auth: this.auth.status(), login: this.auth.status().login || snap?.login || null, loginFlow: this.loginFlow, calendarNeedsSetup: !!snap?.calendarNeedsSetup, mailSetup: snap?.mailSetup || null,
       counts: snap ? { meetings: (snap.meetings || []).length, calendar: (snap.calendar || []).length, messages: Object.values(snap.messages || {}).reduce((n, l) => n + l.length, 0), mails: (snap.mails || []).length } : null,
       refreshedAt: snap?.at || null, refreshing: !!this.refreshing, updating: snap?.updating || [], errors: snap?.errors || [], conversations: (snap?.conversations || []).slice(0, 60), scope: snap?.scope || null, nameResolution: snap?.nameResolution || null, meetingCoverage: snap?.meetingCoverage || null, calendarCoverage: snap?.calendarCoverage || null, mailCoverage: snap?.mailCoverage || null,
       brief: this.brief(day), nextBriefAt: next, chat: this.chat().filter(c => { if (c.entry === 'ppt') return false; try { this.verifyTeamOwner(c); return true; } catch { return false; } }).slice(-60), job: this.job ? { type: this.job.type, sentAt: this.job.sentAt || null } : null,

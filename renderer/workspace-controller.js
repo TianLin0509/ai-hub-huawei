@@ -890,7 +890,15 @@
   function setError(message = '') {
     const errorEl = document.getElementById('new-session-error');
     if (!errorEl) return;
-    errorEl.textContent = message.replace(/Error invoking remote method '[^']+': (?:Error: )?/, '');
+    const text = message.replace(/Error invoking remote method '[^']+': (?:Error: )?/, '');
+    // 5.5.24：报错用统一错误卡（已知问题直接给解法；悬停出现「问问 Agent」「一键反馈」）。CodeAgent 起不来时求助会改用别的 Agent。
+    const card = text && window.HubErrorCard;
+    if (card) {
+      const split = /^([^：:]{1,24})[：:]\s*([\s\S]+)$/.exec(text);
+      errorEl.innerHTML = card.html({ area: selectedKind === 'codeagent' ? 'codeagent' : 'session-create', severity: 'error',
+        title: split ? split[1] : text.split(/\r?\n/)[0].slice(0, 120), cause: split ? split[2] : '', details: text,
+        showDetails: /[A-Z]{4,}|Error|[{}\\/]|\b\d{3}\b/.test(text) });
+    } else errorEl.textContent = text;
     errorEl.hidden = !message;
     if (message && /官方登录界面|登录入口/.test(message)) errorEl.scrollIntoView({ block: 'nearest' });
   }

@@ -58,7 +58,9 @@ function enhanceCard(card) {
   help.dataset.errorKind = info.kind;
   help.setAttribute('role', 'status');
   help.dataset.copyExclude = '';
-  help.innerHTML = renderHelp(info, s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])));
+  help.innerHTML = renderHelp(info, s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])))
+    // 右上角悬停才出现的「问问 Agent」「一键反馈」（5.5.24，renderer/hub-error-card.js）。
+    + require('./hub-error-card').assistHtml({ area: 'model-service', title: info.title, symptom: info.detail, details: last.textContent.trim() });
   const raw = doc.createElement('details');
   raw.className = 'teh-raw';
   raw.innerHTML = '<summary>原始报错</summary>';
@@ -73,7 +75,13 @@ function runAction(action, { card, document: doc, window: win, ipcRenderer }) {
   if (action === 'retry') { card.querySelector('[data-action="regen"]')?.click(); return true; }
   if (action === 'model') { panel.querySelector('.composer-model')?.click(); return true; }
   if (action === 'accounts') { doc.getElementById('btn-rail-accounts')?.click(); return true; }
-  if (action === 'feedback') { win.__hubFeedback?.open?.(); return true; }
+  if (action === 'feedback') {
+    const help = card.querySelector('.turn-error-help');
+    const raw = (card.querySelector('.teh-raw')?.textContent || '').replace(/^原始报错/, '').trim();
+    if (win.HubAssist) win.HubAssist.feedback({ area: 'model-service', title: help?.querySelector('.teh-title')?.textContent || '', symptom: help?.querySelector('.teh-detail')?.textContent || '', details: raw });
+    else win.__hubFeedback?.open?.();
+    return true;
+  }
   if (action === 'new-session') { win.LaunchCenter?.open?.('session', { kind: 'codeagent' }); return true; }
   if (action === 'compact') {
     const sessionId = card.dataset.sessionId || win.activeSessionId;

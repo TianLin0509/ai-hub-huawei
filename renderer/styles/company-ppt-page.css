@@ -201,3 +201,6 @@
   .pptw-results{grid-template-columns:repeat(auto-fill,minmax(168px,1fr))}
   .pptw-status:not(.pptw-guide){max-width:420px}
 }
+/* 装了多个版本的 PPT Doctor：页头下方一行提示（renderer/tool-version-picker.js，2026-11-07） */
+.pptw-tool-hint{width:min(960px,100%);margin:0 auto 12px}
+.pptw-tool-hint:empty{display:none}

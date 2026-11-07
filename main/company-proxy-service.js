@@ -65,6 +65,7 @@ class CompanyProxyService {
     this.lastStatus = null;
     this.draining = null;
     this.drainCancelled = false;
+    this.polling = null;
   }
 
   proxy() { return require('../core/company-model-proxy'); }
@@ -243,10 +244,19 @@ class CompanyProxyService {
     } finally { clearTimeout(timer); }
   }
 
-  async poll() {
+  // 同一时刻只跑一次读状态（自动重试会让一次读状态拉长到几秒，不能和下一次定时读叠起来）。
+  poll() {
+    if (this.polling) return this.polling;
+    this.polling = this.pollOnce().finally(() => { this.polling = null; });
+    return this.polling;
+  }
+
+  async pollOnce() {
     if (!this.child) return;
     let status;
-    try { status = await this.request('/admin/status'); }
+    // 就绪探测：GET /admin/status 只读反代自己的状态，重复读没有副作用；反代刚起、本机端口一时连不上（ECONNREFUSED/ECONNRESET）
+    // 这类偶发错误隔一秒再读一次（core/transient-retry.js），免得「上游准备中」的状态晚 5 秒才更新。关停（POST /admin/shutdown）不重试。
+    try { status = await require('../core/transient-retry').retryOnce(() => this.request('/admin/status'), { label: 'company-proxy-status', budgetMs: 4500, ...(this.retryOptions || {}) }); }
     catch { return; }
     this.lastStatus = status;
     if (this.draining) { /* keep the draining message */ }

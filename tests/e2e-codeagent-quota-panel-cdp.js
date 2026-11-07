@@ -137,7 +137,7 @@ async function run() {
     await c.eval("require('electron').ipcRenderer.invoke('codeagent:usage').then(r=>{window.codeagentQuotaBar.setUsage(r.accounts,r.defaultModels);return 1})");
     await c.eval("(()=>{const s=document.getElementById('cfg-codeagent-quota-placement');s.value='bottom';s.dispatchEvent(new Event('change'));return 1})()");
     await wait(() => c.eval("document.getElementById('account-quota-panel').hidden&&!document.getElementById('rail-codeagent-quota').hidden"), 'bottom placement applies');
-    check('bottom placement hides the right panel and shows every account with its name and remaining', await c.eval("document.querySelectorAll('#rail-codeagent-quota .qp-foot-item').length===6&&document.querySelector('#rail-codeagent-quota .qp-foot-item').textContent.includes('84%')"));
+    check('bottom placement hides the right panel and shows the current account with today, hour and minute, others on hover', await c.eval(`(()=>{const items=document.querySelectorAll('#rail-codeagent-quota .qp-foot-item'),t=items[0]?.textContent||'';return items.length===1&&items[0].dataset.qpAccount===${JSON.stringify(ids[0])}&&t.includes('今日 62%')&&t.includes('时 95%')&&t.includes('分 99%')&&t.includes('+5')&&items[0].title.includes('我的账号：今日 84%')})()`));
     await shot('quota-bottom', 1440);
     await c.eval("(()=>{const s=document.getElementById('cfg-codeagent-quota-placement');s.value='right';s.dispatchEvent(new Event('change'));return 1})()");
     await wait(() => c.eval("!document.getElementById('account-quota-panel').hidden&&document.getElementById('rail-codeagent-quota').hidden"), 'right placement applies');

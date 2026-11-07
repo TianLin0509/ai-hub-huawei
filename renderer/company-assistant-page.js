@@ -86,6 +86,7 @@ const secondsText = ms => { const s = Math.max(0, Math.round(ms / 1000)); return
 function createCompanyAssistantPage({ document, window, ipcRenderer, openSession, closeOtherPanels = () => {}, showMessage }) {
   const { ASSISTANT_AVATAR_SRC, USER_AVATAR_SRC } = require('./chat-avatar');
   const { connectionState } = require('./company-assistant-connection');
+  const toolPicker = require('./tool-version-picker').createToolVersionPicker({ document, ipcRenderer });
   const { queryRows, refreshNotice } = require('./company-assistant-query-status');
   const { renderMessageBody } = require('./conversation-message-view');
   let page = null, data = null, timer = null, tick = null, sending = false, gate = null, firstPaint = true;
@@ -147,6 +148,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
           <button type="button" class="ca-head-btn" data-ca="settings" title="助理设置：简报与提醒 / WeLink 与邮箱 / 手机 / 桌宠" aria-label="助理设置">${ICON.gear}<span>设置</span></button></div>
       </header>
       <div class="ca-alert" data-slot="alert" role="status"></div>
+      <div class="ca-tool-hint" data-slot="tool-hint"></div>
       <div data-slot="action-error" role="alert" hidden></div>
       <div class="ca-panel" data-slot="panel" hidden></div>
       <div class="ca-split" data-slot="split">
@@ -269,7 +271,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
   function onboarding() {
     if (!onboardingShown()) return '';
     const c = connectionState(data), ready = c.kind === 'online';
-    return `<article class="ca-onboarding" data-connection="${c.kind}"><h2>${esc(ready ? '正在获取今天的工作信息' : c.title)}</h2><p>${esc(c.detail)}</p><div class="ca-onboarding-steps" aria-label="接入进度"><span>${data.cliFound ? '✓' : '1'} 安装工具</span><span>${ready ? '✓' : '2'} 确认登录</span><span>${ready && data.refreshedAt ? '✓' : '3'} 获取工作信息</span></div>${c.action ? `<button type="button" class="ca-btn primary" data-ca="${c.action}">${esc(c.label)}</button>` : ''}${!data.cliFound ? '<button type="button" class="ca-btn" data-ca="pick-cli">手动选择…</button>' + installGuide() : ''}<p class="ca-note">接通前也可以直接提问，讨论已有的材料。</p></article>`;
+    return `<article class="ca-onboarding" data-connection="${c.kind}"><h2>${esc(ready ? '正在获取今天的工作信息' : c.title)}</h2><p>${esc(c.detail)}</p><div class="ca-onboarding-steps" aria-label="接入进度"><span>${data.cliFound ? '✓' : '1'} 安装工具</span><span>${ready ? '✓' : '2'} 确认登录</span><span>${ready && data.refreshedAt ? '✓' : '3'} 获取工作信息</span></div>${c.action ? `<button type="button" class="ca-btn primary" data-ca="${c.action}">${esc(c.label)}</button>` : ''}${!data.cliFound ? '<button type="button" class="ca-btn" data-ca="pick-cli">手动选择…</button>' + installGuide() : ''}<p class="ca-note">接通前也可以直接提问，讨论已有的材料。</p>${!ready && ['missing', 'login', 'unknown'].includes(c.kind) && window.HubErrorCard ? window.HubErrorCard.assistHtml({ area: 'welink', title: c.title, symptom: c.detail, details: [c.title, c.detail, data.cliSearch?.error].filter(Boolean).join(' · ') }) : ''}</article>`;
   }
   function loginPanel() {
     const f = data.loginFlow;
@@ -442,6 +444,8 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     };
     const alertHtml = alerts();
     setHtml('alert', alertHtml); page.querySelector('[data-slot="alert"]').hidden = !alertHtml;
+    // 装了多个版本的 welink-cli（2026-11-07）：一行不打扰的提示，点开是版本选择器（renderer/tool-version-picker.js）。
+    setHtml('tool-hint', toolPicker.hintHtml(data.cliChoice));
     applyFold();
     setHtml('today', todayHtml());
     setHtml('onboarding', onboarding());
@@ -714,7 +718,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     const from = s.emailFrom === 'welink' ? '从 WeLink 账号自动读到' : s.email ? '你填写的' : '';
     const snapRows = querySnapshotRows(d);
     const VIA = { path: '系统路径里找到的', npm: 'npm 全局目录里找到的', disk: '在硬盘里找到的', manual: '你手动选的' };
-    const cliLine = d.cliFound ? `<fieldset class="col"><legend>welink-cli 位置</legend><div class="ca-row"><span class="ca-chip ok">已找到</span><span class="ca-note" title="${esc(d.cliPath)}">${esc(d.cliPath)}${VIA[d.cliSearch?.via] ? '（' + VIA[d.cliSearch.via] + '）' : ''}</span>${d.cliVersion ? `<span class="ca-note">版本 ${esc(d.cliVersion)}</span>` : ''}</div>
+    const cliLine = d.cliFound ? `<fieldset class="col"><legend>welink-cli 位置</legend><div class="ca-row"><span class="ca-chip ok">已找到</span><span class="ca-note" title="${esc(d.cliPath)}">${esc(d.cliPath)}${VIA[d.cliSearch?.via] ? '（' + VIA[d.cliSearch.via] + '）' : ''}</span>${d.cliVersion ? `<span class="ca-note">版本 ${esc(d.cliVersion)}</span>` : ''}${toolPicker.switchHtml(d.cliChoice, { className: 'ca-note' })}</div>${toolPicker.hintHtml(d.cliChoice)}
         <div class="ca-row"><button type="button" class="ca-btn small" data-ca="find-cli">重新查找</button><button type="button" class="ca-btn small" data-ca="pick-cli">手动选择…</button></div></fieldset>` : '';
     return `<fieldset><legend>WeLink 登录</legend><div class="ca-row">${loginLine}</div></fieldset>${cliLine}
       <fieldset class="col"><legend>公司邮箱（邮件和日历要用）</legend>
@@ -827,6 +831,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
   };
   document.addEventListener('click', e => { if (page && !page.hidden && e.target.closest('#scene-rail button:not(#btn-company-assistant)')) close(); });
   ipcRenderer.on('company-assistant:changed', () => { if (page && !page.hidden) void load().catch(() => {}); });
+  document.addEventListener('tool-version-changed', e => { if (['welink', 'ppt-doctor'].includes(e.detail?.tool) && page && !page.hidden) void load().then(() => { const panel = page.querySelector('[data-slot="panel"]'); if (e.detail.tool === 'welink' && panel?.dataset.kind === 'settings' && !panel.hidden) openSettings(); }).catch(() => {}); });
   ipcRenderer.on('company-assistant:notice', (_e, notice) => {
     if (notice?.title) showMessage?.(notice.title);
     if (!page || page.hidden) document.getElementById('btn-company-assistant')?.classList.add('has-unread');

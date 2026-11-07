@@ -59,6 +59,8 @@
 /* 页头下的提示条：只在有问题时出现 */
 .ca-alert{flex:none;padding:6px 24px;background:var(--hw-amber-soft);color:var(--hw-text-1);font-size:var(--hw-fs-13)}
 .ca-alert[hidden],.ca-alert:empty{display:none}
+.ca-tool-hint{flex:none;padding:6px 24px 0}
+.ca-tool-hint:empty{display:none}
 .ca-alert-row{display:flex;align-items:center;gap:8px;min-height:32px;flex-wrap:wrap}
 .ca-alert-mark{color:var(--hw-amber)}
 .ca-alert-row b{font-weight:600}

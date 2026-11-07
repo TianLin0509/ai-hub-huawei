@@ -84,7 +84,7 @@ test('the panel only shows with more than one distinct account and in the chosen
   const single = mount({ storage: memoryStorage(), rows: [read, { ...blank, id: 'a2', sameAsPersonal: true }], footerRoot });
   await single.panel.whenIdle();
   assert.equal(single.root.hidden, true);
-  assert.equal(footerRoot.hidden, true);
+  assert.equal(footerRoot.hidden, false, 'a single account has no right panel, so the footer carries its quota');
   single.setRows([read, { ...blank, id: 'a2' }]);
   await single.panel.reload();
   assert.equal(single.root.hidden, false);

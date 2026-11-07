@@ -51,6 +51,16 @@ function showStickyNotice(document, message, level = 'warning') {
     color: 'var(--hw-text-2, #58626d)', font: 'inherit', fontSize: '12px', padding: '2px 8px', cursor: 'pointer',
   });
   close.addEventListener('click', () => item.remove());
+  // 错误类（5.5.24）：命中已知问题时在原文下直接给解法；悬停这条提示时出现「问问 Agent」「一键反馈」。
+  if (level === 'error') {
+    try {
+      const card = require('./hub-error-card');
+      const ctx = { area: 'notice', title: text.split(/\r?\n/)[0].slice(0, 120), symptom: text, details: text };
+      const extra = document.createElement('div');
+      extra.innerHTML = card.knownHtml(ctx) + card.assistHtml(ctx);
+      body.append(...extra.childNodes);
+    } catch (error) { console.warn('[sticky-notice] 求助按钮没挂上：', error && error.message); }
+  }
   item.append(body, close);
   root.appendChild(item);
   return item;

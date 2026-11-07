@@ -16,12 +16,13 @@ function createQuotaPlacement({ storage = null } = {}) {
       for (const listener of listeners) listener(next);
     },
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
-    // 设置页的下拉：选了立刻生效，不等「保存」。
+    // 设置页的下拉：选了立刻生效，不等「保存」；额度栏上的「移到底栏 / 移回右侧」改了位置，下拉跟着变。
     bindSelect(field, select) {
       if (!field || !select) return;
       field.hidden = false;
       select.value = value;
       select.addEventListener('change', () => this.set(select.value));
+      listeners.add(next => { if (select.value !== next) select.value = next; });
     },
   };
 }

@@ -63,6 +63,28 @@ function presentNext(doc, state) {
     details.append(make('summary', '', '查看技术详情'), make('pre', '', content.detail));
     dialog.append(details);
   }
+  // 错误类提示（5.5.24）：命中已知问题直接给解法（能一键做的带按钮），否则认得出的原始报错补一句人话原因；
+  // 右上角悬停才出现「问问 Agent」「一键反馈」。
+  if (!options.confirm && isErrorNotice(item.message, options, content)) {
+    const card = require('./hub-error-card');
+    const firstLine = String(item.message).split(/\r?\n/)[0].slice(0, 120);
+    const ctx = { area: options.area || 'hub-alert', title: content.title === '操作未完成' ? firstLine : content.title,
+      symptom: content.body, details: content.detail || String(item.message) };
+    const anchor = dialog.querySelector('.hub-dialog-details');
+    const knownBlock = card.knownHtml(ctx);
+    if (knownBlock) {
+      const holder = make('div');
+      holder.innerHTML = knownBlock;
+      dialog.insertBefore(holder.firstChild, anchor);
+    } else {
+      const human = require('../core/error-humanize').humanizeError(ctx.details);
+      if (human) dialog.insertBefore(make('p', 'hub-dialog-body hub-dialog-hint', '可能的原因：' + human.cause + (human.steps[0] ? '可以先试试：' + human.steps[0] + '。' : '')), anchor);
+    }
+    dialog.dataset.hubErrHover = '';
+    const holder = make('div');
+    holder.innerHTML = card.assistHtml(ctx);
+    if (holder.firstChild) dialog.append(holder.firstChild);
+  }
   const footer = make('footer', 'hub-dialog-actions');
   let settled = false;
   const finish = accepted => {
@@ -92,6 +114,12 @@ function presentNext(doc, state) {
     finish(false);
   }
 }
+// 失败、报错类的提示才挂求助按钮；普通「请留意」信息不挂（正常使用时不打扰）。
+function isErrorNotice(message, options = {}, content = {}) {
+  if (options.assist === false) return false;
+  if (options.assist === true || options.detail) return true;
+  return /失败|错误|无法|出错|异常|Error|ENOENT|EACCES|EPERM|ETIMEDOUT|ECONN/i.test(String(message || '')) && content.icon !== 'lock';
+}
 function showHubAlert(message, options) { return requestDialog(message, { ...options, confirm: false }); }
 function confirmHubAction(message, options) { return requestDialog(message, { ...options, confirm: true }); }
-module.exports = { showHubAlert, confirmHubAction, noticeContent };
+module.exports = { showHubAlert, confirmHubAction, noticeContent, isErrorNotice };

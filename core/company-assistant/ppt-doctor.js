@@ -15,15 +15,20 @@ class PptDoctor {
     this.server = new (require('./ppt-doctor-server').PptDoctorServer)(this);
   }
   config() { return this.a.settings().ppt || {}; }
+  // 2026-11-07：装了多份时由自动发现（core/tool-discovery）按版本选；用户指定的程序被卸载 / 移动时不再一直报错，回到扫描。
   async discover() {
     const override = this.config().doctorExe || this.env.PPT_DOCTOR_EXE;
-    if (override) {
-      if (!path.isAbsolute(override) || !fs.existsSync(override)) throw failure('DOCTOR_NOT_FOUND', '指定的 PPT Doctor 程序不存在，请在 PPT 页重新选择或安装 PPT Doctor', { downloadUrl: DOWNLOAD_URL });
-      return path.resolve(override);
+    if (override && path.isAbsolute(override) && fs.existsSync(override)) return path.resolve(override);
+    const discovery = this.deps.toolDiscovery;
+    if (discovery?.has?.('ppt-doctor')) {
+      const summary = await discovery.list('ppt-doctor');
+      if (summary.current?.path) return summary.current.path;
+    } else {
+      const candidates = await require('./ppt-doctor-discovery').candidates(this.env, this.deps);
+      const found = candidates.find(file => path.isAbsolute(file) && fs.existsSync(file));
+      if (found) return found;
     }
-    const candidates = await require('./ppt-doctor-discovery').candidates(this.env, this.deps);
-    const found = candidates.find(file => path.isAbsolute(file) && fs.existsSync(file));
-    if (found) return found;
+    if (override) throw failure('DOCTOR_NOT_FOUND', '之前指定的 PPT Doctor 程序已经不在了，也没在常见位置找到新的；请重新安装或手动指定', { downloadUrl: DOWNLOAD_URL });
     throw failure('DOCTOR_NOT_FOUND', '请安装 PPT Doctor 后使用 PPT 素材库与图片转可编辑，无需另装 Python', { downloadUrl: DOWNLOAD_URL });
   }
   async status({ force = false } = {}) {

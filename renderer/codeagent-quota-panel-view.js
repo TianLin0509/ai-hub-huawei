@@ -52,6 +52,20 @@ function tokenMetric(account, currentModel, now = Date.now()) {
 }
 // 向下取整：用过一点就不显示 100%；还有余量时至少显示 1%，只有真的用完才写「用完」。
 const wholePct = pct => (pct > 0 ? Math.max(1, Math.floor(pct)) : 0);
+// 今日 / 1 小时 / 1 分钟三档剩余（2026-11-07 用户：不要只显示今日）。口径同今日：剩余百分比，≤20% 琥珀，0 写「用完」；
+// 读不到写「—」；不在当前窗口（上一小时、上一分钟的读数）置灰，不报警。
+const WINDOWS = [['day', '今日', '今日'], ['hour', '1 小时', '时'], ['min', '1 分钟', '分']];
+function tokenWindows(token) {
+  if (!token) return [];
+  return WINDOWS.map(([key, label, short]) => {
+    const used = token.periods?.[key];
+    if (!Number.isFinite(used)) return { key, label, short, pct: null, text: '—', level: 'none', title: `${label}：未读取（CodeAgent 这次没给这一档的用量）` };
+    const pct = clamp(100 - used), whole = wholePct(pct), fresh = !!token.fresh?.[key];
+    const text = whole === 0 ? '用完' : `${whole}%`;
+    if (!fresh) return { key, label, short, pct, text, level: 'stale', title: `${label}：上次读数剩 ${whole}%，这一轮可能已重置（按整天、整点、整分钟估算）` };
+    return { key, label, short, pct, text, level: whole === 0 ? 'out' : whole <= 20 ? 'low' : '', title: `${label}：剩 ${whole}%` };
+  });
+}
 
 function idleView(rows, now) {
   const source = rows.filter(row => row.credit && (row.credit.idleDiscountActive || row.credit.idleDiscountIn || row.credit.idleDiscountUntil))
@@ -81,7 +95,7 @@ function quotaView(snapshot, { now = Date.now(), currentAccountId = '', currentM
     const loading = loadingKeys.has(account.id) || account.refresh?.status === 'in-flight';
     // 第二行（s1 样稿）：模型名 · 告警 · 读数时间；状态类的文字（暂停、需登录、读取失败）占模型名的位置。
     let detail = token?.name || '下次读取后显示', alert = '';
-    let warning = false;
+    let warning = false, windowAlert = false;
     if (sharedDown) { detail = snapshot.connection === 'revoked' ? '口令已撤销 · 上次读数' : '主机连接中断 · 上次读数'; warning = true; }
     else if (account.avoid) { detail = pauseReason(account.avoid, now); warning = true; }
     else if (!health.usable) { detail = health.detail || health.label; warning = true; }
@@ -89,11 +103,11 @@ function quotaView(snapshot, { now = Date.now(), currentAccountId = '', currentM
     else if (account.refresh?.status === 'failed' || account.refresh?.error) { detail = token || busy || month ? '读取失败，保留上次读数' : '读取失败，暂未读到额度'; warning = true; }
     else if (account.refresh?.status === 'disabled') detail = token || busy || month ? '暂未开启额度读取 · 显示上次读数' : '暂未开启额度读取';
     else if (token?.pct === 0) alert = '约 00:00 恢复';
-    else if (token?.warning) alert = `${token.warning.label} ${Math.round(token.warning.pct)}%`;
+    else if (token?.warning) { alert = `${token.warning.label} ${Math.round(token.warning.pct)}%`; windowAlert = true; }
     const at = token?.at || Math.max(busy?.at || 0, month?.at || 0);
     const name = account.personal ? '我的账号' : account.label || account.note || account.accountLabel || '未备注账号';
     const needsLogin = !sharedDown && account.state !== 'ready' && !account.avoid;
-    return { ...account, name, token, busy, idle, month, at, current, loading, warning, detail, alert, needsLogin, statusLabel: sharedDown ? '主机离线' : health.label,
+    return { ...account, name, token, busy, idle, month, at, current, loading, warning, detail, alert, windowAlert, needsLogin, statusLabel: sharedDown ? '主机离线' : health.label,
       usable: health.usable && !sharedDown, dim: sharedDown || !health.usable || token?.pct === 0 || busy?.pct === 0 || month?.pct === 0,
       avatar: account.personal ? '我' : [...name][0],
       tint: account.personal ? 'brand' : ['tint-room', 'tint-assist', 'tint-meet', 'tint-room', 'tint-forum'][(index - 1 + 5) % 5] };
@@ -108,6 +122,8 @@ const ICON_PATHS = {
   unfold: '<path d="m11 7-5 5 5 5m6-10-5 5 5 5"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 6v6l4 2"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9m-3 3 3 3m-6 0 3 3"/>',
+  dockBottom: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 15h16M12 7v5m-2-2 2 2 2-2"/>',
+  dockRight: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M15 4v16M8 12h4m-2-2 2 2-2 2"/>',
 };
 const icon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name]}</svg>`;
 function metricTitle(value, bucket, now) {
@@ -142,15 +158,22 @@ function readAge(at, now) {
   if (hours < 1) return { text: readTime(at, now), old: false };
   return { text: hours < 48 ? `${hours} 小时前` : `${Math.floor(hours / 24)} 天前`, old: true };
 }
+function windowsHtml(row) {
+  if (row.needsLogin || !row.token) return '';
+  const cells = tokenWindows(row.token).filter(item => item.key !== 'day').map(item =>
+    `<span class="qp-win${item.level ? ` ${item.level}` : ''}" data-qp-window="${item.key}" aria-label="${esc(item.title)}"><i>${item.label}</i><span class="qp-mini"${item.pct !== null ? ` style="--v:${item.pct}"` : ''}><span>${esc(item.text)}</span></span></span>`);
+  return `<div class="qp-wins">${cells.join('')}</div>`;
+}
 function rowHtml(row, now) {
   const first = row.warning ? `<span class="warn">${esc(row.detail)}</span>` : `<span>${esc(row.detail)}</span>`;
-  const alert = row.alert ? `<span class="warn">${esc(row.alert)}</span>` : '';
+  // 小时窗、分钟窗告警由第三行的小胶囊变琥珀来表达；第二行再写「已用 86%」会和胶囊上的「剩 14%」打架。
+  const alert = row.alert && !row.windowAlert ? `<span class="warn">${esc(row.alert)}</span>` : '';
   const showAt = row.at && !row.loading && !row.warning;
   const age = showAt ? readAge(row.at, now) : null;
   return `<div class="qp-row${row.current ? ' is-current' : ''}${row.dim ? ' dim' : ''}${row.loading ? ' is-loading' : ''}" data-qp-account="${esc(row.id)}" role="button" tabindex="0" aria-label="${esc(`打开账号页并定位到「${row.name}」`)}">
     <span class="qp-av" style="--av:var(--hw-${row.tint})">${esc(row.avatar)}</span><span class="qp-name"><span class="qp-name-text">${esc(row.name)}</span>${row.personal ? '<i class="qp-tag">个人</i>' : ''}</span>
     ${capsule(row)}
-    <div class="qp-sub"${row.refresh?.error ? ` title="${esc(row.refresh.error)}"` : ''}>${first}${alert}${age ? `<span class="qp-at${age.old ? ' warn' : ''}">${esc(age.text)}</span>` : ''}</div></div>`;
+    <div class="qp-sub"${row.refresh?.error ? ` title="${esc(row.refresh.error)}"` : ''}>${first}${alert}${age ? `<span class="qp-at${age.old ? ' warn' : ''}">${esc(age.text)}</span>` : ''}</div>${windowsHtml(row)}</div>`;
 }
 // 悬停卡（s1 样稿）：三档 Token + Credit，一行一项；只有已用 ≥80% 的那档标琥珀；只写读取时间，不写没实现的行为。
 function tipHtml(row, now) {
@@ -174,22 +197,43 @@ function ringHtml(row, now) {
   const title = [row.name, quotaTitle(row, now), row.detail].join('\n');
   return `<button type="button" class="qp-ring ${cls}${row.current ? ' is-current' : ''}" data-qp-account="${esc(row.id)}" style="--v:${row.token?.pct || 0}" aria-label="${esc(title)}"><span class="qp-av" style="--av:var(--hw-${row.tint})">${esc(row.avatar)}</span></button>`;
 }
-// 底部状态栏形态：一行放下所有号，名字加今日剩余，和右侧栏同一口径。
+// 底部状态栏形态（2026-11-07 用户）：极简一行「今日 62% · 时 80% · 分 95%」。多号时只放当前会话的号，没有就放最紧张的号，悬停看全部。
+// 只有 1 个号时右侧栏不出现，这一行就是它的额度（不论位置怎么选）。
+function tightest(row) {
+  const fresh = tokenWindows(row.token).filter(item => item.pct !== null && item.level !== 'stale');
+  return row.needsLogin || !row.token || row.token.expired || !fresh.length ? Infinity : Math.min(...fresh.map(item => item.pct));
+}
+function footerPick(view) {
+  return view.rows.find(row => row.current) || view.rows.reduce((best, row) => (tightest(row) < tightest(best) ? row : best), view.rows[0]);
+}
+function footerLine(row) {
+  const token = row.token;
+  if (row.needsLogin || !token) return `${row.name}：${row.needsLogin ? '需登录' : '未读取'}`;
+  return `${row.name}：${tokenWindows(token).map(item => `${item.label} ${item.key === 'day' && token.expired ? '待读取' : item.level === 'stale' ? `上次 ${item.text}` : item.text}`).join(' · ')}`;
+}
 function renderQuotaFooter(view, { now = Date.now() } = {}) {
-  const items = view.rows.map(row => {
-    const token = row.token, pct = token && !token.expired ? wholePct(token.pct) : null;
-    const text = row.needsLogin ? '需登录' : !token ? '未读取' : token.expired ? '待读取' : pct === 0 ? '用完' : `${pct}%`;
-    const level = row.warning || row.alert || (pct !== null && pct <= 20) ? ' low' : '';
-    return `<button type="button" class="qp-foot-item${level}${row.current ? ' is-current' : ''}${row.dim ? ' dim' : ''}" data-qp-account="${esc(row.id)}" title="${esc([row.name, quotaTitle(row, now), row.detail, '点击打开账号页'].join('\n'))}">`
-      + `<span class="qp-av" style="--av:var(--hw-${row.tint})">${esc(row.avatar)}</span><span class="qp-foot-name">${esc(row.name)}</span><b>${esc(text)}</b></button>`;
-  });
-  return `<div class="qp-foot" role="group" aria-label="今日 Token 剩余">${items.join('')}</div>`;
+  const row = footerPick(view);
+  if (!row) return '';
+  const token = row.token, pct = token && !token.expired ? wholePct(token.pct) : null;
+  const today = row.needsLogin ? '需登录' : !token ? '未读取' : token.expired ? '待读取' : pct === 0 ? '用完' : `${pct}%`;
+  const wins = row.needsLogin || !token ? [] : tokenWindows(token).filter(item => item.key !== 'day');
+  const level = row.warning || row.alert || (pct !== null && pct <= 20) || wins.some(item => item.level === 'low' || item.level === 'out') ? ' low' : '';
+  const others = view.rows.length - 1;
+  const title = [view.rows.length > 1 ? `${view.usable}/${view.total} 个号可用` : '', ...view.rows.map(footerLine), row.warning ? row.detail : '',
+    token && !token.fresh.min ? '读数可能已过时：CodeAgent 不告诉重置时间，按整天、整点、整分钟估算' : '', token?.at ? `${readTime(token.at, now)} 读取` : '', '点击打开账号页'].filter(Boolean).join('\n');
+  const move = view.visible ? `<button type="button" class="qp-foot-move" data-qp-action="to-right" title="移回右侧额度栏" aria-label="把号池额度移回右侧栏">${icon('dockRight')}</button>` : '';
+  // 「移回右侧」放在最左：额度项的悬停卡从右边弹出，放右边会被它盖住。
+  return `<div class="qp-foot" role="group" aria-label="CodeAgent Token 剩余">${move}<button type="button" class="qp-foot-item${level}${row.current ? ' is-current' : ''}${row.dim ? ' dim' : ''}" data-qp-account="${esc(row.id)}" title="${esc(title)}">`
+    + `<span class="qp-av" style="--av:var(--hw-${row.tint})">${esc(row.avatar)}</span><span class="qp-foot-name">${esc(row.name)}</span>`
+    + `<span class="qp-foot-w${pct === 0 ? ' out' : pct !== null && pct <= 20 ? ' low' : pct === null ? ' none' : ''}" data-qp-window="day">今日 <b>${esc(today)}</b></span>${wins.map(item => `<span class="qp-foot-w${item.level ? ` ${item.level}` : ''}" data-qp-window="${item.key}">${item.short} <b>${esc(item.text)}</b></span>`).join('')}`
+    + `${others > 0 ? `<span class="qp-foot-more">+${others}</span>` : ''}</button></div>`;
 }
 function renderQuota(view, { now = Date.now(), refreshing = false, loadingCount = 0, message = '' } = {}) {
   if (view.installed === false) return `<div class="qp-h"><h3>号池额度</h3><span class="sp"></span><button type="button" class="icon-btn qp-fold" data-qp-action="collapse" aria-label="收起额度栏">${icon('fold')}</button></div><div class="qp-note" role="status">CodeAgent 未安装</div><div class="qp-list"><div class="qp-empty">先安装 CodeAgent，再登录读取额度。</div></div><div class="qp-f"><button type="button" class="btn btn-ghost btn-sm" data-qp-action="install-guide">查看安装说明</button></div><div class="qp-rail"><button type="button" class="icon-btn" data-qp-action="expand" aria-label="展开号池额度">${icon('unfold')}</button><button type="button" class="icon-btn" data-qp-action="install-guide" title="CodeAgent 未安装 · 查看安装说明" aria-label="CodeAgent 未安装，查看安装说明">${icon('key')}</button></div>`;
   const note = refreshing ? (view.shared ? '正在同步主机额度…' : `正在读取 ${loadingCount} 个号…`) : message || view.message;
   return `<div class="qp-h"><h3>${view.shared ? '共享号池额度' : '号池额度'}</h3><span class="qp-n"><b>${view.usable}</b>/${view.total} 可用</span><span class="sp"></span>
     <button type="button" class="icon-btn qp-refresh" data-qp-action="refresh" title="刷新全部号的读数（同一个号 10 分钟内只读一次）" aria-label="刷新全部额度"${refreshing ? ' disabled' : ''}>${icon('refresh')}</button>
+    <button type="button" class="icon-btn qp-move${view.total === 1 ? ' with-text' : ''}" data-qp-action="to-bottom" title="${view.total === 1 ? '只有 1 个号，放到底部状态栏更省地方' : '移到底部状态栏'}" aria-label="把号池额度移到底部状态栏">${icon('dockBottom')}${view.total === 1 ? '<span>移到底栏</span>' : ''}</button>
     <button type="button" class="icon-btn qp-fold" data-qp-action="collapse" title="收起成细栏" aria-label="收起额度栏">${icon('fold')}</button></div>
     ${note ? `<div class="qp-note" role="status"><i class="d"></i><span>${esc(note)}</span></div>` : ''}
     ${view.idle ? `<div class="qp-idle${view.idle.active ? ' on' : ''}" title="${esc(`按最近读数计算 · ${readTime(view.idle.at, now) || '读取时间未知'}`)}">${icon('clock')}<span>${esc(view.idle.text)}</span></div>` : ''}
@@ -200,4 +244,4 @@ function renderQuota(view, { now = Date.now(), refreshing = false, loadingCount 
     <span class="sp"></span><button type="button" class="icon-btn" data-qp-action="accounts" title="打开账号页" aria-label="打开账号页">${icon('key')}</button></div>`;
 }
 
-module.exports = { metric, tokenMetric, wholePct, idleView, quotaView, readTime, renderQuota, renderQuotaFooter, metricTitle, quotaTitle, tipHtml };
+module.exports = { metric, tokenMetric, tokenWindows, footerPick, wholePct, idleView, quotaView, readTime, renderQuota, renderQuotaFooter, metricTitle, quotaTitle, tipHtml };
