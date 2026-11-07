@@ -93,6 +93,19 @@ function writeAtomic(file, text) {
   fs.renameSync(temporary, file);
 }
 
+// Codex 把 CODEX_HOME 规范化成磁盘上的最终路径（8.3 短名展开、目录链接解开）再拼信任键。
+// Hub 必须用同一形态写键，否则 TEMP 是 C:\Users\ABCDEF~1\… 这类短名时，
+// Codex 会把 Hub 已信任的 hook 全部当成「新的」，停在 Hooks need review。
+function canonicalCodexHome(dir) {
+  const resolved = path.resolve(dir);
+  try {
+    fs.mkdirSync(resolved, { recursive: true });
+    return fs.realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
 function copyHookScript(codexHome, sourceScript, runner) {
   const target = hubHookScriptPath(codexHome, runner);
   const source = fs.readFileSync(sourceScript);
@@ -315,7 +328,7 @@ function policyHandlerIdentities(trustedHooks) {
  */
 function ensureCodexHookIntegration({ codexHome = null, sourceScript = null, logger = console, parseToml = null,
   runner = hookRunner(), trustedHooks = null } = {}) {
-  const home = path.resolve(codexHome || defaultCodexHome());
+  const home = canonicalCodexHome(codexHome || defaultCodexHome());
   const parse = parseToml || defaultParseToml(runner);
   const result = { codexHome: home, hooksChanged: false, trustChanged: false, trusted: [], untrusted: [], errors: [],
     policyTrusted: 0 };

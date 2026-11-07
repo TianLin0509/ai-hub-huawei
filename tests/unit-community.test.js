@@ -544,6 +544,24 @@ test('Codex hook trust is written without Python', () => {
   assert.match(config, /trusted_hash = "sha256:[0-9a-f]{64}"/);
 });
 
+test('Codex hook trust keys use the final on-disk path of CODEX_HOME (short names, directory links)', () => {
+  // Codex canonicalizes CODEX_HOME before it builds trust keys; a TEMP like C:\Users\ABCDEF~1\... or a
+  // junction would otherwise leave every Hub hook "new or changed" (Codex stops at Hooks need review).
+  const { ensureCodexHookIntegration } = require('../core/codex-hook-integration');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'community-codex-link-'));
+  const real = path.join(root, 'real'); const link = path.join(root, 'link');
+  fs.mkdirSync(real);
+  fs.symlinkSync(real, link, 'junction');
+  const result = ensureCodexHookIntegration({ codexHome: path.join(link, 'home'), logger: {} });
+  assert.deepEqual(result.errors, []);
+  const finalHome = fs.realpathSync.native(path.join(real, 'home'));
+  assert.equal(result.codexHome, finalHome);
+  const config = fs.readFileSync(path.join(real, 'home', 'config.toml'), 'utf8');
+  const keys = [...config.matchAll(/^\[hooks\.state\.'([^']+)'\]$/gm)].map(m => m[1]);
+  assert.ok(keys.length >= 6);
+  for (const key of keys) assert.ok(key.startsWith(path.join(finalHome, 'hooks.json') + ':'), key);
+});
+
 test('data directory and product naming are separate from any private installation', () => {
   const dataDir = require('../core/data-dir');
   const saved = process.env.CLAUDE_HUB_DATA_DIR;

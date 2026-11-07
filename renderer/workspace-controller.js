@@ -1916,6 +1916,8 @@
       if (workspaceMode === 'scratch') workspace = await createScratch('未命名任务');
       else if (workspaceMode === 'default') workspace = await createDefaultWorkspace('未命名任务');
       if (submit) submit.textContent = '检查账号并启动…';
+      // 公司模型反代还没就绪（刚启动或首次签名初始化）：主进程会等它准备好再建会话，按钮上说一声。
+      if (submit && companyApiKind(selectedKind) && companyPick[selectedKind]?.source === 'company' && companyProxyStatus?.state !== 'running') submit.textContent = '公司模型准备中（首次约 10–20 秒）…';
       const session = await createSession(selectedKind, { workspace, opts: tuningOpts() });
       require('./codeagent-preference').rememberKind(selectedKind);
       closeNewSessionModal();

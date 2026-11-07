@@ -359,6 +359,48 @@ test('DSH terminal session uses the company provider, its own key variable and t
   assert.ok(options.launch.secrets.includes(endpoint.key + '.dsh-1'));
 });
 
+test('branch of a company-model session keeps the route and the source model', async () => {
+  const { planSessionFork } = require('../core/session-fork-plan');
+  // DSH / 原生 Codex 建会话时只发 _toPublic 的公开形态：线路漏掉，分支的标题栏和卡片就是空的（2026-11-07 验收）。
+  const { SessionManager } = require('../core/session-manager');
+  const pub = SessionManager.prototype._toPublic.call({}, { id: 'b-1', kind: 'deepseek-acp', agentRuntime: 'pty',
+    companyRoute: 'proxy', currentModel: { id: 'GLM-5.2-WX', displayName: 'GLM-5.2-WX' } });
+  assert.equal(pub.companyRoute, 'proxy');
+  // 分支跟源会话的模型，不跟此刻保存的工具默认（保存的是 DeepSeek，源会话是 GLM）。
+  const dsh = planSessionFork({ source: { id: 's-dsh', kind: 'deepseek-acp', agentRuntime: 'pty', companyRoute: 'proxy',
+    acpSid: '8fc2f692-84b3-48fe-883e-d6cf86435feb', currentModel: { id: 'GLM-5.2-WX' } } });
+  assert.equal(dsh.ok, true);
+  assert.equal(dsh.opts.model, 'GLM-5.2-WX');
+  if (companyApi.isCompany()) {
+    const dataDir = hubData();
+    const runtime = fs.mkdtempSync(path.join(os.tmpdir(), 'cmp-dsh-br-'));
+    for (const file of ['node_modules/@deepseek-ai/dsh/lib/bin.js', 'node_modules/@deepseek-harness-tui/dsh-tui/package.json']) {
+      fs.mkdirSync(path.dirname(path.join(runtime, file)), { recursive: true });
+      fs.writeFileSync(path.join(runtime, file), '{}');
+    }
+    const config = companyApi.applyCompanyConfig({ acp: { nodePath: process.execPath, providers: { 'deepseek-acp': { cliRoot: runtime } } } },
+      { acp: { companyApi: { backend: 'proxy', model: 'deepseek-v4.1-flash-1017' } } });
+    const options = require('../core/dsh-cli-profile').buildDshCliOptions('deepseek-acp',
+      { ...dsh.opts, id: 'dsh-br-1', cwd: dataDir }, config, dataDir, { PATH: process.env.PATH });
+    const model = JSON.parse(fs.readFileSync(path.join(options.home, '.dsh-tui/model.json'), 'utf8'));
+    assert.equal(model.model, 'GLM-5.2-WX');
+  }
+  // 公司版 Codex 分支：没有全局订阅账号，跨账号预分叉不能接手（以前在这里报「全局 Codex 账号不存在」，分支建不出来）。
+  const root = path.join(os.tmpdir(), 'codex-company-proxy', 'sessions');
+  const codex = planSessionFork({ source: { id: 's-cx', kind: 'codex', companyRoute: 'proxy', codexSid: '01a1b44c-e8d4-7672-a1c1-ccea74438db7',
+    codexSessionsRoot: root, transcriptPath: path.join(root, 'rollout-x.jsonl'), currentModel: { id: 'deepseek-v4.1-flash-1017' } } });
+  assert.equal(codex.ok, true);
+  assert.equal(codex.kind, 'codex');
+  assert.equal(codex.opts.model, 'deepseek-v4.1-flash-1017', 'not swapped for the default GPT / company model');
+  assert.equal(codex.opts.codexForkSid, '01a1b44c-e8d4-7672-a1c1-ccea74438db7');
+  const { prepareCrossAccountCodexFork } = require('../core/codex-cross-account-fork');
+  let clients = 0;
+  const prepared = await prepareCrossAccountCodexFork(codex.opts, { config: { companyCli: true, codexBackend: 'proxy', codexSubscriptionProfiles: [] },
+    createClient: () => { clients++; throw new Error('must not start a fork client'); } });
+  assert.equal(prepared, codex.opts, 'the terminal `codex fork` runs in the company Codex home as planned');
+  assert.equal(clients, 0);
+});
+
 test('proxy service: starts with the Hub, restarts once after a crash, then explains the failure', { timeout: 60000 }, async () => {
   const { CompanyProxyService } = require('../main/company-proxy-service');
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cmp-svc-'));
@@ -1784,4 +1826,55 @@ test('proxy status names the account of each session by its alias, never by id',
     assert.deepEqual(service.sessionAccounts({ s1: 'bbbbbb2', s2: 'personal', s3: 'aaaaaa1' }), { s1: '号 2', s2: '个人', s3: '号 1' });
     assert.deepEqual(service.sessionAccounts(null), {});
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
+
+test('new session waits while the proxy prepares the upstream (first-time signer init), but not for problems the user must fix', async () => {
+  const { CompanyProxyService } = require('../main/company-proxy-service');
+  const make = replies => {
+    const service = new CompanyProxyService({ dataDir: os.tmpdir(), isEnabled: () => true, logger: { warn() {} } });
+    service.child = { pid: 1 };
+    service.state = 'not-ready';
+    let polls = 0;
+    service.request = async () => replies[Math.min(polls++, replies.length - 1)];
+    service.ensureRunning = async () => { await service.poll(); return service.status(); };
+    return { service, polls: () => polls };
+  };
+  const init = { ready: false, code: 'INITIALIZING', message: 'preparing' };
+  const a = make([init, init, init, { ready: true }]);
+  const ready = await a.service.ensureReady({ timeoutMs: 5000, stepMs: 10 });
+  assert.equal(ready.state, 'running');
+  assert.equal(a.polls(), 4);
+  const b = make([{ ready: false, code: 'ZONE_UNKNOWN', message: 'pick a zone' }]);
+  const zone = await b.service.ensureReady({ timeoutMs: 5000, stepMs: 10 });
+  assert.equal(zone.state, 'not-ready');
+  assert.equal(zone.code, 'ZONE_UNKNOWN');
+  assert.equal(b.polls(), 1);
+  const c = make([init]);
+  const started = Date.now();
+  const slow = await c.service.ensureReady({ timeoutMs: 80, stepMs: 10 });
+  assert.equal(slow.code, 'INITIALIZING');
+  assert.ok(Date.now() - started < 1000);
+});
+
+test('DSH runtime: a global npm install is found when no runtime folder is configured', () => {
+  const { resolveDshCliRuntime } = require('../core/dsh-cli-profile');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-global-'));
+  const appData = path.join(root, 'AppData'); const home = path.join(root, 'home');
+  fs.mkdirSync(home, { recursive: true });
+  const savedHome = process.env.USERPROFILE;
+  process.env.USERPROFILE = home;
+  try {
+    assert.throws(() => resolveDshCliRuntime({}, { APPDATA: appData }), /请先安装 DSH CLI/);
+    const modules = path.join(appData, 'npm', 'node_modules');
+    fs.mkdirSync(path.join(modules, '@deepseek-ai', 'dsh', 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(modules, '@deepseek-ai', 'dsh', 'lib', 'bin.js'), '');
+    assert.throws(() => resolveDshCliRuntime({}, { APPDATA: appData }), /请先安装 DSH CLI/, 'half an install is not picked up');
+    fs.mkdirSync(path.join(modules, '@deepseek-harness-tui', 'dsh-tui'), { recursive: true });
+    fs.writeFileSync(path.join(modules, '@deepseek-harness-tui', 'dsh-tui', 'package.json'), '{}');
+    assert.equal(resolveDshCliRuntime({}, { APPDATA: appData }).root, path.join(appData, 'npm'));
+    const own = path.join(root, 'own');
+    assert.throws(() => resolveDshCliRuntime({ cliRoot: own }, { APPDATA: appData }), /不完整/, 'a configured folder still wins');
+  } finally {
+    if (savedHome === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = savedHome;
+  }
 });

@@ -109,7 +109,7 @@ function createCompanyForumPage({ document, window, ipcRenderer, closeOtherPanel
     if (!entry) body = `<p class="cf-note">${data.syncing ? '正在取…' : '还没同步。'}</p>`;
     else if (entry.needsLogin) {
       const waiting = site.login === 'waiting';
-      body = `<div class="cf-login"><p>${esc(entry.error)}</p><button type="button" class="cf-btn primary" data-cf="login" data-site="${site.id}"${waiting ? ' disabled' : ''}>${waiting ? '登录窗口已打开…' : '登录' + esc(site.name)}</button></div>`;
+      body = `<div class="cf-login"><p>${esc(site.loginError || entry.error)}</p><button type="button" class="cf-btn primary" data-cf="login" data-site="${site.id}"${waiting ? ' disabled' : ''}>${waiting ? '登录窗口已打开…' : '登录' + esc(site.name)}</button></div>`;
     } else if (!entry.ok) body = `<p class="cf-note bad">${esc(entry.error || '没取到')}</p>`;
     else body = `<ol class="cf-posts">${(cur?.posts || []).map(p => postHtml(site, p)).join('')}</ol>`;
     return `<section class="cf-site" data-site="${site.id}"><div class="cf-site-head"><b>${esc(site.name)}</b>${tabs}<span class="cf-sp"></span>${entry?.at ? `<span class="cf-time">${when(entry.at)}</span>` : ''}</div>${body}</section>`;

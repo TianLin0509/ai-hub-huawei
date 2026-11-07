@@ -38,6 +38,7 @@ class CompanyForum {
     this.syncing = null;
     this.progress = '';
     this.logins = {};
+    this.loginErrors = {};
     this.timers = [];
   }
 
@@ -298,10 +299,11 @@ class CompanyForum {
     if (this.logins[site.id] === 'waiting') return { ok: true, state: 'waiting' };
     if (!this.deps.browser?.login) throw new Error('浏览器窗口不可用');
     this.logins[site.id] = 'waiting';
+    this.loginErrors[site.id] = '';
     this.changed();
-    void this.deps.browser.login({ url: S.homeUrl(site, base), base, title: `登录${site.name}（AI Hub 论坛）` })
-      .then(r => { this.logins[site.id] = r && r.ok ? 'ok' : 'closed'; if (r && r.ok) return this.sync({ sites: [site.id], reason: 'login' }); return null; })
-      .catch(() => { this.logins[site.id] = 'closed'; })
+    void Promise.resolve().then(() => this.deps.browser.login({ url: S.homeUrl(site, base), base, title: `登录${site.name}（AI Hub 论坛）` }))
+      .then(r => { this.logins[site.id] = r && r.ok ? 'ok' : 'closed'; this.loginErrors[site.id] = r?.error || ''; if (r && r.ok) return this.sync({ sites: [site.id], reason: 'login' }); return null; })
+      .catch(error => { this.logins[site.id] = 'closed'; this.loginErrors[site.id] = error.message; })
       .finally(() => this.changed());
     return { ok: true, state: 'waiting' };
   }
@@ -309,7 +311,7 @@ class CompanyForum {
   status() {
     const s = this.settings(), snap = this.latest(), dom = this.domain();
     return { ok: true, now: this.now(), day: dayKey(this.now()), settings: s, domain: dom.domain, domainFrom: dom.from,
-      sites: S.SITES.map(x => ({ id: x.id, name: x.name, short: x.short, base: this.bases()[x.id] || '', login: this.logins[x.id] || null })),
+      sites: S.SITES.map(x => ({ id: x.id, name: x.name, short: x.short, base: this.bases()[x.id] || '', login: this.logins[x.id] || null, loginError: this.loginErrors[x.id] || '' })),
       snapshot: snap, today: !!(snap && snap.day === dayKey(this.now())), syncing: !!this.syncing, progress: this.progress,
       job: this.job ? { sentAt: this.job.sentAt || null } : null, nextSyncAt: this.nextSyncAt(s), session: this.state().sessionId || null };
   }

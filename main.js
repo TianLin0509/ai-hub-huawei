@@ -2468,7 +2468,7 @@ const sessionOperations = registerSessionIpc(ipcMain, {
         const shared = await lanPoolService.snapshot({ force: true });
         if (!shared?.ready) throw new Error(lanPoolService.error || '共享主机模型服务尚未就绪');
       } else {
-        const status = await companyProxyService.ensureRunning();
+        const status = await companyProxyService.ensureReady();
         if (status.state === 'failed' || status.state === 'not-ready') throw new Error(status.message || '公司模型反代还没准备好');
       }
     }

@@ -60,14 +60,13 @@ function resolveForkTimestamp({ session, childTurns, providerForkAt } = {}) {
 // 把祖先 turn 标记出来并前置。已经出现在子 transcript 里的（Claude 复制过来的那批）
 // 按签名滤掉；fork 之后父会话自己继续产生的那批按时间戳滤掉。
 function mergeInheritedTurns(inheritedTurns, childTurns, { forkAt = 0, sourceSessionId = null } = {}) {
-  const child = Array.isArray(childTurns) ? childTurns : [];
-  const seen = new Set(child.map(turnSignature));
   const cut = finiteTs(forkAt);
+  const before = (Array.isArray(inheritedTurns) ? inheritedTurns : [])
+    .filter(turn => turn && turn.role && !(cut && finiteTs(turn.ts) && finiteTs(turn.ts) > cut));
+  const child = markCopiedPrefix(Array.isArray(childTurns) ? childTurns : [], inheritedTurns, sourceSessionId);
+  const seen = new Set(child.map(turnSignature));
   const prefix = [];
-  for (const turn of Array.isArray(inheritedTurns) ? inheritedTurns : []) {
-    if (!turn || !turn.role) continue;
-    const ts = finiteTs(turn.ts);
-    if (cut && ts && ts > cut) continue;
+  for (const turn of before) {
     const signature = turnSignature(turn);
     if (!normalizeText(turn.text)) continue;
     if (seen.has(signature)) continue;
@@ -82,6 +81,23 @@ function mergeInheritedTurns(inheritedTurns, childTurns, { forkAt = 0, sourceSes
     });
   }
   return prefix.concat(child);
+}
+
+// Claude 的分支文件开头就是整份复制来的父历史（记录 uuid 原样保留，只改 sessionId）。
+// 它们也是「分支前」的对话，要和 Codex 分支一样打上标记。只认子会话开头那一段：
+// 与父会话同 id、同正文的条目；分支里后来说的同样一句话（如「继续」）id 不同，不算。
+// 这里不能按 forkAt 截父会话：落盘记录没有 createdAt，forkAt 会退到子会话最早一条，
+// 也就是复制段的第一条。id 保留子文件里的原值：工具输出按需读取认的是这份文件。
+function markCopiedPrefix(child, parentTurns, sourceSessionId) {
+  const parent = new Set((Array.isArray(parentTurns) ? parentTurns : [])
+    .filter(turn => turn && turn.id != null && turn.role)
+    .map(turn => `${turn.id}|${turnSignature(turn)}`));
+  let copied = 0;
+  while (copied < child.length && child[copied] && child[copied].id != null
+    && parent.has(`${child[copied].id}|${turnSignature(child[copied])}`)) copied += 1;
+  if (!copied) return child;
+  return child.map((turn, index) => index < copied && !turn.inherited
+    ? { ...turn, inherited: true, inheritedFrom: sourceSessionId || null } : turn);
 }
 
 function applyTailLimit(turns, limit, fromTail) {

@@ -12,6 +12,7 @@ const { spawn } = require('node:child_process');
 
 const POLL_MS = 5_000;
 const READY_TIMEOUT_MS = 15_000;
+const READY_WAIT_MS = 90_000; // 新建会话时最多等上游准备 90 秒（首次签名初始化实测约 11 秒）
 const DRAIN_POLL_MS = 2_000;
 const DRAIN_MAX_MS = 10 * 60_000;
 
@@ -141,6 +142,21 @@ class CompanyProxyService {
     if (!this.draining) return;
     this.drainCancelled = true;
     if (this.child) this.setState('running', '公司模型反代运行中');
+  }
+
+  // 新建公司模型会话前用：反代刚启动、还在准备上游（含首次签名初始化，约 10–20 秒）时等它准备好，
+  // 而不是直接报「创建失败」（2026-11-07 公司真机：首次用公司模型点「创建会话」就失败）。
+  // 只等「准备中」；区域未知、登录缺失这类要用户处理的情况立即返回，由调用方报原因。
+  async ensureReady({ timeoutMs = READY_WAIT_MS, stepMs = 500 } = {}) {
+    let status = await this.ensureRunning();
+    const deadline = Date.now() + timeoutMs;
+    const preparing = s => s.state === 'starting' || (s.state === 'not-ready' && (!s.code || s.code === 'INITIALIZING'));
+    while (preparing(status) && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, stepMs));
+      if (this.child && this.state !== 'starting') await this.poll();
+      status = this.status();
+    }
+    return status;
   }
 
   async ensureRunning() {

@@ -91,7 +91,7 @@
   }
   function proxyStatusHtml(kind) {
     const proxy = snapshot?.proxy;
-    const dshHint = kind === 'deepseek-acp' && !snapshot?.dshCliReady ? '<p class="company-api-note company-proxy-warn">DSH 终端运行环境还没装好，装好后才能新建 DSH 会话。</p>' : '';
+    const dshHint = kind === 'deepseek-acp' && !snapshot?.dshCliReady ? '<p class="company-api-note company-proxy-warn">DSH 终端运行环境还没装好，装好后才能新建 DSH 会话。可在命令行执行 <code>npm i -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui</code>，装完重新打开设置即可。</p>' : '';
     if (!proxy) return '<div class="company-proxy-state" data-proxy-state="unknown"><p>保存后由 Hub 在后台启动反代。</p></div>' + dshHint;
     if (proxy.shared) return `<div class="company-proxy-state" data-proxy-state="${esc(proxy.state)}"><strong>共享主机${proxy.state === 'running' ? '已连接' : '暂不可用'}</strong><p>${esc(proxy.message)}</p><p>主机各号的可用模型和额度见右侧「共享号池额度」。</p></div>` + dshHint;
     const all = proxy.accounts || [];

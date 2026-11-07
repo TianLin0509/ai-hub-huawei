@@ -52,15 +52,20 @@ export async function startMockUpstream({controlFile}={}){
       if(typeof m.reasoning_content==='string'&&m.reasoning_content.startsWith('mock-reasoning'))stats.reasoningReplayed++;else stats.reasoningMissing++;
     }
     const lastAssistant=msgs.findLastIndex(m=>m.role==='assistant'&&Array.isArray(m.tool_calls)&&m.tool_calls.length);
-    const toolAfter=lastAssistant>=0?msgs.slice(lastAssistant+1).find(m=>m.role==='tool'):null;
+    // The file the latest instruction names decides the round: once a tool result carries that file's marker the
+    // answer is final, otherwise read it. This holds for second turns and branches whatever way a client groups
+    // its history (Claude Code folds tool results and the next instruction into one user message).
     let path=null;for(const m of msgs)if(m.role==='user'){const found=text(m.content).match(PATH_RE);if(found)path=found.at(-1);}
+    let want=null;try{want=path?readFileSync(path,'utf8').match(/[A-Z]+_MARKER_[0-9A-Za-z]+/)?.[0]||null:null;}catch{}
+    const toolAfter=want?msgs.find(m=>m.role==='tool'&&text(m.content).includes(want))||null
+      :lastAssistant>=0?msgs.slice(lastAssistant+1).find(m=>m.role==='tool'):null;
     const tool=!toolAfter&&path&&Array.isArray(body.tools)?pickTool(body.tools,path):null;
     res.writeHead(200,{'content-type':'text/event-stream'});
     const send=obj=>res.write('data: '+JSON.stringify({id:'chatcmpl-mock',object:'chat.completion.chunk',model:body.model,...obj})+'\n\n');
     if(thinking&&!dsNoThinking)send({choices:[{index:0,delta:{reasoning_content:'mock-reasoning '+stats.chat}}]});
     if(toolAfter){
       stats.finals++;
-      const body2=text(toolAfter.content),hit=body2.match(/[A-Z]+_MARKER_[0-9A-Za-z]+/);send({choices:[{index:0,delta:{content:'MOCK_FINAL: '+(hit?hit[0]:body2.slice(0,400))}}]});
+      const body2=text(toolAfter.content),hit=want?[want]:body2.match(/[A-Z]+_MARKER_[0-9A-Za-z]+/);send({choices:[{index:0,delta:{content:'MOCK_FINAL: '+(hit?hit[0]:body2.slice(0,400))}}]});
       send({choices:[{index:0,delta:{},finish_reason:'stop'}]});
     }else if(tool){
       stats.toolCalls++;

@@ -93,6 +93,10 @@ function sessionModelId(session) {
     if (/[\\/]codex-api-profile[\\/]sessions[\\/]?$/.test(session.codexSessionsRoot || '')) {
       return require('./company-api-config').optionalText(candidate, '模型名称');
     }
+    // 公司模型（经本机反代）的 Codex 会话用 GLM / DeepSeek：按 GPT 目录归一会被换成默认 GPT，分支就换了模型。
+    if (session.companyRoute === 'proxy' || /[\\/]codex-company-proxy[\\/]sessions[\\/]?$/.test(session.codexSessionsRoot || '')) {
+      return require('./company-model-proxy').launchModel(candidate);
+    }
     return normalizeCodexSessionModel(candidate);
   }
   if (kind === 'deepseek' && sessionProviderFamily(session) === 'codex') {

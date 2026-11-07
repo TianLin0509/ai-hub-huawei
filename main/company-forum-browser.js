@@ -5,7 +5,7 @@
 //   - 用调试协议截下页面取数据的 JSON 响应（帖子编号、阅读、回复都在里面），再收页面上的帖子链接和指定板块的文字；
 //   - 等页面「安定」（正文长度连续两次不变）再收，不是固定等几秒——固定等待在公司实测过同一页一次 3122 字、一次 189 字；
 //   - 没登录时由用户点「登录」弹出同一分区的可见窗口，回到站点首页且不再是登录页就自动关掉。
-// 窗口都挂在一个永不显示的宿主下（同桌宠，见 main/hub-pet-controller.js）：Windows 挑进程主窗口时不会挑到它们。
+// 后台抓取窗口挂在隐藏宿主下（同桌宠）；用户主动打开的登录窗口独立显示并取得焦点。
 const LOGIN_WORDS = /账号登录|扫码登录|密码登录|统一身份认证|统一认证|请输入(?:账号|密码|工号)|忘记密码/;
 const delay = ms => new Promise(r => setTimeout(r, ms));
 
@@ -19,13 +19,17 @@ function collectScript(sections) {
     const linkOf = a => ({ href: abs(a), text: one(txt(a)).slice(0, 300) });
     const links = [...document.querySelectorAll('a[href]')].map(linkOf).filter(l => l.href && l.text.length >= 4);
     const all = [...document.querySelectorAll('body *')];
-    const sections = wanted.map(heading => {
-      const head = all.find(e => e.children.length <= 3 && one(txt(e)) === heading) || all.find(e => e.children.length <= 3 && one(txt(e)).startsWith(heading) && one(txt(e)).length <= heading.length + 10);
+    const heads = wanted.map(heading => all.find(e => e.children.length <= 3 && one(txt(e)) === heading) || all.find(e => e.children.length <= 3 && one(txt(e)).startsWith(heading) && one(txt(e)).length <= heading.length + 10));
+    const sections = wanted.map((heading, index) => {
+      const head = heads[index];
       if (!head) return { heading, found: false, links: [], lines: [] };
-      let box = head.parentElement;
+      let box = head;
       for (let i = 0; i < 6 && box && box.parentElement; i += 1) {
+        const next = box.parentElement;
+        // 少于五条时也不能爬到另一个排行的共同祖先，否则两榜会收成同一批链接。
+        if (heads.some(other => other && other !== head && next.contains(other))) break;
+        box = next;
         if (box.querySelectorAll('a[href]').length >= 5 || txt(box).split('\\n').filter(Boolean).length >= 8) break;
-        box = box.parentElement;
       }
       const boxLinks = box ? [...box.querySelectorAll('a[href]')].map(linkOf).filter(l => l.href && l.text.length >= 4) : [];
       const lines = box ? txt(box).split('\\n').map(one).filter(s => s && s !== heading).slice(0, 60) : [];
@@ -70,7 +74,7 @@ function createForumBrowser({ BrowserWindow, BaseWindow = null, session = null, 
     return owner;
   }
   function makeWindow({ show = false, title = 'AI Hub 论坛' } = {}) {
-    const parent = ensureOwner();
+    const parent = show ? null : ensureOwner();
     const win = new BrowserWindow({
       ...(parent ? { parent } : {}), show, width: 1400, height: 900, title, autoHideMenuBar: true,
       webPreferences: { partition, sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false, spellcheck: false },
@@ -78,12 +82,14 @@ function createForumBrowser({ BrowserWindow, BaseWindow = null, session = null, 
     win.webContents.setAudioMuted?.(true);
     // 站点弹新窗口（比如帖子在新标签打开）：在同一个窗口里跳过去，不另开。
     win.webContents.setWindowOpenHandler?.(({ url }) => { if (/^https?:/i.test(url)) void win.loadURL(url).catch(() => {}); return { action: 'deny' }; });
+    if (show) { win.show(); win.focus(); }
     return win;
   }
   // 截下页面取数据的 JSON 响应（只收网址匹配 api 的，单个最多 3MB）。
   function tap(win, api) {
     const out = [], pending = new Map(), dbg = win.webContents.debugger;
-    try { dbg.attach('1.3'); } catch (error) { logger.warn?.('[company-forum] debugger attach failed:', error.message); return { out, ready: Promise.resolve(), stop() {} }; }
+    const ownsDebugger = !dbg.isAttached();
+    try { if (ownsDebugger) dbg.attach('1.3'); } catch (error) { logger.warn?.('[company-forum] debugger attach failed:', error.message); return { out, ready: Promise.resolve(), stop() {} }; }
     const onMessage = (_e, method, params) => {
       if (method === 'Network.responseReceived') {
         const r = params.response || {};
@@ -99,7 +105,7 @@ function createForumBrowser({ BrowserWindow, BaseWindow = null, session = null, 
     };
     dbg.on('message', onMessage);
     const ready = dbg.sendCommand('Network.enable').catch(() => {});
-    return { out, ready, stop() { try { dbg.removeListener('message', onMessage); dbg.detach(); } catch { /* 窗口已关 */ } } };
+    return { out, ready, stop() { try { dbg.removeListener('message', onMessage); if (ownsDebugger) dbg.detach(); } catch { /* 窗口已关 */ } } };
   }
   // 页面在跳转（比如单点登录的重定向）时，正在执行的脚本可能永远不返回（Electron 已知行为）：每次最多等 5 秒，当作没取到。
   const within = (p, ms, fallback) => Promise.race([p, delay(ms).then(() => fallback)]);
@@ -161,12 +167,15 @@ function createForumBrowser({ BrowserWindow, BaseWindow = null, session = null, 
     const win = loginWin = makeWindow({ show: true, title });
     return new Promise(resolve => {
       let done = false, okSince = 0;
-      const finish = ok => { if (done) return; done = true; clearInterval(timer); if (!win.isDestroyed()) win.destroy(); loginWin = null; resolve({ ok }); };
+      const finish = (ok, error = '') => { if (done) return; done = true; clearInterval(timer); if (!win.isDestroyed()) win.destroy(); loginWin = null; resolve(error ? { ok, error } : { ok }); };
       win.on('closed', () => finish(false));
+      win.webContents.on('did-fail-load', (_event, code, description, _url, isMainFrame) => {
+        if (isMainFrame && code !== -3) finish(false, '登录页面没打开：' + description);
+      });
       const started = Date.now();
       const timer = setInterval(async () => {
         if (win.isDestroyed()) return finish(false);
-        if (Date.now() - started > timeoutMs) return finish(false);
+        if (Date.now() - started > timeoutMs) return finish(false, '登录超时，请重试');
         let host = '';
         try { host = new URL(win.webContents.getURL()).host; } catch { /* 还没加载 */ }
         const page = host === want ? await run(win, '({ n: document.body ? document.body.innerText.length : 0, t: document.body ? document.body.innerText.slice(0, 3000) : "" })') : null;
@@ -175,7 +184,7 @@ function createForumBrowser({ BrowserWindow, BaseWindow = null, session = null, 
         if (!okSince) okSince = Date.now();
         if (Date.now() - okSince >= 3000) finish(true);
       }, 1000);
-      void load(win, url).catch(error => logger.warn?.('[company-forum] login load', error.message));
+      void load(win, url).catch(error => { logger.warn?.('[company-forum] login load', error.message); finish(false, '登录页面没打开：' + error.message); });
     });
   }
   function close() { try { if (loginWin && !loginWin.isDestroyed()) loginWin.destroy(); } catch { /* 已关 */ } try { if (owner && !owner.isDestroyed?.()) owner.destroy?.(); } catch { /* 已关 */ } }

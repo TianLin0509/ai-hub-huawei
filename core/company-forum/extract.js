@@ -1,7 +1,7 @@
 'use strict';
 // 从论坛首页的抓取结果里认出热帖（core/company-forum/sites.js 说明了两个站点）。
 // 抓取结果来自 Hub 的隐藏浏览器窗口（main/company-forum-browser.js）：页面取数据时截下来的 JSON 响应，加上页面里的链接和板块文字。
-// 认帖子的顺序：页面上对应板块里的帖子链接（顺序就是站点自己的排行）→ 截到的 JSON 里像帖子列表的数组 → 板块里的文字行（只有标题）。
+// 认帖子的顺序：（多榜站点）准确命名的 API 卡片 → 对应板块里的帖子链接 →（单榜站点）链接不足 3 条时找卡片 → 归属明确的接口数组 → 板块文字行。
 // JSON 补阅读、回复、时间这些数字。字段名以公司真机回执 Q-1018-01 第 2 轮为准（稼先 browseCount / commentCount / favoriteCount /
 // upvoteCount / submitUsers / resourceId，心声排行卡片里的 postId / title / link），其余按常见写法多认几种。
 // 心声的两个排行在同一个「卡片」接口里：数组的每个元素是一张卡片（有自己的标题和 list），按榜名找卡片，不把卡片当帖子。
@@ -80,19 +80,28 @@ function postArrays(json, out = [], depth = 0) {
 
 // 标题等于（或包含）榜名的卡片里的帖子列表，例如心声的「24小时点击排行」卡片。
 const headingKey = s => clean(s).replace(/\s+/g, '');
-function namedList(json, heading, depth = 0) {
+const LIST_KEY = /^(?:list|posts|items|dataList|postList|resourceList)$/i;
+const CARD_POST_TITLE = TITLE.filter(k => k !== 'name');
+const POST_ID = ID.filter(k => k !== 'id' && k !== 'uuid');
+// min：卡片里至少几条帖子才算数。min 为 1 时，确有空的榜单数组也算（返回 []）。
+function namedList(json, heading, min = 1, depth = 0) {
   if (!json || typeof json !== 'object' || depth > 8) return null;
   if (!Array.isArray(json)) {
     const t = headingKey(pick(json, ['title', 'name', 'cardName', 'cardTitle']) || '');
-    if (t && (t === headingKey(heading) || t.includes(headingKey(heading)))) {
-      for (const v of Object.values(json)) {
-        if (!Array.isArray(v)) continue;
-        const posts = v.map(postFromObject).filter(Boolean);
-        if (posts.length >= 3) return posts;
+    // postId 等明确属于帖子；卡片自身的通用 id/uuid 不受此限制。
+    if (t && (t === headingKey(heading) || t.includes(headingKey(heading))) && (min > 1 || pick(json, POST_ID) === undefined)) {
+      let emptyList = false;
+      for (const [key, v] of Object.entries(json)) {
+        // 低门槛卡片只认榜单字段和帖子标题：作者、tabs 等 id/name 对象不能冒充一条热帖。
+        if (!Array.isArray(v) || (min <= 1 && !LIST_KEY.test(key))) continue;
+        const posts = v.filter(o => min > 1 || pick(o, CARD_POST_TITLE)).map(postFromObject).filter(Boolean);
+        if (posts.length && posts.length >= min) return posts;
+        if (min <= 1 && !v.length && LIST_KEY.test(key)) emptyList = true;
       }
+      if (emptyList) return []; // 确有榜单数组但为空；仅在帖子标题里提到榜名不算卡片。
     }
   }
-  for (const v of Object.values(json)) { const hit = namedList(v, heading, depth + 1); if (hit) return hit; }
+  for (const v of Object.values(json)) { const hit = namedList(v, heading, min, depth + 1); if (hit) return hit; }
   return null;
 }
 // 帖子详情页截到的接口数据里补阅读、回复、点赞、收藏、时间（心声的排行只有标题和链接）。
@@ -162,22 +171,26 @@ function postsForSite(site, capture, { base = '', limit = 20 } = {}) {
   for (const list of site.lists) {
     const section = (capture.sections || []).find(s => s.heading === list.heading);
     let posts = [], from = '';
-    // 1. 页面上这个板块里的帖子链接
-    if (section) { posts = linkPosts(section.links, site, capture.finalUrl || base); from = 'links'; }
-    // 2. 截到的接口数据：先找标题就是这个榜名的卡片（心声）；再找网址像这个榜或像热榜的帖子数组
-    if (posts.length < 3) {
-      for (const r of [...(capture.json || [])].reverse()) { const hit = namedList(r.json, list.heading); if (hit) { posts = hit; from = 'api-card'; break; } }
-    }
-    if (posts.length < 3 && arrays.length) {
+    const multi = site.lists.length > 1;
+    const card = min => { for (const r of [...(capture.json || [])].reverse()) { const hit = namedList(r.json, list.heading, min); if (hit !== null) return hit; } return null; };
+    // 1. 多榜站点（心声）：准确命名的卡片优先，0–2 条也照实保留——DOM 的共同祖先可能把两个榜的链接一起收进来。
+    if (multi) { const hit = card(1); if (hit !== null) { posts = hit; from = 'api-card'; } }
+    // 2. 没有对应卡片时，再看这个板块的链接和能确定归属的接口。
+    if (from !== 'api-card' && section) { posts = linkPosts(section.links, site, capture.finalUrl || base); from = 'links'; }
+    // 单榜站点（稼先）沿用原顺序和门槛：链接不足 3 条才找卡片、卡片至少 3 条。榜名「热点」太短，热帖标题常带这两个字。
+    if (!multi && posts.length < 3) { const hit = card(3); if (hit) { posts = hit; from = 'api-card'; } }
+    if (from !== 'api-card' && posts.length < 3 && arrays.length) {
       // 同分时取后截到的（稼先点「热点」后才取热榜，先截到的是首页推荐）。
-      const ranked = arrays.map((r, i) => ({ ...r, i })).sort((a, b) => score(b.url, list, site) - score(a.url, list, site) || b.i - a.i);
+      // 多榜站点必须命中本榜的接口；共享接口或另一榜不能作为通用兜底。
+      const ranked = arrays.map((r, i) => ({ ...r, i })).filter(r => site.lists.length === 1 || list.api?.test(r.url))
+        .sort((a, b) => score(b.url, list, site) - score(a.url, list, site) || b.i - a.i);
       const best = ranked[0];
       if (best && score(best.url, list, site) > 0) { posts = best.arrays[0]; from = 'api'; }
     }
     // 3. 板块里的文字行
-    if (posts.length < 3 && section) { const lines = linePosts(section.lines); if (lines.length >= 3) { posts = lines; from = 'text'; } }
+    if (from !== 'api-card' && posts.length < 3 && section) { const lines = linePosts(section.lines); if (lines.length >= 3) { posts = lines; from = 'text'; } }
     // 稼先的「热点」是首页主列表：板块没认出来时，用整页的帖子链接
-    if (posts.length < 3 && site.lists.length === 1) { const all = linkPosts(capture.links, site, capture.finalUrl || base); if (all.length >= 3) { posts = all; from = 'page-links'; } }
+    if (from !== 'api-card' && posts.length < 3 && site.lists.length === 1) { const all = linkPosts(capture.links, site, capture.finalUrl || base); if (all.length >= 3) { posts = all; from = 'page-links'; } }
     // 接口数据常只有编号：按站点的详情页格式补链接（稼先）。
     const link = p => p.url ? absolute(p.url, capture.finalUrl || base) : (base && site.detailPath && p.id ? base + site.detailPath(p.id) : '');
     posts = enrich(posts, pool).slice(0, limit).map((p, i) => ({ ...p, rank: i + 1, url: link(p) }));

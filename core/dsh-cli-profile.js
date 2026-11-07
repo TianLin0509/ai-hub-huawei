@@ -4,12 +4,19 @@ const os = require('node:os');
 const path = require('node:path');
 
 // The runtime is installed separately; Hub's shared node_modules stays intact.
+const RUNTIME_FILES = ['@deepseek-ai/dsh/lib/bin.js', '@deepseek-harness-tui/dsh-tui/package.json'];
+function isRuntimeRoot(root) {
+  return RUNTIME_FILES.every(file => fs.existsSync(path.join(root, 'node_modules', file)));
+}
+
 function resolveDshCliRuntime(entry = {}, env = process.env) {
   let root = entry.cliRoot || env.AI_HUB_DSH_CLI_ROOT;
   if (!root) {
     const file = path.join(os.homedir(), '.dsh', 'hub-cli-runtime.json');
     if (fs.existsSync(file)) root = JSON.parse(fs.readFileSync(file, 'utf8')).root;
   }
+  // 全局安装（npm i -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui）也认：Windows 默认装在 %APPDATA%\npm。
+  if (!root && env.APPDATA && isRuntimeRoot(path.join(env.APPDATA, 'npm'))) root = path.join(env.APPDATA, 'npm');
   if (!root || !path.isAbsolute(root)) throw new Error('请先安装 DSH CLI 终端运行环境');
   const modules = path.join(root, 'node_modules');
   const entryPath = path.join(modules, '@deepseek-ai/dsh/lib/bin.js');
