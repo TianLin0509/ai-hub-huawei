@@ -490,3 +490,21 @@ test('packaging script: arguments parse, unknown components are refused', () => 
   assert.throws(() => parseArgs(['--only', 'gemini']), /不认识的组件/);
   assert.throws(() => parseArgs(['--upload']), /不认识的参数/);
 });
+
+test('install: the fast mirror lagging behind (older catalog) does not win; the newer catalog and its host go first', async t => {
+  const root = tempDir(t);
+  const fast = await server(t, {}), old = await server(t, {});
+  const pkgOld = await tgz(t, [{ name: 'package/claude.exe', data: Buffer.alloc(1024, 1) }]);
+  const pkgNew = await tgz(t, [{ name: 'package/claude.exe', data: Buffer.alloc(2048, 2) }]);
+  const install = { strip: 'package', bin: 'claude.exe', pathDirs: ['.'], versionArgs: ['--version'] };
+  const cOld = component('claude', '2.1.300', pkgOld, { install }), cNew = component('claude', '2.1.319', pkgNew, { install });
+  publish(fast, catalogLib.sign({ schema: 1, publishedAt: '2026-11-06T00:00:00Z', components: [cOld] }, TEST_KEY), { [cOld.files[0].url]: pkgOld });
+  publish(old, catalogLib.sign({ schema: 1, publishedAt: '2026-11-07T00:00:00Z', components: [cNew] }, TEST_KEY), { [cNew.files[0].url]: pkgNew });
+  const { installer } = makeInstaller(fast, root, { extra: { sources: [
+    { id: 'aliyun-fast', name: '阿里云高速', manifest: fast.manifest }, { id: 'aliyun', name: '阿里云', manifest: old.manifest }] } });
+  const result = await installer.install('claude');
+  assert.equal(result.tools.claude.phase, 'done', result.tools.claude.error);
+  assert.equal(result.installed.claude.version, '2.1.319');
+  assert.ok(old.hits.includes('/hub-update/components/' + cNew.files[0].url), 'downloaded from the host whose catalog is newest');
+  assert.ok(!fast.hits.some(h => h.endsWith('.tgz')), 'the lagging mirror was not asked for the file');
+});

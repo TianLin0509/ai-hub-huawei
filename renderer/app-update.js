@@ -10,6 +10,9 @@
   const productName = distribution.productName || 'AI Hub';
   let state = null, dialog = null;
   let confirmInfo = null;
+  // 放行下载服务器（2026-11-07，renderer/net-pass-view.js）：两台下载服务器一个按钮；新用户没放行时在弹窗里提醒。
+  const netPassView = require('./net-pass-view');
+  let netPass = null, netPassLast = null;
 
   const css = `
   .app-update-dialog { position: fixed; inset: 0; margin: auto; height: fit-content; max-height: calc(100vh - 48px); overflow: auto; width: min(560px, calc(100vw - 48px)); padding: 0; border: 1px solid var(--border-subtle, #e3e1ea); border-radius: 14px;
@@ -185,9 +188,11 @@
       body += '<div class="au-msg info">点「检查更新」查询最新版本。</div>';
       foot = '<button class="au-btn" data-au="close">关闭</button><button class="au-btn primary" data-au="retry">检查更新</button>';
     }
+    if (['idle', 'none', 'available', 'error'].includes(s.phase)) body += netPassView.boxHtml(netPass, { last: netPassLast });
     dialog.innerHTML = `<div class="au-head"><img src="../claude-wx.ico" alt=""><div class="au-title"><strong>软件更新</strong><span>${esc(productName)}${distribution.editionBadge ? ' · ' + esc(distribution.editionBadge) : ''}</span></div>`
       + '<button class="au-close" data-au="close" aria-label="关闭">×</button></div>'
       + `<div class="au-body">${body}${quietBox}</div><div class="au-foot">${foot}</div>`;
+    netPassView.bind(dialog, { ipcRenderer, onUpdate: (next, last) => { if (next) netPass = next; netPassLast = last; render(); } });
   }
 
   function openDialog() {
@@ -198,8 +203,10 @@
       dialog.addEventListener('close', () => { dialog.remove(); dialog = null; });
       document.body.appendChild(dialog);
     }
+    netPassView.ensureCss();
     render();
     if (!dialog.open) dialog.showModal();
+    void ipcRenderer.invoke('net-pass:status', { refresh: true }).then(v => { if (v) { netPass = v; if (dialog) render(); } }).catch(() => {});
   }
 
   async function onClick(event) {
@@ -339,6 +346,7 @@
 
   const update = next => { state = next; render(); renderPill(); renderBadge(); renderUnread(); maybePromptOnce(); };
   ipcRenderer.on('app-update:state', (_e, next) => update(next));
+  ipcRenderer.on('net-pass:state', (_e, next) => { netPass = next; if (dialog && !confirmInfo) render(); });
   let refreshTimer = null;
   const refresh = () => { if (refreshTimer) return; refreshTimer = setTimeout(() => { refreshTimer = null; ipcRenderer.invoke('app-update:get-state').then(next => { if (next) update(next); }).catch(() => {}); }, 1500); };
   ipcRenderer.on('bridge:changed', refresh);

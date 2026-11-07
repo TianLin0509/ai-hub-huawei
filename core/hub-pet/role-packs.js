@@ -18,6 +18,8 @@ const VERSION = /^\d{1,6}\.\d{1,6}\.\d{1,6}$/;
 const FILE = /^(?:idle|typing|happy|sleep|seq-[a-z][a-z-]{0,23})\.webp$/;
 const POSE_NAMES = new Set(['idle', 'typing', 'happy', 'sleep']);
 const SOURCES = Object.freeze([
+  // 高速下载镜像（2026-11-07）排第一：内容每 5 分钟从旧阿里云同步，没有时自动换下一个源。
+  { id: 'aliyun-fast', name: '阿里云高速', manifest: 'https://dl.lt-stockpartner.tech/hub-update/hub-pet/catalog.json', files: 'https://dl.lt-stockpartner.tech/hub-update/hub-pet/' },
   { id: 'github', name: 'GitHub', manifest: 'https://github.com/TianLin0509/ai-hub-huawei/releases/download/hub-pet-v1/catalog.json', files: 'https://github.com/TianLin0509/ai-hub-huawei/releases/download/hub-pet-v1/' },
   { id: 'aliyun', name: '阿里云', manifest: 'https://me.lt-stockpartner.tech/hub-update/hub-pet/catalog.json', files: 'https://me.lt-stockpartner.tech/hub-update/hub-pet/' },
 ]);

@@ -16,6 +16,8 @@ const ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const VERSION = /^\d{1,6}\.\d{1,6}\.\d{1,6}$/;
 const DEFAULT_PREFERENCES = Object.freeze({ pack: 'default', overrides: {}, icons: 'brand', iconOverrides: {} });
 const SOURCES = Object.freeze([
+  // 高速下载镜像（2026-11-07）排第一：内容每 5 分钟从旧阿里云同步，没有时自动换下一个源。
+  { id: 'aliyun-fast', name: '阿里云高速', manifest: 'https://dl.lt-stockpartner.tech/hub-update/appearance/catalog.json', files: 'https://dl.lt-stockpartner.tech/hub-update/appearance/' },
   { id: 'github', name: 'GitHub', manifest: 'https://github.com/TianLin0509/ai-hub-huawei/releases/download/appearance-v1/catalog.json', files: 'https://github.com/TianLin0509/ai-hub-huawei/releases/download/appearance-v1/' },
   { id: 'aliyun', name: '阿里云', manifest: 'https://me.lt-stockpartner.tech/hub-update/appearance/catalog.json', files: 'https://me.lt-stockpartner.tech/hub-update/appearance/' },
 ]);

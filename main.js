@@ -4235,13 +4235,33 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
       // 测试把更新源换成本机服务（AI_HUB_UPDATE_SOURCES）时，自家主机与反馈地址跟着换，和一键更新同一口径。
       const ownConfig = (() => { try { return process.env.AI_HUB_UPDATE_SOURCES ? { sources: JSON.parse(process.env.AI_HUB_UPDATE_SOURCES) } : distribution.updateConfig; } catch { return distribution.updateConfig; } })();
       const ownUnblocker = new netUnblock.GatePasser({ logDir: path.join(getHubDataDir(), 'logs'), logName: 'net-unblock',
-        open: () => netUnblock.openHiddenGateWindow(BrowserWindow, ownHosts.unblockPage(ownConfig)) });
+        // 被拦的是哪台就开哪台的放行页（2026-11-07 起有高速镜像和旧阿里云两台，公司代理按主机放行）。
+        open: url => netUnblock.openHiddenGateWindow(BrowserWindow, ownHosts.unblockPage(ownConfig, url)) });
+      // 「放行下载服务器」按钮（core/net-pass.js）：一次点击逐台放行全部自家下载主机，并提醒还没放行的新用户。
+      try {
+        const { createNetPass } = require('./core/net-pass');
+        const netPass = createNetPass({ hosts: ownHosts.downloadHosts(ownConfig), dataDir: getHubDataDir(),
+          fetchImpl: (...args) => require('electron').net.fetch(...args),
+          openGate: page => netUnblock.openHiddenGateWindow(BrowserWindow, page),
+          onChange: view => sendToRenderer('net-pass:state', view) });
+        ipcMain.handle('net-pass:status', async (_e, opts) => { if (opts && opts.refresh) void netPass.refresh(); return netPass.status(); });
+        ipcMain.handle('net-pass:run', async () => { const r = await netPass.passAll(); if (r.results.some(x => x.result === 'ok')) { try { ownUnblocker.passed(); } catch (_) {} } return r; });
+        ipcMain.handle('net-pass:open-browser', async (_e, page) => {
+          // 只打开自家主机的放行小页面，不打开别的网址。
+          if (!ownHosts.downloadHosts(ownConfig).some(h => h.page === page)) return false;
+          await shell.openExternal(page); return true;
+        });
+        // 启动后查一次（每台一个很小的网页请求）：新用户第一次打开更新或安装面板时，提醒已经准备好。
+        setTimeout(() => { void netPass.refresh().catch(() => {}); }, 20000).unref?.();
+      } catch (e) { console.warn('[net-pass] 放行按钮初始化失败：', e && e.message); }
       // 检查更新和反馈同时被拦时只开一个放行窗口：进行中的那次结果大家共用。
-      let unblocking = null;
+      // 按主机分开：两台同时被拦时各开各的放行页。
+      const unblocking = new Map();
       const unblockOwn = async url => {
-        if (!ownHosts.isOwnUrl(url, ownConfig) || !ownHosts.unblockPage(ownConfig)) return false;
-        if (!unblocking) unblocking = ownUnblocker.attempt(url).finally(() => { unblocking = null; });
-        return unblocking;
+        if (!ownHosts.isOwnUrl(url, ownConfig) || !ownHosts.unblockPage(ownConfig, url)) return false;
+        const host = ownHosts.hostOf(url);
+        if (!unblocking.has(host)) unblocking.set(host, ownUnblocker.attempt(url).finally(() => { unblocking.delete(host); }));
+        return unblocking.get(host);
       };
       const appUpdate = createAppUpdateController({ app, config: memberUpgrade ? editionChannel.updateConfig(distribution.updateConfig, getHubDataDir()) : distribution.updateConfig, dataDir: getHubDataDir(),
         currentVersion: distribution.editionVersion || app.getVersion(), sendToRenderer, prepareLaunch: prepareHubLaunchClean,

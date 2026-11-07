@@ -6,6 +6,9 @@
   const { ipcRenderer, shell } = require('electron');
   const { KINDS, LABELS } = require('../core/company-api-config');
   const cliView = require('./cli-install-view');
+  // 一键安装前先提醒放行下载服务器（2026-11-07，renderer/net-pass-view.js）：只在还没放行时显示。
+  const netPassView = require('./net-pass-view');
+  let netPass = null, netPassLast = null;
   let cliState = null;
   let snapshot = null;
   let setup = null;
@@ -69,7 +72,11 @@
   function renderCliBlock(target, kind) {
     const slot = target?.querySelector(`[data-cli-install="${kind}"]`);
     if (!slot) return;
-    slot.innerHTML = cliView.installBlockHtml(kind, cliState);
+    const block = cliView.installBlockHtml(kind, cliState);
+    const needPass = block && netPass && (netPass.needed || (netPassLast?.results || []).some(r => r.result === 'blocked'));
+    netPassView.ensureCss();
+    slot.innerHTML = (needPass ? netPassView.boxHtml(netPass, { last: netPassLast }) : '') + block;
+    netPassView.bind(slot, { ipcRenderer, onUpdate: (next, last) => { if (next) netPass = next; netPassLast = last; renderCliBlock(target, kind); } });
     slot.querySelector('[data-cli-action="install"]')?.addEventListener('click', () => void runInstall(target, kind));
     slot.querySelector('[data-cli-action="cancel"]')?.addEventListener('click', () => void ipcRenderer.invoke('cli-tools:cancel').catch(() => {}));
   }
@@ -117,6 +124,7 @@
       target.querySelector('[data-api-action="configure"]').onclick = () => void open(kind);
       renderCliBlock(target, kind);
       void loadCliState().then(() => { if (dialog === target) renderCliBlock(target, kind); });
+      void ipcRenderer.invoke('net-pass:status', { refresh: true }).then(v => { netPass = v; if (dialog === target) renderCliBlock(target, kind); }).catch(() => {});
       return;
     }
     target.innerHTML = heading(`安装 ${LABELS[kind]}`, '安装完成后可沿用本机配置，或填写自己的 API 接口。')
@@ -135,6 +143,7 @@
       finally { target.querySelector('[data-api-action="refresh"]')?.removeAttribute('disabled'); }
     };
     renderCliBlock(target, kind);
+    void ipcRenderer.invoke('net-pass:status', { refresh: true }).then(v => { netPass = v; if (dialog === target) renderCliBlock(target, kind); }).catch(() => {});
     // 读到安装器状态后再画一次。有一键安装时，手动步骤降为次要（「重新检测」不再是主按钮）；
     // 没有下载源的版本这里保持空白，弹窗和以前一样。
     void loadCliState().then(() => {
@@ -335,6 +344,11 @@
       if (form) refreshProxyBlocks(form);
     });
     // 安装进度推送：弹窗开着就就地刷新一键安装区块。
+    ipcRenderer.on('net-pass:state', (_event, state) => {
+      netPass = state;
+      const slot = dialog?.querySelector('[data-cli-install]');
+      if (slot) renderCliBlock(dialog, slot.dataset.cliInstall);
+    });
     ipcRenderer.on('cli-tools:state', (_event, state) => {
       if (!state) return;
       cliState = state;

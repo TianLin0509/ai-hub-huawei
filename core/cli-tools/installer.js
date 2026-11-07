@@ -106,10 +106,14 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
       const why = results.map(r => `${r.name}：${r.reason}`).join('；');
       throw Object.assign(new Error(`读不到组件目录（${why}）`), { blocked: results.find(r => r.blocked)?.url || null });
     }
-    // 目录读到的源排在前面下载；读不到的源留作后备（文件可能还在）。
-    catalog = ok[0].manifest;
+    // 取发布时间最新的那份目录（高速镜像每 5 分钟才同步一次，刚发的组件可能只在旧服务器上）；一样新时按源的顺序。
+    // 目录和它一样新的源排在前面下载；其余的源留作后备（文件可能还在）。
+    const when = r => Date.parse(r.manifest.publishedAt) || 0;
+    const best = ok.reduce((a, r) => (when(r) > when(a) ? r : a), ok[0]);
+    const same = ok.filter(r => when(r) === when(best));
+    catalog = best.manifest;
     catalogAt = Date.now();
-    catalogFrom = [...sources.filter(s => ok.some(r => r.id === s.id)), ...sources.filter(s => !ok.some(r => r.id === s.id))];
+    catalogFrom = [...sources.filter(s => same.some(r => r.id === s.id)), ...sources.filter(s => !same.some(r => r.id === s.id))];
     return catalog;
   }
 

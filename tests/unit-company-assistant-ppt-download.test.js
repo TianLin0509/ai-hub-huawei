@@ -5,8 +5,8 @@ const response = (body, status = 200, type = 'application/json') => ({ ok: statu
 test('下载默认解析镜像清单并核对同源整包，GitHub只在用户选择备用时打开', async () => {
   const fetched = [], opened = [], deps = { pptDownloadFetch: async (url, options) => { fetched.push({ url, method: options.method }); return response({ version: '2.0.6' }); }, pptOpenExternal: async url => opened.push(url) };
   const result = await downloadDoctor(undefined, deps);
-  assert.equal(fetched[0].url, 'https://me.lt-stockpartner.tech/pptutor/manifest.json'); assert.equal(fetched[1].method, 'HEAD');
-  assert.equal(result.url, 'https://me.lt-stockpartner.tech/pptutor/PPT-Doctor-v2.0.6.zip'); assert.deepEqual(opened, [result.url]);
+  assert.equal(fetched[0].url, 'https://dl.lt-stockpartner.tech/pptutor/manifest.json'); assert.equal(fetched[1].method, 'HEAD');
+  assert.equal(result.url, 'https://dl.lt-stockpartner.tech/pptutor/PPT-Doctor-v2.0.6.zip'); assert.deepEqual(opened, [result.url]);
   await downloadDoctor('github', deps); assert.equal(fetched.length, 2); assert.equal(opened[1], 'https://github.com/TianLin0509/PPTutor/releases/latest');
 });
 
@@ -16,7 +16,7 @@ test('full字段可指定现存最新或基线整包，不把增量版本当成�
     const result = await downloadDoctor('mirror', { pptOpenExternal: async url => opened.push(url), pptDownloadFetch: async (url, options) => {
       fetched.push(url); return options.method === 'HEAD' ? response({}, 200, 'application/zip') : response({ version: '2.0.6', full: { version, path: `PPT-Doctor-v${version}.zip` } });
     } });
-    assert.equal(result.url, `https://me.lt-stockpartner.tech/pptutor/PPT-Doctor-v${version}.zip`);
+    assert.equal(result.url, `https://dl.lt-stockpartner.tech/pptutor/PPT-Doctor-v${version}.zip`);
     assert.deepEqual(opened, [result.url]); assert.equal(fetched.length, 2);
   }
 });
@@ -36,4 +36,19 @@ test('镜像清单异常、安装包缺失或代理拦截页均不打开错误�
       : response({ version: mode === 'bad-version' ? '../../other' : '2.0.6' }) }), /GitHub 备用/);
   }
   assert.equal(opened, 0);
+});
+
+test('高速镜像读不到或整包还没同步到时，换旧阿里云，打开的是旧阿里云的同源整包', async () => {
+  for (const miss of ['manifest', 'archive']) {
+    const fetched = [], opened = [];
+    const result = await downloadDoctor('mirror', { pptOpenExternal: async url => opened.push(url), pptDownloadFetch: async (url, options) => {
+      fetched.push(url);
+      const fast = url.startsWith('https://dl.');
+      if (options.method === 'HEAD') return response({}, fast && miss === 'archive' ? 404 : 200, 'application/zip');
+      return fast && miss === 'manifest' ? response({}, 404) : response({ version: '2.0.6' });
+    } });
+    assert.equal(result.url, 'https://me.lt-stockpartner.tech/pptutor/PPT-Doctor-v2.0.6.zip');
+    assert.deepEqual(opened, [result.url]);
+    assert.equal(fetched[0], 'https://dl.lt-stockpartner.tech/pptutor/manifest.json');
+  }
 });

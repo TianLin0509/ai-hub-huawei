@@ -6,6 +6,8 @@ const { scryptSync } = require('node:crypto');
 const CHANNEL_FILE = 'edition-channel.json';
 const SALT = '7d1f0c9a4be25e83a6f4c10d92b7e5a1';
 const BASE = 'https://me.lt-stockpartner.tech/hub-update/';
+// 高速下载镜像（2026-11-07）：内容每 5 分钟从 BASE 同步，排第一；只读，反馈等仍走 BASE 所在的主服务器。
+const FAST_BASE = 'https://dl.lt-stockpartner.tech/hub-update/';
 
 function channelId(code) {
   const text = String(code || '').trim().toLowerCase();
@@ -14,7 +16,8 @@ function channelId(code) {
 }
 
 function channelSources(id) {
-  return [{ id: 'aliyun', name: '阿里云', manifest: `${BASE}m-${id}/latest.json`, files: `${BASE}m-${id}/v{version}/` }];
+  return [{ id: 'aliyun-fast', name: '阿里云高速', mirror: true, manifest: `${FAST_BASE}m-${id}/latest.json`, files: `${FAST_BASE}m-${id}/v{version}/` },
+    { id: 'aliyun', name: '阿里云', manifest: `${BASE}m-${id}/latest.json`, files: `${BASE}m-${id}/v{version}/` }];
 }
 
 // 本机开通过扩展功能：只读，打不开或没有记录都当没开通。
@@ -59,7 +62,7 @@ function updateConfig(base, dataDir) {
 async function verify(code, { fetchImpl = globalThis.fetch, timeoutMs = 15000 } = {}) {
   const id = channelId(code);
   if (!id) return { ok: false, reason: 'format', message: '口令长度不对' };
-  const url = channelSources(id)[0].manifest;
+  const url = channelSources(id).find(s => !s.mirror).manifest;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
@@ -75,6 +78,6 @@ async function verify(code, { fetchImpl = globalThis.fetch, timeoutMs = 15000 } 
   } finally { clearTimeout(timer); }
 }
 
-function manifestUrl(code) { const id = channelId(code); return id ? channelSources(id)[0].manifest : ''; }
+function manifestUrl(code) { const id = channelId(code); return id ? channelSources(id).find(s => !s.mirror).manifest : ''; }
 
 module.exports = { CHANNEL_FILE, channelId, channelSources, manifestUrl, wasUnlocked, readChannel, writeChannel, updateConfig, verify };
