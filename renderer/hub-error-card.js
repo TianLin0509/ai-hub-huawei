@@ -130,8 +130,17 @@ function buildPrompt({ area, title, symptom, details } = {}, info = {}) {
   return lines.filter(line => line != null).join('\n');
 }
 
+// 每次「问问 Agent」用一个专属的空工作目录（<数据目录>/troubleshoot/<时间>）。
+// 11-08 实测：排查会话开在默认工作区时，它自己的记录还没生成，卡片视图会显示同目录里别的会话正在写的记录。
+function troubleshootDir(now = Date.now()) {
+  const stamp = new Date(now + 8 * 3600000).toISOString().replace(/[-:T]/g, '').slice(0, 14);
+  const dir = path.join(require('../core/data-dir').getHubDataDir(), 'troubleshoot', `${stamp}-${Math.random().toString(36).slice(2, 6)}`);
+  require('node:fs').mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
 function createHubAssist({ invoke, createSession, selectSession = () => {}, closeOverlays = () => {}, openFeedback = null,
-  info = hubInfo, now = () => Date.now(), notify = () => {} } = {}) {
+  info = hubInfo, now = () => Date.now(), notify = () => {}, workDir = troubleshootDir } = {}) {
   const recent = new Map();
   let setup = null, setupAt = 0, setupPromise = null;
 
@@ -174,9 +183,11 @@ function createHubAssist({ invoke, createSession, selectSession = () => {}, clos
       closeOverlays();
       const title = clip('排查：' + (ctx.title || areaLabel(ctx.area)), 60).replace('…（已截断）', '…');
       const errors = [];
+      let cwd = null;
+      try { cwd = workDir(now()); } catch { /* 建不了专属目录就退回默认工作区 */ }
       for (const kind of kinds) {
         let session;
-        try { session = await createSession(kind, { workspaceLabel: title, opts: { title, userRenamed: true } }); }
+        try { session = await createSession(kind, { workspaceLabel: title, ...(cwd ? { cwd } : {}), opts: { title, userRenamed: true } }); }
         catch (error) { errors.push(`${kind}：${error && error.message ? error.message : error}`); continue; }
         if (!session || !session.id) { errors.push(`${kind}：没有返回会话`); continue; }
         entry.sessionId = session.id; entry.kind = kind; entry.at = now();

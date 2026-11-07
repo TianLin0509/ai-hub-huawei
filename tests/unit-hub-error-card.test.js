@@ -137,6 +137,7 @@ function fakeDeps({ installed = ['codeagent', 'claude', 'codex'], failKinds = []
     selectSession: id => calls.select.push(id),
     closeOverlays: () => { calls.closed++; },
     notify: (message, level) => calls.notify.push([message, level]),
+    workDir: () => 'D:/hub-data/troubleshoot/t1',
   };
   return { deps, calls };
 }
@@ -149,6 +150,8 @@ test('问问 Agent：默认开 CodeAgent 会话，标题「排查：…」，首
   assert.deepEqual([r.ok, r.kind, r.sessionId], [true, 'codeagent', 's1']);
   assert.equal(calls.create[0].options.opts.title, '排查：创建失败');
   assert.equal(calls.create[0].options.opts.userRenamed, true);
+  // 排查会话开在专属空目录，不和其他会话共用记录目录（11-08 实测串显示）
+  assert.equal(calls.create[0].options.cwd, 'D:/hub-data/troubleshoot/t1');
   assert.deepEqual(calls.select, ['s1']);
   assert.equal(calls.closed, 1);
   const { text, waitForCliReady, sessionId } = calls.send[0];
