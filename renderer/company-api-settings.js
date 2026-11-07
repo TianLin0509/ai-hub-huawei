@@ -86,13 +86,14 @@
   }
   function modeSwitch(mode) {
     return '<div class="company-api-mode" role="radiogroup" aria-label="接入方式">'
-      + `<button type="button" role="radio" data-api-mode="proxy" aria-checked="${mode === 'proxy'}"><strong>公司模型</strong><small>经本机反代，用 CodeAgent 账号</small></button>`
+      + `<button type="button" role="radio" data-api-mode="proxy" aria-checked="${mode === 'proxy'}"><strong>公司模型</strong><small>${snapshot?.proxy?.shared ? '经共享主机，使用团队号池' : '经本机反代，用 CodeAgent 账号'}</small></button>`
       + `<button type="button" role="radio" data-api-mode="own" aria-checked="${mode !== 'proxy'}"><strong>自有接口</strong><small>填写接口地址，或沿用 CLI 本机配置</small></button></div>`;
   }
   function proxyStatusHtml(kind) {
     const proxy = snapshot?.proxy;
     const dshHint = kind === 'deepseek-acp' && !snapshot?.dshCliReady ? '<p class="company-api-note company-proxy-warn">DSH 终端运行环境还没装好，装好后才能新建 DSH 会话。</p>' : '';
     if (!proxy) return '<div class="company-proxy-state" data-proxy-state="unknown"><p>保存后由 Hub 在后台启动反代。</p></div>' + dshHint;
+    if (proxy.shared) return `<div class="company-proxy-state" data-proxy-state="${esc(proxy.state)}"><strong>共享主机${proxy.state === 'running' ? '已连接' : '暂不可用'}</strong><p>${esc(proxy.message)}</p><p>主机各号的可用模型和额度见右侧「共享号池额度」。</p></div>` + dshHint;
     const all = proxy.accounts || [];
     const pool = all.filter(a => a.kind !== 'personal');
     const cooling = all.filter(a => a.coolingUntil && a.coolingUntil > Date.now()).length;
@@ -107,6 +108,7 @@
   const ZONE_NAMES = { blue: '蓝区', green: '绿区', yellow: '黄区' };
   function zoneHtml() {
     const proxy = snapshot?.proxy;
+    if (proxy?.shared) return '<p class="company-api-note">账号登录、区域和号池调度由共享主机管理，同事端无需设置。</p>';
     const chosen = proxy?.chosenZone?.zone || '';
     const unknown = proxy?.code === 'ZONE_UNKNOWN';
     const text = proxy?.mock ? '模拟上游（测试用）不按区域路由。' : proxy?.zone?.text || (unknown ? '还没识别出你所在的区域（蓝区 / 绿区 / 黄区），请在下面选择。选错了，公司模型的请求会全部失败。'
@@ -148,13 +150,13 @@
       + `<div data-proxy-zone>${zoneHtml()}</div>`
       + `<div data-proxy-status>${proxyStatusHtml(kind)}</div>`
       + '<p class="company-api-note">只用 CodeAgent 已登录的账号，不会替你登录或刷新登录；公司模型只收文字，不支持联网搜索。新建会话时也可在模型菜单里换另一个模型。</p>'
-      + '<p class="company-api-message" role="status" aria-live="polite"></p><footer><button type="button" data-api-action="proxy-restart">重新启动反代</button><button type="button" data-api-action="close">取消</button><button type="submit" class="primary">保存配置</button></footer></form>');
+      + `<p class="company-api-message" role="status" aria-live="polite"></p><footer><button type="button" data-api-action="proxy-restart">${snapshot?.proxy?.shared ? '重新连接主机' : '重新启动反代'}</button><button type="button" data-api-action="close">取消</button><button type="submit" class="primary">保存配置</button></footer></form>`);
     target.querySelector('[data-api-action="close"]').onclick = close;
     bindZone(target);
     target.querySelector('[data-api-action="proxy-restart"]').onclick = async event => {
       const button = event.currentTarget, status = target.querySelector('[role="status"]');
       button.disabled = true;
-      status.textContent = '正在重新启动反代…';
+      status.textContent = snapshot?.proxy?.shared ? '正在重新连接共享主机…' : '正在重新启动反代…';
       try {
         const result = await ipcRenderer.invoke('company-proxy:restart');
         snapshot = { ...snapshot, proxy: result?.proxy || snapshot?.proxy };
@@ -265,6 +267,7 @@
     }, true);
     // 反代状态变了（启动完成、自动重启、失败）：弹窗开着就就地刷新状态块。
     ipcRenderer.on('company-proxy:status', (_event, proxy) => {
+      if (snapshot?.proxy?.shared && !proxy?.shared) return;
       if (!snapshot || !proxy) return;
       snapshot = { ...snapshot, proxy };
       const form = dialog?.querySelector('[data-proxy-form]');

@@ -840,10 +840,12 @@ function registerSessionIpc(ipcMain, deps) {
   // 真正退出时停掉自动读取，并结束正在跑的临时 serve（手动刷新、读模型清单起的也算），否则它会留在后台。
   require('../../core/codeagent-quota-auto-refresh').installQuotaQuitCleanup({ app,
     stopAutoRefresh: () => quotaAutoRefresh?.stop(), shutdownServes: () => require('../../core/codeagent-serve').shutdownTempServes() });
+  if (deps.lanPoolService) deps.lanPoolService.quotaReader = () => quotaPanel.snapshot();
   ipcMain.handle('codeagent:quota-panel', async (_event, payload = {}) => {
     try {
       if (!require('../../core/distribution').kindAllowed('codeagent')) throw new Error('当前发行版未开放 CodeAgent');
-      return await quotaPanel.snapshot(payload);
+      const shared = await deps.lanPoolService?.snapshot({ force: payload.refresh === true });
+      return shared || await quotaPanel.snapshot(payload);
     } catch (error) {
       return { ok: false, rows: [], usage: {}, creditReadings: {},
         error: require('../../core/codeagent-quota').redactSnippet(error.message) };

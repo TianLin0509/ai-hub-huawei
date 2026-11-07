@@ -328,6 +328,12 @@ function registerConfigIpc(ipcMain, deps) {
 
   const companyApi = require('../../core/company-api-config');
   if (companyApi.isCompany()) {
+    const proxyStatus = () => deps.lanPoolService?.clientProxyStatus() || companyProxyService?.status() || null;
+    if (deps.lanPoolService) require('./lan-pool-handlers').registerLanPoolIpc(ipcMain, {
+      service: deps.lanPoolService, readConfig: readConfigJsonForUpdate, saveConfig,
+      clearConfig: clearSessionManagerConfigCache, proxyService: companyProxyService,
+      changed: () => sendToRenderer('company-api:changed', {}),
+    });
     ipcMain.handle('company-api:get', () => {
       const raw = readConfigJsonForUpdate();
       const files = [raw.acp?.nodePath, raw.acp?.providers?.['deepseek-acp']?.entryPath];
@@ -337,15 +343,19 @@ function registerConfigIpc(ipcMain, deps) {
       let dshCliReady = false;
       try { require('../../core/dsh-cli-profile').resolveDshCliRuntime(raw.acp?.providers?.['deepseek-acp']); dshCliReady = true; } catch { dshCliReady = false; }
       return { ok: true, providers: companyApi.settings(raw), dshRuntimeInstalled, dshCliReady,
-        proxy: companyProxyService ? companyProxyService.status() : null };
+        proxy: proxyStatus() };
     });
-    ipcMain.handle('company-proxy:status', () => ({ ok: true, proxy: companyProxyService ? companyProxyService.status() : null }));
+    ipcMain.handle('company-proxy:status', () => ({ ok: true, proxy: proxyStatus() }));
     ipcMain.handle('company-proxy:restart', async () => {
+      if (deps.lanPoolService?.client()?.enabled) {
+        await deps.lanPoolService.snapshot({ force: true }); return { ok: true, proxy: proxyStatus() };
+      }
       if (!companyProxyService) return { ok: false, error: '反代服务不可用' };
       try { return { ok: true, proxy: await companyProxyService.restart() }; }
       catch (error) { return { ok: false, error: error.message, proxy: companyProxyService.status() }; }
     });
     ipcMain.handle('company-proxy:set-zone', async (_event, request = {}) => {
+      if (deps.lanPoolService?.client()?.enabled) return { ok: false, error: '共享模型的区域由主机管理员设置', proxy: proxyStatus() };
       if (!companyProxyService) return { ok: false, error: '反代服务不可用' };
       try { return { ok: true, proxy: await companyProxyService.setZone(request.zone) }; }
       catch (error) { return { ok: false, error: error.message, proxy: companyProxyService.status() }; }
@@ -359,7 +369,7 @@ function registerConfigIpc(ipcMain, deps) {
         sendToRenderer('company-api:changed', { kind: request.kind });
         // 选了或取消了「公司模型」：反代随之启动或停下（不等它就绪，状态在弹窗里刷新）。
         if (companyProxyService) void companyProxyService.syncWithConfig();
-        return { ok: true, providers: companyApi.settings(next), proxy: companyProxyService ? companyProxyService.status() : null };
+        return { ok: true, providers: companyApi.settings(next), proxy: proxyStatus() };
       } catch (error) { return { ok: false, error: error.message }; }
     });
   }

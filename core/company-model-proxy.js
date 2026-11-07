@@ -65,8 +65,10 @@ function sessionTag(sessionId) {
   return tag || 'default';
 }
 function sessionKey(endpoint, sessionId) { return `${endpoint.key}.${sessionTag(sessionId)}`; }
-function origin(endpoint) { return `http://127.0.0.1:${endpoint.port}`; }
+function origin(endpoint) { return endpoint.origin || `http://127.0.0.1:${endpoint.port}`; }
 function requireEndpoint(dataDir) {
+  const shared = require('./lan-pool').read(dataDir).client;
+  if (shared?.enabled) return { origin: require('./lan-pool').address(shared.address), key: shared.key };
   const endpoint = readEndpoint(dataDir);
   if (!endpoint || !endpoint.port) throw new Error('公司模型反代还没准备好，请稍等几秒再新建会话');
   return endpoint;
@@ -95,6 +97,13 @@ function applyNoProxy(env) {
   return env;
 }
 
+function applyEndpointNoProxy(env, endpoint) {
+  applyNoProxy(env);
+  if (!endpoint.origin) return;
+  const host = new URL(endpoint.origin).hostname;
+  for (const name of ['NO_PROXY', 'no_proxy']) if (!env[name].split(',').includes(host)) env[name] += ',' + host;
+}
+
 function applyClaudeEnv(env, { dataDir, sessionId, model }) {
   const endpoint = requireEndpoint(dataDir);
   const chosen = launchModel(model);
@@ -108,7 +117,7 @@ function applyClaudeEnv(env, { dataDir, sessionId, model }) {
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1', DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1',
     CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: '1', API_TIMEOUT_MS: '900000',
   });
-  applyNoProxy(env);
+  applyEndpointNoProxy(env, endpoint);
   return chosen;
 }
 
@@ -179,7 +188,7 @@ function applyCodexEnv(env, { dataDir, sessionId, model, projectDir }) {
   env.CODEX_HOME = ensureCodexHome(dataDir, { model, projectDir });
   env[KEY_ENV] = sessionKey(endpoint, sessionId);
   for (const key of ['OPENAI_API_KEY', 'OPENAI_BASE_URL', 'CODEX_API_KEY']) delete env[key];
-  applyNoProxy(env);
+  applyEndpointNoProxy(env, endpoint);
   return env.CODEX_HOME;
 }
 
@@ -252,5 +261,5 @@ module.exports = {
   ZONE_CHOICES, upstreamFile, readUpstreamConfig, setUpstreamZone, chosenZone,
   MODELS, MODEL_IDS, DEFAULT_MODEL, DEFAULT_PORT, KEY_ENV, PROVIDER_ID, LABEL, CODEX_WINDOWS_SANDBOX_DEFAULT, codexWindowsSandbox,
   proxyDir, endpointFile, readEndpoint, ensureEndpoint, setEndpointPort, sessionTag, sessionKey, normalizeModel, launchModel,
-  applyNoProxy, usesProxy, applyClaudeEnv, codexCatalog, codexHome, ensureCodexHome, applyCodexEnv, dshRoute, findNodeOnPath,
+  applyNoProxy, applyEndpointNoProxy, usesProxy, applyClaudeEnv, codexCatalog, codexHome, ensureCodexHome, applyCodexEnv, dshRoute, findNodeOnPath,
 };

@@ -2421,11 +2421,13 @@ require('./core/codeagent-commands-probe').commandStartup(getHubDataDir(), {
 let companyProxyFailureShown = '';
 const companyProxyService = new (require('./main/company-proxy-service').CompanyProxyService)({
   dataDir: getHubDataDir(),
-  isEnabled: () => getHubConfig().companyCli === true && getHubConfig().companyProxyEnabled === true,
+  isEnabled: () => getHubConfig().companyCli === true && !require('./core/lan-pool').read(getHubDataDir()).client?.enabled
+    && (getHubConfig().companyProxyEnabled === true || require('./core/lan-pool').read(getHubDataDir()).host?.enabled === true),
   // 换号、退回个人号、反代起不来：用会话提示条讲给用户听（renderer.js 的 session-notice）。
   // 换号/退回个人号是常驻提示条，用户手动关（只在每类第一次时弹，见 company-proxy-service）。
   onNotice: notice => sendToRenderer('session-notice', { message: notice.text, level: 'warning', persistent: notice.persistent === true }),
   onStatus: status => {
+    if (require('./core/lan-pool').read(getHubDataDir()).client?.enabled) return;
     sendToRenderer('company-proxy:status', status);
     if (status.state === 'failed' && status.message !== companyProxyFailureShown) {
       companyProxyFailureShown = status.message;
@@ -2438,16 +2440,37 @@ const companyProxyService = new (require('./main/company-proxy-service').Company
     } else if (status.state === 'running') companyProxyFailureShown = '';
   },
 });
-app.whenReady().then(() => companyProxyService.syncWithConfig());
+const lanPoolService = new (require('./main/lan-pool-service').LanPoolService)({
+  dataDir: getHubDataDir(), proxyService: companyProxyService,
+  onChanged: () => { sendToRenderer('lan-pool:changed', {}); sendToRenderer('codeagent-usage-changed', {});
+    sendToRenderer('company-proxy:status', lanPoolService.clientProxyStatus() || companyProxyService.status()); },
+  // 共享停摆、地址变化、主机掉线或恢复：用会话提示条告诉用户，不让共享悄悄失效。
+  onNotice: notice => sendToRenderer('session-notice', { message: notice.text, level: notice.persistent ? 'warning' : 'info', persistent: notice.persistent === true }),
+});
+app.whenReady().then(async () => {
+  await companyProxyService.syncWithConfig();
+  if (!getHubConfig().companyCli) return;
+  await lanPoolService.sync().catch(error => console.warn('[lan-pool] ' + error.message));
+  // 启动失败、换网、休眠唤醒后自动重试；同事端掉线后自动重连。
+  lanPoolService.startWatchdog();
+  powerMonitor.on('resume', () => { setTimeout(() => void lanPoolService.resume(), 5000); });
+});
+app.on('before-quit', () => { void lanPoolService.stop(); });
 // 退出时先请反代自己收尾（删状态文件、关连接）；来不及的由 will-quit 兜底结束进程。
 app.on('before-quit', () => { void companyProxyService.stop().catch(() => {}); });
 app.on('will-quit', () => companyProxyService.killNow());
 const sessionOperations = registerSessionIpc(ipcMain, {
   app,
+  lanPoolService,
   ensureLaunchAuth: async (kind, opts) => {
     if (require('./core/company-model-proxy').usesProxy(kind, getHubConfig())) {
-      const status = await companyProxyService.ensureRunning();
-      if (status.state === 'failed' || status.state === 'not-ready') throw new Error(status.message || '公司模型反代还没准备好');
+      if (lanPoolService.client()?.enabled) {
+        const shared = await lanPoolService.snapshot({ force: true });
+        if (!shared?.ready) throw new Error(lanPoolService.error || '共享主机模型服务尚未就绪');
+      } else {
+        const status = await companyProxyService.ensureRunning();
+        if (status.state === 'failed' || status.state === 'not-ready') throw new Error(status.message || '公司模型反代还没准备好');
+      }
     }
     // Both checks are read-only; run them side by side. A login problem is
     // reported ahead of a config problem, as when they ran one after another.
@@ -4055,6 +4078,7 @@ require('./main/ipc/mailbox-handlers').registerMailboxIpc(ipcMain, {
   openInLoginEnv: payload => vpsLogin.enabled() ? vpsLogin.open(payload) : Promise.reject(new Error('本机没有接入 VPS 登录环境，无法在账号自己的出口打开邮箱')),
 });
 registerConfigIpc(ipcMain, {
+  lanPoolService,
   companyProxyService,
   prepareNewClaudeAccount: payload => vpsLogin.enabled() ? vpsLogin.prepareNew(payload) : Promise.resolve({}),
   requireClaudeExit: () => vpsLogin.enabled(),

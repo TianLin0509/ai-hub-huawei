@@ -20,6 +20,14 @@ function shortReason(status) {
 // 反代状态 → 卡片状态点：ready 可用 / busy 准备中 / needs 要你处理 / error 出错 / idle 还没启动（选中后自动启动）。
 function proxyBadge(status, model = '') {
   const s = status || {};
+  if (s.shared) {
+    if (s.state !== 'running') return { state: 'needs', text: '共享主机暂不可用', tip: s.message || '请在号池内网共享中检查主机连接。' };
+    const base = v => String(v || '').toLowerCase().replace(/-auto$/, '');
+    const available = (s.accounts || []).filter(a => !a.paused && !a.coolingUntil
+      && (!model || a.modelsAuthoritative !== true || (a.models || []).some(m => base(m) === base(model))));
+    return available.length ? { state: 'ready', text: `共享可用 · ${available.length} 个号`, tip: '经团队共享主机自动选号，额度由所有同事共同使用；逐号读数见右侧栏。' }
+      : { state: 'needs', text: '共享号池暂不可用', tip: '请联系主机管理员检查账号登录、暂停状态和模型权限。' };
+  }
   if (!status || s.state === 'stopped' || s.state === 'draining') {
     return { state: 'idle', text: '选中后自动启动', tip: '公司模型反代现在没在运行；用公司模型新建会话时，Hub 会在后台启动它（几秒）。' };
   }
@@ -75,7 +83,7 @@ function cardsFor(kind, provider, status, pick) {
   if (!COMPANY_KINDS.has(kind) || !provider) return [];
   const cards = companyModels(provider).map(m => {
     const badge = proxyBadge(status, m.id);
-    return { id: m.id, name: m.label === m.id ? m.id : m.label, detail: m.label === m.id ? '' : m.id, source: 'company', sourceText: '公司模型',
+    return { id: m.id, name: m.label === m.id ? m.id : m.label, detail: m.label === m.id ? '' : m.id, source: 'company', sourceText: status?.shared ? '共享号池' : '公司模型',
       state: badge.state, statusText: badge.text, tip: badge.tip, checked: pick?.source === 'company' && pick.model === m.id };
   });
   if (kind !== 'deepseek-acp') {

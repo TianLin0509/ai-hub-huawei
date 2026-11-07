@@ -122,7 +122,7 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
     const providerId = companyRoute ? companyRoute.providerId : 'bailian-tpp';
     if (companyRoute) {
       env[companyRoute.keyEnv] = key;
-      require('./company-model-proxy').applyNoProxy(env);
+      require('./company-model-proxy').applyEndpointNoProxy(env, { origin: companyRoute.baseURL });
     } else env.BAILIAN_API_KEY = key;
     // authenticate persists the native provider credential in this isolated
     // profile. DSH rejects that write if the same key is injected read-only

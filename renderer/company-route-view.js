@@ -6,6 +6,7 @@
 
 const COMPANY_KINDS = new Set(['claude', 'codex', 'deepseek-acp']);
 let sessionAccounts = {};
+let shared = false;
 const listeners = new Set();
 
 // 和 core/company-model-proxy.js sessionTag 同一规则：会话 ID 只留字母数字、下划线和连字符，最多 64 位。
@@ -28,6 +29,8 @@ function routeInfo(session) {
   const model = session.currentModel?.id || '';
   if (session.companyRoute === 'proxy') {
     const alias = sessionAccounts[tagOf(session.id)] || '';
+    if (shared) return { route: 'proxy', model, alias, source: '共享号池', chip: [shortModel(model), '共享'].filter(Boolean).join(' · '),
+      text: [model, '共享号池', alias].filter(Boolean).join(' · '), title: '经团队共享主机，账号由主机自动分配；额度与连接状态见右侧栏。' };
     return { route: 'proxy', model, alias, source: '公司模型',
       chip: [shortModel(model), alias].filter(Boolean).join(' · '),
       text: [model, '公司模型', alias ? aliasWords(alias) : ''].filter(Boolean).join(' · '),
@@ -42,7 +45,8 @@ function routeInfo(session) {
 
 function updateStatus(status) {
   const next = status && status.sessionAccounts && typeof status.sessionAccounts === 'object' ? { ...status.sessionAccounts } : {};
-  const changed = JSON.stringify(next) !== JSON.stringify(sessionAccounts);
+  const changed = shared !== (status?.shared === true) || JSON.stringify(next) !== JSON.stringify(sessionAccounts);
+  shared = status?.shared === true;
   sessionAccounts = next;
   if (changed) for (const fn of listeners) { try { fn(); } catch { /* UI only */ } }
   return changed;

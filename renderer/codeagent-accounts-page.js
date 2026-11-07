@@ -40,6 +40,8 @@ function createCodeagentAccountsPage({ document, window = document.defaultView, 
       drawer.querySelector('[data-ca="add"]').disabled = !!state.busy;
     }
     if (Date.now() < locateUntil) locatedRow()?.classList.add('is-located');
+    // 号池内网共享卡片（renderer/lan-pool-settings.js）：主机看同事用量，同事看共享号额度。
+    window.__lanPoolMountAccount?.(page.querySelector('.caa-page'));
   }
   function locatedRow() {
     return [...(page?.querySelectorAll('[data-ca-account]') || [])].find(row => row.dataset.caAccount === locateId);

@@ -69,6 +69,7 @@ function idleView(rows, now) {
 }
 
 function quotaView(snapshot, { now = Date.now(), currentAccountId = '', currentModel = '', loadingKeys = new Set(), installed } = {}) {
+  const sharedDown = !!(snapshot?.shared && snapshot.connection && snapshot.connection !== 'online');
   // 不分个人和号池：个人账号排第一，和它相同或互相重复的号只算一个，没登录的个人账号不占位。
   const rows = (snapshot?.rows || []).map((account, index) => ({ account, index }))
     .filter(({ account }) => !account.sameAsPersonal && !account.duplicateOf && !(account.personal && account.present === false))
@@ -81,7 +82,8 @@ function quotaView(snapshot, { now = Date.now(), currentAccountId = '', currentM
     // 第二行（s1 样稿）：模型名 · 告警 · 读数时间；状态类的文字（暂停、需登录、读取失败）占模型名的位置。
     let detail = token?.name || '下次读取后显示', alert = '';
     let warning = false;
-    if (account.avoid) { detail = pauseReason(account.avoid, now); warning = true; }
+    if (sharedDown) { detail = snapshot.connection === 'revoked' ? '口令已撤销 · 上次读数' : '主机连接中断 · 上次读数'; warning = true; }
+    else if (account.avoid) { detail = pauseReason(account.avoid, now); warning = true; }
     else if (!health.usable) { detail = health.detail || health.label; warning = true; }
     else if (loading) detail = '读取中…';
     else if (account.refresh?.status === 'failed' || account.refresh?.error) { detail = token || busy || month ? '读取失败，保留上次读数' : '读取失败，暂未读到额度'; warning = true; }
@@ -90,13 +92,13 @@ function quotaView(snapshot, { now = Date.now(), currentAccountId = '', currentM
     else if (token?.warning) alert = `${token.warning.label} ${Math.round(token.warning.pct)}%`;
     const at = token?.at || Math.max(busy?.at || 0, month?.at || 0);
     const name = account.personal ? '我的账号' : account.label || account.note || account.accountLabel || '未备注账号';
-    const needsLogin = account.state !== 'ready' && !account.avoid;
-    return { ...account, name, token, busy, idle, month, at, current, loading, warning, detail, alert, needsLogin, statusLabel: health.label,
-      usable: health.usable, dim: !health.usable || token?.pct === 0 || busy?.pct === 0 || month?.pct === 0,
+    const needsLogin = !sharedDown && account.state !== 'ready' && !account.avoid;
+    return { ...account, name, token, busy, idle, month, at, current, loading, warning, detail, alert, needsLogin, statusLabel: sharedDown ? '主机离线' : health.label,
+      usable: health.usable && !sharedDown, dim: sharedDown || !health.usable || token?.pct === 0 || busy?.pct === 0 || month?.pct === 0,
       avatar: account.personal ? '我' : [...name][0],
       tint: account.personal ? 'brand' : ['tint-room', 'tint-assist', 'tint-meet', 'tint-room', 'tint-forum'][(index - 1 + 5) % 5] };
   });
-  return { rows, installed, visible: rows.length > 1, total: rows.length, usable: rows.filter(row => row.usable).length,
+  return { rows, installed: snapshot?.shared ? true : installed, shared: !!snapshot?.shared, message: snapshot?.shared ? snapshot.message : '', visible: snapshot?.shared || rows.length > 1, total: rows.length, usable: rows.filter(row => row.usable).length,
     idle: idleView(snapshot?.rows || [], now), at: Math.max(0, ...rows.map(row => row.at)) };
 }
 
@@ -185,14 +187,14 @@ function renderQuotaFooter(view, { now = Date.now() } = {}) {
 }
 function renderQuota(view, { now = Date.now(), refreshing = false, loadingCount = 0, message = '' } = {}) {
   if (view.installed === false) return `<div class="qp-h"><h3>号池额度</h3><span class="sp"></span><button type="button" class="icon-btn qp-fold" data-qp-action="collapse" aria-label="收起额度栏">${icon('fold')}</button></div><div class="qp-note" role="status">CodeAgent 未安装</div><div class="qp-list"><div class="qp-empty">先安装 CodeAgent，再登录读取额度。</div></div><div class="qp-f"><button type="button" class="btn btn-ghost btn-sm" data-qp-action="install-guide">查看安装说明</button></div><div class="qp-rail"><button type="button" class="icon-btn" data-qp-action="expand" aria-label="展开号池额度">${icon('unfold')}</button><button type="button" class="icon-btn" data-qp-action="install-guide" title="CodeAgent 未安装 · 查看安装说明" aria-label="CodeAgent 未安装，查看安装说明">${icon('key')}</button></div>`;
-  const note = refreshing ? `正在读取 ${loadingCount} 个号…` : message;
-  return `<div class="qp-h"><h3>号池额度</h3><span class="qp-n"><b>${view.usable}</b>/${view.total} 可用</span><span class="sp"></span>
+  const note = refreshing ? (view.shared ? '正在同步主机额度…' : `正在读取 ${loadingCount} 个号…`) : message || view.message;
+  return `<div class="qp-h"><h3>${view.shared ? '共享号池额度' : '号池额度'}</h3><span class="qp-n"><b>${view.usable}</b>/${view.total} 可用</span><span class="sp"></span>
     <button type="button" class="icon-btn qp-refresh" data-qp-action="refresh" title="刷新全部号的读数（同一个号 10 分钟内只读一次）" aria-label="刷新全部额度"${refreshing ? ' disabled' : ''}>${icon('refresh')}</button>
     <button type="button" class="icon-btn qp-fold" data-qp-action="collapse" title="收起成细栏" aria-label="收起额度栏">${icon('fold')}</button></div>
     ${note ? `<div class="qp-note" role="status"><i class="d"></i><span>${esc(note)}</span></div>` : ''}
     ${view.idle ? `<div class="qp-idle${view.idle.active ? ' on' : ''}" title="${esc(`按最近读数计算 · ${readTime(view.idle.at, now) || '读取时间未知'}`)}">${icon('clock')}<span>${esc(view.idle.text)}</span></div>` : ''}
     <div class="qp-cols"><span>账号 · 当前模型</span><span>今日 Token</span></div><div class="qp-list">${view.rows.map(row => rowHtml(row, now)).join('')}</div>
-    <div class="qp-f"><button type="button" class="btn btn-ghost btn-sm" data-qp-action="accounts">${icon('key')}打开账号页</button><small title="CodeAgent 不告诉重置时间，按整天估算">通常每日 00:00 重置</small></div>
+    <div class="qp-f"><button type="button" class="btn btn-ghost btn-sm" data-qp-action="accounts">${icon('key')}${view.shared ? '共享详情' : '打开账号页'}</button><small title="CodeAgent 不告诉重置时间，按整天估算">通常每日 00:00 重置</small></div>
     <div class="qp-rail"><button type="button" class="icon-btn" data-qp-action="expand" title="展开号池额度" aria-label="展开号池额度">${icon('unfold')}</button>
     <div class="qp-rail-sum"><b>${view.usable}</b>/${view.total}</div><span class="qp-rail-line"></span>${view.rows.map(row => ringHtml(row, now)).join('')}
     <span class="sp"></span><button type="button" class="icon-btn" data-qp-action="accounts" title="打开账号页" aria-label="打开账号页">${icon('key')}</button></div>`;

@@ -1236,6 +1236,8 @@
     grid.dataset.account = String(showAccount);
 
     const options = launchModelOptions(selectedKind);
+    // 异步加载后的旧调参记忆可能覆盖卡片默认值；卡片存在时，它就是本次启动的选择。
+    if (companyApiKind(selectedKind) && companyPick[selectedKind]) selectedModel = companyPickModel(selectedKind);
     const hasModels = options.length > 0 || selectedKind === 'codeagent';
     const section = document.getElementById('new-session-config-section');
     if (section) section.hidden = !hasModels;
@@ -1559,7 +1561,8 @@
     if (companyApiKind(selectedKind)) {
       const pick = companyPick[selectedKind];
       const own = companyProvider[selectedKind]?.own;
-      parts.push(!pick ? (companyApiBackend[selectedKind] === 'proxy' ? '公司模型' : '') : pick.source === 'company' ? '公司模型' : own?.backend === 'api' ? '自有接口' : 'CLI 默认');
+      const companySource = companyProxyStatus?.shared ? '共享号池' : '公司模型';
+      parts.push(!pick ? (companyApiBackend[selectedKind] === 'proxy' ? companySource : '') : pick.source === 'company' ? companySource : own?.backend === 'api' ? '自有接口' : 'CLI 默认');
     }
     const tuning = tuningTag();
     if (tuning) parts.push(tuning);
@@ -1628,7 +1631,7 @@
     const details = document.getElementById('new-session-tuning-details');
     if (details) details.open = false;
     const { kindAllowed } = require('../core/distribution');
-    selectedKind = [panelKind(options.kind), panelKind(require('./codeagent-preference').preferredKind(Object.keys(KIND_LABELS).filter(kindAllowed)))]
+    selectedKind = [panelKind(options.kind), window.__lanPoolConnected ? 'claude' : '', panelKind(require('./codeagent-preference').preferredKind(Object.keys(KIND_LABELS).filter(kindAllowed)))]
       .find(kind => kind && kindAllowed(kind)) || require('./codeagent-preference').preferredKind(Object.keys(KIND_LABELS).filter(kindAllowed));
     if (selectedKind === 'codeagent' && (options.codeagentPoolPick || options.codeagentAccount === 'personal')) {
       codeagentAccount = options.codeagentPoolPick ? 'pool-manual' : 'personal';

@@ -94,6 +94,7 @@ function createCodeAgentQuotaPanel({ document, root, window = document.defaultVi
       if (disposed) return;
       if (!result?.ok) throw new Error(result?.error || '额度读取失败');
       snapshot = result; noteReading();
+      if (result.shared) { message = result.message || '已同步主机额度'; return; }
       const failures = result.rows.filter(row => row.refresh?.status === 'failed');
       const updated = result.rows.filter(row => row.refresh?.status === 'updated');
       const cooling = result.rows.filter(row => row.refresh?.status === 'cooldown');
@@ -122,7 +123,7 @@ function createCodeAgentQuotaPanel({ document, root, window = document.defaultVi
     if (action === 'refresh') { void refresh(); return; }
     if (action === 'expand' || action === 'collapse') { fold(action === 'collapse', true); return; }
     clearTip(); if (narrow) fold(true);
-    void openAccounts(target.dataset.qpAccount || undefined);
+    void openAccounts(snapshot?.shared ? undefined : target.dataset.qpAccount || undefined);
   }
   function outside(event) { if (narrow && !collapsed && !root.contains(event.target)) fold(true); }
   function resize() {
