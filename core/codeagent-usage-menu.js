@@ -313,20 +313,25 @@ function recordUsage(dataDir, key, usage, { label = '', source = '', now = Date.
 }
 
 const squash = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+const TRUNCATED_NAME = /(?:\.{3}|…)\s*$/;
+const isTruncatedName = name => TRUNCATED_NAME.test(String(name || ''));
+// 菜单把长模型名截断显示（「DeepSeek-V4.1-Flash-1…」）：去掉省略号后的前缀是目标名的开头、且版本号一致，才算这个模型的候选。
+// 用量表（modelUsage）和选模型（codeagent-model-picker）共用；只命中唯一一行才认，由调用方判断。
+function truncatedNameMatches(name, modelId) {
+  if (!isTruncatedName(name) || !modelId) return false;
+  const normalize = value => String(value).toLowerCase().replace(/[^a-z0-9.]+/g, '');
+  const prefix = String(name).replace(TRUNCATED_NAME, '');
+  const version = /\d+(?:\.\d+)*/.exec(prefix);
+  const requestedVersion = /\d+(?:\.\d+)*/.exec(modelId);
+  if (requestedVersion && version?.[0] !== requestedVersion[0]) return false;
+  return !!normalize(prefix) && normalize(modelId).startsWith(normalize(prefix));
+}
 function modelUsage(entry, modelId) {
   if (!entry || !Array.isArray(entry.models) || !modelId) return null;
   const want = squash(modelId);
-  const exact = entry.models.find(m => !/(?:\.{3}|…)\s*$/.test(m.name) && squash(m.name) === want);
+  const exact = entry.models.find(m => !isTruncatedName(m.name) && squash(m.name) === want);
   if (exact) return exact;
-  const normalize = value => String(value).toLowerCase().replace(/[^a-z0-9.]+/g, '');
-  const matches = entry.models.filter(m => {
-    if (!/(?:\.{3}|…)\s*$/.test(m.name)) return false;
-    const prefix = String(m.name).replace(/(?:\.{3}|…)\s*$/, '');
-    const version = /\d+(?:\.\d+)*/.exec(prefix);
-    const requestedVersion = /\d+(?:\.\d+)*/.exec(modelId);
-    if (requestedVersion && version?.[0] !== requestedVersion[0]) return false;
-    return !!normalize(prefix) && normalize(modelId).startsWith(normalize(prefix));
-  });
+  const matches = entry.models.filter(m => truncatedNameMatches(m.name, modelId));
   return matches.length === 1 ? matches[0] : null;
 }
 
@@ -433,5 +438,5 @@ function formatAge(ms) {
   return m < 1 ? '刚刚' : m < 60 ? `${m} 分钟前` : m < 2880 ? `${Math.round(m / 60)} 小时前` : `${Math.round(m / 1440)} 天前`;
 }
 
-module.exports = { parseCodeAgentUsageMenu, recordUsage, readUsage, usageFile, markUsageDirty, modelUsage, usageHint, durationMinutes, formatMinutes, formatAge, displayCol, createUsageRefresher, CODEAGENT_SERVE_MAX_AGE_MS, CODEAGENT_USAGE_OPEN_MIN_INTERVAL_MS,
+module.exports = { parseCodeAgentUsageMenu, recordUsage, readUsage, usageFile, markUsageDirty, modelUsage, isTruncatedName, truncatedNameMatches, usageHint, durationMinutes, formatMinutes, formatAge, displayCol, createUsageRefresher, CODEAGENT_SERVE_MAX_AGE_MS, CODEAGENT_USAGE_OPEN_MIN_INTERVAL_MS,
   hasModelTokens, readUsageMenu, usageMenuLines, appendUsageDiagnostic, PICKER_USAGE_WAIT_MS, PROBE_USAGE_WAIT_MS, USAGE_LOG_MAX_BYTES };

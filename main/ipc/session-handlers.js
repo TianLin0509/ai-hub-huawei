@@ -1191,7 +1191,10 @@ function registerSessionIpc(ipcMain, deps) {
     // 自动会话没人守着：菜单没选上，但菜单已关、输入行可以用（认得出普通输入框，或旧版画面认不出、但已没有菜单和「/model」残留），
     // 就按 CLI 当前模型照常把问题发出去，失败只记在 pick 日志里，不卡住这一轮；回执里的模型按实际作答的模型（company.js 读原生记录）。
     // 选菜单第一个也是 Hub 自己替用户做的：没选上但输入框能用时同样照常发，第一条消息不被退回（会话里提示一句，见下面的 codeagent-model-pick 监听）。
-    const fallback = !result.ok && (automatic || pickFirst) && (result.inputReady || result.inputUsable);
+    // 启动和原地重拉时选具体模型也一样（2026-11-08 公司实测：菜单把 deepseek-v4.1-flash-1017 显示成截断名、没选上，
+    // 「问问 Agent」新建的会话首句被退回、会话页空着）：输入框能用就先用 CLI 当前模型把首句发出去，提示一句没切到哪个模型。
+    const startupPick = reason === 'launch' || reason === 'relaunch';
+    const fallback = !result.ok && (automatic || pickFirst || startupPick) && (result.inputReady || result.inputUsable);
     if (!result.ok && automatic && !fallback) {
       result = { ...result, message: `自动选模型没成功，模型菜单也没能关掉，为了不把问题打进菜单，这一轮没有发出去（原因：${result.message || '未知'}）` };
     }
@@ -1261,12 +1264,21 @@ function registerSessionIpc(ipcMain, deps) {
     // 同步登记：随后到达的第一条消息会等这一步做完（group-chat-watcher 的 sendToPty）。
     codeagentPicker.schedulePick(sessionId, async () => {
       const result = await runCodeAgentPick(sessionId, modelId, reason);
+      const session = sessionManager.getSession(sessionId);
       if (result.fallback && codeagentPicker.isFirstMenuModel(modelId)) {
         sendToRenderer('session-notice', { sessionId, level: 'warning',
           message: `没能自动选中 CodeAgent 模型菜单里的第一个模型（${result.message || '原因未知'}），这个会话沿用 CodeAgent 当前的模型；需要换的话在终端里 /model 选一次。` });
+      } else if (result.fallback) {
+        // 自动会话没人看，回退只记日志（runCodeAgentPick 的 pick 日志 fallback=send-with-cli-model）；用户会话提示一句。
+        if (!session || !isAutomaticCodeAgent(session)) {
+          sendToRenderer('session-notice', { sessionId, level: 'warning',
+            message: `没切到 ${modelId}，先用 CodeAgent 当前模型继续，第一条消息已照常发出（原因：${result.technicalReason || result.message || '未知'}）；需要换的话在终端里 /model 选一次。` });
+        }
       } else if (!result.ok) {
-        sendToRenderer('session-notice', { sessionId, level: 'warning',
-          message: result.message });
+        // 真失败（菜单没关掉、输入框不能用）：第一条消息被退回，常驻提示讲清原因和下一步，不用一闪而过的提示。
+        const why = result.technicalReason && result.technicalReason !== result.message ? `（${result.technicalReason}）` : '';
+        sendToRenderer('session-notice', { sessionId, level: 'warning', persistent: true,
+          message: `${result.message || `没能选中 ${modelId}`}${why}。第一条消息还没发出；请到会话的终端里按 Esc 关掉模型菜单，或用 /model 手动选一次，再重新发送。` });
       }
       return result;
     });

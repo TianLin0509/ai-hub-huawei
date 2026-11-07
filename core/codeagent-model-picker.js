@@ -171,12 +171,28 @@ function promptInputAvailable(lines) {
   return prompt >= 0 && screen.slice(prompt + 1).some(line => /\? for shortcuts|bypass permissions|(?:manual|plan|accept edits) mode on|shift\+tab/i.test(line));
 }
 
-// 目标在哪一行：模型名完全相同优先，其次以它开头，最后整行包含。
+// 菜单把长模型名截断显示（公司实录「DeepSeek-V4.1-Flash-1…」，目标 deepseek-v4.1-flash-1017）：截断名的前缀是目标名的开头才算候选，
+// 规则与用量表共用（codeagent-usage-menu truncatedNameMatches）。只命中唯一一行才选；几行同前缀分不清就不选，免得误选。
+function truncatedRows(rows, label) {
+  const { truncatedNameMatches } = require('./codeagent-usage-menu');
+  return (rows || []).reduce((hits, row, index) => truncatedNameMatches(row.label, label) ? [...hits, index] : hits, []);
+}
+// 搜索与翻页用：名字完全相同（不分大小写）优先，其次唯一命中的截断名。
+function locateLabel(rows, label) {
+  const exact = (rows || []).findIndex(row => exactLabel(row.label, label));
+  if (exact >= 0) return exact;
+  const cut = truncatedRows(rows, label);
+  return cut.length === 1 ? cut[0] : -1;
+}
+
+// 目标在哪一行：模型名完全相同优先，其次唯一命中的截断名，再次以它开头，最后整行包含。
 function findTarget(picker, label) {
   const want = squash(label);
   if (!picker || !want) return -1;
   const exact = picker.rows.findIndex(row => squash(row.label) === want);
   if (exact >= 0) return exact;
+  const cut = truncatedRows(picker.rows, label);
+  if (cut.length) return cut.length === 1 ? cut[0] : -1;
   const prefix = picker.rows.findIndex(row => squash(row.label).startsWith(want));
   if (prefix >= 0) return prefix;
   return picker.rows.findIndex(row => squash(row.text).includes(want));
@@ -467,7 +483,7 @@ async function findOffscreenTarget({ picker, screen, manager, sid, label, log, r
     }, MODEL_SEARCH_WAIT_MS);
     onSearchFrame(stable.lines);
     let searched = { value: stable.value?.picker || null };
-    let found = searched.value && searched.value.rows.findIndex(row => exactLabel(row.label, label));
+    let found = searched.value && locateLabel(searched.value.rows, label);
     if (Number.isInteger(found) && found >= 0) {
       picker = searched.value;
       let searchSteps = 0;
@@ -477,10 +493,10 @@ async function findOffscreenTarget({ picker, screen, manager, sid, label, log, r
         searched = await waitForPickerChange(screen, prior, MODEL_SEARCH_WAIT_MS);
         if (!searched.value) break;
         picker = searched.value;
-        found = picker.rows.findIndex(row => exactLabel(row.label, label));
+        found = locateLabel(picker.rows, label);
         if (found < 0) break;
       }
-      if (exactLabel(picker.rows[picker.cursor]?.label, label)) {
+      if (picker.cursor >= 0 && locateLabel(picker.rows, label) === picker.cursor) {
         log({ event: 'switch-search', result: 'found' }); return { picker, target: picker.cursor };
       }
     }
@@ -503,11 +519,15 @@ async function findOffscreenTarget({ picker, screen, manager, sid, label, log, r
     if (!focused.value) return { error: '无法确认模型列表的选中项，没有选择模型' };
     picker = focused.value;
   }
-  const seen = new Set(), limit = picker.total || MODEL_SCROLL_LIMIT;
+  // 截断名要翻完整个列表才知道是不是唯一：一路记下命中的行，完全同名的随时优先；翻到底只有一行时再按上键退回去。
+  const seen = new Set(), truncated = new Set(), limit = picker.total || MODEL_SCROLL_LIMIT;
+  const identityOf = row => JSON.stringify([row.number, row.label]);
+  const noteTruncated = () => { for (const index of truncatedRows(picker.rows, label)) truncated.add(identityOf(picker.rows[index])); };
   let steps = 0;
   while (steps < limit) {
-    const row = picker.rows[picker.cursor], identity = JSON.stringify([row.number, row.label]);
+    const row = picker.rows[picker.cursor], identity = identityOf(row);
     if (exactLabel(row.label, label)) { log({ event: 'switch-scroll', steps, result: 'found' }); return { picker, target: picker.cursor }; }
+    noteTruncated();
     if (seen.has(identity)) break;
     seen.add(identity);
     const before = pickerSignature(picker);
@@ -517,7 +537,20 @@ async function findOffscreenTarget({ picker, screen, manager, sid, label, log, r
     picker = next.value;
   }
   if (exactLabel(picker.rows[picker.cursor]?.label, label)) { log({ event: 'switch-scroll', steps, result: 'found' }); return { picker, target: picker.cursor }; }
-  log({ event: 'switch-scroll', steps, result: 'not-found' });
+  noteTruncated();
+  if (truncated.size === 1) {
+    const [only] = truncated;
+    for (let back = 0; back <= steps + 1; back += 1) {
+      const row = picker.rows[picker.cursor];
+      if (row && identityOf(row) === only) { log({ event: 'switch-scroll', steps, back, result: 'found-truncated' }); return { picker, target: picker.cursor }; }
+      const before = pickerSignature(picker);
+      manager.writeToSession(sid, '[A');
+      const next = await waitForPickerChange(screen, before, MODEL_SEARCH_WAIT_MS);
+      if (!next.value) break;
+      picker = next.value;
+    }
+  }
+  log({ event: 'switch-scroll', steps, result: truncated.size > 1 ? 'ambiguous-truncated' : 'not-found', ...(truncated.size ? { truncated: truncated.size } : {}) });
   return { picker, target: -1 };
 }
 
@@ -643,6 +676,9 @@ async function pickModel({ manager, sid, kind, modelId, configDir, dataDir, send
         log: fields => require('./codeagent-models').appendModelLog(dataDir, { session: String(sid).slice(0, 8), model: modelId, ...fields }) });
       if (found.error) return fail(found.error);
       picker = found.picker; target = found.target;
+    }
+    if (target < 0 && truncatedRows(picker.rows, label).length > 1) {
+      return fail(`模型菜单里有几行截断的名字都像 ${modelId}（${truncatedRows(picker.rows, label).map(index => picker.rows[index].label).join('、')}），分不清是哪一个，没有选`);
     }
     if (target < 0) return fail(`模型菜单里没有 ${modelId}（菜单里有：${picker.rows.map(row => row.label).join('、')}）` );
     if (picker.cursor < 0) {

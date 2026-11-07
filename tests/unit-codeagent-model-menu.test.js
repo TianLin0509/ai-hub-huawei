@@ -1149,8 +1149,12 @@ for (const reason of ['switch', 'launch']) for (const present of [true, false]) 
     ipc.listeners.get('codeagent-model-pick')({ sessionId: 'scroll-session', modelId: SCROLL_TARGET, reason: 'launch' });
     if (present) assert.equal((await f.api.waitForPick('scroll-session')).ok, true);
     else {
-      await assert.rejects(f.api.waitForPick('scroll-session'), /这个账号在 CodeAgent 模型菜单里选不了/);
-      assert.equal(ipc.notices[0].message, `这个账号在 CodeAgent 模型菜单里选不了 ${SCROLL_TARGET}`);
+      // 启动时具体模型没选上、但菜单已关、输入框能用：用 CLI 当前模型照常发首句，提示一句没切到（2026-11-08 公司实测会话空着）。
+      const picked = await f.api.waitForPick('scroll-session');
+      assert.equal(picked.ok, true); assert.equal(picked.fallback, 'cli-default-model');
+      assert.match(ipc.notices[0].message, new RegExp(`没切到 ${SCROLL_TARGET}，先用 CodeAgent 当前模型继续`));
+      assert.notEqual(ipc.notices[0].persistent, true);
+      assert.match(fs.readFileSync(path.join(f.dir, 'logs/codeagent-model.log'), 'utf8'), /event=pick .*fallback=send-with-cli-model/);
     }
   }
   files.forEach((file, index) => assert.deepEqual(fs.readFileSync(file), before[index]));
@@ -1505,4 +1509,67 @@ test('an old menu cache stays usable until a successful read replaces it', t => 
   assert.equal(read.authoritative, true);
   assert.equal(pool.pickAccount([rowOf(read)], { model: IDS[2] }), null);
   assert.equal(pool.pickAutoChoice([], { ...personal, models: read.models, modelsAuthoritative: read.authoritative }, { model: IDS[2] }), null);
+});
+
+// 2026-11-08 公司实测：菜单把 deepseek-v4.1-flash-1017 显示成截断名「DeepSeek-V4.1-Flash-1…」，选模型认不出、首句被退回。
+const TRUNCATED = 'DeepSeek-V4.1-Flash-1…';
+test('findTarget accepts a uniquely matching truncated label, rejects ambiguous ones, and ignores case for full names', () => {
+  const rows = labels => ({ rows: labels.map((label, index) => ({ number: index + 1, label, text: label })) });
+  assert.equal(picker.findTarget(rows(['GLM-5.2-WX-Auto', TRUNCATED, 'GLM-5.2']), SCROLL_TARGET), 1);
+  assert.equal(picker.findTarget(rows(['GLM-5.2-WX-Auto', 'DeepSeek-V4.1-Flash-1...', 'GLM-5.2']), SCROLL_TARGET), 1);
+  assert.equal(picker.findTarget(rows(['GLM-5.2-WX-Auto', TRUNCATED, 'DeepSeek-V4.1-Fla…']), SCROLL_TARGET), -1, 'two truncated candidates: do not guess');
+  assert.equal(picker.findTarget(rows([TRUNCATED, 'DeepSeek-V4.1-Flash-1017']), SCROLL_TARGET), 1, 'the full name wins over a truncated one');
+  assert.equal(picker.findTarget(rows(['GLM-5.2', 'DEEPSEEK-V4.1-FLASH-1017']), SCROLL_TARGET), 1);
+  assert.equal(picker.findTarget(rows(['GLM-5.2', 'DeepSeek-V4.2-Flash…']), SCROLL_TARGET), -1, 'a different version is not a candidate');
+  assert.equal(usage.truncatedNameMatches(TRUNCATED, SCROLL_TARGET), true);
+  assert.equal(usage.truncatedNameMatches('DeepSeek-V4.1-Flash-1017', SCROLL_TARGET), false, 'only names ending in an ellipsis are truncated');
+});
+
+test('search selects a uniquely matching truncated row and a full name in different case', async t => {
+  for (const shown of [TRUNCATED, 'DeepSeek-V4.1-Flash-1017']) {
+    const f = scrollingPicker(t, { searchWorks: true, ids: ['GLM-5.2-WX-Auto', shown], filterIds: [shown] });
+    const result = await f.run();
+    assert.equal(result.ok, true, shown); assert.equal(f.selected(), shown);
+    assert.deepEqual(f.writes.map(([key]) => key), [SCROLL_TARGET, '\r']);
+  }
+});
+
+test('search does not pick when two truncated rows match the target', async t => {
+  const f = scrollingPicker(t, { searchWorks: true, ids: ['GLM-5.2-WX-Auto', TRUNCATED, 'DeepSeek-V4.1-Flash-10…'], filterIds: [TRUNCATED, 'DeepSeek-V4.1-Flash-10…'] });
+  const result = await f.run();
+  assert.equal(result.ok, false); assert.equal(f.selected(), null); assert.equal(f.writes.some(([key]) => key === '\r'), false);
+  assert.match(fs.readFileSync(path.join(f.dir, 'logs/codeagent-model.log'), 'utf8'), /event=switch-scroll.*result=ambiguous-truncated/);
+});
+
+for (const wrap of [false, true]) test(`scrolling finds a unique truncated row only after seeing the whole list, then steps back to it (wrap ${wrap})`, async t => {
+  const f = scrollingPicker(t, { ids: ['GLM-5.2-WX-Auto', TRUNCATED, 'MiniMax-M2.7', 'GLM-5.2'], wrap });
+  const result = await f.run();
+  assert.equal(result.ok, true); assert.equal(f.selected(), TRUNCATED);
+  assert.ok(f.writes.some(([key]) => key === '\x1b[A'), 'went back up to the remembered row');
+  assert.match(fs.readFileSync(path.join(f.dir, 'logs/codeagent-model.log'), 'utf8'), /event=switch-scroll.*result=found-truncated/);
+});
+
+for (const wrap of [false, true]) test(`scrolling does not pick when two truncated rows match (wrap ${wrap})`, async t => {
+  const f = scrollingPicker(t, { ids: ['GLM-5.2-WX-Auto', TRUNCATED, 'MiniMax-M2.7', 'DeepSeek-V4.1-Flash-10…'], wrap });
+  const result = await f.run();
+  assert.equal(result.ok, false); assert.equal(f.selected(), null); assert.equal(f.writes.some(([key]) => key === '\r'), false);
+  assert.match(fs.readFileSync(path.join(f.dir, 'logs/codeagent-model.log'), 'utf8'), /result=ambiguous-truncated/);
+});
+
+for (const usable of [true, false]) test(`launch pick failure ${usable ? 'falls back to the CLI model and sends' : 'keeps the first message and shows a persistent notice'}`, async t => {
+  const f = scrollingPicker(t);
+  const stub = { ...f.api, pickModel: async () => ({ ok: false, inputReady: usable, inputUsable: usable,
+    message: `这个账号在 CodeAgent 模型菜单里选不了 ${SCROLL_TARGET}`, technicalReason: '模型菜单里没有 synthetic' }) };
+  const ipc = pickerSessionIpc(t, { ...f, api: stub });
+  ipc.listeners.get('codeagent-model-pick')({ sessionId: 'scroll-session', modelId: SCROLL_TARGET, reason: 'launch' });
+  if (usable) {
+    const picked = await f.api.waitForPick('scroll-session');
+    assert.equal(picked.ok, true); assert.equal(picked.fallback, 'cli-default-model');
+    assert.match(ipc.notices[0].message, /没切到 .*先用 CodeAgent 当前模型继续.*模型菜单里没有 synthetic/);
+    assert.notEqual(ipc.notices[0].persistent, true);
+  } else {
+    await assert.rejects(f.api.waitForPick('scroll-session'), /这个账号在 CodeAgent 模型菜单里选不了/);
+    assert.equal(ipc.notices[0].persistent, true);
+    assert.match(ipc.notices[0].message, /模型菜单里没有 synthetic.*第一条消息还没发出.*\/model/);
+  }
 });
