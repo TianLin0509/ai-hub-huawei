@@ -191,7 +191,8 @@ async function downloadWithFallback({ sources, version, expect, dest, fetchImpl,
   const attempts = [];
   for (const source of sources) {
     if (signal && signal.aborted) break;
-    const url = fileUrl(source, version, expect.file);
+    // source.url：直接给出完整地址（CLI 组件的官方下载地址，core/cli-tools/catalog.js），不按目录拼。
+    const url = source.url || fileUrl(source, version, expect.file);
     const attempt = { id: source.id, name: source.name, url, status: 'downloading', startedAt: Date.now() };
     attempts.push(attempt);
     onAttempt && onAttempt(attempts.map(a => ({ ...a })));

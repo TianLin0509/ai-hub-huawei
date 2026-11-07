@@ -647,7 +647,7 @@ function scheduleNativeMcpLearn(manager, id, rootPid, learn, delayMs = NATIVE_MC
 function applyClaudeSessionEnv(sessionEnv, cv, launch = {}) {
   if (cv.COMPANY_CLI && cv.CLAUDE_BACKEND === 'proxy') {
     // 公司模型：经本机反代用 CodeAgent 账号（core/company-model-proxy.js），会话 Key 带会话标识以便粘号。
-    require('./company-model-proxy').applyClaudeEnv(sessionEnv, { dataDir: getHubDataDir(), sessionId: launch.sessionId, model: launch.model || cv.CLAUDE_API_MODEL });
+    require('./company-model-proxy').applyClaudeEnv(sessionEnv, { dataDir: getHubDataDir(), sessionId: launch.sessionId, model: launch.model || cv.CLAUDE_API_MODEL, account: launch.companyProxyAccount });
     return 'proxy';
   }
   if (cv.COMPANY_CLI) {
@@ -1772,6 +1772,10 @@ class SessionManager extends EventEmitter {
     delete sessionEnv.CLAUDE_HUB_CLAUDE_SCOPE;
     // Hub 自己的进程环境里若带着（例如从某个会话里启动了测试 Hub），不能原样传给每个新会话，否则新会话会顶着别人的身份（2026-10-20）。
     for (const key of Object.keys(sessionEnv)) if (/^HUB_BRIDGE_/i.test(key)) delete sessionEnv[key];
+    // Hub 一键安装的 Claude Code / Codex（core/cli-tools）：本机没有用户自己的安装时，把它们的目录放到这个会话 PATH 最前面，
+    // 终端里直接输入 claude / codex 就能找到；用户自己装过的照旧优先。
+    try { require('./cli-tools/registry').applySessionPath(sessionEnv); }
+    catch (error) { console.warn('[cli-tools] 会话 PATH 补充失败：', error.message); }
     applyInteractiveTerminalEnv(sessionEnv, { truecolor: isPtyAgent && (isClaude || isDeepSeekClaude || isCodexRuntime || isCodeAgent) });
     // 自动分配任务的 CodeAgent 会话：给 ask-gate hook 的标记（拒绝提问工具，core/auto-dispatch-rules.js）；其余会话去掉继承来的标记。
     require('./auto-dispatch-rules').applySessionEnv(sessionEnv, isCodeAgent ? opts.purpose : null);
@@ -1800,6 +1804,20 @@ class SessionManager extends EventEmitter {
       if (String(personal.defaultModel).toLowerCase() !== routeModel.toLowerCase()) {
         throw new Error(`个人账号此刻的默认模型是 ${personal.defaultModel || '未知'}，不改个人账号的默认模型；${routeModel} 请用号池里有它权限的号`);
       }
+    }
+    // 公司模型（经本机反代）的 Claude Code / Codex / DSH：启动中心选的号（companyProxyPick），或恢复 / 分支带来的号
+    // （companyProxyAccount）。选定的号整段会话固定用，反代不给它换号（core/company-proxy-account.js）。
+    let companyProxyPin = null;
+    if (isClaude || isCodex || isDshCli) {
+      const cv = getConfigValues();
+      const viaProxy = cv.COMPANY_CLI && (isClaude ? cv.CLAUDE_BACKEND === 'proxy' : isCodex ? cv.CODEX_BACKEND === 'proxy' : isDshCli ? getConfig().dshBackend === 'proxy' : false);
+      if (viaProxy && (opts.companyProxyPick || opts.companyProxyAccount)) {
+        const model = isClaude ? resolveClaudeLaunchModel(cv, opts.model) : isCodex ? resolveCodexLaunchModel(cv, opts.model)
+          : require('./company-model-proxy').launchModel(opts.model || getConfig().dshApiModel);
+        companyProxyPin = require('./company-proxy-account').resolveCompanyProxyAccount({ dataDir: getHubDataDir(),
+          pick: opts.companyProxyPick, stored: opts.companyProxyAccount, model });
+      }
+      opts = { ...opts, companyProxyPick: undefined, companyProxyAccount: companyProxyPin ? companyProxyPin.id : undefined };
     }
     // 自动会话按真人在启动中心选好模型那样开（2026-10-20 用户：「直接模拟真人用户从启动中心点开创建」）：开起来后在 /model 菜单里
     // 选中这个号该用的模型（指定的模型 → 号池号同步定下的模型 → 个人账号纠正后的默认模型），第一条消息等选完再发。
@@ -1899,7 +1917,7 @@ class SessionManager extends EventEmitter {
 
     if (isClaude) {
       const cv = getConfigValues();
-      applyClaudeSessionEnv(sessionEnv, cv, { sessionId: id, model: opts.model });
+      applyClaudeSessionEnv(sessionEnv, cv, { sessionId: id, model: opts.model, companyProxyAccount: opts.companyProxyAccount });
       // Attribution + auth for the Stop/UserPromptSubmit hook script (both modes)
       this._applyHubSessionEnv(sessionEnv, id);
       // 软压缩：用户目录的提醒钩子看到它，才让 AI 在断点结束本轮留标记（main/soft-compact-controller.js 只管 PTY）。
@@ -2201,7 +2219,7 @@ class SessionManager extends EventEmitter {
       if (cv.COMPANY_CLI && cv.CODEX_BACKEND === 'proxy') {
         // 公司模型：独立的 Codex home，提供方指向本机反代；Key 放在会话环境变量里，按会话粘号。
         require('./company-model-proxy').applyCodexEnv(sessionEnv, { dataDir: getHubDataDir(), sessionId: id,
-          model: resolveCodexLaunchModel(cv, opts.model), projectDir: spawnCwd });
+          model: resolveCodexLaunchModel(cv, opts.model), projectDir: spawnCwd, account: opts.companyProxyAccount });
         codexSessionsRoot = path.join(sessionEnv.CODEX_HOME, 'sessions');
       } else if (isCodexApiBackend(cv)) {
         sessionEnv.CODEX_HOME = ensureCodexApiProfile(cv, spawnCwd);
@@ -2574,7 +2592,8 @@ class SessionManager extends EventEmitter {
         const cv = getConfigValues();
         if (!cv.COMPANY_CLI) return {};
         const route = isClaude ? cv.CLAUDE_BACKEND : isCodex ? cv.CODEX_BACKEND : isDshCli ? (getConfig().dshBackend === 'proxy' ? 'proxy' : null) : null;
-        return ['proxy', 'api', 'local'].includes(route) ? { companyRoute: route } : {};
+        return ['proxy', 'api', 'local'].includes(route) ? { companyRoute: route,
+          ...(route === 'proxy' && companyProxyPin ? { companyProxyAccount: companyProxyPin.id, companyProxyLabel: companyProxyPin.label } : {}) } : {};
       })()),
       ...(typeof opts.contextPct === 'number' ? { contextPct: opts.contextPct } : {}),
       ...(typeof opts.contextUsed === 'number' ? { contextUsed: opts.contextUsed } : {}),
@@ -4299,6 +4318,8 @@ try {
       ...(info.codeagentPoolAccount ? { codeagentPoolAccount: info.codeagentPoolAccount, codeagentPoolLabel: info.codeagentPoolLabel || '' } : {}),
       // 公司版线路：DSH、原生 Codex 建会话和后续更新都只发这份公开形态，漏掉它分支的标题栏和卡片就不写公司模型。
       ...(info.companyRoute ? { companyRoute: info.companyRoute } : {}),
+      // 公司模型会话固定用的号（启动中心选的；没有就是反代自动分配）：恢复、分支沿用，卡片和标题栏一开始就显示它。
+      ...(info.companyProxyAccount ? { companyProxyAccount: info.companyProxyAccount, companyProxyLabel: info.companyProxyLabel || '' } : {}),
       ...(info.transcriptPath !== undefined ? { transcriptPath: info.transcriptPath } : {}),
       ...(info.codexSid !== undefined ? { codexSid: info.codexSid } : {}),
       ...(info.codexSessionsRoot !== undefined ? { codexSessionsRoot: info.codexSessionsRoot } : {}),

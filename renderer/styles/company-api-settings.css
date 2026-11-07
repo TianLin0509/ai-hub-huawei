@@ -37,3 +37,14 @@
 .company-api-dialog .company-proxy-warn{color:var(--hw-amber,#e8780c)}
 .company-api-dialog .company-proxy-zone{margin:var(--hw-sp-3,12px) 0 0}
 .company-api-dialog .company-proxy-zone p{margin:var(--hw-sp-1,4px) 0 0;font-size:var(--hw-fs-12,12px)}
+/* 一键安装（2026-11-07）：说明一句、进度条、人话进度、主按钮 */
+.company-api-dialog .cli-install{padding:var(--hw-sp-4,16px);margin:var(--hw-sp-4,16px) 0;border-radius:var(--hw-r-md,16px);background:var(--hw-surface-2,#f7f8fa)}
+.company-api-dialog .cli-install-intro{margin:0 0 var(--hw-sp-3,12px);color:var(--hw-text-1,#182431)}
+.company-api-dialog .cli-install-bar{height:6px;border-radius:3px;background:var(--hw-surface-3,#edeff2);overflow:hidden}
+.company-api-dialog .cli-install-bar span{display:block;height:100%;background:var(--hw-brand,#0a59f7);transition:width .2s}
+.company-api-dialog .cli-install-bar span[data-indeterminate]{opacity:.35}
+.company-api-dialog .cli-install-status{min-height:20px;margin:var(--hw-sp-2,8px) 0 0;font-size:var(--hw-fs-12,12px);overflow-wrap:anywhere}
+.company-api-dialog [data-cli-phase=error] .cli-install-status{color:var(--hw-red,#d63b3b)}
+.company-api-dialog [data-cli-phase=done] .cli-install-status{color:var(--hw-green,#1a9e5c)}
+.company-api-dialog .cli-install-note{margin:var(--hw-sp-2,8px) 0 0;font-size:var(--hw-fs-12,12px);overflow-wrap:anywhere}
+.company-api-dialog .cli-install-actions{display:flex;justify-content:flex-end;gap:var(--hw-sp-3,12px);margin-top:var(--hw-sp-3,12px)}

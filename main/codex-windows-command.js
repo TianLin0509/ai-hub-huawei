@@ -40,6 +40,10 @@ function locateWindowsCodex(env = process.env) {
     const official = path.join(env.LOCALAPPDATA, 'Programs', 'OpenAI', 'Codex', 'bin', 'codex.exe');
     if (isFile(official)) return { kind: 'native', command: official, source: 'official-installer' };
   }
+  // 5. Hub 一键安装的（<数据目录>/tools/codex/<版本>/bin/codex.exe，core/cli-tools）：前面都没有时才用。
+  let hub = null;
+  try { hub = require('../core/cli-tools/registry').managedBin('codex', env); } catch (_) {}
+  if (hub) return { kind: 'native', command: hub, source: 'hub-tools' };
   return null;
 }
 
@@ -79,7 +83,14 @@ function resolveWindowsCodex(env = process.env, options = {}) {
   if (!found) throw new Error('未找到 Codex CLI：请安装官方 Codex（原生安装器或 npm），装好后重新检测。');
   if (found.kind === 'npm') return resolveNpmShim(env, found.shim, options);
   // The official native installer ships a self-contained codex.exe; run it as-is.
-  return { command: found.command, args: [], env: { ...env } };
+  const launchEnv = { ...env };
+  // Hub 装的 Codex：和 npm 版一样把自带的 rg 等工具目录（codex-path）放进 PATH。
+  if (found.source === 'hub-tools') {
+    const tools = require('../core/cli-tools/registry');
+    const managed = tools.managed('codex', env);
+    if (managed) tools.prependPath(launchEnv, managed.pathDirs);
+  }
+  return { command: found.command, args: [], env: launchEnv };
 }
 
 // A PTY session types `codex` into PowerShell. When the only install is a native one whose

@@ -29,7 +29,7 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
   const entry = profile.providers?.[kind];
   // 公司版 DSH 选了「公司模型」：经本机反代用 CodeAgent 账号（core/company-model-proxy.js），不走套餐和 DeepSeek 备用线路。
   const companyRoute = kind === 'deepseek-acp' && config.companyCli && config.dshBackend === 'proxy'
-    ? require('./company-model-proxy').dshRoute({ dataDir, sessionId: opts.id, model: opts.model || config.dshApiModel }) : null;
+    ? require('./company-model-proxy').dshRoute({ dataDir, sessionId: opts.id, model: opts.model || config.dshApiModel, account: opts.companyProxyAccount }) : null;
   // 套餐额度用完且配了 DeepSeek Key 时，DeepSeek 旧 Harness 整条会话改走 DeepSeek 官方 API；千问 / GLM 等重置（core/token-plan-fallback.js）。
   const fallback = require('./token-plan-fallback');
   const requestedRoute = kind === 'deepseek-acp' ? opts.deepseekRoute : undefined;
@@ -41,7 +41,10 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
   const deepseekRoute = route.route === 'deepseek';
   const key = companyRoute ? companyRoute.key : deepseekRoute ? route.apiKey : profile.apiKey || baseEnv.AI_HUB_TOKEN_PLAN_KEY;
   if (!key) throw new Error('请先配置套餐专属 Key');
-  const nodePath = profile.nodePath || (companyRoute ? require('./company-model-proxy').findNodeOnPath(baseEnv) : '');
+  // Hub 只在本机没有可用的 Node 22+ 时才装自己的 node（core/cli-tools/installer.js），装了就给 DSH 用它。
+  let hubNode = null;
+  if (companyRoute && !profile.nodePath) { try { hubNode = require('./cli-tools/registry').managedBin('node', baseEnv); } catch (_) {} }
+  const nodePath = profile.nodePath || (companyRoute ? hubNode || require('./company-model-proxy').findNodeOnPath(baseEnv) : '');
   if (companyRoute && !nodePath) throw new Error('DSH 需要本机的 Node.js：请先安装 Node.js 22 或更新版本');
   if (!entry?.entryPath || !nodePath || (!entry.model && !companyRoute)) throw new Error('请配置原生 Harness 路径、Node 路径和套餐模型');
   for (const file of [entry.entryPath, nodePath]) {

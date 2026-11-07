@@ -9850,6 +9850,7 @@ ipcRenderer.on('session-updated', (_e, { session }) => {
   if (session.codeagentForkSourceSessionId) local.codeagentForkSourceSessionId = session.codeagentForkSourceSessionId;
   if (session.codeagentPoolAccount) { local.codeagentPoolAccount = session.codeagentPoolAccount; local.codeagentPoolLabel = session.codeagentPoolLabel || ''; }
   if (session.companyRoute) local.companyRoute = session.companyRoute;
+  if (session.companyProxyAccount) { local.companyProxyAccount = session.companyProxyAccount; local.companyProxyLabel = session.companyProxyLabel || ''; }
   let persistModel = false;
   if (session.currentModel && session.currentModel.id) {
     const previousModelId = local.currentModel && local.currentModel.id;
@@ -10000,6 +10001,7 @@ function persistWorkscene(flush = false) {
         ...(s.codeagentForkSourceSessionId ? { codeagentForkSourceSessionId: s.codeagentForkSourceSessionId } : {}),
         ...(s.codeagentPoolAccount ? { codeagentPoolAccount: s.codeagentPoolAccount, codeagentPoolLabel: s.codeagentPoolLabel || '' } : {}),
         ...(s.companyRoute ? { companyRoute: s.companyRoute } : {}),
+        ...(s.companyProxyAccount ? { companyProxyAccount: s.companyProxyAccount, companyProxyLabel: s.companyProxyLabel || '' } : {}),
         effort: s.effort || null,
         contextPct: typeof s.contextPct === 'number' ? s.contextPct : null,
         contextUsed: typeof s.contextUsed === 'number' ? s.contextUsed : null,
@@ -10423,6 +10425,7 @@ sessionImmersive = require('./session-immersive').createSessionImmersiveControll
         ...(meta.codeagentForkSourceSessionId ? { codeagentForkSourceSessionId: meta.codeagentForkSourceSessionId } : {}),
         ...(meta.codeagentPoolAccount ? { codeagentPoolAccount: meta.codeagentPoolAccount, codeagentPoolLabel: meta.codeagentPoolLabel || '' } : {}),
         ...(meta.companyRoute ? { companyRoute: meta.companyRoute } : {}),
+        ...(meta.companyProxyAccount ? { companyProxyAccount: meta.companyProxyAccount, companyProxyLabel: meta.companyProxyLabel || '' } : {}),
         effort: meta.effort || null,
         contextPct: typeof meta.contextPct === 'number' ? meta.contextPct : null,
         contextUsed: typeof meta.contextUsed === 'number' ? meta.contextUsed : null,

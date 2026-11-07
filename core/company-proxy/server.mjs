@@ -1,7 +1,8 @@
 // Company-model proxy process (started and stopped by Hub; loopback only, no window).
 //   node server.mjs --data-dir <Hub data> [--port 18765] [--parent-pid N] [--mock-upstream]
 // The local key arrives in AI_HUB_COMPANY_PROXY_KEY. Each Hub session authenticates
-// with "<key>.<session tag>"; the tag keeps that session on one company account.
+// with "<key>.<session tag>"; the tag keeps that session on one company account. A tag ending in
+// "__pin_<account id | personal>" pins the session to that account (launch center account choice).
 // Endpoints:
 //   POST /v1/messages (+ /v1/messages/count_tokens)  Claude Code
 //   POST /v1/responses                               Codex
@@ -28,6 +29,40 @@ import { MODELS, MODEL_GLM, KIND, createClaudeAdapter, createCodexAdapter, creat
 export const VERSION = 'company-model-proxy 1.0';
 const SAFE_CODE = /^[A-Za-z0-9_ .:\-]{1,120}$/;
 const TAG = /^[A-Za-z0-9_-]{1,64}$/;
+const PIN_SUFFIX = /^(.+?)__pin_([a-z0-9]{6,16}|personal)$/;
+
+// "<session tag>[__pin_<id>]" -> { sessionTag, pin } (pin '' = automatic), or null when malformed.
+// Sticky assignments and the session card alias stay keyed by the plain session tag.
+export function parseTag(raw) {
+  const value = String(raw ?? '');
+  const match = PIN_SUFFIX.exec(value);
+  const sessionTag = match ? match[1] : value;
+  if (!TAG.test(sessionTag)) return null;
+  return { sessionTag, pin: match ? match[2] : '' };
+}
+
+// Account alias for plain-words errors (个人 / 号 N, the numbering of Hub's account page), never the id.
+export function accountAlias(dataDir, id) {
+  if (id === PERSONAL) return '个人账号';
+  const n = readJsonSync(join(dataDir, 'codeagent-pool', 'quota-aliases.json'))?.map?.[id];
+  return Number.isInteger(n) ? `号 ${n}` : '所选的号';
+}
+
+// Plain words for a pinned session whose account cannot answer now (the session never switches accounts).
+export function pinnedMessage(error, alias) {
+  const fresh = '要自动换号请新建会话、账号选「自动挑号」';
+  switch (error?.code) {
+    case 'COMPANY_PINNED_RATE_LIMITED':
+      return `${alias}被限流，本会话固定用它，约 ${Number(error.retryAfterSeconds) || 60} 秒后恢复；${fresh}`;
+    case 'COMPANY_PINNED_PAUSED':
+      return `${alias}已暂停（账号页里手动暂停或额度用完），本会话固定用它；请到 Hub 账号页恢复这个号，或${fresh}`;
+    case 'COMPANY_PINNED_MISSING':
+      return `本会话固定用的${alias}已不在号池里；请新建会话重新选择账号`;
+    case 'COMPANY_PINNED_NO_MODEL':
+      return `${alias}没有 ${String(error.model || '这个模型').slice(0, 60)} 的权限，本会话固定用它；请新建会话换一个有权限的号，或选「自动挑号」`;
+    default: return '';
+  }
+}
 const stamp = () => new Date().toISOString();
 
 function parseArgs(argv) {
@@ -254,12 +289,12 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
   let active = 0; const waiters = [];
   const acquire = () => active < opts.maxConcurrent ? (active++, Promise.resolve()) : new Promise(r => { stats.queued++; waiters.push(r); });
   const release = () => { const next = waiters.shift(); if (next) { stats.queued--; next(); } else active--; };
-  const errorResponse = (status, message, extra = {}) => new Response(JSON.stringify({ type: 'error', error: { type: status === 429 ? 'rate_limit_error' : status === 401 ? 'authentication_error' : 'api_error', message } }),
+  const errorResponse = (status, message, extra = {}) => new Response(JSON.stringify({ type: 'error', error: { type: status === 429 ? 'rate_limit_error' : status === 401 ? 'authentication_error' : status === 400 ? 'invalid_request_error' : 'api_error', message } }),
     { status, headers: { 'content-type': 'application/json; charset=utf-8', [OWN_RESPONSE_HEADER]: '1', ...extra } });
   const gated = {
     listModels: async () => [...MODELS],
     async complete(body, { signal } = {}) {
-      const kind = body[KIND] || 'dsh', started = Date.now(), sessionTag = als.getStore()?.sessionTag || 'default';
+      const kind = body[KIND] || 'dsh', started = Date.now(), sessionTag = als.getStore()?.sessionTag || 'default', pin = als.getStore()?.pin || '';
       stats.requests++; stats.byKind[kind]++; stats.byModel[body.model] = (stats.byModel[body.model] || 0) + 1;
       if (!startup.ready) { stats.failed++; stats.lastError = startup.code; return errorResponse(503, startup.message); }
       await acquire(); stats.inFlight++;
@@ -267,7 +302,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
       let held = true, handedOff = false;
       const done = () => { if (held) { held = false; stats.inFlight--; release(); } };
       try {
-        const response = await router.complete(body, { signal, sessionTag, kind });
+        const response = await router.complete(body, { signal, sessionTag, kind, pin });
         if (response.ok) stats.ok++; else { stats.failed++; stats.lastError = `upstream HTTP ${response.status}`; }
         log(`${kind} ${body.model} -> HTTP ${response.status} via ${router.accountFor(sessionTag) || '-'} in ${Date.now() - started}ms`);
         if (!response.body) return response;
@@ -277,6 +312,9 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
         stats.failed++;
         const code = typeof error?.code === 'string' && SAFE_CODE.test(error.code) ? error.code : 'UPSTREAM_CALL_FAILED';
         stats.lastError = code; log(`${kind} ${body.model} -> FAILED ${code} after ${Date.now() - started}ms`);
+        const pinned = pinnedMessage(error, accountAlias(opts.dataDir, error?.account));
+        if (pinned) return errorResponse(error.status, pinned, code === 'COMPANY_PINNED_RATE_LIMITED' ? { 'retry-after': String(error.retryAfterSeconds || 60) } : {});
+        if (code === 'COMPANY_LOGIN_NEEDED' && error.pinned) return errorResponse(401, loginNeededMessage(error) + `（本会话固定用${accountAlias(opts.dataDir, error.account)}，不会换号）`);
         if (code === 'COMPANY_NO_ACCOUNT_AVAILABLE') return errorResponse(429, '公司模型的所有账号都在限流冷却中，请稍后再试', { 'retry-after': String(error.retryAfterSeconds || 60) });
         if (code === 'COMPANY_LOGIN_NEEDED') return errorResponse(401, loginNeededMessage(error));
         if (code === 'COMPANY_ACCOUNTS_PAUSED') return errorResponse(503, '公司模型的号都被暂停了（账号页里手动暂停或额度用完），请到 Hub 账号页恢复一个号');
@@ -296,14 +334,14 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
     onEvent: e => { if (e.type !== 'request_finished') log(`proxy event ${e.type}`); },
     protocolAdapters: { '/v1/messages': logged('claude', claude), '/v1/responses': logged('codex', codex), '/v1/chat/completions': logged('dsh', dsh) } });
   const keyBytes = Buffer.from(key);
-  // Returns the session tag for a valid "<key>[.<tag>]" credential, otherwise null.
+  // Returns { sessionTag, pin } for a valid "<key>[.<tag>]" credential, otherwise null.
   const credential = req => {
     const a = typeof req.headers.authorization === 'string' ? req.headers.authorization.replace(/^Bearer\s+/i, '') : '';
     const raw = a || (typeof req.headers['x-api-key'] === 'string' ? req.headers['x-api-key'] : '');
     const dot = raw.indexOf('.');
-    const head = Buffer.from(dot < 0 ? raw : raw.slice(0, dot)), tag = dot < 0 ? 'default' : raw.slice(dot + 1);
-    if (head.length !== keyBytes.length || !timingSafeEqual(head, keyBytes) || !TAG.test(tag)) return null;
-    return tag;
+    const head = Buffer.from(dot < 0 ? raw : raw.slice(0, dot));
+    if (head.length !== keyBytes.length || !timingSafeEqual(head, keyBytes)) return null;
+    return dot < 0 ? { sessionTag: 'default', pin: '' } : parseTag(raw.slice(dot + 1));
   };
   const readJson = async req => { const c = []; let n = 0; for await (const x of req) { n += x.length; if (n > 64 * 1024 * 1024) throw new Error('too large'); c.push(x); } return JSON.parse(Buffer.concat(c).toString('utf8')); };
   const json = (res, status, value) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(value)); };
@@ -330,7 +368,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
         const body = await readJson(req);
         return json(res, 200, { input_tokens: Math.ceil(JSON.stringify({ s: body.system, m: body.messages, t: body.tools }).length / 3) });
       }
-      return await als.run({ sessionTag: tag }, async () => {
+      return await als.run(tag, async () => {
         if (req.method === 'POST' && path === '/v1/messages' && String(req.headers['content-type'] || '').startsWith('application/json')) {
           // Non-streaming Claude calls: the shared transport is stream-only, so stream upstream and collect here.
           const body = await readJson(req);

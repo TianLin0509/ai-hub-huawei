@@ -142,6 +142,13 @@
   };
   const codeagentSelectionUnavailable = () => selectedKind === 'codeagent' && codeagentPoolRequested()
     && (codeagentAccount === 'pool' ? autoCandidateCount() === 0 : !codeagentUsesPool() || !codeagentManualPick());
+  // 公司模型（经本机反代）的 Claude Code / Codex / DSH 也选账号（2026-11-07 用户：和 CodeAgent 一致）：自动挑号 / 个人账号 / 号 N，
+  // 和 CodeAgent 的选择分开记（renderer/company-proxy-account-view.js）。团队共享主机上号由主机分配，不显示。
+  const companyProxyAccountView = require('./company-proxy-account-view');
+  let companyProxyChoice = (() => { try { return companyProxyAccountView.normalizeChoice(localStorage.getItem(companyProxyAccountView.STORAGE_KEY)); } catch { return 'auto'; } })();
+  const companyAccountShown = (kind = selectedKind) => companyApiKind(kind) && !companyProxyStatus?.shared
+    && (companyPick[kind] ? companyPick[kind].source === 'company' : companyApiBackend[kind] === 'proxy');
+  const companyAccountState = () => companyProxyAccountView.describe({ pool: codeagentPool, model: companyPickModel(selectedKind), choice: companyProxyChoice, escapeHtml });
   let codexBackend = companyApi.isCompany() ? 'api' : 'subscription';
   // DeepSeek 接入：上次选的方式（Hub 配置记住，默认 Token Plan）+ 两条线各自是否有 Key。
   let deepseekRoute = deepseekProfile.DEFAULT_ROUTE;
@@ -1148,6 +1155,28 @@
       : '自动挑号会跳过暂停或需登录的号，其他号都不可用时才用个人账号；整段会话固定使用选中的账号。';
   }
 
+  function paintCompanyAccount() {
+    const field = document.getElementById('new-session-company-account-field');
+    const select = document.getElementById('new-session-company-account');
+    const control = document.getElementById('new-session-company-account-choice');
+    const note = document.getElementById('new-session-company-account-note');
+    const show = companyAccountShown();
+    if (field) field.hidden = !show;
+    if (note) note.hidden = !show;
+    if (!show || !select) return;
+    const view = companyAccountState();
+    if (select.dataset.built !== view.html) { select.innerHTML = view.html; select.dataset.built = view.html; }
+    select.value = view.value;
+    select.disabled = submitting;
+    if (control) {
+      const content = renderAccountControl(view.control);
+      if (control.innerHTML !== content) control.innerHTML = content;
+      control.disabled = submitting;
+      control.title = select.selectedOptions[0]?.textContent || '选择账号';
+    }
+    if (note) note.textContent = codeagentPoolError ? `${codeagentPoolError}；仍可选「自动挑号」。` : view.note;
+  }
+
   let launchConfigLayout = null, launchAccountCtx = null;
   // 2026-11-01 用户选定 C：左栏账号、右栏参数，少选项的下拉框画成分段按钮；原 <select> 仍是取值来源。
   function paintLaunchLayout() {
@@ -1224,6 +1253,7 @@
     // C 布局（launch-config-layout.js）左栏账号列表用的同一份数据。
     launchAccountCtx={kind:selectedKind,showAccount,accounts,selectedId:pendingAccountId || selectedAccount,disabled:accountSaving || submitting || !accounts.length || !!accountReadError,ranking:isClaudeAccount ? claudeRanking : null};
     paintCodeagentAccount();
+    paintCompanyAccount();
     const label = document.getElementById('new-session-tuning-label');
     const grid = document.getElementById('new-session-tuning');
     const modelSelect = document.getElementById('new-session-model');
@@ -1563,6 +1593,10 @@
       const own = companyProvider[selectedKind]?.own;
       const companySource = companyProxyStatus?.shared ? '共享号池' : '公司模型';
       parts.push(!pick ? (companyApiBackend[selectedKind] === 'proxy' ? companySource : '') : pick.source === 'company' ? companySource : own?.backend === 'api' ? '自有接口' : 'CLI 默认');
+      if (companyAccountShown() && companyProxyChoice !== 'auto') {
+        const account = (codeagentPool.accounts || []).find(a => a.id === companyProxyChoice);
+        parts.push(companyProxyChoice === 'personal' ? '个人账号' : account ? `指定账号 · ${account.note || account.accountLabel || '未备注账号'}` : '指定账号');
+      }
     }
     const tuning = tuningTag();
     if (tuning) parts.push(tuning);
@@ -1730,6 +1764,10 @@
     // 本次打开里没点过卡：默认选保存的来源和模型（也就是上次选的）。点过就保留点选，不被重新读配置冲掉。
     if (!companyPick[kind]) companyPick[kind] = modelCards.defaultPick(kind, provider);
     if (selectedKind === kind) selectedModel = companyPickModel(kind);
+    // 账号下拉（公司模型）：和 CodeAgent 同一份号池状态。读不到不挡建会话，自动挑号照常可用。
+    await ipcRenderer.invoke('codeagent-pool:list').then(status => {
+      if (status && status.ok !== false) { codeagentPool = status; codeagentPoolError = ''; } else codeagentPoolError = '账号状态暂时读取失败';
+    }).catch(() => { codeagentPoolError = '账号状态暂时读取失败'; });
     return { ok: true, models, source: 'company-api' };
   }
 
@@ -1867,6 +1905,7 @@
       const pick = codeagentManualPick();
       if (pick) opts.codeagentPoolPick = pick;
     }
+    if (companyAccountShown()) Object.assign(opts, companyProxyAccountView.launchOpts(companyProxyChoice));
     return opts;
   }
 
@@ -1911,6 +1950,7 @@
       // 刷新登录（5–15 秒），创建会话不等它。
       if (selectedKind !== 'gemini') await loadModelCatalog(selectedKind);
       if (codeagentSelectionUnavailable()) throw new Error('所选账号当前不可用，请到「账号」页登录或恢复使用后再试');
+      if (companyAccountShown() && companyAccountState().unavailable) throw new Error(companyAccountState().note);
       paintTuning();
       if (submit) submit.textContent = '准备目录…';
       if (workspaceMode === 'scratch') workspace = await createScratch('未命名任务');
@@ -1951,7 +1991,7 @@
     if (companyApi.isCompany()) {
       ipcRenderer.on('company-proxy:status', (_event, status) => {
         companyProxyStatus = status || null;
-        if (menuEl && menuEl.style.display !== 'none' && companyApiKind(selectedKind)) paintModelCards();
+        if (menuEl && menuEl.style.display !== 'none' && companyApiKind(selectedKind)) { paintModelCards(); paintCompanyAccount(); }
       });
     }
     ipcRenderer.on('company-api:changed', () => {
@@ -2007,8 +2047,10 @@
     });
     // 号池或个人账号登录完成、模型权限获取完：启动中心开着且选的是 CodeAgent 时重新取账号状态和模型（2026-10-19 审核）
     ipcRenderer.on('codeagent-pool:changed', (_event, change) => {
-      if (!menuEl || menuEl.style.display === 'none' || selectedKind !== 'codeagent' || (change && change.probing)) return;
-      void loadModelCatalog('codeagent').then(paint).catch(() => {});
+      if (!menuEl || menuEl.style.display === 'none' || (change && change.probing)) return;
+      if (selectedKind === 'codeagent') { void loadModelCatalog('codeagent').then(paint).catch(() => {}); return; }
+      // 公司模型的账号下拉：号登录完成、暂停或恢复后跟着刷新。
+      if (companyAccountShown()) void ipcRenderer.invoke('codeagent-pool:list').then(status => { if (status && status.ok !== false) { codeagentPool = status; codeagentPoolError = ''; } paint(); }).catch(() => {});
     });
 
     menuEl.querySelectorAll('.new-session-option').forEach(button => {
@@ -2051,6 +2093,13 @@
       setError('');
       paint();
       void loadModelCatalog('codeagent').then(paint);
+    });
+    document.getElementById('new-session-company-account')?.addEventListener('change', event => {
+      if (event.target.value === 'manage-accounts') { paint(); window.__codeagentAccountsOpen?.(); return; }
+      companyProxyChoice = companyProxyAccountView.choiceFromSelect(event.target.value);
+      try { localStorage.setItem(companyProxyAccountView.STORAGE_KEY, companyProxyChoice); } catch { /* 隐私模式 */ }
+      setError('');
+      paint();
     });
     document.getElementById('new-session-codeagent-account')?.addEventListener('change', event => {
       if (event.target.value === 'manage-accounts') { paint(); window.__codeagentAccountsOpen?.(); return; }

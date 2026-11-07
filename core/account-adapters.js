@@ -19,7 +19,10 @@ function resolveClaudeExe(env){
  const key=Object.keys(env).find(k=>k.toLowerCase()==='path')||'PATH';
  for(const dir of String(env[key]||'').split(path.delimiter).filter(Boolean)){const f=path.join(dir.replace(/^"|"$/g,''),'claude.exe');if(fs.existsSync(f))return f;}
  const local=path.join(env.USERPROFILE||os.homedir(),'.local','bin','claude.exe');
- return fs.existsSync(local)?local:'claude.exe';
+ if(fs.existsSync(local))return local;
+ // 都没有时用 Hub 一键安装的（core/cli-tools/registry.js）。
+ let hub=null;try{hub=require('./cli-tools/registry').managedBin('claude',env);}catch{}
+ return hub||'claude.exe';
 }
 function createAccountAdapters({dataDir,homeDir=os.homedir(),env=process.env,runImpl=run,terminal=openTerminal,browser=new AccountBrowser({dataDir,env}),getConfig=()=>require('./hub-config').getConfig(),onLoginComplete=()=>{}}={}){
  const isolated=!!env.CLAUDE_HUB_HOME_DIR;const py=path.join(env.LOCALAPPDATA||'','Programs/Python/Python312/python.exe');

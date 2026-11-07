@@ -64,7 +64,16 @@ function sessionTag(sessionId) {
   const tag = String(sessionId || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
   return tag || 'default';
 }
-function sessionKey(endpoint, sessionId) { return `${endpoint.key}.${sessionTag(sessionId)}`; }
+// 启动中心给公司模型会话选的号（2026-11-07 用户：和 CodeAgent 一致）：'personal' 个人账号、号池账号 id；
+// 其他值（'auto'、空、格式不对）都是自动分配。
+const PIN_ID = /^(?:[a-z0-9]{6,16}|personal)$/;
+function normalizePin(account) { const value = String(account || '').trim(); return PIN_ID.test(value) ? value : ''; }
+// 固定了号的会话，Key 的会话标识后面带「__pin_<号>」，反代只用这个号（core/company-proxy/server.mjs parseTag）；
+// 粘号和卡片上的号仍按不带后缀的会话标识记。走团队共享主机时号由主机分配，不带后缀。
+function sessionKey(endpoint, sessionId, account = '') {
+  const pin = endpoint.origin ? '' : normalizePin(account);
+  return `${endpoint.key}.${sessionTag(sessionId)}${pin ? '__pin_' + pin : ''}`;
+}
 function origin(endpoint) { return endpoint.origin || `http://127.0.0.1:${endpoint.port}`; }
 function requireEndpoint(dataDir) {
   const shared = require('./lan-pool').read(dataDir).client;
@@ -104,13 +113,13 @@ function applyEndpointNoProxy(env, endpoint) {
   for (const name of ['NO_PROXY', 'no_proxy']) if (!env[name].split(',').includes(host)) env[name] += ',' + host;
 }
 
-function applyClaudeEnv(env, { dataDir, sessionId, model }) {
+function applyClaudeEnv(env, { dataDir, sessionId, model, account }) {
   const endpoint = requireEndpoint(dataDir);
   const chosen = launchModel(model);
   for (const key of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR', 'CLAUDE_CODE_SESSION_ACCESS_TOKEN', 'ANTHROPIC_API_BASE_URL']) delete env[key];
   Object.assign(env, {
     ANTHROPIC_BASE_URL: origin(endpoint),
-    ANTHROPIC_AUTH_TOKEN: sessionKey(endpoint, sessionId),
+    ANTHROPIC_AUTH_TOKEN: sessionKey(endpoint, sessionId, account),
     ANTHROPIC_MODEL: chosen,
     ANTHROPIC_DEFAULT_OPUS_MODEL: chosen, ANTHROPIC_DEFAULT_SONNET_MODEL: chosen, ANTHROPIC_DEFAULT_HAIKU_MODEL: chosen,
     ANTHROPIC_SMALL_FAST_MODEL: chosen, CLAUDE_CODE_SUBAGENT_MODEL: chosen,
@@ -183,10 +192,10 @@ function ensureCodexHome(dataDir, { model, projectDir }) {
   ].join('\n'));
   return home;
 }
-function applyCodexEnv(env, { dataDir, sessionId, model, projectDir }) {
+function applyCodexEnv(env, { dataDir, sessionId, model, projectDir, account }) {
   const endpoint = requireEndpoint(dataDir);
   env.CODEX_HOME = ensureCodexHome(dataDir, { model, projectDir });
-  env[KEY_ENV] = sessionKey(endpoint, sessionId);
+  env[KEY_ENV] = sessionKey(endpoint, sessionId, account);
   for (const key of ['OPENAI_API_KEY', 'OPENAI_BASE_URL', 'CODEX_API_KEY']) delete env[key];
   applyEndpointNoProxy(env, endpoint);
   return env.CODEX_HOME;
@@ -197,10 +206,10 @@ function applyCodexEnv(env, { dataDir, sessionId, model, projectDir }) {
 // 它背后的搜索与抓取提供方都关掉，联网工具也关掉。
 const DSH_DISABLED = ['deepseek-account', 'llm-deepseek', 'llm-deepseek-account', 'web-search-deepseek', 'web-deepseek-api',
   'web-fetch-http', 'tool-web', 'otel', 'session-telemetry-otel', 'session-log-deepseek', 'plugin-package-inventory-deepseek', 'plugin-manager', 'tool-plugin-manager'];
-function dshRoute({ dataDir, sessionId, model }) {
+function dshRoute({ dataDir, sessionId, model, account }) {
   const endpoint = requireEndpoint(dataDir);
   return {
-    providerId: PROVIDER_ID, keyEnv: KEY_ENV, key: sessionKey(endpoint, sessionId), baseURL: origin(endpoint) + '/v1',
+    providerId: PROVIDER_ID, keyEnv: KEY_ENV, key: sessionKey(endpoint, sessionId, account), baseURL: origin(endpoint) + '/v1',
     model: launchModel(model),
     providerConfig: { api: 'openai-completions', baseURL: origin(endpoint) + '/v1', apiKeyEnv: KEY_ENV, retryPolicy: { mode: 'normal', maxRetries: 0 }, reasoning: 'high',
       models: MODEL_IDS.map(id => ({ id, contextWindow: 128000, maxTokens: 16384, reasoningEfforts: { high: 'high' },
@@ -260,6 +269,6 @@ function chosenZone(dataDir) {
 module.exports = {
   ZONE_CHOICES, upstreamFile, readUpstreamConfig, setUpstreamZone, chosenZone,
   MODELS, MODEL_IDS, DEFAULT_MODEL, DEFAULT_PORT, KEY_ENV, PROVIDER_ID, LABEL, CODEX_WINDOWS_SANDBOX_DEFAULT, codexWindowsSandbox,
-  proxyDir, endpointFile, readEndpoint, ensureEndpoint, setEndpointPort, sessionTag, sessionKey, normalizeModel, launchModel,
+  proxyDir, endpointFile, readEndpoint, ensureEndpoint, setEndpointPort, sessionTag, sessionKey, normalizePin, normalizeModel, launchModel,
   applyNoProxy, applyEndpointNoProxy, usesProxy, applyClaudeEnv, codexCatalog, codexHome, ensureCodexHome, applyCodexEnv, dshRoute, findNodeOnPath,
 };

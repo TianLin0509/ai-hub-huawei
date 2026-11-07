@@ -95,6 +95,101 @@ test('non-429 errors are not retried on another account', async () => {
   assert.deepEqual(calls, ['aaaaaa1']);
 });
 
+// ---------- sessions pinned to one account (launch center account choice, 2026-11-07) ----------
+test('pinned session: only its account, no spreading; sticky by the plain tag so loads and aliases still work', async () => {
+  const { createAccountRouter } = await load('account-router.mjs');
+  const used = [];
+  const router = createAccountRouter({
+    listAccounts: () => [{ id: 'aaaaaa1', kind: 'pool' }, { id: 'bbbbbb2', kind: 'pool' }, { id: 'personal', kind: 'personal' }],
+    makeProvider: account => ({ complete: async () => { used.push(account.id); return sse(); } }),
+  });
+  await router.complete({}, { sessionTag: 'p1', pin: 'bbbbbb2' });
+  await router.complete({}, { sessionTag: 'p2', pin: 'bbbbbb2' });
+  await router.complete({}, { sessionTag: 'p3', pin: 'personal' });
+  // An auto session spreads around the pinned load: bbbbbb2 already has two sessions.
+  await router.complete({}, { sessionTag: 'a1' });
+  assert.deepEqual(used, ['bbbbbb2', 'bbbbbb2', 'personal', 'aaaaaa1']);
+  assert.deepEqual(router.snapshot().assignments, { p1: 'bbbbbb2', p2: 'bbbbbb2', p3: 'personal', a1: 'aaaaaa1' });
+});
+
+test('pinned session on 429: cooldown recorded for auto sessions, the pinned session gets 429 and never switches', async () => {
+  const { createAccountRouter } = await load('account-router.mjs');
+  let now = 5_000_000;
+  const events = [], calls = [];
+  const router = createAccountRouter({ now: () => now, onEvent: e => events.push(e),
+    listAccounts: () => [{ id: 'aaaaaa1', kind: 'pool' }, { id: 'bbbbbb2', kind: 'pool' }, { id: 'personal', kind: 'personal' }],
+    makeProvider: account => ({ complete: async () => { calls.push(account.id); return account.id === 'aaaaaa1' ? limited('40') : sse(); } }),
+  });
+  const error = await router.complete({}, { sessionTag: 'pin', pin: 'aaaaaa1' }).catch(e => e);
+  assert.equal(error.code, 'COMPANY_PINNED_RATE_LIMITED');
+  assert.equal(error.status, 429);
+  assert.equal(error.account, 'aaaaaa1');
+  assert.equal(error.retryAfterSeconds, 40);
+  assert.deepEqual(calls, ['aaaaaa1'], 'not retried on another account');
+  assert.ok(events.some(e => e.type === 'rate_limited' && e.account === 'aaaaaa1' && e.pinned));
+  assert.ok(!events.some(e => e.type === 'switch' || e.type === 'fallback_personal'));
+  assert.equal(router.accountFor('pin'), 'aaaaaa1');
+  // During the cooldown the pinned session fails at once, without a request upstream.
+  now += 10_000;
+  const again = await router.complete({}, { sessionTag: 'pin', pin: 'aaaaaa1' }).catch(e => e);
+  assert.equal(again.code, 'COMPANY_PINNED_RATE_LIMITED');
+  assert.equal(again.retryAfterSeconds, 30);
+  assert.deepEqual(calls, ['aaaaaa1']);
+  // An auto session sees the cooldown and goes elsewhere.
+  assert.equal((await router.complete({}, { sessionTag: 'auto' })).status, 200);
+  assert.equal(router.accountFor('auto'), 'bbbbbb2');
+  // After the cooldown the pinned session is served by its own account again.
+  now += 31_000;
+  let ok = false;
+  const r2 = createAccountRouter({ now: () => now, listAccounts: () => [{ id: 'aaaaaa1', kind: 'pool' }], makeProvider: () => ({ complete: async () => { ok = true; return sse(); } }) });
+  assert.equal((await r2.complete({}, { sessionTag: 'pin', pin: 'aaaaaa1' })).status, 200);
+  assert.ok(ok);
+});
+
+test('pinned session: missing, paused, model not allowed and unreadable login each fail plainly, never another account', async () => {
+  const { createAccountRouter } = await load('account-router.mjs');
+  const calls = [];
+  const router = createAccountRouter({
+    listAccounts: () => [{ id: 'aaaaaa1', kind: 'pool', models: ['deepseek-v4.1-flash-1017'], modelsAuthoritative: true },
+      { id: 'bbbbbb2', kind: 'pool', paused: true }, { id: 'cccccc3', kind: 'pool' }, { id: 'personal', kind: 'personal' }],
+    makeProvider: (account, { onCredentialFailure }) => ({ complete: async () => {
+      calls.push(account.id);
+      if (account.id === 'cccccc3') { onCredentialFailure(); throw Object.assign(new Error('login'), { code: 'X' }); }
+      return sse();
+    } }),
+  });
+  const fail = pin => router.complete({ model: 'GLM-5.2-WX' }, { sessionTag: 's-' + pin, pin }).catch(e => e);
+  let e = await fail('zzzzzz9');
+  assert.equal(e.code, 'COMPANY_PINNED_MISSING'); assert.equal(e.status, 503);
+  e = await fail('bbbbbb2');
+  assert.equal(e.code, 'COMPANY_PINNED_PAUSED'); assert.equal(e.status, 503);
+  e = await fail('aaaaaa1');
+  assert.equal(e.code, 'COMPANY_PINNED_NO_MODEL'); assert.equal(e.status, 400); assert.equal(e.model, 'GLM-5.2-WX');
+  e = await fail('cccccc3');
+  assert.equal(e.code, 'COMPANY_LOGIN_NEEDED'); assert.equal(e.status, 401); assert.equal(e.pinned, true); assert.equal(e.poolAccounts, 1);
+  assert.deepEqual(calls, ['cccccc3'], 'no other account was tried');
+  // The same account still serves a model it has.
+  assert.equal((await router.complete({ model: 'deepseek-v4.1-flash-1017' }, { sessionTag: 'ok', pin: 'aaaaaa1' })).status, 200);
+});
+
+test('session key tag: "<tag>__pin_<id>" parses into the plain tag and the pin', async () => {
+  const { parseTag, pinnedMessage } = await load('server.mjs');
+  assert.deepEqual(parseTag('sess-1'), { sessionTag: 'sess-1', pin: '' });
+  assert.deepEqual(parseTag('sess-1__pin_aaaaaa1'), { sessionTag: 'sess-1', pin: 'aaaaaa1' });
+  assert.deepEqual(parseTag('sess-1__pin_personal'), { sessionTag: 'sess-1', pin: 'personal' });
+  assert.deepEqual(parseTag('x'.repeat(64) + '__pin_aaaaaa1'), { sessionTag: 'x'.repeat(64), pin: 'aaaaaa1' }, 'a full-length tag still fits');
+  assert.deepEqual(parseTag('sess__pin_BAD'), { sessionTag: 'sess__pin_BAD', pin: '' }, 'not a pin: plain tag');
+  assert.equal(parseTag('bad tag!'), null);
+  assert.deepEqual(parseTag('__pin_aaaaaa1'), { sessionTag: '__pin_aaaaaa1', pin: '' }, 'no session tag before it: a plain tag, not a pin');
+  assert.equal(parseTag('x'.repeat(65)), null);
+  const hubProxy = require('../core/company-model-proxy');
+  const key = hubProxy.sessionKey({ key: 'k' }, 'abc-1', 'aaaaaa1');
+  assert.deepEqual(parseTag(key.slice(2)), { sessionTag: hubProxy.sessionTag('abc-1'), pin: 'aaaaaa1' }, 'Hub encodes what the proxy parses');
+  assert.match(pinnedMessage({ code: 'COMPANY_PINNED_RATE_LIMITED', retryAfterSeconds: 42 }, '号 3'), /^号 3被限流，本会话固定用它，约 42 秒后恢复；要自动换号请新建会话、账号选「自动挑号」$/);
+  assert.match(pinnedMessage({ code: 'COMPANY_PINNED_PAUSED' }, '号 3'), /号 3已暂停/);
+  assert.equal(pinnedMessage({ code: 'COMPANY_NO_ACCOUNT_AVAILABLE' }, '号 3'), '');
+});
+
 test('Retry-After parsing: seconds, HTTP date and fallback', async () => {
   const { retryAfterMs } = await load('account-router.mjs');
   assert.equal(retryAfterMs('12', 0), 12_000);
@@ -244,6 +339,52 @@ test('proxy process: three client protocols, session stickiness and 429 switch o
     await r.text();
     // Broken pool credentials: falls back to personal.
     fs.writeFileSync(path.join(dataDir, 'company-model-proxy', 'mock-control.json'), JSON.stringify({ brokenCredentials: ['aaaaaa1', 'bbbbbb2'] }));
+  } finally {
+    await fetch(base + '/admin/shutdown', { method: 'POST', headers: { authorization: `Bearer ${key}` } }).catch(() => {});
+    await new Promise(resolve => { child.once('exit', resolve); setTimeout(() => { child.kill(); resolve(); }, 5000); });
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('proxy process: a pinned session stays on its account through a 429 and says so in plain words', { timeout: 60000 }, async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cmp-proxy-pin-'));
+  const key = 'p'.repeat(40);
+  fs.mkdirSync(path.join(dataDir, 'codeagent-pool'), { recursive: true });
+  fs.writeFileSync(path.join(dataDir, 'codeagent-pool', 'pool.json'), JSON.stringify({ accounts: [{ id: 'aaaaaa1' }, { id: 'bbbbbb2' }] }));
+  fs.writeFileSync(path.join(dataDir, 'codeagent-pool', 'quota-aliases.json'), JSON.stringify({ next: 3, map: { aaaaaa1: 1, bbbbbb2: 2 } }));
+  writeModels(dataDir, 'aaaaaa1', ['GLM-5.2-WX', 'deepseek-v4.1-flash-1017']);
+  writeModels(dataDir, 'bbbbbb2', ['deepseek-v4.1-flash-1017']);
+  const { child, port } = await startProxy(dataDir, key);
+  const base = `http://127.0.0.1:${port}`;
+  const post = (tag, model = 'GLM-5.2-WX') => fetch(base + '/v1/chat/completions', { method: 'POST', headers: { authorization: `Bearer ${key}.${tag}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ model, stream: true, messages: [{ role: 'user', content: 'hi' }] }) });
+  const auth = { headers: { authorization: `Bearer ${key}` } };
+  try {
+    let r = await post('pinned__pin_aaaaaa1');
+    assert.equal(r.status, 200);
+    assert.equal(await sseText(r), 'MOCK_OK');
+    let status = await (await fetch(base + '/admin/status', auth)).json();
+    assert.equal(status.router.assignments.pinned, 'aaaaaa1', 'assignment keyed by the plain session tag');
+    fs.writeFileSync(path.join(dataDir, 'company-model-proxy', 'mock-control.json'), JSON.stringify({ rateLimitedTokens: ['mock-token-aaaaaa1'] }));
+    r = await post('pinned__pin_aaaaaa1');
+    assert.equal(r.status, 429);
+    assert.equal(r.headers.get('retry-after'), '30');
+    assert.match((await r.json()).error.message, /号 1被限流，本会话固定用它，约 30 秒后恢复/);
+    status = await (await fetch(base + '/admin/status', auth)).json();
+    assert.ok(!status.router.events.some(e => e.type === 'switch' && e.session === 'pinned'), 'no switch for the pinned session');
+    assert.equal(status.router.assignments.pinned, 'aaaaaa1');
+    // An auto session avoids the cooling account (bbbbbb2 has only DeepSeek, so DeepSeek here).
+    r = await post('auto1', 'deepseek-v4.1-flash-1017');
+    assert.equal(r.status, 200); await r.text();
+    status = await (await fetch(base + '/admin/status', auth)).json();
+    assert.equal(status.router.assignments.auto1, 'bbbbbb2');
+    // Model outside the pinned account's list; account not in the pool.
+    r = await post('p2__pin_bbbbbb2');
+    assert.equal(r.status, 400);
+    assert.match((await r.json()).error.message, /号 2没有 GLM-5\.2-WX 的权限/);
+    r = await post('p3__pin_zzzzzz9');
+    assert.equal(r.status, 503);
+    assert.match((await r.json()).error.message, /已不在号池里/);
   } finally {
     await fetch(base + '/admin/shutdown', { method: 'POST', headers: { authorization: `Bearer ${key}` } }).catch(() => {});
     await new Promise(resolve => { child.once('exit', resolve); setTimeout(() => { child.kill(); resolve(); }, 5000); });

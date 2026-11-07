@@ -4171,6 +4171,7 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
 // 一键更新（2026-10-13，公司版）：只有发行目标写了下载源才开启；主仓库没有这个入口。
 {
   const distribution = require('./core/distribution');
+  let cliToolsInstallerRef = null;
   if (distribution.updateConfig) {
     try {
       const { createAppUpdateController, registerAppUpdateIpc } = require('./main/app-update-controller');
@@ -4197,6 +4198,13 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
         restartWait: () => companyHubAdmin()?.restartWaitView?.() || null });
       registerAppUpdateIpc(ipcMain, appUpdate, { gate: { apply: opts => { const admin = companyHubAdmin(); return admin && typeof admin.localApply === 'function' ? admin.localApply(opts) : null; } } });
       appUpdateControllerRef = appUpdate;
+      // CLI 一键安装（2026-11-07）：组件目录和一键更新放在同一台自家主机，被放行页拦住时共用同一个放行器。
+      try {
+        const { createCliInstaller } = require('./core/cli-tools/installer');
+        const cliSources = require('./core/cli-tools/catalog').catalogSources({ config: distribution.updateConfig });
+        cliToolsInstallerRef = createCliInstaller({ sources: cliSources, unblock: unblockOwn, isOwnUrl: url => ownHosts.isOwnUrl(url, ownConfig),
+          unblockPassed: () => ownUnblocker.passed(), onState: state => sendToRenderer('cli-tools:state', state) });
+      } catch (e) { console.warn('[cli-tools] 一键安装初始化失败：', e && e.message); }
       // 一键反馈（2026-10-29）：设置菜单「一键反馈」→ 脱敏诊断包提交到自家阿里云；被拦自动放行，发不出就存到「下载」。
       try {
         const { createHubFeedbackService, registerHubFeedbackIpc } = require('./main/hub-feedback-service');
@@ -4235,6 +4243,8 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
       console.warn('[app-update] 一键更新初始化失败：', e && e.message);
     }
   }
+  // 没有下载源的发行版也注册，界面据 available:false 只显示手动安装说明。
+  require('./main/cli-tools-ipc').registerCliToolsIpc(ipcMain, { installer: cliToolsInstallerRef });
 }
 require('./main/ipc/capability-handlers').registerCapabilityIpc(ipcMain,
   capabilityService);

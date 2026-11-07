@@ -12,6 +12,11 @@
 //   A list that is not authoritative (never probed, empty, unreadable) is unknown and refuses nothing, as in
 //   Hub; accounts that list the model explicitly are preferred over unknown ones. When no pool account may
 //   serve the model the personal account answers and the event says why (reason 'model').
+// - A session pinned to one account (the launch center's account choice; the key tag carries it, see
+//   server.mjs parseTag) only ever uses that account: no spreading, no switching, no personal fallback.
+//   A 429 still cools the account down (auto sessions then avoid it) but the pinned session gets the 429
+//   back (COMPANY_PINNED_RATE_LIMITED) and every request during the cooldown fails at once the same way.
+//   Missing, paused, login-unreadable or model-not-allowed pinned accounts fail with their own codes.
 // - Only cached CodeAgent logins are read. Nothing here logs in, refreshes a token or
 //   records request content; events carry account ids, codes and times only.
 
@@ -98,7 +103,31 @@ export function createAccountRouter({ listAccounts, makeProvider, now = Date.now
   const usable = account => !account.paused && !cooling(account.id, now(), account);
   const load = id => { let n = 0; for (const value of sticky.values()) if (value === id) n++; return n; };
 
-  function pick(sessionTag, exclude = new Set(), model = '') {
+  const pinError = (code, status, message, extra = {}) => Object.assign(new Error(message), { code, status, ...extra });
+  // Pinned session: the pinned account or an error, never another account.
+  function pickPinned(sessionTag, pin, exclude, model) {
+    const account = accounts().find(a => a.id === pin);
+    if (!account) throw pinError('COMPANY_PINNED_MISSING', 503, 'Pinned account is not in the pool', { account: pin });
+    if (account.paused) throw pinError('COMPANY_PINNED_PAUSED', 503, 'Pinned account is paused', { account: pin });
+    if (!accountHasModel(account, model)) throw pinError('COMPANY_PINNED_NO_MODEL', 400, 'Pinned account may not use this model', { account: pin, model });
+    const c = cooling(pin, now(), account);
+    if (c?.reason === 'rate_limit') {
+      throw pinError('COMPANY_PINNED_RATE_LIMITED', 429, 'Pinned account is rate limited', { account: pin,
+        retryAfterSeconds: Math.max(1, Math.ceil((c.until - now()) / 1000)) });
+    }
+    if (c?.reason === 'credential') {
+      throw pinError('COMPANY_LOGIN_NEEDED', 401, 'Company login needed', { account: pin, pinned: true,
+        personal: pin === PERSONAL, poolAccounts: pin === PERSONAL ? 0 : 1 });
+    }
+    if (exclude.has(pin)) return null;
+    // Still recorded per session: the account load (auto sessions spread around it) and the session card alias.
+    if (sticky.get(sessionTag) !== pin) sticky.set(sessionTag, pin);
+    lastUsed.set(sessionTag, now());
+    return account;
+  }
+
+  function pick(sessionTag, exclude = new Set(), model = '', pin = '') {
+    if (pin) return pickPinned(sessionTag, pin, exclude, model);
     const list = accounts();
     const current = sticky.get(sessionTag);
     const currentAccount = list.find(a => a.id === current);
@@ -131,13 +160,15 @@ export function createAccountRouter({ listAccounts, makeProvider, now = Date.now
     return chosen;
   }
 
-  async function complete(body, { signal, sessionTag = 'default', kind } = {}) {
+  async function complete(body, { signal, sessionTag = 'default', kind, pin = '' } = {}) {
     const tried = new Set();
     let lastRateLimited = null;
     const dropStashed = async () => { if (lastRateLimited) { const r = lastRateLimited; lastRateLimited = null; try { await r.body?.cancel(); } catch { /* cleanup only */ } } };
     for (;;) {
       if (signal?.aborted) { await dropStashed(); throw Object.assign(new Error('aborted'), { code: 'ROUTER_ABORTED', status: 499 }); }
-      const account = pick(sessionTag, tried, typeof body?.model === 'string' ? body.model : '');
+      let account;
+      try { account = pick(sessionTag, tried, typeof body?.model === 'string' ? body.model : '', pin); }
+      catch (error) { await dropStashed(); throw error; }
       if (!account) {
         if (lastRateLimited) return lastRateLimited;
         const active = accounts().map(a => ({ a, c: cooling(a.id, now(), a) })).filter(x => x.c);
@@ -175,7 +206,7 @@ export function createAccountRouter({ listAccounts, makeProvider, now = Date.now
         count(account.id, 'rateLimited');
         const wait = retryAfterMs(response.headers?.get?.('retry-after'), now());
         cooldowns.set(account.id, { until: now() + wait, reason: 'rate_limit' });
-        emit({ type: 'rate_limited', session: sessionTag, account: account.id, until: now() + wait });
+        emit({ type: 'rate_limited', session: sessionTag, account: account.id, until: now() + wait, ...(pin ? { pinned: true } : {}) });
         if (lastRateLimited) { try { await lastRateLimited.body?.cancel(); } catch { /* cleanup only */ } }
         lastRateLimited = response;
         continue;

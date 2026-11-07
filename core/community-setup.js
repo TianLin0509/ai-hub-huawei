@@ -21,6 +21,8 @@ function searchDirs(command, env, platform) {
   if (platform === 'win32') {
     if (env.APPDATA) dirs.push(path.join(env.APPDATA, 'npm'));
     dirs.push(path.join(env.USERPROFILE || os.homedir(), '.local', 'bin'));
+    // Hub 一键安装的 CLI（core/cli-tools/registry.js）排在用户自己的安装之后：用户装过就用用户的。
+    try { dirs.push(...require('./cli-tools/registry').managedSearchDirs(command, env)); } catch (_) {}
   }
   return dirs;
 }

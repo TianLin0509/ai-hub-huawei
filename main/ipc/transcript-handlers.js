@@ -135,6 +135,12 @@ async function withInheritedBranchTurns(args, deps, liveSession, childTurns, par
   return applyTailLimit(merged, limit, parseOpts && parseOpts.fromTail);
 }
 
+// DSH 分支会话的整段视图（不是只取某一轮）才补「分支前」标记。
+function isDshBranchView(session, opts) {
+  return !!session && String(session.kind || '').replace(/-resume$/, '') === 'deepseek-acp' && !!session.branchSourceSessionId
+    && !(opts && (opts.turnId || opts.latestTurn));
+}
+
 async function parseProviderTranscript(args = {}, deps) {
   const {
     defaultCodexSessionsRoot,
@@ -192,7 +198,10 @@ async function parseProviderTranscript(args = {}, deps) {
           const messages=turn.displayMessages.filter(m=>displayIds.has(m.id)||m===final);
           return messages.length || displayIds.has(turn.id+':activity') ? [{...turn,displayMessages:messages}] : [];
         });
-      return {turns:nativeCodex.readTranscript({...opts,toolPreviews:true}),
+      let nativeTurns=nativeCodex.readTranscript({...opts,toolPreviews:true});
+      // DSH 的 /fork 把源会话的历史整份复制进新会话：和 Claude 分支一样标成「分支前」（按同 id、同正文认，不重复补）。
+      if(isDshBranchView(session,opts)) nativeTurns=await withInheritedBranchTurns(args,deps,session,nativeTurns,{...(opts||{})},session?.transcriptPath||null);
+      return {turns:nativeTurns,
         refreshedTurns,transcriptPath:session?.transcriptPath || null,
         error:null,source:nativeCodex.isCliProvider ? 'provider-cli' : nativeCodex.options?.kind && require('../../core/acp-profiles').isAcpKind(nativeCodex.options.kind) ? 'acp' : 'codex-app-server'};
     }
@@ -324,7 +333,8 @@ async function parseProviderTranscript(args = {}, deps) {
       .commandNames(deps.dataDir || require('../../core/data-dir').getHubDataDir(), record?.codeagentPoolAccount || 'personal');
     if (String(record?.kind || inKind).replace(/-resume$/, '') === 'deepseek-acp'
       && transcriptPath && /[\\/]\.dsh[\\/]hub-events[\\/]/.test(transcriptPath)) {
-      return { turns: require('../../core/dsh-cli-session').readDshCliTranscript(transcriptPath, parseOpts),
+      const dshTurns = require('../../core/dsh-cli-session').readDshCliTranscript(transcriptPath, parseOpts);
+      return { turns: isDshBranchView(record, parseOpts) ? await withInheritedBranchTurns(args, deps, session, dshTurns, parseOpts, transcriptPath) : dshTurns,
         transcriptPath, source: 'provider-cli', error: null };
     }
     // Cards and native sessions share one projection; legacy DeepSeek-Claude keeps its parser.

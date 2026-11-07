@@ -180,6 +180,7 @@ function buildSessionResumeMeta(session, overrides = {}) {
     ...(/^codeagent(?:-resume)?$/.test(session.kind) ? { codeagentModelPick: session.codeagentModelPick === true } : {}),
     ...(session.codeagentForkSourceSessionId ? { codeagentForkSourceSessionId: session.codeagentForkSourceSessionId } : {}),
     ...(session.codeagentPoolAccount ? { codeagentPoolAccount: session.codeagentPoolAccount, codeagentPoolLabel: session.codeagentPoolLabel || '' } : {}),
+    ...(session.companyProxyAccount ? { companyProxyAccount: session.companyProxyAccount, companyProxyLabel: session.companyProxyLabel || '' } : {}),
     effort: session.effort || null,
     codexSid: session.codexSid || null,
     acpSid: session.acpSid || null,

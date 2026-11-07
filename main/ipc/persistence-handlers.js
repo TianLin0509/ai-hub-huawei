@@ -46,6 +46,8 @@ const RESUME_META_FIELDS = [
   'codeagentForkSourceSessionId',
   'codeagentPoolAccount',
   'codeagentPoolLabel',
+  'companyProxyAccount',
+  'companyProxyLabel',
   'effort',
   'contextPct',
   'contextUsed',
@@ -331,6 +333,7 @@ function handlePersistSessions(list, meetingList, deps) {
       if (authoritative?.[field]) session[field] = authoritative[field];
     }
     if (authoritative?.codeagentPoolAccount) { session.codeagentPoolAccount = authoritative.codeagentPoolAccount; session.codeagentPoolLabel = authoritative.codeagentPoolLabel || ''; }
+    if (authoritative?.companyProxyAccount) { session.companyProxyAccount = authoritative.companyProxyAccount; session.companyProxyLabel = authoritative.companyProxyLabel || ''; }
     const previous = previousSessionsById.get(session.hubId);
     const changed = !previous
       || typeof previous.updatedAt !== 'number'

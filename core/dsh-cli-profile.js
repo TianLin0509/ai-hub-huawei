@@ -17,6 +17,8 @@ function resolveDshCliRuntime(entry = {}, env = process.env) {
   }
   // 全局安装（npm i -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui）也认：Windows 默认装在 %APPDATA%\npm。
   if (!root && env.APPDATA && isRuntimeRoot(path.join(env.APPDATA, 'npm'))) root = path.join(env.APPDATA, 'npm');
+  // 最后才用 Hub 一键安装的运行环境（<数据目录>/tools/dsh/<版本>，core/cli-tools/registry.js）。
+  if (!root) { try { root = require('./cli-tools/registry').managedDshRoot(env) || root; } catch (_) {} }
   if (!root || !path.isAbsolute(root)) throw new Error('请先安装 DSH CLI 终端运行环境');
   const modules = path.join(root, 'node_modules');
   const entryPath = path.join(modules, '@deepseek-ai/dsh/lib/bin.js');

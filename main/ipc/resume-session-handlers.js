@@ -300,6 +300,8 @@ function createResumeSessionHandler(deps) {
       ...(forkClaudeConversation ? { forkCCSessionId: meta.ccSessionId } : {}),
       ...(meta.codeagentForkSourceSessionId ? { codeagentForkSourceSessionId: meta.codeagentForkSourceSessionId } : {}),
       ...(meta.codeagentPoolAccount && /^codeagent(?:-resume)?$/.test(meta.kind) ? { codeagentPoolAccount: meta.codeagentPoolAccount } : {}),
+      // 公司模型会话固定用的号：恢复后还是这个号（session-manager 不再核对，号后来不能用时由反代说明）。
+      ...(meta.companyProxyAccount && /^(?:claude|codex|deepseek-acp)(?:-resume)?$/.test(meta.kind) ? { companyProxyAccount: meta.companyProxyAccount } : {}),
       ...(meta.codeagentRouteModel && /^codeagent(?:-resume)?$/.test(meta.kind) ? { codeagentRouteModel: meta.codeagentRouteModel } : {}),
       // 上一轮回答里的实际模型：恢复后第一轮回答前就按它显示（session-manager codeAgentExpectedModel），不显示占位。
       ...(meta.codeagentActualModel && /^codeagent(?:-resume)?$/.test(meta.kind) ? { codeagentActualModel: meta.codeagentActualModel } : {}),

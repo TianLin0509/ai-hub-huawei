@@ -124,6 +124,8 @@ function planSessionFork({ source, siblingPool = [], meeting = null, rendererTit
     if (source.transcriptPath) opts.resumeTranscriptPath = source.transcriptPath;
     opts.codexForkSid = nativeSessionId;
   }
+  // 公司模型会话固定用的号（启动中心选的）：分支也固定用它（和 CodeAgent 号池会话一致）。
+  if (['claude', 'codex', 'deepseek-acp'].includes(kind) && source.companyProxyAccount) opts.companyProxyAccount = source.companyProxyAccount;
 
   // overrides 里给 null 表示「这一项不要」——整群分支就靠它去掉分支标题那套：
   // 群聊标题已经写了「（分支N）」，成员再各自叫「分支1: <源群聊名>」会全部重名。

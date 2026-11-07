@@ -5,6 +5,8 @@
   if (distribution.target !== 'company') return;
   const { ipcRenderer, shell } = require('electron');
   const { KINDS, LABELS } = require('../core/company-api-config');
+  const cliView = require('./cli-install-view');
+  let cliState = null;
   let snapshot = null;
   let setup = null;
   let dialog = null;
@@ -59,17 +61,66 @@
     }
     return setup;
   }
+  // 一键安装（2026-11-07）：安装器状态来自主进程（core/cli-tools/installer.js），文字见 renderer/cli-install-view.js。
+  async function loadCliState() {
+    try { cliState = await ipcRenderer.invoke('cli-tools:state'); } catch { cliState = null; }
+    return cliState;
+  }
+  function renderCliBlock(target, kind) {
+    const slot = target?.querySelector(`[data-cli-install="${kind}"]`);
+    if (!slot) return;
+    slot.innerHTML = cliView.installBlockHtml(kind, cliState);
+    slot.querySelector('[data-cli-action="install"]')?.addEventListener('click', () => void runInstall(target, kind));
+    slot.querySelector('[data-cli-action="cancel"]')?.addEventListener('click', () => void ipcRenderer.invoke('cli-tools:cancel').catch(() => {}));
+  }
+  async function runInstall(target, kind) {
+    const id = cliView.TOOL_FOR_KIND[kind];
+    cliState = { ...cliState, busy: id, tools: { ...cliState?.tools, [id]: { phase: 'checking' } } };
+    renderCliBlock(target, kind);
+    let result;
+    try { result = await ipcRenderer.invoke('cli-tools:install', { id }); }
+    catch (error) { result = { ok: false, error: error.message }; }
+    if (result?.state) cliState = result.state;
+    else cliState = { ...cliState, busy: null, tools: { ...cliState?.tools, [id]: { phase: 'error', error: result?.error || '未知原因' } } };
+    // 装好后马上重新检测：启动中心的卡片不用重启 Hub 就能用。
+    let ready = false;
+    if (result?.ok) {
+      try {
+        await refreshInstall();
+        ready = kind === 'deepseek-acp' ? document.querySelector('.new-session-option[data-kind="deepseek"]')?.dataset.installed === '1'
+          : !!setup?.providers?.find(p => p.id === kind)?.installed;
+      } catch { ready = false; }
+    }
+    if (dialog !== target) return;
+    renderCliBlock(target, kind);
+    if (!result?.ok) return;
+    const status = target.querySelector('.company-api-message');
+    target.querySelector('.company-api-install')?.setAttribute('hidden', '');
+    if (status) status.textContent = ready ? `${LABELS[kind]} 已装好，回到启动中心直接新建会话即可；要用公司模型或自有接口时点「配置接口」。`
+      : '已安装，但 Hub 还没检测到它，请点「重新检测」，或重启 Hub 后再试。';
+    const footer = target.querySelector('footer');
+    if (footer && ready) {
+      footer.innerHTML = '<button type="button" data-api-action="configure">配置接口</button><button type="button" class="primary" data-api-action="finish">完成</button>';
+      footer.querySelector('[data-api-action="configure"]').onclick = () => void open(kind);
+      footer.querySelector('[data-api-action="finish"]').onclick = close;
+    }
+  }
   function showInstall(kind) {
     const target = makeDialog();
     const provider = setup?.providers?.find(p => p.id === kind);
     if (kind === 'deepseek-acp') {
       target.innerHTML = heading('安装 DSH 运行环境', 'DSH 运行环境尚未就绪，当前可先配置接口。')
-        + '<div class="company-api-install"><ol><li>安装组织提供的 DSH 终端运行环境（Node 和 DSH 终端界面）。</li><li>在「自有 API」的 DSH 页选择「公司模型」并保存。</li><li>回到启动中心新建 DSH 会话；在此之前可先使用 Claude Code 或 Codex。</li></ol></div><footer><button type="button" data-api-action="configure">配置接口</button></footer>';
+        + `<div data-cli-install="${kind}"></div>`
+        + '<div class="company-api-install"><ol><li>安装组织提供的 DSH 终端运行环境（Node 和 DSH 终端界面）。</li><li>在「自有 API」的 DSH 页选择「公司模型」并保存。</li><li>回到启动中心新建 DSH 会话；在此之前可先使用 Claude Code 或 Codex。</li></ol></div>'
+        + '<p class="company-api-message" role="status"></p><footer><button type="button" data-api-action="configure">配置接口</button></footer>';
       bindClose(target);
       target.querySelector('[data-api-action="configure"]').onclick = () => void open(kind);
+      renderCliBlock(target, kind);
+      void loadCliState().then(() => { if (dialog === target) renderCliBlock(target, kind); });
       return;
     }
     target.innerHTML = heading(`安装 ${LABELS[kind]}`, '安装完成后可沿用本机配置，或填写自己的 API 接口。')
+      + `<div data-cli-install="${kind}"></div>`
       + `<div class="company-api-install"><span class="company-api-tag">未安装</span><ol><li>按官方说明安装 ${esc(LABELS[kind])} CLI${kind === 'claude' ? '，Windows 同时需要 Git for Windows' : ''}。</li><li>完成安装后点击「重新检测」。</li><li>需要自有接口时，到「自有 API」填写配置。</li></ol></div>`
       + '<p class="company-api-message" role="status"></p><footer><button type="button" data-api-action="docs">查看安装说明</button><button type="button" class="primary" data-api-action="refresh">重新检测</button></footer>';
     bindClose(target);
@@ -83,6 +134,16 @@
       } catch { target.querySelector('[role="status"]').textContent = '检测失败，请稍后重试。'; }
       finally { target.querySelector('[data-api-action="refresh"]')?.removeAttribute('disabled'); }
     };
+    renderCliBlock(target, kind);
+    // 读到安装器状态后再画一次。有一键安装时，手动步骤降为次要（「重新检测」不再是主按钮）；
+    // 没有下载源的版本这里保持空白，弹窗和以前一样。
+    void loadCliState().then(() => {
+      if (dialog !== target) return;
+      renderCliBlock(target, kind);
+      if (!cliState?.available) return;
+      target.querySelector('.company-api-install .company-api-tag')?.replaceWith(Object.assign(document.createElement('p'), { className: 'company-api-note', textContent: '也可以自己按官方说明安装：' }));
+      target.querySelector('[data-api-action="refresh"]')?.classList.remove('primary');
+    });
   }
   function modeSwitch(mode) {
     return '<div class="company-api-mode" role="radiogroup" aria-label="接入方式">'
@@ -91,7 +152,7 @@
   }
   function proxyStatusHtml(kind) {
     const proxy = snapshot?.proxy;
-    const dshHint = kind === 'deepseek-acp' && !snapshot?.dshCliReady ? '<p class="company-api-note company-proxy-warn">DSH 终端运行环境还没装好，装好后才能新建 DSH 会话。可在命令行执行 <code>npm i -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui</code>，装完重新打开设置即可。</p>' : '';
+    const dshHint = kind === 'deepseek-acp' && !snapshot?.dshCliReady ? '<p class="company-api-note company-proxy-warn">DSH 终端运行环境还没装好，装好后才能新建 DSH 会话。可在启动中心点 DSH 卡片「一键安装」，或在命令行执行 <code>npm i -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui</code>，装完重新打开设置即可。</p>' : '';
     if (!proxy) return '<div class="company-proxy-state" data-proxy-state="unknown"><p>保存后由 Hub 在后台启动反代。</p></div>' + dshHint;
     if (proxy.shared) return `<div class="company-proxy-state" data-proxy-state="${esc(proxy.state)}"><strong>共享主机${proxy.state === 'running' ? '已连接' : '暂不可用'}</strong><p>${esc(proxy.message)}</p><p>主机各号的可用模型和额度见右侧「共享号池额度」。</p></div>` + dshHint;
     const all = proxy.accounts || [];
@@ -272,6 +333,13 @@
       snapshot = { ...snapshot, proxy };
       const form = dialog?.querySelector('[data-proxy-form]');
       if (form) refreshProxyBlocks(form);
+    });
+    // 安装进度推送：弹窗开着就就地刷新一键安装区块。
+    ipcRenderer.on('cli-tools:state', (_event, state) => {
+      if (!state) return;
+      cliState = state;
+      const slot = dialog?.querySelector('[data-cli-install]');
+      if (slot) renderCliBlock(dialog, slot.dataset.cliInstall);
     });
     window.__companyApiOpen = open;
     void refreshInstall().catch(() => {});

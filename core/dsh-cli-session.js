@@ -192,6 +192,8 @@ class DshCliSession extends EventEmitter {
     const header = d.header?.config || d.header;
     if (event.type === 'request/header' && header?.model) {
       this.currentModel = header.model;
+      // 这一轮实际请求的模型：卡片上的发言人写它（和 Claude / Codex 卡片一样写模型名，不写 deepseek-acp）。
+      if (record) record.model = header.model;
       this.currentEffort = header.reasoningEffort;
       if (!replay) this.emit('bound', { threadId: this.threadId, model: this.currentModel,
         reasoningEffort: header.reasoningEffort, configOptions: this.configOptions });
@@ -342,7 +344,8 @@ class DshCliSession extends EventEmitter {
     const cards = claudeTranscriptTurns(records).map(card => {
       const record = records.find(r => r.userMessageId === (card.userMessageId || card.id));
       const identity = { providerTurnId: record?.turnId || null, clientSubmissionId: record?.submissionId || null };
-      return { ...card, ...identity, ...(record?.steer ? { steer: true } : {}), kind: 'deepseek-acp', source: 'provider-cli',
+      const model = card.role === 'assistant' ? record?.model || this.currentModel || this.options?.model || '' : '';
+      return { ...card, ...identity, ...(record?.steer ? { steer: true } : {}), ...(model ? { model } : {}), kind: 'deepseek-acp', source: 'provider-cli',
         ...(card.displayMessages ? { displayMessages: card.displayMessages.map(m => ({ ...m, ...identity })) } : {}) };
     });
     return Number.isFinite(options.limit) ? options.fromTail === false ? cards.slice(0, options.limit) : cards.slice(-options.limit) : cards;
@@ -435,7 +438,9 @@ class DshCliSession extends EventEmitter {
 function readDshCliTranscript(file, options = {}) {
   const view = Object.create(DshCliSession.prototype);
   EventEmitter.call(view);
-  Object.assign(view, { options: {}, records: [], runtime: {}, seen: new Set(), contentRevision: 0 });
+  // 回放会走到用量、后台任务的记账（request/context、job/*）：这几项也要有初值，否则休眠会话的卡片整份读不出来。
+  Object.assign(view, { options: {}, records: [], runtime: {}, seen: new Set(), contentRevision: 0, pendingSteers: [],
+    usageTotals: { input: 0, output: 0, cached: 0, total: 0 }, contextWindow: null, contextUsed: null, jobs: new Map() });
   for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
     if (!line.trim()) continue;
     let row; try { row = JSON.parse(line); } catch { continue; }

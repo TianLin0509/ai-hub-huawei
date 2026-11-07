@@ -97,13 +97,15 @@ function renderAccounts(pool, state = {}) {
   const available = state.installed === false ? withInstallation.replace(/<button\b[^>]*>/g, tag => /data-ca="(?:login|session|add|probe|probe-all|drawer)"/.test(tag) && !/\bdisabled\b/.test(tag) ? tag.replace(/>$/, ' disabled title="检测到 CodeAgent 后可使用">') : tag) : withInstallation;
   return available.replace(/class="([^"]*)"/g, (_, names) => `class="${names.split(/\s+/).filter(Boolean).map(name => 'caa-' + name).join(' ')}"`);
 }
-function renderAccountOption({ type, account = {}, available = 0 }) {
+// blocked：这个号此刻可用、但这次选不了的原因（公司模型启动中心：号没有所选模型的权限）。
+function renderAccountOption({ type, account = {}, available = 0, blocked = '' }) {
   if (type === 'manage') return `${scopedIcon('users')}<span>管理账号…</span>`;
   const personal = type === 'personal', status = accountState(account, { personal });
+  const stop = blocked && status.usable ? String(blocked) : '';
   let avatar = `<span class="avatar${personal ? ' me' : ''}">${personal ? '我' : esc([...(account.note || '号')][0])}</span>`;
   let title = personal ? '个人账号' : esc(account.note || '未备注账号');
-  let sub = [account.accountLabel, account.avoid ? pauseReason(account.avoid) : status.detail, hasCredit(account) ? `剩 ${account.credit.remaining} · ${account.credit.pct}%` : ''].filter(Boolean).join(' · ');
-  let badge = `<span class="pill ${status.tone === 'muted' ? 'mute' : status.tone}">${esc(status.label)}</span>`;
+  let sub = [account.accountLabel, stop || (account.avoid ? pauseReason(account.avoid) : status.detail), hasCredit(account) ? `剩 ${account.credit.remaining} · ${account.credit.pct}%` : ''].filter(Boolean).join(' · ');
+  let badge = stop ? '<span class="pill mute">无此模型</span>' : `<span class="pill ${status.tone === 'muted' ? 'mute' : status.tone}">${esc(status.label)}</span>`;
   let count = `<span class="meta num">${Number(account.activeSessions) || 0} 个会话</span>`;
   if (['auto', 'manual', 'manage'].includes(type)) {
     avatar = `<span class="auto-ico">${icon(type === 'auto' ? 'sparkle' : 'users', 'sm')}</span>`;

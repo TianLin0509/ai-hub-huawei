@@ -2,7 +2,8 @@
 
 // 公司版：会话卡片和标题栏上的「模型 · 线路 · 号」（2026-11-06）。
 // 线路来自会话自己记的 companyRoute（core/session-manager.js：proxy 公司模型 / api 自有接口 / local CLI 默认）；
-// 公司模型会话用的是哪个号，来自反代状态里的 sessionAccounts（main/company-proxy-service.js，只有代称：个人 / 号 N）。
+// 公司模型会话用的是哪个号，来自反代状态里的 sessionAccounts（main/company-proxy-service.js，只有代称：个人 / 号 N）；
+// 启动中心固定了号的会话（companyProxyAccount + companyProxyLabel，2026-11-07）一开始就显示这个号，不等第一次回答。
 
 const COMPANY_KINDS = new Set(['claude', 'codex', 'deepseek-acp']);
 let sessionAccounts = {};
@@ -28,13 +29,14 @@ function routeInfo(session) {
   if (!COMPANY_KINDS.has(base)) return null;
   const model = session.currentModel?.id || '';
   if (session.companyRoute === 'proxy') {
-    const alias = sessionAccounts[tagOf(session.id)] || '';
+    const pinned = !shared && session.companyProxyAccount ? (session.companyProxyLabel || (session.companyProxyAccount === 'personal' ? '个人' : '')) : '';
+    const alias = pinned || sessionAccounts[tagOf(session.id)] || '';
     if (shared) return { route: 'proxy', model, alias, source: '共享号池', chip: [shortModel(model), '共享'].filter(Boolean).join(' · '),
       text: [model, '共享号池', alias].filter(Boolean).join(' · '), title: '经团队共享主机，账号由主机自动分配；额度与连接状态见右侧栏。' };
-    return { route: 'proxy', model, alias, source: '公司模型',
+    return { route: 'proxy', model, alias, source: '公司模型', ...(session.companyProxyAccount && !shared ? { pinned: true } : {}),
       chip: [shortModel(model), alias].filter(Boolean).join(' · '),
       text: [model, '公司模型', alias ? aliasWords(alias) : ''].filter(Boolean).join(' · '),
-      title: `公司模型 ${model}${alias ? ` · ${alias === '个人' ? '你的个人 CodeAgent 账号' : '号池 ' + alias}` : ' · 第一次回答后显示用的是哪个号'}` };
+      title: `公司模型 ${model}${alias ? ` · ${alias === '个人' ? '你的个人 CodeAgent 账号' : '号池 ' + alias}` : ' · 第一次回答后显示用的是哪个号'}${pinned ? '（启动时选定，整段会话固定用它）' : ''}` };
   }
   const source = session.companyRoute === 'api' ? '自有接口' : 'CLI 默认';
   return { route: session.companyRoute, model, alias: '', source,
