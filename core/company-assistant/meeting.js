@@ -66,6 +66,14 @@ class MeetingCompanion {
       || m.answers.some(q => q.state === 'queued') || (m.questionJob && m.questionJob.state !== 'error'));
     if (ACTIVE.has(m.state) || audio || understanding || questions) this.pending.add(m.id); else this.pending.delete(m.id);
     if (audio) this.pendingAsr.add(m.id); else this.pendingAsr.delete(m.id);
+    (this.live ||= new Set())[ACTIVE.has(m.state) ? 'add' : 'delete'](m.id); this.keepAwake(this.live.size > 0);
+  }
+  // A sleeping laptop stops the capture mid-meeting, so hold the display on only while one is being recorded.
+  keepAwake(on) {
+    const blocker = this.deps.powerSaveBlocker ?? require('electron').powerSaveBlocker;
+    if (!blocker) return;
+    if (on && this.awakeId == null) this.awakeId = blocker.start('prevent-display-sleep');
+    else if (!on && this.awakeId != null) { blocker.stop(this.awakeId); this.awakeId = null; }
   }
   save(m) { write(path.join(this.dir(m.id), 'meeting.json'), m); this.trackPending(m); this.a.changed?.(); }
   start() {
@@ -85,7 +93,7 @@ class MeetingCompanion {
     }
     this.timer = setInterval(() => { void this.tick(); }, 1000); this.timer.unref?.();
   }
-  close() { clearInterval(this.timer); this.timer = null; this.asr.close(); this.tools.close(); this.frames.close(); }
+  close() { this.keepAwake(false); clearInterval(this.timer); this.timer = null; this.asr.close(); this.tools.close(); this.frames.close(); }
   ownsSession(id) { return !!id && this.ids().some(k => { const m = this.load(k); return m.sessionId === id || m.questionSessionId === id; }); }
   // 用户反馈：历史会议改不了名字。空名字不改；已有会话和纪要内容不受影响。
   rename(id, title) {
@@ -94,7 +102,7 @@ class MeetingCompanion {
     if (next !== m.title) { m.title = next; this.save(m); }
     return m;
   }
-  list() { return this.ids().map(id => { const m = this.load(id); return { id, title: m.title, startedAt: m.startedAt, state: m.state, pages: m.events.filter(e => e.kind === 'slide').length }; }).sort((a, b) => b.startedAt - a.startedAt); }
+  list() { return this.ids().map(id => { const m = this.load(id); return { id, title: m.title, startedAt: m.startedAt, state: m.state, pages: m.events.filter(e => e.kind === 'slide').length, videoBytes: m.recording?.bytes || 0 }; }).sort((a, b) => b.startedAt - a.startedAt); }
   create({ title, sourceName, audio = [], speed = 'normal' } = {}) {
     this.start();
     if (this.list().some(m => ACTIVE.has(m.state))) throw new Error('已有会议在采集，请先结束它');

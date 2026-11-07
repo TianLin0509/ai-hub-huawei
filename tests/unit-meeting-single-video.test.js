@@ -142,3 +142,40 @@ test('伴侣只能读已存截图，读不到录像', async t => {
   const skill = fs.readFileSync(path.join(__dirname, '../core/company-assistant/meeting-companion-skill.md'), 'utf8');
   assert.ok(!skill.includes('meeting_frames'));
 });
+
+test('删录像只删视频，纪要和截图保留，再删提示没有录像', async t => {
+  const { m, id } = setup(t);
+  record(m, id, MP4, mp4);
+  m.capture(id, { kind: 'slide', at: 500, data: Buffer.from([0xff, 0xd8, 0xff, 0xd9]).toString('base64'), forced: true });
+  assert.throws(() => m.recording.deleteVideo(id), /还在保存|没结束/);
+  m.capture(id, { kind: 'recording-finish', key, at: 9000, durationMs: 9000 });
+  const cur = m.load(id); cur.state = 'ended'; cur.summary = '纪要正文'; m.save(cur);
+  assert.equal(m.list().find(x => x.id === id).videoBytes, mp4.length);
+  assert.equal(m.recording.deleteVideo(id).freed, mp4.length);
+  const left = m.load(id);
+  assert.equal(left.recording.full, null); assert.equal(left.recording.bytes, 0); assert.equal(left.summary, '纪要正文');
+  assert.ok(left.events.some(e => e.kind === 'slide'));
+  assert.ok(!fs.existsSync(path.join(m.dir(id), 'recording-full.mp4')));
+  assert.equal(m.list().find(x => x.id === id).videoBytes, 0);
+  assert.throws(() => m.recording.deleteVideo(id), /没有录像/);
+  assert.throws(() => m.recording.locate(id, 100), /没有已完成/);
+});
+
+test('录制期间防睡眠，全部结束后放开', (t) => {
+  const { m, id } = setup(t);
+  const calls = []; m.deps.powerSaveBlocker = { start: kind => { calls.push(kind); return 7; }, stop: x => calls.push('stop' + x) };
+  m.save(m.load(id)); m.save(m.load(id));
+  assert.deepEqual(calls, ['prevent-display-sleep']);
+  const cur = m.load(id); cur.state = 'ended'; m.save(cur);
+  assert.deepEqual(calls, ['prevent-display-sleep', 'stop7']);
+});
+
+test('硬盘充足时不提示', async t => {
+  const { m } = setup(t);
+  const real = fs.promises.statfs;
+  t.mock.method(fs.promises, 'statfs', async () => ({ bavail: 1024, bsize: 1024 * 1024 }));
+  assert.match(await m.recording.diskWarning(), /只剩 1\.0 GB/);
+  fs.promises.statfs = real; t.mock.restoreAll();
+  t.mock.method(fs.promises, 'statfs', async () => ({ bavail: 100 * 1024, bsize: 1024 * 1024 }));
+  assert.equal(await m.recording.diskWarning(), '');
+});

@@ -4,6 +4,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { createHash } = require('node:crypto');
 const { fixWebmDuration } = require('./meeting-webm-duration');
+const LOW_DISK_BYTES = 3 * 1024 ** 3;
 const keyOK = key => /^[a-f0-9-]{36}$/.test(String(key));
 const hash = b => createHash('sha256').update(b).digest('hex');
 const isMp4 = s => /^video\/mp4/.test(s.mime || '');
@@ -109,6 +110,24 @@ class MeetingRecording {
     const m = this.m.load(id), full = this.state(m).full;
     if (!full?.bytes || full.status === 'writing') throw new Error('完整录像仍在保存，结束会议后可打开');
     return { file: this.file(id, full), url: pathToFileURL(this.file(id, full)).href, recording: full };
+  }
+  // Only the video goes; minutes, transcript, screenshots and audio stay, so the meeting remains readable.
+  deleteVideo(id) {
+    const m = this.m.load(id), rec = this.state(m);
+    if (['recording', 'paused'].includes(m.state)) throw new Error('会议还没结束，不能删录像');
+    if (rec.full?.status === 'writing') throw new Error('录像还在保存，稍后再删');
+    const files = [...(rec.full ? [rec.full] : []), ...rec.segments].filter(s => s.status !== 'empty');
+    if (!files.length) throw new Error('这场会议没有录像');
+    for (const s of files) fs.rmSync(this.file(id, s), { force: true });
+    const freed = rec.bytes; rec.full = null; rec.segments = []; rec.bytes = 0; rec.deleted = { at: Date.now(), bytes: freed };
+    this.m.save(m); return { freed };
+  }
+  // A warning, not a gate: a meeting that cannot be recorded in full is still worth recording.
+  async diskWarning() {
+    try {
+      const { bavail, bsize } = await fs.promises.statfs(this.m.root), free = bavail * bsize;
+      return free < LOW_DISK_BYTES ? `硬盘只剩 ${(free / 1024 ** 3).toFixed(1)} GB，录一小时大约要 0.5 GB。可在「更多」里删掉旧录像。` : '';
+    } catch { return ''; }
   }
   exportName(id) {
     const m = this.m.load(id), d = new Date(m.startedAt), pad = n => String(n).padStart(2, '0');

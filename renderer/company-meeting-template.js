@@ -28,10 +28,11 @@ function meetingTemplate() {
       <button class="ca-btn meeting-when-live" data-act="pause" disabled>${icon(ICONS.pause)}<span>暂停</span></button>
       <button class="ca-btn meeting-stop meeting-when-live" data-act="stop" disabled>${icon(ICONS.stop)}<span>结束会议</span></button>
       <button class="ca-btn meeting-when-review" data-act="open-full" disabled>${icon(ICONS.play)}<span>完整录像</span></button>
-      <button class="ca-btn meeting-when-review" data-act="save-video" disabled>${icon(ICONS.play)}<span>保存视频</span></button>
+      <button class="ca-btn meeting-when-review" data-act="save-video" disabled>${icon(ICONS.export)}<span>保存视频</span></button>
       <button class="ca-btn meeting-when-review" data-act="new">${icon(ICONS.plus)}<span>新会议</span></button>
       <details class="meeting-more" data-m="more"><summary class="ca-btn" aria-label="更多会议操作" title="更多会议操作">${icon(ICONS.more)}<span>更多</span></summary><div class="meeting-more-panel">
         <label class="meeting-menu-field">历史会议<select data-m="history" aria-label="历史会议"></select></label>
+        <div class="meeting-video-usage"><span data-m="video-total"></span><button class="ca-btn" data-act="delete-video" disabled>删除这场的录像</button></div>
         <label class="meeting-menu-field">自动更新理解<select data-m="interval" aria-label="自动更新间隔">${[[0,'关闭'],[1,'每 1 分钟'],[3,'每 3 分钟'],[5,'每 5 分钟'],[10,'每 10 分钟']].map(([v,l]) => `<option value="${v}">${l}</option>`).join('')}</select></label>
         <label class="meeting-menu-field">快速档模型<select data-m="fast-model" aria-label="快速档模型"></select></label>
         <details class="meeting-advanced"><summary>截图区域</summary><div class="meeting-region-row"><img data-m="preview" alt="所选窗口预览"><p>精选截图使用指定区域，原始录像保留完整共享窗口。</p><div class="meeting-crop">${[['x','左',0],['y','上',0],['w','宽',100],['h','高',100]].map(([k,l,v]) => `<label>${l}<input type="number" min="0" max="100" value="${v}" data-crop="${k}" aria-label="截图区域${l}">%</label>`).join('')}</div></div></details>
@@ -57,7 +58,7 @@ function meetingTemplate() {
         <div class="meeting-viewer-controls"><div class="meeting-section-heading"><h3 data-m="viewer-label">共享画面</h3><button class="ca-btn" data-act="live" hidden>返回实时</button><button class="ca-btn meeting-viewer-size" data-act-local="expand-viewer" aria-pressed="false">放大</button></div>
           <p class="meeting-viewer-hint">点时间流里的截图，可在这里回看当时画面</p>
           <div class="meeting-mark-bar"><button class="ca-btn" data-act="snap" disabled>${icon(ICONS.camera,14)}<span>截图</span></button><input data-m="note" placeholder="记下重点，回车保存" aria-label="重点备注"><button class="ca-btn" data-act="mark" disabled>${icon(ICONS.star,14)}<span>记重点</span></button></div>
-          <div class="meeting-replay"><div class="meeting-replay-row"><button class="meeting-play" data-act="play" disabled aria-label="回放">${icon(ICONS.play,14)}</button><span class="meeting-play-time"><span data-m="play-time">00:00</span> / <span data-m="duration">00:00</span></span><button class="ca-btn" data-act="extract" disabled>${icon(ICONS.camera,14)}<span>截取此帧</span></button></div><input data-m="seek" type="range" min="0" max="0" value="0" step="0.1" aria-label="会议时间轴"><input data-m="seek-seconds" type="number" min="0" value="0" step="1" hidden aria-label="跳转到会议秒数"><p class="meeting-gaps" data-m="gaps"></p></div>
+          <div class="meeting-replay"><div class="meeting-replay-row"><button class="meeting-play" data-act="play" disabled aria-label="回放">${icon(ICONS.play,14)}</button><span class="meeting-play-time"><span data-m="play-time">00:00</span> / <span data-m="duration">00:00</span></span><select class="meeting-rate" data-m="rate" aria-label="回放速度">${[1,1.25,1.5,2].map(v=>`<option value="${v}">${v}×</option>`).join('')}</select><button class="ca-btn" data-act="extract" disabled>${icon(ICONS.camera,14)}<span>截取此帧</span></button></div><input data-m="seek" type="range" min="0" max="0" value="0" step="0.1" aria-label="会议时间轴"><input data-m="seek-seconds" type="number" min="0" value="0" step="1" hidden aria-label="跳转到会议秒数"><p class="meeting-gaps" data-m="gaps"></p></div>
         </div>
       </section>
       <div class="meeting-flow-heading"><h3>时间流</h3><span data-m="flow-count">截图、原话与问答</span><button class="ca-link" data-act-local="latest" hidden>回到最新</button></div>
