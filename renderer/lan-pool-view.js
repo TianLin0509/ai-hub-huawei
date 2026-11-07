@@ -9,6 +9,7 @@ function ago(t, now = Date.now()) {
   const s = Math.max(0, Math.round((now - t) / 1000));
   return s < 60 ? '刚刚' : s < 3600 ? Math.floor(s / 60) + ' 分钟前' : s < 86400 ? Math.floor(s / 3600) + ' 小时前' : clock(t);
 }
+const fmtTokens = n => !Number.isFinite(n) || n <= 0 ? '0' : n >= 1e8 ? (n / 1e8).toFixed(1) + ' 亿' : n >= 1e4 ? (n / 1e4).toFixed(n >= 1e6 ? 0 : 1) + ' 万' : String(Math.round(n));
 const hostOf = address => { try { return new URL(address).host; } catch { return String(address || ''); } };
 
 // 每个共享号今日剩余：只认今天（北京时间）的读数，过期读数显示「今日待读取」。
@@ -35,8 +36,11 @@ function clientSummary(snapshot, now = Date.now()) {
 function hostSummary(settings) {
   const host = settings?.host || {}, gateway = settings?.gateway || {}, health = settings?.health || { phase: host.enabled ? 'starting' : 'off' };
   const members = host.members || [], active = members.filter(m => !m.revokedAt);
-  const usage = new Map((gateway.members || []).map(u => [u.id, u]));
-  const totals = (gateway.members || []).reduce((t, u) => ({ requests: t.requests + (u.requests || 0), active: t.active + (u.active || 0) }), { requests: 0, active: 0 });
+  // 有落盘统计时按「今天」口径（Hub 重启不清零）；老数据结构退回本次运行的内存计数。
+  const usage = settings?.stats ? new Map(settings.stats.rows.map(r => [r.id, { requests: r.today.requests, succeeded: r.today.succeeded, failed: r.today.failed,
+    active: r.active, lastAt: r.lastUsedAt, online: r.online, lastSeenAt: r.lastSeenAt }])) : new Map((gateway.members || []).map(u => [u.id, u]));
+  const totals = settings?.stats ? { requests: settings.stats.totals.requests, active: settings.stats.totals.active, online: settings.stats.totals.online }
+    : (gateway.members || []).reduce((t, u) => ({ requests: t.requests + (u.requests || 0), active: t.active + (u.active || 0) }), { requests: 0, active: 0 });
   const state = { off: { tone: 'mute', label: '未开启' }, serving: { tone: 'ok', label: '正在共享' }, 'waiting-model': { tone: 'warn', label: '模型服务准备中' },
     starting: { tone: 'warn', label: '正在启动' }, error: { tone: 'bad', label: '共享暂停' } }[health.phase] || { tone: 'mute', label: '未开启' };
   return { host, health, state, members, active, usage, totals, address: host.addresses?.[0] || '', localOnly: !!host.localOnly };
@@ -51,7 +55,7 @@ function quotaList(view) {
 }
 function usageLine(view) {
   const u = view.myUsage, m = view.member;
-  return [m ? `我的上限：同时 ${m.maxConcurrent} 个请求 · 每分钟 ${m.rpm} 次` : '', u ? `主机本次运行：我请求 ${u.requests} 次，成功 ${u.succeeded}${u.failed ? '，失败 ' + u.failed : ''}` : ''].filter(Boolean);
+  return [m ? `我的上限：同时 ${m.maxConcurrent} 个请求 · 每分钟 ${m.rpm} 次` : '', u ? `${u.scope === 'today' ? '今天' : '主机本次运行'}：我请求 ${u.requests} 次，成功 ${u.succeeded}${u.failed ? '，失败 ' + u.failed : ''}${u.tokens ? `，约 ${fmtTokens(u.tokens)} token` : ''}` : ''].filter(Boolean);
 }
 
 // ---- 设置弹窗：同事端 ----
@@ -75,7 +79,7 @@ function clientPanel(settings, snapshot, now = Date.now()) {
 }
 
 // ---- 设置弹窗：主机端 ----
-function hostPanel(settings, { oneTime = null, invite = '', confirmRevoke = '', now = Date.now() } = {}) {
+function hostPanel(settings, { oneTime = null, invite = '', confirmRevoke = '', now = Date.now(), dashboard = false } = {}) {
   const v = hostSummary(settings), host = v.host;
   const changed = v.health.addressChanged ? `<div class="lp-banner lp-warn">本机地址从 <code>${esc(v.health.addressChanged.from)}</code> 变成了 <code>${esc(v.health.addressChanged.to)}</code>，共享已跟着换过去。请把新地址发给同事；长期使用建议请 IT 给这台电脑固定 IP。</div>` : '';
   const error = v.health.error && host.enabled ? `<div class="lp-banner lp-${v.health.phase === 'error' ? 'bad' : 'warn'}">${esc(v.health.error)}${v.health.phase === 'error' ? ` · 每 ${v.health.retrySeconds || 30} 秒自动重试` : ''}</div>` : '';
@@ -90,19 +94,19 @@ function hostPanel(settings, { oneTime = null, invite = '', confirmRevoke = '', 
   const row = m => {
     const u = v.usage.get(m.id) || {};
     const confirm = confirmRevoke === m.id;
-    return `<tr class="${m.revokedAt ? 'lp-revoked' : ''}"><td><strong>${esc(m.name)}</strong></td><td>${m.revokedAt ? '已撤销' : `同时 ${m.maxConcurrent} · 每分 ${m.rpm}`}</td><td class="lp-num">${u.requests || 0}<small> / 成功 ${u.succeeded || 0}${u.failed ? ' / 失败 ' + u.failed : ''}</small></td><td class="lp-num">${u.active ? `<span class="lp-live">${u.active}</span>` : '0'}</td><td>${esc(ago(u.lastAt, now))}</td><td>${m.revokedAt ? '' : confirm ? `${btn(`data-lan-revoke="${esc(m.id)}" data-confirmed="1"`, '确认撤销', 'lp-danger lp-sm')}${btn('data-lan-revoke-cancel', '取消', 'lp-quiet lp-sm')}` : btn(`data-lan-revoke="${esc(m.id)}"`, '撤销', 'lp-quiet lp-sm')}</td></tr>`;
+    return `<tr class="${m.revokedAt ? 'lp-revoked' : ''}"><td>${u.online != null && !m.revokedAt ? `<span title="${u.online ? '在线' : '离线'}">${dot(u.online ? 'ok' : 'mute')}</span>` : ''}<strong>${esc(m.name)}</strong></td><td>${m.revokedAt ? '已撤销' : `同时 ${m.maxConcurrent} · 每分 ${m.rpm}`}</td><td class="lp-num">${u.requests || 0}<small> / 成功 ${u.succeeded || 0}${u.failed ? ' / 失败 ' + u.failed : ''}</small></td><td class="lp-num">${u.active ? `<span class="lp-live">${u.active}</span>` : '0'}</td><td>${esc(ago(u.lastAt, now))}</td><td>${m.revokedAt ? '' : confirm ? `${btn(`data-lan-revoke="${esc(m.id)}" data-confirmed="1"`, '确认撤销', 'lp-danger lp-sm')}${btn('data-lan-revoke-cancel', '取消', 'lp-quiet lp-sm')}` : btn(`data-lan-revoke="${esc(m.id)}"`, '撤销', 'lp-quiet lp-sm')}</td></tr>`;
   };
-  const table = v.active.length ? `<table class="lp-table"><thead><tr><th>同事</th><th>上限</th><th>本次请求</th><th>进行中</th><th>最近使用</th><th></th></tr></thead><tbody>${v.active.map(row).join('')}</tbody></table>` : '<p class="lp-muted">还没有同事。填好备注生成口令，把连接信息发给他。</p>';
+  const table = v.active.length ? `<table class="lp-table"><thead><tr><th>同事</th><th>上限</th><th>今天请求</th><th>进行中</th><th>最近使用</th><th></th></tr></thead><tbody>${v.active.map(row).join('')}</tbody></table>` : '<p class="lp-muted">还没有同事。填好备注生成口令，把连接信息发给他。</p>';
   const old = revoked.length ? `<details class="lp-old"><summary>已撤销 ${revoked.length} 位</summary><table class="lp-table"><tbody>${revoked.map(row).join('')}</tbody></table></details>` : '';
   return `${changed}${error}${status}
-    <h3 class="lp-h3">同事口令<small>每人一个，撤销后立即断开他的在途请求</small></h3>
+    <h3 class="lp-h3">同事口令<small>每人一个，撤销后立即断开他的在途请求</small>${dashboard && host.enabled ? `<span class="lp-grow"></span>${btn('data-lan-dashboard', '打开号池视图', 'lp-quiet lp-sm')}` : ''}</h3>
     <form data-lan-member class="lp-member-form"><label>同事备注<input name="name" maxlength="40" required placeholder="例如 张工（仅本机可见）"></label><label>同时请求<input name="maxConcurrent" type="number" min="1" max="16" value="2"></label><label>每分钟<input name="rpm" type="number" min="1" max="600" value="60"></label><button type="submit" class="primary">生成口令</button></form>
     ${secret}${table}${old}
-    <p class="lp-foot">统计只含本次 Hub 运行期间，不记录对话内容。</p>`;
+    <p class="lp-foot">统计按天保留 14 天，只记次数和 token 数，不记录对话内容。</p>`;
 }
 
 // ---- 账号页卡片 ----
-function accountCard(settings, snapshot, now = Date.now()) {
+function accountCard(settings, snapshot, now = Date.now(), { dashboard = false } = {}) {
   if (!settings) return '';
   if (settings.client?.connected) {
     const v = clientSummary(snapshot, now);
@@ -111,11 +115,11 @@ function accountCard(settings, snapshot, now = Date.now()) {
   }
   if (settings.host?.enabled) {
     const v = hostSummary(settings), top = v.active.slice().sort((a, b) => (v.usage.get(b.id)?.lastAt || 0) - (v.usage.get(a.id)?.lastAt || 0)).slice(0, 6);
-    return `<section class="lp-card" aria-label="内网共享"><header><span class="lp-card-title">${dot(v.state.tone)}内网共享</span><span class="lp-tag">${esc(v.state.label)}</span><span class="lp-card-sub">同事地址 <code class="lp-mono">${esc(v.address)}</code>${btn(`data-lan-copy="${esc(v.address)}"`, '复制', 'lp-link')}</span><span class="lp-grow"></span>${btn('data-lan-card="open"', '管理共享', 'lp-quiet lp-sm')}</header>
+    return `<section class="lp-card" aria-label="内网共享"><header><span class="lp-card-title">${dot(v.state.tone)}内网共享</span><span class="lp-tag">${esc(v.state.label)}</span><span class="lp-card-sub">同事地址 <code class="lp-mono">${esc(v.address)}</code>${btn(`data-lan-copy="${esc(v.address)}"`, '复制', 'lp-link')}</span><span class="lp-grow"></span>${dashboard ? btn('data-lan-card="dashboard"', '号池视图', 'primary lp-sm') : ''}${btn('data-lan-card="open"', '管理共享', 'lp-quiet lp-sm')}</header>
       ${v.health.addressChanged ? `<div class="lp-banner lp-warn">地址已从 ${esc(v.health.addressChanged.from)} 变为 ${esc(v.health.addressChanged.to)}，请把新地址发给同事。</div>` : ''}
       ${v.health.error ? `<div class="lp-banner lp-${v.health.phase === 'error' ? 'bad' : 'warn'}">${esc(v.health.error)}${v.health.phase === 'error' ? ' · 自动重试中' : ''}</div>` : ''}
-      <div class="lp-card-body"><div class="lp-card-stat"><b>${v.active.length}</b><span> 位同事</span><p>本次运行共 ${v.totals.requests} 次请求，${v.totals.active} 个进行中。下方号池同时服务你和同事，「会话数」含同事的会话。</p></div>
-      ${top.length ? `<ul class="lp-people">${top.map(m => { const u = v.usage.get(m.id) || {}; return `<li><span class="lp-avatar">${esc([...m.name][0] || '同')}</span><span class="lp-q-name">${esc(m.name)}</span><span class="lp-muted">${esc(ago(u.lastAt, now))}</span><b>${u.requests || 0} 次${u.active ? ` · <span class="lp-live">${u.active} 进行中</span>` : ''}</b></li>`; }).join('')}</ul>` : '<p class="lp-muted">还没有同事。点「管理共享」生成口令。</p>'}</div></section>`;
+      <div class="lp-card-body"><div class="lp-card-stat"><b>${v.active.length}</b><span> 位同事</span><p>${v.totals.online != null ? `${v.totals.online} 位在线 · ` : ''}今天共 ${v.totals.requests} 次请求，${v.totals.active} 个进行中。下方号池同时服务你和同事，「会话数」含同事的会话。</p></div>
+      ${top.length ? `<ul class="lp-people">${top.map(m => { const u = v.usage.get(m.id) || {}; return `<li><span class="lp-avatar">${esc([...m.name][0] || '同')}</span><span class="lp-q-name">${u.online != null ? dot(u.online ? 'ok' : 'mute') : ''}${esc(m.name)}</span><span class="lp-muted">${u.online ? '在线' : ''}${u.online && u.lastAt ? ' · ' : ''}${u.lastAt || !u.online ? esc(ago(u.lastAt, now)) : ''}</span><b>${u.requests || 0} 次${u.active ? ` · <span class="lp-live">${u.active} 进行中</span>` : ''}</b></li>`; }).join('')}</ul>` : '<p class="lp-muted">还没有同事。点「管理共享」生成口令。</p>'}</div></section>`;
   }
   return `<section class="lp-card lp-card-slim" aria-label="号池内网共享"><span class="lp-card-title">号池内网共享</span><span class="lp-card-sub">把本机号池共享给同事，或连接同事电脑上的号池</span><span class="lp-grow"></span>${btn('data-lan-card="open"', '设置共享', 'lp-quiet lp-sm')}</section>`;
 }
@@ -129,4 +133,4 @@ function launchStrip(settings, snapshot, now = Date.now()) {
     <span class="lp-strip-q">${v.rows.map(r => `<span class="lp-q-${r.quota.tone}" title="${esc(r.quota.model)}">${esc(r.label.replace('共享号 ', '号'))} <b>${esc(r.quota.text)}</b></span>`).join('')}</span></div>`;
 }
 
-module.exports = { esc, clock, ago, rowQuota, clientSummary, hostSummary, clientPanel, hostPanel, accountCard, launchStrip };
+module.exports = { esc, clock, ago, fmtTokens, hostOf, dot, bar, rowQuota, clientSummary, hostSummary, clientPanel, hostPanel, accountCard, launchStrip };

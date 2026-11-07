@@ -321,7 +321,7 @@ test('只支持有记录的 CodeAgent 会话，原因可读', t => {
     a: { kind: 'powershell', cwd }, b: { kind: 'codeagent', cwd }, c: { kind: 'codeagent', cwd, ccSessionId: CC },
     d: { kind: 'codeagent-resume', cwd, ccSessionId: CC, codeagentPoolAccount: 'acc2' } } });
   assert.match(svc.support('none').reason, /请先打开/);
-  assert.match(svc.support('a').reason, /只支持 CodeAgent/);
+  assert.match(svc.support('a').reason, /支持 CodeAgent、Claude Code、Codex 和 DSH/);
   assert.match(svc.support('b').reason, /还没聊过/);
   assert.equal(svc.support('c').supported, true);
   assert.equal(svc.support('c').account, '个人账号');

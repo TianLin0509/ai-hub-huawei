@@ -49,11 +49,10 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "新增号池内网共享：主机给每位同事生成专属口令，同事在自己电脑上用 Claude Code、Codex、DSH 共用主机号池额度，可随时撤销。",
-    "共享更稳：主机启动失败、换网或休眠后自动恢复并提示；同事端主机掉线自动重连，口令被撤销会单独提示。",
-    "账号页新增共享卡片：主机看到同事用量，同事看到各号今日额度；连接信息一行复制、整行粘贴即可连接。"
+    "「问一下」现在也能在 Claude Code、Codex、DSH 会话里用：点顶栏「问一下」旁问一句，主会话照常工作，问答不进会话记录",
+    "DSH 会话旁问通常几秒出答案；Claude Code / Codex 十几秒起，走的是会话自己的模型和额度"
   ],
-  "version": "5.5.17",
+  "version": "5.5.19",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

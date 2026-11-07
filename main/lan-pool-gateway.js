@@ -2,6 +2,7 @@
 const http = require('node:http');
 const { StringDecoder } = require('node:string_decoder');
 const pool = require('../core/lan-pool');
+const { LanPoolStats, usageOf } = require('../core/lan-pool-stats');
 const ROUTES = new Set(['/v1/messages', '/v1/messages/count_tokens', '/v1/responses', '/v1/chat/completions']);
 const MAX_BODY = 16 * 1024 * 1024;
 const IDLE_MS = 5 * 60 * 1000;
@@ -10,6 +11,9 @@ function fail(res, status, message, headers) { json(res, status, { error: { type
 // Observe only protocol completion/error metadata; conversation text is forwarded and never retained.
 function completionMeter() {
   const decoder = new StringDecoder('utf8'); let line = '', finished = false, failed = false, finishReason = false;
+  const tokens = { in: 0, out: 0 };
+  // Usage counters are cumulative in every protocol, so the largest seen value is the total.
+  const count = v => { const u = usageOf(v); if (u) { tokens.in = Math.max(tokens.in, u.in); tokens.out = Math.max(tokens.out, u.out); } };
   return {
     take(chunk) {
       line += decoder.write(chunk);
@@ -19,7 +23,7 @@ function completionMeter() {
         if (!raw.startsWith('data:')) continue;
         const data = raw.slice(5).trim(); if (data === '[DONE]') { if (finishReason) finished = true; continue; }
         try {
-          const v = JSON.parse(data);
+          const v = JSON.parse(data); count(v);
           if (v.error || ['error', 'response.failed', 'response.incomplete'].includes(v.type)) failed = true;
           if (['message_stop', 'response.completed'].includes(v.type)) finished = true;
           if (Array.isArray(v.choices) && v.choices.some(c => ['stop', 'length', 'tool_calls', 'content_filter', 'function_call'].includes(c.finish_reason))) finishReason = true;
@@ -28,18 +32,27 @@ function completionMeter() {
       if (line.length > 1024 * 1024) { line = ''; failed = true; }
     },
     complete: () => finished && !failed,
+    tokens,
+    count,
     failed: () => failed,
   };
 }
 
 class LanPoolGateway {
-  constructor({ dataDir, getEndpoint, getSnapshot, getReady = () => true, host = '127.0.0.1' }) {
+  constructor({ dataDir, getEndpoint, getSnapshot, getReady = () => true, host = '127.0.0.1', stats }) {
     Object.assign(this, { dataDir, getEndpoint, getSnapshot, getReady, host });
+    this.stats = stats || new LanPoolStats(dataDir);
     this.server = null; this.active = new Map(); this.usage = new Map(); this.sockets = new Set();
   }
   status() { return { running: !!this.server?.listening, port: this.server?.address()?.port || null,
     members: [...this.usage].map(([id, u]) => ({ id, ...u, active: this.active.get(id)?.size || 0 })),
     usageScope: '本次 Hub 运行期间的共享请求统计；不记录对话正文' }; }
+  // Live per-member numbers for the pool view: in-flight requests and this minute's request count.
+  live() {
+    const now = Date.now();
+    return new Map([...this.usage].map(([id, u]) => [id, { active: this.active.get(id)?.size || 0, lastAt: u.lastAt,
+      minuteRequests: now - u.window < 60000 ? u.windowRequests : 0 }]));
+  }
   kick(id) { for (const req of this.active.get(id) || []) req.destroy(); }
   async start(port = pool.DEFAULT_PORT) {
     if (this.server) return this.status();
@@ -57,6 +70,7 @@ class LanPoolGateway {
     for (const id of this.active.keys()) this.kick(id);
     for (const socket of this.sockets) socket.destroy();
     if (server) await new Promise(resolve => server.close(resolve));
+    this.stats.flush();
   }
   async handle(req, res) {
     if (!pool.isPrivateAddress(req.socket.remoteAddress)) return fail(res, 403, '此服务仅允许内网连接');
@@ -68,6 +82,7 @@ class LanPoolGateway {
     const identity = pool.authenticate(this.dataDir, auth);
     if (!identity) return fail(res, 401, '共享口令无效或已撤销');
     const { member, tag } = identity;
+    this.stats.seen(member, { ip: req.socket.remoteAddress, client: String(req.headers['x-ai-hub-client'] || '').slice(0, 40), userAgent: req.headers['user-agent'] });
     let url; try { url = new URL(req.url, 'http://localhost'); } catch { return fail(res, 400, '请求地址无效'); }
     const pathname = url.pathname;
     // Claude Code adds ?beta=true to its Anthropic calls. It is protocol metadata, not another route.
@@ -76,8 +91,9 @@ class LanPoolGateway {
     if (req.url !== pathname && !beta) return fail(res, 404, '共享端口不提供该接口');
     if (req.method === 'GET' && pathname === '/pool/v1/snapshot') {
       const snapshot = await this.getSnapshot();
+      const today = this.stats.view([member]).rows[0].today;
       return json(res, 200, { ...snapshot, ready: this.getReady(), member: { name: member.name, maxConcurrent: member.maxConcurrent, rpm: member.rpm },
-        myUsage: this.usage.get(member.id) ? { requests: this.usage.get(member.id).requests, succeeded: this.usage.get(member.id).succeeded, failed: this.usage.get(member.id).failed } : { requests: 0, succeeded: 0, failed: 0 } });
+        myUsage: { scope: 'today', requests: today.requests, succeeded: today.succeeded, failed: today.failed, tokens: today.tokensIn + today.tokensOut } });
     }
     if (req.method === 'GET' && pathname === '/v1/models') return json(res, 200, { object: 'list', data: pool.MODEL_IDS.map(id => ({ id, object: 'model', owned_by: 'shared-pool' })) });
     if (req.method !== 'POST' || !ROUTES.has(pathname)) return fail(res, 404, '共享端口仅提供模型与只读额度接口');
@@ -87,14 +103,27 @@ class LanPoolGateway {
     u.lastAt = Date.now();
     this.usage.set(member.id, u);
     if (Date.now() - u.window >= 60000) { u.window = Date.now(); u.windowRequests = 0; }
-    if (active.size >= member.maxConcurrent || u.windowRequests >= member.rpm) return fail(res, 429, '已达到你的共享并发或每分钟上限，请稍后重试', { 'retry-after': '10' });
-    if ([...this.active.values()].reduce((n, set) => n + set.size, 0) >= 16) return fail(res, 429, '共享主机正在处理较多请求，请稍后再试', { 'retry-after': '5' });
+    if (active.size >= member.maxConcurrent || u.windowRequests >= member.rpm) {
+      this.stats.limited(member, active.size >= member.maxConcurrent ? `同时请求达到上限 ${member.maxConcurrent}` : `每分钟请求达到上限 ${member.rpm}`);
+      return fail(res, 429, '已达到你的共享并发或每分钟上限，请稍后重试', { 'retry-after': '10' });
+    }
+    if ([...this.active.values()].reduce((n, set) => n + set.size, 0) >= 16) {
+      this.stats.limited(member, '主机总并发已满（16）');
+      return fail(res, 429, '共享主机正在处理较多请求，请稍后再试', { 'retry-after': '5' });
+    }
     // Reserve before receiving the body; slow uploads also occupy their member's slot.
     const cancelRequest = { destroy: () => { req.destroy(); upstreamReq?.destroy(); res.destroy(); release(false); } };
     active.add(cancelRequest); u.windowRequests++; u.requests++;
-    let done = false, upstreamReq, deadline, idleTimer, responseOk = false, isSse = false;
+    let done = false, upstreamReq, deadline, idleTimer, responseOk = false, isSse = false, model = '', jsonBody = [], jsonSize = 0;
     const meter = completionMeter();
-    const release = success => { if (done) return; done = true; clearTimeout(deadline); clearTimeout(idleTimer); active.delete(cancelRequest); success ? u.succeeded++ : u.failed++; };
+    const release = success => {
+      if (done) return; done = true; clearTimeout(deadline); clearTimeout(idleTimer); active.delete(cancelRequest); success ? u.succeeded++ : u.failed++;
+      if (!isSse && jsonBody.length) { try { meter.count(JSON.parse(Buffer.concat(jsonBody).toString('utf8'))); } catch { /* usage is optional */ } }
+      try {
+        const ticket = this.stats.request(member, { model, userAgent: req.headers['user-agent'] });
+        this.stats.finish(member, ticket, { ok: success, tokensIn: meter.tokens.in, tokensOut: meter.tokens.out, status: res.statusCode });
+      } catch (error) { console.warn('[lan-pool] stats: ' + error.message); }
+    };
     const abort = () => { upstreamReq?.destroy(); release(responseOk && meter.complete()); };
     res.once('close', () => { if (!res.writableFinished) abort(); });
     deadline = setTimeout(() => { upstreamReq?.destroy(); if (!res.headersSent) fail(res, 504, '共享模型请求超时'); else res.destroy(); release(false); }, 15 * 60 * 1000);
@@ -105,6 +134,7 @@ class LanPoolGateway {
       const body = Buffer.concat(chunks); let parsed;
       try { parsed = JSON.parse(body.toString('utf8')); } catch { fail(res, 400, '请求 JSON 无效'); release(false); return; }
       if (!parsed || !pool.MODEL_IDS.includes(parsed.model)) { fail(res, 400, '请选择共享主机提供的模型'); release(false); return; }
+      model = parsed.model;
       // Revocation during an upload is effective before forwarding.
       if (!pool.authenticate(this.dataDir, auth)) { fail(res, 401, '共享口令已撤销'); release(false); return; }
       const endpoint = this.getEndpoint();
@@ -118,7 +148,10 @@ class LanPoolGateway {
         // A hung upstream must not hold the colleague's slot for the whole 15 minutes.
         const idle = () => { clearTimeout(idleTimer); idleTimer = setTimeout(() => { upstreamReq?.destroy(); res.destroy(); release(false); }, IDLE_MS); };
         idle(); res.once('close', () => clearTimeout(idleTimer));
-        upstreamRes.on('data', c => { idle(); u.bytesOut += c.length; if (isSse) meter.take(c); });
+        upstreamRes.on('data', c => {
+          idle(); u.bytesOut += c.length;
+          if (isSse) meter.take(c); else if (jsonSize < 2 * 1024 * 1024) { jsonSize += c.length; jsonBody.push(c); }
+        });
         upstreamRes.on('error', () => { res.destroy(); release(false); });
         res.once('finish', () => release(responseOk && (!isSse || meter.complete())));
         upstreamRes.pipe(res);

@@ -1104,8 +1104,12 @@ test('first-time signer init timeout kills the CLI and says so', { skip: process
   const delegate = () => ({ once() {}, on() {}, kill() { killed = true; } });
   const hang = async () => ({ async init() { require('node:child_process').spawn(cli, ['-p'], {}); return new Promise(() => {}); }, async isAvailable() { return true; } });
   const started = Date.now();
+  // The init timeout timer is unref'd (it must never keep Hub alive). Hold the test's own event loop open,
+  // otherwise a runner with nothing else pending cancels the test before the timeout fires.
+  const keepAlive = setInterval(() => {}, 1000); t.after(() => clearInterval(keepAlive));
   await assert.rejects(initializeCacheOnlySigner({ codeagentDir, allowStampProbe: true, timeoutMs: 300, loadSigner: hang, testOnly: true, testOnlySpawnDelegate: delegate }),
     e => e.code === 'SIGNER_INIT_TIMEOUT' && e.spawnSummary.cliAllowed === 1);
+  clearInterval(keepAlive);
   assert.ok(Date.now() - started < 5000);
   assert.equal(killed, true);
   assert.match(signerInitFailureMessage('SIGNER_INIT_TIMEOUT', { version: '9.1.2', timeoutMs: 60000 }), /CodeAgent 命令行在 60 秒内没有结束/);

@@ -145,6 +145,20 @@ async function main() {
     await until(cc, '(document.querySelector("[data-lan-account-slot] .lp-card")?.querySelectorAll(".lp-quota li").length || 0) === 5', 'client account card');
     check('同事账号页显示共享号池逐号额度', await cc.eval('document.querySelector("[data-lan-account-slot]").innerText.includes("45% 剩余")'));
     await shot(cc, '同事账号页');
+    // 号池视图（成员版专属）：主机从账号页卡片打开，看到同事在线、今天用量和事件。
+    check('主机账号页卡片有号池视图入口', await hc.eval(`!!document.querySelector('[data-lan-account-slot] [data-lan-card="dashboard"]')`));
+    await click(hc, '[data-lan-account-slot] [data-lan-card="dashboard"]');
+    await until(hc, '(t => t.includes("测试同事甲") && t.includes("在线同事"))(document.querySelector("#lan-pool-dashboard .pd-body")?.innerText || "")', 'pool dashboard');
+    check('号池视图显示同事在线', await hc.eval('(r => !!r && /在线|使用中/.test(r.innerText))([...document.querySelectorAll("#lan-pool-dashboard .pd-row")].find(r => r.innerText.includes("测试同事甲")))'));
+    check('号池视图显示今天请求数与事件', await hc.eval('(() => { const d = document.querySelector("#lan-pool-dashboard"); const row = [...d.querySelectorAll(".pd-row")].find(r => r.innerText.includes("测试同事甲")); return Number(row.querySelector("td:nth-child(5) b").textContent) >= 3 && d.querySelector(".pd-events").innerText.includes("上线"); })()'));
+    check('号池视图显示主机各号额度', await hc.eval('document.querySelectorAll("#lan-pool-dashboard .lp-quota li").length === 5'));
+    await shot(hc, '主机号池视图');
+    await hc.eval('[...document.querySelectorAll("#lan-pool-dashboard .pd-row")].find(r => r.innerText.includes("测试同事甲")).click()');
+    await until(hc, '!!document.querySelector("#lan-pool-dashboard .pd-detail")', 'dashboard detail');
+    check('点开同事看到按模型和按工具明细', await hc.eval('(t => t.includes("按模型") && t.includes("按工具"))(document.querySelector("#lan-pool-dashboard .pd-detail").innerText)'));
+    await shot(hc, '主机号池视图-明细');
+    check('号池视图在 1440 宽度不横向溢出', await hc.eval('(b => b.scrollWidth <= b.clientWidth + 1)(document.querySelector("#lan-pool-dashboard .pd-body"))'));
+    await hc.eval('document.querySelector("#lan-pool-dashboard").close()');
     await hc.eval('window.__lanPoolOpen("host")');
     await until(hc, '!!document.querySelector(`[data-lan-revoke="' + memberId + '"]`)', 'host dialog reopened');
     await click(hc, `[data-lan-revoke="${memberId}"]`);
@@ -152,6 +166,10 @@ async function main() {
     await click(hc, `[data-lan-revoke="${memberId}"][data-confirmed]`);
     await until(hc, 'document.querySelector("#lan-pool-dialog").innerText.includes("已撤销")', 'member revoked');
     const revoked = await fetch(address + '/v1/models', { headers: { authorization: 'Bearer ' + secret } }); check('撤销后模型接口立即拒绝', revoked.status === 401);
+    await hc.eval('document.querySelector("#lan-pool-dialog")?.close(); window.__lanPoolDashboardOpen()');
+    await until(hc, '(document.querySelector("#lan-pool-dashboard .pd-events")?.innerText || "").includes("撤销")', 'dashboard revoke event');
+    check('号池视图记下撤销事件', true);
+    await hc.eval('document.querySelector("#lan-pool-dashboard").close()');
     await cc.eval('window.codeagentQuotaPanel.refresh()');
     check('同事侧提示口令已撤销并保留读数', await cc.eval('document.getElementById("account-quota-panel").innerText.includes("已撤销")'));
     await cc.eval('window.__lanPoolOpen("client")');

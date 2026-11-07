@@ -21,7 +21,8 @@ class LanPoolService {
   }
   settings() {
     return { ok: true, ...pool.publicSettings(this.dataDir), gateway: { ...this.gateway.status(), modelReady: this.proxyService.state === 'running' },
-      health: this.hostHealth(), error: this.error, clientState: this.clientState() };
+      health: this.hostHealth(), error: this.error, clientState: this.clientState(),
+      stats: pool.read(this.dataDir).host?.enabled ? this.gateway.stats.view(pool.read(this.dataDir).host.members || [], this.gateway.live()) : null };
   }
   client() { return pool.read(this.dataDir).client; }
   clientState() {
@@ -170,7 +171,20 @@ class LanPoolService {
     const address = pool.publicSettings(this.dataDir).host.addresses[0] || '';
     return address ? pool.formatInvite(address, secret) : '';
   }
-  revoke(id) { pool.revoke(this.dataDir, id); this.gateway.kick(id); this.onChanged(); return this.settings(); }
-  async stop() { if (this.timer) clearInterval(this.timer); this.timer = null; await this.gateway.stop(); }
+  revoke(id) {
+    const member = (pool.read(this.dataDir).host?.members || []).find(m => m.id === id);
+    pool.revoke(this.dataDir, id); this.gateway.kick(id); if (member) this.gateway.stats.revoked(member);
+    this.onChanged(); return this.settings();
+  }
+  // 号池视图（主机端）：每位同事的在线状态、今天和最近 7 天的用量、最近事件，加主机各号的额度读数。
+  async dashboard() {
+    const settings = pool.read(this.dataDir), host = settings.host || {};
+    const stats = this.gateway.stats.view(host.members || [], this.gateway.live());
+    let quota = null;
+    try { quota = pool.quotaSnapshot(await this.quotaReader(), this.proxyService.lastStatus?.router); } catch (error) { quota = { rows: [], error: error.message }; }
+    return { ok: true, enabled: !!host.enabled, health: this.hostHealth(), address: pool.publicSettings(this.dataDir).host.addresses?.[0] || '',
+      modelReady: this.proxyService.state === 'running', stats, quota };
+  }
+  async stop() { if (this.timer) clearInterval(this.timer); this.timer = null; this.gateway.stats.flush(); await this.gateway.stop(); }
 }
 module.exports = { LanPoolService };

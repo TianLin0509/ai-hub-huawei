@@ -39,6 +39,8 @@ class DshCliSession extends EventEmitter {
     // is the only signal that a "long silence" is work in progress.
     this.jobs = new Map();
     this.log = path.join(options.home, '.dsh', 'hub-events', randomUUID() + '.jsonl');
+    // 「问一下」：问题文件放这里，DSH 里的 Hub 观察插件作答后把回答写回事件日志（type: 'btw'）。
+    this.askDir = this.log.replace(/\.jsonl$/, '-asks'); this.sideAsks = new Map();
     fs.mkdirSync(path.dirname(this.log), { recursive: true }); fs.writeFileSync(this.log, '');
   }
   get pid() { return this.pty?.pid || null; }
@@ -58,7 +60,7 @@ class DshCliSession extends EventEmitter {
     this.startTimer = setTimeout(() => this.fail(new Error('DSH CLI 启动未确认，请查看终端')), 60000);
     try {
       this.pty = require('node-pty').spawn(this.options.launch.command, this.options.launch.args, {
-        cwd: this.options.cwd, env: { ...this.options.launch.env, AI_HUB_DSH_EVENT_LOG: this.log },
+        cwd: this.options.cwd, env: { ...this.options.launch.env, AI_HUB_DSH_EVENT_LOG: this.log, AI_HUB_DSH_ASK_DIR: this.askDir },
         cols: this.cols || 120, rows: this.rows || 35, name: 'xterm-256color', useConpty: true, conptyInheritCursor: false });
       require('./pty-process-owner').recordPtySpawn(this.pty);
       this.pty.onData(data => { this.output = ((this.output || '') + data).slice(-32768); this.emit('data', data); });
@@ -66,12 +68,37 @@ class DshCliSession extends EventEmitter {
     } catch (error) { this.fail(error); this.dispose(); }
     return ready;
   }
+  // 不经 TUI 输入框，主会话正在跑也能问；同一会话的问题由调用方按顺序发。
+  askSide(question, { timeoutMs = 180000 } = {}) {
+    if (this.closed || this.runtime.connection !== 'connected') return Promise.reject(new Error('DSH 终端未连接，请先恢复会话'));
+    if (!this.threadId) return Promise.reject(new Error('DSH 还没有会话记录，请等首轮开始后再问'));
+    const id = randomUUID();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => { this.sideAsks.delete(id); reject(new Error(`DSH 超过 ${Math.round(timeoutMs / 1000)} 秒没答完`)); }, timeoutMs + 5000);
+      this.sideAsks.set(id, { resolve, reject, timer });
+      try {
+        fs.mkdirSync(this.askDir, { recursive: true });
+        const file = path.join(this.askDir, id + '.ask.json');
+        fs.writeFileSync(file + '.tmp', JSON.stringify({ id, question: String(question), timeoutMs }), 'utf8');
+        fs.renameSync(file + '.tmp', file);
+      } catch (error) { clearTimeout(timer); this.sideAsks.delete(id); reject(error); }
+    });
+  }
+  settleSideAsk(row) {
+    const waiter = this.sideAsks.get(row.id);
+    if (!waiter) return;
+    clearTimeout(waiter.timer); this.sideAsks.delete(row.id);
+    if (row.answer) waiter.resolve({ answer: String(row.answer) });
+    else waiter.reject(new Error(row.error || 'DSH 没有给出回答'));
+  }
   fail(error) {
+    for (const [id, waiter] of this.sideAsks) { clearTimeout(waiter.timer); waiter.reject(new Error('DSH 终端已断开：' + error.message)); this.sideAsks.delete(id); }
     clearTimeout(this.startTimer); this.readyReject?.(error);
     if (this.pending) { clearTimeout(this.pending.timer); this.pending.resolve({ ok: false, sendStatus: 'stuck', unconfirmed: true }); this.pending = null; }
     this.apply({ connection: 'disconnected', state: 'failed', reason: error.message }); this.emit('action-error', error.message);
   }
   observe(row) {
+    if (row.type === 'btw') { this.settleSideAsk(row); return; }
     if (this.closed) return;
     if (row.type === 'ready') { this.bootReady = true; return; }
     if (row.type === 'bound') {

@@ -81,7 +81,11 @@ test('an available ledger is mandatory and a failed admission never falls back t
 
 test('dependency isolation and unsupported platform fail explicitly', t => {
   const f = fixture(t), other = path.join(f.root, 'shared-modules'); fs.mkdirSync(other);
-  fs.symlinkSync(other, path.join(f.tree, 'node_modules'), 'junction');
+  // Creating a junction can hit a transient EBUSY on a busy Windows machine; that is fixture setup, not the behaviour under test.
+  for (let i = 0; ; i++) {
+    try { fs.symlinkSync(other, path.join(f.tree, 'node_modules'), 'junction'); break; }
+    catch (error) { if (error.code !== 'EBUSY' || i >= 9) throw error; Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200); }
+  }
   assert.throws(() => validateTree(f.tree, 'win32'), /linked node_modules/);
   fs.rmdirSync(other);
   assert.equal(fs.existsSync(path.join(f.tree, 'node_modules')), false);

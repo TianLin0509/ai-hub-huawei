@@ -2688,6 +2688,8 @@ class SessionManager extends EventEmitter {
       info,
       pty: ptyProcess,
       ...(isGemini ? {antigravityEnv:{...sessionEnv}} : {}),
+      // 问一下：Claude Code / Codex 终端会话在后台分叉作答，要用和终端同一套环境（公司模型代理、会话 Key、配置目录）。只在内存里，不落盘。
+      ...((isClaude || isCodex) && isPtyAgent ? {askAsideEnv:{...sessionEnv}} : {}),
       codexEditorInput,
       nativeRuleCoverage: require('./native-rule-coverage').captureNativeRuleCoverage({
         kind:isNativeClaude||isDeepSeekClaude?'claude':isCodexRuntime?'codex':kind.replace(/-resume$/,''),cwd:spawnCwd,

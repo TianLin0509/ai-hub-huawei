@@ -21,6 +21,7 @@ function registerLanPoolIpc(ipcMain, { service, readConfig, saveConfig, clearCon
       return service.settings();
     } catch (error) { pool.write(service.dataDir, before); throw error; }
   });
+  handle('dashboard', () => service.dashboard());
   handle('refresh', async () => { await service.snapshot({ force: true }); return service.settings(); });
   handle('disconnect', async () => {
     const current = pool.read(service.dataDir), previous = current.client?.previous;

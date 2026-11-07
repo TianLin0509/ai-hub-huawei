@@ -130,12 +130,14 @@ function quotaSnapshot(snapshot, router = {}, now = Date.now()) {
   return { ok: true, shared: true, version: VERSION, checkedAt: now, serveEnabled: true, rows, models: MODEL_IDS,
     message: '共享主机最近一次额度读数；所有同事共同消耗，刷新只同步读数' };
 }
+// Shown to the host in the pool view so they know which Hub version a colleague runs.
+function hubVersion() { try { return require('../package.json').version; } catch { return ''; } }
 async function fetchSnapshot(client, { timeoutMs = 5000 } = {}) {
   const u = new URL('/pool/v1/snapshot', address(client.address));
   // Use node:http directly: LAN requests must bypass Windows/system proxy configuration.
   const transport = require(u.protocol === 'https:' ? 'node:https' : 'node:http');
   return new Promise((resolve, reject) => {
-    const req = transport.get(u, { headers: { authorization: 'Bearer ' + client.key, accept: 'application/json' } }, res => {
+    const req = transport.get(u, { headers: { authorization: 'Bearer ' + client.key, accept: 'application/json', 'x-ai-hub-client': 'AI Hub ' + hubVersion() } }, res => {
       let n = 0, chunks = [];
       res.on('data', c => { n += c.length; if (n > 512 * 1024) res.destroy(new Error('共享状态响应过大')); else chunks.push(c); });
       res.on('error', reject);

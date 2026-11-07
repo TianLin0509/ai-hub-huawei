@@ -1,5 +1,5 @@
 'use strict';
-// 公司版「问一下」抽屉：在 CodeAgent 会话旁问一句，后台另起分叉进程回答，正在跑的终端不受影响。
+// 公司版「问一下」抽屉：在 CodeAgent / Claude Code / Codex / DSH 会话旁问一句，正在跑的终端不受影响。
 // 外观按 m5 样稿（batch2/m5 20261104-样稿-号池额度与问一下-m5）与 C 令牌重做。主进程接口见 main/ask-aside/service.js。
 
 const ICONS = {
@@ -8,7 +8,10 @@ const ICONS = {
   warn: '<path d="M12 3.5l9 16H3z"/><path d="M12 10v4M12 17h.01"/>',
 };
 const SUGGESTIONS = ['现在卡在哪？', '为什么这么做？', '还要多久？'];
-const WAIT_HINT = '通常 30–60 秒，会话照常运行';
+// 各家的等待预期（2026-11-07 实测：DSH 旁问约 5 秒；Claude Code / Codex 后台分叉十几秒起）。
+const ENGINE_WAIT = { codeagent: '30–60 秒', claude: '10–30 秒', codex: '10–40 秒', dsh: '几秒' };
+const waitText = engine => ENGINE_WAIT[engine] || ENGINE_WAIT.codeagent;
+const ASK_KIND = /^(?:codeagent|claude|codex|deepseek-acp)(?:-resume)?$/;
 
 const pad2 = n => String(n).padStart(2, '0');
 function clock(iso) { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; }
@@ -98,7 +101,7 @@ function createAskAsideUi({ document, ipcRenderer, getSession, getTitle = s => s
       qa.append(waitBlock({ thinking: false, title: queuePos > 1 ? `正在排队，前面还有 ${queuePos - 1} 个问题` : '正在排队，马上开始', small: '前面的问题答完后自动开始' }));
     } else if (item.status === 'running') {
       // 后台答完才整段给出（公司回执：CodeAgent 没有真流式），所以只有「思考中」→ 整段回答，不做逐字。
-      qa.append(waitBlock({ thinking: true, title: '正在读这个会话的上下文', small: WAIT_HINT, since: item.startedAt || item.at }));
+      qa.append(waitBlock({ thinking: true, title: '正在读这个会话的上下文', small: `通常 ${waitText(item.engine)}，会话照常运行`, since: item.startedAt || item.at }));
     } else {
       if (item.a) qa.append(renderAnswer(item));
       if (item.status === 'error') {
@@ -122,7 +125,7 @@ function createAskAsideUi({ document, ipcRenderer, getSession, getTitle = s => s
     const busy = items.some(item => item.status === 'queued' || item.status === 'running');
     const blocked = state && state.supported === false;
     hint.className = blocked ? 'warn' : '';
-    hint.textContent = blocked ? (state.reason || '这个会话暂时不能问') : busy ? '这条答完前再问，会排在后面' : '通常 30–60 秒 · Enter 换行';
+    hint.textContent = blocked ? (state.reason || '这个会话暂时不能问') : busy ? '这条答完前再问，会排在后面' : `通常 ${waitText(state?.engine)} · Enter 换行`;
     hint.title = hint.textContent;
     send.disabled = sending || blocked || !input.value.trim();
   }
@@ -229,8 +232,8 @@ function createAskAsideUi({ document, ipcRenderer, getSession, getTitle = s => s
     sync(visible) {
       const session = getSession();
       const area = document.getElementById('toolbar-actions');
-      const codeagent = !!session && require('../core/ai-kinds').isCodeAgentKind(session.kind);
-      button.hidden = !visible || !codeagent;
+      const askable = !!session && (require('../core/ai-kinds').isCodeAgentKind(session.kind) || ASK_KIND.test(session.kind || ''));
+      button.hidden = !visible || !askable;
       // 放在顶栏操作区最前（「文件管理」之前）；顶栏重绘后补回来。
       if (area && (!button.isConnected || area.firstChild !== button)) area.insertBefore(button, area.firstChild);
       if (sessionId && session?.id !== sessionId) hide();

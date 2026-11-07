@@ -13,13 +13,14 @@ function temp(t) { const p = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-lan-pool
 async function fixture(t, options = {}) {
   const dataDir = temp(t); pool.write(dataDir, { host: { enabled: true, members: [] } });
   const a = pool.addMember(dataDir, { name: '同事甲', ...options }), b = pool.addMember(dataDir, { name: '同事乙' });
-  const calls = [], open = new Set(); let delay = 0, linger = 0, streamError = false;
+  const calls = [], open = new Set(); let delay = 0, linger = 0, streamError = false, extra = '';
   const upstream = http.createServer(async (req, res) => {
     let text = ''; for await (const c of req) text += c;
     calls.push({ url: req.url, key: req.headers.authorization, body: JSON.parse(text) });
     res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write('data: {"choices":[{"delta":{"content":"你好"}}]}\n\n');
     if (delay) await new Promise(r => setTimeout(r, delay));
     if (streamError) res.write('data: {"error":{"message":"synthetic error"}}\n\n');
+    if (extra) res.write(extra);
     res.write('data: {"choices":[{"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n');
     if (linger) await new Promise(r => setTimeout(r, linger));
     res.end();
@@ -35,7 +36,7 @@ async function fixture(t, options = {}) {
     method: 'POST', headers: { authorization: 'Bearer ' + secret, 'content-type': 'application/json', ...extra.headers },
     body: JSON.stringify({ model, messages: [{ role: 'user', content: '测试' }], stream: true }), ...extra,
   });
-  return { dataDir, a, b, calls, gateway, origin, call, setDelay: n => { delay = n; }, setLinger: n => { linger = n; }, setStreamError: v => { streamError = v; } };
+  return { dataDir, a, b, calls, gateway, origin, call, setDelay: n => { delay = n; }, setLinger: n => { linger = n; }, setStreamError: v => { streamError = v; }, setExtra: v => { extra = v; } };
 }
 
 test('member secrets are hashed, names stay local, and identical session tags have separate namespaces', t => {
@@ -259,4 +260,49 @@ test('shared views: offline host is not counted as usable and is not shown as "n
   assert.equal(q.usable, 0); assert.equal(q.rows[0].needsLogin, false);
   const html = view.accountCard({ client: { connected: true, address: 'http://10.0.0.2:18766' } }, { shared: true, connection: 'revoked', rows: [row] }, now);
   assert.ok(html.includes('口令已撤销'));
+});
+
+test('host stats: presence, tool, tokens and limits are recorded per colleague and survive a Hub restart', async t => {
+  const { LanPoolStats, usageOf, toolOf } = require('../core/lan-pool-stats');
+  const f = await fixture(t, { rpm: 2 });
+  f.setExtra('data: {"choices":[],"usage":{"prompt_tokens":1200,"completion_tokens":300}}\n\n');
+  await pool.fetchSnapshot({ address: f.origin, key: f.a.secret });
+  for (let i = 0; i < 2; i++) await (await f.call(f.a.secret, undefined, { headers: { authorization: 'Bearer ' + f.a.secret, 'content-type': 'application/json', 'user-agent': 'claude-cli/2.1.0 (external, cli)' } })).text();
+  assert.equal((await f.call(f.a.secret)).status, 429);
+  const members = pool.read(f.dataDir).host.members;
+  let v = f.gateway.stats.view(members, f.gateway.live());
+  const a = v.rows.find(r => r.name === '同事甲'), b = v.rows.find(r => r.name === '同事乙');
+  assert.equal(a.online, true); assert.equal(a.ip, '127.0.0.1'); assert.match(a.client, /^AI Hub /);
+  assert.equal(a.today.requests, 2); assert.equal(a.today.succeeded, 2); assert.equal(a.today.limited, 1);
+  assert.equal(a.today.tokensIn, 2400); assert.equal(a.today.tokensOut, 600);
+  assert.equal(a.today.tools['Claude Code'], 2); assert.equal(a.today.models[model].requests, 2);
+  assert.equal(b.online, false); assert.equal(b.today.requests, 0);
+  assert.deepEqual(v.events.map(e => e.kind).sort(), ['limit', 'online']);
+  assert.equal(v.totals.online, 1); assert.equal(v.totals.requests, 2);
+  // The colleague sees today's numbers too, not only this Hub run.
+  const mine = await pool.fetchSnapshot({ address: f.origin, key: f.a.secret });
+  assert.equal(mine.myUsage.scope, 'today'); assert.equal(mine.myUsage.requests, 2); assert.equal(mine.myUsage.tokens, 3000);
+  f.gateway.stats.flush();
+  v = new LanPoolStats(f.dataDir).view(members);
+  assert.equal(v.rows.find(r => r.name === '同事甲').today.tokensIn, 2400);
+  assert.ok(!fs.readFileSync(path.join(f.dataDir, 'lan-pool', 'usage.json'), 'utf8').includes('测试'), 'no prompt text is stored');
+  // Token counters across the three protocols.
+  assert.deepEqual(usageOf({ type: 'message_start', message: { usage: { input_tokens: 10, cache_read_input_tokens: 90, output_tokens: 1 } } }), { in: 100, out: 1 });
+  assert.deepEqual(usageOf({ type: 'message_delta', usage: { output_tokens: 42 } }), { in: 0, out: 42 });
+  assert.deepEqual(usageOf({ type: 'response.completed', response: { usage: { input_tokens: 7, output_tokens: 3 } } }), { in: 7, out: 3 });
+  assert.equal(toolOf('codex_cli_rs/0.50'), 'Codex'); assert.equal(toolOf(''), '未知');
+});
+
+test('host stats: old days are pruned, a colleague goes offline after the presence window, revocation is logged', t => {
+  const { LanPoolStats, ONLINE_MS } = require('../core/lan-pool-stats');
+  const dir = temp(t); let now = Date.UTC(2026, 10, 1, 2);
+  const s = new LanPoolStats(dir, { now: () => now }), m = { id: 'm1', name: '甲', maxConcurrent: 2, rpm: 60 };
+  s.seen(m, { ip: '::ffff:10.1.2.3' }); s.finish(m, s.request(m, { model }), { ok: true });
+  assert.equal(s.view([m]).rows[0].ip, '10.1.2.3');
+  now += ONLINE_MS + 1000; assert.equal(s.view([m]).rows[0].online, false);
+  s.revoked(m); assert.equal(s.view([m]).events[0].kind, 'revoke');
+  now += 20 * 86400000; s.finish(m, s.request(m, { model }), { ok: false, status: 502 }); s.flush();
+  const kept = Object.keys(JSON.parse(fs.readFileSync(path.join(dir, 'lan-pool', 'usage.json'), 'utf8')).members.m1.days);
+  assert.equal(kept.length, 1);
+  assert.equal(s.view([m]).events[0].kind, 'error');
 });

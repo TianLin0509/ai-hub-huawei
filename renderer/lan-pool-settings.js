@@ -28,7 +28,7 @@
   function render() {
     if (!dialog) return;
     tab ||= current.host?.enabled ? 'host' : 'client';
-    const body = tab === 'client' ? view.clientPanel(current, snapshot) : view.hostPanel(current, { oneTime, invite, confirmRevoke });
+    const body = tab === 'client' ? view.clientPanel(current, snapshot) : view.hostPanel(current, { oneTime, invite, confirmRevoke, dashboard: !!window.__lanPoolDashboardOpen });
     dialog.innerHTML = `<header class="lp-head"><div><h2>号池内网共享</h2><p>同事用自己电脑上的工具，共用主机的号池额度。</p></div>${headerPill()}<button type="button" class="company-api-close" aria-label="关闭">×</button></header>
       <nav class="lp-tabs" aria-label="共享方式"><button type="button" data-lan-tab="client" aria-pressed="${tab === 'client'}"><b>连接共享主机</b><small>我用别人的号池</small></button><button type="button" data-lan-tab="host" aria-pressed="${tab === 'host'}"><b>本机提供共享</b><small>把我的号池给同事用</small></button></nav>
       <div role="status" class="lp-msg company-api-message" data-tone="${esc(messageTone)}" ${message ? '' : 'hidden'}>${esc(message)}</div>
@@ -48,6 +48,7 @@
       const key = address.form.elements.key;
       if (/^[a-f0-9]{48}$/.test(parsed.key) && parsed.address.startsWith('http')) { address.value = parsed.address; key.value = parsed.key; setMessage('已识别地址和口令，点「验证并连接」。', 'ok'); }
     });
+    dialog.querySelector('[data-lan-dashboard]')?.addEventListener('click', () => { dialog.close(); window.__lanPoolDashboardOpen?.(); });
     dialog.querySelector('[data-lan-disconnect]')?.addEventListener('click', () => void act('disconnect'));
     dialog.querySelector('[data-lan-refresh]')?.addEventListener('click', () => void act('refresh'));
     dialog.querySelector('[data-lan-host]')?.addEventListener('submit', event => {
@@ -123,10 +124,11 @@
   }
   function fillSlot(slot) {
     if (!cardData) return;
-    const html = view.accountCard(cardData.settings, cardData.shared);
+    const html = view.accountCard(cardData.settings, cardData.shared, Date.now(), { dashboard: !!window.__lanPoolDashboardOpen });
     if (slot.dataset.html === html) return;
     slot.dataset.html = html; slot.innerHTML = html;
     for (const b of slot.querySelectorAll('[data-lan-copy]')) b.onclick = () => { try { require('electron').clipboard.writeText(b.dataset.lanCopy); notice('地址已复制，可以发给同事'); } catch { notice('复制失败，请手动选中复制', 'error'); } };
+    slot.querySelector('[data-lan-card="dashboard"]')?.addEventListener('click', () => window.__lanPoolDashboardOpen?.());
     slot.querySelector('[data-lan-card="open"]')?.addEventListener('click', () => void open());
     slot.querySelector('[data-lan-card="refresh"]')?.addEventListener('click', async () => {
       try { await invoke('refresh'); } catch (error) { notice(error.message, 'error'); } await refreshSummary();
