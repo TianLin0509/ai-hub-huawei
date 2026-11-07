@@ -607,8 +607,13 @@ async function _onCreate() {
     const title = titleInput ? titleInput.value.trim() : '';
 
     const workspace = await _syncWorkspace();
-    createBtn.textContent = '正在创建成员会话...';
-    const meeting = await ipcRenderer.invoke('create-meeting', {
+    // 创建时按钮上读秒（2026-11-06 用户：等 CodeAgent 要看到等了多久）。
+    const waitUi = require('./wait-progress');
+    createBtn.innerHTML = waitUi.waitHtml({ label: `正在创建 ${slots.length} 个成员会话`, from: Date.now() });
+    const stopCreateTick = waitUi.startWaitTicker(() => createBtn);
+    let meeting;
+    try {
+      meeting = await ipcRenderer.invoke('create-meeting', {
       mode: 'general',
       scene: 'general',
       sceneHint: _sceneHints.some(s => s.id === sceneHint) ? sceneHint : '',
@@ -623,7 +628,8 @@ async function _onCreate() {
       workspaceDraft: !!workspace.draft,
       serialWorkflow: null,
       ...(orchestration ? { orchestration } : {}),
-    });
+      });
+    } finally { stopCreateTick(); }
     if (!meeting || !meeting.id) throw new Error('create-meeting returned empty meeting');
     const onCreated = _presentation.onCreated;
     closeMeetingCreateModal();

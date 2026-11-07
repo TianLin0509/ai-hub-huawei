@@ -87,6 +87,8 @@
   <link rel="stylesheet" href="styles/hw-type.css">
   <link rel="stylesheet" href="styles/hw-sweep.css">
   <link rel="stylesheet" href="styles/ask-aside.css">
+  <link rel="stylesheet" href="styles/turn-error-help.css">
+  <link rel="stylesheet" href="styles/home-recent.css">
   <link rel="stylesheet" href="styles/controls.css" id="controls-layer">
 </head>
 <body>
@@ -668,6 +670,7 @@
   <script src="task-presets.js"></script>
   <script src="floating-input-history.js"></script>
   <script src="edition-trim.js"></script>
+  <script src="whats-new.js"></script>
   <script src="app-update.js"></script>
   <script src="hub-feedback.js"></script>
   <script src="optional-features.js"></script>
@@ -837,6 +840,7 @@
   <script src="meeting-room.js"></script>
   <script src="workflow-config-modal.js"></script>
   <script src="community-welcome.js"></script>
+  <script src="home-recent-boot.js"></script>
   <script src="company-api-settings.js"></script>
   <script src="lan-pool-settings.js"></script>
   <script src="rules.js"></script>
@@ -920,6 +924,14 @@
             </div>
           </div>
           <p class="config-reading-note">默认已从 13px 调到 15px；代码块仍使用等宽字体。公式由本地 KaTeX 离线渲染。</p>
+          <div class="config-field" id="cfg-composer-enter-field">
+            <label for="cfg-composer-enter">回车键</label>
+            <select id="cfg-composer-enter">
+              <option value="send">回车发送，Shift+回车换行</option>
+              <option value="newline">回车换行，Ctrl+回车发送</option>
+            </select>
+            <p class="config-reading-note">单会话、群聊和助理的输入框都按这个来，选择后立即生效。</p>
+          </div>
           <div class="config-field" id="cfg-codeagent-quota-placement-field" hidden>
             <label for="cfg-codeagent-quota-placement">号池额度栏位置</label>
             <select id="cfg-codeagent-quota-placement">

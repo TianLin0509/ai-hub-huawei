@@ -177,8 +177,15 @@
       const approve = act.dataset.teamAct === 'approve';
       const edits = plan.members.map((_m, i) => { const sel = modal.querySelector(`[data-team-account="${i}"]`); return sel ? { account: sel.value,model:modal.querySelector(`[data-team-model="${i}"]`).value } : {}; });
       modal.querySelectorAll('button').forEach(b => { b.disabled = true; });
-      act.textContent = approve ? '正在建会话…' : '正在驳回…';
+      // 建会话时按钮上读秒（2026-11-06 用户：等 CodeAgent 要看到等了多久）。
+      const wait = require('./wait-progress');
+      let stopTick = () => {};
+      if (approve) {
+        act.innerHTML = wait.waitHtml({ label: `正在建 ${plan.members.length} 个会话`, from: Date.now(), hint: '逐个开 CodeAgent 会话' });
+        stopTick = wait.startWaitTicker(() => act);
+      } else act.textContent = '正在驳回…';
       const r = await ipcRenderer.invoke('team:decide', { leadSid, planId: plan.id, approve, note: modal.querySelector('[data-team-note]').value, edits });
+      stopTick();
       if (r && r.ok) { closeModal(); return; }
       const err = modal.querySelector('.team-error');
       err.hidden = false; err.textContent = (r && r.error) || '操作失败';

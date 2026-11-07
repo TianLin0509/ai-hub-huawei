@@ -17,6 +17,8 @@
 const DEFAULT_STORAGE_KEY = 'fi-input-history-v1';
 const DEFAULT_LIMIT = 30;
 const DEFAULT_SESSION_LIMIT = 40;
+// 单条超过这个长度（字符）不进历史：大日志/粘贴块会把 localStorage 配额挤光，连累别的功能。
+const ENTRY_MAX_CHARS = 64 * 1024;
 
 function createFloatingInputHistory({
   storage = null,
@@ -34,12 +36,19 @@ function createFloatingInputHistory({
     }
   }
 
-  function writeAll(map) {
+  function writeAll(map, keepKey = null) {
     if (!storage) return;
-    try {
-      storage.setItem(storageKey, JSON.stringify(map));
-    } catch {
-      // localStorage 满了/被禁：历史是锦上添花，绝不能因此让发送流程炸掉。
+    for (;;) {
+      try {
+        storage.setItem(storageKey, JSON.stringify(map));
+        return;
+      } catch {
+        // localStorage 满了/被禁：历史是锦上添花，绝不能因此让发送流程炸掉。
+        // 配额错误时淘汰最旧的会话历史再试，直到写进去或只剩当前会话。
+        const oldest = Object.keys(map).find(key => key !== keepKey);
+        if (oldest === undefined) return;
+        delete map[oldest];
+      }
     }
   }
 
@@ -52,12 +61,14 @@ function createFloatingInputHistory({
   function push(sessionId, text) {
     if (!sessionId) return [];
     const value = String(text == null ? '' : text);
-    if (!value.trim()) return list(sessionId);
+    if (!value.trim() || value.length > ENTRY_MAX_CHARS) return list(sessionId);
     const map = readAll();
     const previous = Array.isArray(map[sessionId]) ? map[sessionId].filter(i => typeof i === 'string') : [];
     // 连发同一句（重试/催一下）不该在历史里堆成一串同样的东西。
     const deduped = previous.filter(item => item !== value);
     const next = [value, ...deduped].slice(0, limit);
+    // 先删后写，让当前会话排到 key 末尾：淘汰按最近使用而不是最早创建。
+    delete map[sessionId];
     map[sessionId] = next;
 
     const keys = Object.keys(map);
@@ -66,7 +77,7 @@ function createFloatingInputHistory({
       const doomed = keys.filter(key => key !== sessionId).slice(0, keys.length - sessionLimit);
       for (const key of doomed) delete map[key];
     }
-    writeAll(map);
+    writeAll(map, sessionId);
     return next;
   }
 
@@ -152,6 +163,7 @@ const api = {
   DEFAULT_LIMIT,
   DEFAULT_SESSION_LIMIT,
   DEFAULT_STORAGE_KEY,
+  ENTRY_MAX_CHARS,
   createFloatingInputHistory,
   shouldRecallNewer,
   shouldRecallOlder,

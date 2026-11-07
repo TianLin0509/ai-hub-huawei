@@ -58,7 +58,11 @@ function loadConfigJson() {
   try {
     const raw = fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, '');
     return JSON.parse(raw);
-  } catch {
+  } catch (error) {
+    // 主文件损坏（不是不存在）时回退到上一次保存前留下的 .bak，免得设置全回到默认。
+    if (error.code !== 'ENOENT') {
+      try { return JSON.parse(fs.readFileSync(configPath + '.bak', 'utf8').replace(/^﻿/, '')); } catch { /* 没有可用备份 */ }
+    }
     return {};
   }
 }
@@ -206,7 +210,7 @@ function clearConfigCache() {
 function saveConfig(config) {
   const configPath = path.join(getHubDataDir(), 'config.json');
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
+  require('./atomic-write').writeFileAtomic(fs, configPath, JSON.stringify(config, null, 2), { backup: true });
   clearConfigCache();
 }
 

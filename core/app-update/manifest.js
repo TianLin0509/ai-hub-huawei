@@ -71,6 +71,8 @@ function validateManifest(raw) {
   if (!runtime || !/^\d+\.\d+\.\d+/.test(String(runtime.electron || ''))) throw new Error('版本清单缺少运行时信息');
   return {
     schema: 1,
+    // 静默送达的远程总开关：万一哪一版静默替换出问题，发版时在清单里写 quiet:false，所有人立刻停止后台下载和退出时替换。
+    quiet: m.quiet !== false,
     product: String(m.product || ''),
     version: String(m.version).replace(/^v/, ''),
     publishedAt: String(m.publishedAt || ''),

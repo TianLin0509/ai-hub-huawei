@@ -67,6 +67,10 @@ class PromptSubmissionReceipts {
     // 原文离开了输入框且屏幕在跑：记「已送达」——不是已确认（仍可被逐字回报升级），也不提示补发。
     receipt.status = result?.ok === false ? 'failed' : result?.sendStatus === 'queued' ? 'queued'
       : result?.acknowledgementSource === 'pty-input-cleared' ? 'delivered' : 'unconfirmed';
+    // 明确没发出去的回执不再参与后续确认匹配，否则原样重发的新消息会被它抢走确认。
+    if (result?.notSent === true) {
+      this.unresolved.set(receipt.sessionId, (this.unresolved.get(receipt.sessionId) || []).filter(item => item !== receipt));
+    }
     this.onUpdate(this.snapshot(receipt));
   }
 

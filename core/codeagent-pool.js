@@ -472,7 +472,7 @@ function syncSharedConfig(personalDir, targetDir, fsModule = fs, { routeModel = 
     const text = JSON.stringify(next, null, 2) + '\n';
     const file = path.join(targetDir, 'settings.json');
     let current = null; try { current = fsModule.readFileSync(file, 'utf8'); } catch { /* 新目录 */ }
-    if (current !== text) fsModule.writeFileSync(file, text, 'utf8');
+    if (current !== text) require('./atomic-write').writeFileAtomic(fsModule, file, text);
   } catch (error) { errors.push(`settings.json：${error.message}`); }
   for (const name of SHARED_FILES) {
     const src = path.join(personalDir, name);

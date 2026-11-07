@@ -49,14 +49,17 @@ function createAssistantPage({ document, window, ipcRenderer, openSession, close
       before: page.querySelector('.ap-send'), input: page.querySelector('textarea') });
     page.addEventListener('click', event => {
       const link = event.target.closest('.ap-md a[href]');
-      if (link) { event.preventDefault(); const href = link.getAttribute('href') || ''; if (/^https?:\/\//i.test(href)) void ipcRenderer.invoke('open-external-url', href); else { const file = decodeURI(href.replace(/^file:\/\/\/?/i, '')); if (/^[A-Za-z]:[\\/]/.test(file)) void ipcRenderer.invoke('open-path', file); } return; }
+      if (link) { event.preventDefault(); const href = link.getAttribute('href') || ''; if (/^https?:\/\//i.test(href)) void ipcRenderer.invoke('open-external-url', href); else { const file = decodeURI(href.replace(/^file:\/\/\/?/i, '')); if (/^[A-Za-z]:[\\/]/.test(file)) void require('./executable-path').confirmIfExecutable(file).then(ok => { if (ok) return ipcRenderer.invoke('open-path', file); }); } return; }
       const again = event.target.closest('[data-again]');
       if (again) { const q = entries.find(x => x.id === again.dataset.again && x.role === 'user'); if (q) { again.disabled = true; void call('assistant:ask', { text: q.text, to: 'assistant', again: q.id }).catch(e => showMessage?.(e.message)); } return; }
       const b = event.target.closest('[data-ap]'); if (b) void action(b.dataset.ap, b).catch(e => showMessage?.(e.message));
     });
     const input = page.querySelector('textarea');
+    const enterHint = () => { const keys = require('./composer-enter-key'); input.placeholder = keys.placeholderFor(keys.readMode(window.localStorage), '和助理说…'); };
+    enterHint();
+    input.addEventListener('focus', enterHint);
     input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = Math.min(160, input.scrollHeight) + 'px'; });
-    input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); page.querySelector('form').requestSubmit(); } });
+    input.addEventListener('keydown', e => { if (require('./composer-enter-key').isSendKey(e, require('./composer-enter-key').readMode(window.localStorage)) && !e.isComposing) { e.preventDefault(); page.querySelector('form').requestSubmit(); } });
     page.querySelector('form').addEventListener('submit', async e => {
       e.preventDefault(); const text = input.value.trim(); if (!text || sending) return;
       sending = true; input.value = ''; input.style.height = 'auto'; paintComposer();

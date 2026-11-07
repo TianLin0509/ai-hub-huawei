@@ -3,6 +3,7 @@
 const { ipcRenderer } = require('electron');
 
 let currentSessionId = '';
+let currentNoticeId = '';
 
 function formatClock(value) {
   const timestamp = Number(value) || Date.now();
@@ -19,6 +20,7 @@ function formatClock(value) {
 
 function applyPayload(payload = {}) {
   currentSessionId = String(payload.sessionId || '');
+  currentNoticeId = String(payload.noticeId || '');
   const title = document.getElementById('notification-title');
   const body = document.getElementById('notification-body');
   const time = document.getElementById('notification-time');
@@ -49,7 +51,8 @@ window.addEventListener('DOMContentLoaded', () => {
   const card = document.getElementById('notification-card');
   const close = document.getElementById('notification-close');
   card?.addEventListener('click', () => {
-    if (currentSessionId) ipcRenderer.send('desktop-notification:open', { sessionId: currentSessionId });
+    if (currentSessionId) ipcRenderer.send('desktop-notification:open', { sessionId: currentSessionId,
+      ...(currentNoticeId ? { noticeId: currentNoticeId } : {}) });
   });
   close?.addEventListener('click', (event) => {
     event.preventDefault();

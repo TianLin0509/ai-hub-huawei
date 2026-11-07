@@ -36,9 +36,9 @@ function claudeProjectRoots(homeDir = defaultHomeDir()) {
   return roots;
 }
 
-function findTranscriptByCCSessionId(ccSessionId, homeDir = defaultHomeDir()) {
+function findTranscriptByCCSessionId(ccSessionId, homeDir = defaultHomeDir(), projectsRoots = null) {
   if (!ccSessionId) return null;
-  for (const projectsDir of claudeProjectRoots(homeDir)) {
+  for (const projectsDir of projectsRoots || claudeProjectRoots(homeDir)) {
     try {
       const entries = fs.readdirSync(projectsDir, { withFileTypes: true });
       for (const d of entries) {
@@ -64,6 +64,8 @@ function projectSlug(cwd) {
 // failure here must degrade to "resumes without history", never abort the move.
 function migrateTranscriptsForCwdChange(opts = {}) {
   const { toCwd, ccSessionIds = [] } = opts;
+  // configDir：只在这个 CLI 配置目录里找（CodeAgent 账号各有自己的目录，默认根找不到）。
+  const roots = opts.configDir ? [path.join(opts.configDir, 'projects')] : null;
   const homeDir = opts.homeDir || defaultHomeDir();
   const logger = opts.logger || console;
   const result = { copied: [], missing: [], errors: [] };
@@ -73,7 +75,7 @@ function migrateTranscriptsForCwdChange(opts = {}) {
   for (const ccSessionId of ccSessionIds) {
     if (!ccSessionId) continue;
     try {
-      const source = findTranscriptByCCSessionId(ccSessionId, homeDir);
+      const source = findTranscriptByCCSessionId(ccSessionId, homeDir, roots);
       if (!source) {
         result.missing.push(ccSessionId);
         continue;

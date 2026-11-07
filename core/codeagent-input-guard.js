@@ -200,7 +200,9 @@ function createCodeAgentInputGuard(manager, {
           : !before.readFailed && !before.menu && before.screenState === 'idle' ? 'idle' : 'unknown';
         decision = preRunning === 'running' ? 'screen-running' : preRunning === 'idle' ? 'screen-idle' : 'runtime-fallback';
         if (sessionKey(sid) !== targetKey) { log('rejected'); return { ok: false, message: '会话已变化' }; }
-        const runtimeRunning = preRunning === 'unknown' && getSessionRuntimeTruth(manager.getSession(sid)).state === 'running';
+        // 画面认不出时的兜底：主进程 runtimeTruth（只有 Codex 写）或主进程记录的回合进行中（CodeAgent 靠 hook 维护）。
+        const runtimeRunning = preRunning === 'unknown'
+          && (getSessionRuntimeTruth(manager.getSession(sid)).state === 'running' || manager.isAgentTurnActive?.(sid) === true);
         if (preRunning !== 'running' && !runtimeRunning) {
           log('rejected');
           return { ok: false, code: preRunning === 'idle' ? 'codeagent-already-idle' : 'codeagent-running-unknown',

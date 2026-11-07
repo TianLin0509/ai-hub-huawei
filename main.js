@@ -248,7 +248,13 @@ process.stdout.on('error', (e) => { if (e.code !== 'EPIPE') throw e; });
 process.stderr.on('error', (e) => { if (e.code !== 'EPIPE') throw e; });
 process.on('uncaughtException', (e) => {
   if (e && e.code === 'EPIPE') return;
-  throw e;
+  // 先写崩溃文件、弹人话对话框再退出（之前原样 rethrow，用户只看到 Hub 消失）。
+  require('./core/fatal-error-report.js').reportFatal(e, {
+    dataDir: require('./core/data-dir.js').getHubDataDir(),
+    showDialog: (title, content) => require('electron').dialog.showErrorBox(title, content),
+    exit: code => { try { require('electron').app.exit(code); } catch { process.exit(code); } },
+    version: (() => { try { return require('./package.json').version; } catch { return ''; } })(),
+  });
 });
 
 const STARTUP_TRACE = process.env.HUB_STARTUP_TRACE === '1';
@@ -549,6 +555,15 @@ let hubPetController = null;
 // 桌宠「敲键盘」看的是助理会话本轮是否还在跑（CLI hook 报告的状态）。
 const HUB_PET_ASSISTANT_PURPOSES = new Set(['company-assistant', 'hub-assistant']);
 const sessionManager = new SessionManager();
+// 会话的 CLI 进程还在不在：true 在 / false 已退出 / null 说不准（会话没打开、没有进程号）。公司联动与助理共用。
+function sessionProcessAlive(id) {
+  const entry = sessionManager.sessions?.get?.(id);
+  if (!entry) return null; // 会话已关闭由调用方单独判断
+  if (entry.confirmedExit) return false;
+  const pid = Number(entry.pty?.pid);
+  if (!pid) return null;
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'ESRCH' ? false : null; }
+}
 const { SessionTokenUsageService } = require('./main/usage/session-token-usage-service.js');
 const { isSessionViewer } = require('./core/session-observer-policy');
 const { createContentUpdateBatcher } = require('./core/content-update-batcher');
@@ -1068,6 +1083,25 @@ transcriptTap.on('turn-started', (ev) => {
     console.warn('[codex task] turn-started-event broadcast failed:', error && error.message);
   }
 });
+
+// Stop 到了但最后一条没有正文：转成 pending 的回合，延时后收尾（core/stop-pending-settle.js）。
+const stopPendingSettle = require('./core/stop-pending-settle').createStopPendingSettle({
+  manager: sessionManager, getTurnSeq: id => sessionManager.sessions.get(id)?.agentTurnStartSeq || 0,
+});
+// CodeAgent 回合中 CLI 退回宿主 shell：结束这一轮并让界面退出"工作中"（core/cli-exit-watch.js）。
+require('./core/cli-exit-watch').createCliExitWatch({
+  manager: sessionManager,
+  onExited: ({ sessionId, failedAt, kind }) => {
+    const session = sessionManager.getSession(sessionId);
+    sendToRenderer('turn-failed-event', {
+      hubSessionId: sessionId, transcriptPath: session ? session.transcriptPath : null, failedAt,
+      meetingId: session ? session.meetingId : null, kind, signalSource: 'cli-exited-to-shell', turnId: null,
+      message: 'CLI 已退出到系统终端，本轮没有完成；请重连会话后再发消息。',
+      occurrenceId: `cli-exit:${sessionId}:${failedAt}`,
+    });
+  },
+}).start();
+transcriptTap.on('turn-pending', (ev) => { try { stopPendingSettle.onPending(ev); } catch (error) { console.warn('[stop-settle]', error.message); } });
 
 transcriptTap.on('turn-aborted', (ev) => {
   if (!ev || !ev.hubSessionId) return;
@@ -1965,6 +1999,13 @@ function codeAgentIdentityRejection(hubSessionId, current, fields) {
   return identity.identityRejection(fields, sourceId);
 }
 
+// CodeAgent 换身份（/clear、/new、/resume）时，必须工作目录和记录目录都与会话一致才改绑。
+function codeAgentSwitchLocationOk(parsed, session) {
+  if (!session?.cwd || !parsed?.cwd || !parsed?.transcriptPath) return false;
+  try { return sameWorkDir(parsed.cwd, session.cwd) && transcriptBucketMatches(parsed.transcriptPath, session.cwd); }
+  catch { return false; }
+}
+
 function updateSessionTranscriptBinding(hubSessionId, fields = {}) {
   if (!hubSessionId) return null;
   const next = {};
@@ -2505,6 +2546,9 @@ let phoneService = null;
 const promptOperations = registerPromptSubmitIpc(ipcMain, {
   sessionManager, transcriptTap, sendToRenderer,
   onPromptReceipt: receipt => { assistantService?.observePromptReceipt?.(receipt); phoneService?.observeReceipt(receipt); },
+  onUserPrompt: ({ sessionId, text }) => autoTitleManager.maybeAutoTitleSessionFromPrompt({
+    hubSessionId: sessionId, text, submittedAt: Date.now(), signalSource: 'hub_composer',
+  }),
   preparePrompt(request, session) {
     if(session?.purpose==='hub-photo-assistant'){
       if(!assistantService)throw new Error('拍图助理服务尚未就绪，消息未发送');
@@ -2690,6 +2734,8 @@ try {
       ...(process.env.CLAUDE_HUB_E2E === '1' && process.env.CLAUDE_HUB_DATA_DIR && Number(process.env.CLAUDE_HUB_E2E_ASSISTANT_TOOLS_DELAY_MS) > 0
         ? { toolsStartDelayMs: Number(process.env.CLAUDE_HUB_E2E_ASSISTANT_TOOLS_DELAY_MS) } : {}),
       isAgentTurnActive: id => sessionManager.isAgentTurnActive(id),
+      // 助理会话的 CodeAgent 进程退出了，这一问立刻报失败（审计 A3-17，以前要空等 12–24 分钟）。
+      isSessionProcessAlive: id => sessionProcessAlive(id),
       // CodeAgent 的原生记录是 Claude 格式，按 Claude 读最终回答。
       readFinals: meta => { const r = live.read({ ...meta, id: meta.id || meta.hubId, kind: 'claude' }); return r && r.available ? r.records : []; },
       nodeExecutable: process.execPath,
@@ -2730,10 +2776,12 @@ try {
     require('./core/company-assistant/notice-bus').noticeBus().on('notice', notice => {
       sendToRenderer('company-assistant:notice', notice);
       // 点通知打开助理页（页面认这个固定编号），不直接跳进会话。
-      try { void desktopNotificationController?.show({ sessionId: 'company-assistant', title: notice.title, body: notice.text, kind: 'assistant' }); } catch (error) { console.warn('[company-assistant] notification', error.message); }
+      try { void desktopNotificationController?.show({ sessionId: 'company-assistant', title: notice.title, body: notice.text, kind: 'assistant',
+        ...(notice.kind === 'digest' ? { noticeId: notice.id } : {}) }); } catch (error) { console.warn('[company-assistant] notification', error.message); }
     });
     companyAssistantService.startTools();
-    if (optionalFeatures.get('assistant')) companyAssistantService.start();
+    // start 失败（例如磁盘满）不能连带让下面的 IPC 注册落空，否则助理、会议、会议室、PPT 页全部不可用。
+    if (optionalFeatures.get('assistant')) { try { companyAssistantService.start(); } catch (error) { console.error('[company-assistant] 启动出错，继续注册接口：', error && error.message); } }
     const bridgeMcpPlan = sessionManager.extraMcpProvider;
     sessionManager.setExtraMcpProvider(request => companyAssistantService.sessionPlan(request)
       || companyAssistantService.tools.petSessionPlan(request, bridgeMcpPlan ? bridgeMcpPlan(request) : null));
@@ -3505,6 +3553,7 @@ const hookServer = http.createServer((req, res) => {
           && (event === 'pre-compact' || (event === 'session-start' && parsed.source === 'compact'))
           && (!boundClaudeSessionId || incomingClaudeSessionId === boundClaudeSessionId);
         if (compactSignal) {
+          for (const lane of Object.values(companyAssistantService?.lanes || {})) if (lane.job?.sessionId === parsed.sessionId) lane.job.meterCompacted = true; // 三条队列（5.5.11）各自有在答的任务
           sessionManager.emit('claude-local-command-ack', {
             sessionId: parsed.sessionId, command: 'compact',
             phase: event === 'pre-compact' ? 'start' : 'end',
@@ -3519,6 +3568,8 @@ const hookServer = http.createServer((req, res) => {
             event, boundId: boundClaudeSessionId, incomingId: incomingClaudeSessionId,
             source: parsed.source || null, reason: parsed.reason || null, agentId: parsed.agentId || null,
             promptId: parsed.promptId || null,
+            endOptional: event === 'session-start' && isCodeAgentKind(hookTargetSession.kind)
+              && !!boundClaudeSessionId && codeAgentSwitchLocationOk(parsed, hookTargetSession),
           });
           if (verdict.action === 'rebind') {
             const updated = updateSessionTranscriptBinding(parsed.sessionId, {
@@ -4238,7 +4289,7 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
         return { ok: true, version: r.version };
       });
       app.whenReady().then(() => appUpdate.startBackgroundChecks());
-      app.on('will-quit', () => appUpdate.dispose());
+      app.on('will-quit', () => { try { appUpdate.applyOnQuit(); } catch (error) { console.warn('[app-update] 退出时替换出错：', error && error.message); } appUpdate.dispose(); });
     } catch (e) {
       console.warn('[app-update] 一键更新初始化失败：', e && e.message);
     }

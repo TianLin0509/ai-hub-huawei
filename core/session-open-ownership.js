@@ -13,6 +13,7 @@ function openOwnershipDatabase(filename) {
   // journal mode, even with busy_timeout set. Retry only this idempotent setup;
   // ownership transactions must still fail normally when their lock is busy.
   let deadline;
+  let quarantined = false;
   const pause = new Int32Array(new SharedArrayBuffer(4));
   for (;;) {
     let db;
@@ -33,6 +34,18 @@ function openOwnershipDatabase(filename) {
       // Close also rolls back incomplete setup and releases the old journal
       // mode's locks before another initializer can finish switching to WAL.
       try { db?.close(); } catch (closeError) { error.closeError = closeError; throw error; }
+      // 库文件损坏（CORRUPT 11 / NOTADB 26）：协调库只存「哪个 Hub 打开了哪个会话」，随时可重建。
+      // 改名隔离后重来一次，避免启动时直接抛出、双击没反应。
+      if (!quarantined && error.code === 'ERR_SQLITE_ERROR' && [11, 26].includes(error.errcode & 255)) {
+        quarantined = true;
+        const stamp = new Date().toISOString().replace(/[-:.]/g, '').slice(0, 15);
+        try {
+          for (const suffix of ['', '-wal', '-shm']) {
+            if (fs.existsSync(filename + suffix)) fs.renameSync(filename + suffix, `${filename}${suffix}.corrupt-${stamp}`);
+          }
+        } catch { throw error; }
+        continue;
+      }
       if (error.code !== 'ERR_SQLITE_ERROR' || (error.errcode & 255) !== 5) throw error;
       // 1 秒在机器满载时不够：32 路并发压测里 11/32 次初始化报 database is locked
       // （2026-09-26，合并闸门也因此失败过）。每次尝试都立即失败并释放连接，放宽窗口不会造成

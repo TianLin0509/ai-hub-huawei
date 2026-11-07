@@ -253,7 +253,7 @@ function createAskAsideService({ sessionManager, getHubDataDir, sendToRenderer =
     if (!includeDormant && (CLAUDE_RE.test(kind) || CODEX_RE.test(kind) || DSH_RE.test(kind))) return liveTarget(sid, session);
     if (!KIND_RE.test(kind)) return { supported: false, reason: '问一下支持 CodeAgent、Claude Code、Codex 和 DSH 会话' };
     const ccSessionId = session.ccSessionId;
-    if (!UUID_RE.test(String(ccSessionId || ''))) return { supported: false, reason: '这个会话还没聊过，没有可以问的内容' };
+    if (!UUID_RE.test(String(ccSessionId || ''))) return { supported: false, notReady: true, reason: '这个会话还没聊过，没有可以问的内容' };
     let config;
     try { config = resolveConfig(); } catch (error) { return { supported: false, reason: error.message }; }
     if (session.codeagentPoolAccount) {
@@ -325,7 +325,7 @@ function createAskAsideService({ sessionManager, getHubDataDir, sendToRenderer =
     const maxQuestion = meetingId ? MAX_MEETING_QUESTION : MAX_QUESTION;
     if (!q || q.length > maxQuestion || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(q)) throw new Error(`请输入有效问题（最多 ${maxQuestion} 字）`);
     const first = target(sid, !!meetingId);
-    if (!first.supported) throw new Error(meetingId ? `会议上下文尚未就绪，可稍后重试：${first.reason}` : first.reason);
+    if (!first.supported) throw Object.assign(new Error(meetingId ? `会议上下文尚未就绪，可稍后重试：${first.reason}` : first.reason), first.notReady && meetingId ? { code: 'MEETING_CONTEXT_NOT_READY' } : {});
     if (meetingId && !first.model) throw new Error('会议模型尚未就绪，请等原会话确定模型后稍后重试');
     const mode = resolveMode();
     if (meetingId && mode.input === 'arg') throw new Error('会议问答需要标准输入传递完整材料；请把问一下输入方式设为 stdin 后重试');

@@ -16,8 +16,25 @@ const SPEEDS = {
 };
 const INTERVALS = [0, 1, 3, 5, 10];
 const DEFAULT_INTERVAL_MIN = 3;
-const read = (p, fallback) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return fallback; throw e; } };
-function write(p, data) { fs.mkdirSync(path.dirname(p), { recursive: true }); const tmp = p + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8'); fs.renameSync(tmp, p); }
+const QUESTION_READY_WAIT_MS = 3 * 60000; // 问一下遇到「理解会话未就绪」最多排队等这么久
+// 读失败（断电后留下空文件或半截 JSON）时回退到 .bak；仍不行才抛原错误。
+const read = (p, fallback) => {
+  try { return JSON.parse(fs.readFileSync(p, 'utf8')); }
+  catch (e) {
+    if (e.code === 'ENOENT') return fallback;
+    try { return JSON.parse(fs.readFileSync(p + '.bak', 'utf8')); } catch { throw e; }
+  }
+};
+const lastBackup = new Map();
+function write(p, data) {
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  // 写入前把当前的好文件留一份 .bak（同一文件最多 30 秒一次，录制中每秒会写多次）。
+  const now = Date.now();
+  if (now - (lastBackup.get(p) || 0) > 30000) {
+    try { if (fs.statSync(p).size > 0) { fs.copyFileSync(p, p + '.bak'); lastBackup.set(p, now); } } catch {}
+  }
+  const tmp = p + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8'); fs.renameSync(tmp, p);
+}
 class MeetingCompanion {
   constructor(a, deps = {}) {
     this.a = a; this.deps = deps; this.root = path.join(a.workspace, 'meetings'); this.now = deps.now || (() => Date.now());
@@ -26,7 +43,18 @@ class MeetingCompanion {
     this.recording = new MeetingRecording(this);
     this.frames = new MeetingFrames(this); this.tools = new MeetingTools(this);
   }
-  ids() { try { return fs.readdirSync(this.root).filter(s => /^[a-f0-9-]{36}$/.test(s)); } catch { return []; } }
+  // 只返回读得出来的会议：单场 meeting.json 坏了不能拖垮其他会议和助理的启动。
+  // 坏的那场记在 corrupt 里（录像和音频文件原样保留），读成功过一次的不再重复解析。
+  ids() {
+    let names = [];
+    try { names = fs.readdirSync(this.root).filter(s => /^[a-f0-9-]{36}$/.test(s)); } catch { return []; }
+    this.good ||= new Set(); this.corrupt ||= new Map();
+    return names.filter(id => {
+      if (this.good.has(id)) return true;
+      try { this.load(id); this.good.add(id); this.corrupt.delete(id); return true; }
+      catch (e) { this.corrupt.set(id, e.message); return false; }
+    });
+  }
   dir(id) { if (!/^[a-f0-9-]{36}$/.test(String(id))) throw new Error('会议编号无效'); return path.join(this.root, id); }
   load(id) { const m = read(path.join(this.dir(id), 'meeting.json'), null); if (!m) throw new Error('会议不存在'); return m; }
   trackPending(m) {
@@ -59,6 +87,13 @@ class MeetingCompanion {
   }
   close() { clearInterval(this.timer); this.timer = null; this.asr.close(); this.tools.close(); this.frames.close(); }
   ownsSession(id) { return !!id && this.ids().some(k => { const m = this.load(k); return m.sessionId === id || m.questionSessionId === id; }); }
+  // 用户反馈：历史会议改不了名字。空名字不改；已有会话和纪要内容不受影响。
+  rename(id, title) {
+    const m = this.load(id), next = String(title || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+    if (!next) throw new Error('会议名称不能为空');
+    if (next !== m.title) { m.title = next; this.save(m); }
+    return m;
+  }
   list() { return this.ids().map(id => { const m = this.load(id); return { id, title: m.title, startedAt: m.startedAt, state: m.state, pages: m.events.filter(e => e.kind === 'slide').length }; }).sort((a, b) => b.startedAt - a.startedAt); }
   create({ title, sourceName, audio = [], speed = 'normal' } = {}) {
     this.start();
@@ -274,7 +309,18 @@ class MeetingCompanion {
       const latest = this.load(m.id);
       if (latest.questionJob?.token !== job.token) return;
       latest.questionJob.requestId = result.id; latest.questionJob.state = 'queued'; this.save(latest);
-    } catch (error) { if (this.load(m.id).questionJob?.token === job.token) this.fail(m.id, error, 'questionJob'); }
+    } catch (error) {
+      const cur = this.load(m.id);
+      if (cur.questionJob?.token === job.token) {
+        // 理解会话还没答完第一轮（开会第一分钟、轮换会话后）：问题留在队列里等它就绪，下一轮自动再发；等太久才报错。
+        const q = cur.answers.find(x => x.id === question.id);
+        if (error.code === 'MEETING_CONTEXT_NOT_READY' && q && q.state === 'queued') {
+          q.waitingSince ||= this.now();
+          if (this.now() - q.waitingSince < QUESTION_READY_WAIT_MS) { q.waiting = '等会议理解会话就绪'; cur.questionJob = null; this.save(cur); return; }
+        }
+        this.fail(m.id, error, 'questionJob');
+      }
+    }
   }
   async runQuestion(m) {
     if (m.questionCleanupError) return;

@@ -1,7 +1,7 @@
 'use strict';
 
 // One persistent menu keeps display controls reachable from sessions and views.
-function initToolbarMore({ document, zoom }) {
+function initToolbarMore({ document, zoom, exportConversation = null }) {
   const button = document.getElementById('btn-toolbar-more');
   const menu = document.getElementById('toolbar-more-menu');
   const actions = document.getElementById('toolbar-more-actions');
@@ -22,6 +22,7 @@ function initToolbarMore({ document, zoom }) {
   item('重置缩放', '1:1', () => zoom(0));
   const notify = item('完成通知', '', () => notification()?.click());
   if (!require('../core/distribution').featureEnabled('completionNotification')) notify.control.style.display = 'none';
+  const exporter = exportConversation ? item('导出这段对话', '.md', () => exportConversation.run()) : null;
   notify.control.className = 'ho-notify';
   notify.control.setAttribute('role', 'menuitemcheckbox');
   function syncNotification() {
@@ -36,7 +37,10 @@ function initToolbarMore({ document, zoom }) {
     event.stopPropagation();
     menu.hidden = !menu.hidden;
     button.setAttribute('aria-expanded', String(!menu.hidden));
-    if (!menu.hidden) syncNotification();
+    if (!menu.hidden) {
+      syncNotification();
+      if (exporter) exporter.control.style.display = exportConversation.available() ? '' : 'none';
+    }
   });
   menu.addEventListener('click', event => { if (event.target.closest('button')) close(); });
   document.addEventListener('click', event => { if (!menu.contains(event.target)) close(); });

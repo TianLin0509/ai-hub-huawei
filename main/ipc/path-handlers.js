@@ -45,8 +45,9 @@ function registerPathIpc(ipcMain, deps = {}) {
     try {
       const stat = await fs.promises.stat(filePath);
       if (stat.size > 5 * 1024 * 1024) return { error: 'file too large (>5MB)' };
-      const content = await fs.promises.readFile(filePath, 'utf-8');
-      return { content };
+      // 不再写死 UTF-8：按 BOM / 严格 UTF-8 / GBK 回退解码，并把实际编码带回给预览。
+      const { content, encoding } = require('../../core/text-file-decoding').decodeTextBuffer(await fs.promises.readFile(filePath));
+      return { content, encoding };
     } catch (e) {
       return { error: String(e && e.message || e) };
     }

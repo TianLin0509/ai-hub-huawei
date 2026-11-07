@@ -49,8 +49,9 @@ function registerFileManagerIpc(ipcMain, deps = {}) {
       const fakeClipboard = require('../../core/e2e-desktop-sandbox').activeFakeClipboard();
       if (fakeClipboard) { fakeClipboard.writeFiles(paths); return { ok: true }; }
       if (process.platform !== 'win32') throw new Error('文件剪贴板当前仅支持 Windows');
-      const literals = paths.map(value => `'${value.replace(/'/g, "''")}'`).join(',');
-      await exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; Set-Clipboard -LiteralPath @(${literals})`], { windowsHide: true, timeout: 15000 });
+      // 路径经环境变量(JSON)传入，不拼进命令串：PowerShell 会把弯引号也当单引号，拼接会被文件名注入命令。
+      await exec('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', "$ErrorActionPreference='Stop'; Set-Clipboard -LiteralPath @($env:HUB_CLIP_PATHS | ConvertFrom-Json)"],
+        { windowsHide: true, timeout: 15000, env: { ...process.env, HUB_CLIP_PATHS: JSON.stringify(paths) } });
     } else if (p.kind === 'image') {
       if (paths.length !== 1) throw new Error('请选择一张图片');
       const picture = electron.nativeImage.createFromPath(paths[0]);

@@ -4,7 +4,7 @@
 // 每条提醒的 id 固定（同一件事只提醒一次）；每小时最多几条（默认 3），超出的下一轮再算、顺延发出。
 const D = require('./data');
 
-const PRIORITY = { reminder: -1, 'meeting-prep': 0, overbooked: 1, 'commitment-due': 2, 'awaiting-reply': 3, keyword: 4, 'day-summary': 5, brief: 0 };
+const PRIORITY = { reminder: -1, digest: 0, 'meeting-prep': 0, overbooked: 1, 'commitment-due': 2, 'awaiting-reply': 3, keyword: 4, 'day-summary': 5, brief: 0 };
 const minutesOf = hhmm => { const [h, m] = String(hhmm || '').split(':').map(Number); return (Number(h) || 0) * 60 + (Number(m) || 0); };
 const nowMinutes = now => { const d = D.dateParts(now); return d ? d.hour * 60 + d.minute : NaN; };
 const isWorkday = (now, settings) => (settings.workdays || [1, 2, 3, 4, 5]).includes(new Date(D.dayKey(now) + 'T00:00:00Z').getUTCDay());
@@ -58,7 +58,7 @@ function dueNotices({ snapshot, settings, now, commitments = [], sessionId = nul
   }
   // 4. 等你回复太久（上班时间里才提醒）
   const waitMs = (Number(settings.waitHours) || 4) * 3600000;
-  if (minute >= 9 * 60 && minute < 20 * 60) {
+  if (!(Number(settings.digestHours) > 0) && minute >= 9 * 60 && minute < 20 * 60) {
     for (const m of D.awaiting(snapshot, settings)) {
       if (done.has(m.sourceId) || !Number.isFinite(m.since) || now - m.since < waitMs) continue;
       add({ id: `await:${m.conv}:${m.key}`, kind: 'awaiting-reply', title: `${D.short(m.sender, 12)} ${m.needsReplyReview ? '@你的消息已过' : '等你回复'} ${Math.round((now - m.since) / 3600000)} 小时`,

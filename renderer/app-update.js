@@ -31,6 +31,7 @@
   .au-plan { margin-left: auto; text-align: right; font-size: 12px; color: var(--fg-muted, #6b7080); }
   .au-plan b { display: block; color: var(--fg-default, #1f2330); font-size: 13px; }
   .au-notes { margin: 0 0 12px; padding-left: 18px; }
+  .au-quiet { display: flex; align-items: center; gap: 6px; margin: 10px 0 6px; font-size: 12px; color: var(--fg-muted, #6b7080); cursor: pointer; }
   .au-notes li { margin: 2px 0; }
   .au-section { font-size: 12px; font-weight: 600; color: var(--fg-muted, #6b7080); margin: 10px 0 6px; }
   .au-progress { height: 8px; border-radius: 99px; background: var(--surface-sunken, #eeedf4); overflow: hidden; }
@@ -149,6 +150,7 @@
         + `<div class="au-plan"><b>${plan.kind === 'incremental' ? '程序更新（不含运行库）' : '完整安装包'} · ${mb(plan.bytes)}</b>${esc(plan.reason)}</div>` : '')
       + '</div>';
     let body = versions, foot = '';
+    const quietBox = s.quietFeature ? `<label class="au-quiet"><input type="checkbox" data-au="quiet"${s.quietEnabled === false ? '' : ' checked'}> 小版本自动更新：后台下载，下次打开 Hub 时生效，不打断工作</label>` : '';
     if (s.phase === 'checking') {
       body += '<div class="au-msg info">正在向各个更新源查询最新版本…</div>';
       foot = '<button class="au-btn" data-au="close">关闭</button>';
@@ -185,7 +187,7 @@
     }
     dialog.innerHTML = `<div class="au-head"><img src="../claude-wx.ico" alt=""><div class="au-title"><strong>软件更新</strong><span>${esc(productName)}${distribution.editionBadge ? ' · ' + esc(distribution.editionBadge) : ''}</span></div>`
       + '<button class="au-close" data-au="close" aria-label="关闭">×</button></div>'
-      + `<div class="au-body">${body}</div><div class="au-foot">${foot}</div>`;
+      + `<div class="au-body">${body}${quietBox}</div><div class="au-foot">${foot}</div>`;
   }
 
   function openDialog() {
@@ -204,6 +206,7 @@
     const action = event.target.closest('[data-au]')?.dataset.au;
     if (!action) return;
     try {
+      if (action === 'quiet') { await ipcRenderer.invoke('app-update:set-quiet', event.target.checked); return; }
       if (action === 'close') { confirmInfo = null; dialog?.close(); }
       else if (action === 'retry') { await ipcRenderer.invoke('app-update:check'); }
       else if (action === 'download') {
@@ -296,7 +299,8 @@
     let pill = document.getElementById('hub-update-pill');
     // 「有新版本」改由弹窗 + 设置红点提醒；标题栏只在下载中 / 已就绪时提示进度和重启。
     const wait = state && state.restartWait;
-    const show = wait || (state && ['ready', 'downloading'].includes(state.phase) && state.latest && state.plan?.kind !== 'none');
+    // 静默送达的小版本在后台下载、关闭时替换，标题栏不提示；用户自己从设置打开更新窗口时照常能看到。
+    const show = wait || (state && !state.quiet && ['ready', 'downloading'].includes(state.phase) && state.latest && state.plan?.kind !== 'none');
     if (!show) { pill?.remove(); return; }
     if (!pill) {
       pill = document.createElement('button');
@@ -345,7 +349,11 @@
     const r = initial && initial.lastResult;
     if (r) {
       void ipcRenderer.invoke('app-update:dismiss-result');
-      if (r.ok) toast(`✅ 已更新到 <b>v${esc(r.version)}</b>`);
+      // 有更新日志时右下角会列出这次多了什么（renderer/whats-new.js），这里就不再多弹一条。
+      if (r.ok) { if (!window.__whatsNew?.hasUnread?.()) toast(`✅ 已更新到 <b>v${esc(r.version)}</b>`); }
+      // 静默替换失败时脚本已回滚，下一版还会再试，不打扰用户；原因留在日志里。
+      else if (r.quiet && !r.restoreFailed) console.warn('[app-update] 静默更新没有完成：', r.reason);
+      else if (r.quiet) toast(`⚠️ 后台更新到 v${esc(r.version)} 没有完成，也没能恢复原来的文件：${esc(r.reason)}。如果用着不正常，请用完整安装包重装。`, 30000);
       else toast(`⚠️ 更新到 v${esc(r.version)} 没有完成${r.rolledBack ? '，已恢复原来的版本' : ''}：${esc(r.reason)}`, 15000);
     }
   }).catch(() => {});

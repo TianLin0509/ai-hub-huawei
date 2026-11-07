@@ -668,6 +668,8 @@ test('actual renderer key handler keeps IME, popup Enter/Esc, ordinary send and 
   const handle = vm.runInNewContext(`(e) => {${match[1]}\n}`, {
     codeagentSkills: f.controller, sendInput: () => { sends += 1; }, inputHistory: null,
     isNativeAgent: () => false, sessions: new Map(), sessionId: 'test', terminal: { focus: () => { focuses += 1; } },
+    focusAfterSend: () => { focuses += 1; },
+    require: id => require(path.join(__dirname, '..', 'renderer', id)), localStorage: { getItem: () => null },
   });
   f.input.textContent = '/ins'; f.caret(4); f.input.dispatchEvent(event('input')); await new Promise(setImmediate);
   handle(event('keydown', { key: 'Enter', isComposing: true }));

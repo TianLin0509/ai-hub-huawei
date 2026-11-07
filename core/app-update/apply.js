@@ -16,8 +16,11 @@ const { unpackPayload } = require('./payload');
 const HELPER = String.raw`param([string]$Plan, [switch]$Elevated)
 $ErrorActionPreference = 'Stop'
 $p = Get-Content -LiteralPath $Plan -Raw -Encoding UTF8 | ConvertFrom-Json
-function Write-Result($ok, $reason, $rolledBack) {
-  $r = [ordered]@{ ok = $ok; version = $p.version; from = $p.from; reason = $reason; rolledBack = $rolledBack; elevated = [bool]$Elevated; at = (Get-Date).ToString('o') }
+# 第一时间留下「已开始」标记：主进程要看到它才会退出（脚本被组策略、杀软拦住时主进程不退出，用户还能继续用）。
+if ($p.cancelFile -and -not $Elevated -and (Test-Path -LiteralPath $p.cancelFile)) { exit 0 }
+if ($p.startedFile -and -not $Elevated) { try { Set-Content -LiteralPath $p.startedFile -Value (Get-Date).ToString('o') -Encoding ASCII } catch {} }
+function Write-Result($ok, $reason, $rolledBack, $restoreFailed = $false) {
+  $r = [ordered]@{ ok = $ok; version = $p.version; from = $p.from; reason = $reason; rolledBack = $rolledBack; restoreFailed = [bool]$restoreFailed; elevated = [bool]$Elevated; quiet = [bool]$p.quiet; at = (Get-Date).ToString('o') }
   ($r | ConvertTo-Json -Compress) | Set-Content -LiteralPath $p.resultFile -Encoding UTF8
 }
 function Relaunch {
@@ -34,15 +37,20 @@ function Get-Leftovers {
   $dir = ([string]$p.appDir).TrimEnd('\') + '\'
   @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $PID -and $_.Path -and $_.Path.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase) })
 }
+# 其中真正开着窗口的 Hub（另开的，或用户刚关又开的）；GPU、终端这类残留子进程没有主窗口。
+# 自己算 SHA256，不用 Get-FileHash：从 PowerShell 7 终端或 CI 服务里拉起时会继承 7 的 PSModulePath，
+# 5.1 自带的 Get-FileHash 就认不出来，替换整个失败（11-07 CI 实测）。
+function Get-Sha256($path) { $s = [IO.File]::OpenRead($path); try { $a = [Security.Cryptography.SHA256]::Create(); try { return ([BitConverter]::ToString($a.ComputeHash($s)) -replace '-', '') } finally { $a.Dispose() } } finally { $s.Dispose() } }
+function Get-OpenWindows { @(Get-Leftovers | Where-Object { $_.MainWindowHandle -ne 0 }) }
 function Test-Writable($dir) {
   try { $t = Join-Path $dir ('.hub-update-write-test-' + $PID); [IO.File]::WriteAllText($t, 'x'); Remove-Item -LiteralPath $t -Force; return $true } catch { return $false }
 }
 # 替换失败的原因分开说：没权限 / 被占用，并附系统原话（以前一律写「被占用」，权限问题也被说成占用）。
 function Explain($err, $rel) {
   $e = $err.Exception; $msg = $e.Message
-  if ($e -is [UnauthorizedAccessException] -or $msg -match 'denied|拒绝') { return "替换 $rel 失败：没有写入安装目录的权限（$msg）" }
   $left = @(Get-Leftovers | ForEach-Object { $_.Name + '(' + $_.Id + ')' }) -join '、'
   if ($left) { return "替换 $rel 失败：文件被占用，这些程序还在运行：$left（$msg）" }
+  if ($e -is [UnauthorizedAccessException] -or $msg -match 'denied|拒绝') { return "替换 $rel 失败：没有写入安装目录的权限（$msg）" }
   return "替换 $rel 失败：文件被占用，可能另一个窗口还开着（$msg）"
 }
 function Replace-Files {
@@ -57,17 +65,24 @@ function Replace-Files {
       if ($existed) { New-Item -ItemType Directory -Force -Path (Split-Path $bak) | Out-Null; Copy-Item -LiteralPath $dest -Destination $bak -Force }
       $done += [pscustomobject]@{ dest = $dest; bak = $bak; existed = $existed }
       New-Item -ItemType Directory -Force -Path (Split-Path $dest) | Out-Null
-      $copied = $false
-      for ($i = 0; $i -lt 40 -and -not $copied; $i++) {
-        try { Copy-Item -LiteralPath (Join-Path $p.newDir $f.path) -Destination $dest -Force; $copied = $true }
-        catch {
-          # 没权限重试也没用，直接报；被占用等 0.5 秒再试，最多 20 秒。
-          if ($i -eq 39 -or $_.Exception -is [UnauthorizedAccessException]) { throw (Explain $_ $f.path) }
+      # 先写到同目录的临时名并核对，再一步换上：中途断电、关机或脚本被结束时，原文件要么是旧的要么是新的，不会只剩半截。
+      $tmp = $dest + '.hub-new'
+      $old = $dest + '.hub-old'
+      try { Copy-Item -LiteralPath (Join-Path $p.newDir $f.path) -Destination $tmp -Force } catch { throw (Explain $_ $f.path) }
+      $h = (Get-Sha256 $tmp).ToLower()
+      if ($h -ne $f.sha256) { throw "替换后 $($f.path) 校验不一致" }
+      $swapped = $false
+      for ($i = 0; $i -lt 40 -and -not $swapped; $i++) {
+        try {
+          if ($existed) { [IO.File]::Replace($tmp, $dest, $old) } else { [IO.File]::Move($tmp, $dest) }
+          $swapped = $true
+        } catch {
+          # 被占用等 0.5 秒再试，最多 20 秒。
+          if ($i -eq 39) { throw (Explain $_ $f.path) }
           Start-Sleep -Milliseconds 500
         }
       }
-      $h = (Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash.ToLower()
-      if ($h -ne $f.sha256) { throw "替换后 $($f.path) 校验不一致" }
+      Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
     }
     if ($p.simulateFailure) { throw $p.simulateFailure }
     Write-Result $true '' $false
@@ -77,13 +92,14 @@ function Replace-Files {
     $reason = $_.Exception.Message
     $restored = $true
     foreach ($d in $done) {
+      Remove-Item -LiteralPath ($d.dest + '.hub-new') -Force -ErrorAction SilentlyContinue
       try {
         # 还没被换掉的（比如没权限、第一次复制就失败）不用再写回，免得写回本身也失败、误报「没能恢复」。
-        if ($d.existed) { if ((Get-FileHash -LiteralPath $d.dest -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $d.bak -Algorithm SHA256).Hash) { Copy-Item -LiteralPath $d.bak -Destination $d.dest -Force } }
+        if ($d.existed) { if ((Get-Sha256 $d.dest) -ne (Get-Sha256 $d.bak)) { Copy-Item -LiteralPath $d.bak -Destination $d.dest -Force } }
         elseif (Test-Path -LiteralPath $d.dest) { Remove-Item -LiteralPath $d.dest -Force }
       } catch { $restored = $false }
     }
-    Write-Result $false $reason $restored
+    Write-Result $false $reason $restored (-not $restored)
   }
 }
 function Is-Cancelled($e) {
@@ -95,14 +111,20 @@ function Is-Cancelled($e) {
 # 管理员副本（2026-10-30）：只替换文件、写结果，不重新打开程序——由普通权限的那一份负责，免得 Hub 以管理员身份运行。
 if ($Elevated) { Replace-Files; exit 0 }
 
+# 多开时两个窗口可能先后退出，各起一个脚本：只让先到的那个干活，它结束时系统自动释放。
+try { $script:helperLock = [IO.File]::Open((Join-Path $p.stagingDir 'helper.lock'), 'OpenOrCreate', 'ReadWrite', 'None') } catch { Relaunch; exit 0 }
+
 $deadline = (Get-Date).AddSeconds([int]$p.waitSeconds)
 while ($p.pid -and (Get-Process -Id ([int]$p.pid) -ErrorAction SilentlyContinue)) {
+  if ($p.cancelFile -and (Test-Path -LiteralPath $p.cancelFile)) { exit 0 }
   if ((Get-Date) -gt $deadline) { Write-Result $false '等待程序退出超时，没有替换任何文件' $false; Relaunch; exit 1 }
   Start-Sleep -Milliseconds 300
 }
 # 主进程退了，子进程可能还要一会儿（GPU、终端等）；最多再等 leftoverWaitSeconds 秒，还在就照常尝试，失败时报出名字。
 $leftDeadline = (Get-Date).AddSeconds([int]$p.leftoverWaitSeconds)
 while ((Get-Date) -lt $leftDeadline -and (Get-Leftovers).Count) { Start-Sleep -Milliseconds 500 }
+# 静默替换是顺手的事：还有 Hub 窗口开着（另开的，或用户刚关又开）就不动，留给下次退出。
+if ($p.quiet -and (Get-OpenWindows).Count) { exit 0 }
 
 if (Test-Writable $p.resourcesDir) { Replace-Files }
 else {
@@ -126,7 +148,7 @@ Relaunch
 function stagingPaths(dataDir) {
   const root = path.join(dataDir, 'app-update');
   return { root, downloads: path.join(root, 'downloads'), newDir: path.join(root, 'new'), plan: path.join(root, 'plan.json'),
-    helper: path.join(root, 'apply-update.ps1'), result: path.join(root, 'last-result.json') };
+    helper: path.join(root, 'apply-update.ps1'), result: path.join(root, 'last-result.json'), started: path.join(root, 'helper-started.flag'), cancel: path.join(root, 'helper-cancelled.flag') };
 }
 
 // 解包并写替换计划；不动安装目录。
@@ -142,9 +164,12 @@ function stageIncremental({ dataDir, payloadFile, resourcesDir, version, from, e
   const p = stagingPaths(dataDir);
   fs.rmSync(p.newDir, { recursive: true, force: true });
   fs.mkdirSync(p.newDir, { recursive: true });
-  const files = unpackPayload(payloadFile, p.newDir, { resourcesDir });
+  // app.asar 放最后换：中途断掉时版本号还是旧的，下次检查发现文件对不上，会改下完整更新包补齐；反过来就再也不会更新了。
+  const unpacked = unpackPayload(payloadFile, p.newDir, { resourcesDir });
+  const files = [...unpacked.filter(f => f.path !== 'app.asar'), ...unpacked.filter(f => f.path === 'app.asar')];
   const plan = { version, from, pid, exe, args, relaunch, waitSeconds: 90, resourcesDir, appDir: path.dirname(path.resolve(resourcesDir)), leftoverWaitSeconds,
-    newDir: p.newDir, stagingDir: p.root, resultFile: p.result, files, ...(simulateFailure ? { simulateFailure } : {}), ...(elevateMode ? { elevateMode } : {}) };
+    newDir: p.newDir, stagingDir: p.root, resultFile: p.result, startedFile: p.started, cancelFile: p.cancel, files, ...(simulateFailure ? { simulateFailure } : {}), ...(elevateMode ? { elevateMode } : {}) };
+  try { fs.rmSync(p.started, { force: true }); fs.rmSync(p.cancel, { force: true }); } catch (_) {}
   fs.writeFileSync(p.plan, JSON.stringify(plan, null, 2), 'utf8');
   fs.writeFileSync(p.helper, '﻿' + HELPER, 'utf8');
   return { plan, paths: p, needsAdmin: !canWriteDir(resourcesDir) };

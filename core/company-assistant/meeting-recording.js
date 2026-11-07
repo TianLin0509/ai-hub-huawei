@@ -58,7 +58,14 @@ class MeetingRecording {
       rec.savedThrough = Math.max(rec.savedThrough, at); return;
     }
     if (r.kind === 'recording-finish') {
-      if (at < segment.at || !segment.bytes) throw new Error('录制分段未完整保存');
+      if (at < segment.at) throw new Error('录制分段未完整保存');
+      if (!segment.bytes) {
+        // 编码器一个字节都没吐出就结束（刚切分段、刚开始就停）：重试多少次都不会变，不能卡死结束流程。
+        // 标记为 empty（不进回放列表），记一条缺口，正常结束。
+        segment.end = at; segment.status = 'empty'; rec.savedThrough = Math.max(rec.savedThrough, at);
+        rec.gaps.push({ at: segment.at, end: Math.max(at, segment.at), reason: segment.full ? '完整录像没有录到内容' : '该分段没有录到内容' });
+        return;
+      }
       segment.end = at; segment.status = 'ready'; rec.savedThrough = Math.max(rec.savedThrough, at);
       if (segment.full && !segment.durationFixed && !this.repairs.has(m.id)) { segment.durationMs = this.m.time(r.durationMs ?? segment.durationMs ?? at - segment.at); this.repair(m.id); }
       return;

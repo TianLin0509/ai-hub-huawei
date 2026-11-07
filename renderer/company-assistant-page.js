@@ -54,6 +54,10 @@ function todayFolded(storage, width) {
 }
 function saveTodayFolded(storage, folded) { try { storage?.setItem(TODAY_FOLD_KEY, folded ? '1' : '0'); } catch { /* 存不了只影响下次默认 */ } }
 // 「今天」栏标题下的一句状态和空列表说明。数据正在分批更新时如实说「暂显示上次完成的」，不说成数据没取全。
+// 「今天」栏最多列几条提醒：按时间新的在前取（服务端给的是新到旧，这里不再依赖顺序）。
+function latestNotices(notices, limit = 2) {
+  return (notices || []).filter(n => n.kind !== 'brief').slice().sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, limit);
+}
 function todayStatus(d = {}, clock = at => String(at)) {
   const b = d.brief, sections = (b?.sections || []).filter(s => s.items?.length);
   const updating = !!d.updating?.length;
@@ -75,6 +79,8 @@ function dayTitle(day) {
   if (!y || !m || !d) return '';
   return `${m}月${d}日 周${'日一二三四五六'[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]}`;
 }
+// 助理回答进行中的阶段（2026-11-06 用户：等 CodeAgent 时要看到在哪一步、等了多久）；规则与 PPT 检索共用。
+const waitPhase = c => require('./wait-progress').assistantChatPhase(c) || { label: '正在查…', verb: '已用', from: c.startedAt || c.askedAt, hint: '' };
 const secondsText = ms => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s} 秒` : `${Math.floor(s / 60)} 分 ${s % 60} 秒`; };
 
 function createCompanyAssistantPage({ document, window, ipcRenderer, openSession, closeOtherPanels = () => {}, showMessage }) {
@@ -180,7 +186,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     });
     const form = page.querySelector('[data-slot="form"]'), input = form.querySelector('textarea');
     form.addEventListener('submit', e => { e.preventDefault(); void send(input.value); });
-    input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); void send(input.value); } });
+    input.addEventListener('keydown', e => { if (require('./composer-enter-key').isSendKey(e, require('./composer-enter-key').readMode(window.localStorage)) && !e.isComposing) { e.preventDefault(); void send(input.value); } });
   }
   function place() {
     if (!page || page.hidden) return;
@@ -291,7 +297,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
 
   // ---- 右栏「今天」（原今日简报）----
   const SECTION_SHORT = { meetings: '会', awaiting: '回', commitments: '诺', groups: '群', mail: '邮' };
-  const NOTICE_NAMES = { reminder: '重要提醒', brief: '简报', 'meeting-prep': '会前准备', 'awaiting-reply': '等你回复', 'commitment-due': '答应的事', overbooked: '会议太满', 'day-summary': '下班小结', keyword: '关注词' };
+  const NOTICE_NAMES = { reminder: '重要提醒', digest: '定时汇总', brief: '简报', 'meeting-prep': '会前准备', 'awaiting-reply': '等你回复', 'commitment-due': '答应的事', overbooked: '会议太满', 'day-summary': '下班小结', keyword: '关注词' };
   // 会议节：已结束的置灰，下一场标「下一场」，正在开的标「进行中」。
   function meetingStates(items, now) {
     const next = items.filter(i => Number.isFinite(i.start) && i.start > now).sort((a, b) => a.start - b.start)[0];
@@ -340,8 +346,8 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     // 助理批注：简报整体的说明（AI 没整理完、改用规则清单的原因等），放在标题下面。
     const note = b?.note && b.by !== 'none' && !b.organizing ? `<p class="ca-today-note" data-slot="brief-note">${esc(b.note)}</p>` : '';
     // 「简报已生成」这类提醒就是本栏本身，不再重复列。
-    const noticeAll = (d.notices || []).filter(n => n.kind !== 'brief'), noticeList = noticeAll.slice(-2).reverse();
-    const notices = noticeList.length ? `<div class="ca-tg"><span>提醒</span><small>${noticeAll.length}</small></div>${noticeList.map(n => `<div class="ca-notice" data-notice-id="${esc(n.id)}"><button type="button" class="ca-ti-main ca-notice-line"${n.detail?.source ? ` data-ca="source:${esc(n.detail.source)}"` : ''} title="${esc([n.title, n.text && n.text !== n.title ? n.text : ''].filter(Boolean).join('\n'))}"><span class="ca-ti-tag amber">${esc(NOTICE_NAMES[n.kind] || n.kind)}</span><span class="ca-notice-title">${esc(n.title)}</span><time>${when(n.at)}</time></button></div>`).join('')}` : '';
+    const noticeAll = (d.notices || []).filter(n => n.kind !== 'brief'), noticeList = latestNotices(d.notices, 2);
+    const notices = noticeList.length ? `<div class="ca-tg"><span>提醒</span><small>${noticeAll.length}</small></div>${noticeList.map(n => `<div class="ca-notice" data-notice-id="${esc(n.id)}"><button type="button" class="ca-ti-main ca-notice-line"${n.detail?.source ? ` data-ca="source:${esc(n.detail.source)}"` : ''} title="${esc([n.title, n.text && n.text !== n.title ? n.text : ''].filter(Boolean).join('\n'))}"><span class="ca-ti-tag amber">${esc(NOTICE_NAMES[n.kind] || n.kind)}</span><span class="ca-notice-title">${esc(n.title)}</span><time>${n.kind === 'digest' ? '汇总于 ' : ''}${when(n.at)}</time></button>${n.kind === 'digest' ? require('./company-assistant-digest').digestList(n, esc) : ''}</div>`).join('')}` : '';
     let list;
     if (!b) list = `<p class="ca-today-empty">今天的摘要还没生成。</p><button type="button" class="ca-btn small primary" data-ca="brief-now">现在生成</button>`;
     else if (b.by === 'none') list = `<p class="ca-today-empty">${esc(b.note || '今天暂时没有可整理的信息。')}</p>`;
@@ -389,16 +395,20 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
         const { body: text, coverage } = answerCoverage(c);
         const pptLinks = (c.pptResults || []).map(p => `<div class="ca-ppt-reference"><span>${esc(p.name)} · 第 ${esc(p.page)} 页</span><button type="button" class="ca-link" data-ca="ppt-open:${esc(p.id)}">打开到第 ${esc(p.page)} 页</button></div>`).join('');
         answer = `<div class="ca-answer">${tagSources(body(text, false), labelOf)}</div>${pptLinks}${coverageLine(coverage, id)}`;
-        meta = `${c.answeredAt ? `<time>${when(c.answeredAt)}</time>` : ''}${c.answeredAt && (c.startedAt || c.askedAt) ? `<span>用时 ${secondsText(c.answeredAt - (c.startedAt || c.askedAt))}</span>` : ''}`;
+        meta = `${c.answeredAt ? `<time>${when(c.answeredAt)}</time>` : ''}${c.answeredAt && (c.startedAt || c.askedAt) ? `<span>用时 ${secondsText(c.answeredAt - (c.startedAt || c.askedAt))}${c.startedAt && c.answeringAt ? `（准备 ${secondsText(c.answeringAt - c.startedAt)} · 回答 ${secondsText(c.answeredAt - c.answeringAt)}）` : ''}</span>` : ''}`;
       } else if (c.state === 'error') {
-        answer = `<div class="ca-turn-error"><span>没答上：${esc(c.error || '原因未知')}</span><button type="button" class="ca-btn small" data-ca="retry:${esc(id)}">重问</button></div>`;
+        const why = c.stopped ? '已停止这一问' : `没答上：${esc(c.error || '原因未知')}`;
+        answer = `<div class="ca-turn-error${c.stopped ? ' is-stopped' : ''}"><span>${why}</span><button type="button" class="ca-btn small" data-ca="retry:${esc(id)}">重问</button></div>`;
         meta = c.askedAt ? `<time>${when(c.askedAt)}</time>` : '';
       } else {
+        // 三段：排队 → CodeAgent 准备中（开会话、送入问题，通常 10–20 秒）→ 正在查（问题已送进去）。
         const guide = c.state === 'running' && c.guide?.kinds?.length ? `按「${c.guide.kinds.join('、')}」作答${c.guide.items ? ` · 已备好材料 ${c.guide.items} 条` : ''} · 正在写…` : '';
-        const label = c.state === 'queued' ? '排队中' : esc(guide) || '正在查…';
-        const from = c.state === 'running' && c.startedAt ? c.startedAt : c.askedAt;
-        const since = from ? `<span>${c.state === 'queued' ? '已等' : '已用'} <span data-since="${Number(from)}">${secondsText(Date.now() - from)}</span></span>` : '';
-        answer = `<div class="ca-think"><span class="ca-dots"><i></i><i></i><i></i></span>${label}</div>`;
+        const phase = waitPhase(c);
+        const from = phase.from;
+        const since = from ? `<span>${phase.verb} <span data-since="${Number(from)}">${secondsText(Date.now() - from)}</span>${phase.hint ? `<span class="ca-wait-hint">（${phase.hint}）</span>` : ''}</span>` : '';
+        const label = guide && phase.label === '正在查…' ? esc(guide) : phase.label;
+        // 审计 A3-17：等着的问题可以停下（只结束这一问，其他队列照常）。
+        answer = `<div class="ca-think"><span class="ca-dots"><i></i><i></i><i></i></span>${label}<button type="button" class="ca-btn small ca-stop" data-ca="stop:${esc(id)}">停止这一问</button></div>`;
         meta = since;
       }
       const assistant = `<div class="ca-turn assistant${c.state === 'done' || c.state === 'error' ? '' : ' is-thinking'}"><span class="ca-turn-avatar"><img src="${ASSISTANT_AVATAR_SRC}" alt=""></span><div class="ca-turn-content">
@@ -494,6 +504,10 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     if (chip && !(chip.fill && input.value.trim())) await useChip(chip);
     else if (detail.prompt && !input.value.trim()) { input.value = String(detail.prompt); input.focus(); }
     if (detail.noticeId) {
+      if (String(detail.noticeId).startsWith('digest:') && !data.notices?.some(notice => notice.id === detail.noticeId)) {
+        try { const result = await call('digest-notice', { id: detail.noticeId }); data.notices = [result.notice, ...(data.notices || [])]; render(); }
+        catch (error) { showMessage?.(error.message); }
+      }
       if (isFolded()) { folded = false; saveTodayFolded(window.localStorage, false); render(); }
       const row = [...page.querySelectorAll('.ca-notice')].find(n => n.dataset.noticeId === String(detail.noticeId));
       if (row) { row.classList.add('focus'); row.scrollIntoView({ block: 'center' }); setTimeout(() => row.classList.remove('focus'), 3000); }
@@ -533,6 +547,11 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     if (verb === 'done') { await call('mark-done', { source: arg }); await load(); return; }
     if (verb === 'source') return openSource(arg, button.dataset.sourceDay);
     if (verb === 'retry') { await call('retry-chat', { id: arg }); await load(); return; }
+    if (verb === 'stop') {
+      button.disabled = true; button.textContent = '正在停止…';
+      try { await call('stop-chat', { id: arg }); } catch (error) { showMessage?.('没停下：' + error.message); }
+      await load(); return;
+    }
     if (verb === 'login') { button.disabled = true; const panel = page.querySelector('[data-slot="panel"]'); panel.dataset.kind = 'login'; await call('login'); await load(); return; }
     if (verb === 'open-login-url') { const url = data.loginFlow?.url || ''; if (/^https:\/\//i.test(url)) await require('electron').shell.openExternal(url); return; }
     if (verb === 'close-panel') { closePanel(); return; }
@@ -719,6 +738,8 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
         <p class="ca-note">${last}</p></fieldset>
       <fieldset><legend>提醒</legend>
         <label>关注词（逗号分隔）<input type="text" data-f="keywords" value="${esc(s.keywords.join('，'))}"></label>
+        <label>定时汇总<select data-f="digestHours">${opts([0, 1, 2, 4], s.digestHours, x => x ? '每 ' + x + ' 小时' : '关闭')}</select></label>
+        <p class="ca-note">工作日 9:00–20:00 汇总私聊超过 30 分钟未回、@你后尚未在群里发言、今明到期的承诺和重要未读邮件。有新增才通知，不占每小时提醒名额；开启后不单独发「等你回复」，关闭后按下方时长提醒。使用本机已获取的数据。</p>
         <label>等你回复超过<select data-f="waitHours">${opts([1, 2, 3, 4, 6, 8, 12, 24], s.waitHours, x => x + ' 小时')}</select>提醒</label>
         <label>开会前<select data-f="prepMinutes">${opts([5, 10, 15, 20, 30], s.prepMinutes, x => x + ' 分钟')}</select>出准备卡</label>
         <label>每小时最多<select data-f="maxPerHour">${opts([1, 2, 3, 4, 5], s.maxPerHour, x => x + ' 条')}</select></label></fieldset>
@@ -760,7 +781,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       try {
         await call('set-settings', {
           lookbackHours: Number(v('lookbackHours')), maxConversations: Number(v('maxConversations')),
-          keywords: v('keywords'), waitHours: Number(v('waitHours')), prepMinutes: Number(v('prepMinutes')), maxPerHour: Number(v('maxPerHour')),
+          keywords: v('keywords'), waitHours: Number(v('waitHours')), digestHours: Number(v('digestHours')), prepMinutes: Number(v('prepMinutes')), maxPerHour: Number(v('maxPerHour')),
           briefTime: v('briefTime'), summaryTime: v('summaryTime'), refreshMinutes: Number(v('refreshMinutes')),
         });
         panel.hidden = true; panel.innerHTML = ''; panel.dataset.kind = ''; await load(); showMessage?.('助理设置已保存');
@@ -811,8 +832,8 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     if (!page || page.hidden) document.getElementById('btn-company-assistant')?.classList.add('has-unread');
   });
   // 点桌面通知：打开助理页（主进程用固定编号 company-assistant）。
-  ipcRenderer.on('desktop-notification:open-session', (_e, payload) => { if (payload?.sessionId === 'company-assistant') void open(); });
+  ipcRenderer.on('desktop-notification:open-session', (_e, payload) => { if (payload?.sessionId === 'company-assistant') void fromPet({ noticeId: payload.noticeId }); });
   window.addEventListener('hub-pet:open-assistant', e => { void fromPet(e.detail || {}).catch(error => showMessage?.(error.message)); });
   return { open, close, isOpen: () => !!page && !page.hidden };
 }
-module.exports = { createCompanyAssistantPage, todayStatus, shortMeetingText, shanghaiClock, shanghaiDay, dayTitle, visibleChat, splitLegacyCoverage, answerCoverage, sourceLabels, tagSources, todayFolded, saveTodayFolded, TODAY_FOLD_KEY, secondsText };
+module.exports = { createCompanyAssistantPage, latestNotices, todayStatus, shortMeetingText, shanghaiClock, shanghaiDay, dayTitle, visibleChat, splitLegacyCoverage, answerCoverage, sourceLabels, tagSources, todayFolded, saveTodayFolded, TODAY_FOLD_KEY, secondsText, waitPhase };

@@ -634,7 +634,10 @@ function buildCodeAgentPtyLaunch(id, kind, opts, cwd, env, config, auth = null, 
   // 学习去重要用（core/codeagent-member-mcp.js learnNativeMcp）：这次写进去的、按记录跳过的
   const memberMcpLearn = bridgeTrim || (memberMcp && !memberMcp.error && (memberMcp.file || (memberMcp.skipped && memberMcp.skipped.length)))
     ? { accountDir: config.configDir, command: config.command, written: memberMcp?.file ? memberMcp.servers || {} : {}, skipped: memberMcp?.skippedServers || {}, bridgeTrim } : null;
-  return { cmd, sessionId, model: requestedModel, settingsModel: settingsFile && launchArgs.includes('--settings') ? settingsModel : '', ...(memberMcpLearn ? { memberMcpLearn } : {}) };
+  // 请求恢复某个对话，但当前配置目录里找不到记录：会按全新会话启动，要让用户知道（A1-06）。
+  const resumeHistoryMissing = !!opts.resumeCCSessionId && !opts.forkCCSessionId && isUuid(opts.resumeCCSessionId) && identity.length === 0;
+  if (resumeHistoryMissing) console.warn(`[codeagent] ${String(id || '').slice(0, 8)} resume requested for ${String(opts.resumeCCSessionId).slice(0, 8)} but no history found under ${config.configDir}; starting a new conversation`);
+  return { cmd, sessionId, ...(resumeHistoryMissing ? { resumeHistoryMissing: true } : {}), model: requestedModel, settingsModel: settingsFile && launchArgs.includes('--settings') ? settingsModel : '', ...(memberMcpLearn ? { memberMcpLearn } : {}) };
 }
 
 // 只记录、写一行日志，不结束任何进程；这一会话里已经起的重复由膨胀回收兜底。失败只影响学习，不影响会话。
@@ -1235,6 +1238,8 @@ function getSessionResumeIdentity(info) {
   const identity = nativeSessionIdentity(info);
   return identity ? identity.value : null;
 }
+
+const SUSPEND_EXIT_WATCHDOG_MS = 20_000;
 
 function supportsRecoverableSuspend(info) {
   return supportsRecoverableSession(info);
@@ -2378,6 +2383,16 @@ class SessionManager extends EventEmitter {
       // Only a newly created child environment is changed. relaunchCli reuses
       // the existing shell; its command builder must never mutate process.env.
       const auth = require('./codeagent-launch-env').applyAccountEnv(sessionEnv, codeagentConfig);
+      // 原工作目录已不存在、回落到主目录时，CLI 的 --resume 只看新目录对应的记录桶：
+      // 先把记录复制过去，否则会"有记录却恢复失败"，重启也没用（A1-15）。
+      if (cwdFellBack && opts.resumeCCSessionId && !opts.forkCCSessionId) {
+        try {
+          const moved = require('./claude-transcript-locator').migrateTranscriptsForCwdChange({
+            toCwd: spawnCwd, ccSessionIds: [opts.resumeCCSessionId], configDir: codeagentConfig.configDir,
+          });
+          if (moved.errors.length) console.warn('[codeagent] 回落目录后迁移对话记录失败：' + moved.errors.join('; '));
+        } catch (error) { console.warn('[codeagent] 回落目录后迁移对话记录出错：' + error.message); }
+      }
       codeagentLaunch = buildCodeAgentPtyLaunch(id, kind, opts, spawnCwd, sessionEnv, codeagentConfig, auth, codeagentPool);
       // 只有真正 --resume 已有记录时身份才已知；其余一律清空，等第一个 hook 绑定。
       // 留着一个 CLI 不会用的旧 id，后面每个 hook 都会被当成外来会话丢弃。
@@ -2942,6 +2957,11 @@ class SessionManager extends EventEmitter {
       setTimeout(() => this.emit('session-notice', { sessionId: id, message, level: 'warning' }), 0);
     }
 
+    if (codeagentLaunch && codeagentLaunch.resumeHistoryMissing) {
+      setTimeout(() => this.emit('session-notice', { sessionId: id, level: 'warning',
+        message: '没有找到这个会话之前的对话记录（可能已被清理或配置目录换过），这次是一段新对话，AI 不记得之前聊过的内容。' }), 0);
+    }
+
     const agentPtyLaunch = claudePtyLaunch || codeagentLaunch;
     if (agentPtyLaunch) {
       // 信任框兜底（照搬 8c5c6928）：预写没生效时（.claude.json 损坏 / 只读）才会出现。
@@ -3234,7 +3254,13 @@ class SessionManager extends EventEmitter {
     }
     entry.confirmedExit = exitInfo || {};
     if (this.openLeases?.has(sessionId) && !entry.openReleaseReady) {
-      return require('./session-store').flushSessionForRelease(sessionId, entry.info).then(() => {
+      return require('./session-store').flushSessionForRelease(sessionId, entry.info).catch((error) => {
+        // 落盘失败（磁盘满、文件被占用）不能让会话卡在"正在休眠"：明说一声，仍按休眠收尾，
+        // 旧的会话文件和界面侧 state.json 里的副本仍在（A1-14）。
+        console.warn('[session] flush before release failed:', sessionId, error && error.message);
+        setTimeout(() => this.emit('session-notice', { sessionId, level: 'warning',
+          message: `会话记录最后一次保存失败（${error && error.message ? error.message : error}），已先收为休眠；之前保存的内容还在，请检查磁盘空间。` }), 0);
+      }).then(() => {
         entry.openReleaseReady = true;
         return this._handlePtyExit(sessionId, ptyProcess, exitInfo);
       });
@@ -3418,7 +3444,11 @@ try {
       return Promise.resolve(this._handlePtyExit(sessionId,session.pty,session.confirmedExit))
         .then(()=>({ok:true,sessionId,action:'suspended',recoverable:true}),error=>({ok:false,error:'history-save-failed',message:error.message}));
     }
-    if (!supportsRecoverableSuspend(session.info)) {
+    // CodeAgent 还没收到第一个 hook（没有原生身份）：没有可恢复的对话，休眠只会被
+    // native-session-id-missing 拒绝，用户关不掉。直接结束 PTY。
+    const unbound = isCodeAgentKind(session.info.kind) && session.info.codeagentIdentityPending === true
+      && !getSessionResumeIdentity(session.info);
+    if (unbound || !supportsRecoverableSuspend(session.info)) {
       this.closeSession(sessionId);
       return { ok: true, sessionId, action: 'closed', recoverable: false };
     }
@@ -3622,6 +3652,7 @@ try {
         this.onSessionSuspended(sessionId, session.info.meetingId || null, dormantInfo, { noPty: true });
       } else {
         this._terminatePty(session);
+        this._armSuspendExitWatchdog(sessionId, session);
       }
       return { ok: true, sessionId, lastActivityAt, reason: session.suspendReason };
     } catch (error) {
@@ -3630,6 +3661,23 @@ try {
       session.info.status = 'idle';
       return { ok: false, error: 'kill-failed', message: error && error.message ? error.message : String(error) };
     }
+  }
+
+  // 休眠时 kill 之后 exit 事件迟迟不来（A1-14）：约 20 秒后改走带身份核对的强制结束，
+  // 结果都通知界面，不再无声地停在"正在休眠"。
+  _armSuspendExitWatchdog(sessionId, session, delayMs = SUSPEND_EXIT_WATCHDOG_MS) {
+    const timer = setTimeout(async () => {
+      if (this.sessions.get(sessionId) !== session || session.confirmedExit || !session.suspendRequestedAt) return;
+      console.warn('[session] suspend: PTY did not exit in time, forcing:', sessionId);
+      try {
+        await this._forceTerminatePty(sessionId, session);
+      } catch (error) {
+        this.emit('session-notice', { sessionId, level: 'warning',
+          message: `会话迟迟没有退出，强制结束也没成功（${error && error.message ? error.message : error}）。可以稍后重试休眠。` });
+      }
+    }, delayMs);
+    timer.unref?.();
+    return timer;
   }
 
   suspendIdleSessions(options = {}) {

@@ -26,7 +26,7 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
   }
 
   function preview({ description = '', contact = '' } = {}) {
-    const b = collectBundle({ info: info(), description, contact, logsDir, now: now() });
+    const b = collectBundle({ info: info(), description, contact, logsDir, dataDir: path.dirname(logsDir), now: now() });
     return { ok: true, available: !!endpoint, items: b.items, chars: b.chars };
   }
 
@@ -66,7 +66,7 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
   async function send({ description = '', contact = '', onProgress: progress = onProgress } = {}) {
     if (!String(description).trim()) return { ok: false, reason: '请先写一句遇到了什么问题' };
     const i = info();
-    const b = collectBundle({ info: i, description, contact, logsDir, now: now() });
+    const b = collectBundle({ info: i, description, contact, logsDir, dataDir: path.dirname(logsDir), now: now() });
     if (!endpoint) return { ok: false, reason: '这个版本没有配置反馈地址', savedTo: saveLocal(b.text) };
     const body = { text: b.text, summary: b.summary, version: String(i.version || ''), edition: String(i.edition || ''), platform: String(i.platform || ''), contact: String(contact || '') };
     let r = await post(body);

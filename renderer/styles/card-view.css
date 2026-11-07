@@ -1540,6 +1540,23 @@
   color: currentColor;
   font-size: .82em;
 }
+/* 任务列表：复选框已经是项目符号，圆点不再重复出现。 */
+.msg-overlay .turn-body li:has(> input[type="checkbox"]) {
+  list-style: none;
+}
+.msg-overlay .turn-body li > input[type="checkbox"] {
+  margin: 0 .45em 0 -1.35em;
+  vertical-align: middle;
+}
+/* 引用块：左侧竖线 + 次要文字色，颜色走主题变量，六个主题都能看清。 */
+.msg-overlay .turn-body blockquote {
+  margin: .52em 0 .72em;
+  padding: .1em 0 .1em .9em;
+  border-left: 3px solid var(--border-mid);
+  color: var(--fg-muted);
+}
+.msg-overlay .turn-body blockquote > :first-child { margin-top: 0; }
+.msg-overlay .turn-body blockquote > :last-child { margin-bottom: 0; }
 .msg-overlay .turn-body li > ul,
 .msg-overlay .turn-body li > ol {
   margin-block: .22em .32em;

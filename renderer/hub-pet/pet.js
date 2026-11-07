@@ -328,7 +328,7 @@
 
   // ---------- 气泡、小圆点、展开面板 ----------
   // 提醒类别的短名（和助理页「今天的提醒」一致），气泡和展开面板里当小标签用，一眼知道是哪类事。
-  const KIND = { reminder: '重要提醒', brief: '简报', 'meeting-prep': '会前准备', 'awaiting-reply': '等你回复', 'commitment-due': '答应的事', overbooked: '会议太满', 'day-summary': '下班小结', keyword: '关注词' };
+  const KIND = { reminder: '重要提醒', digest: '定时汇总', brief: '简报', 'meeting-prep': '会前准备', 'awaiting-reply': '等你回复', 'commitment-due': '答应的事', overbooked: '会议太满', 'day-summary': '下班小结', keyword: '关注词' };
   const bubbleKind = $('bubble-kind');
   function showBubble(b) {
     if (b && b.id !== bubbleId) {

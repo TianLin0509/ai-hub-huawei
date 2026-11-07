@@ -24,7 +24,7 @@ function createClaudeIdentitySwitch({ now = () => Date.now(), windowMs = SWITCH_
     /**
      * @returns {{action:'record-end'|'rebind'|'same'|'ignore', why?:string}}
      */
-    observe(hubSessionId, { event, boundId, incomingId, source = null, reason = null, agentId = null, promptId = null } = {}) {
+    observe(hubSessionId, { event, boundId, incomingId, source = null, reason = null, agentId = null, promptId = null, endOptional = false } = {}) {
       if (!hubSessionId || !incomingId) return { action: 'ignore', why: 'no-identity' };
       if (agentId) return { action: 'ignore', why: 'subagent' };
       if (event === 'session-end') {
@@ -35,6 +35,12 @@ function createClaudeIdentitySwitch({ now = () => Date.now(), windowMs = SWITCH_
       if (event !== 'session-start') return { action: 'ignore', why: 'not-lifecycle' };
       if (!boundId || incomingId === boundId) return { action: 'same' };
       const end = ended.get(hubSessionId);
+      // CodeAgent 不登记 SessionEnd：调用方确认工作目录和记录目录都对得上之后，
+      // 顶层 SessionStart 的 source 为 clear/resume 就足以改绑（子代理已在上面被排除）。
+      if ((!end || end.id !== boundId) && endOptional && SWITCH_SOURCES.has(String(source || ''))) {
+        ended.delete(hubSessionId);
+        return { action: 'rebind', cycleId: null };
+      }
       if (!end || end.id !== boundId) return { action: 'ignore', why: 'bound-session-still-running' };
       const src = String(source || '');
       const accepted = SWITCH_SOURCES.has(src)

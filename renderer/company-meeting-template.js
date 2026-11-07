@@ -23,7 +23,7 @@ function meetingTemplate() {
   return `<header class="meeting-topbar">
     <div class="meeting-record-state"><i data-m="record-dot"></i><strong data-m="record-label">尚未开始</strong><span data-m="clock">00:00</span></div>
     <div class="meeting-levels" data-m="levels"></div>
-    <div class="meeting-session-name"><h3 data-m="session-title">会议伴侣</h3><span data-m="source-label">截图、原话和问答，按时间留下来</span></div>
+    <div class="meeting-session-name"><h3 data-m="session-title">会议伴侣</h3><button type="button" class="meeting-rename-btn" data-act-local="rename-title" data-m="rename-title" title="改会议名称" aria-label="改会议名称" hidden>✎</button><span data-m="source-label">截图、原话和问答，按时间留下来</span></div>
     <div class="meeting-actions">
       <button class="ca-btn meeting-when-live" data-act="pause" disabled>${icon(ICONS.pause)}<span>暂停</span></button>
       <button class="ca-btn meeting-stop meeting-when-live" data-act="stop" disabled>${icon(ICONS.stop)}<span>结束会议</span></button>

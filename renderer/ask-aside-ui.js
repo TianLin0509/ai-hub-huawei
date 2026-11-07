@@ -30,7 +30,7 @@ function createAskAsideUi({ document, ipcRenderer, getSession, getTitle = s => s
   const el = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text != null) node.textContent = text; return node; };
   const icon = name => { const span = el('span'); span.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`; return span.firstChild; };
 
-  const button = el('button', 'ask-entry'); button.type = 'button'; button.hidden = true;
+  const button = el('button', 'ask-entry'); button.type = 'button'; button.hidden = true; button.setAttribute('aria-pressed', 'false');
   button.append(icon('ask'), document.createTextNode('问一下'));
   const drawer = el('section', 'ask'); drawer.hidden = true; drawer.setAttribute('aria-label', '问一下');
   const head = el('header', 'ask-h');
@@ -198,14 +198,14 @@ function createAskAsideUi({ document, ipcRenderer, getSession, getTitle = s => s
     const session = getSession(); if (!session) return;
     if (sessionId !== session.id) { sessionId = session.id; state = null; input.value = ''; expanded.clear(); refilled.clear(); body.replaceChildren(); }
     place();
-    drawer.hidden = false; button.classList.add('on');
+    drawer.hidden = false; button.classList.add('on'); button.setAttribute('aria-pressed', 'true');
     if (!panelObserver && typeof document.defaultView?.ResizeObserver === 'function') {
       const panel = document.getElementById('terminal-panel');
       if (panel) { panelObserver = new document.defaultView.ResizeObserver(() => { place(); if (stick) toBottom(); }); panelObserver.observe(panel); panelObserver.observe(body); }
     }
     refresh().then(() => input.focus()).catch(error => { hint.className = 'warn'; hint.textContent = error.message; });
   }
-  function hide() { drawer.hidden = true; button.classList.remove('on'); syncTimer(false); }
+  function hide() { drawer.hidden = true; button.classList.remove('on'); button.setAttribute('aria-pressed', 'false'); syncTimer(false); }
 
   button.onclick = () => (drawer.hidden ? open() : hide());
   close.onclick = hide;

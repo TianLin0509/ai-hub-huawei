@@ -68,7 +68,7 @@ function registerPromptSubmitIpc(ipcMain, deps) {
       // 原生时代存下的草稿在改走 PTY 后照样读得回来。
       if (!['claude-stream-json', 'codex-app-server', 'acp'].includes(session?.runtimeBackend)
           && !require('../../core/agent-runtime-mode').isPtyAgentSession(session)) {
-        return { ok: false, error: '当前会话不支持草稿持久化' };
+        return { ok: false, error: '当前会话不支持草稿持久化', code: session ? null : 'session-offline' };
       }
       try {
         nativeDraftStore ||= new (require('../../core/native-draft-store').NativeDraftStore)();
@@ -362,6 +362,12 @@ function registerPromptSubmitIpc(ipcMain, deps) {
 
   const assistantSubmissions = new Set();
   const submitPrompt = async (event, request = {}) => {
+    // 用户在 Hub 输入框按发送的这一刻就起名（2026-11-06 用户定）：原文已在手，不等 CLI 启动、
+    //   hook 那条路保留，只兜底用户直接在终端里打字的情况；已起过名的会话自动跳过。
+    if (request.memoryIndex === true && typeof request.text === 'string' && request.text.trim() && !request.text.trimStart().startsWith('/')) {
+      try { deps.onUserPrompt?.({ sessionId: request.sessionId, text: request.text }); }
+      catch (error) { logger.warn?.('[prompt-submit] early title failed:', error && error.message); }
+    }
     const session = sessionManager.getSession(request.sessionId);
     if (require('../../core/ai-kinds').isCodeAgentKind(session?.kind)) {
       const input = await groupChatWatcher.codeAgentInputAction(request.sessionId, 'check', { preserveInput: request.preserveInput === true, allowUnready: request.waitForCliReady === true });

@@ -147,6 +147,7 @@ function createPathLinkContextMenuController({
           const r = await ipcRenderer.invoke('open-external-url', t.absPath);
           if (r && r.success === false) console.warn('[path-link-ctx] open-external-url failed for', t.absPath);
         } else {
+          if (!(await require('./executable-path').confirmIfExecutable(t.absPath))) return;
           const err = await ipcRenderer.invoke('open-path', t.absPath);
           if (err) console.warn('[path-link-ctx] open-path returned:', err);
         }

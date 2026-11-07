@@ -58,7 +58,7 @@ function sendFixture({ code = source, kind = 'codeagent', text = '普通消息',
     calls.cards.push({ text: cardText, kind: cardKind, receipt, route, card });
     return card;
   };
-  const context = vm.createContext({
+  const context = vm.createContext({ focusAfterSend() {},
     require: name => recovery && name === './composer-codeagent-input' ? { ...rendererRequire(name), restoreRecoveredPrompt: (box, value, options) => { box.text = box.text + (box.text ? '\n\n' : '') + value.text; box.skill ||= value.skill; options.onChange(); } } : rendererRequire(name),
     localStorage: storage,
     turnCardRenderer: { markUserStopped: (_sid, card) => { if (card) card.dataset.stopped = 'true'; }, latestUserCard: () => null },
@@ -273,7 +273,7 @@ test('the real stop click rechecks running state and routes CodeAgent to the sha
   assert.ok(at >= 0 && end > at);
   const body = source.slice(at + marker.length, end);
   const current = { kind: 'codeagent', agentRuntime: 'pty', status: 'idle' }, calls = [], toasts = [];
-  const context = vm.createContext({ sessionId: 'test', sessions: new Map([['test', current]]),
+  const context = vm.createContext({ focusAfterSend() {}, sessionId: 'test', sessions: new Map([['test', current]]),
     turnCardRenderer: { latestUserCard: () => null, markUserStopped() {} },
     stopBtn: { dataset: {} }, bar: { _codeagentInputRecovery: { stop: async () => calls.push('shared-stop') } },
     getSessionRuntimeTruth: runtime.getSessionRuntimeTruth, RUNTIME_RUNNING: runtime.RUNTIME_RUNNING, isCodeAgentKind: aiKinds.isCodeAgentKind,
@@ -310,7 +310,7 @@ for (const unavailable of [false, true]) test(`late-arriving CodeAgent info lazi
   const at = source.indexOf(marker), end = source.indexOf('\n  });', at), body = source.slice(at + marker.length, end);
   const ensure = functionSource(source, 'ensureCodeAgentInputRecovery', '  ');
   const sessions = new Map(), calls = [], notices = [], bar = {};
-  const context = vm.createContext({ sessionId: 'test', sessions, bar, recoveryHost: {}, document: {}, window: {},
+  const context = vm.createContext({ focusAfterSend() {}, sessionId: 'test', sessions, bar, recoveryHost: {}, document: {}, window: {},
     turnCardRenderer: { latestUserCard: () => null, markUserStopped() {} },
     stopBtn: { dataset: {} }, RUNTIME_RUNNING: runtime.RUNTIME_RUNNING, isCodeAgentKind: aiKinds.isCodeAgentKind,
     getSessionRuntimeTruth: runtime.getSessionRuntimeTruth, showToast: text => notices.push(text),
@@ -385,7 +385,7 @@ function editClickFixture({ draft = '', kind = 'claude', cardSid = 'test', activ
   const card = { closest: selector => selector === '[data-group-member]' && group ? { dataset: { groupMember: cardSid } }
     : selector === '.terminal-panel' && !group ? { querySelector: () => input } : null };
   let collapsed;
-  const context = vm.createContext({ require: rendererRequire, card, turn: { text: 'original' }, sessions: new Map([[cardSid, { kind }]]),
+  const context = vm.createContext({ focusAfterSend() {}, require: rendererRequire, card, turn: { text: 'original' }, sessions: new Map([[cardSid, { kind }]]),
     getCardSessionId: () => cardSid, activeSessionId: activeSid, showToast: text => notices.push(text), localStorage: storage,
     document: { getElementById: () => input, createRange: () => ({ selectNodeContents() {}, collapse: value => { collapsed = value; } }) },
     window: { Event: class { constructor(type) { this.type = type; } }, getSelection: () => ({ removeAllRanges() {}, addRange() {} }) },
@@ -421,7 +421,7 @@ test('after edit-resend the actual ArrowUp path recalls the replaced draft even 
   const history = historyApi.createFloatingInputHistory({ storage: { getItem: key => values.get(key), setItem: (key, value) => values.set(key, value) } });
   const input = { text: 'original prompt' }, bar = {};
   history.push('test', 'saved draft');
-  const context = vm.createContext({ bar, inputBox: input, inputHistory: history, historyCursor: history.createCursor('test'), historyApi,
+  const context = vm.createContext({ focusAfterSend() {}, bar, inputBox: input, inputHistory: history, historyCursor: history.createCursor('test'), historyApi,
     editResendHistoryReady: false, contenteditableHasText: box => !!box.text, isCaretAtContenteditableStart: () => false,
     readContenteditablePlainText: box => box.text, applyHistoryText: text => { input.text = text; } });
   const ready = source.match(/bar\._editResendHistoryChanged = \(\) => \{[^\n]+\};/)[0];

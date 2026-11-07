@@ -47,23 +47,40 @@ const INTERRUPT_KEY_GAP_MS = 120;
 //   旧实现对整个 ring buffer 裸测，AI 回答里提到 "not logged in" 就误杀（2026-07-12）。
 const AUTH_DETECT_WINDOW_MS = 120 * 1000;
 
+// 中文里 @ 后面常常不留空格（「@m1帮我看下」）：整段连着的文字不是名字时，再看它是不是以某个成员名开头、后面紧跟汉字。
+// 以前这种写法认不出来，消息静默发给所有成员（用户反馈：@ 没有作用）。
+const MENTION_ALL = ['all', '全部', '所有人'];
+const CJK = /[一-鿿]/;
+function memberMentionKeys(mem) {
+  const position = Number.isInteger(mem.index) ? [`成员${mem.index + 1}`] : [];
+  return [mem.memberId, mem.displayName, mem.kind, mem.model, ...(mem.aliases || []), ...position]
+    .filter(Boolean).map(x => String(x).toLowerCase().replace(/\s+/g, ''));
+}
+function resolveMention(rawToken, members) {
+  const token = String(rawToken || '').toLowerCase().replace(/[._-]+$/, '');
+  if (MENTION_ALL.includes(token)) return { all: true };
+  const exact = members.filter(mem => memberMentionKeys(mem).includes(token));
+  if (exact.length) return { hit: exact.length === 1 ? exact[0] : null };
+  if (MENTION_ALL.some(key => token.startsWith(key) && CJK.test(token[key.length] || ''))) return { all: true };
+  let best = null, bestLength = 0, tied = false;
+  for (const mem of members) {
+    for (const key of memberMentionKeys(mem)) {
+      if (!token.startsWith(key) || !CJK.test(token[key.length] || '')) continue;
+      if (key.length > bestLength) { best = mem; bestLength = key.length; tied = false; }
+      else if (key.length === bestLength && best !== mem) tied = true;
+    }
+  }
+  return { hit: tied ? null : best };
+}
 function parseGroupTargets(userInput, members, participants) {
   const selected = Array.isArray(participants) ? participants : [];
   const selectedMembers = members.filter(m => selected.includes(m.index));
-  const mentionRe = /@([A-Za-z0-9_\-\u4e00-\u9fff]+)/g;
+  const mentionRe = /@([A-Za-z0-9_.\-一-鿿]+)/g;
   const mentioned = [];
   let m;
   while ((m = mentionRe.exec(userInput || '')) !== null) {
-    const token = String(m[1] || '').toLowerCase();
-    if (token === 'all' || token === '全部' || token === '所有人') {
-      return { targets: members, mentions: ['all'] };
-    }
-    const hits = members.filter(mem => {
-      const keys = [mem.memberId, mem.displayName, mem.kind, ...(mem.aliases || [])]
-        .filter(Boolean).map(x => String(x).toLowerCase());
-      return keys.includes(token);
-    });
-    const hit = hits.length === 1 ? hits[0] : null;
+    const { all, hit } = resolveMention(m[1], members);
+    if (all) return { targets: members, mentions: ['all'] };
     if (hit && !mentioned.some(x => x.sid === hit.sid)) mentioned.push(hit);
   }
   if (mentioned.length > 0) return { targets: mentioned, mentions: mentioned.map(x => x.memberId) };

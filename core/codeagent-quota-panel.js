@@ -44,9 +44,11 @@ function createCodeAgentQuotaPanel({ getStatus, readUsage, serveEnabled, refresh
     return last ? last + CODEAGENT_SERVE_MAX_AGE_MS : 0;
   }
 
-  function refresh(key, entry) {
+  // manual：用户自己点的刷新。上一次读取失败时不算「刚读过」，不进冷却（冷却只为避免重复读成功的号）。
+  function refresh(key, entry, { manual = false } = {}) {
     if (pending.has(key)) return pending.get(key);
-    if (now() < nextRefreshAt(key, entry)) {
+    const retryFailed = manual && lastRefresh.get(key)?.status === 'failed';
+    if (!retryFailed && now() < nextRefreshAt(key, entry)) {
       const previous = lastRefresh.get(key);
       return Promise.resolve({ status: 'cooldown', attemptedAt: previous?.attemptedAt || null,
         error: previous?.status === 'failed' ? previous.error : null });
@@ -80,7 +82,7 @@ function createCodeAgentQuotaPanel({ getStatus, readUsage, serveEnabled, refresh
     const results = new Map();
     if (requested && on) {
       const before = readUsage() || {};
-      await Promise.all(keys.map(async key => results.set(key, await refresh(key, before[key]))));
+      await Promise.all(keys.map(async key => results.set(key, await refresh(key, before[key], { manual: true }))));
       rows = accountRows(getStatus());
     }
     const cached = readUsage() || {};

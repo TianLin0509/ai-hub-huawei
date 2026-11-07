@@ -258,6 +258,9 @@ async function run() {
     await click(toggle);
     await click('#btn-global-search');
     await wait(()=>cdp.eval("!!document.querySelector('#search-query')?.getBoundingClientRect().width"),'search input');
+    // 搜索默认只看「我的提问 + 最近 7 天」，按成员标题找要切到全部内容、全部时间。
+    await cdp.eval("document.querySelector('#session-search-scope-tabs [data-scope=\"all\"]').click()");
+    await cdp.eval("(()=>{const t=document.querySelector('#session-search-time');t.value='all';t.dispatchEvent(new Event('change',{bubbles:true}));})()");
     await click('#search-query');
     await cdp.send('Input.insertText',{text:'研发成员'});
     await wait(()=>cdp.eval("[...document.querySelectorAll('.session-search-result')].some(e=>e.textContent.includes('研发成员'))"),'collapsed member search hit');

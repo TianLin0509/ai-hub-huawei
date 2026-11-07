@@ -11,8 +11,8 @@
 #toolbar-actions .ask-entry.on{background:var(--hw-brand-soft);color:var(--hw-brand);box-shadow:none}
 
 /* 抽屉：贴右浮在会话区上，不加遮罩（边问边看会话）；位置由脚本按会话区实际位置写进 --ask-top/right/bottom。
-   z-index 要压过聊天视图的 #msg-overlay(50) 与 #card-session-status(59)（同 toolbar.css 的说明），低于菜单与提示 */
-.ask{position:fixed;top:var(--ask-top,54px);right:var(--ask-right,12px);bottom:var(--ask-bottom,12px);width:440px;max-width:calc(100vw - 24px);z-index:70;background:var(--hw-surface);border-radius:var(--hw-r-xl);box-shadow:var(--hw-e3);display:flex;flex-direction:column;overflow:hidden;color:var(--hw-text-1);font-family:var(--hw-font, inherit);animation:ask-slide var(--hw-t-slow) var(--hw-ease)}
+   层级：压过聊天视图 #msg-overlay(50)、#card-session-status(59) 和号池额度浮层(800)/其悬停提示(810)，低于账号页(880)（m1 核对） */
+.ask{position:fixed;top:var(--ask-top,54px);right:var(--ask-right,12px);bottom:var(--ask-bottom,12px);width:440px;max-width:calc(100vw - 24px);z-index:820;background:var(--hw-surface);border-radius:var(--hw-r-xl);box-shadow:var(--hw-e3);display:flex;flex-direction:column;overflow:hidden;color:var(--hw-text-1);font-family:var(--hw-font, inherit);animation:ask-slide var(--hw-t-slow) var(--hw-ease)}
 .ask *{box-sizing:border-box}
 .ask p,.ask h3{margin:0}
 .ask button{font:inherit;border:0;background:none;cursor:pointer;color:inherit}

@@ -51,7 +51,13 @@ function attachPromptPolish({ input, rail, before, ipcRenderer, getTarget, isAct
     const current = { id: globalThis.crypto.randomUUID(), target, text, revision };
     request = current;
     button.textContent = '取消'; button.title = '取消整理'; button.setAttribute('aria-label', '取消整理'); button.setAttribute('aria-busy', 'true');
-    setStatus(company ? 'CodeAgent 整理中，可在会话列表查看进度…' : '整理中…');
+    // 公司版走 CodeAgent，要等几十秒：状态里读秒（2026-11-06 用户：等 CodeAgent 要看到等了多久）。
+    const startedAt = Date.now();
+    const waitLine = () => company
+      ? require('./wait-progress').waitText({ label: 'CodeAgent 整理中', from: startedAt, hint: '可在会话列表查看进度' })
+      : '整理中…';
+    setStatus(waitLine());
+    const waitTick = company ? setInterval(() => { if (request === current && !disposed) setStatus(waitLine()); }, 1000) : null;
     try {
       const result = await ipcRenderer.invoke('prompt:polish', { id: current.id, text });
       if (request !== current || disposed) return;
@@ -66,7 +72,7 @@ function attachPromptPolish({ input, rail, before, ipcRenderer, getTarget, isAct
       previous = { target, original: text, result: result.text };
       write(result.text); refresh(); notice('已整理，请检查后发送');
     } catch { if (request === current && !disposed) notice('整理失败，原稿已保留'); }
-    finally { if (request === current) { request = null; idle(); } }
+    finally { if (waitTick) clearInterval(waitTick); if (request === current) { request = null; idle(); } }
   });
   undo.addEventListener('click', event => {
     event.stopPropagation();

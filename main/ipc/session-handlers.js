@@ -61,6 +61,7 @@ function registerSessionIpc(ipcMain, deps) {
     codeagentStartupProbeMs = 20000,
   } = deps;
   require('./codex-backstage-handlers').registerCodexBackstageIpc(ipcMain, { sessionManager });
+  require('./session-export-handlers').registerSessionExportIpc(ipcMain);
   require('../../core/codex-fast-command').registerCodexSpeedIpc(ipcMain,{sessionManager,sendToRenderer});
   ipcMain.on('hub:ui-theme', (_event, theme) => sessionManager.setPresentationTheme?.(theme));
 

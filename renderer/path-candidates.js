@@ -35,7 +35,16 @@ const REL_PATH_CACHE_TTL_MS = 5000;
 function _cleanPathCandidate(raw) {
   let s = String(raw || '').replace(/[\r\n]+/g, '').trim();
   s = s.replace(/^[`'"\u201c\u201d\u2018\u2019(<\[]+/, '');
-  s = s.replace(/[`'"\u201c\u201d\u2018\u2019)>.,;:!\]]+$/, '');
+  // 句末标点逐个剥；)、] 只在没有对应的 (、[ 时才算多余，目录名 方案(终版) 不能被吃掉。
+  for (;;) {
+    const last = s.slice(-1);
+    if (!last || !'`\'"\u201c\u201d\u2018\u2019)>.,;:!]'.includes(last)) break;
+    if (last === ')' || last === ']') {
+      const open = last === ')' ? '(' : '[';
+      if (s.split(open).length >= s.split(last).length) break;
+    }
+    s = s.slice(0, -1);
+  }
   return s;
 }
 
@@ -76,6 +85,18 @@ function _repairLocalPathCandidate(raw) {
     try { return path.win32.normalize('\\\\' + rest); } catch { return '\\\\' + rest; }
   }
   return s;
+}
+
+// 文件名本身带 %xx 或以 ) ] ! 结尾时，清洗/解码会得到另一个不存在的路径：
+// 先看原样的路径在磁盘上是否存在，存在就直接用；共享盘不在这里同步查询。
+function resolveLiteralLocalPath(original, cwd = null) {
+  const s = _expandHomePath(String(original || '').replace(/[\r\n]+/g, '').trim());
+  if (!s || /^[a-z][a-z0-9+.-]+:\/\//i.test(s) || _isNetworkPath(s)) return null;
+  let abs = null;
+  if (_isAbsLocalPath(s)) abs = s;
+  else if (cwd) { try { abs = path.resolve(cwd, s); } catch { return null; } }
+  if (!abs || _isNetworkPath(abs)) return null;
+  try { return fs.existsSync(abs) ? abs : null; } catch { return null; }
 }
 
 function _isAbsLocalPath(filePath) {
@@ -414,6 +435,7 @@ module.exports = {
   _isAbsLocalPath,
   _statPathQuiet,
   _normalizeLocalPathForOpen,
+  resolveLiteralLocalPath,
   classifyLocalPathHref,
   _isDirectoryPath,
   _isDirectoryPathAsync,

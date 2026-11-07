@@ -649,7 +649,8 @@ function saveFloatingInputDraft(sessionId, inputBox) {
   else rawComposerDrafts.delete(sessionId);
   if (text) floatingInputDrafts.set(sessionId, text);
   else floatingInputDrafts.delete(sessionId);
-  if (sessions.get(sessionId)?.status === 'dormant') return;
+  // 断开（dormant）期间只有已存在的控制器才排队草稿；新建控制器会因主进程无此会话而读取失败。
+  if (sessions.get(sessionId)?.status === 'dormant' && !nativeDraftControllers.has(sessionId)) return;
   attachNativeDraft(sessionId, inputBox)?.change(text);
 }
 
@@ -1043,9 +1044,14 @@ function formatTime(ts) {
 }
 
 function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
+  // 同时转义引号：结果会被拼进 HTML 属性（title/data-path 等），DOM 序列化不转引号会让属性被注入。
+  if (text == null) return '';
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function normalizeMarkdownPathBreaks(text) {
@@ -1605,7 +1611,9 @@ function disposeCachedTerminal(sessionId) {
 
 async function closeSessionAsSleep(sessionId) {
   try {
-    await nativeDraftControllers.get(sessionId)?.flush();
+    // 草稿存盘失败不应让会话关不掉：提示后继续关闭。
+    try { await nativeDraftControllers.get(sessionId)?.flush(); }
+    catch (error) { showToast(`草稿未能保存：${error && error.message ? error.message : String(error)}`, 'error'); }
     const result = await ipcRenderer.invoke('close-session', sessionId);
     if (!result || !result.ok) {
       require('./ui-feedback').showHubAlert((result && result.message) || '关闭休眠失败，请稍后重试。');
@@ -1711,6 +1719,8 @@ function getOrCreateTerminal(sessionId) {
   // doesn't fire paste events on xterm's helper textarea for real keystrokes.
   terminal.attachCustomKeyEventHandler((e) => {
     if (e.type !== 'keydown') return true;
+    // Hub 全局快捷键（捕获阶段）已 preventDefault 的按键，xterm 不认，必须在这里拦住，否则同时写进 CLI。
+    if (e.defaultPrevented) return false;
     if (['PageUp', 'PageDown', 'Home', 'End'].includes(e.key)) {
       markCodexUserScrollIntent(sessionId, terminalCache.get(sessionId), {
         detachFromBottom: e.key === 'PageUp' || e.key === 'Home',
@@ -1946,6 +1956,13 @@ const toolbarActionsEl = document.getElementById('toolbar-actions');
 require('./toolbar-more').initToolbarMore({
   document,
   zoom: delta => applyZoom(delta === 0 ? 0 : currentZoom + delta),
+  exportConversation: {
+    available: () => !currentAppToolbarView() && !!activeSessionId && sessions.has(activeSessionId),
+    run: () => require('./session-export').createSessionExporter({
+      invoke: (channel, payload) => ipcRenderer.invoke(channel, payload),
+      getSession: id => sessions.get(id), toast: showToast,
+    }).run(activeSessionId),
+  },
 });
 const backstageButton = document.getElementById('btn-backstage');
 const backstageMenu = require('./backstage-menu').createBackstageMenu({ document,
@@ -2686,6 +2703,9 @@ function syncTurnPresentationToSession(sessionId, presentation, turn) {
 }
 const { createCardFollowScroll } = require('./card-follow-scroll');
 const cardFollowScroll = createCardFollowScroll({ element: document.getElementById('msg-overlay'), window, document });
+require('./turn-error-help').install({ document, window, ipcRenderer });
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', () => require('./composer-enter-key').bindSetting({ document, storage: localStorage }), { once: true });
+else require('./composer-enter-key').bindSetting({ document, storage: localStorage });
 const turnCardRenderer = createTurnCardRenderer({
   document,
   window,
@@ -3387,7 +3407,8 @@ ipcRenderer.on('turn-aborted-event', (_event, payload) => {
 
 ipcRenderer.on('turn-failed-event', (_event, payload) => {
   const { hubSessionId, failedAt, turnId, kind, message, occurrenceId } = payload || {};
-  if (!hubSessionId || !isTranscriptCliKind(kind)) return;
+  const cliExited = isCodeAgentKind(kind) && payload.signalSource === 'cli-exited-to-shell';
+  if (!hubSessionId || (!isTranscriptCliKind(kind) && !cliExited)) return;
   const session = sessions.get(hubSessionId);
   if (!session || session.status === 'dormant') return;
   const normalized = detectStreamDisconnect(message);
@@ -3635,7 +3656,9 @@ function wrapPathLinksInElement(rootEl, opts = {}) {
   let node;
   // Share paths are resolved in the background (see path-candidates.js); this
   // element is wrapped again once one of them turns out to exist.
-  const pathOpts = { onNetworkPending: () => _networkPendingWraps.set(rootEl, opts) };
+  // 每次包装最多做 64 次同步磁盘查询：长回答/大日志里每个词都可能被当相对路径去查盘，
+  // 不设上限会卡住主线程；预算用完后靠后的相对路径不再变成链接。
+  const pathOpts = { onNetworkPending: () => _networkPendingWraps.set(rootEl, opts), statBudget: opts.statBudget || { remaining: 64 } };
   while ((node = walker.nextNode())) {
     const text = normalizeMarkdownPathBreaks(node.nodeValue);
     const candidates = collectPathCandidates(text, cwd, pathOpts);
@@ -4778,6 +4801,14 @@ function openCodeAgentSkillsMenu(sessionId, pane = {}, command = '/skills') {
 }
 
 function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
+  // 发送/停止/Esc 之后的焦点：卡片视图回输入框，不要进藏在卡片背后的终端。
+  const focusAfterSend = () => {
+    const target = require('./focus-target').pickFocusTarget({
+      nativeAgent: isNativeAgent(sessions.get(sessionId)),
+      cardView: pane.isCard ? pane.isCard() : currentView === 'card',
+    });
+    if (target === 'input') inputBox.focus(); else terminal.focus();
+  };
   const bar = document.createElement('div');
   bar.className = 'floating-input-bar';
   const commandFeedback = require('./codex-command-feedback').createCodexCommandFeedback(document, bar);
@@ -4817,7 +4848,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   const inputBox = document.createElement('div');
   inputBox.className = 'floating-input-box';
   inputBox.contentEditable = 'true';
-  inputBox.setAttribute('data-placeholder', '输入消息…');
+  inputBox.setAttribute('data-placeholder', require('./composer-enter-key').placeholderFor(require('./composer-enter-key').readMode(localStorage)));
   if (!floatingInputDrafts.has(sessionId)) {
     try {
       const draft = require('./composer-codeagent-skills').readSkillDraft(localStorage, sessionId, sessions.get(sessionId));
@@ -5068,11 +5099,11 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       // Ctrl+C 连点会让 CLI 退出；PTY Claude / Codex 用 Esc，只在运行时发一次（见 pty-interrupt.js）。
       require('./pty-interrupt').sendPtyAgentInterrupt(stopTarget, { state: getSessionRuntimeTruth(stopTarget).state,
         send: data => ipcRenderer.send('terminal-input', { sessionId, data }) });
-      terminal.focus();
+      focusAfterSend();
       return;
     }
     ipcRenderer.send('terminal-input', { sessionId, data: '\x03' });
-    terminal.focus();
+    focusAfterSend();
   });
 
   const sendBtn = document.createElement('button');
@@ -5448,8 +5479,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       terminal.scrollToBottom();
       session = (typeof sessions !== 'undefined' && sessions && typeof sessions.get === 'function')
         ? sessions.get(sessionId) : null;
-      if (isNativeAgent(session)) inputBox.focus();
-      else terminal.focus();
+      focusAfterSend();
       kind = session && session.kind ? session.kind : null;
       wasRunning = session && getSessionRuntimeTruth(session).state === RUNTIME_RUNNING;
       // PTY 的已知本地斜杠命令（/compact、/model…）不一定开新的一轮，
@@ -5644,9 +5674,15 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     // ↑/↓ 同理：候选词翻页也用方向键，抢过来会让中文输入没法选词。
     if (e.isComposing || e.keyCode === 229) return;
     if (codeagentSkills?.onKeyDown(e)) return;
-    if (e.key === 'Enter' && !e.shiftKey) {
+    const enterKey = require('./composer-enter-key'), enterMode = enterKey.readMode(localStorage);
+    if (enterKey.isSendKey(e, enterMode)) {
       e.preventDefault();
       sendInput();
+      return;
+    }
+    if (enterKey.isNewlineKey(e, enterMode)) {
+      e.preventDefault();
+      document.execCommand('insertLineBreak');
       return;
     }
     if (inputHistory) {
@@ -5679,7 +5715,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
         historyCursor.reset();
         return;
       }
-      if (!isNativeAgent(sessions.get(sessionId))) terminal.focus();
+      focusAfterSend();
     }
   });
 
@@ -6158,7 +6194,7 @@ async function selectSession(id, opts = {}) {
     ipcRenderer.send('focus-session', { sessionId: null });
     showDormantResumePlaceholder(session);
     scheduleSessionListRender();
-    void resumeDormantSession(id, opts).catch((error) => {
+    void resumeDormantSession(id, { ...opts, selectIntent: intent }).catch((error) => {
       console.warn('[resume-session] dormant wake failed:', error);
       if (activeSessionId === id) showDormantResumePlaceholder(session, error);
       require('./ui-feedback').showHubAlert(`会话恢复失败：${error && error.message ? error.message : String(error)}`);
@@ -6543,7 +6579,8 @@ async function openPathInHub(filePath, opts = {}) {
     await openPreviewPanel(raw, previewOptions);
     return { ok: true, path: raw, type: 'preview' };
   }
-  const fullPath = _normalizeLocalPathForOpen(raw, cwd, opts.requireExistsForRel !== false);
+  const fullPath = require('./path-candidates').resolveLiteralLocalPath(filePath, cwd)
+    || _normalizeLocalPathForOpen(raw, cwd, opts.requireExistsForRel !== false);
   if (!fullPath) return fail('路径不存在或无法解析', raw);
   // A share path is checked off the main thread: an unreachable server would
   // otherwise freeze the window until the SMB timeout on a single click.
@@ -6575,6 +6612,7 @@ async function openPathInHub(filePath, opts = {}) {
     await openPreviewPanel(fullPath, previewOptions);
     return { ok: true, path: fullPath, type: 'preview' };
   }
+  if (!(await require('./executable-path').confirmIfExecutable(fullPath))) return { ok: false, path: fullPath, cancelled: true };
   let err;
   try { err = await ipcRenderer.invoke('open-path', fullPath); }
   catch (error) { return fail('文件打开失败', fullPath, String(error && error.message || error)); }
@@ -9367,6 +9405,11 @@ ipcRenderer.on('session-created', async (_e, { session }) => {
     return;
   }
   const pendingResume = _pendingDormantResumes.get(session.id) || null;
+  // 用户点开休眠会话后在唤醒期间又切走（别的会话、主页、团队页）：唤醒完成只刷新侧栏，不把人拽回来。
+  // 只管「点侧栏唤醒」这一条路：搜索结果「继续会话」、右键重启等入口发起时本来就要打开它，不记 selectIntent，照旧切过去。
+  const resumeAbandoned = pendingResume?.selectIntent != null && (pendingResume.selectIntent !== sessionOpenIntent
+    || (typeof document !== 'undefined' && document.body.classList.contains('team-page-open'))
+    || (typeof terminalPanelEl !== 'undefined' && !!terminalPanelEl?.classList?.contains('home-active')));
   const wasDormant = !!pendingResume || !!(existing && existing.status === 'dormant');
   if (pendingResume) _pendingDormantResumes.delete(session.id);
   paintSidebarResumePending(session.id, false);
@@ -9467,7 +9510,7 @@ ipcRenderer.on('session-created', async (_e, { session }) => {
   }
   // Background creation/recovery only refreshes the sidebar. Explicit user resumes
   // still mount the terminal, while other sessions retain their unread state.
-  if (!pendingResume && activeSessionId !== session.id && (session.openInBackground === true || !!existing)) {
+  if (resumeAbandoned || (!pendingResume && activeSessionId !== session.id && (session.openInBackground === true || !!existing))) {
     scheduleSessionListRender();
     schedulePersist();
     return;
@@ -9507,6 +9550,16 @@ ipcRenderer.on('session-created', async (_e, { session }) => {
   showTerminal(session.id, {
     forceScrollBottom: !!(pendingResume && pendingResume.forceScrollBottom),
   });
+  // 唤醒完成后与普通切会话一致：自动聚焦输入框（卡片视图下终端不可见，showTerminal 的 focus 不适用）。
+  if (pendingResume) {
+    const resumedId = session.id;
+    setTimeout(() => {
+      if (activeSessionId !== resumedId) return;
+      if (sessionSplit && !sessionSplit.isPrimaryFocused()) return;
+      const box = document.querySelector('.terminal-panel .floating-input-box');
+      if (box && document.activeElement !== box) { box.focus(); placeCaretAtContenteditableEnd(box); }
+    }, 50);
+  }
   scheduleSessionListRender();
   await restorePreviewForContext(`session:${session.id}`);
 });
@@ -10120,12 +10173,14 @@ async function resumeDormantSession(hubId, opts = {}) {
   const existingPending = _pendingDormantResumes.get(hubId);
   if (existingPending) {
     if (opts.forceScrollBottom === true) existingPending.forceScrollBottom = true;
+    if (opts.selectIntent != null) existingPending.selectIntent = opts.selectIntent;
     return existingPending.promise || null;
   }
   const dormant = sessions.get(hubId);
   if (!dormant || dormant.status !== 'dormant') return dormant || null;
   const pendingResume = {
     forceScrollBottom: opts.forceScrollBottom === true,
+    selectIntent: opts.selectIntent ?? null,
     promise: null,
   };
   _pendingDormantResumes.set(hubId, pendingResume);

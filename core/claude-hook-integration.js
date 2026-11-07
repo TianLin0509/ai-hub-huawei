@@ -155,7 +155,7 @@ function ensureManagedSettings(claudeDir, { fsModule = fs, logger = console, eve
 
   if (changed) {
     fsModule.mkdirSync(claudeDir, { recursive: true });
-    fsModule.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf8');
+    require('./atomic-write').writeFileAtomic(fsModule, settingsPath, JSON.stringify(settings, null, 2));
     logger.log?.(`[群聊] settings.json repaired with Hub hook config: ${settingsPath}`);
   }
   return { changed, settingsPath, errors: [] };

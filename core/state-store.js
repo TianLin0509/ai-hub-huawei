@@ -202,7 +202,12 @@ function loadAndSelfHeal({ sessionStore, meetingStore, canEditSession = () => tr
     disk.cleanShutdown = false;
     if (haveLock) {
       // 只在拿到锁的情况下写盘，避免与并发 boot 的 Hub 互踩
-      _writeMergedToDisk(disk);
+      // 写失败（磁盘满、目录只读）不致命：用内存状态继续启动，并把原因带给调用方。
+      try { _writeMergedToDisk(disk); }
+      catch (error) {
+        console.warn('[hub] loadAndSelfHeal: state.json 写入失败，用内存状态继续：', error && error.code || '', error && error.message);
+        disk.storageWriteError = { code: error && error.code || '', message: String(error && error.message || error) };
+      }
     } else {
       console.warn('[hub] loadAndSelfHeal: lock unavailable, returning in-memory heal without disk write');
     }

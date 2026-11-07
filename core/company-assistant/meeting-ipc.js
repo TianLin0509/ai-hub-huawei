@@ -4,6 +4,7 @@ function createMeetingHandlers(service) {
   return {
     'meeting-status': r => m.status(r.id),
     'meeting-start': r => ({ ok: true, meeting: m.create(r) }),
+    'meeting-rename': r => ({ ok: true, meeting: m.rename(r.id, r.title) }),
     'meeting-capture': r => m.capture(r.id, r),
     'meeting-control': r => m.control(r.id, r.op, r.value),
     'meeting-asset': r => ({ ok: true, ...m.asset(r.id, r.seq) }),

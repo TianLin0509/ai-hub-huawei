@@ -10,6 +10,32 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
   let busy = false, refreshing = false, evidenceRequest = 0, thumbsObserver, meterTimer, activeSeq = null, revealQuestion = false;
   const thumbCache = new Map();
   function message(s) { if (root) root.querySelector('[data-m="message"]').textContent = s; }
+  // 改会议名称：点标题旁的笔变成输入框，回车或点别处保存，Esc 放弃。
+  function startRename() {
+    const title = el('session-title'), meetingId = id, current = state?.meeting?.title || '';
+    if (!meetingId || root.querySelector('.meeting-rename-input')) return;
+    const input = document.createElement('input');
+    input.className = 'meeting-rename-input'; input.value = current; input.maxLength = 160; input.setAttribute('aria-label', '会议名称');
+    let finished = false;
+    const finish = async save => {
+      if (finished) return;
+      finished = true;
+      const next = input.value.trim();
+      input.remove(); title.hidden = false; el('rename-title').hidden = false;
+      if (!save || !next || next === current) return;
+      title.textContent = next;
+      try { await call('meeting-rename', { id: meetingId, title: next }); await refresh(); }
+      catch (error) { title.textContent = current; message('改名没成功：' + error.message); }
+    };
+    input.addEventListener('keydown', event => {
+      if (event.isComposing) return;
+      if (event.key === 'Enter') { event.preventDefault(); void finish(true); }
+      else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); void finish(false); }
+    });
+    input.addEventListener('blur', () => { void finish(true); });
+    title.hidden = true; el('rename-title').hidden = true;
+    title.after(input); input.focus(); input.select();
+  }
   const EMPTY_SUMMARY = '<div class="meeting-summary-empty"><strong>讨论的脉络，在这里慢慢清晰</strong><p>结论、待确认的问题与行动项会随理解更新；点击来源标记，回到对应画面和原话。</p><small>理解与问答需要 CodeAgent；未安装也可先采集和回看。</small></div>';
   function meters() {
     const box = root && el('levels'); if (!box) return;
@@ -57,7 +83,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
     root.querySelector('[data-act-local="latest"]').hidden = list.scrollHeight - list.clientHeight - list.scrollTop < 64;
   }
   function questionCard(q, expanded, queueAhead) {
-    const status = { queued: '排队中', running: '回答中', done: '已回答', error: '没答上' }[q.state] || '排队中';
+    const status = q.state === 'queued' && q.waiting ? q.waiting : { queued: '排队中', running: '回答中', done: '已回答', error: '没答上' }[q.state] || '排队中';
     const refs = [...new Set(String(q.answer || '').match(/\[(?:事件\s*\d+|画面\s*\d+:\d{2})\]/g) || [])];
     const answer = String(q.answer || '').replace(/\[(?:事件\s*\d+|画面\s*\d+:\d{2})\]/g, '').trim();
     const answerBody = `<div class="meeting-answer-body">${markdown(answer)}</div>`;
@@ -188,7 +214,8 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       el('duration').textContent = time(m?.capturedMs);
       meters();
       el('clock').textContent = time(capture?.running ? capture.elapsed() : m?.capturedMs);
-      el('session-title').textContent = m?.title || '准备开始一场会议';
+      if (!root.querySelector('.meeting-rename-input')) el('session-title').textContent = m?.title || '准备开始一场会议';
+      el('rename-title').hidden = !m;
       el('source-label').textContent = m ? m.sourceName || '本地会议记录' : '选择共享窗口，让会议内容有据可查';
       el('progress').textContent = m ? `${phase} · 已采集 ${time(m.capturedMs)} · 转写至 ${time(m.transcribedMs)} · 理解至 ${time(m.understoodMs)}` : '尚未开始采集 · 先选窗口和音源';
       for (const name of ['pause','stop']) root.querySelector(`[data-act="${name}"]`).disabled = !capture?.running;
@@ -329,6 +356,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
         const button = e.target.closest('[data-act]'); if (button && !button.disabled && !busy) { busy = true; el('history').disabled = true; button.disabled = true; void action(button.dataset.act).catch(e => message(e.message)).finally(() => { busy = false; button.disabled = false; void refresh().catch(e => message(e.message)); }); }
         if (!e.target.closest('.meeting-more')) el('more').open = false;
         if (e.target.closest('[data-act-local="dismiss"]')) message('');
+        if (e.target.closest('[data-act-local="rename-title"]')) startRename();
         const transcriptToggle = e.target.closest('[data-act-local="toggle-transcript"]');
         if (transcriptToggle) { const hide = root.dataset.hideTranscripts !== 'true'; root.dataset.hideTranscripts = String(hide); transcriptToggle.setAttribute('aria-pressed', String(hide)); transcriptToggle.textContent = hide ? '显示时间流中的原话' : '隐藏时间流中的原话'; }
         if (e.target.closest('[data-act-local="expand-viewer"]')) setViewerExpanded(!root.querySelector('.meeting-viewer').classList.contains('is-expanded'));

@@ -29,6 +29,7 @@ const { AssistantQuery } = require('./query-tool');
 const { PPT_INSTRUCTIONS } = require('./ppt-instructions');
 const { PetReminders } = require('./pet-reminders');
 const AC = require('./answer-context');
+const { AssistantDigest, DIGEST_HOURS, visibleDigest, SOURCE_KEEP_MS } = require('./digest');
 
 const PURPOSE = 'company-assistant';
 const QUERY_DIAGNOSTIC_SEEN = new Set();
@@ -37,7 +38,7 @@ const TOOLS_VERSION = 6;
 // 会话工具的接通判定（v3.1.1）：助理会话起来这么久还没收到工具进程的接通信号，就算「未接上」。
 const TOOLS_HELLO_GRACE_MS = 90000;
 const DEFAULT_SETTINGS = Object.freeze({
-  enabled: true, briefTime: '08:20', summaryTime: '18:00', waitHours: 4, prepMinutes: 15, maxPerHour: 3, refreshMinutes: 10,
+  enabled: true, briefTime: '08:20', summaryTime: '18:00', waitHours: 4, digestHours: 0, prepMinutes: 15, maxPerHour: 3, refreshMinutes: 10,
   watchGroups: [], keywords: [], myName: '', workdays: [1, 2, 3, 4, 5], cliPath: '', email: '', emailFrom: '', chips: [], phone: DEFAULT_PHONE,
   lookbackHours: 36, maxConversations: 0, answerStyle: 'guided', answerEffort: '',
 });
@@ -82,6 +83,20 @@ const DIGEST_CHARS = 4000;
 const JOB_TIMEOUT_MS = 12 * 60000;
 const PPT_TIMEOUT_MS = 25 * 60000;
 const FRESH_MS = 3 * 60000;
+// 助理收工看回执标记（2026-11-06 CodeAgent 性能盘点，做法同会议的「会议回执」和 AI 任务的「任务回执」）：
+// 提问末尾要求最后一行原样写 [助理回执:<本问编号>]，带标记的回答才算答完；以前只要最后一条回答变了就收，
+// CodeAgent 中途一句过渡话可能被当成答案收走。没写标记的（模型漏写）兜底：会话空闲、这条回答又稳定了
+// UNMARKED_GRACE_MS 还没有新回答，按原判定收下，不让回答永远收不了。
+// 8 秒：公司模型漏写标记时每问只多等几秒（助理中位耗时约 60 秒，30 秒太贵）；会话仍须报空闲才收。
+const UNMARKED_GRACE_MS = 8000;
+const STOPPED_TEXT = '已停止这一问';
+const receiptMark = token => `[助理回执:${token}]`;
+const receiptLine = token => `回答完成后，另起最后一行原样写：${receiptMark(token)}（Hub 据此判断你已答完，这一行不会显示给用户）`;
+function stripReceiptMark(text, token) {
+  const s = String(text || '');
+  if (!token) return s;
+  return s.replace(new RegExp(`\\[?\\s*助理回执\\s*[:：]\\s*${token}\\s*\\]?`, 'g'), '').trim();
+}
 // 每页取 100 条（welink-cli 的上限）；一个会话最多往回翻 30 页，只为防止翻页死循环，正常回看时间内远到不了。
 const HISTORY_PAGE = 100;
 const MAX_PAGES = 30;
@@ -140,6 +155,7 @@ class CompanyAssistant {
     } };
     this.welinkGate = deps.welinkGate || (deps.welinkRun ? new WelinkGate(gateOptions) : sharedWelinkGate(gateOptions));
     this.dir = path.join(deps.dataDir, 'company-assistant');
+    this.metering = new (require('./metering').TaskMetering)(this.dir, deps, this.now);
     this.workspace = path.join(this.dir, 'workspace');
     this.bus = deps.bus || noticeBus();
     // 三条互不阻塞的队列（5.5.11）：问答、简报、PPT 页各排各的，简报和 PPT 检索不再挡住提问。
@@ -160,6 +176,7 @@ class CompanyAssistant {
     this.query = new AssistantQuery(this);
     this.meetings = new (require('./meeting').MeetingCompanion)(this, deps);
     this.petReminders = new PetReminders(this);
+    this.digest = new AssistantDigest(this);
     this.toolsReady = null;
   }
 
@@ -182,6 +199,10 @@ class CompanyAssistant {
   settings() { const s = this.read('settings.json', {}); return { ...DEFAULT_SETTINGS, ...s }; }
   setSettings(patch = {}) {
     const s = this.settings(), next = { ...s };
+    if ('digestHours' in patch) {
+      if (!DIGEST_HOURS.includes(patch.digestHours)) throw new Error('定时汇总请选择关闭、1、2 或 4 小时');
+      next.digestHours = patch.digestHours;
+    }
     const hhmm = v => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(v)) ? String(v) : null;
     if ('enabled' in patch) next.enabled = !!patch.enabled;
     if (['guided', 'classic'].includes(patch.answerStyle)) next.answerStyle = patch.answerStyle;
@@ -440,7 +461,7 @@ class CompanyAssistant {
     this.meetings.start(); this.phone.start();
     this.startTimers();
   }
-  close() { this.closed = true; this.petReminders.close(); this.stopPptCollector(); this.stopTimers(); this.meetings.close(); this.loginStop?.abort(); this.auth.close(); this.phone.close(); this.ppt.close?.();
+  close() { this.closed = true; this.digest.close(); this.petReminders.close(); this.stopPptCollector(); this.stopTimers(); this.meetings.close(); this.loginStop?.abort(); this.auth.close(); this.phone.close(); this.ppt.close?.();
     for (const id of Object.values(this.warm)) this.retire(id);
     this.warm = {};
     this.tools?.close();
@@ -790,9 +811,12 @@ class CompanyAssistant {
     }
     this.assertCollectionIdentity(snap);
     this.retainReferencedEvents(snap);
-    this.write(`raw-${day}.json`, snap);
+    // 这一轮没登录上（过期、CLI 超时）：今天已有的好快照原样保留，不写成空的；登录状态由 auth 单独显示。
+    // 否则早上的出处、提醒、摘要都因为 login.ok 为假而一起失效，页面还写「数据 xx 更新」。
+    const keepPrior = !snap.login?.ok && this.snapshot(day)?.login?.ok;
+    if (!keepPrior) this.write(`raw-${day}.json`, snap);
     // 给助理会话读的同一份数据（只留在本机）。
-    try { fs.mkdirSync(path.join(this.workspace, 'data'), { recursive: true }); fs.writeFileSync(path.join(this.workspace, 'data', 'today.json'), JSON.stringify(this.agentSnapshot(snap), null, 1), 'utf8'); } catch { /* 下次再写 */ }
+    if (!keepPrior) try { fs.mkdirSync(path.join(this.workspace, 'data'), { recursive: true }); fs.writeFileSync(path.join(this.workspace, 'data', 'today.json'), JSON.stringify(this.agentSnapshot(snap), null, 1), 'utf8'); } catch { /* 下次再写 */ }
     this.pruneFiles();
     return snap;
   }
@@ -1124,6 +1148,7 @@ class CompanyAssistant {
   finishBrief(job, text, error) {
     const day = job.day, snap = this.snapshot(day), st = this.state(), prev = this.brief(day) || {};
     let brief = !error && snap ? B.parseAgentBrief(text, snap, { day, now: this.now(), settings: this.settings(), done: this.doneSet(), commitments: st.commitments, memory: this.memory.active() }) : null;
+    this.metering.finish(job, brief && !error ? 'success' : 'failure');
     if (brief) {
       brief.note = brief.dropped ? `AI 整理的条目里有 ${brief.dropped} 条找不到出处，已删掉。` : '';
       if (!brief.total && prev.total) brief = { ...prev, organizing: false, note: 'AI 没挑出重点，下面是按规则排的清单。' };
@@ -1176,6 +1201,14 @@ class CompanyAssistant {
         day = candidateDay; historical = true; break;
       }
     }
+    if (!entry) {
+      const saved = this.digest.source(source, login.uid);
+      if (saved) {
+        snap = { at: saved.capturedAt, messages: saved.kind === 'message' ? { [saved.item.conv]: [saved.item] } : {}, scope: { conversations: saved.coverage ? [saved.coverage] : [] } };
+        entry = { kind: saved.kind, label: saved.label + '（汇总时记录）', item: saved.item };
+        day = D.dayKey(saved.item.at || saved.capturedAt); historical = true;
+      }
+    }
     if (!entry) throw new Error('本机资料中没有这条原文。可刷新数据后重试；较早的承诺可能已超出消息保留范围。');
     let context = [], coverage = null;
     if (entry.kind === 'message') {
@@ -1189,11 +1222,19 @@ class CompanyAssistant {
 
   // ---- 提醒 ----
   remind() {
+    this.digest.pruneSources();
     const s = this.settings(), now = this.now(), snap = this.snapshot(D.dayKey(now));
     if (!s.enabled || !snap || !snap.login?.ok) return [];
     const st = this.state();
     const due = R.dueNotices({ snapshot: snap, settings: { ...s, keywordSince: st.keywordSince }, now, commitments: st.commitments, done: this.doneSet(), sessionId: st.sessionId || null });
-    return due.filter(n => this.publish(n));
+    const sent = due.filter(n => this.publish(n));
+    const digest = this.digest.check(snap, s, this.state());
+    return digest ? [...sent, digest] : sent;
+  }
+  digestNotice(id) {
+    const notice = this.state().notices.find(item => item.id === id && item.kind === 'digest' && this.now() - item.at <= SOURCE_KEEP_MS);
+    if (!notice) throw new Error('这份汇总已不在本机近期记录中');
+    return { ok: true, notice: visibleDigest(notice, this.doneSet()) };
   }
   publish(notice) {
     const st = this.state(), now = this.now();
@@ -1253,6 +1294,36 @@ class CompanyAssistant {
     const meta = this.deps.getSession(id) || this.deps.getSessionMetadata?.(id);
     const records = meta && this.deps.readFinals ? this.deps.readFinals(meta) : [];
     return records && records.length ? records[records.length - 1] : null;
+  }
+  // 这一问的会话还在不在（审计 A3-17：以前 CodeAgent 退出后还要空等 12–24 分钟才报「没给出回答」）。
+  // 返回给用户看的原因；还在、或说不准时返回空串（说不准的照旧按时限等）。
+  sessionGone(id) {
+    if (!id) return '';
+    if (!this.deps.getSession(id)) return '助理会话已经关掉了，这一问没答完；可以重问';
+    if (this.deps.isSessionProcessAlive?.(id) === false) return '助理会话的 CodeAgent 进程已退出，这一问没答完；可以重问';
+    return '';
+  }
+  // 「停止这一问」（审计 A3-17）：还在排队的直接撤下；正在答的先让会话停下（尽力而为，停不下也照样结束这一问），
+  // 会话留着可以打开看过程。只动这一问所在的队列，其他队列照常。
+  async stopChat(id) {
+    const item = this.chat().find(c => c.id === id);
+    if (!item) throw new Error('这条对话已经不在了');
+    for (const lane of Object.values(this.lanes)) {
+      const at = lane.queue.findIndex(job => job.type === 'chat' && job.chatId === id);
+      if (at >= 0) { const [job] = lane.queue.splice(at, 1); this.failJob(job, STOPPED_TEXT, { stopped: true }); return this.chat().find(c => c.id === id); }
+      const job = lane.job;
+      if (job && job.type === 'chat' && job.chatId === id) {
+        job.stopped = true;
+        if (job.sessionId && this.sessionBusy(job.sessionId)) {
+          try { await this.deps.interruptSession?.(job.sessionId); } catch (error) { console.warn('[company-assistant] stop chat', error.message); }
+        }
+        this.failJob(job, STOPPED_TEXT, { stopped: true });
+        return this.chat().find(c => c.id === id);
+      }
+    }
+    // 队列里已经没有它（Hub 重启前留下的「进行中」）：直接标成已停止；已答完或已报错的不动。
+    if (item.state === 'queued' || item.state === 'running') { this.patchChat(id, { state: 'error', error: STOPPED_TEXT, stopped: true }); this.changed(); }
+    return this.chat().find(c => c.id === id);
   }
 
   // ---- 每问一个会话（5.5.11，用户 11-05 拍板） ----
@@ -1435,15 +1506,23 @@ class CompanyAssistant {
     const job = lane.queue.shift();
     try {
       lane.job = job;
+      job.meterStart = this.now();
       this.verifyTeamOwner(job);
-      if (job.type === 'chat') this.patchChat(job.chatId, { state: 'running', startedAt: this.now() });
+      if (job.type === 'chat') { this.patchChat(job.chatId, { state: 'running', startedAt: this.now() }); this.changed(); }
       if (!job.teamOwner) await this.ensureToolsReady();
       const toolset = job.teamOwner ? null : this.toolsetOf(job);
       const id = job.teamOwner ? await this.ensureTeamSession(job.teamOwner) : await this.takeSession(toolset);
       if (this.closed) throw new Error('Hub 正在关闭，请重新打开后重试');
+      // 开会话期间用户点了「停止这一问」：不再发问；开好的会话留作下一问的预开会话。
+      if (job.stopped) {
+        if (!job.teamOwner && !this.warm[toolset]) this.warm[toolset] = id; else if (!job.teamOwner) this.retire(id);
+        setTimeout(() => { void this.pump(laneName); }, 0); // 本轮 pump 结束后接着派下一问
+        return;
+      }
       this.verifyTeamOwner(job);
       if (job.teamOwner && this.sessionBusy(id)) { lane.queue.unshift(job); lane.job = null; return; }
-      const prompt = job.teamOwner ? job.prompt : this.composePrompt(job, toolset);
+      job.token = randomUUID();
+      const prompt = (job.teamOwner ? job.prompt : this.composePrompt(job, toolset)) + '\n\n' + receiptLine(job.token);
       // 等回答时让用户看到：按哪类问题作答、Hub 已备好几条材料（体感更快，也知道它在干什么）。
       if (job.type === 'chat' && job.intents?.length) this.patchChat(job.chatId, { guide: { kinds: job.intents.map(k => AC.TITLES[k]).filter(Boolean), items: job.materialItems || 0 } });
       job.baseline = this.lastFinal(id)?.id || null;
@@ -1455,11 +1534,21 @@ class CompanyAssistant {
         this.query.beginTask(job.id, id);
         if (laneName === 'chat') this.saveState({ sessionId: id, toolsVersion: TOOLS_VERSION });
       }
+      this.metering.begin(job);
       const receipt = await this.deps.sendPrompt(id, prompt, randomUUID());
+      if (job.stopped) {
+        // 发问途中被停止：问题可能已经进了会话，让它停下；这一问已按停止结束，接着派下一问。
+        if (receipt && !receipt.notSent) Promise.resolve().then(() => this.deps.interruptSession?.(id)).catch(() => {});
+        setTimeout(() => { void this.pump(laneName); }, 0);
+        return;
+      }
       if (!receipt || receipt.notSent || (receipt.ok === false && !receipt.unconfirmed && receipt.sendStatus !== 'stuck')) throw new Error(receipt?.error || '问题没有发进助理会话');
+      // 问题已送进 CodeAgent：界面从「CodeAgent 准备中」切到「正在查」，两段各自计时（2026-11-06 用户要进度可见）。
+      if (job.type === 'chat') this.patchChat(job.chatId, { answeringAt: this.now() });
       if (toolset === 'desk') this.prewarm('desk');
     } catch (error) {
-      this.failJob(job, error.message);
+      // 已按「停止这一问」结束的不再改写原因，只接着派下一问
+      if (!job.stopped) this.failJob(job, error.message); else setTimeout(() => { void this.pump(laneName); }, 0);
     } finally { lane.pumping = false; this.changed(); }
   }
   async collectJob(laneName) {
@@ -1477,9 +1566,22 @@ class CompanyAssistant {
       this.failJob(job, error.message); return;
     }
     const limit = laneName === 'ppt' ? PPT_TIMEOUT_MS : JOB_TIMEOUT_MS;
-    if (this.sessionBusy(job.sessionId)) { if (this.now() - job.sentAt > limit * 2) this.failJob(job, '助理会话忙了太久'); return; }
-    const final = this.lastFinal(job.sessionId);
-    if (final && final.id !== job.baseline && String(final.text || '').trim()) {
+    const latest = this.lastFinal(job.sessionId);
+    const fresh = latest && latest.id !== job.baseline && String(latest.text || '').trim() ? latest : null;
+    // 带本问回执标记的回答：答完了，会话状态还没报空闲也直接收（省掉收工后的轮询等待）。
+    const marked = !!(fresh && job.token && String(fresh.text).includes(job.token));
+    // 会话没了（关掉了、CodeAgent 进程退出）：已经写出的回答照原判定收下，没有回答就立刻报失败并说明原因。
+    const gone = marked ? '' : this.sessionGone(job.sessionId);
+    if (gone && !fresh) { this.failJob(job, gone); return; }
+    if (!marked && !gone && this.sessionBusy(job.sessionId)) { job.unmarked = null; if (this.now() - job.sentAt > limit * 2) this.failJob(job, '助理会话忙了太久'); return; }
+    if (fresh && !marked && !gone && job.token) {
+      // 没写标记：可能是中途的过渡话，等它稳定一会儿；期间有了新回答或又忙起来就重新计时。
+      if (job.unmarked?.id !== fresh.id) job.unmarked = { id: fresh.id, at: this.now() };
+      if (this.now() - job.unmarked.at < UNMARKED_GRACE_MS) return;
+    }
+    if (fresh) {
+      const final = { ...fresh, text: stripReceiptMark(fresh.text, job.token) };
+      if (!final.text) { this.failJob(job, '助理会话只回了回执标记、没有正文，可以重问'); return; }
       lane.job = null;
       if (!job.teamOwner) this.memory.touch(final.text);
       const isPpt = job.toolset === 'ppt';
@@ -1499,6 +1601,7 @@ class CompanyAssistant {
         this.patchChat(job.chatId, { state: 'done', a: answer.text, agentText: final.text, coverage, queryCoverage: answer.lines, sources, ...(phoneText ? { phoneText } : {}),
           answeredAt: this.now(), pptResults: isPpt ? this.ppt.takeTaskResult?.(job.id) || [] : [] });
       } else this.finishBrief(job, final.text, null);
+      if (job.type === 'chat') this.metering.finish(job, 'success');
       if (!job.teamOwner) this.keepLast(laneName, job.sessionId);
       this.changed();
       void this.pump(laneName);
@@ -1506,13 +1609,15 @@ class CompanyAssistant {
     }
     if (this.now() - job.sentAt > limit) this.failJob(job, `助理会话 ${Math.round(limit / 60000)} 分钟没给出回答`);
   }
-  failJob(job, message) {
+  failJob(job, message, { stopped = false } = {}) {
+    if (stopped) job.stopped = true;
+    this.metering.finish(job, stopped ? 'stopped' : 'failure');
     if (job.toolset === 'ppt' || job.entry === 'ppt') { this.ppt.takeTaskReport?.(job.id); this.ppt.takeTaskResult?.(job.id); }
     this.query.finishAnswer(job.id, '', job.sessionId);
     const lane = this.lanes[job.lane || this.laneOf(job)];
     if (lane && lane.job === job) lane.job = null;
     if (job.sessionId && !job.teamOwner && this.pool.has(job.sessionId)) this.keepLast(job.lane || this.laneOf(job), job.sessionId);
-    if (job.type === 'chat') this.patchChat(job.chatId, { state: 'error', error: message });
+    if (job.type === 'chat') this.patchChat(job.chatId, { state: 'error', error: message, ...(stopped ? { stopped: true } : {}) });
     else this.finishBrief(job, '', message);
     this.changed();
     setTimeout(() => { void this.pump(job.lane || this.laneOf(job)); }, 0);
@@ -1618,7 +1723,7 @@ class CompanyAssistant {
       brief: this.brief(day), nextBriefAt: next, chat: this.chat().filter(c => { if (c.entry === 'ppt') return false; try { this.verifyTeamOwner(c); return true; } catch { return false; } }).slice(-60), job: this.job ? { type: this.job.type, sentAt: this.job.sentAt || null } : null,
       briefJob: this.lanes.brief.job ? { sentAt: this.lanes.brief.job.sentAt || null } : null, pptQueued: this.lanes.ppt.queue.length + (this.lanes.ppt.job ? 1 : 0),
       queued: this.queue.length, session: sid ? { id: sid, open: !!this.deps.getSession(sid), busy: this.sessionBusy(sid) } : null, tools: this.toolsStatus(),
-      notices: [...this.petReminders.notices(), ...st.notices].sort((a, b) => b.at - a.at).slice(0, 10), commitments: st.commitments, phone: this.phone.status(), ppt: this.ppt.status(),
+      notices: [...this.petReminders.notices(), ...st.notices.map(notice => visibleDigest(notice, this.doneSet()))].sort((a, b) => b.at - a.at).slice(0, 10), commitments: st.commitments, phone: this.phone.status(), ppt: this.ppt.status(),
     };
   }
   nextBriefAt(s, now) {

@@ -35,7 +35,7 @@ test('background creation and recovery preserve current view and unread metadata
 test('explicit pending resume and currently selected session still activate',async()=>{
   assert.equal((await route({session:{id:'new'}})).activated,true);
   const existing={id:'other',kind:'codeagent',status:'dormant',unreadCount:4,currentModel:{id:'GLM-5.2',displayName:'GLM-5.2'}};
-  const r=await route({existing,session:{id:'other',kind:'codeagent',currentModel:'',openInBackground:true},pending:true});
+  const r=await route({existing,session:{id:'other',kind:'codeagent',currentModel:'',openInBackground:true},pending:true,active:'other'});
   assert.equal(r.activated,true);assert.equal(r._pendingDormantResumes.size,0);assert.equal(r.saved.currentModel.id,'GLM-5.2');
   assert.equal((await route({existing,session:{id:'other',openInBackground:true},active:'other'})).activated,true);
 });

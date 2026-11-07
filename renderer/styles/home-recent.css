@@ -1,0 +1,26 @@
+/* 主页「接着做」和快捷键表。颜色走主题变量，六个主题都能用。 */
+.home-recent { margin-top: 18px; }
+.home-recent > h2 { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--fg-muted); }
+.home-recent-list { display: grid; gap: 6px; }
+.home-recent-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px; padding: 8px 14px; border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--surface-raised); color: var(--fg-strong); font: inherit; font-size: 13px; text-align: left; cursor: pointer; transition: border-color .18s, background .18s; }
+.home-recent-row:hover { border-color: var(--brand); background: var(--brand-tint); }
+.home-recent-row:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.home-recent-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--fg-muted); opacity: .45; }
+.home-recent-row[data-state="running"] .home-recent-dot { background: var(--brand); opacity: 1; }
+.home-recent-row[data-state="waiting"] .home-recent-dot { background: var(--warning, #e8780c); opacity: 1; }
+.home-recent-title { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.home-recent-state { flex: none; font-size: 12px; color: var(--fg-muted); }
+.home-recent-row[data-state="waiting"] .home-recent-state { color: var(--warning, #e8780c); }
+.home-recent-meta { flex: none; max-width: 40%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: var(--fg-muted); }
+
+.shortcut-help-dialog { width: min(720px, calc(100vw - 48px)); }
+.shortcut-help-dialog .sh-body { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 28px; padding-bottom: 18px; }
+.sh-group h3 { margin: 10px 0 6px; font-size: 13px; font-weight: 600; color: var(--fg-muted); }
+.sh-group dl { margin: 0; }
+.sh-group dl > div { display: flex; flex-direction: column; gap: 3px; padding: 6px 0; border-top: 1px solid var(--border-subtle); }
+.sh-group dt { display: flex; align-items: center; flex-wrap: wrap; gap: 3px; }
+.sh-group dt i { font-style: normal; font-size: 12px; color: var(--fg-muted); }
+.sh-group dd { margin: 0; font-size: 13px; color: var(--fg-strong); }
+.sh-group kbd { padding: 1px 6px; border: 1px solid var(--border-subtle); border-radius: 5px; background: var(--surface-canvas); color: var(--fg-strong); font: inherit; font-size: 12px; }
+.attention-jump { margin-left: 8px; padding: 1px 10px; border: 0; border-radius: 999px; background: var(--brand-tint); color: var(--brand); font: inherit; font-size: 12px; line-height: 20px; cursor: pointer; white-space: nowrap; }
+.attention-jump:hover { background: var(--brand); color: #fff; }

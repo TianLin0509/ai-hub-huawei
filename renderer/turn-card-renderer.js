@@ -404,8 +404,9 @@ function _postProcessTurnCard(card, sessionId, deferActivity = false) {
   if (typeof postProcessCardCodeBlocks === 'function') postProcessCardCodeBlocks(card);
   if (typeof postProcessToolResults === 'function') postProcessToolResults(card);
   const bodyEl = card.querySelector('.turn-body');
-  if (bodyEl && typeof wrapPathLinksInElement === 'function') wrapPathLinksInElement(bodyEl, { sessionId });
+  if (bodyEl && typeof wrapPathLinksInElement === 'function') wrapPathLinksInElement(bodyEl, { sessionId, skipCodeBlocks: true });
   postProcessCardMath(card);
+  require('./turn-error-help').enhanceCard(card);
   if (typeof postProcessLongTextFold === 'function') postProcessLongTextFold(card);
   require('./message-disclosure-state').restore(card);
   if (!deferActivity) require('./conversation-message-view').syncResponseNeighbors(card);
@@ -768,15 +769,18 @@ function reconcileCommandUserCards(sessionId, submissionIds, turns, { container 
 
 function postProcessCardMath(cardEl) {
   if (!cardEl || !renderMathInElement) return false;
+  // 用户自己发的话不是公式来源，不做公式渲染（否则 $5 ... $10 会被吃掉）。
+  if (cardEl.classList?.contains('user')) return false;
   const body = cardEl.querySelector('.turn-body');
   if (!body || body.dataset.mathRendered === 'true') return false;
   try {
+    // 单个 $ 只认 $x$ 这类行内公式：先改写成 \(x\)，不再把任意成对的 $ 当公式。
+    require('./card-math-dollars').convertInlineDollarsIn(body);
     renderMathInElement(body, {
       delimiters: [
         { left: '$$', right: '$$', display: true },
         { left: '\\[', right: '\\]', display: true },
         { left: '\\(', right: '\\)', display: false },
-        { left: '$', right: '$', display: false },
       ],
       ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code', 'option'],
       ignoredClasses: ['katex', 'katex-display'],

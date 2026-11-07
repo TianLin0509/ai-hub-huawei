@@ -7159,7 +7159,7 @@ if (typeof document !== 'undefined') (function () {
         ? '请先勾选至少一位发言人'
         : 'AI 群聊：发普通文本启动一轮 / @<slot> 单聊';
     } else {
-      inputBox.dataset.placeholder = '输入消息...';
+      inputBox.dataset.placeholder = require('./composer-enter-key').placeholderFor(require('./composer-enter-key').readMode(localStorage), '输入消息...');
     }
     if (meeting.scene && meeting.groupChat) {
       inputBox.dataset.placeholder = zeroParticipantsSelected
@@ -7505,7 +7505,9 @@ if (typeof document !== 'undefined') (function () {
       const mid = activeMeetingId;
       const currentMeeting = meetingData[mid] || meeting;
       if (_handleGcMentionKeydown(e, inputBox, currentMeeting)) return;
-      if (e.key === 'Enter' && !e.shiftKey) {
+      const enterKey = require('./composer-enter-key'), enterMode = enterKey.readMode(localStorage);
+      if (enterKey.isNewlineKey(e, enterMode)) { e.preventDefault(); document.execCommand('insertLineBreak'); return; }
+      if (enterKey.isSendKey(e, enterMode)) {
         e.preventDefault();
         doSend();
       }

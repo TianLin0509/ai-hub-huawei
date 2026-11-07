@@ -229,10 +229,11 @@ test('serve exception and incomplete Credit preserve prior readings and expose a
   const failed = await fixture.snapshot({ refresh: true, key: 'personal' });
   assert.equal(failed.rows[0].refresh.error, 'socket closed');
   assert.deepEqual(failed.usage.personal, saved);
-  const cooling = await fixture.snapshot({ refresh: true, key: 'personal' });
-  assert.equal(cooling.rows[0].refresh.status, 'cooldown');
-  assert.equal(cooling.rows[0].refresh.error, 'socket closed');
-  assert.equal(fixture.calls.length, 1);
+  // 上一次失败不算「刚读过」：手动再点会重新读取（仍失败时继续报错），不被冷却挡住。
+  const retried = await fixture.snapshot({ refresh: true, key: 'personal' });
+  assert.equal(retried.rows[0].refresh.status, 'failed');
+  assert.equal(retried.rows[0].refresh.error, 'socket closed');
+  assert.equal(fixture.calls.length, 2);
   clock += usage.CODEAGENT_SERVE_MAX_AGE_MS;
   read = async () => ({ ok: true, models: [], details: [], credit: [], quotas: {} });
   const incomplete = await fixture.snapshot({ refresh: true, key: 'personal' });

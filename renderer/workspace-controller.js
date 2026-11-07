@@ -1676,8 +1676,19 @@
     const requestedWorkspace = options.workspace && typeof options.workspace.path === 'string'
       ? { ...options.workspace }
       : null;
-    workspaceMode = requestedWorkspace ? 'existing' : 'default';
-    existingWorkspace = requestedWorkspace;
+    // 没指定目录时接着用上次的；目录已经不在了就退回默认工作目录。
+    const lastWorkspace = require('./launch-last-workspace');
+    const remembered = requestedWorkspace ? null : lastWorkspace.recall(localStorage);
+    workspaceMode = requestedWorkspace ? 'existing' : (remembered?.mode || 'default');
+    existingWorkspace = requestedWorkspace || remembered?.workspace || null;
+    if (remembered?.mode === 'existing') {
+      const rememberedPath = remembered.workspace.path;
+      void loadRecent().then(paint).catch(() => {});
+      require('node:fs').promises.access(rememberedPath).catch(() => {
+        lastWorkspace.forget(localStorage);
+        if (existingWorkspace?.path === rememberedPath && workspaceMode === 'existing') { workspaceMode = 'default'; existingWorkspace = null; paint(); }
+      });
+    }
     void loadPreparedProjects();
     submitting = false;
     selectedModel = resolveDefaultModel(selectedKind, defaultModelConfig());
@@ -1960,6 +1971,7 @@
       if (submit && companyApiKind(selectedKind) && companyPick[selectedKind]?.source === 'company' && companyProxyStatus?.state !== 'running') submit.textContent = '公司模型准备中（首次约 10–20 秒）…';
       const session = await createSession(selectedKind, { workspace, opts: tuningOpts() });
       require('./codeagent-preference').rememberKind(selectedKind);
+      require('./launch-last-workspace').remember(localStorage, { mode: workspaceMode, workspace });
       closeNewSessionModal();
       return session;
     } catch (error) {

@@ -159,7 +159,7 @@ function createCompanyPptPage({ document, window, ipcRenderer, closeOtherPanels 
     timer = setTimeout(async () => {
       try {
         if (conversionId) { const r = await call('ppt-imgtext-status', { jobId: conversionId }); renderConversion(r.job); if (['done', 'error'].includes(r.job.state)) conversionId = null; }
-        if (chatId) { const r = await call('ppt-page-state', { chatId }); renderStatus(r.ppt); if (r.chat?.state === 'done') { const items = r.chat.pptResults || []; results(items); showReport(r.chat.a, !items.length); notice(items.length ? `助理核验完成 · ${items.length}页候选。适用条件与原文引用见核验报告。` : '本轮未给出已核验候选，原因见下方报告。'); chatId = null; } else if (r.chat?.state === 'error') { notice(r.chat.error || '助理检索未完成，请重试'); chatId = null; } }
+        if (chatId) { const r = await call('ppt-page-state', { chatId }); renderStatus(r.ppt); if (r.chat?.state === 'done') { const items = r.chat.pptResults || []; results(items); showReport(r.chat.a, !items.length); notice(items.length ? `助理核验完成 · ${items.length}页候选。适用条件与原文引用见核验报告。` : '本轮未给出已核验候选，原因见下方报告。'); chatId = null; } else if (r.chat?.state === 'error') { notice(r.chat.error || '助理检索未完成，请重试'); chatId = null; } else if (r.chat) { const phase = require('./wait-progress').assistantChatPhase(r.chat); if (phase) notice(`CodeAgent 按用途检索 · ${require('./wait-progress').waitText(phase)}，整体通常 1–3 分钟。`); } }
         if (status?.indexing?.state === 'indexing') renderStatus((await call('ppt-page-state')).ppt);
       } catch (error) { notice(error.message); }
       if (conversionId || chatId || status?.indexing?.state === 'indexing') poll();

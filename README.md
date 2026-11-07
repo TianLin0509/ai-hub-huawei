@@ -1,6 +1,6 @@
 # AI HUB-Huawei · 内测先锋版（CodeAgent）
 
-把公司内网的 **Code Agent CLI** 放进一个 Windows 桌面工作台：单独会话、多 AI 群聊、卡片视图、休眠恢复、历史检索、自动命名。这是 AI Hub 的公司版（产品名 AI HUB-Huawei，内测先锋版），当前 **v5.5.22**，同步自上游 **1.6.738**（具体提交见 `community-edition.json`）。
+把公司内网的 **Code Agent CLI** 放进一个 Windows 桌面工作台：单独会话、多 AI 群聊、卡片视图、休眠恢复、历史检索、自动命名。这是 AI Hub 的公司版（产品名 AI HUB-Huawei，内测先锋版），当前 **v5.5.23**，同步自上游 **1.6.738**（具体提交见 `community-edition.json`）。
 
 与公开社区版是同一套代码，区别只在默认行为面向公司内网：
 
@@ -19,7 +19,7 @@
 
 > 请帮我安装（或更新）AI HUB-Huawei。运行下面这一条命令（会下载约 140 MB，可能要几分钟，请把命令超时设为 10 分钟或放到后台运行，等它结束）：
 >
-> `powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr https://github.com/TianLin0509/ai-hub-codeagent/releases/latest/download/install-release.ps1 -OutFile ~\aihub-install.ps1 -UseBasicParsing; & ~\aihub-install.ps1 -DisableGpu"`
+> `powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr https://github.com/TianLin0509/ai-hub-huawei/releases/latest/download/install-release.ps1 -OutFile ~\aihub-install.ps1 -UseBasicParsing; & ~\aihub-install.ps1 -DisableGpu"`
 >
 > 结束后看最后输出的 JSON：`ok` 为 true 就告诉我「装好了，桌面上有 AI HUB-Huawei 快捷方式」；`ok` 为 false，就把 `error` 翻译成中文告诉我，并照其中 Fix 部分说明我该怎么做。不要修改其他文件。
 
@@ -29,14 +29,14 @@
 
 ## 安装（离线包）
 
-从发布页下载这三个文件（或由同事转来的离线包里取）：`install-release.ps1`、`AIHubHuawei-5.5.22-win-x64.zip`、`SHA256SUMS.txt`，放在同一个文件夹里，在 PowerShell 中执行：
+从发布页下载这三个文件（或由同事转来的离线包里取）：`install-release.ps1`、`AIHubHuawei-5.5.23-win-x64.zip`、`SHA256SUMS.txt`，放在同一个文件夹里，在 PowerShell 中执行：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install-release.ps1 -Version v5.5.22 `
-  -PackagePath .\AIHubHuawei-5.5.22-win-x64.zip -ChecksumPath .\SHA256SUMS.txt -DisableGpu
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install-release.ps1 -Version v5.5.23 `
+  -PackagePath .\AIHubHuawei-5.5.23-win-x64.zip -ChecksumPath .\SHA256SUMS.txt -DisableGpu
 ```
 
-- 安装到 `%LOCALAPPDATA%\Programs\AIHubCommunity\v5.5.22`，**不需要管理员权限**，旧版本和用户数据都保留。
+- 安装到 `%LOCALAPPDATA%\Programs\AIHubCommunity\v5.5.23`，**不需要管理员权限**，旧版本和用户数据都保留。
 - `-DisableGpu` 是兼容渲染：部分电脑用显卡渲染时窗口会全黑。加上它之后，桌面快捷方式自带兼容参数，并在 `%USERPROFILE%\.ai-hub-community\gpu-disabled.json` 留一个标记（删掉这个文件即恢复显卡渲染）。
 - 装好后从桌面快捷方式「AI HUB-Huawei」打开。窗口标题会显示版本号，报告问题时请带上这一行。
 
@@ -46,17 +46,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install-release.ps1 -Versi
 
 装好 v1.0.1 之后，以后的版本不用再下载整包：
 
-- 启动约 20 秒后在后台查一次新版本（之后每 6 小时一次）。同一个新版本只自动弹窗提醒一次；关掉后左下角「设置」上留一个红点，从设置菜单点开「有新版本」后红点消失。也可以随时在设置菜单里点「检查更新」。只改末位的小版本（例如 5.0.0 → 5.0.1）不弹窗、不挂红点、左上角也不提示，只有在设置菜单里点「检查更新」才看得到；前两位变化（例如 5.0 → 5.1）才照常提醒。
+- 启动约 20 秒后在后台查一次新版本（之后每 6 小时一次）。同一个新版本只自动弹窗提醒一次；关掉后左下角「设置」上留一个红点，从设置菜单点开「有新版本」后红点消失。也可以随时在设置菜单里点「检查更新」。只改末位的小版本（例如 5.5.15 → 5.5.16）不弹窗、不挂红点，要在设置菜单里点「检查更新」手动更新；更新后右下角列出这次的改动（设置菜单「更新日志」能看全部）。
 - 更新弹窗里能看到当前版本 → 新版本、发布说明、更新包大小。下载时显示当前用的下载源、进度、速度和剩余时间。
-- 下载源按顺序尝试：先 GitHub，再阿里云。每个源下完都核对大小和校验值；被公司代理换成网页、404、长时间没数据、校验不一致，都会写明原因并自动换下一个源。全部失败时给出发布页链接，可以手动下载安装包。
-- 一般只下载约 7 MB 的程序文件（整包约 90 MB）。点「立即重启」后约 5 秒完成替换并自动重新打开；替换失败会自动恢复原来的版本，并在重新打开后告诉你原因。底层运行时变化的版本会改为下载完整安装包。
+- 下载源按发行版配置依次尝试（成员版走阿里云，公开版 GitHub 和阿里云）。每个源下完都核对大小和校验值；被公司代理换成网页、404、长时间没数据、校验不一致，都会写明原因并自动换下一个源。全部失败时给出发布页链接，可以手动下载安装包。
+- 一般只下载约 14 MB 的程序文件（整包约 100 MB）。点「立即重启」后约 5 秒完成替换并自动重新打开；替换失败会自动恢复原来的版本，并在重新打开后告诉你原因。底层运行时变化的版本会改为下载完整安装包。
 - 从 v1.0.0 升级到 v1.0.1 需要装一次完整包（v1.0.0 还没有这个功能）。
 
 ## 让 Agent 代装与验收
 
 把这段话发给你的 Code Agent：
 
-> 请按 AI Hub 公司版 v5.5.22 的 README 用离线包安装（带 -DisableGpu），然后读 docs/COMPANY-CODE-AGENT.md 的「现场验收」，逐项验证 CodeAgent 会话：新建、卡片显示回答、休眠后恢复、Hub 关闭重开后恢复、两名 CodeAgent 成员的群聊。只发极短的测试消息，不修改项目文件，报告每项通过或不通过并附原始证据。
+> 请按 AI Hub 公司版 v5.5.23 的 README 用离线包安装（带 -DisableGpu），然后读 docs/COMPANY-CODE-AGENT.md 的「现场验收」，逐项验证 CodeAgent 会话：新建、卡片显示回答、休眠后恢复、Hub 关闭重开后恢复、两名 CodeAgent 成员的群聊。只发极短的测试消息，不修改项目文件，报告每项通过或不通过并附原始证据。
 
 源码包里另有自动验收脚本 `tests/acceptance-codeagent-real.js`（14 项，用真实 Code Agent 跑），用法见脚本开头注释。
 

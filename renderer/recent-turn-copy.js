@@ -25,6 +25,7 @@ function normalizeCopiedText(value) {
 function assistantSender(entry = {}) {
   const kindLabels = {
     claude: 'Claude',
+    codeagent: 'CodeAgent',
     codex: 'Codex',
     deepseek: 'DeepSeek',
     gemini: 'Antigravity',

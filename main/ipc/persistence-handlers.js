@@ -210,6 +210,17 @@ function handlePersistSessions(list, meetingList, deps) {
     stateStore,
   } = deps;
 
+  // Guard: an empty list while two or more sessions were last persisted is far more
+  // likely an incomplete renderer snapshot (restore not finished) than a user deleting
+  // everything at once. Single deletes still flow through the normal diff below.
+  if (list.length === 0) {
+    const lastIds = getLastPersistedSessionIds();
+    if (lastIds && lastIds.size >= 2) {
+      console.warn(`[persist-sessions] refused empty session list (last persisted ${lastIds.size}), no records removed`);
+      return false;
+    }
+  }
+
   const previousSessions = getLastPersistedSessions();
   const sharedViewerIds = new Set();
   const previousSessionsById = new Map(

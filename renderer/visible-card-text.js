@@ -23,7 +23,7 @@ function extractVisibleCardText(root) {
     '.conversation-long-preview',
     '[data-copy-exclude]',
   ].join(',')).forEach(node => node.remove());
-  clone.querySelectorAll('.conversation-long-message, .conversation-activity').forEach(details => {
+  clone.querySelectorAll('.conversation-long-message, .conversation-activity, .teh-raw').forEach(details => {
     details.open=true;
     details.querySelector('summary')?.remove();
   });
@@ -64,7 +64,6 @@ function extractVisibleCardText(root) {
   return String(text)
     .replace(/\u00a0/g, ' ')
     .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n[ \t]+/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }

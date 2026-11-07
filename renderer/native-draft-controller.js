@@ -4,21 +4,28 @@
 // window can retain its text but cannot overwrite a newer saved draft.
 function createNativeDraftController({ sessionId, invoke, initialText = '', onRestore, onStatus }) {
   let view = { onRestore, onStatus }, current = null, pending, saving = false, failure = null;
+  // 会话暂时不在主进程（CLI 断开）：草稿留在内存里排队，重新 attach 后再存，不算失败。
+  let offline = false;
   let changedBeforeRead = false;
   let desired = initialText;
   let activeSave = null;
   const status = error => view.onStatus?.(error, { saving: saving || pending !== undefined || !current });
   function pump() {
     if (saving) return activeSave;
-    if (!current || failure || pending === undefined) return;
+    if (!current || failure || offline || pending === undefined) return;
     saving = true;
     activeSave = (async () => {
       // Publish the promise before invoking callbacks that may change the draft.
       await Promise.resolve();
       try {
-        while (!failure && pending !== undefined) {
+        while (!failure && !offline && pending !== undefined) {
           const text = pending; pending = undefined; status(null);
           const response = await invoke('native-draft:save', { sessionId, text, revision: current.revision });
+          if (!response?.ok && response?.code === 'session-offline') {
+            if (pending === undefined) pending = text;
+            offline = true;
+            break;
+          }
           if (!response?.ok) throw new Error(response?.error || '草稿未能保存');
           current = response.record;
         }
@@ -48,7 +55,7 @@ function createNativeDraftController({ sessionId, invoke, initialText = '', onRe
     ready,
     async flush() {
       await ready;
-      while (!failure && (saving || pending !== undefined)) await pump();
+      while (!failure && !offline && (saving || pending !== undefined)) await pump();
       if (failure) throw failure;
     },
     change(text) {
@@ -56,11 +63,14 @@ function createNativeDraftController({ sessionId, invoke, initialText = '', onRe
       if (!saving && pending === undefined && !failure && current?.text === text) return;
       desired = text;
       if (!current) changedBeforeRead = true;
-      pending = text; void pump(); status(failure);
+      pending = text; offline = false; void pump(); status(failure);
     },
     attach(nextView) {
       view = nextView;
+      const wasOffline = offline;
+      offline = false;
       if (current && !failure) view.onRestore?.(desired);
+      if (wasOffline) void pump();
       status(failure);
     },
     get state() { return { current, pending, saving, failure }; },

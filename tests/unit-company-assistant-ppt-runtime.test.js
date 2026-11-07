@@ -23,7 +23,7 @@ function rig(t) {
       assert.ok(fs.existsSync(svc.tools.endpointFile));
       sessions.set(opts.id, { ...opts, kind, status: 'idle' }); return { id: opts.id };
     },
-    sendPrompt: async (id, prompt) => { sent.push({ id, prompt }); finals.set(id, [{ id: 'final-' + sent.length, text: 'PPT 请求已完成' }]); return { ok: true }; },
+    sendPrompt: async (id, prompt) => { sent.push({ id, prompt }); finals.set(id, [{ id: 'final-' + sent.length, text: 'PPT 请求已完成\n' + (String(prompt).match(/\[助理回执:[^\]]+\]/) || [''])[0] }]); return { ok: true }; },
   });
   for (const name of ['meetings', 'phone']) svc[name].start = () => background.push(name);
   svc.tick = async () => background.push('tick');

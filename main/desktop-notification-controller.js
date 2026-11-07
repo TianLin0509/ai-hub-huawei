@@ -18,6 +18,7 @@ function normalizeDesktopNotificationPayload(payload = {}) {
   if (!sessionId) return null;
   return {
     sessionId,
+    ...(sessionId === 'company-assistant' && cleanInline(payload.noticeId, 160) ? { noticeId: cleanInline(payload.noticeId, 160) } : {}),
     title: cleanInline(payload.title, 100) || 'AI 会话',
     body: cleanInline(payload.body, 240) || '本轮回答已经完成，点击回到会话查看。',
     kind: cleanInline(payload.kind, 32),
@@ -184,7 +185,8 @@ function createDesktopNotificationController({
     if (!sessionId) return;
     dismiss();
     try { focusPrimaryWindow?.(); } catch (_) {}
-    try { sendToRenderer?.('desktop-notification:open-session', { sessionId }); } catch (_) {}
+    try { sendToRenderer?.('desktop-notification:open-session', { sessionId,
+      ...(sessionId === 'company-assistant' && cleanInline(payload.noticeId, 160) ? { noticeId: cleanInline(payload.noticeId, 160) } : {}) }); } catch (_) {}
   };
   const onDismiss = (event) => {
     if (!event || !isNotificationRenderer(event.sender)) return;

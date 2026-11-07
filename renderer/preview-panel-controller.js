@@ -25,6 +25,15 @@ const GUEST_FAILURE_HINTS = {
   'integrity-failure': '渲染进程完整性校验失败，通常是安全软件拦截或 exe 被改动过，重启 Hub 再试。',
 };
 
+// 半窗预览的全局 Esc：只在焦点位于预览内、或没有明确焦点时才由预览处理。
+// 终端（要用 Esc 打断 AI）、对话框、菜单、输入框、可编辑区里的 Esc 属于它们自己。
+const ESC_OWNER_SELECTOR = '.xterm, dialog, [role="menu"], .fm-context-menu, [contenteditable]:not([contenteditable="false"]), input, textarea, select';
+function previewOwnsEscape(target, panelEl) {
+  if (!target || typeof target.closest !== 'function') return true;
+  if (panelEl && typeof panelEl.contains === 'function' && panelEl.contains(target)) return true;
+  return !target.closest(ESC_OWNER_SELECTOR);
+}
+
 function describeGuestFailure(reason, fallback) {
   const code = String(reason == null ? '' : reason);
   if (!code) return fallback;
@@ -660,7 +669,9 @@ function createPreviewPanelController({
 
   async function readPreviewFile(filePath) {
     try {
-      return await ipcRenderer.invoke('read-file', filePath);
+      const result = await ipcRenderer.invoke('read-file', filePath);
+      if (result && result.encoding && result.encoding !== 'utf-8') showPreviewNotice(`已按 ${result.encoding.toUpperCase()} 解码显示`, 'info');
+      return result;
     } catch (error) {
       return { error: String(error && error.message || error) };
     }
@@ -2245,6 +2256,7 @@ function createPreviewPanelController({
       return;
     }
     if (event.key !== 'Escape') return;
+    if (!(outlineState && outlineState.isFullscreen) && !previewOwnsEscape(event.target, previewPanelEl)) return;
     if (previewPanelEl.style.display === 'flex') {
       event.preventDefault();
       event.stopPropagation();
@@ -2321,6 +2333,7 @@ function createPreviewPanelController({
 }
 
 module.exports = {
+  previewOwnsEscape,
   QUICK_OPEN_DEBOUNCE_MS,
   cleanPreviewTarget,
   createPreviewPanelController,

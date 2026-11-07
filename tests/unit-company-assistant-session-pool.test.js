@@ -52,7 +52,9 @@ function fixture(t, { prewarm = true } = {}) {
   a.cli = () => 'fixture-cli';
   a.auth.status = () => ({ state: 'online', login: { ok: true, uid: 'owner' } });
   a.write(`raw-${DAY}.json`, snapshot());
-  const answer = (id, text) => { const list = finals.get(id) || []; list.push({ id: 'f' + (list.length + 1), text }); finals.set(id, list); };
+  // 照真实 CodeAgent 的样子：回答最后一行带上这一问的回执标记（发给这个会话的最后一条提问里的那个）。
+  const markOf = id => ([...prompts].reverse().find(p => p.id === id)?.text.match(/\[助理回执:[^\]]+\]/) || [''])[0];
+  const answer = (id, text) => { const list = finals.get(id) || []; list.push({ id: 'f' + (list.length + 1), text: text + '\n' + markOf(id) }); finals.set(id, list); };
   const settle = async () => { for (let i = 0; i < 20; i += 1) await new Promise(r => setImmediate(r)); };
   return { a, root, sessions, prompts, closed, answer, settle, advance: ms => { clock += ms; } };
 }

@@ -9,7 +9,10 @@ function registerCompanyAssistantIpc(ipcMain, service) {
     'brief-now': async () => { await service.generateBrief({ force: true }); return service.status(); },
     ask: request => ({ ok: true, item: service.ask(String(request?.text || ''), { entry: request?.entry === 'ppt' ? 'ppt' : '' }) }),
     'retry-chat': request => ({ ok: true, item: service.retryChat(String(request?.id || '')) }),
+    // 「停止这一问」（审计 A3-17）：只结束这一问，其他队列照常。
+    'stop-chat': async request => ({ ok: true, item: await service.stopChat(String(request?.id || '')) }),
     'mark-done': request => service.markDone(String(request?.source || ''), request?.done !== false),
+    'digest-notice': request => service.digestNotice(String(request?.id || '')),
     source: request => service.sourceContext(String(request?.source || ''), request?.day),
     'set-settings': request => ({ ok: true, settings: service.setSettings(request || {}) }),
     memory: request => service.memory.execute(request || { op: 'list' }, { fromSettings: true }),

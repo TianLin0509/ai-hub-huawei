@@ -65,7 +65,7 @@ function speakGate(settings = {}, ctx = {}, spokenAt = [], item = null) {
   if (ctx.fullscreen) return { ok: false, reason: 'fullscreen' };
   if (ctx.pose === 'sleep' && !item?.sticky) return { ok: false, reason: 'sleeping' };
   const recent = spokenAt.filter(t => now - t < 3600000).length;
-  if (recent >= MAX_PER_HOUR && !item?.sticky) return { ok: false, reason: 'hourly-cap' };
+  if (recent >= MAX_PER_HOUR && !item?.sticky && item?.kind !== 'digest') return { ok: false, reason: 'hourly-cap' };
   return { ok: true, reason: '' };
 }
 
@@ -109,7 +109,7 @@ class SpeechQueue {
       const next = this.pending.shift();
       const verdict = typeof gate === 'function' ? gate(this.spokenAt, next) : { ok: true };
       if (verdict && verdict.ok) {
-        if (!next.sticky) this.spokenAt.push(now);
+        if (!next.sticky && next.kind !== 'digest') this.spokenAt.push(now);
         this.spokenAt = this.spokenAt.filter(t => now - t < 3600000);
         this.current = { ...next, at: now, until: next.sticky ? null : now + this.showMs };
       } else {
