@@ -45,7 +45,7 @@ assert.deepEqual(flowEntries(queueMeeting).map(q => q.at), [1000, 2000, 3000], '
 queueMeeting.answers[1].state = 'error'; queueMeeting.questionJob.state = 'error';
 assert.deepEqual(queuePositions(), [0, null, 1], 'failed answers do not count ahead');
 const { meetingAsrState } = require('../renderer/company-meeting-asr-state');
-assert.equal(meetingAsrState().setupText, '本地转写：未安装（约 500 MB）');
+assert.equal(meetingAsrState().setupText, '本地转写：未安装（约 300 MB）');
 assert.equal(meetingAsrState({ ready: true }).setupText, '本地转写：已就绪');
 assert.equal(meetingAsrState({ phase: '下载识别模型' }).installing, true);
 assert.match(meetingAsrState({ error: '下载失败' }).setupText, /下载失败/);

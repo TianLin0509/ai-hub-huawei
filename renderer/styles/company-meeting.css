@@ -105,6 +105,11 @@
 .meeting-more-panel{position:absolute;right:0;top:44px;width:340px;max-height:calc(100vh - 170px);overflow:auto;padding:16px;background:var(--hw-surface);border-radius:var(--hw-r-md);box-shadow:var(--hw-e3)}
 .meeting-menu-field{display:grid;grid-template-columns:105px minmax(0,1fr);align-items:center;gap:8px;margin-bottom:10px;font-size:var(--hw-fs-12);color:var(--hw-text-2)}
 .meeting-menu-field select{width:100%}
+.meeting-speakers{display:grid;gap:6px;margin-bottom:10px;font-size:var(--hw-fs-12);color:var(--hw-text-2)}
+.meeting-speakers p{margin:0}
+.meeting-menu-field textarea{width:100%;min-height:72px;resize:vertical;font:inherit;font-size:var(--hw-fs-12)}
+.meeting-speakers label{display:grid;grid-template-columns:120px 1fr;align-items:center;gap:8px}
+.meeting-speakers input{height:26px;min-width:0}
 .meeting-video-usage{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;font-size:var(--hw-fs-12);color:var(--hw-text-2)}
 .meeting-rate{height:28px;font-size:var(--hw-fs-12)}
 .meeting-menu-actions{display:flex;flex-direction:column;gap:2px;border-top:1px solid var(--hw-line);padding-top:10px;margin-top:12px}

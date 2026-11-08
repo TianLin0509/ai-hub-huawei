@@ -33,7 +33,7 @@ class MeetingTools {
       const start=this.m.time(a.startMs??0),end=this.m.time(a.endMs??m.capturedMs);if(end<start||end-start>15*60000)throw new Error('每次读取最多15分钟');
       const offset=Number(a.offset||0);if(!Number.isInteger(offset)||offset<0)throw new Error('分页位置无效');
       const all=m.events.filter(e=>['transcript','mark','slide'].includes(e.kind)&&e.at<=end&&(e.end??e.at)>=start).sort((a,b)=>a.at-b.at||a.seq-b.seq),rows=all.slice(offset,offset+60);
-      return {content:[text({startMs:start,endMs:end,total:all.length,events:rows,nextOffset:offset+rows.length<all.length?offset+rows.length:null,gaps:(m.recording?.gaps||[]).filter(g=>g.at<=end&&g.end>=start),transcribedMs:m.transcribedMs})]};
+      return {content:[text({startMs:start,endMs:end,total:all.length,speakers:require('./meeting-speakers').names(m),events:rows,nextOffset:offset+rows.length<all.length?offset+rows.length:null,gaps:(m.recording?.gaps||[]).filter(g=>g.at<=end&&g.end>=start),transcribedMs:m.transcribedMs})]};
     }
     if (r.name === 'meeting_slides') {
       const seqs=a.seqs;if(!Array.isArray(seqs)||!seqs.length||seqs.length>4)throw new Error('每次指定1至4个截图序号');

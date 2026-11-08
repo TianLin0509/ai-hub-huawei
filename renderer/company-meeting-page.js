@@ -3,6 +3,7 @@ const { MeetingCapture } = require('./meeting-capture');
 const { meetingTemplate } = require('./company-meeting-template');
 const { flowEntries, meetingNavigation } = require('./company-meeting-flow');
 const { meetingAsrState } = require('./company-meeting-asr-state');
+const netPassView = require('./net-pass-view');
 function createCompanyMeetingPage({ document, window, call, markdown, openSession }) {
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const time = ms => `${String(Math.floor((ms || 0) / 60000)).padStart(2, '0')}:${String(Math.floor((ms || 0) / 1000) % 60).padStart(2, '0')}`;
@@ -111,7 +112,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       if (!row) { row = document.createElement('div'); row.dataset.flowKey = entry.key; }
       row.className = `meeting-flow-event is-${entry.kind}`;
       row.dataset.at = entry.at === null ? '' : String(entry.at);
-      const version = JSON.stringify(entry);
+      const version = JSON.stringify(entry) + (entry.event?.speaker ? speakerName(entry.event) : '');
       if (row.dataset.version !== version) {
         const expanded = row.querySelector('details')?.open ?? true;
         const label = entry.afterMeeting ? '会后' : entry.at === null ? '未记录' : time(entry.at);
@@ -121,7 +122,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
         } else {
           const e = entry.event;
           content = e.kind === 'slide' ? `<div class="meeting-frame-item"><button class="meeting-frame" data-event="${e.seq}" aria-label="查看 ${time(e.at)} 的截图"><img data-thumb="${e.seq}" alt="会议截图"></button><div><strong>共享画面${e.revisit ? ' · 再次展示' : ''}</strong><p>${e.forced ? '手动截图' : '自动精选'}</p><button class="ca-link" data-find-ppt="${e.seq}">找原稿</button></div></div>`
-            : `<button class="meeting-event ${e.kind === 'mark' ? 'is-mark' : ''}" data-event="${e.seq}"><b>${e.kind === 'mark' ? '★ 重点' : e.track === 'mic' ? '麦克风' : '系统声音'}</b><span>${esc(e.text)}</span></button>`;
+            : `<button class="meeting-event ${e.kind === 'mark' ? 'is-mark' : ''}" data-event="${e.seq}"><b>${e.kind === 'mark' ? '★ 重点' : esc(speakerName(e))}</b><span>${esc(e.text)}</span></button>`;
         }
         row.innerHTML = `<time>${label}</time><div class="meeting-flow-content">${content}</div>`;
         citations(row); row.dataset.version = version;
@@ -188,10 +189,12 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       state = next;
       const m = state.meeting, asr = state.asr || {};
       const history = '<option value="">历史会议…</option>' + state.meetings.map(x => `<option value="${esc(x.id)}" ${x.id === id ? 'selected' : ''}>${esc(x.title)} · ${shortDate(x.startedAt)}${x.videoBytes ? ' · ' + size(x.videoBytes) : ''}</option>`).join('');
+      renderSpeakers(m);
       const videoTotal = state.meetings.reduce((n, x) => n + (x.videoBytes || 0), 0);
       el('video-total').textContent = videoTotal ? `全部录像占用 ${size(videoTotal)}` : '';
       if (el('history').dataset.html !== history) { el('history').innerHTML = history; el('history').dataset.html = history; }
-      el('asr').textContent = asr.error || asr.phase || (asr.ready ? '本地转写已就绪 · CPU 模式' : '首次使用可安装独立本地转写组件（模型约 500 MB）；未安装也可先录音，之后补转写。');
+      el('asr').textContent = asr.error || asr.phase || (asr.upgrade ? `本地转写可用（旧引擎，较慢）。升级到新引擎更快、中文更准，约 ${asr.sizeText}。` : asr.ready ? `本地转写已就绪 · ${asr.voiceprint ? '自动区分发言人 · ' : ''}CPU 模式` : `首次使用需下载本地转写组件（约 ${asr.sizeText || '300 MB'}，断了可续）；未安装也可先录音，之后补转写。`);
+      renderAsrPass(asr);
       const speech = meetingAsrState(asr, m);
       el('setup-asr').textContent = speech.setupText;
       el('setup-asr-install').hidden = !speech.install;
@@ -245,6 +248,9 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       const jobText = !m?.job ? '' : m.job.state === 'error' ? (m.job.kind === 'question' ? '回答失败，可重试' : '理解失败，可重试')
         : m.job.kind === 'prime' ? `CodeAgent 正在预热（${waited} 秒）` : m.job.kind === 'question' ? `正在回答提问（${waited} 秒）` : `CodeAgent 正在整理（${waited} 秒）`;
       el('understanding-status').textContent = m ? `第 ${m.revision} 版 · 理解至 ${time(m.understoodMs)}${jobText ? ' · ' + jobText : m.summary ? ' · 来源可点击回查' : ' · 等待 CodeAgent 理解'}${m.lastDuration && !m.job ? ` · 上轮用时 ${Math.round(m.lastDuration / 1000)} 秒` : ''}` : '采集、本地转写与会议理解独立进行';
+      // 一眼看出这一轮改了什么（模型写的「本轮小结」），不用逐条对比纪要。
+      if (m?.lastChange && !m.job) el('understanding-status').textContent += ` · 刚更新：${m.lastChange.length > 40 ? m.lastChange.slice(0, 40) + '…' : m.lastChange}`;
+      el('understanding-status').title = m?.lastChange ? '本轮变化：' + m.lastChange : '';
       // 会议专属 CodeAgent：状态、速度档、自动间隔、打开会话（2026-10-25）。
       const agent = m?.agent?.state || (m?.sessionId ? 'ready' : 'none');
       const agentBox = el('agent-state'); agentBox.dataset.state = m?.job && m.job.state !== 'error' && m.job.kind !== 'prime' ? 'busy' : agent;
@@ -266,7 +272,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       pendingBox.innerHTML = pending.length ? `<i aria-hidden="true"></i><span>${pending.length} 个问题处理中 · 答案会插回时间流</span>` : '';
       if (state.recordingError || m?.error || m?.asrError || rec?.full?.durationError) message(state.recordingError || m.error || m.asrError || rec?.full?.durationError);
       renderFlow(m); renderNavigation(m); renderReviewHero(m);
-      const summary = el('summary'), html = m?.summary ? markdown(m.summary) : EMPTY_SUMMARY;
+      const summary = el('summary'), html = m?.summary ? markdown(plainMinutes(m.summary)) : EMPTY_SUMMARY;
       if (summary.dataset.html !== html) { summary.innerHTML = html; citations(summary); summary.dataset.html = html; }
     } finally { refreshing = false; }
   }
@@ -392,6 +398,9 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       root.addEventListener('keydown', e => { if (e.key === 'Escape' && el('more').open) { el('more').open = false; el('more').querySelector('summary').focus(); } });
       el('timeline').addEventListener('scroll', updateFollowButton, { passive: true });
       root.querySelector('[data-m="history"]').addEventListener('change', e => selectMeeting(e.target.value));
+      void call('meeting-glossary', {}).then(r => { if (document.activeElement !== el('glossary')) el('glossary').value = r.text || ''; }).catch(() => {});
+      el('glossary').addEventListener('change', e => { void call('meeting-glossary-save', { text: e.target.value }).then(r => message(`专业词库已保存：${r.terms.length} 个词${r.fixes.length ? `，${r.fixes.length} 条替换（对之后的转写生效）` : ''}`)).catch(err => message(err.message)); });
+      el('speakers').addEventListener('change', e => { const sid = e.target.dataset?.speaker; if (id && sid) void call('meeting-control', { id, op: 'speaker-name', value: { id: Number(sid), name: e.target.value } }).then(() => refresh()).catch(err => message(err.message)); });
       el('interval').addEventListener('change', e => { if (id) void call('meeting-control', { id, op: 'interval', value: Number(e.target.value) }).then(() => refresh()).catch(err => message(err.message)); });
       el('fast-model').addEventListener('change', e => { if (id) void call('meeting-control', { id, op: 'fast-model', value: e.target.value }).then(() => refresh()).catch(err => message(err.message)); });
       el('note').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); root.querySelector('[data-act="mark"]').click(); } });
@@ -445,6 +454,26 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
     void refresh().catch(e => message(e.message));
   }
   // 回放优先走整场录像；只有 5.5.0 之前的老会议才退回分段。
+  // 发言人：按声音自动区分，名字在「更多」里改（core/company-assistant/meeting-speakers.js）。
+  function speakerName(e){const s=(state?.meeting?.speakers?.list||[]).find(x=>x.id===e.speaker);return s?(s.name||`发言人${s.id}`):e.track==='mic'?'麦克风':'系统声音';}
+  function renderSpeakers(m){
+    const box=el('speakers'),list=m?.speakers?.list||[],key=(m?.id||'')+':'+list.map(s=>`${s.id}/${s.name}/${s.n}`).join(',');
+    if(box.dataset.key===key||box.contains(document.activeElement))return; box.dataset.key=key; box.hidden=!list.length;
+    box.innerHTML=list.length?`<p>发言人（按声音自动区分，改名后时间流和纪要都用新名字）</p>`+list.map(s=>`<label>${esc(s.track==='mic'?'麦克风':'系统声音')} · ${s.n} 句<input data-speaker="${s.id}" maxlength="40" value="${esc(s.name)}" placeholder="发言人${s.id}"></label>`).join(''):'';
+  }
+  // 下载被公司代理拦下时，就地给「放行下载服务器」按钮（renderer/net-pass-view.js，和一键更新共用）。
+  let netPass = null, netPassLast = null;
+  const ipcRenderer = (() => { try { return require('electron').ipcRenderer; } catch { return null; } })();
+  function renderAsrPass(asr){
+    const slot=el('asr-pass'); if(!slot)return;
+    if(!asr.blocked||!ipcRenderer){slot.hidden=true;slot.innerHTML='';return;}
+    slot.hidden=false; netPassView.ensureCss();
+    if(!netPass){void ipcRenderer.invoke('net-pass:status',{refresh:true}).then(v=>{netPass=v||{hosts:[]};renderAsrPass(state?.asr||{});}).catch(()=>{});return;}
+    const html=netPassView.boxHtml(netPass,{last:netPassLast}); if(slot.dataset.html===html)return; slot.dataset.html=html; slot.innerHTML=html;
+    netPassView.bind(slot,{ipcRenderer,onUpdate:(next,last)=>{if(next)netPass=next;netPassLast=last;slot.dataset.html='';renderAsrPass(state?.asr||{});}});
+  }
+  // 纪要条目编号（[D2] 等）只给模型对齐用，界面不显示（core/company-assistant/meeting-minutes.js）。
+  function plainMinutes(s){return String(s||'').replace(/^(\s*[-*]\s*)\[[TFDAQ]\d{1,3}\]\s*/gm,'$1');}
   function size(bytes){return bytes>=1024**3?(bytes/1024**3).toFixed(1)+' GB':Math.max(1,Math.round(bytes/1024**2))+' MB';}
   function canReplayFull(rec){return !!rec?.full?.bytes&&rec.full.status!=='writing';}
   function canReplayAt(at){const rec=state.meeting?.recording;return canReplayFull(rec)||!!rec?.segments.some(s=>s.status==='ready'&&s.at<=at&&s.end>at);}

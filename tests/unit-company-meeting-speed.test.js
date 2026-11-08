@@ -41,11 +41,14 @@ async function main() {
     const file = prompts.find(p => p.id === first.sessionId && /input-/.test(p.prompt)).prompt.match(/input-[\w-]+\.txt/)[0];
     const input = fs.readFileSync(path.join(m.dir(first.id), file), 'utf8'); assert.equal((input.match(/先固定信道参数/g) || []).length, 1); assert.doesNotMatch(input, /audioSeq|recentContext|previousSummary/);
     await finish('job');
-    // Three completed understanding turns retire only that lane, then read the skill once in its new session.
+    // Three completed understanding turns retire only that lane; the new session reads the skill inside its first round (no separate warmup turn).
     for (let i = 0; i < 2; i++) { state = m.load(first.id); state.requested = true; m.save(state); await m.tick(); await finish('job'); }
     state = m.load(first.id); state.requested = true; m.save(state); await m.tick();
-    state = m.load(first.id); assert.equal(state.job.kind, 'prime'); assert.notEqual(state.sessionId, first.sessionId); assert.deepEqual(retired, [first.sessionId]); assert.equal(state.questionSessionId, first.questionSessionId);
-    assert.ok(prompts.filter(p => /input-/.test(p.prompt)).every(p => !p.prompt.includes('SKILL.md')), 'skill only read during warmup'); await finish('job', '已就绪');
+    state = m.load(first.id); assert.equal(state.job.kind, 'understand'); assert.notEqual(state.sessionId, first.sessionId); assert.deepEqual(retired, [first.sessionId]); assert.equal(state.questionSessionId, first.questionSessionId);
+    const rounds = prompts.filter(p => /input-/.test(p.prompt));
+    assert.ok(rounds.filter(p => p.id === first.sessionId).every(p => !p.prompt.includes('SKILL.md')), 'old session never re-reads the skill');
+    assert.deepEqual(rounds.filter(p => p.id === state.sessionId).map(p => p.prompt.includes('SKILL.md')), [true], 'new session reads it once, in its first round');
+    await finish('job', '- [T1] 换会话后第一轮'); assert.equal(m.load(first.id).agent.state, 'ready'); assert.equal(m.load(first.id).skillPending, undefined);
     rejectQuestion = true; m.control(first.id, 'ask', '故障问题'); await turn(); await turn(); state = m.load(first.id); const failed = state.answers.at(-1); assert.equal(failed.state, 'error'); assert.match(state.questionError, /test send failure/);
     rejectQuestion = false; m.control(first.id, 'ask', '新问题'); await turn(); await turn(); state = m.load(first.id); const runningToken = state.questionJob.token;
     m.control(first.id, 'retry-question', failed.id); await turn(); assert.equal(m.load(first.id).questionJob.token, runningToken, 'retry never replaces a newer active question');
@@ -195,12 +198,12 @@ test('后台回答未结束时纪要照常收取并发起下一轮理解', async
   let finish;
   const fx = asideMeetingFixture(t, () => new Promise(resolve => { finish = resolve; }));
   const saved = fx.m.load(fx.first.id), token = randomUUID();
-  saved.summary = '旧纪要'; saved.job = { kind: 'understand', sessionId: saved.sessionId, token, state: 'running', sentAt: Date.now(), from: 0, to: 0, final: false };
+  saved.summary = '## 议题\n- [T1] 旧纪要'; saved.job = { kind: 'understand', sessionId: saved.sessionId, token, state: 'running', sentAt: Date.now(), from: 0, to: 0, final: false };
   fx.m.save(saved); fx.m.control(saved.id, 'ask', '正在回答的问题'); await until(() => !!finish);
   fx.owner.sessionBusy = () => false;
-  fx.finals.set(saved.sessionId, { id: randomUUID(), text: '更新后的纪要\n[会议回执:' + token + ']' });
+  fx.finals.set(saved.sessionId, { id: randomUUID(), text: '- [T1] 更新后的纪要\n本轮小结：改了议题\n[会议回执:' + token + ']' });
   await fx.m.tick(); let latest = fx.m.load(saved.id);
-  assert.equal(latest.summary, '更新后的纪要'); assert.equal(latest.answers[0].state, 'running');
+  assert.equal(latest.summary, '## 议题\n- [T1] 更新后的纪要'); assert.equal(latest.lastChange, '改了议题'); assert.equal(latest.answers[0].state, 'running');
   latest.requested = true; fx.m.save(latest); await fx.m.tick(); latest = fx.m.load(saved.id);
   assert.equal(latest.job.kind, 'understand'); assert.equal(latest.answers[0].state, 'running');
   assert.equal(fx.prompts.length, 1); assert.ok(!fx.prompts[0][1].includes('正在回答的问题'));

@@ -26,6 +26,8 @@ function createMeetingHandlers(service) {
     },
     'meeting-frames': async r => ({ ok: true, frames: await m.frames.extract(r.id, r) }),
     'meeting-asr-install': () => ({ ok: true, asr: m.asr.install() }),
+    'meeting-glossary': () => ({ ok: true, text: m.glossary.text() }),
+    'meeting-glossary-save': r => ({ ok: true, ...m.glossary.save(r.text), text: m.glossary.text() }),
     'meeting-export': async r => { const file = m.export(r.id); require('electron').shell.showItemInFolder(file); return { ok: true, file }; },
     'meeting-sources': async () => {
       const sources = await require('electron').desktopCapturer.getSources({ types: ['window', 'screen'], thumbnailSize: { width: 320, height: 180 } });

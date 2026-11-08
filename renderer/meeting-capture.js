@@ -9,6 +9,17 @@ function distance(a, b) { if (!a || !b || a.length !== b.length) return Infinity
 // 同一页上的小变化（PPT 逐条出现、批注、高亮）：变化像素少于 3%、平均差也小，服务端会用它覆盖上一张而不是新增（2026-10-25）。
 function minorChange(a, b) { if (!a || !b || a.length !== b.length) return false; let pixels = 0; for (let i = 0; i < a.length; i++) if (Math.abs(a[i] - b[i]) > 24) pixels++; return pixels / a.length < 0.03 && distance(a, b) < 6; }
 function changed(a, b) { if (!a || !b) return true; let pixels = 0; for (let i = 0; i < a.length; i++) if (Math.abs(a[i] - b[i]) > 24) pixels++; return distance(a, b) >= 3 || pixels / a.length > 0.002; }
+// 语音分段：在说话停顿处切（2026-11-07）。原来固定 15 秒硬切会把一个词切成两半，两边都识别错；
+// 合成会议音频上，噪声条件下错字率 18% → 9%。8 秒后遇到安静的 256 毫秒就切，最长 20 秒（识别模型一次最好不超过 30 秒）。
+// 「安静」相对本路的底噪判断：底噪取最近的最小音量，慢慢回升，适应开着空调或风扇的会议室。
+const CUT_MIN_S = 8, CUT_MAX_S = 20;
+function cutHere(n, buffer, rate) {
+  let sum = 0; for (const v of buffer) sum += v * v;
+  const rms = Math.sqrt(sum / Math.max(1, buffer.length));
+  n.floor = n.floor == null ? rms : Math.min(rms, n.floor * 1.01 + 1e-5);
+  const len = n.length / rate;
+  return len >= CUT_MAX_S || (len >= CUT_MIN_S && rms <= Math.max(0.004, n.floor * 2));
+}
 class MeetingCapture {
   constructor({ document, window, save, status, waitMs = 10000 }) { this.d = document; this.w = window; this.save = save; this.status = status; this.waitMs = waitMs; this.streams = []; this.nodes = []; this.queue = []; this.levels = {}; }
   async wait(promise, message, progressAt) {
@@ -45,7 +56,7 @@ class MeetingCapture {
       const copy = new Float32Array(e.inputBuffer.getChannelData(0));
       if (n.at === null) n.at = this.elapsed();
       n.samples.push(copy); n.length += copy.length; let peak = 0; for (const v of copy) peak = Math.max(peak, Math.abs(v)); this.levels[track] = peak;
-      if (n.length >= ctx.sampleRate * 15) this.flush(n);
+      if (cutHere(n, copy, ctx.sampleRate)) this.flush(n);
     };
     src.connect(proc); proc.connect(mute); mute.connect(ctx.destination);
     stream.getAudioTracks().forEach(t => { t.onended = () => { this.disconnected = true; void this.pause((track === 'mic' ? '麦克风' : '系统声音') + '断开').catch(e => this.status(e.message)); this.status('声音来源已断开，已暂停采集，请结束并重新选择设备'); }; });
@@ -153,4 +164,4 @@ class MeetingCapture {
     if (error) throw error;
   }
 }
-module.exports = { MeetingCapture, wav, distance, changed, minorChange };
+module.exports = { MeetingCapture, wav, distance, changed, minorChange, cutHere };

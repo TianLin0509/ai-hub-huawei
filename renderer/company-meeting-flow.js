@@ -36,7 +36,7 @@ function meetingNavigation(meeting) {
     const refs = [...line.matchAll(/\[事件\s*(\d+)\]/g)].map(m => events.get(Number(m[1]))).filter(e => Number.isFinite(e?.at));
     if (!refs.length) continue;
     const first = refs.sort((a, b) => a.at - b.at)[0];
-    const title = (heading || line).replace(/^\s*(?:[-*+]\s+|\d+[.、]\s*)/, '').replace(/\[(?:事件[^\]]*|画面[^\]]*)\]/g, '').replace(/[*#`]/g, '').trim();
+    const title = (heading || line).replace(/^\s*(?:[-*+]\s+|\d+[.、]\s*)/, '').replace(/\[(?:事件[^\]]*|画面[^\]]*|[TFDAQ]\d{1,3})\]/g, '').replace(/[*#`]/g, '').trim();
     if (title && !topics.some(t => t.seq === first.seq && t.title === title)) topics.push({ title, seq: first.seq, at: first.at });
     heading = '';
   }

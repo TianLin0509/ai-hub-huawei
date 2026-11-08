@@ -66,8 +66,9 @@ function installFixture() {
   const image = canvas.toDataURL('image/jpeg').split(',')[1];
   navigator.mediaDevices.getUserMedia = async () => { window.m3Fixture.captureRequests++; return canvas.captureStream(5); };
   const make = id => ({ id, title: id === 'fixture-live' ? '界面验收夹具 · 算法评审' : '历史会议夹具', sourceName: '合成共享画面', startedAt: Date.now() - 120000, state: 'recording', capturedMs: 120000, transcribedMs: 110000, understoodMs: 100000, cursor: 8, revision: 1, speed: 'normal', autoUnderstand: true, autoIntervalMin: 3, audio: [], sessionId: 'understanding-fixture', questionSessionId: 'question-fixture', agent: { state: 'ready' }, questionAgent: { state: 'ready' },
-    summary: '## 议题\n- 算法取舍 [事件 2]\n- 补测与分工 [事件 5]\n\n## 结论\n算法 A 暂不采用，继续对照方案 B。 [事件 2]\n\n## 待确认\n不同信道种子的稳定性还需要验证。 [事件 5]\n\n## 行动项\n王工补测，周三回看结果。 [事件 5]',
-    events: [{seq:1,kind:'slide',at:1000},{seq:2,kind:'transcript',at:4000,track:'system',text:'算法 A 暂不采用，先比较方案 B。'},{seq:3,kind:'transcript',at:8000,track:'mic',text:'下一步用相同信道种子对照。'},{seq:4,kind:'slide',at:13000},{seq:5,kind:'mark',at:17000,text:'王工补测方案 B，周三给出结果。'},{seq:6,kind:'transcript',at:22000,track:'system',text:'检查重传率、时延和吞吐。'}],
+    summary: '## 议题\n- [T1] 算法取舍 [事件 2]\n- [T2] 补测与分工 [事件 5]\n## 决定\n- [D1] 算法 A 暂不采用，继续对照方案 B。 [事件 2]\n## 待确认\n- [Q1] 不同信道种子的稳定性还需要验证。 [事件 5]\n## 行动项\n- [A1] 王工｜补测方案 B｜周三 [事件 5]', minutesProtocol: 2,
+    speakers: { next: 3, list: [{ id: 1, track: 'system', name: '', n: 2, centroid: [] }, { id: 2, track: 'system', name: '王工', n: 1, centroid: [] }] },
+    events: [{seq:1,kind:'slide',at:1000},{seq:2,kind:'transcript',at:4000,track:'system',speaker:1,text:'算法 A 暂不采用，先比较方案 B。'},{seq:3,kind:'transcript',at:8000,track:'mic',text:'下一步用相同信道种子对照。'},{seq:4,kind:'slide',at:13000},{seq:5,kind:'mark',at:17000,text:'王工补测方案 B，周三给出结果。'},{seq:6,kind:'transcript',at:22000,track:'system',speaker:2,text:'检查重传率、时延和吞吐。'}],
     answers: [], recording: { bytes:0, savedThrough:0, segments:[], gaps:[], full:null } });
   const fixture = window.m3Fixture = { meetings: {}, calls: [], current: null, image, parts: new Map(), failPpt: false, failSave: false, asr: { ready: false }, captureRequests: 0 };
   fixture.meetings['fixture-old'] = { ...make('fixture-old'), state: 'ended', summary: '## 历史结论\n之前已经结束。 [事件 2]' };
@@ -236,7 +237,7 @@ function installFixture() {
     await c.send('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'no-preference'}]});
     await until('!!document.getElementById("btn-company-meeting")','nav');await c.eval('('+installFixture.toString()+')()');observing=true;await click('#btn-company-meeting');
     await until('document.querySelector("[data-m=source]")?.options.length===1','setup');await noOverflow();await shot('01-idle');
-    assert.match(await c.eval(`document.querySelector('[data-m=setup-asr]').textContent`), /未安装（约 500 MB）/);
+    assert.match(await c.eval(`document.querySelector('[data-m=setup-asr]').textContent`), /未安装（约 .*MB）/);
     await c.eval(`document.querySelector('[data-m=system]').checked=false;document.querySelector('[data-m=mic]').checked=false;`);
     await click('[data-act=start]');await until(`!document.querySelector('[data-m=record-only-confirm]').hidden`,'record-only confirmation');
     assert.equal(await c.eval('m3Fixture.captureRequests'),0,'confirmation precedes screen/audio capture');
