@@ -1,3 +1,4 @@
+import { isSignerVersion } from './version-format.mjs';
 import { randomUUID } from 'node:crypto';
 
 const TOP_FIELDS = new Set(['model','messages','stream','stream_options','tools','temperature','max_tokens','stop']);
@@ -100,7 +101,7 @@ function buildPersonalL1Provider({readAccessToken,getIdentity,signer,modelMap,en
   check(object(signer)&&typeof signer.signHash3==='function');
   // Caller captures these exact strings after safe initialization, including the DLL creation kernel version.
   const codeagentVersion=signer.codeagentVersion,kernelVersion=signer.kernelVersion;
-  check(headerText(codeagentVersion)&&/^[0-9]+(?:\.[0-9]+)+$/.test(codeagentVersion));
+  check(headerText(codeagentVersion)&&isSignerVersion(codeagentVersion));
   const kernelBase=`${codeagentVersion}-win32-x64`;
   check(headerText(kernelVersion)&&(kernelVersion===kernelBase||(kernelVersion.startsWith(kernelBase+'-')&&kernelVersion.length>kernelBase.length+1)));
   const signHash3=signer.signHash3.bind(signer);

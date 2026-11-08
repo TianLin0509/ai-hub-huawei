@@ -1,3 +1,4 @@
+import { isSignerVersion } from './version-format.mjs';
 import { readPersonalAccessToken } from './personal-token.mjs';
 import { createPersonalL1Provider } from './l1-provider.mjs';
 
@@ -50,7 +51,7 @@ function wire({ signer, readAccessToken = readPersonalAccessToken, fetchImpl = g
   requireFact(typeof signer.isAvailable === 'function' && typeof signer.codeagentVersion === 'function' &&
     typeof signer.kernelVersion === 'function' && typeof signer.signHash3 === 'function');
   requireFact(signer.isAvailable() === true, 'COMPANY_SIGNER_UNAVAILABLE');
-  requireFact(typeof expectedVersion === 'string' && /^\d+(?:\.\d+){1,5}$/.test(expectedVersion));
+  requireFact(typeof expectedVersion === 'string' && isSignerVersion(expectedVersion));
   requireFact(typeof appId === 'string' && appId.length > 0 && appId.length <= 200 && safeHeader(appId));
   const version = signer.codeagentVersion(), kernel = signer.kernelVersion(), sign = signer.signHash3.bind(signer);
   requireFact(version === expectedVersion, 'COMPANY_SIGNER_VERSION_UNVERIFIED');

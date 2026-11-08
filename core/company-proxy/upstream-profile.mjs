@@ -49,6 +49,7 @@ import { pathToFileURL } from 'node:url';
 import { initializeCacheOnlySigner } from './signer-init.mjs';
 import { probeNativeStamp, writeStampCache, configDirOf } from './native-stamp.mjs';
 import { createNativeSigner, findNativeRuntime } from './native-signer.mjs';
+import { isSignerVersion } from './version-format.mjs';
 
 const exec = promisify(execFile);
 // The adapter's identity function name: only a clue to find the identity endpoint and its fields in the source.
@@ -332,17 +333,12 @@ async function registryVersion(codeagentDir) {
     return parseRegistryVersions(stdout);
   } catch { return ''; }
 }
-// Version text may carry a build suffix (1.2615.02.03-beta): the native signer only wants the numeric part.
-export function numericVersion(text) {
-  const match = /^\s*v?(\d+(?:\.\d+){1,5})(?:[-+][0-9A-Za-z.+-]*)?\s*$/.exec(String(text || ''));
-  return match ? match[1] : '';
-}
 // Output of "codeagentcli --version" (first line that is only a version, optional product name; update notices are skipped).
 export function parseCliVersion(text) {
   for (const line of String(text || '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').split(/\r?\n/)) {
     if (/new version|update|新版本|升级/i.test(line)) continue;
     const match = /^\s*(?:(?:codeagent(?:cli)?|cac)\s+(?:version\s*:?\s*|v)?|version\s*:?\s*|v)?(\d+(?:\.\d+){1,5}[0-9A-Za-z.+-]*)(?:\s*\([^)]*\))?\s*$/i.exec(line);
-    if (match) return numericVersion(match[1]);
+    if (match) return match[1];
   }
   return '';
 }
@@ -354,7 +350,7 @@ async function cliVersion(codeagentDir, run = exec) {
 }
 // Registry first (no process start). No entry, two entries or a portable install: ask the installed program itself.
 export async function installedVersion(codeagentDir, { registry = registryVersion, run = exec } = {}) {
-  return numericVersion(await registry(codeagentDir)) || await cliVersion(codeagentDir, run);
+  return await registry(codeagentDir) || await cliVersion(codeagentDir, run);
 }
 
 /**
@@ -585,7 +581,7 @@ export async function resolveUpstreamProfile({ dataDir, env = process.env, versi
     profile.signerInit = { needed: true, reason: cacheTried.some(t => t.state === 'version') ? 'version' : 'missing',
       text: signerInitReason(cacheTried, profile.codeagentVersion), tried: cacheTried.map(t => ({ source: t.source, state: t.state })) };
   }
-  if (profile.signerMode === 'native' && /^\d+(?:\.\d+){1,5}$/.test(profile.codeagentVersion)
+  if (profile.signerMode === 'native' && isSignerVersion(profile.codeagentVersion)
       && !await findNativeRuntime({ codeagentDir: profile.codeagentDir,
         runtimeDir: join(profileDir, 'native-runtime', profile.codeagentVersion) })) {
     // Existing adapter/CodeAgent caches are read-only. A native-runtime probe writes only Hub's cache.
@@ -609,7 +605,7 @@ export const SIGNER_INIT_TIMEOUT_MS = 60_000;
  */
 export async function loadSigner(profile, { workDir, timeoutMs = SIGNER_INIT_TIMEOUT_MS, testOnlySpawnDelegate, stampProbe = probeNativeStamp } = {}) {
   const native = profile.signerMode === 'native' || !profile.adapterPackage;
-  if (native && !/^\d+(?:\.\d+){1,5}$/.test(profile.codeagentVersion || '')) throw new ProfileError('SIGNER_VERSION', '无法核实 CodeAgent 版本，请检查安装是否完整');
+  if (native && !isSignerVersion(profile.codeagentVersion)) throw new ProfileError('SIGNER_VERSION', '无法核实 CodeAgent 版本，请检查安装是否完整');
   let sha = 'hub-native', signerFile = '';
   const runtimeDir = join(workDir, 'native-runtime', String(profile.codeagentVersion));
   if (!native) {

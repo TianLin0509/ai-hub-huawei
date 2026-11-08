@@ -4221,6 +4221,11 @@ sessionManager.on('codex-session-updated',session=>{
 });
 app.on('before-quit',()=>{accountCenter.stopPump();accountCenter.adapter.dispose?.();});
 require('./main/ipc/account-center-handlers').registerAccountCenterIpc(ipcMain,accountCenter);
+const tokenUsage = new (require('./core/token-usage/service').TokenUsageService)({ dataDir: getHubDataDir(), homeDir: accountCenterHome,
+  codeAgentDir: () => { try { return require('./core/codeagent-config').resolveCodeAgentConfig({ ...process.env, USERPROFILE: accountCenterHome, HOME: accountCenterHome }).configDir; } catch { return ''; } },
+  publish: state => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('token-usage-changed', state); } });
+require('./main/ipc/token-usage-handlers').registerTokenUsageIpc(ipcMain, tokenUsage);
+tokenUsage.start();
 // The account page: one Hub Chrome holds every web login; CLIs report their own token files.
 hubAccountsService = new (require('./core/hub-accounts').HubAccounts)({
   getCliObservation:id=>accountCenter.recentObservation(id.startsWith('codex:')?id.replace('codex:','codex-'):id==='gemini'?'gemini-cli':id),
@@ -5089,6 +5094,7 @@ async function runFinalShutdownCleanup() {
   });
   capture('dev-chat-history', () => { clearInterval(devChatHistoryTimer); nativeGroupContent.dispose(); nativeItemNotifications.dispose(); devChatHistory.dispose(); });
   capture('session-token-usage', () => sessionUsageService.dispose());
+  capture('token-usage', () => tokenUsage.dispose());
   capture('transcript-tap', () => transcriptTap.dispose());
   // 原生投研 PTY 的全局租约属于 Hub 进程生命周期。退出时同步释放，
   // 让另一台/另一个 Hub 可以立即恢复同一个 native session；崩溃场景

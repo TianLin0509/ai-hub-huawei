@@ -15,6 +15,7 @@
 //
 // The report carries counts and booleans only; the stamp, the log text and the CLI output never leave this module
 // except the stamp into the cache file.
+import { baseVersion } from './version-format.mjs';
 import { spawn as nodeSpawn } from 'node:child_process';
 import { mkdir, writeFile, rename, rm, lstat, open } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
@@ -183,7 +184,7 @@ export function parseStampLog(text) {
     const stamp = suffix.slice(arch + ARCH.length).match(/^\d{1,64}/)?.[0];
     if (!stamp) continue;
     result.stamp = stamp;
-    result.logVersion = suffix.slice(0, arch).match(/(?:^|[^\d.])(\d+(?:\.\d+){1,4})-$/)?.[1] || null;
+    result.logVersion = suffix.slice(0, arch).match(/(?:^|[^\d.])(\d+(?:\.\d+){1,5}(?:-[0-9A-Za-z.]+)?)-$/)?.[1] || null;
     return result;
   }
   if (tail && tail.includes(MARKER)) { result.markerMatched = true; result.incompleteTail = true; }
@@ -274,7 +275,7 @@ export async function probeNativeStamp({ cliExe, configDir, expectedVersion, wor
   }
   const stamp = parsed?.stamp || null;
   report.stampParsed = !!stamp;
-  if (stamp) report.logVersionStatus = parsed.logVersion ? (parsed.logVersion === expectedVersion ? 'matched' : 'mismatch') : 'unknown';
+  if (stamp) report.logVersionStatus = parsed.logVersion ? (baseVersion(parsed.logVersion) === baseVersion(expectedVersion) ? 'matched' : 'mismatch') : 'unknown';
   if (!stamp && !report.error) {
     report.error = !report.cliStarted ? 'CLI_START_FAILED' : report.stoppedBy === 'timeout' ? 'CLI_TIMEOUT'
       : !report.logExists ? 'LOG_MISSING' : parsed?.incompleteTail ? 'LOG_INCOMPLETE' : report.markerMatched ? 'STAMP_NOT_PARSED' : 'MARKER_MISSING';

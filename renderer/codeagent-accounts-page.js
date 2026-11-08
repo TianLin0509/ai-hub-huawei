@@ -1,6 +1,8 @@
 'use strict';
 const { renderAccounts } = require('./codeagent-accounts-view');
 const { canStartAccount } = require('./codeagent-account-state');
+const { tokenPageHtml } = require('./account-token-view');
+const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 // All operations use the existing account IPC and registry format.
 async function accountCommand(ipcRenderer, action, { id, note, dir, hours } = {}) {
@@ -18,13 +20,14 @@ function createCodeagentAccountsPage({ document, window = document.defaultView, 
   document.addEventListener('tool-version-changed', e => { if (e.detail?.tool === 'codeagent') { state.toolChoice = e.detail.summary; void setup.refresh().then(() => refresh()); } });
   let page, pool = null, timer, revision = 0, disposed = false, pending = null, scanDue = false;
   let locateId = '', locateUntil = 0, locateTimer;
-  const state = { local: [], probing: new Set(), queue: [], drawer: false, note: '', menu: '', sub: false, filter: 'all', loading: false, busy: false, message: '' };
+  const state = { view: 'accounts', metric: 'total', tokens: null, tokenFirstSyncAsked: false, local: [], probing: new Set(), queue: [], drawer: false, note: '', menu: '', sub: false, filter: 'all', loading: false, busy: false, message: '' };
   function render() {
     if (!page || page.hidden || disposed) return;
     const next = document.createElement('template');
     next.innerHTML = renderAccounts(pool, { ...state, installed: setup.current?.installed,
       tokenFor: account => require('./codeagent-quota-panel-view').tokenMetric({ usage: globalThis.codeagentQuotaBar?.usageFor?.(account.id), defaultModel: account.defaultModel }) });
     const main = page.querySelector('.caa-main'), content = next.content.querySelector('.caa-main');
+    if (state.view === 'token') content.innerHTML = tokenViewHtml();
     if (main) {
       const scroll = main.scrollTop;
       main.innerHTML = content.innerHTML;
@@ -44,11 +47,37 @@ function createCodeagentAccountsPage({ document, window = document.defaultView, 
     }
     const hint = toolPicker.hintHtml(state.toolChoice);
     page.querySelector('[data-tvp-slot]')?.remove();
-    if (hint) page.querySelector('.caa-page-head')?.insertAdjacentHTML('afterend', `<div data-tvp-slot>${hint}</div>`);
+    if (hint && state.view === 'accounts') page.querySelector('.caa-page-head')?.insertAdjacentHTML('afterend', `<div data-tvp-slot>${hint}</div>`);
     if (Date.now() < locateUntil) locatedRow()?.classList.add('is-located');
     // 号池内网共享卡片（renderer/lan-pool-settings.js）：主机看同事用量，同事看共享号额度。
-    window.__lanPoolMountAccount?.(page.querySelector('.caa-page'));
+    if (state.view === 'accounts') window.__lanPoolMountAccount?.(page.querySelector('.caa-page'));
+    page.querySelector('.caa-page-head')?.insertAdjacentHTML('afterend', viewTabsHtml());
   }
+  function viewTabsHtml() {
+    const tab = (view, label) => `<button type="button" role="tab" data-ca="view" data-view="${view}" aria-selected="${state.view === view}">${label}</button>`;
+    return `<div class="caa-view-tabs" role="tablist" aria-label="账号页内容">${tab('accounts', '账号')}${tab('token', 'Token 开销')}</div>`;
+  }
+  function accountName(provider, id) {
+    if (provider !== 'codeagent') return id === 'default' ? '默认账号' : id;
+    if (id === 'personal') return '我的账号';
+    const account = pool?.accounts?.find(a => a.id === id);
+    return account?.note || account?.accountLabel || '已移出号池的账号';
+  }
+  function tokenViewHtml() {
+    return `<div class="caa-page"><header class="caa-page-head"><div><h1 class="caa-page-title">账号</h1><p class="caa-page-sub">各工具的 token 用量，只在本机统计。</p></div></header><div class="atk-wrap">${tokenPageHtml(state.tokens, { metric: state.metric, accountName }, escapeHtml)}</div></div>`;
+  }
+  // 第一次切到这页就自动统计，不要求用户先点按钮。
+  async function loadTokens() {
+    try {
+      state.tokens = await ipcRenderer.invoke('token-usage:state');
+      if (state.tokens && !state.tokens.syncedAt && !state.tokens.running && !state.tokenFirstSyncAsked) {
+        state.tokenFirstSyncAsked = true;
+        state.tokens = await ipcRenderer.invoke('token-usage:sync');
+      }
+    } catch (error) { state.tokens = { days: {}, syncedAt: 0, error: error.message }; }
+    render();
+  }
+  function tokensChanged(_event, next) { state.tokens = next; if (state.view === 'token') render(); }
   function locatedRow() {
     return [...(page?.querySelectorAll('[data-ca-account]') || [])].find(row => row.dataset.caAccount === locateId);
   }
@@ -113,6 +142,13 @@ function createCodeagentAccountsPage({ document, window = document.defaultView, 
   }
   async function act(action, element) {
     const id = element?.dataset?.id;
+    if (action === 'view') {
+      state.view = element.dataset.view === 'token' ? 'token' : 'accounts'; state.menu = ''; render();
+      if (state.view === 'token') await loadTokens();
+      return;
+    }
+    if (action === 'token-metric') { state.metric = element.dataset.v === 'net' ? 'net' : 'total'; render(); return; }
+    if (action === 'token-sync') { state.tokens = await ipcRenderer.invoke('token-usage:sync'); render(); return; }
     if (action === 'install-guide') { setup.showGuide(); return; }
     if (action === 'check-install') { await setup.refresh(); await refresh({ scan: true }); return; }
     if (['login', 'add', 'probe', 'probe-all', 'session', 'drawer'].includes(action)) {
@@ -178,13 +214,14 @@ function createCodeagentAccountsPage({ document, window = document.defaultView, 
     if (disposed) return;
     clearTimeout(locateTimer); locatedRow()?.classList.remove('is-located');
     locateId = typeof accountId === 'string' ? accountId : ''; locateUntil = 0;
-    if (locateId) state.filter = 'all';
+    if (locateId) { state.filter = 'all'; state.view = 'accounts'; }
     build(); configModal?.close(); closeOtherPanels();
     for (const hook of ['__companyAssistantHide', '__companyMeetingHide', '__companyRoomsHide', '__companyPptHide', '__assistantHide', '__cloudHide', '__wirelessHide', '__rulesHide', '__writingHide', '__xresearchHide', '__studyHide', '__ranHide']) window[hook]?.();
     page.hidden = false; document.body.classList.add('codeagent-accounts-page-open');
     document.getElementById('btn-rail-accounts')?.classList.add('active'); document.getElementById('btn-rail-accounts')?.setAttribute('aria-expanded', 'true'); window.setShellNavActive?.('btn-rail-accounts');
     window.addEventListener('resize', place); place(); render();
     await setup.refresh().catch(error => { state.message = '安装检测失败：' + error.message; });
+    if (state.view === 'token') void loadTokens();
     await refresh({ scan: true });
     locateAccount();
   }
@@ -201,11 +238,11 @@ function createCodeagentAccountsPage({ document, window = document.defaultView, 
   }
   const changed = () => { if (page && !page.hidden) void refresh(); };
   const unsubscribeSetup = setup.subscribe(status => { if (!status.installed) { state.drawer = false; state.menu = ''; } render(); });
-  document.addEventListener('click', onNav); ipcRenderer.on('codeagent-pool:changed', changed);
+  document.addEventListener('click', onNav); ipcRenderer.on('codeagent-pool:changed', changed); ipcRenderer.on('token-usage-changed', tokensChanged);
   document.getElementById('btn-rail-accounts')?.setAttribute('aria-controls', 'codeagent-accounts-page');
   window.__codeagentAccountsOpen = open; window.__codeagentAccountsHide = close;
   return { open, close, isOpen: () => !!page && !page.hidden, refresh, destroy() {
-    disposed = true; close(); unsubscribeSetup(); state.queue = []; ipcRenderer.removeListener('codeagent-pool:changed', changed);
+    disposed = true; close(); unsubscribeSetup(); state.queue = []; ipcRenderer.removeListener('codeagent-pool:changed', changed); ipcRenderer.removeListener('token-usage-changed', tokensChanged);
     document.removeEventListener('click', onNav); page?.remove();
   }, whenIdle: () => pending || Promise.resolve() };
 }
