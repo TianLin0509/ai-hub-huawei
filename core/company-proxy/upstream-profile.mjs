@@ -332,6 +332,31 @@ async function registryVersion(codeagentDir) {
     return parseRegistryVersions(stdout);
   } catch { return ''; }
 }
+// Version text may carry a build suffix (1.2615.02.03-beta): the native signer only wants the numeric part.
+export function numericVersion(text) {
+  const match = /^\s*v?(\d+(?:\.\d+){1,5})(?:[-+][0-9A-Za-z.+-]*)?\s*$/.exec(String(text || ''));
+  return match ? match[1] : '';
+}
+// Output of "codeagentcli --version" (first line that is only a version, optional product name; update notices are skipped).
+export function parseCliVersion(text) {
+  for (const line of String(text || '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').split(/\r?\n/)) {
+    if (/new version|update|新版本|升级/i.test(line)) continue;
+    const match = /^\s*(?:(?:codeagent(?:cli)?|cac)\s+(?:version\s*:?\s*|v)?|version\s*:?\s*|v)?(\d+(?:\.\d+){1,5}[0-9A-Za-z.+-]*)(?:\s*\([^)]*\))?\s*$/i.exec(line);
+    if (match) return numericVersion(match[1]);
+  }
+  return '';
+}
+async function cliVersion(codeagentDir, run = exec) {
+  try {
+    const { stdout, stderr } = await run(join(codeagentDir, 'bin', 'codeagentcli.exe'), ['--version'], { windowsHide: true, timeout: 15000, maxBuffer: 32768, encoding: 'utf8' });
+    return parseCliVersion(String(stdout || '') + '\n' + String(stderr || ''));
+  } catch { return ''; }
+}
+// Registry first (no process start). No entry, two entries or a portable install: ask the installed program itself.
+export async function installedVersion(codeagentDir, { registry = registryVersion, run = exec } = {}) {
+  return numericVersion(await registry(codeagentDir)) || await cliVersion(codeagentDir, run);
+}
+
 /**
  * stdout of the registry query: a JSON array with the DisplayVersion of every Uninstall entry whose
  * InstallLocation is the CodeAgent CLI dir. Exactly one distinct version counts (the same install listed
@@ -414,7 +439,7 @@ export function signerInitFailureMessage(code, { version, timeoutMs, detail } = 
  * Resolves every value the real upstream needs. Throws ProfileError naming what is missing.
  * options.env / options.versionReader / options.archiveReader exist for tests.
  */
-export async function resolveUpstreamProfile({ dataDir, env = process.env, versionReader = registryVersion,
+export async function resolveUpstreamProfile({ dataDir, env = process.env, versionReader = installedVersion,
   archiveReader = listArchiveText, packageFinder = findAdapterPackage, zoneDetector = detectCodeAgentZone, zoneOverride = null } = {}) {
   const profileDir = join(dataDir, 'company-model-proxy');
   const user = await readUserProfile(join(profileDir, 'upstream.json'));
@@ -507,9 +532,9 @@ export async function resolveUpstreamProfile({ dataDir, env = process.env, versi
     }
   }
   if (!profile.codeagentVersion) {
-    note('codeagentVersion', 'registry:Uninstall');
+    note('codeagentVersion', 'registry:Uninstall, codeagentcli --version');
     profile.codeagentVersion = await versionReader(profile.codeagentDir);
-    if (profile.codeagentVersion) profile.sources.codeagentVersion = 'registry:Uninstall';
+    if (profile.codeagentVersion) profile.sources.codeagentVersion = 'installed';
   }
   if (profile.signerMode === 'native' && !profile.signerCacheEnv) {
     profile.signerCacheEnv = 'HWTRAN_AUTH_DIR'; profile.sources.signerCacheEnv = 'hub:native-signer';

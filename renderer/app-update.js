@@ -99,7 +99,7 @@
       + `<span class="au-st">${c.ok ? `可用，最新 v${esc(c.version)}` : `连不上：${esc(c.reason)}`}</span></li>`).join('');
   }
 
-  // 被公司代理拦截的源：给出网址，用户在浏览器里打开、点「允许」放行后回来重新检查（2026-10-14 用户：阿里云点一下允许就通）。
+  // 被公司代理拦截的源：在 Hub 里弹出那台主机的放行页，放行后自动重新检查（2026-11-08 用户定，不再把文件地址交给浏览器）。
   function blockedSources() {
     const seen = new Map();
     for (const row of [...(state.checks || []), ...(state.attempts || [])]) {
@@ -112,10 +112,8 @@
     const rows = blockedSources();
     if (!rows.length) return '';
     return rows.map(r => `<div class="au-allow" data-allow-source="${esc(r.name)}"><b>「${esc(r.name)}」被公司网络拦截了，可以手动放行</b>`
-      + `<ol><li>点「打开网页放行」，会用浏览器打开下面这个网址；</li><li>在打开的网页上点「允许」${r.file ? '（之后浏览器若开始下载文件，取消即可）' : ''}；</li><li>回到这里点「重新检查」。</li></ol>`
-      + `<code class="au-allow-url">${esc(r.url)}</code>`
-      + `<div class="au-allow-actions"><button class="au-btn" data-au="allow-open" data-url="${esc(r.url)}">打开网页放行</button>`
-      + `<button class="au-btn" data-au="allow-copy" data-url="${esc(r.url)}">复制网址</button>`
+      + `<ol><li>点「打开放行页」，Hub 会弹出放行页并尝试自动放行；</li><li>页面没自动过的话，点「继续访问」或「接受」，放行后窗口自动关闭并重新检查。</li></ol>`
+      + `<div class="au-allow-actions"><button class="au-btn" data-au="allow-open" data-url="${esc(r.url)}">打开放行页</button>`
       + `<button class="au-btn${state.phase === 'error' ? '' : ' primary'}" data-au="retry">重新检查</button></div></div>`).join('');
   }
 
@@ -233,13 +231,14 @@
         if (next && next.phase) update(next); else render();
       }
       else if (action === 'manual' && state?.releasePage) shell.openExternal(state.releasePage);
-      else if (action === 'allow-open' || action === 'allow-copy') {
+      else if (action === 'allow-open') {
         const button = event.target.closest('[data-au]');
         const url = button.dataset.url || '';
-        // 只放行界面上列出的被拦截网址，不打开别的。
+        // 只处理界面上列出的被拦截网址；主进程会换成那台主机的放行页。
         if (!blockedSources().some(r => r.url === url)) return;
-        if (action === 'allow-open') shell.openExternal(url);
-        else { require('electron').clipboard.writeText(url); button.textContent = '已复制'; }
+        button.disabled = true; button.textContent = '放行中…';
+        await ipcRenderer.invoke('net-pass:open-window', url);
+        await ipcRenderer.invoke('app-update:check');
       }
     } catch (error) {
       state = { ...state, phase: 'error', error: error.message };

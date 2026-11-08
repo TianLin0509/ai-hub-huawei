@@ -94,8 +94,8 @@ function probeList(ctx) {
       if (!cli) {
         return entry('welink', 'welink-cli', 'welink', STATUS.bad, '没找到 welink-cli', {
           cause: 'Hub 在常见的 npm 全局目录和 PATH 里都没找到它；刚装完没重启 Hub 时也会这样。',
-          steps: ['确认这台电脑已经装好 welink-cli（公司软件中心或 npm 全局安装）', '点「再找一次」，Hub 会在后台把各个盘找一遍', '还找不到就到助理页手动选择程序位置'],
-          fixes: [{ label: '再找一次', act: 'welink-find' }, { label: '去助理页', act: 'open-assistant' }],
+          steps: ['没装过就点「一键安装」（需要连接公司网络，不需要 Node 和管理员权限）', '装过的话点「再找一次」，Hub 会在后台把各个盘找一遍', '还找不到就到助理页手动选择程序位置'],
+          fixes: [...(assistant.cliInstaller?.available?.() ? [{ label: '一键安装', act: 'welink-install' }] : []), { label: '再找一次', act: 'welink-find' }, { label: '去助理页', act: 'open-assistant' }],
         });
       }
       const [ver, login] = await Promise.all([
@@ -124,18 +124,18 @@ function probeList(ctx) {
       const st = await doctor.status({ force: true });
       // status 里的 version 是 PPT Doctor 内置检索引擎的版本（如 0.4.0），程序版本在 doctorVersion；先认程序版本，和工具自动发现一致。
       const ver = st.doctorVersion || st.appVersion || st.version || '';
-      const download = { label: '下载 PPT Doctor', act: 'ppt-download' };
+      const download = { label: '下载 PPT Doctor', act: 'ppt-download' }, oneClick = label => ({ label, act: 'doctor-install' });
       if (st.state === 'ready' || st.state === 'empty') {
         return entry('ppt-doctor', 'PPT Doctor', 'ppt-doctor', STATUS.ok, `${ver ? 'v' + ver + ' · ' : ''}${st.state === 'empty' ? '已安装，还没有建素材库' : '已安装，能联动'}`);
       }
       if (st.state === 'missing') {
         return entry('ppt-doctor', 'PPT Doctor', 'ppt-doctor', STATUS.warn, '没装 PPT Doctor（用 PPT 素材库和图片转可编辑时才需要）', {
-          cause: '在开始菜单、注册表和默认安装位置都没找到它。', steps: ['点「下载 PPT Doctor」安装', '装好后点「重新检测」'], fixes: [download, RECHECK],
+          cause: '在开始菜单、注册表和默认安装位置都没找到它。', steps: ['点「一键安装」，装好后会自动重新检测', '一键安装失败时再点「下载 PPT Doctor」手动安装'], fixes: [oneClick('一键安装'), download, RECHECK],
         });
       }
       if (st.state === 'upgrade') {
-        return entry('ppt-doctor', 'PPT Doctor', 'ppt-doctor', STATUS.warn, `版本太旧，和 Hub 联动不上${ver ? '（v' + ver + '）' : ''}`, {
-          cause: st.error || '装的 PPT Doctor 缺少和 Hub 联动所需的能力标记。', steps: ['点「下载 PPT Doctor」装最新版', '装好后点「重新检测」'], fixes: [download, RECHECK], raw: st.error || '',
+        return entry('ppt-doctor', 'PPT Doctor', 'ppt-doctor', STATUS.warn, `已检测到${(st.installedVersion || ver) ? ' v' + (st.installedVersion || ver) : ''}，版本太旧，和 Hub 联动不上`, {
+          cause: st.error || '装的 PPT Doctor 缺少和 Hub 联动所需的能力标记。', steps: ['点「一键升级」，不会动你原来的安装', '升级后会自动重新检测'], fixes: [oneClick('一键升级'), download, RECHECK], raw: st.error || '',
         });
       }
       return entry('ppt-doctor', 'PPT Doctor', 'ppt-doctor', STATUS.warn, '找到了，但这次没能读出它的状态', {

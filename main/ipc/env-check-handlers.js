@@ -53,6 +53,17 @@ function registerEnvCheckIpc(ipcMain, deps) {
     const id = String(request.id || ''), act = String(request.act || '');
     const item = last?.items?.find(x => x.id === id) || null;
     try {
+      if (act === 'welink-install') {
+        const assistant = deps.assistant();
+        if (!assistant) throw new Error('这个版本没有助理');
+        const r = await assistant.installCli();
+        return r.ok ? { ok: true, message: r.already ? '这台电脑已经装了 welink-cli' : 'welink-cli 装好了，到助理页扫码登录即可' } : { ok: false, error: r.error || '安装未完成' };
+      }
+      if (act === 'doctor-install') {
+        if (!deps.assistant()?.ppt?.doctor) throw new Error('这个版本没有 PPT 联动');
+        const state = await doctorInstaller.install();
+        return state.phase === 'done' ? { ok: true, message: state.message } : { ok: false, error: state.error || state.message || '安装未完成' };
+      }
       if (act === 'welink-find') {
         const assistant = deps.assistant();
         if (!assistant) throw new Error('这个版本没有助理');

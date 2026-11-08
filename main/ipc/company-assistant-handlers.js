@@ -21,6 +21,7 @@ function registerCompanyAssistantIpc(ipcMain, service) {
     // 「手机」设置页（2026-10-18）：选群、开关、推送范围；测试消息只发到选定的群。
     // 找 welink-cli（2026-10-19）：「再找一次」立刻全盘找；「手动选择…」弹系统选择框。
     'find-cli': async () => ({ ok: true, search: await service.findCli({ force: true }) }),
+    'install-cli': () => service.installCli(),
     'pick-cli': async () => {
       const { dialog, BrowserWindow } = require('electron');
       const r = await dialog.showOpenDialog(BrowserWindow.getFocusedWindow() || undefined, { title: '选择 welink-cli', properties: ['openFile'], filters: [{ name: 'welink-cli', extensions: ['exe', 'cmd'] }] });

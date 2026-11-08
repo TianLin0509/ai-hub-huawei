@@ -3,8 +3,13 @@
 // Current auth is authoritative. A saved snapshot is not a fresh login check.
 function connectionState(data = {}) {
   if (!data.cliFound) {
-    const search = data.cliSearch || {};
+    const search = data.cliSearch || {}, install = data.cliInstall || {};
+    if (['checking', 'downloading', 'verifying'].includes(install.phase)) return { kind: 'searching', title: '正在安装 WeLink 连接工具', detail: install.message || '正在安装，完成后会继续登录。', action: '', label: '' };
     if (search.state === 'searching') return { kind: 'searching', title: '正在查找 WeLink 连接工具', detail: '后台正在查找 welink-cli，找到后会继续检查连接。', action: '', label: '' };
+    if (data.cliInstallAvailable && search.state !== 'searching') {
+      const failed = install.phase === 'error';
+      return { kind: 'missing', title: failed ? 'WeLink 工具安装没成功' : '先接入 WeLink', detail: failed ? `${install.error} 可以重试，或手动选择已经安装的工具。` : '这台电脑还没有 welink-cli，它负责读取当前账号可见的消息、会议和邮件。点一键安装即可，不需要 Node，也不需要管理员权限。', action: 'install-cli', label: failed ? '重试安装' : '一键安装', alt: 'find-cli', altLabel: '已安装，重新检测' };
+    }
     if (search.state === 'error') return { kind: 'missing', title: 'WeLink 工具查找未完成', detail: search.error || '查找出错，可重试或手动选择已经安装的工具。', action: 'find-cli', label: '重新查找' };
     return { kind: 'missing', title: '先接入 WeLink', detail: '尚未检测到 welink-cli。它负责读取当前账号可见的消息、会议和邮件。', action: 'find-cli', label: '已安装，重新检测' };
   }

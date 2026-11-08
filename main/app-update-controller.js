@@ -39,7 +39,7 @@ function resolveSources(config, env) {
 function createAppUpdateController({ app, config, dataDir, currentVersion, sendToRenderer = () => {}, logger = console,
   // 自家阿里云被公司网络放行页拦住时：在看不见的窗口里自动放行一次再重试（core/net-unblock.js，2026-10-29 用户选默认开、无感）。
   // unblock(url) → 是否点到了放行按钮；isOwnUrl(url) → 是不是自家地址（GitHub 被拦不碰）。
-  unblock = null, isOwnUrl = () => false, unblockPassed = () => {},
+  unblock = null, unblockInteractive = null, isOwnUrl = () => false, unblockPassed = () => {},
   env = process.env, fetchImpl, resourcesPath = process.resourcesPath, isPackaged = !!(app && app.isPackaged), spawnImpl = spawn,
   // 拉起新程序用的干净环境与工作目录（core/clean-launch-env.js，2026-10-19）：main.js 传入；没传时按当前环境现算。
   prepareLaunch = () => require('../core/clean-launch-env').prepareHubLaunch({ env, isPackaged, appRoot: app && typeof app.getAppPath === 'function' ? app.getAppPath() : undefined }),
@@ -208,6 +208,13 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     let result = await runDownload();
     const blockedOwn = !result.ok && !result.cancelled && (result.attempts || []).find(a => a.blocked && isOwnUrl(a.url));
     if (blockedOwn && unblock && await tryUnblock(blockedOwn.url)) { result = await runDownload(); if (result.ok) { try { unblockPassed(); } catch (_) {} } }
+    // 下载是用户点的：后台放行没成功就在 Hub 里弹出放行页，放行后接着下（2026-11-08 用户定）。
+    const stillBlocked = !result.ok && !result.cancelled && (result.attempts || []).find(a => a.blocked && isOwnUrl(a.url));
+    if (stillBlocked && unblockInteractive) {
+      try { await unblockInteractive(stillBlocked.url); } catch (error) { logger.warn?.('[app-update] 放行窗口出错：', error.message); }
+      result = await runDownload();
+      if (result.ok) { try { unblockPassed(); } catch (_) {} }
+    }
     abort = null;
     // 查到新版后发布源又发了一版、旧版目录被删：所有源都回 404。重新查一次清单，换到新版本再下一次（只重试一次）。
     if (!result.ok && !result.cancelled && !_afterRecheck && (result.attempts || []).length && result.attempts.every(a => /HTTP 404/.test(a.reason || ''))) {

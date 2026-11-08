@@ -81,7 +81,7 @@ test('WeLink 与 PPT Doctor：没找到是红、登录过期是黄、PPT Doctor 
   let r = await envCheck.runEnvCheck({ platform: 'linux', kindAllowed: () => false, setup: fakeSetup({}), assistant: () => assistant('', '', { state: 'missing' }) });
   let by = Object.fromEntries(r.items.map(i => [i.id, i]));
   assert.equal(by.welink.status, 'bad'); assert.equal(by.welink.fixes[0].act, 'welink-find');
-  assert.equal(by['ppt-doctor'].status, 'warn'); assert.equal(by['ppt-doctor'].fixes[0].act, 'ppt-download');
+  assert.equal(by['ppt-doctor'].status, 'warn'); assert.equal(by['ppt-doctor'].fixes[0].act, 'doctor-install');
   r = await envCheck.runEnvCheck({ platform: 'linux', kindAllowed: () => false, setup: fakeSetup({}), assistant: () => assistant('C:\\w\\welink-cli.exe', 'User Token: EXPIRED', { state: 'upgrade', error: '请升级' }) });
   by = Object.fromEntries(r.items.map(i => [i.id, i]));
   assert.equal(by.welink.status, 'warn'); assert.match(by.welink.detail, /过期/); assert.match(by.welink.detail, /v1\.0\.20/);

@@ -261,17 +261,20 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
   function cliChip(d) {
     const s = d.cliSearch || {};
     if (s.state === 'searching') return `<span class="ca-chip run">正在查找 welink-cli…${CLI_STAGE[s.stage] ? '（' + CLI_STAGE[s.stage] + '）' : ''}</span>`;
-    return `<span class="ca-chip bad">${s.state === 'error' ? '查找未完成' : '尚未检测到 welink-cli'}</span><button type="button" class="ca-btn small" data-ca="find-cli">再找一次</button><button type="button" class="ca-btn small" data-ca="pick-cli">手动选择…</button>`;
+    const inst = d.cliInstall || {};
+    if (['checking', 'downloading', 'verifying'].includes(inst.phase)) return `<span class="ca-chip run">${esc(inst.message || '正在安装 welink-cli…')}</span>`;
+    const installBtn = d.cliInstallAvailable ? `<button type="button" class="ca-btn small primary" data-ca="install-cli">${inst.phase === 'error' ? '重试安装' : '一键安装'}</button>` : '';
+    return `<span class="ca-chip bad">${inst.phase === 'error' ? esc(inst.error || '安装未完成') : s.state === 'error' ? '查找未完成' : '尚未检测到 welink-cli'}</span>${installBtn}<button type="button" class="ca-btn small" data-ca="find-cli">再找一次</button><button type="button" class="ca-btn small" data-ca="pick-cli">手动选择…</button>`;
   }
   function installGuide() {
-    return `<details class="ca-install-guide"><summary>还没安装？查看安装步骤</summary><ol><li>在公司电脑连接公司网络，按内部 WeLink CLI 文档安装 <code>@welink/welink-cli</code>。已有 Node.js / npm 且配置好公司指定的软件源时，安装命令为：<pre>npm install -g @welink/welink-cli</pre>版本、软件源和权限要求以内部安装文档为准。</li><li>如果拿到的是公司分发的安装包，先完成安装，再点“手动选择…”选择 <code>welink-cli.exe</code> 或 <code>welink-cli.cmd</code>。</li><li>安装后点“已安装，重新检测”，确认连接后按提示扫码登录。邮件和日历可随后配置。</li></ol><p class="ca-note">这里提供操作说明；Hub 不会自动安装软件或修改 npm 配置。</p></details>`;
+    return `<details class="ca-install-guide"><summary>还没安装？查看安装步骤</summary><ol><li>在公司电脑连接公司网络，按内部 WeLink CLI 文档安装 <code>@welink/welink-cli</code>。已有 Node.js / npm 且配置好公司指定的软件源时，安装命令为：<pre>npm install -g @welink/welink-cli</pre>版本、软件源和权限要求以内部安装文档为准。</li><li>如果拿到的是公司分发的安装包，先完成安装，再点“手动选择…”选择 <code>welink-cli.exe</code> 或 <code>welink-cli.cmd</code>。</li><li>安装后点“已安装，重新检测”，确认连接后按提示扫码登录。邮件和日历可随后配置。</li></ol><p class="ca-note">${data.cliInstallAvailable ? '一键安装不需要这些步骤；只有一键安装失败时才需要手动操作。' : '这里提供操作说明；这个版本不提供一键安装。'}</p></details>`;
   }
   // 首次接入引导：还没连上 WeLink 或还没取过数据时出现在对话区开头（连上并取过数后消失）。
   function onboardingShown() { const c = connectionState(data); return !(c.kind === 'online' && data.refreshedAt); }
   function onboarding() {
     if (!onboardingShown()) return '';
     const c = connectionState(data), ready = c.kind === 'online';
-    return `<article class="ca-onboarding" data-connection="${c.kind}"><h2>${esc(ready ? '正在获取今天的工作信息' : c.title)}</h2><p>${esc(c.detail)}</p><div class="ca-onboarding-steps" aria-label="接入进度"><span>${data.cliFound ? '✓' : '1'} 安装工具</span><span>${ready ? '✓' : '2'} 确认登录</span><span>${ready && data.refreshedAt ? '✓' : '3'} 获取工作信息</span></div>${c.action ? `<button type="button" class="ca-btn primary" data-ca="${c.action}">${esc(c.label)}</button>` : ''}${!data.cliFound ? '<button type="button" class="ca-btn" data-ca="pick-cli">手动选择…</button>' + installGuide() : ''}<p class="ca-note">接通前也可以直接提问，讨论已有的材料。</p>${!ready && ['missing', 'login', 'unknown'].includes(c.kind) && window.HubErrorCard ? window.HubErrorCard.assistHtml({ area: 'welink', title: c.title, symptom: c.detail, details: [c.title, c.detail, data.cliSearch?.error].filter(Boolean).join(' · ') }) : ''}</article>`;
+    return `<article class="ca-onboarding" data-connection="${c.kind}"><h2>${esc(ready ? '正在获取今天的工作信息' : c.title)}</h2><p>${esc(c.detail)}</p><div class="ca-onboarding-steps" aria-label="接入进度"><span>${data.cliFound ? '✓' : '1'} 安装工具</span><span>${ready ? '✓' : '2'} 确认登录</span><span>${ready && data.refreshedAt ? '✓' : '3'} 获取工作信息</span></div>${c.action ? `<button type="button" class="ca-btn primary" data-ca="${c.action}">${esc(c.label)}</button>` : ''}${c.kind === 'missing' && c.alt ? `<button type="button" class="ca-btn" data-ca="${c.alt}">${esc(c.altLabel)}</button>` : ''}${!data.cliFound ? '<button type="button" class="ca-btn" data-ca="pick-cli">手动选择…</button>' + installGuide() : ''}<p class="ca-note">接通前也可以直接提问，讨论已有的材料。</p>${!ready && ['missing', 'login', 'unknown'].includes(c.kind) && window.HubErrorCard ? window.HubErrorCard.assistHtml({ area: 'welink', title: c.title, symptom: c.detail, details: [c.title, c.detail, data.cliSearch?.error].filter(Boolean).join(' · ') }) : ''}</article>`;
   }
   function loginPanel() {
     const f = data.loginFlow;
@@ -571,6 +574,15 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     if (verb === 'open-session') return window.__companyAssistantOpenSession();
     if (verb === 'reopen-session') { button.disabled = true; showMessage?.('正在重开助理会话…'); await call('reopen-session'); await load(); showMessage?.('助理会话已重开，会话工具接上后状态点会变绿'); return; }
     const reopenSettings = () => { const p = page.querySelector('[data-slot="panel"]'); if (p.dataset.kind === 'settings' && !p.hidden) openSettings(); };
+    if (verb === 'install-cli') {
+      button.disabled = true;
+      const r = await call('install-cli');
+      await load(); reopenSettings();
+      if (!r.ok) { showMessage?.(r.error || '安装未完成，可以重试或手动选择'); return; }
+      showMessage?.(r.already ? '这台电脑已经装了 welink-cli，直接用它' : '安装好了，正在进入登录');
+      if (data.auth?.login?.ok) return;
+      await call('login'); await load(); return;
+    }
     if (verb === 'find-cli') { button.disabled = true; await call('find-cli'); await load(); reopenSettings(); showMessage?.(data.cliFound ? '找到 welink-cli 了，正在确认连接' : data.cliSearch?.state === 'error' ? '查找未完成，可以重试或手动选择' : '暂未找到，可查看安装步骤或手动选择已安装的工具'); return; }
     if (verb === 'pick-cli') { const r = await call('pick-cli'); if (!r.canceled) { showMessage?.('已用 ' + r.path); await load(); reopenSettings(); } return; }
   }

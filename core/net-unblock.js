@@ -43,6 +43,15 @@ function gateClickScript(ownTitles = OWN_PAGE_TITLES) {
   })()`;
 }
 
+// 放行窗口里的任何下载一律取消（2026-11-08 公司网络：放行页点完跳到更新包地址，变成下载了文件）。放行只看网页，不要文件。
+function blockDownloads(win) {
+  const ses = win.webContents && win.webContents.session;
+  if (!ses || typeof ses.on !== 'function') return () => {};
+  const onDownload = (event, _item, contents) => { if (contents === win.webContents) event.preventDefault(); };
+  ses.on('will-download', onDownload);
+  return () => { try { ses.removeListener('will-download', onDownload); } catch (_) {} };
+}
+
 const timeout = (promise, ms, what) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(what + '超时')), ms))]);
 // 在看不见的窗口里打开放行页并点按钮。只在 Electron 主进程里调用（BrowserWindow 由调用方传入，测试可换）。
 async function openHiddenGateWindow(BrowserWindow, url, { loadTimeoutMs = 20000, settleMs = 5000, ownTitles = OWN_PAGE_TITLES } = {}) {
@@ -51,6 +60,7 @@ async function openHiddenGateWindow(BrowserWindow, url, { loadTimeoutMs = 20000,
   const win = new BrowserWindow({ show: false, skipTaskbar: true, focusable: false, width: 1100, height: 780,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } });
   const js = (code, ms = 5000) => timeout(win.webContents.executeJavaScript(code, true), ms, '读取放行页');
+  const stopBlockingDownloads = blockDownloads(win);
   try {
     // 放行页常常再跳转一次，loadURL 会因中途跳转报错：报错后仍按页面最终停下的样子继续。
     try { await timeout(win.loadURL(url), loadTimeoutMs, '打开放行页'); }
@@ -69,8 +79,47 @@ async function openHiddenGateWindow(BrowserWindow, url, { loadTimeoutMs = 20000,
     }
     result.finalUrl = win.webContents.getURL();
   } catch (error) { result.error = error.message; }
-  finally { if (!win.isDestroyed()) win.destroy(); }
+  finally { stopBlockingDownloads(); if (!win.isDestroyed()) win.destroy(); }
   return result;
+}
+
+// 后台放行没成功时的第二步（2026-11-08 用户定：要么自动放行，要么在 Hub 里弹出网页）：在 Hub 自己的窗口里打开放行页，
+// 继续自动点放行按钮，用户也可以手动点。看到自家页面（已放行）就自动关窗。只在用户动手触发的流程里用，后台检查不弹窗。
+async function openVisibleGateWindow(BrowserWindow, url, { parent = null, show = true, timeoutMs = 180000, pollMs = 1500, afterClickMs = 3000, maxClicks = 3,
+  ownTitles = OWN_PAGE_TITLES, title = '放行下载服务器（页面上点「继续访问」或「接受」，放行后自动关闭）' } = {}) {
+  const result = { passed: false, clicked: false, closed: false, timedOut: false, text: null, error: null };
+  if (!/^https?:\/\//i.test(String(url || ''))) return { ...result, error: '放行页地址无效' };
+  const win = new BrowserWindow({ show, width: 1000, height: 720, title, autoHideMenuBar: true,
+    ...(parent && !(parent.isDestroyed && parent.isDestroyed()) ? { parent } : {}),
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  const stopBlockingDownloads = blockDownloads(win);
+  win.on('page-title-updated', event => event.preventDefault());
+  return new Promise(resolve => {
+    let done = false, timer = null, clicks = 0;
+    const finish = patch => {
+      if (done) return;
+      done = true; clearTimeout(timer); clearTimeout(deadline); Object.assign(result, patch); stopBlockingDownloads();
+      try { if (!win.isDestroyed()) win.destroy(); } catch (_) {}
+      resolve(result);
+    };
+    const deadline = setTimeout(() => finish({ timedOut: true }), timeoutMs);
+    win.on('closed', () => finish({ closed: true }));
+    const onlyCheckOwn = `(() => ({ notGate: ${JSON.stringify(ownTitles)}.some(t => String(document.title || '').includes(t)) }))()`;
+    const tick = async () => {
+      if (done || win.isDestroyed()) return;
+      let wait = pollMs;
+      try {
+        if (!win.webContents.isLoading()) {
+          const r = await timeout(win.webContents.executeJavaScript(clicks < maxClicks ? gateClickScript(ownTitles) : onlyCheckOwn, true), 3000, '读取放行页');
+          if (r && r.notGate) return finish({ passed: true });
+          if (r && r.clicked) { clicks += 1; result.clicked = true; result.text = r.text || null; wait = afterClickMs; }
+        }
+      } catch (_) { /* 页面正在跳转：下一轮再看 */ }
+      if (!done) timer = setTimeout(tick, wait);
+    };
+    win.loadURL(url).catch(() => {});
+    timer = setTimeout(tick, pollMs);
+  });
 }
 
 // 在看不见的窗口里直接 POST 一份 JSON（2026-10-30 公司真机：放行页的 GET 早已放行、只拿到自家页面，反馈的 POST 仍被拦成网页，
@@ -151,4 +200,4 @@ class GatePasser {
 }
 function hostOf(url) { try { return new URL(url).host; } catch { return null; } }
 
-module.exports = { OWN_PAGE_TITLES, GatePasser, pickGateButton, gateClickScript, openHiddenGateWindow, postInHiddenWindow, GATE_WORDS, MAX_TRIES, COOLDOWN_MS };
+module.exports = { OWN_PAGE_TITLES, GatePasser, pickGateButton, gateClickScript, openHiddenGateWindow, openVisibleGateWindow, postInHiddenWindow, GATE_WORDS, MAX_TRIES, COOLDOWN_MS };

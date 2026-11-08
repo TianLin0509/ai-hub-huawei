@@ -70,7 +70,7 @@ function installBlockHtml(kind, state) {
     : `<button type="button" class="primary" data-cli-action="install"${otherBusy ? ' disabled' : ''}>${label}</button>`;
   const bar = view.busy || view.done
     ? `<div class="cli-install-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"${view.percent == null ? '' : ` aria-valuenow="${view.percent}"`}><span style="width:${view.percent == null ? 100 : view.percent}%"${view.percent == null ? ' data-indeterminate="1"' : ''}></span></div>` : '';
-  const blocked = view.blocked ? `<p class="cli-install-note">公司网络可能拦截了下载地址：可在浏览器里打开 <code>${esc(view.blocked)}</code>，点「允许」后回来点「重试」。</p>` : '';
+  const blocked = view.blocked ? `<p class="cli-install-note">公司网络拦截了下载。<button type="button" data-cli-action="open-pass" data-url="${esc(view.blocked)}">打开放行页</button>，放行后自动重试。</p>` : '';
   const busyNote = otherBusy ? `<p class="cli-install-note">正在安装${esc(TOOL_NAMES[state.busy] || '其他组件')}，装完再装这个。</p>` : '';
   const git = id === 'claude' ? gitBlockHtml(state) : '';
   const advice = !git && view.done && state.advice && state.advice[id] ? `<p class="cli-install-note">${esc(state.advice[id])}</p>` : '';

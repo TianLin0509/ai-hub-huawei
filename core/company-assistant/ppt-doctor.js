@@ -35,7 +35,7 @@ class PptDoctor {
     if (!force && this.cached && Date.now() - this.cached.checkedAt < 60000) return this.cached;
     if (this.checking) return this.checking;
     this.checking = this.call('status', { ...(this.config().db ? { db: this.config().db } : {}), includePaths: true }).then(result => (this.cached = { ...result, installed: true, state: result.available === false ? 'empty' : 'ready', checkedAt: Date.now() }))
-      .catch(error => (this.cached = { ok: false, available: false, state: error.code === 'DOCTOR_NOT_FOUND' ? 'missing' : error.code === 'DOCTOR_UPGRADE_REQUIRED' ? 'upgrade' : 'error', code: error.code || 'DOCTOR_ERROR', error: error.message, downloadUrl: error.downloadUrl || DOWNLOAD_URL, checkedAt: Date.now() }))
+      .catch(error => (this.cached = { ok: false, available: false, state: error.code === 'DOCTOR_NOT_FOUND' ? 'missing' : error.code === 'DOCTOR_UPGRADE_REQUIRED' ? 'upgrade' : 'error', code: error.code || 'DOCTOR_ERROR', error: error.message, installedVersion: error.installedVersion || '', downloadUrl: error.downloadUrl || DOWNLOAD_URL, checkedAt: Date.now() }))
       .finally(() => { this.checking = null; });
     return this.checking;
   }
@@ -45,7 +45,9 @@ class PptDoctor {
     const exe = await this.discover();
     const marker = this.deps.pptDoctorTrustedExecutable ? this.deps.pptDoctorCapability : await require('./ppt-doctor-discovery').capability(exe);
     if (!this.deps.pptDoctorTrustedExecutable && !marker) {
-      throw failure('DOCTOR_UPGRADE_REQUIRED', '请升级 PPT Doctor：安装目录缺少兼容的 Hub 联动能力标记，未启动旧程序', { downloadUrl: DOWNLOAD_URL });
+      let installedVersion = '';
+      try { installedVersion = String(JSON.parse(fs.readFileSync(path.join(path.dirname(exe), 'manifest.json'), 'utf8').replace(/^\uFEFF/, '')).version || '').slice(0, 32); } catch { /* 读不到版本号时只提示升级 */ }
+      throw failure('DOCTOR_UPGRADE_REQUIRED', `已检测到 PPT Doctor${installedVersion ? ' ' + installedVersion : ''}，版本太旧，和 Hub 联动不上，点一键升级即可`, { downloadUrl: DOWNLOAD_URL, installedVersion });
     }
     if (this.closed) throw failure('DOCTOR_CLOSED', 'PPT Doctor 调用已关闭');
     options = { ...options, timeoutMs: options.timeoutMs ?? this.deps.pptDoctorTimeoutMs ?? (action === 'index' ? 1800000 : action.startsWith('imgtext') ? 180000 : 30000) };

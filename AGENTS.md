@@ -19,6 +19,7 @@
 - 文件/运行数据/账号目录互相分离；不提交 `.env`、config.json、auth.json、Cookie、session、日志或截图中的私人内容。
 - 代码运行边界：Main 管理会话/归属/IPC；renderer 管界面。Claude/Codex 在 PTY 里运行真实 CLI，状态以 CLI hook 为准（`core/claude-hook-integration.js`、`core/codex-hook-integration.js`），发 prompt 一律走 `session:send-prompt` 的提交闭环（`core/pty-prompt-submit.js`），不要把文本和回车拼成一次写入。
 - GUI 验证：`node tests/e2e-community-cdp.js`。它创建临时 home/data、独立 CDP 和模拟 Claude CLI（`tests/fixtures/fake-claude.ps1`），用鼠标键盘操作；只关闭自己启动的进程。
+- 开箱即用（设计铁律）：用户第一次点开就能用。必需的输入先自动找（已有设置、其他功能存过的值、账号信息、本机环境），逐级兜底并记下共用；实在找不到，才在出错位置就地给输入框和一键「保存并继续」；提示写清下一步。验收用全新数据目录、什么都没配的状态走一遍首次使用路径，测试脚本不预填本该自动得到的值。
 - 基础验证：`npm test`、`node scripts/audit-public.js`、改动文件 `node --check`。实际运行命令和失败也要记入报告。
 - 安装/构建只能用本副本独立的 node_modules；遇到 junction 不得 npm ci/install/dist。不得批量杀 electron.exe。
 - 发布使用干净文件集与新历史；由 `.github/workflows/ci.yml` 验证和打包。不得假称未完成的云构建已通过。

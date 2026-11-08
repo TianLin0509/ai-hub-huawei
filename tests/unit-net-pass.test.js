@@ -56,8 +56,8 @@ test('后台放行没成功的给出浏览器打开；连不上不是放行能�
   assert.equal(r.needed, true);
   const html = view.boxHtml(r, { last: r });
   assert.match(html, /第一次使用请先放行下载服务器/);
-  assert.match(html, /用浏览器打开「阿里云」/);
-  assert.doesNotMatch(html, /用浏览器打开「阿里云高速」/);
+  assert.match(html, /打开放行页「阿里云」/);
+  assert.doesNotMatch(html, /打开放行页「阿里云高速」/);
   assert.match(html, /连不上/);
 });
 
@@ -68,4 +68,64 @@ test('都能访问时只显示一行和「重新放行」；没有自家主机�
   assert.match(html, /np-line/); assert.match(html, /重新放行/); assert.doesNotMatch(html, /第一次使用/);
   assert.equal(view.boxHtml(createNetPass({ hosts: [] }).status()), '');
   assert.equal(view.boxHtml(null), '');
+});
+
+// 2026-11-08 事故：放行失败后给的是被拦的 .gz 地址，点开变成下载文件。放行一律开主机的放行小页面，放行窗口里不下载。
+const { openVisibleGateWindow, openHiddenGateWindow } = require('../core/net-unblock');
+function fakeWindowClass(script) {
+  return class FakeWin {
+    constructor(opts) { FakeWin.last = this; this.opts = opts; this.handlers = {}; this.destroyed = false;
+      this.webContents = { session: { on: (_n, fn) => { FakeWin.onDownload = fn; }, removeListener: () => { FakeWin.removed = true; } }, isLoading: () => false, getURL: () => this.url,
+        executeJavaScript: async code => script(code, this), once: () => {} }; }
+    on(name, fn) { this.handlers[name] = fn; }
+    loadURL(url) { this.url = url; return Promise.resolve(); }
+    isDestroyed() { return this.destroyed; }
+    destroy() { this.destroyed = true; }
+  };
+}
+
+test('被拦的是 .gz 下载地址时，放行页仍是那台主机的小页面', () => {
+  const page = ownHosts.unblockPage(config, 'https://dl.example.tech/hub-update/company/v5.5.42/AIHubHuawei-5.5.42-update.gz');
+  assert.equal(page, 'https://dl.example.tech/hub-update/api/feedback');
+  assert.doesNotMatch(page, /\.gz/);
+});
+
+test('Hub 里弹出的放行窗：自动点按钮，看到自家页面就关窗', async () => {
+  let n = 0;
+  const Win = fakeWindowClass(() => (++n === 1 ? { clicked: true, text: '接受风险并访问' } : { notGate: true }));
+  const r = await openVisibleGateWindow(Win, 'https://dl.example.tech/hub-update/api/feedback', { pollMs: 1, afterClickMs: 1 });
+  assert.equal(r.passed, true); assert.equal(r.clicked, true); assert.equal(r.text, '接受风险并访问');
+  assert.equal(Win.last.opts.show, true); assert.equal(Win.last.destroyed, true); assert.equal(Win.removed, true);
+});
+
+test('放行窗：用户关掉窗口时结束，超时时也结束', async () => {
+  const Win = fakeWindowClass(() => ({ clicked: false }));
+  const closing = openVisibleGateWindow(Win, 'https://dl.example.tech/p', { pollMs: 1 });
+  setTimeout(() => Win.last.handlers.closed(), 5);
+  assert.equal((await closing).closed, true);
+  assert.equal((await openVisibleGateWindow(Win, 'https://dl.example.tech/p', { pollMs: 1, timeoutMs: 5 })).timedOut, true);
+  assert.equal((await openVisibleGateWindow(Win, 'file:///x')).error, '放行页地址无效');
+});
+
+test('放行窗里的下载一律取消，别的窗口的下载不管', async () => {
+  const Win = fakeWindowClass(() => ({ notGate: true }));
+  await openVisibleGateWindow(Win, 'https://dl.example.tech/p', { pollMs: 1 });
+  let prevented = 0;
+  Win.onDownload({ preventDefault: () => { prevented++; } }, {}, Win.last.webContents);
+  Win.onDownload({ preventDefault: () => { prevented++; } }, {}, { other: true });
+  assert.equal(prevented, 1);
+});
+
+test('后台放行失败时弹出放行页，放行后核对通过；后台放行成功就不弹', async () => {
+  const hosts = [{ host: 'dl.example.tech', name: '阿里云高速', page: 'https://dl.example.tech/hub-update/api/feedback' }];
+  let passed = false, visible = 0;
+  const pass = createNetPass({ hosts, dataDir: tmp(), fetchImpl: async () => res(passed ? OWN : GATE), openGate: async () => ({ clicked: false }),
+    openVisible: async page => { visible++; assert.equal(page, hosts[0].page); passed = true; return { passed: true }; } });
+  const r = await pass.passAll();
+  assert.equal(visible, 1); assert.equal(r.results[0].result, 'ok');
+  let visible2 = 0, passed2 = false;
+  const pass2 = createNetPass({ hosts, dataDir: tmp(), fetchImpl: async () => res(passed2 ? OWN : GATE), openGate: async () => { passed2 = true; return { clicked: true }; },
+    openVisible: async () => { visible2++; return {}; } });
+  await pass2.passAll();
+  assert.equal(visible2, 0);
 });

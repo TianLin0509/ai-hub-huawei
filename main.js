@@ -2859,7 +2859,6 @@ try {
       noTimer: process.env.CLAUDE_HUB_FORUM_TIMER === '0',
       browser: companyForumBrowser,
       lookupEmail: () => companyAssistantService?.accountEmail?.() || '',
-      gitEmail: () => require('./core/company-domain').gitGlobalEmail(),
       // 站点域名默认取本人公司邮箱的域名：助理页已从 WeLink 账号读到并存在它的设置里。
       accountEmail: () => { try { return JSON.parse(require('fs').readFileSync(require('path').join(getHubDataDir(), 'company-assistant', 'settings.json'), 'utf8')).email || ''; } catch { return ''; } },
       createSession: (kind, opts) => sessionOperations.createSession({ kind, opts }),
@@ -2887,9 +2886,8 @@ try {
       noTimer: process.env.CLAUDE_HUB_ATTENDANCE_TIMER === '0',
       browser: companyAttendanceBrowser,
       edgeCapture: process.env.CLAUDE_HUB_ATTENDANCE_EDGE === '0' ? null : opts => require('./main/company-attendance-edge').captureWithEdge(opts),
-      // 公司域名自动找：助理设置邮箱 → 论坛设置 → 现场问 WeLink 账号 → git 全局邮箱（core/company-domain.js）。
+      // 公司域名自动找：助理设置邮箱 → 论坛设置 → 内置默认域名 → 现场问 WeLink 账号（core/company-domain.js）。
       lookupEmail: () => companyAssistantService?.accountEmail?.() || '',
-      gitEmail: () => require('./core/company-domain').gitGlobalEmail(),
       accountEmail: () => { try { return JSON.parse(require('fs').readFileSync(require('path').join(getHubDataDir(), 'company-assistant', 'settings.json'), 'utf8')).email || ''; } catch { return ''; } },
       onChanged: () => sendToRenderer('company-attendance:changed', {}),
     });
@@ -4293,19 +4291,32 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
       const ownUnblocker = new netUnblock.GatePasser({ logDir: path.join(getHubDataDir(), 'logs'), logName: 'net-unblock',
         // 被拦的是哪台就开哪台的放行页（2026-11-07 起有高速镜像和旧阿里云两台，公司代理按主机放行）。
         open: url => netUnblock.openHiddenGateWindow(BrowserWindow, ownHosts.unblockPage(ownConfig, url)) });
+      // 第二步放行（2026-11-08 用户定）：后台没成功就在 Hub 里弹出放行页，继续自动点，用户也能手动点。只在用户动手的流程里用。
+      const gateVisible = page => netUnblock.openVisibleGateWindow(BrowserWindow, page, { parent: mainWindow || null });
+      const gatePageFor = url => {
+        const text = String(url || '');
+        if (!/^https?:\/\//i.test(text)) return '';
+        if (ownHosts.isOwnUrl(text, ownConfig)) return ownHosts.unblockPage(ownConfig, text);
+        try { return new URL(text).origin + '/'; } catch { return ''; }  // 别家地址也只开站点首页，绝不打开文件地址
+      };
       // 「放行下载服务器」按钮（core/net-pass.js）：一次点击逐台放行全部自家下载主机，并提醒还没放行的新用户。
       try {
         const { createNetPass } = require('./core/net-pass');
         const netPass = createNetPass({ hosts: ownHosts.downloadHosts(ownConfig), dataDir: getHubDataDir(),
           fetchImpl: (...args) => require('electron').net.fetch(...args),
           openGate: page => netUnblock.openHiddenGateWindow(BrowserWindow, page),
+          openVisible: gateVisible,
           onChange: view => sendToRenderer('net-pass:state', view) });
         ipcMain.handle('net-pass:status', async (_e, opts) => { if (opts && opts.refresh) void netPass.refresh(); return netPass.status(); });
         ipcMain.handle('net-pass:run', async () => { const r = await netPass.passAll(); if (r.results.some(x => x.result === 'ok')) { try { ownUnblocker.passed(); } catch (_) {} } return r; });
-        ipcMain.handle('net-pass:open-browser', async (_e, page) => {
-          // 只打开自家主机的放行小页面，不打开别的网址。
-          if (!ownHosts.downloadHosts(ownConfig).some(h => h.page === page)) return false;
-          await shell.openExternal(page); return true;
+        // 所有「打开放行页」按钮都走这里：传进来的可能是被拦的下载文件地址，一律换成那台主机的放行小页面。
+        ipcMain.handle('net-pass:open-window', async (_e, url) => {
+          const page = gatePageFor(url);
+          if (!page) return { passed: false, error: '放行页地址无效' };
+          const opened = await gateVisible(page);
+          await netPass.refresh({ force: true }).catch(() => {});
+          if (opened.passed) { try { ownUnblocker.passed(); } catch (_) {} }
+          return { ...opened, status: netPass.status() };
         });
         // 启动后查一次（每台一个很小的网页请求）：新用户第一次打开更新或安装面板时，提醒已经准备好。
         setTimeout(() => { void netPass.refresh().catch(() => {}); }, 20000).unref?.();
@@ -4321,7 +4332,7 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
       };
       const appUpdate = createAppUpdateController({ app, config: memberUpgrade ? editionChannel.updateConfig(distribution.updateConfig, getHubDataDir()) : distribution.updateConfig, dataDir: getHubDataDir(),
         currentVersion: distribution.editionVersion || app.getVersion(), sendToRenderer, prepareLaunch: prepareHubLaunchClean,
-        unblock: unblockOwn, isOwnUrl: url => ownHosts.isOwnUrl(url, ownConfig), unblockPassed: () => ownUnblocker.passed(),
+        unblock: unblockOwn, unblockInteractive: url => gateVisible(gatePageFor(url)), isOwnUrl: url => ownHosts.isOwnUrl(url, ownConfig), unblockPassed: () => ownUnblocker.passed(),
         restartWait: () => companyHubAdmin()?.restartWaitView?.() || null });
       registerAppUpdateIpc(ipcMain, appUpdate, { gate: { apply: opts => { const admin = companyHubAdmin(); return admin && typeof admin.localApply === 'function' ? admin.localApply(opts) : null; } } });
       appUpdateControllerRef = appUpdate;

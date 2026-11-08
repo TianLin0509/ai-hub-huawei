@@ -447,7 +447,7 @@ test('install dialog: plain-words progress for every phase, retry on failure, no
   const err = at({ phase: 'error', error: '阿里云：连接超时 <b>', blocked: 'https://m.example/x.tgz' });
   assert.match(err, /安装没有成功：阿里云：连接超时 &lt;b&gt;/);
   assert.match(err, />重试</);
-  assert.match(err, /<code>https:\/\/m\.example\/x\.tgz<\/code>/);
+  assert.match(err, /data-cli-action="open-pass" data-url="https:\/\/m\.example\/x\.tgz"/);
   assert.match(at({ phase: 'cancelled' }), /已取消，可以重新安装/);
   const other = view.installBlockHtml('codex', { ...base, busy: 'claude', tools: { claude: { phase: 'downloading' } } });
   assert.match(other, /data-cli-action="install" disabled/);

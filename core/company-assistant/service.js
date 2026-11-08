@@ -172,6 +172,7 @@ class CompanyAssistant {
     this.phone = new PhoneChannel(this, deps);
     this.ppt = new PptLibrary(this, deps);
     this.auth = new AuthKeeper(this);
+    this.cliInstaller = require('./welink-install').createWelinkInstaller({ dir: path.join(this.dir, 'tools', 'welink-cli'), configure: exe => this.useCliPath(exe), onState: () => this.changed(), ...(deps.welinkInstall || {}) });
     this.memory = new AssistantMemory(this);
     this.query = new AssistantQuery(this);
     this.meetings = new (require('./meeting').MeetingCompanion)(this, deps);
@@ -318,6 +319,15 @@ class CompanyAssistant {
         this.changed();
       });
     return this.cliSearching;
+  }
+  // 一键安装（2026-11-08）：先确认全盘确实没有，再从内部软件源取程序，不让用户重复装。
+  async installCli() {
+    const already = () => { const cli = this.cli(); return cli ? { ok: true, already: true, path: cli } : null; };
+    if (already()) return already();
+    const s = this.cliSearch;
+    if (!(s?.state === 'notfound' && this.now() - s.at < 10 * 60000)) { await this.findCli({ force: true }); if (already()) return already(); }
+    const state = await this.cliInstaller.install();
+    return { ok: state.phase === 'done', state, path: state.path, error: state.error };
   }
   // 「手动选择…」：用户选的是 welink-cli.cmd 时换成旁边 node_modules 里的真 exe（不经 shell 调用）。
   useCliPath(file) {
@@ -1743,7 +1753,7 @@ class CompanyAssistant {
     const next = this.nextBriefAt(s, now);
     const sid = st.sessionId || null;
     return { ok: true, enabled: s.enabled, now, day, settings: s, chips: [...BUILTIN_CHIPS, ...s.chips.map(c => ({ ...c, custom: true }))],
-      cliFound: !!this.cli(), cliPath: this.cli() || '', cliVersion: this.cliVersion(), cliChoice: this.cliChoice(), cliSearch: this.cliSearch || { state: 'idle' }, auth: this.auth.status(), login: this.auth.status().login || snap?.login || null, loginFlow: this.loginFlow, calendarNeedsSetup: !!snap?.calendarNeedsSetup, mailSetup: snap?.mailSetup || null,
+      cliFound: !!this.cli(), cliPath: this.cli() || '', cliVersion: this.cliVersion(), cliChoice: this.cliChoice(), cliSearch: this.cliSearch || { state: 'idle' }, cliInstall: this.cliInstaller.snapshot(), cliInstallAvailable: this.cliInstaller.available(), auth: this.auth.status(), login: this.auth.status().login || snap?.login || null, loginFlow: this.loginFlow, calendarNeedsSetup: !!snap?.calendarNeedsSetup, mailSetup: snap?.mailSetup || null,
       counts: snap ? { meetings: (snap.meetings || []).length, calendar: (snap.calendar || []).length, messages: Object.values(snap.messages || {}).reduce((n, l) => n + l.length, 0), mails: (snap.mails || []).length } : null,
       refreshedAt: snap?.at || null, refreshing: !!this.refreshing, updating: snap?.updating || [], errors: snap?.errors || [], conversations: (snap?.conversations || []).slice(0, 60), scope: snap?.scope || null, nameResolution: snap?.nameResolution || null, meetingCoverage: snap?.meetingCoverage || null, calendarCoverage: snap?.calendarCoverage || null, mailCoverage: snap?.mailCoverage || null,
       brief: this.brief(day), nextBriefAt: next, chat: this.chat().filter(c => { if (c.entry === 'ppt') return false; try { this.verifyTeamOwner(c); return true; } catch { return false; } }).slice(-60), job: this.job ? { type: this.job.type, sentAt: this.job.sentAt || null } : null,

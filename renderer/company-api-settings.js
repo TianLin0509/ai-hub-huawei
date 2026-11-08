@@ -79,6 +79,12 @@
     netPassView.bind(slot, { ipcRenderer, onUpdate: (next, last) => { if (next) netPass = next; netPassLast = last; renderCliBlock(target, kind); } });
     slot.querySelector('[data-cli-action="install"]')?.addEventListener('click', () => void runInstall(target, kind));
     slot.querySelector('[data-cli-action="install-git"]')?.addEventListener('click', () => void runGitInstall(target, kind));
+    slot.querySelector('[data-cli-action="open-pass"]')?.addEventListener('click', async event => {
+      const button = event.currentTarget;
+      button.disabled = true;
+      try { await ipcRenderer.invoke('net-pass:open-window', button.dataset.url); } catch (_) {}
+      void runInstall(target, kind);
+    });
     for (const b of slot.querySelectorAll('[data-cli-action="cancel"]')) b.addEventListener('click', () => void ipcRenderer.invoke('cli-tools:cancel').catch(() => {}));
   }
   // Git for Windows（2026-11-07）：挂在 Claude Code 区块下面；主进程先全局找本机的 Git，没有才下载。

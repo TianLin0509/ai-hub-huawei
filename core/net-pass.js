@@ -16,7 +16,7 @@ function readState(file) {
   catch { return { hosts: {} }; }
 }
 
-function createNetPass({ hosts = [], dataDir, fetchImpl, openGate, now = () => Date.now(), logger = console, onChange = () => {} } = {}) {
+function createNetPass({ hosts = [], dataDir, fetchImpl, openGate, openVisible = null, now = () => Date.now(), logger = console, onChange = () => {} } = {}) {
   const file = dataDir ? path.join(dataDir, FILE) : null;
   const saved = file ? readState(file) : { hosts: {} };
   // 每台：state = unknown（还没查）/ checking / ok / blocked（拿到拦截页）/ error（连不上，不是放行能解决的）
@@ -84,6 +84,11 @@ function createNetPass({ hosts = [], dataDir, fetchImpl, openGate, now = () => D
         if (r === 'blocked' && openGate) {
           try { const g = await openGate(h.page); clicked = !!(g && g.clicked); }
           catch (error) { logger.warn?.('[net-pass] 放行窗口出错：', error.message); }
+          r = await probe(h);
+        }
+        // 后台没放行成功：在 Hub 里弹出放行页，继续自动点，用户也能手动点（2026-11-08 用户定）。
+        if (r === 'blocked' && openVisible) {
+          try { await openVisible(h.page); } catch (error) { logger.warn?.('[net-pass] 放行窗口出错：', error.message); }
           r = await probe(h);
         }
         results.push({ host: h.host, name: h.name, result: r, clicked, page: h.page });

@@ -1018,7 +1018,7 @@ test('profile diagnostics: each value names its source category and file; a fail
     assert.equal(d.sources.personalCredential, 'default:.cac/.credentials.json');
     assert.equal(d.sources.adapterPackage, 'config:upstream.json');
     assert.equal(d.sources.identityUrl, 'adapter:codeagent.js');
-    assert.equal(d.sources.codeagentVersion, 'registry:Uninstall');
+    assert.equal(d.sources.codeagentVersion, 'installed');
     assert.equal(d.codeagentVersion, '9.1.2', 'the version read from the registry is reported, not only its source');
     assert.equal(d.zone, 'yellow');
     assert.ok(d.tried.chatUrl.includes('adapter:codeagent.js:full-url'));

@@ -55,7 +55,7 @@ class CompanyAttendance {
     const known = own || fromEmail ? null : companyDomain.knownDomain(this.deps.dataDir);
     return { domain: own || fromEmail || known.domain, domainFrom: own ? 'settings' : fromEmail ? 'assistant-email' : known.from, autoDaily: s.autoDaily !== false };
   }
-  // 设置里没有时自动找（WeLink 账号、git 邮箱），找到就记下，用户不用手填。
+  // 设置里没有时自动找（内置默认、WeLink 账号），找到就记下，用户不用手填。
   async ensureDomain() {
     const cur = this.settings();
     if (cur.domain) return cur.domain;
@@ -90,7 +90,9 @@ class CompanyAttendance {
     if (!this.settings().autoDaily) return false;
     if (st.lastSuccessDay === this.todayKey()) return false;
     // 上次因为没找到域名失败、现在找到了：不用等 1 小时。
-    if (st.lastResult?.needsDomain && this.settings().domain) return now.getHours() >= 6;
+    // （旧版本的这类失败没有 needsDomain 标记，按报错文字认。）
+    const domainFail = st.lastResult && !st.lastResult.ok && (st.lastResult.needsDomain || /公司域名/.test(String(st.lastResult.error || '')));
+    if (domainFail && this.settings().domain) return now.getHours() >= 6;
     if (now.getHours() < 6) return false;
     return !st.lastAttemptAt || now.getTime() - Date.parse(st.lastAttemptAt) >= RETRY_MS;
   }
@@ -124,7 +126,7 @@ class CompanyAttendance {
       this.changed();
       const url = attendanceUrl(await this.ensureDomain().catch(() => ''));
       let entry;
-      if (!url) entry = { at, reason, ok: false, needsDomain: true, error: '没能自动找到公司域名（助理设置、WeLink 账号、git 邮箱里都没有公司邮箱）：在下面填一下你的公司邮箱就行' };
+      if (!url) entry = { at, reason, ok: false, needsDomain: true, error: '没能自动找到公司域名（助理设置、WeLink 账号里都没有公司邮箱）：在下面填一下你的公司邮箱就行' };
       else {
         let r;
         try { r = await this.capture(url); } catch (e) { r = { ok: false, error: e.message }; }

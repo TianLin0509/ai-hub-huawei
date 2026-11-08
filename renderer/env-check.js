@@ -173,7 +173,7 @@
       await run();
       return;
     }
-    const busy = { 'welink-find': '正在全盘找 welink-cli，最多约 2 分钟…', 'proxy-restart': '正在重新启动反代…', 'ppt-download': '正在打开下载地址…' }[act];
+    const busy = { 'welink-find': '正在全盘找 welink-cli，最多约 2 分钟…', 'proxy-restart': '正在重新启动反代…', 'ppt-download': '正在打开下载地址…', 'welink-install': '正在安装 welink-cli…', 'doctor-install': '正在下载并安装 PPT Doctor，可能需要几分钟…' }[act];
     if (busy) setMessage(busy);
     if (act === 'open-url' || act === 'ppt-download') recheckOnFocus = true;
     const r = await ipcRenderer.invoke('env-check:fix', { id: item.id, act, url: fix.url || '' }).catch(error => ({ ok: false, error: error.message }));

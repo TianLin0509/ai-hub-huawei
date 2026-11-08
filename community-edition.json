@@ -57,9 +57,10 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "考勤/论坛自动找公司域名，首次使用不再报“不知道公司域名”；找不到时页面内填邮箱一键读取"
+    "修复放行失败时打开了下载文件的问题：放行统一成两步，先在后台自动放行，没成功就在 Hub 里弹出放行页，可自动或手动点，放行后窗口自动关闭并继续。",
+    "修复右上角一直提示「无法核实 CodeAgent 版本」：注册表读不到版本时，改为直接询问已安装的 CodeAgent。"
   ],
-  "version": "5.5.44",
+  "version": "5.5.45",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

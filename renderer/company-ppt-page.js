@@ -86,7 +86,7 @@ function createCompanyPptPage({ document, window, ipcRenderer, closeOtherPanels 
     statusEl.classList.toggle('pptw-guide', !!p.error);
     if (p.error) statusEl.removeAttribute('title');
     const download = ['missing', 'upgrade'].includes(p.state);
-    statusEl.innerHTML = p.error ? `<span class="pptw-guide-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l9 5v8l-9 5-9-5V8z"/><path d="M12 8v8M8 10v4M16 10v4" class="cut"/></svg></span><div class="pptw-guide-copy"><strong>${esc(p.error)}</strong><p>PPT 检索和图片转可编辑都靠 PPT Doctor 在本机运行。</p></div>${window.HubErrorCard ? window.HubErrorCard.knownHtml({ area: 'ppt-doctor', title: p.error, details: p.detail || p.error }) + window.HubErrorCard.assistHtml({ area: 'ppt-doctor', title: p.error, details: p.detail || p.error }) : ''}${download ? '<div class="pptw-guide-actions"><button type="button" class="pptw-btn pri" data-ppt="download">镜像下载 / 升级 Doctor</button><button type="button" class="pptw-btn sec" data-ppt="download-backup">GitHub 备用</button><button type="button" class="pptw-btn ghost" data-ppt="doctor">已有程序，手动指定</button></div>' : ''}` : `<i class="pptw-dot" aria-hidden="true"></i><span>${p.doctorVersion ? 'PPT Doctor ' + esc(p.doctorVersion) : 'PPT Doctor'} · ${p.available ? `${p.files || 0}份文稿 / ${p.pages || 0}页 · 索引更新 ${esc(at)}` : '请选择素材文件夹并更新索引'}${busy ? `<br>${esc(p.indexing.message || '正在更新索引…')}` : ''}</span>`;
+    statusEl.innerHTML = p.error ? `<span class="pptw-guide-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l9 5v8l-9 5-9-5V8z"/><path d="M12 8v8M8 10v4M16 10v4" class="cut"/></svg></span><div class="pptw-guide-copy"><strong>${esc(p.error)}</strong><p>PPT 检索和图片转可编辑都靠 PPT Doctor 在本机运行。</p></div>${window.HubErrorCard ? window.HubErrorCard.knownHtml({ area: 'ppt-doctor', title: p.error, details: p.detail || p.error }) + window.HubErrorCard.assistHtml({ area: 'ppt-doctor', title: p.error, details: p.detail || p.error }) : ''}${download ? '<div class="pptw-guide-actions"><button type="button" class="pptw-btn pri" data-ppt="doctor-install">' + (p.state === 'upgrade' ? '一键升级 Doctor' : '一键安装 Doctor') + '</button><button type="button" class="pptw-btn sec" data-ppt="download">镜像下载</button><button type="button" class="pptw-btn sec" data-ppt="download-backup">GitHub 备用</button><button type="button" class="pptw-btn ghost" data-ppt="doctor">已有程序，手动指定</button></div>' : ''}` : `<i class="pptw-dot" aria-hidden="true"></i><span>${p.doctorVersion ? 'PPT Doctor ' + esc(p.doctorVersion) : 'PPT Doctor'} · ${p.available ? `${p.files || 0}份文稿 / ${p.pages || 0}页 · 索引更新 ${esc(at)}` : '请选择素材文件夹并更新索引'}${busy ? `<br>${esc(p.indexing.message || '正在更新索引…')}` : ''}</span>`;
     page.querySelector('[data-ppt-roots]').textContent = (p.roots || []).join('；') || '尚未指定素材文件夹';
     page.querySelector('[data-ppt="index"]').disabled = busy || !p.roots?.length;
     page.querySelector('[data-ppt="folders"]').disabled = busy;
@@ -203,6 +203,18 @@ function createCompanyPptPage({ document, window, ipcRenderer, closeOtherPanels 
     if (name === 'image') { const r = await call('ppt-pick-image'); if (!r.canceled) await convert(r.imagePath); return; }
     if (name === 'conversion-open') return call('ppt-imgtext-open', { jobId: lastConversionId() });
     if (name === 'conversion-workdir') return call('ppt-imgtext-workdir', { jobId: lastConversionId() });
+    if (name === 'doctor-install') {
+      button.disabled = true; notice('正在下载并安装 PPT Doctor，可能需要几分钟，不会动原来的安装。');
+      const progress = (_event, state) => { if (state?.message) notice(state.message); };
+      ipcRenderer.on('components:doctor-state', progress);
+      try {
+        const r = await ipcRenderer.invoke('components:doctor-install');
+        if (!r?.ok) { notice(r?.error || '安装未完成，可以重试或用镜像下载'); return; }
+        notice(r.state?.message || 'PPT Doctor 已安装');
+        const status = await call('ppt-status'); if (status?.ppt) renderStatus(status.ppt);
+      } finally { ipcRenderer.removeListener('components:doctor-state', progress); button.disabled = false; }
+      return;
+    }
     if (name === 'download' || name === 'download-backup') {
       button.disabled = true; notice(name === 'download' ? '正在检查镜像安装包…' : '正在打开 GitHub 备用页面…');
       try { await call('ppt-download-doctor', { source: name === 'download' ? 'mirror' : 'github' }); notice('已打开下载入口。安装或升级后，点「重新检查」。'); }

@@ -37,8 +37,8 @@ function boxHtml(status, { last = null, compact = true } = {}) {
     return `<p class="np-line">下载服务器 ${names}<button type="button" data-np="run"${running ? ' disabled' : ''}>${running ? '正在放行…' : '重新放行'}</button></p>`;
   }
   const manual = stillBlocked.length
-    ? `<p>后台放行没成功的，请点「用浏览器打开」，在打开的网页上点「继续访问」或「允许」，回来再点「放行下载服务器」核对一次。</p><div class="np-actions">${stillBlocked
-      .map(r => `<button type="button" data-np="open" data-page="${esc(r.page)}">用浏览器打开「${esc(r.name)}」</button>`).join('')}</div>` : '';
+    ? `<p>还有没放行的，点下面的按钮会在 Hub 里打开放行页，点「继续访问」或「接受」即可，放行后窗口自动关闭核对一次。</p><div class="np-actions">${stillBlocked
+      .map(r => `<button type="button" data-np="open" data-page="${esc(r.page)}">打开放行页「${esc(r.name)}」</button>`).join('')}</div>` : '';
   return `<div class="np-box np-need" data-np-box><b>第一次使用请先放行下载服务器</b>`
     + `公司网络对新网站要先确认一次，没放行时下载会很慢或失败。点下面的按钮，Hub 会在后台把 ${status.hosts.length} 台下载服务器一起放行，只需点一次。`
     + `<ul>${rows}</ul><div class="np-actions">${runBtn}</div>${manual}</div>`;
@@ -64,7 +64,9 @@ function bind(root, { ipcRenderer, onUpdate = () => {} }) {
       try { result = await ipcRenderer.invoke('net-pass:run'); } catch (_) { result = null; }
       onUpdate(result, result);
     } else if (button.dataset.np === 'open') {
-      try { await ipcRenderer.invoke('net-pass:open-browser', button.dataset.page); } catch (_) {}
+      let opened = null;
+      try { opened = await ipcRenderer.invoke('net-pass:open-window', button.dataset.page); } catch (_) {}
+      if (opened && opened.status) onUpdate(opened.status, null);
     }
   });
 }

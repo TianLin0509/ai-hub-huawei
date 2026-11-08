@@ -70,7 +70,8 @@ test('失败后 1 小时内不重试，0–6 点不访问', async () => {
   assert.equal(svc.shouldRun(), false);
 });
 
-test('不知道域名时不访问，给出可操作的提示', async () => {
+// 成员版内置默认域名，这条只在没有默认值的公开版里成立。
+test('不知道域名时不访问，给出可操作的提示', { skip: !!require('../core/company-domain').DEFAULT_DOMAIN }, async () => {
   let called = false;
   const { svc } = make({ email: '', hub: async () => { called = true; return { json: [] }; } });
   const r = await svc.sync();
