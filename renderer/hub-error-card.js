@@ -7,8 +7,11 @@
 //   window.HubErrorCard.html({ area, title, cause, steps, actions, details, severity }) → HTML 字符串
 //   window.HubErrorCard.assistHtml({ area, title, symptom, details }) → 只有两个求助按钮，嵌进现有提示里用
 //   window.HubAssist.askAgent({ area, title, symptom, details }) / window.HubAssist.feedback({ area, title, details })
+// 5.5.31「问问 Agent」闭环：首句是一份排查任务书（先读排查手册、2 分钟先给判断、结尾输出【排查结论】块）；
+// 排查会话顶栏有「把排查结果反馈给维护人」，把结论块预填进一键反馈（renderer/troubleshoot-feedback.js）。
 // 主按钮 data-hub-err-act 由调用方自己处理；求助按钮、复制在这里统一委托处理。
 
+const path = require('node:path');
 const { humanizeError } = require('../core/error-humanize');
 const { matchKnownIssue } = require('../core/known-issues');
 
@@ -90,8 +93,22 @@ function html({ area = '', title = '', cause = '', steps, actions, details = '',
 }
 
 // ---- 求助 ----
+// 排查手册（docs/TROUBLESHOOT-AGENT.md）给排查 Agent 读的普通文件路径。打包后优先 app.asar.unpacked/docs
+// （package.json asarUnpack；一键更新的增量包会带上它），再找完整安装包放的 resources/guides/docs（extraResources）。
+// app.asar 里的那份外部程序读不到，不给。都没有时返回 null，首句里就不提手册。
+const MANUAL_NAME = 'TROUBLESHOOT-AGENT.md';
+function troubleshootManualPath({ appDir = path.resolve(__dirname, '..'), resourcesPath = process.resourcesPath, exists = require('node:fs').existsSync } = {}) {
+  const packed = /\.asar$/i.test(appDir);
+  const res = resourcesPath || path.dirname(appDir);
+  const candidates = packed
+    ? [path.join(res, 'app.asar.unpacked', 'docs', MANUAL_NAME), path.join(res, 'guides', 'docs', MANUAL_NAME)]
+    : [path.join(appDir, 'docs', MANUAL_NAME)];
+  for (const file of candidates) { try { if (exists(file)) return file; } catch {} }
+  return null;
+}
+
 function hubInfo() {
-  const os = require('node:os'), path = require('node:path');
+  const os = require('node:os');
   let version = '';
   try { const d = require('../core/distribution'); version = d.editionVersion || ''; } catch {}
   if (!version) { try { version = require('../package.json').version; } catch {} }
@@ -100,7 +117,7 @@ function hubInfo() {
   const dataDir = require('../core/data-dir').getHubDataDir();
   return {
     productName, version, platform: `${process.platform} ${os.release()}`,
-    appDir: path.resolve(__dirname, '..'), dataDir,
+    appDir: path.resolve(__dirname, '..'), dataDir, manual: troubleshootManualPath(),
     files: [
       ['日志目录（按修改时间看最近的几份）', path.join(dataDir, 'logs')],
       ['诊断记录（闪退、启动耗时等）', path.join(dataDir, 'diagnostics')],
@@ -109,10 +126,29 @@ function hubInfo() {
   };
 }
 
+const CONCLUSION_FORMAT = [
+  '【排查结论】',
+  '状态：已解决 / 未解决 / 需要用户操作（三选一）',
+  '原因：（一两句话）',
+  '证据：（日志文件 + 时间 + 关键行摘要）',
+  '已做的修改：（没有就写「无」）',
+  '建议用户做的：',
+  '给维护人的说明：（未解决时写复现步骤、怀疑的模块或文件、需要的修复；已解决写「无」）',
+  '【排查结论完】',
+];
+
+// 首句 = 排查任务书：角色与目标、问题现场、先读什么、节奏、结尾固定的结论块。
+// 11-08 公司真机实测：只说「请帮我排查」时，Agent 闷头深挖 8 分钟才开口、思考英文外露、不问能否复现、最后也没有能转给维护人的结论。
 function buildPrompt({ area, title, symptom, details } = {}, info = {}) {
+  const product = info.productName || 'AI HUB';
   const lines = [
-    `我在用 ${info.productName || 'AI HUB'} 时遇到了报错，请帮我排查。`,
+    `我在用 ${product} 时遇到了报错，请你作为这台电脑上的排查助手帮我处理。`,
     '',
+    '## 你的目标',
+    '- 能安全修好就修：动手前先说要改什么、为什么，等我同意后再改。',
+    `- 修不好，就写一份给 ${product} 维护人的排查报告（格式见最后），我会一键转给维护人。`,
+    '',
+    '## 问题',
     `- 现象：${clip(symptom || title || '（未描述）', 600)}`,
     title && symptom && symptom !== title ? `- 界面上的提示：${clip(title, 200)}` : null,
     `- 出错的功能区：${areaLabel(area)}`,
@@ -120,12 +156,23 @@ function buildPrompt({ area, title, symptom, details } = {}, info = {}) {
     '- 原始报错：',
     details ? '```\n' + clip(details, MAX_DETAILS) + '\n```' : '（界面上没有附带原始报错）',
     '',
-    '本机相关文件的位置（请你自己去读，这里没有贴内容）：',
+    '## 先读这些（请你自己去读，这里没有贴内容）',
+    info.manual ? `- 排查手册（目录结构、各日志的含义、模块地图、常见问题和已知解法），先读它：${info.manual}` : null,
     ...(info.files || []).map(([name, file]) => `- ${name}：${file}`),
     info.appDir ? `- 程序所在目录：${info.appDir}` : null,
     '',
-    '请先只读排查：找出和这个报错时间相近的日志记录，讲清楚是什么原因、我可以怎么解决。',
-    '需要修改我电脑上的文件、设置，或安装、卸载软件之前，先告诉我要改什么、为什么，等我同意后再动手。',
+    '## 节奏',
+    '1. 2 分钟内先用中文给我初步判断：最可能的 1–3 个原因，以及我马上能试的办法；然后再深入查。',
+    '2. 报错信息不完整，或看起来没法复现时，先问我是怎么出现的（当时在做什么、能不能重现），再继续查。',
+    '3. 总时长控制在 10 分钟左右，查到能下结论就收敛，不要无限深挖。',
+    '4. 全程用中文回复我，思考过程简短即可。',
+    '5. 先只读排查：找出和这个报错时间相近的日志记录，讲清楚是什么原因、我可以怎么解决。',
+    '6. 需要修改我电脑上的文件、设置，或安装、卸载软件之前，先告诉我要改什么、为什么，等我同意后再动手。不删除我的数据，不读取、不外发账号口令和密钥。',
+    '',
+    '## 结尾固定输出',
+    '查完后，在最后一条回答的末尾按下面的格式输出结论（首尾两行标记原样保留，界面靠它把结论一键反馈给维护人）：',
+    '',
+    ...CONCLUSION_FORMAT,
   ];
   return lines.filter(line => line != null).join('\n');
 }
@@ -139,8 +186,11 @@ function troubleshootDir(now = Date.now()) {
   return dir;
 }
 
+// 开排查会话时把原始报错存进它的专属目录，之后「把排查结果反馈给维护人」从这里取（重启 Hub 后也在）。
+function saveTroubleshootContext(cwd, data) { require('./troubleshoot-feedback').writeContext(cwd, data); }
+
 function createHubAssist({ invoke, createSession, selectSession = () => {}, closeOverlays = () => {}, openFeedback = null,
-  info = hubInfo, now = () => Date.now(), notify = () => {}, workDir = troubleshootDir } = {}) {
+  info = hubInfo, now = () => Date.now(), notify = () => {}, workDir = troubleshootDir, saveContext = saveTroubleshootContext } = {}) {
   const recent = new Map();
   let setup = null, setupAt = 0, setupPromise = null;
 
@@ -191,6 +241,10 @@ function createHubAssist({ invoke, createSession, selectSession = () => {}, clos
         catch (error) { errors.push(`${kind}：${error && error.message ? error.message : error}`); continue; }
         if (!session || !session.id) { errors.push(`${kind}：没有返回会话`); continue; }
         entry.sessionId = session.id; entry.kind = kind; entry.at = now();
+        if (cwd) {
+          const saved = { area: ctx.area || '', areaLabel: areaLabel(ctx.area), title: clip(ctx.title, 200), symptom: clip(ctx.symptom, 600), details: clip(ctx.details, MAX_DETAILS) };
+          try { saveContext(cwd, { sessionId: session.id, kind, createdAt: new Date(now()).toISOString(), ctx: saved }); } catch { /* 只影响事后反馈时带不带原始报错 */ }
+        }
         selectSession(session.id);
         const text = buildPrompt(ctx, typeof info === 'function' ? info() : info);
         let sent;
@@ -402,7 +456,10 @@ function install({ document: doc, window: win, ipcRenderer, sessionKind = null }
   };
   doc.addEventListener('pointerover', onEnter, true);
   doc.addEventListener('focusin', onEnter, true);
+  // 排查会话顶栏的「把排查结果反馈给维护人」。
+  const mountFeedback = () => { try { require('./troubleshoot-feedback').mountTroubleshootFeedback(win); } catch (error) { console.warn('[troubleshoot-feedback] 未加载：', error && error.message); } };
+  if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', mountFeedback, { once: true }); else mountFeedback();
   return assist;
 }
 
-module.exports = { html, assistHtml, knownHtml, createHubAssist, buildPrompt, showErrorToast, install, areaLabel, AREA_LABELS };
+module.exports = { html, assistHtml, knownHtml, createHubAssist, buildPrompt, troubleshootManualPath, CONCLUSION_FORMAT, showErrorToast, install, areaLabel, AREA_LABELS };

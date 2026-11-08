@@ -119,11 +119,11 @@ test('错误卡命中已知问题：标题下给「已知解法」，一键动�
 });
 
 function fakeDeps({ installed = ['codeagent', 'claude', 'codex'], failKinds = [], clock } = {}) {
-  const calls = { create: [], send: [], select: [], notify: [], closed: 0, setup: 0 };
+  const calls = { create: [], send: [], select: [], notify: [], closed: 0, setup: 0, saved: [] };
   let n = 0;
   const deps = {
     now: () => clock.t,
-    info: { productName: 'AI HUB', version: '5.5.24', platform: 'win32 10.0', appDir: 'C:\\Hub', files: [['日志目录', 'C:\\data\\logs']] },
+    info: { productName: 'AI HUB', version: '5.5.24', platform: 'win32 10.0', appDir: 'C:\\Hub', manual: 'C:\\Hub\\docs\\TROUBLESHOOT-AGENT.md', files: [['日志目录', 'C:\\data\\logs']] },
     invoke: async (channel, payload) => {
       if (channel === 'community:setup') { calls.setup++; return { providers: ['codeagent', 'claude', 'codex', 'gemini'].map(id => ({ id, installed: installed.includes(id) })) }; }
       if (channel === 'session:send-prompt') { calls.send.push(payload); return { ok: true }; }
@@ -138,6 +138,7 @@ function fakeDeps({ installed = ['codeagent', 'claude', 'codex'], failKinds = []
     closeOverlays: () => { calls.closed++; },
     notify: (message, level) => calls.notify.push([message, level]),
     workDir: () => 'D:/hub-data/troubleshoot/t1',
+    saveContext: (cwd, data) => calls.saved.push({ cwd, data }),
   };
   return { deps, calls };
 }
@@ -158,6 +159,43 @@ test('问问 Agent：默认开 CodeAgent 会话，标题「排查：…」，首
   assert.equal(sessionId, 's1');
   assert.equal(waitForCliReady, true);
   for (const part of ['点创建没反应', '新建会话', 'spawn x ENOENT', 'v5.5.24', 'C:\\data\\logs', '先只读排查', '等我同意后再动手']) assert.ok(text.includes(part), part);
+  // 5.5.31 任务书：角色与目标、先读手册、2 分钟先给判断、问复现、10 分钟收敛、全程中文、结尾固定结论块
+  for (const part of ['排查助手', '能安全修好就修', '给 AI HUB 维护人的排查报告', '先读它：C:\\Hub\\docs\\TROUBLESHOOT-AGENT.md',
+    '2 分钟内先用中文给我初步判断', '最可能的 1–3 个原因', '先问我是怎么出现的', '10 分钟左右', '全程用中文回复我', '不删除我的数据']) assert.ok(text.includes(part), part);
+  assert.ok(text.endsWith(card.CONCLUSION_FORMAT.join('\n')), '结论块格式放在最后');
+  for (const field of ['状态：已解决 / 未解决 / 需要用户操作', '原因：', '证据：（日志文件 + 时间 + 关键行摘要）', '已做的修改：', '建议用户做的：', '给维护人的说明：（未解决时写复现步骤']) assert.ok(text.includes(field), field);
+  assert.equal(card.CONCLUSION_FORMAT[0], '【排查结论】');
+  assert.equal(card.CONCLUSION_FORMAT.at(-1), '【排查结论完】');
+  // 原始报错存进排查目录，事后「把排查结果反馈给维护人」取用
+  assert.equal(calls.saved.length, 1);
+  assert.equal(calls.saved[0].cwd, 'D:/hub-data/troubleshoot/t1');
+  assert.deepEqual([calls.saved[0].data.sessionId, calls.saved[0].data.kind], ['s1', 'codeagent']);
+  assert.deepEqual(calls.saved[0].data.ctx, { area: 'session-create', areaLabel: '新建会话', title: '创建失败', symptom: '点创建没反应', details: 'spawn x ENOENT' });
+});
+
+test('首句：找不到排查手册时不提手册，其余照常', () => {
+  const text = card.buildPrompt({ area: 'welink', title: 'X' }, { version: '1', files: [] });
+  assert.ok(!text.includes('排查手册'));
+  assert.match(text, /【排查结论】/);
+});
+
+test('排查手册路径：源码运行看 docs/；打包后先 app.asar.unpacked/docs，再 resources/guides/docs；都没有返回 null', () => {
+  const path = require('node:path');
+  const has = set => file => set.has(file);
+  const res = path.join('C:', 'Hub', 'resources');
+  const asar = path.join(res, 'app.asar');
+  const unpacked = path.join(res, 'app.asar.unpacked', 'docs', 'TROUBLESHOOT-AGENT.md');
+  const guides = path.join(res, 'guides', 'docs', 'TROUBLESHOOT-AGENT.md');
+  assert.equal(card.troubleshootManualPath({ appDir: asar, resourcesPath: res, exists: has(new Set([unpacked, guides])) }), unpacked);
+  assert.equal(card.troubleshootManualPath({ appDir: asar, resourcesPath: res, exists: has(new Set([guides])) }), guides);
+  assert.equal(card.troubleshootManualPath({ appDir: asar, resourcesPath: res, exists: () => false }), null);
+  const src = path.join('D:', 'src', 'hub');
+  assert.equal(card.troubleshootManualPath({ appDir: src, exists: has(new Set([path.join(src, 'docs', 'TROUBLESHOOT-AGENT.md')])) }), path.join(src, 'docs', 'TROUBLESHOOT-AGENT.md'));
+  // 仓库里真有这份手册，并且打包配置会把它解包成普通文件（一键更新的增量包只带 app.asar 和 app.asar.unpacked）
+  assert.ok(card.troubleshootManualPath(), '源码目录下应能找到 docs/TROUBLESHOOT-AGENT.md');
+  const pkg = require('../package.json');
+  assert.ok(pkg.build.files.includes('docs/TROUBLESHOOT-AGENT.md'));
+  assert.ok(pkg.build.asarUnpack.includes('docs/TROUBLESHOOT-AGENT.md'));
 });
 
 test('问问 Agent：CodeAgent 起不来时退到 Claude Code；报错就是 CodeAgent 时先找别的', async () => {
