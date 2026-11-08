@@ -57,9 +57,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "考勤：公司单点登录先显示几秒登录页再自动跳回时，不再误判为「需要登录」（Hub 窗口和 Edge 两条读取路径都改了）；Edge 读取完后临时文件删干净"
+    "环境体检里 PPT Doctor 的版本号改为显示程序版本（之前误显示内置检索引擎的 0.4.0，这是「问问 Agent」真机排查自己找出的问题）；公司回执在提问没送进、自动重发时，不再把同一账号别的会话的回答带进来，避免回执串题"
   ],
-  "version": "5.5.32",
+  "version": "5.5.33",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

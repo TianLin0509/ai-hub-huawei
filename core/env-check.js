@@ -122,7 +122,8 @@ function probeList(ctx) {
       const doctor = assistant.ppt?.doctor;
       if (!doctor) return entry('ppt-doctor', 'PPT Doctor', 'ppt-doctor', STATUS.off, '这个版本没有 PPT 素材库');
       const st = await doctor.status({ force: true });
-      const ver = st.version || st.doctorVersion || st.appVersion || '';
+      // status 里的 version 是 PPT Doctor 内置检索引擎的版本（如 0.4.0），程序版本在 doctorVersion；先认程序版本，和工具自动发现一致。
+      const ver = st.doctorVersion || st.appVersion || st.version || '';
       const download = { label: '下载 PPT Doctor', act: 'ppt-download' };
       if (st.state === 'ready' || st.state === 'empty') {
         return entry('ppt-doctor', 'PPT Doctor', 'ppt-doctor', STATUS.ok, `${ver ? 'v' + ver + ' · ' : ''}${st.state === 'empty' ? '已安装，还没有建素材库' : '已安装，能联动'}`);

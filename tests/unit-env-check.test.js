@@ -140,3 +140,11 @@ test('版本号解析与带超时的取版本（隐藏窗口、超时返回失�
   const ok = await envCheck.runVersion(process.execPath, { timeoutMs: 8000 });
   assert.equal(ok.ok, true); assert.equal(ok.version, process.versions.node);
 });
+
+test('PPT Doctor 版本：显示程序版本 doctorVersion，不显示内置引擎的 version', async () => {
+  const assistant = { cli: () => '', auth: { status: () => ({ state: 'unknown' }) }, rawWelink: async () => ({ code: 1, stdout: '' }),
+    findCli: async () => ({ state: 'notfound' }), ppt: { doctor: { status: async () => ({ state: 'ready', version: '0.4.0', doctorVersion: '2.0.7' }) } } };
+  const r = await envCheck.runEnvCheck({ platform: 'linux', kindAllowed: () => false, setup: fakeSetup({}), assistant: () => assistant });
+  const it = r.items.find(i => i.id === 'ppt-doctor');
+  assert.match(it.detail, /v2\.0\.7/); assert.doesNotMatch(it.detail, /0\.4\.0/);
+});
