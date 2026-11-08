@@ -3,7 +3,8 @@
 //
 // 解压（extractTgz）是流式的：边解 gzip 边写盘，几百 MB 的包也不整个读进内存；写盘全用异步 fs，
 // DSH 运行环境约 7 万个小文件，同步写会把 Electron 主进程卡住几十秒。
-// 只认普通文件和目录（含 pax / GNU 长文件名头）；链接、设备等一律拒绝，路径不许跳出目标目录。
+// 只认普通文件、目录和硬链接（含 pax / GNU 长文件名头）；符号链接、设备等一律拒绝，路径不许跳出目标目录。
+// 硬链接（2026-11-07，Git for Windows 里同一个 git.exe 有几十个别名）：指向包里前面已解出的文件，解压时建硬链接，建不了就复制一份。
 // strip：只取这个前缀下面的条目，并去掉前缀（npm 包的 package/、Codex 的 vendor 子目录）。
 //
 // 打包（packTgz）给发布机上的打包脚本和单测用：条目按路径排序、时间戳固定，同样的输入打出同样的字节。
@@ -80,7 +81,7 @@ async function extractTgz(file, dest, { strip = '', signal, onEntry, maxBytes = 
   let files = 0, bytes = 0;
   let buf = Buffer.alloc(0);
   // 当前条目：{ remaining, padding, handle, kind }；kind = file / skip / pax / gnu-name
-  let entry = null, nextName = null, nextSize = null, ended = false;
+  let entry = null, nextName = null, nextSize = null, nextLink = null, ended = false;
   const meta = [];
   const input = fs.createReadStream(file).pipe(zlib.createGunzip());
   const abort = () => input.destroy(Object.assign(new Error('已取消'), { reason: '已取消' }));
@@ -114,6 +115,7 @@ async function extractTgz(file, dest, { strip = '', signal, onEntry, maxBytes = 
             const fields = parsePax(Buffer.concat(meta.splice(0)));
             if (fields.path) nextName = fields.path;
             if (fields.size) nextSize = Number(fields.size);
+            if (fields.linkpath) nextLink = fields.linkpath;
           } else if (done.kind === 'gnu-name') {
             nextName = Buffer.concat(meta.splice(0)).toString('utf8').replace(/\0+$/, '');
           }
@@ -139,13 +141,35 @@ async function extractTgz(file, dest, { strip = '', signal, onEntry, maxBytes = 
           const pre = ustar ? header.toString('utf8', 345, 500).replace(/\0.*$/s, '') : '';
           name = pre ? pre + '/' + short : short;
         }
-        nextName = null; nextSize = null;
+        const linkName = nextLink || header.toString('utf8', 157, 257).replace(/\0.*$/s, '');
+        nextName = null; nextSize = null; nextLink = null;
         const rel = cleanRel(name);
         if (!rel) throw new Error('组件包里有不安全的路径：' + String(name).slice(0, 120));
         let keep = rel;
         if (prefix) keep = (rel + '/').startsWith(prefix) ? rel.slice(prefix.length) : null;
         if (type === '5') {
           if (keep) await ensureDir(target(keep));
+          entry = { remaining: size, padding, kind: 'skip' };
+          continue;
+        }
+        if (type === '1') {
+          if (keep) {
+            const linkRel = cleanRel(linkName);
+            const inside = linkRel && (!prefix || (linkRel + '/').startsWith(prefix));
+            const from = inside ? target(prefix ? linkRel.slice(prefix.length) : linkRel) : null;
+            if (!from || !fs.existsSync(from)) throw new Error('组件包里的硬链接指向不存在的文件：' + rel);
+            const full = target(keep);
+            await ensureDir(path.dirname(full));
+            try { await fs.promises.link(from, full); }
+            catch (_) {
+              // 建不了硬链接（FAT/exFAT 盘、权限）就复制一份；复制占真实空间，计入解压大小上限。
+              bytes += (await fs.promises.stat(from)).size;
+              if (bytes > maxBytes) throw new Error('组件包解压后超过允许大小');
+              await fs.promises.copyFile(from, full, fs.constants.COPYFILE_EXCL);
+            }
+            files += 1;
+            onEntry && onEntry({ files, bytes });
+          }
           entry = { remaining: size, padding, kind: 'skip' };
           continue;
         }
@@ -179,9 +203,10 @@ async function extractTgz(file, dest, { strip = '', signal, onEntry, maxBytes = 
 // ---------- 打包 ----------
 function octal(n, len) { return n.toString(8).padStart(len - 1, '0') + '\0'; }
 
-function header(name, size, type) {
+function header(name, size, type, linkName = '') {
   const h = Buffer.alloc(BLOCK);
   h.write(name.slice(0, 100), 0, 'utf8');
+  if (linkName) h.write(linkName.slice(0, 100), 157, 'utf8');
   h.write(octal(type === '5' ? 0o755 : 0o644, 8), 100, 'ascii');
   h.write(octal(0, 8), 108, 'ascii');
   h.write(octal(0, 8), 116, 'ascii');
@@ -198,20 +223,27 @@ function header(name, size, type) {
   return h;
 }
 
-function paxHeader(name) {
+function paxRecord(key, value) {
   // 记录长度包含长度数字本身：先按不含数字的长度算，再把数字位数加上（位数变了就再加一次）。
-  const rest = Buffer.byteLength(` path=${name}\n`);
+  const rest = Buffer.byteLength(` ${key}=${value}\n`);
   let len = rest + String(rest).length;
   if (String(len).length !== String(rest).length) len = rest + String(len).length;
-  const body = Buffer.from(`${len} path=${name}\n`, 'utf8');
+  return Buffer.from(`${len} ${key}=${value}\n`, 'utf8');
+}
+function paxHeader(name, linkName = '') {
+  const body = Buffer.concat([Buffer.byteLength(name) > 100 ? paxRecord('path', name) : Buffer.alloc(0),
+    Buffer.byteLength(linkName) > 100 ? paxRecord('linkpath', linkName) : Buffer.alloc(0)]);
   return [header('PaxHeader', body.length, 'x'), body, Buffer.alloc((BLOCK - (body.length % BLOCK)) % BLOCK)];
 }
 
-// entries：[{ name, data?: Buffer, file?: 绝对路径, dir?: true }]；写成 gzip 流到 out（文件路径）。
+// entries：[{ name, data?: Buffer, file?: 绝对路径, dir?: true, link?: 包里另一个文件的路径（硬链接）}]；写成 gzip 流到 out（文件路径）。
+// 硬链接排在所有普通文件之后，解压时它指向的文件一定已经解出来了。
 async function packTgz(entries, out, { level = 9 } = {}) {
-  const list = entries.map(e => ({ ...e, name: cleanRel(e.name) }));
-  if (list.some(e => !e.name)) throw new Error('打包条目里有不安全的路径');
-  list.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const list = entries.map(e => ({ ...e, name: cleanRel(e.name), ...(e.link !== undefined ? { link: cleanRel(e.link) } : {}) }));
+  if (list.some(e => !e.name || (e.link !== undefined && !e.link))) throw new Error('打包条目里有不安全的路径');
+  const names = new Set(list.filter(e => e.link === undefined && !e.dir).map(e => e.name));
+  if (list.some(e => e.link !== undefined && !names.has(e.link))) throw new Error('硬链接指向的文件不在打包条目里');
+  list.sort((a, b) => ((a.link !== undefined) - (b.link !== undefined)) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   await fs.promises.mkdir(path.dirname(path.resolve(out)), { recursive: true });
   const gzip = zlib.createGzip({ level });
   const sink = fs.createWriteStream(out);
@@ -220,9 +252,10 @@ async function packTgz(entries, out, { level = 9 } = {}) {
   const write = chunk => new Promise(resolve => { if (gzip.write(chunk)) resolve(); else gzip.once('drain', resolve); });
   for (const e of list) {
     const name = e.dir ? e.name + '/' : e.name;
-    const data = e.dir ? Buffer.alloc(0) : e.data != null ? Buffer.from(e.data) : await fs.promises.readFile(e.file);
-    if (Buffer.byteLength(name) > 100) for (const part of paxHeader(name)) await write(part);
-    await write(header(name, data.length, e.dir ? '5' : '0'));
+    const link = e.link || '';
+    const data = e.dir || link ? Buffer.alloc(0) : e.data != null ? Buffer.from(e.data) : await fs.promises.readFile(e.file);
+    if (Buffer.byteLength(name) > 100 || Buffer.byteLength(link) > 100) for (const part of paxHeader(name, link)) await write(part);
+    await write(header(name, data.length, e.dir ? '5' : link ? '1' : '0', link));
     if (data.length) {
       await write(data);
       const pad = (BLOCK - (data.length % BLOCK)) % BLOCK;

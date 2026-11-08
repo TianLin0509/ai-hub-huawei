@@ -24,7 +24,7 @@ const { cleanRel } = require('./tar');
 
 // 发布机生成的组件目录签名公钥（私钥不进仓库）。
 const PUBLIC_KEY_HEX = '302a300506032b65700321000f541a07f44bc3f490da52763debe083aff0b0ff2477d729638984c81540535e';
-const IDS = Object.freeze(['claude', 'codex', 'dsh', 'node']);
+const IDS = Object.freeze(['claude', 'codex', 'dsh', 'node', 'git']);
 const KINDS = Object.freeze(['exe', 'tgz']);
 const SHA = /^[a-f0-9]{64}$/;
 const FILE = /^[A-Za-z0-9._+-]{1,120}$/;

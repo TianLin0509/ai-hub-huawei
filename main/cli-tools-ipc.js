@@ -3,7 +3,12 @@
 // installer 为 null（发行版没有下载源）时也注册，界面据 available:false 显示原来的手动安装说明。
 function registerCliToolsIpc(ipcMain, { installer = null } = {}) {
   const unavailable = () => ({ available: false, busy: null, tools: {}, installed: {}, catalog: null });
-  ipcMain.handle('cli-tools:state', () => installer ? installer.snapshot() : unavailable());
+  // 每次打开安装窗口顺带在后台全局找一遍 Git Bash；找到了经 cli-tools:state 推送，界面就不再提示装 Git。
+  ipcMain.handle('cli-tools:state', () => {
+    if (!installer) return unavailable();
+    try { installer.refreshGit?.(); } catch (_) {}
+    return installer.snapshot();
+  });
   ipcMain.handle('cli-tools:install', async (_event, request = {}) => {
     if (!installer) return { ok: false, error: '这个版本暂不支持一键安装', state: unavailable() };
     try {

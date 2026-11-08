@@ -403,3 +403,4 @@
 .meeting-rename-btn{flex:none;border:0;background:transparent;color:var(--hw-text-3);font-size:var(--hw-fs-13);line-height:1.4;cursor:pointer;padding:0 4px;border-radius:var(--hw-r-xs)}
 .meeting-rename-btn:hover{color:var(--hw-brand);background:var(--hw-brand-soft)}
 .meeting-rename-input{flex:none;width:min(360px,40vw);height:28px;padding:0 8px;border:1px solid var(--hw-brand);border-radius:var(--hw-r-xs);background:var(--hw-surface);color:var(--hw-text-1);font:inherit;font-size:var(--hw-fs-16);font-weight:600}
+.meeting-glossary-hints{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px 0 10px;font-size:var(--hw-fs-12);color:var(--hw-text-2)}

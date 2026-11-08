@@ -2,8 +2,9 @@
 // 分辨发言人（2026-11-07 用户确认要做）。转写组件给每句话（≥1 秒）算一个声纹向量（3D-Speaker CAM++，192 维单位向量），
 // 这里按会议在线聚类：和已有发言人的平均声纹余弦相似度 ≥ THRESHOLD 就归给最像的那位，否则记为新发言人。
 // 麦克风和系统声音分开聚类：同一个人很少同时出现在两路里，两路的音色也被各自的设备改变了。
-// 合成三人会议上 0.4–0.6 都能一人一类且不混；真人的声音起伏更大，阈值取中间值。名字由用户在界面里改，改名不影响聚类。
-const THRESHOLD = 0.5;
+// 阈值：合成三人会议上 0.4–0.6 都分得开；换成 6 个合成声音（4 男 2 女）时 0.5 会把相近的男声并成一人（6 人聚成 4 人），
+// 0.6 聚成 5 人、0.75 才全分开但真人声音起伏大、会被拆碎。并错了用户没法改，拆开了可以把两位改成同一个名字，所以宁拆勿并，取 0.6。
+const THRESHOLD = 0.6;
 const MAX_SPEAKERS = 12;
 const INHERIT_MS = 4000;
 
@@ -41,7 +42,11 @@ function names(m) {
 function rename(m, id, name) {
   const s = (m.speakers?.list || []).find(x => x.id === Number(id));
   if (!s) throw new Error('没有这位发言人');
+  const before = s.name || `发言人${s.id}`;
   s.name = String(name || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+  // 纪要里已经写成「发言人2」的负责人、提议人一并换成新名字（模拟评测里较强的模型也会把行动项记在「发言人N」名下）。
+  const after = s.name || `发言人${s.id}`;
+  if (m.summary && before !== after) m.summary = m.summary.replace(new RegExp(before.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?!\\d)', 'g'), after);
 }
 
 // 界面和导出只要名字与句数，不带声纹。

@@ -48,17 +48,9 @@ function findCommand(command, env = process.env, platform = process.platform) {
   return null;
 }
 
-// Claude Code on Windows runs its tools and hooks through Git Bash.
-function findGitBash(env = process.env) {
-  const candidates = [
-    env.CLAUDE_CODE_GIT_BASH_PATH,
-    path.join(env.ProgramFiles || 'C:\\Program Files', 'Git', 'bin', 'bash.exe'),
-    path.join(env.LOCALAPPDATA || '', 'Programs', 'Git', 'bin', 'bash.exe'),
-  ].filter(Boolean);
-  const git = findCommand('git', env);
-  if (git) candidates.push(path.join(path.dirname(path.dirname(git)), 'bin', 'bash.exe'));
-  return candidates.find(candidate => { try { return fs.statSync(candidate).isFile(); } catch { return false; } }) || null;
-}
+// Claude Code on Windows prefers Git Bash and falls back to PowerShell without it.
+// Where we look (and in which order) lives in core/git-bash.js.
+function findGitBash(env = process.env) { return require('./git-bash').findGitBash(env); }
 
 // Managed machines can block the hook script: a Group Policy execution policy
 // overrides -ExecutionPolicy Bypass, and Constrained Language Mode blocks the
@@ -94,7 +86,7 @@ function inspectSetup({ root = path.resolve(__dirname, '..'), env = process.env,
   };
   const advisories = [];
   if (providers.find(p => p.id === 'claude')?.installed && platform === 'win32' && !findGitBash(env)) {
-    advisories.push('Claude Code 在 Windows 上需要 Git for Windows（Git Bash）；未找到时 Claude 会话无法执行工具。');
+    advisories.push('没找到 Git for Windows（Git Bash）：Claude Code 会改用 PowerShell 执行命令（官方预览功能），建议安装 Git for Windows。');
   }
   const policy = knownPolicy !== undefined ? knownPolicy : probePolicy ? probePowerShellPolicy(env) : null;
   if (policy && !policy.ok) {
@@ -121,4 +113,5 @@ async function inspectSetupAsync(options = {}) {
   return inspectSetup({ ...options, knownPolicy });
 }
 
-module.exports = { PROVIDERS, findCommand, findGitBash, inspectSetup, inspectSetupAsync, probePowerShellPolicy };
+function searchGitBash(env = process.env, options) { return require('./git-bash').searchGitBash(env, options); }
+module.exports = { PROVIDERS, findCommand, findGitBash, searchGitBash, inspectSetup, inspectSetupAsync, probePowerShellPolicy };

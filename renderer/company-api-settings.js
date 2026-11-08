@@ -78,7 +78,19 @@
     slot.innerHTML = (needPass ? netPassView.boxHtml(netPass, { last: netPassLast }) : '') + block;
     netPassView.bind(slot, { ipcRenderer, onUpdate: (next, last) => { if (next) netPass = next; netPassLast = last; renderCliBlock(target, kind); } });
     slot.querySelector('[data-cli-action="install"]')?.addEventListener('click', () => void runInstall(target, kind));
-    slot.querySelector('[data-cli-action="cancel"]')?.addEventListener('click', () => void ipcRenderer.invoke('cli-tools:cancel').catch(() => {}));
+    slot.querySelector('[data-cli-action="install-git"]')?.addEventListener('click', () => void runGitInstall(target, kind));
+    for (const b of slot.querySelectorAll('[data-cli-action="cancel"]')) b.addEventListener('click', () => void ipcRenderer.invoke('cli-tools:cancel').catch(() => {}));
+  }
+  // Git for Windows（2026-11-07）：挂在 Claude Code 区块下面；主进程先全局找本机的 Git，没有才下载。
+  async function runGitInstall(target, kind) {
+    cliState = { ...cliState, busy: 'git', tools: { ...cliState?.tools, git: { phase: 'checking' } } };
+    renderCliBlock(target, kind);
+    let result;
+    try { result = await ipcRenderer.invoke('cli-tools:install', { id: 'git' }); }
+    catch (error) { result = { ok: false, error: error.message }; }
+    if (result?.state) cliState = result.state;
+    else cliState = { ...cliState, busy: null, tools: { ...cliState?.tools, git: { phase: 'error', error: result?.error || '未知原因' } } };
+    if (dialog === target) renderCliBlock(target, kind);
   }
   async function runInstall(target, kind) {
     const id = cliView.TOOL_FOR_KIND[kind];
@@ -129,7 +141,7 @@
     }
     target.innerHTML = heading(`安装 ${LABELS[kind]}`, '安装完成后可沿用本机配置，或填写自己的 API 接口。')
       + `<div data-cli-install="${kind}"></div>`
-      + `<div class="company-api-install"><span class="company-api-tag">未安装</span><ol><li>按官方说明安装 ${esc(LABELS[kind])} CLI${kind === 'claude' ? '，Windows 同时需要 Git for Windows' : ''}。</li><li>完成安装后点击「重新检测」。</li><li>需要自有接口时，到「自有 API」填写配置。</li></ol></div>`
+      + `<div class="company-api-install"><span class="company-api-tag">未安装</span><ol><li>按官方说明安装 ${esc(LABELS[kind])} CLI${kind === 'claude' ? '，Windows 建议同时安装 Git for Windows（没有时 Claude 改用 PowerShell 执行命令）' : ''}。</li><li>完成安装后点击「重新检测」。</li><li>需要自有接口时，到「自有 API」填写配置。</li></ol></div>`
       + '<p class="company-api-message" role="status"></p><footer><button type="button" data-api-action="docs">查看安装说明</button><button type="button" class="primary" data-api-action="refresh">重新检测</button></footer>';
     bindClose(target);
     target.querySelector('[data-api-action="docs"]').onclick = () => { if (provider?.docs) void shell.openExternal(provider.docs); };

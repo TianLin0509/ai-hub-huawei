@@ -29,12 +29,28 @@ function render(items) {
   return out.join('\n');
 }
 
+// 模型不守编号、却按小标题写了整份纪要（换了不熟悉这种格式的模型时可能出现）：按小标题把要点认成条目、重新编号。
+const HEADS = [['T', /议题|主题/], ['F', /事实|数据|进展/], ['D', /决定|结论|决议/], ['A', /行动|待办|任务/], ['Q', /待确认|问题|分歧|风险/]];
+function fromHeadings(text) {
+  const items = new Map(), count = {}; let kind = null;
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const head = raw.match(/^\s*#{1,6}\s*(.+?)\s*$/) || raw.match(/^\s*\*\*(.+?)\*\*\s*[:：]?\s*$/);
+    if (head) { kind = HEADS.find(([, re]) => re.test(head[1]))?.[0] || null; continue; }
+    const bullet = raw.match(/^\s*(?:[-*•]|\d+[.、)])\s+(.*\S)\s*$/);
+    if (kind && bullet) { const n = (count[kind] = (count[kind] || 0) + 1); items.set(`${kind}${n}`, { kind, n, text: bullet[1] }); }
+  }
+  return items;
+}
+
 // 返回 { summary, changed, note }：changed 是本轮改动的条目数，note 是模型写的「本轮小结」。
 function apply(current, reply) {
   const items = parse(current), changes = parse(reply), note = String(reply || '').match(SUMMARY_LINE)?.[1]?.trim() || '';
   if (!changes.size) {
-    // 模型没按条目格式写、而纪要还是空的：先把它写的整段留下，总比空着强；有纪要时保留原纪要。
     const body = String(reply || '').replace(SUMMARY_LINE, '').trim();
+    // 不守编号但写了整份分区纪要，且不比原来短太多：当成整份重写收下。
+    const whole = fromHeadings(body);
+    if (whole.size >= 2 && body.length >= String(current || '').length * 0.5) return { summary: render(whole), changed: whole.size, note };
+    // 模型没按条目格式写、而纪要还是空的：先把它写的整段留下，总比空着强；有纪要时保留原纪要。
     if (!current && body.length >= 8 && !/^本轮无更新/.test(body)) return { summary: body, changed: 0, note };
     return { summary: current || '', changed: 0, note };
   }

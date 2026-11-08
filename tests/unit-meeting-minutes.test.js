@@ -21,6 +21,15 @@ test('一句「本轮无更新」或格式走样不清空已有纪要', () => {
   assert.equal(minutes.apply('', '本轮无更新').summary, '');
 });
 
+test('模型不守编号、但写了整份分区纪要：按小标题认成条目，长度不够不收', () => {
+  const current = '## 决定\n- [D1] 先做固定秩四仿真 [事件 12]';
+  const whole = '## 议题\n- 吞吐下降排查 [事件 3]\n\n## 决定\n1. 先做固定秩四仿真 [事件 12]\n2. 步长定为 0.4 [事件 30]\n\n**行动项**\n- 刘洋｜按 0.4 回归｜下周二前 [事件 31]\n本轮小结：补了行动项';
+  const r = minutes.apply(current, whole);
+  assert.equal(r.summary, '## 议题\n- [T1] 吞吐下降排查 [事件 3]\n## 决定\n- [D1] 先做固定秩四仿真 [事件 12]\n- [D2] 步长定为 0.4 [事件 30]\n## 行动项\n- [A1] 刘洋｜按 0.4 回归｜下周二前 [事件 31]');
+  const long = '## 决定\n' + Array.from({ length: 30 }, (_, i) => `- [D${i + 1}] 决定${i + 1}`).join('\n');
+  assert.equal(minutes.apply(long, '## 决定\n- 只剩一条\n## 行动项\n- 一条').summary, long, '比原来短一半以上不当成整份重写');
+});
+
 test('编号写法走样也认：[T-1]、**[D2]**、[A 3]：', () => {
   const items = minutes.parse('- [T-1] a\n**[D2]** b\n- [A 3]：c\n普通一行 [事件 2]');
   assert.deepEqual([...items.keys()], ['T1', 'D2', 'A3']);

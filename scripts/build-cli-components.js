@@ -6,7 +6,8 @@
 //   node scripts/build-cli-components.js --dry-run                 只打印计划（会查版本号，不下载）
 //   node scripts/build-cli-components.js --gen-key <私钥.pem>      生成签名钥匙对，打印公钥（写进 core/cli-tools/catalog.js）
 //
-// 选项：--only claude,codex,dsh,node   --claude-version latest|stable|x.y.z   --codex-version latest|x.y.z
+// 选项：--only claude,codex,dsh,node,git   --claude-version latest|stable|x.y.z   --codex-version latest|x.y.z
+//       --git-version latest|2.56.0.windows.4（Git for Windows，取 npm 国内镜像上的完整 tar.bz2，和 GitHub 发布的 sha256 核对）
 //       --dsh-version 0.2.1-rc.2 --dsh-tui-version 0.16.1   --dsh-from <已装好的运行环境目录>（直接打包它，不再 npm install）
 //       --node-version v22.x.y（默认取 22 系列最新）   --registry https://registry.npmmirror.com
 //       --mirror-claude（Claude Code 也放一份到自家源，默认只写官方地址；许可见报告）
@@ -20,13 +21,15 @@ const { execFile } = require('child_process');
 const { packTgz, listTree, extractTgz } = require('../core/cli-tools/tar');
 const catalogLib = require('../core/cli-tools/catalog');
 
-const DEFAULTS = { registry: 'https://registry.npmmirror.com', claude: 'latest', codex: 'latest', dsh: '0.2.1-rc.2', dshTui: '0.16.1', node: '22' };
+const DEFAULTS = { registry: 'https://registry.npmmirror.com', claude: 'latest', codex: 'latest', dsh: '0.2.1-rc.2', dshTui: '0.16.1', node: '22', git: 'latest' };
+const GIT_MIRROR = 'https://registry.npmmirror.com/-/binary/git-for-windows';
+const GIT_RELEASES = 'https://api.github.com/repos/git-for-windows/git/releases/tags';
 const NPMJS = 'https://registry.npmjs.org';
 const CLAUDE_RELEASES = 'https://downloads.claude.ai/claude-code-releases';
 const NODE_MIRROR = 'https://registry.npmmirror.com/-/binary/node';
 
 function parseArgs(argv) {
-  const o = { only: ['claude', 'codex', 'dsh', 'node'] };
+  const o = { only: ['claude', 'codex', 'dsh', 'node'] }; // git 要显式 --only 才打
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i], next = () => { const v = argv[++i]; if (v === undefined) throw new Error(`${a} 缺少参数`); return v; };
     if (a === '--out') o.out = path.resolve(next());
@@ -39,6 +42,7 @@ function parseArgs(argv) {
     else if (a === '--dsh-tui-version') o.dshTui = next();
     else if (a === '--dsh-from') o.dshFrom = path.resolve(next());
     else if (a === '--node-version') o.node = next();
+    else if (a === '--git-version') o.git = next();
     else if (a === '--registry') o.registry = next().replace(/\/+$/, '');
     else if (a === '--mirror-claude') o.mirrorClaude = true;
     else if (a === '--dry-run') o.dryRun = true;
@@ -144,6 +148,25 @@ async function planNode(o) {
     preferOfficial: false, mirror: true, official: [], install: { bin: 'node.exe', pathDirs: ['.'], versionArgs: ['--version'] } };
 }
 
+// Git for Windows（2026-11-07）：版本号 2.56.0.windows.4 → 组件版本 2.56.0+windows.4，文件 Git-2.56.0.4-64-bit.tar.bz2。
+async function planGit(o) {
+  let tag = o.git;
+  if (!/^v?\d+\.\d+\.\d+\.windows\.\d+$/.test(tag)) {
+    const list = await getJson(GIT_MIRROR + '/');
+    const tags = list.map(r => String(r.name).replace(/\/$/, '')).filter(n => /^v\d+\.\d+\.\d+\.windows\.\d+$/.test(n));
+    const num = n => n.slice(1).split(/\.windows\.|\./).map(Number);
+    tags.sort((a, b) => { const x = num(a), y = num(b); for (let i = 0; i < 4; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; });
+    tag = tags[tags.length - 1];
+    if (!tag) throw new Error('npm 国内镜像上找不到 Git for Windows 的正式版');
+  }
+  tag = tag.startsWith('v') ? tag : 'v' + tag;
+  const [, base, build] = /^v(\d+\.\d+\.\d+)\.windows\.(\d+)$/.exec(tag);
+  const asset = `Git-${build === '1' ? base : base + '.' + build}-64-bit.tar.bz2`;
+  return { id: 'git', name: 'Git for Windows', version: `${base}+windows.${build}`, tag, asset, file: `git-for-windows-${base}.${build}-64-bit.tgz`,
+    license: 'GPL-2.0（Git for Windows）', preferOfficial: false, mirror: true, official: [],
+    install: { bin: 'cmd/git.exe', pathDirs: ['cmd'], versionArgs: ['--version'], check: ['bin/bash.exe', 'usr/bin/bash.exe', 'usr/bin/ls.exe', 'usr/bin/grep.exe'] } };
+}
+
 // ---------- 各组件的打包 ----------
 async function buildNpmTarball(p, dir, staging) {
   const dest = path.join(dir, p.file);
@@ -212,6 +235,51 @@ async function buildNode(p, dir, staging) {
   return { file: dest, bytes: fs.statSync(dest).size, sha256: h.sha256 };
 }
 
+// 解开官方 tar.bz2（Windows 自带的 tar.exe），硬链接按链接打包（同一个 git.exe 有几十个别名，展开会多出约 67 MB），
+// 符号链接（dev/fd、etc/mtab 这类，Git 自己的运行库会模拟）不打包。解出来试跑 git --version 和一条 bash 命令。
+async function buildGit(p, dir, staging) {
+  const src = path.join(staging, 'git-dl', p.asset);
+  const got = await download(`${GIT_MIRROR}/${p.tag}/${p.asset}`, src);
+  try {
+    const rel = await getJson(`${GIT_RELEASES}/${p.tag}`);
+    const want = String((rel.assets || []).find(a => a.name === p.asset)?.digest || '').replace(/^sha256:/, '');
+    if (want && want !== got.sha256) throw new Error(`${p.asset} 与 GitHub 发布的 sha256 不一致，停止`);
+    log(want ? `${p.asset} 与 GitHub 发布的 sha256 一致` : 'GitHub 发布信息里没有 sha256，跳过对照');
+  } catch (error) {
+    if (/不一致/.test(error.message)) throw error;
+    log('警告：读不到 GitHub 发布信息，跳过 sha256 对照（' + error.message + '）');
+  }
+  const tarExe = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+  const listing = await run(tarExe, ['-tvjf', src]);
+  const links = new Map(), symlinks = [];
+  for (const line of listing.split(/\r?\n/)) {
+    const hard = /^h\S*\s+.*?\d\d:\d\d (.+) link to (.+)$/.exec(line);
+    if (hard) links.set(hard[1], hard[2]);
+    const sym = /^l\S*\s+.*?\d\d:\d\d (.+) -> (.+)$/.exec(line);
+    if (sym) symlinks.push(sym[1]);
+  }
+  const tree = path.join(staging, 'git-tree');
+  fs.rmSync(tree, { recursive: true, force: true });
+  fs.mkdirSync(tree, { recursive: true });
+  await run(tarExe, ['-xjf', src, '-C', tree, ...symlinks.flatMap(s => ['--exclude', s])]);
+  for (const rel of p.install.check) if (!fs.existsSync(path.join(tree, ...rel.split('/')))) throw new Error('Git 包里缺少 ' + rel);
+  p.probeVersion = await run(path.join(tree, 'cmd', 'git.exe'), ['--version']);
+  const bashOut = await run(path.join(tree, 'bin', 'bash.exe'), ['-lc', 'ls / >/dev/null && echo a | grep -c a']);
+  if (bashOut.trim() !== '1') throw new Error('Git Bash 试跑结果不对：' + bashOut);
+  const entries = listTree(tree).filter(e => !links.has(e.name));
+  for (const [name, target] of links) entries.push({ name, link: target });
+  const notice = `Git for Windows ${p.tag} (64-bit), unmodified official files repacked as tgz by AI HUB (source asset ${p.asset}, sha256 ${got.sha256}).\n`
+    + `License: GPL-2.0 and others, see LICENSE.txt. Source code: https://github.com/git-for-windows/git/releases/tag/${p.tag}\n`;
+  entries.push({ name: 'AI-HUB-NOTICE.txt', data: notice });
+  log(`打包 Git for Windows：${entries.length} 个条目（其中硬链接 ${links.size} 个，略过符号链接 ${symlinks.length} 个）…`);
+  const dest = path.join(dir, p.file);
+  await packTgz(entries, dest);
+  const h = await hashFile(dest);
+  p.fileCount = entries.length;
+  fs.rmSync(tree, { recursive: true, force: true });
+  return { file: dest, bytes: fs.statSync(dest).size, sha256: h.sha256 };
+}
+
 async function main() {
   const o = parseArgs(process.argv.slice(2));
   if (o.help) { console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(2, 17).join('\n')); return; }
@@ -223,7 +291,7 @@ async function main() {
     console.log('公钥（写进 core/cli-tools/catalog.js 的 PUBLIC_KEY_HEX）：' + publicKey.export({ type: 'spki', format: 'der' }).toString('hex'));
     return;
   }
-  const planners = { claude: planClaude, codex: planCodex, dsh: planDsh, node: planNode };
+  const planners = { claude: planClaude, codex: planCodex, dsh: planDsh, node: planNode, git: planGit };
   const plans = [];
   for (const id of o.only) plans.push(await planners[id](o));
   log('计划：');
@@ -247,7 +315,8 @@ async function main() {
     const dir = p.mirror ? path.join(outRoot, p.id, p.version) : path.join(o.out, 'official-only', p.id, p.version);
     fs.mkdirSync(dir, { recursive: true });
     log(`== ${p.name} ${p.version}`);
-    const built = p.id === 'dsh' ? await buildDsh(p, dir, staging, o) : p.id === 'node' ? await buildNode(p, dir, staging) : await buildNpmTarball(p, dir, staging);
+    const built = p.id === 'dsh' ? await buildDsh(p, dir, staging, o) : p.id === 'node' ? await buildNode(p, dir, staging)
+      : p.id === 'git' ? await buildGit(p, dir, staging) : await buildNpmTarball(p, dir, staging);
     const rel = `${p.id}/${p.version}/${p.file}`;
     // 不放自家源的组件（默认 Claude Code）：文件仍留在输出目录方便核对，但不进目录的 url，也不用上传。
     components.push({ id: p.id, name: p.name, version: p.version, kind: 'tgz', license: p.license, preferOfficial: p.preferOfficial,

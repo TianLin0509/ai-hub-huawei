@@ -131,6 +131,16 @@
     if (act === 'open-codeagent') { leave(); (window.__codeagentAccountsOpen || window.__companyApiOpen)?.(); return; }
     if (act === 'open-company-api' || act === 'open-cli-install') { leave(); window.__companyApiOpen?.(); return; }
     if (act === 'open-update') { leave(); window.__appUpdate?.open?.(); return; }
+    // 一键安装 Git for Windows（2026-11-07）：主进程先全局找本机的 Git，没有才下载，装完重新体检。
+    if (act === 'git-install') {
+      setMessage('正在全局查找本机的 Git，没有就下载安装 Git for Windows（可能要几分钟）…');
+      const r = await ipcRenderer.invoke('cli-tools:install', { id: 'git' }).catch(error => ({ ok: false, error: error.message }));
+      const git = r?.state?.tools?.git || {};
+      if (!r?.ok) { setMessage('Git for Windows 没装上：' + (r?.error || git.error || '未知原因'), true); return; }
+      setMessage(git.found ? `这台电脑已经有 Git Bash（${git.found}），不用重复安装` : 'Git for Windows 已装好，新建的 Claude 会话会用它执行命令');
+      await run();
+      return;
+    }
     const busy = { 'welink-find': '正在全盘找 welink-cli，最多约 2 分钟…', 'proxy-restart': '正在重新启动反代…', 'ppt-download': '正在打开下载地址…' }[act];
     if (busy) setMessage(busy);
     const r = await ipcRenderer.invoke('env-check:fix', { id: item.id, act, url: fix.url || '' }).catch(error => ({ ok: false, error: error.message }));

@@ -40,11 +40,13 @@ test('缺东西：CodeAgent 没装在公司版是红，Claude 没装但缺 Git B
   assert.ok(by.codeagent.cause && by.codeagent.steps.length);
 });
 
-test('装了 Claude 却没有 Git Bash：红；CodeAgent 版本太旧：黄', async () => {
+test('装了 Claude 却没有 Git Bash：黄（Claude 会改用 PowerShell）；公司版带一键安装；CodeAgent 版本太旧：黄', async () => {
   const r = await envCheck.runEnvCheck({ platform: 'win32', isCompany: true, setup: fakeSetup({ claude: 'C:\\c.exe', codeagent: 'C:\\ca.exe' }),
     runVersion: async () => ({ ok: true, version: '2.0.0' }), codeagentVersion: async () => '1.2600.0.0', codeagentCommand: () => 'codeagent' });
   const by = Object.fromEntries(r.items.map(i => [i.id, i]));
-  assert.equal(by['git-bash'].status, 'bad');
+  assert.equal(by['git-bash'].status, 'warn');
+  assert.match(by['git-bash'].detail, /改用 PowerShell/);
+  assert.equal(by['git-bash'].fixes[0].act, 'git-install');
   assert.equal(by.codeagent.status, 'warn'); assert.match(by.codeagent.detail, /太旧/);
 });
 

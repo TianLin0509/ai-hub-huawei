@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const IDS = ['claude', 'codex', 'dsh', 'node'];
+const IDS = ['claude', 'codex', 'dsh', 'node', 'git'];
 const DSH_RUNTIME_FILES = ['@deepseek-ai/dsh/lib/bin.js', '@deepseek-harness-tui/dsh-tui/package.json'];
 
 function toolsRoot(env = process.env) {
@@ -110,6 +110,17 @@ function applySessionPath(sessionEnv, { platform = process.platform } = {}) {
   if (codex) {
     const found = require('../../main/codex-windows-command').locateWindowsCodex(sessionEnv);
     if (found && found.source === 'hub-tools') added.push(...prependPath(sessionEnv, codex.pathDirs));
+  }
+  // Git Bash（2026-11-07）：Claude Code 自己只看 PATH 上 git.exe 推出来的位置和默认安装目录，scoop 的 shim、只在 PATH 上放了
+  // bash.exe、注册表或其他硬盘上的、VS 自带的它都找不到。Hub 找到的一律经 CLAUDE_CODE_GIT_BASH_PATH 告诉它（指向的就是
+  // 真实存在的 bash.exe，标准位置也设，无副作用）；Hub 装的 git 顺便放进 PATH，终端里也能直接用 git。
+  if (!sessionEnv.CLAUDE_CODE_GIT_BASH_PATH) {
+    try {
+      const hit = require('../git-bash').locateGitBash(sessionEnv);
+      if (hit && hit.source !== 'env') sessionEnv.CLAUDE_CODE_GIT_BASH_PATH = hit.bash;
+      const git = hit && hit.source === 'hub' ? managed('git', sessionEnv) : null;
+      if (git && !pathDirs(sessionEnv).some(d => isFile(path.join(d, 'git.exe')))) added.push(...prependPath(sessionEnv, git.pathDirs));
+    } catch (_) { /* 找 Git 出错不影响建会话 */ }
   }
   return added;
 }

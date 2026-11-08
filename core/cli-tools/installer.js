@@ -16,7 +16,8 @@ const registry = require('./registry');
 const { extractTgz } = require('./tar');
 
 const CATALOG_TTL_MS = 10 * 60 * 1000;
-const NAMES = { claude: 'Claude Code', codex: 'Codex', dsh: 'DSH 运行环境', node: 'Node.js 运行环境' };
+const NAMES = { claude: 'Claude Code', codex: 'Codex', dsh: 'DSH 运行环境', node: 'Node.js 运行环境', git: 'Git for Windows' };
+const gitBash = require('../git-bash');
 
 function resolveFetch(fetchImpl) {
   if (typeof fetchImpl === 'function') return fetchImpl;
@@ -60,6 +61,8 @@ async function removeQuietly(target) {
   try { await fs.promises.rm(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch (_) {}
 }
 
+const GIT_ADVICE = '没找到 Git for Windows：Claude Code 会改用 PowerShell 执行命令（官方预览功能，复杂命令偶尔不如 bash 顺手），建议装上 Git for Windows。';
+
 function attemptsText(attempts) {
   return (attempts || []).map(a => `${a.name}：${a.status === 'ok' ? '可用' : a.reason || '失败'}`).join('；');
 }
@@ -76,12 +79,14 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
   function snapshot() {
     const installed = {};
     for (const id of registry.IDS) { const m = registry.managed(id, env); if (m) installed[id] = { version: m.version, dir: m.dir }; }
-    // Claude Code 在 Windows 上靠 Git Bash 执行工具：装好了但缺 Git 时提醒一句（不替用户装 Git）。
-    let advice = null;
-    if (installed.claude && process.platform === 'win32') {
-      try { if (!require('../community-setup').findGitBash(env)) advice = { claude: 'Claude Code 在 Windows 上还需要 Git for Windows（Git Bash）才能执行工具，请另行安装。' }; } catch (_) {}
+    // Git Bash（2026-11-07）：Claude Code 优先用它执行命令，没有时改用 PowerShell。git 为 null 表示这台电脑上没找到，
+    // 界面在 Claude Code 的安装区块里给「一键安装 Git for Windows」。
+    let git = null, advice = null;
+    if (process.platform === 'win32') {
+      try { const hit = gitBash.locateGitBash(env); git = hit ? { bash: hit.bash, source: hit.source } : null; } catch (_) {}
+      if (!git && installed.claude) advice = { claude: GIT_ADVICE };
     }
-    return { available: sources.length > 0, busy, tools: JSON.parse(JSON.stringify(tools)), installed, advice,
+    return { available: sources.length > 0, busy, tools: JSON.parse(JSON.stringify(tools)), installed, advice, git,
       catalog: catalog ? catalog.components.map(c => ({ id: c.id, name: c.name, version: c.version, license: c.license,
         bytes: c.files.reduce((n, f) => n + f.bytes, 0) })) : null };
   }
@@ -201,6 +206,19 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
     }
   }
 
+  // 后台深度找一遍 Git Bash（注册表、各硬盘、VS 自带），找到了就推一次新状态，界面不再提示安装。
+  let gitSearch = null;
+  function refreshGit() {
+    if (process.platform !== 'win32' || gitSearch) return gitSearch;
+    const before = snapshot().git;
+    gitSearch = gitBash.searchGitBash(env).then(() => {
+      const now = snapshot();
+      if ((now.git && now.git.bash) !== (before && before.bash)) { try { onState(now); } catch (_) {} }
+      return now.git;
+    }).catch(() => null).finally(() => { gitSearch = null; });
+    return gitSearch;
+  }
+
   async function install(id) {
     if (!registry.IDS.includes(id) || id === 'node') throw new Error('不认识的组件');
     if (busy) {
@@ -211,7 +229,12 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
     abort = new AbortController();
     const signal = abort.signal;
     set(id, { phase: 'checking', error: null, blocked: null, received: 0, total: 0, files: 0, attempts: [], step: null });
-    try {
+    try { work: {
+      // Git：先全局找一遍（注册表、各硬盘、VS 自带的），本机已有就不重复装。查找期间界面显示「正在全局查找」、别的组件排队。
+      if (id === 'git') {
+        const hit = await gitBash.searchGitBash(env, { force: true }).catch(() => null);
+        if (hit) { set(id, { phase: 'done', error: null, found: hit.bash, foundSource: hit.source, finishedAt: Date.now() }); break work; }
+      }
       // 上次 Hub 中途退出留下的临时下载：安装一次只跑一个，这里整个清掉。
       await removeQuietly(path.join(root(), '.staging'));
       const cat = await loadCatalog(signal);
@@ -238,17 +261,18 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
         doneBytes += c.files[0].bytes;
       }
       set(id, { phase: 'done', received: total, total, error: null, version: main.version, finishedAt: Date.now() });
-    } catch (error) {
+    } } catch (error) {
       const cancelled = error.cancelled || signal.aborted;
       set(id, { phase: cancelled ? 'cancelled' : 'error', error: cancelled ? null : error.message, blocked: error.blocked || null });
     } finally {
       busy = null;
       abort = null;
+      if (id === 'git') gitBash.invalidate();
     }
     return snapshot();
   }
 
-  return { snapshot, install, cancel: () => { abort?.abort(); return snapshot(); }, loadCatalog };
+  return { snapshot, install, refreshGit, cancel: () => { abort?.abort(); return snapshot(); }, loadCatalog };
 }
 
 module.exports = { createCliInstaller, runVersion, pathNodeUsable, NAMES, fmtBytes };

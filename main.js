@@ -4325,6 +4325,8 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
         const cliSources = require('./core/cli-tools/catalog').catalogSources({ config: distribution.updateConfig });
         cliToolsInstallerRef = createCliInstaller({ sources: cliSources, unblock: unblockOwn, isOwnUrl: url => ownHosts.isOwnUrl(url, ownConfig),
           unblockPassed: () => ownUnblocker.passed(), onState: state => sendToRenderer('cli-tools:state', state) });
+        // 启动 40 秒后在后台全局找一遍 Git Bash（隐藏的 PowerShell 读注册表和硬盘列表），新会话能用上别处装的 Git。
+        setTimeout(() => { try { cliToolsInstallerRef?.refreshGit?.(); } catch (_) {} }, 40000).unref?.();
       } catch (e) { console.warn('[cli-tools] 一键安装初始化失败：', e && e.message); }
       // 一键反馈（2026-10-29）：设置菜单「一键反馈」→ 脱敏诊断包提交到自家阿里云；被拦自动放行，发不出就存到「下载」。
       try {

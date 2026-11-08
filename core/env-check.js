@@ -211,13 +211,16 @@ function probeList(ctx) {
 
   if (platform === 'win32') {
     add('git-bash', 'Git Bash', 'env-check', async () => {
-      const bash = setup.findGitBash(env);
-      if (bash) return entry('git-bash', 'Git Bash', 'env-check', STATUS.ok, bash);
+      // 先全局找（注册表、各硬盘、VS / GitHub Desktop 自带的），找到就不提示安装，免得重复装。
+      const hit = setup.searchGitBash ? await setup.searchGitBash(env, { force: true, timeoutMs: 6000 }) : null;
+      const bash = hit ? hit.bash : setup.findGitBash(env);
+      if (bash) return entry('git-bash', 'Git Bash', 'env-check', STATUS.ok, hit && hit.source === 'hub' ? `${bash}（Hub 装的）` : bash);
       const claude = kindAllowed('claude') && setup.findCommand('claude', env, platform);
-      return entry('git-bash', 'Git Bash', 'env-check', claude ? STATUS.bad : STATUS.warn, claude ? '没找到 Git Bash，Claude 会话没法执行工具' : '没找到 Git Bash（只有 Claude Code 需要）', {
-        cause: 'Claude Code 在 Windows 上靠 Git for Windows 自带的 bash 执行命令。',
-        steps: ['安装 Git for Windows（默认选项即可）', '装好后点「重新检测」'],
-        fixes: [{ label: '打开下载页', act: 'open-url', url: 'https://git-scm.com/download/win' }, RECHECK],
+      const install = isCompany ? [{ label: '一键安装 Git for Windows', act: 'git-install' }] : [];
+      return entry('git-bash', 'Git Bash', 'env-check', STATUS.warn, claude ? '没找到 Git Bash，Claude 会改用 PowerShell 执行命令（建议安装）' : '没找到 Git Bash（只有 Claude Code 用得上）', {
+        cause: 'Claude Code 在 Windows 上优先用 Git for Windows 自带的 bash 执行命令；没有时改用 PowerShell（官方预览功能，复杂命令偶尔不如 bash 顺手）。',
+        steps: [isCompany ? '点「一键安装 Git for Windows」，或自己安装 Git for Windows（默认选项即可）' : '安装 Git for Windows（默认选项即可）', '装好后点「重新检测」'],
+        fixes: [...install, { label: '打开下载页', act: 'open-url', url: 'https://git-scm.com/download/win' }, RECHECK],
       });
     });
   }

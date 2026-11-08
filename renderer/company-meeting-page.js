@@ -189,7 +189,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       state = next;
       const m = state.meeting, asr = state.asr || {};
       const history = '<option value="">历史会议…</option>' + state.meetings.map(x => `<option value="${esc(x.id)}" ${x.id === id ? 'selected' : ''}>${esc(x.title)} · ${shortDate(x.startedAt)}${x.videoBytes ? ' · ' + size(x.videoBytes) : ''}</option>`).join('');
-      renderSpeakers(m);
+      renderSpeakers(m); renderGlossaryHints(m);
       const videoTotal = state.meetings.reduce((n, x) => n + (x.videoBytes || 0), 0);
       el('video-total').textContent = videoTotal ? `全部录像占用 ${size(videoTotal)}` : '';
       if (el('history').dataset.html !== history) { el('history').innerHTML = history; el('history').dataset.html = history; }
@@ -368,6 +368,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
         if (!e.target.closest('.meeting-more')) el('more').open = false;
         if (e.target.closest('[data-act-local="dismiss"]')) message('');
         if (e.target.closest('[data-act-local="rename-title"]')) startRename();
+        if (e.target.closest('[data-act-local="add-hints"]')) addGlossaryHints();
         const transcriptToggle = e.target.closest('[data-act-local="toggle-transcript"]');
         if (transcriptToggle) { const hide = root.dataset.hideTranscripts !== 'true'; root.dataset.hideTranscripts = String(hide); transcriptToggle.setAttribute('aria-pressed', String(hide)); transcriptToggle.textContent = hide ? '显示时间流中的原话' : '隐藏时间流中的原话'; }
         if (e.target.closest('[data-act-local="expand-viewer"]')) setViewerExpanded(!root.querySelector('.meeting-viewer').classList.contains('is-expanded'));
@@ -456,10 +457,14 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
   // 回放优先走整场录像；只有 5.5.0 之前的老会议才退回分段。
   // 发言人：按声音自动区分，名字在「更多」里改（core/company-assistant/meeting-speakers.js）。
   function speakerName(e){const s=(state?.meeting?.speakers?.list||[]).find(x=>x.id===e.speaker);return s?(s.name||`发言人${s.id}`):e.track==='mic'?'麦克风':'系统声音';}
+  // 会后复核给的「词库建议」：词库里已有的不再提示；点一下追加进词库并保存。
+  function pendingHints(m){const have=el('glossary').value;return (m?.glossaryHints||[]).filter(h=>!have.split(/\r?\n/).some(l=>l.replace(/\s/g,'')===h.replace(/\s/g,'')));}
+  function renderGlossaryHints(m){const hints=pendingHints(m),box=el('glossary-hints');box.hidden=!hints.length;el('glossary-hint-text').textContent=hints.length?`本场常听错：${hints.join('、')}`:'';if(hints.length&&box.dataset.shown!==m.id){box.dataset.shown=m.id;message(`本场发现 ${hints.length} 个常听错的专业词，可在「更多 › 专业词库」一键加入`);}}
+  function addGlossaryHints(){const hints=pendingHints(state?.meeting);if(!hints.length)return;const box=el('glossary');box.value=(box.value.replace(/\s+$/,'')+'\n'+hints.join('\n')).replace(/^\n/,'')+'\n';void call('meeting-glossary-save',{text:box.value}).then(r=>{message(`已加入词库，之后的转写会自动改对（共 ${r.fixes.length} 条替换）`);renderGlossaryHints(state?.meeting);}).catch(err=>message(err.message));}
   function renderSpeakers(m){
     const box=el('speakers'),list=m?.speakers?.list||[],key=(m?.id||'')+':'+list.map(s=>`${s.id}/${s.name}/${s.n}`).join(',');
     if(box.dataset.key===key||box.contains(document.activeElement))return; box.dataset.key=key; box.hidden=!list.length;
-    box.innerHTML=list.length?`<p>发言人（按声音自动区分，改名后时间流和纪要都用新名字）</p>`+list.map(s=>`<label>${esc(s.track==='mic'?'麦克风':'系统声音')} · ${s.n} 句<input data-speaker="${s.id}" maxlength="40" value="${esc(s.name)}" placeholder="发言人${s.id}"></label>`).join(''):'';
+    box.innerHTML=list.length?`<p>发言人（按声音自动区分；改名后时间流和纪要都用新名字，同一人被分成两位时改成同一个名字）</p>`+list.map(s=>`<label>${esc(s.track==='mic'?'麦克风':'系统声音')} · ${s.n} 句<input data-speaker="${s.id}" maxlength="40" value="${esc(s.name)}" placeholder="发言人${s.id}"></label>`).join(''):'';
   }
   // 下载被公司代理拦下时，就地给「放行下载服务器」按钮（renderer/net-pass-view.js，和一键更新共用）。
   let netPass = null, netPassLast = null;

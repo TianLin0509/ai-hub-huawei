@@ -81,3 +81,10 @@ test('年度统计', () => {
   assert.equal(y.overMonths, 0);
   assert.equal(y.peakMonth.month, 11);
 });
+
+test('公司假期日历把周末也列进来时：周末仍按周末 / 月末周六规则，只有工作日上的才算法定假', () => {
+  const holidays = { '2026-10-31': '休息日', '2026-11-07': '休息日', '2026-10-01': '法定假 国庆' };
+  assert.equal(A.dayKind('2026-10-31', { holidays }), 'lastSaturday');
+  assert.equal(A.dayKind('2026-11-07', { holidays }), 'weekend');
+  assert.equal(A.dayKind('2026-10-01', { holidays }), 'holiday');
+});

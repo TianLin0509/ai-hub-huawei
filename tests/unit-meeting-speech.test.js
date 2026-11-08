@@ -7,7 +7,7 @@ const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
 const { MeetingAsr, PACK } = require('../core/company-assistant/meeting-asr');
 const speakers = require('../core/company-assistant/meeting-speakers');
-const { MeetingGlossary, parse } = require('../core/company-assistant/meeting-glossary');
+const { MeetingGlossary, parse, parseHints } = require('../core/company-assistant/meeting-glossary');
 const { cutHere } = require('../renderer/meeting-capture');
 const { MeetingCompanion } = require('../core/company-assistant/meeting');
 const { compactEvents } = require('../core/company-assistant/meeting-context');
@@ -107,7 +107,9 @@ test('发言人：同一路相近的声音归为一人，不同声音新开；�
   m.events.push({ kind: 'transcript', track: 'system', at: 9000, end: 10000, speaker: 2 });
   assert.equal(speakers.assign(m, 'system', null, 11000), 2);
   assert.equal(speakers.assign(m, 'system', null, 30000), null);
+  m.summary = '## 行动项\n- [A1] 发言人2｜补测｜周三 [事件 5]\n- [A2] 发言人12｜复核｜未明确 [事件 6]';
   speakers.rename(m, 2, '  张工 ');
+  assert.equal(m.summary, '## 行动项\n- [A1] 张工｜补测｜周三 [事件 5]\n- [A2] 发言人12｜复核｜未明确 [事件 6]', '纪要里的旧称呼一并换掉，发言人12 不受影响');
   assert.deepEqual(speakers.names(m), { 1: '发言人1', 2: '张工', 3: '发言人3' });
   assert.ok(!('centroid' in speakers.publicList(m)[0]));
   const rows = compactEvents([{ seq: 5, kind: 'transcript', at: 61000, track: 'system', speaker: 2, text: '周三给结论' }], speakers.names(m));
@@ -124,6 +126,10 @@ test('专业词库：错词替换、长词优先、给伴侣的说明', t => {
   assert.equal(gl.apply('把欧亚的步长调小，欧亚拉不变'), '把OLLA的步长调小，欧拉不变');
   assert.match(gl.promptLine(), /OLLA、欧拉/);
   gl.save(''); assert.equal(gl.promptLine(), '');
+  gl.save('CQ=CQI\nSI=SINR');
+  assert.equal(gl.apply('CQ 上报和 CQI 不一致，SI 偏低，SIM 卡无关'), 'CQI 上报和 CQI 不一致，SINR 偏低，SIM 卡无关', '正确词含错词、英文词边界');
+  assert.deepEqual(parseHints('- [D1] x\n词库建议：欧拉=OLLA；CQ = CQI；乱写；A=A；欧拉=OLLA\n本轮小结：y'), ['欧拉=OLLA', 'CQ=CQI']);
+  assert.deepEqual(gl.newHints(['CQ=CQI', 'PI=PF']), ['PI=PF'], '词库里已有的不再建议');
 });
 
 test('停顿处切段：8 秒前不切，8 秒后遇到安静就切，最长 20 秒', () => {

@@ -21,6 +21,12 @@ function parse(text) {
   return { terms: [...terms].slice(0, 200), fixes: fixes.slice(0, 200) };
 }
 
+// 从会后复核回复里取「词库建议：欧拉=OLLA；CQ=CQI」，只留像样的「错词=正确词」。
+function parseHints(text) {
+  const line = String(text || '').match(/^\s*词库建议[:：]\s*(.+)$/m)?.[1] || '';
+  return [...new Set(line.split(/[；;，,、]\s*/).map(x => x.trim().replace(/\s*(?:=|→|->)\s*/, '=')).filter(x => /^[^=]{1,20}=[^=]{1,20}$/.test(x) && x.split('=')[0] !== x.split('=')[1]))];
+}
+
 class MeetingGlossary {
   constructor(dir) { this.file = path.join(dir, 'meeting-glossary.txt'); this.cache = null; }
   text() { try { return fs.readFileSync(this.file, 'utf8'); } catch { return DEFAULT_TEXT; } }
@@ -34,10 +40,21 @@ class MeetingGlossary {
     if (!this.cache || this.cache.mtime !== mtime) this.cache = { mtime, ...parse(this.text()) };
     return this.cache;
   }
+  // 两个坑：正确词本身含错词（CQ=CQI，「CQI」不能变「CQII」）；英文错词不能拆别的词（SI=SINR 不能改 SIM）。
   apply(text) {
     let out = String(text || '');
-    for (const f of this.read().fixes) out = out.split(f.from).join(f.to);
+    for (const f of this.read().fixes) {
+      const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      out = out.split(f.to).join('\u0000'); // 已经写对的先藏起来
+      const ascii = /^[A-Za-z0-9 ]+$/.test(f.from);
+      out = out.replace(new RegExp(ascii ? `(?<![A-Za-z0-9])${esc(f.from)}(?![A-Za-z0-9])` : esc(f.from), 'g'), f.to);
+      out = out.split('\u0000').join(f.to);    }
     return out;
+  }
+  // 会议伴侣在会后复核里给的「词库建议」，去掉词库里已有的。
+  newHints(list) {
+    const have = new Set(this.read().fixes.map(f => `${f.from}=${f.to}`));
+    return (list || []).filter(x => !have.has(x));
   }
   // 给会议伴侣的一行说明；没有词就不占输入。
   promptLine() {
@@ -46,4 +63,4 @@ class MeetingGlossary {
   }
 }
 
-module.exports = { MeetingGlossary, parse, DEFAULT_TEXT };
+module.exports = { MeetingGlossary, parse, parseHints, DEFAULT_TEXT };

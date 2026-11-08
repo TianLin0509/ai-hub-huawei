@@ -150,7 +150,7 @@ test('tgz: long names, nested dirs, strip prefix and empty files survive a round
 
 test('tgz: path traversal, absolute paths, links and corrupt archives are refused', async t => {
   const dir = tempDir(t);
-  const cases = [['../evil.txt', '0', /不安全的路径/], ['/abs.txt', '0', /不安全的路径/], ['C:/abs.txt', '0', /不安全的路径/], ['ok/link', '2', /不支持的条目类型/], ['ok/hard', '1', /不支持的条目类型/]];
+  const cases = [['../evil.txt', '0', /不安全的路径/], ['/abs.txt', '0', /不安全的路径/], ['C:/abs.txt', '0', /不安全的路径/], ['ok/link', '2', /不支持的条目类型/], ['ok/hard', '1', /硬链接指向不存在的文件/]];
   for (const [i, [name, type, re]] of cases.entries()) {
     const file = path.join(dir, `bad${i}.tgz`);
     fs.writeFileSync(file, rawTar(name, type, Buffer.from('x')));
@@ -425,7 +425,7 @@ test('DSH company route uses the Hub Node when one was installed', t => {
 test('install dialog: plain-words progress for every phase, retry on failure, nothing when unavailable', () => {
   assert.equal(view.installBlockHtml('claude', { available: false }), '');
   assert.equal(view.installBlockHtml('claude', null), '');
-  const base = { available: true, busy: null, tools: {}, catalog: [{ id: 'claude', bytes: 160447830 }, { id: 'dsh', bytes: 200 * 1024 * 1024 }] };
+  const base = { available: true, busy: null, tools: {}, git: { bash: 'C:\\Git\\bin\\bash.exe', source: 'user' }, catalog: [{ id: 'claude', bytes: 160447830 }, { id: 'dsh', bytes: 200 * 1024 * 1024 }] };
   const idle = view.installBlockHtml('claude', base);
   assert.match(idle, /data-cli-action="install"[^>]*>一键安装</);
   assert.match(idle, /约 153 MB/);
@@ -452,8 +452,26 @@ test('install dialog: plain-words progress for every phase, retry on failure, no
   const other = view.installBlockHtml('codex', { ...base, busy: 'claude', tools: { claude: { phase: 'downloading' } } });
   assert.match(other, /data-cli-action="install" disabled/);
   assert.match(other, /正在安装Claude Code，装完再装这个/);
-  const advice = view.installBlockHtml('claude', { ...base, tools: { claude: { phase: 'done' } }, advice: { claude: '还需要 Git for Windows' } });
-  assert.match(advice, /还需要 Git for Windows/);
+  const advice = view.installBlockHtml('codex', { ...base, tools: { codex: { phase: 'done' } }, advice: { codex: '某条提醒' } });
+  assert.match(advice, /某条提醒/);
+  // 本机找到了 Git Bash：Claude 区块里不出 Git 小节。
+  assert.doesNotMatch(view.installBlockHtml('claude', base), /install-git/);
+  // 没找到：Claude 区块下面出「一键安装 Git for Windows」，原来那句提醒不再重复。
+  const noGit = view.installBlockHtml('claude', { ...base, git: null, tools: { claude: { phase: 'done' } }, advice: { claude: '没找到 Git for Windows' },
+    catalog: [...base.catalog, { id: 'git', bytes: 120 * 1024 * 1024 }] });
+  assert.match(noGit, /data-cli-action="install-git"[^>]*>一键安装 Git for Windows</);
+  assert.match(noGit, /改用 PowerShell/);
+  assert.match(noGit, /约 120 MB/);
+  assert.match(noGit, /全局找一遍/);
+  assert.doesNotMatch(noGit, /cli-install-note">没找到 Git for Windows/);
+  const gitAt = tool => view.installBlockHtml('claude', { ...base, git: null, busy: ['done', 'error'].includes(tool.phase) ? null : 'git', tools: { git: tool } });
+  assert.match(gitAt({ phase: 'checking' }), /正在全局查找本机的 Git/);
+  assert.match(gitAt({ phase: 'checking' }), /data-cli-action="install" disabled/, 'Claude 的按钮在装 Git 时不能点');
+  assert.match(gitAt({ phase: 'downloading', received: 1024 * 1024, total: 2 * 1024 * 1024 }), /下载中 1\.0 \/ 2\.0 MB/);
+  assert.match(gitAt({ phase: 'error', error: '超时' }), /重试安装 Git/);
+  assert.match(view.installBlockHtml('claude', { ...base, tools: { git: { phase: 'done', found: 'D:\\PortableGit\\bin\\bash.exe' } } }), /已经有 Git Bash（D:\\PortableGit\\bin\\bash\.exe），不用重复安装/);
+  assert.match(view.installBlockHtml('claude', { ...base, tools: { git: { phase: 'done' } } }), /Git for Windows 已装好/);
+  assert.equal(view.gitBlockHtml({ available: false }), '');
 });
 
 test('install dialog wiring: one click installs, progress events re-render, success re-detects without restart', () => {

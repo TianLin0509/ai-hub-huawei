@@ -33,10 +33,10 @@ const KNOWN_ISSUES = [
     fix: m => `从首页「安装说明」装好 ${m[1]}，回到新建会话点「重新检测」，再到「账号」页登录。`,
     action: null },
   { id: 'claude-git-bash', areas: ['session-create', 'model-service', 'hub-alert'],
-    // core/community-setup.js advisories：「Claude Code 在 Windows 上需要 Git for Windows（Git Bash）」。
+    // core/community-setup.js advisories「没找到 Git for Windows（Git Bash）…」；Claude Code 自己的「requires a shell tool. Git Bash was not found…」。
     test: /Git for Windows|git-bash|Git Bash/i,
-    title: 'Claude Code 缺少 Git Bash',
-    fix: '安装 Git for Windows（默认选项即可），装好后重启 AI HUB，Claude 会话才能执行工具。',
+    title: 'Claude Code 没找到 Git Bash',
+    fix: '安装 Git for Windows（默认选项即可；公司版可在「环境体检」的 Git Bash 一项点「一键安装 Git for Windows」），装好后新建 Claude 会话。没有 Git 时 Claude 会改用 PowerShell，若 PowerShell 也被关掉就无法执行命令。',
     action: null },
   { id: 'company-proxy-not-ready', areas: ['company-proxy', 'session-create', 'codeagent', 'model-service', 'hub-alert'],
     // core/company-model-proxy.js「公司模型反代还没准备好，请稍等几秒再新建会话」；main/company-proxy-service.js「正在启动…」「意外退出，正在自动重启…」「公司上游还没准备好」。

@@ -51,10 +51,12 @@ function lastSaturday(year, monthIndex) {
 /* 日子类型：工作日 / 周末 / 月末周六 / 节假日。holidays、extraWorkdays 为 { 'YYYY-MM-DD': true } */
 function dayKind(k, opts = {}) {
   const rules = { ...DEFAULT_RULES, ...(opts.rules || {}) };
-  if (opts.holidays && opts.holidays[k]) return 'holiday';
   if (opts.extraWorkdays && opts.extraWorkdays[k]) return 'workday';
   const d = parseDate(k);
   const w = d.getDay();
+  // 公司假期日历把周末也列成休息日（11-08 真机：31 条里含 11/07 周六）。周末一律按周末 / 月末周六规则算，
+  // 假期日历只用来认出落在周一到周五的法定假，免得月末周六被当成假日、整天算加班。
+  if (w >= 1 && w <= 5 && opts.holidays && opts.holidays[k]) return 'holiday';
   if (w === 6 && rules.lastSaturdayIsWorkday && k === lastSaturday(d.getFullYear(), d.getMonth())) return 'lastSaturday';
   return w === 0 || w === 6 ? 'weekend' : 'workday';
 }

@@ -17,7 +17,7 @@ const ICONS = {
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
   more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
 };
-const QUICK_QUESTIONS = ['目前确定了哪些结论？', '还有哪些问题待确认？', '行动项和负责人是谁？'];
+const QUICK_QUESTIONS = ['我刚进来，用几句话讲清现在讨论到哪了、定了什么、要我做什么', '目前确定了哪些结论？', '还有哪些问题待确认？', '行动项和负责人是谁？'];
 
 function meetingTemplate() {
   return `<header class="meeting-topbar">
@@ -34,6 +34,7 @@ function meetingTemplate() {
         <label class="meeting-menu-field">历史会议<select data-m="history" aria-label="历史会议"></select></label>
         <div class="meeting-speakers" data-m="speakers" hidden></div>
         <label class="meeting-menu-field">专业词库（所有会议共用）<textarea data-m="glossary" rows="4" spellcheck="false" placeholder="每行一个词，如 OLLA&#10;欧亚=OLLA：把识别成「欧亚」的改成 OLLA"></textarea></label>
+        <div class="meeting-glossary-hints" data-m="glossary-hints" hidden><span data-m="glossary-hint-text"></span><button class="ca-btn" data-act-local="add-hints">加入词库</button></div>
         <div class="meeting-video-usage"><span data-m="video-total"></span><button class="ca-btn" data-act="delete-video" disabled>删除这场的录像</button></div>
         <label class="meeting-menu-field">自动更新理解<select data-m="interval" aria-label="自动更新间隔">${[[0,'关闭'],[1,'每 1 分钟'],[3,'每 3 分钟'],[5,'每 5 分钟'],[10,'每 10 分钟']].map(([v,l]) => `<option value="${v}">${l}</option>`).join('')}</select></label>
         <label class="meeting-menu-field">快速档模型<select data-m="fast-model" aria-label="快速档模型"></select></label>
