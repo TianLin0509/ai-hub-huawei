@@ -325,6 +325,27 @@ function hasNearbyEventUserDuplicate(entries, entryIndex, text) {
   return false;
 }
 
+// The response_item(role=user) of a submission lands on disk before its
+// item_completed/user_message mirror (2026-11-07 real Codex 0.164: ~0.6 s apart).
+// A parse that runs in between shows the response_item; once the mirror lands
+// the event wins. Both must yield the same card id, otherwise the live card
+// stays and a second card with the same message is mounted below it.
+function priorResponseUserMirror(entries, entryIndex, text) {
+  const normalized = normalizeUserDuplicateText(text);
+  if (!normalized) return null;
+  for (let i = entryIndex - 1; i >= Math.max(0, entryIndex - 6); i--) {
+    const obj = entries[i] && entries[i].obj;
+    if (codexUserMessageEventFromRecord(obj)) return null;
+    if (obj?.type !== 'response_item' || obj.payload?.role !== 'user') continue;
+    const raw = textFromPayload(obj.payload).trim();
+    if (!raw || isSyntheticUserEntry(obj, raw)) continue;
+    const shown = displayUserText(raw);
+    return shown && normalizeUserDuplicateText(shown) === normalized
+      && hasNearbyEventUserDuplicate(entries, i, shown) ? entries[i] : null;
+  }
+  return null;
+}
+
 function normalizeUserDuplicateText(text) {
   return require('./conversation-display').userTextIdentity(text);
 }
@@ -529,12 +550,13 @@ function parseCodexRolloutEntries(entries) {
         const raw = userEvent.text.trim();
         const text = raw && !isSyntheticUserEntry(obj, raw) ? displayUserText(raw) : null;
         if (text) {
+          const mirror = priorResponseUserMirror(entries, entryIndex, text);
           turns.push({
-            id: _makeTurnId('codex-user', obj, index),
+            id: mirror ? _makeTurnId('codex-user', mirror.obj, mirror.index) : _makeTurnId('codex-user', obj, index),
             role: 'user',
             text,
             ts: userEvent.submittedAt || toMs(obj.timestamp),
-            sourceIndex: index,
+            sourceIndex: mirror ? mirror.index : index,
             ...hubAttachedFields(raw),
           });
         }

@@ -32,7 +32,7 @@ class MarttyCliSession extends AcpSession {
     if(this.closed)throw new Error('CLI 已关闭');
     const ready=new Promise((resolve,reject)=>{this.readyResolve=resolve;this.readyReject=reject;});
     this.startTimer=setTimeout(()=>this.fail(new Error('终端启动未确认，请查看 CLI')),60000);
-    try{this.pty=require('node-pty').spawn(this.options.launch.command,args,{cwd:this.options.cwd,env,cols:this.cols||120,rows:this.rows||30,
+    try{this.pty=require('./pty-host').spawnPty(require('node-pty'),this.options.launch.command,args,{cwd:this.options.cwd,env,cols:this.cols||120,rows:this.rows||30,
       name:'xterm-256color',useConpty:true,conptyInheritCursor:false});
     }catch(error){this.dispose();this.readyReject(error);return ready;}
     require('./pty-process-owner').recordPtySpawn(this.pty);

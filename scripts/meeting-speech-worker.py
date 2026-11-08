@@ -61,7 +61,8 @@ def sentences(tokens, stamps, total):
 
 def clean(text):
     stripped = text.strip().strip("，。？！,.?! ").strip()
-    return "" if stripped.lower() in FILLER else text.strip()
+    # 只剩标点的句子（停顿后模型单独吐出的「。」）不成一行：真人录音 57 秒里出现 3 次。
+    return "" if not stripped or stripped.lower() in FILLER else text.strip()
 
 
 def voiceprint(samples, start, end):

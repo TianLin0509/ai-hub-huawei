@@ -872,3 +872,17 @@ test('CodeAgent merge restores a raw command wrapper and uses its original CLI l
   assert.deepEqual(merged.map(turn => turn.id), ['command:known', 'reply']);
   assert.equal(merged[0].text, command.text); assert.equal(merged[0].ts, echo.ts); assert.equal(command.ts, NOW);
 });
+
+// 2026-11-07：系统 ConPTY 吞掉引号、破折号等符号（core/pty-host.js），落盘文字只比乐观气泡少几个符号，
+// 以前对不上就显示两遍。只少符号要认领；文字不同（x>0 对 x<0）不能认领。
+test('an optimistic card is claimed when the recorded prompt only lost symbols, never by a different prompt', () => {
+  const f = cardFixture();
+  const pending = f.renderer.mountOptimisticUserCard('hub-fixture', '只回复“完成”——别的不要→①', 'codeagent');
+  const other = f.renderer.mountOptimisticUserCard('hub-fixture', 'x<0', 'codeagent');
+  const ts = Date.now() + 1000;
+  f.renderer.mountSessionTurnCard('hub-fixture', { id: 'old-user', role: 'user', text: 'x>0', ts });
+  assert.ok(other.parentNode, 'x>0 must not claim x<0');
+  f.renderer.mountSessionTurnCard('hub-fixture', { id: 'real-user', role: 'user', text: '只回复完成别的不要', ts });
+  assert.equal(pending.parentNode, null, 'symbol-only difference is claimed');
+  f.renderer.dispose();
+});

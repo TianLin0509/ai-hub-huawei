@@ -716,7 +716,7 @@ function reconcileOptimisticUserCards(sessionId, turns, { container = overlay(),
   if (!container) return;
   const sid = String(sessionId || '');
   const codeagent = isCodeAgentKind(kind || getSessionContext(sessionId)?.kind);
-  const normalize = require('../core/conversation-display').userTextIdentity;
+  const { userTextIdentity: normalize, isSentWithDroppedSymbols } = require('../core/conversation-display');
   for (const turn of turns) {
     if (turn?.role !== 'user' || !turn.id) continue;
     const key = JSON.stringify([sid, turn.id]);
@@ -726,7 +726,7 @@ function reconcileOptimisticUserCards(sessionId, turns, { container = overlay(),
     const raw = String(turn.text || '').trim();
     if (!raw) continue;
     const text = normalize(raw);
-    const candidates = Array.from(container.querySelectorAll('.turn-card.user[data-optimistic="true"]')).filter(card => {
+    const eligible = Array.from(container.querySelectorAll('.turn-card.user[data-optimistic="true"]')).filter(card => {
       if (card.dataset.sessionId !== sid) return false;
       const receipt = card.dataset.clientSubmissionId;
       if (turn.clientSubmissionId || receipt) {
@@ -734,8 +734,12 @@ function reconcileOptimisticUserCards(sessionId, turns, { container = overlay(),
         if (!codeagent) return false;
       }
       const sentAt = Number(card.dataset.submittedAt);
-      return (!sentAt || Number(turn.ts) >= sentAt - 1000) && normalize(card.dataset.optimisticText) === text;
+      return !sentAt || Number(turn.ts) >= sentAt - 1000;
     });
+    // 先认逐字一致的；对不上再认「原文只少了几个符号」的：系统终端吞掉的引号、破折号（core/pty-host.js）
+    // 不该让同一句话显示两遍。
+    const exact = eligible.filter(card => normalize(card.dataset.optimisticText) === text);
+    const candidates = exact.length ? exact : eligible.filter(card => isSentWithDroppedSymbols(card.dataset.optimisticText || '', raw));
     // 一次发送的同回执副本一起移除；没有回执时仍只认领一张，不能按相同文字合并两次发送。
     const first = candidates[0], receipt = first?.dataset.clientSubmissionId;
     if (first) {

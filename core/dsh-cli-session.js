@@ -59,7 +59,7 @@ class DshCliSession extends EventEmitter {
     if (this.closed) throw new Error('DSH CLI 已关闭');
     this.startTimer = setTimeout(() => this.fail(new Error('DSH CLI 启动未确认，请查看终端')), 60000);
     try {
-      this.pty = require('node-pty').spawn(this.options.launch.command, this.options.launch.args, {
+      this.pty = require('./pty-host').spawnPty(require('node-pty'), this.options.launch.command, this.options.launch.args, {
         cwd: this.options.cwd, env: { ...this.options.launch.env, AI_HUB_DSH_EVENT_LOG: this.log, AI_HUB_DSH_ASK_DIR: this.askDir },
         cols: this.cols || 120, rows: this.rows || 35, name: 'xterm-256color', useConpty: true, conptyInheritCursor: false });
       require('./pty-process-owner').recordPtySpawn(this.pty);

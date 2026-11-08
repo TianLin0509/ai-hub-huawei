@@ -2491,7 +2491,7 @@ class SessionManager extends EventEmitter {
         hubDataDir:getHubDataDir(),hubPid:process.pid,hubVersion:require('../package.json').version,
         lazyStart:opts.lazyStart === true, resumeId:opts.useResume ? opts.codexSid : null, forkId:opts.codexForkSid})
       : isNativeClaude ? createNativeClaudeDriver(id, kind, opts, spawnCwd, sessionEnv, isDeepSeekLegacy)
-      : pty.spawn(windowsPowerShellPath(), shellArgs, {
+      : require('./pty-host').spawnPty(pty, windowsPowerShellPath(), shellArgs, {
       name: 'xterm-256color',
       cols: 120,
       rows: 30,

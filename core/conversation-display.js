@@ -70,6 +70,25 @@ function userTextIdentity(text) {
     .replace(/\s+/g, ' ').trim();
 }
 
+// 只留字母和十进制数字的比对口径（①² 这类也会被吞）：系统 ConPTY 会吞掉引号、破折号、箭头等符号（见 core/pty-host.js），
+// 发出去的原文和 CLI 落盘的文字可能只差这些符号。只用于「这条落盘消息是不是刚发的那条」的兜底比对。
+function userTextLooseIdentity(text) {
+  return userTextIdentity(text).replace(/[^\p{L}\p{Nd}]+/gu, '');
+}
+
+// recorded 是否就是 sent 去掉了若干符号（只删不改、删的都不是字母数字）。
+// 比单纯比字母数字严：「x>0」不会被当成「x<0」。
+function isSentWithDroppedSymbols(sent, recorded) {
+  const a = [...userTextIdentity(sent).replace(/\s+/g, '')], b = [...userTextIdentity(recorded).replace(/\s+/g, '')];
+  if (!b.length || b.length >= a.length) return false;
+  let j = 0;
+  for (const ch of a) {
+    if (j < b.length && ch === b[j]) j++;
+    else if (/[\p{L}\p{Nd}]/u.test(ch)) return false;
+  }
+  return j === b.length;
+}
+
 function groupDisplayMessages(message, stored) {
   if(!Array.isArray(stored) || !stored.length)return undefined;
   const messages=stored.slice().sort((a,b)=>Number(a.phase==='activity')-Number(b.phase==='activity'));
@@ -82,4 +101,4 @@ function groupDisplayMessages(message, stored) {
   return messages.sort((a,b)=>Number(a.phase==='activity')-Number(b.phase==='activity'));
 }
 
-module.exports = { displayTurns, userTextIdentity, groupDisplayMessages };
+module.exports = { displayTurns, userTextIdentity, userTextLooseIdentity, isSentWithDroppedSymbols, groupDisplayMessages };

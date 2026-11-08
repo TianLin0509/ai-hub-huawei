@@ -31,8 +31,14 @@ test('模型不守编号、但写了整份分区纪要：按小标题认成条�
 });
 
 test('编号写法走样也认：[T-1]、**[D2]**、[A 3]：', () => {
-  const items = minutes.parse('- [T-1] a\n**[D2]** b\n- [A 3]：c\n普通一行 [事件 2]');
-  assert.deepEqual([...items.keys()], ['T1', 'D2', 'A3']);
+  const items = minutes.parse('- [T-1] a\n**[D2]** b\n- [A 3]：c\n1. [Q4] d\n2、F5 e\n普通一行 [事件 2]');
+  assert.deepEqual([...items.keys()], ['T1', 'D2', 'A3', 'Q4', 'F5']);
+});
+
+test('不带方括号的「- T1 内容」也认（GLM 常这么写），正文里的 F1 分数不误认', () => {
+  const r = minutes.apply('', '- T1 今日三议题 [事件 10]\n- **A4**：发言人5｜整理日志｜周四前 [事件 69]\n- D3：统一 32 用户 [事件 74]\nF1 分数提升了\n本轮小结：开场');
+  assert.deepEqual([...minutes.parse(r.summary).keys()], ['T1', 'D3', 'A4']);
+  assert.doesNotMatch(r.summary, /分数/);
 });
 
 test('界面和导出不显示条目编号', () => {

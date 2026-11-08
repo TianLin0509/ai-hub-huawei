@@ -64,7 +64,7 @@ class QwenCliSession extends EventEmitter {
     if(this.options.forkCli)args.push('--fork-session');
     const ready=new Promise((resolve,reject)=>{this.readyResolve=resolve;this.readyReject=reject;});
     this.startTimer=setTimeout(()=>this.fail(new Error('千问 CLI 启动未确认，请查看终端')),60000);
-    try{this.pty=require('node-pty').spawn(this.options.launch.command,args,{cwd:this.options.cwd,
+    try{this.pty=require('./pty-host').spawnPty(require('node-pty'),this.options.launch.command,args,{cwd:this.options.cwd,
       env:{...this.options.launch.env,AI_HUB_PROVIDER_HOOK_LOG:this.hookFile},cols:this.cols||120,rows:this.rows||30,
       name:'xterm-256color',useConpty:true,conptyInheritCursor:false});
       require('./pty-process-owner').recordPtySpawn(this.pty);
