@@ -4104,7 +4104,8 @@ function _updateStreamingIndicator(sessionId) {
   const overlay = document.getElementById('msg-overlay');
   if (!overlay) return;
   const sess = sessions.get(sessionId);
-  const isRunning = isSessionCardWorking(sess);
+  // CodeAgent 首次准备还没做完（等用户点信任框可能超过「启动中」的 15 秒有效期）时，指示条照样留着并每秒刷新。
+  const isRunning = isSessionCardWorking(sess) || !!(sess && sess.codeagentLaunchPhase && sess.codeagentLaunchPhase.label);
   // 多方审查 P1 (DeepSeek + Claude 共识)：querySelector 不带 dataset 过滤会拿到
   // 别 session 残留的 indicator（1.5s 延迟移除期间），快速切 session 时新 session
   // 会"接管"旧 indicator 导致显示错乱或 timer 触发时误删新 session 的 indicator。
@@ -4147,6 +4148,13 @@ function _updateStreamingIndicator(sessionId) {
     indicator.dataset.label = cardCount === 0
       ? (pendingSubmit || starting ? `${label} 启动中` : `${label} 工作中`)
       : (pendingSubmit || starting ? '启动中' : '工作中');
+    // 首次准备（2026-11-07）：CodeAgent 在后台确认目录信任、选模型时，把走到哪一步、已等多久写在这条指示上。
+    const launchPhase = sess && sess.codeagentLaunchPhase;
+    if (launchPhase && launchPhase.label) {
+      indicator.dataset.launchPhase = '1';
+      indicator.dataset.label = require('./wait-progress').waitText({ label: launchPhase.label, from: sess.cardWorkingSince || launchPhase.since, hint: launchPhase.hint });
+      indicator.title = launchPhase.label;
+    } else delete indicator.dataset.launchPhase;
   } else if (!isRunning && indicator) {
     const runtimeTruth = getSessionRuntimeTruth(sess);
     if (isNativeAgent(sess) || [RUNTIME_WAITING, RUNTIME_COMPLETED, RUNTIME_FAILED, RUNTIME_DORMANT].includes(runtimeTruth.state)) {
@@ -8307,6 +8315,29 @@ ipcRenderer.on('codeagent-models-changed', (_event, payload = {}) => {
 });
 
 // 主进程推来的会话提示（例如 Token Plan 额度用完、DeepSeek 会话改走官方 API）。
+// CodeAgent 首次准备进度（main/ipc/session-handlers.js sendLaunchPhase）：记在会话上，每秒刷新一次「已等 N 秒」，做完就收。
+const _launchPhaseTimers = new Map();
+ipcRenderer.on('codeagent-launch-phase', (_event, payload = {}) => {
+  const sessionId = payload && payload.sessionId;
+  const session = sessionId ? sessions.get(sessionId) : null;
+  if (!session) return;
+  const stop = () => { clearInterval(_launchPhaseTimers.get(sessionId)); _launchPhaseTimers.delete(sessionId); };
+  if (payload.clear || !payload.label) {
+    delete session.codeagentLaunchPhase;
+    stop();
+  } else {
+    const since = (session.codeagentLaunchPhase && session.codeagentLaunchPhase.since) || session.cardWorkingSince || Date.now();
+    session.codeagentLaunchPhase = { label: payload.label, hint: payload.hint || '', since };
+    if (!_launchPhaseTimers.has(sessionId)) {
+      _launchPhaseTimers.set(sessionId, setInterval(() => {
+        if (!sessions.get(sessionId) || !sessions.get(sessionId).codeagentLaunchPhase) { stop(); return; }
+        _updateStreamingIndicator(sessionId);
+      }, 1000));
+    }
+  }
+  _updateStreamingIndicator(sessionId);
+});
+
 ipcRenderer.on('session-notice', (_event, payload = {}) => {
   if (!payload || !payload.message) return;
   const session = payload.sessionId ? sessions.get(payload.sessionId) : null;

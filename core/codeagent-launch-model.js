@@ -55,4 +55,16 @@ function chooseLaunchModel({ models, authoritative, singleModelReliable = false,
   return { open: true, model: first, reason: 'unknown-list' };
 }
 
-module.exports = { FILE, lastModel, lastEntry, rememberModel, chooseLaunchModel };
+// 首次会话（2026-11-07 用户：第一次会话要丝滑）：启动时清单未知，等后台 serve 读完清单后按同一口径再判断一次。
+// 读到的清单里有 CodeAgent 记着的模型、或只有一个模型，就不用再往终端里敲 /model。
+function recheckLaunchChoice({ dataDir, configDir, accountKey = 'personal', first, pool = require('./codeagent-pool') }) {
+  const known = pool.accountModels(configDir, undefined, accountKey === 'personal' ? pool.personalModelsFile(dataDir) : null);
+  const current = pool.readSettingsModel(configDir);
+  const last = lastEntry(dataDir, accountKey);
+  let settingsAt = 0;
+  try { settingsAt = fs.statSync(path.join(configDir, 'settings.json')).mtimeMs; } catch { settingsAt = 0; }
+  return chooseLaunchModel({ models: known.models, authoritative: known.authoritative, singleModelReliable: known.probeReliable,
+    current, currentNewer: settingsAt > last.at, last: last.model, first });
+}
+
+module.exports = { FILE, lastModel, lastEntry, rememberModel, chooseLaunchModel, recheckLaunchChoice };

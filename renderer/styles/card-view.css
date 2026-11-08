@@ -1167,6 +1167,8 @@
   color: currentColor;
   white-space: nowrap;
 }
+/* CodeAgent 首次准备进度一句话较长，窄窗口时允许换行。 */
+.streaming-indicator[data-launch-phase]::after { white-space: normal; }
 /* Live status is a stable tail below the newest message, including tool-only work. */
 .msg-overlay > .streaming-indicator {
   display: flex;

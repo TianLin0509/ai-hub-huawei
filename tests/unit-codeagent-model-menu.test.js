@@ -1120,7 +1120,7 @@ for (const evidence of ['config', 'v1-menu', 'current-menu', 'serve']) test(`sin
   assert.equal(choice.reason, reliable ? 'single-model' : 'unknown-list');
 });
 
-function pickerSessionIpc(t, f) {
+function pickerSessionIpc(t, f, extraDeps = {}) {
   const cfg = path.join(f.dir, 'personal'), sid = 'scroll-session'; config(cfg, ['GLM-5.2-WX-Auto', SCROLL_TARGET]);
   probe.writeProbed(pool.personalModelsFile(f.dir), { models: ['GLM-5.2-WX-Auto', SCROLL_TARGET] });
   models.recordMenu(f.dir, ['GLM-5.2-WX-Auto', SCROLL_TARGET], { complete: true });
@@ -1135,9 +1135,42 @@ function pickerSessionIpc(t, f) {
   const context = vm.createContext({ module: { exports: {} }, console, process, Buffer, setTimeout, clearTimeout, setImmediate,
     require: name => name === '../../core/codeagent-model-picker' ? f.api : name === '../../core/group-chat-watcher' ? { sendToPty: f.sendToPty } : localRequire(name) });
   vm.runInContext(fs.readFileSync(file, 'utf8'), context);
-  context.module.exports.registerSessionIpc({ handle: (name, fn) => handlers.set(name, fn), on() {} }, { sessionManager: manager, sendToRenderer: (name, payload) => { if (name === 'session-notice') notices.push(payload); } });
-  return { handlers, listeners, notices, session };
+  const events = [];
+  context.module.exports.registerSessionIpc({ handle: (name, fn) => handlers.set(name, fn), on() {} }, { sessionManager: manager, ...extraDeps,
+    sendToRenderer: (name, payload) => { events.push([name, payload]); if (name === 'session-notice') notices.push(payload); } });
+  return { handlers, listeners, notices, session, events };
 }
+
+// 首次会话（2026-11-07）：启动时清单未知，先经 serve 读清单；读到 CodeAgent 记着的模型在清单里，就不往终端敲 /model。
+for (const served of ['remembered', 'failed']) test(`first launch with unknown list rechecks after a serve read (${served})`, async t => {
+  const f = scrollingPicker(t, { searchWorks: true });
+  const cfg = path.join(f.dir, 'personal');
+  const reads = [];
+  const ipc = pickerSessionIpc(t, f, { codeagentServeRead: async options => { reads.push(options.configDir);
+    return served === 'remembered' ? { ok: true, models: ['GLM-5.2-WX-Auto', SCROLL_TARGET], readyMs: 5 } : { ok: false, error: 'synthetic-serve-down' }; } });
+  // 清单未知：去掉夹具预写的读屏结果和配置里的模型缓存，只留 CodeAgent 记着的默认模型。
+  fs.rmSync(pool.personalModelsFile(f.dir), { force: true });
+  fs.rmSync(path.join(f.dir, 'codeagent-account-menu-models.json'), { force: true });
+  json(path.join(cfg, '.cac.json'), {});
+  json(path.join(cfg, 'settings.json'), { model: SCROLL_TARGET });
+  process.env.AI_HUB_CODEAGENT_SERVE = '1';
+  ipc.listeners.get('codeagent-model-pick')({ sessionId: 'scroll-session', modelId: picker.FIRST_MENU_MODEL, reason: 'launch', listUnknown: true, accountKey: 'personal', configDir: cfg });
+  const picked = await f.api.waitForPick('scroll-session');
+  assert.equal(picked.ok, true);
+  assert.deepEqual(reads, [cfg]);
+  const phases = ipc.events.filter(([name]) => name === 'codeagent-launch-phase').map(([, p]) => p);
+  assert.match(phases[0].label, /读取可用模型/);
+  assert.equal(phases.at(-1).clear, true);
+  const log = fs.readFileSync(path.join(f.dir, 'logs/codeagent-model.log'), 'utf8');
+  assert.match(log, /event=first-launch-recheck/);
+  if (served === 'remembered') {
+    assert.equal(picked.skipped, true);
+    assert.equal(f.writes.length, 0, 'no /model may be typed into the terminal');
+  } else {
+    assert.notEqual(picked.skipped, true);
+    assert.ok(f.writes.length > 0, 'falls back to the menu when the list stays unknown');
+  }
+});
 
 for (const reason of ['switch', 'launch']) for (const present of [true, false]) test(`session ${reason} never rewrites menu or permission files after failed search clearing (${present})`, async t => {
   const ids = ['GLM-5.2-WX-Auto', 'MiniMax-M2.7', 'GLM-5.2', ...(present ? [SCROLL_TARGET] : [])];

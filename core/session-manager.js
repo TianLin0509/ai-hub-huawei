@@ -1888,6 +1888,8 @@ class SessionManager extends EventEmitter {
     let codeagentPickFirst = isCodeAgent && freshLaunch && !codeAgentReadOnly(opts) && !shouldPickCodeAgentModel(opts);
     // 2026-10-28 用户选 A（core/codeagent-launch-model.js）：号的模型清单权威且只有 1 个就不开菜单；多个时选这个号上次在 Hub 里切到的，没有再选第一个。
     let codeagentPickTarget = require('./codeagent-model-picker').FIRST_MENU_MODEL;
+    // 清单还不知道（刚装好、刚更新，开 Hub 20 秒后那次后台读取还没跑）：交给选模型那一步先等 serve 读完再定开不开菜单（2026-11-07 用户：首次会话要丝滑）。
+    let codeagentPickListUnknown = false;
     if (codeagentPickFirst) {
       try {
         const launchModel = require('./codeagent-launch-model');
@@ -1905,7 +1907,7 @@ class SessionManager extends EventEmitter {
           codeagentPickFirst = false;
           const note = choice.reason === 'cli-remembered' ? `CodeAgent 记着的默认模型 ${choice.model} 在这个号的清单里，新会话直接用它，不开模型菜单` : '这个号只有一个模型，新会话不开模型菜单';
           try { require('./codeagent-models').appendModelLog(getHubDataDir(), { event: 'pick-skipped', session: String(id).slice(0, 8), account: codeagentPool ? '号池' : '个人', model: choice.model, reason: choice.reason, note }); } catch { /* 只是日志 */ }
-        } else codeagentPickTarget = choice.model;
+        } else { codeagentPickTarget = choice.model; codeagentPickListUnknown = choice.reason === 'unknown-list'; }
       } catch (error) { console.warn('[codeagent] 新会话选模型判断出错，照旧选菜单第一个：' + error.message); }
     }
     if (codeagentPickFirst) {
@@ -2378,8 +2380,25 @@ class SessionManager extends EventEmitter {
     let codeagentLaunch = null;
     if (isCodeAgent) {
       // .cac.json 的 projects 也预写信任（--skip-safe-check 之外的第二道保险）。
-      require('./claude-project-trust.js').ensureClaudeProjectTrusted(spawnCwd,
-        { configDir: codeagentConfig.configDir, stateFileName: codeagentConfig.stateFile });
+      const trustOptions = { configDir: codeagentConfig.configDir, stateFileName: codeagentConfig.stateFile };
+      const pretrust = require('./claude-project-trust.js').ensureClaudeProjectTrusted(spawnCwd, trustOptions);
+      // 状态文件还没有（这个配置目录第一次用）：不凭空建，等 CodeAgent 自己建出来、写稳了再补上信任（2026-11-07 首次会话丝滑）。
+      // 这次启动的信任框由下面的自动确认兜底；补写保证之后同目录的会话都不再弹。
+      if (pretrust && pretrust.reason === 'state-missing') {
+        const deadline = Date.now() + 60000;
+        let seenAt = 0;
+        const poll = setInterval(() => {
+          let exists = false;
+          try { exists = fs.existsSync(pretrust.statePath); } catch { exists = false; }
+          if (exists && !seenAt) seenAt = Date.now();
+          if (exists && Date.now() - seenAt >= 1500) {
+            clearInterval(poll);
+            const later = require('./claude-project-trust.js').ensureClaudeProjectTrusted(spawnCwd, trustOptions);
+            console.log(`[trust-dialog] ${String(id).slice(0, 8)} CodeAgent 状态文件建好后补写信任：${later.changed ? '已写入' : later.reason || '已是信任'}`);
+          } else if (Date.now() > deadline) clearInterval(poll);
+        }, 500);
+        poll.unref?.();
+      }
       // Only a newly created child environment is changed. relaunchCli reuses
       // the existing shell; its command builder must never mutate process.env.
       const auth = require('./codeagent-launch-env').applyAccountEnv(sessionEnv, codeagentConfig);
@@ -2972,8 +2991,11 @@ class SessionManager extends EventEmitter {
       let trustDone = false;
       let trustBuf = '';
       let trustTimer = null;
+      // 首次准备进度（2026-11-07 用户：信任框在后台时前台像卡住）：认出信任框、点掉、点不掉都告诉界面。
+      const trustPhase = phase => { if (codeagentLaunch) { try { this.emit('codeagent-launch-phase', { sessionId: id, phase }); } catch {} } };
       const pressTrustKeys = (dialog) => {
         trustDone = true;
+        trustPhase('trust-done');
         console.log(`[trust-dialog] ${id} 自动确认信任框（${kind}，光标行 ${dialog.cursorRow} → 信任行 ${dialog.trustRow}）`);
         dialog.keys.forEach((key, index) => {
           setTimeout(() => { try { ptyProcess.write(key); } catch {} }, index * 80);
@@ -2983,11 +3005,26 @@ class SessionManager extends EventEmitter {
       // 判断节流到 0.4 秒一次，信任框画完后同样再等 1.2 秒、用最新屏幕确认一遍才按键。
       const trustScreen = codeagentLaunch ? createTrustScreen() : null;
       let trustSeenAt = 0;
+      // 只看字样（不要求定位到光标行）：自动点不了的框也要能提醒用户；框自己消失（用户在后台点了）也算完成。
+      let trustTextSince = 0, trustStuckSent = false;
+      const { TRUST_PROMPT_RE, TRUST_OPTION_RE } = require('./claude-trust-dialog.js');
       const checkTrustScreen = async () => {
         trustTimer = null;
         if (trustDone || !trustScreen) return;
-        const dialog = detectTrustDialogInLines(await trustScreen.lines());
-        if (trustDone) return;
+        const lines = await trustScreen.lines();
+        // 空屏 = 屏幕已被 90 秒看门狗收掉，不能当成「框消失了」。
+        if (trustDone || !lines.length) return;
+        const dialog = detectTrustDialogInLines(lines);
+        const joined = lines.join('\n');
+        const textShown = TRUST_PROMPT_RE.test(joined) && TRUST_OPTION_RE.test(joined);
+        if (textShown && !trustTextSince) { trustTextSince = Date.now(); trustPhase('trust-detected'); }
+        if (!textShown && trustTextSince) { trustDone = true; trustPhase('trust-done'); try { trustSub.dispose(); } catch {} trustScreen.dispose(); return; }
+        if (textShown && !dialog) {
+          if (!trustStuckSent && Date.now() - trustTextSince >= 8000) { trustStuckSent = true; trustPhase('trust-stuck'); }
+          // 屏幕静止时不会再来数据，自己再看一次，用户点掉后才能及时收起提示。
+          trustTimer = setTimeout(checkTrustScreen, 1000);
+          return;
+        }
         if (!dialog) { trustSeenAt = 0; return; }
         if (!trustSeenAt) trustSeenAt = Date.now();
         if (Date.now() - trustSeenAt < 1200) { trustTimer = setTimeout(checkTrustScreen, 400); return; }
@@ -3013,6 +3050,15 @@ class SessionManager extends EventEmitter {
         }, 1200);
       });
       pendingTimers.push(setTimeout(() => {
+        // 框还在等用户点：继续看着（最多 10 分钟），否则用户点掉之后提示收不起来、第一句也一直等着。
+        if (trustScreen && trustTextSince && !trustDone) {
+          pendingTimers.push(setTimeout(() => {
+            if (trustTimer) { clearTimeout(trustTimer); trustTimer = null; }
+            trustScreen.dispose();
+            try { trustSub.dispose(); } catch {}
+          }, 10 * 60 * 1000));
+          return;
+        }
         if (trustScreen) trustScreen.dispose();
         if (trustDone) return;
         if (trustTimer) { clearTimeout(trustTimer); trustTimer = null; }
@@ -3046,7 +3092,8 @@ class SessionManager extends EventEmitter {
         try { require('./codeagent-models').appendModelLog(getHubDataDir(), { event: 'pick-skipped', session: String(id).slice(0, 8), account: codeagentPool ? '号池' : '个人',
           model: codeagentLaunch.settingsModel, reason: 'cli-settings', note: '启动参数 --settings 已指定模型（只对这个会话生效、不写配置文件），不开模型菜单' }); } catch { /* 只是日志 */ }
       } else if (codeagentLaunch && shouldPickCodeAgentModel(opts)) this.emit('codeagent-model-pick', { sessionId: id, modelId: codeagentLaunch.model, reason: 'launch' });
-      else if (codeagentLaunch && codeagentPickFirst) this.emit('codeagent-model-pick', { sessionId: id, modelId: codeagentPickTarget, reason: 'launch' });
+      else if (codeagentLaunch && codeagentPickFirst) this.emit('codeagent-model-pick', { sessionId: id, modelId: codeagentPickTarget, reason: 'launch',
+        ...(codeagentPickListUnknown ? { listUnknown: true, accountKey: codeagentPool ? codeagentPool.account.id : 'personal', configDir: codeagentConfig.configDir } : {}) });
     }
 
     if (isGemini) {

@@ -1259,11 +1259,72 @@ function registerSessionIpc(ipcMain, deps) {
     }
     return { ok: true, model: result.model || target, mode: result.mode, confirmed: !!result.confirmed };
   }
-  if (typeof sessionManager.on === 'function') sessionManager.on('codeagent-model-pick', ({ sessionId, modelId, reason } = {}) => {
+  // 首次会话（2026-11-07 用户：第一次会话要丝滑）：启动时清单未知，先经 serve 读一次清单（约 3 秒，和 CodeAgent 启动并行），
+  // 读到后按启动时同一口径再判断；能定下来就不往终端里敲 /model。读不到或超时照旧开菜单。
+  const CODEAGENT_FIRST_LAUNCH_READ_MS = 15000;
+  // 首次准备进度（2026-11-07 用户：后台在点信任、选模型时前台像卡住）：每个会话记两步的状态，拼成一句话推给卡片底部的「启动中」指示条。
+  const codeagentLaunchPhases = new Map();
+  function sendLaunchPhase(sessionId, patch) {
+    if (!sessionId) return;
+    const state = { ...(codeagentLaunchPhases.get(sessionId) || {}), ...patch };
+    codeagentLaunchPhases.set(sessionId, state);
+    const parts = [];
+    if (state.trust) parts.push(state.trust === 'done' ? '确认目录信任 ✓' : state.trust === 'stuck' ? '确认目录信任（需要你在「后台」点一下 Yes）' : '确认目录信任…');
+    if (state.model) parts.push(state.model === 'done' ? '选好模型 ✓' : state.model === 'reading' ? '读取可用模型…' : '选择模型…');
+    const finished = (!state.trust || state.trust === 'done') && (!state.model || state.model === 'done');
+    if (finished) codeagentLaunchPhases.delete(sessionId);
+    const hint = state.trust === 'stuck' ? '' : state.model === 'reading' ? '首次约 5 秒' : state.model === 'picking' ? '通常 10–30 秒' : '';
+    sendToRenderer('codeagent-launch-phase', { sessionId, clear: finished, label: parts.length ? `准备 CodeAgent：${parts.join(' → ')} → 发送你的消息` : '', hint });
+  }
+  if (typeof sessionManager.on === 'function') sessionManager.on('codeagent-launch-phase', ({ sessionId, phase } = {}) => {
+    if (phase === 'trust-detected') sendLaunchPhase(sessionId, { trust: 'detected' });
+    else if (phase === 'trust-done') sendLaunchPhase(sessionId, { trust: 'done' });
+    else if (phase === 'trust-stuck') {
+      sendLaunchPhase(sessionId, { trust: 'stuck' });
+      sendToRenderer('session-notice', { sessionId, level: 'warning', persistent: true,
+        message: 'CodeAgent 第一次进入这个工作目录，弹出了「是否信任此目录」的确认，Hub 没能自动点掉。请打开这个会话的「后台」终端，选 Yes, I trust this folder 后回车；你的消息会在确认后自动发出。' });
+    }
+  });
+  async function recheckFirstLaunchModel(sessionId, { accountKey, configDir, first }) {
+    const dataDir = require('../../core/data-dir').getHubDataDir();
+    if (!accountKey || !configDir || !codeagentServeEnabled(dataDir)) return null;
+    const pool = require('../../core/codeagent-pool');
+    const config = require('../../core/codeagent-config').resolveCodeAgentConfig(process.env);
+    const account = accountKey === 'personal' ? null : codeagentPoolAccounts().find(row => row.id === accountKey);
+    const started = Date.now();
+    const read = readCodeAgentServeAccount(accountKey, { command: config.command, configDirEnv: config.configDirEnv, configDir, dataDir,
+      cwd: pool.probeCwd(dataDir) }, account ? pool.label(account) : '个人账号', 'first-launch').catch(error => ({ ok: false, error: error.message }));
+    let timer = null;
+    const served = await Promise.race([read, new Promise(resolve => { timer = setTimeout(() => resolve({ ok: false, error: 'timeout' }), CODEAGENT_FIRST_LAUNCH_READ_MS); timer.unref?.(); })]);
+    clearTimeout(timer);
+    let choice = null;
+    try { choice = require('../../core/codeagent-launch-model').recheckLaunchChoice({ dataDir, configDir, accountKey, first }); } catch { choice = null; }
+    codeagentModels.appendModelLog(dataDir, { event: 'first-launch-recheck', session: String(sessionId).slice(0, 8), account: accountKey === 'personal' ? '个人' : '号池',
+      ok: !!served?.ok, ms: Date.now() - started, ...(served?.ok ? {} : { error: served?.error || '未知' }), open: choice ? choice.open : true, reason: choice?.reason || '', model: choice?.model || '' });
+    return choice;
+  }
+  if (typeof sessionManager.on === 'function') sessionManager.on('codeagent-model-pick', ({ sessionId, modelId, reason, listUnknown, accountKey, configDir } = {}) => {
     if (!sessionId || !modelId) return;
     // 同步登记：随后到达的第一条消息会等这一步做完（group-chat-watcher 的 sendToPty）。
     codeagentPicker.schedulePick(sessionId, async () => {
-      const result = await runCodeAgentPick(sessionId, modelId, reason);
+      const showPhase = reason === 'launch' || reason === 'relaunch';
+      if (reason === 'launch' && listUnknown) {
+        if (codeagentServeEnabled(require('../../core/data-dir').getHubDataDir())) sendLaunchPhase(sessionId, { model: 'reading' });
+        let choice = null;
+        try { choice = await recheckFirstLaunchModel(sessionId, { accountKey, configDir, first: modelId }); }
+        catch (error) { console.warn('[codeagent] 首次会话读模型清单出错，照旧开菜单：' + error.message); }
+        if (choice && !choice.open) {
+          codeagentModels.appendModelLog(require('../../core/data-dir').getHubDataDir(), { event: 'pick-skipped', session: String(sessionId).slice(0, 8),
+            model: choice.model, reason: choice.reason, note: '首次会话：后台读到模型清单后判断不用开模型菜单' });
+          sendLaunchPhase(sessionId, { model: 'done' });
+          return { ok: true, skipped: true, model: choice.model, inputReady: true };
+        }
+        if (choice && choice.open && choice.model) modelId = choice.model;
+      }
+      if (showPhase) sendLaunchPhase(sessionId, { model: 'picking' });
+      let result;
+      try { result = await runCodeAgentPick(sessionId, modelId, reason); }
+      finally { if (showPhase) sendLaunchPhase(sessionId, { model: 'done' }); }
       const session = sessionManager.getSession(sessionId);
       if (result.fallback && codeagentPicker.isFirstMenuModel(modelId)) {
         sendToRenderer('session-notice', { sessionId, level: 'warning',
