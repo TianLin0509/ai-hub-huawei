@@ -4,6 +4,7 @@ import { lstat, readFile, readdir, mkdir, copyFile, rename, rm } from 'node:fs/p
 import { join, dirname, basename, resolve, relative, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
+import { isSignerVersion } from './version-format.mjs';
 
 const require = createRequire(import.meta.url);
 const DLL = 'libsnap_engine.dll', FFI = 'koffi.node';
@@ -28,7 +29,8 @@ async function loadedPair(files, codeagentDir, tempDir) {
       dirname(resolve(files.ffi)).toLowerCase() !== dir.toLowerCase()) return null;
   // Accept only the current installation's known cache layout or this probe's
   // isolated TEMP. Paths are observed in the live CLI, never selected by mtime.
-  const roots = [codeagentDir && join(codeagentDir, 'temp', 'codeagent'), tempDir].filter(Boolean);
+  // 真机（2026-11-09 绿区）：CLI 把运行库解到 <TEMP>\codeagent\signer-x64-win32-*，比 TEMP 根目录多一层。
+  const roots = [codeagentDir && join(codeagentDir, 'temp', 'codeagent'), tempDir, tempDir && join(tempDir, 'codeagent')].filter(Boolean);
   const root = roots.find(base => /^signer-x64-win32-[A-Za-z0-9._-]+$/.test(relative(resolve(base), dir)));
   if (!root) return null;
   const stop = codeagentDir && root === join(codeagentDir, 'temp', 'codeagent') ? resolve(codeagentDir) : resolve(root);
@@ -47,9 +49,13 @@ export async function findNativeRuntime({ codeagentDir, runtimeDir, tempDir } = 
   if (!tempDir) return null;
   try {
     const candidates = [];
-    for (const entry of await readdir(tempDir, { withFileTypes: true })) {
-      if (!entry.isDirectory() || entry.isSymbolicLink() || !/^signer-x64-win32-[A-Za-z0-9._-]+$/.test(entry.name)) continue;
-      const hit = await pair(join(tempDir, entry.name)); if (hit) candidates.push(hit);
+    for (const base of [tempDir, join(tempDir, 'codeagent')]) {
+      let entries = [];
+      try { entries = await readdir(base, { withFileTypes: true }); } catch { continue; }
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.isSymbolicLink() || !/^signer-x64-win32-[A-Za-z0-9._-]+$/.test(entry.name)) continue;
+        const hit = await pair(join(base, entry.name)); if (hit) candidates.push(hit);
+      }
     }
     return candidates.sort((a, b) => b.mtimeMs - a.mtimeMs)[0] || null;
   } catch { return null; }
@@ -110,7 +116,7 @@ export function createNativeSigner({ version, cacheDir, codeagentDir, runtimeDir
     lib = null;
   };
   async function initialize() {
-    if (!/^\d+(?:\.\d+){1,5}$/.test(version || '') || !/^[A-Za-z0-9._-]{3,200}$/.test(appId || '')
+    if (!isSignerVersion(version) || !/^[A-Za-z0-9._-]{3,200}$/.test(appId || '')
         || typeof codeagentDir !== 'string' || !isAbsolute(codeagentDir) || typeof cacheDir !== 'string' || !isAbsolute(cacheDir)) throw fail('SIGNER_CONFIGURATION_INVALID');
     if (telemetryUrl) {
       let u; try { u = new URL(telemetryUrl); } catch { throw fail('SIGNER_CONFIGURATION_INVALID'); }

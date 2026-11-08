@@ -10,12 +10,15 @@ const { MeetingRecording } = require('./meeting-recording');
 const { MeetingFrames } = require('./meeting-frames');
 const { MeetingTools } = require('./meeting-tools');
 const { compactEvents, relevant, modelOptions, fastModel, selectedModel } = require('./meeting-context');
+const engine = require('./meeting-engine');
 const ACTIVE = new Set(['recording', 'paused']);
 // 理解速度三档（2026-10-25 用户：强调实时性）：每轮最多带几张新截图、回答写多长、是否鼓励回查。
 const SPEEDS = {
-  fast: { label: '快速', slides: 2, words: 300, note: '这是快速档：只看本轮新增原话和最新截图，非必要不调用会议工具回查。', legacy: '这是快速档：只看本轮新增文字和最新截图，写要点式更新（300 字以内），非必要不调用会议工具回查。' },
-  normal: { label: '中等', slides: 5, words: 700, note: '这是中等档：结合新增原话和代表截图，只在关键处回查。', legacy: '这是中等档：结合新增文字和代表截图，写完整但精炼的更新（700 字以内），只在关键处回查。' },
-  deep: { label: '深入', slides: 120, words: 0, note: '这是深入档：逐项核对，必要时用会议工具回查转写与截图。', legacy: '这是深入档：逐项核对，必要时用会议工具回查转写与截图，写完整更新。' },
+// 2026-11-08 三档改成输入也不同（公司对照评测 Q-1108-26 的三档定义）：recent/earlier 是问答带几条最近原话、几条按问题挑出的更早原话；
+// allFile 时每轮把到目前为止的全部原话写进 transcript-all.txt 供核对。
+  fast: { label: '快速', slides: 2, words: 200, recent: 20, earlier: 0, note: '这是快速档：只记决定、行动项、待确认，议题每个一句话；关键事实只记会影响决定的数字；每条不超过 40 字；不回查历史。', legacy: '这是快速档：只看本轮新增文字和最新截图，写要点式更新（300 字以内），非必要不调用会议工具回查。' },
+  normal: { label: '中等', slides: 5, words: 700, recent: 40, earlier: 12, note: '这是中等档：结合新增原话和代表截图，只在关键处回查。', legacy: '这是中等档：结合新增文字和代表截图，写完整但精炼的更新（700 字以内），只在关键处回查。' },
+  deep: { label: '深入', slides: 120, words: 0, recent: 60, earlier: 24, allFile: true, note: '这是深入档：当前目录的 transcript-all.txt 是到目前为止的全部原话。逐项核对：被推翻的决定写清先后，行动项的负责人和期限对照原话确认，关键事实写全数字和对比对象；必要时用会议工具回查截图。', legacy: '这是深入档：逐项核对，必要时用会议工具回查转写与截图，写完整更新。' },
 };
 const INTERVALS = [0, 1, 3, 5, 10];
 const DEFAULT_INTERVAL_MIN = 3;
@@ -159,6 +162,7 @@ class MeetingCompanion {
     else if (op === 'auto') m.autoUnderstand = !!value;
     else if (op === 'interval') { const v = Number(value); if (!INTERVALS.includes(v)) throw new Error('自动更新间隔无效'); m.autoIntervalMin = v; m.autoUnderstand = v > 0; }
     else if (op === 'speed') { if (!SPEEDS[value]) throw new Error('理解速度无效'); m.speed = value; }
+    else if (op === 'engine') { if (value && !engine.engines(this.terminals()).some(e => e.id === value)) throw new Error('这个会议 AI 不在可用清单中'); m.engine = value || ''; }
     else if (op === 'fast-model') { if (value && !modelOptions(this.deps).some(x => x.id === value)) throw new Error('快速模型不在可用清单中'); m.fastModel = value || ''; }
     else if (op === 'speaker-name') speakers.rename(m, value?.id, value?.name);
     else if (op === 'retry-asr') { for (const e of m.events) if (e.kind === 'audio' && e.asr === 'error') { e.asr = 'pending'; delete e.error; } m.asrError = ''; }
@@ -169,7 +173,25 @@ class MeetingCompanion {
     if (['ask', 'retry-question'].includes(op)) delete m.questionCleanupError;
     this.save(m); this.start(); void this.tick(); return this.status(id);
   }
-  status(id) { const models = modelOptions(this.deps); return { ok: true, meetings: this.list(), meeting: id ? this.load(id) : null, asr: this.asr.status(), models, defaultFastModel: fastModel(models), recordingError: this.recording.errors.get(id) || '' }; }
+  status(id) {
+    const models = modelOptions(this.deps), meeting = id ? this.load(id) : null, speed = meeting?.speed || 'normal';
+    const engines = this.deps.meetingTerminals ? engine.rank(engine.engines(this.terminals()), speed) : [];
+    return { ok: true, meetings: this.list(), meeting, asr: this.asr.status(), models, defaultFastModel: fastModel(models),
+      engines: engines.map(({ id, label }) => ({ id, label })), recommendedEngine: engines[0]?.id || '', recordingError: this.recording.errors.get(id) || '' };
+  }
+  // 本机装了哪些终端、各接上了哪些模型（一分钟内复用，找命令要扫 PATH）。测试和老接线没有 meetingTerminals 时只有 CodeAgent。
+  terminals() {
+    if (this.termCache && this.now() - this.termCache.at < 60000) return this.termCache.value;
+    const t = this.deps.meetingTerminals?.() || { codeagent: true }, models = modelOptions(this.deps);
+    const value = { codeagent: t.codeagent ? (models.length ? models : [{ id: '', label: '' }]) : null, claude: t.claude || null, codex: t.codex || null };
+    this.termCache = { at: this.now(), value }; return value;
+  }
+  // 这场会议理解会话用的终端和模型。key 变了就换会话（shouldRotate）。
+  engineFor(m) {
+    if (!this.deps.meetingTerminals) { const model = selectedModel(m, this.deps); return { harness: 'codeagent', model, key: model, label: 'CodeAgent' }; }
+    const e = engine.choose(m, this.terminals());
+    return { harness: e.harness, model: e.model, key: e.id, label: e.label };
+  }
   asset(id, seq) { const m = this.load(id), e = m.events.find(e => e.seq === Number(seq)); if (!e?.file || !/^(page|system|mic)-\d+\.(jpg|wav)$/.test(e.file)) throw new Error('材料不存在'); const file = path.join(this.dir(id), e.file); return { kind: e.kind, path: file, data: fs.readFileSync(file).toString('base64') }; }
   async transcribeOne() {
     if (this.asrBusy || !this.asr.status().ready) return;
@@ -230,7 +252,7 @@ class MeetingCompanion {
   }
   async ensureLane(id, slot) {
     const lane = this.lane(slot); let m = this.load(id);
-    const model = selectedModel(m, this.deps), oldId = m[lane.sid];
+    const picked = this.engineFor(m), model = picked.key, oldId = m[lane.sid];
     if (oldId && this.a.sessionBusy(oldId)) return null;
     // Bound native history, including question traffic. Keep three turns to amortize one skill warmup.
     const rotate = this.shouldRotate(m, lane, model);
@@ -248,9 +270,9 @@ class MeetingCompanion {
     await this.tools.start(); this.tools.bind(this.load(id));
     if (!this.deps.getSession(sid)) {
       if (this.deps.getSessionMetadata?.(sid)) await this.deps.resumeSession?.(sid);
-      else await this.deps.createSession('codeagent', { id: sid, cwd: this.dir(id), title: lane.title + ' · ' + m.title, purpose: 'company-assistant', autonomous: true, noInheritCursor: true, ...(model ? { model } : {}) });
+      else await this.deps.createSession(picked.harness, { id: sid, cwd: this.dir(id), title: lane.title + ' · ' + m.title, purpose: 'company-assistant', autonomous: true, noInheritCursor: true, ...(picked.model ? { model: picked.model } : {}) });
     }
-    m = this.load(id); m[lane.model] = model; m[lane.protocol] = 2;
+    m = this.load(id); m[lane.model] = model; m[lane.protocol] = 2; if (slot === 'job') m.engineLabel = picked.label;
     if (m[lane.agent]?.state === 'error') m[lane.prime] = true;
     this.save(m);
     return this.a.sessionBusy(sid) ? null : m;
@@ -278,6 +300,7 @@ class MeetingCompanion {
         `待转写音频：${m.events.filter(e => e.kind === 'audio' && e.asr !== 'done').length} 段`,
         `暂停或异常缺口：${JSON.stringify(m.recording?.gaps || [])}；当前暂停：${JSON.stringify(m.recording?.openGap || null)}` ].filter(Boolean).join('\n');
       const file = `input-${m.revision + 1}-${randomUUID().slice(0, 8)}.txt`; fs.writeFileSync(path.join(this.dir(m.id), file), input, 'utf8');
+      if (speed.allFile && itemized) fs.writeFileSync(path.join(this.dir(m.id), 'transcript-all.txt'), compactEvents(m.events.filter(e => e.seq <= to), speakers.names(m)), 'utf8');
       const job = this.newJob(m, 'understand', slot, { from: m.cursor, to, final: !!final && to === m.events.length, speed: m.speed || 'normal', inputChars: input.length });
       m.job = job; m.lastDispatch = this.now(); m.requested = false; this.save(m);
       const prompt = (itemized ? [`${m.skillPending ? '这是新会话：先读取 skills/meeting-companion/SKILL.md，了解纪要规则和 meeting_index、meeting_read、meeting_slides 的用法，之后不再重复读。然后' : ''}你是会议伴侣，读取当前目录 ${file}，按技能里的规则更新纪要。文件里有当前纪要（每条带编号）和本轮新增原话。`,
@@ -325,9 +348,9 @@ class MeetingCompanion {
     const job = { kind: 'question', engine: 'ask-aside', token: randomUUID(), sourceSessionId: m.sessionId,
       questionId: question.id, state: 'sending', sentAt: this.now() };
     m.questionJob = job; question.dispatchedAt = this.now(); this.save(m);
-    const said = m.events.filter(e => ['transcript', 'mark'].includes(e.kind)), recent = said.slice(-40), earlier = relevant(question.q, said.slice(0, -40));
     const speed = SPEEDS[m.speed] || SPEEDS.normal;
-    const context = [this.glossary.promptLine(), '当前会议理解：', m.summary || '尚未整理出理解', '最近 40 条转写与重点（[序号] mm:ss 发言人或音轨 文本）：', compactEvents(recent, speakers.names(m)),
+    const said = m.events.filter(e => ['transcript', 'mark'].includes(e.kind)), recent = said.slice(-speed.recent), earlier = speed.earlier ? relevant(question.q, said.slice(0, -speed.recent), speed.earlier) : [];
+    const context = [this.glossary.promptLine(), '当前会议理解：', m.summary || '尚未整理出理解', `最近 ${speed.recent} 条转写与重点（[序号] mm:ss 发言人或音轨 文本）：`, compactEvents(recent, speakers.names(m)),
       ...(earlier.length ? ['与问题相关的更早原话（按时间排序）：', compactEvents(earlier, speakers.names(m))] : [])].filter(Boolean).join('\n');
     const responseHint = `先给结论再给依据，中文${speed.words ? `、${Math.min(speed.words, 700)} 字以内` : '、逐项核对'}；关键结论附 [事件 N] 出处，不写纪要条目编号（如 [A7]）；问的是现在的状态就按此刻回答，改过的决定讲清先后；材料里找不到就说明，不重写整份会议理解。`;
     try {

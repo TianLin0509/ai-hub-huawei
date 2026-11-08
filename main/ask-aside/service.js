@@ -250,7 +250,8 @@ function createAskAsideService({ sessionManager, getHubDataDir, sendToRenderer =
     const session = sessionManager.getSession(sid) || (includeDormant ? getSessionMetadata(sid) : null);
     if (!session) return { supported: false, reason: '请先打开一个会话' };
     const kind = session.kind || '';
-    if (!includeDormant && (CLAUDE_RE.test(kind) || CODEX_RE.test(kind) || DSH_RE.test(kind))) return liveTarget(sid, session);
+    // 会议伴侣也可能开在 Claude Code / Codex 上（2026-11-08）：这两种照样要终端正开着，按在线会话问。
+    if ((!includeDormant && DSH_RE.test(kind)) || CLAUDE_RE.test(kind) || CODEX_RE.test(kind)) return liveTarget(sid, session);
     if (!KIND_RE.test(kind)) return { supported: false, reason: '问一下支持 CodeAgent、Claude Code、Codex 和 DSH 会话' };
     const ccSessionId = session.ccSessionId;
     if (!UUID_RE.test(String(ccSessionId || ''))) return { supported: false, notReady: true, reason: '这个会话还没聊过，没有可以问的内容' };
@@ -326,12 +327,12 @@ function createAskAsideService({ sessionManager, getHubDataDir, sendToRenderer =
     if (!q || q.length > maxQuestion || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(q)) throw new Error(`请输入有效问题（最多 ${maxQuestion} 字）`);
     const first = target(sid, !!meetingId);
     if (!first.supported) throw Object.assign(new Error(meetingId ? `会议上下文尚未就绪，可稍后重试：${first.reason}` : first.reason), first.notReady && meetingId ? { code: 'MEETING_CONTEXT_NOT_READY' } : {});
-    if (meetingId && !first.model) throw new Error('会议模型尚未就绪，请等原会话确定模型后稍后重试');
+    if (meetingId && !first.model && first.engine !== 'codex') throw new Error('会议模型尚未就绪，请等原会话确定模型后稍后重试');
     const mode = resolveMode();
     if (meetingId && mode.input === 'arg') throw new Error('会议问答需要标准输入传递完整材料；请把问一下输入方式设为 stdin 后重试');
     const saved = data(sid);
     if (saved.items.filter(item => ['queued', 'running'].includes(item.status)).length >= MAX_PENDING) throw new Error(`已有 ${MAX_PENDING} 个问题在排队，等前面答完再问`);
-    if (meetingId && first.engine !== 'codeagent') throw new Error('会议问答只支持 CodeAgent 会话');
+    if (meetingId && !['codeagent', 'claude', 'codex'].includes(first.engine)) throw new Error('会议问答只支持 CodeAgent、Claude Code 和 Codex 会话');
     const item = { id: randomUUID(), q, a: '', at: new Date(now()).toISOString(), wall_s: 0, status: 'queued', error: '', truncated: false, engine: first.engine,
       ...(meetingId ? { meetingId, questionId, contextChars: context.length } : {}) };
     saved.items.push(item);
@@ -345,12 +346,12 @@ function createAskAsideService({ sessionManager, getHubDataDir, sendToRenderer =
         if (!acquired || abort.signal.aborted) throw new Error('Hub 正在关闭');
         const current = frozen || target(sid);
         if (!current.supported) throw new Error(current.reason);
-        if (frozen && (!fs.existsSync(current.config.configDir) || !fs.existsSync(current.cwd)
+        if (frozen && current.engine !== 'codex' && (!fs.existsSync(current.config.configDir) || !fs.existsSync(current.cwd)
           || !hasHistory(current.ccSessionId, current.cwd, current.config.configDir))) throw new Error('原会议账号目录或会话记录已不可用，请检查后重试');
         item.status = 'running'; item.startedAt = new Date(now()).toISOString(); publish(sid);
         // text 输出答完才一次性给出，不推中间片段（公司回执：没有真流式）。
         const result = current.engine === 'dsh' ? await current.entry.pty.askSide(q)
-          : current.engine === 'codex' ? await runCodex({ session: current.session, question: q, env: current.env, now })
+          : current.engine === 'codex' ? await runCodex({ session: current.session, question: q, env: current.env, now, ...(meetingId ? { context, responseHint } : {}) })
           : await run({ mode: frozen ? mode : resolveMode(), config: current.config, cwd: current.cwd, ccSessionId: current.ccSessionId,
             model: current.model, question: q, ...(current.env ? { env: current.env } : {}), ...(meetingId ? { context, responseHint } : {}), signal: abort.signal });
         if (abort.signal.aborted) throw Object.assign(new Error('Hub 正在关闭，提问已中断，可重试'), { answer: result.answer, truncated: result.truncated });

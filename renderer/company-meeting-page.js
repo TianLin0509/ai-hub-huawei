@@ -254,11 +254,20 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       // 会议专属 CodeAgent：状态、速度档、自动间隔、打开会话（2026-10-25）。
       const agent = m?.agent?.state || (m?.sessionId ? 'ready' : 'none');
       const agentBox = el('agent-state'); agentBox.dataset.state = m?.job && m.job.state !== 'error' && m.job.kind !== 'prime' ? 'busy' : agent;
-      agentBox.querySelector('span').textContent = !m ? 'CodeAgent 未启动' : agent === 'starting' ? 'CodeAgent 预热中' : agent === 'error' ? 'CodeAgent 启动异常' : m.job && m.job.state !== 'error' ? 'CodeAgent 工作中' : 'CodeAgent 已就绪';
+      const who = String(m?.engineLabel || 'CodeAgent').split(' · ')[0];
+      agentBox.querySelector('span').textContent = !m ? `${who} 未启动` : agent === 'starting' ? `${who} 预热中` : agent === 'error' ? `${who} 启动异常` : m.job && m.job.state !== 'error' ? `${who} 工作中` : `${who} 已就绪`;
+      agentBox.title = m?.engineLabel ? '会议 AI：' + m.engineLabel : '';
       root.querySelectorAll('[data-speed]').forEach(b => { const on = b.dataset.speed === (m?.speed || 'normal'); b.setAttribute('aria-checked', String(on)); b.disabled = !m; });
       if (document.activeElement !== el('interval')) el('interval').value = String(m ? (m.autoUnderstand === false ? 0 : (m.autoIntervalMin ?? 1)) : 3);
       el('interval').disabled = !m;
       root.querySelector('[data-act-local="open-agent"]').disabled = !m?.sessionId || !openSession;
+      // 会议 AI（2026-11-08）：本机装了、接上了模型的终端都列出来，自动 = 按评测排出的推荐；能选时旧的「快速档模型」收起来。
+      const engines = state.engines || [], engineSelect = el('engine');
+      el('engine-field').hidden = !engines.length; el('fast-model-field').hidden = engines.length > 0;
+      const recommended = engines.find(x => x.id === state.recommendedEngine);
+      const engineHtml = `<option value="">自动${recommended ? ' · ' + esc(recommended.label) : ''}</option>` + engines.map(x => `<option value="${esc(x.id)}">${esc(x.label)}</option>`).join('');
+      if (engineSelect.dataset.html !== engineHtml) { engineSelect.innerHTML = engineHtml; engineSelect.dataset.html = engineHtml; }
+      if (document.activeElement !== engineSelect) engineSelect.value = m?.engine || ''; engineSelect.disabled = !m;
       const modelSelect = el('fast-model');
       const modelHtml = `<option value="">自动${state.defaultFastModel ? ' · ' + esc(state.defaultFastModel) : ' · 沿用当前模型'}</option>` + (state.models || []).map(x => `<option value="${esc(x.id)}">${esc(x.label || x.id)}</option>`).join('');
       if (modelSelect.dataset.html !== modelHtml) { modelSelect.innerHTML = modelHtml; modelSelect.dataset.html = modelHtml; }
@@ -403,6 +412,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       el('glossary').addEventListener('change', e => { void call('meeting-glossary-save', { text: e.target.value }).then(r => message(`专业词库已保存：${r.terms.length} 个词${r.fixes.length ? `，${r.fixes.length} 条替换（对之后的转写生效）` : ''}`)).catch(err => message(err.message)); });
       el('speakers').addEventListener('change', e => { const sid = e.target.dataset?.speaker; if (id && sid) void call('meeting-control', { id, op: 'speaker-name', value: { id: Number(sid), name: e.target.value } }).then(() => refresh()).catch(err => message(err.message)); });
       el('interval').addEventListener('change', e => { if (id) void call('meeting-control', { id, op: 'interval', value: Number(e.target.value) }).then(() => refresh()).catch(err => message(err.message)); });
+      el('engine').addEventListener('change', e => { if (id) void call('meeting-control', { id, op: 'engine', value: e.target.value }).then(() => refresh()).catch(err => message(err.message)); });
       el('fast-model').addEventListener('change', e => { if (id) void call('meeting-control', { id, op: 'fast-model', value: e.target.value }).then(() => refresh()).catch(err => message(err.message)); });
       el('note').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); root.querySelector('[data-act="mark"]').click(); } });
       el('question').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); root.querySelector('[data-act="ask"]').click(); } });

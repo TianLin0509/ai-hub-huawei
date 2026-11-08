@@ -167,3 +167,14 @@ test('invalid version and non-absolute paths fail before native loading or probi
     workDir: f.root, stampProbe: () => assert.fail('must not probe'),
   }), { code: 'SIGNER_VERSION' });
 });
+
+test('finds the runtime in the real layout: <TEMP>/codeagent/signer-x64-win32-*', async t => {
+  const { findNativeRuntime, retainNativeRuntime } = await load(), f = fixture(t);
+  const probeTemp = path.join(f.root, 'probe-temp'), dir = path.join(probeTemp, 'codeagent', 'signer-x64-win32-b07ce00-1a1ae85c220');
+  fs.mkdirSync(dir, { recursive: true });
+  for (const name of ['libsnap_engine.dll', 'koffi.node']) fs.writeFileSync(path.join(dir, name), 'real-layout');
+  assert.equal((await findNativeRuntime({ tempDir: probeTemp })).dll, path.join(dir, 'libsnap_engine.dll'));
+  const saved = path.join(f.root, 'saved-real');
+  await retainNativeRuntime(probeTemp, saved);
+  assert.equal(fs.readFileSync(path.join(saved, 'koffi.node'), 'utf8'), 'real-layout');
+});

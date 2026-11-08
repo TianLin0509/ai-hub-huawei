@@ -2748,8 +2748,15 @@ try {
       isAgentTurnActive: id => sessionManager.isAgentTurnActive(id),
       // 助理会话的 CodeAgent 进程退出了，这一问立刻报失败（审计 A3-17，以前要空等 12–24 分钟）。
       isSessionProcessAlive: id => sessionProcessAlive(id),
-      // CodeAgent 的原生记录是 Claude 格式，按 Claude 读最终回答。
-      readFinals: meta => { const r = live.read({ ...meta, id: meta.id || meta.hubId, kind: 'claude' }); return r && r.available ? r.records : []; },
+      // CodeAgent 的原生记录是 Claude 格式，按 Claude 读最终回答；会议伴侣也可能开在 Codex 上（2026-11-08），按 Codex 读。
+      readFinals: meta => { const r = live.read({ ...meta, id: meta.id || meta.hubId, kind: /^codex/.test(String(meta.kind || '')) ? 'codex' : 'claude' }); return r && r.available ? r.records : []; },
+      // 会议伴侣能用的终端和模型（core/company-assistant/meeting-engine.js）：装了才列；公司版的 Claude Code / Codex 要设成「公司模型」才算接上。
+      meetingTerminals: () => {
+        const setup = require('./core/community-setup'), cfg = getHubConfig(), proxy = require('./core/company-model-proxy');
+        const viaConfig = backend => cfg.companyCli === true ? (backend === 'proxy' ? proxy.MODELS.map(m => ({ id: m.id, label: m.label })) : null) : [{ id: '', label: '' }];
+        const has = id => { try { return !!setup.findCommand(id); } catch { return false; } };
+        return { codeagent: has('codeagent'), claude: has('claude') ? viaConfig(cfg.claudeBackend) : null, codex: has('codex') ? viaConfig(cfg.codexBackend) : null };
+      },
       nodeExecutable: process.execPath,
       onChanged: () => sendToRenderer('company-assistant:changed', {}),
       // 手机对话（2026-10-18，core/company-assistant/phone.js 与 hub-tools.js）：助理用这些看会话、推进会话、卡住时替用户按键。
