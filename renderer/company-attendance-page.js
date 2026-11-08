@@ -138,6 +138,7 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
   function bodyHtml() {
     if (!status.records.length) {
       return `<div class="att-empty"><h2>还没有考勤数据</h2><p>${status.syncing ? '正在打开考勤页读取最近 8 天，大约需要半分钟。' : esc(status.lastResult?.error || '开启后每天会在后台读一次；也可以现在就读。')}</p>
+        ${status.lastResult?.needsDomain && !status.settings?.domain ? '<div class="att-row"><input class="att-input" data-f="quickDomain" placeholder="你的公司邮箱，例如 name@corp.example"><button type="button" class="att-btn primary" data-att="quick-domain">保存并读取</button></div>' : ''}
         <div class="att-row">${status.lastResult?.needsLogin ? '<button type="button" class="att-btn primary" data-att="login">登录考勤</button>' : ''}<button type="button" class="att-btn${status.lastResult?.needsLogin ? '' : ' primary'}" data-att="sync">现在读取</button></div></div>`;
     }
     const m = vm.month;
@@ -206,9 +207,9 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
     if (!panelOpen) { el.innerHTML = ''; return; }
     const s = status.settings || {};
     el.innerHTML = `<div class="att-card att-settings"><h2>考勤设置</h2>
-      <label class="att-field"><span>公司域名（考勤地址用它拼出）</span><input data-f="domain" value="${esc(s.domain || '')}" placeholder="从公司邮箱自动得到，例如 corp.example"></label>
+      <label class="att-field"><span>公司域名（考勤地址用它拼出）</span><input data-f="domain" value="${esc(s.domain || '')}" placeholder="自动找到；也可填公司邮箱或域名"></label>
       <label class="att-check"><input type="checkbox" data-f="autoDaily" ${s.autoDaily !== false ? 'checked' : ''}> 每天自动读取一次（当天读到就不再访问）</label>
-      <p class="att-note">读取地址：${esc(status.url || '还不知道公司域名')}</p>
+      <p class="att-note">读取地址：${esc(status.url || '正在自动查找公司域名…')}${s.domainFrom && s.domainFrom !== 'settings' ? '（域名是自动找到的）' : ''}</p>
       <div class="att-row"><button type="button" class="att-btn" data-att="login">在 Hub 里登录考勤</button><span class="att-sp"></span><button type="button" class="att-btn" data-att="settings">取消</button><button type="button" class="att-btn primary" data-att="save">保存</button></div>
       ${status.log?.length ? `<h3>最近读取</h3><ul class="att-log">${status.log.slice(0, 6).map(e => `<li><span>${when(e.at)}</span><span class="${e.ok ? 'ok' : 'bad'}">${e.ok ? '成功' : '失败'}</span><span>${e.ok ? `拿到 ${e.got} 天，新增 ${e.added}，更新 ${e.updated}${e.via === 'edge' ? '（无头 Edge）' : ''}` : esc(e.error)}</span></li>`).join('')}</ul>` : ''}</div>`;
   }
@@ -226,6 +227,13 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
 
   async function action(name, el) {
     if (name === 'sync') { el.disabled = true; showMessage?.('正在读取考勤，大约需要半分钟'); try { status = await call('sync'); render(); const r = status.lastResult; showMessage?.(r?.ok ? `读到 ${r.got} 天，新增 ${r.added}、更新 ${r.updated}` : '读取失败：' + (r?.error || '')); } finally { el.disabled = false; } return; }
+    if (name === 'quick-domain') {
+      const v = page.querySelector('[data-f="quickDomain"]').value.trim();
+      if (!v) { showMessage?.('填一下公司邮箱或域名'); return; }
+      const saved = await call('set-settings', { domain: v });
+      if (!(saved?.settings?.domain || saved?.domain)) { showMessage?.('没认出公司域名，请填完整的公司邮箱，例如 name@corp.example'); return; }
+      return action('sync', el);
+    }
     if (name === 'settings') { panelOpen = !panelOpen; renderPanel(); return; }
     if (name === 'save') {
       const v = f => page.querySelector(`[data-f="${f}"]`);

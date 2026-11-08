@@ -217,7 +217,7 @@ test('upstream profile names what is missing in plain words', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cmp-profile-'));
   try {
     await assert.rejects(resolveUpstreamProfile({ dataDir, env: { TEMP: dataDir }, versionReader: async () => '', packageFinder: async () => '', archiveReader: async () => '' }),
-      e => e.code === 'PROFILE_INCOMPLETE' && /模型适配包/.test(e.message) && e.missing.includes('chatUrl'));
+      e => e.code === 'PROFILE_INCOMPLETE' && /CodeAgent 版本/.test(e.message) && !e.missing.includes('adapterPackage') && e.missing.includes('chatUrl'));
     const cache = path.join(dataDir, 'cache');
     fs.mkdirSync(cache);
     fs.writeFileSync(path.join(cache, 'codeagent-version-stamp'), '9.1.2\n123\n');
@@ -1003,7 +1003,11 @@ test('profile diagnostics: each value names its source category and file; a fail
     };
     fs.writeFileSync(path.join(dataDir, '.cac', '.cac.json'), JSON.stringify({ enterpriseNetworkZoneCache: 'yellow' }));
     const base = { dataDir, env: { USERPROFILE: dataDir }, versionReader: async () => '9.1.2', packageFinder: async () => path.join(dataDir, 'dsh-hw-llm-adapter-1.0.27.tgz') };
-    // Without the chat line: PROFILE_INCOMPLETE, with what was found, where, and every place looked at.
+    // Explicit legacy mode still reports incomplete package metadata with diagnostics.
+    fs.mkdirSync(path.join(dataDir, 'company-model-proxy'), { recursive: true });
+    fs.writeFileSync(path.join(dataDir, 'company-model-proxy', 'upstream.json'), JSON.stringify({
+      adapterPackage: path.join(dataDir, 'dsh-hw-llm-adapter-1.0.27.tgz'),
+    }));
     const noChat = { ...members, 'package/lib/index.js': "headers={'app-id':'com.example.client'}" };
     const error = await resolveUpstreamProfile({ ...base, archiveReader: async (_a, m) => noChat[m] || '' }).catch(e => e);
     assert.equal(error.code, 'PROFILE_INCOMPLETE');
@@ -1012,7 +1016,7 @@ test('profile diagnostics: each value names its source category and file; a fail
     const d = error.diagnostics;
     assert.equal(d.personalCredentialFile, true, 'default personal login path is <USERPROFILE>\\.cac\\.credentials.json');
     assert.equal(d.sources.personalCredential, 'default:.cac/.credentials.json');
-    assert.equal(d.sources.adapterPackage, 'welink:dsh-hw-llm-adapter-1.0.27.tgz');
+    assert.equal(d.sources.adapterPackage, 'config:upstream.json');
     assert.equal(d.sources.identityUrl, 'adapter:codeagent.js');
     assert.equal(d.sources.codeagentVersion, 'registry:Uninstall');
     assert.equal(d.codeagentVersion, '9.1.2', 'the version read from the registry is reported, not only its source');
@@ -1030,6 +1034,7 @@ test('profile diagnostics: each value names its source category and file; a fail
     assert.equal(profile.sources.identityFields, 'adapter:codeagent.js');
     assert.equal(profile.identityAccountField, 'staffAccount');
     assert.equal(profile.identityDeptField, 'orgPath');
+    assert.equal(profile.signerMode, 'adapter');
     assert.equal(profile.sources.signerCacheDir, 'hub');
     assert.equal(profile.diagnostics.personalCredentialFile, true);
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
@@ -1099,10 +1104,13 @@ test('zone: both fields missing or not valid -> ZONE_UNKNOWN asking the user to 
     assert.ok(error.identityProbe && error.identityProbe.identityUrl.startsWith('https://'), 'the proxy may still ask the identity service');
     assert.ok(!JSON.stringify(error.diagnostics).includes('example.test'));
   }
-  // No zone-dependent chat URL in the adapter at all: the old "missing chat URL" report, not a zone question.
+  // Native defaults fill an incomplete auto-discovered package, but still require a real zone.
   const noChat = await zoneProfile({ chatTemplate: false });
-  assert.equal(noChat.code, 'PROFILE_INCOMPLETE');
-  assert.deepEqual(noChat.missing, ['chatUrl']);
+  assert.equal(noChat.code, 'ZONE_UNKNOWN');
+  assert.deepEqual(noChat.missing, ['zone']);
+  const legacy = await zoneProfile({ chatTemplate: false, upstream: { adapterPackage: path.join(os.tmpdir(), 'explicit-legacy.tgz') } });
+  assert.equal(legacy.code, 'PROFILE_INCOMPLETE');
+  assert.deepEqual(legacy.missing, ['chatUrl']);
 });
 
 test('zone choice in Settings is written to upstream.json and can be reset to automatic', () => {
@@ -1263,6 +1271,16 @@ test('first-time signer init failures are explained with diagnostics: no stamp, 
   assert.deepEqual([noStamp.firstInit.probe.cliExitCode, noStamp.firstInit.probe.logExists, noStamp.firstInit.probe.logLines, noStamp.firstInit.probe.markerMatched, noStamp.firstInit.probe.stampParsed], [0, false, 0, false, false]);
   const marker = await loadSigner(f.profile, { workDir: f.workDir, stampProbe: fakeProbe([], { ok: false, report: { logExists: true, logLines: 3, error: 'MARKER_MISSING' } }) }).catch(e => e);
   assert.match(marker.message, /签名日志里没有签名记录/);
+  // A successful stamp followed by runtime retention failure must not masquerade
+  // as a missing stamp (observed with the installed CLI in Q-1108-18 r4/r5).
+  const runtime = await loadSigner(f.profile, { workDir: f.workDir, stampProbe: fakeProbe([], { ok: false,
+    report: { cliStarted: true, stoppedBy: 'stamp', logExists: true, markerMatched: true,
+      stampParsed: true, nativeRuntimeRetained: false, error: 'SIGNER_NATIVE_FILES_MISSING' } }) }).catch(e => e);
+  assert.equal(runtime.code, 'SIGNER_NATIVE_FILES_MISSING');
+  assert.match(runtime.message, /签名信息已取得，但未能保留 CodeAgent 的签名运行库/);
+  assert.doesNotMatch(runtime.message, /没有留下签名信息/);
+  assert.equal(runtime.firstInit.probe.stampParsed, true);
+  assert.equal(runtime.firstInit.probe.nativeRuntimeRetained, false);
   const timeout = await loadSigner(f.profile, { workDir: f.workDir, stampProbe: fakeProbe([], { ok: false, report: { stoppedBy: 'timeout', error: 'CLI_TIMEOUT' } }) }).catch(e => e);
   assert.equal(timeout.code, 'SIGNER_INIT_TIMEOUT');
   assert.match(timeout.message, /CodeAgent 命令行在 45 秒内没有结束/);
@@ -1410,6 +1428,163 @@ test('native stamp: failures report exit code, log existence, lines, marker, sta
   const notStarted = await probeNativeStamp({ cliExe: 'C:\\X\\c.exe', expectedVersion: '9.1.2', workRoot: root, env: {}, spawnImpl: () => { throw new Error('ENOENT'); }, pollMs: 20 });
   assert.equal(notStarted.report.error, 'CLI_START_FAILED'); assert.equal(notStarted.report.cliStarted, false);
   assert.equal(fs.readdirSync(root).length, 4, 'failed runs keep their scratch dirs for local troubleshooting');
+});
+
+test('native stamp: retains only native runtime files before clearing probe output', async t => {
+  const { probeNativeStamp } = await load('native-stamp.mjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cmp-retain-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const calls = [], launch = fakeLauncher({ hang: true }, calls), saved = path.join(root, 'runtime');
+  let extracted, retainedAtStop = false;
+  const r = await probeNativeStamp({ cliExe: 'C:\\X\\bin\\codeagentcli.exe', expectedVersion: '9.1.2', workRoot: root,
+    nativeRuntimeDir: saved, env: {}, pollMs: 20, timeoutMs: 5000, spawnImpl: (command, args, options) => {
+      if (/powershell/i.test(command)) {
+        extracted = path.join(options.env.TEMP, 'signer-x64-win32-retain'); fs.mkdirSync(extracted, { recursive: true });
+        for (const name of ['libsnap_engine.dll', 'koffi.node', 'private-output.txt']) fs.writeFileSync(path.join(extracted, name), 'test-placeholder');
+      }
+      if (/taskkill/i.test(command)) {
+        retainedAtStop = ['libsnap_engine.dll', 'koffi.node'].every(name => fs.existsSync(path.join(saved, name)));
+        fs.rmSync(extracted, { recursive: true }); // Simulate cleanup when the CLI stops.
+      }
+      return launch(command, args, options);
+    } });
+  assert.equal(r.ok, true); assert.equal(r.report.nativeRuntimeRetained, true);
+  assert.equal(retainedAtStop, true, 'preserve the pair before stopping the CLI');
+  assert.deepEqual(fs.readdirSync(root), ['runtime']);
+  assert.deepEqual(fs.readdirSync(saved).sort(), ['koffi.node', 'libsnap_engine.dll']);
+});
+
+test('native stamp: retains the installed CLI runtime when no pair is extracted into isolated TEMP', async t => {
+  const { probeNativeStamp } = await load('native-stamp.mjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cmp-retain-installed-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const bin = path.join(root, 'cli', 'bin'), saved = path.join(root, 'runtime');
+  fs.mkdirSync(bin, { recursive: true });
+  for (const name of ['libsnap_engine.dll', 'koffi.node']) fs.writeFileSync(path.join(bin, name), 'installed-pair');
+  const result = await probeNativeStamp({ cliExe: path.join(bin, 'codeagentcli.exe'), expectedVersion: '9.1.2',
+    workRoot: root, nativeRuntimeDir: saved, env: {}, pollMs: 20, timeoutMs: 5000,
+    spawnImpl: fakeLauncher({ hang: true }, []) });
+  assert.equal(result.ok, true);
+  assert.equal(result.report.nativeRuntimeRetained, true);
+  assert.deepEqual(fs.readdirSync(saved).sort(), ['koffi.node', 'libsnap_engine.dll']);
+  assert.equal(fs.readFileSync(path.join(saved, 'libsnap_engine.dll'), 'utf8'), 'installed-pair');
+});
+
+test('native stamp: queries its live CLI for an installation-cache pair before stopping it', async t => {
+  const { probeNativeStamp } = await load('native-stamp.mjs');
+  const { EventEmitter } = require('node:events'), { PassThrough } = require('node:stream');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cmp-loaded-runtime-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const cli = path.join(root, 'cli'), bin = path.join(cli, 'bin'), saved = path.join(root, 'runtime');
+  fs.mkdirSync(bin, { recursive: true });
+  const dir = path.join(cli, 'temp', 'codeagent', 'signer-x64-win32-current');
+  fs.mkdirSync(dir, { recursive: true });
+  const files = { dll: path.join(dir, 'libsnap_engine.dll'), ffi: path.join(dir, 'koffi.node') };
+  for (const file of Object.values(files)) fs.writeFileSync(file, 'live-install-cache');
+  const calls = [], launch = fakeLauncher({ hang: true }, calls);
+  let queried = 0;
+  const result = await probeNativeStamp({ cliExe: path.join(bin, 'codeagentcli.exe'), expectedVersion: '9.1.2',
+    workRoot: root, nativeRuntimeDir: saved, env: {}, pollMs: 20, timeoutMs: 5000,
+    spawnImpl: (command, args, options) => {
+      if (options.env?.HUB_STAMP_QUERY_PID) {
+        queried++;
+        assert.equal(calls.killed, undefined);
+        assert.equal(options.windowsHide, true); assert.equal(options.shell, false);
+        assert.equal(options.env.HUB_STAMP_QUERY_PID, '777');
+        assert.equal(options.env.HUB_STAMP_QUERY_EXE, path.join(bin, 'codeagentcli.exe'));
+        const child = new EventEmitter(); child.stdout = new PassThrough(); child.kill = () => {};
+        setImmediate(() => { child.stdout.write(JSON.stringify(files)); child.emit('close', 0); });
+        return child;
+      }
+      return launch(command, args, options);
+    } });
+  assert.equal(result.ok, true); assert.equal(queried, 1); assert.equal(calls.killed, true);
+  assert.equal(fs.readFileSync(path.join(saved, 'libsnap_engine.dll'), 'utf8'), 'live-install-cache');
+});
+
+test('native runtime query preserves Unicode paths through real PowerShell output', { skip: process.platform !== 'win32' }, async () => {
+  const { queryLoadedRuntime } = await load('native-stamp.mjs');
+  const cliExe = 'C:\\测试安装\\bin\\codeagentcli.exe';
+  const prefix = "function Get-Process { param($Id,$ErrorAction) [PSCustomObject]@{Path=$env:HUB_STAMP_QUERY_EXE;Modules=@(" +
+    "[PSCustomObject]@{ModuleName='libsnap_engine.dll';FileName=($env:HUB_STAMP_QUERY_EXE+'-libsnap_engine.dll')}," +
+    "[PSCustomObject]@{ModuleName='koffi.node';FileName=($env:HUB_STAMP_QUERY_EXE+'-koffi.node')})} }";
+  const value = await queryLoadedRuntime({ pid: 777, cliExe,
+    spawnImpl: (command, args, options) => spawn(command, [...args.slice(0, -1), prefix + ';' + args.at(-1)], options) });
+  assert.deepEqual(value, { dll: cliExe + '-libsnap_engine.dll', ffi: cliExe + '-koffi.node' });
+});
+
+test('native runtime query rejects failed, malformed and oversized metadata and bounds a hung query', async () => {
+  const { queryLoadedRuntime } = await load('native-stamp.mjs');
+  const { EventEmitter } = require('node:events'), { PassThrough } = require('node:stream');
+  for (const scenario of ['nonzero', 'malformed', 'oversized', 'hang']) {
+    let killed = false;
+    const value = await queryLoadedRuntime({ pid: 777, cliExe: 'C:\\CLI\\bin\\codeagentcli.exe', timeoutMs: 30,
+      spawnImpl: () => {
+        const child = new EventEmitter(); child.stdout = new PassThrough(); child.kill = () => { killed = true; };
+        setImmediate(() => {
+          if (scenario === 'hang') return;
+          child.stdout.write(scenario === 'oversized' ? 'x'.repeat(9000) : 'not-json');
+          child.emit('close', scenario === 'nonzero' ? 1 : 0);
+        });
+        return child;
+      } });
+    assert.equal(value, null);
+    if (['oversized', 'hang'].includes(scenario)) assert.equal(killed, true);
+  }
+});
+
+test('native profile works without any adapter package when upstream facts are configured', async t => {
+  const { resolveUpstreamProfile } = await load('upstream-profile.mjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cmp-no-adapter-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'company-model-proxy'));
+  fs.writeFileSync(path.join(root, 'company-model-proxy/upstream.json'), JSON.stringify({
+    codeagentDir: path.join(root, 'cli'), codeagentVersion: '9.1.2', zone: 'yellow',
+    identityUrl: 'https://id.example.test/auth/getUserDetail', identityAccountField: 'staffAccount',
+    chatUrl: 'https://chat.example.test/api/v2/chat/completions', appId: 'com.example.client',
+  }));
+  const profile = await resolveUpstreamProfile({ dataDir: root, env: { USERPROFILE: root, TEMP: root },
+    packageFinder: async () => '', archiveReader: async () => assert.fail('no archive may be read') });
+  assert.equal(profile.signerMode, 'native'); assert.equal(profile.adapterPackage, '');
+  assert.equal(profile.signerCacheEnv, 'HWTRAN_AUTH_DIR');
+  assert.equal(profile.signerInit.needed, true);
+  const externalCache = path.join(root, 'old-adapter-cache'); fs.mkdirSync(externalCache);
+  const stampFile = path.join(externalCache, 'codeagent-version-stamp'); fs.writeFileSync(stampFile, '9.1.2\n1234567\n');
+  const staleRuntime = path.join(root, 'signer-x64-win32-unverified'); fs.mkdirSync(staleRuntime);
+  for (const name of ['libsnap_engine.dll', 'koffi.node']) fs.writeFileSync(path.join(staleRuntime, name), 'unverified-old-version');
+  const missingRuntime = await resolveUpstreamProfile({ dataDir: root,
+    env: { USERPROFILE: root, TEMP: root, HWTRAN_AUTH_DIR: externalCache }, packageFinder: async () => '' });
+  assert.equal(missingRuntime.signerInit.reason, 'native-files');
+  assert.equal(missingRuntime.signerInit.needed, true, 'an arbitrary ambient TEMP runtime never suppresses the version-bound native probe');
+  assert.equal(missingRuntime.signerCacheDir, path.join(root, 'company-model-proxy/signer-cache'));
+  assert.equal(fs.readFileSync(stampFile, 'utf8'), '9.1.2\n1234567\n', 'existing adapter cache is read-only even when native files need probing');
+});
+
+test('fresh native setup resolves all upstream facts without an archive and never guesses the zone', async t => {
+  const { resolveUpstreamProfile } = await load('upstream-profile.mjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cmp-native-defaults-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const base = { dataDir: root, env: { USERPROFILE: root, TEMP: root }, packageFinder: async () => '',
+    archiveReader: async () => assert.fail('no archive exists'), versionReader: async () => '9.1.2', zoneDetector: async () => ({ zone: '', tried: [] }) };
+  const unknown = await resolveUpstreamProfile(base).catch(e => e);
+  assert.equal(unknown.code, 'ZONE_UNKNOWN'); assert.deepEqual(unknown.missing, ['zone']);
+  assert.ok(unknown.identityProbe.identityUrl.startsWith('https://'));
+  const hosts = new Set();
+  for (const zone of ['blue', 'green', 'yellow']) {
+    const p = await resolveUpstreamProfile({ ...base, zoneOverride: { zone } });
+    assert.equal(p.signerMode, 'native'); assert.equal(p.adapterPackage, '');
+    assert.equal(p.zone, zone); assert.equal(p.sources.chatUrl, 'hub:native-protocol');
+    const url = new URL(p.chatUrl); assert.equal(url.protocol, 'https:'); assert.equal(url.pathname, '/api/v2/chat/completions');
+    hosts.add(url.hostname); assert.ok(p.identityAccountField); assert.ok(p.appId);
+  }
+  assert.equal(hosts.size, 3);
+  const stale = path.join(root, 'old-adapter.tgz'); fs.writeFileSync(stale, 'unreadable-old-package');
+  const withOldPackage = await resolveUpstreamProfile({ ...base, packageFinder: async () => stale,
+    archiveReader: async () => null, zoneOverride: { zone: 'yellow' } });
+  assert.equal(withOldPackage.signerMode, 'native');
+  assert.equal(withOldPackage.sources.chatUrl, 'hub:native-protocol');
+  assert.equal(withOldPackage.sources.identityFields, 'hub:native-protocol');
+  assert.ok(withOldPackage.telemetryUrl);
 });
 
 test('native stamp: cache file written atomically as "<version>\\n<stamp>\\n"; bad values refused', async t => {

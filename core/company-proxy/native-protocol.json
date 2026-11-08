@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "identityUrl": "https://codeagentcli.rnd.huawei.com/codeAgentPro/auth/internal/getUserDetail",
+  "identityAccountField": "w3account",
+  "identityDeptField": "departmentPath",
+  "appId": "com.huawei.devmind.codebot.apibot",
+  "telemetryUrl": "https://mammoth.opentelemetry.endpoint.tools.huawei.com/v1",
+  "chatUrls": {
+    "blue": "https://snapengine.cida.cce.prod-szv-b.dragon.tools.huawei.com/api/v2/chat/completions",
+    "green": "https://snapengine.cida.cce.prod-szv-g.dragon.tools.huawei.com/api/v2/chat/completions",
+    "yellow": "https://snapengine.cida.cce.prod-szv-y.dragon.tools.huawei.com/api/v2/chat/completions"
+  }
+}

@@ -48,4 +48,4 @@ async function downloadDoctor(source = 'mirror', deps = {}) {
   await (deps.pptOpenExternal || (target => require('electron').shell.openExternal(target)))(url);
   return { ok: true, source, url };
 }
-module.exports = { downloadDoctor };
+module.exports = { downloadDoctor, archiveUrl };

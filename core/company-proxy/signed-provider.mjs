@@ -2,7 +2,7 @@ import { readPersonalAccessToken } from './personal-token.mjs';
 import { createPersonalL1Provider } from './l1-provider.mjs';
 
 // Upstream addresses, the identity answer's field names, the client id and the expected CodeAgent version are
-// not compiled in: they come from the local upstream profile (read from the adapter, see upstream-profile.mjs).
+// resolved by upstream-profile.mjs from user configuration, a legacy adapter or reviewed product defaults.
 const CHAT_PATH = '/api/v2/chat/completions';
 const FIELD = /^[A-Za-z_$][\w$]{0,63}$/;
 const OWN_ERRORS = new WeakSet();

@@ -82,7 +82,9 @@ class CompanyForum {
     if (s.domain) return { domain: s.domain, from: 'settings' };
     const email = (() => { try { return this.deps.accountEmail?.() || ''; } catch { return ''; } })();
     const d = S.domainFromEmail(email);
-    return d ? { domain: d, from: 'email' } : { domain: '', from: '' };
+    if (d) return { domain: d, from: 'email' };
+    // 考勤等功能自动找到并记下的公司域名（core/company-domain.js）。
+    return require('../company-domain').knownDomain(this.deps.dataDir);
   }
   bases() { return S.siteBases(this.domain().domain, this.deps.env || process.env); }
   // 只放行这两个站点的网址（点帖子用系统浏览器打开）。
@@ -96,6 +98,7 @@ class CompanyForum {
   // 可选功能开关（core/optional-features.js）：关着时 main.js 不调 start()；用到一半关掉走 close()，再开再 start()。
   start() {
     if (this.timers.length) return;
+    if (!this.domain().domain) void require('../company-domain').resolveDomain(this.deps.dataDir, { lookupEmail: this.deps.lookupEmail || null, gitEmail: this.deps.gitEmail || null }).then(r => { if (r.domain) this.changed(); }).catch(() => {});
     fs.mkdirSync(this.workspace, { recursive: true });
     fs.writeFileSync(path.join(this.workspace, 'CLAUDE.md'), '# 公司论坛热帖整理\n\n' + INSTRUCTIONS + '\n', 'utf8');
     // 重启前没写完的摘要：标出来，下次同步或点「重新整理」再来。

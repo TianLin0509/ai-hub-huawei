@@ -19,6 +19,7 @@ import { spawn as nodeSpawn } from 'node:child_process';
 import { mkdir, writeFile, rename, rm, lstat, open } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { retainNativeRuntime } from './native-signer.mjs';
 
 export const STAMP_LOG = 'codeagent_signer.log';
 export const STAMP_FILE = 'codeagent-version-stamp';
@@ -27,6 +28,50 @@ const ARCH = 'win32-x64-';
 const MAX_LOG_BYTES = 1024 * 1024;
 const POWERSHELL = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
 const TASKKILL = 'C:\\Windows\\System32\\taskkill.exe';
+
+const RUNTIME_QUERY = [
+  '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)',
+  "$ErrorActionPreference='Stop';try{",
+  '$p=Get-Process -Id ([int]$env:HUB_STAMP_QUERY_PID) -ErrorAction Stop',
+  "if($p.Path -ine $env:HUB_STAMP_QUERY_EXE){throw 'CLI_MISMATCH'}",
+  '$modules=@($p.Modules)',
+  "$dll=@($modules|Where-Object {$_.ModuleName -ieq 'libsnap_engine.dll'})",
+  "$ffi=@($modules|Where-Object {$_.ModuleName -ieq 'koffi.node'})",
+  "if($dll.Count -ne 1 -or $ffi.Count -ne 1){throw 'PAIR_NOT_LOADED'}",
+  '@{dll=$dll[0].FileName;ffi=$ffi[0].FileName}|ConvertTo-Json -Compress',
+  '}catch{exit 1}',
+].join(';');
+
+// This exact PID was returned by our launcher. Inspect only that live CLI and
+// return its pair in-process; never publish module paths in status or logs.
+export function queryLoadedRuntime({ pid, cliExe, spawnImpl = nodeSpawn, timeoutMs = 8000 } = {}) {
+  if (!Number.isSafeInteger(pid) || pid <= 0 || typeof cliExe !== 'string') return Promise.resolve(null);
+  return new Promise(resolve => {
+    let child, timer, output = '', settled = false;
+    const done = value => { if (!settled) { settled = true; clearTimeout(timer); resolve(value); } };
+    try {
+      child = spawnImpl(POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', RUNTIME_QUERY], {
+        windowsHide: true, shell: false, detached: false, stdio: ['ignore', 'pipe', 'ignore'],
+        env: { ...process.env, HUB_STAMP_QUERY_PID: String(pid), HUB_STAMP_QUERY_EXE: cliExe },
+      });
+    } catch { done(null); return; }
+    timer = setTimeout(() => { try { child.kill(); } catch {} done(null); }, timeoutMs);
+    child.stdout?.setEncoding('utf8');
+    child.stdout?.on('data', chunk => {
+      if (settled) return;
+      output += chunk.toString('utf8');
+      if (output.length > 8192) { try { child.kill(); } catch {} done(null); }
+    });
+    child.once('error', () => done(null));
+    child.once('close', code => {
+      if (code !== 0 || settled) { done(null); return; }
+      try {
+        const value = JSON.parse(output.trim());
+        done(value && typeof value.dll === 'string' && typeof value.ffi === 'string' ? value : null);
+      } catch { done(null); }
+    });
+  });
+}
 
 // Variables the CLI must not inherit: Hub/proxy internals, and a surrounding CodeAgent / Claude Code session
 // (a CLI started inside another one attaches to it instead of starting its own signer).
@@ -175,7 +220,7 @@ const killTree = (spawnImpl, pid) => new Promise(resolve => {
  * timeoutMs, model (optional), env (base environment), spawnImpl / powershell (tests).
  */
 export async function probeNativeStamp({ cliExe, configDir, expectedVersion, workRoot, timeoutMs = 45_000, model = '',
-  env = process.env, spawnImpl = nodeSpawn, powershell = POWERSHELL, pollMs = 250, privateDesktop = true } = {}) {
+  env = process.env, spawnImpl = nodeSpawn, powershell = POWERSHELL, pollMs = 250, privateDesktop = true, nativeRuntimeDir } = {}) {
   const started = Date.now();
   const report = { ran: true, cliStarted: false, cliExitCode: null, stoppedBy: null, logExists: false, logBytes: 0, logLines: 0,
     markerMatched: false, stampParsed: false, logVersionStatus: 'unknown', envDropped: 0, consoleMode: 'unknown',
@@ -227,11 +272,6 @@ export async function probeNativeStamp({ cliExe, configDir, expectedVersion, wor
     if (Date.now() >= deadline) { report.stoppedBy = 'timeout'; break; }
     await Promise.race([closed, new Promise(r => setTimeout(r, pollMs))]);
   }
-  if (!launcherClosed) {
-    if (cliPid) await killTree(spawnImpl, cliPid);
-    await Promise.race([closed, new Promise(r => setTimeout(r, 3000))]);
-    if (!launcherClosed) { try { launcher?.kill(); } catch { /* gone */ } }
-  }
   const stamp = parsed?.stamp || null;
   report.stampParsed = !!stamp;
   if (stamp) report.logVersionStatus = parsed.logVersion ? (parsed.logVersion === expectedVersion ? 'matched' : 'mismatch') : 'unknown';
@@ -240,8 +280,23 @@ export async function probeNativeStamp({ cliExe, configDir, expectedVersion, wor
       : !report.logExists ? 'LOG_MISSING' : parsed?.incompleteTail ? 'LOG_INCOMPLETE' : report.markerMatched ? 'STAMP_NOT_PARSED' : 'MARKER_MISSING';
   }
   if (stamp && report.logVersionStatus === 'mismatch') report.error = 'STAMP_VERSION_MISMATCH';
+  let ok = !!stamp && report.logVersionStatus !== 'mismatch';
+  if (ok && nativeRuntimeDir) {
+    // Keep the pair while the CLI still owns it: shutdown may remove its extracted
+    // files. Some installations load the pair directly from their own bin folder.
+    try {
+      await retainNativeRuntime(temp, nativeRuntimeDir, { codeagentDir: dirname(dirname(cliExe)),
+        loadRuntime: () => queryLoadedRuntime({ pid: cliPid, cliExe, spawnImpl }) });
+      report.nativeRuntimeRetained = true;
+    }
+    catch { ok = false; report.nativeRuntimeRetained = false; report.error = 'SIGNER_NATIVE_FILES_MISSING'; }
+  }
+  if (!launcherClosed) {
+    if (cliPid) await killTree(spawnImpl, cliPid);
+    await Promise.race([closed, new Promise(r => setTimeout(r, 3000))]);
+    if (!launcherClosed) { try { launcher?.kill(); } catch { /* gone */ } }
+  }
   report.elapsedMs = Date.now() - started;
-  const ok = !!stamp && report.logVersionStatus !== 'mismatch';
   // Our own scratch directory: removed after success (it holds the CLI answer and the log); kept after a failure
   // for local troubleshooting (never sent anywhere).
   if (ok) await rm(dir, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});

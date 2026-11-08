@@ -10,6 +10,7 @@ const path = require('path');
 const { writeFileAtomic } = require('../atomic-write');
 const calc = require('../attendance-calc');
 const { domainFromEmail, normalizeDomain } = require('../company-forum/sites');
+const companyDomain = require('../company-domain');
 
 const RETRY_MS = 60 * 60 * 1000;
 const FIRST_DELAY_MS = 45 * 1000;
@@ -49,11 +50,23 @@ class CompanyAttendance {
 
   settings() {
     const s = this.read('settings', {});
-    return { domain: normalizeDomain(s.domain || '') || domainFromEmail(this.deps.accountEmail?.() || ''), autoDaily: s.autoDaily !== false };
+    const own = normalizeDomain(s.domain || '');
+    const fromEmail = companyDomain.companyDomainOf((() => { try { return this.deps.accountEmail?.() || ''; } catch { return ''; } })());
+    const known = own || fromEmail ? null : companyDomain.knownDomain(this.deps.dataDir);
+    return { domain: own || fromEmail || known.domain, domainFrom: own ? 'settings' : fromEmail ? 'assistant-email' : known.from, autoDaily: s.autoDaily !== false };
+  }
+  // 设置里没有时自动找（WeLink 账号、git 邮箱），找到就记下，用户不用手填。
+  async ensureDomain() {
+    const cur = this.settings();
+    if (cur.domain) return cur.domain;
+    const r = await companyDomain.resolveDomain(this.deps.dataDir, { lookupEmail: this.deps.lookupEmail || null, gitEmail: this.deps.gitEmail || null });
+    if (r.domain) this.changed();
+    return r.domain;
   }
   setSettings(patch = {}) {
     const s = this.read('settings', {});
-    if (patch.domain !== undefined) s.domain = normalizeDomain(patch.domain);
+    // 填公司邮箱或域名都行。
+    if (patch.domain !== undefined) s.domain = String(patch.domain).includes('@') ? domainFromEmail(patch.domain) : normalizeDomain(patch.domain);
     if (patch.autoDaily !== undefined) s.autoDaily = !!patch.autoDaily;
     this.write('settings', s);
     this.changed();
@@ -62,6 +75,7 @@ class CompanyAttendance {
 
   start() {
     this.stop();
+    void this.ensureDomain().catch(() => {});
     if (this.deps.noTimer) return;
     this.timers.push(setTimeout(() => { void this.tick().catch(() => {}); }, FIRST_DELAY_MS));
     this.timers.push(setInterval(() => { void this.tick().catch(() => {}); }, TICK_MS));
@@ -75,6 +89,8 @@ class CompanyAttendance {
     const now = this.now();
     if (!this.settings().autoDaily) return false;
     if (st.lastSuccessDay === this.todayKey()) return false;
+    // 上次因为没找到域名失败、现在找到了：不用等 1 小时。
+    if (st.lastResult?.needsDomain && this.settings().domain) return now.getHours() >= 6;
     if (now.getHours() < 6) return false;
     return !st.lastAttemptAt || now.getTime() - Date.parse(st.lastAttemptAt) >= RETRY_MS;
   }
@@ -106,9 +122,9 @@ class CompanyAttendance {
       st.lastAttemptAt = at;
       this.write('state', st);
       this.changed();
-      const url = attendanceUrl(this.settings().domain);
+      const url = attendanceUrl(await this.ensureDomain().catch(() => ''));
       let entry;
-      if (!url) entry = { at, reason, ok: false, error: '还不知道公司域名：请在考勤设置里填写，或先在助理页登录 WeLink' };
+      if (!url) entry = { at, reason, ok: false, needsDomain: true, error: '没能自动找到公司域名（助理设置、WeLink 账号、git 邮箱里都没有公司邮箱）：在下面填一下你的公司邮箱就行' };
       else {
         let r;
         try { r = await this.capture(url); } catch (e) { r = { ok: false, error: e.message }; }
@@ -130,9 +146,9 @@ class CompanyAttendance {
     return this.syncing;
   }
 
-  login() {
-    const url = attendanceUrl(this.settings().domain);
-    if (!url) return Promise.resolve({ ok: false, error: '还不知道公司域名' });
+  async login() {
+    const url = attendanceUrl(await this.ensureDomain().catch(() => ''));
+    if (!url) return { ok: false, error: '没能自动找到公司域名：在考勤设置里填一下你的公司邮箱就行' };
     if (!this.deps.browser?.login) return Promise.resolve({ ok: false, error: '登录窗口不可用' });
     return this.deps.browser.login({ url, base: url, title: '登录（AI Hub 考勤）' });
   }

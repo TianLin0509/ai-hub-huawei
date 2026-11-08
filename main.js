@@ -2858,6 +2858,8 @@ try {
       dataDir: getHubDataDir(),
       noTimer: process.env.CLAUDE_HUB_FORUM_TIMER === '0',
       browser: companyForumBrowser,
+      lookupEmail: () => companyAssistantService?.accountEmail?.() || '',
+      gitEmail: () => require('./core/company-domain').gitGlobalEmail(),
       // 站点域名默认取本人公司邮箱的域名：助理页已从 WeLink 账号读到并存在它的设置里。
       accountEmail: () => { try { return JSON.parse(require('fs').readFileSync(require('path').join(getHubDataDir(), 'company-assistant', 'settings.json'), 'utf8')).email || ''; } catch { return ''; } },
       createSession: (kind, opts) => sessionOperations.createSession({ kind, opts }),
@@ -2885,6 +2887,9 @@ try {
       noTimer: process.env.CLAUDE_HUB_ATTENDANCE_TIMER === '0',
       browser: companyAttendanceBrowser,
       edgeCapture: process.env.CLAUDE_HUB_ATTENDANCE_EDGE === '0' ? null : opts => require('./main/company-attendance-edge').captureWithEdge(opts),
+      // 公司域名自动找：助理设置邮箱 → 论坛设置 → 现场问 WeLink 账号 → git 全局邮箱（core/company-domain.js）。
+      lookupEmail: () => companyAssistantService?.accountEmail?.() || '',
+      gitEmail: () => require('./core/company-domain').gitGlobalEmail(),
       accountEmail: () => { try { return JSON.parse(require('fs').readFileSync(require('path').join(getHubDataDir(), 'company-assistant', 'settings.json'), 'utf8')).email || ''; } catch { return ''; } },
       onChanged: () => sendToRenderer('company-attendance:changed', {}),
     });
@@ -3375,6 +3380,7 @@ ipcMain.handle('community:setup', () => require('./core/community-setup').inspec
 // 环境体检（5.5.24，main/ipc/env-check-handlers.js）：设置菜单「环境体检」一屏列出各外部工具与本机条件；各服务按需取，没有的项自动不出。
 require('./main/ipc/env-check-handlers').registerEnvCheckIpc(ipcMain, {
   dataDir: getHubDataDir,
+  send: (channel, state) => sendToRenderer(channel, state),
   version: () => require('./core/distribution').editionVersion || app.getVersion(),
   isCompany: () => require('./core/company-api-config').isCompany(),
   assistant: () => companyAssistantService,

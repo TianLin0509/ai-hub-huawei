@@ -5,6 +5,16 @@
 function registerEnvCheckIpc(ipcMain, deps) {
   const envCheck = require('../../core/env-check');
   let last = null, running = null;
+  const doctorInstaller = require('../../core/company-assistant/ppt-doctor-install').createDoctorInstaller({
+    dataDir: deps.dataDir(),
+    onState: state => deps.send?.('components:doctor-state', state),
+    configure: async exe => {
+      const assistant = deps.assistant();
+      if (!assistant?.ppt?.doctor) throw new Error('这个版本没有 PPT 联动');
+      assistant.setSettings({ ppt: { doctorExe: exe } });
+      assistant.ppt.doctor.cached = null;
+    },
+  });
 
   const context = () => ({
     env: process.env,
@@ -25,12 +35,19 @@ function registerEnvCheckIpc(ipcMain, deps) {
     if (running) return running;
     running = envCheck.runEnvCheck(context()).then(result => {
       last = result;
-      return { ok: true, ...result, report: envCheck.formatReport(result) };
+      return { ok: true, ...result, features: require('../../core/feature-readiness').featureReadiness(result.items), report: envCheck.formatReport(result) };
     }).catch(error => ({ ok: false, error: error.message })).finally(() => { running = null; });
     return running;
   }
 
   ipcMain.handle('env-check:run', () => run());
+  ipcMain.handle('components:state', () => ({ doctor: doctorInstaller.snapshot() }));
+  ipcMain.handle('components:doctor-install', async () => {
+    if (!deps.assistant()?.ppt?.doctor) return { ok: false, error: '这个版本没有 PPT 联动' };
+    const state = await doctorInstaller.install();
+    return { ok: state.phase === 'done', state, error: state.error };
+  });
+  ipcMain.handle('components:doctor-cancel', () => doctorInstaller.cancel());
 
   ipcMain.handle('env-check:fix', async (_event, request = {}) => {
     const id = String(request.id || ''), act = String(request.act || '');

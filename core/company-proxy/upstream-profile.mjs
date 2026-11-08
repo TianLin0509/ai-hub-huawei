@@ -1,14 +1,15 @@
 // Where the company upstream lives and how to sign for it.
 //
-// Nothing about the company network is compiled into Hub. Values are taken, in order:
+// Upstream values are taken from explicit configuration, an optional legacy adapter,
+// or the product's reviewed native-protocol.json defaults. CodeAgent itself is still required.
 //   1. <Hub data>/company-model-proxy/upstream.json (written by the user or an admin);
 //   2. the CodeAgent model-adapter package already on this computer (read-only: a few
 //      text files are listed out of the archive with tar; package code is not executed
-//      except the signer module, which is loaded exactly as CodeAgent's own adapter does);
+//      except when upstream.json explicitly selects the legacy adapter signer);
 //   3. CodeAgent's install registration (version) and the default personal login path.
-// Any value that cannot be found is reported by name so the UI can say what is missing.
-// No company address, path or field name is written in Hub: all of them are read from the adapter's own
-// source at run time. The adapter does not always spell its URLs out: the model endpoint host carries the zone
+// By default the Hub-owned native binding signs through the installed CodeAgent runtime;
+// the adapter archive is optional. Any missing upstream fact is reported by name.
+// Legacy adapters do not always spell their URLs out: the model endpoint host carries the zone
 // letter and is assembled from a template or constants. The scan resolves such expressions from same-file string
 // literals and the zone, and never guesses between two candidate hosts. The identity endpoint is the URL whose
 // path ends with the adapter's identity function name (IDENTITY_FUNCTION); the identity response fields are the
@@ -47,6 +48,7 @@ import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { initializeCacheOnlySigner } from './signer-init.mjs';
 import { probeNativeStamp, writeStampCache, configDirOf } from './native-stamp.mjs';
+import { createNativeSigner, findNativeRuntime } from './native-signer.mjs';
 
 const exec = promisify(execFile);
 // The adapter's identity function name: only a clue to find the identity endpoint and its fields in the source.
@@ -399,6 +401,7 @@ export function signerInitFailureMessage(code, { version, timeoutMs, detail } = 
     SIGNER_INIT_CLI_FAILED: 'CodeAgent 命令行没能启动',
     SIGNER_INIT_SPAWN_BLOCKED: '签名模块想启动 Hub 不认识的程序，Hub 已拦下',
     SIGNER_INIT_CACHE_WRITE: '签名信息取到了，但写不进 Hub 数据目录',
+    SIGNER_NATIVE_FILES_MISSING: '签名信息已取得，但未能保留 CodeAgent 的签名运行库',
   }[code] || '签名模块初始化失败';
   const step = { LOG_MISSING: '签名日志没有生成', MARKER_MISSING: '签名日志里没有签名记录', LOG_INCOMPLETE: '签名记录没写完整',
     STAMP_NOT_PARSED: '签名记录格式认不出', STAMP_VERSION_MISMATCH: '签名记录的版本和安装的 CodeAgent 不一致' }[detail];
@@ -418,6 +421,7 @@ export async function resolveUpstreamProfile({ dataDir, env = process.env, versi
   const home = text(env.USERPROFILE) || homedir();
   const profile = {
     codeagentDir: text(user.codeagentDir) || DEFAULT_CODEAGENT_DIR,
+    signerMode: text(user.adapterPackage) ? 'adapter' : 'native',
     adapterPackage: text(user.adapterPackage),
     adapterPackageSha256: text(user.adapterPackageSha256).toLowerCase(),
     signerCacheDir: text(user.signerCacheDir),
@@ -428,6 +432,7 @@ export async function resolveUpstreamProfile({ dataDir, env = process.env, versi
     identityDeptField: FIELD.test(text(user.identityDeptField)) ? text(user.identityDeptField) : '',
     chatUrl: httpsUrl(text(user.chatUrl), CHAT_PATH),
     appId: text(user.appId),
+    telemetryUrl: httpsUrl(text(user.telemetryUrl), null),
     zone: zoneWord(user.zone),
     // Optional model for the one first-time CLI run (default: CodeAgent's own default model).
     stampProbeModel: /^[A-Za-z0-9._-]{1,80}$/.test(text(user.stampProbeModel)) ? text(user.stampProbeModel) : '',
@@ -487,17 +492,34 @@ export async function resolveUpstreamProfile({ dataDir, env = process.env, versi
     }
     if (!Object.keys(sources).length) for (const key of ['identityUrl', 'chatUrl', 'appId', 'signerCacheEnv']) if (!profile[key]) note(key, 'adapter:(archive unreadable)');
   }
+  if (profile.signerMode === 'native') {
+    const defaults = JSON.parse(await readFile(new URL('./native-protocol.json', import.meta.url), 'utf8'));
+    for (const key of ['identityUrl', 'appId', 'telemetryUrl']) {
+      if (!profile[key]) { profile[key] = defaults[key]; profile.sources[key] = 'hub:native-protocol'; note(key, 'hub:native-protocol'); }
+    }
+    if (!profile.identityAccountField) {
+      profile.identityAccountField = defaults.identityAccountField; profile.identityDeptField = defaults.identityDeptField;
+      profile.sources.identityFields = 'hub:native-protocol'; note('identityFields', 'hub:native-protocol');
+    }
+    if (!profile.chatUrl) {
+      if (profile.zone) { profile.chatUrl = defaults.chatUrls[profile.zone]; profile.sources.chatUrl = 'hub:native-protocol'; note('chatUrl', 'hub:native-protocol'); }
+      else { zoneNeeded = true; note('chatUrl', 'hub:native-protocol:zone-needed'); }
+    }
+  }
   if (!profile.codeagentVersion) {
     note('codeagentVersion', 'registry:Uninstall');
     profile.codeagentVersion = await versionReader(profile.codeagentDir);
     if (profile.codeagentVersion) profile.sources.codeagentVersion = 'registry:Uninstall';
+  }
+  if (profile.signerMode === 'native' && !profile.signerCacheEnv) {
+    profile.signerCacheEnv = 'HWTRAN_AUTH_DIR'; profile.sources.signerCacheEnv = 'hub:native-signer';
   }
   const diagnostics = () => ({ sources: { ...profile.sources }, tried: JSON.parse(JSON.stringify(tried)),
     personalCredentialFile: !!profile.personalCredential && isAbsolute(profile.personalCredential) && existsSync(profile.personalCredential),
     codeagentVersion: /^\d[0-9A-Za-z.+-]{0,40}$/.test(profile.codeagentVersion) ? profile.codeagentVersion : null,
     zone: profile.zone || null });
   const missing = [];
-  const labels = { adapterPackage: '模型适配包', identityUrl: '身份接口地址', identityFields: '身份字段名', chatUrl: '模型接口地址', appId: '客户端标识',
+  const labels = { identityUrl: '身份接口地址', identityFields: '身份字段名', chatUrl: '模型接口地址', appId: '客户端标识',
     codeagentVersion: 'CodeAgent 版本', signerCacheEnv: '签名缓存变量名' };
   for (const key of Object.keys(labels)) if (key === 'identityFields' ? !profile.identityAccountField : !profile[key]) missing.push(key);
   // The model host needs the zone; without it the chat URL cannot be built, and Settings asks for it.
@@ -520,6 +542,7 @@ export async function resolveUpstreamProfile({ dataDir, env = process.env, versi
     throw error;
   }
   for (const key of ['adapterPackage', 'personalCredential', 'codeagentDir']) {
+    if (key === 'adapterPackage' && !profile[key]) continue;
     if (!isAbsolute(profile[key])) throw new ProfileError('PROFILE_INVALID', `上游配置里的路径必须是绝对路径：${key}`);
   }
   const { found, tried: cacheTried } = await findSignerCache({ dataDir, env, signerCacheEnv: profile.signerCacheEnv,
@@ -537,6 +560,15 @@ export async function resolveUpstreamProfile({ dataDir, env = process.env, versi
     profile.signerInit = { needed: true, reason: cacheTried.some(t => t.state === 'version') ? 'version' : 'missing',
       text: signerInitReason(cacheTried, profile.codeagentVersion), tried: cacheTried.map(t => ({ source: t.source, state: t.state })) };
   }
+  if (profile.signerMode === 'native' && /^\d+(?:\.\d+){1,5}$/.test(profile.codeagentVersion)
+      && !await findNativeRuntime({ codeagentDir: profile.codeagentDir,
+        runtimeDir: join(profileDir, 'native-runtime', profile.codeagentVersion) })) {
+    // Existing adapter/CodeAgent caches are read-only. A native-runtime probe writes only Hub's cache.
+    profile.signerCacheDir = hubSignerCacheDir(dataDir);
+    profile.sources.signerCacheDir = 'hub:native-runtime-init';
+    profile.signerInit = { needed: true, reason: 'native-files', text: 'CodeAgent 签名运行库尚未释放',
+      tried: cacheTried.map(t => ({ source: t.source, state: t.state })) };
+  }
   profile.diagnostics = diagnostics();
   return profile;
 }
@@ -546,27 +578,36 @@ export async function resolveUpstreamProfile({ dataDir, env = process.env, versi
 export const SIGNER_INIT_TIMEOUT_MS = 60_000;
 
 /**
- * Loads the signer from the adapter package exactly once per process.
- * profile.signerInit.needed -> the adapter's own first-time initialization fills profile.signerCacheDir
- * (one hidden CLI run allowed); afterwards the cache must match the installed version.
+ * Loads the built-in signer, or an explicitly configured legacy adapter.
+ * First use runs one hidden CodeAgent probe; the stamp must match the installed version.
  * -> { signer, adapterSha256, firstInit: { ran, ms, reason, cliRuns } }
  */
 export async function loadSigner(profile, { workDir, timeoutMs = SIGNER_INIT_TIMEOUT_MS, testOnlySpawnDelegate, stampProbe = probeNativeStamp } = {}) {
-  const archive = await readFile(profile.adapterPackage);
-  const sha = createHash('sha256').update(archive).digest('hex');
-  if (profile.adapterPackageSha256 && sha !== profile.adapterPackageSha256) {
-    throw new ProfileError('ADAPTER_CHANGED', '模型适配包和登记的不一致（文件被替换过），请核对后更新上游配置');
+  const native = profile.signerMode === 'native' || !profile.adapterPackage;
+  if (native && !/^\d+(?:\.\d+){1,5}$/.test(profile.codeagentVersion || '')) throw new ProfileError('SIGNER_VERSION', '无法核实 CodeAgent 版本，请检查安装是否完整');
+  let sha = 'hub-native', signerFile = '';
+  const runtimeDir = join(workDir, 'native-runtime', String(profile.codeagentVersion));
+  if (!native) {
+    const archive = await readFile(profile.adapterPackage);
+    sha = createHash('sha256').update(archive).digest('hex');
+    if (profile.adapterPackageSha256 && sha !== profile.adapterPackageSha256) {
+      throw new ProfileError('ADAPTER_CHANGED', '模型适配包和登记的不一致（文件被替换过），请核对后更新上游配置');
+    }
+    const dir = join(workDir, 'adapter-' + sha.slice(0, 16));
+    signerFile = join(dir, 'package', 'lib', 'signer.js');
+    if (!existsSync(signerFile)) {
+      await mkdir(dir, { recursive: true });
+      const copy = join(dir, 'adapter.tgz');
+      await writeFile(copy, archive);
+      await exec(SYSTEM_TAR, ['-xf', copy, '-C', dir, 'package/package.json', 'package/lib/signer.js'],
+        { windowsHide: true, timeout: 15000, maxBuffer: 32768, encoding: 'utf8' });
+    }
   }
-  const dir = join(workDir, 'adapter-' + sha.slice(0, 16));
-  const signerFile = join(dir, 'package', 'lib', 'signer.js');
-  if (!existsSync(signerFile)) {
-    await mkdir(dir, { recursive: true });
-    const copy = join(dir, 'adapter.tgz');
-    await writeFile(copy, archive);
-    await exec(SYSTEM_TAR, ['-xf', copy, '-C', dir, 'package/package.json', 'package/lib/signer.js'],
-      { windowsHide: true, timeout: 15000, maxBuffer: 32768, encoding: 'utf8' });
-  }
-  const firstInit = !!profile.signerInit?.needed;
+  // Ambient TEMP may hold a DLL from a different CodeAgent release. The default
+  // path reuses only our versioned cache or the installation's own runtime pair.
+  const nativeMissing = native && !await findNativeRuntime({ codeagentDir: profile.codeagentDir, runtimeDir });
+  const firstInit = !!profile.signerInit?.needed || nativeMissing;
+  const signerCacheDir = nativeMissing ? join(workDir, 'signer-cache') : profile.signerCacheDir;
   const started = Date.now();
   const probeTimeoutMs = Math.max(1000, timeoutMs - 15_000);
   // Diagnostics of the first-time run (counts, booleans, categories; never the stamp, log or CLI output).
@@ -579,17 +620,19 @@ export async function loadSigner(profile, { workDir, timeoutMs = SIGNER_INIT_TIM
     let result;
     try {
       result = await stampProbe({ cliExe: join(profile.codeagentDir, 'bin', 'codeagentcli.exe'), configDir: configDirOf(profile.personalCredential),
-        expectedVersion: profile.codeagentVersion, workRoot, timeoutMs: probeTimeoutMs, model: profile.stampProbeModel || '' });
+        expectedVersion: profile.codeagentVersion, workRoot, timeoutMs: probeTimeoutMs, model: profile.stampProbeModel || '',
+        ...(native ? { nativeRuntimeDir: runtimeDir } : {}) });
     } catch (error) {
       result = { ok: false, report: { ran: true, cliStarted: false, error: 'PROBE_FAILED:' + String(error?.code || 'unknown').slice(0, 40) } };
     }
     probe = result.report;
     if (!result.ok) {
-      const code = probe.error === 'CLI_TIMEOUT' ? 'SIGNER_INIT_TIMEOUT' : probe.cliStarted ? 'SIGNER_INIT_NO_STAMP' : 'SIGNER_INIT_CLI_FAILED';
+      const code = probe.error === 'SIGNER_NATIVE_FILES_MISSING' ? 'SIGNER_NATIVE_FILES_MISSING'
+        : probe.error === 'CLI_TIMEOUT' ? 'SIGNER_INIT_TIMEOUT' : probe.cliStarted ? 'SIGNER_INIT_NO_STAMP' : 'SIGNER_INIT_CLI_FAILED';
       const error = new ProfileError(code, signerInitFailureMessage(code, { version: profile.codeagentVersion, timeoutMs: probeTimeoutMs, detail: probe.error }));
       error.firstInit = info(); throw error;
     }
-    try { cacheWrite = { ok: true, category: await writeStampCache(profile.signerCacheDir, profile.codeagentVersion, result.stamp) }; }
+    try { cacheWrite = { ok: true, category: await writeStampCache(signerCacheDir, profile.codeagentVersion, result.stamp) }; }
     catch (error) {
       cacheWrite = { ok: false, category: 'hub-signer-cache', error: String(error?.code || 'unknown').slice(0, 40) };
       const failed = new ProfileError('SIGNER_INIT_CACHE_WRITE', signerInitFailureMessage('SIGNER_INIT_CACHE_WRITE', { version: profile.codeagentVersion }));
@@ -597,17 +640,19 @@ export async function loadSigner(profile, { workDir, timeoutMs = SIGNER_INIT_TIM
     }
   }
   const previous = process.env[profile.signerCacheEnv];
-  process.env[profile.signerCacheEnv] = profile.signerCacheDir; // this dedicated proxy process only
+  process.env[profile.signerCacheEnv] = signerCacheDir; // this dedicated proxy process only
   let summary = null;
   try {
     // The stamp cache is in place now, so the signer itself never needs to start the CLI (a CLI spawn is blocked).
     const signer = await initializeCacheOnlySigner({ codeagentDir: profile.codeagentDir,
-      loadSigner: () => import(pathToFileURL(signerFile).href),
+      loadSigner: () => native ? createNativeSigner({ version: profile.codeagentVersion, cacheDir: signerCacheDir,
+        codeagentDir: profile.codeagentDir, runtimeDir, tempDir: '', appId: profile.appId, telemetryUrl: profile.telemetryUrl || '' })
+        : import(pathToFileURL(signerFile).href),
       allowStampProbe: false, timeoutMs,
       onSummary: s => { summary = s; },
       ...(testOnlySpawnDelegate ? { testOnly: true, testOnlySpawnDelegate } : {}) });
     if (signer.codeagentVersion() !== profile.codeagentVersion) throw new ProfileError('SIGNER_VERSION', 'CodeAgent 版本和签名模块不一致');
-    if (firstInit && (await inspectStamp(profile.signerCacheDir, profile.codeagentVersion)).state !== 'ok') {
+    if (firstInit && (await inspectStamp(signerCacheDir, profile.codeagentVersion)).state !== 'ok') {
       throw new ProfileError('SIGNER_INIT_NO_STAMP', signerInitFailureMessage('SIGNER_INIT_NO_STAMP', { version: profile.codeagentVersion }));
     }
     return { signer, adapterSha256: sha, firstInit: firstInit ? info({ signerCliBlocked: summary?.cliBlocked ?? 0 }) : { ran: false, ms: 0, reason: null, cliRuns: 0 } };
