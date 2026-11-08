@@ -32,8 +32,11 @@ function history() {
 }
 
 function fakeSite() {
-  const html = `<!doctype html><meta charset="utf-8"><title>考勤</title><body><h1>我的考勤</h1><p>本月出勤统计与假期日历</p>
-    <span id="t">打卡记录</span><div id="out"></div><script>
+  // 先像公司单点登录那样显示 6 秒登录页，再自动换成考勤页：Hub 不能一见登录页就判「需要登录」。
+  const html = `<!doctype html><meta charset="utf-8"><title>考勤</title><body><div id="sso">账号登录 <input type="password"> 忘记密码</div>
+    <div id="app" style="display:none"><h1>我的考勤</h1><p>本月出勤统计与假期日历</p>
+    <span id="t">打卡记录</span><div id="out"></div></div><script>
+    setTimeout(()=>{document.getElementById('sso').remove();document.getElementById('app').style.display='';},6000);
     fetch('/attendanceDocument/homePage/queryHolidayCalendarDetails').then(r=>r.json());
     document.getElementById('t').onclick=()=>fetch('/attendanceCompanion/services/attendance/card/queryCardRecord',{method:'POST',body:'{"jsonParam":"x"}'}).then(r=>r.json()).then(j=>{document.getElementById('out').textContent='共 '+j.length+' 天'});
     </script>`;

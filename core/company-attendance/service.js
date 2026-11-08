@@ -18,6 +18,8 @@ const LOG_KEEP = 30;
 const CARD_API = /queryCardRecord/;
 const HOLIDAY_API = /queryHolidayCalendarDetails/;
 
+function hostOf(u) { try { return u ? `（停在 ${new URL(u).host}）` : ''; } catch { return ''; } }
+
 function attendanceUrl(domain, env = process.env) {
   if (env.CLAUDE_HUB_ATTENDANCE_URL && env.CLAUDE_HUB_DATA_DIR) return env.CLAUDE_HUB_ATTENDANCE_URL;
   return domain ? `https://hr.${domain}/apps/attendanceflow/#/myAttendance` : '';
@@ -81,12 +83,12 @@ class CompanyAttendance {
   async capture(url) {
     const tries = [];
     if (this.deps.browser) {
-      const cap = await this.deps.browser.capture({ url, clickText: '打卡记录', clickUnless: CARD_API, api: /attendanceCompanion|attendanceDocument/, maxMs: 30000 });
+      const cap = await this.deps.browser.capture({ url, clickText: '打卡记录', clickUnless: CARD_API, api: /attendanceCompanion|attendanceDocument/, maxMs: 30000, loginGraceMs: 25000 });
       const card = (cap.json || []).find((r) => CARD_API.test(String(r.url)) && (Array.isArray(r.json) || Array.isArray(r.json?.data)));
       const hol = (cap.json || []).find((r) => HOLIDAY_API.test(String(r.url)));
       const pick = (r) => (r ? (Array.isArray(r.json) ? r.json : r.json?.data) : null);
       if (card) return { ok: true, via: 'hub', records: pick(card), holidays: pick(hol) };
-      tries.push({ via: 'hub', needsLogin: !!cap.needsLogin, error: cap.needsLogin ? '需要登录' : '没截到打卡记录' });
+      tries.push({ via: 'hub', needsLogin: !!cap.needsLogin, error: cap.needsLogin ? `需要登录${hostOf(cap.finalUrl)}` : '没截到打卡记录' });
     }
     if (this.deps.edgeCapture) {
       const r = await this.deps.edgeCapture({ url });

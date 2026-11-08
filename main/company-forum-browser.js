@@ -130,7 +130,8 @@ function createForumBrowser({ BrowserWindow, BaseWindow = null, session = null, 
   // 一次只开一个窗口，排队执行。
   function serial(fn) { const p = busy.then(fn, fn); busy = p.catch(() => {}); return p; }
 
-  function capture({ url, clickText = '', clickUnless = null, sections = [], api = null, maxMs = 25000 }) {
+  // loginGraceMs：单点登录常先显示几秒登录页再自动跳回（公司考勤约 5–10 秒），登录页要连续停留这么久才判「需要登录」。
+  function capture({ url, clickText = '', clickUnless = null, sections = [], api = null, maxMs = 25000, loginGraceMs = 0 }) {
     return serial(async () => {
       const win = makeWindow();
       const t = tap(win, api);
@@ -139,7 +140,13 @@ function createForumBrowser({ BrowserWindow, BaseWindow = null, session = null, 
         await load(win, url);
         await settle(win, { maxMs });
         let page = await run(win, collectScript(sections));
-        if (page && LOGIN_WORDS.test(String(page.text).slice(0, 3000)) && page.textLength < 4000) return { ...page, needsLogin: true, json: [] };
+        const onLogin = (p) => !!p && LOGIN_WORDS.test(String(p.text).slice(0, 3000)) && p.textLength < 4000;
+        if (onLogin(page) && loginGraceMs > 0) {
+          const since = Date.now();
+          while (onLogin(page) && Date.now() - since < loginGraceMs) { await delay(2000); page = await run(win, collectScript(sections)) || page; }
+          if (!onLogin(page)) { await settle(win, { minMs: 1000, maxMs }); page = await run(win, collectScript(sections)) || page; }
+        }
+        if (onLogin(page)) return { ...page, needsLogin: true, json: [] };
         const haveData = clickUnless && t.out.some(r => clickUnless.test(String(r.url)));
         if (clickText && !haveData && await run(win, clickScript(clickText))) { await settle(win, { minMs: 2000, maxMs: 15000 }); page = await run(win, collectScript(sections)) || page; }
         await delay(300); // 最后几个接口的响应体

@@ -39,13 +39,16 @@ function copyProfile(tmp, env = process.env) {
 
 async function getJson(url) { const r = await fetch(url); return r.json(); }
 
+// 公司单点登录常先闪一下登录页再自动跳回（11-08 公司真机：一见密码框就判「需要登录」是误判），
+// 所以登录页要连续停留这么久才算真的要登录。
+const LOGIN_GRACE_MS = 25000;
 const PAGE_STATE = `(() => { const t = document.body ? document.body.innerText : '';
-  return { textLength: t.length, hasPassword: !!document.querySelector('input[type=password]'), hasQr: /扫码登录|二维码/.test(t.slice(0, 3000)), hasCardTab: t.includes('打卡记录') }; })()`;
+  return { host: location.host, title: document.title.slice(0, 40), textLength: t.length, hasPassword: !!document.querySelector('input[type=password]'), hasQr: /扫码登录|二维码/.test(t.slice(0, 3000)), hasCardTab: t.includes('打卡记录') }; })()`;
 const CLICK_CARD = `(() => { const els = [...document.querySelectorAll('a,button,span,div,li')].filter(e => e.childElementCount === 0 && (e.innerText || '').trim() === '打卡记录');
   if (!els.length) return false; els[0].click(); return true; })()`;
 
 /* 返回 { ok, records, holidays, needsLogin, error, via:'edge' } */
-async function captureWithEdge({ url, timeoutMs = 90000, logger = console, env = process.env } = {}) {
+async function captureWithEdge({ url, timeoutMs = 90000, loginGraceMs = LOGIN_GRACE_MS, pollMs = 2000, logger = console, env = process.env } = {}) {
   const edge = findEdge(env);
   if (!edge) return { ok: false, via: 'edge', error: '本机没有找到 Edge' };
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-attendance-'));
@@ -91,27 +94,36 @@ async function captureWithEdge({ url, timeoutMs = 90000, logger = console, env =
     await send('Page.enable');
     await send('Page.navigate', { url });
     const evalState = async () => (await send('Runtime.evaluate', { expression: PAGE_STATE, returnByValue: true }))?.result?.result?.value || {};
-    let st = {}, clicked = false;
+    let st = {}, clicked = false, loginSince = 0;
     while (Date.now() < deadline) {
-      await delay(2000);
+      await delay(pollMs);
       st = await evalState();
-      if (st.hasPassword || st.hasQr) { result.needsLogin = true; break; }
+      if (st.hasPassword || st.hasQr) {
+        loginSince = loginSince || Date.now();
+        if (Date.now() - loginSince >= loginGraceMs) { result.needsLogin = true; result.error = `需要登录（停在 ${st.host || '登录页'}）`; break; }
+        continue;
+      }
+      loginSince = 0;
       if (!clicked && st.hasCardTab) {
         clicked = !!(await send('Runtime.evaluate', { expression: CLICK_CARD, returnByValue: true }))?.result?.result?.value;
       }
       if (result.records) { await delay(800); break; }
     }
     if (result.records) result.ok = true;
+    else if (!result.needsLogin && loginSince) { result.needsLogin = true; result.error = `需要登录（停在 ${st.host || '登录页'}）`; }
     else if (!result.needsLogin) result.error = clicked ? '打开了打卡记录，但没收到数据' : '考勤页没有出现「打卡记录」';
   } catch (e) {
     result.error = e.message;
   } finally {
+    // 按进程号结束整棵 Edge 进程树（只动自己启动的这一个）：只杀主进程时子进程还占着文件，临时目录（登录状态副本）删不掉。
     try { ws?.close(); } catch { /* 已关 */ }
-    try { proc?.kill(); } catch { /* 已退 */ }
-    await delay(1200);
-    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (e) { logger.warn?.('[company-attendance] 临时目录未删净', e.code || e.message); }
+    if (proc?.pid && proc.exitCode === null) {
+      try { require('child_process').spawnSync('taskkill.exe', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 }); } catch { try { proc.kill(); } catch { /* 已退 */ } }
+    }
+    await delay(800);
+    try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 8, retryDelay: 500 }); } catch (e) { logger.warn?.('[company-attendance] 临时目录未删净', e.code || e.message); }
   }
   return result;
 }
 
-module.exports = { captureWithEdge, findEdge, CARD_API, HOLIDAY_API, KEEP_API };
+module.exports = { captureWithEdge, findEdge, CARD_API, HOLIDAY_API, KEEP_API, LOGIN_GRACE_MS };

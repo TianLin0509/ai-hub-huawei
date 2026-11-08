@@ -16,11 +16,11 @@ function fixture(t) {
   return { root, tree, logDir: path.join(root, 'logs') };
 }
 
-test('public test plan installs in the export and gives tests a fresh 900 second budget', () => {
+test('public test plan installs in the export and gives tests a fresh 1800 second budget', () => {
   const phases = phasePlans('export');
   assert.deepEqual(phases.map(x => [x.name, x.seconds, x.npm, x.cwd]), [
     ['install', 600, ['ci', '--prefer-offline', '--no-audit', '--no-fund'], 'export'],
-    ['test', 900, ['test'], 'export'],
+    ['test', 1800, ['test'], 'export'],
   ]);
   for (const phase of phases) {
     assert.equal(phase.command, 'python');

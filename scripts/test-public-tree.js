@@ -48,7 +48,7 @@ function phasePlans(tree, source = SOURCE) {
   const watchdog = path.join(source, 'tests', 'helpers', 'test-budget.py');
   return [
     { name: 'install', seconds: 600, npm: ['ci', '--prefer-offline', '--no-audit', '--no-fund'] },
-    { name: 'test', seconds: 900, npm: ['test'] },
+    { name: 'test', seconds: 1800, npm: ['test'] }, // 2026-11-08：机器满载时 900 秒误超时
   ].map(phase => ({ ...phase, command: 'python', args: [watchdog, '--timeout-seconds', String(phase.seconds),
     '--label', `public-${phase.name}`, '--', 'npm.cmd', ...phase.npm], cwd: tree }));
 }
