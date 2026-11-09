@@ -35,19 +35,31 @@ function Relaunch {
 function Get-Leftovers {
   if (-not $p.appDir) { return @() }
   $dir = ([string]$p.appDir).TrimEnd('\') + '\'
-  @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $PID -and $_.Path -and $_.Path.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase) })
+  # 进程可能在枚举中途退出，Path 前后两次读到的不一样；只读一次，出错就跳过，否则整个脚本会崩掉、不写结果也不重开程序。
+  @(Get-Process -ErrorAction SilentlyContinue | ForEach-Object { try { $path = [string]$_.Path; if ($_.Id -ne $PID -and $path -and $path.StartsWith($dir, [StringComparison]::OrdinalIgnoreCase)) { $_ } } catch {} })
 }
 # 其中真正开着窗口的 Hub（另开的，或用户刚关又开的）；GPU、终端这类残留子进程没有主窗口。
 # 自己算 SHA256，不用 Get-FileHash：从 PowerShell 7 终端或 CI 服务里拉起时会继承 7 的 PSModulePath，
 # 5.1 自带的 Get-FileHash 就认不出来，替换整个失败（11-07 CI 实测）。
 function Get-Sha256($path) { $s = [IO.File]::OpenRead($path); try { $a = [Security.Cryptography.SHA256]::Create(); try { return ([BitConverter]::ToString($a.ComputeHash($s)) -replace '-', '') } finally { $a.Dispose() } } finally { $s.Dispose() } }
-function Get-OpenWindows { @(Get-Leftovers | Where-Object { $_.MainWindowHandle -ne 0 }) }
+function Get-OpenWindows { @(Get-Leftovers | ForEach-Object { try { if ($_.MainWindowHandle -ne 0) { $_ } } catch {} }) }
+# 主进程已退、也没有开着窗口的 Hub 时，同一 exe 的进程只可能是上次运行的残留（GPU、以 Node 方式跑的 MCP 等），它们锁着 app.asar。
+# 有窗口说明用户另开了 Hub，一个都不动；只认 Hub 自己的 exe，安装目录里的其他程序不碰。
+function Stop-Orphans {
+  if (-not $p.exe -or (Get-OpenWindows).Count) { return }
+  $orphans = @(Get-Leftovers | Where-Object { $_.Path -ieq [string]$p.exe })
+  if (-not $orphans.Count) { return }
+  $orphans | Stop-Process -Force -ErrorAction SilentlyContinue
+  Start-Sleep -Milliseconds 800
+}
 function Test-Writable($dir) {
   try { $t = Join-Path $dir ('.hub-update-write-test-' + $PID); [IO.File]::WriteAllText($t, 'x'); Remove-Item -LiteralPath $t -Force; return $true } catch { return $false }
 }
 # 替换失败的原因分开说：没权限 / 被占用，并附系统原话（以前一律写「被占用」，权限问题也被说成占用）。
 function Explain($err, $rel) {
   $e = $err.Exception; $msg = $e.Message
+  $open = @(Get-OpenWindows | ForEach-Object { $_.Name + '(' + $_.Id + ')' }) -join '、'
+  if ($open) { return "替换 $rel 失败：还有别的 Hub 窗口开着（$open）。请把所有 Hub 窗口都关掉后再更新" }
   $left = @(Get-Leftovers | ForEach-Object { $_.Name + '(' + $_.Id + ')' }) -join '、'
   if ($left) { return "替换 $rel 失败：文件被占用，这些程序还在运行：$left（$msg）" }
   if ($e -is [UnauthorizedAccessException] -or $msg -match 'denied|拒绝') { return "替换 $rel 失败：没有写入安装目录的权限（$msg）" }
@@ -125,6 +137,7 @@ $leftDeadline = (Get-Date).AddSeconds([int]$p.leftoverWaitSeconds)
 while ((Get-Date) -lt $leftDeadline -and (Get-Leftovers).Count) { Start-Sleep -Milliseconds 500 }
 # 静默替换是顺手的事：还有 Hub 窗口开着（另开的，或用户刚关又开）就不动，留给下次退出。
 if ($p.quiet -and (Get-OpenWindows).Count) { exit 0 }
+Stop-Orphans
 
 if (Test-Writable $p.resourcesDir) { Replace-Files }
 else {

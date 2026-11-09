@@ -22,6 +22,10 @@ function writeJson(file, object) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(object, null, 2), { encoding: 'utf8', mode: 0o600 });
 }
+// DSH 由系统上单独的 Node 运行，读不了 app.asar 里面的文件；这些文件打包时解压到 app.asar.unpacked（package.json 的 asarUnpack）。
+function dshRuntimeFile(name, baseDir = __dirname) {
+  return path.join(baseDir, name).replace(/([\\/])app\.asar([\\/])/, '$1app.asar.unpacked$2');
+}
 function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
   kind = kind.replace(/-resume$/, '');
   if (!isAcpKind(kind)) throw new Error('未知 ACP Harness');
@@ -119,7 +123,7 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
       modelProviders: { openai: models.map(({id}) => ({ id, name: id, baseUrl: baseURL, envKey: 'OPENAI_API_KEY' })) },
     });
   } else if (kind === 'deepseek-acp') {
-    if (process.platform === 'win32') args.unshift('--require', path.join(__dirname, 'dsh-windows-link-retry.cjs'));
+    if (process.platform === 'win32') args.unshift('--require', dshRuntimeFile('dsh-windows-link-retry.cjs'));
     if(!opts.dshCliRuntime && !entry.bridgePath)throw new Error('DeepSeek 完整交互需要配置 ACP 扩展包目录');
     env.DSH_HOME = path.join(home, '.dsh');
     const providerId = companyRoute ? companyRoute.providerId : 'bailian-tpp';
@@ -147,7 +151,7 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
       { id: 'acp', config: { provider: providerId, model } }];
     if (companyRoute) routePatches.unshift(...companyRoute.disabledPatches, { id: 'tools', config: { mode: 'native' } });
     if (opts.dshCliRuntime) {
-      args[args.indexOf(entry.entryPath)] = path.join(__dirname, 'dsh-cli-launch.mjs');
+      args[args.indexOf(entry.entryPath)] = dshRuntimeFile('dsh-cli-launch.mjs');
       env.AI_HUB_DSH_CLI_ENTRY = entry.entryPath;
       const profileHome = path.join(env.DSH_HOME, 'profiles/hub-cli');
       fs.mkdirSync(profileHome, { recursive: true });
@@ -163,7 +167,7 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
       writeJson(path.join(home, '.dsh-tui/onboarding.json'), { completed: true, version: 1 });
       writeJson(path.join(home, '.dsh-tui/model.json'), { provider: providerId, model });
       routePatches.pop();
-      routePatches.push({ insert: [{ id: 'hub-cli-observer', name: path.join(__dirname, 'dsh-cli-observer.mjs') }] });
+      routePatches.push({ insert: [{ id: 'hub-cli-observer', name: dshRuntimeFile('dsh-cli-observer.mjs') }] });
       routePatches.push({ id: 'dsh-tui', inject: ['hubCliObserver', 'agents', 'workspaceRegistry',
         'tuiWorkspaces', 'tuiScenes', 'tuiPanels', 'tuiDialogs', 'tuiStatus', 'tuiShortcuts', 'tuiRenderers', 'tuiThemes'],
         config: { provider: providerId, model, backend: 'dsh', fullscreen: true, launchpad: false,
@@ -194,11 +198,11 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
       routePatches.pop();
       routePatches.push({ id: 'acp-plugin', config: { provider: 'bailian-tpp', model } });
       routePatches.push({ id:'acp-bridge',disabled:true });
-      routePatches.push({ insert:[{id:'hub-acp-bridge',name:path.join(__dirname,'acp-dsh-stdio.mjs')}] });
+      routePatches.push({ insert:[{id:'hub-acp-bridge',name:dshRuntimeFile('acp-dsh-stdio.mjs')}] });
       env.AI_HUB_DSH_BRIDGE = entry.bridgePath;
     }
     // 进展卡提醒（2026-10-24）：DSH 没有 shell 钩子，用插件做和 Claude / Codex 钩子相同的两条提醒。
-    routePatches.push({ insert: [{ id: 'hub-card-reminder', name: path.join(__dirname, 'dsh-card-reminder.mjs') }] });
+    routePatches.push({ insert: [{ id: 'hub-card-reminder', name: dshRuntimeFile('dsh-card-reminder.mjs') }] });
     // Keep the native tool and explicit user decisions available; ordinary
     // implementation choices belong to the agent in Hub's delegated workflow.
     routePatches.push({ id: 'system-prompt', config: { personaSuffix:
@@ -229,4 +233,4 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
     storeDir: path.join(dataDir, 'acp-history'), home, authMethod, authMeta,
     launch: { command: nodePath, args, cwd: opts.cwd, env, secrets: [key] } };
 }
-module.exports = { ACP_KINDS, LABELS, PLAN_BASE_URL, isAcpKind, buildAcpOptions, linkWithRetry };
+module.exports = { dshRuntimeFile, ACP_KINDS, LABELS, PLAN_BASE_URL, isAcpKind, buildAcpOptions, linkWithRetry };
