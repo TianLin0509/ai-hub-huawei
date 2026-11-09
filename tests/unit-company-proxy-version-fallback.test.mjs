@@ -38,3 +38,12 @@ test('退出码非 0 但打印了版本，算读到', async () => {
   const run = async () => { throw Object.assign(new Error('exit 1'), { stdout: '1.2615.02.02-01 (codeAgentCLI)\n', stderr: '' }); };
   assert.equal(await installedVersion('C:/x', { registry: async () => '', run }), '1.2615.02.02-01');
 });
+
+test('findCodeAgentDir: the install dir Hub picked (AI_HUB_CODEAGENT_INSTALL_DIR) comes first, ahead of the default folder', async () => {
+  const { resolve } = await import('node:path');
+  const custom = resolve('/llm/CodeAgentCLI'), standard = resolve('/Program Files/CodeAgentCLI');
+  const exists = dir => dir === custom || dir === standard;
+  assert.equal(await findCodeAgentDir({ env: { AI_HUB_CODEAGENT_INSTALL_DIR: custom }, exists, fallback: standard, registry: async () => [] }), custom);
+  // Not usable (no bin\codeagentcli.exe): the usual search order goes on.
+  assert.equal(await findCodeAgentDir({ env: { AI_HUB_CODEAGENT_INSTALL_DIR: resolve('/gone') }, exists, fallback: standard, registry: async () => [] }), standard);
+});

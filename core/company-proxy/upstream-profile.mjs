@@ -373,7 +373,9 @@ async function registryInstallDirs() {
 /** 返回含 bin\\codeagentcli.exe 的安装目录；都没有返回 ''。 */
 export async function findCodeAgentDir({ env = process.env, exists = hasCodeAgentCli, registry = registryInstallDirs, fallback = DEFAULT_CODEAGENT_DIR } = {}) {
   const pathKey = Object.keys(env).find(k => k.toLowerCase() === 'path');
-  const quick = [fallback, ...String(pathKey ? env[pathKey] : '').split(delimiter), ...namedInstallDirs(env)];
+  // Hub 认定的那份排第一（main 经 AI_HUB_CODEAGENT_INSTALL_DIR 传来：会话实际用的 CodeAgent，含 npm 转发入口、手选路径），
+  // 版本号和签名都跟会话用同一份。
+  const quick = [env.AI_HUB_CODEAGENT_INSTALL_DIR, fallback, ...String(pathKey ? env[pathKey] : '').split(delimiter), ...namedInstallDirs(env)];
   const pick = dirs => dirs.map(installRootOf).find(d => d && isAbsolute(d) && exists(d)) || '';
   return pick(quick) || pick(await registry());
 }

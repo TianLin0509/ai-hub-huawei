@@ -290,6 +290,52 @@ function localModelOptions(dataDir, env = process.env) {
   return codeAgentModels.modelOptions(dataDir, { configDir });
 }
 
+// 公司模型反代要的是 CodeAgent 安装目录（含 bin\codeagentcli.exe 的那层），不是启动命令。
+// 同事常装在 D 盘等自定义目录，反代不能只认 C:\Program Files\CodeAgentCLI（2026-11-09）。按顺序找，找不到返回 ''：
+//   1. Hub 实际用的 CodeAgent 命令（自动发现 / 手选）：它所在目录或上一层就是安装目录；
+//   2. 命令是 .cmd/.bat 转发入口（npm 全局安装、自建的启动脚本）：读出它转去的路径，从那里往上找；
+//   3. PATH 里直接能找到的 codeagentcli.exe。
+// 只读文件文本，不运行任何程序。
+const CLI_EXE = 'codeagentcli.exe';
+function installDirAround(start, levels = 5) {
+  const cli = dir => { try { return fs.statSync(path.join(dir, 'bin', CLI_EXE)).isFile(); } catch { return false; } };
+  let dir = start;
+  for (let i = 0; i <= levels && dir; i++) {
+    if (path.basename(dir).toLowerCase() === CLI_EXE) { dir = path.dirname(dir); continue; }
+    if (cli(dir)) return dir;
+    const up = path.dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  return '';
+}
+// .cmd/.bat 里引号中的路径（%~dp0 / %dp0% 换成脚本所在目录）。
+function shimTargets(file) {
+  let body = '';
+  try { if (fs.statSync(file).size <= 64 * 1024) body = fs.readFileSync(file, 'utf8'); } catch { return []; }
+  const base = path.dirname(file);
+  const out = [];
+  for (const m of body.matchAll(/"([^"\r\n]{1,400})"/g)) {
+    let target = m[1].replace(/%~dp0%?\\?|%dp0%\\?/gi, base + path.sep);
+    if (/%|[*?<>|]/.test(target)) continue;
+    target = target.replace(/[\\/]+/g, path.sep);
+    if (!path.isAbsolute(target)) continue;
+    out.push(path.normalize(target));
+  }
+  return out;
+}
+function codeagentInstallDir(env = process.env, options) {
+  let file = '';
+  try { file = commandFile(resolveCodeAgentConfig(env, undefined, options).command, env); } catch { file = ''; }
+  if (file) {
+    const own = installDirAround(path.dirname(file), 1);
+    if (own) return own;
+    if (/\.(cmd|bat)$/i.test(file)) for (const target of shimTargets(file)) { const dir = installDirAround(target); if (dir) return dir; }
+  }
+  const onPath = commandFile(CLI_EXE.replace(/\.exe$/, ''), env) || commandFile(CLI_EXE, env);
+  return onPath && path.basename(onPath).toLowerCase() === CLI_EXE ? installDirAround(onPath, 2) : '';
+}
+
 module.exports = {
   DEFAULT_COMMAND,
   DEFAULT_CONFIG_ENV,
@@ -301,6 +347,7 @@ module.exports = {
   LEGACY_COMMAND,
   commandOnPath,
   resolveCodeAgentConfig,
+  codeagentInstallDir,
   configDirEnvName,
   configDirSource,
   inheritedConfigDir,

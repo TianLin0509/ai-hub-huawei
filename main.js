@@ -3383,7 +3383,8 @@ registerWorkbenchOperationsIpc(ipcMain, {
 registerPathIpc(ipcMain);
 ipcMain.handle('community:setup', () => require('./core/community-setup').inspectSetupAsync({ packaged: app.isPackaged }));
 // 环境体检（5.5.24，main/ipc/env-check-handlers.js）：设置菜单「环境体检」一屏列出各外部工具与本机条件；各服务按需取，没有的项自动不出。
-require('./main/ipc/env-check-handlers').registerEnvCheckIpc(ipcMain, {
+let firstRunNetPass = null; // 放行模块在后面初始化，首次启动准备经它取
+const firstRunEnvCheck = require('./main/ipc/env-check-handlers').registerEnvCheckIpc(ipcMain, {
   dataDir: getHubDataDir,
   send: (channel, state) => sendToRenderer(channel, state),
   version: () => require('./core/distribution').editionVersion || app.getVersion(),
@@ -3401,6 +3402,19 @@ require('./main/ipc/env-check-handlers').registerEnvCheckIpc(ipcMain, {
   getConfig: () => require('./core/hub-config').getConfig(),
   openExternal: url => shell.openExternal(url),
   openPath: dir => shell.openPath(dir),
+});
+// 首次启动准备页（core/first-run-prep.js）：第一次把该查的查完存下，以后打开不用等。
+require('./main/ipc/first-run-handlers').registerFirstRunIpc(ipcMain, {
+  dataDir: getHubDataDir,
+  isCompany: () => require('./core/company-api-config').isCompany(),
+  send: (channel, event) => sendToRenderer(channel, event),
+  envCheck: () => firstRunEnvCheck.run(),
+  toolDiscovery: () => toolDiscovery,
+  proxyService: companyProxyService,
+  lanPool: () => lanPoolService,
+  netPass: () => firstRunNetPass,
+  systemProxy: () => require('electron').session.defaultSession.resolveProxy('https://example.com/'),
+  fetchImpl: (...args) => require('electron').net.fetch(...args),
 });
 
 // --- Hook HTTP server ---
@@ -4319,6 +4333,7 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
           openGate: page => netUnblock.openHiddenGateWindow(BrowserWindow, page),
           openVisible: gateVisible,
           onChange: view => sendToRenderer('net-pass:state', view) });
+        firstRunNetPass = netPass;
         ipcMain.handle('net-pass:status', async (_e, opts) => { if (opts && opts.refresh) void netPass.refresh(); return netPass.status(); });
         ipcMain.handle('net-pass:run', async () => { const r = await netPass.passAll(); if (r.results.some(x => x.result === 'ok')) { try { ownUnblocker.passed(); } catch (_) {} } return r; });
         // 所有「打开放行页」按钮都走这里：传进来的可能是被拦的下载文件地址，一律换成那台主机的放行小页面。

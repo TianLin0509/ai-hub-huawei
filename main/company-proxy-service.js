@@ -176,6 +176,10 @@ class CompanyProxyService {
     try { fs.rmSync(stateFile, { force: true }); } catch { /* stale */ }
     const logFd = fs.openSync(this.logPath(), 'a');
     const env = { ...process.env, AI_HUB_COMPANY_PROXY_KEY: endpoint.key };
+    // Hub 认定的 CodeAgent 安装目录（自动发现 / 手选的那份，能跟进 npm 转发入口）交给反代，作为它查找安装目录的第一个候选。
+    delete env.AI_HUB_CODEAGENT_INSTALL_DIR;
+    try { const dir = require('../core/codeagent-config').codeagentInstallDir(process.env); if (dir) env.AI_HUB_CODEAGENT_INSTALL_DIR = dir; }
+    catch (error) { this.logger.warn?.('[company-proxy] CodeAgent install dir not found: ' + error.message); }
     if (process.versions.electron) env.ELECTRON_RUN_AS_NODE = '1';
     delete env.NODE_OPTIONS;
     this.proxy().applyNoProxy(env);

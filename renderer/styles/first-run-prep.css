@@ -1,0 +1,30 @@
+/* 首次启动准备页：沿用 Hub 的鸿蒙设计变量。 */
+.fr-mask { position: fixed; inset: 0; z-index: 100000; background: var(--hw-bg, #F1F3F5); display: flex; justify-content: center; align-items: center; padding: 24px; }
+.fr-card { width: 760px; max-width: 100%; max-height: 100%; background: var(--hw-surface, #fff); color: var(--hw-text-1, #182431); border-radius: var(--hw-r-md, 16px); box-shadow: var(--hw-e2); padding: 20px 24px; display: flex; flex-direction: column; min-height: 0; }
+.fr-card h3 { margin: 0; font-size: var(--hw-fs-18, 18px); }
+.fr-hint { color: var(--hw-text-2); font-size: 13px; margin: 2px 0 10px; }
+.fr-bar { height: 6px; background: var(--hw-surface-3, #EDEFF2); border-radius: 9px; overflow: hidden; flex: none; }
+.fr-bar i { display: block; height: 100%; width: 0; background: var(--hw-brand, #0A59F7); transition: width .25s; }
+.fr-list { flex: 1; overflow: auto; margin: 8px 0; padding-right: 6px; min-height: 0; }
+.fr-grp { font-size: 12px; color: var(--hw-text-3); margin: 8px 0 1px; }
+.fr-row { display: flex; align-items: center; gap: 9px; min-height: 28px; padding: 3px 0; font-size: 13px; }
+.fr-n { width: 130px; flex: none; }
+.fr-d { flex: 1; min-width: 0; color: var(--hw-text-2); overflow-wrap: anywhere; }
+.fr-dot { width: 14px; height: 14px; border-radius: 50%; flex: none; border: 2px solid var(--hw-line-strong, #B7C0CA); box-sizing: border-box; display: inline-block; }
+.fr-dot.run { border-color: var(--hw-brand); border-right-color: transparent; animation: fr-spin .7s linear infinite; }
+.fr-dot.ok { background: var(--hw-green); border-color: var(--hw-green); }
+.fr-dot.warn { background: var(--hw-amber); border-color: var(--hw-amber); }
+.fr-dot.bad { background: var(--hw-red); border-color: var(--hw-red); }
+.fr-dot.off { border-style: dashed; }
+@keyframes fr-spin { to { transform: rotate(360deg); } }
+.fr-fix { border: 1px solid var(--hw-brand); color: var(--hw-brand); background: var(--hw-surface); border-radius: 99px; padding: 1px 11px; font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
+.fr-fix.alt { border-color: var(--hw-line-strong); color: var(--hw-text-2); }
+.fr-foot { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--hw-text-2); border-top: 1px solid var(--hw-line); padding-top: 10px; flex: none; }
+.fr-sum { flex: 1; }
+.fr-go { border: 0; border-radius: 99px; padding: 7px 20px; font: inherit; cursor: pointer; background: var(--hw-surface-3); color: var(--hw-text-1); }
+.fr-go.pri { background: var(--hw-brand); color: var(--hw-text-on, #fff); }
+.fr-strip { position: fixed; right: 16px; bottom: 16px; z-index: 9000; width: 340px; background: var(--hw-surface, #fff); color: var(--hw-text-1); border-radius: 12px; box-shadow: var(--hw-e2); padding: 11px 14px; font-size: 13px; }
+.fr-strip b { display: block; margin-bottom: 3px; }
+.fr-sl { display: flex; align-items: center; gap: 8px; padding: 2px 0; color: var(--hw-text-2); }
+.fr-sl .fr-dot { width: 11px; height: 11px; }
+.fr-link { border: 0; background: none; color: var(--hw-brand); font: inherit; cursor: pointer; padding: 2px 12px 2px 0; }

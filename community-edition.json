@@ -57,11 +57,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "会话栏：模型看 logo（GLM / DeepSeek），号池第几号标在 logo 右下角，不再挂「GLM · 号 2」文字，会话名能多显示一倍",
-    "PPT：回车就让 AI 找页，过程看得见——换了哪些说法、读了哪几页、为什么推荐；关键词命中同时即时显示",
-    "PPT：搜索结果每页都有预览，没有截图缓存的页按原稿版式画出来"
+    "新增首次启动准备页：第一次打开检查工具、账号、模型和网络，以后打开直接进入"
   ],
-  "version": "5.5.52",
+  "version": "5.5.53",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

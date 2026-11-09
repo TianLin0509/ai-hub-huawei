@@ -2194,3 +2194,33 @@ test('DSH runtime: a global npm install is found when no runtime folder is confi
     if (savedHome === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = savedHome;
   }
 });
+test('codeagentInstallDir: from the CodeAgent Hub uses to the folder holding bin\\codeagentcli.exe (installer, npm shim, PATH)', () => {
+  const { codeagentInstallDir } = require('../core/codeagent-config');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-ca-cmd-'));
+  const make = (file, body = '') => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, body); return file; };
+  const exe = process.platform === 'win32' ? '.exe' : '';
+  try {
+    // Installer layout: the command sits next to bin\codeagentcli.exe, or inside bin.
+    const install = path.join(root, 'D', 'MyCodeAgent');
+    make(path.join(install, 'bin', 'codeagentcli.exe'));
+    const inBin = make(path.join(install, 'bin', 'codeagent' + exe));
+    assert.equal(codeagentInstallDir({ AI_HUB_CODEAGENT_COMMAND: inBin, PATH: '' }), install);
+    // npm global shim far away from the program: followed through the path it forwards to (%dp0% = the shim folder).
+    const npm = path.join(root, 'Roaming', 'npm');
+    const pkg = path.join(npm, 'node_modules', '@company', 'codeagent');
+    make(path.join(pkg, 'bin', 'codeagentcli.exe'));
+    make(path.join(pkg, 'bin', 'codeagent.js'));
+    const shim = make(path.join(npm, 'codeagent.cmd'), '@ECHO off\r\nSETLOCAL\r\nCALL :find_dp0\r\n"%_prog%"  "%dp0%\\node_modules\\@company\\codeagent\\bin\\codeagent.js" %*\r\n');
+    assert.equal(codeagentInstallDir({ AI_HUB_CODEAGENT_COMMAND: shim, PATH: '' }), pkg);
+    // A hand-written launcher pointing at an absolute path on another drive.
+    const other = path.join(root, 'E', 'tools', 'CA');
+    make(path.join(other, 'bin', 'codeagentcli.exe'));
+    const launcher = make(path.join(root, 'scripts', 'codeagent.bat'), `@echo off\r\n"${path.join(other, 'bin', 'codeagentcli.exe')}" %*\r\n`);
+    assert.equal(codeagentInstallDir({ AI_HUB_CODEAGENT_COMMAND: launcher, PATH: '' }), other);
+    // Command gives nothing, but codeagentcli.exe is on PATH.
+    const lone = make(path.join(root, 'empty', 'codeagent.cmd'), '@echo off\r\n');
+    assert.equal(codeagentInstallDir({ AI_HUB_CODEAGENT_COMMAND: lone, PATH: path.join(other, 'bin') }), other);
+    // Nothing anywhere: '' (the proxy keeps its default folder).
+    assert.equal(codeagentInstallDir({ AI_HUB_CODEAGENT_COMMAND: lone, PATH: '' }), '');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
