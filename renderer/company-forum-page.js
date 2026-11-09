@@ -121,7 +121,7 @@ function createCompanyForumPage({ document, window, ipcRenderer, closeOtherPanel
   }
   function panelHtml() {
     const s = data.settings;
-    const from = { settings: '设置里填的', email: '取自你的公司邮箱' }[data.domainFrom] || '还不知道';
+    const from = !data.domain ? '还不知道' : { settings: '设置里填的', email: '取自你的公司邮箱', 'assistant-email': '取自你的公司邮箱', welink: '取自你的公司邮箱', 'forum-settings': '设置里填的' }[data.domainFrom] || '自动找到的';
     return `<div class="cf-set"><b>论坛设置</b>
       <label>公司站点域名 <input data-f="domain" value="${esc(s.domain || data.domain || '')}" placeholder="例如 corp.example.com"><span class="cf-note">当前：${esc(data.domain || '—')}（${from}）。两个站点是 jx.域名 和 xinsheng.域名。</span></label>
       <label><input type="checkbox" data-f="enabled"${s.enabled ? ' checked' : ''}> 工作日自动同步，时间 <input type="time" data-f="syncTime" value="${esc(s.syncTime)}"></label>

@@ -104,6 +104,16 @@ function namedList(json, heading, min = 1, depth = 0) {
   for (const v of Object.values(json)) { const hit = namedList(v, heading, min, depth + 1); if (hit) return hit; }
   return null;
 }
+// HOT_LIST 类型、名字匹配 re 的卡片。
+function hotCard(json, re, depth = 0) {
+  if (!json || typeof json !== 'object' || depth > 8) return null;
+  if (!Array.isArray(json) && json.cardType === 'HOT_LIST' && re.test(String(json.title || '')) && Array.isArray(json.list)) {
+    const posts = json.list.map(postFromObject).filter(Boolean);
+    if (posts.length) return { title: clean(json.title), posts };
+  }
+  for (const v of Object.values(json)) { const hit = hotCard(v, re, depth + 1); if (hit) return hit; }
+  return null;
+}
 // 帖子详情页截到的接口数据里补阅读、回复、点赞、收藏、时间（心声的排行只有标题和链接）。
 function countsFromJson(list) {
   const out = {};
@@ -177,9 +187,14 @@ function postsForSite(site, capture, { base = '', limit = 20 } = {}) {
     if (multi) { const hit = card(1); if (hit !== null) { posts = hit; from = 'api-card'; } }
     // 2. 没有对应卡片时，再看这个板块的链接和能确定归属的接口。
     if (from !== 'api-card' && section) { posts = linkPosts(section.links, site, capture.finalUrl || base); from = 'links'; }
+    // 首页没有这个榜（现网部分视图只给「热门文章」卡片）：用榜单配置的备用卡片，标签写卡片自己的名字，不冒充原榜。
+    let label = list.label;
+    if (multi && from !== 'api-card' && posts.length < 3 && list.fallbackCard) {
+      for (const r of [...(capture.json || [])].reverse()) { const hit = hotCard(r.json, list.fallbackCard); if (hit) { posts = hit.posts; label = hit.title; from = 'api-card-fallback'; break; } }
+    }
     // 单榜站点（稼先）沿用原顺序和门槛：链接不足 3 条才找卡片、卡片至少 3 条。榜名「热点」太短，热帖标题常带这两个字。
     if (!multi && posts.length < 3) { const hit = card(3); if (hit) { posts = hit; from = 'api-card'; } }
-    if (from !== 'api-card' && posts.length < 3 && arrays.length) {
+    if (!/^api-card/.test(from) && posts.length < 3 && arrays.length) {
       // 同分时取后截到的（稼先点「热点」后才取热榜，先截到的是首页推荐）。
       // 多榜站点必须命中本榜的接口；共享接口或另一榜不能作为通用兜底。
       const ranked = arrays.map((r, i) => ({ ...r, i })).filter(r => site.lists.length === 1 || list.api?.test(r.url))
@@ -188,15 +203,16 @@ function postsForSite(site, capture, { base = '', limit = 20 } = {}) {
       if (best && score(best.url, list, site) > 0) { posts = best.arrays[0]; from = 'api'; }
     }
     // 3. 板块里的文字行
-    if (from !== 'api-card' && posts.length < 3 && section) { const lines = linePosts(section.lines); if (lines.length >= 3) { posts = lines; from = 'text'; } }
+    if (!/^api-card/.test(from) && posts.length < 3 && section) { const lines = linePosts(section.lines); if (lines.length >= 3) { posts = lines; from = 'text'; } }
     // 稼先的「热点」是首页主列表：板块没认出来时，用整页的帖子链接
     if (from !== 'api-card' && posts.length < 3 && site.lists.length === 1) { const all = linkPosts(capture.links, site, capture.finalUrl || base); if (all.length >= 3) { posts = all; from = 'page-links'; } }
     // 接口数据常只有编号：按站点的详情页格式补链接（稼先）。
     const link = p => p.url ? absolute(p.url, capture.finalUrl || base) : (base && site.detailPath && p.id ? base + site.detailPath(p.id) : '');
     posts = enrich(posts, pool).slice(0, limit).map((p, i) => ({ ...p, rank: i + 1, url: link(p) }));
-    lists.push({ key: list.key, label: list.label, from, posts });
+    lists.push({ key: list.key, label, from, posts });
   }
-  return lists;
+  // 用了备用卡片时，原榜里取不到的空榜不显示。
+  return lists.some(l => l.from === 'api-card-fallback') ? lists.filter(l => l.posts.length) : lists;
 }
 function score(url, list, site) {
   let n = 0;

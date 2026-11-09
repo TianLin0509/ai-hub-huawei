@@ -7,12 +7,15 @@
 // 没有一键反馈入口（window.__hubFeedback）的发行版不显示按钮。
 
 const path = require('node:path');
+const randomId = () => { try { return require('node:crypto').randomUUID(); } catch { return String(Date.now()) + Math.random().toString(36).slice(2); } };
 
 const CONTEXT_FILE = '.hub-troubleshoot.json';
 const BEGIN = '【排查结论】';
 const END = '【排查结论完】';
 const MAX_BLOCK = 4000;
 const FALLBACK_TAIL = 3000;
+// 还没有结论块时，第一次点按钮先替用户催 Agent 收尾（Agent 常常查着查着忘了收尾，用户不知道该说什么）；再点一次就直接反馈现有内容。
+const WRAP_UP_PROMPT = '请现在先停下深入排查，按开头要求用中文输出【排查结论】（到【排查结论完】为止）。没查完的部分写进「给维护人的说明」。';
 const MAX_DETAILS = 4000;
 
 const clip = (value, max) => { const s = String(value == null ? '' : value).trim(); return s.length > max ? s.slice(0, max) + '…（已截断）' : s; };
@@ -47,7 +50,13 @@ function pickConclusion(turns, fallbackText = '') {
   }
   const fromFallback = extractConclusion(fallbackText);
   if (fromFallback) return { text: fromFallback.text, found: true, complete: fromFallback.complete };
-  const last = String((answers.length ? answers[answers.length - 1].text : fallbackText) || '').trim();
+  // 没有结论块时取「最近一次提问之后」Agent 写的全部内容的末尾：查到一半的会话里，最后一条完整回答往往只是开头那句「我先读手册」（11-08 Q-1108-16）。
+  const list = Array.isArray(turns) ? turns.filter(Boolean) : [];
+  let from = list.length; while (from > 0 && list[from - 1].role !== 'user') from -= 1;
+  const recent = list.slice(from).filter(t => t.role === 'assistant' && typeof t.text === 'string' && t.text.trim()).map(t => t.text.trim());
+  const joined = recent.join(String.fromCharCode(10, 10));
+  const fb = String(fallbackText || '').trim();
+  const last = (fb.length > joined.length ? fb : joined) || String((answers.length ? answers[answers.length - 1].text : '') || '').trim();
   if (!last) return { text: '', found: false, complete: false };
   return { text: last.length > FALLBACK_TAIL ? '…' + last.slice(-FALLBACK_TAIL) : last, found: false, complete: false };
 }
@@ -98,6 +107,7 @@ function createTroubleshootFeedbackUi({ document: doc, ipcRenderer, getSession, 
   button.innerHTML = ICON;
   button.append(doc.createTextNode('把排查结果反馈给维护人'));
   let busy = false;
+  const nudged = new Set();
 
   async function collect(session) {
     let turns = [];
@@ -124,6 +134,14 @@ function createTroubleshootFeedbackUi({ document: doc, ipcRenderer, getSession, 
     button.lastChild.textContent = '正在整理…';
     try {
       const conclusion = await collect(session);
+      if (!conclusion.found && !nudged.has(session.id) && ipcRenderer && typeof ipcRenderer.invoke === 'function') {
+        nudged.add(session.id);
+        const sent = await ipcRenderer.invoke('session:send-prompt', { sessionId: session.id, text: WRAP_UP_PROMPT, clientSubmissionId: randomId(), waitForCliReady: true }).catch(() => null);
+        if (sent && sent.ok !== false) {
+          notify('Agent 还没写出【排查结论】，已替你请它现在收尾。结论出来后再点一次；不想等的话现在再点一次，直接反馈已有内容。', 'info');
+          return { ok: true, found: false, nudged: true };
+        }
+      }
       const saved = readContext(session.cwd) || {};
       const description = feedbackDescription({ conclusion, ctx: saved.ctx || {}, sessionTitle: session.title || '', kindLabel: kindLabel(session.kind) });
       void open({ description });
@@ -178,6 +196,6 @@ function mountTroubleshootFeedback(win = typeof window !== 'undefined' ? window 
 }
 
 module.exports = {
-  CONTEXT_FILE, BEGIN, END, isTroubleshootCwd, extractConclusion, pickConclusion, feedbackDescription, readContext, writeContext,
+  CONTEXT_FILE, BEGIN, END, WRAP_UP_PROMPT, isTroubleshootCwd, extractConclusion, pickConclusion, feedbackDescription, readContext, writeContext,
   createTroubleshootFeedbackUi, mountTroubleshootFeedback,
 };

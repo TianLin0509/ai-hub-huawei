@@ -1,7 +1,7 @@
 'use strict';
 const { MeetingCapture } = require('./meeting-capture');
 const { meetingTemplate } = require('./company-meeting-template');
-const { flowEntries, meetingNavigation } = require('./company-meeting-flow');
+const { flowEntries, flowStamp, meetingNavigation } = require('./company-meeting-flow');
 const { meetingAsrState } = require('./company-meeting-asr-state');
 const netPassView = require('./net-pass-view');
 function createCompanyMeetingPage({ document, window, call, markdown, openSession }) {
@@ -100,7 +100,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
     return `<details class="meeting-flow-answer" data-answer="${esc(q.id)}" data-question-state="${esc(q.state || 'queued')}"${expanded ? ' open' : ''}><summary><span class="meeting-question-badge" aria-hidden="true">问</span><span class="meeting-question-title">${esc(q.q)}</span><small class="meeting-question-isolation">单独回答 · 不影响纪要</small><span class="meeting-question-state">${status}</span></summary>${body}${actions}</details>`;
   }
   function renderFlow(meeting) {
-    const list = el('timeline'), entries = flowEntries(meeting), stamp = JSON.stringify([id, entries]);
+    const list = el('timeline'), entries = flowEntries(meeting), stamp = flowStamp(id, meeting, entries);
     if (list.dataset.stamp === stamp) return;
     const follow = list.scrollHeight - list.clientHeight - list.scrollTop < 64;
     const anchor = [...list.children].find(n => n.getBoundingClientRect().bottom > list.getBoundingClientRect().top);
@@ -218,7 +218,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       exportButton.querySelector('span').hidden = !reviewing;
       el('duration').textContent = time(m?.capturedMs);
       meters();
-      el('clock').textContent = time(capture?.running ? capture.elapsed() : m?.capturedMs);
+      el('clock').textContent = time(capture?.running ? capture.displayMs() : m?.capturedMs);
       if (!root.querySelector('.meeting-rename-input')) el('session-title').textContent = m?.title || '准备开始一场会议';
       el('rename-title').hidden = !m;
       el('source-label').textContent = m ? m.sourceName || '本地会议记录' : '选择共享窗口，让会议内容有据可查';

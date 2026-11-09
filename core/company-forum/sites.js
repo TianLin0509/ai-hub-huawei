@@ -26,7 +26,7 @@ const SITES = Object.freeze([
     id: 'xinsheng', name: '心声社区', short: '心声', sub: 'xinsheng', home: '/next/index/#/home',
     clickText: '',
     lists: Object.freeze([
-      { key: 'click', label: '24小时点击', heading: '24小时点击排行', api: /click|view|read|hot/i },
+      { key: 'click', label: '24小时点击', heading: '24小时点击排行', api: /click|view|read|hot/i, fallbackCard: /热门/ },
       { key: 'reply', label: '24小时回复', heading: '24小时回复排行', api: /reply|comment/i },
     ]),
     api: /\/(?:xsapi|xsrecommend)\//i,

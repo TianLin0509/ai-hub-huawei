@@ -57,9 +57,12 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "修复公司模型无法使用：能正确找到 CodeAgent 的签名运行库，带构建后缀的版本号（如 1.2615.02.02-01）也能正常使用。"
+    "公司助理第一次使用时，不再卡在目录信任确认上，第一个问题能正常发出",
+    "助理启动慢时自动多等一会，问题没送达会换新会话重发一次",
+    "会议暂停时计时冻结；发言人改名后时间流同步更新",
+    "论坛热门卡片兜底、考勤夜里打开也会读取、一键安装 PPT 组件显示百分比、内置域名不再提示还不知道"
   ],
-  "version": "5.5.48",
+  "version": "5.5.50",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

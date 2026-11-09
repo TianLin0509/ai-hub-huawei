@@ -94,3 +94,13 @@ require('node:test')('安装就绪后已有待转写音频自动继续，最终�
   assert.equal(current.finalRequested, false);
   assert.equal(meetingAsrState({ ready }, current).reviewReady, true);
 });
+
+// 发言人改名后时间流要重画：名字不在事件里，必须进指纹。
+{
+  const { flowStamp } = require('../renderer/company-meeting-flow');
+  const renamed = { events: [{ seq: 1, kind: 'transcript', at: 0, speaker: 1, text: '你好' }], answers: [], speakers: { list: [{ id: 1, name: '' }] } };
+  const before = flowStamp('m1', renamed, flowEntries(renamed));
+  assert.equal(before, flowStamp('m1', renamed, flowEntries(renamed)));
+  renamed.speakers.list[0].name = '新名字';
+  assert.notEqual(before, flowStamp('m1', renamed, flowEntries(renamed)));
+}

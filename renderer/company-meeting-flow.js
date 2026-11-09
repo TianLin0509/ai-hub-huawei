@@ -19,6 +19,11 @@ function flowEntries(meeting) {
   return entries.sort((a, b) => (a.at ?? Infinity) - (b.at ?? Infinity) || (a.event?.seq || 0) - (b.event?.seq || 0));
 }
 
+// 发言人名字存在会议上、不在事件里，要算进指纹，否则改名后时间流不重画。
+function flowStamp(id, meeting, entries) {
+  return JSON.stringify([id, entries, (meeting?.speakers?.list || []).map(s => [s.id, s.name])]);
+}
+
 // Only index topics grounded by an existing event; never invent topics from timestamps.
 function meetingNavigation(meeting) {
   const events = new Map((meeting?.events || []).map(e => [e.seq, e]));
@@ -45,4 +50,4 @@ function meetingNavigation(meeting) {
   return { kind: 'time', items: anchors.map(e => ({ seq: e.seq, at: e.at, title: e.kind === 'mark' ? e.text || '会议重点' : '共享画面' })) };
 }
 
-module.exports = { flowEntries, meetingNavigation };
+module.exports = { flowEntries, flowStamp, meetingNavigation };

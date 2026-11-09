@@ -145,3 +145,54 @@ test('顶栏按钮：只在排查会话且有一键反馈入口时出现，放�
     assert.equal(ui.button.hidden, true, '不在会话视图时不显示');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('没有结论块：兜底取最近一次提问之后 Agent 写的全部内容，不只是开头那句', () => {
+  const turns = [
+    { role: 'user', text: '任务书' },
+    { role: 'assistant', text: '我先读排查手册，2 分钟内给你初步判断。' },
+    { role: 'assistant', text: '查到 welink-cli 在 npm 全局目录，能运行。' },
+  ];
+  const r = tf.pickConclusion(turns);
+  assert.equal(r.found, false);
+  assert.ok(r.text.includes('我先读排查手册') && r.text.includes('npm 全局目录'));
+});
+
+test('还没有结论块时：第一次点先替用户催 Agent 收尾，第二次点直接反馈现有内容', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-wrap-'));
+  const cwd = path.join(dir, 'troubleshoot', '20261108160000-cd34');
+  fs.mkdirSync(cwd, { recursive: true });
+  try {
+    const { doc } = fakeDom();
+    const session = { id: 's9', kind: 'codeagent', title: '排查：x', cwd };
+    const opened = [], prompts = [], notes = [];
+    const ipcRenderer = { invoke: async (channel, payload) => {
+      if (channel === 'parse-session-transcript') return { turns: [{ role: 'user', text: '任务书' }, { role: 'assistant', text: '我先读手册。' }] };
+      if (channel === 'session:send-prompt') { prompts.push(payload); return { ok: true }; }
+      return '';
+    } };
+    const ui = tf.createTroubleshootFeedbackUi({ document: doc, ipcRenderer, getSession: () => session, getDataDir: () => dir,
+      openFeedback: () => prefill => opened.push(prefill), notify: m => notes.push(m) });
+    const first = await ui.run();
+    assert.equal(first.nudged, true);
+    assert.equal(prompts.length, 1); assert.equal(prompts[0].sessionId, 's9'); assert.equal(prompts[0].text, tf.WRAP_UP_PROMPT);
+    assert.equal(opened.length, 0); assert.match(notes[0], /再点一次/);
+    const second = await ui.run();
+    assert.equal(second.found, false); assert.equal(prompts.length, 1, '同一会话只催一次');
+    assert.equal(opened.length, 1); assert.match(opened[0].description, /我先读手册/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('催收尾发不出去（会话已关等）：直接打开反馈，不卡住', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ts-wrap2-'));
+  const cwd = path.join(dir, 'troubleshoot', '20261108160100-ef56');
+  fs.mkdirSync(cwd, { recursive: true });
+  try {
+    const { doc } = fakeDom();
+    const opened = [];
+    const ipcRenderer = { invoke: async channel => { if (channel === 'session:send-prompt') throw new Error('closed'); return channel === 'parse-session-transcript' ? { turns: [] } : '半截回答'; } };
+    const ui = tf.createTroubleshootFeedbackUi({ document: doc, ipcRenderer, getSession: () => ({ id: 's8', cwd }), getDataDir: () => dir,
+      openFeedback: () => prefill => opened.push(prefill) });
+    await ui.run();
+    assert.equal(opened.length, 1); assert.match(opened[0].description, /半截回答/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

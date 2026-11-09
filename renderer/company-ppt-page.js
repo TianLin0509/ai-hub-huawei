@@ -205,7 +205,7 @@ function createCompanyPptPage({ document, window, ipcRenderer, closeOtherPanels 
     if (name === 'conversion-workdir') return call('ppt-imgtext-workdir', { jobId: lastConversionId() });
     if (name === 'doctor-install') {
       button.disabled = true; notice('正在下载并安装 PPT Doctor，可能需要几分钟，不会动原来的安装。');
-      const progress = (_event, state) => { if (state?.message) notice(state.message); };
+      const progress = (_event, state) => { if (state?.message) notice(state.message + (state.phase === 'downloading' && state.total > 0 && state.received > 0 ? ` ${Math.min(99, Math.floor(state.received / state.total * 100))}%` : '')); };
       ipcRenderer.on('components:doctor-state', progress);
       try {
         const r = await ipcRenderer.invoke('components:doctor-install');

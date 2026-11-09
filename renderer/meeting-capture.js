@@ -62,6 +62,8 @@ class MeetingCapture {
     stream.getAudioTracks().forEach(t => { t.onended = () => { this.disconnected = true; void this.pause((track === 'mic' ? '麦克风' : '系统声音') + '断开').catch(e => this.status(e.message)); this.status('声音来源已断开，已暂停采集，请结束并重新选择设备'); }; });
   }
   elapsed() { return Math.max(0, Math.round(this.w.performance.now() - this.started)); }
+  // 界面时钟：暂停期间停在暂停那一刻。elapsed() 是墙上时钟，录像时间轴靠它记录暂停缺口，不能改。
+  displayMs() { return this.paused && this.gapAt != null ? this.gapAt : this.elapsed(); }
   start(crop) { this.crop = crop; this.started = this.w.performance.now(); this.running = true; this.paused = false; this.recorder?.start(); this.timer = setInterval(() => { if (!this.paused) { void this.frame().catch(e => this.status(e.message)); this.enqueue({ kind: 'heartbeat', at: this.elapsed() }); } }, 1000); void this.frame(true).catch(e => this.status(e.message)); }
   enqueue(item) { this.queue.push(item); if (this.queue.length > 30) { this.suspendForError('材料保存积压'); this.status('保存积压，已暂停采集；点击重试保存后继续。尚未写入的片段保留在内存中。'); } void this.drain(); }
   suspendForError(reason) { if (this.paused) return; this.paused = true; this.openGap(reason); this.pausing = this.recorder?.pause(); void this.pausing?.catch(() => {}); }

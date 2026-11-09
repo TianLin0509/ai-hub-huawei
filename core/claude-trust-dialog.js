@@ -119,15 +119,19 @@ function detectClaudeTrustDialog(buffer) {
 }
 
 // 屏幕上已经排好版的行（例如终端模拟器读出来的）：行号从 1 开始。
-function detectTrustDialogInLines(lines) {
+// cursorOnTrustIsEnough：只给 Hub 自己建的工作目录用。带安全风险清单的加长信任框可能看不到底栏按键提示，
+// 这时只要光标已经停在「信任」那一行，回车选的就是它。
+function detectTrustDialogInLines(lines, { cursorOnTrustIsEnough = false } = {}) {
   const entries = (Array.isArray(lines) ? lines : []).map((line, index) => [index + 1, String(line || '')]);
   if (!entries.some(([, line]) => TRUST_HINT_RE.test(line))) return null;
-  return detectTrustDialogInRows(entries);
+  return detectTrustDialogInRows(entries, { cursorOnTrustIsEnough });
 }
 
-function detectTrustDialogInRows(entries) {
+function detectTrustDialogInRows(entries, { cursorOnTrustIsEnough = false } = {}) {
   const joined = entries.map(([, line]) => line).join('\n');
-  if (!TRUST_PROMPT_RE.test(joined) || !CONFIRM_HINT_RE.test(joined)) return null;
+  if (!TRUST_PROMPT_RE.test(joined)) return null;
+  const hasConfirmHint = CONFIRM_HINT_RE.test(joined);
+  if (!hasConfirmHint && !cursorOnTrustIsEnough) return null;
 
   let trustRow = null;
   let cursorRow = null;
@@ -138,6 +142,7 @@ function detectTrustDialogInRows(entries) {
     if (startsWithCursorMarker(line)) cursorRow = rowNumber;
   }
   if (trustRow === null || cursorRow === null) return null;
+  if (!hasConfirmHint && cursorRow !== trustRow) return null;
 
   const delta = trustRow - cursorRow;
   if (Math.abs(delta) > MAX_MENU_DISTANCE) return null;

@@ -84,7 +84,8 @@ class CompanyAttendance {
   close() { this.stop(); }
 
   // 今天还没成功、距上次尝试超过 1 小时、不在 0–6 点：才去访问。
-  shouldRun() {
+  // allowNight：用户此刻打开了考勤页，不受夜间限制；后台定时仍然避开 0–6 点。
+  shouldRun({ allowNight = false } = {}) {
     const st = this.read('state', {});
     const now = this.now();
     if (!this.settings().autoDaily) return false;
@@ -92,8 +93,8 @@ class CompanyAttendance {
     // 上次因为没找到域名失败、现在找到了：不用等 1 小时。
     // （旧版本的这类失败没有 needsDomain 标记，按报错文字认。）
     const domainFail = st.lastResult && !st.lastResult.ok && (st.lastResult.needsDomain || /公司域名/.test(String(st.lastResult.error || '')));
-    if (domainFail && this.settings().domain) return now.getHours() >= 6;
-    if (now.getHours() < 6) return false;
+    if (domainFail && this.settings().domain) return allowNight || now.getHours() >= 6;
+    if (!allowNight && now.getHours() < 6) return false;
     return !st.lastAttemptAt || now.getTime() - Date.parse(st.lastAttemptAt) >= RETRY_MS;
   }
   async tick() { if (this.shouldRun()) await this.sync({ reason: 'daily' }); }

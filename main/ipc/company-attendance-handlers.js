@@ -7,7 +7,7 @@ function registerCompanyAttendanceIpc(ipcMain, getService) {
     status: () => svc().status(),
     sync: async () => { await svc().sync({ reason: 'manual' }); return svc().status(); },
     // 打开考勤页：今天还没成功、且允许每天自动取时，开始取一次（不等结果）。
-    'ensure-today': () => { const s = svc(); if (s.shouldRun()) void s.sync({ reason: 'open' }).catch(() => {}); else if (!s.settings().domain) void s.ensureDomain().then(d => { if (d && s.shouldRun()) return s.sync({ reason: 'open' }); }).catch(() => {}); return s.status(); },
+    'ensure-today': () => { const s = svc(); if (s.shouldRun({ allowNight: true })) void s.sync({ reason: 'open' }).catch(() => {}); else if (!s.settings().domain) void s.ensureDomain().then(d => { if (d && s.shouldRun({ allowNight: true })) return s.sync({ reason: 'open' }); }).catch(() => {}); return s.status(); },
     login: async () => { const r = await svc().login(); if (r && r.ok) void svc().sync({ reason: 'login' }).catch(() => {}); return r; },
     'set-settings': (request) => ({ ok: true, settings: svc().setSettings(request || {}) }),
   };

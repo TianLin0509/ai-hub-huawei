@@ -82,6 +82,9 @@ const HISTORY_IDLE_MS = 30 * 60000;
 const DIGEST_CHARS = 4000;
 const JOB_TIMEOUT_MS = 12 * 60000;
 const PPT_TIMEOUT_MS = 25 * 60000;
+const CLI_NOT_READY_RETRY_MS = 15000;
+const CLI_NOT_READY_MAX_MS = 5 * 60000;
+const UNDELIVERED_MS = 90000;
 const FRESH_MS = 3 * 60000;
 // 助理收工看回执标记（2026-11-06 CodeAgent 性能盘点，做法同会议的「会议回执」和 AI 任务的「任务回执」）：
 // 提问末尾要求最后一行原样写 [助理回执:<本问编号>]，带标记的回答才算答完；以前只要最后一条回答变了就收，
@@ -1571,7 +1574,7 @@ class CompanyAssistant {
         if (laneName === 'chat') this.saveState({ sessionId: id, toolsVersion: TOOLS_VERSION });
       }
       this.metering.begin(job);
-      const receipt = await this.deps.sendPrompt(id, prompt, randomUUID());
+      const receipt = await this.sendWhenReady(job, id, prompt);
       if (job.stopped) {
         // 发问途中被停止：问题可能已经进了会话，让它停下；这一问已按停止结束，接着派下一问。
         if (receipt && !receipt.notSent) Promise.resolve().then(() => this.deps.interruptSession?.(id)).catch(() => {});
@@ -1580,12 +1583,26 @@ class CompanyAssistant {
       }
       if (!receipt || receipt.notSent || (receipt.ok === false && !receipt.unconfirmed && receipt.sendStatus !== 'stuck')) throw new Error(receipt?.error || '问题没有发进助理会话');
       // 问题已送进 CodeAgent：界面从「CodeAgent 准备中」切到「正在查」，两段各自计时（2026-11-06 用户要进度可见）。
+      job.sentAt = this.now(); // 回答时限从真正发进去算，等 CLI 就绪的时间不占
       if (job.type === 'chat') this.patchChat(job.chatId, { answeringAt: this.now() });
       if (toolset === 'desk') this.prewarm('desk');
     } catch (error) {
       // 已按「停止这一问」结束的不再改写原因，只接着派下一问
       if (!job.stopped) this.failJob(job, error.message); else setTimeout(() => { void this.pump(laneName); }, 0);
     } finally { lane.pumping = false; this.changed(); }
+  }
+  // 会话没了或过了上限才算这一问失败。用户点了「停止这一问」就不再发。
+  async sendWhenReady(job, id, prompt) {
+    const since = this.now();
+    for (;;) {
+      const receipt = await this.deps.sendPrompt(id, prompt, randomUUID());
+      if (!receipt?.notSent || receipt.error !== 'cli-not-ready' || job.stopped || this.closed) return receipt;
+      const gone = this.sessionGone(id);
+      if (gone) throw new Error(gone);
+      if (this.now() - since >= CLI_NOT_READY_MAX_MS) throw new Error(`CodeAgent 等了 ${Math.round((this.now() - since) / 60000)} 分钟还没启动好，这一问没有发出；可以重问`);
+      await new Promise(resolve => setTimeout(resolve, this.deps.notReadyRetryMs ?? CLI_NOT_READY_RETRY_MS));
+      if (job.stopped || this.closed) return receipt;
+    }
   }
   async collectJob(laneName) {
     if (!laneName) { for (const name of Object.keys(this.lanes)) await this.collectJob(name); return; }
@@ -1643,7 +1660,27 @@ class CompanyAssistant {
       void this.pump(laneName);
       return;
     }
+    if (this.undelivered(job)) { this.resendOrFail(job, lane, laneName); return; }
     if (this.now() - job.sentAt > limit) this.failJob(job, `助理会话 ${Math.round(limit / 60000)} 分钟没给出回答`);
+  }
+  // 发出后 90 秒，会话既没在忙、也没绑定到任何记录：这一问没进 CodeAgent，或进了也读不到回答，再等也等不到（绿区实录：空等 12 分钟）。
+  undelivered(job) {
+    if (job.teamOwner || job.toolset === 'ppt' || this.now() - job.sentAt < UNDELIVERED_MS) return false;
+    const meta = this.deps.getSession(job.sessionId) || this.deps.getSessionMetadata?.(job.sessionId);
+    return !!meta && !meta.transcriptPath && !meta.ccSessionId;
+  }
+  // 换一个新会话重发一次；还不行才报失败。
+  resendOrFail(job, lane, laneName) {
+    if (job.resent) { this.failJob(job, '问题没能送进 CodeAgent（已换新会话重发过一次），可以重问；也可以点「历史」看终端停在哪'); return; }
+    const old = job.sessionId;
+    this.query.finishAnswer(job.id, '', old);
+    Object.assign(job, { resent: true, sentAt: null, sessionId: null, token: null, baseline: null, unmarked: null });
+    lane.job = null;
+    lane.queue.unshift(job);
+    this.retire(old);
+    if (job.type === 'chat') this.patchChat(job.chatId, { answeringAt: null });
+    this.changed();
+    void this.pump(laneName);
   }
   failJob(job, message, { stopped = false } = {}) {
     if (stopped) job.stopped = true;

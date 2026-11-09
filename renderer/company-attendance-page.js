@@ -137,7 +137,7 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
   }
   function bodyHtml() {
     if (!status.records.length) {
-      return `<div class="att-empty"><h2>还没有考勤数据</h2><p>${status.syncing ? '正在打开考勤页读取最近 8 天，大约需要半分钟。' : esc(status.lastResult?.error || '开启后每天会在后台读一次；也可以现在就读。')}</p>
+      return `<div class="att-empty"><h2>还没有考勤数据</h2><p>${status.syncing ? '正在打开考勤页读取最近 8 天，通常半分钟，最长约 3 分钟。' : esc(status.lastResult?.error || '开启后每天会在后台读一次；也可以现在就读。')}</p>
         ${status.lastResult?.needsDomain && !status.settings?.domain ? '<div class="att-row"><input class="att-input" data-f="quickDomain" placeholder="你的公司邮箱，例如 name@corp.example"><button type="button" class="att-btn primary" data-att="quick-domain">保存并读取</button></div>' : ''}
         <div class="att-row">${status.lastResult?.needsLogin ? '<button type="button" class="att-btn primary" data-att="login">登录考勤</button>' : ''}<button type="button" class="att-btn${status.lastResult?.needsLogin ? '' : ' primary'}" data-att="sync">现在读取</button></div></div>`;
     }
@@ -226,7 +226,7 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
   async function load() { status = await call('status'); render(); }
 
   async function action(name, el) {
-    if (name === 'sync') { el.disabled = true; showMessage?.('正在读取考勤，大约需要半分钟'); try { status = await call('sync'); render(); const r = status.lastResult; showMessage?.(r?.ok ? `读到 ${r.got} 天，新增 ${r.added}、更新 ${r.updated}` : '读取失败：' + (r?.error || '')); } finally { el.disabled = false; } return; }
+    if (name === 'sync') { el.disabled = true; showMessage?.('正在读取考勤，通常半分钟，最长约 3 分钟'); try { status = await call('sync'); render(); const r = status.lastResult; showMessage?.(r?.ok ? `读到 ${r.got} 天，新增 ${r.added}、更新 ${r.updated}` : '读取失败：' + (r?.error || '')); } finally { el.disabled = false; } return; }
     if (name === 'quick-domain') {
       const v = page.querySelector('[data-f="quickDomain"]').value.trim();
       if (!v) { showMessage?.('填一下公司邮箱或域名'); return; }

@@ -99,3 +99,9 @@ test('漏抓几天：后一次的 8 天把早上只有上班卡的那天补全',
 test('假期列表解析', () => {
   assert.deepEqual(holidaysFrom([{ holidayDate: '2026-10-02 00:00:00', holidayType: '法定假期' }, { x: 1 }]), { '2026-10-02': '法定假期' });
 });
+
+test('夜里打开考勤页可以读取，后台定时仍避开 0–6 点', () => {
+  const { svc } = make({ now: '2026-11-09T02:55:00' });
+  assert.equal(svc.shouldRun(), false);
+  assert.equal(svc.shouldRun({ allowNight: true }), true);
+});

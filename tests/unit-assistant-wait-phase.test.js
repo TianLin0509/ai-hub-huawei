@@ -23,7 +23,7 @@ test('旧记录没有 answeringAt 时仍按原来的起点显示', () => {
 test('服务在问题送进 CodeAgent 后记下 answeringAt，进入准备阶段时立刻通知界面', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'core', 'company-assistant', 'service.js'), 'utf8');
   assert.match(src, /startedAt: this\.now\(\) \}\); this\.changed\(\);/);
-  const sendAt = src.indexOf('await this.deps.sendPrompt(id, prompt');
+  const sendAt = src.indexOf('await this.sendWhenReady(job, id, prompt)');
   const markAt = src.indexOf("patchChat(job.chatId, { answeringAt: this.now() })");
   assert.ok(sendAt > 0 && markAt > sendAt);
 });

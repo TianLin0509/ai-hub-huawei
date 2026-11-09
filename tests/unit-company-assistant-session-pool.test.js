@@ -207,3 +207,75 @@ test('助理思考档：默认不带，设成 low 后新开的问答会话带上
   const id = await f.a.openPooled('ppt');
   assert.equal(f.sessions.get(id).effort, undefined);
 });
+
+test('CLI 没就绪（cli-not-ready）不让这一问失败：同一会话隔一会儿再发，就绪后照常答', async t => {
+  const f = fixture(t, { prewarm: false });
+  f.a.deps.notReadyRetryMs = 0;
+  const realSend = f.a.deps.sendPrompt;
+  let notReady = 2;
+  f.a.deps.sendPrompt = async (id, text) => {
+    if (notReady > 0) { notReady -= 1; f.advance(60000); return { ok: false, notSent: true, sendStatus: 'rejected', error: 'cli-not-ready' }; }
+    return realSend(id, text);
+  };
+  const item = f.a.ask('今天有哪些会');
+  await f.settle(); await new Promise(r => setTimeout(r, 5)); await f.settle();
+  assert.equal(f.prompts.length, 1, '就绪后发出去一次');
+  assert.equal(f.a.chat().find(c => c.id === item.id).state, 'running');
+  f.answer(f.prompts[0].id, '今天两场会');
+  await f.a.collectJob('chat');
+  assert.equal(f.a.chat().find(c => c.id === item.id).state, 'done');
+});
+
+test('CLI 一直没就绪：到上限才报失败，提示可以重问', async t => {
+  const f = fixture(t, { prewarm: false });
+  f.a.deps.notReadyRetryMs = 0;
+  f.a.deps.sendPrompt = async () => { f.advance(120000); return { ok: false, notSent: true, sendStatus: 'rejected', error: 'cli-not-ready' }; };
+  const item = f.a.ask('今天有哪些会');
+  for (let i = 0; i < 5; i += 1) { await f.settle(); await new Promise(r => setTimeout(r, 5)); }
+  const row = f.a.chat().find(c => c.id === item.id);
+  assert.equal(row.state, 'error');
+  assert.match(row.error, /还没启动好.*可以重问/);
+  assert.doesNotMatch(row.error, /cli-not-ready/);
+});
+
+test('等 CLI 就绪期间点停止：不再发问，按停止结束', async t => {
+  const f = fixture(t, { prewarm: false });
+  f.a.deps.notReadyRetryMs = 20;
+  let sends = 0;
+  f.a.deps.sendPrompt = async () => { sends += 1; return { ok: false, notSent: true, sendStatus: 'rejected', error: 'cli-not-ready' }; };
+  const item = f.a.ask('今天有哪些会');
+  await f.settle();
+  await f.a.stopChat(item.id);
+  await new Promise(r => setTimeout(r, 40)); await f.settle();
+  assert.equal(sends, 1);
+  const row = f.a.chat().find(c => c.id === item.id);
+  assert.equal(row.state, 'error'); assert.equal(row.stopped, true);
+});
+
+test('发出后 90 秒没忙、没绑定记录：换新会话重发一次，再不行就报失败，不空等 12 分钟', async t => {
+  const f = fixture(t, { prewarm: false });
+  const item = f.a.ask('今天有哪些会');
+  await f.settle();
+  assert.equal(f.prompts.length, 1);
+  f.advance(91000);
+  await f.a.collectJob('chat'); await f.settle();
+  assert.equal(f.prompts.length, 2, '重发一次');
+  assert.notEqual(f.prompts[1].id, f.prompts[0].id, '换了新会话');
+  assert.equal(f.a.chat().find(c => c.id === item.id).state, 'running');
+  f.advance(91000);
+  await f.a.collectJob('chat'); await f.settle();
+  const row = f.a.chat().find(c => c.id === item.id);
+  assert.equal(row.state, 'error');
+  assert.match(row.error, /没能送进 CodeAgent/);
+  assert.equal(f.prompts.length, 2, '只重发一次');
+});
+
+test('已绑定记录的会话答得慢：不算没送达，不重发', async t => {
+  const f = fixture(t, { prewarm: false });
+  f.a.ask('今天有哪些会');
+  await f.settle();
+  f.sessions.get(f.prompts[0].id).transcriptPath = 'x.jsonl';
+  f.advance(120000);
+  await f.a.collectJob('chat'); await f.settle();
+  assert.equal(f.prompts.length, 1);
+});

@@ -161,7 +161,7 @@ test('问问 Agent：默认开 CodeAgent 会话，标题「排查：…」，首
   for (const part of ['点创建没反应', '新建会话', 'spawn x ENOENT', 'v5.5.24', 'C:\\data\\logs', '先只读排查', '等我同意后再动手']) assert.ok(text.includes(part), part);
   // 5.5.31 任务书：角色与目标、先读手册、2 分钟先给判断、问复现、10 分钟收敛、全程中文、结尾固定结论块
   for (const part of ['排查助手', '能安全修好就修', '给 AI HUB 维护人的排查报告', '先读它：C:\\Hub\\docs\\TROUBLESHOOT-AGENT.md',
-    '2 分钟内先用中文给我初步判断', '最可能的 1–3 个原因', '先问我是怎么出现的', '10 分钟左右', '全程用中文回复我', '不删除我的数据']) assert.ok(text.includes(part), part);
+    '第一条回复先用 2–4 句中文写初步判断', '最可能的 1–3 个原因', '能不能复现', '状态写「未复现」', '到 10 分钟时', '全程用中文回复我', '不删除我的数据']) assert.ok(text.includes(part), part);
   assert.ok(text.endsWith(card.CONCLUSION_FORMAT.join('\n')), '结论块格式放在最后');
   for (const field of ['状态：已解决 / 未解决 / 需要用户操作', '原因：', '证据：（日志文件 + 时间 + 关键行摘要）', '已做的修改：', '建议用户做的：', '给维护人的说明：（未解决时写复现步骤']) assert.ok(text.includes(field), field);
   assert.equal(card.CONCLUSION_FORMAT[0], '【排查结论】');

@@ -108,3 +108,19 @@ test('单榜站点（稼先）：热帖标题带「热点」、下面挂着带�
   assert.deepEqual(ids(list), ['101', '102', '103']);
   assert.equal(list.from, 'api');
 });
+
+test('首页没有 24 小时榜时，用热门卡片兜底并按卡片名显示，不用最新卡片', () => {
+  const { SITES } = require('../core/company-forum/sites');
+  const { postsForSite } = require('../core/company-forum/extract');
+  const site = SITES.find(s => s.id === 'xinsheng');
+  const list = prefix => Array.from({ length: 10 }, (_, i) => ({ postId: `${prefix}${i + 100}`, title: `${prefix}帖子标题 ${i + 1}`, link: `/next/detail/#/index?uuid=${prefix}${i + 100}&uniqueType=homeRanking` }));
+  const capture = { finalUrl: 'https://xinsheng.corp.example/next/index/#/home', links: [], sections: site.lists.map(l => ({ heading: l.heading, found: false, links: [], lines: [] })),
+    json: [{ url: 'https://xinsheng.corp.example/xsrecommend/user/v1/cards/recommends/home/right', json: { status: 200, data: [
+      { id: '1', cardType: 'HOT_LIST', title: '公司人最新文章', list: list('new') }, { id: '2', cardType: 'HOT_LIST', title: '公司人热门文章', list: list('hot') }] } }] };
+  const lists = postsForSite(site, capture, { base: 'https://xinsheng.corp.example', limit: 20 });
+  assert.equal(lists.length, 1);
+  assert.equal(lists[0].label, '公司人热门文章');
+  assert.equal(lists[0].posts.length, 10);
+  assert.match(lists[0].posts[0].title, /^hot/);
+  assert.match(lists[0].posts[0].url, /^https:\/\/xinsheng\.corp\.example\/next\/detail/);
+});
