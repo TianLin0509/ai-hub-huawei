@@ -3014,7 +3014,7 @@ class SessionManager extends EventEmitter {
         const lines = await trustScreen.lines();
         // 空屏 = 屏幕已被 90 秒看门狗收掉，不能当成「框消失了」。
         if (trustDone || !lines.length) return;
-        const dialog = detectTrustDialogInLines(lines, { cursorOnTrustIsEnough: opts.purpose === 'company-assistant' });
+        const dialog = detectTrustDialogInLines(lines, { cursorOnTrustIsEnough: true });
         const joined = lines.join('\n');
         const textShown = TRUST_PROMPT_RE.test(joined) && TRUST_OPTION_RE.test(joined);
         if (textShown && !trustTextSince) { trustTextSince = Date.now(); trustPhase('trust-detected'); }

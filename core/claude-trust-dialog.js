@@ -119,7 +119,7 @@ function detectClaudeTrustDialog(buffer) {
 }
 
 // 屏幕上已经排好版的行（例如终端模拟器读出来的）：行号从 1 开始。
-// cursorOnTrustIsEnough：只给 Hub 自己建的工作目录用。带安全风险清单的加长信任框可能看不到底栏按键提示，
+// cursorOnTrustIsEnough：CodeAgent 会话一律默认信任。带安全风险清单的加长信任框可能看不到底栏按键提示，
 // 这时只要光标已经停在「信任」那一行，回车选的就是它。
 function detectTrustDialogInLines(lines, { cursorOnTrustIsEnough = false } = {}) {
   const entries = (Array.isArray(lines) ? lines : []).map((line, index) => [index + 1, String(line || '')]);

@@ -380,6 +380,23 @@ async function writeSubmitFallbackSignals(sessionManager, sid, kind, tries = 1, 
 // waitCliReady — 群聊发送 prompt 前的等待轮询。判定逻辑独立到
 //   core/group-chat-cli-ready-detector.js（marker + buffer 静默双门 + monotonic guard）。
 //   timeout 提到 60s 兜底（Claude Opus 1M 启动 + 配置加载在慢机可能 30s+）。
+// 启动被提示框或别的画面挡住、问题发不出去时，把当时的屏幕记到本地日志，只弹一次的提醒也能事后查到原文。
+async function logStartupBlock(sid, reason, buffer, { dataDir, makeScreen } = {}) {
+  let screen = null;
+  try {
+    screen = (makeScreen || require('./claude-trust-dialog.js').createTrustScreen)();
+    if (!screen) return;
+    screen.write(String(buffer || '').slice(-200000));
+    const lines = (await screen.lines()).filter(line => line.trim()).slice(-40)
+      .map(line => line.replace(/[A-Za-z]:[\\/][^\s"]*/g, '<PATH>').trim().slice(0, 200));
+    const dir = path.join(dataDir || require('./data-dir').getHubDataDir(), 'logs');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'codeagent-startup-blocks.log');
+    if (fs.existsSync(file) && fs.statSync(file).size > 256 * 1024) fs.renameSync(file, file + '.1');
+    fs.appendFileSync(file, JSON.stringify({ at: new Date().toISOString(), session: String(sid).slice(0, 8), reason, lines }) + '\n');
+  } catch { /* 记录失败不能影响发送结果。 */ } finally { try { screen && screen.dispose(); } catch {} }
+}
+
 async function waitCliReady(sid, kind, maxMs = 60000) {
   const { sessionManager, cliReadyDetector } = _deps;
   const native = (sessionManager.getNativeSession?.(sid) || sessionManager.getNativeCodex?.(sid));
@@ -689,6 +706,7 @@ async function sendToPtyImpl(sid, prompt, kind, options = {}) {
       const readyKind = isCodexCliKind(kind) ? 'codex' : isCodeAgentKind(kind) ? 'codeagent' : isAntigravityKind(kind) ? 'gemini' : 'claude';
       // 选择框还挂着时粘贴会被吞掉，回车还会替用户选默认项：宁可不发，也不能替人做选择。
       if (_deps.cliReadyDetector.isChoiceDialogVisible?.(readyKind, sessionManager.getSessionBuffer(sid) || '')) {
+        await logStartupBlock(sid, 'cli-choice-pending', sessionManager.getSessionBuffer(sid) || '');
         throw Object.assign(new Error('CLI 正在等你在终端里做选择（例如启动提示），消息未发送；处理完后再发送'),
           { notSent: true, code: 'cli-choice-pending' });
       }
@@ -703,6 +721,7 @@ async function sendToPtyImpl(sid, prompt, kind, options = {}) {
     if (!ready) {
       const buf = sessionManager.getSessionBuffer(sid) || '';
       console.warn(`[group-chat] cli not ready for ${kind}(${sid.slice(0, 8)}) after 60s; bufLen=${buf.length}; tail=${JSON.stringify(buf.slice(-160))}`);
+      await logStartupBlock(sid, 'cli-not-ready', buf);
       return {ok:false,notSent:true,sendStatus:'rejected',error:'cli-not-ready',message:'助理启动尚未完成，本条消息未发送；稍后再发送即可。'};
     }
     sessionManager.setGroupChatReady(sid, true);
@@ -1400,6 +1419,7 @@ module.exports = {
   drainSubmission: sid => promptSubmissionQueues.get(sid)?.catch(() => {}) || Promise.resolve(),
   init,
   waitCliReady,
+  logStartupBlock,
   sendToPty,
   openCodeAgentCommands,
   codeAgentInputAction,
