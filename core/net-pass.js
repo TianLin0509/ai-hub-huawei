@@ -16,7 +16,7 @@ function readState(file) {
   catch { return { hosts: {} }; }
 }
 
-function createNetPass({ hosts = [], dataDir, fetchImpl, openGate, openVisible = null, now = () => Date.now(), logger = console, onChange = () => {} } = {}) {
+function createNetPass({ hosts = [], bridgeHosts = () => [], dataDir, fetchImpl, openGate, openVisible = null, now = () => Date.now(), logger = console, onChange = () => {} } = {}) {
   const file = dataDir ? path.join(dataDir, FILE) : null;
   const saved = file ? readState(file) : { hosts: {} };
   // 每台：state = unknown（还没查）/ checking / ok / blocked（拿到拦截页）/ error（连不上，不是放行能解决的）
@@ -33,15 +33,20 @@ function createNetPass({ hosts = [], dataDir, fetchImpl, openGate, openVisible =
     try { onChange(status()); } catch (_) {}
   };
 
+  function listHosts() {
+    const list = [...hosts];
+    for (const h of bridgeHosts()) if (!list.some(x => x.host === h.host)) list.push(h);
+    return list;
+  }
   function status() {
-    const list = hosts.map(h => {
-      const l = live.get(h.host) || {};
-      return { host: h.host, name: h.name, page: h.page, mirror: !!h.mirror, state: l.state, reason: l.reason, checkedAt: l.checkedAt,
+    const list = listHosts().map(h => {
+      const l = live.get(h.host) || { state: 'unknown' };
+      return { host: h.host, name: h.name, page: h.page, mirror: !!h.mirror, bridge: !!h.probeUrl, state: l.state, reason: l.reason, checkedAt: l.checkedAt,
         okAt: saved.hosts[h.host]?.okAt || null };
     });
     // 需要提醒：有主机拿到的是拦截页；或者这台电脑从没确认过能访问、这次也还没查出结果。连不上（error）不是放行能解决的，不催。
     const needed = list.some(h => h.state === 'blocked' || (!h.okAt && h.state === 'unknown'));
-    return { available: hosts.length > 0, running: !!running, needed, hosts: list };
+    return { available: list.length > 0, running: !!running, needed, hosts: list };
   }
 
   async function probe(h) {
@@ -49,10 +54,17 @@ function createNetPass({ hosts = [], dataDir, fetchImpl, openGate, openVisible =
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), PROBE_TIMEOUT_MS);
     try {
-      const res = await fetchImpl(h.page, { signal: ac.signal, cache: 'no-store', redirect: 'follow' });
+      const res = await fetchImpl(h.probeUrl || h.page, { signal: ac.signal, cache: 'no-store', redirect: 'follow' });
       const text = String(await res.text()).slice(0, 200000);
-      if (text.includes(`<title>${OWN_TITLE}</title>`)) { set(h.host, { state: 'ok', reason: null, checkedAt: now() }); return 'ok'; }
-      if (/<html|<!doctype/i.test(text)) { set(h.host, { state: 'blocked', reason: '被公司网络拦截，需要放行', checkedAt: now() }); return 'blocked'; }
+      if ((res.url && new URL(res.url).host !== h.host) || /HIS Proxy Notification|proxycontrolwarn/i.test(text)) {
+        set(h.host, { state: 'blocked', reason: '被公司网络拦截，需要放行', checkedAt: now() }); return 'blocked';
+      }
+      let bridgeOk = false;
+      if (h.probeUrl && res.status >= 200 && res.status < 300) {
+        try { const body = JSON.parse(text); bridgeOk = body.ok === true && Array.isArray(body.messages); } catch (_) {}
+      }
+      if (bridgeOk || (!h.probeUrl && res.status >= 200 && res.status < 300 && text.includes(`<title>${OWN_TITLE}</title>`))) { set(h.host, { state: 'ok', reason: null, checkedAt: now() }); return 'ok'; }
+      if (res.status !== 404 && res.status < 500 && /<html|<!doctype/i.test(text)) { set(h.host, { state: 'blocked', reason: '被公司网络拦截，需要放行', checkedAt: now() }); return 'blocked'; }
       set(h.host, { state: 'error', reason: `服务器返回 HTTP ${res.status}`, checkedAt: now() }); return 'error';
     } catch (error) {
       set(h.host, { state: 'error', reason: ac.signal.aborted ? '连接超时' : '连不上：' + (error && error.message || error), checkedAt: now() });
@@ -64,7 +76,7 @@ function createNetPass({ hosts = [], dataDir, fetchImpl, openGate, openVisible =
   async function refresh({ force = false } = {}) {
     if (running) return running;
     running = (async () => {
-      for (const h of hosts) {
+      for (const h of listHosts()) {
         const l = live.get(h.host);
         if (!force && l && l.state === 'ok') continue;
         await probe(h);
@@ -79,7 +91,7 @@ function createNetPass({ hosts = [], dataDir, fetchImpl, openGate, openVisible =
     if (running) await running.catch(() => {});
     const results = [];
     running = (async () => {
-      for (const h of hosts) {
+      for (const h of listHosts()) {
         let r = await probe(h), clicked = false;
         if (r === 'blocked' && openGate) {
           try { const g = await openGate(h.page); clicked = !!(g && g.clicked); }

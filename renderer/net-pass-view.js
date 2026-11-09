@@ -27,20 +27,21 @@ function hostText(h) { return h.state === 'error' ? (h.reason || '连不上') : 
 // status：core/net-pass.js status() 的结果；last：上一次 passAll 的结果（可空）；compact：都能访问时只显示一行。
 function boxHtml(status, { last = null, compact = true } = {}) {
   if (!status || !status.available || !Array.isArray(status.hosts) || !status.hosts.length) return '';
+  const serverWord = status.hosts.some(h => h.bridge) ? '服务器' : '下载服务器';
   const running = !!status.running;
   const rows = status.hosts.map(h => `<li class="np-${esc(h.state)}"><span class="np-name">${esc(h.name)}</span><span class="np-st">${esc(hostText(h))}</span></li>`).join('');
   const stillBlocked = last && Array.isArray(last.results) ? last.results.filter(r => r.result === 'blocked') : [];
-  const runBtn = `<button type="button" class="primary" data-np="run"${running ? ' disabled' : ''}>${running ? '正在放行…' : '放行下载服务器'}</button>`;
+  const runBtn = `<button type="button" class="primary" data-np="run"${running ? ' disabled' : ''}>${running ? '正在放行…' : '放行' + serverWord}</button>`;
   if (!status.needed && !stillBlocked.length) {
-    if (!compact) return `<div class="np-box"><b>下载服务器</b><ul>${rows}</ul><div class="np-actions">${runBtn}</div></div>`;
+    if (!compact) return `<div class="np-box"><b>${serverWord}</b><ul>${rows}</ul><div class="np-actions">${runBtn}</div></div>`;
     const names = status.hosts.map(h => `${esc(h.name)}：${esc(hostText(h))}`).join(' · ');
-    return `<p class="np-line">下载服务器 ${names}<button type="button" data-np="run"${running ? ' disabled' : ''}>${running ? '正在放行…' : '重新放行'}</button></p>`;
+    return `<p class="np-line">${serverWord} ${names}<button type="button" data-np="run"${running ? ' disabled' : ''}>${running ? '正在放行…' : '重新放行'}</button></p>`;
   }
   const manual = stillBlocked.length
     ? `<p>还有没放行的，点下面的按钮会在 Hub 里打开放行页，点「继续访问」或「接受」即可，放行后窗口自动关闭核对一次。</p><div class="np-actions">${stillBlocked
       .map(r => `<button type="button" data-np="open" data-page="${esc(r.page)}">打开放行页「${esc(r.name)}」</button>`).join('')}</div>` : '';
-  return `<div class="np-box np-need" data-np-box><b>第一次使用请先放行下载服务器</b>`
-    + `公司网络对新网站要先确认一次，没放行时下载会很慢或失败。点下面的按钮，Hub 会在后台把 ${status.hosts.length} 台下载服务器一起放行，只需点一次。`
+  return `<div class="np-box np-need" data-np-box><b>第一次使用请先放行${serverWord}</b>`
+    + `公司网络对新网站要先确认一次，没放行时${status.hosts.some(h => h.bridge) ? '下载或通道连接' : '下载'}会很慢或失败。点下面的按钮，Hub 会在后台把 ${status.hosts.length} 台${serverWord}一起放行，只需点一次。`
     + `<ul>${rows}</ul><div class="np-actions">${runBtn}</div>${manual}</div>`;
 }
 
