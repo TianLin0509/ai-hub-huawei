@@ -18,7 +18,7 @@ class PptLibrary {
     this.reading = null; this.materialized = '';
     this.doctor = deps.pptDoctor || new PptDoctor(assistant, deps);
     this.imgtext = new (require('./ppt-imgtext').PptImgtext)(this);
-    this.references = new Map();
+    this.references = new Map(); this.traces = new Map(); this.activeChat = '';
     this.taskResults = new Map(); this.taskReports = new Map(); this.taskEvidence = new Map(); this.activeTask = null; this.indexJob = null; this.indexChild = null;
     try { this.indexState = JSON.parse(fs.readFileSync(path.join(this.a.dir, 'ppt-index-state.json'), 'utf8')); }
     catch { this.indexState = { state: 'idle' }; }
@@ -42,7 +42,29 @@ class PptLibrary {
     const folders = [...new Set([...roots, ...[...(this.documents?.values() || [])].map(d => path.dirname(d.path))])].sort();
     return { ...this.current, db: this.db(), roots, folders, sources: this.current.sources || this.sources(), indexing: this.indexState };
   }
-  beginTask(id) { this.activeTask = id; this.taskResults.delete(id); this.taskReports.delete(id); this.taskEvidence.clear(); }
+  // chatId：界面问的是哪一条（job.id 是内部任务号）。Agent 每次 ppt_find / ppt_read / report 都记一笔「轨迹」，
+  // PPT 页把它画成「AI 正在做什么」（2026-11-08 用户：Agent 检索要让人感知到），全是真实调用，不编造。
+  beginTask(id, chatId = '') {
+    this.activeTask = id; this.activeChat = chatId || id; this.taskResults.delete(id); this.taskReports.delete(id); this.taskEvidence.clear();
+    this.traces.set(this.activeChat, { startedAt: Date.now(), events: [] });
+    while (this.traces.size > 20) this.traces.delete(this.traces.keys().next().value);
+  }
+  traceEvent(event) {
+    if (!this.activeTask) return;
+    const trace = this.traces.get(this.activeChat);
+    if (trace && trace.events.length < 60) trace.events.push({ at: Date.now(), ...event });
+  }
+  trace(chatId) { return chatId ? this.traces.get(chatId) || null : null; }
+  // 版式预览：只给本轮检索 / 读页返回过的页（references 里有的）画，不接受界面传来的任意路径。
+  async preview(id) {
+    const ref = this.references.get(String(id || ''));
+    if (!ref || !ref.path) throw Object.assign(new Error('这页不在最近的检索结果里，请重新检索'), { code: 'UNKNOWN_PAGE' });
+    if (!this.previewer) {
+      const { createSlidePreviewer, electronShrinker } = require('./ppt-slide-preview');
+      this.previewer = createSlidePreviewer({ cacheDir: path.join(this.a.dir, 'ppt-preview-cache'), shrinkImage: this.deps.pptPreviewShrink === undefined ? electronShrinker() : this.deps.pptPreviewShrink });
+    }
+    return { ok: true, id: String(id), scene: await this.previewer.scene(ref.path, Number(ref.page)) };
+  }
   takeTaskReport(id) { const report = this.taskReports.get(id) || ''; this.taskReports.delete(id); return report; }
   takeTaskResult(id) { const result = this.taskResults.get(id) || []; this.taskResults.delete(id); if (this.activeTask === id) { this.activeTask = null; this.taskEvidence.clear(); } return result; }
   // Python cannot read an Electron asar. Materialize the shipped, allowlisted files by content hash.
@@ -81,6 +103,7 @@ class PptLibrary {
         this.taskReports.set(taskId, result.report);
         while (this.taskReports.size > 40) this.taskReports.delete(this.taskReports.keys().next().value);
       }
+      if (taskId && this.activeTask === taskId) this.traceEvent({ kind: 'report', checked: (evidence?.pages || []).length, recommended: eligible.size });
       if (taskId && this.activeTask === taskId) this.taskResults.set(taskId, (args.decision?.results || []).filter(r => eligible.has(r.id)).map(r => {
         const page = pages.get(r.id); return { id: r.id, name: page.ref.name, path: page.ref.path, page: page.ref.page, thumbnail: page.thumbnail, reason: r.reason, sourceState: page.source_state };
       }));
@@ -162,6 +185,8 @@ class PptLibrary {
     if (!Array.isArray(queries) || queries.length < 3 || queries.length > 8) throw new Error('请按用途提供 3–8 组短查询，包括原关键词、同义词或中英文表达');
     const plan = { intent: question, queries: queries.map(q => typeof q === 'string' ? { query: q } : q) };
     const result = await this.execute('search', { plan, limit });
+    this.traceEvent({ kind: 'find', queries: plan.queries.map(q => String(q.query || '')).filter(Boolean).slice(0, 8), total: result.unique_candidates ?? result.candidates.length,
+      top: result.candidates.slice(0, 6).map(c => ({ id: c.id, name: c.ref?.name || '', page: c.ref?.page, thumbnail: c.thumbnail || null })) });
     return { ...result, question, candidates: result.candidates.map(c => ({ ...c, snippet: c.snippet.slice(0, 120), snippet_truncated: c.snippet_truncated || c.snippet.length > 120 })) };
   }
   async read(args = {}) {
@@ -187,6 +212,7 @@ class PptLibrary {
       }
       missing.push(...value.missing.map(m => ({ ...m, sourceId: source.id }))); scopes.push(value.scope);
     }
+    if (taskId && this.activeTask === taskId) this.traceEvent({ kind: 'read', pages: pages.filter(p => !p.neighbor_of).slice(0, 20).map(p => ({ id: p.id, name: p.ref?.name || '', page: p.ref?.page, thumbnail: p.thumbnail || null })) });
     return { ok: true, pages, missing, truncated: false, scope: { read_only: true, sources: scopes }, visual_inspection: 'not performed' };
   }
   async runPython(request, options = {}) {

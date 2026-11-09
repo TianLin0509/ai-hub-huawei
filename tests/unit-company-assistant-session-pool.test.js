@@ -218,7 +218,9 @@ test('CLI 没就绪（cli-not-ready）不让这一问失败：同一会话隔一
     return realSend(id, text);
   };
   const item = f.a.ask('今天有哪些会');
-  await f.settle(); await new Promise(r => setTimeout(r, 5)); await f.settle();
+  // 重试走真实定时器：机器忙时 5 毫秒不够（发版预检并行跑时偶发 0 !== 1），最多等 2 秒直到发出去。
+  for (let waited = 0; f.prompts.length < 1 && waited < 2000; waited += 20) { await f.settle(); await new Promise(r => setTimeout(r, 20)); }
+  await f.settle();
   assert.equal(f.prompts.length, 1, '就绪后发出去一次');
   assert.equal(f.a.chat().find(c => c.id === item.id).state, 'running');
   f.answer(f.prompts[0].id, '今天两场会');

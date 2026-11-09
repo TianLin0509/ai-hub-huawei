@@ -378,10 +378,11 @@ function _logoKind(kind, modelId = '') {
 //   扫列表时真正要一眼分辨的只是"哪家 CLI"，具体型号是二级信息 → 退到 tooltip
 //   （会话行的无障碍标签也包含完整 displayName）。
 //   拿不到图标的 kind 回落成原来的文字列，避免这一列直接消失。
-function _sessionKindHtml(kind, modelTxt, state = 'idle', stateTip = '', modelId = '', targetSessionId = '', account = null) {
-  const k = _logoKind(kind, modelId);
+function _sessionKindHtml(kind, modelTxt, state = 'idle', stateTip = '', modelId = '', targetSessionId = '', account = null, logoOverride = '') {
+  const k = logoOverride || _logoKind(kind, modelId);
   if (!k) return `<span class="sl-model">${escapeHtml(modelTxt || '')}</span>`;
-  const labelKind = String(kind || '').replace(/-resume$/, '') === 'codeagent' ? 'codeagent' : k;
+  const baseKind = String(kind || '').replace(/-resume$/, '');
+  const labelKind = baseKind === 'codeagent' ? 'codeagent' : logoOverride ? baseKind : k;
   const label = String(modelTxt || '').startsWith('ChatGPT') ? 'ChatGPT' : (KIND_LABELS[labelKind] || labelKind);
   const tip = label === 'ChatGPT' ? modelTxt : modelTxt ? `${label} · ${modelTxt}` : label;
   const status = stateTip || STATUS_LABELS[state] || STATUS_LABELS.idle;
@@ -389,9 +390,26 @@ function _sessionKindHtml(kind, modelTxt, state = 'idle', stateTip = '', modelId
   const navigation = targetSessionId
     ? `role="button" tabindex="0" data-sub-id="${escapeHtml(targetSessionId)}" data-sidebar-control="group-logo-${escapeHtml(targetSessionId)}"`
     : 'role="img"';
-  const accountTip = account ? ` · 账号 ${account.no}（${account.label}）` : '';
-  const accountAttr = account ? ` data-account="${Number(account.no)}"` : '';
+  // 角标：订阅账号序号 1/2、公司模型号池「号 N」的 N、CodeAgent 账号字母，都标在 logo 右下角（account.tip 是悬停全文）。
+  const accountTip = account ? ` · ${account.tip || `账号 ${account.no}（${account.label}）`}` : '';
+  const accountAttr = account && String(account.no ?? '').trim() ? ` data-account="${escapeHtml(String(account.no).trim().slice(0, 2))}"` : '';
   return `<span class="sl-kind ai-logo logo-${k}" data-state="${state}"${accountAttr} ${navigation} aria-label="${escapeHtml(label + accountTip + ' · ' + status + action)}" title="${escapeHtml(tip + accountTip + ' · ' + status + action)}"></span>`;
+}
+
+// 公司版会话栏（2026-11-08 用户）：不再在标题后挂「GLM · 号 2」文字标签，省出位置给会话名。
+// - 走公司模型 / 自有接口的会话，logo 换成模型那家的（GLM / DeepSeek / MiniMax / Qwen），CLI 名留在悬停说明；
+// - 用的是号池哪个号，标在 logo 右下角（号 2 → 2）；个人号不标；CodeAgent 会话的账号字母同样挪到角标。
+const COMPANY_MODEL_LOGOS = new Set(['glm', 'deepseek', 'minimax', 'qwen']);
+function companyRouteLogo(route) {
+  if (!route || !['proxy', 'api'].includes(route.route)) return '';
+  const family = require('../core/codeagent-models').modelFamily(route.model);
+  return COMPANY_MODEL_LOGOS.has(family) ? family : '';
+}
+function companyRouteCorner(route) {
+  if (!route) return null;
+  const tip = [route.source, route.alias ? (route.alias === '个人' ? '个人号' : '号池 ' + route.alias) : ''].filter(Boolean).join(' · ');
+  const no = /(\d+)/.exec(String(route.alias || ''))?.[1] || '';
+  return { no, tip };
 }
 
 const STATUS_LABELS = { wait: '等你响应', error: '运行异常', run: '运行中', start: '唤醒中', unread: '未读', dorm: '休眠', idle: '就绪', unknown: '状态未知' };
@@ -1031,7 +1049,10 @@ sessionListEl.addEventListener('keydown', event => {
         if (!member) return '';
         let state = partitionSidebarSessions([member], { sessionMap, groupMemberIds: new Set([id]) }).states.get(id) || 'idle';
         if (getSessionRuntimeTruth(member).state === RUNTIME_DORMANT && !member._resumePending && state !== 'error') state = 'dorm';
-        return _sessionKindHtml(member.kind, member.currentModel ? modelShort(member.currentModel) : '', state, '', require('../core/codeagent-models').iconModelId(member), id, subscriptionAccount(member));
+        const memberRoute = require('./company-route-view').routeInfo(member), memberCorner = companyRouteCorner(memberRoute), memberLetter = accountBadge(member);
+        return _sessionKindHtml(member.kind, member.currentModel ? modelShort(member.currentModel) : '', state, '', require('../core/codeagent-models').iconModelId(member), id,
+          (memberRoute && ['proxy', 'api'].includes(memberRoute.route) ? (memberCorner && (memberCorner.no || memberCorner.tip) ? memberCorner : null)
+            : subscriptionAccount(member) || (memberLetter ? { no: memberLetter.letter, tip: memberLetter.title } : null)), companyRouteLogo(memberRoute));
       }).join('');
       div.innerHTML = '<div class="sl-line1">'
         + '<span class="sl-group-logos" data-state="' + dotCls + '" aria-label="群聊 · ' + STATUS_LABELS[dotCls] + '">'
@@ -1098,7 +1119,13 @@ sessionListEl.addEventListener('keydown', event => {
     const account = accountBadge(s);
     // 公司版：模型走哪条线路、用的哪个号（renderer/company-route-view.js），例如「GLM · 号 2」。
     const route = require('./company-route-view').routeInfo(s);
-    const routeHtml = route && route.chip ? `<span class="sl-route" data-route="${escapeHtml(route.route)}" title="${escapeHtml(route.title)}">${escapeHtml(route.chip)}</span>` : '';
+    // 2026-11-08 起不再画 .sl-route 文字标签：模型看 logo，号看 logo 角标，完整说明在悬停与无障碍标签里。
+    const logoOverride = companyRouteLogo(route);
+    const corner = companyRouteCorner(route);
+    // 走公司模型 / 自有接口时，本机订阅账号（Claude 号 1/2）与这次用的号无关：角标只认号池的号。
+    const companyBound = !!route && ['proxy', 'api'].includes(route.route);
+    const logoAccount = companyBound ? (corner && (corner.no || corner.tip) ? corner : null)
+      : subscriptionAccount(s) || (account ? { no: account.letter, tip: account.title } : null) || (corner && corner.tip ? corner : null);
     const accessibleSummary = [displayTitle,
       account ? account.title : '',
       route ? route.text : '',
@@ -1114,15 +1141,14 @@ sessionListEl.addEventListener('keydown', event => {
     div.setAttribute('aria-label', accessibleSummary);
     // CodeAgent 会话：标题前一个账号字母（2026-10-20 用户：不再用「池」区分号池，个人号和号池号统一显示工号首字母），
     // 放在标题格里不占列，悬停看代称（个人账号 / 号池 · 号 N）。拿不到字母时不显示。
-    const accountHtml = account ? `<span class="sl-acct" title="${escapeHtml(account.title)}">${escapeHtml(account.letter)}</span>` : '';
+    // 2026-11-08 用户：字母挪到 logo 右下角（和订阅号 1/2、号池号 N 同一个位置），标题格只放会话名。
     const bridge = bridgeBadge(s.id);
     // 进展卡状态点 / 待拍板标签（2026-10-27，renderer/progress-view.js）：没有进展卡的会话不显示。悬停标题能看到白话现状。
     const progress = typeof window !== 'undefined' && typeof window.__progressBadgeFor === 'function' ? window.__progressBadgeFor(s.id) : null;
     const bridgeHtml = bridge && bridge.role === 'restart' ? `<span class="bt-badge" data-state="${escapeHtml(bridge.state)}" data-role="${escapeHtml(bridge.role || '')}" title="${escapeHtml(bridge.sub)}">${escapeHtml(bridge.chip)}</span>` : '';
-    div.innerHTML = _sessionKindHtml(s.kind, modelTxt, isDormant && !isResumePending && !issue ? 'dorm' : dotCls, dormantStateTip || runtimeTruthSummary(runtimeTruth), require('../core/codeagent-models').iconModelId(s), '', subscriptionAccount(s))
+    div.innerHTML = _sessionKindHtml(s.kind, modelTxt, isDormant && !isResumePending && !issue ? 'dorm' : dotCls, dormantStateTip || runtimeTruthSummary(runtimeTruth), require('../core/codeagent-models').iconModelId(s), '', logoAccount, logoOverride)
       // 悬停标题显示全名（2026-10-24 用户：会话栏宽度有限，长名字被省略号截断）。
-      + '<span class="sl-title" title="' + escapeHtml(displayTitle + (progress ? '\n' + progress.tip : '')) + '">' + _warningHtml(anyWarning) + (progress ? progress.html : '') + accountHtml + bridgeHtml + escapeHtml(displayTitle) + '</span>'
-      + routeHtml
+      + '<span class="sl-title" title="' + escapeHtml(displayTitle + (route ? '\n' + route.text : '') + (progress ? '\n' + progress.tip : '')) + '">' + _warningHtml(anyWarning) + (progress ? progress.html : '') + bridgeHtml + escapeHtml(displayTitle) + '</span>'
       + timeHtml(s, showUnread ? Math.max(1, unreadCount) : 0);
     const teamTag = typeof window !== 'undefined' ? window.__teamUi?.rowTagHtml(s.id, sessionMap, getMeetings()) : '';
     if (teamTag) {

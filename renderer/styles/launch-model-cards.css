@@ -43,22 +43,12 @@
 .session-model-cards-note[hidden] { display: none; }
 @media (max-width: 720px) { .session-model-cards { grid-template-columns: 1fr; } }
 
-/* 会话卡片与标题栏：这个会话的模型走哪条线路、用的哪个号（renderer/company-route-view.js）。 */
-.sl-route {
-  flex: none; max-width: 96px; margin-left: 6px; padding: 0 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  border-radius: 4px; font-size: 10.5px; line-height: 16px;
-  background: var(--hw-surface-3, var(--surface-hover)); color: var(--hw-text-2, var(--fg-muted));
-}
-.sl-route[data-route="proxy"] { background: var(--hw-brand-soft, #E7EFFE); color: var(--hw-brand, #0A59F7); }
+/* 标题栏：这个会话的模型走哪条线路、用的哪个号（renderer/company-route-view.js）。
+   会话栏 2026-11-08 起不再挂文字标签：模型看 logo、号看 logo 角标（renderer/session-list-renderer.js）。 */
 .crumb-model-route {
   flex: 0 1 auto; min-width: 0; max-width: 360px; margin-left: 8px; padding: 0 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   border-radius: 4px; font-size: 11.5px; line-height: 20px;
   background: var(--hw-surface-3, var(--surface-hover)); color: var(--hw-text-2, var(--fg-muted));
 }
 .crumb-model-route[data-route="proxy"] { background: var(--hw-brand-soft, #E7EFFE); color: var(--hw-brand, #0A59F7); }
-/* 会话行是三列网格（图标 / 标题 / 时间，display-presets.css 的规则很强）：有线路标签时加一列，标签不换行、不挤掉时间。 */
-#session-list .session-item.slim:has(> .sl-route),
-#session-list .session-item.slim > .sl-line1:has(> .sl-route),
-#session-list .sidebar-group .session-item.slim.child:has(> .sl-route) { grid-template-columns: minmax(20px, max-content) minmax(0, 1fr) auto auto !important; }
-#session-list .session-item.slim .sl-route { align-self: center; }
 .crumb-model-route { flex: none; }

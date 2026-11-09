@@ -3,6 +3,8 @@
 function createCompanyPptPage({ document, window, ipcRenderer, closeOtherPanels = () => {}, showMessage }) {
   const { pathToFileURL } = require('node:url');
   let page, status, timer, conversionId, chatId, md, searching = false, converting = false, candidates = [], selectedId = '', searched = false;
+  // AI 找页（2026-11-08 用户：Hub 的 PPT 主打 Agent 搜索）：ai = 本轮 AI 检索状态；aiItems = AI 推荐；keywordState = 关键词即时检索状态。
+  let ai = null, aiItems = [], keywordState = '', keywordError = '', lastQuery = '', userPicked = false, aiSignature = '', missingPolls = 0;
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   // 装了多个版本的 PPT Doctor（2026-11-07）：页头下方一行提示，点开是版本选择器（renderer/tool-version-picker.js）。
   const toolPicker = require('./tool-version-picker').createToolVersionPicker({ document, ipcRenderer });
@@ -29,7 +31,7 @@ function createCompanyPptPage({ document, window, ipcRenderer, closeOtherPanels 
   function nav() {
     const existing = document.getElementById('btn-company-ppt'); if (existing) return existing;
     const anchor = document.getElementById('btn-company-meeting') || document.getElementById('btn-company-assistant'); if (!anchor) return null;
-    const b = document.createElement('button'); b.type = 'button'; b.id = 'btn-company-ppt'; b.className = 'btn-shell-nav'; b.setAttribute('aria-label', 'PPT'); b.title = 'PPT · 搜索素材与图片转可编辑';
+    const b = document.createElement('button'); b.type = 'button'; b.id = 'btn-company-ppt'; b.className = 'btn-shell-nav'; b.setAttribute('aria-label', 'PPT'); b.title = 'PPT · AI 找页与图片转可编辑';
     b.innerHTML = '<span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="13" rx="1.5"/><path d="M12 17v4m-4 0h8M7 13V8h3a2 2 0 0 1 0 4H7"/></svg></span><span class="btn-label">PPT</span>';
     anchor.after(b); b.addEventListener('click', () => { void open(); }); return b;
   }
@@ -38,17 +40,18 @@ function createCompanyPptPage({ document, window, ipcRenderer, closeOtherPanels 
     page = document.createElement('section'); page.id = 'company-ppt-page'; page.className = 'company-ppt-page'; page.dataset.view = 'home'; page.hidden = true; page.setAttribute('aria-label', 'PPT 素材工作台');
     // 版式按定稿 CDCCBCC · PPT C（2026-11-04 换皮）：首屏居中检索，有结果后左结果右详情，转字三步。
     // 全部 data-ppt* 钩子与原逻辑不变；data-view / data-step 只给样式用。
-    page.innerHTML = `<header class="pptw-head"><h1>PPT</h1><span class="pptw-sub">查原稿，把图片变成可编辑页</span><div class="pptw-head-right" data-ppt-head-slot><details class="pptw-settings"><summary>素材库设置</summary><div class="pptw-settings-pop"><b>素材文件夹</b><div data-ppt-roots></div><p class="pptw-hint">旧的 Hub 索引保留可查；新增素材文件夹后，请点「更新索引」。</p><div class="pptw-actions"><button type="button" data-ppt="folders">选择素材文件夹…</button><button type="button" data-ppt="index">更新索引</button><button type="button" data-ppt="refresh">重新检查</button><button type="button" data-ppt="doctor">选择 Doctor 程序…</button><button type="button" data-ppt="pick-index">选择已有索引…</button><button type="button" data-ppt="download">镜像下载 / 升级 Doctor</button><button type="button" data-ppt="download-backup">GitHub 备用</button></div></div></details><div class="pptw-status" data-ppt-status role="status"></div></div></header>
+    page.innerHTML = `<header class="pptw-head"><h1>PPT</h1><span class="pptw-sub">AI 帮你找讲过的原页，把图片变成可编辑页</span><div class="pptw-head-right" data-ppt-head-slot><details class="pptw-settings"><summary>素材库设置</summary><div class="pptw-settings-pop"><b>素材文件夹</b><div data-ppt-roots></div><p class="pptw-hint">旧的 Hub 索引保留可查；新增素材文件夹后，请点「更新索引」。</p><div class="pptw-actions"><button type="button" data-ppt="folders">选择素材文件夹…</button><button type="button" data-ppt="index">更新索引</button><button type="button" data-ppt="refresh">重新检查</button><button type="button" data-ppt="doctor">选择 Doctor 程序…</button><button type="button" data-ppt="pick-index">选择已有索引…</button><button type="button" data-ppt="download">镜像下载 / 升级 Doctor</button><button type="button" data-ppt="download-backup">GitHub 备用</button></div></div></details><div class="pptw-status" data-ppt-status role="status"></div></div></header>
       <div class="pptw-scroll"><div class="pptw-body">
       <div class="pptw-guide-slot" data-ppt-guide-slot></div>
       <div class="pptw-tool-hint" data-ppt-tool-hint></div>
       <p data-ppt-notice class="pptw-notice" role="status" aria-live="polite"></p>
       <section class="pptw-workspace" data-ppt-search-panel><div class="pptw-main">
-        <div class="pptw-hero"><h2>找一页讲过的 PPT</h2><p>搜标题、正文，或者直接描述“这页要讲清什么”</p></div>
-        <form data-ppt-form class="pptw-search"><label for="company-ppt-query" class="pptw-sr">查找素材</label><div class="pptw-bar"><svg class="pptw-bar-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><input id="company-ppt-query" data-ppt-query autocomplete="off" placeholder="搜索标题、正文关键词，或描述这页要讲什么"><label class="pptw-folder-label" for="company-ppt-folder"><span class="pptw-sr">素材范围</span><select id="company-ppt-folder" data-ppt-folder><option value="">全部素材文件夹</option></select></label><button type="submit" data-ppt-search class="pptw-btn pri">检索</button></div>
-          <div class="pptw-modes"><button type="button" data-ppt="lookup">用图片找</button><button type="button" data-ppt="ask">让助理按用途找</button><button type="button" data-ppt="convert-mode">图片转可编辑</button></div></form>
+        <div class="pptw-hero"><span class="pptw-hero-kicker"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.2 6.3 6.3 2.2-6.3 2.2L12 19.5l-2.2-6.3L3.5 11l6.3-2.2z"/></svg>AI 找页</span><h2>说清这页要讲什么，AI 帮你翻遍素材库</h2><p>AI 会换几种说法检索、逐页读原文核对，再告诉你推荐哪几页、为什么；关键词命中同时即时显示</p></div>
+        <form data-ppt-form class="pptw-search"><label for="company-ppt-query" class="pptw-sr">描述要找的页面</label><div class="pptw-bar"><svg class="pptw-bar-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><input id="company-ppt-query" data-ppt-query autocomplete="off" placeholder="描述这页要讲什么，例如：证明 MU 配对增益的外场对比页"><label class="pptw-folder-label" for="company-ppt-folder"><span class="pptw-sr">素材范围</span><select id="company-ppt-folder" data-ppt-folder><option value="">全部素材文件夹</option></select></label><button type="submit" data-ppt-search class="pptw-btn pri pptw-ai-go" title="AI 检索 + 关键词即时命中（回车）"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.2 6.3 6.3 2.2-6.3 2.2L12 19.5l-2.2-6.3L3.5 11l6.3-2.2z"/></svg>AI 找页</button></div>
+          <div class="pptw-modes"><button type="button" data-ppt="keyword" title="只按文字匹配，几秒出结果，不调用 AI">只搜关键词</button><button type="button" data-ppt="lookup">用图片找</button><button type="button" data-ppt="convert-mode">图片转可编辑</button></div>
+          <div class="pptw-examples" aria-label="试试这样问"><small>试试这样问</small><button type="button" data-ppt="example" data-q="讲清 SRS 信道估计原理的那一页">讲清 SRS 信道估计原理的那一页</button><button type="button" data-ppt="example" data-q="有外场数据证明调度增益的对比页">有外场数据证明调度增益的对比页</button><button type="button" data-ppt="example" data-q="技术路线逐年演进的路标图">技术路线逐年演进的路标图</button></div></form>
         <details data-ppt-report class="pptw-report" hidden><summary>查看核验报告与引用</summary><div class="pptw-report-body"></div></details>
-        <div class="pptw-results" data-ppt-results><p class="pptw-empty">输入关键词，查看素材原页。</p></div>
+        <div class="pptw-results" data-ppt-results><p class="pptw-empty">描述要找的页面，AI 会读页核对后推荐。</p></div>
       </div><aside class="pptw-detail" data-ppt-detail aria-label="选中页详情"><p class="pptw-empty">选中一页，查看出处与可用操作。</p></aside></section>
       <section class="pptw-convert" data-ppt-convert-panel data-step="1" hidden><div class="pptw-conv-card">
         <div class="pptw-section-head"><h2>图片转可编辑</h2><button type="button" class="pptw-btn ghost sm" data-ppt="search-mode">返回素材</button></div>
@@ -58,7 +61,7 @@ function createCompanyPptPage({ document, window, ipcRenderer, closeOtherPanels 
       </div><aside class="pptw-conv-side" data-ppt-conv-side><h3>转换说明</h3><p>文字转成可改的文本框，图案切成可拖动的贴图。拿不准的文字和位置会列进复核项，在 PowerPoint 里对照原图检查。</p></aside></section>
       </div></div>`;
     document.body.append(page);
-    page.querySelector('[data-ppt-form]').addEventListener('submit', e => { e.preventDefault(); void search(false); });
+    page.querySelector('[data-ppt-form]').addEventListener('submit', e => { e.preventDefault(); void search(true); }); // 回车与「AI 找页」：AI 检索 + 关键词即时命中
     page.querySelector('[data-ppt-folder]').addEventListener('change', () => { drawResults(); if (page.querySelector('[data-ppt-query]').value.trim()) void search(false); });
     page.addEventListener('click', e => { const b = e.target.closest('[data-ppt]'); if (b) { e.preventDefault(); void action(b.dataset.ppt, b).catch(err => notice(err.message)); } });
     const drop = page.querySelector('[data-ppt-drop]');
@@ -91,7 +94,8 @@ function createCompanyPptPage({ document, window, ipcRenderer, closeOtherPanels 
     page.querySelector('[data-ppt="index"]').disabled = busy || !p.roots?.length;
     page.querySelector('[data-ppt="folders"]').disabled = busy;
     const select = page.querySelector('[data-ppt-folder]'), previous = select.value, folders = [...new Set([...(p.folders || p.roots || []), ...(previous ? [previous] : [])])];
-    select.innerHTML = '<option value="">全部素材文件夹</option>' + folders.map(folder => `<option value="${esc(folder)}">${esc(folder)}</option>`).join(''); select.value = previous;
+    const optionsHtml = '<option value="">全部素材文件夹</option>' + folders.map(folder => `<option value="${esc(folder)}">${esc(folder)}</option>`).join('');
+    if (select.dataset.options !== optionsHtml) { select.innerHTML = optionsHtml; select.dataset.options = optionsHtml; select.value = previous; } // 轮询时列表没变就不重建，展开的下拉框不会被收起
     if (!p.error) statusEl.title = statusEl.textContent.trim();
     void toolHint();
   }
@@ -104,35 +108,146 @@ function createCompanyPptPage({ document, window, ipcRenderer, closeOtherPanels 
   function mode(convert) {
     page.querySelector('[data-ppt-convert-panel]').hidden = !convert; page.querySelector('[data-ppt-search-panel]').hidden = convert; page.querySelector('[data-ppt-form]').hidden = convert;
     view(convert);
-    const report = page.querySelector('[data-ppt-report]'); report.hidden = convert || !report.querySelector('.pptw-report-body').textContent.trim();
+    const report = page.querySelector('[data-ppt-report]'); report.hidden = convert || !report.querySelector('.pptw-report-body').textContent.trim() || !report.open;
   }
-  // 样式用：还没出过结果时是居中检索首屏，出过一次结果（含零命中）后是左结果右详情。
+  // 样式用：还没出过结果时是居中检索首屏，出过一次结果（含零命中、AI 在找）后是左结果右详情。
   function view(convert) { page.dataset.view = convert ? 'convert' : searched ? 'results' : 'home'; }
-  function results(items) { candidates = items; searched = true; mode(false); drawResults(); }
+  function results(items) { candidates = items; keywordState = 'done'; searched = true; mode(false); drawResults(); }
+
+  // ---------------- 版式预览（2026-11-08）：Doctor 有截图缓存就用截图，否则主进程直接读 pptx 画版式（core/company-assistant/ppt-slide-preview.js）
+  const previews = new Map(), previewQueue = [];
+  let previewRunning = 0;
+  const thumbOf = c => c?.thumbnail || null;
+  function previewHtml(c, alt) {
+    const image = fileUrl(thumbOf(c));
+    if (image) return `<img src="${esc(image)}" alt="${esc(alt)}" loading="lazy">`;
+    const p = previews.get(c?.id);
+    if (p?.svg) return p.svg;
+    if (p?.state === 'error') return `<span class="pptw-pv-text"><b>${esc(p.short || '没能画出版式')}</b>${c.snippet ? `<i>${esc(String(c.snippet).slice(0, 80))}</i>` : ''}</span>`;
+    if (c?.id) queuePreview(c.id);
+    return '<span class="pptw-pv-loading" aria-label="正在画版式预览"></span>';
+  }
+  // 新一轮检索：没开始画的排队项作废（新结果不用排在旧结果后面），画失败的页下次重试（例如当时文稿正在保存）。
+  function resetPreviews() {
+    for (const id of previewQueue.splice(0)) previews.delete(id);
+    for (const [id, p] of previews) if (p.state === 'error') previews.delete(id);
+  }
+  function queuePreview(id) {
+    if (!id || previews.has(id)) return;
+    previews.set(id, { state: 'queued' }); previewQueue.push(id); pumpPreviews();
+  }
+  function pumpPreviews() {
+    while (previewRunning < 2 && previewQueue.length) {
+      const id = previewQueue.shift(); previewRunning++;
+      Promise.resolve().then(() => ipcRenderer.invoke('company-assistant:ppt-preview', { id })).then(r => {
+        if (r?.ok && r.scene) previews.set(id, { state: 'ok', svg: require('./ppt-slide-svg').sceneSvg(r.scene) });
+        else previews.set(id, { state: 'error', short: r?.code === 'UNSUPPORTED_FORMAT' ? '旧版 .ppt，只显示文字' : r?.code === 'UNKNOWN_PAGE' ? '请重新检索' : '暂时画不出版式' });
+      }).catch(() => previews.set(id, { state: 'error', short: '暂时画不出版式' })).finally(() => {
+        previewRunning--; paintPreview(id); pumpPreviews();
+      });
+    }
+  }
+  function paintPreview(id) {
+    if (!page) return;
+    const c = allItems().find(x => x.id === id) || traceItems().find(x => x.id === id) || { id };
+    for (const el of page.querySelectorAll('[data-ppt-thumb]')) if (el.dataset.pptThumb === id) el.innerHTML = previewHtml(c, '预览');
+  }
+
+  // ---------------- 结果：AI 推荐（主）+ 关键词命中（即时）
+  const allItems = () => [...aiItems, ...candidates.filter(c => !aiItems.some(a => a.id === c.id))];
+  const traceItems = () => (ai?.trace?.events || []).flatMap(e => e.pages || e.top || []);
+  function terms(c) {
+    const words = new Set([...(c.matched_queries || []).map(q => q.query), ...String(lastQuery || '').split(/\s+/)].map(w => String(w || '').trim()).filter(w => w.length >= 2 || /[一-鿿]/.test(w)));
+    return [...words].sort((a, b) => b.length - a.length).slice(0, 8);
+  }
+  function marked(text, c) {
+    let html = esc(text);
+    for (const w of terms(c)) { const e = esc(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); html = html.replace(new RegExp(`(${e})(?![^<]*>)`, 'gi'), '<mark>$1</mark>'); }
+    return html;
+  }
+  function card(c, isAi) {
+    const ref = c.ref || c, name = ref.name || c.name || '', pageNo = ref.page ?? c.page;
+    const body = isAi ? (c.reason ? `<span class="pptw-reason">${esc(c.reason)}</span>` : '') : (c.snippet ? `<span class="pptw-hit">${marked(c.snippet, c)}</span>` : '');
+    return `<article class="pptw-result${c.id === selectedId ? ' selected' : ''}${isAi ? ' is-ai' : ''}" data-ppt-result><button type="button" class="pptw-select" data-ppt="select" data-id="${esc(c.id)}" aria-pressed="${c.id === selectedId}"><span class="pptw-preview" data-ppt-thumb="${esc(c.id)}">${previewHtml(c, `第${pageNo}页预览`)}</span><span class="pptw-result-copy"><strong title="${esc(name)}">${isAi ? '<i class="pptw-ai-badge">AI 推荐</i>' : ''}${esc(name)}</strong><span class="pptw-meta">第 ${esc(pageNo)} 页</span>${body}</span></button></article>`;
+  }
   function drawResults() {
-    const items = candidates.filter(inFolder); if (!items.some(c => c.id === selectedId)) selectedId = items[0]?.id || '';
-    page.querySelector('[data-ppt-results]').innerHTML = items.length ? items.map(c => {
-      const ref = c.ref || c, image = fileUrl(c.thumbnail);
-      return `<article class="pptw-result${c.id === selectedId ? ' selected' : ''}" data-ppt-result><button type="button" class="pptw-select" data-ppt="select" data-id="${esc(c.id)}" aria-pressed="${c.id === selectedId}"><span class="pptw-preview">${image ? `<img src="${esc(image)}" alt="第${esc(ref.page)}页缩略图" loading="lazy">` : '<span>暂无缓存预览</span>'}</span><span class="pptw-result-copy"><strong>${esc(c.title || ref.name || c.name)}</strong><span>${esc(ref.name || c.name)} · 第 ${esc(ref.page)} 页</span></span></button></article>`;
-    }).join('') : '<p class="pptw-empty">本轮没有命中，可改用更短的关键词，或让助理按用途扩展查询。</p>';
-    detail(items.find(c => c.id === selectedId));
+    const items = candidates.filter(inFolder), picks = aiItems.filter(inFolder);
+    const all = [...picks, ...items.filter(c => !picks.some(p => p.id === c.id))];
+    if (!all.some(c => c.id === selectedId)) selectedId = all[0]?.id || '';
+    const kw = items.filter(c => !picks.some(p => p.id === c.id));
+    const kwHead = `<header class="pptw-sec-head"><h3>关键词命中<span>${kw.length} 页</span></h3><small>按文字直接匹配，即时出结果；没经 AI 读页核对</small></header>`;
+    const kwBody = kw.length ? `<div class="pptw-grid">${kw.map(c => card(c, false)).join('')}</div>`
+      : `<p class="pptw-empty">${keywordState === 'loading' ? '正在按关键词检索…' : keywordState === 'error' ? esc(keywordError) : items.length ? '关键词命中的页都已在上面的 AI 推荐里。' : ai?.state === 'running' ? '关键词没有直接命中；AI 正在换说法继续找。' : ai ? '关键词没有直接命中。' : '本轮没有命中，可改用更短的关键词，或点「AI 找页」让 AI 换说法找。'}</p>`;
+    page.querySelector('[data-ppt-results]').innerHTML = (ai ? `<section class="pptw-ai" data-ppt-ai data-state="${esc(ai.state)}">${aiHtml(picks)}</section>` : '')
+      + (keywordState || candidates.length ? `<section class="pptw-kw">${kwHead}${kwBody}</section>` : '');
+    detail(all.find(c => c.id === selectedId));
+  }
+  function seconds(ms) { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s} 秒` : `${Math.floor(s / 60)} 分 ${s % 60} 秒`; }
+  // AI 面板：步骤和数字全部来自真实调用轨迹（ppt_find / ppt_read / 报告核对），没有的就不写。
+  function aiHtml(picks) {
+    const ev = ai.trace?.events || [], finds = ev.filter(e => e.kind === 'find'), reads = ev.filter(e => e.kind === 'read'), report = ev.find(e => e.kind === 'report');
+    const queries = [...new Set(finds.flatMap(e => e.queries || []))], hits = finds.reduce((n, e) => n + (Number(e.total) || 0), 0);
+    const readPages = []; for (const e of reads) for (const p of e.pages || []) if (!readPages.some(x => x.id === p.id)) readPages.push(p);
+    const chat = ai.chat || {}, running = ai.state === 'running';
+    const started = chat.state === 'running' && !!chat.answeringAt;
+    const stage = ai.state === 'done' ? 4 : report ? 3 : reads.length ? 2 : finds.length || started ? 1 : 0;
+    const steps = [
+      ['唤起 CodeAgent', stage > 0 ? '已就绪' : ai.phase ? require('./wait-progress').waitText(ai.phase) : '开会话并送入你的需求，通常 10–20 秒'],
+      ['换说法多路检索', queries.length ? `试了 ${queries.length} 种说法 · 初筛 ${hits} 页` : '把需求改写成同义词、中英文、缩写'],
+      ['逐页读原文', readPages.length ? `已读 ${readPages.length} 页，核对用途、数值和年份` : '读排在前面的页，确认真的讲了这件事'],
+      ['核验并推荐', report ? `核对 ${report.checked} 页引用 · 推荐 ${report.recommended} 页` : '只推荐读过且原文对得上的页'],
+    ];
+    const elapsed = seconds((ai.endedAt || Date.now()) - ai.startedAt);
+    const mark = '<span class="pptw-ai-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 2.5l2.2 6.3 6.3 2.2-6.3 2.2L12 19.5l-2.2-6.3L3.5 11l6.3-2.2z"/></svg></span>';
+    const head = running
+      ? `<header class="pptw-ai-head">${mark}<div><h3>AI 正在帮你找<span class="pptw-dots" aria-hidden="true"><i></i><i></i><i></i></span></h3><small>「${esc(ai.query)}」 · 已用 <b data-ppt-elapsed>${elapsed}</b>，整体通常 1–3 分钟；下面的关键词命中可以先看</small></div></header>`
+      : ai.state === 'error'
+        ? `<header class="pptw-ai-head">${mark}<div><h3>AI 这次没找完</h3><small>${esc(ai.error || '助理检索未完成')}</small></div><button type="button" class="pptw-btn sec sm" data-ppt="ai-retry">再让 AI 找一次</button></header>`
+        : `<header class="pptw-ai-head">${mark}<div><h3>AI 推荐 ${picks.length} 页<span class="pptw-ai-ok">已逐页读原文核对</span></h3><small>「${esc(ai.query)}」 · 用时 ${elapsed}${queries.length ? ` · 试了 ${queries.length} 种说法、读了 ${readPages.length} 页` : ''}</small></div>${ai.report ? '<button type="button" class="pptw-btn ghost sm" data-ppt="open-report">核验报告与原文引用</button>' : ''}</header>`;
+    const flow = `<ol class="pptw-ai-steps">${steps.map(([t, d], k) => `<li class="${k < stage || ai.state === 'done' ? 'done' : k === stage && running ? 'now' : ''}"><b>${t}</b><small>${esc(d)}</small></li>`).join('')}</ol>`;
+    const chips = queries.length ? `<div class="pptw-ai-queries" aria-label="AI 用过的检索说法"><small>AI 换的说法</small>${queries.slice(0, 12).map(q => `<span>${esc(q)}</span>`).join('')}</div>` : '';
+    const peek = running && readPages.length ? `<div class="pptw-ai-peek"><small>AI 刚读过的页</small><div>${readPages.slice(-6).map(p => `<span class="pptw-preview" data-ppt-thumb="${esc(p.id)}" title="${esc(p.name)} · 第 ${esc(p.page)} 页">${previewHtml(p, '')}</span>`).join('')}</div></div>` : '';
+    if (ai.state === 'done') {
+      const grid = picks.length ? `<div class="pptw-grid">${picks.map(c => card(c, true)).join('')}</div>` : '<p class="pptw-empty">读过的页里没有原文对得上的，原因见核验报告；可以换个说法再找，或先看下面的关键词命中。</p>';
+      return head + grid + `<details class="pptw-ai-how"><summary>AI 是怎么找的</summary>${flow}${chips}</details>`;
+    }
+    return head + (ai.state === 'error' ? flow : `<div class="pptw-ai-live${running ? ' pptw-thinking' : ''}">${flow}${chips}${peek}</div>`);
   }
   function detail(c) {
     const panel = page.querySelector('[data-ppt-detail]');
-    if (!c) { panel.innerHTML = '<p class="pptw-empty">选中一页，查看出处与可用操作。</p>'; return; }
-    const ref = c.ref || c, image = fileUrl(c.thumbnail), dir = require('node:path').dirname(ref.path || '');
-    panel.innerHTML = `<div class="pptw-preview">${image ? `<img src="${esc(image)}" alt="选中的第${esc(ref.page)}页">` : '<span>暂无缓存预览</span>'}</div><div class="pptw-dt-body"><div class="pptw-tags"><span class="pptw-tag">第 ${esc(ref.page)} 页</span></div><h2>${esc(c.title || ref.name || c.name)}</h2><dl><dt>文件</dt><dd>${esc(ref.name || c.name)}</dd><dt>位置</dt><dd>第 ${esc(ref.page)} 页</dd><dt>目录</dt><dd>${esc(dir)}</dd></dl>${c.reason || c.snippet ? `<p class="pptw-snippet">${esc(c.reason || c.snippet)}</p>` : ''}${image ? '' : '<p class="pptw-hint">这页暂无缓存图片，可打开原稿截图后转字。</p>'}</div><div class="pptw-detail-actions"><button type="button" class="pptw-btn pri" data-ppt="open" data-id="${esc(c.id)}">打开到第 ${esc(ref.page)} 页</button><div class="pptw-row"><button type="button" class="pptw-btn sec" data-ppt="show-folder" data-id="${esc(c.id)}">所在文件夹</button><button type="button" class="pptw-btn sec" data-ppt="convert-page" data-id="${esc(c.id)}" ${image ? '' : 'disabled'}>这页图片转可编辑</button></div><button type="button" class="pptw-btn sec" data-ppt="copy" hidden data-id="${esc(c.id)}">复制到当前 PPT</button></div>`;
+    if (!c) { panel.innerHTML = `<p class="pptw-empty">${ai?.state === 'running' ? 'AI 找到后会在这里显示推荐理由；也可以先点左边的关键词命中。' : '选中一页，查看出处与可用操作。'}</p>`; return; }
+    const ref = c.ref || c, pageNo = ref.page ?? c.page, dir = require('node:path').dirname(ref.path || c.path || ''), image = fileUrl(thumbOf(c));
+    const isAi = aiItems.some(a => a.id === c.id), kw = candidates.find(k => k.id === c.id) || c;
+    panel.innerHTML = `<div class="pptw-preview" data-ppt-thumb="${esc(c.id)}">${previewHtml(c, `选中的第${pageNo}页`)}</div><div class="pptw-dt-body"><div class="pptw-tags"><span class="pptw-tag">第 ${esc(pageNo)} 页</span>${isAi ? '<span class="pptw-tag ai">AI 推荐 · 已读原文</span>' : '<span class="pptw-tag">关键词命中</span>'}</div><h2>${esc(ref.name || c.name)}</h2>${isAi && c.reason ? `<div class="pptw-why"><b>为什么推荐</b><p>${esc(c.reason)}</p></div>` : ''}${kw.snippet ? `<div class="pptw-why plain"><b>命中原文</b><p>${marked(kw.snippet, kw)}</p></div>` : ''}<dl><dt>文件</dt><dd>${esc(ref.name || c.name)}</dd><dt>目录</dt><dd>${esc(dir)}</dd></dl>${image ? '' : '<p class="pptw-hint">预览按原稿版式绘制（不是截图），图表与特殊字体可能有出入，以打开原稿为准。</p>'}</div><div class="pptw-detail-actions"><button type="button" class="pptw-btn pri" data-ppt="open" data-id="${esc(c.id)}">打开到第 ${esc(pageNo)} 页</button><div class="pptw-row"><button type="button" class="pptw-btn sec" data-ppt="show-folder" data-id="${esc(c.id)}">所在文件夹</button><button type="button" class="pptw-btn sec" data-ppt="convert-page" data-id="${esc(c.id)}" ${image ? '' : 'disabled title="需要 PPT Doctor 里的页面截图；可打开原稿截图后用「图片转可编辑」"'}>这页图片转可编辑</button></div><button type="button" class="pptw-btn sec" data-ppt="copy" hidden data-id="${esc(c.id)}">复制到当前 PPT</button></div>`;
   }
-  async function search(withAgent) {
-    if (searching) return; const query = page.querySelector('[data-ppt-query]').value.trim(); if (!query) { notice('先输入关键词或描述要讲清的内容。'); return; }
-    searching = true; page.querySelector('[data-ppt-search]').disabled = true;
-    page.querySelector('[data-ppt-report]').hidden = true;
-    notice(withAgent ? '已交给 CodeAgent 按用途检索，通常1–3分钟。' : '正在检索，单个索引最多等待30秒。');
+  async function keywordSearch(query) {
+    keywordState = 'loading'; keywordError = ''; candidates = []; drawResults();
     try {
-      if (withAgent) { const r = await call('ppt-ask', { question: folder() ? `${query}\n本次只找素材目录「${folder()}」中的页面。` : query }); chatId = r.item.id; poll(); }
-      else { chatId = null; const r = await call('ppt-search', { query, folder: folder() }); results(r.candidates || []); notice(`${r.candidates?.length || 0}页候选；只检索已提取文字，图表与版式尚未核查。${r.errors?.length ? ' 部分查询失败：' + r.errors.map(e => e.message).join('；') : ''}${r.truncated ? ' 结果有截断，可缩小关键词范围。' : ''}`); }
-    } catch (error) { notice(error.message); }
-    finally { searching = false; page.querySelector('[data-ppt-search]').disabled = false; }
+      const r = await call('ppt-search', { query, folder: folder() });
+      candidates = r.candidates || []; keywordState = 'done';
+      if (!ai) notice(`${candidates.length} 页关键词命中，只按文字匹配。想让 AI 读页核对，点「AI 找页」。${r.errors?.length ? ' 部分查询失败：' + r.errors.map(e => e.message).join('；') : ''}${r.truncated ? ' 结果有截断，可缩小关键词范围。' : ''}`);
+    } catch (error) { keywordState = 'error'; keywordError = error.message; if (!ai) notice(error.message); }
+    drawResults();
+  }
+  // 默认（回车 /「AI 找页」）：AI 检索 + 关键词即时命中同时跑；「只搜关键词」只跑后者。
+  async function search(withAgent) {
+    if (searching) return; const query = page.querySelector('[data-ppt-query]').value.trim(); if (!query) { notice('先输入要找的内容，例如“讲清 SRS 信道估计原理的那页”。'); return; }
+    if (withAgent && ai?.state === 'running') { notice('上一轮 AI 还在找，完成后再发起新的；关键词检索不受影响，可点「只搜关键词」。'); return; }
+    searching = true; page.querySelector('[data-ppt-search]').disabled = true; lastQuery = query; searched = true;
+    const report = page.querySelector('[data-ppt-report]'); report.hidden = true; report.open = false; report.querySelector('.pptw-report-body').textContent = '';
+    aiItems = []; selectedId = ''; userPicked = false; resetPreviews();
+    if (!withAgent && ai?.state !== 'running') ai = null;
+    mode(false); notice('');
+    try {
+      if (withAgent) {
+        ai = { query, state: 'running', startedAt: Date.now(), chat: { state: 'queued' }, trace: null };
+        drawResults();
+        const asking = call('ppt-ask', { question: folder() ? `${query}\n本次只找素材目录「${folder()}」中的页面。` : query })
+          .then(r => { chatId = r.item.id; ai.chatId = chatId; poll(); })
+          .catch(error => { ai.state = 'error'; ai.error = error.message; ai.endedAt = Date.now(); drawResults(); });
+        await Promise.all([keywordSearch(query), asking]);
+      } else await keywordSearch(query);
+    } finally { searching = false; page.querySelector('[data-ppt-search]').disabled = false; }
   }
   const PHASES = [['识别文字', '找出文字框与位置'], ['CodeAgent 看图修正', '核对文字、位置与公式'], ['生成可编辑 PPT', '装配文本框与贴图'], ['完成', '在 PowerPoint 中对照原图复核']];
   const PHASE_OF = { seeding: 0, running: 0, waiting_agent: 1, building: 2, done: 3 };
@@ -170,23 +285,41 @@ function createCompanyPptPage({ document, window, ipcRenderer, closeOtherPanels 
     timer = setTimeout(async () => {
       try {
         if (conversionId) { const r = await call('ppt-imgtext-status', { jobId: conversionId }); renderConversion(r.job); if (['done', 'error'].includes(r.job.state)) conversionId = null; }
-        if (chatId) { const r = await call('ppt-page-state', { chatId }); renderStatus(r.ppt); if (r.chat?.state === 'done') { const items = r.chat.pptResults || []; results(items); showReport(r.chat.a, !items.length); notice(items.length ? `助理核验完成 · ${items.length}页候选。适用条件与原文引用见核验报告。` : '本轮未给出已核验候选，原因见下方报告。'); chatId = null; } else if (r.chat?.state === 'error') { notice(r.chat.error || '助理检索未完成，请重试'); chatId = null; } else if (r.chat) { const phase = require('./wait-progress').assistantChatPhase(r.chat); if (phase) notice(`CodeAgent 按用途检索 · ${require('./wait-progress').waitText(phase)}，整体通常 1–3 分钟。`); } }
+        if (chatId) {
+          const r = await call('ppt-page-state', { chatId }); renderStatus(r.ppt);
+          if (ai && ai.chatId === chatId) { ai.chat = r.chat || ai.chat; ai.trace = r.trace || ai.trace; ai.phase = require('./wait-progress').assistantChatPhase(r.chat); } // 排队 / 准备中用公共等待文案（renderer/wait-progress.js）
+          if (r.chat?.state === 'done') {
+            aiItems = (r.chat.pptResults || []).map(x => ({ ...x, ref: { name: x.name, path: x.path, page: x.page } })); if (!userPicked) selectedId = aiItems[0]?.id || selectedId;
+            if (ai) { ai.state = 'done'; ai.endedAt = Date.now(); ai.report = !!r.chat.a; }
+            showReport(r.chat.a, false); page.querySelector('[data-ppt-report]').hidden = true;
+            chatId = null;
+          } else if (r.chat?.state === 'error') { if (ai) { ai.state = 'error'; ai.error = r.chat.error || '助理检索未完成，请重试'; ai.endedAt = Date.now(); } chatId = null; }
+          else if (!r.chat && ++missingPolls >= 4) { if (ai) { ai.state = 'error'; ai.error = '找不到这次 AI 检索的记录（可能已被清理），请再找一次'; ai.endedAt = Date.now(); } chatId = null; }
+          if (r.chat) missingPolls = 0;
+          // 每 1.5 秒轮询一次，但只有 AI 真的有新进展才重画结果区（避免整列重建打断点选、收起下拉框）；用时数字原地更新。
+          const sig = ai ? JSON.stringify([ai.state, r.chat?.state, !!r.chat?.answeringAt, ai.phase?.label, ai.trace?.events?.length || 0]) : '';
+          if (sig !== aiSignature) { aiSignature = sig; drawResults(); }
+          else if (ai) { const el = page.querySelector('[data-ppt-elapsed]'); if (el) el.textContent = seconds(Date.now() - ai.startedAt); }
+        }
         if (status?.indexing?.state === 'indexing') renderStatus((await call('ppt-page-state')).ppt);
       } catch (error) { notice(error.message); }
       if (conversionId || chatId || status?.indexing?.state === 'indexing') poll();
     }, 1500);
   }
   async function action(name, button) {
-    if (name === 'select') { selectedId = button.dataset.id; drawResults(); return; }
+    if (name === 'select') { selectedId = button.dataset.id; userPicked = true; drawResults(); return; }
     if (name === 'search-mode' || name === 'convert-mode') { mode(name === 'convert-mode'); return; }
     if (name === 'lookup') {
       const picked = await call('ppt-pick-image'); if (picked.canceled) return;
       button.disabled = true; notice('正在识别截图文字并查找原稿，通常数十秒。');
-      try { const r = await call('ppt-lookup-frame', { imagePath: picked.imagePath, limit: 10 }); results(r.candidates || []); notice(r.coverage + (r.errors?.length ? '；部分索引未完成：' + r.errors.map(e => e.message).join('；') : '')); }
+      try { const r = await call('ppt-lookup-frame', { imagePath: picked.imagePath, limit: 10 }); if (ai?.state !== 'running') ai = null; aiItems = []; lastQuery = ''; results(r.candidates || []); notice(r.coverage + (r.errors?.length ? '；部分索引未完成：' + r.errors.map(e => e.message).join('；') : '')); }
       finally { button.disabled = false; } return;
     }
     if (name === 'refresh') return renderStatus((await call('ppt-status')).ppt);
-    if (name === 'ask') return search(true);
+    if (name === 'ask' || name === 'ai-retry') return search(true);
+    if (name === 'keyword') return search(false);
+    if (name === 'example') { const q = page.querySelector('[data-ppt-query]'); q.value = button.dataset.q || ''; q.focus(); return search(true); }
+    if (name === 'open-report') { const report = page.querySelector('[data-ppt-report]'); report.hidden = false; report.open = true; report.scrollIntoView({ block: 'nearest' }); return; }
     if (name === 'show-folder') return call('ppt-show-folder', { id: button.dataset.id });
     if (name === 'convert-page') return startConversion('ppt-convert-page', { id: button.dataset.id });
     if (name === 'copy') {

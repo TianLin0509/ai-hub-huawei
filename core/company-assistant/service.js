@@ -1569,7 +1569,7 @@ class CompanyAssistant {
       job.toolset = toolset;
       job.sentAt = this.now();
       if (!job.teamOwner) {
-        if (toolset === 'ppt') this.ppt.beginTask?.(job.id);
+        if (toolset === 'ppt') this.ppt.beginTask?.(job.id, job.chatId);
         this.query.beginTask(job.id, id);
         if (laneName === 'chat') this.saveState({ sessionId: id, toolsVersion: TOOLS_VERSION });
       }

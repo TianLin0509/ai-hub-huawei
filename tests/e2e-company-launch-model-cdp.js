@@ -169,13 +169,14 @@ async function main() {
       }
       await sleep(5500); // proxy status poll (5 s) brings the pool account to the title bar and card
       const titleChip = await cdp.eval('document.getElementById("toolbar-model-route")?.innerText || ""');
-      const cardText = await cdp.eval(`(()=>{const e=document.querySelector('[data-session-id=${JSON.stringify(id)}] .sl-route');return e?e.dataset.route+'|'+e.innerText+'|'+e.title:''})()`);
+      // 2026-11-08 起会话栏不挂文字标签：模型看 logo，号看 logo 角标，完整说明在悬停里。
+      const cardText = await cdp.eval(`(()=>{const row=document.querySelector('[data-session-id=${JSON.stringify(id)}]');const e=row&&row.querySelector('.sl-kind');return e?[(e.className.match(/logo-([a-z]+)/)||[])[1]||'',e.dataset.account||'',e.title].join('|')+(row.querySelector('.sl-route')?'|HAS_ROUTE_CHIP':''):''})()`);
       const st = await proxyStatus();
       report.sessions.push({ ...r, id, seen, titleChip, cardText, byModel: st.mockUpstream?.byModel, byKind: st.stats?.byKind });
       await shot(`answer-${r.ui}-${r.model === GLM ? 'glm' : 'ds'}-1440`);
       check(`${r.label}+${r.model}：读文件后的回答出现在界面上（${r.marker}）`, seen);
       check(`${r.label}+${r.model}：标题栏写明模型、公司模型和号池别名`, titleChip.includes(r.model) && titleChip.includes('公司模型') && /号 \d|个人/.test(titleChip), titleChip);
-      check(`${r.label}+${r.model}：会话卡片写明模型和号池别名（悬停写公司模型）`, cardText.startsWith('proxy|') && cardText.includes(r.model === GLM ? 'GLM' : 'DS') && /号 \d|个人/.test(cardText) && cardText.includes('公司模型'), cardText);
+      check(`${r.label}+${r.model}：会话卡片用模型 logo、号标在角标（悬停写公司模型和号）`, cardText.startsWith(r.model === GLM ? 'glm|' : 'deepseek|') && /号池 号 \d|个人号/.test(cardText) && cardText.includes('公司模型') && !cardText.includes('HAS_ROUTE_CHIP'), cardText);
     }
     const final = await proxyStatus();
     report.finalProxy = { stats: final.stats, upstream: final.mockUpstream };

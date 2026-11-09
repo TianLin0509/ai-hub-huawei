@@ -80,7 +80,8 @@
 .pptw-report-body{margin-top:8px;color:var(--hw-text-1);overflow-wrap:anywhere}
 .pptw-report-body table{border-collapse:collapse;margin:8px 0;font-size:var(--hw-fs-12)}
 .pptw-report-body :is(th,td){border:1px solid var(--hw-line);padding:6px 8px;text-align:left;vertical-align:top}
-.pptw-results{flex:1;min-height:0;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(188px,1fr));gap:12px;align-content:start;padding:14px 16px 16px}
+.pptw-results{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:14px;padding:14px 16px 16px}
+.pptw-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(208px,1fr));gap:12px;align-content:start}
 .pptw-empty{grid-column:1/-1;margin:0;padding:20px 4px;color:var(--hw-text-3);font-size:var(--hw-fs-13)}
 .pptw-result{min-width:0;border:1.5px solid transparent;border-radius:var(--hw-r-item);transition:background var(--hw-t-fast)}
 .pptw-result:hover{background:var(--hw-surface-2)}
@@ -198,9 +199,79 @@
 @media (max-width:1360px){
   .pptw-workspace{grid-template-columns:minmax(0,1fr) 320px}
   .pptw-convert{grid-template-columns:minmax(0,1fr) 300px}
-  .pptw-results{grid-template-columns:repeat(auto-fill,minmax(168px,1fr))}
+  .pptw-grid{grid-template-columns:repeat(auto-fill,minmax(184px,1fr))}
   .pptw-status:not(.pptw-guide){max-width:420px}
 }
 /* 装了多个版本的 PPT Doctor：页头下方一行提示（renderer/tool-version-picker.js，2026-11-07） */
 .pptw-tool-hint{width:min(960px,100%);margin:0 auto 12px}
 .pptw-tool-hint:empty{display:none}
+
+/* ---------------- 2026-11-08 AI 找页改版：AI 推荐为主、关键词即时命中为辅；没有截图缓存的页按原稿版式画 SVG 预览 */
+.pptw-hero-kicker{display:inline-flex;align-items:center;gap:6px;margin-bottom:10px;padding:3px 12px;border-radius:var(--hw-r-pill);background:var(--hw-brand-soft);color:var(--hw-brand);font-size:var(--hw-fs-13);font-weight:600}
+.pptw-hero-kicker svg,.pptw-ai-go svg{width:14px;height:14px;fill:currentColor}
+.company-ppt-page .pptw-ai-go{gap:6px}
+.pptw-examples{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:10px}
+.pptw-examples small{color:var(--hw-text-3);font-size:var(--hw-fs-12);margin-right:2px}
+.company-ppt-page .pptw-examples button{height:28px;padding:0 12px;background:transparent;box-shadow:inset 0 0 0 1px var(--hw-line);color:var(--hw-text-2);font-weight:400}
+.company-ppt-page .pptw-examples button:hover{color:var(--hw-brand);box-shadow:inset 0 0 0 1px var(--hw-brand)}
+.company-ppt-page[data-view=home] .pptw-examples{justify-content:center;margin-top:18px}
+.company-ppt-page:not([data-view=home]) .pptw-examples{display:none}
+.pptw-results>.pptw-empty{padding:20px 4px}
+.pptw-sec-head{display:flex;align-items:baseline;gap:10px;margin:0 0 10px}
+.pptw-sec-head h3{margin:0;font-size:var(--hw-fs-14);font-weight:600}
+.pptw-sec-head h3 span{margin-left:6px;color:var(--hw-text-3);font-weight:400;font-size:var(--hw-fs-13)}
+.pptw-sec-head small{color:var(--hw-text-3);font-size:var(--hw-fs-12)}
+.pptw-kw .pptw-empty{padding:4px 2px}
+.pptw-preview svg{display:block;width:100%;height:100%}
+.pptw-preview{position:relative;background:#fff}
+.pptw-pv-loading{position:absolute;inset:0;background:linear-gradient(90deg,var(--hw-surface-2) 0%,var(--hw-surface-3) 50%,var(--hw-surface-2) 100%);background-size:200% 100%;animation:pptw-sweep 1.4s linear infinite}
+.pptw-pv-text{display:flex;flex-direction:column;gap:4px;width:100%;height:100%;padding:10px 12px;background:var(--hw-surface-2);text-align:left}
+.pptw-pv-text b{font-size:var(--hw-fs-12);font-weight:500;color:var(--hw-text-3)}
+.pptw-pv-text i{font-style:normal;font-size:11px;line-height:1.5;color:var(--hw-text-2);overflow:hidden;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical}
+.pptw-result-copy .pptw-meta{font-size:12px;color:var(--hw-text-3)}
+.pptw-result-copy .pptw-hit,.pptw-result-copy .pptw-reason{display:-webkit-box;margin-top:4px;font-size:12px;line-height:1.55;color:var(--hw-text-2);white-space:normal;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2}
+.pptw-result-copy .pptw-reason{-webkit-line-clamp:3;color:var(--hw-text-1)}
+.company-ppt-page mark{background:color-mix(in srgb,var(--hw-brand) 16%,transparent);color:inherit;border-radius:2px;padding:0 1px}
+.pptw-ai-badge{display:inline-block;margin-right:5px;padding:0 6px;border-radius:var(--hw-r-pill);background:var(--hw-brand);color:var(--hw-text-on);font-style:normal;font-size:11px;line-height:17px;vertical-align:1px}
+.pptw-result.is-ai{background:color-mix(in srgb,var(--hw-brand-soft) 45%,transparent)}
+.pptw-result.is-ai.selected{background:var(--hw-brand-soft)}
+/* AI 面板 */
+.pptw-ai{padding:14px 16px 16px;border-radius:var(--hw-r-lg);background:var(--hw-surface-2);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--hw-brand) 22%,transparent)}
+.pptw-ai-head{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.pptw-ai-head>div{flex:1;min-width:0}
+.pptw-ai-head h3{display:flex;align-items:center;gap:10px;margin:0;font-size:var(--hw-fs-16);font-weight:600}
+.pptw-ai-head h3 .pptw-dots{margin-left:2px}
+.pptw-ai-head small{display:block;margin-top:2px;color:var(--hw-text-2);font-size:var(--hw-fs-12);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pptw-ai-head small b{font-weight:600;color:var(--hw-text-1)}
+.pptw-ai-mark{flex:none;display:grid;place-items:center;width:32px;height:32px;border-radius:50%;background:var(--hw-brand);color:var(--hw-text-on)}
+.pptw-ai-mark svg{width:16px;height:16px;fill:currentColor}
+.pptw-ai-ok{padding:1px 8px;border-radius:var(--hw-r-pill);background:color-mix(in srgb,var(--hw-green) 14%,transparent);color:var(--hw-green);font-size:var(--hw-fs-12);font-weight:500}
+.pptw-ai-live{position:relative;padding-bottom:6px}
+.pptw-ai-steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:0;padding:0;list-style:none}
+.pptw-ai-steps li{position:relative;padding:10px 12px 10px 30px;border-radius:var(--hw-r-item);background:var(--hw-surface);min-width:0}
+.pptw-ai-steps li::before{content:"";position:absolute;left:11px;top:14px;width:10px;height:10px;border-radius:50%;border:2px solid var(--hw-surface-3);background:var(--hw-surface)}
+.pptw-ai-steps li.done::before{border-color:var(--hw-green);background:var(--hw-green)}
+.pptw-ai-steps li.now{box-shadow:inset 0 0 0 1.5px var(--hw-brand)}
+.pptw-ai-steps li.now::before{border-color:var(--hw-brand);box-shadow:0 0 0 3px var(--hw-brand-soft)}
+.pptw-ai-steps b{display:block;font-size:var(--hw-fs-13);font-weight:600}
+.pptw-ai-steps li:not(.done):not(.now) b{color:var(--hw-text-3)}
+.pptw-ai-steps small{display:block;margin-top:2px;font-size:var(--hw-fs-12);line-height:1.45;color:var(--hw-text-2)}
+.pptw-ai-queries{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:12px}
+.pptw-ai-queries small,.pptw-ai-peek small{color:var(--hw-text-3);font-size:var(--hw-fs-12);margin-right:2px}
+.pptw-ai-queries span{padding:2px 10px;border-radius:var(--hw-r-pill);background:var(--hw-surface);box-shadow:inset 0 0 0 1px var(--hw-line);font-size:var(--hw-fs-12);color:var(--hw-text-1)}
+.pptw-ai-peek{margin-top:12px}
+.pptw-ai-peek>div{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-top:6px}
+.pptw-ai .pptw-grid{margin-top:2px}
+.pptw-ai-how{margin-top:12px}
+.pptw-ai-how summary{cursor:pointer;color:var(--hw-text-2);font-size:var(--hw-fs-12)}
+.pptw-ai-how .pptw-ai-steps{margin-top:8px}
+.pptw-ai[data-state=error] .pptw-ai-mark{background:var(--hw-text-3)}
+.pptw-why{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border-radius:var(--hw-r-item);background:var(--hw-brand-soft)}
+.pptw-why.plain{background:var(--hw-surface-2)}
+.pptw-why b{font-size:var(--hw-fs-12);font-weight:600;color:var(--hw-text-2)}
+.pptw-why p{margin:0;font-size:13px;line-height:1.7;overflow-wrap:anywhere}
+.pptw-tag.ai{background:var(--hw-brand);color:var(--hw-text-on)}
+@media (max-width:1360px){.pptw-ai-steps{grid-template-columns:repeat(2,minmax(0,1fr))}}
+/* 结果视图：整页不滚动，结果区自己滚，右侧详情的「打开到第 N 页」始终在可视范围内（AI 面板变高时也一样）。 */
+.company-ppt-page[data-view=results] .pptw-body{height:100%}
+.company-ppt-page[data-view=results] .pptw-workspace{min-height:440px;height:0}

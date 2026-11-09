@@ -10,7 +10,12 @@ function createPptHandlers(service) {
       return service.ppt.execute('search', { query: String(request?.query || ''), ...(folder ? { roots: [folder] } : {}), limit: 30 });
     },
     'ppt-ask': request => ({ ok: true, item: service.ask(String(request?.question || ''), { entry: 'ppt' }) }),
-    'ppt-page-state': request => ({ ok: true, ppt: service.ppt.status(), chat: request?.chatId ? service.chat().find(c => c.id === request.chatId) : null }),
+    'ppt-page-state': request => ({ ok: true, ppt: service.ppt.status(), chat: request?.chatId ? service.chat().find(c => c.id === request.chatId) : null,
+      trace: request?.chatId ? service.ppt.trace?.(request.chatId) || null : null }),
+    'ppt-preview': async request => {
+      try { return await service.ppt.preview(request?.id); }
+      catch (error) { return { ok: false, code: error.code || 'PPT_PREVIEW_FAILED', error: error.message }; }
+    },
     'ppt-page-detail': async request => ({ ok: true, page: await service.ppt.resolvePage(request?.id) }),
     'ppt-show-folder': request => service.ppt.showFolder(request?.id),
     'ppt-copy': request => service.ppt.copy(request?.id),

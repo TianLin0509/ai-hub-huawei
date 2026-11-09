@@ -43,9 +43,16 @@ async function main() {
     await wait('document.querySelector("[data-ppt-status]")?.dataset.state === "ready"', 'Doctor status');
     await wait('document.getElementById("btn-company-ppt").getAttribute("aria-current")==="page"', 'PPT navigation selection');
     assert.equal(await c.eval('document.getElementById("btn-company-ppt").getAttribute("aria-current")'), 'page');
-    await click('[data-ppt-query]'); await c.send('Input.insertText', { text: 'SRS' }); await click('[data-ppt-search]');
-    await wait('document.querySelectorAll("[data-ppt-result]").length===1', 'search result'); await shot('search');
-    result.checks.push('公司开关下PPT左栏、Doctor状态、键盘检索、真实文件与第2页结果卡');
+    await shot('home');
+    assert.equal(await c.eval('document.querySelector("[data-ppt-search]").textContent.includes("AI 找页")'), true, '主按钮是 AI 找页');
+    await click('[data-ppt-query]'); await c.send('Input.insertText', { text: 'SRS' }); await click('[data-ppt="keyword"]');
+    await wait('document.querySelectorAll("[data-ppt-result]").length===1', 'search result');
+    // 2026-11-08：没有 Doctor 截图缓存的页，按原稿版式画 SVG 预览（读真实 pptx），不再是一片「暂无缓存预览」。
+    await wait('!!document.querySelector("[data-ppt-result] .pptw-preview svg foreignObject")', 'slide layout preview', 20000);
+    assert.match(await c.eval('document.querySelector("[data-ppt-result] .pptw-preview svg").textContent'), /SRS channel estimation/);
+    assert.equal(await c.eval('document.querySelector("[data-ppt-result] mark")?.textContent'), 'SRS', '命中原文里高亮关键词');
+    await shot('search');
+    result.checks.push('公司开关下PPT左栏、Doctor状态、只搜关键词、真实文件第2页结果卡；版式预览画出该页标题（读真实pptx）；命中词高亮');
     assert.equal(await c.eval('document.querySelectorAll("[data-ppt-folder] option").length >= 2'), true);
     assert.equal(await c.eval('document.querySelector("[data-ppt-detail]").textContent.includes("第 2 页")'), true);
     assert.equal(await c.eval('document.querySelector("[data-ppt-detail]").getBoundingClientRect().left > document.querySelector("[data-ppt-results]").getBoundingClientRect().right'), true);
@@ -80,16 +87,27 @@ async function main() {
     assert.equal(await c.eval('!!document.querySelector("#company-assistant-page [data-ca=ppt-assist]")'), false);
     await click('#btn-company-ppt'); await wait('!document.getElementById("company-ppt-page").hidden', 'rail back to PPT');
     result.checks.push('助理页没有PPT素材库入口；从左栏回到PPT页，检索仍保留');
-    // Exercise final report layout without issuing another paid model request.
-    // The separate real-Agent smoke validates actual MCP find/read/report.
-    const reportFixture = { id: 'ui-report-fixture', state: 'done', a: '**已核验 1 页**\n\n| 原页 | 原文 |\n|---|---|\n| SRS 第2页 | 保留复数信道相位 |', pptResults: [{ id, name: ref.name, path: file, page: 2, reason: '原文包含信道相位' }] };
-    await c.eval(`(()=>{const invoke=ipcRenderer.invoke.bind(ipcRenderer); window.__pptRestoreInvoke=()=>{ipcRenderer.invoke=invoke}; ipcRenderer.invoke=async(channel,args)=>{if(channel==='company-assistant:ppt-ask')return{ok:true,item:{id:'ui-report-fixture'}}; const r=await invoke(channel,args);if(channel==='company-assistant:ppt-page-state'&&args?.chatId==='ui-report-fixture')r.chat=${j(reportFixture)};return r;};})()`);
-    await click('[data-ppt="ask"]'); await wait('!document.querySelector("[data-ppt-report]").hidden', 'report result');
-    assert.equal(await c.eval('document.querySelector("[data-ppt-report]").open'), false);
-    await shot('report-collapsed'); await click('[data-ppt-report] summary');
+    // AI 找页：回包与轨迹是夹具（不花真实 token），界面按真实轮询路径画「AI 正在做什么」与最终推荐。
+    const liveId = await c.eval('document.querySelector("[data-ppt=select]").dataset.id'); // 检索返回的页编号（真实流程里 AI 读页也用它）
+    const trace = { startedAt: Date.now(), events: [
+      { kind: 'find', queries: ['SRS', 'sounding reference signal', '信道估计', 'channel phase'], total: 12, top: [{ id: liveId, name: ref.name, page: 2 }] },
+      { kind: 'read', pages: [{ id: liveId, name: ref.name, page: 2 }] } ] };
+    const running = { id: 'ui-report-fixture', state: 'running', askedAt: Date.now() - 40000, startedAt: Date.now() - 35000, answeringAt: Date.now() - 20000 };
+    const reportFixture = { id: 'ui-report-fixture', state: 'done', a: '**已核验 1 页**\n\n| 原页 | 原文 |\n|---|---|\n| SRS 第2页 | 保留复数信道相位 |', pptResults: [{ id: liveId, name: ref.name, path: file, page: 2, reason: '原文写明 SRS 保留复数信道相位，正好讲清信道估计原理' }] };
+    await c.eval(`(()=>{const invoke=ipcRenderer.invoke.bind(ipcRenderer); window.__pptPhase='running'; window.__pptRestoreInvoke=()=>{ipcRenderer.invoke=invoke}; ipcRenderer.invoke=async(channel,args)=>{if(channel==='company-assistant:ppt-ask')return{ok:true,item:{id:'ui-report-fixture'}}; const r=await invoke(channel,args);if(channel==='company-assistant:ppt-page-state'&&args?.chatId==='ui-report-fixture'){r.chat=window.__pptPhase==='done'?${j(reportFixture)}:${j(running)};r.trace=${j(trace)};}return r;};})()`);
+    await click('[data-ppt-search]');
+    await wait('document.querySelector("[data-ppt-ai]")?.dataset.state==="running" && document.querySelectorAll(".pptw-ai-queries span").length===4', 'AI running trace');
+    assert.match(await c.eval('document.querySelector("[data-ppt-ai]").textContent'), /试了 4 种说法 · 初筛 12 页[\s\S]*已读 1 页/);
+    await wait('!!document.querySelector(".pptw-ai-peek .pptw-preview svg")', 'AI peek preview'); await shot('ai-running');
+    await c.eval('window.__pptPhase="done"');
+    await wait('document.querySelector("[data-ppt-ai]")?.dataset.state==="done"', 'AI done');
+    assert.equal(await c.eval('document.querySelectorAll("[data-ppt-ai] .pptw-result.is-ai").length'), 1);
+    assert.match(await c.eval('document.querySelector("[data-ppt-detail]").textContent'), /为什么推荐[\s\S]*复数信道相位/);
+    assert.equal(await c.eval('document.querySelector("[data-ppt-report]").hidden'), true, '报告默认收起，由 AI 面板按钮打开');
+    await shot('ai-done'); await click('[data-ppt="open-report"]');
     assert.equal(await c.eval('document.querySelectorAll(".pptw-report-body table").length'), 1); await shot('report-expanded');
     await c.eval('window.__pptRestoreInvoke();delete window.__pptRestoreInvoke');
-    result.checks.push('核验报告默认折叠、完整Markdown表格可展开（Agent回包夹具；另有真实Agent烟测）');
+    result.checks.push('AI 找页：运行中显示真实轨迹的说法、初筛数、已读页与预览；完成后 AI 推荐卡、推荐理由、报告按钮展开表格（回包与轨迹为夹具）');
     const interrupted = { id: 'interrupted-ui-fixture', state: 'error', seed: {}, error: 'Doctor任务中断，请检查已有产物', needsOutputCheck: true };
     await c.eval(`(()=>{const invoke=ipcRenderer.invoke.bind(ipcRenderer);window.__pptRestoreInvoke=()=>{ipcRenderer.invoke=invoke};window.__pptRecoveryCalls=[];window.__pptRecoveryJob=${j(interrupted)};ipcRenderer.invoke=(channel,args)=>{if(channel==='company-assistant:ppt-pick-image')return Promise.resolve({ok:true,imagePath:'fixture.png'});if(channel==='company-assistant:ppt-imgtext-start')return Promise.resolve(window.__pptRecoveryJob);if(channel==='company-assistant:ppt-imgtext-status')return Promise.resolve({ok:true,job:window.__pptRecoveryJob});if(channel==='company-assistant:ppt-imgtext-workdir'){window.__pptRecoveryCalls.push('workdir');return Promise.resolve({ok:true})}if(channel==='company-assistant:ppt-imgtext-retry'){window.__pptRecoveryCalls.push('retry');window.__pptRecoveryJob={...window.__pptRecoveryJob,state:'done',needsOutputCheck:false,error:'',step:'恢复夹具已完成'};return Promise.resolve(window.__pptRecoveryJob)}return invoke(channel,args)}})()`);
     await click('[data-ppt="convert-mode"]'); await click('[data-ppt="image"]');
@@ -101,7 +119,7 @@ async function main() {
     await wait('!!document.querySelector("[data-conversion-state=done]")', 'explicit manual recovery'); await sleep(1800);
     await click('[data-ppt="search-mode"]'); await c.eval('window.__pptRestoreInvoke();delete window.__pptRestoreInvoke');
     result.checks.push('中断转字显示产物目录与人工重试，实际点击顺序通过（故障回包与打开目录为夹具；后端防Agent重放另有单测）');
-    fs.unlinkSync(path.join(doctorDir, 'hub-api.json')); await click('.pptw-settings summary'); await click('[data-ppt="refresh"]'); await wait('/请升级/.test(document.querySelector("[data-ppt-status]").textContent)', 'upgrade preflight'); await shot('upgrade');
+    fs.unlinkSync(path.join(doctorDir, 'hub-api.json')); await click('.pptw-settings summary'); await click('[data-ppt="refresh"]'); await wait('/升级/.test(document.querySelector("[data-ppt-status]").textContent)', 'upgrade preflight'); await shot('upgrade');
     result.checks.push('能力标记缺失：不启动旧Doctor并显示升级入口');
     await c.eval(`(()=>{const invoke=ipcRenderer.invoke.bind(ipcRenderer);window.__pptDownloadCalls=[];ipcRenderer.invoke=(channel,args)=>{if(channel==='company-assistant:ppt-download-doctor'){window.__pptDownloadCalls.push(args.source);return Promise.resolve(args.source==='mirror'?{ok:false,error:'镜像下载暂不可用（故障夹具），请使用GitHub备用'}:{ok:true})}return invoke(channel,args)}})()`);
     await click('[data-ppt-status] [data-ppt="download"]'); await wait('/镜像下载暂不可用/.test(document.querySelector("[data-ppt-notice]").textContent)', 'mirror failure is visible');
