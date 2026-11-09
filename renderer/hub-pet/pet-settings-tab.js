@@ -46,7 +46,7 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
     const modes = data.modes || [];
     container.innerHTML = `
       <div class="pet-tab-row pet-tab-top">
-        <div><b>在桌面显示桌宠</b><small>Hub 开着时待在屏幕右下角；有新提醒会说一句，点它打开助理。</small></div>
+        <div><b>在桌面显示桌宠</b><small>Hub 开着时待在屏幕右下角；会话答完、提醒、会议室结果都由它告诉你，右键还能直接问助理。</small></div>
         <label class="pet-tab-switch"><input type="checkbox" data-pet="enabled"${s.enabled ? ' checked' : ''}><span></span></label>
       </div>
       <div class="pet-tab-head"><h4>形象</h4><span class="pet-tab-note${st.phase === 'error' && !st.failedId ? ' bad' : ''}">${esc(checkNote)}</span>
@@ -54,13 +54,13 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
       ${st.failedId && st.error ? `<p class="pet-tab-note bad">${esc(st.error)}</p>` : ''}
       <div class="pet-tab-grid">${roles.map(card).join('')}</div>
       <div class="pet-tab-row">
-        <div><b>大小</b><small>拖动滑块，桌面上的桌宠跟着变大变小；脚的位置不动。</small></div>
+        <div><b>大小与位置</b><small>拖动滑块调大小，脚的位置不动；拖到哪里就记住哪里。</small></div>
         <div class="pet-tab-size"><input type="range" min="${SIZE_MIN}" max="${SIZE_MAX}" step="1" value="${sizePct(s.scale)}" data-pet-size aria-label="桌宠大小"><span data-pet-size-label>${sizePct(s.scale)}%</span>
-          <button type="button" class="pet-tab-mini" data-pet="sizeReset"${sizePct(s.scale) === 100 ? ' disabled' : ''}>原大小</button></div>
+          <button type="button" class="pet-tab-mini" data-pet="sizeReset"${sizePct(s.scale) === 100 ? ' disabled' : ''}>原大小</button>
+          <button type="button" class="pet-tab-mini" data-pet="resetPosition"${s.enabled ? '' : ' disabled'}>回到右下角</button></div>
       </div>
-      <div class="pet-tab-head"><h4>行为</h4></div>
       <div class="pet-tab-row">
-        <div><b>说话频率</b><small>${esc(MODE_NOTES[s.mode] || '')}；每小时最多开口 3 次。</small></div>
+        <div><b>说话频率</b><small>${esc(MODE_NOTES[s.mode] || '')}；提醒每小时最多开口 3 次，通知卡片不受限。</small></div>
         <div class="pet-tab-seg" role="radiogroup" aria-label="说话频率">${modes.map(m => `<button type="button" role="radio" aria-checked="${m.id === s.mode}" data-pet="mode" data-id="${esc(m.id)}"${m.id === s.mode ? ' class="on"' : ''}>${esc(m.label)}</button>`).join('')}</div>
       </div>
       <div class="pet-tab-row">
@@ -71,12 +71,16 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
         </div>
       </div>
       <div class="pet-tab-row">
-        <div><b>全屏时躲到屏幕边</b><small>演示、看视频或全屏开会时缩到右边只露一点，退出全屏后回来。</small></div>
-        <label class="pet-tab-switch"><input type="checkbox" data-pet="peekOnFullscreen"${s.peekOnFullscreen !== false ? ' checked' : ''}><span></span></label>
+        <div><b>通知交给桌宠说</b><small>会话答完、联动消息、会议室结果由桌宠举卡片告诉你，点卡片直接打开；关掉就照旧弹右下角通知卡。</small></div>
+        <label class="pet-tab-switch"><input type="checkbox" data-pet="notifyViaPet"${s.notifyViaPet !== false ? ' checked' : ''}><span></span></label>
       </div>
       <div class="pet-tab-row">
-        <div><b>位置</b><small>拖到哪里就记住哪里；找不到它时点这里。</small></div>
-        <button type="button" class="pet-tab-mini" data-pet="resetPosition"${s.enabled ? '' : ' disabled'}>回到右下角</button>
+        <div><b>会话在跑时陪着干活</b><small>有会话在跑，桌宠敲键盘并标出「N 个在跑」，跑完就停。</small></div>
+        <label class="pet-tab-switch"><input type="checkbox" data-pet="followSessions"${s.followSessions !== false ? ' checked' : ''}><span></span></label>
+      </div>
+      <div class="pet-tab-row">
+        <div><b>全屏时躲到屏幕边</b><small>演示、看视频或全屏开会时缩到右边只露一点，退出全屏后回来。</small></div>
+        <label class="pet-tab-switch"><input type="checkbox" data-pet="peekOnFullscreen"${s.peekOnFullscreen !== false ? ' checked' : ''}><span></span></label>
       </div>`;
   }
 

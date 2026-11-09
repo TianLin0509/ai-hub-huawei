@@ -9,11 +9,26 @@
 <body>
   <div id="stage">
     <div id="panel" class="panel" data-hit="panel" hidden>
-      <div class="panel-head"><b>提醒</b><span id="panel-count"></span><button type="button" class="panel-close" id="panel-close" aria-label="关闭">×</button></div>
+      <div class="panel-head"><b>消息</b><span id="panel-count"></span><button type="button" class="panel-close" id="panel-close" aria-label="关闭">×</button></div>
       <div class="panel-list" id="panel-list"></div>
     </div>
+    <!-- 通知卡片（2026-11-09）：原来右下角的通知卡，开着桌宠时由桌宠举着说 -->
+    <div id="ncard" class="ncard" data-hit="bubble" hidden>
+      <div class="ncard-head"><i class="ncard-dot"></i><span id="ncard-kind"></span><span id="ncard-time"></span><button type="button" id="ncard-close" class="ncard-close" data-hit="close" aria-label="收起">×</button></div>
+      <b id="ncard-title"></b>
+      <p id="ncard-text"></p>
+      <div class="ncard-foot"><span id="ncard-cta"></span><span id="ncard-count"></span></div>
+      <i id="ncard-bar" class="ncard-bar"></i>
+    </div>
+    <!-- 问助理（2026-11-09）：右键「问助理一句…」打开 -->
+    <form id="ask" class="ask" data-hit="ask" hidden>
+      <div class="ask-head"><b>问助理</b><span id="ask-note">回车发送 · Esc 关闭</span></div>
+      <textarea id="ask-input" rows="2" maxlength="2000" placeholder="比如：今天下午有什么会？"></textarea>
+      <div class="ask-foot"><button type="button" id="ask-cancel" class="ask-btn">取消</button><button type="submit" id="ask-send" class="ask-btn primary">交给助理</button></div>
+    </form>
     <div id="bubble" class="bubble" data-hit="bubble" hidden><span id="bubble-kind" class="bubble-kind" hidden></span><span id="bubble-text"></span></div>
     <button type="button" id="dot" class="dot" data-hit="dot" hidden aria-label="未读提醒"></button>
+    <div id="busy" class="busy" hidden><i></i><span id="busy-text"></span></div>
     <div id="shadow"></div>
     <div id="body" data-hit="pet">
       <div id="layers"></div>

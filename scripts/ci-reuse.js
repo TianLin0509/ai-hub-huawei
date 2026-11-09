@@ -13,6 +13,7 @@ const RELEASE_FILES = new Set([
   'scripts/install-release.ps1',
 ]);
 const VERSION_ONLY_FILES = new Set(['package.json', 'package-lock.json']);
+const QUICK_SINCE = '2026-11-09T00:00:00Z';
 
 // diffs: { file: unifiedDiffText }，只含改动的文件。
 function onlyReleaseChanges(diffs) {
@@ -25,8 +26,20 @@ function onlyReleaseChanges(diffs) {
   return { ok: true };
 }
 
-// runs: [{ id, headSha, event, status, conclusion, isTag }]；git: { isAncestor(a,b), diffs(a,b) }
-function decide({ head, isTag, currentRunId, runs, git }) {
+// 运行档位（2026-11-09 用户定：按改动选测试、只在发版时打包）：
+// - quick：推到 main。只跑单测和泄露闸门，不打包、不跑端到端。
+// - full：每晚定时、手动触发、PR。单测 + 端到端 + 公开版测试，不打包。
+// - release：标签。单测、泄露闸门、打包、装机冒烟、发布。
+function modeFor(eventName, ref) {
+  if (String(ref || '').startsWith('refs/tags/')) return 'release';
+  return eventName === 'push' ? 'quick' : 'full';
+}
+
+// runs: [{ id, headSha, event, status, conclusion, isTag, quick }]；git: { isAncestor(a,b), diffs(a,b) }
+// mode 不是 quick 时，quick 运行没跑端到端和公开版测试，不能拿来复用。
+function decide({ head, isTag, currentRunId, runs, git, mode = isTag ? 'release' : 'quick' }) {
+  // 2026-11-09：测试只在打标签前跑一次（发版脚本的本机预检），标签构建只打包、装机冒烟和发布。
+  if (isTag) return { skipTests: true, skipPackage: false, reason: '发版脚本的本机预检已跑过测试，标签构建只打包' };
   if (!isTag) {
     const tagRun = runs.find(r => r.id !== currentRunId && r.isTag && r.headSha === head && r.status !== 'completed');
     if (tagRun) return { skipTests: true, skipPackage: true, reason: `同一提交的标签构建 ${tagRun.id} 已在排队或在跑，由它完整验证` };
@@ -36,6 +49,7 @@ function decide({ head, isTag, currentRunId, runs, git }) {
     (r.status === 'completed' && r.conclusion === 'failure') || (r.isTag && r.status !== 'completed'))).map(r => r.headSha));
   for (const r of runs) {
     if (r.id === currentRunId || r.status !== 'completed' || r.conclusion !== 'success') continue;
+    if (mode !== 'quick' && r.quick) continue;
     if (distrusted.has(r.headSha)) continue;
     if (r.headSha !== head && !git.isAncestor(r.headSha, head)) continue;
     const check = r.headSha === head ? { ok: true } : onlyReleaseChanges(git.diffs(r.headSha, head));
@@ -52,6 +66,7 @@ function sh(cmd, args) {
 function main() {
   const head = process.env.GITHUB_SHA || sh('git', ['rev-parse', 'HEAD']);
   const isTag = (process.env.GITHUB_REF || '').startsWith('refs/tags/');
+  const mode = modeFor(process.env.GITHUB_EVENT_NAME, process.env.GITHUB_REF);
   const currentRunId = Number(process.env.GITHUB_RUN_ID || 0);
   const repo = process.env.GITHUB_REPOSITORY;
   let result;
@@ -59,6 +74,8 @@ function main() {
     const fetchRuns = () => JSON.parse(sh('gh', ['api', `repos/${repo}/actions/workflows/ci.yml/runs?per_page=60`])).workflow_runs.map(r => ({
       id: r.id, headSha: r.head_sha, event: r.event, status: r.status, conclusion: r.conclusion,
       isTag: r.event === 'push' && /^v\d/.test(r.head_branch || '') && r.head_branch !== 'main',
+      // 档位上线之前的 main 推送运行是完整验证；之后的才是 quick。按运行创建时间区分。
+      quick: r.event === 'push' && r.head_branch === 'main' && String(r.created_at || '') >= QUICK_SINCE,
     }));
     let runs = fetchRuns();
     // 发版提交和标签一起推，标签那条运行可能晚几秒才登记：分支上的发版提交最多等 90 秒找它。
@@ -83,16 +100,16 @@ function main() {
         return out;
       },
     };
-    result = decide({ head, isTag, currentRunId, runs, git });
+    result = decide({ head, isTag, currentRunId, runs, git, mode });
   } catch (error) {
     result = { skipTests: false, skipPackage: false, reason: '查询复用信息出错，完整验证：' + String(error.message).split('\n')[0] };
   }
-  console.log(`[ci-reuse] ${result.reason}`);
+  console.log(`[ci-reuse] 档位 ${mode}；${result.reason}`);
   if (process.env.GITHUB_OUTPUT) {
-    fs.appendFileSync(process.env.GITHUB_OUTPUT, `skip_tests=${result.skipTests}\nskip_package=${result.skipPackage}\n`);
+    fs.appendFileSync(process.env.GITHUB_OUTPUT, `skip_tests=${result.skipTests}\nskip_package=${result.skipPackage}\nmode=${mode}\n`);
   }
   if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `## 验证复用\n${result.reason}\n`);
 }
 
 if (require.main === module) main();
-module.exports = { onlyReleaseChanges, decide, RELEASE_FILES };
+module.exports = { onlyReleaseChanges, decide, modeFor, RELEASE_FILES };

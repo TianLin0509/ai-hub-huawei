@@ -22,6 +22,9 @@ const NIGHT_UNTIL = 7;
 const PETTED_AWAKE_MS = 60000;  // 夜里被点一下，醒一分钟
 const SIT_LONG_MS = 90 * 60000; // 活泼档：连续坐 90 分钟提醒起来走走
 const AWAY_BACK_SEC = 1800;     // 活泼档：离开 30 分钟回来打个招呼
+// 通知卡片（2026-11-09）：开着桌宠时，会话完成、联动消息、助理提醒等原来弹在右下角的通知卡，改由桌宠举着卡片说。
+// 停留时间和原通知卡一致；鼠标停在卡片上时不收。
+const NOTIFY_SHOW_MS = 9000;
 
 // 右键菜单里交给助理办的事。prompt 是发给助理页的默认问题，助理页可以按 action 换成自己的流程。
 const ASSISTANT_ACTIONS = Object.freeze([
@@ -43,12 +46,13 @@ function isNight(ms) {
   return h >= NIGHT_FROM || h < NIGHT_UNTIL;
 }
 
-// ctx：{ now, fullscreen, speaking, assistantBusy, idleSec, quotaLow, pettedAt }
+// ctx：{ now, fullscreen, speaking, speakingTone, assistantBusy, sessionsBusy, idleSec, quotaLow, pettedAt }
+// sessionsBusy（2026-11-09）：有会话正在跑时桌宠陪着敲键盘，看一眼就知道活还没干完。
 function decidePose(ctx = {}) {
   const now = Number(ctx.now) || Date.now();
   if (ctx.fullscreen) return 'peek';
-  if (ctx.speaking) return 'happy';
-  if (ctx.assistantBusy) return 'typing';
+  if (ctx.speaking) return ctx.speakingTone === 'bad' ? 'tired' : 'happy';
+  if (ctx.assistantBusy || Number(ctx.sessionsBusy) > 0) return 'typing';
   const petted = Number(ctx.pettedAt) > 0 && now - Number(ctx.pettedAt) < PETTED_AWAKE_MS;
   if (Number(ctx.idleSec) >= IDLE_SLEEP_SEC || (isNight(now) && !petted)) return 'sleep';
   if (ctx.quotaLow) return 'tired';
@@ -63,6 +67,10 @@ function speakGate(settings = {}, ctx = {}, spokenAt = [], item = null) {
   if (Number(settings.quietUntil) > now) return { ok: false, reason: 'quiet-hour' };
   if (settings.silentDate && settings.silentDate === localDateKey(now)) return { ok: false, reason: 'silent-today' };
   if (ctx.fullscreen) return { ok: false, reason: 'fullscreen' };
+  // 开会录制中（2026-11-09）：屏幕可能正在共享，任何卡片都只亮小圆点，散会后点开看。
+  if (ctx.meeting) return { ok: false, reason: 'meeting' };
+  // 通知卡片是用户在等的结果（会话答完、抢到会议室、助理答好了）：不受打盹和每小时上限约束，桌宠会被叫醒来说。
+  if (item?.notify) return { ok: true, reason: '' };
   if (ctx.pose === 'sleep' && !item?.sticky) return { ok: false, reason: 'sleeping' };
   const recent = spokenAt.filter(t => now - t < 3600000).length;
   if (recent >= MAX_PER_HOUR && !item?.sticky && item?.kind !== 'digest') return { ok: false, reason: 'hourly-cap' };
@@ -75,9 +83,11 @@ function cleanText(value, max) {
 
 // 一次一句的气泡队列。提醒先排队；轮到时能开口就说 8 秒，再收进小圆点；不能开口直接进小圆点。
 class SpeechQueue {
-  constructor({ now = () => Date.now(), showMs = SHOW_MS, keepDots = 20 } = {}) {
+  constructor({ now = () => Date.now(), showMs = SHOW_MS, notifyMs = NOTIFY_SHOW_MS, keepDots = 20 } = {}) {
     this.now = now;
     this.showMs = showMs;
+    this.notifyMs = notifyMs;
+    this.held = null;
     this.keepDots = keepDots;
     this.pending = [];
     this.current = null;
@@ -86,14 +96,35 @@ class SpeechQueue {
     this.seen = new Set();
   }
 
-  // item：{ id, kind, title, text, sessionId? }。同一 id 只收一次。
+  // item：{ id, kind, title, text, sessionId?, sticky?, notify?, tone?, page?, noticeId?, count? }。同一 id 只收一次。
+  // notify：通知卡片（会话完成等）。它插到队首，正在说的话先收进小圆点，让最新的结果马上出来（连续完成几个会话时不排队干等）。
   push(item) {
     const id = cleanText(item && item.id, 160);
     const title = cleanText(item && item.title, 80);
     if (!id || !title || this.seen.has(id)) return false;
     this.seen.add(id);
-    this.pending.push({ id, kind: cleanText(item.kind, 32), title, text: String(item.text == null ? '' : item.text).slice(0, 4000), sessionId: cleanText(item.sessionId, 160) || null, sticky: item.sticky === true });
+    if (this.seen.size > 2000) this.seen.delete(this.seen.values().next().value);
+    const entry = { id, kind: cleanText(item.kind, 32), title, text: String(item.text == null ? '' : item.text).slice(0, 4000), sessionId: cleanText(item.sessionId, 160) || null, sticky: item.sticky === true };
+    if (item.notify === true) {
+      entry.notify = true;
+      entry.at = this.now();
+      for (const key of ['tone', 'page', 'noticeId', 'cta']) { const v = cleanText(item[key], key === 'cta' ? 20 : 160); if (v) entry[key] = v; }
+      const count = Math.round(Number(item.count) || 0);
+      if (count > 1) entry.count = Math.min(99, count);
+      if (this.current) { this.toDot(this.current); this.current = null; this.held = null; }
+      this.pending.unshift(entry);
+    } else this.pending.push(entry);
     return true;
+  }
+
+  // 鼠标停在通知卡片上：暂停倒计时；移开后至少再留 2.5 秒。
+  hold(on) {
+    const cur = this.current;
+    if (!cur || cur.sticky) return false;
+    const now = this.now();
+    if (on && !this.held) { this.held = { id: cur.id, left: Math.max(0, cur.until - now) }; cur.until = Infinity; return true; }
+    if (!on && this.held && this.held.id === cur.id) { cur.until = now + Math.max(2500, this.held.left); this.held = null; return true; }
+    return false;
   }
 
   // 每次状态变化或定时器到点调用；gate(spokenAt) 返回 speakGate 的结果。返回是否有可见变化。
@@ -109,9 +140,9 @@ class SpeechQueue {
       const next = this.pending.shift();
       const verdict = typeof gate === 'function' ? gate(this.spokenAt, next) : { ok: true };
       if (verdict && verdict.ok) {
-        if (!next.sticky && next.kind !== 'digest') this.spokenAt.push(now);
+        if (!next.sticky && !next.notify && next.kind !== 'digest') this.spokenAt.push(now);
         this.spokenAt = this.spokenAt.filter(t => now - t < 3600000);
-        this.current = { ...next, at: now, until: next.sticky ? null : now + this.showMs };
+        this.current = { ...next, at: now, until: next.sticky ? null : now + (next.notify ? this.notifyMs : this.showMs) };
       } else {
         this.toDot(next);
       }
@@ -123,8 +154,9 @@ class SpeechQueue {
   }
 
   toDot(item) {
+    if (this.held && this.held.id === item.id) this.held = null;
     const { until, at, ...rest } = item;
-    this.dots.push(rest);
+    this.dots.push(item.notify ? { ...rest, at } : rest);   // 通知卡片收进小圆点后，面板里要显示几点到的
     while (this.dots.filter(item => item.kind !== 'reminder').length > this.keepDots) this.dots.splice(this.dots.findIndex(item => item.kind !== 'reminder'), 1);
   }
 
@@ -142,9 +174,10 @@ class SpeechQueue {
   takeCurrent() {
     const item = this.current;
     this.current = null;
+    this.held = null;
     if (!item) return null;
     const { until, at, ...rest } = item;
-    return rest;
+    return item.notify ? { ...rest, at } : rest;
   }
 
   // 用户点了小圆点：取走全部，最新的在前。
@@ -154,14 +187,25 @@ class SpeechQueue {
     return items;
   }
 
+  // 用户已经在 Hub 里看过的会话：从小圆点里拿掉（不然点开小圆点还是一堆早看过的「已完成」）。
+  dropSession(sessionId) {
+    const sid = cleanText(sessionId, 160);
+    if (!sid) return false;
+    const before = this.dots.length;
+    this.dots = this.dots.filter(item => !(item.notify && item.sessionId === sid));
+    return this.dots.length !== before;
+  }
+
   nextDeadline() {
-    if (this.current) return this.current.sticky ? null : this.current.until;
+    if (this.current) return this.current.sticky || !Number.isFinite(this.current.until) ? null : this.current.until;
     return this.pending.length ? this.now() : null;
   }
 
   snapshot() {
     return {
-      bubble: this.current ? { id: this.current.id, kind: this.current.kind, title: this.current.title, until: this.current.until, sticky: this.current.sticky } : null,
+      bubble: this.current ? { id: this.current.id, kind: this.current.kind, title: this.current.title, until: Number.isFinite(this.current.until) ? this.current.until : null, sticky: this.current.sticky,
+        ...(this.current.notify ? { notify: true, text: this.current.text.slice(0, 400), tone: this.current.tone || '', cta: this.current.cta || '', count: this.current.count || 0, sessionId: this.current.sessionId,
+          held: !!this.held, ms: this.notifyMs, at: this.current.at } : {}) } : null,
       dots: this.dots.length,
       pending: this.pending.length,
     };
@@ -195,11 +239,24 @@ function chatterFor(mode, ctx = {}, track = {}) {
   return null;
 }
 
+// 周五下午问一句要不要让助理起草周报（2026-11-09）：温和、活泼档都说，每周一次；人不在电脑前时不说。
+// 点卡片 → 助理页按「起草周报」开问。
+function weeklyNudge(mode, ctx = {}, track = {}) {
+  if (mode === 'quiet') return null;
+  const now = Number(ctx.now) || Date.now();
+  const d = new Date(now), today = localDateKey(now);
+  if (d.getDay() !== 5 || d.getHours() < 15 || d.getHours() >= 18 || (Number(ctx.idleSec) || 0) >= 300 || track.weeklyDate === today) return null;
+  track.weeklyDate = today;
+  return { id: 'weekly-' + today, kind: 'weekly', notify: true, action: 'weekly-report', cta: '让助理起草',
+    title: '周五了，周报要不要让助理先起个草？', text: '助理按本周的会、邮件和群消息起草，你改改就能交。' };
+}
+
 module.exports = {
   ASSISTANT_ACTIONS,
   IDLE_SLEEP_SEC,
   MAX_PER_HOUR,
   MODES,
+  NOTIFY_SHOW_MS,
   POSES,
   ROLES,
   SHOW_MS,
@@ -209,4 +266,5 @@ module.exports = {
   isNight,
   localDateKey,
   speakGate,
+  weeklyNudge,
 };

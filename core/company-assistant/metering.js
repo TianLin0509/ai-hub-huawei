@@ -1,4 +1,6 @@
 'use strict';
+// 读取卡顿判定：250ms 在构建机满载时误报过（2026-11-09 CI 42652128569），放到 2 秒。
+const STALL_MS = 2000;
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -26,7 +28,7 @@ async function readLedger(file, size, previous = null) {
   let timeout;
   const arm = () => {
     clearTimeout(timeout);
-    timeout = setTimeout(() => stream.destroy(new Error('transcript-read-timeout')), 250);
+    timeout = setTimeout(() => stream.destroy(new Error('transcript-read-timeout')), STALL_MS);
   };
   const decoder = new StringDecoder('utf8');
   let pending = '';

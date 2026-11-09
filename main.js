@@ -1661,6 +1661,8 @@ function createWindow() {
       sendToRenderer,
       canShow: () => !keepIsolatedE2EWindowHidden()
         || process.env.CLAUDE_HUB_E2E_SHOW_NOTIFICATION === '1',
+      // 开着桌宠时，通知由桌宠举卡片说；桌宠没开或被收起时照旧弹这张卡（2026-11-09）。
+      route: payload => hubPetController?.notify?.(payload) === true,
       logger: console,
     });
   }
@@ -1685,6 +1687,28 @@ function createWindow() {
           }
           return false;
         },
+        // 桌宠联动（2026-11-09）：正在跑的会话数（助理自己的会话另算）、问助理、右键菜单里的页面入口。
+        getSessionActivity: () => {
+          let running = 0;
+          for (const s of sessionManager.sessions.values()) {
+            const info = (s && s.info) || {};
+            if (s && s.agentTurnActive && !HUB_PET_ASSISTANT_PURPOSES.has(info.purpose) && !info.hiddenFromSidebar && !info.meetingId) running += 1;
+          }
+          return { running };
+        },
+        askAssistant: text => {
+          if (!companyAssistantService) throw new Error('这个版本没有助理');
+          if (!optionalFeatures.get('assistant')) throw new Error('助理还没开：在「可选功能」里打开助理后再问');
+          return companyAssistantService.ask(text, { via: 'pet' });
+        },
+        getPages: () => ({
+          assistant: !!companyAssistantService,
+          rooms: companyAssistantService && companyAssistantService.rooms
+            ? { label: '会议室', hint: companyAssistantService.rooms.settings().enabled ? '自动抢订开着' : '' } : null,
+        }),
+        // 硬盘快满时桌宠提醒：系统盘和 Hub 数据所在的盘。
+        inMeeting: () => !!(companyAssistantService && companyAssistantService.meetings && companyAssistantService.meetings.live && companyAssistantService.meetings.live.size > 0),
+        diskRoots: () => [path.parse(process.env.SystemRoot || process.cwd()).root, require('./core/hub-pet/disk-watch').driveRoot(getHubDataDir())],
         canShow: () => !keepIsolatedE2EWindowHidden() || process.env.CLAUDE_HUB_E2E_SHOW_PET === '1',
         debug: isIsolatedHub(),
         logger: console,
@@ -2899,6 +2923,8 @@ try {
       lookupEmail: () => companyAssistantService?.accountEmail?.() || '',
       accountEmail: () => { try { return JSON.parse(require('fs').readFileSync(require('path').join(getHubDataDir(), 'company-assistant', 'settings.json'), 'utf8')).email || ''; } catch { return ''; } },
       onChanged: () => sendToRenderer('company-attendance:changed', {}),
+      // 加班红线提醒交给提醒总线：开着桌宠时桌宠说，没开时右下角通知卡（2026-11-09）。
+      publish: notice => require('./core/company-assistant/notice-bus').noticeBus().publish(notice),
     });
     if (optionalFeatures.get('attendance')) companyAttendanceService.start();
   }
@@ -4388,7 +4414,9 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
         return unblocking.get(host);
       };
       const appUpdate = createAppUpdateController({ app, config: memberUpgrade ? editionChannel.updateConfig(distribution.updateConfig, getHubDataDir()) : distribution.updateConfig, dataDir: getHubDataDir(),
-        currentVersion: distribution.editionVersion || app.getVersion(), sendToRenderer, prepareLaunch: prepareHubLaunchClean,
+        currentVersion: distribution.editionVersion || app.getVersion(), prepareLaunch: prepareHubLaunchClean,
+        // 值得提醒的新版本（改了 x 或 y）由桌宠说一声；只改末位的照旧静默（2026-11-09）。
+        sendToRenderer: (channel, payload) => { sendToRenderer(channel, payload); if (channel === 'app-update:state' && payload && payload.phase === 'available' && payload.latest && payload.latest.notify) { try { hubPetController?.announceUpdate?.(payload.latest.version); } catch (_) {} } },
         unblock: unblockOwn, unblockInteractive: url => gateVisible(gatePageFor(url)), isOwnUrl: url => ownHosts.isOwnUrl(url, ownConfig), unblockPassed: () => ownUnblocker.passed(),
         restartWait: () => companyHubAdmin()?.restartWaitView?.() || null });
       registerAppUpdateIpc(ipcMain, appUpdate, { gate: { apply: opts => { const admin = companyHubAdmin(); return admin && typeof admin.localApply === 'function' ? admin.localApply(opts) : null; } } });

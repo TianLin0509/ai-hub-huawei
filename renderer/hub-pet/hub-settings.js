@@ -8,6 +8,19 @@ function mountHubPetSettings({ document, window, ipcRenderer }) {
   ipcRenderer.on('hub-pet:open-assistant', (_event, payload) => {
     try { window.dispatchEvent(new window.CustomEvent('hub-pet:open-assistant', { detail: payload || {} })); } catch (_) {}
   });
+  // 桌宠卡片指向某一页（2026-11-09）：会议室结果 → 会议室页；助理答好了 → 助理页。按左栏按钮打开，和用户自己点一样。
+  const PAGE_BUTTON = { rooms: 'btn-company-rooms', meeting: 'btn-company-meeting', attendance: 'btn-company-attendance' };
+  ipcRenderer.on('hub-pet:open-page', (_event, payload = {}) => {
+    const page = String(payload.page || '');
+    if (page === 'assistant') {
+      try { window.dispatchEvent(new window.CustomEvent('hub-pet:open-assistant', { detail: { source: 'pet', ...(payload.noticeId ? { noticeId: String(payload.noticeId) } : {}) } })); } catch (_) {}
+      return;
+    }
+    if (page === 'disk') { try { window.__hubOpenDiskRelease?.(); } catch (_) {} return; }
+    if (page === 'update') { try { window.__appUpdate?.open?.(); } catch (_) {} return; }
+    const button = PAGE_BUTTON[page] && document.getElementById(PAGE_BUTTON[page]);
+    if (button) button.click();
+  });
 
   // renderer.js 在配置弹窗的标记之前加载，等 DOM 建好再挂。
   if (!document.getElementById('config-main-view') && document.readyState === 'loading') {
@@ -29,7 +42,7 @@ function mountSection({ document, window, ipcRenderer }) {
     '<div class="config-operations-card">',
     '  <label class="config-toggle-row" for="cfg-hub-pet-enabled">',
     '    <input type="checkbox" id="cfg-hub-pet-enabled">',
-    '    <span><strong>在桌面角落显示桌宠</strong><small>Hub 开着时出现；有新提醒会说一句，点它打开助理。右键可让它安静一小时或今天别说话。</small></span>',
+    '    <span><strong>在桌面角落显示桌宠</strong><small>Hub 开着时出现；会话答完、提醒都由它告诉你，点卡片直接打开。右键可问助理，或让它安静一小时。</small></span>',
     '  </label>',
     '  <div class="config-reading-grid">',
     '    <div class="config-field"><label for="cfg-hub-pet-role">角色</label><select id="cfg-hub-pet-role"></select></div>',

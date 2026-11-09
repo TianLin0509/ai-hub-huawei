@@ -58,6 +58,8 @@ function createDesktopNotificationController({
   focusPrimaryWindow,
   sendToRenderer,
   canShow = () => true,
+  // route(payload) 返回 true 表示这条通知已有别处接手（开着桌宠时由桌宠举卡片说，2026-11-09），这里就不再弹卡。
+  route = null,
   logger = console,
   setTimeoutFn = setTimeout,
   clearTimeoutFn = clearTimeout,
@@ -146,6 +148,12 @@ function createDesktopNotificationController({
     if (disposed) return false;
     const normalized = normalizeDesktopNotificationPayload(payload);
     if (!normalized) return false;
+    if (typeof route === 'function') {
+      let taken = false;
+      try { taken = route({ ...normalized, ...(payload && payload.tone ? { tone: String(payload.tone) } : {}) }) === true; }
+      catch (error) { logger.warn?.('[desktop-notification] route failed:', error && error.message); }
+      if (taken) return true;
+    }
     const win = ensureWindow();
     const loaded = await readyPromise;
     if (!loaded || disposed || !win || win.isDestroyed()) return false;

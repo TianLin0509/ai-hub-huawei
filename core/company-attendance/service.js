@@ -105,7 +105,39 @@ class CompanyAttendance {
     if (!allowNight && now.getHours() < 6) return false;
     return !st.lastAttemptAt || now.getTime() - Date.parse(st.lastAttemptAt) >= RETRY_MS;
   }
-  async tick() { if (this.shouldRun()) await this.sync({ reason: 'daily' }); }
+  async tick() { if (this.shouldRun()) await this.sync({ reason: 'daily' }); this.redLine(); }
+
+  // 加班红线提醒（2026-11-09，交给桌宠说）：按本月节奏会超 80 小时时，每天说两次——
+  // 取到当天数据后说一次「今天约几点前走」，快到那个时刻（前 20 分钟内）再提醒一次。数据只用本机记录，不额外访问考勤系统。
+  redLine() {
+    const publish = this.deps.publish;
+    if (typeof publish !== 'function') return null;
+    try {
+      const status = this.status();
+      const holidays = {};
+      for (const k of Object.keys(status.holidays || {})) holidays[k] = true;
+      const r = status.rules || calc.rulesFromWorkTime({});
+      const opts = { holidays, rules: { amEnd: r.amEnd, pmStart: r.pmStart, owePerWorkday: r.owePerWorkday } };
+      const today = status.today, days = calc.buildDays(status.records || [], opts);
+      const m = calc.monthReport(days, today.slice(0, 7), today, opts);
+      if (!(m.willExceed || m.over) || m.workdays < 2 || !calc.isWorkKind(calc.dayKind(today, opts))) return null;
+      const st = this.read('state', {}), told = st.redLineTold || {};
+      const projected = Math.round(m.projected / 60), leave = m.leaveBy != null && m.perDayAllowance >= 0 ? calc.fmtClock(m.leaveBy) : '';
+      const base = { kind: 'attendance', notify: true, page: 'attendance', tone: 'bad', cta: '打开考勤' };
+      let notice = null;
+      const now = this.now(), minute = now.getHours() * 60 + now.getMinutes();
+      if (told.day !== today) {
+        notice = { ...base, id: 'attendance-redline:' + today, title: m.over ? '本月加班已过 80 小时红线' : `本月加班预计 ${projected} 小时，会超红线`,
+          text: leave ? `想守住 80 小时：剩 ${m.leftWorkdays} 个工作日，今天约 ${leave} 前走。` : '本月净加班已超过红线，后面几天尽量早点走、周末别来。' };
+        this.write('state', { ...st, redLineTold: { day: today, evening: false } });
+      } else if (!told.evening && leave && m.leaveBy - minute <= 20 && m.leaveBy - minute >= 0) {
+        notice = { ...base, id: 'attendance-leave:' + today, title: `该准备走了：约 ${leave} 前离开`, text: `按 80 小时红线算的今天离开时间；本月预计 ${projected} 小时。` };
+        this.write('state', { ...st, redLineTold: { ...told, evening: true } });
+      }
+      if (notice) publish(notice);
+      return notice;
+    } catch { return null; }
+  }
 
   async capture(url) {
     const tries = [];

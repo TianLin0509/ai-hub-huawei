@@ -4,7 +4,9 @@
 // 助理页、桌宠、桌面通知各自订阅，互不依赖。同一条提醒（id 相同）只发布一次。
 const { EventEmitter } = require('node:events');
 
-const KINDS = Object.freeze(['brief', 'meeting-prep', 'awaiting-reply', 'commitment-due', 'overbooked', 'day-summary', 'keyword', 'reminder', 'digest']);
+const KINDS = Object.freeze(['brief', 'meeting-prep', 'awaiting-reply', 'commitment-due', 'overbooked', 'day-summary', 'keyword', 'reminder', 'digest',
+  // 2026-11-09：WeLink 续期失败（以前漏登记，这条提醒一直发不出去）、桌宠上问的回答、会议室结果、考勤红线。
+  'welink-login', 'answer', 'room', 'attendance']);
 const KEEP = 50;
 
 class NoticeBus extends EventEmitter {

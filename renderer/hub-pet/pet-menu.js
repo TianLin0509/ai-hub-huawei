@@ -17,6 +17,10 @@
     mute: '<path d="M4 8v4h3l4 3.5v-11L7 8z"/><path d="M14 8l3.5 4M17.5 8L14 12"/>',
     gear: '<circle cx="10" cy="10" r="2.6"/><path d="M10 2.8v2M10 15.2v2M2.8 10h2M15.2 10h2M4.9 4.9l1.4 1.4M13.7 13.7l1.4 1.4M4.9 15.1l1.4-1.4M13.7 6.3l1.4-1.4"/>',
     hide: '<path d="M3 10s2.6-5 7-5 7 5 7 5-2.6 5-7 5-7-5-7-5z"/><path d="M4 16L16 4"/>',
+    // 2026-11-09 快捷入口：问助理、没看的通知、会议室
+    ask: '<path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h9A1.5 1.5 0 0 1 16 5.5v6a1.5 1.5 0 0 1-1.5 1.5H9l-3.5 3v-3h0A1.5 1.5 0 0 1 4 11.5z"/><path d="M8.2 7.4a1.9 1.9 0 1 1 2.6 1.8c-.5.2-.8.6-.8 1.1M10 12.2v.1"/>',
+    inbox: '<path d="M3.5 11.5l2-6.5h9l2 6.5V15a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 15z"/><path d="M3.5 11.5h4l1 2h3l1-2h4"/>',
+    room: '<path d="M4 17V4.5A1.5 1.5 0 0 1 5.5 3h9A1.5 1.5 0 0 1 16 4.5V17M2.5 17h15"/><path d="M8 17v-3.5h4V17M7 6.5h1.5M11.5 6.5H13M7 9.5h1.5M11.5 9.5H13"/>',
   };
   const ACTION_ICON = { 'meetings-today': 'calendar', 'meeting-prep': 'prep', 'awaiting-reply': 'reply', 'group-summary': 'group', 'mail-triage': 'mail', 'weekly-report': 'report' };
   const svg = name => '<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">' + (P[name] || '') + '</svg>';
@@ -38,6 +42,9 @@
     $('avatar').src = s.role.preview || '';
     $('name').textContent = s.role.name || '桌宠';
     $('status').textContent = s.status || '';
+    const quick = $('quick'); quick.textContent = '';
+    for (const q of s.quick || []) quick.appendChild(button('item', '<span class="ico">' + svg(q.icon || 'reply') + '</span><span class="txt">' + text(q.label) + '</span>' + (q.hint ? '<span class="hint">' + text(q.hint) + '</span>' : ''), () => api.act({ type: q.type, ...(q.page ? { page: q.page } : {}) }), { role: 'menuitem' }));
+    $('quick-sep').hidden = !(s.quick || []).length;
     const actions = $('actions'); actions.textContent = '';
     for (const a of s.actions || []) actions.appendChild(button('item', '<span class="ico">' + svg(ACTION_ICON[a.action] || 'reply') + '</span><span class="txt">' + text(a.label) + '</span>', () => api.act({ type: 'action', action: a.action }), { role: 'menuitem' }));
     const modes = $('modes'); modes.textContent = '';

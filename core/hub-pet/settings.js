@@ -13,7 +13,7 @@ const BOX_ROLES_MAX = 24;
 
 const OPT_IN_V = 1;
 function defaults() {
-  return { enabled: false, role: '01-cat', mode: 'gentle', position: null, quietUntil: 0, silentDate: '', peekOnFullscreen: true, scale: 1, bodyBoxes: {} };
+  return { enabled: false, role: '01-cat', mode: 'gentle', position: null, quietUntil: 0, silentDate: '', peekOnFullscreen: true, notifyViaPet: true, followSessions: true, scale: 1, bodyBoxes: {} };
 }
 
 // 大小（2026-10-18）：身体是原大小的 0.6–1.6 倍，按 0.01 取整。认数字和「数字样子的字符串」（手改文件时常见），
@@ -41,6 +41,9 @@ function normalize(raw, base, roleOk = builtinRole) {
   if (typeof raw.role === 'string' && roleOk(raw.role)) out.role = raw.role;
   if (MODES.includes(raw.mode)) out.mode = raw.mode;
   if (typeof raw.peekOnFullscreen === 'boolean') out.peekOnFullscreen = raw.peekOnFullscreen;
+  // 2026-11-09：通知交给桌宠说（关掉就照旧弹右下角通知卡）；会话在跑时陪着敲键盘。
+  if (typeof raw.notifyViaPet === 'boolean') out.notifyViaPet = raw.notifyViaPet;
+  if (typeof raw.followSessions === 'boolean') out.followSessions = raw.followSessions;
   const scale = parseScale(raw.scale);
   if (scale != null) out.scale = scale;
   const p = raw.position;

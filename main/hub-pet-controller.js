@@ -4,11 +4,12 @@
 // 这里负责：窗口位置（拖动、惯性、贴边、躲边、记住位置）、姿态判断、气泡排队、右键菜单、打开助理页。
 const fs = require('fs');
 const path = require('path');
-const { ASSISTANT_ACTIONS, MODES, ROLES, SpeechQueue, chatterFor, decidePose, localDateKey, speakGate } = require('../core/hub-pet/state');
+const { ASSISTANT_ACTIONS, MODES, ROLES, SpeechQueue, chatterFor, decidePose, localDateKey, speakGate, weeklyNudge } = require('../core/hub-pet/state');
 const { allowedRange, clampTo, cubicOut, dockOf, releasePlan } = require('../core/hub-pet/motion');
 const { SCALE_MAX, SCALE_MIN, createSettingsStore, parseBox, parseScale } = require('../core/hub-pet/settings');
 const { DEFAULT_ROLE, createRolePackStore } = require('../core/hub-pet/role-packs');
 const { createFullscreenWatch } = require('../core/hub-pet/fullscreen-watch');
+const { createDiskWatch } = require('../core/hub-pet/disk-watch');
 
 const WIN_W = 280;
 const WIN_H = 340;                       // 原大小时的窗口高度；放大后按身体加高（winH）
@@ -37,6 +38,13 @@ function createHubPetController({
   company = false, available = true,
   getMainWindow, focusPrimaryWindow, sendToRenderer,
   noticeBus, isAssistantBusy = () => false,
+  // 2026-11-09 联动：getSessionActivity() → { running }（正在跑的会话数）；askAssistant(text) → 交给助理的一问；
+  // getPages() → { assistant: bool, rooms: { label, hint } | null }（右键菜单里放哪些入口）。
+  getSessionActivity = () => null, askAssistant = null, getPages = () => ({}),
+  // diskRoots() → 要看的盘（系统盘、Hub 数据所在盘）；不给就不看。
+  diskRoots = null, diskStatfs = undefined,
+  // inMeeting() → 会议页正在录制：这时只亮小圆点，不举卡片（屏幕可能在共享）。
+  inMeeting = () => false,
   canShow = () => true, debug = false, watchFullscreen = true,
   logger = console, now = () => Date.now(),
   fetchImpl = globalThis.fetch, roleSources = null, autoRoleDelayMs = 2500,
@@ -226,8 +234,12 @@ function createHubPetController({
     if (typeof overrides.busy === 'boolean') return overrides.busy;
     try { return !!isAssistantBusy(); } catch (_) { return false; }
   }
+  function meetingNow() {
+    if (typeof overrides.meeting === 'boolean') return overrides.meeting;
+    try { return inMeeting() === true; } catch (_) { return false; }
+  }
   function gate(spokenAt, item) {
-    return speakGate(settings.get(), { now: clock(), pose, fullscreen: fullscreen || screenFull }, spokenAt, item);
+    return speakGate(settings.get(), { now: clock(), pose, fullscreen: fullscreen || screenFull, meeting: meetingNow() }, spokenAt, item);
   }
 
   function evaluate() {
@@ -240,19 +252,23 @@ function createHubPetController({
     }
     const t = clock();
     const idleSec = idleSeconds();
-    const ctxBase = { now: t, fullscreen, assistantBusy: assistantBusy(), idleSec, quotaLow: signals.quotaLow, pettedAt };
+    const running = sessionsRunning();
+    const follow = settings.get().followSessions !== false;
+    const ctxBase = { now: t, fullscreen, assistantBusy: assistantBusy(), sessionsBusy: follow ? running : 0, idleSec, quotaLow: signals.quotaLow, pettedAt };
     // 先按「没在说话」定姿态（决定能不能开口：打盹时不说），再推进气泡队列，最后按是否在说话定最终姿态。
     pose = decidePose({ ...ctxBase, speaking: false });
     const chatter = chatterFor(settings.get().mode, { now: t, idleSec }, chatterTrack);
     if (chatter) speech.push(chatter);
+    if (typeof askAssistant === 'function') { let pages = {}; try { pages = getPages?.() || {}; } catch (_) {} if (pages.assistant) { const nudge = weeklyNudge(settings.get().mode, { now: t, idleSec }, chatterTrack); if (nudge) { remember(nudge); speech.push(nudge); } } }
     speech.tick(gate);
     const snap = speech.snapshot();
-    pose = decidePose({ ...ctxBase, speaking: !!snap.bubble });
+    pose = decidePose({ ...ctxBase, speaking: !!snap.bubble, speakingTone: snap.bubble && snap.bubble.tone });
     const s = settings.get();
     const role = currentRole();
     const state = {
       pose, role, assetBase: roles.assetBase(role), mode: s.mode, dock: fullscreen ? 'right' : dock, peeking: fullscreen, scale: scaleNow(),
-      bubble: snap.bubble ? { id: snap.bubble.id, title: snap.bubble.title, kind: snap.bubble.kind, sticky: snap.bubble.sticky } : null,
+      bubble: snap.bubble ? bubbleView(snap.bubble) : null,
+      running: follow ? running : 0,
       dots: snap.dots, quiet: !gate([]).ok, sequences: (roles.meta(role) && roles.meta(role).sequences) || [], clipped: (roles.meta(role) && roles.meta(role).clipped) || {},
       night: pose === 'sleep', edge: edgeCut(),
     };
@@ -269,10 +285,65 @@ function createHubPetController({
     deadlineTimer = setTimeout(() => { deadlineTimer = null; evaluate(); }, Math.max(50, due - now() + 20));
   }
 
+  // 发给渲染端的气泡：去掉会变的到点时刻（停留暂停时会改，不然每次都算「有变化」），倒计时由渲染端按 ms 自己走。
+  function bubbleView(b) { const { until: _u, ...rest } = b; return rest; }
+
   function onNotice(notice) {
     if (!notice || !notice.id) return;
-    if (speech.push(notice)) evaluate();
+    // 关了「通知交给桌宠」：总线上的通知卡片（会议室、助理回答、考勤）也不由桌宠说，交给右下角通知卡。
+    if (notice.notify && settings.get().notifyViaPet === false) return;
+    // 有去处的通知（会话、页面）记下来：点卡片或面板里的「打开」时按它跳。
+    if (notice.sessionId || notice.page || notice.noticeId || notice.action) remember(notice);
+    if (speech.push(notice)) {
+      // 被通知叫醒：夜里打盹时也醒过来说完（和被点一下一样醒一分钟）。
+      if (notice.notify) pettedAt = clock();
+      evaluate();
+    }
   }
+
+  // ---------- 通知交给桌宠（2026-11-09） ----------
+  // 原来弹在右下角的通知卡（会话答完、联动消息、网页会话、到点提醒），开着桌宠时改由桌宠举着卡片说：
+  // 点卡片直接打开会话；不点 9 秒后收进小圆点，点小圆点能翻到。桌宠没开、被收起或设置里关了「通知交给桌宠」时返回 false，
+  // 调用方照旧弹原通知卡。
+  const opened = new Map();       // 通知 id → 去处（sessionId / page / noticeId）
+  function remember(item) {
+    opened.set(String(item.id), { sessionId: item.sessionId || null, page: item.page || null, noticeId: item.noticeId || null, kind: item.kind || '', action: item.action || null, notify: item.notify === true });
+    while (opened.size > 300) opened.delete(opened.keys().next().value);
+  }
+  const NOTIFY_KIND = { reminder: 'hub-reminder', bridge: 'bridge' };
+  const diskWatch = typeof diskRoots === 'function' ? createDiskWatch({ roots: diskRoots, statfs: diskStatfs, now,
+    active: () => canNotify(), notify: item => { if (!canNotify()) return false; onNotice({ ...item, notify: true }); return true; } }) : null;
+  let diskFirst = null;   // 不用 reminder：那是桌宠提醒（要点了才算确认）的类别
+  function canNotify() {
+    return enabled() && started && alive() && win.isVisible?.() !== false && settings.get().notifyViaPet !== false;
+  }
+  function notify(payload = {}) {
+    if (!canNotify()) return false;
+    const sessionId = String(payload.sessionId || '').slice(0, 160);
+    // 公司助理的提醒本来就经提醒总线交给了桌宠（onNotice），这里只拦掉重复的那张通知卡。
+    if (payload.kind === 'assistant' && sessionId === 'company-assistant') return true;
+    const kind = NOTIFY_KIND[payload.kind] || (sessionId.startsWith('web:') ? 'web' : 'session');
+    const at = Number(payload.completedAt) || now();
+    onNotice({
+      id: `notify:${sessionId}:${at}`, kind, notify: true, title: String(payload.title || 'AI 会话'), text: String(payload.body || ''),
+      sessionId: sessionId || null, count: Number(payload.readyCount) || 0, tone: payload.tone === 'bad' ? 'bad' : '',
+      cta: kind === 'hub-reminder' ? '打开助理' : kind === 'bridge' ? '打开联动' : '打开会话',
+    });
+    return true;
+  }
+  function sessionsRunning() {
+    if (Number.isFinite(overrides.running)) return overrides.running;
+    try { const a = getSessionActivity?.(); return Math.max(0, Math.round(Number(a && a.running) || 0)); } catch (_) { return 0; }
+  }
+  // 值得提醒的新版本：每个版本说一次，点开「检查更新」窗口。
+  function announceUpdate(version) {
+    const v = String(version || '').replace(/[^0-9A-Za-z.-]/g, '').slice(0, 24);
+    if (!v || !canNotify()) return false;
+    onNotice({ id: 'update:' + v, kind: 'update', notify: true, page: 'update', cta: '去更新', title: 'AI HUB 有新版本 ' + v, text: '点开看这版改了什么，一键升级，会话和设置都保留。' });
+    return true;
+  }
+  // 用户已经在 Hub 里点开了这个会话：小圆点里它的「已完成」就不用再留着。
+  function sessionSeen(sessionId) { if (alive() && speech.dropSession(sessionId)) evaluate(); }
   function syncReminders() {
     let items = [];
     try { items = noticeBus?.reminders?.() || []; }
@@ -422,11 +493,36 @@ function createHubPetController({
     try { focusPrimaryWindow?.(); } catch (_) {}
     try { sendToRenderer?.('hub-pet:open-assistant', { source: 'pet', ...payload }); } catch (_) {}
   }
+  // 打开一条通知的去处：页面 → 打开那一页；会话 → 切到那个会话；其余（助理提醒）→ 助理页并定位到这条。
+  function openItem(item = {}) {
+    const known = opened.get(String(item.id || '')) || {};
+    const sessionId = item.sessionId || known.sessionId;
+    const page = item.page || known.page;
+    const noticeId = item.noticeId || known.noticeId;
+    const kind = item.kind || known.kind;
+    const action = ASSISTANT_ACTIONS.find(a => a.action === (item.action || known.action));
+    if (action) { openAssistant({ action: action.action, prompt: action.prompt }); return; }
+    if (page) {
+      try { focusPrimaryWindow?.(); } catch (_) {}
+      try { sendToRenderer?.('hub-pet:open-page', { page: String(page).slice(0, 40), ...(noticeId ? { noticeId: String(noticeId).slice(0, 160) } : {}) }); } catch (_) {}
+      return;
+    }
+    // 只有通知卡片（会话完成等）直接跳会话；助理的简报、会前准备等仍打开助理页并定位到那一条。
+    if (sessionId && (item.notify || known.notify) && kind !== 'reminder' && sessionId !== 'company-assistant') {
+      try { focusPrimaryWindow?.(); } catch (_) {}
+      try { sendToRenderer?.('desktop-notification:open-session', { sessionId: String(sessionId).slice(0, 160) }); } catch (_) {}
+      speech.dropSession(sessionId);
+      return;
+    }
+    openAssistant({ noticeId: String(noticeId || item.id || '').slice(0, 160), sessionId: sessionId ? String(sessionId).slice(0, 160) : undefined });
+  }
   function handleClick(target) {
     pettedAt = clock();
     if (target === 'bubble') {
       const item = speech.takeCurrent();
-      if (item && confirmReminders([item])) send('hub-pet:panel', { items: [item] });
+      // 通知卡片：点一下就去（和原来的通知卡一样），不再多展开一层。
+      if (item && item.notify && confirmReminders([item])) { send('hub-pet:motion', { phase: 'poke' }); openItem(item); }
+      else if (item && confirmReminders([item])) send('hub-pet:panel', { items: [item] });
     } else if (target === 'dot') {
       const items = speech.takeDots();
       if (items.length && confirmReminders(items)) send('hub-pet:panel', { items });
@@ -458,9 +554,17 @@ function createHubPetController({
     const me = list.find(r => r.id === role) || { id: role, name: (ROLES.find(r => r.id === role) || {}).name || '桌宠' };
     const dots = speech.snapshot().dots;
     const quietHour = s.quietUntil > t;
-    const status = [POSE_TEXT[pose] || '', dots ? `${dots} 条提醒没看` : '', s.mode === 'quiet' ? '只亮小圆点' : ''].filter(Boolean).join(' · ');
+    const running = sessionsRunning();
+    const status = [running ? `${running} 个会话在跑` : (POSE_TEXT[pose] || ''), dots ? `${dots} 条没看` : '', s.mode === 'quiet' ? '只亮小圆点' : meetingNow() ? '开会中，只亮小圆点' : ''].filter(Boolean).join(' · ');
+    // 快捷入口（2026-11-09）：问助理、翻没看的通知、会议室。
+    let pages = {};
+    try { pages = getPages?.() || {}; } catch (_) {}
+    const quick = [];
+    if (typeof askAssistant === 'function' && pages.assistant !== false) quick.push({ type: 'ask', label: '问助理一句…', icon: 'ask' });
+    if (dots) quick.push({ type: 'inbox', label: `看 ${dots} 条没看的`, icon: 'inbox' });
+    if (pages.rooms) quick.push({ type: 'page', page: 'rooms', label: String(pages.rooms.label || '会议室'), hint: String(pages.rooms.hint || ''), icon: 'room' });
     return {
-      role: { id: me.id, name: me.name, preview: me.preview || '' }, status, mode: s.mode,
+      role: { id: me.id, name: me.name, preview: me.preview || '' }, status, mode: s.mode, quick,
       modes: MODES.map(id => ({ id, label: MODE_LABELS[id], hint: MODE_HINTS[id] })),
       quietHour, quietUntilText: quietHour ? `${pad2(new Date(s.quietUntil).getHours())}:${pad2(new Date(s.quietUntil).getMinutes())}` : '',
       silentToday: s.silentDate === localDateKey(t),
@@ -518,6 +622,13 @@ function createHubPetController({
     if (menuReady) open(); else menuWin.webContents.once('did-finish-load', () => { menuReady = true; open(); });
   }
   function hideMenu() { if (menuAlive() && menuWin.isVisible()) menuWin.hide(); }
+  // 打开桌宠头顶的输入框：窗口要拿到焦点才能打字（平时 showInactive，不抢焦点）。
+  function openAsk() {
+    if (!alive()) return;
+    setIgnore(false);
+    try { win.focus(); } catch (_) {}
+    send('hub-pet:ask-open', {});
+  }
   function menuAct(a = {}) {
     const t = clock();
     if (a.type === 'action') {
@@ -527,6 +638,9 @@ function createHubPetController({
       return;
     }
     if (a.type === 'settings') { hideMenu(); openAssistant({ settingsTab: String(a.tab || 'pet') }); return; }
+    if (a.type === 'ask') { hideMenu(); openAsk(); return; }
+    if (a.type === 'inbox') { hideMenu(); handleClick('dot'); return; }
+    if (a.type === 'page' && typeof a.page === 'string') { hideMenu(); openItem({ page: a.page }); return; }
     if (a.type === 'hide') { hideMenu(); setSettings({ enabled: false }); return; }
     if (a.type === 'close') { hideMenu(); return; }
     if (a.type === 'mode' && MODE_SET.has(a.mode)) settings.update({ mode: a.mode });
@@ -563,9 +677,28 @@ function createHubPetController({
       if (!confirmReminders([item])) return;
       // 「形象没下载下来」的提示：直接打开「助理 → 设置 → 桌宠」。
       if (/^pet-role-missing-/.test(String(item.id || ''))) { openAssistant({ settingsTab: 'pet' }); return; }
-      openAssistant({ noticeId: String(item.id || '').slice(0, 160), sessionId: item.sessionId ? String(item.sessionId).slice(0, 160) : undefined });
+      openItem(item);
     },
+    // 鼠标停在通知卡片上暂停倒计时；点卡片上的 × 收进小圆点。
+    'hub-pet:hold': (event, on) => { if (fromPet(event) && speech.hold(on === true)) evaluate(); },
+    'hub-pet:dismiss': (event) => {
+      if (!fromPet(event)) return;
+      const item = speech.takeCurrent();
+      if (item) { speech.toDot(item); evaluate(); }
+    },
+    // 桌宠头顶的「问助理」输入框：交给助理，答完由助理发通知回来（kind answer），桌宠举卡片说。
+    'hub-pet:ask': (event, payload) => {
+      if (!fromPet(event)) return;
+      const text = String(payload && payload.text || '').trim().slice(0, 2000);
+      const reply = r => send('hub-pet:ask-result', r);
+      if (!text) { reply({ ok: false, error: '先写一句要问的' }); return; }
+      if (typeof askAssistant !== 'function') { reply({ ok: false, error: '助理还没开：在「可选功能」里打开助理后再问' }); return; }
+      Promise.resolve().then(() => askAssistant(text)).then(() => { reply({ ok: true }); evaluate(); },
+        error => reply({ ok: false, error: String(error && error.message || error).slice(0, 160) }));
+    },
+    'hub-pet:ask-close': (event) => { if (fromPet(event)) setIgnore(true); },
     'hub-pet:signal': (event, patch) => { if (fromMain(event)) setSignal(patch); },
+    'hub-pet:session-seen': (event, id) => { if (fromMain(event)) sessionSeen(String(id || '').slice(0, 160)); },
     // 渲染端量出的身体透明边（比例）。只认 0–0.45 的数，防止一张奇怪的图把限位算坏；量的是别的形象（刚换过）就不认。
     // 量出来就记进 hub-pet.json，下次启动直接用。
     'hub-pet:body-box': (event, box) => {
@@ -604,8 +737,14 @@ function createHubPetController({
     ipcMain.handle('hub-pet:debug', (event, req = {}) => {
       if (!fromMain(event)) return null;
       if (req.op === 'notice') return noticeBus?.publish(req.notice) || false;
+      if (req.op === 'notify') return notify(req.payload || {});
+      if (req.op === 'click') { handleClick(req.target || 'bubble'); return true; }
+      if (req.op === 'menu-state') return menuState();
+      if (req.op === 'menu-act') { menuAct(req.act || {}); return true; }
+      if (req.op === 'ask-open') { openAsk(); return true; }
+      if (req.op === 'disk-check') return diskWatch ? diskWatch.check() : [];
       if (req.op === 'override') {
-        for (const k of ['idleSec', 'busy', 'fullscreen', 'nowShift']) if (k in req) overrides[k] = req[k];
+        for (const k of ['idleSec', 'busy', 'fullscreen', 'nowShift', 'running', 'meeting']) if (k in req) overrides[k] = req[k];
         if ('fullscreen' in req) setScreenFull(req.fullscreen === true);
         evaluate();
         return true;
@@ -639,6 +778,8 @@ function createHubPetController({
     if (typeof patch.role === 'string' && roles.installed(patch.role)) clean.role = patch.role;
     if (MODE_SET.has(patch.mode)) clean.mode = patch.mode;
     if (typeof patch.peekOnFullscreen === 'boolean') clean.peekOnFullscreen = patch.peekOnFullscreen;
+    if (typeof patch.notifyViaPet === 'boolean') clean.notifyViaPet = patch.notifyViaPet;
+    if (typeof patch.followSessions === 'boolean') clean.followSessions = patch.followSessions;
     const t = clock();
     if (typeof patch.quietHour === 'boolean') clean.quietUntil = patch.quietHour ? t + 3600000 : 0;
     if (typeof patch.silentToday === 'boolean') clean.silentDate = patch.silentToday ? localDateKey(t) : '';
@@ -769,6 +910,7 @@ function createHubPetController({
     startHover();
     if (watchFullscreen && overrides.fullscreen == null) fsWatch.start();
     scheduleRoleRestore();
+    if (diskWatch) { diskWatch.start(); diskFirst = setTimeout(() => { diskFirst = null; void diskWatch.check().catch(() => {}); }, 60000); diskFirst.unref?.(); }
     return true;
   }
   function stop() {
@@ -789,6 +931,9 @@ function createHubPetController({
     stopMove();
     drag = null;
     fsWatch.stop();
+    diskWatch?.stop();
+    if (diskFirst) clearTimeout(diskFirst);
+    diskFirst = null;
     fullscreen = false;
     screenFull = false;
     peekFrom = null;
@@ -816,7 +961,7 @@ function createHubPetController({
     if (debug) ipcMain.removeHandler?.('hub-pet:debug');
   }
 
-  return { start, stop, dispose, setSignal, setSettings, roleList, isActive: () => enabled() && started && alive(), getWindow: () => win, getSettings: () => settings.get(), _evaluate: evaluate, _speech: speech, _roles: roles,
+  return { start, stop, dispose, setSignal, setSettings, roleList, notify, canNotify, sessionSeen, announceUpdate, isActive: () => enabled() && started && alive(), getWindow: () => win, getSettings: () => settings.get(), _evaluate: evaluate, _speech: speech, _roles: roles,
     _restoreRememberedRole: restoreRememberedRole, _autoRole: () => ({ ...autoRole }) };
 }
 

@@ -15,6 +15,13 @@ contextBridge.exposeInMainWorld('hubPet', {
   bodyBox: (box) => ipcRenderer.send('hub-pet:body-box', box && typeof box === 'object' ? { left: +box.left || 0, right: +box.right || 0, top: +box.top || 0, bottom: +box.bottom || 0, role: String(box.role || '').slice(0, 40) } : null),
   menu: () => ipcRenderer.send('hub-pet:menu'),
   openNotice: (item) => ipcRenderer.send('hub-pet:open-notice', { id: String(item && item.id || ''), sessionId: item && item.sessionId ? String(item.sessionId) : '' }),
+  // 2026-11-09：通知卡片（停留、收起）、问助理输入框。
+  hold: (on) => ipcRenderer.send('hub-pet:hold', on === true),
+  dismiss: () => ipcRenderer.send('hub-pet:dismiss'),
+  ask: (text) => ipcRenderer.send('hub-pet:ask', { text: String(text || '').slice(0, 2000) }),
+  askClose: () => ipcRenderer.send('hub-pet:ask-close'),
+  onAskOpen: (fn) => on('hub-pet:ask-open', fn),
+  onAskResult: (fn) => on('hub-pet:ask-result', fn),
   onState: (fn) => on('hub-pet:state', fn),
   onMotion: (fn) => on('hub-pet:motion', fn),
   onPanel: (fn) => on('hub-pet:panel', fn),

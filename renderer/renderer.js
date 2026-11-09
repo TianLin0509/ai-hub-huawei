@@ -1135,6 +1135,8 @@ diskReleasePanel = require('./disk-release-panel').attachDiskReleasePanel({
     return () => ipcRenderer.removeListener('disk-release-progress', listener);
   },
 });
+// 桌宠「硬盘快满」卡片点开这里（2026-11-09）。
+window.__hubOpenDiskRelease = () => diskReleasePanel?.open();
 require('./vpn-traffic-panel').attachVpnTrafficPanel({
   document, escapeHtml,
   request: range => ipcRenderer.invoke('get-vpn-traffic-report', { range }),
@@ -6098,6 +6100,8 @@ ipcRenderer.on('session-persistence-error', (_event, error) => {
   require('./ui-feedback').showHubAlert('会话信息未保存：' + error.message);
 });
 async function selectSession(id, opts = {}) {
+  // 点开了这个会话：桌宠小圆点里它的「已完成」就拿掉（2026-11-09）。
+  try { ipcRenderer.send('hub-pet:session-seen', String(id || '')); } catch (_) {}
   for (const bar of document.querySelectorAll('.floating-input-bar')) bar._codeagentSkills?.close();
   window.hubWorkspaces?.close();
   if (!opts.splitBypass && sessionSplit?.routesSelection()) return sessionSplit.route(id, undefined, opts);

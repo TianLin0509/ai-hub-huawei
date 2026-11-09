@@ -1301,7 +1301,7 @@ class CompanyAssistant {
     const q = String(text || '').trim();
     if (!q) throw new Error('问题是空的');
     this.verifyTeamOwner({ teamOwner });
-    const item = { id: randomUUID(), q, state: 'queued', askedAt: this.now(), ...(via === 'phone' ? { via } : {}), ...(entry === 'ppt' ? { entry } : {}), ...(teamOwner ? { teamOwner } : {}), ...(taskTitle ? { taskTitle } : {}) };
+    const item = { id: randomUUID(), q, state: 'queued', askedAt: this.now(), ...(via === 'phone' || via === 'pet' ? { via } : {}), ...(entry === 'ppt' ? { entry } : {}), ...(teamOwner ? { teamOwner } : {}), ...(taskTitle ? { taskTitle } : {}) };
     this.saveChat([...this.chat(), item]);
     const notes = via === 'phone' ? PHONE_NOTE : '';
     this.enqueue({ type: 'chat', chatId: item.id, prompt: notes ? notes + '\n\n' + q : q, ...(via === 'phone' ? { via } : {}), ...(entry === 'ppt' ? { entry } : {}), ...(teamOwner ? { teamOwner } : {}) });
@@ -1709,7 +1709,17 @@ class CompanyAssistant {
   }
   patchChat(id, patch) {
     this.saveChat(this.chat().map(c => c.id === id ? { ...c, ...patch } : c));
-    if (patch.state === 'done' || patch.state === 'error') { const item = this.chat().find(c => c.id === id); if (item?.via === 'phone') this.phone.settle(item); }
+    if (patch.state === 'done' || patch.state === 'error') {
+      const item = this.chat().find(c => c.id === id);
+      if (item?.via === 'phone') this.phone.settle(item);
+      // 在桌宠上问的（2026-11-09）：答完由桌宠举卡片说，点开到助理页看全文。用户自己问的，不占提醒的每小时名额。
+      if (item?.via === 'pet' && !item.stopped) {
+        const q = String(item.q || '').replace(/\s+/g, ' ').slice(0, 24);
+        const ok = item.state === 'done';
+        this.bus.publish({ id: 'answer:' + item.id, kind: 'answer', notify: true, page: 'assistant', tone: ok ? '' : 'bad', cta: '在助理里看全文',
+          title: ok ? '助理答好了：' + q : '助理这一问没答完：' + q, text: ok ? String(item.a || '').slice(0, 1500) : String(item.error || '可以在助理页重问') });
+      }
+    }
   }
 
   // ---- 手动登录与日历初始化 ----

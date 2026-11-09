@@ -328,9 +328,48 @@
 
   // ---------- 气泡、小圆点、展开面板 ----------
   // 提醒类别的短名（和助理页「今天的提醒」一致），气泡和展开面板里当小标签用，一眼知道是哪类事。
-  const KIND = { reminder: '重要提醒', digest: '定时汇总', brief: '简报', 'meeting-prep': '会前准备', 'awaiting-reply': '等你回复', 'commitment-due': '答应的事', overbooked: '会议太满', 'day-summary': '下班小结', keyword: '关注词' };
+  const KIND = { reminder: '重要提醒', digest: '定时汇总', brief: '简报', 'meeting-prep': '会前准备', 'awaiting-reply': '等你回复', 'commitment-due': '答应的事', overbooked: '会议太满', 'day-summary': '下班小结', keyword: '关注词',
+    // 2026-11-09 通知卡片的类别
+    session: '会话完成', web: '网页会话', bridge: '联动消息', 'hub-reminder': '到点提醒', answer: '助理回答', room: '会议室', attendance: '考勤', 'welink-login': 'WeLink', 'pet-role': '形象', disk: '硬盘', update: '新版本', chatter: '', weekly: '周报' };
   const bubbleKind = $('bubble-kind');
+  const card = { el: $('ncard'), kind: $('ncard-kind'), time: $('ncard-time'), title: $('ncard-title'), text: $('ncard-text'), cta: $('ncard-cta'), count: $('ncard-count'), bar: $('ncard-bar') };
+  let cardId = '';
+  const hhmm = ms => { const d = new Date(Number(ms) || Date.now()); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+  // 通知卡片：标题、两三行内容、「打开会话 →」、另有几个待看；底部细条倒计时，鼠标停上去暂停。
+  function showCard(b) {
+    if (b && b.id !== cardId) {
+      cardId = b.id; holding = false;
+      card.kind.textContent = KIND[b.kind] || '通知';
+      card.time.textContent = hhmm(b.at);
+      card.title.textContent = b.title || '';
+      card.text.textContent = b.text || '';
+      card.cta.textContent = (b.cta || '打开') + ' →';
+      card.count.textContent = b.count > 1 ? '另有 ' + (b.count - 1) + ' 个待查看' : '';
+      card.el.classList.toggle('bad', b.tone === 'bad');
+      card.el.hidden = false;
+      card.el.classList.remove('out', 'in', 'held');
+      card.bar.classList.remove('run');
+      card.bar.style.setProperty('--ms', (Number(b.ms) || 9000) + 'ms');
+      void card.el.offsetWidth;
+      card.el.classList.add('in');
+      card.bar.classList.add('run');
+    } else if (!b && cardId) {
+      cardId = '';
+      card.el.classList.remove('in');
+      card.el.classList.add('out');
+      setTimeout(() => { if (!cardId) { card.el.hidden = true; card.el.classList.remove('out'); } }, 340);
+    }
+    if (b && cardId === b.id) card.el.classList.toggle('held', !!b.held);
+  }
+  // 鼠标停在卡片上：按 mousemove 判断（窗口平时点穿，光标进来时可能收不到 mouseenter）。
+  let holding = false;
+  function setHold(on) { on = !!(on && cardId); if (on !== holding) { holding = on; api.hold?.(on); } }
+  card.el.addEventListener('mouseleave', () => setHold(false));
+  $('ncard-close').addEventListener('click', e => { e.stopPropagation(); api.dismiss?.(); });
   function showBubble(b) {
+    // 通知卡片和普通气泡分开演：同一时刻只有一个在说。
+    showCard(b && b.notify ? b : null);
+    if (b && b.notify) b = null;
     if (b && b.id !== bubbleId) {
       bubbleId = b.id;
       bubbleText.textContent = b.title + (b.sticky ? '（点击确认）' : '');
@@ -384,9 +423,22 @@
       bubbleEl.style.setProperty('--tail-x', clampNum(cx - left, 16, w - 16).toFixed(1) + 'px');
       bubbleEl.style.setProperty('--to-dot-x', (dotLeft + 10 - (left + w / 2)).toFixed(1) + 'px');
     }
-    // 提醒面板：两边各留 10px，伸出屏幕的那边再让出伸出的宽度
+    // 通知卡片：和气泡一样对着身体居中、只放在看得见的那一段
+    if (!card.el.hidden) {
+      const w = Math.min(260, visR - visL);
+      card.el.style.width = w + 'px';
+      const left = clampNum(cx - w / 2, visL, visR - w);
+      card.el.style.left = left.toFixed(1) + 'px';
+      card.el.style.setProperty('--tail-x', clampNum(cx - left, 18, w - 18).toFixed(1) + 'px');
+      card.el.style.setProperty('--to-dot-x', (dotLeft + 10 - (left + w / 2)).toFixed(1) + 'px');
+    }
+    // 正在跑的会话标签：身体左上角，出了可见段就挪回来
+    if (!busyEl.hidden) busyEl.style.left = clampNum(side - 4, visL, visR - (busyEl.offsetWidth || 70)).toFixed(1) + 'px';
+    // 提醒面板、问助理：两边各留 10px，伸出屏幕的那边再让出伸出的宽度
     panelEl.style.left = Math.max(10, visL) + 'px';
     panelEl.style.right = Math.max(10, WIN_W - visR) + 'px';
+    askEl.style.left = Math.max(10, visL) + 'px';
+    askEl.style.right = Math.max(10, WIN_W - visR) + 'px';
     // 贴边时面板变窄、字折行变多：高度用满身体上方的空间（顶上留 4px），一条提醒时「在助理里打开 ›」尽量不用滚动就看得到
     if (!panelEl.hidden) {
       const bottom = parseFloat(getComputedStyle(panelEl).bottom) || 0;
@@ -404,11 +456,12 @@
       const title = document.createElement('b');
       title.textContent = item.title || '';
       row.appendChild(title);
+      if (item.at && item.notify) { const w = document.createElement('span'); w.className = 'when'; w.textContent = hhmm(item.at); row.appendChild(w); }
       if (item.text) { const p = document.createElement('p'); p.textContent = item.text; row.appendChild(p); }
       const open = document.createElement('button');
       open.type = 'button';
       open.className = 'open';
-      open.textContent = '在助理里打开 ›';
+      open.textContent = item.notify ? (item.cta || '打开') + ' ›' : '在助理里打开 ›';
       open.addEventListener('click', () => { api.openNotice(item); hidePanel(); });
       row.appendChild(open);
       panelList.appendChild(row);
@@ -420,6 +473,66 @@
   }
   function hidePanel() { panelEl.hidden = true; setHit(false); }
   $('panel-close').addEventListener('click', hidePanel);
+
+  // ---------- 正在跑的会话（2026-11-09） ----------
+  const busyEl = $('busy');
+  function showBusy(n) {
+    const on = n > 0 && !state.peeking;
+    busyEl.hidden = !on;
+    if (on) $('busy-text').textContent = n + ' 个在跑';
+  }
+
+  // ---------- 问助理（2026-11-09） ----------
+  const askEl = $('ask'), askInput = $('ask-input'), askNote = $('ask-note'), askSend = $('ask-send');
+  let askCloseTimer = 0, askSending = false;
+  function openAsk() {
+    clearTimeout(askCloseTimer);
+    panelEl.hidden = true;
+    askEl.hidden = false;
+    askSend.disabled = false;
+    askNote.textContent = '回车发送 · Esc 关闭';
+    askNote.classList.remove('bad');
+    layoutOverlays();
+    setHit(true);
+    setTimeout(() => askInput.focus(), 30);
+  }
+  function closeAsk() {
+    clearTimeout(askCloseTimer);
+    if (askEl.hidden) return;
+    askEl.hidden = true;
+    setHit(false);
+    api.askClose?.();
+  }
+  askEl.addEventListener('submit', e => {
+    e.preventDefault();
+    const text = askInput.value.trim();
+    if (!text) { askInput.focus(); return; }
+    if (askSending) return;   // 连按回车只交一次
+    askSending = true;
+    askSend.disabled = true;
+    askNote.textContent = '正在交给助理…';
+    api.ask?.(text);
+  });
+  askInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); askEl.requestSubmit(); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeAsk(); }
+  });
+  $('ask-cancel').addEventListener('click', closeAsk);
+  // 点到别处（窗口失焦）：没写字就收起，写了字的留着。
+  window.addEventListener('blur', () => { if (!askEl.hidden && !askInput.value.trim()) closeAsk(); });
+  api.onAskOpen?.(() => openAsk());
+  api.onAskResult?.(r => {
+    askSending = false;
+    if (r && r.ok) {
+      askInput.value = '';
+      askNote.textContent = '交给助理了，答好了我举牌告诉你';
+      askCloseTimer = setTimeout(closeAsk, 1400);
+    } else {
+      askSend.disabled = false;
+      askNote.textContent = (r && r.error) || '没交出去，再试一次';
+      askNote.classList.add('bad');
+    }
+  });
 
   // ---------- 鼠标：透明处点穿，身体、气泡、圆点、面板上才接住 ----------
   function setHit(v) { if (v !== hitNow) { hitNow = v; api.hit(v); } }
@@ -434,15 +547,16 @@
     const ix = r.width * 0.16, iy = r.height * 0.12;
     return x > r.left + ix && x < r.right - ix && y > r.top + iy && y < r.bottom - 4 ? 'pet' : null;
   }
-  document.addEventListener('mousemove', e => { if (!pressing) setHit(!!hitTarget(e.clientX, e.clientY)); });
-  document.addEventListener('mouseleave', () => { if (!pressing) setHit(false); });
+  document.addEventListener('mousemove', e => { if (!pressing) setHit(!!hitTarget(e.clientX, e.clientY)); setHold(!!(e.target && e.target.closest && e.target.closest('#ncard'))); });
+  document.addEventListener('mouseleave', () => { if (!pressing) setHit(false); setHold(false); });
   // 窗口点穿时收不到 mousemove：主进程看到光标进了窗口方框，就把位置发过来问一次（不再用全局鼠标钩子）。
   // 接住时总要回报：主进程可能已因光标出框自行改回点穿，这时 hitNow 还是旧值。
   api.onProbe?.(p => { if (pressing || !p) return; const v = !!hitTarget(Number(p.x) || 0, Number(p.y) || 0); hitNow = v; if (v) api.hit(true); });
   document.addEventListener('pointerdown', e => {
     if (e.button !== 0) return;
     const target = hitTarget(e.clientX, e.clientY);
-    if (!target || target === 'panel') return;
+    // 面板、问助理输入框、卡片上的 × 都在本窗口里自己处理点击，不交给主进程（不然会被当成拖动或「点卡片打开」）。
+    if (!target || target === 'panel' || target === 'ask' || target === 'close') return;
     pressing = true;
     try { document.documentElement.setPointerCapture(e.pointerId); } catch (_) {}
     api.press(target);
@@ -514,6 +628,7 @@
     } else applyPose(state.pose, false);
     showBubble(state.bubble);
     showDots(state.dots);
+    showBusy(Number(state.running) || 0);
     layoutOverlays();
     wake();
   });
@@ -528,6 +643,7 @@
   });
   api.onPanel(p => { showPanel(p && p.items); wake(); });
 
-  window.__hubPetDebug = () => ({ box, edge: state.edge, size: getComputedStyle(document.documentElement).getPropertyValue('--body').trim(), pose, layers: visual ? [visual.key] : [], opacities: visual ? [1] : [], domLayers: layersEl.children.length, frame: visual ? visual.shown : -1, swapping: !!pendingSwap, fps: raf ? 'raf' : timer ? 'timer' : 'stopped', bubble: bubbleId, dots: lastDots, transform: bodyEl.style.transform });
+  window.__hubPetDebug = () => ({ card: cardId ? { id: cardId, title: card.title.textContent, kind: card.kind.textContent, cta: card.cta.textContent, count: card.count.textContent, bad: card.el.classList.contains('bad') } : null,
+    busy: busyEl.hidden ? '' : $('busy-text').textContent, ask: !askEl.hidden, askNote: askNote.textContent, panel: panelEl.hidden ? null : panelList.textContent, box, edge: state.edge, size: getComputedStyle(document.documentElement).getPropertyValue('--body').trim(), pose, layers: visual ? [visual.key] : [], opacities: visual ? [1] : [], domLayers: layersEl.children.length, frame: visual ? visual.shown : -1, swapping: !!pendingSwap, fps: raf ? 'raf' : timer ? 'timer' : 'stopped', bubble: bubbleId, dots: lastDots, transform: bodyEl.style.transform });
   api.ready();
 })();
