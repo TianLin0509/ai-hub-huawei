@@ -1,6 +1,6 @@
 'use strict';
 // Functional skeleton. Final visual refinements follow the approved m5 layout.
-function createCompanyPptPage({ document, window, ipcRenderer, closeOtherPanels = () => {}, showMessage }) {
+function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasSession = () => true, closeOtherPanels = () => {}, showMessage }) {
   const { pathToFileURL } = require('node:url');
   let page, status, timer, conversionId, chatId, md, searching = false, converting = false, candidates = [], selectedId = '', searched = false;
   // AI 找页（2026-11-08 用户：Hub 的 PPT 主打 Agent 搜索）：ai = 本轮 AI 检索状态；aiItems = AI 推荐；keywordState = 关键词即时检索状态。
@@ -207,11 +207,12 @@ function createCompanyPptPage({ document, window, ipcRenderer, closeOtherPanels 
     const flow = `<ol class="pptw-ai-steps">${steps.map(([t, d], k) => `<li class="${k < stage || ai.state === 'done' ? 'done' : k === stage && running ? 'now' : ''}"><b>${t}</b><small>${esc(d)}</small></li>`).join('')}</ol>`;
     const chips = queries.length ? `<div class="pptw-ai-queries" aria-label="AI 用过的检索说法"><small>AI 换的说法</small>${queries.slice(0, 12).map(q => `<span>${esc(q)}</span>`).join('')}</div>` : '';
     const peek = running && readPages.length ? `<div class="pptw-ai-peek"><small>AI 刚读过的页</small><div>${readPages.slice(-6).map(p => `<span class="pptw-preview" data-ppt-thumb="${esc(p.id)}" title="${esc(p.name)} · 第 ${esc(p.page)} 页">${previewHtml(p, '')}</span>`).join('')}</div></div>` : '';
+    const sessionLink = ai.chat?.sessionId ? '<div class="pptw-ai-session"><button type="button" class="pptw-btn sec sm" data-ppt="ai-session">查看会话</button></div>' : '';
     if (ai.state === 'done') {
       const grid = picks.length ? `<div class="pptw-grid">${picks.map(c => card(c, true)).join('')}</div>` : '<p class="pptw-empty">读过的页里没有原文对得上的，原因见核验报告；可以换个说法再找，或先看下面的关键词命中。</p>';
-      return head + grid + `<details class="pptw-ai-how"><summary>AI 是怎么找的</summary>${flow}${chips}</details>`;
+      return head + sessionLink + grid + `<details class="pptw-ai-how"><summary>AI 是怎么找的</summary>${flow}${chips}</details>`;
     }
-    return head + (ai.state === 'error' ? flow : `<div class="pptw-ai-live${running ? ' pptw-thinking' : ''}">${flow}${chips}${peek}</div>`);
+    return head + sessionLink + (ai.state === 'error' ? flow : `<div class="pptw-ai-live${running ? ' pptw-thinking' : ''}">${flow}${chips}${peek}</div>`);
   }
   function detail(c) {
     const panel = page.querySelector('[data-ppt-detail]');
@@ -297,7 +298,7 @@ function createCompanyPptPage({ document, window, ipcRenderer, closeOtherPanels 
           else if (!r.chat && ++missingPolls >= 4) { if (ai) { ai.state = 'error'; ai.error = '找不到这次 AI 检索的记录（可能已被清理），请再找一次'; ai.endedAt = Date.now(); } chatId = null; }
           if (r.chat) missingPolls = 0;
           // 每 1.5 秒轮询一次，但只有 AI 真的有新进展才重画结果区（避免整列重建打断点选、收起下拉框）；用时数字原地更新。
-          const sig = ai ? JSON.stringify([ai.state, r.chat?.state, !!r.chat?.answeringAt, ai.phase?.label, ai.trace?.events?.length || 0]) : '';
+          const sig = ai ? JSON.stringify([ai.state, r.chat?.state, r.chat?.sessionId, !!r.chat?.answeringAt, ai.phase?.label, ai.trace?.events?.length || 0]) : '';
           if (sig !== aiSignature) { aiSignature = sig; drawResults(); }
           else if (ai) { const el = page.querySelector('[data-ppt-elapsed]'); if (el) el.textContent = seconds(Date.now() - ai.startedAt); }
         }
@@ -317,6 +318,7 @@ function createCompanyPptPage({ document, window, ipcRenderer, closeOtherPanels 
     }
     if (name === 'refresh') return renderStatus((await call('ppt-status')).ppt);
     if (name === 'ask' || name === 'ai-retry') return search(true);
+    if (name === 'ai-session') { const id = ai?.chat?.sessionId; if (!id) return; if (!hasSession(id)) { notice('这次的会话已经关闭，没有可回看的记录；再找一次会开新的会话。'); return; } close(); return openSession?.(id); }
     if (name === 'keyword') return search(false);
     if (name === 'example') { const q = page.querySelector('[data-ppt-query]'); q.value = button.dataset.q || ''; q.focus(); return search(true); }
     if (name === 'open-report') { const report = page.querySelector('[data-ppt-report]'); report.hidden = false; report.open = true; report.scrollIntoView({ block: 'nearest' }); return; }

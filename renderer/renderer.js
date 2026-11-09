@@ -73,7 +73,7 @@ const applyHubCardDisplaySettings = (config) => {
 applyHubCardDisplaySettings();
 ipcRenderer.invoke('get-hub-config-raw')
   .then(config => {
-    applyHubCardDisplaySettings(config);
+    applyHubCardDisplaySettings(config ?? {});
   })
   .catch(() => {});
 // ── Bug 修复（2026-06-21 maintainer）：marked 默认透传裸 HTML，AI/用户消息正文里的字面
@@ -5292,7 +5292,10 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     const jobsText = runningJobs.length
       ? `后台 ${runningJobs.length} 个：${runningJobs.map(job => job.label || job.kind || '任务').join('、')}`
       : '';
-    const detailText = [localHealth, status.detail, jobsText, hookWarning, writingWarning, userContextWarning, session.claudeSwitchStatus?.message].filter(Boolean).join(' · ');
+    const backgroundBusy = require('./session-background-tasks').isBackgroundPurpose(session.purpose) && isSessionCardWorking(session);
+    const editable = backgroundBusy ? 'false' : 'true';
+    if (inputBox.contentEditable !== editable) inputBox.contentEditable = editable;
+    const detailText = [backgroundBusy ? require('./session-background-tasks').BUSY_NOTICE : '', localHealth, status.detail, jobsText, hookWarning, writingWarning, userContextWarning, session.claudeSwitchStatus?.message].filter(Boolean).join(' · ');
     const detail = detailText ? `· ${detailText}` : '';
     if (statusDetail.textContent !== detail) statusDetail.textContent = detail;
     statusDetail.hidden = !detail;
@@ -5439,6 +5442,8 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   //   与群聊派发同一条实现；渲染进程只负责清 UI 和展示"没提交"这件事。
 
   function sendInput() {
+    { const current = sessions.get(sessionId);
+      if (require('./session-background-tasks').isBackgroundPurpose(current?.purpose) && isSessionCardWorking(current)) { showToast(require('./session-background-tasks').BUSY_NOTICE, 'info'); return; } }
     const skillComposer = require('./composer-codeagent-skills');
     const userText = skillComposer.skillPrompt(inputBox, readContenteditablePlainText(inputBox), sessions.get(sessionId));
     const submittedSkill = skillComposer.selectedSkill(inputBox);
@@ -9249,7 +9254,7 @@ if (require('../core/company-assistant/gate').companyAssistantEnabled()) {
     window.__companyMeetingHide = () => companyMeetingPage.close();
     window.__companyAssistantHide = () => companyAssistantPage.close();
     companyPptPage = require('./company-ppt-page').createCompanyPptPage({
-      document, window, ipcRenderer,
+      document, window, ipcRenderer, openSession: id => selectSession(id, { forceScrollBottom: true }), hasSession: id => sessions.has(id),
       closeOtherPanels: () => { window.hubWorkspaces?.close(); memoryPanel.close(); capabilityPanel.close(); accountCenterPanel.close(); },
       showMessage: message => showToast(message),
     });

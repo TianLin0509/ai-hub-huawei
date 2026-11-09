@@ -2737,6 +2737,7 @@ try {
       isPetMcpEnabled: () => hubPetController?.getSettings().enabled === true,
       createSession: (kind, opts) => sessionOperations.createSession({ kind, opts }),
       closeSession: id => require('./core/company-ai-tasks').closeOwnedSession(sessionManager, id),
+      renameSession: (id, title) => { const updated = sessionManager.updateSessionMeta(id, { title }); if (updated) { sessionStore.markDirty(id, updated); sendToRenderer('session-updated', { session: updated }); } },
       sendPrompt: (sessionId, text, clientSubmissionId) => promptOperations.submitPrompt(null, { sessionId, text, clientSubmissionId, waitForCliReady: true }),
       getSession: id => sessionManager.getSession(id),
       getSessionMetadata: loadMeta,

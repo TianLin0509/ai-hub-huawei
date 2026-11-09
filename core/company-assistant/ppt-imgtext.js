@@ -51,7 +51,7 @@ class PptImgtext {
       'ops使用flash差异：d删除行，x保留图内字，fix纠字，bbox改框，confirm确认行，merge合行，t补文字，c卡片，g图案。字号由Doctor推算。工具schema说明格式。',
       '初次装配后按结果检查；需要时最多修补两轮。预览是近似预览，pixel_gate不通过如实说明，保留产物和复核项。完成后简短报告实际路径与复核项。',
     ].join('\n');
-    const chat = this.a.ask(prompt, { entry: 'ppt' });
+    const chat = this.a.ask(prompt, { entry: 'ppt', taskTitle: 'PPT 看图修正 · ' + path.basename(job.image).slice(0, 18) });
     job.chatId = chat.id; job.state = 'waiting_agent'; job.step = 'CodeAgent 正在看图修正，通常1–3分钟'; job.error = ''; this.a.changed();
     return this.snapshot(id);
   }

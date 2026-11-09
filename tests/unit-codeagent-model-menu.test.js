@@ -34,9 +34,9 @@ const COMMAND_ROWS = [
   '/developer-test-agent:generate-dt-files    指定文件列表生成单元测试，串行调度 developer-test-…custom-command',
   '/batch    Research and plan a large-scale change, then execute it in …skill',
 ];
-function commandTerminal({ size = 2, count = 7, wrap = true, noFrames = false, glued = false, clearFails = false } = {}) {
+function commandTerminal({ size = 2, count = 7, wrap = true, noFrames = false, glued = false, clearFails = false, bad = false } = {}) {
   let clock = 0, revision = 1, cursor = 0, slash = false, top = 0;
-  const writes = [], rows = Array.from({ length: count }, (_, i) => `/item-${i}    description ${i}command`);
+  const writes = [], rows = Array.from({ length: count }, (_, i) => `/item-${i}    description ${i}${bad && i % 2 ? '' : 'command'}`);
   const lines = () => !slash ? ['private answer text', '❯ ', '? for shortcuts']
     : ['private answer text', '❯ /', ...rows.slice(top, top + size).map((row, i) => i + top === cursor ? '❯ ' + row : '  ' + row),
       ...(glued ? ['/bad textcommand/other textskill'] : []), '↑ ↓ to navigate'];
@@ -63,6 +63,10 @@ test('command row parsing preserves aliases, namespaces, types, languages and tr
   assert.equal(commandsProbe.parseCommandRow('❯ ' + COMMAND_ROWS[0]).name, 'model');
   assert.equal(commandsProbe.parseCommandRow('/model 切换模型command/new 新建会话command'), null);
   for (const line of ['❯ /', '─'.repeat(30), '↑ ↓ to navigate', '/unknown incomplete']) assert.equal(commandsProbe.parseCommandRow(line), null);
+  // A name wider than the name column runs into a Chinese description; a name cut with "…" is unreadable.
+  assert.equal(commandsProbe.parseCommandRow('/developer-test-agent:generate-dt-files指定文件列表生成…custom-command').name, 'developer-test-agent:generate-dt-files');
+  assert.equal(commandsProbe.parseCommandRow('/new(clear)新建会话command').name, 'new');
+  assert.equal(commandsProbe.parseCommandRow('/developer-test-agent:generate-d…指定文件列表生成…custom-command'), null);
 });
 
 test('captured opentui main column parses six commands without mixing in Stats or history', () => {
@@ -82,6 +86,57 @@ test('captured opentui main column parses six commands without mixing in Stats o
   }
   const sidebar = opentui.final.map(line => line.includes('╭') || !/^ \//.test(line) ? line : line.slice(0, line.indexOf('command') + 7) + '     changed Stats command');
   assert.equal(commandsProbe.commandFrame({ lines: sidebar }).signature, frame.signature);
+});
+
+test('a recent-sessions box drawn below the input box does not hide the typed slash (11-09 company screen)', () => {
+  // 11-09: with no recent sessions, CodeAgent draws an identical plain border
+  // under the input box, and the probe kept reporting slash-not-visible.
+  const bottom = opentui.final.findIndex(line => line.includes('╰'));
+  const top = opentui.final.findIndex(line => line.includes('╭'));
+  const bar = opentui.final[top].trimEnd(), side = bar.replace('╭', '│').replace(/─+╮$/, m => ' '.repeat(m.length - 1) + '│');
+  const tips = [bar, side.replace(/^( *│) {16}/, '$1 RECENT SESSIONS'), side.replace(/^( *│) {19}/, '$1 No recent sessions'), side, opentui.final[bottom]];
+  const screen = [...opentui.final.slice(0, bottom + 1), ...tips, ...opentui.final.slice(bottom + 1)];
+  const frame = commandsProbe.commandFrame({ lines: screen, revision: 1 });
+  assert.equal(frame.slashEntered, true);
+  assert.deepEqual(frame.commands.map(row => row.name), ['model', 'model-config', 'add-dir', 'cd', 'compact', 'new']);
+  // The company screen centres this layout: commands and both boxes start at column 33.
+  const centred = commandsProbe.commandFrame({ lines: screen.map(line => /^ (?:\/|╭|│|╰)/.test(line) ? ' '.repeat(32) + line : line), revision: 1 });
+  assert.equal(centred.slashEntered, true);
+  assert.deepEqual(centred.commands.map(row => row.name), frame.commands.map(row => row.name));
+  // Before "/" is typed only the tips box is on screen: still not entered.
+  const idle = [...opentui.firstUnrecognized.slice(0, -1), ...tips, opentui.firstUnrecognized.at(-1)];
+  assert.equal(commandsProbe.commandFrame({ lines: idle }).slashEntered, false);
+  assert.equal(commandsProbe.commandFrame({ lines: [...tips, opentui.final.at(-1)] }).slashEntered, false);
+});
+
+test('the captured 11-09 welcome screen (tips box under the input) yields all six commands', async () => {
+  const frame = commandsProbe.commandFrame({ lines: opentui.welcomeFinal, revision: 1 });
+  assert.equal(frame.slashEntered, true); assert.equal(frame.invalid, 0);
+  assert.deepEqual(frame.commands.map(row => row.name), ['model', 'model-config', 'add-dir', 'cd', 'compact', 'new']);
+  // Tips rows such as "/commands" and "/help" inside the lower box must not count as suggestions.
+  assert.ok(frame.commands.every(row => row.kind === 'command' && !/for commands|help/.test(row.description)));
+  let clock = 0;
+  const result = await commandsProbe.collectCommands({ now: () => clock, sleep: async ms => { clock += ms; }, write: () => {},
+    readFrame: async () => ({ lines: opentui.welcomeFinal, revision: 1 + Math.floor(clock / 100) }) });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.commands.map(row => row.name), ['model', 'model-config', 'add-dir', 'cd', 'compact', 'new']);
+});
+
+test('in the 160-row probe window blank rows between the list and the input box still read (Q-1109-02)', async t => {
+  // The company test run read 0 rows (unrecognized-list) although six were on screen: the
+  // probe log had dropped the blank rows, which hid the gap above the input box.
+  const w = opentui.welcomeFinal, pad = line => line.padEnd(160), blank = n => Array(n).fill('');
+  for (const gap of [1, 2, 3]) {
+    const lines = [...blank(60), ...w.slice(0, 6).map(pad), ...blank(gap), ...w.slice(6, 20).map(pad), ...blank(60), ...w.slice(20).map(pad)].map(line => line.trimEnd());
+    const frame = commandsProbe.commandFrame({ lines });
+    assert.equal(frame.slashEntered, true);
+    assert.deepEqual(frame.commands.map(row => row.name), ['model', 'model-config', 'add-dir', 'cd', 'compact', 'new'], `gap ${gap}`);
+  }
+  // The probe log now marks blank rows between content instead of dropping them.
+  const dir = temp(t), trace = commandsProbe.createCommandTrace(dir, { accountKey: 'personal' });
+  trace('screen', { result: 'final', lines: ['', '/model    切换模型command', '', '', ' ╭──╮', ' │ > / │', ''] });
+  const row = JSON.parse(fs.readFileSync(path.join(dir, 'logs/codeagent-commands-probe.log'), 'utf8').trim());
+  assert.deepEqual(row.lines, ['/model    切换模型command', '(2 blank)', ' ╭──╮', ' │ > / │']);
 });
 
 test('a screen without an input border keeps the legacy suggestion-region rules', () => {
@@ -131,12 +186,94 @@ for (const [name, options] of [
   assert.ok(f.writes.slice(1).every(key => key === '\x1b[B'));
 });
 
-test('unconfirmed frames, item/page caps and malformed rows do not produce a complete command list', async () => {
+test('unconfirmed frames, item/page caps and mostly unreadable rows do not produce a complete command list', async () => {
   for (const [options, limits, reason] of [[{ noFrames: true }, {}, 'unconfirmed-navigation'],
-    [{ count: 20 }, { maxScreens: 1 }, 'limit'], [{ count: 20 }, { maxItems: 3 }, 'limit'], [{ glued: true }, {}, 'invalid-rows']]) {
+    [{ count: 20 }, { maxScreens: 1 }, 'limit'], [{ count: 20 }, { maxItems: 3 }, 'limit'], [{ bad: true }, {}, 'invalid-rows']]) {
     const f = commandTerminal(options); f.write('/');
     const result = await commandsProbe.collectCommands({ ...f, ...limits });
     assert.equal(result.ok, false); assert.equal(result.reason, reason);
+  }
+});
+
+test('names cut at the list width are completed with Tab before caching (Q-1109-02 company run)', async t => {
+  // Real company result: the list shows these three names cut to 34 characters without "…";
+  // typing the cut name and pressing Tab completed each one in the input box.
+  const full = ['developer-test-agent:generate-dt-files', 'developer-test-agent:generate-dt-dir', 'developer-test-agent:incremental-dt',
+    'developer-test-agent:cloud-dt-fix', 'sdd:proposal', 'model'];
+  const shown = full.map(name => name.slice(0, 34));
+  let clock = 0, revision = 1, cursor = 0, input = '';
+  const writes = [];
+  const rows = shown.map(name => `/${name}    说明command`);
+  const write = key => {
+    writes.push(key); revision += 1;
+    if (key === '\x15') input = '';
+    else if (key === '\x1b[B') cursor = (cursor + 1) % rows.length;
+    else if (key === '\t') input = '/' + (full.find(name => ('/' + name).startsWith(input)) || input.slice(1)) + ' ';
+    else input += key;
+  };
+  const readFrame = async () => ({ revision, lines: ['❯ ' + input, ...(input === '/' ? rows.slice(cursor, cursor + 3) : []), '? for shortcuts'] });
+  const dir = temp(t);
+  const result = await commandsProbe.probeCommands({ dataDir: dir, accountKey: 'personal', version: '1.2615.02.01', readFrame, write,
+    sleep: async ms => { clock += ms; }, now: () => clock });
+  assert.equal(result.ok, true, result.reason);
+  assert.deepEqual(result.commands.map(row => row.name).sort(), [...full].sort());
+  assert.ok(!writes.includes('\r'), 'completion never presses Enter');
+  assert.equal(writes.filter(key => key === '\t').length, 3, 'only the names at the cut length are completed');
+  assert.equal(input, '', 'the editor is left empty');
+  const cache = JSON.parse(fs.readFileSync(path.join(dir, 'codeagent-pool/codeagent-commands.json')));
+  assert.ok(cache.accounts.personal.commands.some(row => row.name === 'developer-test-agent:generate-dt-files'));
+  // Without completion support the cut names are kept as read rather than failing the probe.
+  const kept = await commandsProbe.completeCutNames(result.commands.map(row => ({ ...row, name: row.name.slice(0, 34) })),
+    { readFrame: async () => ({ lines: ['❯ /'] }), write: () => {}, sleep: async ms => { clock += ms; }, now: () => clock });
+  assert.deepEqual(kept.map(row => row.name).sort(), [...shown].sort());
+});
+
+test('one unreadable row is skipped and logged while the rest of the list is cached', async t => {
+  const dir = temp(t), f = commandTerminal({ glued: true });
+  const result = await commandsProbe.probeCommands({ ...f, dataDir: dir, accountKey: 'personal', version: '1.26.1' });
+  assert.equal(result.ok, true); assert.equal(result.commands.length, 7);
+  assert.deepEqual(result.unreadable, ['/bad textcommand/other textskill']);
+  const cache = JSON.parse(fs.readFileSync(path.join(dir, 'codeagent-pool/codeagent-commands.json')));
+  assert.equal(cache.accounts.personal.commands.length, 7);
+  const rows = fs.readFileSync(path.join(dir, 'logs/codeagent-commands-probe.log'), 'utf8').trim().split('\n').map(JSON.parse);
+  const logged = rows.find(row => row.event === 'screen' && row.result === 'unreadable-rows');
+  assert.deepEqual(logged.lines, ['/bad textcommand/other textskill']);
+  assert.equal(rows.find(row => row.event === 'cache-written').invalidCount, 1);
+});
+
+test('paging the 11-09 welcome layout reads every row, including a name wider than the name column', async () => {
+  const width = text => [...text].reduce((sum, char) => sum + (/[⺀-鿿＀-￯]/.test(char) ? 2 : 1), 0);
+  const fit = (text, room) => {
+    if (width(text) <= room) return text + ' '.repeat(room - width(text));
+    let out = ''; for (const char of text) { if (width(out + char) > room - 1) break; out += char; }
+    return out + '…' + ' '.repeat(room - 1 - width(out));
+  };
+  const list = [['model', '切换模型'], ['model-config', '模型配置管理'], ['add-dir', '追加工作目录'], ['cd', '切换工作目录'], ['compact', '压缩上下文'],
+    ['new(clear)', '新建会话'], ['sessions(continue, resume)', '会话'], ['sdd:proposal', '根据要求创建提案', 'custom-command'],
+    ['developer-test-agent:generate-dt-files', '指定文件列表生成单元测试，串行调度 developer-test-agent', 'custom-command'],
+    ['batch', 'Research and plan a large-scale change, then execute it in parallel', 'skill'],
+    ...Array.from({ length: 6 }, (_, i) => [`item-${i}`, `说明 ${i}`])];
+  // Measured on the company screen: rows start at column 33, the name column is 37 wide and
+  // the type label ends at the box edge (column 126). Longer names run into the description.
+  const draw = cut => list.map(([name, text, kind = 'command']) => {
+    const shown = cut && name.length > 36 ? '/' + name.slice(0, 34) + '…' : '/' + name;
+    const head = shown.padEnd(37);
+    return ' '.repeat(33) + head + fit(text, 94 - width(head) - kind.length) + kind;
+  });
+  for (const [cut, wrap] of [[false, false], [false, true], [true, true]]) {
+    const rows = draw(cut);
+    let clock = 0, revision = 1, cursor = 0, top = 0;
+    const result = await commandsProbe.collectCommands({ now: () => clock, sleep: async ms => { clock += ms; },
+      write: key => {
+        if (key !== '\x1b[B') return;
+        cursor = wrap ? (cursor + 1) % rows.length : Math.min(cursor + 1, rows.length - 1);
+        if (cursor < top) top = cursor; if (cursor >= top + 6) top = cursor - 5; revision += 1;
+      },
+      readFrame: async () => ({ revision, lines: [...rows.slice(top, top + 6), ...opentui.welcomeFinal.slice(6)] }) });
+    assert.equal(result.ok, true, `cut=${cut} wrap=${wrap}`);
+    assert.equal(result.commands.length, cut ? list.length - 1 : list.length);
+    assert.equal(result.unreadable.length, cut ? 1 : 0);
+    assert.equal(result.commands.some(row => row.name === 'developer-test-agent:generate-dt-files'), !cut);
   }
 });
 
@@ -163,7 +300,7 @@ test('failed or uncleared command probe retains the old cache and logs the hidde
   const dir = temp(t), file = path.join(dir, 'codeagent-pool/codeagent-commands.json');
   commandsProbe.writeCommandCache(dir, 'personal', '1.26.0', [commandsProbe.parseCommandRow(COMMAND_ROWS[0])]);
   const original = fs.readFileSync(file, 'utf8');
-  for (const [index, options] of [{ noFrames: true }, { clearFails: true }, { glued: true }, { count: 0 }].entries()) {
+  for (const [index, options] of [{ noFrames: true }, { clearFails: true }, { bad: true }, { count: 0 }].entries()) {
     const f = commandTerminal(options);
     assert.equal((await commandsProbe.probeCommands({ ...f, dataDir: dir, accountKey: 'personal', version: `1.26.${index + 1}` })).ok, false);
     assert.equal(fs.readFileSync(file, 'utf8'), original); assert.equal(f.writes.at(-1), '\x15');

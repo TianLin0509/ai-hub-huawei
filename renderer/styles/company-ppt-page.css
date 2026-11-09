@@ -275,3 +275,4 @@
 /* 结果视图：整页不滚动，结果区自己滚，右侧详情的「打开到第 N 页」始终在可视范围内（AI 面板变高时也一样）。 */
 .company-ppt-page[data-view=results] .pptw-body{height:100%}
 .company-ppt-page[data-view=results] .pptw-workspace{min-height:440px;height:0}
+.pptw-ai-session{display:flex;justify-content:flex-end;margin:6px 0 10px}

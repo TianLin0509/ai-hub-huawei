@@ -1296,12 +1296,12 @@ class CompanyAssistant {
     if (auth.state !== 'online' || auth.login?.ok !== true || auth.login.uid !== job.teamOwner)
       throw new Error('团队分析绑定的 WeLink 账号已退出或改变，请用当前账号重新采集分析。');
   }
-  ask(text, { via = '', entry = '', teamOwner = '' } = {}) {
+  ask(text, { via = '', entry = '', teamOwner = '', taskTitle = '' } = {}) {
     if (this.closed) throw new Error('Hub 正在关闭，请重新打开后重试');
     const q = String(text || '').trim();
     if (!q) throw new Error('问题是空的');
     this.verifyTeamOwner({ teamOwner });
-    const item = { id: randomUUID(), q, state: 'queued', askedAt: this.now(), ...(via === 'phone' ? { via } : {}), ...(entry === 'ppt' ? { entry } : {}), ...(teamOwner ? { teamOwner } : {}) };
+    const item = { id: randomUUID(), q, state: 'queued', askedAt: this.now(), ...(via === 'phone' ? { via } : {}), ...(entry === 'ppt' ? { entry } : {}), ...(teamOwner ? { teamOwner } : {}), ...(taskTitle ? { taskTitle } : {}) };
     this.saveChat([...this.chat(), item]);
     const notes = via === 'phone' ? PHONE_NOTE : '';
     this.enqueue({ type: 'chat', chatId: item.id, prompt: notes ? notes + '\n\n' + q : q, ...(via === 'phone' ? { via } : {}), ...(entry === 'ppt' ? { entry } : {}), ...(teamOwner ? { teamOwner } : {}) });
@@ -1319,7 +1319,7 @@ class CompanyAssistant {
   retryChat(id) {
     const item = this.chat().find(c => c.id === id);
     if (!item) throw new Error('这条对话已经不在了');
-    return this.ask(item.q, { via: item.via, entry: item.entry, teamOwner: item.teamOwner });
+    return this.ask(item.q, { via: item.via, entry: item.entry, teamOwner: item.teamOwner, taskTitle: item.taskTitle });
   }
   laneOf(job) { return job.type === 'brief' ? 'brief' : job.entry === 'ppt' ? 'ppt' : 'chat'; }
   toolsetOf(job) { return job.type === 'brief' ? 'brief' : job.entry === 'ppt' ? 'ppt' : job.via === 'phone' ? 'phone' : 'desk'; }
@@ -1369,6 +1369,15 @@ class CompanyAssistant {
   // 同一个会话连用多天，上下文会涨到十几万 token（公司回执 Q-1105-05）。现在每个问题用一个新会话：
   // 上一问答完就在后台预开好下一个（省掉启动等待），最近两轮问答由 Hub 精简后附在提问里。
   toolsetFor(id) { return (id && this.pool.get(id)?.toolset) || null; }
+  // 侧栏「后台任务」里的会话名：写清来自哪个功能、在办什么。
+  taskTitleFor(job, toolset) {
+    if (job.type !== 'chat' || job.teamOwner) return '';
+    const item = this.chat().find(c => c.id === job.chatId);
+    if (item?.taskTitle) return item.taskTitle;
+    const label = { ppt: 'PPT 找页', phone: '手机问答', desk: '助理问答' }[toolset];
+    const brief = String(item?.q || '').split('\n')[0].trim().slice(0, 18);
+    return label && brief ? label + ' · ' + brief : '';
+  }
   workspaceFor(toolset) { return toolset === 'ppt' ? this.pptWorkspace : this.workspace; }
   async openPooled(toolset) {
     this.prepareWorkspace();
@@ -1559,6 +1568,9 @@ class CompanyAssistant {
         return;
       }
       this.verifyTeamOwner(job);
+      const taskTitle = this.taskTitleFor(job, toolset);
+      if (taskTitle) this.deps.renameSession?.(id, taskTitle);
+      if (toolset === 'ppt' && job.chatId) this.patchChat(job.chatId, { sessionId: id });
       if (job.teamOwner && this.sessionBusy(id)) { lane.queue.unshift(job); lane.job = null; return; }
       job.token = randomUUID();
       const prompt = (job.teamOwner ? job.prompt : this.composePrompt(job, toolset)) + '\n\n' + receiptLine(job.token);

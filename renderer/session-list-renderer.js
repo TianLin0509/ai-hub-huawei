@@ -135,7 +135,7 @@ function isSideSession(item) {
 }
 // 公司版助理会话常驻侧栏顶部（2026-10-18 用户：「希望助理是以一个常驻会话形式出现在左侧栏」）。
 // 助理不进普通分组，单独放在最上面的「助理」一栏，不受筛选影响；有多个（换代留下的旧助理）时只放最新的。
-const RESIDENT_PURPOSE = 'company-assistant';
+const backgroundTasks = require('./session-background-tasks.js');
 function companyAssistantOn() {
   try { return require('../core/company-assistant/gate').companyAssistantEnabled(); } catch { return false; }
 }
@@ -173,6 +173,8 @@ function createSessionListRenderer(options = {}) {
   let previousSidebarView = null;
   let previousPresentation = null;
   const sectionKeys = ['sec-failed', 'sec-active', 'sec-today'];
+  let backgroundOverride = null;
+  let backgroundState = { anyRunning: false, open: false };
   let collapsedSections = new Set();
   let recentDays = 1;
   let pinnedOnly = false;
@@ -801,12 +803,12 @@ sessionListEl.addEventListener('keydown', event => {
     doc.dispatchEvent(new doc.defaultView.CustomEvent('sidebar:open-search', { detail }));
   }
   function filteredSidebarItems(sessionMap = getSessions(), sorted = true) {
-    return collectSidebarItems(sessionMap, sorted).filter(item => item.purpose !== RESIDENT_PURPOSE && sideFilterPasses(item) && projectFilter.matches(item) && (modelFilter === 'all' || sessionFamilies(item, sessionMap).has(modelFilter)));
+    return collectSidebarItems(sessionMap, sorted).filter(item => !backgroundTasks.isBackgroundPurpose(item.purpose) && sideFilterPasses(item) && projectFilter.matches(item) && (modelFilter === 'all' || sessionFamilies(item, sessionMap).has(modelFilter)));
   }
   // 常驻的助理会话：同用途里最近活动的那个。
   // 5.5.11 起每个问题一个助理会话，还会预开一个空的：常驻位放最近真正答过问题的那个；简报、PPT 页、团队分析的会话不放。
   function residentAssistant(sessionMap = getSessions()) {
-    const list = collectSidebarItems(sessionMap).filter(item => item.purpose === RESIDENT_PURPOSE && !['PPT 素材助理', '公司助理 · 简报', '团队关注分析'].includes(item.title));
+    const list = collectSidebarItems(sessionMap).filter(backgroundTasks.isResidentCandidate);
     const used = list.filter(item => item.lastCompletedAt || item.runStartedAt || item.lastRunStartedAt || item.lastMessageTime);
     return (used.length ? used : list).sort((a, b) => latestActivityTime(b) - latestActivityTime(a))[0] || null;
   }
@@ -921,6 +923,11 @@ sessionListEl.addEventListener('keydown', event => {
   }
   const assistantOn = companyAssistantOn();
   const resident = assistantOn ? residentAssistant(sessionMap) : null;
+  const background = backgroundTasks.selectBackgroundTasks(collectSidebarItems(sessionMap), {
+    residentId: resident?.id, isRunning: item => { const c = classify(item); return c.working || c.waiting; }, activityTime: latestActivityTime });
+  if (backgroundOverride && backgroundOverride.anyRunning !== background.running.length > 0) backgroundOverride = null; // 手动折叠只管当前这一段，运行状态一变就回到自动
+  const backgroundOpen = backgroundTasks.backgroundExpanded(background.running.length > 0, backgroundOverride);
+  backgroundState = { anyRunning: background.running.length > 0, open: backgroundOpen }; // 列表刷新会沿用旧表头元素，点击时要读最新状态
   const unreadMemberIds = new Set(Object.values(getMeetings()).flatMap(m => [...getMeetingUnreadMemberIds(m, sessionMap)]));
   // Grouping is unchanged only if every session's runtime/recency projection
   // still matches. For the actual visible rows also compare *all* source
@@ -931,14 +938,14 @@ sessionListEl.addEventListener('keydown', event => {
   let presentationUnchanged = false;
   const previous = previousPresentation;
   try {
-    const sources = new Set([...sections.failed, ...sections.active, ...sections.today, ...(resident ? [resident] : [])]);
+    const sources = new Set([...sections.failed, ...sections.active, ...sections.today, ...background.items, ...(resident ? [resident] : [])]);
     for (const item of [...sources]) {
       const ids = item._isMeeting ? item._meeting.subSessions || []
         : typeof window !== 'undefined' ? window.__teamUi?.membersOf(item.id, sessionMap, getMeetings()) || [] : [];
       for (const id of ids) if (sessionMap.has(id)) sources.add(sessionMap.get(id));
     }
     const context = JSON.stringify([getActiveSessionId(), getActiveMeetingId(), detailsEnabled, modelFilter,
-      [...collapsedSections], [...collapsedDetailsMeetings], [..._expandedMeetings], assistantOn]);
+      [...collapsedSections], [...collapsedDetailsMeetings], [..._expandedMeetings], assistantOn, backgroundOpen]);
     const rows = [...sources].map(item => {
       const at = latestActivityTime(item);
       const external = JSON.stringify([formatTime?.(at), sidebarRelativeTime(at),
@@ -1168,7 +1175,8 @@ sessionListEl.addEventListener('keydown', event => {
   }
 
   function appendSecHeader(label, items, cls, action, onAction) {
-    const collapsed = collapsedSections.has(cls);
+    const isBackground = cls === 'sec-background';
+    const collapsed = isBackground ? !backgroundOpen : collapsedSections.has(cls);
     const h = doc.createElement('div');
     h.className = 'session-sec-header ' + cls;
     h.dataset.sidebarRenderKey='section:'+cls;
@@ -1177,6 +1185,7 @@ sessionListEl.addEventListener('keydown', event => {
     h.addEventListener('click', event => {
       if (event.target?.closest?.('.sec-collapse') || /sec-collapse/.test(event.target?.className || '')) {
         event.preventDefault(); event.stopPropagation();
+        if (isBackground) { backgroundOverride = { anyRunning: backgroundState.anyRunning, expanded: !backgroundState.open }; renderSessionList(); return; }
         if (collapsedSections.has(cls)) collapsedSections.delete(cls); else collapsedSections.add(cls);
         savePreference('hubSidebarCollapsedSections', JSON.stringify([...collapsedSections]));
         renderSessionList();
@@ -1208,6 +1217,7 @@ sessionListEl.addEventListener('keydown', event => {
       renderTarget.appendChild(row);
     }
   }
+  if (background.items.length) appendSecHeader(background.running.length ? `后台任务 · ${background.running.length} 个运行中` : '后台任务', background.items, 'sec-background');
   if (sections.failed.length) appendSecHeader('异常', sections.failed, 'sec-failed');
   if (sections.active.length) appendSecHeader('活跃', sections.active, 'sec-active');
   appendSecHeader(pinnedOnly ? '置顶' : recentDays === 3 ? '3 天内' : '今天', sections.today, 'sec-today', !pinnedOnly && sections.today.length ? '休眠' : '', archiveToday);

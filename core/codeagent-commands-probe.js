@@ -30,7 +30,9 @@ const ITEM = /^\s*(?:[│┃]\s*)?(?:[❯›▶>]\s*)?\/[\w.:-]+/;
 
 function parseCommandRow(line) {
   const clean = String(line).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\s*[│┃]\s*$/, '');
-  const match = /^\s*(?:[│┃]\s*)?(?:[❯›▶>]\s*)?\/([\w.:-]+)(?:\s*\(([^)]*)\))?\s+(.*?)(custom-command|command|skill)\s*$/.exec(clean);
+  // A name longer than the name column runs straight into the description, so
+  // a description starting with a non-ASCII character (not "…") needs no space.
+  const match = /^\s*(?:[│┃]\s*)?(?:[❯›▶>]\s*)?\/([\w.:-]+)(?:\s*\(([^)]*)\))?(?:\s+|(?=[^\x00-\x7f…]))(.*?)(custom-command|command|skill)\s*$/.exec(clean);
   if (!match || /(?:custom-command|command|skill)\s*(?:[❯›▶>]\s*)?\/[\w.:-]+/.test(match[3])) return null;
   const aliases = match[2] ? match[2].split(',').map(value => value.trim().replace(/^\//, '')) : [];
   if (aliases.some(value => !/^[\w.:-]+$/.test(value))) return null;
@@ -51,20 +53,41 @@ function mainColumn(line, width) {
   }
   return result;
 }
-function suggestionRegion(lines) {
-  const borderAt = lines.findLastIndex(line => /^\s*╭[─━]+╮/.test(line));
-  if (borderAt >= 0) {
+const SLASH_INPUT = /^\s*(?:[│┃]\s*)?[❯›>]\s*\/\s*(?:[│┃])?\s*$/;
+// The input box is the bordered box holding "> /". On a fresh directory the
+// welcome screen draws an identical box (recent sessions / tips) below it, so
+// the last border on screen is not always the input box.
+function inputBox(lines) {
+  const borders = lines.flatMap((line, index) => /^\s*╭[─━]+╮/.test(line) ? [index] : []);
+  if (!borders.length) return null;
+  let below = lines.length, fallback;
+  for (const borderAt of borders.reverse()) {
     const width = lines[borderAt].indexOf('╮') + 1;
     const screen = lines.map(line => mainColumn(line, width));
-    const inputAt = screen.findLastIndex(line => /^\s*(?:[│┃]\s*)?[❯›>]\s*\/\s*(?:[│┃])?\s*$/.test(line));
+    const inputAt = screen.findLastIndex(line => SLASH_INPUT.test(line));
+    const box = { borderAt, screen, inputAt };
+    fallback ??= box;
+    if (inputAt > borderAt && inputAt < below) return box;
+    below = borderAt;
+  }
+  return fallback;
+}
+function suggestionRegion(lines) {
+  const box = inputBox(lines);
+  if (box) {
+    const { borderAt, screen, inputAt } = box;
     const region = [];
-    if (inputAt > borderAt) for (let i = borderAt - 1; i >= 0; i -= 1) {
-      if (!/^\s*(?:[❯›▶>]\s*)?\//.test(screen[i]) || !parseCommandRow(screen[i])) break;
-      region.unshift(screen[i]);
+    if (inputAt > borderAt) {
+      // In the tall hidden probe window the list can sit a few blank rows above the input box.
+      let i = borderAt - 1;
+      for (let gap = 0; i >= 0 && gap < 3 && !screen[i].trim(); gap += 1) i -= 1;
+      for (; i >= 0 && /^\s*(?:[❯›▶>]\s*)?\//.test(screen[i]); i -= 1) region.unshift(screen[i]);
+      // An unreadable row counts only below a readable one; lines above the list never do.
+      while (region.length && !parseCommandRow(region[0])) region.shift();
     }
     return { lines: region, slashEntered: inputAt > borderAt };
   }
-  const inputAt = lines.findLastIndex(line => /^\s*(?:[│┃]\s*)?[❯›>]\s*\/\s*(?:[│┃])?\s*$/.test(line));
+  const inputAt = lines.findLastIndex(line => SLASH_INPUT.test(line));
   if (inputAt < 0) return { lines: [], slashEntered: false };
   const runs = [];
   for (let i = 0; i < lines.length; i += 1) {
@@ -81,8 +104,9 @@ function suggestionRegion(lines) {
 function commandFrame(frame) {
   const region = suggestionRegion(frame.lines);
   const rows = region.lines.map(parseCommandRow);
+  const plain = region.lines.map(line => line.replace(/^\s*(?:[│┃]\s*)?[❯›▶>]\s*(?=\/)/, '').trim());
   return { ...region, commands: rows.filter(Boolean), invalid: rows.filter(row => !row).length,
-    signature: JSON.stringify(region.lines.map(line => line.replace(/^\s*(?:[│┃]\s*)?[❯›▶>]\s*(?=\/)/, '').trim())), revision: frame.revision };
+    unreadable: plain.filter((_, index) => !rows[index]), signature: JSON.stringify(plain), revision: frame.revision };
 }
 function cacheFile(dataDir) { return path.join(dataDir, 'codeagent-pool', 'codeagent-commands.json'); }
 function readCommandCache(dataDir) {
@@ -114,9 +138,17 @@ function commandDiagnostic(dataDir, reason, lines, { now = Date.now(), maxBytes 
     fs.appendFileSync(file, text, 'utf8');
   } catch { /* Command diagnostics do not affect the model usage probe. */ }
 }
+// Blank rows between content are kept as a "(N blank)" marker: dropping them
+// silently once hid a gap between the list and the input box (11-09).
 function screenDiagnosticLines(lines, limit = 40) {
-  return lines.flatMap(line => require('./ansi-utils').stripAnsi(String(line)).split(/\r?\n/))
-    .filter(line => line.trim()).slice(-limit).map(line => line.slice(0, 200));
+  const out = [];
+  let gap = 0;
+  for (const line of lines.flatMap(line => require('./ansi-utils').stripAnsi(String(line)).split(/\r?\n/))) {
+    if (!line.trim()) { gap += 1; continue; }
+    if (gap && out.length) out.push(`(${gap} blank)`);
+    gap = 0; out.push(line.slice(0, 200));
+  }
+  return out.slice(-limit);
 }
 function inputDiagnosticLines(lines) {
   const clean = lines.map(line => require('./ansi-utils').stripAnsi(String(line)));
@@ -208,12 +240,17 @@ async function collectCommands({ readFrame, write, sleep = ms => new Promise(res
     }
     return null;
   }
-  const commands = new Map();
+  const commands = new Map(), unreadable = new Set();
+  // One unreadable row is skipped and logged instead of discarding the whole
+  // list; more than one row in five means the layout is not understood.
+  const finish = last => unreadable.size * 5 > commands.size + unreadable.size
+    ? { ok: false, reason: 'invalid-rows', lines: last.lines }
+    : { ok: true, commands: [...commands.values()], unreadable: [...unreadable], lines: last.lines };
   let frame = await stable(), steps = 0, unchanged = 0, moved = false;
   if (!frame) return { ok: false, reason: initialReason, lines: latest.lines };
-  const first = frame.signature, firstName = frame.commands[0].name, pageSize = frame.commands.length;
+  const first = frame.signature, firstName = frame.commands[0].name, pageSize = frame.commands.length + frame.invalid;
   while (frame) {
-    if (frame.invalid) return { ok: false, reason: 'invalid-rows', lines: frame.lines };
+    for (const line of frame.unreadable) unreadable.add(line);
     for (const command of frame.commands) commands.set(command.name.toLowerCase(), command);
     // Down moves one item. Bound work to forty screenfuls of keys, rather than
     // treating each highlight-only move inside the same viewport as a page.
@@ -224,12 +261,60 @@ async function collectCommands({ readFrame, write, sleep = ms => new Promise(res
     if (next.signature === frame.signature) unchanged += 1;
     else { unchanged = 0; moved = true; }
     if (unchanged > pageSize + 2 || moved && next.signature !== frame.signature && (next.signature === first || next.commands[0].name === firstName)) {
-      if (next.invalid) return { ok: false, reason: 'invalid-rows', lines: next.lines };
-      return { ok: true, commands: [...commands.values()], lines: next.lines };
+      for (const line of next.unreadable) unreadable.add(line);
+      return finish(next);
     }
     frame = next;
   }
   return { ok: false, reason: 'unrecognized-list', lines: latest.lines };
+}
+
+// The "/" list cuts long names at a fixed width without "…" (company machine,
+// Q-1109-02: "developer-test-agent:generate-dt-f" for "...-dt-files"), and a wider
+// window does not help. The names at the longest length seen may be cut, so type
+// each one and press Tab: CodeAgent completes the input box to the full name.
+// A name that was not cut completes to itself, which costs only a moment.
+const INPUT_TEXT = /^\s*(?:[│┃]\s*)?[❯›>]\s*(\/[\w.:-]*)\s*(?:[│┃].*)?$/;
+const CUT_NAME_MIN = 20, CUT_NAME_MAX = 8, CUT_TYPE_WAIT_MS = 3000, CUT_TAB_WAIT_MS = 2000;
+function inputText(lines) {
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const match = INPUT_TEXT.exec(String(lines[i]));
+    if (match) return match[1];
+  }
+  return null;
+}
+async function completeCutNames(commands, { readFrame, write, sleep, now, exited = () => false, trace = () => {} }) {
+  const longest = Math.max(0, ...commands.map(command => command.name.length));
+  if (longest < CUT_NAME_MIN) return commands;
+  const cut = commands.filter(command => command.name.length === longest && !command.aliases.length).slice(0, CUT_NAME_MAX);
+  const waitInput = async (test, ms) => {
+    const deadline = now() + ms;
+    let text = null;
+    while (!exited()) {
+      text = inputText((await readFrame()).lines);
+      if (test(text) || now() >= deadline) break;
+      await sleep(COMMAND_POLL_MS);
+    }
+    return text;
+  };
+  const full = new Map();
+  try {
+    for (const command of cut) {
+      const typed = '/' + command.name;
+      write('\x15'); await sleep(300); write(typed);
+      if (await waitInput(text => text === typed, CUT_TYPE_WAIT_MS) !== typed) continue;
+      write('\t');
+      const text = await waitInput(value => value !== typed, CUT_TAB_WAIT_MS);
+      if (text && text.length > typed.length && text.startsWith(typed)) full.set(command.name, text.slice(1));
+    }
+  } catch { /* Keep the names as read; completing them is best effort. */ }
+  trace('cut-names', { result: `${full.size}/${cut.length}`, commandCount: full.size });
+  if (!full.size) return commands;
+  const taken = new Set(commands.map(command => command.name.toLowerCase()));
+  return commands.map(command => {
+    const name = full.get(command.name);
+    return name && !taken.has(name.toLowerCase()) ? { ...command, name } : command;
+  });
 }
 
 // This is called only by the hidden /model probe, never a user's session PTY.
@@ -259,12 +344,14 @@ async function probeCommands({ dataDir, accountKey, version, readFrame, write,
     else {
       trace('input-before-slash', { lines: inputLines, state: 'empty' });
       typed = true; write('/'); trace('slash-typed', { key: '/', downCount });
-      result = await collectCommands({ readFrame: async () => {
+      const read = async () => {
         const frame = await readFrame(); latest = frame.diagnosticLines || frame.lines; return frame;
-      }, write: key => {
+      };
+      result = await collectCommands({ readFrame: read, write: key => {
         write(key);
         if (key === '\x1b[B') trace('key', { key: '↓', downCount: ++downCount });
       }, sleep, now, exited, trace, ...limits });
+      if (result.ok) result = { ...result, commands: await completeCutNames(result.commands, { readFrame: read, write, sleep, now, exited, trace }) };
     }
   } catch { result = { ok: false, reason: 'probe-error', lines: latest }; }
   finally {
@@ -277,7 +364,10 @@ async function probeCommands({ dataDir, accountKey, version, readFrame, write,
   }
   if (cancelled()) result = { ...result, ok: false, reason: 'timeout' };
   if (result.ok) {
-    try { writeCommandCache(dataDir, accountKey, version, result.commands); trace('cache-written', { commandCount: result.commands.length, state: 'ready' }); }
+    try {
+      writeCommandCache(dataDir, accountKey, version, result.commands); trace('cache-written', { commandCount: result.commands.length, invalidCount: result.unreadable.length, state: 'ready' });
+      if (result.unreadable.length) trace('screen', { result: 'unreadable-rows', reason: 'unreadable-rows', lines: result.unreadable, downCount });
+    }
     catch { result = { ...result, ok: false, reason: 'cache-write-failed' }; }
   }
   if (!result.ok) { finalScreen(); trace('failed', { reason: result.reason, state: 'failed', downCount }); }
@@ -335,5 +425,5 @@ function createCommandsProbeScheduler({ dataDir, getVersion, probe, now = Date.n
 }
 
 module.exports = { parseCommandRow, mainColumn, suggestionRegion, commandFrame, commandsNeedProbe, writeCommandCache, commandDiagnostic,
-  createCommandTrace, commandStartup, recoveredCommandState, queueCommandsProbe, collectCommands, probeCommands, createCommandsProbeScheduler,
+  createCommandTrace, commandStartup, recoveredCommandState, queueCommandsProbe, collectCommands, completeCutNames, probeCommands, createCommandsProbeScheduler,
   COMMAND_QUEUE_WAIT_MS, COMMAND_VERSION_WAIT_MS, COMMAND_PROBE_RETRY_MS, COMMAND_MAX_ITEMS, COMMAND_MAX_SCREENS, COMMAND_FRAME_WAIT_MS, COMMAND_SLASH_WAIT_MS, COMMAND_LIST_EMPTY_WAIT_MS, COMMAND_LOG_MAX_BYTES };

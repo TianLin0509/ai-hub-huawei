@@ -29,10 +29,11 @@ function maskSecret(secret) {
 }
 
 function toMaskedConfig(config) {
+  config = config ?? {};
   const notifications = normalizeNotificationConfig(config.notifications || {});
   const operations = normalizeOperationsConfig(config.operations || {});
   return {
-    codeagentPrefixBranch: config.codeagentPrefixBranch === true,
+    codeagentPrefixBranch: config.codeagentPrefixBranch !== false,
     proxy: config.proxy,
     claudeBackend: config.claudeBackend,
     claudeSubscriptionProfile: config.claudeSubscriptionProfile || 'default',
@@ -87,10 +88,11 @@ function toMaskedConfig(config) {
 }
 
 function toEditableConfig(config) {
+  config = config ?? {};
   const notifications = normalizeNotificationConfig(config.notifications || {});
   const operations = normalizeOperationsConfig(config.operations || {});
   return {
-    codeagentPrefixBranch: config.codeagentPrefixBranch === true,
+    codeagentPrefixBranch: config.codeagentPrefixBranch !== false,
     proxy: config.proxy,
     claudeBackend: config.claudeBackend,
     claudeApiKey: config.claudeApiKey || '',

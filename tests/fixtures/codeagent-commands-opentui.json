@@ -51,5 +51,30 @@
     " │ Auto (Cycle shift+tab) | GLM-5.2-WX-Auto                                                                    @  ✲  ↵  ▷   │     Update detected: 1.2615.02.",
     " ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯",
     "                                                                                          Alt+P switch model │ Ctrl+G editor"
+  ],
+  "welcomeSource": "CodeAgent 1.2615.02.01 hidden probe on a company machine, 11-09 (request 5de86865); no recent sessions, so a tips box is drawn under the input box. Leading/trailing spaces as logged, user directory replaced.",
+  "welcomeFinal": [
+    "                                 /model                               切换模型                                          command",
+    "                                 /model-config                        模型配置管理                                      command",
+    "                                 /add-dir                             追加工作目录                                      command",
+    "                                 /cd                                  切换工作目录                                      command",
+    "                                 /compact                             压缩上下文                                        command",
+    "                                 /new(clear)                          新建会话                                          command",
+    "                                 ╭────────────────────────────────────────────────────────────────────────────────────────────╮",
+    "                                 │ > /                                                                                        │",
+    "                                 │                                                                                            │",
+    "                                 │                                                                                            │",
+    "                                 │ Auto (Cycle shift+tab) | GLM-5.2-WX-Auto                                      @  ✲  ↵  ▷   │",
+    "                                 ╰────────────────────────────────────────────────────────────────────────────────────────────╯",
+    "                                 ╭────────────────────────────────────────────────────────────────────────────────────────────╮",
+    "                                 │ RECENT SESSIONS                   /sessions   │  TIPS                                /help │",
+    "                                 │                                                                                            │",
+    "                                 │ No recent sessions                               !bash                        for bash mode│",
+    "                                 │                                                  /commands                     for commands│",
+    "                                 │                                                  @file                       for file paths│",
+    "                                 │                                                  Esc×2                          clear input│",
+    "                                 ╰────────────────────────────────────────────────────────────────────────────────────────────╯",
+    "                                                                   ...sers\\<用户目录>\\.ai-hub-community\\codeagent-pool\\probe-cwd",
+    " 信息由AI生成，可能有误，请注意核实                                                                                                                1.2615.02.01"
   ]
 }
