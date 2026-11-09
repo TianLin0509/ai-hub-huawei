@@ -39,11 +39,11 @@
 // hidden console, fresh TEMP, signer log on), reads the build stamp from the signer log and writes the cache into (1);
 // the signer then only reads that cache (signer-init.mjs blocks any CLI start). Not a login; no token is refreshed by Hub.
 import { readFile, readdir, stat, mkdir, writeFile, lstat } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
-import { join, isAbsolute, basename } from 'node:path';
+import { join, isAbsolute, basename, dirname, delimiter } from 'node:path';
 import { homedir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { initializeCacheOnlySigner } from './signer-init.mjs';
@@ -342,11 +342,40 @@ export function parseCliVersion(text) {
   }
   return '';
 }
+// 刚装好的电脑第一次启动可能很慢（杀毒扫描），等 40 秒；退出码非 0 但版本已经打印出来的，照样算读到。
 async function cliVersion(codeagentDir, run = exec) {
   try {
-    const { stdout, stderr } = await run(join(codeagentDir, 'bin', 'codeagentcli.exe'), ['--version'], { windowsHide: true, timeout: 15000, maxBuffer: 32768, encoding: 'utf8' });
+    const { stdout, stderr } = await run(join(codeagentDir, 'bin', 'codeagentcli.exe'), ['--version'], { windowsHide: true, timeout: 40000, maxBuffer: 32768, encoding: 'utf8' });
     return parseCliVersion(String(stdout || '') + '\n' + String(stderr || ''));
-  } catch { return ''; }
+  } catch (error) { return parseCliVersion(String(error?.stdout || '') + '\n' + String(error?.stderr || '')); }
+}
+
+// CodeAgent 不一定装在默认目录（2026-11-09 同事新装 5.5.50 报「信息不全」）。Hub 建会话早就会到处找，这里按同样的范围找：
+// 默认目录 → 当前 PATH → Program Files 与 LocalAppData\Programs 下名字带 codeagent 的文件夹 → 卸载注册表 → 注册表里最新的 PATH。
+const hasCodeAgentCli = dir => existsSync(join(dir, 'bin', 'codeagentcli.exe'));
+const installRootOf = dir => { const clean = String(dir || '').trim().replace(/^"|"$/g, '').replace(/[\\/]+$/, ''); return basename(clean).toLowerCase() === 'bin' ? dirname(clean) : clean; };
+function namedInstallDirs(env) {
+  const out = [];
+  for (const base of [env.ProgramW6432, env.ProgramFiles, env['ProgramFiles(x86)'], env.LOCALAPPDATA && join(env.LOCALAPPDATA, 'Programs')].filter(Boolean)) {
+    try { for (const e of readdirSync(base, { withFileTypes: true })) if (e.isDirectory() && /code\s*-?agent/i.test(e.name)) out.push(join(base, e.name)); } catch { /* 目录不存在就跳过 */ }
+  }
+  return out;
+}
+async function registryInstallDirs() {
+  const script = `$ErrorActionPreference='SilentlyContinue';$v=@();foreach($r in @('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall','HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall','HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall')){foreach($k in Get-ChildItem -LiteralPath $r){$p=Get-ItemProperty -LiteralPath $k.PSPath;if(([string]$p.DisplayName -match 'code\\s*-?agent' -or [string]$p.InstallLocation -match 'code\\s*-?agent') -and $p.InstallLocation){$v+=[string]$p.InstallLocation}}};foreach($s in @('Machine','User')){$v+=([string][Environment]::GetEnvironmentVariable('Path',$s)).Split(';')};ConvertTo-Json -InputObject @($v) -Compress`;
+  try {
+    const { stdout } = await exec(POWERSHELL, ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script],
+      { windowsHide: true, timeout: 15000, maxBuffer: 1024 * 1024, encoding: 'utf8' });
+    const rows = JSON.parse(String(stdout || '').trim() || '[]');
+    return (Array.isArray(rows) ? rows : [rows]).filter(v => typeof v === 'string' && v.trim());
+  } catch { return []; }
+}
+/** 返回含 bin\\codeagentcli.exe 的安装目录；都没有返回 ''。 */
+export async function findCodeAgentDir({ env = process.env, exists = hasCodeAgentCli, registry = registryInstallDirs, fallback = DEFAULT_CODEAGENT_DIR } = {}) {
+  const pathKey = Object.keys(env).find(k => k.toLowerCase() === 'path');
+  const quick = [fallback, ...String(pathKey ? env[pathKey] : '').split(delimiter), ...namedInstallDirs(env)];
+  const pick = dirs => dirs.map(installRootOf).find(d => d && isAbsolute(d) && exists(d)) || '';
+  return pick(quick) || pick(await registry());
 }
 // Registry first (no process start). No entry, two entries or a portable install: ask the installed program itself.
 export async function installedVersion(codeagentDir, { registry = registryVersion, run = exec } = {}) {
@@ -436,7 +465,7 @@ export function signerInitFailureMessage(code, { version, timeoutMs, detail } = 
  * options.env / options.versionReader / options.archiveReader exist for tests.
  */
 export async function resolveUpstreamProfile({ dataDir, env = process.env, versionReader = installedVersion,
-  archiveReader = listArchiveText, packageFinder = findAdapterPackage, zoneDetector = detectCodeAgentZone, zoneOverride = null } = {}) {
+  archiveReader = listArchiveText, packageFinder = findAdapterPackage, zoneDetector = detectCodeAgentZone, zoneOverride = null, dirFinder = findCodeAgentDir } = {}) {
   const profileDir = join(dataDir, 'company-model-proxy');
   const user = await readUserProfile(join(profileDir, 'upstream.json'));
   const home = text(env.USERPROFILE) || homedir();
@@ -472,7 +501,13 @@ export async function resolveUpstreamProfile({ dataDir, env = process.env, versi
     if (profile[key] && text(user[key])) profile.sources[key] = 'config:upstream.json';
     else if (text(user[key])) note(key, 'config:upstream.json(invalid)');
   }
-  if (!profile.sources.codeagentDir) profile.sources.codeagentDir = 'default';
+  if (!profile.sources.codeagentDir) {
+    profile.sources.codeagentDir = 'default';
+    const found = await dirFinder({ env });
+    note('codeagentDir', found ? 'search:found' : 'search:not-found');
+    if (found) { if (found !== profile.codeagentDir) profile.sources.codeagentDir = 'discovered'; profile.codeagentDir = found; }
+    else profile.codeagentMissing = true;
+  }
   if (profile.sources.zone && user.zoneChosenBy === 'settings') profile.sources.zone = 'settings';
   if (!profile.zone) {
     const detected = await zoneDetector({ env, home });
@@ -557,8 +592,11 @@ export async function resolveUpstreamProfile({ dataDir, env = process.env, versi
     missing.push('zone'); labels.zone = '所在区域';
   }
   if (missing.length) {
+    const versionHint = !missing.includes('codeagentVersion') ? ''
+      : profile.codeagentMissing ? '\n这台电脑上没找到 CodeAgent 程序（codeagentcli.exe）：查过默认目录、PATH、常见安装目录和系统安装记录。请先安装 CodeAgent，并在命令行里登录、对话一次，然后到「设置 → 自有 API」点「重新启动反代」。'
+        : '\n找到了 CodeAgent，但它没有报出版本号。请在命令行运行 codeagent --version 确认能正常启动，然后到「设置 → 自有 API」点「重新启动反代」。';
     const error = new ProfileError('PROFILE_INCOMPLETE', '公司上游信息不全：' + missing.map(k => labels[k]).join('、') +
-      '\n找过：' + missing.map(k => `${labels[k]}（${(tried[k] || []).join('、') || '无'}）`).join('；'), missing);
+      '\n找过：' + missing.map(k => `${labels[k]}（${(tried[k] || []).join('、') || '无'}）`).join('；') + versionHint, missing);
     error.diagnostics = diagnostics();
     throw error;
   }

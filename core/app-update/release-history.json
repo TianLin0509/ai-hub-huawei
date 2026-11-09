@@ -2,6 +2,13 @@
   "schema": 1,
   "entries": [
     {
+      "version": "5.5.51",
+      "date": "2026-11-09",
+      "notes": [
+        "修复公司模型在 CodeAgent 未装到默认目录的电脑上报「公司上游信息不全：CodeAgent 版本」"
+      ]
+    },
+    {
       "version": "5.5.50",
       "date": "2026-11-09",
       "notes": [
