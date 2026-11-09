@@ -101,7 +101,8 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
     }
     if (r.ok) { try { onPassed(); } catch {} }
     if (r.ok) return { ok: true, id: r.id, chars: b.chars };
-    return { ok: false, reason: r.reason, savedTo: saveLocal(b.text) };
+    // blocked：仍被放行页拦着，界面据此给「打开放行页」让用户自己点（公开版不在后台自动点）。
+    return { ok: false, reason: r.reason, savedTo: saveLocal(b.text), ...(r.blocked ? { blocked: true, url: endpoint } : {}) };
   }
 
   return { preview, send };

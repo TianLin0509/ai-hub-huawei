@@ -91,8 +91,10 @@ test('被拦的是 .gz 下载地址时，放行页仍是那台主机的小页面
 });
 
 test('Hub 里弹出的放行窗：自动点按钮，看到自家页面就关窗', async () => {
+  // 第 1 轮：定位到放行按钮（locate）→ 点（DOM 补点，没有真实点击用的调试器）；第 2 轮：已是自家页面。
   let n = 0;
-  const Win = fakeWindowClass(() => (++n === 1 ? { clicked: true, text: '接受风险并访问' } : { notGate: true }));
+  const Win = fakeWindowClass(code => { n += 1; if (n === 1) return { found: true, index: 0, text: '接受风险并访问', rect: null };
+    if (n === 2) { assert.match(code, /el\.click\(\)/); return { clicked: true, text: '接受风险并访问' }; } return { notGate: true }; });
   const r = await openVisibleGateWindow(Win, 'https://dl.example.tech/hub-update/api/feedback', { pollMs: 1, afterClickMs: 1 });
   assert.equal(r.passed, true); assert.equal(r.clicked, true); assert.equal(r.text, '接受风险并访问');
   assert.equal(Win.last.opts.show, true); assert.equal(Win.last.destroyed, true); assert.equal(Win.removed, true);

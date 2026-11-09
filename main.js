@@ -2669,6 +2669,7 @@ if (require('./core/distribution').featureEnabled('assistant')) try {
 } catch (error) { console.error('[assistant] service unavailable:', error.message); }
 let appUpdateControllerRef = null;
 function companyHubAdmin() { return null; }
+function heartbeatLinkRef() { return null; }
 // 公司版「助理」（2026-10-16）：每日简报 + 对话 + 6 条提醒，只读 WeLink，数据只留在本机 Hub 数据目录。
 let companyAssistantService = null, askAsideService = null;
 const teamAccess = { assert() { throw new Error('该功能未启用'); } };
@@ -4314,23 +4315,34 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
       const netUnblock = require('./core/net-unblock');
       // 测试把更新源换成本机服务（AI_HUB_UPDATE_SOURCES）时，自家主机与反馈地址跟着换，和一键更新同一口径。
       const ownConfig = (() => { try { return process.env.AI_HUB_UPDATE_SOURCES ? { sources: JSON.parse(process.env.AI_HUB_UPDATE_SOURCES) } : distribution.updateConfig; } catch { return distribution.updateConfig; } })();
-      const ownUnblocker = new netUnblock.GatePasser({ logDir: path.join(getHubDataDir(), 'logs'), logName: 'net-unblock',
+      // 成员版（不是公开版）：后台被拦就在看不见的窗口里自动放行，并每分钟心跳探一次各台自家主机（2026-11-08 用户：默认自动放行，不用再手动点）。
+      // 公开版：不在后台自动点；被拦的地方给「打开放行页」，在 Hub 里弹出放行页让用户自己点。
+      const autoUnblock = distribution.target === 'company' && !distribution.featureEnabled('memberUpgrade');
+      const ownUnblocker = new netUnblock.GatePasser({ logDir: path.join(getHubDataDir(), 'logs'), logName: 'net-unblock', budget: netUnblock.sharedBudget,
         // 被拦的是哪台就开哪台的放行页（2026-11-07 起有高速镜像和旧阿里云两台，公司代理按主机放行）。
-        open: url => netUnblock.openHiddenGateWindow(BrowserWindow, ownHosts.unblockPage(ownConfig, url)) });
+        // 心跳发现只有 POST 被拦（GET 已通）时，在窗口里直接 POST 一次，拦截页就出现在窗口里再点。
+        open: (url, opts) => opts && opts.method === 'POST'
+          ? netUnblock.postInHiddenWindow(BrowserWindow, ownHosts.unblockPage(ownConfig, url), {})
+          : netUnblock.openHiddenGateWindow(BrowserWindow, ownHosts.unblockPage(ownConfig, url)) });
       // 第二步放行（2026-11-08 用户定）：后台没成功就在 Hub 里弹出放行页，继续自动点，用户也能手动点。只在用户动手的流程里用。
-      const gateVisible = page => netUnblock.openVisibleGateWindow(BrowserWindow, page, { parent: mainWindow || null });
+      // 公开版：弹出的放行页只等用户自己点（maxClicks 0，看到自家页面照样自动关窗），2026-11-08 用户。
+      const gateVisible = page => netUnblock.openVisibleGateWindow(BrowserWindow, page, { parent: mainWindow || null, ...(autoUnblock ? {} : { maxClicks: 0, title: '放行下载服务器（在页面上点放行按钮，放行后自动关闭）' }) });
       const gatePageFor = url => {
         const text = String(url || '');
         if (!/^https?:\/\//i.test(text)) return '';
         if (ownHosts.isOwnUrl(text, ownConfig)) return ownHosts.unblockPage(ownConfig, text);
         try { return new URL(text).origin + '/'; } catch { return ''; }  // 别家地址也只开站点首页，绝不打开文件地址
       };
+      // 放行心跳的状态（net-unblock:state，诊断与测试用）。
+      let gateHeartbeats = [];
+      ipcMain.handle('net-unblock:state', () => ({ auto: autoUnblock, heartbeats: gateHeartbeats.map(b => ({ url: b.url, ...b.status() })) }));
       // 「放行下载服务器」按钮（core/net-pass.js）：一次点击逐台放行全部自家下载主机，并提醒还没放行的新用户。
       try {
         const { createNetPass } = require('./core/net-pass');
         const netPass = createNetPass({ hosts: ownHosts.downloadHosts(ownConfig), dataDir: getHubDataDir(),
           fetchImpl: (...args) => require('electron').net.fetch(...args),
-          openGate: page => netUnblock.openHiddenGateWindow(BrowserWindow, page),
+          // 公开版不在后台自动点：「放行下载服务器」直接弹出放行页让用户点。
+          openGate: autoUnblock ? page => netUnblock.openHiddenGateWindow(BrowserWindow, page) : null,
           openVisible: gateVisible,
           onChange: view => sendToRenderer('net-pass:state', view) });
         firstRunNetPass = netPass;
@@ -4347,12 +4359,29 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
         });
         // 启动后查一次（每台一个很小的网页请求）：新用户第一次打开更新或安装面板时，提醒已经准备好。
         setTimeout(() => { void netPass.refresh().catch(() => {}); }, 20000).unref?.();
+        // 放行心跳（成员版，2026-11-08 用户）：每台自家主机每分钟探一次放行小页（GET + POST 各一个很小的请求），
+        if (autoUnblock && process.env.CLAUDE_HUB_GATE_HEARTBEAT !== '0') {
+          const { GateHeartbeat, probeOwnPage } = require('./core/net-gate-heartbeat');
+          const testMs = Number(process.env.CLAUDE_HUB_GATE_HEARTBEAT_MS);
+          const intervalMs = process.env.CLAUDE_HUB_DATA_DIR && testMs > 0 ? testMs : 60000;
+          const beats = ownHosts.downloadHosts(ownConfig).map(h => new GateHeartbeat({
+            url: h.page, passer: ownUnblocker, intervalMs,
+            probe: () => probeOwnPage((...args) => require('electron').net.fetch(...args), h.page),
+            // 公司联动弹窗里「网络放行」选了手动：心跳照探，但不自动点。
+            enabled: () => { const b = heartbeatLinkRef(); try { return !b || typeof b.settings !== 'function' || b.settings().autoGate !== false; } catch { return true; } },
+            onState: p => { if (p.state === 'ok') netPass.markOk(h.host); },
+            onPassed: () => { netPass.markOk(h.host); const b = heartbeatLinkRef(); if (b && typeof b.checkNow === 'function') void b.checkNow().catch(() => {}); },
+          }));
+          gateHeartbeats = beats;
+          app.whenReady().then(() => beats.forEach((b, i) => setTimeout(() => b.start(), i * 7000).unref?.()));
+          app.on('before-quit', () => beats.forEach(b => b.stop()));
+        }
       } catch (e) { console.warn('[net-pass] 放行按钮初始化失败：', e && e.message); }
       // 检查更新和反馈同时被拦时只开一个放行窗口：进行中的那次结果大家共用。
       // 按主机分开：两台同时被拦时各开各的放行页。
       const unblocking = new Map();
       const unblockOwn = async url => {
-        if (!ownHosts.isOwnUrl(url, ownConfig) || !ownHosts.unblockPage(ownConfig, url)) return false;
+        if (!autoUnblock || !ownHosts.isOwnUrl(url, ownConfig) || !ownHosts.unblockPage(ownConfig, url)) return false;
         const host = ownHosts.hostOf(url);
         if (!unblocking.has(host)) unblocking.set(host, ownUnblocker.attempt(url).finally(() => { unblocking.delete(host); }));
         return unblocking.get(host);
@@ -4378,7 +4407,8 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
         registerHubFeedbackIpc(ipcMain, createHubFeedbackService({
           endpoint: ownHosts.feedbackEndpoint(ownConfig), logsDir: path.join(getHubDataDir(), 'logs'), unblock: unblockOwn, onPassed: () => ownUnblocker.passed(),
           // 放行后提交仍被拦：在看不见的窗口里直接提交（走浏览器网络栈，拦截页出现在窗口里就点放行），见 core/net-unblock.js postInHiddenWindow。
-          windowPost: (url, body) => ownHosts.isOwnUrl(url, ownConfig) ? netUnblock.postInHiddenWindow(BrowserWindow, url, body) : Promise.resolve({ error: '不是自家地址' }),
+          // 公开版不在后台窗口里自动点放行（2026-11-08 用户）：被拦就提示用户打开放行页自己点。
+          windowPost: autoUnblock ? (url, body) => ownHosts.isOwnUrl(url, ownConfig) ? netUnblock.postInHiddenWindow(BrowserWindow, url, body) : Promise.resolve({ error: '不是自家地址' }) : null,
           downloadsDir: () => app.getPath('downloads'),
           info: () => ({ productName: distribution.productName, edition: distribution.editionBadge || distribution.target || '',
             version: distribution.editionVersion || app.getVersion(), electron: process.versions.electron, platform: `${process.platform} ${require('os').release()}`,
@@ -4398,7 +4428,8 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
         const verify = () => editionChannel.verify(code, { fetchImpl: (...args) => require('electron').net.fetch(...args) });
         let r = await verify();
         if (!r.ok && (r.reason === 'blocked' || r.reason === 'network') && await unblockOwn(editionChannel.manifestUrl(code)).catch(() => false)) r = await verify();
-        if (!r.ok) return r;
+        // 公开版不在后台自动放行：被拦时带上地址，界面给「打开放行页」（在 Hub 里弹出，用户自己点）。
+        if (!r.ok) return (r.reason === 'blocked' || r.reason === 'network') && !r.url ? { ...r, url: editionChannel.manifestUrl(code) || undefined } : r;
         editionChannel.writeChannel(getHubDataDir(), r.id);
         appUpdate.useConfig(editionChannel.updateConfig(distribution.updateConfig, getHubDataDir()));
         await appUpdate.check({ silent: false });

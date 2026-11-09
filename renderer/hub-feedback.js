@@ -51,6 +51,8 @@
     box.innerHTML = html ? `<div class="au-msg ${kind}">${html}</div>` : '';
     const link = box.querySelector('[data-hf-open]');
     if (link) link.addEventListener('click', () => shell.showItemInFolder(link.dataset.hfOpen));
+    const unblock = box.querySelector('[data-hf-unblock]');
+    if (unblock) unblock.addEventListener('click', event => { event.preventDefault(); void ipcRenderer.invoke('net-pass:open-window', unblock.dataset.hfUnblock).catch(() => {}); });
   }
 
   // prefill.description：从错误卡「一键反馈」进来时预填现象、功能区和原始报错（5.5.24），用户可以改了再发。
@@ -100,7 +102,9 @@
     }
     btn.disabled = false; btn.textContent = '重新发送';
     const saved = r && r.savedTo ? `<br>同样的内容已存到：<span class="hf-path">${esc(r.savedTo)}</span> <a href="#" data-hf-open="${esc(r.savedTo)}">打开所在文件夹</a>，可以手动发给维护人。` : '';
-    message('bad', `没发出去：${esc((r && r.reason) || '未知原因')}${saved}`);
+    // 被公司网络放行页拦着（公开版不在后台自动点）：给按钮在 Hub 里打开放行页，点完回来点「重新发送」。
+    const gate = r && r.blocked ? `<br>公司网络要求放行：<a href="#" data-hf-unblock="${esc(r.url || '')}">打开放行页</a>，在页面上点「接受风险并访问」（或左边那个放行按钮），再回来点「重新发送」。` : '';
+    message('bad', `没发出去：${esc((r && r.reason) || '未知原因')}${gate}${saved}`);
   }
 
   function addMenuEntry() {
