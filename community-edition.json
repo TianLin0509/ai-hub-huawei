@@ -57,10 +57,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "网络连接更稳：主线路不可用时自动切换到备用线路，恢复后自动切回。",
-    "一键放行会自动覆盖当前用到的服务器地址。"
+    "考勤：核心工作时间可自定义（上午、下午、晚上加班起算），扣时和加班随之计算；设置面板不再被定时刷新冲掉"
   ],
-  "version": "5.5.58",
+  "version": "5.5.59",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

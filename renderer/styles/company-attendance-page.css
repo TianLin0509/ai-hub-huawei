@@ -104,6 +104,8 @@
 .att-sp{flex:1}
 .company-attendance-page .att-field{display:flex;flex-direction:column;align-items:stretch;gap:6px;margin-bottom:12px;font-size:var(--hw-fs-13);color:var(--hw-text-2)}
 .att-field input{height:34px;border:0;border-radius:var(--hw-r-sm);background:var(--hw-surface-3);padding:0 12px;font:inherit;color:var(--hw-text-1);max-width:420px}
+.att-time-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;color:var(--hw-text-2);margin-top:4px}
+.att-field .att-time-row input{width:112px;padding:0 8px}
 .att-input{height:34px;width:300px;border:0;border-radius:var(--hw-r-sm);background:var(--hw-surface-3);padding:0 12px;font:inherit;color:var(--hw-text-1)}
 .att-empty .att-row+.att-row{margin-top:10px}
 .company-attendance-page .att-check{display:flex;gap:8px;align-items:center;font-size:var(--hw-fs-13);margin-bottom:8px}

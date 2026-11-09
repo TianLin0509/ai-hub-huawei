@@ -53,7 +53,7 @@ class CompanyAttendance {
     const own = normalizeDomain(s.domain || '');
     const fromEmail = companyDomain.companyDomainOf((() => { try { return this.deps.accountEmail?.() || ''; } catch { return ''; } })());
     const known = own || fromEmail ? null : companyDomain.knownDomain(this.deps.dataDir);
-    return { domain: own || fromEmail || known.domain, domainFrom: own ? 'settings' : fromEmail ? 'assistant-email' : known.from, autoDaily: s.autoDaily !== false };
+    return { domain: own || fromEmail || known.domain, domainFrom: own ? 'settings' : fromEmail ? 'assistant-email' : known.from, autoDaily: s.autoDaily !== false, workTime: calc.normalizeWorkTime(s.workTime).workTime };
   }
   // 设置里没有时自动找（内置默认、WeLink 账号），找到就记下，用户不用手填。
   async ensureDomain() {
@@ -68,6 +68,14 @@ class CompanyAttendance {
     // 填公司邮箱或域名都行。
     if (patch.domain !== undefined) s.domain = String(patch.domain).includes('@') ? domainFromEmail(patch.domain) : normalizeDomain(patch.domain);
     if (patch.autoDaily !== undefined) s.autoDaily = !!patch.autoDaily;
+    if (patch.workTime !== undefined) {
+      if (patch.workTime === null) delete s.workTime;
+      else {
+        const n = calc.normalizeWorkTime(patch.workTime);
+        if (!n.ok) throw new Error('核心工作时间不对：' + n.error);
+        s.workTime = n.workTime;
+      }
+    }
     this.write('settings', s);
     this.changed();
     return this.settings();
@@ -163,7 +171,7 @@ class CompanyAttendance {
     const lastSuccess = st.lastSuccessAt ? Date.parse(st.lastSuccessAt) : 0;
     const staleDays = lastSuccess ? Math.floor((this.now().getTime() - lastSuccess) / 86400000) : null;
     return {
-      ok: true, today: this.todayKey(), syncing: !!this.syncing, settings,
+      ok: true, today: this.todayKey(), syncing: !!this.syncing, settings, rules: calc.rulesFromWorkTime(settings.workTime),
       url: attendanceUrl(settings.domain), records, holidays: this.read('holidays', {}),
       lastResult: st.lastResult || null, lastSuccessAt: st.lastSuccessAt || null, lastAttemptAt: st.lastAttemptAt || null,
       log: (st.log || []).slice(0, 10), staleDays, gapRisk: staleDays != null && staleDays >= 6,

@@ -10,13 +10,14 @@ const KIND = { workday: '', lastSaturday: '月末周六 · 正常上班', weeken
 function viewModel(status, now = new Date()) {
   const holidays = {};
   for (const k of Object.keys(status?.holidays || {})) holidays[k] = true;
-  const opts = { holidays };
+  const r = status?.rules || A.rulesFromWorkTime({});
+  const opts = { holidays, rules: { amEnd: r.amEnd, pmStart: r.pmStart, owePerWorkday: r.owePerWorkday } };
   const days = A.buildDays(status?.records || [], opts);
   const today = status?.today || A.dateKey(now);
   const ym = today.slice(0, 7);
   const month = A.monthReport(days, ym, today, opts);
   const year = A.yearReport(days, Number(today.slice(0, 4)), today, opts);
-  return { days, today, ym, month, year, opts };
+  return { days, today, ym, month, year, opts, work: r };
 }
 
 function createCompanyAttendancePage({ document, window, ipcRenderer, closeOtherPanels = () => {}, showMessage }) {
@@ -129,9 +130,11 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
       <div class="att-facts">${facts.join('')}</div></section>`;
   }
   function rulesHtml() {
+    const w = vm.work, t = w.workTime;
+    const owe = w.owePerWorkday ? `规定每天 8 小时，每个出勤工作日扣 ${h1(w.owePerWorkday)} 小时，按月统计` : '已满 8 小时，工作日不扣';
     return `<details class="att-rules"><summary>加班怎么算</summary><ul>
-      <li>额定上班 09:00–12:30、13:30–17:30，共 7.5 小时；规定每天 8 小时，每个出勤工作日扣 0.5 小时，按月统计。</li>
-      <li>工作日 09:00 前和 18:00 后算加班；一天从 05:00 算起，凌晨 05:00 前的打卡算前一天。</li>
+      <li>核心工作时间 ${t.amStart}–${t.amEnd}、${t.pmStart}–${t.pmEnd}，共 ${h1(w.ratedMinutes)} 小时；${owe}。可在「考勤设置」里改成你自己的时间。</li>
+      <li>工作日 ${t.amStart} 前和 ${t.eveningFrom} 后算加班；一天从 05:00 算起，凌晨 05:00 前的打卡算前一天。</li>
       <li>周末、节假日整段在岗都算加班；月末周六是正常上班日，和工作日一样算。节假日以考勤系统的假期日历为准。</li>
       <li>只算有打卡的时段：同一天离开后又回来，中间不算。考勤页只给最近 8 天，Hub 每天读一次并按日期拼起来。</li></ul></details>`;
   }
@@ -144,9 +147,9 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
     const m = vm.month;
     const hero = `<section class="att-card att-hero"><div class="att-hero-num"><div class="l">${Number(vm.ym.slice(5))} 月净加班 · 截至 ${md(vm.today)}</div>
         <div class="v">${h1(m.net)}<small>小时</small></div><div class="n">相当于多上了 <b>${m.equivalentDays.toFixed(1)}</b> 天班（每天 8 小时）</div></div>
-        <div class="att-hero-cap">${capBar()}<div class="att-hero-sub">加班 ${h1(m.gross)} − 扣除 ${h1(m.owe)}（${m.workdays} 个工作日 × 0.5）· 本月 ${m.monthWorkdays} 个工作日</div></div></section>`;
+        <div class="att-hero-cap">${capBar()}<div class="att-hero-sub">加班 ${h1(m.gross)} − 扣除 ${h1(m.owe)}（${m.workdays} 个工作日 × ${h1(vm.work.owePerWorkday)}）· 本月 ${m.monthWorkdays} 个工作日</div></div></section>`;
     const k = `<div class="att-kpis">${
-      kpi('工作日平均离开', m.avgLeave != null ? A.fmtClock(m.avgLeave) : '—', '', m.avgLeave != null ? `比 18:00 晚 ${hm(Math.max(0, m.avgLeave - 1080))} · ${m.workdays} 天里 ${m.late22} 天过了 22 点` : '本月还没有工作日记录')}${
+      kpi('工作日平均离开', m.avgLeave != null ? A.fmtClock(m.avgLeave) : '—', '', m.avgLeave != null ? `比 ${vm.work.workTime.eveningFrom} 晚 ${hm(Math.max(0, m.avgLeave - vm.work.pmStart))} · ${m.workdays} 天里 ${m.late22} 天过了 22 点` : '本月还没有工作日记录')}${
       kpi('折算日均工时', h1(m.convertedDaily), '小时', `规定 8 小时 + 日均净加班 ${h1(m.avgNetPerWorkday)}`)}${
       m.leftWorkdays && m.leaveBy != null && m.perDayAllowance >= 0
         ? kpi('守住 80 小时', A.fmtClock(m.leaveBy), '前离开', `剩 ${m.leftWorkdays} 个工作日 · 每天净加班 ≤ ${h1(m.perDayAllowance)}h`, m.willExceed ? 'red' : '')
@@ -161,7 +164,8 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
     for (const x of list) {
       let tr = `<div class="tr">${A.isWorkKind(x.kind) ? `<div class="std" style="left:${X(540)};width:${W(210)}"></div><div class="std" style="left:${X(810)};width:${W(240)}"></div>` : ''}`;
       for (const s of x.segs) {
-        const parts = A.isWorkKind(x.kind) ? [[s.a, Math.min(s.b, 540), 1], [Math.max(s.a, 540), Math.min(s.b, 1080), 0], [Math.max(s.a, 1080), s.b, 1]] : [[s.a, s.b, 1]];
+        const AM = vm.opts.rules.amEnd, PM = vm.opts.rules.pmStart;
+        const parts = A.isWorkKind(x.kind) ? [[s.a, Math.min(s.b, AM), 1], [Math.max(s.a, AM), Math.min(s.b, PM), 0], [Math.max(s.a, PM), s.b, 1]] : [[s.a, s.b, 1]];
         for (const p of parts) if (p[1] > p[0]) tr += `<div class="br${p[2] ? ' ot' : ''}" style="left:${X(p[0])};width:${W(p[1] - p[0])}"></div>`;
         tr += `<span class="pt" style="left:${X(s.a)}">${badge(s.ta)}</span><span class="pt" style="left:${X(s.b)}">${badge(s.tb)}</span>`;
         tr += s.b - s.a < 90 ? `<span class="tx" style="left:${X((s.a + s.b) / 2)}">${clk(s.a)}–${clk(s.b)}</span>` : `<span class="tx" style="left:${X(s.a)}">${clk(s.a)}</span><span class="tx" style="left:${X(s.b)}">${clk(s.b)}</span>`;
@@ -206,8 +210,13 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
     el.hidden = !panelOpen;
     if (!panelOpen) { el.innerHTML = ''; return; }
     const s = status.settings || {};
+    const wt = s.workTime || A.DEFAULT_WORK_TIME;
     el.innerHTML = `<div class="att-card att-settings"><h2>考勤设置</h2>
       <label class="att-field"><span>公司域名（考勤地址用它拼出）</span><input data-f="domain" value="${esc(s.domain || '')}" placeholder="自动找到；也可填公司邮箱或域名"></label>
+      <div class="att-field"><span>核心工作时间（加班按它算）</span>
+        <div class="att-time-row">上午 <input type="time" data-w="amStart" value="${esc(wt.amStart)}"> – <input type="time" data-w="amEnd" value="${esc(wt.amEnd)}">
+        下午 <input type="time" data-w="pmStart" value="${esc(wt.pmStart)}"> – <input type="time" data-w="pmEnd" value="${esc(wt.pmEnd)}"></div>
+        <div class="att-time-row">晚上 <input type="time" data-w="eveningFrom" value="${esc(wt.eveningFrom)}"> 之后算加班（默认下班后 30 分钟）<button type="button" class="att-btn" data-att="worktime-reset">恢复默认</button></div></div>
       <label class="att-check"><input type="checkbox" data-f="autoDaily" ${s.autoDaily !== false ? 'checked' : ''}> 每天自动读取一次（当天读到就不再访问）</label>
       <p class="att-note">读取地址：${esc(status.url || '正在自动查找公司域名…')}${s.domainFrom && s.domainFrom !== 'settings' ? '（域名是自动找到的）' : ''}</p>
       <div class="att-row"><button type="button" class="att-btn" data-att="login">在 Hub 里登录考勤</button><span class="att-sp"></span><button type="button" class="att-btn" data-att="settings">取消</button><button type="button" class="att-btn primary" data-att="save">保存</button></div>
@@ -220,7 +229,8 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
     page.querySelector('[data-slot="status"]').innerHTML = statusHtml();
     page.querySelector('[data-slot="body"]').innerHTML = bodyHtml();
     page.querySelector('[data-att="drawer"]').hidden = !status.records.length;
-    renderPanel();
+    // 设置面板开着时不重画：定时刷新会冲掉用户正在填的内容。
+    if (!panelOpen || !page.querySelector('[data-slot="panel"] .att-settings')) renderPanel();
     renderDrawer();
   }
   async function load() { status = await call('status'); render(); }
@@ -234,10 +244,18 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
       if (!(saved?.settings?.domain || saved?.domain)) { showMessage?.('没认出公司域名，请填完整的公司邮箱，例如 name@corp.example'); return; }
       return action('sync', el);
     }
+    if (name === 'worktime-reset') {
+      for (const [k, val] of Object.entries(A.DEFAULT_WORK_TIME)) { const i = page.querySelector(`[data-w="${k}"]`); if (i) i.value = val; }
+      return;
+    }
     if (name === 'settings') { panelOpen = !panelOpen; renderPanel(); return; }
     if (name === 'save') {
       const v = f => page.querySelector(`[data-f="${f}"]`);
-      await call('set-settings', { domain: v('domain').value, autoDaily: v('autoDaily').checked });
+      const workTime = {};
+      for (const i of page.querySelectorAll('[data-w]')) workTime[i.dataset.w] = i.value;
+      const check = A.normalizeWorkTime(workTime);
+      if (!check.ok) { showMessage?.('核心工作时间不对：' + check.error); return; }
+      await call('set-settings', { domain: v('domain').value, autoDaily: v('autoDaily').checked, workTime });
       panelOpen = false; await load(); showMessage?.('考勤设置已保存'); return;
     }
     if (name === 'login') { el.disabled = true; try { const r = await call('login'); showMessage?.(r?.ok ? '已登录，正在读取考勤' : (r?.error || '登录窗口已关闭')); } finally { el.disabled = false; await load(); } return; }

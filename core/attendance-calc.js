@@ -18,6 +18,37 @@ const DEFAULT_RULES = Object.freeze({
   lastSaturdayIsWorkday: true,
 });
 
+// 核心工作时间（用户可在考勤设置里改，各公司、各人不一样）。加班口径由它推出：
+//   上班前算早上加班；「晚上加班起算」之后算晚上加班（默认下班后 30 分钟）；
+//   规定每天 8 小时，额定上班不足 8 小时的差额每个出勤工作日扣掉。
+const DEFAULT_WORK_TIME = Object.freeze({ amStart: '09:00', amEnd: '12:30', pmStart: '13:30', pmEnd: '17:30', eveningFrom: '18:00' });
+const REQUIRED_DAILY = 8 * 60;
+
+function clockText(min) { return `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`; }
+// 校验并补齐；不合理时 ok=false 并说明哪里不对。
+function normalizeWorkTime(w = {}) {
+  const t = {};
+  for (const key of Object.keys(DEFAULT_WORK_TIME)) {
+    const m = toMinutes(w[key] ?? DEFAULT_WORK_TIME[key]);
+    t[key] = m == null || m >= 1440 ? toMinutes(DEFAULT_WORK_TIME[key]) : m;
+  }
+  // 没单独填晚上加班起算时，跟着下班时间走：下班后 30 分钟。
+  if (w.eveningFrom == null || w.eveningFrom === '') t.eveningFrom = Math.min(1439, t.pmEnd + 30);
+  const order = [['amStart', 'amEnd', '上午上班要早于上午下班'], ['amEnd', 'pmStart', '午休结束不能早于午休开始'], ['pmStart', 'pmEnd', '下午上班要早于下午下班'], ['pmEnd', 'eveningFrom', '晚上加班起算不能早于下班']];
+  let error = '';
+  if (t.amStart < 300) error = '上班时间不能早于 05:00（05:00 前算前一天）';
+  for (const [a, b, msg] of order) if (!error && (a === 'amEnd' || a === 'pmEnd' ? t[a] > t[b] : t[a] >= t[b])) error = msg;
+  const text = {};
+  for (const key of Object.keys(t)) text[key] = clockText(t[key]);
+  return { ok: !error, error, workTime: text, minutes: t };
+}
+function rulesFromWorkTime(w) {
+  const n = normalizeWorkTime(w);
+  const t = n.ok ? n.minutes : normalizeWorkTime(DEFAULT_WORK_TIME).minutes;
+  const rated = (t.amEnd - t.amStart) + (t.pmEnd - t.pmStart);
+  return { amEnd: t.amStart, pmStart: t.eveningFrom, owePerWorkday: Math.max(0, REQUIRED_DAILY - rated), ratedMinutes: rated, workTime: n.ok ? n.workTime : { ...DEFAULT_WORK_TIME } };
+}
+
 const WEEK = ['日', '一', '二', '三', '四', '五', '六'];
 
 function toMinutes(t) {
@@ -249,7 +280,7 @@ function fmtClock(min) {
 }
 
 module.exports = {
-  DEFAULT_RULES, WEEK, toMinutes, parseDate, dateKey, shiftDay, lastSaturday, dayKind, isWorkKind,
+  DEFAULT_RULES, DEFAULT_WORK_TIME, normalizeWorkTime, rulesFromWorkTime, WEEK, toMinutes, parseDate, dateKey, shiftDay, lastSaturday, dayKind, isWorkKind,
   normalizeRecord, mergeRecords, buildDays, monthWorkdays, remainingWorkdays, summarize,
   monthReport, yearReport, fmtHours, fmtHm, fmtClock,
 };

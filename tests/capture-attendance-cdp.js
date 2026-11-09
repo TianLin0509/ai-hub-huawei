@@ -103,6 +103,16 @@ async function run() {
     await clickSel('#company-attendance-page [data-att="prev"]'); await shot('07-明细-上个月');
     await clickSel('#company-attendance-page .att-x'); await sleep(300);
     await clickSel('#company-attendance-page [data-att="settings"]'); await shot('08-设置');
+    // 自定义核心工作时间：改成 08:30–12:00、13:00–17:30（满 8 小时），保存后加班口径与月净加班应跟着变。
+    const netText = `document.querySelector('#company-attendance-page .att-kpi .v')?.textContent || ''`;
+    evidence.workTime = { before: await c.eval(netText) };
+    await c.eval(`(()=>{const v={amStart:'08:30',amEnd:'12:00',pmStart:'13:00',pmEnd:'17:30',eveningFrom:'18:00'};for(const [k,x] of Object.entries(v)){const i=document.querySelector('#company-attendance-page [data-w="'+k+'"]');i.value=x;i.dispatchEvent(new Event('input',{bubbles:true}))}})()`);
+    await shot('09-设置-改工作时间');
+    await clickSel('#company-attendance-page [data-att="save"]'); await sleep(800);
+    await c.eval(`document.querySelector('#company-attendance-page .att-rules')?.setAttribute('open','')`);
+    evidence.workTime.after = await c.eval(netText);
+    evidence.workTime.rules = await c.eval(`document.querySelector('#company-attendance-page .att-rules')?.innerText || ''`);
+    await c.eval(`(()=>{const r=document.querySelector('#company-attendance-page .att-rules');r&&r.scrollIntoView()})()`); await shot('10-加班口径-自定义后');
     evidence.layout = await c.eval(`(()=>{const p=document.getElementById('company-attendance-page');const r=s=>{const e=p.querySelector(s);if(!e)return null;const b=e.getBoundingClientRect();return [Math.round(b.top),Math.round(b.height)]};return {pageTop:p.style.top,pageScroll:p.scrollTop,head:r('.att-head'),panel:r('.att-panel'),scroll:r('.att-scroll'),scrollTop:p.querySelector('.att-scroll').scrollTop}})()`);
     evidence.fonts = await c.eval(`(()=>{const s={};for(const e of document.querySelectorAll('#company-attendance-page *')){if(!e.offsetParent)continue;const own=[...e.childNodes].some(n=>n.nodeType===3&&n.textContent.trim());if(!own)continue;const f=parseFloat(getComputedStyle(e).fontSize);s[f]=(s[f]||0)+1}return s})()`);
     evidence.overflowX = await c.eval(`(()=>{const p=document.querySelector('#company-attendance-page .att-scroll');return p.scrollWidth>p.clientWidth})()`);

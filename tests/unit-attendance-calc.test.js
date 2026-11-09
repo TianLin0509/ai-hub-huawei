@@ -88,3 +88,21 @@ test('公司假期日历把周末也列进来时：周末仍按周末 / 月末�
   assert.equal(A.dayKind('2026-11-07', { holidays }), 'weekend');
   assert.equal(A.dayKind('2026-10-01', { holidays }), 'holiday');
 });
+
+test('核心工作时间可自定义：默认口径不变，改时间后扣时与加班起点跟着变', () => {
+  const def = A.rulesFromWorkTime({});
+  assert.deepEqual([def.amEnd, def.pmStart, def.owePerWorkday, def.ratedMinutes], [540, 1080, 30, 450]);
+  // 08:30–12:00、13:00–17:30 = 8 小时：不扣；晚上默认跟着下班后 30 分钟
+  const r = A.rulesFromWorkTime({ amStart: '08:30', amEnd: '12:00', pmStart: '13:00', pmEnd: '17:30' });
+  assert.deepEqual([r.amEnd, r.pmStart, r.owePerWorkday], [510, 1080, 0]);
+  const late = A.rulesFromWorkTime({ amStart: '10:00', amEnd: '12:30', pmStart: '13:30', pmEnd: '19:00' });
+  assert.equal(late.pmStart, 19 * 60 + 30);
+  const days = A.buildDays([{ attendanceDate: '2026-11-04', earlyClockInTime: '08:00', lateClockInTime: '20:00' }], { rules: late });
+  assert.equal(days[0].otAm, 120);
+  assert.equal(days[0].otPm, 30);
+  assert.equal(days[0].owe, late.owePerWorkday);
+  // 不合理的时间给出说明，不静默乱算
+  assert.equal(A.normalizeWorkTime({ amStart: '12:00', amEnd: '09:00' }).ok, false);
+  assert.match(A.normalizeWorkTime({ pmEnd: '18:00', eveningFrom: '17:00' }).error, /晚上加班/);
+  assert.equal(A.rulesFromWorkTime({ amStart: '12:00', amEnd: '09:00' }).amEnd, 540);
+});

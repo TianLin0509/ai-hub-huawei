@@ -105,3 +105,15 @@ test('夜里打开考勤页可以读取，后台定时仍避开 0–6 点', () =
   assert.equal(svc.shouldRun(), false);
   assert.equal(svc.shouldRun({ allowNight: true }), true);
 });
+
+test('考勤设置：核心工作时间可保存、可恢复默认，不合理时拒绝并说明', () => {
+  const dir = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'att-wt-'));
+  const svc = new (require('../core/company-attendance/service').CompanyAttendance)({ dataDir: dir, noTimer: true });
+  assert.equal(svc.status().rules.owePerWorkday, 30);
+  svc.setSettings({ workTime: { amStart: '08:30', amEnd: '12:00', pmStart: '13:00', pmEnd: '17:30' } });
+  assert.equal(svc.settings().workTime.amStart, '08:30');
+  assert.equal(svc.status().rules.owePerWorkday, 0);
+  assert.throws(() => svc.setSettings({ workTime: { amStart: '13:00', amEnd: '12:00' } }), /核心工作时间不对/);
+  svc.setSettings({ workTime: null });
+  assert.equal(svc.settings().workTime.amStart, '09:00');
+});
