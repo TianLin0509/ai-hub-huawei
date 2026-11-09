@@ -2,6 +2,13 @@
   "schema": 1,
   "entries": [
     {
+      "version": "5.5.62",
+      "date": "2026-11-09",
+      "notes": [
+        "修复新目录打开 CodeAgent 时仍弹信任框"
+      ]
+    },
+    {
       "version": "5.5.61",
       "date": "2026-11-09",
       "notes": [

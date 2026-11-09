@@ -135,9 +135,21 @@ function ensureClaudeProjectTrusted(projectDir, options = {}) {
   }
 }
 
+// Code Agent 的目录信任记录放哪因版本而异：1.2615.02.03 在 <configDir>/.cac.json；1.2615.02.02 只认用户目录根下的 ~/.cac.json，
+// 配置目录指向别处也一样，且这个版本 --skip-safe-check 不起作用（2026-11-09 公司真机 Q-1109-11，新目录 7 种启动全弹框，已信任目录不弹）。
+// 所以两处都写，各自仍只在文件已存在时才写；任一处写成就算成功，都没有才交给调用方等 CLI 建文件。
+function ensureCodeAgentProjectTrusted(projectDir, options = {}) {
+  const { homeDir = os.homedir(), ...rest } = options;
+  const primary = ensureClaudeProjectTrusted(projectDir, rest);
+  if (path.resolve(rest.configDir || '') === path.resolve(homeDir)) return primary;
+  const root = ensureClaudeProjectTrusted(projectDir, { ...rest, configDir: homeDir });
+  return primary.reason === 'state-missing' && root.ok ? root : primary;
+}
+
 module.exports = {
   claudeStatePathFor,
   ensureClaudeProjectTrusted,
+  ensureCodeAgentProjectTrusted,
   renameWithRetrySync,
   toClaudeProjectKey,
 };

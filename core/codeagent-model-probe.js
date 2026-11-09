@@ -72,7 +72,7 @@ async function probeModels({ command, configDirEnv, configDir, cwd, dataDir, env
   const screen = createTrustScreen({ cols, rows });
   if (!screen) return unavailable('screen-unavailable', { ok: false, error: '终端组件不可用' });
   fs.mkdirSync(cwd, { recursive: true });
-  try { require('./claude-project-trust.js').ensureClaudeProjectTrusted(cwd, { configDir, stateFileName: '.cac.json' }); } catch { /* 有 --skip-safe-check 兜底 */ }
+  try { require('./claude-project-trust.js').ensureCodeAgentProjectTrusted(cwd, { configDir, stateFileName: '.cac.json' }); } catch { /* 有 --skip-safe-check 兜底 */ }
   const childEnv = { ...env, [configDirEnv]: configDir };
   require('./codeagent-launch-env').applyAccountEnv(childEnv, { configDirEnv, configDir });
   // 不让这个临时进程的 hook 冒充 Hub 会话

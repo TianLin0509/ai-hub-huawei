@@ -2381,7 +2381,7 @@ class SessionManager extends EventEmitter {
     if (isCodeAgent) {
       // .cac.json 的 projects 也预写信任（--skip-safe-check 之外的第二道保险）。
       const trustOptions = { configDir: codeagentConfig.configDir, stateFileName: codeagentConfig.stateFile };
-      const pretrust = require('./claude-project-trust.js').ensureClaudeProjectTrusted(spawnCwd, trustOptions);
+      const pretrust = require('./claude-project-trust.js').ensureCodeAgentProjectTrusted(spawnCwd, trustOptions);
       // 状态文件还没有（这个配置目录第一次用）：不凭空建，等 CodeAgent 自己建出来、写稳了再补上信任（2026-11-07 首次会话丝滑）。
       // 这次启动的信任框由下面的自动确认兜底；补写保证之后同目录的会话都不再弹。
       if (pretrust && pretrust.reason === 'state-missing') {
@@ -2393,7 +2393,7 @@ class SessionManager extends EventEmitter {
           if (exists && !seenAt) seenAt = Date.now();
           if (exists && Date.now() - seenAt >= 1500) {
             clearInterval(poll);
-            const later = require('./claude-project-trust.js').ensureClaudeProjectTrusted(spawnCwd, trustOptions);
+            const later = require('./claude-project-trust.js').ensureCodeAgentProjectTrusted(spawnCwd, trustOptions);
             console.log(`[trust-dialog] ${String(id).slice(0, 8)} CodeAgent 状态文件建好后补写信任：${later.changed ? '已写入' : later.reason || '已是信任'}`);
           } else if (Date.now() > deadline) clearInterval(poll);
         }, 500);

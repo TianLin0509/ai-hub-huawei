@@ -19,7 +19,7 @@ public class HubInstallerProbe {
 [IO.File]::WriteAllText((Join-Path $source 'resources\app.asar'),'synthetic app archive')
 $version='v0.0.0-test'
 $archive=Join-Path $root 'AIHubHuawei-0.0.0-test-win-x64.zip'
-Compress-Archive -Path (Join-Path $source '*') -DestinationPath $archive
+for($try=1;;$try++){ try { Compress-Archive -Path (Join-Path $source '*') -DestinationPath $archive -Force; break } catch { if($try -ge 5){throw}; Start-Sleep -Seconds 2 } }
 $manifest=Join-Path $root 'SHA256SUMS.txt'
 $hash=(Get-FileHash -LiteralPath $archive).Hash
 [IO.File]::WriteAllText($manifest,($hash+'  '+[IO.Path]::GetFileName($archive)))
