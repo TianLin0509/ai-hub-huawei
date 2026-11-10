@@ -57,10 +57,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "公开版开放会议室、CodeAgent「从此处分支」、号池视图、CodeAgent 添加技能与官方安装入口",
-    "考勤默认使用公司域名，公开版用户不用再手动填写"
+    "新用户开箱即用加固：首次准备页的一键安装 Git、一键登录 CodeAgent 可用；没登录时就地给登录按钮，首次选模型失败不再退回第一条消息；会议室自动抢订不再依赖助理开关；助理首问未就绪会说明原因并给按钮，邮箱读不到可就地填写；PPT 没选素材文件夹时直接引导；电脑没有麦克风也能开会议（只录电脑声音），重启后旧会议继续转写；更新失败时给完整安装包下载"
   ],
-  "version": "5.5.67",
+  "version": "5.5.68",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

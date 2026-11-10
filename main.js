@@ -1701,9 +1701,13 @@ function createWindow() {
           }
           return { running };
         },
-        askAssistant: text => {
+        askAssistant: (text, { enableAssistant = false } = {}) => {
           if (!companyAssistantService) throw new Error('这个版本没有助理');
-          if (!optionalFeatures.get('assistant')) throw new Error('助理还没开：在「可选功能」里打开助理后再问');
+          if (!optionalFeatures.get('assistant')) {
+            if (!enableAssistant) throw Object.assign(new Error('助理还没开启。点「开启助理并发送」，会开启助理并发送刚才的问题。'), { code: 'ASSISTANT_DISABLED' });
+            optionalFeatures.set('assistant', true); companyAssistantService.start();
+            sendToRenderer('optional-features:changed', optionalFeatureList());
+          }
           return companyAssistantService.ask(text, { via: 'pet' });
         },
         getPages: () => ({
@@ -2857,6 +2861,7 @@ try {
         ...(notice.kind === 'digest' ? { noticeId: notice.id } : {}) }); } catch (error) { console.warn('[company-assistant] notification', error.message); }
     });
     companyAssistantService.startTools();
+    companyAssistantService.rooms.start();
     // start 失败（例如磁盘满）不能连带让下面的 IPC 注册落空，否则助理、会议、会议室、PPT 页全部不可用。
     if (optionalFeatures.get('assistant')) { try { companyAssistantService.start(); } catch (error) { console.error('[company-assistant] 启动出错，继续注册接口：', error && error.message); } }
     const bridgeMcpPlan = sessionManager.extraMcpProvider;

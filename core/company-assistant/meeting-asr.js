@@ -9,6 +9,8 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const readline = require('node:readline');
+const { Readable } = require('node:stream');
+const { pipeline } = require('node:stream/promises');
 const { downloadWithFallback, fmtBytes } = require('../app-update/downloader');
 const { resolveFetch } = require('./fetch-util');
 
@@ -84,8 +86,9 @@ class MeetingAsr {
     fs.rmSync(stage, { recursive: true, force: true }); fs.mkdirSync(path.join(stage, 'model'), { recursive: true });
     for (const f of this.pack.files) {
       const out = path.join(stage, f.extract ? f.name : path.join('model', f.name));
-      const fd = fs.openSync(out, 'w');
-      try { for (const p of f.parts) fs.writeSync(fd, fs.readFileSync(path.join(this.downloads, p.file))); } finally { fs.closeSync(fd); }
+      const downloads = this.downloads;
+      async function* chunks() { for (const p of f.parts) yield* fs.createReadStream(path.join(downloads, p.file)); }
+      await pipeline(Readable.from(chunks()), fs.createWriteStream(out));
       if (await sha256File(out) !== f.sha256) throw new Error(`${f.name} 拼合后校验不一致，请重试`);
       if (f.extract) { await this.unzip(out, path.join(stage, f.extract)); fs.rmSync(out, { force: true }); }
     }

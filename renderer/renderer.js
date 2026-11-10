@@ -8367,7 +8367,19 @@ ipcRenderer.on('session-notice', (_event, payload = {}) => {
     return;
   }
   // persistent：要手动关的常驻提示条（公司模型换号、退回个人号、反代没就绪），见 sticky-notice.js。
-  if (payload.persistent === true) require('./sticky-notice.js').showStickyNotice(document, text, payload.level);
+  if (payload.persistent === true) {
+    const notices = require('./sticky-notice.js');
+    const notice = notices.showStickyNotice(document, text, payload.level);
+    if (notice && payload.action && !notice.dataset.action) {
+      notice.dataset.action = payload.action;
+      if (payload.action === 'codeagent-login') notices.appendCodeAgentLoginButton(document, notice.children[0], ipcRenderer);
+      else if (payload.action === 'open-backstage') notices.appendActionButton(document, notice.children[0], '打开后台', async () => {
+        if (!sessions.has(payload.sessionId)) throw new Error('会话已关闭');
+        await selectSession(payload.sessionId, { splitBypass: true });
+        applyViewMode('pty');
+      });
+    }
+  }
   else showToast(text, payload.level);
 });
 

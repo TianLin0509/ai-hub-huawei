@@ -2,7 +2,7 @@
 function createMeetingHandlers(service) {
   const m = service.meetings;
   return {
-    'meeting-status': r => m.status(r.id),
+    'meeting-status': r => { m.start(); return m.status(r.id); },
     'meeting-start': async r => { const meeting = m.create(r); return { ok: true, meeting, diskWarning: await m.recording.diskWarning() }; },
     'meeting-rename': r => ({ ok: true, meeting: m.rename(r.id, r.title) }),
     'meeting-capture': r => m.capture(r.id, r),

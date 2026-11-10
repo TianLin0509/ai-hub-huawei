@@ -18,7 +18,7 @@ contextBridge.exposeInMainWorld('hubPet', {
   // 2026-11-09：通知卡片（停留、收起）、问助理输入框。
   hold: (on) => ipcRenderer.send('hub-pet:hold', on === true),
   dismiss: () => ipcRenderer.send('hub-pet:dismiss'),
-  ask: (text) => ipcRenderer.send('hub-pet:ask', { text: String(text || '').slice(0, 2000) }),
+  ask: (text, enableAssistant = false) => ipcRenderer.send('hub-pet:ask', { text: String(text || '').slice(0, 2000), enableAssistant: enableAssistant === true }),
   askClose: () => ipcRenderer.send('hub-pet:ask-close'),
   onAskOpen: (fn) => on('hub-pet:ask-open', fn),
   onAskResult: (fn) => on('hub-pet:ask-result', fn),

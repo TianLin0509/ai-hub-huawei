@@ -1161,6 +1161,9 @@
       // 一个号固定一个模型（2026-10-20 用户）：启动中心不再有 CodeAgent 模型菜单，这里不再提它。
       : manual ? '指定账号：整段会话固定使用这个号及其默认模型。'
       : '自动挑号会跳过暂停或需登录的号，其他号都不可用时才用个人账号；整段会话固定使用选中的账号。';
+    if (note && !codeagentUsesPool() && accountState(personal, { personal: true }).label === '需登录') {
+      require('./sticky-notice').appendCodeAgentLoginButton(document, note, ipcRenderer);
+    }
   }
 
   function paintCompanyAccount() {

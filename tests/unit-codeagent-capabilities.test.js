@@ -126,6 +126,42 @@ test('没走 prepare 的入口仍同步探测，结果写入缓存', t => {
   assert.equal(runs, 2, '--version 和 --help 各一次');
 });
 
+test('发送时过期缓存立即返回且并发后台刷新只运行一次', async t => {
+  const command = fakeCli(t);
+  caps._helpCache.clear();
+  let now = 1000;
+  caps.readHelp(command, { run: fakeRun({ '--version': '1.2605.05.01', '--help': HELP }), now: () => now });
+  now += 6 * 3600 * 1000;
+  const calls = [], held = fakeExec({ '--version': '1.2615.0.0' }, calls, { hold: true });
+  const options = { run: () => assert.fail('不能同步启动 CLI'), exec: held.exec, platform: 'win32', now: () => now };
+  assert.equal(caps.readHelp(command, options), HELP);
+  assert.equal(caps.readHelp(command, options), HELP);
+  await new Promise(setImmediate);
+  assert.equal(calls.length, 1);
+  const refresh = caps.prepare(command, options);
+  held.releases.shift()();
+  await refresh;
+  assert.equal(caps.readHelp(command, options), '', '刷新后的新版本不再过滤参数');
+  assert.equal(calls.length, 1);
+});
+
+test('群聊会话等异步能力预读完成才创建', async t => {
+  let release;
+  const calls = [];
+  t.mock.method(caps, 'prepareForKind', kind => { calls.push(kind); return new Promise(resolve => { release = resolve; }); });
+  t.mock.method(require('../core/company-ai-policy'), 'assertTaskKind', () => {});
+  const add = require('../main/ipc/meeting-create-handlers').createMeetingSubAdder({
+    fs, path, getHookPort: () => 0, isCodexBaseKind: () => false,
+    meetingManager: { getMeeting: () => null }, sendToRenderer() {},
+    sessionManager: { createSession: () => { calls.push('create'); return null; } },
+  });
+  const pending = add('room', 'codeagent', { cwd: os.tmpdir() });
+  assert.deepEqual(calls, ['codeagent']);
+  release();
+  assert.equal(await pending, null);
+  assert.deepEqual(calls, ['codeagent', 'create']);
+});
+
 test('命令找不到时探测失败按原样启动，装上后马上重探', async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caps-missing-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));

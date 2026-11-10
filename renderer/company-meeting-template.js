@@ -46,7 +46,7 @@ function meetingTemplate() {
       </div></details>
     </div>
   </header>
-  <div class="meeting-notice"><p class="meeting-message" role="status" data-m="message"></p><button class="ca-btn" data-act="retry-save" hidden>重试保存</button><button class="meeting-notice-close" data-act-local="dismiss" aria-label="关闭提示">${icon(ICONS.close,14)}</button></div>
+  <div class="meeting-notice"><p class="meeting-message" role="status" data-m="message"></p><div data-m="agent-help"></div><button class="ca-btn" data-act="retry-save" hidden>重试保存</button><button class="meeting-notice-close" data-act-local="dismiss" aria-label="关闭提示">${icon(ICONS.close,14)}</button></div>
   <div class="meeting-columns">
     <nav class="meeting-topic-pane" aria-label="会议议题与时间定位"><h3 data-m="topics-label">议题</h3><p class="meeting-topic-hint" data-m="topics-hint">有出处的议题会显示在这里</p><div data-m="topics"></div></nav>
     <main class="meeting-evidence-pane">

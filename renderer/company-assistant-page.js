@@ -245,7 +245,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     if (connection.kind === 'online' && d.calendarNeedsSetup) {
       const auto = d.mailSetup || {};
       const why = auto.reason === 'no-email' ? 'WeLink 账号信息里没读到你的邮箱，需要补填一次。' : auto.email ? `用 ${auto.email} 自动配置没成功${auto.output ? '（' + auto.output + '）' : ''}。` : '还没接入。';
-      out.push(['邮件和日历暂不可用', why, btn('settings-tab:welink', '去设置', true)]);
+      out.push(['邮件和日历暂不可用', why, `<div class="ca-row"><input type="email" data-ca-email placeholder="填写公司邮箱" value="${esc(auto.email || d.settings?.email || '')}">${btn('configure-mail', '保存并配置', true)}<span class="ca-note" data-ca-mail-msg></span></div>`]);
     }
     const failed = [['会议', d.meetingCoverage], ['日程', d.calendarCoverage], ['邮件', d.mailCoverage]].filter(([, c]) => c?.status === 'failed').map(([n]) => n);
     if (connection.kind === 'online' && !d.calendarNeedsSetup && failed.length) out.push([failed.join('、') + '查询失败', '已取到的内容照常显示，可以稍后刷新。', btn('refresh', '刷新')]);
@@ -274,7 +274,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
   function onboarding() {
     if (!onboardingShown()) return '';
     const c = connectionState(data), ready = c.kind === 'online';
-    return `<article class="ca-onboarding" data-connection="${c.kind}"><h2>${esc(ready ? '正在获取今天的工作信息' : c.title)}</h2><p>${esc(c.detail)}</p><div class="ca-onboarding-steps" aria-label="接入进度"><span>${data.cliFound ? '✓' : '1'} 安装工具</span><span>${ready ? '✓' : '2'} 确认登录</span><span>${ready && data.refreshedAt ? '✓' : '3'} 获取工作信息</span></div>${c.action ? `<button type="button" class="ca-btn primary" data-ca="${c.action}">${esc(c.label)}</button>` : ''}${c.kind === 'missing' && c.alt ? `<button type="button" class="ca-btn" data-ca="${c.alt}">${esc(c.altLabel)}</button>` : ''}${!data.cliFound ? '<button type="button" class="ca-btn" data-ca="pick-cli">手动选择…</button>' + installGuide() : ''}<p class="ca-note">接通前也可以直接提问，讨论已有的材料。</p>${!ready && ['missing', 'login', 'unknown'].includes(c.kind) && window.HubErrorCard ? window.HubErrorCard.assistHtml({ area: 'welink', title: c.title, symptom: c.detail, details: [c.title, c.detail, data.cliSearch?.error].filter(Boolean).join(' · ') }) : ''}</article>`;
+    return `<article class="ca-onboarding" data-connection="${c.kind}"><h2>${esc(ready ? '正在获取今天的工作信息' : c.title)}</h2><p>${esc(c.detail)}</p><div class="ca-onboarding-steps" aria-label="接入进度"><span>${data.cliFound ? '✓' : '1'} 安装工具</span><span>${ready ? '✓' : '2'} 确认登录</span><span>${ready && data.refreshedAt ? '✓' : '3'} 获取工作信息</span></div>${c.action ? `<button type="button" class="ca-btn primary" data-ca="${c.action}">${esc(c.label)}</button>` : ''}${c.alt ? `<button type="button" class="ca-btn" data-ca="${c.alt}">${esc(c.altLabel)}</button>` : ''}${!data.cliFound ? '<button type="button" class="ca-btn" data-ca="pick-cli">手动选择…</button>' + installGuide() : ''}<p class="ca-note">接通前也可以直接提问，讨论已有的材料。</p>${!ready && ['missing', 'login', 'unknown'].includes(c.kind) && window.HubErrorCard ? window.HubErrorCard.assistHtml({ area: 'welink', title: c.title, symptom: c.detail, details: [c.title, c.detail, data.cliSearch?.error].filter(Boolean).join(' · ') }) : ''}</article>`;
   }
   function loginPanel() {
     const f = data.loginFlow;
@@ -403,7 +403,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
         meta = `${c.answeredAt ? `<time>${when(c.answeredAt)}</time>` : ''}${c.answeredAt && (c.startedAt || c.askedAt) ? `<span>用时 ${secondsText(c.answeredAt - (c.startedAt || c.askedAt))}${c.startedAt && c.answeringAt ? `（准备 ${secondsText(c.answeringAt - c.startedAt)} · 回答 ${secondsText(c.answeredAt - c.answeringAt)}）` : ''}</span>` : ''}`;
       } else if (c.state === 'error') {
         const why = c.stopped ? '已停止这一问' : `没答上：${esc(c.error || '原因未知')}`;
-        answer = `<div class="ca-turn-error${c.stopped ? ' is-stopped' : ''}"><span>${why}</span><button type="button" class="ca-btn small" data-ca="retry:${esc(id)}">重问</button></div>`;
+        answer = `<div class="ca-turn-error${c.stopped ? ' is-stopped' : ''}"><span>${why}</span><button type="button" class="ca-btn small" data-ca="retry:${esc(id)}">重问</button></div>${!c.stopped && window.HubErrorCard ? window.HubErrorCard.knownHtml({ area: 'codeagent', title: c.error || '助理没答上', details: c.error || '' }) : ''}`;
         meta = c.askedAt ? `<time>${when(c.askedAt)}</time>` : '';
       } else {
         // 三段：排队 → CodeAgent 准备中（开会话、送入问题，通常 10–20 秒）→ 正在查（问题已送进去）。
@@ -413,7 +413,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
         const since = from ? `<span>${phase.verb} <span data-since="${Number(from)}">${secondsText(Date.now() - from)}</span>${phase.hint ? `<span class="ca-wait-hint">（${phase.hint}）</span>` : ''}</span>` : '';
         const label = guide && phase.label === '正在查…' ? esc(guide) : phase.label;
         // 审计 A3-17：等着的问题可以停下（只结束这一问，其他队列照常）。
-        answer = `<div class="ca-think"><span class="ca-dots"><i></i><i></i><i></i></span>${label}<button type="button" class="ca-btn small ca-stop" data-ca="stop:${esc(id)}">停止这一问</button></div>`;
+        answer = `<div class="ca-think"><span class="ca-dots"><i></i><i></i><i></i></span>${label}${c.notReadySince != null && !c.answeringAt ? '<button type="button" class="ca-btn small" data-ca="open-session">打开助理会话</button>' : ''}<button type="button" class="ca-btn small ca-stop" data-ca="stop:${esc(id)}">停止这一问</button></div>`;
         meta = since;
       }
       const assistant = `<div class="ca-turn assistant${c.state === 'done' || c.state === 'error' ? '' : ' is-thinking'}"><span class="ca-turn-avatar"><img src="${ASSISTANT_AVATAR_SRC}" alt=""></span><div class="ca-turn-content">
@@ -571,6 +571,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       return;
     }
     if (verb === 'settings-tab') return openSettings(arg);
+    if (verb === 'configure-mail') return setupMail(page.querySelector('[data-ca-email]'), page.querySelector('[data-ca-mail-msg]'), button);
     if (verb === 'open-session') return window.__companyAssistantOpenSession();
     if (verb === 'reopen-session') { button.disabled = true; showMessage?.('正在重开助理会话…'); await call('reopen-session'); await load(); showMessage?.('助理会话已重开，会话工具接上后状态点会变绿'); return; }
     const reopenSettings = () => { const p = page.querySelector('[data-slot="panel"]'); if (p.dataset.kind === 'settings' && !p.hidden) openSettings(); };
@@ -738,7 +739,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     const loginLine = !d.cliFound ? cliChip(d) + installGuide()
       : connection.kind === 'online' ? `<span class="ca-chip ok">已登录</span><span class="ca-note">账号 ${esc(d.auth.login.uid || '')}</span>`
         : `<span class="ca-chip warn">${esc(connection.title)}</span><span class="ca-note">${esc(connection.detail)}</span>${connection.action ? `<button type="button" class="ca-btn small primary" data-ca="${connection.action}">${esc(connection.label)}</button>` : ''}${connection.alt ? `<button type="button" class="ca-btn small" data-ca="${connection.alt}">${esc(connection.altLabel)}</button>` : ''}`;
-    const from = s.emailFrom === 'welink' ? '从 WeLink 账号自动读到' : s.email ? '你填写的' : '';
+    const from = s.emailFrom === 'welink' ? '从 WeLink 账号自动读到' : s.emailFrom === 'git' ? '从本机 Git 自动读到（公司域名已核对）' : s.email ? '你填写的' : '';
     const snapRows = querySnapshotRows(d);
     const VIA = { path: '系统路径里找到的', npm: 'npm 全局目录里找到的', disk: '在硬盘里找到的', manual: '你手动选的' };
     const cliLine = d.cliFound ? `<fieldset class="col"><legend>welink-cli 位置</legend><div class="ca-row"><span class="ca-chip ok">已找到</span><span class="ca-note" title="${esc(d.cliPath)}">${esc(d.cliPath)}${VIA[d.cliSearch?.via] ? '（' + VIA[d.cliSearch.via] + '）' : ''}</span>${d.cliVersion ? `<span class="ca-note">版本 ${esc(d.cliVersion)}</span>` : ''}${toolPicker.switchHtml(d.cliChoice, { className: 'ca-note' })}</div>${toolPicker.hintHtml(d.cliChoice)}

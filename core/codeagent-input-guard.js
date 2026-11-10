@@ -49,14 +49,14 @@ function createCodeAgentInputGuard(manager, {
   now = Date.now,
   setTimer = setTimeout, clearTimer = clearTimeout,
   stopDiagnose = require('./codeagent-stop-log').recordCodeAgentStop,
-  diagnose = event => {
+  diagnose = (event, fields = { reason: 'target-check-failed', stage: 'before-send', sendBlocked: false }) => {
     try {
       const fs = require('node:fs'), path = require('node:path');
       const dir = path.join(require('./data-dir').getHubDataDir(), 'logs');
       fs.mkdirSync(dir, { recursive: true });
       const file = path.join(dir, 'codeagent-input.log');
       if (fs.existsSync(file) && fs.statSync(file).size > 256 * 1024) fs.renameSync(file, file + '.1');
-      fs.appendFileSync(file, JSON.stringify({ at: new Date().toISOString(), event }) + '\n');
+      fs.appendFileSync(file, JSON.stringify({ at: new Date().toISOString(), event, ...fields }) + '\n');
     } catch { /* A failed diagnostic must not prevent a prompt submission. */ }
   },
 } = {}) {
@@ -74,14 +74,15 @@ function createCodeAgentInputGuard(manager, {
     if (!s || !isCodeAgentKind(s.kind) || ['claude-stream-json', 'codex-app-server', 'acp'].includes(s.runtimeBackend)) throw new Error('当前会话不是可用的 CodeAgent 终端会话');
     return s;
   };
-  async function read(sid, timeoutMs = CODEAGENT_INPUT_READ_WAIT_MS, inspectScreen = false) {
+  // sendBlocked marks immediate refusal; retried reads do not decide the eventual send.
+  async function read(sid, timeoutMs = CODEAGENT_INPUT_READ_WAIT_MS, inspectScreen = false, stage = 'inspect', sendBlocked = false) {
     session(sid);
-    let screen, timer, expired = false;
+    let screen, timer, expired = false, reason = 'open-screen-failed';
     try {
       const operation = (async () => {
-        screen = await openScreen(sid);
+        screen = await openScreen(sid); reason = 'screen-read-failed';
         if (expired) { screen.dispose(); throw new Error('input-read-timeout'); }
-        const lines = await screen.lines(), input = inputSnapshot(lines);
+        const lines = await screen.lines(); reason = 'frame-inspection-failed'; const input = inputSnapshot(lines);
         return inspectScreen ? { ...input, menu: choiceMenuOpen(lines),
           screenState: require('./terminal-runtime-state').classifyTerminalRuntime(session(sid).kind, lines).state } : input;
       })();
@@ -90,8 +91,8 @@ function createCodeAgentInputGuard(manager, {
       })]);
       if (!inspectScreen && snapshot.state === 'unknown') throw new Error('input-frame-unknown');
       return snapshot;
-    } catch {
-      diagnose('input-read-failed');
+    } catch (error) {
+      diagnose('input-read-failed', { reason: expired ? 'timeout' : error?.message === 'input-frame-unknown' ? 'frame-unrecognized' : reason, stage, sendBlocked });
       return { state: 'unknown', text: '', readFailed: true };
     } finally { clearTimer(timer); screen?.dispose(); }
   }
@@ -101,7 +102,7 @@ function createCodeAgentInputGuard(manager, {
     const deadline = now() + CODEAGENT_MENU_CLOSE_WAIT_MS;
     do {
       await sleep(CODEAGENT_INPUT_POLL_MS);
-      const after = await read(sid, CODEAGENT_INPUT_READ_WAIT_MS, true);
+      const after = await read(sid, CODEAGENT_INPUT_READ_WAIT_MS, true, 'menu-close');
       if (!after.readFailed && !after.menu && (after.state !== 'unknown' || after.screenState === 'running')) return { ok: true, snapshot: after };
     } while (now() < deadline);
     return { ok: false, notSent: true, code: 'codeagent-menu-open', message: '终端里有未关闭的菜单，请到终端确认' };
@@ -117,14 +118,14 @@ function createCodeAgentInputGuard(manager, {
       input: { token, ...recoveryText(snapshot, last?.session === sessionKey(sid) ? last : null) } };
   }
   async function clear(sid, token) {
-    const snapshot = await read(sid), saved = blocked.get(sid);
+    const snapshot = await read(sid, CODEAGENT_INPUT_READ_WAIT_MS, false, 'clear', true), saved = blocked.get(sid);
     if (snapshot.state === 'empty') { blocked.delete(sid); return { ok: true }; }
     if (!saved || token !== saved.token || saved.session !== sessionKey(sid) || snapshot.state !== 'nonempty' || snapshot.text !== saved.text) return { ...describe(sid, snapshot), ok: false, message: '终端输入已变化或无法确认，请重新取回' };
     manager.writeToSession(sid, '\x15');
     const deadline = now() + 800;
     do {
       await sleep(CODEAGENT_INPUT_POLL_MS);
-      const after = await read(sid);
+      const after = await read(sid, CODEAGENT_INPUT_READ_WAIT_MS, false, 'clear-confirm');
       if (after.state === 'empty') { blocked.delete(sid); return { ok: true }; }
     } while (now() < deadline);
     return { ok: false, notSent: true, message: '尚未确认终端输入已清空，请到终端确认' };
@@ -134,7 +135,7 @@ function createCodeAgentInputGuard(manager, {
     async inspect(sid) { return describe(sid, await read(sid)); },
     async check(sid, options = {}) {
       if (options.preserveInput === true) {
-        const frame = await read(sid, CODEAGENT_INPUT_READ_WAIT_MS, true);
+        const frame = await read(sid, CODEAGENT_INPUT_READ_WAIT_MS, true, 'check-preserve-input', true);
         // Early checks may precede the first editor frame. Only the existing
         // readiness wait may pass this state; the final pre-write check cannot.
         if (options.allowUnready === true && frame.state === 'unknown' && !frame.readFailed && !frame.menu)
@@ -147,13 +148,13 @@ function createCodeAgentInputGuard(manager, {
       }
       let snapshot;
       if (!options.skipMenuClose) {
-        const frame = await read(sid, CODEAGENT_INPUT_READ_WAIT_MS, true);
+        const frame = await read(sid, CODEAGENT_INPUT_READ_WAIT_MS, true, 'check');
         const closed = await closeMenu(sid, frame);
         if (!closed.ok) return closed;
         snapshot = closed.snapshot;
-      } else snapshot = await read(sid);
+      } else snapshot = await read(sid, CODEAGENT_INPUT_READ_WAIT_MS, false, 'check');
       if (snapshot.state === 'unknown' && !snapshot.readFailed) {
-        diagnose('input-read-failed'); snapshot = { state: 'unknown', text: '', readFailed: true };
+        diagnose('input-read-failed', { reason: 'frame-unrecognized', stage: 'check', sendBlocked: false }); snapshot = { state: 'unknown', text: '', readFailed: true };
       }
       const result = describe(sid, snapshot);
       if (!result.input) return result;
@@ -195,7 +196,7 @@ function createCodeAgentInputGuard(manager, {
           log('finished');
           return { ok: true, stopRequested: true, notSent: true };
         }
-        const before = await read(sid, CODEAGENT_INPUT_READ_WAIT_MS, true);
+        const before = await read(sid, CODEAGENT_INPUT_READ_WAIT_MS, true, 'stop-before');
         preRunning = before.screenState === 'running' && !before.menu ? 'running'
           : !before.readFailed && !before.menu && before.screenState === 'idle' ? 'idle' : 'unknown';
         decision = preRunning === 'running' ? 'screen-running' : preRunning === 'idle' ? 'screen-idle' : 'runtime-fallback';
@@ -218,7 +219,7 @@ function createCodeAgentInputGuard(manager, {
         manager.writeToSession(sid, '\x1b');
         escSent = 2;
         log('esc-second');
-        const afterEsc = await read(sid, CODEAGENT_INPUT_READ_WAIT_MS, true);
+        const afterEsc = await read(sid, CODEAGENT_INPUT_READ_WAIT_MS, true, 'stop-after-esc');
         if (afterEsc.menu) {
           const closed = await closeMenu(sid, afterEsc);
           rewindMenuClosed = closed.ok;
@@ -232,7 +233,7 @@ function createCodeAgentInputGuard(manager, {
           const state = getSessionRuntimeTruth(manager.getSession(sid)).state;
           if (state !== lastState) { log('runtime', { mainState: state }); lastState = state; }
           if (lastState !== mainState && !['running', 'unknown', 'starting'].includes(state)) changed = true;
-          let snapshot = await read(sid, Math.min(CODEAGENT_INPUT_READ_WAIT_MS, Math.max(1, deadline - now())), true);
+          let snapshot = await read(sid, Math.min(CODEAGENT_INPUT_READ_WAIT_MS, Math.max(1, deadline - now())), true, 'stop-recover');
           if (snapshot.menu) {
             const closed = await closeMenu(sid, snapshot);
             rewindMenuClosed = closed.ok;

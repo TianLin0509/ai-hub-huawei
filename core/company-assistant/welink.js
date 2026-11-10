@@ -124,7 +124,7 @@ async function findCliDeep({ env = process.env, fsModule = fs, execFileImpl, tim
 // onData：边跑边拿到目前为止的全部输出（扫码登录要在命令结束前把二维码显示出来）。
 function run(args, { cli, timeoutMs = 30000, allowSetup = false, sendGroup = '', env = process.env, spawnFn = spawn, onData = null, signal = null } = {}) {
   const list = checkArgs(args, { allowSetup, sendGroup });
-  if (!cli) return Promise.reject(Object.assign(new Error('没找到 welink-cli：公司电脑上需先安装（npm 全局包 @welink/welink-cli）'), { code: 'WELINK_MISSING' }));
+  if (!cli) return Promise.reject(Object.assign(new Error('没找到 welink-cli：请在当前页面点「一键安装」或「查找或一键安装」'), { code: 'WELINK_MISSING' }));
   const isScript = /\.(?:c?js)$/i.test(cli);
   const cmd = isScript ? process.execPath : cli;
   const argv = isScript ? [cli, ...list] : list;
@@ -358,7 +358,7 @@ function loginNeedsScan(text) {
 const SPAWN_RETRY = new Set(['EBUSY', 'EPERM', 'EACCES', 'ENOENT', 'UNKNOWN']);
 const AUTH_FAILURE = /(?:token|session)\s*(?:is\s*)?(?:expired|invalid)|unauthenticated|not\s+authenticated|not\s+logged\s*in|未登录|登录(?:已)?(?:过期|失效)|no\s+token|\buser\s+token\s+not\s+found\b|refresh\s+token\s+invalid|run:?\s*['"`]?welink-cli\s+auth\s+login/i;
 const FRIENDLY = [
-  [e => e.code === 'WELINK_MISSING', () => '没找到 welink-cli：请在公司电脑上安装（npm 全局包 @welink/welink-cli），装好后 Hub 会自动找到'],
+  [e => e.code === 'WELINK_MISSING', () => '没找到 welink-cli：请在当前页面点「一键安装」或「查找或一键安装」，装好后会自动填入路径'],
   [e => e.syscall === 'spawn' || SPAWN_RETRY.has(e.code), () => 'welink-cli 暂时打不开（可能正在升级或被占用），Hub 稍后自动重试'],
   [e => e.code === 'WELINK_TIMEOUT', e => { const s = /(\d+)\s*秒/.exec(e.message || ''); return `WeLink 这次响应太慢${s ? `（超过 ${s[1]} 秒）` : ''}，已跳过，稍后自动重试`; }],
   [e => e.code === 'WELINK_CLEANUP_TIMEOUT', () => 'WeLink 上一条查询还没退出，稍后自动重试'],

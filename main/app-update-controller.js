@@ -125,7 +125,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       const asset = plan.kind === 'incremental' ? (variant === 'delta' ? manifest.incrementalDelta : manifest.incremental) : plan.kind === 'full' ? manifest.installer : null;
       plan = { ...plan, variant, asset };
       const checked = emit({ phase: plan.kind === 'none' ? 'none' : 'available', checks, checkedAt: new Date().toISOString(), error: null,
-        latest: { version: manifest.version, notes: manifest.notes, publishedAt: manifest.publishedAt, sourceName: best.name, notify: isNotableUpdate(currentVersion, manifest.version), canary: manifest.canary || null },
+        latest: { version: manifest.version, notes: manifest.notes, publishedAt: manifest.publishedAt, sourceName: best.name, installer: manifest.installer, notify: isNotableUpdate(currentVersion, manifest.version), canary: manifest.canary || null },
         plan: { kind: plan.kind, variant: plan.variant, reason: plan.reason, bytes: plan.asset ? plan.asset.bytes : 0, file: plan.asset ? plan.asset.file : null } });
       if (quietAllowed && shouldQuietDownload(resDir)) void quietDownload();
       return checked;

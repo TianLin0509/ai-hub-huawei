@@ -1579,6 +1579,12 @@ test('real PTY submission guards ordinary, skill and interactive prompts; non-Co
   assert.equal(f.writes.filter(data => data === '\r').length, 1);
   const diagnostic = fs.readFileSync(path.join(process.env.CLAUDE_HUB_DATA_DIR, 'logs', 'codeagent-input.log'), 'utf8');
   assert.match(diagnostic, /input-read-failed/); assert.doesNotMatch(diagnostic, /private|account|unknown|prompt/);
+  const { reason, stage, sendBlocked } = JSON.parse(diagnostic.trim().split('\n').at(-1));
+  assert.deepEqual({ reason, stage, sendBlocked }, { reason: 'target-check-failed', stage: 'before-send', sendBlocked: false });
+  assert.equal((await require('../core/codeagent-input-guard').codeAgentInputGuard(f.manager).check('test', { preserveInput: true })).notSent, true);
+  const denied = JSON.parse(fs.readFileSync(path.join(process.env.CLAUDE_HUB_DATA_DIR, 'logs', 'codeagent-input.log'), 'utf8').trim().split('\n').at(-1));
+  assert.deepEqual([denied.reason, denied.stage, denied.sendBlocked], ['open-screen-failed', 'check-preserve-input', true]);
+  assert.doesNotMatch(JSON.stringify(denied), /private|account|unknown|prompt/);
 });
 
 test('a stalled terminal screen read times out without blocking submission', async () => {

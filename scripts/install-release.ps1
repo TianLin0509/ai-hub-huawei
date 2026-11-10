@@ -1,7 +1,7 @@
-# Windows PowerShell 5.1+. No Node, Git, admin rights or existing Hub required.
+﻿# Windows PowerShell 5.1+. No Node, Git, admin rights or existing Hub required.
 [CmdletBinding()]
 param(
-  [ValidatePattern('^v?\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$')][string]$Version = 'v5.5.67',
+  [ValidatePattern('^v?\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$')][string]$Version = 'v5.5.68',
   [string]$Destination = (Join-Path $env:LOCALAPPDATA 'Programs\AIHubCommunity'),
   [string]$PackagePath,
   [string]$ChecksumPath,
@@ -15,9 +15,6 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-# Corporate proxies often require the signed-in Windows account (NTLM/Kerberos).
-try { $proxy = [Net.WebRequest]::DefaultWebProxy; if ($proxy) { $proxy.Credentials = [Net.CredentialCache]::DefaultNetworkCredentials } } catch { }
 $repo = 'TianLin0509/ai-hub-huawei'
 $tag = 'v' + $Version.TrimStart('v')
 $asset = 'AIHubHuawei-' + $tag.Substring(1) + '-win-x64.zip'
@@ -26,9 +23,13 @@ $success = $false
 function Write-Receipt($value) {
   $json = $value | ConvertTo-Json -Depth 5
   if ($ResultPath) {
-    $receiptPath = [IO.Path]::GetFullPath($ResultPath)
-    [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($receiptPath)) | Out-Null
-    [IO.File]::WriteAllText($receiptPath, $json, (New-Object Text.UTF8Encoding($false)))
+    $receiptDir = Split-Path -Parent $ResultPath
+    if ($receiptDir) { New-Item -ItemType Directory -Path $receiptDir -Force | Out-Null }
+    if ($ExecutionContext.SessionState.LanguageMode -eq 'FullLanguage') {
+      [IO.File]::WriteAllText($ResultPath, $json, (New-Object System.Text.UTF8Encoding $false))
+    } else {
+      Set-Content -LiteralPath $ResultPath -Value $json -Encoding UTF8
+    }
   }
   Write-Output $json
 }
@@ -62,6 +63,10 @@ function Reject-ReparseAncestors([string]$candidate) {
   }
 }
 try {
+  if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') { throw '当前 PowerShell 处于受限语言模式，无法运行安装脚本。请下载完整安装包并解压使用，或联系 IT 开放脚本运行权限。' }
+  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+  # Corporate proxies often require the signed-in Windows account (NTLM/Kerberos).
+  try { $proxy = [Net.WebRequest]::DefaultWebProxy; if ($proxy) { $proxy.Credentials = [Net.CredentialCache]::DefaultNetworkCredentials } } catch { }
   if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') { throw 'This release supports Windows x64 only.' }
   if ([bool]$PackagePath -ne [bool]$ChecksumPath) { throw 'Offline installation requires both -PackagePath and -ChecksumPath.' }
   $base = [IO.Path]::GetFullPath($Destination)

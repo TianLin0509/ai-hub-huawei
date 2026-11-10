@@ -81,9 +81,10 @@ class MeetingCompanion {
     if (on && this.awakeId == null) this.awakeId = blocker.start('prevent-display-sleep');
     else if (!on && this.awakeId != null) { blocker.stop(this.awakeId); this.awakeId = null; }
   }
-  save(m) { write(path.join(this.dir(m.id), 'meeting.json'), m); this.trackPending(m); this.a.changed?.(); }
+  save(m) { write(path.join(this.dir(m.id), 'meeting.json'), m); this.listCache?.delete(m.id); this.trackPending(m); this.a.changed?.(); }
   start() {
     if (this.timer) return;
+    this.closed = false;
     void this.tools.start().catch(e => { this.lastError = e.message; });
     if (!this.recovered) {
       for (const id of this.ids()) {
@@ -99,7 +100,7 @@ class MeetingCompanion {
     }
     this.timer = setInterval(() => { void this.tick(); }, 1000); this.timer.unref?.();
   }
-  close() { this.keepAwake(false); clearInterval(this.timer); this.timer = null; this.asr.close(); this.tools.close(); this.frames.close(); }
+  close() { this.closed = true; this.keepAwake(false); clearInterval(this.timer); this.timer = null; this.asr.close(); this.tools.close(); this.frames.close(); }
   ownsSession(id) { return !!id && this.ids().some(k => { const m = this.load(k); return m.sessionId === id || m.questionSessionId === id; }); }
   // 用户反馈：历史会议改不了名字。空名字不改；已有会话和纪要内容不受影响。
   rename(id, title) {
@@ -108,7 +109,17 @@ class MeetingCompanion {
     if (next !== m.title) { m.title = next; this.save(m); }
     return m;
   }
-  list() { return this.ids().map(id => { const m = this.load(id); return { id, title: m.title, startedAt: m.startedAt, state: m.state, pages: m.events.filter(e => e.kind === 'slide').length, videoBytes: m.recording?.bytes || 0 }; }).sort((a, b) => b.startedAt - a.startedAt); }
+  list() {
+    this.listCache ||= new Map();
+    const ids = this.ids(), present = new Set(ids);
+    for (const id of this.listCache.keys()) if (!present.has(id)) this.listCache.delete(id);
+    return ids.map(id => {
+      const { mtimeMs, size } = fs.statSync(path.join(this.dir(id), 'meeting.json')), cached = this.listCache.get(id);
+      if (cached?.mtimeMs === mtimeMs && cached.size === size) return cached.summary;
+      const m = this.load(id), summary = { id, title: m.title, startedAt: m.startedAt, state: m.state, pages: m.events.filter(e => e.kind === 'slide').length, videoBytes: m.recording?.bytes || 0 };
+      this.listCache.set(id, { mtimeMs, size, summary }); return summary;
+    }).sort((a, b) => b.startedAt - a.startedAt);
+  }
   create({ title, sourceName, audio = [], speed = 'normal' } = {}) {
     this.start();
     if (this.list().some(m => ACTIVE.has(m.state))) throw new Error('已有会议在采集，请先结束它');
@@ -323,12 +334,22 @@ class MeetingCompanion {
     const lane = this.lane(slot), latest = this.load(id);
     if (latest[slot]?.token !== job.token) return;
     latest[slot].inputChars = (job.inputChars || 0) + prompt.length; latest[lane.chars] = (latest[lane.chars] || 0) + latest[slot].inputChars; this.save(latest);
-    const receipt = await this.deps.sendPrompt(job.sessionId, prompt, job.token);
+    let receipt;
+    const since = this.now();
+    for (;;) {
+      if (this.closed || this.load(id)[slot]?.token !== job.token) return;
+      receipt = await this.deps.sendPrompt(job.sessionId, prompt, randomUUID());
+      // 只重发明确没送出的请求；未确认的提交仍交给原有收集流程。
+      if (!receipt?.notSent || receipt.error !== 'cli-not-ready') break;
+      if (this.now() - since >= 5 * 60000) throw new Error('CodeAgent 还没启动好，稍后点重试');
+      await new Promise(resolve => setTimeout(resolve, this.deps.notReadyRetryMs ?? 15000));
+    }
     const after = this.load(id); if (after[slot]?.token !== job.token) return;
     if (!receipt || receipt.notSent || (receipt.ok === false && !receipt.unconfirmed && receipt.sendStatus !== 'stuck')) throw new Error(receipt?.error || '会议请求没有送达 CodeAgent');
     after[slot].state = receipt.unconfirmed || receipt.sendStatus === 'stuck' ? 'unconfirmed' : 'running'; this.save(after);
   }
   fail(id, e, slot = 'job') {
+    if (/cli-not-ready/.test(e.message)) e = new Error(e.message.replace(/cli-not-ready/g, 'CodeAgent 还没启动好，稍后点重试'));
     if (!id) { this.lastError = e.message; return; }
     const latest = this.load(id), lane = this.lane(slot), job = latest[slot]; latest[lane.error] = e.message;
     const q = latest.answers.find(q => q.id === job?.questionId) || (slot === 'questionJob' ? latest.answers.find(q => q.state === 'queued') : null); if (q) { q.state = 'error'; q.error = e.message; }

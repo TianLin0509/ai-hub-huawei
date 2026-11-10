@@ -169,7 +169,7 @@ export async function identityRegion({ identityUrl, credential }, { readToken, f
 // Plain words for "no usable login": which login and what to do. Logging in again clears it without a restart.
 export function loginNeededMessage({ personal = false, poolAccounts = 0 } = {}) {
   const what = [personal ? '你自己的 CodeAgent 登录' : '', poolAccounts ? `号池里 ${poolAccounts} 个号的登录` : ''].filter(Boolean).join('和') || '公司账号的登录';
-  const how = [personal ? '打开 CodeAgent 命令行登录一下' : '', poolAccounts ? '到 Hub 账号页把这些号重新登录' : ''].filter(Boolean).join('；') || '打开 CodeAgent 登录一下';
+  const how = [personal ? '到 Hub「账号」页点击个人账号的「登录」' : '', poolAccounts ? '到 Hub 账号页把这些号重新登录' : ''].filter(Boolean).join('；') || '到 Hub「账号」页点击个人账号的「登录」';
   return `公司模型需要重新登录：${what}过期了或读不出来（不是限流）。请${how}，登录后会自动恢复，不用重启 Hub。`;
 }
 

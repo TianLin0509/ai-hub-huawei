@@ -485,11 +485,13 @@
   // ---------- 问助理（2026-11-09） ----------
   const askEl = $('ask'), askInput = $('ask-input'), askNote = $('ask-note'), askSend = $('ask-send');
   let askCloseTimer = 0, askSending = false;
+  let enableAssistant = false, pendingQuestion = '';
   function openAsk() {
     clearTimeout(askCloseTimer);
     panelEl.hidden = true;
     askEl.hidden = false;
     askSend.disabled = false;
+    enableAssistant = false; pendingQuestion = ''; askSend.textContent = '交给助理';
     askNote.textContent = '回车发送 · Esc 关闭';
     askNote.classList.remove('bad');
     layoutOverlays();
@@ -505,13 +507,14 @@
   }
   askEl.addEventListener('submit', e => {
     e.preventDefault();
-    const text = askInput.value.trim();
+    const text = enableAssistant ? pendingQuestion : askInput.value.trim();
     if (!text) { askInput.focus(); return; }
     if (askSending) return;   // 连按回车只交一次
     askSending = true;
     askSend.disabled = true;
     askNote.textContent = '正在交给助理…';
-    api.ask?.(text);
+    pendingQuestion = text;
+    api.ask?.(text, enableAssistant);
   });
   askInput.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); askEl.requestSubmit(); }
@@ -524,11 +527,14 @@
   api.onAskResult?.(r => {
     askSending = false;
     if (r && r.ok) {
+      enableAssistant = false; pendingQuestion = ''; askSend.textContent = '交给助理';
       askInput.value = '';
       askNote.textContent = '交给助理了，答好了我举牌告诉你';
       askCloseTimer = setTimeout(closeAsk, 1400);
     } else {
       askSend.disabled = false;
+      enableAssistant = r?.enableAssistant === true;
+      askSend.textContent = enableAssistant ? '开启助理并发送' : '交给助理';
       askNote.textContent = (r && r.error) || '没交出去，再试一次';
       askNote.classList.add('bad');
     }

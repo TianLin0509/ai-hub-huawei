@@ -805,7 +805,7 @@ test('sticky notice stays until closed and does not stack duplicates', () => {
   first.children[1].listeners.click();
   assert.equal(stack.children.length, 1);
   const rendererSource = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'renderer.js'), 'utf8');
-  assert.match(rendererSource, /payload\.persistent === true\) require\('\.\/sticky-notice\.js'\)\.showStickyNotice/);
+  assert.match(rendererSource, /payload\.persistent === true\) \{\s*const notices = require\('\.\/sticky-notice\.js'\);\s*const notice = notices\.showStickyNotice/);
 });
 
 // ---------- Codex tool history replay (company Q-1106-04 r7: real DeepSeek, no thinking, second turn refused) ----------
@@ -1607,7 +1607,7 @@ test('review 2: an expired / unreadable login is "login needed" (401, plain word
     makeProvider: (account, { onCredentialFailure }) => ({ complete: async () => { if (broken.has(account.id)) { onCredentialFailure(); throw new Error('expired'); } return sse(); } }) });
   const error = await router.complete({ model: 'GLM-5.2-WX' }, { sessionTag: 's' }).catch(e => e);
   assert.equal(error.code, 'COMPANY_LOGIN_NEEDED'); assert.equal(error.status, 401); assert.equal(error.personal, true);
-  assert.match(loginNeededMessage(error), /需要重新登录：你自己的 CodeAgent 登录过期了或读不出来（不是限流）。请打开 CodeAgent 命令行登录一下/);
+  assert.match(loginNeededMessage(error), /需要重新登录：你自己的 CodeAgent 登录过期了或读不出来（不是限流）。请到 Hub「账号」页点击个人账号的「登录」/);
   assert.match(loginNeededMessage({ poolAccounts: 2 }), /号池里 2 个号的登录.*到 Hub 账号页把这些号重新登录/);
   // A real rate limit still reads as one, even when another account needs a login.
   const limited = createAccountRouter({ listAccounts: () => [{ id: 'pool111', kind: 'pool' }, { id: 'personal', kind: 'personal' }],

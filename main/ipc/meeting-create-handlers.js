@@ -186,6 +186,7 @@ function createMeetingSubAdder(deps) {
     if (meeting?.groupChat && (meeting.mode === 'dev' || meeting.scene === 'dev')
         && ['codex', 'codex-resume', 'claude', 'claude-resume'].includes(kind)) sessionOpts.lazyStart = true;
     if (ensureLaunchAuth) await ensureLaunchAuth(kind,sessionOpts);
+    await require('../../core/codeagent-capabilities').prepareForKind(kind);
     const session = await require('../session-model-creation').createSessionWithModelPolicy({ kind, opts: sessionOpts,
       contextLabel: `群聊 ${meeting?.title || meetingId} / ${sessionOpts.title || kind}`,
       create: (runtimeKind, launchOpts) => sessionManager.createSession(runtimeKind, launchOpts),

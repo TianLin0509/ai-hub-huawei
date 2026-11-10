@@ -42,7 +42,7 @@ function proxyBadge(status, model = '') {
   const poolOk = pool.filter(a => usable(a) && allowed(a));
   if (accounts.length && !accounts.some(usable)) {
     if (accounts.every(a => a.paused || a.coolingReason === 'credential')) {
-      return { state: 'needs', text: '需要在 CodeAgent 登录', tip: '公司模型的账号登录都读不出来（可能过期）。打开 CodeAgent 命令行登录一下，号池的号到「账号」页重新登录；登录后自动恢复。' };
+      return { state: 'needs', text: '需要在 CodeAgent 登录', tip: '公司模型的账号登录都读不出来（可能过期）。请到 Hub「账号」页点击个人账号的「登录」，号池的号也在该页重新登录；登录后自动恢复。' };
     }
     if (accounts.some(a => a.coolingReason === 'rate_limit')) return { state: 'busy', text: '号都在限流冷却', tip: '号池和个人号都被限流，冷却后自动恢复。' };
     return { state: 'needs', text: '号都已暂停', tip: '账号页里把号都暂停了，恢复一个号就能用。' };
@@ -61,7 +61,7 @@ function companyModels(provider) {
 // 打开启动中心时默认选中的卡：该工具在「自有 API」里保存的来源和模型（也就是上次选的）。
 function defaultPick(kind, provider) {
   if (!provider) return null;
-  if (provider.backend === 'proxy' || kind === 'deepseek-acp') {
+  if (provider.backend === 'proxy' || kind === 'deepseek-acp' || provider.companyDefault === true && provider.backend === 'local') {
     const models = companyModels(provider);
     const model = models.some(m => m.id === provider.model) ? provider.model : models[0]?.id || '';
     return { source: 'company', model };
@@ -76,7 +76,7 @@ function saveRequest(kind, provider, pick) {
     return provider.backend === 'proxy' && provider.model === pick.model ? null : { kind, backend: 'proxy', model: pick.model };
   }
   if (kind === 'deepseek-acp') return null;
-  return provider.backend === 'proxy' ? { kind, backend: 'own' } : null;
+  return provider.backend === 'proxy' || provider.companyDefault === true ? { kind, backend: 'own' } : null;
 }
 
 function cardsFor(kind, provider, status, pick) {

@@ -25,6 +25,8 @@ test('旧清单下载全部 404：自动重查并改下新版本', async () => {
   const c = make(async url => { url = String(url); urls.push(url); if (url.endsWith('latest.json')) return respJson(manifest(latest)); return resp404(); });
   await c.check({ silent: true, quietAllowed: false });
   assert.equal(c.getState().latest.version, '5.5.13');
+  assert.equal(c.view().plan.kind, 'incremental');
+  assert.deepEqual(c.view().latest.installer, manifest('5.5.13').installer);
   latest = '5.5.14'; urls.length = 0;
   await c.download();
   const s = c.getState();
@@ -32,6 +34,7 @@ test('旧清单下载全部 404：自动重查并改下新版本', async () => {
   assert.equal(s.latest.version, '5.5.14');
   assert.ok(urls.some(u => u.includes('5.5.14')), '改下新版本');
   assert.equal(s.phase, 'error'); // 替身源上新版文件也是 404，只重试一次，不循环
+  assert.deepEqual(c.view().latest.installer, manifest('5.5.14').installer);
   assert.equal(urls.filter(u => u.endsWith('latest.json')).length, 1);
 });
 

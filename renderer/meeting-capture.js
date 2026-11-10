@@ -43,10 +43,23 @@ class MeetingCapture {
       this.video = this.d.createElement('video'); this.video.muted = true; this.video.srcObject = stream; await this.video.play();
       for (const t of stream.getVideoTracks()) t.onended = () => { this.disconnected = true; void this.pause('共享画面断开').catch(e => this.status(e.message)); this.status('共享画面已断开，请结束会议并重新选择窗口'); };
       if (audio.system) this.audio(stream, 'system');
-      if (audio.mic) { const mic = await this.w.navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false }); this.streams.push(mic); this.audio(mic, 'mic'); }
+      if (audio.mic) {
+        let mic;
+        try { mic = await this.w.navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true }, video: false }); }
+        catch (e) {
+          audio.mic = false;
+          const reason = { NotAllowedError: '麦克风权限被拒绝', NotFoundError: '没找到麦克风', NotReadableError: '麦克风被占用或无法读取' }[e.name] || '麦克风暂时不可用';
+          this.warning = reason + (audio.system ? '，本场只录电脑声音' : '，本场只录画面'); this.status(this.warning);
+        }
+        if (mic) { this.streams.push(mic); this.audio(mic, 'mic'); }
+      }
       this.recorder = new MeetingRecorder({ window: this.w, streams: this.streams, elapsed: () => this.elapsed(), save: this.save, waitMs: this.waitMs, onError: message => { void this.pause('录屏保存异常').catch(() => {}); this.status('录像出错：' + message + '。已录的内容都在，请先点「重试保存」。'); } });
       await this.recorder.open();
-    } catch (e) { await this.dispose(); throw e; }
+    } catch (e) {
+      const message = { NotAllowedError: '采集权限被拒绝，请在系统隐私设置中允许访问后重试', NotFoundError: '未找到共享设备，请刷新并重新选择窗口或屏幕', NotReadableError: '共享设备被占用或无法读取，请关闭占用程序后重试' }[e.name];
+      if (message) e = new Error(message);
+      await this.dispose(); throw e;
+    }
   }
   audio(stream, track) {
     const ctx = new this.w.AudioContext({ sampleRate: 16000 }), src = ctx.createMediaStreamSource(stream), proc = ctx.createScriptProcessor(4096, 1, 1), mute = ctx.createGain(); mute.gain.value = 0;

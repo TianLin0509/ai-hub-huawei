@@ -296,7 +296,7 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
       // 2026-11-07：没找到时不再让用户去设置页填路径，而是走 Hub 的自动发现（与助理页同一套，多个版本时可切换）。
       const test = state.messageTest?.state === 'running' ? ' · 正在发送测试消息…' : state.messageTest?.state === 'done' ? ' · 测试消息已发送' : state.messageTest?.error ? ' · ' + state.messageTest.error : '';
       slot('cli').innerHTML = state.cliAvailable ? escape('已找到 welink-cli' + test)
-        : escape('还没找到 welink-cli' + test) + ' ' + button('find-cli', '自动查找', 'sec', 'cr-btn-sm');
+        : escape('还没找到 welink-cli' + test) + ' ' + button('find-cli', '查找或一键安装', 'sec', 'cr-btn-sm');
       slot('pending-n').textContent = pendingCount ? String(pendingCount) : '';
       slot('pending').innerHTML = (state.pending || []).map(p => `<div class="cr-item"><span class="cr-svc">${icon('bell', 15)}</span><span class="cr-grow">${escape(p.description)}</span><button type="button" class="cr-btn cr-btn-ghost cr-btn-sm" data-cr-op="remove-pending" data-id="${escape(p.id)}">删除</button></div>`).join('') || '<p class="cr-empty">暂无待执行事项</p>';
     }
@@ -345,14 +345,26 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
     if (!draft.抢订日.length) throw Error('至少选择一个抢订日');
     return { ...copy(draft), 主题: topic, 优先会议室: rooms };
   }
-  async function save() { const rules = validate(); const patch = Object.fromEntries([...changed].map(k => [k, rules[k]])); await call('room-command', { op: 'configure', rules: patch }); draft = rules; dirty = false; changed.clear(); }
-  // 自动查找 welink-cli：用 Hub 的自动发现（常见目录 + 全盘找，装了多个版本时默认最新），找到就把路径写进会议室组件的设置。
+  async function save() {
+    if (draft.会后动作.模式 !== '不动作' && !draft.高级['welink-cli路径']) {
+      const status = await call('status');
+      if (status.cliPath) { draft.高级['welink-cli路径'] = status.cliPath; changed.add('高级'); }
+    }
+    const rules = validate(); const patch = Object.fromEntries([...changed].map(k => [k, rules[k]])); await call('room-command', { op: 'configure', rules: patch }); draft = rules; dirty = false; changed.clear();
+  }
+  // 复用 Hub 的自动发现与一键安装；找到后把路径写进会议室组件的设置。
   async function findCli() {
     busy = true; slot('message').textContent = '正在自动查找 welink-cli，最长约 2 分钟…'; updateControls();
     try {
       await call('find-cli');
-      const status = await call('status');
-      if (!status.cliPath) { slot('message').textContent = '这台电脑上没找到 welink-cli。请先在公司电脑安装（npm 全局包 @welink/welink-cli），装好后再点「自动查找」'; return; }
+      let status = await call('status');
+      if (!status.cliPath && status.cliInstallAvailable) {
+        slot('message').textContent = '正在一键安装 welink-cli，装好后会自动填入路径…';
+        const result = await call('install-cli');
+        if (!result.ok) throw new Error(result.error || '安装未完成，请再点「查找或一键安装」重试');
+        status = await call('status');
+      }
+      if (!status.cliPath) { slot('message').textContent = '暂未找到 welink-cli。可在助理页点「一键安装」，或手动选择已安装的工具。'; return; }
       draft.高级['welink-cli路径'] = status.cliPath; dirty = true; changed.add('高级');
       await save();
       const version = status.cliChoice?.current?.version || status.cliVersion;

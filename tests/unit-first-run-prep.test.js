@@ -67,7 +67,40 @@ test('CodeAgent 变化只重做受影响的项', async () => {
   let net = 0;
   const r = await run({ netPass: async () => { net++; return null; } }, 'changed');
   assert.equal(net, 0);
-  assert.deepEqual(Object.keys(r.rows).sort(), ['codeagent', 'hello', 'models', 'proxy', 'sign'].sort());
+  assert.deepEqual(Object.keys(r.rows).sort(), ['codeagent', 'login', 'hello', 'models', 'proxy', 'sign'].sort());
+});
+
+test('CodeAgent 新装或更新后仍检查登录，未登录不能报同步成功', async () => {
+  let reads = 0;
+  const r = await run({ loginState: async () => 'missing', readModels: async () => { reads++; return {}; } }, 'changed');
+  assert.ok(r.problems.includes('login'));
+  assert.equal(r.rows.login.fixes[0].act, 'codeagent-login');
+  assert.equal(r.rows.login.fixes[0].label, '一键登录');
+  assert.equal(r.rows.models.status, 'hold');
+  assert.equal(reads, 0);
+});
+
+test('环境体检、登录和模型读取不等下载服务器放行', async () => {
+  let release, checked = 0, passed = false, loggedIn = 0, models = 0;
+  const gate = new Promise(resolve => { release = () => { passed = true; resolve(null); }; });
+  const pending = run({ netPass: () => gate, loginState: async () => { loggedIn++; return 'ready'; },
+    readModels: async () => { models++; return { ok: true, models: ['GLM'] }; }, envCheck: async () => {
+    checked++; assert.equal(passed, false);
+    return { ok: true, items: [{ id: 'app-update', status: 'ok', detail: '可用' }] };
+  } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(checked, 1); assert.equal(loggedIn, 1); assert.equal(models, 1);
+  release();
+  const result = await pending;
+  assert.equal(checked, 1); assert.equal(result.rows['app-update'].status, 'ok');
+});
+
+test('放行失败也继续检查更新源，其余准备项照常结束', async () => {
+  let checked = false;
+  const result = await run({ netPass: async () => { throw new Error('网络错误'); },
+    envCheck: async () => { checked = true; return { ok: true, items: [{ id: 'app-update', status: 'bad', detail: '连不上' }] }; } });
+  assert.equal(checked, true); assert.equal(result.rows['net-pass'].status, 'warn');
+  assert.equal(result.rows['app-update'].status, 'bad'); assert.equal(result.rows.login.status, 'ok');
 });
 test('读模型太慢不拖住，默认模型不行换下一个；指纹读文件', async () => {
   let n = 0;

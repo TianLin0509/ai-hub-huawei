@@ -61,9 +61,14 @@ function runCli(command, flag, { run = require('child_process').spawnSync, platf
 }
 
 // 返回用来过滤的帮助文本；不该过滤时返回空串（版本读不到、版本不低于 1.2615、帮助不像 CodeAgent 的）。
-function readHelp(command, { run, platform, now = Date.now } = {}) {
+function readHelp(command, { run, exec, platform, now = Date.now } = {}) {
   const hit = helpCache.get(command);
   if (isFresh(hit, command, now())) return hit.text;
+  // 同一程序的过期结果先用，后台更新；发消息时不再同步等待 CLI。
+  if (hit && locate(command, hit.file).stamp === hit.stamp) {
+    void prepare(command, { exec, platform, now });
+    return hit.text;
+  }
   const ticket = { seq: ++probeSeq, ...locate(command) };
   const version = parseVersion(runCli(command, '--version', { run, platform }));
   const text = isOlder(version) ? usableHelp(runCli(command, '--help', { run, platform })) : '';

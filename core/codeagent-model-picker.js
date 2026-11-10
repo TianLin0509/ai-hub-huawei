@@ -741,7 +741,7 @@ async function pickModel({ manager, sid, kind, modelId, configDir, dataDir, send
       }
       // inputUsable：认不出普通输入框（旧版 CodeAgent 画面不同，见 screenHasContent），但菜单已关、输入行没留着「/model」。
       // 自动会话据此照常把问题发出去（main/ipc/session-handlers.js runCodeAgentPick）；用户会话仍按 inputReady 处理。
-      result = { ...result, inputReady: !!ready.value, inputUsable: !!ready.value || inputUsableAfterPick(await screen.lines()) };
+      result = { ...result, inputReady: !!ready.value, inputUsable: !!ready.value || inputUsableAfterPick(await screen.lines(), manager.getSession?.(sid)) };
       if (!ready.value) result = { ...result, ok: false, message: `${result?.message || '模型操作尚未完成'}；尚未确认恢复普通输入框` };
     } catch (error) {
       result = { ...result, ok: false, inputReady: false,
@@ -827,8 +827,14 @@ function screenHasContent(lines) {
 // 最下面的输入行没留着「/model」、画面不是空白。认不出就当不能用，走原来的失败路径。
 // 「↑↓」类操作提示：菜单或选择框还开着（旧版/汉化界面的底栏写法不一，宁可当成没关）。
 const MENU_TRACES = /Select model|Switch model|选择模型|切换模型|Navigate\s*↑\s*↓|↑\s*\/?\s*↓|Back\s+esc|⌕\s*Search/i;
-function inputUsableAfterPick(lines) {
+function loginRequired(lines, session) {
+  // 已完成对话的会话不再按正文里的登录词拦截；首轮只检查底部六行非空内容。
+  return !session?.lastCompletedAt && require('./codeagent-model-probe').NEEDS_LOGIN.test(
+    lines.filter(line => line.trim()).slice(-6).join('\n'));
+}
+function inputUsableAfterPick(lines, session) {
   const screen = Array.isArray(lines) ? lines : String(lines || '').split(/\r?\n/);
+  if (loginRequired(screen, session)) return false;
   if (!screenHasContent(screen) || modelDialogVisible(screen) || screen.some(line => MENU_TRACES.test(line))) return false;
   const promptLine = screen[screen.findLastIndex(line => /^\s*(?:[│┃]\s*)?[─\s]*[❯›>]/.test(line))] || '';
   return !/[❯›>]\s*\/model\b/i.test(promptLine);
@@ -846,6 +852,11 @@ async function beforePrompt(manager, sid, { allowUnready = false, isChoiceDialog
     screen = typeof manager.getSessionBufferSnapshot === 'function' ? await openSessionScreen(manager, sid) : null;
     const lines = screen ? await screen.lines() : String(manager.getSessionBuffer?.(sid) || '').split(/\r?\n/);
     rejectPending();
+    if (loginRequired(lines, manager.getSession?.(sid))) {
+      const message = 'CodeAgent 尚未登录或登录已过期，本条消息未发送。请点击「登录」，完成后再发送。';
+      manager.emit?.('session-notice', { sessionId: sid, level: 'warning', persistent: true, action: 'codeagent-login', message });
+      throw notSent(message, 'codeagent-login-required');
+    }
     const failure = failures.get(sid);
     const inputReady = promptInputAvailable(lines);
     const menuOpen = modelDialogVisible(lines);
@@ -853,9 +864,12 @@ async function beforePrompt(manager, sid, { allowUnready = false, isChoiceDialog
     const choiceOpen = !inputReady && typeof isChoiceDialog === 'function' && !!isChoiceDialog(lines.join('\n'));
     const usable = inputReady || (!menuOpen && !choiceOpen && screenHasContent(lines));
     if (failure) {
-      // 选模型失败已经提示过一次、菜单也关了：之后的消息照常发，不再一直退回。
-      if (usable) failures.delete(sid);
-      if (!usable || !failure.reported) {
+      // 输入框已恢复时提示并继续本条消息，不要求用户重复发送。
+      if (usable) {
+        failures.delete(sid);
+        manager.emit?.('session-notice', { sessionId: sid, level: 'warning', persistent: true,
+          message: `${failure.result?.message || '自动选择模型没成功'}。输入框已恢复，本条消息将沿用 CodeAgent 当前模型发送；也可以重新选择模型。` });
+      } else {
         failure.reported = true;
         throw notSent(failureMessage(failure.result, usable));
       }

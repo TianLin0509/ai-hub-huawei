@@ -58,9 +58,11 @@ function ownSource(raw, kind) {
   return { backend: (o.baseURL || o.apiKey || o.model) ? 'api' : 'local', model: o.model || '' };
 }
 function settings(raw = {}) {
+  const sessions = isCompany() ? require('./state-store').load().sessions : [];
   return Object.fromEntries(KINDS.map(kind => {
     const p = connection(raw, kind);
-    const common = { companyModels: proxyModels().MODELS.map(m => ({ ...m })), own: ownSource(raw, kind) };
+    const common = { companyModels: proxyModels().MODELS.map(m => ({ ...m })), own: ownSource(raw, kind),
+      companyDefault: isCompany() && !raw.providers?.[kind]?.backend && !sessions.some(session => baseKind(session.kind) === kind) };
     if (p.backend === 'proxy') return [kind, { backend: 'proxy', baseURL: '', apiKeySet: false, model: p.model || proxyModels().DEFAULT_MODEL,
       models: proxyModels().MODELS.map(m => ({ ...m })), ...common, ...(kind === 'codex' ? { wireApi: 'responses' } : {}) }];
     return [kind, { backend: backendOf(p), baseURL: p.baseURL || '', apiKeySet: !!p.apiKey, model: p.model || '', ...common,

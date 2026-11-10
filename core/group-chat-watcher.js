@@ -849,7 +849,8 @@ async function sendToPtyImpl(sid, prompt, kind, options = {}) {
       const buf = sessionManager.getSessionBuffer(sid) || '';
       console.warn(`[group-chat] cli not ready for ${kind}(${sid.slice(0, 8)}) after 60s; bufLen=${buf.length}; tail=${JSON.stringify(buf.slice(-160))}`);
       await logStartupBlock(sid, 'cli-not-ready', buf);
-      return {ok:false,notSent:true,sendStatus:'rejected',error:'cli-not-ready',message:'助理启动尚未完成，本条消息未发送；稍后再发送即可。'};
+      const terminalLastLine = require('./env-check').sanitize(stripAnsi(buf).split(/[\r\n]+/).map(line => line.trim()).filter(Boolean).pop() || '').slice(-240);
+      return {ok:false,notSent:true,sendStatus:'rejected',error:'cli-not-ready',terminalLastLine,message:'会话还没就绪（可能在等登录或确认），本条消息未发送；请打开助理会话处理。'};
     }
     sessionManager.setGroupChatReady(sid, true);
   }

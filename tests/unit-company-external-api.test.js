@@ -7,6 +7,26 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+test('company defaults apply only to tools without prior sessions, including resumed sessions', t => {
+  const state = { sessions: [] };
+  t.mock.method(require('../core/state-store'), 'load', () => state);
+  const cards = require('../renderer/launch-model-cards');
+  for (const kind of ['claude', 'codex']) {
+    const otherKind = kind === 'claude' ? 'codex' : 'claude';
+    for (const savedKind of [kind, `${kind}-resume`]) {
+      state.sessions = [{ kind: savedKind }];
+      const view = api.settings({});
+      assert.equal(view[kind].companyDefault, false);
+      const pick = cards.defaultPick(kind, view[kind]);
+      assert.equal(pick.source, 'own');
+      assert.equal(cards.saveRequest(kind, view[kind], pick), null);
+      assert.equal(view[otherKind].companyDefault, api.isCompany());
+      const saved = api.withSettings({}, { kind, backend: 'proxy', model: 'GLM-5.2-WX' });
+      assert.equal(cards.defaultPick(kind, api.settings(saved)[kind]).source, 'company');
+    }
+  }
+});
+
 test('external single-session tools do not become company dream or group runtimes', () => {
   for (const kind of [...api.KINDS, 'powershell']) {
     assert.doesNotThrow(() => policy.assertKind(kind));
@@ -124,7 +144,7 @@ test('blank key preserves a saved key and a new empty form uses the installed CL
   assert.equal(next.providers.claude.api_key, 'fixture-api-key');
   assert.equal(api.withSettings({}, request('claude', { apiKey: '' })).providers.claude.api_key, '');
   const local = api.withSettings(saved, { kind: 'claude', useLocal: true });
-  const { companyModels, own, ...connection } = api.settings(local).claude;
+  const { companyModels, own, companyDefault, ...connection } = api.settings(local).claude;
   assert.deepEqual(connection, { backend: 'local', baseURL: '', apiKeySet: false, model: '' });
   assert.deepEqual(own, { backend: 'local', model: '' }); // launch center: the own-source card
   assert.equal(companyModels.length, 2);

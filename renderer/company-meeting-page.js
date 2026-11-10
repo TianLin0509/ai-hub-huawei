@@ -10,7 +10,11 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
   let root, id = null, capture, state, poll, sourceList = [], playback = null, playRequest = 0;
   let busy = false, refreshing = false, evidenceRequest = 0, thumbsObserver, meterTimer, activeSeq = null, revealQuestion = false;
   const thumbCache = new Map();
-  function message(s) { if (root) root.querySelector('[data-m="message"]').textContent = s; }
+  function message(s) {
+    if (!root) return;
+    root.querySelector('[data-m="message"]').textContent = String(s || '').replace(/cli-not-ready/g, 'CodeAgent 还没启动好，稍后点重试');
+    root.querySelector('[data-m="agent-help"]').innerHTML = window.HubErrorCard?.knownHtml({ area: 'codeagent', details: s }) || '';
+  }
   // 改会议名称：点标题旁的笔变成输入框，回车或点别处保存，Esc 放弃。
   function startRename() {
     const title = el('session-title'), meetingId = id, current = state?.meeting?.title || '';
@@ -88,7 +92,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
     const refs = [...new Set(String(q.answer || '').match(/\[(?:事件\s*\d+|画面\s*\d+:\d{2})\]/g) || [])];
     const answer = String(q.answer || '').replace(/\[(?:事件\s*\d+|画面\s*\d+:\d{2})\]/g, '').trim();
     const answerBody = `<div class="meeting-answer-body">${markdown(answer)}</div>`;
-    const error = String(q.error || '暂时没有收到回答').trim();
+    const error = String(q.error || '暂时没有收到回答').replace(/cli-not-ready/g, 'CodeAgent 还没启动好，稍后点重试').trim();
     const errorSentence = error + (/[。！？.!?]$/.test(error) ? '' : '。');
     const clipped = q.truncated ? '<p class="meeting-question-error">回答过长，仅保留部分内容。</p>' : '';
     const sources = refs.length ? `<span class="meeting-question-sources">依据 ${refs.map(esc).join(' ')}</span>` : '';
@@ -279,7 +283,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       const pendingBox = el('question-pending');
       pendingBox.hidden = !pending.length;
       pendingBox.innerHTML = pending.length ? `<i aria-hidden="true"></i><span>${pending.length} 个问题处理中 · 答案会插回时间流</span>` : '';
-      if (state.recordingError || m?.error || m?.asrError || rec?.full?.durationError) message(state.recordingError || m.error || m.asrError || rec?.full?.durationError);
+      if (state.recordingError || m?.error || m?.questionError || m?.asrError || rec?.full?.durationError) message(state.recordingError || m.error || m.questionError || m.asrError || rec?.full?.durationError);
       renderFlow(m); renderNavigation(m); renderReviewHero(m);
       const summary = el('summary'), html = m?.summary ? markdown(plainMinutes(m.summary)) : EMPTY_SUMMARY;
       if (summary.dataset.html !== html) { summary.innerHTML = html; citations(summary); summary.dataset.html = html; }
@@ -306,7 +310,8 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       let captureId;
       const next = new MeetingCapture({ document, window, save: r => call('meeting-capture', { id: captureId, ...r }), status: message });
       await next.open(selected, audio);
-      try { const r = await call('meeting-start', { title: root.querySelector('[data-m="title"]').value, sourceName: sourceList.find(s => s.id === selected)?.name, audio: Object.keys(audio).filter(k => audio[k]) }); id = captureId = r.meeting.id; resetPlayer(); capture = next; capture.start(crop); el('live').srcObject = capture.video.srcObject; await el('live').play(); view('live'); el('setup').open = false; if (r.diskWarning) message(r.diskWarning); else message('已开始连续录屏。原始画面和声音本地留底，CodeAgent 默认只读取提炼图文；截图区域不裁掉原始录像。'); }
+      root.querySelector('[data-m="mic"]').checked = audio.mic;
+      try { const r = await call('meeting-start', { title: root.querySelector('[data-m="title"]').value, sourceName: sourceList.find(s => s.id === selected)?.name, audio: Object.keys(audio).filter(k => audio[k]) }); id = captureId = r.meeting.id; resetPlayer(); capture = next; capture.start(crop); el('live').srcObject = capture.video.srcObject; await el('live').play(); view('live'); el('setup').open = false; message([next.warning, r.diskWarning].filter(Boolean).join('；') || '已开始连续录屏。原始画面和声音本地留底，CodeAgent 默认只读取提炼图文；截图区域不裁掉原始录像。'); }
       catch (e) {
         let cleanupError;
         try { await next.dispose(); } catch (error) { cleanupError = error; }

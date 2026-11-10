@@ -100,7 +100,7 @@ class RoomBooking {
     return state;
   }
   start() {
-    if (this.deps.noTimer) return;
+    if (this.deps.noTimer || this.timer) return;
     this.timer = setInterval(() => { void this.tick().catch(e => { this.error = e.message; this.a.changed(); }); }, 15000);
   }
   close() { clearInterval(this.timer); this.timer = null; }

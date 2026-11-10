@@ -80,6 +80,15 @@
   const mb = n => n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round((n || 0) / 1024))} KB`;
   const eta = s => s == null ? '' : s >= 60 ? `剩余约 ${Math.ceil(s / 60)} 分钟` : `剩余约 ${Math.max(1, s)} 秒`;
 
+  function manualDownload() {
+    if (state?.releasePage) return { url: state.releasePage, label: '打开发布页手动下载' };
+    const file = state?.latest?.installer?.file || (state?.plan?.kind === 'full' ? state.plan.file : null);
+    const source = distribution.updateConfig.sources?.find(s => s.files && s.name === state?.latest?.sourceName)
+      || distribution.updateConfig.sources?.find(s => s.files);
+    if (!file || !state?.latest?.version || !source) return null;
+    return { url: require('../core/app-update/downloader').fileUrl(source, state.latest.version, file), label: '下载完整安装包' };
+  }
+
   function sourceRows() {
     const attempts = state.attempts || [];
     const byId = new Map(attempts.map(a => [a.id, a]));
@@ -179,13 +188,16 @@
     } else if (s.phase === 'error') {
       // 5.5.24：命中已知问题（如安装包校验失败、被公司网络拦截）直接给解法和一键按钮；悬停这条出现「问问 Agent」「一键反馈」。
       const card = window.HubErrorCard;
+      const manual = manualDownload();
+      const error = (s.error || '更新失败').replace('或打开发布页手动下载安装包。', s.releasePage ? '或打开发布页手动下载安装包。'
+        : manual ? '或点「下载完整安装包」手动安装。' : '或点「重试」重新检查。');
       const reasons = [...(s.attempts || []), ...(s.checks || [])].filter(a => a && a.reason).map(a => `${a.name || a.id || '更新源'}：${a.reason}`);
-      const ctx = { area: 'app-update', title: '一键更新没有完成', symptom: s.error || '更新失败', details: [s.error || '更新失败', ...reasons].join('\n') };
-      body += `<div class="au-msg bad">${card ? card.assistHtml(ctx) : ''}${esc(s.error || '更新失败')}</div>${card ? card.knownHtml(ctx) : ''}`;
+      const ctx = { area: 'app-update', title: '一键更新没有完成', symptom: error, details: [error, ...reasons].join('\n') };
+      body += `<div class="au-msg bad">${card ? card.assistHtml(ctx) : ''}${esc(error)}</div>${card ? card.knownHtml(ctx) : ''}`;
       if (s.attempts && s.attempts.length) body += `<div class="au-section">各下载源的结果</div><ul class="au-sources">${sourceRows()}</ul>`;
       else if (s.checks && s.checks.length) body += `<div class="au-section">更新源</div><ul class="au-sources">${checkRows()}</ul>`;
       body += allowBox();
-      foot = `${s.releasePage ? '<button class="au-btn" data-au="manual">打开发布页手动下载</button>' : ''}<button class="au-btn" data-au="close">关闭</button><button class="au-btn primary" data-au="retry">重试</button>`;
+      foot = `${manual ? `<button class="au-btn" data-au="manual">${manual.label}</button>` : ''}<button class="au-btn" data-au="close">关闭</button><button class="au-btn primary" data-au="retry">重试</button>`;
     } else {
       body += '<div class="au-msg info">点「检查更新」查询最新版本。</div>';
       foot = '<button class="au-btn" data-au="close">关闭</button><button class="au-btn primary" data-au="retry">检查更新</button>';
@@ -231,7 +243,7 @@
         confirmInfo = next && next.needsConfirm ? next.confirm : null;
         if (next && next.phase) update(next); else render();
       }
-      else if (action === 'manual' && state?.releasePage) shell.openExternal(state.releasePage);
+      else if (action === 'manual') { const manual = manualDownload(); if (manual) shell.openExternal(manual.url); }
       else if (action === 'allow-open') {
         const button = event.target.closest('[data-au]');
         const url = button.dataset.url || '';

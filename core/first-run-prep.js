@@ -14,7 +14,7 @@ const SCHEMA = 1;
 const STATE_FILE = 'first-run-prep.json';
 const ST = Object.freeze({ wait: 'wait', run: 'run', ok: 'ok', warn: 'warn', bad: 'bad', off: 'off', hold: 'hold' });
 const ENV_ROWS = Object.freeze(['codeagent', 'claude', 'codex', 'dsh', 'git-bash', 'node', 'welink', 'ppt-doctor', 'app-update', 'disk', 'data-dir']);
-const CHANGED_ROWS = new Set(['codeagent', 'models', 'proxy', 'sign', 'hello']);
+const CHANGED_ROWS = new Set(['codeagent', 'login', 'models', 'proxy', 'sign', 'hello']);
 const RECHECK = Object.freeze({ label: '重新检查', act: 'recheck' });
 // 用到才需要的工具：没装不算问题，准备页不标红、不催装（安装入口在环境体检页）。
 const OPTIONAL_ROWS = new Set(['claude', 'codex', 'dsh', 'welink', 'ppt-doctor']);
@@ -112,6 +112,14 @@ function createPrep({ isCompany, deps, emit = () => {} }) {
     try { await limited(deps.discover(), 12000, null); } catch { /* 找不到时由体检那一行说明 */ }
     const hasCli = !!deps.codeagentFile();
 
+    const netPass = only ? Promise.resolve() : step('net-pass', 30000, async () => {
+      const s = await deps.netPass();
+      if (!s || !s.available) return { status: ST.off, detail: '这个版本不需要' };
+      const blocked = s.hosts.filter(h => h.state === 'blocked');
+      if (blocked.length) return { status: ST.bad, detail: '公司代理拦了下载服务器，自动放行没成功', fixes: blocked.slice(0, 1).map(h => ({ label: '打开放行页', act: 'open-gate', url: h.page })).concat(RECHECK) };
+      const failed = s.hosts.filter(h => h.state === 'error').length;
+      return failed ? { status: ST.warn, detail: `${s.hosts.length} 台里 ${failed} 台暂时连不上，更新时会自动换源`, fixes: [RECHECK] } : { status: ST.ok, detail: `${s.hosts.length} 台都能访问` };
+    });
     const env = (async () => {
       ENV_ROWS.forEach(id => set(id, ST.run, '检查中…'));
       let result = null;
@@ -131,7 +139,7 @@ function createPrep({ isCompany, deps, emit = () => {} }) {
       const login = await step('login', 6000, async () => {
         const state = await deps.loginState();
         return state === 'ready' ? { status: ST.ok, detail: '已登录' }
-          : { status: ST.bad, detail: '还没登录：在命令行运行 codeagent 完成登录，然后点重新检查', fixes: [RECHECK] };
+          : { status: ST.bad, detail: '还没登录：点「一键登录」完成登录，回到 Hub 后自动重新检查', fixes: [{ label: '一键登录', act: 'codeagent-login' }, RECHECK] };
       });
       if (login.status !== ST.ok) { hold(['models'], '等登录好'); return; }
       // 读模型清单要启动一次 CodeAgent，可能比较慢：到时间就让它后台继续，不拖住用户。
@@ -169,14 +177,7 @@ function createPrep({ isCompany, deps, emit = () => {} }) {
     })();
 
     const network = only ? Promise.resolve() : Promise.all([
-      step('net-pass', 30000, async () => {
-        const s = await deps.netPass();
-        if (!s || !s.available) return { status: ST.off, detail: '这个版本不需要' };
-        const blocked = s.hosts.filter(h => h.state === 'blocked');
-        if (blocked.length) return { status: ST.bad, detail: '公司代理拦了下载服务器，自动放行没成功', fixes: blocked.slice(0, 1).map(h => ({ label: '打开放行页', act: 'open-gate', url: h.page })).concat(RECHECK) };
-        const failed = s.hosts.filter(h => h.state === 'error').length;
-        return failed ? { status: ST.warn, detail: `${s.hosts.length} 台里 ${failed} 台暂时连不上，更新时会自动换源`, fixes: [RECHECK] } : { status: ST.ok, detail: `${s.hosts.length} 台都能访问` };
-      }),
+      netPass,
       step('sys-proxy', 5000, async () => { const r = await deps.systemProxy(); return { status: ST.ok, detail: r === 'DIRECT' || !r ? '直连' : '使用系统代理，本机模型通道不经过它' }; }),
       step('clock', 8000, async () => {
         const skew = await deps.clockSkew();

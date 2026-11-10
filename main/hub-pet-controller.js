@@ -692,9 +692,9 @@ function createHubPetController({
       const text = String(payload && payload.text || '').trim().slice(0, 2000);
       const reply = r => send('hub-pet:ask-result', r);
       if (!text) { reply({ ok: false, error: '先写一句要问的' }); return; }
-      if (typeof askAssistant !== 'function') { reply({ ok: false, error: '助理还没开：在「可选功能」里打开助理后再问' }); return; }
-      Promise.resolve().then(() => askAssistant(text)).then(() => { reply({ ok: true }); evaluate(); },
-        error => reply({ ok: false, error: String(error && error.message || error).slice(0, 160) }));
+      if (typeof askAssistant !== 'function') { reply({ ok: false, error: '这个版本没有接入助理，暂时不能从桌宠提问。' }); return; }
+      Promise.resolve().then(() => askAssistant(text, { enableAssistant: payload?.enableAssistant === true })).then(() => { reply({ ok: true }); evaluate(); },
+        error => reply({ ok: false, enableAssistant: error?.code === 'ASSISTANT_DISABLED', error: String(error && error.message || error).slice(0, 160) }));
     },
     'hub-pet:ask-close': (event) => { if (fromPet(event)) setIgnore(true); },
     'hub-pet:signal': (event, patch) => { if (fromMain(event)) setSignal(patch); },

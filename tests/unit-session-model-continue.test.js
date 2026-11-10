@@ -18,7 +18,7 @@ const config = require('../core/hub-config');
 const OLD = 'GLM-5.2-WX-Auto', NEXT = 'GLM-5.3-WX-Auto';
 const flush = async () => { for (let i = 0; i < 8; i++) await new Promise(setImmediate); };
 
-function fixture(t, { status = 'idle' } = {}) {
+function fixture(t, { status = 'idle', probeModels } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'model-continue-'));
   const before = process.env.CLAUDE_HUB_DATA_DIR;
   process.env.CLAUDE_HUB_DATA_DIR = root; config.clearConfigCache();
@@ -30,6 +30,7 @@ function fixture(t, { status = 'idle' } = {}) {
   write(path.join(root, 'codeagent-launch', 'member-0001.json'), { model: OLD });
   t.mock.method(require('../core/codeagent-config'), 'resolveCodeAgentConfig', () => ({ command: 'never-run', configDir }));
   t.mock.method(require('../core/codeagent-capabilities'), 'readHelp', () => '');
+  t.mock.method(require('../core/codeagent-capabilities'), 'prepareForKind', async () => {});
   const picks = [];
   t.mock.method(require('../core/codeagent-model-picker'), 'pickModel', async ({ modelId }) => { picks.push(modelId); return { ok: true, confirmed: true }; });
   const manager = Object.create(SessionManager.prototype); EventEmitter.call(manager);
@@ -43,6 +44,8 @@ function fixture(t, { status = 'idle' } = {}) {
   const gate = require('../main/session-model-creation').createModelCreationConfirmation({ onWait: event => manager.emit('session-model-wait', event), sendToRenderer: (name, payload) => { if (name === 'session-model-create-confirm') requests.push(payload); } });
   const api = require('../main/ipc/session-handlers').registerSessionIpc({ handle: (name, fn) => handlers.set(name, fn), on() {} }, {
     sessionManager: manager, requestModelConfirmation: (payload, options) => gate.request(payload, options),
+    codeagentProbeModels: probeModels,
+    codeagentServeRead: probeModels ? async () => ({ ok: false, error: 'fixture fallback' }) : null,
     sendToRenderer: (name, payload) => notices.push({ name, payload }),
   });
   watcher.init({ sessionManager: manager, confirmSessionModel: (...args) => api.confirmSessionModel(...args) });
@@ -55,6 +58,57 @@ function fixture(t, { status = 'idle' } = {}) {
   });
   return { root, manager, info, sent, picks, requests, notices, gate, api, handlers, send, decide, write };
 }
+
+test('空清单并发确认只自动重拉一次，读到后进入原有模型确认', async t => {
+  let probes = 0;
+  const f = fixture(t, { probeModels: async () => { probes++; return { ok: true, models: [NEXT], source: 'menu' }; } });
+  const error = require('../core/session-model-pin').unavailableError(OLD, '清单为空', []);
+  const first = f.api.confirmSessionModel(f.info.id, error, { clientSubmissionId: 'empty-one' });
+  const second = f.api.confirmSessionModel(f.info.id, error, { clientSubmissionId: 'empty-two' });
+  await flush();
+  assert.equal(probes, 1);
+  assert.equal(f.requests.length, 1);
+  assert.deepEqual(f.requests[0].availableModels, [NEXT]);
+  assert.match(f.requests[0].message, /清单为空/);
+  f.decide();
+  assert.equal((await first).ok, true);
+  assert.equal((await second).ok, true);
+  assert.equal(f.info.fixedModel, NEXT);
+});
+
+test('自动重拉仍为空时明确未发送和下一步，保持固定模型', async t => {
+  let probes = 0;
+  const f = fixture(t, { probeModels: async () => { probes++; return { ok: true, models: [], source: 'menu' }; } });
+  const error = require('../core/session-model-pin').unavailableError(OLD, '清单为空', []);
+  await assert.rejects(f.api.confirmSessionModel(f.info.id, error), failure => failure.notSent && failure.stopped);
+  assert.equal(probes, 1);
+  assert.equal(f.requests.length, 0);
+  assert.equal(f.info.fixedModel, OLD);
+  const notice = f.notices.find(item => item.name === 'session-notice');
+  assert.match(notice.payload.message, /已重新读取模型清单，仍无可用模型.*账号.*重新发送/);
+});
+
+test('重新拉取清单不能把刚被拒绝的唯一模型再次推荐为替代', async t => {
+  const f = fixture(t, { probeModels: async () => ({ ok: true, models: [OLD], source: 'menu' }) });
+  const error = require('../core/session-model-pin').unavailableError(OLD, '模型请求已被拒绝', []);
+  await assert.rejects(f.api.confirmSessionModel(f.info.id, error), failure => failure.notSent && failure.stopped);
+  assert.equal(f.requests.length, 0);
+  assert.equal(f.info.fixedModel, OLD);
+});
+
+test('空清单重拉期间停止任务，迟到的模型清单不能继续确认', async t => {
+  let release;
+  const f = fixture(t, { probeModels: () => new Promise(resolve => { release = resolve; }) });
+  const controller = new AbortController();
+  const error = require('../core/session-model-pin').unavailableError(OLD, '清单为空', []);
+  const pending = f.api.confirmSessionModel(f.info.id, error, { signal: controller.signal });
+  await flush();
+  controller.abort();
+  release({ ok: true, models: [NEXT], source: 'menu' });
+  await assert.rejects(pending, failure => failure.notSent && failure.stopped);
+  assert.equal(f.requests.length, 0);
+  assert.equal(f.sent.length, 0);
+});
 
 for (const status of ['idle', 'running']) test(`a blocked send resumes the original body and receipt once after confirmation (${status})`, async t => {
   const f = fixture(t, { status });

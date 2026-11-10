@@ -54,7 +54,19 @@
             install.type = 'button';
             install.textContent = '安装';
             install.setAttribute('aria-label', '安装 ' + provider.name);
-            install.onclick = () => provider.id === 'codeagent' ? codeagentSetup.showGuide() : shell.openExternal(provider.docs);
+            install.onclick = async () => {
+              if (provider.id === 'codeagent') return codeagentSetup.showGuide();
+              if (require('../core/distribution').target !== 'company' || !['claude', 'codex', 'dsh'].includes(provider.id)) return shell.openExternal(provider.docs);
+              install.disabled = true; install.textContent = '安装中…';
+              try {
+                const state = await ipcRenderer.invoke('cli-tools:state');
+                if (!state?.available) return shell.openExternal(provider.docs);
+                const result = await ipcRenderer.invoke('cli-tools:install', { id: provider.id });
+                if (!result?.ok) throw new Error(result?.error || '安装没完成，请重试');
+                await refresh();
+              } catch (error) { advisory.textContent = `安装没完成：${error.message}。可点「安装」重试，或查看安装说明。`; advisory.hidden = false; }
+              finally { install.disabled = false; install.textContent = '安装'; }
+            };
             item.append(' ', install);
           }
           target.append(item);

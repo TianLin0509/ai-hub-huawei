@@ -216,4 +216,4 @@ async function probeModels({ command, configDirEnv, configDir, cwd, dataDir, env
   }
 }
 
-module.exports = { MODELS_FILE, COMMANDS_ONLY_TIMEOUT_MS, MODEL_PROBE_TIMEOUT_MS, probeModels, readProbed, writeProbed, modelsFromPicker, cleanModelId };
+module.exports = { NEEDS_LOGIN, MODELS_FILE, COMMANDS_ONLY_TIMEOUT_MS, MODEL_PROBE_TIMEOUT_MS, probeModels, readProbed, writeProbed, modelsFromPicker, cleanModelId };

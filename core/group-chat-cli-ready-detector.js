@@ -58,7 +58,7 @@ const CODEAGENT_DIALOG_BLOCKERS = [/版本更新提醒/, /Quick safety check/i, 
 const BLOCKERS = {
   gemini: [/not signed in/i, /Select login method/i, /sign in to continue/i, /Do you trust the contents of this project/i, /esc to dismiss/i, ...AGY_DIALOG_BLOCKERS, ...CHOICE_DIALOG_BLOCKERS],
   claude: [...CHOICE_DIALOG_BLOCKERS],
-  codeagent: [...CODEAGENT_DIALOG_BLOCKERS, ...CHOICE_DIALOG_BLOCKERS],
+  codeagent: [require('./codeagent-model-probe').NEEDS_LOGIN, ...CODEAGENT_DIALOG_BLOCKERS, ...CHOICE_DIALOG_BLOCKERS],
   codex: [/Do you trust the contents of this directory/i, /Booting MCP server/i, /esc to interrupt/i, ...CHOICE_DIALOG_BLOCKERS],
   kimi: [
     /OAuth login expired/i,
@@ -82,7 +82,7 @@ const STALEABLE_BLOCKERS = {
   gemini: [/not signed in/i, /Do you trust the contents of this project/i, /esc to dismiss/i, ...AGY_DIALOG_BLOCKERS, ...CHOICE_DIALOG_BLOCKERS],
   // 选择框答完就消失：之后出现的输入行标记说明它已被新画面盖掉。
   claude: [...CHOICE_DIALOG_BLOCKERS],
-  codeagent: [...CODEAGENT_DIALOG_BLOCKERS, ...CHOICE_DIALOG_BLOCKERS],
+  codeagent: [require('./codeagent-model-probe').NEEDS_LOGIN, ...CODEAGENT_DIALOG_BLOCKERS, ...CHOICE_DIALOG_BLOCKERS],
   codex: [/Booting MCP server/i, /esc to interrupt/i, ...CHOICE_DIALOG_BLOCKERS],
 };
 
@@ -134,7 +134,7 @@ function isReady(sessionId, kind, buf, options = {}) {
   // 真实开题连着两次 cli_not_ready（合并位在真实链路上复现）。
   //
   // 现在分两类：瞬态阻断词（见 STALEABLE_BLOCKERS）在输入框标记出现之后就算过期；
-  // 终态阻断词（未登录、信任弹窗）一律拦到底。
+  // 终态阻断词（见各工具未列入过期名单的登录或信任弹窗）一律拦到底。
   const staleable = STALEABLE_BLOCKERS[kind] || [];
   const absolute = blockers.filter(re => !staleable.some(x => x.source === re.source));
   const markerAt = need.length > 0 ? _lastIncludesIndex(buf, need) : -1;

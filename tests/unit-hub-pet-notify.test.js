@@ -230,7 +230,7 @@ test('在桌宠上问的：答完经提醒总线交给桌宠说，点开到助�
   const { CompanyAssistant } = require('../core/company-assistant/service');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pet-ask-'));
   const bus = new NoticeBus({ now: () => NOON });
-  const a = new CompanyAssistant({ dataDir: root, noTimer: true, noTools: true, now: () => NOON, bus, getSession: () => null, resolveCli: () => null });
+  const a = new CompanyAssistant({ dataDir: root, noTimer: true, noTools: true, powerSaveBlocker: {}, now: () => NOON, bus, getSession: () => null, resolveCli: () => null });
   t.after(() => { a.close(); fs.rmSync(root, { recursive: true, force: true }); });
   a.saveChat([{ id: 'c1', q: '今天下午有什么会？', state: 'running', via: 'pet' }, { id: 'c2', q: '普通的一问', state: 'running' }, { id: 'c3', q: '答不出的', state: 'running', via: 'pet' }]);
   a.patchChat('c1', { state: 'done', a: '14:00 周会；16:00 评审' });

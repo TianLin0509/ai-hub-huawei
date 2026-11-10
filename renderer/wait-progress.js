@@ -57,6 +57,7 @@ function startWaitTicker(getRoot, { isActive = () => true, setIntervalFn = setIn
 function assistantChatPhase(c) {
   if (!c) return null;
   if (c.state === 'queued') return { label: '排队中', verb: '已等', from: c.askedAt, hint: '' };
+  if (c.state === 'running' && !c.answeringAt && c.notReadySince != null) return { label: '会话还没就绪（可能在等登录或确认）', verb: '已等', from: c.notReadySince, hint: '打开助理会话处理后会自动继续' };
   if (c.state === 'running' && !c.answeringAt) return { label: 'CodeAgent 准备中…', verb: '已等', from: c.startedAt || c.askedAt, hint: '开会话并送入问题，通常 10–20 秒' };
   if (c.state !== 'running') return null;
   return { label: '正在查…', verb: '已用', from: c.answeringAt || c.startedAt || c.askedAt,

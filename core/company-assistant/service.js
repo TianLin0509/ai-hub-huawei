@@ -239,7 +239,7 @@ class CompanyAssistant {
     if (Array.isArray(patch.workdays)) next.workdays = [...new Set(patch.workdays.map(Number).filter(d => Number.isInteger(d) && d >= 0 && d <= 6))];
     if ('myName' in patch) next.myName = String(patch.myName || '').trim().slice(0, 30);
     if ('cliPath' in patch) next.cliPath = String(patch.cliPath || '').trim();
-    if ('email' in patch) { next.email = String(patch.email || '').trim().slice(0, 120); next.emailFrom = patch.emailFrom === 'welink' ? 'welink' : 'settings'; }
+    if ('email' in patch) { next.email = String(patch.email || '').trim().slice(0, 120); next.emailFrom = ['welink', 'git'].includes(patch.emailFrom) ? patch.emailFrom : 'settings'; }
     if (patch.phone && typeof patch.phone === 'object') {
       const cur = { ...DEFAULT_PHONE, ...(s.phone || {}) }, q = patch.phone, np = { ...cur };
       if ('extraIds' in q) np.extraIds = validateExtraIds(q.extraIds);
@@ -428,8 +428,8 @@ class CompanyAssistant {
     } catch { /* 诊断写入失败不影响取数 */ }
   }
 
-  // 可选功能开关（core/optional-features.js）：关着时 main.js 不调 start()，后台什么都不跑；
-  // 用到一半关掉走 pause()（停定时取数、会议与会议室轮询、手机推送），再开走 resume()。会话工具接口不停，开销可忽略。
+  // 可选功能开关（core/optional-features.js）：关着时 main.js 不调 start()，助理后台不取数；会议室守护独立启动。
+  // 用到一半关掉走 pause()（停定时取数、会议轮询与手机推送，保留已开启的会议室守护），再开走 resume()。会话工具接口不停。
   start() {
     if (this.started) { this.resume(); return; }
     this.started = true;
@@ -501,7 +501,7 @@ class CompanyAssistant {
     this.stopTimers();
     clearInterval(this.meetings.timer); this.meetings.timer = null;
     this.phone.close();
-    this.rooms.close();
+    if (!this.rooms.settings().enabled) this.rooms.close();
     if (this.lanes.ppt.job || this.lanes.ppt.queue.length) this.startPptCollector();
   }
   resume() {
@@ -1135,7 +1135,7 @@ class CompanyAssistant {
     const display = x => { const { start, end, timeEvidence, ...rest } = x; return { ...rest, startDisplay: x.startDisplay || D.displayTime(start), endDisplay: x.endDisplay || D.displayTime(end) }; };
     return { ...snap, meetings: (snap.meetings || []).map(display), calendar: (snap.calendar || []).map(display) };
   }
-  // 本人邮箱：设置里填过的优先；否则读 WeLink 账号信息（onebox user-info，只读）。读到的存进设置，下次不再查。
+  // 本人邮箱：设置优先，再读 WeLink；最后只接受域名与已知公司域名相同的 Git 全局邮箱，找到后共用。
   async accountEmail(s = this.settings()) {
     if (s.email) return { email: s.email, from: s.emailFrom || 'settings' };
     try {
@@ -1146,7 +1146,13 @@ class CompanyAssistant {
       const name = [info, info?.data, info?.user].map(x => x && typeof x === 'object' ? x.name : '').find(v => typeof v === 'string' && v.trim());
       if (name && !s.myName) this.setSettings({ myName: name.trim() });
       if (found) { this.setSettings({ email: String(found), emailFrom: 'welink' }); return { email: String(found), from: 'welink' }; }
-    } catch { /* 读不到就请用户填 */ }
+    } catch { /* 再试本机已知的公司邮箱 */ }
+    const domain = require('../company-domain');
+    const email = (this.deps.gitGlobalEmail || domain.gitGlobalEmail)();
+    if (/^[^\s@]+@[^\s@]+$/.test(email) && domain.companyDomainOf(email) === domain.knownDomain(this.deps.dataDir).domain) {
+      this.setSettings({ email, emailFrom: 'git' });
+      return { email, from: 'git' };
+    }
     return { email: '', from: '' };
   }
   // 自动配置邮件和日历：同一个邮箱每天最多自动试一次，失败了不反复跑；用户在设置里点「配置」不受这个限制。
@@ -1607,7 +1613,7 @@ class CompanyAssistant {
         setTimeout(() => { void this.pump(laneName); }, 0);
         return;
       }
-      if (!receipt || receipt.notSent || (receipt.ok === false && !receipt.unconfirmed && receipt.sendStatus !== 'stuck')) throw new Error(receipt?.error || '问题没有发进助理会话');
+      if (!receipt || receipt.notSent || (receipt.ok === false && !receipt.unconfirmed && receipt.sendStatus !== 'stuck')) throw new Error(receipt?.message || receipt?.error || '问题没有发进助理会话');
       // 问题已送进 CodeAgent：界面从「CodeAgent 准备中」切到「正在查」，两段各自计时（2026-11-06 用户要进度可见）。
       job.sentAt = this.now(); // 回答时限从真正发进去算，等 CLI 就绪的时间不占
       if (job.type === 'chat') this.patchChat(job.chatId, { answeringAt: this.now() });
@@ -1623,9 +1629,15 @@ class CompanyAssistant {
     for (;;) {
       const receipt = await this.deps.sendPrompt(id, prompt, randomUUID());
       if (!receipt?.notSent || receipt.error !== 'cli-not-ready' || job.stopped || this.closed) return receipt;
+      if (job.notReadySince == null) {
+        job.notReadySince = this.now();
+        if (job.type === 'chat') this.patchChat(job.chatId, { notReadySince: job.notReadySince });
+        this.changed();
+      }
+      const tail = receipt.terminalLastLine ? `；终端最后一行：${require('../env-check').sanitize(receipt.terminalLastLine).slice(-240)}` : '';
       const gone = this.sessionGone(id);
-      if (gone) throw new Error(gone);
-      if (this.now() - since >= CLI_NOT_READY_MAX_MS) throw new Error(`CodeAgent 等了 ${Math.round((this.now() - since) / 60000)} 分钟还没启动好，这一问没有发出；可以重问`);
+      if (gone) throw new Error(gone + tail);
+      if (this.now() - since >= CLI_NOT_READY_MAX_MS) throw new Error(`CodeAgent 等了 ${Math.round((this.now() - since) / 60000)} 分钟还没启动好，这一问没有发出；请打开助理会话处理登录或确认，处理后可以重问${tail}`);
       await new Promise(resolve => setTimeout(resolve, this.deps.notReadyRetryMs ?? CLI_NOT_READY_RETRY_MS));
       if (job.stopped || this.closed) return receipt;
     }

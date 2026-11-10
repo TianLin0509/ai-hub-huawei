@@ -6,6 +6,27 @@
 
 const STACK_ID = 'hub-sticky-notices';
 
+function appendActionButton(document, host, label, run) {
+  const button = document.createElement('button');
+  button.type = 'button'; button.className = 'hub-sticky-notice-close'; button.textContent = label;
+  Object.assign(button.style, { marginLeft: '8px', cursor: 'pointer', font: 'inherit' });
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    try { await run(); }
+    catch (error) { button.textContent = `${error.message || '操作失败'}，点击重试`; }
+    finally { button.disabled = false; }
+  });
+  host.appendChild(button);
+  return button;
+}
+
+function appendCodeAgentLoginButton(document, host, ipcRenderer) {
+  return appendActionButton(document, host, '登录', async () => {
+    const result = await ipcRenderer.invoke('codeagent-pool:personal-login');
+    if (result?.ok === false) throw new Error(result.error || '登录窗口未能打开');
+  });
+}
+
 function stack(document) {
   let el = document.getElementById(STACK_ID);
   if (!el) {
@@ -77,7 +98,8 @@ function showUnavailableModelNotice(document, payload, onSelect, onCancel) {
   const models = [...new Set([...(payload.availableModels || []), payload.suggestedModel])].filter(id => require('../core/codeagent-models').isSafeModelId(id));
   const suggested = models.includes(payload.suggestedModel) ? payload.suggestedModel : models[0];
   const message = [payload.message, payload.originalModel && !String(payload.message).includes(payload.originalModel) ? `原模型 ${payload.originalModel} 不可用。` : '',
-    suggested ? `建议换成 ${suggested}（可改选其他模型）。${creating ? '确认后创建，取消则不创建会话。' : '确认后切换并继续，取消保持暂停。'}` : (creating ? '暂无可用替代模型，未创建会话。' : '暂无可用替代模型，会话保持暂停。')].filter(Boolean).join('\n');
+    suggested ? `建议换成 ${suggested}（可改选其他模型）。${creating ? '确认后创建，取消则不创建会话。' : '确认后切换并继续，取消保持暂停。'}` : (creating ? '暂无可用替代模型，未创建会话。' : '暂无可用替代模型，本条消息未发送。')
+      + '请到「账号」页确认登录，再点击模型重新获取清单；恢复后重新发送。'].filter(Boolean).join('\n');
   const notice = showStickyNotice(document, message, 'warning', { key: payload.requestId || (payload.sessionId ? `model:${payload.sessionId}:${message}` : undefined), onClose: onCancel });
   if (!notice || notice.dataset.modelAction) return notice;
   notice.children[1].textContent = creating ? '取消，不创建' : '取消，保持暂停';
@@ -131,4 +153,4 @@ function registerModelCreationConfirmation(ipcRenderer, document) {
   });
 }
 
-module.exports = { showStickyNotice, showUnavailableModelNotice, registerModelCreationConfirmation, STACK_ID };
+module.exports = { appendActionButton, appendCodeAgentLoginButton, showStickyNotice, showUnavailableModelNotice, registerModelCreationConfirmation, STACK_ID };

@@ -1356,7 +1356,7 @@ function registerSessionIpc(ipcMain, deps) {
     else if (phase === 'trust-done') sendLaunchPhase(sessionId, { trust: 'done' });
     else if (phase === 'trust-stuck') {
       sendLaunchPhase(sessionId, { trust: 'stuck' });
-      sendToRenderer('session-notice', { sessionId, level: 'warning', persistent: true,
+      sendToRenderer('session-notice', { sessionId, level: 'warning', persistent: true, action: 'open-backstage',
         message: 'CodeAgent 第一次进入这个工作目录，弹出了「是否信任此目录」的确认，Hub 没能自动点掉。请打开这个会话的「后台」终端，选 Yes, I trust this folder 后回车；你的消息会在确认后自动发出。' });
     }
   });
@@ -1523,8 +1523,19 @@ function registerSessionIpc(ipcMain, deps) {
     const key = options.clientSubmissionId || Symbol('model-submission');
     if (group?.subscribers.has(key)) return group.subscribers.get(key).promise;
     const choices = [...new Set([...(error.availableModels || []), error.suggestedModel])].filter(codeagentModels.isSafeModelId);
+    if (!group && !choices.length && !options.modelListRetried && error.canChooseAlternative !== false) {
+      // 每次被拦的提交只重拉一次；并发提交复用账号探测，不更改模型固定规则。
+      return probeCodeAgentAccount(session.codeagentPoolAccount || 'personal').catch(() => []).then(models => {
+        if (!valid()) throw stopped('会话或任务已变化，本条消息未发送。');
+        const available = error.reason === '模型请求已被拒绝' ? models.filter(id => id.toLowerCase() !== String(error.model).toLowerCase()) : models;
+        return confirmSessionModel(sessionId, { ...error, message: error.message, availableModels: available, suggestedModel: available[0] || '' },
+          { ...options, modelListRetried: true });
+      });
+    }
     if (!group && (error.canChooseAlternative === false || !choices.length || typeof requestModelConfirmation !== 'function')) {
-      sendToRenderer('session-notice', { sessionId, persistent: true, level: 'error', message: `${error.message} 本条消息保持暂停，请先修复模型或 CLI 配置。` });
+      sendToRenderer('session-notice', { sessionId, persistent: true, level: 'error', message: `${error.message} 本条消息未发送。${!choices.length
+        ? `${options.modelListRetried ? '已重新读取模型清单，仍无可用模型。' : '暂无可用模型。'}请到「账号」页确认登录，再在会话下方点击模型重新获取清单；恢复后重新发送。`
+        : '请先修复模型或 CLI 配置后重新发送。'}` });
       return Promise.reject(stopped(error.message));
     }
     if (!group) {
