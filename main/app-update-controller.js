@@ -15,6 +15,7 @@ const PERIODIC_CHECK_MS = 6 * 60 * 60 * 1000;
 // 小版本静默送达：只改末位的版本不打扰用户（不弹窗、不挂红点），但也要真的送到。后台下载校验，用户下次关闭 Hub 时隐藏替换、不重开，
 // 下次打开就是新版，并由更新日志告诉用户多了什么。装在受保护目录（要管理员授权）的不静默，仍走设置菜单。用户可以在更新窗口里关掉。
 const QUIET_OFF_FILE = 'quiet-updates-off.flag';
+const canary = require('../core/app-update/canary');
 
 function resolveFetch(fetchImpl) {
   if (typeof fetchImpl === 'function') return fetchImpl;
@@ -48,14 +49,16 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   helperStartWaitMs = Number(env.AI_HUB_UPDATE_HELPER_WAIT_MS) || 15000,
   // 小版本静默送达（11-07 定：先不上线）：默认关，代码保留；测试或日后放开时传 true 或设 AI_HUB_QUIET_UPDATE=1。
   quietDelivery = env.AI_HUB_QUIET_UPDATE === '1' }) {
-  let sources = resolveSources(config, env);
+  let baseSources = resolveSources(config, env);
+  let previewEnabled = canary.read(dataDir).enabled === true;
+  let sources = previewEnabled ? [...canary.previewSources(baseSources), ...baseSources] : baseSources;
   let allowSame = !!(config && config.switchEdition);
   const releasePage = (config && config.releasePage) || '';
   let state = { phase: 'idle', current: currentVersion, sources: sources.map(s => ({ id: s.id, name: s.name })), releasePage, canApply: isPackaged || env.AI_HUB_UPDATE_FORCE_APPLY === '1' };
   let manifest = null, plan = null, abort = null, checkAbort = null, staged = null, checking = null, lastResult = null, timer = null;
   const quietTried = new Set();
   const quietOffFile = () => path.join(stagingPaths(dataDir).root, QUIET_OFF_FILE);
-  const quietEnabled = () => { if (!quietDelivery) return false; try { return !fs.existsSync(quietOffFile()); } catch (_) { return true; } };
+  const quietEnabled = () => { if (!quietDelivery && !(previewEnabled && canary.read(dataDir).enabled === true)) return false; try { return !fs.existsSync(quietOffFile()); } catch (_) { return true; } };
   // 查版本时清单里就是这一版的源：下载先走它们，查不到或版本不同的源只留作后备，免得先报一次 404（旧 GitHub 库改私有后实测，2026-10-28）。
   let confirmedIds = [];
 
@@ -63,6 +66,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   if (lastResult) state.lastResult = lastResult;
   state.quietEnabled = quietEnabled();
   state.quietFeature = !!quietDelivery;
+  state.previewEnabled = previewEnabled;
 
   // 界面看到的 = 控制器状态 + 等待重启的状态（读不到就当没在等）。
   const view = () => { let wait = null; try { wait = restartWait() || null; } catch (_) {} return { ...state, restartWait: wait }; };
@@ -70,6 +74,9 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
 
   async function check({ silent = false, quietAllowed = silent } = {}) {
     if (checking) return checking;
+    // An administrator may set the same local preference through the existing managed command facility.
+    const preferred = canary.read(dataDir).enabled === true;
+    if (preferred !== previewEnabled && !['downloading', 'ready'].includes(state.phase)) setPreviewEnabled(preferred);
     if (state.phase === 'ready' && state.quiet && silent) {
       let discarded = false;
       checking = revalidateQuiet().then(result => { discarded = result; return state; }).finally(() => { checking = null; checkAbort = null; });
@@ -96,6 +103,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       if (!best) return emit({ phase: silent ? 'idle' : 'error', checks, checkedAt: new Date().toISOString(),
         error: '所有更新源都连不上，暂时查不到新版本', silentFailure: silent });
       manifest = best.manifest;
+      if (manifest.canary && manifest.version === currentVersion && previewEnabled) canary.write(dataDir, { releaseSha: manifest.canary.sha, releaseVersion: currentVersion });
       confirmedIds = results.filter(r => r.ok && compareVersions(r.manifest.version, manifest.version) === 0).map(r => r.id);
       // 能核对本机文件时才走小包（开发运行、没打包又没指定 resources 时无从核对）。
       const resDir = isPackaged || env.AI_HUB_UPDATE_RESOURCES ? (env.AI_HUB_UPDATE_RESOURCES || resourcesPath) : null;
@@ -117,7 +125,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       const asset = plan.kind === 'incremental' ? (variant === 'delta' ? manifest.incrementalDelta : manifest.incremental) : plan.kind === 'full' ? manifest.installer : null;
       plan = { ...plan, variant, asset };
       const checked = emit({ phase: plan.kind === 'none' ? 'none' : 'available', checks, checkedAt: new Date().toISOString(), error: null,
-        latest: { version: manifest.version, notes: manifest.notes, publishedAt: manifest.publishedAt, sourceName: best.name, notify: isNotableUpdate(currentVersion, manifest.version) },
+        latest: { version: manifest.version, notes: manifest.notes, publishedAt: manifest.publishedAt, sourceName: best.name, notify: isNotableUpdate(currentVersion, manifest.version), canary: manifest.canary || null },
         plan: { kind: plan.kind, variant: plan.variant, reason: plan.reason, bytes: plan.asset ? plan.asset.bytes : 0, file: plan.asset ? plan.asset.file : null } });
       if (quietAllowed && shouldQuietDownload(resDir)) void quietDownload();
       return checked;
@@ -245,6 +253,10 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       return emit({ phase: 'error', attempts: result.attempts, error: `更新包解开或校验失败：${error.message}` });
     }
     // 装在 Program Files 这类目录时，重启那一步 Windows 会弹一次管理员确认框：界面提前说一声（2026-10-30）。
+    if (previewEnabled && manifest.canary) {
+      const saved = canary.read(dataDir);
+      canary.write(dataDir, { releases: { ...(saved.releases || {}), [manifest.version]: manifest.canary.sha } });
+    }
     return emit({ phase: 'ready', attempts: result.attempts, readySource: result.source.name, needsAdmin: !!(staged && staged.needsAdmin) });
   }
 
@@ -303,7 +315,9 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   function useConfig(next) {
     if (state.phase === 'ready' && state.quiet) { staged = null; emit({ phase: 'idle', quiet: false }); }
     if (['downloading', 'ready'].includes(state.phase)) throw new Error('正在下载或已下载好别的版本，先完成或取消再换');
-    sources = resolveSources(next, env); allowSame = !!(next && next.switchEdition);
+    baseSources = resolveSources(next, env);
+    sources = previewEnabled ? [...canary.previewSources(baseSources), ...baseSources] : baseSources;
+    allowSame = !!(next && next.switchEdition);
     manifest = null; plan = null; confirmedIds = [];
     return emit({ phase: 'idle', sources: sources.map(s => ({ id: s.id, name: s.name })), latest: null, plan: null, error: null });
   }
@@ -319,6 +333,15 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
 
   function dismissLastResult() { delete state.lastResult; return state; }
 
+  function setPreviewEnabled(on) {
+    if (checking || ['downloading', 'ready'].includes(state.phase)) throw new Error('更新正在进行，请完成或取消后再切换抢先版');
+    previewEnabled = on === true;
+    canary.write(dataDir, { enabled: previewEnabled });
+    sources = previewEnabled ? [...canary.previewSources(baseSources), ...baseSources] : baseSources;
+    manifest = null; plan = null; confirmedIds = [];
+    return emit({ phase: 'idle', previewEnabled, quietEnabled: quietEnabled(), latest: null, plan: null, error: null });
+  }
+
   // 环境体检用（5.5.24）：只看各更新源连不连得上、清单读不读得出，不改更新状态、不触发下载、不弹放行窗口。
   async function probeSources({ timeoutMs = 7000 } = {}) {
     const results = await checkManifests({ sources, fetchImpl: resolveFetch(fetchImpl), validate: validateManifest, timeoutMs });
@@ -326,7 +349,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       reason: r.reason || null, blocked: !!r.blocked })) };
   }
 
-  return { check, probeSources, download, cancel, apply, applyOnQuit, setQuietEnabled, getState: () => state, view, startBackgroundChecks, useConfig, dismissLastResult, lastResult: () => lastResult,
+  return { check, probeSources, download, cancel, apply, applyOnQuit, setQuietEnabled, setPreviewEnabled, getState: () => state, view, startBackgroundChecks, useConfig, dismissLastResult, lastResult: () => lastResult,
     dispose: () => { clearTimeout(timer); if (abort) abort.abort(); if (checkAbort) checkAbort.abort(); } };
 }
 
@@ -345,6 +368,7 @@ function registerAppUpdateIpc(ipcMain, controller, { gate = null } = {}) {
   });
   ipcMain.handle('app-update:dismiss-result', () => controller.dismissLastResult());
   ipcMain.handle('app-update:set-quiet', (_e, on) => controller.setQuietEnabled(on !== false));
+  ipcMain.handle('app-update:set-preview', (_e, on) => controller.setPreviewEnabled(on === true));
 }
 
 module.exports = { createAppUpdateController, registerAppUpdateIpc, resolveSources };

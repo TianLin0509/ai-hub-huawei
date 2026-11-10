@@ -3430,6 +3430,16 @@ const firstRunEnvCheck = require('./main/ipc/env-check-handlers').registerEnvChe
   getConfig: () => require('./core/hub-config').getConfig(),
   openExternal: url => shell.openExternal(url),
   openPath: dir => shell.openPath(dir),
+  discoverAttendanceDomain: () => {
+    const s = companyAttendanceService?.settings();
+    return s?.domain ? { domain: s.domain, from: s.domainFrom } : require('./core/company-domain').knownDomain(getHubDataDir());
+  },
+  probeAttendancePage: async () => {
+    const { probePage, attendanceFetch } = require('./core/app-update/canary-network');
+    const domain = companyAttendanceService?.settings()?.domain || require('./core/company-domain').knownDomain(getHubDataDir()).domain;
+    const url = require('./core/company-attendance/service').attendanceUrl(domain);
+    return probePage(url, { fetchImpl: attendanceFetch(require('electron').session) });
+  },
 });
 // 首次启动准备页（core/first-run-prep.js）：第一次把该查的查完存下，以后打开不用等。
 require('./main/ipc/first-run-handlers').registerFirstRunIpc(ipcMain, {
@@ -4464,7 +4474,34 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
         await appUpdate.check({ silent: false });
         return { ok: true, version: r.version };
       });
-      app.whenReady().then(() => appUpdate.startBackgroundChecks());
+      app.whenReady().then(() => {
+        appUpdate.startBackgroundChecks();
+        const preview = require('./core/app-update/canary');
+        const runner = preview.createCanaryRunner({ dataDir: getHubDataDir(), version: distribution.editionVersion || app.getVersion(),
+          runCheck: () => firstRunEnvCheck.run({ canary: true }),
+          zone: async () => {
+            const configured = require('./core/company-model-proxy').chosenZone(getHubDataDir()).zone;
+            const detected = configured ? null : await import('./core/company-proxy/upstream-profile.mjs').then(m => m.detectCodeAgentZone());
+            const zone = configured || companyProxyService.status()?.zone || detected?.zone || '';
+            return ({ green: '绿区', yellow: '黄区', blue: '蓝区' })[zone] || zone;
+          },
+          sendReport: async report => {
+            return false;
+          } });
+        let pending = false;
+        const tick = async () => {
+          if (pending || !preview.read(getHubDataDir()).enabled) return;
+          pending = true;
+          try {
+            const s = preview.read(getHubDataDir());
+            const installed = distribution.editionVersion || app.getVersion();
+            const releaseSha = s.releases?.[installed] || (s.releaseVersion === installed ? s.releaseSha : '');
+            if (releaseSha) await runner.run(releaseSha);
+          } catch (e) { console.warn('[preview] 后台体检等待重试：', e.message); }
+          finally { pending = false; }
+        };
+        app.once('will-quit', preview.scheduleChecks(tick));
+      });
       app.on('will-quit', () => { try { appUpdate.applyOnQuit(); } catch (error) { console.warn('[app-update] 退出时替换出错：', error && error.message); } appUpdate.dispose(); });
     } catch (e) {
       console.warn('[app-update] 一键更新初始化失败：', e && e.message);

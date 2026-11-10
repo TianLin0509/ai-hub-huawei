@@ -73,6 +73,7 @@ function validateManifest(raw) {
     schema: 1,
     // 静默送达的远程总开关：万一哪一版静默替换出问题，发版时在清单里写 quiet:false，所有人立刻停止后台下载和退出时替换。
     quiet: m.quiet !== false,
+    ...(m.canary && /^[a-f0-9]{40}$/.test(m.canary.sha) ? { canary: { sha: m.canary.sha } } : {}),
     product: String(m.product || ''),
     version: String(m.version).replace(/^v/, ''),
     publishedAt: String(m.publishedAt || ''),

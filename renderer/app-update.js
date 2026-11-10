@@ -193,7 +193,7 @@
     if (['idle', 'none', 'available', 'error'].includes(s.phase)) body += netPassView.boxHtml(netPass, { last: netPassLast });
     dialog.innerHTML = `<div class="au-head"><img src="../claude-wx.ico" alt=""><div class="au-title"><strong>软件更新</strong><span>${esc(productName)}${distribution.editionBadge ? ' · ' + esc(distribution.editionBadge) : ''}</span></div>`
       + '<button class="au-close" data-au="close" aria-label="关闭">×</button></div>'
-      + `<div class="au-body">${body}${quietBox}</div><div class="au-foot">${foot}</div>`;
+      + `<div class="au-body">${body}${quietBox}<label class="au-quiet"><input type="checkbox" data-au="preview"${s.previewEnabled ? ' checked' : ''}> 抢先版：提前接收更新并在后台体检（默认关闭）</label></div><div class="au-foot">${foot}</div>`;
     netPassView.bind(dialog, { ipcRenderer, onUpdate: (next, last) => { if (next) netPass = next; netPassLast = last; render(); } });
   }
 
@@ -216,6 +216,7 @@
     if (!action) return;
     try {
       if (action === 'quiet') { await ipcRenderer.invoke('app-update:set-quiet', event.target.checked); return; }
+      if (action === 'preview') { await ipcRenderer.invoke('app-update:set-preview', event.target.checked); await ipcRenderer.invoke('app-update:check'); return; }
       if (action === 'close') { confirmInfo = null; dialog?.close(); }
       else if (action === 'retry') { await ipcRenderer.invoke('app-update:check'); }
       else if (action === 'download') {

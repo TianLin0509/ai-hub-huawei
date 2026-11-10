@@ -30,7 +30,7 @@ function codeagentVersion(command) {
     if (process.platform === 'win32') {
       const head = /^[A-Za-z0-9_.-]+$/.test(command) ? command : `"${String(command).replace(/"/g, '')}"`;
       child = execFile('cmd.exe', ['/d', '/s', '/c', `"call ${head} --version"`], { windowsHide: true, windowsVerbatimArguments: true, encoding: 'utf8', env }, done);
-    } else child = execFile(command, ['--version'], { encoding: 'utf8', env }, done);
+    } else child = execFile(command, ['--version'], { windowsHide: true, encoding: 'utf8', env }, done);
     timer = setTimeout(() => {
       timedOut = true;
       reject(Object.assign(new Error('8 秒没返回'), { code: 'version-timeout' }));

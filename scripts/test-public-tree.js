@@ -104,7 +104,8 @@ function runPublicTree({ tree, logDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p
   // A caller may reuse an artifact directory; never accept an older run's pass.
   if (fs.existsSync(file)) fs.unlinkSync(file);
   log('[public-tests] queue-wait: 4 cores; install/test budgets start after admission');
-  const run = spawn('python', [ledger, 'run', '--cores', '4', '--label', 'public-tree-tests', '--',
+  // 内存按实测申报（公开树安装 + 单测，峰值与成员版单测相当，约 0.7 GB）；CI 里用 AI_HUB_LEDGER_LABEL 标成 HUB-H CI 的步骤。
+  const run = spawn('python', [ledger, 'run', '--cores', '4', '--mem', '1', '--label', process.env.AI_HUB_LEDGER_LABEL || 'public-tree-tests', '--',
     process.execPath, __filename, '--tree', tree, '--log-dir', logDir, '--execute-in-slot'],
   { cwd: SOURCE, windowsHide: true, stdio: 'inherit', env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
   const exitCode = statusOf(run);

@@ -27,10 +27,13 @@ function registerEnvCheckIpc(ipcMain, deps) {
     proxy: deps.proxy,
     appUpdate: deps.appUpdate,
     getConfig: deps.getConfig,
+    discoverAttendanceDomain: deps.discoverAttendanceDomain,
+    probeAttendancePage: deps.probeAttendancePage,
     codeagentCommand: () => require('../../core/codeagent-config').resolveCodeAgentConfig(process.env).command,
   });
 
-  async function run() {
+  async function run({ canary = false } = {}) {
+    if (canary) return envCheck.runEnvCheck({ ...context(), canary: true });
     // 连点「重新体检」时共用进行中的那一次。
     if (running) return running;
     running = envCheck.runEnvCheck(context()).then(result => {

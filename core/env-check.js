@@ -86,6 +86,9 @@ function probeList(ctx) {
   const installAct = isCompany ? { label: '去一键安装', act: 'open-cli-install' } : null;
   const probes = [];
   const add = (id, name, area, run) => probes.push({ id, name, area, run });
+  if (ctx.canary) for (const p of require('./canary-env-probes').probes(ctx)) {
+    add(p.id, p.name, p.area, async () => ({ id: p.id, name: p.name, area: p.area, ...await p.run() }));
+  }
 
   // WeLink、PPT Doctor 只在公司版助理存在时检测（没有助理的版本不出这两项）。
   if (assistant) {
@@ -146,7 +149,8 @@ function probeList(ctx) {
 
   if (kindAllowed('codeagent')) {
     add('codeagent', 'CodeAgent', 'codeagent', async () => {
-      const found = setup.findCommand('codeagent', env, platform);
+      const configured = ctx.codeagentCommand ? ctx.codeagentCommand() : '';
+      const found = (configured && require('./codeagent-config').commandFile(configured, env)) || setup.findCommand('codeagent', env, platform);
       const check = ctx.codeagentVersionCheck || require('./codeagent-version-check');
       const downloadFix = check.DOWNLOAD_PAGE ? [{ label: '打开下载页', act: 'open-url', url: check.DOWNLOAD_PAGE }] : [];
       if (!found) {
@@ -171,7 +175,7 @@ function probeList(ctx) {
           steps: ['在命令行运行 codeagent update，或到软件中心下载最新安装包', '升级后点「重新检测」'], fixes: [...downloadFix, RECHECK],
         });
       }
-      return entry('codeagent', 'CodeAgent', 'codeagent', STATUS.ok, `v${version} · ${found}`);
+      return entry('codeagent', 'CodeAgent', 'codeagent', STATUS.ok, `v${version} · ${found}`, ctx.canary ? { fingerprint: { version, command: found } } : {});
     });
   }
 
@@ -280,7 +284,8 @@ function probeList(ctx) {
         });
       }
       const head = `${ok.map(s => s.name).join('、')} 连得上${latest ? ' · 最新 v' + latest : ''}`;
-      if (bad.length) return entry('app-update', '一键更新下载源', 'app-update', STATUS.warn, `${head}；${failText}`, { cause: '有一个下载源连不上，更新会自动改用能连上的那个。', fixes: [RECHECK], raw: failText });
+      if (bad.length && !ctx.canary) return entry('app-update', '一键更新下载源', 'app-update', STATUS.warn, `${head}；${failText}`, { cause: '有一个下载源连不上，更新会自动改用能连上的那个。', fixes: [RECHECK], raw: failText });
+      if (ctx.canary) return entry('app-update', '一键更新下载源', 'app-update', STATUS.ok, head, { fingerprint: { available: ok.map(s => s.id), fallback: failText.slice(0, 200) } });
       return entry('app-update', '一键更新下载源', 'app-update', STATUS.ok, head);
     });
   }
@@ -310,6 +315,10 @@ function probeList(ctx) {
         });
       }
     });
+  }
+  if (ctx.canary) {
+    const required = new Set(['codeagent', 'codeagent-trust', 'codeagent-signer', 'company-model-config', 'company-proxy', 'attendance-domain', 'attendance-page', 'canary-pages', 'app-update', 'data-dir', 'disk']);
+    return probes.filter(p => required.has(p.id));
   }
   return probes;
 }
@@ -351,6 +360,8 @@ async function runEnvCheck(ctx = {}, { timeoutMs = ITEM_TIMEOUT_MS, now = Date.n
 
 function sanitize(text, { home = os.homedir(), user = safeUser() } = {}) {
   let s = String(text == null ? '' : text);
+  // CLI caches can use an 8.3 profile alias; also match JSON-escaped separators.
+  s = s.replace(/\b[A-Za-z]:[\\/]+Users[\\/]+[^\\/\s"']+~\d+(?=[\\/])/gi, '~');
   if (home) {
     const variants = new Set([home, home.replace(/\\/g, '/'), home.replace(/\//g, '\\')]);
     for (const v of variants) if (v && v.length > 3) s = s.split(v).join('~').replace(new RegExp(escapeRe(v), 'gi'), '~');
