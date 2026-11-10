@@ -11,11 +11,13 @@ function nativeUnknownOutcome(result, { claude, codex, submissionId, providerTur
   const codexUnknown = submission?.id === submissionId && (submission.status === 'unknown'
     || (runtime.state === 'unknown' && providerTurnId && runtime.turnId === providerTurnId
       && submission.turnId === providerTurnId));
-  if (!claudeUnknown && !codexUnknown) return result;
+  const explicitUnknown = result.unconfirmed === true;
+  if (!claudeUnknown && !codexUnknown && !explicitUnknown) return result;
   return { ...result, reason: 'submission_unknown', finality: 'unknown',
+    ...(explicitUnknown ? { promptDelivered: null } : {}),
     submissionId, userMessageId: record?.userMessageId || result.userMessageId || null,
     providerTurnId: result.providerTurnId || providerTurnId || null,
-    signalSource: claudeUnknown ? 'claude-stream-json' : 'codex-app-server',
+    signalSource: claudeUnknown ? 'claude-stream-json' : codexUnknown ? 'codex-app-server' : result.signalSource || null,
     failure: { code: 'submission_unknown', category: 'reconciliation', retryable: false, autoRetry: false,
       action: 'reconcile_native_history', summary: '本条提交待核对' } };
 }

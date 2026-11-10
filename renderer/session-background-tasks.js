@@ -1,13 +1,12 @@
 'use strict';
 // 功能在后台替用户开的 CodeAgent 会话（PPT 找页、简报、团队分析、会议助理、助理问答、公司 AI 任务、论坛整理）
 // 统一进侧栏「后台任务」分组：用户随时能看到进展，又不挤占自己的会话。
-const BACKGROUND_PURPOSES = new Set(['company-assistant', 'company-ai', 'company-forum']);
+const { isBackgroundPurpose } = require('../core/session-background-purpose');
 const RESIDENT_PURPOSE = 'company-assistant';
 const RESIDENT_TITLE = /^(?:公司助理(?: · 手机)?$|助理问答 · |手机问答 · )/;
 const KEEP_FINISHED = 20;
 const BUSY_NOTICE = '后台任务运行中，只能查看；结束后可继续提问';
 
-const isBackgroundPurpose = purpose => BACKGROUND_PURPOSES.has(purpose);
 const wasUsed = item => !!(item.lastCompletedAt || item.runStartedAt || item.lastRunStartedAt || item.lastMessageTime);
 const isResidentCandidate = item => item?.purpose === RESIDENT_PURPOSE && RESIDENT_TITLE.test(String(item.title || ''));
 

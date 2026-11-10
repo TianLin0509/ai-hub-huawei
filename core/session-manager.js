@@ -439,7 +439,7 @@ function buildClaudePtyLaunch(id, kind, opts, cwd, env, cv) {
 // 与 buildClaudePtyLaunch 的区别：
 //   - 它不认 --session-id：新会话和分支都不带身份参数，sessionId 留空，等第一个 hook 上报后绑定；
 //     预先写一个它不会用的 id，会让后续每个 hook 都被当成外来会话丢弃，卡片永远不更新。
-//   - 它不认 --settings：群聊插件隔离、fast、CLI 主题这些靠 overlay 的设置都不传；hook 写在配置目录。
+//   - 模型专属 --settings 按 CLI 能力传入；群聊插件隔离、fast、主题 overlay 不传，hook 写在配置目录。
 //   - 必须带 --disable-update（否则弹阻塞的升级框）与 --skip-safe-check（信任框）。
 //   - 没有 Claude 的模型目录与 fast 档；思考档只有 low/medium/high/max。
 // 不改动公司电脑只靠说明约束：2026-10-15 公司真机实测 CodeAgent 1.2615 收到 --disallowedTools 照样放行 Write，
@@ -485,7 +485,7 @@ function codeagentLaunchModel(model, { pool = null, dataDir } = {}) {
     return (known.models || []).find(m => String(m).toLowerCase() === String(model).toLowerCase()) || '';
   } catch { return ''; }
 }
-// 每个会话一份只写模型的设置文件（Hub 数据目录 codeagent-launch/<会话>.json）；顺手删掉 7 天没动过的旧文件。
+// 每个会话一份只写模型的设置文件；长期开着的会话每次请求仍需读取它。
 const LAUNCH_SETTINGS_DIR = 'codeagent-launch';
 function writeCodeAgentLaunchSettings(dataDir, id, model) {
   const dir = path.join(dataDir, LAUNCH_SETTINGS_DIR);
@@ -493,13 +493,6 @@ function writeCodeAgentLaunchSettings(dataDir, id, model) {
   const file = path.join(dir, `${String(id || 'session').replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
   fs.writeFileSync(file + '.tmp', JSON.stringify({ model }), 'utf8');
   fs.renameSync(file + '.tmp', file);
-  try {
-    const cutoff = Date.now() - 7 * 86400000;
-    for (const name of fs.readdirSync(dir)) {
-      const f = path.join(dir, name);
-      if (f !== file && fs.statSync(f).mtimeMs < cutoff) fs.rmSync(f, { force: true });
-    }
-  } catch { /* 清理失败不影响启动 */ }
   return file;
 }
 function shouldPickCodeAgentModel(opts) {
@@ -557,6 +550,13 @@ function syncCodeAgentProjectMcp(cwd, hubConfigFile, hubDataDir) {
 function buildCodeAgentPtyLaunch(id, kind, opts, cwd, env, config, auth = null, pool = null) {
   const { normalizeCodeAgentModel, EFFORTS, commandHead } = require('./codeagent-config');
   const hubDataDir = getHubDataDir();
+  const { findNativeClaudeHistory } = require('./claude-native-history');
+  const historyEnv = { ...env, CLAUDE_CONFIG_DIR: config.configDir };
+  const isUuid = value => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || ''));
+  const hasHistory = value => isUuid(value) && !!findNativeClaudeHistory(value, { cwd, env: historyEnv });
+  if (opts.codeagentPrefixFork?.newSessionId && !require('./codeagent-capabilities').filterArgs(['--resume', opts.resumeCCSessionId], require('./codeagent-capabilities').readHelp(config.command)).args.includes('--resume')) {
+    throw Object.assign(new Error('当前 CodeAgent 未保留截断分支的恢复参数，未启动会话'), { code: 'CODEAGENT_PREFIX_RESUME_UNSUPPORTED' });
+  }
   const bridge = codeAgentReadOnly(opts);
   // 公司助理例外（2026-10-18）：它的额外配置里只有 Hub 给它的会话工具（core/company-assistant/hub-tools.js），要带上。
   const extraOnly = bridge && opts.purpose === 'company-assistant';
@@ -564,14 +564,21 @@ function buildCodeAgentPtyLaunch(id, kind, opts, cwd, env, config, auth = null, 
     mcpProfile: bridge ? 'none' : (opts.mcpProfile || 'full') });
   const args = ['--disable-update', '--skip-safe-check'];
   if (bridge) args.push('--setting-sources', 'user');
-  const inheritModel = !shouldPickCodeAgentModel(opts);
-  const requestedModel = inheritModel ? null : normalizeCodeAgentModel(opts.model);
+  const pinOptions = { dataDir: hubDataDir, configDir: config.configDir, command: config.command, pool };
+  let pin = require('./session-model-pin').resolveCodeAgentPin(opts, pinOptions);
+  const inheritModel = !pin.fixedModel;
+  let requestedModel = pin.fixedModel || null;
   // 模型用 --settings 文件指定（见 codeagentLaunchModel）；写法拿不准就不传，照旧由 /model 菜单选。
-  const settingsModel = requestedModel ? codeagentLaunchModel(requestedModel, { pool, dataDir: hubDataDir }) : '';
+  let settingsModel = requestedModel && pin.settingsSupported ? codeagentLaunchModel(requestedModel, { pool, dataDir: hubDataDir }) : '';
   let settingsFile = '';
   if (settingsModel) {
     try { settingsFile = writeCodeAgentLaunchSettings(hubDataDir, id, settingsModel); args.push('--settings', settingsFile); }
-    catch (error) { console.warn('[codeagent] 写启动设置文件失败，改用 /model 菜单：' + error.message); }
+    catch (error) {
+      pin = require('./session-model-pin').resolveCodeAgentPin(opts, { ...pinOptions, failureReason: '会话模型设置文件写入失败', failureCode: 'SETTINGS_WRITE_FAILED' });
+      requestedModel = pin.fixedModel || null;
+      settingsModel = '';
+      console.warn('[codeagent] 写启动设置文件失败，改用 /model 菜单：' + error.message);
+    }
   }
   if (EFFORTS.includes(opts.effort)) args.push('--effort', opts.effort);
   args.push('--permission-mode', CLAUDE_PERMISSION_MODES.has(opts.permissionMode) ? opts.permissionMode : 'bypassPermissions');
@@ -586,10 +593,6 @@ function buildCodeAgentPtyLaunch(id, kind, opts, cwd, env, config, auth = null, 
   if (mcp.profile !== 'full') args.push('--strict-mcp-config');
   syncCodeAgentProjectMcp(cwd, bridge && !extraOnly ? null : opts.mcpConfigFile, hubDataDir);
   for (const dir of claudeNativeAddDirs(bridgeSettings ? [...claudeNativeAddDirs(opts.addDirs), ...(bridgeSettings.codeRoots || [])] : opts.addDirs)) args.push('--add-dir', dir);
-  const { findNativeClaudeHistory } = require('./claude-native-history');
-  const historyEnv = { ...env, CLAUDE_CONFIG_DIR: config.configDir };
-  const isUuid = value => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || ''));
-  const hasHistory = value => isUuid(value) && !!findNativeClaudeHistory(value, { cwd, env: historyEnv });
   let sessionId = null;
   let identity = [];
   if (opts.forkCCSessionId) {
@@ -637,7 +640,9 @@ function buildCodeAgentPtyLaunch(id, kind, opts, cwd, env, config, auth = null, 
   // 请求恢复某个对话，但当前配置目录里找不到记录：会按全新会话启动，要让用户知道（A1-06）。
   const resumeHistoryMissing = !!opts.resumeCCSessionId && !opts.forkCCSessionId && isUuid(opts.resumeCCSessionId) && identity.length === 0;
   if (resumeHistoryMissing) console.warn(`[codeagent] ${String(id || '').slice(0, 8)} resume requested for ${String(opts.resumeCCSessionId).slice(0, 8)} but no history found under ${config.configDir}; starting a new conversation`);
-  return { cmd, sessionId, ...(resumeHistoryMissing ? { resumeHistoryMissing: true } : {}), model: requestedModel, settingsModel: settingsFile && launchArgs.includes('--settings') ? settingsModel : '', ...(memberMcpLearn ? { memberMcpLearn } : {}) };
+  return { cmd, sessionId, ...pin, requiresMenu: !!requestedModel && !(settingsFile && launchArgs.includes('--settings')),
+    ...(resumeHistoryMissing ? { resumeHistoryMissing: true } : {}), model: requestedModel,
+    settingsModel: settingsFile && launchArgs.includes('--settings') ? settingsModel : '', ...(memberMcpLearn ? { memberMcpLearn } : {}) };
 }
 
 // 只记录、写一行日志，不结束任何进程；这一会话里已经起的重复由膨胀回收兜底。失败只影响学习，不影响会话。
@@ -1537,7 +1542,9 @@ class SessionManager extends EventEmitter {
       if (lease) require('./session-store').resumeSessionWrites(id);
       require('./community-provider').assertProviderAvailable(kind);
       require('./company-api-config').assertLaunchConfigured(kind, getConfig());
-      return this._createSession(kind, this._withExtraMcp(kind, {...opts, id, hubUiTheme: this.presentationTheme}));
+      const session = this._createSession(kind, this._withExtraMcp(kind, {...opts, id, hubUiTheme: this.presentationTheme}));
+      if (session.fixedModel) require('./session-store').saveSessionFile(id, this.getSession(id) || session);
+      return session;
     }
     catch (error) {
       if (!this.sessions.has(id)) this._releaseOpenSession(id);
@@ -1619,7 +1626,9 @@ class SessionManager extends EventEmitter {
       if (account.sameAsPersonal || account.duplicateOf) throw new Error(`${who(account)} 和别的号重复，不能单独使用`);
       if (account.avoid) throw new Error(`${who(account)} 已暂停使用，请在左栏「账号」恢复后再新建会话`);
     } else {
-      const choice = pool.pickAutoChoice(accounts, bridge ? null : this._personalAutoCandidate(personalConfig, dataDir), { model: opts.codeagentModelPick === true ? opts.model : '' });
+      const personalCandidate = bridge ? null : this._personalAutoCandidate(personalConfig, dataDir);
+      const choice = pool.pickAutoChoice(accounts, personalCandidate, { model: opts.fixedModel || (opts.codeagentModelPick === true ? opts.model : '') })
+        || (opts.fixedModel ? pool.pickAutoChoice(accounts, personalCandidate) : null);
       if (choice?.personal) return { personalFallback: true };
       if (!choice) throw new Error(accounts.length ? '暂时没有可用的账号（已暂停、需要重新登录或没有所选模型的权限），未启动会话' : '号池里还没有账号：请到左栏「账号」添加');
       account = choice.account;
@@ -1754,23 +1763,7 @@ class SessionManager extends EventEmitter {
     const isCodexRuntime = isCodex || (isDeepSeek && !isDeepSeekLegacy);
     const isKimi = isKimiCliKind(kind);
     const isAgent = isClaude || isGemini || isCodexRuntime || isDeepSeekLegacy || isDeepSeekClaude || isKimi || isAcp || isCodeAgent;
-    let title;
-    if (opts.title) title = opts.title;
-    else if (isAcp) title = ACP_LABELS[kind.replace(/-resume$/, '')];
-    else if (kind === 'claude') title = `Claude ${++this.claudeCounter}`;
-    else if (kind === 'claude-resume') title = `Claude Resume ${++this.resumeCounter}`;
-    else if (kind === 'gemini') { this.geminiCounter = (this.geminiCounter || 0) + 1; title = `Antigravity ${this.geminiCounter}`; }
-    else if (webRoute) { this.codexCounter = (this.codexCounter || 0) + 1; title = `${webRoute.label} ${this.codexCounter}`; }
-    else if (kind === 'codex') { this.codexCounter = (this.codexCounter || 0) + 1; title = `Codex ${this.codexCounter}`; }
-    else if (kind === 'deepseek' || kind === 'deepseek-claude') { this.deepseekCounter = (this.deepseekCounter || 0) + 1; title = `DeepSeek ${this.deepseekCounter}`; }
-    else if (kind === 'kimi') { this.kimiCounter = (this.kimiCounter || 0) + 1; title = `Kimi ${this.kimiCounter}`; }
-    else if (kind === 'codeagent') { this.codeagentCounter = (this.codeagentCounter || 0) + 1; title = `CodeAgent ${this.codeagentCounter}`; }
-    else if (kind === 'gemini-resume') title = `Antigravity Resume ${++this.resumeCounter}`;
-    else if (kind === 'codex-resume') title = `Codex Resume ${++this.resumeCounter}`;
-    else if (kind === 'deepseek-resume' || kind === 'deepseek-claude-resume') title = `DeepSeek Resume ${++this.resumeCounter}`;
-    else if (kind === 'kimi-resume') title = `Kimi Resume ${++this.resumeCounter}`;
-    else if (kind === 'codeagent-resume') title = `CodeAgent Resume ${++this.resumeCounter}`;
-    else title = `PowerShell ${++this.psCounter}`;
+    const title = require('./session-default-title').defaultSessionTitle(this, kind, opts, isAgent || !!webRoute);
 
     const sessionEnv = { ...process.env };
     delete sessionEnv.CLAUDE_HUB_CLAUDE_PROFILE;
@@ -1786,8 +1779,8 @@ class SessionManager extends EventEmitter {
     require('./auto-dispatch-rules').applySessionEnv(sessionEnv, isCodeAgent ? opts.purpose : null);
     let codexProfile = null;
     let codeagentConfig = isCodeAgent ? require('./codeagent-config').resolveCodeAgentConfig(process.env) : null;
-    // 自动会话的模型由号定（2026-10-19 账号即模型）：调用方带来的模型名和选型标记一律不认，挑号也不按它；选哪个模型见下方。
-    if (isCodeAgent && codeAgentReadOnly(opts)) opts = { ...opts, model: undefined, codeagentModelPick: false, codeagentAccountModel: undefined };
+    // 自动会话首次按账号定模型；已有固定模型的恢复沿用固定值。
+    if (isCodeAgent && codeAgentReadOnly(opts) && !opts.fixedModel) opts = { ...opts, model: undefined, codeagentModelPick: false, codeagentAccountModel: undefined };
     // 号池（core/codeagent-pool.js）：新建时挑一个号，恢复/分支时回到原来那个号；换的只是配置目录。
     let codeagentPool = null;
     if (isCodeAgent && (opts.codeagentAccount === 'pool' || opts.codeagentPoolAccount)) {
@@ -1827,7 +1820,7 @@ class SessionManager extends EventEmitter {
     // 自动会话按真人在启动中心选好模型那样开（2026-10-20 用户：「直接模拟真人用户从启动中心点开创建」）：开起来后在 /model 菜单里
     // 选中这个号该用的模型（指定的模型 → 号池号同步定下的模型 → 个人账号纠正后的默认模型），第一条消息等选完再发。
     // 公司真机 Q-1020-14：只带 --setting-sources user 时，个人号启动 12 秒后仍把默认模型写成 deepseek 并报「模型不存在」；交互模式下只有菜单选择确定管用。
-    if (isCodeAgent && codeAgentReadOnly(opts)) {
+    if (isCodeAgent && codeAgentReadOnly(opts) && !opts.fixedModel) {
       // 个人账号一律选它纠正后的默认模型：新开时它就是指定模型（上面已核对），恢复时按此刻的默认照常起，不选回当初的模型。
       // 号的权限清单探测过且只有一个模型时就选它，不管 settings.json 写的什么（2026-10-20 公司真机：CodeAgent 启动时把默认模型写回 deepseek）。
       const pool = require('./codeagent-pool');
@@ -1858,7 +1851,7 @@ class SessionManager extends EventEmitter {
     // 其余一律不猜、保持原样（清单未知、清单有多个模型、配置写的值本来就在清单里或能归进清单——GLM-5.2-WX 这种分档名也算，
     // 那四种能确定的情形都轮不到这里）。选之前先看这个号的熔断，跳过了在模型日志里写清楚原因。
     // 号池号的手动会话不走这里：启动前 syncSharedConfig 已按号写好自己的模型（_resolveCodeAgentPool），没有这个问题。
-    if (isCodeAgent && freshLaunch && !codeAgentReadOnly(opts) && !codeagentPool) {
+    if (isCodeAgent && freshLaunch && !opts.fixedModel && !codeAgentReadOnly(opts) && !codeagentPool) {
       const route = require('./codeagent-model-route');
       const readPersonal = single => {
         try { return route.personalModels({ dataDir: getHubDataDir(), personalDir: codeagentConfig.configDir, single }); }
@@ -1885,7 +1878,7 @@ class SessionManager extends EventEmitter {
     // 启动后打开 /model 选菜单里的第一个（core/codeagent-model-picker.js FIRST_MENU_MODEL），个人号和号池号都一样。
     // 明确选了模型、上面已按权限清单定了模型的，照原来的走；恢复、分支、自动会话不动。
     // 这个号连续选模型没成功（熔断中，core/codeagent-auto-pick.js）就不开菜单，免得每个新会话都卡在同一个菜单上。
-    let codeagentPickFirst = isCodeAgent && freshLaunch && !codeAgentReadOnly(opts) && !shouldPickCodeAgentModel(opts);
+    let codeagentPickFirst = isCodeAgent && freshLaunch && !opts.fixedModel && !codeAgentReadOnly(opts) && !shouldPickCodeAgentModel(opts);
     // 2026-10-28 用户选 A（core/codeagent-launch-model.js）：号的模型清单权威且只有 1 个就不开菜单；多个时选这个号上次在 Hub 里切到的，没有再选第一个。
     let codeagentPickTarget = require('./codeagent-model-picker').FIRST_MENU_MODEL;
     // 清单还不知道（刚装好、刚更新，开 Hub 20 秒后那次后台读取还没跑）：交给选模型那一步先等 serve 读完再定开不开菜单（2026-11-07 用户：首次会话要丝滑）。
@@ -2412,10 +2405,17 @@ class SessionManager extends EventEmitter {
           if (moved.errors.length) console.warn('[codeagent] 回落目录后迁移对话记录失败：' + moved.errors.join('; '));
         } catch (error) { console.warn('[codeagent] 回落目录后迁移对话记录出错：' + error.message); }
       }
-      codeagentLaunch = buildCodeAgentPtyLaunch(id, kind, opts, spawnCwd, sessionEnv, codeagentConfig, auth, codeagentPool);
+      try { codeagentLaunch = buildCodeAgentPtyLaunch(id, kind, opts, spawnCwd, sessionEnv, codeagentConfig, auth, codeagentPool); }
+      catch (error) {
+        if (error.code === 'SESSION_MODEL_UNAVAILABLE' && !opts.modelCreationContext) this.emit('session-notice', { sessionId: id, level: 'error', persistent: true,
+          modelUnavailable: true, originalModel: error.model, suggestedModel: error.suggestedModel, availableModels: error.availableModels, message: error.message });
+        throw error;
+      }
       // 只有真正 --resume 已有记录时身份才已知；其余一律清空，等第一个 hook 绑定。
       // 留着一个 CLI 不会用的旧 id，后面每个 hook 都会被当成外来会话丢弃。
-      opts = { ...opts, resumeCCSessionId: codeagentLaunch.sessionId || undefined,
+      opts = { ...opts, ...require('./session-model-pin').modelPinFields(codeagentLaunch),
+        model: codeagentLaunch.fixedModel || opts.model,
+        resumeCCSessionId: codeagentLaunch.sessionId || undefined,
         resumeTranscriptPath: codeagentLaunch.sessionId ? opts.resumeTranscriptPath : undefined };
     }
     let antigravityLaunch = null;
@@ -2552,7 +2552,8 @@ class SessionManager extends EventEmitter {
       // 恢复的会话用上一轮实际模型；号池号用这次同步配置定下的模型；个人账号用纠正后的默认模型。都不知道才写占位。
       const expected = !routeModel && !shouldPickCodeAgentModel(opts)
         ? codeAgentExpectedModel(opts, { pool: codeagentPool, configDir: codeagentConfig.configDir }) : '';
-      currentModel = shouldPickCodeAgentModel(opts) ? { id: mid, displayName: require('./codeagent-models').modelLabel(mid) }
+      currentModel = opts.fixedModel ? { id: opts.fixedModel, displayName: require('./codeagent-models').modelLabel(opts.fixedModel) }
+        : shouldPickCodeAgentModel(opts) ? { id: mid, displayName: require('./codeagent-models').modelLabel(mid) }
         : routeModel ? { id: routeModel, displayName: require('./codeagent-models').modelLabel(routeModel) }
         : !shouldPickCodeAgentModel(opts)
         ? { id: '', displayName: expected ? require('./codeagent-models').modelLabel(expected) : require('./codeagent-models').PLACEHOLDER_LABEL }
@@ -2576,6 +2577,8 @@ class SessionManager extends EventEmitter {
     const ptyCodexForkLaunch = !!opts.codexForkSid && !isNativeCodex;
     const info = {
       id,
+      ...require('./session-model-pin').modelPinFields(opts),
+      ...(opts.fixedModel || currentModel?.id ? { fixedModel: opts.fixedModel || currentModel.id, modelPinSource: opts.modelPinSource || 'created' } : {}),
       kind,
       freshLaunch,
       ...(isNativeClaude ? { runtimeBackend: 'claude-stream-json', nativeRuntime: ptyProcess.runtime,
@@ -2583,6 +2586,7 @@ class SessionManager extends EventEmitter {
         nativeConfig: require('./claude-native-launch').claudeNativeResumeConfig({ ...opts,
           permissionMode: opts.permissionMode || (opts.autonomous === true || isDeepSeekLegacy ? 'bypassPermissions' : undefined) }) } : {}),
       title,
+      titleRevision: Number(opts.titleRevision) || 0,
       status: 'idle',
       ...(isNativeCodex ? {runtimeBackend:'codex-app-server',nativeRuntime:ptyProcess.runtime,
         codexApprovalPolicy:opts.approvalPolicy || 'never',codexSandbox:opts.sandbox || 'danger-full-access'} : {}),
@@ -2687,7 +2691,7 @@ class SessionManager extends EventEmitter {
         ? { codeagentActualModel: opts.codeagentActualModel.trim() } : {}),
       ...(isCodeAgent ? { codeagentConfigDir: codeagentConfig.configDir, codeagentIdentityPending: !codeagentLaunch.sessionId,
         codeagentForkSourceSessionId: opts.forkCCSessionId || opts.codeagentForkSourceSessionId || undefined,
-        codeagentModelPick: shouldPickCodeAgentModel(opts) } : {}),
+        codeagentModelPick: codeagentLaunch.requiresMenu } : {}),
       ...(isCodeAgent && codeAgentRouteModel(opts) ? { codeagentRouteModel: codeAgentRouteModel(opts) } : {}),
       ...(isCodexRuntime && opts.effort ? { effort: normalizeCodexEffort(opts.effort) } : {}),
       ...(opts.codexSid ? { codexSid: opts.codexSid } : {}),
@@ -2744,6 +2748,7 @@ class SessionManager extends EventEmitter {
     }
     this.sessions.set(id, {
       info,
+      ...(isCodeAgent ? { codeagentSettingsActive: !!codeagentLaunch.settingsModel } : {}),
       pty: ptyProcess,
       ...(isGemini ? {antigravityEnv:{...sessionEnv}} : {}),
       // 问一下：Claude Code / Codex 终端会话在后台分叉作答，要用和终端同一套环境（公司模型代理、会话 Key、配置目录）。只在内存里，不落盘。
@@ -2924,7 +2929,7 @@ class SessionManager extends EventEmitter {
       ptyProcess.on('thread-reset', () => { info.codexSid=null; info.transcriptPath=null; publish(); });
       ptyProcess.on('choices', choices => { info.nativeThreadChoices = choices; publish(); });
       ptyProcess.on('migration-draft', text => { info.nativeMigrationDraft=text; publish(); });
-      ptyProcess.on('renamed', name => { info.title = name; publish(); });
+      ptyProcess.on('renamed', name => { if (!info.userRenamed) info.title = name; publish(); });
       ptyProcess.on('lifecycle', event => {
         this.emit('codex-lifecycle',event);
       });
@@ -2976,6 +2981,11 @@ class SessionManager extends EventEmitter {
       setTimeout(() => this.emit('session-notice', { sessionId: id, message, level: 'warning' }), 0);
     }
 
+    if (codeagentLaunch?.modelChanged) {
+      require('./codeagent-models').appendModelLog(getHubDataDir(), { event: 'model-auto-switch', session: id, ...codeagentLaunch.modelChange });
+      if (!opts.modelCreationContext) setTimeout(() => this.emit('session-notice', { sessionId: id, level: 'warning', persistent: true,
+        message: require('./session-model-pin').modelChangeMessage(codeagentLaunch.modelChange) }), 0);
+    }
     if (codeagentLaunch && codeagentLaunch.resumeHistoryMissing) {
       setTimeout(() => this.emit('session-notice', { sessionId: id, level: 'warning',
         message: '没有找到这个会话之前的对话记录（可能已被清理或配置目录换过），这次是一段新对话，AI 不记得之前聊过的内容。' }), 0);
@@ -3088,10 +3098,10 @@ class SessionManager extends EventEmitter {
       // CodeAgent 交互模式不认 --model（2026-10-13 公司真机），明确选了模型就在它的 /model 菜单里再选一次。
       // 同步发出：监听方马上登记闸门，渲染进程随后发来的第一条消息会等它做完。
       if (codeagentLaunch) require('./codeagent-model-picker').resetFailure(id);
-      if (codeagentLaunch && shouldPickCodeAgentModel(opts) && codeagentLaunch.settingsModel) {
+      if (codeagentLaunch && codeagentLaunch.settingsModel) {
         try { require('./codeagent-models').appendModelLog(getHubDataDir(), { event: 'pick-skipped', session: String(id).slice(0, 8), account: codeagentPool ? '号池' : '个人',
           model: codeagentLaunch.settingsModel, reason: 'cli-settings', note: '启动参数 --settings 已指定模型（只对这个会话生效、不写配置文件），不开模型菜单' }); } catch { /* 只是日志 */ }
-      } else if (codeagentLaunch && shouldPickCodeAgentModel(opts)) this.emit('codeagent-model-pick', { sessionId: id, modelId: codeagentLaunch.model, reason: 'launch' });
+      } else if (codeagentLaunch && codeagentLaunch.requiresMenu) this.emit('codeagent-model-pick', { sessionId: id, modelId: codeagentLaunch.model, reason: 'launch' });
       else if (codeagentLaunch && codeagentPickFirst) this.emit('codeagent-model-pick', { sessionId: id, modelId: codeagentPickTarget, reason: 'launch',
         ...(codeagentPickListUnknown ? { listUnknown: true, accountKey: codeagentPool ? codeagentPool.account.id : 'personal', configDir: codeagentConfig.configDir } : {}) });
     }
@@ -3771,6 +3781,52 @@ try {
     return { ...session.info };
   }
 
+  async ensureSessionModelReady(sessionId, options = {}) {
+    const entry = this.sessions.get(sessionId);
+    if (!entry || !isCodeAgentKind(entry.info.kind)) return;
+    const info = entry.info;
+    const pins = require('./session-model-pin');
+    const config = { ...require('./codeagent-config').resolveCodeAgentConfig(process.env), ...(info.codeagentConfigDir ? { configDir: info.codeagentConfigDir } : {}) };
+    const accounts = require('./codeagent-pool');
+    const known = info.codeagentPoolAccount ? accounts.accountModels(config.configDir) : null;
+    const pool = known ? { account: { models: known.models, modelsAuthoritative: known.authoritative } } : null;
+    try {
+      const requiresSelection = info.codeagentModelPick && !require('./codeagent-model-picker').isPicking(sessionId);
+      const pin = pins.resolveCodeAgentPin({ ...info, ...pins.migrateModelPin(info) }, {
+        dataDir: getHubDataDir(), configDir: config.configDir, command: config.command, pool,
+        ...(requiresSelection ? { failureReason: '尚未完成原模型选择' } : {}),
+      });
+      if (!pin.fixedModel || !requiresSelection && !pin.modelChanged && pin.fixedModel === info.fixedModel) return;
+      if (!requiresSelection && pin.modelChanged && pin.fixedModel === info.fixedModel
+          && (!pin.settingsSupported || pin.modelChange.reason === info.modelChange?.reason)) return;
+      if (entry.codeagentSettingsActive && pin.settingsSupported) {
+        writeCodeAgentLaunchSettings(getHubDataDir(), sessionId, pin.fixedModel);
+      } else {
+        if (!this.listenerCount('codeagent-model-pick')) throw pins.unavailableError(info.fixedModel, '模型菜单尚未就绪');
+        this.emit('codeagent-model-pick', { sessionId, modelId: pin.fixedModel, reason: 'model-config-fix' });
+        const picked = await require('./codeagent-model-picker').waitForPick(sessionId);
+        if (!picked?.ok || picked.fallback && this.getSession(sessionId)?.fixedModel !== pin.fixedModel) throw pins.unavailableError(info.fixedModel, '未能确认替代模型');
+      }
+      const fields = { ...pins.modelPinFields(pin), codeagentModelPick: false,
+        currentModel: { id: pin.fixedModel, displayName: require('./codeagent-models').modelLabel(pin.fixedModel) } };
+      require('./session-store').saveSessionFile(sessionId, { ...info, ...fields });
+      this.updateSessionMeta(sessionId, fields);
+      if (pin.modelChanged) {
+        require('./codeagent-models').appendModelLog(getHubDataDir(), { event: 'model-auto-switch', session: sessionId, ...pin.modelChange });
+        this.emit('session-notice', { sessionId, level: 'warning', persistent: true, message: pins.modelChangeMessage(pin.modelChange) });
+      }
+    } catch (error) {
+      error.notSent = true;
+      if (error.code === 'SESSION_MODEL_UNAVAILABLE') {
+        const paused = this.updateSessionMeta(sessionId, { codeagentModelPick: true, modelConfirmationRequired: true, modelUnavailableReason: error.reason || error.message });
+        require('./session-store').saveSessionFile(sessionId, paused || info);
+        if (!options.deferModelNotice) this.emit('session-notice', { sessionId, level: 'error', persistent: true,
+          modelUnavailable: true, originalModel: error.model, suggestedModel: error.suggestedModel, availableModels: error.availableModels, message: error.message });
+      }
+      throw error;
+    }
+  }
+
   // Record proof that Hub actually wrote a managed Codex command. Never retain
   // the command itself: ephemeral MCP arguments can contain paths or env values.
   // A SHA-256 plus the normalized policy fields is enough to distinguish a Hub
@@ -4244,7 +4300,11 @@ try {
       return false;
     }
     const kind = s.info && s.info.kind;
-    const modelId = s.info && s.info.currentModel && s.info.currentModel.id;
+    if (isCodeAgentKind(kind)) {
+      s.modelSubmissionEpoch = (s.modelSubmissionEpoch || 0) + 1;
+      this.emit('session-model-reset', { sessionId });
+    }
+    const modelId = require('./session-capabilities').sessionModelId(s.info);
     const meetingId = s.info && s.info.meetingId;
     // 群聊成员：复用 buildGroupChatIsolationFlags 输出 (v2 后仅 --settings,不含
     //   --disable-slash-commands;详见该函数注释)。
@@ -4253,7 +4313,7 @@ try {
     const baseKind = (typeof runtimeKind === 'string') ? runtimeKind.replace(/-resume$/, '') : runtimeKind;
     const isClaudeCli = isClaudeFamily(baseKind);
     const autonomous = !!(s.info && s.info.autonomous);
-    // Code Agent 不认 --settings，群聊隔离 overlay 对它无效，不传。
+    // CodeAgent 的群聊隔离 overlay 不传；模型专属设置由启动器单独处理。
     const isolation = isClaudeCli && !isCodeAgentKind(baseKind) ? buildGroupChatIsolationFlags(meetingId || autonomous) : '';
     let cmd;
     if (isCodeAgentKind(runtimeKind)) {
@@ -4265,12 +4325,26 @@ try {
       // 原地重拉是一个全新的 CodeAgent 进程，按当前规则重新写进系统提示（同 Claude）。
       const relaunchRules = this.hubRulesSystemPrompt({}, s.info && s.info.purpose);
       if (s.info) s.info.hubRulesSystem = SessionManager.hubRulesRecord(relaunchRules);
+      const known = s.info.codeagentPoolAccount ? require('./codeagent-pool').accountModels(config.configDir) : null;
+      const pool = known ? { account: { models: known.models, modelsAuthoritative: known.authoritative, modelsSource: known.probedSource } } : null;
       const launch = buildCodeAgentPtyLaunch(sessionId, 'codeagent', {
         model: modelId, effort: s.info && s.info.effort, mcpConfigFile: s.claudeMcpConfigFile,
+        ...require('./session-model-pin').migrateModelPin(s.info),
         mcpProfile: s.info && s.info.mcpProfile, appendSystemPromptFile: relaunchRules ? relaunchRules.file : undefined,
         purpose: s.info && s.info.purpose,
         codeagentModelPick: false,
-      }, s.info && s.info.cwd, s.pty.options?.env || process.env, config);
+      }, s.info && s.info.cwd, s.pty.options?.env || process.env, config, null, pool);
+      s.codeagentSettingsActive = !!launch.settingsModel;
+      if (launch.modelChanged || launch.fixedModel !== s.info.fixedModel) {
+        const fields = { ...require('./session-model-pin').modelPinFields(launch),
+          currentModel: { id: launch.fixedModel, displayName: require('./codeagent-models').modelLabel(launch.fixedModel) } };
+        require('./session-store').saveSessionFile(sessionId, { ...s.info, ...fields });
+        this.updateSessionMeta(sessionId, fields);
+        if (launch.modelChanged) this.emit('session-notice', { sessionId, persistent: true, level: 'warning', message: require('./session-model-pin').modelChangeMessage(launch.modelChange) });
+      } else {
+        Object.assign(s.info, require('./session-model-pin').modelPinFields(launch));
+      }
+      s.codeagentRelaunchNeedsMenu = launch.requiresMenu;
       if (launch.memberMcpLearn) scheduleNativeMcpLearn(this, sessionId, Number(s.pty?.pid), launch.memberMcpLearn);
       Object.assign(s.info, { ccSessionId: undefined, transcriptPath: undefined, codeagentIdentityPending: true, codeagentModelPick: false });
       cmd = launch.cmd;
@@ -4411,11 +4485,9 @@ try {
     s.groupChatReady = false;
     if (isCodeAgentKind(runtimeKind)) {
       require('./codeagent-model-picker').resetFailure(sessionId);
-      // CodeAgent 交互模式不认 --model，选模型后菜单又会把全局默认恢复原样，所以重拉出来的新进程回到 CLI 默认模型。
-      // 只有用户明确选中过、且当前显示的仍是那个模型时，才再走一次 /model 菜单（随后的第一条消息会等它做完）；
-      // 历史选型标记（codeagentModelPick）和从记录里观察到的默认模型都不会触发。
-      const userModel = s.info && s.info.codeagentUserModel;
-      if (userModel && modelId === userModel && !codeAgentReadOnly(s.info)) {
+      // 固定模型已经通过 --settings 传入时不打开菜单；能力不足时等待菜单选择完成。
+      const userModel = s.info && (s.info.fixedModel || s.info.codeagentUserModel);
+      if (userModel && s.codeagentRelaunchNeedsMenu) {
         this.emit('codeagent-model-pick', { sessionId, modelId: userModel, reason: 'relaunch' });
       }
     }
@@ -4431,6 +4503,7 @@ try {
   // Returns the public shape used by renderer IPC and 'session-updated' events.
   _toPublic(info) {
     return {
+      ...require('./session-model-pin').modelPinFields(info),
       // 千问 / GLM 走终端时没有 runtimeBackend，卡片提示（如 Token Plan 改道说明）也要随更新送到界面。
       ...(isAcpKind(info.kind) ? {cliRuntime:info.cliRuntime||null,nativeActionError:info.nativeActionError || null} : {}),
       ...(isAcpKind(info.kind) ? {acpSid:info.acpSid,acpProfileId:info.acpProfileId,
@@ -4449,6 +4522,7 @@ try {
       id: info.id,
       meetingId: info.meetingId || null,
       title: info.title,
+      titleRevision: Number(info.titleRevision) || 0,
       kind: info.kind,
       freshLaunch: info.freshLaunch === true,
       cwd: info.cwd,

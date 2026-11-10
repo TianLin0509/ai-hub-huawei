@@ -16,6 +16,8 @@ const path = require('path');
 const { getHubDataDir } = require('./data-dir');
 const { migrateLegacyBranchSessionMeta } = require('./session-title-guards');
 const { positiveTimestamp, preserveLatestInteraction } = require('./session-recency');
+const { preserveTitleMetadata } = require('./title-metadata');
+const { withTitleBackupWrite, withTitleBackupWriteAsync } = require('./title-backup-write');
 const _activityHighWater = new Map();
 
 function preserveActivity(hubId, data) {
@@ -82,14 +84,17 @@ function _sanitizeConnectionIssueAck(value) {
 }
 
 function _buildSessionPayload(hubId, data) {
+  data = preserveTitleMetadata(data, loadSessionFile(hubId));
   data = preserveActivity(hubId, data);
   data = migrateLegacyBranchSessionMeta(data);
   const now = Date.now();
   return {
     schemaVersion: SCHEMA_VERSION,
+    ...require('./session-model-pin').modelPinFields(data),
     hubId,
     kind: typeof data.kind === 'string' ? data.kind : 'claude',
     title: typeof data.title === 'string' ? data.title : null,
+    titleRevision: Number(data.titleRevision) || 0,
     cwd: typeof data.cwd === 'string' ? data.cwd : null,
     workspaceLabel: typeof data.workspaceLabel === 'string' ? data.workspaceLabel : null,
     pinned: !!data.pinned,
@@ -204,7 +209,7 @@ function saveSessionFile(hubId, data) {
   const tmp = _tempPath(hubId);
   try {
     fs.writeFileSync(tmp, JSON.stringify(payload));
-    fs.renameSync(tmp, sessionFilePath(hubId));
+    return withTitleBackupWrite(sessionFilePath(hubId), Object.hasOwn(data, 'titleRevision') ? data.titleRevision : payload.titleRevision, () => fs.renameSync(tmp, sessionFilePath(hubId)));
   } finally {
     try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
   }
@@ -216,23 +221,23 @@ async function saveSessionFileAsync(hubId, data) {
   const tmp = _tempPath(hubId);
   try {
     await fs.promises.writeFile(tmp, JSON.stringify(payload));
-    await fs.promises.rename(tmp, sessionFilePath(hubId));
+    return await withTitleBackupWriteAsync(sessionFilePath(hubId), Object.hasOwn(data, 'titleRevision') ? data.titleRevision : payload.titleRevision, () => fs.promises.rename(tmp, sessionFilePath(hubId)));
   } finally {
     try { await fs.promises.unlink(tmp); } catch {}
   }
 }
 
-function loadSessionFile(hubId, {strict = false} = {}) {
+function loadSessionFile(hubId, {strict = false, raw = false} = {}) {
   try {
-    const raw = fs.readFileSync(sessionFilePath(hubId), 'utf-8');
-    const obj = JSON.parse(raw);
+    const contents = fs.readFileSync(sessionFilePath(hubId), 'utf-8');
+    const obj = JSON.parse(contents);
     if (obj.schemaVersion !== SCHEMA_VERSION) {
       if(strict)throw Error('不支持的会话记录版本：' + obj.schemaVersion);
       console.warn(`[session-store] schema mismatch for ${hubId}: ${obj.schemaVersion}`);
       return null;
     }
     if (typeof obj.updatedAt !== 'number') obj.updatedAt = obj.savedAt || 0;
-    return migrateLegacyBranchSessionMeta(obj);
+    return raw ? obj : migrateLegacyBranchSessionMeta(obj);
   } catch (e) {
     if(strict && e.code!=='ENOENT')throw e;
     if (e.code !== 'ENOENT') console.warn(`[session-store] load ${hubId} failed:`, e.message);
@@ -278,20 +283,24 @@ function _isRemoved(hubId) {
   return !!(ss && typeof ss.isMarkedRemovedSession === 'function' && ss.isMarkedRemovedSession(hubId));
 }
 
-function _enqueueWrite(hubId, snap) {
+function withWriteLock(hubId, write) {
   const previous = _writeChains.get(hubId) || Promise.resolve();
-  const task = previous.then(async () => {
-    if (_isRemoved(hubId) || _releasedWrites.has(hubId)) return;
-    await saveSessionFileAsync(hubId, snap);
-    if (_dirty.get(hubId) === snap) _dirty.delete(hubId);
-  });
+  const task = previous.then(write);
   const tracked = task
     .catch(error => console.warn(`[session-store] async flush ${hubId} failed:`, error.message))
     .finally(() => {
       if (_writeChains.get(hubId) === tracked) _writeChains.delete(hubId);
     });
   _writeChains.set(hubId, tracked);
-  return tracked;
+  return task;
+}
+function _enqueueWrite(hubId, snap, { strict = false } = {}) {
+  const task = withWriteLock(hubId, async () => {
+    if (_isRemoved(hubId) || _releasedWrites.has(hubId)) return;
+    await saveSessionFileAsync(hubId, snap);
+    if (_dirty.get(hubId) === snap) _dirty.delete(hubId);
+  });
+  return strict ? task : task.catch(() => {});
 }
 
 function markDirty(hubId, data) {
@@ -349,6 +358,14 @@ function flushAll() {
   _dirty.clear();
 }
 
+// Confirmation boundary: wait behind older writes and propagate actual I/O
+// failures. Failed snapshots remain dirty so an unchanged retry writes again.
+async function flushPending() {
+  for (const timer of _timers.values()) clearTimeout(timer);
+  _timers.clear();
+  await Promise.all([..._dirty].map(([id, snap]) => _enqueueWrite(id, snap, { strict: true })));
+}
+
 function cancelDirty(hubId) {
   if (_timers.has(hubId)) {
     clearTimeout(_timers.get(hubId));
@@ -383,6 +400,8 @@ module.exports = {
   markDirtySync,
   cancelDirty,
   flushAll,
+  flushPending,
+  withWriteLock,
   SCHEMA_VERSION,
   DEBOUNCE_MS,
 };

@@ -35,6 +35,7 @@ function createResumeSessionHandler(deps) {
     sessionManager,
     slotIds,
     ensureLaunchAuth,
+    requestModelConfirmation,
   } = deps;
 
   function addCodexMcpEntry(resumeOpts, entry) {
@@ -60,14 +61,19 @@ function createResumeSessionHandler(deps) {
     // This window may have been idle since before another Hub's last turn.
     // Resume the persisted authoritative identity, never its boot-time copy.
     const saved = require('../../core/session-store').loadSessionFile(meta.hubId,{strict:true});
+    const identityAtOpen = Object.fromEntries(['kind', 'ccSessionId', 'codexSid', 'transcriptPath'].map(key => [key, (saved || meta)[key]]));
     if (saved) meta = {...meta, ...saved, hubId:meta.hubId};
     // 显式的启动覆盖（助理切换模型/深度）在磁盘记录之后生效，否则会被旧记录里的型号盖回去。
     if (launchOverrides) {
       const { model, ...rest } = launchOverrides;
-      meta = { ...meta, ...rest, ...(model ? { model, currentModel: { id: model, displayName: model } } : {}) };
-      if (model && /^codeagent(?:-resume)?$/.test(meta.kind) && !AUTOMATIC_CODEAGENT_PURPOSES.has(meta.purpose)) codeagentModelPick = rest.codeagentModelPick !== false;
+      meta = { ...meta, ...rest, ...(model ? { model, fixedModel: model, modelPinSource: 'user', modelChange: null, modelConfirmationRequired: false, modelUnavailableReason: '', currentModel: { id: model, displayName: model } } : {}) };
+      if (model && /^codeagent(?:-resume)?$/.test(meta.kind)) {
+        meta.codeagentUserModel = model;
+        if (!AUTOMATIC_CODEAGENT_PURPOSES.has(meta.purpose)) codeagentModelPick = rest.codeagentModelPick !== false;
+      }
     }
     delete meta.launchOverrides;
+    meta = { ...meta, ...require('../../core/session-model-pin').migrateModelPin(meta) };
     // Account switch (2026-10-28): reopen the same conversation in a new Claude
     // process under a new native session id (--resume <old> --fork-session), so
     // the old id never appears under the new account.
@@ -277,12 +283,23 @@ function createResumeSessionHandler(deps) {
       }
     }
 
+    // 自动目的会话也沿用已保存或迁移出的固定模型；确实没有型号时再让账号解析默认值。
     const automaticCodeAgent = /^codeagent(?:-resume)?$/.test(meta.kind) && AUTOMATIC_CODEAGENT_PURPOSES.has(meta.purpose);
-    const safeResumeModel = automaticCodeAgent ? '' : sessionModelId(meta);
-    const createdSession = sessionManager.createSession(meta.kind || 'claude', {
+    const safeResumeModel = automaticCodeAgent && !meta.fixedModel ? '' : sessionModelId(meta);
+    const createdSession = await require('../session-model-creation').createSessionWithModelPolicy({
+      kind: meta.kind || 'claude', operation: 'resume',
+      contextLabel: `恢复会话 ${meta.title || meta.kind || 'AI'}`,
+      requestConfirmation: requestModelConfirmation, sendToRenderer,
+      canCreate: () => {
+        const current = require('../../core/session-store').loadSessionFile(meta.hubId, { strict: true });
+        return (!saved || !!current) && (!current || Object.keys(identityAtOpen).every(key => current[key] === identityAtOpen[key]));
+      },
+      create: (kind, opts) => sessionManager.createSession(kind, opts), opts: {
       ...(reservation ? {_openLeaseNonce:reservation} : {}),
       id: meta.hubId,
+      ...require('../../core/session-model-pin').modelPinFields(meta),
       title: meta.title,
+      titleRevision: Number(meta.titleRevision) || 0,
       cwd: (isGemini && meta.geminiProjectRoot) ? meta.geminiProjectRoot : meta.cwd,
       ...(meta.cwdFellBackFrom ? { cwdFellBackFrom: meta.cwdFellBackFrom } : {}),
       ...(meta.workspaceLabel ? { workspaceLabel: meta.workspaceLabel } : {}),
@@ -377,7 +394,7 @@ function createResumeSessionHandler(deps) {
       ...(meta.researchSessionId ? { researchSessionId: meta.researchSessionId } : {}),
       ...(meta.hiddenFromSidebar ? { hiddenFromSidebar: true } : {}),
       ...resumeOpts,
-    });
+    } });
     registerSessionForTap(createdSession);
     // CodexTap can synchronously discover and publish a persisted rollout
     // while registerSessionForTap is still on the stack. Always send/return the

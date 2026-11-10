@@ -256,7 +256,7 @@ function createGroupChatForkUi({ document, ipcRenderer, notify, getMeetings, sel
             return;
           }
           say(`已新建「${result.meeting.title}」`);
-          if (typeof selectMeeting === 'function') selectMeeting(result.meeting.id);
+          if (typeof selectMeeting === 'function') selectMeeting(result.meeting.id, { created: true });
         },
       },
       ...groupChats.map(meeting => ({
@@ -301,7 +301,7 @@ function createGroupChatForkUi({ document, ipcRenderer, notify, getMeetings, sel
       return;
     }
     say(`已分支为「${result.meeting.title}」`);
-    if (typeof selectMeeting === 'function') selectMeeting(result.meeting.id);
+    if (typeof selectMeeting === 'function') selectMeeting(result.meeting.id, { created: true });
   }
 
   return { addExistingSessionToMeeting, forkMeeting, openJoinGroupMenu };

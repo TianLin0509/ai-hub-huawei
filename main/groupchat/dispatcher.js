@@ -102,10 +102,12 @@ function createGroupChatDispatcher(deps) {
     sessionManager,
     transcriptTap,
     recoverLaunchAuth,
+    confirmSessionModel,
   } = deps;
 
   groupChatWatcher.init({
     sessionManager,
+    confirmSessionModel,
     cliReadyDetector,
     transcriptTap,
     enableSendDiagnostics: process.env.HUB_GROUPCHAT_SEND_DIAGNOSTICS === '1',
@@ -1020,7 +1022,7 @@ function createGroupChatDispatcher(deps) {
     }).filter(Boolean);
   }
 
-  async function dispatchInternalPrompt(meetingId, meeting, targetMembers, userInput, turnTimeoutMs, workflowRun = null) {
+  async function dispatchInternalPrompt(meetingId, meeting, targetMembers, userInput, turnTimeoutMs, workflowRun = null, shouldSubmit = () => true) {
     for (const member of targetMembers) {
       try { transcriptTap.clearStreamingBuf(member.sid); }
       catch (error) { warn('[groupchat] internal clearStreamingBuf failed:', error && error.message); }
@@ -1073,7 +1075,8 @@ function createGroupChatDispatcher(deps) {
         const sendStartedAt = Date.now();
         if (t.attemptId) _orch.updateAttempt(t.attemptId, { status: 'submitting', dispatchAt: sendStartedAt }, 'attempt_submitting');
         const sendResult = await groupChatWatcher.sendToPty(t.sid, t.prompt, t.kind, {
-          clientSubmissionId: t.attemptId, metadata: { attemptId: t.attemptId, runId, meetingId },
+          clientSubmissionId: t.attemptId, workflowMessageId: workflowRun?.kind === 'orchestration' ? workflowRun.runId : undefined, metadata: { attemptId: t.attemptId, runId, meetingId },
+          shouldSubmit: () => shouldSubmit() && !!meetingManager.getMeeting(meetingId)?.subSessions?.includes(t.sid),
         });
         if (sendResult && sendResult.ok) {
           t.promptSubmitSinceTs = Math.max(0, sendStartedAt - 1000);
@@ -1095,7 +1098,7 @@ function createGroupChatDispatcher(deps) {
             sid: t.sid, label: t.label, status: 'errored', text: '',
             reason: failure.code, failure, runId, attemptId: t.attemptId,
             deliveredIdx: t.deliveredIdx, deliveredSeq: t.deliveredSeq,
-            promptDelivered: false,
+            promptDelivered: false, unconfirmed: sendResult?.unconfirmed === true,
           }, t);
           if (t.attemptId) _orch.settleAttempt(t.attemptId, result);
           sendFailures.push(result);
@@ -1472,7 +1475,7 @@ function createGroupChatDispatcher(deps) {
         return { status: 'error', reason: '请先勾选至少一位 AI 成员，或用 @ 指定成员', turnNum: null };
       }
       if (silent) {
-        return await dispatchInternalPrompt(meetingId, meeting, targetMembers, userInput || '', turnTimeoutMs, workflowRun);
+        return await dispatchInternalPrompt(meetingId, meeting, targetMembers, userInput || '', turnTimeoutMs, workflowRun, () => !interruptedSinceStart() && (!shouldDispatch || shouldDispatch()));
       }
       if (!silent) maybeAutoTitleMeetingFromPrompt(meetingId, userInput || '');
 
@@ -1618,8 +1621,8 @@ function createGroupChatDispatcher(deps) {
             if (!silent) publishAttempt(meetingId, orch, submitting);
           }
           const sendResult = await groupChatWatcher.sendToPty(t.sid, t.prompt, t.kind, {
-            clientSubmissionId: t.attemptId, metadata: { attemptId: t.attemptId, runId, meetingId, turnNum },
-            shouldSubmit:()=>!interruptedSinceStart() && (!shouldDispatch || shouldDispatch()),
+            clientSubmissionId: t.attemptId, workflowMessageId: workflowRun?.kind === 'orchestration' ? workflowRun.runId : undefined, metadata: { attemptId: t.attemptId, runId, meetingId, turnNum },
+            shouldSubmit:()=>!interruptedSinceStart() && (!shouldDispatch || shouldDispatch()) && !!meetingManager.getMeeting(meetingId)?.subSessions?.includes(t.sid),
           });
           const ok = sendResult && sendResult.ok;
           const sendStatus = sendResult && sendResult.sendStatus;
@@ -1700,8 +1703,8 @@ function createGroupChatDispatcher(deps) {
               reason: sendResult && sendResult.reason || 'cli_not_ready',
               deliveredIdx: t.deliveredIdx,
               deliveredSeq: t.deliveredSeq,
-              // 没送进 CLI：completeTurn 不得推进它的已读游标（下一轮要补上这段）。
-              promptDelivered: false,
+              // 明确未送达保留游标；未知提交交给核对关卡，不能自动补发。
+              promptDelivered: false, unconfirmed: sendResult?.unconfirmed === true,
               runId,
               attemptId: t.attemptId,
               failure: classifyProviderFailure({

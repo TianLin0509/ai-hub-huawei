@@ -1,6 +1,7 @@
 'use strict';
 
 const { KIND_LABELS, HARNESS_LABELS } = require('./ai-kinds.js');
+const { isBackgroundPurpose } = require('./session-background-purpose');
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -54,6 +55,9 @@ function normalizeLegacyBranchSessionTitle(title) {
 
 function migrateLegacyBranchSessionMeta(session, kindLabels = KIND_LABELS) {
   if (!session || typeof session !== 'object') return session;
+  if (/^\[Team\]/.test(session.title || '') && !Object.hasOwn(session, 'hiddenFromSidebar') && !session.userRenamed && !isBackgroundPurpose(session.purpose)) {
+    session = { ...session, hiddenFromSidebar: true };
+  }
   const displayTitle = sessionDisplayTitle(session, kindLabels);
   if (displayTitle && displayTitle !== normalizeTitle(session.title)) session = { ...session, title: displayTitle };
   const originalTitle = normalizeTitle(session.title);
@@ -101,6 +105,7 @@ function isClaudeCodePlaceholderTitle(title) {
 function isGenericAutoSessionTitle(title, kindLabels = KIND_LABELS) {
   const clean = normalizeTitle(title);
   return !clean
+    || /^新会话 \d+$/.test(clean)
     || Object.values(HARNESS_LABELS).includes(clean)
     || isClaudeCodePlaceholderTitle(clean)
     || buildGenericSessionTitleRe(kindLabels).test(clean);

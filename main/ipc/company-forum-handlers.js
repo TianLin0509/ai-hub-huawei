@@ -5,8 +5,8 @@ function registerCompanyForumIpc(ipcMain, service, { shell, browser } = {}) {
   const handlers = {
     status: () => service.status(),
     sync: async () => { await service.sync({ reason: 'manual' }); return service.status(); },
-    // 打开论坛页：今天还没同步就开始（不等结果）。
-    'ensure-today': () => { const st = service.status(); if (!st.today && !st.syncing && st.settings.enabled) void service.sync({ reason: 'open' }).catch(() => {}); return service.status(); },
+    // 打开论坛页：今天还没同步，或当天快照来自旧抽取规则时开始（不等结果）。
+    'ensure-today': () => { const st = service.status(); if ((!st.today || st.needsRefresh) && !st.syncing && st.settings.enabled) void service.sync({ reason: 'open' }).catch(() => {}); return service.status(); },
     summarize: () => service.summarize(service.status().day),
     login: request => service.login(String(request?.site || '')),
     'set-settings': request => ({ ok: true, settings: service.setSettings(request || {}) }),

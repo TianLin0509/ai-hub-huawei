@@ -67,8 +67,11 @@ export function createPoolAccessTokenReader(config={}){
    // No account enumeration or alternate OAuth fallback. Whole JSON bytes can include mtoken;
    // only the two confirmed IDaaS fields below are accessed, and mtoken is never used/decrypted.
    let credential=await readJson(join(root,'accounts',accountId,'.credentials.json'),signal,'CREDENTIAL');
-   const idaas=credential?.idaasOAuth;requireFact(object(idaas),'POOL_AUTH_TYPE_UNSUPPORTED');
-   const expiry=idaas.xAuthExpires,encrypted=idaas.xAuthToken;credential=undefined;
+   // Account-password login (idaasOAuth) or browser login (devUCOAuth, accessToken / expiresAt in ms); token and expiry only.
+   const idaas=object(credential?.idaasOAuth)&&credential.idaasOAuth.xAuthToken?credential.idaasOAuth:null;
+   const devuc=!idaas&&object(credential?.devUCOAuth)?credential.devUCOAuth:null;
+   requireFact(idaas||devuc,'POOL_AUTH_TYPE_UNSUPPORTED');
+   const expiry=idaas?idaas.xAuthExpires:devuc.expiresAt,encrypted=idaas?idaas.xAuthToken:devuc.accessToken;credential=undefined;
    requireFact(Number.isSafeInteger(expiry)&&expiry>0,'POOL_EXPIRY_INVALID');
    const validExpiry=()=>requireFact(expiry-(nowMs+performance.now()-began)>minValidityMs,'POOL_ACCESS_TOKEN_EXPIRED_OR_NEAR_EXPIRY');
    validExpiry();const ciphertext=cipher(encrypted);requireFact(ciphertext!==null,'POOL_ACCESS_TOKEN_CIPHERTEXT_INVALID');cancelled(signal);

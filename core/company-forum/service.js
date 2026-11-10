@@ -36,7 +36,9 @@ class CompanyForum {
     this.workspace = path.join(this.dir, 'workspace');
     this.job = null;
     this.syncing = null;
+    this.pendingLoginSites = new Set();
     this.progress = '';
+    this.syncError = '';
     this.logins = {};
     this.loginErrors = {};
     this.timers = [];
@@ -131,26 +133,46 @@ class CompanyForum {
 
   // ---- 同步 ----
   sync({ sites = null, reason = 'manual' } = {}) {
-    if (this.syncing) return this.syncing;
-    this.syncing = this.collect({ only: sites, reason }).finally(() => { this.syncing = null; this.progress = ''; this.changed(); });
+    if (this.syncing) {
+      // 多个登录回执只合并到下一次同步，不为每个回执另排一个任务。
+      if (reason === 'login') for (const id of sites || []) this.pendingLoginSites.add(id);
+      return this.syncing;
+    }
+    this.syncError = '';
+    this.syncing = this.collect({ only: sites, reason }).catch(error => {
+      const why = error.code === 'EISDIR' ? '保存位置被同名文件夹占用（EISDIR）' : short(error.message, 120);
+      this.syncError = `论坛同步失败：${why}。点「刷新」重试。`;
+      throw error;
+    }).finally(() => {
+      this.syncing = null;
+      this.progress = '';
+      const pending = [...this.pendingLoginSites];
+      this.pendingLoginSites.clear();
+      if (pending.length) void this.sync({ sites: pending, reason: 'login' }).catch(error => console.warn('[company-forum] login sync', error.message));
+      this.changed();
+    });
     this.changed();
     return this.syncing;
   }
   setProgress(text) { this.progress = text; this.changed(); }
   async collect({ only = null, reason = 'manual' } = {}) {
     const now = this.now(), day = dayKey(now), s = this.settings(), bases = this.bases(), prev = this.snapshot(day);
-    const snap = { day, at: now, reason, attempts: (prev?.attempts || 0) + 1, domain: this.domain(), sites: [], overview: prev?.overview || [], summaryNote: '', summarizing: false };
+    const snap = { day, at: now, reason, extractionVersion: X.EXTRACTION_VERSION, attempts: (prev?.attempts || 0) + 1, domain: this.domain(), sites: [], overview: prev?.overview || [], summaryNote: '', summarizing: false };
     const browser = this.deps.browser;
     for (const site of S.SITES) {
       const old = prev?.sites?.find(x => x.id === site.id);
-      if (only && !only.includes(site.id) && old) { snap.sites.push(old); continue; }
+      if (only && !only.includes(site.id) && old) {
+        // 局部重抓不能让另一站仍旧的抽取结果也变成新版。
+        if (prev.extractionVersion !== X.EXTRACTION_VERSION) snap.extractionVersion = prev.extractionVersion || 0;
+        snap.sites.push(old); continue;
+      }
       const base = bases[site.id], home = S.homeUrl(site, base);
       const entry = { id: site.id, name: site.name, short: site.short, base: base || '', home, ok: false, needsLogin: false, error: '', lists: [], at: this.now() };
       if (!base) { entry.error = '还不知道公司站点的域名：在「设置」里填一次（一般就是公司邮箱 @ 后面那段）。'; snap.sites.push(entry); continue; }
       if (!browser) { entry.error = '浏览器窗口不可用'; snap.sites.push(entry); continue; }
       this.setProgress(`正在打开${site.name}…`);
       try {
-        const cap = await browser.capture({ url: home, base, clickText: site.clickText, clickUnless: site.clickUnless || null, sections: site.lists.map(l => l.heading), api: site.api });
+        const cap = await browser.capture({ url: home, base, clickText: site.clickText, clickUnless: site.clickUnless || null, sections: site.lists.map(l => l.heading), api: site.api, loginGraceMs: 25000 });
         if (cap.needsLogin || X.looksLikeLogin(cap, base)) { entry.needsLogin = true; entry.error = `${site.name}需要登录：点「登录」在弹出的窗口里登录一次，以后自动同步。`; }
         else {
           entry.lists = X.postsForSite(site, cap, { base, limit: s.perList });
@@ -304,8 +326,17 @@ class CompanyForum {
     this.logins[site.id] = 'waiting';
     this.loginErrors[site.id] = '';
     this.changed();
-    void Promise.resolve().then(() => this.deps.browser.login({ url: S.homeUrl(site, base), base, title: `登录${site.name}（AI Hub 论坛）` }))
-      .then(r => { this.logins[site.id] = r && r.ok ? 'ok' : 'closed'; this.loginErrors[site.id] = r?.error || ''; if (r && r.ok) return this.sync({ sites: [site.id], reason: 'login' }); return null; })
+    void Promise.resolve().then(() => this.deps.browser.login({ url: S.homeUrl(site, base), base, site: site.id, title: `登录${site.name}（AI Hub 论坛）` }))
+      .then(r => {
+        this.logins[site.id] = r && r.ok ? 'ok' : 'closed';
+        this.loginErrors[site.id] = r?.error || '';
+        if (r?.reason === 'already-open') {
+          const other = S.siteById(r.site)?.short || '另一个站点';
+          this.loginErrors[site.id] = `${other}的登录窗口还开着，先在那边登录或关掉，再试一次。`;
+        }
+        if (r && r.ok) return this.sync({ sites: [site.id], reason: 'login' });
+        return null;
+      })
       .catch(error => { this.logins[site.id] = 'closed'; this.loginErrors[site.id] = error.message; })
       .finally(() => this.changed());
     return { ok: true, state: 'waiting' };
@@ -315,7 +346,7 @@ class CompanyForum {
     const s = this.settings(), snap = this.latest(), dom = this.domain();
     return { ok: true, now: this.now(), day: dayKey(this.now()), settings: s, domain: dom.domain, domainFrom: dom.from,
       sites: S.SITES.map(x => ({ id: x.id, name: x.name, short: x.short, base: this.bases()[x.id] || '', login: this.logins[x.id] || null, loginError: this.loginErrors[x.id] || '' })),
-      snapshot: snap, today: !!(snap && snap.day === dayKey(this.now())), syncing: !!this.syncing, progress: this.progress,
+      snapshot: snap, today: !!(snap && snap.day === dayKey(this.now())), needsRefresh: !!(snap && snap.day === dayKey(this.now()) && snap.extractionVersion !== X.EXTRACTION_VERSION), syncing: !!this.syncing, progress: this.progress, syncError: this.syncError,
       job: this.job ? { sentAt: this.job.sentAt || null } : null, nextSyncAt: this.nextSyncAt(s), session: this.state().sessionId || null };
   }
 }

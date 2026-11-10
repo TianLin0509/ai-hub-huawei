@@ -175,16 +175,29 @@ function registerMeetingIpc(ipcMain, deps) {
     };
   });
 
-  ipcMain.on('update-meeting', (_e, { meetingId, fields }) => {
-    const updated = meetingManager.updateMeeting(meetingId, withUserRenameFields(fields));
-    if (updated) sendToRenderer('meeting-updated', { meeting: updated });
-  });
-
-  ipcMain.handle('update-meeting-sync', (_e, { meetingId, fields }) => {
+  function updateMeetingFields(meetingId, fields) {
+    if (typeof fields?.title === 'string' && !fields.autoTitleGenerated && deps.getTitleService?.()) {
+      return deps.getTitleService().rename({ type: 'meeting', id: meetingId, title: fields.title }).then(() => {
+        const { title: _title, titleRevision: _revision, userRenamed: _manual,
+          autoTitlePending: _pending, autoTitleGenerated: _auto, ...rest } = fields;
+        if (Object.keys(rest).length) {
+          const updated = meetingManager.updateMeeting(meetingId, rest);
+          if (updated) sendToRenderer('meeting-updated', { meeting: updated });
+        }
+        return true;
+      });
+    }
+    const current = meetingManager.getMeeting(meetingId);
+    if (fields?.autoTitleGenerated && current?.userRenamed) fields = { ...fields, ...require('../../core/title-metadata').titleMetadata(current) };
     const updated = meetingManager.updateMeeting(meetingId, withUserRenameFields(fields));
     if (updated) sendToRenderer('meeting-updated', { meeting: updated });
     return !!updated;
+  }
+  ipcMain.on('update-meeting', (_e, { meetingId, fields }) => {
+    const result = updateMeetingFields(meetingId, fields);
+    return result?.catch?.(error => sendToRenderer('session-persistence-error', { message: error.message }));
   });
+  ipcMain.handle('update-meeting-sync', (_e, { meetingId, fields }) => updateMeetingFields(meetingId, fields));
 
   ipcMain.handle('get-scene-covenant', (_e, sceneKey) => {
     const sceneObj = scenes.getScene(sceneKey || 'research');

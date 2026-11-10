@@ -64,9 +64,22 @@ function createOrchestrationService(deps) {
   const endpointFile = path.join(getHubDataDir(), 'orchestration', 'bridge-endpoint.json');
   const lastEmitted = new Map();
   const credentials = new Map();
+  const modelWaits = new Map();
+  const onModelWait = event => {
+    const previousWait = modelWaits.get(event.sessionId);
+    if (event.active) modelWaits.set(event.sessionId, event);
+    else if (modelWaits.get(event.sessionId)?.key === event.key) modelWaits.delete(event.sessionId);
+    else return;
+    const m = findMeetingBySession(event.sessionId);
+    if (!m) return;
+    const member = members(m.id).find(item => item.sid === event.sessionId);
+    if (event.active && previousWait?.key !== event.key && member && !member.orchestrator) notify(m.id, `model-wait:${event.key}`, `${member.name}（${member.memberId}）：${event.reason}`);
+    persist(m.id);
+  };
+  sessionManager.on?.('session-model-wait', onModelWait);
   const channel = createChannel({ ledgerFor, members, persist, notify,
     dispatch: (id, args) => { ensureConnections(id); return dispatcher().dispatchGroupChatTurn(id, args); },
-    inject: typeof injectPrompt === 'function' ? (id, target, text) => injectPrompt(target.sid, text, { meetingId: id, memberId: target.memberId }) : null,
+    inject: typeof injectPrompt === 'function' ? (id, target, text, options = {}) => injectPrompt(target.sid, text, { ...options, meetingId: id, memberId: target.memberId }) : null,
     ensureReady: (id, memberId) => ensureMemberReady(meeting(id), memberId),
     busy: sid => sessionManager.isAgentTurnActive(sid), now, isFrozen: () => frozen, logger });
 
@@ -158,7 +171,7 @@ function createOrchestrationService(deps) {
       return {
         memberId: x.memberId, name: x.displayName, sid: x.sid, kind: x.kind, model: x.model || s.currentModel?.id || null,
         role: isOrch ? '编排员' : (ledger?.roles?.[x.memberId]?.role || ''), orchestrator: !!isOrch,
-        state: s.status || 'unknown', busy: sessionManager.isAgentTurnActive(x.sid),
+        state: modelWaits.has(x.sid) ? 'waiting-model' : s.status || 'unknown', reason: modelWaits.get(x.sid)?.reason || '', busy: sessionManager.isAgentTurnActive(x.sid),
       };
     });
   }
@@ -480,9 +493,16 @@ function createOrchestrationService(deps) {
     const clip = t => { const v = String(t || ''); return v.length > 300 ? v.slice(0, 300) + '…' : v; };
     const open = c.messages.filter(x => ['queued', 'sending', 'failed'].includes(x.state));
     const recent = c.messages.slice(-10).filter(x => !open.includes(x));
+    const project = item => {
+      const target = members(meetingId).find(member => member.memberId === item.to);
+      const sessionWait = modelWaits.get(target?.sid);
+      const wait = ['sending', 'queued'].includes(item.state) && sessionWait
+        && ((item.state === 'queued' && sessionWait.operation === 'resume') || sessionWait.clientSubmissionIds?.includes(item.id) || sessionWait.workflowMessageIds?.includes(item.id)) && sessionWait;
+      return { ...item, text: clip(item.text), ...(wait ? { stage: 'waiting-model', reason: wait.reason, notSent: true } : {}) };
+    };
     return {
       totalMessages: c.messages.length,
-      open: open.map(x => ({ ...x, text: clip(x.text) })),
+      open: open.map(project),
       recent: recent.map(x => ({ ...x, text: clip(x.text) })),
       pendingRequests: c.requests.filter(r => r.status === 'pending'),
       grants: c.grants,
@@ -802,6 +822,7 @@ function createOrchestrationService(deps) {
 
   // ---- 生命周期 ----
   async function start() {
+    sessionManager.off?.('session-model-wait', onModelWait); sessionManager.on?.('session-model-wait', onModelWait);
     bridge = new AssistantBridge(request => invokeTool(request), { identityHeader: 'x-hub-orchestrator-session',
       resolveIdentity: authorization => [...credentials].find(([, token]) => authorization === 'Bearer ' + token)?.[0] || null });
     await bridge.start();
@@ -814,7 +835,7 @@ function createOrchestrationService(deps) {
     timer.unref?.();
     return { endpointFile };
   }
-  function stop() { clearInterval(timer); timer = null; bridge?.close(); bridge = null; }
+  function stop() { clearInterval(timer); timer = null; bridge?.close(); bridge = null; sessionManager.off?.('session-model-wait', onModelWait); }
   // 关机排空期间不再唤醒编排员、不再分配任务；关机取消时恢复。
   function freeze() { frozen = true; }
   function unfreeze() { frozen = false; }

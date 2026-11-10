@@ -802,7 +802,7 @@ async function waitForPick(sid, timeoutMs = 150000) {
       const failure = failures.get(sid);
       if (failure) failure.reported = true;
       if (result?.inputReady) failures.delete(sid);
-      throw notSent(failureMessage(result, result?.inputReady));
+      throw Object.assign(notSent(failureMessage(result, result?.inputReady)), { modelMenuClosed: result?.inputReady === true || result?.inputUsable === true });
     }
     return result;
   } catch (error) {

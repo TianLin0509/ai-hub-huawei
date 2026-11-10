@@ -57,9 +57,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "更新窗口新增「抢先版」选项（默认关闭）"
+    "修复：用账号密码登录 CodeAgent 的电脑上，DSH、Claude、Codex 经公司模型反代报 401「需要重新登录」（CodeAgent 本身正常）；现在浏览器登录和账号密码登录都能用反代"
   ],
-  "version": "5.5.65",
+  "version": "5.5.66",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

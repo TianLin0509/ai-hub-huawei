@@ -148,6 +148,7 @@ function createSessionListRenderer(options = {}) {
   const { detailsHtml } = require('./session-details.js');
   const doc = options.document || document;
   const storage = options.localStorage || localStorage;
+  const sidebarFolders = options.sidebarFolders || null;
   const bridgeBadge = typeof options.bridgeBadge === 'function' ? options.bridgeBadge
     : id => { try { return (typeof window !== 'undefined' && window._bridgeThreads?.badge(id)) || null; } catch { return null; } };
   doc.addEventListener?.('bridge-threads-updated', () => { try { renderSessionList(); } catch (error) { console.warn('[session-list] bridge refresh failed:', error && error.message); } });
@@ -765,10 +766,9 @@ sessionListEl.addEventListener('keydown', event => {
 
   const ordered = sorted ? sortBySidebarPlacement(all) : all;
 
-  // Hide any leftover legacy background PTY sessions from the removed room path.
-  const everything = ordered.filter(s => !s.title || !s.title.startsWith('[Team] '));
-
-    return everything;
+    // Backend identity is metadata (hiddenFromSidebar above), never a user
+    // title prefix. A legitimate manual name may also start with [Team].
+    return ordered;
   }
   sidebarSources.set(doc, () => {
     const sessionMap = getSessions();
@@ -817,6 +817,14 @@ sessionListEl.addEventListener('keydown', event => {
     const teamLead = teamUi?.leadOf?.(memberId || id, getSessions(), getMeetings());
     const item = collectSidebarItems().find(entry => entry.id === (teamLead || id));
     if (!item) return;
+    if (backgroundTasks.isBackgroundPurpose(item.purpose)) {
+      // Refresh the running phase before opening a finished search result.
+      renderSessionList();
+      backgroundOverride = { anyRunning: backgroundState.anyRunning, expanded: true };
+      renderSessionList();
+      return;
+    }
+    sidebarFolders?.reveal(item);
     if (sideMode && isSideSession(item) !== sideOnly) {
       // 只为这次定位切过去，不存：否则刷新后自己的会话整片消失（2026-10-17 审核）。
       sideOnly = isSideSession(item); syncWirelessControl();
@@ -852,19 +860,31 @@ sessionListEl.addEventListener('keydown', event => {
     savePreference('hubSidebarCollapsedSections', JSON.stringify([...collapsedSections]));
     renderSessionList();
   }
+  function revealCreatedItem(id) {
+    revealSearchItem(id);
+    const scroll = () => {
+      if (getActiveSessionId() !== id && getActiveMeetingId() !== id) return;
+      const row = [...(sessionListEl.querySelectorAll?.('.session-item') || [])]
+        .find(node => node.dataset.sessionId === id || node.dataset.meetingId === id);
+      row?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    };
+    if (doc.defaultView?.requestAnimationFrame) doc.defaultView.requestAnimationFrame(scroll);
+    else scroll();
+  }
   doc.addEventListener?.('sidebar:manage-pin', event => {
     if (!collectSidebarItems().some(item => item.id === event.detail?.id && item.pinned)) return;
     openContextMenu(event.detail.id, event.detail.x, event.detail.y);
   });
   let archivingToday = false;
-  async function archiveToday() {
+  async function archiveToday(folderId = undefined) {
     if (archivingToday) return;
     archivingToday = true;
     const failures = [];
     try {
       const ipc = options.ipcRenderer || require('electron').ipcRenderer;
       const current = sidebarView(filteredSidebarItems());
-      for (const item of current.today.filter(item => !item.pinned && !sidebarItemHasUnread(item, getSessions()))) {
+      for (const item of current.today.filter(item => !item.pinned && !sidebarItemHasUnread(item, getSessions())
+          && (folderId === undefined || sidebarFolders?.folderOf(item) === folderId))) {
         try {
           const members = item._isMeeting ? (item._meeting.subSessions || []) : [item.id];
           for (const id of members) {
@@ -945,7 +965,7 @@ sessionListEl.addEventListener('keydown', event => {
       for (const id of ids) if (sessionMap.has(id)) sources.add(sessionMap.get(id));
     }
     const context = JSON.stringify([getActiveSessionId(), getActiveMeetingId(), detailsEnabled, modelFilter,
-      [...collapsedSections], [...collapsedDetailsMeetings], [..._expandedMeetings], assistantOn, backgroundOpen]);
+      [...collapsedSections], [...collapsedDetailsMeetings], [..._expandedMeetings], assistantOn, backgroundOpen, sidebarFolders?.signature()]);
     const rows = [...sources].map(item => {
       const at = latestActivityTime(item);
       const external = JSON.stringify([formatTime?.(at), sidebarRelativeTime(at),
@@ -1174,12 +1194,12 @@ sessionListEl.addEventListener('keydown', event => {
     target.appendChild(div);
   }
 
-  function appendSecHeader(label, items, cls, action, onAction) {
+  function appendSecHeader(label, items, cls, action, onAction, target = renderTarget, scope = '') {
     const isBackground = cls === 'sec-background';
     const collapsed = isBackground ? !backgroundOpen : collapsedSections.has(cls);
     const h = doc.createElement('div');
     h.className = 'session-sec-header ' + cls;
-    h.dataset.sidebarRenderKey='section:'+cls;
+    h.dataset.sidebarRenderKey='section:'+scope+cls;
     h.innerHTML = '<button type="button" class="sec-collapse" data-sidebar-control="' + cls + '" aria-label="' + (collapsed ? '展开' : '折叠') + label + '" aria-expanded="' + !collapsed + '">' + (collapsed ? '▸' : '▾') + '</button><span>' + label + '</span><span class="sec-count">' + items.length + '</span><span class="sec-rule"></span>'
       + (action ? '<button type="button" class="sec-action ' + (cls === 'sec-unread' ? 'sec-mark-all-read' : '') + '">' + action + '</button>' : '');
     h.addEventListener('click', event => {
@@ -1195,8 +1215,9 @@ sessionListEl.addEventListener('keydown', event => {
       event.preventDefault(); event.stopPropagation();
       return onAction?.();
     });
-    renderTarget.appendChild(h);
-    if (!collapsed) for (const item of items) appendItem(item);
+    if (scope) h.innerHTML = h.innerHTML.replace('data-sidebar-control="' + cls + '"', 'data-sidebar-control="' + scope + cls + '"');
+    target.appendChild(h);
+    if (!collapsed) for (const item of items) appendItem(item, false, target);
   }
   // 「助理」一栏：常驻最上面，不受筛选影响；会话还没打开时放一行「点击打开」。
   if (assistantOn) {
@@ -1218,9 +1239,53 @@ sessionListEl.addEventListener('keydown', event => {
     }
   }
   if (background.items.length) appendSecHeader(background.running.length ? `后台任务 · ${background.running.length} 个运行中` : '后台任务', background.items, 'sec-background');
-  if (sections.failed.length) appendSecHeader('异常', sections.failed, 'sec-failed');
-  if (sections.active.length) appendSecHeader('活跃', sections.active, 'sec-active');
-  appendSecHeader(pinnedOnly ? '置顶' : recentDays === 3 ? '3 天内' : '今天', sections.today, 'sec-today', !pinnedOnly && sections.today.length ? '休眠' : '', archiveToday);
+  function appendSections(parts, target = renderTarget, scope = '', folderId = undefined) {
+    if (parts.failed.length) appendSecHeader('异常', parts.failed, 'sec-failed', '', null, target, scope);
+    if (parts.active.length) appendSecHeader('活跃', parts.active, 'sec-active', '', null, target, scope);
+    if (parts.today.length || !scope) appendSecHeader(pinnedOnly ? '置顶' : recentDays === 3 ? '3 天内' : '今天', parts.today, 'sec-today', !pinnedOnly && parts.today.length ? '休眠' : '', () => archiveToday(folderId), target, scope);
+  }
+  if (!sidebarFolders) appendSections(sections);
+  else {
+    const controls = doc.createElement('div'); controls.className = 'sidebar-folder-tools'; controls.dataset.sidebarRenderKey = 'folder-tools';
+    controls.innerHTML = '<span>目录</span><button type="button" data-folder-create aria-label="新建目录"' + (sidebarFolders.error() ? ' disabled' : '') + '>＋ 新建目录</button>';
+    controls.addEventListener('click', event => {
+      if (event.target?.closest?.('[data-folder-create]') && !sidebarFolders.error()) void sidebarFolders.showCreate();
+    });
+    renderTarget.appendChild(controls);
+    if (sidebarFolders.error()) {
+      const warning = doc.createElement('div'); warning.className = 'sidebar-folder-error'; warning.dataset.sidebarRenderKey = 'folder-error';
+      warning.innerHTML = '<span role="alert">' + escapeHtml(sidebarFolders.error()) + '</span><button type="button">重新读取</button>';
+      warning.addEventListener('click', event => { if (event.target?.closest?.('button')) void sidebarFolders.refresh(); }); renderTarget.appendChild(warning);
+    }
+    for (const folder of sidebarFolders.folders()) {
+      const key = folder.id || 'unclassified', collapsed = sidebarFolders.isCollapsed(folder.id);
+      const parts = Object.fromEntries(['failed', 'active', 'today', 'archive'].map(section => [section, sections[section].filter(item => sidebarFolders.folderOf(item) === folder.id)]));
+      const count = parts.failed.length + parts.active.length + parts.today.length + parts.archive.length;
+      const wrapper = doc.createElement('div'); wrapper.className = 'sidebar-folder'; wrapper.dataset.sidebarFolder = key;
+      wrapper.dataset.sidebarRenderKey = 'folder:' + key; wrapper.dataset.sidebarRenderTree = 'true'; renderTarget.appendChild(wrapper);
+      const header = doc.createElement('div'); header.className = 'sidebar-folder-header'; header.dataset.sidebarRenderKey = 'folder-header:' + key;
+      header.innerHTML = '<button type="button" class="sidebar-folder-toggle" data-folder-action="toggle" data-sidebar-control="folder:' + escapeHtml(key) + '" aria-expanded="' + !collapsed + '" title="' + escapeHtml(folder.name) + '"><span aria-hidden="true">' + (collapsed ? '▸' : '▾') + '</span><span class="sidebar-folder-name">' + escapeHtml(folder.name) + '</span><span class="sidebar-folder-count">' + count + '</span></button>'
+        + (folder.id ? '<button type="button" class="sidebar-folder-action" data-folder-action="rename" title="重命名目录" aria-label="重命名目录 ' + escapeHtml(folder.name) + '">改名</button><button type="button" class="sidebar-folder-action" data-folder-action="remove" title="删除目录，里面的条目回未分类" aria-label="删除目录 ' + escapeHtml(folder.name) + '">删除</button>' : '');
+      header.addEventListener('click', event => {
+        const action = event.target?.closest?.('[data-folder-action]')?.dataset.folderAction;
+        if (!action) return; event.preventDefault(); event.stopPropagation();
+        if (action === 'toggle') sidebarFolders.toggle(folder.id);
+        else if (action === 'rename') void sidebarFolders.showRename(folder.id);
+        else if (action === 'remove') sidebarFolders.showRemove(folder.id).catch(error => {
+          if (options.notify) options.notify(error.message); else require('./ui-feedback').showHubAlert(error.message, { document: doc });
+        });
+      });
+      wrapper.appendChild(header);
+      if (!collapsed) {
+        const body = doc.createElement('div'); body.className = 'sidebar-folder-body'; body.dataset.sidebarRenderKey = 'folder-body:' + key; body.dataset.sidebarRenderTree = 'true'; wrapper.appendChild(body);
+        appendSections(parts, body, key + ':', folder.id);
+        if (!parts.failed.length && !parts.active.length && !parts.today.length) {
+          const empty = doc.createElement('div'); empty.className = 'sidebar-folder-empty'; empty.dataset.sidebarRenderKey = 'folder-empty:' + key;
+          empty.textContent = parts.archive.length ? '较早记录请到下方“全部目录归档”查看' : '当前筛选范围内没有会话'; body.appendChild(empty);
+        }
+      }
+    }
+  }
   if (markAllSessionsRead && visible.some(item => classify(item).unread)) {
     const read = doc.createElement('button'); read.type = 'button'; read.className = 'sidebar-mark-read';
     read.textContent = '全部已读'; read.addEventListener('click', markAllSessionsRead); renderTarget.appendChild(read);
@@ -1230,7 +1295,7 @@ sessionListEl.addEventListener('keydown', event => {
   archive.type = 'button';
   archive.className = 'session-archive-entry';
   archive.dataset.sidebarRenderKey='archive';
-  archive.innerHTML = '<span>归档</span><span class="archive-count">' + sections.archiveCount + '</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>';
+  archive.innerHTML = '<span>' + (sidebarFolders ? '全部目录归档' : '归档') + '</span><span class="archive-count">' + sections.archiveCount + '</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>';
   archive.addEventListener('click', () => openSearch({ scope: 'dormant' }));
   renderTarget.appendChild(archive);
 
@@ -1320,6 +1385,7 @@ sessionListEl.addEventListener('mousedown', (e) => {
   return {
     renderSessionList,
     revealSearchItem,
+    revealCreatedItem,
     renderSidebarStrip,
     getRenderStats: () => ({ ...renderStats }),
   };

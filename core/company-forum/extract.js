@@ -6,6 +6,9 @@
 // upvoteCount / submitUsers / resourceId，心声排行卡片里的 postId / title / link），其余按常见写法多认几种。
 // 心声的两个排行在同一个「卡片」接口里：数组的每个元素是一张卡片（有自己的标题和 list），按榜名找卡片，不把卡片当帖子。
 
+// 修改榜单抽取规则时递增，用于识别升级前的当天快照。
+const EXTRACTION_VERSION = 3;
+
 const pick = (o, keys) => {
   if (!o || typeof o !== 'object') return undefined;
   const lower = new Map(Object.keys(o).map(k => [k.toLowerCase(), k]));
@@ -105,13 +108,14 @@ function namedList(json, heading, min = 1, depth = 0) {
   return null;
 }
 // HOT_LIST 类型、名字匹配 re 的卡片。
-function hotCard(json, re, depth = 0) {
+function hotCard(json, re, accept, depth = 0) {
   if (!json || typeof json !== 'object' || depth > 8) return null;
   if (!Array.isArray(json) && json.cardType === 'HOT_LIST' && re.test(String(json.title || '')) && Array.isArray(json.list)) {
-    const posts = json.list.map(postFromObject).filter(Boolean);
-    if (posts.length) return { title: clean(json.title), posts };
+    const posts = json.list.filter(o => pick(o, CARD_POST_TITLE)).map(postFromObject).filter(Boolean);
+    const hit = { title: clean(json.title), posts };
+    if (posts.length && accept(hit)) return hit;
   }
-  for (const v of Object.values(json)) { const hit = hotCard(v, re, depth + 1); if (hit) return hit; }
+  for (const v of Object.values(json)) { const hit = hotCard(v, re, accept, depth + 1); if (hit) return hit; }
   return null;
 }
 // 帖子详情页截到的接口数据里补阅读、回复、点赞、收藏、时间（心声的排行只有标题和链接）。
@@ -178,20 +182,18 @@ function postsForSite(site, capture, { base = '', limit = 20 } = {}) {
   const arrays = (capture.json || []).map(r => ({ url: String(r.url || ''), arrays: postArrays(r.json) })).filter(r => r.arrays.length);
   const pool = arrays.flatMap(r => r.arrays.flat());
   const lists = [];
+  const multi = site.lists.length > 1;
+  // 接口数据常只有编号：按站点的详情页格式补链接（稼先）。
+  const link = p => p.url ? absolute(p.url, capture.finalUrl || base) : (base && site.detailPath && p.id ? base + site.detailPath(p.id) : '');
+  const prepare = posts => enrich(posts, pool).slice(0, limit).map((p, i) => ({ ...p, rank: i + 1, url: link(p) }));
   for (const list of site.lists) {
     const section = (capture.sections || []).find(s => s.heading === list.heading);
     let posts = [], from = '';
-    const multi = site.lists.length > 1;
     const card = min => { for (const r of [...(capture.json || [])].reverse()) { const hit = namedList(r.json, list.heading, min); if (hit !== null) return hit; } return null; };
     // 1. 多榜站点（心声）：准确命名的卡片优先，0–2 条也照实保留——DOM 的共同祖先可能把两个榜的链接一起收进来。
     if (multi) { const hit = card(1); if (hit !== null) { posts = hit; from = 'api-card'; } }
     // 2. 没有对应卡片时，再看这个板块的链接和能确定归属的接口。
     if (from !== 'api-card' && section) { posts = linkPosts(section.links, site, capture.finalUrl || base); from = 'links'; }
-    // 首页没有这个榜（现网部分视图只给「热门文章」卡片）：用榜单配置的备用卡片，标签写卡片自己的名字，不冒充原榜。
-    let label = list.label;
-    if (multi && from !== 'api-card' && posts.length < 3 && list.fallbackCard) {
-      for (const r of [...(capture.json || [])].reverse()) { const hit = hotCard(r.json, list.fallbackCard); if (hit) { posts = hit.posts; label = hit.title; from = 'api-card-fallback'; break; } }
-    }
     // 单榜站点（稼先）沿用原顺序和门槛：链接不足 3 条才找卡片、卡片至少 3 条。榜名「热点」太短，热帖标题常带这两个字。
     if (!multi && posts.length < 3) { const hit = card(3); if (hit) { posts = hit; from = 'api-card'; } }
     if (!/^api-card/.test(from) && posts.length < 3 && arrays.length) {
@@ -206,10 +208,32 @@ function postsForSite(site, capture, { base = '', limit = 20 } = {}) {
     if (!/^api-card/.test(from) && posts.length < 3 && section) { const lines = linePosts(section.lines); if (lines.length >= 3) { posts = lines; from = 'text'; } }
     // 稼先的「热点」是首页主列表：板块没认出来时，用整页的帖子链接
     if (from !== 'api-card' && posts.length < 3 && site.lists.length === 1) { const all = linkPosts(capture.links, site, capture.finalUrl || base); if (all.length >= 3) { posts = all; from = 'page-links'; } }
-    // 接口数据常只有编号：按站点的详情页格式补链接（稼先）。
-    const link = p => p.url ? absolute(p.url, capture.finalUrl || base) : (base && site.detailPath && p.id ? base + site.detailPath(p.id) : '');
-    posts = enrich(posts, pool).slice(0, limit).map((p, i) => ({ ...p, rank: i + 1, url: link(p) }));
-    lists.push({ key: list.key, label, from, posts });
+    lists.push({ key: list.key, label: list.label, from, posts: prepare(posts) });
+  }
+  // 本榜来源一条都没认出时才用热门兜底；准确命名的空卡片仍照实保留。
+  // 先选完各榜，再排除属于另一榜的标题，以及另一榜已选中的同组帖子（顺序不同也算同组）。
+  const group = values => values.every(Boolean) ? JSON.stringify([...new Set(values)].sort()) : null;
+  // URL 中的帖子编号也按站点详情页格式归一，去掉排名来源等展示参数的差异。
+  const identityUrl = post => {
+    const match = post.url && site.postLink.exec(post.url);
+    const id = match ? match[1] : post.id;
+    if (post.url && !match) return absolute(post.url, capture.finalUrl || base);
+    return id && site.detailPath ? absolute(site.detailPath(id), base || capture.finalUrl) : '';
+  };
+  const sameGroup = (left, right) => {
+    const ids = group(left.map(p => p.id)), urls = group(left.map(identityUrl));
+    return (ids && ids === group(right.map(p => p.id))) || (urls && urls === group(right.map(identityUrl)));
+  };
+  for (const entry of lists) {
+    const config = site.lists.find(l => l.key === entry.key);
+    if (!multi || entry.from === 'api-card' || entry.posts.length || !config.fallbackCard) continue;
+    const otherNames = site.lists.filter(l => l.key !== entry.key).flatMap(l => [l.heading, l.label]).map(headingKey).filter(Boolean);
+    const accept = hit => !otherNames.some(name => headingKey(hit.title).includes(name))
+      && !lists.some(other => other !== entry && other.posts.length && sameGroup(other.posts, prepare(hit.posts)));
+    for (const r of [...(capture.json || [])].reverse()) {
+      const hit = hotCard(r.json, config.fallbackCard, accept);
+      if (hit) { entry.posts = prepare(hit.posts); entry.label = hit.title; entry.from = 'api-card-fallback'; break; }
+    }
   }
   // 用了备用卡片时，原榜里取不到的空榜不显示。
   return lists.some(l => l.from === 'api-card-fallback') ? lists.filter(l => l.posts.length) : lists;
@@ -232,4 +256,4 @@ function looksLikeLogin({ finalUrl = '', text = '', textLength = 0 } = {}, base 
   return LOGIN_WORDS.test(String(text).slice(0, 3000)) && textLength < 4000;
 }
 
-module.exports = { postsForSite, postArrays, postFromObject, namedList, countsFromJson, linkPosts, linePosts, looksLikeLogin, count, timeOf, titleKey, clean };
+module.exports = { EXTRACTION_VERSION, postsForSite, postArrays, postFromObject, namedList, countsFromJson, linkPosts, linePosts, looksLikeLogin, count, timeOf, titleKey, clean };

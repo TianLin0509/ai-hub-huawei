@@ -256,22 +256,22 @@ function registerGroupchatSupplementIpc(ipcMain, deps) {
 function createRunningInjector({ sessionManager, transcriptTap, groupChatWatcher }) {
   const observeSpecificPrompt = createSpecificPromptObserver(sessionManager, transcriptTap);
   let seq = 0;
-  return async (sid, prompt) => {
+  return async (sid, prompt, options = {}) => {
     const session = sessionManager.getSession(sid);
     if (!session || session.status === 'dormant') return { accepted: false, notSent: true, reason: '成员会话未打开' };
     const kind = session.transcriptKind || session.kind;
     if (!kind) return { accepted: false, notSent: true, reason: '成员会话类型未知' };
-    const id = `lead-inject-${sid}-${Date.now()}-${++seq}`;
+    const id = options.clientSubmissionId || `lead-inject-${sid}-${Date.now()}-${++seq}`;
     const observed = isPtyAgentSession(session) ? observeSpecificPrompt(sid, id, prompt, () => {}) : null;
     try {
-      const result = await groupChatWatcher.sendToPty(sid, prompt, kind, { requireReady: false, clientSubmissionId: id,
+      const result = await groupChatWatcher.sendToPty(sid, prompt, kind, { requireReady: false, clientSubmissionId: id, shouldSubmit: options.shouldSubmit,
         ...(observed ? { submissionReceipt: observed.receipt } : {}) });
-      if (result?.notSent) { observed?.cleanup(); return { accepted: false, notSent: true, reason: result.message || result.error || result.sendStatus || '未发送' }; }
+      if (result?.notSent) { observed?.cleanup(); return { accepted: false, notSent: true, ...(result.stopped ? { stopped: true, code: result.code } : {}), reason: result.message || result.error || result.sendStatus || '未发送' }; }
       const accepted = observed ? observed.receipt.started === true : !!result?.ok && result.sendStatus !== 'stuck';
       const reason = result?.ok && result.sendStatus === 'ok' ? '终端已接收，尚未收到它开始处理的回执' : (result?.reason || result?.sendStatus || '未确认送达');
       return { accepted, uncertain: !accepted, reason: accepted ? '' : reason };
     } catch (error) {
-      if (error?.notSent) { observed?.cleanup(); return { accepted: false, notSent: true, reason: error.message }; }
+      if (error?.notSent) { observed?.cleanup(); return { accepted: false, notSent: true, ...(error.stopped ? { stopped: true, code: error.code } : {}), reason: error.message }; }
       const accepted = observed?.receipt.started === true;
       return { accepted, uncertain: !accepted, reason: accepted ? '' : error.message };
     }

@@ -835,6 +835,11 @@ async function ensureCodexAccountNamespace(kind,opts={}) {
 
 
 sessionManager.on('session-updated', session => {
+  if (isCodeAgentKind(session.kind)) {
+    sessionStore.markDirty(session.id, sessionManager.getSession(session.id));
+    sendToRenderer('session-updated', { session });
+    return;
+  }
   if (session.agentRuntime === 'pty' && /^codex(?:-resume)?$/.test(session.kind) && session.codexProfile) {
     sessionStore.markDirty(session.id, sessionManager.getSession(session.id));
     sendToRenderer('session-updated', {session});
@@ -1840,6 +1845,7 @@ function createWindow() {
     event.preventDefault();
     void beginGracefulHubShutdown('window-close-requested');
   });
+  sessionModelCreationConfirmation.attachRenderer(mainWindow.webContents);
   mainWindow.on('closed', () => { mainWindow = null; });
 }
 
@@ -1855,6 +1861,20 @@ function sendToRenderer(channel, data) {
     mainWindow.webContents.send(channel, data);
   }
 }
+
+const sessionModelCreationConfirmation = require('./main/session-model-creation').createModelCreationConfirmation({
+  onWait: event => sessionManager.emit('session-model-wait', event),
+  sendToRenderer: (channel, payload) => {
+    if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) throw Error('确认界面不可用，未创建会话；请打开 Hub 后重试');
+    sendToRenderer(channel, payload);
+  },
+});
+ipcMain.handle('session:model-create-decision', (_event, payload) => sessionModelCreationConfirmation.respond(payload));
+app.on('before-quit', () => sessionModelCreationConfirmation.cancelAll());
+sessionManager.on('session-model-reset', ({ sessionId }) => {
+  sessionModelCreationConfirmation.cancelSession(sessionId);
+  require('./core/group-chat-watcher').cancelPendingModelSubmissions(sessionId);
+});
 
 function syncSessionRuntimeModel(sessionId, model) {
   if (!sessionId || !model || typeof model.id !== 'string' || !model.id.trim()) return false;
@@ -1907,6 +1927,8 @@ sessionManager.onData = (sessionId, data, seq) => {
 };
 
 sessionManager.onSessionClosed = (sessionId, meetingId, exitInfo) => {
+  sessionModelCreationConfirmation.cancelSession(sessionId);
+  require('./core/group-chat-watcher').cancelPendingModelSubmissions(sessionId);
   codexAccountSwitch.forget(sessionId);
   claudeAccountSwitch.forget(sessionId);
   claudeQuotaPrecompact?.forget(sessionId);
@@ -1938,6 +1960,8 @@ sessionManager.onSessionClosed = (sessionId, meetingId, exitInfo) => {
 };
 
 sessionManager.onSessionSuspended = (sessionId, meetingId, session, exitInfo) => {
+  sessionModelCreationConfirmation.cancelSession(sessionId);
+  require('./core/group-chat-watcher').cancelPendingModelSubmissions(sessionId);
   if (session?.suspendReason !== 'account-switch' || !codexAccountSwitch.isSwitching(sessionId)) codexAccountSwitch.forget(sessionId);
   if (session?.suspendReason !== 'account-switch' || !claudeAccountSwitch.isSwitching(sessionId)) claudeAccountSwitch.forget(sessionId);
   claudeQuotaPrecompact?.forget(sessionId);
@@ -2070,6 +2094,7 @@ function updateSessionTranscriptBinding(hubSessionId, fields = {}) {
 }
 
 const { addMeetingSubInternal } = registerMeetingCreateIpc(ipcMain, {
+  requestModelConfirmation: sessionModelCreationConfirmation.request,
   ensureLaunchAuth:async(kind,opts)=>{await launchAuth.ensure(kind,opts);await ensureCodexAccountNamespace(kind,opts);},
   fs,
   getOrchestrationService: () => global.__orchestrationService || null,
@@ -2111,6 +2136,7 @@ require('./main/ipc/groupchat-fork-handlers.js').registerGroupChatForkIpc(ipcMai
 });
 
 registerMeetingIpc(ipcMain, {
+  getTitleService: () => titleService,
   deleteImmersiveByMeeting: (meetingId) => { delete _immersiveByMeeting[meetingId]; },
   getHubDataDir,
   getImmersiveByMeeting: () => _immersiveByMeeting,
@@ -2130,6 +2156,7 @@ registerMeetingIpc(ipcMain, {
 // Group Chat Mode dispatch
 // =====================================================================
 groupChatDispatcher = createGroupChatDispatcher({
+  confirmSessionModel: (...args) => sessionOperations.confirmSessionModel(...args),
   recoverLaunchAuth:(session,failure)=>launchAuth.recover(session.kind,{...session,model:session.currentModel?.id},failure),
   cliReadyDetector,
   getHubDataDir,
@@ -2429,6 +2456,7 @@ registerTranscriptIpc(ipcMain, transcriptIpcDeps);
 // Module C 后 blackboard 已删除,该 handler 不再被任何前端代码调用,清理。
 
 const resumeSession = createResumeSessionHandler({
+  requestModelConfirmation: sessionModelCreationConfirmation.request,
   ensureLaunchAuth:async(kind,opts)=>{await launchAuth.ensure(kind,opts);await ensureCodexAccountNamespace(kind,opts);},
   async prepareAssistantResume(meta) {
     if (!assistantService) throw new Error('助理服务尚未就绪');
@@ -2524,7 +2552,11 @@ app.on('before-quit', () => { void lanPoolService.stop(); });
 // 退出时先请反代自己收尾（删状态文件、关连接）；来不及的由 will-quit 兜底结束进程。
 app.on('before-quit', () => { void companyProxyService.stop().catch(() => {}); });
 app.on('will-quit', () => companyProxyService.killNow());
+let titleService;
 const sessionOperations = registerSessionIpc(ipcMain, {
+  getTitleService: () => titleService,
+  requestModelConfirmation: sessionModelCreationConfirmation.request,
+  cancelModelConfirmation: sessionModelCreationConfirmation.cancelSession,
   app,
   lanPoolService,
   ensureLaunchAuth: async (kind, opts) => {
@@ -2964,7 +2996,7 @@ if (require('./core/distribution').featureEnabled('leadTeam')) try {
   global.__teamService = require('./main/team/service').createTeamService({
     getHubDataDir, sessionManager, sendToRenderer, logger: console,
     createSession: request => sessionOperations.createSession(request),
-    submitPrompt: (sessionId, text) => promptOperations.submitPrompt(null, { sessionId, text, waitForCliReady: true, preserveInput: true }),
+    submitPrompt: (sessionId, text, options = {}) => promptOperations.submitPrompt(null, { sessionId, text, ...options, waitForCliReady: true, preserveInput: true }),
     reconcileTurn: require('./main/team/turn-reconcile').createTeamTurnReconciler({ sessionManager, transcriptTap }),
     injectPrompt: createRunningInjector({ sessionManager, transcriptTap, groupChatWatcher: groupChatDispatcher.getGroupChatWatcher() }),
     restartSession: id => sessionOperations.restartSession(id),
@@ -3189,6 +3221,17 @@ let lastPersistedMeetings = bootMeetings;
 for (const m of bootMeetings) {
   meetingManager.restoreMeeting(m);
 }
+// Sidebar classification is presentation metadata, independent of cwd/runtime.
+require('./main/ipc/sidebar-folders-handlers').registerSidebarFoldersIpc(ipcMain, {
+  store: require('./core/sidebar-folders').createSidebarFolderStore({ dataDir: getHubDataDir() }),
+  entityExists: key => {
+    if (typeof key !== 'string') return false;
+    const [type, id] = key.split(':');
+    if (type === 'meeting') return !!meetingManager.getMeeting(id);
+    return type === 'session' && (!!sessionManager.getSession(id) || lastPersistedSessions.some(s => (s.hubId || s.id) === id));
+  },
+  publish: state => sendToRenderer('sidebar-folders:changed', { state }),
+});
 const { meetingMemberTitlePatch, createMeetingMemberTitleSync } = require('./core/meeting-member-titles');
 meetingMemberTitleSync = createMeetingMemberTitleSync({
   getMeeting: id => meetingManager.getMeeting(id),
@@ -3349,6 +3392,15 @@ registerPersistenceIpc(ipcMain, {
   setLastPersistedSessions: (sessions) => { lastPersistedSessions = sessions; },
   stateStore,
 });
+
+titleService = require('./main/session-title-service').createTitleService({
+  sessionManager, meetingManager, sessionStore, meetingStore, stateStore, sendToRenderer,
+  getLastPersistedSessions: () => lastPersistedSessions,
+  setLastPersistedSessions: rows => { lastPersistedSessions = rows; _lastPersistedSessionIds = new Set(rows.map(row => row.hubId)); },
+  getLastPersistedMeetings: () => lastPersistedMeetings,
+  setLastPersistedMeetings: rows => { lastPersistedMeetings = rows; },
+});
+ipcMain.handle('session:rename-title', (_event, request) => titleService.rename(request));
 
 registerResumeSessionIpc(ipcMain, { resumeSession });
 

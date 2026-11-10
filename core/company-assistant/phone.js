@@ -9,11 +9,37 @@ const crypto = require('node:crypto');
 const welink = require('./welink');
 
 const PREFIX = '【助理】';
-const DEFAULT_PHONE = Object.freeze({ enabled: false, groupId: '', groupName: '', pushWatched: true, pushStuck: true, since: 0 });
+const DEFAULT_PHONE = Object.freeze({ enabled: false, groupId: '', groupName: '', pushWatched: true, pushStuck: true, since: 0, extraIds: Object.freeze([]) });
 const POLL_MS = 6000, WATCH_TICK_MS = 10000;
 const FRESH_MS = 120000, RATE_PER_MIN = 20, CHUNK = 1500, ACK_MS = 20000, AT_DESK_S = 300, WATCH_TTL_MS = 24 * 3600000;
 const PHONE_NOTE = '（这句是我在手机 WeLink 上发的，你的回答会由 Hub 发回我手机：先说结论，尽量 300 字以内，不用表格。）';
 const WELCOME = '手机对话已接通。在这个群里直接跟我说话就行，例如「现在有哪些会话在跑？」「让某某会话接着做，做完告诉我」。会话做完或卡住时我也会在这里提醒你。';
+
+function normalizeExtraIds(value) {
+  const entries = Array.isArray(value) ? value : typeof value === 'string' ? value.split(/[,，\r\n]+/) : [];
+  return [...new Set(entries.filter(x => typeof x === 'string').map(x => x.trim()).filter(Boolean))];
+}
+const EMPLOYEE_ID = /^[a-zA-Z]?([0-9]{8})$/;
+function validateExtraIds(value) {
+  if (value != null && typeof value !== 'string' && !Array.isArray(value) || Array.isArray(value) && value.some(x => typeof x !== 'string'))
+    throw new Error('额外账号请填写 8 位数字工号，不要带字母；多个工号用换行或逗号分隔');
+  const ids = normalizeExtraIds(value);
+  if (ids.length > 5) throw new Error('额外账号最多填写 5 个');
+  const invalid = ids.filter(id => !/^[0-9]{8}$/.test(id));
+  if (invalid.length) throw new Error(`额外账号格式不正确：${invalid.map(id => `「${id.slice(0, 40)}」`).join('、')}。请只填写 8 位数字工号，例如 00951078，不要带字母，前导零要保留`);
+  return ids;
+}
+// 手机收消息和群成员展示共用；别名只用于匹配，不改登录身份。
+function isOwnAccount(account, uid, extraIds = []) {
+  const sender = String(account ?? '').trim();
+  const automatic = String(uid ?? '').trim();
+  if (automatic && sender === automatic) return true;
+  const ids = normalizeExtraIds(extraIds);
+  if (ids.includes(sender)) return true; // 兼容此前已保存的账号写法。
+  const digits = EMPLOYEE_ID.exec(sender)?.[1];
+  // 仅手动授权列表兼容带字母/不带字母的写法；空列表仍按真实 UID 精确匹配。
+  return !!digits && ids.some(id => EMPLOYEE_ID.exec(id)?.[1] === digits);
+}
 
 const short = (s, n) => { s = String(s ?? '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n) + '…' : s; };
 // 截短但保留换行（推到手机的会话回答要分段好读）。
@@ -99,7 +125,7 @@ class PhoneChannel {
         const text = m.text.trim();
         if (!text) continue;
         // 小微助手和别人的消息不理；记在往来里并写明发件账号：真机上要是本人账号和发件人格式对不上，一眼能看出来。
-        if (m.sender !== me) { this.note('in', `${short(text, 40)}（${m.sender || '未知账号'} 发的，你的账号是 ${me}）`, 'other'); continue; }
+        if (!isOwnAccount(m.sender, me, p.extraIds)) { this.note('in', `${short(text, 40)}（${m.sender || '未知账号'} 发的，你的账号是 ${me}）如果这是你本人，可在手机设置里添加该账号。`, 'other'); continue; }
         if (text.startsWith(PREFIX) || sent.some(x => x.hash === digest(text))) continue; // Hub 自己发出去的
         // 只认开启（或换群）之后发的，关掉期间发的重新开启后也不补执行；平时超过 120 秒的旧消息不执行（时间以 WeLink 服务器为准）。
         if (m.at ? m.at < (p.since || 0) : fresh) continue;
@@ -213,7 +239,7 @@ class PhoneChannel {
     const members = welink.groupMembers(r.stdout);
     if (!members.length && r.code !== 0) throw new Error(short(r.stderr || r.stdout || '没查到群成员', 160));
     let me = ''; try { me = await this.me(); } catch { /* 没登录也能看成员 */ }
-    const others = members.filter(m => m.account !== me);
+    const others = members.filter(m => !isOwnAccount(m.account, me, this.settings().extraIds));
     const check = { at: this.now(), groupId: String(groupId), count: members.length, names: members.map(m => m.name || m.account).slice(0, 10), ok: members.length <= 2,
       note: members.length <= 2 ? '群里只有你和' + (others[0]?.name || '小微助手') + '，可以用。' : `群里有 ${members.length} 个成员（${others.map(m => m.name || m.account).slice(0, 5).join('、')}）。别人也能看到 Hub 发的回答，建议先把同事移出群。` };
     this.save({ groupCheck: check });
@@ -226,4 +252,4 @@ class PhoneChannel {
   }
 }
 
-module.exports = { POLL_MS, PhoneChannel, DEFAULT_PHONE, PREFIX, PHONE_NOTE, WELCOME, plain, chunks };
+module.exports = { POLL_MS, PhoneChannel, DEFAULT_PHONE, PREFIX, PHONE_NOTE, WELCOME, plain, chunks, normalizeExtraIds, validateExtraIds, isOwnAccount };

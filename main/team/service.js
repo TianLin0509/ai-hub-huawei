@@ -37,6 +37,75 @@ function createTeamService(deps) {
   const decisions = new Map(); // 同一负责人审批串行，不阻塞其他团队。
   const wakeTried = new Map();   // sid → 上次尝试唤醒的时间：休眠的收件人一分钟内只叫一次
   const alerted = new Map();
+  const modelWaits = new Map();
+  const onModelWait = event => {
+    const previousWait = modelWaits.get(event.sessionId);
+    if (event.active) modelWaits.set(event.sessionId, event);
+    else if (modelWaits.get(event.sessionId)?.key === event.key) modelWaits.delete(event.sessionId);
+    else return;
+    for (const team of teams.values()) {
+      const target = memberBySid(team, event.sessionId);
+      if (!target || (event.active && target.memberId !== LEAD && target.status === 'dismissed')) continue;
+      for (const item of team.messages || []) {
+        if (item.to !== target.memberId) continue;
+        const matches = event.clientSubmissionIds?.includes(item.submissionId)
+          || (event.operation === 'resume' && (item.state === 'queued' || item.modelWait?.previousState === 'queued'));
+        if (event.active && matches && ['sending', 'queued', 'waiting-model'].includes(item.state)) {
+          item.modelWait = { ...event, previousState: item.modelWait?.previousState || (item.state === 'waiting-model' ? 'sending' : item.state) };
+          item.state = 'waiting-model'; item.notSent = true;
+        } else if (item.modelWait?.key === event.key) {
+          if (!event.active && !event.selectedModel && event.cancelReason !== 'user' && frozen && item.state === 'waiting-model') {
+            item.modelWait.recovered = true;
+          } else if (!event.active && event.selectedModel && event.operation !== 'resume' && item.state === 'waiting-model') {
+            item.modelWait = { ...item.modelWait, confirmed: true, reason: `正在切换模型（原模型 ${event.originalModel}，所选 ${event.selectedModel}），原任务尚未发送。` };
+          } else {
+            if (item.state === 'waiting-model') {
+              item.state = !event.active && !event.selectedModel ? 'failed' : item.modelWait.previousState || 'sending';
+              if (!event.active && !event.selectedModel) item.error = '已取消模型确认，原任务未发送';
+            }
+            delete item.modelWait;
+          }
+        }
+      }
+      save(team);
+      if (event.active && previousWait?.key !== event.key && target.memberId !== LEAD) enqueue(team, 'hub', LEAD, `${target.memberId}（${target.title || target.role}）：${event.reason}`, { wake: true });
+    }
+  };
+  const onSubmissionHandoff = event => {
+    for (const team of teams.values()) {
+      const target = memberBySid(team, event.sessionId);
+      if (!target) continue;
+      const changed = [];
+      for (const item of team.messages || []) {
+        if (item.to !== target.memberId || item.submissionId !== event.clientSubmissionId || item.notSent !== true) continue;
+        changed.push({ item, state: item.state, notSent: item.notSent, modelWait: item.modelWait });
+        item.state = 'sending'; item.notSent = false; delete item.modelWait;
+      }
+      if (changed.length) {
+        try { save(team); }
+        catch (error) {
+          for (const before of changed) {
+            before.item.state = before.state; before.item.notSent = before.notSent;
+            if (before.modelWait === undefined) delete before.item.modelWait; else before.item.modelWait = before.modelWait;
+          }
+          // This listener is synchronous and the watcher has not written a
+          // byte yet. Only this proved boundary grants a fresh retry attempt.
+          throw Object.assign(error, { retryableBeforeHandoff: true });
+        }
+      }
+    }
+  };
+  function modelWaitFor(sid) {
+    if (modelWaits.has(sid)) return modelWaits.get(sid);
+    for (const team of teams.values()) for (const item of team.messages || []) {
+      if (item.state !== 'waiting-model' || !item.modelWait) continue;
+      const targetSid = item.to === LEAD ? team.leadSid : team.members?.find(member => member.memberId === item.to)?.sid;
+      if (targetSid === sid) return item.modelWait;
+    }
+    return null;
+  }
+  sessionManager.on?.('session-model-wait', onModelWait);
+  sessionManager.on?.('session-submission-handoff', onSubmissionHandoff);
   let lastWatch = 0;
   let timer = null, loaded = false, frozen = false;
 
@@ -55,7 +124,16 @@ function createTeamService(deps) {
         if (!team || !safeSid(team.leadSid)) continue;
         // Hub 重启时正在送的消息结果不明：保留内容，交给负责人决定是否重发，不自动重发。
         let changed = false;
-        for (const m of team.messages || []) if (m.state === 'sending') { m.state = 'unconfirmed'; m.error = 'Hub 重启前可能已送达，请先核对对方会话再决定是否重发'; changed = true; }
+        for (const m of team.messages || []) if (m.state === 'waiting-model' && m.modelWait) {
+          m.modelWait.recovered = true; m.notSent = true;
+          const targetSid = m.to === LEAD ? team.leadSid : team.members?.find(member => member.memberId === m.to)?.sid;
+          if (targetSid && !modelWaits.has(targetSid)) modelWaits.set(targetSid, m.modelWait);
+          changed = true;
+        }
+        for (const m of team.messages || []) if (m.state === 'sending') {
+          m.state = m.notSent === true ? 'queued' : 'unconfirmed';
+          m.error = m.notSent === true ? 'Hub 重启前尚未写入，保留原任务等待投递' : 'Hub 重启前可能已送达，请先核对对方会话再决定是否重发'; changed = true;
+        }
         teams.set(team.leadSid, team);
         for (const plan of team.plans || []) {
           const interrupted = (plan.members || []).filter(m => m.status === 'creating');
@@ -100,6 +178,7 @@ function createTeamService(deps) {
   }
   function sessionState(sid) {
     const s = sessionManager.getSession(sid);
+    if (modelWaitFor(sid)) return 'waiting-model';
     if (!s) return 'missing';
     if (s.status === 'dormant') return 'dormant';
     return sessionManager.isAgentTurnActive(sid) ? 'running' : 'idle';
@@ -108,7 +187,7 @@ function createTeamService(deps) {
   function publicView(team) {
     return {
       leadSid: team.leadSid, createdAt: team.createdAt, updatedAt: team.updatedAt,
-      members: (team.members || []).map(m => ({ memberId: m.memberId, sid: m.sid, role: m.role, kind: m.kind, account: m.account || '', title: m.title, status: m.status, ...(m.model ? {model:m.model} : {}) })),
+      members: (team.members || []).map(m => ({ memberId: m.memberId, sid: m.sid, role: m.role, kind: m.kind, account: m.account || '', title: m.title, status: m.status, state: m.status === 'dismissed' ? 'dismissed' : sessionState(m.sid), reason: modelWaitFor(m.sid)?.reason || '', ...(m.model ? {model:m.model} : {}) })),
       plans: (team.plans || []).map(p => ({ id: p.id, status: p.status, goal: p.goal, members: p.members, submittedAt: p.submittedAt, decidedAt: p.decidedAt || 0, note: p.note || '' })),
       grants: (team.grants || []).slice(),
       messages: (team.messages || []).map(m => deliveryView(team, m)),
@@ -144,8 +223,9 @@ function createTeamService(deps) {
         if(!row || !row.usable)throw Error(`第 ${i+1} 人的号池账号不可用，请用 accounts 查看并选择可用账号`);
         model=String(raw?.model || '').trim();
         if(model&&!require('../../core/codeagent-models').isSafeModelId(model))throw Error(`第 ${i+1} 人的模型名称无效`);
-        if(model&&row.modelsAuthoritative&&!row.models.some(m=>m.toLowerCase()===model.toLowerCase()))throw Error(`第 ${i+1} 人的账号没有 ${model} 权限，请从该账号的 models 清单选择`);
-        if(model)model=row.models.find(m=>m.toLowerCase()===model.toLowerCase()) || model;
+        // Valid model intent is resolved by the shared creation policy after approval.
+        // Account availability and model syntax are still checked before approval.
+        if(model)model=(row.models || []).find(m=>m.toLowerCase()===model.toLowerCase()) || model;
       }
       const cwd = String(raw?.cwd || '').trim();
       if (cwd && !fs.existsSync(cwd)) throw Error(`第 ${i + 1} 人的工作目录不存在：${cwd}`);
@@ -219,11 +299,14 @@ function createTeamService(deps) {
       try {
         // 未选模型时沿用所选号池账号的默认模型。
         const opts = { cwd: spec.cwd || lead?.cwd || undefined, title: spec.title, workspaceLabel: spec.title, openInBackground: true,
-          codeagentAccount: 'pool', codeagentPoolPick: spec.account };
+          codeagentAccount: 'pool', codeagentPoolPick: spec.account,
+          modelCreationContext: `负责人 ${lead?.title || leadSid} / 新成员 ${spec.title || spec.role}` };
         if (spec.model) { opts.model = spec.model; opts.codeagentModelPick = true; }
         const session = await createSession({ kind: spec.kind, opts });
         if (!session?.id) throw Error('Hub 没返回新会话');
         const account = spec.account || session.codeagentPoolAccount;
+        const actualModel = session.fixedModel || session.currentModel?.id || spec.model;
+        if (actualModel) { spec.model = actualModel; member.model = actualModel; }
         Object.assign(member, { sid: session.id, account: account || '', joinedAt: now(), status: 'active' });
         spec.status = 'created'; spec.sid = session.id;
         save(team);
@@ -335,7 +418,7 @@ function createTeamService(deps) {
   // 收件人空闲才送；发给负责人的消息只有「要叫醒」的那条到了，才连同攒着的留言一起送。
   async function flush(team) {
     if (frozen) return;
-    const ready = m => m.state === 'queued' && !(m.retryAt > now());
+    const ready = m => (m.state === 'queued' || (m.state === 'waiting-model' && (m.modelWait?.recovered || m.modelWait?.confirmed))) && !(m.retryAt > now());
     const queued = (team.messages || []).filter(ready);
     const targets = [...new Set(queued.map(m => m.to))];
     for (const to of targets) {
@@ -353,12 +436,27 @@ function createTeamService(deps) {
         save(team); continue;
       }
       let state = sessionState(target.sid);
+      if (modelWaits.get(target.sid)?.recovered) {
+        const live = sessionManager.getSession(target.sid);
+        state = !live ? 'missing' : live.status === 'dormant' ? 'dormant' : sessionManager.isAgentTurnActive(target.sid) ? 'running' : 'idle';
+      }
       if (state === 'missing' || state === 'dormant') {
         // Hub 会让空闲会话自动休眠：有消息要送时把它叫醒（只叫侧栏里登记为休眠的会话，关掉的不复活）。
         if (typeof wakeSession === 'function' && now() - (wakeTried.get(target.sid) || 0) > 60000) {
           wakeTried.set(target.sid, now());
           sending.add(lock);
-          try { await wakeSession(target.sid); } catch (error) { logger.warn?.('[team] 唤醒失败', target.sid, error.message); }
+          const stopWake = failure => {
+            for (const item of items) { item.state = 'failed'; item.error = String(failure.message || '已取消恢复，待发消息保持停止').slice(0, 300); }
+            save(team);
+            if (to !== LEAD) enqueue(team, 'hub', LEAD, `${to} 的恢复已停止，原待发任务未发送；${failure.message || '需要时请重新发起'}。`, { wake: true });
+          };
+          try {
+            const result = await wakeSession(target.sid);
+            if (result?.stopped && result.notSent !== false) stopWake(result);
+          } catch (error) {
+            if (error.stopped && error.notSent !== false) stopWake(error);
+            else logger.warn?.('[team] 唤醒失败', target.sid, error.message);
+          }
           finally { sending.delete(lock); }
         }
         continue;
@@ -389,12 +487,34 @@ function createTeamService(deps) {
       }
       sending.add(lock);
       const batch = to === LEAD ? items : [items[0]];
-      batch.forEach(m => { m.state = 'sending'; m.sendingAt = now(); });
-      save(team);
+      const submissionId = batch.map(item => item.id).join(':').slice(0, 160);
       let confirmedNotSent = false;
       try {
+        batch.forEach(m => {
+          if (m.state === 'waiting-model' && m.modelWait?.recovered) {
+            const live = sessionManager.getSession(target.sid);
+            // A fresh process has no old invocation or confirmation UI. Keep
+            // the durable not-sent state until a fresh choice is made. A model
+            // explicitly selected since that wait is already user consent.
+            const alreadyChosen = live?.modelPinSource === 'user' && live.fixedModel
+              && live.fixedModel !== m.modelWait.originalModel && !live.modelConfirmationRequired;
+            if (alreadyChosen) {
+              if (modelWaits.get(target.sid)?.key === m.modelWait.key) modelWaits.delete(target.sid);
+              delete m.modelWait; m.state = 'sending';
+            } else {
+              sessionManager.updateSessionMeta?.(target.sid, { modelConfirmationRequired: true, modelUnavailableReason: m.modelWait.reason });
+              m.modelWait.recovered = false;
+            }
+          } else m.state = 'sending';
+          m.sendingAt = now(); m.submissionId = submissionId;
+        });
+        save(team);
         const text = batch.length === 1 && batch[0].kickoff ? batch[0].text : formatBatch(team, batch, to);
-        const result = await submitPrompt(target.sid, text);
+        const targetSid = target.sid;
+        const shouldSubmit = () => !frozen && memberById(team, to)?.sid === targetSid
+          && batch.every(item => team.messages.includes(item) && ['sending', 'waiting-model'].includes(item.state));
+        const result = await submitPrompt(targetSid, text, { clientSubmissionId: submissionId, shouldSubmit });
+        if (frozen && batch.every(item => item.notSent === true && item.modelWait)) return;
         // These IPC preflight errors precede any write. Also recognize legacy
         // receipts without notSent, but never override explicit uncertainty.
         const preflightRejected = result?.ok === false && !result.unconfirmed && result.notSent !== false
@@ -413,16 +533,18 @@ function createTeamService(deps) {
             const reason = result.message || result.error || '未发送（发送时被停止）';
             batch.forEach(m => { m.state = 'failed'; m.error = String(reason).slice(0, 300); });
             if (to !== LEAD) enqueue(team, 'hub', LEAD, `发给 ${to} 的消息没送达：${String(reason).slice(0, 200)}。内容保留，可用 status 查看后核对。`);
-          } else if (result?.ok === true) batch.forEach(m => { m.state = 'sent'; m.sentAt = now(); });
+          } else if (result?.ok === true) batch.forEach(m => { m.state = 'sent'; m.notSent = false; m.sentAt = now(); });
           else markUnconfirmed(team, batch, to, '提交未返回明确回执');
         }
       } catch (error) {
-        if (confirmedNotSent) {
+        if (frozen && batch.every(item => item.notSent === true && item.modelWait)) return;
+        if (confirmedNotSent || batch.every(item => item.notSent === true)) {
           batch.forEach(m => { m.state = 'failed'; m.error = String(error.message || error).slice(0, 300); });
           if (to !== LEAD) enqueue(team, 'hub', LEAD, `发给 ${to} 的消息没送达：${String(error.message || error).slice(0, 200)}。内容保留，可用 status 查看。`);
         } else markUnconfirmed(team, batch, to, error.message || error);
       } finally {
         sending.delete(lock);
+        for (const item of batch) if (!['sending', 'waiting-model'].includes(item.state)) delete item.modelWait;
         save(team);
         if ((team.messages || []).some(m => ready(m) && m.to === to)) setImmediate(() => flush(team).catch(() => {}));
       }
@@ -499,7 +621,7 @@ function createTeamService(deps) {
   }
   function markUnconfirmed(team, items, to, error) {
     const warning = '可能已送达，请先核对对方会话再决定是否重发';
-    for (const item of items) { item.state = 'unconfirmed'; item.error = error ? `${String(error).slice(0, 200)}；${warning}` : warning; }
+    for (const item of items) { item.state = 'unconfirmed'; item.notSent = false; item.error = error ? `${String(error).slice(0, 200)}；${warning}` : warning; }
     if (to !== LEAD) enqueue(team, 'hub', LEAD, `发给 ${to} 的消息${warning}。用 status 查看保留的正文。`);
   }
   function formatBatch(team, batch, to) {
@@ -529,16 +651,20 @@ function createTeamService(deps) {
   }
   async function interruptNow(team, item, target) {
     const lock = team.leadSid + ':' + item.to;
-    sending.add(lock); item.state = 'sending'; item.sendingAt = now(); save(team);
+    sending.add(lock); item.state = 'sending'; item.sendingAt = now(); item.submissionId = item.id; save(team);
     try {
-      const result = await injectPrompt(target.sid, `## 负责人追加指示（${item.id}）\n${item.text}\n\n按这条指示调整当前工作，不重做已完成的部分。`);
+      const targetSid = target.sid;
+      const shouldSubmit = () => !frozen && memberById(team, item.to)?.sid === targetSid
+        && team.messages.includes(item) && ['sending', 'waiting-model'].includes(item.state);
+      const result = await injectPrompt(targetSid, `## 负责人追加指示（${item.id}）\n${item.text}\n\n按这条指示调整当前工作，不重做已完成的部分。`, { clientSubmissionId: item.id, shouldSubmit });
+      if (frozen && item.notSent === true && item.modelWait) return;
       if (result?.uncertain) markUnconfirmed(team, [item], item.to);
       else if (result?.accepted) { item.state = 'sent'; item.sentAt = now(); item.via = 'interrupt'; }
       else {
         item.state = 'failed'; item.error = result?.message || result?.error || '插话未发送';
         enqueue(team, 'hub', LEAD, `发给 ${item.to} 的消息没送达：${item.error}。用 status 查看保留的正文。`);
       }
-    } catch (error) { markUnconfirmed(team, [item], item.to, error.message); }
+    } catch (error) { if (!(frozen && item.notSent === true && item.modelWait)) markUnconfirmed(team, [item], item.to, error.message); }
     finally { sending.delete(lock); save(team); }
   }
 
@@ -546,8 +672,12 @@ function createTeamService(deps) {
   function deliveryView(team, m) {
     const target = memberById(team, m.to);
     const waitedMs = Math.max(0, (m.sentAt || now()) - m.at);
-    const receiptOverdue = m.state === 'sending' && now() - (m.sendingAt ?? m.at) >= RECEIPT_WAIT_MS;
-    const stage = receiptOverdue ? 'unconfirmed' : m.state;
+    const receiptOverdue = m.state === 'sending' && m.notSent !== true && now() - (m.sendingAt ?? m.at) >= RECEIPT_WAIT_MS;
+    const sessionWait = modelWaits.get(target?.sid);
+    const wait = ['queued', 'sending', 'waiting-model'].includes(m.state) && (m.modelWait
+      || (sessionWait && ((m.state === 'queued' && sessionWait.operation === 'resume')
+        || sessionWait.clientSubmissionIds?.includes(m.submissionId)) && sessionWait));
+    const stage = wait ? 'waiting-model' : receiptOverdue ? 'unconfirmed' : m.state;
     let reason = m.error || '';
     if (m.state === 'sending') reason = receiptOverdue ? '暂未收到确认，送达结果待核对；不会自动重发' : '正在提交，等待送达回执';
     else if (m.state === 'sent') reason = '提交已确认；不代表对方已阅读或完成任务';
@@ -556,9 +686,10 @@ function createTeamService(deps) {
       reason = state === 'running' ? (m.waitReason || '等待对方回合结束') : state === 'dormant' ? '等待唤醒会话' : state === 'missing' ? '目标会话不可用' :
         m.to === LEAD && m.wake === false ? '留言等待负责人唤醒或批量送达' : '等待投递';
     }
+    if (wait) reason = wait.reason;
     return { id: m.id, from: m.from, to: m.to, targetSessionId: target?.sid || null, state: m.state, stage,
-      label: ({ queued: '排队', sending: '发送中', sent: '已送', failed: '提交失败', unconfirmed: '送达结果待核对' })[stage] || stage,
-      reason, at: m.at, sendingAt: m.sendingAt || null, sentAt: m.sentAt || null, waitedMs,
+      label: ({ 'waiting-model': '等待模型确认', queued: '排队', sending: '发送中', sent: '已送', failed: '提交失败', unconfirmed: '送达结果待核对' })[stage] || stage,
+      reason, ...(wait || m.notSent === true ? { notSent: true } : {}), at: m.at, sendingAt: m.sendingAt || null, sentAt: m.sentAt || null, waitedMs,
       retryAt: m.state === 'queued' && m.retryAt > now() ? m.retryAt : null };
   }
   function status(callerSid) {
@@ -568,13 +699,13 @@ function createTeamService(deps) {
     const mine = (team.messages || []).filter(m => m.to === member.memberId || m.from === member.memberId);
     return {
       you: member.memberId, leadSid: team.leadSid,
-      members: [{ memberId: LEAD, title: sessionManager.getSession(team.leadSid)?.title || '负责人', state: sessionState(team.leadSid), runtime: runtimeOf(team.leadSid) }]
-        .concat((team.members || []).map(m => ({ memberId: m.memberId, title: m.title, role: m.role, kind: m.kind, account: m.account, ...(m.model ? { model: m.model } : {}), runtime: runtimeOf(m.sid), status: m.status, state: m.status === 'dismissed' ? 'dismissed' : sessionState(m.sid) }))),
+      members: [{ memberId: LEAD, title: sessionManager.getSession(team.leadSid)?.title || '负责人', state: sessionState(team.leadSid), reason: modelWaitFor(team.leadSid)?.reason || '', runtime: runtimeOf(team.leadSid) }]
+        .concat((team.members || []).map(m => ({ memberId: m.memberId, title: m.title, role: m.role, kind: m.kind, account: m.account, ...(m.model ? { model: m.model } : {}), runtime: runtimeOf(m.sid), status: m.status, state: m.status === 'dismissed' ? 'dismissed' : sessionState(m.sid), reason: modelWaitFor(m.sid)?.reason || '' }))),
       plans: member.memberId === LEAD ? (team.plans || []).map(p => ({ id: p.id, status: p.status, size: p.members.length, note: p.note || '' })) : undefined,
       grants: team.grants,
       messages: mine.map(m => deliveryView(team, m)),
-      pendingForYou: mine.filter(m => m.to === member.memberId && ['queued', 'sending', 'unconfirmed'].includes(m.state)).map(m => ({ ...deliveryView(team, m), text: m.text, sourceId: m.sourceId, bodyPath: m.bodyPath, wake: m.wake !== false })),
-      undelivered: mine.filter(m => m.from === member.memberId && ['queued', 'sending', 'failed', 'unconfirmed'].includes(m.state)).map(m => ({ ...deliveryView(team, m), text: m.text.slice(0, 200), error: m.error || '' })),
+      pendingForYou: mine.filter(m => m.to === member.memberId && ['queued', 'sending', 'waiting-model', 'unconfirmed'].includes(m.state)).map(m => ({ ...deliveryView(team, m), text: m.text, sourceId: m.sourceId, bodyPath: m.bodyPath, wake: m.wake !== false })),
+      undelivered: mine.filter(m => m.from === member.memberId && ['queued', 'sending', 'waiting-model', 'failed', 'unconfirmed'].includes(m.state)).map(m => ({ ...deliveryView(team, m), text: m.text.slice(0, 200), error: m.error || '' })),
     };
   }
   function runtimeOf(sid) {
@@ -628,8 +759,8 @@ function createTeamService(deps) {
     try { watch(); } catch (error) { logger.warn?.('[team] 心跳巡检失败', error.message); }
     for (const team of teams.values()) flush(team).catch(error => logger.warn?.('[team] 投递失败', error.message));
   }
-  function start() { load(); if (!timer) { timer = setInterval(tick, TICK_MS); timer.unref?.(); } }
-  function stop() { clearInterval(timer); timer = null; }
+  function start() { sessionManager.off?.('session-model-wait', onModelWait); sessionManager.on?.('session-model-wait', onModelWait); sessionManager.off?.('session-submission-handoff', onSubmissionHandoff); sessionManager.on?.('session-submission-handoff', onSubmissionHandoff); load(); if (!timer) { timer = setInterval(tick, TICK_MS); timer.unref?.(); } }
+  function stop() { clearInterval(timer); timer = null; sessionManager.off?.('session-model-wait', onModelWait); sessionManager.off?.('session-submission-handoff', onSubmissionHandoff); }
 
   function accounts() { return { ...listAccounts(), note: 'id 填进计划 account，model 从该账号 models 清单选择；省略 model 沿用账号设置。用户在批准时可改账号和模型。' }; }
   return { start, stop, invoke, decide, accounts, listTeams, teamOfLead, teamOfMember, flush: lead => { const t = teamOfLead(lead); return t ? flush(t) : null; },

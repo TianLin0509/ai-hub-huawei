@@ -295,7 +295,7 @@ function observeModel(session, value, { at = Date.now() } = {}) {
     result: settingsOnly.model.toLowerCase() === normalizeModel(id).toLowerCase() ? 'match' : 'mismatch' } : null;
   pendingSettingsOnly.delete(sessionId);
   const current = session.currentModel && typeof session.currentModel === 'object' ? session.currentModel : {};
-  const currentId = clean(current.id);
+  const currentId = clean(session.fixedModel || current.id);
   const fields = {};
   if (session.codeagentActualModel !== id) fields.codeagentActualModel = id;
   const sameId = currentId.toLowerCase() === id.toLowerCase();
@@ -305,11 +305,12 @@ function observeModel(session, value, { at = Date.now() } = {}) {
   const switchMismatch = expected && expected.toLowerCase() !== normalizeModel(id).toLowerCase();
   let mismatch = null;
   if (switchMismatch || !sameId && !sameFamily) {
-    fields.currentModel = { id, displayName: modelLabel(id) };
+    if (!session.fixedModel) fields.currentModel = { id, displayName: modelLabel(id) };
     const requested = switchMismatch ? expected : currentId;
     if (requested) {
       fields.codeagentRequestedModel = requested;
-      mismatch = { requested, requestedLabel: modelLabel(requested), actual: id, ...(switchMismatch ? { manualSwitch: true } : {}) };
+      mismatch = { requested, requestedLabel: modelLabel(requested), actual: id,
+        ...(session.fixedModel ? { fixedModel: session.fixedModel } : {}), ...(switchMismatch ? { manualSwitch: true } : {}) };
     }
   }
   return Object.keys(fields).length || settingsOnlyVerification ? { fields, mismatch, ...(settingsOnlyVerification ? { settingsOnlyVerification } : {}) } : null;
@@ -317,6 +318,7 @@ function observeModel(session, value, { at = Date.now() } = {}) {
 
 function mismatchNotice(mismatch) {
   if (!mismatch) return '';
+  if (mismatch.fixedModel) return `会话仍固定 ${mismatch.fixedModel}，本轮实际回答使用 ${mismatch.actual}。请核对模型权限或手动重新选择模型。`;
   if (mismatch.manualSwitch) return `模型切换没有生效，实际仍是 ${mismatch.actual}`;
   return `选的是 ${mismatch.requestedLabel}，CodeAgent 实际用的是 ${mismatch.actual}（可能没有所选模型的权限）。`
     + '界面已按实际模型显示，之后恢复这个会话也用它；新建会话时请在模型下拉里改选有权限的模型。';

@@ -636,6 +636,7 @@ async function _onCreate() {
     if (typeof onCreated === 'function') {
       try { onCreated(meeting); } catch (error) { console.error('[meeting-create] onCreated failed', error); }
     }
+    window.__revealCreatedMeeting?.(meeting.id);
     if (typeof selectMeeting === 'function') selectMeeting(meeting.id);
     else if (typeof window.selectMeeting === 'function') window.selectMeeting(meeting.id);
   } catch (e) {

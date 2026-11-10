@@ -332,6 +332,8 @@
         </div>
       </section>
       <div class="context-menu" id="context-menu" style="display:none">
+        <button class="context-menu-item" data-action="rename">重命名会话</button>
+        <button class="context-menu-item" data-action="folder-move">移动到目录…</button>
         <button class="context-menu-item" data-action="pin">置顶</button>
         <button class="context-menu-item" data-action="reference" title="复制聊天记录引用，可粘贴到其他会话">引用会话</button>
         <button class="context-menu-item" data-action="restart">重启</button>
@@ -862,6 +864,14 @@
       <div class="config-modal-body">
         <div id="config-main-view">
           <p class="config-hint">配置全局代理、通知与显示；账号登录和 AI 接入方式已统一移至左侧「权限」。</p>
+          <div class="config-field">
+            <label for="cfg-model-unavailable-policy">会话原模型不可用时</label>
+            <select id="cfg-model-unavailable-policy">
+              <option value="auto-switch-notify">自动换成可用模型，并醒目提示（默认）</option>
+              <option value="stop-and-ask">切换前必须手动确认</option>
+            </select>
+            <p class="config-hint">会话固定创建或手动选择的模型。自动模式只换同家族可用型号；跨家族须手动确认，暂停状态不会因恢复或重启解除。</p>
+          </div>
           <div class="config-field">
             <label>HTTP 代理 <span class="config-label-hint">（VPN/Clash 端口）</span></label>
             <input type="text" id="cfg-proxy" placeholder="http://127.0.0.1:7890" spellcheck="false">

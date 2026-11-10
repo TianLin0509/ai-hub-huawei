@@ -435,6 +435,7 @@ const codeAgentSubmissions = new Map();
 const codeAgentStops = new Map();
 function assertCodeAgentSubmission(options) {
   const ticket = options.codeagentSubmission;
+  if (ticket?.modelWaited && !require('./session-model-pin').sameSessionExecution(ticket.execution, _deps.sessionManager, ticket.sessionId)) ticket.cancelled = true;
   if (ticket?.cancelled) throw Object.assign(new Error('已请求停止，未继续写入终端'), {
     code: 'codeagent-stop-requested', notSent: !ticket.submitted,
   });
@@ -443,8 +444,95 @@ function awaitCodeAgentSubmission(operation, options) {
   const ticket = options.codeagentSubmission;
   return ticket ? Promise.race([operation, ticket.stopped.then(() => assertCodeAgentSubmission(options))]) : operation;
 }
-async function sendToPty(sid, prompt, kind, options = {}) {
-  const ticket = isCodeAgentKind(kind) ? { cancelled: false, submitted: false } : null;
+// Only attempts stopped at the model gate are retained after completion. The
+// original body stays in its suspended call; this cache holds its digest/result,
+// never a second replay job. A new physical session has a different owner.
+const modelSubmissionResults = new WeakMap();
+function sendToPty(sid, prompt, kind, options = {}) {
+  const manager = _deps.sessionManager;
+  if (!isCodeAgentKind(kind) || options.codeagentModelPick || !options.clientSubmissionId) {
+    return sendToPtyAttempt(sid, prompt, kind, options);
+  }
+  let sessions = modelSubmissionResults.get(manager);
+  if (!sessions) modelSubmissionResults.set(manager, sessions = new Map());
+  let attempts = sessions.get(sid);
+  if (!attempts) sessions.set(sid, attempts = new Map());
+  const id = options.clientSubmissionId;
+  const digest = require('node:crypto').createHash('sha256').update(String(prompt)).update(JSON.stringify(options.attachments || [])).digest('hex');
+  const pins = require('./session-model-pin');
+  const execution = pins.captureSessionExecution(manager, sid);
+  const previous = attempts.get(id);
+  if (previous) {
+    if (previous.invalidated || !pins.sameSessionExecution(previous.execution, manager, sid)) {
+      previous.invalidated = true; previous.execution = null;
+      const uncertain = previous.dispatched && !previous.notSent;
+      return Promise.resolve({ ok: false, stopped: true, notSent: !uncertain, ...(uncertain ? { unconfirmed: true } : {}),
+        code: 'submission-session-changed', message: '该消息属于此前会话，未向新会话重发；原结果请核对历史。' });
+    }
+    if (previous.digest !== digest) return Promise.resolve({ ok: false, stopped: true, notSent: true,
+      code: 'submission-id-conflict', message: '同一消息编号对应的正文或附件已变化，未发送。' });
+    if (previous.promise) return previous.promise;
+  }
+  const record = { digest, execution, blocked: previous?.blocked === true, dispatched: false };
+  const task = sendToPtyAttempt(sid, prompt, kind, options, record);
+  record.promise = task; attempts.set(id, record);
+  const finished = (result, error) => {
+    record.notSent = result?.notSent === true || error?.notSent === true;
+    const retryableBeforeHandoff = error?.retryableBeforeHandoff === true && record.notSent
+      && error.stopped !== true && !error.unconfirmed && !record.handedOff && !record.invalidated
+      && pins.sameSessionExecution(record.execution, manager, sid);
+    if (retryableBeforeHandoff) {
+      // Retain only the identity/digest: the rejected Promise must not become
+      // a fake retry. The next attempt still owns this model-gated receipt.
+      record.promise = null;
+    } else if (!record.blocked && attempts.get(id) === record) attempts.delete(id);
+  };
+  task.then(result => finished(result), error => finished(null, error));
+  return task;
+}
+
+async function ensureModelBeforeSubmission(sid, options, ticket, submission) {
+  const manager = _deps.sessionManager;
+  const confirm = _deps.confirmSessionModel;
+  for (;;) {
+    try { await manager.ensureSessionModelReady(sid, { deferModelNotice: typeof confirm === 'function' }); return; }
+    catch (error) {
+      if (error.code !== 'SESSION_MODEL_UNAVAILABLE' || typeof confirm !== 'function') throw error;
+      if (submission) submission.blocked = true;
+      const controller = new AbortController();
+      const pins = require('./session-model-pin'), execution = pins.captureSessionExecution(manager, sid);
+      const valid = () => !ticket?.cancelled && pins.sameSessionExecution(execution, manager, sid)
+        && (!options.shouldSubmit || options.shouldSubmit());
+      if (!valid()) throw Object.assign(new Error('会话或派工已取消，本条消息未发送。'), { stopped: true, notSent: true });
+      ticket.active = true; ticket.modelPending = true; ticket.modelWaited = true;
+      ticket.execution = execution; ticket.sessionId = sid; ticket.cancelModel = () => controller.abort();
+      const poll = setInterval(() => { if (!valid()) controller.abort(); }, 250);
+      poll.unref?.();
+      try {
+        await awaitCodeAgentSubmission(confirm(sid, error, { clientSubmissionId: options.clientSubmissionId, workflowMessageId: options.workflowMessageId, signal: controller.signal, shouldSubmit: valid }), options);
+        assertCodeAgentSubmission(options);
+        if (!valid()) throw Object.assign(new Error('会话或派工已取消，本条消息未发送。'), { stopped: true, notSent: true });
+      } finally {
+        clearInterval(poll); ticket.active = false; ticket.modelPending = false; ticket.cancelModel = null;
+      }
+    }
+  }
+}
+
+function cancelPendingModelSubmissions(sid) {
+  for (const ticket of codeAgentSubmissions.get(sid) || []) {
+    if (!ticket.modelWaited) continue;
+    ticket.cancelled = true; ticket.cancelModel?.();
+    try { ticket.endPaste?.(); } catch { /* old PTY may have already exited */ }
+    ticket.stop();
+  }
+  for (const record of modelSubmissionResults.get(_deps?.sessionManager)?.get(sid)?.values() || []) {
+    record.invalidated = true; record.execution = null;
+  }
+}
+
+async function sendToPtyAttempt(sid, prompt, kind, options = {}, submission = null) {
+  const ticket = isCodeAgentKind(kind) ? { cancelled: false, submitted: false, onHandoff: () => { if (submission) submission.handedOff = true; } } : null;
   if (ticket) {
     ticket.stopped = new Promise(resolve => { ticket.stop = resolve; });
     ticket.finished = new Promise(resolve => { ticket.finish = resolve; });
@@ -457,7 +545,25 @@ async function sendToPty(sid, prompt, kind, options = {}) {
   // 否则第一轮还是 CLI 的默认模型。选模型自己发的 /model 带 codeagentModelPick，不等自己。
   // 没有在选模型时不能多等一拍：下面「同步进入第一次提交」的约定要求同一拍里就登记（关会话能取消它）。
   const picker = require('./codeagent-model-picker');
-  if (!options.codeagentModelPick && picker.isPicking(sid)) await picker.waitForPick(sid);
+  if (!options.codeagentModelPick && picker.isPicking(sid)) {
+    try { await picker.waitForPick(sid); }
+    catch (error) {
+      if (!(error.modelMenuClosed && !picker.isPicking(sid)
+          && _deps.sessionManager.getSession(sid)?.codeagentModelPick && typeof _deps.confirmSessionModel === 'function')) throw error;
+      // A closed failed menu is a model pause, so keep this exact send pending.
+    }
+  }
+  if (isCodeAgentKind(kind) && !options.codeagentModelPick && typeof _deps.sessionManager.ensureSessionModelReady === 'function'
+      && !String(prompt).trimStart().startsWith('/model')) {
+    try { await ensureModelBeforeSubmission(sid, options, ticket, submission); }
+    catch (error) {
+      if (error.stopped || error.code === 'codeagent-stop-requested') return {
+        ok: false, stopped: true, notSent: true, sendStatus: 'stopped', enterAttempts: 0,
+        code: error.code, message: error.message,
+      };
+      throw error;
+    }
+  }
   // Resolve the account barrier before joining the submission queue: a swap
   // may itself wait for all already queued submissions to settle.
   const accountSwitch = [_deps.sessionManager.claudeAccountSwitch, _deps.sessionManager.codexAccountSwitch]
@@ -481,6 +587,7 @@ async function sendToPty(sid, prompt, kind, options = {}) {
   // its intent before a caller can close the session in this same tick.
   const submit = () => {
     const start = () => {
+      if (submission) submission.dispatched = true;
       if (ticket) ticket.active = true;
       const prepared = releaseAccount?.started?.();
       return prepared?.then ? prepared.then(() => sendToPtyImpl(sid,prompt,kind,options))
@@ -494,6 +601,7 @@ async function sendToPty(sid, prompt, kind, options = {}) {
   let receipt;
   try {
     receipt = await task;
+    if (ticket?.modelWaited) assertCodeAgentSubmission(options);
     if (isCodeAgentKind(kind) && receipt?.ok && !receipt.notSent && !receipt.unconfirmed
         && !['stuck', 'content-mismatch', 'rejected', 'stopped'].includes(receipt.sendStatus) && !options.codeagentModelPick) {
       require('./codeagent-input-guard').codeAgentInputGuard(_deps.sessionManager)
@@ -503,9 +611,10 @@ async function sendToPty(sid, prompt, kind, options = {}) {
   }
   catch (error) {
     if (error?.code === 'codeagent-stop-requested') {
-      receipt = { ok: true, stopped: true, sendStatus: 'stopped', notSent: !ticket.submitted,
+      receipt = { ok: !ticket.modelWaited, stopped: true, sendStatus: 'stopped', notSent: !ticket.submitted,
+        ...(ticket.modelWaited && ticket.submitted ? { unconfirmed: true } : {}),
         enterAttempts: ticket.submitted ? 1 : 0, message: '已停止' };
-      if (ticket.submitted) require('./codeagent-input-guard').codeAgentInputGuard(_deps.sessionManager)
+      if (ticket.submitted && (!ticket.modelWaited || require('./session-model-pin').sameSessionExecution(ticket.execution, _deps.sessionManager, sid))) require('./codeagent-input-guard').codeAgentInputGuard(_deps.sessionManager)
         .remember(sid, options.originalPrompt ?? prompt, options.codeagentSkill);
       return receipt;
     }
@@ -528,6 +637,11 @@ async function sendToPty(sid, prompt, kind, options = {}) {
 async function codeAgentInputAction(sid, action, options = {}) {
   if (action === 'stop') {
     if (codeAgentStops.has(sid)) return codeAgentStops.get(sid);
+    const pendingTickets = [...(codeAgentSubmissions.get(sid) || [])];
+    const pendingStopped = pendingTickets.some(ticket => ticket.modelWaited && !ticket.submitted);
+    if (pendingStopped) cancelPendingModelSubmissions(sid);
+    // Still inspect the screen: a missing/late hook cannot prove an older turn
+    // is idle. Cancelling the queued message does not replace stopping that turn.
     // Stop is a key action, not a submission. Never wait for readiness or an
     // acknowledgement. Prevent the old sender from typing/recovering Enter later.
     const previous = promptSubmissionQueues.get(sid);
@@ -535,24 +649,24 @@ async function codeAgentInputAction(sid, action, options = {}) {
     const guard = require('./codeagent-input-guard').codeAgentInputGuard(_deps.sessionManager);
     const task = guard
       .stop(sid, { ...options, queuePending: !!previous, cancelPending() {
-        const ticket = [...(codeAgentSubmissions.get(sid) || [])].find(item => item.active && !item.submitted);
+        const ticket = [...(codeAgentSubmissions.get(sid) || [])].find(item => item.active && !item.submitted && !item.cancelled);
         if (!ticket) return false;
         stoppedTicket = ticket;
-        ticket.cancelled = true; ticket.endPaste?.(); ticket.stop();
+        ticket.cancelled = true; ticket.cancelModel?.(); ticket.endPaste?.(); ticket.stop();
         return true;
       }, beforeEsc() {
-        const ticket = [...(codeAgentSubmissions.get(sid) || [])].find(item => item.active);
+        const ticket = [...(codeAgentSubmissions.get(sid) || [])].find(item => item.active && !item.cancelled);
         stoppedTicket = ticket;
-        if (ticket) { ticket.cancelled = true; ticket.endPaste?.(); ticket.stop(); }
+        if (ticket) { ticket.cancelled = true; ticket.cancelModel?.(); ticket.endPaste?.(); ticket.stop(); }
       } }).then(async result => {
-        if (!result.ok) return result;
+        if (!result.ok) return pendingStopped ? { ...result, pendingStopped: true, message: `待发消息已取消；${result.message || '请核对当前回合状态'}` } : result;
         // Esc bypasses the sender; editing waits until the cancelled writer is
         // settled so Ctrl+U cannot interleave with a pending paste chunk.
         await stoppedTicket?.finished;
         const latest = await guard.inspect(sid);
         const cleared = latest.input ? await guard.clear(sid, latest.input.token)
           : { ok: !latest.readFailed };
-        return { ...result, cleared: cleared.ok, notSent: stoppedTicket ? !stoppedTicket.submitted : false };
+        return { ...result, cleared: cleared.ok, ...(pendingStopped ? { pendingStopped: true } : {}), notSent: stoppedTicket ? !stoppedTicket.submitted : pendingStopped };
       });
     codeAgentStops.set(sid, task);
     const release = () => { if (codeAgentStops.get(sid) === task) codeAgentStops.delete(sid); };
@@ -617,9 +731,21 @@ async function openCodeAgentCommands(sid) {
   finally { if (promptSubmissionQueues.get(sid) === task) promptSubmissionQueues.delete(sid); }
 }
 
+// End the durable model-gate not-sent proof at the physical adapter/PTY
+// handoff, never merely when the user clicks a model in the confirmation UI.
+function notifySubmissionHandoff(sid, kind, options) {
+  const ticket = options.codeagentSubmission;
+  if (!isCodeAgentKind(kind) || options.codeagentModelPick || !options.clientSubmissionId || ticket?.handoffNotified) return;
+  assertCodeAgentSubmission(options);
+  if (options.shouldSubmit && !options.shouldSubmit()) throw Object.assign(new Error('任务已停止，原消息未写入'), { stopped: true, notSent: true });
+  try { _deps.sessionManager.emit?.('session-submission-handoff', { sessionId: sid, clientSubmissionId: options.clientSubmissionId }); }
+  catch (error) { throw Object.assign(error, { stopped: error.retryableBeforeHandoff !== true, notSent: true }); }
+  if (ticket) { ticket.handoffNotified = true; ticket.onHandoff?.(); }
+}
+
 async function sendToPtyImpl(sid, prompt, kind, options = {}) {
   assertCodeAgentSubmission(options);
-  if(options.shouldSubmit && !options.shouldSubmit())return {ok:false,notSent:true,reason:'派工已暂停或取消，本条未发送'};
+  if(options.shouldSubmit && !options.shouldSubmit())return {ok:false,stopped:true,notSent:true,reason:'派工已暂停或取消，本条未发送'};
   if (require('./session-speed').pendingSpeedSwitches.has(sid) && !options.localCommandObserver) {
     throw new Error('正在确认当前会话的速度设置，请完成后再发送');
   }
@@ -642,9 +768,10 @@ async function sendToPtyImpl(sid, prompt, kind, options = {}) {
     await sessionManager.tokenPlanFallback.beforeSend(sid);
   }
   const native = (sessionManager.getNativeSession?.(sid) || sessionManager.getNativeCodex?.(sid));
-  if (native) return native.send(prompt, {
-    ...options, clientSubmissionId:options.clientSubmissionId || options.submissionReceipt?.clientSubmissionId,
-  });
+  if (native) {
+    notifySubmissionHandoff(sid, kind, options);
+    return native.send(prompt, { ...options, clientSubmissionId:options.clientSubmissionId || options.submissionReceipt?.clientSubmissionId });
+  }
   const session = sessionManager.getSession?.(sid);
   // 原生 Codex 断了连接时不能退回 PTY 粘贴；PTY Codex 正常走下面的提交闭环。
   if (session && session.runtimeBackend === 'codex-app-server') {
@@ -835,6 +962,7 @@ async function sendToPtyImpl(sid, prompt, kind, options = {}) {
     let pasteOpen = false, pasteTail = '';
     const pasteManager = ticket ? { writeToSession(id, data) {
       assertCodeAgentSubmission(options);
+      notifySubmissionHandoff(sid, kind, options);
       sessionManager.writeToSession(id, data);
       pasteTail = (pasteTail + data).slice(-6);
       pasteOpen = !pasteTail.endsWith('\x1b[201~');
@@ -873,7 +1001,7 @@ async function sendToPtyImpl(sid, prompt, kind, options = {}) {
       echoNeedle: usedCodexEditorInput ? null : echoNeedle(prompt),
       readOutputSince: typeof sessionManager.getSessionOutputSince === 'function'
         ? () => sessionManager.getSessionOutputSince(sid, outputMarkBefore) : null });
-    if (options.shouldSubmit && !options.shouldSubmit()) return {ok:false,notSent:true,reason:'派工已暂停或取消，本条未提交'};
+    if (options.shouldSubmit && !options.shouldSubmit()) return {ok:false,stopped:true,notSent:true,reason:'派工已暂停或取消，本条未提交'};
     if (options.submissionReceipt?.resolved) return alreadySubmitted();
     // One Enter first.  Extra Enters are conditional on the absence of a
     // semantic work-start acknowledgement, rather than being fired blindly.
@@ -1423,6 +1551,7 @@ module.exports = {
   sendToPty,
   openCodeAgentCommands,
   codeAgentInputAction,
+  cancelPendingModelSubmissions,
   extractStreamingText,
   cleanBufLen,
   checkHostShellTakeover,

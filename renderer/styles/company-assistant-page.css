@@ -238,6 +238,8 @@
 .ca-settings input[type=number]{width:72px;min-width:72px}
 .ca-settings input[type=text]:focus,.ca-settings input[type=email]:focus,.ca-settings input[type=time]:focus,.ca-settings input[type=number]:focus,.ca-settings select:focus{background:var(--hw-surface);border-color:var(--hw-brand);box-shadow:0 0 0 4px var(--hw-brand-soft)}
 .ca-settings input[type=checkbox]{width:16px;min-width:16px;height:16px;margin:0;accent-color:var(--hw-brand)}
+.ca-settings textarea[data-f=phone-extraIds]{box-sizing:border-box;width:100%;min-height:80px;padding:8px 10px;border:1.5px solid transparent;border-radius:var(--hw-r-sm);background:var(--hw-surface-3);color:var(--hw-text-1);font:inherit;font-size:var(--hw-fs-13);line-height:1.5;resize:vertical;outline:0}
+.ca-settings textarea[data-f=phone-extraIds]:focus{background:var(--hw-surface);border-color:var(--hw-brand);box-shadow:0 0 0 4px var(--hw-brand-soft)}
 .ca-settings .ca-note{margin:0;line-height:1.6}
 .ca-settings .ca-row{margin-top:0}
 .ca-settings .ca-btn{height:32px;padding:0 16px}

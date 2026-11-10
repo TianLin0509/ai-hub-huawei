@@ -25,6 +25,7 @@ const DEFAULT_RETRIES = 20;
 // 2026-05-07 maintainer — 多方审查 fix：原 50ms × 20 = 最多 1s 同步 spin 阻塞事件循环。
 // 缩短到 10ms × 20 = 最多 200ms。100 进程压测过零丢失说明竞争实际很罕见，10ms 够用。
 const DEFAULT_RETRY_DELAY_MS = 10;
+// A caller may add canReap(owner) to retain old locks held by live writers.
 const DEFAULT_STALE_MS = 10000; // a writer holding the lock > 10s is considered crashed
 
 function _sleepBusy(ms) {
@@ -62,7 +63,8 @@ async function acquireLockAsync(lockPath, opts = {}) {
       let didReap = false;
       try {
         const stat = await fs.promises.stat(lockPath);
-        if (Date.now() - stat.mtimeMs > staleMs) {
+        if (Date.now() - stat.mtimeMs > staleMs
+            && (!opts.canReap || opts.canReap(JSON.parse(await fs.promises.readFile(lockPath, 'utf8'))))) {
           try { await fs.promises.unlink(lockPath); didReap = true; } catch {}
         }
       } catch {}
@@ -107,7 +109,8 @@ function acquireLock(lockPath, opts = {}) {
       let didReap = false;
       try {
         const stat = fs.statSync(lockPath);
-        if (Date.now() - stat.mtimeMs > staleMs) {
+        if (Date.now() - stat.mtimeMs > staleMs
+            && (!opts.canReap || opts.canReap(JSON.parse(fs.readFileSync(lockPath, 'utf8'))))) {
           try { fs.unlinkSync(lockPath); didReap = true; } catch { /* another proc may have just released */ }
         }
       } catch { /* lock file vanished between EEXIST and statSync — race-friendly */ }

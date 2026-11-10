@@ -37,6 +37,10 @@ const RESUME_META_FIELDS = [
   'kimiSid',
   'kimiSessionDir',
   'currentModel',
+  'fixedModel',
+  'modelPinSource',
+  'modelChange',
+  'codeagentUserModel',
   'codeagentModelPick',
   'codeagentRouteModel',
   // 否则休眠 / 重启后显示名和侧栏图标退回占位或清单第一项（2026-10-18 用户反馈 v2.1.11）。
@@ -134,15 +138,23 @@ function mergeResumeMetaFields(list, previousSessions) {
 
 function buildMeetingsForState(meetingList, meetingManager) {
   if (!Array.isArray(meetingList)) {
-    return meetingManager.getAllMeetings();
+    return meetingManager.getAllMeetings().filter(m => !(m.creationPending && !m.subSessions?.length));
   }
-  return meetingList.map(rendererMeeting => {
+  return meetingList.filter(item => {
+    const authoritative = item?.id && meetingManager.getMeeting(item.id);
+    const meeting = authoritative || item;
+    return !(meeting?.creationPending && !meeting.subSessions?.length);
+  }).map(rendererMeeting => {
     if (!rendererMeeting || !rendererMeeting.id) return rendererMeeting;
     const authoritative = meetingManager.getMeeting(rendererMeeting.id);
     if (!authoritative) return rendererMeeting;
     const { sceneHint: _rendererSceneHint, ...rendererFields } = rendererMeeting;
     return {
       ...rendererFields,
+      // Renames are acknowledged by MeetingRoomManager. An older queued
+      // renderer snapshot must not roll the name/protection back afterwards.
+      title: typeof authoritative.title === 'string' ? authoritative.title : rendererMeeting.title,
+      titleRevision: Number(authoritative.titleRevision) || 0,
       scene: rendererMeeting.scene || authoritative.scene,
       ...require('../../core/group-scene-hint').sceneHintFields(authoritative.sceneHint),
       mode: rendererMeeting.mode || authoritative.mode,
@@ -153,15 +165,9 @@ function buildMeetingsForState(meetingList, meetingManager) {
       groupRecentRawN: Number.isInteger(rendererMeeting.groupRecentRawN)
         ? rendererMeeting.groupRecentRawN
         : (Number.isInteger(authoritative.groupRecentRawN) ? authoritative.groupRecentRawN : 5),
-      userRenamed: typeof rendererMeeting.userRenamed === 'boolean'
-        ? rendererMeeting.userRenamed
-        : !!authoritative.userRenamed,
-      autoTitlePending: typeof rendererMeeting.autoTitlePending === 'boolean'
-        ? rendererMeeting.autoTitlePending
-        : !!authoritative.autoTitlePending,
-      autoTitleGenerated: typeof rendererMeeting.autoTitleGenerated === 'boolean'
-        ? rendererMeeting.autoTitleGenerated
-        : !!authoritative.autoTitleGenerated,
+      userRenamed: typeof authoritative.userRenamed === 'boolean' ? authoritative.userRenamed : !!rendererMeeting.userRenamed,
+      autoTitlePending: typeof authoritative.autoTitlePending === 'boolean' ? authoritative.autoTitlePending : !!rendererMeeting.autoTitlePending,
+      autoTitleGenerated: typeof authoritative.autoTitleGenerated === 'boolean' ? authoritative.autoTitleGenerated : !!rendererMeeting.autoTitleGenerated,
       completionNotificationEnabled: typeof rendererMeeting.completionNotificationEnabled === 'boolean'
         ? rendererMeeting.completionNotificationEnabled
         : !!authoritative.completionNotificationEnabled,
@@ -191,7 +197,7 @@ function buildMeetingsForState(meetingList, meetingManager) {
   });
 }
 
-function handlePersistSessions(list, meetingList, deps) {
+function handlePersistSessions(list, meetingList, deps, { deferStateSave = false } = {}) {
   if (!Array.isArray(list)) return false;
 
   const {
@@ -226,6 +232,13 @@ function handlePersistSessions(list, meetingList, deps) {
   const previousSessionsById = new Map(
     (previousSessions || []).filter(Boolean).map(session => [session.hubId, session]),
   );
+  // User names are main-owned. Renderer autosave only supplies navigation,
+  // runtime and draft metadata; a delayed window snapshot cannot rename.
+  const { titleMetadata } = require('../../core/title-metadata');
+  list = list.map(row => {
+    const authoritative = deps.sessionManager?.getSession(row?.hubId) || previousSessionsById.get(row?.hubId);
+    return authoritative ? { ...row, ...titleMetadata(authoritative) } : row;
+  });
   // Closed copies in another Hub are navigation entries, not writers.
   // Keep unchanged entries without disk polling. Explicit edits and resume read
   // the current file under ownership protection instead of rewriting snapshots.
@@ -329,6 +342,7 @@ function handlePersistSessions(list, meetingList, deps) {
   for (const session of list) {
     if (!session || !session.hubId) continue;
     const authoritative = deps.sessionManager?.getSession(session.hubId);
+    Object.assign(session, require('../../core/session-model-pin').modelPinFields(authoritative || {}));
     if (authoritative?.runtimeBackend === 'claude-stream-json') {
       session.runtimeBackend = authoritative.runtimeBackend;
       session.nativeRuntime = authoritative.nativeRuntime;
@@ -402,7 +416,7 @@ function handlePersistSessions(list, meetingList, deps) {
 
   setLastPersistedMeetings(meetingsForState);
 
-  if (changedSessions > 0 || changedMeetings > 0 || removedEntities > 0) {
+  if (!deferStateSave && (changedSessions > 0 || changedMeetings > 0 || removedEntities > 0)) {
     stateStore.save({
       version: 1,
       cleanShutdown: false,
@@ -417,8 +431,17 @@ function handlePersistSessions(list, meetingList, deps) {
 
 function registerPersistenceIpc(ipcMain, deps) {
   ipcMain.handle('persist-sessions:flush', async (_e, list, meetingList) => {
-    if (!handlePersistSessions(list, meetingList, deps)) throw new Error('工作现场无效，未保存');
-    await deps.stateStore.flushPending();
+    if (!handlePersistSessions(list, meetingList, deps, { deferStateSave: true })) throw new Error('工作现场无效，未保存');
+    await Promise.all([deps.sessionStore.flushPending(), deps.meetingStore.flushPending()]);
+    // Background saving logs errors, whereas an explicit user save must fail
+    // closed. Force the latest snapshot even when metadata compares unchanged
+    // after an earlier failed attempt updated the in-memory persistence cache.
+    await deps.stateStore.saveForRestart({
+      version: 1, cleanShutdown: false,
+      sessions: deps.getLastPersistedSessions(),
+      meetings: deps.getLastPersistedMeetings(),
+      immersiveByMeeting: deps.getImmersiveByMeeting(),
+    });
     return { ok: true };
   });
   ipcMain.handle('get-dormant-sessions', () => ({

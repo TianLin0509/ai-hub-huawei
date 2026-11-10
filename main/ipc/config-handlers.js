@@ -34,6 +34,7 @@ function toMaskedConfig(config) {
   const operations = normalizeOperationsConfig(config.operations || {});
   return {
     codeagentPrefixBranch: config.codeagentPrefixBranch !== false,
+    sessionModelUnavailablePolicy: require('../../core/session-model-pin').unavailablePolicy(config.sessionModelUnavailablePolicy),
     proxy: config.proxy,
     claudeBackend: config.claudeBackend,
     claudeSubscriptionProfile: config.claudeSubscriptionProfile || 'default',
@@ -93,6 +94,7 @@ function toEditableConfig(config) {
   const operations = normalizeOperationsConfig(config.operations || {});
   return {
     codeagentPrefixBranch: config.codeagentPrefixBranch !== false,
+    sessionModelUnavailablePolicy: require('../../core/session-model-pin').unavailablePolicy(config.sessionModelUnavailablePolicy),
     proxy: config.proxy,
     claudeBackend: config.claudeBackend,
     claudeApiKey: config.claudeApiKey || '',
@@ -215,6 +217,10 @@ function buildConfigJsonUpdate(existing, newConfig) {
   const hasOperationsUpdate = OPERATIONS_UPDATE_FIELDS.some(H);
   const merged = {
     ...existing,
+    ...(H('sessionModelUnavailablePolicy') ? { experiments: {
+      ...(existing.experiments || {}),
+      sessionModelUnavailablePolicy: require('../../core/session-model-pin').unavailablePolicy(newConfig.sessionModelUnavailablePolicy),
+    } } : {}),
     proxy: { http: H('proxy') ? (newConfig.proxy || DEFAULTS.proxy) : (existing.proxy?.http || DEFAULTS.proxy) },
     providers: {
       ...(existing.providers || {}),

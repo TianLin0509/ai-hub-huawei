@@ -149,7 +149,16 @@ function poolDirMatch(dataDir, dir, { fsModule = fs } = {}) {
 // 更新的完整快照优先排列；默认模型、账号状态和路由选择规则仍由原调用方判断。
 function accountModels(dir, fsModule = fs, probedFile = null) {
   const probe = require('./codeagent-model-probe');
-  const probed = probe.readProbed(probedFile || path.join(dir, probe.MODELS_FILE));
+  const probeFile = probedFile || path.join(dir, probe.MODELS_FILE);
+  const cachedProbe = probe.readProbed(probeFile);
+  // Missing legacy timestamps use the file's age; unreadable/invalid dates
+  // cannot establish fresh negative permission evidence.
+  let probeTime = cachedProbe?.at ? Date.parse(cachedProbe.at) : NaN;
+  if (cachedProbe && !cachedProbe.at) { try { probeTime = fsModule.statSync(probeFile).mtimeMs; } catch {} }
+  const now = Date.now();
+  const expiredServe = cachedProbe?.source === 'serve'
+    && (!Number.isFinite(probeTime) || probeTime > now + 1000 || now - probeTime > 3 * 24 * 3600 * 1000);
+  const probed = expiredServe ? null : cachedProbe;
   const models = require('./codeagent-models');
   const configured = models.configuredModels(dir, fsModule);
   // Derive identity only from Hub-owned canonical paths, never from a label.
@@ -165,7 +174,9 @@ function accountModels(dir, fsModule = fs, probedFile = null) {
   // 升级前留下的读屏清单不再可信，但在一次成功读取替换它之前继续可用：只拿配置里的模型会把其余模型当成没权限，指定模型开会话直接失败。
   // 它可能不全（旧版读屏读不到被折叠的模型），所以不算权威：清单外的模型不因此被拒绝。
   const staleMenuProbe = !!probed && !reliable && probed.source === 'menu';
-  const lists = reliable ? [probed.models] : menuNewer ? [menu.models] : [probed?.models || [], configured.models];
+  const lists = reliable ? [probed.models] : menuNewer ? [menu.models]
+    : expiredServe && configured.authoritative ? [configured.models]
+    : [probed?.models || [], configured.models, ...(expiredServe ? [cachedProbe.models] : [])];
   const union = [];
   for (const id of lists.flat()) if (!union.some(value => value.toLowerCase() === id.toLowerCase())) union.push(id);
   return { ...configured, models: union, defaultModel: probed ? probed.defaultModel : configured.defaultModel,

@@ -151,6 +151,7 @@ function getConfig() {
 
   _cachedConfig = {
     codeagentPrefixBranch: rawConfig.experiments?.codeagentPrefixBranch !== false,
+    sessionModelUnavailablePolicy: require('./session-model-pin').unavailablePolicy(rawConfig.experiments?.sessionModelUnavailablePolicy),
     acp: rawConfig.acp || {},
     proxy: getConfigValue('proxy', 'CLAUDE_PROXY', 'proxy.http', DEFAULTS.proxy),
     claudeBackend: getConfigValue('claudeBackend', 'HUB_CLAUDE_BACKEND', 'providers.claude.backend', DEFAULTS.claude_backend),

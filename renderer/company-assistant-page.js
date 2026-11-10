@@ -655,6 +655,10 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
         <details><summary class="ca-note">不知道群 ID？从最近会话里找</summary><div class="ca-row"><select data-f="phone-recent">${options}</select><button type="button" class="ca-btn small" data-x="phone-refresh">刷新群列表</button></div></details>
         <div class="ca-row"><button type="button" class="ca-btn small" data-x="phone-check">查看群成员</button><span class="ca-note">群内其他人能看到助理的回答，建议用专用群。</span></div>
         <div class="ca-row" data-slot="phone-check">${checkLine}</div></fieldset>
+      <fieldset class="col"><legend>额外属于我的账号</legend>
+        <p class="ca-note" id="ca-phone-extra-ids-help">换工号后，如果手机消息被识别成“别人发的”，把新工号填在这里。只填写 8 位数字工号，例如 00951078，不要带字母，前导零要保留。手机消息里的带字母账号仍按数字部分匹配。</p>
+        <textarea data-f="phone-extraIds" rows="3" inputmode="numeric" aria-label="额外属于我的账号" aria-describedby="ca-phone-extra-ids-help ca-phone-extra-ids-error" placeholder="每行一个 8 位工号，或用逗号分隔">${esc((st.extraIds || []).join('\n'))}</textarea>
+        <p class="ca-note bad" id="ca-phone-extra-ids-error" role="alert"></p></fieldset>
       <fieldset class="col"><legend>开关与推送</legend>
         <label><input type="checkbox" data-f="phone-enabled"${st.enabled ? ' checked' : ''}>开启手机对话</label>
         <label><input type="checkbox" data-f="phone-pushWatched"${st.pushWatched ? ' checked' : ''}>助理派出的、让它盯着的会话答完或卡住时，推到手机</label>
@@ -668,6 +672,13 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     if (panel.dataset.tab !== 'phone' || !tabBody.isConnected) return;
     tabBody.innerHTML = phoneTab();
     const groupSel = tabBody.querySelector('[data-f="phone-group"]');
+    const extraIdsInput = tabBody.querySelector('[data-f="phone-extraIds"]');
+    const settingsError = tabBody.querySelector('#ca-phone-extra-ids-error');
+    const showSettingsError = error => {
+      settingsError.textContent = error.message;
+      settingsError.scrollIntoView({ block: 'center' });
+    };
+    extraIdsInput.oninput = () => { settingsError.textContent = ''; };
     const chosen = () => {
       const groupId = groupSel.value.trim(), recent = (phoneData.conversations || []).find(g => g.group && g.id === groupId);
       return { groupId, groupName: recent?.name || (groupId === phoneData.phone.settings.groupId ? phoneData.phone.settings.groupName : '') || '' };
@@ -676,12 +687,12 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     tabBody.querySelector('[data-x="phone-connect"]').onclick = async e => {
       const g = chosen(), slot = tabBody.querySelector('[data-slot="phone-connect-result"]');
       if (!g.groupId) { slot.textContent = '请先填入群 ID'; return; }
-      e.target.disabled = true; slot.textContent = '正在发送欢迎消息…';
+      e.target.disabled = true; settingsError.textContent = ''; slot.textContent = '正在校验设置并发送欢迎消息…';
       try {
-        const r = await call('phone-settings', { ...g, enabled: true });
+        const r = await call('phone-settings', { ...g, enabled: true, extraIds: extraIdsInput.value });
         if (!r.ok) { slot.innerHTML = `<p class="ca-note bad">${esc(r.error)}</p>`; return; }
         await mountPhoneTab(panel); showMessage?.('手机对话已接通');
-      } catch (error) { slot.innerHTML = `<p class="ca-note bad">没有接通：${esc(error.message)}</p>`; }
+      } catch (error) { slot.innerHTML = `<p class="ca-note bad">没有接通：${esc(error.message)}</p>`; showSettingsError(error); }
       finally { e.target.disabled = false; }
     };
     tabBody.querySelector('[data-x="phone-refresh"]').onclick = async e => {
@@ -702,13 +713,13 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     tabBody.querySelector('[data-x="phone-save"]').onclick = async e => {
       const g = chosen(), on = f => tabBody.querySelector(`[data-f="phone-${f}"]`).checked;
       if (on('enabled') && !g.groupId) { showMessage?.('请先填群 ID'); return; }
-      e.target.disabled = true;
+      e.target.disabled = true; settingsError.textContent = '';
       try {
-        const r = await call('phone-settings', { ...g, enabled: on('enabled'), pushWatched: on('pushWatched'), pushStuck: on('pushStuck') });
+        const r = await call('phone-settings', { ...g, enabled: on('enabled'), pushWatched: on('pushWatched'), pushStuck: on('pushStuck'), extraIds: extraIdsInput.value });
         if (!r.ok) { showMessage?.('没有接通：' + r.error); e.target.disabled = false; return; }
         showMessage?.(r.welcome ? '已接通：欢迎消息已发到手机群' : '手机设置已保存');
         await mountPhoneTab(panel);
-      } catch (error) { e.target.disabled = false; showMessage?.('没有保存：' + error.message); }
+      } catch (error) { e.target.disabled = false; showSettingsError(error); showMessage?.('没有保存：' + error.message); }
     };
     // 开着这页时每 3 秒刷新界面上的状态和往来（只换这一块，不打断正在改的选项）；后台查群消息是 6 秒一次。
     clearInterval(phoneTimer);

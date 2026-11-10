@@ -1,5 +1,6 @@
 'use strict';
 
+const { isBackgroundPurpose } = require('../core/session-background-purpose');
 const { supportsRecoverableSession } = require('../core/session-capabilities.js');
 const { buildReferenceText, referenceableRows } = require('../core/session-reference.js');
 const { showForkToast } = require('./groupchat-fork-ui.js');
@@ -28,6 +29,9 @@ function createSessionContextMenuController({
   wakeDormantSession,
   confirmAction = (message, options) => require('./ui-feedback').confirmHubAction(message, { document, ...options }),
   selectMeeting = null,
+  requestRename = null,
+  sidebarFolders = null,
+  folderEntityKey = () => null,
   requestAnimationFrameFn = requestAnimationFrame,
 }) {
   let contextMenuSessionId = null;
@@ -42,7 +46,10 @@ function createSessionContextMenuController({
     ipcRenderer,
     notify: showNotice,
     getMeetings: () => meetings,
-    selectMeeting,
+    selectMeeting: (id, options) => {
+      if (options?.created) window.__revealCreatedMeeting?.(id);
+      return selectMeeting?.(id);
+    },
     confirmAction,
   });
   const roomAlreadyAsleep = meeting => meeting?.status === 'dormant'
@@ -68,6 +75,18 @@ function createSessionContextMenuController({
     if (pinBtn) pinBtn.style.display = '';
     const session = sessions.get(sessionId);
     const meeting = meetings[sessionId];
+    const folderBtn = contextMenuEl.querySelector('[data-action="folder-move"]');
+    if (folderBtn) {
+      folderBtn.style.display = sidebarFolders && (session || meeting) ? '' : 'none';
+      folderBtn.disabled = isBackgroundPurpose(session?.purpose) || !folderEntityKey(sessionId) || !!sidebarFolders?.error();
+      folderBtn.title = isBackgroundPurpose(session?.purpose) ? '后台任务统一显示在独立分组中' : folderEntityKey(sessionId) ? '分类只影响侧栏，不改变工作目录' : '成员跟随所属群聊或团队的目录';
+    }
+    const renameBtn = contextMenuEl.querySelector('[data-action="rename"]');
+    if (renameBtn) {
+      renameBtn.style.display = requestRename && (session || meeting) ? '' : 'none';
+      renameBtn.disabled = !!(session || meeting)?.readOnly;
+      renameBtn.textContent = meeting ? '重命名群聊' : window.__teamUi?.isLead(sessionId) ? '重命名负责人（团队）' : '重命名会话';
+    }
     const referenceBtn = contextMenuEl.querySelector('[data-action="reference"]');
     if (referenceBtn) referenceBtn.style.display = (canReference(session) || (meeting && typeof copyText === 'function')) ? '' : 'none';
     if (restartBtn) {
@@ -136,6 +155,17 @@ function createSessionContextMenuController({
 
         const session = sessions.get(sid);
         const meeting = meetings[sid];
+
+        if (action === 'folder-move') {
+          const key = folderEntityKey(sid);
+          if (key && sidebarFolders && !isBackgroundPurpose(session?.purpose)) await sidebarFolders.showAssign(key);
+          return;
+        }
+
+        if (action === 'rename') {
+          if (requestRename) await requestRename(sid);
+          return;
+        }
 
         if (action === 'reference') {
           if (!canReference(session) && !(meeting && typeof copyText === 'function')) return;

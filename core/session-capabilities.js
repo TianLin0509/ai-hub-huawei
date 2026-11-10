@@ -80,7 +80,8 @@ function supportsForkSession(session) {
 function sessionModelId(session) {
   if (!session) return null;
   let candidate = null;
-  if (session.currentModel && typeof session.currentModel === 'object') {
+  if (require('./codeagent-models').isSafeModelId(session.fixedModel)) candidate = session.fixedModel;
+  else if (session.currentModel && typeof session.currentModel === 'object') {
     candidate = session.currentModel.id || null;
   } else if (session.model && typeof session.model === 'object') {
     candidate = session.model.id || null;
@@ -160,6 +161,7 @@ function buildSessionResumeMeta(session, overrides = {}) {
   const hubId = session.hubId || session.id;
   const meta = {
     hubId,
+    ...require('./session-model-pin').modelPinFields(session),
     kind: session.kind || 'claude',
     title: session.title || null,
     cwd: session.cwd || null,

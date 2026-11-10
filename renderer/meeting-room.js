@@ -6472,33 +6472,15 @@ if (typeof document !== 'undefined') (function () {
     });
 
     const titleSpan = document.getElementById('mr-title');
-    titleSpan.addEventListener('dblclick', () => {
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.value = meeting.title;
-      input.className = 'mr-header-title';
-      input.style.cssText = 'border:1px solid var(--accent);border-radius:4px;padding:2px 6px;background:var(--bg-primary);color:var(--text-primary);font-size:14px;font-weight:600;outline:none;';
-      titleSpan.replaceWith(input);
-      input.focus();
-      input.select();
-      const finish = () => {
-        const trimmed = input.value.trim();
-        if (trimmed && trimmed !== meeting.title) {
-          meeting.title = trimmed;
-          ipcRenderer.send('update-meeting', { meetingId: meeting.id, fields: { title: trimmed } });
-        }
-        const newSpan = document.createElement('span');
-        newSpan.className = 'mr-header-title';
-        newSpan.id = 'mr-title';
-        newSpan.textContent = meeting.title;
-        input.replaceWith(newSpan);
-      };
-      input.addEventListener('blur', finish);
-      input.addEventListener('keydown', (e) => {
-        if (e.isComposing || e.keyCode === 229) return;
-        if (e.key === 'Enter') input.blur();
-        if (e.key === 'Escape') { input.value = meeting.title; input.blur(); }
-      });
+    require('./name-editor').bindInlineNameEditor({
+      element: titleSpan, document, event: 'dblclick',
+      getName: () => meetingData[meeting.id]?.title || meeting.title,
+      save: title => {
+        if (typeof window.__renameHubSession !== 'function') throw new Error('改名服务尚未就绪，请稍后重试');
+        return window.__renameHubSession(meeting.id, title);
+      },
+      onError: message => require('./ui-feedback').showHubAlert(message, { document }),
+      notify: message => require('./ui-feedback').showHubAlert(message, { document }),
     });
   }
 

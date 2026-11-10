@@ -400,6 +400,7 @@ function createConfigModalController({
       providerModes.codex = cfg.codexBackend === 'api' ? 'api' : 'subscription';
       setCodexProfileForm(cfg.codexSubscriptionProfiles, cfg.codexSubscriptionProfile);
       document.getElementById('cfg-proxy').value = cfg.proxy || '';
+      if (configEl('cfg-model-unavailable-policy')) configEl('cfg-model-unavailable-policy').value = cfg.sessionModelUnavailablePolicy || 'auto-switch-notify';
       document.getElementById('cfg-claude-backend').value = cfg.claudeBackend || 'subscription';
       document.getElementById('cfg-claude-key').value = cfg.claudeApiKey || '';
       document.getElementById('cfg-claude-url').value = cfg.claudeApiBaseUrl || '';
@@ -531,6 +532,7 @@ function createConfigModalController({
       const operationsForm = readOperationsForm();
       const notificationTarget = getNotificationTarget();
       const newConfig = {
+        sessionModelUnavailablePolicy: configEl('cfg-model-unavailable-policy')?.value || 'auto-switch-notify',
         proxy: document.getElementById('cfg-proxy').value.trim() || undefined,
         ...readCardDisplayForm(),
         notificationIncludePreview: notificationForm.notificationIncludePreview,

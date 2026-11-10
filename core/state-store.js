@@ -4,6 +4,8 @@ const { getHubDataDir } = require('./data-dir');
 const { acquireLock, acquireLockAsync, releaseLock, releaseLockAsync } = require('./file-lock');
 const { migrateLegacyBranchSessionMeta } = require('./session-title-guards');
 const { healPersistedBranchSessionTitles } = require('./branch-session-titles');
+const { preserveTitleMetadata, titleRevision } = require('./title-metadata');
+const { isBackgroundPurpose } = require('./session-background-purpose');
 
 const STATE_DIR = getHubDataDir();
 const STATE_FILE = path.join(STATE_DIR, 'state.json');
@@ -49,6 +51,16 @@ function defaultState() {
     meetings: [],
     immersiveByMeeting: {},
   };
+}
+
+// Confirmed user edits must never turn a failed read into an empty snapshot.
+function _readDiskStateStrict() {
+  let contents;
+  try { contents = fs.readFileSync(STATE_FILE, 'utf8'); }
+  catch (error) { if (error.code === 'ENOENT') return defaultState(); throw error; }
+  const parsed = JSON.parse(contents);
+  if (parsed.version !== CURRENT_VERSION || !Array.isArray(parsed.sessions) || !Array.isArray(parsed.meetings)) throw new Error('state.json 版本或结构无效，名称未保存');
+  return _normalizeState(parsed);
 }
 
 function _readDiskState() {
@@ -140,7 +152,7 @@ function loadAndSelfHeal({ sessionStore, meetingStore, canEditSession = () => tr
             if (i >= 0) {
               const prior = disk.sessions[i];
               const winner = (data.updatedAt || 0) > (prior.updatedAt || 0) ? { ...prior, ...data } : prior;
-              disk.sessions[i] = preserveLatestInteraction(winner, prior, data);
+              disk.sessions[i] = preserveTitleMetadata(preserveLatestInteraction(winner, prior, data), winner === prior ? data : prior);
             }
           } else {
             disk.sessions.push({ ...data });
@@ -164,7 +176,9 @@ function loadAndSelfHeal({ sessionStore, meetingStore, canEditSession = () => tr
             const i = disk.meetings.findIndex(m => m.id === data.id);
             if (i >= 0 && (data.updatedAt || 0) > (disk.meetings[i].updatedAt || 0)) {
               // v2 文件版字段更全（含 title/scene/createdAt/...），覆盖式合并
-              disk.meetings[i] = { ...disk.meetings[i], ...data };
+              disk.meetings[i] = preserveTitleMetadata({ ...disk.meetings[i], ...data }, disk.meetings[i]);
+            } else if (i >= 0) {
+              disk.meetings[i] = preserveTitleMetadata(disk.meetings[i], data);
             }
           } else if ((data.schemaVersion || 0) >= 2) {
             // v2 文件包含完整字段，可单独还原
@@ -199,6 +213,21 @@ function loadAndSelfHeal({ sessionStore, meetingStore, canEditSession = () => tr
       console.log(`[branch-title] healed ${healedBranches.length} persisted branch title(s)`);
     }
 
+    // Persist the legacy backend identity once. A manual [Team] title or an
+    // explicit visibility choice is never interpreted as a backend marker.
+    if (haveLock && sessionStore?.loadSessionFile && sessionStore?.saveSessionFile) {
+      for (const session of disk.sessions) {
+        if (!session?.hiddenFromSidebar || session.userRenamed || isBackgroundPurpose(session.purpose) || !/^\[Team\]/.test(session.title || '') || !canEditSession(session)) continue;
+        try {
+          const backup = sessionStore.loadSessionFile(session.hubId, { raw: true, strict: true });
+          if (!backup || !Object.hasOwn(backup, 'hiddenFromSidebar')) sessionStore.saveSessionFile(session.hubId, session);
+        } catch (error) {
+          console.warn('[hub] legacy background metadata migration failed:', error.message);
+          disk.storageWriteError = { code: error.code || '', message: error.message };
+        }
+      }
+    }
+
     disk.cleanShutdown = false;
     if (haveLock) {
       // 只在拿到锁的情况下写盘，避免与并发 boot 的 Hub 互踩
@@ -231,17 +260,19 @@ function mergeState(diskState, memState, removed = { sessions: [], meetings: [] 
     if (!s || !s.hubId) continue;
     const existing = sessByHubId.get(s.hubId);
     const winner = !existing || (s.updatedAt || 0) >= (existing.updatedAt || 0) ? s : existing;
-    sessByHubId.set(s.hubId, preserveLatestInteraction(winner, existing, s));
+    sessByHubId.set(s.hubId, preserveTitleMetadata(preserveLatestInteraction(winner, existing, s), winner === s ? existing : s));
   }
   for (const id of removed.sessions || []) sessByHubId.delete(id);
 
   const meetByMtgId = new Map();
-  for (const m of diskState.meetings || []) meetByMtgId.set(m.id, m);
+  for (const m of diskState.meetings || []) if (!(m.creationPending && !m.subSessions?.length)) meetByMtgId.set(m.id, m);
   for (const m of memState.meetings || []) {
-    if (!m || !m.id) continue;
+    if (!m || !m.id || (m.creationPending && !m.subSessions?.length)) continue;
     const existing = meetByMtgId.get(m.id);
     if (!existing || (m.updatedAt || 0) >= (existing.updatedAt || 0)) {
-      meetByMtgId.set(m.id, m);
+      meetByMtgId.set(m.id, preserveTitleMetadata(m, existing));
+    } else {
+      meetByMtgId.set(m.id, preserveTitleMetadata(existing, m));
     }
   }
   for (const id of removed.meetings || []) meetByMtgId.delete(id);
@@ -460,10 +491,43 @@ async function flushPending() {
   await _saveQueue;
 }
 
+// A single main-process transaction owns name changes. Hold the state lock
+// through both atomic replacements; if the backup fails, restore the state
+// snapshot before returning failure. Normal queued saves use titleRevision to
+// retain a newer committed name even if their metadata snapshot was older.
+function commitTitle({ type, id, base, getBase = () => base, title, writeBackup, guard = run => run() }) {
+  const task = _saveQueue.then(async () => {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    const handle = await acquireLockAsync(LOCK_FILE, { retries: 1200, retryDelayMs: 10 });
+    if (!handle) throw new Error('名称保存锁不可用，请重试');
+    try {
+      const before = _readDiskStateStrict(), key = type === 'session' ? 'sessions' : 'meetings';
+      const latest = getBase();
+      if (!latest) throw new Error('会话已关闭或移除，请刷新后重试');
+      const identity = type === 'session' ? 'hubId' : 'id';
+      const prior = before[key].find(record => record[identity] === id);
+      const record = { ...prior, ...latest, [identity]: id, title,
+        titleRevision: Math.max(titleRevision(prior), titleRevision(latest)) + 1,
+        userRenamed: true, autoTitlePending: false, branchAutoTitlePending: false,
+        updatedAt: Date.now() };
+      return guard(() => {
+        const after = { ...before, [key]: [...before[key].filter(row => row[identity] !== id), record] };
+        _writeMergedToDisk(after);
+        try { writeBackup(record); }
+        catch (error) { _writeMergedToDisk(before); throw error; }
+        return record;
+      });
+    } finally { await releaseLockAsync(handle, LOCK_FILE); }
+  });
+  _saveQueue = task.catch(error => console.warn('[title-store] save failed:', error.message));
+  return task;
+}
+
 module.exports = {
   load,
   loadAndSelfHeal,
   save,
+  commitTitle,
   flushPending,
   saveForRestart: async state => { await flushPending(); await _saveImplAsync(state, { strict: true }); },
   mergeState,

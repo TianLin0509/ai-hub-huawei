@@ -2,6 +2,8 @@
 const fs = require('fs');
 const path = require('path');
 const { getHubDataDir } = require('./data-dir');
+const { preserveTitleMetadata } = require('./title-metadata');
+const { withTitleBackupWrite, withTitleBackupWriteAsync } = require('./title-backup-write');
 // 2026-05-07 多方审查 fix：见 session-store 同款注释——markDirty 检查 removed 集合
 //   防 renderer 防抖窗口复活已删 meeting。
 let _stateStore = null;
@@ -37,6 +39,7 @@ function meetingFilePath(id) {
 }
 
 function _buildMeetingPayload(id, data) {
+  data = preserveTitleMetadata(data, loadMeetingFile(id));
   const now = Date.now();
   return {
     schemaVersion: SCHEMA_VERSION,
@@ -55,6 +58,10 @@ function _buildMeetingPayload(id, data) {
     workspaceLabel: typeof data.workspaceLabel === 'string' ? data.workspaceLabel : null,
     // ── v2 新增：完整 meeting metadata（用于 boot 自我修复） ──
     title: typeof data.title === 'string' ? data.title : null,
+    titleRevision: Number(data.titleRevision) || 0,
+    userRenamed: !!data.userRenamed,
+    autoTitlePending: !!data.autoTitlePending,
+    autoTitleGenerated: !!data.autoTitleGenerated,
     scene: typeof data.scene === 'string' ? data.scene : null,
     ...require('./group-scene-hint').sceneHintFields(data.sceneHint),
     createdAt: typeof data.createdAt === 'number' ? data.createdAt : null,
@@ -84,24 +91,26 @@ function _tempPath(id) {
 }
 
 function saveMeetingFile(id, data) {
+  if (data?.creationPending && !data.subSessions?.length) return;
   ensureDir();
   const payload = _buildMeetingPayload(id, data);
   const tmp = _tempPath(id);
   try {
     fs.writeFileSync(tmp, JSON.stringify(payload));
-    fs.renameSync(tmp, meetingFilePath(id));
+    return withTitleBackupWrite(meetingFilePath(id), Object.hasOwn(data, 'titleRevision') ? data.titleRevision : payload.titleRevision, () => fs.renameSync(tmp, meetingFilePath(id)));
   } finally {
     try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
   }
 }
 
 async function saveMeetingFileAsync(id, data) {
+  if (data?.creationPending && !data.subSessions?.length) return;
   await fs.promises.mkdir(meetingsDir(), { recursive: true });
   const payload = _buildMeetingPayload(id, data);
   const tmp = _tempPath(id);
   try {
     await fs.promises.writeFile(tmp, JSON.stringify(payload));
-    await fs.promises.rename(tmp, meetingFilePath(id));
+    return await withTitleBackupWriteAsync(meetingFilePath(id), Object.hasOwn(data, 'titleRevision') ? data.titleRevision : payload.titleRevision, () => fs.promises.rename(tmp, meetingFilePath(id)));
   } finally {
     try { await fs.promises.unlink(tmp); } catch {}
   }
@@ -115,12 +124,13 @@ async function loadMeetingFileAsync(id) {
   }
 }
 
-function loadMeetingFile(id) {
+function loadMeetingFile(id, { strict = false } = {}) {
   try {
     const raw = fs.readFileSync(meetingFilePath(id), 'utf-8');
     const obj = JSON.parse(raw);
     const v = obj.schemaVersion;
     if (v !== 1 && v !== 2) {
+      if (strict) throw new Error('不支持的群聊记录版本：' + v);
       console.warn(`[meeting-store] schema mismatch for ${id}: ${v}`);
       return null;
     }
@@ -143,6 +153,7 @@ function loadMeetingFile(id) {
     }
     return obj;
   } catch (e) {
+    if (strict && e.code !== 'ENOENT') throw e;
     if (e.code !== 'ENOENT') console.warn(`[meeting-store] load ${id} failed:`, e.message);
     return null;
   }
@@ -185,25 +196,29 @@ const _dirty = new Map();
 const _timers = new Map();
 const _writeChains = new Map();
 
-function _enqueueWrite(id, snap) {
+function withWriteLock(id, write) {
   const previous = _writeChains.get(id) || Promise.resolve();
-  const task = previous.then(async () => {
-    if (_isMeetingRemoved(id)) return;
-    const disk = await loadMeetingFileAsync(id) || {};
-    await saveMeetingFileAsync(id, { ...disk, ...snap });
-    if (_dirty.get(id) === snap) _dirty.delete(id);
-  });
+  const task = previous.then(write);
   const tracked = task
     .catch(error => console.warn(`[meeting-store] async flush ${id} failed:`, error.message))
     .finally(() => {
       if (_writeChains.get(id) === tracked) _writeChains.delete(id);
     });
   _writeChains.set(id, tracked);
-  return tracked;
+  return task;
+}
+function _enqueueWrite(id, snap, { strict = false } = {}) {
+  const task = withWriteLock(id, async () => {
+    if (_isMeetingRemoved(id)) return;
+    const disk = await loadMeetingFileAsync(id) || {};
+    await saveMeetingFileAsync(id, { ...disk, ...snap });
+    if (_dirty.get(id) === snap) _dirty.delete(id);
+  });
+  return strict ? task : task.catch(() => {});
 }
 
 function markDirty(id, data) {
-  if (!id) return;
+  if (!id || (data?.creationPending && !data.subSessions?.length)) return;
   if (_isMeetingRemoved(id)) return;  // 防复活
   const prev = _dirty.get(id) || {};
   _dirty.set(id, { ...prev, ...(data || {}) });
@@ -235,6 +250,12 @@ async function flushAll() {
   _dirty.clear();
 }
 
+async function flushPending() {
+  for (const timer of _timers.values()) clearTimeout(timer);
+  _timers.clear();
+  await Promise.all([..._dirty].map(([id, snap]) => _enqueueWrite(id, snap, { strict: true })));
+}
+
 function cancelDirty(id) {
   if (_timers.has(id)) {
     clearTimeout(_timers.get(id));
@@ -252,6 +273,8 @@ module.exports = {
   markDirty,
   cancelDirty,
   flushAll,
+  flushPending,
+  withWriteLock,
   SCHEMA_VERSION,
   DEBOUNCE_MS,
 };

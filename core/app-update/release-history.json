@@ -2,6 +2,13 @@
   "schema": 1,
   "entries": [
     {
+      "version": "5.5.66",
+      "date": "2026-11-10",
+      "notes": [
+        "修复：用账号密码登录 CodeAgent 的电脑上，DSH、Claude、Codex 经公司模型反代报 401「需要重新登录」（CodeAgent 本身正常）；现在浏览器登录和账号密码登录都能用反代"
+      ]
+    },
+    {
       "version": "5.5.65",
       "date": "2026-11-10",
       "notes": [

@@ -70,6 +70,7 @@ class MeetingRoomManager {
     const meeting = {
       id,
       type: 'meeting',
+      creationPending: opts.creationPending === true,
       title: customTitle || `${titlePrefix} #${seq}`,
       userRenamed,
       autoTitlePending: opts.autoTitlePending !== undefined ? !!opts.autoTitlePending : !userRenamed,
@@ -303,11 +304,11 @@ class MeetingRoomManager {
       throw new Error(`Invalid scene value: '${fields.scene}'. Allowed: ${MEETING_MODES.join(', ')}`);
     }
     const allowed = [
-      'title', 'layout', 'focusedSub', 'syncContext', 'sendTarget', 'pinned', 'bottomed',
+      'title', 'titleRevision', 'layout', 'focusedSub', 'syncContext', 'sendTarget', 'pinned', 'bottomed',
       'lastMessageTime', 'lastCompletedAt', 'status', 'lastScene', 'scene', 'covenantText',
       'userRenamed', 'autoTitlePending', 'autoTitleGenerated',
       'serialWorkflow', 'workspace', 'workspaceLabel',
-      'completionNotificationEnabled', 'orchestration',
+      'completionNotificationEnabled', 'orchestration', 'creationPending',
     ];
     for (const key of allowed) {
       if (key in fields) {
@@ -322,7 +323,8 @@ class MeetingRoomManager {
     else if (fields.bottomed === true) m.pinned = false;
     // 串行工作流配置变更必须落盘（updateMeeting 默认不 markDirty）；传完整 meeting 快照，
     //   避免新群聊首次 markDirty 时 prev 残缺导致 title/subSessions 被默认值覆盖。
-    if ('serialWorkflow' in fields || 'workspace' in fields || 'workspaceLabel' in fields
+    if ('title' in fields || 'userRenamed' in fields || 'autoTitlePending' in fields || 'autoTitleGenerated' in fields
+        || 'serialWorkflow' in fields || 'workspace' in fields || 'workspaceLabel' in fields
         || 'lastMessageTime' in fields || 'lastCompletedAt' in fields
         || 'completionNotificationEnabled' in fields || 'orchestration' in fields
         || 'pinned' in fields || 'bottomed' in fields) {
@@ -389,6 +391,7 @@ class MeetingRoomManager {
       id: meetingData.id,
       type: 'meeting',
       title: restoredTitle,
+      titleRevision: Number(meetingData.titleRevision) || 0,
       workspace: typeof meetingData.workspace === 'string' ? meetingData.workspace : null,
       workspaceLabel: typeof meetingData.workspaceLabel === 'string' ? meetingData.workspaceLabel : null,
       userRenamed: restoredUserRenamed,

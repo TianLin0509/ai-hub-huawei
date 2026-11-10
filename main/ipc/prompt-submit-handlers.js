@@ -89,7 +89,7 @@ function registerPromptSubmitIpc(ipcMain, deps) {
     try {
       await native.setModel(request.modelId);
       const currentModel = { id: request.modelId, displayName: request.modelId };
-      const updated = sessionManager.updateSessionMeta(request.sessionId, { currentModel });
+      const updated = sessionManager.updateSessionMeta(request.sessionId, { currentModel, fixedModel: request.modelId, modelPinSource: 'user' });
       if (!updated) throw new Error('模型已切换，但 Hub 元数据保存失败');
       sendToRenderer('session-updated', { session: updated });
       return { ok: true, model: currentModel };
@@ -293,6 +293,7 @@ function registerPromptSubmitIpc(ipcMain, deps) {
           requireReady: request.waitForCliReady === true || sessionManager.getSession(sessionId)?.purpose === 'hub-assistant', submissionReceipt: receipt,
           clientSubmissionId, attachments:request.attachments,
           originalPrompt, codeagentSkill: request.codeagentSkill,
+          shouldSubmit: request.shouldSubmit,
           preserveInput: request.preserveInput === true,
           codeagentInteractiveCommand: request.codeagentInteractiveCommand === true && require('../../core/ai-kinds').isCodeAgentKind(kind) && /^\s*\/\S+/.test(text),
           ...(clearObserver ? { localCommandObserver: clearObserver } : {}),

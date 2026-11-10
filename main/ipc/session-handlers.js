@@ -50,6 +50,8 @@ function registerSessionIpc(ipcMain, deps) {
     getPersistedSessions = () => [],
     ensureLaunchAuth,
     prepareLaunchAuth,
+    requestModelConfirmation,
+    cancelModelConfirmation,
     // 登录窗口打开后多久看一次凭证（单测可缩短）；获取模型权限的实现（单测可替换）。
     codeagentLoginPollMs = 3000,
     codeagentProbeModels = null,
@@ -209,10 +211,16 @@ function registerSessionIpc(ipcMain, deps) {
       const workspace = workspaceService.resolveForSession(opts.cwd, workspaceMeta);
       opts.cwd = workspace.path;
     }
-    const session = sessionManager.createSession(kind, opts);
-    registerSessionForTap(session);
-    sendToRenderer('session-created', { session });
-    return session;
+    return require('../session-model-creation').createSessionWithModelPolicy({ kind, opts,
+      contextLabel: opts.modelCreationContext || (opts.title ? `新建会话 ${opts.title}` : '新建会话'),
+      requestConfirmation: requestModelConfirmation, sendToRenderer,
+      create: (runtimeKind, launchOpts) => {
+        const session = sessionManager.createSession(runtimeKind, launchOpts);
+        registerSessionForTap(session);
+        sendToRenderer('session-created', { session });
+        return session;
+      },
+    });
   }
 
   // 分支编号要看「现存 + 已持久化」两边，否则重启后分支序号会从头再来一遍。
@@ -271,6 +279,7 @@ function registerSessionIpc(ipcMain, deps) {
 
 
   ipcMain.handle('close-session', async (_e, sessionId) => {
+    cancelModelConfirmation?.(sessionId);
     if (typeof sessionId !== 'string' || !sessionId) {
       return { ok: false, error: 'invalid-session-id', message: '缺少会话 ID' };
     }
@@ -282,6 +291,7 @@ function registerSessionIpc(ipcMain, deps) {
   // “关闭”在用户语义上等同于可恢复休眠。真正移除卡片/历史入口必须走
   // 明确命名的永久删除，内部 restart/workspace 迁移仍可直接调用 closeSession。
   ipcMain.handle('delete-session', (_e, sessionId) => {
+    cancelModelConfirmation?.(sessionId);
     if (typeof sessionId !== 'string' || !sessionId) {
       return { ok: false, error: 'invalid-session-id', message: '缺少会话 ID' };
     }
@@ -339,6 +349,10 @@ function registerSessionIpc(ipcMain, deps) {
       else if (payload.action === 'snapshot') result = native.runtime;
       else if (payload.action === 'review-submission') result = await Promise.resolve(native.reviewUnknownSubmission(payload.submissionId,payload.epoch));
       else return {ok:false,message:'不支持的 Codex 操作'};
+      if (payload.action === 'configure' && result?.modelId) {
+        const updated = sessionManager.updateSessionMeta(payload.sessionId, { fixedModel: result.modelId, modelPinSource: 'user', modelChange: null });
+        if (updated) sendToRenderer('session-updated', { session: updated });
+      }
       return {ok:true,result};
     } catch (error) {
       return {ok:false,message:error.message};
@@ -476,7 +490,7 @@ function registerSessionIpc(ipcMain, deps) {
       .replace(/[\0\r\n]+/g, ' ')
       .trim()
       .slice(0, 120) || modelId;
-    const fields = { currentModel: { id: modelId, displayName } };
+    const fields = { currentModel: { id: modelId, displayName }, fixedModel: modelId, modelPinSource: 'user', modelChange: null };
     const effort = String(payload.effort || '').toLowerCase();
     if (['codex','deepseek'].includes(kind) && CODEX_MODEL_EFFORTS.has(effort)) fields.effort = effort;
     const updated = sessionManager.updateSessionMeta(sessionId, fields);
@@ -508,8 +522,10 @@ function registerSessionIpc(ipcMain, deps) {
   });
 
   ipcMain.handle('rename-session', (_e, { sessionId, title, userRenamed }) => {
+    if (userRenamed && deps.getTitleService?.()) return deps.getTitleService().rename({ type: 'session', id: sessionId, title });
     const codexNative = sessionManager.getNativeCodex?.(sessionId) || sessionManager.getNativeClaude?.(sessionId);
     if (codexNative?.control?.shared && codexNative.control.role !== 'controller') return null;
+    if (!userRenamed && sessionManager.getSession(sessionId)?.userRenamed) return sessionManager.getSession(sessionId);
     const session = sessionManager.renameSession(sessionId, title, { userRenamed: !!userRenamed });
     const claudeNative = sessionManager.getNativeClaude?.(sessionId);
     const finish = () => {
@@ -1146,6 +1162,7 @@ function registerSessionIpc(ipcMain, deps) {
     const guard = require('../../core/codeagent-default-model-guard');
     // 当场在同一个会话里用 /model 切到清单里的模型再把这一轮重发一次。
     if (isAutomaticCodeAgent(session)
+      && !(reason === 'switch' && session.codeagentModelPick === true)
       && reason !== 'launch' && reason !== 'relaunch' && reason !== 'model-config-fix') {
       codeagentModels.appendModelLog(dataDir, { event: 'pick', session: String(sessionId).slice(0, 8), reason, model: modelId, ok: false, error: 'automatic-session' });
       return { ok: false, inputReady: true, message: '自动会话用账号自己的默认模型，不切换模型' };
@@ -1194,7 +1211,31 @@ function registerSessionIpc(ipcMain, deps) {
     // 启动和原地重拉时选具体模型也一样（2026-11-08 公司实测：菜单把 deepseek-v4.1-flash-1017 显示成截断名、没选上，
     // 「问问 Agent」新建的会话首句被退回、会话页空着）：输入框能用就先用 CLI 当前模型把首句发出去，提示一句没切到哪个模型。
     const startupPick = reason === 'launch' || reason === 'relaunch';
-    const fallback = !result.ok && (automatic || pickFirst || startupPick) && (result.inputReady || result.inputUsable);
+    let fallback = !result.ok && (automatic || pickFirst || startupPick) && (result.inputReady || result.inputUsable);
+    if (fallback && session.fixedModel) {
+      const pin = require('../../core/session-model-pin');
+      const known = guard.permittedModels(session, configDir, { dataDir });
+      const actual = session.codeagentActualModel || before;
+      if (session.modelConfirmationRequired || codeagentModels.modelFamily(actual) !== codeagentModels.modelFamily(session.fixedModel)
+          || (!codeagentModels.modelFamily(session.fixedModel) && String(actual).toLowerCase() !== String(session.fixedModel).toLowerCase())
+          || pin.unavailablePolicy(require('../../core/hub-config').getConfig().sessionModelUnavailablePolicy) === 'stop-and-ask'
+          || !codeagentModels.isSafeModelId(actual) || known.authoritative && !known.models.some(id => id.toLowerCase() === actual.toLowerCase())) {
+        fallback = false;
+        sessionManager.updateSessionMeta(sessionId, { codeagentModelPick: true, modelConfirmationRequired: true, modelUnavailableReason: '启动模型菜单未能选择原模型' });
+        result = { ...result, message: `原模型 ${session.fixedModel} 不可用，请手动选择可用模型后继续。` };
+        sendToRenderer('session-notice', { sessionId, level: 'error', persistent: true, modelUnavailable: true,
+          originalModel: session.fixedModel, suggestedModel: known.models.find(id => id.toLowerCase() === String(actual).toLowerCase()) || known.models[0] || '',
+          availableModels: known.models, message: result.message });
+      } else {
+        const change = { from: session.fixedModel, to: actual, reason: '启动时的模型菜单未能选中原模型，改用账号当前模型', at: Date.now() };
+        const file = require('path').join(dataDir, 'codeagent-launch', `${String(sessionId).replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
+        if (require('fs').existsSync(file)) require('../../core/session-manager')._private.writeCodeAgentLaunchSettings(dataDir, sessionId, actual);
+        sessionManager.updateSessionMeta(sessionId, { fixedModel: actual, modelPinSource: 'auto-switch', modelChange: change,
+          currentModel: { id: actual, displayName: codeagentModels.modelLabel(actual) }, codeagentModelPick: false });
+        codeagentModels.appendModelLog(dataDir, { event: 'model-auto-switch', session: sessionId, ...change });
+        sendToRenderer('session-notice', { sessionId, level: 'warning', persistent: true, message: pin.modelChangeMessage(change) });
+      }
+    }
     if (!result.ok && automatic && !fallback) {
       result = { ...result, message: `自动选模型没成功，模型菜单也没能关掉，为了不把问题打进菜单，这一轮没有发出去（原因：${result.message || '未知'}）` };
     }
@@ -1229,7 +1270,8 @@ function registerSessionIpc(ipcMain, deps) {
     if (result.ok) {
       const updated = sessionManager.updateSessionMeta(sessionId, { currentModel: { id: picked, displayName: codeagentModels.modelLabel(picked) }, codeagentRequestedModel: undefined, codeagentModelPick: false,
         // 用户明确选中过的模型：CLI 自己退出、Hub 原地重拉时据此再选一次（core/session-manager.js 的 relaunch）。
-        codeagentUserModel: picked });
+        codeagentUserModel: picked, fixedModel: picked, ...(reason === 'switch' ? { modelConfirmationRequired: false, modelUnavailableReason: '' } : {}), modelPinSource: reason === 'switch' ? 'user' : session.modelPinSource || 'created',
+        ...(reason === 'switch' ? { modelChange: null } : {}) });
       if (updated) sendToRenderer('session-updated', { session: updated });
     }
     return { ...result, model: result.ok ? picked : result.model };
@@ -1238,6 +1280,7 @@ function registerSessionIpc(ipcMain, deps) {
   async function fixCodeAgentModel(sessionId, { avoidModel = '' } = {}) {
     const session = sessionManager.getSession(sessionId);
     if (!session) return { ok: false, error: 'session-closed', message: '会话已经关闭' };
+    const previousModel = session.fixedModel;
     if (codeagentPicker.isPicking(sessionId)) return { ok: false, error: 'busy', message: '正在切换模型，请稍候' };
     const { getHubDataDir } = require('../../core/data-dir');
     const dataDir = getHubDataDir();
@@ -1245,17 +1288,43 @@ function registerSessionIpc(ipcMain, deps) {
     const configDir = codeagentPicker.normalizeConfigDir(guard.sessionConfigDir(session, { dataDir }));
     const permitted = guard.permittedModels(session, configDir, { dataDir });
     const list = permitted.authoritative ? permitted.models : [];
-    const target = list.find(m => String(m).toLowerCase() !== String(avoidModel).toLowerCase()) || '';
+    const pin = require('../../core/session-model-pin');
+    const family = codeagentModels.modelFamily(session.fixedModel || avoidModel);
+    const target = list.find(m => String(m).toLowerCase() !== String(avoidModel).toLowerCase() && family && codeagentModels.modelFamily(m) === family) || '';
+    if (session.fixedModel && (session.modelConfirmationRequired || !target || pin.unavailablePolicy(require('../../core/hub-config').getConfig().sessionModelUnavailablePolicy) === 'stop-and-ask')) {
+      const error = pin.unavailableError(session.fixedModel, '模型请求已被拒绝', list.filter(m => String(m).toLowerCase() !== String(avoidModel).toLowerCase()), target);
+      const paused = sessionManager.updateSessionMeta(sessionId, { codeagentModelPick: true, modelConfirmationRequired: true, modelUnavailableReason: error.reason || error.message });
+      require('../../core/session-store').saveSessionFile(sessionId, paused || session);
+      if (typeof requestModelConfirmation === 'function') {
+        try {
+          const selected = await confirmSessionModel(sessionId, error);
+          return { ok: true, model: selected.model?.id || selected.model, mode: 'user-confirmed', confirmed: true };
+        } catch (failure) { return { ok: false, stopped: true, notSent: true, error: failure.code, message: failure.message }; }
+      }
+      sendToRenderer('session-notice', { sessionId, level: 'error', persistent: true, modelUnavailable: true, originalModel: error.model, suggestedModel: error.suggestedModel, availableModels: error.availableModels, message: error.message });
+      return { ok: false, error: error.code, message: error.message };
+    }
     if (!target) {
       const message = list.length ? `这个号的权限清单里只有刚报错的 ${avoidModel || '（未知）'}，没有可换的模型` : '读不到这个号的权限清单';
       return { ok: false, error: 'no-model', message };
     }
-    const result = await codeagentPicker.schedulePick(sessionId, () => runCodeAgentPick(sessionId, target, 'model-config-fix'));
+    const activeSettings = sessionManager.sessions?.get(sessionId)?.codeagentSettingsActive;
+    const settingsChange = activeSettings ? updateCodeAgentModelSettings(sessionId, session, target) : null;
+    if (activeSettings && !settingsChange) return { ok: false, error: 'settings-update-failed', message: '无法更新这个会话正在使用的模型设置，本轮未重发' };
+    const result = settingsChange ? { ok: true, model: target, mode: 'settings-only', confirmed: false }
+      : await codeagentPicker.schedulePick(sessionId, () => runCodeAgentPick(sessionId, target, 'model-config-fix'));
     // result.fallback：菜单没选上、只是没把问题挡住（自动会话「能发就发」的老兜底）。这一条路不能算切成了——
     if (!result || !result.ok || result.fallback) {
       const why = (result && result.message) || '没能在 CodeAgent 里切到清单里的模型';
       return { ok: false, error: 'pick-failed', model: target,
         message: result && result.fallback ? `${why}；模型菜单没能用上，会话还是当前模型` : why };
+    }
+    if (session.fixedModel) {
+      const change = { from: previousModel, to: result.model || target, reason: '原模型请求被拒绝，已按可用模型清单修复', at: Date.now() };
+      sessionManager.updateSessionMeta(sessionId, { fixedModel: change.to, modelPinSource: 'auto-switch', modelChange: change,
+        currentModel: { id: change.to, displayName: codeagentModels.modelLabel(change.to) }, codeagentModelPick: false });
+      codeagentModels.appendModelLog(dataDir, { event: 'model-auto-switch', session: sessionId, ...change });
+      sendToRenderer('session-notice', { sessionId, level: 'warning', persistent: true, message: pin.modelChangeMessage(change) });
     }
     return { ok: true, model: result.model || target, mode: result.mode, confirmed: !!result.confirmed };
   }
@@ -1344,19 +1413,8 @@ function registerSessionIpc(ipcMain, deps) {
       return result;
     });
   });
-  ipcMain.handle('codeagent:switch-model', async (_e, payload = {}) => {
-    const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : '';
-    const session = sessionId ? sessionManager.getSession(sessionId) : null;
-    if (!session) return { ok: false, error: 'session-not-found', message: '会话不存在或已经休眠，先打开它再切换' };
-    if (!/^codeagent(?:-resume)?$/.test(String(session.kind || ''))) return { ok: false, error: 'not-codeagent', message: '只有 CodeAgent 会话走这条切换' };
+  function updateCodeAgentModelSettings(sessionId, session, modelId) {
     const models = require('../../core/codeagent-models');
-    const requested = typeof payload.modelId === 'string' ? payload.modelId.trim() : '';
-    const modelId = models.normalizeModel(requested);
-    if (!requested || modelId.toLowerCase() !== requested.toLowerCase()) return { ok: false, error: 'invalid-model', message: `模型名不能用：${requested}` };
-    if (session.status === 'running') return { ok: false, error: 'busy', message: '当前回答仍在运行，请结束后再切换' };
-    if (codeagentPicker.isPicking(sessionId)) return { ok: false, error: 'busy', message: '正在切换模型，请稍候' };
-    // 用 --settings 文件启动的会话（2026-10-30 5.3.12）：先把它自己的设置文件改成新模型，再照常在菜单里选。
-    // 会话每次请求都重读配置；--settings 优先级最高，不改它的话菜单选的可能被它压回去。只在能换成 CodeAgent 自己的写法时改。
     let launchChange = null;
     try {
       const dataDir = require('../../core/data-dir').getHubDataDir();
@@ -1374,12 +1432,44 @@ function registerSessionIpc(ipcMain, deps) {
         }
       }
     } catch (error) { console.warn('[codeagent] 切换模型时改会话设置文件失败，只用菜单：' + error.message); }
+    return launchChange;
+  }
+
+  const pendingModelSelections = new Map();
+  async function switchCodeAgentModel(payload = {}, options = {}) {
+    const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : '';
+    const session = sessionId ? sessionManager.getSession(sessionId) : null;
+    if (!session) {
+      const saved = sessionId && require('../../core/session-store').loadSessionFile(sessionId, { strict: true });
+      const model = typeof payload.modelId === 'string' ? payload.modelId.trim() : '';
+      if (!saved || !/^codeagent(?:-resume)?$/.test(saved.kind) || typeof resumeSession !== 'function') {
+        return { ok: false, error: 'session-not-found', message: '会话不存在或已经休眠，先打开它再切换' };
+      }
+      if (!require('../../core/codeagent-models').isSafeModelId(model)) return { ok: false, error: 'invalid-model', message: '请选择有效模型' };
+      try {
+        const fresh = await resumeSession({ ...saved, hubId: sessionId, launchOverrides: { model } });
+        if (!fresh || fresh.ok === false) return { ok: false, message: fresh?.message || '会话恢复失败' };
+        const selected = fresh.fixedModel || model;
+        return { ok: true, model: { id: selected, displayName: require('../../core/codeagent-models').modelLabel(selected) }, mode: 'resumed', confirmed: false };
+      } catch (error) { return { ok: false, error: error.code, message: error.message }; }
+    }
+    if (!/^codeagent(?:-resume)?$/.test(String(session.kind || ''))) return { ok: false, error: 'not-codeagent', message: '只有 CodeAgent 会话走这条切换' };
+    const models = require('../../core/codeagent-models');
+    const requested = typeof payload.modelId === 'string' ? payload.modelId.trim() : '';
+    const modelId = models.normalizeModel(requested);
+    if (!requested || modelId.toLowerCase() !== requested.toLowerCase()) return { ok: false, error: 'invalid-model', message: `模型名不能用：${requested}` };
+    if (session.status === 'running' && !(options.pendingConfirmation && pendingModelSelections.has(sessionId)
+        && !sessionManager.isAgentTurnActive?.(sessionId))) return { ok: false, error: 'busy', message: '当前回答仍在运行，请结束后再切换' };
+    if (codeagentPicker.isPicking(sessionId)) return { ok: false, error: 'busy', message: '正在切换模型，请稍候' };
+    // 用 --settings 文件启动的会话（2026-10-30 5.3.12）：先把它自己的设置文件改成新模型，再照常在菜单里选。
+    // 会话每次请求都重读配置；--settings 优先级最高，不改它的话菜单选的可能被它压回去。只在能换成 CodeAgent 自己的写法时改。
+    const launchChange = updateCodeAgentModelSettings(sessionId, session, modelId);
     const settingsOnly = failure => {
       const message = failure?.message || 'CodeAgent 没能切换模型';
       models.appendModelLog(require('../../core/data-dir').getHubDataDir(), { event: 'switch-settings-only',
         session: sessionId.slice(0, 8), model: modelId, reason: message });
       const updated = sessionManager.updateSessionMeta(sessionId, { currentModel: { id: modelId, displayName: models.modelLabel(modelId) },
-        codeagentRequestedModel: undefined, codeagentModelPick: false, codeagentUserModel: modelId });
+        codeagentRequestedModel: undefined, codeagentModelPick: false, codeagentUserModel: modelId, fixedModel: modelId, modelConfirmationRequired: false, modelUnavailableReason: '', modelPinSource: 'user', modelChange: null });
       if (updated) sendToRenderer('session-updated', { session: updated });
       return { ...failure, ok: true, mode: 'settings-only', confirmed: false, message };
     };
@@ -1401,10 +1491,88 @@ function registerSessionIpc(ipcMain, deps) {
     try { if (result.mode !== 'settings-only') require('../../core/codeagent-launch-model').rememberModel(require('../../core/data-dir').getHubDataDir(), (session.info && session.info.codeagentPoolAccount) || session.codeagentPoolAccount || 'personal', modelId); }
     catch (error) { console.warn('[codeagent] 记住上次选的模型失败：' + error.message); }
     models.expectModelSwitch(sessionId, modelId, { settingsOnly: result.mode === 'settings-only' });
+    const selectedSession = sessionManager.getSession(sessionId);
+    if (!selectedSession) return { ok: false, error: 'session-closed', message: '会话已关闭，本次选择未保存' };
+    require('../../core/session-store').saveSessionFile(sessionId, selectedSession);
     // 回执：菜单关掉了；看到「Set model to …」时 confirmed=true。下一条回答再核对实际模型。
     return { ok: true, model: { id: modelId, displayName: models.modelLabel(modelId) }, mode: result.mode, confirmed: !!result.confirmed,
       ...(result.mode === 'settings-only' ? { message: result.message } : {}) };
-  });
+  }
+  ipcMain.handle('codeagent:switch-model', (_event, payload) => switchCodeAgentModel(payload));
+
+  function confirmSessionModel(sessionId, error, options = {}) {
+    const stopped = message => Object.assign(new Error(message || '已取消模型确认，本条消息未发送，保持暂停。'), {
+      code: 'SESSION_MODEL_CONFIRMATION_CANCELLED', stopped: true, notSent: true,
+    });
+    const pins = require('../../core/session-model-pin');
+    const execution = pins.captureSessionExecution(sessionManager, sessionId);
+    const valid = () => !options.signal?.aborted && (!options.shouldSubmit || options.shouldSubmit())
+      && pins.sameSessionExecution(execution, sessionManager, sessionId);
+    const session = sessionManager.getSession(sessionId);
+    if (!session || !valid()) return Promise.reject(stopped('会话或任务已变化，本条消息未发送。'));
+    let group = pendingModelSelections.get(sessionId);
+    if (group && !pins.sameSessionExecution(group.execution, sessionManager, sessionId)) {
+      pendingModelSelections.delete(sessionId); group.controller.abort(); group = null;
+    }
+    const key = options.clientSubmissionId || Symbol('model-submission');
+    if (group?.subscribers.has(key)) return group.subscribers.get(key).promise;
+    const choices = [...new Set([...(error.availableModels || []), error.suggestedModel])].filter(codeagentModels.isSafeModelId);
+    if (!group && (error.canChooseAlternative === false || !choices.length || typeof requestModelConfirmation !== 'function')) {
+      sendToRenderer('session-notice', { sessionId, persistent: true, level: 'error', message: `${error.message} 本条消息保持暂停，请先修复模型或 CLI 配置。` });
+      return Promise.reject(stopped(error.message));
+    }
+    if (!group) {
+      group = { subscribers: new Map(), submissionIds: [], workflowMessageIds: [], execution, controller: new AbortController() };
+      pendingModelSelections.set(sessionId, group);
+      const meeting = session.meetingId && meetingManager?.getMeeting?.(session.meetingId);
+      const contextLabel = meeting ? `群聊 ${meeting.title || session.meetingId} / ${session.title || '成员'}` : `会话 ${session.title || 'CodeAgent'}`;
+      group.task = Promise.resolve().then(async () => {
+        const selected = await requestModelConfirmation({ sessionId, creation: false,
+          originalModel: error.model || session.fixedModel, suggestedModel: error.suggestedModel, availableModels: choices, clientSubmissionIds: group.submissionIds, workflowMessageIds: group.workflowMessageIds,
+          contextLabel, message: `${contextLabel}：${error.message} 确认后继续仍有效的原消息，取消则保持停止。` }, { signal: group.controller.signal, onWaitRegistered: refresh => { group.refreshWait = refresh; } });
+        if (!selected) throw stopped();
+        const anyValid = () => [...group.subscribers.values()].some(item => item.valid());
+        if (!anyValid()) throw stopped('会话或任务已变化，本条消息未发送。');
+        if (!choices.includes(selected)) throw stopped('所选型号不在本次可用清单中，本条消息未发送。');
+        if (sessionManager.isAgentTurnActive?.(sessionId)) throw stopped('当前回答仍在运行，本条消息未发送。');
+        const result = await switchCodeAgentModel({ sessionId, modelId: selected }, { pendingConfirmation: true });
+        if (!result?.ok) throw stopped(result?.message || '模型未确认切换，本条消息未发送。');
+        return result;
+      });
+      const settle = (failure, result) => {
+        if (pendingModelSelections.get(sessionId) === group) pendingModelSelections.delete(sessionId);
+        for (const item of [...group.subscribers.values()]) {
+          item.finish(failure || !item.valid() ? failure || stopped('会话或任务已变化，本条消息未发送。') : null, result);
+        }
+        if (failure) sendToRenderer('session-notice', { sessionId, persistent: true, level: 'warning', message: failure.message });
+      };
+      group.task.then(result => settle(null, result), failure => settle(Object.assign(failure, { stopped: true, notSent: true })));
+    }
+    let resolve, reject;
+    const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+    const item = { promise, valid, finish(failure, result) {
+      if (!group.subscribers.delete(key)) return;
+      if (typeof key === 'string') { const index = group.submissionIds.indexOf(key); if (index >= 0) group.submissionIds.splice(index, 1); }
+      if (options.workflowMessageId) { const index = group.workflowMessageIds.indexOf(options.workflowMessageId); if (index >= 0) group.workflowMessageIds.splice(index, 1); }
+      group.refreshWait?.();
+      options.signal?.removeEventListener('abort', abort);
+      if (failure) reject(failure); else resolve(result);
+    } };
+    const abort = () => {
+      item.finish(stopped());
+      if (!group.subscribers.size) {
+        if (pendingModelSelections.get(sessionId) === group) pendingModelSelections.delete(sessionId);
+        group.controller.abort();
+      }
+    };
+    group.subscribers.set(key, item);
+    if (typeof key === 'string') group.submissionIds.push(key);
+    if (options.workflowMessageId) group.workflowMessageIds.push(options.workflowMessageId);
+    group.refreshWait?.();
+    options.signal?.addEventListener('abort', abort, { once: true });
+    if (options.signal?.aborted) abort();
+    return promise;
+  }
   ipcMain.handle('codeagent:available', () => {
     try { return { installed: require('../../core/codeagent-config').isCodeAgentInstalled() }; }
     catch (error) { return { installed: false, error: error.message }; }
@@ -1557,7 +1725,7 @@ function registerSessionIpc(ipcMain, deps) {
     return fresh;
   }
 
-  return { lastResizeBySid, createSession, restartSession, fixCodeAgentModel };
+  return { lastResizeBySid, createSession, restartSession, fixCodeAgentModel, confirmSessionModel };
 }
 
 module.exports = {

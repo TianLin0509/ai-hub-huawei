@@ -124,3 +124,112 @@ test('首页没有 24 小时榜时，用热门卡片兜底并按卡片名显示�
   assert.match(lists[0].posts[0].title, /^hot/);
   assert.match(lists[0].posts[0].url, /^https:\/\/xinsheng\.corp\.example\/next\/detail/);
 });
+
+test('热门兜底跳过标题属于回复榜的卡片，继续查找普通热门卡片', () => {
+  const lists = postsForSite(site, capture([
+    card('【24 小时回复排行】（热门讨论）', posts('reply')),
+    card('公司人热门文章', posts('hot')),
+  ]), { base });
+  assert.deepEqual(ids(lists[0]), ['hot1', 'hot2', 'hot3']);
+  assert.deepEqual(ids(lists[1]), ['reply1', 'reply2', 'reply3']);
+});
+
+test('只有带热门字样的回复卡片时，不复制到点击榜', () => {
+  const lists = postsForSite(site, capture([card('24小时回复排行（热门讨论）', posts('reply'))]), { base });
+  assert.deepEqual(ids(lists[0]), []);
+  assert.deepEqual(ids(lists[1]), ['reply1', 'reply2', 'reply3']);
+});
+
+for (const reverse of [false, true]) {
+  test(`热门兜底不重复专用回复接口已选中的同组帖子，逆序=${reverse}`, () => {
+    const hot = posts('hot');
+    const cap = capture([card('公司人热门文章', hot)]);
+    cap.json.push({ url: base + '/xsapi/user/replyRank', json: {
+      data: [{ items: reverse ? [...hot].reverse() : hot }, { items: posts('realReply') }],
+    } });
+    const lists = postsForSite(site, cap, { base });
+    assert.deepEqual(ids(lists[0]), []);
+    assert.deepEqual(ids(lists[1]), reverse ? ['hot3', 'hot2', 'hot1'] : ['hot1', 'hot2', 'hot3']);
+  });
+}
+
+test('热门兜底被同组帖子挡住后，可以继续用下一张不同的热门卡片', () => {
+  const cap = capture([card('公司人热门文章', posts('reply')), card('其他热门文章', posts('hot'))]);
+  cap.json.push({ url: base + '/xsapi/user/replyRank', json: { data: posts('reply') } });
+  const lists = postsForSite(site, cap, { base });
+  assert.deepEqual(ids(lists[0]), ['hot1', 'hot2', 'hot3']);
+  assert.deepEqual(ids(lists[1]), ['reply1', 'reply2', 'reply3']);
+});
+
+for (const n of [1, 2]) {
+  test(`点击榜已有 ${n} 条真实链接时保留，不被热门卡片覆盖`, () => {
+    const cap = capture([card('公司人热门文章', posts('hot'))]);
+    cap.sections = [{ heading: '24小时点击排行', links: posts('click', n).map(p => ({ href: p.link, text: p.title })) }];
+    assert.deepEqual(ids(postsForSite(site, cap, { base })[0]), n === 1 ? ['click1'] : ['click1', 'click2']);
+  });
+}
+
+test('本榜专用点击接口优先于热门兜底', () => {
+  const cap = capture([card('公司人热门文章', posts('hot'))]);
+  cap.json.push({ url: base + '/xsapi/user/clickRank', json: { data: posts('click') } });
+  assert.deepEqual(ids(postsForSite(site, cap, { base })[0]), ['click1', 'click2', 'click3']);
+});
+
+test('本榜板块文字优先于热门兜底', () => {
+  const cap = capture([card('公司人热门文章', posts('hot'))]);
+  cap.sections = [{ heading: '24小时点击排行', links: [], lines: posts('click').map(p => p.title) }];
+  assert.deepEqual(postsForSite(site, cap, { base })[0].posts.map(p => p.title), [
+    'click榜单里的帖子标题1', 'click榜单里的帖子标题2', 'click榜单里的帖子标题3',
+  ]);
+});
+
+test('热门兜底混有 id/name 辅助对象时，只认有真实标题字段的帖子', () => {
+  const cap = capture([card('公司人热门文章', [
+    { id: 'more', name: '查看全部热帖' }, posts('hot', 1)[0],
+  ])]);
+  assert.deepEqual(ids(postsForSite(site, cap, { base })[0]), ['hot1']);
+});
+
+test('热门卡片只有辅助对象时，保留空榜', () => {
+  const cap = capture([card('公司人热门文章', [{ id: 'more', name: '查看全部热帖' }])]);
+  assert.deepEqual(postsForSite(site, cap, { base }).map(ids), [[], []]);
+});
+
+test('没有热门兜底时，少量 DOM 链接仍按原顺序由本榜专用接口补全', () => {
+  const cap = capture([]);
+  cap.sections = [{ heading: '24小时点击排行', links: posts('partial', 1).map(p => ({ href: p.link, text: p.title })) }];
+  cap.json.push({ url: base + '/xsapi/user/clickRank', json: { data: posts('click') } });
+  assert.deepEqual(ids(postsForSite(site, cap, { base })[0]), ['click1', 'click2', 'click3']);
+});
+
+for (const mode of ['id-and-link', 'id-only', 'url-only', 'mixed', 'different-ids']) {
+  test(`同组帖子跨 id/URL 字段时挡住热门兜底，表示=${mode}`, () => {
+    let hot = posts('hot');
+    let reply = hot.map(p => ({ title: p.title + '（回复榜显示）', url: p.link }));
+    if (mode === 'id-only') hot = hot.map(({ postId, title }) => ({ postId, title }));
+    if (mode === 'url-only') {
+      reply = hot.map(({ postId, title }) => ({ postId, title: title + '（回复榜显示）' }));
+      hot = hot.map(p => ({ title: p.title, url: p.link }));
+    }
+    if (mode === 'mixed') hot = [
+      { postId: hot[0].postId, title: hot[0].title },
+      { url: hot[1].link, title: hot[1].title },
+      hot[2],
+    ];
+    if (mode === 'different-ids') reply = reply.map((p, i) => ({ ...p, postId: `display${i}` }));
+    const lists = postsForSite(site, capture([
+      card('公司人热门文章', hot), card('24小时回复排行', reply.reverse()),
+    ]), { base });
+    assert.deepEqual(ids(lists[0]), []);
+    assert.equal(lists[1].posts.length, 3);
+  });
+}
+
+test('跨身份字段只部分重合时仍保留两个榜', () => {
+  const hot = posts('hot');
+  const reply = [hot[0], hot[1], posts('reply')[0]].map(p => ({ title: p.title + '（回复榜显示）', url: p.link }));
+  const lists = postsForSite(site, capture([
+    card('公司人热门文章', hot), card('24小时回复排行', reply),
+  ]), { base });
+  assert.deepEqual(lists.map(l => l.posts.length), [3, 3]);
+});

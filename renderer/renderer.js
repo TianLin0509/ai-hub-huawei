@@ -1063,7 +1063,13 @@ function normalizeMarkdownPathBreaks(text) {
 
 const { createSessionListRenderer } = require('./session-list-renderer.js');
 const meetingUnread = require('./meeting-unread.js');
+const sidebarFoldersController = require('./sidebar-folders').createSidebarFoldersController({
+  document, ipcRenderer, storage: localStorage, onChange: () => scheduleSessionListRender(),
+});
+void sidebarFoldersController.refresh();
+window.addEventListener('focus', () => { void sidebarFoldersController.refresh(); });
 const sessionListRenderer = createSessionListRenderer({
+  sidebarFolders: sidebarFoldersController,
   // 会话 logo 右下角的订阅账号序号：与底栏额度的 1/2 同一顺序；只有一个账号时不显示。
   subscriptionAccount: s => {
     try {
@@ -1355,7 +1361,10 @@ function paintSidebarActiveTarget({ sessionId = null, meetingId = null } = {}) {
     : (meetingId ? `[data-meeting-id="${CSS.escape(String(meetingId))}"]` : '');
   if (!selector) return;
   const row = sessionListEl.querySelector(selector);
-  if (row) row.classList.add('selected');
+  if (row) {
+    row.classList.add('selected');
+    row.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  }
 }
 
 function paintSidebarResumePending(sessionId, pending) {
@@ -2092,7 +2101,13 @@ function paintAppToolbarForSession(sessionId, session, cached) {
   const titleReadOnly = session.readOnly;
   titleSpan.setAttribute('aria-label', titleReadOnly ? '同步查看会话' : `${session.title} · 点击重命名`);
   if (titleReadOnly) titleSpan.classList.add('is-readonly');
-  if (!titleReadOnly) titleSpan.addEventListener('click', () => startRename(sessionId, titleSpan));
+  if (!titleReadOnly) require('./name-editor').bindInlineNameEditor({
+    element: titleSpan, document,
+    getName: () => sessions.get(sessionId)?.title || session.title,
+    save: title => sessionRenamer.rename(sessionId, title),
+    notify: message => showToast(message, 'warning'),
+    onError: message => showToast(message, 'error'),
+  });
 
   // 状态点：runtime truth 的四色（绿 / 琥珀 / 红 / 灰），title 给 runtimeLabel。
   const statusDot = document.createElement('span');
@@ -6043,55 +6058,34 @@ function flushRenameToClaude(sessionId) {
     .catch(error => showPreviewNotice('Hub 名称已保存，CLI 名称未同步：' + error.message, 'error'));
 }
 
-// --- Inline rename ---
-function startRename(sessionId, titleSpan) {
-  const session = sessions.get(sessionId);
-  if (!session) return;
-
-  const input = document.createElement('input');
-  input.className = 'terminal-title-input';
-  input.value = session.title;
-
-  const finish = async () => {
-    const trimmed = input.value.trim();
-    const changed = !!trimmed && trimmed !== session.title;
-    if (changed) {
-      // 本地必须自己落地，不能等 session-updated 的回声：那个 handler 的守卫是
-      // `if (!local.userRenamed && session.title) local.title = session.title`，
-      // 用来挡自动改名（OSC / auto-title）覆盖用户手动改的名字。但我们上一行刚把
-      // userRenamed 置成 true，回声就被自己的守卫挡掉了 —— 改名于是只落到主进程，
-      // 侧栏和顶栏还是旧名字，看起来像「点了没反应」。
-      // 只有 dormant 分支原本歪打正着写了本地 title，所以休眠会话改名一直是好的，
-      // 活着的会话（codex / codex-resume / 分支都属此列）一直是坏的。
-      session.userRenamed = true;
-      session.title = trimmed;
-      // titleSpan 是进入改名前捕获的那个节点，下面会被放回 DOM。不同步刷新它，
-      // 顶栏就会一直显示旧标题，直到切走再切回来触发 showTerminal 重建。
-      titleSpan.textContent = trimmed;
-    }
-    input.replaceWith(titleSpan);
-    if (!changed) return;
+// One commit path for title editing and sidebar renaming (including team leads).
+const sessionRenamer = require('./session-renaming').createSessionRenamer({
+  getSession: id => sessions.get(id), getMeeting: id => meetings[id], ipcRenderer,
+  render: id => {
     renderSessionList();
-    schedulePersist();
-    // 休眠会话没有 PTY，也没有主进程侧的 session 对象要同步，到此为止。
-    if (session.status === 'dormant') return;
-    const renamed = await ipcRenderer.invoke('rename-session', { sessionId, title: trimmed, userRenamed: true });
-    if (renamed?.nativeRename?.status === 'failed') showToast('Hub 名称已保存；Claude 历史同步失败：' + renamed.nativeRename.message, 'warning');
-    if (session.kind === 'claude' || session.kind === 'claude-resume') {
-      syncRenameToClaude(sessionId, trimmed);
+    if (id === activeSessionId) {
+      const title = toolbarCrumbEl?.querySelector('.terminal-title');
+      if (title) title.textContent = sessions.get(id)?.title || '';
     }
-  };
-
-  input.addEventListener('blur', finish);
-  input.addEventListener('keydown', (e) => {
-    if (e.isComposing || e.keyCode === 229) return;
-    if (e.key === 'Enter') input.blur();
-    if (e.key === 'Escape') { input.value = session.title; input.blur(); }
+    if (id === activeMeetingId) {
+      const title = document.getElementById('mr-title');
+      if (title) title.textContent = meetings[id]?.title || '';
+    }
+  },
+  syncClaude: syncRenameToClaude,
+  notify: message => showToast(message, 'warning'),
+});
+window.__revealCreatedMeeting = id => sessionListRenderer.revealCreatedItem(id);
+window.__renameHubSession = (id, title) => sessionRenamer.rename(id, title);
+function requestSessionRename(id) {
+  const target = meetings[id] || sessions.get(id);
+  if (!target || target.readOnly) return;
+  const isLead = window.__teamUi?.isLead(id);
+  return require('./name-editor').openNameEditor({
+    document, title: meetings[id] ? '重命名群聊' : isLead ? '重命名负责人（团队）' : '重命名会话',
+    value: target.title, save: title => sessionRenamer.rename(id, title),
+    notify: message => showToast(message, 'warning'),
   });
-
-  titleSpan.replaceWith(input);
-  input.focus();
-  input.select();
 }
 
 // --- Session selection ---
@@ -7811,7 +7805,7 @@ const memoryPanel = createMemoryPanel({
       cwd: s.cwd,
       kind: s.kind,
       runtimeKind: s.transcriptKind || s.kind,
-      title: s.title,
+      title: s.title, titleRevision: Number(s.titleRevision) || 0,
       codexSessionsRoot: s.codexSessionsRoot || null,
       codexProfile: s.codexProfile || null,
       ...claudeSessionAccountMeta(s),
@@ -8347,10 +8341,17 @@ ipcRenderer.on('codeagent-launch-phase', (_event, payload = {}) => {
   _updateStreamingIndicator(sessionId);
 });
 
+require('./sticky-notice').registerModelCreationConfirmation(ipcRenderer, document);
+
 ipcRenderer.on('session-notice', (_event, payload = {}) => {
   if (!payload || !payload.message) return;
   const session = payload.sessionId ? sessions.get(payload.sessionId) : null;
   const text = `${session && session.title ? session.title + '：' : ''}${payload.message}`;
+  if (payload.modelUnavailable) {
+    require('./sticky-notice').showUnavailableModelNotice(document, { ...payload, message: text },
+      modelId => ipcRenderer.invoke('codeagent:switch-model', { sessionId: payload.sessionId, modelId }));
+    return;
+  }
   // persistent：要手动关的常驻提示条（公司模型换号、退回个人号、反代没就绪），见 sticky-notice.js。
   if (payload.persistent === true) require('./sticky-notice.js').showStickyNotice(document, text, payload.level);
   else showToast(text, payload.level);
@@ -8972,6 +8973,14 @@ const sessionContextMenu = createSessionContextMenuController({
   document,
   window,
   contextMenuEl,
+  requestRename: requestSessionRename,
+  sidebarFolders: sidebarFoldersController,
+  folderEntityKey: id => {
+    if (meetings[id]) return 'meeting:' + id;
+    const session = sessions.get(id);
+    if (!session || require('./session-background-tasks').isBackgroundPurpose(session.purpose) || session.meetingId || Object.values(meetings).some(m => m.subSessions?.includes(id)) || window.__teamUi?.leadOf(id, sessions, meetings)) return null;
+    return 'session:' + id;
+  },
   sessions,
   meetings,
   ipcRenderer,
@@ -9229,7 +9238,7 @@ async function appendToSessionDraft(sessionId, text) {
 }
 function sessionsForDraft() {
   return [...sessions.values()]
-    .filter(s => s && s.id && !s.readOnly && !String(s.title || '').startsWith('[Team] ') && !/powershell|terminal/i.test(String(s.kind || '')))
+    .filter(s => s && s.id && !s.readOnly && !s.hiddenFromSidebar && !/powershell|terminal/i.test(String(s.kind || '')))
     .map(s => ({ id: s.id, title: s.title || s.name || s.id, kind: String(s.kind || ''), at: Number(s.lastActivityAt || s.lastOutputAt || s.updatedAt || s.createdAt || 0), active: s.id === activeSessionId }))
     .sort((a, b) => (b.active - a.active) || (b.at - a.at)).slice(0, 30);
 }
@@ -9592,6 +9601,7 @@ ipcRenderer.on('session-created', async (_e, { session }) => {
   if (terminalPanelEl) terminalPanelEl.style.display = '';
   ipcRenderer.send('focus-session', { sessionId: session.id });
   paintSidebarActiveTarget({ sessionId: session.id });
+  sessionListRenderer.revealCreatedItem(session.id);
   // A league shortcut may have requested card/PTY before this asynchronous
   // event arrived. Honor that last explicit intent; otherwise a late create
   // event makes the card button intermittently bounce back to PTY.
@@ -9850,6 +9860,7 @@ ipcRenderer.on('session-closed', (_e, { sessionId, exitInfo, requested }) => {
 });
 
 ipcRenderer.on('session-updated', (_e, { session }) => {
+  session = require('../core/title-metadata').preserveTitleMetadata(session, sessions.get(session.id));
   queueMicrotask(() => turnCardRenderer.refreshCardActions());
   nativeSessionBootstrap.record(session);
   if (!sessions.has(session.id)) return;
@@ -9911,7 +9922,9 @@ ipcRenderer.on('session-updated', (_e, { session }) => {
   }
   // Merge server updates but keep local preview/status (managed by renderer)
   if (session.meetingId) local.meetingId = session.meetingId;
-  if (!local.userRenamed && session.title) local.title = session.title;
+  if (session.title && (!local.userRenamed || Number(session.titleRevision) > (Number(local.titleRevision) || 0))) {
+    Object.assign(local, require('../core/title-metadata').titleMetadata(session));
+  }
   if (session.ccSessionId) local.ccSessionId = session.ccSessionId;
   if (session.transcriptPath) local.transcriptPath = session.transcriptPath;
   if (session.codexSid) local.codexSid = session.codexSid;
@@ -9955,6 +9968,7 @@ ipcRenderer.on('session-updated', (_e, { session }) => {
   if (session.codeagentActualModel) local.codeagentActualModel = session.codeagentActualModel;
   if (session.codeagentRequestedModel) local.codeagentRequestedModel = session.codeagentRequestedModel;
   if (session.codeagentLaunchModel) local.codeagentLaunchModel = session.codeagentLaunchModel;
+  Object.assign(local, require('../core/session-model-pin').modelPinFields(session));
   if (typeof session.codeagentModelPick === 'boolean') local.codeagentModelPick = session.codeagentModelPick;
   if (session.codeagentForkSourceSessionId) local.codeagentForkSourceSessionId = session.codeagentForkSourceSessionId;
   if (session.codeagentPoolAccount) { local.codeagentPoolAccount = session.codeagentPoolAccount; local.codeagentPoolLabel = session.codeagentPoolLabel || ''; }
@@ -10067,7 +10081,7 @@ function persistWorkscene(flush = false) {
       if (!s.meetingId && !isAiKind(s.kind) && s.kind !== 'claude-resume' && !(typeof s.kind === 'string' && s.kind.endsWith('-resume'))) continue;
       const project = s => ({
         hubId: s.id,
-        title: s.title,
+        title: s.title, titleRevision: Number(s.titleRevision) || 0,
         kind: s.kind,
         cwd: s.cwd || null,
         cwdFellBackFrom: s.cwdFellBackFrom || null,
@@ -10101,6 +10115,7 @@ function persistWorkscene(flush = false) {
         _connectionIssueAck: s._connectionIssueAck && typeof s._connectionIssueAck === 'object'
           ? { ...s._connectionIssueAck }
           : null,
+        ...require('../core/session-model-pin').modelPinFields(s),
         currentModel: s.currentModel || null,
         ...(typeof s.codeagentModelPick === 'boolean' ? { codeagentModelPick: s.codeagentModelPick } : {}),
         ...(s.codeagentActualModel ? { codeagentActualModel: s.codeagentActualModel } : {}),
@@ -10169,7 +10184,7 @@ function persistWorkscene(flush = false) {
     //   修：补全所有 createMeeting 写入 + setMeetingContext 维护的持久化字段。
     //   main.js persist-sessions handler 端加了 fallback 兜底，但渲染端先把字段补全是第一道防线。
     const meetingList = Object.values(meetings).map(m => cachePersistedMeeting(m, m => ({
-      id: m.id, type: 'meeting', title: m.title, subSessions: m.subSessions,
+      id: m.id, type: 'meeting', title: m.title, titleRevision: Number(m.titleRevision) || 0, subSessions: m.subSessions,
       layout: m.layout, focusedSub: m.focusedSub, syncContext: m.syncContext,
       sendTarget: m.sendTarget, createdAt: m.createdAt, lastMessageTime: m.lastMessageTime,
       lastCompletedAt: typeof m.lastCompletedAt === 'number' ? m.lastCompletedAt : null,
@@ -10503,7 +10518,7 @@ sessionImmersive = require('./session-immersive').createSessionImmersiveControll
       sessions.set(meta.hubId, {
         id: meta.hubId,
         kind: meta.kind || 'claude',
-        title: normalizeLegacyBranchSessionTitle(meta.title) || 'Claude',
+        title: normalizeLegacyBranchSessionTitle(meta.title) || 'Claude', titleRevision: Number(meta.titleRevision) || 0,
         status: 'dormant',
         lastMessageTime: meta.lastMessageTime || Date.now(),
         lastOutputPreview: meta.lastOutputPreview || '',
@@ -10527,6 +10542,7 @@ sessionImmersive = require('./session-immersive').createSessionImmersiveControll
         ...(meta.runtimeBackend === 'claude-stream-json' ? { nativeConfig: meta.nativeConfig } : {}),
         transcriptPath: meta.transcriptPath || null,
         meetingId: meta.meetingId || null,
+        ...require('../core/session-model-pin').modelPinFields(meta),
         currentModel: resolvedModel,
         ...(typeof meta.codeagentModelPick === 'boolean' ? { codeagentModelPick: meta.codeagentModelPick } : {}),
         ...(meta.codeagentActualModel ? { codeagentActualModel: meta.codeagentActualModel } : {}),
@@ -10751,6 +10767,7 @@ ipcRenderer.on('meeting-updated', (_e, { meeting }) => {
   // Unread attention belongs to this window. Backend metadata updates (including
   // the reply's completion timestamp) must not acknowledge unread answers.
   const previous = meetings[meeting.id];
+  meeting = require('../core/title-metadata').preserveTitleMetadata(meeting, previous);
   meetingUnread.preserveMeetingAttention(previous, meeting);
   meetings[meeting.id] = meeting;
   if (meeting.id === activeMeetingId) completionNotificationToggle.refreshTarget();

@@ -122,14 +122,21 @@ export function createPersonalAccessTokenReader({ decryptAccessToken = decryptDe
       parsed = JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(raw).replace(/^\uFEFF/,''));
     } catch { throw fail('CREDENTIAL_FORMAT_INVALID'); }
     finally { raw.fill(0); }
-    // Do not enumerate, copy, return, decrypt, or otherwise access refreshToken or alternate OAuth records.
-    const personal = parsed?.devUCOAuth;
-    if (!personal || typeof personal !== 'object' || Array.isArray(personal)) throw fail('PERSONAL_AUTH_TYPE_UNSUPPORTED');
-    const expiresAt = personal.expiresAt;
-    const ciphertext = personal.accessToken;
+    // CodeAgent has two personal login records: browser login (devUCOAuth: accessToken / expiresAt) and
+    // account-password login (idaasOAuth: xAuthToken / xAuthExpires, the same record pool accounts use).
+    // 2026-11-10: colleagues logged in with account-password got 401 "login needed" while CodeAgent itself worked.
+    // Only the token and its expiry are read; refreshToken / mtoken are never touched.
+    const record = value => value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+    const devuc = record(parsed?.devUCOAuth), idaas = record(parsed?.idaasOAuth);
+    const personal = devuc && devuc.accessToken ? devuc : idaas && idaas.xAuthToken ? idaas : devuc || idaas;
+    if (!personal) throw fail('PERSONAL_AUTH_TYPE_UNSUPPORTED');
+    const isIdaas = personal === idaas;
+    const expiresAt = isIdaas ? personal.xAuthExpires : personal.expiresAt;
+    const rawToken = isIdaas ? personal.xAuthToken : personal.accessToken;
+    const ciphertext = typeof rawToken === 'string' ? rawToken.trim() : rawToken;
     parsed = undefined;
     if (!Number.isSafeInteger(expiresAt) || expiresAt <= 0) throw fail('EXPIRY_VALUE_INVALID');
-    const expiresAtMs = expiryUnit === 'seconds' ? expiresAt * 1000 : expiresAt;
+    const expiresAtMs = expiryUnit === 'seconds' && !isIdaas ? expiresAt * 1000 : expiresAt;
     if (!Number.isSafeInteger(expiresAtMs)) throw fail('EXPIRY_VALUE_INVALID');
     const ensureValidExpiry = () => {
       if (expiresAtMs - (nowMs + performance.now() - began) <= minValidityMs) throw fail('ACCESS_TOKEN_EXPIRED_OR_NEAR_EXPIRY');

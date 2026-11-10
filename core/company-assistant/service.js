@@ -20,7 +20,7 @@ const Identity = require('./identity');
 const { recordMessageRound } = require('./message-round-log');
 const { WelinkGate, sharedWelinkGate, withWelinkPriority, WELINK_RATE_LIMITED, MESSAGE_ROUND_EXPIRED } = require('./welink-gate');
 const { noticeBus } = require('./notice-bus');
-const { PhoneChannel, DEFAULT_PHONE, PHONE_NOTE } = require('./phone');
+const { PhoneChannel, DEFAULT_PHONE, PHONE_NOTE, validateExtraIds } = require('./phone');
 const { HubTools } = require('./hub-tools');
 const { PptLibrary } = require('./ppt-library');
 const { AuthKeeper, authFailure } = require('./auth-keeper');
@@ -240,6 +240,7 @@ class CompanyAssistant {
     if ('email' in patch) { next.email = String(patch.email || '').trim().slice(0, 120); next.emailFrom = patch.emailFrom === 'welink' ? 'welink' : 'settings'; }
     if (patch.phone && typeof patch.phone === 'object') {
       const cur = { ...DEFAULT_PHONE, ...(s.phone || {}) }, q = patch.phone, np = { ...cur };
+      if ('extraIds' in q) np.extraIds = validateExtraIds(q.extraIds);
       if ('enabled' in q) np.enabled = !!q.enabled;
       if ('groupId' in q) { np.groupId = String(q.groupId || '').trim().slice(0, 80); np.groupName = String(q.groupName || '').trim().slice(0, 60); }
       for (const k of ['pushWatched', 'pushStuck']) if (k in q) np[k] = !!q[k];
@@ -571,6 +572,8 @@ class CompanyAssistant {
   async applyPhoneSettings(patch) {
     const before = this.settings().phone || {};
     const p = { ...before, ...patch };
+    // 校验先于欢迎消息，防止非法账号保存失败但已经向群里发消息。
+    if ('extraIds' in patch) p.extraIds = validateExtraIds(patch.extraIds);
     p.groupId = String(p.groupId || '').trim();
     if (p.enabled && !p.groupId) throw new Error('请填写助理消息群 ID');
     if (/[\s\r\n]/.test(p.groupId) || p.groupId.length > 80) throw new Error('群 ID 格式不正确');

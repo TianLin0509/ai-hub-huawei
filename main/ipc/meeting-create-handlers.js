@@ -21,7 +21,8 @@ function sanitizeMeetingSlot(slot = {}, fallbackIndex = null) {
   if (/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(memberId)) safe.memberId = memberId;
   else if (Number.isInteger(fallbackIndex) && fallbackIndex >= 0) safe.memberId = `m${fallbackIndex + 1}`;
   if (typeof slot.model === 'string' && slot.model.trim()) safe.model = slot.model.trim();
-  if (kind === 'codeagent') safe.codeagentModelPick = slot.codeagentModelPick === true;
+  if (kind === 'codeagent') safe.codeagentModelPick = typeof slot.codeagentModelPick === 'boolean'
+    ? slot.codeagentModelPick : !!safe.model && slot.followDefault !== true;
 
   const effort = typeof slot.effort === 'string' ? slot.effort.trim().toLowerCase() : '';
   // DeepSeek on Claude Code 与 Claude 同一套 --effort / MCP 档位。
@@ -99,6 +100,7 @@ function createMeetingSubAdder(deps) {
     slotIds,
     workspaceService,
     ensureLaunchAuth,
+    requestModelConfirmation,
   } = deps;
 
   function addCodexMcpEntry(sessionOpts, entry) {
@@ -120,8 +122,7 @@ function createMeetingSubAdder(deps) {
       }
       if (!sessionOpts.title) {
         if (meeting.groupChat) {
-          const label = kindLabels[kind] || kind || 'AI';
-          sessionOpts.title = `${label} ${currentSubCount + 1}`;
+          sessionOpts.title = `成员 ${currentSubCount + 1}`;
         } else if (slotId) {
           sessionOpts.title = getSlotPromptName(slotId);
         }
@@ -185,7 +186,11 @@ function createMeetingSubAdder(deps) {
     if (meeting?.groupChat && (meeting.mode === 'dev' || meeting.scene === 'dev')
         && ['codex', 'codex-resume', 'claude', 'claude-resume'].includes(kind)) sessionOpts.lazyStart = true;
     if (ensureLaunchAuth) await ensureLaunchAuth(kind,sessionOpts);
-    const session = sessionManager.createSession(kind, sessionOpts);
+    const session = await require('../session-model-creation').createSessionWithModelPolicy({ kind, opts: sessionOpts,
+      contextLabel: `群聊 ${meeting?.title || meetingId} / ${sessionOpts.title || kind}`,
+      create: (runtimeKind, launchOpts) => sessionManager.createSession(runtimeKind, launchOpts),
+      requestConfirmation: requestModelConfirmation, sendToRenderer,
+    });
     if (!session) return null;
     const updated = meetingManager.addSubSession(meetingId, session.id);
     if (!updated) {
@@ -212,7 +217,7 @@ function createMeetingSubAdder(deps) {
         slotSpecs[addedIndex] = sanitizeMeetingSlot({
           memberId: opts.memberId || nextMeetingMemberId(slotSpecs),
           kind,
-          model: opts.model || currentModel || null,
+          model: session.fixedModel || currentModel || opts.model || null,
           effort: opts.effort,
           mcpProfile: opts.mcpProfile,
           fastMode: opts.fastMode,
@@ -306,24 +311,29 @@ function registerMeetingCreateIpc(ipcMain, deps) {
       ? (Array.isArray(safe.participants) ? safe.participants.slice() : [safe.slotSpecs?.[0]?.index ?? 0])
       : null;
     if (devParticipants) safe.participants = devParticipants.slice();
-    const meeting = meetingManager.createMeeting(safe);
+    const meeting = meetingManager.createMeeting({ ...safe, creationPending: !!safe.slots?.length });
 
     if (Array.isArray(safe.slots) && safe.slots.length > 0) {
-      const errors = [];
+      const errors = [], successfulSlots = [], successfulIndices = [];
       for (const [slotIndex, slot] of safe.slots.entries()) {
         try {
           const orchestratorOpts = orchestration && slotIndex === 0 ? orchestrationService.launchOptions(slot.kind) : null;
-          await addMeetingSubInternal(
+          const added = await addMeetingSubInternal(
             meeting.id,
             slot.kind,
-            { ...sessionOptionsForMeetingSlot(slot, safe.workspace), ...(orchestratorOpts || {}) },
+            { ...sessionOptionsForMeetingSlot(slot, safe.workspace), memberId: slot.memberId, ...(orchestratorOpts || {}) },
           );
+          if (added?.session) {
+            successfulSlots.push({ ...slot, index: successfulSlots.length, model: added.session.fixedModel || slot.model });
+            successfulIndices.push(slotIndex);
+          }
         } catch (err) {
           errors.push({ slot, message: err && err.message || String(err) });
           logger.warn('[create-meeting] add-sub failed for slot', slot, err && err.message);
+          if (orchestration && slotIndex === 0) break;
         }
       }
-      if (devParticipants) meetingManager.setParticipants(meeting.id, devParticipants.slice());
+      if (devParticipants) meetingManager.setParticipants(meeting.id, devParticipants.map(index => successfulIndices.indexOf(index)).filter(index => index >= 0));
       const finalMeeting = meetingManager.getMeeting(meeting.id);
       const subCount = finalMeeting ? (finalMeeting.subSessions || []).length : 0;
       if (subCount === 0) {
@@ -332,7 +342,8 @@ function registerMeetingCreateIpc(ipcMain, deps) {
         const detail = errors.map(er => `· ${er.slot.kind}（${er.slot.model || 'default'}）：${er.message}`).join('\n');
         throw new Error('所有子会话创建失败：\n' + (detail || '（未知原因）'));
       }
-      meetingManager.setSlotSpecs(meeting.id, safe.slotSpecs);
+      meetingManager.updateMeeting(meeting.id, { creationPending: false });
+      meetingManager.setSlotSpecs(meeting.id, successfulSlots);
       if (orchestration) {
         try { orchestrationService.onMeetingCreated(meeting.id); }
         catch (err) {

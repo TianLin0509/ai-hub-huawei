@@ -63,7 +63,7 @@ const DETAIL_SCRIPT = `(() => {
 })()`;
 
 function createForumBrowser({ BrowserWindow, BaseWindow = null, session = null, partition = 'persist:company-forum', logger = console } = {}) {
-  let owner = null, loginWin = null, busy = Promise.resolve();
+  let owner = null, loginWin = null, loginSite = '', busy = Promise.resolve();
   function ensureOwner() {
     if (!BaseWindow) return null;
     if (owner && !owner.isDestroyed?.()) return owner;
@@ -168,13 +168,14 @@ function createForumBrowser({ BrowserWindow, BaseWindow = null, session = null, 
     });
   }
   // 登录：可见窗口，用户自己登录；回到站点且页面不再是登录页（连续 3 秒）就关掉并返回 ok。用户关窗返回 ok:false。
-  function login({ url, base, title = '登录（AI Hub 论坛）', timeoutMs = 10 * 60000 }) {
-    if (loginWin && !loginWin.isDestroyed()) { loginWin.show(); loginWin.focus(); return Promise.resolve({ ok: false, reason: 'already-open' }); }
+  function login({ url, base, site = '', title = '登录（AI Hub 论坛）', timeoutMs = 10 * 60000 }) {
+    if (loginWin && !loginWin.isDestroyed()) { loginWin.show(); loginWin.focus(); return Promise.resolve({ ok: false, reason: 'already-open', site: loginSite }); }
     const want = (() => { try { return new URL(base || url).host; } catch { return ''; } })();
     const win = loginWin = makeWindow({ show: true, title });
+    loginSite = site;
     return new Promise(resolve => {
       let done = false, okSince = 0;
-      const finish = (ok, error = '') => { if (done) return; done = true; clearInterval(timer); if (!win.isDestroyed()) win.destroy(); loginWin = null; resolve(error ? { ok, error } : { ok }); };
+      const finish = (ok, error = '') => { if (done) return; done = true; clearInterval(timer); if (!win.isDestroyed()) win.destroy(); loginWin = null; loginSite = ''; resolve(error ? { ok, error } : { ok }); };
       win.on('closed', () => finish(false));
       win.webContents.on('did-fail-load', (_event, code, description, _url, isMainFrame) => {
         if (isMainFrame && code !== -3) finish(false, '登录页面没打开：' + description);

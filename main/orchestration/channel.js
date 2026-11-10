@@ -97,20 +97,29 @@ function createChannel({ ledgerFor, members, persist, notify, dispatch, inject =
   async function interruptNow(id, item, target, source) {
     const lock = id + ':' + item.to;
     sending.add(lock); item.state = 'sending'; persist(id);
+    const shouldSubmit = () => !isFrozen() && !['halted', 'ended', 'finished'].includes(ledgerFor(id)?.status)
+      && state(id).messages.includes(item) && item.state === 'sending'
+      && members(id).some(member => member.memberId === target.memberId && member.sid === target.sid)
+      && members(id).some(member => member.memberId === item.from);
+    const stop = reason => {
+      item.state = 'failed'; item.notSent = true; item.error = String(reason || '原指示已停止，未发送').slice(0, 300);
+      notify(id, item.id + ':interrupt-stopped', `发给 ${target.name} 的追加指示已停止，未发送：${item.error}。不会自动重排。`, { quiet: true });
+    };
     const fallback = reason => {
       // 没送进正在进行的工作：退回普通排队，对方空闲后作为新一轮送达。
       item.state = 'queued'; item.interrupt = false; item.interruptError = String(reason || '未确认送达').slice(0, 300);
       notify(id, item.id + ':interrupt-fallback', `发给 ${target.name} 的追加指示没能插进它当前的工作（${item.interruptError}），已改为等它空闲后送达。`, { quiet: true });
     };
     try {
-      const result = await inject(id, target, interruptText(item, source));
+      const result = await inject(id, target, interruptText(item, source), { clientSubmissionId: item.id, shouldSubmit });
       if (result && result.accepted) { item.state = 'sent'; item.sentAt = now(); item.via = 'interrupt'; }
       else if (result && result.uncertain) {
         // 写进去了但没拿到确认：不自动重发，免得同一条指示出现两次。
         item.state = 'sent'; item.sentAt = now(); item.via = 'interrupt'; item.uncertain = true;
         notify(id, item.id + ':interrupt-uncertain', `发给 ${target.name} 的追加指示已写入它的会话，但没拿到确认（${String(result.reason || '').slice(0, 200)}）；可在它的回答里核对，必要时重发。`, { quiet: true });
-      } else fallback(result?.reason);
-    } catch (error) { fallback(error.message || error); }
+      } else if (result?.stopped || !shouldSubmit()) stop(result?.reason);
+      else fallback(result?.reason);
+    } catch (error) { if (error.stopped || !shouldSubmit()) stop(error.message); else fallback(error.message || error); }
     finally { sending.delete(lock); persist(id); setImmediate(() => flush(id).catch(error => logger.warn('[orchestration] message delivery:', error.message))); }
   }
   async function flush(id) {

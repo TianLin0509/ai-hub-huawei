@@ -1,16 +1,15 @@
 'use strict';
 
-const { KIND_LABELS } = require('./ai-kinds');
-
 function meetingMemberTitlePatch(session, meeting) {
   if (!session || !meeting || session.userRenamed || session.meetingId !== meeting.id) return null;
   const topic = String(meeting.title || '').trim();
   if (!topic) return null;
-  const kind = String(session.kind || '').replace(/-resume$/, '');
-  const model = session.currentModel;
-  const label = String((model && typeof model === 'object' ? model.displayName || model.id : model)
-    || KIND_LABELS[kind] || kind || 'AI').trim();
-  const title = `${label} · ${topic}`;
+  const index = (meeting.subSessions || []).indexOf(session.id || session.hubId);
+  // Creation may publish the session before the meeting has registered it.
+  if (index < 0) return null;
+  const stableNumber = /^m([1-9]\d*)$/.exec(String(meeting.slotSpecs?.[index]?.memberId || ''));
+  const number = stableNumber ? stableNumber[1] : index + 1;
+  const title = `成员 ${number} · ${topic}`;
   return session.title === title && session.autoTitleGenerated ? null : { title, autoTitleGenerated: true };
 }
 
@@ -19,7 +18,7 @@ function meetingMemberTitlePatch(session, meeting) {
 function createMeetingMemberTitleSync({ getMeeting, readSession, writeSession, publish, logger = console }) {
   const updating = new Set();
   const meetingNames = new Map();
-  const signature = meeting => JSON.stringify([meeting.title, meeting.subSessions || []]);
+  const signature = meeting => JSON.stringify([meeting.title, meeting.subSessions || [], (meeting.slotSpecs || []).map(s => s?.memberId)]);
   function rememberMeeting(meeting) { meetingNames.set(meeting.id, signature(meeting)); }
   function syncSession(session) {
     const id = session?.id || session?.hubId;

@@ -27,16 +27,16 @@ test('company plans create only CodeAgent, preserve account/model intent, and de
   const dismissed=await h.service.invoke('lead-0001','dismiss',{memberId:'m1'});
   assert.match(dismissed.note,/用户/);assert.doesNotMatch(dismissed.note,/\u7530\u54e5/);
 });
-test('company rejects unsupported kinds, wrong model permissions, and unavailable accounts',async t=>{
+test('company rejects unsupported kinds, malformed model names, and unavailable accounts',async t=>{
   const h=harness(t);
-  for(const value of [{...member(),kind:'claude'},{...member(),kind:'powershell'},member('missing'),member('pool-a','MiniMax-M2.7')])
+  for(const value of [{...member(),kind:'claude'},{...member(),kind:'powershell'},member('missing'),member('pool-a','not a model')])
     await assert.rejects(h.service.invoke('lead-0001','propose',{goal:'目标',members:[value]}));
   h.rows[0].usable=false;await assert.rejects(h.service.invoke('lead-0001','propose',{goal:'目标',members:[member()]}),/账号不可用/);
   assert.equal(h.created.length,0);
 });
 test('approval revalidates account/model edits before creating any member',async t=>{
   const h=harness(t),p=await h.service.invoke('lead-0001','propose',{goal:'目标',members:[member()]});
-  await assert.rejects(h.service.decide({leadSid:'lead-0001',planId:p.planId,approve:true,edits:[{account:'pool-b',model:'GLM-5.2'}]}),/权限/);
+  await assert.rejects(h.service.decide({leadSid:'lead-0001',planId:p.planId,approve:true,edits:[{account:'pool-b',model:'not a model'}]}),/模型名称/);
   assert.equal(h.created.length,0);assert.equal(h.service.listTeams()[0].plans[0].status,'pending');
   await h.service.decide({leadSid:'lead-0001',planId:p.planId,approve:true,edits:[{account:'pool-b',model:'MiniMax-M2.7'}]});
   assert.equal(h.created[0].opts.model,'MiniMax-M2.7');
