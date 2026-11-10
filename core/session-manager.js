@@ -3907,7 +3907,14 @@ try {
     const s = this.sessions.get(sessionId);
     if (s && s.pty) {
       const safeCols = Math.max(cols, 60);
-      s.pty.resize(safeCols, rows);
+      try {
+        s.pty.resize(safeCols, rows);
+      } catch (error) {
+        // 终端进程已退出、会话还没从列表清掉时，node-pty 会抛「Cannot resize a pty that has already exited」。
+        // 这里只跳过本次改大小：不推进序号、不改快照、不发 terminal-resized，也不让错误冒到 uncaughtException 把 Hub 带走。
+        this._recordPtyResizeSkipped(sessionId, s, error);
+        return;
+      }
       // 与输出共用单调序号：观察者从快照接到实时事件时，resize 也不能漏放或重放。
       const seq = ++this._outputSeq;
       s.lastOutputSeq = seq;
@@ -3915,6 +3922,51 @@ try {
       if (s.terminalOutputRewriter) s.terminalOutputRewriter.resize(safeCols, rows);
       this.emit('terminal-resized', { sessionId, seq, cols: safeCols, rows });
     }
+  }
+
+  // 改大小被跳过时记下是哪个会话、终端怎么结束的，便于查「终端为什么已经退出」：
+  // Hub 关的（closeRequestedAt / hubKillRequested）、休眠收起的（suspend*），还是 CLI 自己退出的（这些都为空、只有退出码）。
+  // 每个终端只记一次，拖窗口时连续的 resize 不刷屏。写在 <数据目录>/logs/pty-resize-skipped.log。
+  _recordPtyResizeSkipped(sessionId, s, error) {
+    const pty = s.pty;
+    const trackable = !!pty && typeof pty === 'object';
+    if (!this._ptyResizeSkipLogged) this._ptyResizeSkipLogged = new WeakSet();
+    if (trackable) {
+      if (this._ptyResizeSkipLogged.has(pty)) return;
+      this._ptyResizeSkipLogged.add(pty);
+    }
+    const iso = ms => (ms ? new Date(ms).toISOString() : null);
+    const exit = s.confirmedExit || null;
+    const entry = {
+      event: 'resize-skipped',
+      sessionId,
+      purpose: s.info?.purpose || '',
+      kind: s.info?.kind || '',
+      title: s.info?.title || '',
+      error: String(error?.message || error),
+      exitConfirmed: !!exit,
+      exitCode: exit && exit.exitCode !== undefined ? exit.exitCode : null,
+      signal: exit && exit.signal !== undefined ? exit.signal : null,
+      // Hub 的 onExit 还没跑到时 confirmedExit 为空；node-pty 自己先记下的退出码（内部字段，读不到就是 null）。
+      agentExitCode: (() => { try { const code = pty?._agent?._exitCode; return code === undefined ? null : code; } catch { return null; } })(),
+      closeRequestedAt: iso(s.closeRequestedAt),
+      suspendRequestedAt: iso(s.suspendRequestedAt),
+      suspendReason: s.suspendReason || null,
+      hubKillRequested: trackable && this._ptyTerminationRequests.has(pty),
+      createdAt: iso(s.info?.createdAt),
+    };
+    console.warn(`[hub] ${String(sessionId).slice(0, 8)} 终端已退出，改大小已跳过：${entry.error}`);
+    this._appendDiagnosticLog('pty-resize-skipped.log', entry);
+  }
+
+  _appendDiagnosticLog(fileName, entry) {
+    try {
+      const dir = path.join(getHubDataDir(), 'logs');
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, fileName);
+      if (fs.existsSync(file) && fs.statSync(file).size > 256 * 1024) fs.renameSync(file, file + '.1');
+      fs.appendFileSync(file, JSON.stringify({ at: new Date().toISOString(), ...entry }) + '\n');
+    } catch { /* 诊断日志写失败不能影响会话本身。 */ }
   }
 
   // 「恢复历史会话」picker 默认只列当前目录的会话。会话以前都在用户主目录下时

@@ -59,7 +59,7 @@
   "releaseNotes": [
     "更新窗口新增「抢先版」选项（默认关闭）"
   ],
-  "version": "5.5.64",
+  "version": "5.5.65",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false
