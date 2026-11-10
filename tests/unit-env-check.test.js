@@ -9,6 +9,32 @@ function fakeSetup(found = {}) {
 }
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'env-check-'));
 
+test('没有系统 Node 的新用户：原生工具不提醒，只有依赖 Node 的 npm 工具才提醒', async t => {
+  const dir = tmp();
+  t.after(() => { assert.equal(path.dirname(dir), path.resolve(os.tmpdir())); fs.rmSync(dir, { recursive: true, force: true }); });
+  const shim = path.join(dir, 'tool.cmd');
+  fs.writeFileSync(shim, '@echo off\nnode "%~dp0\\node_modules\\tool\\cli.js" %*');
+  const check = async found => (await envCheck.runEnvCheck({ platform: 'win32', env: {},
+    setup: fakeSetup(found), kindAllowed: id => ['claude', 'codex', 'gemini', 'deepseek-acp'].includes(id),
+    resolveDsh: () => null, runVersion: async () => ({ ok: true, version: '22.0.0' }),
+  })).items.find(i => i.id === 'node');
+  const fresh = await check({ claude: path.join(dir, 'claude.exe'), codex: path.join(dir, 'codex.exe') });
+  assert.equal(fresh.status, 'off'); assert.equal(fresh.detail, '没装，用到时再装'); assert.deepEqual(fresh.fixes || [], []);
+  assert.match(fresh.cause, /一键安装 DSH 会自动准备 Node/);
+  for (const id of ['claude', 'gemini', 'dsh']) {
+    const missing = await check({ [id]: shim });
+    assert.equal(missing.status, 'warn', id); assert.match(missing.detail, new RegExp(id));
+  }
+  assert.equal((await check({ codex: shim })).status, 'off', 'npm Codex 由 Hub 直接运行包内原生程序');
+  fs.writeFileSync(path.join(dir, 'node.exe'), 'local runtime');
+  assert.equal((await check({ claude: shim })).status, 'off', '启动器自带 Node 时不要求系统安装');
+  const manualDsh = async config => (await envCheck.runEnvCheck({ platform: 'win32', env: {}, setup: fakeSetup({}),
+    kindAllowed: id => id === 'deepseek-acp', resolveDsh: () => ({ root: dir, modules: dir }), getConfig: () => config,
+  })).items.find(i => i.id === 'node');
+  assert.equal((await manualDsh({})).status, 'warn', '手动装 DSH 运行环境但没有 Node 时提醒');
+  assert.equal((await manualDsh({ acp: { nodePath: path.join(dir, 'node.exe') } })).status, 'off', 'DSH 已配置独立 Node 时不要求系统安装');
+});
+
 test('全都装好：各项为正常，版本和路径写进说明', async () => {
   const dataDir = tmp();
   const r = await envCheck.runEnvCheck({

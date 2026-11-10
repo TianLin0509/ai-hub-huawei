@@ -45,3 +45,44 @@ test('号池号：浏览器登录的号也能用', async t => {
   assert.equal(await read({ poolRoot: root, accountId: 'abc123' }), 'plain-token');
   assert.equal(await read({ poolRoot: root, accountId: 'def456' }), 'plain-token');
 });
+
+test('两种登录并存：优先有效记录，都有效或都过期时保持原顺序', async t => {
+  const root = await tempDir(t), accountId = 'abc123';
+  await mkdir(join(root, 'accounts', accountId), { recursive: true });
+  await writeFile(join(root, 'pool.json'), JSON.stringify({ accounts: [{ id: accountId }] }));
+  const personalFile = join(root, 'personal.json'), poolFile = join(root, 'accounts', accountId, '.credentials.json');
+  const encrypted = name => Buffer.concat([Buffer.from('01000000d08c9ddf0115d1118c7a00c04fc297eb', 'hex'), Buffer.from(name)]).toString('base64');
+  const devToken = encrypted('browser'), idaasToken = encrypted('password');
+  const decrypt = async c => c === devToken ? 'browser-token' : c === idaasToken ? 'password-token' : assert.fail('unexpected ciphertext');
+  const personal = createPersonalAccessTokenReader({ decryptAccessToken: decrypt });
+  const pool = createPoolAccessTokenReader({ decryptAccessToken: decrypt });
+  const nowMs = Date.now();
+  for (const expiryUnit of ['milliseconds', 'seconds']) {
+    for (const [devOffset, idaasOffset, wantPersonal, wantPool] of [
+      [3600_000, 3600_000, 'browser-token', 'password-token'],
+      [-1000, 3600_000, 'password-token', 'password-token'],
+      [3600_000, -1000, 'browser-token', 'browser-token'],
+      [30_000, 3600_000, null, 'password-token'],
+      [3600_000, 30_000, 'browser-token', null],
+      [-1000, -1000, null, null],
+    ]) {
+      const body = { devUCOAuth: { accessToken: devToken, expiresAt: nowMs + devOffset },
+        idaasOAuth: { xAuthToken: idaasToken, xAuthExpires: nowMs + idaasOffset } };
+      await writeFile(poolFile, JSON.stringify(body));
+      body.devUCOAuth.expiresAt = expiryUnit === 'seconds' ? Math.floor(body.devUCOAuth.expiresAt / 1000) : body.devUCOAuth.expiresAt;
+      await writeFile(personalFile, JSON.stringify(body));
+      const p = personal({ credentialPath: personalFile, expiryUnit, nowMs });
+      if (wantPersonal) assert.equal(await p, wantPersonal);
+      else await assert.rejects(p, { code: 'ACCESS_TOKEN_EXPIRED_OR_NEAR_EXPIRY' });
+      const q = pool({ poolRoot: root, accountId, nowMs });
+      if (wantPool) assert.equal(await q, wantPool);
+      else await assert.rejects(q, { code: 'POOL_ACCESS_TOKEN_EXPIRED_OR_NEAR_EXPIRY' });
+    }
+  }
+  await writeFile(personalFile, JSON.stringify({ devUCOAuth: { accessToken: devToken, expiresAt: 'invalid' },
+    idaasOAuth: { xAuthToken: idaasToken, xAuthExpires: nowMs + 3600_000 } }));
+  await assert.rejects(personal({ credentialPath: personalFile, expiryUnit: 'milliseconds', nowMs }), { code: 'EXPIRY_VALUE_INVALID' });
+  await writeFile(poolFile, JSON.stringify({ devUCOAuth: { accessToken: devToken, expiresAt: nowMs + 3600_000 },
+    idaasOAuth: { xAuthToken: idaasToken, xAuthExpires: 'invalid' } }));
+  await assert.rejects(pool({ poolRoot: root, accountId, nowMs }), { code: 'POOL_EXPIRY_INVALID' });
+});

@@ -96,6 +96,7 @@ function probeList(ctx) {
       const cli = assistant.cli();
       if (!cli) {
         return entry('welink', 'welink-cli', 'welink', STATUS.bad, '没找到 welink-cli', {
+          installed: false,
           cause: 'Hub 在常见的 npm 全局目录和 PATH 里都没找到它；刚装完没重启 Hub 时也会这样。',
           steps: ['没装过就点「一键安装」（需要连接公司网络，不需要 Node 和管理员权限）', '装过的话点「再找一次」，Hub 会在后台把各个盘找一遍', '还找不到就到助理页手动选择程序位置'],
           fixes: [...(assistant.cliInstaller?.available?.() ? [{ label: '一键安装', act: 'welink-install' }] : []), { label: '再找一次', act: 'welink-find' }, { label: '去助理页', act: 'open-assistant' }],
@@ -133,6 +134,7 @@ function probeList(ctx) {
       }
       if (st.state === 'missing') {
         return entry('ppt-doctor', 'PPT Doctor', 'ppt-doctor', STATUS.warn, '没装 PPT Doctor（用 PPT 素材库和图片转可编辑时才需要）', {
+          installed: false,
           cause: '在开始菜单、注册表和默认安装位置都没找到它。', steps: ['点「一键安装」，装好后会自动重新检测', '一键安装失败时再点「下载 PPT Doctor」手动安装'], fixes: [oneClick('一键安装'), download, RECHECK],
         });
       }
@@ -185,6 +187,7 @@ function probeList(ctx) {
       const found = setup.findCommand(id, env, platform);
       if (!found) {
         return entry(id, name, 'env-check', STATUS.warn, `没装（要用 ${name} 会话时再装）`, {
+          installed: false,
           cause: `PATH、npm 全局目录和 Hub 一键安装的位置里都没有 ${name}。`,
           steps: installAct ? [`点「去一键安装」装 ${name}`, '装好后点「重新检测」'] : [`按官方说明安装 ${name}`, '装好后点「重新检测」'],
           fixes: [installAct || { label: '打开安装说明', act: 'open-url', url: docs }, RECHECK],
@@ -203,6 +206,7 @@ function probeList(ctx) {
       try { runtime = (ctx.resolveDsh || require('./dsh-cli-profile').resolveDshCliRuntime)(config?.acp?.providers?.['deepseek-acp'], env); } catch (e) { error = e.message; }
       if (!runtime) {
         return entry('dsh', 'DSH（DeepSeek 终端）', 'env-check', STATUS.warn, '没装（要用 DeepSeek · DSH 会话时再装）', {
+          installed: false,
           cause: error || '没找到 DSH 的终端运行环境。', steps: installAct ? ['点「去一键安装」装 DSH', '装好后点「重新检测」'] : ['用 npm 全局安装 @deepseek-ai/dsh 和 @deepseek-harness-tui/dsh-tui', '装好后点「重新检测」'],
           fixes: [...(installAct ? [installAct] : []), RECHECK], raw: error,
         });
@@ -232,8 +236,22 @@ function probeList(ctx) {
   add('node', 'Node.js', 'env-check', async () => {
     const node = setup.findCommand('node', env, platform);
     if (!node) {
-      return entry('node', 'Node.js', 'env-check', STATUS.warn, '没找到（welink-cli 和部分组件需要它）', {
-        cause: 'PATH 里没有 node 命令。Hub 本身不需要，但用 npm 装的命令行工具要靠它运行。',
+      // Codex 的 npm 包由 Hub 直接启动其中的原生 exe；WeLink 脚本用 Hub 自带运行时。
+      const needsNode = ['claude', 'gemini', 'dsh'].filter(id => {
+        if (!kindAllowed(id === 'dsh' ? 'deepseek-acp' : id)) return false;
+        if (id === 'dsh') {
+          const profile = ctx.getConfig?.()?.acp || {};
+          if (profile.nodePath && fs.existsSync(profile.nodePath)) return false;
+          try { if ((ctx.resolveDsh || require('./dsh-cli-profile').resolveDshCliRuntime)(profile.providers?.['deepseek-acp'], env)) return true; } catch { /* 没装运行环境 */ }
+        }
+        const file = setup.findCommand(id, env, platform);
+        if (!file || /\.exe$/i.test(file) || fs.existsSync(path.join(path.dirname(file), 'node.exe'))) return false;
+        try { return /\bnode(?:\.exe)?\b/i.test(fs.readFileSync(file, 'utf8')); } catch { return false; }
+      });
+      const nodeUse = 'Hub、原生 Claude/Codex、WeLink、PPT Doctor 和会议室不需要系统 Node；Gemini、npm 版 Claude 和手动安装的 DSH 需要。一键安装 DSH 会自动准备 Node 运行环境。';
+      if (!needsNode.length) return entry('node', 'Node.js', 'env-check', STATUS.off, '没装，用到时再装', { installed: false, cause: nodeUse });
+      return entry('node', 'Node.js', 'env-check', STATUS.warn, `没找到 Node.js（已安装的 ${needsNode.join('、')} 需要它）`, {
+        cause: nodeUse,
         steps: ['安装 Node.js 22 或更新的长期支持版', '装好后重启 Hub'], fixes: [{ label: '打开下载页', act: 'open-url', url: 'https://nodejs.org/zh-cn/download' }, RECHECK],
       });
     }

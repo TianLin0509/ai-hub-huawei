@@ -173,7 +173,7 @@ test('welink-cli 全盘找：注册表 PATH 和 npm prefix 各找到一份时都
   const a = path.join(root, 'a'), b = path.join(root, 'b');
   for (const d of [a, b]) { fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, 'welink-cli.exe'), ''); }
   const execFileImpl = (file, args, opts, cb) => {
-    if (file === 'reg.exe' && /HKCU/.test(args[1])) return cb(null, `    Path    REG_SZ    ${a}\r\n`);
+    if (file === 'powershell.exe') return cb(null, Buffer.from(JSON.stringify({ u: a, m: null }), 'utf8').toString('base64'));
     if (file === 'cmd.exe') return cb(null, b + '\r\n');
     return cb(null, '');
   };

@@ -64,12 +64,14 @@ export function createPoolAccessTokenReader(config={}){
    requireFact(object(registry)&&Array.isArray(registry.accounts)&&registry.accounts.every(a=>object(a)&&typeof a.id==='string'&&ID.test(a.id)),'POOL_REGISTRY_FORMAT_INVALID');
    const matches=registry.accounts.filter(a=>a.id===accountId).length;registry=undefined;
    requireFact(matches===1,matches===0?'POOL_ACCOUNT_NOT_REGISTERED':'POOL_ACCOUNT_REGISTRY_AMBIGUOUS');
-   // No account enumeration or alternate OAuth fallback. Whole JSON bytes can include mtoken;
-   // only the two confirmed IDaaS fields below are accessed, and mtoken is never used/decrypted.
+   // No account enumeration. Whole JSON bytes can include mtoken;
+   // only login tokens and expiry fields are accessed, and mtoken is never used/decrypted.
    let credential=await readJson(join(root,'accounts',accountId,'.credentials.json'),signal,'CREDENTIAL');
    // Account-password login (idaasOAuth) or browser login (devUCOAuth, accessToken / expiresAt in ms); token and expiry only.
-   const idaas=object(credential?.idaasOAuth)&&credential.idaasOAuth.xAuthToken?credential.idaasOAuth:null;
-   const devuc=!idaas&&object(credential?.devUCOAuth)?credential.devUCOAuth:null;
+   let idaas=object(credential?.idaasOAuth)&&credential.idaasOAuth.xAuthToken?credential.idaasOAuth:null;
+   const devuc=object(credential?.devUCOAuth)?credential.devUCOAuth:null;
+   const unexpired=value=>Number.isSafeInteger(value)&&value>0?value>nowMs+performance.now()-began:null;
+   if(idaas&&devuc?.accessToken&&unexpired(idaas.xAuthExpires)===false&&unexpired(devuc.expiresAt))idaas=null;
    requireFact(idaas||devuc,'POOL_AUTH_TYPE_UNSUPPORTED');
    const expiry=idaas?idaas.xAuthExpires:devuc.expiresAt,encrypted=idaas?idaas.xAuthToken:devuc.accessToken;credential=undefined;
    requireFact(Number.isSafeInteger(expiry)&&expiry>0,'POOL_EXPIRY_INVALID');

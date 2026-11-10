@@ -251,6 +251,52 @@ function lineOf(spPr, style, ctx) {
   return null;
 }
 
+// 渐变（2026-11-10 素材预览）：fill 仍给中间色（老渲染照旧可用），grad 给完整色标与方向，SVG 用 linearGradient / radialGradient 画。
+function gradOf(spPr, ctx) {
+  const grad = spPr && !kid(spPr, 'solidFill') && !kid(spPr, 'noFill') ? kid(spPr, 'gradFill') : null;
+  if (!grad) return null;
+  const stops = kids(kid(grad, 'gsLst'), 'gs').map(gs => [Math.round(num(gs.attrs.pos) / 1000) / 100, colorOf(gs, ctx)]).filter(s => s[1]).sort((a, b) => a[0] - b[0]);
+  if (stops.length < 2) return null;
+  const lin = kid(grad, 'lin');
+  return { stops: stops.slice(0, 10), ...(kid(grad, 'path') ? { radial: true } : { ang: Math.round(num(lin?.attrs.ang) / 60000) }) };
+}
+// 自定义形状（custGeom）：按路径画轮廓，坐标换算到形状自身的磅坐标（左上角为 0,0）。公式引用（gd 名字）读不出数值时整条放弃，退回矩形。
+function custPathOf(spPr, box) {
+  const paths = kids(at(spPr, 'custGeom', 'pathLst'), 'path');
+  if (!paths.length) return null;
+  const out = [];
+  const f = v => Math.round(v * 10) / 10;
+  for (const p of paths.slice(0, 20)) {
+    const pw = num(p.attrs.w), ph = num(p.attrs.h);
+    const sx = pw > 0 ? box.w / pw : 1 / EMU_PER_PT, sy = ph > 0 ? box.h / ph : 1 / EMU_PER_PT;
+    let d = '', cx = 0, cy = 0, bad = false;
+    const pt = n => { const x = Number(n?.attrs.x), y = Number(n?.attrs.y); if (!Number.isFinite(x) || !Number.isFinite(y)) { bad = true; return [0, 0]; } return [x * sx, y * sy]; };
+    for (const c of p.children) {
+      const k = local(c.name), pts = kids(c, 'pt').map(pt);
+      if (k === 'moveTo' || k === 'lnTo') { const [x, y] = pts[0] || [0, 0]; d += `${k === 'moveTo' ? 'M' : 'L'}${f(x)} ${f(y)}`; cx = x; cy = y; }
+      else if (k === 'cubicBezTo' && pts.length === 3) { d += 'C' + pts.map(([x, y]) => `${f(x)} ${f(y)}`).join(' '); [cx, cy] = pts[2]; }
+      else if (k === 'quadBezTo' && pts.length === 2) { d += 'Q' + pts.map(([x, y]) => `${f(x)} ${f(y)}`).join(' '); [cx, cy] = pts[1]; }
+      else if (k === 'arcTo') {
+        const wr = Number(c.attrs.wR) * sx, hr = Number(c.attrs.hR) * sy, st = Number(c.attrs.stAng) / 60000 * Math.PI / 180, sw = Number(c.attrs.swAng) / 60000;
+        if (![wr, hr, st, sw].every(Number.isFinite)) { bad = true; break; }
+        const ox = cx - wr * Math.cos(st), oy = cy - hr * Math.sin(st), en = st + sw * Math.PI / 180;
+        const ex = ox + wr * Math.cos(en), ey = oy + hr * Math.sin(en);
+        d += `A${f(wr)} ${f(hr)} 0 ${Math.abs(sw) > 180 ? 1 : 0} ${sw > 0 ? 1 : 0} ${f(ex)} ${f(ey)}`; cx = ex; cy = ey;
+      } else if (k === 'close') d += 'Z';
+      if (bad) break;
+    }
+    if (bad || !d) return null;
+    out.push({ d, ...(p.attrs.fill === 'none' ? { nofill: true } : {}), ...(p.attrs.stroke === '0' ? { nostroke: true } : {}) });
+  }
+  return out.length ? out : null;
+}
+// 预置形状的调整值（avLst 里 val N，单位 1/100000），按顺序给渲染用；没写就用默认值。
+function adjOf(spPr) {
+  const gds = kids(at(spPr, 'prstGeom', 'avLst'), 'gd');
+  const vals = gds.map(g => { const m = String(g.attrs.fmla || '').match(/^val\s+(-?\d+)$/); return m ? Number(m[1]) / 100000 : null; });
+  return vals.length && vals.every(v => v !== null) ? vals : null;
+}
+
 // ---------------------------------------------------------------- 文字
 // 字号优先级：run → 段落 defRPr → 形状 lstStyle → 版式/母版占位符 lstStyle → 母版 txStyles → 默认 18 磅。
 function levelProps(lst, lvl) { return lst ? kid(lst, `lvl${lvl + 1}pPr`) : null; }
@@ -437,7 +483,13 @@ class SceneBuilder {
     const line = lineOf(spPr, style, ctx);
     const isLine = /^(?:line|lineInv|straightConnector\d*|bentConnector\d*|curvedConnector\d*)$/.test(prst) || local(node.name) === 'cxnSp';
     if (isLine) { if (line || style) this.push({ t: 'line', ...box, color: line?.color || '#7F7F7F', lw: line?.width || 0.75, ...(x.flipH ? { flipH: true } : {}), ...(x.flipV ? { flipV: true } : {}) }); return; }
-    if (fill || line) this.push({ t: 'box', ...box, shape: /ellipse|oval|circle/i.test(prst) ? 'ellipse' : /round/i.test(prst) ? 'round' : /triangle/i.test(prst) ? 'tri' : /rightArrow|chevron|homePlate/i.test(prst) ? 'arrow' : 'rect', ...(fill ? { fill } : {}), ...(line ? { stroke: line.color, lw: line.width } : {}) });
+    if (fill || line) {
+      // prst / adj / path / grad / flip 是 2026-11-10 为素材预览加的细节；shape 保留给老的粗略画法。
+      const cust = kid(spPr, 'custGeom') ? custPathOf(spPr, box) : null, grad = !blip && gradOf(spPr, ctx), adj = adjOf(spPr);
+      this.push({ t: 'box', ...box, shape: /ellipse|oval|circle/i.test(prst) ? 'ellipse' : /round/i.test(prst) ? 'round' : /triangle/i.test(prst) ? 'tri' : /rightArrow|chevron|homePlate/i.test(prst) ? 'arrow' : 'rect',
+        ...(kid(spPr, 'prstGeom') ? { prst } : {}), ...(adj ? { adj } : {}), ...(cust ? { path: cust } : {}), ...(grad ? { grad } : {}),
+        ...(x.flipH ? { flipH: true } : {}), ...(x.flipV ? { flipV: true } : {}), ...(fill ? { fill } : {}), ...(line ? { stroke: line.color, lw: line.width } : {}) });
+    }
     const fontRefColor = colorOf(kid(style, 'fontRef'), ctx);
     const fam = inh.info ? phFamily(inh.info.type) : '';
     const defaults = { sz: fam === 'title' ? 32 : 18, color: fontRefColor || ctx.textColor, bullets: fam === 'body' && inh.info?.type !== 'subTitle', anchor: fam === 'title' ? 'ctr' : 't' };
@@ -565,7 +617,7 @@ function createSlidePreviewer({ cacheDir, shrinkImage = null, limit = 200 } = {}
   const inflight = new Map();
   function keyOf(file, page) {
     const st = fs.statSync(file);
-    return crypto.createHash('sha1').update(`${path.resolve(file).toLowerCase()}|${st.mtimeMs}|${st.size}|${page}|v1`).digest('hex').slice(0, 24);
+    return crypto.createHash('sha1').update(`${path.resolve(file).toLowerCase()}|${st.mtimeMs}|${st.size}|${page}|v2`).digest('hex').slice(0, 24);
   }
   async function scene(file, page) {
     const key = keyOf(file, page);

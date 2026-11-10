@@ -128,7 +128,13 @@ export function createPersonalAccessTokenReader({ decryptAccessToken = decryptDe
     // Only the token and its expiry are read; refreshToken / mtoken are never touched.
     const record = value => value && typeof value === 'object' && !Array.isArray(value) ? value : null;
     const devuc = record(parsed?.devUCOAuth), idaas = record(parsed?.idaasOAuth);
-    const personal = devuc && devuc.accessToken ? devuc : idaas && idaas.xAuthToken ? idaas : devuc || idaas;
+    const unexpired = (value, seconds = false) => {
+      const ms = seconds ? value * 1000 : value;
+      return Number.isSafeInteger(value) && value > 0 && Number.isSafeInteger(ms) ? ms > nowMs + performance.now() - began : null;
+    };
+    const preferIdaas = devuc?.accessToken && idaas?.xAuthToken
+      && unexpired(devuc.expiresAt, expiryUnit === 'seconds') === false && unexpired(idaas.xAuthExpires);
+    const personal = preferIdaas ? idaas : devuc && devuc.accessToken ? devuc : idaas && idaas.xAuthToken ? idaas : devuc || idaas;
     if (!personal) throw fail('PERSONAL_AUTH_TYPE_UNSUPPORTED');
     const isIdaas = personal === idaas;
     const expiresAt = isIdaas ? personal.xAuthExpires : personal.expiresAt;

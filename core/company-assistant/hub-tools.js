@@ -119,6 +119,12 @@ class HubTools {
     if (name === 'ppt_read') return this.a.ppt.read(args);
     if (name === 'ppt_library') return this.a.ppt.execute(args.op || 'status', args);
     if (name === 'ppt_lookup_frame') return this.a.ppt.lookupFrame(args);
+    if (name === 'ppt_materials') {
+      const r = this.a.ppt.materials.list({ query: args.query, category: args.category, offset: args.offset, limit: Math.min(50, Number(args.limit) || 20) });
+      return { total: r.total, offset: r.offset, categories: r.categories, items: r.items.map(({ id, name, category, source, pptx, page }) => ({ id, name, category, source, pptx, page })),
+        note: r.library.total ? '素材文件是 pptx，第 page 页上就是这个形状；推荐时请用户到 PPT 页「素材」Tab 一键插入。' : '素材库是空的：请用户在 PPT Doctor 下载团队素材包，或在 PPT 页「素材」Tab 打开素材包文件。',
+        ...(r.library.errors.length ? { errors: r.library.errors } : {}) };
+    }
     if (name === 'ppt_imgtext') {
       if (args.op === 'build') return this.a.ppt.imgtext.build(args);
       if (args.op === 'status') return { ok: true, job: this.a.ppt.imgtext.snapshot(args.jobId) };

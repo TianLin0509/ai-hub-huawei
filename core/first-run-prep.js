@@ -128,7 +128,8 @@ function createPrep({ isCompany, deps, emit = () => {} }) {
       for (const id of ENV_ROWS) {
         const item = items.get(id);
         if (!item) set(id, result?.ok === false ? ST.warn : ST.off, result?.ok === false ? '体检没跑成，稍后可重新检查' : '不适用', result?.ok === false ? [RECHECK] : []);
-        else if (OPTIONAL_ROWS.has(id) && item.status !== 'ok') set(id, ST.off, '没装，用到时再装');
+        else if (OPTIONAL_ROWS.has(id) && item.status !== 'ok') set(id, ST.off,
+          item.installed === false ? '没装，用到时再装' : [item.detail, item.cause].filter(Boolean).join('：'));
         else set(id, item.status, item.status === 'ok' || item.status === 'off' ? item.detail : [item.detail, item.cause].filter(Boolean).join('：'),
           (item.fixes || []).map(fix => (fix.act === 'open-codeagent' ? { ...fix, label: '已装，手动选择' } : fix)));
       }

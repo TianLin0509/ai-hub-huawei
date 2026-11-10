@@ -54,6 +54,7 @@ class CompanyProxyService {
     this.logger = logger;
     this.mock = mock;
     this.child = null;
+    this.endpoint = null;
     this.state = 'stopped';
     this.message = '';
     this.restarts = 0;
@@ -73,7 +74,7 @@ class CompanyProxyService {
 
   status() {
     const s = this.lastStatus;
-    return { state: this.state, message: this.message, pid: this.child?.pid || null, port: this.proxy().readEndpoint(this.dataDir)?.port || null,
+    return { state: this.state, message: this.message, pid: this.child?.pid || null, port: this.endpoint?.port || null,
       mock: this.mock, restarts: this.restarts, accounts: s?.router?.accounts || [], events: (s?.router?.events || []).slice(-10),
       stats: s?.stats || null, log: this.logPath(), code: s?.code || null,
       zone: s?.zone || null, chosenZone: this.proxy().chosenZone(this.dataDir), firstInit: s?.firstInit || null,
@@ -170,11 +171,10 @@ class CompanyProxyService {
 
   async start() {
     this.stopping = false;
+    this.endpoint = null;
     const endpoint = this.proxy().ensureEndpoint(this.dataDir);
     fs.mkdirSync(path.dirname(this.logPath()), { recursive: true });
     const stateFile = path.join(this.proxy().proxyDir(this.dataDir), 'proxy-state.json');
-    try { fs.rmSync(stateFile, { force: true }); } catch { /* stale */ }
-    const logFd = fs.openSync(this.logPath(), 'a');
     const env = { ...process.env, AI_HUB_COMPANY_PROXY_KEY: endpoint.key };
     // Hub 认定的 CodeAgent 安装目录（自动发现 / 手选的那份，能跟进 npm 转发入口）交给反代，作为它查找安装目录的第一个候选。
     delete env.AI_HUB_CODEAGENT_INSTALL_DIR;
@@ -186,6 +186,7 @@ class CompanyProxyService {
     const args = [...systemCaArgs(), serverScript(), '--data-dir', this.dataDir, '--port', String(endpoint.port || 0), '--parent-pid', String(process.pid)];
     if (this.mock) args.push('--mock-upstream');
     this.setState('starting', '公司模型反代正在启动…');
+    const logFd = fs.openSync(this.logPath(), 'a');
     let child;
     try {
       child = spawn(process.execPath, args, { env, windowsHide: true, detached: false, stdio: ['ignore', logFd, logFd] });
@@ -203,6 +204,7 @@ class CompanyProxyService {
       throw new Error(this.message);
     }
     if (this.stopping || this.child !== child) return this.status();
+    this.endpoint = { ...endpoint, port: ready.port, pid: child.pid };
     this.proxy().setEndpointPort(this.dataDir, ready.port);
     await this.poll();
     if (!this.timer) { this.timer = setInterval(() => void this.poll(), POLL_MS); this.timer.unref?.(); }
@@ -237,8 +239,8 @@ class CompanyProxyService {
   }
 
   async request(pathname, { method = 'GET', timeoutMs = 3000 } = {}) {
-    const endpoint = this.proxy().readEndpoint(this.dataDir);
-    if (!endpoint?.port) throw new Error('no endpoint');
+    const endpoint = this.endpoint;
+    if (!endpoint?.port || endpoint.pid !== this.child?.pid) throw new Error('no endpoint');
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {

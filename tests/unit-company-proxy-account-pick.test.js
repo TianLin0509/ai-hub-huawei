@@ -12,6 +12,40 @@ const view = require('../renderer/company-proxy-account-view');
 const { resolveCompanyProxyAccount, accountHasModel } = require('../core/company-proxy-account');
 const hubProxy = require('../core/company-model-proxy');
 
+test('proxy reassigns deleted or login-missing sticky accounts; unreadable logins retry before returning 401', async () => {
+  const load = name => import(require('node:url').pathToFileURL(path.join(__dirname, '../core/company-proxy', name)).href);
+  const { createAccountRouter } = await load('account-router.mjs'), { poolAccounts, accountAlias } = await load('server.mjs');
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cpa-deleted-')), root = path.join(dataDir, 'codeagent-pool');
+  const credential = id => path.join(root, 'accounts', id, '.credentials.json');
+  try {
+    for (const mode of ['missing', 'deleted', 'unregistered', 'unreadable']) for (const target of ['bbbbbb2', 'personal']) {
+      for (const id of ['aaaaaa1', 'bbbbbb2', 'personal']) { fs.mkdirSync(path.dirname(credential(id)), { recursive: true }); fs.writeFileSync(credential(id), '{}'); }
+      fs.writeFileSync(path.join(root, 'pool.json'), JSON.stringify({ accounts: [{ id: 'aaaaaa1' }, { id: 'bbbbbb2' }] }));
+      fs.writeFileSync(path.join(root, 'quota-aliases.json'), JSON.stringify({ map: { aaaaaa1: 1 } }));
+      let broken = false, allBroken = false; const used = [];
+      const router = createAccountRouter({ statSync: fs.statSync, listAccounts: () => poolAccounts(dataDir, Date.now(), credential('personal')),
+        makeProvider: (account, { onCredentialFailure }) => ({ complete: async () => {
+          used.push(account.id);
+          if (allBroken || broken && account.id === 'aaaaaa1') { onCredentialFailure(); throw new Error('unreadable'); }
+          return new Response(null, { status: 200 });
+        } }) });
+      assert.equal(router.pick('q1').id, 'aaaaaa1');
+      if (mode === 'deleted') require('../core/codeagent-pool').removeAccount(dataDir, 'aaaaaa1');
+      if (mode === 'unregistered') fs.writeFileSync(path.join(root, 'pool.json'), JSON.stringify({ accounts: [{ id: 'bbbbbb2' }] }));
+      if (mode === 'missing') fs.rmSync(credential('aaaaaa1'));
+      if (mode === 'unreadable') broken = true;
+      if (target === 'personal') fs.rmSync(credential('bbbbbb2'));
+      assert.equal(accountAlias(dataDir, 'aaaaaa1'), '号 1', 'retained alias does not register an account');
+      assert.equal((await router.complete({}, { sessionTag: 'q1' })).status, 200, mode + ':' + target);
+      assert.deepEqual(used, mode === 'unreadable' ? ['aaaaaa1', target] : [target]);
+      assert.equal(router.accountFor('q1'), target);
+      allBroken = true;
+      await assert.rejects(router.complete({}, { sessionTag: 'q1' }), e => e.code === 'COMPANY_LOGIN_NEEDED' && e.status === 401);
+      for (const id of ['aaaaaa1', 'bbbbbb2', 'personal']) fs.rmSync(credential(id), { force: true });
+      await assert.rejects(router.complete({}, { sessionTag: 'q1' }), e => e.code === 'COMPANY_LOGIN_NEEDED' && e.status === 401);
+    }
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
+});
 const ready = (id, extra = {}) => ({ id, state: 'ready', note: '备注' + id.slice(-1), accountLabel: 'x***' + id.slice(-1), activeSessions: 0, ...extra });
 const pool = {
   ok: true,

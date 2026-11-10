@@ -280,7 +280,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
       experimentalNativeThinking: true, experimentalCodexControls: kind === 'codex',
       ...(upstream.testOrigin ? { testOnlyLoopbackOrigin: upstream.testOrigin } : {}) });
   };
-  const router = createAccountRouter({ listAccounts: () => poolAccounts(opts.dataDir, Date.now(), upstream?.profile?.personalCredential), makeProvider, statSync,
+  const router = createAccountRouter({ listAccounts: () => poolAccounts(opts.dataDir, Date.now(), upstream?.profile?.personalCredential), makeProvider, statSync: opts.mock ? null : statSync,
     onEvent: e => log(`account ${e.type} session=${String(e.session).slice(0, 8)} ${e.account || ''}${e.from ? ' from=' + e.from : ''}${e.to ? ' to=' + e.to : ''}${e.reason ? ' reason=' + e.reason : ''}`) });
 
   // ---------- request gate ----------

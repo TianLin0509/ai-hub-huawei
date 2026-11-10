@@ -258,6 +258,11 @@ class CompanyAssistant {
         if (!Array.isArray(patch.ppt.roots) || patch.ppt.roots.length > 3 || patch.ppt.roots.some(p => typeof p !== 'string' || !path.isAbsolute(p))) throw new Error('PPT 索引请选择最多 3 个绝对路径的文件夹');
         next.ppt.roots = [...new Set(patch.ppt.roots.map(p => path.resolve(p)))];
       }
+      // 素材 Tab 里打开过的团队素材包（最多 5 个绝对路径）。
+      if ('materialPacks' in patch.ppt) {
+        if (!Array.isArray(patch.ppt.materialPacks) || patch.ppt.materialPacks.some(p => typeof p !== 'string' || !path.isAbsolute(p))) throw new Error('素材包请用绝对路径');
+        next.ppt.materialPacks = [...new Set(patch.ppt.materialPacks.map(p => path.resolve(p)))].slice(0, 5);
+      }
     }
     if (patch.rooms && typeof patch.rooms === 'object') {
       next.rooms = { ...(s.rooms || {}) };

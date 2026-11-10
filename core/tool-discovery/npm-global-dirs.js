@@ -48,12 +48,15 @@ function runText(file, args, { timeoutMs = 15000, env = process.env, execFileImp
 async function registryPathDirs({ env = process.env, execFileImpl, platform = process.platform } = {}) {
   if (platform !== 'win32') return [];
   const expand = v => String(v).replace(/%([^%]+)%/g, (_, k) => env[k] || env[Object.keys(env).find(x => x.toLowerCase() === k.toLowerCase())] || '');
-  const read = async key => {
-    const t = await runText('reg.exe', ['query', key, '/v', 'Path'], { execFileImpl, env });
-    const m = /Path\s+REG_(?:EXPAND_)?SZ\s+(.+)/i.exec(t);
-    return m ? expand(m[1].trim()) : '';
-  };
-  const joined = [await read('HKCU\\Environment'), await read('HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment')].filter(Boolean).join(';');
+  const persisted = await require('../codeagent-config').readPersistentEnv('Path', { execFileImpl, platform }).catch(() => ({}));
+  let joined = [persisted.user, persisted.system].filter(Boolean).map(expand).join(';');
+  if (!joined) { // PowerShell 不可用或被策略限制时退回 reg.exe（中文路径可能读不准，英文路径不受影响）。
+    const read = async key => {
+      const m = /Path\s+REG_(?:EXPAND_)?SZ\s+(.+)/i.exec(await runText('reg.exe', ['query', key, '/v', 'Path'], { execFileImpl, env }));
+      return m ? expand(m[1].trim()) : '';
+    };
+    joined = [await read('HKCU\Environment'), await read('HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment')].filter(Boolean).join(';');
+  }
   const out = [];
   for (const dir of joined.split(';').map(s => s.trim().replace(/^"|"$/g, '')).filter(Boolean)) if (!out.includes(dir)) out.push(dir);
   return out;

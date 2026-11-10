@@ -44,6 +44,27 @@ function createPptHandlers(service) {
       return r.canceled ? { ok: true, canceled: true } : { ok: true, imagePath: r.filePaths[0] };
     },
     'ppt-index': () => ({ ok: true, ppt: service.ppt.startIndex() }),
+    // 素材 Tab（2026-11-10）：只读 PPT Doctor 素材库 + 用户打开的素材包；插入 / 复制只在用户点击时执行。
+    'ppt-materials': request => service.ppt.materials.list({ query: String(request?.query || ''), category: String(request?.category || ''), offset: request?.offset, limit: request?.limit, force: request?.force === true }),
+    'ppt-material-preview': async request => {
+      try { return await service.ppt.materials.preview(request?.id); }
+      catch (error) { return { ok: false, code: error.code || 'MATERIAL_PREVIEW_FAILED', error: error.message }; }
+    },
+    'ppt-material-insert': request => service.ppt.materials.transfer(request?.id, 'insert'),
+    'ppt-material-copy': request => service.ppt.materials.transfer(request?.id, 'copy'),
+    'ppt-material-pick-pack': async request => {
+      // 拖进素材 Tab 的文件直接给路径；点按钮时弹选择框。
+      if (request?.file) return service.ppt.materials.addPack(String(request.file));
+      const { dialog } = require('electron');
+      const r = await dialog.showOpenDialog({ title: '选择团队素材包（.pptx）', properties: ['openFile'], filters: [{ name: '团队素材包', extensions: ['pptx'] }] });
+      if (r.canceled || !r.filePaths[0]) return { ok: true, canceled: true };
+      return service.ppt.materials.addPack(r.filePaths[0]);
+    },
+    'ppt-open-doctor': async () => {
+      const exe = await service.ppt.doctor.discover();
+      require('node:child_process').spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: false }).unref();
+      return { ok: true };
+    },
     'ppt-pick-folders': async () => {
       const { dialog } = require('electron');
       const selected = await dialog.showOpenDialog({ title: '选择 1–3 个 PPT 素材文件夹', properties: ['openDirectory', 'multiSelections'] });

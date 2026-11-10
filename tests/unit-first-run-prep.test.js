@@ -58,10 +58,27 @@ test('被拦没放行成功给放行按钮；没开公司模型时相关项不�
   assert.equal(personal.rows.hello, undefined);
 });
 test('可选工具没装不算问题，手动选择按钮说人话', async () => {
-  const r = await run({ envCheck: async () => ({ ok: true, items: [{ id: 'welink', status: 'bad', detail: '没找到', fixes: [{ label: '一键安装', act: 'x' }] },
+  const r = await run({ envCheck: async () => ({ ok: true, items: [{ id: 'welink', status: 'bad', installed: false, detail: '没找到', fixes: [{ label: '一键安装', act: 'x' }] },
     { id: 'codeagent', status: 'bad', detail: '没找到', fixes: [{ label: '打开 CodeAgent 设置', act: 'open-codeagent' }] }] }) });
   assert.equal(r.rows.welink.status, 'off'); assert.deepEqual(r.rows.welink.fixes, []);
   assert.deepEqual(r.problems, ['codeagent']); assert.equal(r.rows.codeagent.fixes[0].label, '已装，手动选择');
+});
+
+test('可选工具已安装但有提醒时保留真实说明，不计入未就绪', async () => {
+  let saved;
+  const items = [
+    { id: 'welink', status: 'warn', detail: '找到了，但 WeLink 登录已过期 · v1.0.20', cause: '登录令牌过期' },
+    { id: 'ppt-doctor', status: 'warn', detail: '已检测到 v1，版本太旧，和 Hub 联动不上' },
+    { id: 'claude', status: 'warn', detail: '找到了，但版本号没读出来' },
+    { id: 'dsh', status: 'warn', installed: false, detail: '没装' },
+    { id: 'node', status: 'off', installed: false, detail: '没装，用到时再装' },
+  ];
+  const r = await run({ envCheck: async () => ({ items }), saveState: s => { saved = s; } });
+  for (const item of items) {
+    assert.equal(r.rows[item.id].status, 'off');
+    assert.equal(r.rows[item.id].detail, item.installed === false ? '没装，用到时再装' : [item.detail, item.cause].filter(Boolean).join('：'));
+  }
+  assert.deepEqual(saved.problems, []); assert.deepEqual(r.problems, []);
 });
 test('CodeAgent 变化只重做受影响的项', async () => {
   let net = 0;

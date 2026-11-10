@@ -18,6 +18,7 @@ class PptLibrary {
     this.reading = null; this.materialized = '';
     this.doctor = deps.pptDoctor || new PptDoctor(assistant, deps);
     this.imgtext = new (require('./ppt-imgtext').PptImgtext)(this);
+    this.materials = new (require('./ppt-materials').PptMaterials)(this, deps);
     this.references = new Map(); this.traces = new Map(); this.activeChat = '';
     this.taskResults = new Map(); this.taskReports = new Map(); this.taskEvidence = new Map(); this.activeTask = null; this.indexJob = null; this.indexChild = null;
     try { this.indexState = JSON.parse(fs.readFileSync(path.join(this.a.dir, 'ppt-index-state.json'), 'utf8')); }
@@ -59,11 +60,15 @@ class PptLibrary {
   async preview(id) {
     const ref = this.references.get(String(id || ''));
     if (!ref || !ref.path) throw Object.assign(new Error('这页不在最近的检索结果里，请重新检索'), { code: 'UNKNOWN_PAGE' });
+    return { ok: true, id: String(id), scene: await this.previewScene(ref.path, Number(ref.page)) };
+  }
+  // 检索结果与素材共用一个带缓存的版式绘制器。调用方负责只传自己认得的文件。
+  previewScene(file, page) {
     if (!this.previewer) {
       const { createSlidePreviewer, electronShrinker } = require('./ppt-slide-preview');
       this.previewer = createSlidePreviewer({ cacheDir: path.join(this.a.dir, 'ppt-preview-cache'), shrinkImage: this.deps.pptPreviewShrink === undefined ? electronShrinker() : this.deps.pptPreviewShrink });
     }
-    return { ok: true, id: String(id), scene: await this.previewer.scene(ref.path, Number(ref.page)) };
+    return this.previewer.scene(file, Number(page));
   }
   takeTaskReport(id) { const report = this.taskReports.get(id) || ''; this.taskReports.delete(id); return report; }
   takeTaskResult(id) { const result = this.taskResults.get(id) || []; this.taskResults.delete(id); if (this.activeTask === id) { this.activeTask = null; this.taskEvidence.clear(); } return result; }

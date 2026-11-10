@@ -488,8 +488,8 @@ export async function resolveUpstreamProfile({ dataDir, env = process.env, versi
     zone: zoneWord(user.zone),
     // Optional model for the one first-time CLI run (default: CodeAgent's own default model).
     stampProbeModel: /^[A-Za-z0-9._-]{1,80}$/.test(text(user.stampProbeModel)) ? text(user.stampProbeModel) : '',
-    // CodeAgent's own personal login: <user profile>\.cac\.credentials.json (same place the CLI writes it).
-    personalCredential: text(user.personalCredential) || (home ? join(home, '.cac', '.credentials.json') : ''),
+    // Use the same config directory as CodeAgent's settings and login.
+    personalCredential: text(user.personalCredential) || join(codeagentDataDir(env, home), '.credentials.json'),
     // Where each value came from: a category and at most a file name, never the value itself.
     sources: {},
   };
@@ -522,7 +522,7 @@ export async function resolveUpstreamProfile({ dataDir, env = process.env, versi
   }
   profile.zoneInfo = { zone: profile.zone, source: profile.sources.zone || '', text: !profile.zone && profile.chatUrl
     ? '模型接口地址已写在上游配置 upstream.json 里，不按区域拼接。' : zoneText({ zone: profile.zone, source: profile.sources.zone }) };
-  if (!profile.sources.personalCredential && profile.personalCredential) { profile.sources.personalCredential = 'default:.cac/.credentials.json'; note('personalCredential', 'default:.cac/.credentials.json'); }
+  if (!profile.sources.personalCredential && profile.personalCredential) { profile.sources.personalCredential = text(env.CODEAGENT3_CONFIG_DIR) ? 'env:CODEAGENT3_CONFIG_DIR' : 'default:.cac/.credentials.json'; note('personalCredential', profile.sources.personalCredential); }
   if (!profile.adapterPackage) {
     note('adapterPackage', 'welink:ReceiveFiles');
     profile.adapterPackage = await packageFinder(env);

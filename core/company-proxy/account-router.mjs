@@ -100,7 +100,7 @@ export function createAccountRouter({ listAccounts, makeProvider, now = Date.now
     if (!list.some(a => a.id === PERSONAL)) list.push({ id: PERSONAL, kind: 'personal' });
     return list;
   };
-  const usable = account => !account.paused && !cooling(account.id, now(), account);
+  const usable = account => !account.paused && stampOf(account) !== 'missing' && !cooling(account.id, now(), account);
   const load = id => { let n = 0; for (const value of sticky.values()) if (value === id) n++; return n; };
 
   const pinError = (code, status, message, extra = {}) => Object.assign(new Error(message), { code, status, ...extra });
@@ -171,7 +171,7 @@ export function createAccountRouter({ listAccounts, makeProvider, now = Date.now
       catch (error) { await dropStashed(); throw error; }
       if (!account) {
         if (lastRateLimited) return lastRateLimited;
-        const active = accounts().map(a => ({ a, c: cooling(a.id, now(), a) })).filter(x => x.c);
+        const active = accounts().map(a => ({ a, c: cooling(a.id, now(), a) || (!a.paused && stampOf(a) === 'missing' ? { reason: 'credential' } : null) })).filter(x => x.c);
         const limited = active.filter(x => x.c.reason === 'rate_limit');
         if (limited.length) {
           const soonest = limited.reduce((m, x) => Math.min(m, x.c.until), Infinity);
