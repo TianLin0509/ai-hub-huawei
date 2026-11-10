@@ -26,6 +26,7 @@ function rig(t) {
     sendPrompt: async (id, prompt) => { sent.push({ id, prompt }); finals.set(id, [{ id: 'final-' + sent.length, text: 'PPT 请求已完成\n' + (String(prompt).match(/\[助理回执:[^\]]+\]/) || [''])[0] }]); return { ok: true }; },
   });
   for (const name of ['meetings', 'phone']) svc[name].start = () => background.push(name);
+  svc.rooms.start = () => background.push('rooms');
   svc.tick = async () => background.push('tick');
   svc.ppt.citationNote = async () => '';
   t.after(() => svc.close());

@@ -104,6 +104,7 @@ async function withInheritedBranchTurns(args, deps, liveSession, childTurns, par
   const session = liveSession
     || (args && args.hubSessionId ? (lookupSessionRecord(args.hubSessionId, deps) || {}).record : null);
   const parentId = session && session.branchSourceSessionId;
+  if (require('../../core/codeagent-prefix-branch').prefixBranch(session)) return childTurns;
   if (!parentId) return childTurns;
 
   const parent = lookupSessionRecord(parentId, deps);
@@ -328,6 +329,10 @@ async function parseProviderTranscript(args = {}, deps) {
     }
     const parseOpts = { limit: 50, fromTail: true, ...(opts && typeof opts === 'object' ? opts : {}) };
     const record = session || (hubSessionId ? lookupSessionRecord(hubSessionId, deps)?.record : null);
+    const prefix = require('../../core/codeagent-prefix-branch').prefixBranch(record);
+    // Main's saved child binding is authoritative even for a dormant session;
+    // a stale renderer path must never select its parent's transcript.
+    if (prefix) transcriptPath = record.transcriptPath || null;
     parseOpts.codeagent = require('../../core/ai-kinds').isCodeAgentKind(record?.kind || inKind);
     if (parseOpts.codeagent) parseOpts.codeagentCommandNames = require('../../core/codeagent-command-records')
       .commandNames(deps.dataDir || require('../../core/data-dir').getHubDataDir(), record?.codeagentPoolAccount || 'personal');
@@ -349,6 +354,7 @@ async function parseProviderTranscript(args = {}, deps) {
     // is the previous one. The binding stays on the fork's own path.
     let runtimeHome = lineage.runtimeHomeOf(transcriptPath)
       || (lineage.isRuntimeHome(record?.claudeConfigDir) ? record.claudeConfigDir : null);
+    if (prefix) runtimeHome = null;
     if (runtimeHome && !(transcriptPath && require('fs').existsSync(transcriptPath))) {
       const resting = lineage.restingTranscript(runtimeHome, transcriptPath);
       if (resting) {
@@ -375,6 +381,8 @@ async function parseProviderTranscript(args = {}, deps) {
     }
     const parseStartedAt = Date.now();
     const parsed = await parseClaudeFile(transcriptPath, parseOpts);
+    if (prefix) return { turns: parsed.turns,
+      transcriptPath, parseMs: parsed.meta.parseMs, parseCacheHit: !!parsed.meta.cacheHit, error: null };
     const turns = await withAncestorTurns(parsed.turns, transcriptPath, parseOpts, parseClaudeFile);
     return {
       turns: await withInheritedBranchTurns(args, deps, session, turns, parseOpts, transcriptPath),

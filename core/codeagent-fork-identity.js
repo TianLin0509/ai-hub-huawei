@@ -79,6 +79,7 @@ function exactNativeHistory(sessionId, cwd, deps, reason, session) {
   const env = deps.env || process.env;
   try {
     const config = require('./codeagent-config').resolveCodeAgentConfig(env);
+    if (session?.codeagentPrefixFork?.configDir) config.configDir = session.codeagentPrefixFork.configDir;
     const file = require('./claude-native-history').findNativeClaudeHistory(sessionId,
       { cwd, env: { ...env, CLAUDE_CONFIG_DIR: config.configDir } });
     if (!file) throw unresolved(reason);
@@ -94,6 +95,33 @@ function exactNativeHistory(sessionId, cwd, deps, reason, session) {
 function recoverCodeAgentFork(meta, deps = {}) {
   const unchanged = { meta, forkCCSessionId: null, repaired: false, sourceId: null };
   if (!/^codeagent(?:-resume)?$/.test(String(meta?.kind || ''))) return unchanged;
+  const prefixTools = require('./codeagent-prefix-branch');
+  const prefix = prefixTools.prefixBranch(meta);
+  if (prefix) {
+    try {
+      const sourceId = uuid(prefix.sourceNativeSessionId), current = uuid(meta.ccSessionId), seed = uuid(prefix.newSessionId);
+      if (!sourceId || current === sourceId || seed === sourceId || seed && current && seed !== current) throw unresolved('prefix-identity-mismatch');
+      const child = current || seed;
+      if (!child) {
+        if (prefixTools.unusedEmptyPrefix(meta) && !meta.transcriptPath) return unchanged;
+        throw unresolved('prefix-child-unavailable');
+      }
+      let file;
+      try { file = exactNativeHistory(child, meta.cwd, deps, 'prefix-history-unavailable', meta); }
+      catch (error) {
+        if (prefixTools.unusedEmptyPrefix(meta) && prefixTools.missingPrefixChild(meta, child, deps.fsModule)) {
+          prefixTools.logPrefixRecovery(meta, 'empty-reopened', 'unused-empty-prefix', deps.dataDir || require('./data-dir').getHubDataDir());
+          return { ...unchanged, sourceId, meta: { ...meta, ccSessionId: null, transcriptPath: null, codeagentIdentityPending: false } };
+        }
+        throw error;
+      }
+      verifyExactChild(file, child, meta.cwd, deps.fsModule);
+      return { ...unchanged, sourceId, meta: { ...meta, ccSessionId: child, transcriptPath: file, codeagentIdentityPending: false } };
+    } catch (error) {
+      prefixTools.logPrefixRecovery(meta, 'reopen-rejected', error.reason || error.code || 'unknown', deps.dataDir || require('./data-dir').getHubDataDir());
+      throw error;
+    }
+  }
   const sourceId = forkSourceIdentity(meta, deps);
   if (!sourceId) {
     if (meta.branchSourceSessionId && identityRejection(meta, null)) throw unresolved('fork-source-unavailable');

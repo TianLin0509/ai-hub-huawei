@@ -65,6 +65,7 @@ function createTurnCardRenderer(options = {}) {
   function refreshCardActions() {
     if (options.root) return;
     const cards = Array.from(overlay()?.querySelectorAll(':scope > .turn-card') || []);
+    require('./card-prefix-fork').patchCardActions(cards, state._sessionTurns, getSessionContext);
   }
   function cardActionContext(container, sessionId) {
     return { sessionId, mainCard: !options.root && container === overlay() && !getSessionContext(sessionId)?.meetingId };
@@ -542,6 +543,10 @@ function renderCardActions(turn, context = {}) {
   const copy = activity ? '' : '<button class="ta-btn" data-action="copy" title="复制" aria-label="复制这条消息">复制</button>';
   const multi = '<button class="ta-btn ta-multi" data-action="multi-select">多选</button>';
   let fork = '';
+  if (context.mainCard && !options.root) {
+    const action = require('./card-prefix-fork').branchAction(turn, getSessionContext(context.sessionId));
+    if (action) fork = `<button type="button" class="ta-btn" data-action="fork-before-turn"${action.disabled ? ' disabled' : ''} title="${escapeHtml(action.title)}">从此处分支</button>`;
+  }
   const secondary = user
     ? '<button class="ta-btn" data-action="resend">重发这条消息</button><button class="ta-btn" data-action="edit-resend">编辑重发</button><button class="ta-btn" data-action="prompt-inspect">查看完整 Prompt</button>'
       : ''

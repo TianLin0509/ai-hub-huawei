@@ -566,6 +566,7 @@ test('independent bridge works with the assistant disabled and verifies token pl
   const f = ordinaryFixture(t);
   for (const method of ['start', 'startTimers', 'tick', 'collectJob']) f.a[method] = () => { throw new Error('assistant background must stay off'); };
   for (const component of [f.a.meetings, f.a.phone,
+    f.a.rooms,
   ]) component.start = () => { throw new Error('assistant polling must stay off'); };
   const first = f.a.startTools(); assert.equal(f.a.startTools(), first); await first;
   assert.equal(f.a.started, undefined); assert.equal(f.a.timers.length, 0);

@@ -2,7 +2,7 @@
 
 // Share the latest display state, but always recheck before starting an action.
 const instances = new WeakMap();
-const OFFICIAL_INSTALL_URL = '';
+const OFFICIAL_INSTALL_URL = 'https://agent.huawei.com/';
 function createCodeAgentSetup({ document, ipcRenderer }) {
   if (instances.has(document)) return instances.get(document);
   let current = null, pending = null, dialog = null;

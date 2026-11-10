@@ -74,6 +74,7 @@ applyHubCardDisplaySettings();
 ipcRenderer.invoke('get-hub-config-raw')
   .then(config => {
     applyHubCardDisplaySettings(config ?? {});
+    require('./card-prefix-fork').setEnabled(config?.codeagentPrefixBranch !== false);
   })
   .catch(() => {});
 // ── Bug 修复（2026-06-21 maintainer）：marked 默认透传裸 HTML，AI/用户消息正文里的字面
@@ -1429,6 +1430,7 @@ async function selectMeeting(meetingId, opts = {}) {
   if (window.__studyHide) window.__studyHide(); // 2026-09-01 学习面板互斥
   if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
+  window.__companyRoomsHide?.();
   window.__rulesHide?.(); // 独立页面互斥
   if (window.__ranHide) window.__ranHide(); // 2026-09-04 RAN 工作台面板互斥
   setShellNavActive(null);
@@ -2005,6 +2007,7 @@ const APP_TOOLBAR_VIEWS = [
   { id: 'progress-panel', label: '进展' },
   { id: 'writing-panel', label: '写作' },
   { id: 'rules-panel', label: '规则' },
+  { id: 'company-rooms-page', label: '会议室' },
   { id: 'meeting-room-panel', label: '群聊' },
 ];
 
@@ -2745,6 +2748,8 @@ const turnCardRenderer = createTurnCardRenderer({
   updateStreamingIndicator: (sessionId) => _updateStreamingIndicator(sessionId),
   renderMathInElement: window.renderMathInElement,
 });
+require('./card-prefix-fork').configureStatus((channel, payload) => ipcRenderer.invoke(channel, payload),
+  () => turnCardRenderer.refreshCardActions());
 const {
   renderTurnCard,
   rerenderTurn,
@@ -3256,6 +3261,7 @@ async function loadSessionHistoryToOverlayUnserialized(sessionId, opts = {}) {
     // staging 内看不到主界面的临时卡；提交成功后再认领，concurrentExtraCards 就不会把它留回去。
     turnCardRenderer.reconcileOptimisticUserCards(sessionId, turns, { container, kind: mountKind });
   }
+  turnCardRenderer.refreshCardActions();
   turnCardRenderer.reconcileCommandUserCards(sessionId, result?.codeagentCommandSubmissionIds, turns,
     { container, kind: mountKind });
   if(nextPageState)Object.assign(pageState,nextPageState);
@@ -3760,6 +3766,13 @@ document.addEventListener('click', async (e) => {
   if (!turn) return;
   const action = btn.dataset.action;
 
+  if (action === 'fork-before-turn') {
+    if (btn.disabled || card.closest('[data-group-member], [data-split-secondary]')) return;
+    await require('./card-prefix-fork').forkBeforeTurn({ turn, session: sessions.get(getCardSessionId(card)), button: btn,
+      invoke: (channel, payload) => ipcRenderer.invoke(channel, payload), notify: showToast, selectSession,
+      openNewSession: () => window.WorkspaceController.openNewSessionModal({ kind: 'codeagent' }) });
+    return;
+  }
 
   if (action === 'copy') {
     // 复制用户实际看到的回答正文，不复制 markdown 围栏、toolCalls 原始块，
@@ -6119,6 +6132,7 @@ async function selectSession(id, opts = {}) {
   if (window.__studyHide) window.__studyHide(); // 2026-09-01 学习面板互斥
   if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
+  window.__companyRoomsHide?.();
   window.__rulesHide?.(); // 独立页面互斥
   if (window.__ranHide) window.__ranHide(); // 2026-09-04 RAN 工作台面板互斥
   setShellNavActive(null);
@@ -9119,6 +9133,7 @@ function escapeToHome() {
   if (window.__studyHide) window.__studyHide();
   if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
+  window.__companyRoomsHide?.();
   window.__rulesHide?.(); // 独立页面互斥
   if (window.__ranHide) window.__ranHide(); // 2026-09-04 RAN 工作台面板互斥
   if (fileManagerPanel) fileManagerPanel.close();
@@ -9250,6 +9265,7 @@ if (require('../core/company-assistant/gate').companyAssistantEnabled()) {
   if (oldAssistantNav) oldAssistantNav.style.display = 'none';
   try {
     let companyMeetingPage, companyPptPage;
+    let companyRoomsPage;
     const companyAssistantPage = require('./company-assistant-page').createCompanyAssistantPage({
       document, window, ipcRenderer,
       closeOtherPanels: () => { window.hubWorkspaces?.close(); memoryPanel.close(); capabilityPanel.close(); accountCenterPanel.close(); },
@@ -9264,6 +9280,12 @@ if (require('../core/company-assistant/gate').companyAssistantEnabled()) {
       showMessage: message => showToast(message),
       openSession: openSessionById,
     });
+    companyRoomsPage = require('./company-rooms-page').createCompanyRoomsPage({
+      document, window, ipcRenderer,
+      closeOtherPanels: () => { window.hubWorkspaces?.close(); memoryPanel.close(); capabilityPanel.close(); accountCenterPanel.close(); },
+      showMessage: message => showToast(message),
+    });
+    window.__companyRoomsHide = () => companyRoomsPage.close();
     window.__companyMeetingHide = () => companyMeetingPage.close();
     window.__companyAssistantHide = () => companyAssistantPage.close();
     companyPptPage = require('./company-ppt-page').createCompanyPptPage({
@@ -9596,6 +9618,7 @@ ipcRenderer.on('session-created', async (_e, { session }) => {
   if (window.__studyHide) window.__studyHide();
   if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
+  window.__companyRoomsHide?.();
   window.__rulesHide?.(); // 独立页面互斥
   if (window.__ranHide) window.__ranHide(); // 2026-09-04 RAN 工作台面板互斥
   if (terminalPanelEl) terminalPanelEl.style.display = '';
@@ -9971,6 +9994,7 @@ ipcRenderer.on('session-updated', (_e, { session }) => {
   Object.assign(local, require('../core/session-model-pin').modelPinFields(session));
   if (typeof session.codeagentModelPick === 'boolean') local.codeagentModelPick = session.codeagentModelPick;
   if (session.codeagentForkSourceSessionId) local.codeagentForkSourceSessionId = session.codeagentForkSourceSessionId;
+  if (session.codeagentPrefixFork) local.codeagentPrefixFork = session.codeagentPrefixFork;
   if (session.codeagentPoolAccount) { local.codeagentPoolAccount = session.codeagentPoolAccount; local.codeagentPoolLabel = session.codeagentPoolLabel || ''; }
   if (session.companyRoute) local.companyRoute = session.companyRoute;
   if (session.companyProxyAccount) { local.companyProxyAccount = session.companyProxyAccount; local.companyProxyLabel = session.companyProxyLabel || ''; }
@@ -10123,6 +10147,7 @@ function persistWorkscene(flush = false) {
         ...(s.codeagentLaunchModel ? { codeagentLaunchModel: s.codeagentLaunchModel } : {}),
         ...(s.codeagentRouteModel ? { codeagentRouteModel: s.codeagentRouteModel } : {}),
         ...(s.codeagentForkSourceSessionId ? { codeagentForkSourceSessionId: s.codeagentForkSourceSessionId } : {}),
+        ...(s.codeagentPrefixFork ? { codeagentPrefixFork: s.codeagentPrefixFork } : {}),
         ...(s.codeagentPoolAccount ? { codeagentPoolAccount: s.codeagentPoolAccount, codeagentPoolLabel: s.codeagentPoolLabel || '' } : {}),
         ...(s.companyRoute ? { companyRoute: s.companyRoute } : {}),
         ...(s.companyProxyAccount ? { companyProxyAccount: s.companyProxyAccount, companyProxyLabel: s.companyProxyLabel || '' } : {}),
@@ -10550,6 +10575,7 @@ sessionImmersive = require('./session-immersive').createSessionImmersiveControll
         ...(meta.codeagentLaunchModel ? { codeagentLaunchModel: meta.codeagentLaunchModel } : {}),
         ...(meta.codeagentRouteModel ? { codeagentRouteModel: meta.codeagentRouteModel } : {}),
         ...(meta.codeagentForkSourceSessionId ? { codeagentForkSourceSessionId: meta.codeagentForkSourceSessionId } : {}),
+        ...(meta.codeagentPrefixFork ? { codeagentPrefixFork: meta.codeagentPrefixFork } : {}),
         ...(meta.codeagentPoolAccount ? { codeagentPoolAccount: meta.codeagentPoolAccount, codeagentPoolLabel: meta.codeagentPoolLabel || '' } : {}),
         ...(meta.companyRoute ? { companyRoute: meta.companyRoute } : {}),
         ...(meta.companyProxyAccount ? { companyProxyAccount: meta.companyProxyAccount, companyProxyLabel: meta.companyProxyLabel || '' } : {}),
@@ -11059,6 +11085,7 @@ if (process && process.env && process.env.CLAUDE_HUB_E2E === '1') {
           if (window.__studyHide) window.__studyHide();   // 同上：别和学习面板并排
           if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
           if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
+          window.__companyRoomsHide?.();
           window.__rulesHide?.(); // 独立页面互斥
           if (window.__ranHide) window.__ranHide(); // 2026-09-04 RAN 工作台面板互斥
           terminalPanelEl.style.display = '';

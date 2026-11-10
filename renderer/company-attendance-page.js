@@ -273,6 +273,7 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
   const onResize = () => place();
   async function open() {
     build(); closeOtherPanels();
+    window.__companyRoomsHide?.();
     window.__companyMeetingHide?.(); window.__assistantHide?.(); window.__wirelessHide?.(); window.__companyAssistantHide?.(); window.__companyForumHide?.(); window.__companyPptHide?.();
     for (const name of ['__rulesHide', '__writingHide', '__xresearchHide', '__studyHide', '__ranHide']) window[name]?.();
     window.setShellNavActive?.('company-attendance');

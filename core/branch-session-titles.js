@@ -70,6 +70,7 @@ function readCodexForkedFromId(transcriptPath) {
 
 function needsBranchTitleRecovery(session) {
   if (!session) return false;
+  if (require('./codeagent-prefix-branch').prefixBranch(session)) return false;
   const clean = normalizeTitle(session.title);
   const isMarkedBranch = /^分支\s*\d*\s*[:：]\s*/u.test(clean) || !!session.branchSourceSessionId;
   if (!isMarkedBranch) return false;
@@ -181,6 +182,7 @@ function healPersistedBranchSessionTitles(state, {
       if (!canEditSession(session)) continue;
       const baseTitle = stripBranchTitlePrefix(session.title) || '待命名';
       let expectedTitle = formatBranchSessionTitle(baseTitle, '会话', branchIndex);
+      if (require('./codeagent-prefix-branch').prefixBranch(session)) expectedTitle = `分支${branchIndex}: ${baseTitle}`;
       const indexChanged = session.branchIndex !== branchIndex;
       const titleChanged = session.userRenamed !== true && session.title !== expectedTitle;
       if (!indexChanged && !titleChanged) continue;

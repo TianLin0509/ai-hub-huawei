@@ -11,7 +11,7 @@ const { createHash, randomUUID } = require('node:crypto');
 const { execFile } = require('node:child_process');
 const { resolveFetch } = require('./fetch-util');
 
-const DEFAULT_REGISTRY = '';
+const DEFAULT_REGISTRY = 'https://cmc.centralrepo.rnd.huawei.com/artifactory/api/npm/product_npm/';
 const PACKAGE_PATH = '@welink%2fwelink-cli';
 const PACKAGE_NAME = '@welink/welink-cli';
 const MAX_META = 8 * 1024 * 1024;

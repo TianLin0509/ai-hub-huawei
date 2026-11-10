@@ -554,6 +554,10 @@ function buildCodeAgentPtyLaunch(id, kind, opts, cwd, env, config, auth = null, 
   const historyEnv = { ...env, CLAUDE_CONFIG_DIR: config.configDir };
   const isUuid = value => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value || ''));
   const hasHistory = value => isUuid(value) && !!findNativeClaudeHistory(value, { cwd, env: historyEnv });
+  if (opts.codeagentPrefixFork?.newSessionId && (opts.forkCCSessionId
+      || opts.resumeCCSessionId !== opts.codeagentPrefixFork.newSessionId || !hasHistory(opts.resumeCCSessionId))) {
+    throw Object.assign(new Error('截断分支的新会话记录缺失，未恢复源会话'), { code: 'CODEAGENT_PREFIX_HISTORY_MISSING' });
+  }
   if (opts.codeagentPrefixFork?.newSessionId && !require('./codeagent-capabilities').filterArgs(['--resume', opts.resumeCCSessionId], require('./codeagent-capabilities').readHelp(config.command)).args.includes('--resume')) {
     throw Object.assign(new Error('当前 CodeAgent 未保留截断分支的恢复参数，未启动会话'), { code: 'CODEAGENT_PREFIX_RESUME_UNSUPPORTED' });
   }
@@ -616,6 +620,9 @@ function buildCodeAgentPtyLaunch(id, kind, opts, cwd, env, config, auth = null, 
     ({ args: launchArgs, dropped: droppedFlags } = caps.filterArgs(launchArgs, caps.readHelp(config.command)));
     if (droppedFlags.length) console.warn(`[codeagent] ${String(id || '').slice(0, 8)} 本机 CodeAgent 不认这些参数，已不传：${droppedFlags.join(' ')}`);
   } catch (error) { console.warn('[codeagent] 参数兼容检查出错，原样启动：' + error.message); launchArgs = [...identity, ...args]; droppedFlags = []; }
+  if (opts.codeagentPrefixFork?.newSessionId && launchArgs[launchArgs.indexOf('--resume') + 1] !== opts.codeagentPrefixFork.newSessionId) {
+    throw Object.assign(new Error('当前 CodeAgent 未保留截断分支的恢复参数，未启动会话'), { code: 'CODEAGENT_PREFIX_RESUME_UNSUPPORTED' });
+  }
   const cmd = ' ' + commandHead(config.command) + ' ' + launchArgs.map(quote).join(' ') + '\r\n';
   // 账号代称（个人 / 号N）：默认模型看护按启动记录找「改写前后启动了哪些会话」（core/codeagent-default-model-guard.js）。
   let account = '个人';
@@ -1779,6 +1786,7 @@ class SessionManager extends EventEmitter {
     require('./auto-dispatch-rules').applySessionEnv(sessionEnv, isCodeAgent ? opts.purpose : null);
     let codexProfile = null;
     let codeagentConfig = isCodeAgent ? require('./codeagent-config').resolveCodeAgentConfig(process.env) : null;
+    if (isCodeAgent && opts.codeagentPrefixFork?.configDir) codeagentConfig = { ...codeagentConfig, configDir: opts.codeagentPrefixFork.configDir };
     // 自动会话首次按账号定模型；已有固定模型的恢复沿用固定值。
     if (isCodeAgent && codeAgentReadOnly(opts) && !opts.fixedModel) opts = { ...opts, model: undefined, codeagentModelPick: false, codeagentAccountModel: undefined };
     // 号池（core/codeagent-pool.js）：新建时挑一个号，恢复/分支时回到原来那个号；换的只是配置目录。
@@ -2706,6 +2714,7 @@ class SessionManager extends EventEmitter {
       ...(opts.userRenamed ? { userRenamed: true } : {}),
       ...(opts.autoTitleGenerated ? { autoTitleGenerated: true } : {}),
       ...(opts.branchSourceSessionId ? { branchSourceSessionId: String(opts.branchSourceSessionId) } : {}),
+      ...(opts.codeagentPrefixFork ? { codeagentPrefixFork: opts.codeagentPrefixFork } : {}),
       ...(Number.isInteger(Number(opts.branchIndex)) && Number(opts.branchIndex) > 0
         ? { branchIndex: Number(opts.branchIndex) }
         : {}),
@@ -4588,6 +4597,7 @@ try {
       ...(info.userRenamed ? { userRenamed: true } : {}),
       ...(info.autoTitleGenerated ? { autoTitleGenerated: true } : {}),
       ...(info.branchSourceSessionId ? { branchSourceSessionId: info.branchSourceSessionId } : {}),
+      ...(info.codeagentPrefixFork ? { codeagentPrefixFork: info.codeagentPrefixFork } : {}),
       ...(Number.isInteger(Number(info.branchIndex)) && Number(info.branchIndex) > 0
         ? { branchIndex: Number(info.branchIndex) }
         : {}),

@@ -222,6 +222,8 @@ function mountCodeAgentSkillPicker({ document, window, input, host, before, sess
   const footer = document.createElement('div'); footer.className = 'fi-skill-footer';
   const keys = document.createElement('div'); keys.className = 'fi-skill-keys'; keys.textContent = '↑↓ 选择 · Enter 确认 · Esc 关闭'; keys.hidden = true;
   let add = null;
+  add = document.createElement('button'); add.type = 'button'; add.className = 'fi-skill-add'; add.textContent = '添加技能';
+  footer.append(add);
   popup.append(search, list, footer, keys); list.appendChild(note); document.body.appendChild(popup);
   let skills = [], commands = [], commandsProbe = null, choices = [], index = 0, composing = false, mode = 'button', query = '', disposed = false, request = 0, opened = false, warnings = '', error = '', loading = false;
   let pollTimer = null, pollUntil = 0;
@@ -238,6 +240,17 @@ function mountCodeAgentSkillPicker({ document, window, input, host, before, sess
   function changed() { saveDraft(); input.dispatchEvent(new window.Event('input', { bubbles: true })); }
   function choose(row) {
     if (!row) return;
+    if (row.type === 'add') {
+      close();
+      require('./codeagent-skill-add').openSkillAdd({ document, sessionId, invoke: (...args) => ipcRenderer.invoke(...args), notify,
+        onInstalled: async (name, id) => {
+          const result = await refresh();
+          const skill = result?.skills?.find(item => item.name === name || item.name === id.split('@')[0]);
+          const warning = installationWarning(skill, getSession()); if (warning) notify(warning, 'warning');
+        },
+      });
+      return;
+    }
     if (row.type === 'command') {
       const name = row.command.name.toLowerCase();
       if (name === 'skills') { replaceText(''); changed(); open('button'); return; }

@@ -1,0 +1,15 @@
+{
+  "app": "mishu-terminator",
+  "version": "2.1.2",
+  "shell": 1,
+  "date": "2026-11-02",
+  "notes": [
+    "Hub 独立会议室：完整计划、会后动作、历史日志与设置；复用原抢订引擎"
+  ],
+  "code": {
+    "file": "msz-code-2.1.2.zip",
+    "size": 72265,
+    "sha256": "2d1b3022f9e28c8fc121153b82c2cf27f3c0023f2378fda57073a101cb8d97f1"
+  },
+  "signature": "94d13a4f4b90f37d8084337fd7fc104cfa139bad254eee3d334ec3fb6550a8b6919d2161fec2a0a1d82a35c2eec98bbd923282f00f803104bb0e2902f03e3a02"
+}

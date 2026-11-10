@@ -25,6 +25,7 @@ function installColdwhiteShell(doc = globalThis.document) {
   const panelIds = ['team-page', 'cloud-page', 'hub-workspace', 'rules-panel', 'writing-panel', 'account-page', 'codeagent-accounts-page', 'xresearch-panel', 'study-panel', 'progress-panel'];
   const watched = new Set();
   const navigation = ['btn-home','btn-rules','btn-assistant','btn-company-assistant','btn-company-meeting','btn-company-ppt',
+    'btn-company-rooms',
     'btn-company-forum','btn-company-attendance','btn-research','btn-study','btn-progress','btn-wireless','btn-rail-memo','btn-rail-capabilities','btn-cloud','btn-team','btn-rail-accounts','btn-writing'];
   let scheduled = false;
   const sync = () => {
@@ -54,6 +55,7 @@ function installColdwhiteShell(doc = globalThis.document) {
       if (current === 'btn-home' && doc.body.classList.contains('company-assistant-page-open')) current = 'btn-company-assistant';
       if (current === 'btn-home' && doc.body.classList.contains('company-meeting-page-open')) current = 'btn-company-meeting';
       if (current === 'btn-home' && doc.body.classList.contains('company-ppt-page-open')) current = 'btn-company-ppt';
+      if (current === 'btn-home' && doc.body.classList.contains('company-rooms-page-open')) current = 'btn-company-rooms';
       // 公司版「论坛」页（core/company-forum）
       if (current === 'btn-home' && doc.body.classList.contains('company-forum-page-open')) current = 'btn-company-forum';
       // 公司版「考勤」页（core/company-attendance）

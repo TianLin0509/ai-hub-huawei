@@ -181,6 +181,7 @@ function buildSessionResumeMeta(session, overrides = {}) {
     model: sessionModelId(session),
     ...(/^codeagent(?:-resume)?$/.test(session.kind) ? { codeagentModelPick: session.codeagentModelPick === true } : {}),
     ...(session.codeagentForkSourceSessionId ? { codeagentForkSourceSessionId: session.codeagentForkSourceSessionId } : {}),
+    ...(session.codeagentPrefixFork ? { codeagentPrefixFork: session.codeagentPrefixFork } : {}),
     ...(session.codeagentPoolAccount ? { codeagentPoolAccount: session.codeagentPoolAccount, codeagentPoolLabel: session.codeagentPoolLabel || '' } : {}),
     ...(session.companyProxyAccount ? { companyProxyAccount: session.companyProxyAccount, companyProxyLabel: session.companyProxyLabel || '' } : {}),
     effort: session.effort || null,

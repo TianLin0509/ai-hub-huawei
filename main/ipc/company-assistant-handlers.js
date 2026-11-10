@@ -35,6 +35,29 @@ function registerCompanyAssistantIpc(ipcMain, service) {
     'ppt-status': async () => ({ ok: true, ppt: await service.ppt.refresh({ force: true }) }),
     'ppt-query': request => service.ppt.execute(request?.op || 'status', request || {}),
     'ppt-open': request => service.ppt.open(String(request?.id || '')),
+    'room-status': async () => { await service.rooms.tick(); return { ok: true, rooms: service.rooms.status() }; },
+    'room-details': () => ({ ok: true, rooms: service.rooms.details() }),
+    'room-open-folder': async request => {
+      const names = { data: '', logs: 'logs', screenshots: 'screenshots' };
+      if (!Object.hasOwn(names, request?.kind)) throw new Error('不支持的会议室目录');
+      const fs = require('node:fs'), path = require('node:path');
+      const dir = path.join(service.rooms.home(), names[request.kind]);
+      fs.mkdirSync(dir, { recursive: true });
+      const error = await require('electron').shell.openPath(dir);
+      if (error) throw new Error(error);
+      return { ok: true };
+    },
+    'room-command': request => service.rooms.command(request?.op, request?.rules || {}, { user: true }),
+    'room-connect': async () => ({ ok: true, rooms: await service.rooms.ensure({ user: true }) }),
+    'room-reconnect': async () => ({ ok: true, rooms: await service.rooms.reconnect() }),
+    'room-discover': async () => ({ ok: true, rooms: await service.rooms.discover() }),
+    'room-install': async () => ({ ok: true, rooms: await service.rooms.install() }),
+    'room-pick': async () => {
+      const { dialog } = require('electron');
+      const r = await dialog.showOpenDialog({ title: '选择秘书终结者', properties: ['openFile'], filters: [{ name: '秘书终结者', extensions: ['exe'] }] });
+      if (r.canceled || !r.filePaths[0]) return { ok: true, canceled: true };
+      return { ok: true, rooms: service.rooms.useExecutable(r.filePaths[0]) };
+    },
     'ppt-pick-index': async () => {
       const { dialog } = require('electron');
       const r = await dialog.showOpenDialog({ title: '选择 PPT Doctor 文字索引', properties: ['openFile'], filters: [{ name: 'SQLite 索引', extensions: ['db', 'sqlite', 'sqlite3'] }] });

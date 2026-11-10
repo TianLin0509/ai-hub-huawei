@@ -48,6 +48,7 @@ const RESUME_META_FIELDS = [
   'codeagentRequestedModel',
   'codeagentLaunchModel',
   'codeagentForkSourceSessionId',
+  'codeagentPrefixFork',
   'codeagentPoolAccount',
   'codeagentPoolLabel',
   'companyProxyAccount',
@@ -353,6 +354,7 @@ function handlePersistSessions(list, meetingList, deps, { deferStateSave = false
     if (authoritative?.deepseekRoute && !session.deepseekRoute) session.deepseekRoute = authoritative.deepseekRoute;
     if (typeof authoritative?.codeagentModelPick === 'boolean') session.codeagentModelPick = authoritative.codeagentModelPick;
     if (authoritative?.codeagentForkSourceSessionId) session.codeagentForkSourceSessionId = authoritative.codeagentForkSourceSessionId;
+    if (authoritative?.codeagentPrefixFork) session.codeagentPrefixFork = authoritative.codeagentPrefixFork;
     if (authoritative?.codeagentRouteModel) session.codeagentRouteModel = authoritative.codeagentRouteModel;
     for (const field of ['codeagentActualModel', 'codeagentRequestedModel', 'codeagentLaunchModel']) {
       if (authoritative?.[field]) session[field] = authoritative[field];

@@ -23,6 +23,7 @@ const { noticeBus } = require('./notice-bus');
 const { PhoneChannel, DEFAULT_PHONE, PHONE_NOTE, validateExtraIds } = require('./phone');
 const { HubTools } = require('./hub-tools');
 const { PptLibrary } = require('./ppt-library');
+const { RoomBooking } = require('./rooms');
 const { AuthKeeper, authFailure } = require('./auth-keeper');
 const { AssistantMemory } = require('./memory');
 const { AssistantQuery } = require('./query-tool');
@@ -174,6 +175,7 @@ class CompanyAssistant {
     this.tools = deps.noTools ? null : new HubTools(this, deps);
     this.phone = new PhoneChannel(this, deps);
     this.ppt = new PptLibrary(this, deps);
+    this.rooms = new RoomBooking(this, deps);
     this.auth = new AuthKeeper(this);
     this.cliInstaller = require('./welink-install').createWelinkInstaller({ dir: path.join(this.dir, 'tools', 'welink-cli'), configure: exe => this.useCliPath(exe), onState: () => this.changed(), ...(deps.welinkInstall || {}) });
     this.memory = new AssistantMemory(this);
@@ -256,6 +258,11 @@ class CompanyAssistant {
         if (!Array.isArray(patch.ppt.roots) || patch.ppt.roots.length > 3 || patch.ppt.roots.some(p => typeof p !== 'string' || !path.isAbsolute(p))) throw new Error('PPT 索引请选择最多 3 个绝对路径的文件夹');
         next.ppt.roots = [...new Set(patch.ppt.roots.map(p => path.resolve(p)))];
       }
+    }
+    if (patch.rooms && typeof patch.rooms === 'object') {
+      next.rooms = { ...(s.rooms || {}) };
+      for (const key of ['home', 'exePath']) if (key in patch.rooms) next.rooms[key] = String(patch.rooms[key] || '').trim();
+      if ('enabled' in patch.rooms) next.rooms.enabled = !!patch.rooms.enabled;
     }
     this.write('settings.json', next);
     this.changed();
@@ -437,6 +444,7 @@ class CompanyAssistant {
     this.prepareWorkspace();
     this.startTools();
     this.phone.start();
+    this.rooms.start();
     if (!this.deps.noTimer) void this.ppt.refresh().catch(e => console.warn('[company-assistant] ppt', e.message));
     this.startTimers();
   }
@@ -493,15 +501,18 @@ class CompanyAssistant {
     this.stopTimers();
     clearInterval(this.meetings.timer); this.meetings.timer = null;
     this.phone.close();
+    this.rooms.close();
     if (this.lanes.ppt.job || this.lanes.ppt.queue.length) this.startPptCollector();
   }
   resume() {
     if (!this.paused) return;
     this.paused = false;
     this.meetings.start(); this.phone.start();
+    this.rooms.start();
     this.startTimers();
   }
   close() { this.closed = true; this.digest.close(); this.petReminders.close(); this.stopPptCollector(); this.stopTimers(); this.meetings.close(); this.loginStop?.abort(); this.auth.close(); this.phone.close(); this.ppt.close?.();
+    this.rooms.close();
     for (const id of Object.values(this.warm)) this.retire(id);
     this.warm = {};
     this.tools?.close();
@@ -1822,6 +1833,7 @@ class CompanyAssistant {
       briefJob: this.lanes.brief.job ? { sentAt: this.lanes.brief.job.sentAt || null } : null, pptQueued: this.lanes.ppt.queue.length + (this.lanes.ppt.job ? 1 : 0),
       queued: this.queue.length, session: sid ? { id: sid, open: !!this.deps.getSession(sid), busy: this.sessionBusy(sid) } : null, tools: this.toolsStatus(),
       notices: [...this.petReminders.notices(), ...st.notices.map(notice => visibleDigest(notice, this.doneSet()))].sort((a, b) => b.at - a.at).slice(0, 10), commitments: st.commitments, phone: this.phone.status(), ppt: this.ppt.status(),
+      rooms: this.rooms.status(),
     };
   }
   nextBriefAt(s, now) {

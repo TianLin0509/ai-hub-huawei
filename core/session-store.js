@@ -148,6 +148,7 @@ function _buildSessionPayload(hubId, data) {
     codeagentModelPick: typeof data.codeagentModelPick === 'boolean' ? data.codeagentModelPick : null,
     codeagentRouteModel: typeof data.codeagentRouteModel === 'string' ? data.codeagentRouteModel : null,
     codeagentForkSourceSessionId: typeof data.codeagentForkSourceSessionId === 'string' ? data.codeagentForkSourceSessionId : null,
+    ...(data.codeagentPrefixFork?.version === 1 ? { codeagentPrefixFork: data.codeagentPrefixFork } : {}),
     // 号池会话用的是号池里哪个号（core/codeagent-pool.js）；恢复时回到同一个号的配置目录。
     codeagentPoolAccount: typeof data.codeagentPoolAccount === 'string' ? data.codeagentPoolAccount : null,
     codeagentPoolLabel: typeof data.codeagentPoolLabel === 'string' ? data.codeagentPoolLabel : null,

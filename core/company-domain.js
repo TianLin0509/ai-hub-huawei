@@ -15,7 +15,8 @@ const { domainFromEmail, normalizeDomain } = require('./company-forum/sites');
 
 const PUBLIC_MAIL = /^(gmail\.com|googlemail\.com|outlook\.com|hotmail\.com|live\.com|msn\.com|icloud\.com|me\.com|yahoo\.com|qq\.com|foxmail\.com|163\.com|126\.com|yeah\.net|sina\.com|sina\.cn|sohu\.com|aliyun\.com|139\.com|proton\.me|protonmail\.com|users\.noreply\.github\.com)$/i;
 const CACHE = 'company-domain.json';
-const DEFAULT_DOMAIN = '';
+// 和 AgentCenter 技能安装用的同一个内网地址取域名（这个地址已在成员版放行清单里）。
+const DEFAULT_DOMAIN = new URL('https://agent.huawei.com/').hostname.split('.').slice(-2).join('.');
 
 function readJson(file, fallback) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } }
 function companyDomainOf(email) { const d = domainFromEmail(email); return d && !PUBLIC_MAIL.test(d) ? d : ''; }

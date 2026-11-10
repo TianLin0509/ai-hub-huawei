@@ -277,6 +277,7 @@ function registerSessionIpc(ipcMain, deps) {
   };
   ipcMain.handle('fork-session', (_e, request) => forkSession(request));
 
+  require('./codeagent-prefix-fork-handlers').registerPrefixForkIpc(ipcMain, { ...deps, forkSiblingPool, forkSession });
 
   ipcMain.handle('close-session', async (_e, sessionId) => {
     cancelModelConfirmation?.(sessionId);
@@ -585,6 +586,11 @@ function registerSessionIpc(ipcMain, deps) {
       return { ok: true, ...inventory, commands: require('../../core/codeagent-command-cache').readCommands(dataDir, session), commandsProbe: commandsProbeScheduler.state(session) };
     } catch (error) { return { ok: false, error: '读取技能失败：' + error.message, skills: [] }; }
   });
+  const skillInstaller = require('../../core/codeagent-skill-install').createSkillInstaller({
+    getSession: id => sessionManager.getSession(id), dataDir: require('../../core/data-dir').getHubDataDir(),
+    openExternal: url => require('electron').shell.openExternal(url),
+  });
+  ipcMain.handle('codeagent:skill-install', (_event, payload) => skillInstaller(payload));
   ipcMain.handle('codeagent:commands-open', async (_event, payload = {}) => {
     try { return await require('../../core/group-chat-watcher').openCodeAgentCommands(payload.sessionId); }
     catch (error) { return { ok: false, error: error.message }; }
