@@ -10,17 +10,18 @@ class CompanyAiTasks {
     for (const id of fs.readdirSync(this.root).filter(x => /^[a-f0-9-]{36}$/.test(x))) {
       try { const file = path.join(this.root,id,'task.json'), job = JSON.parse(fs.readFileSync(file,'utf8')); this.owned.add(job.sessionId);
         if (['queued','starting','running'].includes(job.state)) { job.state='interrupted';job.error='Hub 重启前未完成，请重新提交；不会自动重复执行。';fs.writeFileSync(file,JSON.stringify(job),'utf8'); }
+        if (job.cleanup) fs.rmSync(path.join(this.root,id),{recursive:true,force:true}); // 用完即删的任务：上次没删掉的这里回收
       } catch {}
     }
   }
   sessionPlan({opts={},id}={}) { return opts.purpose==='company-ai' || this.owned.has(opts.id||id) ? {} : null; }
   save(job) { const file=path.join(this.root,job.id,'task.json');fs.writeFileSync(file+'.tmp',JSON.stringify(job,null,2),'utf8');fs.renameSync(file+'.tmp',file);this.d.onChanged?.({id:job.id,state:job.state,sessionId:job.sessionId,label:job.label,error:job.error}); }
-  run({system='',text='',label='AI 任务',timeoutMs=600000}={}, {signal}={}) {
+  run({system='',text='',label='AI 任务',timeoutMs=600000,cleanup=false}={}, {signal}={}) {
     if(this.closed)return Promise.reject(Error('公司 AI 服务已关闭'));
     if(signal?.aborted)return Promise.reject(Error('已取消 AI 任务'));
     if(typeof text!=='string'||!text.trim()||text.length>160000||typeof system!=='string'||system.length>24000)return Promise.reject(Error('AI 任务内容无效或过长，请分段处理'));
     if(this.queue.length>=30)return Promise.reject(Error('CodeAgent 任务较多，请稍后重试'));
-    const id=randomUUID(),sessionId=randomUUID(),job={id,sessionId,label:String(label).slice(0,80),state:'queued',createdAt:Date.now()};
+    const id=randomUUID(),sessionId=randomUUID(),job={id,sessionId,label:String(label).slice(0,80),state:'queued',createdAt:Date.now(),...(cleanup?{cleanup:true}:{})};
     this.owned.add(sessionId);fs.mkdirSync(path.join(this.root,id));fs.writeFileSync(path.join(this.root,id,'input.json'),JSON.stringify({instruction:system,material:text}),'utf8');this.save(job);
     return new Promise((resolve,reject)=>{
       const item={job,signal,resolve,reject,timeoutMs:Number.isFinite(timeoutMs)?Math.max(1000,Math.min(timeoutMs,1200000)):600000,settled:false};
@@ -33,6 +34,8 @@ class CompanyAiTasks {
     if(item.settled)return;item.settled=true;item.signal?.removeEventListener('abort',item.abort);
     Object.assign(item.job,{state:error?(item.cancelled?'cancelled':'error'):'done',endedAt:Date.now(),...(error?{error:error.message}:{result})});
     try{this.save(item.job);}catch(e){error=error||e;}
+    // 含聊天原话的任务不把材料和结果留在盘上；删不掉（目录还被占用）就留给下次启动回收
+    if(item.job.cleanup)try{fs.rmSync(path.join(this.root,item.job.id),{recursive:true,force:true});}catch{}
     if(error)item.reject(error);else item.resolve({text:result,model:'CodeAgent',jobId:item.job.id,sessionId:item.job.sessionId});
   }
   async execute(item) {
