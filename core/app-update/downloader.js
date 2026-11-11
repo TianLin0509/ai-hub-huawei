@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const { createHash } = require('crypto');
 const { retryOnce } = require('../transient-retry');
+const ownGate = require('../own-gate');
 
 const IDLE_TIMEOUT_MS = 20000;
 const CONNECT_TIMEOUT_MS = 15000;
@@ -65,7 +66,15 @@ async function openResponse(fetchImpl, url, signal, timeoutMs) {
 }
 
 // 查版本：各源并行取清单，返回每个源的结果和版本最高的那份。
-async function checkManifests({ sources, fetchImpl, validate, timeoutMs = MANIFEST_TIMEOUT_MS, signal, retry = null }) {
+// gate（5.6.2）：true / 'auto' 时，全部源都失败就问一次统一放行入口（core/own-gate.js），哪台自家主机被拦就放行，然后再取一遍；
+// 'auto' 只做后台自动放行、不弹窗。一键更新和命令行工具安装自己处理放行，不传。
+async function checkManifests({ gate = false, ...args }) {
+  const results = await checkManifestsOnce(args);
+  if (!gate || args.signal?.aborted || results.some(r => r.ok)) return results;
+  for (const r of results) if (await ownGate.pass(r.url, { interactive: gate !== 'auto' }) === 'passed') return checkManifestsOnce(args);
+  return results;
+}
+async function checkManifestsOnce({ sources, fetchImpl, validate, timeoutMs = MANIFEST_TIMEOUT_MS, signal, retry = null }) {
   const results = await Promise.all(sources.map(async source => {
     const startedAt = Date.now(), controller = new AbortController();
     let response, timer, timedOut = false, rejectStop;
@@ -192,7 +201,14 @@ async function downloadOne({ source, url, expect, dest, fetchImpl, signal, onPro
 }
 
 // 按顺序逐个源下载，任何一个成功就停。attempts 记下每个源的结果（成功/失败 + 原因），给界面显示。
-async function downloadWithFallback({ sources, version, expect, dest, fetchImpl, signal, onProgress, onAttempt,
+// gate：同 checkManifests——全部源都失败时放行被拦的自家主机，再下一遍。
+async function downloadWithFallback({ gate = false, ...args }) {
+  const result = await downloadAll(args);
+  if (!gate || result.ok || result.cancelled) return result;
+  for (const a of result.attempts) if (await ownGate.pass(a.url, { interactive: gate !== 'auto' }) === 'passed') return downloadAll(args);
+  return result;
+}
+async function downloadAll({ sources, version, expect, dest, fetchImpl, signal, onProgress, onAttempt,
   idleTimeoutMs = IDLE_TIMEOUT_MS, connectTimeoutMs = CONNECT_TIMEOUT_MS }) {
   const attempts = [];
   for (const source of sources) {

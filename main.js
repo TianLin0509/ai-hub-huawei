@@ -4456,6 +4456,12 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
           openVisible: gateVisible,
           onChange: view => sendToRenderer('net-pass:state', view) });
         firstRunNetPass = netPass;
+        // 各下载功能失败时的统一放行入口（core/own-gate.js）：被拦才动手，成员版先后台自动点，不行或公开版弹出放行页。
+        require('./core/own-gate').setHandler(async (url, opts) => {
+          const r = await netPass.passUrl(url, opts);
+          if (r === 'passed') { try { ownUnblocker.passed(); } catch (_) {} }
+          return r;
+        });
         ipcMain.handle('net-pass:status', async (_e, opts) => { if (opts && opts.refresh) void netPass.refresh(); return netPass.status(); });
         ipcMain.handle('net-pass:run', async () => { const r = await netPass.passAll(); if (r.results.some(x => x.result === 'ok')) { try { ownUnblocker.passed(); } catch (_) {} } return r; });
         // 所有「打开放行页」按钮都走这里：传进来的可能是被拦的下载文件地址，一律换成那台主机的放行小页面。

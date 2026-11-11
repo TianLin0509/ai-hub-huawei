@@ -70,7 +70,7 @@ class MeetingAsr {
       if (!await this.partReady(file, part)) {
         if (this.closed) throw new Error('Hub 已关闭，安装已中断');
         this.abort = new AbortController();
-        const result = await downloadWithFallback({ sources: this.sources, version: this.pack.version, dest: file, fetchImpl: doFetch, signal: this.abort.signal,
+        const result = await downloadWithFallback({ gate: true, sources: this.sources, version: this.pack.version, dest: file, fetchImpl: doFetch, signal: this.abort.signal,
           expect: { file: part.file, bytes: part.size, sha256: part.sha256 },
           onProgress: p => { const got = done + p.received, rate = (fetched + p.received) / Math.max(1, (Date.now() - started) / 1000); this.phase = `下载本地转写组件 ${fmtBytes(got)} / ${fmtBytes(total)}${fetched + p.received > 2 * 1024 * 1024 ? ' · 还要' + minutes((total - got) / rate) : ''} · ${p.sourceName}`; } });
         fetched += part.size;

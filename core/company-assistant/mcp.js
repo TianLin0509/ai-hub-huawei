@@ -43,19 +43,19 @@ const allTools = [
   { name: 'ppt_materials', description: '查团队PPT素材库（PPT Doctor 素材库与团队素材包，一个素材是一个原生形状：栏头、光带、箭头、编号、卡片等）。不填 query 和 category 先看分类与数量；按分类或名称词筛，返回名称、分类、素材文件与页码。用户要做页、改页或问用什么版式元素时用；推荐时写素材名和分类，告诉用户在 PPT 页「素材」Tab 选中后点「插入到当前 PPT」。只读。', annotations: { readOnlyHint: true }, inputSchema: schema({ query: string, category: string, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 50 } }) },
   { name: 'list_sessions', description: '列出这台电脑 Hub 里的会话：编号、标题、目录、状态（stuck 卡住等确认 / running 运行中 / reply 答完等回复 / idle 空闲 / closed 没打开）。用户问「现在有哪些会话」「谁卡住了」时先调它。', annotations: { readOnlyHint: true }, inputSchema: schema({}) },
   { name: 'read_session', description: '看一个会话的最新回答（默认末尾 4000 字）；卡住时附终端画面（题目和选项）。用户问某个会话做到哪了时用。', annotations: { readOnlyHint: true }, inputSchema: schema({ sessionId: id, maxChars: { type: 'number' }, screen: { type: 'boolean', description: '没卡住也要看终端画面时填 true' } }, ['sessionId']) },
-  { name: 'send_session', description: '给一个空闲或答完的会话发一段话（推进、追问、改要求），直接执行。会话关着会先自动恢复。发出后 Hub 自动盯着它，做完或卡住推到手机，不用轮询。', inputSchema: schema({ sessionId: id, text: string }, ['sessionId', 'text']) },
-  { name: 'create_session', description: '新开一个 CodeAgent 会话并交代任务，直接执行。cwd 是工作目录（用户提到项目时填它的完整路径，不填就用 Hub 默认的新目录）。Hub 自动盯着它，做完或卡住推到手机。', inputSchema: schema({ title: string, text: string, cwd: string }, ['title', 'text']) },
-  { name: 'watch_session', description: '盯着一个会话：它下一次答完或卡住时推到手机（24 小时内有效）。用户说「做完告诉我」时用。', inputSchema: schema({ sessionId: id }, ['sessionId']) },
+  { name: 'send_session', description: '给一个空闲或答完的会话发一段话（推进、追问、改要求），直接执行。会话关着会先自动恢复。发出后 Hub 自动盯着它，做完或卡住时提醒用户（开了手机对话推到手机群，没开弹电脑桌面通知），不用轮询。', inputSchema: schema({ sessionId: id, text: string }, ['sessionId', 'text']) },
+  { name: 'create_session', description: '新开一个 CodeAgent 会话并交代任务，直接执行。cwd 是工作目录（用户提到项目时填它的完整路径，不填就用 Hub 默认的新目录）。Hub 自动盯着它，做完或卡住时提醒用户（开了手机对话推到手机群，没开弹电脑桌面通知）。', inputSchema: schema({ title: string, text: string, cwd: string }, ['title', 'text']) },
+  { name: 'watch_session', description: '盯着一个会话：它下一次答完或卡住时提醒用户（开了手机对话推到手机群，没开弹电脑桌面通知），24 小时内有效。用户说「做完告诉我」时用。', inputSchema: schema({ sessionId: id }, ['sessionId']) },
   { name: 'press_keys', description: '会话卡在确认或选择上（stuck）时替用户按键回答，例如选第 2 项填 ["2"]，确认填 ["enter"]，取消填 ["esc"]。先用 read_session 看清画面再按；按完返回新画面。', inputSchema: schema({ sessionId: id, keys: { type: 'array', items: { type: 'string', enum: ['enter', 'esc', 'up', 'down', 'tab', 'space', 'y', 'n', '1', '2', '3', '4', '5', '6', '7', '8', '9'] } } }, ['sessionId', 'keys']) },
   { name: 'stop_session', description: '停止一个正在运行的会话这一轮（同电脑上的停止键）。只在用户明确要求停下时用。', inputSchema: schema({ sessionId: id }, ['sessionId']) },
 ];
 
 // 按会话用途只挂需要的工具（5.5.11）：工具描述每次请求都要读，少挂一个就少读一段。
-// desk=电脑上问助理，phone=手机上问（多会话管理），ppt=PPT 页，brief=每天的简报；没给的旧会话挂全部（升级前开的会话）。
+// desk=电脑上问助理，phone=手机上问，两者都带多会话管理（5.6.2：电脑上原先没挂，助理答「查不到其他会话」）；ppt=PPT 页，brief=每天的简报；没给的旧会话挂全部（升级前开的会话）。
 const WELINK = ['welink_find', 'welink_inbox', 'welink_message', 'welink_meetings', 'welink_mail'];
 const SESSIONS = ['list_sessions', 'read_session', 'send_session', 'create_session', 'watch_session', 'press_keys', 'stop_session'];
 const TOOLSETS = {
-  desk: [...WELINK, 'assistant_memory', 'pet_remind'],
+  desk: [...WELINK, 'assistant_memory', 'pet_remind', ...SESSIONS],
   phone: [...WELINK, 'assistant_memory', 'pet_remind', ...SESSIONS],
   ppt: ['ppt_find', 'ppt_read', 'ppt_library', 'ppt_lookup_frame', 'ppt_imgtext', 'ppt_materials'],
   brief: ['welink_inbox', 'welink_message', 'welink_meetings'],

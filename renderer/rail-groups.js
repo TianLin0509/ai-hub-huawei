@@ -187,10 +187,10 @@ function installRailGroups(doc = globalThis.document) {
         const nextHtml = activeIcon ? activeIcon.innerHTML : state.baseIconHtml;
         if (nextHtml && icon.innerHTML !== nextHtml) icon.innerHTML = nextHtml;
       }
-      const suffix = state.trigger.dataset.titleSuffix || '';
-      state.trigger.title = label
-        ? `${base}；当前：${label}；悬停展开${suffix}`
-        : `${base}；悬停展开${suffix}`;
+      // 分组入口不带悬停提示：鼠标一移上来就展开子项，提示卡会正好盖在子项上，点不到后面的内容（2026-11-11 用户截图）。
+      // 「当前是哪一页」写在 aria-label 里，读屏照常能读到。
+      state.trigger.removeAttribute('title');
+      state.trigger.removeAttribute('data-hub-tip');
       state.trigger.setAttribute('aria-label', label ? `${base}（当前：${label}）` : base);
       // 选中组里的某一项之后，面板一开（这一项变成当前页）就把 dock 收掉。
       // 不能只靠点击事件：资源 / 回顾 由 hub-workspaces 在捕获阶段 stopImmediatePropagation，

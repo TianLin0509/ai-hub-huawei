@@ -5,6 +5,8 @@ output/
 *.log
 *.exe
 *.zip
+# 会议室控制组件要随源码走：公开库由生成的目录 git add 而来，被上一行忽略后 5.6.0 公开版缺这个包，报「秘书控制组件校验不通过」
+!core/company-assistant/room-component/msz-code-*.zip
 .env
 .env.*
 auth.json

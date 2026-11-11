@@ -22,9 +22,10 @@ const newerVersion = (a, b) => { const x = String(a).split('.').map(Number), y =
 
 // 依次试各下载源，取第一个给出有效清单的。
 async function teamPackManifest(deps = {}) {
-  const fetch = require('./fetch-util').resolveFetch(deps.pptDownloadFetch);
+  const fetch = require('../own-gate').gatedFetch(require('./fetch-util').resolveFetch(deps.pptDownloadFetch));
   const { reasonOf } = require('../app-update/downloader');
   const reasons = [];
+  let gateNote = '';
   for (const base of deps.pptTeamPackUrls || TEAM_PACK_SOURCES) {
     try {
       const response = await fetch(new URL('component.json', base).href, { signal: AbortSignal.timeout(12000) });
@@ -33,8 +34,10 @@ async function teamPackManifest(deps = {}) {
       const hex = v => /^[0-9a-f]{64}$/.test(v || '');
       if (manifest?.kind !== 'materials' || !/^\d+\.\d+\.\d+$/.test(manifest.version) || !hex(manifest.files?.[TEAM_PACK_FILE]?.hash) || !hex(manifest.archive?.hash)) throw new Error('清单格式不对（可能被网络拦截页替换）');
       return { base, manifest };
-    } catch (error) { reasons.push(reasonOf(error)); }
+    } catch (error) { reasons.push(reasonOf(error)); if (error.blocked || error.passed) gateNote = error.message; }
   }
+  // 被公司网络确认页拦住的，直接说放行的事（core/own-gate.js），不拿最后一个源的原因顶替。
+  if (gateNote) throw new Error(gateNote);
   throw new Error(`团队素材包暂时下载不了：${reasons[reasons.length - 1]}。请检查网络后重试，或用「打开素材包…」打开同事发来的素材包文件`);
 }
 const MAX_ITEMS = 2000;
@@ -138,16 +141,19 @@ class PptMaterials {
   }
   async downloadTeamPack() {
     const { base, manifest } = await teamPackManifest(this.deps);
-    const fetch = require('./fetch-util').resolveFetch(this.deps.pptDownloadFetch);
+    const fetch = require('../own-gate').gatedFetch(require('./fetch-util').resolveFetch(this.deps.pptDownloadFetch));
     const response = await fetch(new URL('component.zip', base).href, { signal: AbortSignal.timeout(180000) });
     if (!response.ok) throw new Error(`团队素材包下载失败（HTTP ${response.status}），请重试`);
     const archive = Buffer.from(await response.arrayBuffer());
     if (sha256(archive) !== manifest.archive.hash) throw new Error('下载的团队素材包校验不一致（可能被网络改写），请重试');
     const dir = this.teamPackDir(), stamp = `${process.pid}-${Date.now()}`;
-    const zipTmp = path.join(dir, `download-${stamp}.zip`), packTmp = path.join(dir, `download-${stamp}.pptx`);
+    // 临时文件不用 .pptx 后缀（5.6.2）：公司电脑的文档安全软件会扫描并占住新写出的 Office 文件，
+    // 紧跟着的改名、删除报 EPERM（2026-11-11 用户截图）。清理一律尽力而为，删不掉的留给下次。
+    const zipTmp = path.join(dir, `download-${stamp}.zip`), packTmp = path.join(dir, `download-${stamp}.part`);
+    const tidy = file => { try { fs.rmSync(file, { force: true }); } catch { /* 被占用：下次下载时再清 */ } };
     fs.mkdirSync(dir, { recursive: true });
     // 上次下载中途崩掉留下的半成品，顺手清掉。
-    for (const name of fs.readdirSync(dir)) if (/^download-/.test(name)) fs.rmSync(path.join(dir, name), { force: true });
+    for (const name of fs.readdirSync(dir)) if (/^download-/.test(name)) tidy(path.join(dir, name));
     try {
       const { openZip, readEntry } = require('./ppt-slide-preview');
       fs.writeFileSync(zipTmp, archive);
@@ -156,11 +162,19 @@ class PptMaterials {
       fs.writeFileSync(packTmp, pack);
       const items = readPack(packTmp).length;
       if (!items) throw new Error('团队素材包里没有读到素材，请重试');
-      fs.renameSync(packTmp, this.teamPackFile());
+      // 换掉旧文件：旧素材包正被 PowerPoint 或安全软件占着时改名会报 EPERM/EBUSY，隔半秒再试，最多约 5 秒。
+      for (let attempt = 0; ; attempt += 1) {
+        try { fs.renameSync(packTmp, this.teamPackFile()); break; }
+        catch (error) {
+          if (!['EPERM', 'EBUSY', 'EACCES'].includes(error.code)) throw error;
+          if (attempt >= 10) throw new Error('团队素材包已下载好，但素材文件正被别的程序占用（PowerPoint 开着它，或安全软件在扫描），没能换上；请关掉用到素材包的 PPT 后再点一次下载');
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      }
       fs.writeFileSync(path.join(dir, 'installed.json'), JSON.stringify({ version: manifest.version, items, installedAt: Date.now() }));
       this.latest = manifest.version; this.cache = null;
       return { ok: true, version: manifest.version, items };
-    } finally { fs.rmSync(zipTmp, { force: true }); fs.rmSync(packTmp, { force: true }); }
+    } finally { tidy(zipTmp); tidy(packTmp); }
   }
   config() { return this.lib.config(); }
   dir() { return this.config().materialsDir || path.join(doctorDataDir(this.env), 'materials'); }

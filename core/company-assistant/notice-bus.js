@@ -6,7 +6,9 @@ const { EventEmitter } = require('node:events');
 
 const KINDS = Object.freeze(['brief', 'meeting-prep', 'awaiting-reply', 'commitment-due', 'overbooked', 'day-summary', 'keyword', 'reminder', 'digest',
   // 2026-11-09：WeLink 续期失败（以前漏登记，这条提醒一直发不出去）、桌宠上问的回答、会议室结果、考勤红线。
-  'welink-login', 'answer', 'room', 'attendance']);
+  'welink-login', 'answer', 'room', 'attendance',
+  // 5.6.2：助理盯着的会话做完或卡住（没开手机对话时走这里弹桌面通知）。
+  'session']);
 const KEEP = 50;
 
 class NoticeBus extends EventEmitter {

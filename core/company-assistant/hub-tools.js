@@ -156,7 +156,7 @@ class HubTools {
       const receipt = await this.deps.sendPrompt(r.id, text, require('node:crypto').randomUUID());
       if (!receipt || receipt.notSent || (receipt.ok === false && !receipt.unconfirmed && receipt.sendStatus !== 'stuck')) throw new Error(receipt?.error || '没有发进这个会话');
       this.a.phone?.watch(r.id, { baseline, title: r.title, why: 'send' });
-      return { ok: true, sessionId: r.id, title: r.title, watched: true, note: '已发出。它做完或卡住时 Hub 会推到手机群，不用你轮询。' };
+      return { ok: true, sessionId: r.id, title: r.title, watched: true, note: '已发出。它做完或卡住时 Hub 会提醒用户（开了手机对话推到手机群，没开弹电脑桌面通知），不用你轮询。' };
     }
     if (name === 'create_session') {
       const title = String(args.title || '').trim().slice(0, 60) || '助理派的任务', text = String(args.text || '').trim();
@@ -169,12 +169,12 @@ class HubTools {
       this.a.phone?.watch(id, { baseline: null, title, why: 'create' });
       const receipt = await this.deps.sendPrompt(id, text, require('node:crypto').randomUUID());
       if (!receipt || receipt.notSent || (receipt.ok === false && !receipt.unconfirmed && receipt.sendStatus !== 'stuck')) throw new Error('会话已建好，但任务没发进去：' + (receipt?.error || '原因不明'));
-      return { ok: true, sessionId: id, title, cwd: created.cwd || cwd || null, watched: true, note: '已新建并交代任务。做完或卡住时 Hub 会推到手机群。' };
+      return { ok: true, sessionId: id, title, cwd: created.cwd || cwd || null, watched: true, note: '已新建并交代任务。做完或卡住时 Hub 会提醒用户（开了手机对话推到手机群，没开弹电脑桌面通知）。' };
     }
     if (name === 'watch_session') {
       const r = this.find(args.sessionId);
       this.a.phone?.watch(r.id, { baseline: this.lastFinal(r.id)?.id || null, title: r.title, why: 'watch' });
-      return { ok: true, sessionId: r.id, title: r.title, state: r.label, note: '盯上了：它下一次答完或卡住时推到手机群（24 小时内有效）。' };
+      return { ok: true, sessionId: r.id, title: r.title, state: r.label, note: '盯上了：它下一次答完或卡住时提醒用户（开了手机对话推到手机群，没开弹电脑桌面通知），24 小时内有效。' };
     }
     if (name === 'press_keys') {
       const r = this.find(args.sessionId);

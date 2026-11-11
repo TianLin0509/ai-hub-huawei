@@ -68,7 +68,7 @@ function createRuntimeDownload({ dataDir, baseline, sources = SOURCES, fetchImpl
       notify({ phase: 'downloading', received: 0, speed: 0, etaSec: null, error: null, attempts: [] });
       // 清单里是 size，下载器要的是 bytes；文件名、字节数、sha256 一个都不能少。
       const expect = { file: baseline.exe.file, bytes: baseline.exe.size, sha256: baseline.exe.sha256 };
-      const result = await downloadWithFallback({ sources, version: baseline.version, expect, dest: exe,
+      const result = await downloadWithFallback({ gate: true, sources, version: baseline.version, expect, dest: exe,
         fetchImpl: doFetch, signal, idleTimeoutMs, connectTimeoutMs,
         onProgress: p => notify({ received: p.received, total: p.total, speed: p.speed, etaSec: p.etaSec, sourceName: p.sourceName }),
         // url 带上：被公司代理拦截时，界面要让用户自己去浏览器里放行这个网址。

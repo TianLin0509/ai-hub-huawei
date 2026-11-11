@@ -42,7 +42,7 @@ function createDoctorInstaller({ dataDir, onState = () => {}, configure, fetchIm
   const set = patch => { state = { ...state, ...patch }; try { onState(snapshot()); } catch { /* a closed view must not interrupt installation */ } };
   async function perform() {
     abort = new AbortController();
-    const signal = abort.signal, fetch = resolveFetch(fetchImpl);
+    const signal = abort.signal, fetch = require('../own-gate').gatedFetch(resolveFetch(fetchImpl));
     const root = path.resolve(dataDir, 'tools', 'ppt-doctor');
     const job = path.join(root, 'install-' + randomUUID());
     let registered = false;
@@ -64,7 +64,7 @@ function createDoctorInstaller({ dataDir, onState = () => {}, configure, fetchIm
           const bytes = Number(head.headers.get('content-length'));
           if (!head.ok || /text\/html/i.test(head.headers.get('content-type') || '') || !Number.isSafeInteger(bytes) || bytes < 1 || bytes > 4 * 1024 ** 3) throw new Error('完整包大小无法确认或被网络确认页挡住');
           set({ phase: 'downloading', message: '正在下载 PPT Doctor…', version: meta.version, latestVersion: meta.latestVersion, total: bytes });
-          const result = await download({ sources: [{ id: 'doctor', name: new URL(base).hostname, url: meta.url }],
+          const result = await download({ gate: true, sources: [{ id: 'doctor', name: new URL(base).hostname, url: meta.url }],
             expect: { bytes, sha256: meta.sha256 }, dest: path.join(job, 'package.zip'), fetchImpl: fetch, signal,
             onProgress: progress => set(progress) });
           if (!result.ok) throw new Error(result.cancelled ? '已取消' : result.attempts.map(a => a.reason).join('；'));

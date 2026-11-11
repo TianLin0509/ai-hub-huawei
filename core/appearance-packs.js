@@ -151,7 +151,7 @@ function createAppearanceStore({ dataDir, bundledDir = path.join(__dirname, '../
     if (downloading) return state;
     checking = (async () => {
       notify({ phase: 'checking', error: null, checks: [], attempts: [], progress: null });
-      const results = await checkManifests({ sources, fetchImpl: boundedCatalogFetch(fetchImpl, catalogBodyTimeoutMs), validate: validateCatalog });
+      const results = await checkManifests({ sources, fetchImpl: boundedCatalogFetch(fetchImpl, catalogBodyTimeoutMs), validate: validateCatalog, gate: true });
       const best = results.filter(r => r.ok).sort((a, b) => compareVersion(b.manifest.version, a.manifest.version))[0];
       const checks = results.map(({ id, name, ok, reason, blocked, url }) => ({ id, name, ok, reason, blocked, url }));
       if (!best) return notify({ phase: 'error', checks, error: '暂时无法获取头像目录，已安装的头像仍可使用。可以稍后重试或导入头像包。' });
@@ -181,7 +181,7 @@ function createAppearanceStore({ dataDir, bundledDir = path.join(__dirname, '../
       const dest = path.join(root, 'downloads', entry.file);
       const activeAbort = abort;
       const cancellableFetch = (url, options) => fetchImpl(url, { ...options, signal: AbortSignal.any([options.signal, activeAbort.signal]) });
-      const result = await downloadWithFallback({ sources, version: entry.version, expect: entry, dest, fetchImpl: cancellableFetch, signal: abort.signal,
+      const result = await downloadWithFallback({ gate: true, sources, version: entry.version, expect: entry, dest, fetchImpl: cancellableFetch, signal: abort.signal,
         onProgress: progress => notify({ progress }), onAttempt: attempts => notify({ attempts }) });
       if (!result.ok) return notify({ phase: result.cancelled ? 'cancelled' : 'error', error: result.cancelled ? '下载已取消，可以重新下载' : '下载失败，可重试；原有头像没有改变。' });
       install(readJson(dest), entry);

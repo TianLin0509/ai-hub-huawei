@@ -19,7 +19,7 @@ async function downloadDoctor(source = 'mirror', deps = {}) {
   if (!['mirror', 'github'].includes(source)) throw new Error('请选择镜像下载或 GitHub 备用入口');
   let url = GITHUB_DOWNLOAD_URL;
   if (source === 'mirror') {
-    const fetch = resolveFetch(deps.pptDownloadFetch);
+    const fetch = require('../own-gate').gatedFetch(resolveFetch(deps.pptDownloadFetch));
     const bases = deps.pptMirrorUrls || MIRROR_MANIFEST_URLS;
     const reasons = [];
     url = null;

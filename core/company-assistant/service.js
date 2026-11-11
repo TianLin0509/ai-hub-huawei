@@ -67,10 +67,9 @@ const DESK_RULES = [
   '8. 数据只留在这台电脑：不上传、不转发，不在当前目录以外写文件。',
   '9. PPT 素材请我到 PPT 页去找；这里不查 PPT。',
 ].join('\n');
-const PHONE_RULES = [
-  '10. 这句来自手机 WeLink，回答由 Hub 发回我手机，你自己不发消息。',
-  '11. 管这台电脑 Hub 里的其他会话用会话工具，直接执行：list_sessions 看有哪些会话和状态；read_session 看做到哪了；send_session 推进或追问；create_session 新开并交代任务；watch_session 做完时提醒我；卡在确认上先 read_session 看画面再 press_keys；要停用 stop_session。做完用一两句话复述做了什么、交给了哪个会话；派任务时完整保留动作、限制和预期产物，WeLink 内容只给完成任务所需的最少摘要。没有这些工具时告诉我「会话工具没接上，请在助理页点『重开助理会话』」。',
-].join('\n');
+// 管其他会话的规则：电脑上问和手机上问都带（5.6.2 起电脑上也挂会话工具）。
+const SESSION_RULE = '11. 管这台电脑 Hub 里的其他会话用会话工具，直接执行：list_sessions 看有哪些会话和状态；read_session 看做到哪了；send_session 推进或追问；create_session 新开并交代任务；watch_session 做完时提醒我；卡在确认上先 read_session 看画面再 press_keys；要停用 stop_session。做完用一两句话复述做了什么、交给了哪个会话；派任务时完整保留动作、限制和预期产物，WeLink 内容只给完成任务所需的最少摘要。没有这些工具时告诉我「会话工具没接上，请在助理页点『重开助理会话』」。';
+const PHONE_RULES = ['10. 这句来自手机 WeLink，回答由 Hub 发回我手机，你自己不发消息。', SESSION_RULE].join('\n');
 const BRIEF_RULES = '你是我在公司电脑上的工作助理，现在整理今天的工作简报。只读 WeLink，不发消息；数据只留在这台电脑。只按下面的要求输出。';
 const PPT_RULES = [
   '你是我在公司电脑上的 PPT 素材助理，在本机 PPT Doctor 索引和已选的素材文件夹里找页。',
@@ -627,7 +626,7 @@ class CompanyAssistant {
     if (toolset === 'ppt') return PPT_RULES;
     if (toolset === 'brief') return BRIEF_RULES;
     const desk = this.guided() ? AC.ASK_RULES.replace('{{TOOLS}}', AC.WELINK_TOOLS) : DESK_RULES;
-    return toolset === 'phone' ? desk + '\n' + PHONE_RULES : desk;
+    return toolset === 'phone' ? desk + '\n' + PHONE_RULES : this.tools ? desk + '\n' + SESSION_RULE : desk;
   }
   // 5.5.14（2026-11-07）：默认按「作答手册 + Hub 备好的材料」作答；设置里 answerStyle='classic' 回到 5.5.13 的写法。
   guided() { return this.settings().answerStyle !== 'classic'; }
@@ -1526,8 +1525,16 @@ class CompanyAssistant {
     job.materialItems = (String(material.text || '').match(/\[(?:msg|mail|mtg|meeting|cal):/g) || []).length;
     const book = AC.playbook(material.intents), cut = book.indexOf('\n\n作答手册 · ');
     const general = cut < 0 ? book : book.slice(0, cut), specific = cut < 0 ? '' : book.slice(cut + 2);
-    const parts = [specific, `当前时间（上海）：${D.displayTime(now)}`, this.memory.context(job.prompt), material.text, this.recentHistory(job)].filter(Boolean);
+    const parts = [specific, `当前时间（上海）：${D.displayTime(now)}`, this.memory.context(job.prompt), material.text, this.sessionsBlock(job.prompt), this.recentHistory(job)].filter(Boolean);
     return [this.instructions(toolset), general, '---', ...parts, '---', job.prompt].join('\n\n');
+  }
+  // 问到其他会话时，Hub 把会话现状直接附在提问里：「有哪些会话在跑」不用再调一次工具就能答（公司模型一次工具往返要十来秒）。
+  sessionsBlock(question) {
+    if (!this.tools || !/会话|session|在跑|卡住|任务.{0,4}(进展|进度|状态)/i.test(String(question || ''))) return '';
+    let rows; try { rows = this.tools.rows({ closed: 5 }).slice(0, 30); } catch { return ''; }
+    const line = r => `- ${r.title}｜${r.label}｜${r.cwd || '无目录'}${r.lastActiveAt ? '｜最近活动 ' + D.clock(r.lastActiveAt) : ''}｜编号 ${r.id}${r.waitingText ? '；在等：' + r.waitingText : ''}`;
+    return [`Hub 会话现状（Hub 现查于 ${D.clock(this.now())}，不含助理自己的会话；只问有哪些会话、什么状态时直接用它回答，要看内容或推进再用会话工具）：`,
+      ...(rows.length ? rows.map(line) : ['（现在没有其他会话）'])].join('\n');
   }
   composePrompt(job, toolset) {
     if ((toolset === 'desk' || toolset === 'phone') && this.guided()) return this.composeGuided(job, toolset);

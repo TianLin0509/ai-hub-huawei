@@ -186,11 +186,13 @@ class PhoneChannel {
   watch(id, { baseline = null, title = '', why = '' } = {}) {
     this.update(cur => ({ watches: { ...cur.watches, [id]: { at: this.now(), baseline, title, why } } }));
   }
+  // 没开手机对话时（5.6.2）：盯着的会话做完或卡住改弹电脑桌面通知；「没盯的会话卡住」只推手机，电脑上 Hub 本身已有提示。
   async watchTick() {
-    if (!this.active() || this.watching) return;
+    const phone = this.active();
+    if (this.watching || (!phone && !Object.keys(this.state().watches).length)) return;
     this.watching = true;
     try {
-      const p = this.settings(), now = this.now();
+      const p = { ...this.settings(), ...(phone ? {} : { pushWatched: true, pushStuck: false }) }, now = this.now();
       let ack = 0;
       this.update(cur => {
         const pending = { ...cur.pending };
@@ -213,7 +215,7 @@ class PhoneChannel {
           const final = tools.lastFinal(id);
           if (final && final.id !== w.baseline && String(final.text || '').trim()) {
             dropped.add(id);
-            if (p.pushWatched) void this.send(`「${r.title}」这一轮答完了：\n${clip(plain(final.text), 600)}`, 'done');
+            if (p.pushWatched) void this.tell(`「${r.title}」这一轮答完了：\n${clip(plain(final.text), 600)}`, 'done', r);
           }
         }
         const idle = typeof this.deps.systemIdleSeconds === 'function' ? Number(this.deps.systemIdleSeconds()) : Infinity;
@@ -224,12 +226,18 @@ class PhoneChannel {
       this.update(cur => { const next = { ...cur.watches }; for (const id of dropped) if (next[id] && next[id].at <= (watches[id]?.at ?? Infinity)) delete next[id]; return { watches: next, stuck }; });
     } finally { this.watching = false; }
   }
+  // 推给用户：手机对话开着发手机群，没开发到提醒总线（桌面通知、桌宠）。
+  tell(text, kind, r) {
+    if (this.active()) return this.send(text, kind);
+    const cut = text.indexOf('\n');
+    return this.a.bus?.publish({ id: `session-${kind}:${r.id}:${this.now()}`, kind: 'session', notify: true, title: cut < 0 ? text : text.slice(0, cut), text: cut < 0 ? '' : text.slice(cut + 1) });
+  }
   async pushStuck(r, stuck) {
     if (stuck[r.id]) return;
     stuck[r.id] = this.now();
     const screen = await this.a.tools.screen(r.id);
     const tail = (screen || []).filter(l => l.trim()).slice(-10).join('\n');
-    void this.send(`「${r.title}」卡住了，在等你：\n${r.waitingText || tail || '（看不到终端画面）'}\n\n直接回我怎么处理就行，例如「${short(r.title, 10)} 选 1」或「先停下」。`, 'stuck');
+    void this.tell(`「${r.title}」卡住了，在等你：\n${r.waitingText || tail || '（看不到终端画面）'}\n\n直接回我怎么处理就行，例如「${short(r.title, 10)} 选 1」或「先停下」。`, 'stuck', r);
   }
 
   // ---- 设置页用 ----

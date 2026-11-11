@@ -146,13 +146,15 @@ function createHubRulesStore(options = {}) {
     return snapshot();
   }
 
+  // 定时在后台取规则：被公司网络确认页拦住时只做后台自动放行，不弹窗（core/own-gate.js）。
+  const gated = fetchImpl => require('./own-gate').gatedFetch(fetchImpl, { interactive: false });
   async function fetchJSON(url, fetchImpl) {
-    const response = await fetchImpl(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), cache: 'no-store' });
+    const response = await gated(fetchImpl)(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), cache: 'no-store' });
     if (!response || !response.ok) throw new Error(`服务器返回 ${response ? response.status : '无响应'}`);
     return JSON.parse(await response.text());
   }
   async function fetchText(url, fetchImpl) {
-    const response = await fetchImpl(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), cache: 'no-store' });
+    const response = await gated(fetchImpl)(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), cache: 'no-store' });
     if (!response || !response.ok) throw new Error(`服务器返回 ${response ? response.status : '无响应'}`);
     const bytes = Buffer.from(await response.arrayBuffer());
     if (bytes.length > OFFICIAL_LIMIT) throw new Error('服务器上的规则超过 64 KB，未采用');

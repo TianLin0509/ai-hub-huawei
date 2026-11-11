@@ -152,7 +152,7 @@ function createRolePackStore({ assetsDir, dataDir, sources = SOURCES, fetchImpl 
     if (downloading) return snapshot();
     checking = (async () => {
       notify({ phase: 'checking', error: null, checks: [], attempts: [], progress: null });
-      const results = await checkManifests({ sources, fetchImpl: boundedCatalogFetch(fetchImpl, catalogBodyTimeoutMs), validate: validateCatalog });
+      const results = await checkManifests({ sources, fetchImpl: boundedCatalogFetch(fetchImpl, catalogBodyTimeoutMs), validate: validateCatalog, gate: true });
       const best = results.filter(r => r.ok).sort((a, b) => compareVersion(b.manifest.version, a.manifest.version))[0];
       const checks = results.map(({ id, name, ok, reason, blocked, url }) => ({ id, name, ok, reason, blocked, url }));
       if (!best) { notify({ phase: 'error', checks, error: '暂时连不上形象目录，已安装的形象照常可用，稍后可重试。' }); return snapshot(); }
@@ -197,7 +197,7 @@ function createRolePackStore({ assetsDir, dataDir, sources = SOURCES, fetchImpl 
       const dest = path.join(dataDir, 'hub-pet', 'downloads', entry.file);
       const activeAbort = abort;
       const cancellableFetch = (url, options) => fetchImpl(url, { ...options, signal: AbortSignal.any([options.signal, activeAbort.signal]) });
-      const result = await downloadWithFallback({ sources, version: entry.version, expect: entry, dest, fetchImpl: cancellableFetch, signal: abort.signal,
+      const result = await downloadWithFallback({ gate: true, sources, version: entry.version, expect: entry, dest, fetchImpl: cancellableFetch, signal: abort.signal,
         onProgress: progress => notify({ progress }), onAttempt: attempts => notify({ attempts }) });
       if (!result.ok) { notify({ phase: result.cancelled ? 'cancelled' : 'error', activeId: null, failedId: id, error: result.cancelled ? '下载已取消' : '下载没成功，可以重试；正在用的形象不受影响。' }); return snapshot(); }
       try { install(readJson(dest, MAX_PACK_BYTES * 2), entry); } finally { try { fs.unlinkSync(dest); } catch (_) {} }

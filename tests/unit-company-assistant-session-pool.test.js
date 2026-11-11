@@ -136,7 +136,8 @@ test('工具身份：只认 Hub 登记过的助理会话，并且只放行它那
   await f.settle();
   const desk = f.prompts[0].id;
   const tools = new HubTools(f.a, {});
-  await assert.rejects(tools.invoke({ name: 'list_sessions', arguments: {}, callerSessionId: desk }), /没有挂这个工具/);
+  await assert.rejects(tools.invoke({ name: 'ppt_find', arguments: {}, callerSessionId: desk }), /没有挂这个工具/);
+  assert.deepEqual((await tools.invoke({ name: 'list_sessions', arguments: {}, callerSessionId: desk })).sessions, [], '电脑上问助理也能列会话（5.6.2）');
   await assert.rejects(tools.invoke({ name: 'welink_find', arguments: { person: '周工' }, callerSessionId: 'stranger' }), /只有公司助理会话/);
   const found = await tools.invoke({ name: 'welink_find', arguments: { person: '周工' }, callerSessionId: desk });
   assert.match(found.text, /分档门限你确认一下/);
@@ -151,14 +152,38 @@ test('工具身份：只认 Hub 登记过的助理会话，并且只放行它那
   assert.ok(item.coverage.details.length >= 2);
 });
 
-test('工具按用途挂载：电脑问答不带会话管理和 PPT，抢会议室移出助理', () => {
+test('工具按用途挂载：电脑问答带会话管理、不带 PPT，抢会议室移出助理', () => {
   const names = set => toolsFor(set).map(t => t.name);
-  assert.deepEqual(names('desk'), ['welink_find', 'welink_inbox', 'welink_message', 'welink_meetings', 'welink_mail', 'assistant_memory', 'pet_remind']);
+  assert.deepEqual(names('desk'), names('phone'), '电脑和手机同一组：WeLink 查询 + 记忆 + 提醒 + 会话管理');
+  assert.ok(names('desk').includes('list_sessions') && names('desk').includes('create_session'));
   assert.ok(names('phone').includes('send_session'));
-  assert.ok(!names('desk').some(n => n.startsWith('ppt_') || n.endsWith('_session')));
+  assert.ok(!names('desk').some(n => n.startsWith('ppt_')));
   assert.deepEqual(names('ppt').sort(), [...TOOLSETS.ppt].sort());
   assert.ok(!allTools.some(t => t.name === 'room_booking'));
-  assert.ok(JSON.stringify(toolsFor('desk')).length < JSON.stringify(allTools).length / 2, '电脑问答的工具描述不到全部的一半');
+});
+
+test('电脑上问其他会话：规则带会话管理，提问里附 Hub 会话现状；没开手机对话时盯着的会话做完弹桌面通知', async t => {
+  const f = fixture(t, { prewarm: false });
+  const other = { id: 's-work', title: '仿真对比', kind: 'codeagent', cwd: 'D:/proj/sim', status: 'running', createdAt: NOW - 600000 };
+  f.a.tools = new HubTools(f.a, { getAllSessions: () => [other], isAgentTurnActive: () => other.status === 'running' });
+  f.a.ask('当前有哪些 session 在跑'); await f.settle();
+  const prompt = f.prompts[0].text;
+  assert.match(prompt, /11\. 管这台电脑 Hub 里的其他会话用会话工具/);
+  assert.match(prompt, /Hub 会话现状.*\n- 仿真对比｜运行中｜D:\/proj\/sim/);
+  assert.ok(!prompt.includes(f.prompts[0].id), '助理自己的会话不列进去');
+  assert.equal(f.a.sessionsBlock('今天有哪些会'), '', '没问会话就不附');
+  // 盯着它：运行中不提醒，答完后提醒一次，走提醒总线（手机对话没开）
+  const notices = []; f.a.bus = { publish: n => { notices.push(n); return true; } };
+  f.a.phone.watch(other.id, { baseline: null, title: other.title, why: 'watch' });
+  await f.a.phone.watchTick();
+  assert.equal(notices.length, 0);
+  other.status = 'idle';
+  f.a.tools.lastFinal = () => ({ id: 'f9', text: '对比完成，增益 3.2%' });
+  await f.a.phone.watchTick(); await f.a.phone.watchTick();
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].kind, 'session');
+  assert.match(notices[0].title, /「仿真对比」这一轮答完了/);
+  assert.match(notices[0].text, /增益 3\.2%/);
 });
 
 test('会议同名同时段合并：主题忽略空白标点，开始结束都在 1 分钟内；简报会前准备按任一出处都能对上', () => {
