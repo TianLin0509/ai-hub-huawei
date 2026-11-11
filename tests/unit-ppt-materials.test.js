@@ -2,7 +2,7 @@
 // PPT 页「素材」Tab（2026-11-10）：读 PPT Doctor 素材库与团队素材包、筛选分页数据、插入调用、AI 查素材工具，以及素材预览要用到的形状细节。
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), zlib = require('node:zlib');
-const { PptMaterials, readPack, readDoctorLibrary, MARKER } = require('../core/company-assistant/ppt-materials');
+const { PptMaterials, readPack, readDoctorLibrary, MARKER, TEAM_PACK_FILE } = require('../core/company-assistant/ppt-materials');
 const { buildSlideScene } = require('../core/company-assistant/ppt-slide-preview');
 const { sceneSvg, presetPoints } = require('../renderer/ppt-slide-svg');
 const { TOOLSETS, toolsFor } = require('../core/company-assistant/mcp');
@@ -84,7 +84,7 @@ test('Doctor 素材库：读 item.json；回收站、缺 material.pptx、坏 JSO
 function fixture(t, { doctor = [], packs = [] } = {}) {
   const dir = tmp(t), lib = path.join(dir, 'materials'), settings = { ppt: {} }, calls = [];
   for (const m of doctor) { const d = path.join(lib, m.id); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, 'item.json'), JSON.stringify(m)); fs.writeFileSync(path.join(d, 'material.pptx'), 'x'); }
-  const library = { config: () => settings.ppt, a: { setSettings: patch => { settings.ppt = { ...settings.ppt, ...patch.ppt }; } }, previewScene: async (file, page) => ({ w: 960, h: 540, items: [], file, page }) };
+  const library = { config: () => settings.ppt, a: { dir: path.join(dir, 'assistant'), setSettings: patch => { settings.ppt = { ...settings.ppt, ...patch.ppt }; } }, previewScene: async (file, page) => ({ w: 960, h: 540, items: [], file, page }) };
   const materials = new PptMaterials(library, { pptEnv: { PPTX_FINDER_DATA_DIR: dir }, pptMaterialTransfer: async (file, page, mode) => { calls.push({ file, page, mode }); return { ok: true, mode, target: '目标.pptx', page: 3, count: 1 }; } });
   const packFiles = packs.map((slides, i) => { const f = path.join(dir, `pack${i}.pptx`); makePack(f, slides); return f; });
   return { dir, lib, settings, materials, calls, packFiles };
@@ -176,4 +176,48 @@ test('fit 只框幻灯片自己的形状，母版装饰不把预览缩小', () =
   const scene = { w: 960, h: 540, slideItems: 1, items: [{ t: 'box', x: 0, y: 500, w: 960, h: 40, fill: '#C7000B' }, { t: 'box', x: 400, y: 200, w: 100, h: 50, fill: '#3478F6' }] };
   const vb = sceneSvg(scene, { fit: true }).match(/viewBox="([^"]+)"/)[1].split(' ').map(Number);
   assert.ok(vb[2] < 200 && vb[1] > 150, vb.join(' '));
+});
+
+test('团队素材包一键下载：换源、两层校验、装好即出现；与手动打开的素材包并存；有新版时提示更新并可升级', async t => {
+  const crypto = require('node:crypto'), sha = buf => crypto.createHash('sha256').update(buf).digest('hex');
+  const f = fixture(t, { packs: [[{ shapes: SHAPES.hex, notes: meta({ name: '我自己的卡片', category: '容器与卡片' }) }]] });
+  const publish = (version, slides) => {
+    const pptx = path.join(f.dir, `team-${version}.pptx`), zip = path.join(f.dir, `team-${version}.zip`);
+    makePack(pptx, slides); writeZip(zip, { [TEAM_PACK_FILE]: fs.readFileSync(pptx) });
+    const archive = fs.readFileSync(zip);
+    return { archive, manifest: { version, kind: 'materials', files: { [TEAM_PACK_FILE]: { hash: sha(fs.readFileSync(pptx)) } }, archive: { name: 'component.zip', hash: sha(archive) } } };
+  };
+  let live = publish('1.0.0', [{ shapes: SHAPES.cust, notes: meta({ name: '灰渐变屋顶栏头', category: '栏头与标题条' }) }, { shapes: SHAPES.hex, notes: meta({ name: '蓝色光带', category: '光带·托板·展台' }) }]);
+  let tamper = false;
+  const asked = [];
+  f.materials.deps.pptTeamPackUrls = ['https://bad.example/m/', 'https://good.example/m/'];
+  f.materials.deps.pptDownloadFetch = async url => {
+    asked.push(url);
+    if (url.startsWith('https://bad.example/')) return new Response('<html>拦截页</html>', { status: 200 });
+    if (url.endsWith('component.json')) return new Response(JSON.stringify(live.manifest));
+    return new Response(tamper ? Buffer.concat([live.archive, Buffer.from('x')]) : live.archive);
+  };
+  assert.equal(f.materials.list().library.teamPack.installed, null);
+  tamper = true;
+  await assert.rejects(f.materials.installTeamPack(), /校验不一致/);
+  assert.equal(f.materials.list({ force: true }).library.total, 0, '校验不过时什么都不落地');
+  tamper = false;
+  const r = await f.materials.installTeamPack();
+  assert.deepEqual({ version: r.version, items: r.items }, { version: '1.0.0', items: 2 });
+  assert.ok(asked.includes('https://bad.example/m/component.json') && asked.includes('https://good.example/m/component.zip'), '第一个源给拦截页时换下一个源');
+  assert.deepEqual(fs.readdirSync(f.materials.teamPackDir()).sort(), ['installed.json', TEAM_PACK_FILE], '不留下载临时文件');
+  f.materials.addPack(f.packFiles[0]);
+  const all = f.materials.list();
+  assert.equal(all.library.total, 3, '团队素材包 + 手动打开的素材包');
+  assert.deepEqual(f.settings.ppt.materialPacks, [f.packFiles[0]], '设置里只记用户手动打开的素材包');
+  assert.equal((await f.materials.checkTeamPack()).update, false);
+  // 发布新版：重新查到后提示更新，升级后内容整体替换
+  live = publish('1.1.0', [{ shapes: SHAPES.hex, notes: meta({ name: '新编号圆', category: '编号·标签·胶囊' }) }]);
+  f.materials.latest = null;
+  const check = await f.materials.checkTeamPack();
+  assert.deepEqual({ installed: check.installed, latest: check.latest, update: check.update }, { installed: '1.0.0', latest: '1.1.0', update: true });
+  await f.materials.installTeamPack();
+  const after = f.materials.list();
+  assert.deepEqual(after.items.map(i => i.name).sort(), ['我自己的卡片', '新编号圆']);
+  assert.equal(after.library.teamPack.update, false);
 });

@@ -9,6 +9,34 @@ const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 
 const MARKER = 'PPT Doctor Material v1';
+// 团队素材包（2026-11-11）：和 PPT Doctor 的「团队素材包」组件同一份发布物（component.json + component.zip，
+// zip 里只有 team-materials.pptx）。Hub 自己下载后直接读，不需要先装 Doctor，也不需要 PowerPoint 导入。
+const TEAM_PACK_FILE = 'team-materials.pptx';
+const TEAM_PACK_SOURCES = Object.freeze([
+  'https://dl.lt-stockpartner.tech/pptutor/materials/',
+  'https://me.lt-stockpartner.tech/pptutor/materials/',
+  'https://github.com/TianLin0509/PPTutor/releases/download/materials-v1.0.0/',
+]);
+const sha256 = buf => crypto.createHash('sha256').update(buf).digest('hex');
+const newerVersion = (a, b) => { const x = String(a).split('.').map(Number), y = String(b || '0.0.0').split('.').map(Number); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i]; return false; };
+
+// 依次试各下载源，取第一个给出有效清单的。
+async function teamPackManifest(deps = {}) {
+  const fetch = require('./fetch-util').resolveFetch(deps.pptDownloadFetch);
+  const { reasonOf } = require('../app-update/downloader');
+  const reasons = [];
+  for (const base of deps.pptTeamPackUrls || TEAM_PACK_SOURCES) {
+    try {
+      const response = await fetch(new URL('component.json', base).href, { signal: AbortSignal.timeout(12000) });
+      if (!response.ok) throw new Error(`清单 HTTP ${response.status}`);
+      const manifest = JSON.parse((await response.text()).replace(/^\uFEFF/, ''));
+      const hex = v => /^[0-9a-f]{64}$/.test(v || '');
+      if (manifest?.kind !== 'materials' || !/^\d+\.\d+\.\d+$/.test(manifest.version) || !hex(manifest.files?.[TEAM_PACK_FILE]?.hash) || !hex(manifest.archive?.hash)) throw new Error('清单格式不对（可能被网络拦截页替换）');
+      return { base, manifest };
+    } catch (error) { reasons.push(reasonOf(error)); }
+  }
+  throw new Error(`团队素材包暂时下载不了：${reasons[reasons.length - 1]}。请检查网络后重试，或用「打开素材包…」打开同事发来的素材包文件`);
+}
 const MAX_ITEMS = 2000;
 const MAX_PACKS = 5;
 const CACHE_MS = 5000;
@@ -87,11 +115,58 @@ function readPack(file) {
 class PptMaterials {
   constructor(library, deps = {}) {
     this.lib = library; this.deps = deps; this.env = deps.pptEnv || process.env;
-    this.cache = null; this.busy = false;
+    this.cache = null; this.busy = false; this.installing = null; this.latest = null;
+  }
+  teamPackDir() { return path.join(this.lib.a.dir, 'ppt-team-materials'); }
+  teamPackFile() { return path.join(this.teamPackDir(), TEAM_PACK_FILE); }
+  teamPack() {
+    let installed = null;
+    if (fs.existsSync(this.teamPackFile())) {
+      try { installed = JSON.parse(fs.readFileSync(path.join(this.teamPackDir(), 'installed.json'), 'utf8')); } catch { installed = { version: '0.0.0' }; }
+    }
+    return { installed: installed?.version || null, items: installed?.items || 0, latest: this.latest, update: Boolean(installed && this.latest && newerVersion(this.latest, installed.version)) };
+  }
+  // 看一眼有没有新版素材包；一次运行只查一次，查不到不打扰用户。
+  async checkTeamPack() {
+    if (!this.latest) { try { this.latest = (await teamPackManifest(this.deps)).manifest.version; } catch { /* 离线时不提示更新 */ } }
+    return { ok: true, ...this.teamPack() };
+  }
+  // 一键下载（或更新）团队素材包：下载 → 两层 sha256 校验 → 确认读得出素材 → 换掉旧文件。
+  installTeamPack() {
+    if (!this.installing) this.installing = this.downloadTeamPack().finally(() => { this.installing = null; });
+    return this.installing;
+  }
+  async downloadTeamPack() {
+    const { base, manifest } = await teamPackManifest(this.deps);
+    const fetch = require('./fetch-util').resolveFetch(this.deps.pptDownloadFetch);
+    const response = await fetch(new URL('component.zip', base).href, { signal: AbortSignal.timeout(180000) });
+    if (!response.ok) throw new Error(`团队素材包下载失败（HTTP ${response.status}），请重试`);
+    const archive = Buffer.from(await response.arrayBuffer());
+    if (sha256(archive) !== manifest.archive.hash) throw new Error('下载的团队素材包校验不一致（可能被网络改写），请重试');
+    const dir = this.teamPackDir(), stamp = `${process.pid}-${Date.now()}`;
+    const zipTmp = path.join(dir, `download-${stamp}.zip`), packTmp = path.join(dir, `download-${stamp}.pptx`);
+    fs.mkdirSync(dir, { recursive: true });
+    // 上次下载中途崩掉留下的半成品，顺手清掉。
+    for (const name of fs.readdirSync(dir)) if (/^download-/.test(name)) fs.rmSync(path.join(dir, name), { force: true });
+    try {
+      const { openZip, readEntry } = require('./ppt-slide-preview');
+      fs.writeFileSync(zipTmp, archive);
+      const pack = readEntry(openZip(zipTmp), TEAM_PACK_FILE);
+      if (!pack || sha256(pack) !== manifest.files[TEAM_PACK_FILE].hash) throw new Error('团队素材包内容校验不一致，请重试');
+      fs.writeFileSync(packTmp, pack);
+      const items = readPack(packTmp).length;
+      if (!items) throw new Error('团队素材包里没有读到素材，请重试');
+      fs.renameSync(packTmp, this.teamPackFile());
+      fs.writeFileSync(path.join(dir, 'installed.json'), JSON.stringify({ version: manifest.version, items, installedAt: Date.now() }));
+      this.latest = manifest.version; this.cache = null;
+      return { ok: true, version: manifest.version, items };
+    } finally { fs.rmSync(zipTmp, { force: true }); fs.rmSync(packTmp, { force: true }); }
   }
   config() { return this.lib.config(); }
   dir() { return this.config().materialsDir || path.join(doctorDataDir(this.env), 'materials'); }
-  packs() { return (this.config().materialPacks || []).filter(p => typeof p === 'string' && path.isAbsolute(p)).slice(0, MAX_PACKS); }
+  // Hub 自己下载的团队素材包排在用户手动打开的素材包前面。
+  openedPacks() { return (this.config().materialPacks || []).filter(p => typeof p === 'string' && path.isAbsolute(p)).slice(0, MAX_PACKS); }
+  packs() { return fs.existsSync(this.teamPackFile()) ? [this.teamPackFile(), ...this.openedPacks()] : this.openedPacks(); }
   load({ force = false } = {}) {
     if (!force && this.cache && Date.now() - this.cache.at < CACHE_MS) return this.cache;
     const errors = [];
@@ -122,7 +197,7 @@ class PptMaterials {
     const hits = data.items.filter(i => (!category || i.category === category) && words.every(w => (i.name + ' ' + i.category).toLowerCase().includes(w)));
     const start = Math.max(0, Number(offset) || 0), size = Math.max(1, Math.min(MAX_ITEMS, Number(limit) || 60));
     return { ok: true, total: hits.length, offset: start, items: hits.slice(start, start + size).map(({ pptx, preview, ...rest }) => ({ ...rest, pptx, ...(preview ? { preview } : {}) })),
-      categories: data.categories, library: { dir: data.dir, doctorCount: data.doctorCount, packs: data.packs, errors: data.errors, total: data.items.length } };
+      categories: data.categories, library: { dir: data.dir, doctorCount: data.doctorCount, packs: data.packs, errors: data.errors, total: data.items.length, teamPack: this.teamPack() } };
   }
   get(id) {
     const item = this.load().byId.get(String(id || '')) || this.load({ force: true }).byId.get(String(id || ''));
@@ -140,7 +215,7 @@ class PptMaterials {
     if (!/\.pptx$/i.test(resolved) || !fs.existsSync(resolved)) throw new Error('请选择团队素材包（.pptx）');
     const items = readPack(resolved);
     if (!items.length) throw new Error('这个文件里没有素材标记，不是团队素材包；可在 PPT Doctor 素材库里导出或下载素材包');
-    const packs = [resolved, ...this.packs().filter(p => path.resolve(p).toLowerCase() !== resolved.toLowerCase())].slice(0, MAX_PACKS);
+    const packs = [resolved, ...this.openedPacks().filter(p => path.resolve(p).toLowerCase() !== resolved.toLowerCase())].slice(0, MAX_PACKS);
     this.lib.a.setSettings({ ppt: { materialPacks: packs } });
     this.cache = null;
     return { ok: true, added: items.length, file: resolved };
@@ -218,4 +293,4 @@ function transferMaterial(file, page, mode) {
   });
 }
 
-module.exports = { PptMaterials, readDoctorLibrary, readPack, doctorDataDir, transferMaterial, MARKER };
+module.exports = { PptMaterials, readDoctorLibrary, readPack, doctorDataDir, transferMaterial, teamPackManifest, MARKER, TEAM_PACK_FILE, TEAM_PACK_SOURCES };

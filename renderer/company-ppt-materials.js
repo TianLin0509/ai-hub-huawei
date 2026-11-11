@@ -5,7 +5,7 @@ function createPptMaterials({ root, ipcRenderer, notice, doctorState = () => '' 
   const { pathToFileURL } = require('node:url');
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const fileUrl = file => { try { return file ? pathToFileURL(file).href : ''; } catch { return ''; } };
-  let category = '', query = '', pageNo = 0, pageSize = 12, selectedId = '', data = null, loading = null, emptyTimer = null, shown = false;
+  let category = '', query = '', pageNo = 0, pageSize = 12, selectedId = '', data = null, loading = null, emptyTimer = null, shown = false, checked = false;
   const previews = new Map(), queue = [];
   let running = 0;
   const call = async (action, args) => {
@@ -15,7 +15,7 @@ function createPptMaterials({ root, ipcRenderer, notice, doctorState = () => '' 
   };
 
   root.innerHTML = `<nav class="pptm-cats" data-pptm-cats aria-label="素材分类"></nav>
-    <div class="pptm-main"><div class="pptm-bar"><div class="pptw-bar pptm-search"><svg class="pptw-bar-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><label class="pptw-sr" for="company-ppt-material-query">按名称筛选素材</label><input id="company-ppt-material-query" data-pptm-query autocomplete="off" placeholder="按名称筛选，例如：栏头、箭头、光带"></div><span class="pptm-count" data-pptm-count></span><button type="button" class="pptw-btn ghost sm" data-pptm="pack" title="直接打开团队素材包（.pptx），不导入 Doctor 也能用">打开素材包…</button><button type="button" class="pptw-btn ghost sm" data-pptm="refresh">刷新</button></div>
+    <div class="pptm-main"><div class="pptm-bar"><div class="pptw-bar pptm-search"><svg class="pptw-bar-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><label class="pptw-sr" for="company-ppt-material-query">按名称筛选素材</label><input id="company-ppt-material-query" data-pptm-query autocomplete="off" placeholder="按名称筛选，例如：栏头、箭头、光带"></div><span class="pptm-count" data-pptm-count></span><button type="button" class="pptw-btn ghost sm" data-pptm="team-pack" data-pptm-team hidden></button><button type="button" class="pptw-btn ghost sm" data-pptm="pack" title="直接打开团队素材包（.pptx），不导入 Doctor 也能用">打开素材包…</button><button type="button" class="pptw-btn ghost sm" data-pptm="refresh">刷新</button></div>
     <div class="pptm-grid" data-pptm-grid></div><div class="pptm-pager" data-pptm-pager></div></div>
     <aside class="pptm-detail" data-pptm-detail aria-label="选中素材"></aside>`;
   const $ = sel => root.querySelector(sel);
@@ -59,10 +59,9 @@ function createPptMaterials({ root, ipcRenderer, notice, doctorState = () => '' 
     const lib = data?.library || {}, state = doctorState();
     const errors = (lib.errors || []).length ? `<p class="pptm-err">${esc(lib.errors.join('；'))}</p>` : '';
     if (query || category) return `<p class="pptw-empty">没有符合条件的素材，换个词或点「全部」。</p>`;
-    const doctorBtn = ['missing', 'upgrade'].includes(state)
-      ? `<button type="button" class="pptw-btn pri" data-ppt="doctor-install">${state === 'upgrade' ? '一键升级 PPT Doctor' : '一键安装 PPT Doctor'}</button>`
-      : '<button type="button" class="pptw-btn pri" data-pptm="open-doctor">打开 PPT Doctor 下载团队素材包</button>';
-    return `<div class="pptm-guide"><span class="pptw-guide-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="8" height="7" rx="1.5"/><rect x="13" y="4" width="8" height="7" rx="3.5"/><path d="M3 15h8l-2 5H5z"/><path d="M13 14h8v6h-8z"/></svg></span><div class="pptw-guide-copy"><strong>还没有团队素材</strong><p>团队素材包是整理好的常用原生形状：栏头、光带、箭头、编号、卡片等。在 PPT Doctor 的组件里下载并导入后，这里会自动出现，按分类挑选、一键插入到当前 PPT。</p>${errors}</div><div class="pptw-guide-actions">${doctorBtn}<button type="button" class="pptw-btn sec" data-pptm="pack">已有素材包文件，直接打开…</button></div></div>`;
+    // Doctor 已装好时才给「打开 Doctor」：没装也不耽误，一键下载不依赖它。
+    const doctorBtn = ['missing', 'upgrade'].includes(state) ? '' : '<button type="button" class="pptw-btn sec" data-pptm="open-doctor">在 PPT Doctor 里管理素材</button>';
+    return `<div class="pptm-guide"><span class="pptw-guide-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="8" height="7" rx="1.5"/><rect x="13" y="4" width="8" height="7" rx="3.5"/><path d="M3 15h8l-2 5H5z"/><path d="M13 14h8v6h-8z"/></svg></span><div class="pptw-guide-copy"><strong>还没有团队素材</strong><p>团队素材包是整理好的常用原生形状：栏头、光带、箭头、编号、卡片等。点一下就能下载（约 1 MB，不需要安装 PPT Doctor），之后按分类挑选、一键插入到当前 PPT。</p>${errors}</div><div class="pptw-guide-actions"><button type="button" class="pptw-btn pri" data-pptm="team-pack">一键下载团队素材包</button>${doctorBtn}<button type="button" class="pptw-btn sec" data-pptm="pack">已有素材包文件，直接打开…</button></div></div>`;
   }
   function draw() {
     if (!data) return;
@@ -70,6 +69,10 @@ function createPptMaterials({ root, ipcRenderer, notice, doctorState = () => '' 
     const lib = data.library || {}, hasAny = lib.total > 0;
     root.dataset.empty = hasAny ? '0' : '1';
     $('[data-pptm-count]').textContent = hasAny ? `${data.total} 个${category || query ? '符合' : ''}素材${lib.packs?.length ? ` · 含 ${lib.packs.length} 个素材包` : ''}` : '';
+    // 顶栏的素材包按钮：没下载过 → 下载；有新版 → 更新；已是最新 → 不显示。
+    const team = lib.teamPack || {}, teamBtn = $('[data-pptm-team]');
+    teamBtn.hidden = !hasAny || Boolean(team.installed && !team.update);
+    teamBtn.textContent = team.update ? `更新团队素材包（v${team.latest}）` : '下载团队素材包';
     pageSize = measure();
     const pages = Math.max(1, Math.ceil(data.total / pageSize));
     pageNo = Math.min(pageNo, pages - 1);
@@ -111,7 +114,13 @@ function createPptMaterials({ root, ipcRenderer, notice, doctorState = () => '' 
     if (name === 'prev' || name === 'next') { pageNo += name === 'next' ? 1 : -1; draw(); return; }
     if (name === 'refresh') { previews.clear(); await load({ force: true }); notice('素材库已刷新。'); return; }
     if (name === 'pack') { const r = await call('ppt-material-pick-pack'); if (r.canceled) return; notice(`已打开素材包，读到 ${r.added} 个素材。`); category = ''; pageNo = 0; return load({ force: true }); }
-    if (name === 'open-doctor') { b.disabled = true; try { await call('ppt-open-doctor'); notice('已打开 PPT Doctor：在「组件」里下载团队素材包，导入完成后这里会自动出现。'); } finally { b.disabled = false; } return; }
+    if (name === 'team-pack') {
+      const old = b.textContent; b.disabled = true; b.textContent = '正在下载团队素材包…';
+      try { const r = await call('ppt-team-pack-install'); notice(`团队素材包 v${r.version} 已就绪，共 ${r.items} 个素材。`); category = ''; pageNo = 0; previews.clear(); await load({ force: true }); }
+      finally { b.disabled = false; if (b.isConnected && b.textContent === '正在下载团队素材包…') b.textContent = old; }
+      return;
+    }
+    if (name === 'open-doctor') { b.disabled = true; try { await call('ppt-open-doctor'); notice('已打开 PPT Doctor：在它的素材库里收藏或导入的素材，这里会自动出现。'); } finally { b.disabled = false; } return; }
     if (name === 'insert' || name === 'copy') {
       const it = itemOf(b.dataset.id); b.disabled = true;
       notice(name === 'insert' ? `正在把「${it?.name || '素材'}」插入到当前 PPT…` : `正在复制「${it?.name || '素材'}」…`);
@@ -135,7 +144,12 @@ function createPptMaterials({ root, ipcRenderer, notice, doctorState = () => '' 
   let resizeTimer = null;
   const onResize = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (shown && data && measure() !== pageSize) draw(); }, 120); };
   return {
-    async show() { shown = true; window.addEventListener('resize', onResize); try { await load({ force: !data }); } catch (error) { notice(error.message); } },
+    async show() {
+      shown = true; window.addEventListener('resize', onResize);
+      try { await load({ force: !data }); } catch (error) { notice(error.message); }
+      // 每次运行查一次新版；有更新时顶栏出现「更新团队素材包」。
+      if (!checked) { checked = true; void ipcRenderer.invoke('company-assistant:ppt-team-pack-check').then(r => { if (r?.update && shown) return load({ force: true }); }).catch(() => {}); }
+    },
     hide() { shown = false; clearTimeout(emptyTimer); window.removeEventListener('resize', onResize); },
   };
 }

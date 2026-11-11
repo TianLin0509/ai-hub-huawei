@@ -81,10 +81,27 @@ async function main() {
     await click('[data-ppt-tab="materials"]');
     await wait('!document.querySelector("[data-ppt-materials-panel]").hidden && !!document.querySelector(".pptm-guide")', 'empty guide');
     assert.equal(await c.eval('document.querySelector("[data-ppt-search-panel]").hidden'), true, '素材 Tab 不显示找页面板');
-    assert.match(await c.eval('document.querySelector(".pptm-guide").textContent'), /打开 PPT Doctor 下载团队素材包/);
+    assert.match(await c.eval('document.querySelector(".pptm-guide").textContent'), /一键下载团队素材包/);
     assert.match(await c.eval('document.querySelector(".pptm-guide").textContent'), /已有素材包文件/);
     await shot('01-empty');
-    result.checks.push('空素材库：素材 Tab 就地显示引导卡，一键打开 Doctor 下载素材包 + 直接打开素材包文件');
+    result.checks.push('空素材库：素材 Tab 就地显示引导卡，一键下载团队素材包 + 直接打开素材包文件');
+
+    // 1b) 真实下载（PPT_TEAM_PACK_REAL=1 才跑，走公网发布源）：全新用户点一下 → 素材出现、分类齐全、一屏不滚动
+    if (process.env.PPT_TEAM_PACK_REAL) {
+      const t0 = Date.now();
+      await click('.pptm-guide [data-pptm="team-pack"]');
+      await wait('document.querySelectorAll(".pptm-card").length>0', 'team pack downloaded', 240000);
+      const seconds = ((Date.now() - t0) / 1000).toFixed(1);
+      const lib = (await c.eval(`ipcRenderer.invoke('company-assistant:ppt-materials',{limit:1})`)).library;
+      assert.ok(lib.total >= 400 && lib.teamPack.installed, '团队素材包已装好');
+      assert.equal(await c.eval('document.querySelector("[data-pptm-team]").hidden'), true, '已是最新时顶栏不再显示下载按钮');
+      await wait('[...document.querySelectorAll(".pptm-card .pptm-thumb")].every(t=>!t.querySelector(".pptw-pv-loading"))', 'team pack previews', 30000);
+      await oneScreen('真实团队素材包首页');
+      await shot('06-team-pack-real');
+      result.checks.push(`真实一键下载：${seconds} 秒后出现 ${lib.total} 个素材（v${lib.teamPack.installed}，${await c.eval('document.querySelectorAll(".pptm-cat").length') - 1} 个分类），1440×900 无纵向滚动`);
+      result.ok = true;
+      return;
+    }
 
     // 2) 用户在 Doctor 里导入后（这里直接写进 Doctor 素材库目录），不用刷新，5 秒内自动出现
     for (const name of fs.readdirSync(staging)) fs.renameSync(path.join(staging, name), path.join(materialsDir, name));

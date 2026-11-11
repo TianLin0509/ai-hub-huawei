@@ -60,6 +60,8 @@ function createPptHandlers(service) {
       if (r.canceled || !r.filePaths[0]) return { ok: true, canceled: true };
       return service.ppt.materials.addPack(r.filePaths[0]);
     },
+    'ppt-team-pack-install': () => service.ppt.materials.installTeamPack(),
+    'ppt-team-pack-check': () => service.ppt.materials.checkTeamPack(),
     'ppt-open-doctor': async () => {
       const exe = await service.ppt.doctor.discover();
       require('node:child_process').spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: false }).unref();

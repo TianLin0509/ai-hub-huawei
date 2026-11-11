@@ -28,7 +28,10 @@
       + '<div class="community-setup-actions"><button id="community-accounts" type="button">登录 / 检查账号</button>'
       + '<button id="community-refresh" type="button">重新检测</button>'
       + '<button id="community-guide" type="button">安装说明</button></div>'
-      + '<p id="community-advisory" class="community-setup-note" hidden></p>';
+      + '<p id="community-advisory" class="community-setup-note" hidden></p>'
+      + (require('../core/distribution').target === 'company'
+        ? '<p id="community-thanks" class="community-setup-note">🎉 5.6 正式版 · 感谢各位先锋测试官的共创：你们提的每一条反馈，都变成了今天的开箱即用。</p>'
+        : '');
     host.append(section);
     section.querySelector('#community-accounts').onclick = () => document.getElementById('btn-rail-accounts')?.click();
     // 没有账号页的发行版（公司纯净版）不显示这个按钮。
