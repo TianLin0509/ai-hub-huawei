@@ -26,7 +26,7 @@ function validateExtraIds(value) {
   const ids = normalizeExtraIds(value);
   if (ids.length > 5) throw new Error('额外账号最多填写 5 个');
   const invalid = ids.filter(id => !/^[0-9]{8}$/.test(id));
-  if (invalid.length) throw new Error(`额外账号格式不正确：${invalid.map(id => `「${id.slice(0, 40)}」`).join('、')}。请只填写 8 位数字工号，例如 00951078，不要带字母，前导零要保留`);
+  if (invalid.length) throw new Error(`额外账号格式不正确：${invalid.map(id => `「${id.slice(0, 40)}」`).join('、')}。请只填写 8 位数字工号，不要带字母，前导零要保留`);
   return ids;
 }
 // 手机收消息和群成员展示共用；别名只用于匹配，不改登录身份。

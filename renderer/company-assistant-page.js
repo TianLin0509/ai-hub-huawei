@@ -657,7 +657,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
         <div class="ca-row"><button type="button" class="ca-btn small" data-x="phone-check">查看群成员</button><span class="ca-note">群内其他人能看到助理的回答，建议用专用群。</span></div>
         <div class="ca-row" data-slot="phone-check">${checkLine}</div></fieldset>
       <fieldset class="col"><legend>额外属于我的账号</legend>
-        <p class="ca-note" id="ca-phone-extra-ids-help">换工号后，如果手机消息被识别成“别人发的”，把新工号填在这里。只填写 8 位数字工号，例如 00951078，不要带字母，前导零要保留。手机消息里的带字母账号仍按数字部分匹配。</p>
+        <p class="ca-note" id="ca-phone-extra-ids-help">换工号后，如果手机消息被识别成“别人发的”，把新工号填在这里。只填写 8 位数字工号，不要带字母，前导零要保留。手机消息里的带字母账号仍按数字部分匹配。</p>
         <textarea data-f="phone-extraIds" rows="3" inputmode="numeric" aria-label="额外属于我的账号" aria-describedby="ca-phone-extra-ids-help ca-phone-extra-ids-error" placeholder="每行一个 8 位工号，或用逗号分隔">${esc((st.extraIds || []).join('\n'))}</textarea>
         <p class="ca-note bad" id="ca-phone-extra-ids-error" role="alert"></p></fieldset>
       <fieldset class="col"><legend>开关与推送</legend>

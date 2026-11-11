@@ -54,23 +54,23 @@ const freePort = () => new Promise(resolve => { const s = net.createServer(); s.
         assert.ok(await c.eval(`document.querySelector('#ca-phone-extra-ids-help').textContent.includes('8 位数字')`));
         assert.ok(await c.eval(`document.querySelector('#ca-phone-extra-ids-help').textContent.includes('不要带字母')`));
         assert.equal(await c.eval(`document.querySelector(${JSON.stringify(selector)}).closest('fieldset').querySelector('legend').textContent`), '额外属于我的账号');
-        await type(' 00951078, 00951078\n 00855788\n00000001 , ');
+        await type(' 00123456, 00123456\n 00876543\n00000001 , ');
         await click('[data-x="phone-save"]');
-        await until(`document.querySelector(${JSON.stringify(selector)})?.value===${JSON.stringify('00951078\n00855788\n00000001')}`);
+        await until(`document.querySelector(${JSON.stringify(selector)})?.value===${JSON.stringify('00123456\n00876543\n00000001')}`);
         const saved = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
-        assert.deepEqual(saved.phone.extraIds, ['00951078', '00855788', '00000001']);
+        assert.deepEqual(saved.phone.extraIds, ['00123456', '00876543', '00000001']);
         assert.equal(saved.phone.enabled, false);
         result.checks.push('empty first use, clean account title, eight-digit IDs saved via real IPC, normalized settings on disk');
         // 后台工具发现可能独立更新 cliPath；这里只比较本次表单负责的完整 phone 设置。
         const beforeInvalid = JSON.parse(fs.readFileSync(settingsFile, 'utf8')).phone;
-        await type('z00951078, Z00951078, bad, 951078');
+        await type('z00123456, Z00123456, bad, 123456');
         await click('[data-x="phone-save"]');
         await until(`document.querySelector('#ca-phone-extra-ids-error').textContent.includes('bad')`);
         assert.ok(await c.eval(`(()=>{const e=document.querySelector('#ca-phone-extra-ids-error');const r=e.getBoundingClientRect();return document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===e})()`), 'inline error is visible, not behind the sticky save buttons');
-        assert.ok(await c.eval(`document.querySelector('#ca-phone-extra-ids-error').textContent.includes('951078')`));
-        for (const invalid of ['z00951078', 'Z00951078'])
+        assert.ok(await c.eval(`document.querySelector('#ca-phone-extra-ids-error').textContent.includes('123456')`));
+        for (const invalid of ['z00123456', 'Z00123456'])
           assert.ok(await c.eval(`document.querySelector('#ca-phone-extra-ids-error').textContent.includes(${JSON.stringify(invalid)})`));
-        assert.equal(await value(), 'z00951078, Z00951078, bad, 951078', 'invalid input stays editable');
+        assert.equal(await value(), 'z00123456, Z00123456, bad, 123456', 'invalid input stays editable');
         assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).phone, beforeInvalid);
         const invalidShot = await c.send('Page.captureScreenshot', { format: 'png' });
         fs.writeFileSync(path.join(out, 'phone-invalid.png'), Buffer.from(invalidShot.data, 'base64'));
@@ -80,13 +80,13 @@ const freePort = () => new Promise(resolve => { const s = net.createServer(); s.
         await until(`document.querySelector('[data-slot="phone-connect-result"]').textContent.includes('格式不正确')`);
         assert.deepEqual(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).phone, beforeInvalid, 'invalid connect never changes phone settings');
         result.checks.push('invalid save/connect rejected before sending, inline error, input and previous settings retained');
-        await type('00951078\n00855788\n00000001');
+        await type('00123456\n00876543\n00000001');
         assert.equal(await c.eval(`document.querySelector('#ca-phone-extra-ids-error').textContent`), '');
         await click('[data-x="phone-save"]');
         await until(`!document.querySelector('[data-x="phone-save"]').disabled`);
-        assert.deepEqual(savedIds(), ['00951078', '00855788', '00000001']);
+        assert.deepEqual(savedIds(), ['00123456', '00876543', '00000001']);
       } else {
-        assert.equal(await value(), '00951078\n00855788\n00000001');
+        assert.equal(await value(), '00123456\n00876543\n00000001');
         result.checks.push('full Hub restart retains saved extra IDs in the real phone settings page');
         await type(' ,\n ');
         await click('[data-x="phone-save"]');
