@@ -65,7 +65,7 @@ function parsePolicy(error, stdout, stderr) {
 }
 
 function probePowerShellPolicy(env = process.env) {
-  const result = require('child_process').spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', POLICY_SCRIPT],
+  const result = require('child_process').spawnSync(require('./windows-powershell').windowsPowerShellPath(env), ['-NoProfile', '-NonInteractive', '-Command', POLICY_SCRIPT],
     { env, encoding: 'utf8', windowsHide: true, timeout: 15000 });
   return parsePolicy(result.error || (result.status !== 0 ? new Error('exit ' + result.status) : null), result.stdout, result.stderr);
 }
@@ -80,7 +80,7 @@ function inspectSetup({ root = path.resolve(__dirname, '..'), env = process.env,
   // CLI status hooks run through Windows PowerShell, so no Python or Node is needed for them.
   const requirements = {
     windows: platform === 'win32',
-    powershell: platform !== 'win32' || !!findCommand('powershell', env, platform),
+    powershell: platform !== 'win32' || fs.existsSync(require('./windows-powershell').windowsPowerShellPath(env)) || !!findCommand('powershell', env, platform),
     electron: packaged || fs.existsSync(electron),
     ...(packaged ? {} : { node22: Number(String(version).split('.')[0]) >= 22 }),
   };
@@ -105,7 +105,7 @@ let policyProbe = null;
 async function inspectSetupAsync(options = {}) {
   if (process.platform === 'win32' && !policyProbe) {
     policyProbe = new Promise(resolve => {
-      require('child_process').execFile('powershell', ['-NoProfile', '-NonInteractive', '-Command', POLICY_SCRIPT],
+      require('child_process').execFile(require('./windows-powershell').windowsPowerShellPath(options.env), ['-NoProfile', '-NonInteractive', '-Command', POLICY_SCRIPT],
         { encoding: 'utf8', windowsHide: true, timeout: 15000 }, (error, stdout, stderr) => resolve(parsePolicy(error, stdout, stderr)));
     });
   }

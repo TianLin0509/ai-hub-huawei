@@ -5312,7 +5312,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       && ['starting','running'].includes(session.nativeRuntime?.state)
       ? require('./hub-feedback-health').healthText(now) : '';
     // hook 部署失败时状态只能靠落盘记录和屏幕，必须让用户看见，而不是静默降级。
-    const hookWarning = session.hookIntegrationWarning ? '状态信号降级（hook 未部署）：' + session.hookIntegrationWarning : '';
+    const hookWarning = session.hookIntegrationWarning ? '会话状态同步未准备好，运行中／完成的提示可能不准。请先打开终端查看实际状态；方便时保存工作并重新打开该会话。原因：' + session.hookIntegrationWarning : '';
     // 写作成员没能用上写作专用配置时同样要让人看见（core/session-manager.js 的写作目录准备）
     const writingWarning = session.writingContextWarning ? (/^scene-/.test(session.purpose || '') ? '场景降级：' : '写作上下文降级：') + session.writingContextWarning : '';
     const userContextWarning = session.userContextWarning || '';

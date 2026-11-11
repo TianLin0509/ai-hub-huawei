@@ -7,7 +7,7 @@ function currentConfig() {
   const hub=require('./hub-config');
   // Another Hub can update the choice while this process keeps an older config
   // cache. Read only the account routing fields at launch/send/resume boundaries.
-  // Corrupt/unreadable config must block routing, never silently select default.
+  // Unreadable config blocks routing; the shared reader repairs malformed JSON.
   const raw=hub.readConfigJsonForUpdate();
   const companyApi = require('./company-api-config');
   if (companyApi.isCompany()) return companyApi.applyCompanyConfig({ ...hub.getConfig() }, raw);

@@ -1769,6 +1769,22 @@ function createWindow() {
   mainWindow.webContents.once('did-finish-load', showMainWindow);
   mainWindow.webContents.on('did-finish-load', () => {
     traceStartup('did-finish-load');
+    if (bootState.storageWriteError && ['EPERM', 'EBUSY', 'EACCES'].includes(bootState.storageWriteError.code)
+        && !global.__bootStorageRetryStarted) {
+      global.__bootStorageRetryStarted = true;
+      sendToRenderer('session-notice', { message: '数据文件暂时被占用，稍后自动重试', level: 'warning', persistent: true });
+      const retry = async () => {
+        try {
+          await stateStore.saveForRestart({ version: 1, cleanShutdown: false, sessions: lastPersistedSessions,
+            meetings: meetingManager.getAllMeetings(), immersiveByMeeting: _immersiveByMeeting });
+          sendToRenderer('session-notice', { message: '数据文件占用已解除，保存已恢复', level: 'info' });
+        } catch (error) {
+          if (['EPERM', 'EBUSY', 'EACCES'].includes(error.code)) setTimeout(retry, 5000).unref();
+          else sendToRenderer('session-notice', { message: `数据保存失败：${error.message}`, level: 'error', persistent: true });
+        }
+      };
+      setTimeout(retry, 5000).unref();
+    }
     sendToRenderer('hook-status', { up: hookPort !== null, port: hookPort });
     if (hubRestart.bootToken && !global.__loopResumeScanned) {
       global.__loopResumeScanned = true;

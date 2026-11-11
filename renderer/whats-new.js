@@ -15,8 +15,37 @@
   const entries = loadHistory();
   let dialog = null, notice = null, banner = null, noticeTimer = null;
   // 现在就算好：一键更新的结果提示比页面准备好更早来问。
-  const lastSeen = read();
+  const lastSeen = read() || upgradeFrom();
   let unread = lastSeen ? entriesSince(entries, lastSeen, current) : [];
+
+  function upgradeFrom() {
+    const fs = require('node:fs'), path = require('node:path');
+    const root = path.join(require('../core/data-dir').getHubDataDir(), 'app-update');
+    // 主进程可能已把结果改名为 .seen；只读，不消费它的结果提示。
+    for (const name of ['last-result.json', 'last-result.json.seen']) {
+      try {
+        const result = JSON.parse(fs.readFileSync(path.join(root, name), 'utf8').replace(/^\uFEFF/, ''));
+        return result?.ok !== false && typeof result?.from === 'string' && /^\d+\.\d+\.\d+$/.test(result.from) && result.from !== current ? result.from : '';
+      } catch (error) { if (error.code !== 'ENOENT') return ''; }
+    }
+    return '';
+  }
+
+  function featureGuide() {
+    const enabled = name => distribution.featureEnabled(name);
+    const company = distribution.target === 'company';
+    const features = [], optional = [];
+    if (company && enabled('companyAssistant')) { features.push('助理整理工作信息'); optional.push('助理'); }
+    if (company && enabled('companyAssistant')) features.push('会议留存录音、原话和纪要', '会议室自动抢订', 'PPT 找原页');
+    if (company && enabled('companyForum')) { features.push('论坛看热帖'); optional.push('论坛'); }
+    if (company && enabled('companyAttendance')) { features.push('考勤看工时'); optional.push('考勤'); }
+    const extra = [];
+    if (enabled('hubPet')) { extra.push('桌宠'); optional.push('桌宠'); }
+    if (company) extra.push('号池');
+    extra.push('『从此处分支』');
+    const list = items => items.length > 1 ? items.slice(0, -1).join('、') + '和' + items.at(-1) : items.join('');
+    return `这段时间新增了：${features.length ? features.join('；') + '；还有' : ''}${list(extra)}。入口都在左侧栏${optional.length ? `，${list(optional)}可在设置的『可选功能』里开启` : ''}。`;
+  }
 
   function injectStyle() {
     if (document.getElementById('whats-new-style')) return;
@@ -69,7 +98,7 @@
     notice = document.createElement('aside');
     notice.className = 'wn-notice';
     notice.setAttribute('role', 'status');
-    notice.innerHTML = `<strong>已更新到 v${esc(current)}</strong><ul>${notes.slice(0, 3).map(n => `<li>${esc(n)}</li>`).join('')}</ul>`
+    notice.innerHTML = `<strong>已更新到 v${esc(current)}</strong>${unread.length >= 3 ? `<p>${esc(featureGuide())}</p>` : ''}<ul>${notes.slice(0, 3).map(n => `<li>${esc(n)}</li>`).join('')}</ul>`
       + `<div class="wn-notice-foot">${notes.length > 3 ? `<span>还有 ${notes.length - 3} 条</span>` : '<span></span>'}`
       + '<button type="button" data-wn="later">知道了</button><button type="button" class="primary" data-wn="open">看全部</button></div>';
     notice.addEventListener('click', event => {

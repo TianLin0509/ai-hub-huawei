@@ -62,8 +62,13 @@ test('两种登录并存：优先有效记录，都有效或都过期时保持�
       [3600_000, 3600_000, 'browser-token', 'password-token'],
       [-1000, 3600_000, 'password-token', 'password-token'],
       [3600_000, -1000, 'browser-token', 'browser-token'],
-      [30_000, 3600_000, null, 'password-token'],
-      [3600_000, 30_000, 'browser-token', null],
+      [30_000, 3600_000, 'password-token', 'password-token'],
+      [3600_000, 30_000, 'browser-token', 'browser-token'],
+      [60_000, 3600_000, 'password-token', 'password-token'],
+      [3600_000, 120_000, 'browser-token', 'browser-token'],
+      [90_000, 3600_000, 'browser-token', 'password-token'],
+      [3600_000, 90_000, 'browser-token', 'browser-token'],
+      [30_000, 30_000, null, null],
       [-1000, -1000, null, null],
     ]) {
       const body = { devUCOAuth: { accessToken: devToken, expiresAt: nowMs + devOffset },
@@ -85,4 +90,20 @@ test('两种登录并存：优先有效记录，都有效或都过期时保持�
   await writeFile(poolFile, JSON.stringify({ devUCOAuth: { accessToken: devToken, expiresAt: nowMs + 3600_000 },
     idaasOAuth: { xAuthToken: idaasToken, xAuthExpires: 'invalid' } }));
   await assert.rejects(pool({ poolRoot: root, accountId, nowMs }), { code: 'POOL_EXPIRY_INVALID' });
+});
+
+test('单一登录仍拒绝临期令牌，并遵循调用方指定的最低有效期', async t => {
+  const root = await tempDir(t), accountId = 'abc123', nowMs = Date.now();
+  await mkdir(join(root, 'accounts', accountId), { recursive: true });
+  await writeFile(join(root, 'pool.json'), JSON.stringify({ accounts: [{ id: accountId }] }));
+  const personalFile = join(root, 'personal.json'), poolFile = join(root, 'accounts', accountId, '.credentials.json');
+  const personal = createPersonalAccessTokenReader({ decryptAccessToken }), pool = createPoolAccessTokenReader({ decryptAccessToken });
+  for (const body of [{ devUCOAuth: { accessToken: DPAPI, expiresAt: nowMs + 30000 } },
+    { idaasOAuth: { xAuthToken: DPAPI, xAuthExpires: nowMs + 30000 } }]) {
+    await writeFile(personalFile, JSON.stringify(body)); await writeFile(poolFile, JSON.stringify(body));
+    await assert.rejects(personal({ credentialPath: personalFile, expiryUnit: 'milliseconds', nowMs }), { code: 'ACCESS_TOKEN_EXPIRED_OR_NEAR_EXPIRY' });
+    await assert.rejects(pool({ poolRoot: root, accountId, nowMs }), { code: 'POOL_ACCESS_TOKEN_EXPIRED_OR_NEAR_EXPIRY' });
+    assert.equal(await personal({ credentialPath: personalFile, expiryUnit: 'milliseconds', nowMs, minValidityMs: 10000 }), 'plain-token');
+    assert.equal(await pool({ poolRoot: root, accountId, nowMs, minValidityMs: 10000 }), 'plain-token');
+  }
 });

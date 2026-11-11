@@ -280,7 +280,7 @@
     if (!d.scenes || !d.scenes.length) {
       return h('div', { class: 'rl-view' }, h('div', { class: 'rl-card' },
         h('div', { class: 'rl-strong', text: '还没有场景' }),
-        h('div', { class: 'rl-muted', text: '场景让不同任务用不同的提示词：讨论技术、投研、写作时不再带编程助手那一套。把场景文件放进下面的目录（每个场景一个 md，开头写 id 和 label）就会出现在这里，输入框也会多出「场景」按钮。' }),
+        h('div', { class: 'rl-muted', title: '场景文件格式：每个场景一个 md，开头写 id 和 label。', text: '场景让写作、技术讨论等任务使用不同的规则。还没配置也可以正常聊天；想添加时，可把下方目录发给 AI，请它按 Hub 场景格式创建一份规则。' }),
         d.dir ? h('div', { class: 'rl-path', text: d.dir }) : null,
         d.error ? h('div', { class: 'rl-note bad', text: d.error }) : null));
     }

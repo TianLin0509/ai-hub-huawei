@@ -196,7 +196,7 @@
     const ask = by('decide').length, risk = by('risk').length;
     root.querySelector('#pg-subtitle').textContent = all.length
       ? `${all.length} 个会话在维护进展卡 · ${ask} 件等你拍板 · ${risk} 个有风险或久未更新${older.length ? ` · 另有 ${older.length} 张较早的卡收在下面` : ''}。每张卡是 Agent 最近写的白话；点卡片进入会话。`
-      : older.length ? `眼下没有活跃的进展卡，${older.length} 张较早的卡收在下面。` : '还没有会话在维护进展卡。连续跑 30 分钟以上的任务，Agent 会在任务目录建一张进展卡，这里就会出现。';
+      : older.length ? `眼下没有活跃的进展卡，${older.length} 张较早的卡收在下面。` : '这里汇总长任务的进展和待你决定的事。还没有进展卡时，可以对正在工作的 AI 说：『请为这项任务维护进展卡，写清当前进展、下一步和需要我决定的事。』建卡后会显示在这里。';
     root.querySelector('#pg-cols').innerHTML = GROUPS.map(g => {
       const xs = by(g.key);
       return `<section class="pg-col" data-pg-group="${g.key}"><h3><i class="pg-dot pg-${g.cls}"></i>${esc(g.title)}（${xs.length}）</h3>${xs.map(boardCard).join('') || `<div class="pg-empty">${esc(g.empty)}</div>`}</section>`;

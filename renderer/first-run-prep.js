@@ -46,13 +46,13 @@
   }
   function counts() {
     const list = [...rows.values()], done = list.filter(r => FINAL.has(r.status)).length;
-    return { total: list.length, done, bad: list.filter(r => r.status === 'bad').length, hold: list.filter(r => r.status === 'hold').length };
+    return { total: list.length, done, bad: list.filter(r => r.status === 'bad').length, hold: list.filter(r => r.status === 'hold').length, warn: list.filter(r => r.status === 'warn').length };
   }
   function paintSummary() {
     if (!root) return;
     const c = counts(), seconds = Math.round((Date.now() - startedAt) / 1000);
     root.querySelector('.fr-bar i').style.width = c.total ? `${c.done * 100 / c.total}%` : '0';
-    root.querySelector('.fr-sum').textContent = c.bad || c.hold ? `已用 ${seconds} 秒 · ${c.bad} 项需要处理${c.hold ? `，${c.hold} 项在等它们` : ''}` : finished ? '全部就绪' : `已完成 ${c.done} / ${c.total}`;
+    root.querySelector('.fr-sum').textContent = c.bad || c.hold ? `已用 ${seconds} 秒 · ${c.bad} 项需要处理${c.hold ? `，${c.hold} 项在等它们` : ''}${c.warn ? `，${c.warn} 项提醒` : ''}` : finished ? c.warn ? `准备已完成，还有 ${c.warn} 项提醒；可先进入 Hub，用到时再处理。` : '全部就绪' : `已完成 ${c.done} / ${c.total}`;
     const go = root.querySelector('.fr-go');
     if (finished && !c.bad && !c.hold) { go.textContent = '进入 Hub'; go.classList.add('pri'); }
     else go.textContent = c.bad || c.hold ? '先进入 Hub，这些以后再处理' : '先进入 Hub，其余在后台继续';
@@ -61,12 +61,14 @@
     injectStyle();
     if (!root) {
       root = el('div', 'fr-mask'); root.id = 'first-run-prep';
-      root.innerHTML = '<div class="fr-card" role="dialog" aria-label="首次启动准备"><h3>正在为第一次使用做准备</h3><div class="fr-hint">只有这一次需要等，以后打开直接进入。</div><div class="fr-bar"><i></i></div><div class="fr-list"></div><div class="fr-foot"><span class="fr-sum"></span><button type="button" class="fr-go">先进入 Hub，其余在后台继续</button></div></div>';
+      root.innerHTML = '<div class="fr-card" role="dialog" aria-label="首次启动准备"><h3>正在为第一次使用做准备</h3><div class="fr-hint">正在检查工具、登录和模型连接。完成后即可开始，暂时用不到的功能可以以后再准备。</div><div class="fr-bar"><i></i></div><div class="fr-list"></div><div class="fr-foot"><span class="fr-sum"></span><button type="button" class="fr-go">先进入 Hub，其余在后台继续</button></div></div>';
       root.querySelector('.fr-go').onclick = close;
       document.body.append(root);
       clearInterval(ticker); ticker = setInterval(paintSummary, 1000);
     }
     const list = root.querySelector('.fr-list'); list.textContent = ''; rows = new Map();
+    root.querySelector('h3').textContent = '正在为第一次使用做准备';
+    root.querySelector('.fr-hint').textContent = '正在检查工具、登录和模型连接。完成后即可开始，暂时用不到的功能可以以后再准备。';
     for (const group of groups) {
       list.append(el('div', 'fr-grp', group.name));
       for (const row of group.rows) {
@@ -86,18 +88,34 @@
   }
   const stripRow = id => strip?.querySelector(`[data-fr-s="${id}"]`);
   function onChanged(event) {
-    if (event.type === 'start') { showStrip('CodeAgent 有变化，正在同步', []); for (const g of event.groups) for (const r of g.rows) { const l = el('div', 'fr-sl'); l.dataset.frS = r.id; l.append(el('span', 'fr-dot wait'), el('span', '', r.label)); strip.append(l); } }
-    if (event.type === 'row') { const l = stripRow(event.row.id); if (l) { l.querySelector('.fr-dot').className = `fr-dot ${event.row.status}`; if (event.row.status === 'bad') l.lastChild.textContent += `：${event.row.detail}`; } }
-    if (event.type === 'done') { if (event.problems.length) { strip.append(el('div', 'fr-sl', '有项目没通过，可到设置里的环境体检查看')); strip.append(Object.assign(el('button', 'fr-link', '关闭'), { type: 'button', onclick: () => strip.remove() })); } else { strip.querySelector('b').textContent = '已同步，可以继续用'; setTimeout(() => strip?.remove(), 2500); } }
+    if (event.type === 'start') { rows = new Map(); showStrip('CodeAgent 有变化，正在同步', []); for (const g of event.groups) for (const r of g.rows) { const l = el('div', 'fr-sl'); l.dataset.frS = r.id; l.append(el('span', 'fr-dot wait'), el('span', '', r.label)); strip.append(l); } }
+    if (event.type === 'row') { rows.set(event.row.id, event.row); const l = stripRow(event.row.id); if (l) { l.querySelector('.fr-dot').className = `fr-dot ${event.row.status}`; if (event.row.status === 'bad') l.lastChild.textContent += `：${event.row.detail}`; } }
+    if (event.type === 'done') { if (event.problems.length || counts().warn || event.held.length) { strip.append(el('div', 'fr-sl', '有项目需要处理或提醒，可到设置里的功能体检查看')); strip.append(Object.assign(el('button', 'fr-link', '关闭'), { type: 'button', onclick: () => strip.remove() })); } else { strip.querySelector('b').textContent = '已同步，可以继续用'; setTimeout(() => strip?.remove(), 2500); } }
   }
   let currentMode = 'none';
+  window.__firstRunPrep = { openSaved() {
+    const prep = require('../core/first-run-prep');
+    const state = prep.readState(require('../core/data-dir').getHubDataDir());
+    if (prep.pendingCount(state) === null) return false;
+    clearTimeout(enterTimer);
+    const savedRows = { ...Object.fromEntries((state.problems || []).map(id => [id, { id, status: 'bad', detail: '上次未完成，可重新检查', fixes: [{ label: '重新检查', act: 'recheck' }] }])), ...state.rows };
+    currentMode = 'full'; startedAt = Date.now(); finished = true;
+    drawFull(prep.layout({ isCompany: require('../core/distribution').target === 'company' })
+      .map(group => ({ ...group, rows: group.rows.filter(row => savedRows[row.id]) })).filter(group => group.rows.length));
+    for (const row of Object.values(savedRows)) { rows.set(row.id, row); paintRow(row); }
+    root.querySelector('h3').textContent = '上次准备结果';
+    root.querySelector('.fr-hint').textContent = '这里显示已保存的结果；需要时可点对应项目的「重新检查」。';
+    paintSummary(); return true;
+  } };
   ipcRenderer.on('first-run:event', (_e, event) => {
     if (currentMode === 'changed') return onChanged(event);
     if (event.type === 'start' && root) drawFull(event.groups);
     if (event.type === 'row') { rows.set(event.row.id, event.row); paintRow(event.row); paintSummary(); }
     if (event.type === 'done') {
       finished = true; paintSummary();
-      if (root && !event.problems.length && !event.held.length) enterTimer = setTimeout(close, AUTO_ENTER_MS);
+      clearTimeout(enterTimer);
+      const c = counts();
+      if (root && !event.problems.length && !event.held.length && !c.warn) enterTimer = setTimeout(close, AUTO_ENTER_MS);
     }
   });
   window.addEventListener('focus', () => { if (recheckOnFocus && root) { recheckOnFocus = false; rerun(); } });

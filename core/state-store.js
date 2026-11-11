@@ -357,7 +357,7 @@ function _renameWithRetrySync(source, target, options = {}) {
       rename(source, target);
       return attempt;
     } catch (error) {
-      if (!_isTransientRenameError(error) || attempt >= retries) throw error;
+      if (!_isTransientRenameError(error) || error.renameRetried != null || attempt >= retries) throw error;
       sleep(retryDelayMs);
     }
   }
@@ -375,7 +375,7 @@ async function _renameWithRetryAsync(source, target, options = {}) {
       await rename(source, target);
       return attempt;
     } catch (error) {
-      if (!_isTransientRenameError(error) || attempt >= retries) throw error;
+      if (!_isTransientRenameError(error) || error.renameRetried != null || attempt >= retries) throw error;
       await sleep(retryDelayMs);
     }
   }

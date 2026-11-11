@@ -1197,6 +1197,7 @@ function registerSessionIpc(ipcMain, deps) {
       } catch (error) { return { ok: false, technicalReason: error && error.message ? error.message : String(error), message: `这个账号在 CodeAgent 模型菜单里选不了 ${want}` }; }
     };
     let result = await driveMenu(modelId);
+    if (result.loginRequired) return result;
     // 选菜单第一个（手动新建、没明确选模型，2026-10-25）：实际选中的是菜单第 1 行那个模型。
     const pickFirst = codeagentPicker.isFirstMenuModel(modelId);
     let picked = pickFirst ? (result.ok && result.picked) || '' : modelId;
@@ -1401,6 +1402,7 @@ function registerSessionIpc(ipcMain, deps) {
       try { result = await runCodeAgentPick(sessionId, modelId, reason); }
       finally { if (showPhase) sendLaunchPhase(sessionId, { model: 'done' }); }
       const session = sessionManager.getSession(sessionId);
+      if (result.loginRequired) return result;
       if (result.fallback && codeagentPicker.isFirstMenuModel(modelId)) {
         sendToRenderer('session-notice', { sessionId, level: 'warning',
           message: `没能自动选中 CodeAgent 模型菜单里的第一个模型（${result.message || '原因未知'}），这个会话沿用 CodeAgent 当前的模型；需要换的话在终端里 /model 选一次。` });

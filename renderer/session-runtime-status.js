@@ -111,7 +111,7 @@ function deriveSessionRuntimeStatus(session, options = {}) {
     detail = durationMs > 0 ? `本轮用时 ${formatRuntimeDuration(durationMs)}` : '';
   } else if (state === RUNTIME_UNKNOWN) {
     detail = truth.reason === 'observation-expired'
-      ? '最近的运行信号已过期，等待新的语义事件或 PTY 证据'
+      ? '暂时无法确认 AI 是否仍在运行。可打开终端查看是否需要登录或确认；确认上一条消息状态前，请先不要重复发送。'
       : String(truth.evidence || '').trim();
   }
 

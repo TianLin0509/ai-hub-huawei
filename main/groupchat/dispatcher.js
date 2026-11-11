@@ -72,18 +72,20 @@ function resolveMention(rawToken, members) {
   }
   return { hit: tied ? null : best };
 }
-function parseGroupTargets(userInput, members, participants) {
+function parseGroupTargets(userInput, members, participants, requireAllMentions = false) {
   const selected = Array.isArray(participants) ? participants : [];
   const selectedMembers = members.filter(m => selected.includes(m.index));
   const mentionRe = /@([A-Za-z0-9_.\-一-鿿]+)/g;
   const mentioned = [];
+  let unresolved = false;
   let m;
   while ((m = mentionRe.exec(userInput || '')) !== null) {
     const { all, hit } = resolveMention(m[1], members);
     if (all) return { targets: members, mentions: ['all'] };
+    if (!hit) unresolved = true;
     if (hit && !mentioned.some(x => x.sid === hit.sid)) mentioned.push(hit);
   }
-  if (mentioned.length > 0) return { targets: mentioned, mentions: mentioned.map(x => x.memberId) };
+  if ((!requireAllMentions || !unresolved) && mentioned.length > 0) return { targets: mentioned, mentions: mentioned.map(x => x.memberId) };
   return { targets: selectedMembers, mentions: [] };
 }
 
@@ -1383,12 +1385,18 @@ function createGroupChatDispatcher(deps) {
       const explicitTargetIds = Array.isArray(targetMemberIds)
         ? targetMemberIds.map(x => String(x || '').toLowerCase()).filter(Boolean)
         : [];
-      const routed = explicitTargetIds.length
+      let routed = explicitTargetIds.length
         ? {
             targets: members.filter(m => explicitTargetIds.includes(String(m.memberId || '').toLowerCase())),
             mentions: explicitTargetIds,
           }
         : parseGroupTargets(userInput || '', members, meeting.participants);
+      // 普通群聊的头像快照是默认收件人；本条消息的有效点名优先，不改头像。
+      if (recipientSids !== undefined && !silent && !workflowRun && !meeting.orchestration?.enabled
+          && !meeting.serialWorkflow?.enabled && !DevFile.enabled(meeting) && !DevDiscuss.isDiscussing(meeting)) {
+        const mentioned = parseGroupTargets(userInput || '', members, meeting.participants, true);
+        if (mentioned.mentions.length && !mentioned.mentions.includes('all')) routed = mentioned;
+      }
       const targetMembers = routed.targets || [];
       if (DevFile.enabled(meeting) || require('../../core/delivery-workflow').enabled(meeting)) {
         const historyOrch=groupchat.getOrchestrator(getHubDataDir(),meetingId);

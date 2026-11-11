@@ -174,7 +174,7 @@
   }
   function modeSwitch(mode) {
     return '<div class="company-api-mode" role="radiogroup" aria-label="接入方式">'
-      + `<button type="button" role="radio" data-api-mode="proxy" aria-checked="${mode === 'proxy'}"><strong>公司模型</strong><small>${snapshot?.proxy?.shared ? '经共享主机，使用团队号池' : '经本机反代，用 CodeAgent 账号'}</small></button>`
+      + `<button type="button" role="radio" data-api-mode="proxy" aria-checked="${mode === 'proxy'}"><strong>公司模型</strong><small>${snapshot?.proxy?.shared ? '经共享主机，使用团队号池' : '通过本机公司模型通道，使用 CodeAgent 账号'}</small></button>`
       + `<button type="button" role="radio" data-api-mode="own" aria-checked="${mode !== 'proxy'}"><strong>自有接口</strong><small>填写接口地址，或沿用 CLI 本机配置</small></button></div>`;
   }
   function proxyStatusHtml(kind) {
@@ -187,7 +187,7 @@
     const cooling = all.filter(a => a.coolingUntil && a.coolingUntil > Date.now()).length;
     const accounts = all.length ? `个人账号${pool.length ? ` + 号池 ${pool.length} 个号` : ''}${cooling ? `（${cooling} 个冷却中）` : ''}` : '个人账号与号池（启动后显示）';
     return `<div class="company-proxy-state" data-proxy-state="${esc(proxy.state)}"><div><span class="company-proxy-dot" aria-hidden="true"></span>`
-      + `<strong>反代${esc(PROXY_STATE[proxy.state] || proxy.state)}</strong></div>`
+      + `<strong>公司模型通道：${esc(PROXY_STATE[proxy.state] || '状态待确认')}</strong></div>`
       + `<p>${esc(proxy.message || (proxy.state === 'stopped' ? '保存后自动启动，随 Hub 一起退出。' : ''))}</p>`
       + (proxy.firstInit?.ran && proxy.state === 'running' ? `<p>首次签名初始化已完成（用时约 ${Math.max(1, Math.round((proxy.firstInit.ms || 0) / 1000))} 秒），之后启动直接复用，CodeAgent 升级后会自动重做一次。</p>` : '')
       + `<p>可用账号：${esc(accounts)}。每个会话固定用一个号，号被限流时自动换号，号池都不可用时改用个人账号。</p></div>` + dshHint;
@@ -238,13 +238,13 @@
       + `<div data-proxy-zone>${zoneHtml()}</div>`
       + `<div data-proxy-status>${proxyStatusHtml(kind)}</div>`
       + '<p class="company-api-note">只用 CodeAgent 已登录的账号，不会替你登录或刷新登录；公司模型只收文字，不支持联网搜索。新建会话时也可在模型菜单里换另一个模型。</p>'
-      + `<p class="company-api-message" role="status" aria-live="polite"></p><footer><button type="button" data-api-action="proxy-restart">${snapshot?.proxy?.shared ? '重新连接主机' : '重新启动反代'}</button><button type="button" data-api-action="close">取消</button><button type="submit" class="primary">保存配置</button></footer></form>`);
+      + `<p class="company-api-message" role="status" aria-live="polite"></p><footer><button type="button" data-api-action="proxy-restart">${snapshot?.proxy?.shared ? '重新连接主机' : '重新启动模型通道'}</button><button type="button" data-api-action="close">取消</button><button type="submit" class="primary">保存配置</button></footer></form>`);
     target.querySelector('[data-api-action="close"]').onclick = close;
     bindZone(target);
     target.querySelector('[data-api-action="proxy-restart"]').onclick = async event => {
       const button = event.currentTarget, status = target.querySelector('[role="status"]');
       button.disabled = true;
-      status.textContent = snapshot?.proxy?.shared ? '正在重新连接共享主机…' : '正在重新启动反代…';
+      status.textContent = snapshot?.proxy?.shared ? '正在重新连接共享主机…' : '正在重新启动模型通道…';
       try {
         const result = await ipcRenderer.invoke('company-proxy:restart');
         snapshot = { ...snapshot, proxy: result?.proxy || snapshot?.proxy };

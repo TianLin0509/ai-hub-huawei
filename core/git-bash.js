@@ -110,7 +110,7 @@ const PS_SCRIPT = [
 
 function runPowerShell(env, timeoutMs) {
   return new Promise(resolve => {
-    require('child_process').execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', PS_SCRIPT],
+    require('child_process').execFile(require('./windows-powershell').windowsPowerShellPath(env), ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', PS_SCRIPT],
       { windowsHide: true, timeout: timeoutMs, encoding: 'utf8', env }, (error, stdout) => resolve(String(stdout || '')));
   });
 }

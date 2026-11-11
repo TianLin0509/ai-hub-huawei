@@ -130,7 +130,7 @@ export function createPersonalAccessTokenReader({ decryptAccessToken = decryptDe
     const devuc = record(parsed?.devUCOAuth), idaas = record(parsed?.idaasOAuth);
     const unexpired = (value, seconds = false) => {
       const ms = seconds ? value * 1000 : value;
-      return Number.isSafeInteger(value) && value > 0 && Number.isSafeInteger(ms) ? ms > nowMs + performance.now() - began : null;
+      return Number.isSafeInteger(value) && value > 0 && Number.isSafeInteger(ms) ? ms - (nowMs + performance.now() - began) > minValidityMs : null;
     };
     const preferIdaas = devuc?.accessToken && idaas?.xAuthToken
       && unexpired(devuc.expiresAt, expiryUnit === 'seconds') === false && unexpired(idaas.xAuthExpires);

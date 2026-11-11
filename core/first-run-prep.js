@@ -21,8 +21,8 @@ const OPTIONAL_ROWS = new Set(['claude', 'codex', 'dsh', 'welink', 'ppt-doctor']
 
 function layout({ isCompany }) {
   const company = isCompany ? [
-    ['账号与区域', [['login', 'CodeAgent 登录'], ['zone', '所在区域'], ['pool', '号池账号']]],
-    ['模型', [['models', '可用模型清单'], ['proxy', '公司模型通道'], ['sign', '签名信息'], ['hello', '真实问答一句']]],
+    ['账号与区域', [['login', 'CodeAgent 登录'], ['zone', '所在区域'], ['pool', '可选账号（不添加也能用个人账号）']]],
+    ['模型', [['models', '可用模型清单'], ['proxy', '公司模型通道'], ['sign', '公司模型连接凭证'], ['hello', '验证模型能否回答']]],
   ] : [];
   return [
     ['工具', [['codeagent', 'CodeAgent'], ['claude', 'Claude'], ['codex', 'Codex'], ['dsh', 'DSH'], ['git-bash', 'Git Bash'], ['node', 'Node.js'], ['welink', 'WeLink'], ['ppt-doctor', 'PPT Doctor']]],
@@ -46,6 +46,12 @@ function fingerprint(file) {
   catch { return null; }
 }
 const sameFingerprint = (a, b) => !!a && !!b && String(a.path).toLowerCase() === String(b.path).toLowerCase() && a.size === b.size && a.mtimeMs === b.mtimeMs;
+
+function pendingCount(state) {
+  if (!state || !state.at) return null;
+  if (state.rows && typeof state.rows === 'object') return new Set([...Object.entries(state.rows).filter(([, r]) => ['bad', 'warn', 'hold'].includes(r?.status)).map(([id]) => id), ...(state.problems || [])]).size;
+  return Array.isArray(state.problems) ? new Set(state.problems).size : null;
+}
 
 function decide(state, current) {
   if (!state || state.schema !== SCHEMA) return 'full';
@@ -101,7 +107,7 @@ function createPrep({ isCompany, deps, emit = () => {} }) {
     };
     const step = async (id, ms, fn) => {
       set(id, ST.run, '检查中…');
-      try { const r = await limited(fn(), ms, { status: ST.warn, detail: `${Math.round(ms / 1000)} 秒内没查完，不影响继续使用`, fixes: [RECHECK] }); set(id, r.status, r.detail, r.fixes || []); return r; }
+      try { const r = await limited(fn(), ms, { status: ST.warn, detail: `${Math.round(ms / 1000)} 秒内未能确认结果。可以先进入 Hub；使用这项功能前，请点『重新检查』。`, fixes: [RECHECK] }); set(id, r.status, r.detail, r.fixes || []); return r; }
       catch (error) { const r = { status: ST.warn, detail: `这一项没查成：${String(error.message || error).slice(0, 160)}`, fixes: [RECHECK] }; set(id, r.status, r.detail, r.fixes); return r; }
     };
     const hold = (list, why) => list.forEach(id => set(id, ST.hold, why));
@@ -192,11 +198,13 @@ function createPrep({ isCompany, deps, emit = () => {} }) {
     const problems = list.filter(r => r.status === ST.bad).map(r => r.id);
     const summary = { problems, held: list.filter(r => r.status === ST.hold).map(r => r.id) };
     const previous = deps.readState?.() || null;
-    deps.saveState?.({ schema: SCHEMA, at: deps.now ? deps.now() : Date.now(), fingerprint: deps.fingerprint?.() || previous?.fingerprint || null, problems });
+    const savedRows = mode === 'changed' ? { ...previous?.rows, ...rows } : rows;
+    deps.saveState?.({ schema: SCHEMA, at: deps.now ? deps.now() : Date.now(), fingerprint: deps.fingerprint?.() || previous?.fingerprint || null,
+      rows: savedRows, problems: mode === 'changed' ? [...new Set([...(previous?.problems || []).filter(id => !ids.has(id)), ...problems])] : problems });
     try { emit({ type: 'done', mode, ...summary }); } catch { /* 界面没开 */ }
     return { mode, rows, ...summary };
   }
   return { run };
 }
 
-module.exports = { SCHEMA, STATE_FILE, ST, layout, readState, writeState, fingerprint, sameFingerprint, decide, askOnce, helloAny, createPrep };
+module.exports = { SCHEMA, STATE_FILE, ST, layout, readState, writeState, fingerprint, sameFingerprint, pendingCount, decide, askOnce, helloAny, createPrep };

@@ -13,6 +13,7 @@ class Element {
   }
   append(...nodes) { nodes.forEach(node => { if (typeof node === 'string') return; node.parent = this; this.children.push(node); }); }
   appendChild(node) { this.append(node); }
+  prepend(node) { node.parent = this; this.children.unshift(node); }
   replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
   remove() { if (this.parent) this.parent.children = this.parent.children.filter(node => node !== this); }
   setAttribute(key, value) { this[key] = value; }
@@ -56,23 +57,106 @@ function page(file, invoke, distribution = {}) {
   const host = new Element(); host.className = 'home-welcome-body'; body.append(host);
   const document = { head, body, readyState: 'complete', createElement: tag => new Element(tag),
     getElementById: id => head.querySelector('#' + id) || body.querySelector('#' + id), querySelector: s => body.querySelector(s) };
-  const calls = [], opened = [];
+  const calls = [], opened = [], timers = [];
   const ipcRenderer = { on: (name, callback) => { events[name] = callback; }, invoke: async (name, args) => { calls.push([name, args]); return invoke(name, args); } };
   const window = { addEventListener: (name, callback) => { focus[name] = callback; } };
   const localRequire = name => {
     if (name === 'electron') return { ipcRenderer, shell: { openExternal: url => opened.push(url) } };
     if (name === '../core/distribution') return { community: true, target: 'company', featureEnabled: () => true, ...distribution };
+    if (name === '../core/first-run-prep') return { ...require('../core/first-run-prep'), readState: () => distribution.prepState || null };
+    if (name === '../core/data-dir') return { getHubDataDir: () => 'unused' };
     if (name === './codeagent-setup') return { createCodeAgentSetup: () => ({ accept() {}, subscribe() {}, showGuide() { opened.push('bundled-guide'); } }) };
     if (name === './net-pass-view') return { ensureCss() {}, boxHtml: () => '', bind() {} };
     if (name === '../core/app-update/downloader') return require('../core/app-update/downloader');
     throw new Error('Unexpected require: ' + name);
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../renderer', file), 'utf8'), {
-    document, window, require: localRequire, console, setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {},
+    document, window, require: localRequire, console, localStorage: { getItem: () => '', setItem() {} },
+    setTimeout: (callback, ms) => { timers.push({ callback, ms }); return timers.length; }, clearTimeout() {}, setInterval: () => 1, clearInterval() {},
   }, { filename: '../renderer/' + file });
-  return { document, body, host, events, focus, window, calls, opened };
+  return { document, body, host, events, focus, window, calls, opened, timers };
 }
 const settled = () => new Promise(resolve => setImmediate(resolve));
+
+test('准备页黄色提醒计数且不自动收起；用到时再装不算提醒', async () => {
+  for (const status of ['warn', 'off', 'ok']) {
+    const f = await prepPage();
+    f.events['first-run:event']({}, { type: 'row', row: { id: 'login', status, detail: '检查结果' } });
+    f.events['first-run:event']({}, { type: 'done', problems: [], held: [] });
+    const text = f.body.querySelector('.fr-sum').textContent;
+    if (status === 'warn') {
+      assert.equal(text, '准备已完成，还有 1 项提醒；可先进入 Hub，用到时再处理。');
+      assert.equal(f.timers.length, 0);
+    } else {
+      assert.equal(text, '全部就绪');
+      assert.equal(f.timers[0].ms, 1500);
+    }
+  }
+});
+
+test('CodeAgent 变化后的同步提示有黄色提醒时也不自动收起', async () => {
+  const f = page('first-run-prep.js', () => ({ mode: 'changed' }));
+  await settled();
+  f.events['first-run:event']({}, { type: 'start', groups: [{ rows: [{ id: 'login', label: '登录' }] }] });
+  f.events['first-run:event']({}, { type: 'row', row: { id: 'login', status: 'warn' } });
+  f.events['first-run:event']({}, { type: 'done', problems: [], held: [] });
+  assert.match(f.body.querySelector('.fr-sl').parent.children.at(-2).textContent, /提醒/);
+  assert.equal(f.timers.length, 0);
+});
+
+test('主页复用已保存的结果，完成和待处理两种文案均不触发检查', async () => {
+  for (const status of ['ok', 'off', 'warn', 'bad', 'hold']) {
+    const f = page('env-check.js', () => { throw new Error('不应自动请求检查'); }, {
+      editionVersion: '1.0.0', prepState: { at: 1, rows: { tool: { id: 'tool', status } }, problems: [] },
+    });
+    const hint = f.document.getElementById('env-check-hint');
+    assert.match(hint.innerHTML, ['ok', 'off'].includes(status) ? /准备完成，可以点/ : /还有 1 项准备未完成/);
+    assert.doesNotMatch(hint.innerHTML, /第一次使用|可以先体检一下/);
+    assert.equal(f.calls.length, 0);
+    let opened = 0;
+    f.window.__firstRunPrep = { openSaved: () => { opened++; return true; } };
+    hint.listeners.click({ target: { closest: () => ({ dataset: { ecHint: 'go' } }) } });
+    assert.equal(opened, 1); assert.equal(f.calls.length, 0);
+  }
+});
+
+test('首次准备结束后主页提示及时改用结果，保存的结果能直接打开且不重查', async () => {
+  const distribution = { editionVersion: '1.0.0' };
+  const f = page('env-check.js', () => ({}), distribution);
+  assert.match(f.document.getElementById('env-check-hint').innerHTML, /第一次使用/);
+  distribution.prepState = { at: 1, rows: { login: { id: 'login', status: 'warn', detail: '稍后处理', fixes: [{ label: '重新检查', act: 'recheck' }] } } };
+  f.events['first-run:event']({}, { type: 'done' });
+  assert.match(f.document.getElementById('env-check-hint').innerHTML, /还有 1 项/);
+  const saved = page('first-run-prep.js', () => ({ mode: 'none' }), distribution);
+  await settled();
+  const before = saved.calls.length;
+  assert.equal(saved.window.__firstRunPrep.openSaved(), true);
+  assert.equal(saved.body.querySelector('h3').textContent, '上次准备结果');
+  assert.match(saved.body.querySelector('.fr-sum').textContent, /还有 1 项提醒/);
+  assert.equal(saved.body.querySelector('[data-fr="login"]').querySelector('.fr-fix').textContent, '重新检查');
+  assert.equal(saved.calls.length, before);
+});
+
+test('只有旧版失败清单时也能查看保存结果，不启动检查', async () => {
+  for (const problems of [[], ['login']]) {
+    const f = page('first-run-prep.js', () => ({ mode: 'none' }), { prepState: { at: 1, problems } });
+    await settled();
+    assert.equal(f.window.__firstRunPrep.openSaved(), true);
+    assert.equal(f.calls.length, 1);
+    assert.match(f.body.querySelector('.fr-sum').textContent, problems.length ? /1 项需要处理/ : /全部就绪/);
+  }
+});
+
+test('旧结果局部同步后，尚未重查的失败项仍可查看', async () => {
+  const f = page('first-run-prep.js', () => ({ mode: 'none' }), { prepState: {
+    at: 1, rows: { login: { id: 'login', status: 'ok' } }, problems: ['disk'],
+  } });
+  await settled();
+  assert.equal(f.window.__firstRunPrep.openSaved(), true);
+  assert.equal(f.body.querySelector('[data-fr="disk"]').querySelector('.fr-dot').className, 'fr-dot bad');
+  assert.match(f.body.querySelector('.fr-sum').textContent, /1 项需要处理/);
+  assert.equal(f.calls.length, 1);
+});
 async function prepPage(invoke = () => ({ ok: true })) {
   const f = page('first-run-prep.js', (name, args) => name === 'first-run:state'
     ? { mode: 'full', layout: [{ name: '准备', rows: [{ id: 'login', label: '登录' }] }] }

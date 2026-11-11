@@ -101,7 +101,7 @@ test('注册表 PATH 复用 Unicode/base64 读取，中文目录、展开、去�
     } });
   assert.deepEqual(dirs, ['D:\\中文工具\\bin', 'C:\\用户目录\\npm', 'C:\\系统工具']);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0][0], 'powershell.exe');
+  assert.match(calls[0][0], /powershell.exe$/i);
   assert.match(calls[0][1].at(-1), /GetEnvironmentVariable\('Path','User'\)/);
   assert.match(calls[0][1].at(-1), /ToBase64String/);
   assert.equal(calls[0][2].windowsHide, true);

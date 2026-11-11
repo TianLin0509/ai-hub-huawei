@@ -36,7 +36,12 @@ function relay(event, stdin, env) {
 test('relay forwards raw payloads and the Hub extracts the hook fields', { skip: process.platform !== 'win32' }, async () => {
   const hub = await capture();
   const pathKey = Object.keys(process.env).find(k => k.toLowerCase() === 'path') || 'PATH';
-  const env = { ...process.env, [pathKey]: SYSTEM_PATH, CLAUDE_HUB_SESSION_ID: 'hub-1', CLAUDE_HUB_TOKEN: 'tok', CLAUDE_HUB_PORT: String(hub.port) };
+  const env = { ...process.env, [pathKey]: path.join(process.env.SystemRoot || 'C:\\Windows', 'System32'), CLAUDE_HUB_SESSION_ID: 'hub-1', CLAUDE_HUB_TOKEN: 'tok', CLAUDE_HUB_PORT: String(hub.port) };
+  const shell = require('../core/windows-powershell');
+  assert.ok(path.isAbsolute(shell.windowsPowerShellPath(env)));
+  shell.ensurePowerShellPath(env);
+  const patchedPath = env[pathKey]; shell.ensurePowerShellPath(env);
+  assert.equal(env[pathKey], patchedPath, '补充 PATH 不重复添加目录');
   try {
     const payload = { session_id: 'cc-1', prompt: '你好，继续 😀', transcript_path: 'C:\\t\\a.jsonl', cwd: 'C:\\work' };
     const raw = Buffer.from(JSON.stringify(payload), 'utf8');
@@ -49,6 +54,21 @@ test('relay forwards raw payloads and the Hub extracts the hook fields', { skip:
     assert.deepEqual(body, { sessionId: 'hub-1', token: 'tok', claudeSessionId: 'cc-1', cwd: 'C:\\work',
       transcriptPath: 'C:\\t\\a.jsonl', prompt: '你好，继续 😀', backgroundTasks: [], sessionCrons: [] });
   } finally { hub.server.close(); }
+});
+
+test('精简 PATH 下仍可读注册表环境和异步检查系统 PowerShell', { skip: process.platform !== 'win32' }, async () => {
+  const { execFileSync } = require('node:child_process');
+  const pathKey = Object.keys(process.env).find(k => k.toLowerCase() === 'path') || 'PATH';
+  const core = name => JSON.stringify(path.join(__dirname, '..', 'core', name));
+  const script = `(async () => {
+    const config = require(${core('codeagent-config')});
+    const result = await config.readPersistentEnv('Path');
+    if (result.error) throw new Error(result.error);
+    const setup = await require(${core('community-setup')}).inspectSetupAsync({ packaged: true });
+    if (!setup.requirements.powershell || !setup.powershellPolicy?.ok) throw new Error('PowerShell unavailable');
+  })().catch(() => process.exitCode = 1);`;
+  execFileSync(process.execPath, ['-e', script], { cwd: path.join(__dirname, '..'), windowsHide: true,
+    env: { ...process.env, [pathKey]: path.join(process.env.SystemRoot || 'C:\\Windows', 'System32') }, timeout: 45000, stdio: 'pipe' });
 });
 
 test('large tool output is truncated like the original hook', () => {

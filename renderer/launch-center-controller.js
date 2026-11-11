@@ -2,7 +2,7 @@
 
 const LAUNCH_INTENTS = Object.freeze(['session', 'group', 'web', 'resume']);
 const INTENT_COPY = Object.freeze({
-  session: '选择 AI、模型与工作目录',
+  session: '选择 AI、模型和工作文件夹。这个文件夹是 AI 查看材料、处理文件的起点；第一次可以选准备好的材料文件夹。',
   group: '直接配置模板、成员与工作目录',
   web: '选择网站与登录身份，在 Hub 里直接使用官网',
   resume: '按提供方恢复原生历史会话',

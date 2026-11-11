@@ -173,8 +173,7 @@ function clearSessionManagerConfigCache() {
  * 走代理时长流式请求可能被 60s idle TCP 切断。
  */
 function windowsPowerShellPath() {
-  const candidate = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  return fs.existsSync(candidate) ? candidate : 'powershell.exe';
+  return require('./windows-powershell').windowsPowerShellPath();
 }
 function clearProxyEnv(env) {
   delete env.HTTP_PROXY;
@@ -2035,6 +2034,7 @@ class SessionManager extends EventEmitter {
     if (opts.extraEnv) {
       Object.assign(sessionEnv, opts.extraEnv);
     }
+    require('./windows-powershell').ensurePowerShellPath(sessionEnv);
     if (antigravityProfile) {
       const accountEnv = require('./antigravity-subscription-profiles').applyProfileEnv(sessionEnv, antigravityProfile);
       for (const key of Object.keys(sessionEnv)) if (!Object.hasOwn(accountEnv, key)) delete sessionEnv[key];
@@ -3412,7 +3412,7 @@ class SessionManager extends EventEmitter {
   async _readPtyProcessBirth(pid) {
     const script = `$ErrorActionPreference='Stop'; $p=Get-Process -Id ${pid}; try { [DateTimeOffset]::new($p.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds() } finally { $p.Dispose() }`;
     return new Promise((resolve, reject) => {
-      require('child_process').execFile('powershell.exe',
+      require('child_process').execFile(windowsPowerShellPath(),
         ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
         { windowsHide: true, timeout: 5000, encoding: 'utf8' },
         (error, stdout) => error ? reject(error) : resolve(Number(String(stdout).trim())));
@@ -3461,7 +3461,7 @@ try {
   }
 } finally { $p.Dispose() }`;
     await new Promise((resolve, reject) => {
-      require('child_process').execFile('powershell.exe',
+      require('child_process').execFile(windowsPowerShellPath(),
         ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
         // The holder must outlive taskkill, including its timeout cleanup.
         // Killing the PowerShell parent on an outer timeout could release the

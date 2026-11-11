@@ -143,7 +143,7 @@ function readPersistentEnv(name, { execFileImpl = null, timeoutMs = 8000, platfo
     let done = false;
     const finish = value => { if (!done) { done = true; resolve(value); } };
     try {
-      run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
+      run(require('./windows-powershell').windowsPowerShellPath(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
         { windowsHide: true, timeout: timeoutMs, encoding: 'utf8' }, (error, stdout) => {
           if (error) return finish({ user: null, system: null, error: error.killed || error.signal ? '读取超时' : String(error.message || error).slice(0, 200) });
           try {

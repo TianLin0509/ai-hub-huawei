@@ -16,7 +16,7 @@ let activeProbe = null;
 
 function cleanModelId(label) {
   const id = String(label || '').replace(/\s+default\b.*$/i, '').replace(/[✔✓]/g, '').trim();
-  return /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$/.test(id) ? id : '';
+  return require('./codeagent-models').isSafeModelId(id) ? id : '';
 }
 
 function readProbed(file) {
@@ -30,6 +30,7 @@ function readProbed(file) {
 }
 
 function writeProbed(file, result) {
+  if (!Array.isArray(result.models) || !result.models.length) return;
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify({ schema: 1, models: result.models, defaultModel: result.defaultModel || '', at: new Date().toISOString(),
@@ -177,8 +178,8 @@ async function probeModels({ command, configDirEnv, configDir, cwd, dataDir, env
       const collected = await guarded(picker.collectModelMenu({ lines: menuLines, readLines, write, revision: () => screenRevision, pause: sleep, now: Date.now }));
       require('./codeagent-models').appendModelLog(dataDir, { event: 'menu-scroll', ok: collected.ok, steps: collected.steps,
         reason: collected.reason, atNumber: collected.atNumber });
-      result = collected.ok ? { ...collected, usage: { ...usage, ...collected.usage, credit: collected.usage?.credit || usage?.credit || null, models: collected.usage?.models || usage?.models || [] } }
-        : { ok: false, error: `模型菜单未完整读取：${collected.reason}`, ...(usage ? { usage } : {}) };
+      result = collected.ok && collected.models.length ? { ...collected, usage: { ...usage, ...collected.usage, credit: collected.usage?.credit || usage?.credit || null, models: collected.usage?.models || usage?.models || [] } }
+        : { ok: false, error: `模型菜单未完整读取：${collected.reason || '没有读到有效模型，可稍后刷新重试'}`, ...(usage ? { usage } : {}) };
     }
     if (!result.ok && !accountKey) return result;
     modelResult = result;

@@ -770,6 +770,62 @@ function menuVm(filename, extra = {}, appended = '') {
   return { api: context.module.exports, state };
 }
 
+test('模型探测与模型身份共用长度校验，空清单保留原缓存', t => {
+  const file = path.join(temp(t), 'models.json');
+  for (const length of [80, 81, 96, 97]) {
+    const id = 'GLM-' + 'x'.repeat(length - 4);
+    assert.equal(probe.cleanModelId(id), models.isSafeModelId(id) ? id : '');
+  }
+  probe.writeProbed(file, { models: IDS, source: 'serve' }); const before = fs.readFileSync(file);
+  probe.writeProbed(file, { models: [], source: 'menu' });
+  assert.deepEqual(fs.readFileSync(file), before);
+  assert.deepEqual(probe.readProbed(file).models, IDS);
+});
+
+test('后台读取支持有效长模型名，空的读取结果按失败返回', async t => {
+  for (const empty of [false, true]) {
+    const dir = temp(t), id = 'GLM-' + 'x'.repeat(92); let opened = false, exit;
+    const screen = { write() {}, lines: async () => opened ? menu({ ids: [id] }) : ['❯ ', '? for shortcuts'], dispose() {} };
+    const proc = { onData: () => ({ dispose() {} }), onExit: fn => { exit = fn; }, write: key => { if (key === '\r') opened = true; }, kill: () => exit() };
+    const fixture = menuVm('codeagent-model-probe.js', { './claude-trust-dialog': { createTrustScreen: () => screen },
+      ...(empty ? { './codeagent-model-picker': { ...picker, collectModelMenu: async () => ({ ok: true, models: [], menuComplete: true }) } } : {}) });
+    const result = await fixture.api.probeModels({ command: 'synthetic-codeagent', configDirEnv: 'SYNTHETIC_CONFIG_DIR',
+      configDir: path.join(dir, 'cfg'), cwd: path.join(dir, 'cwd'), dataDir: dir, ptyModule: { spawn: () => proc } });
+    assert.equal(result.ok, !empty);
+    if (empty) { assert.equal(result.models, undefined); assert.match(result.error, /未完整读取/); }
+    else assert.deepEqual(Array.from(result.models), [id]);
+  }
+});
+
+test('首次选模型等待中识别底部未登录屏幕，立即提示登录且不操作菜单', async t => {
+  for (const login of ['W3 用户名', 'Please run /login', 'not logged in', 'No valid auth token', '请先登录', '未登录']) {
+    const dir = temp(t), writes = [], notices = []; let disposed = false;
+    const screen = { lines: async () => ['starting', login], dispose() { disposed = true; } };
+    const fixture = menuVm('codeagent-model-picker.js', { globals: { screen } }, '\nopenSessionScreen = async () => screen;');
+    const result = await fixture.api.pickModel({ sid: 'login-wait', kind: 'codeagent', modelId: IDS[0], dataDir: dir, readyFirstMs: 45000,
+      manager: { getSession: () => ({}), writeToSession: (_sid, key) => writes.push(key), emit: (_event, notice) => notices.push(notice) },
+      sendToPty: async () => { writes.push('/model'); return { ok: true }; } });
+    assert.equal(result.loginRequired, true); assert.equal(result.ok, false);
+    assert.equal(result.inputReady, false); assert.equal(result.inputUsable, false);
+    assert.deepEqual(writes, []); assert.ok(fixture.state.clock < 3000); assert.equal(disposed, true);
+    assert.equal(notices.length, 1); assert.equal(notices[0].action, 'codeagent-login'); assert.match(notices[0].message, /还没登录/);
+  }
+});
+
+test('已完成首轮和底部六行外的登录文字不改变已登录选模型流程', async t => {
+  for (const completed of [true, false]) {
+    const dir = temp(t), notices = []; let opened = false, closed = false, sends = 0;
+    const initial = ['正文：please run /login', ...(completed ? [] : ['one', 'two', 'three', 'four']), '❯ ', '? for shortcuts'];
+    const screen = { lines: async () => closed ? ['❯ ', '? for shortcuts'] : opened ? menu() : initial, dispose() {} };
+    const fixture = menuVm('codeagent-model-picker.js', { globals: { screen } }, '\nopenSessionScreen = async () => screen;');
+    const result = await fixture.api.pickModel({ sid: 'logged-in', kind: 'codeagent', modelId: IDS[0], dataDir: dir, readyFirstMs: 45000,
+      manager: { getSession: () => completed ? { lastCompletedAt: 1 } : {}, emit: (_event, notice) => notices.push(notice),
+        writeToSession: (_sid, key) => { if (key === '\r' || key === '\x1b') closed = true; } },
+      sendToPty: async () => { opened = true; sends++; return { ok: true }; } });
+    assert.equal(result.ok, true); assert.equal(sends, 1); assert.deepEqual(notices, []);
+  }
+});
+
 for (const parserVersion of [undefined, 1, models.MODEL_MENU_PARSER_VERSION + 1]) test(`stale account menus are ignored without changing the file and log once (${parserVersion ?? 'missing'})`, t => {
   const dir = temp(t), cfg = path.join(dir, 'personal'); config(cfg, IDS);
   const file = path.join(dir, 'codeagent-account-menu-models.json');

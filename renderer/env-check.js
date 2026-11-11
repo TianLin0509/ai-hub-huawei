@@ -251,23 +251,34 @@
   }
 
   // 首次启动 / 升级后第一次打开：主页顶部一条小提示，出现即记下本版本，下次不再出；点 × 立即收起。
-  function showHint() {
+  function showHint(refresh = false) {
+    let pending = null;
+    try {
+      const prep = require('../core/first-run-prep');
+      pending = prep.pendingCount(prep.readState(require('../core/data-dir').getHubDataDir()));
+    } catch { /* 没有准备结果时保留原入口 */ }
     let seen = '';
     try { seen = localStorage.getItem(HINT_KEY) || ''; } catch { seen = ''; }
-    if (!current || seen === current || document.getElementById('env-check-hint')) return;
+    if (!current || (!refresh && seen === current)) return;
+    const existing = document.getElementById('env-check-hint');
+    if (existing && !refresh) return;
+    existing?.remove();
     const host = document.querySelector('.home-welcome-body');
     if (!host) return;
     injectStyle();
     try { localStorage.setItem(HINT_KEY, current); } catch { /* 存不下就只这一次 */ }
     const hint = document.createElement('div');
     hint.className = 'ec-hint'; hint.id = 'env-check-hint'; hint.setAttribute('role', 'note');
-    hint.innerHTML = `<span class="ec-hint-text">${seen ? '刚升级完' : '第一次使用'}：可以先体检一下，看看要用的工具都装好没有。</span>`
-      + '<button type="button" class="ec-hint-go" data-ec-hint="go">点此体检 ›</button><button type="button" class="ec-hint-close" data-ec-hint="close" aria-label="关闭提示" title="关闭">×</button>';
+    const text = pending === null ? `${seen ? '刚升级完' : '第一次使用'}：可以先体检一下，看看要用的工具都装好没有。`
+      : pending ? `还有 ${pending} 项准备未完成，点此查看；其他已就绪功能可以先用。`
+        : '准备完成，可以点『新建普通会话』开始；以后遇到问题，可到设置里做功能体检。';
+    hint.innerHTML = `<span class="ec-hint-text">${text}</span>`
+      + `<button type="button" class="ec-hint-go" data-ec-hint="go">${pending !== null ? '查看准备结果' : '点此体检'} ›</button><button type="button" class="ec-hint-close" data-ec-hint="close" aria-label="关闭提示" title="关闭">×</button>`;
     hint.addEventListener('click', event => {
       const act = event.target.closest('[data-ec-hint]')?.dataset.ecHint;
       if (!act) return;
       hint.remove();
-      if (act === 'go') void open();
+      if (act === 'go' && !(pending !== null && window.__firstRunPrep?.openSaved?.())) void open();
     });
     host.prepend(hint);
   }
@@ -277,6 +288,7 @@
   window.__componentCenter = { open: () => open({ tab: 'components' }) };
   ipcRenderer.on('cli-tools:state', (_event, state) => { cliState = state; if (dialog?.open && tab === 'components') render(); });
   ipcRenderer.on('components:doctor-state', (_event, state) => { doctorState = state; if (dialog?.open && tab === 'components') render(); });
+  ipcRenderer.on('first-run:event', (_event, event) => { if (event.type === 'done') showHint(true); });
   window.addEventListener('focus', () => { if (recheckOnFocus && dialog?.open) { recheckOnFocus = false; void run(); } });
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true }); else start();
 })();

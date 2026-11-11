@@ -70,7 +70,7 @@ export function createPoolAccessTokenReader(config={}){
    // Account-password login (idaasOAuth) or browser login (devUCOAuth, accessToken / expiresAt in ms); token and expiry only.
    let idaas=object(credential?.idaasOAuth)&&credential.idaasOAuth.xAuthToken?credential.idaasOAuth:null;
    const devuc=object(credential?.devUCOAuth)?credential.devUCOAuth:null;
-   const unexpired=value=>Number.isSafeInteger(value)&&value>0?value>nowMs+performance.now()-began:null;
+   const unexpired=value=>Number.isSafeInteger(value)&&value>0?value-(nowMs+performance.now()-began)>minValidityMs:null;
    if(idaas&&devuc?.accessToken&&unexpired(idaas.xAuthExpires)===false&&unexpired(devuc.expiresAt))idaas=null;
    requireFact(idaas||devuc,'POOL_AUTH_TYPE_UNSUPPORTED');
    const expiry=idaas?idaas.xAuthExpires:devuc.expiresAt,encrypted=idaas?idaas.xAuthToken:devuc.accessToken;credential=undefined;

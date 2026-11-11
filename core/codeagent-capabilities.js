@@ -54,7 +54,7 @@ function runCli(command, flag, { run = require('child_process').spawnSync, platf
   try {
     const opts = { encoding: 'utf8', windowsHide: true, timeout: CLI_TIMEOUT_MS, maxBuffer: 1024 * 1024 };
     const r = platform === 'win32'
-      ? run('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', require('./codeagent-config').commandHead(command) + ' ' + flag], opts)
+      ? run(require('./windows-powershell').windowsPowerShellPath(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', require('./codeagent-config').commandHead(command) + ' ' + flag], opts)
       : run(command, [flag], opts);
     return !r.error && r.status === 0 ? String(r.stdout || '') : '';
   } catch { return ''; }
@@ -86,7 +86,7 @@ function runCliAsync(command, flag, { exec = require('child_process').execFile, 
       const opts = { encoding: 'utf8', windowsHide: true, maxBuffer: 1024 * 1024 };
       const callback = (error, stdout) => finish(error ? '' : String(stdout || ''));
       child = platform === 'win32'
-        ? exec('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', require('./codeagent-config').commandHead(command) + ' ' + flag], opts, callback)
+        ? exec(require('./windows-powershell').windowsPowerShellPath(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', require('./codeagent-config').commandHead(command) + ' ' + flag], opts, callback)
         : exec(command, [flag], opts, callback);
       child?.on?.('error', () => finish(''));
       timer = setTimeout(() => { finish(''); kill(child, platform); }, CLI_TIMEOUT_MS);

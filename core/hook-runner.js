@@ -9,6 +9,7 @@
 //
 // 命令首词必须是裸命令名（python / powershell）：Claude 在 Git Bash、Codex 经
 // COMSPEC 执行 hook，带引号的绝对路径开头在不同 shell 里解析不一致。
+// SessionManager 通过 windows-powershell 为会话 PATH 补系统 PowerShell 目录。
 // CLAUDE_HUB_HOOK_RUNNER 只用于测试两条路径，不影响发行版判定。
 
 const RUNNERS = Object.freeze({

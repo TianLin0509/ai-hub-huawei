@@ -622,7 +622,12 @@ async function pickModel({ manager, sid, kind, modelId, configDir, dataDir, send
     let existingMenu = modelDialogVisible(await screen.lines());
     if (!existingMenu && readyFirstMs > 0) {
       // 认不出输入框（旧版 CodeAgent 画面不同，见 screenHasContent 的说明）等到点也照常往下走，和不等时一样。
-      const seen = await waitFor(screen, lines => modelDialogVisible(lines) || promptInputReady(lines), readyFirstMs);
+      const seen = await waitFor(screen, lines => loginRequired(lines, manager.getSession?.(sid)) || modelDialogVisible(lines) || promptInputReady(lines), readyFirstMs);
+      if (loginRequired(seen.lines, manager.getSession?.(sid))) {
+        const message = 'CodeAgent 还没登录，请点击「登录」，完成后再发送。';
+        manager.emit?.('session-notice', { sessionId: sid, level: 'warning', persistent: true, action: 'codeagent-login', message });
+        return { ...(await fail(message)), loginRequired: true, inputReady: false, inputUsable: false };
+      }
       if (seen.value) await waitForInput(screen, 3000);
       existingMenu = modelDialogVisible(await screen.lines());
     }
@@ -732,17 +737,19 @@ async function pickModel({ manager, sid, kind, modelId, configDir, dataDir, send
   } finally {
     // 发过 /model 即须负责退出，不能等“解析成功”后才承担清理责任。
     try {
-      const closed = attempted ? await closeModelMenu({ readLines: () => screen.lines(), write: key => manager.writeToSession(sid, key) }) : null;
-      let ready = closed?.ok ? { value: true } : await waitForInput(screen);
-      // Esc 只关掉补全列表时，「/model」还留在输入行里（2026-10-20 发布闸门实录）：没有菜单时退格清掉，再确认一次。
-      if (!ready.value && attempted && !modelDialogVisible(await screen.lines())) {
-        for (let i = 0; i < 12; i += 1) { manager.writeToSession(sid, '\x7f'); await sleep(30); }
-        ready = await waitForInput(screen);
+      if (!result?.loginRequired) {
+        const closed = attempted ? await closeModelMenu({ readLines: () => screen.lines(), write: key => manager.writeToSession(sid, key) }) : null;
+        let ready = closed?.ok ? { value: true } : await waitForInput(screen);
+        // Esc 只关掉补全列表时，「/model」还留在输入行里（2026-10-20 发布闸门实录）：没有菜单时退格清掉，再确认一次。
+        if (!ready.value && attempted && !modelDialogVisible(await screen.lines())) {
+          for (let i = 0; i < 12; i += 1) { manager.writeToSession(sid, '\x7f'); await sleep(30); }
+          ready = await waitForInput(screen);
+        }
+        // inputUsable：认不出普通输入框（旧版 CodeAgent 画面不同，见 screenHasContent），但菜单已关、输入行没留着「/model」。
+        // 自动会话据此照常把问题发出去（main/ipc/session-handlers.js runCodeAgentPick）；用户会话仍按 inputReady 处理。
+        result = { ...result, inputReady: !!ready.value, inputUsable: !!ready.value || inputUsableAfterPick(await screen.lines(), manager.getSession?.(sid)) };
+        if (!ready.value) result = { ...result, ok: false, message: `${result?.message || '模型操作尚未完成'}；尚未确认恢复普通输入框` };
       }
-      // inputUsable：认不出普通输入框（旧版 CodeAgent 画面不同，见 screenHasContent），但菜单已关、输入行没留着「/model」。
-      // 自动会话据此照常把问题发出去（main/ipc/session-handlers.js runCodeAgentPick）；用户会话仍按 inputReady 处理。
-      result = { ...result, inputReady: !!ready.value, inputUsable: !!ready.value || inputUsableAfterPick(await screen.lines(), manager.getSession?.(sid)) };
-      if (!ready.value) result = { ...result, ok: false, message: `${result?.message || '模型操作尚未完成'}；尚未确认恢复普通输入框` };
     } catch (error) {
       result = { ...result, ok: false, inputReady: false,
         message: `${result?.message || '模型操作失败'}；退出菜单失败：${error && error.message ? error.message : String(error)}` };
@@ -753,7 +760,7 @@ async function pickModel({ manager, sid, kind, modelId, configDir, dataDir, send
   // 会话内菜单仅供诊断，调用方不得据此改写后台探测清单或菜单缓存。
   // 读到的用量表：调用方按账号记快照（core/codeagent-usage-menu.js recordUsage），额度条和模型下拉显示。
   if (usage) result = { ...result, usage };
-  if (!result.ok) {
+  if (!result.ok && !result.loginRequired) {
     require('./codeagent-models').appendModelLog(dataDir, { event: 'pick-menu-failed', session: String(sid).slice(0, 8), model: modelId, error: result.message });
     result = { ...result, technicalReason: result.message, message: `这个账号在 CodeAgent 模型菜单里选不了 ${modelId}` };
   }
@@ -768,6 +775,7 @@ function notSent(message, code = 'codeagent-model-pick-failed') {
   return Object.assign(new Error(message), { notSent: true, code });
 }
 function failureMessage(result, inputReady) {
+  if (result?.loginRequired) return result.message;
   const reason = result?.message || '所选模型未完成切换';
   return inputReady
     ? `${reason}。普通输入框已恢复，本条消息未发送；再次发送将沿用 CodeAgent 当前模型，也可以先重新选择模型。`
