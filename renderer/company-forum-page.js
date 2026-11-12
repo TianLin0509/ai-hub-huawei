@@ -230,7 +230,7 @@ function createCompanyForumPage({ document, window, ipcRenderer, closeOtherPanel
   async function open() {
     build(); closeOtherPanels();
     window.__companyRoomsHide?.();
-    window.__companyMeetingHide?.(); window.__assistantHide?.(); window.__wirelessHide?.(); window.__companyAssistantHide?.(); window.__companyAttendanceHide?.();
+    window.__companyMeetingHide?.(); window.__assistantHide?.(); window.__wirelessHide?.(); window.__companyAssistantHide?.(); window.__companyAttendanceHide?.(); window.__profileHide?.();
     // 规则、写作、研究等整页面板也关掉（同云端页），不然从这些页切过来会叠在一起。
     for (const name of ['__rulesHide', '__writingHide', '__xresearchHide', '__studyHide', '__ranHide']) window[name]?.(); window.setShellNavActive?.('company-forum');
     page.hidden = false; document.body.classList.add('company-forum-page-open'); place();

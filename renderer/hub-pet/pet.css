@@ -120,3 +120,41 @@ html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; w
 .ask-btn.primary { background: #3478f6; border-color: #3478f6; color: #fff; font-weight: 600; }
 .ask-btn:disabled { opacity: .55; cursor: default; }
 .panel-item .when { margin-left: 6px; font-size: 11px; color: #8a94a6; }
+
+/* ---------- 等级联动（2026-11-12）：装饰只用 transform / opacity 动，不触发排版 ---------- */
+/* 等级角标：脚边右侧的小标签 */
+.lv { position: absolute; z-index: 2; bottom: 9px; left: calc((280px - var(--body)) / 2 + var(--body) * 0.66); height: 17px; padding: 0 7px; box-sizing: border-box; border-radius: 9px;
+  background: #2f6ad9; color: #fff; font: 700 10.5px/17px "Segoe UI", "Microsoft YaHei UI", sans-serif; letter-spacing: .2px; white-space: nowrap; pointer-events: none;
+  box-shadow: 0 2px 6px rgba(20, 40, 90, .25), 0 0 0 1.5px #fff; }
+/* 头顶段位徽章：跟着身体一起动，自己轻轻上下浮。--head 是图里头顶离身体框上沿的距离，--cx 是看得见的身体的水平中心 */
+#emblem { position: absolute; left: var(--cx, 50%); top: calc(var(--head, 0px) - 30px); width: 34px; height: 34px; margin-left: -17px; pointer-events: none;
+  background: center / contain no-repeat; filter: drop-shadow(0 2px 3px rgba(20, 30, 50, .25)); animation: emblem-float 3.2s ease-in-out infinite; }
+@keyframes emblem-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+body.talking #emblem, body.peeking #emblem, body.peeking #sparks, body.peeking #halo, body.peeking .lv { display: none; }
+/* 星光：身边三颗小星星轮流闪 */
+#sparks { position: absolute; inset: 0; pointer-events: none; }
+#sparks i { position: absolute; width: 11px; height: 11px; background: #ffc83d; opacity: 0;
+  clip-path: polygon(50% 0, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0 50%, 38% 38%); animation: spark 4.8s ease-in-out infinite; }
+#sparks i:nth-child(1) { left: 10%; top: 26%; }
+#sparks i:nth-child(2) { right: 8%; top: 40%; width: 8px; height: 8px; animation-delay: 1.6s; }
+#sparks i:nth-child(3) { right: 20%; top: 12%; width: 9px; height: 9px; animation-delay: 3.2s; }
+@keyframes spark { 0%, 62%, 100% { opacity: 0; transform: scale(.3) rotate(0deg); } 74% { opacity: 1; transform: scale(1) rotate(40deg); } 88% { opacity: 0; transform: scale(.5) rotate(90deg); } }
+/* 光环：脚下一圈柔光，慢慢呼吸 */
+#halo { position: absolute; left: calc((280px - var(--body) * 0.9) / 2); bottom: 1px; width: calc(var(--body) * 0.9); height: calc(var(--body) * 0.2); border-radius: 50%; pointer-events: none;
+  background: radial-gradient(closest-side, rgba(255, 205, 80, 0) 52%, rgba(255, 196, 60, .55) 66%, rgba(90, 150, 255, .28) 80%, rgba(90, 150, 255, 0) 100%); animation: halo-breathe 3.6s ease-in-out infinite; }
+@keyframes halo-breathe { 0%, 100% { opacity: .65; transform: scale(.96); } 50% { opacity: 1; transform: scale(1.04); } }
+/* 撒花与爱心 */
+#fx { position: absolute; inset: 0; pointer-events: none; z-index: 3; overflow: hidden; }
+#fx i { position: absolute; left: var(--x); bottom: var(--y); width: 7px; height: 10px; border-radius: 2px; background: var(--c); opacity: 0;
+  animation: confetti var(--d, 1.5s) cubic-bezier(.15, .7, .3, 1) var(--delay, 0s) both; }
+@keyframes confetti { 0% { opacity: 1; transform: translate(0, 0) rotate(0deg); } 45% { opacity: 1; transform: translate(calc(var(--dx) * .8), calc(var(--up) * -1)) rotate(260deg); } 100% { opacity: 0; transform: translate(var(--dx), calc(var(--up) * -0.2)) rotate(620deg); } }
+#fx b { position: absolute; left: var(--x); bottom: var(--y); width: 14px; height: 13px; opacity: 0; background: #ff5d7a;
+  clip-path: path("M7 13 C7 13 0 8.2 0 3.8 C0 1.6 1.7 0 3.7 0 C5.1 0 6.3 .8 7 2 C7.7 .8 8.9 0 10.3 0 C12.3 0 14 1.6 14 3.8 C14 8.2 7 13 7 13 Z");
+  animation: heart-up 1.3s ease-out var(--delay, 0s) both; }
+@keyframes heart-up { 0% { opacity: 0; transform: translateY(6px) scale(.4); } 20% { opacity: 1; transform: translateY(0) scale(1); } 100% { opacity: 0; transform: translate(var(--dx), -46px) scale(1.15); } }
+@media (prefers-reduced-motion: reduce) { #emblem, #sparks i, #halo { animation: none; } }
+/* 成长卡片：金色点缀，右侧一枚徽章 */
+.ncard.growth { --accent: #d99a12; }
+.ncard-art { position: absolute; right: 12px; top: 30px; width: 46px; height: 46px; background: center / contain no-repeat; pointer-events: none; animation: art-pop 520ms cubic-bezier(.2, 1.5, .4, 1) 120ms both; }
+.ncard.has-art b, .ncard.has-art p { padding-right: 54px; }
+@keyframes art-pop { from { opacity: 0; transform: scale(.4) rotate(-18deg); } to { opacity: 1; transform: none; } }

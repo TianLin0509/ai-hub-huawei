@@ -77,9 +77,15 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
         <div><b>桌面回执</b><small>${esc(NOTIFY_NOTES[s.notifyMode] || NOTIFY_NOTES.pet)}。</small></div>
         <div class="pet-tab-seg" role="radiogroup" aria-label="桌面回执">${NOTIFY_OPTIONS.map(m => `<button type="button" role="radio" aria-checked="${m.id === s.notifyMode}" data-pet="notifyMode" data-id="${esc(m.id)}"${m.id === s.notifyMode ? ' class="on"' : ''}>${esc(m.label)}</button>`).join('')}</div>
       </div>
-      <div class="pet-tab-row">
-        <div><b>会话在跑时陪着干活</b><small>有会话在跑，桌宠敲键盘并标出「N 个在跑」，跑完就停。</small></div>
-        <label class="pet-tab-switch"><input type="checkbox" data-pet="followSessions"${s.followSessions !== false ? ' checked' : ''}><span></span></label>
+      <div class="pet-tab-row pet-tab-duo">
+        <div class="pet-tab-half">
+          <div><b>会话在跑时陪着干活</b><small>有会话在跑，桌宠敲键盘并标出「N 个在跑」。</small></div>
+          <label class="pet-tab-switch"><input type="checkbox" data-pet="followSessions"${s.followSessions !== false ? ' checked' : ''}><span></span></label>
+        </div>
+        <div class="pet-tab-half">
+          <div><b>身上显示等级</b><small>等级角标，升级后解锁星光、徽章、光环，升级时庆祝。</small></div>
+          <label class="pet-tab-switch"><input type="checkbox" data-pet="showGrowth"${s.showGrowth !== false ? ' checked' : ''}><span></span></label>
+        </div>
       </div>
       <div class="pet-tab-row">
         <div><b>全屏时躲到屏幕边</b><small>演示、看视频或全屏开会时缩到右边只露一点，退出全屏后回来。</small></div>

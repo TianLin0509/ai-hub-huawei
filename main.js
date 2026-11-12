@@ -1,6 +1,9 @@
 // Windows 上改名替换遇到短暂占用（EPERM/EBUSY）稍等重试，必须在其他模块加载前装上（core/fs-rename-retry.js）。
 require('./core/fs-rename-retry').install();
 const { app, BrowserWindow, BaseWindow, ipcMain, clipboard, dialog, nativeImage, screen, shell, Menu, Tray, crashReporter, protocol, net, powerMonitor } = require('electron');
+// 「个人」页计分：必须在注册任何 IPC 之前装上，之后注册的功能入口才会被记到（main/profile-controller.js）。
+const profileTap = require('./main/profile-controller').installProfileTap(ipcMain);
+let profileController = null;
 const path = require('path');
 const { fileURLToPath } = require('url');
 const fs = require('fs');
@@ -1686,6 +1689,9 @@ function createWindow() {
         focusPrimaryWindow,
         sendToRenderer,
         noticeBus: require('./core/company-assistant/notice-bus').noticeBus(),
+        // 等级联动（2026-11-12）：桌宠身上的等级与特效来自「个人」页；摸桌宠记一次亲密度。
+        getProfile: () => profileController?.brief() || null,
+        onPetted: () => { try { profileController?.notePet(); } catch { /* 个人页没启动 */ } },
         isAssistantBusy: () => {
           for (const s of sessionManager.sessions.values()) {
             if (s && s.agentTurnActive && HUB_PET_ASSISTANT_PURPOSES.has(s.info && s.info.purpose)) return true;
@@ -3020,6 +3026,17 @@ try {
   }
 } catch (error) { console.error('[company-attendance] 考勤未启动：', error.message); }
 require('./main/ipc/company-attendance-handlers').registerCompanyAttendanceIpc(ipcMain, () => (optionalFeatures.get('attendance') ? companyAttendanceService : null));
+// 「个人」页（2026-11-12）：名字自动认（WeLink 登录账号优先），等级与成就按使用量算，数据只留本机；升级和解锁成就时桌宠庆祝。
+try {
+  profileController = require('./main/profile-controller').createProfileController({
+    ipcMain, tap: profileTap, dataDir: getHubDataDir(), sendToRenderer, transcriptTap, app,
+    getAssistant: () => companyAssistantService,
+    getPet: () => hubPetController,
+    codeAccount: () => require('./core/codeagent-pool').readCredentials(require('./core/codeagent-config').resolveCodeAgentConfig().configDir).accountId || '',
+  });
+  if (require('./core/distribution').featureEnabled('hubPet')) profileController.profile.registerFeature('pet');
+  profileController.start();
+} catch (error) { console.error('[profile] 个人页未启动：', error.message); }
 // AI 编排模式（2026-10-04）：编排员通过 hub_orchestrator 工具驱动群聊与交付工作流。
 try {
   global.__orchestrationService = require('./main/orchestration/service').createOrchestrationService({

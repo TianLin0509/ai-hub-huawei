@@ -19,6 +19,7 @@ const MAX_PER_HOUR = 3;         // 每小时主动开口最多 3 次
 const IDLE_SLEEP_SEC = 600;     // 10 分钟没操作就打盹
 const NIGHT_FROM = 19;          // 19:00 后打盹
 const NIGHT_UNTIL = 7;
+const NIGHT_IDLE_SLEEP_SEC = 120; // 夜里还在操作电脑就陪着不睡，停手 2 分钟才打盹（2026-11-12：加班到深夜时桌宠整晚在睡，提醒都说不出来）
 const PETTED_AWAKE_MS = 60000;  // 夜里被点一下，醒一分钟
 const SIT_LONG_MS = 90 * 60000; // 活泼档：连续坐 90 分钟提醒起来走走
 const AWAY_BACK_SEC = 1800;     // 活泼档：离开 30 分钟回来打个招呼
@@ -54,7 +55,8 @@ function decidePose(ctx = {}) {
   if (ctx.speaking) return ctx.speakingTone === 'bad' ? 'tired' : 'happy';
   if (ctx.assistantBusy || Number(ctx.sessionsBusy) > 0) return 'typing';
   const petted = Number(ctx.pettedAt) > 0 && now - Number(ctx.pettedAt) < PETTED_AWAKE_MS;
-  if (Number(ctx.idleSec) >= IDLE_SLEEP_SEC || (isNight(now) && !petted)) return 'sleep';
+  const idle = Number(ctx.idleSec) || 0;
+  if (idle >= IDLE_SLEEP_SEC || (isNight(now) && !petted && idle >= NIGHT_IDLE_SLEEP_SEC)) return 'sleep';
   if (ctx.quotaLow) return 'tired';
   return 'idle';
 }
@@ -111,6 +113,7 @@ class SpeechQueue {
       for (const key of ['tone', 'page', 'noticeId', 'cta']) { const v = cleanText(item[key], key === 'cta' ? 20 : 160); if (v) entry[key] = v; }
       const count = Math.round(Number(item.count) || 0);
       if (count > 1) entry.count = Math.min(99, count);
+      if (/^(rank|badge)-\d{1,2}$/.test(String(item.art || ''))) entry.art = String(item.art);
       if (this.current) { this.toDot(this.current); this.current = null; this.held = null; }
       this.pending.unshift(entry);
     } else this.pending.push(entry);
@@ -205,7 +208,7 @@ class SpeechQueue {
     return {
       bubble: this.current ? { id: this.current.id, kind: this.current.kind, title: this.current.title, until: Number.isFinite(this.current.until) ? this.current.until : null, sticky: this.current.sticky,
         ...(this.current.notify ? { notify: true, text: this.current.text.slice(0, 400), tone: this.current.tone || '', cta: this.current.cta || '', count: this.current.count || 0, sessionId: this.current.sessionId,
-          held: !!this.held, ms: this.notifyMs, at: this.current.at } : {}) } : null,
+          held: !!this.held, ms: this.notifyMs, at: this.current.at, ...(this.current.art ? { art: String(this.current.art) } : {}) } : {}) } : null,
       dots: this.dots.length,
       pending: this.pending.length,
     };
@@ -226,7 +229,17 @@ function chatterFor(mode, ctx = {}, track = {}) {
   const today = localDateKey(now);
   if (track.greetedDate !== today && hour >= NIGHT_UNTIL && hour < 11) {
     track.greetedDate = today;
-    return { id: 'chatter-greet-' + today, kind: 'chatter', title: '早上好！今天也一起加油。' };
+    const greets = ['早上好！今天也一起加油。', '早呀，新的一天开始了。', '早上好，先喝口水再开工。'];
+    return { id: 'chatter-greet-' + today, kind: 'chatter', title: greets[new Date(now).getDate() % greets.length] };
+  }
+  // 2026-11-12：午饭和深夜各说一句，每天各一次。
+  if (track.lunchDate !== today && hour === 12 && new Date(now).getMinutes() < 30) {
+    track.lunchDate = today;
+    return { id: 'chatter-lunch-' + today, kind: 'chatter', title: '到饭点了，先去吃饭吧。' };
+  }
+  if (track.lateDate !== today && hour >= 23) {
+    track.lateDate = today;
+    return { id: 'chatter-late-' + today, kind: 'chatter', title: '夜深了，忙完这点早些休息。' };
   }
   if (prevIdle >= AWAY_BACK_SEC && idleSec < 60) {
     return { id: 'chatter-back-' + now, kind: 'chatter', title: '欢迎回来～有新提醒我会叫你。' };

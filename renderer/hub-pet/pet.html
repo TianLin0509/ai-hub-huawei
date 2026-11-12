@@ -18,6 +18,7 @@
       <b id="ncard-title"></b>
       <p id="ncard-text"></p>
       <div class="ncard-foot"><span id="ncard-cta"></span><span id="ncard-count"></span></div>
+      <i id="ncard-art" class="ncard-art" hidden></i>
       <i id="ncard-bar" class="ncard-bar"></i>
     </div>
     <!-- 问助理（2026-11-09）：右键「问助理一句…」打开 -->
@@ -29,10 +30,16 @@
     <div id="bubble" class="bubble" data-hit="bubble" hidden><span id="bubble-kind" class="bubble-kind" hidden></span><span id="bubble-text"></span></div>
     <button type="button" id="dot" class="dot" data-hit="dot" hidden aria-label="未读提醒"></button>
     <div id="busy" class="busy" hidden><i></i><span id="busy-text"></span></div>
+    <!-- 等级联动（2026-11-12）：脚下光环、头顶段位徽章、身边星光、脚边等级角标，按「个人」页的等级解锁；撒花和爱心画在 fx 里 -->
+    <div id="halo" hidden></div>
     <div id="shadow"></div>
     <div id="body" data-hit="pet">
       <div id="layers"></div>
+      <div id="sparks" hidden><i></i><i></i><i></i></div>
+      <div id="emblem" hidden></div>
     </div>
+    <div id="lv" class="lv" hidden></div>
+    <div id="fx"></div>
   </div>
   <script src="pet-motion.js"></script>
   <script src="pet.js"></script>

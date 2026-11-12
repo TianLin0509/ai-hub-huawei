@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('hubPet', {
   release: () => ipcRenderer.send('hub-pet:release'),
   bodyBox: (box) => ipcRenderer.send('hub-pet:body-box', box && typeof box === 'object' ? { left: +box.left || 0, right: +box.right || 0, top: +box.top || 0, bottom: +box.bottom || 0, role: String(box.role || '').slice(0, 40) } : null),
   menu: () => ipcRenderer.send('hub-pet:menu'),
+  // 2026-11-12：鼠标在身上来回蹭 = 摸摸。
+  pet: () => ipcRenderer.send('hub-pet:pet'),
   openNotice: (item) => ipcRenderer.send('hub-pet:open-notice', { id: String(item && item.id || ''), sessionId: item && item.sessionId ? String(item.sessionId) : '' }),
   // 2026-11-09：通知卡片（停留、收起）、问助理输入框。
   hold: (on) => ipcRenderer.send('hub-pet:hold', on === true),

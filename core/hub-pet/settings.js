@@ -19,7 +19,7 @@ const isUrgentNotice = n => !!n && (n.tone === 'bad' || URGENT_KINDS.has(String(
 
 const OPT_IN_V = 1;
 function defaults() {
-  return { enabled: false, role: '01-cat', mode: 'gentle', position: null, quietUntil: 0, silentDate: '', peekOnFullscreen: true, notifyMode: 'pet', followSessions: true, scale: 1, bodyBoxes: {} };
+  return { enabled: false, role: '01-cat', mode: 'gentle', position: null, quietUntil: 0, silentDate: '', peekOnFullscreen: true, notifyMode: 'pet', followSessions: true, showGrowth: true, introduced: false, scale: 1, bodyBoxes: {} };
 }
 
 // 大小（2026-10-18）：身体是原大小的 0.6–1.6 倍，按 0.01 取整。认数字和「数字样子的字符串」（手改文件时常见），
@@ -51,6 +51,9 @@ function normalize(raw, base, roleOk = builtinRole) {
   if (NOTIFY_MODES.includes(raw.notifyMode)) out.notifyMode = raw.notifyMode;
   else if (raw.notifyViaPet === false) out.notifyMode = 'popup';   // 11-11 前的开关：关＝照旧弹右下角
   if (typeof raw.followSessions === 'boolean') out.followSessions = raw.followSessions;
+  // 2026-11-12：身上显示等级与解锁的特效（来自「个人」页）；第一次出来时的自我介绍说过没有。
+  if (typeof raw.showGrowth === 'boolean') out.showGrowth = raw.showGrowth;
+  if (typeof raw.introduced === 'boolean') out.introduced = raw.introduced;
   const scale = parseScale(raw.scale);
   if (scale != null) out.scale = scale;
   const p = raw.position;

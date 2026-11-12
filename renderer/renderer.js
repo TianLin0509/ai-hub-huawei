@@ -1431,7 +1431,7 @@ async function selectMeeting(meetingId, opts = {}) {
   if (window.__studyHide) window.__studyHide(); // 2026-09-01 学习面板互斥
   if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
-  window.__companyRoomsHide?.();
+  window.__companyRoomsHide?.(); window.__profileHide?.();
   window.__rulesHide?.(); // 独立页面互斥
   if (window.__ranHide) window.__ranHide(); // 2026-09-04 RAN 工作台面板互斥
   setShellNavActive(null);
@@ -6133,7 +6133,7 @@ async function selectSession(id, opts = {}) {
   if (window.__studyHide) window.__studyHide(); // 2026-09-01 学习面板互斥
   if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
-  window.__companyRoomsHide?.();
+  window.__companyRoomsHide?.(); window.__profileHide?.();
   window.__rulesHide?.(); // 独立页面互斥
   if (window.__ranHide) window.__ranHide(); // 2026-09-04 RAN 工作台面板互斥
   setShellNavActive(null);
@@ -9146,7 +9146,7 @@ function escapeToHome() {
   if (window.__studyHide) window.__studyHide();
   if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
-  window.__companyRoomsHide?.();
+  window.__companyRoomsHide?.(); window.__profileHide?.();
   window.__rulesHide?.(); // 独立页面互斥
   if (window.__ranHide) window.__ranHide(); // 2026-09-04 RAN 工作台面板互斥
   if (fileManagerPanel) fileManagerPanel.close();
@@ -9331,6 +9331,16 @@ if (require('../core/company-attendance/gate').companyAttendanceEnabled()) {
     window.__companyAttendanceHide = () => companyAttendancePage.close();
   } catch (error) { console.warn('[company-attendance] 考勤页未启动：', error.message); }
 }
+// 「个人」页（2026-11-12）：左栏底部「主题」上方的头像入口，点开看身份、等级、成就与桌宠伙伴。
+try {
+  const profilePage = require('./profile-page').createProfilePage({
+    document, window, ipcRenderer,
+    closeOtherPanels: () => { window.hubWorkspaces?.close(); memoryPanel.close(); capabilityPanel.close(); accountCenterPanel.close(); },
+    showMessage: message => showToast(message),
+  });
+  window.__profileHide = () => profilePage.close();
+  window.__profileOpen = () => profilePage.open();
+} catch (error) { console.warn('[profile] 个人页未启动：', error.message); }
 // AI 网页会话（2026-10-25）：启动中心「AI 网页」、侧栏「网页」分组、主区内嵌官网。打开前先回到主页收起其他视图。
 try {
   // 网页圆桌（2026-10-28）：用已登录的 AI 网页同题提问、互评、队长汇总；从侧栏「网页」分组或网页顶栏的圆桌按钮进入。
@@ -9637,7 +9647,7 @@ ipcRenderer.on('session-created', async (_e, { session }) => {
   if (window.__studyHide) window.__studyHide();
   if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
-  window.__companyRoomsHide?.();
+  window.__companyRoomsHide?.(); window.__profileHide?.();
   window.__rulesHide?.(); // 独立页面互斥
   if (window.__ranHide) window.__ranHide(); // 2026-09-04 RAN 工作台面板互斥
   if (terminalPanelEl) terminalPanelEl.style.display = '';

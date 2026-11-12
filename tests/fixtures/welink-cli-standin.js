@@ -101,6 +101,10 @@ if (group === '--version') {
   ];
   const page = Number(arg('--page')), size = Number(arg('--size'));
   out({ code: 200, data: { data: all.slice((page - 1) * size, page * size), page, size, start: (page - 1) * size, total: all.length } });
+} else if (group === 'search' && sub === 'person') {
+  // 和真机同形（2026-11-11 实测）：结果在 search_cli_person.data 里，工号带前导 0，有部门、部门全路径和职位。
+  const q = String(arg('--text') || '');
+  out({ search_cli_person: { data: ['user001', '用户甲'].includes(q) ? [{ chineseName: '用户甲', englishName: 'User A', employeeNumber: '00000001', deptName: '示例部门', departmentName: '示例公司/示例产品线/示例部门', appointPos: '工程师' }] : [] } });
 } else if (group === 'contact' && sub === 'detail') {
   const names = { user001: '用户甲', colleague_a: '同事甲', colleague_b: '同事乙', colleague_c: '同事丙', colleague_d: '同事丁', colleague_e: '同事戊', colleague_f: '同事己', colleague_g: '同事庚', colleague_h: '同事辛', colleague_z: '示例发言人' };
   const accounts = args.slice(2);

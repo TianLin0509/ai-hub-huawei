@@ -41,6 +41,8 @@ function createHubPetController({
   // 2026-11-09 联动：getSessionActivity() → { running }（正在跑的会话数）；askAssistant(text) → 交给助理的一问；
   // getPages() → { assistant: bool, rooms: { label, hint } | null }（右键菜单里放哪些入口）。
   getSessionActivity = () => null, askAssistant = null, getPages = () => ({}),
+  // 2026-11-12 等级联动：getProfile() → { level, rank, perks }（「个人」页的等级、段位、已解锁特效）；onPetted() 被摸了一下。
+  getProfile = () => null, onPetted = null,
   // diskRoots() → 要看的盘（系统盘、Hub 数据所在盘）；不给就不看。
   diskRoots = null, diskStatfs = undefined,
   // inMeeting() → 会议页正在录制：这时只亮小圆点，不举卡片（屏幕可能在共享）。
@@ -266,6 +268,7 @@ function createHubPetController({
     const s = settings.get();
     const role = currentRole();
     const state = {
+      growth: growthView(),
       pose, role, assetBase: roles.assetBase(role), mode: s.mode, dock: fullscreen ? 'right' : dock, peeking: fullscreen, scale: scaleNow(),
       bubble: snap.bubble ? bubbleView(snap.bubble) : null,
       running: follow ? running : 0,
@@ -275,6 +278,43 @@ function createHubPetController({
     const key = JSON.stringify(state);
     if (key !== lastSent) { lastSent = key; send('hub-pet:state', state); }
     scheduleDeadline();
+  }
+
+  // 等级装饰：等级角标、星光、头顶段位徽章、脚下光环，按「个人」页的等级解锁；设置里可以整体关掉。
+  function growthView() {
+    if (settings.get().showGrowth === false) return null;
+    let p = null;
+    try { p = getProfile?.() || null; } catch (_) {}
+    if (!p || !Number.isFinite(p.level)) return null;
+    return { level: p.level, rank: p.rank || 1, perks: Array.isArray(p.perks) ? p.perks.slice(0, 8) : [] };
+  }
+  // 「个人」页的等级变了：马上换装饰，不等下一次轮询。
+  function setProfile() { if (alive()) evaluate(); }
+  // 升级、解锁成就：连跳撒花 + 举一张卡片，点卡片打开「个人」页。只有桌宠会庆祝，不受回执三档影响。
+  function celebrate({ id, title, text, big = false, art = '' } = {}) {
+    if (!canNotify()) return false;
+    pettedAt = clock();
+    send('hub-pet:motion', { phase: 'celebrate', big: big === true });
+    onNotice({ id: 'growth:' + String(id || now()), kind: 'growth', notify: true, page: 'profile', cta: '看看我的成就', title: String(title || '').slice(0, 60), text: String(text || '').slice(0, 200), ...(/^(rank|badge)-\d{1,2}$/.test(art) ? { art } : {}) });
+    return true;
+  }
+  // 被摸了（鼠标在身上来回蹭）：醒一分钟、冒爱心，记一次亲密度。3 秒内只算一次。
+  let lastPetAt = 0;
+  function petted() {
+    const t = now();
+    if (t - lastPetAt < 3000) return false;
+    lastPetAt = t; pettedAt = clock();
+    send('hub-pet:motion', { phase: 'petted' });
+    try { onPetted?.(); } catch (_) {}
+    evaluate();
+    return true;
+  }
+  // 第一次出来：说一句自我介绍，告诉用户能做什么（只说一次）。
+  let introTimer = null;
+  function introduce() {
+    if (settings.get().introduced) return;
+    settings.update({ introduced: true });
+    speech.push({ id: 'intro', kind: 'chatter', sticky: true, title: '你好，我是你的桌宠。会话答完我来报信；鼠标在我身上蹭一蹭是摸摸，右键能问助理、换形象。' });
   }
 
   function scheduleDeadline() {
@@ -291,7 +331,7 @@ function createHubPetController({
   function onNotice(notice) {
     if (!notice || !notice.id) return;
     // 回执不交给桌宠（选了右下角小卡或关闭）：总线上的通知卡片也不由桌宠说；硬盘快满只有桌宠会说，照说（2026-11-11）。
-    if (notice.notify && notice.kind !== 'disk' && !petTakes(notice)) return;
+    if (notice.notify && notice.kind !== 'disk' && notice.kind !== 'growth' && !petTakes(notice)) return;
     // 有去处的通知（会话、页面）记下来：点卡片或面板里的「打开」时按它跳。
     if (notice.sessionId || notice.page || notice.noticeId || notice.action) remember(notice);
     if (speech.push(notice)) {
@@ -574,6 +614,9 @@ function createHubPetController({
     const quick = [];
     if (typeof askAssistant === 'function' && pages.assistant !== false) quick.push({ type: 'ask', label: '问助理一句…', icon: 'ask' });
     if (dots) quick.push({ type: 'inbox', label: `看 ${dots} 条没看的`, icon: 'inbox' });
+    // 2026-11-12：摸摸（和鼠标在身上蹭一样），带上现在的等级。
+    const growth = growthView();
+    quick.push({ type: 'pet', label: '摸摸它', hint: growth ? 'Lv.' + growth.level : '', icon: 'heart' });
     if (pages.rooms) quick.push({ type: 'page', page: 'rooms', label: String(pages.rooms.label || '会议室'), hint: String(pages.rooms.hint || ''), icon: 'room' });
     return {
       role: { id: me.id, name: me.name, preview: me.preview || '' }, status, mode: s.mode, quick,
@@ -652,6 +695,7 @@ function createHubPetController({
     if (a.type === 'settings') { hideMenu(); openAssistant({ settingsTab: String(a.tab || 'pet') }); return; }
     if (a.type === 'ask') { hideMenu(); openAsk(); return; }
     if (a.type === 'inbox') { hideMenu(); handleClick('dot'); return; }
+    if (a.type === 'pet') { hideMenu(); petted(); return; }
     if (a.type === 'page' && typeof a.page === 'string') { hideMenu(); openItem({ page: a.page }); return; }
     if (a.type === 'hide') { hideMenu(); setSettings({ enabled: false }); return; }
     if (a.type === 'close') { hideMenu(); return; }
@@ -674,6 +718,7 @@ function createHubPetController({
     'hub-pet:hit': (event, hit) => { if (fromPet(event) && !drag) setIgnore(!hit); },
     'hub-pet:press': (event, payload) => { if (fromPet(event)) onPress(payload && payload.target); },
     'hub-pet:release': (event) => { if (fromPet(event)) onRelease(); },
+    'hub-pet:pet': (event) => { if (fromPet(event)) petted(); },
     'hub-pet:menu': (event) => { if (fromPet(event)) { if (drag) { drag = null; stopMove(); } popupMenu(); } },
     'hub-pet-menu:ready': (event) => { if (fromMenu(event)) { menuReady = true; sendMenuState(); } },
     'hub-pet-menu:size': (event, box) => {
@@ -754,6 +799,8 @@ function createHubPetController({
       if (req.op === 'menu-state') return menuState();
       if (req.op === 'menu-act') { menuAct(req.act || {}); return true; }
       if (req.op === 'ask-open') { openAsk(); return true; }
+      if (req.op === 'celebrate') return celebrate(req.payload || {});
+      if (req.op === 'pet') return petted();
       if (req.op === 'disk-check') return diskWatch ? diskWatch.check() : [];
       if (req.op === 'override') {
         for (const k of ['idleSec', 'busy', 'fullscreen', 'nowShift', 'running', 'meeting']) if (k in req) overrides[k] = req[k];
@@ -792,6 +839,7 @@ function createHubPetController({
     if (typeof patch.peekOnFullscreen === 'boolean') clean.peekOnFullscreen = patch.peekOnFullscreen;
     if (NOTIFY_MODES.includes(patch.notifyMode)) clean.notifyMode = patch.notifyMode;
     if (typeof patch.followSessions === 'boolean') clean.followSessions = patch.followSessions;
+    if (typeof patch.showGrowth === 'boolean') clean.showGrowth = patch.showGrowth;
     const t = clock();
     if (typeof patch.quietHour === 'boolean') clean.quietUntil = patch.quietHour ? t + 3600000 : 0;
     if (typeof patch.silentToday === 'boolean') clean.silentDate = patch.silentToday ? localDateKey(t) : '';
@@ -922,12 +970,15 @@ function createHubPetController({
     startHover();
     if (watchFullscreen && overrides.fullscreen == null) fsWatch.start();
     scheduleRoleRestore();
+    // 出来 6 秒后再自我介绍：先让用户看到它，再开口。
+    if (!settings.get().introduced) { introTimer = setTimeout(() => { introTimer = null; if (started && alive()) { introduce(); evaluate(); } }, 6000); introTimer.unref?.(); }
     if (diskWatch) { diskWatch.start(); diskFirst = setTimeout(() => { diskFirst = null; void diskWatch.check().catch(() => {}); }, 60000); diskFirst.unref?.(); }
     return true;
   }
   function stop() {
     if (!started) return;
     started = false;
+    if (introTimer) { clearTimeout(introTimer); introTimer = null; }
     noticeBus?.removeListener?.('notice', onNotice);
     noticeBus?.removeListener?.('reminders-changed', syncReminders);
     if (pollTimer) clearInterval(pollTimer);
@@ -973,7 +1024,7 @@ function createHubPetController({
     if (debug) ipcMain.removeHandler?.('hub-pet:debug');
   }
 
-  return { start, stop, dispose, setSignal, setSettings, roleList, notify, routeDesktopNotice, canNotify, sessionSeen, announceUpdate, isActive: () => enabled() && started && alive(), getWindow: () => win, getSettings: () => settings.get(), _evaluate: evaluate, _speech: speech, _roles: roles,
+  return { start, stop, dispose, setSignal, setSettings, setProfile, celebrate, petted, roleList, notify, routeDesktopNotice, canNotify, sessionSeen, announceUpdate, isActive: () => enabled() && started && alive(), getWindow: () => win, getSettings: () => settings.get(), _evaluate: evaluate, _speech: speech, _roles: roles,
     _restoreRememberedRole: restoreRememberedRole, _autoRole: () => ({ ...autoRole }) };
 }
 

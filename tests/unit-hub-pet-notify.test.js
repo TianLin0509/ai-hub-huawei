@@ -66,7 +66,10 @@ test('鼠标停在卡片上暂停倒计时，移开后至少再留 2.5 秒；打
 test('有会话在跑时敲键盘；夜里也是（活没干完不睡）；出错的通知用「累了」的样子说', () => {
   assert.equal(decidePose({ now: NOON, sessionsBusy: 2 }), 'typing');
   assert.equal(decidePose({ now: NIGHT, sessionsBusy: 1 }), 'typing');
-  assert.equal(decidePose({ now: NIGHT, sessionsBusy: 0 }), 'sleep');
+  // 2026-11-12：夜里还在操作电脑就陪着不睡，停手 2 分钟才打盹
+  assert.equal(decidePose({ now: NIGHT, sessionsBusy: 0, idleSec: 0 }), 'idle');
+  assert.equal(decidePose({ now: NIGHT, sessionsBusy: 0, idleSec: 130 }), 'sleep');
+  assert.equal(decidePose({ now: NOON, sessionsBusy: 0, idleSec: 130 }), 'idle');
   assert.equal(decidePose({ now: NOON, speaking: true, speakingTone: 'bad' }), 'tired');
   assert.equal(decidePose({ now: NOON, speaking: true }), 'happy');
 });
@@ -396,4 +399,56 @@ test('关了「通知交给桌宠」：总线上的通知卡片（会议室、�
   assert.equal(r.state().dots, 0);
   r.bus.publish({ id: 'prep:x', kind: 'meeting-prep', title: '会前准备' });
   assert.equal(r.state().bubble.title, '会前准备', '助理原有的提醒照旧由桌宠说');
+});
+
+// ---------- 等级联动（2026-11-12） ----------
+test('等级联动：身上显示等级与已解锁特效；设置里关掉就不显示', t => {
+  const r = rig(t, { getProfile: () => ({ level: 12, rank: 3, perks: ['chip', 'sparkle', 'emblem'] }) });
+  r.c.setSettings({ enabled: true });
+  assert.deepEqual(r.state().growth, { level: 12, rank: 3, perks: ['chip', 'sparkle', 'emblem'] });
+  r.c.setSettings({ showGrowth: false });
+  assert.equal(r.state().growth, null);
+  r.c.setSettings({ showGrowth: true });
+  assert.equal(r.state().growth.level, 12);
+});
+
+test('升级和解锁成就：桌宠连跳撒花并举卡片，点卡片打开个人页；回执不交给桌宠时也照样庆祝；桌宠没开不庆祝', t => {
+  const r = rig(t);
+  assert.equal(r.c.celebrate({ id: 'lv-2', title: '升到 Lv.2' }), false, '桌宠没开');
+  r.c.setSettings({ enabled: true, notifyMode: 'popup' });
+  assert.equal(r.c.celebrate({ id: 'lv-13', title: '升到 Lv.13 · 晋升熟练驾驭者', text: '桌宠解锁「段位徽章」', big: true }), true);
+  const motion = r.sent.filter(x => x.channel === 'hub-pet:motion').map(x => x.payload).pop();
+  assert.deepEqual(motion, { phase: 'celebrate', big: true });
+  const b = r.state().bubble;
+  assert.equal(b.kind, 'growth');
+  assert.equal(b.notify, true);
+  assert.equal(b.title, '升到 Lv.13 · 晋升熟练驾驭者');
+  assert.equal(b.cta, '看看我的成就');
+  r.click('bubble');
+  assert.deepEqual(r.toHub.filter(x => x.channel === 'hub-pet:open-page').map(x => x.payload).pop(), { page: 'profile' });
+});
+
+test('摸摸：鼠标在身上蹭算一次，3 秒内只记一次，记到亲密度上', t => {
+  let petted = 0;
+  const r = rig(t, { onPetted: () => { petted++; } });
+  r.c.setSettings({ enabled: true });
+  r.ipcMain.emit('hub-pet:pet', r.pet());
+  r.ipcMain.emit('hub-pet:pet', r.pet());
+  assert.equal(petted, 1);
+  assert.equal(r.sent.filter(x => x.channel === 'hub-pet:motion' && x.payload.phase === 'petted').length, 1);
+  r.ipcMain.emit('hub-pet:pet', { sender: {} });
+  assert.equal(petted, 1, '不是桌宠窗口发来的不算');
+});
+
+test('闲聊：活泼档早上问好、午饭和深夜各说一句，每天各一次；温和档不闲聊', () => {
+  const { chatterFor } = require('../core/hub-pet/state');
+  const at = (h, m = 0) => new Date(2026, 10, 12, h, m).getTime();
+  const track = {};
+  assert.match(chatterFor('lively', { now: at(9), idleSec: 0 }, track).title, /早/);
+  assert.equal(chatterFor('lively', { now: at(9, 5), idleSec: 0 }, track), null);
+  assert.match(chatterFor('lively', { now: at(12, 10), idleSec: 0 }, track).title, /吃饭/);
+  assert.doesNotMatch(chatterFor('lively', { now: at(12, 20), idleSec: 0 }, track)?.title || '', /吃饭/);
+  assert.match(chatterFor('lively', { now: at(23, 10), idleSec: 0 }, track).title, /休息/);
+  assert.doesNotMatch(chatterFor('lively', { now: at(23, 40), idleSec: 0 }, track)?.title || '', /休息/);
+  assert.equal(chatterFor('gentle', { now: at(9), idleSec: 0 }, {}), null);
 });

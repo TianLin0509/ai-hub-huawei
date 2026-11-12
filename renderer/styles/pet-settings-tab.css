@@ -5,6 +5,10 @@
 .pet-tab-note.bad{color:#b42318}
 .pet-tab-row{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:10px 0;border-top:1px solid #f0f2f6}
 .pet-tab-row>div:first-child{min-width:0}
+/* 两个开关并排一行（2026-11-12：加了「身上显示等级」后仍保持一屏） */
+.pet-tab-duo{gap:36px}
+.pet-tab-half{flex:1;min-width:0;display:flex;align-items:center;justify-content:space-between;gap:16px}
+.pet-tab-half>div{min-width:0}
 .pet-tab-row b{display:block;font-size:13.5px;font-weight:600}
 .pet-tab-row small{display:block;font-size:12px;line-height:1.55;color:#8a94a6;margin-top:1px}
 .pet-tab-top{border-top:0;padding-top:2px}

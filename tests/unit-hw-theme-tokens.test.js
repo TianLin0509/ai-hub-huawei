@@ -112,7 +112,7 @@ for (const theme of IDS) {
 }
 
 // 新外观的样式文件不写颜色值，一律 var(--hw-*)（s2 5.5.10 加入 hw-mid / hw-sweep / hw-type / 问一下 / 助理页）。
-for (const file of ['hw-shell.css', 'hw-mid.css', 'hw-sweep.css', 'hw-type.css', 'ask-aside.css', 'company-assistant-page.css']) {
+for (const file of ['hw-shell.css', 'hw-mid.css', 'hw-sweep.css', 'hw-type.css', 'ask-aside.css', 'company-assistant-page.css', 'profile-page.css']) {
   test(`${file} carries no fixed colour values`, () => {
     const hits = read(file).match(/#[0-9a-f]{3,8}\b|rgba?\(\s*\d/gi) || [];
     assert.deepEqual(hits, []);

@@ -18,6 +18,7 @@ function mountHubPetSettings({ document, window, ipcRenderer }) {
     }
     if (page === 'disk') { try { window.__hubOpenDiskRelease?.(); } catch (_) {} return; }
     if (page === 'update') { try { window.__appUpdate?.open?.(); } catch (_) {} return; }
+    if (page === 'profile') { try { window.__profileOpen?.(); } catch (_) {} return; }
     const button = PAGE_BUTTON[page] && document.getElementById(PAGE_BUTTON[page]);
     if (button) button.click();
   });

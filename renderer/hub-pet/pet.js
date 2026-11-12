@@ -330,7 +330,7 @@
   // 提醒类别的短名（和助理页「今天的提醒」一致），气泡和展开面板里当小标签用，一眼知道是哪类事。
   const KIND = { reminder: '重要提醒', digest: '定时汇总', brief: '简报', 'meeting-prep': '会前准备', 'awaiting-reply': '等你回复', 'commitment-due': '答应的事', overbooked: '会议太满', 'day-summary': '下班小结', keyword: '关注词',
     // 2026-11-09 通知卡片的类别
-    session: '会话完成', web: '网页会话', bridge: '联动消息', 'hub-reminder': '到点提醒', answer: '助理回答', room: '会议室', attendance: '考勤', 'welink-login': 'WeLink', 'pet-role': '形象', disk: '硬盘', update: '新版本', chatter: '', weekly: '周报' };
+    session: '会话完成', web: '网页会话', bridge: '联动消息', 'hub-reminder': '到点提醒', answer: '助理回答', room: '会议室', attendance: '考勤', 'welink-login': 'WeLink', 'pet-role': '形象', disk: '硬盘', update: '新版本', chatter: '', weekly: '周报', growth: '成长' };
   const bubbleKind = $('bubble-kind');
   const card = { el: $('ncard'), kind: $('ncard-kind'), time: $('ncard-time'), title: $('ncard-title'), text: $('ncard-text'), cta: $('ncard-cta'), count: $('ncard-count'), bar: $('ncard-bar') };
   let cardId = '';
@@ -346,6 +346,12 @@
       card.cta.textContent = (b.cta || '打开') + ' →';
       card.count.textContent = b.count > 1 ? '另有 ' + (b.count - 1) + ' 个待查看' : '';
       card.el.classList.toggle('bad', b.tone === 'bad');
+      // 成长卡片（升级、成就）：金色点缀，右侧放段位或成就徽章
+      const art = /^(rank|badge)-\d{1,2}$/.test(b.art || '') ? b.art : '';
+      card.el.classList.toggle('growth', b.kind === 'growth');
+      card.el.classList.toggle('has-art', !!art);
+      $('ncard-art').hidden = !art;
+      if (art) $('ncard-art').style.backgroundImage = 'url("../assets/profile/' + art + '.webp")';
       card.el.hidden = false;
       card.el.classList.remove('out', 'in', 'held');
       card.bar.classList.remove('run');
@@ -540,6 +546,67 @@
     }
   });
 
+  // ---------- 等级联动（2026-11-12）：等级角标、星光、头顶段位徽章、脚下光环；升级撒花；摸摸冒爱心 ----------
+  const lvEl = $('lv'), emblemEl = $('emblem'), sparksEl = $('sparks'), haloEl = $('halo'), fxEl = $('fx');
+  let growthKey = '';
+  function showGrowth(g) {
+    const key = g ? g.level + ':' + g.rank + ':' + (g.perks || []).join(',') : '';
+    if (key !== growthKey) {
+      growthKey = key;
+      const perk = id => !!g && (g.perks || []).indexOf(id) >= 0;
+      lvEl.hidden = !perk('chip'); if (g) lvEl.textContent = 'Lv.' + g.level;
+      sparksEl.hidden = !perk('sparkle');
+      haloEl.hidden = !perk('halo');
+      emblemEl.hidden = !perk('emblem');
+      if (perk('emblem')) emblemEl.style.backgroundImage = 'url("../assets/profile/rank-' + Math.max(1, Math.min(8, Number(g.rank) || 1)) + '.webp")';
+    }
+    // 头顶正举着气泡、卡片、面板或输入框时，徽章先让开
+    document.body.classList.toggle('talking', !!state.bubble || !panelEl.hidden || !askEl.hidden);
+    document.body.classList.toggle('peeking', !!state.peeking);
+  }
+  const FX_COLORS = ['#3478f6', '#ffc83d', '#ff5d7a', '#35c28a', '#9b6bff', '#ff9a3d'];
+  function burst(tag, n, make) {
+    const body = Math.round(150 * (Number(state.scale) || 1));
+    for (let i = 0; i < n; i++) { const el = document.createElement(tag); make(el, i, body); fxEl.appendChild(el); setTimeout(() => el.remove(), 2400); }
+  }
+  // 撒花：从身体两侧往上喷一把彩纸，同时连跳三下
+  function celebrate(big) {
+    const t = now();
+    hops.push({ start: t + 40, dur: 380, height: 22 }, { start: t + 460, dur: 420, height: big ? 34 : 28 }, { start: t + 920, dur: 360, height: 16 });
+    script = { start: t, dur: 1300, fn: s => ({ rot: 5 * Math.sin(Math.PI * 4 * s) * (1 - s), y: 0, sx: 1, sy: 1 }) };
+    burst('i', big ? 34 : 22, (el, i, body) => {
+      const left = i % 2 === 0;
+      el.style.setProperty('--x', (140 + (left ? -1 : 1) * body * 0.28).toFixed(0) + 'px');
+      el.style.setProperty('--y', (body * 0.45).toFixed(0) + 'px');
+      el.style.setProperty('--dx', ((left ? -1 : 1) * rand(10, 95)).toFixed(0) + 'px');
+      el.style.setProperty('--up', rand(50, 130).toFixed(0) + 'px');
+      el.style.setProperty('--c', FX_COLORS[i % FX_COLORS.length]);
+      el.style.setProperty('--d', rand(1.2, 1.9).toFixed(2) + 's');
+      el.style.setProperty('--delay', (i * 0.018).toFixed(3) + 's');
+    });
+    wake();
+  }
+  function hearts() {
+    burst('b', 3, (el, i, body) => {
+      el.style.setProperty('--x', (140 - 22 + i * 18).toFixed(0) + 'px');
+      el.style.setProperty('--y', (body * (1 - box.top) - 14).toFixed(0) + 'px');
+      el.style.setProperty('--dx', ((i - 1) * 12).toFixed(0) + 'px');
+      el.style.setProperty('--delay', (i * 0.12).toFixed(2) + 's');
+    });
+  }
+  // 摸摸：鼠标不按键、在身上左右来回蹭两个来回算一次（主进程限 3 秒一次，确认后才冒爱心）
+  let stroke = { x: 0, dir: 0, turns: 0, dist: 0, at: 0 };
+  function strokeMove(x) {
+    const t = now();
+    if (t - stroke.at > 900) stroke = { x, dir: 0, turns: 0, dist: 0, at: t };
+    const dx = x - stroke.x;
+    if (Math.abs(dx) < 3) return;
+    const dir = dx > 0 ? 1 : -1;
+    if (stroke.dir && dir !== stroke.dir) stroke.turns++;
+    stroke.dir = dir; stroke.dist += Math.abs(dx); stroke.x = x; stroke.at = t;
+    if (stroke.turns >= 2 && stroke.dist >= 90) { stroke.turns = 0; stroke.dist = 0; api.pet?.(); }
+  }
+
   // ---------- 鼠标：透明处点穿，身体、气泡、圆点、面板上才接住 ----------
   function setHit(v) { if (v !== hitNow) { hitNow = v; api.hit(v); } }
   function hitTarget(x, y) {
@@ -553,8 +620,8 @@
     const ix = r.width * 0.16, iy = r.height * 0.12;
     return x > r.left + ix && x < r.right - ix && y > r.top + iy && y < r.bottom - 4 ? 'pet' : null;
   }
-  document.addEventListener('mousemove', e => { if (!pressing) setHit(!!hitTarget(e.clientX, e.clientY)); setHold(!!(e.target && e.target.closest && e.target.closest('#ncard'))); });
-  document.addEventListener('mouseleave', () => { if (!pressing) setHit(false); setHold(false); });
+  document.addEventListener('mousemove', e => { if (!pressing) { const hit = hitTarget(e.clientX, e.clientY); setHit(!!hit); if (hit === 'pet') strokeMove(e.clientX); else stroke.at = 0; } setHold(!!(e.target && e.target.closest && e.target.closest('#ncard'))); });
+  document.addEventListener('mouseleave', () => { if (!pressing) setHit(false); setHold(false); stroke.at = 0; });
   // 窗口点穿时收不到 mousemove：主进程看到光标进了窗口方框，就把位置发过来问一次（不再用全局鼠标钩子）。
   // 接住时总要回报：主进程可能已因光标出框自行改回点穿，这时 hitNow 还是旧值。
   api.onProbe?.(p => { if (pressing || !p) return; const v = !!hitTarget(Number(p.x) || 0, Number(p.y) || 0); hitNow = v; if (v) api.hit(true); });
@@ -563,7 +630,7 @@
     const target = hitTarget(e.clientX, e.clientY);
     // 面板、问助理输入框、卡片上的 × 都在本窗口里自己处理点击，不交给主进程（不然会被当成拖动或「点卡片打开」）。
     if (!target || target === 'panel' || target === 'ask' || target === 'close') return;
-    pressing = true;
+    pressing = true; stroke.at = 0;
     try { document.documentElement.setPointerCapture(e.pointerId); } catch (_) {}
     api.press(target);
   });
@@ -587,6 +654,8 @@
     sizeKey = key;
     document.documentElement.style.setProperty('--body', body + 'px');
     document.documentElement.style.setProperty('--feet', Math.round(box.bottom * body) + 'px');
+    document.documentElement.style.setProperty('--head', Math.round(box.top * body) + 'px');
+    document.documentElement.style.setProperty('--cx', ((1 + box.left - box.right) * 50).toFixed(1) + '%');
   }
   function measureBody(url, role) {
     const img = new Image();
@@ -635,6 +704,7 @@
     showBubble(state.bubble);
     showDots(state.dots);
     showBusy(Number(state.running) || 0);
+    showGrowth(state.growth);
     layoutOverlays();
     wake();
   });
@@ -645,6 +715,8 @@
     else if (m.phase === 'release') { lifted = false; bodyEl.classList.remove('dragging'); }
     else if (m.phase === 'land') squash = { start: now(), power: 0.06 + 0.1 * M.clamp(m.impact || 0, 0, 1) };
     else if (m.phase === 'poke') { squash = { start: now(), power: 0.07 }; }
+    else if (m.phase === 'celebrate') celebrate(m.big === true);
+    else if (m.phase === 'petted') { hearts(); squash = { start: now(), power: 0.05 }; hops.push({ start: now() + 60, dur: 300, height: 8 }); }
     wake();
   });
   api.onPanel(p => { showPanel(p && p.items); wake(); });

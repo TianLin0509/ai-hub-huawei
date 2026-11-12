@@ -20,6 +20,7 @@
     // 2026-11-09 快捷入口：问助理、没看的通知、会议室
     ask: '<path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h9A1.5 1.5 0 0 1 16 5.5v6a1.5 1.5 0 0 1-1.5 1.5H9l-3.5 3v-3h0A1.5 1.5 0 0 1 4 11.5z"/><path d="M8.2 7.4a1.9 1.9 0 1 1 2.6 1.8c-.5.2-.8.6-.8 1.1M10 12.2v.1"/>',
     inbox: '<path d="M3.5 11.5l2-6.5h9l2 6.5V15a1.5 1.5 0 0 1-1.5 1.5H5A1.5 1.5 0 0 1 3.5 15z"/><path d="M3.5 11.5h4l1 2h3l1-2h4"/>',
+    heart: '<path d="M10 16.5S3.5 12.6 3.5 8.2A3.4 3.4 0 0 1 10 6.6a3.4 3.4 0 0 1 6.5 1.6c0 4.4-6.5 8.300-6.5 8.300z"/>',
     room: '<path d="M4 17V4.5A1.5 1.5 0 0 1 5.5 3h9A1.5 1.5 0 0 1 16 4.5V17M2.5 17h15"/><path d="M8 17v-3.5h4V17M7 6.5h1.5M11.5 6.5H13M7 9.5h1.5M11.5 9.5H13"/>',
   };
   const ACTION_ICON = { 'meetings-today': 'calendar', 'meeting-prep': 'prep', 'awaiting-reply': 'reply', 'group-summary': 'group', 'mail-triage': 'mail', 'weekly-report': 'report' };
