@@ -1,6 +1,6 @@
 // Windows 上改名替换遇到短暂占用（EPERM/EBUSY）稍等重试，必须在其他模块加载前装上（core/fs-rename-retry.js）。
 require('./core/fs-rename-retry').install();
-const { app, BrowserWindow, BaseWindow, ipcMain, clipboard, dialog, nativeImage, screen, shell, Menu, crashReporter, protocol, net, powerMonitor } = require('electron');
+const { app, BrowserWindow, BaseWindow, ipcMain, clipboard, dialog, nativeImage, screen, shell, Menu, Tray, crashReporter, protocol, net, powerMonitor } = require('electron');
 const path = require('path');
 const { fileURLToPath } = require('url');
 const fs = require('fs');
@@ -1733,6 +1733,9 @@ function createWindow() {
     mainWindow.once('closed', () => { try { hubPetController?.stop(); } catch (_) {} });
   }
   mainWindow.webContents.once('did-finish-load', () => {
+    try { trayController?.sync(); } catch (error) { console.warn('[tray] sync failed:', error && error.message); }
+  });
+  mainWindow.webContents.once('did-finish-load', () => {
     try { hubPetController?.start(); } catch (error) { console.warn('[hub-pet] start failed:', error && error.message); }
     companyAssistantService?.petReminders.start();
   });
@@ -1861,6 +1864,8 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   mainWindow.on('close', (event) => {
     if (shutdownDrainState === 'drained' || shutdownDrainState === 'finalizing') return;
+    // 「可选功能」里开了「关窗口最小化到托盘」：只藏窗口，会话照常跑（main/tray-controller.js）。
+    if (trayController && trayController.interceptClose(event)) return;
     // Closing the window releases its sessions; no invisible owner remains.
     event.preventDefault();
     void beginGracefulHubShutdown('window-close-requested');
@@ -2380,6 +2385,13 @@ transcriptTap.on('progress-update', event => {
 
 sessionAutoSuspendScheduler = createSessionAutoSuspendScheduler({
   sessionManager,
+  // 内存紧张提前休眠（2026-11-12）：休眠了哪些会话用提示告诉用户；助理的后台会话不列名字。
+  onMemorySuspend: ({ usage, requested }) => {
+    const visible = requested.filter(r => !HUB_PET_ASSISTANT_PURPOSES.has(r.purpose)).map(r => r.title || '未命名会话');
+    const assistants = requested.length - visible.length;
+    const names = [...visible.map(t => `「${t}」`), ...(assistants ? [`${assistants} 个助理后台会话`] : [])].join('、');
+    sendToRenderer('session-notice', { level: 'warning', message: `内存占用 ${Math.round(usage * 100)}%，已自动休眠早已答完的 ${names}，点会话即可唤醒、记录都在。` });
+  },
   getProtectedSessionIds: () => collectProtectedSessionIds({
     agentLeagueBridge,
     groupChatDispatcher,
@@ -2755,6 +2767,19 @@ const optionalFeatures = require('./core/optional-features').createOptionalFeatu
   dataDir: getHubDataDir(),
   defaults: process.env.CLAUDE_HUB_DATA_DIR ? { assistant: process.env.CLAUDE_HUB_COMPANY_ASSISTANT === '1', forum: process.env.CLAUDE_HUB_COMPANY_FORUM === '1', attendance: process.env.CLAUDE_HUB_COMPANY_ATTENDANCE === '1' } : {},
 });
+// 关窗口最小化到托盘（2026-11-12）：开关也放「可选功能」，默认关。
+var trayController = null;
+try {
+  trayController = require('./main/tray-controller').createTrayController({
+    Tray, Menu,
+    getIcon: () => getHubWindowIcon(),
+    getMainWindow: () => mainWindow,
+    focusWindow: () => focusPrimaryWindow(),
+    quit: () => app.quit(),
+    isEnabled: () => optionalFeatures.get('tray') && !keepIsolatedE2EWindowHidden(),
+    title: 'AI Hub',
+  });
+} catch (error) { console.warn('[tray] setup failed:', error && error.message); }
 function optionalFeatureList() {
   const { CATALOG } = require('./core/optional-features');
   const out = [];
@@ -2762,6 +2787,7 @@ function optionalFeatureList() {
   if (companyForumService) out.push({ id: 'forum', ...CATALOG.forum, on: optionalFeatures.get('forum') });
   if (companyAttendanceService) out.push({ id: 'attendance', ...CATALOG.attendance, on: optionalFeatures.get('attendance') });
   if (hubPetController && require('./core/distribution').featureEnabled('hubPet')) out.push({ id: 'pet', ...CATALOG.pet, on: !!hubPetController.getSettings().enabled });
+  if (trayController) out.push({ id: 'tray', ...CATALOG.tray, on: optionalFeatures.get('tray') });
   return out;
 }
 ipcMain.handle('optional-features:list', () => optionalFeatureList());
@@ -2781,6 +2807,9 @@ ipcMain.handle('optional-features:set', (_event, request = {}) => {
     } else if (id === 'attendance' && companyAttendanceService) {
       optionalFeatures.set('attendance', on);
       if (on) companyAttendanceService.start(); else companyAttendanceService.close();
+    } else if (id === 'tray' && trayController) {
+      optionalFeatures.set('tray', on);
+      trayController.sync();
     } else throw new Error('这个版本没有这项功能');
     const list = optionalFeatureList();
     sendToRenderer('optional-features:changed', list);
@@ -5364,6 +5393,7 @@ async function runFinalShutdownCleanup() {
 }
 
 function restoreWindowAfterFailedShutdown() {
+  trayController?.resetQuitting();
   try {
     if (!mainWindow || mainWindow.isDestroyed()) {
       createWindow();
@@ -5463,6 +5493,7 @@ function beginGracefulHubShutdown(reason, { beforeQuit } = {}) {
 }
 
 app.on('before-quit', (event) => {
+  trayController?.markQuitting();
   if (shutdownDrainState === 'drained' || shutdownDrainState === 'finalizing') {
     shutdownDrainState = 'finalizing';
     return;

@@ -3628,6 +3628,10 @@ try {
         sessionId,
         kind: info.kind || '',
         title: info.title || '',
+        purpose: info.purpose || '',
+        hidden: info.hiddenFromSidebar === true,
+        // 内存紧张休眠只收「明确答完、停下来」的：本轮还在跑或状态是 running / waiting 的不算。
+        settled: session.agentTurnActive !== true && !['running', 'waiting', 'starting', 'suspending'].includes(info.status),
         eligible: verdict.ok === true,
         reason: verdict.ok ? null : (verdict.error || 'unknown'),
         message: verdict.ok ? null : (verdict.message || ''),

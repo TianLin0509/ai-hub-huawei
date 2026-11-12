@@ -3,6 +3,36 @@
 const AUTO_SUSPEND_IDLE_MS = 5 * 60 * 60 * 1000;
 const AUTO_SUSPEND_CHECK_MS = 5 * 60 * 1000;
 const AUTO_SUSPEND_REASON = 'idle-timeout';
+const MEMORY_PRESSURE_REASON = 'memory-pressure';
+const MEMORY_CHECK_MS = 60 * 1000;
+// 内存感知休眠（2026-11-12 用户）：整机内存占用 ≥85% 时，不等 5 小时，按压力分档提前休眠「已答完、停下来」的会话。
+// 越紧张，闲置门槛越低、每分钟收得越多；每分钟收一小批再看内存，降下来就停。
+// 顺序：助理会话（用户看不见、随时能重开）优先，其次最早答完的（最不可能马上再用）。
+const MEMORY_TIERS = [
+  { usage: 0.95, minIdleMs: 3 * 60 * 1000, perTick: 3 },
+  { usage: 0.90, minIdleMs: 10 * 60 * 1000, perTick: 2 },
+  { usage: 0.85, minIdleMs: 30 * 60 * 1000, perTick: 1 },
+];
+const ASSISTANT_PURPOSES = new Set(['company-assistant', 'hub-assistant']);
+
+function memoryTier(usage) {
+  return MEMORY_TIERS.find(tier => usage >= tier.usage) || null;
+}
+
+function defaultMemoryUsage() {
+  const os = require('os');
+  const total = os.totalmem();
+  return total > 0 ? 1 - os.freemem() / total : 0;
+}
+
+// 纯函数：从预演结果里挑出这一分钟要休眠的会话。
+function rankMemoryPressureCandidates(items, perTick) {
+  return (items || [])
+    .filter(item => item && item.eligible && item.settled !== false)
+    .sort((a, b) => (Number(ASSISTANT_PURPOSES.has(b.purpose)) - Number(ASSISTANT_PURPOSES.has(a.purpose)))
+      || ((Number(a.lastActivityAt) || 0) - (Number(b.lastActivityAt) || 0)))
+    .slice(0, Math.max(0, perTick));
+}
 
 function collectProtectedSessionIds({ agentLeagueBridge, groupChatDispatcher, loopEngine, meetingManager, studyBridge } = {}) {
   const protectedIds = new Set();
@@ -79,7 +109,10 @@ function createSessionAutoSuspendScheduler(options = {}) {
   const now = typeof options.now === 'function' ? options.now : Date.now;
   const setIntervalFn = options.setIntervalFn || setInterval;
   const clearIntervalFn = options.clearIntervalFn || clearInterval;
+  const getMemoryUsage = typeof options.getMemoryUsage === 'function' ? options.getMemoryUsage : defaultMemoryUsage;
+  const onMemorySuspend = typeof options.onMemorySuspend === 'function' ? options.onMemorySuspend : null;
   let timer = null;
+  let memoryTimer = null;
 
   // sweep 和 preview 必须用同一份参数，否则「预演说会休眠」和「实际会休眠」
   // 会各说各话。这里集中一处产出，两边都从它取。
@@ -126,7 +159,41 @@ function createSessionAutoSuspendScheduler(options = {}) {
     return result;
   }
 
+  // 每分钟看一次整机内存；不紧张时什么都不做（只读一次 os.freemem，开销可忽略）。
+  function memorySweep() {
+    const usage = Number(getMemoryUsage()) || 0;
+    const tier = memoryTier(usage);
+    if (!tier || typeof sessionManager.previewIdleSuspend !== 'function' || typeof sessionManager.suspendSession !== 'function') {
+      return { ok: true, usage, tier: null, requested: [] };
+    }
+    const base = sweepOptions();
+    const preview = sessionManager.previewIdleSuspend({ ...base, idleMs: tier.minIdleMs });
+    const picks = rankMemoryPressureCandidates(preview && preview.items, tier.perTick);
+    const requested = [];
+    for (const item of picks) {
+      const result = sessionManager.suspendSession(item.sessionId, {
+        now: base.now, minIdleMs: tier.minIdleMs, excludePinned: true, excludeFocused: true, excludeMeeting: true,
+        excludeSessionIds: base.excludeSessionIds, reason: MEMORY_PRESSURE_REASON,
+      });
+      if (result && result.ok) requested.push({ sessionId: item.sessionId, title: item.title, purpose: item.purpose, idleMs: item.idleMs });
+    }
+    if (requested.length) {
+      if (logger && typeof logger.log === 'function') {
+        logger.log(`[session-auto-suspend] memory ${Math.round(usage * 100)}% ≥ ${Math.round(tier.usage * 100)}%: suspended ${requested.length} session(s) idle ≥ ${Math.round(tier.minIdleMs / 60000)}min: ${requested.map(r => String(r.sessionId).slice(0, 8)).join(',')}`);
+      }
+      try { onMemorySuspend?.({ usage, tier, requested }); } catch {}
+    }
+    return { ok: true, usage, tier, requested };
+  }
+
   function start() {
+    if (!memoryTimer && options.memoryAware !== false) {
+      memoryTimer = setIntervalFn(() => {
+        try { memorySweep(); }
+        catch (error) { logger?.warn?.('[session-auto-suspend] memory sweep failed:', error && error.message ? error.message : error); }
+      }, Math.max(10 * 1000, Number(options.memoryCheckMs) || MEMORY_CHECK_MS));
+      if (memoryTimer && typeof memoryTimer.unref === 'function') memoryTimer.unref();
+    }
     if (timer) return timer;
     timer = setIntervalFn(() => {
       try { sweep(); }
@@ -141,6 +208,7 @@ function createSessionAutoSuspendScheduler(options = {}) {
   }
 
   function stop() {
+    if (memoryTimer) { clearIntervalFn(memoryTimer); memoryTimer = null; }
     if (!timer) return false;
     clearIntervalFn(timer);
     timer = null;
@@ -153,6 +221,7 @@ function createSessionAutoSuspendScheduler(options = {}) {
     start,
     stop,
     sweep,
+    memorySweep,
     preview,
     isStarted: () => !!timer,
   };
@@ -162,6 +231,10 @@ module.exports = {
   AUTO_SUSPEND_CHECK_MS,
   AUTO_SUSPEND_IDLE_MS,
   AUTO_SUSPEND_REASON,
+  MEMORY_PRESSURE_REASON,
+  MEMORY_TIERS,
+  memoryTier,
+  rankMemoryPressureCandidates,
   collectProtectedSessionIds,
   createSessionAutoSuspendScheduler,
 };
