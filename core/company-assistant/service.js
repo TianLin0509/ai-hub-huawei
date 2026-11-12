@@ -183,6 +183,7 @@ class CompanyAssistant {
     this.meetings = new (require('./meeting').MeetingCompanion)(this, deps);
     this.petReminders = new PetReminders(this);
     this.digest = new AssistantDigest(this);
+    this.archive = new (require('./archive').WelinkArchive)(this);
     this.toolsReady = null;
     // 自动发现与多版本选择（2026-11-07，core/tool-discovery）：welink-cli、PPT Doctor 装了多份时按版本选，页面上可切换。
     const discovery = deps.toolDiscovery;
@@ -225,6 +226,7 @@ class CompanyAssistant {
     }
     const hhmm = v => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(v)) ? String(v) : null;
     if ('enabled' in patch) next.enabled = !!patch.enabled;
+    if ('archive' in patch) next.archive = patch.archive !== false; // 长期档案开关（默认开）
     if (['guided', 'classic'].includes(patch.answerStyle)) next.answerStyle = patch.answerStyle;
     if (['', 'low', 'medium', 'high', 'max'].includes(patch.answerEffort)) next.answerEffort = patch.answerEffort;
     if (hhmm(patch.briefTime)) next.briefTime = hhmm(patch.briefTime);
@@ -516,7 +518,7 @@ class CompanyAssistant {
     this.rooms.start();
     this.startTimers();
   }
-  close() { this.closed = true; this.digest.close(); this.petReminders.close(); this.stopPptCollector(); this.stopTimers(); this.meetings.close(); this.loginStop?.abort(); this.auth.close(); this.phone.close(); this.ppt.close?.();
+  close() { this.closed = true; this.archive.stop(); this.digest.close(); this.petReminders.close(); this.stopPptCollector(); this.stopTimers(); this.meetings.close(); this.loginStop?.abort(); this.auth.close(); this.phone.close(); this.ppt.close?.();
     this.rooms.close();
     for (const id of Object.values(this.warm)) this.retire(id);
     this.warm = {};
@@ -641,7 +643,12 @@ class CompanyAssistant {
     if (!this.deps.noTimer) void this.ppt.refresh().catch(e => console.warn('[company-assistant] ppt', e.message));
     const workday = R.isWorkday(now, s);
     const last = this.snapshot(day);
-    if (workday && minute >= 7 * 60 + 30 && minute < 21 * 60 && (!last || now - (last.at || 0) >= s.refreshMinutes * 60000)) await this.refresh().catch(() => {});
+    // 2026-11-12：100 天真实数据里 19–21 点每小时发 466–676 条、周六 649 条，原来 21 点停、周末不跑是盲区。
+    // 工作日延到 23:00；周末 9:00–23:00 每 2 小时一轮。
+    const gap = (workday ? s.refreshMinutes : Math.max(120, s.refreshMinutes)) * 60000;
+    const open = workday ? minute >= 7 * 60 + 30 && minute < 23 * 60 : minute >= 9 * 60 && minute < 23 * 60;
+    if (open && (!last || now - (last.at || 0) >= gap)) await this.refresh().catch(() => {});
+    if (!this.deps.noArchive) this.archive.maybeRun();
     const brief = this.brief(day);
     // 没登录时生成的是空简报（提示扫码），之后每 10 分钟再试一次。
     const retry = !brief || (brief.by === 'none' && now - (brief.generatedAt || 0) >= 10 * 60000);
@@ -1857,6 +1864,7 @@ class CompanyAssistant {
       refreshedAt: snap?.at || null, refreshing: !!this.refreshing, updating: snap?.updating || [], errors: snap?.errors || [], conversations: (snap?.conversations || []).slice(0, 60), scope: snap?.scope || null, nameResolution: snap?.nameResolution || null, meetingCoverage: snap?.meetingCoverage || null, calendarCoverage: snap?.calendarCoverage || null, mailCoverage: snap?.mailCoverage || null,
       brief: this.brief(day), nextBriefAt: next, chat: this.chat().filter(c => { if (c.entry === 'ppt') return false; try { this.verifyTeamOwner(c); return true; } catch { return false; } }).slice(-60), job: this.job ? { type: this.job.type, sentAt: this.job.sentAt || null } : null,
       briefJob: this.lanes.brief.job ? { sentAt: this.lanes.brief.job.sentAt || null } : null, pptQueued: this.lanes.ppt.queue.length + (this.lanes.ppt.job ? 1 : 0),
+      archive: (() => { try { return this.archive.status(); } catch { return null; } })(),
       queued: this.queue.length, session: sid ? { id: sid, open: !!this.deps.getSession(sid), busy: this.sessionBusy(sid) } : null, tools: this.toolsStatus(),
       notices: [...this.petReminders.notices(), ...st.notices.map(notice => visibleDigest(notice, this.doneSet()))].sort((a, b) => b.at - a.at).slice(0, 10), commitments: st.commitments, phone: this.phone.status(), ppt: this.ppt.status(),
       rooms: this.rooms.status(),

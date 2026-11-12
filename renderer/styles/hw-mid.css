@@ -54,42 +54,42 @@
 :root[data-hw-shell] body #terminal-panel .home-workbench { background: var(--hw-surface); font-family: var(--hw-font); }
 
 /* 对话区：卡内底色统一为白；用户气泡浅蓝、AI 回复无底色 */
-:root[data-hw-shell] body #terminal-panel.card-view-active .msg-overlay { background: var(--hw-surface); }
-:root[data-hw-shell] body #terminal-panel .turn-card.user .chat-message-bubble,
-:root[data-hw-shell] body #terminal-panel .turn-card.user:not(:has(.chat-message-bubble)) .turn-body { border: 0; border-radius: var(--hw-bubble-r) 6px var(--hw-bubble-r) var(--hw-bubble-r); background: var(--hw-bubble-user-bg); box-shadow: none; }
-:root[data-hw-shell] body #terminal-panel .turn-card .chat-message-bubble .turn-body { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
-:root[data-hw-shell] body #terminal-panel .turn-card.assistant .chat-message-bubble,
-:root[data-hw-shell] body #terminal-panel .turn-card.assistant .turn-body { border: 0; background: transparent; box-shadow: none; }
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view).card-view-active .msg-overlay { background: var(--hw-surface); }
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .turn-card.user .chat-message-bubble,
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .turn-card.user:not(:has(.chat-message-bubble)) .turn-body { border: 0; border-radius: var(--hw-bubble-r) 6px var(--hw-bubble-r) var(--hw-bubble-r); background: var(--hw-bubble-user-bg); box-shadow: none; }
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .turn-card .chat-message-bubble .turn-body { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .turn-card.assistant .chat-message-bubble,
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .turn-card.assistant .turn-body { border: 0; background: transparent; box-shadow: none; }
 
 /* ---------- ⑥ 输入区：surface-2 底、16 圆角、无边框，聚焦蓝描边 + 浅蓝光晕 ---------- */
-:root[data-hw-shell] body #terminal-panel .floating-input-bar { border-top: 0; background: var(--hw-surface); box-shadow: none; padding: 8px 16px 16px; }
-:root[data-hw-shell] body #terminal-panel .floating-input-bar .composer,
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .floating-input-bar { border-top: 0; background: var(--hw-surface); box-shadow: none; padding: 8px 16px 16px; }
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .floating-input-bar .composer,
 :root[data-hw-shell] body #meeting-room-panel #mr-input-row.mr-group-composer { border: 0; border-radius: var(--hw-composer-r); background: var(--hw-composer-bg); box-shadow: none; font-family: var(--hw-font); transition: box-shadow var(--hw-t-fast); }
-:root[data-hw-shell] body #terminal-panel .floating-input-bar .composer:focus-within,
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .floating-input-bar .composer:focus-within,
 :root[data-hw-shell] body #meeting-room-panel #mr-input-row.mr-group-composer:focus-within { box-shadow: var(--hw-composer-focus); }
-:root[data-hw-shell] body #terminal-panel .floating-input-box,
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .floating-input-box,
 :root[data-hw-shell] body #meeting-room-panel #mr-input-box { border: 0; outline: 0; background: transparent; box-shadow: none; font-family: var(--hw-font); font-size: var(--hw-fs-14); }
-:root[data-hw-shell] body #terminal-panel .floating-input-box:focus,
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .floating-input-box:focus,
 :root[data-hw-shell] body #meeting-room-panel #mr-input-box:focus { border: 0; outline: 0; box-shadow: none; }
 
 /* 底排按钮：幽灵胶囊（28 高、13 号、二级灰）；模型选择是唯一白底胶囊；发送 32 圆形蓝按钮 */
-:root[data-hw-shell] body #terminal-panel .composer-chip,
-:root[data-hw-shell] body #terminal-panel .fi-bridge-reference,
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .composer-chip,
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .fi-bridge-reference,
 :root[data-hw-shell] body #meeting-room-panel .mr-group-composer .composer-chip { height: var(--hw-btn-h-s); padding: 0 var(--hw-btn-px-s); border: 0; border-radius: var(--hw-r-pill); background: transparent; color: var(--hw-text-2); font-family: var(--hw-font); font-size: var(--hw-btn-fs-s); font-weight: 400; box-shadow: none; }
-:root[data-hw-shell] body #terminal-panel .composer-chip:hover,
-:root[data-hw-shell] body #terminal-panel .fi-bridge-reference:hover,
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .composer-chip:hover,
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .fi-bridge-reference:hover,
 :root[data-hw-shell] body #meeting-room-panel .mr-group-composer .composer-chip:hover { background: var(--hw-surface-3); color: var(--hw-text-1); }
-:root[data-hw-shell] body #terminal-panel .composer-chip.composer-model { background: var(--hw-surface); color: var(--hw-text-1); box-shadow: var(--hw-e1); }
-:root[data-hw-shell] body #terminal-panel .floating-input-send,
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .composer-chip.composer-model { background: var(--hw-surface); color: var(--hw-text-1); box-shadow: var(--hw-e1); }
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .floating-input-send,
 :root[data-hw-shell] body #meeting-room-panel #mr-send-btn { width: 32px; height: 32px; min-width: 32px; padding: 0; border: 0; border-radius: 50%; background: var(--hw-brand); color: var(--hw-text-on); box-shadow: none; }
-:root[data-hw-shell] body #terminal-panel .floating-input-send:hover,
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .floating-input-send:hover,
 :root[data-hw-shell] body #meeting-room-panel #mr-send-btn:hover { background: var(--hw-brand-hover); }
 
 /* 修正（第 2 轮实拍）：分段控件收在会话栏内；输入区内层行与外层栈去掉白底和描边 */
 :root[data-hw-shell] body #session-sidebar .session-range-tabs { box-sizing: border-box; width: auto; margin-left: 12px; margin-right: 12px; }
-:root[data-hw-shell] body #terminal-panel .floating-input-bar .fi-content-stack { background: transparent; }
-:root[data-hw-shell] body #terminal-panel .floating-input-bar .fi-composer-row,
-:root[data-hw-shell] body #terminal-panel .floating-input-bar .fi-composer-row:focus-within { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .floating-input-bar .fi-content-stack { background: transparent; }
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .floating-input-bar .fi-composer-row,
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .floating-input-bar .fi-composer-row:focus-within { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 
 /* 群聊：页头是卡内 52 高标题行（16 号 600），下面一条分隔线；页头按钮改幽灵胶囊；消息区与卡同白 */
 :root[data-hw-shell] body #meeting-room-panel #mr-header { min-height: 52px; padding: 8px 16px 8px 24px; border-bottom: 1px solid var(--hw-line); background: var(--hw-surface); box-shadow: none; }
@@ -115,13 +115,13 @@
 :root[data-hw-shell] body #terminal-panel .home-welcome-portal .home-welcome-description,
 :root[data-hw-shell] body #terminal-panel .home-welcome-description { font-size: var(--hw-fs-13); }
 :root[data-hw-shell] body #terminal-panel #community-setup button { font-size: var(--hw-fs-13); }
-:root[data-hw-shell] body #terminal-panel .turn-head :is(.turn-meta, .turn-who, .ta-btn, .card-actions-more, .conversation-phase, .turn-branch-chip) { font-size: var(--hw-fs-12); }
-:root[data-hw-shell] body #terminal-panel .card-actions-popover .ta-btn { font-size: var(--hw-fs-13); }
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .turn-head :is(.turn-meta, .turn-who, .ta-btn, .card-actions-more, .conversation-phase, .turn-branch-chip) { font-size: var(--hw-fs-12); }
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .card-actions-popover .ta-btn { font-size: var(--hw-fs-13); }
 :root[data-hw-shell] body #meeting-room-panel :is(.mr-input-battle-detail, .mr-input-preflight-chip, .mr-input-preflight-chip *) { font-size: var(--hw-fs-12); }
 :root[data-hw-shell] body #terminal-panel .home-welcome-brand > span { font-size: var(--hw-fs-16); }
-:root[data-hw-shell] body #terminal-panel .composer :is(.composer-status-text, .composer-model-logo) { font-size: var(--hw-fs-12); }
-:root[data-hw-shell] body #terminal-panel .turn-card :is(.ta-btn, .card-actions-more, .turn-meta) { font-size: var(--hw-fs-12); }
-:root[data-hw-shell] body #terminal-panel .turn-card .conversation-progress-time { font-size: var(--hw-fs-12); }
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .composer :is(.composer-status-text, .composer-model-logo) { font-size: var(--hw-fs-12); }
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .turn-card :is(.ta-btn, .card-actions-more, .turn-meta) { font-size: var(--hw-fs-12); }
+:root[data-hw-shell] body :is(#terminal-panel, .split-secondary, .gms-member-view) .turn-card .conversation-progress-time { font-size: var(--hw-fs-12); }
 /* 群聊头像角上的「已选」小圆：原来是 12px 圆里 8 号字「OK」，改成线条勾，不再出现小于 12 号的字 */
 :root[data-hw-shell] body #meeting-room-panel .mr-free-avatar-chk-mark { position: absolute; font-size: 0; }
 :root[data-hw-shell] body #meeting-room-panel .mr-free-avatar-chk-mark::after { content: ''; position: absolute; left: 50%; top: 45%; width: 5px; height: 3px; border: solid currentColor; border-width: 0 0 1.5px 1.5px; transform: translate(-50%, -50%) rotate(-45deg); }
@@ -135,7 +135,7 @@
 
 /* s1 验收必改（2026-11-05）：群聊输入区的模型选择与单会话一致——按文字自适应宽度的白底胶囊，过长时省略 */
 :root[data-hw-shell] body #meeting-room-panel .mr-group-models { gap: 4px; }
-:root[data-hw-shell] body #meeting-room-panel .mr-group-models .mr-group-model-chip { flex: 0 1 auto; width: auto; min-width: 0; max-width: 180px; height: var(--hw-btn-h-s); padding: 0 var(--hw-btn-px-s); border: 0; border-radius: var(--hw-r-pill); background: var(--hw-surface); color: var(--hw-text-1); font-size: var(--hw-btn-fs-s); box-shadow: var(--hw-e1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:root[data-hw-shell] body #meeting-room-panel .mr-group-models .mr-group-model-chip { flex: 0 1 auto; width: auto; min-width: 0; display: block; max-width: 260px; height: var(--hw-btn-h-s); line-height: var(--hw-btn-h-s); padding: 0 var(--hw-btn-px-s); border: 0; border-radius: var(--hw-r-pill); background: var(--hw-surface); color: var(--hw-text-1); font-size: var(--hw-btn-fs-s); box-shadow: var(--hw-e1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 :root[data-hw-shell] body #meeting-room-panel .mr-group-models .mr-group-model-chip:hover { background: var(--hw-surface); color: var(--hw-brand); }
 
 /* 5.5.9 ③ 卡片视图「工作中」（s1 定稿）：白底胶囊 + 绿点，底边间歇流光（.hw-sweep，styles/hw-sweep.css + sweep-pulse.js，每 8 秒扫一遍） */

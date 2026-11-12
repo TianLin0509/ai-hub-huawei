@@ -110,6 +110,7 @@ class HubTools {
     this.noteSeen(me, 'call', name);
     if (name === 'welink_find') return this.a.query.find(args, ctx);
     if (name === 'welink_mail') return this.a.query.mail(args, ctx);
+    if (name === 'welink_history') return this.a.archive.tool(args);
     if (name === 'welink_inbox') return this.a.query.inbox(args, ctx);
     if (name === 'welink_message') return this.a.query.message(args);
     if (name === 'welink_meetings') return this.a.query.meetings(args, ctx);

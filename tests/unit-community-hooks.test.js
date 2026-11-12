@@ -65,10 +65,22 @@ test('精简 PATH 下仍可读注册表环境和异步检查系统 PowerShell', 
     const result = await config.readPersistentEnv('Path');
     if (result.error) throw new Error(result.error);
     const setup = await require(${core('community-setup')}).inspectSetupAsync({ packaged: true });
-    if (!setup.requirements.powershell || !setup.powershellPolicy?.ok) throw new Error('PowerShell unavailable');
-  })().catch(() => process.exitCode = 1);`;
-  execFileSync(process.execPath, ['-e', script], { cwd: path.join(__dirname, '..'), windowsHide: true,
-    env: { ...process.env, [pathKey]: path.join(process.env.SystemRoot || 'C:\\Windows', 'System32') }, timeout: 45000, stdio: 'pipe' });
+    if (!setup.requirements.powershell || !setup.powershellPolicy?.ok) throw new Error('PowerShell unavailable: ' + JSON.stringify(setup.powershellPolicy));
+  })().catch(error => { console.error(String(error && error.message || error)); process.exitCode = 1; });`;
+  // 带上 pwsh 7 的模块目录，模拟从 pwsh 7 终端或 CI 拉起：5.1 不能因此读不到注册表或误报策略拦截
+  const pwsh7Modules = 'C:\\Program Files\\PowerShell\\7\\Modules';
+  try {
+    execFileSync(process.execPath, ['-e', script], { cwd: path.join(__dirname, '..'), windowsHide: true,
+      env: { ...process.env, [pathKey]: path.join(process.env.SystemRoot || 'C:\\Windows', 'System32'),
+        PSModulePath: [pwsh7Modules, process.env.PSModulePath].filter(Boolean).join(';') }, timeout: 45000, stdio: 'pipe' });
+  } catch (error) { assert.fail(String(error.stderr || error.message)); }
+});
+
+test('起 Windows PowerShell 5.1 时去掉 PSModulePath，其余环境不变', () => {
+  const { windowsPowerShellEnv } = require('../core/windows-powershell');
+  const env = { Path: 'X', PSModulePath: 'D:/pwsh-7/Modules', psmodulepath: 'dup', HOME: 'h' };
+  assert.deepEqual(windowsPowerShellEnv(env), { Path: 'X', HOME: 'h' });
+  assert.equal(env.PSModulePath, 'D:/pwsh-7/Modules', '不改调用方的环境');
 });
 
 test('large tool output is truncated like the original hook', () => {

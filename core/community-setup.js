@@ -65,8 +65,9 @@ function parsePolicy(error, stdout, stderr) {
 }
 
 function probePowerShellPolicy(env = process.env) {
-  const result = require('child_process').spawnSync(require('./windows-powershell').windowsPowerShellPath(env), ['-NoProfile', '-NonInteractive', '-Command', POLICY_SCRIPT],
-    { env, encoding: 'utf8', windowsHide: true, timeout: 15000 });
+  const shell = require('./windows-powershell');
+  const result = require('child_process').spawnSync(shell.windowsPowerShellPath(env), ['-NoProfile', '-NonInteractive', '-Command', POLICY_SCRIPT],
+    { env: shell.windowsPowerShellEnv(env), encoding: 'utf8', windowsHide: true, timeout: 15000 });
   return parsePolicy(result.error || (result.status !== 0 ? new Error('exit ' + result.status) : null), result.stdout, result.stderr);
 }
 
@@ -105,8 +106,9 @@ let policyProbe = null;
 async function inspectSetupAsync(options = {}) {
   if (process.platform === 'win32' && !policyProbe) {
     policyProbe = new Promise(resolve => {
-      require('child_process').execFile(require('./windows-powershell').windowsPowerShellPath(options.env), ['-NoProfile', '-NonInteractive', '-Command', POLICY_SCRIPT],
-        { encoding: 'utf8', windowsHide: true, timeout: 15000 }, (error, stdout, stderr) => resolve(parsePolicy(error, stdout, stderr)));
+      const shell = require('./windows-powershell');
+      require('child_process').execFile(shell.windowsPowerShellPath(options.env), ['-NoProfile', '-NonInteractive', '-Command', POLICY_SCRIPT],
+        { env: shell.windowsPowerShellEnv(options.env || process.env), encoding: 'utf8', windowsHide: true, timeout: 15000 }, (error, stdout, stderr) => resolve(parsePolicy(error, stdout, stderr)));
     });
   }
   const knownPolicy = policyProbe ? await policyProbe : null;
