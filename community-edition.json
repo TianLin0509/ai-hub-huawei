@@ -57,9 +57,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "关窗口可选最小化到托盘（设置菜单「可选功能」里打开）；内存占用超过 85% 时，自动提前休眠早已答完的会话（助理会话和最早答完的优先），点会话即可唤醒"
+    "恢复读文件与发图片回家：结果以 60 KB 以内明文传回"
   ],
-  "version": "5.6.9",
+  "version": "5.6.10",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false
