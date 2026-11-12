@@ -4,7 +4,7 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
   const { pathToFileURL } = require('node:url');
   let page, status, timer, conversionId, chatId, md, searching = false, converting = false, candidates = [], selectedId = '', searched = false;
   // AI 找页（2026-11-08 用户：Hub 的 PPT 主打 Agent 搜索）：ai = 本轮 AI 检索状态；aiItems = AI 推荐；keywordState = 关键词即时检索状态。
-  let materials = null;
+  let materials = null, make = null;
   let ai = null, aiItems = [], keywordState = '', keywordError = '', lastQuery = '', userPicked = false, aiSignature = '', missingPolls = 0;
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   // 装了多个版本的 PPT Doctor（2026-11-07）：页头下方一行提示，点开是版本选择器（renderer/tool-version-picker.js）。
@@ -41,7 +41,7 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
     page = document.createElement('section'); page.id = 'company-ppt-page'; page.className = 'company-ppt-page'; page.dataset.view = 'home'; page.hidden = true; page.setAttribute('aria-label', 'PPT 素材工作台');
     // 版式按定稿 CDCCBCC · PPT C（2026-11-04 换皮）：首屏居中检索，有结果后左结果右详情，转字三步。
     // 全部 data-ppt* 钩子与原逻辑不变；data-view / data-step 只给样式用。
-    page.innerHTML = `<header class="pptw-head"><h1>PPT</h1><div class="pptw-tabs" role="tablist" aria-label="PPT 功能"><button type="button" role="tab" class="pptw-tab on" data-ppt-tab="find" aria-selected="true">找页</button><button type="button" role="tab" class="pptw-tab" data-ppt-tab="materials" aria-selected="false">素材</button></div><span class="pptw-sub" data-ppt-sub>AI 帮你找讲过的原页，把图片变成可编辑页</span><div class="pptw-head-right" data-ppt-head-slot><details class="pptw-settings"><summary>素材库设置</summary><div class="pptw-settings-pop"><b>素材文件夹</b><div data-ppt-roots></div><p class="pptw-hint">旧的 Hub 索引保留可查；新增素材文件夹后，请点「更新索引」。</p><div class="pptw-actions"><button type="button" data-ppt="folders">选择素材文件夹…</button><button type="button" data-ppt="index">更新索引</button><button type="button" data-ppt="refresh">重新检查</button><button type="button" data-ppt="doctor">选择 Doctor 程序…</button><button type="button" data-ppt="pick-index">选择已有索引…</button><button type="button" data-ppt="download">镜像下载 / 升级 Doctor</button><button type="button" data-ppt="download-backup">GitHub 备用</button></div></div></details><div class="pptw-status" data-ppt-status role="status"></div></div></header>
+    page.innerHTML = `<header class="pptw-head"><h1>PPT</h1><div class="pptw-tabs" role="tablist" aria-label="PPT 功能"><button type="button" role="tab" class="pptw-tab on" data-ppt-tab="find" aria-selected="true">找页</button><button type="button" role="tab" class="pptw-tab" data-ppt-tab="materials" aria-selected="false">素材</button><button type="button" role="tab" class="pptw-tab" data-ppt-tab="make" aria-selected="false">做页</button></div><span class="pptw-sub" data-ppt-sub>AI 帮你找讲过的原页，把图片变成可编辑页</span><div class="pptw-head-right" data-ppt-head-slot><details class="pptw-settings"><summary>素材库设置</summary><div class="pptw-settings-pop"><b>素材文件夹</b><div data-ppt-roots></div><p class="pptw-hint">旧的 Hub 索引保留可查；新增素材文件夹后，请点「更新索引」。</p><div class="pptw-actions"><button type="button" data-ppt="folders">选择素材文件夹…</button><button type="button" data-ppt="index">更新索引</button><button type="button" data-ppt="refresh">重新检查</button><button type="button" data-ppt="doctor">选择 Doctor 程序…</button><button type="button" data-ppt="pick-index">选择已有索引…</button><button type="button" data-ppt="download">镜像下载 / 升级 Doctor</button><button type="button" data-ppt="download-backup">GitHub 备用</button></div></div></details><div class="pptw-status" data-ppt-status role="status"></div></div></header>
       <div class="pptw-scroll"><div class="pptw-body">
       <div class="pptw-guide-slot" data-ppt-guide-slot></div>
       <div class="pptw-tool-hint" data-ppt-tool-hint></div>
@@ -61,9 +61,11 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
         <div class="pptw-conversion" data-ppt-conversion></div>
       </div><aside class="pptw-conv-side" data-ppt-conv-side><h3>转换说明</h3><p>文字转成可改的文本框，图案切成可拖动的贴图。拿不准的文字和位置会列进复核项，在 PowerPoint 里对照原图检查。</p></aside></section>
       <section class="pptm" data-ppt-materials-panel hidden></section>
+      <section class="pptk" data-ppt-make-panel hidden></section>
       </div></div>`;
     document.body.append(page);
     materials = require('./company-ppt-materials').createPptMaterials({ root: page.querySelector('[data-ppt-materials-panel]'), ipcRenderer, notice, doctorState: () => status?.state || '' });
+    make = require('./company-ppt-make').createPptMake({ root: page.querySelector('[data-ppt-make-panel]'), ipcRenderer, notice });
     page.querySelector('.pptw-tabs').addEventListener('click', e => { const t = e.target.closest('[data-ppt-tab]'); if (t) tab(t.dataset.pptTab); });
     page.querySelector('[data-ppt-form]').addEventListener('submit', e => { e.preventDefault(); void search(true); }); // 回车与「AI 找页」：AI 检索 + 关键词即时命中
     page.querySelector('[data-ppt-folder]').addEventListener('change', () => { drawResults(); if (page.querySelector('[data-ppt-query]').value.trim()) void search(false); });
@@ -112,19 +114,22 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
     const path = require('node:path'), relative = path.relative(folder(), (c.ref || c).path || '');
     return relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);
   }
-  // 一类信息一个 Tab（2026-11-10）：找页（含图片转可编辑）/ 素材。
+  // 一类信息一个 Tab（2026-11-10）：找页（含图片转可编辑）/ 素材 / 做页（2026-11-11）。
   function tab(name) {
-    const materialsTab = name === 'materials';
-    page.dataset.tab = materialsTab ? 'materials' : 'find';
+    const materialsTab = name === 'materials', makeTab = name === 'make';
+    page.dataset.tab = materialsTab ? 'materials' : makeTab ? 'make' : 'find';
     for (const b of page.querySelectorAll('[data-ppt-tab]')) { const on = b.dataset.pptTab === page.dataset.tab; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); }
-    page.querySelector('[data-ppt-sub]').textContent = materialsTab ? '团队素材：按分类挑形状，一键插入到当前 PPT' : 'AI 帮你找讲过的原页，把图片变成可编辑页';
+    page.querySelector('[data-ppt-sub]').textContent = materialsTab ? '团队素材：按分类挑形状，一键插入到当前 PPT' : makeTab ? '选骨架、写一句话，生成一页可编辑的汇报页' : 'AI 帮你找讲过的原页，把图片变成可编辑页';
     page.querySelector('[data-ppt-materials-panel]').hidden = !materialsTab;
+    page.querySelector('[data-ppt-make-panel]').hidden = !makeTab;
     notice('');
-    if (materialsTab) { page.querySelector('[data-ppt-search-panel]').hidden = true; page.querySelector('[data-ppt-convert-panel]').hidden = true; void materials.show(); }
-    else { materials.hide(); mode(page.dataset.view === 'convert'); }
+    if (materialsTab) void materials.show(); else materials.hide();
+    if (makeTab) void make.show(); else make.hide();
+    if (materialsTab || makeTab) { page.querySelector('[data-ppt-search-panel]').hidden = true; page.querySelector('[data-ppt-convert-panel]').hidden = true; }
+    else mode(page.dataset.view === 'convert');
   }
   function mode(convert) {
-    const away = page.dataset.tab === 'materials'; // 在素材 Tab 时后台检索结果回来也不把找页面板翻出来
+    const away = ['materials', 'make'].includes(page.dataset.tab); // 在素材 / 做页 Tab 时后台检索结果回来也不把找页面板翻出来
     page.querySelector('[data-ppt-convert-panel]').hidden = away || !convert; page.querySelector('[data-ppt-search-panel]').hidden = away || convert; page.querySelector('[data-ppt-form]').hidden = convert;
     view(convert);
     const report = page.querySelector('[data-ppt-report]'); report.hidden = convert || !report.querySelector('.pptw-report-body').textContent.trim() || !report.open;
@@ -384,10 +389,11 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
     build(); closeOtherPanels();
     for (const name of ['__companyAssistantHide', '__companyMeetingHide', '__companyForumHide', '__companyAttendanceHide', '__assistantHide', '__cloudHide', '__wirelessHide', '__rulesHide', '__writingHide', '__xresearchHide', '__studyHide', '__ranHide']) window[name]?.();
     if (page.dataset.tab === 'materials') void materials.show();
+    if (page.dataset.tab === 'make') void make.show();
     page.hidden = false; document.body.classList.add('company-ppt-page-open'); nav()?.classList.add('active'); window.setShellNavActive?.('company-ppt'); place(); window.addEventListener('resize', place);
     try { renderStatus((await call('ppt-status')).ppt); poll(); } catch (error) { notice(error.message); }
   }
-  function close() { if (!page) return; materials?.hide(); page.hidden = true; document.body.classList.remove('company-ppt-page-open'); nav()?.classList.remove('active'); clearTimeout(timer); window.removeEventListener('resize', place); }
+  function close() { if (!page) return; materials?.hide(); make?.hide(); page.hidden = true; document.body.classList.remove('company-ppt-page-open'); nav()?.classList.remove('active'); clearTimeout(timer); window.removeEventListener('resize', place); }
   nav(); document.addEventListener('click', e => { if (page && !page.hidden && e.target.closest('#scene-rail button:not(#btn-company-ppt)')) close(); });
   return { open, close, isOpen: () => !!page && !page.hidden, tab: name => { build(); tab(name); } };
 }

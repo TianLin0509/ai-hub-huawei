@@ -6,6 +6,9 @@
 const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ESC[c]);
 const kb = n => (n >= 1024 * 1024 ? (n / 1024 / 1024).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB');
+// 桌面回执三档（2026-11-11），与 Hub 配置里的「桌面回执」是同一个设置。
+const NOTIFY_OPTIONS = [{ id: 'pet', label: '交给桌宠' }, { id: 'popup', label: '右下角小卡' }, { id: 'off', label: '关闭' }];
+const NOTIFY_NOTES = { pet: '会话答完、联动消息由桌宠举卡片告诉你，点卡片直接打开；桌宠没开时用右下角小卡', popup: '一律弹右下角小卡，桌宠不举卡片', off: '都不弹，只留到点提醒、出错这类要紧的；左栏未读照常标' };
 const MODE_NOTES = { lively: '提醒之外，早上问候、久坐提醒也会说', gentle: '只说助理的提醒', quiet: '不开口，只亮小圆点' };
 
 function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
@@ -71,8 +74,8 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
         </div>
       </div>
       <div class="pet-tab-row">
-        <div><b>通知交给桌宠说</b><small>会话答完、联动消息、会议室结果由桌宠举卡片告诉你，点卡片直接打开；关掉就照旧弹右下角通知卡。</small></div>
-        <label class="pet-tab-switch"><input type="checkbox" data-pet="notifyViaPet"${s.notifyViaPet !== false ? ' checked' : ''}><span></span></label>
+        <div><b>桌面回执</b><small>${esc(NOTIFY_NOTES[s.notifyMode] || NOTIFY_NOTES.pet)}。</small></div>
+        <div class="pet-tab-seg" role="radiogroup" aria-label="桌面回执">${NOTIFY_OPTIONS.map(m => `<button type="button" role="radio" aria-checked="${m.id === s.notifyMode}" data-pet="notifyMode" data-id="${esc(m.id)}"${m.id === s.notifyMode ? ' class="on"' : ''}>${esc(m.label)}</button>`).join('')}</div>
       </div>
       <div class="pet-tab-row">
         <div><b>会话在跑时陪着干活</b><small>有会话在跑，桌宠敲键盘并标出「N 个在跑」，跑完就停。</small></div>
@@ -119,6 +122,7 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
     if (btn && !btn.disabled) {
       const kind = btn.dataset.pet;
       if (kind === 'mode') return void save({ mode: btn.dataset.id });
+      if (kind === 'notifyMode') return void save({ notifyMode: btn.dataset.id });
       if (kind === 'quietHour') return void save({ quietHour: !data.quietHour });
       if (kind === 'silentToday') return void save({ silentToday: !data.silentToday });
       if (kind === 'resetPosition') return void save({ resetPosition: true });

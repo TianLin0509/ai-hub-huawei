@@ -55,11 +55,38 @@ function mountSection({ document, window, ipcRenderer }) {
   if (proxyField && proxyField.nextSibling) host.insertBefore(section, proxyField.nextSibling);
   else host.appendChild(section);
 
+  // 桌面回执（2026-11-11 用户：右下角回执太烦，要能缩小、交给桌宠或关掉）。和桌宠设置里的「桌面回执」是同一项，立即生效。
+  const notifySection = document.createElement('div');
+  notifySection.id = 'cfg-notify-mode-section';
+  notifySection.innerHTML = [
+    '<div class="config-section-label"><span>桌面回执</span><span>会话答完、提醒弹在哪 · 立即生效</span></div>',
+    '<div class="config-field">',
+    '  <select id="cfg-notify-mode" aria-label="桌面回执">',
+    '    <option value="pet">交给桌宠（推荐）：桌宠开着由它举卡片，没开时弹右下角小卡</option>',
+    '    <option value="popup">右下角小卡：一律弹右下角，桌宠不举卡片</option>',
+    '    <option value="off">关闭：都不弹，只留到点提醒、出错这类要紧的</option>',
+    '  </select>',
+    '  <p class="config-reading-note" id="cfg-notify-mode-note">左栏的未读标记不受影响；小卡右上角的齿轮也能回到这里。</p>',
+    '</div>',
+  ].join('\n');
+  const notifyAnchor = host.querySelector('.config-notification-title');
+  if (notifyAnchor) host.insertBefore(notifySection, notifyAnchor);
+  else host.appendChild(notifySection);
+  const notifyEl = notifySection.querySelector('#cfg-notify-mode');
+  const notifyNote = notifySection.querySelector('#cfg-notify-mode-note');
+
   const enabledEl = section.querySelector('#cfg-hub-pet-enabled');
   const roleEl = section.querySelector('#cfg-hub-pet-role');
   const modeEl = section.querySelector('#cfg-hub-pet-mode');
 
   function fill(data) {
+    if (data && data.settings) {
+      notifyEl.value = data.settings.notifyMode || 'pet';
+      const petOff = notifyEl.value === 'pet' && !(data.available && data.settings.enabled);
+      notifyNote.textContent = petOff
+        ? (data.available ? '桌宠现在没开，先用右下角小卡；在本页「助理桌宠」打开后改由桌宠说。' : '这个版本没有桌宠，先用右下角小卡。')
+        : '左栏的未读标记不受影响；小卡右上角的齿轮也能回到这里。';
+    }
     if (!data || !data.available) { section.hidden = true; return; }
     section.hidden = false;
     // 只列这台电脑上装了的形象（其余在「助理 → 设置 → 桌宠」里下载）；下载后再打开要能看到新的。
@@ -72,6 +99,7 @@ function mountSection({ document, window, ipcRenderer }) {
   }
   async function refresh() { try { fill(await ipcRenderer.invoke('hub-pet:get-settings')); } catch (_) {} }
   async function save(patch) { try { fill(await ipcRenderer.invoke('hub-pet:set-settings', patch)); } catch (_) {} }
+  notifyEl.addEventListener('change', () => save({ notifyMode: notifyEl.value }));
   enabledEl.addEventListener('change', () => save({ enabled: enabledEl.checked }));
   roleEl.addEventListener('change', () => save({ role: roleEl.value }));
   modeEl.addEventListener('change', () => save({ mode: modeEl.value }));

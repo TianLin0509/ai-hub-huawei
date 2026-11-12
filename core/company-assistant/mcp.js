@@ -41,6 +41,7 @@ const allTools = [
     neighbors: { type: 'integer', minimum: 0, maximum: 2 }, detail: { type: 'string', enum: ['brief', 'full'] }
   }, ['op']) },
   { name: 'ppt_materials', description: '查团队PPT素材库（PPT Doctor 素材库与团队素材包，一个素材是一个原生形状：栏头、光带、箭头、编号、卡片等）。不填 query 和 category 先看分类与数量；按分类或名称词筛，返回名称、分类、素材文件与页码。用户要做页、改页或问用什么版式元素时用；推荐时写素材名和分类，告诉用户在 PPT 页「素材」Tab 选中后点「插入到当前 PPT」。只读。', annotations: { readOnlyHint: true }, inputSchema: schema({ query: string, category: string, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 50 } }) },
+  { name: 'ppt_make', description: '提交做页任务的页面说明，Hub 生成可编辑PPT。只在提问给了 jobId 的做页任务里用；spec 是页面说明对象，结构沿用提问里的示意内容。返回 path 和自查提醒 warnings；warnings 非空时按提醒修改后再提交一次，最多修改两轮。', inputSchema: schema({ jobId: string, spec: { type: 'object', description: '页面说明：title、可选 note，以及 col / row 版面树；叶子是带 type 的组件' } }, ['jobId', 'spec']) },
   { name: 'list_sessions', description: '列出这台电脑 Hub 里的会话：编号、标题、目录、状态（stuck 卡住等确认 / running 运行中 / reply 答完等回复 / idle 空闲 / closed 没打开）。用户问「现在有哪些会话」「谁卡住了」时先调它。', annotations: { readOnlyHint: true }, inputSchema: schema({}) },
   { name: 'read_session', description: '看一个会话的最新回答（默认末尾 4000 字）；卡住时附终端画面（题目和选项）。用户问某个会话做到哪了时用。', annotations: { readOnlyHint: true }, inputSchema: schema({ sessionId: id, maxChars: { type: 'number' }, screen: { type: 'boolean', description: '没卡住也要看终端画面时填 true' } }, ['sessionId']) },
   { name: 'send_session', description: '给一个空闲或答完的会话发一段话（推进、追问、改要求），直接执行。会话关着会先自动恢复。发出后 Hub 自动盯着它，做完或卡住时提醒用户（开了手机对话推到手机群，没开弹电脑桌面通知），不用轮询。', inputSchema: schema({ sessionId: id, text: string }, ['sessionId', 'text']) },
@@ -57,7 +58,7 @@ const SESSIONS = ['list_sessions', 'read_session', 'send_session', 'create_sessi
 const TOOLSETS = {
   desk: [...WELINK, 'assistant_memory', 'pet_remind', ...SESSIONS],
   phone: [...WELINK, 'assistant_memory', 'pet_remind', ...SESSIONS],
-  ppt: ['ppt_find', 'ppt_read', 'ppt_library', 'ppt_lookup_frame', 'ppt_imgtext', 'ppt_materials'],
+  ppt: ['ppt_find', 'ppt_read', 'ppt_library', 'ppt_lookup_frame', 'ppt_imgtext', 'ppt_materials', 'ppt_make'],
   brief: ['welink_inbox', 'welink_message', 'welink_meetings'],
 };
 const toolset = process.env.HUB_COMPANY_TOOLSET || '';

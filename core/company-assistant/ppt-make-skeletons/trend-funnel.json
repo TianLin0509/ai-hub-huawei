@@ -1,0 +1,20 @@
+{
+  "_骨架": "趋势页·多个变化收敛到两条主线",
+  "_适用": "讲外部环境或技术趋势：上面并排列出几个变化（各配一张小图），光带向下收敛，落到两条主线各三点",
+  "_论证链": "N 个变化（是什么、量化到多大）→ 收敛 → 两条主线（各自做什么）→ 结论",
+  "title": "拥抱五个变化：AI for RRM从单点摸高迈向普适兑现",
+  "col": [
+    { "w": 1, "row": [
+      { "type": "card", "frame": "none", "stack": "col", "imageFirst": true, "title": "新负载", "bullet": "none", "sz": 12, "items": ["中轻载站点占多数，Top50% 站点 PRB 利用率约 {r:22%}"], "image": {"placeholder": "负载分布小图", "w": 1.3} },
+      { "type": "card", "frame": "none", "stack": "col", "imageFirst": true, "title": "新协议", "bullet": "none", "sz": 12, "items": ["下一代空口反馈增强，高 Rank 终端流间差异拉大约 {r:6dB}"], "image": {"placeholder": "协议演进小图", "w": 1.3} },
+      { "type": "card", "frame": "none", "stack": "col", "imageFirst": true, "title": "新芯片", "bullet": "none", "sz": 12, "items": ["基带 AI 算力到 {r:40T} 级，低比特量化成为标配"], "image": {"placeholder": "芯片算力小图", "w": 1.3} },
+      { "type": "card", "frame": "none", "stack": "col", "imageFirst": true, "title": "新方法", "bullet": "none", "sz": 12, "items": ["组合优化求最优标签，生成式模型学多解分布"], "image": {"placeholder": "方法对比小图", "w": 1.3} },
+      { "type": "card", "frame": "none", "stack": "col", "imageFirst": true, "title": "新诉求", "bullet": "none", "sz": 12, "items": ["增益要「一半站点都拿到」，单局点摸高不再够用"], "image": {"placeholder": "诉求变化小图", "w": 1.3} }
+    ] },
+    { "type": "band", "size": 30, "flip": true, "color": "gray" },
+    { "w": 0.82, "row": [
+      { "type": "panel", "head": {"text": "技术持续摸高", "style": "roof"}, "body": { "type": "text", "items": ["环境感知：从单小区记忆走向{b:跨小区干扰图谱}", "决策范式：从判决式学次优标签走向{b:生成式学最优标签}", "算芯联合：模型算力效率提升约 {y:8X}，跟上芯片节奏"] } },
+      { "type": "panel", "head": {"text": "商用增益普适兑现", "style": "roof"}, "body": { "type": "text", "items": ["中轻载挖增益：负载 25% 时也要拿到 {y:1.3X}", "泛化兜底：{b:数据混合配比 + 多专家}，最优化算法保底", "规模验证：3 → 20 个局点，50% 站点达标才算兑现"] } }
+    ] }
+  ]
+}

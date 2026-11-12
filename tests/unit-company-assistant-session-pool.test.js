@@ -124,6 +124,7 @@ test('PPT 页的提问走自己的队列和会话，不挡住助理提问，也�
   assert.equal(f.sessions.get(pptPrompt.id).cwd, f.a.pptWorkspace);
   assert.doesNotMatch(pptPrompt.text, /今天摘要/);
   assert.ok(fs.existsSync(path.join(f.a.pptWorkspace, 'skills', 'ppt-search.md')));
+  assert.match(fs.readFileSync(path.join(f.a.pptWorkspace, 'skills', 'ppt-make.md'), 'utf8'), /只通过 ppt_make 产出/);
   const status = f.a.status();
   assert.ok(status.chat.some(c => c.id === chat.id));
   assert.ok(!status.chat.some(c => c.id === ppt.id), '助理页不显示 PPT 页的问答');

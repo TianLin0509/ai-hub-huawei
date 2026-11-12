@@ -62,6 +62,18 @@ function createPptHandlers(service) {
     },
     'ppt-team-pack-install': () => service.ppt.materials.installTeamPack(),
     'ppt-team-pack-check': () => service.ppt.materials.checkTeamPack(),
+    // 做页 Tab（2026-11-11）：选骨架 → 助理写页面说明 → 引擎生成；样例不经模型。打开、插入只在用户点击时执行。
+    'ppt-make-skeletons': () => ({ ok: true, skeletons: service.ppt.make.listSkeletons() }),
+    'ppt-make-example': request => service.ppt.make.example(request?.skeletonId),
+    'ppt-make-render': request => service.ppt.make.renderSpec(request),
+    'ppt-make-guide': request => ({ ok: true, text: service.ppt.make.guideText(request?.skeletonId) }),
+    'ppt-make-start': request => service.ppt.make.start(request),
+    'ppt-make-status': request => ({ ok: true, job: service.ppt.make.status(request?.jobId) }),
+    'ppt-make-rerender': request => service.ppt.make.rerender(request?.jobId, request?.spec),
+    'ppt-make-preview': request => service.ppt.make.preview(request?.jobId),
+    'ppt-make-open': request => service.ppt.make.open(request?.jobId),
+    'ppt-make-insert': request => service.ppt.make.insert(request?.jobId),
+    'ppt-make-folder': request => service.ppt.make.showFolder(request?.jobId),
     'ppt-open-doctor': async () => {
       const exe = await service.ppt.doctor.discover();
       require('node:child_process').spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: false }).unref();

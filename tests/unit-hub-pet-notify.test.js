@@ -156,9 +156,36 @@ test('关了「通知交给桌宠」或桌宠被藏起来时交回原通知卡�
   r.setVisible(false);
   assert.equal(r.c.notify({ sessionId: 's', title: 'x' }), false);
   r.setVisible(true);
-  r.c.setSettings({ notifyViaPet: false });
+  r.c.setSettings({ notifyMode: 'popup' });
   assert.equal(r.c.notify({ sessionId: 's', title: 'x' }), false);
-  assert.equal(r.c.getSettings().notifyViaPet, false);
+  assert.equal(r.c.getSettings().notifyMode, 'popup');
+});
+
+test('桌面回执三档（2026-11-11）：交给桌宠没开时退回小卡；右下角一律弹；关闭只留要紧的', t => {
+  const r = rig(t);
+  const done = { sessionId: 's', title: '答完了' };
+  // 默认交给桌宠；桌宠没开 → 照旧弹右下角小卡，不漏
+  assert.equal(r.c.getSettings().notifyMode, 'pet');
+  assert.equal(r.c.routeDesktopNotice(done), false);
+  r.c.setSettings({ enabled: true });
+  assert.equal(r.c.routeDesktopNotice(done), true);
+  assert.equal(r.state().bubble.title, '答完了');
+  // 右下角小卡：桌宠开着也不举卡片
+  r.c.setSettings({ notifyMode: 'popup' });
+  assert.equal(r.c.routeDesktopNotice({ sessionId: 's2', title: '第二个' }), false);
+  // 关闭：普通回执吞掉；到点提醒、出错的照样说（桌宠没开时退回小卡）
+  r.c.setSettings({ notifyMode: 'off' });
+  assert.equal(r.c.routeDesktopNotice({ sessionId: 's3', title: '普通' }), true);
+  assert.notEqual(r.state().bubble?.title, '普通');
+  assert.equal(r.c.routeDesktopNotice({ sessionId: 'h', title: '到点了', kind: 'reminder' }), true);
+  assert.equal(r.state().bubble.title, '到点了');
+  r.c.setSettings({ enabled: false });
+  assert.equal(r.c.routeDesktopNotice({ sessionId: 'x', title: '出错', tone: 'bad' }), false);
+  assert.equal(r.c.routeDesktopNotice({ sessionId: 'company-assistant', kind: 'assistant', noticeKind: 'welink-login', title: '登录失效' }), false);
+  assert.equal(r.c.routeDesktopNotice({ sessionId: 'company-assistant', kind: 'assistant', noticeKind: 'brief', title: '简报' }), true);
+  // 不认识的档位不改
+  r.c.setSettings({ notifyMode: 'loud' });
+  assert.equal(r.c.getSettings().notifyMode, 'off');
 });
 
 test('安静档下通知只亮小圆点；带页面去处的通知（会议室、助理回答）点开去那一页', t => {
@@ -363,7 +390,7 @@ test('助理的简报、会前准备（带助理会话编号）点开仍去助�
 
 test('关了「通知交给桌宠」：总线上的通知卡片（会议室、助理回答）也不由桌宠说', t => {
   const r = rig(t);
-  r.c.setSettings({ enabled: true, notifyViaPet: false });
+  r.c.setSettings({ enabled: true, notifyMode: 'popup' });
   r.bus.publish({ id: 'room:x', kind: 'room', notify: true, page: 'rooms', title: '抢到会议室了' });
   assert.equal(r.state().bubble, null);
   assert.equal(r.state().dots, 0);

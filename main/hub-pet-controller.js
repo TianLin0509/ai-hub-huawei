@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const { ASSISTANT_ACTIONS, MODES, ROLES, SpeechQueue, chatterFor, decidePose, localDateKey, speakGate, weeklyNudge } = require('../core/hub-pet/state');
 const { allowedRange, clampTo, cubicOut, dockOf, releasePlan } = require('../core/hub-pet/motion');
-const { SCALE_MAX, SCALE_MIN, createSettingsStore, parseBox, parseScale } = require('../core/hub-pet/settings');
+const { NOTIFY_MODES, SCALE_MAX, SCALE_MIN, createSettingsStore, isUrgentNotice, parseBox, parseScale } = require('../core/hub-pet/settings');
 const { DEFAULT_ROLE, createRolePackStore } = require('../core/hub-pet/role-packs');
 const { createFullscreenWatch } = require('../core/hub-pet/fullscreen-watch');
 const { createDiskWatch } = require('../core/hub-pet/disk-watch');
@@ -290,8 +290,8 @@ function createHubPetController({
 
   function onNotice(notice) {
     if (!notice || !notice.id) return;
-    // 关了「通知交给桌宠」：总线上的通知卡片（会议室、助理回答、考勤）也不由桌宠说，交给右下角通知卡。
-    if (notice.notify && settings.get().notifyViaPet === false) return;
+    // 回执不交给桌宠（选了右下角小卡或关闭）：总线上的通知卡片也不由桌宠说；硬盘快满只有桌宠会说，照说（2026-11-11）。
+    if (notice.notify && notice.kind !== 'disk' && !petTakes(notice)) return;
     // 有去处的通知（会话、页面）记下来：点卡片或面板里的「打开」时按它跳。
     if (notice.sessionId || notice.page || notice.noticeId || notice.action) remember(notice);
     if (speech.push(notice)) {
@@ -315,10 +315,22 @@ function createHubPetController({
     active: () => canNotify(), notify: item => { if (!canNotify()) return false; onNotice({ ...item, notify: true }); return true; } }) : null;
   let diskFirst = null;   // 不用 reminder：那是桌宠提醒（要点了才算确认）的类别
   function canNotify() {
-    return enabled() && started && alive() && win.isVisible?.() !== false && settings.get().notifyViaPet !== false;
+    return enabled() && started && alive() && win.isVisible?.() !== false;
+  }
+  // 回执三档（2026-11-11）：pet 交给桌宠；off 只把要紧的交给桌宠；popup 一律不交。
+  function petTakes(item) {
+    const mode = settings.get().notifyMode;
+    return mode === 'pet' || (mode === 'off' && isUrgentNotice(item));
+  }
+  // 右下角通知卡的分流：true＝已有着落（桌宠说了，或关了回执、这条不要紧），false＝照旧弹右下角小卡。
+  function routeDesktopNotice(payload = {}) {
+    const mode = settings.get().notifyMode;
+    if (mode === 'popup') return false;
+    if (mode === 'off' && !isUrgentNotice(payload)) return true;
+    return notify(payload);
   }
   function notify(payload = {}) {
-    if (!canNotify()) return false;
+    if (!canNotify() || !petTakes(payload)) return false;
     const sessionId = String(payload.sessionId || '').slice(0, 160);
     // 公司助理的提醒本来就经提醒总线交给了桌宠（onNotice），这里只拦掉重复的那张通知卡。
     if (payload.kind === 'assistant' && sessionId === 'company-assistant') return true;
@@ -778,7 +790,7 @@ function createHubPetController({
     if (typeof patch.role === 'string' && roles.installed(patch.role)) clean.role = patch.role;
     if (MODE_SET.has(patch.mode)) clean.mode = patch.mode;
     if (typeof patch.peekOnFullscreen === 'boolean') clean.peekOnFullscreen = patch.peekOnFullscreen;
-    if (typeof patch.notifyViaPet === 'boolean') clean.notifyViaPet = patch.notifyViaPet;
+    if (NOTIFY_MODES.includes(patch.notifyMode)) clean.notifyMode = patch.notifyMode;
     if (typeof patch.followSessions === 'boolean') clean.followSessions = patch.followSessions;
     const t = clock();
     if (typeof patch.quietHour === 'boolean') clean.quietUntil = patch.quietHour ? t + 3600000 : 0;
@@ -961,7 +973,7 @@ function createHubPetController({
     if (debug) ipcMain.removeHandler?.('hub-pet:debug');
   }
 
-  return { start, stop, dispose, setSignal, setSettings, roleList, notify, canNotify, sessionSeen, announceUpdate, isActive: () => enabled() && started && alive(), getWindow: () => win, getSettings: () => settings.get(), _evaluate: evaluate, _speech: speech, _roles: roles,
+  return { start, stop, dispose, setSignal, setSettings, roleList, notify, routeDesktopNotice, canNotify, sessionSeen, announceUpdate, isActive: () => enabled() && started && alive(), getWindow: () => win, getSettings: () => settings.get(), _evaluate: evaluate, _speech: speech, _roles: roles,
     _restoreRememberedRole: restoreRememberedRole, _autoRole: () => ({ ...autoRole }) };
 }
 

@@ -4,57 +4,65 @@
   <meta charset="utf-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AI Hub 完成通知</title>
+  <title>AI Hub 回执</title>
   <style>
+    /* 2026-11-11 用户反馈原来的大卡太扰人：改成克制的一行标题 + 一行摘要小卡，可在设置里改成交给桌宠或关闭。 */
     :root { color-scheme: dark; font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif; }
     * { box-sizing: border-box; }
     html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; }
-    body { padding: 8px; }
+    body { padding: 6px; }
     .card {
       position: relative; width: 100%; height: 100%; overflow: hidden; cursor: pointer;
-      border: 1px solid rgba(167, 139, 250, .34); border-radius: 18px;
-      background:
-        radial-gradient(circle at 8% 4%, rgba(139, 92, 246, .23), transparent 42%),
-        linear-gradient(145deg, rgba(24, 28, 39, .985), rgba(13, 17, 27, .985));
-      box-shadow: 0 18px 48px rgba(0, 0, 0, .46), inset 0 1px rgba(255, 255, 255, .06);
-      color: #f4f5f8; -webkit-app-region: no-drag;
+      border: 1px solid rgba(255, 255, 255, .09); border-radius: 12px;
+      background: rgba(23, 26, 35, .97);
+      box-shadow: 0 3px 10px rgba(0, 0, 0, .28);
+      color: #eef0f5; -webkit-app-region: no-drag;
     }
-    .content { display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; gap: 12px; padding: 17px 17px 15px; }
-    .mark {
-      display: grid; place-items: center; width: 42px; height: 42px; border-radius: 13px;
-      background: linear-gradient(145deg, #8b5cf6, #6366f1); box-shadow: 0 9px 24px rgba(99, 102, 241, .33);
-    }
-    .mark svg { width: 22px; height: 22px; stroke: white; }
+    .card:hover { border-color: rgba(167, 139, 250, .38); }
+    .content { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; column-gap: 10px; align-items: center; padding: 9px 6px 0 11px; }
+    .mark { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: rgba(86, 211, 100, .16); color: #6ee787; }
+    .mark svg { width: 13px; height: 13px; stroke: currentColor; }
+    .mark .bad { display: none; }
+    .card[data-tone="bad"] .mark { background: rgba(248, 81, 73, .18); color: #ff7b72; }
+    .card[data-tone="bad"] .mark .ok { display: none; }
+    .card[data-tone="bad"] .mark .bad { display: block; }
+    .card[data-tone="bad"] { border-color: rgba(248, 81, 73, .42); }
     .main { min-width: 0; }
-    .eyebrow { display: flex; align-items: center; gap: 7px; height: 17px; color: #b8b6c7; font-size: 10.5px; font-weight: 650; letter-spacing: .02em; }
-    .dot { width: 6px; height: 6px; border-radius: 50%; background: #56d364; box-shadow: 0 0 0 4px rgba(86, 211, 100, .11); }
-    h1 { margin: 4px 0 3px; overflow: hidden; color: #fff; font-size: 14px; line-height: 1.35; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }
-    p { display: -webkit-box; margin: 0; overflow: hidden; color: #c9cbd4; font-size: 11.5px; line-height: 1.42; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-    .footer { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: #8f93a4; font-size: 10px; }
-    .cta { color: #c4b5fd; font-weight: 700; }
-    .count { padding: 2px 7px; border: 1px solid rgba(167, 139, 250, .25); border-radius: 99px; background: rgba(139, 92, 246, .10); color: #c4b5fd; }
-    .close { width: 26px; height: 26px; margin: -5px -5px 0 0; border: 0; border-radius: 8px; background: transparent; color: #8f93a4; cursor: pointer; font-size: 18px; line-height: 1; }
-    .close:hover { background: rgba(255,255,255,.08); color: #fff; }
-    .progress { position: absolute; right: 13px; bottom: 7px; left: 13px; height: 2px; overflow: hidden; border-radius: 99px; background: rgba(255,255,255,.055); }
-    .progress::after { content: ""; display: block; width: 100%; height: 100%; transform-origin: left; background: linear-gradient(90deg, #8b5cf6, #56d364); }
-    .progress.running::after { animation: drain var(--notification-timeout, 9000ms) linear forwards; }
+    .head { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+    h1 { flex: 0 1 auto; min-width: 0; margin: 0; overflow: hidden; color: #fff; font-size: 13px; line-height: 1.35; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+    .time, .count { flex: none; color: #8f93a4; font-size: 10.5px; }
+    .count { color: #c4b5fd; }
+    p { margin: 2px 0 0; overflow: hidden; color: #b9bcc8; font-size: 11.5px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+    .tools { display: flex; gap: 2px; }
+    .tool { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #7d8192; cursor: pointer; font-size: 15px; line-height: 1; }
+    .tool svg { width: 13px; height: 13px; stroke: currentColor; }
+    .tool:hover { background: rgba(255,255,255,.08); color: #fff; }
+    .progress { position: absolute; right: 0; bottom: 0; left: 0; height: 2px; overflow: hidden; background: transparent; }
+    p:empty { display: none; }
+    .progress::after { content: ""; display: block; width: 100%; height: 100%; transform-origin: left; background: rgba(167, 139, 250, .4); }
+    .card[data-tone="bad"] .progress::after { background: rgba(255, 123, 114, .6); }
+    .progress.running::after { animation: drain var(--notification-timeout, 6000ms) linear forwards; }
     @keyframes drain { from { transform: scaleX(1); } to { transform: scaleX(0); } }
     @media (prefers-reduced-motion: reduce) { .progress.running::after { animation: none; } }
   </style>
 </head>
 <body>
-  <article class="card" id="notification-card" aria-label="AI 会话已完成，点击查看">
+  <article class="card" id="notification-card" title="点击打开会话" aria-label="AI 会话回执，点击打开">
     <div class="content">
       <div class="mark" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+        <svg class="ok" viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+        <svg class="bad" viewBox="0 0 24 24" fill="none" stroke-width="3" stroke-linecap="round"><path d="M12 6v8M12 18.5v.01"/></svg>
       </div>
       <div class="main">
-        <div class="eyebrow"><span class="dot"></span><span>已完成 · 待查看</span><span id="notification-time"></span></div>
-        <h1 id="notification-title">AI 会话</h1>
-        <p id="notification-body">本轮回答已经完成，点击回到会话查看。</p>
-        <div class="footer"><span class="cta">点击打开会话 →</span><span class="count" id="notification-count" hidden></span></div>
+        <div class="head"><h1 id="notification-title">AI 会话</h1><span class="count" id="notification-count" hidden></span><span class="time" id="notification-time"></span></div>
+        <p id="notification-body"></p>
       </div>
-      <button class="close" id="notification-close" type="button" title="关闭通知" aria-label="关闭通知">×</button>
+      <div class="tools">
+        <button class="tool" id="notification-settings" type="button" title="回执设置：右下角小卡 / 交给桌宠 / 关闭" aria-label="回执设置">
+          <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        </button>
+        <button class="tool" id="notification-close" type="button" title="关闭这条" aria-label="关闭这条">×</button>
+      </div>
     </div>
     <div class="progress" id="notification-progress" aria-hidden="true"></div>
   </article>

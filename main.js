@@ -1667,7 +1667,7 @@ function createWindow() {
       canShow: () => !keepIsolatedE2EWindowHidden()
         || process.env.CLAUDE_HUB_E2E_SHOW_NOTIFICATION === '1',
       // 开着桌宠时，通知由桌宠举卡片说；桌宠没开或被收起时照旧弹这张卡（2026-11-09）。
-      route: payload => hubPetController?.notify?.(payload) === true,
+      route: payload => hubPetController?.routeDesktopNotice?.(payload) === true,
       logger: console,
     });
   }
@@ -2873,7 +2873,7 @@ try {
     require('./core/company-assistant/notice-bus').noticeBus().on('notice', notice => {
       sendToRenderer('company-assistant:notice', notice);
       // 点通知打开助理页（页面认这个固定编号），不直接跳进会话。
-      try { void desktopNotificationController?.show({ sessionId: 'company-assistant', title: notice.title, body: notice.text, kind: 'assistant',
+      try { void desktopNotificationController?.show({ sessionId: 'company-assistant', title: notice.title, body: notice.text, kind: 'assistant', noticeKind: notice.kind,
         ...(notice.kind === 'digest' ? { noticeId: notice.id } : {}) }); } catch (error) { console.warn('[company-assistant] notification', error.message); }
     });
     companyAssistantService.startTools();

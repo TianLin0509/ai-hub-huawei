@@ -282,7 +282,7 @@
 .company-ppt-page .pptw-tab{height:28px;padding:0 16px;background:transparent;color:var(--hw-text-2);font-weight:500}
 .company-ppt-page .pptw-tab:hover{background:transparent;color:var(--hw-text-1)}
 .company-ppt-page .pptw-tab.on{background:var(--hw-surface);color:var(--hw-brand);box-shadow:var(--hw-e1)}
-.company-ppt-page[data-tab=materials] :is(.pptw-guide-slot,.pptw-tool-hint){display:none}
+.company-ppt-page:is([data-tab=materials],[data-tab=make]) :is(.pptw-guide-slot,.pptw-tool-hint){display:none}
 
 /* 素材 Tab：左分类、中网格（按高度分页，不滚动）、右详情 */
 .pptm{flex:1;min-height:420px;display:grid;grid-template-columns:184px minmax(0,1fr) 320px;gap:12px}
@@ -318,6 +318,69 @@
 .pptm-guide .pptw-guide-ico svg{fill:none;stroke:var(--hw-text-on);stroke-width:1.6}
 .pptm-err{margin:8px 0 0;font-size:var(--hw-fs-12);color:var(--hw-amber)}
 @media (max-width:1280px){.pptm{grid-template-columns:160px minmax(0,1fr) 280px}}
-.company-ppt-page[data-tab=materials] .pptw-body{height:100%}
+.company-ppt-page:is([data-tab=materials],[data-tab=make]) .pptw-body{height:100%}
 .pptm[data-drag=over]{outline:2px dashed var(--hw-brand);outline-offset:4px;border-radius:var(--hw-r-lg)}
 .pptm[data-empty="1"] .pptm-grid,.pptm-grid:has(>.pptw-empty){grid-auto-rows:auto}
+
+/* 做页 Tab（2026-11-11）：左骨架与输入、中版式预览（16:9 尽量大）、右自查与操作；一屏不滚动 */
+.pptk{flex:1;min-height:420px;display:grid;grid-template-columns:256px minmax(0,1fr) 264px;gap:12px}
+.pptk-left,.pptk-main,.pptk-side{min-height:0;display:flex;flex-direction:column;border-radius:var(--hw-r-lg);background:var(--hw-surface);box-shadow:var(--hw-e1);overflow:hidden}
+.pptk-left{gap:8px;padding:14px 12px}
+.pptk-title{flex:none;font-size:var(--hw-fs-12);font-weight:500;color:var(--hw-text-3)}
+.pptk-list{flex:1;min-height:0;display:flex;flex-direction:column;gap:4px;overflow:hidden}
+.company-ppt-page .pptk-sk{flex:none;flex-direction:column;align-items:stretch;justify-content:center;gap:3px;width:100%;height:52px;padding:0 10px;border-radius:var(--hw-r-item);background:transparent;text-align:left;font-weight:400}
+.company-ppt-page .pptk-sk:hover{background:var(--hw-surface-2)}
+.company-ppt-page .pptk-sk:active{transform:none}
+.company-ppt-page .pptk-sk.on{background:var(--hw-brand-soft)}
+.pptk-sk b,.pptk-sk span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pptk-sk b{font-size:var(--hw-fs-13);font-weight:500;color:var(--hw-text-1)}
+.pptk-sk.on b{color:var(--hw-brand)}
+.pptk-sk span{font-size:var(--hw-fs-12);color:var(--hw-text-3)}
+.pptk-pager{flex:none;display:flex;align-items:center;justify-content:center;gap:8px;font-size:var(--hw-fs-12);color:var(--hw-text-2);font-variant-numeric:tabular-nums}
+.pptk-pager:empty{display:none}
+.pptk-left textarea,.pptk-edit textarea{width:100%;padding:10px 12px;border:1px solid var(--hw-line);border-radius:var(--hw-r-item);background:var(--hw-surface);color:var(--hw-text-1);font:var(--hw-fs-13)/1.6 var(--hw-font);resize:none;outline:none}
+.pptk-left textarea{flex:none;height:132px}
+.pptk-left textarea:focus,.pptk-edit textarea:focus{border-color:var(--hw-brand)}
+.pptk-actions{flex:none;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pptk-actions .pptw-hint{margin:0}
+.pptk-main{padding:12px 16px;gap:8px}
+.pptk-cap{flex:none;display:flex;align-items:baseline;gap:10px;min-height:20px;font-size:var(--hw-fs-12);color:var(--hw-text-3);white-space:nowrap}
+.pptk-cap b{font-size:var(--hw-fs-13);font-weight:600;color:var(--hw-text-1)}
+.pptk-cap i{margin-left:auto;font-style:normal;overflow:hidden;text-overflow:ellipsis}
+.pptk-stage{position:relative;flex:1;min-height:0;display:flex;align-items:center;justify-content:center;container-type:size}
+.pptk-slide{width:min(100cqw,calc(100cqh * 16 / 9));aspect-ratio:16/9;background:#fff;box-shadow:0 0 0 1px var(--hw-line),var(--hw-e1);transition:opacity var(--hw-t-fast)}
+.pptk-slide.dim{opacity:.35}
+.pptk-slide>svg{display:block;width:100%;height:100%}
+.pptk-busy{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;text-align:center}
+.pptk-busy b{font-size:var(--hw-fs-14);font-weight:600;color:var(--hw-text-1)}
+.pptk-busy span{font-size:var(--hw-fs-13);color:var(--hw-text-2);font-variant-numeric:tabular-nums}
+.pptk-busy small{font-size:var(--hw-fs-12);color:var(--hw-text-3)}
+.pptk-spin{width:26px;height:26px;border:3px solid var(--hw-surface-3);border-top-color:var(--hw-brand);border-radius:50%;animation:pptk-spin .9s linear infinite}
+@keyframes pptk-spin{to{transform:rotate(360deg)}}
+.pptk-fail{width:min(520px,100%);padding:20px 24px;border-radius:var(--hw-r-lg);background:var(--hw-amber-soft)}
+.pptk-fail strong{font-size:var(--hw-fs-14)}
+.pptk-fail p{margin:6px 0 0;font-size:var(--hw-fs-13);line-height:1.6;color:var(--hw-text-2);overflow-wrap:anywhere}
+.pptk-fail .pptk-actions{margin-top:14px}
+.pptk-edit{width:100%;height:100%;display:flex;flex-direction:column;gap:8px}
+.pptk-edit textarea{flex:1;min-height:0;font-family:Consolas,'Microsoft YaHei',monospace;font-size:12px;line-height:1.5;white-space:pre;overflow:auto}
+.pptk-more{margin:-2px 0 0 -6px;gap:2px}
+.pptk-err{flex:none;margin:0;padding:6px 10px;border-radius:var(--hw-r-sm);background:var(--hw-amber-soft);font-size:var(--hw-fs-12);line-height:1.5;color:var(--hw-text-1);overflow-wrap:anywhere}
+.pptk-chain{flex:none;margin:0;min-height:18px;font-size:var(--hw-fs-12);line-height:1.5;color:var(--hw-text-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pptk-side{padding:14px 16px;gap:14px}
+.pptk-side>.pptw-empty{padding:8px 0}
+.pptk-side section{flex:none;min-width:0}
+.pptk-side h3{display:flex;align-items:center;gap:6px;margin:0 0 6px;font-size:var(--hw-fs-13);font-weight:600;color:var(--hw-text-1)}
+.pptk-side h3 i{font-style:normal;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--hw-surface-3);font-size:11px;line-height:18px;text-align:center;color:var(--hw-text-2)}
+.pptk-side ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px}
+.pptk-side li{padding:5px 8px;border-radius:var(--hw-r-sm);font-size:var(--hw-fs-12);line-height:1.45;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
+.pptk-warn li{background:var(--hw-amber-soft);color:var(--hw-text-1)}
+.pptk-slots li{background:var(--hw-surface-2);color:var(--hw-text-2);-webkit-line-clamp:1}
+.pptk-side li.more{background:transparent;color:var(--hw-text-3);padding:0 8px}
+.pptk-ok{margin:0;font-size:var(--hw-fs-13);color:var(--hw-green)}
+.pptk-none{margin:0;font-size:var(--hw-fs-12);color:var(--hw-text-3)}
+.pptk-stat{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;margin:0;font-size:var(--hw-fs-13)}
+.pptk-stat dt{color:var(--hw-text-3)}
+.pptk-stat dd{margin:0;color:var(--hw-text-1);font-variant-numeric:tabular-nums}
+.pptk-ops{flex:none;display:flex;flex-direction:column;gap:8px;margin-top:auto}
+.pptk-ops button{width:100%}
+@media (max-width:1280px){.pptk{grid-template-columns:224px minmax(0,1fr) 240px}}

@@ -11,9 +11,15 @@ const SCALE_MIN = 0.6, SCALE_MAX = 1.6;
 const BOX_MAX = 0.45;          // 透明边最多占身体框的比例，防止一张奇怪的图把限位算坏
 const BOX_ROLES_MAX = 24;
 
+// 桌面回执去哪（2026-11-11 用户反馈右下角回执太烦）：pet＝桌宠开着时由桌宠说、没开时弹右下角小卡（默认，不漏）；
+// popup＝一律右下角小卡；off＝不弹，只留要紧的（到点提醒、出错、待办到期、登录失效、考勤、硬盘快满）。
+const NOTIFY_MODES = Object.freeze(['pet', 'popup', 'off']);
+const URGENT_KINDS = new Set(['reminder', 'hub-reminder', 'commitment-due', 'welink-login', 'attendance', 'disk']);
+const isUrgentNotice = n => !!n && (n.tone === 'bad' || URGENT_KINDS.has(String(n.kind || '')) || URGENT_KINDS.has(String(n.noticeKind || '')));
+
 const OPT_IN_V = 1;
 function defaults() {
-  return { enabled: false, role: '01-cat', mode: 'gentle', position: null, quietUntil: 0, silentDate: '', peekOnFullscreen: true, notifyViaPet: true, followSessions: true, scale: 1, bodyBoxes: {} };
+  return { enabled: false, role: '01-cat', mode: 'gentle', position: null, quietUntil: 0, silentDate: '', peekOnFullscreen: true, notifyMode: 'pet', followSessions: true, scale: 1, bodyBoxes: {} };
 }
 
 // 大小（2026-10-18）：身体是原大小的 0.6–1.6 倍，按 0.01 取整。认数字和「数字样子的字符串」（手改文件时常见），
@@ -42,7 +48,8 @@ function normalize(raw, base, roleOk = builtinRole) {
   if (MODES.includes(raw.mode)) out.mode = raw.mode;
   if (typeof raw.peekOnFullscreen === 'boolean') out.peekOnFullscreen = raw.peekOnFullscreen;
   // 2026-11-09：通知交给桌宠说（关掉就照旧弹右下角通知卡）；会话在跑时陪着敲键盘。
-  if (typeof raw.notifyViaPet === 'boolean') out.notifyViaPet = raw.notifyViaPet;
+  if (NOTIFY_MODES.includes(raw.notifyMode)) out.notifyMode = raw.notifyMode;
+  else if (raw.notifyViaPet === false) out.notifyMode = 'popup';   // 11-11 前的开关：关＝照旧弹右下角
   if (typeof raw.followSessions === 'boolean') out.followSessions = raw.followSessions;
   const scale = parseScale(raw.scale);
   if (scale != null) out.scale = scale;
@@ -102,4 +109,4 @@ function createSettingsStore({ dataDir, company = false, logger = console, roleO
   };
 }
 
-module.exports = { FILE, SCALE_MAX, SCALE_MIN, createSettingsStore, defaults, normalize, parseBox, parseScale };
+module.exports = { FILE, NOTIFY_MODES, SCALE_MAX, SCALE_MIN, createSettingsStore, defaults, isUrgentNotice, normalize, parseBox, parseScale };

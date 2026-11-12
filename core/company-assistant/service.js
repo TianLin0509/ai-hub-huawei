@@ -27,7 +27,7 @@ const { RoomBooking } = require('./rooms');
 const { AuthKeeper, authFailure } = require('./auth-keeper');
 const { AssistantMemory } = require('./memory');
 const { AssistantQuery } = require('./query-tool');
-const { PPT_INSTRUCTIONS } = require('./ppt-instructions');
+const { PPT_INSTRUCTIONS, PPT_MAKE_INSTRUCTIONS } = require('./ppt-instructions');
 const { PetReminders } = require('./pet-reminders');
 const AC = require('./answer-context');
 const { AssistantDigest, DIGEST_HOURS, visibleDigest, SOURCE_KEEP_MS } = require('./digest');
@@ -75,6 +75,7 @@ const PPT_RULES = [
   '你是我在公司电脑上的 PPT 素材助理，在本机 PPT Doctor 索引和已选的素材文件夹里找页。',
   '1. 先读当前目录 skills/ppt-search.md，按用途扩搜、读页、核验证据；直接用 ppt_find / ppt_read，汇总前用 ppt_library op=report 核对引用。',
   '2. 只读：不整理、不移动、不改文件；数据只留在这台电脑。缺少索引或兼容的 PPT Doctor 时，说明原因和 PPT 页的设置/升级入口。',
+  '3. 提问写明是「做页任务」时不走第 1 条：按提问里的写法规则（同 skills/ppt-make.md）写页面说明，只通过 ppt_make 产出文件，不改其他文件。',
 ].join('\n');
 const INSTRUCTIONS = DESK_RULES;
 const TITLES = Object.freeze({ desk: '公司助理', phone: '公司助理 · 手机', brief: '公司助理 · 简报', ppt: 'PPT 素材助理' });
@@ -618,6 +619,7 @@ class CompanyAssistant {
     const ppt = this.pptWorkspace;
     fs.mkdirSync(path.join(ppt, 'skills'), { recursive: true });
     fs.writeFileSync(path.join(ppt, 'skills', 'ppt-search.md'), PPT_INSTRUCTIONS + '\n', 'utf8');
+    fs.writeFileSync(path.join(ppt, 'skills', 'ppt-make.md'), PPT_MAKE_INSTRUCTIONS + '\n', 'utf8');
     fs.writeFileSync(path.join(ppt, 'CLAUDE.md'), '# PPT 素材助理\n\n每次提问的开头附有完整规则，以提问里的规则为准。只读，数据只留在这台电脑。\n', 'utf8');
     const pptLines = ['@echo off', 'set ELECTRON_RUN_AS_NODE=1', `set "CLAUDE_HUB_ASSISTANT_DIR=${this.dir}"`, `"${exe}" "${path.join(__dirname, 'ppt-ro.js')}" %*`];
     fs.writeFileSync(path.join(ppt, 'ppt-ro.cmd'), pptLines.join('\r\n') + '\r\n', 'utf8');

@@ -1,9 +1,18 @@
 'use strict';
 
-const NOTIFICATION_WIDTH = 392;
-const NOTIFICATION_HEIGHT = 172;
-const NOTIFICATION_MARGIN = 18;
-const AUTO_HIDE_MS = 9000;
+// 2026-11-11 用户反馈右下角回执太占地方：改成一行标题一行摘要的小卡；出错类多停一会。
+const NOTIFICATION_WIDTH = 340;
+// 高度随内容：有摘要两行高，没摘要只剩标题一行（2026-11-11 用户：大片空白太丑）。
+const NOTIFICATION_HEIGHT = 70;
+const NOTIFICATION_HEIGHT_TITLE_ONLY = 52;
+const NOTIFICATION_MARGIN = 14;
+const AUTO_HIDE_MS = 6000;
+const AUTO_HIDE_BAD_MS = 10000;
+
+// 会话里给 Hub 看的内部标记（如 [[hub:no-update]]）不给用户看。
+function stripHubMarks(value) {
+  return String(value == null ? '' : value).replace(/`?\[\[hub:[^\]\n]{0,80}\]\]`?/g, ' ');
+}
 
 function cleanInline(value, maxLength) {
   return String(value == null ? '' : value)
@@ -19,17 +28,19 @@ function normalizeDesktopNotificationPayload(payload = {}) {
   return {
     sessionId,
     ...(sessionId === 'company-assistant' && cleanInline(payload.noticeId, 160) ? { noticeId: cleanInline(payload.noticeId, 160) } : {}),
-    title: cleanInline(payload.title, 100) || 'AI 会话',
-    body: cleanInline(payload.body, 240) || '本轮回答已经完成，点击回到会话查看。',
+    title: cleanInline(stripHubMarks(payload.title), 100) || 'AI 会话',
+    body: cleanInline(stripHubMarks(payload.body), 240),
     kind: cleanInline(payload.kind, 32),
+    ...(cleanInline(payload.noticeKind, 32) ? { noticeKind: cleanInline(payload.noticeKind, 32) } : {}),
+    tone: payload.tone === 'bad' ? 'bad' : '',
     completedAt: Number(payload.completedAt) || Date.now(),
     readyCount: Math.max(1, Math.min(99, Number(payload.readyCount) || 1)),
     newCount: Math.max(1, Math.min(99, Number(payload.newCount) || 1)),
-    autoHideMs: AUTO_HIDE_MS,
+    autoHideMs: payload.tone === 'bad' ? AUTO_HIDE_BAD_MS : AUTO_HIDE_MS,
   };
 }
 
-function notificationBounds(screen, mainWindow) {
+function notificationBounds(screen, mainWindow, height = NOTIFICATION_HEIGHT) {
   const fallback = { workArea: { x: 0, y: 0, width: 1280, height: 800 } };
   let display = fallback;
   try {
@@ -42,9 +53,9 @@ function notificationBounds(screen, mainWindow) {
   const area = display.workArea || fallback.workArea;
   return {
     x: Math.round(area.x + area.width - NOTIFICATION_WIDTH - NOTIFICATION_MARGIN),
-    y: Math.round(area.y + area.height - NOTIFICATION_HEIGHT - NOTIFICATION_MARGIN),
+    y: Math.round(area.y + area.height - height - NOTIFICATION_MARGIN),
     width: NOTIFICATION_WIDTH,
-    height: NOTIFICATION_HEIGHT,
+    height,
   };
 }
 
@@ -150,7 +161,7 @@ function createDesktopNotificationController({
     if (!normalized) return false;
     if (typeof route === 'function') {
       let taken = false;
-      try { taken = route({ ...normalized, ...(payload && payload.tone ? { tone: String(payload.tone) } : {}) }) === true; }
+      try { taken = route(normalized) === true; }
       catch (error) { logger.warn?.('[desktop-notification] route failed:', error && error.message); }
       if (taken) return true;
     }
@@ -158,7 +169,7 @@ function createDesktopNotificationController({
     const loaded = await readyPromise;
     if (!loaded || disposed || !win || win.isDestroyed()) return false;
     const mainWindow = typeof getMainWindow === 'function' ? getMainWindow() : null;
-    win.setBounds(notificationBounds(screen, mainWindow), false);
+    win.setBounds(notificationBounds(screen, mainWindow, normalized.body ? NOTIFICATION_HEIGHT : NOTIFICATION_HEIGHT_TITLE_ONLY), false);
     win.webContents.send('desktop-notification:payload', normalized);
     // Transparent Windows surfaces can expose a partially invalidated first
     // frame when shown in the same tick as the DOM update. Give Chromium one
@@ -196,6 +207,13 @@ function createDesktopNotificationController({
     try { sendToRenderer?.('desktop-notification:open-session', { sessionId,
       ...(sessionId === 'company-assistant' && cleanInline(payload.noticeId, 160) ? { noticeId: cleanInline(payload.noticeId, 160) } : {}) }); } catch (_) {}
   };
+  // 小卡上的齿轮：回到 Hub 设置里的「桌面回执」（右下角小卡 / 交给桌宠 / 关闭）。
+  const onSettings = (event) => {
+    if (!event || !isNotificationRenderer(event.sender)) return;
+    dismiss();
+    try { focusPrimaryWindow?.(); } catch (_) {}
+    try { sendToRenderer?.('desktop-notification:open-settings', {}); } catch (_) {}
+  };
   const onDismiss = (event) => {
     if (!event || !isNotificationRenderer(event.sender)) return;
     dismiss();
@@ -204,6 +222,7 @@ function createDesktopNotificationController({
   ipcMain.on('desktop-notification:show', onShow);
   ipcMain.on('desktop-notification:open', onOpen);
   ipcMain.on('desktop-notification:dismiss', onDismiss);
+  ipcMain.on('desktop-notification:settings', onSettings);
 
   function dispose() {
     if (disposed) return;
@@ -212,6 +231,7 @@ function createDesktopNotificationController({
     ipcMain.removeListener?.('desktop-notification:show', onShow);
     ipcMain.removeListener?.('desktop-notification:open', onOpen);
     ipcMain.removeListener?.('desktop-notification:dismiss', onDismiss);
+    ipcMain.removeListener?.('desktop-notification:settings', onSettings);
   }
 
   return {
@@ -224,11 +244,14 @@ function createDesktopNotificationController({
 }
 
 module.exports = {
+  AUTO_HIDE_BAD_MS,
   AUTO_HIDE_MS,
   NOTIFICATION_HEIGHT,
+  NOTIFICATION_HEIGHT_TITLE_ONLY,
   NOTIFICATION_MARGIN,
   NOTIFICATION_WIDTH,
   createDesktopNotificationController,
   normalizeDesktopNotificationPayload,
   notificationBounds,
+  stripHubMarks,
 };

@@ -19,6 +19,7 @@ class PptLibrary {
     this.doctor = deps.pptDoctor || new PptDoctor(assistant, deps);
     this.imgtext = new (require('./ppt-imgtext').PptImgtext)(this);
     this.materials = new (require('./ppt-materials').PptMaterials)(this, deps);
+    this.make = new (require('./ppt-make').PptMake)(this);
     this.references = new Map(); this.traces = new Map(); this.activeChat = '';
     this.taskResults = new Map(); this.taskReports = new Map(); this.taskEvidence = new Map(); this.activeTask = null; this.indexJob = null; this.indexChild = null;
     try { this.indexState = JSON.parse(fs.readFileSync(path.join(this.a.dir, 'ppt-index-state.json'), 'utf8')); }

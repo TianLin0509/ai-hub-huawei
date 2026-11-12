@@ -9362,6 +9362,12 @@ try {
 } catch (error) { console.warn('[web-sessions] AI 网页未启动：', error.message); }
 document.getElementById('btn-team')?.remove();
 const openConfigModal = configModal.open;
+// 右下角回执小卡上的齿轮：打开配置并停在「桌面回执」（2026-11-11）。
+ipcRenderer.on('desktop-notification:open-settings', async () => {
+  try { await openConfigModal(); } catch (_) {}
+  const el = document.getElementById('cfg-notify-mode-section');
+  if (el) { el.scrollIntoView({ block: 'center' }); document.getElementById('cfg-notify-mode')?.focus(); }
+});
 const setCodexProfileForm = configModal.setCodexProfileForm;
 document.addEventListener('hub-config-saved', () => {
   void refreshHubProxyInfo({ force: true });

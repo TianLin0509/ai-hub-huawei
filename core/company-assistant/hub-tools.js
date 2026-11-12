@@ -125,6 +125,7 @@ class HubTools {
         note: r.library.total ? '素材文件是 pptx，第 page 页上就是这个形状；推荐时请用户到 PPT 页「素材」Tab 一键插入。' : '素材库是空的：请用户到 PPT 页「素材」Tab 点「一键下载团队素材包」（约 1 MB，不需要安装 PPT Doctor），下载后再查。',
         ...(r.library.errors.length ? { errors: r.library.errors } : {}) };
     }
+    if (name === 'ppt_make') return this.a.ppt.make.submit(args);
     if (name === 'ppt_imgtext') {
       if (args.op === 'build') return this.a.ppt.imgtext.build(args);
       if (args.op === 'status') return { ok: true, job: this.a.ppt.imgtext.snapshot(args.jobId) };
