@@ -181,3 +181,49 @@ test('互斥：两台主机同时要放行不共用结果，排队各点各的�
   assert.deepEqual(opened, ['me.example.cn', 'dl.example.cn']);
   assert.deepEqual([a, b, a2], [true, false, true]);
 });
+
+test('探测：POST 拿回自家小页本身也算正常（静态下载服务器 POST 不回 JSON，2026-11-11 公司真机误判 1983 次）', async () => {
+  const url = 'https://dl.example.cn/hub-update/api/feedback';
+  const fetcher = (get, post) => async (_u, init) => (init.method === 'POST' ? post : get);
+  const r = await probeOwnPage(fetcher(res(200, OWN), res(200, OWN)), url);
+  assert.deepEqual([r.state, r.method], ['ok', 'POST']);
+  assert.equal((await probeOwnPage(fetcher(res(200, OWN), res(200, GATE)), url)).state, 'gate', '拦截页照样算被拦');
+});
+
+test('额度只算真正点下去的次数：开了放行页没点到按钮不占额度，一分钟内同一主机不重复开窗', async () => {
+  const c = clock();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-noclick-'));
+  let opens = 0, clickable = false;
+  const budget = new ClickBudget({ now: c.now });
+  const passer = new GatePasser({ logDir: dir, logName: 'net-unblock', now: c.now, budget,
+    open: async () => { opens += 1; return clickable ? { clicked: true, text: '接受风险并访问', method: 'trusted' } : { clicked: false, notGate: true, candidates: [] }; } });
+  const dl = 'https://dl.example.cn/x', me = 'https://me.example.cn/x';
+  for (let i = 0; i < 40; i++) { assert.equal(await passer.attempt(dl), false); c.t += 61000; }
+  assert.equal(opens, 40, '每分钟照样看一眼');
+  assert.equal(budget.used(30 * 60000), 0, '40 次没点击的尝试不占额度');
+  assert.equal(passer.tries, 0, '没点过就不记「已自动放行」');
+  assert.equal(await passer.attempt(dl), false); const before = opens;
+  assert.equal(await passer.attempt(dl), false);
+  assert.equal(opens, before, '上次没找到按钮：一分钟内不再为这台主机开窗');
+  clickable = true;
+  assert.equal(await passer.attempt(me), true, '另一台主机真被拦时额度还在，能点');
+  assert.equal(budget.used(30 * 60000), 1);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('没点到按钮的冷却按「主机 + 请求方法」分开；别的入口中途清零时计数不会变负', async () => {
+  const c = clock();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-key-'));
+  let passer;
+  const opened = [];
+  passer = new GatePasser({ logDir: dir, logName: 'net-unblock', now: c.now,
+    open: async (_u, opts) => { const m = (opts && opts.method) || 'GET'; opened.push(m); if (m === 'GET') { passer.passed(); return { clicked: false, notGate: true }; } return { clicked: true, text: '接受风险并访问', method: 'trusted' }; } });
+  const url = 'https://me.example.cn/x';
+  assert.equal(await passer.attempt(url, { method: 'GET' }), false);
+  assert.equal(passer.tries, 0, '开窗期间被清零后，没点击的尝试不把计数减成负数');
+  assert.equal(await passer.attempt(url, { method: 'POST' }), true, 'GET 刚空跑过，同一主机的 POST 被拦仍然马上去点');
+  assert.deepEqual(opened, ['GET', 'POST']);
+  assert.equal(passer.tries, 1);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+

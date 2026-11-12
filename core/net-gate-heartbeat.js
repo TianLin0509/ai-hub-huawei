@@ -27,8 +27,10 @@ async function probeOnce(fetchFn, url, init, isOk, timeoutMs) {
 async function probeOwnPage(fetchFn, url, { timeoutMs = 15000, post = true } = {}) {
   const g = await probeOnce(fetchFn, url, { method: 'GET' }, (res, text) => res.ok && text.includes(OK_MARK), timeoutMs);
   if (g.state !== 'ok' || !post) return { ...g, method: 'GET' };
-  const isJson = (_res, text) => { try { const o = JSON.parse(text); return !!o && typeof o === 'object'; } catch { return false; } };
-  const p = await probeOnce(fetchFn, url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }, isJson, timeoutMs);
+  // POST 没被拦的两种样子：接口的 JSON（me. 回 not_found），或者自家小页本身（dl. 是静态下载服务器，POST 也回这张页）。
+  // 2026-11-11 公司真机：只认 JSON 时 dl. 每分钟都被判成被拦，1983 次空跑占满了共用的点击额度。
+  const isOwn = (_res, text) => { if (text.includes(OK_MARK)) return true; try { const o = JSON.parse(text); return !!o && typeof o === 'object'; } catch { return false; } };
+  const p = await probeOnce(fetchFn, url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }, isOwn, timeoutMs);
   return { ...p, method: 'POST' };
 }
 

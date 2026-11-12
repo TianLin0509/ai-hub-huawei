@@ -94,7 +94,9 @@ class ClickBudget {
     }
     return until ? { ok: false, until } : { ok: true, until: null };
   }
-  take() { this.clicks.push(this.now()); }
+  take() { const at = this.now(); this.clicks.push(at); return at; }
+  // 这次开了放行页但没点到按钮：把占的那一格还回去。额度只算真正点下去的次数。
+  refund(at) { const i = this.clicks.lastIndexOf(at); if (i >= 0) this.clicks.splice(i, 1); }
   used(windowMs) { const t = this.now(); return this.clicks.filter(at => t - at < windowMs).length; }
   status() { const c = this.check(); return { limits: this.limits.map(l => ({ ...l, used: this.used(l.windowMs) })), blockedUntil: c.until }; }
   // 互斥：同一时刻只开一个放行窗口。同一台主机、同一种请求（key 相同）正在放行时直接共用那次结果；
@@ -278,6 +280,7 @@ async function postInHiddenWindow(BrowserWindow, url, body, { loadTimeoutMs = 30
   return result;
 }
 
+const NO_CLICK_IDLE_MS = 60000;
 class GatePasser {
   // open(url) → openHiddenGateWindow 的结果；logDir 放日志和放行页样本。
   // budget：点击额度与互斥（ClickBudget）。main 里各入口传同一个 sharedBudget；不传就各用各的（单测用）。
@@ -286,6 +289,7 @@ class GatePasser {
     this.manualHint = manualHint || '请用浏览器打开被拦的网址手动放行'; this.logName = logName;
     this.budget = budget || new ClickBudget({ now: this.now });
     this.tries = 0; this.cooldownUntil = 0; this.notifiedUntil = 0; this.last = null;
+    this.idleUntil = new Map(); // 主机|请求方法 → 上次打开放行页没找到按钮，这之前不再开窗
   }
   status() {
     const b = this.budget.status();
@@ -302,6 +306,10 @@ class GatePasser {
   // 额度用完（1 分钟 10 次 / 30 分钟 15 次）就不点，提示一次人工放行，等额度恢复后自动接着点。
   // opts 原样交给 open（心跳用它说明是 GET 还是 POST 被拦）。
   async attempt(url, opts) {
+    // 上次打开没找到可点的按钮：一分钟内不重复开窗（没点击不占额度，这里只防空转）。
+    // 按主机 + 请求方法分开记（和互斥的键一致）：GET 没找到按钮不该耽误 POST 被拦时去点。
+    const key = `${hostOf(url)}|${(opts && opts.method) || 'GET'}`;
+    if ((this.idleUntil.get(key) || 0) > this.now()) return false;
     const c = this.budget.check();
     if (!c.ok) {
       if (this.notifiedUntil < c.until) {
@@ -314,19 +322,24 @@ class GatePasser {
     }
     const r0 = await this.budget.exclusive(async () => {
       if (!this.budget.check().ok) return { skipped: true };
-      this.budget.take();
-      this.tries += 1;
+      const taken = this.budget.take();
       let r;
       try { r = await this.open(url, opts); } catch (error) { r = { error: error.message }; }
-      return r || {};
-    }, `${hostOf(url)}|${(opts && opts.method) || 'GET'}`);
+      r = r || {};
+      // 没点到按钮（不是放行页、找不到按钮、打不开）不算一次点击：还回额度，否则误报会把真正要放行时的额度占光
+      // （2026-11-11 公司真机：约 300 次「点击额度用完」都是被没点击的空跑挤掉的）。
+      // tries 只在真的点到后才加：开窗期间别的主机可能刚 passed() 清零，先加后减会减成负数。
+      if (!r.clicked) { this.budget.refund(taken); this.idleUntil.set(key, this.now() + NO_CLICK_IDLE_MS); }
+      else { this.tries += 1; this.idleUntil.delete(key); }
+      return r;
+    }, key);
     const r = r0;
     if (r.skipped) return false;
     if (r.shared) return !!r.clicked; // 别的入口刚点过，共用它的结果，不重复记
     if (r.html) {
       try { fs.mkdirSync(this.logDir, { recursive: true }); fs.writeFileSync(path.join(this.logDir, this.logName + '-sample.html'), Buffer.from(r.html, 'utf8').subarray(0, SAMPLE_LIMIT)); } catch {}
     }
-    this.log({ host: hostOf(url), try: this.tries, clicked: !!r.clicked, button: r.text || null, method: r.method || null, how: r.how || null,
+    this.log({ host: hostOf(url), try: r.clicked ? this.tries : this.tries + 1, clicked: !!r.clicked, button: r.text || null, method: r.method || null, how: r.how || null,
       result: r.error ? 'error' : r.clicked ? 'clicked' : r.notGate ? 'not-gate' : 'no-button', error: r.error || null, candidates: r.clicked ? undefined : (r.candidates || []).slice(0, 10) });
     return !!r.clicked;
   }
