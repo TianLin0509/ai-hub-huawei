@@ -297,7 +297,9 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     // 认不出的输出原样给出来（排查用）；框还在流式输出（obtaining）、判成乱码或已结束时不贴。
     const raw = !f.qr && f.text && !f.garbled && !failed && !scanned && p.phase !== 'obtaining' ? `<pre class="ca-qr-text">${esc(f.text.slice(-3000))}</pre>` : '';
     const retry = failed || (f.state === 'finished' && !scanned) ? '<button type="button" class="ca-btn primary" data-ca="login">重新获取二维码</button>' : '';
-    return `<div class="ca-login"><b>扫码登录 WeLink</b><p>${state}</p>${qr}${tickLine}${link}${raw}<div class="ca-row"><button type="button" class="ca-btn" data-ca="close-panel">收起</button>${retry}</div></div>`;
+    // 失败时写明用的是哪个 welink-cli、什么版本（2026-11-12：同事 cmd 里能登录、Hub 里不行，原因是 Hub 用着另一份旧版）。
+    const which = failed && data.cliPath ? `<p class="ca-note" title="${esc(data.cliPath)}">Hub 用的是 welink-cli${data.cliVersion ? ' ' + esc(data.cliVersion) : ''}：${esc(data.cliPath)}；和命令行里不是同一个时，可在设置里切换。</p>` : '';
+    return `<div class="ca-login"><b>扫码登录 WeLink</b><p>${state}</p>${which}${qr}${tickLine}${link}${raw}<div class="ca-row"><button type="button" class="ca-btn" data-ca="close-panel">收起</button>${retry}</div></div>`;
   }
 
   // ---- 右栏「今天」（原今日简报）----

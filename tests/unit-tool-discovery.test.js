@@ -207,3 +207,15 @@ test('版本选择器：只有多个不同版本且没选过时才出提示；�
   assert.equal(picker.switchHtml({ ...base, candidates: base.candidates.slice(0, 1) }), '');
   assert.equal(picker.hintHtml(null), '');
 });
+
+// 2026-11-12 同事：设置里自动记下的是 UniAssistant 自带的 welink-cli 1.0.16，npm 升到 1.0.20 后 Hub 仍用旧版、扫码失败。
+test('choose：自动记下的旧路径遇到更高版本时换成新版并写回；用户亲手选的不动', () => {
+  const c = (p, version, order) => ({ path: p, version, order, key: p.toLowerCase() });
+  const list = [c('C:/UniAssistant/welink-cli.exe', '1.0.16', 0), c('C:/npm/welink-cli.exe', '1.0.20', 1)];
+  const auto = C.choose(list, 'C:/UniAssistant/welink-cli.exe', { configuredByUser: false });
+  assert.equal(auto.reason, 'upgraded'); assert.equal(auto.pick.path, 'C:/npm/welink-cli.exe'); assert.equal(auto.writeBack, true);
+  const manual = C.choose(list, 'C:/UniAssistant/welink-cli.exe', { configuredByUser: true });
+  assert.equal(manual.reason, 'configured'); assert.equal(manual.pick.path, 'C:/UniAssistant/welink-cli.exe');
+  const sameVersion = C.choose([c('C:/a/x.exe', '1.0.20', 0), c('C:/b/x.exe', '1.0.20', 1)], 'C:/b/x.exe', { configuredByUser: false });
+  assert.equal(sameVersion.reason, 'configured', '版本一样就不折腾');
+});

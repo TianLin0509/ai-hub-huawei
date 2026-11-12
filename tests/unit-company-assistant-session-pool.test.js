@@ -307,3 +307,35 @@ test('已绑定记录的会话答得慢：不算没送达，不重发', async t 
   await f.a.collectJob('chat'); await f.settle();
   assert.equal(f.prompts.length, 1);
 });
+
+test('预开的会话固定在用户已换掉的模型上（或已因模型暂停）时不再用它，改开新会话', async t => {
+  const f = fixture(t);
+  f.a.prewarm('desk');
+  await f.settle();
+  const warm = f.a.warm.desk;
+  assert.ok(warm);
+  Object.assign(f.sessions.get(warm), { fixedModel: 'model-old', modelPinSource: 'created' });
+  require('../core/codeagent-model-replacements').recordReplacement(f.root, 'model-old', 'model-new');
+  const taken = await f.a.takeSession('desk');
+  assert.notEqual(taken, warm, '换掉的模型上的预开会话不用');
+  await f.settle();
+  assert.ok(f.closed.includes(warm), '旧的预开会话关掉');
+  Object.assign(f.sessions.get(taken), { fixedModel: 'model-new', modelPinSource: 'created', modelConfirmationRequired: true });
+  f.a.warm.desk = taken;
+  assert.notEqual(await f.a.takeSession('desk'), taken, '已因模型暂停的会话也不用');
+});
+
+test('welink-cli：自动记下的路径让位给自动发现选出的新版；用户亲手选的路径不被换掉', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'assistant-cli-'));
+  const oldCli = path.join(root, 'uni', 'welink-cli.exe'), newCli = path.join(root, 'npm', 'welink-cli.exe');
+  for (const f of [oldCli, newCli]) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, ''); }
+  const a = new CompanyAssistant({ dataDir: root, now: () => NOW, noTimer: true, noTools: true, noPrewarm: true,
+    bus: { latest: () => [], publish: () => true }, welinkRun: async () => ({ code: 0, stdout: '{}', stderr: '' }),
+    toolDiscovery: { register() { return this; }, has: () => false, pick: () => newCli }, resolveCli: ({ configured }) => configured });
+  t.after(() => { a.closed = true; a.welinkGate.flush?.(); fs.rmSync(root, { recursive: true, force: true }); });
+  a.setSettings({ cliPath: oldCli });
+  assert.equal(a.cli(), newCli, '自动记下的旧版让位');
+  a.setSettings({ cliPath: oldCli, cliPathManual: true });
+  assert.equal(a.settings().cliPathManual, true);
+  assert.equal(a.cli(), oldCli, '用户亲手选的保持不变');
+});

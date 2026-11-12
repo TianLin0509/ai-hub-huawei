@@ -93,46 +93,123 @@ function showStickyNotice(document, message, level = 'warning', options = {}) {
   return item;
 }
 
+// 「原模型不可用，换一个继续」卡片（2026-11-12 重做版式）：标题一句话说清要做什么，原模型和原因单列，
+// 下拉框选替代模型，底部「保持暂停 / 切换并继续」两个胶囊按钮。样式在 styles/model-notice.css，颜色走 --hw-* 主题变量。
+function ensureModelNoticeStyle(document) {
+  if (!document.head || document.getElementById('hub-model-notice-style')) return;
+  const link = document.createElement('link');
+  link.id = 'hub-model-notice-style'; link.rel = 'stylesheet'; link.href = 'styles/model-notice.css';
+  document.head.appendChild(link);
+}
+
+function el(document, tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function modelNoticeReason(payload) {
+  if (payload.reason) return String(payload.reason);
+  const hit = String(payload.message || '').match(/不可用（([^）]+)）/);
+  return hit ? hit[1] : '';
+}
+
 function showUnavailableModelNotice(document, payload, onSelect, onCancel) {
   const creating = payload.creation === true;
   const models = [...new Set([...(payload.availableModels || []), payload.suggestedModel])].filter(id => require('../core/codeagent-models').isSafeModelId(id));
   const suggested = models.includes(payload.suggestedModel) ? payload.suggestedModel : models[0];
-  const message = [payload.message, payload.originalModel && !String(payload.message).includes(payload.originalModel) ? `原模型 ${payload.originalModel} 不可用。` : '',
-    suggested ? `建议换成 ${suggested}（可改选其他模型）。${creating ? '确认后创建，取消则不创建会话。' : '确认后切换并继续，取消保持暂停。'}` : (creating ? '暂无可用替代模型，未创建会话。' : '暂无可用替代模型，本条消息未发送。')
-      + '请到「账号」页确认登录，再点击模型重新获取清单；恢复后重新发送。'].filter(Boolean).join('\n');
-  const notice = showStickyNotice(document, message, 'warning', { key: payload.requestId || (payload.sessionId ? `model:${payload.sessionId}:${message}` : undefined), onClose: onCancel });
-  if (!notice || notice.dataset.modelAction) return notice;
-  notice.children[1].textContent = creating ? '取消，不创建' : '取消，保持暂停';
-  notice.children[1].title = creating ? '取消这次创建，不启动会话' : '关闭确认提示，会话继续暂停';
-  if (!models.length) return notice;
-  notice.dataset.modelAction = payload.sessionId;
-  notice.dataset.modelRequestId = payload.requestId || '';
-  const controls = document.createElement('div');
-  Object.assign(controls.style, { display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '8px' });
-  const select = document.createElement('select');
-  select.setAttribute('aria-label', '选择可用模型');
-  select.style.maxWidth = '100%';
-  for (const model of models) {
-    const option = document.createElement('option');
-    option.value = model; option.textContent = model; select.appendChild(option);
+  const original = payload.originalModel || '';
+  const reason = modelNoticeReason(payload);
+  const context = String(payload.contextLabel || '').replace(/^会话\s+/, '');
+  const outcome = suggested
+    ? (creating ? '确认后用新模型创建会话；取消则不创建。' : '确认后用新模型继续发送原消息；取消则会话保持暂停。')
+    : (creating ? '暂无可用替代模型，未创建会话。' : '暂无可用替代模型，本条消息未发送。') + '请到「账号」页确认登录，再点击模型重新获取清单；恢复后重新发送。';
+  const text = [payload.message, original && !String(payload.message).includes(original) ? `原模型 ${original} 不可用。` : '',
+    suggested ? `建议换成 ${suggested}。` : '', outcome].filter(Boolean).join('\n');
+  const root = stack(document);
+  const key = payload.requestId || (payload.sessionId ? `model:${payload.sessionId}:${text}` : text);
+  for (const item of root.children) if ((item.dataset.noticeKey || item.dataset.text) === key) return item;
+  ensureModelNoticeStyle(document);
+
+  const title = creating ? '新建会话需要换个模型' : '需要换个模型才能继续';
+  const item = el(document, 'div', 'hub-sticky-notice hub-model-notice');
+  Object.assign(item.dataset, { text, noticeKey: key, level: 'warning' });
+  item.setAttribute('role', 'alertdialog');
+  item.setAttribute('aria-label', title);
+
+  const body = el(document, 'div', 'hmn-body');
+  const head = el(document, 'div', 'hmn-head');
+  const titles = el(document, 'div', 'hmn-titles');
+  titles.appendChild(el(document, 'div', 'hmn-title', title));
+  if (context) { const sub = el(document, 'div', 'hmn-context', context); sub.title = context; titles.appendChild(sub); }
+  head.append(el(document, 'span', 'hmn-icon', '!'), titles);
+  body.appendChild(head);
+
+  if (original) {
+    const fact = el(document, 'div', 'hmn-fact');
+    const line = el(document, 'div', 'hmn-fact-line');
+    line.append(el(document, 'span', 'hmn-fact-label', '原模型'), el(document, 'code', 'hmn-model', original), el(document, 'span', 'hmn-badge', '暂时用不了'));
+    fact.appendChild(line);
+    if (reason) fact.appendChild(el(document, 'div', 'hmn-fact-reason', `原因：${reason}`));
+    body.appendChild(fact);
+  } else body.appendChild(el(document, 'div', 'hmn-message', String(payload.message || '')));
+
+  const parts = {};
+  if (models.length) {
+    const field = el(document, 'label', 'hmn-field');
+    const select = el(document, 'select', 'hmn-select');
+    select.setAttribute('aria-label', '选择可用模型');
+    for (const model of models) {
+      const option = el(document, 'option', '', model === suggested ? `${model}（推荐）` : model);
+      option.value = model; select.appendChild(option);
+    }
+    select.value = suggested;
+    select.title = suggested;
+    select.addEventListener('change', () => { select.title = select.value; });
+    field.append(el(document, 'div', 'hmn-field-label', '换成'), select);
+    body.appendChild(field);
+    parts.select = select;
   }
-  select.value = suggested;
-  const button = document.createElement('button');
-  button.type = 'button'; button.textContent = creating ? '确认并创建' : '确认切换并继续';
-  button.addEventListener('click', async () => {
-    button.disabled = true;
-    select.disabled = true;
-    notice.children[1].disabled = true;
-    try {
-      const result = await onSelect(select.value);
-      if (!result?.ok) throw new Error(result?.message || '模型未能切换');
-      notice.remove();
-    } catch (error) { button.textContent = error.message; }
-    finally { button.disabled = false; select.disabled = false; notice.children[1].disabled = false; }
+  body.appendChild(el(document, 'div', 'hmn-note', outcome));
+  const errorLine = el(document, 'div', 'hmn-error');
+  errorLine.setAttribute('role', 'alert');
+  body.appendChild(errorLine);
+
+  const actions = el(document, 'div', 'hmn-actions');
+  const cancel = el(document, 'button', 'hmn-btn', models.length ? (creating ? '取消，不创建' : '保持暂停') : '知道了');
+  cancel.type = 'button';
+  cancel.title = creating ? '取消这次创建，不启动会话' : '关闭这张卡片，会话继续暂停';
+  cancel.addEventListener('click', () => {
+    if (cancel.disabled) return;
+    item.remove();
+    if (onCancel) Promise.resolve(onCancel()).catch(error => console.warn('[model-confirmation] 取消失败：', error.message));
   });
-  controls.append(select, button);
-  notice.children[0].appendChild(controls);
-  return notice;
+  actions.appendChild(cancel);
+  parts.cancel = cancel;
+  if (models.length) {
+    const confirm = el(document, 'button', 'hmn-btn hmn-primary', creating ? '换成它并创建' : '切换并继续');
+    confirm.type = 'button';
+    confirm.addEventListener('click', async () => {
+      const label = confirm.textContent;
+      confirm.disabled = true; parts.select.disabled = true; cancel.disabled = true;
+      confirm.textContent = '正在切换…'; errorLine.textContent = '';
+      try {
+        const result = await onSelect(parts.select.value);
+        if (!result?.ok) throw new Error(result?.message || '模型未能切换');
+        item.remove();
+      } catch (error) { errorLine.textContent = `${error.message || '模型未能切换'}；可以换一个模型或再试一次。`; }
+      finally { confirm.disabled = false; parts.select.disabled = false; cancel.disabled = false; confirm.textContent = label; }
+    });
+    actions.appendChild(confirm);
+    parts.confirm = confirm;
+    item.dataset.modelAction = payload.sessionId;
+    item.dataset.modelRequestId = payload.requestId || '';
+  }
+  item.append(body, actions);
+  item.modelParts = parts;
+  root.appendChild(item);
+  return item;
 }
 
 function registerModelCreationConfirmation(ipcRenderer, document) {

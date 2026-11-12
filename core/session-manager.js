@@ -3803,7 +3803,7 @@ try {
       const requiresSelection = info.codeagentModelPick && !require('./codeagent-model-picker').isPicking(sessionId);
       const pin = pins.resolveCodeAgentPin({ ...info, ...pins.migrateModelPin(info) }, {
         dataDir: getHubDataDir(), configDir: config.configDir, command: config.command, pool,
-        ...(requiresSelection ? { failureReason: '尚未完成原模型选择' } : {}),
+        ...(requiresSelection ? { failureReason: '启动时没能选中这个模型' } : {}),
       });
       if (!pin.fixedModel || !requiresSelection && !pin.modelChanged && pin.fixedModel === info.fixedModel) return;
       if (!requiresSelection && pin.modelChanged && pin.fixedModel === info.fixedModel

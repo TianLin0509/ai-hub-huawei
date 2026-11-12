@@ -72,6 +72,11 @@ function resolveCodeAgentPin(opts, { dataDir, configDir, command, pool = null, f
   if (!models.isSafeModelId(fixedModel)) fixedModel = '';
   if (!fixedModel && known.authoritative && list.length === 1) fixedModel = list[0];
   if (fixedModel) fixedModel = accounts.personalDefaultModel(fixedModel, { models: list, authoritative: known.authoritative }) || fixedModel;
+  // 只由 CodeAgent 默认模型推出来的（用户没指定）：用户已为它确认过替代模型，就直接用替代，不再每个新会话问一次。
+  if (fixedModel && !opts.fixedModel && !opts.codeagentUserModel && !requested && dataDir) {
+    const replaced = require('./codeagent-model-replacements').replacementFor(dataDir, fixedModel, known);
+    if (replaced) fixedModel = replaced;
+  }
   const settingsSupported = caps.filterArgs(['--settings', 'session.json'], caps.readHelp(command)).args.includes('--settings');
   const policy = unavailablePolicy(require('./hub-config').getConfig().sessionModelUnavailablePolicy);
   let reason = failureReason || (opts.modelConfirmationRequired ? opts.modelUnavailableReason || '原模型已暂停，须由用户明确确认后继续' : '');

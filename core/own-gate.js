@@ -35,7 +35,8 @@ async function withGate(urls, run, opts = {}) {
 function gatedFetch(fetchImpl, opts) {
   return (url, init) => withGate(url, async () => {
     const response = await fetchImpl(url, init);
-    if (response && response.ok && /text\/html/i.test(response.headers?.get?.('content-type') || '')) {
+    // 不只看 2xx：拦截页也可能带 4xx 状态码。是不是真被拦由 pass() 再探一次自家小页来判断，误报只多一次探测。
+    if (response && /text\/html/i.test(response.headers?.get?.('content-type') || '')) {
       try { void response.body?.cancel().catch(() => {}); } catch (_) {}
       throw Object.assign(new Error('收到的是网页而不是文件（可能被网络确认页替换）'), { blocked: true });
     }

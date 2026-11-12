@@ -4463,12 +4463,36 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
           return r;
         });
         ipcMain.handle('net-pass:status', async (_e, opts) => { if (opts && opts.refresh) void netPass.refresh(); return netPass.status(); });
+        // 主界面底栏的「一键放行」（2026-11-12 用户：统一入口放在主界面角落，一次放行全局共享）：
+        const globalPassStatus = () => {
+          const s = netPass.status();
+          let bridgeGate = null;
+          const blocked = s.hosts.filter(h => h.state === 'blocked').map(h => h.name);
+          if (bridgeGate) blocked.push('通道服务器');
+          return { ...s, bridgeGate: !!bridgeGate, blocked, needed: s.needed || !!bridgeGate };
+        };
+        let globalPassing = null;
+        ipcMain.handle('net-pass:global-status', async () => globalPassStatus());
+        ipcMain.handle('net-pass:global', async () => {
+          if (globalPassing) return globalPassing;
+          globalPassing = (async () => {
+            const steps = [];
+            const all = await netPass.passAll().catch(e => ({ results: [], error: e.message }));
+            if (all.error) steps.push({ name: '下载服务器', ok: false, note: '放行出错：' + String(all.error).slice(0, 80) });
+            if ((all.results || []).some(x => x.result === 'ok')) { try { ownUnblocker.passed(); } catch (_) {} }
+            for (const r of all.results || []) steps.push({ name: r.name, ok: r.result === 'ok', note: r.result === 'ok' ? (r.first === 'blocked' ? '已放行' : '正常') : r.result === 'blocked' ? '还被拦着' : '连不上（不是放行问题）' });
+            return { ok: steps.every(x => x.ok), steps, status: globalPassStatus() };
+          })().finally(() => { globalPassing = null; });
+          return globalPassing;
+        });
         ipcMain.handle('net-pass:run', async () => { const r = await netPass.passAll(); if (r.results.some(x => x.result === 'ok')) { try { ownUnblocker.passed(); } catch (_) {} } return r; });
         // 所有「打开放行页」按钮都走这里：传进来的可能是被拦的下载文件地址，一律换成那台主机的放行小页面。
-        ipcMain.handle('net-pass:open-window', async (_e, url) => {
-          const page = gatePageFor(url);
+        // opts.method === 'POST'：被拦的是提交（如一键反馈），在弹出的窗口里对那个自家地址 POST 一次，拦截页才会出现。
+        ipcMain.handle('net-pass:open-window', async (_e, url, opts) => {
+          const isPost = opts && opts.method === 'POST' && ownHosts.isOwnUrl(String(url || ''), ownConfig);
+          const page = isPost ? String(url) : gatePageFor(url);
           if (!page) return { passed: false, error: '放行页地址无效' };
-          const opened = await gateVisible(page);
+          const opened = isPost ? await netUnblock.openVisibleGateWindow(BrowserWindow, page, { parent: mainWindow || null, post: {}, ...(autoUnblock ? {} : { maxClicks: 0 }) }) : await gateVisible(page);
           await netPass.refresh({ force: true }).catch(() => {});
           if (opened.passed) { try { ownUnblocker.passed(); } catch (_) {} }
           return { ...opened, status: netPass.status() };

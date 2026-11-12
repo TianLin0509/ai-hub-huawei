@@ -92,7 +92,7 @@ function createSessionWithModelPolicy({ kind, opts, create, requestConfirmation,
       notice(`${error.message} ${operation === 'resume' ? '恢复保持停止。' : '未创建会话。'}`);
       throw Object.assign(error, operation === 'resume' ? { stopped: true, notSent: true } : {});
     }
-    return Promise.resolve(requestConfirmation({ originalModel: error.model, suggestedModel: error.suggestedModel,
+    return Promise.resolve(requestConfirmation({ originalModel: error.model, reason: error.reason || '', suggestedModel: error.suggestedModel,
       availableModels, contextLabel, operation, sessionId: operation === 'resume' ? launchOpts.id : undefined, creation: operation !== 'resume',
       message: `${contextLabel}：${error.message}` })).then(selected => {
       if (!selected) {
@@ -101,6 +101,8 @@ function createSessionWithModelPolicy({ kind, opts, create, requestConfirmation,
         throw Object.assign(new Error(message), { code: operation === 'resume' ? 'SESSION_MODEL_CONFIRMATION_CANCELLED' : 'SESSION_CREATION_CANCELLED', notCreated: true, notSent: true, stopped: true });
       }
       if (!availableModels.includes(selected)) throw new Error('所选模型不在本次可用清单内，未创建会话');
+      try { require('../core/codeagent-model-replacements').recordReplacement(require('../core/data-dir').getHubDataDir(), error.model, selected); }
+      catch (failure) { console.warn('[model-confirmation] 记住替代模型失败：', failure.message); }
       const retryOpts = { ...launchOpts, model: selected, fixedModel: selected, codeagentUserModel: selected,
         modelPinSource: 'user', modelChange: null, codeagentModelPick: false, modelConfirmationRequired: false, modelUnavailableReason: '' };
       // A failed create released its lease; the retry must acquire a fresh one.

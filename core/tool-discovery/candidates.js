@@ -67,7 +67,8 @@ function rank(candidates) {
 //   多个、版本不同 → newest（先用最高版本保证能用，界面出「点此切换」的提示，用户选完再写回）；
 //   没有 → none。
 // configuredMissing：用户指定过路径，但那个文件已经不在或跑不起来（被卸载 / 移动），这时回到扫描结果。
-function choose(candidates, configured = '', { fsModule = fs, platform = process.platform } = {}) {
+// configuredByUser=false：设置里的路径是以前自动记下的（不是用户选的），出现更高版本时换成它并写回（reason: upgraded）。
+function choose(candidates, configured = '', { fsModule = fs, platform = process.platform, configuredByUser = true } = {}) {
   const list = candidates || [];
   const ranked = rank(list);
   const versions = [];
@@ -76,6 +77,8 @@ function choose(candidates, configured = '', { fsModule = fs, platform = process
   if (configured) {
     const key = realKey(configured, { fsModule, platform });
     const hit = list.find(c => c.key === key || realKey(c.path, { fsModule, platform }) === key);
+    if (hit && !configuredByUser && ranked[0] && compareVersions(ranked[0].version, hit.version) > 0)
+      return { ...base, pick: ranked[0], reason: 'upgraded', writeBack: true };
     if (hit) return { ...base, pick: hit, reason: 'configured', writeBack: false };
     base.configuredMissing = true;
   }

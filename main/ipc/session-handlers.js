@@ -1471,6 +1471,8 @@ function registerSessionIpc(ipcMain, deps) {
     if (codeagentPicker.isPicking(sessionId)) return { ok: false, error: 'busy', message: '正在切换模型，请稍候' };
     // 用 --settings 文件启动的会话（2026-10-30 5.3.12）：先把它自己的设置文件改成新模型，再照常在菜单里选。
     // 会话每次请求都重读配置；--settings 优先级最高，不改它的话菜单选的可能被它压回去。只在能换成 CodeAgent 自己的写法时改。
+    // 会话因「原模型不可用」暂停时，这次切换就是用户给原模型选的替代：切成后记下，之后由默认模型推出的新会话直接用它。
+    const pausedFrom = session.modelConfirmationRequired && session.fixedModel ? session.fixedModel : '';
     const launchChange = updateCodeAgentModelSettings(sessionId, session, modelId);
     const settingsOnly = failure => {
       const message = failure?.message || 'CodeAgent 没能切换模型';
@@ -1499,6 +1501,10 @@ function registerSessionIpc(ipcMain, deps) {
     try { if (result.mode !== 'settings-only') require('../../core/codeagent-launch-model').rememberModel(require('../../core/data-dir').getHubDataDir(), (session.info && session.info.codeagentPoolAccount) || session.codeagentPoolAccount || 'personal', modelId); }
     catch (error) { console.warn('[codeagent] 记住上次选的模型失败：' + error.message); }
     models.expectModelSwitch(sessionId, modelId, { settingsOnly: result.mode === 'settings-only' });
+    if (pausedFrom) {
+      try { require('../../core/codeagent-model-replacements').recordReplacement(require('../../core/data-dir').getHubDataDir(), pausedFrom, modelId); }
+      catch (error) { console.warn('[codeagent] 记住替代模型失败：' + error.message); }
+    }
     const selectedSession = sessionManager.getSession(sessionId);
     if (!selectedSession) return { ok: false, error: 'session-closed', message: '会话已关闭，本次选择未保存' };
     require('../../core/session-store').saveSessionFile(sessionId, selectedSession);
@@ -1547,7 +1553,7 @@ function registerSessionIpc(ipcMain, deps) {
       const contextLabel = meeting ? `群聊 ${meeting.title || session.meetingId} / ${session.title || '成员'}` : `会话 ${session.title || 'CodeAgent'}`;
       group.task = Promise.resolve().then(async () => {
         const selected = await requestModelConfirmation({ sessionId, creation: false,
-          originalModel: error.model || session.fixedModel, suggestedModel: error.suggestedModel, availableModels: choices, clientSubmissionIds: group.submissionIds, workflowMessageIds: group.workflowMessageIds,
+          originalModel: error.model || session.fixedModel, reason: error.reason || '', suggestedModel: error.suggestedModel, availableModels: choices, clientSubmissionIds: group.submissionIds, workflowMessageIds: group.workflowMessageIds,
           contextLabel, message: `${contextLabel}：${error.message} 确认后继续仍有效的原消息，取消则保持停止。` }, { signal: group.controller.signal, onWaitRegistered: refresh => { group.refreshWait = refresh; } });
         if (!selected) throw stopped();
         const anyValid = () => [...group.subscribers.values()].some(item => item.valid());

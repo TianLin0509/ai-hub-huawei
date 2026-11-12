@@ -241,6 +241,8 @@ class CompanyAssistant {
     if (Array.isArray(patch.workdays)) next.workdays = [...new Set(patch.workdays.map(Number).filter(d => Number.isInteger(d) && d >= 0 && d <= 6))];
     if ('myName' in patch) next.myName = String(patch.myName || '').trim().slice(0, 30);
     if ('cliPath' in patch) next.cliPath = String(patch.cliPath || '').trim();
+    // cliPathManual（2026-11-12）：路径是用户亲手选的才算数；自动找到并记下的，发现更高版本时会被换掉。
+    if ('cliPath' in patch) next.cliPathManual = !!next.cliPath && patch.cliPathManual === true;
     if ('email' in patch) { next.email = String(patch.email || '').trim().slice(0, 120); next.emailFrom = ['welink', 'git'].includes(patch.emailFrom) ? patch.emailFrom : 'settings'; }
     if (patch.phone && typeof patch.phone === 'object') {
       const cur = { ...DEFAULT_PHONE, ...(s.phone || {}) }, q = patch.phone, np = { ...cur };
@@ -284,8 +286,11 @@ class CompanyAssistant {
   changed() { try { this.deps.onChanged?.(); } catch { /* 界面没开 */ } }
   // 用户指定的路径还在就用它；不在了（被卸载 / 移动）或没指定，用自动发现选中的那份（多个版本时默认最新）；再不行走原来的快速查找。
   cli() {
-    const configured = this.settings().cliPath;
-    const usable = configured && fs.existsSync(configured) ? configured : this.deps.toolDiscovery?.pick?.('welink') || configured;
+    const s = this.settings(), configured = s.cliPath;
+    // 自动记下的路径可能是别的软件自带的旧版（2026-11-12 同事：一直用 UniAssistant 里的 1.0.16，npm 升到 1.0.20 后 Hub 仍扫码失败）；
+    // 不是用户亲手选的，就以自动发现按版本选出的那份为准。
+    const discovered = !s.cliPathManual ? this.deps.toolDiscovery?.pick?.('welink') : '';
+    const usable = discovered || (configured && fs.existsSync(configured) ? configured : this.deps.toolDiscovery?.pick?.('welink') || configured);
     return (this.deps.resolveCli || welink.resolveCli)({ configured: usable });
   }
   // welink-cli 版本（2026-11-06）：按「路径 + 文件修改时间」记一次，原地 npm 升级后不用重启 Hub 也会重读；只在设置页显示和写诊断。
@@ -353,7 +358,7 @@ class CompanyAssistant {
     if (!f || !fs.existsSync(f)) throw new Error('这个文件不存在');
     const exe = /\.exe$/i.test(f) ? f : welink.cliUnder(path.dirname(f));
     if (!exe) throw new Error('请选 welink-cli.exe（或 npm 全局目录里的 welink-cli.cmd）');
-    this.setSettings({ cliPath: exe });
+    this.setSettings({ cliPath: exe, cliPathManual: true });
     this.prepareWorkspace();
     this.cliSearch = { state: 'found', at: this.now(), path: exe, via: 'manual' };
     if (this.deps.toolDiscovery?.has?.('welink')) void this.deps.toolDiscovery.list('welink', { force: true }).catch(() => {});
@@ -1431,10 +1436,19 @@ class CompanyAssistant {
     const warm = this.warm[toolset];
     if (warm) {
       delete this.warm[toolset];
-      if (this.deps.getSession(warm) && !this.sessionBusy(warm) && this.toolsetFor(warm) === toolset) return warm;
+      if (this.deps.getSession(warm) && !this.sessionBusy(warm) && this.toolsetFor(warm) === toolset && !this.staleModel(warm)) return warm;
       this.retire(warm);
     }
     return this.openPooled(toolset);
+  }
+  // 预开的会话固定在一个用户已换掉的模型上（或已因模型不可用暂停）：不再用它，免得这一问又弹「原模型不可用」（2026-11-12 同事反馈）。
+  staleModel(id) {
+    const info = this.deps.getSession(id);
+    if (!info) return false;
+    if (info.modelConfirmationRequired) return true;
+    if (!info.fixedModel || info.modelPinSource === 'user') return false;
+    try { return !!require('../codeagent-model-replacements').replacementFor(this.deps.dataDir || require('../data-dir').getHubDataDir(), info.fixedModel); }
+    catch { return false; }
   }
   // 预开下一个会话：只给电脑上的问答（最常用）；手机、简报、PPT 用时再开。测试里可用 noPrewarm 关掉。
   prewarm(toolset = 'desk') {

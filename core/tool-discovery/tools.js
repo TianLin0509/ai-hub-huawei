@@ -34,7 +34,8 @@ function welinkAdapter(service, { env = process.env, findDeep = null, registryDi
     },
     probe: file => probeVersion(file, { timeoutMs: 8000, env }),
     getConfigured: () => service.settings().cliPath || '',
-    setConfigured: file => service.setSettings({ cliPath: file || '' }),
+    configuredByUser: () => service.settings().cliPathManual === true,
+    setConfigured: (file, { manual = false } = {}) => service.setSettings({ cliPath: file || '', cliPathManual: manual }),
   };
 }
 

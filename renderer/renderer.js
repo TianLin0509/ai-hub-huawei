@@ -102,6 +102,7 @@ const { createMemoPanel } = require('./memo-panel.js');
 const { installSessionFirstNavigation } = require('./session-first-navigation.js');
 installSessionFirstNavigation();
 require('./coldwhite-shell.js').installColdwhiteShell();
+try { require('./net-pass-global.js').mount({ ipcRenderer, toast: message => showToast(message) }); } catch (error) { console.warn('[net-pass-global]', error.message); }
 const { createTerminalSearch } = require('./terminal-search.js');
 const { mountTerminalPresentation } = require('./terminal-presentation.js');
 const {
@@ -8362,7 +8363,7 @@ ipcRenderer.on('session-notice', (_event, payload = {}) => {
   const session = payload.sessionId ? sessions.get(payload.sessionId) : null;
   const text = `${session && session.title ? session.title + '：' : ''}${payload.message}`;
   if (payload.modelUnavailable) {
-    require('./sticky-notice').showUnavailableModelNotice(document, { ...payload, message: text },
+    require('./sticky-notice').showUnavailableModelNotice(document, { ...payload, message: text, contextLabel: payload.contextLabel || (session && session.title) || '' },
       modelId => ipcRenderer.invoke('codeagent:switch-model', { sessionId: payload.sessionId, modelId }));
     return;
   }

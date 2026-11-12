@@ -88,7 +88,7 @@ class ToolDiscovery {
   apply(id, candidates) {
     const adapter = this.adapter(id);
     const configured = adapter.getConfigured?.() || '';
-    const decision = choose(candidates, configured);
+    const decision = choose(candidates, configured, { configuredByUser: adapter.configuredByUser ? adapter.configuredByUser() : true });
     // 只有 1 个、或多份同版本：自动用，写回设置。用户指定的路径失效且出现多个版本：清掉失效的那条，先用最新的，等用户选。
     if (decision.writeBack && decision.pick && decision.pick.path !== configured) adapter.setConfigured?.(decision.pick.path);
     else if (decision.configuredMissing && !decision.writeBack) adapter.setConfigured?.('');
@@ -110,7 +110,7 @@ class ToolDiscovery {
       if (!extra.length) throw new Error('这个程序打不开或校验没通过，请换一个');
       candidates = [...candidates, { ...extra[0], order: candidates.length }];
     }
-    adapter.setConfigured(target);
+    adapter.setConfigured(target, { manual: true });
     this.apply(id, candidates);
     this.onChanged(id);
     return this.summary(id);

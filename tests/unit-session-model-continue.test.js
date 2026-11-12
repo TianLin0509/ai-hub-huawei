@@ -888,3 +888,14 @@ test('an uncertain handed-off receipt stays cached and never retries its body', 
   const second = await f.send('已交接结果未知不可重放', options);
   assert.equal(second.unconfirmed, true); assert.equal(f.sent.length, 1);
 });
+
+test('confirming a replacement for a paused session remembers it for later default-model sessions', async t => {
+  const f = fixture(t);
+  const pending = f.send('原始消息').catch(error => ({ error }));
+  await flush();
+  assert.equal(f.requests.length, 1);
+  assert.equal(f.requests[0].reason, '账号的权威模型清单已不包含它，可能没有使用权限');
+  assert.equal(f.decide().ok, true);
+  const result = await pending; assert.equal(result.ok, true, result.error?.message);
+  assert.equal(require('../core/codeagent-model-replacements').replacementFor(f.root, OLD, { models: [NEXT], authoritative: true }), NEXT);
+});

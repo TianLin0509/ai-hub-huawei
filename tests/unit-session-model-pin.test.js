@@ -263,8 +263,7 @@ test('the persistent unavailable notice lets the user select and retry', async (
   const document = fakeDocument(), selected = [];
   const notice = notices.showUnavailableModelNotice(document, { sessionId: 'sleeping', message: '原模型不可用', availableModels: [NEXT] },
     async model => { selected.push(model); return { ok: true }; });
-  const controls = notice.children[0].children.at(-1);
-  const select = controls.children[0], button = controls.children[1];
+  const { select, confirm: button } = notice.modelParts;
   select.value = NEXT;
   await button.listeners.click();
   assert.deepEqual(selected, [NEXT]);
@@ -387,13 +386,13 @@ test('confirmation notice preselects the suggested model and waits for explicit 
   const notice = require('../renderer/sticky-notice').showUnavailableModelNotice(document,
     { sessionId: 'confirm', originalModel: OLD, suggestedModel: NEXT, message: `原模型 ${OLD} 不可用`, availableModels: ['deepseek-other', NEXT] },
     async model => { selected.push(model); return { ok: true }; });
-  assert.match(notice.children[0].textContent, new RegExp(NEXT));
-  const controls = notice.children[0].children.at(-1);
-  assert.equal(controls.children[0].value, NEXT);
+  assert.match(notice.dataset.text, new RegExp(NEXT));
+  const { select, confirm } = notice.modelParts;
+  assert.equal(select.value, NEXT);
   assert.deepEqual(selected, []);
-  assert.equal(controls.children[1].textContent, '确认切换并继续');
-  controls.children[0].value = 'deepseek-other';
-  await controls.children[1].listeners.click();
+  assert.equal(confirm.textContent, '切换并继续');
+  select.value = 'deepseek-other';
+  await confirm.listeners.click();
   assert.deepEqual(selected, ['deepseek-other']);
 });
 
@@ -402,8 +401,8 @@ test('cancelling the model confirmation keeps the stopped session untouched', ()
   const notice = require('../renderer/sticky-notice').showUnavailableModelNotice(document,
     { sessionId: 'cancel', originalModel: OLD, suggestedModel: NEXT, message: `原模型 ${OLD} 不可用`, availableModels: [NEXT] },
     model => { selected.push(model); return { ok: true }; });
-  const cancel = notice.children[1];
-  assert.equal(cancel.textContent, '取消，保持暂停');
+  const cancel = notice.modelParts.cancel;
+  assert.equal(cancel.textContent, '保持暂停');
   cancel.listeners.click();
   assert.deepEqual(selected, []);
   assert.equal(document.body.children[0].children.length, 0);
@@ -428,8 +427,9 @@ for (const policy of ['auto-switch-notify', 'stop-and-ask']) test(`a rejected on
     assert.equal(notices.at(-1).suggestedModel, '');
     assert.deepEqual(notices.at(-1).availableModels, []);
     const notice = require('../renderer/sticky-notice').showUnavailableModelNotice(fakeDocument(), notices.at(-1), () => assert.fail('must remain stopped'));
-    assert.match(notice.children[0].textContent, /暂无可用替代模型/);
-    assert.equal(notice.children[0].children.length, 0);
+    assert.match(notice.dataset.text, /暂无可用替代模型/);
+    assert.equal(notice.modelParts.select, undefined);
+    assert.equal(notice.modelParts.confirm, undefined);
   } else assert.equal(result.error, 'SESSION_MODEL_UNAVAILABLE');
   assert.equal(current.fixedModel, OLD);
 });
@@ -569,16 +569,16 @@ for (const action of ['confirm', 'cancel']) test(`new creation confirmation trav
   const pending = Promise.resolve().then(() => api.createSession({ kind: 'codeagent', opts: { model: OLD, codeagentModelPick: true, cwd: f.cwd } }));
   await Promise.resolve();
   assert.equal(api.created.length, 0);
-  const notice = document.body.children[0].children[0], controls = notice.children[0].children.at(-1);
-  assert.equal(controls.children[0].value, NEXT);
-  assert.match(notice.children[0].textContent, new RegExp(OLD));
+  const notice = document.body.children[0].children[0], { select, confirm, cancel } = notice.modelParts;
+  assert.equal(select.value, NEXT);
+  assert.match(notice.dataset.text, new RegExp(OLD));
   if (action === 'cancel') {
-    notice.children[1].listeners.click();
+    cancel.listeners.click();
     await assert.rejects(pending, { code: 'SESSION_CREATION_CANCELLED' });
     assert.equal(api.created.length, 0);
   } else {
-    controls.children[0].value = 'deepseek-other';
-    await controls.children[1].listeners.click();
+    select.value = 'deepseek-other';
+    await confirm.listeners.click();
     assert.equal((await pending).fixedModel, 'deepseek-other');
     assert.equal(api.created.length, 1);
   }
@@ -857,8 +857,8 @@ test('identically named model notices remain separate for two sessions', async (
   for (const sessionId of ['member-a', 'member-b']) notices.showUnavailableModelNotice(document,
     { sessionId, message: '同名成员原模型不可用', availableModels: [NEXT] }, async () => { selected.push(sessionId); return { ok: true }; });
   const root = document.body.children[0]; assert.equal(root.children.length, 2);
-  await root.children[0].children[0].children.at(-1).children[1].listeners.click();
-  assert.equal(root.children.length, 1); await root.children[0].children[0].children.at(-1).children[1].listeners.click();
+  await root.children[0].modelParts.confirm.listeners.click();
+  assert.equal(root.children.length, 1); await root.children[0].modelParts.confirm.listeners.click();
   assert.deepEqual(selected, ['member-a', 'member-b']);
 });
 
@@ -899,4 +899,48 @@ for (const action of ['confirm', 'cancel']) test(`sleeping team member model con
   gate.respond({ requestId: requests[0].requestId, ...(action === 'cancel' ? { cancel: true } : { modelId: NEXT }) });
   for (let i = 0; i < 8; i++) await new Promise(setImmediate);
   assert.notEqual(service.listTeams()[0].messages.find(x => x.to === 'm1').stage, 'waiting-model');
+});
+
+// 2026-11-12 同事反馈：助理问答每问一个新会话，都固定在 CodeAgent 默认的那个用不了的模型上，每问都弹框。
+test('a confirmed replacement is used by later sessions whose model only came from the CLI default', t => {
+  const f = fixture(t, { ids: [OLD, NEXT] });
+  f.write(path.join(f.configDir, 'settings.json'), { model: OLD });
+  const replacements = require('../core/codeagent-model-replacements');
+  assert.equal(f.launch('before', {}).fixedModel, OLD);
+  assert.equal(replacements.recordReplacement(f.dataDir, OLD, NEXT), true);
+  assert.equal(f.launch('after', {}).fixedModel, NEXT);
+  // 用户明确指定的模型不被替代。
+  assert.equal(f.launch('explicit', { fixedModel: OLD, modelPinSource: 'user' }).fixedModel, OLD);
+  // 替代模型不在可靠清单里时不用它。
+  f.write(pool.personalModelsFile(f.dataDir), { source: 'serve', models: [OLD], at: new Date().toISOString() });
+  assert.equal(f.launch('gone', {}).fixedModel, OLD);
+});
+
+test('replacement records chain and never point to themselves', t => {
+  const f = fixture(t);
+  const r = require('../core/codeagent-model-replacements');
+  r.recordReplacement(f.dataDir, 'model-a', 'model-b');
+  r.recordReplacement(f.dataDir, 'model-b', 'model-c');
+  assert.equal(r.replacementFor(f.dataDir, 'MODEL-A'), 'model-c');
+  assert.equal(r.replacementFor(f.dataDir, 'model-b'), 'model-c');
+  r.recordReplacement(f.dataDir, 'model-c', 'model-a');
+  assert.equal(r.replacementFor(f.dataDir, 'model-a'), '');
+  assert.equal(r.replacementFor(f.dataDir, 'model-c'), 'model-a');
+  assert.equal(r.recordReplacement(f.dataDir, 'same', 'SAME'), false);
+});
+
+test('the model notice shows the original model, reason and context in separate parts', () => {
+  const document = fakeDocument();
+  const notice = require('../renderer/sticky-notice').showUnavailableModelNotice(document,
+    { sessionId: 'layout', requestId: 'r1', creation: false, contextLabel: '会话 助理问答 · 总结周报', originalModel: OLD, suggestedModel: NEXT,
+      availableModels: [NEXT], message: `会话 助理问答 · 总结周报：原模型 ${OLD} 不可用（启动时没能选中这个模型），请手动选择可用模型后继续。` },
+    async () => ({ ok: true }));
+  const flat = node => [node.textContent, ...(node.children || []).map(flat)].join(' ');
+  const shown = flat(notice);
+  assert.match(shown, /需要换个模型才能继续/);
+  assert.match(shown, /助理问答 · 总结周报/);
+  assert.doesNotMatch(shown, /会话 助理问答/);
+  assert.match(shown, /原因：启动时没能选中这个模型/);
+  assert.match(shown, new RegExp(`${NEXT}（推荐）`));
+  assert.equal(notice.modelParts.confirm.textContent, '切换并继续');
 });

@@ -69,3 +69,14 @@ test('下载器 gate：全部源失败且自家主机被拦时放行后再下一
   assert.equal(results[0].ok, true);
   assert.deepEqual(asked, [OWN + 'latest.json']);
 });
+
+test('gatedFetch：拦截网页带 4xx 状态码也会去问放行（2026-11-12 审计）', async () => {
+  const ownGate = require('../core/own-gate');
+  const asked = [];
+  ownGate.setHandler(async url => { asked.push(url); return false; });
+  try {
+    const fetchImpl = async () => ({ ok: false, status: 403, headers: { get: () => 'text/html; charset=utf-8' }, body: null });
+    await assert.rejects(ownGate.gatedFetch(fetchImpl)('https://own.example.cn/f.zip'), /网页/);
+    assert.deepEqual(asked, ['https://own.example.cn/f.zip']);
+  } finally { ownGate.setHandler(null); }
+});

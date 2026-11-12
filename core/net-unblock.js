@@ -217,7 +217,8 @@ async function openHiddenGateWindow(BrowserWindow, url, { loadTimeoutMs = 20000,
 // 后台放行没成功时的第二步（2026-11-08 用户定：要么自动放行，要么在 Hub 里弹出网页）：在 Hub 自己的窗口里打开放行页，
 // 继续自动点放行按钮，用户也可以手动点。看到自家页面（已放行）就自动关窗。只在用户动手触发的流程里用，后台检查不弹窗。
 async function openVisibleGateWindow(BrowserWindow, url, { parent = null, show = true, timeoutMs = 180000, pollMs = 1500, afterClickMs = 3000, maxClicks = 3,
-  ownTitles = OWN_PAGE_TITLES, title = '放行下载服务器（页面上点「继续访问」或「接受」，放行后自动关闭）' } = {}) {
+  ownTitles = OWN_PAGE_TITLES, title = '放行下载服务器（页面上点「继续访问」或「接受」，放行后自动关闭）', post = null } = {}) {
+  // post：只有 POST 被拦时（GET 已通，打开放行页看到的是正常页），在窗口里对被拦的地址 POST 一次，拦截页才会出现；拿回 JSON 即已通。
   const result = { passed: false, clicked: false, closed: false, timedOut: false, text: null, error: null };
   if (!/^https?:\/\//i.test(String(url || ''))) return { ...result, error: '放行页地址无效' };
   const win = new BrowserWindow({ show, width: 1000, height: 720, title, autoHideMenuBar: true,
@@ -243,6 +244,7 @@ async function openVisibleGateWindow(BrowserWindow, url, { parent = null, show =
         if (!win.webContents.isLoading()) {
           const js = (code, ms = 3000) => timeout(win.webContents.executeJavaScript(code, true), ms, '读取放行页');
           // 和看不见的窗口同一种点法：真实鼠标点击，页面没反应再补 DOM 点击（2026-11-08 按钮不灵敏）。
+          if (post && await js('(() => { try { const o = JSON.parse(document.body ? document.body.innerText : ""); return !!o && typeof o === "object"; } catch { return false; } })()')) return finish({ passed: true });
           const r = clicks < maxClicks ? await clickGateIn(win.webContents, js, ownTitles, 0, {}) : await js(onlyCheckOwn);
           if (r && r.notGate) return finish({ passed: true });
           if (r && r.clicked) { clicks += 1; result.clicked = true; result.text = r.text || null; wait = afterClickMs; }
@@ -250,7 +252,8 @@ async function openVisibleGateWindow(BrowserWindow, url, { parent = null, show =
       } catch (_) { /* 页面正在跳转：下一轮再看 */ }
       if (!done) timer = setTimeout(tick, wait);
     };
-    win.loadURL(url).catch(() => {});
+    if (post) win.loadURL(url, { postData: [{ type: 'rawData', bytes: Buffer.from(JSON.stringify(post), 'utf8') }], extraHeaders: 'Content-Type: application/json\n' }).catch(() => {});
+    else win.loadURL(url).catch(() => {});
     timer = setTimeout(tick, pollMs);
   });
 }
@@ -353,4 +356,4 @@ class GatePasser {
 }
 function hostOf(url) { try { return new URL(url).host; } catch { return null; } }
 
-module.exports = { OWN_PAGE_TITLES, GatePasser, ClickBudget, sharedBudget, CLICK_LIMITS, pickGateButton, pickGateFallback, gateClickScript, openHiddenGateWindow, openVisibleGateWindow, postInHiddenWindow, trustedClick, GATE_WORDS, MAX_TRIES, COOLDOWN_MS };
+module.exports = { OWN_PAGE_TITLES, clickGateIn, GatePasser, ClickBudget, sharedBudget, CLICK_LIMITS, pickGateButton, pickGateFallback, gateClickScript, openHiddenGateWindow, openVisibleGateWindow, postInHiddenWindow, trustedClick, GATE_WORDS, MAX_TRIES, COOLDOWN_MS };

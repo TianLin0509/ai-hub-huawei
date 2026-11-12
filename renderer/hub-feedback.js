@@ -52,7 +52,7 @@
     const link = box.querySelector('[data-hf-open]');
     if (link) link.addEventListener('click', () => shell.showItemInFolder(link.dataset.hfOpen));
     const unblock = box.querySelector('[data-hf-unblock]');
-    if (unblock) unblock.addEventListener('click', event => { event.preventDefault(); void ipcRenderer.invoke('net-pass:open-window', unblock.dataset.hfUnblock).catch(() => {}); });
+    if (unblock) unblock.addEventListener('click', event => { event.preventDefault(); void ipcRenderer.invoke('net-pass:open-window', unblock.dataset.hfUnblock, { method: 'POST' }).catch(() => {}); });
   }
 
   // prefill.description：从错误卡「一键反馈」进来时预填现象、功能区和原始报错（5.5.24），用户可以改了再发。
