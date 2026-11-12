@@ -120,15 +120,15 @@ test('任务流：建任务 → 提问带骨架、材料和规则 → 模型提�
   assert.throws(() => f.make.start({ skeletonId: '没有', brief: '内容' }), /找不到这个骨架/);
   assert.equal(f.asks.length, 0);
 
-  const { job } = f.make.start({ skeletonId: sk.id, brief: '三项技术叠加，吞吐提升 72%' });
+  const { job } = f.make.start({ skeletonId: sk.id, brief: '三项措施叠加，指标提升 XX%' });
   assert.equal(job.state, 'waiting_agent'); assert.equal(job.chatId, 'chat-1');
   const { text, options } = f.asks[0];
   assert.deepEqual(options, { entry: 'ppt', taskTitle: 'PPT 做页 · ' + sk.name.slice(0, 18) });
-  for (const part of ['做页任务', `jobId=${job.id}`, sk.name, sk.fit, sk.chain, '三项技术叠加，吞吐提升 72%', PPT_MAKE_INSTRUCTIONS, JSON.stringify(sk.spec), 'ppt_make(jobId, spec)']) assert.ok(text.includes(part), '提问里带：' + part.slice(0, 20));
+  for (const part of ['做页任务', `jobId=${job.id}`, sk.name, sk.fit, sk.chain, '三项措施叠加，指标提升 XX%', PPT_MAKE_INSTRUCTIONS, JSON.stringify(sk.spec), 'ppt_make(jobId, spec)']) assert.ok(text.includes(part), '提问里带：' + part.slice(0, 20));
   assert.equal(f.make.status(job.id).state, 'waiting_agent');
 
   // 第 1 次提交：句末有句号 → 返回提醒，页面已经能看到这一版
-  const bad = page({ type: 'text', items: ['吞吐提升明显。'] });
+  const bad = page({ type: 'text', items: ['指标提升明显。'] });
   const first = f.make.submit({ jobId: job.id, spec: bad });
   assert.equal(first.ok, true); assert.match(first.warnings.join('；'), /句号/); assert.match(first.note, /再提交一次/);
   let now = f.make.status(job.id);
@@ -147,9 +147,9 @@ test('任务流：建任务 → 提问带骨架、材料和规则 → 模型提�
 
   // 没有提醒：一次就完成
   const clean = f.make.start({ skeletonId: sk.id, brief: '内容' }).job;
-  const ok = f.make.submit({ jobId: clean.id, spec: page({ type: 'image', placeholder: '吞吐对比曲线' }) });
+  const ok = f.make.submit({ jobId: clean.id, spec: page({ type: 'image', placeholder: '指标对比曲线' }) });
   assert.deepEqual([ok.warnings, ok.note], [[], undefined]);
-  assert.deepEqual(f.make.status(clean.id).report.imageSlots, ['吞吐对比曲线']);
+  assert.deepEqual(f.make.status(clean.id).report.imageSlots, ['指标对比曲线']);
   assert.equal(f.make.status(clean.id).state, 'done');
 
   assert.throws(() => f.make.submit({ jobId: '不存在', spec: bad }), /找不到这次做页任务/);
@@ -232,8 +232,8 @@ test('界面通道与工具：样例、预览、打开、插入、所在文件�
 
 test('粘贴页面说明直接生成（不经助理）；结构不对时说人话；写法说明带骨架、规则和示意内容', async t => {
   const f = fixture(t), handlers = createPptHandlers({ ppt: f.ppt }), sk = f.make.listSkeletons()[2];
-  const { job } = await handlers['ppt-make-render']({ spec: page({ type: 'image', placeholder: '外场对比图' }), skeletonId: sk.id });
-  assert.deepEqual([job.kind, job.state, job.skeleton, job.report.imageSlots], ['make', 'done', sk.name, ['外场对比图']]);
+  const { job } = await handlers['ppt-make-render']({ spec: page({ type: 'image', placeholder: '结果对比图' }), skeletonId: sk.id });
+  assert.deepEqual([job.kind, job.state, job.skeleton, job.report.imageSlots], ['make', 'done', sk.name, ['结果对比图']]);
   assert.equal(path.dirname(job.path), f.make.dir());
   assert.equal(f.asks.length, 0, '不给助理会话发提问');
   assert.equal((await handlers['ppt-make-render']({ spec: page({ type: 'gap' }) })).job.skeleton, '粘贴的页面说明');

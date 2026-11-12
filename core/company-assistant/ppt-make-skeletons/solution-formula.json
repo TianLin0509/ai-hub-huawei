@@ -1,212 +1,27 @@
 {
- "_骨架": "方案页·公式到框图到方向",
- "_适用": "讲一个算法或方案的原理：先用公式拆出因子，再给系统流程，最后落到几个技术方向；同一套编号贯穿三层",
- "_论证链": "原理推演（公式因子①②③）→ 系统流程（哪几个模块对应）→ 技术方向（每个方向做什么、指标）",
- "title": "三大底座：吞吐公式拆出三个因子，对应三条技术方向",
- "col": [
-  {
-   "size": 104,
-   "row": [
-    {
-     "type": "heading",
-     "t": "原理推演",
-     "size": 96
-    },
-    {
-     "type": "formula",
-     "parts": [
-      "R = ",
-      {
-       "t": "ρ",
-       "n": 3,
-       "label": "模型可用率"
-      },
-      " · ",
-      {
-       "t": "η",
-       "n": 2,
-       "label": "决策效率"
-      },
-      " · Σ B · log₂(1 + ",
-      {
-       "t": "S / (I + N)",
-       "n": 1,
-       "label": "邻区干扰"
-      },
-      ")"
-     ],
-     "note": "*注：ρ = 模型在线可用时长 / 总时长；η = 实际吞吐 / 最优标签吞吐"
-    }
-   ]
-  },
-  {
-   "type": "arrow",
-   "dir": "down",
-   "size": 22
-  },
-  {
-   "size": 150,
-   "row": [
-    {
-     "type": "heading",
-     "t": "系统流程",
-     "size": 96
-    },
-    {
-     "type": "panel",
-     "head": {
-      "text": "感知组",
-      "style": "left",
-      "sz": 14
-     },
-     "frame": "none",
-     "pad": 0,
-     "body": {
-      "type": "flow",
-      "nodes": [
-       "邻区调度\n状态",
-       {
-        "t": "①跨小区\n干扰图谱",
-        "hl": "red"
-       },
-       "逐TTI\n干扰重构"
-      ]
-     }
-    },
-    {
-     "type": "panel",
-     "head": {
-      "text": "决策组",
-      "style": "left",
-      "sz": 14
-     },
-     "frame": "none",
-     "pad": 0,
-     "body": {
-      "type": "flow",
-      "nodes": [
-       "组合优化\n求最优标签",
-       {
-        "t": "②生成式\n决策模型",
-        "hl": "red"
-       },
-       "资源\n分配"
-      ]
-     }
-    },
-    {
-     "type": "panel",
-     "head": {
-      "text": "部署组",
-      "style": "left",
-      "sz": 14
-     },
-     "frame": "none",
-     "pad": 0,
-     "body": {
-      "type": "flow",
-      "nodes": [
-       {
-        "t": "③弹性\n模型",
-        "hl": "red"
-       },
-       "低比特\n推理",
-       "基带\n芯片"
-      ]
-     }
-    }
-   ]
-  },
-  {
-   "type": "arrow",
-   "dir": "down",
-   "size": 22
-  },
-  {
-   "w": 1,
-   "row": [
-    {
-     "type": "heading",
-     "t": "技术方向",
-     "size": 96
-    },
-    {
-     "type": "panel",
-     "head": {
-      "text": "① 环境感知底座",
-      "style": "pill-teal"
-     },
-     "frame": "none",
-     "pad": 4,
-     "body": {
-      "col": [
-       {
-        "type": "text",
-        "items": [
-         "波束级干扰系数建图，快变慢变分开建模",
-         "探测资源按冲突图编排，近似全复用"
-        ]
-       },
-       {
-        "type": "metric",
-        "t": "干扰估计误差 4dB → 1.5dB"
-       }
-      ]
-     }
-    },
-    {
-     "type": "panel",
-     "head": {
-      "text": "② 生成式决策",
-      "style": "pill"
-     },
-     "frame": "none",
-     "pad": 4,
-     "body": {
-      "col": [
-       {
-        "type": "text",
-        "items": [
-         "0-1 整数规划全局求解，拿单一性标签",
-         "生成式模型逼近多解分布，避开平均解"
-        ]
-       },
-       {
-        "type": "metric",
-        "t": "决策效率 0.80 → 0.95"
-       }
-      ]
-     }
-    },
-    {
-     "type": "panel",
-     "head": {
-      "text": "③ 算芯联合",
-      "style": "pill-gold"
-     },
-     "frame": "none",
-     "pad": 4,
-     "body": {
-      "col": [
-       {
-        "type": "text",
-        "items": [
-         "弹性超网按负载切换子网，算力降约 {r:4X}",
-         "低比特量化 {b:W4A8 → W2A4}"
-        ]
-       },
-       {
-        "type": "metric",
-        "t": "异步增量推理，算力再降约 2X"
-       }
-      ]
-     }
-    }
-   ]
-  },
-  {
-   "type": "bar",
-   "t": "三个因子各有一条技术线负责，编号一一对应，缺一项增益就打折"
-  }
- ]
+  "_骨架": "方案页·公式到框图到方向",
+  "_适用": "讲一个算法或方案的原理：先用公式拆出因子，再给系统流程，最后落到几个技术方向；同一套编号贯穿三层",
+  "_论证链": "原理推演（公式因子①②③）→ 系统流程（哪几个模块对应）→ 技术方向（每个方向做什么、指标）",
+  "title": "定位语：目标公式拆出三个因子，对应三个技术方向",
+  "col": [
+    { "size": 104, "row": [
+      { "type": "heading", "t": "原理推演", "size": 96 },
+      { "type": "formula", "parts": ["Y = ", {"t": "a", "n": 1, "label": "因子一"}, " · ", {"t": "b", "n": 2, "label": "因子二"}, " · f(x, ", {"t": "c", "n": 3, "label": "因子三"}, ")"], "note": "*注：这里写各符号的含义" }
+    ] },
+    { "type": "arrow", "dir": "down", "size": 22 },
+    { "size": 150, "row": [
+      { "type": "heading", "t": "系统流程", "size": 96 },
+      { "type": "panel", "head": {"text": "模块组一", "style": "left", "sz": 14}, "frame": "none", "pad": 0, "body": { "type": "flow", "nodes": ["输入\n处理", {"t": "①关键\n模块", "hl": "red"}, "输出\n处理"] } },
+      { "type": "panel", "head": {"text": "模块组二", "style": "left", "sz": 14}, "frame": "none", "pad": 0, "body": { "type": "flow", "nodes": ["步骤\n甲", {"t": "②关键\n模块", "hl": "red"}, "步骤\n乙"] } },
+      { "type": "panel", "head": {"text": "模块组三", "style": "left", "sz": 14}, "frame": "none", "pad": 0, "body": { "type": "flow", "nodes": [{"t": "③关键\n模块", "hl": "red"}, "步骤\n丙", "步骤\n丁"] } }
+    ] },
+    { "type": "arrow", "dir": "down", "size": 22 },
+    { "w": 1, "row": [
+      { "type": "heading", "t": "技术方向", "size": 96 },
+      { "type": "panel", "head": {"text": "① 方向一", "style": "pill-teal"}, "frame": "none", "pad": 4, "body": { "col": [ { "type": "text", "items": ["这里写这个方向做什么，一个短句", "这里写关键做法，一个短句"] }, { "type": "metric", "t": "指标一 XX → XX" } ] } },
+      { "type": "panel", "head": {"text": "② 方向二", "style": "pill"}, "frame": "none", "pad": 4, "body": { "col": [ { "type": "text", "items": ["这里写这个方向做什么，一个短句", "这里写关键做法，一个短句"] }, { "type": "metric", "t": "指标二 XX → XX" } ] } },
+      { "type": "panel", "head": {"text": "③ 方向三", "style": "pill-gold"}, "frame": "none", "pad": 4, "body": { "col": [ { "type": "text", "items": ["这里写这个方向做什么，一个短句", "这里写关键做法，{b:从甲到乙}"] }, { "type": "metric", "t": "指标三 XX → XX" } ] } }
+    ] },
+    { "type": "bar", "t": "一句话结论：三个因子各有一个方向负责，编号一一对应" }
+  ]
 }

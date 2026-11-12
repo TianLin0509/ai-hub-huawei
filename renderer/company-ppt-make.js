@@ -16,7 +16,7 @@ function createPptMake({ root, ipcRenderer, notice }) {
   root.innerHTML = `<aside class="pptk-left" aria-label="骨架与内容">
       <b class="pptk-title">选一个骨架</b><div class="pptk-list" data-pptk-list></div><div class="pptk-pager" data-pptk-pager></div>
       <label class="pptk-title" for="company-ppt-make-brief">这页要讲什么（一句话或贴材料）</label>
-      <textarea id="company-ppt-make-brief" data-pptk-brief placeholder="例如：三项技术逐级叠加，50% 负载下吞吐从 1.0X 到 1.72X。也可以直接贴数据、结论和要点"></textarea>
+      <textarea id="company-ppt-make-brief" data-pptk-brief placeholder="例如：三项措施逐级叠加，指标从基线提升 XX%。也可以直接贴数据、结论和要点"></textarea>
       <div class="pptk-actions"><button type="button" class="pptw-btn pri" data-pptk="start">生成这一页</button><button type="button" class="pptw-btn sec" data-pptk="example">先看骨架样子</button></div>
       <div class="pptk-actions pptk-more"><button type="button" class="pptw-btn ghost sm" data-pptk="paste" title="别的 AI 已经写好页面说明（JSON）时，粘进来直接生成">粘贴页面说明</button><button type="button" class="pptw-btn ghost sm" data-pptk="guide" title="把骨架说明、写法规则和示意 JSON 复制出来，贴给别的 AI">复制写法说明</button></div>
     </aside>

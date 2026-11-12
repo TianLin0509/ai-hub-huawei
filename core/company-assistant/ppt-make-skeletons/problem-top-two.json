@@ -1,249 +1,39 @@
 {
- "_骨架": "问题页·上总账下两难题",
- "_适用": "先用一组数据把痛点摆出来，再拆成两个并列难题，各自讲现象、根因、空间、发力方向",
- "_论证链": "痛点分布（数据）→ 难题①②（现象→根因→空间）→ 发力方向",
- "title": "高铁发力方向：聚焦高铁TOP痛点，增益空间130%~140%",
- "titleStyle": "red",
- "col": [
-  {
-   "type": "panel",
-   "w": 0.46,
-   "head": "高铁TOP痛点：空口质差、TRP间乒乓、容量不足、弱覆盖",
-   "body": {
-    "row": [
-     {
-      "type": "bars",
-      "title": "终端重建&卡顿原因分布@A局(%)",
-      "deltas": false,
-      "series": [
-       {
-        "label": "空口质差",
-        "value": 44.3,
-        "color": "blue"
-       },
-       {
-        "label": "高负载",
-        "value": 29.5,
-        "color": "blue"
-       },
-       {
-        "label": "TRP间乒乓",
-        "value": 17,
-        "color": "blue"
-       },
-       {
-        "label": "弱覆盖",
-        "value": 9.2,
-        "color": "blue"
-       }
-      ]
-     },
-     {
-      "type": "bars",
-      "title": "直播卡顿原因分布@B局(%)",
-      "deltas": false,
-      "series": [
-       {
-        "label": "空口质差",
-        "value": 42.9,
-        "color": "blue"
-       },
-       {
-        "label": "TRP间乒乓",
-        "value": 28.6,
-        "color": "blue"
-       },
-       {
-        "label": "3.5G弱覆盖",
-        "value": 20,
-        "color": "blue"
-       },
-       {
-        "label": "FT乒乓",
-        "value": 8.6,
-        "color": "blue"
-       }
-      ]
-     }
-    ]
-   }
-  },
-  {
-   "type": "band",
-   "size": 22
-  },
-  {
-   "w": 1,
-   "row": [
-    {
-     "type": "panel",
-     "head": {
-      "text": "高速移动，测量不准不全，链路性能差",
-      "num": 1
-     },
-     "body": {
-      "col": [
-       {
-        "type": "text",
-        "bullet": "none",
-        "size": 44,
-        "items": [
-         "**现象&根因**：前后测量时刻信道变化大，测量滞后、不准、不全，导致链路难收敛，调度难决策，TRP/波束易选错"
-        ]
-       },
-       {
-        "row": [
-         {
-          "type": "image",
-          "placeholder": "高铁沿线 TRP 示意",
-          "w": 0.9
-         },
-         {
-          "type": "image",
-          "placeholder": "TRP 频繁切换与链路难收敛曲线"
-         }
-        ],
-        "w": 1
-       },
-       {
-        "type": "text",
-        "bullet": "none",
-        "size": 24,
-        "items": [
-         "**空间**：高速用户谱效提升，叠加最优资源编排，体验{r:增益空间~70%}"
-        ]
-       },
-       {
-        "row": [
-         {
-          "type": "image",
-          "placeholder": "DL 谱效对比散点（Rank1/2）",
-          "w": 1.1
-         },
-         {
-          "type": "text",
-          "bullet": "none",
-          "anchor": "ctr",
-          "items": [
-           "现网实测，高速用户(Rank1/2)下行谱效 {r:GAP 60%} vs 低速用户"
-          ]
-         }
-        ],
-        "w": 1
-       },
-       {
-        "type": "text",
-        "bullet": "none",
-        "size": 24,
-        "items": [
-         "{r:发力方向}：基于网络环境感知的先验信息，辅助消除测量扰动，补全测量信息"
-        ]
-       }
-      ],
-      "gap": 6
-     }
-    },
-    {
-     "type": "panel",
-     "head": {
-      "text": "业务重载，多频负载不均衡",
-      "num": 2
-     },
-     "body": {
-      "col": [
-       {
-        "type": "text",
-        "bullet": "none",
-        "size": 24,
-        "items": [
-         "**现象**：高铁过车时刻单频下行PRB 90%+，上行PRB~50%"
-        ]
-       },
-       {
-        "row": [
-         {
-          "type": "image",
-          "placeholder": "DL PRB 利用率曲线"
-         },
-         {
-          "type": "image",
-          "placeholder": "UL PRB 利用率曲线"
-         }
-        ],
-        "w": 1
-       },
-       {
-        "type": "text",
-        "bullet": "none",
-        "size": 44,
-        "items": [
-         "**根因**：多频可缓解容量压力，但过车时间短、负载重、测量开销大，测量时长无法满足多频间及时切换，负载不均衡"
-        ]
-       },
-       {
-        "row": [
-         {
-          "type": "image",
-          "placeholder": "秒级 PRB 利用率（两频 GAP>40%）"
-         },
-         {
-          "col": [
-           {
-            "type": "text",
-            "bullet": "none",
-            "size": 40,
-            "items": [
-             "**空间**：负载不均衡（80%-20%）->负载均衡（60%），{r:增益空间~30%}"
-            ]
-           },
-           {
-            "type": "table",
-            "head": [
-             "",
-             "谱效增益",
-             "资源增益",
-             "体验增益"
-            ],
-            "rows": [
-             [
-              "2.6G 100M",
-              "1.2",
-              "2",
-              "2.4"
-             ],
-             [
-              "2.6G 60M",
-              "0.625",
-              "0.5",
-              "0.3"
-             ],
-             [
-              "平均体验",
-              "",
-              "",
-              "1.35"
-             ]
-            ]
-           }
-          ],
-          "gap": 4
-         }
-        ],
-        "w": 1.7
-       },
-       {
-        "type": "text",
-        "bullet": "none",
-        "size": 24,
-        "items": [
-         "{r:发力方向}：融合历史记忆信息，免测量免交互，使能快速多频选择决策"
-        ]
-       }
-      ],
-      "gap": 6
-     }
-    }
-   ]
-  }
- ]
+  "_骨架": "问题页·上总账下两难题",
+  "_适用": "先用一组数据把痛点摆出来，再拆成两个并列难题，各自讲现象、根因、空间、发力方向",
+  "_论证链": "痛点分布（数据）→ 难题①②（现象→根因→空间）→ 发力方向",
+  "title": "定位语：一句话写出主要问题和改进空间XX%",
+  "titleStyle": "red",
+  "col": [
+    { "type": "panel", "w": 0.46, "head": "总账：用一句话概括几类主要问题",
+      "body": { "row": [
+        { "type": "bars", "title": "问题分布·场景一(%)", "deltas": false, "series": [ {"label": "问题A", "value": 40, "color": "blue"}, {"label": "问题B", "value": 30, "color": "blue"}, {"label": "问题C", "value": 20, "color": "blue"}, {"label": "问题D", "value": 10, "color": "blue"} ] },
+        { "type": "bars", "title": "问题分布·场景二(%)", "deltas": false, "series": [ {"label": "问题A", "value": 45, "color": "blue"}, {"label": "问题C", "value": 25, "color": "blue"}, {"label": "问题B", "value": 20, "color": "blue"}, {"label": "问题E", "value": 10, "color": "blue"} ] }
+      ] } },
+    { "type": "band", "size": 22 },
+    { "w": 1, "row": [
+      { "type": "panel", "head": {"text": "难题一：用一个短句点出问题", "num": 1},
+        "body": { "col": [
+          { "type": "text", "bullet": "none", "size": 44, "items": ["**现象&根因**：这里写看到的现象，以及背后的原因，一到两行，写具体事实"] },
+          { "row": [ { "type": "image", "placeholder": "场景示意图", "w": 0.9 }, { "type": "image", "placeholder": "说明现象的曲线或截图" } ], "w": 1 },
+          { "type": "text", "bullet": "none", "size": 24, "items": ["**空间**：这里写解决后能拿到多少，{r:改进空间约XX%}"] },
+          { "row": [ { "type": "image", "placeholder": "支撑空间判断的数据图", "w": 1.1 }, { "type": "text", "bullet": "none", "anchor": "ctr", "items": ["这里写数据图说明了什么，{r:差距XX%}"] } ], "w": 1 },
+          { "type": "text", "bullet": "none", "size": 24, "items": ["{r:发力方向}：这里写打算从哪里入手解决"] }
+        ], "gap": 6 } },
+      { "type": "panel", "head": {"text": "难题二：用一个短句点出问题", "num": 2},
+        "body": { "col": [
+          { "type": "text", "bullet": "none", "size": 24, "items": ["**现象**：这里写看到的现象，带一个关键数字"] },
+          { "row": [ { "type": "image", "placeholder": "现象曲线一" }, { "type": "image", "placeholder": "现象曲线二" } ], "w": 1 },
+          { "type": "text", "bullet": "none", "size": 44, "items": ["**根因**：这里写背后的原因，一到两行，讲清为什么现有做法解决不了"] },
+          { "row": [
+            { "type": "image", "placeholder": "支撑根因的数据图" },
+            { "col": [
+              { "type": "text", "bullet": "none", "size": 40, "items": ["**空间**：这里写从现状到目标的变化，{r:改进空间约XX%}"] },
+              { "type": "table", "head": ["", "指标一", "指标二", "指标三"], "rows": [["条件甲", "XX", "XX", "XX"], ["条件乙", "XX", "XX", "XX"], ["平均", "", "", "XX"]] }
+            ], "gap": 4 }
+          ], "w": 1.7 },
+          { "type": "text", "bullet": "none", "size": 24, "items": ["{r:发力方向}：这里写打算从哪里入手解决"] }
+        ], "gap": 6 } }
+    ] }
+  ]
 }

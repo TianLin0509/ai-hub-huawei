@@ -11,13 +11,13 @@ const port = () => new Promise(resolve => { const server = net.createServer(); s
 const out = process.env.PPT_UI_OUT || path.resolve(__dirname, '../artifacts', `ppt-make-${Date.now()}`);
 
 // 模型回包夹具：一条句末带句号、一个素材库里没有的素材、两个图位。
-const MODEL_SPEC = { title: '调度增益：两项改进叠加，外场吞吐提升XX%', col: [
+const MODEL_SPEC = { title: '示例页：两项改进叠加，指标提升XX%', col: [
   { row: [
-    { type: 'panel', head: '现状与问题', body: { type: 'text', items: ['邻区干扰不可见，调度只看本小区。', '高负载下 {r:XX%} 用户速率不达标'] } },
-    { type: 'panel', head: '外场结果', body: { col: [{ type: 'image', placeholder: '外场吞吐对比曲线' }, { type: 'image', placeholder: '测试路线截图' }] } },
+    { type: 'panel', head: '现状与问题', body: { type: 'text', items: ['现有做法看不到全局信息。', '高负载下 {r:XX%} 用户速率不达标'] } },
+    { type: 'panel', head: '验证结果', body: { col: [{ type: 'image', placeholder: '指标对比曲线' }, { type: 'image', placeholder: '测试过程截图' }] } },
   ] },
   { type: 'material', name: '灰渐变屋顶栏头', size: 40 },
-  { type: 'bar', t: '两项改进叠加后吞吐提升 XX%，待补外场数据' },
+  { type: 'bar', t: '两项改进叠加后指标提升 XX%，待补数据' },
 ] };
 const PASTED = { title: '粘贴页：别的模型写好的页面说明', col: [{ type: 'text', items: ['直接生成，不经过助理', '关键数字 {r:1.3X}'] }, { type: 'bar', t: '粘贴的页面说明可以直接生成' }] };
 
@@ -86,11 +86,11 @@ async function main() {
         if(name==='ppt-make-status'&&a.jobId===id){if(window.__mk.phase==='waiting')return{ok:true,job:waiting};if(window.__mk.phase==='submit'){window.__mk.phase='done';await invoke('company-assistant:ppt-make-rerender',{jobId:id,spec:${j(MODEL_SPEC)}})}return invoke(ch,a)}
         if(['ppt-make-open','ppt-make-insert','ppt-make-folder'].includes(name)){window.__mk.calls.push([name,a.jobId]);return name==='ppt-make-insert'?{ok:true,page:5,target:'季度汇报.pptx'}:{ok:true}}
         return invoke(ch,a)}})()`);
-    await click('[data-pptk-brief]'); await c.send('Input.insertText', { text: '两项调度改进叠加后，外场吞吐提升，数据待补' });
+    await click('[data-pptk-brief]'); await c.send('Input.insertText', { text: '两项改进叠加后，指标提升，数据待补' });
     await click('[data-pptk="start"]');
     await wait('document.querySelector(".pptk-busy b")?.textContent==="正在让助理写页面内容…"', 'waiting state');
     await wait('/已用 [1-9]\\d* 秒/.test(document.querySelector("[data-pptk-clock]")?.textContent||"")', 'elapsed clock', 8000);
-    assert.deepEqual(await c.eval('window.__mk.calls[0]'), ['ppt-make-start', { skeletonId: await c.eval('document.querySelector(".pptk-sk.on").dataset.id'), brief: '两项调度改进叠加后，外场吞吐提升，数据待补' }]);
+    assert.deepEqual(await c.eval('window.__mk.calls[0]'), ['ppt-make-start', { skeletonId: await c.eval('document.querySelector(".pptk-sk.on").dataset.id'), brief: '两项改进叠加后，指标提升，数据待补' }]);
     await oneScreen('生成中');
     await shot('03-generating');
     await c.eval('window.__mk.phase="submit"');
@@ -98,9 +98,9 @@ async function main() {
     const warns = await c.eval('[...document.querySelectorAll(".pptk-warn li")].map(e=>e.textContent)');
     assert.ok(warns.some(w => /句号/.test(w)) && warns.some(w => /素材库里没有/.test(w)), '自查提醒：' + warns.join(' | '));
     const slots = await c.eval('[...document.querySelectorAll(".pptk-slots li")].map(e=>e.textContent)');
-    assert.ok(slots.includes('外场吞吐对比曲线') && slots.includes('测试路线截图'), '待贴图位：' + slots.join(' | '));
+    assert.ok(slots.includes('指标对比曲线') && slots.includes('测试过程截图'), '待贴图位：' + slots.join(' | '));
     assert.match(await text('[data-pptk-cap]'), /生成结果/);
-    assert.match(await c.eval('document.querySelector(".pptk-slide").innerHTML'), /调度增益/);
+    assert.match(await c.eval('document.querySelector(".pptk-slide").innerHTML'), /示例页/);
     await oneScreen('模型提交后');
     await shot('04-result-warnings');
     result.checks.push(`生成这一页：等待时显示「正在让助理写页面内容…」和已用时间；模型提交（夹具）后右栏列出 ${warns.length} 条自查提醒、${slots.length} 个待贴图位，预览换成新页`);
