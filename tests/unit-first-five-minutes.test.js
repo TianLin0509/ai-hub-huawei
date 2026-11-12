@@ -52,7 +52,7 @@ test('缺已读记录时用有效升级来源提示，支持已消费的 .seen �
 test('跨三个版本才显示固定导览，功能关闭后不在导览中出现', t => {
   assert.doesNotMatch(updates(t, { seen: '1.0.0', count: 2 }).notice.innerHTML, /这段时间新增了/);
   const f = updates(t, { seen: '1.0.0' });
-  assert.match(f.notice.innerHTML, /这段时间新增了：助理整理工作信息；会议留存录音、原话和纪要；会议室自动抢订；PPT 找原页；论坛看热帖；考勤看工时；还有桌宠、号池和/);
+  assert.match(f.notice.innerHTML, /这段时间新增了：助理整理工作信息；会议留存录音、原话和纪要；会议室自动抢订；PPT 找原页；帖子看发文和热帖；考勤看工时；还有桌宠、号池和/);
   assert.match(f.notice.innerHTML, /可选功能/);
   const trimmed = updates(t, { seen: '1.0.0', features: { companyAssistant: false, companyForum: false, companyAttendance: false, hubPet: false } });
   assert.doesNotMatch(trimmed.notice.innerHTML, /助理|会议|PPT|论坛|考勤|桌宠|可选功能/);

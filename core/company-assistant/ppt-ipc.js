@@ -64,6 +64,7 @@ function createPptHandlers(service) {
     'ppt-team-pack-check': () => service.ppt.materials.checkTeamPack(),
     // 做页 Tab（2026-11-11）：选骨架 → 助理写页面说明 → 引擎生成；样例不经模型。打开、插入只在用户点击时执行。
     'ppt-make-skeletons': () => ({ ok: true, skeletons: service.ppt.make.listSkeletons() }),
+    'ppt-make-pack': () => service.ppt.make.templatePack(),
     'ppt-make-example': request => service.ppt.make.example(request?.skeletonId),
     'ppt-make-render': request => service.ppt.make.renderSpec(request),
     'ppt-make-guide': request => ({ ok: true, text: service.ppt.make.guideText(request?.skeletonId) }),

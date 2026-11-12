@@ -1,20 +1,135 @@
 {
-  "_骨架": "趋势页·多个变化收敛到两条主线",
-  "_适用": "讲外部环境或技术趋势：上面并排列出几个变化（各配一张小图），光带向下收敛，落到两条主线各三点",
-  "_论证链": "N 个变化（是什么、量化到多大）→ 收敛 → 两条主线（各自做什么）→ 结论",
-  "title": "定位语：几个变化推动工作从现状A走向目标B",
-  "col": [
-    { "w": 1, "row": [
-      { "type": "card", "frame": "none", "stack": "col", "imageFirst": true, "title": "变化一", "bullet": "none", "sz": 12, "items": ["一句话写这个变化是什么，量化到 {r:XX%}"], "image": {"placeholder": "变化一的小图", "w": 1.3} },
-      { "type": "card", "frame": "none", "stack": "col", "imageFirst": true, "title": "变化二", "bullet": "none", "sz": 12, "items": ["一句话写这个变化是什么，量化到 {r:XX}"], "image": {"placeholder": "变化二的小图", "w": 1.3} },
-      { "type": "card", "frame": "none", "stack": "col", "imageFirst": true, "title": "变化三", "bullet": "none", "sz": 12, "items": ["一句话写这个变化是什么，量化到 {r:XX}"], "image": {"placeholder": "变化三的小图", "w": 1.3} },
-      { "type": "card", "frame": "none", "stack": "col", "imageFirst": true, "title": "变化四", "bullet": "none", "sz": 12, "items": ["一句话写这个变化是什么，以及带来的影响"], "image": {"placeholder": "变化四的小图", "w": 1.3} },
-      { "type": "card", "frame": "none", "stack": "col", "imageFirst": true, "title": "变化五", "bullet": "none", "sz": 12, "items": ["一句话写这个变化是什么，以及带来的影响"], "image": {"placeholder": "变化五的小图", "w": 1.3} }
-    ] },
-    { "type": "band", "size": 30, "flip": true, "color": "gray" },
-    { "w": 0.82, "row": [
-      { "type": "panel", "head": {"text": "主线一", "style": "roof"}, "body": { "type": "text", "items": ["方向一：从做法甲走向{b:做法乙}", "方向二：从做法丙走向{b:做法丁}", "方向三：关键能力提升约 {y:XX}"] } },
-      { "type": "panel", "head": {"text": "主线二", "style": "roof"}, "body": { "type": "text", "items": ["目标一：在条件X下也要达到 {y:XX}", "保障一：{b:措施甲 + 措施乙}，有兜底办法", "验证一：范围从 XX 扩到 XX，达标才算完成"] } }
-    ] }
-  ]
+ "_骨架": "趋势页·多个变化收敛到两条主线",
+ "_分类": "现状与问题",
+ "_适用": "讲外部环境或技术趋势：上面并排列出几个变化（各配一张小图），光带向下收敛，落到两条主线各三点",
+ "_论证链": "N 个变化（是什么、量化到多大）→ 收敛 → 两条主线（各自做什么）→ 结论",
+ "title": "定位语：几个变化推动工作从现状A走向目标B",
+ "col": [
+  {
+   "w": 1,
+   "row": [
+    {
+     "type": "card",
+     "frame": "none",
+     "stack": "col",
+     "imageFirst": true,
+     "title": "变化一",
+     "bullet": "none",
+     "sz": 12,
+     "items": [
+      "一句话写这个变化是什么，量化到 {r:XX%}"
+     ],
+     "image": {
+      "placeholder": "变化一的小图",
+      "w": 1.3
+     }
+    },
+    {
+     "type": "card",
+     "frame": "none",
+     "stack": "col",
+     "imageFirst": true,
+     "title": "变化二",
+     "bullet": "none",
+     "sz": 12,
+     "items": [
+      "一句话写这个变化是什么，量化到 {r:XX}"
+     ],
+     "image": {
+      "placeholder": "变化二的小图",
+      "w": 1.3
+     }
+    },
+    {
+     "type": "card",
+     "frame": "none",
+     "stack": "col",
+     "imageFirst": true,
+     "title": "变化三",
+     "bullet": "none",
+     "sz": 12,
+     "items": [
+      "一句话写这个变化是什么，量化到 {r:XX}"
+     ],
+     "image": {
+      "placeholder": "变化三的小图",
+      "w": 1.3
+     }
+    },
+    {
+     "type": "card",
+     "frame": "none",
+     "stack": "col",
+     "imageFirst": true,
+     "title": "变化四",
+     "bullet": "none",
+     "sz": 12,
+     "items": [
+      "一句话写这个变化是什么，以及带来的影响"
+     ],
+     "image": {
+      "placeholder": "变化四的小图",
+      "w": 1.3
+     }
+    },
+    {
+     "type": "card",
+     "frame": "none",
+     "stack": "col",
+     "imageFirst": true,
+     "title": "变化五",
+     "bullet": "none",
+     "sz": 12,
+     "items": [
+      "一句话写这个变化是什么，以及带来的影响"
+     ],
+     "image": {
+      "placeholder": "变化五的小图",
+      "w": 1.3
+     }
+    }
+   ]
+  },
+  {
+   "type": "band",
+   "size": 30,
+   "flip": true,
+   "color": "gray"
+  },
+  {
+   "w": 0.82,
+   "row": [
+    {
+     "type": "panel",
+     "head": {
+      "text": "主线一",
+      "style": "roof"
+     },
+     "body": {
+      "type": "text",
+      "items": [
+       "方向一：从做法甲走向{b:做法乙}",
+       "方向二：从做法丙走向{b:做法丁}",
+       "方向三：关键能力提升约 {y:XX}"
+      ]
+     }
+    },
+    {
+     "type": "panel",
+     "head": {
+      "text": "主线二",
+      "style": "roof"
+     },
+     "body": {
+      "type": "text",
+      "items": [
+       "目标一：在条件X下也要达到 {y:XX}",
+       "保障一：{b:措施甲 + 措施乙}，有兜底办法",
+       "验证一：范围从 XX 扩到 XX，达标才算完成"
+      ]
+     }
+    }
+   ]
+  }
+ ]
 }

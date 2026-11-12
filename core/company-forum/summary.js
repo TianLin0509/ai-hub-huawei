@@ -25,7 +25,7 @@ function pickForSummary(snapshot, max = 10) {
 
 function summaryPrompt(picked, { day } = {}) {
   const lines = [
-    `今天是 ${day}。下面是公司内部论坛（稼先社区、心声社区）今天的热门帖子，每条带编号。请：`,
+    `今天是 ${day}。下面是公司发文和公司内部论坛（稼先社区、心声社区）今天排在前面的内容，每条带编号。请：`,
     '1. 写「今日看点」3–5 句：大家在讨论什么、有什么值得关注的趋势或争议。依据的编号只写进 sources，句子里不出现编号；只讲帖子内容，不评论摘录多少、数据全不全。',
     '2. 给每条帖子写一句话摘要（40 字以内），说清帖子讲了什么、结论或争议点是什么。只依据下面给出的标题和正文摘录，不补充外部信息；没有正文摘录的，依据标题写，并在摘要末尾加「（据标题）」。',
     '3. 不调用任何工具、不访问网络、不写文件，直接回答。',
@@ -33,7 +33,7 @@ function summaryPrompt(picked, { day } = {}) {
     '',
   ];
   for (const x of picked) {
-    const p = x.post, meta = [x.siteName + ' · ' + x.list, p.board, p.views != null ? `阅读 ${p.views}` : '', p.replies != null ? `回复 ${p.replies}` : ''].filter(Boolean).join('，');
+    const p = x.post, meta = [x.siteName + ' · ' + x.list, p.code, p.board, p.views != null ? `阅读 ${p.views}` : '', p.replies != null ? `回复 ${p.replies}` : ''].filter(Boolean).join('，');
     lines.push(`[${x.source}] ${p.title}（${meta}）`);
     if (p.excerpt) lines.push('正文摘录：' + short(p.excerpt, EXCERPT_CHARS));
     lines.push('');

@@ -11,20 +11,24 @@ const KEEP_FILES = 30;
 const MAX_SUBMITS = 3; // 首次提交 + 按自查提醒修改 2 轮
 const ACTIVE = ['waiting_agent', 'revising'];
 
-// 骨架：目录里每个 json 一个；下划线开头的三个字段是说明，其余就是一份可直接生成的示意页面说明。
+// 骨架分类按汇报的论证顺序排；不在表里的分类排最后。
+const CATEGORIES = ['现状与问题', '方案与原理', '结果与增益', '规划与计划', '盘点与总结'];
+const rank = c => { const i = CATEGORIES.indexOf(c); return i < 0 ? CATEGORIES.length : i; };
+// 骨架：目录里每个 json 一个；下划线开头的字段是说明，其余就是一份可直接生成的示意页面说明。
 function listSkeletons(dir = SKELETON_DIR) {
   return fs.readdirSync(dir).filter(n => n.endsWith('.json')).sort().map(n => {
-    const { _骨架: name, _适用: fit, _论证链: chain, ...spec } = JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8').replace(/^\uFEFF/, ''));
-    return { id: n.slice(0, -5), name, fit, chain, spec };
-  });
+    const { _骨架: name, _适用: fit, _论证链: chain, _分类: category = '其他', ...spec } = JSON.parse(fs.readFileSync(path.join(dir, n), 'utf8').replace(/^\uFEFF/, ''));
+    return { id: n.slice(0, -5), name, fit, chain, category, spec };
+  }).sort((a, b) => rank(a.category) - rank(b.category));
 }
+const packName = count => `通用汇报页模板包-${count}页.pptx`;
 
 const pad = (n, w = 2) => String(n).padStart(w, '0');
 const stamp = d => `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}-${pad(d.getMilliseconds(), 3)}`;
 const fileName = text => String(text || '').split(/[:：]/)[0].replace(/[\\/:*?"<>|\s]+/g, ' ').trim().slice(0, 24) || '汇报页';
-// 文件名以时间戳开头，按名字排序就是按时间排序；超出的删最旧的。
+// 文件名以时间戳开头，按名字排序就是按时间排序；超出的删最旧的。模板包不带时间戳，不参与淘汰。
 function prune(dir, keep = KEEP_FILES) {
-  const files = fs.readdirSync(dir).filter(n => /\.pptx$/i.test(n) && !n.startsWith('~$')).sort();
+  const files = fs.readdirSync(dir).filter(n => /^\d{8}-.*\.pptx$/i.test(n)).sort();
   for (const n of files.slice(0, Math.max(0, files.length - keep))) {
     try { fs.rmSync(path.join(dir, n)); } catch { /* 正被 PowerPoint 打开着：留到下次再删 */ }
   }
@@ -145,6 +149,17 @@ class PptMake {
     try { this.apply(job, spec); } catch (error) { this.jobs.delete(job.id); throw error; }
     return { ok: true, job: { ...job } };
   }
+  // 「下载整套模板」：全部骨架的示意内容生成一份多页 pptx，同名覆盖；不经模型、不依赖素材包。
+  // 上一份正在 PowerPoint 里开着时写不进去，内容相同，直接用开着的那份。
+  templatePack() {
+    const list = this.listSkeletons(), file = path.join(this.dir(), packName(list.length));
+    const { buffer } = engine.build(list.map(s => s.spec), { materials: n => this.material(n) });
+    fs.mkdirSync(this.dir(), { recursive: true });
+    try { fs.writeFileSync(file, buffer); }
+    catch (error) { if (!['EBUSY', 'EPERM'].includes(error.code) || !fs.existsSync(file)) throw error; }
+    const job = this.add({ kind: 'pack', skeleton: '整套模板', state: 'done', path: file, pages: list.length });
+    return { ok: true, job: { ...job } };
+  }
   // 不经模型：直接用骨架自带的示意内容生成一页，给「先看骨架样子」。
   example(skeletonId) {
     const sk = this.skeleton(skeletonId);
@@ -227,4 +242,4 @@ class PptMake {
   }
 }
 
-module.exports = { PptMake, listSkeletons, packShape, prune, KEEP_FILES, MAX_SUBMITS };
+module.exports = { PptMake, listSkeletons, packShape, prune, CATEGORIES, KEEP_FILES, MAX_SUBMITS };

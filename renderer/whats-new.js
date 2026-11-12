@@ -37,7 +37,7 @@
     const features = [], optional = [];
     if (company && enabled('companyAssistant')) { features.push('助理整理工作信息'); optional.push('助理'); }
     if (company && enabled('companyAssistant')) features.push('会议留存录音、原话和纪要', '会议室自动抢订', 'PPT 找原页');
-    if (company && enabled('companyForum')) { features.push('论坛看热帖'); optional.push('论坛'); }
+    if (company && enabled('companyForum')) { features.push('帖子看发文和热帖'); optional.push('帖子'); }
     if (company && enabled('companyAttendance')) { features.push('考勤看工时'); optional.push('考勤'); }
     const extra = [];
     if (enabled('hubPet')) { extra.push('桌宠'); optional.push('桌宠'); }

@@ -57,9 +57,12 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "恢复读文件与发图片回家：结果以 60 KB 以内明文传回"
+    "做页：骨架扩到 23 个，按分类筛选、一屏分页；新增「下载整套模板」，一键生成全部骨架的多页模板",
+    "论坛改名「帖子」：新增公司发文（政策讲话、公司文件、公告），和心声、稼先各占一个页签，一屏看完、翻页不用滚动",
+    "公司发文白天每小时自动重看，新发文带「新」标并提醒（可在帖子设置里调间隔或关掉）",
+    "帖子取数改借本机 Edge 的登录状态并走公司统一登录入口，心声、稼先不用再反复手动登录"
   ],
-  "version": "5.6.10",
+  "version": "5.6.11",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

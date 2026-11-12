@@ -9,6 +9,7 @@ const vm = require('node:vm');
 const { CompanyAttendance } = require('../core/company-attendance/service');
 const { CompanyForum, dayKey } = require('../core/company-forum/service');
 const { EXTRACTION_VERSION } = require('../core/company-forum/extract');
+const { SITES } = require('../core/company-forum/sites');
 const { createForumBrowser } = require('../main/company-forum-browser');
 const { looksLikeLogin } = require('../core/company-forum/extract');
 const originalLogin = require('./fixtures/company-forum-login-407a7af.cjs');
@@ -30,12 +31,13 @@ function ipc(forum) {
   return (name, request) => handlers.get('company-forum:' + name)({}, request);
 }
 function seedLegacy(forum, version) {
-  const snap = { day: dayKey(), at: Date.now(), sites: ['jx', 'xinsheng'].map(id => ({ id, ok: true, lists: [] })) };
+  const snap = { day: dayKey(), at: Date.now(), sites: SITES.map(({ id }) => ({ id, ok: true, lists: [] })) };
   if (version !== undefined) snap.extractionVersion = version;
   forum.write(`forum-${snap.day}.json`, snap);
 }
+const landed = args => { try { return new URL(args.url).searchParams.get('redirect') || args.url; } catch { return args.url; } };
 const loginPage = args => ({ finalUrl: args.url, text: '请输入账号', textLength: 5, needsLogin: true, json: [], sections: [], links: [] });
-const normalPage = args => ({ finalUrl: args.url, text: '论坛正常内容 '.repeat(20), textLength: 140, needsLogin: false, json: [], sections: [], links: [] });
+const normalPage = args => ({ finalUrl: landed(args), text: '论坛正常内容 '.repeat(20), textLength: 140, needsLogin: false, json: [], sections: [], links: [] });
 function loginState(forum, id) { return forum.status().sites.find(s => s.id === id); }
 
 for (const version of [undefined, 0, 1, 2]) {
@@ -48,7 +50,7 @@ for (const version of [undefined, 0, 1, 2]) {
     await forum.syncing;
     await call('ensure-today');
     await turn();
-    assert.equal(captures, 2);
+    assert.equal(captures, SITES.length);
     assert.ok(Number.isInteger(EXTRACTION_VERSION) && EXTRACTION_VERSION > 0);
     assert.equal(forum.snapshot().extractionVersion, EXTRACTION_VERSION);
     assert.equal(forum.status().needsRefresh, false);
@@ -62,7 +64,7 @@ test('只同步一站不能把另一站的旧快照标成新版', async t => {
   await forum.sync({ sites: ['jx'], reason: 'login' });
   await ipc(forum)('ensure-today');
   await forum.syncing;
-  assert.equal(captures, 3);
+  assert.equal(captures, 1 + SITES.length);
   assert.equal(forum.status().needsRefresh, false);
 });
 
@@ -112,7 +114,7 @@ function browserFixture(t, { readyAfter = Infinity, text = '统一身份认证 �
       windows.push(this);
     }
     async loadURL(target) {
-      this.url = target;
+      this.url = landed({ url: target });
       responses.forEach((response, index) => {
         this.webContents.debugger.emit('message', {}, 'Network.responseReceived', {
           requestId: String(index), response: { url: response.url, status: response.status || 200, mimeType: 'application/json' },
@@ -137,7 +139,7 @@ test('经论坛服务抓取时等待第八秒自动 SSO 返回', async t => {
   const forum = service(t, { capture: args => { options.push(args); return browser.capture(args); } });
   let result;
   forum.sync().then(r => { result = r; });
-  await advance(t, 24000);
+  await advance(t, 45000);
   assert.equal(result?.sites[0].needsLogin, false);
   assert.ok(options.every(args => args.loginGraceMs === 25000));
   assert.equal(windows.filter(w => w.options.show).length, 0);
@@ -163,10 +165,7 @@ test('跨站登录占用原因经 IPC 状态传到真实页面渲染函数', asy
   assert.match(jx.loginError, /心声.*登录窗口.*(?:登录|关)/);
   assert.equal(windows.filter(w => w.options.show).length, 1);
   assert.match(windows[0].url, /xinsheng/);
-  const source = fs.readFileSync(path.join(__dirname, '../renderer/company-forum-page.js'), 'utf8');
-  const functions = source.slice(source.indexOf('  function siteHtml(site) {'), source.indexOf('  function panelHtml() {'));
-  const render = new Function('data', 'tab', 'esc', 'when', 'num', 'postKey', functions + '\nreturn siteHtml(data.sites.find(s => s.id === "jx"));');
-  const html = render(data, {}, String, String, String, (id, title) => id + '|' + title);
+  const html = renderPage(data, 'siteHtml(data.sites.find(s => s.id === "jx"))');
   assert.match(html, /心声.*登录窗口.*(?:登录|关)/);
 });
 
@@ -178,7 +177,7 @@ for (const siteIds of [['jx'], ['jx', 'xinsheng', 'jx']]) {
     const forum = service(t, {
       capture: async args => {
         requests.push(args);
-        if (requests.length <= 2) { await pending; return loginPage(args); }
+        if (requests.length <= 2) { await pending; return loginPage(args); } // 前两站（稼先、心声）停在登录页，第三站正常
         return normalPage(args);
       },
       login: async () => ({ ok: true }),
@@ -189,7 +188,7 @@ for (const siteIds of [['jx'], ['jx', 'xinsheng', 'jx']]) {
     release();
     await syncing;
     for (let i = 0; i < 5; i += 1) await turn();
-    const expectedCaptures = siteIds.length === 1 ? 3 : 4;
+    const expectedCaptures = SITES.length + new Set(siteIds).size;
     assert.equal(requests.length, expectedCaptures);
     assert.equal(forum.snapshot().reason, 'login');
     for (const id of new Set(siteIds)) {
@@ -219,12 +218,14 @@ for (const scenario of englishShortPages) {
   }
 }
 
-function renderOverview(data) {
+// 取页面里从 postKey 到 panelHtml 之前的渲染函数，在给定状态上执行一个表达式。
+function renderPage(data, expression) {
   const source = fs.readFileSync(path.join(__dirname, '../renderer/company-forum-page.js'), 'utf8');
-  const definition = source.slice(source.indexOf('  function overviewHtml() {'), source.indexOf('  function siteShort('));
+  const definition = source.slice(source.indexOf('  const postKey = '), source.indexOf('  function panelHtml() {'));
   const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  return new Function('data', 'esc', 'when', definition + '\nreturn overviewHtml();')(data, escape, String);
+  return new Function('data', 'esc', 'when', 'num', 'ORDER', 'NEW_MS', 'source', 'perPage', 'pageNo', definition + '\nreturn ' + expression + ';')(data, escape, String, String, ['w3', 'xinsheng', 'jx'], 86400000, 'overview', 10, {});
 }
+const renderOverview = data => renderPage(data, 'overviewHtml()');
 
 test('自动同步关闭的旧版本当天快照显示手动刷新提示', async t => {
   let captures = 0;
@@ -263,8 +264,9 @@ test('登录后的补抓落盘失败进入页面状态且不会自行重复补�
   const original = forum.sync();
   await forum.login('jx'); await turn();
   releases.shift()(); await turn();
+  releases.shift()(); await turn();
   releases.shift()(); await original; await turn();
-  assert.equal(captures, 3);
+  assert.equal(captures, 4);
   fs.mkdirSync(forum.file(`forum-${forum.status().day}.json.${process.pid}.tmp`));
   const followup = forum.syncing;
   releases.shift()();
@@ -274,7 +276,7 @@ test('登录后的补抓落盘失败进入页面状态且不会自行重复补�
   assert.match(data.syncError || '', /EISDIR/);
   assert.match(renderOverview(data), /EISDIR/);
   assert.equal(data.syncing, false);
-  assert.equal(captures, 3);
+  assert.equal(captures, 4);
   assert.equal(forum.pendingLoginSites.size, 0);
 });
 

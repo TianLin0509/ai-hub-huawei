@@ -2956,7 +2956,7 @@ if (webSessions) {
   } catch (error) { console.error('[web-roundtable] 网页圆桌未启动：', error.message); }
 }
 let companyWebAi = null;
-// 公司版「论坛」（2026-10-18）：每天同步稼先社区、心声社区的热门帖子并附 AI 摘要，数据只留在本机 Hub 数据目录。
+// 公司版「帖子」（原「论坛」，2026-10-18；2026-11-12 加公司发文）：每天同步公司发文、稼先社区、心声社区并附 AI 摘要，数据只留在本机 Hub 数据目录。
 // 只在公司版启用（core/company-forum/gate.js）。取数用 Hub 自己的隐藏浏览器窗口（main/company-forum-browser.js）。
 let companyForumService = null, companyForumBrowser = null;
 try {
@@ -2969,10 +2969,18 @@ try {
       return saved ? { ...saved, id: saved.hubId || id } : null;
     };
     companyForumBrowser = require('./main/company-forum-browser').createForumBrowser({ BrowserWindow, BaseWindow, session: require('electron').session });
+    // 取数先借本机 Edge 的登录状态（无头，不弹窗）：公司电脑上三个站点都能免密自动登录，不用再手动登录（2026-11-12）。
+    // CLAUDE_HUB_FORUM_EDGE=0 关掉；测试把站点指到本机假站点时默认不用，=1 才用。
+    const forumEdge = process.env.CLAUDE_HUB_FORUM_EDGE === '0' || (process.env.CLAUDE_HUB_FORUM_SITES && process.env.CLAUDE_HUB_FORUM_EDGE !== '1') ? null
+      : require('./main/company-edge-browser').createEdgeBrowser({ logger: console });
+    if (forumEdge) app.on('before-quit', () => { void forumEdge.close(); });
     companyForumService = new CompanyForum({
       dataDir: getHubDataDir(),
       noTimer: process.env.CLAUDE_HUB_FORUM_TIMER === '0',
       browser: companyForumBrowser,
+      edgeBrowser: forumEdge,
+      // 公司发文上新交给提醒总线：开着桌宠时桌宠说，没开时右下角通知卡。
+      publish: notice => require('./core/company-assistant/notice-bus').noticeBus().publish(notice),
       lookupEmail: () => companyAssistantService?.accountEmail?.() || '',
       // 站点域名默认取本人公司邮箱的域名：助理页已从 WeLink 账号读到并存在它的设置里。
       accountEmail: () => { try { return JSON.parse(require('fs').readFileSync(require('path').join(getHubDataDir(), 'company-assistant', 'settings.json'), 'utf8')).email || ''; } catch { return ''; } },

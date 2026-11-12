@@ -1,39 +1,250 @@
 {
-  "_骨架": "问题页·上总账下两难题",
-  "_适用": "先用一组数据把痛点摆出来，再拆成两个并列难题，各自讲现象、根因、空间、发力方向",
-  "_论证链": "痛点分布（数据）→ 难题①②（现象→根因→空间）→ 发力方向",
-  "title": "定位语：一句话写出主要问题和改进空间XX%",
-  "titleStyle": "red",
-  "col": [
-    { "type": "panel", "w": 0.46, "head": "总账：用一句话概括几类主要问题",
-      "body": { "row": [
-        { "type": "bars", "title": "问题分布·场景一(%)", "deltas": false, "series": [ {"label": "问题A", "value": 40, "color": "blue"}, {"label": "问题B", "value": 30, "color": "blue"}, {"label": "问题C", "value": 20, "color": "blue"}, {"label": "问题D", "value": 10, "color": "blue"} ] },
-        { "type": "bars", "title": "问题分布·场景二(%)", "deltas": false, "series": [ {"label": "问题A", "value": 45, "color": "blue"}, {"label": "问题C", "value": 25, "color": "blue"}, {"label": "问题B", "value": 20, "color": "blue"}, {"label": "问题E", "value": 10, "color": "blue"} ] }
-      ] } },
-    { "type": "band", "size": 22 },
-    { "w": 1, "row": [
-      { "type": "panel", "head": {"text": "难题一：用一个短句点出问题", "num": 1},
-        "body": { "col": [
-          { "type": "text", "bullet": "none", "size": 44, "items": ["**现象&根因**：这里写看到的现象，以及背后的原因，一到两行，写具体事实"] },
-          { "row": [ { "type": "image", "placeholder": "场景示意图", "w": 0.9 }, { "type": "image", "placeholder": "说明现象的曲线或截图" } ], "w": 1 },
-          { "type": "text", "bullet": "none", "size": 24, "items": ["**空间**：这里写解决后能拿到多少，{r:改进空间约XX%}"] },
-          { "row": [ { "type": "image", "placeholder": "支撑空间判断的数据图", "w": 1.1 }, { "type": "text", "bullet": "none", "anchor": "ctr", "items": ["这里写数据图说明了什么，{r:差距XX%}"] } ], "w": 1 },
-          { "type": "text", "bullet": "none", "size": 24, "items": ["{r:发力方向}：这里写打算从哪里入手解决"] }
-        ], "gap": 6 } },
-      { "type": "panel", "head": {"text": "难题二：用一个短句点出问题", "num": 2},
-        "body": { "col": [
-          { "type": "text", "bullet": "none", "size": 24, "items": ["**现象**：这里写看到的现象，带一个关键数字"] },
-          { "row": [ { "type": "image", "placeholder": "现象曲线一" }, { "type": "image", "placeholder": "现象曲线二" } ], "w": 1 },
-          { "type": "text", "bullet": "none", "size": 44, "items": ["**根因**：这里写背后的原因，一到两行，讲清为什么现有做法解决不了"] },
-          { "row": [
-            { "type": "image", "placeholder": "支撑根因的数据图" },
-            { "col": [
-              { "type": "text", "bullet": "none", "size": 40, "items": ["**空间**：这里写从现状到目标的变化，{r:改进空间约XX%}"] },
-              { "type": "table", "head": ["", "指标一", "指标二", "指标三"], "rows": [["条件甲", "XX", "XX", "XX"], ["条件乙", "XX", "XX", "XX"], ["平均", "", "", "XX"]] }
-            ], "gap": 4 }
-          ], "w": 1.7 },
-          { "type": "text", "bullet": "none", "size": 24, "items": ["{r:发力方向}：这里写打算从哪里入手解决"] }
-        ], "gap": 6 } }
-    ] }
-  ]
+ "_骨架": "问题页·上总账下两难题",
+ "_分类": "现状与问题",
+ "_适用": "先用一组数据把痛点摆出来，再拆成两个并列难题，各自讲现象、根因、空间、发力方向",
+ "_论证链": "痛点分布（数据）→ 难题①②（现象→根因→空间）→ 发力方向",
+ "title": "定位语：一句话写出主要问题和改进空间XX%",
+ "titleStyle": "red",
+ "col": [
+  {
+   "type": "panel",
+   "w": 0.46,
+   "head": "总账：用一句话概括几类主要问题",
+   "body": {
+    "row": [
+     {
+      "type": "bars",
+      "title": "问题分布·场景一(%)",
+      "deltas": false,
+      "series": [
+       {
+        "label": "问题A",
+        "value": 40,
+        "color": "blue"
+       },
+       {
+        "label": "问题B",
+        "value": 30,
+        "color": "blue"
+       },
+       {
+        "label": "问题C",
+        "value": 20,
+        "color": "blue"
+       },
+       {
+        "label": "问题D",
+        "value": 10,
+        "color": "blue"
+       }
+      ]
+     },
+     {
+      "type": "bars",
+      "title": "问题分布·场景二(%)",
+      "deltas": false,
+      "series": [
+       {
+        "label": "问题A",
+        "value": 45,
+        "color": "blue"
+       },
+       {
+        "label": "问题C",
+        "value": 25,
+        "color": "blue"
+       },
+       {
+        "label": "问题B",
+        "value": 20,
+        "color": "blue"
+       },
+       {
+        "label": "问题E",
+        "value": 10,
+        "color": "blue"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "type": "band",
+   "size": 22
+  },
+  {
+   "w": 1,
+   "row": [
+    {
+     "type": "panel",
+     "head": {
+      "text": "难题一：用一个短句点出问题",
+      "num": 1
+     },
+     "body": {
+      "col": [
+       {
+        "type": "text",
+        "bullet": "none",
+        "size": 44,
+        "items": [
+         "**现象&根因**：这里写看到的现象，以及背后的原因，一到两行，写具体事实"
+        ]
+       },
+       {
+        "row": [
+         {
+          "type": "image",
+          "placeholder": "场景示意图",
+          "w": 0.9
+         },
+         {
+          "type": "image",
+          "placeholder": "说明现象的曲线或截图"
+         }
+        ],
+        "w": 1
+       },
+       {
+        "type": "text",
+        "bullet": "none",
+        "size": 24,
+        "items": [
+         "**空间**：这里写解决后能拿到多少，{r:改进空间约XX%}"
+        ]
+       },
+       {
+        "row": [
+         {
+          "type": "image",
+          "placeholder": "支撑空间判断的数据图",
+          "w": 1.1
+         },
+         {
+          "type": "text",
+          "bullet": "none",
+          "anchor": "ctr",
+          "items": [
+           "这里写数据图说明了什么，{r:差距XX%}"
+          ]
+         }
+        ],
+        "w": 1
+       },
+       {
+        "type": "text",
+        "bullet": "none",
+        "size": 24,
+        "items": [
+         "{r:发力方向}：这里写打算从哪里入手解决"
+        ]
+       }
+      ],
+      "gap": 6
+     }
+    },
+    {
+     "type": "panel",
+     "head": {
+      "text": "难题二：用一个短句点出问题",
+      "num": 2
+     },
+     "body": {
+      "col": [
+       {
+        "type": "text",
+        "bullet": "none",
+        "size": 24,
+        "items": [
+         "**现象**：这里写看到的现象，带一个关键数字"
+        ]
+       },
+       {
+        "row": [
+         {
+          "type": "image",
+          "placeholder": "现象曲线一"
+         },
+         {
+          "type": "image",
+          "placeholder": "现象曲线二"
+         }
+        ],
+        "w": 1
+       },
+       {
+        "type": "text",
+        "bullet": "none",
+        "size": 44,
+        "items": [
+         "**根因**：这里写背后的原因，一到两行，讲清为什么现有做法解决不了"
+        ]
+       },
+       {
+        "row": [
+         {
+          "type": "image",
+          "placeholder": "支撑根因的数据图"
+         },
+         {
+          "col": [
+           {
+            "type": "text",
+            "bullet": "none",
+            "size": 40,
+            "items": [
+             "**空间**：这里写从现状到目标的变化，{r:改进空间约XX%}"
+            ]
+           },
+           {
+            "type": "table",
+            "head": [
+             "",
+             "指标一",
+             "指标二",
+             "指标三"
+            ],
+            "rows": [
+             [
+              "条件甲",
+              "XX",
+              "XX",
+              "XX"
+             ],
+             [
+              "条件乙",
+              "XX",
+              "XX",
+              "XX"
+             ],
+             [
+              "平均",
+              "",
+              "",
+              "XX"
+             ]
+            ]
+           }
+          ],
+          "gap": 4
+         }
+        ],
+        "w": 1.7
+       },
+       {
+        "type": "text",
+        "bullet": "none",
+        "size": 24,
+        "items": [
+         "{r:发力方向}：这里写打算从哪里入手解决"
+        ]
+       }
+      ],
+      "gap": 6
+     }
+    }
+   ]
+  }
+ ]
 }

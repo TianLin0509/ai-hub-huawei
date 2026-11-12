@@ -2,7 +2,7 @@
 // PPT 页「做页」Tab（2026-11-11）：骨架全部能生成且能被版式预览读回；团队素材包按名称取形状；任务流（模型回包为夹具）；产物只留最近 30 个。
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
-const { PptMake, listSkeletons, prune, KEEP_FILES } = require('../core/company-assistant/ppt-make');
+const { PptMake, listSkeletons, prune, CATEGORIES, KEEP_FILES } = require('../core/company-assistant/ppt-make');
 const engine = require('../core/company-assistant/ppt-make-engine');
 const { buildSlideScene, openZip, readEntry } = require('../core/company-assistant/ppt-slide-preview');
 const { sceneSvg } = require('../renderer/ppt-slide-svg');
@@ -55,7 +55,11 @@ const page = body => ({ title: '测试页：一行写完的结论', col: [body] 
 test('骨架：目录里每个 json 都列出，说明字段齐全，示意内容能生成且能被版式预览读回', async t => {
   const f = fixture(t), list = f.make.listSkeletons();
   assert.ok(list.length >= 5);
-  assert.deepEqual(list.map(s => s.id), fs.readdirSync(path.join(__dirname, '../core/company-assistant/ppt-make-skeletons')).filter(n => n.endsWith('.json')).sort().map(n => n.slice(0, -5)));
+  assert.deepEqual(list.map(s => s.id).sort(), fs.readdirSync(path.join(__dirname, '../core/company-assistant/ppt-make-skeletons')).filter(n => n.endsWith('.json')).sort().map(n => n.slice(0, -5)));
+  // 按分类的论证顺序排，每个骨架都属于五类之一
+  const ranks = list.map(s => CATEGORIES.indexOf(s.category));
+  assert.ok(ranks.every(r => r >= 0), '分类都在五类里');
+  assert.deepEqual(ranks, [...ranks].sort((a, b) => a - b), '按分类顺序排');
   for (const s of list) {
     assert.ok(s.name && s.fit && s.chain && s.spec.title, `${s.id} 说明字段齐全`);
     assert.ok(!Object.keys(s.spec).some(k => k.startsWith('_')), `${s.id} 示意内容不带说明字段`);
@@ -77,7 +81,27 @@ test('骨架：目录里每个 json 都列出，说明字段齐全，示意内�
   fs.writeFileSync(path.join(extra, 'b.json'), '﻿' + JSON.stringify({ _骨架: '乙', _适用: '用途', _论证链: '甲 → 乙', title: '标题' }));
   fs.writeFileSync(path.join(extra, 'a.json'), JSON.stringify({ _骨架: '甲', _适用: '用途', _论证链: '甲 → 乙', title: '标题' }));
   fs.writeFileSync(path.join(extra, 'readme.txt'), '不是骨架');
-  assert.deepEqual(listSkeletons(extra).map(s => [s.id, s.name]), [['a', '甲'], ['b', '乙']]);
+  assert.deepEqual(listSkeletons(extra).map(s => [s.id, s.name, s.category]), [['a', '甲', '其他'], ['b', '乙', '其他']]);
+  fs.writeFileSync(path.join(extra, 'c.json'), JSON.stringify({ _骨架: '丙', _适用: '用途', _论证链: '甲 → 乙', _分类: '盘点与总结', title: '标题' }));
+  fs.writeFileSync(path.join(extra, 'd.json'), JSON.stringify({ _骨架: '丁', _适用: '用途', _论证链: '甲 → 乙', _分类: '现状与问题', title: '标题' }));
+  assert.deepEqual(listSkeletons(extra).map(s => s.id), ['d', 'c', 'a', 'b'], '分类顺序在前，没写分类的排最后');
+});
+
+test('下载整套模板：全部骨架生成一份多页 pptx，同名覆盖，能被版式预览逐页读回，不进 30 个淘汰', async t => {
+  const f = fixture(t), handlers = createPptHandlers({ ppt: f.ppt }), list = f.make.listSkeletons();
+  const { job } = await handlers['ppt-make-pack']();
+  assert.equal(job.path, path.join(f.make.dir(), `通用汇报页模板包-${list.length}页.pptx`));
+  assert.deepEqual([job.kind, job.state, job.pages], ['pack', 'done', list.length]);
+  const presentation = readEntry(openZip(job.path), 'ppt/presentation.xml').toString('utf8');
+  assert.equal((presentation.match(/<p:sldId /g) || []).length, list.length, '页数等于骨架数');
+  for (let page = 1; page <= list.length; page++) assert.ok(buildSlideScene(job.path, page).items.length > 5, `第 ${page} 页读回了形状`);
+  assert.equal(f.asks.length, 0, '不经模型');
+  const again = (await handlers['ppt-make-pack']()).job;
+  assert.equal(again.path, job.path);
+  assert.deepEqual(pptxIn(f.make.dir()), [path.basename(job.path)], '同名覆盖，只有一份');
+  assert.deepEqual(await handlers['ppt-make-open']({ jobId: again.id }), { ok: true, path: job.path });
+  prune(f.make.dir(), 0);
+  assert.ok(fs.existsSync(job.path), '模板包不参与淘汰');
 });
 
 test('素材查找：没下载团队素材包返回 null 并在提醒里写明；下载后按名称取形状、宽高和图片', t => {

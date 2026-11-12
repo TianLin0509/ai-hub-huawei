@@ -6,7 +6,7 @@ function createPptMake({ root, ipcRenderer, notice }) {
   const ACTIVE = ['waiting_agent', 'revising'];
   const STEP = { waiting_agent: '正在让助理写页面内容…', revising: '助理正在按自查提醒修改…' };
   const SHOW_MAX = 5;
-  let skeletons = [], selected = '', listPage = 0, listSize = 6, job = null, svg = '', svgKey = '', busy = null, failure = null, editing = false, shown = false, pollTimer = null, clock = null;
+  let skeletons = [], selected = '', category = '', listPage = 0, listSize = 6, job = null, svg = '', svgKey = '', busy = null, failure = null, editing = false, shown = false, pollTimer = null, clock = null;
   const call = async (action, args) => {
     const r = await ipcRenderer.invoke('company-assistant:' + action, args);
     if (r?.ok === false) throw new Error(r.error || '这一步没有完成');
@@ -14,11 +14,11 @@ function createPptMake({ root, ipcRenderer, notice }) {
   };
 
   root.innerHTML = `<aside class="pptk-left" aria-label="骨架与内容">
-      <b class="pptk-title">选一个骨架</b><div class="pptk-list" data-pptk-list></div><div class="pptk-pager" data-pptk-pager></div>
+      <div class="pptk-head"><b class="pptk-title">选一个骨架</b><label class="pptw-sr" for="company-ppt-make-cat">按分类筛选骨架</label><select id="company-ppt-make-cat" class="pptk-cat" data-pptk-cat></select></div><div class="pptk-list" data-pptk-list></div><div class="pptk-pager" data-pptk-pager></div>
       <label class="pptk-title" for="company-ppt-make-brief">这页要讲什么（一句话或贴材料）</label>
       <textarea id="company-ppt-make-brief" data-pptk-brief placeholder="例如：三项措施逐级叠加，指标从基线提升 XX%。也可以直接贴数据、结论和要点"></textarea>
       <div class="pptk-actions"><button type="button" class="pptw-btn pri" data-pptk="start">生成这一页</button><button type="button" class="pptw-btn sec" data-pptk="example">先看骨架样子</button></div>
-      <div class="pptk-actions pptk-more"><button type="button" class="pptw-btn ghost sm" data-pptk="paste" title="别的 AI 已经写好页面说明（JSON）时，粘进来直接生成">粘贴页面说明</button><button type="button" class="pptw-btn ghost sm" data-pptk="guide" title="把骨架说明、写法规则和示意 JSON 复制出来，贴给别的 AI">复制写法说明</button></div>
+      <div class="pptk-actions pptk-more"><button type="button" class="pptw-btn ghost sm" data-pptk="paste" title="别的 AI 已经写好页面说明（JSON）时，粘进来直接生成">粘贴页面说明</button><button type="button" class="pptw-btn ghost sm" data-pptk="guide" title="把骨架说明、写法规则和示意 JSON 复制出来，贴给别的 AI">复制写法说明</button><button type="button" class="pptw-btn ghost sm" data-pptk="pack" title="全部骨架的示意页合成一份多页 PPT，用 PowerPoint 打开">下载整套模板</button></div>
     </aside>
     <div class="pptk-main"><div class="pptk-cap" data-pptk-cap></div><div class="pptk-stage" data-pptk-stage></div><p class="pptk-chain" data-pptk-chain></p></div>
     <aside class="pptk-side" data-pptk-side aria-label="自查与操作"></aside>`;
@@ -26,12 +26,19 @@ function createPptMake({ root, ipcRenderer, notice }) {
   const skeleton = () => skeletons.find(s => s.id === selected);
   const seconds = from => Math.max(0, Math.round((Date.now() - from) / 1000));
 
+  // 分类下拉：全部 + 各类（带个数），顺序同骨架列表（主进程已按分类排好）。
+  function drawCats() {
+    const counts = new Map();
+    for (const s of skeletons) counts.set(s.category, (counts.get(s.category) || 0) + 1);
+    $('[data-pptk-cat]').innerHTML = [['', skeletons.length], ...counts].map(([name, n]) => `<option value="${esc(name)}"${name === category ? ' selected' : ''}>${esc(name || '全部')} · ${n}</option>`).join('');
+  }
+  // 一屏分页：按列表可用高度算每页几项，窗口变了重算（同素材 Tab 的做法）。
   function drawList() {
-    const list = $('[data-pptk-list]');
+    const list = $('[data-pptk-list]'), visible = skeletons.filter(s => !category || s.category === category);
     if (list.clientHeight) listSize = Math.max(1, Math.floor((list.clientHeight + 4) / 56));
-    const pages = Math.max(1, Math.ceil(skeletons.length / listSize));
+    const pages = Math.max(1, Math.ceil(visible.length / listSize));
     listPage = Math.min(listPage, pages - 1);
-    list.innerHTML = skeletons.slice(listPage * listSize, listPage * listSize + listSize).map(s => `<button type="button" class="pptk-sk${s.id === selected ? ' on' : ''}" data-pptk="pick" data-id="${esc(s.id)}" aria-pressed="${s.id === selected}" title="${esc(s.fit)}"><b>${esc(s.name)}</b><span>${esc(s.fit)}</span></button>`).join('');
+    list.innerHTML = visible.slice(listPage * listSize, listPage * listSize + listSize).map(s => `<button type="button" class="pptk-sk${s.id === selected ? ' on' : ''}" data-pptk="pick" data-id="${esc(s.id)}" aria-pressed="${s.id === selected}" title="${esc(s.fit)}"><b>${esc(s.name)}</b><span>${esc(s.fit)}</span></button>`).join('');
     $('[data-pptk-pager]').innerHTML = pages > 1 ? `<button type="button" class="pptw-btn ghost sm" data-pptk="prev"${listPage ? '' : ' disabled'} aria-label="上一页">‹</button><span>${listPage + 1} / ${pages}</span><button type="button" class="pptw-btn ghost sm" data-pptk="next"${listPage < pages - 1 ? '' : ' disabled'} aria-label="下一页">›</button>` : '';
     $('[data-pptk-chain]').textContent = skeleton() ? '论证链：' + skeleton().chain : '';
   }
@@ -104,6 +111,15 @@ function createPptMake({ root, ipcRenderer, notice }) {
   async function act(name, b) {
     if (name === 'pick') { selected = b.dataset.id; drawList(); return; }
     if (name === 'prev' || name === 'next') { listPage += name === 'next' ? 1 : -1; drawList(); return; }
+    if (name === 'pack') {
+      b.disabled = true; notice('正在生成整套模板…');
+      try {
+        const { job: pack } = await call('ppt-make-pack');
+        await call('ppt-make-open', { jobId: pack.id });
+        notice(`已生成 ${pack.pages} 页的整套模板并用 PowerPoint 打开：${pack.path}`);
+      } finally { b.disabled = false; }
+      return;
+    }
     if (name === 'example') return generating(() => call('ppt-make-example', { skeletonId: selected }));
     if (name === 'start') {
       if (job && ACTIVE.includes(job.state)) { notice('助理还在写上一页，请等它完成。'); return; }
@@ -141,6 +157,7 @@ function createPptMake({ root, ipcRenderer, notice }) {
       if (name === 'insert') { notice('正在插入到当前文稿…'); const r = await call('ppt-make-insert', { jobId: job.id }); notice(`已插入到「${r.target}」第 ${r.page} 页，请在 PowerPoint 里检查并保存。`); }
     } finally { b.disabled = false; }
   }
+  $('[data-pptk-cat]').addEventListener('change', e => { category = e.target.value; listPage = 0; drawList(); });
   root.addEventListener('click', e => {
     const b = e.target.closest('[data-pptk]'); if (!b) return;
     e.preventDefault(); e.stopPropagation();
@@ -152,7 +169,7 @@ function createPptMake({ root, ipcRenderer, notice }) {
     async show() {
       shown = true; window.addEventListener('resize', onResize);
       try {
-        if (!skeletons.length) { skeletons = (await call('ppt-make-skeletons')).skeletons; selected = skeletons[0]?.id || ''; }
+        if (!skeletons.length) { skeletons = (await call('ppt-make-skeletons')).skeletons; selected = skeletons[0]?.id || ''; drawCats(); }
         draw();
         if (job) return void poll();
         if (selected) await generating(() => call('ppt-make-example', { skeletonId: selected }));

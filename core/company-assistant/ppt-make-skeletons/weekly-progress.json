@@ -1,0 +1,100 @@
+{
+ "_骨架": "进展汇报页·已完成进行中待支持",
+ "_分类": "规划与计划",
+ "_适用": "周报、双周报、阶段进展：顶部几个状态数字，下面三栏分别写已完成、进行中、需要支持",
+ "_论证链": "整体状态（数字）→ 已完成 → 进行中 → 需要支持",
+ "title": "定位语：本期完成XX项，整体进度XX%",
+ "col": [
+  {
+   "size": 96,
+   "row": [
+    {
+     "type": "bignum",
+     "value": "XX%",
+     "label": "整体进度"
+    },
+    {
+     "type": "bignum",
+     "value": "XX",
+     "label": "本期完成",
+     "color": "green"
+    },
+    {
+     "type": "bignum",
+     "value": "XX",
+     "label": "进行中",
+     "color": "blue"
+    },
+    {
+     "type": "bignum",
+     "value": "XX",
+     "label": "风险项"
+    }
+   ]
+  },
+  {
+   "w": 1,
+   "row": [
+    {
+     "type": "panel",
+     "head": {
+      "text": "已完成",
+      "style": "pill-teal"
+     },
+     "body": {
+      "type": "text",
+      "items": [
+       "事项一：写结果",
+       "- 写结果的意义",
+       "事项二：写结果",
+       "- 写结果的意义",
+       "事项三：写结果"
+      ],
+      "bullet": "✓"
+     },
+     "frame": "soft"
+    },
+    {
+     "type": "panel",
+     "head": {
+      "text": "进行中",
+      "style": "pill"
+     },
+     "body": {
+      "type": "text",
+      "items": [
+       "事项四：写当前进度",
+       "- 预计完成：XX月XX日",
+       "事项五：写当前进度",
+       "- 预计完成：XX月XX日",
+       "事项六：写当前进度"
+      ]
+     },
+     "frame": "soft"
+    },
+    {
+     "type": "panel",
+     "head": {
+      "text": "需要支持",
+      "style": "pill-red"
+     },
+     "body": {
+      "type": "text",
+      "items": [
+       "支持一：写需要谁做什么",
+       "- 何时前：XX月XX日",
+       "支持二：写需要谁做什么",
+       "- 何时前：XX月XX日",
+       "风险：写不支持会怎样"
+      ]
+     },
+     "frame": "soft"
+    }
+   ]
+  },
+  {
+   "type": "bar",
+   "t": "一句话结论：本期整体判断与下期重点"
+  }
+ ]
+}

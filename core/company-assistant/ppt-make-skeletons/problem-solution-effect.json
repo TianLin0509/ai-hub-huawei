@@ -1,0 +1,112 @@
+{
+ "_骨架": "问题方案效果页·三段横排",
+ "_分类": "方案与原理",
+ "_适用": "一页讲完一件事：问题是什么、怎么解决、效果如何，三段从左到右推进",
+ "_论证链": "问题（现象+数字）→ 方案（做法）→ 效果（数字）",
+ "title": "定位语：针对问题X，采用方法Y，效果提升XX%",
+ "col": [
+  {
+   "w": 1,
+   "row": [
+    {
+     "type": "panel",
+     "head": {
+      "text": "问题",
+      "style": "fade-gray"
+     },
+     "body": {
+      "col": [
+       {
+        "type": "image",
+        "placeholder": "问题现象图",
+        "w": 1
+       },
+       {
+        "type": "text",
+        "items": [
+         "这里写问题表现",
+         "影响：{r:损失约XX%}"
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "type": "arrow",
+     "dir": "right",
+     "size": 34
+    },
+    {
+     "type": "panel",
+     "head": {
+      "text": "方案",
+      "style": "fade-blue"
+     },
+     "body": {
+      "col": [
+       {
+        "type": "image",
+        "placeholder": "方案原理图",
+        "w": 1
+       },
+       {
+        "type": "text",
+        "items": [
+         "这里写核心做法",
+         "这里写关键创新点"
+        ]
+       }
+      ]
+     }
+    },
+    {
+     "type": "arrow",
+     "dir": "right",
+     "size": 34,
+     "color": "red"
+    },
+    {
+     "type": "panel",
+     "head": {
+      "text": "效果",
+      "style": "fade-red"
+     },
+     "body": {
+      "col": [
+       {
+        "type": "bars",
+        "deltas": false,
+        "w": 1,
+        "series": [
+         {
+          "label": "改进前",
+          "value": 1,
+          "text": "XX",
+          "color": "gray"
+         },
+         {
+          "label": "改进后",
+          "value": 1.4,
+          "text": "XX",
+          "color": "red"
+         }
+        ]
+       },
+       {
+        "type": "text",
+        "items": [
+         "提升 {r:XX%}",
+         "这里写效果说明"
+        ]
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "type": "bar",
+   "t": "一句话结论：方法Y可以推广到哪些场景"
+  }
+ ]
+}

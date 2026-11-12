@@ -7,12 +7,14 @@ function registerCompanyForumIpc(ipcMain, service, { shell, browser } = {}) {
     sync: async () => { await service.sync({ reason: 'manual' }); return service.status(); },
     // 打开论坛页：今天还没同步，或当天快照来自旧抽取规则时开始（不等结果）。
     'ensure-today': () => { const st = service.status(); if ((!st.today || st.needsRefresh) && !st.syncing && st.settings.enabled) void service.sync({ reason: 'open' }).catch(() => {}); return service.status(); },
+    // 只重看公司发文这一站（定时重看走的同一条路）。
+    'check-docs': async () => { await service.sync({ sites: ['w3'], reason: 'docs' }); return service.status(); },
     summarize: () => service.summarize(service.status().day),
     login: request => service.login(String(request?.site || '')),
     'set-settings': request => ({ ok: true, settings: service.setSettings(request || {}) }),
     'open-url': async request => {
       const url = String(request?.url || '');
-      if (!service.allowedUrl(url)) throw new Error('只能打开论坛站点的网址');
+      if (!service.allowedUrl(url)) throw new Error('只能打开这几个公司站点的网址');
       await shell.openExternal(url);
       return { ok: true };
     },

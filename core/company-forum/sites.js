@@ -1,5 +1,5 @@
 'use strict';
-// 「论坛」页同步的两个公司内部社区（2026-10-18，公司真机回执 Q-1018-01 两轮）：
+// 「帖子」页（原「论坛」）同步的公司内部站点：两个社区 + 门户首页的公司发文（见文件末尾 w3 一项）。两个社区（2026-10-18，公司真机回执 Q-1018-01 两轮）：
 //   稼先社区：首页「热点」tab（/?menuKey=hot），数据 GET /jxService/v1/jxhome/homeHotResources?type=hotRecommend_1Week（本周热榜，
 //            result.dataList 20 条：resourceId、title、url、browseCount、commentCount、favoriteCount、upvoteCount、createTime、submitUsers）；
 //            同页还有推荐流 djx/home/recommendations/query、热门话题 jxhome/hot/topics/list，不是热榜。
@@ -34,6 +34,25 @@ const SITES = Object.freeze([
     postLink: /[?&#/](?:uuid|tid|postId|topicId|articleId|id)[=/]([\w-]{3,})/i,
     detailPath: id => `/next/detail/#/index?uuid=${encodeURIComponent(id)}&uniqueType=homeRanking`,
   }),
+  // 公司发文（2026-11-12，公司真机探针）：内网门户首页的「政策•讲话」「公司文件」「公告」三栏来自同一个接口
+  //   GET /service/rest/info/common/docs —— { policy:[{documents}], corporate:[{documents}], bulletins:[{documents}], … }，每栏 12–17 条：
+  //   title、url（…/viewDoc.do?did=<编号>&cata=…）、code（文号）、deptname（发文部门）、publishdate、docAbstract（讲话类才有摘要）。
+  // 接口没截到时退到页面上同名板块里的链接。同一接口里另有转到心声的两栏，不在这里收。
+  Object.freeze({
+    id: 'w3', name: '公司发文', short: '发文', sub: 'w3', home: '/next/indexa.html',
+    clickText: '',
+    lists: Object.freeze([
+      { key: 'policy', label: '政策讲话', heading: '政策•讲话', api: /info\/common\/docs/i },
+      { key: 'corporate', label: '公司文件', heading: '公司文件', api: /info\/common\/docs/i },
+      // 页面上这一栏的标题带公司名，按仓库惯例用转义写。
+      { key: 'bulletins', label: '公告', heading: '\u534e\u4e3a公告', api: /info\/common\/docs/i },
+    ]),
+    docs: true, docsApi: /\/info\/common\/docs/i,
+    api: /\/service\/rest\/info\//i,
+    hotApi: /docs/i,
+    postLink: /viewDoc\.do\?[^#]*\bdid=(\d+)/i,
+    detailPath: id => `/info/cn/doc/viewDoc.do?did=${encodeURIComponent(id)}`,
+  }),
 ]);
 
 // 本人邮箱 → 域名（user@corp.example → corp.example）。
@@ -58,8 +77,16 @@ function siteBases(domain, env = process.env) {
   }
   return out;
 }
+// 进站地址（2026-11-12 公司真机）：先走公司统一登录入口 login.<域名>/login1/?redirect=<目标>，安全终端免密登录后自动跳回目标页。
+// 直接打开心声只得到游客视图（榜单不全且不报未登录），稼先和门户首页虽会自己跳登录，统一走入口行为一致。
+// 测试把站点指到本机假站点时没有登录入口，直接开目标页。
+function entryUrl(site, base, domain, env = process.env) {
+  const home = homeUrl(site, base);
+  if (!home || !domain || (env.CLAUDE_HUB_FORUM_SITES && env.CLAUDE_HUB_DATA_DIR)) return home;
+  return `https://login.${domain}/login1/?redirect=${encodeURIComponent(home)}`;
+}
 function siteById(id) { return SITES.find(s => s.id === id) || null; }
 function homeUrl(site, base) { return base ? base + site.home : ''; }
 function detailUrl(site, base, id) { return base && site.detailPath && id ? base + site.detailPath(id) : ''; }
 
-module.exports = { SITES, domainFromEmail, normalizeDomain, siteBases, siteById, homeUrl, detailUrl };
+module.exports = { SITES, domainFromEmail, normalizeDomain, siteBases, siteById, homeUrl, detailUrl, entryUrl };

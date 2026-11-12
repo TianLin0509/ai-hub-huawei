@@ -64,6 +64,42 @@ async function main() {
     await shot('01-first-open');
     result.checks.push(`全新用户：点「做页」直接出骨架样例预览（${count} 个骨架，不依赖素材包和模型），1440×900 无纵向滚动`);
 
+    // 1b) 分类筛选与一屏分页：骨架多于一屏时翻页不滚动；切分类后列表只剩该类
+    const all = (await c.eval(`ipcRenderer.invoke('company-assistant:ppt-make-skeletons')`)).skeletons;
+    const listIds = () => c.eval('[...document.querySelectorAll(".pptk-sk")].map(e=>e.dataset.id)');
+    const pagerText = () => text('[data-pptk-pager] span');
+    assert.match(await c.eval('document.querySelector("[data-pptk-cat]").selectedOptions[0].textContent'), new RegExp('全部 · ' + all.length));
+    assert.ok(await pagerText(), `${all.length} 个骨架一屏放不下时有翻页`);
+    const page1 = await listIds();
+    await click('[data-pptk="next"]');
+    await wait(`(()=>{const ids=[...document.querySelectorAll(".pptk-sk")].map(e=>e.dataset.id);return ids.length&&!ids.includes(${j(page1[0])})})()`, 'list next page');
+    await oneScreen('骨架翻页');
+    const cat = '方案与原理', inCat = all.filter(s => s.category === cat).map(s => s.id);
+    await c.eval(`(()=>{const s=document.querySelector("[data-pptk-cat]");s.value=${j(cat)};s.dispatchEvent(new Event("change"))})()`);
+    await wait(`[...document.querySelectorAll(".pptk-sk")].every(e=>${j(inCat)}.includes(e.dataset.id))`, 'category filter');
+    const catPage = await listIds(), perPage = page1.length, catPages = Math.ceil(inCat.length / perPage);
+    assert.deepEqual(catPage, inCat.slice(0, perPage), '分类第一页');
+    assert.equal(await pagerText(), catPages > 1 ? `1 / ${catPages}` : '', '分类内按高度分页');
+    await oneScreen('分类筛选');
+    await shot('01b-category');
+    result.checks.push(`分类筛选：全部 ${all.length} 个骨架每页 ${perPage} 个、翻页不滚动；切到「${cat}」只剩该类 ${inCat.length} 个（${catPages} 页），1440×900 无纵向滚动`);
+    await c.eval('(()=>{const s=document.querySelector("[data-pptk-cat]");s.value="";s.dispatchEvent(new Event("change"))})()');
+    await wait(`document.querySelector(".pptk-sk")?.dataset.id===${j(page1[0])}`, 'back to all');
+
+    // 1c) 下载整套模板：不经模型、不依赖素材包，生成全部骨架的多页 pptx 并用 PowerPoint 打开（打开回包为夹具）
+    await c.eval(`(()=>{const invoke=ipcRenderer.invoke.bind(ipcRenderer);window.__packRestore=()=>{ipcRenderer.invoke=invoke};window.__packOpen=[];ipcRenderer.invoke=(ch,a)=>{if(ch==='company-assistant:ppt-make-open'){window.__packOpen.push(a.jobId);return Promise.resolve({ok:true})}return invoke(ch,a)}})()`);
+    await click('[data-pptk="pack"]');
+    await wait('/已生成 \\d+ 页的整套模板/.test(document.querySelector("[data-ppt-notice]").textContent)', 'pack notice', 60000);
+    const packNote = await text('[data-ppt-notice]'), packFile = packNote.split('：').pop();
+    assert.ok(packNote.includes(`已生成 ${all.length} 页`) && packFile.endsWith(`通用汇报页模板包-${all.length}页.pptx`) && fs.existsSync(packFile), packNote);
+    assert.equal((await c.eval('window.__packOpen')).length, 1, '生成后用 PowerPoint 打开');
+    const { openZip, readEntry } = require('../core/company-assistant/ppt-slide-preview');
+    assert.equal((readEntry(openZip(packFile), 'ppt/presentation.xml').toString('utf8').match(/<p:sldId /g) || []).length, all.length, '模板包页数等于骨架数');
+    await oneScreen('下载整套模板');
+    await shot('01c-pack');
+    await c.eval('window.__packRestore()');
+    result.checks.push(`下载整套模板：全新用户一键生成 ${all.length} 页模板包（${require('node:path').basename(packFile)}）并调用 PowerPoint 打开`);
+
     // 2) 切换骨架 →「先看骨架样子」
     const firstSvg = await c.eval('document.querySelector(".pptk-slide").innerHTML.length');
     await click('.pptk-sk:nth-child(4)');

@@ -254,7 +254,7 @@ COMP.text = (ctx, n, b) => {
   ctx.sizes.push(sz); ctx.chars += paras.reduce((a, p) => a + plain(p.t).length, 0);
   paras.forEach(p => checkEnd(ctx, p.t));
   const used = parasH(paras, b.w, sz, opt);
-  const extra = n.spread === false || paras.length < 2 || used > b.h * 0.85 ? 0 : Math.min(12, (b.h - used) / paras.length * 0.75 * 0.8);
+  const extra = n.spread === false || paras.length < 2 || used > b.h * 0.85 ? 0 : Math.min(20, (b.h - used) / paras.length * 0.7);
   const ps = paras.map((p, i) => {
     const s = p.lvl ? Math.max(10, sz - 2) : sz;
     const o = { runs: parseRuns(p.t, { color: n.color, b: n.b }), align: n.align || 'l', before: i ? opt.gapPt + extra : 0, sz: s, lvl: p.lvl };
@@ -537,7 +537,8 @@ COMP.curve = (ctx, n, b) => {
   const all = [].concat.apply([], S.map(s => s.points)); let lo = n.min != null ? n.min : Math.min.apply(null, all), hi = n.max != null ? n.max : Math.max.apply(null, all);
   if (hi === lo) hi = lo + 1; const pad = (hi - lo) * 0.08; if (n.min == null) lo -= pad; if (n.max == null) hi += pad;
   const ticks = 4;
-  for (let i = 0; i <= ticks; i++) { const yy = py + ph - ph * i / ticks; lineSeg(ctx, px, yy, px + pw, yy, { color: i ? 'E7E6E6' : '7F7F7F', w: i ? 0.5 : 1 }); const v = lo + (hi - lo) * i / ticks; txt(ctx, b.x, yy - 8, L - 4, 16, (Math.abs(v) >= 100 ? Math.round(v) : Math.round(v * 100) / 100) + (n.unit || ''), { sz: 10, color: C.gray, align: 'r', fit: false }); }
+  const span = hi - lo, dec = span >= 20 ? 0 : span >= 2 ? 1 : 2;
+  for (let i = 0; i <= ticks; i++) { const yy = py + ph - ph * i / ticks; lineSeg(ctx, px, yy, px + pw, yy, { color: i ? 'E7E6E6' : '7F7F7F', w: i ? 0.5 : 1 }); const v = lo + span * i / ticks; txt(ctx, b.x - 6, yy - 8, L - 2, 16, v.toFixed(dec) + (n.unit || ''), { sz: 10, color: C.gray, align: 'r', fit: false, box: { wrap: 'none' } }); }
   lineSeg(ctx, px, py, px, py + ph, { color: '7F7F7F', w: 1 });
   const np = Math.max.apply(null, S.map(s => s.points.length)); const X = i => px + (np > 1 ? pw * i / (np - 1) : pw / 2), Y = v => py + ph - (v - lo) / (hi - lo) * ph;
   xl.forEach((s, i) => txt(ctx, X(i) - 40, py + ph + 3, 80, 16, s, { sz: 10, color: C.gray, align: 'ctr', fit: false }));

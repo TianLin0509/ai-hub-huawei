@@ -126,4 +126,4 @@ async function captureWithEdge({ url, timeoutMs = 90000, loginGraceMs = LOGIN_GR
   return result;
 }
 
-module.exports = { captureWithEdge, findEdge, CARD_API, HOLIDAY_API, KEEP_API, LOGIN_GRACE_MS };
+module.exports = { captureWithEdge, findEdge, copyProfile, CARD_API, HOLIDAY_API, KEEP_API, LOGIN_GRACE_MS };

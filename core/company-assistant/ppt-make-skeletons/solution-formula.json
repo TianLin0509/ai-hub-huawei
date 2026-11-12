@@ -1,27 +1,213 @@
 {
-  "_骨架": "方案页·公式到框图到方向",
-  "_适用": "讲一个算法或方案的原理：先用公式拆出因子，再给系统流程，最后落到几个技术方向；同一套编号贯穿三层",
-  "_论证链": "原理推演（公式因子①②③）→ 系统流程（哪几个模块对应）→ 技术方向（每个方向做什么、指标）",
-  "title": "定位语：目标公式拆出三个因子，对应三个技术方向",
-  "col": [
-    { "size": 104, "row": [
-      { "type": "heading", "t": "原理推演", "size": 96 },
-      { "type": "formula", "parts": ["Y = ", {"t": "a", "n": 1, "label": "因子一"}, " · ", {"t": "b", "n": 2, "label": "因子二"}, " · f(x, ", {"t": "c", "n": 3, "label": "因子三"}, ")"], "note": "*注：这里写各符号的含义" }
-    ] },
-    { "type": "arrow", "dir": "down", "size": 22 },
-    { "size": 150, "row": [
-      { "type": "heading", "t": "系统流程", "size": 96 },
-      { "type": "panel", "head": {"text": "模块组一", "style": "left", "sz": 14}, "frame": "none", "pad": 0, "body": { "type": "flow", "nodes": ["输入\n处理", {"t": "①关键\n模块", "hl": "red"}, "输出\n处理"] } },
-      { "type": "panel", "head": {"text": "模块组二", "style": "left", "sz": 14}, "frame": "none", "pad": 0, "body": { "type": "flow", "nodes": ["步骤\n甲", {"t": "②关键\n模块", "hl": "red"}, "步骤\n乙"] } },
-      { "type": "panel", "head": {"text": "模块组三", "style": "left", "sz": 14}, "frame": "none", "pad": 0, "body": { "type": "flow", "nodes": [{"t": "③关键\n模块", "hl": "red"}, "步骤\n丙", "步骤\n丁"] } }
-    ] },
-    { "type": "arrow", "dir": "down", "size": 22 },
-    { "w": 1, "row": [
-      { "type": "heading", "t": "技术方向", "size": 96 },
-      { "type": "panel", "head": {"text": "① 方向一", "style": "pill-teal"}, "frame": "none", "pad": 4, "body": { "col": [ { "type": "text", "items": ["这里写这个方向做什么，一个短句", "这里写关键做法，一个短句"] }, { "type": "metric", "t": "指标一 XX → XX" } ] } },
-      { "type": "panel", "head": {"text": "② 方向二", "style": "pill"}, "frame": "none", "pad": 4, "body": { "col": [ { "type": "text", "items": ["这里写这个方向做什么，一个短句", "这里写关键做法，一个短句"] }, { "type": "metric", "t": "指标二 XX → XX" } ] } },
-      { "type": "panel", "head": {"text": "③ 方向三", "style": "pill-gold"}, "frame": "none", "pad": 4, "body": { "col": [ { "type": "text", "items": ["这里写这个方向做什么，一个短句", "这里写关键做法，{b:从甲到乙}"] }, { "type": "metric", "t": "指标三 XX → XX" } ] } }
-    ] },
-    { "type": "bar", "t": "一句话结论：三个因子各有一个方向负责，编号一一对应" }
-  ]
+ "_骨架": "方案页·公式到框图到方向",
+ "_分类": "方案与原理",
+ "_适用": "讲一个算法或方案的原理：先用公式拆出因子，再给系统流程，最后落到几个技术方向；同一套编号贯穿三层",
+ "_论证链": "原理推演（公式因子①②③）→ 系统流程（哪几个模块对应）→ 技术方向（每个方向做什么、指标）",
+ "title": "定位语：目标公式拆出三个因子，对应三个技术方向",
+ "col": [
+  {
+   "size": 104,
+   "row": [
+    {
+     "type": "heading",
+     "t": "原理推演",
+     "size": 96
+    },
+    {
+     "type": "formula",
+     "parts": [
+      "Y = ",
+      {
+       "t": "a",
+       "n": 1,
+       "label": "因子一"
+      },
+      " · ",
+      {
+       "t": "b",
+       "n": 2,
+       "label": "因子二"
+      },
+      " · f(x, ",
+      {
+       "t": "c",
+       "n": 3,
+       "label": "因子三"
+      },
+      ")"
+     ],
+     "note": "*注：这里写各符号的含义"
+    }
+   ]
+  },
+  {
+   "type": "arrow",
+   "dir": "down",
+   "size": 22
+  },
+  {
+   "size": 150,
+   "row": [
+    {
+     "type": "heading",
+     "t": "系统流程",
+     "size": 96
+    },
+    {
+     "type": "panel",
+     "head": {
+      "text": "模块组一",
+      "style": "left",
+      "sz": 14
+     },
+     "frame": "none",
+     "pad": 0,
+     "body": {
+      "type": "flow",
+      "nodes": [
+       "输入\n处理",
+       {
+        "t": "①关键\n模块",
+        "hl": "red"
+       },
+       "输出\n处理"
+      ]
+     }
+    },
+    {
+     "type": "panel",
+     "head": {
+      "text": "模块组二",
+      "style": "left",
+      "sz": 14
+     },
+     "frame": "none",
+     "pad": 0,
+     "body": {
+      "type": "flow",
+      "nodes": [
+       "步骤\n甲",
+       {
+        "t": "②关键\n模块",
+        "hl": "red"
+       },
+       "步骤\n乙"
+      ]
+     }
+    },
+    {
+     "type": "panel",
+     "head": {
+      "text": "模块组三",
+      "style": "left",
+      "sz": 14
+     },
+     "frame": "none",
+     "pad": 0,
+     "body": {
+      "type": "flow",
+      "nodes": [
+       {
+        "t": "③关键\n模块",
+        "hl": "red"
+       },
+       "步骤\n丙",
+       "步骤\n丁"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "type": "arrow",
+   "dir": "down",
+   "size": 22
+  },
+  {
+   "w": 1,
+   "row": [
+    {
+     "type": "heading",
+     "t": "技术方向",
+     "size": 96
+    },
+    {
+     "type": "panel",
+     "head": {
+      "text": "① 方向一",
+      "style": "pill-teal"
+     },
+     "frame": "none",
+     "pad": 4,
+     "body": {
+      "col": [
+       {
+        "type": "text",
+        "items": [
+         "这里写这个方向做什么，一个短句",
+         "这里写关键做法，一个短句"
+        ]
+       },
+       {
+        "type": "metric",
+        "t": "指标一 XX → XX"
+       }
+      ]
+     }
+    },
+    {
+     "type": "panel",
+     "head": {
+      "text": "② 方向二",
+      "style": "pill"
+     },
+     "frame": "none",
+     "pad": 4,
+     "body": {
+      "col": [
+       {
+        "type": "text",
+        "items": [
+         "这里写这个方向做什么，一个短句",
+         "这里写关键做法，一个短句"
+        ]
+       },
+       {
+        "type": "metric",
+        "t": "指标二 XX → XX"
+       }
+      ]
+     }
+    },
+    {
+     "type": "panel",
+     "head": {
+      "text": "③ 方向三",
+      "style": "pill-gold"
+     },
+     "frame": "none",
+     "pad": 4,
+     "body": {
+      "col": [
+       {
+        "type": "text",
+        "items": [
+         "这里写这个方向做什么，一个短句",
+         "这里写关键做法，{b:从甲到乙}"
+        ]
+       },
+       {
+        "type": "metric",
+        "t": "指标三 XX → XX"
+       }
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "type": "bar",
+   "t": "一句话结论：三个因子各有一个方向负责，编号一一对应"
+  }
+ ]
 }

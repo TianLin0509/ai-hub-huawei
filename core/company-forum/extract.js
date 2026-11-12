@@ -7,7 +7,7 @@
 // 心声的两个排行在同一个「卡片」接口里：数组的每个元素是一张卡片（有自己的标题和 list），按榜名找卡片，不把卡片当帖子。
 
 // 修改榜单抽取规则时递增，用于识别升级前的当天快照。
-const EXTRACTION_VERSION = 3;
+const EXTRACTION_VERSION = 4;
 
 const pick = (o, keys) => {
   if (!o || typeof o !== 'object') return undefined;
@@ -179,6 +179,7 @@ function enrich(posts, pool) {
 // 一个站点首页的抓取结果 → 各排行榜的帖子。
 //   capture: { finalUrl, sections: [{ heading, links, lines }], links, json: [{ url, json }] }
 function postsForSite(site, capture, { base = '', limit = 20 } = {}) {
+  if (site.docs) { const docs = docsForSite(site, capture, { base, limit }); if (docs) return docs; }
   const arrays = (capture.json || []).map(r => ({ url: String(r.url || ''), arrays: postArrays(r.json) })).filter(r => r.arrays.length);
   const pool = arrays.flatMap(r => r.arrays.flat());
   const lists = [];
@@ -238,6 +239,28 @@ function postsForSite(site, capture, { base = '', limit = 20 } = {}) {
   // 用了备用卡片时，原榜里取不到的空榜不显示。
   return lists.some(l => l.from === 'api-card-fallback') ? lists.filter(l => l.posts.length) : lists;
 }
+// 公司发文（site.docs）：接口里每一栏是 { documents: [...] }，按栏目键直接取；发文没有阅读、回复数，带文号、发文部门和摘要。
+// 接口没截到（改版或被拦）时返回 null，调用方退回通用认法（板块里的链接）。
+function docsForSite(site, capture, { base = '', limit = 20 } = {}) {
+  const hit = [...(capture.json || [])].reverse().find(r => site.docsApi.test(String(r.url || '')) && r.json && typeof r.json === 'object');
+  if (!hit) return null;
+  const lists = site.lists.map(list => {
+    const groups = Array.isArray(hit.json[list.key]) ? hit.json[list.key] : [];
+    const docs = groups.flatMap(g => Array.isArray(g?.documents) ? g.documents : []);
+    const seen = new Set(), posts = [];
+    for (const d of docs) {
+      const title = clean(d?.title);
+      const url = absolute(String(d?.url || d?.doc_url || '').replace(/^http:/i, 'https:'), base || capture.finalUrl);
+      const id = (site.postLink.exec(url) || [])[1] || '';
+      if (title.length < 2 || !url || seen.has(id || url)) continue;
+      seen.add(id || url);
+      posts.push({ id, title, url, views: null, replies: null, likes: null, favs: null, time: timeOf(d.publishdate || d.createdDate), author: '',
+        board: clean(d.deptname || '').split('/').pop(), code: clean(d.code || ''), abstract: clean(d.docAbstract || '').slice(0, 300) });
+    }
+    return { key: list.key, label: list.label, from: 'docs-api', posts: posts.slice(0, limit).map((p, i) => ({ ...p, rank: i + 1 })) };
+  });
+  return lists.some(l => l.posts.length) ? lists : null;
+}
 function score(url, list, site) {
   let n = 0;
   if (site.api.test(url)) n += 1;
@@ -256,4 +279,4 @@ function looksLikeLogin({ finalUrl = '', text = '', textLength = 0 } = {}, base 
   return LOGIN_WORDS.test(String(text).slice(0, 3000)) && textLength < 4000;
 }
 
-module.exports = { EXTRACTION_VERSION, postsForSite, postArrays, postFromObject, namedList, countsFromJson, linkPosts, linePosts, looksLikeLogin, count, timeOf, titleKey, clean };
+module.exports = { EXTRACTION_VERSION, postsForSite, docsForSite, postArrays, postFromObject, namedList, countsFromJson, linkPosts, linePosts, looksLikeLogin, count, timeOf, titleKey, clean };
