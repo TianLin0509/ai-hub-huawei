@@ -13,6 +13,7 @@ const CATALOG = Object.freeze({
   assistant: { name: '助理', desc: '整理每日简报、提醒待处理的 WeLink 消息，并回答工作问题。会议和会议室可以单独使用。', cost: '开着时工作日每 10 分钟后台读一次 WeLink，每分钟检查一次登录' },
   forum: { name: '帖子', desc: '公司发文（政策讲话、公司文件、公告）和心声、稼先今天的热帖，附 AI 摘要；发文上新会提醒', cost: '开着时工作日早上在后台用无头 Edge（借本机 Edge 的登录状态，不弹窗）取一次，之后每小时只重看发文；没登录会每 30 分钟重试' },
   attendance: { name: '考勤', desc: '读自己的打卡记录，统计加班、80 小时红线和年度工时', cost: '开着时每天在后台打开一次考勤页（隐藏窗口，取不到时用无头 Edge），当天取到就不再访问' },
+  w3: { name: '门户待办', desc: '读公司门户首页上自己的待办、提的申请和公司文件；新待办、拖了很久的待办和卡住的申请会提醒', cost: '开着时每天早上 6 点后在后台用无头 Edge 打开一次门户首页（约 10 秒、不弹窗），当天取到就不再访问；页面上可随时手动刷新' },
   tray: { name: '关窗口时最小化到托盘', desc: '点窗口右上角的关闭只把 Hub 收到右下角托盘，会话照常在后台跑；单击托盘图标打开，右键「退出 AI Hub」才真正退出', cost: '几乎没有，只多一个托盘图标' },
   pet: { name: '桌宠', desc: '桌面角落的小猫：会话答完、提醒、会议室结果都由它举卡片告诉你，右键还能问助理', cost: '开着时一直有一个置顶的小窗口，每 0.1 秒看一次光标是否碰到它' },
 });
@@ -20,7 +21,7 @@ const CATALOG = Object.freeze({
 // defaults 只给隔离测试用（main.js 在用环境变量强开助理/论坛的隔离实例里传 true，老的端到端测试照旧能直接用）。
 function createOptionalFeatures({ dataDir, logger = console, defaults = {} } = {}) {
   const file = path.join(dataDir, FILE);
-  let value = { assistant: defaults.assistant === true, forum: defaults.forum === true, attendance: defaults.attendance === true, tray: defaults.tray === true };
+  let value = { assistant: defaults.assistant === true, forum: defaults.forum === true, attendance: defaults.attendance === true, w3: defaults.w3 === true, tray: defaults.tray === true };
   try {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
     for (const k of Object.keys(value)) if (typeof raw?.[k] === 'boolean') value[k] = raw[k];

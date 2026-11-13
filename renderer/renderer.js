@@ -1429,7 +1429,7 @@ async function selectMeeting(meetingId, opts = {}) {
   if (terminalPanelEl) terminalPanelEl.classList.remove('home-active');
   if (window.__xresearchHide) window.__xresearchHide(); // 2026-07-23 投研面板互斥
   if (window.__studyHide) window.__studyHide(); // 2026-09-01 学习面板互斥
-  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
+  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
   window.__companyRoomsHide?.(); window.__profileHide?.();
   window.__rulesHide?.(); // 独立页面互斥
@@ -2015,7 +2015,7 @@ const APP_TOOLBAR_VIEWS = [
 function getReadingSurface() {
   // Detached full-page tabs are above the session stage. Keep their mounted
   // controls and content instead of copying them into a fullscreen shell.
-  for (const id of ['team-page', 'cloud-page', 'assistant-page', 'wireless-page', 'account-page', 'hub-workspace', 'memo-panel', ...APP_TOOLBAR_VIEWS.map(v => v.id)]) {
+  for (const id of ['team-page', 'avatar-page', 'cloud-page', 'assistant-page', 'wireless-page', 'account-page', 'hub-workspace', 'memo-panel', ...APP_TOOLBAR_VIEWS.map(v => v.id)]) {
     const panel = document.getElementById(id);
     if (panelIsVisible(panel)) return panel;
   }
@@ -2042,6 +2042,7 @@ function paintAppToolbarForView(label) {
   if (label !== '无线') window.__wirelessHide?.();
   if (label !== '云端') window.__cloudHide?.();
   if (label !== '团队') window.__teamHide?.();
+  if (label !== '替身') window.__avatarHide?.();
   if (label !== 'AI 网页') window.__webSessionHide?.();
   if (label !== '网页圆桌') window.__webRoundtableHide?.();
   if (!toolbarCrumbEl || !toolbarActionsEl) return;
@@ -2213,7 +2214,7 @@ document.addEventListener('bridge-threads-updated', () => {
 });
 
 function currentAppToolbarView() {
-  for (const [id, label] of [['web-session-panel', 'AI 网页'], ['web-roundtable-panel', '网页圆桌'], ['team-page', '团队'], ['cloud-page', '云端'], ['assistant-page', '助理'], ['wireless-page', '无线'], ['account-page', '账号'], ['hub-workspace', '资源与回顾'], ['memo-panel', '速记']]) {
+  for (const [id, label] of [['web-session-panel', 'AI 网页'], ['web-roundtable-panel', '网页圆桌'], ['team-page', '团队'], ['avatar-page', '替身'], ['cloud-page', '云端'], ['assistant-page', '助理'], ['wireless-page', '无线'], ['account-page', '账号'], ['hub-workspace', '资源与回顾'], ['memo-panel', '速记']]) {
     if (panelIsVisible(document.getElementById(id))) return label;
   }
   for (const view of APP_TOOLBAR_VIEWS) {
@@ -2259,7 +2260,7 @@ if (typeof MutationObserver === 'function') {
   // These tabs mount outside app-body. Watch only their own visibility, never
   // streamed text or every descendant mutation.
   const watchReadingTabs = () => {
-    for (const id of ['team-page', 'cloud-page', 'assistant-page', 'wireless-page', 'account-page', 'hub-workspace', 'memo-panel']) {
+    for (const id of ['team-page', 'avatar-page', 'cloud-page', 'assistant-page', 'wireless-page', 'account-page', 'hub-workspace', 'memo-panel']) {
       const el = document.getElementById(id);
       if (el) _appToolbarObserver.observe(el, { attributes: true, attributeFilter: ['style', 'class', 'hidden'] });
     }
@@ -6131,7 +6132,7 @@ async function selectSession(id, opts = {}) {
   }
   if (window.__xresearchHide) window.__xresearchHide(); // 2026-07-23 投研面板互斥
   if (window.__studyHide) window.__studyHide(); // 2026-09-01 学习面板互斥
-  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
+  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
   window.__companyRoomsHide?.(); window.__profileHide?.();
   window.__rulesHide?.(); // 独立页面互斥
@@ -9144,7 +9145,7 @@ function escapeToHome() {
   window.hubWorkspaces?.close();
   if (window.__xresearchHide) window.__xresearchHide();
   if (window.__studyHide) window.__studyHide();
-  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
+  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
   window.__companyRoomsHide?.(); window.__profileHide?.();
   window.__rulesHide?.(); // 独立页面互斥
@@ -9330,6 +9331,17 @@ if (require('../core/company-attendance/gate').companyAttendanceEnabled()) {
     });
     window.__companyAttendanceHide = () => companyAttendancePage.close();
   } catch (error) { console.warn('[company-attendance] 考勤页未启动：', error.message); }
+}
+// 公司版「门户」页（2026-11-13）：门户首页上自己的待办、申请和公司要闻；只在公司版启用（core/company-w3/gate.js），默认关、可选功能里开。
+if (require('../core/company-w3/gate').companyW3Enabled()) {
+  try {
+    const companyW3Page = require('./company-w3-page').createCompanyW3Page({
+      document, window, ipcRenderer,
+      closeOtherPanels: () => { window.hubWorkspaces?.close(); memoryPanel.close(); capabilityPanel.close(); accountCenterPanel.close(); },
+      showMessage: message => showToast(message),
+    });
+    window.__companyW3Hide = () => companyW3Page.close();
+  } catch (error) { console.warn('[company-w3] 门户页未启动：', error.message); }
 }
 // 「个人」页（2026-11-12）：左栏底部「主题」上方的头像入口，点开看身份、等级、成就与桌宠伙伴。
 try {
@@ -9645,7 +9657,7 @@ ipcRenderer.on('session-created', async (_e, { session }) => {
   // 2026-09-02：session-created 会直接亮出终端面板，但此前只隐藏了群聊面板。
   // 主区是 flex 容器，学习面板若还开着就会和终端并排各占一半。
   if (window.__studyHide) window.__studyHide();
-  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
+  if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
   if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
   window.__companyRoomsHide?.(); window.__profileHide?.();
   window.__rulesHide?.(); // 独立页面互斥
@@ -11112,7 +11124,7 @@ if (process && process.env && process.env.CLAUDE_HUB_E2E === '1') {
           currentView = 'card';
           _cardHistoryHydratedSid = sessionId;
           if (window.__studyHide) window.__studyHide();   // 同上：别和学习面板并排
-          if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
+          if (window.__assistantHide) window.__assistantHide(); window.__wirelessHide?.(); window.__cloudHide?.(); window.__teamHide?.(); window.__avatarHide?.(); window.__webSessionHide?.(); window.__webRoundtableHide?.();
           if (window.__writingHide) window.__writingHide(); // 2026-09-30 写作面板互斥
           window.__companyRoomsHide?.();
           window.__rulesHide?.(); // 独立页面互斥

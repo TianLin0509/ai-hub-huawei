@@ -150,6 +150,10 @@ if (group === '--version') {
 } else if (group === 'im' && sub === 'send-to-group') {
   if (arg('--group-id') !== 'g-phone') { process.stderr.write('group not found\n'); process.exitCode = 1; }
   else { addPhoneMessage('user001', arg('--text') || ''); out('{"code":0,"message":"success"}'); }
+} else if (group === 'im' && sub === 'send-to-user') {
+  // 私聊发送：真机回执的字段还没在真机核对过，这里沿用群发送的回执形状。
+  if (!arg('--receiver') || !arg('--text')) { process.stderr.write('receiver and text are required\n'); process.exitCode = 1; }
+  else out('{"code":0,"message":"success"}');
 } else if (group === 'im' && sub === 'query-group-member') {
   out({ code: 0, data: { memberList: arg('--group-id') === 'g-phone'
     ? [{ account: 'user001', name: '用户甲' }, { account: 'xiaowei_bot', name: '小微助手' }]

@@ -114,6 +114,11 @@ class HubTools {
     if (name === 'welink_inbox') return this.a.query.inbox(args, ctx);
     if (name === 'welink_message') return this.a.query.message(args);
     if (name === 'welink_meetings') return this.a.query.meetings(args, ctx);
+    if (name === 'portal_todo') {
+      const portal = require('../company-w3/shared').portal();
+      if (!portal) return { ok: false, text: '门户待办功能没有开启：请用户在设置菜单的「可选功能」里打开「门户待办」，开启后约 10 秒就有数据。' };
+      return { ok: true, text: portal.digestText({ max: Math.min(30, Number(args.limit) || 12) }) };
+    }
     if (name === 'assistant_memory') return this.a.memory.execute(args);
     if (name === 'pet_remind') return this.a.petReminders.execute(args);
     if (name === 'ppt_find') return this.a.ppt.find(args);

@@ -2771,7 +2771,7 @@ const teamAccess = { assert() { throw new Error('该功能未启用'); } };
 // 关着时助理、论坛的服务照样建好（页面能显示「未开启」和开关），但不调 start()，后台不取数、不开窗口。
 const optionalFeatures = require('./core/optional-features').createOptionalFeatures({
   dataDir: getHubDataDir(),
-  defaults: process.env.CLAUDE_HUB_DATA_DIR ? { assistant: process.env.CLAUDE_HUB_COMPANY_ASSISTANT === '1', forum: process.env.CLAUDE_HUB_COMPANY_FORUM === '1', attendance: process.env.CLAUDE_HUB_COMPANY_ATTENDANCE === '1' } : {},
+  defaults: process.env.CLAUDE_HUB_DATA_DIR ? { assistant: process.env.CLAUDE_HUB_COMPANY_ASSISTANT === '1', forum: process.env.CLAUDE_HUB_COMPANY_FORUM === '1', attendance: process.env.CLAUDE_HUB_COMPANY_ATTENDANCE === '1', w3: process.env.CLAUDE_HUB_COMPANY_W3 === '1' } : {},
 });
 // 关窗口最小化到托盘（2026-11-12）：开关也放「可选功能」，默认关。
 var trayController = null;
@@ -2792,6 +2792,7 @@ function optionalFeatureList() {
   if (companyAssistantService) out.push({ id: 'assistant', ...CATALOG.assistant, on: optionalFeatures.get('assistant') });
   if (companyForumService) out.push({ id: 'forum', ...CATALOG.forum, on: optionalFeatures.get('forum') });
   if (companyAttendanceService) out.push({ id: 'attendance', ...CATALOG.attendance, on: optionalFeatures.get('attendance') });
+  if (companyW3Service) out.push({ id: 'w3', ...CATALOG.w3, on: optionalFeatures.get('w3') });
   if (hubPetController && require('./core/distribution').featureEnabled('hubPet')) out.push({ id: 'pet', ...CATALOG.pet, on: !!hubPetController.getSettings().enabled });
   if (trayController) out.push({ id: 'tray', ...CATALOG.tray, on: optionalFeatures.get('tray') });
   return out;
@@ -2813,6 +2814,10 @@ ipcMain.handle('optional-features:set', (_event, request = {}) => {
     } else if (id === 'attendance' && companyAttendanceService) {
       optionalFeatures.set('attendance', on);
       if (on) companyAttendanceService.start(); else companyAttendanceService.close();
+    } else if (id === 'w3' && companyW3Service) {
+      optionalFeatures.set('w3', on);
+      // 刚开启就取一次，用户不用等到下一个时刻才看到内容。
+      if (on) { companyW3Service.start(); void companyW3Service.sync({ reason: 'enable' }).catch(() => {}); } else companyW3Service.close();
     } else if (id === 'tray' && trayController) {
       optionalFeatures.set('tray', on);
       trayController.sync();
@@ -3037,6 +3042,24 @@ try {
   if (require('./core/distribution').featureEnabled('hubPet')) profileController.profile.registerFeature('pet');
   profileController.start();
 } catch (error) { console.error('[profile] 个人页未启动：', error.message); }
+// 公司版「门户待办」（2026-11-12）：每天 3 次在后台用无头 Edge 读公司门户首页上自己的待办、申请和公司文件，
+// 新待办和久拖的事交给提醒总线（桌宠或通知卡），助理经 portal_todo 工具查本机快照。默认关闭（可选功能 w3），关着时不访问门户。
+let companyW3Service = null;
+try {
+  if (require('./core/company-w3/gate').companyW3Enabled()) {
+    const { CompanyW3 } = require('./core/company-w3/service');
+    companyW3Service = new CompanyW3({
+      dataDir: getHubDataDir(),
+      noTimer: process.env.CLAUDE_HUB_W3_TIMER === '0',
+      edgeRun: opts => require('./main/company-edge-capture').runInEdge(opts),
+      onChanged: () => sendToRenderer('company-w3:changed', {}),
+      publish: notice => require('./core/company-assistant/notice-bus').noticeBus().publish(notice),
+    });
+    require('./core/company-w3/shared').setPortal(() => (optionalFeatures.get('w3') ? companyW3Service : null));
+    if (optionalFeatures.get('w3')) companyW3Service.start();
+  }
+} catch (error) { console.error('[company-w3] 门户待办未启动：', error.message); }
+require('./main/ipc/company-w3-handlers').registerCompanyW3Ipc(ipcMain, () => (optionalFeatures.get('w3') ? companyW3Service : null));
 // AI 编排模式（2026-10-04）：编排员通过 hub_orchestrator 工具驱动群聊与交付工作流。
 try {
   global.__orchestrationService = require('./main/orchestration/service').createOrchestrationService({
@@ -5351,6 +5374,7 @@ async function runFinalShutdownCleanup() {
   capture('company-web-ai', () => companyWebAi?.close());
   capture('company-forum', () => { companyForumService?.close(); companyForumBrowser?.close(); });
   capture('company-attendance', () => { companyAttendanceService?.close(); if (companyAttendanceBrowser !== companyForumBrowser) companyAttendanceBrowser?.close(); });
+  capture('company-w3', () => { companyW3Service?.close(); require('./main/company-edge-capture').killAll(); });
   capture('hub-orchestration', () => global.__orchestrationService?.stop());
   capture('hub-team', () => global.__teamService?.stop());
   capture('hub-phone', () => phoneService?.close());

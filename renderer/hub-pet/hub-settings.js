@@ -9,7 +9,7 @@ function mountHubPetSettings({ document, window, ipcRenderer }) {
     try { window.dispatchEvent(new window.CustomEvent('hub-pet:open-assistant', { detail: payload || {} })); } catch (_) {}
   });
   // 桌宠卡片指向某一页（2026-11-09）：会议室结果 → 会议室页；助理答好了 → 助理页。按左栏按钮打开，和用户自己点一样。
-  const PAGE_BUTTON = { rooms: 'btn-company-rooms', meeting: 'btn-company-meeting', attendance: 'btn-company-attendance', forum: 'btn-company-forum' };
+  const PAGE_BUTTON = { rooms: 'btn-company-rooms', meeting: 'btn-company-meeting', attendance: 'btn-company-attendance', forum: 'btn-company-forum', w3: 'btn-company-w3' };
   ipcRenderer.on('hub-pet:open-page', (_event, payload = {}) => {
     const page = String(payload.page || '');
     if (page === 'assistant') {

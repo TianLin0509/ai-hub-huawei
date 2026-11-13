@@ -409,7 +409,7 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
   }
   async function open() {
     build(); closeOtherPanels();
-    for (const key of ['__companyAssistantHide', '__companyMeetingHide', '__companyForumHide', '__companyAttendanceHide', '__profileHide', '__assistantHide', '__teamHide', '__cloudHide', '__wirelessHide', '__rulesHide', '__writingHide', '__xresearchHide', '__studyHide', '__ranHide']) window[key]?.();
+    for (const key of ['__companyAssistantHide', '__companyMeetingHide', '__companyForumHide', '__companyAttendanceHide', '__companyW3Hide', '__profileHide', '__assistantHide', '__teamHide', '__avatarHide', '__cloudHide', '__wirelessHide', '__rulesHide', '__writingHide', '__xresearchHide', '__studyHide', '__ranHide']) window[key]?.();
     generation++; host.hidden = false; nav.classList.add('active'); window.setShellNavActive?.('company-rooms'); document.body.classList.add('company-rooms-page-open'); place(); render();
     window.addEventListener('resize', place); clearInterval(timer); clearInterval(clockTimer);
     timer = setInterval(() => { void refresh(); }, 3000); clockTimer = setInterval(updateClock, 1000);

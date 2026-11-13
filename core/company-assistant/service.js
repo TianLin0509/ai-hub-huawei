@@ -393,7 +393,7 @@ class CompanyAssistant {
     if (args[0] !== 'auth' && authFailure(result.stdout + '\n' + result.stderr)) {
       const maintained = await this.auth.check({ force: true, refresh: false });
       // Only replay read queries. A send/setup command may already have taken effect.
-      if (maintained.login?.ok && !opts.sendGroup && !opts.allowSetup) return this.rawWelink(args, opts);
+      if (maintained.login?.ok && !opts.sendGroup && !opts.sendUser && !opts.allowSetup) return this.rawWelink(args, opts);
     }
     return result;
   }
@@ -1213,7 +1213,7 @@ class CompanyAssistant {
     }
     const st = this.state();
     const list = B.fallbackBrief(snap, { day, now, settings: s, commitments: st.commitments, done: this.doneSet(), memory: this.memory.active() });
-    const brief = { ...list, organizing: true, note: 'AI 正在挑重点，先看按规则排的清单。' };
+    const brief = B.withPortal({ ...list, organizing: true, note: 'AI 正在挑重点，先看按规则排的清单。' }, this.portalLines());
     this.write(`brief-${day}.json`, brief);
     this.changed();
     this.lanes.brief.queue = this.lanes.brief.queue.filter(j => !(j.type === 'brief' && j.day === day));
@@ -1222,6 +1222,8 @@ class CompanyAssistant {
     this.enqueue({ type: 'brief', day, prompt: B.briefPrompt(snap, { day, now, settings: s, commitments: st.commitments, memory: this.memory.active() }) });
     return brief;
   }
+  // 门户待办开着时给简报的两三行；没开、没数据或出错都返回空。
+  portalLines() { try { return require('../company-w3/shared').portal()?.briefLines() || []; } catch { return []; } }
   finishBrief(job, text, error) {
     const day = job.day, snap = this.snapshot(day), st = this.state(), prev = this.brief(day) || {};
     let brief = !error && snap ? B.parseAgentBrief(text, snap, { day, now: this.now(), settings: this.settings(), done: this.doneSet(), commitments: st.commitments, memory: this.memory.active() }) : null;
@@ -1234,6 +1236,7 @@ class CompanyAssistant {
       brief = { ...prev, organizing: false, note: error ? `AI 整理没完成（${D.short(error, 80)}），下面是按规则排的清单。` : 'AI 的整理结果读不出来，下面是按规则排的清单。' };
     }
     brief.organizing = false;
+    brief = B.withPortal(brief, this.portalLines());
     this.write(`brief-${day}.json`, brief);
     if (brief.total) {
       const top = brief.sections.flatMap(x => x.items.map(i => `${x.title}：${i.text}`)).slice(0, 4);

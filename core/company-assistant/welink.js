@@ -25,16 +25,20 @@ const SETUP = Object.freeze({ auth: ['login'], mail: ['autodiscover'] });
 
 // 唯一放行的写命令（2026-10-18 用户同意）：手机对话往他自己选定的那个群发文字（phone.js）。
 // 只有 Hub 主进程传 sendGroup（设置里选定的群号）时才放行，而且群号必须一字不差；助理会话用的 welink-ro 永远不传。
-function sendAllowed(list, sendGroup) {
-  if (!sendGroup || list[0] !== 'im' || list[1] !== 'send-to-group' || list.length !== 6) return false;
+// 第二处（2026-11-12）：本人在页面上点了「发送」的那一条私聊回复，收信账号必须和调用方给的一字不差（sendUser）。
+function sendAllowed(list, sendGroup, sendUser = '') {
+  if (list[0] !== 'im' || list.length !== 6) return false;
   const opt = name => { const i = list.indexOf(name); return i >= 2 && i % 2 === 0 ? list[i + 1] : undefined; };
-  return opt('--group-id') === String(sendGroup) && typeof opt('--text') === 'string' && opt('--text').trim() !== '';
+  if (typeof opt('--text') !== 'string' || opt('--text').trim() === '') return false;
+  if (sendGroup && list[1] === 'send-to-group') return opt('--group-id') === String(sendGroup);
+  if (sendUser && list[1] === 'send-to-user') return opt('--receiver') === String(sendUser);
+  return false;
 }
 
-function checkArgs(args, { allowSetup = false, sendGroup = '' } = {}) {
+function checkArgs(args, { allowSetup = false, sendGroup = '', sendUser = '' } = {}) {
   const list = Array.isArray(args) ? args.map(String) : [];
   const [group, sub = ''] = list;
-  if (sendAllowed(list, sendGroup)) return list; // 发出的文字可以有换行
+  if (sendAllowed(list, sendGroup, sendUser)) return list; // 发出的文字可以有换行
   const ok = group === '--version' ? list.length === 1 : (READ_ONLY[group] || []).includes(group === 'version' ? '' : sub)
     || (allowSetup && (SETUP[group] || []).includes(sub));
   if (!ok) throw Object.assign(new Error(`助理只能用 welink-cli 的查询命令，拒绝执行：${[group, sub].filter(Boolean).join(' ') || '（空）'}`), { code: 'WELINK_NOT_ALLOWED' });
@@ -122,8 +126,8 @@ async function findCliDeep({ env = process.env, fsModule = fs, execFileImpl, tim
 
 // 跑一条 welink-cli。.js 结尾的是测试用的假程序，用 Hub 自己的程序以 Node 方式运行。
 // onData：边跑边拿到目前为止的全部输出（扫码登录要在命令结束前把二维码显示出来）。
-function run(args, { cli, timeoutMs = 30000, allowSetup = false, sendGroup = '', env = process.env, spawnFn = spawn, onData = null, signal = null } = {}) {
-  const list = checkArgs(args, { allowSetup, sendGroup });
+function run(args, { cli, timeoutMs = 30000, allowSetup = false, sendGroup = '', sendUser = '', env = process.env, spawnFn = spawn, onData = null, signal = null } = {}) {
+  const list = checkArgs(args, { allowSetup, sendGroup, sendUser });
   if (!cli) return Promise.reject(Object.assign(new Error('没找到 welink-cli：请在当前页面点「一键安装」或「查找或一键安装」'), { code: 'WELINK_MISSING' }));
   const isScript = /\.(?:c?js)$/i.test(cli);
   const cmd = isScript ? process.execPath : cli;

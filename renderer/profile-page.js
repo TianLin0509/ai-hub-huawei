@@ -298,7 +298,7 @@ function createProfilePage({ document, window, ipcRenderer, closeOtherPanels = (
   const onResize = () => place();
   async function open(openTab) {
     build(); closeOtherPanels();
-    for (const name of ['__companyRoomsHide', '__companyMeetingHide', '__assistantHide', '__wirelessHide', '__companyAssistantHide', '__companyForumHide', '__companyPptHide', '__companyAttendanceHide', '__rulesHide', '__writingHide', '__xresearchHide', '__studyHide', '__ranHide']) window[name]?.();
+    for (const name of ['__companyRoomsHide', '__companyMeetingHide', '__assistantHide', '__wirelessHide', '__companyAssistantHide', '__companyForumHide', '__companyPptHide', '__companyAttendanceHide', '__companyW3Hide', '__rulesHide', '__writingHide', '__xresearchHide', '__studyHide', '__ranHide']) window[name]?.();
     if (TABS.some(t => t.id === openTab)) tab = openTab;
     page.hidden = false; document.body.classList.add('profile-page-open'); place();
     nav()?.classList.add('active');

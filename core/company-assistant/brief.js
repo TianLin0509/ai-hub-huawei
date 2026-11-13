@@ -194,6 +194,15 @@ function finish({ day, generatedAt, by, sections, dropped, done }) {
   return { day, generatedAt, by, sections: out, dropped, total: shown };
 }
 
+// 门户待办（2026-11-13）：门户功能开着时，在简报最后追加一栏两三行（待办数与最久一条、卡住的申请、新讲话）。
+// 这些话由 Hub 按门户快照直接写，不经 AI、不参与出处核对；没开或没数据时原样返回。
+function withPortal(brief, lines) {
+  if (!brief || !Array.isArray(brief.sections)) return brief;
+  const sections = brief.sections.filter(s => s.key !== 'portal');
+  const items = (Array.isArray(lines) ? lines : []).filter(Boolean).slice(0, 3).map((text, i) => ({ source: 'w3:brief:' + i, id: 'portal|w3:brief:' + i, text, sourceLabel: '门户', top: false }));
+  return { ...brief, sections: items.length ? [...sections, { key: 'portal', title: '门户待办', items }] : sections };
+}
+
 // 简报里新出现的承诺并入长期清单（按出处去重，过期两天后清掉）。
 function mergeCommitments(previous, brief, day) {
   const map = new Map((previous || []).map(c => [c.source, c]));
@@ -202,4 +211,4 @@ function mergeCommitments(previous, brief, day) {
   return [...map.values()].filter(c => !c.due || c.due >= cutoff);
 }
 
-module.exports = { SECTIONS, FIRST_SCREEN, INLINE_CHARS, fallbackBrief, briefPrompt, briefInputFile, inlineMessages, inputFileName, parseAgentBrief, mergeCommitments };
+module.exports = { SECTIONS, FIRST_SCREEN, INLINE_CHARS, fallbackBrief, briefPrompt, briefInputFile, inlineMessages, inputFileName, parseAgentBrief, mergeCommitments, withPortal };
