@@ -142,7 +142,7 @@ test('CodeAgent：除 PATH 外也查 npm 全局目录和常用安装目录；同
   const viaInstall = fakeCodeAgent(path.join(localApp, 'Programs', 'CodeAgent CLI', 'bin'), '1.2620.01.00');
   const env = { PATH: path.join(root, 'bin-old'), npm_config_prefix: npmDir, LOCALAPPDATA: localApp, USERPROFILE: root, SystemRoot: process.env.SystemRoot, ComSpec: process.env.ComSpec };
   const store = require('../core/tool-discovery').createStore(root);
-  const adapter = tools.codeagentAdapter(store, { env, registryDirs: async () => [] });
+  const adapter = tools.codeagentAdapter(store, { env, registryDirs: async () => [], registryInstalls: async () => [] });
   const entries = await adapter.list();
   const files = entries.map(e => e.path);
   assert.ok(files.includes(onPath) && files.includes(viaNpm) && files.includes(viaInstall));

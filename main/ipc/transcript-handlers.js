@@ -315,20 +315,35 @@ async function parseProviderTranscript(args = {}, deps) {
       };
     }
 
-    transcriptPath = session && session.transcriptPath ? session.transcriptPath : null;
+    const record = session || (hubSessionId ? lookupSessionRecord(hubSessionId, deps)?.record : null);
+    let codeagentProjects;
+    try {
+      codeagentProjects = require('../../core/codeagent-transcript-dirs').accountProjectsRoot(
+        record, deps.dataDir || require('../../core/data-dir').getHubDataDir());
+    } catch {
+      return { turns: [], transcriptPath: null, error: 'CodeAgent account directory unavailable' };
+    }
+    // A hook can announce only session_id. Its history belongs to this session's
+    // account, which may live outside ~/.cac (including pooled accounts).
+    const findBoundTranscript = id => codeagentProjects
+      ? findTranscriptByCCSessionId(id, undefined, [codeagentProjects])
+      : findTranscriptByCCSessionId(id);
+    transcriptPath = record?.transcriptPath || null;
     if (!transcriptPath && inPath) {
       transcriptPath = inPath;
     }
+    if (codeagentProjects && transcriptPath && !require('fs').existsSync(transcriptPath)) {
+      transcriptPath = findBoundTranscript(record?.ccSessionId || ccSessionId) || transcriptPath;
+    }
     if (!transcriptPath && ccSessionId) {
-      transcriptPath = findTranscriptByCCSessionId(ccSessionId);
+      transcriptPath = findBoundTranscript(record?.ccSessionId || ccSessionId);
     }
     if (!transcriptPath && hubSessionId) {
-      if (session && session.ccSessionId) {
-        transcriptPath = findTranscriptByCCSessionId(session.ccSessionId);
+      if (record && record.ccSessionId) {
+        transcriptPath = findBoundTranscript(record.ccSessionId);
       }
     }
     const parseOpts = { limit: 50, fromTail: true, ...(opts && typeof opts === 'object' ? opts : {}) };
-    const record = session || (hubSessionId ? lookupSessionRecord(hubSessionId, deps)?.record : null);
     const prefix = require('../../core/codeagent-prefix-branch').prefixBranch(record);
     // Main's saved child binding is authoritative even for a dormant session;
     // a stale renderer path must never select its parent's transcript.

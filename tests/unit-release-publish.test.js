@@ -46,7 +46,11 @@ function fixture(t) {
     const overridden = state.hook?.(args, opts, { ok, failed, addAsset });
     if (overridden !== undefined) return overridden;
     if (args[0] === 'api' && args[1] === `repos/${REPO}/releases/tags/${TAG}`) {
-      return state.release ? ok(jsonCopy(state.release)) : failed('gh: Not Found (HTTP 404)');
+      // Like GitHub: the tag endpoint never returns drafts.
+      return state.release && !state.release.draft ? ok(jsonCopy(state.release)) : failed('gh: Not Found (HTTP 404)');
+    }
+    if (args[0] === 'api' && args[1] === `repos/${REPO}/releases?per_page=100`) {
+      return ok(JSON.stringify(state.release ? [jsonCopy(state.release)] : []));
     }
     if (args[0] === 'release' && args[1] === 'create') {
       assert.ok(args.includes('--draft')); assert.ok(args.includes('--prerelease')); assert.ok(args.includes('--verify-tag'));

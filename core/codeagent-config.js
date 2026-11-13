@@ -11,8 +11,8 @@
 //     只能写进配置目录的 settings.json；
 //   - 必须带 --disable-update，否则启动时弹出阻塞的「版本更新提醒」。
 //
-// 命令名、配置目录变量名和配置目录都可覆盖（AI_HUB_CODEAGENT_* 环境变量优先，其次 config.json 的
-// providers.codeagent），没有这个 CLI 的电脑可以指向测试替身
+// 命令名、配置目录变量名和配置目录都可覆盖（AI_HUB_CODEAGENT_* 环境变量优先；命令其次用选择器结果，
+// 再回退 config.json 的 providers.codeagent），没有这个 CLI 的电脑可以指向测试替身
 // tests/fixtures/codeagent-standin/codeagent.cmd（内部启动真 Claude Code）。
 const fs = require('fs');
 const os = require('os');
@@ -61,12 +61,15 @@ function configDirEnvName(env = process.env, provider = hubProviderConfig()) {
 // 注册表读不出来、出错时一律忽略：宁可落到 ~/.cac，也不回到号 1。
 // 变量名本身照旧用：启动 CodeAgent 时由 Hub 把真正的配置目录显式写进这个变量。
 function resolveCodeAgentConfig(env = process.env, provider = hubProviderConfig(), { decision = inheritedDecision, discovered = discoveredCommand } = {}) {
-  const explicitCommand = cleanString(env.AI_HUB_CODEAGENT_COMMAND) || cleanString(provider.command);
+  const envCommand = cleanString(env.AI_HUB_CODEAGENT_COMMAND);
+  const explicitCommand = envCommand || cleanString(provider.command);
   // 1.2605.01-IN（3.0 首版）的启动命令叫 cac，之后改名 codeagent（公司回执 Q-1028-06，FAQ 原文）。没指定命令、PATH 里没有 codeagent 但有 cac 时用 cac。
   const onPath = !commandOnPath(DEFAULT_COMMAND, env) && commandOnPath(LEGACY_COMMAND, env) ? LEGACY_COMMAND : DEFAULT_COMMAND;
   // 指定的是完整路径但文件已经不在（被卸载 / 移动）：不再一直报错，回到自动发现的结果（2026-11-07）。
-  const explicitUsable = explicitCommand && (!path.isAbsolute(explicitCommand) || commandFile(explicitCommand, env));
-  const command = explicitUsable ? explicitCommand : discoveredFor(discovered, onPath, env) || explicitCommand || onPath;
+  const explicitUsable = explicitCommand && commandFile(explicitCommand, env);
+  const selectedCommand = discoveredFor(discovered, onPath, env);
+  const command = envCommand && explicitUsable ? envCommand
+    : selectedCommand || explicitCommand || onPath;
   const configDirEnv = configDirEnvName(env, provider);
   if (/[\r\n"`$;&|<>]/.test(command)) throw new Error('CodeAgent 命令包含不允许的字符');
   const home = env.USERPROFILE || env.HOME || os.homedir();
@@ -250,7 +253,7 @@ function commandFile(command, env = process.env) {
   if (path.isAbsolute(command)) return exists(command) ? command : '';
   const pathKey = Object.keys(env).find(k => k.toLowerCase() === 'path') || 'PATH';
   const dirs = String(env[pathKey] || '').split(path.delimiter).filter(Boolean);
-  const exts = process.platform === 'win32' ? ['.exe', '.cmd', '.bat'] : [''];
+  const exts = process.platform === 'win32' ? (/\.(exe|cmd|bat)$/i.test(command) ? [''] : ['.exe', '.cmd', '.bat']) : [''];
   for (const dir of dirs) for (const ext of exts) {
     const file = path.join(dir.replace(/^"|"$/g, ''), command + ext);
     if (exists(file)) return file;

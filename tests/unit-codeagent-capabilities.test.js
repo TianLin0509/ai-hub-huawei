@@ -35,31 +35,24 @@ function fakeExec(outputs, calls = [], { hold = false } = {}) {
   };
   return { exec, releases };
 }
-// 模拟同步 CLI：同步入口的判定结果作为对照基准。
-const fakeRun = outputs => (file, args) => {
-  const flag = String(args.at(-1)).split(' ').at(-1);
-  return outputs[flag] === undefined ? { status: 1, stdout: '' } : { status: 0, stdout: outputs[flag] };
-};
-
 for (const [label, outputs, expected] of [
   ['旧版过滤帮助里没有的参数', { '--version': '1.2605.05.01\n', '--help': HELP }, ['--model', 'm']],
-  ['1.2615 及以上原样', { '--version': '1.2615.0.0\n', '--help': HELP }, FULL],
-  ['版本读不到原样', { '--help': HELP }, FULL],
+  ['1.2615 也按实际能力过滤', { '--version': '1.2615.0.0\n', '--help': HELP }, ['--model', 'm']],
+  ['3.x 也按实际能力过滤', { '--version': '3.2.0\n', '--help': HELP }, ['--model', 'm']],
+  ['版本读不到仍按帮助过滤', { '--help': HELP }, ['--model', 'm']],
+  ['新版完整支持时原样', { '--version': '3.2.0\n', '--help': HELP + '  --disable-update\n  --effort <level>\n' }, FULL],
   ['旧版但帮助读不到原样', { '--version': '1.2605.05.01\n' }, FULL],
   ['旧版但帮助不像 CodeAgent 原样', { '--version': '1.2605.05.01\n', '--help': 'garbage\n' }, FULL],
 ]) {
-  test(`异步探测与同步入口判定一致：${label}`, async t => {
+  test(`后台探测后同步入口使用缓存：${label}`, async t => {
     const command = fakeCli(t);
     caps._helpCache.clear();
     const calls = [];
     await caps.prepare(command, { exec: fakeExec(outputs, calls).exec, platform: 'win32' });
     assert.ok(calls.length >= 1 && calls.every(call => call.windowsHide === true), '探测进程隐藏窗口');
-    const noRun = () => { throw new Error('prepare 之后不应再同步起进程'); };
-    const afterPrepare = caps.filterArgs(FULL, caps.readHelp(command, { run: noRun, platform: 'win32' }));
-    caps._helpCache.clear();
-    const synchronous = caps.filterArgs(FULL, caps.readHelp(command, { run: fakeRun(outputs), platform: 'win32' }));
+    t.mock.method(require('child_process'), 'spawnSync', () => assert.fail('prepare 之后不应再同步起进程'));
+    const afterPrepare = caps.filterArgs(FULL, caps.readHelp(command, { platform: 'win32' }));
     assert.deepEqual(afterPrepare.args, expected);
-    assert.deepEqual(afterPrepare, synchronous);
   });
 }
 
@@ -83,7 +76,7 @@ test('程序文件被替换后立即重新探测，6 小时内容不变则不重
   fs.writeFileSync(command, 'upgraded-binary');
   await caps.prepare(command, { exec: fakeExec({ '--version': '1.2615.0.0\n' }, calls).exec, platform: 'win32' });
   assert.equal(caps.readHelp(command, { run: () => { throw new Error('no'); }, platform: 'win32' }), '', '升级后不再过滤');
-  assert.deepEqual(calls.map(call => call.flag), ['--version', '--help', '--version']);
+  assert.deepEqual(calls.map(call => call.flag), ['--version', '--help', '--version', '--help']);
 });
 
 test('6 小时到期重新探测', async t => {
@@ -95,10 +88,10 @@ test('6 小时到期重新探测', async t => {
   await caps.prepare(command, { exec, platform: 'win32', now: () => now });
   now += 6 * 3600 * 1000 - 1;
   await caps.prepare(command, { exec, platform: 'win32', now: () => now });
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
   now += 1;
   await caps.prepare(command, { exec, platform: 'win32', now: () => now });
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 4);
 });
 
 test('探测途中程序被替换：旧探测晚到不覆盖新结果', async t => {
@@ -116,33 +109,45 @@ test('探测途中程序被替换：旧探测晚到不覆盖新结果', async t 
   assert.equal(caps.readHelp(command, { run: () => { throw new Error('no'); }, platform: 'win32' }), '');
 });
 
-test('没走 prepare 的入口仍同步探测，结果写入缓存', t => {
+test('冷缓存同步入口立即原样启动，不同步探测版本或帮助；prepare 后使用缓存', async t => {
   const command = fakeCli(t);
   caps._helpCache.clear();
   let runs = 0;
-  const run = (...args) => { runs++; return fakeRun({ '--version': '1.2605.05.01\n', '--help': HELP })(...args); };
-  assert.equal(caps.readHelp(command, { run, platform: 'win32' }), HELP);
-  assert.equal(caps.readHelp(command, { run, platform: 'win32' }), HELP);
-  assert.equal(runs, 2, '--version 和 --help 各一次');
+  t.mock.method(require('child_process'), 'spawnSync', () => {
+    runs++;
+    return { status: 0, stdout: HELP };
+  });
+  const options = { platform: 'win32' };
+  assert.equal(caps.readHelp(command, options), '');
+  assert.equal(caps.readHelp(command, options), '');
+  assert.deepEqual(caps.filterArgs(FULL, caps.readHelp(command, options)), { args: FULL, dropped: [] });
+  assert.equal(runs, 0, '冷缓存不启动同步 CLI');
+  assert.equal(caps._helpCache.has(command), false, '冷缓存不写空结果阻止后台探测');
+  await caps.prepare(command, { exec: fakeExec({ '--version': '1.2605.05.01\n', '--help': HELP }).exec, ...options });
+  assert.equal(caps.readHelp(command, options), HELP);
+  fs.writeFileSync(command, 'upgraded-binary');
+  assert.equal(caps.readHelp(command, options), '', '程序变化后不能继续用旧帮助');
+  assert.equal(runs, 0, '程序变化也不启动同步 CLI');
 });
 
 test('发送时过期缓存立即返回且并发后台刷新只运行一次', async t => {
   const command = fakeCli(t);
   caps._helpCache.clear();
   let now = 1000;
-  caps.readHelp(command, { run: fakeRun({ '--version': '1.2605.05.01', '--help': HELP }), now: () => now });
+  await caps.prepare(command, { exec: fakeExec({ '--version': '1.2605.05.01', '--help': HELP }).exec, now: () => now });
   now += 6 * 3600 * 1000;
   const calls = [], held = fakeExec({ '--version': '1.2615.0.0' }, calls, { hold: true });
   const options = { run: () => assert.fail('不能同步启动 CLI'), exec: held.exec, platform: 'win32', now: () => now };
   assert.equal(caps.readHelp(command, options), HELP);
   assert.equal(caps.readHelp(command, options), HELP);
   await new Promise(setImmediate);
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
   const refresh = caps.prepare(command, options);
+  held.releases.shift()();
   held.releases.shift()();
   await refresh;
   assert.equal(caps.readHelp(command, options), '', '刷新后的新版本不再过滤参数');
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 2);
 });
 
 test('群聊会话等异步能力预读完成才创建', async t => {
@@ -194,7 +199,7 @@ test('子进程占着管道不回调时 4 秒放行并结束进程树', { timeou
   await caps.prepare(command, { exec, platform: 'win32', kill: child => killed.push(child.pid) });
   const elapsed = Date.now() - started;
   assert.ok(elapsed >= 3900 && elapsed < 6000, `耗时 ${elapsed}ms`);
-  assert.deepEqual(killed, [4242]);
+  assert.deepEqual(killed, [4242, 4242]);
   assert.equal(caps.readHelp(command, { run: () => { throw new Error('no'); }, platform: 'win32' }), '', '超时按读不到处理，原样启动');
 });
 

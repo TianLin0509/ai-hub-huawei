@@ -191,7 +191,9 @@ function createResumeSessionHandler(deps) {
     if (meta.codeagentPrefixFork) discoverClaudeHistory = false;
     if (discoverClaudeHistory) {
       try {
-        const discovered = findTranscriptByCCSessionId(meta.ccSessionId);
+        const projects = require('../../core/codeagent-transcript-dirs').accountProjectsRoot(meta, getHubDataDir());
+        const discovered = projects ? findTranscriptByCCSessionId(meta.ccSessionId, undefined, [projects])
+          : findTranscriptByCCSessionId(meta.ccSessionId);
         if (discovered) resumeTranscriptPath = discovered;
       } catch {}
     }
@@ -319,6 +321,7 @@ function createResumeSessionHandler(deps) {
       ...(meta.codeagentForkSourceSessionId ? { codeagentForkSourceSessionId: meta.codeagentForkSourceSessionId } : {}),
       ...(meta.codeagentPrefixFork ? { codeagentPrefixFork: meta.codeagentPrefixFork } : {}),
       ...(meta.codeagentPoolAccount && /^codeagent(?:-resume)?$/.test(meta.kind) ? { codeagentPoolAccount: meta.codeagentPoolAccount } : {}),
+      ...(meta.codeagentConfigDir && /^codeagent(?:-resume)?$/.test(meta.kind) ? { codeagentConfigDir: meta.codeagentConfigDir } : {}),
       // 公司模型会话固定用的号：恢复后还是这个号（session-manager 不再核对，号后来不能用时由反代说明）。
       ...(meta.companyProxyAccount && /^(?:claude|codex|deepseek-acp)(?:-resume)?$/.test(meta.kind) ? { companyProxyAccount: meta.companyProxyAccount } : {}),
       ...(meta.codeagentRouteModel && /^codeagent(?:-resume)?$/.test(meta.kind) ? { codeagentRouteModel: meta.codeagentRouteModel } : {}),

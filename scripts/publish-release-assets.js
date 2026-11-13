@@ -133,7 +133,12 @@ async function publishRelease(options = {}, deps = {}) {
   }
   function release() {
     try {
-      const r = JSON.parse(gh(['api', `repos/${repo}/releases/tags/${tag}`]));
+      // GitHub's releases/tags/{tag} endpoint never returns drafts (404), so look the tag up in the release list,
+      // which does include drafts for a token with push access.
+      const list = JSON.parse(gh(['api', `repos/${repo}/releases?per_page=100`]));
+      requireFact(Array.isArray(list), 'GitHub release list response is invalid');
+      const r = list.find(item => item && item.tag_name === tag);
+      if (!r) return null;
       requireFact(r.tag_name === tag && Number.isSafeInteger(r.id) && r.id > 0 && Array.isArray(r.assets), 'GitHub release response is invalid');
       return r;
     } catch (error) { if (error.notFound) return null; throw error; }

@@ -90,29 +90,51 @@ const CA_NAMES = ['codeagent', 'cac'], CA_EXTS = process.platform === 'win32' ? 
 function codeagentIn(dir) {
   if (!dir) return null;
   for (const name of CA_NAMES) for (const ext of CA_EXTS) { const f = path.join(dir, name + ext); if (exists(f)) return f; }
+  // 安装记录常指向 bin 里的主程序；同一份安装有入口壳时仍用壳，让证书和代理初始化照常运行。
+  for (const ext of CA_EXTS) {
+    const main = path.join(dir, 'codeagentcli' + ext);
+    if (!exists(main)) continue;
+    if (path.basename(dir).toLowerCase() === 'bin') {
+      for (const name of CA_NAMES) for (const wrapperExt of CA_EXTS) {
+        const wrapper = path.join(path.dirname(dir), name + wrapperExt);
+        if (exists(wrapper)) return wrapper;
+      }
+    }
+    return main;
+  }
   return null;
 }
 // 常见安装目录：%LOCALAPPDATA%\Programs、%ProgramFiles%、%ProgramFiles(x86)% 下名字里带 codeagent 的文件夹（本身和 bin 子目录）。
 function installDirs(env = process.env) {
   const out = [];
-  for (const base of [env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'Programs'), env.ProgramFiles, env['ProgramFiles(x86)']].filter(Boolean)) {
+  for (const base of [env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'Programs'), env.LOCALAPPDATA, env.ProgramFiles, env['ProgramFiles(x86)']].filter(Boolean)) {
     let entries = [];
     try { entries = fs.readdirSync(base, { withFileTypes: true }); } catch { continue; }
     for (const e of entries) if (e.isDirectory() && /code\s*-?agent/i.test(e.name)) out.push(path.join(base, e.name), path.join(base, e.name, 'bin'));
   }
   return out;
 }
-function codeagentAdapter(store, { env = process.env, registryDirs = registryPathDirs } = {}) {
+function codeagentAdapter(store, { env = process.env, registryDirs = registryPathDirs, registryInstalls = require('./codeagent-install-dirs').registryInstallDirs, providerConfig = () => require('../hub-config').getConfig()?.providers?.codeagent || {} } = {}) {
+  const configuredCommand = () => {
+    let provider = {};
+    try { provider = providerConfig(); } catch { /* 没有 Hub 配置 */ }
+    const command = String(env.AI_HUB_CODEAGENT_COMMAND || provider.command || '').trim();
+    return command ? require('../codeagent-config').commandFile(command, env) || (path.isAbsolute(command) ? command : '') : '';
+  };
   return {
     label: 'CodeAgent',
     async list() {
       const out = [];
       const add = (file, via) => { if (file) out.push({ path: file, via }); };
       add(this.getConfigured(), 'manual');
-      for (const dir of pathDirs(env)) add(codeagentIn(dir), 'path');
+      add(configuredCommand(), 'manual');
+      for (const dir of await registryInstalls({ env })) {
+        add(codeagentIn(dir) || codeagentIn(path.join(dir, 'bin')), 'registry');
+      }
+      for (const dir of installDirs(env)) add(codeagentIn(dir), 'install');
       for (const dir of npmPrefixes(env)) add(codeagentIn(dir), 'npm');
       for (const dir of await registryDirs({ env })) add(codeagentIn(dir), 'path');
-      for (const dir of installDirs(env)) add(codeagentIn(dir), 'install');
+      for (const dir of pathDirs(env)) add(codeagentIn(dir), 'path');
       return out;
     },
     probe(file) {
@@ -123,7 +145,7 @@ function codeagentAdapter(store, { env = process.env, registryDirs = registryPat
       } catch { /* 读不到账号环境也照样读版本 */ }
       return probeVersion(file, { timeoutMs: 10000, env: probeEnv, parse: require('../codeagent-version-probe').parseCodeAgentVersion });
     },
-    getConfigured: () => store.choice('codeagent'),
+    getConfigured: () => store.choice('codeagent') || configuredCommand(),
     setConfigured: file => store.setChoice('codeagent', file),
     // 选定的路径交给 codeagent-config：之后建会话、查版本、开登录窗口都用它。
     onPick: file => {

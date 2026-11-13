@@ -1801,6 +1801,7 @@ class SessionManager extends EventEmitter {
     require('./auto-dispatch-rules').applySessionEnv(sessionEnv, isCodeAgent ? opts.purpose : null);
     let codexProfile = null;
     let codeagentConfig = isCodeAgent ? require('./codeagent-config').resolveCodeAgentConfig(process.env) : null;
+    if (isCodeAgent && opts.codeagentConfigDir) codeagentConfig = { ...codeagentConfig, configDir: opts.codeagentConfigDir };
     if (isCodeAgent && opts.codeagentPrefixFork?.configDir) codeagentConfig = { ...codeagentConfig, configDir: opts.codeagentPrefixFork.configDir };
     // 自动会话首次按账号定模型；已有固定模型的恢复沿用固定值。
     if (isCodeAgent && codeAgentReadOnly(opts) && !opts.fixedModel) opts = { ...opts, model: undefined, codeagentModelPick: false, codeagentAccountModel: undefined };
@@ -4566,6 +4567,7 @@ try {
       ...(info.pinned !== undefined ? { pinned: info.pinned } : {}),
       ...(info.bottomed !== undefined ? { bottomed: info.bottomed } : {}),
       ...(info.ccSessionId !== undefined ? { ccSessionId: info.ccSessionId } : {}),
+      ...(info.codeagentConfigDir ? { codeagentConfigDir: info.codeagentConfigDir } : {}),
       ...(info.codeagentForkSourceSessionId ? { codeagentForkSourceSessionId: info.codeagentForkSourceSessionId } : {}),
       ...(info.codeagentPoolAccount ? { codeagentPoolAccount: info.codeagentPoolAccount, codeagentPoolLabel: info.codeagentPoolLabel || '' } : {}),
       // 公司版线路：DSH、原生 Codex 建会话和后续更新都只发这份公开形态，漏掉它分支的标题栏和卡片就不写公司模型。

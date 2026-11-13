@@ -3,6 +3,12 @@
 // 绑定的记录所在目录，加上「号的配置目录\projects\<工作目录 slug>」（工作目录的真实路径不同就两种都查）。
 const fs = require('node:fs');
 function projectSlugOf(cwd) { return require('node:path').resolve(String(cwd || '')).replace(/[^\p{L}\p{N}]/gu, '-'); }
+function accountProjectsRoot(meta, dataDir) {
+  if (!require('./ai-kinds').isCodeAgentKind(meta?.kind)) return null;
+  const configDir = meta.codeagentConfigDir || meta.codeagentPrefixFork?.configDir
+    || (meta.codeagentPoolAccount && dataDir ? require('./codeagent-pool').accountDir(dataDir, meta.codeagentPoolAccount) : null);
+  return configDir ? require('node:path').join(configDir, 'projects') : null;
+}
 function transcriptDirs(meta, fsModule = fs) {
   const path = require('node:path');
   const dirs = [];
@@ -37,4 +43,4 @@ function candidateTranscripts(meta, since, fsModule = fs) {
   const bound = String(meta?.transcriptPath || '').toLowerCase();
   return out.sort((a, b) => Number(b.file.toLowerCase() === bound) - Number(a.file.toLowerCase() === bound) || b.mtime - a.mtime).slice(0, MAX_SCAN_FILES);
 }
-module.exports = { projectSlugOf, transcriptDirs, candidateTranscripts, MAX_SCAN_FILES, MAX_SCAN_BYTES };
+module.exports = { projectSlugOf, accountProjectsRoot, transcriptDirs, candidateTranscripts, MAX_SCAN_FILES, MAX_SCAN_BYTES };
