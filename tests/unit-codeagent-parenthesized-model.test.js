@@ -34,8 +34,8 @@ test('company model ids preserve parentheses while refusing control and shell ch
     assert.equal(models.isSafeModelId(id), false, JSON.stringify(id));
     assert.equal(buildArgs(CC, { model: id }).includes('--model'), false, JSON.stringify(id));
   }
-  assert.equal(models.isSafeModelId('G'.repeat(97)), false);
-  assert.equal(buildArgs(CC, { model: 'G'.repeat(101) }).includes('--model'), false);
+  assert.equal(models.isSafeModelId('G'.repeat(165)), false);
+  assert.equal(buildArgs(CC, { model: 'G'.repeat(165) }).includes('--model'), false);
 });
 
 test('account catalogs and legacy configuration scans retain the exact parenthesized model ids', t => {

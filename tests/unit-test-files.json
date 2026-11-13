@@ -1,5 +1,6 @@
 [
   "tests/unit-token-usage.test.js",
+  "tests/unit-model-id.test.js",
   "tests/unit-session-background-tasks.test.js",
   "tests/unit-community.test.js",
   "tests/unit-codeagent-capabilities.test.js",

@@ -53,7 +53,7 @@ function buildCodexSideArgs({ session, outputFile, mcpNames = [] }) {
     '-c', `model_reasoning_effort="${effort}"`];
   if (session.cwd) args.push('-C', session.cwd);
   const model = session.currentModel && session.currentModel.id;
-  if (typeof model === 'string' && /^[\w.:\-]+$/.test(model)) args.push('-m', model);
+  if (require('./model-id').isSafeModelId(model)) args.push('-m', model);
   for (const config of quotedConfigs(require('./codex-speed-tier').buildCodexSpeedTierArg(session.codexSpeedTier))) args.push('-c', config);
   for (const name of mcpNames) args.push('-c', `mcp_servers.${name}.enabled=false`);
   // 问题走 stdin：中文、引号和换行都不经过命令行转义。

@@ -24,14 +24,14 @@ test('known OAuth token fields redact mixed base64 values through JSON escape la
 });
 function temp(t) { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stamp-retry-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true })); return dir; }
 
-function launcher(cases, { killSucceeds = true } = {}) {
+function launcher(cases, { killSucceeds = true, later = setTimeout, soon = setImmediate } = {}) {
   const calls = [], launches = [], killed = [];
   const spawn = (command, args, options) => {
     const child = new EventEmitter(); child.stdout = new PassThrough(); child.kill = () => child.emit('close', null);
     calls.push({ command, args, options });
     if (/taskkill/i.test(command)) {
       const pid = Number(args[1]); killed.push(pid);
-      setImmediate(() => {
+      soon(() => {
         if (killSucceeds) {
           const owner = launches.find(item => item.cliPid === pid || item.hostPid === pid);
           if (owner) owner.child.emit('close', 0);
@@ -43,7 +43,7 @@ function launcher(cases, { killSucceeds = true } = {}) {
     const index = launches.length, scenario = cases[Math.min(index, cases.length - 1)];
     const retry = options.env.HUB_STAMP_PRIVATE_RETRY === '1';
     const item = { child, cliPid: 700 + index, hostPid: 900 + index, retry }; launches.push(item);
-    setTimeout(() => {
+    later(() => {
       if (scenario.startFailed) {
         child.stdout.write('CLI_START_FAILED\r\nCLI_ERROR=PRIVATE_DESKTOP_START_FAILED\r\n'); child.emit('close', 3); return;
       }
@@ -55,7 +55,7 @@ function launcher(cases, { killSucceeds = true } = {}) {
       if (scenario.stderr) fs.writeFileSync(options.env.HUB_STAMP_ERR, scenario.stderr);
       if (scenario.log) fs.writeFileSync(path.join(options.env.TEMP, 'codeagent_signer.log'), scenario.log === true
         ? 'x SnapEngineSigner created: 9.1.2-win32-x64-1730000000123 more\n' : scenario.log);
-      if (!scenario.hang) setTimeout(() => {
+      if (!scenario.hang) later(() => {
         child.stdout.write(`${retry ? 'HOST_EXIT' : 'CLI_EXIT'}=${scenario.exitCode ?? 7}\r\n`); child.emit('close', 0);
       }, 6);
     }, 4);
@@ -121,18 +121,37 @@ test('logs, explicit non-private tests and private desktop startup failure never
 
 test('each retry attempt is bounded and an unconfirmed first CLI cleanup suppresses the second run', async t => {
   const { probeNativeStamp } = await load();
-  const timed = launcher([{ hang: true }]);
-  const started = Date.now();
+  // Only an awaited poll advances this clock. Filesystem work and event-loop
+  // scheduling cannot consume the CLI's 35ms budget before its PID arrives.
+  let time = 1000;
+  const waits = [];
+  const clock = { now: () => time, waitFor: async (closed, ms) => {
+    let exited = false;
+    closed.then(() => { exited = true; });
+    await Promise.resolve();
+    if (!exited) { waits.push(ms); time += ms; }
+  } };
+  const schedule = { later: queueMicrotask, soon: queueMicrotask };
+  const timed = launcher([{ hang: true }], schedule);
+  const started = time;
   const result = await probeNativeStamp({ cliExe: 'C:\\X\\codeagentcli.exe', expectedVersion: '9.1.2', workRoot: temp(t),
-    env: {}, spawnImpl: timed.spawn, pollMs: 5, timeoutMs: 35 });
+    env: {}, spawnImpl: timed.spawn, pollMs: 5, timeoutMs: 35, ...clock });
   assert.equal(timed.launches.length, 2); assert.equal(result.report.error, 'CLI_TIMEOUT');
-  assert.ok(Date.now() - started >= 60 && Date.now() - started < 1000);
+  assert.equal(time - started, 70);
+  assert.equal(result.report.elapsedMs, 70);
+  assert.deepEqual(result.report.attempts.map(attempt => [attempt.stoppedBy, attempt.error, attempt.elapsedMs]),
+    [['timeout', 'CLI_TIMEOUT', 35], ['timeout', 'CLI_TIMEOUT', 35]]);
+  assert.deepEqual(waits, Array(14).fill(5));
   assert.deepEqual(timed.killed, [700, 701]);
-  const stuck = launcher([{ hang: true }], { killSucceeds: false });
+  const stuck = launcher([{ hang: true }], { killSucceeds: false, ...schedule });
   const failed = await probeNativeStamp({ cliExe: 'C:\\X\\codeagentcli.exe', expectedVersion: '9.1.2', workRoot: temp(t),
-    env: {}, spawnImpl: stuck.spawn, pollMs: 5, timeoutMs: 25 });
+    env: {}, spawnImpl: stuck.spawn, pollMs: 5, timeoutMs: 25, ...clock });
   assert.equal(stuck.launches.length, 1); assert.equal(failed.report.cleanupConfirmed, false);
   assert.equal(failed.report.retrySuppressed, 'cleanup-unconfirmed');
+  assert.equal(failed.report.error, 'CLI_TIMEOUT');
+  assert.equal(failed.report.stoppedBy, 'timeout');
+  assert.deepEqual(stuck.killed, [700]);
+  assert.deepEqual(waits.slice(14), [5, 5, 5, 5, 5, 3000]);
 });
 
 test('stderr redaction masks complete spaced profile names through raw and two JSON escape layers', async () => {

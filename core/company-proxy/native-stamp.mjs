@@ -297,10 +297,17 @@ const killTree = (spawnImpl, pid) => new Promise(resolve => {
  * logExists, logBytes, logLines, markerMatched, stampParsed, logVersionStatus, envDropped, consoleMode, elapsedMs, error }.
  * Options: cliExe, configDir (CodeAgent's data dir), expectedVersion, workRoot (an existing Hub-owned directory),
  * timeoutMs, model (optional), env (base environment), spawnImpl / powershell (tests).
+ * now / waitFor inject a clock and a bounded wait for deterministic timeout tests.
  */
+const waitForExit = (closed, ms) => new Promise(resolve => {
+  const timer = setTimeout(resolve, ms);
+  closed.then(() => { clearTimeout(timer); resolve(); });
+});
+
 async function probeNativeStampOnce({ cliExe, configDir, expectedVersion, workRoot, timeoutMs = 45_000, model = '',
-  env = process.env, spawnImpl = nodeSpawn, powershell = POWERSHELL, pollMs = 250, privateDesktop = true, nativeRuntimeDir } = {}, privateStartProcess = false) {
-  const started = Date.now();
+  env = process.env, spawnImpl = nodeSpawn, powershell = POWERSHELL, pollMs = 250, privateDesktop = true, nativeRuntimeDir,
+  now = Date.now, waitFor = waitForExit } = {}, privateStartProcess = false) {
+  const started = now();
   const report = { ran: true, cliStarted: false, cliExitCode: null, stoppedBy: null, logExists: false, logBytes: 0, logLines: 0,
     markerMatched: false, stampParsed: false, logVersionStatus: 'unknown', envDropped: 0, consoleMode: 'unknown',
     tempCategory: 'hub-work-temp', elapsedMs: 0, error: null, stderrPreview: [], stderrPreviewTruncated: false,
@@ -371,8 +378,8 @@ async function probeNativeStampOnce({ cliExe, configDir, expectedVersion, workRo
   while (true) {
     if (await check()) { report.stoppedBy = 'stamp'; break; }
     if (launcherClosed) { await check(); report.stoppedBy = report.error === 'CLI_START_FAILED' || !report.cliStarted ? 'start-failed' : 'exit'; break; }
-    if (Date.now() >= deadline) { report.stoppedBy = 'timeout'; break; }
-    await Promise.race([closed, new Promise(r => setTimeout(r, pollMs))]);
+    if (now() >= deadline) { report.stoppedBy = 'timeout'; break; }
+    await waitFor(closed, pollMs);
   }
   const stamp = parsed?.stamp || null;
   report.stampParsed = !!stamp;
@@ -397,7 +404,7 @@ async function probeNativeStampOnce({ cliExe, configDir, expectedVersion, workRo
   if (!launcherClosed) {
     if (cliPid) treeStopped = await killTree(spawnImpl, cliPid);
     else if (hostPid) treeStopped = await killTree(spawnImpl, hostPid);
-    await Promise.race([closed, new Promise(r => setTimeout(r, 3000))]);
+    await waitFor(closed, 3000);
     if (!launcherClosed) {
       if (hostPid) treeStopped = await killTree(spawnImpl, hostPid) || treeStopped;
       try { launcher?.kill(); } catch { /* gone */ }
@@ -405,7 +412,7 @@ async function probeNativeStampOnce({ cliExe, configDir, expectedVersion, workRo
   }
   await checkProtocol();
   report.cleanupConfirmed = treeStopped || launcherClosed && (!report.cliStarted || Number.isInteger(report.cliExitCode));
-  report.elapsedMs = Date.now() - started;
+  report.elapsedMs = now() - started;
   if (!ok) {
     const stderr = await readLog(launcherEnv.HUB_STAMP_ERR);
     const preview = stderrPreview(stderr.text, { env });
@@ -426,7 +433,8 @@ async function probeNativeStampOnce({ cliExe, configDir, expectedVersion, workRo
 // log. The alternative launcher remains on another private desktop. Each attempt
 // keeps the existing bounded timeout; the first tree must be stopped first.
 export async function probeNativeStamp(options = {}) {
-  const started = Date.now();
+  const now = options.now || Date.now;
+  const started = now();
   const first = await probeNativeStampOnce(options);
   first.report.cliRuns = first.report.cliStarted ? 1 : 0;
   if (first.ok || options.privateDesktop === false || first.report.consoleMode !== 'private-desktop' || !first.report.cliStarted || first.report.logExists !== false) return first;
@@ -434,7 +442,7 @@ export async function probeNativeStamp(options = {}) {
   const second = await probeNativeStampOnce({ ...options, privateDesktop: true }, true);
   const attempts = [{ ...first.report }, { ...second.report }];
   second.report = { ...second.report, retried: true, attempts,
-    cliRuns: attempts.reduce((count, report) => count + (report.cliStarted ? 1 : 0), 0), elapsedMs: Date.now() - started };
+    cliRuns: attempts.reduce((count, report) => count + (report.cliStarted ? 1 : 0), 0), elapsedMs: now() - started };
   return second;
 }
 

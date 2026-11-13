@@ -16,7 +16,7 @@ const path = require('path');
 
 const BACKUP_PREFIX = 'settings.json.hub-backup-';
 const KEEP_BACKUPS = 10;
-const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$/;
+const { isSafeModelId } = require('./model-id');
 
 function stamp(now) {
   const d = new Date(Number(now) + 8 * 3600000); // 北京时间，便于人看
@@ -116,7 +116,7 @@ function setPersonalModel({ dataDir, personalDir, model = '', restore = false, f
     verifiedBy = 'backup';
   } else {
     const want = String(model || '').trim();
-    if (!MODEL_ID.test(want)) throw fail('bad-model', 'model 要是模型名（如 GLM-5.2-WX-Auto）');
+    if (!isSafeModelId(want)) throw fail('bad-model', 'model 要是模型名（如 GLM-5.2-WX-Auto）');
     if (!allowed.length) throw fail('list-unknown', '个人账号的模型权限清单未知，不改；请在公司 Hub 左栏「账号」里点「获取模型权限」');
     target = allowed.find(m => m.toLowerCase() === want.toLowerCase());
     if (!target) throw fail('not-in-list', `${want} 不在个人账号的权限清单里，可选：${allowed.join('、')}`);

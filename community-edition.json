@@ -58,12 +58,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "修复 CodeAgent 装在非默认位置时找不到程序的问题，会自动从安装记录和常见目录里找到并记住",
-    "非 2615 版本的 CodeAgent 不再被限制功能，改为按实际支持的能力启用",
-    "修复部分会话后台有回答但卡片空白的问题",
-    "在设置里手动选择的 CodeAgent 版本会被优先使用"
+    "模型名里带括号、冒号、斜杠、@ 等常见写法都能正常选用，各处规则统一"
   ],
-  "version": "5.6.21",
+  "version": "5.6.22",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

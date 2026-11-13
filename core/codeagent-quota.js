@@ -7,6 +7,7 @@
 // 新增输出匹配须真实样本（项目规则）：内置规则每条都写明样本出处；没有样本的格式不写进内置表。
 const fs = require('fs');
 const path = require('path');
+const { isSafeModelId, MODEL_ID_SOURCE } = require('./model-id');
 
 const RULES_FILE = 'quota-rules.json';
 const STATE_FILE = 'quota-avoid.json';
@@ -35,7 +36,7 @@ const BUILTIN_RULES = Object.freeze([
   //   每次开会话都会报，不会自己恢复：只对这个号请求这个模型时避让，第 1 个捕获组是被请求的模型。全角半角冒号、各种引号、空格宽松。
   Object.freeze({
     id: 'codeagent-model-config-v1', kind: 'model-config', where: ['transcript', 'screen'],
-    pattern: 'API\\s*Error[\\s\\S]{0,160}?模\\s*型\\s*[:：]?\\s*\\\\?["\'“”‘’「」『』＂]?\\s*([A-Za-z0-9][A-Za-z0-9._:/-]{0,79}?)\\s*\\\\?["\'“”‘’「」『』＂]?\\s*不\\s*存\\s*在\\s*或(?:\\s*者)?\\s*配\\s*置\\s*有\\s*误',
+    pattern: 'API\\s*Error[\\s\\S]{0,160}?模\\s*型\\s*[:：]?\\s*\\\\?["\'“”‘’「」『』＂]?\\s*(' + MODEL_ID_SOURCE + '?)\\s*\\\\?["\'“”‘’「」『』＂]?\\s*不\\s*存\\s*在\\s*或(?:\\s*者)?\\s*配\\s*置\\s*有\\s*误',
     flags: 'i',
     sample: 'API Error: 模型 "deepseek-v4-flash-0731" 不存在或配置有误，请检查模型配置',
     origin: '2026-10-19 公司真机原生记录里的结构化 API 错误',
@@ -113,7 +114,7 @@ function matchText(text, rules, where, now = Date.now()) {
     const endNl = s.indexOf('\n', m.index + m[0].length);
     const line = s.slice(start, endNl < 0 ? undefined : endNl).trim();
     // 模型配置有误：第 1 个捕获组是被请求的模型（只认长得像模型名的）
-    const model = rule.kind === 'model-config' && m[1] && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,79}$/.test(m[1]) ? m[1] : '';
+    const model = rule.kind === 'model-config' && isSafeModelId(m[1]) ? m[1] : '';
     return { rule, text: line.slice(0, MAX_SAMPLE), resetAt: rule.reset ? parseReset(s, rule.reset, now) : null, ...(rule.kind === 'model-config' ? { model } : {}) };
   }
   return null;

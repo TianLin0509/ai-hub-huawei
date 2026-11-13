@@ -3,12 +3,13 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { isSafeModelId } = require('./model-id');
 const { scanTomlStatements, samePath, simpleStringValue } = require('./toml-statements');
 
 // Only the explicit local-CLI route uses these names. Subscription catalogs
 // keep their own provider checks; model names never select credentials.
 function isLocalCliModelId(value) {
-  return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}(?:\[1m\])?$/.test(value)
+  return isSafeModelId(value)
     && !require('./model-options').CODEX_NON_CONVERSATION_MODEL_RE.test(value);
 }
 

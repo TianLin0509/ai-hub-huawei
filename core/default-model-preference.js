@@ -23,13 +23,8 @@ const {
 const CONFIG_KEY = 'defaultModels';
 const CONFIG_JSON_PATH = ['models', 'defaults'];
 
-// 命令行安全的模型 id 形状：字母数字开头，其后允许 . _ - / 和 Hub 自己的 [1m]
-// 后缀。刻意不放行空格、引号、分号、反引号之类能改变命令语义的字符。
-const SAFE_MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}(?:\[1m\])?$/;
-
-function isSafeModelId(modelId) {
-  return SAFE_MODEL_ID_RE.test(String(modelId || '').trim());
-}
+// 命令行安全的模型 id 形状：全 Hub 共用 core/model-id.js 一处规则（2026-11-14 收拢）。
+const { isSafeModelId } = require('./model-id');
 
 // 每个 kind 自己的语义校验，防止把 Codex 的模型设成 Claude 的默认值。
 // claude / codex 用各自已有的判据（它们能认出静态清单里还没有的新模型，

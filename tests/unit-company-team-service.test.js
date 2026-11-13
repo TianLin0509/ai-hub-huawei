@@ -34,6 +34,16 @@ test('company rejects unsupported kinds, malformed model names, and unavailable 
   h.rows[0].usable=false;await assert.rejects(h.service.invoke('lead-0001','propose',{goal:'目标',members:[member()]}),/账号不可用/);
   assert.equal(h.created.length,0);
 });
+test('company proposals and approval edits preserve the shared model ID characters and length',async t=>{
+  const h=harness(t);
+  const model='GLM-5.2-Auto(Volcano-MaaS)@preview+fast[1m]';
+  const edited='G'.repeat(164);
+  h.rows[0].models.push(model,edited);
+  const p=await h.service.invoke('lead-0001','propose',{goal:'保留模型名',members:[member('pool-a',model)]});
+  assert.equal(h.service.listTeams()[0].plans[0].members[0].model,model);
+  await h.service.decide({leadSid:'lead-0001',planId:p.planId,approve:true,edits:[{model:edited}]});
+  assert.equal(h.created[0].opts.model,edited);
+});
 test('approval revalidates account/model edits before creating any member',async t=>{
   const h=harness(t),p=await h.service.invoke('lead-0001','propose',{goal:'目标',members:[member()]});
   await assert.rejects(h.service.decide({leadSid:'lead-0001',planId:p.planId,approve:true,edits:[{account:'pool-b',model:'not a model'}]}),/模型名称/);

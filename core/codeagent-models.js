@@ -12,6 +12,7 @@
 // 只校验字符；实际见过的模型名记在 Hub 数据目录，供下次新建会话时选择。
 const fs = require('fs');
 const path = require('path');
+const { isSafeModelId } = require('./model-id');
 
 const KNOWN = Object.freeze([
   { id: 'GLM-5.2-WX-Auto', label: 'GLM-5.2 Auto' },
@@ -23,13 +24,6 @@ const OBSERVED_LIMIT = 24;
 
 function clean(value) {
   return typeof value === 'string' ? value.trim() : '';
-}
-
-// 字母数字开头，只含常见模型名字符；括号由启动器按单个参数引用。
-function isSafeModelId(value) {
-  if (typeof value !== 'string' || /[\x00-\x1f\x7f]/.test(value)) return false;
-  const id = clean(value);
-  return /^[A-Za-z0-9][A-Za-z0-9._:\/\[\]()-]{0,95}$/.test(id) && !id.startsWith('<');
 }
 
 // 别的 CLI 的模型名（从 Claude / Codex 等会话带过来的设置）不是 CodeAgent 的，回到默认。
@@ -65,7 +59,7 @@ function modelFamily(value) {
 // 启动中心只剩内置的两个模型 + 见过的模型。上限放到 64 MB，按 (路径, 修改时间, 大小) 缓存解析结果；
 // 超上限或 JSON 读不懂时，退回在原始文本里找：键名含 model 的键后面约 4000 字符内、单独成串的模型名。
 // 只认 CodeAgent 自家的三家（GLM / DeepSeek / MiniMax）；Qwen、Kimi 是别的 CLI 的模型（见 OTHER_CLI_MODEL）。
-const CONFIG_MODEL_NAME = /^(?:glm|deepseek|minimax)[A-Za-z0-9_.()\-]*\d[A-Za-z0-9_.()\-]*$/i;
+const CONFIG_MODEL_NAME = /^(?:glm|deepseek|minimax).*\d/i;
 const CONFIG_MAX_BYTES = 64 * 1024 * 1024;
 const CONFIG_SCAN_WINDOW = 4000;
 const configFileCache = new Map();
@@ -74,13 +68,13 @@ const configFileCache = new Map();
 // 只收前后都是引号、单独成串的模型名（聊天里「试试 GLM-9.9」这种夹在句子里的不算）。
 function scanModelNamesInText(text, out) {
   const keyRe = /"((?:[^"\\]|\\.)*)"\s*:/g;
-  const nameRe = /(?<!\\)"((?:glm|deepseek|minimax)[A-Za-z0-9_.()\-]*\d[A-Za-z0-9_.()\-]*)"/gi;
+  const nameRe = /(?<!\\)"([^"\\]+)"/g;
   let m;
   while ((m = keyRe.exec(text)) && out.size <= 60) {
     if (m.index > 0 && text[m.index - 1] === '\\') continue;
     if (!/model/i.test(m[1]) || m[1].includes('\\')) continue;
     const windowText = text.slice(keyRe.lastIndex, keyRe.lastIndex + CONFIG_SCAN_WINDOW);
-    for (const n of windowText.matchAll(nameRe)) if (isSafeModelId(n[1])) out.add(n[1]);
+    for (const n of windowText.matchAll(nameRe)) if (CONFIG_MODEL_NAME.test(n[1]) && isSafeModelId(n[1])) out.add(n[1]);
   }
 }
 

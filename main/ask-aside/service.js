@@ -27,8 +27,7 @@ const MAX_MEETING_CONTEXT = 60000;
 const MAX_ANSWER = 60000;
 const MAX_ARG_QUESTION = 2000; // 命令行模式：cmd 一行最多约 8191 字符，留足余量
 const DEFAULT_MODE = Object.freeze({ input: 'stdin' });
-const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+()-]{0,99}$/; // 括号作为单个参数引用
-const safeModelId = value => typeof value === 'string' && !/[\x00-\x1f\x7f]/.test(value) && MODEL_RE.test(value);
+const { isSafeModelId: safeModelId } = require('../../core/model-id');
 const KIND_RE = /^codeagent(?:-resume)?$/;
 // 2026-11-07：Claude Code、Codex、DSH 终端会话（含走公司模型的）也能问。
 const CLAUDE_RE = /^claude(?:-resume)?$/, CODEX_RE = /^codex(?:-resume)?$/, DSH_RE = /^deepseek-acp(?:-resume)?$/;
