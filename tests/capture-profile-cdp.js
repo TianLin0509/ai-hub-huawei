@@ -93,6 +93,7 @@ async function run() {
     await clickSel('#btn-profile');
     await wait(`document.querySelector('#profile-page .pf-badges')`, 'page');
     evidence.checks.seededFits = await c.eval(fits);
+    evidence.checks.evolutionRoad = await c.eval(`(()=>{const road=document.querySelector('.pf-evolutions'),r=road.getBoundingClientRect();return {count:road.children.length,current:road.querySelector('[aria-current="step"] b')?.textContent,lit:road.querySelectorAll('.on').length,next:document.querySelector('.pf-evolution-title span').textContent,clipped:[...road.children].some(e=>{const b=e.getBoundingClientRect();return b.right>r.right+1||b.bottom>r.bottom+1})}})()`);
     evidence.checks.badgeCount = await c.eval(`document.querySelectorAll('#profile-page .pf-badge').length`);
     evidence.checks.badgeImagesLoaded = await c.eval(`[...document.querySelectorAll('#profile-page img')].every(i=>i.complete&&i.naturalWidth>0)`);
     await shot('04-个人页-首屏');
@@ -160,7 +161,8 @@ async function run() {
   });
 
   evidence.ok = evidence.rendererErrors.length === 0 && evidence.checks.freshName === '用户甲' && evidence.checks.freshFits.fits && evidence.checks.seededFits.fits && evidence.checks.badgeImagesLoaded && evidence.checks.renamed === '小北' && evidence.checks.dotClearedAfterClose && Object.values(evidence.checks.tabs).every(t => t.fits && !t.clipped.length)
-    && evidence.checks.live.entryLv === 'Lv.2' && evidence.checks.live.pets === 1 && /"level":2/.test(evidence.checks.live.petGrowth);
+    && evidence.checks.live.entryLv === 'Lv.2' && evidence.checks.live.pets === 1 && /"level":2/.test(evidence.checks.live.petGrowth)
+    && evidence.checks.evolutionRoad.count === 6 && evidence.checks.evolutionRoad.current === require('../core/profile/rules').evolutionOf(seeded.level).name && !evidence.checks.evolutionRoad.clipped;
   fs.writeFileSync(path.join(out, 'evidence.json'), JSON.stringify(evidence, null, 1));
   console.log(JSON.stringify(evidence, null, 1));
   if (!evidence.ok) process.exitCode = 1;

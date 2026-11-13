@@ -38,7 +38,8 @@ function runVersion(file, args, { timeoutMs = 90000, env = process.env } = {}) {
 
 // 本机的 Node 能不能给 DSH 用：PATH 上第一个 node.exe，版本 >= minNode。
 async function pathNodeUsable(env, minNode, run = runVersion) {
-  const file = require('../company-model-proxy').findNodeOnPath(env);
+  // 和启动 DSH 用同一套查找（core/local-node.js）：PATH 之外的常见目录、CodeAgent 自带的 Node 也算本机有。
+  const file = require('../local-node').findNode({ env, minMajor: 0 });
   if (!file) return { ok: false, reason: '本机没有 Node.js' };
   try {
     const out = await run(file, ['--version'], { timeoutMs: 15000, env });
@@ -168,7 +169,7 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
       let probe = null;
       if (component.install.versionArgs && component.install.bin) probe = [path.join(unpack, ...component.install.bin.split('/')), component.install.versionArgs];
       else if (component.install.versionArgs && component.id === 'dsh') {
-        const node = registry.managedBin('node', env) || require('../company-model-proxy').findNodeOnPath(env);
+        const node = registry.managedBin('node', env) || require('../local-node').findNode({ env });
         if (node) probe = [node, [path.join(unpack, 'node_modules', ...registry.DSH_RUNTIME_FILES[0].split('/')), ...component.install.versionArgs]];
       }
       if (probe) {

@@ -449,3 +449,20 @@ test('an idle Stop click records the renderer decision without sending stop keys
   await click({ stopPropagation() {} });
   assert.equal(calls.length, 1); assert.equal(calls[0][0], 'codeagent:stop-diagnostic'); assert.equal(calls[0][1].rendererState, 'idle');
 });
+
+// ---------- 卡住消息的重发按钮（2026-11-12） ----------
+{
+// 2026-11-12：发送卡住时挂着的临时气泡卡（pending-user-*）不进轮次表，
+// 「重发这条消息」「编辑重发」曾在 getTurnFromCard 处静默 return，用户只能手动复制重发。
+const RENDERER = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'renderer.js'), 'utf8');
+const CARD = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'turn-card-renderer.js'), 'utf8');
+
+test('临时气泡卡查不到轮次时用卡上原文兜底，且不再静默 return', () => {
+  const start = RENDERER.indexOf("const btn = e.target.closest('.ta-btn');");
+  assert.ok(start > 0, '找不到卡片操作 click handler');
+  const head = RENDERER.slice(start, start + 900);
+  assert.ok(head.includes('card.dataset.optimisticText'));
+  assert.ok(!/if \(!turn\) return;/.test(head));
+  assert.ok(CARD.includes('cardEl.dataset.optimisticText = text'));
+});
+}

@@ -3764,8 +3764,14 @@ document.addEventListener('click', async (e) => {
   if (!btn) return;
   const card = btn.closest('.turn-card');
   if (!card || !card.closest('.msg-overlay')) return;
-  const turn = getTurnFromCard(card);
-  if (!turn) return;
+  // 刚发出、会话还没确认的临时气泡卡不进轮次表；发送卡住时它会一直挂着，
+  // 正是用户最想点「重发」的时候，所以查不到时用卡上存的原文顶上（2026-11-12）。
+  const turn = getTurnFromCard(card)
+    || (card.dataset.optimisticText ? { role: 'user', text: card.dataset.optimisticText } : null);
+  if (!turn) {
+    showPreviewNotice('这条消息的记录还没加载到，暂时无法操作，请稍后再试。', 'error');
+    return;
+  }
   const action = btn.dataset.action;
 
   if (action === 'fork-before-turn') {

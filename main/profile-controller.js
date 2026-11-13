@@ -105,17 +105,20 @@ function createProfileController({ ipcMain, tap, dataDir, sendToRenderer, getAss
   let changedTimer = null;
   profile.on('changed', () => { if (!changedTimer) changedTimer = setTimeout(() => { changedTimer = null; changed(); }, 400); });
   // 升级、解锁成就：页面弹一条提示；桌宠开着就让它庆祝。一次解锁多枚时合成一条。
-  profile.on('achievement', ({ list }) => {
+  profile.on('achievement', ({ list, evolved }) => {
     const first = list[0], more = list.length - 1;
     const payload = { type: 'achievement', icon: first.icon, title: more > 0 ? `解锁 ${list.length} 枚成就` : `解锁成就「${first.name}」`, text: more > 0 ? list.map(a => a.name).join('、') : first.desc, list };
     sendToRenderer('profile:event', payload);
-    try { getPet()?.celebrate?.({ id: 'ach-' + first.id, title: payload.title, text: payload.text, art: 'badge-' + first.icon }); } catch { /* 桌宠没开 */ }
+    if (!evolved) try { getPet()?.celebrate?.({ id: 'ach-' + first.id, title: payload.title, text: payload.text, art: 'badge-' + first.icon }); } catch { /* 桌宠没开 */ }
   });
   profile.on('level-up', ev => {
     const perk = ev.perks.map(p => `桌宠解锁「${p.name}」`).join('，');
-    const payload = { type: 'level-up', level: ev.to, rank: ev.rank.n, title: ev.rankUp ? `升到 Lv.${ev.to} · 晋升${ev.rank.name}` : `升到 Lv.${ev.to}`, text: perk || `${ev.rank.name}，继续加油` };
+    const evolution = ev.evolution;
+    const numeral = ['一', '二', '三', '四', '五', '六'];
+    const payload = { type: 'level-up', level: ev.to, rank: ev.rank.n, title: evolution ? `进化了！形态${numeral[evolution.n - 1]} · ${evolution.name}` : ev.rankUp ? `升到 Lv.${ev.to} · 晋升${ev.rank.name}` : `升到 Lv.${ev.to}`, text: evolution ? `升到 Lv.${ev.to}，解锁新形态${perk ? '，' + perk : ''}` : perk || `${ev.rank.name}，继续加油` };
     sendToRenderer('profile:event', payload);
-    try { getPet()?.celebrate?.({ id: 'lv-' + ev.to, title: payload.title, text: payload.text, big: ev.rankUp, art: 'rank-' + ev.rank.n }); } catch { /* 桌宠没开 */ }
+    pushPet();
+    try { getPet()?.celebrate?.({ id: 'lv-' + ev.to, title: payload.title, text: payload.text, big: ev.rankUp, art: evolution ? 'evolve-' + evolution.n : 'rank-' + ev.rank.n, ...(evolution ? { evolution, fromEvolution: require('../core/profile/rules').evolutionOf(ev.from) } : {}) }); } catch { /* 桌宠没开 */ }
   });
 
   function noteOpen() {

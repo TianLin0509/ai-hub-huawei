@@ -205,11 +205,12 @@ class Profile extends EventEmitter {
     const level = R.levelOf(s.xp), from = s.lastLevel || 1;
     s.lastLevel = level;
     if (silent) return;
-    if (got.length) this.emit('achievement', { list: got });
+    const evolution = R.evolutionChange(from, level);
+    if (got.length) this.emit('achievement', { list: got, evolved: !!evolution });
     if (level > from) {
       const rank = R.rankOf(level), before = R.rankOf(from);
       const perks = R.PET_PERKS.filter(p => p.level > from && p.level <= level);
-      this.emit('level-up', { from, to: level, rank, rankUp: rank.n > before.n, perks });
+      this.emit('level-up', { from, to: level, rank, rankUp: rank.n > before.n, perks, evolution });
     }
   }
 
@@ -242,7 +243,7 @@ class Profile extends EventEmitter {
   // 给入口按钮和桌宠用的精简状态。
   brief() {
     const s = this.state, level = R.levelOf(s.xp), rank = R.rankOf(level);
-    return { name: s.nickname || s.identity?.name || '', level, rank: rank.n, rankName: rank.name, fresh: Object.keys(s.fresh).length, perks: R.perksOf(level) };
+    return { name: s.nickname || s.identity?.name || '', level, rank: rank.n, rankName: rank.name, fresh: Object.keys(s.fresh).length, perks: R.perksOf(level), evolution: R.evolutionOf(level) };
   }
 
   snapshot() {
@@ -276,7 +277,7 @@ class Profile extends EventEmitter {
       daily, year, groups: R.GROUPS, ranks: R.RANKS,
       achievements, unlocked: achievements.filter(a => a.unlockedAt).length,
       heat, firstDay: s.firstDay, backfill: s.backfill,
-      pet: { pets: s.pet.pets || 0, days: s.pet.days || 0, bond, perks: R.PET_PERKS.map(p => ({ ...p, unlocked: level >= p.level })) },
+      pet: { pets: s.pet.pets || 0, days: s.pet.days || 0, bond, perks: R.PET_PERKS.map(p => ({ ...p, unlocked: level >= p.level })), evolution: R.evolutionOf(level), evolutions: R.EVOLUTIONS.map(e => ({ ...e, unlocked: level >= e.level, current: R.evolutionOf(level).n === e.n })) },
       rules: Object.values(R.XP).map(r => ({ label: r.label, each: r.each, cap: r.cap || null })), tierXp: R.TIER_XP,
     };
   }

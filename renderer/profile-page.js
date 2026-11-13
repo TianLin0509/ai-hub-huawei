@@ -136,7 +136,8 @@ function homeHtml(vm, selected) {
               <div class="pf-bar thin"><i style="width:${bondPct}%"></i></div>
               <span class="pf-pet-num">摸了 ${num(pet.pets)} 次 · 陪伴 ${num(pet.days)} 天${vm.petEnabled ? '' : ' · <button type="button" class="pf-link" data-pf="pet-on">叫它出来</button>'}</span></div>
           </div>
-          <div class="pf-perks">${pet.perks.map(p => `<div class="pf-perk${p.unlocked ? ' on' : ''}" title="${esc(p.desc)}"><i class="pf-perk-ico ${esc(p.id)}"></i><b>${esc(p.name)}</b><span>${p.unlocked ? '已解锁' : 'Lv.' + p.level + ' 解锁'}</span></div>`).join('')}</div>
+          <div class="pf-evolution-title"><b>进化之路</b><span>${pet.evolution && pet.evolution.n < 6 ? '还差 ' + ((pet.evolutions || []).find(e => e.n === pet.evolution.n + 1).level - vm.level) + ' 级' : '已达最终形态'}</span></div>
+          <div class="pf-evolutions">${(pet.evolutions || []).map(e => `<div class="pf-evolution${e.unlocked ? ' on' : ''}${e.current ? ' current' : ''}" ${e.current ? 'aria-current="step"' : ''} title="${esc(e.name)} · Lv.${e.level}${e.current ? ' · 当前形态' : ''}"><span class="pf-evolution-art">${e.head ? `<img src="assets/hub-pet/evolve/${esc(e.head)}.webp" alt="" draggable="false">` : '<i class="pf-newborn">·</i>'}</span><b>${esc(e.name)}</b><span>Lv.${e.level}</span></div>`).join('')}</div>
         </section>` : ''}
         <section class="pf-card pf-heat">
           <div class="pf-card-head"><h2>近 12 周活跃</h2>${legend}</div>

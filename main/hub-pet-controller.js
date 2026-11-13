@@ -280,22 +280,24 @@ function createHubPetController({
     scheduleDeadline();
   }
 
-  // 等级装饰：等级角标、星光、头顶段位徽章、脚下光环，按「个人」页的等级解锁；设置里可以整体关掉。
+  // 等级装饰与进化共用等级规则；设置里可以整体关掉。
   function growthView() {
     if (settings.get().showGrowth === false) return null;
     let p = null;
     try { p = getProfile?.() || null; } catch (_) {}
     if (!p || !Number.isFinite(p.level)) return null;
-    return { level: p.level, rank: p.rank || 1, perks: Array.isArray(p.perks) ? p.perks.slice(0, 8) : [] };
+    const { evolutionOf, perksOf } = require('../core/profile/rules');
+    return { level: p.level, rank: p.rank || 1, perks: perksOf(p.level), evolution: evolutionOf(p.level) };
   }
   // 「个人」页的等级变了：马上换装饰，不等下一次轮询。
   function setProfile() { if (alive()) evaluate(); }
   // 升级、解锁成就：连跳撒花 + 举一张卡片，点卡片打开「个人」页。只有桌宠会庆祝，不受回执三档影响。
-  function celebrate({ id, title, text, big = false, art = '' } = {}) {
+  function celebrate({ id, title, text, big = false, art = '', evolution, fromEvolution } = {}) {
     if (!canNotify()) return false;
     pettedAt = clock();
-    send('hub-pet:motion', { phase: 'celebrate', big: big === true });
-    onNotice({ id: 'growth:' + String(id || now()), kind: 'growth', notify: true, page: 'profile', cta: '看看我的成就', title: String(title || '').slice(0, 60), text: String(text || '').slice(0, 200), ...(/^(rank|badge)-\d{1,2}$/.test(art) ? { art } : {}) });
+    const evolve = evolution && settings.get().showGrowth !== false;
+    send('hub-pet:motion', evolve ? { phase: 'evolve', evolution, fromEvolution } : { phase: 'celebrate', big: big === true });
+    onNotice({ id: 'growth:' + String(id || now()), kind: 'growth', notify: true, page: 'profile', cta: '看看我的成就', title: String(title || '').slice(0, 60), text: String(text || '').slice(0, 200), ...(/^(?:(?:rank|badge)-\d{1,2}|evolve-[2-6])$/.test(art) ? { art } : {}) });
     return true;
   }
   // 被摸了（鼠标在身上来回蹭）：醒一分钟、冒爱心，记一次亲密度。3 秒内只算一次。
@@ -616,7 +618,7 @@ function createHubPetController({
     if (dots) quick.push({ type: 'inbox', label: `看 ${dots} 条没看的`, icon: 'inbox' });
     // 2026-11-12：摸摸（和鼠标在身上蹭一样），带上现在的等级。
     const growth = growthView();
-    quick.push({ type: 'pet', label: '摸摸它', hint: growth ? 'Lv.' + growth.level : '', icon: 'heart' });
+    quick.push({ type: 'pet', label: '摸摸它', hint: growth ? 'Lv.' + growth.level + ' · ' + growth.evolution.name : '', icon: 'heart' });
     if (pages.rooms) quick.push({ type: 'page', page: 'rooms', label: String(pages.rooms.label || '会议室'), hint: String(pages.rooms.hint || ''), icon: 'room' });
     return {
       role: { id: me.id, name: me.name, preview: me.preview || '' }, status, mode: s.mode, quick,

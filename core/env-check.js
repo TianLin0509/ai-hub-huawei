@@ -234,7 +234,9 @@ function probeList(ctx) {
   }
 
   add('node', 'Node.js', 'env-check', async () => {
-    const node = setup.findCommand('node', env, platform);
+    // PATH 上没有时，按启动 DSH 的同一套查找再找一遍（core/local-node.js），体检和真正启动结论一致。
+    const node = setup.findCommand('node', env, platform)
+      || (platform === 'win32' ? require('./local-node').findNode({ env, minMajor: 0 }) || null : null);
     if (!node) {
       // Codex 的 npm 包由 Hub 直接启动其中的原生 exe；WeLink 脚本用 Hub 自带运行时。
       const needsNode = ['claude', 'gemini', 'dsh'].filter(id => {

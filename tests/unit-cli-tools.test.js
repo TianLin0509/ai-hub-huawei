@@ -418,7 +418,7 @@ test('session PATH: Hub tool folders go first only when the user has no install 
 test('DSH company route uses the Hub Node when one was installed', t => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'core', 'acp-profiles.js'), 'utf8');
   assert.match(source, /managedBin\('node', baseEnv\)/);
-  assert.match(source, /hubNode \|\| require\('\.\/company-model-proxy'\)\.findNodeOnPath\(baseEnv\)/);
+  assert.match(source, /hubNode \|\| localNode\.findNode\(\{ env: baseEnv \}\)/);
 });
 
 // ---------- 启动中心弹窗 ----------
@@ -526,3 +526,80 @@ test('install: the fast mirror lagging behind (older catalog) does not win; the 
   assert.ok(old.hits.includes('/hub-update/components/' + cNew.files[0].url), 'downloaded from the host whose catalog is newest');
   assert.ok(!fast.hits.some(h => h.endsWith('.tgz')), 'the lagging mirror was not asked for the file');
 });
+
+// ---------- 本机 Node 与用户自装 DSH 的查找（2026-11-12，原 unit-local-node-discovery） ----------
+{
+// 本机 Node 与用户自装 DSH 的查找（2026-11-12）。
+// 现场：黄区电脑 Node 装在 Program Files\nodejs、CodeAgent 自带 Node 24，但都不在 PATH；
+// Hub 只看 PATH，DSH 报「需要本机的 Node.js」。同事也希望 Hub 认出自己装好的 DSH，不必在 Hub 里重装。
+const localNode = require('../core/local-node');
+const dshProfile = require('../core/dsh-cli-profile');
+
+function tempDir(t) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-local-node-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+function put(file, data = 'x') { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, data); return file; }
+const EXE = process.platform === 'win32' ? 'node.exe' : 'node';
+const versions = map => file => map[file] || '';
+
+test('Node 不在 PATH 时，从 Program Files\nodejs 找到', { skip: process.platform !== 'win32' }, t => {
+  const root = tempDir(t);
+  const node = put(path.join(root, 'PF', 'nodejs', EXE));
+  const env = { PATH: path.join(root, 'empty'), ProgramFiles: path.join(root, 'PF') };
+  assert.equal(localNode.findNode({ env, run: versions({ [node]: 'v24.14.0' }) }), node);
+});
+
+test('PATH 上的 Node 优先；版本太旧的跳过，换下一个够版本的', { skip: process.platform !== 'win32' }, t => {
+  const root = tempDir(t);
+  const old = put(path.join(root, 'bin', EXE));
+  const good = put(path.join(root, 'PF', 'nodejs', EXE));
+  const env = { PATH: path.join(root, 'bin'), ProgramFiles: path.join(root, 'PF') };
+  assert.equal(localNode.findNode({ env, run: versions({ [old]: 'v24.0.0', [good]: 'v24.1.0' }) }), old);
+  assert.equal(localNode.findNode({ env, run: versions({ [old]: 'v18.20.0', [good]: 'v24.1.0' }) }), good);
+});
+
+test('只有 CodeAgent 自带的 Node 时也能用，多个版本取最新', { skip: process.platform !== 'win32' }, t => {
+  const root = tempDir(t);
+  const pf = path.join(root, 'PF');
+  const older = put(path.join(pf, 'CodeAgentCLI', 'node-v24.12.0', EXE));
+  const newer = put(path.join(pf, 'CodeAgentCLI', 'node-v24.18.1-win-x64', EXE));
+  const env = { PATH: '', ProgramFiles: pf };
+  assert.equal(localNode.findNode({ env, run: versions({ [older]: 'v24.12.0', [newer]: 'v24.18.1' }) }), newer);
+});
+
+test('哪里都没有时返回空，不去看测试环境之外的真实目录', t => {
+  const root = tempDir(t);
+  assert.equal(localNode.findNode({ env: { PATH: path.join(root, 'none') }, run: () => 'v24.0.0' }), '');
+});
+
+function runtimeAt(root) {
+  put(path.join(root, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'));
+  put(path.join(root, 'node_modules', '@deepseek-harness-tui', 'dsh-tui', 'package.json'), '{}');
+  return root;
+}
+
+test('用户自装 DSH：改过的 npm 全局目录（.npmrc prefix）能认出', t => {
+  const root = tempDir(t);
+  const home = path.join(root, 'home');
+  const prefix = runtimeAt(path.join(root, 'node_global'));
+  put(path.join(home, '.npmrc'), `registry=https://example.org/\nprefix=${prefix}\n`);
+  const roots = dshProfile.userInstalledRoots({ PATH: '', USERPROFILE: home });
+  assert.ok(roots.includes(prefix), roots.join(' | '));
+});
+
+test('用户自装 DSH：PATH 上有 dsh 命令时，从命令所在目录认出', t => {
+  const root = tempDir(t);
+  const prefix = runtimeAt(path.join(root, 'custom-npm'));
+  put(path.join(prefix, 'dsh.cmd'), '@echo off');
+  const roots = dshProfile.userInstalledRoots({ PATH: prefix });
+  assert.ok(roots.includes(prefix));
+});
+
+test('启动 DSH 的报错写明找过哪些位置', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'core', 'acp-profiles.js'), 'utf8');
+  assert.match(source, /localNode\.SEARCHED_HINT/);
+  assert.match(localNode.SEARCHED_HINT, /CodeAgent/);
+});
+}

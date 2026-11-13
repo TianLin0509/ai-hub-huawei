@@ -48,8 +48,10 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
   // Hub 只在本机没有可用的 Node 22+ 时才装自己的 node（core/cli-tools/installer.js），装了就给 DSH 用它。
   let hubNode = null;
   if (companyRoute && !profile.nodePath) { try { hubNode = require('./cli-tools/registry').managedBin('node', baseEnv); } catch (_) {} }
-  const nodePath = profile.nodePath || (companyRoute ? hubNode || require('./company-model-proxy').findNodeOnPath(baseEnv) : '');
-  if (companyRoute && !nodePath) throw new Error('DSH 需要本机的 Node.js：请先安装 Node.js 22 或更新版本');
+  // 本机 Node 不只看 PATH：常见安装目录、nvm、CodeAgent 自带的 Node 也认（core/local-node.js，2026-11-12）。
+  const localNode = require('./local-node');
+  const nodePath = profile.nodePath || (companyRoute ? hubNode || localNode.findNode({ env: baseEnv }) : '');
+  if (companyRoute && !nodePath) throw new Error(`DSH 需要本机的 Node.js 22 或更新版本，在${localNode.SEARCHED_HINT}里都没找到：请安装 Node.js 22+（装好后不用重启 Hub）再新建会话`);
   if (!entry?.entryPath || !nodePath || (!entry.model && !companyRoute)) throw new Error('请配置原生 Harness 路径、Node 路径和套餐模型');
   for (const file of [entry.entryPath, nodePath]) {
     if (!path.isAbsolute(file) || !fs.statSync(file).isFile()) throw new Error('Harness 可执行文件不存在或不是绝对路径');

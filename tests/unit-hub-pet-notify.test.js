@@ -403,9 +403,9 @@ test('关了「通知交给桌宠」：总线上的通知卡片（会议室、�
 
 // ---------- 等级联动（2026-11-12） ----------
 test('等级联动：身上显示等级与已解锁特效；设置里关掉就不显示', t => {
-  const r = rig(t, { getProfile: () => ({ level: 12, rank: 3, perks: ['chip', 'sparkle', 'emblem'] }) });
+  const r = rig(t, { getProfile: () => ({ level: 12, rank: 3, perks: ['chip', 'sparkle'] }) });
   r.c.setSettings({ enabled: true });
-  assert.deepEqual(r.state().growth, { level: 12, rank: 3, perks: ['chip', 'sparkle', 'emblem'] });
+  assert.deepEqual(r.state().growth, { level: 12, rank: 3, perks: ['chip', 'sparkle'], evolution: require('../core/profile/rules').evolutionOf(12) });
   r.c.setSettings({ showGrowth: false });
   assert.equal(r.state().growth, null);
   r.c.setSettings({ showGrowth: true });
@@ -416,7 +416,7 @@ test('升级和解锁成就：桌宠连跳撒花并举卡片，点卡片打开�
   const r = rig(t);
   assert.equal(r.c.celebrate({ id: 'lv-2', title: '升到 Lv.2' }), false, '桌宠没开');
   r.c.setSettings({ enabled: true, notifyMode: 'popup' });
-  assert.equal(r.c.celebrate({ id: 'lv-13', title: '升到 Lv.13 · 晋升熟练驾驭者', text: '桌宠解锁「段位徽章」', big: true }), true);
+  assert.equal(r.c.celebrate({ id: 'lv-13', title: '升到 Lv.13 · 晋升熟练驾驭者', text: '桌宠解锁「星光」', big: true }), true);
   const motion = r.sent.filter(x => x.channel === 'hub-pet:motion').map(x => x.payload).pop();
   assert.deepEqual(motion, { phase: 'celebrate', big: true });
   const b = r.state().bubble;
@@ -440,6 +440,26 @@ test('摸摸：鼠标在身上蹭算一次，3 秒内只记一次，记到亲密
   assert.equal(petted, 1, '不是桌宠窗口发来的不算');
 });
 
+test('进化：传递旧新形态；桌宠隐藏时不存演出，重新显示直接用最新形态', t => {
+  const R = require('../core/profile/rules');
+  let level = 19;
+  const r = rig(t, { getProfile: () => ({ level }) });
+  r.c.setSettings({ enabled: true });
+  r.setVisible(false);
+  level = 20;
+  assert.equal(r.c.celebrate({ id: 'lv-20', title: '进化了！形态三 · 银冠', evolution: R.evolutionOf(20), fromEvolution: R.evolutionOf(19), art: 'evolve-3' }), false);
+  r.setVisible(true); r.c.setProfile();
+  assert.equal(r.state().growth.evolution.n, 3);
+  assert.equal(r.state().bubble, null);
+  assert.equal(r.sent.filter(x => x.channel === 'hub-pet:motion').length, 0);
+  level = 30;
+  assert.equal(r.c.celebrate({ id: 'lv-30', title: '进化了！形态四 · 金冠', evolution: R.evolutionOf(30), fromEvolution: R.evolutionOf(20), art: 'evolve-4' }), true);
+  assert.deepEqual(r.sent.filter(x => x.channel === 'hub-pet:motion').pop().payload, { phase: 'evolve', evolution: R.evolutionOf(30), fromEvolution: R.evolutionOf(20) });
+  assert.equal(r.state().bubble.art, 'evolve-4');
+  r.c.setSettings({ showGrowth: false });
+  assert.equal(r.state().growth, null);
+});
+
 test('闲聊：活泼档早上问好、午饭和深夜各说一句，每天各一次；温和档不闲聊', () => {
   const { chatterFor } = require('../core/hub-pet/state');
   const at = (h, m = 0) => new Date(2026, 10, 12, h, m).getTime();
@@ -452,3 +472,6 @@ test('闲聊：活泼档早上问好、午饭和深夜各说一句，每天各�
   assert.doesNotMatch(chatterFor('lively', { now: at(23, 40), idleSec: 0 }, track)?.title || '', /休息/);
   assert.equal(chatterFor('gentle', { now: at(9), idleSec: 0 }, {}), null);
 });
+
+// 进化形态的回归测试跟着本文件一起跑：npm test 的文件清单已贴近 Windows 命令行 8191 字符上限，不能再加文件名。
+require('./unit-hub-pet-evolve.test.js');

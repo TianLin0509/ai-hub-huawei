@@ -50,10 +50,21 @@ const FEATURES = {
 const PET_PERKS = [
   { id: 'chip', level: 1, name: '等级角标', desc: '桌宠脚边挂上你的等级' },
   { id: 'sparkle', level: 5, name: '星光', desc: '桌宠身边偶尔闪起小星星' },
-  { id: 'emblem', level: 10, name: '段位徽章', desc: '头顶悬浮当前段位的徽章' },
   { id: 'halo', level: 20, name: '光环', desc: '脚下亮起一圈柔光' },
 ];
 const perksOf = level => PET_PERKS.filter(p => level >= p.level).map(p => p.id);
+
+// 形态和素材共用这一份规则，下载形象也只按透明度戴头饰，不单独存坐标。
+const EVOLUTIONS = Object.freeze([
+  { n: 1, level: 1, name: '初生', head: '', wings: '', width: 0 },
+  { n: 2, level: 10, name: '星冠', head: 'head-2', wings: '', width: 0.30 },
+  { n: 3, level: 20, name: '银冠', head: 'head-3', wings: '', width: 0.32 },
+  { n: 4, level: 30, name: '金冠', head: 'head-4', wings: '', width: 0.34 },
+  { n: 5, level: 40, name: '羽翼', head: 'head-5', wings: 'wings-5', width: 0.36 },
+  { n: 6, level: 50, name: '王者', head: 'head-6', wings: 'wings-6', width: 0.38 },
+].map(Object.freeze));
+const evolutionOf = level => EVOLUTIONS.reduce((hit, e) => Number(level) >= e.level ? e : hit, EVOLUTIONS[0]);
+const evolutionChange = (from, to) => evolutionOf(to).n > evolutionOf(from).n ? evolutionOf(to) : null;
 
 // 亲密度：摸一次 1 点，桌宠陪伴一天 5 点。
 const BOND_STEPS = [0, 10, 30, 60, 100, 160, 240, 340, 460, 600];
@@ -105,4 +116,4 @@ const ACHIEVEMENTS = [
 const GROUPS = [{ id: 'chat', name: '对话' }, { id: 'keep', name: '坚持' }, { id: 'explore', name: '探索' }, { id: 'grow', name: '伙伴与成长' }];
 const goalOf = (a, stats) => (typeof a.goal === 'function' ? a.goal(stats) : a.goal);
 
-module.exports = { MAX_LEVEL, xpForLevel, levelOf, RANKS, rankOf, XP, TIER_XP, FEATURES, PET_PERKS, perksOf, bondOf, ACHIEVEMENTS, GROUPS, goalOf };
+module.exports = { MAX_LEVEL, xpForLevel, levelOf, RANKS, rankOf, XP, TIER_XP, FEATURES, PET_PERKS, perksOf, EVOLUTIONS, evolutionOf, evolutionChange, bondOf, ACHIEVEMENTS, GROUPS, goalOf };

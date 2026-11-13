@@ -113,7 +113,7 @@ class SpeechQueue {
       for (const key of ['tone', 'page', 'noticeId', 'cta']) { const v = cleanText(item[key], key === 'cta' ? 20 : 160); if (v) entry[key] = v; }
       const count = Math.round(Number(item.count) || 0);
       if (count > 1) entry.count = Math.min(99, count);
-      if (/^(rank|badge)-\d{1,2}$/.test(String(item.art || ''))) entry.art = String(item.art);
+      if (/^(?:(?:rank|badge)-\d{1,2}|evolve-[2-6])$/.test(String(item.art || ''))) entry.art = String(item.art);
       if (this.current) { this.toDot(this.current); this.current = null; this.held = null; }
       this.pending.unshift(entry);
     } else this.pending.push(entry);

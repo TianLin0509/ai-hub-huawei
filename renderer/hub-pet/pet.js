@@ -60,6 +60,7 @@
   layersEl.appendChild(cel);
   const ready = new Set();
   const loading = new Map();
+  const frameGeometry = new Map();
   let visual = null;          // { spec, key, role, start, shown, thenFired }
   let pendingSwap = null;     // { start, spec }：压一下再换的那 80ms
   let applyToken = 0;
@@ -69,7 +70,10 @@
     if (!loading.has(url)) {
       const img = new Image();
       img.src = url;
-      loading.set(url, (img.decode ? img.decode() : Promise.resolve()).then(() => { ready.add(url); return true; }, () => false));
+      loading.set(url, (img.decode ? img.decode() : Promise.resolve()).then(() => {
+        cacheFrameGeometry(img, url);
+        ready.add(url); return true;
+      }, () => false));
     }
     return loading.get(url);
   }
@@ -88,7 +92,8 @@
       if (token !== applyToken) return;
       cel.style.backgroundImage = 'url("' + url + '")';
       cel.classList.toggle('sheet', !!spec.sheet);
-      visual = { spec, key: specKey(spec), role: state.role, start: now(), shown: -1, thenFired: false };
+      visual = { spec, key: specKey(spec), role: state.role, url, start: now(), shown: -1, thenFired: false };
+      headAnchor = null;
       if (!spec.sheet) cel.style.backgroundPosition = '';
       wake();
     };
@@ -188,9 +193,9 @@
       show({ sheet: 'dock-right', list: each(back, 110), loop: false, restart: true, then: () => baseSpec(pose), thenTransition: 'pop' }, { transition: 'cut' });
       return;
     }
-    show(baseSpec(next));
+    show(baseSpec(next), { transition: now() < quietEvolutionUntil ? 'cut' : 'pop' });
     // 开口时跳两下就安静下来（原来每 2.6 秒跳一次，看久了晃眼）。
-    if (next === 'happy') hops.push({ start: now() + 80, dur: 420, height: 14 }, { start: now() + 600, dur: 360, height: 8 });
+    if (next === 'happy' && now() >= quietEvolutionUntil) hops.push({ start: now() + 80, dur: 420, height: 14 }, { start: now() + 600, dur: 360, height: 8 });
     scheduleIdle();
   }
 
@@ -231,6 +236,7 @@
     const dt = Math.min(100, lastFrame ? t - lastFrame : 16);
     lastFrame = t;
     let busy = renderVisual(t);
+    busy = renderEvolution(t) || busy;
 
     arousal = M.approach(arousal, AROUSAL[pose] ?? 0.25, dt, 500);
     const br = M.breathStep(phase, dt / 1000, arousal);
@@ -320,6 +326,7 @@
 
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
+      finishEvolution(false);
       if (raf) cancelAnimationFrame(raf);
       if (timer) clearTimeout(timer);
       raf = 0; timer = 0;
@@ -347,11 +354,11 @@
       card.count.textContent = b.count > 1 ? '另有 ' + (b.count - 1) + ' 个待查看' : '';
       card.el.classList.toggle('bad', b.tone === 'bad');
       // 成长卡片（升级、成就）：金色点缀，右侧放段位或成就徽章
-      const art = /^(rank|badge)-\d{1,2}$/.test(b.art || '') ? b.art : '';
+      const art = /^(?:(?:rank|badge)-\d{1,2}|evolve-[2-6])$/.test(b.art || '') ? b.art : '';
       card.el.classList.toggle('growth', b.kind === 'growth');
       card.el.classList.toggle('has-art', !!art);
       $('ncard-art').hidden = !art;
-      if (art) $('ncard-art').style.backgroundImage = 'url("../assets/profile/' + art + '.webp")';
+      if (art) $('ncard-art').style.backgroundImage = art.startsWith('evolve-') ? 'url("../assets/hub-pet/evolve/head-' + art.slice(7) + '.webp")' : 'url("../assets/profile/' + art + '.webp")';
       card.el.hidden = false;
       card.el.classList.remove('out', 'in', 'held');
       card.bar.classList.remove('run');
@@ -546,8 +553,78 @@
     }
   });
 
-  // ---------- 等级联动（2026-11-12）：等级角标、星光、头顶段位徽章、脚下光环；升级撒花；摸摸冒爱心 ----------
-  const lvEl = $('lv'), emblemEl = $('emblem'), sparksEl = $('sparks'), haloEl = $('halo'), fxEl = $('fx');
+  // ---------- 等级与进化：当前帧的透明度决定头饰与翅膀的位置 ----------
+  const lvEl = $('lv'), headEl = $('evolve-head'), wingsEl = $('evolve-wings'), sparksEl = $('sparks'), haloEl = $('halo'), fxEl = $('fx');
+  const reducedMotion = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-reduced-motion: reduce)') : { matches: false };
+  let headAnchor = null, evolutionRun = null, pendingEvolutionBubble = null, quietEvolutionUntil = 0;
+  function cacheFrameGeometry(img, url) {
+    const sheet = /\/seq-[^/]+\.webp(?:[?#].*)?$/.test(url);
+    const cols = sheet ? 5 : 1, rows = cols, size = 192;
+    const canvas = document.createElement('canvas'); canvas.width = size; canvas.height = size;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true }), frames = [];
+    const sw = img.naturalWidth / cols, sh = img.naturalHeight / rows;
+    const ratio = Math.min(size / sw, size / sh), dw = sw * ratio, dh = sh * ratio;
+    try {
+      for (let f = 0; f < cols * rows; f++) {
+        ctx.clearRect(0, 0, size, size);
+        ctx.drawImage(img, f % cols * sw, Math.floor(f / cols) * sh, sw, sh, (size - dw) / 2, (size - dh) / 2, dw, dh);
+        frames.push(window.HubPetEvolution.measure(ctx.getImageData(0, 0, size, size).data, size, size, sheet ? frames[0] : null));
+      }
+      frameGeometry.set(url, frames);
+    } catch (_) { frameGeometry.set(url, []); /* 读不到透明度时不猜位置，隐藏装饰 */ }
+  }
+  function evolutionAsset(el, name) {
+    if (!name || el.dataset.asset === name) return;
+    el.dataset.asset = name; el.src = '../assets/hub-pet/evolve/' + name + '.webp';
+  }
+  function renderEvolution(t) {
+    if (evolutionRun && t - evolutionRun.start >= 1200) finishEvolution(true);
+    const g = state.growth, e = evolutionRun ? evolutionRun.from : g && g.evolution;
+    const frames = visual && frameGeometry.get(visual.url);
+    const geom = frames && frames[visual.spec.sheet ? Math.max(0, visual.shown) : 0];
+    const hide = !g || !e || !geom || state.peeking || pose === 'sleep' || pose === 'peek' || visual.spec.img === 'sleep' || visual.spec.sheet === 'dock-right';
+    headEl.hidden = hide || !e.head;
+    wingsEl.hidden = hide || !e.wings;
+    if (!hide) {
+      const size = Math.round(150 * (Number(state.scale) || 1));
+      headAnchor = window.HubPetEvolution.anchor(geom, headAnchor, size);
+      if (e.head) {
+        evolutionAsset(headEl, e.head);
+        headEl.style.left = (headAnchor.x * 100).toFixed(3) + '%';
+        headEl.style.top = (headAnchor.y * 100).toFixed(3) + '%';
+        headEl.style.width = (geom.width * e.width * 100).toFixed(3) + '%';
+      }
+      if (e.wings) {
+        evolutionAsset(wingsEl, e.wings);
+        wingsEl.classList.toggle('royal', e.n === 6);
+        wingsEl.style.left = ((geom.left + geom.right) * 50).toFixed(3) + '%';
+        wingsEl.style.top = ((geom.top + geom.height * 0.40) * 100).toFixed(3) + '%';
+        wingsEl.style.width = (geom.width * (e.n === 6 ? 1.42 : 1.18) * 100).toFixed(3) + '%';
+      }
+    }
+    return !!evolutionRun;
+  }
+  function finishEvolution(reveal) {
+    if (!evolutionRun) return;
+    evolutionRun = null;
+    bodyEl.classList.remove('evolving');
+    if (reveal && state.growth && !reducedMotion.matches) {
+      headEl.classList.remove('evolve-pop'); void headEl.offsetWidth; headEl.classList.add('evolve-pop');
+      celebrate(true);
+    }
+    if (pendingEvolutionBubble) { showBubble(pendingEvolutionBubble); pendingEvolutionBubble = null; }
+  }
+  function evolve(m) {
+    finishEvolution(false);
+    if (reducedMotion.matches) {
+      // 通知会把姿态切到开心；减少动态效果时也要抑制这次切姿态附带的连跳。
+      quietEvolutionUntil = now() + 2000; script = null; hops = []; squash = null;
+      return;
+    }
+    if (!state.growth || document.visibilityState === 'hidden') return;
+    evolutionRun = { start: now(), from: m.fromEvolution || null };
+    bodyEl.classList.add('evolving');
+  }
   let growthKey = '';
   function showGrowth(g) {
     const key = g ? g.level + ':' + g.rank + ':' + (g.perks || []).join(',') : '';
@@ -557,11 +634,9 @@
       lvEl.hidden = !perk('chip'); if (g) lvEl.textContent = 'Lv.' + g.level;
       sparksEl.hidden = !perk('sparkle');
       haloEl.hidden = !perk('halo');
-      emblemEl.hidden = !perk('emblem');
-      if (perk('emblem')) emblemEl.style.backgroundImage = 'url("../assets/profile/rank-' + Math.max(1, Math.min(8, Number(g.rank) || 1)) + '.webp")';
     }
-    // 头顶正举着气泡、卡片、面板或输入框时，徽章先让开
-    document.body.classList.toggle('talking', !!state.bubble || !panelEl.hidden || !askEl.hidden);
+    if (!g) finishEvolution(false);
+    renderEvolution(now());
     document.body.classList.toggle('peeking', !!state.peeking);
   }
   const FX_COLORS = ['#3478f6', '#ffc83d', '#ff5d7a', '#35c28a', '#9b6bff', '#ff9a3d'];
@@ -571,6 +646,7 @@
   }
   // 撒花：从身体两侧往上喷一把彩纸，同时连跳三下
   function celebrate(big) {
+    if (reducedMotion.matches) return;
     const t = now();
     hops.push({ start: t + 40, dur: 380, height: 22 }, { start: t + 460, dur: 420, height: big ? 34 : 28 }, { start: t + 920, dur: 360, height: 16 });
     script = { start: t, dur: 1300, fn: s => ({ rot: 5 * Math.sin(Math.PI * 4 * s) * (1 - s), y: 0, sx: 1, sy: 1 }) };
@@ -654,8 +730,6 @@
     sizeKey = key;
     document.documentElement.style.setProperty('--body', body + 'px');
     document.documentElement.style.setProperty('--feet', Math.round(box.bottom * body) + 'px');
-    document.documentElement.style.setProperty('--head', Math.round(box.top * body) + 'px');
-    document.documentElement.style.setProperty('--cx', ((1 + box.left - box.right) * 50).toFixed(1) + '%');
   }
   function measureBody(url, role) {
     const img = new Image();
@@ -701,7 +775,8 @@
       if (first) applyPose(state.pose, true);
       else { pose = state.pose; show(baseSpec(state.pose), { transition: 'pop' }); hops.push({ start: now() + 80, dur: 360, height: 10 }); }
     } else applyPose(state.pose, false);
-    showBubble(state.bubble);
+    if (evolutionRun && state.bubble && /^evolve-[2-6]$/.test(state.bubble.art || '')) pendingEvolutionBubble = state.bubble;
+    else { pendingEvolutionBubble = null; showBubble(state.bubble); }
     showDots(state.dots);
     showBusy(Number(state.running) || 0);
     showGrowth(state.growth);
@@ -716,12 +791,14 @@
     else if (m.phase === 'land') squash = { start: now(), power: 0.06 + 0.1 * M.clamp(m.impact || 0, 0, 1) };
     else if (m.phase === 'poke') { squash = { start: now(), power: 0.07 }; }
     else if (m.phase === 'celebrate') celebrate(m.big === true);
+    else if (m.phase === 'evolve') evolve(m);
     else if (m.phase === 'petted') { hearts(); squash = { start: now(), power: 0.05 }; hops.push({ start: now() + 60, dur: 300, height: 8 }); }
     wake();
   });
   api.onPanel(p => { showPanel(p && p.items); wake(); });
 
   window.__hubPetDebug = () => ({ card: cardId ? { id: cardId, title: card.title.textContent, kind: card.kind.textContent, cta: card.cta.textContent, count: card.count.textContent, bad: card.el.classList.contains('bad') } : null,
+    evolution: { head: !headEl.hidden, wings: !wingsEl.hidden, anchor: headAnchor, active: !!evolutionRun, geometry: visual && frameGeometry.get(visual.url)?.[visual.spec.sheet ? Math.max(0, visual.shown) : 0] },
     busy: busyEl.hidden ? '' : $('busy-text').textContent, ask: !askEl.hidden, askNote: askNote.textContent, panel: panelEl.hidden ? null : panelList.textContent, box, edge: state.edge, size: getComputedStyle(document.documentElement).getPropertyValue('--body').trim(), pose, layers: visual ? [visual.key] : [], opacities: visual ? [1] : [], domLayers: layersEl.children.length, frame: visual ? visual.shown : -1, swapping: !!pendingSwap, fps: raf ? 'raf' : timer ? 'timer' : 'stopped', bubble: bubbleId, dots: lastDots, transform: bodyEl.style.transform });
   api.ready();
 })();

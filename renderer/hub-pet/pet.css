@@ -126,11 +126,19 @@ html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; w
 .lv { position: absolute; z-index: 2; bottom: 9px; left: calc((280px - var(--body)) / 2 + var(--body) * 0.66); height: 17px; padding: 0 7px; box-sizing: border-box; border-radius: 9px;
   background: #2f6ad9; color: #fff; font: 700 10.5px/17px "Segoe UI", "Microsoft YaHei UI", sans-serif; letter-spacing: .2px; white-space: nowrap; pointer-events: none;
   box-shadow: 0 2px 6px rgba(20, 40, 90, .25), 0 0 0 1.5px #fff; }
-/* 头顶段位徽章：跟着身体一起动，自己轻轻上下浮。--head 是图里头顶离身体框上沿的距离，--cx 是看得见的身体的水平中心 */
-#emblem { position: absolute; left: var(--cx, 50%); top: calc(var(--head, 0px) - 30px); width: 34px; height: 34px; margin-left: -17px; pointer-events: none;
-  background: center / contain no-repeat; filter: drop-shadow(0 2px 3px rgba(20, 30, 50, .25)); animation: emblem-float 3.2s ease-in-out infinite; }
-@keyframes emblem-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
-body.talking #emblem, body.peeking #emblem, body.peeking #sparks, body.peeking #halo, body.peeking .lv { display: none; }
+/* 底边压进头部 18%，不漂浮；翅膀先画，身体居中，头饰最后画。 */
+#evolve-head, #evolve-wings { position: absolute; display: block; height: auto; pointer-events: none; }
+#evolve-head { z-index: 1; transform: translate(-50%, -82%); }
+#evolve-wings { transform: translate(-50%, -35%); animation: wing-breathe 3.2s ease-in-out infinite; }
+#evolve-wings.royal { filter: drop-shadow(0 0 4px rgba(255, 222, 125, .75)); }
+@keyframes wing-breathe { 0%, 100% { transform: translate(-50%, -35%) scaleY(.97); } 50% { transform: translate(-50%, -35%) scaleY(1.03); } }
+/* 叠当前帧的白色轮廓，黑色身体也能泛白；单用 brightness 会让深色形象几乎不变。 */
+#body.evolving .cel::after { content: ""; position: absolute; inset: 0; background: inherit;
+  filter: brightness(0) invert(1) drop-shadow(0 0 8px #fff); animation: evolution-glow 1.2s ease-in both; }
+@keyframes evolution-glow { 0% { opacity: 0; } 85% { opacity: .88; } 96%, 100% { opacity: 1; } }
+#evolve-head.evolve-pop { animation: evolution-wear 420ms cubic-bezier(.2, 1.5, .4, 1) both; }
+@keyframes evolution-wear { from { transform: translate(-50%, -115%) scale(.7); } to { transform: translate(-50%, -82%) scale(1); } }
+body.peeking #sparks, body.peeking #halo, body.peeking .lv { display: none; }
 /* 星光：身边三颗小星星轮流闪 */
 #sparks { position: absolute; inset: 0; pointer-events: none; }
 #sparks i { position: absolute; width: 11px; height: 11px; background: #ffc83d; opacity: 0;
@@ -152,7 +160,7 @@ body.talking #emblem, body.peeking #emblem, body.peeking #sparks, body.peeking #
   clip-path: path("M7 13 C7 13 0 8.2 0 3.8 C0 1.6 1.7 0 3.7 0 C5.1 0 6.3 .8 7 2 C7.7 .8 8.9 0 10.3 0 C12.3 0 14 1.6 14 3.8 C14 8.2 7 13 7 13 Z");
   animation: heart-up 1.3s ease-out var(--delay, 0s) both; }
 @keyframes heart-up { 0% { opacity: 0; transform: translateY(6px) scale(.4); } 20% { opacity: 1; transform: translateY(0) scale(1); } 100% { opacity: 0; transform: translate(var(--dx), -46px) scale(1.15); } }
-@media (prefers-reduced-motion: reduce) { #emblem, #sparks i, #halo { animation: none; } }
+@media (prefers-reduced-motion: reduce) { #evolve-wings, #evolve-head, #sparks i, #halo, #fx *, .ncard-art { animation: none !important; } #body.evolving .cel::after { content: none; } }
 /* 成长卡片：金色点缀，右侧一枚徽章 */
 .ncard.growth { --accent: #d99a12; }
 .ncard-art { position: absolute; right: 12px; top: 30px; width: 46px; height: 46px; background: center / contain no-repeat; pointer-events: none; animation: art-pop 520ms cubic-bezier(.2, 1.5, .4, 1) 120ms both; }

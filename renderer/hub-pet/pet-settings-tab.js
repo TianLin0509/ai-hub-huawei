@@ -83,7 +83,7 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
           <label class="pet-tab-switch"><input type="checkbox" data-pet="followSessions"${s.followSessions !== false ? ' checked' : ''}><span></span></label>
         </div>
         <div class="pet-tab-half">
-          <div><b>身上显示等级</b><small>等级角标，升级后解锁星光、徽章、光环，升级时庆祝。</small></div>
+          <div><b>身上显示等级</b><small>等级角标，每10级进化一次。</small></div>
           <label class="pet-tab-switch"><input type="checkbox" data-pet="showGrowth"${s.showGrowth !== false ? ' checked' : ''}><span></span></label>
         </div>
       </div>
