@@ -4,6 +4,39 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createModelUiController, modelPickerIdText } = require('../renderer/model-ui.js');
 
+test('Codex native picker recognizes a configured custom model only for an explicit local catalog', () => {
+  const { parseCodexModelPicker } = require('../renderer/model-ui');
+  const screen = 'Select Model and Effort\n› 1. Internal/Case-Sensitive (current)\n  2. Team.Custom\n';
+  assert.equal(parseCodexModelPicker(screen), null);
+  const parsed = parseCodexModelPicker(screen, ['Internal/Case-Sensitive', 'Team.Custom']);
+  assert.equal(parsed.highlighted.value, 'Internal/Case-Sensitive');
+  assert.deepEqual(parsed.entries.map(row => row.value), ['Internal/Case-Sensitive', 'Team.Custom']);
+});
+
+test('local session model popup reads its own IPC catalog instead of an official or company-model fallback', async () => {
+  const elements = [], calls = [];
+  const document = {
+    createElement() {
+      const el = { children: [], dataset: {}, style: {}, ownerDocument: document, addEventListener() {}, setAttribute() {},
+        appendChild(child) { this.children.push(child); }, getBoundingClientRect: () => ({ top: 0, bottom: 20, left: 0, width: 200, height: 20 }) };
+      el.classList = { add() {} };
+      Object.defineProperty(el, 'innerHTML', { get() { return this.markup; }, set(value) { this.markup = value; this.children = []; } });
+      elements.push(el); return el;
+    },
+    body: { appendChild() {} },
+  };
+  const session = { kind: 'codex', companyRoute: 'local', currentModel: { id: 'Internal/Case-Sensitive' } };
+  const controller = createModelUiController({ document, sessions: new Map([['local', session]]),
+    ipcRenderer: { invoke: async (channel, args) => { calls.push([channel, args]); return { ok: true, models: [{ id: 'Internal/Case-Sensitive', label: 'Internal/Case-Sensitive' }] }; } },
+    terminalPanelEl: {}, getActiveSessionId: () => 'local', escapeHtml: String, setTimeoutFn() {},
+    refreshModelCatalog: () => assert.fail('local route must not load the official or company catalog'),
+  });
+  await controller.showModelPicker(document.createElement('span'), 'local');
+  assert.deepEqual(calls, [['session:local-models', { sessionId: 'local' }]]);
+  assert.equal(elements.filter(el => el.dataset.modelId).length, 1);
+  assert.equal(elements.find(el => el.dataset.modelId)?.dataset.modelId, 'Internal/Case-Sensitive');
+});
+
 test('model picker hides ids that repeat the label, ignoring case', () => {
   assert.equal(modelPickerIdText({ label: 'Example-Model', id: 'Example-Model' }), '');
   assert.equal(modelPickerIdText({ label: 'EXAMPLE-MODEL', id: 'example-model' }), '');

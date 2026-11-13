@@ -3172,6 +3172,7 @@ class SessionManager extends EventEmitter {
       // service_tier 控制，两者都不能和 Claude fastMode 混为一谈。
       // 非法值一律回落 max；群聊与普通 Session 一样尊重逐成员的 effort / service_tier。
       const codexReasoningArg = buildCodexReasoningConfigArg(normalizeCodexEffort(opts.effort))
+        + require('./codex-user-config-guard').codexStatusLineConfigArg(sessionEnv.CODEX_HOME || null)
         + buildCodexSpeedTierArg(effectiveCodexSpeedTier)
         + buildCodexContextWindowArg(effectiveContextMax);
       const codexInstructionFile = opts.codexInstructionFile || null;
@@ -4385,6 +4386,7 @@ try {
       // relaunch 要沿用会话自己选过的档位；群聊成员也不例外。
       const codexRelaunchModel = resolveCodexLaunchModel(getConfigValues(), modelId);
       const codexReasoningArg = buildCodexReasoningConfigArg(normalizeCodexEffort(s.info && s.info.effort))
+        + require('./codex-user-config-guard').codexStatusLineConfigArg(codexConfigDir)
         + buildCodexSpeedTierArg(resolveCodexSpeedTier(runtimeKind, s.info && s.info.codexSpeedTier))
         + buildCodexContextWindowArg(resolveCodexContextWindow(codexRelaunchModel, s.info && s.info.contextMax, { configDir: codexConfigDir }));
       ensureCodexMcpEntries(codexConfigDir, [], CODEX_MANAGED_MCP_NAMES);

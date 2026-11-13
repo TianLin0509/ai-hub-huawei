@@ -99,11 +99,13 @@ function pickerCursor(rows) {
   return rows.find(row => row.highlighted) || rows[0] || null;
 }
 
-function parseCodexModelPicker(screen) {
+function parseCodexModelPicker(screen, localModelIds = []) {
   if (!/Select Model and Effort/i.test(String(screen || ''))) return null;
   const rows = pickerRows(screen);
   const entries = rows.map(row => {
-    const match = row.text.match(/^((?:gpt-[\w.-]+|o\d[\w.-]*|deepseek-v4-(?:pro|flash)|deepseek-flash))\b/i);
+    const local = row.text.split(/\s/)[0];
+    const match = localModelIds.some(id => id.toLowerCase() === local.toLowerCase()) ? [local, local]
+      : row.text.match(/^((?:gpt-[\w.-]+|o\d[\w.-]*|deepseek-v4-(?:pro|flash)|deepseek-flash))\b/i);
     return match ? { ...row, value: match[1] } : null;
   }).filter(Boolean);
   if (!entries.length) return null;
@@ -315,7 +317,8 @@ function createModelUiController({
     const kind = session && session.kind ? session.kind : '';
     // CodeAgent：用打开菜单时取回的这个会话所在号的清单（showModelPicker → codeagent:session-models），取不到才用共用列表。
     const ownList = session && Array.isArray(session._codeagentModelOptions) ? session._codeagentModelOptions : null;
-    const options = ownList || getModelOptions(require('../core/chatgpt-web-models').isChatgptWebModel(session?.currentModel?.id) ? 'chatgpt' : kind);
+    const options = session?.companyRoute === 'local' && Array.isArray(session._localCliModelOptions) ? session._localCliModelOptions
+      : ownList || getModelOptions(require('../core/chatgpt-web-models').isChatgptWebModel(session?.currentModel?.id) ? 'chatgpt' : kind);
     const automaticCodeAgent = !!(session && session._codeagentAutomatic);
     const strategy = automaticCodeAgent ? null : modelSwitchStrategy(kind);
     const currentId = session && session.currentModel ? (session.currentModel.id || '') : '';
@@ -451,7 +454,12 @@ function createModelUiController({
         }
       }
       const web = require('../core/chatgpt-web-models').isChatgptWebModel(session?.currentModel?.id);
-      const catalog = await refreshModelCatalog(web ? 'chatgpt' : session && session.kind, session);
+      let catalog;
+      if (session?.companyRoute === 'local' && /^(?:codex|claude)(?:-resume)?$/.test(session.kind)) {
+        catalog = await ipcRenderer.invoke('session:local-models', { sessionId });
+        session._localCliModelOptions = catalog.models || [];
+        if (!catalog.ok) throw new Error(catalog.error || '本机模型目录读取失败');
+      } else catalog = await refreshModelCatalog(web ? 'chatgpt' : session && session.kind, session);
       if (openModelPicker && openModelPicker.el === menu) {
         renderModelPicker(menu, badgeEl, sessionId, catalog && catalog.refreshError ? {
           text: `实时目录刷新失败，已使用本地兜底：${catalog.refreshError}`,
@@ -505,7 +513,7 @@ function createModelUiController({
   function dismissOwnedCodexPicker(sessionId, pending) {
     if (!pending?.ownsCodexPicker) return;
     const screen = commandText(sessionId);
-    if (parseCodexModelPicker(screen) || parseCodexReasoningPicker(screen) || parseCodexAdvancedReasoningPicker(screen)) {
+    if (parseCodexModelPicker(screen, sessions.get(sessionId)?._localCliModelOptions?.map(option => option.id)) || parseCodexReasoningPicker(screen) || parseCodexAdvancedReasoningPicker(screen)) {
       writeTerminal(sessionId, '\x1b');
     }
   }
@@ -542,7 +550,8 @@ function createModelUiController({
       throw new Error('Codex 输入框有未发送内容或当前不在主提示符；请先处理后再切换模型');
     }
     await submitSlashCommand(sessionId, '/model', 'codex-picker');
-    const modelStep = await waitForScreen(sessionId, screen => parseCodexModelPicker(screen), '等待 Codex 模型面板');
+    const modelStep = await waitForScreen(sessionId, screen => parseCodexModelPicker(screen,
+      session.companyRoute === 'local' ? session._localCliModelOptions?.map(model => model.id) : undefined), '等待 Codex 模型面板');
     if (session._modelSwitchPending) session._modelSwitchPending.ownsCodexPicker = true;
     const target = modelStep.value.entries.find(entry => entry.value.toLowerCase() === option.id.toLowerCase());
     if (!target) {

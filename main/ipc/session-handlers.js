@@ -449,6 +449,20 @@ function registerSessionIpc(ipcMain, deps) {
     return { ok: true, preference: await restoreClaudePreferenceGuard(sessionId, { waitForWrite: false }) };
   });
 
+  function localCliModels(session) {
+    const kind = String(session?.kind || '').replace(/-resume$/, '');
+    if (session?.companyRoute !== 'local' || !['codex', 'claude'].includes(kind)) throw new Error('这个会话没有选择沿用本机 CLI 配置');
+    const configDir = kind === 'codex' ? session.codexRuntimeHome || (session.codexSessionsRoot ? require('path').dirname(session.codexSessionsRoot) : undefined)
+      : session.claudeConfigDir || session.claudeRuntimeHome;
+    return require('../../core/local-cli-models').readLocalCliModels(kind, { configDir });
+  }
+  ipcMain.handle('session:local-models', (_event, payload = {}) => {
+    try {
+      const session = sessionManager.getSession(payload.sessionId);
+      if (!session) throw new Error('会话不存在或已经休眠');
+      return localCliModels(session);
+    } catch (error) { return { ok: false, models: [], error: error.message }; }
+  });
   // Renderer calls this only after the provider-owned TUI confirms the switch.
   // Keeping metadata confirmation separate from terminal-input prevents a
   // failed picker interaction from making Hub claim a model that never became active.
@@ -466,7 +480,13 @@ function registerSessionIpc(ipcMain, deps) {
       return {ok:true,model:current,effort:session.effort};
     }
     const kind = String(session.kind || '').replace(/-resume$/, '').toLowerCase();
-    const valid = kind === 'codex'
+    const local = session.companyRoute === 'local' && ['codex', 'claude'].includes(kind);
+    let localOptions;
+    if (local) {
+      try { localOptions = localCliModels(session).models; }
+      catch (error) { return { ok: false, message: error.message }; }
+    }
+    const valid = local ? localOptions.some(model => model.id === modelId) : kind === 'codex'
       ? isCodexConversationModelId(modelId)
       : kind === 'claude'
         ? isClaudeModelSelection(modelId)
@@ -479,7 +499,7 @@ function registerSessionIpc(ipcMain, deps) {
           ? /^(?:gemini|claude|gpt-oss)[\w.-]+$/.test(modelId)
         : false;
     if (!valid) return { ok: false, error: 'invalid-model', message: '该模型不属于当前 CLI 的会话模型目录' };
-    if (kind === 'codex') modelId = require('../../core/model-options').normalizeCodexSessionModel(modelId);
+    if (kind === 'codex' && !local) modelId = require('../../core/model-options').normalizeCodexSessionModel(modelId);
     // DeepSeek on Claude Code：终端里切的是接入方式对应的真实模型名，Hub 记显示用的 id。
     if (kind === 'deepseek-claude') {
       const profile = require('../../core/deepseek-claude-profile');

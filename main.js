@@ -455,19 +455,13 @@ function ensureHooksDeployed(claudeDirPath) {
   } catch { /* .claude.json 不存在或格式异常，跳过（首次启动可能尚未生成） */ }
 }
 
-// Ensure Codex CLI status bar includes context-remaining so the scanner can
-// parse context usage. Idempotent — only patches if the key is absent.
+// Repair only the known duplicate blocks left by old Hub versions. The
+// missing status line is supplied per launch, never appended to user config.
 function ensureCodexContextConfig() {
   const home = process.env.USERPROFILE || process.env.HOME || os.homedir();
-  const configPath = path.join(home, '.codex', 'config.toml');
+  const configPath = path.join(process.env.CODEX_HOME || path.join(home, '.codex'), 'config.toml');
   try {
-    let content = '';
-    try { content = fs.readFileSync(configPath, 'utf8'); } catch {}
-    if (content.includes('status_line')) return;
-    const line = '\n[tui]\nstatus_line = ["model-with-reasoning", "context-remaining", "current-dir"]\n';
-    fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.appendFileSync(configPath, line);
-    console.log('[群聊] codex config.toml patched with context-remaining');
+    require('./core/codex-user-config-guard').repairUserCodexConfigFile(configPath);
   } catch (e) {
     console.warn('[群聊] codex config patch failed:', e.message);
   }

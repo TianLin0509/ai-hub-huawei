@@ -91,6 +91,7 @@ function sessionModelId(session) {
   if (!candidate) return null;
   const kind = baseKind(session.kind);
   if (kind === 'codex') {
+    if (session.companyRoute === 'local') return require('./local-cli-models').isLocalCliModelId(candidate) ? candidate : null;
     if (/[\\/]codex-api-profile[\\/]sessions[\\/]?$/.test(session.codexSessionsRoot || '')) {
       return require('./company-api-config').optionalText(candidate, '模型名称');
     }
@@ -179,6 +180,7 @@ function buildSessionResumeMeta(session, overrides = {}) {
     lastMessageTime: session.lastMessageTime,
     lastOutputPreview: session.lastOutputPreview || '',
     model: sessionModelId(session),
+    ...(session.companyRoute === 'local' ? { companyRoute: 'local' } : {}),
     ...(/^codeagent(?:-resume)?$/.test(session.kind) ? { codeagentModelPick: session.codeagentModelPick === true } : {}),
     ...(session.codeagentForkSourceSessionId ? { codeagentForkSourceSessionId: session.codeagentForkSourceSessionId } : {}),
     ...(session.codeagentPrefixFork ? { codeagentPrefixFork: session.codeagentPrefixFork } : {}),

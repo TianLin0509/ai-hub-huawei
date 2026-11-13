@@ -53,6 +53,12 @@
 #session-list .sidebar-folder-empty { padding: 8px 6px; color: var(--fg-muted); font-size: 11px; line-height: 1.6; }
 #session-list .sidebar-folder-error { padding: 6px; color: var(--mark-red, #a52828); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
 #session-list .sidebar-folder-error button { margin-left: 5px; color: var(--brand-text); background: transparent; border: 0; cursor: pointer; }
+/* 拖拽归类：拖动时目录整块可放，悬停的那个高亮。 */
+#session-list .sidebar-folder.drop-target { border-radius: 6px; background: var(--brand-tint); box-shadow: inset 0 0 0 1px var(--brand); }
+#session-list .sidebar-folder-tools button.drop-target { background: var(--brand-tint); color: var(--brand-text); box-shadow: inset 0 0 0 1px var(--brand); }
+/* 拖动中只用描边提示哪里能放：不能改变任何元素的位置，被拖的行一挪位浏览器就会取消这次拖拽。 */
+#session-list.folder-dragging .sidebar-folder { border-radius: 6px; outline: 1px dashed var(--border-subtle); outline-offset: -1px; }
+#session-list.folder-dragging .sidebar-folder-tools button { outline: 1px dashed var(--border-subtle); outline-offset: -1px; }
 #session-list .sidebar-folder-toggle:focus-visible,
 #session-list .sidebar-folder-action:focus-visible,
 #session-list .sidebar-folder-tools button:focus-visible { outline: 1px solid var(--brand); outline-offset: 1px; }

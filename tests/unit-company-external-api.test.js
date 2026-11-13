@@ -7,6 +7,81 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+test('local CLI catalogs read custom names from the selected home without changing configuration', t => {
+  const { readLocalCliModels, isLocalCliModelId } = require('../core/local-cli-models');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-local-models-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const config = 'model = "Internal/Model-V2"\nmodel_provider = "cc-switch"\n[tui]\nnotifications = false\n';
+  fs.writeFileSync(path.join(home, 'config.toml'), config);
+  fs.writeFileSync(path.join(home, 'models_cache.json'), JSON.stringify({ models: [
+    { slug: 'Internal/Model-V2', display_name: 'Internal' }, { slug: 'Team.Custom-V3' },
+    { slug: 'gpt-image-gen2' }, { slug: 'hidden', hidden: true }, { slug: 'bad; command' }, null,
+  ] }));
+  const models = readLocalCliModels('codex-resume', { configDir: home, env: { CODEX_HOME: 'must-not-read' } });
+  assert.equal(models.defaultModel, 'Internal/Model-V2');
+  assert.deepEqual(models.models.map(model => model.id), ['Internal/Model-V2', 'Team.Custom-V3']);
+  assert.equal(fs.readFileSync(path.join(home, 'config.toml'), 'utf8'), config);
+  fs.writeFileSync(path.join(home, 'config.toml'), 'model="Root"\nprofile="work"\n[profiles.work]\nmodel="Profile/Custom"\n');
+  assert.equal(readLocalCliModels('codex', { configDir: home, env: {} }).defaultModel, 'Profile/Custom');
+  fs.writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ model: 'Settings/Model',
+    env: { ANTHROPIC_DEFAULT_SONNET_MODEL: 'Internal-Sonnet' } }));
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ additionalModelOptionsCache: [{ value: 'Account.Custom' }] }));
+  const claude = readLocalCliModels('claude', { configDir: home, env: { ANTHROPIC_MODEL: 'Route/CaseSensitive' } });
+  assert.equal(claude.defaultModel, 'Route/CaseSensitive');
+  assert.deepEqual(claude.models.map(model => model.id), ['Route/CaseSensitive', 'Internal-Sonnet', 'Account.Custom']);
+  fs.mkdirSync(path.join(home, '.claude'));
+  fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({ model: 'DefaultHome/Model' }));
+  assert.deepEqual(readLocalCliModels('claude', { configDir: path.join(home, '.claude'), env: { HOME: home } }).models.map(model => model.id),
+    ['DefaultHome/Model', 'Account.Custom']);
+  for (const id of ['', 'bad\nmodel', 'bad;command', '"quoted"', '../model', 'gpt-image-gen2']) assert.equal(isLocalCliModelId(id), false);
+});
+
+test('local custom models survive resume and fork while official subscription validation stays unchanged', () => {
+  const caps = require('../core/session-capabilities');
+  const session = { id: 'hub-local', kind: 'codex', companyRoute: 'local', codexSid: '00000000-0000-4000-8000-000000000001',
+    cwd: 'D:/fixture', currentModel: { id: 'Internal/Case-Sensitive' } };
+  assert.equal(caps.sessionModelId(session), 'Internal/Case-Sensitive');
+  assert.equal(caps.sessionModelId(caps.buildSessionResumeMeta(session)), 'Internal/Case-Sensitive');
+  assert.equal(require('../core/session-fork-plan').planSessionFork({ source: session }).opts.model, 'Internal/Case-Sensitive');
+  assert.equal(require('../core/model-options').isCodexConversationModelId('Internal/Case-Sensitive'), false);
+  const { resolveCodexLaunchModel, resolveClaudeLaunchModel, applyClaudeSessionEnv } = sessionHelpers();
+  assert.equal(resolveCodexLaunchModel({ COMPANY_CLI: true, CODEX_BACKEND: 'local' }, session.currentModel.id), session.currentModel.id);
+  assert.equal(resolveClaudeLaunchModel({ COMPANY_CLI: true, CLAUDE_BACKEND: 'local' }, 'Route/CaseSensitive'), 'Route/CaseSensitive');
+  const env = { ANTHROPIC_MODEL: 'Route/CaseSensitive', ANTHROPIC_BASE_URL: 'https://route.example.invalid' };
+  applyClaudeSessionEnv(env, { CLAUDE_BACKEND: 'subscription' });
+  assert.equal(env.ANTHROPIC_MODEL, undefined); assert.equal(env.ANTHROPIC_BASE_URL, undefined);
+});
+
+test('local-model IPC uses the session directory and confirms the exact custom id without changing other routes', async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-local-model-ipc-'));
+  const previous = { data: process.env.CLAUDE_HUB_DATA_DIR, startup: process.env.CLAUDE_HUB_CODEAGENT_STARTUP_PROBE };
+  process.env.CLAUDE_HUB_DATA_DIR = home; process.env.CLAUDE_HUB_CODEAGENT_STARTUP_PROBE = '0';
+  t.after(() => {
+    if (previous.data === undefined) delete process.env.CLAUDE_HUB_DATA_DIR; else process.env.CLAUDE_HUB_DATA_DIR = previous.data;
+    if (previous.startup === undefined) delete process.env.CLAUDE_HUB_CODEAGENT_STARTUP_PROBE; else process.env.CLAUDE_HUB_CODEAGENT_STARTUP_PROBE = previous.startup;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  fs.writeFileSync(path.join(home, 'config.toml'), 'model="Internal/Case-Sensitive"\n');
+  const sessions = new Map([
+    ['local', { id: 'local', kind: 'codex', companyRoute: 'local', codexSessionsRoot: path.join(home, 'sessions') }],
+    ['subscription', { id: 'subscription', kind: 'codex' }],
+  ]);
+  const handlers = new Map();
+  require('../main/ipc/session-handlers').registerSessionIpc({ handle: (name, fn) => handlers.set(name, fn), on() {} }, {
+    sessionManager: { getSession: id => sessions.get(id), getAllSessions: () => [], codeagentPoolActiveCounts: () => ({}),
+      updateSessionMeta: (id, fields) => Object.assign(sessions.get(id), fields) }, sendToRenderer() {},
+  });
+  const read = handlers.get('session:local-models');
+  assert.equal(read(null, { sessionId: 'local' }).models[0].id, 'Internal/Case-Sensitive');
+  assert.equal(read(null, { sessionId: 'subscription' }).ok, false);
+  assert.equal(read(null, { sessionId: 'missing' }).ok, false);
+  const confirm = handlers.get('confirm-session-model-switch');
+  assert.equal((await confirm(null, { sessionId: 'local', modelId: 'Internal/Case-Sensitive' })).ok, true);
+  assert.equal(sessions.get('local').currentModel.id, 'Internal/Case-Sensitive');
+  assert.equal((await confirm(null, { sessionId: 'local', modelId: 'not-in-cli-config' })).ok, false);
+  assert.equal((await confirm(null, { sessionId: 'subscription', modelId: 'Internal/Case-Sensitive' })).ok, false);
+});
+
 test('company defaults apply only to tools without prior sessions, including resumed sessions', t => {
   const state = { sessions: [] };
   t.mock.method(require('../core/state-store'), 'load', () => state);

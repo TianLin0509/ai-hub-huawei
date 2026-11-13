@@ -13,7 +13,19 @@
 // 本模块负责两件事：判断一个 CODEX_HOME 是不是 Hub 自己的；把旧版本写坏的文件修回来。
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+
+const HUB_STATUS_LINE = '["model-with-reasoning", "context-remaining", "current-dir"]';
+
+function codexStatusLineConfigArg(configDir, { fsModule = fs, env = process.env, homeDir = os.homedir() } = {}) {
+  const home = configDir || env.CODEX_HOME || path.join(env.USERPROFILE || env.HOME || homeDir, '.codex');
+  try {
+    // Preserve an existing status line and the old # status_line opt-out.
+    if (fsModule.readFileSync(path.join(home, 'config.toml'), 'utf8').includes('status_line')) return '';
+  } catch (error) { if (error.code !== 'ENOENT') return ''; }
+  return ` -c 'tui.status_line=${HUB_STATUS_LINE}'`;
+}
 
 function norm(p) {
   return path.resolve(String(p || '')).replace(/[\\/]+$/, '').toLowerCase();
@@ -108,6 +120,28 @@ function repairHubCodexConfigText(input) {
     }
   }
 
+  // The old startup writer appended exactly this [tui] block. Scan statements
+  // so a header inside a multiline string cannot be mistaken for a real table.
+  try {
+    const { samePath, scanTomlStatements } = require('./toml-statements');
+    const { statements } = scanTomlStatements(lines.join('\n'));
+    for (let index = statements.length - 1; index >= 0; index -= 1) {
+      const header = statements[index];
+      if (header.kind !== 'table' || !samePath(header.path, ['tui']) || lines[header.startLine].trim() !== '[tui]') continue;
+      const body = [];
+      for (let j = index + 1; j < statements.length && statements[j].kind === 'kv'; j += 1) body.push(statements[j]);
+      if (body.length !== 1 || !samePath(body[0].path, ['tui', 'status_line']) || body[0].valueText !== HUB_STATUS_LINE
+          || body[0].startLine !== header.startLine + 1 || body[0].endLine !== body[0].startLine
+          || lines[body[0].startLine].trim() !== `status_line = ${HUB_STATUS_LINE}`) continue;
+      const conflict = statements.slice(0, index).some(item =>
+        item.kind !== 'kv' ? samePath(item.path, ['tui']) : item.table.length === 0 && item.path[0] === 'tui');
+      if (!conflict) continue;
+      const from = header.startLine > 0 && !lines[header.startLine - 1].trim() ? header.startLine - 1 : header.startLine;
+      lines.splice(from, body[0].endLine - from + 1);
+      fixes.push('删除与原有写法重复的 [tui] 块');
+    }
+  } catch { /* 无法识别结构时不猜测删除用户的 [tui] 内容 */ }
+
   const text = lines.join('\n');
   return { text, changed: text !== original, fixes };
 }
@@ -134,4 +168,4 @@ function repairUserCodexConfigFile(configPath, { logger = console, now = () => n
   }
 }
 
-module.exports = { isHubOwnedCodexHome, repairHubCodexConfigText, repairUserCodexConfigFile };
+module.exports = { isHubOwnedCodexHome, repairHubCodexConfigText, repairUserCodexConfigFile, codexStatusLineConfigArg };

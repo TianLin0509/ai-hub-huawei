@@ -1061,6 +1061,7 @@ sessionListEl.addEventListener('keydown', event => {
         + (hasUnread ? ' need-unread' : '');
       div.dataset.meetingId = s.id;
       div.dataset.sidebarRenderKey = 'meeting:' + s.id;
+      if (sidebarFolders) div.setAttribute('draggable', 'true');
       div.dataset.state = dotCls;
       div.tabIndex = 0;
       const warning = memberIds.map(id => {
@@ -1112,6 +1113,8 @@ sessionListEl.addEventListener('keydown', event => {
     div.tabIndex = 0;
     div.dataset.sessionId = s.id;
     div.dataset.sidebarRenderKey='session:'+s.id;
+    // 顶层的会话、群聊、团队可以整行拖到目录上；成员跟着所属群聊或团队走，不单独拖。
+    if (sidebarFolders && !child) div.setAttribute('draggable', 'true');
     div.dataset.runtimeState = runtimeTruth.state;
     div.dataset.runtimeSource = runtimeTruth.source || '';
     div.dataset.runtimeConfidence = runtimeTruth.confidence || '';
@@ -1247,7 +1250,7 @@ sessionListEl.addEventListener('keydown', event => {
   if (!sidebarFolders) appendSections(sections);
   else {
     const controls = doc.createElement('div'); controls.className = 'sidebar-folder-tools'; controls.dataset.sidebarRenderKey = 'folder-tools';
-    controls.innerHTML = '<span>目录</span><button type="button" data-folder-create aria-label="新建目录"' + (sidebarFolders.error() ? ' disabled' : '') + '>＋ 新建目录</button>';
+    controls.innerHTML = '<span>目录</span><button type="button" data-folder-create aria-label="新建目录" title="新建目录；也可以把会话拖到这里，建好后直接放进去"' + (sidebarFolders.error() ? ' disabled' : '') + '>＋ 新建目录</button>';
     controls.addEventListener('click', event => {
       if (event.target?.closest?.('[data-folder-create]') && !sidebarFolders.error()) void sidebarFolders.showCreate();
     });

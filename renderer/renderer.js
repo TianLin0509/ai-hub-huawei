@@ -9004,18 +9004,24 @@ window.__hubZoomLabel = require('./ctrl-wheel-zoom').installCtrlWheelZoom({
   getTerminalSize: () => currentTerminalFontSize, setTerminalSize: setTerminalFontSize,
 }).label;
 // --- Context menus ---
+// 哪些侧栏条目能归到目录里：群聊、团队负责人和独立会话；成员跟随所属群聊或团队，后台任务有自己的分组。
+function sidebarFolderEntityKey(id) {
+  if (meetings[id]) return 'meeting:' + id;
+  const session = sessions.get(id);
+  if (!session || require('./session-background-tasks').isBackgroundPurpose(session.purpose) || session.meetingId || Object.values(meetings).some(m => m.subSessions?.includes(id)) || window.__teamUi?.leadOf(id, sessions, meetings)) return null;
+  return 'session:' + id;
+}
+require('./sidebar-folder-drag').attachSidebarFolderDrag({
+  listEl: sessionListEl, sidebarFolders: sidebarFoldersController, folderEntityKey: sidebarFolderEntityKey,
+  notify: message => showToast(message, 'error'),
+});
 const sessionContextMenu = createSessionContextMenuController({
   document,
   window,
   contextMenuEl,
   requestRename: requestSessionRename,
   sidebarFolders: sidebarFoldersController,
-  folderEntityKey: id => {
-    if (meetings[id]) return 'meeting:' + id;
-    const session = sessions.get(id);
-    if (!session || require('./session-background-tasks').isBackgroundPurpose(session.purpose) || session.meetingId || Object.values(meetings).some(m => m.subSessions?.includes(id)) || window.__teamUi?.leadOf(id, sessions, meetings)) return null;
-    return 'session:' + id;
-  },
+  folderEntityKey: sidebarFolderEntityKey,
   sessions,
   meetings,
   ipcRenderer,
