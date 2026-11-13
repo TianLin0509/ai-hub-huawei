@@ -39,15 +39,28 @@ const CHECKS = [
   ['email address', /\b[A-Za-z0-9._%+-]+@(?!example\.|users\.noreply\.github\.com|anthropic\.com)[A-Za-z0-9.-]+\.(?:com|cn|edu|org|net)\b/],
 ];
 const TEXT = /\.(?:js|cjs|mjs|json|md|html|css|ps1|bat|cmd|py|yml|yaml|txt)$/i;
+// Check paths and raw bytes too: shell caches can contain profile paths without
+// a text extension, or encode them as UTF-16 inside a binary file.
+const USER_PATH = /(?:^|[\\/])Users[\\/]{1,2}(?!you\b|xxx\b|example-user\b|alice\b|<|%|\$|\{|Public\b|Default\b)[A-Za-z0-9._-]{2,}[\\/]/i;
+function hasUserPath(bytes) {
+  if (USER_PATH.test(bytes.toString('utf8'))) return true;
+  for (const offset of [0, 1]) {
+    const even = bytes.subarray(offset, offset + Math.floor((bytes.length - offset) / 2) * 2);
+    if (USER_PATH.test(even.toString('utf16le')) || USER_PATH.test(Buffer.from(even).swap16().toString('utf16le'))) return true;
+  }
+  return false;
+}
 
 const failures = [];
 const files = listFiles();
 for (const file of files) {
   if (FORBIDDEN_PATH.test(file)) failures.push({ file, rule: 'runtime or account file' });
+  if (USER_PATH.test(file)) failures.push({ file, rule: 'machine user path in filename' });
   const absolute = path.join(root, file);
   let stat;
   try { stat = fs.lstatSync(absolute); } catch { continue; }
   if (stat.isSymbolicLink()) { failures.push({ file, rule: 'symlink' }); continue; }
+  if (stat.isFile() && !TEXT.test(file) && hasUserPath(fs.readFileSync(absolute))) failures.push({ file, rule: 'machine user path in binary' });
   if (!TEXT.test(file) || file === 'scripts/audit-public.js' || file === 'package-lock.json') continue;
   const text = fs.readFileSync(absolute, 'utf8');
   if (text.includes('\uFFFD')) failures.push({ file, rule: 'invalid UTF-8' });

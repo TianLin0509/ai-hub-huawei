@@ -2,7 +2,7 @@
 // 现在个人号和号池号两种登录都认；只读令牌和到期时间。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, mkdir, rm, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createPersonalAccessTokenReader } from '../core/company-proxy/personal-token.mjs';
@@ -12,7 +12,9 @@ const DPAPI = Buffer.concat([Buffer.from('01000000d08c9ddf0115d1118c7a00c04fc297
 const decryptAccessToken = async c => (c === DPAPI ? 'plain-token' : (() => { throw Object.assign(new Error(), { code: 'X' }); })());
 const later = Date.now() + 3600_000;
 
-async function tempDir(t) { const d = await mkdtemp(join(tmpdir(), 'proxy-login-')); t.after(() => rm(d, { recursive: true, force: true })); return d; }
+// Hosted Windows runners expose TEMP through an 8.3 alias. The pool reader
+// deliberately requires canonical paths; login fixtures must honor that contract.
+async function tempDir(t) { const d = await mkdtemp(join(tmpdir(), 'proxy-login-')); t.after(() => rm(d, { recursive: true, force: true })); return realpath(d); }
 
 test('个人号：浏览器登录和账号密码登录都能取到令牌', async t => {
   const dir = await tempDir(t);

@@ -11,6 +11,27 @@ const path = require('path');
 const root = path.join(__dirname, '..');
 const read = rel => fs.readFileSync(path.join(root, rel), 'utf8');
 
+test('public audit rejects profile paths in binary encodings and filenames', t => {
+  const { spawnSync } = require('node:child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'public-audit-binary-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, 'scripts'));
+  fs.copyFileSync(path.join(root, 'scripts/audit-public.js'), path.join(dir, 'scripts/audit-public.js'));
+  const userPath = ['C:', 'Users', 'fixture-account', 'cache'].join('\\');
+  const utf16 = Buffer.from(userPath, 'utf16le');
+  const cases = [Buffer.from(userPath), utf16, Buffer.concat([Buffer.from([0]), utf16]), Buffer.from(utf16).swap16()];
+  for (let index = 0; index < cases.length; index++) fs.writeFileSync(path.join(dir, 'cache-' + index), cases[index]);
+  fs.mkdirSync(path.join(dir, 'Users', 'fixture-account'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'Users', 'fixture-account', 'cache'), 'safe');
+  fs.writeFileSync(path.join(dir, 'image.png'), Buffer.from([0, 255, 0, 123]));
+  const result = spawnSync(process.execPath, [path.join(dir, 'scripts/audit-public.js')], { encoding: 'utf8', windowsHide: true, env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
+  assert.equal(result.status, 1, result.stderr);
+  const failures = JSON.parse(result.stdout).failures;
+  assert.equal(failures.filter(hit => hit.rule === 'machine user path in binary').length, 4);
+  assert.equal(failures.filter(hit => hit.rule === 'machine user path in filename').length, 1);
+  assert.equal(failures.some(hit => hit.file === 'image.png'), false);
+});
+
 test('CDP HTTP helpers bound partial responses and settle aborted bodies', async () => {
   const http = require('node:http'), vm = require('node:vm'), { createRequire } = require('node:module');
   const filename = path.join(__dirname, 'helpers/hub-launcher.js');
