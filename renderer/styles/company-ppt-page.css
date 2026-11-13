@@ -387,3 +387,7 @@
 .pptk-ops{flex:none;display:flex;flex-direction:column;gap:8px;margin-top:auto}
 .pptk-ops button{width:100%}
 @media (max-width:1280px){.pptk{grid-template-columns:224px minmax(0,1fr) 240px}}
+/* 做页 · 自动选骨架：预览上方的方案 A/B/C 切换 */
+.pptk-vars{display:inline-flex;gap:4px;margin-right:10px;vertical-align:middle}
+.pptk-var{padding:1px 10px;border:1px solid var(--pptw-line,#d9d9de);border-radius:999px;background:transparent;color:inherit;font-size:12px;line-height:20px;cursor:pointer}
+.pptk-var.on{background:var(--pptw-acc,#3478f6);border-color:var(--pptw-acc,#3478f6);color:#fff}

@@ -7,6 +7,7 @@ function createPptMake({ root, ipcRenderer, notice }) {
   const STEP = { waiting_agent: '正在让助理写页面内容…', revising: '助理正在按自查提醒修改…' };
   const SHOW_MAX = 5;
   let skeletons = [], selected = '', category = '', listPage = 0, listSize = 6, job = null, svg = '', svgKey = '', busy = null, failure = null, editing = false, shown = false, pollTimer = null, clock = null;
+  let group = []; // 「自动选骨架」的一组方案：每个都是一个普通做页任务，这里只管切换和刷新状态
   const call = async (action, args) => {
     const r = await ipcRenderer.invoke('company-assistant:' + action, args);
     if (r?.ok === false) throw new Error(r.error || '这一步没有完成');
@@ -18,6 +19,7 @@ function createPptMake({ root, ipcRenderer, notice }) {
       <label class="pptk-title" for="company-ppt-make-brief">这页要讲什么（一句话或贴材料）</label>
       <textarea id="company-ppt-make-brief" data-pptk-brief placeholder="例如：三项措施逐级叠加，指标从基线提升 XX%。也可以直接贴数据、结论和要点"></textarea>
       <div class="pptk-actions"><button type="button" class="pptw-btn pri" data-pptk="start">生成这一页</button><button type="button" class="pptw-btn sec" data-pptk="example">先看骨架样子</button></div>
+      <div class="pptk-actions"><button type="button" class="pptw-btn sec" data-pptk="auto" title="不用选骨架：助理按上面这段描述挑 3 个讲法不同的骨架，各出一版让你挑">不选骨架，直接出 3 版</button></div>
       <div class="pptk-actions pptk-more"><button type="button" class="pptw-btn ghost sm" data-pptk="paste" title="别的 AI 已经写好页面说明（JSON）时，粘进来直接生成">粘贴页面说明</button><button type="button" class="pptw-btn ghost sm" data-pptk="guide" title="把骨架说明、写法规则和示意 JSON 复制出来，贴给别的 AI">复制写法说明</button><button type="button" class="pptw-btn ghost sm" data-pptk="pack" title="全部骨架的示意页合成一份多页 PPT，用 PowerPoint 打开">下载整套模板</button></div>
     </aside>
     <div class="pptk-main"><div class="pptk-cap" data-pptk-cap></div><div class="pptk-stage" data-pptk-stage></div><p class="pptk-chain" data-pptk-chain></p></div>
@@ -45,6 +47,7 @@ function createPptMake({ root, ipcRenderer, notice }) {
   function drawStage() {
     const stage = $('[data-pptk-stage]'), running = busy || (job && ACTIVE.includes(job.state) ? { text: STEP[job.state], from: job.startedAt } : null);
     $('[data-pptk-cap]').innerHTML = job?.path ? `<b>${job.kind === 'example' ? '骨架样例' : '生成结果'}</b><span>${esc(job.skeleton)}</span><i title="${esc(job.path)}">${esc(job.path.split(/[\\/]/).pop())}</i>` : '<b>版式预览</b>';
+    if (group.length) $('[data-pptk-cap]').insertAdjacentHTML('afterbegin', `<span class="pptk-vars" role="tablist" aria-label="方案">${group.map(j => `<button type="button" role="tab" class="pptk-var${j.id === job?.id ? ' on' : ''}" data-pptk="variant" data-id="${esc(j.id)}" aria-selected="${j.id === job?.id}" title="${esc(j.skeleton)}">${esc(j.variant)}${ACTIVE.includes(j.state) ? ' …' : j.state === 'error' ? ' ✕' : ''}</button>`).join('')}</span>`);
     if (editing) {
       const paste = editing === 'paste';
       stage.innerHTML = `<div class="pptk-edit"><textarea data-pptk-spec spellcheck="false" aria-label="页面说明（JSON）" placeholder="${paste ? '把别的 AI 写好的页面说明（JSON）粘到这里。还没有？点左边「复制写法说明」，贴给它并写上要讲的内容' : ''}"></textarea><p class="pptk-err" data-pptk-err role="alert" hidden></p><div class="pptk-actions"><button type="button" class="pptw-btn pri" data-pptk="${paste ? 'paste-go' : 'rerender'}">${paste ? '生成' : '重新生成'}</button><button type="button" class="pptw-btn sec" data-pptk="edit-cancel">取消</button><span class="pptw-hint">${paste ? '直接生成，不经过助理。' : '直接改文字和数字；结构不熟时只改引号里的内容。'}</span></div></div>`;
@@ -92,10 +95,20 @@ function createPptMake({ root, ipcRenderer, notice }) {
   }
   async function take(next) {
     job = next; failure = job.state === 'error' ? job.error : null; editing = false;
+    if (job.groupId) group = group.map(j => (j.id === job.id ? job : j)); else if (job.kind === 'make' && ACTIVE.includes(job.state)) group = [];
     await loadPreview();
     draw();
     clearTimeout(pollTimer);
     if (ACTIVE.includes(job.state) && shown) pollTimer = setTimeout(() => { void poll(); }, 1500);
+    else if (group.some(j => ACTIVE.includes(j.state)) && shown) pollTimer = setTimeout(() => { void refreshGroup(); }, 2500);
+  }
+  // 当前看的这一版已写完、别的版还在写：只刷新方案条上的状态，不重画预览，也不打断正在改的页面说明。
+  async function refreshGroup() {
+    if (!shown || !group.length) return;
+    group = await Promise.all(group.map(j => (ACTIVE.includes(j.state) ? call('ppt-make-status', { jobId: j.id }).then(r => r.job, () => j) : j)));
+    if (!editing) drawStage();
+    clearTimeout(pollTimer);
+    if (group.some(j => ACTIVE.includes(j.state)) && shown) pollTimer = setTimeout(() => { void refreshGroup(); }, 2500);
   }
   async function poll() {
     if (!job || !shown) return;
@@ -130,6 +143,16 @@ function createPptMake({ root, ipcRenderer, notice }) {
       catch (error) { failure = error.message; drawStage(); }
       return;
     }
+    if (name === 'auto') {
+      if ([job, ...group].some(j => j && ACTIVE.includes(j.state))) { notice('助理还在写上一页，请等它完成。'); return; }
+      const brief = $('[data-pptk-brief]').value.trim();
+      if (!brief) { notice('先写一句这页要讲什么，或贴上材料。'); $('[data-pptk-brief]').focus(); return; }
+      failure = null; svg = ''; svgKey = ''; notice('助理会挑 3 个讲法不同的骨架各出一版，通常 3–6 分钟；写好一版就能先看一版。');
+      try { const r = await call('ppt-make-auto', { brief }); group = r.jobs; await take(group[0]); }
+      catch (error) { failure = error.message; drawStage(); }
+      return;
+    }
+    if (name === 'variant') { const next = group.find(j => j.id === b.dataset.id); if (next && next.id !== job?.id) { svg = ''; svgKey = ''; await take(next); } return; }
     if (name === 'edit') { editing = 'edit'; drawStage(); return; }
     if (name === 'edit-cancel') { editing = false; drawStage(); return; }
     if (name === 'paste') {

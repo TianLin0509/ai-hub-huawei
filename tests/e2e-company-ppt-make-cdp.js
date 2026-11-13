@@ -206,6 +206,36 @@ async function main() {
     await wait('!document.querySelector("[data-ppt-make-panel]").hidden && !!document.querySelector(".pptk-slide svg")', 'back to make');
     await oneScreen('切回做页');
     result.checks.push('找页 / 素材 / 做页三个 Tab 来回切换：各自面板互不影响，回到做页时上一页预览还在');
+    // 9) 不选骨架，直接出 3 版：一段描述建一组三个方案，写好一版先看一版，方案条上切换（助理回包为夹具，三版的文件与预览是真实引擎生成）
+    const seeds = [];
+    for (const sk of all.slice(0, 3)) seeds.push((await c.eval(`ipcRenderer.invoke('company-assistant:ppt-make-example',{skeletonId:${j(sk.id)}})`)).job);
+    await c.eval(`(()=>{const invoke=ipcRenderer.invoke.bind(ipcRenderer);const done=${j(seeds)}.map((s,i)=>({...s,kind:'make',groupId:'g1',variant:'方案 '+'ABC'[i],skeleton:'方案 '+'ABC'[i]+' · '+s.skeleton}));
+      const waiting=d=>({id:d.id,kind:'make',groupId:'g1',variant:d.variant,skeleton:d.variant,state:'waiting_agent',startedAt:Date.now(),rev:0,submits:0});
+      window.__auto={ready:0,calls:[],restore:()=>{ipcRenderer.invoke=invoke}};
+      ipcRenderer.invoke=(ch,a)=>{const name=ch.replace('company-assistant:','');
+        if(name==='ppt-make-auto'){window.__auto.calls.push(a);return Promise.resolve({ok:true,groupId:'g1',jobs:done.map(waiting)})}
+        const i=done.findIndex(d=>d.id===a?.jobId);
+        if(name==='ppt-make-status'&&i>=0)return Promise.resolve({ok:true,job:i<window.__auto.ready?done[i]:waiting(done[i])});
+        return invoke(ch,a)}})()`);
+    await c.eval('(()=>{const t=document.querySelector("[data-pptk-brief]");t.value="三项措施叠加后指标提升，数据待补";})()');
+    await click('[data-pptk="auto"]');
+    await wait('document.querySelectorAll(".pptk-vars .pptk-var").length===3 && !!document.querySelector(".pptk-busy")', 'auto group waiting');
+    assert.deepEqual(await c.eval('window.__auto.calls'), [{ brief: '三项措施叠加后指标提升，数据待补' }]);
+    await oneScreen('三版等待中');
+    await shot('07-auto-waiting');
+    await c.eval('window.__auto.ready=1');
+    await wait('!!document.querySelector(".pptk-slide svg") && !document.querySelector(".pptk-busy")', 'first variant ready');
+    assert.match(await text('.pptk-var.on'), /^方案 A$/);
+    assert.equal(await c.eval('[...document.querySelectorAll(".pptk-var")].filter(e=>e.textContent.includes("…")).length'), 2, '另外两版还在写');
+    await c.eval('window.__auto.ready=3');
+    await wait('[...document.querySelectorAll(".pptk-var")].every(e=>!e.textContent.includes("…"))', 'all variants ready');
+    await click('.pptk-var:nth-child(2)');
+    await wait('document.querySelector(".pptk-var.on")?.textContent==="方案 B" && !!document.querySelector(".pptk-slide svg") && !document.querySelector(".pptk-busy")', 'switch to variant B');
+    assert.ok((await text('[data-pptk-cap]')).includes(seeds[1].skeleton), '切到方案 B 后显示它用的骨架');
+    await oneScreen('三版切换');
+    await shot('08-auto-variants');
+    await c.eval('window.__auto.restore()');
+    result.checks.push('不选骨架直接出 3 版：一次提问建三个方案；第一版写好即可预览，其余在方案条上显示进行中；写完后点方案 B 切换预览；1440×900 无纵向滚动');
     result.ok = true;
   } catch (error) {
     result.error = error.message;

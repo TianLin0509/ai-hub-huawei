@@ -283,6 +283,8 @@ COMP.card = (ctx, n, b) => {
   if (frame === 'line') sp(ctx, { name: '卡片框', x: b.x, y: b.y, w: b.w, h: b.h, fill: 'none', line: { color: C.line, w: 1 } });
   else if (frame === 'soft') sp(ctx, { name: '卡片底', x: b.x, y: b.y, w: b.w, h: b.h, fill: GRAD.panel, line: 'none' });
   else if (frame === 'shadow') sp(ctx, { name: '卡片底', x: b.x, y: b.y, w: b.w, h: b.h, fill: C.white, line: { color: 'E7E6E6', w: 0.5 }, shadow: true });
+  else if (frame === 'dash') sp(ctx, { name: '卡片虚线框', x: b.x, y: b.y, w: b.w, h: b.h, fill: 'none', line: { color: C.red, w: 1.25, dash: 'dash' }, geom: 'roundRect', adj: [4000] });
+  else if (frame === 'fill') sp(ctx, { name: '卡片底', x: b.x, y: b.y, w: b.w, h: b.h, fill: 'F5F5F5', line: 'none' });
   const pad = 10; let y = b.y + 8; const x = b.x + pad, w = b.w - 2 * pad;
   if (n.title) { COMP.heading(ctx, { t: n.title, num: n.num, numColor: n.numColor, color: n.titleColor, sz: n.titleSz || 16 }, { x, y, w, h: 26 }); y += 30; }
   let bottom = b.y + b.h - 8;
@@ -302,11 +304,15 @@ COMP.metric = (ctx, n, b) => {
 };
 
 // 结论条：深红通栏白字
+// 深色底的结论条上，{r:…} 这类标色会和底色撞（红字落在红底上看不见）：只留文字，统一白字
 COMP.bar = (ctx, n, b) => {
+  let barSz;
   checkEnd(ctx, n.t); ctx.motifs.add('bar');
   const st = n.style || 'red';
   const fill = st === 'red' ? C.red : st === 'fade' ? GRAD.fadeRed : st === 'gray' ? 'E7E6E6' : C.dblue;
-  sp(ctx, { name: '结论条', x: b.x, y: b.y, w: b.w, h: b.h, fill, line: 'none', paras: [{ runs: parseRuns(n.t, { color: st === 'gray' ? C.red : C.white, b: true }), align: 'ctr' }], sz: fitSize([{ t: n.t, b: true }], b.w - 20, b.h, n.sz || 16, { bullet: 'none' }), anchor: 'ctr' });
+  sp(ctx, { name: '结论条', x: b.x, y: b.y, w: b.w, h: b.h, fill, line: 'none', paras: [{ runs: parseRuns(st === 'gray' ? n.t : plain(n.t), { color: st === 'gray' ? C.red : C.white, b: true }), align: 'ctr' }], sz: (barSz = fitSize([{ t: n.t, b: true }], b.w - 20, b.h, n.sz || 16, { bullet: 'none' })), anchor: 'ctr' });
+  // 结论条只有一行高：缩到最小字号仍超宽时文字会被截断，提醒缩短
+  if (textW(plain(n.t), barSz, true) > b.w - 20) ctx.warn.push(`结论条一行放不下（${plain(n.t).length} 字），请缩短`);
 };
 
 // 扇形投影光带：上窄下宽（收敛到下方用 flip）
@@ -469,13 +475,18 @@ COMP.material = (ctx, n, b) => {
   let w = b.w, h = b.h; const mw = +m.w, mh = +m.h;
   if (n.fit !== 'stretch') { const sc = Math.min(b.w * EMU / mw, b.h * EMU / mh); w = mw * sc / EMU; h = mh * sc / EMU; }
   const x = b.x + (b.w - w) / 2, y = b.y + (b.h - h) / 2;
-  let xml = m.xml.replace(/ xmlns:\w+="[^"]+"/g, '');
+  // 只去掉页面根节点已声明的 a/p/r；其余前缀（a14、ns2 等扩展）的声明必须留着，否则文件打不开
+  let xml = m.xml.replace(/ xmlns:(?:a|p|r)="[^"]+"/g, '');
   let first = true;
   xml = xml.replace(/<a:xfrm([^>]*)>\s*<a:off[^>]*\/>\s*<a:ext[^>]*\/>/, (s, at) => { if (!first) return s; first = false; return `<a:xfrm${at}><a:off x="${e(x)}" y="${e(y)}"/><a:ext cx="${e(w)}" cy="${e(h)}"/>`; });
   xml = xml.replace(/(<p:cNvPr[^>]*\bid=")\d+(")/g, (s, a, c) => a + (ctx.id++) + c);
   if (n.text) { const rep = [].concat(n.text); let i = 0; xml = xml.replace(/<a:t>[^<]*<\/a:t>/g, s => (i < rep.length ? `<a:t>${esc(rep[i++])}</a:t>` : s)); }
   const media = m.media || {};
   for (const rid of Object.keys(media)) { const [fname, b64] = media[rid]; const ext = (fname.split('.').pop() || 'png').toLowerCase(); const nr = addMedia(ctx, Buffer.from(b64, 'base64'), ext === 'jpg' ? 'jpeg' : ext); xml = xml.split(`"${rid}"`).join(`"${nr}"`); }
+  // 素材带出来的超链接、内嵌图表等指向原文稿里的部件，这里没有，留着文件会打不开：超链接去掉，图表框去掉，仍有悬空引用就不放这个素材
+  xml = xml.replace(/<a:hlink(?:Click|Hover|MouseOver)\b[^>]*?(?:\/>|>[\s\S]*?<\/a:hlink(?:Click|Hover|MouseOver)>)/g, '');
+  xml = xml.replace(/<p:graphicFrame\b[\s\S]*?<\/p:graphicFrame>/g, s => (/\br:\w+="(?!rIdM)/.test(s) ? '' : s));
+  if (/\br:\w+="(?!rIdM)[^"]*"/.test(xml)) { ctx.warn.push(`素材「${n.name}」带有无法搬运的外部引用，已跳过，换一个素材`); return; }
   ctx.out.push(xml); ctx.usedMaterials.push(n.name);
 };
 

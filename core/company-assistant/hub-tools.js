@@ -127,6 +127,7 @@ class HubTools {
         ...(r.library.errors.length ? { errors: r.library.errors } : {}) };
     }
     if (name === 'ppt_make') return this.a.ppt.make.submit(args);
+    if (name === 'ppt_make_skeleton') return this.a.ppt.make.skeletonGuide(args.id);
     if (name === 'ppt_imgtext') {
       if (args.op === 'build') return this.a.ppt.imgtext.build(args);
       if (args.op === 'status') return { ok: true, job: this.a.ppt.imgtext.snapshot(args.jobId) };

@@ -275,3 +275,54 @@ test('做页规则：只通过 ppt_make 产出文件，不带只读限制', () =
   assert.doesNotMatch(PPT_MAKE_INSTRUCTIONS, /只读/);
   for (const part of ['定位语：结论', '{r:…}', '{b:…}', '{y:…}', '"type":"image"', '"type":"material"', 'ppt_materials', '「XX」']) assert.ok(PPT_MAKE_INSTRUCTIONS.includes(part), part);
 });
+
+test('自动选骨架：一段描述建一组任务，助理按编号取骨架、每版各自提交', async t => {
+  const f = fixture(t), handlers = createPptHandlers({ ppt: f.ppt });
+  assert.throws(() => f.make.startAuto({ brief: ' ' }), /先写一句/);
+  const r = await handlers['ppt-make-auto']({ brief: '三项措施叠加，指标提升，数据待补' });
+  assert.equal(r.jobs.length, 3);
+  assert.deepEqual(r.jobs.map(j => j.variant), ['方案 A', '方案 B', '方案 C']);
+  assert.ok(r.jobs.every(j => j.groupId === r.groupId && j.state === 'waiting_agent'));
+  assert.equal(f.asks.length, 1, '一组只发一次提问');
+  const prompt = f.asks[0].text;
+  for (const j of r.jobs) assert.ok(prompt.includes('jobId=' + j.id));
+  for (const sk of listSkeletons()) assert.ok(prompt.includes(`${sk.id}｜${sk.name}`), sk.id);
+  for (const part of ['ppt_make_skeleton', 'ppt_materials', '"type":"material"', PPT_MAKE_INSTRUCTIONS]) assert.ok(prompt.includes(part), part.slice(0, 20));
+  assert.ok(prompt.length < 12000, '提问只带骨架目录，不带全部示意内容');
+  // 助理取骨架、提交其中两版；第三版没交
+  const picks = listSkeletons().slice(0, 2);
+  for (const [i, sk] of picks.entries()) {
+    const guide = f.make.skeletonGuide(sk.id);
+    assert.deepEqual(guide.spec, sk.spec);
+    const done = f.make.submit({ jobId: r.jobs[i].id, spec: guide.spec, skeletonId: sk.id });
+    assert.ok(fs.existsSync(done.path));
+    assert.equal(f.make.status(r.jobs[i].id).skeleton, `${r.jobs[i].variant} · ${sk.name}`);
+  }
+  assert.throws(() => f.make.skeletonGuide('没有这个'), /找不到这个骨架/);
+  f.chats[0].state = 'done';
+  assert.equal(f.make.status(r.jobs[2].id).state, 'error');
+  assert.ok(TOOLSETS.ppt.includes('ppt_make_skeleton'));
+  assert.ok(toolsFor('ppt').some(tool => tool.name === 'ppt_make_skeleton'));
+});
+
+test('素材带扩展命名空间、超链接时生成的页面仍是合法文件', t => {
+  const shape = '<p:sp xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a14="http://schemas.microsoft.com/office/drawing/2010/main"><p:nvSpPr><p:cNvPr id="9" name="形状"><a:hlinkClick r:id="rId5" action="ppaction://hlinksldjump"/></p:cNvPr><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="457200"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:extLst><a:ext uri="{x}"><a14:hiddenFill/></a:ext></a:extLst></p:spPr></p:sp>';
+  const { buffer, reports } = engine.build({ title: '素材检查', col: [{ type: 'material', name: '带扩展的形状' }] }, { materials: () => ({ xml: shape, w: 914400, h: 457200, media: {} }) });
+  const file = path.join(tmp(t), 'ext.pptx'); fs.writeFileSync(file, buffer);
+  const xml = readEntry(openZip(file), 'ppt/slides/slide1.xml').toString('utf8');
+  assert.ok(xml.includes('xmlns:a14='), '扩展前缀的声明要保留');
+  assert.ok(!xml.includes('hlinkClick'), '悬空的超链接要去掉');
+  assert.deepEqual(reports[0].materials, ['带扩展的形状']);
+});
+
+test('提交时：标题里的标记去掉；留着骨架占位词的给一条提醒让助理改', t => {
+  const f = fixture(t);
+  const { job } = f.make.start({ skeletonId: listSkeletons()[0].id, brief: '两项改进叠加' });
+  const first = f.make.submit({ jobId: job.id, spec: { title: '定位语：两项改进叠加后提升约{r:30%}', col: [{ type: 'bar', t: '一句话结论：先做第一项' }] } });
+  assert.equal(f.make.status(job.id).spec.title, '定位语：两项改进叠加后提升约30%');
+  assert.ok(first.warnings.some(w => w.includes('定位语：') && w.includes('一句话结论：')), first.warnings.join('|'));
+  assert.equal(f.make.status(job.id).state, 'revising');
+  const second = f.make.submit({ jobId: job.id, spec: { title: '改进效果：两项改进叠加后提升约30%', col: [{ type: 'bar', t: '先做第一项，第二项随后叠加' }] } });
+  assert.deepEqual(second.warnings, []);
+  assert.equal(f.make.status(job.id).state, 'done');
+});
