@@ -32,7 +32,10 @@ test('登录过期、CLI 超时各一轮之后，早上的快照仍在', async (
     getSession: () => null, createSession: async () => null, sendPrompt: async () => ({ ok: true }), roomCommand: ['x'] });
   try {
     fs.mkdirSync(a.dir, { recursive: true });
-    a.setSettings({ email: 'mail-sample-user', cliPath: process.execPath });
+    // 只需要一个存在的 welink-cli 文件名（welinkRun 已注入，不会真的运行它）。
+    const placeholder = path.join(dir, 'welink-cli.exe');
+    fs.writeFileSync(placeholder, '');
+    a.setSettings({ email: 'mail-sample-user', cliPath: placeholder });
     await a.refresh({ force: true });
     const before = a.status();
     assert.equal(before.counts.meetings, 1);

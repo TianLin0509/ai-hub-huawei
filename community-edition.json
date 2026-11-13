@@ -58,10 +58,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "新增「替身」Tab（成员版）：替你盯着谁在等你回，先只听 5 天、草稿只给你看对照；满 5 天后可开启起草，你点了才发，回上级的应承话要点两次确认",
-    "新增「门户」页（可选功能，默认关）：每天早上 6 点后在后台读一次公司门户首页上自己的待办、提的申请和公司要闻，按挂的天数排，点开直接去处理页；新待办、拖了很久的待办和卡住的申请由桌宠提醒；助理能回答「我有什么待办」，晨报多一栏门户待办；页面上可随时手动刷新"
+    "修复：装了 Hub 后 WeLink 主界面每隔约 10 分钟自动弹出（Hub 误把 WeLink 客户端当成 welink-cli 运行）；升级后自动清掉记错的路径"
   ],
-  "version": "5.6.14",
+  "version": "5.6.15",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

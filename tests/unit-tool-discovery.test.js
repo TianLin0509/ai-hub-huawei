@@ -219,3 +219,28 @@ test('choose：自动记下的旧路径遇到更高版本时换成新版并写�
   const sameVersion = C.choose([c('C:/a/x.exe', '1.0.20', 0), c('C:/b/x.exe', '1.0.20', 1)], 'C:/b/x.exe', { configuredByUser: false });
   assert.equal(sameVersion.reason, 'configured', '版本一样就不折腾');
 });
+
+// 2026-11-12 同事：设置里记成了 WeLink 桌面客户端 WeLinkPC.exe，Hub 每次读版本都启动它，单实例客户端就把主窗口弹出来（约每 10 分钟一次）。
+test('welink-cli：桌面客户端 WeLinkPC.exe 不运行、不当候选，设置里记错的会被清掉', async () => {
+  const W = require('../core/company-assistant/welink');
+  const dir = tmp('hub-welinkpc-');
+  const client = path.join(dir, 'WeLinkPC.exe');
+  fs.writeFileSync(client, 'not a cli');
+  assert.equal(W.isCliFile(client), false);
+  assert.equal(W.isCliFile(String.raw`C:\npm\node_modules\@welink\welink-cli\welink-cli.exe`), true);
+  assert.equal(W.isCliFile(String.raw`C:\Program Files (x86)\WeLink_Desktop\WeLinkPC.exe`), false);
+  assert.equal(W.resolveCli({ configured: client, env: { PATH: '' } }) === client, false, 'resolveCli 不能把客户端当 CLI');
+  const settings = { cliPath: client, cliPathManual: false };
+  const service = { settings: () => settings, setSettings: p => Object.assign(settings, p) };
+  const adapter = tools.welinkAdapter(service, { env: { PATH: '' }, registryDirs: async () => [] });
+  const probed = [];
+  const realProbe = adapter.probe;
+  adapter.probe = f => { probed.push(f); return realProbe(f); };
+  const d = new ToolDiscovery({ dataDir: dir });
+  d.register('welink', adapter);
+  const s = await d.list('welink', { force: true });
+  assert.equal(s.current, null);
+  assert.deepEqual(probed, [], '客户端一次都不能被启动');
+  assert.equal(settings.cliPath, '', '记错的路径被清掉，下次不再碰它');
+  await assert.rejects(d.use('welink', client), /打不开|校验/);
+});

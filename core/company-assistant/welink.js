@@ -60,8 +60,17 @@ function cliUnder(dir, fsModule = fs) {
 const { npmPrefixes, registryPathDirs, npmConfigPrefix, runText } = require('../tool-discovery/npm-global-dirs');
 // 同步调用方只读路径，不等待 where；按环境隔离缓存，在途去重，未找到一分钟后可再试。
 const cliCaches = new WeakMap();
+// 只认文件名是 welink-cli 的程序（.js / .cjs 是测试替身）。2026-11-12 同事电脑：设置里记成了 WeLink 桌面客户端 WeLinkPC.exe，
+// Hub 每次读版本、查登录都启动它一次；客户端是单实例程序，第二次启动就把主窗口弹到最前，于是每 10 分钟左右弹一次。
+// 不是 welink-cli 的路径一律不运行、不记入设置。
+function isCliFile(file) {
+  const base = String(file || '').split(/[\\/]/).pop().toLowerCase();
+  if (/\.[cm]?js$/.test(base)) return true;
+  // 改过名的副本（welink-cli (1).exe、welink-cli-1.0.16.exe）照认；名字里没有 welink-cli 的（WeLinkPC.exe 等）不认。
+  return base.includes('welink-cli') && /\.(?:exe|cmd|bat)$/.test(base);
+}
 function resolveCli({ env = process.env, configured = '', fsModule = fs, now = Date.now, execFileImpl = execFile } = {}) {
-  const pick = [env.CLAUDE_HUB_WELINK_CLI, configured].find(p => p && fsModule.existsSync(p));
+  const pick = [env.CLAUDE_HUB_WELINK_CLI, configured].find(p => p && isCliFile(p) && fsModule.existsSync(p));
   if (pick) return pick;
   for (const dir of npmPrefixes(env, fsModule)) { const hit = cliUnder(dir, fsModule); if (hit) return hit; }
   // 保留单次运行的只读包装能力：PATH 上的 exe 或 npm cmd 的兄弟 exe 可立即找到。
@@ -85,7 +94,7 @@ function resolveCli({ env = process.env, configured = '', fsModule = fs, now = D
     for (const f of found) {
       const sibling = cliUnder(path.dirname(f), fsModule);
       if (sibling) { cache.path = sibling; break; }
-      try { if (/\.exe$/i.test(f) && fsModule.existsSync(f)) { cache.path = f; break; } } catch { /* 查询结束前路径变得不可读 */ }
+      try { if (/\.exe$/i.test(f) && isCliFile(f) && fsModule.existsSync(f)) { cache.path = f; break; } } catch { /* 查询结束前路径变得不可读 */ }
     }
   };
   try {
@@ -376,5 +385,5 @@ function friendlyError(error) {
   return String(e.message || '');
 }
 
-module.exports = { READ_ONLY, SETUP, checkArgs, resolveCli, findCliDeep, npmPrefixes, cliUnder, run, parseJson, parseJsonBig, groupMessages, groupMembers, loginState, calendarNeedsSetup,
+module.exports = { READ_ONLY, SETUP, checkArgs, isCliFile, resolveCli, findCliDeep, npmPrefixes, cliUnder, run, parseJson, parseJsonBig, groupMessages, groupMembers, loginState, calendarNeedsSetup,
   qrFromLoginOutput, qrMatrixFromBlocks, qrBlocksFromMatrix, qrSvgDataUri, loginOutputGarbled, loginUrlFromOutput, loginProgress, loginNeedsScan, friendlyError, SPAWN_RETRY, AUTH_FAILURE };

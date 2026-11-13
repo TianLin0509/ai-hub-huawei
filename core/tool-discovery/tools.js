@@ -20,7 +20,7 @@ function welinkAdapter(service, { env = process.env, findDeep = null, registryDi
     label: 'welink-cli',
     async list({ deep = false } = {}) {
       const out = [];
-      const add = (files, via) => { for (const f of [].concat(files || [])) if (f) out.push({ path: f, via }); };
+      const add = (files, via) => { for (const f of [].concat(files || [])) if (f && welink.isCliFile(f)) out.push({ path: f, via }); };
       add(env.CLAUDE_HUB_WELINK_CLI, 'env');
       add(this.getConfigured(), 'manual');
       for (const dir of npmPrefixes(env)) add(welinkUnder(dir), 'npm');
@@ -32,7 +32,8 @@ function welinkAdapter(service, { env = process.env, findDeep = null, registryDi
       }
       return out;
     },
-    probe: file => probeVersion(file, { timeoutMs: 8000, env }),
+    // 不是 welink-cli 的程序（如 WeLink 桌面客户端）不运行：启动它会把客户端主窗口弹出来。
+    probe: file => welink.isCliFile(file) ? probeVersion(file, { timeoutMs: 8000, env }) : Promise.resolve({ ok: false, reason: '这不是 welink-cli（请选 welink-cli.exe）' }),
     getConfigured: () => service.settings().cliPath || '',
     configuredByUser: () => service.settings().cliPathManual === true,
     setConfigured: (file, { manual = false } = {}) => service.setSettings({ cliPath: file || '', cliPathManual: manual }),

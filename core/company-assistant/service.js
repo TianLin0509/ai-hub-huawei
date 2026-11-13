@@ -356,7 +356,7 @@ class CompanyAssistant {
   useCliPath(file) {
     const f = String(file || '').trim();
     if (!f || !fs.existsSync(f)) throw new Error('这个文件不存在');
-    const exe = /\.exe$/i.test(f) ? f : welink.cliUnder(path.dirname(f));
+    const exe = /\.exe$/i.test(f) ? (welink.isCliFile(f) ? f : null) : welink.cliUnder(path.dirname(f));
     if (!exe) throw new Error('请选 welink-cli.exe（或 npm 全局目录里的 welink-cli.cmd）');
     this.setSettings({ cliPath: exe, cliPathManual: true });
     this.prepareWorkspace();
