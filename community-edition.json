@@ -58,9 +58,12 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "修复公开版构建失败，清理误提交的缓存文件"
+    "发布包上传中断时自动重试，重新运行只补缺失文件",
+    "修复带括号的公司模型名称选不到的问题",
+    "反馈框适配深色主题，并在本机记住联系方式、预填已有WeLink登录名",
+    "公司模型签名初始化失败时自动安全重试，并在反馈中附带脱敏诊断"
   ],
-  "version": "5.6.19",
+  "version": "5.6.20",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

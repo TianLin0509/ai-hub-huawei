@@ -6,14 +6,15 @@
   const distribution = require('../core/distribution');
   if (!distribution.updateConfig) return;
   const { ipcRenderer, shell } = require('electron');
-  let dialog = null, sending = false;
+  let dialog = null, sending = false, contactEdited = false;
 
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const css = `
   .hub-feedback-dialog textarea { width: 100%; box-sizing: border-box; min-height: 110px; resize: vertical; padding: 8px 10px; border-radius: 8px;
-    border: 1px solid var(--border-subtle, #dcd9e6); background: var(--surface, #fff); color: inherit; font: inherit; font-size: 13px; }
+    border: 1px solid var(--border-subtle, #dcd9e6); background: var(--surface-sunken, #f6f5fa); color: var(--fg-default, #1f2330); font: inherit; font-size: 13px; }
   .hub-feedback-dialog input.hf-contact { width: 100%; box-sizing: border-box; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border-subtle, #dcd9e6);
-    background: var(--surface, #fff); color: inherit; font: inherit; font-size: 13px; }
+    background: var(--surface-sunken, #f6f5fa); color: var(--fg-default, #1f2330); font: inherit; font-size: 13px; }
+  .hub-feedback-dialog :is(textarea, input.hf-contact)::placeholder { color: var(--fg-muted, #6b7080); opacity: 1; }
   .hub-feedback-dialog .hf-items { margin: 0; padding-left: 18px; font-size: 12px; color: var(--fg-muted, #6b7080); max-height: 120px; overflow: auto; }
   .hub-feedback-dialog .hf-path { font-family: Consolas, monospace; font-size: 12px; word-break: break-all; user-select: text; }`;
 
@@ -29,7 +30,7 @@
         <div class="au-section">遇到了什么问题</div>
         <textarea data-hf="desc" placeholder="例如：CodeAgent 会话卡片一直不显示回答，后台终端里是有的"></textarea>
         <div class="au-section">联系方式（可不填）</div>
-        <input class="hf-contact" data-hf="contact" placeholder="工号或姓名，方便回访">
+        <input class="hf-contact" data-hf="contact" maxlength="160" placeholder="工号或姓名，方便回访">
         <div class="au-section">会一起附带（已自动隐去密钥、口令、邮箱和用户目录）</div>
         <ul class="hf-items" data-hf="items"><li>正在整理…</li></ul>
         <div data-hf="msg"></div>
@@ -43,6 +44,10 @@
     q('cancel').addEventListener('click', close);
     dialog.addEventListener('cancel', event => { if (sending) event.preventDefault(); });
     q('send').addEventListener('click', () => void send());
+    q('contact').addEventListener('input', () => {
+      contactEdited = true;
+      void ipcRenderer.invoke('hub-feedback:save-contact', { contact: q('contact').value }).catch(() => {});
+    });
     return dialog;
   }
 
@@ -72,6 +77,7 @@
     if (text) { const at = desc.value.indexOf('（可以在这里补一句'); if (at >= 0) desc.setSelectionRange(at, desc.value.indexOf('）', at) + 1); }
     try {
       const p = await ipcRenderer.invoke('hub-feedback:preview', {});
+      if (!contactEdited && !sending && p && typeof p.contact === 'string') dialog.querySelector('[data-hf="contact"]').value = p.contact;
       const items = (p && p.items) || [];
       dialog.querySelector('[data-hf="items"]').innerHTML = items.map(i => `<li>${esc(i.name)}${i.detail ? ' · ' + esc(i.detail) : ''}</li>`).join('') || '<li>只有问题描述</li>';
     } catch (error) {

@@ -27,7 +27,8 @@ const MAX_MEETING_CONTEXT = 60000;
 const MAX_ANSWER = 60000;
 const MAX_ARG_QUESTION = 2000; // 命令行模式：cmd 一行最多约 8191 字符，留足余量
 const DEFAULT_MODE = Object.freeze({ input: 'stdin' });
-const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,99}$/; // 模型名进命令行，只收安全字符
+const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+()-]{0,99}$/; // 括号作为单个参数引用
+const safeModelId = value => typeof value === 'string' && !/[\x00-\x1f\x7f]/.test(value) && MODEL_RE.test(value);
 const KIND_RE = /^codeagent(?:-resume)?$/;
 // 2026-11-07：Claude Code、Codex、DSH 终端会话（含走公司模型的）也能问。
 const CLAUDE_RE = /^claude(?:-resume)?$/, CODEX_RE = /^codex(?:-resume)?$/, DSH_RE = /^deepseek-acp(?:-resume)?$/;
@@ -73,17 +74,17 @@ function buildArgs(ccSessionId, { model = '', flavor = 'codeagent' } = {}) {
   // CodeAgent 自有开关；Claude Code 不认，另外不起 MCP（它们会带会话身份向 Hub 报到，也拖慢启动）。
   if (flavor === 'claude') args.push('--strict-mcp-config');
   else args.push('--disable-update', '--skip-safe-check');
-  if (MODEL_RE.test(String(model || ''))) args.push('--model', model);
+  if (safeModelId(model)) args.push('--model', model);
   return args;
 }
 
 // 会话当前模型：Hub 按会话第一条回答的实际模型记在 currentModel.id；还没记上时用该账号 settings.json 里写的模型。
 function sessionModel(session, configDir) {
   const id = String(session?.currentModel?.id || '').trim();
-  if (MODEL_RE.test(id)) return id;
+  if (safeModelId(id)) return id;
   try {
     const model = String(JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf8').replace(/^\uFEFF/, '')).model || '').trim();
-    return MODEL_RE.test(model) ? model : '';
+    return safeModelId(model) ? model : '';
   } catch { return ''; }
 }
 
@@ -103,7 +104,7 @@ function runAsk({ config, cwd, ccSessionId, question, context = '', responseHint
     if (context) return Promise.reject(new Error('会议问答需要标准输入传递完整材料；请把问一下输入方式设为 stdin 后重试'));
     const q = argQuestion(stdinText);
     if (q.length > MAX_ARG_QUESTION + PREAMBLE.length) return Promise.reject(new Error(`当前是命令行传问题的兜底模式，问题最多约 ${MAX_ARG_QUESTION} 字`));
-    args.push(platform === 'win32' ? `"${q}"` : q);
+    args.push(q);
     stdinText = '';
   }
   const head = /^[A-Za-z0-9_.-]+$/.test(config.command) ? config.command : `"${path.normalize(String(config.command).replace(/"/g, ''))}"`;
@@ -112,8 +113,9 @@ function runAsk({ config, cwd, ccSessionId, question, context = '', responseHint
     let child;
     try {
       child = platform === 'win32'
-        // 参数是固定开关与 UUID（兜底模式另有已去掉特殊字符、加了引号的问题），无需再转义；/s 去掉最外层一对引号。
-        ? spawnFn('cmd.exe', ['/d', '/s', '/c', `"call ${head} ${args.join(' ')}"`], { ...opts, windowsVerbatimArguments: true })
+        // 模型名可含括号、问题参数可含空格；逐个引用，不能让 cmd 把括号当分组。
+        // 兜底问题已去掉引号与 cmd 展开字符，沿用同一引用；/s 去掉最外层一对引号。
+        ? spawnFn('cmd.exe', ['/d', '/s', '/c', `"call ${head} ${args.map(arg => /[\s()]/.test(arg) ? `"${arg}"` : arg).join(' ')}"`], { ...opts, windowsVerbatimArguments: true })
         : spawnFn(config.command, args, opts);
     } catch (error) { reject(new Error(`启动 ${label} 失败：${error.message}`)); return; }
     let out = '', err = '', truncated = false, settled = false, reason = '';
@@ -241,7 +243,7 @@ function createAskAsideService({ sessionManager, getHubDataDir, sendToRenderer =
     if (!cwd || !fs.existsSync(cwd)) return { supported: false, engine, reason: '会话的工作目录不存在，无法读取它的记录' };
     const configDir = env.CLAUDE_CONFIG_DIR || path.join(require('node:os').homedir(), '.claude');
     if (!hasHistory(ccSessionId, cwd, configDir)) return { supported: false, engine, reason: '没找到这个会话的记录，等它回答过一轮再问' };
-    const model = [session.currentModel?.id, env.ANTHROPIC_MODEL].map(v => String(v || '').trim()).find(v => MODEL_RE.test(v)) || '';
+    const model = [session.currentModel?.id, env.ANTHROPIC_MODEL].map(v => String(v || '').trim()).find(safeModelId) || '';
     return { supported: true, reason: '', engine, config: { command: 'claude', flavor: 'claude', configDirEnv: 'CLAUDE_CONFIG_DIR', configDir },
       env, cwd, ccSessionId, model };
   }

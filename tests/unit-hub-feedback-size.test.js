@@ -7,6 +7,18 @@ const os = require('node:os');
 const path = require('node:path');
 const { collectBundle, MAX_TOTAL_BYTES } = require('../core/hub-feedback');
 
+test('反馈遮住CodeAgent两种OAuth令牌字段及转义JSON中的Base64值', () => {
+  const { redact } = require('../core/hub-feedback');
+  const token = 'ab+/cd'.repeat(8);
+  for (const key of ['xAuthToken', 'mtoken', 'accessToken', 'refreshToken']) {
+    let input = JSON.stringify({ [key]: token });
+    for (let layer = 0; layer < 3; layer++) {
+      assert.equal(redact(input).includes(token), false, key + ' layer ' + layer);
+      input = JSON.stringify(input);
+    }
+  }
+});
+
 function mk() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fb-size-'));
   fs.mkdirSync(path.join(dir, 'logs'), { recursive: true });
@@ -64,4 +76,33 @@ test('没有 dataDir 时行为与旧版一致', () => {
   const b = collectBundle({ logsDir: path.join(dir, 'logs'), description: 'd' });
   assert.ok(b.items.some(i => i.name === '日志 a.log'));
   assert.doesNotMatch(b.text, /已裁剪/);
+});
+
+test('反馈显式附带公司模型的签名初始化诊断，不读取其他诊断文件', t => {
+  const dir = mk(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const report = { cliStarted: true, cliExitCode: 7, stoppedBy: 'exit', consoleMode: 'private-desktop',
+    logExists: false, logBytes: 0, elapsedMs: 2000, error: 'LOG_MISSING', stderrPreview: ['startup failed <已隐去>'] };
+  fs.writeFileSync(path.join(dir, 'diagnostics/company-model-proxy.log'), 'upstream not ready: first-init=' + JSON.stringify({ probe: report }) + '\n');
+  fs.writeFileSync(path.join(dir, 'diagnostics/unrelated-private.log'), 'not-for-feedback');
+  const bundle = collectBundle({ logsDir: path.join(dir, 'logs'), dataDir: dir, description: '公司模型不能用' });
+  assert.ok(bundle.items.some(item => item.name === '公司模型诊断 diagnostics/company-model-proxy.log'));
+  for (const field of ['cliStarted', 'cliExitCode', 'stoppedBy', 'consoleMode', 'logExists', 'logBytes', 'elapsedMs', 'error', 'stderrPreview']) assert.ok(bundle.text.includes(field), field);
+  assert.match(bundle.text, /LOG_MISSING/);
+  assert.equal(bundle.text.includes('not-for-feedback'), false);
+  assert.ok(bundle.bytes <= MAX_TOTAL_BYTES);
+});
+
+test('两次探测的长单行诊断超过8KB时仍完整带入反馈，且整包保持80KB上限', t => {
+  const dir = mk(); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const attempt = { cliStarted: true, cliExitCode: 7, stoppedBy: 'exit', consoleMode: 'private-desktop',
+    logExists: false, logBytes: 0, elapsedMs: 1000, error: 'LOG_MISSING',
+    stderrPreview: Array.from({ length: 20 }, (_, index) => 'safe detail ' + index + ' ' + 'x'.repeat(150)) };
+  const probe = { ...attempt, attempts: [attempt, { ...attempt, consoleMode: 'private-desktop-hidden-console' }] };
+  const row = 'upstream not ready: first-init=' + JSON.stringify({ probe }) + '\n';
+  assert.ok(Buffer.byteLength(row) > 8 * 1024);
+  fs.writeFileSync(path.join(dir, 'diagnostics/company-model-proxy.log'), row);
+  const bundle = collectBundle({ logsDir: path.join(dir, 'logs'), dataDir: dir, description: '签名初始化失败' });
+  assert.ok(bundle.text.includes('first-init=' + JSON.stringify({ probe })), 'the complete diagnostic JSON row must survive tail reading');
+  assert.match(bundle.text, /private-desktop-hidden-console/);
+  assert.ok(bundle.bytes <= MAX_TOTAL_BYTES);
 });

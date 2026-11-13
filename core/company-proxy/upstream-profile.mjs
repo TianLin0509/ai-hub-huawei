@@ -35,7 +35,7 @@
 //   4. signerCacheDir in upstream.json
 //   5. the prototype's cache (%TEMP%/20261106-native-stamp-codex-v1/native-run/signer-cache), last resort
 // upstream.json "reuseSignerCaches": false limits the lookup to (1) (an admin or acceptance run that wants Hub's own cache).
-// When none matches (first use, or CodeAgent was upgraded), Hub runs the CodeAgent CLI once itself (native-stamp.mjs:
+// When none matches (first use, or CodeAgent was upgraded), Hub probes the CodeAgent CLI (with one no-log retry; native-stamp.mjs:
 // hidden console, fresh TEMP, signer log on), reads the build stamp from the signer log and writes the cache into (1);
 // the signer then only reads that cache (signer-init.mjs blocks any CLI start). Not a login; no token is refreshed by Hub.
 import { readFile, readdir, stat, mkdir, writeFile, lstat } from 'node:fs/promises';
@@ -446,7 +446,7 @@ export function signerInitReason(tried, version) {
     : '这台电脑上还没有签名信息，第一次使用要取一次';
 }
 /** Plain-words reason and fix when the first-time initialization did not produce a cache. */
-export function signerInitFailureMessage(code, { version, timeoutMs, detail } = {}) {
+export function signerInitFailureMessage(code, { version, timeoutMs, detail, report } = {}) {
   const why = {
     SIGNER_INIT_TIMEOUT: `CodeAgent 命令行在 ${Math.round((timeoutMs || 0) / 1000)} 秒内没有结束`,
     SIGNER_INIT_NO_STAMP: 'CodeAgent 命令行跑完了，但没有留下签名信息',
@@ -457,8 +457,13 @@ export function signerInitFailureMessage(code, { version, timeoutMs, detail } = 
   }[code] || '签名模块初始化失败';
   const step = { LOG_MISSING: '签名日志没有生成', MARKER_MISSING: '签名日志里没有签名记录', LOG_INCOMPLETE: '签名记录没写完整',
     STAMP_NOT_PARSED: '签名记录格式认不出', STAMP_VERSION_MISMATCH: '签名记录的版本和安装的 CodeAgent 不一致' }[detail];
-  return `公司模型暂时用不了：首次签名初始化没完成（${why}${step ? '：' + step : ''}）。\n` +
-    `这一步会在后台启动一次 CodeAgent 命令行（不弹窗、不登录、不刷新登录），读取 CodeAgent ${version || ''} 的签名信息。\n` +
+  const earlyExit = report?.cliStarted && report.stoppedBy === 'exit' && Number.isFinite(report.elapsedMs)
+    ? `本次探测约 ${(report.elapsedMs / 1000).toFixed(1)} 秒后 CodeAgent 就退出了（退出码 ${Number.isInteger(report.cliExitCode) ? report.cliExitCode : '未知'}）${report.logExists === false ? '，未生成签名日志' : ''}。\n` : '';
+  const launchHint = report?.launchFailure === 'private-desktop'
+    ? 'Windows 没能建立安全的后台运行环境，已停止启动；请用一键反馈附带诊断。\n'
+    : report?.retrySuppressed === 'cleanup-unconfirmed' ? '上一次后台进程还没确认结束，已停止重试；请用一键反馈附带诊断。\n' : '';
+  return `公司模型暂时用不了：首次签名初始化没完成（${why}${step ? '：' + step : ''}）。\n` + earlyExit + launchHint +
+    `这一步会在后台启动 CodeAgent 命令行（不弹窗、不登录、不刷新登录），读取 CodeAgent ${version || ''} 的签名信息；首次启动没有留下日志时会换一种安全的后台方式重试一次。\n` +
     '处理办法：确认 CodeAgent 已安装、已登录，在命令行里能正常对话；然后到「设置 → 自有 API」点「重新启动反代」再试一次。';
 }
 
@@ -640,7 +645,7 @@ export const SIGNER_INIT_TIMEOUT_MS = 60_000;
 
 /**
  * Loads the built-in signer, or an explicitly configured legacy adapter.
- * First use runs one hidden CodeAgent probe; the stamp must match the installed version.
+ * First use runs a hidden CodeAgent probe with one safe no-log retry; the stamp must match the installed version.
  * -> { signer, adapterSha256, firstInit: { ran, ms, reason, cliRuns } }
  */
 export async function loadSigner(profile, { workDir, timeoutMs = SIGNER_INIT_TIMEOUT_MS, testOnlySpawnDelegate, stampProbe = probeNativeStamp } = {}) {
@@ -674,7 +679,7 @@ export async function loadSigner(profile, { workDir, timeoutMs = SIGNER_INIT_TIM
   // Diagnostics of the first-time run (counts, booleans, categories; never the stamp, log or CLI output).
   let probe = null, cacheWrite = null;
   const info = extra => ({ ran: firstInit, ms: Date.now() - started, reason: profile.signerInit?.reason || null,
-    cliRuns: probe?.cliStarted ? 1 : 0, method: firstInit ? 'native-cli' : null, probe, cacheWrite, ...extra });
+    cliRuns: probe?.cliRuns ?? (probe?.cliStarted ? 1 : 0), method: firstInit ? 'native-cli' : null, probe, cacheWrite, ...extra });
   if (firstInit) {
     const workRoot = join(workDir, 'first-init');
     await mkdir(workRoot, { recursive: true });
@@ -684,13 +689,15 @@ export async function loadSigner(profile, { workDir, timeoutMs = SIGNER_INIT_TIM
         expectedVersion: profile.codeagentVersion, workRoot, timeoutMs: probeTimeoutMs, model: profile.stampProbeModel || '',
         ...(native ? { nativeRuntimeDir: runtimeDir } : {}) });
     } catch (error) {
-      result = { ok: false, report: { ran: true, cliStarted: false, error: 'PROBE_FAILED:' + String(error?.code || 'unknown').slice(0, 40) } };
+      const code = /^[A-Z0-9_]{1,40}$/.test(error?.code || '') ? error.code : 'unknown';
+      result = { ok: false, report: { ran: true, cliStarted: false, cliExitCode: null, stoppedBy: 'start-failed',
+        consoleMode: 'unknown', logExists: false, logBytes: 0, elapsedMs: Date.now() - started, stderrPreview: [], error: 'PROBE_FAILED:' + code } };
     }
     probe = result.report;
     if (!result.ok) {
       const code = probe.error === 'SIGNER_NATIVE_FILES_MISSING' ? 'SIGNER_NATIVE_FILES_MISSING'
         : probe.error === 'CLI_TIMEOUT' ? 'SIGNER_INIT_TIMEOUT' : probe.cliStarted ? 'SIGNER_INIT_NO_STAMP' : 'SIGNER_INIT_CLI_FAILED';
-      const error = new ProfileError(code, signerInitFailureMessage(code, { version: profile.codeagentVersion, timeoutMs: probeTimeoutMs, detail: probe.error }));
+      const error = new ProfileError(code, signerInitFailureMessage(code, { version: profile.codeagentVersion, timeoutMs: probeTimeoutMs, detail: probe.error, report: probe }));
       error.firstInit = info(); throw error;
     }
     try { cacheWrite = { ok: true, category: await writeStampCache(signerCacheDir, profile.codeagentVersion, result.stamp) }; }

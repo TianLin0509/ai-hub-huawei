@@ -13,6 +13,7 @@
 //              console program from a detached helper: flashes (the company v4 case).
 //   current  = the shipped code, parent with a console (Hub starts the proxy that way). 0 windows in every run.
 //   current-no-console = the shipped code, parent without any console. 0 windows in every run.
+//   private-retry = first CLI exits without a log, then private-desktop Start-Process retries successfully; 0 windows.
 // SCENARIOS=a,b and KINDS=... narrow a run for troubleshooting; KEEP_STAMP_WINDOW_DIR=1 keeps the raw results.
 const fs = require('node:fs');
 const os = require('node:os');
@@ -31,9 +32,11 @@ if (process.argv[2] === '--driver') {
     // machine) so that Windows 11 does not hand it to Windows Terminal on the user's desktop.
     const conhost = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'conhost.exe');
     const spawnImpl = launcher === 'old' ? (cmd, args, opts) => spawn(conhost, [cmd, ...args], { ...opts, windowsHide: false }) : spawn;
-    const r = await probeNativeStamp({ cliExe: fakeExe, expectedVersion: '9.1.2', workRoot, timeoutMs: 20000, spawnImpl, pollMs: 100, privateDesktop: launcher === 'current',
-      env: { ...process.env, FAKE_CLI_NODE: process.execPath, FAKE_CLI_SCRIPT: path.join(path.dirname(fakeExe), 'fake-cli.js'), FAKE_CLI_CHILDREN: kinds } });
-    fs.writeFileSync(resultFile, JSON.stringify({ ok: r.ok, stoppedBy: r.report.stoppedBy, error: r.report.error, cliStarted: r.report.cliStarted, consoleMode: r.report.consoleMode }));
+    const r = await probeNativeStamp({ cliExe: fakeExe, expectedVersion: '9.1.2', workRoot, timeoutMs: 20000, spawnImpl, pollMs: 100, privateDesktop: launcher === 'current' || launcher === 'current-retry',
+      env: { ...process.env, FAKE_CLI_NODE: process.execPath, FAKE_CLI_SCRIPT: path.join(path.dirname(fakeExe), 'fake-cli.js'), FAKE_CLI_CHILDREN: kinds,
+        ...(launcher === 'current-retry' ? { FAKE_CLI_SKIP_FIRST: path.join(workRoot, 'first-attempt.seen') } : {}) } });
+    fs.writeFileSync(resultFile, JSON.stringify({ ok: r.ok, stoppedBy: r.report.stoppedBy, error: r.report.error, cliStarted: r.report.cliStarted,
+      consoleMode: r.report.consoleMode, retried: r.report.retried === true, cliRuns: r.report.cliRuns }));
   })().catch(error => { fs.writeFileSync(process.argv[6], JSON.stringify({ ok: false, error: String(error?.message || error) })); process.exitCode = 1; });
   return;
 }
@@ -45,6 +48,7 @@ class FakeCli { static int Main(string[] a) {
   var c = Process.Start(p); c.WaitForExit(); return c.ExitCode; } }`;
 
 const FAKE_JS = `const { spawn, exec } = require('node:child_process'); const fs = require('node:fs'); const path = require('node:path');
+if (process.env.FAKE_CLI_SKIP_FIRST && !fs.existsSync(process.env.FAKE_CLI_SKIP_FIRST)) { fs.writeFileSync(process.env.FAKE_CLI_SKIP_FIRST, 'seen'); process.exit(7); }
 const ping = 'ping -n 2 127.0.0.1 >nul';
 const kinds = (process.env.FAKE_CLI_CHILDREN || '').split(',');
 setTimeout(() => {
@@ -64,6 +68,7 @@ const SCENARIOS = {
   'hidden-console-only': { launcher: 'hidden-console', noConsole: false, kinds: 'detached', expect: 'flash' },
   current: { launcher: 'current', noConsole: false, kinds: ALL_KINDS, expect: 'none' },
   'current-no-console': { launcher: 'current', noConsole: true, kinds: ALL_KINDS, expect: 'none' },
+  'private-retry': { launcher: 'current-retry', noConsole: true, kinds: ALL_KINDS, expect: 'none' },
 };
 
 function main() {
@@ -82,7 +87,7 @@ function main() {
   const summary = { runs, scenarios: {} };
   for (const name of names) {
     const sc = { ...SCENARIOS[name], ...(process.env.KINDS ? { kinds: process.env.KINDS } : {}) };
-    const m = summary.scenarios[name] = { ...sc, runs: 0, runsWithWindow: 0, windows: 0, probeOk: 0, hookInstalled: 0, consoleModes: {}, byProcess: {}, perRun: [] };
+    const m = summary.scenarios[name] = { ...sc, runs: 0, runsWithWindow: 0, windows: 0, probeOk: 0, retries: 0, hookInstalled: 0, consoleModes: {}, byProcess: {}, perRun: [] };
     const count = sc.expect === 'flash' ? Math.min(runs, 3) : runs;
     for (let i = 0; i < count; i++) {
       const work = path.join(root, `${name}-${i}`); fs.mkdirSync(work);
@@ -94,15 +99,17 @@ function main() {
       if (!r.privateDesktop) throw new Error('watcher did not use a private desktop');
       m.runs++;
       if (probe.ok) m.probeOk++;
+      if (probe.retried && probe.cliRuns === 2) m.retries++;
       m.consoleModes[probe.consoleMode] = (m.consoleModes[probe.consoleMode] || 0) + 1;
       if (r.hookInstalled) m.hookInstalled++;
       if (r.visible.length) m.runsWithWindow++;
       m.windows += r.visible.length;
       for (const v of r.visible) { const k = `${v.process}/${v.class}/${v.source}`; m.byProcess[k] = (m.byProcess[k] || 0) + 1; }
-      m.perRun.push({ windows: r.visible.length, probeOk: !!probe.ok, polls: r.polls, tree: r.treeProcesses });
+      m.perRun.push({ windows: r.visible.length, probeOk: !!probe.ok, retried: !!probe.retried, cliRuns: probe.cliRuns, polls: r.polls, tree: r.treeProcesses });
     }
     m.pass = m.hookInstalled === m.runs && (sc.expect === 'flash' ? m.runsWithWindow === m.runs : m.windows === 0 && m.probeOk === m.runs
-      && (sc.launcher !== 'current' || m.consoleModes['private-desktop'] === m.runs));
+      && (sc.launcher !== 'current' || m.consoleModes['private-desktop'] === m.runs)
+      && (sc.launcher !== 'current-retry' || m.consoleModes['private-desktop-start-process'] === m.runs && m.retries === m.runs));
   }
   if (!process.env.KEEP_STAMP_WINDOW_DIR) fs.rmSync(root, { recursive: true, force: true, maxRetries: 3 }); else summary.dir = root;
   summary.pass = Object.values(summary.scenarios).every(s => s.pass);

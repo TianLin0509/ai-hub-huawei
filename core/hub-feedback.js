@@ -1,7 +1,7 @@
 'use strict';
 // 一键反馈的诊断包（2026-10-29 用户要求尽快增强反馈渠道）：问题描述 + 版本与环境 + 最近的日志尾部，
 // 全部脱敏后拼成一份纯文字，提交到自家阿里云（core/own-hosts.js feedbackEndpoint）。
-// 只读 Hub 数据目录下 logs/ 里最近改过的日志；不读会话正文、不读配置文件和凭据文件。
+// 只读 Hub 数据目录下近期日志、固定诊断与更新结果；不读会话正文、不读配置文件和凭据文件。
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
@@ -21,7 +21,7 @@ const LOG_NAME = /\.(?:log|jsonl|txt)$/i;
 const SECRET_RULES = [
   [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, '$1 <已隐去>'],
   [/\b(sk|pk|rk|ghp|gho|github_pat|xox[abp])[-_][A-Za-z0-9_-]{12,}/g, '<密钥已隐去>'],
-  [/\b(api[-_]?key|apikey|access[-_]?token|refresh[-_]?token|token|secret|password|passwd|pwd|cookie|authorization|口令|密码)(["']?\s*[:=]\s*["']?)[^\s"',;]{4,}/gi, '$1$2<已隐去>'],
+  [/\b(api[-_]?key|apikey|access[-_]?token|refresh[-_]?token|xauth[-_]?token|mtoken|token|secret|password|passwd|pwd|cookie|authorization|口令|密码)((?:\\*["'])?\s*[:=]\s*(?:\\*["'])?)[^\s"',;]{4,}/gi, '$1$2<已隐去>'],
   [/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, '<邮箱>'],
   [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{6,}/g, '<令牌已隐去>'],
 ];
@@ -101,6 +101,13 @@ function extraSources(dataDir, fsModule = fs) {
     try { const st = fsModule.statSync(file); out.push({ file, name: 'app-update/' + name, mtimeMs: st.mtimeMs, size: st.size, kind: 'update', lines: 30, bytes: 4 * 1024 }); } catch {}
   }
   const dir = path.join(dataDir, 'diagnostics');
+  const proxy = [];
+  const proxyFile = path.join(dir, 'company-model-proxy.log');
+  try {
+    const st = fsModule.statSync(proxyFile);
+    if (st.size > 0) proxy.push({ file: proxyFile, name: 'diagnostics/company-model-proxy.log', mtimeMs: st.mtimeMs, size: st.size,
+      kind: 'company-proxy', lines: 40, bytes: 32 * 1024 });
+  } catch {}
   let names = [];
   try { names = fsModule.readdirSync(dir); } catch {}
   const life = [];
@@ -110,7 +117,7 @@ function extraSources(dataDir, fsModule = fs) {
     try { const st = fsModule.statSync(file); if (st.size > 0) life.push({ file, name: 'diagnostics/' + name, mtimeMs: st.mtimeMs, size: st.size, kind: 'lifecycle', lines: LIFECYCLE_LINES, bytes: LIFECYCLE_BYTES }); } catch {}
   }
   life.sort((a, b) => b.mtimeMs - a.mtimeMs);
-  return out.sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, 1).concat(life.slice(0, LIFECYCLE_FILES));
+  return out.sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, 1).concat(proxy, life.slice(0, LIFECYCLE_FILES));
 }
 
 // info：{ productName, edition, version, electron, platform, dataDir }；返回 { text, items, meta }。
@@ -147,7 +154,8 @@ function collectBundle({ info = {}, description = '', contact = '', logsDir, dat
   for (const log of sources) {
     let rows;
     try { rows = tailLines(log.file, log.lines, log.bytes, fsModule); } catch { continue; }
-    const title = log.kind === 'log' ? `日志 ${log.name}` : log.kind === 'lifecycle' ? `生命周期记录 ${log.name}` : `更新结果 ${log.name}`;
+    const title = log.kind === 'log' ? `日志 ${log.name}` : log.kind === 'lifecycle' ? `生命周期记录 ${log.name}`
+      : log.kind === 'company-proxy' ? `公司模型诊断 ${log.name}` : `更新结果 ${log.name}`;
     const room = MAX_TOTAL_BYTES - total - 200; // 200：小节标题
     if (room < 1024) { trimmedFiles++; trimmedLines += rows.length; continue; }
     // 先脱敏再量，保证最终字节数不会因脱敏变长而超限

@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { collectBundle } = require('../core/hub-feedback');
 const { looksLikeWebPage } = require('../core/app-update/downloader');
+const { writeFileAtomic } = require('../core/atomic-write');
 
 const SEND_TIMEOUT_MS = 30000;
 
@@ -16,6 +17,36 @@ const MAX_CLICKS = 3;
 function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock = null, onPassed = () => {}, downloadsDir, now = () => Date.now(), logger = console,
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), onProgress = () => {}, windowPost = null }) {
   const fetchFn = fetchImpl || ((...args) => require('electron').net.fetch(...args));
+  const dataDir = path.dirname(logsDir);
+  const contactFile = path.join(dataDir, 'hub-feedback-contact.json');
+  const contactText = value => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 160) : '';
+
+  // Reuse the existing local WeLink/profile identity; opening feedback neither
+  // starts WeLink nor asks for a login. This preference stays outside logs.
+  function defaultContact() {
+    try {
+      const saved = JSON.parse(fs.readFileSync(contactFile, 'utf8'));
+      if (typeof saved.contact === 'string') return contactText(saved.contact);
+    } catch { /* No saved preference yet. */ }
+    try {
+      const auth = JSON.parse(fs.readFileSync(path.join(dataDir, 'company-assistant', 'auth.json'), 'utf8'));
+      if (auth.state === 'online' && auth.login?.ok && contactText(auth.login.uid)) return contactText(auth.login.uid);
+    } catch { /* The assistant may not have checked WeLink yet. */ }
+    try {
+      const identity = JSON.parse(fs.readFileSync(path.join(dataDir, 'profile', 'profile.json'), 'utf8')).identity;
+      if (identity?.from === 'welink') return contactText(identity.uid);
+    } catch { /* The local identity is optional. */ }
+    return '';
+  }
+
+  function saveContact({ contact } = {}) {
+    const value = contactText(contact);
+    try {
+      fs.mkdirSync(dataDir, { recursive: true });
+      writeFileAtomic(fs, contactFile, JSON.stringify({ contact: value }) + '\n');
+      return { ok: true };
+    } catch { return { ok: false }; }
+  }
 
   // 发送过程记在 logs/hub-feedback.log，被拦时的页面存成 hub-feedback-<途径>-sample.html（只留前 200 KB），下次一键反馈会随诊断包带上。
   function logEvent(entry) {
@@ -27,7 +58,7 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
 
   function preview({ description = '', contact = '' } = {}) {
     const b = collectBundle({ info: info(), description, contact, logsDir, dataDir: path.dirname(logsDir), now: now() });
-    return { ok: true, available: !!endpoint, items: b.items, chars: b.chars };
+    return { ok: true, available: !!endpoint, items: b.items, chars: b.chars, contact: defaultContact() };
   }
 
   async function post(body) {
@@ -65,6 +96,7 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
 
   async function send({ description = '', contact = '', onProgress: progress = onProgress } = {}) {
     if (!String(description).trim()) return { ok: false, reason: '请先写一句遇到了什么问题' };
+    saveContact({ contact });
     const i = info();
     const b = collectBundle({ info: i, description, contact, logsDir, dataDir: path.dirname(logsDir), now: now() });
     if (!endpoint) return { ok: false, reason: '这个版本没有配置反馈地址', savedTo: saveLocal(b.text) };
@@ -105,11 +137,12 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
     return { ok: false, reason: r.reason, savedTo: saveLocal(b.text), ...(r.blocked ? { blocked: true, url: endpoint } : {}) };
   }
 
-  return { preview, send };
+  return { preview, send, saveContact };
 }
 
 function registerHubFeedbackIpc(ipcMain, service) {
   ipcMain.handle('hub-feedback:preview', (_e, payload) => service.preview(payload || {}));
+  ipcMain.handle('hub-feedback:save-contact', (_e, payload) => service.saveContact(payload || {}));
   ipcMain.handle('hub-feedback:send', (e, payload) => service.send({ ...(payload || {}), onProgress: p => { try { e.sender.send('hub-feedback:progress', p); } catch {} } }));
 }
 

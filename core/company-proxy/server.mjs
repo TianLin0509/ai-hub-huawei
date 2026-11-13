@@ -242,12 +242,15 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
       }
       startup.zone = profile.zoneInfo || null;
       if (profile.signerInit?.needed) {
-        startup.message = `公司模型反代正在做首次签名初始化（${profile.signerInit.text}；后台跑一次 CodeAgent 命令行，不弹窗，约 10–20 秒）…`;
+        startup.message = `公司模型反代正在做首次签名初始化（${profile.signerInit.text}；后台运行 CodeAgent 命令行，不弹窗，通常 10–20 秒，重试时最多约 2 分钟）…`;
         log(`signer first-time initialization: ${profile.signerInit.reason} (tried ${profile.signerInit.tried.map(t => t.source + ':' + t.state).join(',')})`);
       }
       const { signer, adapterSha256, firstInit } = await loadSigner(profile, { workDir });
       startup.firstInit = firstInit;
       log(`signer ready (CodeAgent ${profile.codeagentVersion}; adapter ${adapterSha256.slice(0, 12)}; first-init ${firstInit.ran ? `ran ${firstInit.ms} ms, cli runs ${firstInit.cliRuns}` : 'not needed'}; sources ${JSON.stringify(profile.sources)})`);
+      if (firstInit.probe?.attempts?.some(attempt => attempt.error)) {
+        log(`signer recovered after retry: first-init=${JSON.stringify(firstInit)}`);
+      }
       upstream = { signer, profile, token: null };
     }
     startup.ready = true; startup.code = null; startup.message = null;

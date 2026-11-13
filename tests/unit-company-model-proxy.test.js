@@ -1427,7 +1427,7 @@ test('native stamp: CLI environment drops proxy key and a surrounding CodeAgent 
   assert.deepEqual(cliArguments({ mcp: 'm', settings: 's', model: 'x1' }).slice(-2), ['--model', 'x1']);
 });
 
-function fakeLauncher({ temp, writeLog = true, exitCode = 0, hang = false, pid = 777 } = {}, calls) {
+function fakeLauncher({ temp, writeLog = true, exitCode = 0, hang = false, pid = 777, stderrText = '', mode } = {}, calls) {
   const { EventEmitter } = require('node:events');
   return (command, args, options) => {
     calls.push({ command, args, options });
@@ -1438,7 +1438,9 @@ function fakeLauncher({ temp, writeLog = true, exitCode = 0, hang = false, pid =
     calls.launcher = child;
     const tempDir = options.env.TEMP;
     setTimeout(() => {
+      if (mode) child.stdout.write(`CLI_MODE=${mode}\r\n`);
       child.stdout.write(`CLI_PID=${pid}\r\n`);
+      if (stderrText) fs.writeFileSync(options.env.HUB_STAMP_ERR, stderrText);
       if (writeLog) fs.writeFileSync(path.join(tempDir, 'codeagent_signer.log'), 'z SnapEngineSigner created: 9.1.2-win32-x64-1730000000555 q\n');
       if (!hang) setTimeout(() => { child.stdout.write(`CLI_EXIT=${exitCode}\r\n`); child.emit('close', 0); }, writeLog ? 400 : 20);
     }, 20);
@@ -1493,6 +1495,32 @@ test('native stamp: failures report exit code, log existence, lines, marker, sta
   const notStarted = await probeNativeStamp({ cliExe: 'C:\\X\\c.exe', expectedVersion: '9.1.2', workRoot: root, env: {}, spawnImpl: () => { throw new Error('ENOENT'); }, pollMs: 20 });
   assert.equal(notStarted.report.error, 'CLI_START_FAILED'); assert.equal(notStarted.report.cliStarted, false);
   assert.equal(fs.readdirSync(root).length, 4, 'failed runs keep their scratch dirs for local troubleshooting');
+});
+
+test('native stamp: failed probes expose only the first 20 redacted stderr lines and explain early exit', async t => {
+  const { probeNativeStamp } = await load('native-stamp.mjs');
+  const { signerInitFailureMessage } = await load('upstream-profile.mjs');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cmp-stderr-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const userPath = ['C:', 'Users', 'fixture-person', 'cache'].join('\\');
+  const token = 'sk-' + 'q'.repeat(36);
+  const stderrText = [userPath + ' request 1234567890123 token=' + token,
+    'Bearer ' + 'r'.repeat(48), ...Array.from({ length: 25 }, (_, index) => 'detail line ' + index)].join('\n');
+  const result = await probeNativeStamp({ cliExe: 'C:\\X\\c.exe', expectedVersion: '9.1.2', workRoot: root,
+    env: {}, spawnImpl: fakeLauncher({ writeLog: false, exitCode: 7, stderrText }, []), pollMs: 10 });
+  assert.equal(result.ok, false);
+  assert.equal(result.report.stderrPreview.length, 20);
+  assert.equal(result.report.stderrPreview.at(-1), 'detail line 17');
+  const serialized = JSON.stringify(result.report);
+  for (const secret of ['fixture-person', '1234567890123', token, 'r'.repeat(48)]) assert.equal(serialized.includes(secret), false, secret);
+  assert.equal(result.report.cliExitCode, 7);
+  const message = signerInitFailureMessage('SIGNER_INIT_NO_STAMP', { version: '9.1.2', detail: result.report.error, report: result.report });
+  assert.match(message, /本次探测约 [0-9.]+ 秒后 CodeAgent 就退出了（退出码 7），未生成签名日志/);
+  assert.ok(fs.readdirSync(root).length > 0, 'raw evidence stays only in the local failed scratch directory');
+  const success = await probeNativeStamp({ cliExe: 'C:\\X\\c.exe', expectedVersion: '9.1.2', workRoot: root,
+    env: {}, spawnImpl: fakeLauncher({ hang: true, stderrText }, []), pollMs: 10 });
+  assert.equal(success.ok, true);
+  assert.deepEqual(success.report.stderrPreview, []);
 });
 
 test('native stamp: retains only native runtime files before clearing probe output', async t => {
