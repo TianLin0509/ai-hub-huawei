@@ -2174,7 +2174,8 @@ try {
   if (require('../core/distribution').target === 'company') {
     ipcRenderer.on('company-proxy:status', (_event, status) => { companyRouteView.updateStatus(status); });
     ipcRenderer.invoke('company-proxy:status').then(r => companyRouteView.updateStatus(r && r.proxy)).catch(() => {});
-    companyRouteView.onChange(() => { renderSessionList(); scheduleAppToolbarRefresh(); });
+    // 反代给会话分了号（第一次回答后才知道）时，侧栏额度跟着改显示那个号（2026-11-12）。
+    companyRouteView.onChange(() => { renderSessionList(); scheduleAppToolbarRefresh(); window.codeagentQuotaPanel?.render?.(); window.codeagentQuotaBar?.render?.(); });
   }
 } catch { /* 只影响显示 */ }
 
@@ -7750,14 +7751,14 @@ const renderAccountUsage = accountUsageController.render;
         getPlacement: () => codeagentQuotaPlacement.get(),
         setPlacement: value => codeagentQuotaPlacement.set(value),
         footerRoot: document.getElementById('rail-codeagent-quota'),
+        // CodeAgent 会话和走公司模型反代的 Claude / Codex / DSH 会话，都按实际用的号和模型显示（2026-11-12）。
         getCurrentModel: () => {
           const session = activeSessionId ? sessions.get(activeSessionId) : null;
-          return String(session?.kind || '').replace(/-resume$/, '') === 'codeagent' ? session.currentModel?.id || '' : '';
+          return require('./codeagent-quota-bar.js').quotaTargetFor(session)?.model || '';
         },
         getCurrentAccountId: () => {
           const session = activeSessionId ? sessions.get(activeSessionId) : null;
-          return String(session?.kind || '').replace(/-resume$/, '') === 'codeagent'
-            ? session.codeagentPoolAccount || 'personal' : '';
+          return require('./codeagent-quota-bar.js').quotaTargetFor(session)?.account || '';
         },
         openAccounts: id => window.__codeagentAccountsOpen?.(id),
       });

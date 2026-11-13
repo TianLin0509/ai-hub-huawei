@@ -46,7 +46,7 @@ function tokenMetric(account, currentModel, now = Date.now()) {
     .map(([window, label]) => ({ window, label, pct: token.periods[window] }))
     .filter(item => fresh[item.window] && Number.isFinite(item.pct) && item.pct >= TOKEN_DANGER_PERCENT)
     .sort((a, b) => b.pct - a.pct)[0] || null;
-  const model = account.usage?.models?.find(item => item.name === token.name) || null;
+  const model = token.row || account.usage?.models?.find(item => item.name === token.name) || null;
   return { pct: fresh.day ? clamp(100 - token.pct) : null, expired: !fresh.day, name: token.name, warning, periods: token.periods, fresh, at,
     windows: { day: model?.day || null, hour: model?.hour || null, min: model?.min || null } };
 }

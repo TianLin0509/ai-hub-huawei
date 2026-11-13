@@ -7,6 +7,7 @@
 
 const COMPANY_KINDS = new Set(['claude', 'codex', 'deepseek-acp']);
 let sessionAccounts = {};
+let sessionAccountIds = {};
 let shared = false;
 const listeners = new Set();
 
@@ -45,14 +46,29 @@ function routeInfo(session) {
     title: session.companyRoute === 'api' ? `自有接口${model ? ' ' + model : ''}（不走公司模型）` : 'CLI 默认：用这台电脑上 CLI 自己的配置（不走公司模型）' };
 }
 
+// 侧栏额度（2026-11-12 同事反馈：DSH 走反代用 ds1017，额度却显示成 GLM-5.2）：反代会话也按它实际用的号和模型显示。
+// 号：启动中心固定的号，否则反代给这个会话分的号；还没发过消息、或走团队共享主机（号由主机分配）时为空。
+// 模型：按反代同一规则归到公司模型（core/company-model-proxy.js launchModel：含 deepseek 的归 DeepSeek，其余归 GLM）。
+function quotaTarget(session) {
+  if (!session || session.companyRoute !== 'proxy' || shared) return null;
+  if (!COMPANY_KINDS.has(String(session.kind || '').replace(/-resume$/, ''))) return null;
+  const account = session.companyProxyAccount || sessionAccountIds[tagOf(session.id)] || '';
+  let model = '';
+  try { model = require('../core/company-model-proxy').launchModel(session.currentModel?.id || ''); } catch { model = session.currentModel?.id || ''; }
+  return { account, model };
+}
+
 function updateStatus(status) {
   const next = status && status.sessionAccounts && typeof status.sessionAccounts === 'object' ? { ...status.sessionAccounts } : {};
-  const changed = shared !== (status?.shared === true) || JSON.stringify(next) !== JSON.stringify(sessionAccounts);
+  const nextIds = status && status.sessionAccountIds && typeof status.sessionAccountIds === 'object' ? { ...status.sessionAccountIds } : {};
+  const changed = shared !== (status?.shared === true) || JSON.stringify(next) !== JSON.stringify(sessionAccounts)
+    || JSON.stringify(nextIds) !== JSON.stringify(sessionAccountIds);
   shared = status?.shared === true;
   sessionAccounts = next;
+  sessionAccountIds = nextIds;
   if (changed) for (const fn of listeners) { try { fn(); } catch { /* UI only */ } }
   return changed;
 }
 function onChange(fn) { listeners.add(fn); return () => listeners.delete(fn); }
 
-module.exports = { routeInfo, updateStatus, onChange, tagOf, shortModel };
+module.exports = { routeInfo, quotaTarget, updateStatus, onChange, tagOf, shortModel };

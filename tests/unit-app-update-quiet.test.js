@@ -312,3 +312,19 @@ test('静默送达默认关（11-07 定先不上线）：不开时只提醒、�
   assert.notEqual(state.quiet, true);
   assert.equal(c.applyOnQuit(), false);
 });
+
+// 2026-11-12 公司电脑事故：cmd 带 detached 时没有控制台，powershell 只好新开一个，Windows Terminal 下藏不住，
+// 留下空的「管理员:」窗口，重启后的 Hub 挂在上面，一关窗口 Hub 也退出。替换脚本必须继承一个没有窗口的控制台。
+test('启动替换脚本：经 cmd start /b 转一手，不带 detached，只用 windowsHide', () => {
+  const { launchHelper } = require('../core/app-update/apply');
+  const calls = [];
+  const fake = (cmd, args, opts) => { calls.push({ cmd, args, opts }); return { unref() { calls.push('unref'); } }; };
+  launchHelper({ helper: 'C:\a b\apply-update.ps1', plan: 'C:\a b\plan.json' }, { env: { X: '1' }, spawnImpl: fake });
+  const { args, opts } = calls[0];
+  assert.match(args[0], /start "" \/b powershell\.exe .*-WindowStyle Hidden -File "C:\a b\apply-update\.ps1" -Plan "C:\a b\plan\.json"/);
+  assert.equal(opts.detached, undefined);
+  assert.equal(opts.windowsHide, true);
+  assert.equal(opts.stdio, 'ignore');
+  assert.deepEqual(opts.env, { X: '1' });
+  assert.equal(calls[1], 'unref');
+});

@@ -580,3 +580,6 @@ test('API defaults point to official endpoints', () => {
   assert.match(config, /codex_api_base_url: 'https:\/\/api\.openai\.com\/v1'/);
   assert.match(config, /proxy: ''/);
 });
+
+// 用户 Codex 全局配置保护（npm test 命令行已近 Windows 8191 字符上限，新用例从这里引入）。
+require('./unit-codex-user-config-guard.test.js');

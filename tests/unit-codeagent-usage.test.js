@@ -925,3 +925,37 @@ test('real card refresh treats missing quotas as partial success and never launc
   assert.equal((await refresh({ force: true })).outcome, 'partial'); assert.equal(calls, 2);
   clock += 60000; assert.equal((await refresh({ open: true })).outcome, 'partial'); assert.equal(calls, 3);
 });
+
+// 2026-11-12 同事反馈：DSH 走公司模型反代用 ds1017，侧栏额度却显示 GLM-5.2。反代会话也要按实际用的号和模型显示。
+test('Token account selection follows company-proxy sessions (DSH / Claude / Codex) to their account and model', () => {
+  const route = require('../renderer/company-route-view');
+  const { tokenModelForAccount, quotaTargetFor, tokenUsage } = require('../renderer/codeagent-quota-bar');
+  const defaults = { personal: 'GLM-5.2-WX-Auto', pool1: 'GLM-5.2-WX-Auto' };
+  const dsh = { id: 'sess-1', kind: 'deepseek-acp', companyRoute: 'proxy', currentModel: { id: 'deepseek-v4.1-flash-1017' } };
+  // Before the proxy has assigned an account: no account known, rows keep their defaults.
+  route.updateStatus({ sessionAccounts: {}, sessionAccountIds: {} });
+  assert.deepEqual(quotaTargetFor(dsh), { account: '', model: 'deepseek-v4.1-flash-1017' });
+  assert.equal(tokenModelForAccount('pool1', dsh, defaults), 'GLM-5.2-WX-Auto');
+  // Router assigned pool1 to this session: that row follows the DeepSeek model, the others keep their default.
+  route.updateStatus({ sessionAccounts: { 'sess-1': '号 1' }, sessionAccountIds: { 'sess-1': 'pool1' } });
+  assert.equal(tokenModelForAccount('pool1', dsh, defaults), 'deepseek-v4.1-flash-1017');
+  assert.equal(tokenModelForAccount('personal', dsh, defaults), 'GLM-5.2-WX-Auto');
+  // A pinned account wins over the router's record; resumed kinds count too.
+  assert.equal(quotaTargetFor({ ...dsh, kind: 'claude-resume', companyProxyAccount: 'personal' }).account, 'personal');
+  // Model names the proxy does not know fall back to GLM, same as the proxy does.
+  assert.equal(quotaTargetFor({ ...dsh, kind: 'codex', currentModel: { id: 'gpt-5.5' } }).model, 'GLM-5.2-WX');
+  // Not on the proxy, or shared host (account picked by the host): no target.
+  assert.equal(quotaTargetFor({ ...dsh, companyRoute: 'api' }), null);
+  assert.equal(quotaTargetFor({ ...dsh, kind: 'qwen' }), null);
+  route.updateStatus({ shared: true, sessionAccounts: {}, sessionAccountIds: { 'sess-1': 'pool1' } });
+  assert.equal(quotaTargetFor(dsh), null);
+  route.updateStatus({ sessionAccounts: {}, sessionAccountIds: {} });
+  // CodeAgent sessions unchanged.
+  assert.deepEqual(quotaTargetFor({ kind: 'codeagent', codeagentPoolAccount: 'pool1', currentModel: { id: 'x' } }), { account: 'pool1', model: 'x' });
+  // The proxy's short GLM name finds the menu's longer row; the DeepSeek name matches its menu row case-insensitively.
+  const entry = { models: [{ name: 'GLM-5.2-WX-Auto', day: { pct: 3 } }, { name: 'DeepSeek-V4.1-Flash-1017', day: { pct: 40 }, hour: { pct: 5 } }] };
+  assert.equal(tokenUsage(entry, 'GLM-5.2-WX').pct, 3);
+  assert.equal(tokenUsage(entry, 'deepseek-v4.1-flash-1017').pct, 40);
+  assert.equal(tokenUsage(entry, 'deepseek-v4.1-flash-1017').row.name, 'DeepSeek-V4.1-Flash-1017');
+  assert.equal(tokenUsage({ models: [{ name: 'GLM-5.2-WX-Auto', day: { pct: 1 } }, { name: 'GLM-5.2-WX-Turbo', day: { pct: 2 } }] }, 'GLM-5.2-WX'), null, 'ambiguous prefix never guesses');
+});

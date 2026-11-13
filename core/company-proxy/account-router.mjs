@@ -68,7 +68,12 @@ export function fileStamp(file, statSync) {
 export function createAccountRouter({ listAccounts, makeProvider, now = Date.now, onEvent = () => {}, statSync = null,
   credentialStamp = account => (statSync ? fileStamp(account?.credentialFile, statSync) : '') }) {
   if (typeof listAccounts !== 'function' || typeof makeProvider !== 'function') throw new Error('Account router needs listAccounts and makeProvider');
-  const cooldowns = new Map(); // id -> { until, reason }
+  const cooldowns = new Map(); // id -> { until, reason }（整号：登录失效）
+  // 限流按「号 + 模型」冷却（2026-11-12 用户定）：CodeAgent 每个模型各有 Day/Hour/Min 配额，
+  // DeepSeek 被 429 不该连带这个号的 GLM 也停用。没有模型名的请求按空串记，只挡同样没带模型的请求。
+  const modelCooldowns = new Map(); // `${id}|${model}` -> { until, reason: 'rate_limit', model }
+  const modelKey = model => String(model || '').trim().toLowerCase();
+  const coolKey = (id, model) => id + '|' + modelKey(model);
   const sticky = new Map(); // sessionTag -> id
   const lastUsed = new Map(); // sessionTag -> time
   const counters = new Map(); // id -> { requests, ok, rateLimited, credentialFailures }
@@ -83,7 +88,7 @@ export function createAccountRouter({ listAccounts, makeProvider, now = Date.now
     try { onEvent(record); } catch { /* observers never break routing */ }
   };
   const stampOf = account => { try { return String(credentialStamp(account) ?? ''); } catch { return ''; } };
-  const cooling = (id, time = now(), account = null) => {
+  const accountCooling = (id, time, account) => {
     const entry = cooldowns.get(id);
     if (!entry) return null;
     if (entry.until <= time) { cooldowns.delete(id); return null; }
@@ -93,6 +98,16 @@ export function createAccountRouter({ listAccounts, makeProvider, now = Date.now
     }
     return entry;
   };
+  const modelCooling = (id, model, time) => {
+    const key = coolKey(id, model);
+    const entry = modelCooldowns.get(key);
+    if (!entry) return null;
+    if (entry.until <= time) { modelCooldowns.delete(key); return null; }
+    return entry;
+  };
+  // model 为 null：只看整号冷却（快照的号状态）；给了模型（含空串）再看这个模型的限流。
+  const cooling = (id, time = now(), account = null, model = null) =>
+    accountCooling(id, time, account) || (model == null ? null : modelCooling(id, model, time));
   const accounts = () => {
     let list = [];
     try { list = listAccounts(); } catch { list = []; }
@@ -100,7 +115,7 @@ export function createAccountRouter({ listAccounts, makeProvider, now = Date.now
     if (!list.some(a => a.id === PERSONAL)) list.push({ id: PERSONAL, kind: 'personal' });
     return list;
   };
-  const usable = account => !account.paused && stampOf(account) !== 'missing' && !cooling(account.id, now(), account);
+  const usable = (account, model = '') => !account.paused && stampOf(account) !== 'missing' && !cooling(account.id, now(), account, model);
   const load = id => { let n = 0; for (const value of sticky.values()) if (value === id) n++; return n; };
 
   const pinError = (code, status, message, extra = {}) => Object.assign(new Error(message), { code, status, ...extra });
@@ -110,7 +125,7 @@ export function createAccountRouter({ listAccounts, makeProvider, now = Date.now
     if (!account) throw pinError('COMPANY_PINNED_MISSING', 503, 'Pinned account is not in the pool', { account: pin });
     if (account.paused) throw pinError('COMPANY_PINNED_PAUSED', 503, 'Pinned account is paused', { account: pin });
     if (!accountHasModel(account, model)) throw pinError('COMPANY_PINNED_NO_MODEL', 400, 'Pinned account may not use this model', { account: pin, model });
-    const c = cooling(pin, now(), account);
+    const c = cooling(pin, now(), account, model);
     if (c?.reason === 'rate_limit') {
       throw pinError('COMPANY_PINNED_RATE_LIMITED', 429, 'Pinned account is rate limited', { account: pin,
         retryAfterSeconds: Math.max(1, Math.ceil((c.until - now()) / 1000)) });
@@ -132,8 +147,8 @@ export function createAccountRouter({ listAccounts, makeProvider, now = Date.now
     const current = sticky.get(sessionTag);
     const currentAccount = list.find(a => a.id === current);
     const allowed = a => accountHasModel(a, model);
-    if (currentAccount && usable(currentAccount) && !exclude.has(current) && allowed(currentAccount)) return currentAccount;
-    const pool = list.filter(a => a.kind !== 'personal' && usable(a) && !exclude.has(a.id) && allowed(a));
+    if (currentAccount && usable(currentAccount, model) && !exclude.has(current) && allowed(currentAccount)) return currentAccount;
+    const pool = list.filter(a => a.kind !== 'personal' && usable(a, model) && !exclude.has(a.id) && allowed(a));
     // No pool account has this model at all (not merely cooling or failed): say so.
     const noModel = !!model && list.some(a => a.kind !== 'personal') && !list.some(a => a.kind !== 'personal' && allowed(a));
     let chosen = null;
@@ -142,13 +157,13 @@ export function createAccountRouter({ listAccounts, makeProvider, now = Date.now
         .sort((x, y) => x.fit - y.fit || x.load - y.load || x.index - y.index)[0].a;
     } else {
       const personal = list.find(a => a.id === PERSONAL);
-      if (personal && usable(personal) && !exclude.has(PERSONAL)) chosen = personal;
+      if (personal && usable(personal, model) && !exclude.has(PERSONAL)) chosen = personal;
     }
     if (!chosen) return null;
     if (current !== chosen.id) {
       sticky.set(sessionTag, chosen.id);
       if (current) {
-        const reason = chosen.id === PERSONAL && noModel ? 'model' : cooling(current)?.reason
+        const reason = chosen.id === PERSONAL && noModel ? 'model' : cooling(current, now(), null, model)?.reason
           || (currentAccount?.paused ? 'paused' : exclude.has(current) ? 'failed' : currentAccount && !allowed(currentAccount) ? 'model' : 'removed');
         emit({ type: chosen.id === PERSONAL && list.some(a => a.kind !== 'personal') ? 'fallback_personal' : 'switch',
           session: sessionTag, from: current, to: chosen.id, reason, ...(model ? { model } : {}) });
@@ -164,14 +179,15 @@ export function createAccountRouter({ listAccounts, makeProvider, now = Date.now
     const tried = new Set();
     let lastRateLimited = null;
     const dropStashed = async () => { if (lastRateLimited) { const r = lastRateLimited; lastRateLimited = null; try { await r.body?.cancel(); } catch { /* cleanup only */ } } };
+    const model = typeof body?.model === 'string' ? body.model : '';
     for (;;) {
       if (signal?.aborted) { await dropStashed(); throw Object.assign(new Error('aborted'), { code: 'ROUTER_ABORTED', status: 499 }); }
       let account;
-      try { account = pick(sessionTag, tried, typeof body?.model === 'string' ? body.model : '', pin); }
+      try { account = pick(sessionTag, tried, model, pin); }
       catch (error) { await dropStashed(); throw error; }
       if (!account) {
         if (lastRateLimited) return lastRateLimited;
-        const active = accounts().map(a => ({ a, c: cooling(a.id, now(), a) || (!a.paused && stampOf(a) === 'missing' ? { reason: 'credential' } : null) })).filter(x => x.c);
+        const active = accounts().map(a => ({ a, c: cooling(a.id, now(), a, model) || (!a.paused && stampOf(a) === 'missing' ? { reason: 'credential' } : null) })).filter(x => x.c);
         const limited = active.filter(x => x.c.reason === 'rate_limit');
         if (limited.length) {
           const soonest = limited.reduce((m, x) => Math.min(m, x.c.until), Infinity);
@@ -205,8 +221,8 @@ export function createAccountRouter({ listAccounts, makeProvider, now = Date.now
       if (response?.status === 429) {
         count(account.id, 'rateLimited');
         const wait = retryAfterMs(response.headers?.get?.('retry-after'), now());
-        cooldowns.set(account.id, { until: now() + wait, reason: 'rate_limit' });
-        emit({ type: 'rate_limited', session: sessionTag, account: account.id, until: now() + wait, ...(pin ? { pinned: true } : {}) });
+        modelCooldowns.set(coolKey(account.id, model), { until: now() + wait, reason: 'rate_limit', model });
+        emit({ type: 'rate_limited', session: sessionTag, account: account.id, until: now() + wait, ...(model ? { model } : {}), ...(pin ? { pinned: true } : {}) });
         if (lastRateLimited) { try { await lastRateLimited.body?.cancel(); } catch { /* cleanup only */ } }
         lastRateLimited = response;
         continue;
@@ -227,9 +243,16 @@ export function createAccountRouter({ listAccounts, makeProvider, now = Date.now
     return {
       accounts: accounts().map(a => {
         const c = cooling(a.id, time);
+        const limitedModels = [];
+        for (const [key, entry] of modelCooldowns) {
+          if (!key.startsWith(a.id + '|')) continue;
+          if (entry.until <= time) { modelCooldowns.delete(key); continue; }
+          limitedModels.push({ model: entry.model, until: entry.until });
+        }
         return { id: a.id, kind: a.kind || 'pool', paused: !!a.paused, sessions: load(a.id),
           ...(Array.isArray(a.models) ? { models: a.models.slice(), modelsAuthoritative: a.modelsAuthoritative === true } : {}),
-          coolingUntil: c ? c.until : null, coolingReason: c ? c.reason : null, ...(counters.get(a.id) || {}) };
+          coolingUntil: c ? c.until : null, coolingReason: c ? c.reason : null,
+          ...(limitedModels.length ? { rateLimitedModels: limitedModels } : {}), ...(counters.get(a.id) || {}) };
       }),
       sessions: sticky.size,
       // session tag -> account id, newest 200 (the launch center and session cards show the account per session)

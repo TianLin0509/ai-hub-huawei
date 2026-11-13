@@ -35,7 +35,7 @@ const NOTICE = {
     : '公司模型：号池里的号暂时都用不了，这个会话已改用你的个人 CodeAgent 账号。',
   credential_failed: e => e.account === 'personal' ? '公司模型：你自己的 CodeAgent 登录读不出来（可能已过期），请打开 CodeAgent 命令行登录一下，登录后自动恢复。'
     : `公司模型：号池账号 ${e.account} 的登录信息读不出来（可能已过期），已换号；请到「账号」页重新登录这个号。`,
-  rate_limited: e => `公司模型：${e.account === 'personal' ? '个人账号' : '号池账号 ' + e.account} 被限流，冷却后再用，会话已自动换号。`,
+  rate_limited: e => `公司模型：${e.account === 'personal' ? '个人账号' : '号池账号 ' + e.account}${e.model ? ' 的 ' + e.model : ''} 被限流，冷却后再用${e.model ? '（这个号的其他模型照常可用）' : ''}，会话已自动换号。`,
 };
 
 // 「同一类」：限流换号一类；退回个人号按原因分（缺模型权限再按模型分）；登录读不出按号分。
@@ -53,6 +53,7 @@ class CompanyProxyService {
     this.onStatus = onStatus;
     this.logger = logger;
     this.mock = mock;
+    this.okCounts = new Map(); // account id -> 反代里成功请求数，涨了就标记这个号的额度读数待刷新
     this.child = null;
     this.endpoint = null;
     this.state = 'stopped';
@@ -78,7 +79,9 @@ class CompanyProxyService {
       mock: this.mock, restarts: this.restarts, accounts: s?.router?.accounts || [], events: (s?.router?.events || []).slice(-10),
       stats: s?.stats || null, log: this.logPath(), code: s?.code || null,
       zone: s?.zone || null, chosenZone: this.proxy().chosenZone(this.dataDir), firstInit: s?.firstInit || null,
-      sessionAccounts: this.sessionAccounts(s?.router?.assignments) };
+      sessionAccounts: this.sessionAccounts(s?.router?.assignments),
+      // 会话 → 号 id：侧栏额度按反代会话实际用的号显示（renderer/company-route-view.js quotaTarget），不显示在界面文字里。
+      sessionAccountIds: s?.router?.assignments && typeof s.router.assignments === 'object' ? { ...s.router.assignments } : {} };
   }
 
   // session tag -> account alias（个人 / 号 N，same numbering as the account page; never the account id）.
@@ -268,12 +271,14 @@ class CompanyProxyService {
     if (this.draining) { /* keep the draining message */ }
     else if (!status.ready) this.setState('not-ready', status.message || '公司模型反代已启动，但公司上游还没准备好');
     else this.setState('running', status.mock ? '公司模型反代运行中（模拟上游，仅用于测试）' : '公司模型反代运行中');
+    this.noteUsage(status.router?.accounts);
     for (const event of status.router?.events || []) {
       const id = `${event.at}:${event.type}:${event.account || event.to || ''}:${event.session || ''}`;
       if (this.seenEvents.has(id)) continue;
       this.seenEvents.add(id);
       if (this.seenEvents.size > 500) this.seenEvents = new Set([...this.seenEvents].slice(-200));
-      if (event.type === 'rate_limited' && event.account) {
+      // 带模型的限流只冷却这个号的这个模型（反代自己按模型冷却）；不再把整个号标成暂停，免得 GLM 也显示用不了。
+      if (event.type === 'rate_limited' && event.account && !event.model) {
         try {
           require('../core/codeagent-quota').markAvoid(this.dataDir, event.account, { source: 'error', kind: 'rate-limit',
             reason: '公司模型反代：上游限流（HTTP 429）', until: event.until || undefined });
@@ -285,6 +290,19 @@ class CompanyProxyService {
         this.noticeKeys.add(key);
         try { this.onNotice({ type: event.type, text, account: event.account || event.to || null, persistent: true }); } catch { /* UI only */ }
       }
+    }
+  }
+
+  // 反代每成功跑完请求，就把这个号的额度读数标成待刷新：和 CodeAgent 每轮结束一样（main.js markUsageDirty），
+  // 打开额度面板时按 10 分钟冷却重读。反代重启后计数归零，只重新记基线。
+  noteUsage(accounts) {
+    if (!Array.isArray(accounts)) return;
+    for (const a of accounts) {
+      if (!a || typeof a.id !== 'string') continue;
+      const ok = Number(a.ok) || 0, before = this.okCounts.get(a.id);
+      this.okCounts.set(a.id, ok);
+      if (before === undefined || ok <= before) continue;
+      try { require('../core/codeagent-usage-menu').markUsageDirty(this.dataDir, a.id); } catch { /* 读数标记失败不影响反代 */ }
     }
   }
 

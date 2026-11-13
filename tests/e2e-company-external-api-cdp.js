@@ -197,7 +197,8 @@ async function main() {
       if (kind === 'claude') check('Claude 留空启动没有注入地址、Key或模型环境', !trace.baseURL && !trace.tokenMatches && !trace.envModel);
       else check('Codex 留空启动使用原本机目录', path.resolve(trace.codexHome) === path.join(root, 'codex'));
     }
-    // External single-session availability must not widen company automation.
+    // External single-session availability must not widen company dreams. Group members may use the
+    // launch-center tools since 2026-11-12 (tests/e2e-company-group-harness-cdp.js covers the real launches).
     // The empty group is a local fixture; no CodeAgent process or inference starts.
     const boundaryWorkspace = path.join(root, 'workspaces', 'runtime-boundary');
     fs.mkdirSync(boundaryWorkspace, { recursive: true });
@@ -207,14 +208,9 @@ async function main() {
       const refused = await cdp.eval(`(async()=>{
         const ipc=require('electron').ipcRenderer;
         const dream=await ipc.invoke('memory:start-dream',{kind:${JSON.stringify(kind)}});
-        const blocked=async(channel,args)=>{try{await ipc.invoke(channel,args);return false;}catch(e){return /只使用 CodeAgent/.test(e.message);}};
-        return {dream:!!dream.error&&/只使用 CodeAgent/.test(dream.error),
-          create:await blocked('create-meeting',{slots:[{kind:${JSON.stringify(kind)}}]}),
-          add:await blocked('add-meeting-sub',{meetingId:window.__apiBoundaryGroup.id,kind:${JSON.stringify(kind)}})};
+        return {dream:!!dream.error&&/只使用 CodeAgent/.test(dream.error)};
       })()`);
       check(kind + ' 真实造梦IPC拒绝外部工具', refused.dream);
-      check(kind + ' 真实新建群聊IPC拒绝外部工具', refused.create);
-      check(kind + ' 真实加成员IPC拒绝外部工具', refused.add);
     }
     for (const width of [1440, 1280]) {
       await viewport(width);
@@ -231,7 +227,7 @@ async function main() {
       await click('[data-hw-close]');
       await cdp.eval('window.openMeetingCreateModal("group")');
       await until('!!document.querySelector(".mcm-overlay .mcm-ai-select")', 'group runtime selectors');
-      check(width + ' 新群聊仅列CodeAgent', await cdp.eval('[...document.querySelectorAll(".mcm-overlay .mcm-ai-select option")].every(o=>o.value==="codeagent")'));
+      check(width + ' 新群聊成员可选四种工具', await cdp.eval('[...document.querySelector(".mcm-overlay .mcm-ai-select").options].map(o=>o.value).join(",")==="codeagent,claude,codex,deepseek-acp"'));
       await shot('20261104-api-new-group-codeagent-' + width + '-m1');
       await click('.mcm-close');
       await cdp.eval('window.MeetingRoom.openMeeting(window.__apiBoundaryGroup.id,window.__apiBoundaryGroup)');
@@ -239,7 +235,7 @@ async function main() {
       const addSelector = await cdp.eval('document.querySelector("[data-gc-add-member]")?.getBoundingClientRect().height ? "[data-gc-add-member]" : "#mr-btn-add-sub"');
       await click(addSelector);
       await until('!!document.querySelector("#mr-add-sub-menu [data-add-kind]")', 'add member menu');
-      check(width + ' 已建群聊加成员仅列CodeAgent', await cdp.eval('JSON.stringify([...document.querySelectorAll("#mr-add-sub-menu [data-add-kind]")].map(e=>e.dataset.addKind))===JSON.stringify(["codeagent"])'));
+      check(width + ' 已建群聊加成员可选四种工具', await cdp.eval('JSON.stringify([...document.querySelectorAll("#mr-add-sub-menu [data-add-kind]")].map(e=>e.dataset.addKind))===JSON.stringify(["codeagent","claude","codex","deepseek-acp"])'));
       await shot('20261104-api-add-member-codeagent-' + width + '-m1');
       await click('#btn-home');
     }

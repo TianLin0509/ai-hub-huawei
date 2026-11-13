@@ -35,7 +35,11 @@ function proxyBadge(status, model = '') {
   if (s.state === 'failed') return { state: 'error', text: '反代没能启动', tip: s.message || '公司模型反代没能启动，详情见设置 › 自有 API。' };
   if (s.state === 'not-ready') return { ...shortReason(s), tip: s.message || '' };
   const accounts = Array.isArray(s.accounts) ? s.accounts : [];
-  const usable = a => !a.paused && !a.coolingUntil;
+  // 限流按「号 + 模型」记（core/company-proxy/account-router.mjs rateLimitedModels，2026-11-12）：
+  // 这张卡的模型被限流才算这个号用不了；没指定模型时看号上有没有任何限流。
+  const limited = a => (a.rateLimitedModels || []).some(x => x && x.until > Date.now()
+    && (!model || String(x.model || '').toLowerCase() === model.toLowerCase()));
+  const usable = a => !a.paused && !a.coolingUntil && !limited(a);
   const allowed = a => !model || !Array.isArray(a.models) || a.modelsAuthoritative !== true || a.models.some(m => String(m).toLowerCase() === model.toLowerCase());
   const pool = accounts.filter(a => a.kind !== 'personal');
   const personal = accounts.find(a => a.kind === 'personal' || a.id === 'personal');
@@ -44,7 +48,7 @@ function proxyBadge(status, model = '') {
     if (accounts.every(a => a.paused || a.coolingReason === 'credential')) {
       return { state: 'needs', text: '需要在 CodeAgent 登录', tip: '公司模型的账号登录都读不出来（可能过期）。请到 Hub「账号」页点击个人账号的「登录」，号池的号也在该页重新登录；登录后自动恢复。' };
     }
-    if (accounts.some(a => a.coolingReason === 'rate_limit')) return { state: 'busy', text: '号都在限流冷却', tip: '号池和个人号都被限流，冷却后自动恢复。' };
+    if (accounts.some(a => a.coolingReason === 'rate_limit' || limited(a))) return { state: 'busy', text: '号都在限流冷却', tip: '号池和个人号都被限流，冷却后自动恢复。' };
     return { state: 'needs', text: '号都已暂停', tip: '账号页里把号都暂停了，恢复一个号就能用。' };
   }
   if (poolOk.length) return { state: 'ready', text: `可用 · 号池 ${poolOk.length} 个号`, tip: '经本机反代，按会话分到号池里的号；号池用不了时退回你的个人号。' };
@@ -79,6 +83,25 @@ function saveRequest(kind, provider, pick) {
   return provider.backend === 'proxy' || provider.companyDefault === true ? { kind, backend: 'own' } : null;
 }
 
+// 群聊成员（建群 / 加成员）选了 Claude Code、Codex、DSH：每个成员各带各的模型，但同一种工具的来源（公司模型 / 自有来源）
+// 全机只有一份设置，所以同一种工具的成员要么都用公司模型、要么都用自有来源。返回建成员前要先保存的设置请求。
+function memberSaveRequests(slots, providers) {
+  const requests = [];
+  for (const kind of COMPANY_KINDS) {
+    const models = (slots || []).filter(slot => slot && slot.kind === kind).map(slot => slot.model || '');
+    const provider = providers && providers[kind];
+    if (!models.length || !provider) continue;
+    const companyIds = new Set(companyModels(provider).map(m => m.id));
+    const company = models.filter(id => companyIds.has(id));
+    if (company.length && company.length < models.length) {
+      throw new Error(`${require('../core/company-api-config').LABELS[kind]} 成员不能一部分用公司模型、一部分用自有来源，请选成同一种来源`);
+    }
+    const request = saveRequest(kind, provider, company.length ? { source: 'company', model: company[0] } : { source: 'own', model: models[0] });
+    if (request) requests.push(request);
+  }
+  return requests;
+}
+
 function cardsFor(kind, provider, status, pick) {
   if (!COMPANY_KINDS.has(kind) || !provider) return [];
   const cards = companyModels(provider).map(m => {
@@ -105,4 +128,4 @@ function renderCards(cards, escapeHtml) {
     + '</button>').join('');
 }
 
-module.exports = { COMPANY_KINDS, proxyBadge, companyModels, defaultPick, saveRequest, cardsFor, renderCards };
+module.exports = { COMPANY_KINDS, proxyBadge, companyModels, defaultPick, saveRequest, memberSaveRequests, cardsFor, renderCards };

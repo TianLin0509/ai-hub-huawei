@@ -6510,15 +6510,17 @@ if (typeof document !== 'undefined') (function () {
     // 2026-10-11：新增的 DeepSeek 成员一律跑 Claude Code（接入方式沿用新建面板记住的选择）；
     // 旧的 Codex / 旧 Harness DeepSeek 只留给已有成员恢复。
     const _CLI_SUFFIX = { claude: 'Claude Code', gemini: 'Antigravity CLI', codex: 'Codex CLI', 'deepseek-claude': 'DeepSeek · Claude Code', kimi: 'Kimi Code' };
-    // 公司协作任务只用 CodeAgent；启动中心的单会话工具不影响成员列表。
+    // 公司版群聊成员和启动中心单会话同一批工具可选（2026-11-12），CodeAgent 排第一。
     const { allowedKinds } = require('../core/distribution');
-    const { taskKindAllowed, companyOnly } = require('../core/company-ai-policy');
-    const availableKinds = (meeting.groupChat
-      ? ['claude', 'codex', 'deepseek-acp', 'qwen', 'glm', 'gemini', ...(allowedKinds ? ['codeagent'] : [])]
-      : ALL_AI_KINDS.filter(k => k !== 'deepseek' && k !== 'deepseek-claude')).filter(taskKindAllowed);
+    const { taskKindAllowed, groupKindAllowed, companyOnly, COMPANY_GROUP_KINDS } = require('../core/company-ai-policy');
+    const availableKinds = meeting.groupChat
+      ? (companyOnly() ? COMPANY_GROUP_KINDS : ['claude', 'codex', 'deepseek-acp', 'qwen', 'glm', 'gemini', ...(allowedKinds ? ['codeagent'] : [])]).filter(groupKindAllowed)
+      : ALL_AI_KINDS.filter(k => k !== 'deepseek' && k !== 'deepseek-claude').filter(taskKindAllowed);
+    // 公司版的工具名和启动中心、建群弹窗一致（Claude Code / Codex / DSH）。
+    const companyLabels = companyOnly() ? require('../core/company-api-config').LABELS : {};
     const kinds = availableKinds.map(k => ({
       kind: k,
-      label: _CLI_SUFFIX[k] || getKindLabel(k),
+      label: companyLabels[k] || _CLI_SUFFIX[k] || getKindLabel(k),
     }));
     if (!meeting.groupChat && !companyOnly()) kinds.push({ kind: 'powershell', label: 'PowerShell' });
 
@@ -6533,6 +6535,7 @@ if (typeof document !== 'undefined') (function () {
           _showGcEscapeNotice('正在添加成员…');
           await window.WorkspaceController.loadSessionDefaults();
           const opts = window.WorkspaceController.buildSessionTuningOpts(kind);
+          await window.WorkspaceController.prepareCompanyMembers([{ kind, model: opts.model }]);
           if (kind === 'deepseek-claude') {
             const route = window.WorkspaceController.deepseekRouteState().route;
             const status = window.WorkspaceController.deepseekRouteStatus(route);

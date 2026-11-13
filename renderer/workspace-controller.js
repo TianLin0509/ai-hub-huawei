@@ -321,7 +321,12 @@
     const modelOptions = launchModelOptions(kind);
     // 用户设过默认就用它，否则才回落出厂值；两者都不在当前可选清单里时取第一项。
     // 群聊成员走的也是这里，所以「设为默认」对群聊同样生效。
-    const model = companyApiKind(kind) ? (modelOptions.some(option => option.id === modelId) ? modelId : modelOptions[0]?.id || '') : modelOptions.some(option => option.id === modelId)
+    // 公司版 Claude Code / Codex / DSH 没指定模型时（群聊成员刚换成这个工具）：用启动中心保存的来源和模型，也就是上次选的。
+    const savedCompanyModel = () => {
+      const id = modelCards.defaultPick(kind, companyProvider[kind])?.model;
+      return modelOptions.some(option => option.id === id) ? id : modelOptions[0]?.id || '';
+    };
+    const model = companyApiKind(kind) ? (modelOptions.some(option => option.id === modelId) ? modelId : savedCompanyModel()) : modelOptions.some(option => option.id === modelId)
       ? modelId
       : resolveDefaultModel(kind, defaultModelConfig(), modelOptions.map(option => option.id));
     const effortOptions = EFFORT_KINDS.has(kind) ? effortOptionsFor(kind, model) : [];
@@ -2229,6 +2234,18 @@
     void loadRecent().then(paint).catch(() => {});
   }
 
+  // 群聊成员（建群 / 加成员）用 Claude Code、Codex、DSH 时，和启动中心点模型卡一样：选的来源和保存的不同就先写回设置
+  // （公司模型反代随之启动），下次打开默认就是它。
+  async function prepareCompanyMembers(slots) {
+    if (!companyApi.isCompany()) return;
+    for (const request of modelCards.memberSaveRequests(slots, companyProvider)) {
+      const saved = await ipcRenderer.invoke('company-api:save', request);
+      if (!saved || !saved.ok) throw new Error((saved && saved.error) || '模型来源保存失败');
+      delete companyPick[request.kind];
+      await loadCompanyApiCatalog(request.kind);
+    }
+  }
+
   window.WorkspaceController = {
     closeNewSessionModal,
     compactPath,
@@ -2259,6 +2276,7 @@
     // 群聊成员配置必须与新建 Session 共用动态 Codex 模型目录和默认值。
     resolveSessionTuning,
     buildSessionTuningOpts,
+    prepareCompanyMembers,
     codexModelTuning,
     loadClaudeModelCatalog,
     loadCodexTuningCatalog,

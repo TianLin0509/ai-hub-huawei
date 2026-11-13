@@ -45,13 +45,44 @@ test('429 cools the account down and the same request moves to another account',
   assert.equal(response.status, 200);
   assert.equal(router.accountFor('s1'), 'bbbbbb2');
   const snap = router.snapshot();
-  assert.equal(snap.accounts.find(a => a.id === 'aaaaaa1').coolingUntil, now + 30_000);
+  assert.equal(snap.accounts.find(a => a.id === 'aaaaaa1').coolingUntil, null);
+  assert.deepEqual(snap.accounts.find(a => a.id === 'aaaaaa1').rateLimitedModels, [{ model: '', until: now + 30_000 }]);
   assert.ok(events.some(e => e.type === 'rate_limited' && e.account === 'aaaaaa1'));
   assert.ok(events.some(e => e.type === 'switch' && e.from === 'aaaaaa1' && e.to === 'bbbbbb2'));
   // The session stays on its new account after the cooldown expires.
   now += 31_000;
   await router.complete({}, { sessionTag: 's1' });
   assert.equal(router.accountFor('s1'), 'bbbbbb2');
+});
+
+// 2026-11-12 用户定：限流只停这个号的这个模型。DeepSeek 被 429，同一个号的 GLM 照常用，会话不换号。
+test('429 on one model cools only that model on the account; other models keep using it', async () => {
+  const { createAccountRouter } = await load('account-router.mjs');
+  let now = 1_000_000;
+  const events = [];
+  const router = createAccountRouter({ now: () => now, onEvent: e => events.push(e),
+    listAccounts: () => [{ id: 'aaaaaa1', kind: 'pool' }, { id: 'bbbbbb2', kind: 'pool' }],
+    makeProvider: account => ({ complete: async body => account.id === 'aaaaaa1' && body.model === 'deepseek-v4.1-flash-1017' ? limited('30') : sse() }),
+  });
+  assert.equal((await router.complete({ model: 'deepseek-v4.1-flash-1017' }, { sessionTag: 'd1' })).status, 200);
+  assert.equal(router.accountFor('d1'), 'bbbbbb2');
+  // A new GLM session goes to the less-loaded account — the one DeepSeek was just rate limited on.
+  assert.equal((await router.complete({ model: 'GLM-5.2-WX' }, { sessionTag: 'g1' })).status, 200);
+  assert.equal(router.accountFor('g1'), 'aaaaaa1');
+  const limitedEvent = events.find(e => e.type === 'rate_limited');
+  assert.equal(limitedEvent.account, 'aaaaaa1');
+  assert.equal(limitedEvent.model, 'deepseek-v4.1-flash-1017');
+  // GLM on the same account is not paused: the GLM session stays put, a new GLM session may still land there.
+  assert.equal((await router.complete({ model: 'GLM-5.2-WX' }, { sessionTag: 'g1' })).status, 200);
+  assert.equal(router.accountFor('g1'), 'aaaaaa1');
+  const a = router.snapshot().accounts.find(x => x.id === 'aaaaaa1');
+  assert.equal(a.coolingUntil, null);
+  assert.deepEqual(a.rateLimitedModels, [{ model: 'deepseek-v4.1-flash-1017', until: now + 30_000 }]);
+  // Pinned DeepSeek on the cooled account reports the rate limit; pinned GLM there works.
+  await assert.rejects(router.complete({ model: 'deepseek-v4.1-flash-1017' }, { sessionTag: 'p1', pin: 'aaaaaa1' }), e => e.code === 'COMPANY_PINNED_RATE_LIMITED');
+  assert.equal((await router.complete({ model: 'GLM-5.2-WX' }, { sessionTag: 'p2', pin: 'aaaaaa1' })).status, 200);
+  now += 31_000;
+  assert.equal(router.snapshot().accounts.find(x => x.id === 'aaaaaa1').rateLimitedModels, undefined);
 });
 
 test('unreadable pool login falls back to the personal account with an event', async () => {
@@ -329,7 +360,10 @@ test('proxy process: three client protocols, session stickiness and 429 switch o
     assert.equal(r.status, 200);
     await r.text();
     status = await (await fetch(base + '/admin/status', auth)).json();
-    assert.ok(status.router.accounts.find(a => a.id === 'aaaaaa1').coolingUntil > Date.now());
+    // 限流只冷却「号 + 模型」：号本身不进整号冷却，GLM 这一项记在 rateLimitedModels 里。
+    const limitedA = status.router.accounts.find(a => a.id === 'aaaaaa1');
+    assert.equal(limitedA.coolingUntil, null);
+    assert.ok(limitedA.rateLimitedModels.some(x => x.model === 'GLM-5.2-WX' && x.until > Date.now()));
     assert.ok(status.router.events.some(e => e.type === 'switch' && e.to === 'bbbbbb2'));
     // Every account limited: the client sees 429 with Retry-After, not a hang.
     fs.writeFileSync(path.join(dataDir, 'company-model-proxy', 'mock-control.json'), JSON.stringify({ rateLimitedTokens: ['mock-token-aaaaaa1', 'mock-token-bbbbbb2', 'mock-token-personal'] }));
@@ -785,6 +819,37 @@ test('account-switch notices are sticky and shown only the first time for each r
   assert.ok(notices.every(n => n.persistent === true));
   assert.notEqual(noticeKey(events[2]), noticeKey(events[4]));
   service.child = null;
+});
+
+// 2026-11-12：带模型的限流不把整个号标成暂停（号的其他模型照常可用）；反代成功跑完请求就标记这个号的额度读数待刷新。
+test('proxy service: model-scoped 429 does not pause the whole account; successful requests mark that account usage dirty', async () => {
+  const { CompanyProxyService } = require('../main/company-proxy-service');
+  const quota = require('../core/codeagent-quota');
+  const menu = require('../core/codeagent-usage-menu');
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-proxy-usage-'));
+  try {
+    const notices = [];
+    const service = new CompanyProxyService({ dataDir, isEnabled: () => false, logger: { warn() {} }, onNotice: n => notices.push(n) });
+    service.child = { pid: 1 };
+    let accounts = [{ id: 'pool1', ok: 0 }, { id: 'personal', ok: 2 }];
+    const events = [{ at: 1, type: 'rate_limited', session: 'a', account: 'pool1', model: 'deepseek-v4.1-flash-1017', until: Date.now() + 60000 }];
+    service.request = async () => ({ ready: true, router: { accounts, events, assignments: { 'sess-1': 'pool1' } } });
+    await service.poll();
+    assert.equal(quota.readState(dataDir).accounts.pool1, undefined, 'whole account not paused');
+    assert.match(notices[0].text, /deepseek-v4\.1-flash-1017 被限流.*其他模型照常可用/);
+    assert.deepEqual(service.status().sessionAccountIds, { 'sess-1': 'pool1' });
+    // First poll only records the baseline; a later rise in ok marks only that account.
+    assert.equal(menu.readUsage(dataDir).pool1?.dirtyVersion, undefined);
+    accounts = [{ id: 'pool1', ok: 3 }, { id: 'personal', ok: 2 }];
+    await service.poll();
+    assert.equal(menu.readUsage(dataDir).pool1.dirtyVersion, 1);
+    assert.equal(menu.readUsage(dataDir).personal?.dirtyVersion, undefined);
+    // A model-less 429 (old proxy) still pauses the account as before.
+    events.push({ at: 2, type: 'rate_limited', session: 'b', account: 'personal', until: Date.now() + 60000 });
+    await service.poll();
+    assert.equal(quota.readState(dataDir).accounts.personal.kind, 'rate-limit');
+    service.child = null;
+  } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 
 test('sticky notice stays until closed and does not stack duplicates', () => {

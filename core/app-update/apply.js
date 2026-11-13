@@ -188,12 +188,17 @@ function stageIncremental({ dataDir, payloadFile, resourcesDir, version, from, e
   return { plan, paths: p, needsAdmin: !canWriteDir(resourcesDir) };
 }
 
-// 隐藏启动替换脚本（与本进程脱离，本进程退出后它继续跑）。
+// 隐藏启动替换脚本（本进程退出后它继续跑）。
 // 本机实测（2026-10-13）：直接 detached 启动 powershell.exe 一行都不执行；经 cmd 的 start /b 转一手
-// 才能脱离本进程、在本进程退出后继续跑完，且不弹窗。/s 让 cmd 原样保留引号里的路径（可带空格）。
+// 才能在本进程退出后继续跑完。/s 让 cmd 原样保留引号里的路径（可带空格）。
+// 不能再给 cmd 加 detached（2026-11-12 公司电脑事故）：detached 的 cmd 没有控制台，start /b 起的
+// powershell 只好自己新开一个；默认终端是 Windows Terminal 时 -WindowStyle Hidden 藏不住，桌面留下
+// 一个空的「管理员:」终端窗口，重启后的 Hub 还挂在这个控制台上，用户一关窗口 Hub 就被一起关掉。
+// 不加 detached、只靠 windowsHide 时，cmd 带一个没有窗口的控制台，powershell 和重启后的 Hub 都继承它，
+// 全程不出现窗口；实测 Electron 退出后脚本照常跑完（直接 spawn powershell 则会随 Electron 一起退出）。
 function launchHelper(paths, { env = process.env, spawnImpl = spawn } = {}) {
   const line = `/d /s /c "start "" /b powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "${paths.helper}" -Plan "${paths.plan}""`;
-  const child = spawnImpl(process.env.ComSpec || 'cmd.exe', [line], { detached: true, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true, env });
+  const child = spawnImpl(process.env.ComSpec || 'cmd.exe', [line], { stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true, env });
   if (child && typeof child.unref === 'function') child.unref();
   return child;
 }

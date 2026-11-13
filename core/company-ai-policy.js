@@ -15,6 +15,17 @@ function taskKindAllowed(kind) {
 }
 function assertTaskKind(kind) {
   assertKind(kind);
-  if (!taskKindAllowed(kind)) throw new Error('公司版造梦、群聊与组队只使用 CodeAgent；其他工具请从启动中心新建单会话。');
+  if (!taskKindAllowed(kind)) throw new Error('公司版造梦与组队只使用 CodeAgent；其他工具请从启动中心新建单会话。');
 }
-module.exports = { companyOnly, assertExternalAiAllowed, assertKind, taskKindAllowed, assertTaskKind };
+// 群聊成员（2026-11-12 同事提出）：和启动中心的单会话一样可选 CodeAgent / Claude Code / Codex / DSH，默认仍是 CodeAgent。
+// 造梦与组队不变，仍只用 CodeAgent。
+const COMPANY_GROUP_KINDS = ['codeagent', 'claude', 'codex', 'deepseek-acp'];
+function groupKindAllowed(kind) {
+  return distribution.kindAllowed(kind)
+    && (!companyOnly() || COMPANY_GROUP_KINDS.includes(String(kind || '').replace(/-resume$/, '')));
+}
+function assertGroupKind(kind) {
+  assertKind(kind);
+  if (!groupKindAllowed(kind)) throw new Error('公司版群聊成员可选 CodeAgent、Claude Code、Codex、DSH。');
+}
+module.exports = { companyOnly, assertExternalAiAllowed, assertKind, taskKindAllowed, assertTaskKind, COMPANY_GROUP_KINDS, groupKindAllowed, assertGroupKind };

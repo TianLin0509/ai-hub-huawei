@@ -56,6 +56,14 @@ async function main() {
   for (const id of POOL) writeModels(id, ['GLM-5.2-WX', 'deepseek-v4.1-flash-1017']);
   writeModels(DS_ONLY, ['deepseek-v4.1-flash-1017']);
   fs.writeFileSync(path.join(files, 'note-fallback.txt'), 'Pool exhausted check.\nFALLBACK_MARKER_3Z5\n');
+  // 侧栏额度（2026-11-12）：每个号先放一份读数，GLM 今日用 11%、DeepSeek 用 37%，用来核对反代会话显示的是哪个模型。
+  const usageMenu = require('../core/codeagent-usage-menu');
+  const glmRow = { name: 'GLM-5.2-WX-Auto', day: { used: '11M', total: '100M', pct: 11 }, hour: { pct: 1 }, min: { pct: 1 } };
+  const dsRow = { name: 'DeepSeek-V4.1-Flash-1017', day: { used: '37M', total: '100M', pct: 37 }, hour: { pct: 2 }, min: { pct: 2 } };
+  // 只有 DeepSeek 权限的号，菜单里也只有 DeepSeek 一行（和真机一致）。
+  for (const id of [...POOL, DS_ONLY, 'personal']) {
+    usageMenu.recordUsage(data, id, { models: id === DS_ONLY ? [dsRow] : [glmRow, dsRow], modelsRead: { status: 'ok' } }, { label: id, source: 'serve' });
+  }
   const system = path.join(process.env.SystemRoot || 'C:/Windows', 'System32');
   const cliDirs = ['claude', 'codex', 'node'].map(whichDir);
   assert.ok(cliDirs.every(Boolean), 'claude, codex and node must be installed for this end-to-end test');
@@ -175,6 +183,22 @@ async function main() {
       report.sessions[k.ui].proxy = { byKind: status.stats.byKind, upstream: status.mockUpstream, accounts: status.router?.accounts };
       await shot(`answer-${k.ui}-1440`);
       check(`${k.label}：界面上看到读文件后的回答（${k.marker}）`, seen);
+      // 侧栏额度：这个会话实际用的号那一行，按会话的模型显示（DeepSeek 剩 63%、GLM 剩 89%），不是号的默认模型。
+      const assigned = status.router?.assignments?.[String(id).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64)] || '';
+      const wantName = /deepseek/i.test(k.model) ? 'DeepSeek-V4.1-Flash-1017' : 'GLM-5.2-WX-Auto';
+      const quotaExpr = `(async()=>{const p=window.codeagentQuotaPanel;if(!p)return null;await p.reload?.();const v=p.view();return (v.rows||[]).map(r=>({id:r.id,current:r.current,model:r.token&&r.token.name,pct:r.token&&r.token.pct}));})()`;
+      let quotaRows = null;
+      const quotaEnd = Date.now() + 20000;
+      while (Date.now() < quotaEnd) {
+        quotaRows = await cdp.eval(quotaExpr).catch(() => null);
+        if (quotaRows && quotaRows.some(r => r.current && r.model === wantName)) break;
+        await sleep(1000);
+      }
+      report.sessions[k.ui].quota = { assigned, rows: quotaRows };
+      const currentRow = (quotaRows || []).find(r => r.current);
+      check(`${k.label}：侧栏额度标出这个会话用的号（${assigned || '未分配'}），并显示 ${wantName} 的额度`,
+        !!assigned && currentRow?.id === assigned && currentRow.model === wantName && currentRow.pct === (wantName.startsWith('DeepSeek') ? 63 : 89));
+      check(`${k.label}：其他号仍显示各自默认模型的额度`, (quotaRows || []).filter(r => !r.current && r.model).every(r => r.model === (r.id === DS_ONLY ? 'DeepSeek-V4.1-Flash-1017' : 'GLM-5.2-WX-Auto')));
     }
     const final = await proxyStatus();
     report.finalProxy = { stats: final.stats, upstream: final.mockUpstream };
@@ -226,8 +250,13 @@ async function main() {
       report.fallbackProxy = { events: st.router.events, accounts: st.router.accounts, byToken: st.mockUpstream.byToken, rateLimited: st.mockUpstream.rateLimited };
       check('两个号池账号都被标记限流冷却，并记录退回个人号', POOL.every(id => st.router.events.some(e => e.type === 'rate_limited' && e.account === id))
         && st.router.events.some(e => e.type === 'fallback_personal') && st.mockUpstream.byToken['mock-token-personal'] > 0);
-      const avoid = JSON.parse(fs.readFileSync(path.join(data, 'codeagent-pool', 'quota-avoid.json'), 'utf8'));
-      check('限流的号同步到账号页的避让记录', POOL.every(id => avoid.accounts?.[id]?.kind === 'rate-limit'));
+      // 2026-11-12：限流只冷却「号 + 模型」，不再把整个号写进账号页的避让记录（号的 DeepSeek 照常可用）。
+      let avoid = {};
+      try { avoid = JSON.parse(fs.readFileSync(path.join(data, 'codeagent-pool', 'quota-avoid.json'), 'utf8')); } catch { avoid = {}; }
+      check('限流只冷却这个号的 GLM：整号不进避让记录，反代状态里记的是 GLM-5.2-WX', POOL.every(id => !avoid.accounts?.[id]
+        && st.router.accounts.find(a => a.id === id)?.rateLimitedModels?.some(x => x.model === 'GLM-5.2-WX')));
+      const usageNow = usageMenu.readUsage(data);
+      check('反代成功的请求把用到的号标成「额度待刷新」', Object.values(usageNow).some(e => (e.dirtyVersion || 0) > (e.cleanVersion || 0)));
     }
     report.uiChecksPassed = true;
   } catch (error) {

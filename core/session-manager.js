@@ -124,6 +124,9 @@ function buildCodexReasoningConfigArg(effort = CODEX_REASONING_EFFORT) {
     ` -c 'sandbox_mode="danger-full-access"'`,
     ` -c 'windows.sandbox="unelevated"'`,
     ` -c 'notice.hide_full_access_warning=true'`,
+    // 以下两项以前写进用户全局 config.toml / version.json，现在只对本次启动生效（见 codex-user-config-guard.js）。
+    ` -c 'notice.hide_rate_limit_model_nudge=true'`,
+    ` -c 'check_for_update_on_startup=false'`,
   ].join('');
 }
 const CODEX_REASONING_CONFIG_ARG = buildCodexReasoningConfigArg(CODEX_REASONING_EFFORT);
@@ -924,6 +927,8 @@ function buildClaudeMeetingMcpArgs({
 // 默认对订阅模式 ~/.codex/version.json；API 模式（isolated CODEX_HOME）必须显式传
 // configDir 指向 <hubDataDir>/codex-api-profile，否则 dismiss 写到错误位置不生效。
 function dismissCodexUpdatePrompt(homeDir = process.env.USERPROFILE || process.env.HOME || os.homedir(), configDir = null) {
+  // 用户自己的 CODEX_HOME 不写：启动参数已带 check_for_update_on_startup=false。
+  if (!require('./codex-user-config-guard').isHubOwnedCodexHome(configDir, getHubDataDir())) return false;
   const versionPath = configDir
     ? path.join(configDir, 'version.json')
     : path.join(homeDir, '.codex', 'version.json');
@@ -967,8 +972,13 @@ function escapeRegExp(value) {
 function ensureTomlSectionKey(content, sectionName, key, value) {
   const src = String(content || '');
   const desiredLine = `${key} = ${value}`;
-  const headerRe = new RegExp(`^\\s*\\[${escapeRegExp(sectionName)}\\]\\s*$`, 'im');
+  // 只用 [ \t]，不用 \s：\s 会跨行吞掉换行，替换后把键粘到上一行（2026-11-12 同事 Codex 配置被写坏）。
+  const headerRe = new RegExp(`^[ \\t]*\\[[ \\t]*${escapeRegExp(sectionName)}[ \\t]*\\][ \\t]*(?:#.*)?$`, 'im');
   const headerMatch = src.match(headerRe);
+  // 节已用点号键或内联表定义时，再追加 [节名] 会重复定义；这种写法不动，交给启动参数 -c。
+  if (!headerMatch && new RegExp(`^[ \\t]*${escapeRegExp(sectionName)}[ \\t]*[.=]`, 'im').test(src)) {
+    return { content: src, changed: false };
+  }
 
   if (!headerMatch) {
     const sep = src ? (src.endsWith('\n') ? '\n' : '\n\n') : '';
@@ -980,15 +990,15 @@ function ensureTomlSectionKey(content, sectionName, key, value) {
 
   const sectionStart = headerMatch.index + headerMatch[0].length;
   const tail = src.slice(sectionStart);
-  const nextHeaderMatch = tail.match(/\n\s*\[[^\]]+\]\s*$/m);
+  const nextHeaderMatch = tail.match(/\n[ \t]*\[[^\]]+\][ \t]*(?:#.*)?$/m);
   const sectionEnd = nextHeaderMatch ? sectionStart + nextHeaderMatch.index : src.length;
   const section = src.slice(sectionStart, sectionEnd);
-  const desiredRe = new RegExp(`^\\s*${escapeRegExp(key)}\\s*=\\s*${escapeRegExp(value)}\\s*$`, 'im');
+  const desiredRe = new RegExp(`^[ \\t]*${escapeRegExp(key)}[ \\t]*=[ \\t]*${escapeRegExp(value)}[ \\t]*$`, 'im');
   if (desiredRe.test(section)) {
     return { content: src, changed: false };
   }
 
-  const keyRe = new RegExp(`^\\s*${escapeRegExp(key)}\\s*=.*$`, 'im');
+  const keyRe = new RegExp(`^[ \\t]*${escapeRegExp(key)}[ \\t]*=.*$`, 'im');
   if (keyRe.test(section)) {
     const nextSection = section.replace(keyRe, desiredLine);
     return {
@@ -1007,6 +1017,12 @@ function dismissCodexRateLimitDialog(homeDir = process.env.USERPROFILE || proces
   const configPath = configDir
     ? path.join(configDir, 'config.toml')
     : path.join(homeDir, '.codex', 'config.toml');
+  const guard = require('./codex-user-config-guard');
+  if (!guard.isHubOwnedCodexHome(configDir, getHubDataDir())) {
+    // 用户自己的 Codex 配置不再改写，这几项设置走启动参数 -c；只把 Hub 旧版本写坏的形状修回来。
+    guard.repairUserCodexConfigFile(configPath);
+    return false;
+  }
   try {
     let content = '';
     try { content = fs.readFileSync(configPath, 'utf8'); } catch { /* 文件不存在 → 视作空 */ }

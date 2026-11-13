@@ -3,7 +3,7 @@
 (function () {
 const { ipcRenderer } = require('electron');
 const { KIND_LABELS, GROUP_MEMBER_KINDS } = require('../core/ai-kinds.js');
-const { MODEL_OPTIONS_BY_KIND, modelOptionsFor } = require('../core/model-options.js');
+const { MODEL_OPTIONS_BY_KIND } = require('../core/model-options.js');
 
 const MODEL_KINDS = new Set(Object.keys(MODEL_OPTIONS_BY_KIND).filter(require('../core/distribution').kindAllowed));
 const deepseekProfile = require('../core/deepseek-claude-profile.js');
@@ -11,6 +11,9 @@ const deepseekProfile = require('../core/deepseek-claude-profile.js');
 // 接入只留给历史会话恢复，ChatGPT 网页路由也不再作为新建成员出现。
 const LEGACY_DEEPSEEK_KINDS = new Set(['deepseek', 'deepseek-claude']);
 const HIDDEN_CREATE_KINDS = new Set(['chatgpt', 'deepseek', 'deepseek-claude']);
+// 公司版成员的工具名和启动中心、「自有 API」页一致（Claude Code / Codex / DSH）。
+const companyApi = require('../core/company-api-config');
+const _memberLabel = kind => (companyApi.isCompany() && companyApi.LABELS[kind]) || KIND_LABELS[kind] || kind;
 
 const DEFAULT_SLOTS = [
   { kind: 'claude' },
@@ -205,10 +208,12 @@ function _aiLogo(kind) {
   return `assets/ai-logos/${base.startsWith('deepseek') ? 'deepseek' : base}.svg`;
 }
 
-function _modelOptions(kind, selected) {
-  const opts = modelOptionsFor(kind);
-  return opts.map((option, i) =>
-    `<option value="${_escapeHtml(option.id)}"${option.id === selected || (!selected && i === 0) ? ' selected' : ''}>${_escapeHtml(option.label || option.id)}</option>`
+// opts 用成员调参算出的清单（和启动中心同一份）：公司版 Claude Code / Codex 多一项空值的「沿用本机 CLI 配置」，
+// modelOptionsFor 的清单里没有它。
+function _modelOptions(opts, selected) {
+  const chosen = opts.some(option => option.id === selected) ? selected : opts[0]?.id;
+  return opts.map(option =>
+    `<option value="${_escapeHtml(option.id)}"${option.id === chosen ? ' selected' : ''}>${_escapeHtml(option.label || option.id)}</option>`
   ).join('');
 }
 
@@ -281,10 +286,10 @@ function _slotHtml(i, spec, isGroup) {
   const tuning = window.WorkspaceController.resolveSessionTuning(def.kind, def.model, def);
   const providerKinds = isGroup ? GROUP_MEMBER_KINDS : Array.from(MODEL_KINDS);
   const aiOptions = providerKinds.filter(k => !HIDDEN_CREATE_KINDS.has(k)).map(k =>
-    `<option value="${_escapeHtml(k)}"${k === def.kind ? ' selected' : ''}>${_escapeHtml(KIND_LABELS[k] || k)}</option>`
+    `<option value="${_escapeHtml(k)}"${k === def.kind ? ' selected' : ''}>${_escapeHtml(_memberLabel(k))}</option>`
   ).join('');
   const avatarSrc = _aiLogo(def.kind);
-  const avatarAlt = KIND_LABELS[def.kind] || def.kind;
+  const avatarAlt = _memberLabel(def.kind);
   const orchLead = isGroup && _orchestrationOn && i === 0;
   const label = !isGroup ? `Slot ${i + 1} · ${SLOT_NAMES[i]}`
     : orchLead ? '成员 1 · 负责人'
@@ -319,7 +324,7 @@ function _slotHtml(i, spec, isGroup) {
       <div class="mcm-slot-fields">
         <label${(aiOptions.match(/<option/g) || []).length <= 1 ? ' style="display:none"' : ''}><span class="mcm-slot-field-name">AI</span><select class="mcm-ai-select">${aiOptions}</select></label>
         ${def.kind === 'deepseek-claude' ? _deepseekRouteHtml(def.deepseekRoute) : ''}
-        <label><span class="mcm-slot-field-name">模型</span><select class="mcm-model-select">${_modelOptions(def.kind, def.model)}</select></label>
+        <label><span class="mcm-slot-field-name">模型</span><select class="mcm-model-select">${_modelOptions(tuning.modelOptions, def.model)}</select></label>
         ${effortField}
         ${mcpField}
         ${fastField}
@@ -379,6 +384,8 @@ function _syncGroupSlotsFromDom({ strict = false } = {}) {
 //   补齐后按顺序轮换。同一种 AI 允许多开（两个 Claude 跑不同模型/角色是有效用法），
 //   成员数也不设上限——实际基本停在 3 人，但那是用户的选择，不该由代码写死。
 function _nextGroupMemberKind() {
+  // 公司版：新加的成员默认还是 CodeAgent，要换工具在成员卡的「AI」下拉里改。
+  if (companyApi.isCompany() && GROUP_MEMBER_KINDS.includes('codeagent')) return 'codeagent';
   const present = new Set(_groupSlots.map(slot => slot.kind));
   return GROUP_MEMBER_KINDS.find(kind => !present.has(kind))
     || GROUP_MEMBER_KINDS[_groupSlots.length % GROUP_MEMBER_KINDS.length];
@@ -428,8 +435,8 @@ function _renderSlots() {
   if (addBtn && _isGroupChat) {
     const nextKind = _nextGroupMemberKind();
     addBtn.disabled = false;
-    addBtn.textContent = `+ 添加 ${KIND_LABELS[nextKind] || nextKind}`;
-    addBtn.title = `添加成员 ${KIND_LABELS[nextKind] || nextKind}；同一种 AI 可以多开，人数不设上限`;
+    addBtn.textContent = `+ 添加 ${_memberLabel(nextKind)}`;
+    addBtn.title = `添加成员 ${_memberLabel(nextKind)}；同一种 AI 可以多开，人数不设上限`;
   }
 }
 
@@ -606,6 +613,8 @@ async function _onCreate() {
     const titleInput = _modalEl.querySelector('#mcm-title-input');
     const title = titleInput ? titleInput.value.trim() : '';
 
+    // 成员选了 Claude Code / Codex / DSH 的公司模型或自有来源：和启动中心一样先把来源切好。
+    await window.WorkspaceController.prepareCompanyMembers(slots);
     const workspace = await _syncWorkspace();
     // 创建时按钮上读秒（2026-11-06 用户：等 CodeAgent 要看到等了多久）。
     const waitUi = require('./wait-progress');

@@ -27,7 +27,7 @@ test('company defaults apply only to tools without prior sessions, including res
   }
 });
 
-test('external single-session tools do not become company dream or group runtimes', () => {
+test('external single-session tools do not become company dream runtimes but can be group members', () => {
   for (const kind of [...api.KINDS, 'powershell']) {
     assert.doesNotThrow(() => policy.assertKind(kind));
     assert.equal(policy.taskKindAllowed(kind), false);
@@ -38,6 +38,14 @@ test('external single-session tools do not become company dream or group runtime
     assert.equal(policy.taskKindAllowed(kind), true);
     assert.doesNotThrow(() => policy.assertTaskKind(kind));
   }
+  for (const kind of ['codeagent', ...api.KINDS]) {
+    assert.equal(policy.groupKindAllowed(kind), true);
+    assert.equal(policy.groupKindAllowed(kind + '-resume'), true);
+    assert.doesNotThrow(() => policy.assertGroupKind(kind));
+  }
+  assert.equal(policy.groupKindAllowed('powershell'), false);
+  assert.throws(() => policy.assertGroupKind('powershell'), /群聊成员可选/);
+  assert.throws(() => policy.assertGroupKind('gemini'), /不支持/);
   assert.deepEqual(require('../renderer/memory-panel').dreamKinds(), ['codeagent']);
 });
 
@@ -65,26 +73,43 @@ function meetingBoundary() {
   return { handlers, internal, calls: () => ({ lookups, auth }) };
 }
 
-test('new company groups reject external slots and slotSpecs before any account or session work', async () => {
+test('new company groups accept the launch-center tools as members and reject other kinds before any account or session work', async () => {
   const fixture = meetingBoundary();
-  for (const kind of api.KINDS) {
-    for (const field of ['slots', 'slotSpecs']) {
-      await assert.rejects(fixture.handlers.get('create-meeting')(null, { [field]: [{ kind: 'codeagent' }, { kind }] }), /只使用 CodeAgent/);
-    }
+  for (const field of ['slots', 'slotSpecs']) {
+    await assert.rejects(fixture.handlers.get('create-meeting')(null, { [field]: [{ kind: 'codeagent' }, { kind: 'powershell' }] }), /群聊成员可选/);
   }
   assert.deepEqual(fixture.calls(), { lookups: 0, auth: 0 });
-  await assert.rejects(fixture.handlers.get('create-meeting')(null, { slots: [{ kind: 'codeagent' }] }), /reached-auth/);
+  for (const kind of ['codeagent', ...api.KINDS]) {
+    await assert.rejects(fixture.handlers.get('create-meeting')(null, { slots: [{ kind: 'codeagent' }, { kind }] }), /reached-auth/);
+  }
 });
 
-test('adding a company group member is blocked at IPC and the shared internal entry', async () => {
+test('adding a company group member accepts the launch-center tools at IPC and the shared internal entry', async () => {
   const fixture = meetingBoundary();
-  for (const kind of [...api.KINDS, 'codex-resume', 'claude-resume']) {
-    await assert.rejects(fixture.handlers.get('add-meeting-sub')(null, { meetingId: 'existing-group', kind }), /只使用 CodeAgent/);
-    await assert.rejects(fixture.internal.addMeetingSubInternal('existing-group', kind), /只使用 CodeAgent/);
-  }
+  await assert.rejects(fixture.handlers.get('add-meeting-sub')(null, { meetingId: 'existing-group', kind: 'powershell' }), /群聊成员可选/);
+  await assert.rejects(fixture.internal.addMeetingSubInternal('existing-group', 'powershell'), /群聊成员可选/);
   assert.deepEqual(fixture.calls(), { lookups: 0, auth: 0 });
-  await assert.rejects(fixture.handlers.get('add-meeting-sub')(null, { meetingId: 'existing-group', kind: 'codeagent' }), /reached-meeting/);
-  assert.deepEqual(fixture.calls(), { lookups: 1, auth: 0 });
+  for (const kind of ['codeagent', ...api.KINDS]) {
+    await assert.rejects(fixture.handlers.get('add-meeting-sub')(null, { meetingId: 'existing-group', kind }), /reached-meeting/);
+  }
+  assert.deepEqual(fixture.calls(), { lookups: 4, auth: 0 });
+});
+
+test('group members save the model source the same way the launch center does', t => {
+  t.mock.method(require('../core/state-store'), 'load', () => ({ sessions: [] }));
+  const cards = require('../renderer/launch-model-cards');
+  const fresh = api.settings({});
+  // 全新用户：成员选公司模型，建群前把这个工具切到公司模型；只有 CodeAgent 成员时什么都不改。
+  assert.deepEqual(cards.memberSaveRequests([{ kind: 'codeagent', model: 'GLM-5.2-WX-Auto' }], fresh), []);
+  assert.deepEqual(cards.memberSaveRequests([{ kind: 'codeagent' }, { kind: 'claude', model: 'GLM-5.2-WX' }, { kind: 'deepseek-acp', model: 'deepseek-v4.1-flash-1017' }], fresh),
+    [{ kind: 'claude', backend: 'proxy', model: 'GLM-5.2-WX' }, { kind: 'deepseek-acp', backend: 'proxy', model: 'deepseek-v4.1-flash-1017' }]);
+  // 已经在用公司模型：两个成员各带各的模型，不用再改设置。
+  const proxied = api.settings(api.withSettings({}, { kind: 'codex', backend: 'proxy', model: 'GLM-5.2-WX' }));
+  assert.deepEqual(cards.memberSaveRequests([{ kind: 'codex', model: 'GLM-5.2-WX' }, { kind: 'codex', model: 'deepseek-v4.1-flash-1017' }], proxied), []);
+  // 成员选「沿用本机 CLI 配置」：切回自有来源。
+  assert.deepEqual(cards.memberSaveRequests([{ kind: 'codex' }], proxied), [{ kind: 'codex', backend: 'own' }]);
+  // 同一种工具不能一半公司模型一半自有来源。
+  assert.throws(() => cards.memberSaveRequests([{ kind: 'codex', model: 'GLM-5.2-WX' }, { kind: 'codex' }], proxied), /Codex 成员不能一部分用公司模型/);
 });
 
 test('non-company policy keeps allowed external dream and group runtimes', () => {
@@ -123,7 +148,7 @@ test('distribution allows the three external tools and resume kinds without enab
   assert.throws(() => policy.assertKind('gemini'), /不支持/);
   assert.equal(distribution.featureEnabled('accounts'), false);
   assert.equal(distribution.featureEnabled('quotaBar'), false);
-  assert.deepEqual(require('../core/ai-kinds').GROUP_MEMBER_KINDS, ['codeagent']);
+  assert.deepEqual(require('../core/ai-kinds').GROUP_MEMBER_KINDS, ['codeagent', 'claude', 'codex', 'deepseek-acp']);
 });
 const request = (kind, extra = {}) => ({ kind, baseURL: 'https://api.example.test/v1/', apiKey: 'fixture-api-key', model: 'company/model-1', ...extra });
 test('saving API settings preserves unrelated configuration and never returns a credential', () => {

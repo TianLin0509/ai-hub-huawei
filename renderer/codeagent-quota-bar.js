@@ -12,12 +12,29 @@ const USAGE_STALE_MS = 6 * 3600 * 1000;
 const TOKEN_WARN_PERCENT = 50;
 const TOKEN_DANGER_PERCENT = 80;
 
+// 当前会话用的是哪个号、哪个模型：CodeAgent 会话看它自己；Claude / Codex / DSH 走公司模型反代时看反代分的号
+// （renderer/company-route-view.js quotaTarget，2026-11-12）。其他会话返回 null，额度各行显示号的默认模型。
+function quotaTargetFor(session) {
+  if (!session) return null;
+  if (require('../core/ai-kinds').isCodeAgentKind(session.kind)) return { account: session.codeagentPoolAccount || 'personal', model: session.currentModel?.id || '' };
+  try { return require('./company-route-view').quotaTarget(session); } catch { return null; }
+}
 function tokenModelForAccount(key, session, defaults) {
-  return require('../core/ai-kinds').isCodeAgentKind(session?.kind) && (session.codeagentPoolAccount || 'personal') === key
-    ? session.currentModel?.id || defaults[key] || '' : defaults[key] || '';
+  const target = quotaTargetFor(session);
+  return target && target.account === key ? target.model || defaults[key] || '' : defaults[key] || '';
+}
+// 反代用的模型名比菜单里的短（GLM-5.2-WX 对菜单 GLM-5.2-WX-Auto）：精确对不上时，菜单里唯一一行以它开头的也算。
+function modelRow(entry, modelId) {
+  const menu = require('../core/codeagent-usage-menu');
+  const exact = menu.modelUsage(entry, modelId);
+  if (exact || !Array.isArray(entry?.models)) return exact;
+  const squash = s => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  const want = squash(modelId);
+  const hits = want ? entry.models.filter(m => !menu.isTruncatedName(m.name) && squash(m.name).startsWith(want)) : [];
+  return hits.length === 1 ? hits[0] : null;
 }
 function tokenUsage(entry, modelId) {
-  const model = modelId ? require('../core/codeagent-usage-menu').modelUsage(entry, modelId)
+  const model = modelId ? modelRow(entry, modelId)
     : entry?.models?.find(item => Number.isFinite(item.day?.pct));
   if (!Number.isFinite(model?.day?.pct)) return null;
   const pct = model.day.pct;
@@ -25,7 +42,7 @@ function tokenUsage(entry, modelId) {
     .map(([window, label]) => ({ window, label, pct: model[window]?.pct }))
     .filter(item => Number.isFinite(item.pct) && item.pct >= TOKEN_DANGER_PERCENT)
     .sort((a, b) => b.pct - a.pct)[0] || null;
-  return { window: 'day', label: '今日', pct, name: modelId || model.name, shortWarning,
+  return { window: 'day', label: '今日', pct, name: model.name || modelId, row: model, shortWarning,
     periods: { day: pct, hour: model.hour?.pct, min: model.min?.pct },
     level: pct >= TOKEN_DANGER_PERCENT ? 'danger' : pct >= TOKEN_WARN_PERCENT ? 'warn' : '' };
 }
@@ -159,4 +176,4 @@ function createCodeAgentQuotaBar({ document, ipcRenderer, storage = null, now = 
   return { update, render, setUsage, setAllowed, usageFor, openUsage, readings: () => ({ ...readings }) };
 }
 
-module.exports = { createCodeAgentQuotaBar, tokenModelForAccount, tokenUsage, TOKEN_WARN_PERCENT, TOKEN_DANGER_PERCENT };
+module.exports = { createCodeAgentQuotaBar, tokenModelForAccount, quotaTargetFor, tokenUsage, TOKEN_WARN_PERCENT, TOKEN_DANGER_PERCENT };
