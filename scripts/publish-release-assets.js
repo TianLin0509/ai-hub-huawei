@@ -10,7 +10,7 @@ const { setTimeout: delay } = require('node:timers/promises');
 
 const CHECKSUMS = 'SHA256SUMS.txt';
 const MARKER = '.release-snapshot.json';
-const DEFAULTS = { totalTimeoutMs: 25 * 60_000, uploadTimeoutMs: 5 * 60_000, apiTimeoutMs: 45_000, attempts: 3 };
+const DEFAULTS = { totalTimeoutMs: 25 * 60_000, uploadTimeoutMs: 5 * 60_000, apiTimeoutMs: 45_000, attempts: 3, lookupDelayMs: 3_000 };
 const hash = data => crypto.createHash('sha256').update(data).digest('hex');
 const safeName = name => typeof name === 'string' && name && !/^[-.]/.test(name)
   && !/[\\/#:\r\n\0]/.test(name) && path.basename(name) === name;
@@ -174,7 +174,11 @@ async function publishRelease(options = {}, deps = {}) {
   if (!current) {
     try { gh(['release', 'create', tag, '--repo', repo, '--verify-tag', '--draft', '--prerelease', '--title', `AI Hub Community ${tag}`, '--notes', 'Windows x64.']); }
     catch (error) { current = release(); if (!current) throw error; }
-    current ||= release();
+    // A freshly created draft can take a few seconds to appear in the release list.
+    for (let i = 0; !current && i < 5; i++) {
+      if (i) await new Promise(resolve => setTimeout(resolve, config.lookupDelayMs));
+      current = release();
+    }
   }
   requireFact(current?.draft === true, 'Release must remain a draft while assets are incomplete');
   const expectedNames = new Set(batch.assets.map(asset => asset.name));

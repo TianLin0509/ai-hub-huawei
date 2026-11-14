@@ -263,6 +263,15 @@ test('an uncertain draft creation response resumes the draft created by that req
   assert.equal((await f.publish()).ok, true); assert.equal(f.state.uploads.length, 9);
 });
 
+test('a new draft that shows up in the release list only after a delay is still found', async t => {
+  const f = fixture(t); let hidden = 0;
+  f.state.hook = (args, _opts, h) => {
+    if (args[0] === 'release' && args[1] === 'create') hidden = 2;
+    else if (args[0] === 'api' && String(args[1]).startsWith(`repos/${REPO}/releases?`) && hidden > 0) { hidden--; return h.ok('[]'); }
+  };
+  assert.equal((await f.publish({ lookupDelayMs: 1 })).ok, true); assert.equal(f.state.uploads.length, 9);
+});
+
 test('authentication failures are not interpreted as a missing release', async t => {
   const f = fixture(t); f.state.hook = () => f.failed('gh: unauthorized (HTTP 401)');
   await assert.rejects(f.publish(), /GitHub request failed/);
