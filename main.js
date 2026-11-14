@@ -199,6 +199,7 @@ const searchFirstBuildIdleSec = isIsolatedHub() && String(process.env.HUB_SESSIO
   ? 0 : searchFirstBuild.idleSecondsSetting();
 const searchEventLog = require('./core/window-keep-rendering.js').createWindowEventLog(path.join(getHubDataDir(), 'logs', 'window-events.log'), { logger: {} });
 const sessionSearchService = new SessionSearchService({
+  getIdleSeconds: () => require('electron').powerMonitor.getSystemIdleTime(),
   // 只在会自动预热的 Hub 上生效（隔离测试 Hub 本来就不预热）。
   holdBackground: searchFirstBuildIdleSec > 0 && !searchFirstBuild.firstBuildDone(getHubDataDir()),
   onStatusChange: status => {

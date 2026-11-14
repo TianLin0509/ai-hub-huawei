@@ -23,6 +23,9 @@ class SessionSearchService {
     this._fork = options.fork || fork;
     this._childPath = options.childPath || path.join(__dirname, 'session-search-child.js');
     this._prewarmEnabled = options.prewarmEnabled === true;
+    this._getIdleSeconds = options.getIdleSeconds || (() => 0);
+    this._compactionBusy = false;
+    this._lastCompactionProbeAt = 0;
     this._childData = {
       cachePath: options.cachePath || null,
       databasePath: options.databasePath || sqlitePathForLegacyCache(options.cachePath),
@@ -134,10 +137,10 @@ class SessionSearchService {
     clearTimeout(this._idleTimer);
     this._idleTimer = null;
     if (!this._idleMs || this._closed || !this._child || this._idleStopping || this._pending.size
-        || this._maintenanceBusy || this._queuedSnapshot || this._status.refreshing || this._childBusy) return;
+        || this._maintenanceBusy || this._compactionBusy || this._queuedSnapshot || this._status.refreshing || this._childBusy) return;
     this._idleTimer = setTimeout(() => {
       this._idleTimer = null;
-      if (this._closed || this._pending.size || this._maintenanceBusy || this._queuedSnapshot
+      if (this._closed || this._pending.size || this._maintenanceBusy || this._compactionBusy || this._queuedSnapshot
           || this._status.refreshing || this._childBusy) return;
       const child = this._child;
       this._child = null;
@@ -294,7 +297,7 @@ class SessionSearchService {
     clearTimeout(this._idleTimer);
     this._queuedSnapshot = snapshot;
     this._queuedSources.add(String(source || 'reconcile'));
-    if(this._backgroundHeld || this._queueTimer || this._maintenanceBusy) return;
+    if(this._backgroundHeld || this._queueTimer || this._maintenanceBusy || this._compactionBusy) return;
     this._scheduleQueueFlush(400);
   }
 
@@ -305,7 +308,7 @@ class SessionSearchService {
   }
 
   async _flushRefreshQueue() {
-    if(this._closed || this._maintenanceBusy || !this._queuedSnapshot) return;
+    if(this._closed || this._maintenanceBusy || this._compactionBusy || !this._queuedSnapshot) return;
     this._maintenanceBusy=true;
     this._lastSyncStartedAt=Date.now();
     const queued=this._queuedSnapshot;this._queuedSnapshot=null;this._queuedSources.clear();
@@ -338,6 +341,29 @@ class SessionSearchService {
     }
   }
 
+  async _maybeCompact() {
+    if (this._closed || !this._prewarmEnabled || this._backgroundHeld || this._compactionBusy
+        || this._maintenanceBusy || this._reconcileBusy || this._queuedSnapshot || this._pending.size
+        || this._childBusy || this._status.refreshing || !this._childData.databasePath
+        || Date.now() - this._lastCompactionProbeAt < 60 * 60_000) return;
+    try {
+      const idle = Number(this._getIdleSeconds());
+      if (!Number.isFinite(idle) || idle < 180 || !fs.existsSync(this._childData.databasePath)) return;
+    } catch { return; }
+    this._compactionBusy = true;
+    this._lastCompactionProbeAt = Date.now();
+    try {
+      const result = await this._request('compact');
+      console.info('[session-search] compaction:', JSON.stringify(result));
+    } catch (error) {
+      console.warn('[session-search] compaction skipped:', error.message);
+    } finally {
+      this._compactionBusy = false;
+      if (!this._closed && !this._backgroundHeld && this._queuedSnapshot && !this._queueTimer) this._scheduleQueueFlush(400);
+      this._armIdleTimer();
+    }
+  }
+
   startMaintenance(getSnapshot) {
     if(this._closed || this._maintenanceTimer || !this._prewarmEnabled) return;
     // The minute tick must stay disk-free: thousands of awaited stat calls
@@ -345,6 +371,7 @@ class SessionSearchService {
     this._maintenanceTimer = setInterval(() => {
       if (!this._closed && !this._backgroundHeld && this._queuedSnapshot
           && !this._queueTimer && !this._maintenanceBusy) this._scheduleQueueFlush(400);
+      void this._maybeCompact();
     }, 60_000);
     this._maintenanceTimer.unref?.();
     const reconcile = () => {

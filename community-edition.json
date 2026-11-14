@@ -58,9 +58,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "修复：关闭 Hub 时偶发崩溃（多个终端同时退出时终端组件抢同一份数据），实测关窗 20 次 0 崩溃"
+    "会话搜索索引自动瘦身：电脑空闲时每天最多整理一次，实测 1.27 GB 缩到 0.40 GB，整理期间搜索照常可用；磁盘空间不够时自动跳过"
   ],
-  "version": "5.6.27",
+  "version": "5.6.28",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

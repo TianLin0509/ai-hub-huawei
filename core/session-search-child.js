@@ -5,6 +5,7 @@ const { SessionSearchEngine } = require('./session-search-engine.js');
 let engine = null;
 let closing = false;
 let activeRefreshes = 0;
+let compactionPromise = null;
 
 function withRuntime(status) {
   const memory = process.memoryUsage();
@@ -39,6 +40,7 @@ async function handle(message = {}) {
     // activity as well so the parent cannot retire a still-running writer.
     const refresh = engine.refresh.bind(engine);
     engine.refresh = async (...args) => {
+      if (compactionPromise) return { ...engine.status(), phase: 'waiting_writer' };
       activeRefreshes += 1;
       send({ type: 'status', status: withRuntime(engine.status()) });
       try { return await refresh(...args); }
@@ -52,11 +54,25 @@ async function handle(message = {}) {
   }
   if (message.type === 'close') {
     closing = true;
+    await compactionPromise;
     if (engine) await engine.close();
     engine = null;
     return { closed: true };
   }
   if (!engine) throw new Error('session search child is not initialized');
+  if (message.type === 'compact') {
+    if (compactionPromise || activeRefreshes || engine.refreshPromise) return { skipped: 'writer_active' };
+    activeRefreshes += 1;
+    send({ type: 'status', status: withRuntime(engine.status()) });
+    compactionPromise = require('./session-search-compaction').runCompaction(engine.options.databasePath);
+    try { return await compactionPromise; }
+    finally {
+      compactionPromise = null;
+      activeRefreshes -= 1;
+      engine.index.statsCache = null;
+      send({ type: 'status', status: withRuntime(engine.status()) });
+    }
+  }
   if (message.type === 'status') return withRuntime(engine.status());
   if (message.type === 'refresh') return engine.refresh(message.snapshot || {}, { force: message.force === true, immediate: message.immediate === true });
   if (message.type === 'search') return engine.search(message.request || {}, message.snapshot || {});

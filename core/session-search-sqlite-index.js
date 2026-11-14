@@ -88,6 +88,7 @@ class SqliteSessionSearchIndex {
     // 页缓存是私有内存，按连接各占一份。查询主连接保留 128MB；后台写线程只做增量写，
     // 由它传入更小的值。
     this.cacheSizeKb = Math.max(2048, Math.round((Number(options.sqliteCacheMb) || 128) * 1024));
+    this.busyTimeoutMs = Math.max(0, Number(options.sqliteBusyTimeoutMs ?? 5000));
     this.db = null;
     this.statsCache = null;
     this.recoveredDatabaseFiles = [];
@@ -106,7 +107,7 @@ class SqliteSessionSearchIndex {
     this.db = new DatabaseSync(this.databasePath);
     // cache_size 从 32MB 提到 128MB、并开 1GB mmap：这个库实测 1.8GB，短词查询要顺序
     // 扫 docs 表，页缓存太小时每次搜索都在重新读盘。
-    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA temp_store=FILE; PRAGMA cache_size=-${this.cacheSizeKb}; PRAGMA mmap_size=1073741824; PRAGMA busy_timeout=5000; PRAGMA foreign_keys=ON;`);
+    this.db.exec(`PRAGMA busy_timeout=${this.busyTimeoutMs}; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA temp_store=FILE; PRAGMA cache_size=-${this.cacheSizeKb}; PRAGMA mmap_size=1073741824; PRAGMA foreign_keys=ON;`);
     // WAL 从不截断（journal_size_limit 默认 -1），实测生产环境攒到 290MB，
     // 每次读都要先过一遍这么大的 WAL 索引。开库时截断一次，之后限制在 64MB。
     this.db.exec('PRAGMA journal_size_limit=67108864;');
