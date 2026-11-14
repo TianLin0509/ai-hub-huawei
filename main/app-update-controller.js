@@ -115,7 +115,8 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       let variant = null;
       if (plan.kind === 'incremental') {
         const delta = manifest.incrementalDelta;
-        if (delta && resDir && verifyLocalFiles(delta.requires, resDir).ok) variant = 'delta';
+        if (delta && resDir && (delta.schema !== 3 || delta.baseVersion === currentVersion)
+          && verifyLocalFiles(delta.requires, resDir).ok) variant = 'delta';
         else if (manifest.incremental) {
           variant = 'complete';
           // 小包的前提是本机那些没变的文件确实还是上一版的样子；对不上就退回完整更新包，仍然一步升到最新版。
@@ -230,7 +231,11 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       emit({ phase: 'available' });
       await check({ silent: true, quietAllowed: false });
       if (plan && plan.kind !== 'none' && plan.asset && plan.asset.file !== triedFile) return download(true);
+      if (plan?.variant === 'delta' && manifest.incremental) return downloadComplete('差量包暂时不可用，正在自动下载完整更新包');
       return emit({ phase: 'error', attempts: result.attempts, error: '所有下载源都失败了。可以稍后再试，或打开发布页手动下载安装包。' });
+    }
+    if (!result.ok && !result.cancelled && plan.variant === 'delta' && manifest.incremental) {
+      return downloadComplete('差量包下载或校验失败，正在自动下载完整更新包');
     }
     if (!result.ok) {
       return emit({ phase: result.cancelled ? 'available' : 'error', attempts: result.attempts,
@@ -241,12 +246,17 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
         if (!state.canApply) return emit({ phase: 'error', attempts: result.attempts, error: '开发运行的 Hub 不能自动替换程序文件，请用安装版' });
         staged = stageIncremental({ dataDir, payloadFile: dest, resourcesDir: env.AI_HUB_UPDATE_RESOURCES || resourcesPath, version: manifest.version, from: currentVersion,
           exe: process.execPath, args: process.argv.slice(1), simulateFailure: env.AI_HUB_UPDATE_SIMULATE_FAILURE || null,
-          elevateMode: env.AI_HUB_UPDATE_ELEVATE_MODE || null });
+          elevateMode: env.AI_HUB_UPDATE_ELEVATE_MODE || null,
+          expectedAsar: plan.variant === 'delta' ? manifest.incrementalDelta?.resultAsar : null });
         fs.rmSync(dest, { force: true });
       } else {
         staged = { installer: dest };
       }
     } catch (error) {
+      if (plan.variant === 'delta' && manifest.incremental) {
+        fs.rmSync(dest, { force: true });
+        return downloadComplete('差量重建或校验失败，正在自动下载完整更新包');
+      }
       // 下载到解包之间程序文件被改动过（很少见）：让用户再检查一次，下一次会自动改用完整更新包。
       if (error.code === 'stale-local') return emit({ phase: 'error', attempts: result.attempts,
         error: `本机程序文件在下载期间被改动过（${error.stale?.[0]?.path || '未知文件'}），请重新检查更新，这次会自动改用完整更新包` });
@@ -258,6 +268,15 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       canary.write(dataDir, { releases: { ...(saved.releases || {}), [manifest.version]: manifest.canary.sha } });
     }
     return emit({ phase: 'ready', attempts: result.attempts, readySource: result.source.name, needsAdmin: !!(staged && staged.needsAdmin) });
+  }
+
+  function downloadComplete(reason) {
+    staged = null;
+    plan = { ...plan, variant: 'complete', asset: manifest.incremental, reason };
+    emit({ phase: 'available', error: null, plan: { kind: plan.kind, variant: plan.variant,
+      reason, bytes: plan.asset.bytes, file: plan.asset.file } });
+    // The complete variant cannot recurse back into the delta fallback.
+    return download(true);
   }
 
   function cancel() { if (abort) abort.abort(); if (checkAbort) checkAbort.abort(); return state; }

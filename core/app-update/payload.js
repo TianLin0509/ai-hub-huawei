@@ -11,10 +11,16 @@
 // `unchanged` 里留下路径和 sha256、不再重复打包字节（会议室运行时 76.8MB 常年不变，是省下来的大头）。
 // 解包时对 unchanged 逐个核对本机文件：对不上就报 stale-local，调用方改用完整包，绝不半套替换。
 // schema 1（没有 unchanged）照旧能解，老版本的客户端也只认 schema 1 的包。
+// schema 3: app.asar contains an exact-file-range patch, tied to one baseline
+// version and SHA256. A real unpacked capability file in requires keeps legacy
+// clients on the complete schema-1 payload; reconstructed bytes must also match
+// the resultAsar checksum in the release manifest before any installed file moves.
 const fs = (() => { try { return require('original-fs'); } catch (_) { return require('fs'); } })();
 const path = require('path');
 const zlib = require('zlib');
 const { createHash } = require('crypto');
+const { createAsarDelta, applyAsarDelta } = require('./asar-delta');
+const ASAR_CAPABILITY = 'app.asar.unpacked/core/app-update/asar-delta-capability.json';
 
 const sha256 = buf => createHash('sha256').update(buf).digest('hex');
 const MAX_FILES = 2000;
@@ -57,7 +63,7 @@ function verifyLocalFiles(entries, resourcesDir) {
   return { ok: stale.length === 0, stale };
 }
 
-function packPayload(resourcesDir, outFile, { previous = null } = {}) {
+function packPayload(resourcesDir, outFile, { previous = null, baseAsar = null, baseVersion = null } = {}) {
   const rels = listPayloadFiles(resourcesDir);
   const buffers = rels.map(rel => fs.readFileSync(path.join(resourcesDir, ...rel.split('/'))));
   const entries = rels.map((rel, i) => ({ path: rel, bytes: buffers[i].length, sha256: sha256(buffers[i]) }));
@@ -66,25 +72,48 @@ function packPayload(resourcesDir, outFile, { previous = null } = {}) {
   const unchanged = prev.size ? entries.filter(e => e.path !== 'app.asar' && prev.get(e.path) === e.sha256) : [];
   const isUnchanged = new Set(unchanged.map(e => e.path));
   const keep = [], keepBuffers = [];
-  entries.forEach((e, i) => { if (!isUnchanged.has(e.path)) { keep.push(e); keepBuffers.push(buffers[i]); } });
-  const schema = prev.size ? 2 : 1;
-  const header = schema === 2 ? { schema, files: keep, unchanged: unchanged.map(e => ({ path: e.path, bytes: e.bytes, sha256: e.sha256 })) } : { schema, files: keep };
+  const asarDelta = baseAsar && /^\d+\.\d+\.\d+$/.test(baseVersion || '');
+  entries.forEach((e, i) => {
+    if (isUnchanged.has(e.path)) return;
+    if (asarDelta && e.path === 'app.asar') {
+      const patch = createAsarDelta(baseAsar, buffers[i]);
+      keep.push({ ...e, encoding: 'asar-files-v1', patchBytes: patch.length }); keepBuffers.push(patch);
+    } else { keep.push(e); keepBuffers.push(buffers[i]); }
+  });
+  const schema = asarDelta ? 3 : prev.size ? 2 : 1;
+  const header = { schema, files: keep, ...(schema >= 2 ? { unchanged } : {}),
+    ...(asarDelta ? { baseVersion, baseSha256: sha256(baseAsar) } : {}) };
   const body = Buffer.concat([Buffer.from(JSON.stringify(header) + '\n', 'utf8'), ...keepBuffers]);
   const gz = zlib.gzipSync(body, { level: 9 });
   fs.writeFileSync(outFile, gz);
-  return { file: outFile, bytes: gz.length, sha256: sha256(gz), schema, files: keep, unchanged, index: entries };
+  // Capability prerequisite makes schema-1/2 clients select the complete package.
+  const capability = entries.find(e => e.path === ASAR_CAPABILITY);
+  const requires = [...unchanged];
+  if (asarDelta) {
+    if (!capability) throw Error('ASAR delta capability file is missing');
+    if (!requires.some(e => e.path === ASAR_CAPABILITY)) requires.push(capability);
+    requires.push({ path: 'app.asar', bytes: baseAsar.length, sha256: sha256(baseAsar) });
+  }
+  return { file: outFile, bytes: gz.length, sha256: sha256(gz), schema, files: keep, unchanged, requires, baseVersion,
+    ...(asarDelta ? { resultAsar: entries.find(e => e.path === 'app.asar') } : {}), index: entries };
 }
 
 // 解到 destDir（按相对路径展开）。调用方已核对过整包 sha256。
 // 给了 resourcesDir 时会核对 unchanged 里的本机文件；对不上抛 stale-local，调用方改用完整包。
-function unpackPayload(gzFile, destDir, { resourcesDir = null } = {}) {
+function unpackPayload(gzFile, destDir, { resourcesDir = null, from = null, expectedAsar = null } = {}) {
   const body = zlib.gunzipSync(fs.readFileSync(gzFile), { maxOutputLength: 800 * 1024 * 1024 });
   const nl = body.indexOf(0x0a);
   if (nl < 0 || nl > 2 * 1024 * 1024) throw new Error('更新包目录损坏');
   const header = JSON.parse(body.subarray(0, nl).toString('utf8'));
-  if (!header || ![1, 2].includes(header.schema) || !Array.isArray(header.files) || !header.files.length || header.files.length > MAX_FILES) throw new Error('更新包目录不认识');
+  if (!header || ![1, 2, 3].includes(header.schema) || !Array.isArray(header.files) || !header.files.length || header.files.length > MAX_FILES) throw new Error('更新包目录不认识');
   if (!header.files.some(f => f.path === 'app.asar')) throw new Error('更新包里没有 app.asar');
-  const unchanged = header.schema === 2 && Array.isArray(header.unchanged) ? header.unchanged : [];
+  const unchanged = header.schema >= 2 && Array.isArray(header.unchanged) ? header.unchanged : [];
+  let baseAsar = null;
+  if (header.schema === 3) {
+    if (!resourcesDir || from !== header.baseVersion || !expectedAsar || !HASH.test(expectedAsar.sha256)) throw Error('ASAR 差量基线版本不一致，需要完整更新包');
+    baseAsar = fs.readFileSync(path.join(resourcesDir, 'app.asar'));
+    if (sha256(baseAsar) !== header.baseSha256) throw Error('ASAR 差量基线校验失败，需要完整更新包');
+  }
   if (unchanged.length > MAX_FILES) throw new Error('更新包目录不认识');
   if (resourcesDir && unchanged.length) {
     const check = verifyLocalFiles(unchanged, resourcesDir);
@@ -98,10 +127,22 @@ function unpackPayload(gzFile, destDir, { resourcesDir = null } = {}) {
   }
   let offset = nl + 1;
   const out = [];
+  const seen = new Set();
   for (const f of header.files) {
     if (!safeRel(f.path) || !Number.isInteger(f.bytes) || f.bytes < 0 || !HASH.test(String(f.sha256))) throw new Error(`更新包里有不允许的文件：${f.path}`);
-    const chunk = body.subarray(offset, offset + f.bytes);
-    offset += f.bytes;
+    if (seen.has(f.path)) throw Error('更新包文件重复');
+    seen.add(f.path);
+    const encoded = header.schema === 3 && f.path === 'app.asar';
+    if (f.encoding && (!encoded || f.encoding !== 'asar-files-v1')) throw Error('更新包文件编码不认识');
+    const bytes = encoded ? f.patchBytes : f.bytes;
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || bytes > body.length - offset) throw Error('更新包文件长度无效');
+    let chunk = body.subarray(offset, offset + bytes);
+    offset += bytes;
+    if (encoded) {
+      if (f.encoding !== 'asar-files-v1') throw Error('更新包缺少 ASAR 差量编码');
+      chunk = applyAsarDelta(baseAsar, chunk);
+      if (f.bytes !== expectedAsar.bytes || f.sha256 !== expectedAsar.sha256) throw Error('ASAR 差量结果与发布清单不一致');
+    }
     if (chunk.length !== f.bytes || sha256(chunk) !== f.sha256) throw new Error(`更新包里 ${f.path} 校验不一致`);
     const target = path.join(destDir, ...f.path.split('/'));
     fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -112,4 +153,4 @@ function unpackPayload(gzFile, destDir, { resourcesDir = null } = {}) {
   return out;
 }
 
-module.exports = { packPayload, unpackPayload, listPayloadFiles, verifyLocalFiles, safeRel, sha256 };
+module.exports = { packPayload, unpackPayload, listPayloadFiles, verifyLocalFiles, safeRel, sha256, ASAR_CAPABILITY };

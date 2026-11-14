@@ -191,5 +191,6 @@
   "tests/unit-hub-feedback-contact.test.js",
   "tests/unit-company-proxy-stamp-retry.test.js",
   "tests/unit-codeagent-discovery-regression.test.js",
-  "tests/unit-codeagent-transcript-account.test.js"
+  "tests/unit-codeagent-transcript-account.test.js",
+  "tests/unit-asar-delta.test.js"
 ]

@@ -173,12 +173,12 @@ function canWriteDir(dir) {
 
 // elevateMode 只给测试用：'plain' 不弹授权框、按普通权限跑管理员那一份；'cancel' 模拟用户在授权框点了「否」。
 function stageIncremental({ dataDir, payloadFile, resourcesDir, version, from, exe, args = [], pid = process.pid, simulateFailure = null, relaunch = true,
-  elevateMode = null, leftoverWaitSeconds = 30 }) {
+  elevateMode = null, leftoverWaitSeconds = 30, expectedAsar = null }) {
   const p = stagingPaths(dataDir);
   fs.rmSync(p.newDir, { recursive: true, force: true });
   fs.mkdirSync(p.newDir, { recursive: true });
   // app.asar 放最后换：中途断掉时版本号还是旧的，下次检查发现文件对不上，会改下完整更新包补齐；反过来就再也不会更新了。
-  const unpacked = unpackPayload(payloadFile, p.newDir, { resourcesDir });
+  const unpacked = unpackPayload(payloadFile, p.newDir, { resourcesDir, from, expectedAsar });
   const files = [...unpacked.filter(f => f.path !== 'app.asar'), ...unpacked.filter(f => f.path === 'app.asar')];
   const plan = { version, from, pid, exe, args, relaunch, waitSeconds: 90, resourcesDir, appDir: path.dirname(path.resolve(resourcesDir)), leftoverWaitSeconds,
     newDir: p.newDir, stagingDir: p.root, resultFile: p.result, startedFile: p.started, cancelFile: p.cancel, files, ...(simulateFailure ? { simulateFailure } : {}), ...(elevateMode ? { elevateMode } : {}) };

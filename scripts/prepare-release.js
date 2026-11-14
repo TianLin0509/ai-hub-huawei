@@ -7,9 +7,9 @@ for(const file of ['community-gui/report.json','community-packaged-gui/report.js
   const evidence=JSON.parse(fs.readFileSync(path.join(root,'artifacts',file),'utf8'));
   if(evidence.passed!==true)throw Error('Release verification not passed: '+file);
 }
-const sha=execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim();
+const sha=execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8',windowsHide:true}).trim();
 for(const name of [`AIHubHuawei-${version}-win-x64.zip`,`AIHubHuawei-Setup-${version}.exe`])if(!fs.existsSync(path.join(dist,name)))throw Error('Missing release asset: '+name);
-execFileSync('git',['archive','--format=zip','-o',path.join(dist,`AIHubHuawei-source-${version}.zip`),'HEAD'],{cwd:root});
+execFileSync('git',['archive','--format=zip','-o',path.join(dist,`AIHubHuawei-source-${version}.zip`),'HEAD'],{cwd:root,windowsHide:true});
 // The published installer must install this release when run without -Version.
 const installer=fs.readFileSync(path.join(root,'scripts/install-release.ps1'),'utf8');
 const defaultVersion=(/\[string\]\$Version\s*=\s*'([^']+)'/.exec(installer)||[])[1];
@@ -53,10 +53,10 @@ async function previousIndex(){
   const pick=doc=>{
     if(!doc||!/^\d+\.\d+\.\d+$/.test(String(doc.version||''))||compareVersions(doc.version,version)>=0)return null;
     const index=validIndex(doc.filesIndex);
-    return index?{version:doc.version,index}:null;
+    return index?{version:doc.version,index,document:doc}:null;
   };
   if(process.env.AI_HUB_PREVIOUS_INDEX){
-    try{const hit=pick(JSON.parse(fs.readFileSync(process.env.AI_HUB_PREVIOUS_INDEX,'utf8')));if(hit){console.log(`上一版文件索引来自本机文件（${hit.index.length} 个文件）`);return hit.index;}}catch(error){console.warn('读取上一版索引失败：'+error.message);}
+    try{const hit=pick(JSON.parse(fs.readFileSync(process.env.AI_HUB_PREVIOUS_INDEX,'utf8')));if(hit){console.log(`上一版文件索引来自本机文件（${hit.index.length} 个文件）`);return hit;}}catch(error){console.warn('读取上一版索引失败：'+error.message);}
   }
   for(const src of (edition.update.sources||[])){
     if(!src||!src.manifest)continue;
@@ -65,13 +65,13 @@ async function previousIndex(){
       if(!response.ok)continue;
       const doc=await response.json();
       const hit=pick(doc);
-      if(hit){console.log(`上一版文件索引来自 ${src.id||src.manifest} 的 latest.json（${hit.index.length} 个文件）`);return hit.index;}
+      if(hit){console.log(`上一版文件索引来自 ${src.id||src.manifest} 的 latest.json（${hit.index.length} 个文件）`);return {...hit,packageUrl:String(src.files||'').replace('{version}',hit.version)+doc.incremental?.file};}
       // 老版本的 latest.json 没有索引：只读它更新包的目录。
       if(doc&&doc.version&&doc.incremental&&doc.incremental.file&&/^\d+\.\d+\.\d+$/.test(String(doc.version))&&compareVersions(doc.version,version)<0){
         const base=String(src.files||'').replace('{version}',doc.version);
         if(base){
           const index=await indexFromPackage(base+doc.incremental.file);
-          if(index){console.log(`上一版文件索引来自 ${src.id||src.manifest} 的更新包目录（${index.length} 个文件）`);return index;}
+          if(index){console.log(`上一版文件索引来自 ${src.id||src.manifest} 的更新包目录（${index.length} 个文件）`);return {version:doc.version,index,document:doc,packageUrl:base+doc.incremental.file};}
         }
       }
     }catch(error){console.warn(`从 ${src.id||src.manifest} 取上一版索引失败：${error.message}`);}
@@ -90,15 +90,16 @@ async function main(){
     // 小包：和上一版逐字节一致的文件不进包。没有上一版索引、或省不下东西时不发小包。
     const previous=await previousIndex();
     let delta=null,deltaName=`AIHubHuawei-${version}-update-delta.gz`;
-    if(previous)delta=packPayload(resources,path.join(dist,deltaName),{previous});
-    if(delta&&(!delta.unchanged.length||delta.bytes>=packed.bytes)){try{fs.unlinkSync(path.join(dist,deltaName));}catch(_){}delta=null;}
+    if(previous)delta=await require('./prepare-asar-delta').prepareDelta(resources,path.join(dist,deltaName),{previous});
+    if(delta&&((delta.schema!==3&&!delta.unchanged.length)||delta.bytes>=packed.bytes)){try{fs.unlinkSync(path.join(dist,deltaName));}catch(_){}delta=null;}
     const setup=assets.find(a=>a.name===`AIHubHuawei-Setup-${version}.exe`);
     const electronVersion=JSON.parse(fs.readFileSync(path.join(root,'node_modules','electron','package.json'),'utf8')).version;
     const latest={schema:1,product:edition.productName||'AI Hub Community',version,publishedAt:new Date().toISOString(),notes:edition.releaseNotes||[],
       runtime:currentRuntime({resourcesPath:resources,electron:electronVersion}),
       incremental:{file:updateName,bytes:packed.bytes,sha256:packed.sha256},
       ...(delta?{incrementalDelta:{file:deltaName,bytes:delta.bytes,sha256:delta.sha256,
-        requires:delta.unchanged.map(item=>({path:item.path,bytes:item.bytes,sha256:item.sha256}))}}:{}),
+        requires:delta.requires.map(item=>({path:item.path,bytes:item.bytes,sha256:item.sha256})),
+        ...(delta.schema===3?{schema:3,baseVersion:delta.baseVersion,resultAsar:{bytes:delta.resultAsar.bytes,sha256:delta.resultAsar.sha256}}:{})}}:{}),
       // 下一版据此判断哪些文件没变（公司版另存到 latest.json，客户端不用）。
       filesIndex:packed.index,
       installer:{file:setup.name,bytes:setup.bytes,sha256:setup.sha256}};

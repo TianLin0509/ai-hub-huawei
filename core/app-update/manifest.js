@@ -60,6 +60,15 @@ function checkDelta(asset) {
       || (item.bytes !== undefined && (!Number.isInteger(item.bytes) || item.bytes < 0))) throw new Error('清单里增量小包的核对项不合规');
     return { path: item.path, sha256: item.sha256, ...(item.bytes !== undefined ? { bytes: item.bytes } : {}) };
   });
+  if (asset.schema === 3) {
+    if (!parseVersion(asset.baseVersion) || !asset.resultAsar || !SHA.test(String(asset.resultAsar.sha256 || ''))
+      || !Number.isSafeInteger(asset.resultAsar.bytes) || asset.resultAsar.bytes < 16 || asset.resultAsar.bytes > 600 * 1024 * 1024
+      || !requires.some(item => item.path === 'app.asar')
+      || !requires.some(item => item.path === 'app.asar.unpacked/core/app-update/asar-delta-capability.json')) throw Error('清单里 ASAR 差量基线不合规');
+    return { ...base, requires, schema: 3, baseVersion: asset.baseVersion,
+      resultAsar: { bytes: asset.resultAsar.bytes, sha256: asset.resultAsar.sha256 } };
+  }
+  if (asset.schema !== undefined && asset.schema !== 2) throw Error('清单里增量小包格式不认识');
   return { ...base, requires };
 }
 
