@@ -27,11 +27,15 @@ test('外部 Node 加载的文件都在 asarUnpack 里，且实际存在', () =>
 });
 
 test('更新脚本只在没有开着的 Hub 窗口时清理残留，且只清 Hub 自己的 exe', () => {
-  const body = HELPER.match(/function Stop-Orphans \{[\s\S]*?\r?\n\}/)[0];
-  assert.match(body, /Get-OpenWindows/);
-  assert.match(body, /\$_\.Path -ieq \[string\]\$p\.exe/);
-  assert.ok(HELPER.indexOf('\nStop-Orphans') > HELPER.indexOf('$leftDeadline'));
-  assert.ok(HELPER.indexOf('\nStop-Orphans') < HELPER.indexOf('if (Test-Writable $p.resourcesDir)'));
+  // 2026-11-13：「开着的 Hub」改由 Others-Now 判断（含最小化到托盘的；WMI 不可用时同一 exe 都算可能开着的 Hub，先问再关）。
+  const body = HELPER.match(/function Stop-Orphans\(\$all = \$false\) \{[\s\S]*?\r?\n\}/)[0];
+  assert.match(body, /Others-Now/);
+  assert.match(HELPER, /function Others-Now \{[^\n]*Get-OtherMains/);
+  assert.match(HELPER, /\$_\.Main -or -not \$script:snapWmi/);
+  assert.match(body, /\$all -or \$_\.Path -ieq \[string\]\$p\.exe/);
+  // 先清同一 exe 的残留，再等安装目录里的其他程序，最后才替换。
+  assert.ok(HELPER.indexOf('\nStop-Orphans') < HELPER.indexOf('$leftDeadline = '));
+  assert.ok(HELPER.indexOf('\nStop-Orphans') < HELPER.indexOf('$r = Do-Replace'));
 });
 
 test('枚举进程时目标恰好退出，更新脚本不会崩', () => {

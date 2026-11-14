@@ -49,6 +49,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   helperStartWaitMs = Number(env.AI_HUB_UPDATE_HELPER_WAIT_MS) || 15000,
   // 小版本静默送达（11-07 定：先不上线）：默认关，代码保留；测试或日后放开时传 true 或设 AI_HUB_QUIET_UPDATE=1。
   quietDelivery = env.AI_HUB_QUIET_UPDATE === '1' }) {
+  const productName = () => { try { return (config && config.productName) || (isPackaged && app && typeof app.getName === 'function' && app.getName()) || 'AI Hub'; } catch (_) { return 'AI Hub'; } };
   let baseSources = resolveSources(config, env);
   let previewEnabled = canary.read(dataDir).enabled === true;
   let sources = previewEnabled ? [...canary.previewSources(baseSources), ...baseSources] : baseSources;
@@ -247,7 +248,9 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
         staged = stageIncremental({ dataDir, payloadFile: dest, resourcesDir: env.AI_HUB_UPDATE_RESOURCES || resourcesPath, version: manifest.version, from: currentVersion,
           exe: process.execPath, args: process.argv.slice(1), simulateFailure: env.AI_HUB_UPDATE_SIMULATE_FAILURE || null,
           elevateMode: env.AI_HUB_UPDATE_ELEVATE_MODE || null,
-          expectedAsar: plan.variant === 'delta' ? manifest.incrementalDelta?.resultAsar : null });
+          expectedAsar: plan.variant === 'delta' ? manifest.incrementalDelta?.resultAsar : null,
+          // 升级进度小窗（core/app-update/progress-ui.js，2026-11-13）：只在用户点「立即重启」的替换里出现；测试可设 AI_HUB_UPDATE_PROGRESS_UI=0 关掉。
+          progressUi: env.AI_HUB_UPDATE_PROGRESS_UI !== '0', productName: productName() });
         fs.rmSync(dest, { force: true });
       } else {
         staged = { installer: dest };

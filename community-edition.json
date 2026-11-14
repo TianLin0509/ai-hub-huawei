@@ -58,9 +58,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "发版上传更稳：新建的发布草稿稍晚出现时会等几秒再上传，不再中途失败；本版起升级只下载变化部分（约 0.3 MB）"
+    "升级时有进度小窗：显示升级到哪一步；升级途中再点图标不会打开旧版；别的 Hub 窗口开着会先问再关；替换失败可一键重试"
   ],
-  "version": "5.6.24",
+  "version": "5.6.25",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

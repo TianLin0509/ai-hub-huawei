@@ -43,4 +43,16 @@ try {
   process.__hubGpuModeError = error && error.message ? error.message : String(error);
 }
 
-require('./main.js');
+// 升级途中又点了图标（core/app-update/launch-guard.js，2026-11-13）：把焦点交给升级进度小窗后立即退出，
+// 不打开旧版、不占住要替换的文件。放在加载 main.js 之前，越早退出越不挡替换。
+let deferredToUpgrade = false;
+try {
+  deferredToUpgrade = require('./core/app-update/launch-guard.js').deferToRunningUpgrade({ dataDir: require('./core/data-dir.js').getHubDataDir() });
+} catch (_) { deferredToUpgrade = false; }
+
+if (deferredToUpgrade) {
+  app.exit(0);
+  setTimeout(() => process.exit(0), 1500).unref?.();
+} else {
+  require('./main.js');
+}

@@ -131,6 +131,7 @@
   "tests/unit-attention-jump.test.js",
   "tests/unit-session-export.test.js",
   "tests/unit-app-update-quiet.test.js",
+  "tests/unit-app-update-upgrade-experience.test.js",
   "tests/unit-home-recent.test.js",
   "tests/unit-groupchat-mention-cjk.test.js",
   "tests/unit-user-feedback-batch1.test.js",

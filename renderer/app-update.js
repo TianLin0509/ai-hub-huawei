@@ -180,11 +180,11 @@
         + `<ul class="au-sources">${sourceRows()}</ul>`;
       foot = '<button class="au-btn" data-au="cancel">取消</button>';
     } else if (s.phase === 'ready') {
-      body += `<div class="au-msg ok">新版本已从「${esc(s.readySource)}」下载并校验通过。${plan && plan.kind === 'incremental' ? '点「立即重启」后约 5 秒完成替换并自动重新打开；替换失败会自动恢复旧版本。' : '点「立即安装」会打开安装程序，并关闭当前窗口。'}${plan && plan.kind === 'incremental' && s.needsAdmin ? '<br>程序装在受保护的目录里，重启时 Windows 会弹出确认框，请点「是」授权这一次替换；Hub 本身仍以普通权限运行。' : ''}</div>`
+      body += `<div class="au-msg ok">新版本已从「${esc(s.readySource)}」下载并校验通过。${plan && plan.kind === 'incremental' ? '点「立即重启」后先保存会话、关闭窗口，屏幕中间会出现升级进度小窗（第几步、已等多久），换好后自动打开新版，通常 10–40 秒；期间不用再点图标。替换失败会自动恢复旧版本，可在小窗里一键重试。' : '点「立即安装」会打开安装程序，并关闭当前窗口。'}${plan && plan.kind === 'incremental' && s.needsAdmin ? '<br>程序装在受保护的目录里，重启时 Windows 会弹出确认框，请点「是」授权这一次替换；Hub 本身仍以普通权限运行。' : ''}</div>`
         + `<ul class="au-sources">${sourceRows()}</ul>`;
       foot = `<button class="au-btn" data-au="close">稍后</button><button class="au-btn primary" data-au="apply">${plan && plan.kind === 'incremental' ? '立即重启' : '立即安装'}</button>`;
     } else if (s.phase === 'applying') {
-      body += '<div class="au-msg info">正在关闭并替换程序文件，完成后会自动重新打开…</div>';
+      body += '<div class="au-msg info">正在保存会话并关闭窗口，随后屏幕中间会出现升级进度小窗，换好后自动打开新版（通常 10–40 秒）。期间不用再点图标，点了也只会回到进度小窗。</div>';
     } else if (s.phase === 'error') {
       // 5.5.24：命中已知问题（如安装包校验失败、被公司网络拦截）直接给解法和一键按钮；悬停这条出现「问问 Agent」「一键反馈」。
       const card = window.HubErrorCard;
