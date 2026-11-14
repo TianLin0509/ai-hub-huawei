@@ -224,15 +224,15 @@ async function main() {
     let teardownError;
     if (hub) {
       try { report.teardown = await gracefulQuit(hub); }
-      catch (error) { teardownError = error; report.teardownError = error.stack; }
+      catch (error) { teardownError = error; report.teardownError = error.stack; report.passed = false; }
       fs.writeFileSync(path.join(out, 'hub.log'), hub.log().join('\n'));
       if (report.error || teardownError) console.error(hub.log().slice(-40).join('\n'));
     }
     fs.writeFileSync(path.join(out, 'report.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
-    // 功能检查已全过时，Chromium 退出那一刻的崩溃不拦发版：标签构建里只出过误报。
-    if (teardownError && !/unclean exit during teardown/.test(teardownError.message)) throw teardownError;
-    if (teardownError) console.warn('[warn] ' + teardownError.message);
+    // Functional success cannot waive a native access violation at shutdown.
+    // Keep packaged smoke as strict as the team-skill and launcher contracts.
+    if (teardownError) throw teardownError;
   }
 }
 

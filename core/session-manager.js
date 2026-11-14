@@ -2532,10 +2532,18 @@ class SessionManager extends EventEmitter {
       conptyInheritCursor: (isCodexRuntime || isKimi || isCodeAgent) ? false : !opts.noInheritCursor,
     });
     } catch (error) { codexEditorInput?.dispose(); antigravityForkCleanup?.(); throw error; }
-    if (!isAcp && !isNativeCodex && !isNativeClaude) require('./pty-process-owner').recordPtySpawn(ptyProcess);
-    if (codeagentLaunch && codeagentLaunch.memberMcpLearn) {
-      try { scheduleNativeMcpLearn(this, id, Number(ptyProcess && ptyProcess.pid), codeagentLaunch.memberMcpLearn); } catch { /* 只影响学习 */ }
-    }
+    if (!isAcp && !isNativeCodex && !isNativeClaude) require('./pty-process-owner').recordPtySpawn(ptyProcess, owner => {
+      // Synchronous spawn can precede sessions.set; deferred ConPTY connection
+      // can follow it. Bind only this PTY generation once the PID is known.
+      queueMicrotask(() => {
+        if (this.sessions.get(id)?.pty !== ptyProcess) return;
+        try { this._refreshOpenIdentity(id); }
+        catch (error) { console.error('[session-owner] deferred PID binding failed:', error.message); }
+        if (codeagentLaunch?.memberMcpLearn) {
+          try { scheduleNativeMcpLearn(this, id, owner.pid, codeagentLaunch.memberMcpLearn); } catch { /* 只影响学习 */ }
+        }
+      });
+    });
 
     let currentModel = null;
     if (isClaude) {

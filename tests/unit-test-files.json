@@ -100,6 +100,7 @@
   "tests/unit-codeagent-resume-missing-notice.test.js",
   "tests/unit-cli-exit-watch.test.js",
   "tests/unit-pty-resize-after-exit.test.js",
+  "tests/unit-pty-process-owner.test.js",
   "tests/unit-transcript-migrate-config-dir.test.js",
   "tests/unit-suspend-stuck-recovery.test.js",
   "tests/unit-meeting-question-wait-ready.test.js",
