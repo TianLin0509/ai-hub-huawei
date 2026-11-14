@@ -226,7 +226,9 @@ function Is-Cancelled($e) {
 function Read-Result { try { return (Get-Content -LiteralPath $p.resultFile -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { return $null } }
 # 一次替换（普通权限直接换；受保护目录申请一次管理员授权）。返回结果对象。
 function Do-Replace {
+  $script:elevationAttempted = $false
   if (Test-Writable $p.resourcesDir) { Replace-Files; return (Read-Result) }
+  $script:elevationAttempted = $true
   # 装在 C:\Program Files 这类受保护目录：只为替换这一步申请一次管理员授权（Windows 弹「是否允许」）。
   Remove-Item -LiteralPath $p.resultFile -Force -ErrorAction SilentlyContinue
   $argLine = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $PSCommandPath + '" -Plan "' + $Plan + '" -Elevated'
@@ -313,7 +315,10 @@ while ($true) {
     if (Ui-Alive) { [void](Wait-Decision 600) }
     exit 1
   }
-  if (($r -and $r.ok) -or $attempt -ge 4 -or -not (Ui-Alive)) { break }
+  # 授权被取消或管理员副本替换失败：普通权限父脚本立即重开原版。
+  # 结束占用进程不能解决授权问题；等进度窗再确认会让 Hub 消失最多 10 分钟。
+  # 回滚失败已在上面停止，不能重开可能损坏的版本。
+  if (($r -and $r.ok) -or $script:elevationAttempted -or $attempt -ge 4 -or -not (Ui-Alive)) { break }
   # 失败已自动还原：在进度窗里说清原因，用户点「结束占用的程序并重试」就结束安装目录里还在跑的本程序进程再换一次。
   $why = if ($r) { [string]$r.reason } else { '替换没有留下结果' }
   Set-Progress 3 '这次没换成，已恢复原版本' '' @{ need = 'retry'; reason = $why; rolledBack = [bool]($r -and $r.rolledBack); leftovers = @(Names (@(Others-Now) + @(Get-Leftovers | Where-Object { $_.Path -ine [string]$p.exe }))) } 'failed'

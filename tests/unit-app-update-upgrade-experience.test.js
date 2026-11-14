@@ -350,3 +350,66 @@ test('升级守卫：打开锁文件没权限（EPERM/EACCES）不算在升级�
   } finally { fs.openSync = orig; }
   fs.rmSync(dataDir, { recursive: true, force: true });
 });
+
+// 受保护目录仍由普通权限父脚本重开；进度窗存活时也不能等用户再点一次「先用原来的版本」。
+for (const mode of ['cancel', 'plain']) {
+  test(`受保护目录 ${mode}：失败结果写出后自动重开，不等待进度窗决定`, winOnly, async () => {
+    const k = makeCase({ assumeUi: true, relaunch: true, elevateMode: mode });
+    const marker = path.join(k.dataDir, 'relaunched.json');
+    const script = path.join(k.dataDir, 'mark-relaunch.ps1');
+    fs.writeFileSync(script, `@{ elevated = [bool]$Elevated; parent = (Get-CimInstance Win32_Process -Filter "ProcessId=$PID").ParentProcessId } | ConvertTo-Json | Set-Content -LiteralPath '${q(marker)}'`, 'utf8');
+    k.setPlan({ exe: PS, args: ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-File', script] });
+    const sidResult = spawnSync(path.join(process.env.SystemRoot || 'C:\Windows', 'System32', 'whoami.exe'), ['/user', '/fo', 'csv', '/nh'], { windowsHide: true, encoding: 'utf8' });
+    assert.equal(sidResult.status, 0, sidResult.stderr);
+    const sid = sidResult.stdout.trim().split(',').pop().replace(/"/g, '');
+    const resources = path.dirname(k.asar);
+    // 只限制本用例的临时安装目录；清理前恢复，不改用户或生产目录权限。
+    const acl = spawnSync('icacls.exe', [resources, '/inheritance:r', '/grant:r', '*S-1-5-32-544:(OI)(CI)F', '*S-1-5-18:(OI)(CI)F', `*${sid}:(OI)(CI)RX`, '/Q'], { windowsHide: true, encoding: 'utf8' });
+    try {
+      assert.equal(acl.status, 0, acl.stdout + acl.stderr);
+      assert.throws(() => fs.writeFileSync(path.join(resources, 'probe.tmp'), 'x'), /EPERM|EACCES/);
+      const helper = k.start();
+      const started = Date.now();
+      const restarted = await k.waitFor(() => fs.existsSync(marker), 20000);
+      assert.ok(restarted, `写出结果后应自动重开；当前进度：${JSON.stringify(k.progress())}`);
+      assert.ok(await k.waitFor(() => !alive(helper), 5000), '父脚本已结束，没有留在 600 秒的等待里');
+      assert.ok(Date.now() - started < 25000);
+      const r = k.result();
+      assert.equal(r.ok, false);
+      assert.equal(r.restoreFailed, false);
+      assert.equal(r.elevated, mode === 'plain');
+      assert.equal(r.rolledBack, mode === 'plain');
+      assert.match(r.reason, mode === 'cancel' ? /管理员授权.*没有替换任何文件/ : /没有写入安装目录的权限|访问被拒绝|denied/i);
+      assert.equal(fs.readFileSync(k.asar, 'utf8'), 'old-asar');
+      assert.equal(k.progress().state, 'gave-up');
+      assert.equal(k.progress().need, undefined, '权限失败不再提示结束占用进程');
+      const launch = JSON.parse(fs.readFileSync(marker, 'utf8').replace(/^\uFEFF/, ''));
+      assert.equal(launch.parent, helper.pid, '普通权限父脚本负责重开，管理员副本只写结果');
+      assert.equal(guard.deferToRunningUpgrade({ dataDir: k.dataDir }), false, '启动锁已释放');
+    } finally {
+      spawnSync('icacls.exe', [resources, '/reset', '/T', '/Q'], { windowsHide: true });
+      k.done();
+    }
+  });
+}
+
+test('管理员副本替换成功：普通权限父脚本重开，成功进度不被启动锁拦住', winOnly, async () => {
+  const k = makeCase({ assumeUi: true, relaunch: true, elevateMode: 'plain' });
+  try {
+    const marker = path.join(k.dataDir, 'relaunched-parent.txt');
+    const script = path.join(k.dataDir, 'mark-relaunch.ps1');
+    fs.writeFileSync(script, `(Get-CimInstance Win32_Process -Filter "ProcessId=$PID").ParentProcessId | Set-Content -LiteralPath '${q(marker)}'`, 'utf8');
+    k.setPlan({ exe: PS, args: ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-File', script] });
+    // 普通权限模拟授权成功：仅强制进入授权分支，管理员副本仍执行原版替换逻辑，不弹真实 UAC。
+    fs.writeFileSync(k.p.helper, '\uFEFF' + HELPER.replace('if (Test-Writable $p.resourcesDir)', 'if ($false)'), 'utf8');
+    const helper = k.start();
+    assert.ok(await k.waitFor(() => fs.existsSync(marker), 20000), '替换成功后重开');
+    assert.equal(Number(fs.readFileSync(marker, 'utf8').replace(/^\uFEFF/, '').trim()), helper.pid);
+    assert.ok(await k.waitFor(() => !alive(helper), 5000));
+    assert.equal(k.result().ok, true);
+    assert.equal(k.result().elevated, true);
+    assert.equal(fs.readFileSync(k.asar, 'utf8'), 'new-asar');
+    assert.equal(k.progress().state, 'done');
+    assert.equal(guard.deferToRunningUpgrade({ dataDir: k.dataDir }), false);
+  } finally { k.done(); }
+});
