@@ -13,6 +13,29 @@ const { pathToFileURL } = require('node:url');
 const dir = path.join(__dirname, '..', 'core', 'company-proxy');
 const load = name => import(pathToFileURL(path.join(dir, name)).href);
 
+// Wait for observable state, with a diagnostic deadline rather than an assumed scheduling delay.
+async function waitFor(check, label, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await check();
+    if (value) return value;
+    assert.ok(Date.now() < deadline, 'timeout: ' + label);
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+}
+
+async function stopProxy(child, base, key) {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  // Subscribe before requesting shutdown: a busy runner may observe the exit before fetch returns.
+  const exited = new Promise(resolve => {
+    const done = () => { clearTimeout(timer); child.off('exit', done); resolve(); };
+    const timer = setTimeout(() => child.kill(), 5000);
+    child.once('exit', done);
+  });
+  await fetch(base + '/admin/shutdown', { method: 'POST', headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(3000) }).catch(() => {});
+  await exited;
+}
+
 function sse(text = 'ok', model = 'GLM-5.2-WX') {
   return new Response(`data: ${JSON.stringify({ model, choices: [{ index: 0, delta: { content: text }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`,
     { status: 200, headers: { 'content-type': 'text/event-stream' } });
@@ -247,7 +270,7 @@ test('upstream profile names what is missing in plain words', async () => {
   const { resolveUpstreamProfile } = await load('upstream-profile.mjs');
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cmp-profile-'));
   try {
-    await assert.rejects(resolveUpstreamProfile({ dataDir, env: { TEMP: dataDir }, versionReader: async () => '', packageFinder: async () => '', archiveReader: async () => '' }),
+    await assert.rejects(resolveUpstreamProfile({ dirFinder: async () => '', dataDir, env: { TEMP: dataDir }, versionReader: async () => '', packageFinder: async () => '', archiveReader: async () => '' }),
       e => e.code === 'PROFILE_INCOMPLETE' && /CodeAgent 版本/.test(e.message) && !e.missing.includes('adapterPackage') && e.missing.includes('chatUrl'));
     const cache = path.join(dataDir, 'cache');
     fs.mkdirSync(cache);
@@ -256,7 +279,7 @@ test('upstream profile names what is missing in plain words', async () => {
     fs.writeFileSync(path.join(dataDir, 'company-model-proxy', 'upstream.json'), JSON.stringify({
       adapterPackage: path.join(dataDir, 'a.tgz'), signerCacheDir: cache, signerCacheEnv: 'X_AUTH_DIR', codeagentVersion: '9.1.2',
       identityUrl: 'https://id.example.test/svc/auth/getUserDetail', identityAccountField: 'staffAccount', chatUrl: 'https://chat.example.test/api/v2/chat/completions', appId: 'com.example.client' }));
-    const profile = await resolveUpstreamProfile({ dataDir, env: { USERPROFILE: dataDir }, versionReader: async () => 'unused', archiveReader: async () => '' });
+    const profile = await resolveUpstreamProfile({ dirFinder: async () => '', dataDir, env: { USERPROFILE: dataDir }, versionReader: async () => 'unused', archiveReader: async () => '' });
     assert.equal(profile.codeagentVersion, '9.1.2');
     assert.equal(profile.personalCredential, path.join(dataDir, '.cac', '.credentials.json'));
     assert.equal(profile.signerCacheDir, cache);
@@ -264,7 +287,7 @@ test('upstream profile names what is missing in plain words', async () => {
     assert.equal(profile.signerInit.needed, false);
     // CodeAgent upgraded (cache is 9.1.1, installed 9.1.2): no error, a first-time initialization into Hub's cache.
     fs.writeFileSync(path.join(cache, 'codeagent-version-stamp'), '9.1.1\n123\n');
-    const stale = await resolveUpstreamProfile({ dataDir, env: { USERPROFILE: dataDir }, archiveReader: async () => '' });
+    const stale = await resolveUpstreamProfile({ dirFinder: async () => '', dataDir, env: { USERPROFILE: dataDir }, archiveReader: async () => '' });
     assert.equal(stale.signerInit.needed, true);
     assert.equal(stale.signerInit.reason, 'version');
     assert.match(stale.signerInit.text, /CodeAgent 升级过（缓存是 9\.1\.1 版的，现装的是 9\.1\.2 版）/);
@@ -374,8 +397,7 @@ test('proxy process: three client protocols, session stickiness and 429 switch o
     // Broken pool credentials: falls back to personal.
     fs.writeFileSync(path.join(dataDir, 'company-model-proxy', 'mock-control.json'), JSON.stringify({ brokenCredentials: ['aaaaaa1', 'bbbbbb2'] }));
   } finally {
-    await fetch(base + '/admin/shutdown', { method: 'POST', headers: { authorization: `Bearer ${key}` } }).catch(() => {});
-    await new Promise(resolve => { child.once('exit', resolve); setTimeout(() => { child.kill(); resolve(); }, 5000); });
+    await stopProxy(child, base, key);
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
@@ -420,8 +442,7 @@ test('proxy process: a pinned session stays on its account through a 429 and say
     assert.equal(r.status, 503);
     assert.match((await r.json()).error.message, /已不在号池里/);
   } finally {
-    await fetch(base + '/admin/shutdown', { method: 'POST', headers: { authorization: `Bearer ${key}` } }).catch(() => {});
-    await new Promise(resolve => { child.once('exit', resolve); setTimeout(() => { child.kill(); resolve(); }, 5000); });
+    await stopProxy(child, base, key);
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
@@ -446,8 +467,7 @@ test('proxy process: pool logins unreadable -> personal account, with a fallback
     assert.ok(status.router.events.some(e => e.type === 'fallback_personal'));
     assert.equal(status.mockUpstream.byToken['mock-token-personal'], 1);
   } finally {
-    await fetch(base + '/admin/shutdown', { method: 'POST', headers: { authorization: `Bearer ${key}` } }).catch(() => {});
-    await new Promise(resolve => { child.once('exit', resolve); setTimeout(() => { child.kill(); resolve(); }, 5000); });
+    await stopProxy(child, base, key);
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
@@ -677,8 +697,7 @@ test('review 1: proxy reads unprobed / failed-to-read pool accounts as unknown (
     assert.equal(status.mockUpstream.byToken['mock-token-never1'], 1, 'the never-probed account serves the request');
     assert.equal(status.router.accounts.find(a => a.id === 'never1').modelsAuthoritative, false);
   } finally {
-    await fetch(base + '/admin/shutdown', { method: 'POST', headers: { authorization: `Bearer ${key}` } }).catch(() => {});
-    await new Promise(resolve => { child.once('exit', resolve); setTimeout(() => { child.kill(); resolve(); }, 5000); });
+    await stopProxy(child, base, key);
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
@@ -705,8 +724,7 @@ test('proxy process: GLM request with only a DeepSeek pool account goes to the p
     const { NOTICE } = require('../main/company-proxy-service');
     assert.match(NOTICE.fallback_personal(status.router.events.find(e => e.type === 'fallback_personal')), /没有对 GLM-5\.2-WX 有权限的号.*个人/);
   } finally {
-    await fetch(base + '/admin/shutdown', { method: 'POST', headers: { authorization: `Bearer ${key}` } }).catch(() => {});
-    await new Promise(resolve => { child.once('exit', resolve); setTimeout(() => { child.kill(); resolve(); }, 5000); });
+    await stopProxy(child, base, key);
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
@@ -726,7 +744,7 @@ test('signer cache lookup: Hub, adapter, CodeAgent, upstream.json, prototype TEM
       adapterPackage: path.join(root, 'a.tgz'), signerCacheEnv: 'X_AUTH_DIR', codeagentVersion: '9.1.2', signerCacheDir: configured,
       identityUrl: 'https://id.example.test/svc/auth/getUserDetail', identityAccountField: 'staffAccount', chatUrl: 'https://chat.example.test/api/v2/chat/completions', appId: 'c.example' }));
     const env = { USERPROFILE: home, X_AUTH_DIR: envDir, TEMP: temp };
-    const resolveIt = () => resolveUpstreamProfile({ dataDir, env, versionReader: async () => 'unused', archiveReader: async () => '' });
+    const resolveIt = () => resolveUpstreamProfile({ dirFinder: async () => '', dataDir, env, versionReader: async () => 'unused', archiveReader: async () => '' });
     assert.deepEqual(signerCacheCandidates({ dataDir, env, signerCacheEnv: 'X_AUTH_DIR', configured }).map(c => c.source),
       ['hub', 'adapter-env', 'adapter', 'codeagent', 'config', 'prototype']);
     assert.equal(signerCacheCandidates({ dataDir, env: { ...env, CODEAGENT3_CONFIG_DIR: path.join(root, 'cfg') } }).find(c => c.source === 'codeagent').dir, path.join(root, 'cfg'));
@@ -1074,7 +1092,7 @@ test('profile diagnostics: each value names its source category and file; a fail
       adapterPackage: path.join(dataDir, 'dsh-hw-llm-adapter-1.0.27.tgz'),
     }));
     const noChat = { ...members, 'package/lib/index.js': "headers={'app-id':'com.example.client'}" };
-    const error = await resolveUpstreamProfile({ ...base, archiveReader: async (_a, m) => noChat[m] || '' }).catch(e => e);
+    const error = await resolveUpstreamProfile({ dirFinder: async () => '', ...base, archiveReader: async (_a, m) => noChat[m] || '' }).catch(e => e);
     assert.equal(error.code, 'PROFILE_INCOMPLETE');
     assert.deepEqual(error.missing, ['chatUrl']);
     assert.match(error.message, /模型接口地址（config:upstream\.json、adapter:index\.js:full-url/);
@@ -1092,7 +1110,7 @@ test('profile diagnostics: each value names its source category and file; a fail
     const cache = path.join(dataDir, 'company-model-proxy', 'signer-cache');
     fs.mkdirSync(cache, { recursive: true });
     fs.writeFileSync(path.join(cache, 'codeagent-version-stamp'), '9.1.2\n123\n');
-    const profile = await resolveUpstreamProfile({ ...base, archiveReader: async (_a, m) => members[m] || '' });
+    const profile = await resolveUpstreamProfile({ dirFinder: async () => '', ...base, archiveReader: async (_a, m) => members[m] || '' });
     assert.equal(profile.chatUrl, 'https://chat.zone-y.example.test/api/v2/chat/completions');
     assert.equal(profile.sources.chatUrl, 'adapter:index.js');
     assert.equal(profile.sources.zone, 'codeagent:.cac.json:word');
@@ -1122,7 +1140,7 @@ async function zoneProfile({ cac, homeCac, upstream = {}, chatTemplate = true, z
     'package/lib/signer.js': 'process.env.EXAMPLE_AUTH_DIR',
   };
   try {
-    return await resolveUpstreamProfile({ dataDir, env: { USERPROFILE: dataDir }, versionReader: async () => '9.1.2', zoneOverride,
+    return await resolveUpstreamProfile({ dirFinder: async () => '', dataDir, env: { USERPROFILE: dataDir }, versionReader: async () => '9.1.2', zoneOverride,
       packageFinder: async () => path.join(dataDir, 'a.tgz'), archiveReader: async (_a, m) => members[m] || '' }).catch(e => e);
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 }
@@ -1394,7 +1412,7 @@ test('CodeAgent upgraded: the cache of the old version triggers a new first-time
   fs.writeFileSync(path.join(dataDir, 'company-model-proxy', 'upstream.json'), JSON.stringify({ adapterPackage: f.profile.adapterPackage, codeagentDir: f.codeagentDir,
     codeagentVersion: '9.2.0', signerCacheEnv: 'FAKE_AUTH_DIR', zone: 'yellow', identityUrl: 'https://id.example.test/svc/auth/getUserDetail', identityAccountField: 'staffAccount',
     chatUrl: 'https://chat.example.test/api/v2/chat/completions', appId: 'c.example' }));
-  const profile = await resolveUpstreamProfile({ dataDir, env: { USERPROFILE: f.root }, archiveReader: async () => '' });
+  const profile = await resolveUpstreamProfile({ dirFinder: async () => '', dataDir, env: { USERPROFILE: f.root }, archiveReader: async () => '' });
   assert.equal(profile.signerInit.reason, 'version');
   // The ESM signer is cached per process; a fresh copy of the fake is loaded through a new work dir.
   const again = await loadSigner(profile, { workDir: path.join(f.root, 'work2'), stampProbe: probe });
@@ -1636,7 +1654,7 @@ test('native profile works without any adapter package when upstream facts are c
     identityUrl: 'https://id.example.test/auth/getUserDetail', identityAccountField: 'staffAccount',
     chatUrl: 'https://chat.example.test/api/v2/chat/completions', appId: 'com.example.client',
   }));
-  const profile = await resolveUpstreamProfile({ dataDir: root, env: { USERPROFILE: root, TEMP: root },
+  const profile = await resolveUpstreamProfile({ dirFinder: async () => '', dataDir: root, env: { USERPROFILE: root, TEMP: root },
     packageFinder: async () => '', archiveReader: async () => assert.fail('no archive may be read') });
   assert.equal(profile.signerMode, 'native'); assert.equal(profile.adapterPackage, '');
   assert.equal(profile.signerCacheEnv, 'HWTRAN_AUTH_DIR');
@@ -1645,7 +1663,7 @@ test('native profile works without any adapter package when upstream facts are c
   const stampFile = path.join(externalCache, 'codeagent-version-stamp'); fs.writeFileSync(stampFile, '9.1.2\n1234567\n');
   const staleRuntime = path.join(root, 'signer-x64-win32-unverified'); fs.mkdirSync(staleRuntime);
   for (const name of ['libsnap_engine.dll', 'koffi.node']) fs.writeFileSync(path.join(staleRuntime, name), 'unverified-old-version');
-  const missingRuntime = await resolveUpstreamProfile({ dataDir: root,
+  const missingRuntime = await resolveUpstreamProfile({ dirFinder: async () => '', dataDir: root,
     env: { USERPROFILE: root, TEMP: root, HWTRAN_AUTH_DIR: externalCache }, packageFinder: async () => '' });
   assert.equal(missingRuntime.signerInit.reason, 'native-files');
   assert.equal(missingRuntime.signerInit.needed, true, 'an arbitrary ambient TEMP runtime never suppresses the version-bound native probe');
@@ -1664,7 +1682,7 @@ test('fresh native setup resolves all upstream facts without an archive and neve
   assert.ok(unknown.identityProbe.identityUrl.startsWith('https://'));
   const hosts = new Set();
   for (const zone of ['blue', 'green', 'yellow']) {
-    const p = await resolveUpstreamProfile({ ...base, zoneOverride: { zone } });
+    const p = await resolveUpstreamProfile({ dirFinder: async () => '', ...base, zoneOverride: { zone } });
     assert.equal(p.signerMode, 'native'); assert.equal(p.adapterPackage, '');
     assert.equal(p.zone, zone); assert.equal(p.sources.chatUrl, 'hub:native-protocol');
     const url = new URL(p.chatUrl); assert.equal(url.protocol, 'https:'); assert.equal(url.pathname, '/api/v2/chat/completions');
@@ -1672,7 +1690,7 @@ test('fresh native setup resolves all upstream facts without an archive and neve
   }
   assert.equal(hosts.size, 3);
   const stale = path.join(root, 'old-adapter.tgz'); fs.writeFileSync(stale, 'unreadable-old-package');
-  const withOldPackage = await resolveUpstreamProfile({ ...base, packageFinder: async () => stale,
+  const withOldPackage = await resolveUpstreamProfile({ dirFinder: async () => '', ...base, packageFinder: async () => stale,
     archiveReader: async () => null, zoneOverride: { zone: 'yellow' } });
   assert.equal(withOldPackage.signerMode, 'native');
   assert.equal(withOldPackage.sources.chatUrl, 'hub:native-protocol');
@@ -1747,8 +1765,7 @@ test('review 2: proxy process answers 401 with the login hint when every login i
     assert.equal(body.error.type, 'authentication_error');
     assert.match(body.error.message, /需要重新登录.*不是限流.*登录后会自动恢复/);
   } finally {
-    await fetch(base + '/admin/shutdown', { method: 'POST', headers: { authorization: `Bearer ${key}` } }).catch(() => {});
-    await new Promise(resolve => { child.once('exit', resolve); setTimeout(() => { child.kill(); resolve(); }, 5000); });
+    await stopProxy(child, base, key);
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
@@ -1861,8 +1878,7 @@ test('review 5: proxy process with --max-concurrent 1 queues a second request un
     const end = await (await fetch(base + '/admin/status', { headers: { authorization: `Bearer ${key}` } })).json();
     assert.equal(end.stats.inFlight, 0); assert.equal(end.stats.ok, 2);
   } finally {
-    await fetch(base + '/admin/shutdown', { method: 'POST', headers: { authorization: `Bearer ${key}` } }).catch(() => {});
-    await new Promise(resolve => { child.once('exit', resolve); setTimeout(() => { child.kill(); resolve(); }, 5000); });
+    await stopProxy(child, base, key);
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
@@ -1911,7 +1927,8 @@ test('review 5: switching off the last company-model tool waits for requests in 
   try {
     await service.syncWithConfig();
     let inFlight = 1;
-    service.request = async pathname => pathname === '/admin/status' ? { ready: true, stats: { inFlight, queued: 0 } } : {};
+    const request = service.request.bind(service);
+    service.request = async (pathname, options) => pathname === '/admin/status' ? { ready: true, stats: { inFlight, queued: 0 } } : request(pathname, options);
     enabled = false;
     const done = service.stopWhenIdle({ pollMs: 50, maxMs: 5000 });
     await new Promise(r => setTimeout(r, 150));
@@ -1975,9 +1992,10 @@ test('public edition: no internal address, path or field name is written in the 
 function lingeringUpstream({ frames, lingerMs = 400, signal }) {
   const enc = new TextEncoder();
   const info = { cancelledAt: 0, closedAt: 0, erroredByAbort: false, tapFailed: false, tapEnded: false };
-  let timer;
+  let timer, controller;
   const source = new ReadableStream({
     start(c) {
+      controller = c;
       for (const f of frames) c.enqueue(enc.encode(f));
       timer = setTimeout(() => { try { c.close(); info.closedAt = Date.now(); } catch { /* already gone */ } }, lingerMs);
       signal?.addEventListener('abort', () => { clearTimeout(timer); info.erroredByAbort = true; try { c.error(new DOMException('aborted', 'AbortError')); } catch { /* done */ } }, { once: true });
@@ -1985,8 +2003,9 @@ function lingeringUpstream({ frames, lingerMs = 400, signal }) {
     cancel() { clearTimeout(timer); info.cancelledAt = Date.now(); },
   });
   const [forClient, forTap] = source.tee();
-  (async () => { const r = forTap.getReader(); try { for (;;) { const { done } = await r.read(); if (done) break; } info.tapEnded = true; } catch { info.tapFailed = true; } })();
-  return { response: new Response(forClient, { status: 200, headers: { 'content-type': 'text/event-stream' } }), info, source };
+  const tapDone = (async () => { const r = forTap.getReader(); try { for (;;) { const { done } = await r.read(); if (done) break; } info.tapEnded = true; } catch { info.tapFailed = true; } })();
+  return { response: new Response(forClient, { status: 200, headers: { 'content-type': 'text/event-stream' } }), info, source,
+    async dispose() { clearTimeout(timer); try { controller.close(); } catch { /* already closed or aborted */ } await tapDone; } };
 }
 const chatFrame = obj => `data: ${JSON.stringify(obj)}\n\n`;
 
@@ -2022,11 +2041,9 @@ async function dshClientRun({ frames, lingerMs = 3000, closeAfter, adapters, tap
       req.on('error', () => {});
       req.end(JSON.stringify({ model: 'GLM-5.2-WX', stream: true, messages: [{ role: 'user', content: 'hi' }] }));
     });
-    const t0 = Date.now();
-    while (Date.now() - t0 < 2000 && !events.length) await new Promise(r => setTimeout(r, 10));
-    await new Promise(r => setTimeout(r, 50));
+    await waitFor(() => events.length, 'DSH request terminal event');
     return { got, events, info: up.info };
-  } finally { await proxy.close(); }
+  } finally { await up?.dispose?.(); await proxy.close(); }
 }
 
 const finishedFrames = [chatFrame({ id: 'c', model: 'GLM-5.2-WX', choices: [{ index: 0, delta: { content: 'marker-ok' }, finish_reason: null }] }),
@@ -2107,23 +2124,23 @@ test('proxy process (mock upstream keeps the stream open after [DONE]): a DSH cl
   const status = async () => (await fetch(base + '/admin/status', { headers: { authorization: `Bearer ${key}` } })).json();
   // Reads like pi-ai: stops at the pattern and closes the connection.
   const dshCall = (model, stopAt) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { req.destroy(); reject(new Error('client timeout')); }, 15000);
     const req = http.request({ host: '127.0.0.1', port, path: '/v1/chat/completions', method: 'POST', headers: { authorization: `Bearer ${key}.dshsess`, 'content-type': 'application/json' } }, res => {
       let text = '';
-      res.on('data', d => { text += d; if (stopAt.test(text)) { req.destroy(); resolve({ text, at: Date.now() }); } });
-      res.on('end', () => resolve({ text, at: Date.now(), ended: true }));
+      res.on('data', d => { text += d; if (stopAt.test(text)) { clearTimeout(timer); req.destroy(); resolve({ text, at: Date.now() }); } });
+      res.on('end', () => { clearTimeout(timer); resolve({ text, at: Date.now(), ended: true }); });
       res.on('error', () => {});
     });
     req.on('error', () => {});
     req.end(JSON.stringify({ model, stream: true, messages: [{ role: 'user', content: 'hi' }] }));
-    setTimeout(() => reject(new Error('client timeout')), 15000);
   });
-  const waitFor = async (check, ms = 3000) => { const t0 = Date.now(); for (;;) { const s = await status(); if (check(s) || Date.now() - t0 > ms) return s; await new Promise(r => setTimeout(r, 25)); } };
+  const waitForStatus = async (check, ms = 3000) => { const t0 = Date.now(); for (;;) { const s = await status(); if (check(s) || Date.now() - t0 > ms) return s; await new Promise(r => setTimeout(r, 25)); } };
   try {
     for (const model of ['GLM-5.2-WX', 'deepseek-v4.1-flash-1017']) {
       const before = (await status()).mockUpstream.chatClosedEarly || 0;
       const got = await dshCall(model, /data: \[DONE\]/);
       assert.match(got.text, /MOCK_OK/);
-      const s = await waitFor(x => (x.mockUpstream.chatClosedEarly || 0) > before && x.stats.inFlight === 0);
+      const s = await waitForStatus(x => (x.mockUpstream.chatClosedEarly || 0) > before && x.stats.inFlight === 0);
       assert.equal((s.mockUpstream.chatClosedEarly || 0) - before, 1, 'the proxy lets go of the upstream stream instead of waiting 5s for its end');
       assert.equal(s.stats.inFlight, 0, 'the request slot is free again');
       assert.ok(Date.now() - got.at < 1500, 'released within about 1s');
@@ -2136,16 +2153,15 @@ test('proxy process (mock upstream keeps the stream open after [DONE]): a DSH cl
     // Real mid-answer stop (before [DONE]): logged as an abort, the same account keeps the session, no cooldown.
     control({ streamDelayMs: 3000 });
     await dshCall('GLM-5.2-WX', /MOCK_OK/);
-    s = await waitFor(x => x.stats.inFlight === 0);
-    await new Promise(r => setTimeout(r, 100));
+    s = await waitForStatus(x => x.stats.inFlight === 0);
+    await waitFor(() => /proxy event request_aborted/.test(log()), 'proxy abort log');
     assert.match(log(), /proxy event request_aborted/);
     assert.equal(s.stats.inFlight, 0);
     assert.ok(s.router.accounts.every(a => a.coolingUntil === null), 'an abort cools no account');
     assert.equal(s.router.events.filter(e => e.type === 'switch' || e.type === 'credential_failed' || e.type === 'rate_limited').length, 0, 'and switches none');
     assert.equal(s.router.accounts.find(a => a.sessions > 0)?.id, account);
   } finally {
-    await fetch(base + '/admin/shutdown', { method: 'POST', headers: { authorization: `Bearer ${key}` } }).catch(() => {});
-    await new Promise(resolve => { child.once('exit', resolve); setTimeout(() => { child.kill(); resolve(); }, 5000); });
+    await stopProxy(child, base, key);
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });

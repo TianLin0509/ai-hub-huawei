@@ -58,9 +58,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "会话搜索索引自动瘦身：电脑空闲时每天最多整理一次，实测 1.27 GB 缩到 0.40 GB，整理期间搜索照常可用；磁盘空间不够时自动跳过"
+    "升级进度小窗：升级失败时若很快点了关闭/重试，不再白等 10 分钟；CI 完整验证不再被推送打断；模型代理单测提速"
   ],
-  "version": "5.6.28",
+  "version": "5.6.29",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

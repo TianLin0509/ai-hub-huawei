@@ -68,6 +68,7 @@ test('正常升级：分步写进度（第 1→4 步、已等多久、通常多�
   const oldHub = spawn(PS, ['-NoProfile', '-NonInteractive', '-Command', 'Start-Sleep -Milliseconds 1500'], { windowsHide: true, stdio: 'ignore' });
   k.kids.push(oldHub);
   k.setPlan({ pid: oldHub.pid });
+  k.decide('retry');
   const seen = new Set();
   const helper = k.start();
   const timer = setInterval(() => { const s = k.progress(); if (s) seen.add(`${s.step}:${s.state}`); }, 100);
@@ -82,6 +83,7 @@ test('正常升级：分步写进度（第 1→4 步、已等多久、通常多�
   assert.ok(Date.parse(s.startedAt) && Date.parse(s.stepStartedAt) && Date.parse(s.updatedAt));
   assert.equal(fs.readFileSync(k.asar, 'utf8'), 'new-asar');
   assert.equal(k.result().ok, true);
+  assert.equal(fs.existsSync(k.p.decision), false, '本轮升级开始时清掉旧决定，即使没有进入等待');
   k.done();
 });
 
@@ -303,22 +305,41 @@ test('读不到命令行时：进度窗里先问，用户不同意就不换、�
   k.done();
 });
 
-test('回滚也失败：立即停，不给重试、不自动重开，原备份改名留着', winOnly, async () => {
+test('回滚也失败：立即停，不给重试、不自动重开，原备份改名留着', winOnly, async t => {
   const k = makeCase({ assumeUi: true, simulateFailure: '模拟替换出错', simulateRestoreFailure: true, relaunch: true });
+  t.after(() => k.done());
   const marker = path.join(k.dataDir, 'relaunched.flag');
   k.setPlan({ exe: PS, args: ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', `Set-Content -LiteralPath '${q(marker)}' -Value x`] });
   const seen = new Set();
+  // Hold the real helper immediately before it calls Wait-Decision, so this
+  // simulated fast click is guaranteed to be queued before waiting starts.
+  const beforeWait = path.join(k.dataDir, 'before-decision-wait.flag');
+  const allowWait = path.join(k.dataDir, 'allow-decision-wait.flag');
+  const waitCall = 'if (Ui-Alive) { [void](Wait-Decision 600) }';
+  assert.equal(HELPER.split(waitCall).length, 2);
+  fs.writeFileSync(k.p.helper, '\uFEFF' + HELPER.replace(waitCall, `
+    [IO.File]::WriteAllText('${q(beforeWait)}', 'ready')
+    $testDeadline = (Get-Date).AddSeconds(10)
+    while (-not (Test-Path -LiteralPath '${q(allowWait)}')) {
+      if ((Get-Date) -gt $testDeadline) { throw 'test did not release decision wait' }
+      Start-Sleep -Milliseconds 20
+    }
+    ${waitCall}
+  `), 'utf8');
   const helper = k.start();
   const timer = setInterval(() => { const s = k.progress(); if (s) seen.add(`${s.state}:${s.need || ''}`); }, 100);
+  t.after(() => clearInterval(timer));
   const fin = await k.waitFor(() => { const s = k.progress(); return s && s.restoreFailed ? s : null; });
   assert.ok(fin, '进度窗收到了「没能恢复」');
   assert.equal(fin.state, 'failed');
   assert.equal(fin.need, undefined, '不给重试按钮');
   assert.match(fin.reason, /没能把原来的文件全部恢复.*完整安装包.*backup-restore-failed-/);
+  assert.ok(await k.waitFor(() => fs.existsSync(beforeWait), 5000), '辅助脚本已发布失败状态，尚未进入等待');
   k.decide('close');
-  const code = await new Promise(r => (alive(helper) ? helper.once('exit', c => r(c)) : r(helper.exitCode)));
+  fs.writeFileSync(allowWait, 'go');
+  assert.ok(await k.waitFor(() => !alive(helper), 5000), '关闭决定被接收后辅助脚本应退出');
   clearInterval(timer);
-  assert.equal(code, 1);
+  assert.equal(helper.exitCode, 1);
   assert.ok(![...seen].some(x => x.endsWith(':retry')), `没出现过重试：${[...seen]}`);
   const res = k.result();
   assert.equal(res.ok, false);
@@ -330,7 +351,6 @@ test('回滚也失败：立即停，不给重试、不自动重开，原备份�
   assert.equal(kept.length, 1, '原备份改名留着，下次升级不会覆盖');
   assert.equal(fs.readFileSync(path.join(k.p.root, kept[0], 'app.asar'), 'utf8'), 'old-asar');
   assert.equal(fs.existsSync(path.join(k.p.root, 'backup')), false);
-  k.done();
 });
 
 test('升级守卫：打开锁文件没权限（EPERM/EACCES）不算在升级，照常启动；只有共享冲突（EBUSY）才拦', () => {
@@ -403,8 +423,13 @@ test('管理员副本替换成功：普通权限父脚本重开，成功进度�
     // 普通权限模拟授权成功：仅强制进入授权分支，管理员副本仍执行原版替换逻辑，不弹真实 UAC。
     fs.writeFileSync(k.p.helper, '\uFEFF' + HELPER.replace('if (Test-Writable $p.resourcesDir)', 'if ($false)'), 'utf8');
     const helper = k.start();
-    assert.ok(await k.waitFor(() => fs.existsSync(marker), 20000), '替换成功后重开');
-    assert.equal(Number(fs.readFileSync(marker, 'utf8').replace(/^\uFEFF/, '').trim()), helper.pid);
+    // File creation precedes Set-Content finishing and releasing its write lock.
+    const parent = await k.waitFor(() => {
+      try { return fs.readFileSync(marker, 'utf8').replace(/^\uFEFF/, '').trim(); }
+      catch (err) { if (['ENOENT', 'EBUSY'].includes(err.code)) return null; throw err; }
+    }, 20000);
+    assert.ok(parent, '替换成功后重开，父进程标记已写完并可读');
+    assert.equal(Number(parent), helper.pid);
     assert.ok(await k.waitFor(() => !alive(helper), 5000));
     assert.equal(k.result().ok, true);
     assert.equal(k.result().elevated, true);

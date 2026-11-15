@@ -67,7 +67,6 @@ function Start-Ui {
 function Ui-Alive { if ($p.assumeUi) { return $true }; try { return ($script:ui -and -not $script:ui.HasExited) } catch { return $false } }
 # 等进度小窗里的按钮（decision.json）。小窗没开或被关掉就不等，按原来的做法走。
 function Wait-Decision($seconds) {
-  if ($p.decisionFile) { Remove-Item -LiteralPath $p.decisionFile -Force -ErrorAction SilentlyContinue }
   $end = (Get-Date).AddSeconds($seconds)
   while ((Get-Date) -lt $end) {
     if ($p.decisionFile -and (Test-Path -LiteralPath $p.decisionFile)) {
@@ -251,6 +250,8 @@ if ($Elevated) { Replace-Files; exit 0 }
 # 多开时两个窗口可能先后退出，各起一个脚本：只让先到的那个干活，它结束时系统自动释放。
 try { $script:helperLock = [IO.File]::Open((Join-Path $p.stagingDir 'helper.lock'), 'OpenOrCreate', 'ReadWrite', 'None') } catch { Relaunch; exit 0 }
 
+# 仅本轮的主脚本在小窗出现前清理旧决定；之后按钮可能已写入新决定，进入等待时不能再删。
+if ($p.decisionFile) { Remove-Item -LiteralPath $p.decisionFile -Force -ErrorAction SilentlyContinue }
 Start-Ui
 Set-Progress 1 '保存会话并关闭旧窗口' '通常 3–20 秒'
 $deadline = (Get-Date).AddSeconds([int]$p.waitSeconds)
