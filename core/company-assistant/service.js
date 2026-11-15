@@ -272,6 +272,8 @@ class CompanyAssistant {
       next.rooms = { ...(s.rooms || {}) };
       for (const key of ['home', 'exePath']) if (key in patch.rooms) next.rooms[key] = String(patch.rooms[key] || '').trim();
       if ('enabled' in patch.rooms) next.rooms.enabled = !!patch.rooms.enabled;
+      // 抢订节奏（提前天数 + 开放时刻）：用户就地确认或在设置里改过才写；由 rooms.saveSchedule 校验。
+      if ('schedule' in patch.rooms) next.rooms.schedule = patch.rooms.schedule ? { ...patch.rooms.schedule } : undefined;
     }
     this.write('settings.json', next);
     this.changed();

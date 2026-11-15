@@ -5,6 +5,7 @@ const { randomUUID, createHash } = require('node:crypto');
 const { spawn } = require('node:child_process');
 const component = require('./room-component');
 const { createRuntimeDownload } = require('./room-runtime-download');
+const S = require('./room-schedule');
 
 const SOON_MS = 10 * 60000;   // 订到的会开始前 10 分钟，桌宠提醒一次
 const RULES = ['主题', '开始时间', '时长小时', '时长分钟', '优先会议室', '抢订日', '抢订设置', '会后动作', '系统', '高级'];
@@ -83,7 +84,60 @@ class RoomBooking {
       loginNeeded: !!helper?.loginNeeded, loginBusy: !!(live && helper.loginBusy),
       rules: helper?.rules || null, phases: live ? helper.phases : {}, nextOpen: helper?.nextOpen,
       error: this.preparationError || this.error, home: this.home(), enabled: !!this.settings().enabled,
-      targetOffsetDays: 7, events: (this.a.state().roomEvents || []).map(e => ({ ...e, slot: slotText(e.record) })) };
+      ...this.scheduleState(helper), events: (this.a.state().roomEvents || []).map(e => ({ ...e, slot: slotText(e.record) })) };
+  }
+  // 会议室名称与近期日程地点用来推断园区；日程快照每 10 分钟最多读一次。
+  meetingLocations() {
+    const now = this.a.now();
+    if (this.locCache && now - this.locCache.at < 10 * 60000) return this.locCache.list;
+    let list = [];
+    try {
+      const snap = this.a.snapshot?.();
+      list = [...(snap?.meetings || []), ...(snap?.calendar || [])].map(m => String(m.location || '')).filter(Boolean).slice(0, 200);
+    } catch { list = []; }
+    this.locCache = { at: now, list };
+    return list;
+  }
+  // 生效的抢订节奏 + 组件是否能按非 7 天抢。
+  schedule(helper = null) {
+    try { helper = helper || this.helper(); } catch { helper = null; }
+    const rooms = [...(helper?.rules?.['优先会议室'] || []), ...((helper?.history || []).map(r => r['会议室']).filter(Boolean))];
+    const inferred = S.inferCampus({ rooms, locations: this.meetingLocations() });
+    const componentOpenTime = helper?.preferences?.['抢订设置']?.['开放时间'] || helper?.rules?.['抢订设置']?.['开放时间'] || null;
+    const schedule = S.resolveSchedule({ saved: this.settings().schedule, inferred, componentOpenTime });
+    const caps = Array.isArray(helper?.capabilities) ? helper.capabilities : [];
+    return { ...schedule, componentOpenTime: S.normalizeOpenTime(componentOpenTime), advanceDaysSupported: caps.includes('advance-days') };
+  }
+  scheduleState(helper) {
+    const schedule = this.schedule(helper), openAt = S.nextOpenAt(this.a.now(), schedule.openTime);
+    return { schedule: { ...schedule, text: S.describe(schedule), hubNextOpen: openAt.toISOString(), hubTargetDate: S.targetDateFor(openAt, schedule.advanceDays) },
+      targetOffsetDays: schedule.advanceDays };
+  }
+  saveSchedule({ advanceDays, openTime } = {}) {
+    const days = Number(advanceDays), open = S.normalizeOpenTime(openTime);
+    if (!S.validDays(days)) throw new Error(`提前天数请填 ${S.MIN_DAYS}–${S.MAX_DAYS} 的整数`);
+    if (!open) throw new Error('开放时刻请填 00:00–23:59 的时间');
+    this.a.setSettings({ rooms: { schedule: { advanceDays: days, openTime: open, confirmed: true, at: this.a.now() } } });
+    this.a.changed();
+    return this.status();
+  }
+  // 开抢前把生效的节奏交给组件：开放时刻组件本来就收；提前天数要新版组件才收。
+  // 规则不是 7 天而组件只会抢 7 天：启动守护、立即抢一次都会白跑，在准备组件之前就拒绝。测试填表不提交，照常放行。
+  checkSchedule(op) {
+    const s = this.schedule();
+    if (['start', 'once'].includes(op) && s.advanceDays !== S.DEFAULT_ADVANCE_DAYS && !s.advanceDaysSupported) {
+      const who = s.source === 'campus' ? `${s.campus}园区是提前 ${s.advanceDays} 天放号` : `你设置的是提前 ${s.advanceDays} 天`;
+      throw new Error(`${who}，当前会议室组件只会抢 7 天后的会议室，按这个规则抢不到；需要更新会议室组件后才能按 ${s.advanceDays} 天抢。本次未启动，可在「设置 · 抢订节奏」改回 7 天`);
+    }
+    return s;
+  }
+  async applySchedule() {
+    const s = this.schedule();
+    const patch = {};
+    // 组件开放时刻已知且不同，或不知道组件当前值而规则来自园区/用户设置时才下发；默认规则不动组件原设置。
+    if (s.componentOpenTime ? s.componentOpenTime !== s.openTime : s.source !== 'default') patch['开放时间'] = s.openTime;
+    if (s.advanceDaysSupported) patch['提前天数'] = s.advanceDays;
+    if (Object.keys(patch).length) await this.command('configure', { '抢订设置': patch }, { user: true, internal: true });
   }
   details() {
     const state = this.status(), helper = this.helper() || {};
@@ -171,13 +225,18 @@ class RoomBooking {
     this.a.changed();
     return this.starting;
   }
-  async command(op, args = {}, { user = false } = {}) {
+  async command(op, args = {}, { user = false, internal = false } = {}) {
     if (!['status', 'configure', 'start', 'pause', 'login', 'show', 'test', 'once', 'read-rooms', 'test-message', 'remove-pending'].includes(op)) throw new Error('不支持的会议室操作');
     if (['once', 'test-message', 'remove-pending'].includes(op) && !user) throw new Error('请在会议室页面亲自执行此操作');
     if (op === 'configure' && !user && ['抢订设置', '会后动作', '系统', '高级'].some(k => Object.hasOwn(args, k))) throw new Error('请在会议室页面亲自修改高级设置');
-    if (op === 'configure' && Object.keys(args).some(k => !RULES.includes(k))) throw new Error('此版本按每周规则抢七天后的会议室，不支持指定明天；请提供主题、时段、会议室和星期');
+    if (op === 'configure' && Object.keys(args).some(k => !RULES.includes(k))) {
+      const s = this.schedule();
+      throw new Error(`目标日期按抢订节奏自动算（每天 ${s.openTime.slice(0, 5)} 放号，抢 ${s.advanceDays} 天后），不支持指定某一天；请提供主题、时段、会议室和星期`);
+    }
     if (op === 'status') return this.status();
-    await this.ensure({ user });
+    if (!internal) this.checkSchedule(op);
+    if (!internal) await this.ensure({ user });
+    if (!internal && ['start', 'once', 'test'].includes(op)) await this.applySchedule();
     const id = randomUUID(), req = this.file('hub-control', 'requests', id + '.json'), reply = this.file('hub-control', 'replies', id + '.json');
     fs.mkdirSync(path.dirname(req), { recursive: true });
     const tmp = req + '.tmp'; fs.writeFileSync(tmp, JSON.stringify({ id, op, args, at: this.a.now() }), 'utf8'); fs.renameSync(tmp, req);
@@ -237,7 +296,8 @@ class RoomBooking {
       const now = this.a.now(), d = new Date(now), minute = d.getHours() * 60 + d.getMinutes();
       const live = this.status();
       if (this.settings().enabled && live.connected && !live.running) this.a.setSettings({ rooms: { enabled: false } });
-      if (this.settings().enabled && minute >= 690 && minute < 720 && !live.connected && now - this.lastStart >= 10 * 60000) {
+      const win = S.autoStartWindow(live.schedule?.openTime);
+      if (this.settings().enabled && minute >= win.from && minute < win.to && !live.connected && now - this.lastStart >= 10 * 60000) {
         this.lastStart = now; await this.command('start');
       }
       const history = readJson(this.file('booking_history.json'), []);

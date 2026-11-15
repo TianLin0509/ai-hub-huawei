@@ -48,6 +48,7 @@ function registerCompanyAssistantIpc(ipcMain, service) {
       return { ok: true };
     },
     'room-command': request => service.rooms.command(request?.op, request?.rules || {}, { user: true }),
+    'room-schedule': request => ({ ok: true, rooms: service.rooms.saveSchedule(request || {}) }),
     'room-connect': async () => ({ ok: true, rooms: await service.rooms.ensure({ user: true }) }),
     'room-reconnect': async () => ({ ok: true, rooms: await service.rooms.reconnect() }),
     'room-discover': async () => ({ ok: true, rooms: await service.rooms.discover() }),

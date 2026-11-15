@@ -193,12 +193,17 @@ function remainingWorkdays(todayKey, opts = {}) {
   const t = parseDate(todayKey);
   let n = 0;
   const d = new Date(t);
-  d.setDate(d.getDate() + 1);
+  // 汇总尚未结算今天，剩余预算也要包含今天。
   while (d.getMonth() === t.getMonth()) {
     if (isWorkKind(dayKind(dateKey(d), opts))) n += 1;
     d.setDate(d.getDate() + 1);
   }
   return n;
+}
+
+// 先按 05:00 规则归属日期，再排除今天及未来；原始打卡保留供后续补全。
+function completedDays(days, todayKey) {
+  return todayKey ? days.filter((x) => x.date < todayKey) : days;
 }
 
 function summarize(days) {
@@ -222,7 +227,7 @@ function summarize(days) {
 /* 当月统计 + 80 小时红线推算 */
 function monthReport(days, ym, todayKey, opts = {}) {
   const rules = { ...DEFAULT_RULES, ...(opts.rules || {}) };
-  const list = days.filter((x) => x.date.slice(0, 7) === ym);
+  const list = completedDays(days, todayKey).filter((x) => x.date.slice(0, 7) === ym);
   const s = summarize(list);
   const [y, m] = ym.split('-').map(Number);
   const total = monthWorkdays(y, m - 1, opts);
@@ -243,7 +248,7 @@ function monthReport(days, ym, todayKey, opts = {}) {
 /* 年度统计：逐月净加班、超红线月份、全年合计和几个「有意思」的数 */
 function yearReport(days, year, todayKey, opts = {}) {
   const rules = { ...DEFAULT_RULES, ...(opts.rules || {}) };
-  const list = days.filter((x) => x.date.slice(0, 4) === String(year));
+  const list = completedDays(days, todayKey).filter((x) => x.date.slice(0, 4) === String(year));
   const months = [];
   for (let m = 1; m <= 12; m += 1) {
     const ym = `${year}-${String(m).padStart(2, '0')}`;
@@ -281,6 +286,6 @@ function fmtClock(min) {
 
 module.exports = {
   DEFAULT_RULES, DEFAULT_WORK_TIME, normalizeWorkTime, rulesFromWorkTime, WEEK, toMinutes, parseDate, dateKey, shiftDay, lastSaturday, dayKind, isWorkKind,
-  normalizeRecord, mergeRecords, buildDays, monthWorkdays, remainingWorkdays, summarize,
+  normalizeRecord, mergeRecords, buildDays, monthWorkdays, remainingWorkdays, completedDays, summarize,
   monthReport, yearReport, fmtHours, fmtHm, fmtClock,
 };

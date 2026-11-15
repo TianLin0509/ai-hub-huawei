@@ -6,6 +6,7 @@ Booking, browser login, clock calibration and post actions use the original engi
 import copy
 import queue
 import re
+import sys
 import threading
 from datetime import datetime, timedelta
 from . import config as C, post, welink
@@ -14,7 +15,7 @@ from . import hub_control_base as base
 GROUPS = {
     '抢订设置': {'开放时间': 'clock', '提前填表秒数': (5, 600), '最大重试次数': (1, 30),
                  '重试间隔毫秒': (50, 3000), '抢不到换下一间': bool,
-                 '登录预检提前分钟': (0, 180), '校准服务器时间': bool},
+                 '登录预检提前分钟': (0, 180), '校准服务器时间': bool, '提前天数': (1, 14)},
     '会后动作': {'模式': ['不动作', '通知模式', '自动释放'], '小鲁班ID': str, '提醒提前分钟': (1, 60)},
     '系统': {'守护时阻止睡眠': bool},
     '高级': {'网址': 'url', '浏览器': ['自动', 'Edge', 'Chrome', '内置Chromium'],
@@ -23,9 +24,29 @@ GROUPS = {
 }
 
 
+def advance_days(cfg):
+    """抢几天后的会议室：Hub 按园区规则下发「抢订设置.提前天数」，没设过就是原来的 7 天。"""
+    value = (cfg.get('抢订设置') or {}).get('提前天数', 7)
+    return value if type(value) is int and 1 <= value <= 14 else 7
+
+
+def install_advance_days(window):
+    """原引擎与界面用 timedelta(weeks=1) 算目标日期（仅此一种用法）。把这两个模块里的 timedelta
+    换成按当前配置取天数的版本，其余用法原样转交；不改原引擎代码。"""
+    def delta(*args, **kwargs):
+        if not args and kwargs == {'weeks': 1}:
+            return timedelta(days=advance_days(window.cfg))
+        return timedelta(*args, **kwargs)
+    for name in ('jobs', 'gui'):
+        module = sys.modules.get(__package__ + '.' + name)
+        if module is not None and getattr(module, 'timedelta', None) is timedelta:
+            module.timedelta = delta
+    return delta
+
+
 def validate_patch(patch):
     if not isinstance(patch, dict) or set(patch) - set(base.FIELDS) - set(GROUPS):
-        raise ValueError('不支持的会议室设置；目标日期仍为开放日七天后')
+        raise ValueError('不支持的会议室设置；目标日期按开放日加「提前天数」计算')
     basic = {k: v for k, v in patch.items() if k in base.FIELDS}
     empty_rooms = basic.get('优先会议室') == []
     if empty_rooms:
@@ -67,6 +88,7 @@ class HubControl(base.HubControl):
         self.read_result = {'state': 'idle', 'names': [], 'error': ''}
         self.test_result = {'state': 'idle', 'error': ''}
         super().__init__(window)
+        install_advance_days(window)
 
     def status(self):
         while not self.results.empty():
@@ -84,8 +106,8 @@ class HubControl(base.HubControl):
             now = w.clock.now()
             h, m, sec = map(int, w.cfg['抢订设置']['开放时间'].split(':'))
             opened = now.replace(hour=h, minute=m, second=sec, microsecond=0)
-            target = now.date() + timedelta(days=7)
-        s.update(capabilities=['full-ui'], loginState=w.login_state,
+            target = now.date() + timedelta(days=advance_days(w.cfg))
+        s.update(capabilities=['full-ui', 'advance-days'], targetOffsetDays=advance_days(w.cfg), loginState=w.login_state,
                  loginCheckedAt=w.login_checked_at.isoformat() if w.login_checked_at else None,
                  nextOpen=opened.isoformat(), targetDate=target.isoformat(),
                  serverNow=w.clock.now().isoformat(), controlBusy=self.work,
@@ -148,7 +170,7 @@ class HubControl(base.HubControl):
         elif op == 'read-rooms':
             from .engine import read_rooms
             cfg = copy.deepcopy(w.cfg)
-            day = (datetime.now() + timedelta(weeks=1)).strftime('%Y/%m/%d')
+            day = (datetime.now() + timedelta(days=advance_days(cfg))).strftime('%Y/%m/%d')
             self.background(op, lambda: read_rooms(cfg, lambda m, l='info': w.bus.log.emit(m, l), threading.Event(), day))
         elif op == 'test-message':
             cfg = copy.deepcopy(w.cfg)

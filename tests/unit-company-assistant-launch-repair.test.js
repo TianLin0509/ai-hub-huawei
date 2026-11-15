@@ -97,7 +97,7 @@ test('3 邮箱提示条直接配置，复用配置动作并转义输入', async 
 function roomContext() {
   const calls = [], message = {}, draft = { 会后动作: { 模式: '通知模式' }, 高级: { 'welink-cli路径': '' } };
   let installed = false;
-  const context = { draft, changed: new Set(), copy: value => JSON.parse(JSON.stringify(value)), slot: () => message, updateControls() {}, refresh: async () => {},
+  const context = { draft, changed: new Set(), schedChanged: false, schedDraft: { advanceDays: 7 }, copy: value => JSON.parse(JSON.stringify(value)), slot: () => message, updateControls() {}, refresh: async () => {},
     validate: () => context.draft, call: async op => { calls.push(op); if (op === 'status') return { cliPath: installed ? 'C:\\tools\\welink.exe' : '', cliInstallAvailable: true }; if (op === 'install-cli') { installed = true; return { ok: true }; } } };
   vm.createContext(context);
   vm.runInContext(section(rooms, '  async function save() {', '  async function act('), context);

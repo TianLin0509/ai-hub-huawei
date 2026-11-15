@@ -36,7 +36,7 @@ test('逐日加班与 11 月净加班', () => {
   assert.equal(by['2026-11-07'].ot, 383);
   assert.equal(by['2026-11-07'].owe, 0);
   assert.equal(by['2026-11-05'].manual, true);
-  const m = A.monthReport(days, '2026-11', '2026-11-07');
+  const m = A.monthReport(days, '2026-11', '2026-11-08');
   assert.equal(m.gross, 1586);
   assert.equal(m.owe, 150);
   assert.equal(m.net, 1436);
@@ -74,7 +74,7 @@ test('节假日整段算加班', () => {
 });
 
 test('年度统计', () => {
-  const y = A.yearReport(A.buildDays(RAW), 2026, '2026-11-07');
+  const y = A.yearReport(A.buildDays(RAW), 2026, '2026-11-08');
   assert.equal(y.monthsWithData, 2);
   assert.equal(y.months[10].net, 1436);
   assert.equal(y.months[9].net, 120 - 30);
@@ -105,4 +105,77 @@ test('核心工作时间可自定义：默认口径不变，改时间后扣时�
   assert.equal(A.normalizeWorkTime({ amStart: '12:00', amEnd: '09:00' }).ok, false);
   assert.match(A.normalizeWorkTime({ pmEnd: '18:00', eveningFrom: '17:00' }).error, /晚上加班/);
   assert.equal(A.rulesFromWorkTime({ amStart: '12:00', amEnd: '09:00' }).amEnd, 540);
+});
+
+const card = (date, first, last = first) => ({ attendanceDate: date, earlyClockInTime: first, lateClockInTime: last });
+
+for (const [label, last] of [['只有上班卡', '08:40'], ['已有离开卡', '22:30']]) {
+  test(`今天${label}：月报、年报及明细都只统计昨天以前`, () => {
+    const records = [card('2026-11-09', '08:40', '20:00'), card('2026-11-10', '08:40', last)];
+    const days = A.buildDays(records);
+    const expected = A.summarize(days.filter(x => x.date < '2026-11-10'));
+    const m = A.monthReport(days, '2026-11', '2026-11-10');
+    const y = A.yearReport(days, 2026, '2026-11-10');
+    for (const r of [m, y]) for (const key of ['workdays', 'span', 'gross', 'owe', 'net', 'avgLeave', 'avgArrive', 'convertedDaily', 'late22']) {
+      assert.equal(r[key], expected[key], key);
+    }
+    assert.equal(y.months[10].net, expected.net);
+    assert.equal(y.latestLeave.date, '2026-11-09');
+    assert.deepEqual(m.days.map(x => x.date), ['2026-11-09']);
+    const { viewModel } = require('../renderer/company-attendance-page');
+    const vm = viewModel({ records, today: '2026-11-10' });
+    assert.deepEqual(vm.days.map(x => x.date), ['2026-11-09']);
+    assert.equal(A.summarize(vm.days).net, m.net);
+    assert.equal(records.length, 2); // 原始打卡不删除，第二天可以补全。
+  });
+}
+
+test('工作日今天尚未结算：剩余天数和红线预测包含今天', () => {
+  const m = A.monthReport(A.buildDays([card('2026-11-09', '09:00', '20:00')]), '2026-11', '2026-11-10');
+  assert.equal(m.leftWorkdays, 16);
+  assert.equal(m.projected, 90 + 90 * 16);
+  assert.equal(m.perDayAllowance, (4800 - 90) / 16);
+});
+
+test('月末工作日今天仍有预算，次日自动结算；未传今天时仍可统计历史全集', () => {
+  const days = A.buildDays([card('2026-11-30', '08:40', '20:00')]);
+  const current = A.monthReport(days, '2026-11', '2026-11-30');
+  assert.equal(current.workdays, 0);
+  assert.equal(current.leftWorkdays, 1);
+  assert.equal(A.monthReport(days, '2026-11', '2026-12-01').net, 110);
+  assert.equal(A.monthReport(days, '2026-11').net, 110);
+  assert.equal(A.yearReport(days, 2026).net, 110);
+});
+
+test('今天是周末、节假日或月末周六：不结算，历史分类和加班不变', () => {
+  const cases = [
+    ['2026-11-07', {}, 'weekend', 300],
+    ['2026-10-02', { holidays: { '2026-10-02': true } }, 'holiday', 300],
+    ['2026-10-31', {}, 'lastSaturday', -30],
+  ];
+  for (const [today, opts, kind, net] of cases) {
+    const days = A.buildDays([card(today, '10:00', '15:00')], opts);
+    assert.equal(days[0].kind, kind);
+    assert.equal(A.monthReport(days, today.slice(0, 7), today, opts).net, 0);
+    const past = A.monthReport(days, today.slice(0, 7), A.shiftDay(today, 1), opts);
+    assert.equal(past.net, net);
+  }
+});
+
+test('周一凌晨跨零点打卡仍归周日，周一上班卡不进入汇总', () => {
+  const days = A.buildDays([card('2026-11-08', '22:00', '01:00'), card('2026-11-09', '02:00', '03:00'), card('2026-11-09', '08:40')]);
+  const m = A.monthReport(days, '2026-11', '2026-11-09');
+  assert.deepEqual(m.days.map(x => x.date), ['2026-11-08']);
+  assert.equal(m.rest, 240);
+  assert.equal(m.owe, 0);
+  assert.equal(m.days[0].leave, 1620);
+});
+
+test('只有今天或未来记录：年度不产生已出勤月份、峰值和最晚离开', () => {
+  const days = A.buildDays([card('2026-01-01', '09:00', '23:00'), card('2026-01-02', '09:00', '23:00')]);
+  const y = A.yearReport(days, 2026, '2026-01-01');
+  assert.equal(y.monthsWithData, 0);
+  assert.equal(y.peakMonth, null);
+  assert.equal(y.latestLeave, null);
+  assert.equal(y.firstDate, null);
 });

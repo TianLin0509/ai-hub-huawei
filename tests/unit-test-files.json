@@ -116,6 +116,7 @@
   "tests/unit-boot-storage-failure.test.js",
   "tests/unit-hub-feedback-size.test.js",
   "tests/unit-card-blockquote-tasklist-css.test.js",
+  "tests/unit-rules-toast-click-through.test.js",
   "tests/unit-input-history-quota.test.js",
   "tests/unit-path-literal-and-clip-quote.test.js",
   "tests/unit-text-file-decoding.test.js",

@@ -45,13 +45,14 @@
     if (!r || !r.ok) throw new Error((r && r.error) || '调用失败');
     return r.data;
   }
+  const TOAST_BOTTOM = 44;
   function toast(msg, bad) {
-    // 最多同时留 3 条，新的在最下面，旧的往上挪
+    // 最多同时留 3 条，新的在最下面，旧的往上挪；提示条不拦点击（rules.css 里 pointer-events: none），从状态栏上方起叠
     const old = [...document.querySelectorAll('.rl-toast')];
     old.slice(0, Math.max(0, old.length - 2)).forEach(e => e.remove());
     const t = h('div', { class: 'rl-toast' + (bad ? ' bad' : ''), role: 'status', text: msg });
     document.body.appendChild(t);
-    const restack = () => [...document.querySelectorAll('.rl-toast')].reverse().forEach((e, i) => { e.style.bottom = `${24 + i * 52}px`; });
+    const restack = () => [...document.querySelectorAll('.rl-toast')].reverse().forEach((e, i) => { e.style.bottom = `${TOAST_BOTTOM + i * 52}px`; });
     restack();
     setTimeout(() => { t.remove(); restack(); }, bad ? 7000 : 3200);
   }

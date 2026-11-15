@@ -113,7 +113,8 @@
 .rl-pill.ok { color: var(--status-success, #2f855a); border-color: currentColor; }
 .rl-pill.bad { color: var(--status-danger, #c53030); border-color: currentColor; }
 
-.rl-toast { position: fixed; right: 24px; bottom: 24px; z-index: 9999; background: var(--surface-raised); color: var(--fg-strong); border: 1px solid var(--border-strong); border-radius: var(--radius-md); padding: 10px 14px; font-size: 13px; box-shadow: 0 6px 24px rgba(0,0,0,.18); max-width: 440px; }
+/* 提示条只看不拦：点击穿透到下面的按钮和输入框，抬到底部状态栏之上（r13 用户反馈：提示挡住后面的按钮、发不出消息） */
+.rl-toast { position: fixed; right: 24px; bottom: 44px; z-index: 9999; pointer-events: none; background: var(--surface-raised); color: var(--fg-strong); border: 1px solid var(--border-strong); border-radius: var(--radius-md); padding: 10px 14px; font-size: 13px; box-shadow: 0 6px 24px rgba(0,0,0,.18); max-width: 440px; }
 .rl-toast.bad { border-color: var(--status-danger, #c53030); }
 
 /* 场景（2026-10-13） */

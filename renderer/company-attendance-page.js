@@ -12,8 +12,8 @@ function viewModel(status, now = new Date()) {
   for (const k of Object.keys(status?.holidays || {})) holidays[k] = true;
   const r = status?.rules || A.rulesFromWorkTime({});
   const opts = { holidays, rules: { amEnd: r.amEnd, pmStart: r.pmStart, owePerWorkday: r.owePerWorkday } };
-  const days = A.buildDays(status?.records || [], opts);
   const today = status?.today || A.dateKey(now);
+  const days = A.completedDays(A.buildDays(status?.records || [], opts), today);
   const ym = today.slice(0, 7);
   const month = A.monthReport(days, ym, today, opts);
   const year = A.yearReport(days, Number(today.slice(0, 4)), today, opts);
@@ -136,6 +136,7 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
       <li>核心工作时间 ${t.amStart}–${t.amEnd}、${t.pmStart}–${t.pmEnd}，共 ${h1(w.ratedMinutes)} 小时；${owe}。可在「考勤设置」里改成你自己的时间。</li>
       <li>工作日 ${t.amStart} 前和 ${t.eveningFrom} 后算加班；一天从 05:00 算起，凌晨 05:00 前的打卡算前一天。</li>
       <li>周末、节假日整段在岗都算加班；月末周六是正常上班日，和工作日一样算。节假日以考勤系统的假期日历为准。</li>
+      <li>统计只到昨天，今天的打卡留待次日结算，不参与工时、加班、扣除及平均值；剩余工作日包含今天。</li>
       <li>只算有打卡的时段：同一天离开后又回来，中间不算。考勤页只给最近 8 天，Hub 每天读一次并按日期拼起来。</li></ul></details>`;
   }
   function bodyHtml() {
@@ -145,7 +146,7 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
         <div class="att-row">${status.lastResult?.needsLogin ? '<button type="button" class="att-btn primary" data-att="login">登录考勤</button>' : ''}<button type="button" class="att-btn${status.lastResult?.needsLogin ? '' : ' primary'}" data-att="sync">现在读取</button></div></div>`;
     }
     const m = vm.month;
-    const hero = `<section class="att-card att-hero"><div class="att-hero-num"><div class="l">${Number(vm.ym.slice(5))} 月净加班 · 截至 ${md(vm.today)}</div>
+    const hero = `<section class="att-card att-hero"><div class="att-hero-num"><div class="l">${Number(vm.ym.slice(5))} 月净加班 · 统计至昨日</div>
         <div class="v">${h1(m.net)}<small>小时</small></div><div class="n">相当于多上了 <b>${m.equivalentDays.toFixed(1)}</b> 天班（每天 8 小时）</div></div>
         <div class="att-hero-cap">${capBar()}<div class="att-hero-sub">加班 ${h1(m.gross)} − 扣除 ${h1(m.owe)}（${m.workdays} 个工作日 × ${h1(vm.work.owePerWorkday)}）· 本月 ${m.monthWorkdays} 个工作日</div></div></section>`;
     const k = `<div class="att-kpis">${

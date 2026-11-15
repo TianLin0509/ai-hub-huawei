@@ -55,6 +55,16 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
   let host, footer, state = {}, draft = copy(DEFAULTS), tab = 'overview', dirty = false, busy = false, polling = false, timer, clockTimer, generation = 0, loaded = false, logCleared = '', logsShown = null;
   const changed = new Set();
   let draggedRoom = null;
+  // 抢订节奏（提前天数 + 开放时刻）由 Hub 按园区推断并保存；schedChanged 表示设置页改过、保存时一起存。
+  let schedDraft = { advanceDays: 7 }, schedChanged = false, pendingOp = '';
+  const sched = () => state.schedule || { advanceDays: 7, openTime: draft.抢订设置.开放时间 || '12:00:00', source: 'default', text: '' };
+  // 现有组件只抢 7 天后；规则不是 7 天且组件不支持时，按 Hub 算出的开抢时刻和目标日期显示，不拿组件的 7 天结果误导。
+  const schedBlocked = () => sched().advanceDays !== 7 && !sched().advanceDaysSupported;
+  const componentAgrees = () => !schedBlocked() && (!sched().componentOpenTime || sched().componentOpenTime === sched().openTime);
+  const effOpen = () => componentAgrees() && state.nextOpen ? state.nextOpen : sched().hubNextOpen;
+  const effTarget = () => componentAgrees() && state.targetDate ? state.targetDate : sched().hubTargetDate;
+  const hm = t => String(t || '').slice(0, 5);
+  const sourceLabel = () => sched().source === 'manual' ? '你设置的' : sched().source === 'campus' ? `按${sched().campus}园区规则` : '默认规则';
   const call = async (name, args) => {
     const result = await ipcRenderer.invoke('company-assistant:' + name, args);
     if (result?.ok === false) throw Error(result.error || '会议室操作未完成');
@@ -89,6 +99,8 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
     document.body.append(host);
     host.addEventListener('input', event => {
       const e = event.target;
+      if (e.matches('[data-cr-sched-field]')) { schedDraft.advanceDays = Number(e.value); dirty = true; schedChanged = true; }
+      if (e.dataset.crField === '抢订设置.开放时间') schedChanged = true;
       if (e.matches('[data-cr-field]')) { setValue(e.dataset.crField, e.type === 'checkbox' ? e.checked : e.type === 'number' || ['时长分钟'].includes(e.dataset.crField) ? Number(e.value) : e.value); }
       if (e.matches('[data-cr-day]')) { draft.抢订日 = [...host.querySelectorAll('[data-cr-day]:checked')].map(x => Number(x.dataset.crDay)); dirty = true; changed.add('抢订日'); }
       if (e.matches('[data-cr-room-name]')) { draft.优先会议室[Number(e.dataset.crRoomName)] = e.value; dirty = true; changed.add('优先会议室'); }
@@ -140,14 +152,14 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
       <section>${head('最近 5 次', `<span class="cr-sp"></span><button type="button" class="cr-btn cr-btn-ghost cr-btn-sm" data-cr-tab="history">全部历史</button>`)}<div class="cr-tbl" data-cr-slot="recent"></div></section>`;
   }
   function overviewSide() {
-    return `<div class="cr-side-h">守护<span class="cr-tag" data-cr-slot="guard">—</span></div><div class="cr-side-b"><p class="cr-side-p">守护按每天开放时刻抢七天后的同一天。立即抢一次的目标是今天起第七天，会真实提交；尚未开放时等到今天的开放时刻。</p>
+    return `<div class="cr-side-h">守护<span class="cr-tag" data-cr-slot="guard">—</span></div><div class="cr-side-b"><p class="cr-side-p" data-cr-slot="rule-text"></p><div class="cr-sched" data-cr-slot="sched-card" hidden></div>
       <div class="cr-acts">${button('plan', '去填抢订计划', 'pri')}${button('start', icon('play', 14) + '启动守护', 'pri')}${button('once', icon('bolt', 15) + '立即抢一次')}${button('test', icon('eye', 15) + '测试填表（不提交）')}${button('login', icon('acct', 15) + '登录 / 检查登录')}${button('pause', icon('stop', 14) + '<span data-cr-slot="pause-label">停止</span>', 'danger')}</div>
       <div class="cr-h cr-h-sm"><h3>下一次</h3></div><dl class="cr-kv" data-cr-slot="next"></dl></div>`;
   }
   function plan() {
     const rooms = draft.优先会议室;
     return `<section>${head('会议')}<div class="cr-form">${field('主题', '会议主题', 'text', 'maxlength="120"')}${field('开始时间', '开始时间', 'time', 'step="1800"')}${field('时长小时', '时长 · 小时', 'number', 'min="0" max="12" step="1"')}${select('时长分钟', '时长 · 分钟', [0, 30])}</div><p class="cr-hint">时长为 30 分钟至 12 小时，结束时间不能跨天。</p>
-      <div class="cr-field cr-days-field"><span>哪几天要抢<em>　按目标日期</em></span><div class="cr-days">${['一', '二', '三', '四', '五', '六', '日'].map((d, i) => `<label class="cr-dy" title="周${d}"><input type="checkbox" data-cr-day="${i + 1}"${draft.抢订日.includes(i + 1) ? ' checked' : ''}><span>${d}</span></label>`).join('')}</div></div><p class="cr-hint">每天开放七天后的同一天。</p></section>
+      <div class="cr-field cr-days-field"><span>哪几天要抢<em>　按目标日期</em></span><div class="cr-days">${['一', '二', '三', '四', '五', '六', '日'].map((d, i) => `<label class="cr-dy" title="周${d}"><input type="checkbox" data-cr-day="${i + 1}"${draft.抢订日.includes(i + 1) ? ' checked' : ''}><span>${d}</span></label>`).join('')}</div></div><p class="cr-hint">${escape(`每天 ${hm(sched().openTime)} 放号，抢 ${sched().advanceDays} 天后的同一天。`)}</p></section>
       <section>${head('优先会议室', `<span class="cr-n cr-num">${rooms.length} / 30</span><span class="cr-sp"></span>${button('read-rooms', icon('download', 14) + '从页面读取', 'ghost', 'cr-btn-sm')}`)}<p class="cr-hint cr-hint-top">按从上到下的顺序尝试，可拖动排序或点上下移，直接编辑名称。</p>
       <ol class="cr-rooms">${rooms.map((name, i) => `<li class="cr-rc${i === 0 ? ' first' : ''}" draggable="true" data-cr-room-row="${i}"><span class="cr-grip" aria-hidden="true">${icon('grip', 16)}</span><span class="cr-rc-n cr-num">${i + 1}</span><input class="cr-rc-name" aria-label="第 ${i + 1} 优先会议室" data-cr-room-name="${i}" value="${escape(name)}">${i === 0 ? '<span class="cr-tag blue">首选</span>' : ''}<span class="cr-ops"><button type="button" class="cr-icon-btn" data-cr-op="up" data-index="${i}" aria-label="上移 ${escape(name)}" title="上移"${!i ? ' disabled' : ''}>${icon('arrowU', 15)}</button><button type="button" class="cr-icon-btn" data-cr-op="down" data-index="${i}" aria-label="下移 ${escape(name)}" title="下移"${i === rooms.length - 1 ? ' disabled' : ''}>${icon('arrowD', 15)}</button><button type="button" class="cr-icon-btn" data-cr-op="delete" data-index="${i}" aria-label="删除 ${escape(name)}" title="删除">${icon('x', 15)}</button></span></li>`).join('')}</ol>${rooms.length ? '' : '<p class="cr-empty">还没有会议室。在下面填写全名添加，或点「从页面读取」。</p>'}
       <div class="cr-add"><input class="cr-input" data-cr-new-room aria-label="会议室全名" placeholder="会议室全名，需与网页一致">${button('add', icon('plus', 14) + '添加', 'sec', 'cr-btn-sm')}</div><div class="cr-picker-slot" data-cr-slot="room-picker"></div>${check('抢订设置.抢不到换下一间', '首选被抢走时，自动换下一间（约 20–30 秒）')}</section>`;
@@ -162,7 +174,7 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
       <section>${head('待执行', '<span class="cr-n cr-num" data-cr-slot="pending-n"></span>')}<div class="cr-items" data-cr-slot="pending"></div><p class="cr-hint">关闭页面后仍会继续执行；电脑关机错过的提醒会自动作废。</p></section>`;
   }
   function settings() {
-    return `<section>${head('抢订节奏')}<div class="cr-sets">${setRow('开放时间', '预订系统每天放号的时刻', input('抢订设置.开放时间', '开放时间', 'time', 'step="1"'))}${setRow('提前填表 · 秒', '开放前把表单填好，只差提交', input('抢订设置.提前填表秒数', '提前填表秒数', 'number', 'min="5" max="600"'))}${setRow('整点连点', '开放那一刻连续提交：次数 / 间隔毫秒', `${input('抢订设置.最大重试次数', '整点连点次数', 'number', 'min="1" max="30"')}${input('抢订设置.重试间隔毫秒', '连点间隔毫秒', 'number', 'min="50" max="3000" step="50"')}`)}${setRow('登录预检 · 提前分钟', '发现登录过期会提醒你', input('抢订设置.登录预检提前分钟', '登录预检提前分钟', 'number', 'min="0" max="180"'))}${setRow('按 WeLink 服务器时间对齐整点', '本机时间不准也不影响', toggle('抢订设置.校准服务器时间', '按 WeLink 服务器时间对齐整点'))}</div></section>
+    return `<section>${head('抢订节奏')}<div class="cr-sets">${setRow('开放时间', escape('预订系统每天放号的时刻 · ' + sourceLabel()), input('抢订设置.开放时间', '开放时间', 'time', 'step="1"'))}${setRow('提前天数', escape('抢几天后的会议室 · ' + sourceLabel()), `<input class="cr-input" data-cr-sched-field="advanceDays" type="number" min="1" max="14" step="1" value="${escape(schedDraft.advanceDays)}" aria-label="提前天数">`)}${setRow('提前填表 · 秒', '开放前把表单填好，只差提交', input('抢订设置.提前填表秒数', '提前填表秒数', 'number', 'min="5" max="600"'))}${setRow('整点连点', '开放那一刻连续提交：次数 / 间隔毫秒', `${input('抢订设置.最大重试次数', '整点连点次数', 'number', 'min="1" max="30"')}${input('抢订设置.重试间隔毫秒', '连点间隔毫秒', 'number', 'min="50" max="3000" step="50"')}`)}${setRow('登录预检 · 提前分钟', '发现登录过期会提醒你', input('抢订设置.登录预检提前分钟', '登录预检提前分钟', 'number', 'min="0" max="180"'))}${setRow('按 WeLink 服务器时间对齐整点', '本机时间不准也不影响', toggle('抢订设置.校准服务器时间', '按 WeLink 服务器时间对齐整点'))}</div></section>
       <section>${head('电脑')}<div class="cr-sets">${setRow('守护期间阻止电脑自动睡眠', '合上笔记本仍可能睡眠', toggle('系统.守护时阻止睡眠', '守护期间阻止电脑自动睡眠'))}</div><p class="cr-hint">启动与更新由 AI Hub 统一管理，会议室组件不另设开机启动和自动更新。</p></section>
       <section>${head('页面适配')}<p class="cr-hint cr-hint-top">页面改版时再调整；先用总览里的「测试填表」核对。</p><div class="cr-sets">${setRow('预订页地址', '', input('高级.网址', '预订页地址', 'url'), true)}${setRow('浏览器', '', choice('高级.浏览器', '浏览器', ['自动', 'Edge', 'Chrome', '内置Chromium']))}${setRow('welink-cli 路径', '留空自动查找', input('高级.welink-cli路径', 'welink-cli 路径'), true)}${setRow('自动标定时间网格', '关闭后使用下面的手动标定', toggle('高级.自动标定网格', '自动标定时间网格'))}${setRow('手动标定', '起点 X / 格子宽度 / 首格时间', `${input('高级.网格起点X', '手动标定起点 X', 'number', 'min="0" max="3000"')}${input('高级.格子宽度', '格子宽度', 'number', 'min="10" max="100"')}${input('高级.网格起始时间', '首格时间', 'time')}`, true)}</div></section>
       <section>${head('本机数据')}<div class="cr-sets">${setRow('数据目录', `<span class="cr-path">${escape(state.home || '')}</span>`, button('folder-data', icon('folder', 14) + '打开数据目录', 'sec', 'cr-btn-sm'))}</div><p class="cr-hint">配置、历史和登录资料保留在本机。组件随 Hub 更新。</p></section>`;
@@ -212,6 +224,8 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
       if (op === 'plan') b.hidden = readiness.plan || !!state.running;
       if (op === 'start') { b.hidden = !!state.running; b.disabled ||= !readiness.ready; b.classList.toggle('cr-btn-pri', readiness.ready); b.classList.toggle('cr-btn-sec', !readiness.ready); }
       if (op === 'once') b.disabled ||= !readiness.ready;
+      // 规则不是 7 天而组件还只会抢 7 天：启动和立即抢会白跑，按钮停用，原因写在旁边的节奏卡里。
+      if ((op === 'start' || op === 'once') && schedBlocked()) b.disabled = true;
       if (op === 'login' && b.closest('.cr-side-b')) { b.classList.toggle('cr-btn-pri', readiness.plan && !readiness.ready); b.classList.toggle('cr-btn-sec', !(readiness.plan && !readiness.ready)); }
       if (op === 'pause') b.hidden = !state.running;
     });
@@ -220,16 +234,16 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
   function updatePlanSide() {
     const cal = slot('calendar'), kv = slot('plan-kv');
     if (!cal || !kv) return;
-    const days = draft.抢订日 || [], target = /^(\d{4})-(\d{2})-(\d{2})/.exec(state.targetDate || '');
+    const days = draft.抢订日 || [], target = /^(\d{4})-(\d{2})-(\d{2})/.exec(effTarget() || '');
     const dates = [];
     if (target && days.length) {
       // Upcoming target dates from the helper's next target, following the selected weekdays (Mon=1 … Sun=7).
       const d = new Date(Date.UTC(+target[1], +target[2] - 1, +target[3]));
       for (let i = 0; i < 60 && dates.length < 5; i++, d.setUTCDate(d.getUTCDate() + 1)) if (days.includes(d.getUTCDay() || 7)) dates.push(new Date(d));
     }
-    cal.innerHTML = dates.length ? dates.map((d, i) => `<div class="cr-cd${i === 0 ? ' next' : ''}"><span>周${WEEK[d.getUTCDay()]}</span><b class="cr-num">${d.getUTCDate()}</b><em>${d.getUTCMonth() + 1} 月</em></div>`).join('') : `<p class="cr-empty">${state.connected ? '先选择要抢的日子' : '接通组件后显示'}</p>`;
+    cal.innerHTML = dates.length ? dates.map((d, i) => `<div class="cr-cd${i === 0 ? ' next' : ''}"><span>周${WEEK[d.getUTCDay()]}</span><b class="cr-num">${d.getUTCDate()}</b><em>${d.getUTCMonth() + 1} 月</em></div>`).join('') : `<p class="cr-empty">${target ? '先选择要抢的日子' : '接通组件后显示'}</p>`;
     const skip = ['一', '二', '三', '四', '五', '六', '日'].filter((_, i) => !days.includes(i + 1)).map(d => '周' + d);
-    kv.innerHTML = `<dt>时段</dt><dd class="cr-num">${escape(span() || '—')}</dd><dt>开抢</dt><dd>目标日前 7 天的 ${escape(draft.抢订设置.开放时间 || '—')}</dd><dt>不抢</dt><dd>${escape(skip.join('、') || '无')}</dd>`;
+    kv.innerHTML = `<dt>时段</dt><dd class="cr-num">${escape(span() || '—')}</dd><dt>开抢</dt><dd>目标日前 ${sched().advanceDays} 天的 ${escape(hm(sched().openTime) || '—')}</dd><dt>不抢</dt><dd>${escape(skip.join('、') || '无')}</dd>`;
   }
   function renderLogs() {
     const log = slot('logs'); if (!log) return;
@@ -265,8 +279,10 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
       connection.querySelector('[data-room-open-pass]')?.addEventListener('click', event => { event.currentTarget.disabled = true; void ipcRenderer.invoke('net-pass:open-window', event.currentTarget.dataset.roomOpenPass).catch(() => {}); });
     }
     if (tab === 'overview') {
-      slot('target').textContent = dayLabel(state.targetDate) || state.targetDate || '—';
-      slot('target-note').textContent = state.targetDate ? `${span()} · ${state.mode === 'once' || state.mode === 'test' ? '本次目标' : '开放日七天后'}` : '开放日七天后';
+      const tgt = effTarget(), after = `开放日 ${sched().advanceDays} 天后`;
+      slot('target').textContent = dayLabel(tgt) || tgt || '—';
+      slot('target-note').textContent = tgt ? `${span()} · ${state.mode === 'once' || state.mode === 'test' ? '本次目标' : after}` : after;
+      updateSchedCard();
       const login = slot('login');
       login.textContent = !state.connected ? '未连接' : state.loginState === true ? '有效' : state.loginState === false ? '失效' : '未检查';
       login.className = state.connected && state.loginState === true ? 'ok' : state.connected && state.loginState === false ? 'bad' : '';
@@ -283,7 +299,7 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
       guard.textContent = phase; guard.className = 'cr-tag ' + (state.running ? 'green' : state.preparing || state.controlBusy ? 'amber' : '');
       slot('pause-label').textContent = state.running && state.mode === 'daemon' ? '停止守护' : '停止';
       const rooms = draft.优先会议室.filter(Boolean);
-      slot('next').innerHTML = `<dt>开抢</dt><dd>${escape(whenLabel(state.nextOpen) || (state.connected ? '—' : '接通后显示'))}</dd><dt>订的是</dt><dd>${escape(state.targetDate ? `${dayLabel(state.targetDate)}　${span()}` : '—')}</dd><dt>顺序</dt><dd>${escape(rooms.length ? rooms.slice(0, 3).join(' → ') + (rooms.length > 3 ? ` 等 ${rooms.length} 间` : '') : '还没有会议室')}</dd><dt>连点</dt><dd>${escape(`${draft.抢订设置.最大重试次数} 次，间隔 ${draft.抢订设置.重试间隔毫秒} ms`)}</dd>`;
+      slot('next').innerHTML = `<dt>开抢</dt><dd>${escape(whenLabel(effOpen()) || (state.connected ? '—' : '接通后显示'))}</dd><dt>订的是</dt><dd>${escape(tgt ? `${dayLabel(tgt)}　${span()}` : '—')}</dd><dt>顺序</dt><dd>${escape(rooms.length ? rooms.slice(0, 3).join(' → ') + (rooms.length > 3 ? ` 等 ${rooms.length} 间` : '') : '还没有会议室')}</dd><dt>连点</dt><dd>${escape(`${draft.抢订设置.最大重试次数} 次，间隔 ${draft.抢订设置.重试间隔毫秒} ms`)}</dd>`;
       updateClock();
     }
     if (tab === 'history') {
@@ -314,9 +330,9 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
   }
   function updateClock() {
     if (tab !== 'overview' || !host || host.hidden) return;
-    const ms = new Date(state.nextOpen).getTime() - (Date.now() + (state.clockOffset || 0));
-    slot('countdown').textContent = !state.connected || !Number.isFinite(ms) ? '—' : ms <= 0 ? '进行中' : [Math.floor(ms / 3600000), Math.floor(ms / 60000) % 60, Math.floor(ms / 1000) % 60].map(n => String(n).padStart(2, '0')).join(':');
-    slot('countdown-note').textContent = state.connected && state.nextOpen ? `${whenLabel(state.nextOpen)}${state.serverNow ? '（按服务器时间）' : ''}` : '接通后显示';
+    const open = effOpen(), ms = new Date(open).getTime() - (Date.now() + (state.clockOffset || 0));
+    slot('countdown').textContent = !Number.isFinite(ms) ? '—' : ms <= 0 ? '进行中' : [Math.floor(ms / 3600000), Math.floor(ms / 60000) % 60, Math.floor(ms / 1000) % 60].map(n => String(n).padStart(2, '0')).join(':');
+    slot('countdown-note').textContent = open ? `${whenLabel(open)}${state.connected && state.serverNow ? '（按服务器时间）' : ''}` : '接通后显示';
   }
   async function refresh() {
     if (polling) return;
@@ -329,7 +345,7 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
       }
       if (state.running && !next.running && next.connected && !busy) slot('message').textContent = '任务已结束，可在历史记录和运行日志中查看结果。';
       next.clockOffset = next.serverNow ? new Date(next.serverNow).getTime() - Date.now() : 0; state = next;
-      if (next.rules && !dirty && !busy) { draft = { ...copy(DEFAULTS), ...next.rules }; for (const key of ['抢订设置', '会后动作', '系统', '高级']) draft[key] = { ...DEFAULTS[key], ...next.preferences?.[key] }; const first = !loaded; loaded = true; if (first || ['plan', 'post', 'settings'].includes(tab) && !host.contains(document.activeElement)) render(); }
+      if (next.rules && !dirty && !busy) { draft = { ...copy(DEFAULTS), ...next.rules }; for (const key of ['抢订设置', '会后动作', '系统', '高级']) draft[key] = { ...DEFAULTS[key], ...next.preferences?.[key] }; if (next.schedule) { draft.抢订设置.开放时间 = next.schedule.openTime; schedDraft = { advanceDays: next.schedule.advanceDays }; schedChanged = false; } const first = !loaded; loaded = true; if (first || ['plan', 'post', 'settings'].includes(tab) && !host.contains(document.activeElement)) render(); }
       updateLive();
     } catch (error) { if (epoch === generation && !host.hidden) { slot('message').textContent = '状态刷新失败：' + error.message + '；可点击刷新重试。'; } }
     finally { polling = false; }
@@ -350,7 +366,10 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
       const status = await call('status');
       if (status.cliPath) { draft.高级['welink-cli路径'] = status.cliPath; changed.add('高级'); }
     }
-    const rules = validate(); const patch = Object.fromEntries([...changed].map(k => [k, rules[k]])); await call('room-command', { op: 'configure', rules: patch }); draft = rules; dirty = false; changed.clear();
+    const rules = validate(); const patch = Object.fromEntries([...changed].map(k => [k, rules[k]]));
+    if (Object.keys(patch).length) await call('room-command', { op: 'configure', rules: patch });
+    if (schedChanged) { await call('room-schedule', { advanceDays: schedDraft.advanceDays, openTime: rules.抢订设置.开放时间 }); schedChanged = false; }
+    draft = rules; dirty = false; changed.clear();
   }
   // 复用 Hub 的自动发现与一键安装；找到后把路径写进会议室组件的设置。
   async function findCli() {
@@ -376,6 +395,14 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
     if (op === 'plan') { tab = 'plan'; render(); host.querySelector('[data-cr-new-room]')?.focus(); return; }
     if (busy && !['folder-data', 'folder-logs', 'folder-screenshots', 'clear-log'].includes(op)) return;
     if (op === 'find-cli') { await findCli(); return; }
+    if (op === 'sched-save') { await saveSchedCard(); return; }
+    // 认不出园区、也没确认过节奏：开抢前先在旁边就地确认两项，点「保存并继续」接着做刚才那一步。
+    if (['start', 'once'].includes(op) && schedBlocked()) { updateSchedCard(true); slot('message').textContent = `按现在的规则要抢 ${sched().advanceDays} 天后的会议室，当前会议室组件只会抢 7 天后，本次未启动；原因见右侧`; return; }
+    if (['start', 'once', 'test'].includes(op) && sched().needsConfirm) {
+      pendingOp = op; updateSchedCard(true);
+      slot('message').textContent = '先确认抢订节奏：提前几天、几点开放，点「保存并继续」后接着' + ({ start: '启动守护', once: '立即抢一次', test: '测试填表' })[op];
+      host.querySelector('[data-cr-sched-input="advanceDays"]')?.focus(); return;
+    }
     if (op === 'clear-log') { logCleared = state.logs || ''; updateLive(); return; }
     if (op.startsWith('folder-')) { try { await call('room-open-folder', { kind: op.slice(7) }); } catch (e) { slot('message').textContent = e.message; } return; }
     if (op === 'add' || op === 'add-selected') {
@@ -401,6 +428,35 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
       slot('message').textContent = ({ save: '设置已保存', pause: '已请求停止，待浏览器退出后即可修改', start: '已启动守护', once: '已启动本次抢订，请在流程和记录中查看结果', test: '正在测试填表，不会提交预订', login: '请在打开的浏览器中完成登录', 'read-rooms': '正在读取会议室，通常约 20 秒', 'test-message': '正在发送测试消息，请查看下方发送结果' })[op] || '操作已完成';
     } catch (error) { slot('message').textContent = '操作未完成：' + error.message; if (error.focusPlan) host.dataset.focusPlan = '1'; }
     finally { busy = false; await refresh(); updateControls(); if (host.dataset.focusPlan) { delete host.dataset.focusPlan; host.querySelector('[data-cr-new-room]')?.focus(); } }
+  }
+  // 总览右栏的节奏卡：认不出园区时就地确认两项；规则不是 7 天而组件还只会抢 7 天时，如实说明。
+  function updateSchedCard(force = false) {
+    const card = slot('sched-card'), text = slot('rule-text');
+    if (!card || !text) return;
+    const s = sched();
+    const mode = s.needsConfirm ? 'confirm' : schedBlocked() ? 'blocked' : '';
+    // 节奏卡出现时右栏只留规则一句，保证一屏放下。
+    text.textContent = (s.text || `每天 ${hm(s.openTime)} 放号，抢 ${s.advanceDays} 天后的会议室`) + (mode ? '。' : '。立即抢一次会真实提交；尚未开放时等到今天的开放时刻。');
+    const sig = JSON.stringify([mode, s.advanceDays, s.openTime, s.campus, pendingOp]);
+    if (!force && card.dataset.sig === sig) return;
+    card.dataset.sig = sig; card.hidden = !mode;
+    if (mode === 'confirm') card.innerHTML = `<b>确认抢订节奏</b><p>没从会议室名称和日程地点认出所在园区。各园区放号规则不同，核对后保存一次。</p>
+      <div class="cr-sched-row"><label>提前<input class="cr-input" data-cr-sched-input="advanceDays" type="number" min="1" max="14" step="1" value="${escape(s.advanceDays)}" aria-label="提前几天">天</label><label>每天<input class="cr-input" data-cr-sched-input="openTime" type="time" step="60" value="${escape(hm(s.openTime))}" aria-label="几点开放">开放</label></div>
+      ${button('sched-save', pendingOp ? '保存并继续' : '保存', 'pri', 'cr-btn-sm')}`;
+    else if (mode === 'blocked') card.innerHTML = `<b>${escape(s.source === 'campus' ? `${s.campus}园区提前 ${s.advanceDays} 天放号` : `提前 ${s.advanceDays} 天放号`)}</b><p class="cr-error">当前会议室组件只会抢 7 天后的会议室，按这个规则抢不到，暂不启动；更新会议室组件后自动按 ${s.advanceDays} 天抢。开放时刻 ${escape(hm(s.openTime))} 已按规则设置。</p>`;
+    else card.innerHTML = '';
+  }
+  async function saveSchedCard() {
+    const days = Number(host.querySelector('[data-cr-sched-input="advanceDays"]')?.value), open = host.querySelector('[data-cr-sched-input="openTime"]')?.value || '';
+    busy = true; updateControls();
+    let next = '';
+    try {
+      await call('room-schedule', { advanceDays: days, openTime: open });
+      next = pendingOp; pendingOp = '';
+      slot('message').textContent = `已保存：每天 ${hm(open)} 放号，抢 ${days} 天后的会议室`;
+    } catch (error) { slot('message').textContent = '没保存：' + error.message; }
+    finally { busy = false; await refresh(); updateSchedCard(true); updateControls(); }
+    if (next) await act(next);
   }
   function place() {
     if (!host || host.hidden) return;
