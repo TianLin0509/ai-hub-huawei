@@ -10051,6 +10051,7 @@ ipcRenderer.on('session-updated', (_e, { session }) => {
   if (session.codeagentPrefixFork) local.codeagentPrefixFork = session.codeagentPrefixFork;
   if (session.codeagentPoolAccount) { local.codeagentPoolAccount = session.codeagentPoolAccount; local.codeagentPoolLabel = session.codeagentPoolLabel || ''; }
   if (session.companyRoute) local.companyRoute = session.companyRoute;
+  Object.assign(local, require('../core/cli-api-profiles').metadata(session));
   if (session.companyProxyAccount) { local.companyProxyAccount = session.companyProxyAccount; local.companyProxyLabel = session.companyProxyLabel || ''; }
   let persistModel = false;
   if (session.currentModel && session.currentModel.id) {
@@ -10205,6 +10206,7 @@ function persistWorkscene(flush = false) {
         ...(s.codeagentConfigDir ? { codeagentConfigDir: s.codeagentConfigDir } : {}),
         ...(s.codeagentPoolAccount ? { codeagentPoolAccount: s.codeagentPoolAccount, codeagentPoolLabel: s.codeagentPoolLabel || '' } : {}),
         ...(s.companyRoute ? { companyRoute: s.companyRoute } : {}),
+        ...require('../core/cli-api-profiles').metadata(s),
         ...(s.companyProxyAccount ? { companyProxyAccount: s.companyProxyAccount, companyProxyLabel: s.companyProxyLabel || '' } : {}),
         effort: s.effort || null,
         contextPct: typeof s.contextPct === 'number' ? s.contextPct : null,
@@ -10634,6 +10636,7 @@ sessionImmersive = require('./session-immersive').createSessionImmersiveControll
         ...(meta.codeagentConfigDir ? { codeagentConfigDir: meta.codeagentConfigDir } : {}),
         ...(meta.codeagentPoolAccount ? { codeagentPoolAccount: meta.codeagentPoolAccount, codeagentPoolLabel: meta.codeagentPoolLabel || '' } : {}),
         ...(meta.companyRoute ? { companyRoute: meta.companyRoute } : {}),
+        ...require('../core/cli-api-profiles').metadata(meta),
         ...(meta.companyProxyAccount ? { companyProxyAccount: meta.companyProxyAccount, companyProxyLabel: meta.companyProxyLabel || '' } : {}),
         effort: meta.effort || null,
         contextPct: typeof meta.contextPct === 'number' ? meta.contextPct : null,

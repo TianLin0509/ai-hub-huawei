@@ -15,6 +15,7 @@
   let dialog = null;
   // 每个工具在弹窗里当前看的接入方式：proxy（公司模型，经本机反代）或 own（自有接口 / 沿用本机配置）。
   const viewMode = Object.create(null);
+  const viewProfile = Object.create(null);
   const PROXY_STATE = { running: '运行中', starting: '正在启动', 'not-ready': '已启动，公司上游未就绪', draining: '等在途请求结束后停下', failed: '启动失败', stopped: '未启动' };
   const esc = value => String(value || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -273,7 +274,10 @@
     const target = makeDialog();
     const value = snapshot?.providers?.[kind] || {};
     const mode = viewMode[kind] || (value.backend === 'proxy' ? 'proxy' : 'own');
-    const own = value.backend === 'proxy' ? {} : value;
+    const profiles = kind === 'deepseek-acp' ? [] : value.apiProfiles || [];
+    const profileId = viewProfile[kind] ?? value.selectedProfileId ?? '';
+    const editing = profiles.find(profile => profile.id === profileId);
+    const own = editing || (profileId === 'new' ? {} : value.backend === 'proxy' ? {} : value);
     target.innerHTML = heading('自有 API', '每个工具可用公司模型，或填写自己的接口；留空沿用 CLI 本机登录与配置。')
       + `<nav aria-label="API 工具">${KINDS.map(id => `<button type="button" data-api-kind="${id}" aria-pressed="${id === kind}">${LABELS[id]}</button>`).join('')}</nav>`
       + modeSwitch(mode);
@@ -281,19 +285,24 @@
     target.querySelectorAll('[data-api-kind]').forEach(button => { button.onclick = () => render(button.dataset.apiKind); });
     target.querySelectorAll('[data-api-mode]').forEach(button => { button.onclick = () => { viewMode[kind] = button.dataset.apiMode; render(kind); }; });
     if (mode === 'proxy') { renderProxy(target, kind, value); return; }
-    target.insertAdjacentHTML('beforeend', `<form data-api-form><label>接口地址<input name="baseURL" type="url" value="${esc(own.baseURL)}" placeholder="留空沿用本机配置" autocomplete="off" spellcheck="false"></label>`
+    target.insertAdjacentHTML('beforeend', `<form data-api-form>${kind !== 'deepseek-acp' ? `<label>API 账号<select data-api-profile><option value="">当前接口 / 本机配置</option>${profiles.map(profile => `<option value="${esc(profile.id)}"${profileId === profile.id ? ' selected' : ''}>${esc(profile.label)}</option>`).join('')}<option value="new"${profileId === 'new' ? ' selected' : ''}>＋ 添加 API 账号</option></select></label>` : ''}`
+      + (profileId ? `<label>账号名称<input name="label" value="${esc(editing?.label)}" maxlength="80" required placeholder="例如：供应商 A · 账号 1"></label>` : '')
+      + `<label>接口地址<input name="baseURL" type="url" value="${esc(own.baseURL)}" placeholder="留空沿用本机配置" autocomplete="off" spellcheck="false"></label>`
       + `<label>API Key<input name="apiKey" type="password" placeholder="${own.apiKeySet ? '已保存；留空保留原 Key' : '可选；留空沿用本机登录'}" autocomplete="off" spellcheck="false"></label>`
       + `<label>模型<input name="model" value="${esc(own.model)}" placeholder="留空沿用 CLI 配置的模型" autocomplete="off" spellcheck="false"></label>`
       + (kind === 'codex' ? `<label>接口协议<select name="wireApi"><option value="responses"${own.wireApi === 'chat' ? '' : ' selected'}>responses（默认）</option><option value="chat"${own.wireApi === 'chat' ? ' selected' : ''}>chat</option></select></label>` : '')
       + (kind === 'deepseek-acp' ? '<p class="company-api-note">可先保存接口。DSH 自有接口的运行接入尚未就绪，DSH 会话请选「公司模型」，或先使用 Claude Code、Codex。</p>' : '<p class="company-api-note">Key 仅保存在本机配置中，重新打开时不会显示。进行中的会话保持原配置。</p>')
       + '<p class="company-api-message" role="status" aria-live="polite"></p><footer><button type="button" data-api-action="local">沿用本机配置</button><button type="button" data-api-action="close">取消</button><button type="submit" class="primary">保存配置</button></footer></form>');
     target.querySelector('[data-api-action="close"]').onclick = close;
+    const profileSelect = target.querySelector('[data-api-profile]');
+    if (profileSelect) profileSelect.onchange = () => { viewProfile[kind] = profileSelect.value; render(kind); };
     target.querySelector('[data-api-action="local"]').onclick = async event => {
       event.currentTarget.disabled = true;
       try {
         const result = await ipcRenderer.invoke('company-api:save', { kind, useLocal: true });
         if (!result?.ok) throw new Error(result?.error || '保存失败');
         snapshot = { ...snapshot, ...result };
+        delete viewProfile[kind];
         delete viewMode[kind];
         render(kind);
         dialog.querySelector('[role="status"]').textContent = '已清除 Hub 的接口覆盖；新建会话沿用本机配置。';
@@ -309,9 +318,16 @@
       status.textContent = '正在保存…';
       try {
         const request = Object.fromEntries(new FormData(form));
-        const result = await ipcRenderer.invoke('company-api:save', { kind, ...request });
+        const result = await ipcRenderer.invoke('company-api:save', { kind, ...request,
+          ...(profileId ? { profileAction: 'save', ...(profileId !== 'new' ? { profileId } : {}) } : {}) });
         if (!result?.ok) throw new Error(result?.error || '保存失败');
         snapshot = result;
+        if (profileId) {
+          viewProfile[kind] = result.providers[kind].selectedProfileId;
+          render(kind);
+          dialog.querySelector('form [role="status"]').textContent = '已保存。新建会话使用此 API 账号。';
+          return;
+        }
         form.elements.apiKey.value = '';
         form.elements.apiKey.required = false;
         form.elements.apiKey.placeholder = result.providers?.[kind]?.apiKeySet ? '已保存；留空保留原 Key' : '可选；留空沿用本机登录';

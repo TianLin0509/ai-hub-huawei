@@ -16,6 +16,8 @@
     const pick = companyPick[kind];
     if (!pick) return '';
     if (pick.source === 'company') return pick.model;
+    if (pick.source === 'api') return pick.model;
+    if (companyProvider[kind]?.apiProfiles?.length) return '';
     const own = companyProvider[kind]?.own;
     return own && own.backend === 'api' ? own.model || '' : '';
   };
@@ -1225,7 +1227,9 @@
     const kind = selectedKind;
     if (!card || !companyApiKind(kind) || submitting) return;
     const id = card.dataset.modelCard;
-    companyPick[kind] = id === 'own' ? { source: 'own', model: '' } : { source: 'company', model: id };
+    const apiProfile = companyProvider[kind]?.apiProfiles?.find(item => id === 'api:' + item.id);
+    companyPick[kind] = apiProfile ? { source: 'api', profileId: apiProfile.id, model: apiProfile.model }
+      : id === 'own' ? { source: 'own', model: '' } : { source: 'company', model: id };
     selectedModel = companyPickModel(kind);
     modelTouchedByUser = true;
     tuningTouchedByUser = true;
@@ -1606,9 +1610,10 @@
     if (DEEPSEEK_ROUTE_KINDS.has(selectedKind) && !companyApiKind(selectedKind)) parts.push(deepseekProfile.ROUTES[deepseekRoute].label);
     if (companyApiKind(selectedKind)) {
       const pick = companyPick[selectedKind];
-      const own = companyProvider[selectedKind]?.own;
+      const own = companyProvider[selectedKind]?.apiProfiles?.length ? { backend: 'local' } : companyProvider[selectedKind]?.own;
       const companySource = companyProxyStatus?.shared ? '共享号池' : '公司模型';
-      parts.push(!pick ? (companyApiBackend[selectedKind] === 'proxy' ? companySource : '') : pick.source === 'company' ? companySource : own?.backend === 'api' ? '自有接口' : 'CLI 默认');
+      const apiProfile = companyProvider[selectedKind]?.apiProfiles?.find(profile => profile.id === pick?.profileId);
+      parts.push(apiProfile ? apiProfile.label : !pick ? (companyApiBackend[selectedKind] === 'proxy' ? companySource : '') : pick.source === 'company' ? companySource : own?.backend === 'api' ? '自有接口' : 'CLI 默认');
       if (companyAccountShown() && companyProxyChoice !== 'auto') {
         const account = (codeagentPool.accounts || []).find(a => a.id === companyProxyChoice);
         parts.push(companyProxyChoice === 'personal' ? '个人账号' : account ? `指定账号 · ${account.note || account.accountLabel || '未备注账号'}` : '指定账号');
@@ -1783,8 +1788,10 @@
     if (result.proxy !== undefined) companyProxyStatus = result.proxy;
     // 模型卡：两个公司模型（经本机反代）+ 这个工具自己的来源（自有接口的模型，或沿用本机 CLI 配置）。
     // 隐藏的模型下拉跟着卡片走（其余代码和测试仍读它）。
-    const own = kind === 'deepseek-acp' ? null : (provider.own || { backend: provider.backend === 'api' ? 'api' : 'local', model: provider.model || '' });
+    const own = kind === 'deepseek-acp' ? null : provider.apiProfiles?.length ? { backend: 'local' }
+      : (provider.own || { backend: provider.backend === 'api' ? 'api' : 'local', model: provider.model || '' });
     const models = [...modelCards.companyModels(provider),
+      ...(provider.apiProfiles || []).map(profile => ({ id: profile.model, label: profile.label + ' · ' + profile.model })),
       ...(own ? [own.backend === 'api' ? { id: own.model || '', label: own.model ? own.model + '（自有接口）' : '自有接口默认模型' } : { id: '', label: '沿用本机 CLI 配置' }] : [])];
     companyApiModels[kind] = models;
     setRuntimeModelOptions(kind, models);
@@ -1933,6 +1940,7 @@
       if (pick) opts.codeagentPoolPick = pick;
     }
     if (companyAccountShown()) Object.assign(opts, companyProxyAccountView.launchOpts(companyProxyChoice));
+    if (companyPick[selectedKind]?.source === 'api') opts.cliApiProfileId = companyPick[selectedKind].profileId;
     return opts;
   }
 

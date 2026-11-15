@@ -125,10 +125,13 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
         } else plan = { kind: 'full', reason: '这一版只提供变化的程序文件，本机的程序文件对不上，需要完整安装包' };
       }
       const asset = plan.kind === 'incremental' ? (variant === 'delta' ? manifest.incrementalDelta : manifest.incremental) : plan.kind === 'full' ? manifest.installer : null;
-      plan = { ...plan, variant, asset };
+      // 完整安装包能否无人值守：安装目录不用授权就能写（个人安装，或关了授权提示的管理员）才算（2026-11-15）。
+      let unattended = plan.kind !== 'full';
+      if (plan.kind === 'full') { try { unattended = !!(resDir && canWriteDir(resDir)); } catch (_) { unattended = false; } }
+      plan = { ...plan, variant, asset, silent: unattended };
       const checked = emit({ phase: plan.kind === 'none' ? 'none' : 'available', checks, checkedAt: new Date().toISOString(), error: null,
         latest: { version: manifest.version, notes: manifest.notes, publishedAt: manifest.publishedAt, sourceName: best.name, installer: manifest.installer, notify: isNotableUpdate(currentVersion, manifest.version), canary: manifest.canary || null },
-        plan: { kind: plan.kind, variant: plan.variant, reason: plan.reason, bytes: plan.asset ? plan.asset.bytes : 0, file: plan.asset ? plan.asset.file : null } });
+        plan: { kind: plan.kind, variant: plan.variant, reason: plan.reason, silent: plan.silent, bytes: plan.asset ? plan.asset.bytes : 0, file: plan.asset ? plan.asset.file : null } });
       if (quietAllowed && shouldQuietDownload(resDir)) void quietDownload();
       return checked;
     })().catch(error => emit({ phase: silent ? 'idle' : 'error', error: `检查更新失败：${error.message}` }))
@@ -136,9 +139,23 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     return checking;
   }
 
+  // 完整安装包静默参数（electron-builder NSIS）：/S 不出向导；--updated 按升级处理、沿用原安装目录；
+  // 按原来的安装方式指定 /allusers 或 /currentuser，免得静默时装到另一处；relaunch 时 --force-run 装完重新打开。
+  // 程序还开着时安装程序会自动关掉同一用户的实例，关不掉就放弃安装、原版本不受影响。
+  function installerArgs({ relaunch }) {
+    const norm = p => path.resolve(String(p)).toLowerCase();
+    const exe = norm(process.execPath || '');
+    const roots = [env.ProgramFiles, env['ProgramFiles(x86)'], env.ProgramW6432].filter(Boolean).map(norm);
+    const perMachine = roots.some(r => exe.startsWith(r + path.sep));
+    return ['/S', '--updated', perMachine ? '/allusers' : '/currentuser', ...(relaunch ? ['--force-run'] : [])];
+  }
+
   // 只有后台自动查到的、只改末位、走增量、能直接写安装目录的才静默；同一版本失败一次就不再试，等下一版。
   function shouldQuietDownload(resDir) {
-    if (!quietEnabled() || state.phase !== 'available' || !state.canApply || !manifest || manifest.quiet === false || !plan || plan.kind !== 'incremental') return false;
+    if (!quietEnabled() || state.phase !== 'available' || !manifest || manifest.quiet === false || !plan) return false;
+    // 完整安装包（原生组件或运行时变了）也静默：下好后退出时静默安装，不再弹安装向导（2026-11-15）。
+    if (plan.kind === 'full') return !!(plan.silent && plan.asset && !isNotableUpdate(currentVersion, manifest.version) && !quietTried.has(manifest.version));
+    if (!state.canApply || plan.kind !== 'incremental') return false;
     if (isNotableUpdate(currentVersion, manifest.version) || quietTried.has(manifest.version) || !resDir) return false;
     try { return canWriteDir(resDir); } catch (_) { return false; }
   }
@@ -172,7 +189,18 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   }
   // 退出时替换：只处理静默下好的增量包，不重开程序、不弹任何东西；失败时脚本自己回滚，下次打开时只记日志。
   function applyOnQuit() {
-    if (state.phase !== 'ready' || !state.quiet || !quietEnabled() || !staged || staged.installer || staged.needsAdmin) return false;
+    if (state.phase !== 'ready' || !state.quiet || !quietEnabled() || !staged || staged.needsAdmin) return false;
+    if (staged.installer) {
+      // 静默下好的完整安装包：退出时静默安装，不重开程序（和增量包一样，下次打开就是新版）。
+      try {
+        if (!fs.existsSync(staged.installer)) return false;
+        const child = spawnImpl(staged.installer, installerArgs({ relaunch: false }), { detached: true, stdio: 'ignore', windowsHide: true });
+        child?.on?.('error', error => logger.warn?.('[app-update] 退出时静默安装没能启动：', error.message));
+        child?.unref?.();
+        staged = null;
+        return true;
+      } catch (error) { logger.warn?.('[app-update] 退出时静默安装没能启动：', error.message); return false; }
+    }
     try {
       const planFile = staged.paths.plan;
       const written = JSON.parse(fs.readFileSync(planFile, 'utf8'));
@@ -302,7 +330,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       if (missing) { failInstall('文件不存在'); return state; }
       let child;
       try {
-        child = spawnImpl(staged.installer, [], { detached: true, stdio: 'ignore', windowsHide: false,
+        child = spawnImpl(staged.installer, installerArgs({ relaunch: true }), { detached: true, stdio: 'ignore', windowsHide: true,
           ...(launch ? { env: launch.env, ...(launch.cwd ? { cwd: launch.cwd } : {}) } : {}) });
       } catch (error) { failInstall(error.message); return state; }
       let failed = false;

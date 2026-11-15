@@ -317,7 +317,7 @@ function createModelUiController({
     const kind = session && session.kind ? session.kind : '';
     // CodeAgent：用打开菜单时取回的这个会话所在号的清单（showModelPicker → codeagent:session-models），取不到才用共用列表。
     const ownList = session && Array.isArray(session._codeagentModelOptions) ? session._codeagentModelOptions : null;
-    const options = session?.companyRoute === 'local' && Array.isArray(session._localCliModelOptions) ? session._localCliModelOptions
+    const options = (session?.companyRoute === 'local' || session?.cliApiProfileId) && Array.isArray(session._localCliModelOptions) ? session._localCliModelOptions
       : ownList || getModelOptions(require('../core/chatgpt-web-models').isChatgptWebModel(session?.currentModel?.id) ? 'chatgpt' : kind);
     const automaticCodeAgent = !!(session && session._codeagentAutomatic);
     const strategy = automaticCodeAgent ? null : modelSwitchStrategy(kind);
@@ -455,7 +455,7 @@ function createModelUiController({
       }
       const web = require('../core/chatgpt-web-models').isChatgptWebModel(session?.currentModel?.id);
       let catalog;
-      if (session?.companyRoute === 'local' && /^(?:codex|claude)(?:-resume)?$/.test(session.kind)) {
+      if ((session?.companyRoute === 'local' || session?.cliApiProfileId) && /^(?:codex|claude)(?:-resume)?$/.test(session.kind)) {
         catalog = await ipcRenderer.invoke('session:local-models', { sessionId });
         session._localCliModelOptions = catalog.models || [];
         if (!catalog.ok) throw new Error(catalog.error || '本机模型目录读取失败');
@@ -551,7 +551,7 @@ function createModelUiController({
     }
     await submitSlashCommand(sessionId, '/model', 'codex-picker');
     const modelStep = await waitForScreen(sessionId, screen => parseCodexModelPicker(screen,
-      session.companyRoute === 'local' ? session._localCliModelOptions?.map(model => model.id) : undefined), '等待 Codex 模型面板');
+      session.companyRoute === 'local' || session.cliApiProfileId ? session._localCliModelOptions?.map(model => model.id) : undefined), '等待 Codex 模型面板');
     if (session._modelSwitchPending) session._modelSwitchPending.ownsCodexPicker = true;
     const target = modelStep.value.entries.find(entry => entry.value.toLowerCase() === option.id.toLowerCase());
     if (!target) {

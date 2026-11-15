@@ -7,6 +7,124 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
+function addApiProfile(raw, kind, label, overrides = {}) {
+  return api.withSettings(raw, { kind, profileAction: 'save', label, baseURL: 'https://api.example.test/v1',
+    apiKey: 'fixture-' + label, model: 'Internal/' + label, ...overrides });
+}
+
+test('named API accounts coexist per tool; selecting and editing one preserves other accounts and secrets stay private', () => {
+  let raw = addApiProfile({ unrelated: { keep: true } }, 'codex', 'first');
+  const first = raw.providers.codex.selected_api_profile;
+  raw = addApiProfile(raw, 'codex', 'second', { baseURL: 'https://other.example.test/v1', wireApi: 'chat' });
+  const second = raw.providers.codex.selected_api_profile;
+  raw = addApiProfile(raw, 'claude', 'claude');
+  raw = api.withSettings(raw, { kind: 'codex', profileAction: 'select', profileId: first });
+  assert.equal(raw.providers.codex.api_key, 'fixture-first');
+  assert.equal(raw.providers.codex.api_profiles.length, 2);
+  raw = addApiProfile(raw, 'codex', 'renamed', { profileId: first, apiKey: '' });
+  assert.equal(raw.providers.codex.api_key, 'fixture-first');
+  assert.equal(raw.providers.codex.api_profiles.find(p => p.id === second).wireApi, 'chat');
+  assert.equal(raw.providers.claude.api_key, 'fixture-claude');
+  assert.deepEqual(raw.unrelated, { keep: true });
+  const publicValue = api.settings(raw);
+  assert.equal(publicValue.codex.apiProfiles[0].apiKeySet, true);
+  assert.equal(JSON.stringify(publicValue).includes('fixture-'), false);
+  assert.equal(JSON.stringify(publicValue).includes('api_key'), false);
+  raw = api.withSettings(raw, { kind: 'codex', useLocal: true });
+  assert.equal(raw.providers.codex.selected_api_profile, '');
+  assert.equal(raw.providers.codex.api_profiles.length, 2);
+});
+
+test('API account validation rejects invalid endpoints, missing keys, invalid model names and unknown ids', () => {
+  for (const overrides of [{ baseURL: 'file:///private' }, { baseURL: 'https://key@api.example.test' },
+    { apiKey: '' }, { model: 'bad;model' }, { label: '' }, { wireApi: 'unknown' }, { profileId: '../../escape' }]) {
+    assert.throws(() => addApiProfile({}, 'codex', 'fixture', overrides));
+  }
+  assert.throws(() => api.withSettings({}, { kind: 'codex', profileAction: 'select', profileId: 'missing' }), /不存在/);
+  assert.throws(() => api.withSettings({}, { kind: 'deepseek-acp', profileAction: 'save' }), /多组/);
+});
+
+test('adding the first named API keeps the previous single API including an own API stashed behind company proxy', () => {
+  const legacy = { base_url: 'https://legacy.example.test/v1', api_key: 'legacy-fixture', model: 'Legacy/Custom', wire_api: 'chat' };
+  for (const provider of [{ backend: 'api', ...legacy }, { backend: 'proxy', model: 'GLM-5.2-WX', own_api: legacy }]) {
+    const raw = addApiProfile({ providers: { codex: provider } }, 'codex', 'new');
+    assert.equal(raw.providers.codex.api_profiles.length, 2);
+    const original = raw.providers.codex.api_profiles.find(profile => profile.label === '原有接口');
+    assert.ok(original);
+    const restored = api.withSettings(raw, { kind: 'codex', profileAction: 'select', profileId: original.id });
+    for (const [key, value] of Object.entries(legacy)) assert.equal(restored.providers.codex[key], value);
+  }
+});
+
+test('API accounts have isolated Codex homes and immutable versions so editing or changing defaults cannot move resumed sessions', t => {
+  const profiles = require('../core/cli-api-profiles');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-api-isolation-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  let raw = addApiProfile({}, 'codex', 'one');
+  const first = raw.providers.codex.selected_api_profile;
+  const a = profiles.prepareLaunch('codex', {}, { raw, dataDir: root, values: {} });
+  raw = addApiProfile(raw, 'codex', 'two', { baseURL: 'https://second.example.test/v1' });
+  const b = profiles.prepareLaunch('codex', {}, { raw, dataDir: root, values: {} });
+  assert.notEqual(a.home, b.home);
+  const { ensureCodexApiProfile, resolveCodexLaunchModel } = sessionHelpers();
+  assert.equal(ensureCodexApiProfile(a.values, root), a.home);
+  ensureCodexApiProfile(b.values, root);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(a.home, 'auth.json'))).OPENAI_API_KEY, 'fixture-one');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(b.home, 'auth.json'))).OPENAI_API_KEY, 'fixture-two');
+  assert.equal(resolveCodexLaunchModel(a.values), 'Internal/one');
+  raw = addApiProfile(raw, 'codex', 'edited', { profileId: first, apiKey: 'changed-fixture-key' });
+  const resumed = profiles.prepareLaunch('codex-resume', { ...a.meta, useResume: true }, { raw, dataDir: root, values: {} });
+  assert.equal(resumed.home, a.home);
+  assert.equal(resumed.values.CODEX_API_KEY, 'fixture-one');
+  assert.equal(profiles.prepareLaunch('codex-resume', { useResume: true }, { raw, dataDir: root, values: {} }), null);
+  assert.equal(profiles.prepareLaunch('powershell', {}, { raw, dataDir: root, values: {} }), null);
+  fs.unlinkSync(path.join(a.home, 'connection.json'));
+  assert.throws(() => profiles.prepareLaunch('codex', a.meta, { raw, dataDir: root, values: {} }), /未切换/);
+});
+
+test('Claude API accounts inject only the selected endpoint/key and carry account identity through public, resume and fork metadata', t => {
+  const profiles = require('../core/cli-api-profiles');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-api-claude-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const raw = addApiProfile({}, 'claude', 'custom');
+  const launch = profiles.prepareLaunch('claude', {}, { raw, dataDir: root, values: {} });
+  const env = { ANTHROPIC_API_KEY: 'unrelated-fixture', CLAUDE_CODE_OAUTH_TOKEN: 'oauth-fixture' };
+  sessionHelpers().applyClaudeSessionEnv(env, launch.values);
+  assert.equal(env.ANTHROPIC_AUTH_TOKEN, 'fixture-custom');
+  assert.equal(env.ANTHROPIC_API_KEY, undefined);
+  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+  assert.equal(env.ANTHROPIC_MODEL, 'Internal/custom');
+  const info = { ...launch.meta, kind: 'claude', companyRoute: 'api', id: 'source',
+    ccSessionId: '00000000-0000-4000-8000-000000000001', cwd: root, currentModel: { id: 'Internal/custom' }, claudeConfigDir: launch.home };
+  const caps = require('../core/session-capabilities');
+  const restored = caps.buildSessionResumeMeta(info);
+  assert.deepEqual(profiles.metadata(restored), launch.meta);
+  assert.equal(restored.claudeConfigDir, launch.home);
+  assert.deepEqual(profiles.metadata(require('../core/session-fork-plan').planSessionFork({ source: info }).opts), launch.meta);
+  const { SessionManager } = require('../core/session-manager');
+  const publicInfo = SessionManager.prototype._toPublic.call({}, info);
+  assert.deepEqual(profiles.metadata(publicInfo), launch.meta);
+  assert.equal(JSON.stringify(publicInfo).includes('fixture-custom'), false);
+});
+
+test('launch cards list all named API accounts even when they share a model; selection uses account id', () => {
+  const cards = require('../renderer/launch-model-cards');
+  let raw = addApiProfile({}, 'codex', 'first', { model: 'Shared/Model' });
+  raw = addApiProfile(raw, 'codex', 'second', { model: 'Shared/Model' });
+  const provider = api.settings(raw).codex;
+  const pick = cards.defaultPick('codex', provider);
+  assert.equal(pick.source, 'api');
+  assert.equal(pick.profileId, provider.selectedProfileId);
+  const entries = cards.cardsFor('codex', provider, null, pick);
+  assert.equal(entries.filter(card => card.source === 'api').length, 2);
+  assert.equal(entries.find(card => card.id === 'own').name, '沿用本机 CLI 配置');
+  assert.equal(entries.filter(card => card.checked).length, 1);
+  assert.deepEqual(cards.saveRequest('codex', provider, pick), { kind: 'codex', profileAction: 'select', profileId: pick.profileId });
+  assert.deepEqual(cards.saveRequest('codex', provider, { source: 'own' }), { kind: 'codex', useLocal: true });
+  assert.deepEqual(cards.memberSaveRequests([{ kind: 'codex', model: 'Shared/Model' }], { codex: provider }),
+    [{ kind: 'codex', profileAction: 'select', profileId: pick.profileId }]);
+});
+
 test('local CLI catalogs read custom names from the selected home without changing configuration', t => {
   const { readLocalCliModels, isLocalCliModelId } = require('../core/local-cli-models');
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-local-models-'));

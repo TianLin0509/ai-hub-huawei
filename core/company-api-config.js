@@ -62,6 +62,8 @@ function settings(raw = {}) {
   return Object.fromEntries(KINDS.map(kind => {
     const p = connection(raw, kind);
     const common = { companyModels: proxyModels().MODELS.map(m => ({ ...m })), own: ownSource(raw, kind),
+      ...(raw.providers?.[kind]?.api_profiles?.length ? { apiProfiles: require('./cli-api-profiles').publicProfiles(raw, kind),
+        selectedProfileId: raw.providers[kind].selected_api_profile || '' } : {}),
       companyDefault: isCompany() && !raw.providers?.[kind]?.backend && !sessions.some(session => baseKind(session.kind) === kind) };
     if (p.backend === 'proxy') return [kind, { backend: 'proxy', baseURL: '', apiKeySet: false, model: p.model || proxyModels().DEFAULT_MODEL,
       models: proxyModels().MODELS.map(m => ({ ...m })), ...common, ...(kind === 'codex' ? { wireApi: 'responses' } : {}) }];
@@ -73,6 +75,7 @@ function anyProxy(raw = {}) { return KINDS.some(kind => connection(raw, kind).ba
 function withSettings(raw, request = {}) {
   const kind = baseKind(request.kind);
   if (!KINDS.includes(kind)) throw new Error('不支持的 API 类型');
+  if (request.profileAction) return require('./cli-api-profiles').withProfile(raw, request);
   if (request.backend === 'proxy') {
     const model = proxyModels().normalizeModel(request.model);
     if (kind === 'deepseek-acp') return { ...raw, acp: { ...raw.acp, companyApi: { backend: 'proxy', model } } };
@@ -104,7 +107,7 @@ function withSettings(raw, request = {}) {
   // 切回自有接口或本机配置时，不留 proxy 标记。
   const { own_api: _ownApi, ...kept } = raw.providers?.[kind] || {};
   return { ...raw, providers: { ...raw.providers, [kind]: { ...kept, backend: 'api',
-    base_url: p.baseURL, api_key: p.apiKey, model: p.model,
+    base_url: p.baseURL, api_key: p.apiKey, model: p.model, ...(kept.selected_api_profile ? { selected_api_profile: '' } : {}),
     ...(kind === 'codex' ? { wire_api: wireApi(request.wireApi || previous.wireApi || 'responses') } : {}) } } };
 }
 function applyCompanyConfig(config, raw) {

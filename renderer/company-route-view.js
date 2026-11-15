@@ -39,11 +39,11 @@ function routeInfo(session) {
       text: [model, '公司模型', alias ? aliasWords(alias) : ''].filter(Boolean).join(' · '),
       title: `公司模型 ${model}${alias ? ` · ${alias === '个人' ? '你的个人 CodeAgent 账号' : '号池 ' + alias}` : ' · 第一次回答后显示用的是哪个号'}${pinned ? '（启动时选定，整段会话固定用它）' : ''}` };
   }
-  const source = session.companyRoute === 'api' ? '自有接口' : 'CLI 默认';
+  const source = session.companyRoute === 'api' ? (session.cliApiProfileLabel || '自有接口') : 'CLI 默认';
   return { route: session.companyRoute, model, alias: '', source,
-    chip: session.companyRoute === 'api' ? '自有接口' : '',
+    chip: session.companyRoute === 'api' ? source : '',
     text: [model, source].filter(Boolean).join(' · '),
-    title: session.companyRoute === 'api' ? `自有接口${model ? ' ' + model : ''}（不走公司模型）` : 'CLI 默认：用这台电脑上 CLI 自己的配置（不走公司模型）' };
+    title: session.companyRoute === 'api' ? `${source}${model ? ' ' + model : ''}（不走公司模型）` : 'CLI 默认：用这台电脑上 CLI 自己的配置（不走公司模型）' };
 }
 
 // 侧栏额度（2026-11-12 同事反馈：DSH 走反代用 ds1017，额度却显示成 GLM-5.2）：反代会话也按它实际用的号和模型显示。

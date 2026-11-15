@@ -451,7 +451,11 @@ function registerSessionIpc(ipcMain, deps) {
 
   function localCliModels(session) {
     const kind = String(session?.kind || '').replace(/-resume$/, '');
-    if (session?.companyRoute !== 'local' || !['codex', 'claude'].includes(kind)) throw new Error('这个会话没有选择沿用本机 CLI 配置');
+    if ((session?.companyRoute !== 'local' && !session?.cliApiProfileId) || !['codex', 'claude'].includes(kind)) throw new Error('这个会话没有选择沿用本机 CLI 配置');
+    if (session.cliApiProfileId) {
+      const profile = require('../../core/cli-api-profiles').readConnection(kind, session, require('../../core/data-dir').getHubDataDir());
+      return { ok: true, models: [{ id: profile.model, label: profile.model }], defaultModel: profile.model };
+    }
     const configDir = kind === 'codex' ? session.codexRuntimeHome || (session.codexSessionsRoot ? require('path').dirname(session.codexSessionsRoot) : undefined)
       : session.claudeConfigDir || session.claudeRuntimeHome;
     return require('../../core/local-cli-models').readLocalCliModels(kind, { configDir });
@@ -480,7 +484,7 @@ function registerSessionIpc(ipcMain, deps) {
       return {ok:true,model:current,effort:session.effort};
     }
     const kind = String(session.kind || '').replace(/-resume$/, '').toLowerCase();
-    const local = session.companyRoute === 'local' && ['codex', 'claude'].includes(kind);
+    const local = (session.companyRoute === 'local' || session.cliApiProfileId) && ['codex', 'claude'].includes(kind);
     let localOptions;
     if (local) {
       try { localOptions = localCliModels(session).models; }

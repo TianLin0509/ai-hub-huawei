@@ -66,3 +66,35 @@ test('安装包正常启动：退出一次', async () => {
   await wait(600);
   assert.equal(quits(), 1);
 });
+
+// 2026-11-15 完整安装包静默安装：原生组件变了也不弹安装向导。
+test('完整安装包：静默参数启动、隐藏窗口、装完重开；计划标明可无人值守', async () => {
+  const calls = [], child = new EventEmitter(); child.unref = () => {};
+  const { c, quits } = await setup({ full: true, spawnImpl: (file, args, opts) => { calls.push({ file, args, opts }); return child; } });
+  assert.equal(c.getState().plan.kind, 'full');
+  assert.equal(c.getState().plan.silent, true, '安装目录可写：可无人值守');
+  c.apply();
+  await wait(600);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args, ['/S', '--updated', '/currentuser', '--force-run']);
+  assert.equal(calls[0].opts.windowsHide, true);
+  assert.equal(quits(), 1);
+});
+
+test('完整安装包：后台查到自动下载，退出时静默安装且不重开', async () => {
+  const res = tmp('quiet-full-res-');
+  fs.writeFileSync(path.join(res, 'app.asar'), crypto.randomBytes(1024));
+  const inst = crypto.randomBytes(2048);
+  const m = { schema: 1, version: '5.5.14', notes: [], runtime: { electron: '99.0.0', native: {} }, installer: { file: 'X-Setup-5.5.14.exe', bytes: inst.length, sha256: sha(inst) } };
+  const fetchImpl = async url => { url = String(url); if (url.endsWith('latest.json')) return respJson(m); if (url.endsWith('.exe')) return respFile(inst); return { ok: false, status: 404, headers: { get: () => '' } }; };
+  const calls = [];
+  const c = createAppUpdateController({ app: { quit() {} }, config: { sources: [SRC], releasePage: '' }, dataDir: tmp('quiet-full-data-'), currentVersion: '5.5.13', fetchImpl, quietDelivery: true,
+    isPackaged: true, resourcesPath: res, env: { AI_HUB_UPDATE_RESOURCES: res }, logger: { warn() {} }, prepareLaunch: () => null,
+    spawnImpl: (file, args, opts) => { calls.push({ file, args, opts }); const ch = new EventEmitter(); ch.unref = () => {}; return ch; } });
+  await c.check({ silent: true });
+  for (let i = 0; i < 50 && c.getState().phase !== 'ready'; i++) await wait(20);
+  assert.equal(c.getState().phase, 'ready'); assert.equal(c.getState().quiet, true);
+  assert.equal(c.applyOnQuit(), true);
+  assert.deepEqual(calls[0].args, ['/S', '--updated', '/currentuser']);
+  assert.equal(calls[0].opts.windowsHide, true);
+});

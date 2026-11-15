@@ -76,6 +76,7 @@ function planSessionFork({ source, siblingPool = [], meeting = null, rendererTit
     autoTitleGenerated: resolvedTitle.autoTitleGenerated,
   };
   const sourceModel = sessionModelId(source);
+  Object.assign(opts, require('./cli-api-profiles').metadata(source));
   if (sourceModel) opts.model = sourceModel;
   // 分支必须继承 effort，否则从 low/medium 会话拉分支会被打回默认 max。
   if (source.effort) opts.effort = source.effort;

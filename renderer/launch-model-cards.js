@@ -65,6 +65,10 @@ function companyModels(provider) {
 // 打开启动中心时默认选中的卡：该工具在「自有 API」里保存的来源和模型（也就是上次选的）。
 function defaultPick(kind, provider) {
   if (!provider) return null;
+  if (provider.backend === 'api' && provider.selectedProfileId) {
+    const profile = provider.apiProfiles?.find(item => item.id === provider.selectedProfileId);
+    if (profile) return { source: 'api', profileId: profile.id, model: profile.model };
+  }
   if (provider.backend === 'proxy' || kind === 'deepseek-acp' || provider.companyDefault === true && provider.backend === 'local') {
     const models = companyModels(provider);
     const model = models.some(m => m.id === provider.model) ? provider.model : models[0]?.id || '';
@@ -76,10 +80,12 @@ function defaultPick(kind, provider) {
 // 新建会话前要不要先改保存的设置（选了和保存的不同的卡）：返回 company-api:save 的请求，或 null。
 function saveRequest(kind, provider, pick) {
   if (!pick || !provider || !COMPANY_KINDS.has(kind)) return null;
+  if (pick.source === 'api') return { kind, profileAction: 'select', profileId: pick.profileId };
   if (pick.source === 'company') {
     return provider.backend === 'proxy' && provider.model === pick.model ? null : { kind, backend: 'proxy', model: pick.model };
   }
   if (kind === 'deepseek-acp') return null;
+  if (provider.apiProfiles?.length) return { kind, useLocal: true };
   return provider.backend === 'proxy' || provider.companyDefault === true ? { kind, backend: 'own' } : null;
 }
 
@@ -93,6 +99,11 @@ function memberSaveRequests(slots, providers) {
     if (!models.length || !provider) continue;
     const companyIds = new Set(companyModels(provider).map(m => m.id));
     const company = models.filter(id => companyIds.has(id));
+    const apiProfile = provider.apiProfiles?.find(profile => profile.id === provider.selectedProfileId && models.every(id => id === profile.model));
+    if (!company.length && apiProfile) {
+      requests.push({ kind, profileAction: 'select', profileId: apiProfile.id });
+      continue;
+    }
     if (company.length && company.length < models.length) {
       throw new Error(`${require('../core/company-api-config').LABELS[kind]} 成员不能一部分用公司模型、一部分用自有来源，请选成同一种来源`);
     }
@@ -110,11 +121,16 @@ function cardsFor(kind, provider, status, pick) {
       state: badge.state, statusText: badge.text, tip: badge.tip, checked: pick?.source === 'company' && pick.model === m.id };
   });
   if (kind !== 'deepseek-acp') {
-    const own = provider.own || { backend: provider.backend === 'api' ? 'api' : 'local', model: provider.model || '' };
+    const own = provider.apiProfiles?.length ? { backend: 'local' }
+      : provider.own || { backend: provider.backend === 'api' ? 'api' : 'local', model: provider.model || '' };
     const api = own.backend === 'api';
     cards.push({ id: 'own', name: api ? (own.model || '自有接口默认模型') : '沿用本机 CLI 配置', detail: '', source: 'own',
       sourceText: api ? '自有接口' : 'CLI 默认', state: 'ready', statusText: api ? '用你在「自有 API」里填的接口' : '用这台电脑上 CLI 自己的配置',
       tip: api ? '经你自己的接口地址和 Key，不走公司模型。' : '不经 Hub 改接口，CLI 用它本机的登录和模型设置。', checked: pick?.source === 'own' });
+    for (const profile of provider.apiProfiles || []) cards.push({ id: 'api:' + profile.id, profileId: profile.id,
+      name: profile.label, detail: profile.model, source: 'api', sourceText: '自有 API', state: 'ready',
+      statusText: profile.baseURL, tip: profile.baseURL,
+      checked: pick?.source === 'api' && pick.profileId === profile.id });
   }
   return cards;
 }
