@@ -12,6 +12,10 @@ function registerCompanyAssistantIpc(ipcMain, service) {
     // 「停止这一问」（审计 A3-17）：只结束这一问，其他队列照常。
     'stop-chat': async request => ({ ok: true, item: await service.stopChat(String(request?.id || '')) }),
     'mark-done': request => service.markDone(String(request?.source || ''), request?.done !== false),
+    // 2026-11-16：「等你回复」全部处理了 / 撤销放回 / 立即 AI 复核
+    'mark-awaiting-done': () => service.markAwaitingDone(),
+    'restore-awaiting': request => service.restoreAwaiting(request?.items),
+    'reply-review-now': () => ({ ok: true, ...service.startReplyReview('manual'), status: service.status() }),
     'digest-notice': request => service.digestNotice(String(request?.id || '')),
     source: request => service.sourceContext(String(request?.source || ''), request?.day),
     'set-settings': request => ({ ok: true, settings: service.setSettings(request || {}) }),

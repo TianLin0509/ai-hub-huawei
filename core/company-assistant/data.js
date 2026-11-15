@@ -4,6 +4,7 @@
 // 已核对字段见各函数注释；兼容字段与合成边界测试不代表新的公司接口契约已获验证。
 
 const { createHash } = require('node:crypto');
+const RJ = require('../reply-judge');
 const pad = n => String(n).padStart(2, '0');
 const DISPLAY_ZONE = 'Asia/Shanghai';
 const formatters = new Map();
@@ -261,18 +262,48 @@ function mails(raw) {
 }
 
 // 私聊最后一句由别人发送；群内@缺少与回复的可靠关联，保留待核对，不能因任意本人发言自动结案。
-function awaiting(snapshot, { myName = '' } = {}) {
+//   strong 该回（对方在问/托我；群里 @我）：照常提醒、计入汇总与小结；
+//   weak 可能要回（对方陈述，24 小时内）：列出、不推送；
+//   settled 像是已说完（只回了「好的/收到」、只回答了我的问题、群发通知、超过 24 小时的陈述，或 AI 复核判「不用回」）：
+//     沿用 11-07 口径，照样列出、排到栏末，不推送、不计数。
+// review：公司助理 CodeAgent 的复核结论 { items: { 会话 id: { lastKey, verdict, reason } } }，只对「锚」有效
+//   （私聊是最后一条；群是最近一条 @我 或我的发言），默认从 settings.replyReview 读。
+const mentionsMe = (m, myName) => !m.mine && (m.atMe || (!!myName && String(m.text || '').includes('@' + myName)));
+function reviewAnchor(conv, list, myName = '') {
+  if (!list.length) return null;
+  if (!conv.group) return list[list.length - 1].key;
+  for (let i = list.length - 1; i >= 0; i -= 1) if (list[i].mine || mentionsMe(list[i], myName)) return list[i].key;
+  return null;
+}
+const judgeShape = m => ({ mine: m.mine, kind: m.text ? 'text' : 'other', text: m.text, at: m.at });
+const LEVEL_ORDER = { strong: 0, weak: 1, settled: 2 };
+function awaiting(snapshot, settings = {}, { now, review } = {}) {
+  const myName = settings.myName || '';
+  const t = Number.isFinite(now) ? now : (Number(snapshot.at) || Date.now());
+  const items = ((review === undefined ? settings.replyReview : review) || {}).items || {};
   const out = [];
   for (const conv of snapshot.conversations || []) {
     const list = (snapshot.messages || {})[conv.id] || [];
     if (!list.length) continue;
     const last = list[list.length - 1];
-    if (!conv.group) { if (!last.mine) out.push({ ...last, since: last.at }); continue; }
-    for (const hit of list.filter(m => !m.mine && (m.atMe || (!!myName && m.text.includes('@' + myName))))) {
-      out.push({ ...hit, since: hit.at, needsReplyReview: true });
+    const r = items[conv.id];
+    const ai = r && r.lastKey === reviewAnchor(conv, list, myName) ? r : null;
+    const aiLevel = ai ? { reply: 'strong', maybe: 'weak', no: 'settled' }[ai.verdict] : null;
+    const extra = ai ? { aiVerdict: ai.verdict, aiReason: String(ai.reason || '') } : {};
+    if (!conv.group) {
+      if (last.mine) continue;
+      const v = RJ.judgeDirect(list.map(judgeShape));
+      const pick = v.message ? list.find(m => !m.mine && m.at === v.message.at && m.text === v.message.text) || last : last;
+      let level = aiLevel || (v.closed ? 'settled' : v.level);
+      if (level === 'weak' && Number.isFinite(pick.at) && t - pick.at > RJ.WEAK_EXPIRE_MS) level = 'settled';
+      out.push({ ...pick, since: pick.at, level, judge: v.closed || v.reason, ...extra });
+      continue;
+    }
+    for (const hit of list.filter(m => mentionsMe(m, myName))) {
+      out.push({ ...hit, since: hit.at, needsReplyReview: true, level: aiLevel || 'strong', ...extra });
     }
   }
-  return out.sort((a, b) => a.since - b.since);
+  return out.sort((a, b) => (LEVEL_ORDER[a.level] - LEVEL_ORDER[b.level]) || a.since - b.since);
 }
 
 // 「群里和你相关」：回看时间内有人 @ 你、提到关注词，或者你自己在群里说过话的群（替代原来要手动勾选的「关注群」）。
@@ -345,4 +376,4 @@ function eventInRange(m, range) {
   return true;
 }
 
-module.exports = { DISPLAY_ZONE, dayKey, clock, displayTime, dateParts, timeValue, toMs, explicitBoolean, listIn, textOf, short, namesOf, messageRecords, conversationRecords, messageId, meetings, calendarEvents, isCancelledCalendarEvent, conversations, messages, mails, awaiting, relatedGroups, sourceIndex, todaysMeetings, unresolvedMeetings, eventTimeUnknown, eventInRange, mergeMeetings };
+module.exports = { DISPLAY_ZONE, dayKey, clock, displayTime, dateParts, timeValue, toMs, explicitBoolean, listIn, textOf, short, namesOf, messageRecords, conversationRecords, messageId, meetings, calendarEvents, isCancelledCalendarEvent, conversations, messages, mails, awaiting, reviewAnchor, relatedGroups, sourceIndex, todaysMeetings, unresolvedMeetings, eventTimeUnknown, eventInRange, mergeMeetings };

@@ -42,14 +42,18 @@ function fallbackBrief(snapshot, { day, now = Date.now(), settings = {}, commitm
   const meetings = meetingRows(snapshot, day).map(m => item(m.sourceId, meetingText(m), { timeStatus: m.timeStatus || (Number.isFinite(m.start) ? 'known' : 'unknown'),
     ...(Number.isFinite(m.start) ? { start: m.start, when: `${D.clock(m.start)}${Number.isFinite(m.end) && D.dayKey(m.end) === D.dayKey(m.start) ? '–' + D.clock(m.end) : ''}` } : {}), ...(Number.isFinite(m.end) ? { end: m.end } : {}),
     subject: m.subject, ...(m.location ? { location: m.location } : {}), ...(m.merged ? { merged: true, mergedLabel: m.mergedLabel, sources: m.sources } : {}) }));
-  const awaiting = D.awaiting(snapshot, settings).map(m => {
+  const awaiting = D.awaiting(snapshot, settings, { now }).map(m => {
     const hours = Number.isFinite(m.since) ? Math.max(1, Math.round((now - m.since) / 3600000)) : null;
     const elapsed = hours ? `已过 ${hours} 小时` : '时间待核对';
     // 像是已经说完的（对方最后只回了「好的」「收到」）、群里 @我 之后我在群里说过话的：照样列出，但排到这一栏最后（2026-11-07）。
     const list = (snapshot.messages || {})[m.conv] || [], at = list.findIndex(x => x.sourceId === m.sourceId);
-    const settledLabel = looksLike(m.text) === '像是已了结' ? '像是已说完' : m.group && at >= 0 && list.slice(at + 1).some(x => x.mine) ? '你之后在群里说过话' : '';
-    return item(m.sourceId, `${m.sender}${m.group ? '（' + m.convName + '）@你，处理情况待核对' : '发来的私聊待回复'}，${elapsed}：${D.short(m.text, 30)}`,
-      { ...(m.needsReplyReview ? { needsReplyReview: true } : {}), ...(hours ? { hours } : {}), ...(settledLabel ? { settledLabel } : {}) });
+    // 2026-11-16：AI 复核判「不用回」、规则判已说完的，都按「像是已说完」排到最后；AI 理由附在正文后
+    const settledLabel = m.aiVerdict === 'no' ? 'AI：不用回' : m.level === 'settled' || looksLike(m.text) === '像是已了结' ? '像是已说完'
+      : m.group && !m.aiVerdict && at >= 0 && list.slice(at + 1).some(x => x.mine) ? '你之后在群里说过话' : '';
+    const why = m.aiReason ? `；AI：${D.short(m.aiReason, 30)}` : '';
+    return item(m.sourceId, `${m.sender}${m.group ? '（' + m.convName + '）@你' + (m.aiVerdict ? '' : '，处理情况待核对') : m.level === 'weak' ? '的私聊可能要回' : '发来的私聊待回复'}，${elapsed}：${D.short(m.text, 30)}${why}`,
+      { ...(m.needsReplyReview && !m.aiVerdict ? { needsReplyReview: true } : {}), ...(hours ? { hours } : {}), ...(settledLabel ? { settledLabel } : {}),
+        ...(m.level === 'weak' ? { maybe: true } : {}), ...(m.aiReason ? { aiReason: m.aiReason } : {}) });
   });
   const hours = lookback(settings), since = now - hours * 3600000;
   const allMentions = Object.values(snapshot.messages || {}).flat().filter(m => m.group && !m.mine && m.atAll && (!Number.isFinite(m.at) || m.at >= since));
@@ -159,8 +163,9 @@ function parseAgentBrief(text, snapshot, { day, now = Date.now(), done = new Set
     const fact = factBySource.get(x.source);
     if (!fact || picked.has(x.source)) return x;
     picked.add(x.source);
+    // AI 简报挑中的：复核判「不用回」的仍保留「AI：不用回」标签排到最后（2026-11-16）
     const { settledLabel, ...rest } = fact;
-    return { ...rest, text: x.text, ...(x.guess ? { guess: true } : {}), ...(fact.hours ? { waited: `已等 ${fact.hours} 小时` } : {}) };
+    return { ...rest, text: x.text, ...(settledLabel === 'AI：不用回' ? { settledLabel } : {}), ...(x.guess ? { guess: true } : {}), ...(fact.hours ? { waited: `已等 ${fact.hours} 小时` } : {}) };
   });
   sections.awaiting = [...aiAwaiting, ...factAwaiting.filter(x => !picked.has(x.source))];
   sections.groups = [...(factsBySection.get('groups') || []).filter(x => x.mandatory), ...sections.groups];
@@ -175,6 +180,33 @@ function prioritizedSections(sections, index, memory) {
     // 像是已说完的放这一栏最后，优先的人也一样（2026-11-07）。
     return [key, key === 'awaiting' ? [...sorted.filter(x => !x.settledLabel), ...sorted.filter(x => x.settledLabel)] : sorted];
   }));
+}
+
+// 复核完成后按新结论重算「等你回复」（2026-11-16）：已有条目（含 AI 简报写的「事 → 建议」）保留正文，
+// 档位、标签和理由按最新事实更新；规则清单里新出现的补在后面；不删条目（公司版口径）。
+function refreshAwaiting(brief, snapshot, { now = Date.now(), settings = {}, done = new Set(), memory = [] } = {}) {
+  if (!brief || !Array.isArray(brief.sections)) return brief;
+  const index = D.sourceIndex(snapshot);
+  const facts = fallbackBrief(snapshot, { day: brief.day, now, settings, done, memory });
+  const fresh = (facts.sections.find(s => s.key === 'awaiting')?.items || []).map(({ id, top, ...x }) => x);
+  const bySource = new Map(fresh.map(x => [x.source, x]));
+  const sections = Object.fromEntries(brief.sections.map(s => [s.key, s.items.map(({ id, top, ...x }) => x)]));
+  const kept = (sections.awaiting || []).map(x => {
+    const f = bySource.get(x.source);
+    if (!f) {
+      // 不在最新事实里（对方又说了话等）：旧的 AI 结论已过期，去掉标签、理由和正文后缀
+      const { aiReason, ...rest } = x;
+      const stale = x.settledLabel === 'AI：不用回';
+      return { ...rest, text: String(x.text || '').replace(/；AI：[^；]*$/, ''), ...(stale ? { settledLabel: undefined } : {}) };
+    }
+    const { settledLabel, maybe, aiReason, needsReplyReview, ...base } = x;
+    const aiText = !x.text || x.text === f.text ? f.text : x.text + (f.aiReason && !String(x.text).includes(f.aiReason) ? `；AI：${D.short(f.aiReason, 30)}` : '');
+    return { ...base, text: aiText, ...(f.settledLabel ? { settledLabel: f.settledLabel } : {}), ...(f.maybe ? { maybe: true } : {}), ...(f.aiReason ? { aiReason: f.aiReason } : {}), ...(f.needsReplyReview ? { needsReplyReview: true } : {}) };
+  });
+  const have = new Set(kept.map(x => x.source));
+  sections.awaiting = [...kept, ...fresh.filter(x => !have.has(x.source))];
+  const out = finish({ day: brief.day, generatedAt: brief.generatedAt, by: brief.by, sections: prioritizedSections(sections, index, memory), dropped: brief.dropped || 0, done });
+  return { ...brief, sections: [...out.sections, ...brief.sections.filter(s => !SECTIONS.some(x => x.key === s.key))], total: out.total };
 }
 
 // 去掉点过「处理了」的；同一出处只留一条；标出首屏（前 10 条）。
@@ -211,4 +243,4 @@ function mergeCommitments(previous, brief, day) {
   return [...map.values()].filter(c => !c.due || c.due >= cutoff);
 }
 
-module.exports = { SECTIONS, FIRST_SCREEN, INLINE_CHARS, fallbackBrief, briefPrompt, briefInputFile, inlineMessages, inputFileName, parseAgentBrief, mergeCommitments, withPortal };
+module.exports = { SECTIONS, FIRST_SCREEN, INLINE_CHARS, fallbackBrief, refreshAwaiting, briefPrompt, briefInputFile, inlineMessages, inputFileName, parseAgentBrief, mergeCommitments, withPortal };

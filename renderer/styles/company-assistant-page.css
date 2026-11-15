@@ -281,3 +281,7 @@
   .ca-thread{padding:22px 24px 8px}
   .ca-foot{padding:8px 24px 14px}
 }
+
+/* 2026-11-16 等你回复：全部处理了 / AI 复核 */
+.ca-tg .ca-tg-act{margin-left:auto;font-size:12px}
+.ca-review-line{margin-left:12px;color:var(--hw-text-3);font-size:var(--hw-fs-12)}

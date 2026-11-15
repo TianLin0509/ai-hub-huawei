@@ -11,7 +11,8 @@ const LABELS = { private: '条私聊未回', mention: '条 @你', commitment: '�
 function digestItems(snapshot, { settings, now, commitments = [], done = new Set() }) {
   const items = new Map(), day = D.dayKey(now), tomorrow = D.dayKey(now + 86400000);
   const add = item => { if (item.source && !done.has(item.source)) items.set(item.id, item); };
-  for (const message of D.awaiting(snapshot, settings)) {
+  for (const message of D.awaiting(snapshot, settings, { now })) {
+    if (message.level === 'settled') continue;         // 2026-11-16：像是已说完 / AI 判不用回的不进汇总（公司版口径：可能要回照常列）
     if (message.group) {
       const rows = snapshot.messages?.[message.conv] || [];
       const index = rows.findIndex(row => row.sourceId === message.sourceId);

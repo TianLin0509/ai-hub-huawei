@@ -317,7 +317,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
   }
   function todayItem(i, key, day, state) {
     const tags = [state === 'next' ? '<span class="ca-ti-tag next">下一场</span>' : state === 'live' ? '<span class="ca-ti-tag next">进行中</span>' : '',
-      i.merged ? `<span class="ca-ti-tag">${esc(i.mergedLabel || 'WeLink + 日历')}</span>` : '', i.guess ? '<span class="ca-ti-tag amber">推测</span>' : '', i.due ? `<span class="ca-ti-tag red">截止 ${esc(i.due)}</span>` : '',
+      i.merged ? `<span class="ca-ti-tag">${esc(i.mergedLabel || 'WeLink + 日历')}</span>` : '', i.guess ? '<span class="ca-ti-tag amber">推测</span>' : '', i.maybe ? '<span class="ca-ti-tag">可能要回</span>' : '', i.due ? `<span class="ca-ti-tag red">截止 ${esc(i.due)}</span>` : '',
       i.settledLabel ? `<span class="ca-ti-tag">${esc(i.settledLabel)}</span>` : ''].join('');
     // 会议行的出处标签（「会议 · 04:08 方案评审」）和正文重复，不再列。
     const label = i.sourceLabel && i.sourceLabel !== '查看出处' && !(key === 'meetings' && /^(会议|日程) · /.test(i.sourceLabel)) ? i.sourceLabel : '';
@@ -330,6 +330,16 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     return `<div class="ca-ti${state === 'past' ? ' past' : ''}" data-key="${esc(key)}">
       <button type="button" class="ca-ti-main" data-ca="source:${esc(i.source)}" data-source-day="${esc(day)}" title="查看出处">${compact ? `<b class="ca-ti-when">${esc(i.when)}</b>${esc(i.subject)}` : esc(text)}${tags ? `<span class="ca-ti-tags">${tags}</span>` : ''}${subLine ? `<small>${subLine}</small>` : ''}${i.preparation ? `<small class="ca-ti-prep">会前准备：${esc(i.preparation)}</small>` : ''}</button>
       <span class="ca-ti-acts"><button type="button" data-ca="ask-about:${esc(i.source)}" title="把这件事填进输入框问助理">问助理</button>${state === 'past' ? '' : `<button type="button" data-ca="done:${esc(i.source)}" title="点了以后不再出现在今天里">处理了</button>`}</span></div>`;
+  }
+  // 待回复 AI 复核（2026-11-16）：工作日 9/13/19 点由助理 CodeAgent 判断「等你回复」里哪些真的要回
+  let awaitingUndo = null, awaitingUndoTimer = null;
+  function reviewLine() {
+    const r = data.replyReview;
+    if (!r) return '';
+    const c = r.counts;
+    const what = r.running ? 'AI 正在复核等你回复…' : r.at ? `AI 复核 ${clock(r.at)}${c ? `：该回 ${c.reply} · 可能要回 ${c.maybe} · 不用回 ${c.no}` : ''}` : `AI 每个工作日 ${(r.hours || []).join('/')} 点复核`;
+    const err = r.error ? `（上次没成功：${esc(r.error)}）` : '';
+    return `<span class="ca-review-line" title="AI 复核等你回复：判断哪些真的要回">${esc(what)}${err}</span>${r.running ? '' : '<button type="button" class="ca-link quiet" data-ca="review-now">立即复核</button>'}`;
   }
   function todayHtml() {
     const d = data, b = d.brief, now = d.now || Date.now();
@@ -363,9 +373,10 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       const states = s.key === 'meetings' ? meetingStates(s.items, now) : new Map();
       const top = s.items.filter(i => i.top !== false), rest = s.items.filter(i => i.top === false);
       const shown = top.length ? top : rest, more = top.length ? rest : [];
-      return `<section class="ca-tsec" data-section="${esc(s.key)}"><div class="ca-tg"><span>${esc(s.title)}</span><small>${s.items.length}</small></div>${shown.map(i => todayItem(i, s.key, day, states.get(i))).join('')}${more.length ? `<details class="ca-tmore"><summary>还有 ${more.length} 条</summary>${more.map(i => todayItem(i, s.key, day, states.get(i))).join('')}</details>` : ''}</section>`;
+      const acts = s.key === 'awaiting' ? '<button type="button" class="ca-link quiet ca-tg-act" data-ca="awaiting-done" title="这一栏全部标为处理了；可在栏底撤销">全部处理了</button>' : '';
+      return `<section class="ca-tsec" data-section="${esc(s.key)}"><div class="ca-tg"><span>${esc(s.title)}</span><small>${s.items.length}</small>${acts}</div>${shown.map(i => todayItem(i, s.key, day, states.get(i))).join('')}${more.length ? `<details class="ca-tmore"><summary>还有 ${more.length} 条</summary>${more.map(i => todayItem(i, s.key, day, states.get(i))).join('')}</details>` : ''}</section>`;
     }).join('');
-    const regen = b && b.by !== 'none' ? `<div class="ca-today-foot"><button type="button" class="ca-link quiet" data-ca="brief-now" title="按最新数据重新整理今天">重新整理</button></div>` : '';
+    const regen = b && b.by !== 'none' ? `<div class="ca-today-foot"><button type="button" class="ca-link quiet" data-ca="brief-now" title="按最新数据重新整理今天">重新整理</button>${awaitingUndo ? `<span class="ca-review-line">「等你回复」已处理 ${awaitingUndo.length} 条</span><button type="button" class="ca-link quiet" data-ca="awaiting-undo">撤销</button>` : reviewLine()}</div>` : '';
     return head + note + notices + list + regen;
   }
   let folded = null;
@@ -554,6 +565,24 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     }
     if (verb === 'brief-now') { button.disabled = true; data = await call('brief-now'); render(); return; }
     if (verb === 'done') { await call('mark-done', { source: arg }); await load(); return; }
+    if (verb === 'awaiting-done') {
+      const r = await call('mark-awaiting-done');
+      awaitingUndo = r?.items?.length ? r.items : null;
+      clearTimeout(awaitingUndoTimer); awaitingUndoTimer = setTimeout(() => { awaitingUndo = null; render(); }, 10000);
+      await load(); return;
+    }
+    if (verb === 'awaiting-undo') {
+      const list = awaitingUndo || []; awaitingUndo = null; clearTimeout(awaitingUndoTimer);
+      if (list.length) await call('restore-awaiting', { items: list });
+      await load(); return;
+    }
+    if (verb === 'review-now') {
+      button.disabled = true;
+      const r = await call('reply-review-now');
+      if (r && r.started === false) showMessage?.('现在没法复核：' + (r.reason || '稍后再试'));
+      else if (r && r.count === 0) showMessage?.('没有需要复核的等你回复');
+      await load(); return;
+    }
     if (verb === 'source' && String(arg).startsWith('w3:')) { document.getElementById('btn-company-w3')?.click(); return; }
     if (verb === 'source') return openSource(arg, button.dataset.sourceDay);
     if (verb === 'retry') { await call('retry-chat', { id: arg }); await load(); return; }

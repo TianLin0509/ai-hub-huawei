@@ -59,10 +59,10 @@ function dueNotices({ snapshot, settings, now, commitments = [], sessionId = nul
   // 4. 等你回复太久（上班时间里才提醒）
   const waitMs = (Number(settings.waitHours) || 4) * 3600000;
   if (!(Number(settings.digestHours) > 0) && minute >= 9 * 60 && minute < 20 * 60) {
-    for (const m of D.awaiting(snapshot, settings)) {
-      if (done.has(m.sourceId) || !Number.isFinite(m.since) || now - m.since < waitMs) continue;
+    for (const m of D.awaiting(snapshot, settings, { now })) {
+      if (m.level === 'settled' || done.has(m.sourceId) || !Number.isFinite(m.since) || now - m.since < waitMs) continue;
       add({ id: `await:${m.conv}:${m.key}`, kind: 'awaiting-reply', title: `${D.short(m.sender, 12)} ${m.needsReplyReview ? '@你的消息已过' : '等你回复'} ${Math.round((now - m.since) / 3600000)} 小时`,
-        text: `${m.group ? '群「' + m.convName + '」' : '私聊'} ${D.clock(m.since)}：${D.short(m.text, 120)}${m.needsReplyReview ? '\n回复关联不明确，请核对是否已处理。' : ''}`, detail: { source: m.sourceId } });
+        text: `${m.group ? '群「' + m.convName + '」' : '私聊'} ${D.clock(m.since)}：${D.short(m.text, 120)}${m.aiReason ? '\nAI：' + m.aiReason : m.needsReplyReview ? '\n回复关联不明确，请核对是否已处理。' : ''}`, detail: { source: m.sourceId } });
     }
   }
   // 5. 关注词：别人新说的话里出现关注词（keywordSince 之前的旧消息不算）
@@ -77,7 +77,7 @@ function dueNotices({ snapshot, settings, now, commitments = [], sessionId = nul
   }
   // 6. 下班前小结
   if (minute >= minutesOf(settings.summaryTime || '18:00')) {
-    const waiting = D.awaiting(snapshot, settings).filter(m => !done.has(m.sourceId)).length;
+    const waiting = D.awaiting(snapshot, settings, { now }).filter(m => m.level !== 'settled' && !done.has(m.sourceId)).length;
     const dueTomorrow = commitments.filter(c => c.due === tomorrow).length;
     const ended = meetings.filter(m => Number.isFinite(m.end) && m.end <= now).length;
     add({ id: `summary:${day}`, kind: 'day-summary', title: '下班前小结',

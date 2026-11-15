@@ -15,6 +15,7 @@ const welink = require('./welink');
 const D = require('./data');
 const B = require('./brief');
 const R = require('./reminders');
+const RR = require('./reply-review');
 const Q = require('./queries');
 const Identity = require('./identity');
 const { recordMessageRound } = require('./message-round-log');
@@ -218,6 +219,8 @@ class CompanyAssistant {
     fs.renameSync(tmp, this.file(name));
   }
   settings() { const s = this.read('settings.json', {}); return { ...DEFAULT_SETTINGS, ...s }; }
+  // 判定「等你回复」用的设置：带上 CodeAgent 的待回复复核结论（只读，不写回 settings.json）（2026-11-16）
+  judgeSettings(s = this.settings()) { return { ...s, replyReview: this.state().replyReview || null }; }
   setSettings(patch = {}) {
     const s = this.settings(), next = { ...s };
     if ('digestHours' in patch) {
@@ -660,6 +663,7 @@ class CompanyAssistant {
     // 没登录时生成的是空简报（提示扫码），之后每 10 分钟再试一次。
     const retry = !brief || (brief.by === 'none' && now - (brief.generatedAt || 0) >= 10 * 60000);
     if (workday && minute >= R.minutesOf(s.briefTime) && retry && !this.briefRunning(day)) await this.generateBrief().catch(() => {});
+    if (workday) this.maybeReviewReplies(now);
     this.remind();
     void this.pump();
   }
@@ -1214,7 +1218,7 @@ class CompanyAssistant {
       return brief;
     }
     const st = this.state();
-    const list = B.fallbackBrief(snap, { day, now, settings: s, commitments: st.commitments, done: this.doneSet(), memory: this.memory.active() });
+    const list = B.fallbackBrief(snap, { day, now, settings: this.judgeSettings(s), commitments: st.commitments, done: this.doneSet(), memory: this.memory.active() });
     const brief = B.withPortal({ ...list, organizing: true, note: 'AI 正在挑重点，先看按规则排的清单。' }, this.portalLines());
     this.write(`brief-${day}.json`, brief);
     this.changed();
@@ -1228,7 +1232,7 @@ class CompanyAssistant {
   portalLines() { try { return require('../company-w3/shared').portal()?.briefLines() || []; } catch { return []; } }
   finishBrief(job, text, error) {
     const day = job.day, snap = this.snapshot(day), st = this.state(), prev = this.brief(day) || {};
-    let brief = !error && snap ? B.parseAgentBrief(text, snap, { day, now: this.now(), settings: this.settings(), done: this.doneSet(), commitments: st.commitments, memory: this.memory.active() }) : null;
+    let brief = !error && snap ? B.parseAgentBrief(text, snap, { day, now: this.now(), settings: this.judgeSettings(), done: this.doneSet(), commitments: st.commitments, memory: this.memory.active() }) : null;
     this.metering.finish(job, brief && !error ? 'success' : 'failure');
     if (brief) {
       brief.note = brief.dropped ? `AI 整理的条目里有 ${brief.dropped} 条找不到出处，已删掉。` : '';
@@ -1245,6 +1249,76 @@ class CompanyAssistant {
       this.publish({ id: `brief:${day}`, kind: 'brief', title: `今日简报：${brief.total} 条`, text: top.join('\n'), sessionId: null });
     }
     this.changed();
+  }
+  replyReviewRunning() { const l = this.lanes.brief; return [l.job, ...l.queue].some(j => j && j.type === 'reply-review'); }
+  maybeReviewReplies(now = this.now()) {
+    const slot = RR.slotOf(now);
+    if (!slot || this.state().replyReviewSlot === slot || this.replyReviewRunning()) return false;
+    return this.startReplyReview(slot).started;
+  }
+  startReplyReview(slot = 'manual') {
+    if (this.replyReviewRunning()) return { started: false, reason: '正在复核' };
+    const now = this.now(), day = D.dayKey(now), snap = this.snapshot(day);
+    if (!snap || !snap.login?.ok) return { started: false, reason: '还没取到今天的 WeLink 消息' };
+    const cands = RR.candidates(snap, { now, myName: this.settings().myName, done: this.doneSet() });
+    this.saveState({ replyReviewSlot: slot, replyReviewError: '' });
+    if (!cands.length) { this.saveState({ replyReview: { at: now, slot, items: {} } }); this.changed(); return { started: true, count: 0 }; }
+    this.enqueue({ type: 'reply-review', day, slot, candidates: cands.map(({ c, conv, lastKey }) => ({ c, conv, lastKey })), prompt: RR.prompt(cands, { now }) });
+    this.changed();
+    return { started: true, count: cands.length };
+  }
+  finishReplyReview(job, text, error) {
+    const items = error ? null : RR.parse(text, job.candidates);
+    if (!items) { this.saveState({ replyReviewError: error ? D.short(error, 80) : 'AI 复核结果读不出来，下一轮再试' }); this.changed(); return; }
+    this.saveState({ replyReview: { at: this.now(), slot: job.slot, items }, replyReviewError: '' });
+    // 今天的「等你回复」按新结论重算档位、标签和理由（不删条目）
+    const day = D.dayKey(this.now()), brief = this.brief(day), snap = this.snapshot(day);
+    if (brief && snap && brief.by !== 'none') {
+      try { this.write(`brief-${day}.json`, B.refreshAwaiting(brief, snap, { now: this.now(), settings: this.judgeSettings(), done: this.doneSet(), memory: this.memory.active() })); }
+      catch (e) { console.warn('[company-assistant] 复核后重算简报失败', e.message); }
+    }
+    this.changed();
+  }
+  replyReviewStatus() {
+    const st = this.state(), r = st.replyReview;
+    const n = v => Object.values(r?.items || {}).filter(x => x.verdict === v).length;
+    return { at: r?.at || null, running: this.replyReviewRunning(), error: st.replyReviewError || '', next: RR.nextSlotAt(this.now()), hours: RR.REVIEW_HOURS,
+      counts: r ? { reply: n('reply'), maybe: n('maybe'), no: n('no') } : null };
+  }
+  // 「等你回复」一键全部处理了；撤销时原样放回
+  markAwaitingDone() {
+    const day = D.dayKey(this.now()), brief = this.brief(day);
+    const items = (brief?.sections || []).filter(s => s.key === 'awaiting').flatMap(s => s.items);
+    // 同一出处可能也在别的栏（如「答应的事」），markDone 会一起拿掉：撤销要能整份恢复
+    const done = this.state().done || {};
+    this.awaitingUndo = { day, brief: brief ? JSON.parse(JSON.stringify(brief)) : null, done: Object.fromEntries(items.map(i => [i.source, done[i.source] ?? null])) };
+    for (const i of items) this.markDone(i.source, true);
+    return { ok: true, count: items.length, items };
+  }
+  restoreAwaiting(items = []) {
+    const undo = this.awaitingUndo; this.awaitingUndo = null;
+    if (undo && undo.day === D.dayKey(this.now())) {
+      const map = { ...(this.state().done || {}) };
+      for (const [k, v] of Object.entries(undo.done)) { if (v == null) delete map[k]; else map[k] = v; }
+      this.saveState({ done: map });
+      if (undo.brief) this.write(`brief-${undo.day}.json`, undo.brief);
+      this.changed();
+      return { ok: true, count: Object.keys(undo.done).length };
+    }
+    const list = (Array.isArray(items) ? items : []).filter(i => i && typeof i.source === 'string');
+    for (const i of list) this.markDone(i.source, false);
+    const day = D.dayKey(this.now()), brief = this.brief(day);
+    if (brief && list.length) {
+      const sec = brief.sections.find(s => s.key === 'awaiting');
+      const have = new Set((sec?.items || []).map(i => i.source));
+      const back = list.filter(i => !have.has(i.source));
+      if (sec) sec.items = [...back, ...sec.items];
+      else brief.sections.splice(Math.min(1, brief.sections.length), 0, { key: 'awaiting', title: B.SECTIONS.find(s => s.key === 'awaiting').title, items: back });
+      brief.total = brief.sections.reduce((n, s) => n + s.items.length, 0);
+      this.write(`brief-${day}.json`, brief);
+      this.changed();
+    }
+    return { ok: true, count: list.length };
   }
   markDone(source, done = true) {
     const st = this.state(), map = { ...st.done };
@@ -1308,9 +1382,9 @@ class CompanyAssistant {
     const s = this.settings(), now = this.now(), snap = this.snapshot(D.dayKey(now));
     if (!s.enabled || !snap || !snap.login?.ok) return [];
     const st = this.state();
-    const due = R.dueNotices({ snapshot: snap, settings: { ...s, keywordSince: st.keywordSince }, now, commitments: st.commitments, done: this.doneSet(), sessionId: st.sessionId || null });
+    const due = R.dueNotices({ snapshot: snap, settings: { ...this.judgeSettings(s), keywordSince: st.keywordSince }, now, commitments: st.commitments, done: this.doneSet(), sessionId: st.sessionId || null });
     const sent = due.filter(n => this.publish(n));
-    const digest = this.digest.check(snap, s, this.state());
+    const digest = this.digest.check(snap, this.judgeSettings(s), this.state());
     return digest ? [...sent, digest] : sent;
   }
   digestNotice(id) {
@@ -1364,8 +1438,8 @@ class CompanyAssistant {
     if (!item) throw new Error('这条对话已经不在了');
     return this.ask(item.q, { via: item.via, entry: item.entry, teamOwner: item.teamOwner, taskTitle: item.taskTitle });
   }
-  laneOf(job) { return job.type === 'brief' ? 'brief' : job.entry === 'ppt' ? 'ppt' : 'chat'; }
-  toolsetOf(job) { return job.type === 'brief' ? 'brief' : job.entry === 'ppt' ? 'ppt' : job.via === 'phone' ? 'phone' : 'desk'; }
+  laneOf(job) { return job.type === 'brief' || job.type === 'reply-review' ? 'brief' : job.entry === 'ppt' ? 'ppt' : 'chat'; }
+  toolsetOf(job) { return job.type === 'brief' || job.type === 'reply-review' ? 'brief' : job.entry === 'ppt' ? 'ppt' : job.via === 'phone' ? 'phone' : 'desk'; }
   enqueue(job) { const lane = this.laneOf(job); this.lanes[lane].queue.push({ ...job, id: randomUUID(), lane }); void this.pump(lane); }
   sessionBusy(id) {
     const s = id && this.deps.getSession(id);
@@ -1501,7 +1575,7 @@ class CompanyAssistant {
     const brief = this.brief(day);
     let sections = brief?.sections?.length ? brief.sections : null;
     if (!sections) {
-      try { sections = B.fallbackBrief(snap, { day, now, settings: this.settings(), commitments: this.state().commitments, done: this.doneSet(), memory: this.memory.active() }).sections; }
+      try { sections = B.fallbackBrief(snap, { day, now, settings: this.judgeSettings(), commitments: this.state().commitments, done: this.doneSet(), memory: this.memory.active() }).sections; }
       catch { sections = []; }
     }
     const lines = [];
@@ -1546,7 +1620,7 @@ class CompanyAssistant {
       try {
         const intents = AC.classify(job.prompt, { snapshot: snap }).intents;
         const days = intents.includes('weekly') ? this.snapshotDays().slice(0, 7).map(d => ({ day: d, snapshot: d === day ? snap : this.snapshot(d), brief: this.brief(d) })).filter(x => x.snapshot?.login?.uid === snap.login.uid) : [];
-        material = AC.buildMaterial(job.prompt, snap, { now, settings: s, memory: this.memory.active(), commitments: this.state().commitments, digest: digest.text, days });
+        material = AC.buildMaterial(job.prompt, snap, { now, settings: this.judgeSettings(s), memory: this.memory.active(), commitments: this.state().commitments, digest: digest.text, days });
       } catch (error) { console.warn('[company-assistant] material', error.message); }
     }
     job.intents = material.intents;
@@ -1731,7 +1805,8 @@ class CompanyAssistant {
         const phoneText = job.via === 'phone' && coverage ? `${answer.text}\n\n（查询范围：${coverage.ok ? '' : '⚠ '}${coverage.line}）` : undefined;
         this.patchChat(job.chatId, { state: 'done', a: answer.text, agentText: final.text, coverage, queryCoverage: answer.lines, sources, ...(phoneText ? { phoneText } : {}),
           answeredAt: this.now(), pptResults: isPpt ? this.ppt.takeTaskResult?.(job.id) || [] : [] });
-      } else this.finishBrief(job, final.text, null);
+      } else if (job.type === 'reply-review') this.finishReplyReview(job, final.text, null);
+      else this.finishBrief(job, final.text, null);
       if (job.type === 'chat') this.metering.finish(job, 'success');
       if (!job.teamOwner) this.keepLast(laneName, job.sessionId);
       this.changed();
@@ -1769,6 +1844,7 @@ class CompanyAssistant {
     if (lane && lane.job === job) lane.job = null;
     if (job.sessionId && !job.teamOwner && this.pool.has(job.sessionId)) this.keepLast(job.lane || this.laneOf(job), job.sessionId);
     if (job.type === 'chat') this.patchChat(job.chatId, { state: 'error', error: message, ...(stopped ? { stopped: true } : {}) });
+    else if (job.type === 'reply-review') this.finishReplyReview(job, '', message);
     else this.finishBrief(job, '', message);
     this.changed();
     setTimeout(() => { void this.pump(job.lane || this.laneOf(job)); }, 0);
@@ -1881,7 +1957,7 @@ class CompanyAssistant {
       cliFound: !!this.cli(), cliPath: this.cli() || '', cliVersion: this.cliVersion(), cliChoice: this.cliChoice(), cliSearch: this.cliSearch || { state: 'idle' }, cliInstall: this.cliInstaller.snapshot(), cliInstallAvailable: this.cliInstaller.available(), auth: this.auth.status(), login: this.auth.status().login || snap?.login || null, loginFlow: this.loginFlow, calendarNeedsSetup: !!snap?.calendarNeedsSetup, mailSetup: snap?.mailSetup || null,
       counts: snap ? { meetings: (snap.meetings || []).length, calendar: (snap.calendar || []).length, messages: Object.values(snap.messages || {}).reduce((n, l) => n + l.length, 0), mails: (snap.mails || []).length } : null,
       refreshedAt: snap?.at || null, refreshing: !!this.refreshing, updating: snap?.updating || [], errors: snap?.errors || [], conversations: (snap?.conversations || []).slice(0, 60), scope: snap?.scope || null, nameResolution: snap?.nameResolution || null, meetingCoverage: snap?.meetingCoverage || null, calendarCoverage: snap?.calendarCoverage || null, mailCoverage: snap?.mailCoverage || null,
-      brief: this.brief(day), nextBriefAt: next, chat: this.chat().filter(c => { if (c.entry === 'ppt') return false; try { this.verifyTeamOwner(c); return true; } catch { return false; } }).slice(-60), job: this.job ? { type: this.job.type, sentAt: this.job.sentAt || null } : null,
+      brief: this.brief(day), nextBriefAt: next, replyReview: this.replyReviewStatus(), chat: this.chat().filter(c => { if (c.entry === 'ppt') return false; try { this.verifyTeamOwner(c); return true; } catch { return false; } }).slice(-60), job: this.job ? { type: this.job.type, sentAt: this.job.sentAt || null } : null,
       briefJob: this.lanes.brief.job ? { sentAt: this.lanes.brief.job.sentAt || null } : null, pptQueued: this.lanes.ppt.queue.length + (this.lanes.ppt.job ? 1 : 0),
       archive: (() => { try { return this.archive.status(); } catch { return null; } })(),
       queued: this.queue.length, session: sid ? { id: sid, open: !!this.deps.getSession(sid), busy: this.sessionBusy(sid) } : null, tools: this.toolsStatus(),
