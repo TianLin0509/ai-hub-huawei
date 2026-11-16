@@ -69,7 +69,7 @@ async function teamPackFromOpenx(fetch, manifest, opts = {}) {
   const file = openxPackFile(manifest.version);
   let hit = null;
   try {
-    hit = await openxSource.findForDownload({ ...opts, file, version: manifest.version, fetchImpl: fetch });
+    hit = await openxSource.findForDownload({ unknownBudgetMs: 6000, maxMs: 6000, ...opts, file, version: manifest.version, release: `ppt-materials-${manifest.version}`, fetchImpl: fetch });
     if (!hit) return null;
     const response = await fetch(hit.url, { signal: AbortSignal.timeout(180000), redirect: 'error' });
     if (response.status >= 300 && response.status < 400) throw new Error(`HTTP ${response.status}`);

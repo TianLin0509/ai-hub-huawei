@@ -181,7 +181,7 @@ function createAppearanceStore({ dataDir, bundledDir = path.join(__dirname, '../
       const dest = path.join(root, 'downloads', entry.file);
       const activeAbort = abort;
       const cancellableFetch = (url, options) => fetchImpl(url, { ...options, signal: AbortSignal.any([options.signal, activeAbort.signal]) });
-      const result = await downloadWithFallback({ gate: true, sources, version: entry.version, expect: entry, dest, fetchImpl: cancellableFetch, signal: abort.signal,
+      const result = await downloadWithFallback({ gate: true, sources, version: entry.version, openx: { release: `appearance-${entry.version}` }, expect: entry, dest, fetchImpl: cancellableFetch, signal: abort.signal,
         onProgress: progress => notify({ progress }), onAttempt: attempts => notify({ attempts }) });
       if (!result.ok) return notify({ phase: result.cancelled ? 'cancelled' : 'error', error: result.cancelled ? '下载已取消，可以重新下载' : '下载失败，可重试；原有头像没有改变。' });
       install(readJson(dest), entry);

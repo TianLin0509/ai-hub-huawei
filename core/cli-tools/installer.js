@@ -143,7 +143,7 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
     try {
       const list = catalogLib.fileSources(component, file, catalogFrom);
       const expect = { file: file.name, bytes: file.bytes, sha256: file.sha256 };
-      const go = () => downloadWithFallback({ sources: list, version: component.version, expect, dest: download,
+      const go = () => downloadWithFallback({ sources: list, version: component.version, openx: { release: `cli-${component.id}-${component.version}` }, expect, dest: download,
         fetchImpl: resolveFetch(fetchImpl), signal, idleTimeoutMs, connectTimeoutMs,
         onProgress: p => progress({ phase: 'downloading', received: p.received, total: p.total, speed: p.speed, sourceName: p.sourceName }),
         onAttempt: attempts => progress({ attempts: attempts.map(a => ({ name: a.name, status: a.status, reason: a.reason, blocked: !!a.blocked, url: a.url })) }) });

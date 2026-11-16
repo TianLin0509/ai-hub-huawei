@@ -151,11 +151,10 @@ async function promote(part, dest, expect, { tries = 6, waitMs = 300 } = {}) {
   }
 }
 
-// 从一个源下一个文件到 dest（先写 .part，核对通过才改名）。
-async function downloadOne({ source, url, expect, dest, fetchImpl, signal, onProgress, idleTimeoutMs, connectTimeoutMs, redirect = 'follow' }) {
-  const part = dest + '.part';
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-  const { response, controller } = await openResponse(fetchImpl, url, signal, connectTimeoutMs, redirect);
+// 打开一个地址并检查状态码（分片下载时每片都走这里）。
+async function openChecked(fetchImpl, url, signal, connectTimeoutMs, redirect) {
+  const opened = await openResponse(fetchImpl, url, signal, connectTimeoutMs, redirect);
+  const { response } = opened;
   if (redirect !== 'follow' && response.status >= 300 && response.status < 400) {
     try { await response.body?.cancel(); } catch (_) {}
     throw fail(`服务器要求跳转（HTTP ${response.status}），这个源不跟随跳转`);
@@ -164,8 +163,19 @@ async function downloadOne({ source, url, expect, dest, fetchImpl, signal, onPro
     try { await response.body?.cancel(); } catch (_) {}
     throw fail(response.status === 404 ? '源上没有这个文件（HTTP 404）' : `服务器返回 HTTP ${response.status}`);
   }
+  return opened;
+}
+
+// 从一个源下一个文件到 dest（先写 .part，核对通过才改名）。
+// url 可以是地址数组（r24：公司内源单个附件有大小上限，大文件拆成 <文件名>.000/.001… 上传）：按顺序接成一个文件，
+// 整体仍按清单核对大小和 sha256，分片本身不需要单独的校验值。
+async function downloadOne({ source, url, expect, dest, fetchImpl, signal, onProgress, idleTimeoutMs, connectTimeoutMs, redirect = 'follow' }) {
+  const part = dest + '.part';
+  const urls = Array.isArray(url) ? url : [url];
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  let { response, controller } = await openChecked(fetchImpl, urls[0], signal, connectTimeoutMs, redirect);
   const contentType = response.headers && response.headers.get ? response.headers.get('content-type') : '';
-  const declared = Number(response.headers && response.headers.get ? response.headers.get('content-length') : NaN);
+  const declared = urls.length > 1 ? NaN : Number(response.headers && response.headers.get ? response.headers.get('content-length') : NaN);
   const hash = createHash('sha256');
   const out = fs.openSync(part, 'w');
   let received = 0, head = null, idleTimer = null, idleHit = false, reader = null, renamed = false, closed = false;
@@ -186,7 +196,7 @@ async function downloadOne({ source, url, expect, dest, fetchImpl, signal, onPro
     if (!response.body || typeof response.body.getReader !== 'function') throw fail('服务器没有返回文件内容');
     reader = response.body.getReader();
     armIdle();
-    for (;;) {
+    for (let next = 1; ;) {
       let chunk;
       try { chunk = await reader.read(); }
       catch (error) {
@@ -194,7 +204,17 @@ async function downloadOne({ source, url, expect, dest, fetchImpl, signal, onPro
         if (idleHit) throw fail(`连续 ${Math.round(idleTimeoutMs / 1000)} 秒没有收到数据`);
         throw fail(`下载中断：${reasonOf(error)}`);
       }
-      if (chunk.done) break;
+      if (chunk.done) {
+        if (next >= urls.length) break;
+        // 下一片：换连接继续写同一个文件、同一个 sha256。
+        clearTimeout(idleTimer);
+        ({ response, controller } = await openChecked(fetchImpl, urls[next++], signal, connectTimeoutMs, redirect));
+        if (signal && signal.aborted) controller.abort();
+        if (!response.body || typeof response.body.getReader !== 'function') throw fail('服务器没有返回文件内容');
+        reader = response.body.getReader();
+        armIdle();
+        continue;
+      }
       const buf = Buffer.from(chunk.value);
       if (!head) head = buf.subarray(0, 256);
       received += buf.length;
@@ -262,7 +282,7 @@ async function downloadAll({ sources, version, expect, dest, fetchImpl, signal, 
       onAttempt && onAttempt(attempts.map(a => ({ ...a })));
       try {
         // 内源附件不跟随重定向：入口地址已核过白名单，跳转目标不再放行。
-        const r = await downloadOne({ source, url: hit.url, expect, dest, fetchImpl, signal, onProgress, idleTimeoutMs,
+        const r = await downloadOne({ source, url: hit.urls || hit.url, expect, dest, fetchImpl, signal, onProgress, idleTimeoutMs,
           connectTimeoutMs: Math.min(connectTimeoutMs, openxSource.REACH_TIMEOUT_MS), redirect: 'error' });
         Object.assign(attempt, { status: 'ok', bytes: r.bytes, ms: r.ms });
         onAttempt && onAttempt(attempts.map(a => ({ ...a })));

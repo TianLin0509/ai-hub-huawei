@@ -7,6 +7,7 @@ const { MIRROR_MANIFEST_URLS } = require('./ppt-doctor-protocol');
 const { archiveUrl } = require('./ppt-doctor-download');
 const { resolveFetch } = require('./fetch-util');
 const { downloadWithFallback } = require('../app-update/downloader');
+const openxSource = require('../app-update/openx-source');
 const { capability } = require('./ppt-doctor-discovery');
 
 // Only a verified full archive is installed. The retained mirror baseline may be older than its latest delta.
@@ -60,14 +61,37 @@ function createDoctorInstaller({ dataDir, onState = () => {}, configure, fetchIm
           const body = await response.text();
           if (Buffer.byteLength(body) > 2 * 1024 * 1024) throw new Error('安装清单过大');
           const meta = fullArchive(JSON.parse(body.replace(/^\uFEFF/, '')), base);
-          const head = await fetch(meta.url, { method: 'HEAD', signal: AbortSignal.any([signal, AbortSignal.timeout(12000)]), redirect: 'error' });
-          const bytes = Number(head.headers.get('content-length'));
-          if (!head.ok || /text\/html/i.test(head.headers.get('content-type') || '') || !Number.isSafeInteger(bytes) || bytes < 1 || bytes > 4 * 1024 ** 3) throw new Error('完整包大小无法确认或被网络确认页挡住');
-          set({ phase: 'downloading', message: '正在下载 PPT Doctor…', version: meta.version, latestVersion: meta.latestVersion, total: bytes });
-          const result = await download({ gate: true, sources: [{ id: 'doctor', name: new URL(base).hostname, url: meta.url }],
-            expect: { bytes, sha256: meta.sha256 }, dest: path.join(job, 'package.zip'), fetchImpl: fetch, signal,
-            onProgress: progress => set(progress) });
+          // 公司内源（r24）：公开版按文件名在 openx 找同名附件（大文件是 .000/.001… 分片），版本名固定为 ppt-doctor-<完整包版本>。
+          // 清单没给大小：内源命中就用内源附件的大小，外网 ZIP 的 HEAD 被拦、超时也不影响走内源（r24 审查阻断项）；
+          // 内源没有才问外网 HEAD。找内源总共最多等 6 秒；内容最终都按清单的 sha256 核对。
+          const file = path.posix.basename(new URL(meta.url).pathname);
+          const openx = { release: `ppt-doctor-${meta.version}`, unknownBudgetMs: 6000, maxMs: 6000 };
+          const sane = n => Number.isSafeInteger(n) && n >= 1 && n <= 4 * 1024 ** 3;
+          const externalSize = async () => {
+            const head = await fetch(meta.url, { method: 'HEAD', signal: AbortSignal.any([signal, AbortSignal.timeout(12000)]), redirect: 'error' });
+            const n = Number(head.headers.get('content-length'));
+            if (!head.ok || /text\/html/i.test(head.headers.get('content-type') || '') || !sane(n)) throw new Error('完整包大小无法确认或被网络确认页挡住');
+            return n;
+          };
+          let bytes = NaN;
+          if (openxSource.enabled(process.env)) {
+            const hit = await openxSource.findForDownload({ ...openx, file, version: meta.version, fetchImpl: fetch, signal }).catch(() => null);
+            if (hit) bytes = await openxSource.headSize(hit, { fetchImpl: fetch, signal });
+          }
+          const sizedByOpenx = sane(bytes);
+          if (!sizedByOpenx) bytes = await externalSize();
+          const fetchArchive = (n, viaOpenx) => {
+            set({ phase: 'downloading', message: '正在下载 PPT Doctor…', version: meta.version, latestVersion: meta.latestVersion, total: n });
+            return download({ gate: true, sources: [{ id: 'doctor', name: new URL(base).hostname, url: meta.url }],
+              version: meta.version, openx: viaOpenx ? openx : false, expect: { file, bytes: n, sha256: meta.sha256 },
+              dest: path.join(job, 'package.zip'), fetchImpl: fetch, signal,
+              onProgress: progress => set(progress) });
+          };
+          let result = await fetchArchive(bytes, true);
+          // 大小取自内源、内源那份又不对：外网按自己 HEAD 到的大小再下一次（不让内源上的坏文件连累外网）。
+          if (!result.ok && !result.cancelled && sizedByOpenx) result = await fetchArchive(await externalSize(), false);
           if (!result.ok) throw new Error(result.cancelled ? '已取消' : result.attempts.map(a => a.reason).join('；'));
+          set({ source: result.source && result.source.name });
           chosen = meta; break;
         } catch (error) { failures.push(error.message); }
       }
