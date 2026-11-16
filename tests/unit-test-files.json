@@ -1,5 +1,6 @@
 [
   "tests/unit-token-usage.test.js",
+  "tests/unit-app-update-download-promote.test.js",
   "tests/unit-gpu-mode.test.js",
   "tests/unit-model-id.test.js",
   "tests/unit-session-background-tasks.test.js",
@@ -134,6 +135,9 @@
   "tests/unit-attention-jump.test.js",
   "tests/unit-session-export.test.js",
   "tests/unit-app-update-quiet.test.js",
+  "tests/unit-app-update-version-rollback.test.js",
+  "tests/unit-app-update-version-rollback-review.test.js",
+  "tests/unit-app-update-version-rollback-rework2.test.js",
   "tests/unit-app-update-upgrade-experience.test.js",
   "tests/unit-home-recent.test.js",
   "tests/unit-groupchat-mention-cjk.test.js",

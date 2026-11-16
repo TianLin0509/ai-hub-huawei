@@ -120,8 +120,15 @@ function sameRuntime(a, b) {
 // v3.1.3 起：只要清单里有 incrementalDelta，就先按它走小包（下载前核对 requires，对不上再回完整更新包）；
 // 无论从哪一版过来都直接升到最新版，不需要逐版升级。
 // allowSame（2026-10-28，core/edition-channel.js）：换成另一个版本的同版本号安装包时，版本号相同也照常更新。
-function planUpdate(manifest, { version, runtime, allowSame = false }) {
+// allowDowngrade（2026-11-16，core/app-update/version-catalog.js）：用户在「版本」页签里挑旧版回退时放行降级；
+// 回退只用完整更新包（不走差量小包），运行时不一致的旧版不能回退。
+function planUpdate(manifest, { version, runtime, allowSame = false, allowDowngrade = false }) {
   const cmp = compareVersions(manifest.version, version);
+  if (allowDowngrade && cmp < 0) {
+    if (!manifest.incremental) return { kind: 'none', reason: `v${manifest.version} 没有完整更新包，不能回退` };
+    if (!sameRuntime(manifest.runtime, runtime)) return { kind: 'none', reason: `v${manifest.version} 的底层运行时和本机不同，不能回退` };
+    return { kind: 'incremental', downgrade: true, reason: `回退到 v${manifest.version}：下载该版完整更新包，只换程序文件，设置和数据保留` };
+  }
   if (cmp < 0 || (cmp === 0 && !allowSame)) return { kind: 'none', reason: `已是最新：v${version}` };
   if (!manifest.incremental && !manifest.incrementalDelta) return { kind: 'full', reason: '这一版只提供完整安装包' };
   if (!sameRuntime(manifest.runtime, runtime)) {

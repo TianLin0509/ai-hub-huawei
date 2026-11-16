@@ -122,6 +122,32 @@ async function checkManifestsOnce({ sources, fetchImpl, validate, timeoutMs = MA
   return results;
 }
 
+// 本机已经有一份大小和 sha256 都对得上的同名文件：直接用，不再下（2026-11-16：上次下好后改名失败、
+// 或安装包已下好但还没装，重试时不用再下 90 多 MB）。
+function alreadyComplete(dest, expect) {
+  try {
+    if (!fs.existsSync(dest) || fs.statSync(dest).size !== expect.bytes) return false;
+    return createHash('sha256').update(fs.readFileSync(dest)).digest('hex') === expect.sha256;
+  } catch (_) { return false; }
+}
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const LOCKED = new Set(['EPERM', 'EACCES', 'EBUSY']);
+// .part 核对通过后改名为正式文件。个别电脑上安全软件会在新写好的 exe 上短暂持有句柄，或同名旧安装包
+// 还被占用，改名报 EPERM（2026-11-16 用户反馈）。只在失败时才等一等重试、清掉旧的同名文件，正常情况一次就过。
+async function promote(part, dest, expect, { tries = 6, waitMs = 300 } = {}) {
+  for (let i = 0; ; i++) {
+    try { fs.renameSync(part, dest); return; }
+    catch (error) {
+      if (!LOCKED.has(error.code)) throw error;
+      if (alreadyComplete(dest, expect)) { try { fs.rmSync(part, { force: true }); } catch (_) {} return; }
+      if (i >= tries - 1) throw fail('文件已下好并核对无误，但没法放到位（多半是安全软件正在扫描，或旧的同名安装包还被占用）。请稍等一分钟再点更新；仍不行可重启电脑后再试');
+      try { fs.rmSync(dest, { force: true }); } catch (_) {}
+      await sleep(waitMs * (i + 1));
+    }
+  }
+}
+
 // 从一个源下一个文件到 dest（先写 .part，核对通过才改名）。
 async function downloadOne({ source, url, expect, dest, fetchImpl, signal, onProgress, idleTimeoutMs, connectTimeoutMs }) {
   const part = dest + '.part';
@@ -135,7 +161,7 @@ async function downloadOne({ source, url, expect, dest, fetchImpl, signal, onPro
   const declared = Number(response.headers && response.headers.get ? response.headers.get('content-length') : NaN);
   const hash = createHash('sha256');
   const out = fs.openSync(part, 'w');
-  let received = 0, head = null, idleTimer = null, idleHit = false, reader = null, renamed = false;
+  let received = 0, head = null, idleTimer = null, idleHit = false, reader = null, renamed = false, closed = false;
   // openResponse 只把取消信号接到「拿到响应头」为止；下载正文期间也要能取消（2026-10-22 修：
   // 会议室运行时 77MB，用户点取消后原来还会把整个文件收完）。
   const onAbort = () => controller.abort();
@@ -185,7 +211,8 @@ async function downloadOne({ source, url, expect, dest, fetchImpl, signal, onPro
       throw fail(`文件不完整：应为 ${fmtBytes(expect.bytes)}，只收到 ${fmtBytes(received)}`);
     }
     if (hash.digest('hex') !== expect.sha256) throw fail('文件校验不一致（内容在传输中被改动或源上的文件不对）');
-    fs.renameSync(part, dest);
+    fs.closeSync(out); closed = true;
+    await promote(part, dest, expect);
     renamed = true;
     return { bytes: received, ms: Date.now() - startedAt };
   } finally {
@@ -193,7 +220,7 @@ async function downloadOne({ source, url, expect, dest, fetchImpl, signal, onPro
     if (signal) signal.removeEventListener('abort', onAbort);
     // 没读完的响应体要显式取消，否则连接会挂到回收（换源重试时叠加）。
     try { await reader?.cancel(); } catch (_) {}
-    fs.closeSync(out);
+    if (!closed) fs.closeSync(out);
     // 取消、20 秒没数据、写盘失败、校验不过都走这里：一律不留 .part。
     // 77MB 的半个文件既占盘，也会让下次重试从脏状态开始。
     if (!renamed) { try { fs.rmSync(part, { force: true }); } catch (_) {} }
@@ -211,6 +238,7 @@ async function downloadWithFallback({ gate = false, ...args }) {
 async function downloadAll({ sources, version, expect, dest, fetchImpl, signal, onProgress, onAttempt,
   idleTimeoutMs = IDLE_TIMEOUT_MS, connectTimeoutMs = CONNECT_TIMEOUT_MS }) {
   const attempts = [];
+  if (alreadyComplete(dest, expect)) return { ok: true, reused: true, source: { id: 'local', name: '本机已下好的文件' }, attempts };
   for (const source of sources) {
     if (signal && signal.aborted) break;
     // source.url：直接给出完整地址（CLI 组件的官方下载地址，core/cli-tools/catalog.js），不按目录拼。
@@ -232,4 +260,4 @@ async function downloadAll({ sources, version, expect, dest, fetchImpl, signal, 
   return { ok: false, cancelled: !!(signal && signal.aborted), attempts };
 }
 
-module.exports = { checkManifests, downloadWithFallback, fileUrl, looksLikeWebPage, reasonOf, fmtBytes };
+module.exports = { alreadyComplete, promote, checkManifests, downloadWithFallback, fileUrl, looksLikeWebPage, reasonOf, fmtBytes };

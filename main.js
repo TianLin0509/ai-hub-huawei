@@ -35,6 +35,8 @@ const { WorkspaceService, normalizeKey: normalizeWorkspaceKey } = require('./cor
 const stateStore = require('./core/state-store.js');
 const { primeV8MemoryPoolForExit } = require('./core/v8-exit-guard.js');
 const { getHubDataDir, isIsolatedHub, getMeetingWorkspaceDir } = require('./core/data-dir.js');
+// 版本回退后的「一键还原」（2026-11-16，core/app-update/version-catalog.js）：数据库打开前把登记过的备份拷回数据目录。
+try { const restored = require('./core/app-update/version-catalog.js').applyPendingRestore(getHubDataDir()); if (restored) console.log('[app-update] 回退备份还原：', JSON.stringify(restored)); } catch (error) { console.warn('[app-update] 回退备份还原失败：', error && error.message); }
 const {
   appendManagedLaunchAudit,
   inspectManagedLaunchAudit,

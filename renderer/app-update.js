@@ -266,7 +266,7 @@
   const readKey = key => { try { return localStorage.getItem(key) || ''; } catch { return ''; } };
   const writeKey = (key, value) => { try { localStorage.setItem(key, value); } catch {} };
   function pendingVersion() {
-    return state && state.latest && state.plan && state.plan.kind !== 'none'
+    return state && !state.pinned && state.latest && !state.latest.rollback && state.plan && state.plan.kind !== 'none'
       && ['available', 'downloading', 'ready'].includes(state.phase) ? String(state.latest.version) : '';
   }
   // 只改末位的小更新（latest.notify === false）不主动提醒：弹窗、红点、左上角标签都按「没有新版本」处理，

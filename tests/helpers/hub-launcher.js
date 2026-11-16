@@ -146,6 +146,9 @@ function buildIsolatedHubEnv(dataDir, extraEnv = {}, baseEnv = process.env, {
     CLAUDE_HUB_E2E_WINDOW_MODE: windowMode,
   };
   if (windowMode === 'hidden') env.CLAUDE_HUB_E2E = '1';
+  // 2026-11-16：后台/隐藏实例触发更新替换时，替换脚本另开的升级进度小窗（core/app-update/progress-ui.js，置顶）会弹到桌面。
+  // 非可见模式默认关掉它；调用方在 extraEnv 里显式传了 AI_HUB_UPDATE_PROGRESS_UI 就照传的来。
+  if (windowMode !== 'visible' && !Object.prototype.hasOwnProperty.call(extraEnv, 'AI_HUB_UPDATE_PROGRESS_UI')) env.AI_HUB_UPDATE_PROGRESS_UI = '0';
   // 2026-09-25 起 Claude / Codex 默认跑 PTY。带原生协议夹具的用例测的就是原生后端，
   // 这里替它们打开回退开关；显式传了 CLAUDE_HUB_AGENT_RUNTIME 的以调用方为准。
   if (!safeExtraEnv.CLAUDE_HUB_AGENT_RUNTIME

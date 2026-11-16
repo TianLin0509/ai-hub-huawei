@@ -225,6 +225,14 @@ test('替换脚本和进度小窗都能被 Windows PowerShell 5.1 解析', winOn
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('进度小窗：声明 DPI 感知、用 WPF 矢量渲染（150% 缩放不发糊），参数与决定文件格式不变', () => {
+  assert.match(PROGRESS_UI, /SetProcessDpiAwarenessContext/);
+  assert.match(PROGRESS_UI, /PresentationFramework/);
+  assert.match(PROGRESS_UI, /if \(-not \$form\) \{\s*Add-Type -AssemblyName System\.Windows\.Forms/, 'WPF 加载不了时退回 WinForms 画法');
+  assert.match(PROGRESS_UI, /^param\(\[string\]\$Dir, \[string\]\$Snapshot, \[string\]\$State/);
+  assert.match(PROGRESS_UI, /'\{"action":"' \+ \$action \+ '"\}'/);
+});
+
 test('进度小窗：各状态都能画出来（不显示窗口）', winOnly, () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-upui-'));
   const ui = path.join(dir, 'upgrade-progress.ps1');

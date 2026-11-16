@@ -16,6 +16,7 @@ const PERIODIC_CHECK_MS = 6 * 60 * 60 * 1000;
 // 下次打开就是新版，并由更新日志告诉用户多了什么。装在受保护目录（要管理员授权）的不静默，仍走设置菜单。用户可以在更新窗口里关掉。
 const QUIET_OFF_FILE = 'quiet-updates-off.flag';
 const canary = require('../core/app-update/canary');
+const catalogLib = require('../core/app-update/version-catalog');
 
 function resolveFetch(fetchImpl) {
   if (typeof fetchImpl === 'function') return fetchImpl;
@@ -68,6 +69,12 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   state.quietEnabled = quietEnabled();
   state.quietFeature = !!quietDelivery;
   state.previewEnabled = previewEnabled;
+  // 固定版本（回退后）：自动更新与更新提醒暂停；回退没换上就清掉固定并告诉用户（version-catalog.js）。
+  let pinned = null, versionList = null;
+  try { const settled = catalogLib.settlePin(dataDir, currentVersion, lastResult); pinned = settled.pin; if (settled.failed) state.rollbackFailed = { version: settled.failed.version }; }
+  catch (error) { logger.warn?.('[app-update] 读取固定版本失败：', error.message); }
+  state.pinned = pinned;
+  try { const rr = catalogLib.readRestoreResult(dataDir); if (rr && Date.now() - Date.parse(rr.at) < 24 * 3600 * 1000) state.restoreResult = rr; } catch (_) {}
 
   // 界面看到的 = 控制器状态 + 等待重启的状态（读不到就当没在等）。
   const view = () => { let wait = null; try { wait = restartWait() || null; } catch (_) {} return { ...state, restartWait: wait }; };
@@ -75,6 +82,8 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
 
   async function check({ silent = false, quietAllowed = silent } = {}) {
     if (checking) return checking;
+    // 固定在旧版时：后台不查、不提醒、不静默下载；用户在版本页点「回到最新版」才恢复。
+    if (pinned && silent) return state;
     // An administrator may set the same local preference through the existing managed command facility.
     const preferred = canary.read(dataDir).enabled === true;
     if (preferred !== previewEnabled && !['downloading', 'ready'].includes(state.phase)) setPreviewEnabled(preferred);
@@ -165,6 +174,8 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     emit({ quiet: true });
     try {
       const result = await download();
+      // 下载途中用户固定了版本（审查 P2-4）：下好的静默包直接丢弃，不留到退出时替换。
+      if (pinned) { staged = null; return void emit({ phase: 'idle', quiet: false, error: null }); }
       if (result.phase !== 'ready') { logger.warn?.('[app-update] 静默下载没有完成：', result.error || result.phase); emit({ phase: 'available', quiet: false, error: null }); }
     } catch (error) {
       logger.warn?.('[app-update] 静默下载出错：', error.message);
@@ -189,7 +200,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   }
   // 退出时替换：只处理静默下好的增量包，不重开程序、不弹任何东西；失败时脚本自己回滚，下次打开时只记日志。
   function applyOnQuit() {
-    if (state.phase !== 'ready' || !state.quiet || !quietEnabled() || !staged || staged.needsAdmin) return false;
+    if (pinned || state.phase !== 'ready' || !state.quiet || !quietEnabled() || !staged || staged.needsAdmin) return false;
     if (staged.installer) {
       // 静默下好的完整安装包：退出时静默安装，不重开程序（和增量包一样，下次打开就是新版）。
       try {
@@ -255,7 +266,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     }
     abort = null;
     // 查到新版后发布源又发了一版、旧版目录被删：所有源都回 404。重新查一次清单，换到新版本再下一次（只重试一次）。
-    if (!result.ok && !result.cancelled && !_afterRecheck && (result.attempts || []).length && result.attempts.every(a => /HTTP 404/.test(a.reason || ''))) {
+    if (!result.ok && !result.cancelled && !_afterRecheck && !manifest.rollback && (result.attempts || []).length && result.attempts.every(a => /HTTP 404/.test(a.reason || ''))) {
       const triedFile = asset.file;
       emit({ phase: 'available' });
       await check({ silent: true, quietAllowed: false });
@@ -308,6 +319,94 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       reason, bytes: plan.asset.bytes, file: plan.asset.file } });
     // The complete variant cannot recurse back into the delta fallback.
     return download(true);
+  }
+
+  // —— 版本选择与回退（2026-11-16）——
+  // 本机运行时；开发运行没有解包目录可读，原生依赖按参照版本算，免得全部被过滤掉。
+  function localRuntime(refNative) {
+    const resDir = isPackaged || env.AI_HUB_UPDATE_RESOURCES ? (env.AI_HUB_UPDATE_RESOURCES || resourcesPath) : null;
+    let rt; try { rt = currentRuntime({ resourcesPath: resDir }); } catch (_) { rt = { electron: process.versions.electron, native: {} }; }
+    return !resDir && refNative ? { ...rt, native: { ...refNative } } : rt;
+  }
+  // 版本列表：从各更新源（不含抢先版源）读 versions.json，第一个读得到的为准；只列与本机运行时一致的版本。
+  async function listVersions() {
+    const fetchFn = resolveFetch(fetchImpl);
+    const tried = [];
+    for (const src of baseSources) {
+      const url = catalogLib.versionsUrl(src.manifest);
+      try {
+        const res = await fetchFn(url, { cache: 'no-store' });
+        if (!res.ok) { tried.push(`${src.name}：HTTP ${res.status}`); continue; }
+        const versions = catalogLib.validateVersions(await res.text());
+        if (!versions.length) { tried.push(`${src.name}：列表是空的`); continue; }
+        let history = [];
+        try { history = require('../core/app-update/release-history').loadHistory(); } catch (_) {}
+        versionList = versions;
+        const catalog = catalogLib.buildCatalog(versions, { current: currentVersion, runtime: localRuntime(versions[0].runtime.native), history });
+        return { ok: true, current: currentVersion, source: src.name, ...catalog, pinned, backups: catalogLib.listBackups(dataDir).slice(0, 5) };
+      } catch (error) {
+        tried.push(`${src.name}：${error.message === 'fetch failed' ? '网络请求没有发出去' : error.message}`);
+      }
+    }
+    return { ok: false, current: currentVersion, pinned, items: [], hidden: [], backups: catalogLib.listBackups(dataDir).slice(0, 5),
+      error: baseSources.length ? `读不到版本列表（${tried.join('；')}）` : '这个版本没有配置更新源，不能选择版本' };
+  }
+  // 回退：先备份小文件，再下载目标版的完整更新包（不走差量）；下载好后由用户点「立即重启」换上。
+  async function rollbackTo(version) {
+    if (checking || ['downloading', 'ready', 'applying'].includes(state.phase)) throw new Error('正在检查或下载别的版本，先完成或取消再回退');
+    if (!versionList) await listVersions();
+    const entry = (versionList || []).find(v => v.version === version);
+    if (!entry) throw new Error(`镜像上找不到 v${version}`);
+    const target = catalogLib.targetManifest(entry);
+    const next = planUpdate(target, { version: currentVersion, runtime: localRuntime(entry.runtime.native), allowDowngrade: true });
+    if (next.kind !== 'incremental' || !next.downgrade) throw new Error(next.reason || `不能回退到 v${version}`);
+    // 另一个 Hub 开着同一份数据时不回退：备份拿不到一致快照、换程序时它也还在写（r16 返工2）。
+    catalogLib.assertNoOtherHub(dataDir);
+    const backup = catalogLib.backupForRollback(dataDir, { from: currentVersion, to: version });
+    manifest = target;
+    plan = { ...next, variant: 'complete', asset: entry.incremental, silent: false };
+    confirmedIds = [];
+    pinned = catalogLib.writePin(dataDir, { version, from: currentVersion, at: new Date().toISOString(), pending: true, backup: backup.dir,
+      supportsPin: (entry.capabilities || []).includes('version-pin') });
+    emit({ pinned, rollback: { version, backup: { dir: backup.dir, files: backup.files, bytes: backup.bytes } },
+      latest: { version, notes: entry.notes, publishedAt: entry.publishedAt, notify: false, rollback: true },
+      plan: { kind: plan.kind, variant: plan.variant, reason: plan.reason, silent: false, bytes: plan.asset.bytes, file: plan.asset.file, downgrade: true } });
+    const result = await download();
+    if (result.phase !== 'ready') { catalogLib.clearPin(dataDir); pinned = null; manifest = null; plan = null; emit({ pinned: null }); }
+    else if (previewEnabled) {
+      // 抢先版开着时，旧版会在后台静默下载最新版并在退出时自动升回去：旧包下好、换上之前替用户关掉抢先版（确认框已写明）。
+      previewEnabled = false; canary.write(dataDir, { enabled: false });
+      sources = baseSources;
+      emit({ previewEnabled: false, quietEnabled: quietEnabled() });
+    }
+    return view();
+  }
+  // 回到最新版：清掉固定，照常检查并下载最新版；下载好后用户点「立即重启」。
+  async function returnToLatest() {
+    if (['downloading', 'applying'].includes(state.phase)) throw new Error('正在下载，先完成或取消');
+    if (state.phase === 'ready') staged = null;
+    catalogLib.clearPin(dataDir); pinned = null;
+    manifest = null; plan = null;
+    emit({ pinned: null, rollback: null, phase: 'idle' });
+    const checked = await check({ silent: false, quietAllowed: false });
+    // 增量与完整安装包都接上现有下载流程（审查 P2-5）；下好后版本页给「立即重启 / 立即安装」。
+    if (checked.phase === 'available' && plan && ['incremental', 'full'].includes(plan.kind)) await download();
+    return view();
+  }
+  // 关掉「跟随最新版」但不回退：固定在当前版本，自动更新与提醒暂停。
+  // 后台静默下载在途就取消、已暂存的静默包丢弃（审查 P2-4）；用户自己点的下载不动。
+  function pinCurrent() {
+    pinned = catalogLib.writePin(dataDir, { version: currentVersion, from: currentVersion, at: new Date().toISOString(), manual: true, supportsPin: true });
+    if (state.quiet && state.phase === 'downloading' && abort) abort.abort();
+    if (state.quiet && state.phase === 'ready') { staged = null; return emit({ pinned, phase: 'idle', quiet: false, error: null }); }
+    return emit({ pinned });
+  }
+  // 一键还原：数据库可能正开着，登记后重启，下次启动在打开任何数据库前还原。
+  function restoreBackup(dir) {
+    catalogLib.assertNoOtherHub(dataDir);
+    const res = catalogLib.scheduleRestore(dataDir, dir);
+    setTimeout(() => { try { app.relaunch(); app.quit(); } catch (error) { logger.warn?.('[app-update] 还原后重启失败：', error.message); } }, 300);
+    return res;
   }
 
   function cancel() { if (abort) abort.abort(); if (checkAbort) checkAbort.abort(); return state; }
@@ -399,7 +498,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       reason: r.reason || null, blocked: !!r.blocked })) };
   }
 
-  return { check, probeSources, download, cancel, apply, applyOnQuit, setQuietEnabled, setPreviewEnabled, getState: () => state, view, startBackgroundChecks, useConfig, dismissLastResult, lastResult: () => lastResult,
+  return { check, probeSources, listVersions, rollbackTo, returnToLatest, restoreBackup, pinCurrent, download, cancel, apply, applyOnQuit, setQuietEnabled, setPreviewEnabled, getState: () => state, view, startBackgroundChecks, useConfig, dismissLastResult, lastResult: () => lastResult,
     dispose: () => { clearTimeout(timer); if (abort) abort.abort(); if (checkAbort) checkAbort.abort(); } };
 }
 
@@ -418,6 +517,11 @@ function registerAppUpdateIpc(ipcMain, controller, { gate = null } = {}) {
   });
   ipcMain.handle('app-update:dismiss-result', () => controller.dismissLastResult());
   ipcMain.handle('app-update:set-quiet', (_e, on) => controller.setQuietEnabled(on !== false));
+  ipcMain.handle('app-update:list-versions', () => controller.listVersions());
+  ipcMain.handle('app-update:rollback', (_e, version) => controller.rollbackTo(String(version || '')));
+  ipcMain.handle('app-update:return-latest', () => controller.returnToLatest());
+  ipcMain.handle('app-update:pin-current', () => controller.pinCurrent());
+  ipcMain.handle('app-update:restore-backup', (_e, dir) => controller.restoreBackup(String(dir || '')));
   ipcMain.handle('app-update:set-preview', (_e, on) => controller.setPreviewEnabled(on === true));
 }
 
