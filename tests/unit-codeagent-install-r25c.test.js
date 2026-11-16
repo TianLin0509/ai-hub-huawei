@@ -17,14 +17,22 @@ const GOOD_SIG = { status: 'Valid', subject: 'CN=CodeAgentCLI3.0, O=Huawei, C=CN
 const made = [];
 const procs = [];
 const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'ca-r25c-')); made.push(d); return d; };
+function stopStandIns(children = procs) {
+  // 保留 ChildProcess 的归属；退出后的数字 PID 可能已被并发用例的新进程复用。
+  for (const c of children) { try { c.kill(); } catch { /* 已退出 */ } }
+}
 test.after(() => {
-  for (const c of procs) if (isAlive(c.pid)) { try { process.kill(c.pid); } catch { /* 已退出 */ } }
+  stopStandIns();
   for (const d of made) fs.rmSync(d, { recursive: true, force: true });
 });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // 无害替身进程：隐藏窗口，ms 后自行退出，不会遗留。
 const standIn = (ms = 15000) => { const c = spawn(process.execPath, ['-e', `setTimeout(() => {}, ${ms})`], { windowsHide: true, stdio: 'ignore' }); procs.push(c); return c; };
 const waitExitReal = pid => new Promise(r => { const t = setInterval(() => { if (!isAlive(pid)) { clearInterval(t); r(); } }, 100); });
+const waitIdle = async installer => {
+  const deadline = Date.now() + 5000;
+  while (installer.busy() && Date.now() < deadline) await sleep(25);
+};
 const deny = async () => ({ ok: false, output: 'simulated Access is denied' });
 function fakeInstaller(dir) {
   const file = path.join(dir, 'Cli3.0-Setup.exe');
@@ -34,6 +42,18 @@ function fakeInstaller(dir) {
 const pidFileOf = args => (String(args[args.length - 1]).match(/-LiteralPath '([^']+installer\.pid)'/) || [])[1];
 // m42 的时序：计时器触发后包装进程先退出（close 抢先到达），结束进程树的结果随后才回来、且报失败。
 const wrapperExitsFirst = async pid => { process.kill(pid); await sleep(300); return { ok: false, output: 'simulated access denied' }; };
+
+test('测试清理：旧替身退出后 PID 被复用，也不结束新进程', async t => {
+  const old = standIn(0);
+  await new Promise(resolve => old.once('exit', resolve));
+  const current = standIn();
+  t.after(() => current.kill());
+  // 确定性模拟 PID 复用；旧对象的系统句柄已经关闭，新进程仍属于本用例。
+  old.pid = current.pid;
+  stopStandIns([old]);
+  await sleep(100);
+  assert.equal(isAlive(current.pid), true, '清理旧替身不能结束拿到同一个数字 PID 的新进程');
+});
 
 // ---- P1-a：超时一旦触发就定局 ----
 test('P1-a runHidden：结束进程树期间包装进程先退出，结果仍是超时，并报回没退出的后代', async () => {
@@ -51,7 +71,7 @@ test('P1-a runHidden：树能结束时，确认全部退出后才返回 killed=t
   const kid = standIn();
   const r = await runHidden(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
     timeout: 200, tree: async pid => [pid, kid.pid], settleMs: 2000,
-    kill: async pid => { process.kill(pid); setTimeout(() => process.kill(kid.pid), 100); return { ok: true }; },
+    kill: async pid => { process.kill(pid); setTimeout(() => kid.kill(), 100); return { ok: true }; },
   });
   assert.equal(r.timedOut, true);
   assert.equal(r.killed, true, JSON.stringify(r));
@@ -82,7 +102,7 @@ test('P1-a 安装超时 + close 抢先 + 安装器结束不了：保留任务目
   assert.equal(installer.busy(), true, '安装器还活着，不能释放占用');
   assert.equal((await installer.start()).code, 'CA_INSTALL_STILL_RUNNING');
   assert.equal(runs, 1, '不会启动第二个安装');
-  await waitExitReal(inst.pid); await sleep(300);
+  await waitExitReal(inst.pid); await waitIdle(installer);
   assert.equal(fs.existsSync(path.dirname(pidFile)), false, '安装器退出后清理任务目录');
   assert.equal(installer.busy(), false);
 });
@@ -97,7 +117,7 @@ test('P1-a 安装超时、没有安装器 PID 但包装进程结束不了：不�
   const r = await installer.start();
   assert.equal(r.code, 'CA_INSTALL_STILL_RUNNING', r.message);
   assert.equal(installer.busy(), true);
-  await waitExitReal(wrapper.pid); await sleep(300);
+  await waitExitReal(wrapper.pid); await waitIdle(installer);
   assert.equal(installer.busy(), false);
 });
 
@@ -117,7 +137,7 @@ test('P1-b 升级超时且更新器结束不了：保持占用、不启动第二
   const second = await up.start();
   assert.equal(second.code, 'CA_UPDATE_STILL_RUNNING');
   assert.equal(runs, 1, '不会启动第二次升级');
-  await waitExitReal(updater.pid); await sleep(300);
+  await waitExitReal(updater.pid); await waitIdle(up);
   assert.equal(up.busy(), false);
   assert.equal(rediscovered, 1, '更新器退出后重新查找 CodeAgent');
 });

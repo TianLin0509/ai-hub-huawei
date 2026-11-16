@@ -4,11 +4,41 @@
 // 启动时再起一个子进程（模拟 MCP 子进程），用来验证结束的是整棵进程树。
 // 环境变量：SERVE_FAKE_LOG=<文件> 记下启动参数和子进程 pid；SERVE_FAKE_MODE=never-ready | exit；
 // SERVE_FAKE_PROVIDERS=<json 文件> 作为 /api/v2/config/providers 的返回；SERVE_FAKE_QUOTA_DIR=<目录> 下 <模型>.json 作为配额返回。
+// SERVE_FAKE_CLEANUP=1 只供清理兜底用例：各实例提供唯一 IPC 管道，自行退出，避免按历史 PID 误杀。
 const http = require('http');
+const net = require('net');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
+const { randomUUID } = require('crypto');
 const { spawn } = require('child_process');
+
+function cleanupPipe() {
+  const name = `hub-serve-fake-${randomUUID()}`;
+  const endpoint = process.platform === 'win32' ? `\\\\.\\pipe\\${name}` : path.join(os.tmpdir(), name);
+  const control = net.createServer(socket => {
+    socket.setEncoding('utf8');
+    let input = '';
+    socket.on('error', () => {});
+    socket.on('data', chunk => {
+      input += chunk;
+      if (input === 'stop\n') socket.end('stopping\n', () => process.exit(0));
+      else if (input.length > 16 || input.includes('\n')) socket.destroy();
+    });
+  });
+  return new Promise((resolve, reject) => {
+    control.once('error', reject);
+    control.listen(endpoint, () => resolve(endpoint));
+  });
+}
+
+async function main() {
 const argv = process.argv.slice(2);
+if (argv[0] === 'cleanup-child') {
+  const endpoint = await cleanupPipe();
+  process.send({ cleanupPipe: endpoint });
+  return;
+}
 if (argv[0] !== 'serve') { console.error('only serve'); process.exit(2); }
 const opts = {};
 for (let i = 1; i < argv.length; i += 2) {
@@ -16,8 +46,21 @@ for (let i = 1; i < argv.length; i += 2) {
   opts[argv[i].slice(2)] = argv[i + 1];
 }
 if (process.env.SERVE_FAKE_MODE === 'exit') process.exit(3);
-const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true });
-if (process.env.SERVE_FAKE_LOG) fs.appendFileSync(process.env.SERVE_FAKE_LOG, JSON.stringify({ pid: process.pid, child: child.pid, opts, env: { CODEAGENT3_CONFIG_DIR: process.env.CODEAGENT3_CONFIG_DIR || null } }) + '\n');
+const cleanup = process.env.SERVE_FAKE_CLEANUP === '1';
+const child = spawn(process.execPath, cleanup ? [__filename, 'cleanup-child'] : ['-e', 'setInterval(() => {}, 1000)'], {
+  stdio: cleanup ? ['ignore', 'ignore', 'ignore', 'ipc'] : 'ignore', windowsHide: true,
+});
+let cleanupPipes;
+if (cleanup) {
+  const childReady = new Promise((resolve, reject) => {
+    child.once('message', message => resolve(message.cleanupPipe));
+    child.once('error', reject);
+    child.once('exit', code => reject(new Error(`cleanup child exited before ready: ${code}`)));
+  });
+  cleanupPipes = await Promise.all([cleanupPipe(), childReady]);
+}
+if (process.env.SERVE_FAKE_LOG) fs.appendFileSync(process.env.SERVE_FAKE_LOG, JSON.stringify({ pid: process.pid, child: child.pid, opts,
+  ...(cleanupPipes ? { cleanupPipes } : {}), env: { CODEAGENT3_CONFIG_DIR: process.env.CODEAGENT3_CONFIG_DIR || null } }) + '\n');
 const send = (res, status, body) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(typeof body === 'string' ? body : JSON.stringify(body)); };
 const server = http.createServer((req, res) => {
   if (process.env.SERVE_FAKE_MODE === 'never-ready') return send(res, 503, { error: 'starting' });
@@ -36,3 +79,5 @@ const server = http.createServer((req, res) => {
   return send(res, 404, { error: 'not found' });
 });
 server.listen(Number(opts.port), opts.host || '127.0.0.1');
+}
+main().catch(error => { console.error(error); process.exit(1); });

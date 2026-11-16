@@ -504,14 +504,66 @@ test('automatic reading backs off up to six hours and no further', async () => {
   assert.deepEqual(gaps, [30, 60, 120, 240, 360, 360, 360, 360]);
 });
 
-function killLoggedServes(log) {
+// 用例失败时也收掉模拟 serve；只连接本轮实例的唯一管道，不再重杀可能已经复用的历史 PID。
+async function stopLoggedServes(log) {
   let rows = [];
   try { rows = fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)); } catch { /* 还没起来 */ }
-  for (const pid of rows.flatMap(row => [row.pid, row.child])) {
-    if (!pid) continue;
-    try { require('node:child_process').execFileSync('taskkill', ['/T', '/F', '/PID', String(pid)], { windowsHide: true, stdio: 'ignore' }); } catch { /* 已退出 */ }
-  }
+  const pipes = rows.flatMap(row => {
+    assert.ok(Array.isArray(row.cleanupPipes) && row.cleanupPipes.length === 2, '模拟 serve 必须提供自己和子进程的清理管道');
+    return row.cleanupPipes;
+  });
+  await Promise.all(pipes.map(async endpoint => {
+    const deadline = Date.now() + 30000;
+    while (Date.now() < deadline) {
+      const gone = await new Promise((resolve, reject) => {
+        const socket = require('node:net').createConnection(endpoint);
+        socket.setTimeout(Math.min(10000, Math.max(1, deadline - Date.now())));
+        socket.once('connect', () => socket.write('stop\n'));
+        socket.on('data', () => {}); // ACK 后还要确认管道消失，才算原实例退出。
+        socket.once('error', error => {
+          if (error.code === 'ENOENT' || error.code === 'ECONNREFUSED') resolve(true);
+          else reject(error);
+        });
+        socket.once('timeout', () => socket.destroy(new Error('模拟 serve 清理管道没有按时回应')));
+        socket.once('close', () => resolve(false));
+      });
+      if (gone) return;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    assert.fail(`模拟 serve 还没确认退出，保留临时目录：${endpoint}`);
+  }));
 }
+
+test('fixture cleanup ignores historical PIDs after their instance pipes disappear', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-serve-cleanup-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const log = path.join(dir, 'fake.jsonl');
+  const prefix = process.platform === 'win32' ? `\\\\.\\pipe\\hub-serve-gone-${path.basename(dir)}` : path.join(dir, 'gone');
+  fs.writeFileSync(log, JSON.stringify({ pid: process.pid, child: process.pid, cleanupPipes: [`${prefix}-parent`, `${prefix}-child`] }) + '\n');
+  const kills = [];
+  t.mock.method(require('node:child_process'), 'execFileSync', (...args) => { kills.push(args); });
+  await stopLoggedServes(log);
+  assert.deepEqual(kills, [], '历史 PID 即使已属于当前测试进程，也不能发 taskkill');
+});
+
+test('fixture cleanup asks both owned instances to exit and confirms their pipes disappear', { timeout: 90000 }, async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-serve-cleanup-live-'));
+  const log = path.join(dir, 'fake.jsonl');
+  t.after(async () => { await stopLoggedServes(log); fs.rmSync(dir, { recursive: true, force: true }); });
+  const fixture = require('node:child_process').spawn(process.execPath, [path.join(__dirname, 'fixtures/codeagent-serve-fake/codeagent-serve-fake.js'),
+    'serve', '--host', '127.0.0.1', '--port', '0', '--token', 'fixture', '--config-dir', dir], {
+    windowsHide: true, stdio: 'ignore', env: { ...process.env, SERVE_FAKE_LOG: log, SERVE_FAKE_CLEANUP: '1' },
+  });
+  const deadline = Date.now() + 30000;
+  while (!fs.existsSync(log) && fixture.exitCode === null && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
+  assert.ok(fs.existsSync(log), '两个替身的清理管道都已启动');
+  const row = JSON.parse(fs.readFileSync(log, 'utf8').trim());
+  assert.equal(row.cleanupPipes.length, 2);
+  assert.notEqual(row.cleanupPipes[0], row.cleanupPipes[1]);
+  await stopLoggedServes(log);
+  while (fixture.exitCode === null && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(fixture.exitCode, 0, '替身收到管道通知后自行正常退出');
+});
 
 test('a slow taskkill hands the rest to a background kill instead of giving up', async () => {
   const { killServeSync, killTree } = require('../core/codeagent-serve');
@@ -547,12 +599,12 @@ test('quitting ends the running temporary serve, its child and refuses new ones'
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-serve-quit-'));
   const log = path.join(dir, 'fake.jsonl'), command = path.join(dir, 'fake-serve.cmd');
   let release = () => {};
-  t.after(() => { release(); killLoggedServes(log); serve.resetTempServeShutdownForTest(); try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 进程刚退出时可能还占着 */ } });
+  t.after(async () => { release(); try { await stopLoggedServes(log); } finally { serve.resetTempServeShutdownForTest(); } fs.rmSync(dir, { recursive: true, force: true }); });
   fs.writeFileSync(command, `@echo off\r\n"${process.execPath}" "${path.join(__dirname, 'fixtures/codeagent-serve-fake/codeagent-serve-fake.js')}" %*\r\n`);
   const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
   const waitFor = async (check, what) => { const end = Date.now() + 90000; while (Date.now() < end) { if (await check()) return; await new Promise(r => setTimeout(r, 100)); } assert.fail(what); };
   const held = new Promise(resolve => { release = resolve; });
-  const running = serve.withTempServe({ command, configDirEnv: 'CODEAGENT3_CONFIG_DIR', configDir: dir, cwd: dir, readyTimeoutMs: 120000, env: { ...process.env, SERVE_FAKE_LOG: log } }, async () => { await held; return { ok: true }; });
+  const running = serve.withTempServe({ command, configDirEnv: 'CODEAGENT3_CONFIG_DIR', configDir: dir, cwd: dir, readyTimeoutMs: 120000, env: { ...process.env, SERVE_FAKE_LOG: log, SERVE_FAKE_CLEANUP: '1' } }, async () => { await held; return { ok: true }; });
   await waitFor(() => fs.existsSync(log) && fs.readFileSync(log, 'utf8').trim(), 'temporary serve started');
   const { pid, child, opts } = JSON.parse(fs.readFileSync(log, 'utf8').trim().split('\n')[0]);
   assert.equal(opts.host, '127.0.0.1');
@@ -576,10 +628,10 @@ test('a failed shutdown leaves quota reading working; only will-quit stops it', 
   const serve = require('../core/codeagent-serve');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-serve-retry-'));
   const log = path.join(dir, 'fake.jsonl');
-  t.after(() => { killLoggedServes(log); serve.resetTempServeShutdownForTest(); try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 进程刚退出时可能还占着 */ } });
+  t.after(async () => { try { await stopLoggedServes(log); } finally { serve.resetTempServeShutdownForTest(); } fs.rmSync(dir, { recursive: true, force: true }); });
   const command = path.join(dir, 'fake-serve.cmd');
   fs.writeFileSync(command, `@echo off\r\n"${process.execPath}" "${path.join(__dirname, 'fixtures/codeagent-serve-fake/codeagent-serve-fake.js')}" %*\r\n`);
-  const read = () => serve.withTempServe({ command, configDirEnv: 'CODEAGENT3_CONFIG_DIR', configDir: dir, cwd: dir, readyTimeoutMs: 120000, env: { ...process.env, SERVE_FAKE_LOG: log } }, async ({ get }) => ({ ok: (await get('/api/v1/global/health')).ok }));
+  const read = () => serve.withTempServe({ command, configDirEnv: 'CODEAGENT3_CONFIG_DIR', configDir: dir, cwd: dir, readyTimeoutMs: 120000, env: { ...process.env, SERVE_FAKE_LOG: log, SERVE_FAKE_CLEANUP: '1' } }, async ({ get }) => ({ ok: (await get('/api/v1/global/health')).ok }));
   const app = new EventEmitter();
   let stopped = 0, clock = 1000;
   installQuotaQuitCleanup({ app, stopAutoRefresh: () => { stopped += 1; }, shutdownServes: () => serve.shutdownTempServes() });
@@ -601,12 +653,12 @@ test('a real serve still ends when every synchronous kill times out', { timeout:
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-serve-starved-'));
   const log = path.join(dir, 'fake.jsonl'), command = path.join(dir, 'fake-serve.cmd');
   let release = () => {};
-  t.after(() => { release(); killLoggedServes(log); serve.resetTempServeShutdownForTest(); try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* 进程刚退出时可能还占着 */ } });
+  t.after(async () => { release(); try { await stopLoggedServes(log); } finally { serve.resetTempServeShutdownForTest(); } fs.rmSync(dir, { recursive: true, force: true }); });
   fs.writeFileSync(command, `@echo off\r\n"${process.execPath}" "${path.join(__dirname, 'fixtures/codeagent-serve-fake/codeagent-serve-fake.js')}" %*\r\n`);
   const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
   const waitFor = async (check, what) => { const end = Date.now() + 90000; while (Date.now() < end) { if (await check()) return; await new Promise(r => setTimeout(r, 100)); } assert.fail(what); };
   const held = new Promise(resolve => { release = resolve; });
-  const running = serve.withTempServe({ command, configDirEnv: 'CODEAGENT3_CONFIG_DIR', configDir: dir, cwd: dir, readyTimeoutMs: 120000, env: { ...process.env, SERVE_FAKE_LOG: log } }, async () => { await held; return { ok: true }; });
+  const running = serve.withTempServe({ command, configDirEnv: 'CODEAGENT3_CONFIG_DIR', configDir: dir, cwd: dir, readyTimeoutMs: 120000, env: { ...process.env, SERVE_FAKE_LOG: log, SERVE_FAKE_CLEANUP: '1' } }, async () => { await held; return { ok: true }; });
   await waitFor(() => fs.existsSync(log) && fs.readFileSync(log, 'utf8').trim(), 'temporary serve started');
   const { pid, child } = JSON.parse(fs.readFileSync(log, 'utf8').trim().split('\n')[0]);
   assert.equal(serve.shutdownTempServes({ killSync: (target, port) => serve.killServeSync(target, port, { timeoutMs: 1 }) }), 1);

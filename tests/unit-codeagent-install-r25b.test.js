@@ -24,19 +24,18 @@ function fakeInstaller(dir, name = 'Cli3.0-Setup.exe') {
 const pidFileOf = args => (String(args[args.length - 1]).match(/-LiteralPath '([^']+installer\.pid)'/) || [])[1];
 
 // ---- P1：超时要结束整棵进程树，不能只结束最外层包装进程 ----
-test('P1 runHidden 超时：按 PID 结束整棵进程树，孙进程不再继续写文件', { skip: process.platform !== 'win32' && '仅 Windows' }, async () => {
+test('P1 runHidden 超时：按 PID 结束整棵进程树，孙进程不再继续写文件', { skip: process.platform !== 'win32' && '仅 Windows', timeout: 75000 }, async () => {
   // 和真实安装一样由 PowerShell 拉起子进程（Node 自己 spawn 的子进程会随父进程一起退出，测不出问题）。
-  // 孙进程每 200 ms 追加一个字节当心跳，15 秒后自行退出，不会遗留。
+  // 孙进程每 200 ms 写心跳，90 秒后自行退出；寿命长于整例预算，不能靠自然退出蒙混通过。
   const dir = tmp();
   const beat = path.join(dir, 'heartbeat.txt');
   const script = path.join(dir, 'grandchild.js');
-  fs.writeFileSync(script, `const fs = require('fs'); setInterval(() => fs.appendFileSync(${JSON.stringify(beat)}, 'x'), 200); setTimeout(() => process.exit(0), 15000);`);
+  fs.writeFileSync(script, `const fs = require('fs'); setInterval(() => fs.appendFileSync(${JSON.stringify(beat)}, 'x'), 200); setTimeout(() => process.exit(0), 90000);`);
   const ps = `Start-Process -FilePath '${process.execPath.replace(/'/g, "''")}' -ArgumentList '"${script}"' -NoNewWindow; Start-Sleep -Seconds 60`;
-  const t0 = Date.now();
   const r = await runHidden('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', ps], { timeout: 5000 });
   assert.equal(r.code, 'timeout'); assert.equal(r.timedOut, true);
   assert.equal(r.killed, true, r.killOutput);
-  assert.ok(Date.now() - t0 < 9000, '超时后及时返回');
+  // 超时后还需枚举并结束进程树；两条系统命令各有 30 秒预算，不能用整轮 9 秒假设限制慢机。
   assert.ok(fs.existsSync(beat), '孙进程确实起来过');
   await sleep(500);
   const size = fs.statSync(beat).size;
@@ -88,7 +87,9 @@ test('P1 安装超时、管理员安装器 Hub 无权强停：保留任务目录
   assert.equal(again.code, 'CA_INSTALL_STILL_RUNNING');
   assert.equal(h.calls.runs, 1, '不会再启动第二个安装');
   installerAlive = false; exited();
-  await sleep(50);
+  // 收尾包含异步删除安装副本，磁盘忙时 50 ms 不足；等实际释放占用再核对目录。
+  const deadline = Date.now() + 5000;
+  while (h.installer.busy() && Date.now() < deadline) await sleep(25);
   assert.deepEqual(h.jobs(), [], '安装器退出后清理任务目录');
   assert.equal(h.installer.busy(), false);
 });

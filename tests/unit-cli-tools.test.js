@@ -13,7 +13,7 @@ const crypto = require('node:crypto');
 const catalogLib = require('../core/cli-tools/catalog');
 const tar = require('../core/cli-tools/tar');
 const registry = require('../core/cli-tools/registry');
-const { createCliInstaller } = require('../core/cli-tools/installer');
+const { createCliInstaller, retryBusy, READY_MARK } = require('../core/cli-tools/installer');
 const view = require('../renderer/cli-install-view');
 
 const { publicKey: TEST_PUB, privateKey: TEST_KEY } = crypto.generateKeyPairSync('ed25519');
@@ -64,7 +64,7 @@ function makeInstaller(srv, root, opts = {}) {
   const installer = createCliInstaller({ sources: [{ id: 'aliyun', name: '阿里云', manifest: srv.manifest }], fetchImpl: globalThis.fetch,
     env: { AI_HUB_CLI_TOOLS_DIR: root, PATH: '' }, key: TEST_PUB, onState: s => states.push(s),
     run: opts.run || (async (file, args) => { runs.push([file, args]); return 'v-test'; }),
-    nodeUsable: opts.nodeUsable || (async () => ({ ok: true })), connectTimeoutMs: 3000, idleTimeoutMs: 3000, logger: { warn() {} }, ...opts.extra });
+    nodeUsable: opts.nodeUsable || (async () => ({ ok: true })), processLines: async () => [], connectTimeoutMs: 3000, idleTimeoutMs: 3000, logger: { warn() {} }, ...opts.extra });
   return { installer, states, runs };
 }
 
@@ -165,7 +165,7 @@ test('tgz: path traversal, absolute paths, links and corrupt archives are refuse
 });
 
 // ---------- 下载 + 校验 + 原子安装 ----------
-test('install: download, verify, extract, probe, rename into tools/<id>/<version> and record installed.json', async t => {
+test('install: download, verify, extract straight into tools/<id>/<version>, probe, mark ready and record installed.json', async t => {
   const root = tempDir(t);
   const srv = await server(t, {});
   const pkg = await tgz(t, [{ name: 'package/claude.exe', data: Buffer.alloc(4096, 3) }, { name: 'package/README.md', data: 'r' }]);
@@ -180,7 +180,9 @@ test('install: download, verify, extract, probe, rename into tools/<id>/<version
   assert.equal(fs.statSync(exe).size, 4096);
   assert.equal(runs.length, 1);
   assert.deepEqual(runs[0][1], ['--version']);
-  assert.ok(runs[0][0].endsWith('claude.exe') && runs[0][0].includes('.tmp'), 'the probe runs on the unpacked copy before it is promoted');
+  assert.equal(runs[0][0], exe, 'the probe runs in the version folder itself (no directory rename afterwards)');
+  const ready = JSON.parse(fs.readFileSync(path.join(root, 'claude', '2.1.319', READY_MARK), 'utf8'));
+  assert.deepEqual([ready.version, ready.sha256], ['2.1.319', c.files[0].sha256]);
   const installed = JSON.parse(fs.readFileSync(path.join(root, 'installed.json'), 'utf8'));
   assert.equal(installed.tools.claude.version, '2.1.319');
   assert.equal(installed.tools.claude.dir, 'claude/2.1.319');
@@ -276,7 +278,7 @@ test('install: DSH brings its own Node only when the machine has none that is ne
   assert.equal(runs.length, 1);
   assert.equal(runs[0][0], path.join(root, 'node', '22.23.4', 'node.exe'));
   assert.ok(runs[0][1][0].endsWith(path.join('node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')), runs[0][1][0]);
-  assert.match(path.basename(path.dirname(path.dirname(path.dirname(path.dirname(path.dirname(runs[0][1][0])))))), /^\.tmp-[0-9a-f]{8}$/, 'probed before promotion');
+  assert.equal(path.basename(path.dirname(path.dirname(path.dirname(path.dirname(path.dirname(runs[0][1][0])))))), '0.2.1-rc.2+tui.0.16.1', 'probed in the version folder');
   assert.deepEqual(runs[0][1].slice(1), ['--version']);
   assert.deepEqual(asked, [22]);
   const steps = [...new Set(states.map(s => s.tools.dsh.step && `${s.tools.dsh.step.index}/${s.tools.dsh.step.count} ${s.tools.dsh.step.name}`).filter(Boolean))];
@@ -291,6 +293,208 @@ test('install: DSH brings its own Node only when the machine has none that is ne
   await installer.install('dsh');
   assert.deepEqual(asked, []);
   assert.equal(srv.hits.filter(h => h.includes('node-22')).length, before);
+});
+
+// ---------- r31：目标被占用（安全软件扫描新 exe）----------
+const busyError = msg => Object.assign(new Error(msg), { code: 'EBUSY' });
+function fakeSleep() { const waits = []; return { waits, busyRetry: { sleep: async ms => { waits.push(ms); } } }; }
+
+test('busy retry: exponential back-off 250ms doubling, capped at 8s per wait, about 60s in total', async () => {
+  const { waits, busyRetry } = fakeSleep();
+  let calls = 0;
+  await assert.rejects(retryBusy(async () => { calls++; throw busyError('busy'); }, busyRetry), /busy/);
+  assert.deepEqual(waits, [250, 500, 1000, 2000, 4000, 8000, 8000, 8000, 8000, 8000, 8000, 4250]);
+  assert.equal(waits.reduce((a, b) => a + b, 0), 60000);
+  assert.equal(calls, waits.length + 1);
+  const other = fakeSleep();
+  await assert.rejects(retryBusy(async () => { throw Object.assign(new Error('nope'), { code: 'ENOENT' }); }, other.busyRetry), /nope/);
+  assert.deepEqual(other.waits, [], 'only "file in use" errors are retried');
+});
+
+test('install lands even when no directory under tools/ can ever be renamed; old .tmp-*, *.old and half-finished folders are cleared', async t => {
+  const root = tempDir(t);
+  const srv = await server(t, {});
+  const pkg = await tgz(t, [{ name: 'package/claude.exe', data: Buffer.alloc(3000, 7) }, { name: 'package/lib/a.dll', data: 'dll' }]);
+  const c = component('claude', '2.0.0', pkg, { install: { strip: 'package', bin: 'claude.exe', pathDirs: ['.'], versionArgs: ['--version'] } });
+  publish(srv, signed([c]), { [c.files[0].url]: pkg });
+  // 以前的版本留下的垃圾：改名方案的临时目录、挪开的旧目录、以及同版本的半成品（没有「装好了」标记）。
+  for (const d of ['.tmp-deadbeef', '1.0.0.abcd1234.old', '2.0.0']) { fs.mkdirSync(path.join(root, 'claude', d), { recursive: true }); fs.writeFileSync(path.join(root, 'claude', d, 'x'), 'x'); }
+  const isDir = p => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
+  const denied = [];
+  const origRename = fs.promises.rename, origRenameSync = fs.renameSync;
+  t.mock.method(fs.promises, 'rename', async (a, b) => { if (isDir(a)) { denied.push(a); throw Object.assign(new Error(`EPERM: operation not permitted, rename ${a}`), { code: 'EPERM' }); } return origRename(a, b); });
+  t.mock.method(fs, 'renameSync', (a, b) => { if (isDir(a)) { denied.push(a); throw Object.assign(new Error('EPERM'), { code: 'EPERM' }); } return origRenameSync(a, b); });
+  const { installer, runs } = makeInstaller(srv, root);
+  const r = await installer.install('claude');
+  assert.equal(r.tools.claude.phase, 'done', r.tools.claude.error);
+  assert.deepEqual(denied, [], 'no directory rename was even attempted');
+  assert.deepEqual(fs.readdirSync(path.join(root, 'claude')), ['2.0.0'], 'leftovers cleared');
+  assert.deepEqual(fs.readdirSync(path.join(root, 'claude', '2.0.0')).sort(), [READY_MARK, 'claude.exe', 'lib'], 'the half-finished copy was replaced, not merged');
+  assert.equal(runs[0][0], path.join(root, 'claude', '2.0.0', 'claude.exe'));
+  assert.equal(registry.managedBin('claude', { AI_HUB_CLI_TOOLS_DIR: root }), path.join(root, 'claude', '2.0.0', 'claude.exe'));
+});
+
+test('occupied for a while, then released: the probe waits with back-off and the install succeeds', async t => {
+  const root = tempDir(t);
+  const srv = await server(t, {});
+  const pkg = await tgz(t, [{ name: 'package/claude.exe', data: Buffer.alloc(2000, 8) }]);
+  const c = component('claude', '1.0.0', pkg, { install: { strip: 'package', bin: 'claude.exe', versionArgs: ['--version'] } });
+  publish(srv, signed([c]), { [c.files[0].url]: pkg });
+  const { waits, busyRetry } = fakeSleep();
+  let tries = 0;
+  const { installer } = makeInstaller(srv, root, { run: async () => { if (++tries <= 3) throw busyError('spawn EBUSY'); return '1.0.0'; }, extra: { busyRetry } });
+  const r = await installer.install('claude');
+  assert.equal(r.tools.claude.phase, 'done', r.tools.claude.error);
+  assert.equal(tries, 4);
+  assert.deepEqual(waits, [250, 500, 1000]);
+  assert.equal(registry.readInstalled(root).tools.claude.dir, 'claude/1.0.0');
+});
+
+test('occupied the whole time: gives up after about 60s, says why, removes only its own folder and keeps the old version', async t => {
+  const root = tempDir(t);
+  const srv = await server(t, {});
+  const v1 = await tgz(t, [{ name: 'package/claude.exe', data: Buffer.alloc(2000, 1) }]);
+  const v2 = await tgz(t, [{ name: 'package/claude.exe', data: Buffer.alloc(2000, 2) }]);
+  const install = { strip: 'package', bin: 'claude.exe', versionArgs: ['--version'] };
+  const c1 = component('claude', '1.0.0', v1, { install });
+  publish(srv, signed([c1]), { [c1.files[0].url]: v1 });
+  assert.equal((await makeInstaller(srv, root).installer.install('claude')).tools.claude.phase, 'done');
+  const c2 = component('claude', '2.0.0', v2, { install });
+  publish(srv, signed([c2]), { [c2.files[0].url]: v2 });
+  const { waits, busyRetry } = fakeSleep();
+  const { installer } = makeInstaller(srv, root, { run: async () => { throw busyError('spawn EBUSY'); }, extra: { busyRetry } });
+  const r = await installer.install('claude');
+  assert.equal(r.tools.claude.phase, 'error');
+  assert.match(r.tools.claude.error, /试运行没有通过.*EBUSY.*安全软件/);
+  assert.equal(waits.reduce((a, b) => a + b, 0), 60000);
+  assert.equal(registry.readInstalled(root).tools.claude.version, '1.0.0');
+  assert.equal(registry.managedBin('claude', { AI_HUB_CLI_TOOLS_DIR: root }), path.join(root, 'claude', '1.0.0', 'claude.exe'));
+  assert.deepEqual(fs.readdirSync(path.join(root, 'claude')), ['1.0.0'], 'the failed 2.0.0 folder is removed');
+});
+
+test('some files occupied: a half-finished folder that cannot be fully deleted is side-stepped, then cleaned on a later install', async t => {
+  const root = tempDir(t);
+  const srv = await server(t, {});
+  const pkg = await tgz(t, [{ name: 'package/claude.exe', data: Buffer.alloc(2000, 9) }]);
+  const c = component('claude', '2.0.0', pkg, { install: { strip: 'package', bin: 'claude.exe', versionArgs: ['--version'] } });
+  publish(srv, signed([c]), { [c.files[0].url]: pkg });
+  const half = path.join(root, 'claude', '2.0.0');
+  fs.mkdirSync(half, { recursive: true });
+  fs.writeFileSync(path.join(half, 'a.txt'), 'a');
+  fs.writeFileSync(path.join(half, 'claude.exe'), 'locked');
+  // 替身：删这个半成品时，a.txt 能删，claude.exe 被占着删不掉。
+  const origRm = fs.promises.rm;
+  const rmMock = t.mock.method(fs.promises, 'rm', async (target, opts) => {
+    if (path.resolve(target) === half) { fs.rmSync(path.join(half, 'a.txt'), { force: true }); throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' }); }
+    return origRm(target, opts);
+  });
+  const r = await makeInstaller(srv, root).installer.install('claude');
+  assert.equal(r.tools.claude.phase, 'done', r.tools.claude.error);
+  const rec = registry.readInstalled(root).tools.claude;
+  assert.match(rec.dir, /^claude\/~[0-9a-f]{6}$/);
+  const bin = registry.managedBin('claude', { AI_HUB_CLI_TOOLS_DIR: root });
+  assert.equal(bin, path.join(root, ...rec.dir.split('/'), 'claude.exe'));
+  assert.equal(fs.readFileSync(bin).length, 2000, 'the new copy, not the locked stale file');
+  assert.deepEqual(fs.readdirSync(half), ['claude.exe'], 'the locked leftover stays until it is released');
+  // 占用解除后再装一次（同一版修复）：半成品被清掉，回到正常目录名，上一次的 ~ 目录也清掉。
+  rmMock.mock.restore();
+  const again = await makeInstaller(srv, root).installer.install('claude');
+  assert.equal(again.tools.claude.phase, 'done', again.tools.claude.error);
+  assert.equal(registry.readInstalled(root).tools.claude.dir, 'claude/2.0.0');
+  assert.deepEqual(fs.readdirSync(path.join(root, 'claude')), ['2.0.0']);
+  assert.equal(fs.readFileSync(path.join(half, 'claude.exe')).length, 2000);
+});
+
+test('repairing the same version never touches the folder in use: it installs beside it and switches over', async t => {
+  const root = tempDir(t);
+  const srv = await server(t, {});
+  const pkg = await tgz(t, [{ name: 'package/claude.exe', data: Buffer.alloc(2000, 4) }]);
+  const c = component('claude', '3.0.0', pkg, { install: { strip: 'package', bin: 'claude.exe' } });
+  publish(srv, signed([c]), { [c.files[0].url]: pkg });
+  assert.equal((await makeInstaller(srv, root).installer.install('claude')).tools.claude.phase, 'done');
+  const seen = [];
+  const origRm = fs.promises.rm;
+  t.mock.method(fs.promises, 'rm', async (target, opts) => { seen.push(path.resolve(target)); return origRm(target, opts); });
+  const recBefore = registry.readInstalled(root).tools.claude;
+  assert.equal((await makeInstaller(srv, root).installer.install('claude')).tools.claude.phase, 'done');
+  const rec = registry.readInstalled(root).tools.claude;
+  assert.equal(recBefore.dir, 'claude/3.0.0');
+  assert.match(rec.dir, /^claude\/~[0-9a-f]{6}$/);
+  const inUse = path.join(root, 'claude', '3.0.0');
+  assert.equal(seen.filter(p => p === inUse).length, 1, 'the old folder is removed only once, after the switch');
+  assert.deepEqual(fs.readdirSync(path.join(root, 'claude')), [rec.dir.split('/')[1]]);
+});
+
+// ---------- r31b：退避期间取消、只清自己的目录、旁装目录名不加长 ----------
+// 在「等占用解除」时点取消：不再继续试、不切换版本，旧版原样可用，这次新建的目录清掉。三处等待（试跑、复制、写 installed.json）都要管。
+for (const where of ['probe', 'copy', 'registry']) test(`cancel during the busy back-off (${where}) stops the install: old version kept, new folder removed, phase cancelled`, async t => {
+  const root = tempDir(t);
+  const srv = await server(t, {});
+  const v1 = await tgz(t, [{ name: 'package/claude.exe', data: Buffer.alloc(2000, 1) }]);
+  const install = { strip: 'package', bin: 'claude.exe', versionArgs: ['--version'] };
+  const c1 = component('claude', '1.0.0', v1, { install });
+  publish(srv, signed([c1]), { [c1.files[0].url]: v1 });
+  assert.equal((await makeInstaller(srv, root).installer.install('claude')).tools.claude.phase, 'done');
+  const exe = Buffer.alloc(2000, 2);
+  const c2 = where === 'copy' ? { ...component('claude', '2.0.0', exe, { install: { bin: 'claude.exe' } }), kind: 'exe' } : component('claude', '2.0.0', v1, { install });
+  if (where === 'copy') c2.files[0].name = 'claude.exe';
+  publish(srv, signed([c2]), { [c2.files[0].url]: where === 'copy' ? exe : v1 });
+  let installer, waits = 0, calls = 0;
+  const busyRetry = { sleep: async () => { waits++; installer.cancel(); } };
+  const busyOnce = () => { if (++calls === 1) throw busyError('EBUSY: resource busy or locked'); };
+  if (where === 'copy') { const orig = fs.promises.copyFile; t.mock.method(fs.promises, 'copyFile', async (...a) => { busyOnce(); return orig(...a); }); }
+  if (where === 'registry') { const orig = registry.writeInstalled; t.mock.method(registry, 'writeInstalled', (...a) => { busyOnce(); return orig(...a); }); }
+  const run = async () => { if (where === 'probe') busyOnce(); return 'v'; };
+  ({ installer } = makeInstaller(srv, root, { run, extra: { busyRetry } }));
+  const r = await installer.install('claude');
+  assert.equal(waits, 1, 'it was waiting when cancel was pressed');
+  assert.equal(calls, 1, 'no further attempt after cancel');
+  assert.equal(r.tools.claude.phase, 'cancelled', r.tools.claude.error);
+  assert.equal(registry.readInstalled(root).tools.claude.version, '1.0.0');
+  assert.equal(registry.managedBin('claude', { AI_HUB_CLI_TOOLS_DIR: root }), path.join(root, 'claude', '1.0.0', 'claude.exe'));
+  assert.deepEqual(fs.readdirSync(path.join(root, 'claude')), ['1.0.0'], 'the new 2.0.0 folder is removed');
+});
+
+test('busy retry: the real wait wakes up as soon as cancel is pressed and throws a cancel error', async () => {
+  const ac = new AbortController();
+  const started = Date.now();
+  setTimeout(() => ac.abort(), 30);
+  let calls = 0;
+  await assert.rejects(retryBusy(async () => { calls++; throw busyError('busy'); }, { signal: ac.signal, firstMs: 20000, totalMs: 60000 }), e => e.cancelled === true);
+  assert.equal(calls, 1);
+  assert.ok(Date.now() - started < 5000, 'did not sit out the 20 s wait');
+  await assert.rejects(retryBusy(async () => 'never', { signal: ac.signal }), e => e.cancelled === true, 'already cancelled: not even one attempt');
+});
+
+test('cleanup removes only installer-owned folders and keeps folders still used by a running session', async t => {
+  const root = tempDir(t);
+  const srv = await server(t, {});
+  const pkg = await tgz(t, [{ name: 'package/claude.exe', data: Buffer.alloc(2000, 5) }]);
+  const c = component('claude', '2.0.0', pkg, { install: { strip: 'package', bin: 'claude.exe' } });
+  publish(srv, signed([c]), { [c.files[0].url]: pkg });
+  const owned = ['0.8.0', '0.9.0', '.tmp-deadbeef', '0.7.0.abcd1234.old', '~a1b2c3', '1.5.0~0f0f0f'];
+  const foreign = ['paired-0123456789ab', 'paired-0123456789ab.tmp-12345678', 'user-npm', 'my-notes'];
+  for (const d of [...owned, ...foreign]) { fs.mkdirSync(path.join(root, 'claude', d), { recursive: true }); fs.writeFileSync(path.join(root, 'claude', d, 'x'), 'x'); }
+  // 一个正在运行的会话还在用 0.9.0（DSH 那样的 node 脚本，删掉也不会报占用）。
+  const lines = [`"C:\\Program Files\\nodejs\\node.exe" "${path.join(root, 'claude', '0.9.0', 'x')}" --tui`];
+  const { installer } = makeInstaller(srv, root, { extra: { processLines: async () => lines } });
+  assert.equal((await installer.install('claude')).tools.claude.phase, 'done');
+  assert.deepEqual(fs.readdirSync(path.join(root, 'claude')).sort(), ['0.9.0', '2.0.0', ...foreign].sort());
+  // 查不到正在运行的程序时，这次一个都不删（留到下次）。
+  fs.mkdirSync(path.join(root, 'claude', '0.1.0'));
+  const again = makeInstaller(srv, root, { extra: { processLines: async () => null } }).installer;
+  assert.equal((await again.install('claude')).tools.claude.phase, 'done');
+  assert.ok(fs.existsSync(path.join(root, 'claude', '0.1.0')));
+  for (const d of foreign) assert.ok(fs.existsSync(path.join(root, 'claude', d)), d);
+});
+
+test('the side-by-side folder name is a short fixed prefix plus a short random part, no longer than the old .tmp-xxxxxxxx', () => {
+  const { ownedName } = require('../core/cli-tools/installer');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'core', 'cli-tools', 'installer.js'), 'utf8');
+  assert.match(src, /const alt = `\$\{SIDE_PREFIX\}\$\{crypto\.randomBytes\(3\)\.toString\('hex'\)\}`/);
+  assert.ok('~a1b2c3'.length <= '.tmp-deadbeef'.length);
+  for (const n of ['2.1.319', '0.2.1-rc.2+tui.0.16.1', '2.56.0+windows.4', '~a1b2c3', '.tmp-deadbeef', '1.0.0.abcd1234.old']) assert.ok(ownedName(n), n);
+  for (const n of ['paired-0123456789ab', 'paired-0123456789ab.tmp-12345678', 'paired-0123456789ab.old-12345678', 'user-npm', 'notes', '.staging']) assert.ok(!ownedName(n), n);
 });
 
 test('install: a proxy block page on our host is auto-unblocked once and retried', async t => {

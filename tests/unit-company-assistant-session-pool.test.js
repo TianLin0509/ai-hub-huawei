@@ -48,7 +48,20 @@ function fixture(t, { prewarm = true } = {}) {
     isAgentTurnActive: () => false,
   };
   const a = new CompanyAssistant(deps);
-  t.after(() => { a.closed = true; a.welinkGate.flush?.(); fs.rmSync(root, { recursive: true, force: true }); });
+  // Task metering intentionally writes in the background. Event-loop turns do not
+  // wait for its filesystem work; drain the actual writes before removing their root.
+  const meterWrites = [], finishMetering = a.metering.finish.bind(a.metering);
+  a.metering.finish = (...args) => {
+    const pending = finishMetering(...args);
+    if (pending) meterWrites.push(pending);
+    return pending;
+  };
+  t.after(async () => {
+    a.close();
+    for (let i = 0; i < meterWrites.length; i++) await meterWrites[i];
+    a.welinkGate.flush?.();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
   a.cli = () => 'fixture-cli';
   a.auth.status = () => ({ state: 'online', login: { ok: true, uid: 'owner' } });
   a.write(`raw-${DAY}.json`, snapshot());

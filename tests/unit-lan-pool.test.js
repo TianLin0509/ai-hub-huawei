@@ -10,6 +10,15 @@ const { LanPoolGateway } = require('../main/lan-pool-gateway');
 const { LanPoolService } = require('../main/lan-pool-service');
 const model = pool.MODEL_IDS[0];
 function temp(t) { const p = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-lan-pool-')); t.after(() => fs.rmSync(p, { recursive: true, force: true })); return p; }
+async function settledMember(f, member) {
+  const deadline = Date.now() + 5000;
+  for (;;) {
+    const row = f.gateway.status().members.find(m => m.id === member.id);
+    if (row?.active === 0) return row;
+    assert.ok(Date.now() < deadline, '服务端未完成请求结算：' + JSON.stringify(row));
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+}
 async function fixture(t, options = {}) {
   const dataDir = temp(t); pool.write(dataDir, { host: { enabled: true, members: [] } });
   const a = pool.addMember(dataDir, { name: '同事甲', ...options }), b = pool.addMember(dataDir, { name: '同事乙' });
@@ -114,11 +123,14 @@ test('a DSH client leaving after DONE counts as success, while an SSE error at H
   const f = await fixture(t); f.setLinger(120);
   const response = await f.call(f.a.secret); const reader = response.body.getReader(); let text = '';
   while (!text.includes('[DONE]')) { const { value, done } = await reader.read(); if (done) break; text += Buffer.from(value).toString('utf8'); }
-  await reader.cancel(); await new Promise(r => setTimeout(r, 25));
-  assert.equal(f.gateway.status().members.find(m => m.id === f.a.member.id).succeeded, 1);
+  await reader.cancel();
+  // Fetch cancellation only acknowledges the local reader; the server observes
+  // the socket closing on a later turn. Wait for settlement, never for a success.
+  const a = await settledMember(f, f.a.member);
+  assert.equal(a.succeeded, 1); assert.equal(a.failed, 0); assert.equal(a.requests, 1);
   f.setLinger(0); f.setStreamError(true); await (await f.call(f.b.secret)).text();
-  assert.equal(f.gateway.status().members.find(m => m.id === f.b.member.id).succeeded, 0);
-  assert.equal(f.gateway.status().members.find(m => m.id === f.b.member.id).failed, 1);
+  const b = await settledMember(f, f.b.member);
+  assert.equal(b.succeeded, 0); assert.equal(b.failed, 1); assert.equal(b.requests, 1);
 });
 
 test('client failure preserves dated readings and blocks launching without falling back to local credentials', async t => {

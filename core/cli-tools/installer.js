@@ -2,8 +2,10 @@
 // CLI 一键安装（2026-11-07 用户：没装 Claude Code / Codex / DSH 的同事，点一下就装好，不用去官网）。
 //
 // 流程：读组件目录（签名校验）→ 下载（多源依次试，每个源都核对字节数和 sha256，被公司网络放行页拦住就自动放行再试）
-// → 解压到临时目录 → 核对主程序、试跑一次 --version → 改名成 <数据目录>/tools/<组件>/<版本>/ → 写 installed.json。
-// 任何一步失败都只删这次的临时文件，已经装好的上一版原样保留；新版装好后上一版留着，再下一次安装时才清掉更早的。
+// → 直接解压到 <数据目录>/tools/<组件>/<版本>/ → 核对主程序、试跑一次 --version → 写「装好了」标记 → 写 installed.json。
+// 不再「先解压到临时目录、再整体改名」（r31：公司电脑上安全软件扫描新 exe 时整个目录改不了名，一键安装卡在 EPERM）。
+// installed.json 才是「装好了」的判据（标记文件 .aihub-ready.json 是旁证）：没写进去的目录都是半成品，下次安装时清掉。
+// 任何一步失败都只删这次的目录，已经装好的上一版原样保留；新版装好后上一版留着，再下一次安装时才清掉更早的。
 // 全程在用户自己的数据目录里，不要管理员权限；起的进程都隐藏窗口。
 // DSH 需要 Node 22+：本机没有或版本太低时，顺带装组件目录里的 node。
 const fs = require('fs');
@@ -48,15 +50,61 @@ async function pathNodeUsable(env, minNode, run = runVersion) {
   } catch { return { ok: false, reason: '本机的 Node.js 启动不了' }; }
 }
 
-async function renameWithRetry(from, to, tries = 40) {
-  for (let i = 0; ; i++) {
-    try { await fs.promises.rename(from, to); return; }
+const BUSY_CODES = ['EPERM', 'EBUSY', 'EACCES'];
+const READY_MARK = '.aihub-ready.json';
+const cancelledError = () => Object.assign(new Error('已取消'), { cancelled: true });
+// 用户点了「取消」就立即停：每一步动手前都看一眼（r31 审查：等占用期间点取消，之前仍会切换版本并报完成）。
+function throwIfCancelled(signal) { if (signal && signal.aborted) throw cancelledError(); }
+// 可被取消的等待：点取消时立刻醒来。
+const sleepMs = (ms, signal) => new Promise(resolve => {
+  if (signal && signal.aborted) return resolve();
+  const done = () => { clearTimeout(timer); if (signal) signal.removeEventListener('abort', done); resolve(); };
+  const timer = setTimeout(done, ms);
+  if (signal) signal.addEventListener('abort', done, { once: true });
+});
+// 文件被别的程序（多是安全软件在扫描新 exe）占着时等一等再试：250ms 起每次翻倍、单次最多 8 秒，总共约 60 秒。
+// 每次尝试前、每次等完后都检查取消；已取消就抛出「已取消」，不再试。
+async function retryBusy(fn, { totalMs = 60000, firstMs = 250, maxStepMs = 8000, sleep = sleepMs, codes = BUSY_CODES, signal = null } = {}) {
+  for (let waited = 0, step = firstMs; ; step = Math.min(step * 2, maxStepMs)) {
+    throwIfCancelled(signal);
+    try { return await fn(); }
     catch (error) {
-      // 刚解压出来的 exe 常被杀毒软件扫描占用几秒；等一等再改名。
-      if (i >= tries || !['EPERM', 'EBUSY', 'EACCES'].includes(error.code)) throw error;
-      await new Promise(resolve => setTimeout(resolve, 250));
+      if (waited >= totalMs || !codes.includes(error && error.code)) throw error;
+      const delay = Math.min(step, totalMs - waited);
+      await sleep(delay, signal);
+      waited += delay;
     }
   }
+}
+// installed.json 里这一版和上一版占用的 <组件>/ 下的目录名（npm 兜底装的 dsh/user-npm 也算）。
+function keptNames(id, record) {
+  const dirs = [record?.dir, record?.previousDir || (record?.previous && `${id}/${record.previous}`)];
+  return dirs.filter(d => typeof d === 'string').map(d => d.replace(/\\/g, '/').split('/')).filter(p => p[0] === id && p[1]).map(p => p[1]);
+}
+// 安装器自己建的目录才清：版本目录（数字开头的版本号）、旁装目录（~ 加随机串；含本分支早期的 <版本>~<随机>）、
+// 旧版留下的临时目录 .tmp-* 和 <版本>.<随机>.old。DSH 的拼接目录 paired-*（core/dsh-cli-profile.js）、
+// npm 兜底装的 user-npm 和其他不认识的目录一律不碰。
+const SIDE_PREFIX = '~';
+function ownedName(name) {
+  return /^\d[0-9A-Za-z.+-]*$/.test(name) || /^\d[0-9A-Za-z.+-]*~[0-9a-f]{6}$/.test(name)
+    || /^~[0-9a-f]{6}$/.test(name) || /^\.tmp-[0-9a-f]{8}$/.test(name) || /^\d[0-9A-Za-z.+-]*\.[0-9a-f]{8}\.old$/.test(name);
+}
+// 正在运行的程序（可执行文件路径和命令行）：还被会话用着的目录不删——DSH 这类 node 脚本被删时不会报「占用」。
+// 查不到时返回 null，调用方这次就不清理，留到下次。
+function runningCommandLines() {
+  return new Promise(resolve => {
+    const done = (error, stdout) => resolve(error ? null : String(stdout || '').split(/\r?\n/).filter(Boolean));
+    if (process.platform === 'win32') {
+      execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command',
+        '[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-CimInstance Win32_Process | ForEach-Object { $_.ExecutablePath; $_.CommandLine }'],
+      { windowsHide: true, timeout: 20000, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }, done);
+    } else execFile('ps', ['-axo', 'command='], { timeout: 20000, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }, done);
+  });
+}
+function referencedBy(lines, dir) {
+  const norm = p => { const t = String(p).split('\\').join('/'); return process.platform === 'win32' ? t.toLowerCase() : t; };
+  const needle = norm(dir).replace(/\/+$/, '') + '/';
+  return lines.some(line => norm(line).includes(needle));
 }
 async function removeQuietly(target) {
   try { await fs.promises.rm(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch (_) {}
@@ -70,7 +118,8 @@ function attemptsText(attempts) {
 
 function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, onState = () => {},
   unblock = null, isOwnUrl = () => false, unblockPassed = () => {}, run = runVersion, nodeUsable = null,
-  idleTimeoutMs, connectTimeoutMs, logger = console, npmRun, getDshEntry = () => ({}) } = {}) {
+  idleTimeoutMs, connectTimeoutMs, logger = console, npmRun, getDshEntry = () => ({}), busyRetry = {},
+  processLines = runningCommandLines } = {}) {
   const root = () => registry.toolsRoot(env);
   let catalog = null, catalogAt = 0, catalogFrom = [];
   let busy = null, abort = null;
@@ -144,14 +193,32 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
     return catalog;
   }
 
-  // 一个组件：下载 → 校验 → 解压 → 试跑 → 转正。返回装好的版本信息。
+  // 版本目录：<组件>/<版本>。已有同名目录时：installed.json 记着的或带「装好了」标记的不动（同一版修复安装），
+  // 其余是以前中途失败的半成品，先删掉再用；删不掉（文件被占着）或不能动，就换一个旁装目录 ~<6位随机>
+  // （7 个字符，比旧版的 .tmp-xxxxxxxx 还短，DSH 的深路径不会因此更接近 260 字符上限）。
+  async function pickInstallDir(base, component, record) {
+    const name = component.version;
+    const full = path.join(base, component.id, name);
+    const used = new Set(keptNames(component.id, record));
+    if (!fs.existsSync(full)) return { name, full };
+    if (!used.has(name) && !fs.existsSync(path.join(full, READY_MARK))) {
+      await removeQuietly(full);
+      if (!fs.existsSync(full)) return { name, full };
+    }
+    for (;;) {
+      const alt = `${SIDE_PREFIX}${crypto.randomBytes(3).toString('hex')}`;
+      if (!fs.existsSync(path.join(base, component.id, alt))) return { name: alt, full: path.join(base, component.id, alt) };
+    }
+  }
+
+  // 一个组件：下载 → 校验 → 解压到版本目录 → 试跑 → 写标记和 installed.json。返回装好的版本信息。
   async function installOne(component, signal, progress) {
     const base = root();
     const staging = path.join(base, '.staging', `${component.id}-${crypto.randomUUID().slice(0, 8)}`);
     const file = component.files[0];
     const download = path.join(staging, 'download', file.name);
-    // 临时目录名尽量短：DSH 的 node_modules 里最深的路径有 170 多个字符，整体要留在 Windows 260 字符以内。
-    const unpack = path.join(base, component.id, `.tmp-${crypto.randomUUID().slice(0, 8)}`);
+    // 目录名尽量短：DSH 的 node_modules 里最深的路径有 170 多个字符，整体要留在 Windows 260 字符以内。
+    let unpack = null, done = false;
     try {
       const list = catalogLib.fileSources(component, file, catalogFrom);
       const expect = { file: file.name, bytes: file.bytes, sha256: file.sha256 };
@@ -171,11 +238,15 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
       // 下载器边下边算过 sha256；这里只是让界面停在「校验」一下，表示已核对。
       progress({ phase: 'verifying' });
       progress({ phase: 'installing', files: 0 });
-      await removeQuietly(unpack);
+      const before = registry.readInstalled(base).tools[component.id];
+      throwIfCancelled(signal);
+      const target = await pickInstallDir(base, component, before);
+      unpack = target.full;
+      await fs.promises.mkdir(unpack, { recursive: true });
       if (component.kind === 'exe') {
         const bin = path.join(unpack, ...component.install.bin.split('/'));
         await fs.promises.mkdir(path.dirname(bin), { recursive: true });
-        await fs.promises.copyFile(download, bin);
+        await retryBusy(() => fs.promises.copyFile(download, bin), { ...busyRetry, signal });
       } else {
         let last = 0;
         await extractTgz(download, unpack, { strip: component.install.strip || '', signal,
@@ -195,36 +266,43 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
       }
       if (probe) {
         progress({ phase: 'probing' });
-        try { await run(probe[0], probe[1], { env }); }
+        // 安全软件正在扫描新 exe 时启动会报 EBUSY/EPERM：按退避等它扫完再试。
+        try { await retryBusy(() => run(probe[0], probe[1], { env }), { ...busyRetry, signal }); }
         catch (error) {
+          if (error.cancelled) throw error;
           throw new Error(`${component.name}已下载，但试运行没有通过（${error.killed ? '90 秒内没有响应' : String(error.message || '').slice(0, 120)}）。`
             + '可能是安全软件正在扫描或拦截，请稍后重试');
         }
       }
-      // 转正：<组件>/<版本>/ 已存在（以前装过同一版又被改坏）就先挪开，新的改名进去后再删旧的。
-      const final = path.join(base, component.id, component.version);
-      let aside = null;
-      if (fs.existsSync(final)) { aside = `${final}.${crypto.randomUUID().slice(0, 8)}.old`; await renameWithRetry(final, aside); }
-      try { await renameWithRetry(unpack, final); }
-      catch (error) { if (aside) { try { await renameWithRetry(aside, final); } catch (_) {} } throw new Error(`安装目录改名失败：${error.message}`); }
-      if (aside) await removeQuietly(aside);
+      throwIfCancelled(signal);
+      await fs.promises.writeFile(path.join(unpack, READY_MARK),
+        JSON.stringify({ id: component.id, version: component.version, sha256: file.sha256, readyAt: new Date().toISOString() }), 'utf8');
       const installed = registry.readInstalled(base);
-      const before = installed.tools[component.id];
-      const record = { version: component.version, dir: `${component.id}/${component.version}`,
+      const dir = `${component.id}/${target.name}`;
+      const changed = before && before.version !== component.version;
+      const previous = changed ? { previous: before.version, previousDir: before.dir }
+        : before?.previous ? { previous: before.previous, previousDir: before.previousDir || `${component.id}/${before.previous}` } : {};
+      const record = { version: component.version, dir,
         ...(component.install.bin ? { bin: component.install.bin } : {}),
         ...(component.install.pathDirs ? { pathDirs: component.install.pathDirs } : {}),
-        installedAt: new Date().toISOString(), sha256: file.sha256,
-        ...(before && before.version !== component.version ? { previous: before.version } : before?.previous ? { previous: before.previous } : {}) };
-      registry.writeInstalled(base, { tools: { ...installed.tools, [component.id]: record } });
-      // 只留这一版和上一版；更早的版本、以前失败留下的临时目录都清掉。
-      const keep = new Set([component.version, record.previous].filter(Boolean));
-      for (const name of fs.readdirSync(path.join(base, component.id))) {
-        if (!keep.has(name)) await removeQuietly(path.join(base, component.id, name));
+        installedAt: new Date().toISOString(), sha256: file.sha256, ...previous };
+      await retryBusy(async () => registry.writeInstalled(base, { tools: { ...installed.tools, [component.id]: record } }), { ...busyRetry, signal });
+      done = true;
+      // 只留这一版和上一版；更早的版本、以前失败留下的半成品（含旧版的 .tmp-*、*.old）都清掉。
+      // 只清安装器自己建的目录；还被正在运行的会话用着的、删不掉的（还被占着）都留到下次。
+      const keep = new Set(keptNames(component.id, record));
+      const stale = fs.readdirSync(path.join(base, component.id)).filter(name => !keep.has(name) && ownedName(name));
+      if (stale.length) {
+        const lines = await processLines();
+        for (const name of stale) {
+          const dir = path.join(base, component.id, name);
+          if (lines && !referencedBy(lines, dir)) await removeQuietly(dir);
+        }
       }
       return record;
     } finally {
       await removeQuietly(staging);
-      await removeQuietly(unpack);
+      if (unpack && !done) await removeQuietly(unpack);
     }
   }
 
@@ -321,4 +399,4 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
   return { snapshot, install, refreshGit, cancel: () => { abort?.abort(); return snapshot(); }, loadCatalog };
 }
 
-module.exports = { createCliInstaller, runVersion, pathNodeUsable, NAMES, fmtBytes };
+module.exports = { createCliInstaller, runVersion, pathNodeUsable, retryBusy, ownedName, runningCommandLines, NAMES, fmtBytes, READY_MARK };

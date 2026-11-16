@@ -400,6 +400,9 @@ async function probeNativeStampOnce({ cliExe, configDir, expectedVersion, workRo
     }
     catch { ok = false; report.nativeRuntimeRetained = false; report.error = 'SIGNER_NATIVE_FILES_MISSING'; }
   }
+  // A signer log can arrive after this poll already observed a missing protocol.
+  // Refresh the owned retry protocol before falling back to killing its host tree.
+  if (privateStartProcess && !cliPid) await checkProtocol();
   let treeStopped = false;
   if (!launcherClosed) {
     if (cliPid) treeStopped = await killTree(spawnImpl, cliPid);

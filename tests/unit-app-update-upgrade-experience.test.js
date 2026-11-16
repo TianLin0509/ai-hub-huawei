@@ -42,6 +42,11 @@ function makeCase(extra = {}) {
     setPlan(more) { Object.assign(plan, more); fs.writeFileSync(p.plan, JSON.stringify(plan), 'utf8'); },
     start() { const c = spawn(PS, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', p.helper, '-Plan', p.plan], { windowsHide: true, stdio: 'ignore' }); kids.push(c); return c; },
     runSync() { return spawnSync(PS, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', p.helper, '-Plan', p.plan], { windowsHide: true, encoding: 'utf8', timeout: 90000 }); },
+    diagnostic(r) {
+      let log = '';
+      try { log = fs.readFileSync(path.join(p.root, 'upgrade-log.txt'), 'utf8'); } catch (_) {}
+      return JSON.stringify({ dataDir, status: r.status, signal: r.signal, error: r.error?.message, stdout: r.stdout, stderr: r.stderr, progress: k.progress(), log });
+    },
     progress() { try { return JSON.parse(fs.readFileSync(p.progress, 'utf8').replace(/^\uFEFF/, '')); } catch (_) { return null; } },
     result() { return JSON.parse(fs.readFileSync(p.result, 'utf8').replace(/^\uFEFF/, '')); },
     decide(action) { fs.writeFileSync(p.decision, JSON.stringify({ action })); },
@@ -63,15 +68,21 @@ function makeCase(extra = {}) {
 const alive = c => c.exitCode === null && c.signalCode === null;
 const exited = c => new Promise(r => (alive(c) ? c.once('exit', () => r()) : r()));
 
-test('正常升级：分步写进度（第 1→4 步、已等多久、通常多久），最后是完成', winOnly, async () => {
+test('正常升级：分步写进度（第 1→4 步、已等多久、通常多久），最后是完成', winOnly, async t => {
   const k = makeCase();
-  const oldHub = spawn(PS, ['-NoProfile', '-NonInteractive', '-Command', 'Start-Sleep -Milliseconds 1500'], { windowsHide: true, stdio: 'ignore' });
+  t.after(() => k.done());
+  // 旧窗口等测试确实看到第 1 步才退出，避免慢机上辅助脚本还没启动，1.5 秒寿命就已结束。
+  const release = path.join(k.dataDir, 'release-old-hub.flag');
+  const oldHub = spawn(PS, ['-NoProfile', '-NonInteractive', '-Command', `while (-not (Test-Path -LiteralPath '${q(release)}')) { Start-Sleep -Milliseconds 100 }`], { windowsHide: true, stdio: 'ignore' });
   k.kids.push(oldHub);
   k.setPlan({ pid: oldHub.pid });
   k.decide('retry');
   const seen = new Set();
   const helper = k.start();
   const timer = setInterval(() => { const s = k.progress(); if (s) seen.add(`${s.step}:${s.state}`); }, 100);
+  t.after(() => clearInterval(timer));
+  assert.ok(await k.waitFor(() => { const s = k.progress(); if (s?.step === 1 && s.state === 'running') { seen.add('1:running'); return true; } return false; }), '旧窗口还在时发布第 1 步');
+  fs.writeFileSync(release, 'exit');
   await exited(helper);
   clearInterval(timer);
   const s = k.progress();
@@ -84,7 +95,6 @@ test('正常升级：分步写进度（第 1→4 步、已等多久、通常多�
   assert.equal(fs.readFileSync(k.asar, 'utf8'), 'new-asar');
   assert.equal(k.result().ok, true);
   assert.equal(fs.existsSync(k.p.decision), false, '本轮升级开始时清掉旧决定，即使没有进入等待');
-  k.done();
 });
 
 test('升级途中再点图标：新启动的程序交给进度窗并退出；升级结束后照常启动', winOnly, async () => {
@@ -163,18 +173,18 @@ test('别的 Hub 开着、用户选「这次先不升级」：不换、不结束
   k.done();
 });
 
-test('主程序退出后残留的子进程（带 --type=）占着文件：自动结束后换上', winOnly, async () => {
+test('主程序退出后残留的子进程（带 --type=）占着文件：自动结束后换上', winOnly, async t => {
   const k = makeCase();
+  t.after(() => k.done());
   const child = await k.hold({ asHub: true, tag: '--type=gpu-process' });
   const t0 = Date.now();
   const r = k.runSync();
-  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.status, 0, k.diagnostic(r));
   assert.equal(fs.readFileSync(k.asar, 'utf8'), 'new-asar');
   assert.equal(k.result().ok, true);
   await Promise.race([exited(child), sleep(3000)]);
   assert.ok(!alive(child), '残留子进程已结束');
   assert.ok(Date.now() - t0 < 25000, `用时 ${Date.now() - t0}ms`);
-  k.done();
 });
 
 test('替换失败已还原：进度窗给出原因和「结束占用的程序并重试」，重试成功', winOnly, async () => {
@@ -384,8 +394,10 @@ for (const mode of ['cancel', 'plain']) {
   test(`受保护目录 ${mode}：失败结果写出后自动重开，不等待进度窗决定`, winOnly, async () => {
     const k = makeCase({ assumeUi: true, relaunch: true, elevateMode: mode });
     const marker = path.join(k.dataDir, 'relaunched.json');
+    const launched = path.join(k.dataDir, 'relaunched.flag');
     const script = path.join(k.dataDir, 'mark-relaunch.ps1');
-    fs.writeFileSync(script, `@{ elevated = [bool]$Elevated; parent = (Get-CimInstance Win32_Process -Filter "ProcessId=$PID").ParentProcessId } | ConvertTo-Json | Set-Content -LiteralPath '${q(marker)}'`, 'utf8');
+    // 入口先留启动标记；WMI 查询只用于随后核对亲缘关系，不能把查询耗时算成产品尚未重开。
+    fs.writeFileSync(script, `Set-Content -LiteralPath '${q(launched)}' -Value x; @{ elevated = [bool]$Elevated; parent = (Get-CimInstance Win32_Process -Filter "ProcessId=$PID").ParentProcessId } | ConvertTo-Json | Set-Content -LiteralPath '${q(marker)}'`, 'utf8');
     k.setPlan({ exe: PS, args: ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-File', script] });
     const sidResult = spawnSync(path.join(process.env.SystemRoot || 'C:\Windows', 'System32', 'whoami.exe'), ['/user', '/fo', 'csv', '/nh'], { windowsHide: true, encoding: 'utf8' });
     assert.equal(sidResult.status, 0, sidResult.stderr);
@@ -398,7 +410,7 @@ for (const mode of ['cancel', 'plain']) {
       assert.throws(() => fs.writeFileSync(path.join(resources, 'probe.tmp'), 'x'), /EPERM|EACCES/);
       const helper = k.start();
       const started = Date.now();
-      const restarted = await k.waitFor(() => fs.existsSync(marker), 20000);
+      const restarted = await k.waitFor(() => fs.existsSync(launched), 20000);
       assert.ok(restarted, `写出结果后应自动重开；当前进度：${JSON.stringify(k.progress())}`);
       assert.ok(await k.waitFor(() => !alive(helper), 5000), '父脚本已结束，没有留在 600 秒的等待里');
       assert.ok(Date.now() - started < 25000);
@@ -411,7 +423,8 @@ for (const mode of ['cancel', 'plain']) {
       assert.equal(fs.readFileSync(k.asar, 'utf8'), 'old-asar');
       assert.equal(k.progress().state, 'gave-up');
       assert.equal(k.progress().need, undefined, '权限失败不再提示结束占用进程');
-      const launch = JSON.parse(fs.readFileSync(marker, 'utf8').replace(/^\uFEFF/, ''));
+      const launch = await k.waitFor(() => { try { return JSON.parse(fs.readFileSync(marker, 'utf8').replace(/^\uFEFF/, '')); } catch (_) { return null; } });
+      assert.ok(launch, '重开的进程应完成亲缘关系核对');
       assert.equal(launch.parent, helper.pid, '普通权限父脚本负责重开，管理员副本只写结果');
       assert.equal(guard.deferToRunningUpgrade({ dataDir: k.dataDir }), false, '启动锁已释放');
     } finally {

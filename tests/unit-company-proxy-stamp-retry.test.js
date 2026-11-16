@@ -24,7 +24,10 @@ test('known OAuth token fields redact mixed base64 values through JSON escape la
 });
 function temp(t) { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stamp-retry-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true })); return dir; }
 
-function launcher(cases, { killSucceeds = true, later = setTimeout, soon = setImmediate } = {}) {
+// These scenarios specify process events, not elapsed startup time. Publish them
+// asynchronously without wall-clock timers; timeout boundaries are tested below
+// with the injected logical clock instead of racing filesystem setup under load.
+function launcher(cases, { killSucceeds = true, later = queueMicrotask, soon = queueMicrotask } = {}) {
   const calls = [], launches = [], killed = [];
   const spawn = (command, args, options) => {
     const child = new EventEmitter(); child.stdout = new PassThrough(); child.kill = () => child.emit('close', null);
