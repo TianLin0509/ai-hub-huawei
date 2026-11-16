@@ -314,6 +314,16 @@ function claudeNativeAddDirs(requested) {
   return dirs;
 }
 
+function supportedClaudeFragment(flag, fragment) {
+  return require('./cli-capabilities').filterArgs('claude', [flag]).args.includes(flag) ? fragment : '';
+}
+function compatibleClaudeMcpArgs(plan) {
+  const files = plan?.configPaths || (plan?.configPath ? [plan.configPath] : []);
+  if (!files.length) return '';
+  const config = supportedClaudeFragment('--mcp-config', ` --mcp-config ${files.map(file => `"${String(file).replace(/\\/g, '\\\\')}"`).join(' ')}`);
+  return config + (config && plan.profile !== 'full' ? supportedClaudeFragment('--strict-mcp-config', ' --strict-mcp-config') : '');
+}
+
 function createNativeClaudeDriver(id, kind, opts, cwd, env, legacy) {
   const { ClaudeNativeSession } = require('./claude-native-session');
   const { NativeAgentJournal } = require('./native-agent-journal');
@@ -338,7 +348,7 @@ function createNativeClaudeDriver(id, kind, opts, cwd, env, legacy) {
   });
   const launchArgs = buildClaudeNativeArgs({ model: legacy ? normalizeLegacyDeepSeekClaudeModel(opts.model) : opts.model,
     effort: legacy || process.env.CLAUDE_HUB_NO_EFFORT_MAX === '1' ? null
-      : (opts.effort || 'max'),
+      : require('./cli-capabilities').claudeEffort(opts.effort || 'max'),
     permissionMode: opts.permissionMode || 'bypassPermissions',
     appendSystemPromptFile: opts.appendSystemPromptFile, systemPromptFile: opts.systemPromptFile,
     disableSlashCommands: opts.disableSlashCommands === true, noChrome: opts.claudeNoChrome === true, tools: opts.claudeTools, settingsFile,
@@ -355,7 +365,7 @@ function createNativeClaudeDriver(id, kind, opts, cwd, env, legacy) {
   const unstarted = opts.nativeRuntime?.connection === 'unstarted' && opts.nativeRuntime?.lazyStart === true
     && !records.length && !opts.forkCCSessionId && !!opts.resumeCCSessionId
     && !require('./claude-native-history').findNativeClaudeHistory(opts.resumeCCSessionId, { cwd, env });
-  return new ClaudeNativeSession({ id, kind, cwd, env, launchArgs, settingsFile, hubDataDir, journalSessionId:id,
+  return new ClaudeNativeSession({ id, kind, cwd, env, launchArgs: require('./cli-capabilities').filterArgs('claude', launchArgs).args, settingsFile, hubDataDir, journalSessionId:id,
     hubPid:process.pid,hubVersion:require('../package.json').version,
     fastMode: !legacy && shouldUseClaudeFastSettings(cv, opts),
     ownership: true, exclusiveSession:true, nativeProvider: 'claude', lazyStart: opts.lazyStart === true,
@@ -399,7 +409,7 @@ function buildClaudePtyLaunch(id, kind, opts, cwd, env, cv) {
   });
   const args = buildClaudeNativeArgs({ model: opts.model, omitModel: cv.COMPANY_CLI && !opts.model,
     effort: process.env.CLAUDE_HUB_NO_EFFORT_MAX === '1' ? null
-      : (CLAUDE_EFFORT_LEVELS.has(opts.effort) ? opts.effort : 'max'),
+      : require('./cli-capabilities').claudeEffort(CLAUDE_EFFORT_LEVELS.has(opts.effort) ? opts.effort : 'max'),
     permissionMode: opts.permissionMode || 'bypassPermissions',
     appendSystemPromptFile: opts.appendSystemPromptFile, systemPromptFile: opts.systemPromptFile,
     disableSlashCommands: opts.disableSlashCommands === true, noChrome: opts.claudeNoChrome === true, tools: opts.claudeTools, settingsFile,
@@ -433,7 +443,7 @@ function buildClaudePtyLaunch(id, kind, opts, cwd, env, cv) {
     identity = ['--session-id', sessionId];
   }
   const quote = value => /^[A-Za-z0-9_.:=\/\\-]+$/.test(String(value)) ? String(value) : quotePowerShellLiteral(value);
-  const cmd = ' claude ' + [...identity, ...args].map(quote).join(' ') + '\r\n';
+  const cmd = ' claude ' + [...identity, ...require('./cli-capabilities').filterArgs('claude', args).args].map(quote).join(' ') + '\r\n';
   return { cmd, sessionId, fast };
 }
 
@@ -1560,19 +1570,33 @@ class SessionManager extends EventEmitter {
       if (this.sessions.has(id) || this.openLeases?.get(id)?.nonce!==opts._openLeaseNonce) throw new Error('会话打开预约已失效');
     } else this.reserveSessionOpen(id);
     const lease = this.openLeases?.get(id);
-    try {
-      if (lease) require('./session-store').resumeSessionWrites(id);
-      require('./community-provider').assertProviderAvailable(kind);
-      require('./company-api-config').assertLaunchConfigured(kind, getConfig());
-      const session = this._createSession(kind, this._withExtraMcp(kind, {...opts, id, hubUiTheme: this.presentationTheme}));
-      if (session.fixedModel) require('./session-store').saveSessionFile(id, this.getSession(id) || session);
-      return session;
+    const launch = () => {
+      // Resume reservations may be cancelled while the asynchronous probe runs.
+      if (lease && this.openLeases?.get(id) !== lease) throw new Error('会话打开预约已失效');
+      try {
+        if (lease) require('./session-store').resumeSessionWrites(id);
+        require('./community-provider').assertProviderAvailable(kind);
+        require('./company-api-config').assertLaunchConfigured(kind, getConfig());
+        const session = this._createSession(kind, this._withExtraMcp(kind, {...opts, id, hubUiTheme: this.presentationTheme}));
+        if (session.fixedModel) require('./session-store').saveSessionFile(id, this.getSession(id) || session);
+        return session;
+      }
+      catch (error) {
+        if (!this.sessions.has(id)) this._releaseOpenSession(id);
+        else this.closeSession(id);
+        throw error;
+      }
+    };
+    // Internal callers (team seats, assistants, memory) may bypass IPC preflight.
+    // Keep shell/hot-cache creation synchronous, but never build a cold AI launch
+    // before the bounded capability probe finishes. Failed probes retain defaults.
+    const capabilities = require('./cli-capabilities');
+    if (capabilities.providerForKind(kind)) {
+      let ready = false;
+      try { ready = !!capabilities.snapshot(kind).help; } catch { /* Probe failure retains launch defaults. */ }
+      if (!ready) return Promise.resolve().then(() => capabilities.prepareForKind(kind)).catch(() => {}).then(launch);
     }
-    catch (error) {
-      if (!this.sessions.has(id)) this._releaseOpenSession(id);
-      else this.closeSession(id);
-      throw error;
-    }
+    return launch();
   }
 
   // Codex 走固定挂载（不受 MCP 档位影响）；Claude 把它并进 --mcp-config 的那份配置。
@@ -3027,6 +3051,12 @@ class SessionManager extends EventEmitter {
       setTimeout(() => this.emit('session-notice', { sessionId: id, message, level: 'warning' }), 0);
     }
 
+    const cliCompatibility = require('./cli-capabilities').snapshot(kind);
+    const effortNotice = cliCompatibility.provider === 'claude' && process.env.CLAUDE_HUB_NO_EFFORT_MAX !== '1'
+      ? require('./cli-capabilities').effortNotice(opts.effort || (isDeepSeekClaude ? DEEPSEEK_CLAUDE_DEFAULT_EFFORT : 'max')) : '';
+    const cliNotice = [cliCompatibility.compatibilityNotice, effortNotice].filter(Boolean).join('；');
+    if (cliNotice) setTimeout(() => this.emit('session-notice', { sessionId: id, message: cliNotice, level: 'warning' }), 0);
+
     if (codeagentLaunch?.modelChanged) {
       require('./codeagent-models').appendModelLog(getHubDataDir(), { event: 'model-auto-switch', session: id, ...codeagentLaunch.modelChange });
       if (!opts.modelCreationContext) setTimeout(() => this.emit('session-notice', { sessionId: id, level: 'warning', persistent: true,
@@ -4328,8 +4358,9 @@ try {
       return launch.codexInstructionFile ? ` -c "model_instructions_file=${launch.codexInstructionFile.replace(/\\/g, '\\\\')}"` : '';
     }
     if (!launch.systemPromptFile) return '';
-    return ` --system-prompt-file "${launch.systemPromptFile}" --disable-slash-commands --no-chrome --tools ${launch.claudeTools.join(',')}`
-      + launch.addDirs.map(dir => ` --add-dir "${dir}"`).join('');
+    const args = ['--system-prompt-file', launch.systemPromptFile, '--disable-slash-commands', '--no-chrome', '--tools', launch.claudeTools.join(','),
+      ...launch.addDirs.flatMap(dir => ['--add-dir', dir])];
+    return ' ' + require('./cli-capabilities').filterArgs('claude', args).args.map(quotePowerShellLiteral).join(' ');
   }
 
   relaunchCli(sessionId, options = {}) {
@@ -4454,8 +4485,9 @@ try {
       //   spawn block 对齐，防止 relaunch 后丢 fast 状态。
       //   会话自己关过 fast（info.fastMode === false）时也要沿用，否则 relaunch
       //   会把用户显式关掉的开关又打开。
-      const effort = CLAUDE_EFFORT_LEVELS.has(s.info && s.info.effort) ? s.info.effort : 'max';
-      const effortFlag = process.env.CLAUDE_HUB_NO_EFFORT_MAX === '1' ? '' : ` --effort ${effort}`;
+      const requestedEffort = CLAUDE_EFFORT_LEVELS.has(s.info && s.info.effort) ? s.info.effort : 'max';
+      const effort = require('./cli-capabilities').claudeEffort(requestedEffort);
+      const effortFlag = process.env.CLAUDE_HUB_NO_EFFORT_MAX === '1' || !effort ? '' : ` --effort ${effort}`;
       let fastFlag = '';
       const cv = apiLaunch?.values || getConfigValues();
       if (shouldUseClaudeFastSettings(cv, { fastMode: s.info && s.info.fastMode, autonomous })) {
@@ -4485,24 +4517,25 @@ try {
           cwd: s.info && s.info.cwd,
           hubDataDir: getHubDataDir(),
         });
-      const mcpFlag = mcpPlan && mcpPlan.args ? mcpPlan.args : '';
-      const relaunchPermissionFlag = claudePermissionModeArg({ autonomous });
+      const mcpFlag = compatibleClaudeMcpArgs(mcpPlan);
+      const relaunchPermissionFlag = supportedClaudeFragment('--permission-mode', claudePermissionModeArg({ autonomous }));
       // 原地重拉是一个全新的 Claude 进程，按当前规则重新写进系统提示。
       const relaunchRules = this.hubRulesSystemPrompt({}, s.info && s.info.purpose);
       if (s.info) s.info.hubRulesSystem = SessionManager.hubRulesRecord(relaunchRules);
-      const rulesFlag = relaunchRules ? ` --append-system-prompt-file "${relaunchRules.file}"` : '';
-      const addDirFlag = claudeNativeAddDirs([]).map(dir => ` --add-dir "${dir}"`).join('');
+      const rulesFlag = relaunchRules ? supportedClaudeFragment('--append-system-prompt-file', ` --append-system-prompt-file "${relaunchRules.file}"`) : '';
+      const addDirFlag = supportedClaudeFragment('--add-dir', claudeNativeAddDirs([]).map(dir => ` --add-dir "${dir}"`).join(''));
       const claudeModel = resolveClaudeLaunchModel(apiLaunch?.values || getConfigValues(), modelId);
-      cmd = ` claude${claudeModel ? ' --model ' + quotePowerShellLiteral(claudeModel) : ''}${effortFlag}${relaunchPermissionFlag}${fastFlag}${mcpFlag}${addDirFlag}${rulesFlag}${this._sceneRelaunchFlags(s, 'claude')}${isolation}\r\n`;
+      cmd = ` claude${claudeModel ? supportedClaudeFragment('--model', ' --model ' + quotePowerShellLiteral(claudeModel)) : ''}${effortFlag}${relaunchPermissionFlag}${supportedClaudeFragment('--settings', fastFlag)}${mcpFlag}${addDirFlag}${rulesFlag}${this._sceneRelaunchFlags(s, 'claude')}${supportedClaudeFragment('--settings', isolation)}\r\n`;
     } else if (deepseekClaude.isDeepSeekClaudeKind(kind)) {
       // PTY 的环境变量（接入端点、Key、模型名、配置目录）在会话创建时已经写好，原地重拉只需同一套参数。
       const route = s.info && (s.info.deepseekActiveRoute || s.info.deepseekRoute);
       const relaunchRules = this.hubRulesSystemPrompt({}, s.info && s.info.purpose);
       if (s.info) s.info.hubRulesSystem = SessionManager.hubRulesRecord(relaunchRules);
-      const rulesFlag = relaunchRules ? ` --append-system-prompt-file "${relaunchRules.file}"` : '';
+      const rulesFlag = relaunchRules ? supportedClaudeFragment('--append-system-prompt-file', ` --append-system-prompt-file "${relaunchRules.file}"`) : '';
       const wire = deepseekClaude.wireModel(modelId, route);
-      const effort = CLAUDE_EFFORT_LEVELS.has(s.info && s.info.effort) ? s.info.effort : DEEPSEEK_CLAUDE_DEFAULT_EFFORT;
-      const effortFlag = process.env.CLAUDE_HUB_NO_EFFORT_MAX === '1' ? '' : ` --effort ${effort}`;
+      const requestedEffort = CLAUDE_EFFORT_LEVELS.has(s.info && s.info.effort) ? s.info.effort : DEEPSEEK_CLAUDE_DEFAULT_EFFORT;
+      const effort = require('./cli-capabilities').claudeEffort(requestedEffort);
+      const effortFlag = process.env.CLAUDE_HUB_NO_EFFORT_MAX === '1' || !effort ? '' : ` --effort ${effort}`;
       const mcpPlan = (meetingId || (autonomous && s.claudeMcpConfigFile))
         ? buildClaudeMeetingMcpArgs({
           mcpConfigFile: s.claudeMcpConfigFile,
@@ -4515,9 +4548,9 @@ try {
           cwd: s.info && s.info.cwd,
           hubDataDir: getHubDataDir(),
         });
-      const mcpFlag = mcpPlan && mcpPlan.args ? mcpPlan.args : '';
-      const addDirFlag = claudeNativeAddDirs([]).map(dir => ` --add-dir "${dir}"`).join('');
-      cmd = ` claude --model ${wire}${effortFlag}${claudePermissionModeArg({ permissionMode: 'bypassPermissions' })}${mcpFlag}${addDirFlag}${rulesFlag}${this._sceneRelaunchFlags(s, 'claude')}${isolation}\r\n`;
+      const mcpFlag = compatibleClaudeMcpArgs(mcpPlan);
+      const addDirFlag = supportedClaudeFragment('--add-dir', claudeNativeAddDirs([]).map(dir => ` --add-dir "${dir}"`).join(''));
+      cmd = ` claude${supportedClaudeFragment('--model', ' --model ' + wire)}${effortFlag}${supportedClaudeFragment('--permission-mode', claudePermissionModeArg({ permissionMode: 'bypassPermissions' }))}${mcpFlag}${addDirFlag}${rulesFlag}${this._sceneRelaunchFlags(s, 'claude')}${supportedClaudeFragment('--settings', isolation)}\r\n`;
     } else if (kind === 'deepseek' || kind === 'deepseek-resume') {
       const mcpPlan = meetingId ? buildClaudeMeetingMcpArgs({
         mcpConfigFile: s.claudeMcpConfigFile,
@@ -4532,6 +4565,11 @@ try {
     } else {
       return false;
     }
+    const cliState = require('./cli-capabilities').snapshot(kind);
+    const effortMessage = cliState.provider === 'claude' && process.env.CLAUDE_HUB_NO_EFFORT_MAX !== '1'
+      ? require('./cli-capabilities').effortNotice(s.info?.effort || (deepseekClaude.isDeepSeekClaudeKind(kind) ? DEEPSEEK_CLAUDE_DEFAULT_EFFORT : 'max')) : '';
+    const compatibilityMessage = [cliState.compatibilityNotice, effortMessage].filter(Boolean).join('；');
+    if (compatibilityMessage) this.emit('session-notice', { sessionId, message: compatibilityMessage, level: 'warning' });
     s.pty.write(cmd);
     if (isCodexCliKind(runtimeKind)) {
       this._recordManagedCodexLaunch(sessionId, cmd, options.trigger || 'relaunch');

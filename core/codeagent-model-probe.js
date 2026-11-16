@@ -19,22 +19,33 @@ function cleanModelId(label) {
   return require('./codeagent-models').isSafeModelId(id) ? id : '';
 }
 
+function contextWindows(models, values) {
+  const entries = Object.entries(values || {}).map(([id, size]) => [id.toLowerCase(), Number(size)]);
+  return Object.fromEntries(entries.filter(([id, size]) => models.some(model => model.toLowerCase() === id)
+    && Number.isFinite(size) && size >= 1000).map(([id, size]) => [id, Math.round(size)]));
+}
+
 function readProbed(file) {
   try {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
     const models = (Array.isArray(raw.models) ? raw.models : []).map(cleanModelId).filter(Boolean);
     // source：serve = 经 CodeAgent serve 接口读的（core/codeagent-serve.js），menu = 读 /model 屏幕
     // Keep old model values usable while the caller refreshes stale menu evidence.
-    return models.length ? { models, defaultModel: cleanModelId(raw.defaultModel), at: raw.at || null, source: raw.source || 'menu', parserVersion: raw.parserVersion } : null;
+    const windows = raw.source === 'serve' ? contextWindows(models, raw.contextWindows) : {};
+    return models.length ? { models, defaultModel: cleanModelId(raw.defaultModel), at: raw.at || null, source: raw.source || 'menu', parserVersion: raw.parserVersion,
+      ...(Object.keys(windows).length ? { contextWindows: windows } : {}) } : null;
   } catch { return null; }
 }
 
 function writeProbed(file, result) {
   if (!Array.isArray(result.models) || !result.models.length) return;
+  const windows = result.source === 'serve' ? contextWindows(result.models, Object.fromEntries(
+    (Array.isArray(result.details) ? result.details : []).map(model => [String(model.id || ''), model.contextWindow]))) : {};
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify({ schema: 1, models: result.models, defaultModel: result.defaultModel || '', at: new Date().toISOString(),
-    source: result.source || 'menu', ...((result.source || 'menu') === 'menu' ? { parserVersion: require('./codeagent-models').MODEL_MENU_PARSER_VERSION } : {}) }, null, 2) + '\n', 'utf8');
+    source: result.source || 'menu', ...((result.source || 'menu') === 'menu' ? { parserVersion: require('./codeagent-models').MODEL_MENU_PARSER_VERSION } : {}),
+    ...(Object.keys(windows).length ? { contextWindows: windows } : {}) }, null, 2) + '\n', 'utf8');
   fs.renameSync(tmp, file);
 }
 

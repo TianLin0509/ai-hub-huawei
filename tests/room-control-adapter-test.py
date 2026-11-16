@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'core/company-assistant/room-component/msz-code-2.1.2.zip'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'core/company-assistant/room-component/msz-code-2.1.3.zip'))
 from msz import config as C
 from msz.hub_control import HubControl, validate_patch
 
@@ -104,6 +104,7 @@ class AdapterTests(unittest.TestCase):
             status = c.status()
         self.assertEqual(status['targetDate'], '2026-11-09')
         self.assertEqual(status['nextOpen'], '2026-11-02T12:00:00')
+        self.assertEqual(status['preferences']['抢订设置']['提前天数'], 7)
 
 
 if __name__ == '__main__':

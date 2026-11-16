@@ -70,7 +70,7 @@ function attemptsText(attempts) {
 
 function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, onState = () => {},
   unblock = null, isOwnUrl = () => false, unblockPassed = () => {}, run = runVersion, nodeUsable = null,
-  idleTimeoutMs, connectTimeoutMs, logger = console } = {}) {
+  idleTimeoutMs, connectTimeoutMs, logger = console, npmRun, getDshEntry = () => ({}) } = {}) {
   const root = () => registry.toolsRoot(env);
   let catalog = null, catalogAt = 0, catalogFrom = [];
   let busy = null, abort = null;
@@ -92,6 +92,15 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
         bytes: c.files.reduce((n, f) => n + f.bytes, 0) })) : null };
   }
   const set = (id, patch) => { tools[id] = { ...tools[id], ...patch }; try { onState(snapshot()); } catch (_) {} };
+  function dshRepairRoot() {
+    const entry = getDshEntry() || {};
+    const explicit = entry.cliRoot || env.AI_HUB_DSH_CLI_ROOT;
+    if (explicit) {
+      if (!path.isAbsolute(explicit)) throw new Error('DSH 运行环境目录必须是绝对路径');
+      return explicit;
+    }
+    return require('../dsh-cli-profile').resolveDshCliRuntime(entry, env).root;
+  }
 
   async function tryUnblock(url) {
     if (!unblock || !isOwnUrl(url)) return false;
@@ -220,7 +229,7 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
     return gitSearch;
   }
 
-  async function install(id) {
+  async function install(id, { repair = false } = {}) {
     if (!registry.IDS.includes(id) || id === 'node') throw new Error('不认识的组件');
     if (busy) {
       if (busy === id) return snapshot();
@@ -231,6 +240,12 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
     const signal = abort.signal;
     set(id, { phase: 'checking', error: null, blocked: null, received: 0, total: 0, files: 0, attempts: [], step: null });
     try { work: {
+      // A broken global DSH takes precedence over Hub tools, so repair that same user install.
+      if (id === 'dsh' && repair) {
+        const result = await require('./npm-fallback').installDshWithUserNpm({ env, signal, run: npmRun, targetRoot: dshRepairRoot(), onProgress: patch => set(id, patch) });
+        set(id, { phase: 'done', error: null, version: result.version, source: result.source, finishedAt: Date.now() });
+        break work;
+      }
       // Git：先全局找一遍（注册表、各硬盘、VS 自带的），本机已有就不重复装。查找期间界面显示「正在全局查找」、别的组件排队。
       if (id === 'git') {
         const hit = await gitBash.searchGitBash(env, { force: true }).catch(() => null);
@@ -264,7 +279,21 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
       set(id, { phase: 'done', received: total, total, error: null, version: main.version, finishedAt: Date.now() });
     } } catch (error) {
       const cancelled = error.cancelled || signal.aborted;
-      set(id, { phase: cancelled ? 'cancelled' : 'error', error: cancelled ? null : error.message, blocked: error.blocked || null });
+      if (id === 'dsh' && !repair && !cancelled && !/签名|校验不一致|文件大小不对/.test(error.message)) {
+        try {
+          const targetRoot = path.join(root(), 'dsh', 'user-npm');
+          const result = await require('./npm-fallback').installDshWithUserNpm({ env, signal, run: npmRun, targetRoot,
+            onProgress: patch => set(id, { ...patch, fallbackReason: error.message, step: null }) });
+          const installed = registry.readInstalled(root());
+          installed.tools.dsh = { version: result.version, dir: path.relative(root(), targetRoot), installedAt: Date.now() };
+          registry.writeInstalled(root(), installed);
+          set(id, { phase: 'done', error: null, blocked: null, version: result.version, source: result.source, finishedAt: Date.now() });
+        } catch (npmError) {
+          const stopped = signal.aborted || npmError.name === 'AbortError';
+          set(id, { phase: stopped ? 'cancelled' : 'error', error: stopped ? null
+            : `${error.message}；按你的 npm 配置重试也没有成功：${String(npmError.stderr || npmError.message).slice(0, 800)}`, blocked: error.blocked || null });
+        }
+      } else set(id, { phase: cancelled ? 'cancelled' : 'error', error: cancelled ? null : error.message, blocked: error.blocked || null });
     } finally {
       busy = null;
       abort = null;

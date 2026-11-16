@@ -398,11 +398,23 @@ function recordMenu(dataDir, labels, { key = 'personal', complete = false, now =
 // ---------------------------------------------------------------- 上下文占比
 // 2026-10-13 公司版：输入框旁的上下文圆环一直不显示。Claude 的占比来自状态栏回调，CodeAgent 会话没有接状态栏
 // （Hub 不改同事 CodeAgent 配置里的状态栏）。改为每轮回答后从原生记录里这一轮的用量算：
-// 已用 = 输入 + 缓存写入 + 缓存读取 + 输出 token；上限取账号清单里该模型的 contextWindow，
+// 已用 = 输入 + 缓存写入 + 缓存读取 + 输出 token；上限优先取该账号 serve 清单的 max_context_tokens，再取配置的 contextWindow，
 // 按「会话当前模型 → 回答实际模型」的顺序找；清单里都没有时按 200K 估（windowSource=estimated）。
 const DEFAULT_CONTEXT_WINDOW = 200000;
 
-function contextWindowFor(configDir, modelIds = [], fsModule = fs) {
+function contextWindowFor(configDir, modelIds = [], fsModule = fs, { dataDir = null, accountKey = 'personal' } = {}) {
+  if (dataDir) {
+    const probe = require('./codeagent-model-probe');
+    const file = accountKey === 'personal' ? require('./codeagent-pool').personalModelsFile(dataDir)
+      : configDir ? path.join(configDir, probe.MODELS_FILE) : null;
+    const cached = file ? probe.readProbed(file) : null;
+    if (cached?.source === 'serve') {
+      for (const id of modelIds) {
+        const size = cached.contextWindows?.[clean(id).toLowerCase()];
+        if (size) return { window: size, source: 'serve' };
+      }
+    }
+  }
   let windows = {};
   if (configDir) {
     // 同 configuredModels：目录里的 .cac.json 没有清单时，个人默认目录再看用户目录根下的 ~/.cac.json

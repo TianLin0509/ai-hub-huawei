@@ -453,7 +453,7 @@ function registerResumeSessionIpc(ipcMain, deps) {
   const resumeSession = typeof deps.resumeSession === 'function'
     ? deps.resumeSession
     : createResumeSessionHandler(deps);
-  ipcMain.handle('resume-session', (_event, meta) => (/^codeagent(?:-resume)?$/.test(String(meta?.kind || ''))
+  ipcMain.handle('resume-session', (_event, meta) => (require('../../core/cli-capabilities').providerForKind(meta?.kind)
     ? require('../../core/codeagent-capabilities').prepareForKind(meta.kind).then(() => resumeSession(meta))
     : resumeSession(meta)));
   return { resumeSession };

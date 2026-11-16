@@ -94,6 +94,25 @@ test('6 小时到期重新探测', async t => {
   assert.equal(calls.length, 4);
 });
 
+test('npm 只升级 shim 指向的包而不改 cmd 时立即使旧能力缓存失效', async t => {
+  const command = fakeCli(t, '@echo off\r\n"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js" %*\r\n');
+  const packageFile = path.join(path.dirname(command), 'node_modules', '@anthropic-ai', 'claude-code', 'package.json');
+  fs.mkdirSync(path.dirname(packageFile), { recursive: true });
+  fs.writeFileSync(packageFile, '{"version":"2.1.50"}');
+  const calls = [];
+  caps._helpCache.clear();
+  await caps.prepare(command, { exec: fakeExec({ '--version': '2.1.50', '--help': HELP }, calls).exec });
+  const shimBefore = fs.readFileSync(command, 'utf8');
+  const stat = fs.statSync(packageFile);
+  fs.writeFileSync(packageFile, '{"version":"2.1.51"}');
+  fs.utimesSync(packageFile, stat.atime, stat.mtime);
+  assert.equal(fs.readFileSync(command, 'utf8'), shimBefore);
+  assert.equal(caps.readHelp(command), '', 'package version changes invalidate even a same-size manifest');
+  await caps.prepare(command, { exec: fakeExec({ '--version': '2.1.51', '--help': HELP + '--effort <level>' }, calls).exec });
+  assert.equal(caps.cachedVersion(command), '2.1.51');
+  assert.equal(calls.length, 4);
+});
+
 test('探测途中程序被替换：旧探测晚到不覆盖新结果', async t => {
   const command = fakeCli(t);
   caps._helpCache.clear();
@@ -203,9 +222,8 @@ test('子进程占着管道不回调时 4 秒放行并结束进程树', { timeou
   assert.equal(caps.readHelp(command, { run: () => { throw new Error('no'); }, platform: 'win32' }), '', '超时按读不到处理，原样启动');
 });
 
-test('prepareForKind 只处理 CodeAgent', async () => {
+test('prepareForKind 不探测普通 shell', async () => {
   caps._helpCache.clear();
-  await caps.prepareForKind('claude', { exec: () => { throw new Error('不应探测'); } });
   await caps.prepareForKind('powershell', { exec: () => { throw new Error('不应探测'); } });
   assert.equal(caps._helpCache.size, 0);
 });

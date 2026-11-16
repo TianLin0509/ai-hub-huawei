@@ -1,14 +1,19 @@
 # Secretary control component
 
 This is the meeting-room component embedded in the company edition of Hub.
-2026-11-02: the current signed control package is **2.1.2**. It adds the independent
-six-page meeting-room UI API while preserving the original booking engine.
-`hub_control.py` is the readable adapter source. `scripts/build-room-control.py`
+2026-11-16: the current signed control package is **2.1.3**. It reloads the
+document after a failed booking before selecting another room, recognizes both
+spellings of the booked-room response, retries short Windows status-file locks,
+and includes the configurable advance-days adapter. The successful first-choice
+path keeps the original 8-second preparation floor and opening-time submission.
+`hub_control.py`, `engine.py` and `jobs.py` are the readable overlay sources.
+The latter two were extracted unchanged from signed 2.1.2 before the focused fix.
+`scripts/build-room-control.py`
 reproducibly combines it with the official 2.1.1 package supplied via `--base`
 (renaming the original adapter to `hub_control_base.py`) and signs
-`msz-code-2.1.2.zip` locally with the release key supplied via `--key`.
+`msz-code-2.1.3.zip` locally with the release key supplied via `--key`.
 The old package and private release key are external build inputs, not bundled
-in this repository. Ordinary application builds reuse the signed 2.1.2 asset.
+in this repository. Ordinary application builds reuse the signed 2.1.3 asset.
 No network publishing is performed, no private key is included, and shell 2.1.0
 is unchanged. History, logs, login state, room discovery, once booking and post
 actions are supplied by the original Python process. Settings are saved only
@@ -25,9 +30,11 @@ package adds a local GUI-thread control adapter and preserves the browser
 profile, original settings and post-booking behavior.
 
 - `baseline.json`: original signed v2.1.0 release manifest, including the shell asset.
-- `control.json`: current signed v2.1.2 code manifest.
-- `msz-code-2.1.2.zip`: original Python modules plus the extended control adapter
+- `control.json`: current signed v2.1.3 code manifest.
+- `msz-code-2.1.3.zip`: original Python modules plus the three readable overlays
   and the retained `hub_control_base.py`. Inspectable with any ZIP reader.
+- `msz-code-2.1.2.zip`: retained previous signed payload for upgrade/regression
+  fixtures; the current manifest selects only 2.1.3.
 - No private signing key is included.
 - `runtime/MishuTerminator-2.1.0.exe` is a build artifact, excluded from Git.
   It is the original signed release asset: 80,568,759 bytes (76.84 MiB).
@@ -79,6 +86,12 @@ from the WeLink CLI login. Rewriting the engine in JavaScript is a different
 project; this integration does not claim that migration or a real-company
 booking acceptance test.
 
-The first release supports weekly rules for bookings seven days after the
-opening day, matching the original engine. A one-off request for tomorrow is
-not silently converted into a recurring rule.
+Advance days default to seven for existing settings and support 1–14 days when
+Hub supplies a site-specific rule. The adapter applies this to scheduling,
+immediate booking and room discovery without changing the standalone helper.
+
+Regression entry points: `tests/room-next-room-test.py` (also in `npm test`),
+`tests/e2e-company-rooms-next-room.py` (real headless browser and local SPA), and
+`tests/e2e-company-rooms-upgrade.js` (signed 2.1.2 -> 2.1.3, verified managed exe).
+The headless E2E accepts `MSZ_SOURCE` for the existing mock site/dependencies;
+`ROOM_NEXT_BUNDLE` can select 2.1.2 to reproduce the 15-second blocked click.

@@ -136,7 +136,7 @@ test('状态栏只作为本次会话参数传入，自定义设置与旧注释�
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const env = { CODEX_HOME: dir };
   const arg = codexStatusLineConfigArg(null, { env });
-  assert.equal(arg, ' -c \'tui.status_line=["model-with-reasoning", "context-remaining", "current-dir"]\'');
+  assert.equal(arg, ` -c "tui.status_line=['model-with-reasoning', 'context-remaining', 'current-dir']"`);
   assert.equal(fs.existsSync(path.join(dir, 'config.toml')), false);
   const file = path.join(dir, 'config.toml');
   for (const text of ['[tui]\nstatus_line = ["mine"]\n', '# status_line\n']) {
@@ -148,4 +148,32 @@ test('状态栏只作为本次会话参数传入，自定义设置与旧注释�
   const launch = fs.readFileSync(path.join(__dirname, '..', 'core', 'session-manager.js'), 'utf8');
   assert.match(launch, /codexStatusLineConfigArg\(sessionEnv\.CODEX_HOME \|\| null\)/);
   assert.match(launch, /codexStatusLineConfigArg\(codexConfigDir\)/);
+});
+
+test('PowerShell 5.1 传给原生程序后的状态栏参数仍是可解析的 TOML 数组', { skip: process.platform !== 'win32' }, t => {
+  const { spawnSync } = require('node:child_process');
+  const { windowsPowerShellPath } = require('../core/windows-powershell');
+  const { codexStatusLineConfigArg } = require('../core/codex-user-config-guard');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-native-argv-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const script = path.join(dir, 'argv.cjs');
+  fs.writeFileSync(script, 'process.stdout.write(JSON.stringify(process.argv.slice(2)))');
+  const quote = value => "'" + value.replace(/'/g, "''") + "'";
+  const command = `& ${quote(process.execPath)} ${quote(script)}` + codexStatusLineConfigArg(dir);
+  const result = spawnSync(windowsPowerShellPath(), ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command],
+    { encoding: 'utf8', windowsHide: true, timeout: 15000 });
+  assert.equal(result.status, 0, result.stderr);
+  const args = JSON.parse(result.stdout.trim());
+  assert.equal(args[0], '-c');
+  const parsed = spawnSync('python', ['-c', 'import sys,json,tomllib;print(json.dumps(tomllib.loads(sys.stdin.read())))'],
+    { input: args[1], encoding: 'utf8', windowsHide: true, timeout: 10000 });
+  assert.equal(parsed.status, 0, parsed.error?.message || parsed.stderr);
+  assert.deepEqual(JSON.parse(parsed.stdout).tui.status_line, ['model-with-reasoning', 'context-remaining', 'current-dir']);
+});
+
+test('旧双引号和兼容单引号的重复 Hub 状态栏都能修复，用户自定义值保留', () => {
+  for (const array of ['["model-with-reasoning", "context-remaining", "current-dir"]', "['model-with-reasoning', 'context-remaining', 'current-dir']"]) {
+    const original = 'tui.notifications = false\n';
+    assert.equal(repairHubCodexConfigText(original + `\n[tui]\nstatus_line = ${array}\n`).text, original);
+  }
 });

@@ -151,7 +151,8 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
     const routePatches = [{ id: 'llm-pi-ai', config: settings['llm-pi-ai'] },
       { id: 'agent-default-model', config: settings['agent-default-model'] },
       { id: 'acp', config: { provider: providerId, model } }];
-    if (companyRoute) routePatches.unshift(...companyRoute.disabledPatches, { id: 'tools', config: { mode: 'native' } });
+    if (companyRoute) routePatches.unshift(...companyRoute.disabledPatches,
+      ...require('./dsh-tools-compat').companyToolsPatch({ modules: opts.dshCliRuntime?.modules, entryPath: entry.entryPath }));
     if (opts.dshCliRuntime) {
       args[args.indexOf(entry.entryPath)] = dshRuntimeFile('dsh-cli-launch.mjs');
       env.AI_HUB_DSH_CLI_ENTRY = entry.entryPath;
@@ -161,7 +162,7 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
       if (!fs.existsSync(link)) linkWithRetry(opts.dshCliRuntime.modules, link);
       if (fs.realpathSync(link) !== fs.realpathSync(opts.dshCliRuntime.modules)) throw new Error('DSH CLI 运行环境链接不一致');
       writeJson(path.join(profileHome, 'package.json'), { name: 'hub-dsh-cli-profile', private: true,
-        dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-harness-tui/dsh-tui'], patchReload: 'startup' } } });
+        dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', opts.dshCliRuntime.tuiPackage || '@deepseek-harness-tui/dsh-tui'], patchReload: 'startup' } } });
       Object.assign(env, { DSH_PERMISSION_MODE: 'danger-full-access', DSH_TUI_BACKEND: 'dsh',
         DSH_TUI_WORKSPACE_TARGET: opts.cwd, DSH_TUI_NO_LAUNCHPAD: '1' });
       if (opts.acpSid || opts.acpFork?.sessionId) env.DSH_TUI_RESUME_SESSION = opts.acpFork?.sessionId || opts.acpSid;

@@ -51,11 +51,11 @@ const until = async (fn, label, ms = 90000) => { const end = Date.now() + ms; wh
     const status = () => JSON.parse(fs.readFileSync(path.join(home, 'hub-control/status.json')));
     await wait("!!document.getElementById('btn-company-rooms')", 'room navigation', 60000);
     await click('#btn-rules'); await click('#btn-company-rooms');
-    await wait(`${q('[data-cr-slot="version"]')}?.textContent === '2.1.2'`, 'signed new adapter', 150000);
+    await wait(`${q('[data-cr-slot="version"]')}?.textContent === '2.1.3'`, 'signed new adapter', 150000);
     await wait("document.getElementById('btn-company-rooms').getAttribute('aria-current') === 'page'", 'room nav current');
     assert.equal(await c.eval("(() => { const p=document.getElementById('rules-panel'); return !p || p.hidden || getComputedStyle(p).display === 'none'; })()"), true);
     assert.equal(await c.eval(`${q('[data-cr-slot="login"]')}.textContent`), '未检查');
-    assert.deepEqual(await bookings(), []); result.checks.push('rules -> independent room tab, signed 2.1.2 ready, no booking on open, login unknown is not valid');
+    assert.deepEqual(await bookings(), []); result.checks.push('rules -> independent room tab, signed 2.1.3 ready, no booking on open, login unknown is not valid');
     await shot('01-overview');
     await click('[data-cr-tab="settings"]');
     await fill('[data-cr-field="抢订设置.最大重试次数"]', '7'); await click('[data-cr-op="save"]');

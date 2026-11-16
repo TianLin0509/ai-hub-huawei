@@ -12,11 +12,17 @@ const MARKER = 'PPT Doctor Material v1';
 // 团队素材包（2026-11-11）：和 PPT Doctor 的「团队素材包」组件同一份发布物（component.json + component.zip，
 // zip 里只有 team-materials.pptx）。Hub 自己下载后直接读，不需要先装 Doctor，也不需要 PowerPoint 导入。
 const TEAM_PACK_FILE = 'team-materials.pptx';
+// 成员版按这里的顺序（2026-11-16 定：成员版只走外网，顺序不变）；公开版内源生效时先试内源，再按 GitHub → 阿里云 排序（packSources）。
 const TEAM_PACK_SOURCES = Object.freeze([
   'https://dl.lt-stockpartner.tech/pptutor/materials/',
   'https://me.lt-stockpartner.tech/pptutor/materials/',
   'https://github.com/TianLin0509/PPTutor/releases/download/materials-v1.0.0/',
 ]);
+function packSources(deps = {}) {
+  const list = deps.pptTeamPackUrls || TEAM_PACK_SOURCES;
+  if (deps.openx === false || !require('../app-update/openx-source').enabled((deps.openx && deps.openx.env) || process.env)) return list;
+  return require('../app-update/downloader').orderSources(list.map(url => ({ url }))).map(s => s.url);
+}
 const sha256 = buf => crypto.createHash('sha256').update(buf).digest('hex');
 const newerVersion = (a, b) => { const x = String(a).split('.').map(Number), y = String(b || '0.0.0').split('.').map(Number); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i]; return false; };
 
@@ -26,7 +32,7 @@ async function teamPackManifest(deps = {}) {
   const { reasonOf } = require('../app-update/downloader');
   const reasons = [];
   let gateNote = '';
-  for (const base of deps.pptTeamPackUrls || TEAM_PACK_SOURCES) {
+  for (const base of packSources(deps)) {
     try {
       const response = await fetch(new URL('component.json', base).href, { signal: AbortSignal.timeout(12000) });
       if (!response.ok) throw new Error(`清单 HTTP ${response.status}`);
@@ -39,6 +45,40 @@ async function teamPackManifest(deps = {}) {
   // 被公司网络确认页拦住的，直接说放行的事（core/own-gate.js），不拿最后一个源的原因顶替。
   if (gateNote) throw new Error(gateNote);
   throw new Error(`团队素材包暂时下载不了：${reasons[reasons.length - 1]}。请检查网络后重试，或用「打开素材包…」打开同事发来的素材包文件`);
+}
+// 逐个源下载素材包文件，返回第一个 sha256 对得上的；都不行时说清原因。
+async function teamPackArchive(fetch, manifest, bases) {
+  let mismatch = false, last = '';
+  for (const base of bases) {
+    try {
+      const response = await fetch(new URL('component.zip', base).href, { signal: AbortSignal.timeout(180000) });
+      if (!response.ok) { last = `HTTP ${response.status}`; continue; }
+      const archive = Buffer.from(await response.arrayBuffer());
+      if (sha256(archive) === manifest.archive.hash) return archive;
+      mismatch = true;
+    } catch (error) { last = require('../app-update/downloader').reasonOf(error); }
+  }
+  if (mismatch) throw new Error('下载的团队素材包校验不一致（可能被网络改写），请重试');
+  throw new Error(`团队素材包下载失败（${last}），请重试`);
+}
+// 团队素材包在公司内源上的文件名（发版同步时按这个名字上传）。找不到、连不上、校验不对都返回 null，不报错。
+const openxPackFile = version => `pptutor-materials-${version}.zip`;
+async function teamPackFromOpenx(fetch, manifest, opts = {}) {
+  if (opts === false || !require('../app-update/openx-source').enabled((opts && opts.env) || process.env)) return null;
+  const openxSource = require('../app-update/openx-source');
+  const file = openxPackFile(manifest.version);
+  let hit = null;
+  try {
+    hit = await openxSource.findForDownload({ ...opts, file, version: manifest.version, fetchImpl: fetch });
+    if (!hit) return null;
+    const response = await fetch(hit.url, { signal: AbortSignal.timeout(180000), redirect: 'error' });
+    if (response.status >= 300 && response.status < 400) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const archive = Buffer.from(await response.arrayBuffer());
+    if (sha256(archive) === manifest.archive.hash) return archive;
+  } catch (_) { /* 内源不可用：静默回原源 */ }
+  if (hit) openxSource.markBad(file);
+  return null;
 }
 const MAX_ITEMS = 2000;
 const MAX_PACKS = 5;
@@ -142,10 +182,11 @@ class PptMaterials {
   async downloadTeamPack() {
     const { base, manifest } = await teamPackManifest(this.deps);
     const fetch = require('../own-gate').gatedFetch(require('./fetch-util').resolveFetch(this.deps.pptDownloadFetch));
-    const response = await fetch(new URL('component.zip', base).href, { signal: AbortSignal.timeout(180000) });
-    if (!response.ok) throw new Error(`团队素材包下载失败（HTTP ${response.status}），请重试`);
-    const archive = Buffer.from(await response.arrayBuffer());
-    if (sha256(archive) !== manifest.archive.hash) throw new Error('下载的团队素材包校验不一致（可能被网络改写），请重试');
+    // 公开版内源优先（r21）：openx 上有 pptutor-materials-<版本>.zip 且校验对就用它，否则照旧走原下载源；成员版不试内源。
+    let archive = await teamPackFromOpenx(fetch, manifest, this.deps.openx);
+    // 包文件按 给出清单的源 → 其余源（GitHub → 阿里云高速 → 阿里云）逐个试，都按选定清单的 sha256 核对；
+    // 某个源上包文件 404、断线或内容不对，换下一个源（2026-11-16 审查：原来只从给出清单的源取，失败就报错）。
+    if (!archive) archive = await teamPackArchive(fetch, manifest, [base, ...packSources(this.deps).filter(u => u !== base)]);
     const dir = this.teamPackDir(), stamp = `${process.pid}-${Date.now()}`;
     // 临时文件不用 .pptx 后缀（5.6.2）：公司电脑的文档安全软件会扫描并占住新写出的 Office 文件，
     // 紧跟着的改名、删除报 EPERM（2026-11-11 用户截图）。清理一律尽力而为，删不掉的留给下次。
@@ -307,4 +348,4 @@ function transferMaterial(file, page, mode) {
   });
 }
 
-module.exports = { PptMaterials, readDoctorLibrary, readPack, doctorDataDir, transferMaterial, teamPackManifest, MARKER, TEAM_PACK_FILE, TEAM_PACK_SOURCES };
+module.exports = { PptMaterials, teamPackFromOpenx, teamPackArchive, packSources, readDoctorLibrary, readPack, doctorDataDir, transferMaterial, teamPackManifest, MARKER, TEAM_PACK_FILE, TEAM_PACK_SOURCES };

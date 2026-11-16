@@ -334,6 +334,12 @@ async function runKnownAction(act, button, { doc, ipcRenderer, closeOverlays }) 
   };
   button.disabled = true;
   try {
+    if (act === 'known:dsh-repair') {
+      say('正在修复 DSH…');
+      const result = await ipcRenderer.invoke('cli-tools:install', { id: 'dsh', repair: true });
+      if (!result?.ok) throw new Error(result?.error || 'DSH 安装没有成功');
+      return done('已修复，请重新新建会话', 6000);
+    }
     if (act === 'known:open-accounts') { closeOverlays(); doc.getElementById('btn-rail-accounts')?.click(); return done(label, 0); }
     if (act === 'known:welink-login') {
       closeOverlays();

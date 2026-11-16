@@ -14,6 +14,7 @@ function progressView(tool) {
   const percent = t.total > 0 ? Math.min(100, Math.round((t.received || 0) / t.total * 100)) : null;
   switch (t.phase) {
     case 'checking': return { text: '正在读取组件目录…', percent: null, busy: true };
+    case 'npm-fallback': return { text: '组件下载没有成功，正在按你的 npm 源和代理配置安装配套版本（通常 1–3 分钟）…', percent: null, busy: true };
     case 'downloading': return { text: `下载中 ${mb(t.received)} / ${mb(t.total)} MB${step}${t.sourceName ? ` · 来自${t.sourceName}` : ''}`, percent, busy: true };
     case 'verifying': return { text: `正在校验文件…${step}`, percent, busy: true };
     case 'installing': return { text: `正在安装${t.files ? `（已解压 ${t.files} 个文件）` : ''}…${step}`, percent, busy: true };

@@ -16,14 +16,54 @@ import mock_server
 from msz import config as C
 state = mock_server.MockState()
 base = mock_server.make_handler(state)
+conflict = "--conflict" in sys.argv
+attempts = []
+page_loads = 0
+
+# Keep the existing page and booking engine; add the observed failed-booking
+# overlay. A same-document hash navigation cannot clear it. Only the first room
+# is stolen, so the second room remains genuinely bookable through the page.
+CONFLICT_SCRIPT = """<script>
+document.getElementById('book').addEventListener('click', e => {
+  fetch('/__attempt', {method: 'POST', body: JSON.stringify({room: state.room, at: Date.now()})});
+  if (state.room !== ROOMS[0] || Q.get('allowFirst') === '1') return;
+  e.stopImmediatePropagation();
+  toast(Q.get('conflictText') === 'new' ? '会议室已被预订，请重新选择' : '预定失败：会议室已被预定，请重新选择', false);
+  let mask = document.getElementById('conflict-mask');
+  if (!mask) {
+    mask = document.createElement('div'); mask.id = 'conflict-mask';
+    mask.style.cssText = 'position:fixed;inset:0;z-index:999;background:rgba(0,0,0,.1)';
+    document.body.appendChild(mask);
+  }
+}, true);
+// Mimic delayed SPA data: a fast retry must wait for the new form to be usable.
+document.getElementById('form').style.display = 'none';
+setTimeout(() => document.getElementById('form').style.display = '', 1200);
+</script>"""
 
 
 class Handler(base):
+    def _send(self, code, body, ctype="text/html; charset=utf-8"):
+        global page_loads
+        if conflict and self.path.startswith("/meetingroom"):
+            page_loads += 1
+            body = body.replace("</body>", CONFLICT_SCRIPT + "</body>")
+        super()._send(code, body, ctype)
+
     def do_GET(self):
         if self.path == "/__state":
             self._send(200, json.dumps(state.booked, ensure_ascii=False), "application/json")
+        elif self.path == "/__conflict":
+            self._send(200, json.dumps({"attempts": attempts, "pageLoads": page_loads}), "application/json")
         else:
             super().do_GET()
+
+    def do_POST(self):
+        if self.path == "/__attempt":
+            attempts.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+            self._send(200, "ok", "text/plain")
+        else:
+            super().do_POST()
 
 
 server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)

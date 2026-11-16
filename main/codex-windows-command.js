@@ -93,12 +93,13 @@ function resolveWindowsCodex(env = process.env, options = {}) {
   return { command: found.command, args: [], env: launchEnv };
 }
 
-// A PTY session types `codex` into PowerShell. When the only install is a native one whose
-// folder has not reached this process's PATH yet, put that folder in front for this session.
+// A PTY types `codex` into PowerShell. Put the selected installation first so
+// its executable is the same one checked for capabilities, including an APPDATA
+// npm shim selected ahead of another native binary already present on PATH.
 function ensureCodexOnSessionPath(sessionEnv) {
   const found = locateWindowsCodex(sessionEnv);
-  if (!found || found.kind !== 'native' || found.source === 'PATH') return false;
-  const dir = path.dirname(found.command);
+  if (!found || found.source === 'PATH') return false;
+  const dir = path.dirname(found.kind === 'npm' ? found.shim : found.command);
   const pathKey = Object.keys(sessionEnv).find(key => key.toLowerCase() === 'path') || 'PATH';
   sessionEnv[pathKey] = dir + path.delimiter + (sessionEnv[pathKey] || '');
   return true;

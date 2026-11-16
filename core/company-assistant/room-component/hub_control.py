@@ -4,10 +4,14 @@ The signed 2.1.1 adapter is retained as hub_control_base by the offline packer.
 Booking, browser login, clock calibration and post actions use the original engine.
 """
 import copy
+import errno
+import json
+import os
 import queue
 import re
 import sys
 import threading
+import time
 from datetime import datetime, timedelta
 from . import config as C, post, welink
 from . import hub_control_base as base
@@ -82,6 +86,19 @@ def validate_patch(patch):
 
 
 class HubControl(base.HubControl):
+    def write(self, file, data):
+        """Readers on Windows may briefly prevent replacing the status file."""
+        temp = file.with_suffix('.tmp')
+        temp.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+        for attempt in range(5):
+            try:
+                os.replace(temp, file)
+                return
+            except OSError as exc:
+                if exc.errno not in (errno.EACCES, errno.EPERM) or attempt == 4:
+                    raise
+                time.sleep(.02 * (attempt + 1))
+
     def __init__(self, window):
         self.work = None
         self.results = queue.Queue()
@@ -111,7 +128,8 @@ class HubControl(base.HubControl):
                  loginCheckedAt=w.login_checked_at.isoformat() if w.login_checked_at else None,
                  nextOpen=opened.isoformat(), targetDate=target.isoformat(),
                  serverNow=w.clock.now().isoformat(), controlBusy=self.work,
-                 preferences={k: {f: copy.deepcopy(w.cfg[k][f]) for f in fields} for k, fields in GROUPS.items()},
+                 preferences={k: {f: copy.deepcopy(advance_days(w.cfg) if k == '抢订设置' and f == '提前天数'
+                                                  else w.cfg[k][f]) for f in fields} for k, fields in GROUPS.items()},
                  history=C.load_history()[-50:], logs=w.log_view.toPlainText()[-60000:],
                  pending=[dict(a, description=post.describe(a)) for a in post.pending()],
                  roomRead=self.read_result, messageTest=self.test_result,

@@ -5,8 +5,11 @@ const path = require('node:path');
 
 // The runtime is installed separately; Hub's shared node_modules stays intact.
 const RUNTIME_FILES = ['@deepseek-ai/dsh/lib/bin.js', '@deepseek-harness-tui/dsh-tui/package.json'];
+const TUI_PACKAGES = ['@deepseek-ai/dsh-tui', '@deepseek-harness-tui/dsh-tui'];
+const DSH_REPAIR_HINT = '请点击「一键修复 DSH」，按界面包要求配套安装 @deepseek-ai/dsh 和 @deepseek-harness-tui/dsh-tui，并补齐同代插件。';
+function tuiPackageAt(modules) { return TUI_PACKAGES.find(name => fs.existsSync(path.join(modules, name, 'package.json'))); }
 function isRuntimeRoot(root) {
-  return RUNTIME_FILES.every(file => fs.existsSync(path.join(root, 'node_modules', file)));
+  return fs.existsSync(path.join(root, 'node_modules', RUNTIME_FILES[0])) && !!tuiPackageAt(path.join(root, 'node_modules'));
 }
 
 // 用户自己全局安装 DSH 可能落在的根目录（根目录下有 node_modules）。只读文件，不运行 npm。
@@ -43,7 +46,10 @@ function resolveDshCliRuntime(entry = {}, env = process.env) {
   let root = entry.cliRoot || env.AI_HUB_DSH_CLI_ROOT;
   if (!root) {
     const file = path.join(os.homedir(), '.dsh', 'hub-cli-runtime.json');
-    if (fs.existsSync(file)) root = JSON.parse(fs.readFileSync(file, 'utf8')).root;
+    if (fs.existsSync(file)) {
+      const recorded = JSON.parse(fs.readFileSync(file, 'utf8')).root;
+      if (recorded && isRuntimeRoot(recorded)) root = recorded;
+    }
   }
   // 全局安装（npm i -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui）也认：Windows 默认装在 %APPDATA%\npm。
   if (!root && env.APPDATA && isRuntimeRoot(path.join(env.APPDATA, 'npm'))) root = path.join(env.APPDATA, 'npm');
@@ -51,13 +57,14 @@ function resolveDshCliRuntime(entry = {}, env = process.env) {
   if (!root) root = userInstalledRoots(env).find(isRuntimeRoot) || root;
   // 最后才用 Hub 一键安装的运行环境（<数据目录>/tools/dsh/<版本>，core/cli-tools/registry.js）。
   if (!root) { try { root = require('./cli-tools/registry').managedDshRoot(env) || root; } catch (_) {} }
-  if (!root || !path.isAbsolute(root)) throw new Error('请先安装 DSH CLI 终端运行环境');
+  if (!root || !path.isAbsolute(root)) throw new Error('请先安装 DSH CLI 终端运行环境。' + DSH_REPAIR_HINT);
   const modules = path.join(root, 'node_modules');
   const entryPath = path.join(modules, '@deepseek-ai/dsh/lib/bin.js');
-  for (const file of [entryPath, path.join(modules, '@deepseek-harness-tui/dsh-tui/package.json')]) {
-    if (!fs.existsSync(file)) throw new Error('DSH CLI 终端运行环境不完整：' + file);
+  const tuiPackage = tuiPackageAt(modules);
+  for (const file of [entryPath, tuiPackage && path.join(modules, tuiPackage, 'package.json')]) {
+    if (!file || !fs.existsSync(file)) throw new Error('DSH CLI 终端运行环境不完整。' + DSH_REPAIR_HINT);
   }
-  return { root, modules, entryPath };
+  return { root, modules, entryPath, tuiPackage };
 }
 
 function buildDshCliOptions(kind, opts, config, dataDir, env) {
@@ -68,4 +75,4 @@ function buildDshCliOptions(kind, opts, config, dataDir, env) {
       'deepseek-acp': { ...acp.providers?.['deepseek-acp'], entryPath: runtime.entryPath } } },
   }, dataDir, env);
 }
-module.exports = { resolveDshCliRuntime, buildDshCliOptions, userInstalledRoots };
+module.exports = { resolveDshCliRuntime, buildDshCliOptions, userInstalledRoots, tuiPackageAt, DSH_REPAIR_HINT };

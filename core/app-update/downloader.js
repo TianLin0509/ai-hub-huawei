@@ -8,6 +8,7 @@ const path = require('path');
 const { createHash } = require('crypto');
 const { retryOnce } = require('../transient-retry');
 const ownGate = require('../own-gate');
+const openxSource = require('./openx-source');
 
 const IDLE_TIMEOUT_MS = 20000;
 const CONNECT_TIMEOUT_MS = 15000;
@@ -49,13 +50,13 @@ const fail = reason => Object.assign(new Error(reason), { reason });
 const blockedFail = reason => Object.assign(new Error(reason), { reason, blocked: true });
 
 // 带「连接超时」：拿到响应头之前最多等 CONNECT_TIMEOUT_MS。
-async function openResponse(fetchImpl, url, signal, timeoutMs) {
+async function openResponse(fetchImpl, url, signal, timeoutMs, redirect = 'follow') {
   const ac = new AbortController();
   const onAbort = () => ac.abort();
   if (signal) { if (signal.aborted) ac.abort(); else signal.addEventListener('abort', onAbort, { once: true }); }
   const timer = setTimeout(() => ac.abort(Object.assign(new Error('timeout'), { name: 'TimeoutError' })), timeoutMs);
   try {
-    return { response: await fetchImpl(url, { signal: ac.signal, cache: 'no-store', redirect: 'follow' }), controller: ac };
+    return { response: await fetchImpl(url, { signal: ac.signal, cache: 'no-store', redirect }), controller: ac };
   } catch (error) {
     if (signal && signal.aborted) throw fail('已取消');
     throw fail(error && (error.name === 'AbortError' || error.name === 'TimeoutError') ? `${Math.round(timeoutMs / 1000)} 秒内没有连上服务器` : reasonOf(error));
@@ -69,6 +70,8 @@ async function openResponse(fetchImpl, url, signal, timeoutMs) {
 // gate（5.6.2）：true / 'auto' 时，全部源都失败就问一次统一放行入口（core/own-gate.js），哪台自家主机被拦就放行，然后再取一遍；
 // 'auto' 只做后台自动放行、不弹窗。一键更新和命令行工具安装自己处理放行，不传。
 async function checkManifests({ gate = false, ...args }) {
+  // 查清单时顺手在后台探测公司内源（不等、不报错），到下载时内源状态已知，公司外不会因此多等。
+  if (args.fetchImpl && args.openx !== false) openxSource.prewarm({ ...(args.openx || {}), fetchImpl: args.fetchImpl });
   const results = await checkManifestsOnce(args);
   if (!gate || args.signal?.aborted || results.some(r => r.ok)) return results;
   for (const r of results) if (await ownGate.pass(r.url, { interactive: gate !== 'auto' }) === 'passed') return checkManifestsOnce(args);
@@ -149,10 +152,14 @@ async function promote(part, dest, expect, { tries = 6, waitMs = 300 } = {}) {
 }
 
 // 从一个源下一个文件到 dest（先写 .part，核对通过才改名）。
-async function downloadOne({ source, url, expect, dest, fetchImpl, signal, onProgress, idleTimeoutMs, connectTimeoutMs }) {
+async function downloadOne({ source, url, expect, dest, fetchImpl, signal, onProgress, idleTimeoutMs, connectTimeoutMs, redirect = 'follow' }) {
   const part = dest + '.part';
   fs.mkdirSync(path.dirname(dest), { recursive: true });
-  const { response, controller } = await openResponse(fetchImpl, url, signal, connectTimeoutMs);
+  const { response, controller } = await openResponse(fetchImpl, url, signal, connectTimeoutMs, redirect);
+  if (redirect !== 'follow' && response.status >= 300 && response.status < 400) {
+    try { await response.body?.cancel(); } catch (_) {}
+    throw fail(`服务器要求跳转（HTTP ${response.status}），这个源不跟随跳转`);
+  }
   if (!response.ok) {
     try { await response.body?.cancel(); } catch (_) {}
     throw fail(response.status === 404 ? '源上没有这个文件（HTTP 404）' : `服务器返回 HTTP ${response.status}`);
@@ -236,9 +243,64 @@ async function downloadWithFallback({ gate = false, ...args }) {
   return result;
 }
 async function downloadAll({ sources, version, expect, dest, fetchImpl, signal, onProgress, onAttempt,
-  idleTimeoutMs = IDLE_TIMEOUT_MS, connectTimeoutMs = CONNECT_TIMEOUT_MS }) {
+  idleTimeoutMs = IDLE_TIMEOUT_MS, connectTimeoutMs = CONNECT_TIMEOUT_MS, openx = {} }) {
   const attempts = [];
   if (alreadyComplete(dest, expect)) return { ok: true, reused: true, source: { id: 'local', name: '本机已下好的文件' }, attempts };
+  // 公司内源优先（r21）：先按文件名去 openx 找同名附件，找到就先从那里下，仍按清单核对大小和 sha256。
+  // 内源没有、连不上、校验不对都静默落回下面的原下载源：失败的内源尝试不留在 attempts 里，
+  // 界面和「全部 404 就重查清单」「被拦就放行」这些判断看到的和以前完全一样。openx:false 关掉（单测用）。
+  let openxNote = null;
+  // 成员版（内源不生效）：不探测、不改源顺序，和以前完全一样；公开版：内源 → GitHub → 阿里云。
+  const openxOn = openx !== false && openxSource.enabled((openx && openx.env) || process.env);
+  if (openxOn) {
+    const hit = await openxSource.findForDownload({ ...openx, file: expect.file, version, fetchImpl, signal });
+    if (!hit) openxNote = { status: 'skipped', reason: openxSource.lastReason() };
+    else {
+      const source = { id: 'openx', name: '公司内源' };
+      const attempt = { ...source, url: hit.url, status: 'downloading', startedAt: Date.now() };
+      attempts.push(attempt);
+      onAttempt && onAttempt(attempts.map(a => ({ ...a })));
+      try {
+        // 内源附件不跟随重定向：入口地址已核过白名单，跳转目标不再放行。
+        const r = await downloadOne({ source, url: hit.url, expect, dest, fetchImpl, signal, onProgress, idleTimeoutMs,
+          connectTimeoutMs: Math.min(connectTimeoutMs, openxSource.REACH_TIMEOUT_MS), redirect: 'error' });
+        Object.assign(attempt, { status: 'ok', bytes: r.bytes, ms: r.ms });
+        onAttempt && onAttempt(attempts.map(a => ({ ...a })));
+        return { ok: true, source, attempts, openx: { status: 'ok', releaseVersion: hit.releaseVersion, ms: r.ms } };
+      } catch (error) {
+        attempts.pop();
+        if (signal && signal.aborted) return { ok: false, cancelled: true, attempts };
+        openxSource.markBad(expect.file);
+        openxNote = { status: 'failed', reason: reasonOf(error) };
+        onAttempt && onAttempt(attempts.map(a => ({ ...a })));
+      }
+    }
+  }
+  const result = await downloadFromSources({ sources: openxOn ? orderSources(sources) : sources, version, expect, dest, fetchImpl, signal, onProgress, onAttempt, idleTimeoutMs, connectTimeoutMs, attempts });
+  return openxNote ? { ...result, openx: openxNote } : result;
+}
+// 公开版下载源顺序（2026-11-16 定）：公司内源 openx → GitHub → 其他官方源 → 阿里云（自家服务器只做最后兜底）。
+// 内源在 downloadAll 里单独先试；这里把调用方给的源按 GitHub / 其他 / 阿里云 三档稳定排序，同档保持原顺序。成员版不排序。
+// 自家阿里云服务器上的下载目录（和各组件源列表里的地址同一组前缀）。
+const OWN_MIRROR_PREFIXES = ['https://dl.lt-stockpartner.tech/hub-update/', 'https://dl.lt-stockpartner.tech/pptutor/',
+  'https://me.lt-stockpartner.tech/hub-update/', 'https://me.lt-stockpartner.tech/pptutor/'];
+const GITHUB_HOST = /(^|\.)(github\.com|githubusercontent\.com)$/i;
+function sourceHost(source) {
+  for (const u of [source.url, source.files, source.manifest]) {
+    try { if (u) return new URL(String(u).replace('{version}', '0')).hostname; } catch (_) {}
+  }
+  return '';
+}
+function sourceRank(source) {
+  const id = String(source.id || ''), host = sourceHost(source);
+  if (id === 'github' || GITHUB_HOST.test(host)) return 0;
+  if (/^aliyun/.test(id) || [source.url, source.files, source.manifest].some(u => u && OWN_MIRROR_PREFIXES.some(p => String(u).startsWith(p)))) return 2;
+  return 1;
+}
+function orderSources(sources) {
+  return (sources || []).map((s, i) => ({ s, i, r: sourceRank(s) })).sort((a, b) => a.r - b.r || a.i - b.i).map(x => x.s);
+}
+async function downloadFromSources({ sources, version, expect, dest, fetchImpl, signal, onProgress, onAttempt, idleTimeoutMs, connectTimeoutMs, attempts }) {
   for (const source of sources) {
     if (signal && signal.aborted) break;
     // source.url：直接给出完整地址（CLI 组件的官方下载地址，core/cli-tools/catalog.js），不按目录拼。
@@ -260,4 +322,4 @@ async function downloadAll({ sources, version, expect, dest, fetchImpl, signal, 
   return { ok: false, cancelled: !!(signal && signal.aborted), attempts };
 }
 
-module.exports = { alreadyComplete, promote, checkManifests, downloadWithFallback, fileUrl, looksLikeWebPage, reasonOf, fmtBytes };
+module.exports = { orderSources, alreadyComplete, promote, checkManifests, downloadWithFallback, fileUrl, looksLikeWebPage, reasonOf, fmtBytes };

@@ -34,12 +34,13 @@ function hasCustomKeymap(home, cwd) {
 }
 
 class CodexEditorInput {
-  constructor(directory) {
+  constructor(directory, { untested = false } = {}) {
     this.directory = directory;
     this.pending = null;
     this.closed = false;
     this.failed = false;
     this.lastTransfer = null;
+    this.untested = untested;
   }
 
   // Parse only raw terminal protocol, before the scrollback compatibility layer.
@@ -66,7 +67,7 @@ class CodexEditorInput {
   // A Ctrl+G in that window is dropped, not queued (2026-10-12, writing-tab first
   // prompt failed 4 of 4). Until Codex takes the request -- the helper claims it or
   // the TUI suspends for the editor -- press again.
-  async load(text, write, { timeoutMs = 8000, startupMs = 20000, repressMs = 2000, attachments = [], preservePunctuation = false } = {}) {
+  async load(text, write, { timeoutMs = 8000, startupMs = this.untested ? 5000 : 20000, repressMs = 2000, attachments = [], preservePunctuation = false } = {}) {
     text = String(text || '');
     if ((!preservePunctuation && text.length < MIN_LENGTH) || /^\s*\//.test(text) || attachments.length) return false;
     if (this.closed || this.failed) throw inputError('长文本输入通道未就绪，请重开此会话后重试；正文未提交');
@@ -111,6 +112,18 @@ class CodexEditorInput {
       if (!error.untouched) this.failed = true;
       // A late helper must never consume this cancelled request.
       this.cancel(id);
+      // Only a completely untouched request is safe to submit through ordinary paste.
+      if (this.untested && error.untouched && !this.closed) {
+        try {
+          // Atomically withdraw it before pasting. A helper may have claimed the
+          // file between the last poll and cancellation; that draft is unknown.
+          fs.unlinkSync(request);
+          return false;
+        } catch (withdrawError) {
+          this.failed = true;
+          throw Object.assign(inputError('长文本交接已被接管，未重复粘贴或提交；请重开会话后重试'), { cause: withdrawError });
+        }
+      }
       throw Object.assign(error, { notSent: true });
     } finally {
       this.pending = null;
@@ -141,8 +154,13 @@ class CodexEditorInput {
   }
 }
 
-function configureCodexEditorInput(env, { dataDir, cwd, platform = process.platform, executable = process.execPath } = {}) {
+function configureCodexEditorInput(env, { dataDir, cwd, platform = process.platform, executable = process.execPath,
+  capabilities = require('./cli-capabilities').snapshot('codex', { env }) } = {}) {
   if (platform !== 'win32' || env.HUB_CODEX_EDITOR_INPUT === '0') return null;
+  // Untested versions first try the same handoff, with a short no-response limit.
+  if (capabilities.tested === false) {
+    console.info(`[codex-editor-input] ${capabilities.compatibilityNotice || 'untested CLI version'}; trying Ctrl+G before PTY paste`);
+  }
   const home = env.CODEX_HOME || path.join(os.homedir(), '.codex');
   if (hasCustomKeymap(home, cwd)) {
     console.info('[codex-editor-input] custom keymap: retaining PTY paste');
@@ -162,7 +180,7 @@ function configureCodexEditorInput(env, { dataDir, cwd, platform = process.platf
     HUB_CODEX_EDITOR_SCRIPT: path.join(__dirname, 'codex-editor-helper.js'),
     HUB_CODEX_EDITOR_DIR: directory,
   });
-  return new CodexEditorInput(directory);
+  return new CodexEditorInput(directory, { untested: capabilities.tested === false });
 }
 
 module.exports = { CodexEditorInput, configureCodexEditorInput, hasCustomKeymap, atomicJson, readJson, hash, MIN_LENGTH };

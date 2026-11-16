@@ -215,10 +215,13 @@ function registerSessionIpc(ipcMain, deps) {
       contextLabel: opts.modelCreationContext || (opts.title ? `新建会话 ${opts.title}` : '新建会话'),
       requestConfirmation: requestModelConfirmation, sendToRenderer,
       create: (runtimeKind, launchOpts) => {
-        const session = sessionManager.createSession(runtimeKind, launchOpts);
-        registerSessionForTap(session);
-        sendToRenderer('session-created', { session });
-        return session;
+        const created = session => {
+          registerSessionForTap(session);
+          sendToRenderer('session-created', { session });
+          return session;
+        };
+        const result = sessionManager.createSession(runtimeKind, launchOpts);
+        return result?.then ? result.then(created) : created(result);
       },
     });
   }
@@ -259,10 +262,13 @@ function registerSessionIpc(ipcMain, deps) {
 
     const { kind, opts } = plan;
     const createFork = (preparedOpts = opts) => {
-      const session = sessionManager.createSession(kind, preparedOpts);
-      registerSessionForTap(session);
-      sendToRenderer('session-created', { session });
-      return { ok: true, session };
+      const created = session => {
+        registerSessionForTap(session);
+        sendToRenderer('session-created', { session });
+        return { ok: true, session };
+      };
+      const result = sessionManager.createSession(kind, preparedOpts);
+      return result?.then ? result.then(created) : created(result);
     };
     if (plan.needsAcpFork) {
       return sessionManager.getNativeSession(source.id).fork()

@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const { CompanyAssistant } = require('../core/company-assistant/service');
+const { RoomBooking } = require('../core/company-assistant/rooms');
 const { assistantChatPhase } = require('../renderer/wait-progress');
 const { connectionState } = require('../renderer/company-assistant-connection');
 const { sanitize } = require('../core/env-check');
@@ -19,7 +20,7 @@ const rooms = 'renderer/company-rooms-page.js';
 const ppt = 'renderer/company-ppt-page.js';
 const esc = text => String(text ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-test('1 守护独立于助理启动，暂停助理保留已启用的守护，定时器不重复建立', () => {
+test('1 守护独立于助理启动，暂停助理保留已启用的守护，定时器不重复建立', t => {
   const boot = section('main.js', '    companyAssistantService.startTools();', '    const bridgeMcpPlan');
   for (const enabled of [false, true]) {
     let starts = 0;
@@ -31,11 +32,14 @@ test('1 守护独立于助理启动，暂停助理保留已启用的守护，定
     CompanyAssistant.prototype.pause.call({ started: true, stopTimers() {}, meetings: {}, phone: { close() {} }, rooms: { settings: () => ({ enabled }), close() { closed++; } }, lanes: { ppt: { queue: [] } } });
     assert.equal(closed, enabled ? 0 : 1);
   }
-  const code = section('core/company-assistant/rooms.js', '  start() {', '  close() {');
   let intervals = 0;
-  const context = { setInterval() { intervals++; return intervals; } };
-  const booking = vm.runInNewContext(`({ deps: {}, ${code} })`, context);
+  t.mock.method(global, 'setInterval', () => ++intervals);
+  t.mock.method(global, 'clearInterval', () => {});
+  const booking = new RoomBooking({}, {});
   booking.start(); booking.start(); assert.equal(intervals, 1);
+  booking.close(); assert.equal(booking.offlineRetry.closed, true);
+  booking.start(); booking.start(); assert.equal(intervals, 2);
+  assert.equal(booking.offlineRetry.closed, false); booking.close();
 });
 
 test('2 首次未就绪立刻通知，重试保留起点，就绪后进入回答阶段', async () => {

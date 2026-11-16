@@ -6,6 +6,7 @@ const { spawn } = require('node:child_process');
 const component = require('./room-component');
 const { createRuntimeDownload } = require('./room-runtime-download');
 const S = require('./room-schedule');
+const { RoomOfflineRetry } = require('./room-offline-retry');
 
 const SOON_MS = 10 * 60000;   // 订到的会开始前 10 分钟，桌宠提醒一次
 const RULES = ['主题', '开始时间', '时长小时', '时长分钟', '优先会议室', '抢订日', '抢订设置', '会后动作', '系统', '高级'];
@@ -34,6 +35,7 @@ class RoomBooking {
   constructor(a, deps = {}) {
     this.a = a; this.deps = deps; this.timer = null; this.starting = null; this.ticking = false;
     this.error = ''; this.preparationError = ''; this.lastStart = 0; this.child = null; this.runtime = null;
+    this.offlineRetry = new RoomOfflineRetry(this);
   }
   saved() { const exe = this.settings().exePath; return !!(exe && fs.existsSync(exe)); }
   // 会议室运行时（77MB 的秘书终结者）第一次用时才下载：这里只做一次性的准备，不联网。
@@ -84,7 +86,7 @@ class RoomBooking {
       loginNeeded: !!helper?.loginNeeded, loginBusy: !!(live && helper.loginBusy),
       rules: helper?.rules || null, phases: live ? helper.phases : {}, nextOpen: helper?.nextOpen,
       error: this.preparationError || this.error, home: this.home(), enabled: !!this.settings().enabled,
-      ...this.scheduleState(helper), events: (this.a.state().roomEvents || []).map(e => ({ ...e, slot: slotText(e.record) })) };
+      ...this.scheduleState(helper), events: (this.a.state().roomEvents || []).map(e => ({ ...e, record: this.offlineRetry.decorate(e.record), slot: slotText(e.record) })) };
   }
   // 会议室名称与近期日程地点用来推断园区；日程快照每 10 分钟最多读一次。
   meetingLocations() {
@@ -151,13 +153,20 @@ class RoomBooking {
       if (!Array.isArray(history)) throw new Error('会议室历史格式不正确，原文件已保留');
       state.history = history.slice(-50);
     }
+    state.history = this.offlineRetry.history(state.history);
     return state;
   }
   start() {
+    this.offlineRetry.start();
     if (this.deps.noTimer || this.timer) return;
     this.timer = setInterval(() => { void this.tick().catch(e => { this.error = e.message; this.a.changed(); }); }, 15000);
   }
-  close() { clearInterval(this.timer); this.timer = null; }
+  close() { clearInterval(this.timer); this.timer = null; this.offlineRetry.close(); }
+  readHistory() {
+    const history = readJson(this.file('booking_history.json'), []);
+    if (!Array.isArray(history)) throw new Error('秘书历史格式不正确，已保留之前的结果');
+    return history;
+  }
   async discover() { return this.status(); }
   async install() { return this.ensure({ user: true }); }
   async reconnect() {
@@ -234,6 +243,7 @@ class RoomBooking {
       throw new Error(`目标日期按抢订节奏自动算（每天 ${s.openTime.slice(0, 5)} 放号，抢 ${s.advanceDays} 天后），不支持指定某一天；请提供主题、时段、会议室和星期`);
     }
     if (op === 'status') return this.status();
+    if (!internal && ['pause', 'once', 'test', 'configure', 'start'].includes(op)) this.offlineRetry.cancel();
     if (!internal) this.checkSchedule(op);
     if (!internal) await this.ensure({ user });
     if (!internal && ['start', 'once', 'test'].includes(op)) await this.applySchedule();
@@ -246,7 +256,7 @@ class RoomBooking {
       if (result) {
         if (result.requestId !== id) throw new Error('秘书回执编号不一致');
         if (!result.ok) throw new Error(result.error || '秘书未执行这项操作');
-        if (op === 'start' || op === 'pause') this.a.setSettings({ rooms: { enabled: op === 'start' } });
+        if (!internal && (op === 'start' || op === 'pause')) this.a.setSettings({ rooms: { enabled: op === 'start' } });
         this.error = ''; this.a.changed(); return { ...this.status(), ...result, connected: true };
       }
       await new Promise(r => setTimeout(r, 200));
@@ -295,13 +305,12 @@ class RoomBooking {
     try {
       const now = this.a.now(), d = new Date(now), minute = d.getHours() * 60 + d.getMinutes();
       const live = this.status();
-      if (this.settings().enabled && live.connected && !live.running) this.a.setSettings({ rooms: { enabled: false } });
+      if (this.settings().enabled && live.connected && !live.running && !this.offlineRetry.active()) this.a.setSettings({ rooms: { enabled: false } });
       const win = S.autoStartWindow(live.schedule?.openTime);
       if (this.settings().enabled && minute >= win.from && minute < win.to && !live.connected && now - this.lastStart >= 10 * 60000) {
         this.lastStart = now; await this.command('start');
       }
-      const history = readJson(this.file('booking_history.json'), []);
-      if (!Array.isArray(history)) throw new Error('秘书历史格式不正确，已保留之前的结果');
+      const history = this.readHistory();
       const idOf = r => createHash('sha256').update(JSON.stringify(r)).digest('hex');
       const stored = this.a.state(), prior = stored.roomSeen;
       const ids = history.map(idOf), seen = new Set(prior || ids);
@@ -315,6 +324,7 @@ class RoomBooking {
         events = [{ id, at: now, record, phoneSent: false }, ...events].slice(0, 30);
       }
       this.a.saveState({ roomSeen: [...new Set([...(prior || []), ...ids])].slice(-200), roomEvents: events });
+      await this.offlineRetry.tick(history, live, now);
       this.tellPet(added, history, live, now);
       for (const event of events.filter(e => !e.phoneSent).slice(0, 3)) {
         if (!this.a.phone?.active()) break;

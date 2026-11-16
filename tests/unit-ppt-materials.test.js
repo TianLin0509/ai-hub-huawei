@@ -221,3 +221,25 @@ test('团队素材包一键下载：换源、两层校验、装好即出现；�
   assert.deepEqual(after.items.map(i => i.name).sort(), ['我自己的卡片', '新编号圆']);
   assert.equal(after.library.teamPack.update, false);
 });
+
+test('团队素材包：GitHub 清单有效但包文件 404 时换到阿里云下包（2026-11-16 审查返工）', async t => {
+  const crypto = require('node:crypto'), sha = buf => crypto.createHash('sha256').update(buf).digest('hex');
+  const f = fixture(t, { packs: [] });
+  const pptx = path.join(f.dir, 'team-2.0.0.pptx'), zip = path.join(f.dir, 'team-2.0.0.zip');
+  makePack(pptx, [{ shapes: SHAPES.hex, notes: meta({ name: '蓝色光带', category: '光带·托板·展台' }) }]);
+  writeZip(zip, { [TEAM_PACK_FILE]: fs.readFileSync(pptx) });
+  const archive = fs.readFileSync(zip);
+  const manifest = { version: '2.0.0', kind: 'materials', files: { [TEAM_PACK_FILE]: { hash: sha(fs.readFileSync(pptx)) } }, archive: { name: 'component.zip', hash: sha(archive) } };
+  const asked = [];
+  f.materials.deps.openx = false;
+  f.materials.deps.pptTeamPackUrls = ['https://github.example/m/', 'https://aliyun.example/m/'];
+  f.materials.deps.pptDownloadFetch = async url => {
+    asked.push(url);
+    if (url.endsWith('component.json')) return new Response(JSON.stringify(manifest));
+    if (url.startsWith('https://github.example/')) return new Response('nf', { status: 404 });
+    return new Response(archive);
+  };
+  const r = await f.materials.installTeamPack();
+  assert.deepEqual({ version: r.version, items: r.items }, { version: '2.0.0', items: 1 });
+  assert.deepEqual(asked, ['https://github.example/m/component.json', 'https://github.example/m/component.zip', 'https://aliyun.example/m/component.zip']);
+});

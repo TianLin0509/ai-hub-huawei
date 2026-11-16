@@ -181,7 +181,7 @@ function registerPrefixForkIpc(ipcMain, deps) {
       const opts = { ...plan.opts, codeagentPrefixFork: metadata, codeagentForkSourceSessionId: source.ccSessionId,
         codeagentModelPick: false, resumeCCSessionId: copied.newSessionId, resumeTranscriptPath: copied.file };
       delete opts.forkCCSessionId;
-      const session = sessionManager.createSession('codeagent', opts);
+      const session = await sessionManager.createSession('codeagent', opts);
       sessionCreated = true; log.preparedFileState = 'session-owned';
       registerSessionForTap(session);
       sendToRenderer('session-created', { session });

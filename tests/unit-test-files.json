@@ -6,6 +6,7 @@
   "tests/unit-session-background-tasks.test.js",
   "tests/unit-community.test.js",
   "tests/unit-codeagent-capabilities.test.js",
+  "tests/unit-session-capabilities-prepare.test.js",
   "tests/unit-read-scope.test.js",
   "tests/unit-community-onboarding.test.js",
   "tests/unit-community-hooks.test.js",
@@ -40,6 +41,7 @@
   "tests/unit-renderer-crash-recovery.test.js",
   "tests/unit-session-search-first-build.test.js",
   "tests/unit-window-keep-rendering.test.js",
+  "tests/unit-company-room-offline-retry.test.js",
   "tests/unit-company-rooms-page.test.js",
   "tests/unit-codeagent-skills.test.js",
   "tests/unit-codeagent-accounts-page.test.js",
@@ -203,5 +205,9 @@
   "tests/unit-asar-delta.test.js",
   "tests/unit-app-update-native-runtime.test.js",
   "tests/unit-published-nsis-installer.test.js",
-  "tests/unit-session-search-compaction.test.js"
+  "tests/unit-session-search-compaction.test.js",
+  "tests/unit-company-room-component.test.js",
+  "tests/unit-cli-capabilities.test.js",
+  "tests/unit-codex-editor-compat.test.js",
+  "tests/unit-dsh-version-compat.test.js"
 ]

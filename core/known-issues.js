@@ -8,6 +8,11 @@
 // 只管「给出解法」，不改原有的报错流程；认不出的不硬套。
 
 const KNOWN_ISSUES = [
+  { id: 'dsh-package-mismatch',
+    test: /(?:Cannot find|ERR_MODULE_NOT_FOUND|missing|未找到|找不到)[^\n]{0,180}(?:dsh-user-questions|dsh-llm-pi-ai)|DSH CLI 终端运行环境(?:不完整|.*请先安装)/i,
+    title: 'DSH 与终端界面包没有配套装好',
+    fix: '点「一键修复 DSH」，在当前运行环境里按 @deepseek-harness-tui/dsh-tui 要求配套安装 @deepseek-ai/dsh 及同代插件，装好后重新新建会话。',
+    action: { label: '一键修复 DSH', act: 'known:dsh-repair' } },
   { id: 'welink-login-expired', areas: ['welink', 'hub-alert', 'notice', 'toast'],
     // core/company-assistant/welink.js「WeLink 登录已过期，Hub 正在自动续期」、service.js「WeLink 没登录或登录过期」、phone.js 同句。
     test: /WeLink\s*(?:没登录或)?登录(?:已)?过期|自动续期没成功|needs-scan/i,

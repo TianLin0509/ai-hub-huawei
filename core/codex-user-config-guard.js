@@ -16,7 +16,11 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const HUB_STATUS_LINE = '["model-with-reasoning", "context-remaining", "current-dir"]';
+// TOML literal strings survive Windows PowerShell 5.1's native argv conversion.
+// Inner double quotes would be stripped before Codex can parse the override.
+const HUB_STATUS_LINE = "['model-with-reasoning', 'context-remaining', 'current-dir']";
+const LEGACY_HUB_STATUS_LINE = '["model-with-reasoning", "context-remaining", "current-dir"]';
+const HUB_STATUS_LINES = new Set([HUB_STATUS_LINE, LEGACY_HUB_STATUS_LINE]);
 
 function codexStatusLineConfigArg(configDir, { fsModule = fs, env = process.env, homeDir = os.homedir() } = {}) {
   const home = configDir || env.CODEX_HOME || path.join(env.USERPROFILE || env.HOME || homeDir, '.codex');
@@ -24,7 +28,7 @@ function codexStatusLineConfigArg(configDir, { fsModule = fs, env = process.env,
     // Preserve an existing status line and the old # status_line opt-out.
     if (fsModule.readFileSync(path.join(home, 'config.toml'), 'utf8').includes('status_line')) return '';
   } catch (error) { if (error.code !== 'ENOENT') return ''; }
-  return ` -c 'tui.status_line=${HUB_STATUS_LINE}'`;
+  return ` -c "tui.status_line=${HUB_STATUS_LINE}"`;
 }
 
 function norm(p) {
@@ -130,9 +134,9 @@ function repairHubCodexConfigText(input) {
       if (header.kind !== 'table' || !samePath(header.path, ['tui']) || lines[header.startLine].trim() !== '[tui]') continue;
       const body = [];
       for (let j = index + 1; j < statements.length && statements[j].kind === 'kv'; j += 1) body.push(statements[j]);
-      if (body.length !== 1 || !samePath(body[0].path, ['tui', 'status_line']) || body[0].valueText !== HUB_STATUS_LINE
+      if (body.length !== 1 || !samePath(body[0].path, ['tui', 'status_line']) || !HUB_STATUS_LINES.has(body[0].valueText)
           || body[0].startLine !== header.startLine + 1 || body[0].endLine !== body[0].startLine
-          || lines[body[0].startLine].trim() !== `status_line = ${HUB_STATUS_LINE}`) continue;
+          || lines[body[0].startLine].trim() !== `status_line = ${body[0].valueText}`) continue;
       const conflict = statements.slice(0, index).some(item =>
         item.kind !== 'kv' ? samePath(item.path, ['tui']) : item.table.length === 0 && item.path[0] === 'tui');
       if (!conflict) continue;

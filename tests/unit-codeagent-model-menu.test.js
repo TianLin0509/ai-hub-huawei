@@ -26,6 +26,61 @@ function temp(t) {
 function json(file, data) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(data)); }
 function config(dir, ids) { json(path.join(dir, '.cac.json'), { enterpriseModelOptionsCache: ids }); }
 
+test('serve context limits survive cache reload and reach the CodeAgent context ring after an answer', async t => {
+  const dir = temp(t), cfg = path.join(dir, 'personal'), id = 'DeepSeek-V4.1-Flash-1017';
+  config(cfg, [id]);
+  const served = require('../core/codeagent-serve').parseProviders({ providers: [{ id: 'provider', status: 'available',
+    models: { [id]: { id, max_context_tokens: 400000 } } }] });
+  assert.equal(served.models[0].contextWindow, 400000);
+  probe.writeProbed(pool.personalModelsFile(dir), { source: 'serve', models: [id], details: served.models });
+  assert.equal(probe.readProbed(pool.personalModelsFile(dir)).contextWindows[id.toLowerCase()], 400000);
+  assert.deepEqual(models.contextWindowFor(cfg, [id], fs, { dataDir: dir }), { window: 400000, source: 'serve' });
+  const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8').replace(/\r\n/g, '\n');
+  const start = source.indexOf('async function observeCodeAgentModel('), end = source.indexOf('\n}\n', start) + 2;
+  const session = { id: 'context-observer', kind: 'codeagent', codeagentConfigDir: cfg, currentModel: { id }, codeagentActualModel: id };
+  const events = [], saved = [];
+  const context = vm.createContext({ console, fs, codeAgentModelObservations: new WeakMap(), getHubDataDir: () => dir,
+    sessionManager: { sessions: new Map([[session.id, {}]]), getSession: () => session,
+      updateSessionMeta: (_sid, patch) => Object.assign(session, patch) },
+    sessionStore: { markDirty: (_sid, value) => saved.push({ ...value }) },
+    sendToRenderer: (name, value) => events.push({ name, value }),
+    require: name => { assert.equal(name, './core/codeagent-models'); return { ...models, recordObserved: () => false }; } });
+  vm.runInContext(source.slice(start, end), context);
+  await context.observeCodeAgentModel(session.id, { modelId: id, usage: { input_tokens: 90000, output_tokens: 10000 } });
+  const event = events.find(row => row.name === 'status-event').value;
+  assert.equal(event.contextEffectiveMax, 400000);
+  assert.equal(event.contextPct, 25);
+  assert.equal(saved[0].contextEffectiveMax, 400000);
+  const ring = require('../core/session-status-summary').composerContextRing(session);
+  assert.equal(ring.percent, 25);
+  assert.match(ring.title, /400,000/);
+});
+
+test('context limits use the session account and exact model, with the existing configuration and default paths unchanged', t => {
+  const dir = temp(t), cfg = path.join(dir, 'personal'), account = pool.accountDir(dir, 'abcdef12'), id = 'DeepSeek-V4.1';
+  config(cfg, [{ value: id, contextWindow: 200000 }]); config(account, [id]);
+  probe.writeProbed(pool.personalModelsFile(dir), { source: 'serve', models: [id], details: [{ id, contextWindow: 400000 }] });
+  probe.writeProbed(path.join(account, probe.MODELS_FILE), { source: 'serve', models: [id], details: [{ id, contextWindow: 800000 }] });
+  assert.deepEqual(models.contextWindowFor(cfg, [id.toLowerCase()], fs, { dataDir: dir }), { window: 400000, source: 'serve' });
+  assert.deepEqual(models.contextWindowFor(account, [id], fs, { dataDir: dir, accountKey: 'abcdef12' }), { window: 800000, source: 'serve' });
+  assert.deepEqual(models.contextWindowFor(cfg, [id]), { window: 200000, source: 'account' });
+  assert.deepEqual(models.contextWindowFor(cfg, ['Other-Model'], fs, { dataDir: dir }), { window: 200000, source: 'estimated' });
+  probe.writeProbed(pool.personalModelsFile(dir), { source: 'serve', models: [id] });
+  assert.deepEqual(models.contextWindowFor(cfg, [id], fs, { dataDir: dir }), { window: 200000, source: 'account' });
+  probe.writeProbed(path.join(account, probe.MODELS_FILE), { models: [id], details: [{ id, contextWindow: 400000 }] });
+  assert.deepEqual(models.contextWindowFor(account, [id], fs, { dataDir: dir, accountKey: 'abcdef12' }), { window: 200000, source: 'estimated' });
+});
+
+test('probe context metadata excludes invalid limits and models outside the account catalog', t => {
+  const dir = temp(t), file = pool.personalModelsFile(dir);
+  probe.writeProbed(file, { source: 'serve', models: ['Valid', 'Missing', 'Negative', 'Huge'], details: [
+    { id: 'Valid', contextWindow: 400000 }, { id: 'Missing', contextWindow: null },
+    { id: 'Negative', contextWindow: -1 }, { id: 'Huge', contextWindow: Infinity },
+    { id: 'Unlisted', contextWindow: 900000 },
+  ] });
+  assert.deepEqual(probe.readProbed(file).contextWindows, { valid: 400000 });
+});
+
 // Known command-row text, reconstructed as separate terminal lines. Layout and
 // paging below are synthetic; the actual CLI paging behavior is not verified.
 const COMMAND_ROWS = [

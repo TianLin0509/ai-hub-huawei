@@ -12,7 +12,7 @@ function registerCliToolsIpc(ipcMain, { installer = null } = {}) {
   ipcMain.handle('cli-tools:install', async (_event, request = {}) => {
     if (!installer) return { ok: false, error: '这个版本暂不支持一键安装', state: unavailable() };
     try {
-      const state = await installer.install(String(request.id || ''));
+      const state = await installer.install(String(request.id || ''), { repair: request.repair === true });
       const tool = state.tools[request.id] || {};
       return { ok: tool.phase === 'done', error: tool.error || null, state };
     } catch (error) { return { ok: false, error: error.message, state: installer.snapshot() }; }

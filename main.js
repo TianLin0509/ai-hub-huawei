@@ -927,7 +927,8 @@ async function observeCodeAgentModel(hubSessionId, ev, transcriptPath, source = 
     // 上下文占比（输入框旁的圆环）：CodeAgent 没有状态栏回调，按这一轮的用量算，见 core/codeagent-models.js。
     if (session && usage) {
       const configDir = session.codeagentConfigDir || require('./core/codeagent-config').resolveCodeAgentConfig(process.env).configDir;
-      const { window } = codeAgentModels.contextWindowFor(configDir, [session.currentModel?.id, modelId]);
+      const { window } = codeAgentModels.contextWindowFor(configDir, [session.currentModel?.id, modelId], fs,
+        { dataDir: getHubDataDir(), accountKey: session.codeagentPoolAccount || 'personal' });
       const context = codeAgentModels.contextFromUsage(usage, window);
       if (context && (context.contextUsed !== session.contextUsed || context.contextEffectiveMax !== session.contextEffectiveMax)) {
         const withContext = sessionManager.updateSessionMeta(hubSessionId, context);
@@ -4466,7 +4467,7 @@ const hubMemoryService = new HubMemoryService({
   searchService:sessionSearchService, sendToRenderer,
   getPersistedSessions:()=>lastPersistedSessions,
   createSession:async(kind,opts)=>{
-    const session=sessionManager.createSession(kind,opts);
+    const session=await sessionManager.createSession(kind,opts);
     registerSessionForTap(session);sendToRenderer('session-created',{session});return session;
   },
   sendPrompt:(...args)=>require('./core/group-chat-watcher').sendToPty(...args),
@@ -4613,6 +4614,7 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
         const { createCliInstaller } = require('./core/cli-tools/installer');
         const cliSources = require('./core/cli-tools/catalog').catalogSources({ config: distribution.updateConfig });
         cliToolsInstallerRef = createCliInstaller({ sources: cliSources, unblock: unblockOwn, isOwnUrl: url => ownHosts.isOwnUrl(url, ownConfig),
+          getDshEntry: () => getHubConfig().acp?.providers?.['deepseek-acp'] || {},
           unblockPassed: () => ownUnblocker.passed(), onState: state => sendToRenderer('cli-tools:state', state) });
         // 启动 40 秒后在后台全局找一遍 Git Bash（隐藏的 PowerShell 读注册表和硬盘列表），新会话能用上别处装的 Git。
         setTimeout(() => { try { cliToolsInstallerRef?.refreshGit?.(); } catch (_) {} }, 40000).unref?.();

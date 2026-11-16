@@ -1,4 +1,4 @@
-"""提前天数 adapter（待签发 2.1.3 用）：仓库里的 hub_control.py 源码装进已签名 2.1.2 包的原模块后，
+"""提前天数 adapter：签名 2.1.3 的模块与仓库内可读源码保持一致，
 原引擎与界面的 timedelta(weeks=1) 改按「抢订设置.提前天数」取天数，其他 timedelta 用法不变。
 本机没有 PyQt5 时用最小替身，只测这层替换，不跑浏览器。"""
 import copy
@@ -17,7 +17,7 @@ if 'PyQt5' not in sys.modules:
         qt = types.ModuleType('PyQt5'); core = types.ModuleType('PyQt5.QtCore')
         core.QTimer = type('QTimer', (), {'__init__': lambda self, *a, **k: None, 'timeout': types.SimpleNamespace(connect=lambda *a: None), 'start': lambda self, *a: None})
         qt.QtCore = core; sys.modules['PyQt5'] = qt; sys.modules['PyQt5.QtCore'] = core
-sys.path.insert(0, str(root / 'msz-code-2.1.2.zip'))
+sys.path.insert(0, str(root / 'msz-code-2.1.3.zip'))
 from msz import config as C, jobs  # noqa: E402
 spec = importlib.util.spec_from_file_location('msz.hub_control_next', root / 'hub_control.py', submodule_search_locations=None)
 adapter = importlib.util.module_from_spec(spec); adapter.__package__ = 'msz'; spec.loader.exec_module(adapter)
