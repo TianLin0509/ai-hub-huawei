@@ -224,7 +224,11 @@ class CompanyAssistant {
   }
   settings() { const s = this.read('settings.json', {}); return { ...DEFAULT_SETTINGS, ...s }; }
   // 判定「等你回复」用的设置：带上 CodeAgent 的待回复复核结论（只读，不写回 settings.json）（2026-11-16）
-  judgeSettings(s = this.settings()) { return { ...s, replyReview: this.state().replyReview || null }; }
+  judgeSettings(s = this.settings()) {
+    const now = this.now(), sizes = {};
+    for (const [k, v] of Object.entries(this.state().groupSizes || {})) if (v && v.count > 0 && now - (v.at || 0) < 14 * 864e5) sizes[k] = v;
+    return { ...s, replyReview: this.state().replyReview || null, groupSizes: sizes };
+  }
   setSettings(patch = {}) {
     const s = this.settings(), next = { ...s };
     if ('dataRoot' in patch) {
@@ -671,7 +675,7 @@ class CompanyAssistant {
     // 没登录时生成的是空简报（提示扫码），之后每 10 分钟再试一次。
     const retry = !brief || (brief.by === 'none' && now - (brief.generatedAt || 0) >= 10 * 60000);
     if (workday && minute >= R.minutesOf(s.briefTime) && retry && !this.briefRunning(day)) await this.generateBrief().catch(() => {});
-    if (workday) this.maybeReviewReplies(now);
+    if (workday) { void this.maybeSizeGroups(now).catch(() => {}); this.maybeReviewReplies(now); }
     this.remind();
     void this.pump();
   }
@@ -1259,6 +1263,32 @@ class CompanyAssistant {
     this.changed();
   }
   replyReviewRunning() { const l = this.lanes.brief; return [l.job, ...l.queue].some(j => j && j.type === 'reply-review'); }
+  // 2026-11-16：@所有人 只有 10 人以下小群才算等我回复。群人数按需查：每群 7 天查一次、每轮最多 3 个，30 天没再用到的清掉。
+  async maybeSizeGroups(now = this.now()) {
+    if (this.sizingGroups) return 0;
+    const snap = this.snapshot(D.dayKey(now));
+    if (!snap || !snap.login?.ok) return 0;
+    const old = this.state().groupSizes || {}, sizes = {};
+    for (const [k, v] of Object.entries(old)) if (v && now - (v.at || 0) < 30 * 864e5) sizes[k] = v;
+    const want = (snap.conversations || []).filter(c => c.group && ((snap.messages || {})[c.id] || []).some(m => m.atAll && !m.mine)
+      && !(sizes[c.id] && now - (sizes[c.id].at || 0) < (sizes[c.id].count > 0 ? 7 : 1) * 864e5)).slice(0, 3);
+    if (!want.length) { if (Object.keys(sizes).length !== Object.keys(old).length) this.saveState({ groupSizes: sizes }); return 0; }
+    this.sizingGroups = true;
+    let n = 0;
+    try {
+      for (const c of want) {
+        try {
+          const r = await this.welink(['im', 'query-group-member', '--group-id', String(c.id)], { timeoutMs: 20000, priority: 'background' });
+          const count = welink.groupMembers(r.stdout).length;
+          sizes[c.id] = { count, at: now };
+          if (count) n += 1;
+        } catch { sizes[c.id] = { count: 0, at: now }; }       // 查不到：按大群处理（@所有人 不列），1 天后再试
+      }
+      this.saveState({ groupSizes: sizes });
+      if (n) this.changed();
+    } finally { this.sizingGroups = false; }
+    return n;
+  }
   maybeReviewReplies(now = this.now()) {
     const slot = RR.slotOf(now);
     if (!slot || this.state().replyReviewSlot === slot || this.replyReviewRunning()) return false;

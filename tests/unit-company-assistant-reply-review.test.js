@@ -173,3 +173,62 @@ test('审查回归：全部处理了再撤销，其他栏里同出处的条目�
   assert.equal(snapshotOf(), before);
   assert.ok(!a.doneSet().has('msg:p:k0'));
 });
+
+test('群 @所有人：10 人以下小群才算等我回复；点名 @我 的 AI 不能判不用回（2026-11-16 定）', () => {
+  const all = { atAll: true };
+  const s = snap([
+    ['big', true, [['甲', '@所有人 明早九点开会', 100, all]]],
+    ['small', true, [['乙', '@所有人 周报今天交一下', 100, all]]],
+    ['small2', true, [['丙', '@所有人 下午对一下进度', 100, all], ['我', '好的我来', 50]]],
+    ['named', true, [['丁', '@我 这个方案你看下', 100, { atMe: true }]]],
+  ]);
+  const settings = { groupSizes: { big: { count: 40, at: NOW }, small: { count: 6, at: NOW }, small2: { count: 6, at: NOW } } };
+  const review = { at: NOW, items: { named: { lastKey: 'k0', verdict: 'no', reason: '已在别处回复' } } };
+  const got = D.awaiting(s, settings, { now: NOW, review });
+  assert.deepEqual(got.map(m => [m.conv, m.level]), [['small', 'strong'], ['named', 'weak'], ['small2', 'settled']]);
+  assert.ok(got.find(m => m.conv === 'small').atAllSmallGroup);
+  assert.equal(got.find(m => m.conv === 'named').aiReason, '已在别处回复');
+  assert.deepEqual(D.awaiting(s, {}, { now: NOW }).map(m => m.conv), ['named'], '没查到人数的群按大群处理');
+});
+test('服务：只给出现 @所有人 的群查人数，7 天内不重复查', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'assistant-size-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const svc = new CompanyAssistant({ dataDir: root, noTools: true, noTimer: true, now: () => NOW, bus: new NoticeBus({ now: () => NOW }), getSession: () => null, resolveCli: () => null });
+  svc.cli = () => null; svc.pump = async () => {};
+  t.after(() => svc.digest.close());
+  const day = D.dayKey(NOW);
+  const s = snap([['g1', true, [['甲', '@所有人 开会', 30, { atAll: true }]]], ['g2', true, [['乙', '闲聊', 30]]]]);
+  svc.write('raw-' + day + '.json', s);
+  const calls = [];
+  svc.welink = async args => { calls.push(args.join(' ')); return { code: 0, stdout: JSON.stringify({ data: { members: [{ account: 'a' }, { account: 'b' }, { account: 'c' }] } }) }; };
+  assert.equal(await svc.maybeSizeGroups(NOW), 1);
+  assert.deepEqual(calls, ['im query-group-member --group-id g1']);
+  assert.equal(svc.state().groupSizes.g1.count, 3);
+  assert.equal(svc.judgeSettings().groupSizes.g1.count, 3);
+  assert.equal(await svc.maybeSizeGroups(NOW + 3600e3), 0);
+  assert.equal(calls.length, 1);
+});
+
+test('审查回归：小群新来 @所有人，旧的 AI 结论失效；人数查询失败记时间、1 天内不重查', async t => {
+  const s = snap([['small', true, [['丁', '@我 这个方案你看下', 100, { atMe: true }], ['乙', '@所有人 周报今天交一下', 30, { atAll: true }]]]]);
+  const settings = { groupSizes: { small: { count: 6, at: NOW } } };
+  const review = { at: NOW, items: { small: { lastKey: 'k0', verdict: 'no', reason: '旧结论' } } };
+  const got = D.awaiting(s, settings, { now: NOW, review });
+  assert.ok(got.length === 2 && got.every(m => m.level === 'strong' && !m.aiReason), JSON.stringify(got.map(m => [m.key, m.level, m.aiReason])));
+  assert.equal(D.reviewAnchor(s.conversations[0], s.messages.small, '', settings), 'k1');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'assistant-size2-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const svc = new CompanyAssistant({ dataDir: root, noTools: true, noTimer: true, now: () => NOW, bus: new NoticeBus({ now: () => NOW }), getSession: () => null, resolveCli: () => null });
+  svc.cli = () => null; svc.pump = async () => {};
+  t.after(() => svc.digest.close());
+  svc.write('raw-' + D.dayKey(NOW) + '.json', s);
+  let calls = 0;
+  svc.welink = async () => { calls += 1; throw new Error('超时'); };
+  await svc.maybeSizeGroups(NOW);
+  await svc.maybeSizeGroups(NOW + 60000);
+  assert.equal(calls, 1);
+  assert.deepEqual(svc.judgeSettings().groupSizes, {}, '失败记录不当作人数');
+  svc.write('raw-' + D.dayKey(NOW + 25 * 3600e3) + '.json', s);
+  await svc.maybeSizeGroups(NOW + 25 * 3600e3);
+  assert.equal(calls, 2);
+});

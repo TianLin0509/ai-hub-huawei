@@ -58,9 +58,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "更新包下好后放到位失败（多见于安全软件正在扫描）时自动重试；本机已下好的完整安装包直接复用"
+    "WeLink 等你回复：群里 @所有人 只有 10 人以下小群才列为等你回复；群里点名 @我 的，AI 复核不再判不用回"
   ],
-  "version": "5.6.35",
+  "version": "5.6.36",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

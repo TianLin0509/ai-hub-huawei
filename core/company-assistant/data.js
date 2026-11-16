@@ -269,10 +269,19 @@ function mails(raw) {
 // review：公司助理 CodeAgent 的复核结论 { items: { 会话 id: { lastKey, verdict, reason } } }，只对「锚」有效
 //   （私聊是最后一条；群是最近一条 @我 或我的发言），默认从 settings.replyReview 读。
 const mentionsMe = (m, myName) => !m.mine && (m.atMe || (!!myName && String(m.text || '').includes('@' + myName)));
-function reviewAnchor(conv, list, myName = '') {
+// 2026-11-16 定：@所有人 默认不用回，只有 10 人以下的小群才当作 @我（群人数由服务按需查一次，存在 settings.groupSizes）。
+// 群里点名 @我 的，AI 复核最多降为「可能要回」，不能判「不用回」。
+const SMALL_GROUP_MAX = 9;
+const smallGroup = (settings, id) => { const n = Number(settings && settings.groupSizes && settings.groupSizes[id] && settings.groupSizes[id].count) || 0; return n > 0 && n <= SMALL_GROUP_MAX; };
+const groupHits = (conv, list, myName, settings) => {
+  const small = smallGroup(settings, conv.id);
+  return list.filter(m => mentionsMe(m, myName) || (small && m.atAll && !m.mine));
+};
+function reviewAnchor(conv, list, myName = '', settings = null) {
   if (!list.length) return null;
   if (!conv.group) return list[list.length - 1].key;
-  for (let i = list.length - 1; i >= 0; i -= 1) if (list[i].mine || mentionsMe(list[i], myName)) return list[i].key;
+  const small = !!settings && smallGroup(settings, conv.id);
+  for (let i = list.length - 1; i >= 0; i -= 1) if (list[i].mine || mentionsMe(list[i], myName) || (small && list[i].atAll)) return list[i].key;
   return null;
 }
 const judgeShape = m => ({ mine: m.mine, kind: m.text ? 'text' : 'other', text: m.text, at: m.at });
@@ -287,7 +296,7 @@ function awaiting(snapshot, settings = {}, { now, review } = {}) {
     if (!list.length) continue;
     const last = list[list.length - 1];
     const r = items[conv.id];
-    const ai = r && r.lastKey === reviewAnchor(conv, list, myName) ? r : null;
+    const ai = r && r.lastKey === reviewAnchor(conv, list, myName, settings) ? r : null;
     const aiLevel = ai ? { reply: 'strong', maybe: 'weak', no: 'settled' }[ai.verdict] : null;
     const extra = ai ? { aiVerdict: ai.verdict, aiReason: String(ai.reason || '') } : {};
     if (!conv.group) {
@@ -299,8 +308,12 @@ function awaiting(snapshot, settings = {}, { now, review } = {}) {
       out.push({ ...pick, since: pick.at, level, judge: v.closed || v.reason, ...extra });
       continue;
     }
-    for (const hit of list.filter(m => mentionsMe(m, myName))) {
-      out.push({ ...hit, since: hit.at, needsReplyReview: true, level: aiLevel || 'strong', ...extra });
+    for (const hit of groupHits(conv, list, myName, settings)) {
+      const named = mentionsMe(hit, myName);
+      let level = named && aiLevel === 'settled' ? 'weak' : aiLevel || 'strong';
+      // 小群 @所有人：我之后在群里说过话就算回应过了（点名 @我 仍按原口径不自动结案）
+      if (!named && !aiLevel && list.some(m => m.mine && m.at > hit.at)) level = 'settled';
+      out.push({ ...hit, since: hit.at, needsReplyReview: true, level, ...(named ? {} : { atAllSmallGroup: true }), ...extra });
     }
   }
   return out.sort((a, b) => (LEVEL_ORDER[a.level] - LEVEL_ORDER[b.level]) || a.since - b.since);
