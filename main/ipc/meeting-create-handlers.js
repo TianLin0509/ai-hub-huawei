@@ -23,6 +23,7 @@ function sanitizeMeetingSlot(slot = {}, fallbackIndex = null) {
   if (typeof slot.model === 'string' && slot.model.trim()) safe.model = slot.model.trim();
   if (kind === 'codeagent') safe.codeagentModelPick = typeof slot.codeagentModelPick === 'boolean'
     ? slot.codeagentModelPick : !!safe.model && slot.followDefault !== true;
+  if (kind === 'codeagent') Object.assign(safe, require('../../core/codeagent-model-choice').routeFields(slot));
 
   const effort = typeof slot.effort === 'string' ? slot.effort.trim().toLowerCase() : '';
   // DeepSeek on Claude Code 与 Claude 同一套 --effort / MCP 档位。

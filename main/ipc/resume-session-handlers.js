@@ -309,6 +309,7 @@ function createResumeSessionHandler(deps) {
       meetingId: meta.meetingId || null,
       completionNotificationEnabled: meta.completionNotificationEnabled === true,
       model: safeResumeModel || undefined,
+      ...require('../../core/codeagent-model-choice').routeFields(meta),
       // 普通恢复只沿用原生模型，只有本次明确更换模型的覆盖才需要操作菜单。
       ...(/^codeagent(?:-resume)?$/.test(meta.kind) ? { codeagentModelPick } : {}),
       ...(meta.effort ? { effort: meta.effort } : {}),

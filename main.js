@@ -2832,6 +2832,9 @@ try {
   toolDiscovery = handlers.createHubToolDiscovery({ dataDir: getHubDataDir(), onChanged: tool => sendToRenderer('tool-discovery:changed', { tool }) });
   handlers.registerToolDiscoveryIpc(ipcMain, toolDiscovery);
 } catch (error) { console.error('[tool-discovery] 自动发现未启动：', error.message); }
+// CodeAgent 一键安装 / 升级（2026-11-16）：没装或太旧时，界面上的「一键安装 / 一键升级」都走这里。
+try { require('./main/ipc/codeagent-install-handlers').registerCodeAgentInstallIpc(ipcMain, { dataDir: getHubDataDir(), toolDiscovery, send: sendToRenderer }); }
+catch (error) { console.error('[codeagent-install] 一键安装未启动：', error.message); }
 try {
   if (require('./core/company-assistant/gate').companyAssistantEnabled()) {
     const { CompanyAssistant } = require('./core/company-assistant/service');

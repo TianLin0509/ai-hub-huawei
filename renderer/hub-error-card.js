@@ -353,9 +353,21 @@ async function runKnownAction(act, button, { doc, ipcRenderer, closeOverlays }) 
       require('./codeagent-setup').createCodeAgentSetup({ document: doc, ipcRenderer }).showGuide();
       return done(label, 0);
     }
-    if (act === 'known:codeagent-upgrade') {
-      const r = await ipcRenderer.invoke('codeagent:open-upgrade').catch(error => ({ ok: false, message: error.message }));
-      return done(r && r.ok ? '已打开升级窗口，完成后重启 AI HUB' : '没能打开升级窗口：' + ((r && r.message) || '未知原因'), 6000);
+    // 一键安装 / 升级（2026-11-16，core/codeagent-install.js）：后台隐藏运行，进度写在按钮上；需要用户下载时直接打开官方下载页。
+    if (act === 'known:codeagent-upgrade' || act === 'known:codeagent-oneclick') {
+      const client = require('./codeagent-install-client').sharedClient(ipcRenderer);
+      const off = client.subscribe(state => { if (state?.message) say(state.message.length > 60 ? state.message.slice(0, 58) + '…' : state.message); });
+      say('正在启动…');
+      const r = await client.start().finally(off);
+      if (r && r.phase === 'need-download' && r.downloadPage) {
+        const opened = await client.openOfficial();
+        return done(opened && opened.ok ? '已打开官方下载页，点页面里的下载，下完自动安装' : '官方下载页没能打开：' + ((opened && opened.error) || '未知原因'), 8000);
+      }
+      if (r && r.phase === 'error' && r.downloadPage && r.code !== 'CA_INSTALL_UAC') {
+        const opened = await client.openOfficial();
+        return done((opened && opened.ok ? '没成功，已打开官方下载页手动下载：' : '没成功：') + (r.error || r.message || ''), 12000);
+      }
+      return done((r && r.message) || '已结束', r && r.phase === 'done' ? 6000 : 10000);
     }
     if (act === 'known:proxy-restart') {
       say('正在重新启动…');

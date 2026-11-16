@@ -20,11 +20,48 @@ const H = 3600000;
 const talk = (lines, lastAgoH = 2) => lines.map(([who, text], i) => ({ mine: who === '我', kind: text ? 'text' : 'other', text, at: NOW - lastAgoH * H - (lines.length - 1 - i) * 60000 }));
 const judge = (lines, h) => RJ.judgeDirect(talk(lines, h));
 
+test('WeLink 已核对的文本表情编码与 Unicode 点赞识别为收尾', () => {
+  for (const text of ['\u2060/CY', '\u2060/ZB', '\u2060/OK', '\u2060/GO\u2060/GO', '\u2060[强]', '👍']) {
+    assert.equal(RJ.isAck({ kind: 'text', text }), true, JSON.stringify(text));
+    assert.equal(judge([['他', text]]).closed, 'ack');
+  }
+  assert.equal(RJ.isAck({ kind: 'text', text: '明天请确认\u2060/OK' }), false);
+});
+
+test('群里紧接点名消息的本人纯表情回应停止提醒，闲聊及后来的新问题仍提醒', () => {
+  for (const emoji of ['👍', '[强]', '\u2060/OK']) {
+    const s = snap([['g', true, [['甲', '请确认材料', 300, { atMe: true }], ['我', emoji, 290]]]]);
+    const settings = { waitHours: 1, workdays: [0, 1, 2, 3, 4, 5, 6], replyReview: { items: { g: { lastKey: 'k1', verdict: 'reply' } } } };
+    assert.equal(D.awaiting(s, settings, { now: NOW })[0].level, 'settled', emoji);
+    assert.equal(R.dueNotices({ snapshot: s, settings, now: NOW }).some(n => n.kind === 'awaiting-reply'), false);
+    s.messages.g.push({ ...s.messages.g[0], key: 'k2', sourceId: 'msg:g:k2', at: NOW - 120 * 60000 });
+    const later = D.awaiting(s, settings, { now: NOW });
+    assert.equal(later.find(m => m.key === 'k2').level, 'strong', '后来的新问题恢复提醒');
+  }
+  for (const text of ['无关的进展', '稍后确认👍', '？', '👍？', '[强]？', '\u2060/OK?']) {
+    const s = snap([['g', true, [['甲', '请确认材料', 300, { atMe: true }], ['我', text, 290]]]]);
+    assert.equal(D.awaiting(s, {}, { now: NOW })[0].level, 'strong', text);
+  }
+  const unrelated = snap([['g', true, [['甲', '请确认材料', 300, { atMe: true }], ['乙', '我分享个消息', 299], ['我', '👍', 290]]]]);
+  assert.equal(D.awaiting(unrelated, {}, { now: NOW })[0].level, 'strong', '回应别人的消息不能结案');
+});
+
 test('规则：收尾话、只回答了我的问题、群发通知识别为已说完', () => {
   assert.equal(judge([['我', '材料发你了'], ['他', '好的 收到']]).closed, 'ack');
   assert.equal(judge([['我', '方案改好了'], ['他', '辛苦了[强]']]).closed, 'ack');
   assert.equal(judge([['我', '周会几点开？'], ['他', '下午三点']]).closed, 'answered');
   assert.equal(judge([['他', '【温馨提示】本周五 18:00 起办公区网络维护，活动时间另行通知，请提前报名团购']]).closed, 'notice');
+});
+
+test('群里附件、状态与未知方括号标签不能冒充本人表情回复', () => {
+  for (const text of ['[图片]', '[文件]', '[链接]', '[语音]', '[位置]', '[已处理]', '[已完成]', '[新标签]', '[图片]👍', '[微笑][文件]']) {
+    const s = snap([['g', true, [['甲', '请确认材料', 300, { atMe: true }], ['我', text, 290]]]]);
+    assert.equal(D.awaiting(s, {}, { now: NOW })[0].level, 'strong', text);
+  }
+  for (const text of ['[微笑]', '[强][鼓掌]', '\u2060[强]', '[微笑]👍']) {
+    const s = snap([['g', true, [['甲', '请确认材料', 300, { atMe: true }], ['我', text, 290]]]]);
+    assert.equal(D.awaiting(s, {}, { now: NOW })[0].level, 'settled', text);
+  }
 });
 
 test('规则：提问、请求、「请……」祈使句算该回；陈述算可能要回', () => {

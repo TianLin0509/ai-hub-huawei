@@ -21,7 +21,9 @@ const GREET_RE = /打招呼的消息|已添加了|通过了你的朋友验证/;
 
 /** 去掉标点、空白、[微笑] 这类表情码和 emoji，剩下的才是「说了什么」。 */
 function bareText(s) {
-  return String(s || '').replace(/\[[^\]\s]{1,8}\]/g, '').replace(/[\p{P}\p{S}\p{Extended_Pictographic}\s‍️]/gu, '').trim();
+  // WeLink 文本表情的真实编码带 U+2060 前缀，例如 /CY、/OK；普通斜杠正文保留。
+  return String(s || '').replace(/\u2060(?:\/[A-Za-z;:]{1,3}|\[[^\]\s]{1,12}\])/g, '')
+    .replace(/\[[^\]\s]{1,8}\]/g, '').replace(/[\p{P}\p{S}\p{Extended_Pictographic}\s‍️]/gu, '').trim();
 }
 function asks(m) {
   if (m.kind === 'sticker') return false;

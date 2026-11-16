@@ -3,6 +3,7 @@
 const AUTO_SUSPEND_IDLE_MS = 5 * 60 * 60 * 1000;
 const AUTO_SUSPEND_CHECK_MS = 5 * 60 * 1000;
 const AUTO_SUSPEND_REASON = 'idle-timeout';
+const CODEAGENT_IDLE_MS = 30 * 60 * 1000;
 const MEMORY_PRESSURE_REASON = 'memory-pressure';
 const MEMORY_CHECK_MS = 60 * 1000;
 // 内存感知休眠（2026-11-12 用户）：整机内存占用 ≥85% 时，不等 5 小时，按压力分档提前休眠「已答完、停下来」的会话。
@@ -119,6 +120,8 @@ function createSessionAutoSuspendScheduler(options = {}) {
   function sweepOptions() {
     return {
       idleMs,
+      codeagentIdleMs: CODEAGENT_IDLE_MS,
+      requireSettledCodeAgent: true,
       now: now(),
       excludePinned: true,
       excludeFocused: true,
@@ -173,6 +176,7 @@ function createSessionAutoSuspendScheduler(options = {}) {
     for (const item of picks) {
       const result = sessionManager.suspendSession(item.sessionId, {
         now: base.now, minIdleMs: tier.minIdleMs, excludePinned: true, excludeFocused: true, excludeMeeting: true,
+        requireSettledCodeAgent: true,
         excludeSessionIds: base.excludeSessionIds, reason: MEMORY_PRESSURE_REASON,
       });
       if (result && result.ok) requested.push({ sessionId: item.sessionId, title: item.title, purpose: item.purpose, idleMs: item.idleMs });
@@ -231,6 +235,7 @@ module.exports = {
   AUTO_SUSPEND_CHECK_MS,
   AUTO_SUSPEND_IDLE_MS,
   AUTO_SUSPEND_REASON,
+  CODEAGENT_IDLE_MS,
   MEMORY_PRESSURE_REASON,
   MEMORY_TIERS,
   memoryTier,

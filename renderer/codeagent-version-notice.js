@@ -47,7 +47,7 @@
       + `<div class="cav-ver">本机 CodeAgent <b>${esc(info.version)}</b> · 需要 <b>${esc(info.min)}</b> 或更新</div>`
       + '<p>卡片视图靠新版 CodeAgent 的会话记录和状态回报工作，老版本下卡片可能空白、状态不对。升级后重启 AI HUB 即可。</p>'
       + '<p>升级办法（任选其一）：</p><ol>'
-      + '<li>点「一键升级」：打开一个 PowerShell 窗口运行 <code>codeagent update</code>，按提示确认即可。</li>'
+      + '<li>点「一键升级」：Hub 在后台运行 <code>codeagent update</code>，不弹命令行窗口；Windows 弹出管理员确认时选「是」。</li>'
       + (info.downloadPage ? '<li>点「打开下载页」：到 CSOP 软件中心下载 <code>Cli3.0-Setup.exe</code> 重新安装。</li>' : '<li>到 CSOP 软件中心下载 <code>Cli3.0-Setup.exe</code> 重新安装。</li>')
       + (info.yellowZoneDownload ? '<li>点「下载最新版（黄区专用）」：从云盘直接下载最新安装包，只有黄区网络能打开。</li>' : '')
       + '</ol><div class="cav-msg" data-cav-msg></div></div>'
@@ -67,8 +67,15 @@
       } else if (action === 'yellow') {
         shell.openExternal(info.yellowZoneDownload);
       } else if (action === 'upgrade') {
-        const r = await ipcRenderer.invoke('codeagent:open-upgrade').catch(error => ({ ok: false, message: error.message }));
-        msg.textContent = r && r.ok ? '已打开升级窗口。升级完成后关掉那个窗口，再重启 AI HUB。' : `没能打开升级窗口：${(r && r.message) || '未知原因'}。可以改用「打开下载页」。`;
+        // 2026-11-16 改为后台隐藏升级（core/codeagent-install.js），进度和结果写在这里，不再开 PowerShell 窗口。
+        const client = require('./codeagent-install-client').sharedClient(ipcRenderer);
+        const button = event.target.closest('[data-cav]');
+        const off = client.subscribe(state => { if (state?.message) msg.textContent = state.message; });
+        button.disabled = true; msg.textContent = '正在启动升级…';
+        const r = await client.start();
+        off(); button.disabled = false;
+        msg.textContent = (r && r.message) || '升级结束';
+        if (r && r.phase === 'done') button.textContent = '完成';
       }
     });
     document.body.appendChild(dialog);

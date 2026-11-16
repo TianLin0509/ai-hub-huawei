@@ -658,7 +658,7 @@ function registerSessionIpc(ipcMain, deps) {
   ipcMain.handle('codeagent:session-models', (_event, payload = {}) => {
     const session = typeof payload.sessionId === 'string' ? sessionManager.getSession(payload.sessionId) : null;
     if (!session) return { options: [], error: 'session-not-found' };
-    const automatic = isAutomaticCodeAgent(session);
+    const automatic = isAutomaticCodeAgent(session) && !session.modelConfirmationRequired;
     const list = session.codeagentPoolAccount
       ? codeagentModelList({ account: 'pool', poolAccount: session.codeagentPoolAccount })
       : codeagentModelList({ account: 'personal' });
@@ -752,7 +752,8 @@ function registerSessionIpc(ipcMain, deps) {
     const personalDir = require('../../core/codeagent-config').resolveCodeAgentConfig(process.env).configDir;
     const personal = pool.readCredentials(personalDir);
     const personalModels = pool.accountModels(personalDir, undefined, pool.personalModelsFile(getHubDataDir()));
-    const accounts = codeagentPoolAccounts().map(({ dir, ...rest }) => rest);
+    const accounts = codeagentPoolAccounts().map(({ dir, ...rest }) => ({ ...rest,
+      modelOptions: require('../../core/codeagent-models').modelOptions(getHubDataDir(), { configDir: dir, accountKey: rest.id }) }));
     // 本机各账号进行中的 CodeAgent 会话数（休眠的不算）：个人账号 = 没有号池标记的 CodeAgent 会话
     const personalActive = sessionManager.getAllSessions().filter(s => /^codeagent(?:-resume)?$/.test(String(s.kind || ''))
       && !s.codeagentPoolAccount && s.status !== 'dormant' && s.status !== 'closed').length;
@@ -786,6 +787,7 @@ function registerSessionIpc(ipcMain, deps) {
     return { ok: true, accounts: accounts.map(a => ({ ...a, ...quotaOf(a.id) })), checkedAt: new Date().toISOString(),
       usable: accounts.filter(a => a.state === 'ready' && !a.sameAsPersonal && !a.duplicateOf).length, quotaRules: rules,
       personal: { accountLabel: pool.maskAccountId(personal.accountId), method: personal.method || null, present: !!personal.present,
+        modelOptions: require('../../core/codeagent-models').modelOptions(getHubDataDir(), { configDir: personalDir }),
         // 登录状态（2026-10-19）：ready / expired / login-required / unreadable；启动中心据此提示「个人账号要重新登录」
         state: pool.accountState(personal), expiresAt: personal.expiresAt || null, ...(personal.detail ? { credentialsNote: personal.detail } : {}),
         activeSessions: personalActive, models: personalModels.models, modelsProbedAt: personalModels.probedAt || null, modelsSource: personalModels.probedSource || null, modelsParserVersion: personalModels.probedParserVersion, ...quotaOf('personal'),
@@ -1190,15 +1192,16 @@ function registerSessionIpc(ipcMain, deps) {
   // 「能发就发」的兜底，第一条消息可能被挡住（2026-10-28 对照补上）。
   const AUTOMATIC_CODEAGENT_PURPOSES = require('../../core/auto-dispatch-rules').AUTO_PURPOSES;
   const isAutomaticCodeAgent = session => !!session && AUTOMATIC_CODEAGENT_PURPOSES.includes(session.purpose);
-  async function runCodeAgentPick(sessionId, modelId, reason) {
+  async function runCodeAgentPick(sessionId, modelId, reason, selection = {}) {
     const session = sessionManager.getSession(sessionId);
     if (!session) return { ok: false, message: '会话已经关闭' };
+    const selectedProvider = Object.hasOwn(selection, 'provider') ? selection.provider : session.codeagentModelProvider || '';
     const { getHubDataDir } = require('../../core/data-dir');
     const dataDir = getHubDataDir();
     const guard = require('../../core/codeagent-default-model-guard');
     // 当场在同一个会话里用 /model 切到清单里的模型再把这一轮重发一次。
     if (isAutomaticCodeAgent(session)
-      && !(reason === 'switch' && session.codeagentModelPick === true)
+      && !(reason === 'switch' && (session.codeagentModelPick === true || selection.recovery === true))
       && reason !== 'launch' && reason !== 'relaunch' && reason !== 'model-config-fix') {
       codeagentModels.appendModelLog(dataDir, { event: 'pick', session: String(sessionId).slice(0, 8), reason, model: modelId, ok: false, error: 'automatic-session' });
       return { ok: false, inputReady: true, message: '自动会话用账号自己的默认模型，不切换模型' };
@@ -1217,6 +1220,7 @@ function registerSessionIpc(ipcMain, deps) {
       guard.noteHubWrite(configDir, want, `codeagent-menu-enter:${reason}`, { logged: true, session: String(sessionId).slice(0, 8) });
       try {
         return await codeagentPicker.pickModel({ manager: sessionManager, sid: sessionId, kind: session.kind, modelId: want,
+          provider: Object.hasOwn(selection, 'provider') ? selection.provider : session.codeagentModelProvider || '', providerLabel: Object.hasOwn(selection, 'providerLabel') ? selection.providerLabel : session.codeagentModelProviderLabel || '', menuLabel: Object.hasOwn(selection, 'menuLabel') ? selection.menuLabel : session.codeagentModelMenuLabel || '',
           configDir, dataDir,
           // 启动和原地重拉：等 CLI 画出普通输入框再敲 /model（太早敲回车会丢，见 pickModel 的 readyFirstMs）
           readyFirstMs: reason === 'launch' || reason === 'relaunch' ? 45000 : 0,
@@ -1248,7 +1252,7 @@ function registerSessionIpc(ipcMain, deps) {
     // 启动和原地重拉时选具体模型也一样（2026-11-08 公司实测：菜单把 deepseek-v4.1-flash-1017 显示成截断名、没选上，
     // 「问问 Agent」新建的会话首句被退回、会话页空着）：输入框能用就先用 CLI 当前模型把首句发出去，提示一句没切到哪个模型。
     const startupPick = reason === 'launch' || reason === 'relaunch';
-    let fallback = !result.ok && (automatic || pickFirst || startupPick) && (result.inputReady || result.inputUsable);
+    let fallback = !selectedProvider && !result.ok && (automatic || pickFirst || startupPick) && (result.inputReady || result.inputUsable);
     if (fallback && session.fixedModel) {
       const pin = require('../../core/session-model-pin');
       const known = guard.permittedModels(session, configDir, { dataDir });
@@ -1485,7 +1489,8 @@ function registerSessionIpc(ipcMain, deps) {
       }
       if (!require('../../core/codeagent-models').isSafeModelId(model)) return { ok: false, error: 'invalid-model', message: '请选择有效模型' };
       try {
-        const fresh = await resumeSession({ ...saved, hubId: sessionId, launchOverrides: { model } });
+        const route = require('../../core/codeagent-model-choice').routeFields(payload);
+        const fresh = await resumeSession({ ...saved, hubId: sessionId, launchOverrides: { model, ...route } });
         if (!fresh || fresh.ok === false) return { ok: false, message: fresh?.message || '会话恢复失败' };
         const selected = fresh.fixedModel || model;
         return { ok: true, model: { id: selected, displayName: require('../../core/codeagent-models').modelLabel(selected) }, mode: 'resumed', confirmed: false };
@@ -1496,14 +1501,23 @@ function registerSessionIpc(ipcMain, deps) {
     const requested = typeof payload.modelId === 'string' ? payload.modelId.trim() : '';
     const modelId = models.normalizeModel(requested);
     if (!requested || modelId.toLowerCase() !== requested.toLowerCase()) return { ok: false, error: 'invalid-model', message: `模型名不能用：${requested}` };
-    if (session.status === 'running' && !(options.pendingConfirmation && pendingModelSelections.has(sessionId)
+    const recovery = payload.recovery === true && sessionManager.isAgentTurnActive?.(sessionId) === false;
+    if (payload.recovery === true && !recovery) return { ok: false, error: 'busy', message: '当前回答仍在运行，请结束后再切换' };
+    if (session.status === 'running' && !recovery && !(session.modelConfirmationRequired && sessionManager.isAgentTurnActive?.(sessionId) === false) && !(options.pendingConfirmation && pendingModelSelections.has(sessionId)
         && !sessionManager.isAgentTurnActive?.(sessionId))) return { ok: false, error: 'busy', message: '当前回答仍在运行，请结束后再切换' };
     if (codeagentPicker.isPicking(sessionId)) return { ok: false, error: 'busy', message: '正在切换模型，请稍候' };
     // 用 --settings 文件启动的会话（2026-10-30 5.3.12）：先把它自己的设置文件改成新模型，再照常在菜单里选。
     // 会话每次请求都重读配置；--settings 优先级最高，不改它的话菜单选的可能被它压回去。只在能换成 CodeAgent 自己的写法时改。
     // 会话因「原模型不可用」暂停时，这次切换就是用户给原模型选的替代：切成后记下，之后由默认模型推出的新会话直接用它。
     const pausedFrom = session.modelConfirmationRequired && session.fixedModel ? session.fixedModel : '';
-    const launchChange = updateCodeAgentModelSettings(sessionId, session, modelId);
+    const provider = typeof payload.provider === 'string' ? payload.provider.trim() : '';
+    const providerLabel = typeof payload.providerLabel === 'string' ? payload.providerLabel.trim() : '';
+    const menuLabel = typeof payload.menuLabel === 'string' ? payload.menuLabel.trim() : '';
+    if (provider && (provider.length > 150 || /[\x00-\x1f\x7f]/.test(provider))) return { ok: false, error: 'invalid-provider', message: '请选择有效模型分组' };
+    const selection = { provider, providerLabel, menuLabel, recovery };
+    // A model-only settings file cannot select a provider. Grouped choices must
+    // be confirmed in the native menu, without a settings-only success fallback.
+    const launchChange = provider ? null : updateCodeAgentModelSettings(sessionId, session, modelId);
     const settingsOnly = failure => {
       const message = failure?.message || 'CodeAgent 没能切换模型';
       models.appendModelLog(require('../../core/data-dir').getHubDataDir(), { event: 'switch-settings-only',
@@ -1516,7 +1530,7 @@ function registerSessionIpc(ipcMain, deps) {
     let result;
     try {
       result = await codeagentPicker.schedulePick(sessionId, async () => {
-        const picked = await runCodeAgentPick(sessionId, modelId, 'switch');
+        const picked = await runCodeAgentPick(sessionId, modelId, 'switch', selection);
         return launchChange && !picked?.ok ? settingsOnly(picked) : picked;
       });
     } catch (error) {
@@ -1527,6 +1541,9 @@ function registerSessionIpc(ipcMain, deps) {
     if (!result || !result.ok) {
       return { ok: false, error: 'pick-failed', message: (result && result.message) || 'CodeAgent 没能切换模型' };
     }
+    // After the native menu confirmed the provider, update only this session's
+    // model overlay so its former model cannot override the next request.
+    if (provider) updateCodeAgentModelSettings(sessionId, session, modelId);
     // 记住这个号上次手动切到的模型，下次新建会话默认用它（core/codeagent-launch-model.js）。
     try { if (result.mode !== 'settings-only') require('../../core/codeagent-launch-model').rememberModel(require('../../core/data-dir').getHubDataDir(), (session.info && session.info.codeagentPoolAccount) || session.codeagentPoolAccount || 'personal', modelId); }
     catch (error) { console.warn('[codeagent] 记住上次选的模型失败：' + error.message); }
@@ -1535,11 +1552,12 @@ function registerSessionIpc(ipcMain, deps) {
       try { require('../../core/codeagent-model-replacements').recordReplacement(require('../../core/data-dir').getHubDataDir(), pausedFrom, modelId); }
       catch (error) { console.warn('[codeagent] 记住替代模型失败：' + error.message); }
     }
+    sessionManager.updateSessionMeta(sessionId, { codeagentModelProvider: provider, codeagentModelProviderLabel: providerLabel, codeagentModelMenuLabel: menuLabel });
     const selectedSession = sessionManager.getSession(sessionId);
     if (!selectedSession) return { ok: false, error: 'session-closed', message: '会话已关闭，本次选择未保存' };
     require('../../core/session-store').saveSessionFile(sessionId, selectedSession);
     // 回执：菜单关掉了；看到「Set model to …」时 confirmed=true。下一条回答再核对实际模型。
-    return { ok: true, model: { id: modelId, displayName: models.modelLabel(modelId) }, mode: result.mode, confirmed: !!result.confirmed,
+    return { ok: true, model: { id: modelId, displayName: provider ? `${models.modelLabel(modelId)} · ${providerLabel || provider}` : models.modelLabel(modelId), ...(provider ? { provider, providerLabel } : {}) }, mode: result.mode, confirmed: !!result.confirmed,
       ...(result.mode === 'settings-only' ? { message: result.message } : {}) };
   }
   ipcMain.handle('codeagent:switch-model', (_event, payload) => switchCodeAgentModel(payload));
@@ -1632,7 +1650,7 @@ function registerSessionIpc(ipcMain, deps) {
     try { return { installed: require('../../core/codeagent-config').isCodeAgentInstalled() }; }
     catch (error) { return { installed: false, error: error.message }; }
   });
-  // CodeAgent 版本过旧提醒（core/codeagent-version-check.js）：查版本、点「一键升级」开一个可见的 PowerShell 窗口跑 codeagent update。
+  // CodeAgent 版本过旧提醒（core/codeagent-version-check.js）：查版本。
   ipcMain.handle('codeagent:version-check', () => {
     const config = require('../../core/codeagent-config');
     let command = null;
@@ -1643,18 +1661,7 @@ function registerSessionIpc(ipcMain, deps) {
       probe: () => require('../../core/codeagent-version-probe').codeagentVersion(command),
     })).finally(() => { if (installed) void require('../../core/codeagent-capabilities').prepare(command); });
   });
-  ipcMain.handle('codeagent:open-upgrade', () => {
-    if (process.platform !== 'win32') return { ok: false, message: '只支持 Windows' };
-    const config = require('../../core/codeagent-config');
-    let command;
-    try { ({ command } = config.resolveCodeAgentConfig()); } catch (error) { return { ok: false, message: error.message }; }
-    const script = `${config.commandHead(command)} update; Write-Host ''; Write-Host '升级结束后请关闭本窗口，并重启 AI HUB。'`;
-    const { spawn } = require('child_process');
-    // detached 会给 PowerShell 新开一个可见控制台；用户在里面确认升级、看结果。
-    const child = spawn('powershell.exe', ['-NoProfile', '-NoExit', '-Command', script], { detached: true, stdio: 'ignore' });
-    child.unref();
-    return { ok: true };
-  });
+  // 「一键升级」2026-11-16 起改由 main/ipc/codeagent-install-handlers.js 后台隐藏运行（codeagent-install:start），不再开可见 PowerShell 窗口。
 
   ipcMain.handle('debug:get-session-buffer', (_e, sessionId) => {
     return sessionManager.getSessionBuffer(sessionId);

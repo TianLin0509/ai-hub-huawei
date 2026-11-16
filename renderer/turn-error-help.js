@@ -73,7 +73,11 @@ function enhanceCard(card) {
 function runAction(action, { card, document: doc, window: win, ipcRenderer }) {
   const panel = card.closest('.terminal-panel') || doc;
   if (action === 'retry') { card.querySelector('[data-action="regen"]')?.click(); return true; }
-  if (action === 'model') { panel.querySelector('.composer-model')?.click(); return true; }
+  if (action === 'model') {
+    const anchor = panel.querySelector('.composer-model');
+    if (anchor) { anchor.dataset.modelRecovery = 'true'; anchor.click(); }
+    return true;
+  }
   if (action === 'accounts') { doc.getElementById('btn-rail-accounts')?.click(); return true; }
   if (action === 'feedback') {
     const help = card.querySelector('.turn-error-help');

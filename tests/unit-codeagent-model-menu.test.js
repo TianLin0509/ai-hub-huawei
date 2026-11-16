@@ -1023,7 +1023,8 @@ test('new-session model option tooltips retain the unconfirmed description and u
   const start = source.indexOf('    const wanted = nativeCodeagentOption + listed.map');
   const end = source.indexOf('\n    }', start) + 6;
   const select = { dataset: {}, innerHTML: '' }, listed = [{ id: IDS[2], label: IDS[2], description: '账号模型探测清单中有' }];
-  const context = vm.createContext({ modelSelect: select, listed, selectedKind: 'codeagent', nativeCodeagentOption: '', usageAttrs: () => '', escapeHtml: String });
+  const context = vm.createContext({ modelSelect: select, listed, selectedKind: 'codeagent', nativeCodeagentOption: '', usageAttrs: () => '', escapeHtml: String,
+    choiceValue: require('../core/codeagent-model-choice').choiceValue });
   vm.runInContext(`{${source.slice(start, end)}\n}`, context);
   assert.match(select.innerHTML, /title="账号模型探测清单中有"/);
   const before = select.dataset.builtFor; listed[0].description = 'CodeAgent 模型菜单里有';

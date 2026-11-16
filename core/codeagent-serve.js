@@ -170,8 +170,10 @@ function parseProviders(data) {
     const map = provider && provider.models && typeof provider.models === 'object' ? provider.models : {};
     for (const [key, info] of Object.entries(map)) {
       const id = text(info && info.id) || text(key);
-      if (!id || id === 'default' || models.some(m => m.id.toLowerCase() === id.toLowerCase())) continue;
-      models.push({ id, label: text(info && info.display_name) || id, provider: text(provider.id),
+      const providerId = text(provider.id), group = text(info && (info.group || info.groupId)) || text(provider.group || provider.groupId);
+      const providerKey = group ? `${providerId}/${group}` : providerId;
+      if (!id || id === 'default' || models.some(m => m.id.toLowerCase() === id.toLowerCase() && m.provider === providerKey)) continue;
+      models.push({ id, label: text(info && info.display_name) || id, provider: providerKey, providerLabel: [text(provider.display_name || provider.name) || providerId, group].filter(Boolean).join(' / '),
         contextWindow: num(info && info.max_context_tokens), coefficient: text(info && info.originCoefficient),
         idleCoefficient: text(info && info.idleCoefficient), isIdle: info && typeof info.isIdle === 'boolean' ? info.isIdle : null,
         load: text(info && info.load) });
@@ -201,7 +203,7 @@ async function readAccount(options) {
       const quota = await get(`/api/v2/model/${encodeURIComponent(model.id)}/quota`, { retries: 1 });
       if (quota.ok) quotas[model.id] = parseQuota(quota.data);
     }
-    return { ok: true, source: 'serve', models: parsed.models.map(m => m.id), details: parsed.models, credit: parsed.credit,
+    return { ok: true, source: 'serve', models: [...new Set(parsed.models.map(m => m.id))], details: parsed.models, credit: parsed.credit,
       discount: parsed.discount, quotas, at: new Date().toISOString() };
   });
 }

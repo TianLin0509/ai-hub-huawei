@@ -40,6 +40,9 @@ const QUERY_DIAGNOSTIC_SEEN = new Set();
 const TOOLS_VERSION = 6;
 // 会话工具的接通判定（v3.1.1）：助理会话起来这么久还没收到工具进程的接通信号，就算「未接上」。
 const TOOLS_HELLO_GRACE_MS = 90000;
+const PREWARM_TTL_MS = 5 * 60000;
+const PREWARM_START_GRACE_MS = 90000;
+const PREWARM_BUSY_MAX_MS = 10 * 60000;
 const DEFAULT_SETTINGS = Object.freeze({
   enabled: true, briefTime: '08:20', summaryTime: '18:00', waitHours: 4, digestHours: 0, prepMinutes: 15, maxPerHour: 3, refreshMinutes: 10,
   watchGroups: [], keywords: [], myName: '', workdays: [1, 2, 3, 4, 5], cliPath: '', email: '', emailFrom: '', chips: [], phone: DEFAULT_PHONE,
@@ -173,6 +176,7 @@ class CompanyAssistant {
     this.pool = new Map();
     this.warm = {};
     this.warming = {};
+    this.warmSweepTimer = null;
     this.lastSessions = {};
     this.refreshing = null;
     this.loginFlow = null;
@@ -542,6 +546,7 @@ class CompanyAssistant {
   }
   close() { this.closed = true; this.archive.stop(); this.digest.close(); this.petReminders.close(); this.stopPptCollector(); this.stopTimers(); this.meetings.close(); this.loginStop?.abort(); this.auth.close(); this.phone.close(); this.ppt.close?.();
     this.rooms.close();
+    clearInterval(this.warmSweepTimer); this.warmSweepTimer = null;
     for (const id of Object.values(this.warm)) this.retire(id);
     this.warm = {};
     this.tools?.close();
@@ -687,7 +692,7 @@ class CompanyAssistant {
     const day = D.dayKey(this.now()), last = this.snapshot(day);
     if (!force && last && this.now() - (last.at || 0) < FRESH_MS) return Promise.resolve(last);
     this.refreshStartedAt = this.now(); this.refreshTrigger = trigger;
-    this.refreshing = this.withCollection(() => this.collect({ priority, trigger })).finally(() => { this.refreshing = null; this.refreshStartedAt = null; this.refreshTrigger = null; this.changed(); });
+    this.refreshing = this.withCollection(() => this.collect({ priority, trigger, force })).finally(() => { this.refreshing = null; this.refreshStartedAt = null; this.refreshTrigger = null; this.changed(); });
     return this.refreshing;
   }
   // 用户点「重新检查并取数」（2026-11-06，用户：「排在后台后面等 6 分钟，太蠢了」）：
@@ -740,17 +745,39 @@ class CompanyAssistant {
   previousFor(snap) {
     return snap.login?.uid && this.snapshotDays().map(day => this.snapshot(day)).find(old => old?.login?.uid === snap.login.uid);
   }
-  async queryWithCache(snap, key, query) {
+  async queryWithCache(snap, key, query, { force = false } = {}) {
     const coverageKey = { meetings: 'meetingCoverage', calendar: 'calendarCoverage', mails: 'mailCoverage' }[key];
+    // 只有邮件真的耗尽 CLI 和 Hub 重试才降低轮询频率，按账号隔离，成功后恢复默认。
+    this.mailBackoffs ||= new Map();
+    const identity = String(snap.login?.uid || '');
+    const backoff = key === 'mails' && identity ? this.mailBackoffs.get(identity) : null;
+    const deferredMail = result => {
+      const previous = this.previousFor(snap);
+      const rows = new Map((previous?.mails || []).map(row => [row.sourceId || row.id, row]));
+      for (const row of result?.mails || []) rows.set(row.sourceId || row.id, row);
+      const attempts = (backoff?.attempts || 0) + 1;
+      const baseMinutes = Math.max(5, this.settings().refreshMinutes * 2);
+      const retryAt = backoff?.retryAt > this.now() ? backoff.retryAt : this.now() + Math.min(120, baseMinutes * 2 ** Math.min(attempts - 1, 3)) * 60000;
+      if (identity && !(backoff?.retryAt > this.now())) this.mailBackoffs.set(identity, { attempts, retryAt });
+      const minutes = Math.max(1, Math.ceil((retryAt - this.now()) / 60000));
+      return { mails: [...rows.values()], coverage: { ...result?.coverage, status: 'deferred', reason: 'rate-limited',
+        reasonLabel: `请求太频繁，${minutes} 分钟后自动再查；已保留已取结果`, retryAt, capturedAt: previous?.at || null } };
+    };
+    if (!force && backoff?.retryAt > this.now()) return deferredMail();
     try {
       const result = await query();
-      if (result.coverage.reason !== 'rate-limited') return result;
+      if (result.coverage.reason !== 'rate-limited') {
+        if (key === 'mails' && identity && result.coverage.status !== 'failed') this.mailBackoffs.delete(identity);
+        return result;
+      }
+      if (key === 'mails') return deferredMail(result);
       const previous = this.previousFor(snap);
       const rows = new Map((previous?.[key] || []).map(row => [row.sourceId || row.id, row]));
       for (const row of result[key] || []) rows.set(row.sourceId || row.id, row);
       return { ...result, [key]: [...rows.values()], coverage: { ...result.coverage, capturedAt: previous?.at || null } };
     } catch (error) {
       if (error.code !== WELINK_RATE_LIMITED) throw error;
+      if (key === 'mails') return deferredMail();
       const previous = this.previousFor(snap);
       return { [key]: previous?.[key] || [], coverage: { ...previous?.[coverageKey], status: 'deferred', reason: 'rate-limited', reasonLabel: 'WeLink 限流，已保留上次结果', capturedAt: previous?.at || null } };
     }
@@ -812,9 +839,9 @@ class CompanyAssistant {
     this.assertCollectionIdentity(snap);
     return snap;
   }
-  collect({ priority = 'background', trigger = priority === 'user' ? 'manual' : 'timer' } = {}) {
+  collect({ priority = 'background', trigger = priority === 'user' ? 'manual' : 'timer', force = priority === 'user' } = {}) {
     const round = this.newMessageRound(trigger);
-    return withWelinkPriority(priority, () => this.collectUnlocked({ trigger, round }))
+    return withWelinkPriority(priority, () => this.collectUnlocked({ trigger, round, force: force && priority === 'user' }))
       .catch(error => { round.failed ||= 1; throw error; }).finally(() => { this.finishMessageRound(round); this.visibleSnapshot = null; this.changed(); });
   }
   showCollection(snap, pending) {
@@ -828,7 +855,7 @@ class CompanyAssistant {
     this.visibleSnapshot = JSON.parse(JSON.stringify(visible));
     this.changed();
   }
-  async collectUnlocked({ trigger = 'timer', round } = {}) {
+  async collectUnlocked({ trigger = 'timer', round, force = false } = {}) {
     const s = this.settings(), now = this.now(), day = D.dayKey(now), errors = [];
     const snap = { at: now, day, login: null, calendarNeedsSetup: false, meetings: [], calendar: [], conversations: [], messages: {}, mails: [], errors };
     const diagnose = (command, raw, metadata) => this.diagnoseQuery(command, raw, metadata);
@@ -869,7 +896,7 @@ class CompanyAssistant {
       }
       snap.calendarNeedsSetup = errors.some(e => e.calendar);
       pending.delete('calendar'); this.showCollection(snap, pending);
-      const mailResult = await this.queryWithCache(snap, 'mails', () => Q.collectMails(runJson, { diagnose }));
+      const mailResult = await this.queryWithCache(snap, 'mails', () => Q.collectMails(runJson, { diagnose }), { force });
       snap.mails = mailResult.mails; snap.mailCoverage = mailResult.coverage;
       if (!['complete', 'deferred'].includes(mailResult.coverage.status) && mailResult.coverage.reason !== 'query-failed') errors.push({ label: '未读邮件', text: mailResult.coverage.reasonLabel });
       pending.delete('mails'); this.showCollection(snap, pending);
@@ -1550,13 +1577,68 @@ class CompanyAssistant {
   }
   async takeSession(toolset) {
     if (this.warming[toolset]) await this.warming[toolset];
+    this.retireExpiredWarm();
     const warm = this.warm[toolset];
     if (warm) {
+      // 初始化或其他工作仍在运行的预热会话留给清扫器，不能为取下一问把它关掉。
+      if (this.sessionBusy(warm)) return this.openPooled(toolset);
       delete this.warm[toolset];
-      if (this.deps.getSession(warm) && !this.sessionBusy(warm) && this.toolsetFor(warm) === toolset && !this.staleModel(warm)) return warm;
+      if (!this.warmUnavailable(warm) && this.toolsetFor(warm) === toolset && !this.staleModel(warm)) return warm;
       this.retire(warm);
     }
     return this.openPooled(toolset);
+  }
+  warmUnavailable(id) {
+    if (this.sessionGone(id)) return true;
+    // 新建时 CLI 尚未接管终端，短暂留在 PowerShell 属于正常启动过程。
+    const meta = this.pool.get(id);
+    if (meta && this.now() - meta.createdAt < PREWARM_START_GRACE_MS) return false;
+    // PTY 的 PowerShell 还活着并不代表 CodeAgent 还在；复用已有宿主提示符判定，不把历史提示符当退出。
+    try {
+      const screen = this.deps.readTerminalScreen?.(id);
+      return require('../host-shell-detector').detectHostShellTakeover(screen?.text || '');
+    } catch { return false; } // 终端快照暂不可读不等于进程已退出，TTL 仍独立执行。
+  }
+  keepWarm(toolset, id) {
+    this.warm[toolset] = id;
+    const meta = this.pool.get(id);
+    if (meta) {
+      meta.warmIdleSince = this.now();
+      meta.warmBusySince = this.sessionBusy(id) ? this.now() : null;
+    }
+    // 与取数/提问计时独立：助理暂停或未绑定原生 ID，也不能把没用到的预热进程永久留着。
+    if (!this.deps.noTimer && !this.warmSweepTimer) {
+      this.warmSweepTimer = setInterval(() => this.retireExpiredWarm(), 60000);
+      this.warmSweepTimer.unref?.();
+    }
+  }
+  retireExpiredWarm() {
+    const now = this.now();
+    const owned = new Set(Object.values(this.lanes).map(lane => lane.job?.sessionId).filter(Boolean));
+    for (const [toolset, id] of Object.entries(this.warm)) {
+      const meta = this.pool.get(id);
+      if (owned.has(id)) continue;
+      if (this.sessionBusy(id)) {
+        if (meta) {
+          meta.warmIdleSince = null;
+          meta.warmBusySince ??= now;
+          if (now - meta.warmBusySince >= PREWARM_BUSY_MAX_MS) {
+            delete this.warm[toolset];
+            this.retire(id); // 未交给提问的预热不能因 running 卡住而常驻。
+          }
+        }
+        continue;
+      }
+      if (meta) meta.warmBusySince = null;
+      const unavailable = this.warmUnavailable(id);
+      if (!unavailable && meta) {
+        if (meta.warmIdleSince == null) meta.warmIdleSince = now;
+        if (now - meta.warmIdleSince < PREWARM_TTL_MS) continue;
+      }
+      delete this.warm[toolset];
+      this.retire(id); // 只关闭自己登记的预热会话，不要求 ccSessionId/transcriptPath。
+    }
+    if (!Object.keys(this.warm).length) { clearInterval(this.warmSweepTimer); this.warmSweepTimer = null; }
   }
   // 预开的会话固定在一个用户已换掉的模型上（或已因模型不可用暂停）：不再用它，免得这一问又弹「原模型不可用」（2026-11-12 同事反馈）。
   staleModel(id) {
@@ -1571,7 +1653,7 @@ class CompanyAssistant {
   prewarm(toolset = 'desk') {
     if (this.closed || this.deps.noPrewarm || this.warm[toolset] || this.warming[toolset]) return null;
     const pending = this.openPooled(toolset)
-      .then(id => { if (this.closed) this.retire(id); else this.warm[toolset] = id; })
+      .then(id => { if (this.closed) this.retire(id); else this.keepWarm(toolset, id); })
       .catch(error => console.warn('[company-assistant] prewarm', error.message))
       .finally(() => { if (this.warming[toolset] === pending) delete this.warming[toolset]; });
     this.warming[toolset] = pending;
@@ -1735,7 +1817,7 @@ class CompanyAssistant {
       if (this.closed) throw new Error('Hub 正在关闭，请重新打开后重试');
       // 开会话期间用户点了「停止这一问」：不再发问；开好的会话留作下一问的预开会话。
       if (job.stopped) {
-        if (!job.teamOwner && !this.warm[toolset]) this.warm[toolset] = id; else if (!job.teamOwner) this.retire(id);
+        if (!job.teamOwner && !this.warm[toolset]) this.keepWarm(toolset, id); else if (!job.teamOwner) this.retire(id);
         setTimeout(() => { void this.pump(laneName); }, 0); // 本轮 pump 结束后接着派下一问
         return;
       }
@@ -1751,7 +1833,7 @@ class CompanyAssistant {
       job.baseline = this.lastFinal(id)?.id || null;
       job.sessionId = id;
       job.toolset = toolset;
-      job.sentAt = this.now();
+      job.sentAt = null; // CLI 尚在启动/提交，90 秒送达检查此时不能回收会话。
       if (!job.teamOwner) {
         if (toolset === 'ppt') this.ppt.beginTask?.(job.id, job.chatId);
         this.query.beginTask(job.id, id);
@@ -1759,13 +1841,18 @@ class CompanyAssistant {
       }
       this.metering.begin(job);
       const receipt = await this.sendWhenReady(job, id, prompt);
-      if (job.stopped) {
+      if (job.stopped || lane.job !== job) {
         // 发问途中被停止：问题可能已经进了会话，让它停下；这一问已按停止结束，接着派下一问。
         if (receipt && !receipt.notSent) Promise.resolve().then(() => this.deps.interruptSession?.(id)).catch(() => {});
         setTimeout(() => { void this.pump(laneName); }, 0);
         return;
       }
+      // 仅明确未发出的退出才可安全重建；结果未知的提交不能重发，团队拥有的会话也不能替换。
+      if (!job.teamOwner && receipt?.notSent && ['cli-exited', 'no-session'].includes(receipt.code || receipt.error || receipt.sendStatus)) {
+        this.resendOrFail(job, lane, laneName); return;
+      }
       if (!receipt || receipt.notSent || (receipt.ok === false && !receipt.unconfirmed && receipt.sendStatus !== 'stuck')) throw new Error(receipt?.message || receipt?.error || '问题没有发进助理会话');
+      job.deliveryUnconfirmed = !!receipt.unconfirmed || receipt.sendStatus === 'stuck';
       // 问题已送进 CodeAgent：界面从「CodeAgent 准备中」切到「正在查」，两段各自计时（2026-11-06 用户要进度可见）。
       job.sentAt = this.now(); // 回答时限从真正发进去算，等 CLI 就绪的时间不占
       if (job.type === 'chat') this.patchChat(job.chatId, { answeringAt: this.now() });
@@ -1856,7 +1943,7 @@ class CompanyAssistant {
   }
   // 发出后 90 秒，会话既没在忙、也没绑定到任何记录：这一问没进 CodeAgent，或进了也读不到回答，再等也等不到（绿区实录：空等 12 分钟）。
   undelivered(job) {
-    if (job.teamOwner || job.toolset === 'ppt' || this.now() - job.sentAt < UNDELIVERED_MS) return false;
+    if (job.teamOwner || job.toolset === 'ppt' || job.deliveryUnconfirmed || this.now() - job.sentAt < UNDELIVERED_MS) return false;
     const meta = this.deps.getSession(job.sessionId) || this.deps.getSessionMetadata?.(job.sessionId);
     return !!meta && !meta.transcriptPath && !meta.ccSessionId;
   }
@@ -1871,7 +1958,7 @@ class CompanyAssistant {
     this.retire(old);
     if (job.type === 'chat') this.patchChat(job.chatId, { answeringAt: null });
     this.changed();
-    void this.pump(laneName);
+    queueMicrotask(() => { void this.pump(laneName); }); // 本次 pump 的 finally 释放占用后再接手。
   }
   failJob(job, message, { stopped = false } = {}) {
     if (stopped) job.stopped = true;
@@ -2015,4 +2102,4 @@ class CompanyAssistant {
   }
 }
 
-module.exports = { CompanyAssistant, changedConversationIds, conversationOrderChanges, PURPOSE, TOOLS_VERSION, TOOLS_HELLO_GRACE_MS, DEFAULT_SETTINGS, BUILTIN_CHIPS, INSTRUCTIONS, DESK_RULES, PHONE_RULES, PPT_RULES, MESSAGE_REFRESH_MAX_MS, MESSAGE_ROTATION_LIMIT, MESSAGE_FULL_CHECK_MS };
+module.exports = { CompanyAssistant, changedConversationIds, conversationOrderChanges, PURPOSE, TOOLS_VERSION, TOOLS_HELLO_GRACE_MS, PREWARM_TTL_MS, DEFAULT_SETTINGS, BUILTIN_CHIPS, INSTRUCTIONS, DESK_RULES, PHONE_RULES, PPT_RULES, MESSAGE_REFRESH_MAX_MS, MESSAGE_ROTATION_LIMIT, MESSAGE_FULL_CHECK_MS };

@@ -8,7 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const D = require('../core/company-assistant/data');
 const B = require('../core/company-assistant/brief');
-const { CompanyAssistant, DESK_RULES, PHONE_RULES, PPT_RULES } = require('../core/company-assistant/service');
+const { CompanyAssistant, DESK_RULES, PHONE_RULES, PPT_RULES, PREWARM_TTL_MS } = require('../core/company-assistant/service');
 const { HubTools } = require('../core/company-assistant/hub-tools');
 const { TOOLSETS, toolsFor, allTools } = require('../core/company-assistant/mcp');
 const AC = require('../core/company-assistant/answer-context');
@@ -86,7 +86,7 @@ test('每个问题用一个新会话：提问带固定规则、今天摘要；�
   await f.settle();
   const warm = f.a.warm.desk;
   assert.ok(warm && warm !== p1.id, '已经预开了下一个会话');
-  f.advance(5 * 60000);
+  f.advance(4 * 60000); // TTL 内仍复用；超时后的新建由专门回归覆盖。
   f.a.ask('短一点');
   await f.settle();
   assert.equal(f.prompts[1].id, warm, '第二问用预开好的会话');
@@ -306,6 +306,164 @@ test('已绑定记录的会话答得慢：不算没送达，不重发', async t 
   f.advance(120000);
   await f.a.collectJob('chat'); await f.settle();
   assert.equal(f.prompts.length, 1);
+});
+
+test('CLI 提交仍在等待时，90 秒轮询不得回收或重发；提交成功才开始回答计时', async t => {
+  const f = fixture(t, { prewarm: false });
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  f.a.deps.sendPrompt = async (id, text) => { f.prompts.push({ id, text }); return pending; };
+  const item = f.a.ask('今天有什么会议'); await f.settle();
+  const job = f.a.lanes.chat.job, id = job.sessionId;
+  f.advance(91000); await f.a.collectJob('chat'); await f.settle();
+  assert.equal(job.resent, undefined); assert.equal(f.closed.includes(id), false);
+  assert.equal(f.prompts.length, 1); assert.equal(f.a.lanes.chat.job, job);
+  release({ ok: true }); await f.settle();
+  assert.equal(job.sentAt, NOW + 91000);
+  assert.equal(f.a.chat().find(c => c.id === item.id).answeringAt, NOW + 91000);
+  f.answer(id, '今天没有会议'); await f.a.collectJob('chat');
+  assert.equal(f.a.chat().find(c => c.id === item.id).state, 'done');
+});
+
+test('预热会话已确认退出时，新问题用新会话', async t => {
+  const f = fixture(t); f.a.prewarm('desk'); await f.settle();
+  const warm = f.a.warm.desk;
+  f.a.deps.isSessionProcessAlive = id => id !== warm;
+  assert.notEqual(await f.a.takeSession('desk'), warm);
+  await f.settle(); assert.ok(f.closed.includes(warm));
+});
+
+test('预热闲置满 TTL 后关闭，包括从未绑定原生 ID 的会话，不会立即再预开', async t => {
+  const f = fixture(t); f.a.prewarm('desk'); await f.settle();
+  const warm = f.a.warm.desk;
+  assert.equal(f.sessions.get(warm).ccSessionId, undefined);
+  f.advance(PREWARM_TTL_MS - 1); f.a.retireExpiredWarm(); await f.settle();
+  assert.equal(f.closed.includes(warm), false);
+  f.advance(1); f.a.retireExpiredWarm(); await f.settle();
+  assert.ok(f.closed.includes(warm)); assert.equal(f.a.warm.desk, undefined);
+  assert.equal(f.a.pool.has(warm), false); assert.equal(f.sessions.size, 0, '回收后不自动补开');
+});
+
+test('下一问到达前超时但清扫尚未运行，也不能复用旧预热；没超时仍复用', async t => {
+  const f = fixture(t); f.a.prewarm('desk'); await f.settle();
+  const first = f.a.warm.desk; f.advance(PREWARM_TTL_MS - 1);
+  assert.equal(await f.a.takeSession('desk'), first);
+  f.a.prewarm('desk'); await f.settle(); const next = f.a.warm.desk;
+  f.advance(PREWARM_TTL_MS);
+  assert.notEqual(await f.a.takeSession('desk'), next);
+  await f.settle(); assert.ok(f.closed.includes(next)); assert.ok(!f.closed.includes(first), '已取去回答的会话不回收');
+});
+
+test('预热清扫保护正在运行和已经交给提问的会话，重新空闲后再算 TTL', async t => {
+  const f = fixture(t); f.a.prewarm('desk'); await f.settle(); const warm = f.a.warm.desk;
+  f.sessions.get(warm).status = 'running'; f.advance(PREWARM_TTL_MS); f.a.retireExpiredWarm(); await f.settle();
+  assert.ok(!f.closed.includes(warm));
+  f.sessions.get(warm).status = 'idle'; f.a.retireExpiredWarm();
+  f.advance(PREWARM_TTL_MS - 1); f.a.retireExpiredWarm(); assert.ok(!f.closed.includes(warm));
+  f.advance(1); f.a.retireExpiredWarm(); await f.settle(); assert.ok(f.closed.includes(warm));
+  const item = f.a.ask('今天有哪些会'); await f.settle(); const active = f.a.lanes.chat.job.sessionId;
+  f.advance(PREWARM_TTL_MS); f.a.retireExpiredWarm(); await f.settle();
+  assert.ok(!f.closed.includes(active)); assert.equal(f.a.chat().find(c => c.id === item.id).state, 'running');
+});
+
+test('PTY 进程还活着但预热已退回 PowerShell，takeSession 不复用；历史 shell 字样不会误伤', async t => {
+  const f = fixture(t); f.a.prewarm('desk'); await f.settle(); const warm = f.a.warm.desk;
+  f.advance(90000);
+  f.a.deps.isSessionProcessAlive = () => true;
+  f.a.deps.readTerminalScreen = () => ({ text: 'CLI stopped\r\nPS D:\\Work> ' });
+  assert.notEqual(await f.a.takeSession('desk'), warm); await f.settle(); assert.ok(f.closed.includes(warm));
+  f.a.prewarm('desk'); await f.settle(); const ready = f.a.warm.desk;
+  f.a.deps.readTerminalScreen = () => ({ text: 'PS D:\\Work> codeagent\r\nCodeAgent\r\n> ' });
+  assert.equal(await f.a.takeSession('desk'), ready);
+});
+
+test('预热冷启动的 shell 提示符有 90 秒宽限，真实进程退出仍立即回收', async t => {
+  const f = fixture(t); f.a.prewarm('desk'); await f.settle(); const warm = f.a.warm.desk;
+  f.a.deps.readTerminalScreen = () => ({ text: 'PS D:\\Work> ' });
+  f.a.retireExpiredWarm(); await f.settle(); assert.ok(!f.closed.includes(warm));
+  f.advance(89999); f.a.retireExpiredWarm(); await f.settle(); assert.ok(!f.closed.includes(warm));
+  assert.equal(await f.a.takeSession('desk'), warm, '启动宽限内留给提交就绪检测，不因 shell 画面误杀');
+  f.a.keepWarm('desk', warm); f.advance(1); f.a.retireExpiredWarm(); await f.settle();
+  assert.ok(f.closed.includes(warm), '宽限到期后真实 shell 可回收');
+  f.a.prewarm('desk'); await f.settle(); const exited = f.a.warm.desk;
+  f.a.deps.isSessionProcessAlive = id => id !== exited;
+  f.a.retireExpiredWarm(); await f.settle(); assert.ok(f.closed.includes(exited));
+});
+
+test('未交给问题的预热持续忙碌 10 分钟会回收，边界前不回收', async t => {
+  const f = fixture(t); f.a.prewarm('desk'); await f.settle(); const warm = f.a.warm.desk;
+  f.sessions.get(warm).status = 'running'; f.a.retireExpiredWarm();
+  f.advance(10 * 60000 - 1); f.a.retireExpiredWarm(); await f.settle(); assert.ok(!f.closed.includes(warm));
+  f.advance(1); f.a.retireExpiredWarm(); await f.settle(); assert.ok(f.closed.includes(warm));
+  assert.equal(f.a.warm.desk, undefined); assert.equal(f.a.pool.has(warm), false);
+});
+
+test('预热忙碌上限会在空闲后重新计算，且不回收已有问题拥有的会话', async t => {
+  const f = fixture(t); f.a.prewarm('desk'); await f.settle(); const warm = f.a.warm.desk;
+  f.a.deps.isAgentTurnActive = id => id === warm;
+  f.a.retireExpiredWarm(); f.advance(9 * 60000);
+  f.a.deps.isAgentTurnActive = () => false; f.a.retireExpiredWarm();
+  f.a.deps.isAgentTurnActive = id => id === warm; f.a.retireExpiredWarm();
+  f.advance(9 * 60000); f.a.retireExpiredWarm(); await f.settle(); assert.ok(!f.closed.includes(warm));
+  f.a.lanes.chat.job = { sessionId: warm };
+  f.advance(2 * 60000); f.a.retireExpiredWarm(); await f.settle(); assert.ok(!f.closed.includes(warm));
+  f.a.lanes.chat.job = null; f.a.retireExpiredWarm(); await f.settle(); assert.ok(f.closed.includes(warm));
+});
+
+test('预热回收独立计时，助理暂停后仍执行；close 会清掉清扫定时器', async t => {
+  const f = fixture(t); f.a.deps.noTimer = false;
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  f.a.prewarm('desk'); await f.settle(); const warm = f.a.warm.desk;
+  f.a.started = true; f.a.pause();
+  f.advance(PREWARM_TTL_MS); t.mock.timers.tick(PREWARM_TTL_MS); await f.settle();
+  assert.ok(f.closed.includes(warm)); assert.equal(f.a.warmSweepTimer, null);
+  f.a.prewarm('desk'); await f.settle(); assert.ok(f.a.warmSweepTimer);
+  f.a.close(); assert.equal(f.a.warmSweepTimer, null);
+});
+
+test('终端暂时读不到时不误判退出，TTL 到时仍能回收', async t => {
+  const f = fixture(t); f.a.prewarm('desk'); await f.settle(); const warm = f.a.warm.desk;
+  f.a.deps.readTerminalScreen = () => { throw Error('screen unavailable'); };
+  assert.doesNotThrow(() => f.a.retireExpiredWarm()); assert.ok(!f.closed.includes(warm));
+  f.advance(PREWARM_TTL_MS); assert.doesNotThrow(() => f.a.retireExpiredWarm());
+  await f.settle(); assert.ok(f.closed.includes(warm));
+});
+
+test('预热仍在运行且屏幕暂现 shell 时，清扫不关闭，下一问也不复用', async t => {
+  const f = fixture(t); f.a.prewarm('desk'); await f.settle(); const warm = f.a.warm.desk;
+  f.sessions.get(warm).status = 'running';
+  f.a.deps.readTerminalScreen = id => ({ text: id === warm ? 'PS D:\\Work> ' : '' });
+  f.advance(PREWARM_TTL_MS); f.a.retireExpiredWarm(); await f.settle();
+  assert.ok(!f.closed.includes(warm), '运行状态优先于单帧 shell 判断');
+  assert.notEqual(await f.a.takeSession('desk'), warm, '运行中的预热不用于新问题');
+  await f.settle(); assert.ok(!f.closed.includes(warm));
+  f.sessions.get(warm).status = 'idle'; f.a.retireExpiredWarm(); await f.settle();
+  assert.ok(f.closed.includes(warm), '空闲后确认退到 shell 才关闭');
+});
+
+test('明确 CLI 已退出且没发出时只换会话重发一次；未知提交不自动重发', async t => {
+  const f = fixture(t, { prewarm: false });
+  let n = 0;
+  f.a.deps.sendPrompt = async (id, text) => { f.prompts.push({ id, text }); return n++ === 0
+    ? { ok: false, notSent: true, error: 'send-threw', code: 'cli-exited', message: 'CLI 已退出到系统终端' } : { ok: true }; };
+  const item = f.a.ask('今天有什么会议'); await f.settle();
+  assert.equal(f.prompts.length, 2); assert.notEqual(f.prompts[0].id, f.prompts[1].id);
+  f.answer(f.prompts[1].id, '没有会议'); await f.a.collectJob('chat');
+  assert.equal(f.a.chat().find(c => c.id === item.id).state, 'done');
+  for (const unknown of [{ ok: false, unconfirmed: true, error: 'cli-exited' }, { ok: false, sendStatus: 'stuck' }]) {
+    f.a.deps.sendPrompt = async (id, text) => { f.prompts.push({ id, text }); return unknown; };
+    const next = f.a.ask('接着问'); await f.settle();
+    const before = f.prompts.length;
+    f.advance(91000); await f.a.collectJob('chat'); await f.settle(); assert.equal(f.prompts.length, before);
+    await f.a.stopChat(next.id); await f.settle();
+  }
+});
+
+test('换新会话仍然明确退出时停止自动重发', async t => {
+  const f = fixture(t, { prewarm: false });
+  f.a.deps.sendPrompt = async (id, text) => { f.prompts.push({ id, text }); return { ok: false, notSent: true, error: 'cli-exited', message: 'CLI 已退出' }; };
+  const item = f.a.ask('今天有什么会议'); await f.settle();
+  assert.equal(f.prompts.length, 2); assert.equal(f.a.chat().find(c => c.id === item.id).state, 'error');
 });
 
 test('预开的会话固定在用户已换掉的模型上（或已因模型暂停）时不再用它，改开新会话', async t => {

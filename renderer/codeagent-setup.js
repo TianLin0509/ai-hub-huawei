@@ -40,20 +40,40 @@ function createCodeAgentSetup({ document, ipcRenderer }) {
     dialog.className = 'company-api-dialog'; dialog.id = 'codeagent-install-guide';
     dialog.setAttribute('aria-label', 'CodeAgent 安装说明');
     dialog.innerHTML = '<header><div><h2>安装 CodeAgent</h2><p>说明已随 Hub 安装，无需访问代码仓库。</p></div><button type="button" class="company-api-close" aria-label="关闭">×</button></header>'
-      + '<div class="company-api-install"><ol><li>连接公司网络，打开 CodeAgent 官方入口，按其中的 Windows 安装指引完成安装。</li><li>安装完成后，点击下面的「重新检测」，不用重启 Hub。</li><li>检测为已安装后，到「账号」页登录，再创建会话。</li></ol><p>Hub 会自动在系统路径、npm 全局目录和常用安装目录里查找；装在别处时，点「手动选择…」指定 codeagent 程序。</p></div>'
-      + '<p class="company-api-message" role="status">正在自动查找本机已安装的 CodeAgent…</p><footer><button type="button" data-setup="official">打开官方安装入口</button><button type="button" data-setup="pick">手动选择…</button><button type="button" class="primary" data-setup="refresh">重新检测</button></footer>';
+      + '<div class="company-api-install"><ol><li>连接公司网络，点「一键安装」：Hub 会用「下载」文件夹里的官方安装包，或打开官方下载页让你点一下下载，然后自动核对签名、静默安装（Windows 会弹一次管理员确认）。也可以打开官方入口自己装。</li><li>安装完成后，点击下面的「重新检测」，不用重启 Hub。</li><li>检测为已安装后，到「账号」页登录，再创建会话。</li></ol><p>Hub 会自动在系统路径、npm 全局目录和常用安装目录里查找；装在别处时，点「手动选择…」指定 codeagent 程序。</p></div>'
+      + '<p class="company-api-message" role="status">正在自动查找本机已安装的 CodeAgent…</p><footer style="flex-wrap:wrap"><button type="button" data-setup="official" style="white-space:nowrap">官方安装入口</button><button type="button" data-setup="csop" style="white-space:nowrap" hidden>打开官方下载页</button><button type="button" data-setup="pick" style="white-space:nowrap">手动选择…</button><button type="button" data-setup="refresh" style="white-space:nowrap">重新检测</button><button type="button" class="primary" data-setup="install" style="white-space:nowrap">一键安装</button></footer>';
     document.body.append(dialog); dialog.showModal();
     // 打开说明时先自动找一遍：装在常见位置、只是 Hub 启动后才装的，这里就能直接找到，不用用户做任何事。
     const opened = dialog;
     void refresh({ scan: true }).then(() => {
       if (!opened?.isConnected) return;
       if (current?.installed) foundText(opened);
-      else opened.querySelector('[role="status"]').textContent = '常见位置都没找到 CodeAgent。请按上面的步骤安装，装好后点「重新检测」。';
+      else if (!opened.dataset.installTouched) opened.querySelector('[role="status"]').textContent = '常见位置都没找到 CodeAgent。点「一键安装」，或按上面的步骤安装，装好后点「重新检测」。';
     }, error => { if (opened?.isConnected) opened.querySelector('[role="status"]').textContent = '自动查找没完成：' + error.message; });
     dialog.querySelector('.company-api-close').onclick = () => dialog.close();
     dialog.addEventListener('close', () => { dialog?.remove(); dialog = null; }, { once: true });
     dialog.querySelector('[data-setup="official"]').hidden = !OFFICIAL_INSTALL_URL;
     dialog.querySelector('[data-setup="official"]').onclick = () => { if (OFFICIAL_INSTALL_URL) void require('electron').shell.openExternal(OFFICIAL_INSTALL_URL); };
+    // 一键安装（2026-11-16）：已有安装包就核签名后静默安装；没有就亮出「打开官方下载页」，下载完 Hub 自动接手。
+    const installClient = require('./codeagent-install-client').sharedClient(ipcRenderer);
+    const say = state => {
+      const target = dialog; if (!target?.isConnected || !state?.message) return;
+      target.dataset.installTouched = '1';
+      target.querySelector('[role="status"]').textContent = state.message;
+      target.querySelector('[data-setup="csop"]').hidden = !(state.downloadPage && /need-download|error/.test(state.phase));
+      target.querySelector('[data-setup="install"]').disabled = installClient.active(state);
+    };
+    const unsubscribe = installClient.subscribe(state => {
+      say(state);
+      if (state.phase === 'done') void refresh().then(() => { if (dialog?.isConnected && current?.installed) dialog.querySelector('[role="status"]').textContent = state.message + '。可以关闭说明，到账号页登录或直接新建会话。'; });
+    });
+    dialog.addEventListener('close', unsubscribe, { once: true });
+    if (installClient.active(installClient.last)) say(installClient.last);
+    dialog.querySelector('[data-setup="install"]').onclick = async () => { say({ phase: 'verifying', message: '正在准备一键安装…' }); say(await installClient.start()); };
+    dialog.querySelector('[data-setup="csop"]').onclick = async () => {
+      const r = await installClient.openOfficial();
+      if (!r?.ok && dialog?.isConnected) dialog.querySelector('[role="status"]').textContent = '官方下载页没能打开：' + (r?.error || '未知原因');
+    };
     dialog.querySelector('[data-setup="pick"]').onclick = async () => {
       const target = dialog;
       try {

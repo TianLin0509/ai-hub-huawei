@@ -19,7 +19,7 @@ const CURSOR_GLYPHS = '❯›▶>';
 // 靠下面「编号连续」和「含模型名」两道筛选排除正文。
 const NUMBERED_ROW = new RegExp(`(?:^|[^\\d.])([${CURSOR_GLYPHS}])?\\s*(\\d{1,2})\\.\\s+(\\S.*?)\\s*$`);
 const BARE_CURSOR_ROW = new RegExp(`^(\\s*)([${CURSOR_GLYPHS}])\\s+(\\S.*?)\\s*$`);
-const MODEL_WORDS = /\b(?:GLM|MiniMax|DeepSeek|Qwen|Kimi|Default|Auto|Opus|Sonnet|Haiku|Fable)\b|模型/i;
+const MODEL_WORDS = /\b(?:GLM|MiniMax|DeepSeek|Qwen|Kimi)(?=[\d\W]|$)|\b(?:Default|Auto|Opus|Sonnet|Haiku|Fable)\b|模型/i;
 const SESSION_ONLY_KEY = /(?:^|[\s·|])([a-z])\s+to\s+use\s+(?:this|for this)\s+session\s+only/i;
 
 const squash = value => String(value || '').toLowerCase().replace(/[^a-z0-9一-鿿]+/g, '');
@@ -111,6 +111,18 @@ function parsePicker(lines, { requireTitle = false, allowNoCursor = false } = {}
     }
   }
   if (rows.length < minRows || !rows.some(row => MODEL_WORDS.test(row.text))) return null;
+  // Group headings belong to the following rows; duplicate names may be
+  // offered by separate providers. Never identify those rows by name alone.
+  let group = '';
+  for (const row of rows) {
+    const previous = rows[rows.indexOf(row) - 1];
+    for (const line of screen.slice(previous ? previous.line + 1 : startLine + 1, row.line)) {
+      const heading = line.replace(/^[\s│┃]+|[\s│┃]+$/g, '').trim();
+      if (heading && !/^(?:[╭╰─━┌└]|⌕|Credit|月度|忙时|闲时|Hour\b|Min\b|Day\b|Token\b|模型名称|Model\s+name)/i.test(heading)
+          && !/\s{2,}|[●%]/.test(heading) && heading.length <= 100) group = heading;
+    }
+    if (group) row.group = group;
+  }
   // 判断「能不能发消息」时，菜单上方必须有菜单标题：回答正文里的「> 1. GLM… / 2. MiniMax…」这类编号列表
   // 也有光标符号和模型名，以前会被当成菜单，之后每条消息都以「仍在模型选择界面」退回（2026-10-16 同事反馈
   // 2.1.0 发送被弹回）。Hub 自己刚打开菜单、正在读它时不要求（替身的重绘可能把标题挤出屏幕）。
@@ -178,7 +190,8 @@ function truncatedRows(rows, label) {
   return (rows || []).reduce((hits, row, index) => truncatedNameMatches(row.label, label) ? [...hits, index] : hits, []);
 }
 // 搜索与翻页用：名字完全相同（不分大小写）优先，其次唯一命中的截断名。
-function locateLabel(rows, label) {
+function locateLabel(rows, label, route = {}) {
+  if (route.provider) return findTarget({ rows }, label, route);
   const exact = (rows || []).findIndex(row => exactLabel(row.label, label));
   if (exact >= 0) return exact;
   const cut = truncatedRows(rows, label);
@@ -186,11 +199,35 @@ function locateLabel(rows, label) {
 }
 
 // 目标在哪一行：模型名完全相同优先，其次唯一命中的截断名，再次以它开头，最后整行包含。
-function findTarget(picker, label) {
+function groupMatches(row, provider = '', providerLabel = '') {
+  if (!provider) return true;
+  const group = squash(row.group);
+  const candidates = [provider, providerLabel, String(provider).split('/').pop(), String(providerLabel).split('/').pop()].map(squash).filter(Boolean);
+  return !!group && (candidates.includes(group) || provider === 'w3' && /^(?:builtin|内置)$/.test(group));
+}
+
+function defaultGroup(picker) {
+  const groups = [...new Set((picker?.rows || [])
+    .filter(row => /(?:^|\s)(?:default|默认)(?=\s|[✓✔]|$)/i.test(row.text))
+    .map(row => row.group).filter(Boolean))];
+  return groups.length === 1 ? groups[0] : '';
+}
+
+function findTarget(picker, label, { provider = '', providerLabel = '' } = {}) {
+  if (provider) {
+    const indexed = picker?.rows.map((row, index) => ({ row, index })).filter(({ row }) => groupMatches(row, provider, providerLabel)) || [];
+    const target = findTarget({ rows: indexed.map(item => item.row) }, label);
+    return target >= 0 ? indexed[target].index : -1;
+  }
   const want = squash(label);
   if (!picker || !want) return -1;
-  const exact = picker.rows.findIndex(row => squash(row.label) === want);
-  if (exact >= 0) return exact;
+  const exact = picker.rows.map((row, index) => squash(row.label) === want ? index : -1).filter(index => index >= 0);
+  if (exact.length === 1) return exact[0];
+  if (exact.length > 1) {
+    const group = defaultGroup(picker);
+    const preferred = group ? exact.filter(index => groupMatches(picker.rows[index], group)) : [];
+    return preferred.length === 1 ? preferred[0] : -1;
+  }
   const cut = truncatedRows(picker.rows, label);
   if (cut.length) return cut.length === 1 ? cut[0] : -1;
   const prefix = picker.rows.findIndex(row => squash(row.label).startsWith(want));
@@ -468,7 +505,7 @@ async function collectModelMenu({ lines, readLines, write, revision, pause = sle
       modelsComplete: rows.every(row => tokens.get(row.label.toLowerCase())?.day) }, steps };
 }
 
-async function findOffscreenTarget({ picker, screen, manager, sid, label, log, reopenMenu, onSearchFrame }) {
+async function findOffscreenTarget({ picker, screen, manager, sid, label, route = {}, log, reopenMenu, onSearchFrame }) {
   const initial = modelMenuLines(await screen.lines());
   if (initial.some(line => /⌕/.test(line))) {
     const oldSearch = searchText(initial);
@@ -483,7 +520,7 @@ async function findOffscreenTarget({ picker, screen, manager, sid, label, log, r
     }, MODEL_SEARCH_WAIT_MS);
     onSearchFrame(stable.lines);
     let searched = { value: stable.value?.picker || null };
-    let found = searched.value && locateLabel(searched.value.rows, label);
+    let found = searched.value && locateLabel(searched.value.rows, label, route);
     if (Number.isInteger(found) && found >= 0) {
       picker = searched.value;
       let searchSteps = 0;
@@ -493,10 +530,10 @@ async function findOffscreenTarget({ picker, screen, manager, sid, label, log, r
         searched = await waitForPickerChange(screen, prior, MODEL_SEARCH_WAIT_MS);
         if (!searched.value) break;
         picker = searched.value;
-        found = locateLabel(picker.rows, label);
+        found = locateLabel(picker.rows, label, route);
         if (found < 0) break;
       }
-      if (picker.cursor >= 0 && locateLabel(picker.rows, label) === picker.cursor) {
+      if (picker.cursor >= 0 && locateLabel(picker.rows, label, route) === picker.cursor) {
         log({ event: 'switch-search', result: 'found' }); return { picker, target: picker.cursor };
       }
     }
@@ -522,11 +559,11 @@ async function findOffscreenTarget({ picker, screen, manager, sid, label, log, r
   // 截断名要翻完整个列表才知道是不是唯一：一路记下命中的行，完全同名的随时优先；翻到底只有一行时再按上键退回去。
   const seen = new Set(), truncated = new Set(), limit = picker.total || MODEL_SCROLL_LIMIT;
   const identityOf = row => JSON.stringify([row.number, row.label]);
-  const noteTruncated = () => { for (const index of truncatedRows(picker.rows, label)) truncated.add(identityOf(picker.rows[index])); };
+  const noteTruncated = () => { for (const index of truncatedRows(picker.rows, label)) if (groupMatches(picker.rows[index], route.provider, route.providerLabel)) truncated.add(identityOf(picker.rows[index])); };
   let steps = 0;
   while (steps < limit) {
     const row = picker.rows[picker.cursor], identity = identityOf(row);
-    if (exactLabel(row.label, label)) { log({ event: 'switch-scroll', steps, result: 'found' }); return { picker, target: picker.cursor }; }
+    if (exactLabel(row.label, label) && groupMatches(row, route.provider, route.providerLabel)) { log({ event: 'switch-scroll', steps, result: 'found' }); return { picker, target: picker.cursor }; }
     noteTruncated();
     if (seen.has(identity)) break;
     seen.add(identity);
@@ -536,7 +573,7 @@ async function findOffscreenTarget({ picker, screen, manager, sid, label, log, r
     if (!next.value) break;
     picker = next.value;
   }
-  if (exactLabel(picker.rows[picker.cursor]?.label, label)) { log({ event: 'switch-scroll', steps, result: 'found' }); return { picker, target: picker.cursor }; }
+  if (exactLabel(picker.rows[picker.cursor]?.label, label) && groupMatches(picker.rows[picker.cursor], route.provider, route.providerLabel)) { log({ event: 'switch-scroll', steps, result: 'found' }); return { picker, target: picker.cursor }; }
   noteTruncated();
   if (truncated.size === 1) {
     const [only] = truncated;
@@ -590,9 +627,10 @@ async function waitForEcho(manager, sid, mark, timeoutMs, screen) {
 // 启动后马上敲，/model 的回车有时没被执行，输入行停在「❯ /model」，第一条题目发不出去）。
 // keepDefault（2026-10-28 用户「记住最新的选择作为默认」）：手动会话这次选的模型留作 CodeAgent 的默认模型——按回车存成默认、不改回原值，
 // 下次新建会话 CodeAgent 直接用它起，不再开菜单（core/codeagent-launch-model.js 的 cli-remembered）。自动会话不传，照旧只改本会话、事后改回。
-async function pickModel({ manager, sid, kind, modelId, configDir, dataDir, sendToPty, screenTimeoutMs = 8000, guardMs = 3500, onDefaultChange = null, env = process.env, readyFirstMs = 0, keepDefault = false }) {
+async function pickModel({ manager, sid, kind, modelId, provider = '', providerLabel = '', menuLabel = '', configDir, dataDir, sendToPty, screenTimeoutMs = 8000, guardMs = 3500, onDefaultChange = null, env = process.env, readyFirstMs = 0, keepDefault = false }) {
   const first = isFirstMenuModel(modelId);
-  let label = first ? '' : pickerLabelFor(modelId, env);
+  let label = first ? '' : menuLabel || pickerLabelFor(modelId, env);
+  const route = { provider, providerLabel };
   const dir = normalizeConfigDir(configDir);
   let defaults = null;
   const screen = await openSessionScreen(manager, sid);
@@ -656,9 +694,13 @@ async function pickModel({ manager, sid, kind, modelId, configDir, dataDir, send
     // 选第一个：认出的第一行得是菜单的第 1 项（滚动过的菜单看不到第 1 项，不猜）。光标不一定停在第 1 项（会停在上次的模型上），照常按方向键挪过去。
     if (first && (picker.rows[0].number ?? 1) !== 1) return fail(`模型菜单没有从第 1 项列起（第一行是 ${picker.rows[0].number}. ${picker.rows[0].label}），没有选`);
     if (first) label = picker.rows[0].label;
-    let target = first ? 0 : findTarget(picker, label);
+    let target = first ? 0 : findTarget(picker, label, route);
+    if (!first && !provider && picker.rows.filter(row => exactLabel(row.label, label)).length > 1) {
+      if (target < 0) return { ...(await fail(`多个分组都有 ${modelId}，无法确认账号默认分组，请在模型列表中重新选择带分组的项`)), requiresGroupSelection: true };
+      route.provider = picker.rows[target].group;
+    }
     if (target < 0 && !first) {
-      const found = await findOffscreenTarget({ picker, screen, manager, sid, label,
+      const found = await findOffscreenTarget({ picker, screen, manager, sid, label, route,
         reopenMenu: async () => {
           if (!(await closeModelMenu({ readLines: () => screen.lines(), write: key => manager.writeToSession(sid, key) })).ok) return { value: null };
           if (await openMenu()) return { value: null };
@@ -690,7 +732,7 @@ async function pickModel({ manager, sid, kind, modelId, configDir, dataDir, send
       manager.writeToSession(sid, '\x1b[B');
       const focused = await waitForPickerChange(screen, pickerSignature(picker), MODEL_SEARCH_WAIT_MS);
       if (!focused.value) return fail('无法确认模型列表的选中项，没有选择模型');
-      picker = focused.value; target = findTarget(picker, label);
+      picker = focused.value; target = findTarget(picker, label, route);
       if (target < 0) return fail(`模型菜单里没有 ${modelId}`);
     }
     // 可见目标仍沿用行号差逐键移动；跨屏搜索/翻页已逐步确认。选择键之前再读一次光标，
@@ -703,7 +745,8 @@ async function pickModel({ manager, sid, kind, modelId, configDir, dataDir, send
     await sleep(300);
     const selectedLabel = picker.rows[target].label;
     const checked = parsePicker(await screen.lines());
-    if (!checked || !exactLabel(checked.rows[checked.cursor]?.label, selectedLabel)) return fail(`未确认光标已移到 ${selectedLabel}，没有选择模型`);
+    if (!checked || !exactLabel(checked.rows[checked.cursor]?.label, selectedLabel)
+        || !groupMatches(checked.rows[checked.cursor], route.provider, route.providerLabel)) return fail(`未确认光标已移到 ${selectedLabel} 的目标分组，没有选择模型`);
     const restoreSnapshot = dir && !keepDefault ? snapshotDefaults(dir) : [];
     const mode = picker.sessionKey && !keepDefault ? 'session' : 'default';
     const mark = typeof manager.getSessionOutputMark === 'function' ? manager.getSessionOutputMark(sid) : null;
@@ -720,7 +763,7 @@ async function pickModel({ manager, sid, kind, modelId, configDir, dataDir, send
       }
     }
     // 回显可能用菜单上的显示名（例如「Sonnet 5.5」），也可能用模型名：两种都算对。
-    const echoMatches = echo && [label, picker.rows[target].label].some(name => squash(name) && echo.startsWith(squash(name)));
+    const echoMatches = echo && [modelId, label, picker.rows[target].label].some(name => squash(name) && echo.startsWith(squash(name)));
     // 选第一个不核对名字：菜单上的显示名和回显可以不同（替身实录：第 1 项「Default」，回显「Opus 5.5 … for this session only」）。
     if (echo && !echoMatches && !first) {
       return { ...(await fail(`CodeAgent 回显选中的不是 ${modelId}（回显：${echo.slice(0, 30)}）`)), restored, defaults };
@@ -762,7 +805,7 @@ async function pickModel({ manager, sid, kind, modelId, configDir, dataDir, send
   if (usage) result = { ...result, usage };
   if (!result.ok && !result.loginRequired) {
     require('./codeagent-models').appendModelLog(dataDir, { event: 'pick-menu-failed', session: String(sid).slice(0, 8), model: modelId, error: result.message });
-    result = { ...result, technicalReason: result.message, message: `这个账号在 CodeAgent 模型菜单里选不了 ${modelId}` };
+    result = { ...result, technicalReason: result.message, message: result.requiresGroupSelection ? result.message : `这个账号在 CodeAgent 模型菜单里选不了 ${modelId}` };
   }
   return menu ? { ...result, menu } : result;
 }

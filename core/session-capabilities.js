@@ -163,6 +163,7 @@ function buildSessionResumeMeta(session, overrides = {}) {
   const meta = {
     hubId,
     ...require('./session-model-pin').modelPinFields(session),
+    ...require('./codeagent-model-choice').routeFields(session),
     kind: session.kind || 'claude',
     title: session.title || null,
     cwd: session.cwd || null,

@@ -402,6 +402,11 @@
     }).catch(() => {});
   }
   function buildSessionTuningOpts(kind, modelId, selection = {}) {
+    if (kind === 'codeagent') {
+      const choice = require('../core/codeagent-model-choice').decodeChoice(modelId);
+      modelId = choice.id;
+      selection = { ...selection, ...require('../core/codeagent-model-choice').routeFields(choice) };
+    }
     const tuning = resolveSessionTuning(kind, modelId, selection);
     const opts = {};
     if (kind === 'chatgpt') {
@@ -413,6 +418,7 @@
     // 群聊/写作/造梦提交的具体型号是本次配置选择；解析出的默认型号本身不是选型请求。
     if (kind === 'codeagent') opts.codeagentModelPick = typeof selection.codeagentModelPick === 'boolean'
       ? selection.codeagentModelPick : !!modelId && selection.followDefault !== true;
+    if (kind === 'codeagent') Object.assign(opts, require('../core/codeagent-model-choice').routeFields(selection));
     if (tuning.showEffort && tuning.effort) opts.effort = tuning.effort;
     if (tuning.showMcp) opts.mcpProfile = tuning.mcpProfile;
     // 只有"关"需要写字段：session-manager 全链路按 fastMode === false 判断，
@@ -450,6 +456,8 @@
   let submitting = false;
   let checkingCodeagent = false;
   let selectedModel = '';
+  let selectedCodeagentRoute = {};
+  const modelChoice = require('../core/codeagent-model-choice');
   let selectedEffort = defaultEffortFor('claude');
   let selectedMcpProfile = 'lean';
   let selectedFastMode = DEFAULT_FAST_MODE;
@@ -1332,22 +1340,24 @@
       ? (codeagentDefault
         ? `<option value="" title="${escapeHtml(codeagentDefault + ' · 这个号的默认模型，启动后不切换')}"${usageAttrs(codeagentDefault)}>${escapeHtml(codeagentModelLabel(codeagentDefault) + '（默认）')}</option>`
         : '<option value="">沿用 CLI 当前模型</option>') : '';
-    const listed = codeagentDefault ? options.filter(option => option.id.toLowerCase() !== codeagentDefault.toLowerCase()) : options;
-    const wanted = nativeCodeagentOption + listed.map(option => `${option.id}\u0000${option.label}${selectedKind === 'codeagent' ? option.description || '' : ''}${usageAttrs(option.id)}`).join('|');
+    const listed = codeagentDefault ? options.filter(option => option.provider || option.id.toLowerCase() !== codeagentDefault.toLowerCase()) : options;
+    const choiceValue = option => selectedKind === 'codeagent' ? modelChoice.choiceValue(option) : option.id;
+    const wanted = nativeCodeagentOption + listed.map(option => `${choiceValue(option)}\u0000${option.label}${selectedKind === 'codeagent' ? option.description || '' : ''}${usageAttrs(option.id)}`).join('|');
     if (modelSelect.dataset.builtFor !== wanted) {
       modelSelect.innerHTML = nativeCodeagentOption + listed
-        .map(option => `<option value="${escapeHtml(option.id)}"${selectedKind === 'codeagent' && option.description ? ` title="${escapeHtml(option.description)}"` : ''}${usageAttrs(option.id)}>${escapeHtml(option.label)}</option>`)
+        .map(option => `<option value="${escapeHtml(choiceValue(option))}"${selectedKind === 'codeagent' && option.description ? ` title="${escapeHtml(option.description)}"` : ''}${usageAttrs(option.id)}>${escapeHtml(option.label)}</option>`)
         .join('');
       modelSelect.dataset.builtFor = wanted;
     }
     // 之前点选过的模型正好是这个号的默认模型：按「沿用」处理（不切换，免得启动后再走一遍 /model 菜单）。
-    if (codeagentDefault && modelTouchedByUser && String(selectedModel || '').toLowerCase() === codeagentDefault.toLowerCase()) modelTouchedByUser = false;
+    if (codeagentDefault && modelTouchedByUser && !selectedCodeagentRoute.codeagentModelProvider && String(selectedModel || '').toLowerCase() === codeagentDefault.toLowerCase()) modelTouchedByUser = false;
     // CodeAgent 的模型选项（2026-10-20 隐藏，2026-10-29 用户要恢复）：默认一项是这个号启动会用的模型（main codeagent:models 的
     // defaultModel，和启动判断同一口径），不切换、不等；选别的模型启动时开一次 /model，选中的留作默认，下次就不用再等。
     const modelField = document.getElementById('new-session-model-field');
     const useCards = companyApiKind(selectedKind) && !!companyProvider[selectedKind];
     if (modelField) modelField.hidden = useCards;
-    modelSelect.value = selectedKind === 'codeagent' && !modelTouchedByUser ? '' : selectedModel;
+    modelSelect.value = selectedKind === 'codeagent' && !modelTouchedByUser ? '' : selectedKind === 'codeagent' && selectedCodeagentRoute.codeagentModelProvider
+      ? modelChoice.choiceValue({ id: selectedModel, provider: selectedCodeagentRoute.codeagentModelProvider, providerLabel: selectedCodeagentRoute.codeagentModelProviderLabel, menuLabel: selectedCodeagentRoute.codeagentModelMenuLabel }) : selectedModel;
     paintModelCards(useCards);
 
     const effortLabel = document.getElementById('new-session-effort-label');
@@ -1589,7 +1599,7 @@
     if (options.length === 0) return '';
     const effortTag = EFFORT_PICKER ? ` · ${selectedEffort}` : '';
     if (selectedKind === 'codeagent' && !modelTouchedByUser) return codeagentDefaultModel ? `${codeagentModelLabel(codeagentDefaultModel)}${effortTag}` : (EFFORT_PICKER ? selectedEffort : '');
-    const model = options.find(option => option.id === selectedModel);
+    const model = options.find(option => option.id === selectedModel && (!selectedCodeagentRoute.codeagentModelProvider || option.provider === selectedCodeagentRoute.codeagentModelProvider));
     const modelLabel = model ? model.label : selectedModel;
     if (selectedKind === 'codex') {
       return `${modelLabel} · ${selectedEffort} · ${MCP_PROFILE_LABELS[selectedMcpProfile] || 'No MCP'} · ${selectedCodexTier}`;
@@ -1934,6 +1944,7 @@
     });
     if (DEEPSEEK_ROUTE_KINDS.has(selectedKind) && !companyApiKind(selectedKind)) opts.deepseekRoute = deepseekRoute;
     if (selectedKind === 'codeagent') opts.codeagentModelPick = modelTouchedByUser;
+    if (selectedKind === 'codeagent' && modelTouchedByUser) Object.assign(opts, selectedCodeagentRoute);
     if (selectedKind === 'codeagent' && codeagentPoolRequested()) {
       opts.codeagentAccount = 'pool';
       const pick = codeagentManualPick();
@@ -2155,7 +2166,9 @@
     document.getElementById('new-session-project-refresh')?.addEventListener('click', loadPreparedProjects);
     if (modelSelect) {
       modelSelect.addEventListener('change', () => {
-        selectedModel = modelSelect.value;
+        const choice = selectedKind === 'codeagent' ? modelChoice.decodeChoice(modelSelect.value) : { id: modelSelect.value };
+        selectedModel = choice.id;
+        selectedCodeagentRoute = modelChoice.routeFields(choice);
         modelTouchedByUser = selectedKind !== 'codeagent' || !!selectedModel;
         tuningTouchedByUser = true;
         paint();

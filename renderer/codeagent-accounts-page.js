@@ -19,7 +19,7 @@ function createCodeagentAccountsPage({ document, window = document.defaultView, 
   const toolPicker = require('./tool-version-picker').createToolVersionPicker({ document, ipcRenderer });
   document.addEventListener('tool-version-changed', e => { if (e.detail?.tool === 'codeagent') { state.toolChoice = e.detail.summary; void setup.refresh().then(() => refresh()); } });
   let page, pool = null, timer, revision = 0, disposed = false, pending = null, scanDue = false;
-  let locateId = '', locateUntil = 0, locateTimer;
+  let locateId = '', locateUntil = 0, locateTimer, installRun = null;
   const state = { view: 'accounts', metric: 'total', tokens: null, tokenFirstSyncAsked: false, local: [], probing: new Set(), queue: [], drawer: false, note: '', menu: '', sub: false, filter: 'all', loading: false, busy: false, message: '' };
   function render() {
     if (!page || page.hidden || disposed) return;
@@ -48,6 +48,13 @@ function createCodeagentAccountsPage({ document, window = document.defaultView, 
     const hint = toolPicker.hintHtml(state.toolChoice);
     page.querySelector('[data-tvp-slot]')?.remove();
     if (hint && state.view === 'accounts') page.querySelector('.caa-page-head')?.insertAdjacentHTML('afterend', `<div data-tvp-slot>${hint}</div>`);
+    // 已装时页头下方一行：本机 CodeAgent 版本 + 一键升级（2026-11-16，core/codeagent-install.js）。
+    page.querySelector('[data-ca-install-slot]')?.remove();
+    const installedVersion = state.toolChoice?.current?.version;
+    if (setup.current?.installed === true && state.view === 'accounts') {
+      const esc = v => String(v).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+      page.querySelector('.caa-page-head')?.insertAdjacentHTML('afterend', `<div data-ca-install-slot class="tvp-hint" role="status"><span class="tvp-hint-dot" aria-hidden="true"></span><span class="tvp-hint-text">本机 CodeAgent${installedVersion ? ' v' + esc(installedVersion) : ''}${state.installMessage ? ' · ' + esc(state.installMessage) : ''}</span><button type="button" class="tvp-link" data-ca="install-oneclick"${state.installing ? ' disabled' : ''}>${state.installing ? '正在升级…' : '一键升级'}</button></div>`);
+    }
     if (Date.now() < locateUntil) locatedRow()?.classList.add('is-located');
     // 号池内网共享卡片（renderer/lan-pool-settings.js）：主机看同事用量，同事看共享号额度。
     if (state.view === 'accounts') window.__lanPoolMountAccount?.(page.querySelector('.caa-page'));
@@ -150,6 +157,25 @@ function createCodeagentAccountsPage({ document, window = document.defaultView, 
     if (action === 'token-metric') { state.metric = element.dataset.v === 'net' ? 'net' : 'total'; render(); return; }
     if (action === 'token-sync') { state.tokens = await ipcRenderer.invoke('token-usage:sync'); render(); return; }
     if (action === 'install-guide') { setup.showGuide(); return; }
+    if (action === 'install-oneclick') {
+      // 页面显示期间一直订阅到终态：去官方页下载后的核签名、安装、管理员确认取消等结果都在这里显示（r25b）。
+      const { sharedClient, runOneClick } = require('./codeagent-install-client');
+      installRun?.stop();
+      state.installing = true; render();
+      await new Promise(resolve => {
+        installRun = runOneClick(sharedClient(ipcRenderer), {
+          onMessage: text => { state.installMessage = text; render(); },
+          onWaiting: text => { state.installing = false; state.installMessage = text; message(text); resolve(); },
+          onSettled: async r => {
+            installRun = null; state.installing = false; state.installMessage = r?.message || '';
+            if (r?.phase !== 'done') message(r?.message || '已结束'); else render();
+            resolve();
+            if (!disposed) { await setup.refresh(); await refresh({ scan: true }); }
+          },
+        });
+      });
+      return;
+    }
     if (action === 'check-install') { await setup.refresh(); await refresh({ scan: true }); return; }
     if (['login', 'add', 'probe', 'probe-all', 'session', 'drawer'].includes(action)) {
       await setup.refresh();
@@ -242,7 +268,7 @@ function createCodeagentAccountsPage({ document, window = document.defaultView, 
   document.getElementById('btn-rail-accounts')?.setAttribute('aria-controls', 'codeagent-accounts-page');
   window.__codeagentAccountsOpen = open; window.__codeagentAccountsHide = close;
   return { open, close, isOpen: () => !!page && !page.hidden, refresh, destroy() {
-    disposed = true; close(); unsubscribeSetup(); state.queue = []; ipcRenderer.removeListener('codeagent-pool:changed', changed); ipcRenderer.removeListener('token-usage-changed', tokensChanged);
+    disposed = true; close(); unsubscribeSetup(); installRun?.stop(); installRun = null; state.queue = []; ipcRenderer.removeListener('codeagent-pool:changed', changed); ipcRenderer.removeListener('token-usage-changed', tokensChanged);
     document.removeEventListener('click', onNav); page?.remove();
   }, whenIdle: () => pending || Promise.resolve() };
 }

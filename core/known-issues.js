@@ -23,13 +23,13 @@ const KNOWN_ISSUES = [
     // core/community-provider.js「未找到 ${name} CLI」，renderer/codeagent-setup.js「CodeAgent 未安装」。
     test: /未找到\s*CodeAgent\s*CLI|CodeAgent\s*未安装/i,
     title: '这台电脑上没找到 CodeAgent',
-    fix: '按安装说明装好 CodeAgent，回来点「重新检测」；装在自定义位置的，重启一次 AI HUB 再检测。',
-    action: { label: '查看安装说明', act: 'known:codeagent-install' } },
+    fix: '点「一键安装」：Hub 用官方安装包静默安装（Windows 会弹一次管理员确认）；本机没有安装包时会打开官方下载页，点下载后自动接着装。装在自定义位置的，到安装说明里点「手动选择…」。',
+    action: { label: '一键安装', act: 'known:codeagent-oneclick' } },
   { id: 'codeagent-outdated', areas: ['codeagent'],
     // core/codeagent-version-check.js 门槛 1.2615.02.01；renderer/codeagent-version-notice.js「CodeAgent 版本较旧，卡片视图可能显示不出回答」。
     test: /CodeAgent\s*版本(?:较旧|过旧|太旧)|codeagent[^\n]{0,40}(?:outdated|too old)/i,
     title: 'CodeAgent 版本太旧',
-    fix: '运行 codeagent update 升级（或到 CSOP 软件中心下载 Cli3.0-Setup.exe 重装），升级后重启 AI HUB。',
+    fix: '点「一键升级」：Hub 在后台运行 codeagent update，不弹命令行窗口；升级失败时会打开官方下载页让你下载重装。',
     action: { label: '一键升级', act: 'known:codeagent-upgrade' } },
   { id: 'cli-missing',
     // core/community-provider.js「未找到 Claude Code CLI。请从首页「安装说明」安装 …」。

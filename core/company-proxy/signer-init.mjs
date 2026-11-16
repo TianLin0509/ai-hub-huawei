@@ -66,8 +66,39 @@ function stampProbeSpawn(scope, command, args, options) {
   try { child = Reflect.apply(scope.delegate, childProcess, [command, [...args], { ...base, env, windowsHide: true, shell: false, detached: false }]); }
   catch { scope.cliFailed = true; throw failure('SIGNER_INIT_CLI_FAILED', scope); }
   scope.cliChild = child;
+  trackChild(scope, child);
   child?.once?.('error', () => { scope.cliFailed = true; });
   return child;
+}
+
+function trackChild(scope, child) {
+  if (!child) return;
+  scope.children.add(child);
+  const done = () => scope.children.delete(child);
+  child.once?.('exit', done);
+  child.once?.('error', done);
+}
+
+// These are temporary initialization processes, never an interactive session.
+// A signer can return before its probe exits; clean up on every return path.
+async function stopChildren(scope, spawn) {
+  await Promise.all([...scope.children].map(async child => {
+    const fallback = () => { try { child.kill?.(); } catch {} };
+    if (process.platform === 'win32' && Number.isInteger(child.pid) && child.pid > 0) {
+      try {
+        const killer = spawn('C:\\Windows\\System32\\taskkill.exe', ['/PID', String(child.pid), '/T', '/F'],
+          { windowsHide: true, shell: false, stdio: 'ignore' });
+        await new Promise(resolve => {
+          let done = false;
+          const finish = failed => { if (done) return; done = true; clearTimeout(timer); if (failed && scope.children.has(child)) fallback(); resolve(); };
+          const timer = setTimeout(() => finish(true), 5000);
+          killer.once('error', () => finish(true));
+          killer.once('close', code => finish(code !== 0));
+        });
+      } catch { fallback(); }
+    } else fallback();
+  }));
+  scope.children.clear();
 }
 
 // Only the SHA-verified signer's known spawn paths are in scope. This is not a
@@ -90,7 +121,11 @@ function scopedSpawn(command, args, options) {
     throw failure('SIGNER_INIT_SPAWN_BLOCKED', scope);
   }
   scope.registryAllowed++;
-  try { return Reflect.apply(scope.delegate, childProcess, [command, [...args.slice(0, 3), scope.registryScript], options]); }
+  try {
+    const child = Reflect.apply(scope.delegate, childProcess, [command, [...args.slice(0, 3), scope.registryScript], options]);
+    trackChild(scope, child);
+    return child;
+  }
   catch {
     scope.spawnFailed = true;
     throw failure('SIGNER_INIT_REGISTRY_SPAWN_FAILED', scope);
@@ -103,7 +138,6 @@ const withTimeout = (promise, ms, scope) => {
   return Promise.race([promise, new Promise((_, reject) => {
     timer = setTimeout(() => {
       scope.timedOut = true;
-      try { scope.cliChild?.kill?.(); } catch { /* already gone */ }
       reject(failure('SIGNER_INIT_TIMEOUT', scope));
     }, ms);
     timer.unref?.();
@@ -123,7 +157,7 @@ export async function initializeCacheOnlySigner(options = {}) {
   if (active) throw failure('SIGNER_INIT_BUSY');
   const scope = { blocked: false, spawnFailed: false, delegate: null,
     cliCommand: null, registryScript: null, registryAllowed: 0, cliBlocked: 0, otherBlocked: 0,
-    allowStampProbe: options.allowStampProbe === true, cliAllowed: 0, cliFailed: false, cliChild: null, timedOut: false };
+    allowStampProbe: options.allowStampProbe === true, cliAllowed: 0, cliFailed: false, cliChild: null, timedOut: false, children: new Set() };
   active = scope;
   const originalSpawn = childProcess.spawn;
   let installed = false;
@@ -157,6 +191,7 @@ export async function initializeCacheOnlySigner(options = {}) {
     if (publicErrors.has(error)) throw failure(error.code, scope);
     throw failure('SIGNER_INIT_FAILED', scope);
   } finally {
+    await stopChildren(scope, originalSpawn);
     try {
       if (installed) { childProcess.spawn = originalSpawn; syncBuiltinESMExports(); }
     } catch { throw failure('SIGNER_INIT_RESTORE_FAILED', scope); }

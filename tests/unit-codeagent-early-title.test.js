@@ -8,7 +8,7 @@ const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { EventEmitter } = require('node:events');
 
-function harness() {
+function harness({ sendError } = {}) {
   const file = path.join(__dirname, '..', 'main', 'ipc', 'prompt-submit-handlers.js');
   const localRequire = createRequire(file);
   const events = [];
@@ -17,7 +17,7 @@ function harness() {
     require: name => name === '../../core/group-chat-watcher.js' ? {
       codeAgentInputAction: async () => ({ ok: true }),
       // 模拟 CLI 还在启动：发送迟迟不返回
-      sendToPty: (_sid, text) => { events.push(['pty', text]); return new Promise(resolve => { releaseSend = () => resolve({ ok: true }); }); },
+      sendToPty: (_sid, text) => { events.push(['pty', text]); if (sendError) throw sendError; return new Promise(resolve => { releaseSend = () => resolve({ ok: true }); }); },
     } : localRequire(name),
   });
   vm.runInContext(fs.readFileSync(file, 'utf8'), context);
@@ -32,6 +32,16 @@ function harness() {
   });
   return { events, send: req => handlers.get('session:send-prompt')(null, req), release: () => releaseSend?.(), registration };
 }
+
+test('CLI 明确退出且未发送的结构化原因穿过 IPC，普通异常不能冒充可重发', async () => {
+  for (const [error, expected] of [[Object.assign(Error('退出'), { notSent: true, code: 'cli-exited' }), true], [Error('未知提交'), false]]) {
+    const h = harness({ sendError: error });
+    try {
+      const got = await h.send({ sessionId: 's1', text: '今天有什么会议', clientSubmissionId: 'assistant-exit' });
+      assert.equal(got.error, 'send-threw'); assert.equal(got.code === 'cli-exited', expected); assert.equal(got.notSent === true, expected);
+    } finally { h.registration.dispose(); }
+  }
+});
 
 test('用户亲手发送时，起名先于写入 CLI，且用的是用户原话', async () => {
   const h = harness();

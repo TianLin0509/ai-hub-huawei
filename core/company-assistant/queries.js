@@ -52,8 +52,9 @@ async function readJson(run, args, { diagnose = async () => {} } = {}) {
     if (r.code === null || r.code !== undefined && Number(r.code) !== 0) throw new Error(String(r.stderr || r.stdout || `查询退出码 ${r.code}`).trim());
   };
   checkExit(result);
-  // Q-1021-07：仅 calendar list 的成功空结果是纯文本；不接受其他命令或失败退出。
-  if (command === 'calendar list' && [0, '0'].includes(result.code) && String(result.stdout || '').trim() === 'No events found.') return [];
+  // 已核对的空结果是纯文本；只接受对应查询的精确标记及成功退出码。
+  const emptyResult = r => [0, '0'].includes(r.code) && String(r.stdout || '').trim() === ({ 'calendar list': 'No events found.', 'mail list': 'No messages found.' }[command] || '\0');
+  if (emptyResult(result)) return [];
   let data = W.parseJsonBig(result.stdout);
   const calendarNonJson = data == null && command === 'calendar list';
   const lines = calendarNonJson ? String(result.stdout || '').trim().split(/\r?\n/) : [];
@@ -75,7 +76,7 @@ async function readJson(run, args, { diagnose = async () => {} } = {}) {
       result = retry; checkExit(result); data = W.parseJsonBig(result.stdout);
     }
   }
-  if (command === 'calendar list' && [0, '0'].includes(result.code) && String(result.stdout || '').trim() === 'No events found.') return [];
+  if (emptyResult(result)) return [];
   if (calendarTable && (!data || typeof data !== 'object')) {
     if (table.events.length) return { events: table.events, tableInvalid: table.tableInvalid };
     throw Object.assign(new Error(CALENDAR_TABLE_UPGRADE), { code: CALENDAR_NON_JSON, tableInvalid: table.tableInvalid });
@@ -251,7 +252,12 @@ async function collectMails(runJson, { diagnose = async () => {} } = {}) {
   const coverage = { status: 'partial', reason: 'result-limit', pages: 0, records: 0, rawCount: 0, limit: MAIL_MAX, pageSize: MAIL_PAGE_SIZE };
   let offset = 0;
   while (offset < MAIL_MAX) {
-    const raw = await runJson('未读邮件', ['mail', 'list', '--is-read', '0', '--max', String(MAIL_PAGE_SIZE), '--offset', String(offset)]);
+    let raw;
+    try { raw = await runJson('未读邮件', ['mail', 'list', '--is-read', '0', '--max', String(MAIL_PAGE_SIZE), '--offset', String(offset)]); }
+    catch (error) {
+      if (error.code !== WELINK_RATE_LIMITED) throw error;
+      coverage.status = 'deferred'; coverage.reason = 'rate-limited'; break;
+    }
     coverage.pages += 1;
     if (!raw) { coverage.status = found.size ? 'partial' : 'failed'; coverage.reason = 'query-failed'; coverage.failedPage = coverage.pages; break; }
     const records = mailRecords(raw);
@@ -272,6 +278,7 @@ async function collectMails(runJson, { diagnose = async () => {} } = {}) {
   }
   coverage.records = found.size;
   coverage.reasonLabel = {
+    'rate-limited': `请求太频繁，稍后自动再查；已取 ${found.size} 封`,
     'query-failed': found.size ? `已取 ${found.size} 封；第 ${coverage.failedPage} 页查询失败，未读邮件未取全` : '未读邮件查询失败',
     'invalid-shape': `已取 ${found.size} 封；无法识别未读邮件结构，未读邮件未取全`,
     'repeated-page': `已取 ${found.size} 封；接口重复返回邮件，未读邮件未取全`,

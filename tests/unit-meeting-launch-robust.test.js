@@ -167,7 +167,7 @@ test('页面就地显示安装入口，旧错误码也显示中文；开录后�
   const window = { addEventListener() {}, HubErrorCard: require('../renderer/hub-error-card') };
   const page = module.exports.createCompanyMeetingPage({ document: {}, window, markdown: s => s, call: async (op, r) => { payloads.push([op, r]); return { meeting: { id: randomUUID() } }; } });
   page.configure(root, { asr: { ready: true } });
-  page.message('未找到 CodeAgent CLI'); assert.match(node('[data-m="agent-help"]').innerHTML, /known:codeagent-install/);
+  page.message('未找到 CodeAgent CLI'); assert.match(node('[data-m="agent-help"]').innerHTML, /known:codeagent-oneclick/);
   page.message('cli-not-ready'); assert.match(node('[data-m="message"]').textContent, /稍后点重试/);
   const card = page.questionCard({ id: 'old', state: 'error', error: 'cli-not-ready' }, true);
   assert.match(card, /稍后点重试/); assert.doesNotMatch(card, /cli-not-ready/);

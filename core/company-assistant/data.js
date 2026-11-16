@@ -285,6 +285,17 @@ function reviewAnchor(conv, list, myName = '', settings = null) {
   return null;
 }
 const judgeShape = m => ({ mine: m.mine, kind: m.text ? 'text' : 'other', text: m.text, at: m.at });
+// 方括号也用于附件和状态占位；只剥掉明确的表情名，未知标签留作正文。
+const TEXT_EMOJI_NAMES = new Set('微笑 大笑 呲牙 露齿 笑哭 偷笑 憨笑 可爱 调皮 眨眼 害羞 得意 酷 大哭 流泪 委屈 难过 失望 惊讶 惊恐 发呆 晕 困 睡 尴尬 无语 疑问 嘘 亲亲 么么哒 爱心 心碎 玫瑰 凋谢 鲜花 咖啡 蛋糕 礼物 太阳 月亮 强 弱 赞 点赞 鼓掌 握手 拥抱 抱拳 合十 胜利 加油 OK ok'.split(' '));
+const emojiReply = m => {
+  if (!m.mine || RJ.asks(judgeShape(m))) return false;
+  let found = false;
+  const rest = String(m.text || '')
+    .replace(/\u2060\/[A-Za-z;:]{1,3}|\p{Extended_Pictographic}/gu, () => { found = true; return ''; })
+    .replace(/\[([^\]\s]{1,8})\]/g, (tag, name) => { if (!TEXT_EMOJI_NAMES.has(name)) return tag; found = true; return ''; })
+    .replace(/[\p{P}\p{S}\s\u2060‍️]/gu, '');
+  return found && !rest;
+};
 const LEVEL_ORDER = { strong: 0, weak: 1, settled: 2 };
 function awaiting(snapshot, settings = {}, { now, review } = {}) {
   const myName = settings.myName || '';
@@ -311,9 +322,14 @@ function awaiting(snapshot, settings = {}, { now, review } = {}) {
     for (const hit of groupHits(conv, list, myName, settings)) {
       const named = mentionsMe(hit, myName);
       let level = named && aiLevel === 'settled' ? 'weak' : aiLevel || 'strong';
+      // 纯表情紧跟这条点名消息，且中间没有其他发言，按明确回应处理；群里普通发言仍不能结案。
+      const next = list[list.indexOf(hit) + 1];
+      const responded = next && next.at > hit.at && emojiReply(next);
+      if (responded) level = 'settled';
       // 小群 @所有人：我之后在群里说过话就算回应过了（点名 @我 仍按原口径不自动结案）
       if (!named && !aiLevel && list.some(m => m.mine && m.at > hit.at)) level = 'settled';
-      out.push({ ...hit, since: hit.at, needsReplyReview: true, level, ...(named ? {} : { atAllSmallGroup: true }), ...extra });
+      out.push({ ...hit, since: hit.at, needsReplyReview: true, level, ...(named ? {} : { atAllSmallGroup: true }), ...extra,
+        ...(responded ? { judge: 'emoji-reply', aiVerdict: undefined, aiReason: undefined } : {}) });
     }
   }
   return out.sort((a, b) => (LEVEL_ORDER[a.level] - LEVEL_ORDER[b.level]) || a.since - b.since);

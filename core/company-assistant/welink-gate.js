@@ -10,7 +10,7 @@ const PRIORITY = Object.freeze({ phone: 0, user: 1, background: 2 });
 const context = new AsyncLocalStorage();
 const withWelinkPriority = (priority, run) => context.run({ ...context.getStore(), priority }, run);
 const rateLimited = result => String(result?.code) === '429' || result?.code != null && Number(result.code) !== 0
-  && /\bstatus\s+429\b/i.test(String(result.stdout || '') + '\n' + String(result.stderr || ''));
+  && /\b(?:status|HTTP)\s+429\b/i.test(String(result.stdout || '') + '\n' + String(result.stderr || ''));
 const exempt = args => args[0] === '--version' || args.includes('--help') || args[0] === 'auth' && args[1] === 'login';
 // Exchange commands have not hit rate limits in the observed account. Bypass
 // request spacing for these verified commands, but share cooldown and retries.

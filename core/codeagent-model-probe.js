@@ -33,7 +33,8 @@ function readProbed(file) {
     // Keep old model values usable while the caller refreshes stale menu evidence.
     const windows = raw.source === 'serve' ? contextWindows(models, raw.contextWindows) : {};
     return models.length ? { models, defaultModel: cleanModelId(raw.defaultModel), at: raw.at || null, source: raw.source || 'menu', parserVersion: raw.parserVersion,
-      ...(Object.keys(windows).length ? { contextWindows: windows } : {}) } : null;
+      ...(Object.keys(windows).length ? { contextWindows: windows } : {}),
+      ...(Array.isArray(raw.details) ? { details: raw.details } : {}) } : null;
   } catch { return null; }
 }
 
@@ -45,7 +46,8 @@ function writeProbed(file, result) {
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify({ schema: 1, models: result.models, defaultModel: result.defaultModel || '', at: new Date().toISOString(),
     source: result.source || 'menu', ...((result.source || 'menu') === 'menu' ? { parserVersion: require('./codeagent-models').MODEL_MENU_PARSER_VERSION } : {}),
-    ...(Object.keys(windows).length ? { contextWindows: windows } : {}) }, null, 2) + '\n', 'utf8');
+    ...(Object.keys(windows).length ? { contextWindows: windows } : {}),
+    ...(Array.isArray(result.details) ? { details: result.details.map(({ id, label, provider, providerLabel }) => ({ id, label, provider, providerLabel })) } : {}) }, null, 2) + '\n', 'utf8');
   fs.renameSync(tmp, file);
 }
 
@@ -58,7 +60,8 @@ function modelsFromPicker(picker) {
     models.push(id);
     if (/\bdefault\b/i.test(row.text)) defaultModel = id;
   }
-  return { models, defaultModel };
+  return { models, defaultModel, details: picker.rows.map(row => ({ id: cleanModelId(row.label), label: row.label,
+    ...(row.group ? { provider: row.group, providerLabel: row.group } : {}) })).filter(row => row.id) };
 }
 
 // command/configDirEnv 来自 core/codeagent-config.js；cwd 必须是一个下面没有 .cac 凭证的目录（否则会认成别的号）。

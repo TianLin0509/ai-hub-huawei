@@ -319,7 +319,7 @@ function createModelUiController({
     const ownList = session && Array.isArray(session._codeagentModelOptions) ? session._codeagentModelOptions : null;
     const options = (session?.companyRoute === 'local' || session?.cliApiProfileId) && Array.isArray(session._localCliModelOptions) ? session._localCliModelOptions
       : ownList || getModelOptions(require('../core/chatgpt-web-models').isChatgptWebModel(session?.currentModel?.id) ? 'chatgpt' : kind);
-    const automaticCodeAgent = !!(session && session._codeagentAutomatic);
+    const automaticCodeAgent = !!(session && session._codeagentAutomatic && !session.modelConfirmationRequired && !session._codeagentModelRecovery);
     const strategy = automaticCodeAgent ? null : modelSwitchStrategy(kind);
     const currentId = session && session.currentModel ? (session.currentModel.id || '') : '';
     const hasExactCurrent = options.some(option => String(option.id).toLowerCase() === String(currentId).toLowerCase());
@@ -408,8 +408,9 @@ function createModelUiController({
       // 用户完全无从知道新模型的存在 —— 那正是要修的毛病。
       if (opt.disabled) item.classList.add('disabled');
       item.dataset.modelId = opt.id;
-      const current = String(currentId).toLowerCase() === String(opt.id).toLowerCase()
-        || (!hasExactCurrent && modelSelectionMatches(currentId, opt.id));
+      const current = (String(currentId).toLowerCase() === String(opt.id).toLowerCase()
+        || (!hasExactCurrent && modelSelectionMatches(currentId, opt.id)))
+        && (!opt.provider || opt.provider === (session.codeagentModelProvider || session.currentModel?.provider));
       if (current) item.classList.add('current');
       if (session && session._modelSwitchPending) item.classList.add('disabled');
       item.title = opt.disabled && opt.upgradeTo
@@ -433,6 +434,10 @@ function createModelUiController({
 
   async function showModelPicker(badgeEl, sessionId) {
     closeModelPicker();
+    const recovery = badgeEl.dataset?.modelRecovery === 'true';
+    if (badgeEl.dataset) delete badgeEl.dataset.modelRecovery;
+    const targetSession = sessions.get(sessionId);
+    if (targetSession) targetSession._codeagentModelRecovery = recovery;
     const menu = document.createElement('div');
     menu.className = 'model-picker-menu';
     document.body.appendChild(menu);
@@ -683,11 +688,14 @@ function createModelUiController({
     try {
       commandScreen = await beginCommandScreen(sessionId, session);
       if (strategy === 'codeagent-picker') {
-        if (isSessionBusy(session)) throw new Error('当前回答仍在运行，请结束后再切换');
-        const result = await ipcRenderer.invoke('codeagent:switch-model', { sessionId, modelId: option.id });
+        if (isSessionBusy(session) && !session.modelConfirmationRequired && !session._codeagentModelRecovery) throw new Error('当前回答仍在运行，请结束后再切换');
+        const result = await ipcRenderer.invoke('codeagent:switch-model', { sessionId, modelId: option.id,
+          ...(session._codeagentModelRecovery ? { recovery: true } : {}),
+          ...(option.provider ? { provider: option.provider, providerLabel: option.providerLabel, menuLabel: option.menuLabel } : {}) });
         if (!result || result.ok !== true) throw new Error(result && result.message || 'CodeAgent 没能切换模型');
         const current = sessions.get(sessionId) || session;
         current.currentModel = { ...result.model };
+        if (option.provider) { current.codeagentModelProvider = option.provider; current.codeagentModelProviderLabel = option.providerLabel || option.provider; }
         delete session._modelSwitchPending;
         delete current._modelSwitchPending;
         updateActiveModelChip();
@@ -958,6 +966,8 @@ function createModelUiController({
 
   function closeModelPicker() {
     if (!openModelPicker) return;
+    const session = sessions.get(openModelPicker.sessionId);
+    if (session) delete session._codeagentModelRecovery;
     document.removeEventListener('click', openModelPicker.onDocClick);
     openModelPicker.el.remove();
     openModelPicker = null;

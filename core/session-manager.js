@@ -339,10 +339,12 @@ function createNativeClaudeDriver(id, kind, opts, cwd, env, legacy) {
   const settings = [];
   if (opts.meetingId || opts.autonomous === true) settings.push(ensureGroupChatSettings(hubDataDir));
   if (!legacy && shouldUseClaudeFastSettings(cv, opts)) settings.push(resolveAsarUnpacked('claude-subscription-fast-settings.json'));
+  const connection = require('./claude-connection-settings').connectionSettings({ values: opts.claudeConnectionValues || cv, env, model: opts.model, cwd });
   const settingsFile = prepareClaudeSettingsOverlay(settings, {
     directory: path.join(hubDataDir, 'native-agent-settings'), sessionId: id + '-' + require('crypto').randomUUID(),
     overrides: { ...require('./agent-user-context').claudeSharedConfig(env,hubDataDir),fastMode: !legacy && shouldUseClaudeFastSettings(cv, opts),
       ...(opts.claudeSharedNetworkEnv ? { env: opts.claudeSharedNetworkEnv } : {}),
+      ...(connection.env ? { env: { ...(opts.claudeSharedNetworkEnv || {}), ...connection.env } } : {}),
       ...(opts.claudeOutputStyle ? { outputStyle: String(opts.claudeOutputStyle) } : {}),
       ...(['hub-assistant','hub-photo-assistant'].includes(opts.purpose) && opts.autonomous === true ? {skipDangerousModePermissionPrompt:true} : {}) },
   });
@@ -365,7 +367,9 @@ function createNativeClaudeDriver(id, kind, opts, cwd, env, legacy) {
   const unstarted = opts.nativeRuntime?.connection === 'unstarted' && opts.nativeRuntime?.lazyStart === true
     && !records.length && !opts.forkCCSessionId && !!opts.resumeCCSessionId
     && !require('./claude-native-history').findNativeClaudeHistory(opts.resumeCCSessionId, { cwd, env });
-  return new ClaudeNativeSession({ id, kind, cwd, env, launchArgs: require('./cli-capabilities').filterArgs('claude', launchArgs).args, settingsFile, hubDataDir, journalSessionId:id,
+  const compatibleArgs = require('./cli-capabilities').filterArgs('claude', launchArgs).args;
+  require('./claude-connection-settings').assertSettingsSupport(connection, compatibleArgs);
+  const driver = new ClaudeNativeSession({ id, kind, cwd, env, launchArgs: compatibleArgs, settingsFile, hubDataDir, journalSessionId:id,
     hubPid:process.pid,hubVersion:require('../package.json').version,
     fastMode: !legacy && shouldUseClaudeFastSettings(cv, opts),
     ownership: true, exclusiveSession:true, nativeProvider: 'claude', lazyStart: opts.lazyStart === true,
@@ -380,6 +384,8 @@ function createNativeClaudeDriver(id, kind, opts, cwd, env, legacy) {
       commandArgs: [fixture, '--fixture=' + (process.env.CLAUDE_HUB_CLAUDE_FIXTURE_MODE || 'normal')],
       env: { ...env, ELECTRON_RUN_AS_NODE: '1' } } : {}),
   });
+  driver.claudeConnectionNotice = connection.notice;
+  return driver;
 }
 
 // PTY 模式下 Claude 的启动命令。参数与原生驱动共用 buildClaudeNativeArgs，
@@ -403,9 +409,11 @@ function buildClaudePtyLaunch(id, kind, opts, cwd, env, cv) {
   let cliTheme = null;
   try { cliTheme = require('./cli-coldwhite-theme').ensureClaudeTheme(env, opts.hubUiTheme); }
   catch (error) { console.warn('[CLI theme] Claude:', error.message); }
+  const connection = require('./claude-connection-settings').connectionSettings({ values: cv, env, model: opts.model, cwd });
   const settingsFile = prepareClaudeSettingsOverlay(settings, {
     directory: path.join(hubDataDir, 'native-agent-settings'), sessionId: id + '-' + require('crypto').randomUUID(),
-    overrides: { fastMode: fast, skipDangerousModePermissionPrompt: true, ...(cliTheme ? { theme: cliTheme } : {}), ...(opts.claudeNetworkEnv ? { env: opts.claudeNetworkEnv } : {}) },
+    overrides: { fastMode: fast, skipDangerousModePermissionPrompt: true, ...(cliTheme ? { theme: cliTheme } : {}),
+      ...((opts.claudeNetworkEnv || connection.env) ? { env: { ...(opts.claudeNetworkEnv || {}), ...(connection.env || {}) } } : {}) },
   });
   const args = buildClaudeNativeArgs({ model: opts.model, omitModel: cv.COMPANY_CLI && !opts.model,
     effort: process.env.CLAUDE_HUB_NO_EFFORT_MAX === '1' ? null
@@ -443,8 +451,10 @@ function buildClaudePtyLaunch(id, kind, opts, cwd, env, cv) {
     identity = ['--session-id', sessionId];
   }
   const quote = value => /^[A-Za-z0-9_.:=\/\\-]+$/.test(String(value)) ? String(value) : quotePowerShellLiteral(value);
-  const cmd = ' claude ' + [...identity, ...require('./cli-capabilities').filterArgs('claude', args).args].map(quote).join(' ') + '\r\n';
-  return { cmd, sessionId, fast };
+  const compatibleArgs = require('./cli-capabilities').filterArgs('claude', args).args;
+  require('./claude-connection-settings').assertSettingsSupport(connection, compatibleArgs);
+  const cmd = ' claude ' + [...identity, ...compatibleArgs].map(quote).join(' ') + '\r\n';
+  return { cmd, sessionId, fast, connectionNotice: connection.notice };
 }
 
 // 公司 Code Agent 的启动命令（core/codeagent-config.js 说明了它与 Claude 的差异）。
@@ -585,7 +595,7 @@ function buildCodeAgentPtyLaunch(id, kind, opts, cwd, env, config, auth = null, 
   const inheritModel = !pin.fixedModel;
   let requestedModel = pin.fixedModel || null;
   // 模型用 --settings 文件指定（见 codeagentLaunchModel）；写法拿不准就不传，照旧由 /model 菜单选。
-  let settingsModel = requestedModel && pin.settingsSupported ? codeagentLaunchModel(requestedModel, { pool, dataDir: hubDataDir }) : '';
+  let settingsModel = requestedModel && pin.settingsSupported && !opts.codeagentModelProvider ? codeagentLaunchModel(requestedModel, { pool, dataDir: hubDataDir }) : '';
   let settingsFile = '';
   if (settingsModel) {
     try { settingsFile = writeCodeAgentLaunchSettings(hubDataDir, id, settingsModel); args.push('--settings', settingsFile); }
@@ -1971,6 +1981,7 @@ class SessionManager extends EventEmitter {
     if (isClaude) {
       const cv = getLaunchValues();
       applyClaudeSessionEnv(sessionEnv, cv, { sessionId: id, model: opts.model, companyProxyAccount: opts.companyProxyAccount });
+      opts = { ...opts, claudeConnectionValues: cv };
       if (apiLaunch) {
         sessionEnv.CLAUDE_CONFIG_DIR = apiLaunch.home;
         opts = { ...opts, claudeConfigDir: apiLaunch.home };
@@ -2759,6 +2770,7 @@ class SessionManager extends EventEmitter {
       ...(isCodeAgent && typeof opts.codeagentActualModel === 'string' && require('./codeagent-models').isSafeModelId(opts.codeagentActualModel)
         ? { codeagentActualModel: opts.codeagentActualModel.trim() } : {}),
       ...(isCodeAgent ? { codeagentConfigDir: codeagentConfig.configDir, codeagentIdentityPending: !codeagentLaunch.sessionId,
+        ...require('./codeagent-model-choice').routeFields(opts),
         codeagentForkSourceSessionId: opts.forkCCSessionId || opts.codeagentForkSourceSessionId || undefined,
         codeagentModelPick: codeagentLaunch.requiresMenu } : {}),
       ...(isCodeAgent && codeAgentRouteModel(opts) ? { codeagentRouteModel: codeAgentRouteModel(opts) } : {}),
@@ -3046,6 +3058,10 @@ class SessionManager extends EventEmitter {
     }
 
     if (isNativeClaude) require('./claude-native-binding').bindClaudeNativeSession(this, id, ptyProcess);
+    const claudeConnectionNotice = claudePtyLaunch?.connectionNotice || ptyProcess.claudeConnectionNotice;
+    if (claudeConnectionNotice) setTimeout(() => this.emit('session-notice', {
+      sessionId: id, message: claudeConnectionNotice, level: 'warning', persistent: true,
+    }), 0);
     if (deepseekClaudeLaunch && deepseekClaudeLaunch.notice) {
       const message = deepseekClaudeLaunch.notice;
       setTimeout(() => this.emit('session-notice', { sessionId: id, message, level: 'warning' }), 0);
@@ -3606,6 +3622,11 @@ try {
     if (!session) {
       return { ok: false, error: 'session-not-found', message: '会话不存在或已经休眠' };
     }
+    if (options.requireSettledCodeAgent && Number(options.minIdleMs) > 0 && isCodeAgentKind(session.info.kind)
+        && (session.agentTurnActive === true || !['idle', 'completed', 'interrupted', 'failed'].includes(session.info.status)
+          || !(Number(session.agentTurnFinishedAt) > 0) || Number(session.lastInputAt || 0) > session.agentTurnFinishedAt)) {
+      return { ok: false, error: 'codeagent-not-settled', message: 'CodeAgent 尚未确认完成，或完成后仍有输入，已跳过自动休眠' };
+    }
     if (session.info.agentRuntime === 'pty' && session.agentTurnActive
         && (options.reason === 'meeting-room-complete' || Number(options.minIdleMs) > 0)) {
       return { ok:false, error:'pty-turn-unfinished', message:'CLI 仍在执行或等待操作，已跳过自动休眠' };
@@ -3685,7 +3706,9 @@ try {
       if (!session) continue;
       const verdict = this._evaluateSuspendEligibility(sessionId, {
         now,
-        minIdleMs: idleMs,
+        minIdleMs: isCodeAgentKind(session.info.kind) && Number(options.codeagentIdleMs) > 0
+          ? Math.min(idleMs, Math.max(60000, Number(options.codeagentIdleMs))) : idleMs,
+        requireSettledCodeAgent: options.requireSettledCodeAgent,
         excludePinned: options.excludePinned !== false,
         excludeMeeting: options.excludeMeeting === true,
         excludeFocused: options.excludeFocused !== false,
@@ -3824,9 +3847,13 @@ try {
     const requested = [];
     const skipped = {};
     for (const sessionId of [...this.sessions.keys()]) {
+      const session = this.sessions.get(sessionId);
+      if (!session) continue;
       const result = this.suspendSession(sessionId, {
         now,
-        minIdleMs: idleMs,
+        minIdleMs: isCodeAgentKind(session.info.kind) && Number(options.codeagentIdleMs) > 0
+          ? Math.min(idleMs, Math.max(60000, Number(options.codeagentIdleMs))) : idleMs,
+        requireSettledCodeAgent: options.requireSettledCodeAgent,
         excludePinned: options.excludePinned !== false,
         excludeMeeting: options.excludeMeeting !== false,
         excludeFocused: options.excludeFocused !== false,
@@ -4299,6 +4326,7 @@ try {
     const at = Number(event.completedAt || event.abortedAt || event.failedAt) || Date.now();
     if (at < s.agentTurnStartedAt) return false;
     s.agentTurnActive = false;
+    s.agentTurnFinishedAt = at;
     const runtimeChanged = require('./codex-pty-runtime').observeCodexPtyRuntime(s, {
       state: event.failedAt ? 'failed' : event.abortedAt ? 'interrupted' : 'completed',
       source: event.failedAt ? 'codex-turn-failed' : event.abortedAt ? 'codex-turn-aborted' : 'codex-turn-complete',
@@ -4399,7 +4427,7 @@ try {
     const isClaudeCli = isClaudeFamily(baseKind);
     const autonomous = !!(s.info && s.info.autonomous);
     // CodeAgent 的群聊隔离 overlay 不传；模型专属设置由启动器单独处理。
-    const isolation = isClaudeCli && !isCodeAgentKind(baseKind) ? buildGroupChatIsolationFlags(meetingId || autonomous) : '';
+    let isolation = isClaudeCli && !isCodeAgentKind(baseKind) ? buildGroupChatIsolationFlags(meetingId || autonomous) : '';
     let cmd;
     if (isCodeAgentKind(runtimeKind)) {
       // 原地重拉开一个新的 CLI 进程（同 Claude）。它不认 --session-id，新身份要等 hook 上报：
@@ -4413,6 +4441,7 @@ try {
       const known = s.info.codeagentPoolAccount ? require('./codeagent-pool').accountModels(config.configDir) : null;
       const pool = known ? { account: { models: known.models, modelsAuthoritative: known.authoritative, modelsSource: known.probedSource } } : null;
       const launch = buildCodeAgentPtyLaunch(sessionId, 'codeagent', {
+        ...require('./codeagent-model-choice').routeFields(s.info),
         model: modelId, effort: s.info && s.info.effort, mcpConfigFile: s.claudeMcpConfigFile,
         ...require('./session-model-pin').migrateModelPin(s.info),
         mcpProfile: s.info && s.info.mcpProfile, appendSystemPromptFile: relaunchRules ? relaunchRules.file : undefined,
@@ -4497,12 +4526,37 @@ try {
         const standardSettingsPath = resolveAsarUnpacked('claude-subscription-standard-settings.json');
         fastFlag = ` --settings "${standardSettingsPath.replace(/\\/g, '\\\\')}"`;
       }
-      if (['hub-assistant','hub-photo-assistant'].includes(s.info?.purpose) && autonomous) {
+      const assistantSettings = ['hub-assistant','hub-photo-assistant'].includes(s.info?.purpose) && autonomous;
+      if (assistantSettings) {
         const fast = shouldUseClaudeFastSettings(cv, {fastMode:s.info.fastMode,autonomous});
         const settingsFile = require('./claude-native-launch').prepareClaudeSettingsOverlay(
           [ensureGroupChatSettings(getHubDataDir()),resolveAsarUnpacked(fast?'claude-subscription-fast-settings.json':'claude-subscription-standard-settings.json')],
           {directory:path.join(getHubDataDir(),'native-agent-settings'),sessionId:sessionId+'-'+require('crypto').randomUUID(),overrides:{skipDangerousModePermissionPrompt:true}});
         fastFlag = ` --settings "${settingsFile.replace(/\\/g, '\\\\')}"`;
+      }
+      const relaunchEnv = { ...(s.pty.options?.env || process.env),
+        ...(s.info?.claudeConfigDir ? { CLAUDE_CONFIG_DIR: s.info.claudeConfigDir } : {}) };
+      // Some PTY implementations do not retain options.env. Rebuild the Hub
+      // connection instead of emitting an empty token/endpoint on relaunch.
+      if (require('./claude-connection-settings').connectionEnv(cv, relaunchEnv, modelId)) {
+        applyClaudeSessionEnv(relaunchEnv, cv, { sessionId, model: modelId, companyProxyAccount: s.info?.companyProxyAccount });
+      }
+      const connection = require('./claude-connection-settings').connectionSettings({
+        values: cv, env: relaunchEnv, model: modelId, cwd: s.info?.cwd,
+      });
+      if (connection.env) {
+        require('./claude-connection-settings').assertSettingsSupport(connection, require('./cli-capabilities').filterArgs('claude', ['--settings', 'overlay.json']).args);
+        const files = [];
+        if (meetingId || autonomous) files.push(ensureGroupChatSettings(getHubDataDir()));
+        if (shouldUseClaudeFastSettings(cv, { fastMode: s.info?.fastMode, autonomous })) files.push(resolveAsarUnpacked('claude-subscription-fast-settings.json'));
+        else if (s.info?.fastMode === false || assistantSettings) files.push(resolveAsarUnpacked('claude-subscription-standard-settings.json'));
+        const file = require('./claude-native-launch').prepareClaudeSettingsOverlay(files, {
+          directory: path.join(getHubDataDir(), 'native-agent-settings'), sessionId: sessionId + '-' + require('crypto').randomUUID(),
+          overrides: { env: connection.env, ...(assistantSettings ? { skipDangerousModePermissionPrompt: true } : {}) },
+        });
+        fastFlag = ` --settings ${quotePowerShellLiteral(file)}`;
+        isolation = '';
+        if (connection.notice) this.emit('session-notice', { sessionId, message: connection.notice, level: 'warning', persistent: true });
       }
       // 单人和群聊都沿用自己的 MCP 档位；群聊与 autonomous 额外恢复 research config。
       const mcpPlan = (meetingId || (autonomous && s.claudeMcpConfigFile))
@@ -4668,6 +4722,7 @@ try {
       ...(info.codeagentActualModel ? { codeagentActualModel: info.codeagentActualModel } : {}),
       ...(info.codeagentLaunchModel ? { codeagentLaunchModel: info.codeagentLaunchModel } : {}),
       ...(info.codeagentRequestedModel ? { codeagentRequestedModel: info.codeagentRequestedModel } : {}),
+      ...require('./codeagent-model-choice').routeFields(info),
       ...(typeof info.codeagentModelPick === 'boolean' ? { codeagentModelPick: info.codeagentModelPick } : {}),
       ...(info.codeagentRouteModel ? { codeagentRouteModel: info.codeagentRouteModel } : {}),
       ...(info.effort ? { effort: info.effort } : {}),
@@ -5054,6 +5109,7 @@ module.exports = {
     shouldUseClaudeFastSettings,
     claudePermissionModeArg,
     buildClaudePtyLaunch,
+    createNativeClaudeDriver,
     buildCodeAgentPtyLaunch,
     syncCodeAgentProjectMcp,
     singleCodeAgentMcpConfig,

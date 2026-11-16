@@ -24,6 +24,84 @@ const TABLE_UPGRADE = 'welink-cli 返回了无法解析的表格，请升级：n
 const reply = stdout => ({ code: 0, stdout, stderr: '' });
 const json = value => reply(JSON.stringify(value));
 
+test('empty unread mailbox is a successful CLI result without a format retry', async () => {
+  let calls = 0;
+  const mails = await Q.readJson(async () => { calls++; return reply('No messages found.\r\n'); }, ['mail', 'list']);
+  assert.deepEqual(mails, []); assert.equal(calls, 1);
+  assert.equal((await Q.collectMails(async () => mails)).coverage.status, 'complete');
+  await assert.rejects(Q.readJson(async () => ({ code: 1, stdout: 'No messages found.', stderr: 'failure' }), ['mail', 'list']));
+  await assert.rejects(Q.readJson(async () => reply('No messages found.'), ['im', 'query-history-message']));
+});
+
+test('HTTP 429 retries only after CLI exit, while a successful CLI retry warning is harmless', async () => {
+  let clock = 0, calls = 0;
+  const gate = new WelinkGate({ now: () => clock, sleep: async ms => { clock += ms; } });
+  try {
+    const got = await Q.readJson(args => gate.run(args, async () => {
+      calls++;
+      return calls === 1 ? { code: 1, stdout: '', stderr: '[WARN] Rate limited (HTTP 429), retry 1/3 after 1000ms' }
+        : { code: 0, stdout: '[]', stderr: '[WARN] Rate limited (HTTP 429), retry 1/3 after 1000ms' };
+    }), ['mail', 'list']);
+    assert.deepEqual(got, []); assert.equal(calls, 2); assert.equal(clock, WELINK_COOLDOWN_MS);
+  } finally { gate.flush(); }
+});
+
+test('mail cooldown preserves cache, skips early polls, increases on repeated exhaustion and clears on recovery', async t => {
+  let limited = true;
+  const { a, advance, clock } = fixture(t);
+  a.write('raw-2026-11-02.json', { at: NOW, day: '2026-11-02', login: { uid: 'fixture-owner' }, mails: [{ id: 'old', sourceId: 'mail:old' }] });
+  const snap = { login: { uid: 'fixture-owner' } }; let calls = 0;
+  const query = async () => { calls++; if (limited) throw Object.assign(Error('limited'), { code: WELINK_RATE_LIMITED }); return { mails: [], coverage: { status: 'complete', reason: 'exhausted' } }; };
+  const first = await a.queryWithCache(snap, 'mails', query);
+  assert.equal(first.coverage.status, 'deferred'); assert.equal(first.mails[0].id, 'old');
+  assert.match(first.coverage.reasonLabel, /请求太频繁，20 分钟后自动再查/);
+  assert.equal(first.coverage.retryAt, clock() + 20 * 60000);
+  advance(60000); await a.queryWithCache(snap, 'mails', query); assert.equal(calls, 1);
+  advance(19 * 60000); const second = await a.queryWithCache(snap, 'mails', query);
+  assert.equal(calls, 2); assert.equal(second.coverage.retryAt, clock() + 40 * 60000);
+  // Another identity must never inherit cached mail or the first identity's cooldown.
+  const other = await a.queryWithCache({ login: { uid: 'other' } }, 'mails', query);
+  assert.deepEqual(other.mails, []); assert.equal(calls, 3);
+  limited = false; advance(40 * 60000);
+  assert.equal((await a.queryWithCache(snap, 'mails', query)).coverage.status, 'complete');
+  limited = true;
+  assert.match((await a.queryWithCache(snap, 'mails', query)).coverage.reasonLabel, /20 分钟/);
+});
+
+test('mail pagination retains an already fetched page when the next page is rate limited', async () => {
+  let calls = 0;
+  const got = await Q.collectMails(async () => {
+    if (calls++) throw Object.assign(Error('limited'), { code: WELINK_RATE_LIMITED });
+    return Array.from({ length: 100 }, (_, i) => ({ id: String(i), subject: 'fixture' }));
+  });
+  assert.equal(got.mails.length, 100); assert.equal(got.coverage.reason, 'rate-limited'); assert.equal(got.coverage.status, 'deferred');
+});
+
+test('manual refresh retries mails during cooldown; forced background refresh still waits', async t => {
+  const { a, calls, clock } = fixture(t);
+  const retryAt = clock() + 20 * 60000;
+  a.mailBackoffs = new Map([['fixture-owner', { attempts: 2, retryAt }]]);
+  await a.refresh({ force: true });
+  assert.equal(calls.filter(args => args[0] === 'mail').length, 0);
+  assert.equal(a.snapshot().mailCoverage.reason, 'rate-limited');
+  await a.manualRefresh();
+  assert.equal(calls.filter(args => args[0] === 'mail').length, 1, '用户按钮必须真正重查邮件');
+  assert.equal(a.snapshot().mailCoverage.status, 'complete');
+  assert.equal(a.mailBackoffs.has('fixture-owner'), false);
+});
+
+test('successful partial mail recovery resets exponential cooldown before a later 429', async t => {
+  const { a, advance, clock } = fixture(t);
+  const snap = { login: { uid: 'fixture-owner' } };
+  a.mailBackoffs = new Map([['fixture-owner', { attempts: 3, retryAt: clock() }]]);
+  const partial = { mails: [{ id: 'fetched' }], coverage: { status: 'partial', reason: 'limit' } };
+  assert.equal(await a.queryWithCache(snap, 'mails', async () => partial), partial);
+  assert.equal(a.mailBackoffs.has('fixture-owner'), false);
+  advance(1);
+  const next = await a.queryWithCache(snap, 'mails', async () => { throw Object.assign(Error('limited'), { code: WELINK_RATE_LIMITED }); });
+  assert.equal(next.coverage.retryAt, clock() + 20 * 60000, '恢复后下一次限流从基础退避重新算');
+});
+
 function fixture(t, override = async () => undefined) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'welink-query-status-'));
   t.after(() => { a.welinkGate.flush(); fs.rmSync(root, { recursive: true, force: true }); });

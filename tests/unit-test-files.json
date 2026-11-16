@@ -201,6 +201,9 @@
   "tests/unit-hub-feedback-contact.test.js",
   "tests/unit-company-proxy-stamp-retry.test.js",
   "tests/unit-codeagent-discovery-regression.test.js",
+  "tests/unit-codeagent-install.test.js",
+  "tests/unit-codeagent-install-r25b.test.js",
+  "tests/unit-codeagent-install-r25c.test.js",
   "tests/unit-codeagent-transcript-account.test.js",
   "tests/unit-asar-delta.test.js",
   "tests/unit-app-update-native-runtime.test.js",
@@ -209,5 +212,8 @@
   "tests/unit-company-room-component.test.js",
   "tests/unit-cli-capabilities.test.js",
   "tests/unit-codex-editor-compat.test.js",
-  "tests/unit-dsh-version-compat.test.js"
+  "tests/unit-dsh-version-compat.test.js",
+  "tests/unit-claude-connection-settings.test.js",
+  "tests/unit-codeagent-model-groups.test.js",
+  "tests/unit-codeagent-process-lifecycle.test.js"
 ]

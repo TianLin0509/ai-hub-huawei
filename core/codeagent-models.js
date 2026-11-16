@@ -481,7 +481,15 @@ function modelOptions(dataDir, { configDir = null, accountKey = 'personal' } = {
   const catalog = readModelCatalog(dataDir, { configDir, accountKey });
   if (!catalog) return [];
   const configured = configuredModels(configDir);
-  const options = catalog.models.filter(isSafeModelId).map(id => ({ id, label: modelLabel(id), source: catalog.source }));
+  const details = Array.isArray(catalog.details) ? catalog.details.filter(row => row && isSafeModelId(row.id) && catalog.models.some(id => id.toLowerCase() === row.id.toLowerCase())) : [];
+  const providers = new Set(details.map(row => row.provider).filter(Boolean));
+  const routed = row => row.provider && (providers.size > 1 || !/^(?:w3|built-in)$/i.test(row.provider));
+  const options = catalog.models.filter(isSafeModelId).flatMap(id => {
+    const own = details.filter(row => row.id.toLowerCase() === id.toLowerCase());
+    return own.length ? own.map(row => ({ id, label: routed(row) ? `${row.label || modelLabel(id)} · ${row.providerLabel || row.provider}` : row.label && row.label !== id ? row.label : modelLabel(id), source: catalog.source,
+      ...(routed(row) ? { provider: row.provider, providerLabel: row.providerLabel || row.provider, menuLabel: row.label || id } : {}) }))
+      : [{ id, label: modelLabel(id), source: catalog.source }];
+  });
   // Auto 路由背后的具体模型不能直接选：2026-10-16 公司真机 `--model GLM-5.2-WX` 报 401「未识别到用户认证信息」，
   // 只有 GLM-5.2-WX-Auto 能用。它出现在回答记录（实际模型）和分档配置里，列出来用户一选就失败，所以有「名字-Auto」时去掉它。
   // 账号清单里明确列出的照留（那是 CodeAgent 自己说这个账号能选的）。

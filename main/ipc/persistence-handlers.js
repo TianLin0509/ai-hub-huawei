@@ -42,6 +42,9 @@ const RESUME_META_FIELDS = [
   'modelChange',
   'codeagentUserModel',
   'codeagentModelPick',
+  'codeagentModelProvider',
+  'codeagentModelProviderLabel',
+  'codeagentModelMenuLabel',
   'codeagentRouteModel',
   // 否则休眠 / 重启后显示名和侧栏图标退回占位或清单第一项（2026-10-18 用户反馈 v2.1.11）。
   'codeagentActualModel',
@@ -353,6 +356,7 @@ function handlePersistSessions(list, meetingList, deps, { deferStateSave = false
     // 接入方式只在主进程确定（缺 Key 不换线），渲染层漏带时以主进程为准。
     if (authoritative?.deepseekRoute && !session.deepseekRoute) session.deepseekRoute = authoritative.deepseekRoute;
     if (typeof authoritative?.codeagentModelPick === 'boolean') session.codeagentModelPick = authoritative.codeagentModelPick;
+    Object.assign(session, require('../../core/codeagent-model-choice').routeFields(authoritative));
     if (authoritative?.codeagentForkSourceSessionId) session.codeagentForkSourceSessionId = authoritative.codeagentForkSourceSessionId;
     if (authoritative?.codeagentPrefixFork) session.codeagentPrefixFork = authoritative.codeagentPrefixFork;
     if (authoritative?.codeagentRouteModel) session.codeagentRouteModel = authoritative.codeagentRouteModel;

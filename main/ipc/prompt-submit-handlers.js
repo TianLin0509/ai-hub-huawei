@@ -334,7 +334,7 @@ function registerPromptSubmitIpc(ipcMain, deps) {
       } catch (error) {
         if (receipt) receipts.finish(receipt, { ok: false });
         logger.warn('[prompt-submit] send threw:', error && error.message);
-        return { ok: false, error: 'send-threw', message: error && error.message, kind, ...(error?.notSent ? {notSent:true} : {}) };
+        return { ok: false, error: 'send-threw', message: error && error.message, kind, ...(error?.notSent ? {notSent:true, ...(error.code === 'cli-exited' ? {code:'cli-exited'} : {})} : {}) };
       } finally {
         if (awaitLateLocalAck) armLateLocalCommandAck(clearObserver, sessionId, clientSubmissionId, localCommand);
         else clearObserver?.dispose();
