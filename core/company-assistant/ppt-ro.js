@@ -5,7 +5,8 @@ const { PptLibrary } = require('./ppt-library');
 async function main() {
   const dir = process.env.CLAUDE_HUB_ASSISTANT_DIR;
   if (!dir) throw new Error('请从助理工作目录调用 ppt-ro.cmd');
-  const a = { dir, now: Date.now, changed() {}, settings() { try { return JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8')); } catch (e) { if (e.code === 'ENOENT') return {}; throw e; } } };
+  const settingsFile = process.env.CLAUDE_HUB_ASSISTANT_SETTINGS || path.join(dir, 'settings.json');
+  const a = { dir, now: Date.now, changed() {}, settings() { try { return JSON.parse(fs.readFileSync(settingsFile, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return {}; throw e; } } };
   const [op = 'status', ...rest] = process.argv.slice(2);
   let args = {};
   if (op === 'search') args = { query: rest.join(' ') };

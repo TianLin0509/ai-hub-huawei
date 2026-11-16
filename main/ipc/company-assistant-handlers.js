@@ -32,6 +32,12 @@ function registerCompanyAssistantIpc(ipcMain, service) {
       if (r.canceled || !r.filePaths[0]) return { ok: true, canceled: true };
       return service.useCliPath(r.filePaths[0]);
     },
+    'pick-data-root': async () => {
+      const { dialog, BrowserWindow } = require('electron');
+      const r = await dialog.showOpenDialog(BrowserWindow.getFocusedWindow() || undefined, { title: '选择助理数据目录', defaultPath: service.dir, properties: ['openDirectory', 'createDirectory'] });
+      if (r.canceled || !r.filePaths[0]) return { ok: true, canceled: true };
+      return { ok: true, settings: service.setSettings({ dataRoot: r.filePaths[0] }) };
+    },
     'phone-status': () => ({ ok: true, phone: service.phone.status(), conversations: service.status().conversations }),
     'phone-settings': request => service.setPhone(request || {}),
     'phone-test': async () => ({ ok: await service.phone.send('测试消息：Hub 能往这个群发消息。在这里直接跟我说话就行。', 'test') }),

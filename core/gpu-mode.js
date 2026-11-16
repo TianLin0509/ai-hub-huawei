@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 
 const MARKER = 'gpu-disabled.json';
+const COMPAT_SWITCHES = ['disable-gpu', 'disable-gpu-compositing', 'disable-software-rasterizer', 'disable-gpu-sandbox'];
 
 function markerPath(dataDir) {
   return path.join(dataDir, MARKER);
@@ -25,7 +26,10 @@ function applyGpuMode({ app, env = process.env, argv = process.argv, dataDir, lo
   const reason = shouldDisableGpu({ env, argv, dataDir });
   if (reason) {
     app.disableHardwareAcceleration();
-    if (!argv.includes('--disable-gpu-compositing')) app.commandLine.appendSwitch('disable-gpu-compositing');
+    // 2026-11-16：只关硬件加速时 Chromium 仍会起一个软件渲染的 GPU 子进程；个别电脑上它初始化就崩
+    // （退出码 0x80000003），连崩几次整个程序退出。兼容模式下连这个子进程也不起、它的沙箱也放开；
+    // 只影响已经打开兼容模式的人，默认走显卡渲染的同事完全不变。不用 --no-sandbox（会放开所有子进程）。
+    for (const sw of COMPAT_SWITCHES) if (!argv.includes('--' + sw)) app.commandLine.appendSwitch(sw);
     logger.log?.(`[gpu] hardware acceleration disabled (${reason})`);
   }
   app.on('child-process-gone', (_event, details) => {
@@ -36,4 +40,4 @@ function applyGpuMode({ app, env = process.env, argv = process.argv, dataDir, lo
   return reason;
 }
 
-module.exports = { MARKER, markerPath, shouldDisableGpu, applyGpuMode };
+module.exports = { MARKER, COMPAT_SWITCHES, markerPath, shouldDisableGpu, applyGpuMode };

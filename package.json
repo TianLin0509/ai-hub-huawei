@@ -1,11 +1,11 @@
 {
   "name": "ai-hub-community",
-  "version": "5.6.33",
+  "version": "5.6.34",
   "description": "Local multi-agent desktop workspace using your own AI accounts",
   "main": "main-bootstrap.js",
   "scripts": {
     "start": "electron .",
-    "test": "node scripts/run-unit-tests.js --test-timeout=300000",
+    "test": "node scripts/run-unit-tests.js --test-timeout=300000 tests/unit-company-assistant-data-root.test.js",
     "dist": "electron-builder --win --publish never",
     "doctor": "node scripts/doctor.js",
     "audit": "node scripts/audit-public.js"

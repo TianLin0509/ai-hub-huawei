@@ -618,6 +618,11 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     }
     if (verb === 'find-cli') { button.disabled = true; await call('find-cli'); await load(); reopenSettings(); showMessage?.(data.cliFound ? '找到 welink-cli 了，正在确认连接' : data.cliSearch?.state === 'error' ? '查找未完成，可以重试或手动选择' : '暂未找到，可查看安装步骤或手动选择已安装的工具'); return; }
     if (verb === 'pick-cli') { const r = await call('pick-cli'); if (!r.canceled) { showMessage?.('已用 ' + r.path); await load(); reopenSettings(); } return; }
+    if (verb === 'pick-data-root' || verb === 'reset-data-root') {
+      const r = await call(verb === 'pick-data-root' ? verb : 'set-settings', verb === 'reset-data-root' ? { dataRoot: '' } : {});
+      if (!r.canceled) { await load(); reopenSettings(); showMessage?.('助理数据目录已保存，重启 Hub 后生效'); }
+      return;
+    }
   }
 
   async function openSource(source, day) {
@@ -776,7 +781,14 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     const VIA = { path: '系统路径里找到的', npm: 'npm 全局目录里找到的', disk: '在硬盘里找到的', manual: '你手动选的' };
     const cliLine = d.cliFound ? `<fieldset class="col"><legend>welink-cli 位置</legend><div class="ca-row"><span class="ca-chip ok">已找到</span><span class="ca-note" title="${esc(d.cliPath)}">${esc(d.cliPath)}${VIA[d.cliSearch?.via] ? '（' + VIA[d.cliSearch.via] + '）' : ''}</span>${d.cliVersion ? `<span class="ca-note">版本 ${esc(d.cliVersion)}</span>` : ''}${toolPicker.switchHtml(d.cliChoice, { className: 'ca-note' })}</div>${toolPicker.hintHtml(d.cliChoice)}
         <div class="ca-row"><button type="button" class="ca-btn small" data-ca="find-cli">重新查找</button><button type="button" class="ca-btn small" data-ca="pick-cli">手动选择…</button></div></fieldset>` : '';
-    return `<fieldset><legend>WeLink 登录</legend><div class="ca-row">${loginLine}</div></fieldset>${cliLine}
+    const storage = d.dataDirectory;
+    const storageLine = storage ? `<fieldset class="col"><legend>助理数据目录</legend>
+      <p class="ca-note">当前目录：${esc(storage.current)}</p>
+      <div class="ca-row"><button type="button" class="ca-btn small" data-ca="pick-data-root">选择文件夹</button><button type="button" class="ca-btn small" data-ca="reset-data-root">恢复默认</button></div>
+      ${storage.restartRequired ? `<p class="ca-note">已保存：${esc(storage.requested)}；重启 Hub 后生效。</p>` : ''}
+      ${storage.error ? `<p class="ca-note" role="alert">${esc(storage.error)}</p>` : ''}
+      <p class="ca-note">留空使用默认位置。重启时复制全部助理数据，设置文件仍留在默认位置；已有数据的目标目录直接使用。旧目录保留，确认新目录正常后可手动删除旧数据（默认目录的 settings.json 请保留）。换目录后，CodeAgent 的旧会话不会出现在新目录的历史里。</p></fieldset>` : '';
+    return `<fieldset><legend>WeLink 登录</legend><div class="ca-row">${loginLine}</div></fieldset>${cliLine}${storageLine}
       <fieldset class="col"><legend>公司邮箱（邮件和日历要用）</legend>
         <div class="ca-row">${s.emailFrom === 'welink' && s.email ? `<span>邮箱（自动读取）：${esc(s.email)}</span>` : `<input type="email" data-f="email" placeholder="自动读取失败，可补填公司邮箱" value="${esc(s.email || '')}">`}<button type="button" class="ca-btn primary" data-x="mail">${d.calendarNeedsSetup ? '配置邮件和日历' : '重新配置'}</button>${from ? `<span class="ca-note">${from}</span>` : ''}</div>
         <p class="ca-note" data-f="mail-msg">${d.calendarNeedsSetup ? '还没接入。' : '已接入。'}只让 welink-cli 按邮箱找一次公司邮件服务器，不发邮件。</p></fieldset>

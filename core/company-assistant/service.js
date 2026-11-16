@@ -32,6 +32,7 @@ const { PPT_INSTRUCTIONS, PPT_MAKE_INSTRUCTIONS } = require('./ppt-instructions'
 const { PetReminders } = require('./pet-reminders');
 const AC = require('./answer-context');
 const { AssistantDigest, DIGEST_HOURS, visibleDigest, SOURCE_KEEP_MS } = require('./digest');
+const { prepareDataRoot, validateDataRoot } = require('./data-root');
 
 const PURPOSE = 'company-assistant';
 const QUERY_DIAGNOSTIC_SEEN = new Set();
@@ -42,7 +43,7 @@ const TOOLS_HELLO_GRACE_MS = 90000;
 const DEFAULT_SETTINGS = Object.freeze({
   enabled: true, briefTime: '08:20', summaryTime: '18:00', waitHours: 4, digestHours: 0, prepMinutes: 15, maxPerHour: 3, refreshMinutes: 10,
   watchGroups: [], keywords: [], myName: '', workdays: [1, 2, 3, 4, 5], cliPath: '', email: '', emailFrom: '', chips: [], phone: DEFAULT_PHONE,
-  lookbackHours: 36, maxConversations: 0, answerStyle: 'guided', answerEffort: '',
+  lookbackHours: 36, maxConversations: 0, answerStyle: 'guided', answerEffort: '', dataRoot: '',
 });
 // 输入框上方的常用问题（设计稿 B）。fill=true 的只填进输入框，等补全再发。
 const BUILTIN_CHIPS = Object.freeze([
@@ -159,7 +160,10 @@ class CompanyAssistant {
       } catch { /* 诊断写入失败不影响取数 */ }
     } };
     this.welinkGate = deps.welinkGate || (deps.welinkRun ? new WelinkGate(gateOptions) : sharedWelinkGate(gateOptions));
-    this.dir = path.join(deps.dataDir, 'company-assistant');
+    this.defaultDir = path.join(deps.dataDir, 'company-assistant');
+    const storage = prepareDataRoot(this.defaultDir);
+    this.dir = storage.dir;
+    this.dataRootError = storage.error;
     this.metering = new (require('./metering').TaskMetering)(this.dir, deps, this.now);
     this.workspace = path.join(this.dir, 'workspace');
     this.bus = deps.bus || noticeBus();
@@ -210,10 +214,10 @@ class CompanyAssistant {
   get pptWorkspace() { return path.join(this.dir, 'ppt-workspace'); }
 
   // ---- 本地文件（只在这台电脑的 Hub 数据目录里） ----
-  file(name) { return path.join(this.dir, name); }
+  file(name) { return path.join(name === 'settings.json' ? this.defaultDir : this.dir, name); }
   read(name, fallback) { try { return JSON.parse(fs.readFileSync(this.file(name), 'utf8')); } catch { return fallback; } }
   write(name, value) {
-    fs.mkdirSync(this.dir, { recursive: true });
+    fs.mkdirSync(path.dirname(this.file(name)), { recursive: true });
     const tmp = this.file(name) + '.' + process.pid + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(value, null, 1), 'utf8');
     fs.renameSync(tmp, this.file(name));
@@ -223,6 +227,10 @@ class CompanyAssistant {
   judgeSettings(s = this.settings()) { return { ...s, replyReview: this.state().replyReview || null }; }
   setSettings(patch = {}) {
     const s = this.settings(), next = { ...s };
+    if ('dataRoot' in patch) {
+      next.dataRoot = validateDataRoot(patch.dataRoot, this.defaultDir, this.dir);
+      next.dataRootActive = this.dir;
+    }
     if ('digestHours' in patch) {
       if (!DIGEST_HOURS.includes(patch.digestHours)) throw new Error('定时汇总请选择关闭、1、2 或 4 小时');
       next.digestHours = patch.digestHours;
@@ -626,14 +634,14 @@ class CompanyAssistant {
     const lines = ['@echo off', 'set ELECTRON_RUN_AS_NODE=1', `set "CLAUDE_HUB_ASSISTANT_DIR=${this.dir}"`, cli ? `set "CLAUDE_HUB_WELINK_CLI=${cli}"` : '', `"${exe}" "${script}" %*`].filter(Boolean);
     fs.writeFileSync(path.join(this.workspace, 'welink-ro.cmd'), lines.join('\r\n') + '\r\n', 'utf8');
     // 作答对照评测（只读本机快照，用 CodeAgent 无头模式比较现版与新版提问；结果只留本机，summary.json 只有数字）。
-    const bench = ['@echo off', 'set ELECTRON_RUN_AS_NODE=1', `set "CLAUDE_HUB_ASSISTANT_DIR=${this.dir}"`, `"${exe}" "${path.join(__dirname, 'answer-bench.js')}" %*`];
+    const bench = ['@echo off', 'set ELECTRON_RUN_AS_NODE=1', `set "CLAUDE_HUB_ASSISTANT_DIR=${this.dir}"`, `set "CLAUDE_HUB_ASSISTANT_SETTINGS=${this.file('settings.json')}"`, `"${exe}" "${path.join(__dirname, 'answer-bench.js')}" %*`];
     fs.writeFileSync(path.join(this.workspace, 'assistant-bench.cmd'), bench.join('\r\n') + '\r\n', 'utf8');
     const ppt = this.pptWorkspace;
     fs.mkdirSync(path.join(ppt, 'skills'), { recursive: true });
     fs.writeFileSync(path.join(ppt, 'skills', 'ppt-search.md'), PPT_INSTRUCTIONS + '\n', 'utf8');
     fs.writeFileSync(path.join(ppt, 'skills', 'ppt-make.md'), PPT_MAKE_INSTRUCTIONS + '\n', 'utf8');
     fs.writeFileSync(path.join(ppt, 'CLAUDE.md'), '# PPT 素材助理\n\n每次提问的开头附有完整规则，以提问里的规则为准。只读，数据只留在这台电脑。\n', 'utf8');
-    const pptLines = ['@echo off', 'set ELECTRON_RUN_AS_NODE=1', `set "CLAUDE_HUB_ASSISTANT_DIR=${this.dir}"`, `"${exe}" "${path.join(__dirname, 'ppt-ro.js')}" %*`];
+    const pptLines = ['@echo off', 'set ELECTRON_RUN_AS_NODE=1', `set "CLAUDE_HUB_ASSISTANT_DIR=${this.dir}"`, `set "CLAUDE_HUB_ASSISTANT_SETTINGS=${this.file('settings.json')}"`, `"${exe}" "${path.join(__dirname, 'ppt-ro.js')}" %*`];
     fs.writeFileSync(path.join(ppt, 'ppt-ro.cmd'), pptLines.join('\r\n') + '\r\n', 'utf8');
   }
   instructions(toolset = 'desk') {
@@ -1953,7 +1961,9 @@ class CompanyAssistant {
     const s = this.settings(), now = this.now(), day = D.dayKey(now), snap = this.visibleSnapshot?.day === day ? this.visibleSnapshot : this.snapshot(day), st = this.state();
     const next = this.nextBriefAt(s, now);
     const sid = st.sessionId || null;
-    return { ok: true, enabled: s.enabled, now, day, settings: s, chips: [...BUILTIN_CHIPS, ...s.chips.map(c => ({ ...c, custom: true }))],
+    return { ok: true, enabled: s.enabled, now, day, settings: s,
+      dataDirectory: { current: this.dir, default: this.defaultDir, requested: s.dataRoot || this.defaultDir, restartRequired: path.resolve(s.dataRoot || this.defaultDir) !== path.resolve(this.dir), error: this.dataRootError },
+      chips: [...BUILTIN_CHIPS, ...s.chips.map(c => ({ ...c, custom: true }))],
       cliFound: !!this.cli(), cliPath: this.cli() || '', cliVersion: this.cliVersion(), cliChoice: this.cliChoice(), cliSearch: this.cliSearch || { state: 'idle' }, cliInstall: this.cliInstaller.snapshot(), cliInstallAvailable: this.cliInstaller.available(), auth: this.auth.status(), login: this.auth.status().login || snap?.login || null, loginFlow: this.loginFlow, calendarNeedsSetup: !!snap?.calendarNeedsSetup, mailSetup: snap?.mailSetup || null,
       counts: snap ? { meetings: (snap.meetings || []).length, calendar: (snap.calendar || []).length, messages: Object.values(snap.messages || {}).reduce((n, l) => n + l.length, 0), mails: (snap.mails || []).length } : null,
       refreshedAt: snap?.at || null, refreshing: !!this.refreshing, updating: snap?.updating || [], errors: snap?.errors || [], conversations: (snap?.conversations || []).slice(0, 60), scope: snap?.scope || null, nameResolution: snap?.nameResolution || null, meetingCoverage: snap?.meetingCoverage || null, calendarCoverage: snap?.calendarCoverage || null, mailCoverage: snap?.mailCoverage || null,

@@ -63,7 +63,10 @@ function truncate(s, now) {
   return { ...s, at: Math.min(s.at || now, now), messages, mails: (s.mails || []).filter(m => !Number.isFinite(m.at) || m.at <= now) };
 }
 const snap = truncate(full, NOW);
-const settings = { lookbackHours: 36, keywords: [], ...readJson('settings.json', {}) };
+const settings = { lookbackHours: 36, keywords: [], ...(() => {
+  if (!process.env.CLAUDE_HUB_ASSISTANT_SETTINGS) return readJson('settings.json', {});
+  return JSON.parse(fs.readFileSync(process.env.CLAUDE_HUB_ASSISTANT_SETTINGS, 'utf8'));
+})() };
 const owner = snap.login?.uid || 'local';
 const memory = (readJson('memory.json', { items: [] }).items || []).filter(x => !x.deletedAt && (!x.owner || x.owner === owner) && (!x.expiresAt || x.expiresAt > NOW));
 const commitments = (readJson('state.json', {}).commitments || []);
