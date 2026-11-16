@@ -1983,7 +1983,7 @@ class CompanyAssistant {
       if (item?.via === 'pet' && !item.stopped) {
         const q = String(item.q || '').replace(/\s+/g, ' ').slice(0, 24);
         const ok = item.state === 'done';
-        this.bus.publish({ id: 'answer:' + item.id, kind: 'answer', notify: true, page: 'assistant', tone: ok ? '' : 'bad', cta: '在助理里看全文',
+        this.bus.publish({ id: 'answer:' + item.id, kind: 'answer', notify: true, page: 'assistant', tone: ok ? '' : 'bad', err: !ok, cta: '在助理里看全文',
           title: ok ? '助理答好了：' + q : '助理这一问没答完：' + q, text: ok ? String(item.a || '').slice(0, 1500) : String(item.error || '可以在助理页重问') });
       }
     }

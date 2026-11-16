@@ -18,6 +18,27 @@ function linkWithRetry(target, link) {
     }
   }
 }
+// 会话 profile 的 node_modules 链接指向当前运行环境：恢复旧会话时运行环境可能已换（升级、换装法），
+// 就把链接原子换成当前目录，不报错（r26a3 复审）。用 lstat 认出失效链接；只摘链接本身，不进入它指向的目录。
+function pointLinkAt(target, link) {
+  const real = p => { try { return fs.realpathSync(p); } catch (_) { return null; } };
+  let st = null;
+  try { st = fs.lstatSync(link); } catch (_) {}
+  if (!st) { linkWithRetry(target, link); }
+  else if (real(link) !== real(target)) {
+    if (!st.isSymbolicLink()) throw new Error(`DSH CLI 运行环境位置被普通目录占用（${link}）`);
+    const suffix = `${process.pid}-${Date.now().toString(36)}`;
+    const tmp = `${link}.tmp-${suffix}`, old = `${link}.old-${suffix}`;
+    const unlinkOnly = p => { try { fs.unlinkSync(p); } catch (_) { try { fs.rmdirSync(p); } catch (_) {} } };
+    try {
+      linkWithRetry(target, tmp);
+      fs.renameSync(link, old);
+      try { fs.renameSync(tmp, link); } catch (error) { try { fs.renameSync(old, link); } catch (_) {} throw error; }
+      unlinkOnly(old);
+    } finally { try { fs.lstatSync(tmp); unlinkOnly(tmp); } catch (_) {} }
+  }
+  if (real(link) !== real(target)) throw new Error('DSH CLI 运行环境链接不一致');
+}
 function writeJson(file, object) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(object, null, 2), { encoding: 'utf8', mode: 0o600 });
@@ -159,8 +180,7 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
       const profileHome = path.join(env.DSH_HOME, 'profiles/hub-cli');
       fs.mkdirSync(profileHome, { recursive: true });
       const link = path.join(profileHome, 'node_modules');
-      if (!fs.existsSync(link)) linkWithRetry(opts.dshCliRuntime.modules, link);
-      if (fs.realpathSync(link) !== fs.realpathSync(opts.dshCliRuntime.modules)) throw new Error('DSH CLI 运行环境链接不一致');
+      pointLinkAt(opts.dshCliRuntime.modules, link);
       writeJson(path.join(profileHome, 'package.json'), { name: 'hub-dsh-cli-profile', private: true,
         dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', opts.dshCliRuntime.tuiPackage || '@deepseek-harness-tui/dsh-tui'], patchReload: 'startup' } } });
       Object.assign(env, { DSH_PERMISSION_MODE: 'danger-full-access', DSH_TUI_BACKEND: 'dsh',

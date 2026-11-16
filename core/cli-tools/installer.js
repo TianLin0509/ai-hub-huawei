@@ -92,14 +92,26 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
         bytes: c.files.reduce((n, f) => n + f.bytes, 0) })) : null };
   }
   const set = (id, patch) => { tools[id] = { ...tools[id], ...patch }; try { onState(snapshot()); } catch (_) {} };
-  function dshRepairRoot() {
+  // 「装到我的全局 npm」/ 修复用户自己那份：装进用户已有的那个目录（核心或界面包所在处）；用户什么都没装时，
+  // 明确选了全局（target: 'user-global'）才问 npm 的全局目录（npm prefix -g，读用户自己的 npm 配置）。
+  async function dshRepairRoot(target, signal) {
     const entry = getDshEntry() || {};
     const explicit = entry.cliRoot || env.AI_HUB_DSH_CLI_ROOT;
     if (explicit) {
       if (!path.isAbsolute(explicit)) throw new Error('DSH 运行环境目录必须是绝对路径');
       return explicit;
     }
-    return require('../dsh-cli-profile').resolveDshCliRuntime(entry, env).root;
+    const profile = require('../dsh-cli-profile');
+    let d = null;
+    try { d = profile.diagnoseDshRuntime(entry, env); } catch (_) {}
+    if (d && d.userRoot) return d.userRoot;
+    if (target === 'user-global') {
+      const npm = require('./npm-fallback');
+      const prefix = String(await (npmRun || npm.runNpm)(['prefix', '-g'], { env, signal, timeoutMs: 30000 }) || '').trim().split(/\r?\n/).pop().trim();
+      if (!prefix || !path.isAbsolute(prefix)) throw new Error('没读到你的 npm 全局目录（npm prefix -g），请确认本机装了 npm');
+      return prefix;
+    }
+    return profile.resolveDshCliRuntime(entry, env).root;
   }
 
   async function tryUnblock(url) {
@@ -229,7 +241,7 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
     return gitSearch;
   }
 
-  async function install(id, { repair = false } = {}) {
+  async function install(id, { repair = false, target } = {}) {
     if (!registry.IDS.includes(id) || id === 'node') throw new Error('不认识的组件');
     if (busy) {
       if (busy === id) return snapshot();
@@ -240,9 +252,13 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
     const signal = abort.signal;
     set(id, { phase: 'checking', error: null, blocked: null, received: 0, total: 0, files: 0, attempts: [], step: null });
     try { work: {
-      // A broken global DSH takes precedence over Hub tools, so repair that same user install.
+      // repair（「装到我的全局 npm」）：按界面包要求把配套版本以 npm 全局模式装进用户自己的目录（生成 dsh.cmd，终端里能直接用）。
+      // 不带 repair 的默认动作永远装进 Hub 自管目录，与识别到哪个目录、设置里指定了哪个目录无关，绝不写用户目录
+      // （r26a 审查：以前指定了 DSH 目录时默认按钮会直接 npm 写进那个目录）。指定目录不完整时，识别会改用 Hub 自管的那份
+      // （core/dsh-cli-profile.js），所以这里装好立即生效。
       if (id === 'dsh' && repair) {
-        const result = await require('./npm-fallback').installDshWithUserNpm({ env, signal, run: npmRun, targetRoot: dshRepairRoot(), onProgress: patch => set(id, patch) });
+        const result = await require('./npm-fallback').installDshWithUserNpm({ env, signal, run: npmRun, global: true,
+          targetRoot: await dshRepairRoot(target, signal), onProgress: patch => set(id, patch) });
         set(id, { phase: 'done', error: null, version: result.version, source: result.source, finishedAt: Date.now() });
         break work;
       }

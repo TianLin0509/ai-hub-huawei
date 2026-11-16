@@ -48,11 +48,15 @@ function mockNpm(f) {
     calls.push({ args, options });
     if (args[0] === 'view') return args.length === 3 ? '0.3.0' : '{"version":"0.3.0"}';
     if (args[0] === 'install') {
-      const prefix = path.relative(f.root, args[2]);
-      f.put(path.join(prefix, 'node_modules/@deepseek-ai/dsh/lib/bin.js'));
-      f.put(path.join(prefix, 'node_modules/@deepseek-ai/dsh/package.json'), '{"version":"0.3.0"}');
-      f.put(path.join(prefix, 'node_modules/@deepseek-harness-tui/dsh-tui/package.json'), '{"version":"0.3.0"}');
-      f.put(path.join(prefix, 'node_modules/@deepseek-ai/dsh-tui/package.json'), '{"version":"0.3.0"}');
+      // 全局模式（--global）和 npm 一样：模块进全局布局的 node_modules，命令入口 dsh.cmd 生成在全局目录本身。
+      const target = args[args.indexOf('--prefix') + 1], global = args.includes('--global');
+      const layout = global ? npm.globalLayout(target) : { modules: path.join(target, 'node_modules'), shims: [] };
+      const prefix = path.relative(f.root, layout.modules);
+      f.put(path.join(prefix, '@deepseek-ai/dsh/lib/bin.js'));
+      f.put(path.join(prefix, '@deepseek-ai/dsh/package.json'), '{"version":"0.3.0"}');
+      f.put(path.join(prefix, '@deepseek-harness-tui/dsh-tui/package.json'), '{"version":"0.3.0"}');
+      f.put(path.join(prefix, '@deepseek-ai/dsh-tui/package.json'), '{"version":"0.3.0"}');
+      for (const shim of layout.shims) f.put(path.relative(f.root, shim), '@echo off');
       return 'installed';
     }
     if (args[0] === 'prefix') return f.root;
@@ -81,7 +85,7 @@ test('explicit DSH repair fixes the user npm install directly, without a compone
   const result = await createCliInstaller({ env: { ...process.env, AI_HUB_CLI_TOOLS_DIR: path.join(f.root, 'tools') }, getDshEntry: () => ({ cliRoot: f.root }), npmRun: m.run }).install('dsh', { repair: true });
   assert.equal(result.tools.dsh.phase, 'done');
   assert.equal(m.calls.length, 3);
-  assert.deepEqual(m.calls.at(-1).args.slice(0, 3), ['install', '--prefix', f.root]);
+  assert.deepEqual(m.calls.at(-1).args.slice(0, 4), ['install', '--global', '--prefix', f.root]);
 });
 
 test('repair root resolution failure reports an error without launching npm', async t => {
@@ -165,8 +169,9 @@ test('repair retains selected non-global runtime and fills missing same-family p
   const npmRun = async args => {
     calls.push(args);
     if (args[0] === 'view') return '{"version":"0.16.1","peerDependencies":{"@deepseek-ai/dsh-user-questions":"0.2.1-rc.2"}}';
-    assert.deepEqual(args.slice(0, 3), ['install', '--prefix', f.root]);
+    assert.deepEqual(args.slice(0, 4), ['install', '--global', '--prefix', f.root]);
     f.put('node_modules/@deepseek-ai/dsh-user-questions/package.json', '{"version":"0.2.1-rc.2"}');
+    f.put('dsh.cmd', '@echo off');
     return '';
   };
   const entry = { cliRoot: f.root };
@@ -174,7 +179,7 @@ test('repair retains selected non-global runtime and fills missing same-family p
   assert.equal(result.tools.dsh.phase, 'done');
   assert.equal(result.tools.dsh.version, '0.2.1-rc.2');
   assert.deepEqual(calls, [['view', '@deepseek-harness-tui/dsh-tui@0.16.1', 'version', 'peerDependencies', '--json'],
-    ['install', '--prefix', f.root, '@deepseek-ai/dsh@0.2.1-rc.2', '@deepseek-harness-tui/dsh-tui@0.16.1', '@deepseek-ai/dsh-user-questions@0.2.1-rc.2']]);
+    ['install', '--global', '--prefix', f.root, '@deepseek-ai/dsh@0.2.1-rc.2', '@deepseek-harness-tui/dsh-tui@0.16.1', '@deepseek-ai/dsh-user-questions@0.2.1-rc.2']]);
   const picked = require('../core/dsh-cli-profile').resolveDshCliRuntime(entry, env);
   assert.equal(picked.root, f.root);
   assert.equal(JSON.parse(fs.readFileSync(path.join(picked.modules, '@deepseek-ai/dsh-user-questions/package.json'), 'utf8')).version, '0.2.1-rc.2');

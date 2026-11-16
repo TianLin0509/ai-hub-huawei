@@ -264,7 +264,7 @@ function createHubPetController({
     if (typeof askAssistant === 'function') { let pages = {}; try { pages = getPages?.() || {}; } catch (_) {} if (pages.assistant) { const nudge = weeklyNudge(settings.get().mode, { now: t, idleSec }, chatterTrack); if (nudge) { remember(nudge); speech.push(nudge); } } }
     speech.tick(gate);
     const snap = speech.snapshot();
-    pose = decidePose({ ...ctxBase, speaking: !!snap.bubble, speakingTone: snap.bubble && snap.bubble.tone });
+    pose = decidePose({ ...ctxBase, speaking: !!snap.bubble, speakingTone: snap.bubble && snap.bubble.tone, speakingKind: snap.bubble && snap.bubble.kind });
     const s = settings.get();
     const role = currentRole();
     const state = {
@@ -316,7 +316,7 @@ function createHubPetController({
   function introduce() {
     if (settings.get().introduced) return;
     settings.update({ introduced: true });
-    speech.push({ id: 'intro', kind: 'chatter', sticky: true, title: '你好，我是你的桌宠。会话答完我来报信；鼠标在我身上蹭一蹭是摸摸，右键能问助理、换形象。' });
+    speech.push({ id: 'intro', kind: 'chatter', sticky: true, title: '你好，我是桌宠。答完来报信，蹭蹭是摸摸；右键问助理、换形象。' });
   }
 
   function scheduleDeadline() {
@@ -554,6 +554,7 @@ function createHubPetController({
     const page = item.page || known.page;
     const noticeId = item.noticeId || known.noticeId;
     const kind = item.kind || known.kind;
+    if (kind === 'chatter') return;
     const action = ASSISTANT_ACTIONS.find(a => a.action === (item.action || known.action));
     if (action) { openAssistant({ action: action.action, prompt: action.prompt }); return; }
     if (page) {
@@ -574,6 +575,8 @@ function createHubPetController({
     pettedAt = clock();
     if (target === 'bubble') {
       const item = speech.takeCurrent();
+      // 闲聊（含首次介绍）点完就地收起，不展开没有实际去处的助理入口。
+      if (item && item.kind === 'chatter') { evaluate(); return; }
       // 通知卡片：点一下就去（和原来的通知卡一样），不再多展开一层。
       if (item && item.notify && confirmReminders([item])) { send('hub-pet:motion', { phase: 'poke' }); openItem(item); }
       else if (item && confirmReminders([item])) send('hub-pet:panel', { items: [item] });

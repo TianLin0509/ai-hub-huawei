@@ -233,3 +233,19 @@ test('三审 runHidden 进程树查询失败时标记 treeUnknown', async () => 
   assert.equal(r.timedOut, true);
   assert.equal(r.treeUnknown, true);
 });
+
+test('三审补 进程树未知时默认一直占用到 Hub 重启，不会到点自动放出第二次升级', async () => {
+  let runs = 0;
+  const up = createCodeAgentInstaller({
+    platform: 'win32', resolveCommand: () => 'codeagent', probeVersion: async () => '1.0.0', rediscover: async () => {},
+    alive: () => false, settleMs: 0,
+    run: async () => { runs++; return { code: 'timeout', timedOut: true, killed: true, pid: 1, survivors: [], treeUnknown: true }; },
+  });
+  await up.start();
+  await sleep(500);
+  assert.equal(up.busy(), true);
+  const again = await up.start();
+  assert.equal(again.code, 'CA_UPDATE_STILL_RUNNING');
+  assert.match(again.message, /重启 AI HUB/);
+  assert.equal(runs, 1);
+});

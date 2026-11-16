@@ -56,13 +56,21 @@ function runNpm(args, { env = process.env, signal, timeoutMs = 600000, exec = ex
     } catch (error) { finish(error); }
   });
 }
-async function installDshWithUserNpm({ env = process.env, signal, run = runNpm, onProgress = () => {}, targetRoot = null } = {}) {
+// global：「装到我的全局 npm」用 npm 的全局模式（--global --prefix），和用户自己 npm i -g 的结果一致——
+// 命令入口 dsh.cmd 生成在全局目录本身（PATH 上的那个），而不是 node_modules 下的 .bin。Hub 自管目录用局部模式。
+function globalLayout(prefix, platform = process.platform) {
+  return platform === 'win32'
+    ? { modules: path.join(prefix, 'node_modules'), shims: [path.join(prefix, 'dsh.cmd')] }
+    : { modules: path.join(prefix, 'lib', 'node_modules'), shims: [path.join(prefix, 'bin', 'dsh')] };
+}
+async function installDshWithUserNpm({ env = process.env, signal, run = runNpm, onProgress = () => {}, targetRoot = null, global = false, platform = process.platform } = {}) {
   if (typeof targetRoot !== 'string' || !path.isAbsolute(targetRoot)) throw new Error('DSH 安装目标必须显式指定绝对路径');
+  const layout = global ? globalLayout(targetRoot, platform) : { modules: path.join(targetRoot, 'node_modules'), shims: [] };
   onProgress({ phase: 'npm-fallback' });
   // npm itself reads user/global npmrc and npm_config_*; no registry or proxy override.
   const readInstalled = name => {
     if (!targetRoot) return null;
-    try { return JSON.parse(fs.readFileSync(path.join(targetRoot, 'node_modules', name, 'package.json'), 'utf8')); } catch { return null; }
+    try { return JSON.parse(fs.readFileSync(path.join(layout.modules, name, 'package.json'), 'utf8')); } catch { return null; }
   };
   const version = String(readInstalled('@deepseek-ai/dsh')?.version || await run(['view', '@deepseek-ai/dsh', 'version'], { env, signal, timeoutMs: 30000 })).trim();
   if (!semver.valid(version)) throw new Error('npm 没有返回可用的 DSH 版本');
@@ -94,9 +102,9 @@ async function installDshWithUserNpm({ env = process.env, signal, run = runNpm, 
     // dependency conflict, including prerelease, caret and tilde constraints.
     packages.push(name + '@' + version);
   }
-  await run(['install', '--prefix', targetRoot, ...packages], { env, signal });
+  await run(['install', ...(global ? ['--global'] : []), '--prefix', targetRoot, ...packages], { env, signal });
   const prefix = targetRoot;
-  const modules = path.join(prefix, 'node_modules');
+  const modules = layout.modules;
   const entry = path.join(modules, '@deepseek-ai/dsh/lib/bin.js');
   if (!path.isAbsolute(prefix) || !fs.existsSync(entry) || !fs.existsSync(path.join(modules, tuiName, 'package.json'))) {
     throw new Error('npm 已执行，但 DSH 与终端界面包没有同时就绪，请检查 npm 全局安装目录');
@@ -108,6 +116,8 @@ async function installDshWithUserNpm({ env = process.env, signal, run = runNpm, 
     try { installed = JSON.parse(fs.readFileSync(path.join(modules, name, 'package.json'), 'utf8')); } catch {}
     if (installed?.version !== wanted) throw new Error(`DSH 安装后 ${name} 没有就绪到 ${wanted}，尚未修复完成`);
   }
+  const missingShim = layout.shims.find(file => !fs.existsSync(file));
+  if (missingShim) throw new Error(`npm 已装好 DSH，但全局命令入口 ${missingShim} 没有生成，终端里还不能直接用 dsh`);
   return { version, prefix, tuiName, tuiVersion: metadata.version, source: 'user-npm' };
 }
-module.exports = { npmInvocation, runNpm, killNpmTree, installDshWithUserNpm };
+module.exports = { npmInvocation, runNpm, killNpmTree, installDshWithUserNpm, globalLayout };

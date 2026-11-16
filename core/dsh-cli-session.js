@@ -94,7 +94,10 @@ class DshCliSession extends EventEmitter {
   fail(error) {
     // Boot failures occur before the event observer exists; retain the actionable package cause.
     if (/(?:Cannot find|ERR_MODULE_NOT_FOUND|missing)[^\r\n]{0,180}(?:dsh-user-questions|dsh-llm-pi-ai)/i.test(this.output || '')) {
-      error = new Error('DSH CLI 终端运行环境不完整。' + require('./dsh-cli-profile').DSH_REPAIR_HINT);
+      // 讲清缺的是哪几个同代插件、从哪个目录启动的（2026-11-17）。
+      const missing = [...new Set([...String(this.output).matchAll(/Cannot find (?:package|module) '(@deepseek-ai\/dsh-[\w.-]+)'/g)].map(m => m[1]))];
+      const where = /imported from (.+?)[\\/]node_modules[\\/]@deepseek/.exec(String(this.output))?.[1];
+      error = new Error(`DSH CLI 终端运行环境不完整${missing.length ? `：缺同代插件 ${missing.slice(0, 4).join('、')}` : ''}${where ? `（启动目录 ${where.trim()}）` : ''}。` + require('./dsh-cli-profile').DSH_REPAIR_HINT);
     }
     for (const [id, waiter] of this.sideAsks) { clearTimeout(waiter.timer); waiter.reject(new Error('DSH 终端已断开：' + error.message)); this.sideAsks.delete(id); }
     clearTimeout(this.startTimer); this.readyReject?.(error);

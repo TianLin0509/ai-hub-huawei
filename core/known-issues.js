@@ -8,11 +8,17 @@
 // 只管「给出解法」，不改原有的报错流程；认不出的不硬套。
 
 const KNOWN_ISSUES = [
+  // DSH 没配套装好（2026-11-17 起分情况讲，core/dsh-cli-profile.js describeRuntimeIssue）：只装了桌面版的单独讲清「桌面版不是终端版」。
+  // 一键修复默认装 Hub 自管的运行环境、不改全局 npm；「装到我的全局 npm」才按界面包要求配套装进用户自己的目录。
   { id: 'dsh-package-mismatch',
-    test: /(?:Cannot find|ERR_MODULE_NOT_FOUND|missing|未找到|找不到)[^\n]{0,180}(?:dsh-user-questions|dsh-llm-pi-ai)|DSH CLI 终端运行环境(?:不完整|.*请先安装)/i,
-    title: 'DSH 与终端界面包没有配套装好',
-    fix: '点「一键修复 DSH」，在当前运行环境里按 @deepseek-harness-tui/dsh-tui 要求配套安装 @deepseek-ai/dsh 及同代插件，装好后重新新建会话。',
-    action: { label: '一键修复 DSH', act: 'known:dsh-repair' } },
+    test: /(?:Cannot find|ERR_MODULE_NOT_FOUND|missing|未找到|找不到)[^\n]{0,180}(?:dsh-user-questions|dsh-llm-pi-ai)|DSH CLI 终端运行环境(?:不完整|.*请先安装)|找到了 DSH 桌面版[^\n]{0,80}桌面版不是终端版/i,
+    title: m => /桌面版不是终端版/.test(m.input) ? '装的是 DSH 桌面版，Hub 要用终端版' : 'DSH 与终端界面包没有配套装好',
+    fix: m => /桌面版不是终端版/.test(m.input)
+      ? '桌面版的核心封在桌面程序里、也不带终端界面包（TUI），Hub 借用不了；你的桌面版照常可用。点「一键安装终端版」由 Hub 装一份自管的终端运行环境（约 1 分钟，不改全局 npm），装好后重新新建会话。'
+      : '点「一键修复 DSH」：Hub 装一份自管的运行环境，按 @deepseek-harness-tui/dsh-tui 要求配套 @deepseek-ai/dsh 及同代插件（约 1 分钟，不改你的全局 npm），装好后重新新建会话。想装进自己的 npm 全局目录就点「装到我的全局 npm」。',
+    action: { label: '一键修复 DSH', act: 'known:dsh-repair' },
+    actionLabel: m => /桌面版不是终端版/.test(m.input) ? '一键安装终端版' : null,
+    more: [{ label: '装到我的全局 npm', act: 'known:dsh-repair-global' }] },
   { id: 'welink-login-expired', areas: ['welink', 'hub-alert', 'notice', 'toast'],
     // core/company-assistant/welink.js「WeLink 登录已过期，Hub 正在自动续期」、service.js「WeLink 没登录或登录过期」、phone.js 同句。
     test: /WeLink\s*(?:没登录或)?登录(?:已)?过期|自动续期没成功|needs-scan/i,
@@ -106,7 +112,8 @@ function matchKnownIssue({ area = '', title = '', details = '', cause = '' } = {
     const m = issue.test.exec(text);
     if (!m) continue;
     const pick = v => (typeof v === 'function' ? v(m) : v);
-    return { id: issue.id, title: pick(issue.title), fix: pick(issue.fix), action: issue.action ? { ...issue.action } : null };
+    return { id: issue.id, title: pick(issue.title), fix: pick(issue.fix), action: issue.action ? { ...issue.action, ...(issue.actionLabel && pick(issue.actionLabel) ? { label: pick(issue.actionLabel) } : {}) } : null,
+      more: (issue.more || []).map(a => ({ ...a })) };
   }
   return null;
 }

@@ -1,7 +1,7 @@
 'use strict';
 // 助理桌宠的纯逻辑（2026-10-16 用户选定设计稿 D:\AI-Artifacts\20261016-助理桌宠设计-claude1.html）。
 // 这里只决定「现在摆什么姿态」「这句话说不说、什么时候收」，不碰窗口和动画，方便单测。
-// 姿态优先级借鉴 WorkMate 的 PetStateMachine：全屏躲边 > 开口欢呼 > 助理干活敲键盘 > 打盹 > 有点累 > 待机。
+// 姿态优先级借鉴 WorkMate 的 PetStateMachine：全屏躲边 > 按消息情绪开口 > 助理干活敲键盘 > 打盹 > 有点累 > 待机。
 
 const POSES = Object.freeze(['idle', 'typing', 'happy', 'sleep', 'peek', 'tired']);
 const MODES = Object.freeze(['lively', 'gentle', 'quiet']);
@@ -47,12 +47,16 @@ function isNight(ms) {
   return h >= NIGHT_FROM || h < NIGHT_UNTIL;
 }
 
-// ctx：{ now, fullscreen, speaking, speakingTone, assistantBusy, sessionsBusy, idleSec, quotaLow, pettedAt }
+// ctx：{ now, fullscreen, speaking, speakingTone, speakingKind, assistantBusy, sessionsBusy, idleSec, quotaLow, pettedAt }
 // sessionsBusy（2026-11-09）：有会话正在跑时桌宠陪着敲键盘，看一眼就知道活还没干完。
 function decidePose(ctx = {}) {
   const now = Number(ctx.now) || Date.now();
   if (ctx.fullscreen) return 'peek';
-  if (ctx.speaking) return ctx.speakingTone === 'bad' ? 'tired' : 'happy';
+  if (ctx.speaking) {
+    if (ctx.speakingTone === 'bad') return 'tired';
+    // 只为完成类好消息欢呼；等回复、到点提醒、新版本和闲聊都平静地说。
+    return ['session', 'web', 'answer', 'growth'].includes(ctx.speakingKind) ? 'happy' : 'idle';
+  }
   if (ctx.assistantBusy || Number(ctx.sessionsBusy) > 0) return 'typing';
   const petted = Number(ctx.pettedAt) > 0 && now - Number(ctx.pettedAt) < PETTED_AWAKE_MS;
   const idle = Number(ctx.idleSec) || 0;
@@ -109,6 +113,7 @@ class SpeechQueue {
     const entry = { id, kind: cleanText(item.kind, 32), title, text: String(item.text == null ? '' : item.text).slice(0, 4000), sessionId: cleanText(item.sessionId, 160) || null, sticky: item.sticky === true };
     if (item.notify === true) {
       entry.notify = true;
+      if (item.err === true) entry.err = true;
       entry.at = this.now();
       for (const key of ['tone', 'page', 'noticeId', 'cta']) { const v = cleanText(item[key], key === 'cta' ? 20 : 160); if (v) entry[key] = v; }
       const count = Math.round(Number(item.count) || 0);
@@ -208,7 +213,7 @@ class SpeechQueue {
     return {
       bubble: this.current ? { id: this.current.id, kind: this.current.kind, title: this.current.title, until: Number.isFinite(this.current.until) ? this.current.until : null, sticky: this.current.sticky,
         ...(this.current.notify ? { notify: true, text: this.current.text.slice(0, 400), tone: this.current.tone || '', cta: this.current.cta || '', count: this.current.count || 0, sessionId: this.current.sessionId,
-          held: !!this.held, ms: this.notifyMs, at: this.current.at, ...(this.current.art ? { art: String(this.current.art) } : {}) } : {}) } : null,
+          held: !!this.held, ms: this.notifyMs, at: this.current.at, ...(this.current.err === true ? { err: true } : {}), ...(this.current.art ? { art: String(this.current.art) } : {}) } : {}) } : null,
       dots: this.dots.length,
       pending: this.pending.length,
     };

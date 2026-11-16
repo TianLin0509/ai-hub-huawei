@@ -167,15 +167,15 @@ function createCodeAgentInstaller({
   kill = pid => killTree(pid),          // 按 PID 结束进程树
   waitExit = pid => new Promise(resolve => { const t = setInterval(() => { if (!alive(pid)) { clearInterval(t); resolve(); } }, 5000); }),
   settleMs = 3000,                      // 结束进程后最多等多久确认它真的退出
-  unknownHoldMs = 30 * 60 * 1000,       // 列不出进程树时保守占用多久
+  unknownHoldMs = Infinity,             // 列不出进程树时保守占用多久：默认一直占到 Hub 重启（看不到后代就不放第二次升级）
 } = {}) {
   let state = { phase: 'idle' };
   let lock = null;      // 当前占用：含超时后仍在跑、Hub 无权强停的安装器
   let active = null;    // 正在跑的任务结果，连点「一键安装」合并到它
   let linger = null;    // 超时后仍在跑、Hub 结束不了的安装器 / 更新器，确认退出后才释放占用
   let lingerMessage = '';
-  const STILL_RUNNING = '安装器以管理员身份运行了 20 分钟还没结束，Hub 没有权限强行停止它；已停止等待，等它自己结束后会自动清理并重新查找 CodeAgent，在此之前不会再启动新的安装。也可以在任务管理器里结束 Cli 安装程序后再试';
-  const UPDATE_STILL_RUNNING = '升级 20 分钟还没结束，Hub 没能停下它（可能正以管理员身份运行）；已停止等待，等它自己结束后会自动重新查找 CodeAgent，在此之前不会再启动新的升级或安装。也可以在任务管理器里结束 CodeAgent 升级程序后再试';
+  const STILL_RUNNING = '安装器以管理员身份运行了 20 分钟还没结束，Hub 没有权限强行停止它；已停止等待，等它自己结束后会自动清理并重新查找 CodeAgent，在此之前不会再启动新的安装。也可以在任务管理器里结束 Cli 安装程序，或重启 AI HUB 后再试';
+  const UPDATE_STILL_RUNNING = '升级 20 分钟还没结束，Hub 没能停下它（可能正以管理员身份运行）；已停止等待，等它自己结束后会自动重新查找 CodeAgent，在此之前不会再启动新的升级或安装。也可以在任务管理器里结束 CodeAgent 升级程序，或重启 AI HUB 后再试';
   const snapshot = () => ({ ...state });
   const set = patch => { state = { ...patch, downloadPage, at: now() }; try { onState(snapshot()); } catch { /* 界面关了不影响安装 */ } return snapshot(); };
   const jobsRoot = () => path.join(dataDir || os.tmpdir(), 'codeagent-install');
@@ -205,7 +205,7 @@ function createCodeAgentInstaller({
   function holdUntilGone(pids, message, after) {
     lingerMessage = message;
     const waits = pids.map(pid => waitExit(pid));
-    if (pids.unknown) waits.push(new Promise(resolve => setTimeout(resolve, unknownHoldMs)));
+    if (pids.unknown) waits.push(new Promise(resolve => { if (Number.isFinite(unknownHoldMs)) setTimeout(resolve, unknownHoldMs); }));
     linger = Promise.all(waits).then(after).catch(() => {}).finally(() => { linger = null; lingerMessage = ''; });
   }
 

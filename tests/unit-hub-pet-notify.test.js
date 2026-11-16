@@ -10,6 +10,7 @@ const { SpeechQueue, speakGate, decidePose } = require('../core/hub-pet/state');
 const { NoticeBus } = require('../core/company-assistant/notice-bus');
 const { createHubPetController } = require('../main/hub-pet-controller');
 const { createDesktopNotificationController } = require('../main/desktop-notification-controller');
+const { label: noticeLabel } = require('../renderer/hub-pet/pet-notices');
 
 const NOON = new Date(2026, 10, 9, 12).getTime();
 const NIGHT = new Date(2026, 10, 9, 23, 30).getTime();
@@ -71,7 +72,14 @@ test('有会话在跑时敲键盘；夜里也是（活没干完不睡）；出�
   assert.equal(decidePose({ now: NIGHT, sessionsBusy: 0, idleSec: 130 }), 'sleep');
   assert.equal(decidePose({ now: NOON, sessionsBusy: 0, idleSec: 130 }), 'idle');
   assert.equal(decidePose({ now: NOON, speaking: true, speakingTone: 'bad' }), 'tired');
-  assert.equal(decidePose({ now: NOON, speaking: true }), 'happy');
+  assert.equal(decidePose({ now: NOON, speaking: true }), 'idle');
+  for (const speakingKind of ['awaiting-reply', 'reminder', 'hub-reminder', 'update', 'chatter', 'bridge']) {
+    assert.equal(decidePose({ now: NOON, speaking: true, speakingKind }), 'idle', speakingKind);
+  }
+  for (const speakingKind of ['session', 'web', 'answer', 'growth']) {
+    assert.equal(decidePose({ now: NOON, speaking: true, speakingKind }), 'happy', speakingKind);
+    assert.equal(decidePose({ now: NOON, speaking: true, speakingKind, speakingTone: 'bad' }), 'tired', speakingKind);
+  }
 });
 
 function rig(t, opts = {}) {
@@ -109,6 +117,32 @@ function rig(t, opts = {}) {
   const click = target => { ipcMain.emit('hub-pet:press', pet(), { target }); ipcMain.emit('hub-pet:release', pet()); };
   return { c, bus, sent, toHub, ipcMain, state, pet, click, setRunning: n => { running = n; }, setVisible: v => { visible = v; } };
 }
+
+test('中性提醒按真实总线保持待机；完成回执欢呼；闲聊含首次介绍点完就收起，桌宠单击照旧打开助理', t => {
+  const r = rig(t);
+  r.c.setSettings({ enabled: true });
+  r.bus.publish({ id: 'wait-test', kind: 'awaiting-reply', title: '有 2 个人在等你回复' });
+  assert.equal(r.state().bubble.kind, 'awaiting-reply');
+  assert.equal(r.state().pose, 'idle');
+  r.click('bubble');
+  assert.equal(r.sent.filter(x => x.channel === 'hub-pet:panel').length, 1, '有内容的提醒仍可展开');
+  r.c.notify({ sessionId: 'done', title: '答完了' });
+  assert.equal(r.state().pose, 'happy');
+  r.click('bubble');
+  const panels = r.sent.filter(x => x.channel === 'hub-pet:panel').length;
+  const opened = r.toHub.length;
+  for (const sticky of [false, true]) {
+    assert.equal(r.c._speech.push({ id: 'chat-test-' + sticky, kind: 'chatter', title: '你好，我是桌宠。', sticky }), true);
+    r.c._evaluate();
+    assert.equal(r.state().bubble.kind, 'chatter');
+    r.click('bubble');
+    assert.equal(r.state().bubble, null);
+    assert.equal(r.sent.filter(x => x.channel === 'hub-pet:panel').length, panels);
+    assert.equal(r.toHub.length, opened, '闲聊点击不跳转');
+  }
+  r.click('pet');
+  assert.equal(r.toHub.at(-1).channel, 'hub-pet:open-assistant');
+});
 
 test('桌宠没开时通知照旧走右下角卡；开着时由桌宠举卡片说，点卡片直接打开那个会话', t => {
   const r = rig(t);
@@ -261,11 +295,18 @@ test('在桌宠上问的：答完经提醒总线交给桌宠说，点开到助�
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pet-ask-'));
   const bus = new NoticeBus({ now: () => NOON });
   const a = new CompanyAssistant({ dataDir: root, noTimer: true, noTools: true, powerSaveBlocker: {}, now: () => NOON, bus, getSession: () => null, resolveCli: () => null });
+  const r = rig(t, { noticeBus: bus });
+  r.c.setSettings({ enabled: true });
   t.after(() => { a.close(); fs.rmSync(root, { recursive: true, force: true }); });
   a.saveChat([{ id: 'c1', q: '今天下午有什么会？', state: 'running', via: 'pet' }, { id: 'c2', q: '普通的一问', state: 'running' }, { id: 'c3', q: '答不出的', state: 'running', via: 'pet' }]);
   a.patchChat('c1', { state: 'done', a: '14:00 周会；16:00 评审' });
+  assert.equal(r.state().pose, 'happy', '真实成功回执仍欢呼');
+  assert.notEqual(r.state().bubble.err, true, '成功回执不是执行错误');
   a.patchChat('c2', { state: 'done', a: 'x' });
   a.patchChat('c3', { state: 'error', error: '助理会话 12 分钟没给出回答' });
+  assert.equal(r.state().bubble.tone, 'bad', '真实出错标记到达桌宠，不用伪造完成回执');
+  assert.equal(r.state().bubble.err, true, '显式执行错误标记贯通服务、总线和气泡');
+  assert.equal(r.state().pose, 'tired');
   const items = bus.latest(10);
   assert.equal(items.length, 2, '只有桌宠上问的才让桌宠说');
   const ok = items.find(n => n.id === 'answer:c1');
@@ -275,7 +316,24 @@ test('在桌宠上问的：答完经提醒总线交给桌宠说，点开到助�
   assert.equal(ok.text, '14:00 周会；16:00 评审');
   const bad = items.find(n => n.id === 'answer:c3');
   assert.equal(bad.tone, 'bad');
+  assert.equal(bad.err, true);
   assert.match(bad.text, /12 分钟/);
+});
+
+test('执行错误标记只接受布尔 true，警示色不会变成执行错误；历史队列保留标记', () => {
+  for (const item of [
+    { kind: 'disk', tone: 'bad' }, { kind: 'attendance', tone: 'bad' },
+    { kind: 'w3', tone: 'bad' }, { kind: 'room', tone: 'bad' },
+    { kind: 'answer', tone: 'bad', err: 'true' }, { kind: 'answer', tone: 'bad', err: true },
+  ]) {
+    const q = new SpeechQueue({ now: () => NOON });
+    q.push({ ...item, id: 'test', title: '注意', notify: true }); q.tick(() => ({ ok: true }));
+    assert.equal(q.snapshot().bubble.err === true, item.err === true, item.kind);
+    q.toDot(q.takeCurrent());
+    assert.equal(q.takeDots()[0].err === true, item.err === true);
+    const expected = { disk: '硬盘', attendance: '考勤', w3: '通知', room: '会议室', answer: '助理回答' };
+    assert.equal(noticeLabel(item), item.err === true ? '出错了' : expected[item.kind]);
+  }
 });
 
 test('加班红线：按本月节奏会超 80 小时时，早上说一次今天几点前走，快到点再提醒一次；不超就不说', t => {

@@ -335,9 +335,7 @@
 
   // ---------- 气泡、小圆点、展开面板 ----------
   // 提醒类别的短名（和助理页「今天的提醒」一致），气泡和展开面板里当小标签用，一眼知道是哪类事。
-  const KIND = { reminder: '重要提醒', digest: '定时汇总', brief: '简报', 'meeting-prep': '会前准备', 'awaiting-reply': '等你回复', 'commitment-due': '答应的事', overbooked: '会议太满', 'day-summary': '下班小结', keyword: '关注词',
-    // 2026-11-09 通知卡片的类别
-    session: '会话完成', web: '网页会话', bridge: '联动消息', 'hub-reminder': '到点提醒', answer: '助理回答', room: '会议室', attendance: '考勤', 'welink-login': 'WeLink', 'pet-role': '形象', disk: '硬盘', update: '新版本', chatter: '', weekly: '周报', growth: '成长' };
+  const { KIND, label: noticeLabel } = window.HubPetNotices;
   const bubbleKind = $('bubble-kind');
   const card = { el: $('ncard'), kind: $('ncard-kind'), time: $('ncard-time'), title: $('ncard-title'), text: $('ncard-text'), cta: $('ncard-cta'), count: $('ncard-count'), bar: $('ncard-bar') };
   let cardId = '';
@@ -346,7 +344,7 @@
   function showCard(b) {
     if (b && b.id !== cardId) {
       cardId = b.id; holding = false;
-      card.kind.textContent = KIND[b.kind] || '通知';
+      card.kind.textContent = noticeLabel(b);
       card.time.textContent = hhmm(b.at);
       card.title.textContent = b.title || '';
       card.text.textContent = b.text || '';
@@ -386,6 +384,7 @@
     if (b && b.id !== bubbleId) {
       bubbleId = b.id;
       bubbleText.textContent = b.title + (b.sticky ? '（点击确认）' : '');
+      bubbleEl.classList.toggle('sticky', !!b.sticky);
       bubbleKind.textContent = KIND[b.kind] || '';
       bubbleKind.hidden = !KIND[b.kind];
       bubbleEl.hidden = false;
@@ -445,8 +444,17 @@
       card.el.style.setProperty('--tail-x', clampNum(cx - left, 18, w - 18).toFixed(1) + 'px');
       card.el.style.setProperty('--to-dot-x', (dotLeft + 10 - (left + w / 2)).toFixed(1) + 'px');
     }
-    // 正在跑的会话标签：身体左上角，出了可见段就挪回来
-    if (!busyEl.hidden) busyEl.style.left = clampNum(side - 4, visL, visR - (busyEl.offsetWidth || 70)).toFixed(1) + 'px';
+    // 标签优先放到可见身体外侧；大形象或贴边时横向空间不足，就放到身体上方的外侧。
+    // 不把标签钳回耳朵和头饰上；气泡/卡片的层级更高，说话时可以盖住这条次要状态。
+    if (!busyEl.hidden) {
+      const w = busyEl.offsetWidth || 80;
+      // 用整张身体画布避让，打字时尾巴/键盘可能伸出待机图的透明度轮廓。
+      const left = side - w - 8;
+      const right = side + body + 8;
+      const beside = left >= visL || right + w <= visR;
+      busyEl.style.left = (left >= visL ? left : right + w <= visR ? right : visL).toFixed(1) + 'px';
+      busyEl.style.bottom = ((beside ? body * 0.42 : body + 12) - body * box.bottom + 6) + 'px';
+    }
     // 提醒面板、问助理：两边各留 10px，伸出屏幕的那边再让出伸出的宽度
     panelEl.style.left = Math.max(10, visL) + 'px';
     panelEl.style.right = Math.max(10, WIN_W - visR) + 'px';
@@ -465,12 +473,14 @@
     for (const item of items || []) {
       const row = document.createElement('div');
       row.className = 'panel-item';
-      if (KIND[item.kind]) { const k = document.createElement('span'); k.className = 'kind'; k.textContent = KIND[item.kind]; row.appendChild(k); }
+      const label = noticeLabel(item, '');
+      if (label) { const k = document.createElement('span'); k.className = 'kind'; k.textContent = label; row.appendChild(k); }
       const title = document.createElement('b');
       title.textContent = item.title || '';
       row.appendChild(title);
       if (item.at && item.notify) { const w = document.createElement('span'); w.className = 'when'; w.textContent = hhmm(item.at); row.appendChild(w); }
       if (item.text) { const p = document.createElement('p'); p.textContent = item.text; row.appendChild(p); }
+      if (item.kind === 'chatter') { panelList.appendChild(row); continue; }
       const open = document.createElement('button');
       open.type = 'button';
       open.className = 'open';

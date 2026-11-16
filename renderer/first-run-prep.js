@@ -21,12 +21,15 @@
     if (fix.act === 'open-codeagent') { await ipcRenderer.invoke('tool-discovery:pick', { tool: 'codeagent' }); return rerun(); }
     if (fix.act === 'open-update') { window.__appUpdate?.open?.(); return; }
     if (fix.act === 'codeagent-login') recheckOnFocus = true;
-    const result = await (fix.act === 'git-install' ? ipcRenderer.invoke('cli-tools:install', { id: 'git' })
+    // DSH 一键补齐（2026-11-17）：默认 Hub 自管；「装到我的全局 npm」才装进用户的 npm 全局目录。
+    const dsh = fix.act === 'dsh-install' ? { id: 'dsh' } : fix.act === 'dsh-install-global' ? { id: 'dsh', repair: true, target: 'user-global' } : null;
+    const result = await (dsh ? ipcRenderer.invoke('cli-tools:install', dsh)
+      : fix.act === 'git-install' ? ipcRenderer.invoke('cli-tools:install', { id: 'git' })
       : fix.act === 'codeagent-login' ? ipcRenderer.invoke('codeagent-pool:personal-login')
       : ipcRenderer.invoke('env-check:fix', { id: row.id, act: fix.act, url: fix.url }));
     if (fix.act === 'proxy-restart') return rerun();
     if (result && result.ok === false) { const cell = root?.querySelector(`[data-fr="${row.id}"] .fr-d`); if (cell) cell.textContent = result.error || '没能完成'; return; }
-    if (fix.act === 'git-install') return rerun();
+    if (fix.act === 'git-install' || dsh) return rerun();
     recheckOnFocus = true; // 去外面安装、下载的，回到 Hub 时自动重查
   }
   function paintRow(row) {

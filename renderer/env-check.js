@@ -60,17 +60,23 @@
 
   function fixButtons(item) {
     if (tab === 'components' && item.id === 'ppt-doctor' && item.status !== 'ok' && item.status !== 'off') return installButtons(item.id);
-    if (tab === 'components' && INSTALLABLE.has(item.id) && cliState?.available && item.status !== 'ok') return installButtons(item.id);
+    if (tab === 'components' && INSTALLABLE.has(item.id) && cliState?.available && item.status !== 'ok') {
+      // DSH（2026-11-17）：主按钮用体检给的说法（一键补齐 / 一键安装终端版，同样装 Hub 自管的），旁边留「装到我的全局 npm」。
+      const own = item.id === 'dsh' ? (item.fixes || []).find(f => f.act === 'dsh-install') : null;
+      const global = item.id === 'dsh' ? (item.fixes || []).findIndex(f => f.act === 'dsh-install-global') : -1;
+      return installButtons(item.id, own && own.label)
+        + (global >= 0 && !installing.has(item.id) && !ACTIVE.has(componentState(item.id)?.phase) ? `<button type="button" class="ec-btn" data-ec-fix="${esc(item.id)}:${global}">${esc(item.fixes[global].label)}</button>` : '');
+    }
     if (item.status === 'ok' || item.status === 'off') return '';
     return (item.fixes || []).slice(0, 2).map((f, i) => `<button type="button" class="ec-btn${i === 0 && item.status === 'bad' ? ' primary' : ''}" data-ec-fix="${esc(item.id)}:${i}">${esc(f.label)}</button>`).join('');
   }
 
   function componentState(id) { return id === 'ppt-doctor' ? doctorState : cliState?.tools?.[id]; }
-  function installButtons(id) {
+  function installButtons(id, label) {
     const busy = installing.has(id) || ACTIVE.has(componentState(id)?.phase);
     const another = id !== 'ppt-doctor' && cliState?.busy && cliState.busy !== id;
     return busy ? `<button type="button" class="ec-btn" data-ec-cancel="${esc(id)}">取消安装</button>`
-      : `<button type="button" class="ec-btn" data-ec-install="${esc(id)}" ${another ? 'disabled title="请等待当前 CLI 安装结束"' : ''}>${componentState(id)?.phase === 'error' ? '重试安装' : '一键安装'}</button>`;
+      : `<button type="button" class="ec-btn" data-ec-install="${esc(id)}" ${another ? 'disabled title="请等待当前 CLI 安装结束"' : ''}>${componentState(id)?.phase === 'error' ? '重试安装' : esc(label || '一键安装')}</button>`;
   }
   function progressHtml(id) {
     const s = componentState(id); if (!s || s.phase === 'idle') return '';
@@ -170,6 +176,19 @@
       const git = r?.state?.tools?.git || {};
       if (!r?.ok) { setMessage('Git for Windows 没装上：' + (r?.error || git.error || '未知原因'), true); return; }
       setMessage(git.found ? `这台电脑已经有 Git Bash（${git.found}），不用重复安装` : 'Git for Windows 已装好，新建的 Claude 会话会用它执行命令');
+      await run();
+      return;
+    }
+    // DSH 分情况补齐（2026-11-17）：默认装 Hub 自管的运行环境；用户明确点「装到我的全局 npm」才按界面包要求配套装进全局目录。
+    if (act === 'dsh-install' || act === 'dsh-install-global') {
+      const toGlobal = act === 'dsh-install-global';
+      setMessage(toGlobal ? '正在按界面包要求，把配套的 DSH 装进你的 npm 全局目录（用你自己的 npm 源和代理，可能要几分钟）…'
+        : '正在安装 Hub 自管的 DSH 终端运行环境（约 1 分钟，不改你的全局 npm）…');
+      const r = await ipcRenderer.invoke('cli-tools:install', toGlobal ? { id: 'dsh', repair: true, target: 'user-global' } : { id: 'dsh' })
+        .catch(error => ({ ok: false, error: error.message }));
+      if (r?.state) cliState = r.state;
+      if (!r?.ok) { setMessage('DSH 没装好：' + (r?.error || r?.state?.tools?.dsh?.error || '未知原因') + (toGlobal ? '' : '。也可以试试「装到我的全局 npm」'), true); return; }
+      setMessage('DSH 已装好，正在重新检测…');
       await run();
       return;
     }

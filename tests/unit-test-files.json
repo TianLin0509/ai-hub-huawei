@@ -215,5 +215,6 @@
   "tests/unit-dsh-version-compat.test.js",
   "tests/unit-claude-connection-settings.test.js",
   "tests/unit-codeagent-model-groups.test.js",
-  "tests/unit-codeagent-process-lifecycle.test.js"
+  "tests/unit-codeagent-process-lifecycle.test.js",
+  "tests/unit-dsh-runtime-diagnosis.test.js"
 ]

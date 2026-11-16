@@ -67,7 +67,8 @@ function assistHtml(ctx = {}, env) {
 function knownHtml(ctx = {}, { withAction = true } = {}) {
   const known = matchKnownIssue(ctx);
   if (!known) return '';
-  const button = withAction && known.action ? `<button type="button" class="hub-err-btn primary" data-hub-err-act="${esc(known.action.act)}">${esc(known.action.label)}</button>` : '';
+  const button = withAction && known.action ? `<button type="button" class="hub-err-btn primary" data-hub-err-act="${esc(known.action.act)}">${esc(known.action.label)}</button>`
+    + (known.more || []).map(a => `<button type="button" class="hub-err-btn" data-hub-err-act="${esc(a.act)}">${esc(a.label)}</button>`).join('') : '';
   return `<div class="hub-err-known" data-known-issue="${esc(known.id)}"><span class="hub-err-known-tag">已知解法</span><span class="hub-err-known-text">${esc(known.fix)}</span>${button ? `<span class="hub-err-known-actions">${button}</span>` : ''}</div>`;
 }
 
@@ -79,7 +80,7 @@ function html({ area = '', title = '', cause = '', steps, actions, details = '',
   const list = (Array.isArray(steps) && steps.length ? steps : human?.steps || []).filter(Boolean);
   const head = title || known?.title || human?.title || '出了点问题';
   const level = ['error', 'warning', 'info'].includes(severity) ? severity : 'error';
-  const all = [known?.action, ...(Array.isArray(actions) ? actions : [])].filter(a => a && a.label && a.act);
+  const all = [known?.action, ...(known?.more || []), ...(Array.isArray(actions) ? actions : [])].filter(a => a && a.label && a.act);
   const buttons = all.map((a, i) => `<button type="button" class="hub-err-btn${i === 0 ? ' primary' : ''}" data-hub-err-act="${esc(a.act)}">${esc(a.label)}</button>`).join('');
   return `<div class="hub-err-card" data-severity="${level}" role="${level === 'error' ? 'alert' : 'status'}"${known ? ` data-known-issue="${esc(known.id)}"` : ''} ${ctxAttrs({ area, title: head, symptom: symptom || why, details })}>`
     + assistButtons(env)
@@ -334,11 +335,13 @@ async function runKnownAction(act, button, { doc, ipcRenderer, closeOverlays }) 
   };
   button.disabled = true;
   try {
-    if (act === 'known:dsh-repair') {
-      say('正在修复 DSH…');
-      const result = await ipcRenderer.invoke('cli-tools:install', { id: 'dsh', repair: true });
+    // 默认装 Hub 自管的运行环境（不改全局 npm）；「装到我的全局 npm」才按界面包要求配套装进用户自己的目录（2026-11-17）。
+    if (act === 'known:dsh-repair' || act === 'known:dsh-repair-global') {
+      const toGlobal = act === 'known:dsh-repair-global';
+      say(toGlobal ? '正在装进全局 npm…' : '正在安装（约 1 分钟）…');
+      const result = await ipcRenderer.invoke('cli-tools:install', toGlobal ? { id: 'dsh', repair: true, target: 'user-global' } : { id: 'dsh' });
       if (!result?.ok) throw new Error(result?.error || 'DSH 安装没有成功');
-      return done('已修复，请重新新建会话', 6000);
+      return done('已装好，请重新新建会话', 6000);
     }
     if (act === 'known:open-accounts') { closeOverlays(); doc.getElementById('btn-rail-accounts')?.click(); return done(label, 0); }
     if (act === 'known:welink-login') {

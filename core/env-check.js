@@ -201,19 +201,48 @@ function probeList(ctx) {
 
   if (kindAllowed('deepseek-acp')) {
     add('dsh', 'DSH（DeepSeek 终端）', 'env-check', async () => {
+      const NAME = 'DSH（DeepSeek 终端）';
       const config = ctx.getConfig ? ctx.getConfig() : {};
-      let runtime = null, error = '';
-      try { runtime = (ctx.resolveDsh || require('./dsh-cli-profile').resolveDshCliRuntime)(config?.acp?.providers?.['deepseek-acp'], env); } catch (e) { error = e.message; }
-      if (!runtime) {
-        return entry('dsh', 'DSH（DeepSeek 终端）', 'env-check', STATUS.warn, '没装（要用 DeepSeek · DSH 会话时再装）', {
-          installed: false,
-          cause: error || '没找到 DSH 的终端运行环境。', steps: installAct ? ['点「去一键安装」装 DSH', '装好后点「重新检测」'] : ['用 npm 全局安装 @deepseek-ai/dsh 和 @deepseek-harness-tui/dsh-tui', '装好后点「重新检测」'],
-          fixes: [...(installAct ? [installAct] : []), RECHECK], raw: error,
+      const entryCfg = config?.acp?.providers?.['deepseek-acp'];
+      const profile = require('./dsh-cli-profile');
+      // 分情况识别（2026-11-17）：讲清在哪找到了什么、缺什么，旁边给一键补齐（默认 Hub 自管，不动全局 npm）。
+      let d;
+      if (ctx.diagnoseDsh) d = ctx.diagnoseDsh(entryCfg, env);
+      else if (ctx.resolveDsh) {
+        try { const runtime = ctx.resolveDsh(entryCfg, env); d = runtime ? { state: 'ready', runtime } : { state: 'none' }; }
+        catch (e) { d = { state: 'none', error: e.message }; }
+      } else d = profile.diagnoseDshRuntime(entryCfg, env);
+      const fill = { label: d.state === 'none' ? '一键安装 DSH 终端版' : d.state === 'desktop-only' ? '一键安装终端版' : '一键补齐（Hub 自管）', act: 'dsh-install' };
+      // 设置里指定了 DSH 目录时，「装到我的全局 npm」补的就是那个目录：按钮上写明目标，默认按钮只装 Hub 自管的（r26a 审查）。
+      const globalFix = { label: d.configured ? `补到我指定的目录（${d.configured}）` : '装到我的全局 npm', act: 'dsh-install-global' };
+      const fixes = [fill, globalFix, RECHECK];
+      const steps = [`点「${fill.label}」：Hub 把配套的核心、终端界面包（TUI）和同代插件装进自己的目录，约 1 分钟，不改你的全局 npm 和已装的东西`,
+        '想装进自己的 npm 全局目录（终端里也能直接用 dsh）就点「装到我的全局 npm」', '装好后点「重新检测」'];
+      if (d.state === 'ready' || d.state === 'split') {
+        const runtime = d.runtime || {};
+        let ver = d.core?.version || '';
+        if (!ver && runtime.modules) { try { ver = JSON.parse(fs.readFileSync(path.join(runtime.modules, '@deepseek-ai', 'dsh', 'package.json'), 'utf8')).version || ''; } catch { /* 读不到版本不影响结论 */ } }
+        if (d.state === 'split') return entry('dsh', NAME, 'env-check', STATUS.ok, profile.describeRuntimeIssue(d), { dsh: { state: d.state } });
+        const from = d.source === 'hub' ? (d.configuredIssue ? `（Hub 一键安装的；${d.configuredIssue}，已改用 Hub 这份）` : '（Hub 一键安装的）') : '';
+        return entry('dsh', NAME, 'env-check', STATUS.ok, `${ver ? 'v' + ver + ' · ' : ''}${runtime.root}${from}`, { dsh: { state: d.state } });
+      }
+      if (d.state === 'none') {
+        return entry('dsh', NAME, 'env-check', STATUS.warn, '没装（要用 DeepSeek · DSH 会话时再装）', {
+          installed: false, dsh: { state: d.state },
+          cause: d.error || profile.describeRuntimeIssue(d) + '。', steps, fixes, raw: d.error || '',
         });
       }
-      let ver = '';
-      try { ver = JSON.parse(fs.readFileSync(path.join(runtime.modules, '@deepseek-ai', 'dsh', 'package.json'), 'utf8')).version || ''; } catch { /* 读不到版本不影响结论 */ }
-      return entry('dsh', 'DSH（DeepSeek 终端）', 'env-check', STATUS.ok, `${ver ? 'v' + ver + ' · ' : ''}${runtime.root}`);
+      const why = profile.describeRuntimeIssue(d);
+      const cause = {
+        'core-no-tui': 'Hub 的 DSH 会话要用终端界面包（TUI）来显示和交互；只装了核心（npm i -g @deepseek-ai/dsh）还开不起来。',
+        'tui-no-core': '终端界面包（TUI）只是外壳，要配同代的 DSH 核心才能跑。',
+        'desktop-only': '桌面版和终端版是两套安装：桌面版的核心封在桌面程序里、由它自带的运行时启动，也不带终端界面包（TUI）。你的桌面版照常可用，Hub 需要另装一份终端版。',
+        incomplete: '界面包按「同代插件」配套工作，缺了的那几个会在启动时报 Cannot find package，会话开不起来或功能不全。',
+        mismatch: '界面包只认它声明的那几代核心和插件，版本对不上时启动会报错或功能异常。',
+        'configured-incomplete': '设置里指定的 DSH 目录不完整。点「一键补齐（Hub 自管）」由 Hub 另装一份并改用它，不动你指定的目录；想补齐你指定的目录，点旁边写明目录的那个按钮。',
+      }[d.state] || '';
+      return entry('dsh', NAME, 'env-check', STATUS.warn, why, { installed: d.state === 'incomplete' || d.state === 'mismatch', dsh: { state: d.state },
+        cause, steps, fixes, raw: why });
     });
   }
 
