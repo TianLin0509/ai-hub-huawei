@@ -10,6 +10,12 @@ const kb = n => (n >= 1024 * 1024 ? (n / 1024 / 1024).toFixed(1) + ' MB' : Math.
 const NOTIFY_OPTIONS = [{ id: 'pet', label: '交给桌宠' }, { id: 'popup', label: '右下角小卡' }, { id: 'off', label: '关闭' }];
 const NOTIFY_NOTES = { pet: '会话答完、联动消息由桌宠举卡片告诉你，点卡片直接打开；桌宠没开时用右下角小卡', popup: '一律弹右下角小卡，桌宠不举卡片', off: '都不弹，只留到点提醒、出错这类要紧的；左栏未读照常标' };
 const MODE_NOTES = { lively: '提醒之外，早上问候、久坐提醒也会说', gentle: '只说助理的提醒', quiet: '不开口，只亮小圆点' };
+// 起名与回应（2026-11-17 r27g）：名字用在气泡里；闲聊气泡下的回应按钮记下的偏好可以一键忘掉。
+const TALK_TYPES = { care: '关心作息', cheer: '打气', chat: '闲聊' };
+function talkNote(prefs) {
+  const less = Object.entries(TALK_TYPES).filter(([k]) => prefs && prefs[k] && prefs[k].down > 0).map(([k, label]) => label + ' ' + prefs[k].down + ' 次');
+  return less.length ? '你点过「少说」：' + less.join('、') + '，这几类会说得少些' : '活泼档的闲聊气泡下有回应按钮，点「少说」它就记住';
+}
 
 function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
   if (!container || !ipcRenderer) return { refresh: () => {} };
@@ -47,6 +53,10 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
     const checking = st.phase === 'checking';
     const checkNote = checking ? '正在连接形象目录…' : st.phase === 'error' && !st.failedId ? st.error : '';
     const modes = data.modes || [];
+    // 重画时保住名字输入框里正在打的字（下载进度推送会触发重画）。
+    const nameEl = container.querySelector('input[data-pet-name]');
+    const typing = nameEl && document.activeElement === nameEl ? { value: nameEl.value, start: nameEl.selectionStart, end: nameEl.selectionEnd } : null;
+    const hasPrefs = s.talkPrefs && Object.values(s.talkPrefs).some(p => p && (p.up > 0 || p.down > 0));
     container.innerHTML = `
       <div class="pet-tab-row pet-tab-top">
         <div><b>在桌面显示桌宠</b><small>Hub 开着时待在屏幕右下角；会话答完、提醒、会议室结果都由它告诉你，右键还能直接问助理。</small></div>
@@ -65,6 +75,14 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
       <div class="pet-tab-row">
         <div><b>说话频率</b><small>${esc(MODE_NOTES[s.mode] || '')}；提醒每小时最多开口 3 次，通知卡片不受限。</small></div>
         <div class="pet-tab-seg" role="radiogroup" aria-label="说话频率">${modes.map(m => `<button type="button" role="radio" aria-checked="${m.id === s.mode}" data-pet="mode" data-id="${esc(m.id)}"${m.id === s.mode ? ' class="on"' : ''}>${esc(m.label)}</button>`).join('')}</div>
+      </div>
+      <div class="pet-tab-row">
+        <div><b>名字</b><small>${esc(talkNote(s.talkPrefs))}。</small></div>
+        <div class="pet-tab-pair">
+          <input type="text" class="pet-tab-name" data-pet-name maxlength="8" placeholder="不起名" value="${esc(s.petName || '')}" aria-label="桌宠的名字">
+          <button type="button" class="pet-tab-mini" data-pet="saveName">保存</button>
+          <button type="button" class="pet-tab-mini" data-pet="resetTalk"${hasPrefs ? '' : ' disabled'} title="清空回应偏好和说过的句子">忘掉我的回应</button>
+        </div>
       </div>
       <div class="pet-tab-row">
         <div><b>暂时别说话</b><small>到点自动恢复，提醒照样收进小圆点。</small></div>
@@ -91,6 +109,10 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
         <div><b>全屏时躲到屏幕边</b><small>演示、看视频或全屏开会时缩到右边只露一点，退出全屏后回来。</small></div>
         <label class="pet-tab-switch"><input type="checkbox" data-pet="peekOnFullscreen"${s.peekOnFullscreen !== false ? ' checked' : ''}><span></span></label>
       </div>`;
+    if (typing) {
+      const el = container.querySelector('input[data-pet-name]');
+      if (el) { el.value = typing.value; el.focus(); try { el.setSelectionRange(typing.start, typing.end); } catch (_) {} }
+    }
   }
 
   // 大小滑块（2026-10-18 用户：连续调）：拖动时边拖边改（约 60ms 一次，不重画分页免得打断拖动）。
@@ -133,6 +155,8 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
       if (kind === 'silentToday') return void save({ silentToday: !data.silentToday });
       if (kind === 'resetPosition') return void save({ resetPosition: true });
       if (kind === 'sizeReset') return void save({ scale: 1 });
+      if (kind === 'saveName') return void saveName();
+      if (kind === 'resetTalk') return void save({ resetTalk: true });
       if (kind === 'check') { void ipcRenderer.invoke('hub-pet:roles-check').then(r => { if (r) packs = r; render(); }); return; }
       if (kind === 'download') {
         void ipcRenderer.invoke('hub-pet:role-download', btn.dataset.id).then(async r => { if (r) packs = r; data = (await ipcRenderer.invoke('hub-pet:get-settings')) || data; render(); });
@@ -143,7 +167,20 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
     const cardEl = event.target.closest('.pet-tab-card.installed:not(.current)');
     if (cardEl) void save({ role: cardEl.dataset.role });
   });
+  function saveName() {
+    const el = container.querySelector('input[data-pet-name]');
+    if (el) void save({ petName: el.value });
+  }
+  // 中文输入法：确认候选字的那一下 Enter 属于输入法（isComposing / keyCode 229），不算提交；
+  // 有的环境在 compositionend 之后紧跟一个 Enter，也一并放过，下一次 Enter 再保存（r27g 审查第 2 项）。
+  let nameComposing = false;
+  container.addEventListener('compositionstart', event => { if (event.target.closest && event.target.closest('input[data-pet-name]')) nameComposing = true; });
+  container.addEventListener('compositionend', event => { if (event.target.closest && event.target.closest('input[data-pet-name]')) setTimeout(() => { nameComposing = false; }, 0); });
   container.addEventListener('keydown', event => {
+    if (event.target.closest && event.target.closest('input[data-pet-name]')) {
+      if (event.key === 'Enter' && !event.isComposing && event.keyCode !== 229 && !nameComposing) { event.preventDefault(); saveName(); }
+      return;
+    }
     if (event.key !== 'Enter' && event.key !== ' ') return;
     const cardEl = event.target.closest('.pet-tab-card.installed:not(.current)');
     if (cardEl) { event.preventDefault(); void save({ role: cardEl.dataset.role }); }
@@ -159,6 +196,7 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
   container.addEventListener('change', event => {
     const range = event.target.closest('input[data-pet-size]');
     if (range) { sizeWant = Number(range.value); pushSize(true); return; }
+    if (event.target.closest('input[data-pet-name]')) return;   // 名字点「保存」或回车才存
     const input = event.target.closest('input[data-pet]');
     if (input) void save({ [input.dataset.pet]: input.checked });
   });

@@ -26,8 +26,16 @@ html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; w
 .bubble { position: absolute; z-index: 2; bottom: calc(var(--body) - var(--feet) + 12px); left: 22px; max-width: 236px; box-sizing: border-box;
   background: #fff; color: #1f2733; border-radius: 14px; padding: 9px 13px; font-size: 13.5px; line-height: 1.55;
   box-shadow: 0 6px 18px rgba(20, 30, 50, .16), 0 0 0 1px rgba(20, 30, 50, .05); cursor: pointer; transform-origin: var(--tail-x, 50%) 100%;
-  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.bubble.sticky { -webkit-line-clamp: 4; }
+  }
+.bubble-line { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.bubble.sticky .bubble-line { -webkit-line-clamp: 4; }
+/* 回应按钮（2026-11-17 r27g）：气泡下一两个小按钮，点完它记住你的选择。 */
+.bubble-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.bubble-chips .chip { font: inherit; font-size: 12px; line-height: 20px; padding: 1px 10px; border-radius: 11px; border: 1px solid #d5dfef; background: #f5f8fd; color: #2f6ad9; cursor: pointer; }
+.bubble-chips .chip:hover { background: #e8f0fd; border-color: #b9cdf0; }
+.bubble-chips .chip:disabled { cursor: default; opacity: .55; }
+.bubble-chips .chip.picked { opacity: 1; background: #3478f6; border-color: #3478f6; color: #fff; }
+.bubble-kind.name { background: #f1f3f6; color: #4a5568; }
 .bubble::after { content: ""; position: absolute; left: var(--tail-x, 50%); bottom: -6px; margin-left: -6px; border: 6px solid transparent;
   border-top-color: #fff; border-bottom: 0; }
 .bubble.in { animation: bubble-in 260ms cubic-bezier(.2, 1.4, .4, 1) both; }

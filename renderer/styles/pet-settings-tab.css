@@ -62,3 +62,7 @@
 .pet-tab-size{flex:none;display:flex;align-items:center;gap:10px}
 .pet-tab-size input[type=range]{width:220px;accent-color:#3478f6;cursor:pointer}
 .pet-tab-size span{min-width:42px;text-align:right;font-size:12.5px;color:#4a5568;font-variant-numeric:tabular-nums}
+/* 名字输入框（2026-11-17 r27g） */
+.pet-tab-pair{align-items:center}
+.pet-tab-name{width:110px;height:28px;box-sizing:border-box;padding:0 8px;border:1px solid #dfe3ea;border-radius:7px;background:#fff;color:#1b2942;font:inherit;font-size:13px}
+.pet-tab-name:focus{outline:none;border-color:#3478f6}

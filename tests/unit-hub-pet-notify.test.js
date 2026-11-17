@@ -522,12 +522,13 @@ test('闲聊：活泼档早上问好、午饭和深夜各说一句，每天各�
   const { chatterFor } = require('../core/hub-pet/state');
   const at = (h, m = 0) => new Date(2026, 10, 12, h, m).getTime();
   const track = {};
-  assert.match(chatterFor('lively', { now: at(9), idleSec: 0 }, track).title, /早/);
+  // 2026-11-17 r27g：每个情境有一组话轮着说，按情境编号判断，不再按某一句原文。
+  assert.match(chatterFor('lively', { now: at(9), idleSec: 0 }, track).id, /^chatter-greet-/);
   assert.equal(chatterFor('lively', { now: at(9, 5), idleSec: 0 }, track), null);
-  assert.match(chatterFor('lively', { now: at(12, 10), idleSec: 0 }, track).title, /吃饭/);
-  assert.doesNotMatch(chatterFor('lively', { now: at(12, 20), idleSec: 0 }, track)?.title || '', /吃饭/);
-  assert.match(chatterFor('lively', { now: at(23, 10), idleSec: 0 }, track).title, /休息/);
-  assert.doesNotMatch(chatterFor('lively', { now: at(23, 40), idleSec: 0 }, track)?.title || '', /休息/);
+  assert.match(chatterFor('lively', { now: at(12, 10), idleSec: 0 }, track).title, /饭/);
+  assert.doesNotMatch(chatterFor('lively', { now: at(12, 20), idleSec: 0 }, track)?.id || '', /noon/);
+  assert.match(chatterFor('lively', { now: at(23, 10), idleSec: 0 }, track).id, /^chatter-late-/);
+  assert.doesNotMatch(chatterFor('lively', { now: at(23, 40), idleSec: 0 }, track)?.id || '', /late/);
   assert.equal(chatterFor('gentle', { now: at(9), idleSec: 0 }, {}), null);
 });
 

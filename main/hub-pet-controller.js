@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const { ASSISTANT_ACTIONS, MODES, ROLES, SpeechQueue, chatterFor, decidePose, localDateKey, speakGate, weeklyNudge } = require('../core/hub-pet/state');
+const { applyReply, cleanName, noteSpoken, normalizePrefs, pickLine } = require('../core/hub-pet/talk');
 const { allowedRange, clampTo, cubicOut, dockOf, releasePlan } = require('../core/hub-pet/motion');
 const { NOTIFY_MODES, SCALE_MAX, SCALE_MIN, createSettingsStore, isUrgentNotice, parseBox, parseScale } = require('../core/hub-pet/settings');
 const { DEFAULT_ROLE, createRolePackStore } = require('../core/hub-pet/role-packs');
@@ -265,8 +266,10 @@ function createHubPetController({
     const ctxBase = { now: t, fullscreen, assistantBusy: assistantBusy(), sessionsBusy: follow ? running : 0, idleSec, quotaLow, pettedAt };
     // 先按「没在说话」定姿态（决定能不能开口：打盹时不说），再推进气泡队列，最后按是否在说话定最终姿态。
     pose = decidePose({ ...ctxBase, speaking: false });
-    const chatter = chatterFor(settings.get().mode, { now: t, idleSec }, chatterTrack);
-    if (chatter) speech.push(chatter);
+    // 闲聊（2026-11-17 r27g）：按情境挑句子，说过的记进 hub-pet.json，短期内不重复；名字和回应偏好也从那里来。
+    const s0 = settings.get();
+    const chatter = chatterFor(s0.mode, { now: t, idleSec, meeting: meetingNow(), doneAt: chatterTrack.doneAt }, chatterTrack, { name: s0.petName, prefs: s0.talkPrefs, recent: s0.talkRecent });
+    if (chatter && speech.push(chatter)) settings.update({ talkRecent: noteSpoken(s0.talkRecent, chatter.talk.line) });
     if (typeof askAssistant === 'function') { let pages = {}; try { pages = getPages?.() || {}; } catch (_) {} if (pages.assistant) { const nudge = weeklyNudge(settings.get().mode, { now: t, idleSec }, chatterTrack); if (nudge) { remember(nudge); speech.push(nudge); } } }
     speech.tick(gate);
     const snap = speech.snapshot();
@@ -336,7 +339,29 @@ function createHubPetController({
   }
 
   // 发给渲染端的气泡：去掉会变的到点时刻（停留暂停时会改，不然每次都算「有变化」），倒计时由渲染端按 ms 自己走。
-  function bubbleView(b) { const { until: _u, ...rest } = b; return rest; }
+  // 起了名字：闲聊气泡左上角标出名字（句子里已经带名字的不重复标）。
+  function bubbleView(b) {
+    const { until: _u, named: _n, ...rest } = b;
+    const name = settings.get().petName;
+    return b.kind === 'chatter' && !b.notify && name && !b.named ? { ...rest, name } : rest;
+  }
+  // 气泡下的回应按钮（2026-11-17 r27g）：记进回应偏好（hub-pet.json），之后少说不喜欢的那类；
+  // 「再等 20 分钟」只推迟久坐提醒。回应后它回一句（2.6 秒，不计入每小时开口次数）。
+  let ackSeq = 0;
+  function reply(id, choice) {
+    const cur = speech.current;
+    if (!cur || cur.id !== String(id || '') || !Array.isArray(cur.chips) || !cur.chips.some(c => c.id === choice)) return false;
+    speech.takeCurrent();
+    const s = settings.get();
+    const { prefs, ack } = applyReply(s.talkPrefs, { type: cur.talk && cur.talk.type, ctx: cur.talk && cur.talk.ctx, choice, name: s.petName });
+    settings.update({ talkPrefs: prefs });
+    if (choice === 'snooze') chatterTrack.sitSnoozeUntil = clock() + 20 * 60000;
+    pettedAt = clock();
+    if (choice === 'up') send('hub-pet:motion', { phase: 'petted' });
+    if (ack) speech.push({ id: 'ack-' + now() + '-' + (++ackSeq), kind: 'chatter', title: ack, ack: true, ms: 2600 });
+    evaluate();
+    return true;
+  }
 
   function onNotice(notice) {
     if (!notice || !notice.id) return;
@@ -345,6 +370,8 @@ function createHubPetController({
     // 有去处的通知（会话、页面）记下来：点卡片或面板里的「打开」时按它跳。
     if (notice.sessionId || notice.page || notice.noticeId || notice.action) remember(notice);
     if (speech.push(notice)) {
+      // 答完的会话记个时刻：30 分钟内答完 3 个，活泼档会说一句「连着答完好几个」（2026-11-17 r27g）。
+      if (notice.notify && notice.kind === 'session' && notice.tone !== 'bad' && notice.err !== true) chatterTrack.doneAt = [...(chatterTrack.doneAt || []), clock()].slice(-10);
       // 被通知叫醒：夜里打盹时也醒过来说完（和被点一下一样醒一分钟）。
       if (notice.notify) pettedAt = clock();
       evaluate();
@@ -787,10 +814,11 @@ function createHubPetController({
     },
     // 鼠标停在通知卡片上暂停倒计时；点卡片上的 × 收进小圆点。
     'hub-pet:hold': (event, on) => { if (fromPet(event) && speech.hold(on === true)) evaluate(); },
+    'hub-pet:reply': (event, payload) => { if (fromPet(event) && payload) reply(payload.id, String(payload.choice || '')); },
     'hub-pet:dismiss': (event) => {
       if (!fromPet(event)) return;
       const item = speech.takeCurrent();
-      if (item) { speech.toDot(item); evaluate(); }
+      if (item) { if (!item.ack) speech.toDot(item); evaluate(); }
     },
     // 桌宠头顶的「问助理」输入框：交给助理，答完由助理发通知回来（kind answer），桌宠举卡片说。
     'hub-pet:ask': (event, payload) => {
@@ -824,7 +852,7 @@ function createHubPetController({
   // roles：[{ id, name, bundled, installed, available, update, bytes, preview, previewMain }]，「换形象」只列 installed 的。
   function roleList() { return roles.listRoles(); }
   function publicSettings() {
-    const { bodyBoxes: _boxes, ...s } = settings.get();
+    const { bodyBoxes: _boxes, talkRecent: _recent, ...s } = settings.get();
     const t = clock();
     return { available, settings: { ...s, role: currentRole() }, roles: roleList(), modes: MODES.map(id => ({ id, label: MODE_LABELS[id] })),
       quietHour: s.quietUntil > t, silentToday: s.silentDate === localDateKey(t), running: alive() };
@@ -856,6 +884,16 @@ function createHubPetController({
       if (req.op === 'open-session') return openSession(req.id);
       if (req.op === 'celebrate') return celebrate(req.payload || {});
       if (req.op === 'pet') return petted();
+      // 截图与端到端用：直接说某个情境的一句（不走时段判断），或点气泡下的回应按钮。
+      if (req.op === 'talk') {
+        const s0 = settings.get();
+        const line = pickLine(String(req.ctx || 'greet'), { now: clock(), name: s0.petName, prefs: s0.talkPrefs, recent: s0.talkRecent, rng: () => 0.5 });
+        if (!line) return null;
+        speech.push({ id: 'chatter-dbg-' + now(), kind: 'chatter', title: line.text, chips: line.chips, named: line.named, talk: { line: line.id, type: line.type, ctx: line.ctx } });
+        evaluate();
+        return line;
+      }
+      if (req.op === 'reply') return reply(speech.current && speech.current.id, String(req.choice || ''));
       if (req.op === 'disk-check') return diskWatch ? diskWatch.check() : [];
       if (req.op === 'override') {
         for (const k of ['idleSec', 'busy', 'fullscreen', 'nowShift', 'running', 'meeting', 'sessions', 'known', 'edge']) if (k in req) overrides[k] = req[k];
@@ -899,6 +937,10 @@ function createHubPetController({
     if (typeof patch.quietHour === 'boolean') clean.quietUntil = patch.quietHour ? t + 3600000 : 0;
     if (typeof patch.silentToday === 'boolean') clean.silentDate = patch.silentToday ? localDateKey(t) : '';
     if (patch.resetPosition === true) clean.position = null;
+    // 起名（2026-11-17 r27g）：空串＝不起名；「忘掉我的回应」清空回应偏好和说过的句子。
+    let renamed = '';
+    if (typeof patch.petName === 'string') { clean.petName = cleanName(patch.petName); if (clean.petName && clean.petName !== settings.get().petName) renamed = clean.petName; }
+    if (patch.resetTalk === true) { clean.talkPrefs = normalizePrefs(null); clean.talkRecent = []; }
     const scale = parseScale(patch.scale);
     const g0 = geom();
     if (scale != null && scale !== scaleNow()) {
@@ -924,6 +966,7 @@ function createHubPetController({
         send('hub-pet:motion', { phase: 'land', impact: 0.3 }); lastSent = ''; evaluate();
       });
     }
+    if (renamed && alive()) speech.push({ id: 'ack-name-' + now() + '-' + (++ackSeq), kind: 'chatter', title: '好，以后我就叫「' + renamed + '」了。', ack: true, ms: 3500 });
     if ('enabled' in clean) { if (clean.enabled) start(); else stop(); }
     else evaluate();
   }
@@ -1079,7 +1122,7 @@ function createHubPetController({
     if (debug) ipcMain.removeHandler?.('hub-pet:debug');
   }
 
-  return { start, stop, dispose, setSignal, setSettings, setProfile, celebrate, petted, roleList, notify, routeDesktopNotice, canNotify, sessionSeen, announceUpdate, isActive: () => enabled() && started && alive(), getWindow: () => win, getSettings: () => settings.get(), _evaluate: evaluate, _speech: speech, _roles: roles,
+  return { start, stop, dispose, setSignal, setSettings, setProfile, celebrate, petted, roleList, notify, routeDesktopNotice, canNotify, sessionSeen, announceUpdate, isActive: () => enabled() && started && alive(), getWindow: () => win, getSettings: () => settings.get(), _evaluate: evaluate, _speech: speech, _roles: roles, _reply: reply, _chatterTrack: chatterTrack,
     _restoreRememberedRole: restoreRememberedRole, _autoRole: () => ({ ...autoRole }) };
 }
 

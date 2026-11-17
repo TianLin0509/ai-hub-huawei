@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld('hubPet', {
   // 2026-11-09：通知卡片（停留、收起）、问助理输入框。
   hold: (on) => ipcRenderer.send('hub-pet:hold', on === true),
   dismiss: () => ipcRenderer.send('hub-pet:dismiss'),
+  // 2026-11-17：闲聊气泡下的回应按钮（up 喜欢 / down 少说 / snooze 久坐提醒晚 20 分钟）。
+  reply: (id, choice) => ipcRenderer.send('hub-pet:reply', { id: String(id || '').slice(0, 160), choice: String(choice || '').slice(0, 12) }),
   ask: (text, enableAssistant = false) => ipcRenderer.send('hub-pet:ask', { text: String(text || '').slice(0, 2000), enableAssistant: enableAssistant === true }),
   askClose: () => ipcRenderer.send('hub-pet:ask-close'),
   // 2026-11-17 r27c：点会话状态灯直达那个会话。

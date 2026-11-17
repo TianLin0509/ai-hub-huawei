@@ -282,7 +282,7 @@
 .company-ppt-page .pptw-tab{height:28px;padding:0 16px;background:transparent;color:var(--hw-text-2);font-weight:500}
 .company-ppt-page .pptw-tab:hover{background:transparent;color:var(--hw-text-1)}
 .company-ppt-page .pptw-tab.on{background:var(--hw-surface);color:var(--hw-brand);box-shadow:var(--hw-e1)}
-.company-ppt-page:is([data-tab=materials],[data-tab=make]) :is(.pptw-guide-slot,.pptw-tool-hint){display:none}
+.company-ppt-page:is([data-tab=materials],[data-tab=make],[data-tab=map]) :is(.pptw-guide-slot,.pptw-tool-hint){display:none}
 
 /* 素材 Tab：左分类、中网格（按高度分页，不滚动）、右详情 */
 .pptm{flex:1;min-height:420px;display:grid;grid-template-columns:184px minmax(0,1fr) 320px;gap:12px}
@@ -318,7 +318,7 @@
 .pptm-guide .pptw-guide-ico svg{fill:none;stroke:var(--hw-text-on);stroke-width:1.6}
 .pptm-err{margin:8px 0 0;font-size:var(--hw-fs-12);color:var(--hw-amber)}
 @media (max-width:1280px){.pptm{grid-template-columns:160px minmax(0,1fr) 280px}}
-.company-ppt-page:is([data-tab=materials],[data-tab=make]) .pptw-body{height:100%}
+.company-ppt-page:is([data-tab=materials],[data-tab=make],[data-tab=map]) .pptw-body{height:100%}
 .pptm[data-drag=over]{outline:2px dashed var(--hw-brand);outline-offset:4px;border-radius:var(--hw-r-lg)}
 .pptm[data-empty="1"] .pptm-grid,.pptm-grid:has(>.pptw-empty){grid-auto-rows:auto}
 
@@ -391,3 +391,94 @@
 .pptk-vars{display:inline-flex;gap:4px;margin-right:10px;vertical-align:middle}
 .pptk-var{padding:1px 10px;border:1px solid var(--pptw-line,#d9d9de);border-radius:999px;background:transparent;color:inherit;font-size:12px;line-height:20px;cursor:pointer}
 .pptk-var.on{background:var(--pptw-acc,#3478f6);border-color:var(--pptw-acc,#3478f6);color:#fff}
+
+/* 库地图 Tab（r28g，2026-11-17）：顶部筛选与状态，左树、中页列表、右原页预览；树和列表按高度分页，一屏不滚动 */
+.pptg{flex:1;min-height:420px;display:flex;flex-direction:column;gap:10px}
+.pptg-top{flex:none;display:flex;align-items:center;gap:10px;min-width:0}
+.pptg-search{flex:0 1 300px;height:36px}
+.company-ppt-page .pptg-select{height:32px;max-width:150px;padding:0 8px;border:1px solid var(--hw-line);border-radius:var(--hw-r-item);background:var(--hw-surface);color:var(--hw-text-1);font:var(--hw-fs-13)/1 var(--hw-font);outline:none;cursor:pointer}
+.pptg-seg{display:flex;gap:2px;padding:3px;border-radius:var(--hw-r-pill);background:var(--hw-surface-3);flex:none}
+.company-ppt-page .pptg-seg button{height:26px;padding:0 12px;background:transparent;color:var(--hw-text-2);font-size:var(--hw-fs-13);font-weight:500}
+.company-ppt-page .pptg-seg button[aria-pressed=true]{background:var(--hw-surface);color:var(--hw-brand);box-shadow:var(--hw-e1)}
+.pptg-status{flex:1;min-width:0;font-size:var(--hw-fs-12);color:var(--hw-text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pptg-status[data-state=busy]{color:var(--hw-brand)}
+.pptg-status:is([data-state=warn],[data-state=error]){color:var(--hw-amber)}
+.pptg-warn:not([hidden]){flex:none;margin:0;padding:7px 12px;border-radius:var(--hw-r-item);background:var(--hw-amber-soft);color:var(--hw-amber);font-size:var(--hw-fs-13);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pptg-acts{flex:none;display:flex;gap:6px}
+.pptg-body{flex:1;min-height:0;display:grid;grid-template-columns:280px minmax(0,1fr) 320px;gap:12px}
+.pptg-tree,.pptg-main,.pptg-detail{min-height:0;display:flex;flex-direction:column;border-radius:var(--hw-r-lg);background:var(--hw-surface);box-shadow:var(--hw-e1);overflow:hidden}
+.pptg-tree-list{flex:1;min-height:0;overflow:hidden;padding:8px 6px 0}
+.pptg-node{display:flex;align-items:center;gap:4px;height:32px;padding:0 8px 0 calc(6px + var(--d,0) * 16px);border-radius:var(--hw-r-item);font-size:var(--hw-fs-13);color:var(--hw-text-1);cursor:pointer;user-select:none}
+.pptg-node:hover{background:var(--hw-surface-2)}
+.pptg-node.on{background:var(--hw-brand-soft);color:var(--hw-brand);font-weight:500}
+.pptg-node.drop-over{outline:2px dashed var(--hw-brand);outline-offset:-2px;background:var(--hw-brand-soft)}
+.pptg-node.file{color:var(--hw-text-2)}
+.pptg-node.file.on{color:var(--hw-brand)}
+.pptg-node[draggable=true]{cursor:grab}
+.pptg-caret{flex:none;width:14px;font-size:12px;color:var(--hw-text-3);text-align:center}
+.pptg-label{flex:1;min-width:0;display:flex;align-items:center;gap:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pptg-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pptg-file-ico{flex:none;width:10px;height:12px;border-radius:2px;box-shadow:inset 0 0 0 1.5px currentColor;opacity:.55}
+.pptg-moved{flex:none;font-style:normal;font-size:11px;padding:0 5px;border-radius:var(--hw-r-xs);background:var(--hw-surface-3);color:var(--hw-text-2)}
+.pptg-count{flex:none;font-style:normal;font-size:var(--hw-fs-12);color:var(--hw-text-3);font-variant-numeric:tabular-nums}
+.company-ppt-page .pptg-edit{flex:none;width:22px;height:22px;padding:0;background:transparent;opacity:0}
+.company-ppt-page .pptg-edit svg{width:13px;height:13px;fill:none;stroke:var(--hw-text-2);stroke-width:1.8;stroke-linejoin:round}
+.pptg-node:hover .pptg-edit,.company-ppt-page .pptg-edit:focus-visible{opacity:1}
+.company-ppt-page .pptg-edit:hover{background:var(--hw-surface-3)}
+.pptg-node.renaming{padding-right:6px}
+.pptg-rename{flex:1;min-width:0;height:26px;padding:0 8px;border:1.5px solid var(--hw-brand);border-radius:var(--hw-r-item);font:var(--hw-fs-13)/1 var(--hw-font);outline:none}
+.pptg-tree .pptm-pager,.pptg-main .pptm-pager{flex:none;min-height:40px;padding:0 10px 6px}
+.pptg-main-head{flex:none;display:flex;align-items:baseline;gap:10px;padding:14px 16px 8px;min-width:0}
+.pptg-crumb{min-width:0;display:flex;align-items:baseline;gap:6px;font-size:var(--hw-fs-13);color:var(--hw-text-3);white-space:nowrap;overflow:hidden}
+.pptg-crumb i{font-style:normal}
+.pptg-crumb b{min-width:0;font-size:var(--hw-fs-16);font-weight:600;color:var(--hw-text-1);overflow:hidden;text-overflow:ellipsis}
+.pptg-main-head small{flex:none;font-size:var(--hw-fs-12);color:var(--hw-text-3)}
+.pptg-list{flex:1;min-height:0;overflow:hidden;padding:0 10px}
+.company-ppt-page .pptg-item{display:grid;grid-template-columns:34px 96px minmax(0,1fr) auto 86px;align-items:center;gap:12px;width:100%;height:64px;margin:0 0 4px;padding:4px 8px;border:1.5px solid transparent;border-radius:var(--hw-r-item);background:transparent;font-weight:400;text-align:left;white-space:normal}
+.company-ppt-page .pptg-item:hover{background:var(--hw-surface-2)}
+.company-ppt-page .pptg-item:active{transform:none}
+.company-ppt-page .pptg-item.on{background:var(--hw-brand-soft);border-color:var(--hw-brand)}
+.pptg-no{font-size:var(--hw-fs-12);color:var(--hw-text-3);font-variant-numeric:tabular-nums}
+.pptg-thumb{position:relative;display:flex;align-items:center;justify-content:center;width:96px;height:54px;overflow:hidden;border-radius:var(--hw-r-sm);background:#fff;box-shadow:inset 0 0 0 1px var(--hw-line)}
+.pptg-thumb>:is(img,svg){width:100%;height:100%;object-fit:contain}
+.pptg-copy{min-width:0;display:flex;flex-direction:column;gap:2px}
+.pptg-copy strong{font-size:var(--hw-fs-14);font-weight:500;color:var(--hw-text-1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pptg-copy small{font-size:var(--hw-fs-12);color:var(--hw-text-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pptg-type{justify-self:end;height:22px;padding:0 8px;line-height:22px;border-radius:var(--hw-r-xs);background:var(--hw-brand-soft);color:var(--hw-brand);font-size:var(--hw-fs-12);white-space:nowrap}
+.pptg-type.warn{background:var(--hw-amber-soft);color:var(--hw-amber)}
+.pptg-src{font-size:var(--hw-fs-12);color:var(--hw-text-3);white-space:nowrap}
+.pptg-detail>.pptw-empty{padding:24px 20px}
+.pptg-big{aspect-ratio:16/9}
+.pptg-move{flex:none;display:flex;flex-direction:column;gap:8px;margin:0 18px 16px;padding:12px;border-radius:var(--hw-r-md);background:var(--hw-surface-2);font-size:var(--hw-fs-13)}
+.pptg-detail>.pptg-move:first-child{margin-top:16px}
+.pptg-move label{display:grid;grid-template-columns:64px minmax(0,1fr);align-items:center;gap:8px;color:var(--hw-text-2)}
+.pptg-move select{height:30px;padding:0 6px;border:1px solid var(--hw-line);border-radius:var(--hw-r-item);background:var(--hw-surface);font:var(--hw-fs-13)/1 var(--hw-font);color:var(--hw-text-1)}
+.pptg-move small{font-size:var(--hw-fs-12);color:var(--hw-text-3)}
+.pptg-guide:not([hidden]){display:grid;grid-template-columns:56px minmax(0,1fr);gap:6px 18px;width:min(760px,100%);margin:6vh auto 0;padding:24px 28px;border-radius:var(--hw-r-xl);background:var(--hw-surface-2);align-content:start}
+.pptg-guide .pptw-guide-ico svg{fill:none;stroke:var(--hw-text-on);stroke-width:1.6}
+.pptg[data-empty="1"] .pptg-top>:not(.pptg-status){visibility:hidden}
+/* 抽查 50 页：左大图、右标签与对错按钮；键盘 1/2/3/4 */
+.pptg-review{flex:1;min-height:0;display:flex;flex-direction:column;gap:10px;padding:14px 16px;border-radius:var(--hw-r-lg);background:var(--hw-surface);box-shadow:var(--hw-e1)}
+.pptg-rv-head{flex:none;display:flex;align-items:center;gap:12px;font-size:var(--hw-fs-13)}
+.pptg-rv-head small{color:var(--hw-text-3)}
+.pptg-rv-head button{margin-left:auto}
+.pptg-rv-bar{width:200px;height:6px;border-radius:3px;background:var(--hw-surface-3);overflow:hidden}
+.pptg-rv-bar i{display:block;height:100%;background:var(--hw-brand)}
+.pptg-rv-body{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:18px}
+.pptg-rv-big{margin:0;aspect-ratio:auto;height:100%}
+.pptg-rv-side{min-width:0;display:flex;flex-direction:column;gap:12px}
+.pptg-rv-side h2{margin:0;font-size:16px;font-weight:600;overflow-wrap:anywhere}
+.pptg-rv-q{display:flex;flex-direction:column;gap:8px;padding:12px;border-radius:var(--hw-r-md);background:var(--hw-surface-2);font-size:var(--hw-fs-13)}
+.pptg-rv-q>div{display:flex;gap:8px}
+.company-ppt-page .pptg-vd{flex:1;height:36px;background:var(--hw-surface);box-shadow:inset 0 0 0 1px var(--hw-line)}
+.company-ppt-page .pptg-vd.on.right{background:var(--hw-brand-soft);color:var(--hw-brand);box-shadow:inset 0 0 0 1.5px var(--hw-brand)}
+.company-ppt-page .pptg-vd.on.wrong{background:var(--hw-amber-soft);color:var(--hw-amber);box-shadow:inset 0 0 0 1.5px var(--hw-amber)}
+.pptg-vd kbd,.pptg-rv-nav kbd{font:11px/1 var(--hw-font);padding:2px 5px;border-radius:4px;background:var(--hw-surface-3);color:var(--hw-text-3)}
+.pptg-rv-nav{display:flex;flex-wrap:wrap;gap:6px}
+.pptg-rv-done{width:min(720px,100%);margin:6vh auto 0}
+.pptg-rv-done h2{margin:0 0 12px;font-size:var(--hw-fs-22)}
+.pptg-rv-done ul{margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:12px}
+.pptg-rv-done li{display:flex;flex-direction:column;gap:2px;font-size:var(--hw-fs-18)}
+.pptg-rv-done li b{font-size:var(--hw-fs-13);font-weight:500;color:var(--hw-text-3)}
+.pptg-rv-done li small,.pptg-rv-done p{font-size:var(--hw-fs-13);color:var(--hw-text-2)}
+@media (max-width:1280px){.pptg-body{grid-template-columns:240px minmax(0,1fr) 280px}.company-ppt-page .pptg-item{grid-template-columns:30px 88px minmax(0,1fr) auto}.pptg-src{display:none}}

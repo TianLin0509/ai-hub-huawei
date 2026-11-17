@@ -20,6 +20,7 @@ class PptLibrary {
     this.imgtext = new (require('./ppt-imgtext').PptImgtext)(this);
     this.materials = new (require('./ppt-materials').PptMaterials)(this, deps);
     this.make = new (require('./ppt-make').PptMake)(this);
+    this.map = new (require('./ppt-map-job').PptMap)(this, deps); // 库地图 Tab（r28g）
     this.references = new Map(); this.traces = new Map(); this.activeChat = '';
     this.taskResults = new Map(); this.taskReports = new Map(); this.taskEvidence = new Map(); this.activeTask = null; this.indexJob = null; this.indexChild = null;
     try { this.indexState = JSON.parse(fs.readFileSync(path.join(this.a.dir, 'ppt-index-state.json'), 'utf8')); }
@@ -318,7 +319,7 @@ class PptLibrary {
       });
     return this.status();
   }
-  close() { this.indexChild?.kill(); this.indexChild = null; this.doctor.close(); }
+  close() { this.indexChild?.kill(); this.indexChild = null; this.doctor.close(); this.map?.close(); }
   // 回答后的出处核对（v3.1.2）：模型没调用 ppt_library op=report 时，按索引里的文稿与页数
   // 核对回答里写的「文件名 + 第 N 页」。没有索引、没有 Python 或没有引用时一句都不加。
   async citationNote(text) {

@@ -76,6 +76,21 @@ function createPptHandlers(service) {
     'ppt-make-open': request => service.ppt.make.open(request?.jobId),
     'ppt-make-insert': request => service.ppt.make.insert(request?.jobId),
     'ppt-make-folder': request => service.ppt.make.showFolder(request?.jobId),
+    // 库地图 Tab（r28g，2026-11-17）：后台增量分类、树形目录、改名与拖动、抽查 50 页。全部只读索引，结果只存本机。
+    'ppt-map-state': () => service.ppt.map.state(),
+    'ppt-map-start': request => service.ppt.map.start({ force: request?.force === true }),
+    'ppt-map-cancel': () => service.ppt.map.cancel(),
+    'ppt-map-tree': request => service.ppt.map.tree({ group: request?.group === 'pageType' ? 'pageType' : 'topic' }),
+    'ppt-map-pages': request => service.ppt.map.pages({ node: String(request?.node || ''), offset: request?.offset, limit: request?.limit, deckType: String(request?.deckType || '') }),
+    'ppt-map-preview': async request => {
+      try { return await service.ppt.map.preview(request?.id); }
+      catch (error) { return { ok: false, code: error.code || 'PPT_PREVIEW_FAILED', error: error.message }; }
+    },
+    'ppt-map-rename': request => service.ppt.map.rename({ dim: String(request?.dim || ''), key: String(request?.key ?? ''), to: request?.to }),
+    'ppt-map-move': request => service.ppt.map.move({ path: String(request?.path || ''), ...(request?.topic !== undefined ? { topic: String(request.topic) } : {}), ...(request?.deckType !== undefined ? { deckType: String(request.deckType) } : {}) }),
+    'ppt-map-review-start': request => service.ppt.map.startReview({ n: request?.n }),
+    'ppt-map-review': () => service.ppt.map.reviewState(),
+    'ppt-map-verdict': request => service.ppt.map.verdict({ id: String(request?.id || ''), pageType: request?.pageType, topics: request?.topics }),
     'ppt-open-doctor': async () => {
       const exe = await service.ppt.doctor.discover();
       require('node:child_process').spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: false }).unref();

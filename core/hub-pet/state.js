@@ -3,6 +3,8 @@
 // 这里只决定「现在摆什么姿态」「这句话说不说、什么时候收」，不碰窗口和动画，方便单测。
 // 姿态优先级借鉴 WorkMate 的 PetStateMachine：全屏躲边 > 按消息情绪开口 > 助理干活敲键盘 > 打盹 > 有点累 > 待机。
 
+const { pickLine } = require('./talk');
+
 const POSES = Object.freeze(['idle', 'typing', 'happy', 'sleep', 'peek', 'tired']);
 const MODES = Object.freeze(['lively', 'gentle', 'quiet']);
 const ROLES = Object.freeze([
@@ -65,6 +67,9 @@ function decidePose(ctx = {}) {
   return 'idle';
 }
 
+// 硬门禁：命中时连正在显示的气泡也撤下（安静档、安静一小时、今天静音、全屏、开会）。
+const HARD_GATES = new Set(['quiet-mode', 'quiet-hour', 'silent-today', 'fullscreen', 'meeting']);
+
 // 现在能不能开口；不能就只亮小圆点。返回 { ok, reason }。
 // settings：{ mode, quietUntil, silentDate }；ctx：{ now, pose, fullscreen }
 function speakGate(settings = {}, ctx = {}, spokenAt = [], item = null) {
@@ -77,6 +82,8 @@ function speakGate(settings = {}, ctx = {}, spokenAt = [], item = null) {
   if (ctx.meeting) return { ok: false, reason: 'meeting' };
   // 通知卡片是用户在等的结果（会话答完、抢到会议室、助理答好了）：不受打盹和每小时上限约束，桌宠会被叫醒来说。
   if (item?.notify) return { ok: true, reason: '' };
+  // 点了回应按钮、刚起了名字后它回的一句：是对用户动作的回应，不受打盹和每小时上限约束（2026-11-17 r27g）。
+  if (item?.ack) return { ok: true, reason: '' };
   if (ctx.pose === 'sleep' && !item?.sticky) return { ok: false, reason: 'sleeping' };
   const recent = spokenAt.filter(t => now - t < 3600000).length;
   if (recent >= MAX_PER_HOUR && !item?.sticky && item?.kind !== 'digest') return { ok: false, reason: 'hourly-cap' };
@@ -111,6 +118,16 @@ class SpeechQueue {
     this.seen.add(id);
     if (this.seen.size > 2000) this.seen.delete(this.seen.values().next().value);
     const entry = { id, kind: cleanText(item.kind, 32), title, text: String(item.text == null ? '' : item.text).slice(0, 4000), sessionId: cleanText(item.sessionId, 160) || null, sticky: item.sticky === true };
+    if (item.notify !== true) {
+      // 闲聊的回应按钮与话术信息（2026-11-17 r27g）；ack：回应后的一句，停留 ms 毫秒，不计入每小时开口次数，不能说时直接丢掉。
+      const chips = Array.isArray(item.chips) ? item.chips.filter(c => c && ['up', 'down', 'snooze'].includes(c.id)).slice(0, 2).map(c => ({ id: c.id, label: cleanText(c.label, 12) })).filter(c => c.label) : [];
+      if (chips.length) entry.chips = chips;
+      if (item.talk && typeof item.talk === 'object') entry.talk = { line: cleanText(item.talk.line, 40), type: cleanText(item.talk.type, 12), ctx: cleanText(item.talk.ctx, 20) };
+      if (item.named === true) entry.named = true;
+      if (item.ack === true) entry.ack = true;
+      const ms = Math.round(Number(item.ms) || 0);
+      if (ms >= 1000 && ms <= 20000) entry.ms = ms;
+    }
     if (item.notify === true) {
       entry.notify = true;
       if (item.err === true) entry.err = true;
@@ -119,9 +136,10 @@ class SpeechQueue {
       const count = Math.round(Number(item.count) || 0);
       if (count > 1) entry.count = Math.min(99, count);
       if (/^(?:(?:rank|badge)-\d{1,2}|evolve-[2-6])$/.test(String(item.art || ''))) entry.art = String(item.art);
-      if (this.current) { this.toDot(this.current); this.current = null; this.held = null; }
+      if (this.current) { if (!this.current.ack) this.toDot(this.current); this.current = null; this.held = null; }
       this.pending.unshift(entry);
-    } else this.pending.push(entry);
+    } else if (entry.ack) this.pending.unshift(entry);   // 回应那句紧跟着用户的点击说，不排在别的闲聊后面
+    else this.pending.push(entry);
     return true;
   }
 
@@ -139,25 +157,29 @@ class SpeechQueue {
   tick(gate) {
     const now = this.now();
     let changed = false;
-    if (this.current && (!this.current.sticky && now >= this.current.until || this.current.sticky && typeof gate === 'function' && !gate(this.spokenAt, this.current)?.ok)) {
-      this.toDot(this.current);
+    // 正在显示的普通气泡（含鼠标悬停暂停了倒计时的）也要重新过一遍硬门禁：切到安静档、静音、开会、全屏时立刻收进小圆点，
+    // 不然悬停中的闲聊会一直挂着（r27g 审查第 1 项）。打盹、每小时上限只管「能不能开口」，不撤已经在说的话。
+    const blocked = () => { const v = typeof gate === 'function' ? gate(this.spokenAt, this.current) : null; return !!v && !v.ok && (this.current.sticky || HARD_GATES.has(v.reason)); };
+    if (this.current && (!this.current.sticky && now >= this.current.until || blocked())) {
+      if (!this.current.ack) this.toDot(this.current);   // 回应后的那一句说完就散，不进小圆点
       this.current = null;
+      this.held = null;
       changed = true;
     }
     while (!this.current && this.pending.length) {
       const next = this.pending.shift();
       const verdict = typeof gate === 'function' ? gate(this.spokenAt, next) : { ok: true };
       if (verdict && verdict.ok) {
-        if (!next.sticky && !next.notify && next.kind !== 'digest') this.spokenAt.push(now);
+        if (!next.sticky && !next.notify && !next.ack && next.kind !== 'digest') this.spokenAt.push(now);
         this.spokenAt = this.spokenAt.filter(t => now - t < 3600000);
-        this.current = { ...next, at: now, until: next.sticky ? null : now + (next.notify ? this.notifyMs : this.showMs) };
-      } else {
+        this.current = { ...next, at: now, until: next.sticky ? null : now + (next.notify ? this.notifyMs : next.ms || this.showMs) };
+      } else if (!next.ack) {
         this.toDot(next);
       }
       changed = true;
     }
     // 常驻气泡挡住队列时，后续提醒保留在圆点中，不丢弃也不忙等。
-    if (this.current?.sticky) while (this.pending.length) { this.toDot(this.pending.shift()); changed = true; }
+    if (this.current?.sticky) while (this.pending.length) { const next = this.pending.shift(); if (!next.ack) this.toDot(next); changed = true; }
     return changed;
   }
 
@@ -226,6 +248,7 @@ class SpeechQueue {
   snapshot() {
     return {
       bubble: this.current ? { id: this.current.id, kind: this.current.kind, title: this.current.title, until: Number.isFinite(this.current.until) ? this.current.until : null, sticky: this.current.sticky,
+        ...(this.current.chips ? { chips: this.current.chips.map(c => ({ ...c })), held: !!this.held } : {}), ...(this.current.named ? { named: true } : {}),
         ...(this.current.notify ? { notify: true, text: this.current.text.slice(0, 400), tone: this.current.tone || '', cta: this.current.cta || '', count: this.current.count || 0, sessionId: this.current.sessionId,
           held: !!this.held, ms: this.notifyMs, at: this.current.at, ...(this.current.err === true ? { err: true } : {}), ...(this.current.art ? { art: String(this.current.art) } : {}) } : {}) } : null,
       dots: this.dots.length,
@@ -260,39 +283,54 @@ function finishedSessions(items = []) {
 }
 
 // 活泼档的闲聊（温和档只说助理的提醒，安静档什么都不说）。返回要说的话或 null。
-// track：调用方保存的 { greetedDate, activeSince, sitRemindedAt, lastIdleSec }，本函数会更新它。
-function chatterFor(mode, ctx = {}, track = {}) {
-  if (mode !== 'lively') return null;
+// track：调用方保存的 { greetedDate, activeSince, sitRemindedAt, lastIdleSec, ... }，本函数会更新它。
+// 2026-11-17 r27g：说什么由 talk.js 按情境、日子、说过没有和用户的回应挑（100 多句）；这里只决定「现在是哪个情境」。
+// ctx：{ now, idleSec, meeting, doneAt }（doneAt：最近答完的会话时刻）；talk：{ name, prefs, recent, rng }。
+function chatterFor(mode, ctx = {}, track = {}, talk = {}) {
   const now = Number(ctx.now) || Date.now();
+  // 开会状态在任何档都跟着记，散会那一刻才认得出来。
+  const meeting = ctx.meeting === true;
+  if (track.inMeeting && !meeting) track.meetingEndedAt = now;
+  track.inMeeting = meeting;
+  if (mode !== 'lively') return null;
   const idleSec = Number(ctx.idleSec) || 0;
-  const hour = new Date(now).getHours();
+  const d = new Date(now), hour = d.getHours(), min = d.getMinutes(), day = d.getDay();
   const prevIdle = Number(track.lastIdleSec) || 0;
   track.lastIdleSec = idleSec;
-  if (idleSec >= 300) { track.activeSince = 0; return null; }
+  // 离开 5 分钟以上算休息过：这一轮「再等 20 分钟」的延后提醒作废，回来重新计久坐（r27g 审查第 4 项）。
+  if (idleSec >= 300) { track.activeSince = 0; track.sitSnoozeUntil = 0; return null; }
+  if (meeting) return null;
   if (!track.activeSince) track.activeSince = now;
   const today = localDateKey(now);
-  if (track.greetedDate !== today && hour >= NIGHT_UNTIL && hour < 11) {
-    track.greetedDate = today;
-    const greets = ['早上好！今天也一起加油。', '早呀，新的一天开始了。', '早上好，先喝口水再开工。'];
-    return { id: 'chatter-greet-' + today, kind: 'chatter', title: greets[new Date(now).getDate() % greets.length] };
+  const say = (ctxKey, idKey) => {
+    const line = pickLine(ctxKey, { now, ...talk });
+    if (!line) return null;
+    return { id: 'chatter-' + ctxKey + '-' + idKey, kind: 'chatter', title: line.text, chips: line.chips, named: line.named, talk: { line: line.id, type: line.type, ctx: ctxKey } };
+  };
+  // 每天一次的情境：先记下「今天说过」，再挑句子（挑不出或被「少说」跳过也不再反复试）。
+  const daily = (flag, ctxKey) => { track[flag] = today; return say(ctxKey, today); };
+  if (track.greetedDate !== today && hour >= NIGHT_UNTIL && hour < 11) return daily('greetedDate', 'greet');
+  if (track.lunchDate !== today && hour === 12 && min < 30) return daily('lunchDate', 'noon');
+  // 深夜：23 点到次日 5 点算同一晚（日期往前推 6 小时），一晚一次。
+  const night = localDateKey(now - 6 * 3600000);
+  if (track.lateDate !== night && (hour >= 23 || hour < 5)) { track.lateDate = night; return say('late', night); }
+  if (track.meetingEndedAt && now - track.meetingEndedAt < 10 * 60000 && idleSec < 120) { const at = track.meetingEndedAt; track.meetingEndedAt = 0; return say('meetingAfter', at); }
+  if (prevIdle >= AWAY_BACK_SEC && idleSec < 60) return say('back', now);
+  const done = (Array.isArray(ctx.doneAt) ? ctx.doneAt : []).filter(t => now - t < 30 * 60000 && t <= now).length;
+  if (done >= 3 && now - (Number(track.doneSaidAt) || 0) >= 2 * 3600000) { track.doneSaidAt = now; return say('done', now); }
+  if (track.sitSnoozeUntil && now >= track.sitSnoozeUntil) {
+    track.sitSnoozeUntil = 0; track.sitRemindedAt = now; track.activeSince = now;
+    return say('sitAgain', now);
   }
-  // 2026-11-12：午饭和深夜各说一句，每天各一次。
-  if (track.lunchDate !== today && hour === 12 && new Date(now).getMinutes() < 30) {
-    track.lunchDate = today;
-    return { id: 'chatter-lunch-' + today, kind: 'chatter', title: '到饭点了，先去吃饭吧。' };
-  }
-  if (track.lateDate !== today && hour >= 23) {
-    track.lateDate = today;
-    return { id: 'chatter-late-' + today, kind: 'chatter', title: '夜深了，忙完这点早些休息。' };
-  }
-  if (prevIdle >= AWAY_BACK_SEC && idleSec < 60) {
-    return { id: 'chatter-back-' + now, kind: 'chatter', title: '欢迎回来～有新提醒我会叫你。' };
-  }
-  if (now - track.activeSince >= SIT_LONG_MS && now - (Number(track.sitRemindedAt) || 0) >= SIT_LONG_MS) {
+  if (!track.sitSnoozeUntil && now - track.activeSince >= SIT_LONG_MS && now - (Number(track.sitRemindedAt) || 0) >= SIT_LONG_MS) {
     track.sitRemindedAt = now;
     track.activeSince = now;
-    return { id: 'chatter-sit-' + now, kind: 'chatter', title: '坐了一个半小时啦，起来走走、喝口水？' };
+    return say('sit', now);
   }
+  const afternoon = (hour === 14 && min >= 30) || hour === 15 || (hour === 16 && min < 30);
+  if (track.afternoonDate !== today && afternoon && now - track.activeSince >= 10 * 60000) return daily('afternoonDate', 'afternoon');
+  const offwork = day >= 1 && day <= 5 && (hour === 18 || (hour === 19 && min < 30));
+  if (track.offworkDate !== today && offwork) return daily('offworkDate', 'offwork');
   return null;
 }
 

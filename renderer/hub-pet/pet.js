@@ -375,9 +375,19 @@
   }
   // 鼠标停在卡片上：按 mousemove 判断（窗口平时点穿，光标进来时可能收不到 mouseenter）。
   let holding = false;
-  function setHold(on) { on = !!(on && cardId); if (on !== holding) { holding = on; api.hold?.(on); } }
+  function setHold(on) { on = !!(on && (cardId || bubbleChips)); if (on !== holding) { holding = on; api.hold?.(on); } }
   card.el.addEventListener('mouseleave', () => setHold(false));
   $('ncard-close').addEventListener('click', e => { e.stopPropagation(); api.dismiss?.(); });
+  const chipsEl = $('bubble-chips');
+  let bubbleChips = 0;
+  chipsEl.addEventListener('click', e => {
+    const btn = e.target.closest && e.target.closest('.chip');
+    if (!btn || !bubbleId) return;
+    e.stopPropagation();
+    chipsEl.querySelectorAll('.chip').forEach(el => { el.disabled = true; });
+    btn.classList.add('picked');
+    api.reply?.(bubbleId, btn.dataset.choice);
+  });
   function showBubble(b) {
     // 通知卡片和普通气泡分开演：同一时刻只有一个在说。
     showCard(b && b.notify ? b : null);
@@ -386,8 +396,17 @@
       bubbleId = b.id;
       bubbleText.textContent = b.title + (b.sticky ? '（点击确认）' : '');
       bubbleEl.classList.toggle('sticky', !!b.sticky);
-      bubbleKind.textContent = KIND[b.kind] || '';
-      bubbleKind.hidden = !KIND[b.kind];
+      // 起了名字的闲聊：小标签写名字（2026-11-17 r27g）。
+      const tag = KIND[b.kind] || (b.kind === 'chatter' && b.name ? String(b.name).slice(0, 8) : '');
+      bubbleKind.textContent = tag;
+      bubbleKind.hidden = !tag;
+      bubbleKind.classList.toggle('name', !KIND[b.kind] && !!tag);
+      // 回应按钮：一两个，点了它记住你的选择；鼠标停在气泡上时不收。
+      const chips = Array.isArray(b.chips) ? b.chips.slice(0, 2) : [];
+      bubbleChips = chips.length;
+      chipsEl.replaceChildren(...chips.map(c => { const el = document.createElement('button'); el.type = 'button'; el.className = 'chip'; el.dataset.hit = 'chip'; el.dataset.choice = String(c.id || ''); el.textContent = String(c.label || ''); return el; }));
+      chipsEl.hidden = !chips.length;
+      bubbleEl.classList.toggle('has-chips', !!chips.length);
       bubbleEl.hidden = false;
       bubbleEl.classList.remove('out');
       bubbleEl.classList.remove('in');
@@ -395,6 +414,7 @@
       bubbleEl.classList.add('in');
     } else if (!b && bubbleId) {
       bubbleId = '';
+      bubbleChips = 0; setHold(false);
       bubbleEl.classList.remove('in');
       bubbleEl.classList.add('out');
       setTimeout(() => { if (!bubbleId) { bubbleEl.hidden = true; bubbleEl.classList.remove('out'); } }, 340);
@@ -867,7 +887,7 @@
     const ix = r.width * 0.16, iy = r.height * 0.12;
     return x > r.left + ix && x < r.right - ix && y > r.top + iy && y < r.bottom - 4 ? 'pet' : null;
   }
-  document.addEventListener('mousemove', e => { if (!pressing) { const hit = hitTarget(e.clientX, e.clientY); setHit(!!hit); if (hit === 'pet') strokeMove(e.clientX); else stroke.at = 0; } setHold(!!(e.target && e.target.closest && e.target.closest('#ncard'))); });
+  document.addEventListener('mousemove', e => { if (!pressing) { const hit = hitTarget(e.clientX, e.clientY); setHit(!!hit); if (hit === 'pet') strokeMove(e.clientX); else stroke.at = 0; } setHold(!!(e.target && e.target.closest && e.target.closest('#ncard, #bubble.has-chips'))); });
   document.addEventListener('mouseleave', () => { if (!pressing) setHit(false); setHold(false); stroke.at = 0; });
   // 窗口点穿时收不到 mousemove：主进程看到光标进了窗口方框，就把位置发过来问一次（不再用全局鼠标钩子）。
   // 接住时总要回报：主进程可能已因光标出框自行改回点穿，这时 hitNow 还是旧值。
@@ -877,7 +897,7 @@
     const target = hitTarget(e.clientX, e.clientY);
     // 面板、问助理输入框、卡片上的 × 都在本窗口里自己处理点击，不交给主进程（不然会被当成拖动或「点卡片打开」）。
     if (target === 'lamp') { clickLamp(e.target); return; }
-    if (!target || target === 'panel' || target === 'ask' || target === 'close') return;
+    if (!target || target === 'panel' || target === 'ask' || target === 'close' || target === 'chip') return;
     pressing = true; stroke.at = 0;
     try { document.documentElement.setPointerCapture(e.pointerId); } catch (_) {}
     api.press(target);
@@ -977,6 +997,6 @@
     busy: busyEl.hidden ? '' : $('busy-text').textContent,
     prop: propsEl.hidden ? '' : propKind, propRects: propParts.map(el => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }; }),
     lamps: lampsEl.hidden ? null : { merged: lampsEl.classList.contains('merged'), row: lampsEl.classList.contains('row'), items: [...lampsEl.querySelectorAll('[data-lamp]')].map(el => ({ id: el.dataset.lamp, st: el.classList.contains('run') ? 'run' : el.classList.contains('err') ? 'err' : 'done' })), text: lampsEl.textContent },
-    dotText: dotEl.hidden ? '' : dotEl.textContent, meeting: document.body.classList.contains('meeting'), ask: !askEl.hidden, askNote: askNote.textContent, panel: panelEl.hidden ? null : panelList.textContent, box, edge: state.edge, size: getComputedStyle(document.documentElement).getPropertyValue('--body').trim(), pose, layers: visual ? [visual.key] : [], opacities: visual ? [1] : [], domLayers: layersEl.children.length, frame: visual ? visual.shown : -1, swapping: !!pendingSwap, fps: raf ? 'raf' : timer ? 'timer' : 'stopped', bubble: bubbleId, dots: lastDots, transform: bodyEl.style.transform });
+    dotText: dotEl.hidden ? '' : dotEl.textContent, meeting: document.body.classList.contains('meeting'), ask: !askEl.hidden, askNote: askNote.textContent, panel: panelEl.hidden ? null : panelList.textContent, box, edge: state.edge, size: getComputedStyle(document.documentElement).getPropertyValue('--body').trim(), pose, layers: visual ? [visual.key] : [], opacities: visual ? [1] : [], domLayers: layersEl.children.length, frame: visual ? visual.shown : -1, swapping: !!pendingSwap, fps: raf ? 'raf' : timer ? 'timer' : 'stopped', bubble: bubbleId, bubbleText: bubbleId ? bubbleText.textContent : '', bubbleTag: bubbleKind.hidden ? '' : bubbleKind.textContent, chips: bubbleId ? Array.from(chipsEl.querySelectorAll('.chip')).map(el => el.textContent) : [], dots: lastDots, transform: bodyEl.style.transform });
   api.ready();
 })();

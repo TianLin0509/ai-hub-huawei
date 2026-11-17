@@ -2963,6 +2963,20 @@ async function loadSessionHistoryToOverlayUnserialized(sessionId, opts = {}) {
     container.innerHTML =
       '<div class="msg-overlay-placeholder">' + html + '</div>';
   };
+  // 加载历史失败且是已知问题（如 DSH 运行环境不完整）时，用统一报错卡片显示，带「一键修复」等按钮，
+  // 不再只给一行提示文字让用户去找不存在的按钮（2026-11-17 同事反馈）。
+  const showHistoryError = (msg) => {
+    let card = '';
+    try {
+      if (require('../core/known-issues').matchKnownIssue({ area: 'session', details: msg })) {
+        card = require('./hub-error-card').html({ area: 'session', title: '', details: msg });
+      }
+    } catch (_) { card = ''; }
+    if (!card) return false;
+    container.innerHTML = '<div class="msg-overlay-placeholder msg-overlay-error">' + card
+      + '<div class="msg-overlay-error-alt"><a href="#" data-action="switch-to-pty">切到 PTY 视图查看终端</a></div></div>';
+    return true;
+  };
 
   // 3. look up session info — same pattern as showTerminal (line ~1080)
   let session = null;
@@ -3061,7 +3075,9 @@ async function loadSessionHistoryToOverlayUnserialized(sessionId, opts = {}) {
     if (isStaleLoad()) return { mounted: 0, error: 'stale load' };
     const msg = (err && err.message) ? err.message : String(err);
     console.warn('[loadSessionHistoryToOverlay] IPC invoke threw:', err);
-    if (!incremental) {
+    if (!incremental && showHistoryError(msg)) {
+      /* 已知问题：报错卡片已就地给出修复按钮 */
+    } else if (!incremental) {
       showPlaceholder(
         '加载历史失败：' + msg + ' — '
         + '<a href="#" data-action="switch-to-pty">切到 PTY 视图查看终端</a>'
@@ -3151,7 +3167,9 @@ async function loadSessionHistoryToOverlayUnserialized(sessionId, opts = {}) {
     } else {
       txt = '加载历史失败：' + ipcError;
     }
-    if (!incremental && concurrentFullCards.length === 0) {
+    if (!incremental && concurrentFullCards.length === 0 && ipcError && showHistoryError(ipcError)) {
+      /* 已知问题：报错卡片已就地给出修复按钮 */
+    } else if (!incremental && concurrentFullCards.length === 0) {
       showPlaceholder(
         txt + ' — '
         + '<a href="#" data-action="switch-to-pty">切到 PTY 视图查看终端</a>'

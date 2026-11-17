@@ -1360,6 +1360,22 @@
   line-height: 1.6;
   opacity: 0.85;
 }
+.msg-overlay-placeholder.msg-overlay-error {
+  /* 已知问题报错卡：正常字体、左对齐、限宽，按钮可点（2026-11-17） */
+  font-size: 14px;
+  font-style: normal;
+  text-align: left;
+  opacity: 1;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 40px 24px;
+  color: inherit;
+}
+.msg-overlay-error-alt {
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--hw-text-2);
+}
 .msg-overlay-placeholder a {
   color: var(--ui-purple-2);
   text-decoration: underline;

@@ -5,6 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const { MODES, ROLES } = require('./state');
+const { cleanName, normalizePrefs, normalizeRecent } = require('./talk');
 
 const FILE = 'hub-pet.json';
 const SCALE_MIN = 0.6, SCALE_MAX = 1.6;
@@ -19,7 +20,7 @@ const isUrgentNotice = n => !!n && (n.tone === 'bad' || URGENT_KINDS.has(String(
 
 const OPT_IN_V = 1;
 function defaults() {
-  return { enabled: false, role: '01-cat', mode: 'gentle', position: null, quietUntil: 0, silentDate: '', peekOnFullscreen: true, notifyMode: 'pet', followSessions: true, showGrowth: true, introduced: false, scale: 1, bodyBoxes: {} };
+  return { enabled: false, role: '01-cat', mode: 'gentle', position: null, quietUntil: 0, silentDate: '', peekOnFullscreen: true, notifyMode: 'pet', followSessions: true, showGrowth: true, introduced: false, scale: 1, bodyBoxes: {}, petName: '', talkPrefs: normalizePrefs(null), talkRecent: [] };
 }
 
 // 大小（2026-10-18）：身体是原大小的 0.6–1.6 倍，按 0.01 取整。认数字和「数字样子的字符串」（手改文件时常见），
@@ -56,6 +57,10 @@ function normalize(raw, base, roleOk = builtinRole) {
   if (typeof raw.introduced === 'boolean') out.introduced = raw.introduced;
   const scale = parseScale(raw.scale);
   if (scale != null) out.scale = scale;
+  // 2026-11-17 r27g：桌宠的名字（空串＝不起名）、对各类闲聊的回应次数、最近说过的句子（短期内不重复）。
+  if (typeof raw.petName === 'string') out.petName = cleanName(raw.petName);
+  if (raw.talkPrefs && typeof raw.talkPrefs === 'object') out.talkPrefs = normalizePrefs(raw.talkPrefs);
+  if (Array.isArray(raw.talkRecent)) out.talkRecent = normalizeRecent(raw.talkRecent);
   const p = raw.position;
   if (p === null) out.position = null;
   else if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) out.position = { x: Math.round(p.x), y: Math.round(p.y) };
@@ -98,7 +103,7 @@ function createSettingsStore({ dataDir, company = false, logger = console, roleO
   if (migrate) save();
   return {
     file,
-    get: () => ({ ...value, bodyBoxes: { ...value.bodyBoxes } }),
+    get: () => ({ ...value, bodyBoxes: { ...value.bodyBoxes }, talkPrefs: normalizePrefs(value.talkPrefs), talkRecent: value.talkRecent.slice() }),
     // 不合法的字段保留原值；position 传 null、quietUntil 传 0、silentDate 传空串表示清掉。
     // persist:false 只改内存（拖大小滑块的过程中），之后由 flush() 或下一次普通 update 一起写盘。
     update(patch, { persist = true } = {}) {
