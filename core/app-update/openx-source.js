@@ -35,13 +35,19 @@ function freshState() {
   return { unreachableUntil: 0, list: null, listAt: 0, listing: null, details: new Map(), bad: new Set(), lastReason: '' };
 }
 
-// 只在公开版的 Hub 程序（Electron）里默认开；成员版默认关（只走外网），纯 Node 跑的单测和脚本也不碰。
+// 2026-11-18 用户定：成员版下载组件也优先走内源（只下载、按 sha256 核对，不上传任何东西）。
+// 所以 Hub 程序（Electron）里两个版本都默认开；纯 Node 跑的单测和脚本不碰。
 // AI_HUB_OPENX=0 任何版本都关（排查用）；=1 强制开（单测与排查用）。
-function enabled(env = process.env, versions = process.versions, editionOn = EDITION_ON) {
+function enabled(env = process.env, versions = process.versions) {
   const v = String(env.AI_HUB_OPENX || '').trim();
   if (v === '0') return false;
   if (v === '1') return true;
-  return !!editionOn && !!(versions && versions.electron);
+  return !!(versions && versions.electron);
+}
+// 内源之后的外网源要不要改顺序（GitHub 提到阿里云前）：只按发行版本定——公开版改，成员版保持原顺序（阿里云高速在前）。
+// AI_HUB_OPENX=1 只管开内源，不改顺序；AI_HUB_TEST_EDITION=public 仅供单测模拟公开版。
+function publicOrder(env = process.env, editionOn = EDITION_ON) {
+  return !!editionOn || String(env.AI_HUB_TEST_EDITION || '').trim() === 'public';
 }
 
 const normVersion = v => String(v || '').trim().replace(/^v/i, '');
@@ -203,4 +209,4 @@ function lastReason() { return state.lastReason; }
 const releaseName = (kind, version) => `${kind}-${normVersion(version)}`;
 function _reset() { state = freshState(); }
 
-module.exports = { EDITION_ON, releaseName, find, findForDownload, headSize, prewarm, reachability, safeUrl, markBad, lastReason, enabled, normVersion, _reset, DEFAULT_API, PROJECT_ID, REACH_TIMEOUT_MS, UNKNOWN_BUDGET_MS };
+module.exports = { EDITION_ON, publicOrder, releaseName, find, findForDownload, headSize, prewarm, reachability, safeUrl, markBad, lastReason, enabled, normVersion, _reset, DEFAULT_API, PROJECT_ID, REACH_TIMEOUT_MS, UNKNOWN_BUDGET_MS };

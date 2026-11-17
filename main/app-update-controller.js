@@ -251,7 +251,9 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     emit({ phase: 'downloading', attempts: [], progress: { received: 0, total: asset.bytes }, error: null });
     let lastEmit = 0;
     const ordered = [...sources.filter(s => confirmedIds.includes(s.id)), ...sources.filter(s => !confirmedIds.includes(s.id))];
+    // 程序更新包：公开版先走内源；成员版的更新包不在内源上（内源只发公开版），不去内源找（2026-11-18）。
     const runDownload = () => downloadWithFallback({ sources: ordered, version: manifest.version, expect: asset, dest, fetchImpl: resolveFetch(fetchImpl), signal: abort.signal,
+      openx: require('../core/app-update/openx-source').EDITION_ON ? {} : false,
       onAttempt: attempts => emit({ attempts }),
       onProgress: progress => { const now = Date.now(); if (now - lastEmit > 200 || progress.received === progress.total) { lastEmit = now; emit({ progress }); } } });
     let result = await runDownload();

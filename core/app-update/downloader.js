@@ -296,11 +296,11 @@ async function downloadAll({ sources, version, expect, dest, fetchImpl, signal, 
       }
     }
   }
-  const result = await downloadFromSources({ sources: openxOn ? orderSources(sources) : sources, version, expect, dest, fetchImpl, signal, onProgress, onAttempt, idleTimeoutMs, connectTimeoutMs, attempts });
+  const result = await downloadFromSources({ sources: openxOn && openxSource.publicOrder((openx && openx.env) || process.env) ? orderSources(sources) : sources, version, expect, dest, fetchImpl, signal, onProgress, onAttempt, idleTimeoutMs, connectTimeoutMs, attempts });
   return openxNote ? { ...result, openx: openxNote } : result;
 }
 // 公开版下载源顺序（2026-11-16 定）：公司内源 openx → GitHub → 其他官方源 → 阿里云（自家服务器只做最后兜底）。
-// 内源在 downloadAll 里单独先试；这里把调用方给的源按 GitHub / 其他 / 阿里云 三档稳定排序，同档保持原顺序。成员版不排序。
+// 内源在 downloadAll 里单独先试；这里把调用方给的源按 GitHub / 其他 / 阿里云 三档稳定排序，同档保持原顺序。成员版不排序（内源照样先试）。
 // 自家阿里云服务器上的下载目录（和各组件源列表里的地址同一组前缀）。
 const OWN_MIRROR_PREFIXES = ['https://dl.lt-stockpartner.tech/hub-update/', 'https://dl.lt-stockpartner.tech/pptutor/',
   'https://me.lt-stockpartner.tech/hub-update/', 'https://me.lt-stockpartner.tech/pptutor/'];

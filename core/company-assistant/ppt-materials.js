@@ -20,7 +20,8 @@ const TEAM_PACK_SOURCES = Object.freeze([
 ]);
 function packSources(deps = {}) {
   const list = deps.pptTeamPackUrls || TEAM_PACK_SOURCES;
-  if (deps.openx === false || !require('../app-update/openx-source').enabled((deps.openx && deps.openx.env) || process.env)) return list;
+  const env = (deps.openx && deps.openx.env) || process.env, openxSource = require('../app-update/openx-source');
+  if (deps.openx === false || !openxSource.enabled(env) || !openxSource.publicOrder(env)) return list;
   return require('../app-update/downloader').orderSources(list.map(url => ({ url }))).map(s => s.url);
 }
 const sha256 = buf => crypto.createHash('sha256').update(buf).digest('hex');
