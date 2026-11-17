@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('hubPet', {
   dismiss: () => ipcRenderer.send('hub-pet:dismiss'),
   ask: (text, enableAssistant = false) => ipcRenderer.send('hub-pet:ask', { text: String(text || '').slice(0, 2000), enableAssistant: enableAssistant === true }),
   askClose: () => ipcRenderer.send('hub-pet:ask-close'),
+  // 2026-11-17 r27c：点会话状态灯直达那个会话。
+  openSession: (id) => ipcRenderer.send('hub-pet:open-session', String(id || '').slice(0, 160)),
   onAskOpen: (fn) => on('hub-pet:ask-open', fn),
   onAskResult: (fn) => on('hub-pet:ask-result', fn),
   onState: (fn) => on('hub-pet:state', fn),

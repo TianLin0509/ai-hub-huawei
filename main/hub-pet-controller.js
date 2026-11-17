@@ -47,6 +47,8 @@ function createHubPetController({
   diskRoots = null, diskStatfs = undefined,
   // inMeeting() → 会议页正在录制：这时只亮小圆点，不举卡片（屏幕可能在共享）。
   inMeeting = () => false,
+  // r27d：isQuotaLow() → 当前账号额度是否快用完（main.js 按账号用量读数判断，每次轮询都问，切号/重置后自动熄）。
+  isQuotaLow = () => false,
   canShow = () => true, debug = false, watchFullscreen = true,
   logger = console, now = () => Date.now(),
   fetchImpl = globalThis.fetch, roleSources = null, autoRoleDelayMs = 2500,
@@ -81,7 +83,7 @@ function createHubPetController({
   let dock = null;
   let pettedAt = 0;
   let lastRelease = null;       // 最近一次松手的速度与计划（隔离测试读）
-  let signals = { quotaLow: false };
+  let signals = { quotaLow: null };   // null＝跟随真实额度；调试 setSignal 可强制 true/false
   // 形象图里身体四周的透明边（占身体框的比例，渲染端量出来的）。贴边按看得见的身体算，
   // 不然图里那圈透明边会像「空气墙」一样，离屏幕边还有二三十像素就停住（2026-10-18 用户在公司反馈）。
   // 量过的形象记在 hub-pet.json 的 bodyBoxes 里，启动时直接用，不再「先按整张图摆、量完又挪一下」（2026-10-18 审核）。
@@ -171,6 +173,8 @@ function createHubPetController({
   // 保证气泡和面板总有地方放（正常贴边最多伸出约 113px：60%、贴右边；躲边时本来就不冒气泡）。
   function edgeCut() {
     if (!alive()) return { left: 0, right: 0 };
+    // 调试覆盖（r27d）：隔离测试的窗口被压在屏幕外、挪不到真实屏幕边，用它模拟贴边伸出多少。
+    if (overrides.edge && typeof overrides.edge === 'object') return { left: Math.max(0, Number(overrides.edge.left) || 0), right: Math.max(0, Number(overrides.edge.right) || 0) };
     const b = placedBounds();
     const area = areaFor(b);
     const h = winH();
@@ -256,7 +260,9 @@ function createHubPetController({
     const idleSec = idleSeconds();
     const running = sessionsRunning();
     const follow = settings.get().followSessions !== false;
-    const ctxBase = { now: t, fullscreen, assistantBusy: assistantBusy(), sessionsBusy: follow ? running : 0, idleSec, quotaLow: signals.quotaLow, pettedAt };
+    let quotaLow = signals.quotaLow;
+    if (typeof quotaLow !== 'boolean') { try { quotaLow = isQuotaLow?.() === true; } catch (_) { quotaLow = false; } }
+    const ctxBase = { now: t, fullscreen, assistantBusy: assistantBusy(), sessionsBusy: follow ? running : 0, idleSec, quotaLow, pettedAt };
     // 先按「没在说话」定姿态（决定能不能开口：打盹时不说），再推进气泡队列，最后按是否在说话定最终姿态。
     pose = decidePose({ ...ctxBase, speaking: false });
     const chatter = chatterFor(settings.get().mode, { now: t, idleSec }, chatterTrack);
@@ -272,6 +278,8 @@ function createHubPetController({
       pose, role, assetBase: roles.assetBase(role), mode: s.mode, dock: fullscreen ? 'right' : dock, peeking: fullscreen, scale: scaleNow(),
       bubble: snap.bubble ? bubbleView(snap.bubble) : null,
       running: follow ? running : 0,
+      // r27c：会话状态灯（在跑 / 答完 / 出错，点灯直达会话）、小圆点分色计数、开会与额度低时身上的道具。
+      lamps: follow ? sessionLamps(snap.finished) : [], dotTones: snap.dotTones, meeting: meetingNow(), quotaLow,
       dots: snap.dots, quiet: !gate([]).ok, sequences: (roles.meta(role) && roles.meta(role).sequences) || [], clipped: (roles.meta(role) && roles.meta(role).clipped) || {},
       night: pose === 'sleep', edge: edgeCut(),
     };
@@ -380,7 +388,7 @@ function createHubPetController({
     const at = Number(payload.completedAt) || now();
     onNotice({
       id: `notify:${sessionId}:${at}`, kind, notify: true, title: String(payload.title || 'AI 会话'), text: String(payload.body || ''),
-      sessionId: sessionId || null, count: Number(payload.readyCount) || 0, tone: payload.tone === 'bad' ? 'bad' : '',
+      sessionId: sessionId || null, count: Number(payload.readyCount) || 0, tone: payload.tone === 'bad' ? 'bad' : '', ...(payload.err === true ? { err: true } : {}),
       cta: kind === 'hub-reminder' ? '打开助理' : kind === 'bridge' ? '打开联动' : '打开会话',
     });
     return true;
@@ -388,6 +396,42 @@ function createHubPetController({
   function sessionsRunning() {
     if (Number.isFinite(overrides.running)) return overrides.running;
     try { const a = getSessionActivity?.(); return Math.max(0, Math.round(Number(a && a.running) || 0)); } catch (_) { return 0; }
+  }
+  // 会话状态灯（2026-11-17 r27c）：正在跑的会话一盏转圈灯；答完、出错但还没看的会话各一盏绿灯、橙灯。
+  // 在跑的排前面；同一会话又跑起来了就只亮转圈灯。最多给渲染端 30 盏，超过 6 盏由渲染端合并成数字。
+  // r27d：活动里带 known（侧栏还活着的全部会话）时，按它校正：已关闭/休眠的不亮，标题取当前名字，
+  // 通知早于该会话最近一轮开始的（上一轮的结果）不再亮。调试覆盖 sessions 时可一并给 known。
+  function sessionLamps(finished = []) {
+    let list = [], known = null;
+    if (Array.isArray(overrides.sessions)) { list = overrides.sessions; if (Array.isArray(overrides.known)) known = overrides.known; }
+    else {
+      try {
+        const a = getSessionActivity?.();
+        list = Array.isArray(a && a.sessions) ? a.sessions : [];
+        if (Array.isArray(a && a.known)) known = a.known;
+      } catch (_) {}
+    }
+    const live = known ? new Map(known.filter(k => k && k.id).map(k => [String(k.id), k])) : null;
+    const out = [], seen = new Set();
+    const add = (id, title, st) => { id = String(id || '').slice(0, 160); if (!id || seen.has(id)) return; seen.add(id); out.push({ id, title: String(title || '').slice(0, 40), st }); };
+    for (const s of list) add(s && s.id, live?.get(String(s && s.id))?.title || (s && s.title), 'run');
+    for (const f of finished || []) {
+      if (live) {
+        const k = live.get(String(f.id));
+        if (!k || (Number(k.startedAt) || 0) > (Number(f.at) || 0)) continue;
+        add(f.id, k.title || f.title, f.st === 'err' ? 'err' : 'done');
+      } else add(f.id, f.title, f.st === 'err' ? 'err' : 'done');
+    }
+    return out.slice(0, 30);
+  }
+  function openSession(sessionId) {
+    const sid = String(sessionId || '').slice(0, 160);
+    if (!sid) return false;
+    try { focusPrimaryWindow?.(); } catch (_) {}
+    try { sendToRenderer?.('desktop-notification:open-session', { sessionId: sid }); } catch (_) {}
+    speech.seenSession(sid);
+    evaluate();
+    return true;
   }
   // 值得提醒的新版本：每个版本说一次，点开「检查更新」窗口。
   function announceUpdate(version) {
@@ -397,7 +441,7 @@ function createHubPetController({
     return true;
   }
   // 用户已经在 Hub 里点开了这个会话：小圆点里它的「已完成」就不用再留着。
-  function sessionSeen(sessionId) { if (alive() && speech.dropSession(sessionId)) evaluate(); }
+  function sessionSeen(sessionId) { if (alive() && speech.seenSession(sessionId)) evaluate(); }
   function syncReminders() {
     let items = [];
     try { items = noticeBus?.reminders?.() || []; }
@@ -566,7 +610,7 @@ function createHubPetController({
     if (sessionId && (item.notify || known.notify) && kind !== 'reminder' && sessionId !== 'company-assistant') {
       try { focusPrimaryWindow?.(); } catch (_) {}
       try { sendToRenderer?.('desktop-notification:open-session', { sessionId: String(sessionId).slice(0, 160) }); } catch (_) {}
-      speech.dropSession(sessionId);
+      speech.seenSession(sessionId);
       return;
     }
     openAssistant({ noticeId: String(noticeId || item.id || '').slice(0, 160), sessionId: sessionId ? String(sessionId).slice(0, 160) : undefined });
@@ -759,6 +803,8 @@ function createHubPetController({
         error => reply({ ok: false, enableAssistant: error?.code === 'ASSISTANT_DISABLED', error: String(error && error.message || error).slice(0, 160) }));
     },
     'hub-pet:ask-close': (event) => { if (fromPet(event)) setIgnore(true); },
+    // 点会话状态灯：直达那个会话；答完、出错的灯随即熄掉。
+    'hub-pet:open-session': (event, id) => { if (fromPet(event)) openSession(id); },
     'hub-pet:signal': (event, patch) => { if (fromMain(event)) setSignal(patch); },
     'hub-pet:session-seen': (event, id) => { if (fromMain(event)) sessionSeen(String(id || '').slice(0, 160)); },
     // 渲染端量出的身体透明边（比例）。只认 0–0.45 的数，防止一张奇怪的图把限位算坏；量的是别的形象（刚换过）就不认。
@@ -804,11 +850,15 @@ function createHubPetController({
       if (req.op === 'menu-state') return menuState();
       if (req.op === 'menu-act') { menuAct(req.act || {}); return true; }
       if (req.op === 'ask-open') { openAsk(); return true; }
+      if (req.op === 'signal') { setSignal(req.patch || {}); return true; }
+      if (req.op === 'push') { onNotice(req.notice); return true; }   // 隔离测试：新版本、硬盘等不走提醒总线的通知
+      if (req.op === 'update') return announceUpdate(req.version);
+      if (req.op === 'open-session') return openSession(req.id);
       if (req.op === 'celebrate') return celebrate(req.payload || {});
       if (req.op === 'pet') return petted();
       if (req.op === 'disk-check') return diskWatch ? diskWatch.check() : [];
       if (req.op === 'override') {
-        for (const k of ['idleSec', 'busy', 'fullscreen', 'nowShift', 'running', 'meeting']) if (k in req) overrides[k] = req[k];
+        for (const k of ['idleSec', 'busy', 'fullscreen', 'nowShift', 'running', 'meeting', 'sessions', 'known', 'edge']) if (k in req) overrides[k] = req[k];
         if ('fullscreen' in req) setScreenFull(req.fullscreen === true);
         evaluate();
         return true;
@@ -829,7 +879,7 @@ function createHubPetController({
   }
 
   function setSignal(patch = {}) {
-    if (typeof patch.quotaLow === 'boolean') signals = { ...signals, quotaLow: patch.quotaLow };
+    if (typeof patch.quotaLow === 'boolean' || patch.quotaLow === null) signals = { ...signals, quotaLow: patch.quotaLow };
     evaluate();
   }
 

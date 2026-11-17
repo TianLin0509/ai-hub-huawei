@@ -4319,6 +4319,16 @@ try {
     return !!(s && s.agentTurnActive);
   }
 
+  // 只读：结束类事件（完成/中止/失败）是否属于当前这一回合——回合标识一致、事件时间不早于本回合开始。
+  // 不看是否仍在跑：Stop 先到、失败后到时，同一回合的失败仍算数（r27e，桌宠据此丢弃上一轮迟到的失败）。
+  isCurrentAgentTurnEvent(sessionId, event = {}) {
+    const s = this.sessions.get(sessionId);
+    if (!s) return false;
+    if (s.agentTurnId && event.turnId && s.agentTurnId !== event.turnId) return false;
+    const at = Number(event.completedAt || event.abortedAt || event.failedAt) || 0;
+    return !(at && at < (Number(s.agentTurnStartedAt) || 0));
+  }
+
   noteAgentTurnFinished(sessionId, event = {}) {
     const s = this.sessions.get(sessionId);
     if (!s || !s.agentTurnActive) return false;

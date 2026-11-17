@@ -13,6 +13,7 @@
   "tests/unit-company-assistant-query-status.test.js",
   "tests/unit-pet-reminder.test.js",
   "tests/unit-hub-pet-notify.test.js",
+  "tests/unit-hub-pet-status-r27c.test.js",
   "tests/unit-profile.test.js",
   "tests/unit-profile-review.test.js",
   "tests/unit-codeagent-skill-transcript.test.js",

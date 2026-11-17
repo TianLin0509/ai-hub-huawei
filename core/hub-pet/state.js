@@ -204,6 +204,20 @@ class SpeechQueue {
     return this.dots.length !== before;
   }
 
+  // 会话已读（点了状态灯、或在主界面打开）：正在展示的卡片、排队中的通知和小圆点一起清，
+  // 不然卡片仍挂着绿灯、超时后又回到未读（r27d 审查第 1 项）。
+  seenSession(sessionId) {
+    const sid = cleanText(sessionId, 160);
+    if (!sid) return false;
+    const mine = item => item && item.notify && item.sessionId === sid;
+    let changed = this.dropSession(sid);
+    const before = this.pending.length;
+    this.pending = this.pending.filter(item => !mine(item));
+    if (this.pending.length !== before) changed = true;
+    if (mine(this.current)) { this.current = null; this.held = null; changed = true; }
+    return changed;
+  }
+
   nextDeadline() {
     if (this.current) return this.current.sticky || !Number.isFinite(this.current.until) ? null : this.current.until;
     return this.pending.length ? this.now() : null;
@@ -215,9 +229,34 @@ class SpeechQueue {
         ...(this.current.notify ? { notify: true, text: this.current.text.slice(0, 400), tone: this.current.tone || '', cta: this.current.cta || '', count: this.current.count || 0, sessionId: this.current.sessionId,
           held: !!this.held, ms: this.notifyMs, at: this.current.at, ...(this.current.err === true ? { err: true } : {}), ...(this.current.art ? { art: String(this.current.art) } : {}) } : {}) } : null,
       dots: this.dots.length,
+      dotTones: dotTones(this.dots),
+      finished: finishedSessions(this.current ? [...this.dots, this.current] : this.dots),
       pending: this.pending.length,
     };
   }
+}
+
+// 小圆点分色计数（2026-11-17 r27c）：出错和警示色（磁盘、考勤等）算橙，会话答完算绿，其余算蓝。
+// 只有 err:true 写「出错了」；警示色只决定颜色，不改类别抬头。
+const DONE_KINDS = new Set(['session', 'web', 'answer']);
+function dotTone(item = {}) {
+  if (item.err === true || item.tone === 'bad') return 'bad';
+  return DONE_KINDS.has(item.kind) ? 'ok' : 'info';
+}
+function dotTones(items = []) {
+  const out = { ok: 0, bad: 0, info: 0 };
+  for (const item of items) out[dotTone(item)] += 1;
+  return out;
+}
+// 答完、出错但还没看的会话：会话状态灯里的绿灯和橙灯。同一会话只留最新一条。
+function finishedSessions(items = []) {
+  const map = new Map();
+  for (const item of items) {
+    if (!item || !item.notify || !item.sessionId || !DONE_KINDS.has(item.kind)) continue;
+    map.delete(item.sessionId);
+    map.set(item.sessionId, { id: item.sessionId, title: String(item.title || '').slice(0, 40), st: item.err === true ? 'err' : 'done', at: Number(item.at) || 0 });
+  }
+  return [...map.values()].reverse();
 }
 
 // 活泼档的闲聊（温和档只说助理的提醒，安静档什么都不说）。返回要说的话或 null。
@@ -269,6 +308,30 @@ function weeklyNudge(mode, ctx = {}, track = {}) {
     title: '周五了，周报要不要让助理先起个草？', text: '助理按本周的会、邮件和群消息起草，你改改就能交。' };
 }
 
+// 额度快用完（r27d）：当前账号 5 小时或 7 天窗口用到 ≥90%，且这个窗口还没重置。
+// 已过重置时间、或读数太旧（不知道重置时间时超过 1 小时）都算已恢复；切号后读的是新账号的读数。
+const QUOTA_LOW_PCT = 90;
+function quotaIsLow(entry, now = Date.now()) {
+  if (!entry || typeof entry !== 'object') return false;
+  const ts = Number(entry.ts) || 0;
+  return ['usage5h', 'usage7d'].some(key => {
+    const w = entry[key];
+    const pct = w && Number(w.pct);
+    if (!Number.isFinite(pct) || pct < QUOTA_LOW_PCT || pct > 100) return false;
+    const resetsAt = Number(w.resetsAt) || 0;
+    return resetsAt > 0 ? resetsAt > now : ts > 0 && now - ts < 3600000;
+  });
+}
+
+// 会话真实失败 → 交给桌宠的通知（r27d）。session 是会话管理器给的会话信息；助理、隐藏、群聊成员的会话不亮灯。
+// 只有权威失败事件调用这里，带 err:true 和警示色；同一次失败 failedAt 相同，桌宠按 id 去重。
+function failureNotice(session, sessionId, failedAt, message, assistantPurposes = new Set()) {
+  const sid = cleanText(sessionId, 160);
+  if (!sid || !session || assistantPurposes.has(session.purpose) || session.hiddenFromSidebar || session.meetingId) return null;
+  return { sessionId: sid, title: `${String(session.title || 'AI 会话').slice(0, 40)} 出错了`,
+    body: String(message || '这一轮没有答完').slice(0, 200), completedAt: Number(failedAt) || Date.now(), tone: 'bad', err: true };
+}
+
 module.exports = {
   ASSISTANT_ACTIONS,
   IDLE_SLEEP_SEC,
@@ -276,11 +339,16 @@ module.exports = {
   MODES,
   NOTIFY_SHOW_MS,
   POSES,
+  QUOTA_LOW_PCT,
+  failureNotice,
+  quotaIsLow,
   ROLES,
   SHOW_MS,
   SpeechQueue,
   chatterFor,
   decidePose,
+  dotTone,
+  finishedSessions,
   isNight,
   localDateKey,
   speakGate,

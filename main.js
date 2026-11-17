@@ -1090,6 +1090,16 @@ transcriptTap.on('turn-started', (ev) => {
   }
 });
 
+// r27d：真实失败交给桌宠，亮橙灯、举「出错了」卡。只有权威失败事件（Codex task_complete.error、CLI 退回终端）
+// 走这里并带 err:true；中止、警示色都不算出错。同一次失败重复上报时 failedAt 相同，桌宠按 id 去重。
+function petTurnFailed(sessionId, failedAt, message) {
+  try {
+    const notice = require('./core/hub-pet/state').failureNotice(sessionManager.getSession(sessionId), sessionId, failedAt, message, HUB_PET_ASSISTANT_PURPOSES);
+    if (notice) hubPetController?.routeDesktopNotice?.(notice);
+  } catch (error) {
+    console.warn('[hub-pet] turn-failed notice failed:', error && error.message);
+  }
+}
 // Stop 到了但最后一条没有正文：转成 pending 的回合，延时后收尾（core/stop-pending-settle.js）。
 const stopPendingSettle = require('./core/stop-pending-settle').createStopPendingSettle({
   manager: sessionManager, getTurnSeq: id => sessionManager.sessions.get(id)?.agentTurnStartSeq || 0,
@@ -1105,6 +1115,7 @@ require('./core/cli-exit-watch').createCliExitWatch({
       message: 'CLI 已退出到系统终端，本轮没有完成；请重连会话后再发消息。',
       occurrenceId: `cli-exit:${sessionId}:${failedAt}`,
     });
+    petTurnFailed(sessionId, failedAt, 'CLI 已退出到系统终端，本轮没有完成。');
   },
 }).start();
 transcriptTap.on('turn-pending', (ev) => { try { stopPendingSettle.onPending(ev); } catch (error) { console.warn('[stop-settle]', error.message); } });
@@ -1137,7 +1148,9 @@ transcriptTap.on('turn-error', (ev) => {
   // Rollout errors carry completedAt. Label the terminal event before main
   // retains it, so renderer reload cannot turn a failed request into success.
   const failedAt = ev.failedAt != null ? ev.failedAt : ev.completedAt != null ? ev.completedAt : Date.now();
-  sessionManager.noteAgentTurnFinished(ev.hubSessionId, { ...ev, failedAt });
+  const accepted = sessionManager.noteAgentTurnFinished(ev.hubSessionId, { ...ev, failedAt });
+  // 桌宠只认本回合的失败：上一轮迟到的失败（旧回合标识或早于本回合开始）不弹卡、不亮橙灯（r27e）。
+  const petCurrent = accepted || sessionManager.isCurrentAgentTurnEvent(ev.hubSessionId, { ...ev, failedAt });
   completionNotifier.noteTurnFailed(ev);
   void codexAccountSwitch.onFailure(codexAccountTurnEvent(ev)).catch(error => console.error('[codex-account]',error.message));
   const session = sessionManager.getSession(ev.hubSessionId);
@@ -1157,6 +1170,7 @@ transcriptTap.on('turn-error', (ev) => {
   } catch (error) {
     console.warn('[codex task] turn-failed-event broadcast failed:', error && error.message);
   }
+  if (petCurrent) petTurnFailed(ev.hubSessionId, failedAt, ev.message);
 });
 
 transcriptTap.on('prompt-submitted', (ev) => {
@@ -1699,12 +1713,35 @@ function createWindow() {
         // 桌宠联动（2026-11-09）：正在跑的会话数（助理自己的会话另算）、问助理、右键菜单里的页面入口。
         getSessionActivity: () => {
           let running = 0;
-          for (const s of sessionManager.sessions.values()) {
+          const sessions = [];   // r27c：会话状态灯，每个在跑的会话一盏（点灯直达）
+          // r27d：侧栏里还活着的全部会话（当前名字、最近一轮开始时间）。桌宠据此丢掉已关闭/休眠会话的灯、
+          // 刷新改名后的标题、淘汰上一轮的完成/出错灯。休眠会话已移出这张表，所以不留灯，点灯不会落空。
+          const known = [];
+          for (const [id, s] of sessionManager.sessions) {
             const info = (s && s.info) || {};
-            if (s && s.agentTurnActive && !HUB_PET_ASSISTANT_PURPOSES.has(info.purpose) && !info.hiddenFromSidebar && !info.meetingId) running += 1;
+            if (!s || HUB_PET_ASSISTANT_PURPOSES.has(info.purpose) || info.hiddenFromSidebar || info.meetingId) continue;
+            if (/^(dormant|closed)$/.test(String(info.status || ''))) continue;
+            const title = String(info.title || '').slice(0, 40);
+            if (known.length < 500) known.push({ id: String(id), title, startedAt: Number(s.agentTurnStartedAt) || 0 });
+            if (s.agentTurnActive) {
+              running += 1;
+              if (sessions.length < 30) sessions.push({ id: String(id), title });
+            }
           }
-          return { running };
+          return { running, sessions, known };
         },
+        // r27d：额度快用完 → 低电量道具。读当前 Claude 账号的用量读数（与侧栏同源），30 秒缓存一次，
+        // 切号后读新账号、过了重置时间自动熄。
+        isQuotaLow: (() => {
+          let at = 0, low = false;
+          return () => {
+            const t = Date.now();
+            if (t - at < 30_000) return low;
+            at = t;
+            try { low = require('./core/hub-pet/state').quotaIsLow(claudeCache(), t); } catch { low = false; }
+            return low;
+          };
+        })(),
         askAssistant: (text, { enableAssistant = false } = {}) => {
           if (!companyAssistantService) throw new Error('这个版本没有助理');
           if (!optionalFeatures.get('assistant')) {

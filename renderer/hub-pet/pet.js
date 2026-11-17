@@ -237,6 +237,7 @@
     lastFrame = t;
     let busy = renderVisual(t);
     busy = renderEvolution(t) || busy;
+    renderProps();
 
     arousal = M.approach(arousal, AROUSAL[pose] ?? 0.25, dt, 500);
     const br = M.breathStep(phase, dt / 1000, arousal);
@@ -268,7 +269,7 @@
     if (script) {
       const s = Math.min(1, (t - script.start) / script.dur);
       const v = script.fn(s);
-      rot += v.rot || 0; y += v.y || 0; sx *= v.sx || 1; sy *= v.sy || 1;
+      rot += v.rot || 0; y += v.y || 0; x += v.x || 0; sx *= v.sx || 1; sy *= v.sy || 1;
       busy = true;
       if (s >= 1) { const done = script.done; script = null; if (done) done(); }
     }
@@ -400,9 +401,26 @@
     }
   }
 
-  function showDots(n) {
+  // 小圆点分色计数（2026-11-17 r27c）：绿=答完、橙=出错或要注意、蓝=其他；各色只显示非零的那几种。
+  let dotKey = '';
+  function showDots(n, tones) {
     dotEl.hidden = !(n > 0);
-    dotEl.textContent = n > 9 ? '9+' : String(n || '');
+    const t = tones && typeof tones === 'object' ? tones : null;
+    const key = n + ':' + (t ? [t.ok, t.bad, t.info].join(',') : '');
+    if (key !== dotKey) {
+      dotKey = key;
+      dotEl.textContent = '';
+      dotEl.classList.toggle('typed', !!t);
+      if (!t) dotEl.textContent = n > 9 ? '9+' : String(n || '');
+      else for (const tone of ['ok', 'bad', 'info']) {
+        const c = Math.max(0, Number(t[tone]) || 0);
+        if (!c) continue;
+        const span = document.createElement('span'), i = document.createElement('i');
+        i.className = 'tone-' + tone; span.appendChild(i); span.appendChild(document.createTextNode(c > 9 ? '9+' : String(c)));
+        dotEl.appendChild(span);
+      }
+      dotEl.setAttribute('aria-label', t ? '未读：答完 ' + (t.ok || 0) + '、要注意 ' + (t.bad || 0) + '、其他 ' + (t.info || 0) : '未读提醒');
+    }
     if (n > lastDots) { dotEl.classList.remove('bump'); void dotEl.offsetWidth; dotEl.classList.add('bump'); }
     lastDots = n;
   }
@@ -455,6 +473,30 @@
       busyEl.style.left = (left >= visL ? left : right + w <= visR ? right : visL).toFixed(1) + 'px';
       busyEl.style.bottom = ((beside ? body * 0.42 : body + 12) - body * box.bottom + 6) + 'px';
     }
+    // 会话状态灯：和「N 个在跑」一样放在身体外侧；两边都放不下（大形象、贴边）就横过来放到身体上方的外侧。
+    // 展开后灯多（r27d）：竖排按窗口剩余高度换列、横排按可见宽度换行，顶边不出窗口，每盏都点得到。
+    if (!lampsEl.hidden) {
+      const CELL = 17, PAD = 10;   // 12px 灯 + 5px 间隔；四周各 5px 内边距
+      const n = lampsEl.classList.contains('merged') ? 0 : lampsEl.childElementCount;
+      const winH = window.innerHeight || 340;
+      const grid = (rows, cols) => { lampsEl.style.gridTemplateRows = rows ? 'repeat(' + rows + ', 12px)' : ''; lampsEl.style.gridTemplateColumns = cols ? 'repeat(' + cols + ', 12px)' : ''; };
+      const sideBottom = body * 0.12 - body * box.bottom + 6;
+      lampsEl.classList.remove('row');
+      grid(n ? clampNum(Math.floor((winH - sideBottom - 4 - PAD + 5) / CELL), 1, n) : 0, 0);
+      let w = lampsEl.offsetWidth || 22;
+      const left = side - w - 8, right = side + body + 8;
+      const beside = left >= visL || right + w <= visR;
+      if (!beside) {
+        lampsEl.classList.add('row');
+        grid(0, n ? clampNum(Math.floor((visR - visL - PAD + 5) / CELL), 1, n) : 0);
+        w = lampsEl.offsetWidth || w;
+      }
+      lampsEl.style.left = (left >= visL ? left : right + w <= visR ? right : clampNum(visL, 0, Math.max(0, WIN_W - w))).toFixed(1) + 'px';
+      let bottom = (beside ? body * 0.12 : body + 12) - body * box.bottom + 6;
+      const h = lampsEl.offsetHeight || 0;
+      if (bottom + h > winH - 4) bottom = Math.max(0, winH - 4 - h);
+      lampsEl.style.bottom = bottom.toFixed(1) + 'px';
+    }
     // 提醒面板、问助理：两边各留 10px，伸出屏幕的那边再让出伸出的宽度
     panelEl.style.left = Math.max(10, visL) + 'px';
     panelEl.style.right = Math.max(10, WIN_W - visR) + 'px';
@@ -500,9 +542,128 @@
   // ---------- 正在跑的会话（2026-11-09） ----------
   const busyEl = $('busy');
   function showBusy(n) {
-    const on = n > 0 && !state.peeking;
+    // 有会话状态灯时由灯代替「N 个在跑」；拿不到会话列表时（旧主进程、测试注入）仍显示这条。
+    // 安静档只留小圆点：灯藏起来后也不能退回旋转的「N 个在跑」（r27e）。
+    const on = n > 0 && !state.peeking && state.mode !== 'quiet' && !lampList.length;
     busyEl.hidden = !on;
     if (on) $('busy-text').textContent = n + ' 个在跑';
+  }
+
+  // ---------- 会话状态灯（2026-11-17 r27c） ----------
+  // 每个会话一盏：转圈=在跑、绿=答完、橙=出错；点灯直达那个会话。超过 6 盏合并成「转圈 N · 绿 N · 橙 N」，点一下展开全部。
+  const lampsEl = $('lamps');
+  const LAMP_MAX = 6, LAMP_TEXT = { run: '在跑', done: '答完了，点开看', err: '出错了，点开看' };
+  let lampList = [], lampKey = '', lampExpanded = false, lampCollapseTimer = 0;
+  const lampPrev = new Map();
+  function lampDot(st) { const el = document.createElement('i'); el.className = 'lamp ' + st; return el; }
+  function showLamps(list) {
+    lampList = Array.isArray(list) ? list.filter(l => l && l.id && LAMP_TEXT[l.st]) : [];
+    const merged = lampList.length > LAMP_MAX && !lampExpanded;
+    const key = (merged ? 'M' : 'L') + JSON.stringify(lampList);
+    if (key === lampKey) return;
+    lampKey = key;
+    lampsEl.textContent = '';
+    lampsEl.classList.toggle('merged', merged);
+    if (merged) {
+      const count = { run: 0, done: 0, err: 0 };
+      for (const l of lampList) count[l.st]++;
+      for (const st of ['run', 'done', 'err']) {
+        if (!count[st]) continue;
+        const span = document.createElement('span'); span.appendChild(lampDot(st)); span.appendChild(document.createTextNode(String(count[st])));
+        lampsEl.appendChild(span);
+      }
+      lampsEl.title = lampList.length + ' 个会话：在跑 ' + count.run + '，答完 ' + count.done + '，出错 ' + count.err + '。点开看每一个';
+    } else {
+      lampsEl.title = '';
+      for (const l of lampList) {
+        const el = lampDot(l.st);
+        el.dataset.lamp = l.id;
+        el.title = (l.title || '会话') + '（' + LAMP_TEXT[l.st] + '）';
+        const prev = lampPrev.get(l.id);
+        if (prev && prev !== l.st && !reducedMotion.matches) el.classList.add('lit');
+        lampsEl.appendChild(el);
+      }
+    }
+    lampPrev.clear();
+    for (const l of lampList) lampPrev.set(l.id, l.st);
+    lampsEl.hidden = !lampList.length;
+  }
+  function clickLamp(target) {
+    const lamp = target && target.closest && target.closest('[data-lamp]');
+    if (lamp) { lampExpanded = false; api.openSession?.(lamp.dataset.lamp); return; }
+    if (lampsEl.classList.contains('merged')) {
+      lampExpanded = true; showLamps(lampList); layoutOverlays();
+      clearTimeout(lampCollapseTimer);
+      lampCollapseTimer = setTimeout(() => { lampExpanded = false; showLamps(lampList); layoutOverlays(); }, 8000);
+    }
+  }
+
+  // ---------- 事件道具（2026-11-17 r27c） ----------
+  // 正在说的这条配一件道具（答完举牌、等回复冒「…」、出错感叹号加汗、新版本礼盒、硬盘容量条），没在说时开会戴耳机、额度低亮低电量。
+  // 道具挂在身体里、跟着身体一起动；位置按当前帧的透明度轮廓算，帧变了只在挪动超过 1.5 像素时才重写位置。
+  const propsEl = $('props');
+  const { prop: propOf, stateProp } = window.HubPetNotices;
+  let propKind = '', propBubble = '', propParts = [], propGeom = null, propPos = '', propInputs = '';
+  function propAction(kind) {
+    if (reducedMotion.matches) return;
+    const t = now();
+    // 出错：身体一抖；硬盘：轻抖一下；等回复：歪头招手；新版本：轻跳一下。答完的欢呼由「开心」姿态自己跳。
+    if (kind === 'err') script = { start: t, dur: 520, fn: s => ({ x: 4 * Math.sin(Math.PI * 8 * s) * (1 - s), rot: 0, y: 0, sx: 1, sy: 1 }) };
+    else if (kind === 'disk') script = { start: t, dur: 900, fn: s => ({ x: 3 * Math.sin(Math.PI * 6 * s) * (1 - s), rot: 0, y: 0, sx: 1, sy: 1 }) };
+    else if (kind === 'wait') script = { start: t, dur: 1800, fn: s => ({ rot: 5 * Math.sin(Math.PI * 3 * s) * (1 - s * 0.4), y: 0, sx: 1, sy: 1 }) };
+    else if (kind === 'gift') hops.push({ start: t + 60, dur: 380, height: 12 });
+    wake();
+  }
+  function updateProp() {
+    const kind = stateProp(state);
+    const bid = state.bubble && propOf(state.bubble) ? state.bubble.id : '';
+    if (kind === propKind && bid === propBubble) return;
+    const fresh = kind && (kind !== propKind || bid !== propBubble);
+    propKind = kind; propBubble = bid; propGeom = null; propPos = '';
+    propsEl.textContent = ''; propParts = [];
+    if (fresh) propAction(kind);
+  }
+  function renderProps() {
+    const frames = visual && frameGeometry.get(visual.url);
+    const geom = frames && frames[visual.spec.sheet ? Math.max(0, visual.shown) : 0];
+    const show = !!(propKind && geom && !state.peeking && pose !== 'peek' && visual.spec.sheet !== 'dock-right');
+    propsEl.hidden = !show;
+    // 缓存键含帧几何、大小、头饰、有无卡片（r27d）：缩放、换头饰、卡片出现/收起时都要重算，不能只看帧。
+    if (!show) return;
+    const size = Math.round(150 * (Number(state.scale) || 1));
+    const headKey = !headEl.hidden && headEl.naturalWidth ? headEl.currentSrc || headEl.src : '';
+    const evo = state.growth && state.growth.evolution;
+    const inputKey = size + '|' + headKey + '|' + (evo && evo.width || 0) + '|' + (state.bubble ? 1 : 0);
+    if (geom === propGeom && inputKey === propInputs) return;
+    propGeom = geom; propInputs = inputKey;
+    // 头饰高出头顶的部分：头饰底边压进头部 18%，按图片宽高比算，不读排版。
+    let crown = 0;
+    if (!headEl.hidden && headEl.naturalWidth) {
+      const e = state.growth && state.growth.evolution;
+      if (e && e.width) crown = geom.width * e.width * headEl.naturalHeight / headEl.naturalWidth * 0.82;
+    }
+    const parts = window.HubPetProps.layout(propKind, geom, { crown, bubble: state.bubble });
+    // 卡片和气泡的下沿在身体方框上方 6px：头很高的形象（兔子）道具会钻到卡片底下，往下挪到卡片下沿之下。
+    if (state.bubble) for (const p of parts) {
+      const vb = /viewBox="0 0 ([\d.]+) ([\d.]+)"/.exec(p.svg);
+      const w = p.wf ? p.wf * size : p.w * size / 150, h = vb ? w * Number(vb[2]) / Number(vb[1]) : w;
+      const top = p.y * size + p.ty / 100 * h;
+      if (top < 6) p.y += (6 - top) / size;   // 留出弹出、招手动画的余量
+    }
+    const pos = size + ':' + parts.map(p => Math.round(p.x * size / 1.5) + ',' + Math.round(p.y * size / 1.5)).join(';');
+    if (pos === propPos && propParts.length === parts.length) return;
+    propPos = pos;
+    if (propParts.length !== parts.length) {
+      propsEl.textContent = '';
+      propParts = parts.map(p => { const el = document.createElement('i'); el.innerHTML = p.svg; el.firstChild.setAttribute('class', p.cls); propsEl.appendChild(el); return el; });
+    }
+    parts.forEach((p, i) => {
+      const el = propParts[i];
+      el.style.left = (p.x * 100).toFixed(2) + '%';
+      el.style.top = (p.y * 100).toFixed(2) + '%';
+      el.style.width = p.wf ? (p.wf * 100).toFixed(2) + '%' : (p.w * size / 150).toFixed(1) + 'px';
+      el.style.transform = 'translate(' + p.tx + '%,' + p.ty + '%)';
+    });
   }
 
   // ---------- 问助理（2026-11-09） ----------
@@ -715,6 +876,7 @@
     if (e.button !== 0) return;
     const target = hitTarget(e.clientX, e.clientY);
     // 面板、问助理输入框、卡片上的 × 都在本窗口里自己处理点击，不交给主进程（不然会被当成拖动或「点卡片打开」）。
+    if (target === 'lamp') { clickLamp(e.target); return; }
     if (!target || target === 'panel' || target === 'ask' || target === 'close') return;
     pressing = true; stroke.at = 0;
     try { document.documentElement.setPointerCapture(e.pointerId); } catch (_) {}
@@ -787,8 +949,11 @@
     } else applyPose(state.pose, false);
     if (evolutionRun && state.bubble && /^evolve-[2-6]$/.test(state.bubble.art || '')) pendingEvolutionBubble = state.bubble;
     else { pendingEvolutionBubble = null; showBubble(state.bubble); }
-    showDots(state.dots);
+    showDots(state.dots, state.dotTones);
+    showLamps(state.peeking || state.mode === 'quiet' ? [] : state.lamps);   // 全屏、安静档不亮会话灯（r27d）
     showBusy(Number(state.running) || 0);
+    document.body.classList.toggle('meeting', state.meeting === true && !state.peeking);
+    updateProp();
     showGrowth(state.growth);
     layoutOverlays();
     wake();
@@ -809,6 +974,9 @@
 
   window.__hubPetDebug = () => ({ card: cardId ? { id: cardId, title: card.title.textContent, kind: card.kind.textContent, cta: card.cta.textContent, count: card.count.textContent, bad: card.el.classList.contains('bad') } : null,
     evolution: { head: !headEl.hidden, wings: !wingsEl.hidden, anchor: headAnchor, active: !!evolutionRun, geometry: visual && frameGeometry.get(visual.url)?.[visual.spec.sheet ? Math.max(0, visual.shown) : 0] },
-    busy: busyEl.hidden ? '' : $('busy-text').textContent, ask: !askEl.hidden, askNote: askNote.textContent, panel: panelEl.hidden ? null : panelList.textContent, box, edge: state.edge, size: getComputedStyle(document.documentElement).getPropertyValue('--body').trim(), pose, layers: visual ? [visual.key] : [], opacities: visual ? [1] : [], domLayers: layersEl.children.length, frame: visual ? visual.shown : -1, swapping: !!pendingSwap, fps: raf ? 'raf' : timer ? 'timer' : 'stopped', bubble: bubbleId, dots: lastDots, transform: bodyEl.style.transform });
+    busy: busyEl.hidden ? '' : $('busy-text').textContent,
+    prop: propsEl.hidden ? '' : propKind, propRects: propParts.map(el => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }; }),
+    lamps: lampsEl.hidden ? null : { merged: lampsEl.classList.contains('merged'), row: lampsEl.classList.contains('row'), items: [...lampsEl.querySelectorAll('[data-lamp]')].map(el => ({ id: el.dataset.lamp, st: el.classList.contains('run') ? 'run' : el.classList.contains('err') ? 'err' : 'done' })), text: lampsEl.textContent },
+    dotText: dotEl.hidden ? '' : dotEl.textContent, meeting: document.body.classList.contains('meeting'), ask: !askEl.hidden, askNote: askNote.textContent, panel: panelEl.hidden ? null : panelList.textContent, box, edge: state.edge, size: getComputedStyle(document.documentElement).getPropertyValue('--body').trim(), pose, layers: visual ? [visual.key] : [], opacities: visual ? [1] : [], domLayers: layersEl.children.length, frame: visual ? visual.shown : -1, swapping: !!pendingSwap, fps: raf ? 'raf' : timer ? 'timer' : 'stopped', bubble: bubbleId, dots: lastDots, transform: bodyEl.style.transform });
   api.ready();
 })();

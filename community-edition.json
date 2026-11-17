@@ -58,9 +58,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "命令行工具（Claude Code、Codex 等）一键安装不再因公司安全软件扫描而改名失败（EPERM），安装中可随时取消；高负载下几处偶发问题修复"
+    "桌宠：答完、等你回复、出错、开会、新版本、硬盘、额度快用完各有专属表情和道具；身边一列会话状态灯，点灯直达对应会话"
   ],
-  "version": "5.6.41",
+  "version": "5.6.42",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false
