@@ -11,7 +11,7 @@ const KNOWN_ISSUES = [
   // DSH 没配套装好（2026-11-17 起分情况讲，core/dsh-cli-profile.js describeRuntimeIssue）：只装了桌面版的单独讲清「桌面版不是终端版」。
   // 一键修复默认装 Hub 自管的运行环境、不改全局 npm；「装到我的全局 npm」才按界面包要求配套装进用户自己的目录。
   { id: 'dsh-package-mismatch',
-    test: /(?:Cannot find|ERR_MODULE_NOT_FOUND|missing|未找到|找不到)[^\n]{0,180}(?:dsh-user-questions|dsh-llm-pi-ai)|DSH CLI 终端运行环境(?:不完整|.*请先安装)|找到了 DSH 桌面版[^\n]{0,80}桌面版不是终端版/i,
+    test: /(?:Cannot find|ERR_MODULE_NOT_FOUND|missing|未找到|找不到)[^\n]{0,180}(?:dsh-user-questions|dsh-llm-pi-ai)|DSH CLI 终端运行环境(?:不完整|.*请先安装)|找到了 DSH 桌面版[^\n]*桌面版不是终端版/i,
     title: m => /桌面版不是终端版/.test(m.input) ? '装的是 DSH 桌面版，Hub 要用终端版' : 'DSH 与终端界面包没有配套装好',
     fix: m => /桌面版不是终端版/.test(m.input)
       ? '桌面版的核心封在桌面程序里、也不带终端界面包（TUI），Hub 借用不了；你的桌面版照常可用。点「一键安装终端版」由 Hub 装一份自管的终端运行环境（约 1 分钟，不改全局 npm），装好后重新新建会话。'
@@ -55,9 +55,9 @@ const KNOWN_ISSUES = [
     title: '公司模型反代还在准备',
     fix: '反代刚启动或正在初始化（首次约 10–20 秒），稍等它就绪就能用；点下面的按钮会等它准备好后自动重试。',
     action: { label: '等它就绪后重试', act: 'known:proxy-wait' } },
-  { id: 'company-proxy-failed', areas: ['company-proxy', 'session-create', 'codeagent', 'model-service', 'hub-alert'],
+  { id: 'company-proxy-failed', areas: ['company-proxy', 'session-create', 'codeagent', 'model-service', 'hub-alert', 'notice'],
     // main/company-proxy-service.js「公司模型反代没能启动」「反复退出，已停止自动重启」；core/company-proxy/server.mjs「公司模型反代启动失败：」。
-    test: /公司模型反代(?:没能启动|反复退出|启动失败)/,
+    test: /^(?![\s\S]*(?:后台进程还没确认结束|仍然没有送达))[\s\S]*(?:公司模型反代(?:没能启动|反复退出|启动失败)|首次签名初始化没完成|CodeAgent 未收到签名初始化所需的测试输入)/,
     title: '公司模型反代没能启动',
     fix: '先重新启动一次反代；还不行就点「问问 Agent」让它看反代日志找原因。',
     action: { label: '重新启动反代', act: 'known:proxy-restart' } },

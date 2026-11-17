@@ -34,7 +34,7 @@
   let lean = 0;
   let stretch = 0;
   let squash = null;          // { start, power }
-  let hops = [];              // [{ start, dur, height }]
+  let hops = [];              // [{ start, dur, height, crouch? }]：crouch 毫秒的下蹲之后才起跳（r27f）
   let script = null;          // 一段编排好的动作：{ start, dur, fn(t) -> { rot, y, sx, sy }, done() }
   let nextGestureAt = 0;
   let nextRareAt = 0;
@@ -44,11 +44,17 @@
   let lastDots = 0;
   let hitNow = false;
   let pressing = false;
+  // r27f：钟摆（拎起来）、甩出去在飞、走路、坐在窗口边、鼠标靠近、抱抱
+  let swing = { a: 0, w: 0 }, swingVx = 0, flying = null, swingPeak = 0;   // swingPeak：这次拎起来摆到的最大角度（调试看）
+  let walking = null, sitting = false, sitK = 0, sitDir = 0;
+  let nearSide = 0, nearTurn = 0, lastNearHop = 0;
+  let hugging = false, hugK = 0, hugHearts = 0;
 
   const now = () => performance.now();
   const rand = (lo, hi) => lo + Math.random() * (hi - lo);
   const has = name => state.sequences.indexOf(name) >= 0;
-  const asset = name => (state.assetBase || ('../assets/hub-pet/' + state.role + '/')) + name + '.webp';
+  // 下载形象带上包版本：同一形象更新后网址变了，旧图的解码缓存和几何缓存自然失效（r27i 审查第 2 项）。
+  const asset = name => (state.assetBase || ('../assets/hub-pet/' + state.role + '/')) + name + '.webp' + (state.roleVersion ? '?v=' + encodeURIComponent(state.roleVersion) : '');
   const sheetAsset = name => asset('seq-' + name);
 
   // ---------- 画面：只有一张图，逐帧硬切 ----------
@@ -103,7 +109,7 @@
   // transition：'cut' 直接换（同一段动作里的帧、外观相近的画面）；'pop' 压一下再换（换姿态）。
   function show(spec, { transition = 'pop' } = {}) {
     if (!spec) return;
-    if (!spec.restart && visual && visual.key === specKey(spec) && visual.role === state.role && !pendingSwap) return;
+    if (!spec.restart && visual && visual.key === specKey(spec) && visual.role === state.role && visual.url === urlOf(spec) && !pendingSwap) return;
     if (pendingSwap && specKey(pendingSwap.spec) === specKey(spec)) return;
     if (transition === 'pop' && visual) { pendingSwap = { start: now(), spec }; preload(urlOf(spec)); wake(); return; }
     pendingSwap = null;
@@ -201,9 +207,25 @@
 
   function scheduleIdle() {
     const t = now();
-    nextGestureAt = t + rand(28000, 45000);
+    nextGestureAt = t + gestureGap();
     if (!nextRareAt) nextRareAt = t + rand(240000, 420000);
     nextYawnAt = t + rand(9000, 16000);
+  }
+
+  // ---------- 待机更活（2026-11-17 r27f） ----------
+  // 小动作间隔从 28–45 秒加密到 8–20 秒，新增 6 种不用画图的动作（pet-motion.js 的 IDLE_MOVES）；鼠标靠近时侧身看你、轻跳；
+  // 起跳前先下蹲。动得太勤会分心：安静档、开会、躲边、系统「减少动态效果」时一律照旧（28–45 秒、不看鼠标）。
+  const lively = () => state.mode !== 'quiet' && !state.peeking && state.meeting !== true && !reducedMotion.matches;
+  const gestureGap = () => (lively() ? rand(8000, 20000) : rand(28000, 45000));
+  let lastMove = '';
+  function playMove(t, move, dir) {
+    lastMove = move.name;
+    if (move.hops) { for (const h of move.hops) hops.push({ start: t + h.at, dur: h.dur, height: h.height, crouch: 110 }); return; }
+    script = { start: t, dur: move.dur, fn: s => move.fn(s, dir) };
+  }
+  function newMove(t) {
+    const pool = M.IDLE_MOVES.filter(m => m.name !== lastMove);
+    playMove(t, pool[Math.floor(Math.random() * pool.length)], Math.random() < 0.5 ? -1 : 1);
   }
 
   // 待机时偶尔换个姿势：猫和企鹅从小动作序列里挑一段没被裁切的 5 帧，演完倒放回来；其他角色用连续变换演。
@@ -215,6 +237,8 @@
       script = { start: t, dur: 1600, fn: s => { const k = Math.sin(Math.PI * s); return { sy: 1 + 0.05 * k, sx: 1 - 0.03 * k, rot: 0, y: -2 * k }; } };
       return;
     }
+    // 活泼时：有小动作序列的形象一半用序列、一半用新动作；只有静态图的下载形象全用新动作。
+    if (lively() && (!has('idle-life') || Math.random() < 0.5)) { newMove(t); return; }
     if (has('idle-life')) {
       const options = [0, 5, 10, 15, 20].map(start => M.gesturePlaylist(start, 5, clip('idle-life'))).filter(Boolean);
       if (options.length) {
@@ -261,8 +285,8 @@
     } else if (pose === 'typing' && !(visual && visual.spec.sheet === 'typing')) {
       // 没有打字序列的角色：轻轻点头，1.6 次/秒（原来 3.2 次/秒加左右摆，看久了晃眼）
       y -= 1.2 * Math.abs(Math.sin(Math.PI * 1.6 * t / 1000));
-    } else if (pose === 'idle' && !script && !pendingSwap && isBase('idle') && t >= nextGestureAt) {
-      nextGestureAt = t + rand(28000, 45000);
+    } else if (pose === 'idle' && !script && !pendingSwap && !walking && !hugging && isBase('idle') && t >= nextGestureAt) {
+      nextGestureAt = t + gestureGap();
       idleGesture(t);
     }
 
@@ -274,16 +298,39 @@
       if (s >= 1) { const done = script.done; script = null; if (done) done(); }
     }
 
-    // 跳：落地时接一个挤压回弹
-    let height = 0;
-    for (let i = hops.length - 1; i >= 0; i--) {
-      const h = hops[i];
-      const ht = t - h.start;
-      if (ht < 0) { busy = true; continue; }
-      if (ht > h.dur) { hops.splice(i, 1); squash = { start: t, power: 0.04 + h.height / 260 }; continue; }
-      height += M.hopAt(ht / 1000, h.dur / 1000, h.height);
+    // 走路（r27f）：主进程在挪窗口，这里一颠一颠地迈步；坐在窗口边上时身子矮一点、往窗口那边靠。
+    if (walking) {
+      const g = M.walkGait((t - walking.start) / 1000, walking.dir);
+      y += g.y; rot += g.rot; sy *= g.sy;
       busy = true;
     }
+    sitK = M.approach(sitK, sitting ? 1 : 0, dt, 160);
+    if (sitK > 0.002) { sy *= 1 - 0.07 * sitK; sx *= 1 + 0.04 * sitK; y += 2 * sitK; rot += 3 * sitDir * sitK; if (Math.abs(sitK - (sitting ? 1 : 0)) > 0.002) busy = true; }
+
+    // 鼠标靠近（r27f）：侧过身看着鼠标那边——往那边歪一点、身子变窄一点（像转了半个身）。
+    nearTurn = M.approach(nearTurn, nearSide && lively() && !lifted && !walking ? nearSide : 0, dt, 140);
+    if (Math.abs(nearTurn) > 0.002) {
+      rot += 3.5 * nearTurn; x += 3 * nearTurn; sx *= 1 - 0.06 * Math.abs(nearTurn);
+      if (Math.abs(nearTurn - (nearSide && lively() && !lifted && !walking ? nearSide : 0)) > 0.002) busy = true;
+    }
+
+    // 抱抱（r27f）：按住不放时慢慢压扁、身子变宽，松手弹回。
+    hugK = M.approach(hugK, hugging ? 1 : 0, dt, hugging ? 260 : 90);
+    if (hugK > 0.002) { sy *= 1 - 0.09 * hugK; sx *= 1 + 0.07 * hugK; if (Math.abs(hugK - (hugging ? 1 : 0)) > 0.002) busy = true; }
+
+    // 跳：起跳前先下蹲（r27f），落地时接一个挤压回弹
+    let height = 0, crouch = 0;
+    for (let i = hops.length - 1; i >= 0; i--) {
+      const h = hops[i];
+      const c = h.crouch ?? 90;   // 所有起跳都先蹲一下（r27f）
+      const ht = t - h.start;
+      if (ht < 0) { busy = true; continue; }
+      if (ht < c) { crouch = Math.max(crouch, M.crouchAt(ht / c)); busy = true; continue; }
+      if (ht - c > h.dur) { hops.splice(i, 1); squash = { start: t, power: 0.04 + h.height / 260 }; continue; }
+      height += M.hopAt((ht - c) / 1000, h.dur / 1000, h.height);
+      busy = true;
+    }
+    if (crouch) { sy *= 1 - 0.08 * crouch; sx *= 1 + 0.05 * crouch; }
     y -= height;
 
     if (squash) {
@@ -292,14 +339,20 @@
       sy *= 1 + q; sx *= 1 - 0.6 * q;
     }
 
-    // 拖动：被拎起来放大一点，向移动方向倾斜，速度越快拉得越长；松手后弹回（幅度比原来收一些，不显得软塌塌）
+    // 拖动：被拎起来放大一点，速度越快拉得越长；身子像钟摆一样挂在抓握点下面晃（r27f：横向加速度推着摆，松手后慢慢停）。
     lift = M.approach(lift, lifted ? 1 : 0, dt, 70);
     const speed = Math.hypot(drag.vx, drag.vy);
-    lean = M.approach(lean, M.clamp(drag.vx * 0.008, -9, 9), dt, 70);
+    if (!lifted && !flying) { drag.vx = M.approach(drag.vx, 0, dt, 50); drag.vy = M.approach(drag.vy, 0, dt, 50); }
+    const ax = lifted ? (drag.vx - swingVx) / Math.max(0.008, dt / 1000) : 0;
+    swingVx = drag.vx;
+    if (lifted || flying || Math.abs(swing.a) > 0.05 || Math.abs(swing.w) > 0.5) swing = M.pendulumStep(swing, reducedMotion.matches ? 0 : ax, dt / 1000);
+    else swing = { a: 0, w: 0 };
     stretch = M.approach(stretch, M.clamp(speed / 4000, 0, 0.05), dt, 70);
-    if (!lifted) { drag.vx = M.approach(drag.vx, 0, dt, 50); drag.vy = M.approach(drag.vy, 0, dt, 50); }
-    if (lift > 0.002 || Math.abs(lean) > 0.05 || stretch > 0.002) busy = true;
-    rot += lean;
+    if (lift > 0.002 || Math.abs(swing.a) > 0.05 || stretch > 0.002) busy = true;
+    lean = swing.a;
+    if (Math.abs(swing.a) > swingPeak) swingPeak = Math.abs(swing.a);
+    const piv = M.pivotOffset(lean, Math.round(150 * (Number(state.scale) || 1)) * 0.77);
+    rot += lean; x += piv.x; y += piv.y;
     sy *= 1 + stretch; sx *= 1 - 0.5 * stretch;
     const ls = 1 + 0.04 * lift;
     sx *= ls; sy *= ls;
@@ -449,6 +502,48 @@
   // 放在 state.edge（随大小、形象透明边变）。气泡尽量对着看得见的身体居中，放不下就往屏幕里面挪，小尾巴仍指着身体。
   const WIN_W = 280, EDGE_PAD = 6, BUBBLE_MAX = 236;
   const clampNum = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  // 快捷钮落位（r27f 审查第 4 项，r27f3 返工）：先放头顶；和状态灯（展开后可能多列、贴边翻到上方）或小圆点有任何重叠，
+  // 就在可见窗口里找离头顶最近、四周都不碰灯和小圆点的位置——横排放不下再试竖排（三颗钮叠成一列，通常落到灯列另一侧）；
+  // 实在没有空位就这一次不露面（visibility 隐藏，鼠标点不到它，灯照常点得到），不拿重叠的位置凑合。
+  function placeQuick({ H, body, visL, visR, cx, lampBox, dotLeft }) {
+    quickEl.classList?.remove('col');   // 先按横排量尺寸，竖排尺寸由它换算
+    const RW = quickEl.offsetWidth || 106, RH = quickEl.offsetHeight || 30, GAP = 6;
+    let top = H - (6 - box.bottom * body) - body + box.top * body;
+    if (!headEl.hidden) { const r = headEl.getBoundingClientRect(); if (r.height > 0) top = Math.min(top, r.top); }
+    let bottom = H - top + 6;
+    if (!dotEl.hidden) bottom = Math.max(bottom, body * 0.933 - box.bottom * body + 26);
+    bottom = Math.min(H - RH - 4, bottom);
+    const prefL = clampNum(cx - RW / 2, visL, Math.max(visL, visR - RW)), prefT = H - bottom - RH;
+    // 障碍物统一成窗口坐标（左、上、右、下），四周各多让 GAP，连「信」上的角标也不压灯
+    const obs = [];
+    if (lampBox) { const t = H - lampBox.bottom - lampBox.height; obs.push([lampBox.left - GAP, t - GAP, lampBox.left + lampBox.width + GAP, t + lampBox.height + GAP]); }
+    if (!dotEl.hidden) { const dh = dotEl.offsetHeight || 22, db = body * 0.933 - box.bottom * body + 6; obs.push([dotLeft - GAP, H - db - dh - GAP, dotLeft + (dotEl.offsetWidth || 24) + GAP, H - db + GAP]); }
+    const free = (l, t, w, h) => obs.every(o => l >= o[2] || l + w <= o[0] || t >= o[3] || t + h <= o[1]);
+    const inWin = (l, t, w, h) => l >= visL - 0.01 && l + w <= visR + 0.01 && t >= 3.99 && t + h <= H - 3.99;
+    let best = null;
+    if (free(prefL, prefT, RW, RH)) best = { l: prefL, t: prefT, col: false };
+    // 头顶被灯条挡住：照旧先整体抬到灯条上方（大形象、灯横在头顶时最自然）
+    if (!best && lampBox) { const t = obs[0][1] - RH; if (inWin(prefL, t, RW, RH) && free(prefL, t, RW, RH)) best = { l: prefL, t, col: false }; }
+    if (!best) {
+      // 离头顶最近的空位只会出现在「贴着某个障碍物的边」或「贴着窗口边」或「原来的横/纵坐标」上，只试这些位置，不逐像素扫
+      // 竖排：三颗 30px 钮叠起来，宽＝钮高、高＝横排宽；同样远时优先横排
+      for (const [col, w, h, cost] of [[false, RW, RH, 0], [true, RH, RW, 24]]) {
+        const px = col ? cx - w / 2 : prefL, py = col ? prefT - (h - RH) : prefT;   // 竖排底边对齐原来横排的底边，不压头顶
+        const xs = [px, visL, visR - w], ys = [py, 4, H - h - 4];
+        for (const o of obs) { xs.push(o[0] - w, o[2]); ys.push(o[1] - h, o[3]); }
+        for (const l of xs) for (const t of ys) {
+          if (!inWin(l, t, w, h) || !free(l, t, w, h)) continue;
+          const d = Math.abs(l - px) + Math.abs(t - py) + cost;
+          if (!best || d < best.d) best = { l, t, col, d };
+        }
+      }
+    }
+    quickEl.classList?.toggle('col', !!(best && best.col));
+    quickEl.style.visibility = best ? '' : 'hidden';
+    if (!best) return;
+    quickEl.style.left = best.l.toFixed(1) + 'px';
+    quickEl.style.bottom = (H - best.t - (best.col ? RW : RH)).toFixed(1) + 'px';
+  }
   function layoutOverlays() {
     const edge = state.edge || {};
     const body = Math.round(150 * (Number(state.scale) || 1));
@@ -495,6 +590,7 @@
     }
     // 会话状态灯：和「N 个在跑」一样放在身体外侧；两边都放不下（大形象、贴边）就横过来放到身体上方的外侧。
     // 展开后灯多（r27d）：竖排按窗口剩余高度换列、横排按可见宽度换行，顶边不出窗口，每盏都点得到。
+    let lampBox = null;   // 灯条占的矩形（左、宽、离窗口底边、高），给下面的快捷钮避让
     if (!lampsEl.hidden) {
       const CELL = 17, PAD = 10;   // 12px 灯 + 5px 间隔；四周各 5px 内边距
       const n = lampsEl.classList.contains('merged') ? 0 : lampsEl.childElementCount;
@@ -516,7 +612,10 @@
       const h = lampsEl.offsetHeight || 0;
       if (bottom + h > winH - 4) bottom = Math.max(0, winH - 4 - h);
       lampsEl.style.bottom = bottom.toFixed(1) + 'px';
+      lampBox = { left: parseFloat(lampsEl.style.left) || 0, width: lampsEl.offsetWidth || w, bottom, height: h || lampsEl.offsetHeight || 22 };
     }
+    // 悬停快捷钮（r27f）：对着看得见的身体居中，放在头顶（含头饰）上方；小圆点亮着时再抬到它上面，不挡住它。
+    if (!quickEl.hidden) placeQuick({ H: window.innerHeight || 340, body, visL, visR, cx, lampBox, dotLeft });
     // 提醒面板、问助理：两边各留 10px，伸出屏幕的那边再让出伸出的宽度
     panelEl.style.left = Math.max(10, visL) + 'px';
     panelEl.style.right = Math.max(10, WIN_W - visR) + 'px';
@@ -553,6 +652,7 @@
     }
     bubbleEl.hidden = true;
     bubbleId = '';
+    hideQuick();
     panelEl.hidden = false;
     layoutOverlays();
   }
@@ -692,6 +792,7 @@
   let enableAssistant = false, pendingQuestion = '';
   function openAsk() {
     clearTimeout(askCloseTimer);
+    hideQuick();
     panelEl.hidden = true;
     askEl.hidden = false;
     askSend.disabled = false;
@@ -861,6 +962,26 @@
       el.style.setProperty('--delay', (i * 0.12).toFixed(2) + 's');
     });
   }
+  // 单击逗它（r27f）：压一下之外，随机回一个小反应（下蹲小跳、歪头、抖一抖）。躲边、减少动态效果时只压一下。
+  function pokeReact() {
+    if (reducedMotion.matches || state.peeking || walking) return;
+    const t = now(), pick = Math.floor(Math.random() * 3), dir = Math.random() < 0.5 ? -1 : 1;
+    if (pick === 0) hops.push({ start: t + 60, dur: 300, height: 9, crouch: 100 });
+    else if (pick === 1) script = { start: t, dur: 900, fn: s => { const k = Math.sin(Math.PI * s); return { x: 1.5 * dir * k, y: 0, rot: 8 * dir * k, sx: 1, sy: 1 }; } };
+    else { const move = M.IDLE_MOVES.find(m => m.name === 'shake'); script = { start: t, dur: 700, fn: s => move.fn(s, dir) }; }
+  }
+  // 鼠标靠近（主进程按光标位置算好哪一侧）：侧身看过去；隔 15 秒以上重新靠近时，先下蹲再轻跳一下。
+  api.onNear?.(n => {
+    const side = n && n.near ? (n.side < 0 ? -1 : 1) : 0;
+    const t = now();
+    if (side && !nearSide && lively() && pose === 'idle' && !script && !walking && !lifted && t - lastNearHop > 15000) {
+      lastNearHop = t;
+      hops.push({ start: t + 40, dur: 300, height: 7, crouch: 120 });
+    }
+    nearSide = side;
+    wake();
+  });
+
   // 摸摸：鼠标不按键、在身上左右来回蹭两个来回算一次（主进程限 3 秒一次，确认后才冒爱心）
   let stroke = { x: 0, dir: 0, turns: 0, dist: 0, at: 0 };
   function strokeMove(x) {
@@ -887,16 +1008,57 @@
     const ix = r.width * 0.16, iy = r.height * 0.12;
     return x > r.left + ix && x < r.right - ix && y > r.top + iy && y < r.bottom - 4 ? 'pet' : null;
   }
-  document.addEventListener('mousemove', e => { if (!pressing) { const hit = hitTarget(e.clientX, e.clientY); setHit(!!hit); if (hit === 'pet') strokeMove(e.clientX); else stroke.at = 0; } setHold(!!(e.target && e.target.closest && e.target.closest('#ncard, #bubble.has-chips'))); });
-  document.addEventListener('mouseleave', () => { if (!pressing) setHit(false); setHold(false); stroke.at = 0; });
+  // ---------- 悬停快捷钮（2026-11-17 r27f） ----------
+  // 鼠标在身上停半秒：头顶冒出「问 / 信 / 摸」；移开（离开身体和圆钮）650ms 后收起。正在说话、展开面板、问助理、拖动、躲边时不冒。
+  const quickEl = $('quick'), quickN = $('quick-n');
+  let quickTimer = 0, quickHideTimer = 0;
+  // 安静档（含临时安静、今天静音）、开会时悬停也不冒（r27f 审查第 5 项）。
+  const quickAllowed = () => state.hush !== true && state.mode !== 'quiet' && state.meeting !== true && !pressing && !lifted && !state.peeking && pose !== 'peek' && bubbleEl.hidden && card.el.hidden && panelEl.hidden && askEl.hidden;
+  function showQuick() {
+    if (!quickAllowed()) return;
+    const n = Number(state.dots) || 0;
+    quickN.hidden = !(n > 0); quickN.textContent = n > 9 ? '9+' : String(n);
+    const inbox = quickEl.querySelector('[data-q="inbox"]');
+    inbox.classList.toggle('empty', !(n > 0));
+    inbox.title = n > 0 ? '看 ' + n + ' 条没看的消息' : '暂时没有没看的消息';
+    quickEl.querySelector('[data-q="ask"]').title = state.quickAsk === false ? '打开助理' : '问助理一句';
+    quickEl.hidden = false;
+    layoutOverlays();
+  }
+  function hideQuick() {
+    clearTimeout(quickTimer); clearTimeout(quickHideTimer); quickTimer = quickHideTimer = 0;
+    quickEl.hidden = true;
+  }
+  function hoverSeen(kind) {
+    if (kind === 'pet' || kind === 'quick') {
+      clearTimeout(quickHideTimer); quickHideTimer = 0;
+      if (kind === 'pet' && quickEl.hidden && !quickTimer) quickTimer = setTimeout(() => { quickTimer = 0; showQuick(); }, 500);
+    } else {
+      clearTimeout(quickTimer); quickTimer = 0;
+      if (!quickEl.hidden && !quickHideTimer) quickHideTimer = setTimeout(() => { quickHideTimer = 0; quickEl.hidden = true; }, 650);
+    }
+  }
+  function clickQuick(target) {
+    const btn = target && target.closest && target.closest('[data-q]');
+    if (!btn) return;
+    const q = btn.dataset.q;
+    if (q === 'inbox' && !(Number(state.dots) > 0)) { btn.classList.remove('nope'); void btn.offsetWidth; btn.classList.add('nope'); return; }
+    hideQuick();
+    api.quick?.(q);
+  }
+
+  document.addEventListener('mousemove', e => { if (!pressing) { const hit = hitTarget(e.clientX, e.clientY); setHit(!!hit); hoverSeen(hit); if (hit === 'pet') strokeMove(e.clientX); else stroke.at = 0; } setHold(!!(e.target && e.target.closest && e.target.closest('#ncard, #bubble.has-chips'))); });
+  document.addEventListener('mouseleave', () => { if (!pressing) setHit(false); hoverSeen(null); setHold(false); stroke.at = 0; });
   // 窗口点穿时收不到 mousemove：主进程看到光标进了窗口方框，就把位置发过来问一次（不再用全局鼠标钩子）。
   // 接住时总要回报：主进程可能已因光标出框自行改回点穿，这时 hitNow 还是旧值。
-  api.onProbe?.(p => { if (pressing || !p) return; const v = !!hitTarget(Number(p.x) || 0, Number(p.y) || 0); hitNow = v; if (v) api.hit(true); });
+  api.onProbe?.(p => { if (pressing || !p) return; const hit = hitTarget(Number(p.x) || 0, Number(p.y) || 0); const v = !!hit; hitNow = v; if (v) api.hit(true); hoverSeen(hit); });
   document.addEventListener('pointerdown', e => {
     if (e.button !== 0) return;
     const target = hitTarget(e.clientX, e.clientY);
     // 面板、问助理输入框、卡片上的 × 都在本窗口里自己处理点击，不交给主进程（不然会被当成拖动或「点卡片打开」）。
     if (target === 'lamp') { clickLamp(e.target); return; }
+    if (target === 'quick') { clickQuick(e.target); return; }
+    hideQuick();
     if (!target || target === 'panel' || target === 'ask' || target === 'close' || target === 'chip') return;
     pressing = true; stroke.at = 0;
     try { document.documentElement.setPointerCapture(e.pointerId); } catch (_) {}
@@ -952,7 +1114,8 @@
 
   // ---------- 主进程消息 ----------
   api.onState(next => {
-    const roleChanged = next.role !== state.role;
+    // 换形象，或同一形象更新到新版本，都按换形象处理：重新量轮廓、预载新图、重新摆姿态。
+    const roleChanged = next.role !== state.role || (next.roleVersion || null) !== (state.roleVersion || null);
     const prevDock = state.dock;
     state = { ...state, ...next };
     if (prevDock !== state.dock || roleChanged) {
@@ -970,6 +1133,7 @@
     if (evolutionRun && state.bubble && /^evolve-[2-6]$/.test(state.bubble.art || '')) pendingEvolutionBubble = state.bubble;
     else { pendingEvolutionBubble = null; showBubble(state.bubble); }
     showDots(state.dots, state.dotTones);
+    if (!quickEl.hidden && !quickAllowed()) hideQuick();   // 开口说话、躲边、切安静档、开会时收起快捷钮
     showLamps(state.peeking || state.mode === 'quiet' ? [] : state.lamps);   // 全屏、安静档不亮会话灯（r27d）
     showBusy(Number(state.running) || 0);
     document.body.classList.toggle('meeting', state.meeting === true && !state.peeking);
@@ -980,11 +1144,22 @@
   });
   api.onMotion(m => {
     if (!m) return;
-    if (m.phase === 'lift') { lifted = true; bodyEl.classList.add('dragging'); script = null; }
+    if (m.phase === 'lift') { swingPeak = 0; lifted = true; bodyEl.classList.add('dragging'); script = null; walking = null; sitting = false; hugging = false; swingVx = drag.vx; }
     else if (m.phase === 'drag') { drag.vx = M.approach(drag.vx, m.vx || 0, 16, 30); drag.vy = M.approach(drag.vy, m.vy || 0, 16, 30); }
     else if (m.phase === 'release') { lifted = false; bodyEl.classList.remove('dragging'); }
-    else if (m.phase === 'land') squash = { start: now(), power: 0.06 + 0.1 * M.clamp(m.impact || 0, 0, 1) };
-    else if (m.phase === 'poke') { squash = { start: now(), power: 0.07 }; }
+    // 甩出去（r27f）：飞的时候身子继续晃，落地压扁回弹；摔得重压得更扁。
+    else if (m.phase === 'fly') { flying = { start: now(), dur: Number(m.durationMs) || 600 }; }
+    else if (m.phase === 'land') { flying = null; squash = { start: now(), power: 0.06 + 0.1 * M.clamp(m.impact || 0, 0, 1) }; }
+    else if (m.phase === 'poke') { squash = { start: now(), power: 0.07 }; if (m.play) pokeReact(); }
+    else if (m.phase === 'hug') {
+      hugging = m.on === true;
+      clearInterval(hugHearts); hugHearts = 0;
+      if (hugging) { hearts(); hugHearts = setInterval(() => { if (hugging) hearts(); }, 1100); }
+      else squash = { start: now(), power: 0.06 };
+    }
+    // 走动（r27f）：开始迈步 / 停下；坐在窗口边上（往窗口那边靠）。
+    else if (m.phase === 'walk') { walking = m.on === true ? { start: now(), dir: m.dir < 0 ? -1 : 1 } : null; if (m.on === true) sitDir = m.dir < 0 ? -1 : 1; else squash = { start: now(), power: 0.03 }; }
+    else if (m.phase === 'sit') sitting = m.on === true;
     else if (m.phase === 'celebrate') celebrate(m.big === true);
     else if (m.phase === 'evolve') evolve(m);
     else if (m.phase === 'petted') { hearts(); squash = { start: now(), power: 0.05 }; hops.push({ start: now() + 60, dur: 300, height: 8 }); }
@@ -992,11 +1167,19 @@
   });
   api.onPanel(p => { showPanel(p && p.items); wake(); });
 
+  // 系统「减少动态效果」告诉主进程：开着时不在任务栏上走动。
+  const sendPrefs = () => api.prefs?.({ reducedMotion: reducedMotion.matches });
+  reducedMotion.addEventListener?.('change', sendPrefs);
+  sendPrefs();
+
   window.__hubPetDebug = () => ({ card: cardId ? { id: cardId, title: card.title.textContent, kind: card.kind.textContent, cta: card.cta.textContent, count: card.count.textContent, bad: card.el.classList.contains('bad') } : null,
     evolution: { head: !headEl.hidden, wings: !wingsEl.hidden, anchor: headAnchor, active: !!evolutionRun, geometry: visual && frameGeometry.get(visual.url)?.[visual.spec.sheet ? Math.max(0, visual.shown) : 0] },
     busy: busyEl.hidden ? '' : $('busy-text').textContent,
     prop: propsEl.hidden ? '' : propKind, propRects: propParts.map(el => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }; }),
     lamps: lampsEl.hidden ? null : { merged: lampsEl.classList.contains('merged'), row: lampsEl.classList.contains('row'), items: [...lampsEl.querySelectorAll('[data-lamp]')].map(el => ({ id: el.dataset.lamp, st: el.classList.contains('run') ? 'run' : el.classList.contains('err') ? 'err' : 'done' })), text: lampsEl.textContent },
+    // r27f：快捷钮、鼠标靠近、钟摆、抱抱、走动、坐下、下一次小动作还有多久、最近一种新动作
+    quick: quickEl.hidden || quickEl.style.visibility === 'hidden' ? null : (() => { const r = quickEl.getBoundingClientRect(); return { col: quickEl.classList.contains('col'), left: r.left, top: r.top, right: r.right, bottom: r.bottom, n: quickN.hidden ? 0 : quickN.textContent, buttons: [...quickEl.querySelectorAll('[data-q]')].map(b => { const x = b.getBoundingClientRect(); return { q: b.dataset.q, left: x.left, top: x.top, right: x.right, bottom: x.bottom }; }) }; })(),
+    near: nearSide, nearTurn, swing: { ...swing }, swingPeak, hug: hugging, hugK, walking: !!walking, sitting, sitK, lively: lively(), gestureIn: Math.round(nextGestureAt - now()), lastMove, flying: !!flying, hops: hops.length,
     dotText: dotEl.hidden ? '' : dotEl.textContent, meeting: document.body.classList.contains('meeting'), ask: !askEl.hidden, askNote: askNote.textContent, panel: panelEl.hidden ? null : panelList.textContent, box, edge: state.edge, size: getComputedStyle(document.documentElement).getPropertyValue('--body').trim(), pose, layers: visual ? [visual.key] : [], opacities: visual ? [1] : [], domLayers: layersEl.children.length, frame: visual ? visual.shown : -1, swapping: !!pendingSwap, fps: raf ? 'raf' : timer ? 'timer' : 'stopped', bubble: bubbleId, bubbleText: bubbleId ? bubbleText.textContent : '', bubbleTag: bubbleKind.hidden ? '' : bubbleKind.textContent, chips: bubbleId ? Array.from(chipsEl.querySelectorAll('.chip')).map(el => el.textContent) : [], dots: lastDots, transform: bodyEl.style.transform });
   api.ready();
 })();

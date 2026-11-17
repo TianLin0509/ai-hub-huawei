@@ -5,7 +5,8 @@
 //
 // Why not the adapter's own probe: on the company machine it ran 16 s (its 15 s kill), init() still returned true
 // and no cache appeared (Q-1106-08 r3). Its CLI run gets no prompt on stdin within that window and inherits the
-// caller's CodeAgent session variables; here the prompt is given on stdin and those variables are removed.
+// caller's CodeAgent session variables; here those variables are removed. The first prompt is given on stdin;
+// the existing no-log retry passes a positional prompt so startup checks cannot consume its input.
 //
 // Window: Node's windowsHide gives the child CREATE_NO_WINDOW, i.e. no console at all, and any console program the
 // CLI then starts without its own hiding (cmd /c ...) gets a brand-new, visible console. The CLI therefore owns a
@@ -165,10 +166,10 @@ export function quoteArg(arg) {
   return out + '\\'.repeat(slashes * 2) + '"';
 }
 
-export function cliArguments({ mcp, settings, model }) {
+export function cliArguments({ mcp, settings, model, prompt, skipSafeCheck = false }) {
   return ['--print', '--output-format', 'text', '--no-session-persistence', '--permission-mode', 'default', '--tools', '',
     '--strict-mcp-config', '--mcp-config', mcp, '--settings', settings, '--setting-sources', '', '--disable-slash-commands',
-    ...(model ? ['--model', model] : [])];
+    ...(model ? ['--model', model] : []), ...(skipSafeCheck ? ['--skip-safe-check'] : []), ...(prompt ? [prompt] : [])];
 }
 
 // Private desktop: the hidden console covers the CLI and every child that shares its console, but not a helper the
@@ -319,11 +320,18 @@ async function probeNativeStampOnce({ cliExe, configDir, expectedVersion, workRo
   await writeFile(mcp, JSON.stringify({ mcpServers: {} }), { flag: 'wx' });
   await writeFile(settings, JSON.stringify({}), { flag: 'wx' });
   const promptFile = join(dir, 'prompt.txt');
-  await writeFile(promptFile, `Reply with exactly STAMP_${randomBytes(6).toString('hex')} and nothing else. Do not use tools.\n`, { flag: 'wx' });
+  const prompt = `Reply with exactly STAMP_${randomBytes(6).toString('hex')} and nothing else. Do not use tools.`;
+  // A CLI startup safety check may consume file-backed stdin before --print
+  // reads it. Keep the proven first launch unchanged; its existing no-log retry
+  // supplies a positional prompt and skips that check only in this owned, empty
+  // scratch cwd with tools/MCP disabled. Empty stdin avoids duplicate prompts.
+  // Both launches stay on private desktops.
+  await writeFile(promptFile, privateStartProcess ? '' : prompt + '\n', { flag: 'wx' });
   const { env: childEnv, dropped } = cliEnvironment(env, { temp, configDir });
   report.envDropped = dropped;
   const logFile = join(temp, STAMP_LOG);
-  const launcherEnv = { ...childEnv, HUB_STAMP_EXE: cliExe, HUB_STAMP_ARGS: cliArguments({ mcp, settings, model }).map(quoteArg).join(' '),
+  const launcherEnv = { ...childEnv, HUB_STAMP_EXE: cliExe, HUB_STAMP_ARGS: cliArguments({ mcp, settings, model,
+    ...(privateStartProcess ? { prompt, skipSafeCheck: true } : {}) }).map(quoteArg).join(' '),
     HUB_STAMP_CWD: cwd, HUB_STAMP_IN: promptFile, HUB_STAMP_OUT: join(dir, 'cli-stdout.txt'), HUB_STAMP_ERR: join(dir, 'cli-stderr.txt'), ...(privateDesktop ? { HUB_STAMP_CS: PRIVATE_DESKTOP_CS } : {}) };
   if (privateStartProcess) Object.assign(launcherEnv, {
     HUB_STAMP_PRIVATE_RETRY: '1', HUB_STAMP_HOST_EXE: powershell,
@@ -420,6 +428,10 @@ async function probeNativeStampOnce({ cliExe, configDir, expectedVersion, workRo
     const stderr = await readLog(launcherEnv.HUB_STAMP_ERR);
     const preview = stderrPreview(stderr.text, { env });
     report.stderrPreview = preview.lines; report.stderrPreviewTruncated = preview.truncated || stderr.bytes > MAX_LOG_BYTES;
+    if (!stamp && report.cliStarted && report.stoppedBy === 'exit' &&
+      preview.lines.some(line => line.includes('Input must be provided either through stdin or as a prompt argument when using --print'))) {
+      report.error = 'CLI_INPUT_MISSING';
+    }
     if (privateStartProcess) {
       const hostStderr = await readLog(launcherEnv.HUB_STAMP_HOST_ERR);
       const hostPreview = stderrPreview(hostStderr.text, { env });

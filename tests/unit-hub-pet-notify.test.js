@@ -140,6 +140,10 @@ test('中性提醒按真实总线保持待机；完成回执欢呼；闲聊含�
     assert.equal(r.sent.filter(x => x.channel === 'hub-pet:panel').length, panels);
     assert.equal(r.toHub.length, opened, '闲聊点击不跳转');
   }
+  // r27f：单击只逗它，双击才打开助理（连点两下在 400ms 内）。
+  const before = r.toHub.length;
+  r.click('pet');
+  assert.equal(r.toHub.length, before, '单击不打开助理');
   r.click('pet');
   assert.equal(r.toHub.at(-1).channel, 'hub-pet:open-assistant');
 });

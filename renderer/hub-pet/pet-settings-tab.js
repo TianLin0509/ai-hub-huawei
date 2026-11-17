@@ -40,6 +40,9 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
       if (r.id === activeId) {
         status = `下载中 ${pct}%`;
         action = `<span class="pet-tab-bar"><i style="width:${pct}%"></i></span>`;
+      } else if (current && r.update) {
+        // 使用中的形象也要能更新（r27i 审查：先判 current 会吞掉「更新」按钮）。
+        status = '使用中 · 有新版本'; action = `<button type="button" class="pet-tab-mini" data-pet="download" data-id="${esc(r.id)}">更新</button>`;
       } else if (current) status = '使用中';
       else if (r.installed && r.update) { status = '有新版本'; action = `<button type="button" class="pet-tab-mini" data-pet="download" data-id="${esc(r.id)}">更新</button>`; }
       else if (r.installed) status = r.bundled ? '内置 · 点击使用' : '已安装 · 点击使用';
@@ -76,38 +79,52 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
         <div><b>说话频率</b><small>${esc(MODE_NOTES[s.mode] || '')}；提醒每小时最多开口 3 次，通知卡片不受限。</small></div>
         <div class="pet-tab-seg" role="radiogroup" aria-label="说话频率">${modes.map(m => `<button type="button" role="radio" aria-checked="${m.id === s.mode}" data-pet="mode" data-id="${esc(m.id)}"${m.id === s.mode ? ' class="on"' : ''}>${esc(m.label)}</button>`).join('')}</div>
       </div>
-      <div class="pet-tab-row">
-        <div><b>名字</b><small>${esc(talkNote(s.talkPrefs))}。</small></div>
-        <div class="pet-tab-pair">
-          <input type="text" class="pet-tab-name" data-pet-name maxlength="8" placeholder="不起名" value="${esc(s.petName || '')}" aria-label="桌宠的名字">
-          <button type="button" class="pet-tab-mini" data-pet="saveName">保存</button>
-          <button type="button" class="pet-tab-mini" data-pet="resetTalk"${hasPrefs ? '' : ' disabled'} title="清空回应偏好和说过的句子">忘掉我的回应</button>
+      <!-- r27f2（2026-11-17）：r27g 加了「名字」一行后整页超出一屏 32px，「名字」和「暂时别说话」并成一行两半（1440×900 仍不出滚动）。 -->
+      <div class="pet-tab-row pet-tab-duo">
+        <div class="pet-tab-half pet-tab-wide">
+          <div><b>名字</b><small>${esc(talkNote(s.talkPrefs))}。</small></div>
+          <div class="pet-tab-pair">
+            <input type="text" class="pet-tab-name" data-pet-name maxlength="8" placeholder="不起名" value="${esc(s.petName || '')}" aria-label="桌宠的名字">
+            <button type="button" class="pet-tab-mini" data-pet="saveName">保存</button>
+            <button type="button" class="pet-tab-mini" data-pet="resetTalk"${hasPrefs ? '' : ' disabled'} title="清空回应偏好和说过的句子">忘掉我的回应</button>
+          </div>
         </div>
-      </div>
-      <div class="pet-tab-row">
-        <div><b>暂时别说话</b><small>到点自动恢复，提醒照样收进小圆点。</small></div>
-        <div class="pet-tab-pair">
-          <button type="button" class="pet-tab-toggle${data.quietHour ? ' on' : ''}" aria-pressed="${!!data.quietHour}" data-pet="quietHour">安静一小时</button>
-          <button type="button" class="pet-tab-toggle${data.silentToday ? ' on' : ''}" aria-pressed="${!!data.silentToday}" data-pet="silentToday">今天别说话</button>
+        <div class="pet-tab-half">
+          <div><b>暂时别说话</b><small>到点自动恢复，提醒收进小圆点。</small></div>
+          <div class="pet-tab-pair">
+            <button type="button" class="pet-tab-toggle${data.quietHour ? ' on' : ''}" aria-pressed="${!!data.quietHour}" data-pet="quietHour">安静一小时</button>
+            <button type="button" class="pet-tab-toggle${data.silentToday ? ' on' : ''}" aria-pressed="${!!data.silentToday}" data-pet="silentToday">今天别说话</button>
+          </div>
         </div>
       </div>
       <div class="pet-tab-row">
         <div><b>桌面回执</b><small>${esc(NOTIFY_NOTES[s.notifyMode] || NOTIFY_NOTES.pet)}。</small></div>
         <div class="pet-tab-seg" role="radiogroup" aria-label="桌面回执">${NOTIFY_OPTIONS.map(m => `<button type="button" role="radio" aria-checked="${m.id === s.notifyMode}" data-pet="notifyMode" data-id="${esc(m.id)}"${m.id === s.notifyMode ? ' class="on"' : ''}>${esc(m.label)}</button>`).join('')}</div>
       </div>
+      <!-- r27f（2026-11-17）：多了「单击只逗它」「任务栏走走」两个开关，三个旧开关并成一行三列，整页仍是一屏（1440×900）。 -->
       <div class="pet-tab-row pet-tab-duo">
         <div class="pet-tab-half">
-          <div><b>会话在跑时陪着干活</b><small>有会话在跑，桌宠敲键盘并标出「N 个在跑」。</small></div>
+          <div><b>会话在跑时陪着干活</b><small>有会话在跑就敲键盘，标出在跑几个。</small></div>
           <label class="pet-tab-switch"><input type="checkbox" data-pet="followSessions"${s.followSessions !== false ? ' checked' : ''}><span></span></label>
         </div>
         <div class="pet-tab-half">
           <div><b>身上显示等级</b><small>等级角标，每10级进化一次。</small></div>
           <label class="pet-tab-switch"><input type="checkbox" data-pet="showGrowth"${s.showGrowth !== false ? ' checked' : ''}><span></span></label>
         </div>
+        <div class="pet-tab-half">
+          <div><b>全屏时躲到屏幕边</b><small>演示、看视频时缩到右边只露一点。</small></div>
+          <label class="pet-tab-switch"><input type="checkbox" data-pet="peekOnFullscreen"${s.peekOnFullscreen !== false ? ' checked' : ''}><span></span></label>
+        </div>
       </div>
-      <div class="pet-tab-row">
-        <div><b>全屏时躲到屏幕边</b><small>演示、看视频或全屏开会时缩到右边只露一点，退出全屏后回来。</small></div>
-        <label class="pet-tab-switch"><input type="checkbox" data-pet="peekOnFullscreen"${s.peekOnFullscreen !== false ? ' checked' : ''}><span></span></label>
+      <div class="pet-tab-row pet-tab-duo">
+        <div class="pet-tab-half">
+          <div><b>单击只逗它</b><small>双击打开助理、按住抱抱；关掉＝单击就打开助理。</small></div>
+          <label class="pet-tab-switch"><input type="checkbox" data-pet="clickPlay"${s.clickMode !== 'open' ? ' checked' : ''}><span></span></label>
+        </div>
+        <div class="pet-tab-half">
+          <div><b>偶尔在任务栏上走走</b><small>十来分钟踱几步，只走桌面空白处。</small></div>
+          <label class="pet-tab-switch"><input type="checkbox" data-pet="walk"${s.walk !== false ? ' checked' : ''}><span></span></label>
+        </div>
       </div>`;
     if (typing) {
       const el = container.querySelector('input[data-pet-name]');

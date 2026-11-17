@@ -50,6 +50,7 @@ function presentNext(doc, state) {
     return el;
   };
   const dialog = make('dialog', 'hub-dialog');
+  if (/仍然没有送达|后台进程还没确认结束/.test(content.body)) dialog.classList.add('hub-dialog-feedback-required');
   dialog.setAttribute('aria-modal', 'true');
   dialog.setAttribute('aria-labelledby', 'hub-dialog-title');
   dialog.setAttribute('aria-describedby', 'hub-dialog-body');
@@ -118,7 +119,7 @@ function presentNext(doc, state) {
 function isErrorNotice(message, options = {}, content = {}) {
   if (options.assist === false) return false;
   if (options.assist === true || options.detail) return true;
-  return /失败|错误|无法|出错|异常|Error|ENOENT|EACCES|EPERM|ETIMEDOUT|ECONN/i.test(String(message || '')) && content.icon !== 'lock';
+  return /失败|错误|无法|出错|异常|公司模型暂时用不了|Error|ENOENT|EACCES|EPERM|ETIMEDOUT|ECONN/i.test(String(message || '')) && content.icon !== 'lock';
 }
 function showHubAlert(message, options) { return requestDialog(message, { ...options, confirm: false }); }
 function confirmHubAction(message, options) { return requestDialog(message, { ...options, confirm: true }); }

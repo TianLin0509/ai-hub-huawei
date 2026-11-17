@@ -6,8 +6,8 @@ const fs = require('fs');
 const path = require('path');
 const { ASSISTANT_ACTIONS, MODES, ROLES, SpeechQueue, chatterFor, decidePose, localDateKey, speakGate, weeklyNudge } = require('../core/hub-pet/state');
 const { applyReply, cleanName, noteSpoken, normalizePrefs, pickLine } = require('../core/hub-pet/talk');
-const { allowedRange, clampTo, cubicOut, dockOf, releasePlan } = require('../core/hub-pet/motion');
-const { NOTIFY_MODES, SCALE_MAX, SCALE_MIN, createSettingsStore, isUrgentNotice, parseBox, parseScale } = require('../core/hub-pet/settings');
+const { allowedRange, clampTo, cubicOut, dockOf, flingPlan, flyAt, releasePlan, walkIntervals, walkPlan } = require('../core/hub-pet/motion');
+const { CLICK_MODES, NOTIFY_MODES, SCALE_MAX, SCALE_MIN, createSettingsStore, isUrgentNotice, parseBox, parseScale } = require('../core/hub-pet/settings');
 const { DEFAULT_ROLE, createRolePackStore } = require('../core/hub-pet/role-packs');
 const { createFullscreenWatch } = require('../core/hub-pet/fullscreen-watch');
 const { createDiskWatch } = require('../core/hub-pet/disk-watch');
@@ -32,6 +32,15 @@ const MODE_LABELS = { lively: '活泼', gentle: '温和', quiet: '安静' };
 const MODE_HINTS = { lively: '提醒之外，早上问候、久坐提醒', gentle: '只说助理的提醒', quiet: '不说话，只亮小圆点' };
 
 const MODE_SET = new Set(MODES);
+// 2026-11-17 r27f：鼠标离身体中心多近算「靠近」（身体半宽 + 这么多 DIP）；按住多久算抱抱；两次单击隔多久内算双击。
+const NEAR_PAD = 110;
+const HUG_MS = 600;
+const DOUBLE_MS = 400;
+// 在任务栏上走动：出来后 4–8 分钟第一次，之后每 8–15 分钟一次；条件不满足（在说话、在开会、人走开了……）1–2 分钟后再看。
+const WALK_FIRST = [240000, 480000];
+const WALK_EVERY = [480000, 900000];
+const WALK_RETRY = [60000, 120000];
+const between = ([lo, hi]) => Math.round(lo + Math.random() * (hi - lo));
 
 function createHubPetController({
   BrowserWindow, BaseWindow = null, screen, ipcMain, Menu, powerMonitor, app,
@@ -95,7 +104,7 @@ function createHubPetController({
   let flushTimer = null;          // 拖大小滑块时，停下 300ms 再写盘
   const overrides = {};          // 隔离测试注入（idleSec / busy / fullscreen / cursor）
 
-  const fsWatch = createFullscreenWatch({ logger, onChange: (value) => { if (overrides.fullscreen == null) setScreenFull(value); } });
+  const fsWatch = createFullscreenWatch({ logger, foreground: true, onChange: (value) => { if (overrides.fullscreen == null) setScreenFull(value); } });
 
   const enabled = () => available && !disposed && settings.get().enabled;
   const alive = () => !!(win && !win.isDestroyed());
@@ -124,7 +133,9 @@ function createHubPetController({
   const areaAt = pos => areaFor(pos);
   function rangeFor(pos, g = geom()) { return allowedRange(areaFor(pos, g), g.size, g.inset); }
   const rangeAt = pos => rangeFor(pos);
-  function currentPos() { const b = win.getBounds(); return { x: b.x, y: b.y }; }
+  // 隔离测试（调试入口 override virtual）：测试窗口被压在屏幕外、挪不动，这时以「自己放的位置」当窗口位置，走动、甩出去的规划照真实屏幕算。
+  function winBounds() { const b = win.getBounds(); return overrides.virtual && placed ? { ...b, x: placed.x, y: placed.y } : b; }
+  function currentPos() { const b = winBounds(); return { x: b.x, y: b.y }; }
   // 最近一次自己放窗口的位置。混合 DPI 下 getBounds 读回来可能和设的差 1px，连续改大小时按读回值算会一点点漂；
   // 读回值和它相差不超过 2px 就以它为准（2026-10-18 审核）。
   let placed = null;
@@ -134,7 +145,7 @@ function createHubPetController({
     win.setBounds({ x: placed.x, y: placed.y, width: WIN_W, height: placed.height }, false);
   }
   function placedBounds() {
-    const b = win.getBounds();
+    const b = winBounds();
     if (placed && Math.abs(b.x - placed.x) <= 2 && Math.abs(b.y - placed.y) <= 2 && Math.abs(b.height - placed.height) <= 2) return { ...placed };
     return { x: b.x, y: b.y, height: b.height };
   }
@@ -251,6 +262,7 @@ function createHubPetController({
 
   function evaluate() {
     if (!alive()) return;
+    if (excursion) guardExcursion({ quiet: true });
     // 换了形象：量过的就直接用它的透明边（refit 里会再进 evaluate，boxRole 先改掉，不会绕圈）。
     if (boxRole !== currentRole()) {
       boxRole = currentRole();
@@ -278,7 +290,11 @@ function createHubPetController({
     const role = currentRole();
     const state = {
       growth: growthView(),
-      pose, role, assetBase: roles.assetBase(role), mode: s.mode, dock: fullscreen ? 'right' : dock, peeking: fullscreen, scale: scaleNow(),
+      pose, role, roleVersion: (typeof roles.version === 'function' && roles.version(role)) || null, assetBase: roles.assetBase(role), mode: s.mode, dock: fullscreen ? 'right' : excursion ? null : dock, peeking: fullscreen, scale: scaleNow(),
+      // r27f：悬停快捷钮里「问」能不能就地提问（没接助理时改为打开助理页）；单击是逗它还是打开；正在走动。
+      quickAsk: canAsk(), clickMode: s.clickMode === 'open' ? 'open' : 'play', walking: !!excursion,
+      // 安静档、临时安静、今天静音：悬停不冒快捷钮（r27f 审查第 5 项；开会看 meeting）。
+      hush: s.mode === 'quiet' || s.quietUntil > t || s.silentDate === localDateKey(t),
       bubble: snap.bubble ? bubbleView(snap.bubble) : null,
       running: follow ? running : 0,
       // r27c：会话状态灯（在跑 / 答完 / 出错，点灯直达会话）、小圆点分色计数、开会与额度低时身上的道具。
@@ -313,11 +329,11 @@ function createHubPetController({
   }
   // 被摸了（鼠标在身上来回蹭）：醒一分钟、冒爱心，记一次亲密度。3 秒内只算一次。
   let lastPetAt = 0;
-  function petted() {
+  function petted(motion = 'petted') {
     const t = now();
     if (t - lastPetAt < 3000) return false;
     lastPetAt = t; pettedAt = clock();
-    send('hub-pet:motion', { phase: 'petted' });
+    if (motion) send('hub-pet:motion', { phase: motion });
     try { onPetted?.(); } catch (_) {}
     evaluate();
     return true;
@@ -498,8 +514,11 @@ function createHubPetController({
     fullscreen = value;
     if (alive() && !drag) {
       if (fullscreen) {
-        peekFrom = currentPos();
-        const pos = peekFrom;
+        // 正在任务栏上走动：躲边结束后回到它原来的家，不回到走到一半的地方。
+        const home = excursion ? excursion.home : null;
+        abortExcursion();
+        peekFrom = home || currentPos();
+        const pos = currentPos();
         const to = peekTarget(pos);
         animateTo([{ from: pos, to, durationMs: 420 }], () => send('hub-pet:motion', { phase: 'land', impact: 0.2 }));
       } else if (peekFrom) {
@@ -521,9 +540,16 @@ function createHubPetController({
     let startAt = Date.now();
     moveTimer = setInterval(() => {
       if (!alive()) { stopMove(); return; }
-      const p = Math.min(1, (Date.now() - startAt) / step.durationMs);
-      const k = cubicOut(p);
-      place({ x: step.from.x + (step.to.x - step.from.x) * k, y: step.from.y + (step.to.y - step.from.y) * k });
+      // 走动的每一步先核一遍：前台窗口、工作区、安静/开会/减少动态/锁屏变了就当场停下回原处（r27f 审查第 1、2 项）。
+      if (step.kind === 'walk' && guardExcursion()) return;
+      const elapsed = Date.now() - startAt;
+      const p = Math.min(1, elapsed / step.durationMs);
+      // fly：甩出去的抛物线（core/hub-pet/motion.js 的 flyAt）；walk：匀速踱步；其余 cubic-out 缓动。
+      if (step.kind === 'fly') place(flyAt(step, elapsed));
+      else {
+        const k = step.kind === 'walk' ? p : cubicOut(p);
+        place({ x: step.from.x + (step.to.x - step.from.x) * k, y: step.from.y + (step.to.y - step.from.y) * k });
+      }
       if (p < 1) return;
       if (queue.length) { step = queue.shift(); startAt = Date.now(); return; }
       stopMove();
@@ -538,9 +564,24 @@ function createHubPetController({
     ignoring = v;
     win.setIgnoreMouseEvents(v);
   }
+  // 鼠标靠近（r27f）：光标离身体中心不到「身体半宽 + NEAR_PAD」就告诉渲染端在哪一侧，它侧身看过去、轻跳一下。
+  // 只在进出、换边时发一次；躲边、拖动时不算。动作开不开由渲染端按安静档、开会、减少动态效果定。
+  let nearKey = '';
+  function nearTick(c, b) {
+    const g = geom();
+    const cx = b.x + WIN_W / 2 + (bodyBox.left - bodyBox.right) * g.body / 2;
+    const cy = b.y + b.height - INSET.bottom - g.body / 2;
+    const dx = c.x - cx, dy = c.y - cy, r = g.body / 2 + NEAR_PAD;
+    const near = !fullscreen && !drag && dx * dx + dy * dy < r * r;
+    const key = near ? (dx >= 0 ? 'right' : 'left') : '';
+    if (key === nearKey) return;
+    nearKey = key;
+    send('hub-pet:near', { near, side: dx >= 0 ? 1 : -1 });
+  }
   function hoverTick() {
     if (!alive() || drag || !win.isVisible?.()) return;
-    const c = cursor(), b = win.getBounds();
+    const c = cursor(), b = winBounds();
+    nearTick(c, b);
     const inside = c.x >= b.x && c.x < b.x + b.width && c.y >= b.y && c.y < b.y + b.height;
     if (!inside) { lastProbe = ''; if (ignoring === false) setIgnore(true); return; }
     if (ignoring === false) return; // 已接住：离开身体由渲染端的 mousemove / mouseleave 报
@@ -558,9 +599,13 @@ function createHubPetController({
   function onPress(target) {
     if (!alive()) return;
     stopMove();
+    // 走动途中被按住：先停下。拖走了就以落点为新家；只是点一下或抱一下，过一会儿自己走回家。
+    const away = excursion ? excursion.home : null;
+    abortExcursion();
     const c = cursor();
     const pos = currentPos();
-    drag = { target: target || 'pet', start: c, offset: { x: c.x - pos.x, y: c.y - pos.y }, moved: false, samples: [{ t: Date.now(), x: pos.x, y: pos.y }], startedAt: Date.now(), last: pos };
+    drag = { target: target || 'pet', start: c, offset: { x: c.x - pos.x, y: c.y - pos.y }, moved: false, samples: [{ t: Date.now(), x: pos.x, y: pos.y }], startedAt: Date.now(), last: pos, away, hug: false };
+    if (nearKey) { nearKey = ''; send('hub-pet:near', { near: false, side: 1 }); }
     setIgnore(false);
     moveTimer = setInterval(dragTick, DRAG_TICK_MS);
   }
@@ -569,8 +614,20 @@ function createHubPetController({
     if (!drag.releasing && Date.now() - drag.startedAt > 120000) { onRelease(); return; }
     if (fullscreen) return; // 躲边时只认点击，不让拖出来
     const c = cursor();
-    if (!drag.moved && Math.hypot(c.x - drag.start.x, c.y - drag.start.y) < CLICK_SLOP) return;
-    if (!drag.moved) { drag.moved = true; send('hub-pet:motion', { phase: 'lift' }); }
+    if (!drag.moved && Math.hypot(c.x - drag.start.x, c.y - drag.start.y) < CLICK_SLOP) {
+      // 按住不放（单击只逗它的新习惯下）：抱抱。慢慢压扁、冒爱心，记一次亲密度（和摸摸共用 3 秒一次的限制）。
+      if (!drag.hug && drag.target === 'pet' && clickPlays() && Date.now() - drag.startedAt >= HUG_MS) {
+        drag.hug = true;
+        send('hub-pet:motion', { phase: 'hug', on: true });
+        petted(null);
+      }
+      return;
+    }
+    if (!drag.moved) {
+      drag.moved = true;
+      if (drag.hug) { drag.hug = false; send('hub-pet:motion', { phase: 'hug', on: false }); }
+      send('hub-pet:motion', { phase: 'lift' });
+    }
     // 限位取「鼠标所在屏」和「宠物现在所在屏」的并集：以前只按现在所在的屏，宠物出不了这块屏（双屏拖不过去）；
     // 只按要去的位置所在屏时，身体中心一过两屏中线范围就整个换掉，会闪跳一下（2026-10-18 审核）。松手后再按落点所在屏贴好。
     const want = { x: c.x - drag.offset.x, y: c.y - drag.offset.y };
@@ -597,17 +654,25 @@ function createHubPetController({
     const d = drag;
     drag = null;
     stopMove();
-    if (!d.moved) { handleClick(d.target); return; }
+    if (!d.moved) {
+      if (d.hug) { send('hub-pet:motion', { phase: 'hug', on: false }); evaluate(); }
+      else handleClick(d.target);
+      if (d.away) scheduleReturn(d.away);
+      return;
+    }
     pettedAt = clock();
     const position = currentPos();
-    const plan = releasePlan({ samples: d.samples, position, area: areaAt(position), size: winSize(), inset: inset() });
+    // 甩出去（够快）：沿抛物线落到任务栏上；慢慢放下：照旧原地停住（只滑一小段、离边近就贴边）。
+    const args = { samples: d.samples, position, area: areaAt(position), size: winSize(), inset: inset() };
+    const plan = flingPlan(args) || releasePlan(args);
     send('hub-pet:motion', { phase: 'release', speed: plan.speed, vx: plan.vx, vy: plan.vy });
-    lastRelease = { speed: Math.round(plan.speed), samples: d.samples.length, steps: plan.steps.map(st => st.kind), dock: plan.dock };
+    if (plan.fling) send('hub-pet:motion', { phase: 'fly', durationMs: plan.steps[0].durationMs, vx: plan.vx });
+    lastRelease = { speed: Math.round(plan.speed), samples: d.samples.length, steps: plan.steps.map(st => st.kind), dock: plan.dock, fling: !!plan.fling, final: plan.final };
     animateTo(plan.steps, () => {
       dock = plan.dock;
       settings.update({ position: plan.final });
       savedDetached = false;
-      send('hub-pet:motion', { phase: 'land', impact: Math.min(1, 0.35 + plan.speed / 2400) });
+      send('hub-pet:motion', { phase: 'land', impact: plan.fling ? plan.impact : Math.min(1, 0.35 + plan.speed / 2400) });
       lastSent = '';
       evaluate();
     });
@@ -654,11 +719,198 @@ function createHubPetController({
     } else if (target === 'dot') {
       const items = speech.takeDots();
       if (items.length && confirmReminders(items)) send('hub-pet:panel', { items });
-    } else {
+    } else if (!clickPlays()) {
+      // 旧习惯（设置里可切回）：单击就打开助理。
       send('hub-pet:motion', { phase: 'poke' });
       openAssistant({});
+    } else {
+      // 新习惯（2026-11-17 r27f，用户拍板）：单击只是逗它一下，双击才打开助理。第一次单击时说一句新玩法。
+      const t = Date.now();
+      if (t - lastPetClick < DOUBLE_MS) {
+        lastPetClick = 0;
+        send('hub-pet:motion', { phase: 'poke' });
+        openAssistant({});
+      } else {
+        lastPetClick = t;
+        send('hub-pet:motion', { phase: 'poke', play: true });
+        if (!settings.get().clickHinted) {
+          settings.update({ clickHinted: true });
+          speech.push({ id: 'click-hint', kind: 'chatter', sticky: true, title: '单击是逗我玩，双击打开助理，按住是抱抱。想要单击就打开，可在设置里改回来。' });
+        }
+      }
     }
     evaluate();
+  }
+  let lastPetClick = 0;
+  const clickPlays = () => settings.get().clickMode !== 'open';
+  function canAsk() {
+    if (typeof askAssistant !== 'function') return false;
+    let pages = {};
+    try { pages = getPages?.() || {}; } catch (_) {}
+    return pages.assistant !== false;
+  }
+  // 悬停快捷钮（r27f）：问＝就地问助理（没接助理时打开助理页），信＝翻没看的消息，摸＝摸摸它。
+  function quick(type) {
+    pettedAt = clock();
+    if (type === 'ask') { if (canAsk()) openAsk(); else openAssistant({}); return true; }
+    if (type === 'inbox') { handleClick('dot'); return true; }
+    if (type === 'pet') { petted(); return true; }
+    return false;
+  }
+
+  // ---------- 在任务栏上走动（2026-11-17 r27f） ----------
+  // 偶尔沿任务栏上沿踱几步，或走到前台窗口边上坐一会儿，然后走回原处（不改存的位置）。
+  // 只在桌面空白处走：身体不进前台窗口在底带上占的横向范围，窗口铺满底带（最大化）就不走；拿不到前台窗口位置也不走。
+  // 走的时候主进程 16ms 挪一次窗口、渲染端满帧，走完立即停下、降回平时的帧率。
+  let walkTimer = null, dwellTimer = null, excursion = null, lastWalk = null, askOpen = false;
+  let rendererPrefs = { reducedMotion: false };
+  // 锁屏、睡眠（r27f 审查第 2 项）：收到就停下回原处、暂停排期；解锁、醒来后过 1–2 分钟再按当时的前台窗口和工作区重新核。
+  let screenLocked = false;
+  const onLock = () => { screenLocked = true; if (excursion) guardExcursion(); if (walkTimer) clearTimeout(walkTimer); walkTimer = null; };
+  const onUnlock = () => { if (!screenLocked) return; screenLocked = false; scheduleWalk(WALK_RETRY); };
+  const POWER_EVENTS = [['lock-screen', onLock], ['suspend', onLock], ['unlock-screen', onUnlock], ['resume', onUnlock]];
+  function scheduleWalk(range) {
+    if (walkTimer) clearTimeout(walkTimer);
+    walkTimer = null;
+    if (!started) return;
+    walkTimer = setTimeout(() => { walkTimer = null; walkTick(false); }, between(range));
+    walkTimer.unref?.();
+  }
+  // 前台窗口（DIP）：{ kind: 'desk' } 或 { kind: 'win', rect }；拿不到返回 null。物理像素按各屏缩放换算（多屏、混合缩放）。
+  function foregroundDip() {
+    if ('foreground' in overrides) return overrides.foreground || null;
+    const f = fsWatch.foreground();
+    if (!f || f.kind === 'unknown') return null;
+    if (f.kind === 'desk') return { kind: 'desk' };
+    let r = f.rect;
+    try { if (typeof screen.screenToDipRect === 'function') r = screen.screenToDipRect(null, r); } catch (_) { return null; }
+    if (!r || !(r.width > 0)) return null;
+    // 前台就是桌宠自己（刚点过它）：不知道用户真正在用哪个窗口，这次不走。
+    if (alive()) { const b = winBounds(); if (Math.abs(r.x - b.x) <= 4 && Math.abs(r.y - b.y) <= 4 && Math.abs(r.width - b.width) <= 4) return null; }
+    return { kind: 'win', rect: { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) } };
+  }
+  function walkBlocked() {
+    const s = settings.get(), t = clock();
+    if (!alive() || !started || !win.isVisible?.()) return 'hidden';
+    if (s.walk === false) return 'off';
+    if (s.mode === 'quiet' || s.quietUntil > t || s.silentDate === localDateKey(t)) return 'quiet';
+    if (meetingNow()) return 'meeting';
+    if (fullscreen || screenFull || peekFrom) return 'fullscreen';
+    if (rendererPrefs.reducedMotion) return 'reduced-motion';
+    if (screenLocked) return 'locked';
+    if (drag || moveTimer || excursion) return 'moving';
+    if ((menuAlive() && menuWin.isVisible()) || askOpen) return 'menu';
+    if (pose !== 'idle') return 'pose';
+    if (speech.snapshot().bubble) return 'speaking';
+    if (idleSeconds() > 120) return 'away';
+    return '';
+  }
+  // force（隔离测试）：跳过「在说话、人走开、频率」这类软条件，但关掉、安静、开会、全屏、减少动态效果照样不走。
+  const HARD_BLOCKS = new Set(['hidden', 'off', 'quiet', 'meeting', 'fullscreen', 'reduced-motion', 'locked', 'moving']);
+  // 走动途中（出去、坐着、回来）随时要停下的：这些一出现就立即停、直接回原处，不再慢慢走回去。
+  const STOP_NOW = new Set(['hidden', 'off', 'quiet', 'meeting', 'fullscreen', 'reduced-motion', 'locked']);
+  const sameArea = (a, b) => !!a && !!b && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+  // 走动还安不安全：返回停下的原因，安全返回 ''。
+  // 剩下要走的路（现在的位置、原处、出去时的目标）必须整段落在同一段空白里：前台窗口换了、最大化了、挪到底带上，
+  // 或屏幕工作区变了（任务栏挪位、分辨率/缩放改了），都按新的算；拿不到前台窗口（比如前台就是桌宠自己）时沿用上一次的判断。
+  function excursionUnsafe() {
+    const why = walkBlocked();
+    if (STOP_NOW.has(why)) return why;
+    const home = excursion.home, pos = currentPos(), g = geom();
+    const area = areaAt(home);
+    if (excursion.area && !sameArea(area, excursion.area)) return 'work-area';
+    const fg = foregroundDip();
+    if (!fg || fg.kind !== 'win') return '';
+    const range = allowedRange(area, g.size, g.inset);
+    const floorBottom = home.y + g.size.height - g.inset.bottom;
+    const free = walkIntervals({ range, size: g.size, inset: g.inset, band: { top: floorBottom - g.body, bottom: floorBottom }, foreground: fg.rect });
+    const xs = [pos.x, home.x];
+    if (excursion.phase === 'out' && excursion.plan) xs.push(excursion.plan.to.x);
+    const lo = Math.min(...xs), hi = Math.max(...xs);
+    return free.some(([a, b]) => lo >= a - 0.5 && hi <= b + 0.5) ? '' : 'foreground';
+  }
+  // 不安全就中止：停在哪儿都直接放回原处（原处是用户自己放的位置，不会穿过窗口走回去）。quiet：从 evaluate 里调，不再回调 evaluate。
+  function guardExcursion({ quiet = false } = {}) {
+    if (!excursion || drag || !alive()) return false;
+    const why = excursionUnsafe();
+    if (!why) return false;
+    abortExcursion({ snapHome: true });
+    lastWalk = { ...(lastWalk || {}), at: now(), aborted: why };
+    if (why === 'locked') { if (walkTimer) clearTimeout(walkTimer); walkTimer = null; }
+    else scheduleWalk(WALK_RETRY);
+    if (!quiet) evaluate();
+    return true;
+  }
+  function walkTick(force, rnd) {
+    if (excursion) return lastWalk;
+    const why = walkBlocked();
+    if (why && !(force && !HARD_BLOCKS.has(why))) { lastWalk = { at: now(), skipped: why }; scheduleWalk(WALK_RETRY); return lastWalk; }
+    const fg = foregroundDip();
+    if (!fg) { lastWalk = { at: now(), skipped: 'no-foreground' }; scheduleWalk(WALK_RETRY); return lastWalk; }
+    const pos = currentPos(), g = geom();
+    const res = walkPlan({ position: pos, area: areaAt(pos), size: g.size, inset: g.inset, body: g.body, foreground: fg.kind === 'win' ? fg.rect : null, ...(rnd ? { rnd } : {}) });
+    if (!res.plan) { lastWalk = { at: now(), skipped: res.reason }; scheduleWalk(WALK_RETRY); return lastWalk; }
+    lastWalk = { at: now(), plan: { from: res.plan.from, to: res.plan.to, sit: res.plan.sit, durationMs: res.plan.durationMs, dwellMs: res.plan.dwellMs }, foreground: fg };
+    excursion = { home: res.plan.from, plan: res.plan, phase: 'out', area: areaAt(pos) };
+    startGuard();
+    walkLeg(res.plan.from, res.plan.to, res.plan.durationMs, () => {
+      if (!excursion) return;
+      excursion.phase = 'dwell';
+      if (res.plan.sit) send('hub-pet:motion', { phase: 'sit', on: true });
+      dwellTimer = setTimeout(() => { dwellTimer = null; walkHome(); }, res.plan.dwellMs);
+      dwellTimer.unref?.();
+    });
+    return lastWalk;
+  }
+  function walkLeg(from, to, durationMs, done) {
+    send('hub-pet:motion', { phase: 'walk', on: true, dir: to.x >= from.x ? 1 : -1, durationMs });
+    lastSent = ''; evaluate();
+    animateTo([{ kind: 'walk', from, to, durationMs }], () => { send('hub-pet:motion', { phase: 'walk', on: false }); done(); });
+  }
+  function walkHome() {
+    if (!excursion || !alive()) return;
+    if (dwellTimer) { clearTimeout(dwellTimer); dwellTimer = null; }
+    send('hub-pet:motion', { phase: 'sit', on: false });
+    excursion.phase = 'back';
+    const from = currentPos(), to = excursion.home;
+    const dist = Math.abs(to.x - from.x);
+    if (dist < 2 && Math.abs(to.y - from.y) < 2) { endExcursion(); return; }
+    walkLeg(from, { x: to.x, y: to.y }, Math.round(Math.min(6000, Math.max(700, dist / 70 * 1000))), endExcursion);
+  }
+  // 坐着、停着的时候没有逐帧挪动，靠这个 120ms 的小定时器盯着（走动时每帧本来就核）。
+  let guardTimer = null;
+  function startGuard() {
+    if (guardTimer) return;
+    guardTimer = setInterval(() => { if (!excursion) stopGuard(); else if (excursion.phase === 'dwell') guardExcursion(); }, 120);
+    guardTimer.unref?.();
+  }
+  function stopGuard() { if (guardTimer) clearInterval(guardTimer); guardTimer = null; }
+  function endExcursion() {
+    stopGuard();
+    excursion = null;
+    lastSent = ''; evaluate();
+    scheduleWalk(WALK_EVERY);
+  }
+  // 中途打断（被按住、躲边、改大小、关掉）：snapHome 时直接回原处。
+  function abortExcursion({ snapHome = false } = {}) {
+    if (dwellTimer) { clearTimeout(dwellTimer); dwellTimer = null; }
+    stopGuard();
+    if (!excursion) return;
+    const home = excursion.home;
+    excursion = null;
+    if (moveTimer && !drag) stopMove();
+    send('hub-pet:motion', { phase: 'walk', on: false });
+    send('hub-pet:motion', { phase: 'sit', on: false });
+    if (snapHome && alive()) place(home);
+    lastSent = '';
+  }
+  // 点了一下或抱了一下（没拖走）：1.5 秒后自己走回家。
+  function scheduleReturn(home) {
+    if (dwellTimer) clearTimeout(dwellTimer);
+    excursion = { home, plan: null, phase: 'dwell', area: areaAt(home) };
+    startGuard();
+    dwellTimer = setTimeout(() => { dwellTimer = null; walkHome(); }, 1500);
+    dwellTimer.unref?.();
   }
 
   // ---------- 右键菜单（2026-10-17：自绘浮层，替换系统原生菜单） ----------
@@ -756,6 +1008,7 @@ function createHubPetController({
   // 打开桌宠头顶的输入框：窗口要拿到焦点才能打字（平时 showInactive，不抢焦点）。
   function openAsk() {
     if (!alive()) return;
+    askOpen = true;
     setIgnore(false);
     try { win.focus(); } catch (_) {}
     send('hub-pet:ask-open', {});
@@ -830,7 +1083,10 @@ function createHubPetController({
       Promise.resolve().then(() => askAssistant(text, { enableAssistant: payload?.enableAssistant === true })).then(() => { reply({ ok: true }); evaluate(); },
         error => reply({ ok: false, enableAssistant: error?.code === 'ASSISTANT_DISABLED', error: String(error && error.message || error).slice(0, 160) }));
     },
-    'hub-pet:ask-close': (event) => { if (fromPet(event)) setIgnore(true); },
+    'hub-pet:ask-close': (event) => { if (fromPet(event)) { askOpen = false; setIgnore(true); } },
+    // r27f：悬停快捷钮（问 / 信 / 摸）；渲染端的系统偏好（减少动态效果时不走动）。
+    'hub-pet:quick': (event, type) => { if (fromPet(event)) { quick(String(type || '')); evaluate(); } },
+    'hub-pet:prefs': (event, prefs) => { if (fromPet(event) && prefs && typeof prefs === 'object') { rendererPrefs = { reducedMotion: prefs.reducedMotion === true }; if (excursion) guardExcursion(); } },
     // 点会话状态灯：直达那个会话；答完、出错的灯随即熄掉。
     'hub-pet:open-session': (event, id) => { if (fromPet(event)) openSession(id); },
     'hub-pet:signal': (event, patch) => { if (fromMain(event)) setSignal(patch); },
@@ -897,15 +1153,24 @@ function createHubPetController({
       if (req.op === 'disk-check') return diskWatch ? diskWatch.check() : [];
       if (req.op === 'override') {
         for (const k of ['idleSec', 'busy', 'fullscreen', 'nowShift', 'running', 'meeting', 'sessions', 'known', 'edge']) if (k in req) overrides[k] = req[k];
+        // r27f：前台窗口（DIP，{ kind:'win', rect } / { kind:'desk' } / null）；传 'real' 改回真实读数。
+        if ('virtual' in req) { overrides.virtual = req.virtual === true; if (overrides.virtual && alive()) place(initialPosition()); }
+        if ('foreground' in req) { if (req.foreground === 'real') delete overrides.foreground; else overrides.foreground = req.foreground; }
         if ('fullscreen' in req) setScreenFull(req.fullscreen === true);
         evaluate();
         return true;
       }
-      if (req.op === 'state') return { lastSent: lastSent ? JSON.parse(lastSent) : null, bounds: alive() ? win.getBounds() : null, area: alive() ? areaAt(currentPos()) : null, bodyBox: { ...bodyBox }, inset: inset(), edge: edgeCut(), scale: scaleNow(), dock, savedPosition: settings.get().position, savedDetached, visible: alive() && win.isVisible(), petPid: alive() ? win.webContents.getOSProcessId() : null, fullscreenWatch: fsWatch.isRunning(), lastRelease, autoRole: { ...autoRole }, role: settings.get().role };
+      if (req.op === 'state') return { lastSent: lastSent ? JSON.parse(lastSent) : null, bounds: alive() ? winBounds() : null, area: alive() ? areaAt(currentPos()) : null, bodyBox: { ...bodyBox }, inset: inset(), edge: edgeCut(), scale: scaleNow(), dock, savedPosition: settings.get().position, savedDetached, visible: alive() && win.isVisible(), petPid: alive() ? win.webContents.getOSProcessId() : null, fullscreenWatch: fsWatch.isRunning(), lastRelease, autoRole: { ...autoRole }, role: settings.get().role,
+        excursion: excursion ? { home: excursion.home, phase: excursion.phase, sit: excursion.plan && excursion.plan.sit } : null, lastWalk, walkScheduled: !!walkTimer, near: nearKey, clickMode: settings.get().clickMode, clickHinted: settings.get().clickHinted, askOpen, drag: drag ? { target: drag.target, moved: drag.moved, hug: drag.hug, start: drag.start } : null, moving: !!moveTimer };
       if (req.op === 'metrics') {
         const pid = alive() ? win.webContents.getOSProcessId() : null;
         return (app?.getAppMetrics?.() || []).filter(m => m.pid === pid || m.type === 'GPU').map(m => ({ pid: m.pid, type: m.type, cpu: m.cpu && m.cpu.percentCPUUsage }));
       }
+      // rnd（隔离测试）：固定随机数，0.1 ≈ 能坐就坐到窗口边上、0.9 ≈ 随便踱几步
+      if (req.op === 'walk') return walkTick(true, Number.isFinite(req.rnd) ? () => req.rnd : null);
+      if (req.op === 'walk-home') { walkHome(); return true; }
+      if (req.op === 'quick') return quick(String(req.type || ''));
+      if (req.op === 'foreground') return { raw: fsWatch.foreground(), dip: foregroundDip() };
       if (req.op === 'press') { onPress(req.target); return true; }
       if (req.op === 'release') { onRelease(); return true; }
       if (req.op === 'move') { if (alive()) place(req.pos); return true; }
@@ -933,6 +1198,9 @@ function createHubPetController({
     if (NOTIFY_MODES.includes(patch.notifyMode)) clean.notifyMode = patch.notifyMode;
     if (typeof patch.followSessions === 'boolean') clean.followSessions = patch.followSessions;
     if (typeof patch.showGrowth === 'boolean') clean.showGrowth = patch.showGrowth;
+    if (typeof patch.clickPlay === 'boolean') clean.clickMode = patch.clickPlay ? 'play' : 'open';
+    if (CLICK_MODES.includes(patch.clickMode)) clean.clickMode = patch.clickMode;
+    if (typeof patch.walk === 'boolean') clean.walk = patch.walk;
     const t = clock();
     if (typeof patch.quietHour === 'boolean') clean.quietUntil = patch.quietHour ? t + 3600000 : 0;
     if (typeof patch.silentToday === 'boolean') clean.silentDate = patch.silentToday ? localDateKey(t) : '';
@@ -956,6 +1224,9 @@ function createHubPetController({
       flushTimer = setTimeout(() => { flushTimer = null; settings.flush(); }, 300);
       flushTimer.unref?.();
     }
+    if ('scale' in clean && excursion) abortExcursion({ snapHome: true });
+    if (clean.position === null && excursion) abortExcursion();
+    // 关掉走动：和安静档一样，由 evaluate 里的 guardExcursion 当场停下放回原处。
     if ('scale' in clean) refitWindow(g0);
     if ('peekOnFullscreen' in clean) setFullscreen(screenFull && clean.peekOnFullscreen);
     if (clean.position === null && alive() && !drag) {
@@ -1068,6 +1339,8 @@ function createHubPetController({
     startHover();
     if (watchFullscreen && overrides.fullscreen == null) fsWatch.start();
     scheduleRoleRestore();
+    for (const [ev, fn] of POWER_EVENTS) { try { powerMonitor?.on?.(ev, fn); } catch (_) {} }
+    scheduleWalk(WALK_FIRST);
     // 出来 6 秒后再自我介绍：先让用户看到它，再开口。
     if (!settings.get().introduced) { introTimer = setTimeout(() => { introTimer = null; if (started && alive()) { introduce(); evaluate(); } }, 6000); introTimer.unref?.(); }
     if (diskWatch) { diskWatch.start(); diskFirst = setTimeout(() => { diskFirst = null; void diskWatch.check().catch(() => {}); }, 60000); diskFirst.unref?.(); }
@@ -1077,6 +1350,11 @@ function createHubPetController({
     if (!started) return;
     started = false;
     if (introTimer) { clearTimeout(introTimer); introTimer = null; }
+    abortExcursion();
+    for (const [ev, fn] of POWER_EVENTS) { try { powerMonitor?.removeListener?.(ev, fn); } catch (_) {} }
+    screenLocked = false;
+    if (walkTimer) clearTimeout(walkTimer);
+    walkTimer = null; askOpen = false; nearKey = '';
     noticeBus?.removeListener?.('notice', onNotice);
     noticeBus?.removeListener?.('reminders-changed', syncReminders);
     if (pollTimer) clearInterval(pollTimer);

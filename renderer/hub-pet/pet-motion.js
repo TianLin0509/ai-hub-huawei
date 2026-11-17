@@ -88,7 +88,54 @@
     return (col * 25) + '% ' + (row * 25) + '%';
   }
 
-  const api = { approach, breathStep, clamp, easeInOut, easeOutBack, easeOutCubic, frameRange, gesturePlaylist, hopAt, pingPong, playlistFrame, sheetPosition, squashAt };
+  // ---------- 2026-11-17 r27f：待机更活 ----------
+  // 起跳前下蹲：k∈[0,1] 是下蹲阶段的进度，返回压下去的深度（0→1→回到 0.35 时起跳，带一点「蓄力还没完全放开」的感觉）。
+  function crouchAt(k) {
+    k = clamp(k, 0, 1);
+    return k < 0.7 ? easeOutCubic(k / 0.7) : 1 - 0.65 * easeInOut((k - 0.7) / 0.3);
+  }
+
+  // 不用画图的 6 种小动作（6 个形象通用，只动 transform）：s∈[0,1] → { x, y, rot, sx, sy }，两端都回到原样，接缝不跳。
+  // dir 是 ±1（往哪边）。'hops' 这一种是「原地小跳两下」，由调用方按 hops 列表演（带下蹲），这里只给节奏。
+  const hold = (s, a, b) => (s < a ? easeInOut(s / a) : s > b ? easeInOut((1 - s) / (1 - b)) : 1);
+  const IDLE_MOVES = [
+    { name: 'look', label: '左右张望', dur: 2600, fn: (s, dir) => { const k = Math.sin(TAU * s) * Math.sin(Math.PI * s); return { x: 2.5 * dir * k, y: 0, rot: 5 * dir * k, sx: 1 - 0.03 * Math.abs(k), sy: 1 }; } },
+    { name: 'nod', label: '点点头', dur: 1300, fn: s => { const k = Math.pow(Math.sin(TAU * s), 2); return { x: 0, y: 2.4 * k, rot: 1.5 * k, sx: 1 + 0.01 * k, sy: 1 - 0.025 * k }; } },
+    { name: 'hops', label: '原地小跳两下', dur: 1100, hops: [{ at: 0, dur: 300, height: 8 }, { at: 520, dur: 280, height: 6 }], fn: () => ({ x: 0, y: 0, rot: 0, sx: 1, sy: 1 }) },
+    { name: 'shake', label: '抖一抖', dur: 900, fn: s => { const env = Math.sin(Math.PI * s); const w = Math.sin(TAU * 6 * s); return { x: 2.6 * w * env, y: 0, rot: 2.2 * w * env, sx: 1 + 0.02 * env, sy: 1 - 0.02 * env }; } },
+    { name: 'tilt', label: '歪头想一想', dur: 2400, fn: (s, dir) => { const k = hold(s, 0.22, 0.72); return { x: 1.5 * dir * k, y: 0, rot: 7 * dir * k, sx: 1, sy: 1 }; } },
+    { name: 'tiptoe', label: '踮脚伸一伸', dur: 1900, fn: s => { const k = hold(s, 0.35, 0.65); return { x: 0, y: -3 * k, rot: 0, sx: 1 - 0.03 * k, sy: 1 + 0.06 * k }; } },
+  ];
+
+  // 拎起来的钟摆：角度 a（度）、角速度 w（度/秒），被横向加速度 ax（DIP/s²）推着摆；约 1.3 Hz、阻尼比 0.12，±25° 封顶。
+  // 分步积分，帧率高低都稳。往右加速时身体下半截落在后面（顺时针为正）。
+  function pendulumStep(p, ax, dtSec) {
+    const K = Math.pow(TAU * 1.3, 2), C = 2 * 0.12 * TAU * 1.3, D = 0.1;
+    let a = p.a, w = p.w;
+    const n = Math.max(1, Math.ceil(dtSec / 0.008));
+    const h = dtSec / n;
+    const drive = clamp(ax, -12000, 12000) * D;
+    for (let i = 0; i < n; i++) {
+      w += (-K * a - C * w + drive) * h;
+      a += w * h;
+      if (a > 25) { a = 25; w = Math.min(0, w); } else if (a < -25) { a = -25; w = Math.max(0, w); }
+    }
+    return { a, w };
+  }
+  // 绕身体上方的抓握点转（不改 CSS 的 transform-origin，免得松手时跳一下）：绕原点转 θ 再平移这么多，等价于绕抓握点转。
+  // h 是抓握点在原点上方多少像素。
+  function pivotOffset(deg, h) {
+    const r = deg * Math.PI / 180;
+    return { x: -h * Math.sin(r), y: -h * (1 - Math.cos(r)) };
+  }
+
+  // 走路的步态：t 秒，每秒 2.4 步，身体一颠一颠、左右轻摆，往前倾一点。
+  function walkGait(t, dir) {
+    const step = Math.sin(Math.PI * 2.4 * t);
+    return { x: 0, y: -2.2 * Math.abs(step), rot: 2.4 * step + 2 * dir, sx: 1, sy: 1 + 0.015 * Math.abs(step) };
+  }
+
+  const api = { IDLE_MOVES, approach, breathStep, clamp, crouchAt, easeInOut, easeOutBack, easeOutCubic, frameRange, gesturePlaylist, hopAt, pendulumStep, pingPong, pivotOffset, playlistFrame, sheetPosition, squashAt, walkGait };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.HubPetMotion = api;
 })(typeof window !== 'undefined' ? window : globalThis);

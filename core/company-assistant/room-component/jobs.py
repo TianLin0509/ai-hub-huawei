@@ -99,8 +99,9 @@ class Runner:
             b.shot(f"prepared_{date_str}")
             if room is None:
                 b.shot(f"failed_{date_str}")
-                self.phase("prepare", "bad", "优先列表里的会议室在该时段都被占了")
-                res.update(status="满员", note="优先列表全部被占")
+                status, note = b.selection_failure()
+                self.phase("prepare", "bad", note)
+                res.update(status=status, note=note)
                 return self._finish(res, td)
             lead = s["提前填表秒数"]
             margin = (open_at - self.clock.now()).total_seconds() if open_at else None
@@ -144,9 +145,10 @@ class Runner:
                 self.phase("submit", "run", "首选没抢到，重新打开页面换下一间…")
                 nxt = b.prepare(date_slash, exclude=tried, retry=True)
                 if nxt is None:
-                    res.update(status="满员", room=None)
-                    notes.append("备选会议室也都被占了")
-                    self.phase("submit", "bad", "备选会议室也都被占了")
+                    status, note = b.selection_failure()
+                    res.update(status=status, room=None)
+                    notes.append(note)
+                    self.phase("submit", "bad", note)
                     break
                 room = nxt
             res["note"] = "；".join(notes)

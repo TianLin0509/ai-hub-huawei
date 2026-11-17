@@ -14,6 +14,8 @@
   "tests/unit-pet-reminder.test.js",
   "tests/unit-hub-pet-notify.test.js",
   "tests/unit-hub-pet-status-r27c.test.js",
+  "tests/unit-hub-pet-lively-r27f.test.js",
+  "tests/unit-hub-pet-lively-r27f2.test.js",
   "tests/unit-hub-pet-talk.test.js",
   "tests/unit-profile.test.js",
   "tests/unit-profile-review.test.js",
@@ -220,5 +222,8 @@
   "tests/unit-claude-connection-settings.test.js",
   "tests/unit-codeagent-model-groups.test.js",
   "tests/unit-codeagent-process-lifecycle.test.js",
-  "tests/unit-dsh-runtime-diagnosis.test.js"
+  "tests/unit-dsh-runtime-diagnosis.test.js",
+  "tests/unit-hub-pet-role-pack-frames.test.js",
+  "tests/unit-hub-pet-role-update-r27i2.test.js",
+  "tests/unit-hub-pet-role-packs-v110.test.js"
 ]

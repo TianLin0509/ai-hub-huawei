@@ -447,6 +447,14 @@ export function signerInitReason(tried, version) {
 }
 /** Plain-words reason and fix when the first-time initialization did not produce a cache. */
 export function signerInitFailureMessage(code, { version, timeoutMs, detail, report } = {}) {
+  if (detail === 'CLI_INPUT_MISSING') {
+    const next = report?.retrySuppressed === 'cleanup-unconfirmed'
+      ? '后台进程还没确认结束，Hub 已停止重试；请点「一键反馈」附带诊断。'
+      : report?.retried ? 'Hub 已尝试通过命令行参数补发输入，仍然没有送达；请直接点「一键反馈」附带诊断。'
+        : '请点「重新启动反代」重试，仍未恢复时点「一键反馈」附带诊断。';
+    return '公司模型暂时用不了：CodeAgent 未收到签名初始化所需的测试输入，在生成签名日志前退出了。\n' +
+      next;
+  }
   const why = {
     SIGNER_INIT_TIMEOUT: `CodeAgent 命令行在 ${Math.round((timeoutMs || 0) / 1000)} 秒内没有结束`,
     SIGNER_INIT_NO_STAMP: 'CodeAgent 命令行跑完了，但没有留下签名信息',

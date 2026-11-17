@@ -7,6 +7,7 @@
   3. 结果判定只看“点击后新出现的文字”，页面上原本就有的“成功”字样不会误判；
   4. 首选被抢走时，重新打开页面换下一间会议室再提交。
 """
+import json
 import math
 import os
 import threading
@@ -69,6 +70,23 @@ JS_ROOM_Y = """(n) => {
     }
   }
   return null;
+}"""
+
+# Only fixed fields: never copy URLs, arbitrary page text, account data or HTML.
+JS_ROOM_DIAGNOSTICS = """(name) => {
+  const visible = e => { const r = e.getBoundingClientRect();
+    if (!r.width || !r.height) return false;
+    const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    return !!hit && (hit === e || e.contains(hit)); };
+  const matches = [...document.querySelectorAll('body *')].filter(e => e.textContent.trim() === name);
+  const date = document.querySelector('input.ev_datepicker_input')?.value || '';
+  const tabs = ['可用会议室', '全部会议室', '我的收藏'];
+  const active = [...document.querySelectorAll('[aria-selected="true"],.active,.is-active,.selected')]
+    .map(e => e.textContent.trim()).find(t => tabs.includes(t)) || null;
+  return {readyState: document.readyState, formDate: /^\\d{4}[/-]\\d{1,2}[/-]\\d{1,2}$/.test(date) ? date : null,
+    activeRoomTab: active, labelMatches: matches.length,
+    leafMatches: matches.filter(e => !e.children.length).length,
+    visibleMatches: matches.filter(visible).length};
 }"""
 
 # 会议室那一行里所有约 30px 宽的格子的 X 坐标、宽度、是否真的显示在屏幕上
@@ -143,6 +161,63 @@ JS_LIST_ROOMS = """() => {
     if (c.length && !out.includes(c[0].t)) out.push(c[0].t);
   }
   return out;
+}"""
+
+# Find the scroll owner of the visible grid, rather than wheeling at a fixed
+# screen coordinate. Keep a reference during asynchronous/virtual-list paints.
+JS_ROOM_SCROLL = """(action) => {
+  const shown = e => { const r = e.getBoundingClientRect();
+    const h = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    return r.width > 0 && r.height > 0 && !!h && (h === e || e.contains(h)); };
+  if (action === 'reset') delete window.__mszRoomScroll;
+  let owner = window.__mszRoomScroll;
+  if (owner && (!owner.isConnected || !owner.clientHeight)) owner = null;
+  let rowHeight = 28;
+  if (!owner) {
+    const scores = new Map();
+    const root = document.scrollingElement;
+    for (const cell of document.querySelectorAll('div')) {
+      const r = cell.getBoundingClientRect();
+      if (r.width < 28 || r.width > 32 || r.height < 16 || r.height > 60 || !shown(cell)) continue;
+      rowHeight = Math.max(rowHeight, r.height);
+      let candidate = root;
+      for (let p = cell.parentElement; p && p !== root; p = p.parentElement) {
+        if (p.scrollHeight > p.clientHeight + 1 && p.clientHeight > 0
+            && /auto|scroll|hidden|clip/.test(getComputedStyle(p).overflowY)) {
+          candidate = p; break;
+        }
+      }
+      // The document can scroll with overflow:visible; it is not an ordinary
+      // overflow:auto element. A visible grid still needs a verified owner.
+      if (candidate) scores.set(candidate, (scores.get(candidate) || 0) + 1);
+    }
+    owner = [...scores].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+    window.__mszRoomScroll = owner;
+  }
+  let scroll = null;
+  if (owner) {
+    const isRoot = owner === document.scrollingElement;
+    const height = isRoot ? innerHeight : owner.clientHeight;
+    const r = owner.getBoundingClientRect();
+    let top = isRoot ? 0 : Math.max(0, r.top + owner.clientTop);
+    let bottom = isRoot ? innerHeight : Math.min(innerHeight, r.top + owner.clientTop + height);
+    for (let p = isRoot ? null : owner.parentElement; p; p = p.parentElement) {
+      if (/auto|scroll|hidden|clip/.test(getComputedStyle(p).overflowY)) {
+        const pr = p.getBoundingClientRect();
+        top = Math.max(top, pr.top + p.clientTop);
+        bottom = Math.min(bottom, pr.top + p.clientTop + p.clientHeight);
+      }
+    }
+    const viewHeight = Math.max(0, Math.min(height, bottom - top));
+    const blocked = !isRoot && /hidden|clip/.test(getComputedStyle(owner).overflowY);
+    if (action === 'reset') owner.scrollTop = 0;
+    if (action === 'next' && viewHeight > 0) owner.scrollTop += Math.max(1, Math.floor(viewHeight * .8));
+    scroll = {top: owner.scrollTop, height, scrollHeight: owner.scrollHeight,
+              viewHeight, rowHeight, blocked};
+  }
+  const names = (""" + JS_LIST_ROOMS + """)();
+  const busy = [...document.querySelectorAll('[aria-busy="true"]')].some(shown);
+  return {names, scroll, busy};
 }"""
 
 JS_CLICK_BUTTON = """(t) => {
@@ -483,8 +558,9 @@ class Booker:
         self.sleep(2)
 
     def prepare(self, date_slash, exclude=(), retry=False):
-        """打开页面、填表、选第一间可用的会议室。返回会议室名，全满返回 None。"""
+        """返回选中的会议室；未选到返回 None，原因由 selection_failure() 区分。"""
         cfg = self.cfg
+        self.room_checks = []
         total_min = int(cfg["时长小时"]) * 60 + int(cfg["时长分钟"])
         if retry:
             self.open_page(retry=True)
@@ -494,8 +570,11 @@ class Booker:
         self.open_room_dialog(date_slash)
         for room in cfg["优先会议室"]:
             if room in exclude:
+                # Only the runner's confirmed booking conflicts enter exclude.
+                self.room_checks.append((room, "taken"))
                 continue
             st, y, xs = self.check_room(room, cfg["开始时间"], total_min)
+            self.room_checks.append((room, st))
             if st == "free":
                 self.log(f"选中会议室：{room}（{len(xs)} 个半小时格子都空闲）")
                 self.pick_cells(xs, y)
@@ -507,7 +586,94 @@ class Booker:
                 return room
             reason = {"taken": "该时段已被占用", "missing": "弹窗里没找到这间", "nogrid": "没定位到时段格子"}[st]
             self.log(f"跳过 {room}：{reason}")
+            if st in ("missing", "nogrid"):
+                self.log_room_diagnostic(room, st, date_slash)
         return None
+
+    def selection_failure(self):
+        checks = getattr(self, "room_checks", [])
+        if checks and all(state == "taken" for _, state in checks):
+            return "满员", "优先列表全部被占"
+        reasons = {"missing": "未找到房间", "nogrid": "未定位到时段格子"}
+        detail = "；".join(f"{room}：{reasons.get(state, '状态未确认')}"
+                          for room, state in checks if state != "taken")
+        return "错误", "会议室识别未完成：" + (detail or "没有可检查的优先会议室") + "。请查看运行日志。"
+
+    def log_room_diagnostic(self, room, reason, date_slash):
+        data = {"room": room[:120], "reason": reason, "expectedDate": date_slash,
+                "start": self.cfg["开始时间"]}
+        try:
+            probe = self.page.evaluate(JS_ROOM_DIAGNOSTICS, room)
+            # The allowlist also protects against unexpected page/plugin results.
+            for key in ("labelMatches", "leafMatches", "visibleMatches"):
+                value = probe.get(key)
+                if type(value) is int and 0 <= value <= 100000:
+                    data[key] = value
+            if probe.get("readyState") in ("loading", "interactive", "complete"):
+                data["readyState"] = probe["readyState"]
+            if probe.get("activeRoomTab") in ("可用会议室", "全部会议室", "我的收藏"):
+                data["activeRoomTab"] = probe["activeRoomTab"]
+            value = probe.get("formDate")
+            if isinstance(value, str) and len(value) <= 10:
+                try:
+                    datetime.strptime(value.replace("-", "/"), "%Y/%m/%d")
+                    data["formDate"] = value
+                except ValueError:
+                    pass
+        except Exception:
+            data["probeUnavailable"] = True
+        self.log("[会议室诊断] " + json.dumps(data, ensure_ascii=False), "warn")
+
+    def _wait_room_snapshot(self, deadline, previous=None):
+        last, since = None, time.monotonic()
+        while time.monotonic() < deadline:
+            if self.stop.is_set():
+                raise StopRequested()
+            state = self.page.evaluate(JS_ROOM_SCROLL, "snapshot")
+            key = json.dumps(state, sort_keys=True, ensure_ascii=False)
+            if key != last:
+                last, since = key, time.monotonic()
+            scroll = state.get("scroll")
+            stale = False
+            if previous and scroll and previous.get("scroll"):
+                delta = abs(scroll["top"] - previous["scroll"]["top"])
+                stale = delta >= scroll["rowHeight"] and state["names"] == previous["names"]
+            if (state["names"] and not state["busy"] and not stale
+                    and (not scroll or scroll["viewHeight"] > 0)
+                    and time.monotonic() - since >= 0.8):
+                return state
+            self.sleep_real(0.15)
+        raise RuntimeError("会议室读取未完成：页面仍在加载或列表没有稳定，请确认页面后重试")
+
+    def list_rooms(self):
+        deadline = time.monotonic() + 30
+        if self.stop.is_set():
+            raise StopRequested()
+        self.page.evaluate(JS_ROOM_SCROLL, "reset")
+        state = self._wait_room_snapshot(deadline)
+        # The list may only have mounted after the initial reset.
+        if state.get("scroll") and state["scroll"]["top"] > 0:
+            self.page.evaluate(JS_ROOM_SCROLL, "reset")
+            state = self._wait_room_snapshot(deadline)
+        names, seen = [], set()
+        for _ in range(120):
+            for name in state["names"]:
+                if name not in seen:
+                    names.append(name)
+                    seen.add(name)
+            scroll = state.get("scroll")
+            if not scroll:
+                raise RuntimeError("会议室读取未完成：无法确认列表滚动区域，请确认页面后重试")
+            if scroll.get("blocked") or scroll["viewHeight"] + 1 < scroll["height"]:
+                raise RuntimeError("会议室读取未完成：列表被窗口或外层区域裁剪，请展开完整列表后重试")
+            if scroll["top"] + scroll["height"] >= scroll["scrollHeight"] - 1:
+                return names
+            self.page.evaluate(JS_ROOM_SCROLL, "next")
+            following = self._wait_room_snapshot(deadline, state)
+            if not following.get("scroll") or following["scroll"]["top"] <= scroll["top"]:
+                raise RuntimeError("会议室读取未完成：列表未能继续滚动，请确认页面后重试")
+            state = following
+        raise RuntimeError("会议室读取未完成：列表超出本次读取范围，请缩小网页筛选范围")
 
     # ---------- 提交 ----------
     def submit(self, open_at, max_retries, interval_ms, tag):
@@ -576,22 +742,14 @@ def interactive_login(cfg, log, stop_event, timeout=600):
 
 
 def read_rooms(cfg, log, stop_event, date_slash):
-    """打开会议室弹窗，读出页面上列出的会议室名（会上下滚动几次把下面的也读到）。"""
+    """从列表顶部逐屏读取；未到稳定的底部不把部分名单当成成功。"""
     b = Booker(cfg, log, stop_event, None)
     try:
         b.launch()
         b.open_page()
         b.fill_form(cfg["主题"], date_slash, cfg["开始时间"], cfg["时长小时"], cfg["时长分钟"])
         b.open_room_dialog(date_slash)
-        names = []
-        for i in range(12):
-            new = [n for n in b.page.evaluate(JS_LIST_ROOMS) if n not in names]
-            names += new
-            if i and not new:
-                break
-            b.page.mouse.move(700, 520)
-            b.page.mouse.wheel(0, 400)
-            b.sleep(0.6)
+        names = b.list_rooms()
         b.shot("rooms_read")
         log(f"从页面读到 {len(names)} 间会议室" + ("" if names else "（没认出来，截图在 screenshots/rooms_read.png）"),
             "ok" if names else "warn")

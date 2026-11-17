@@ -18,9 +18,12 @@ const NOTIFY_MODES = Object.freeze(['pet', 'popup', 'off']);
 const URGENT_KINDS = new Set(['reminder', 'hub-reminder', 'commitment-due', 'welink-login', 'attendance', 'disk']);
 const isUrgentNotice = n => !!n && (n.tone === 'bad' || URGENT_KINDS.has(String(n.kind || '')) || URGENT_KINDS.has(String(n.noticeKind || '')));
 
+const CLICK_MODES = Object.freeze(['play', 'open']);
 const OPT_IN_V = 1;
 function defaults() {
-  return { enabled: false, role: '01-cat', mode: 'gentle', position: null, quietUntil: 0, silentDate: '', peekOnFullscreen: true, notifyMode: 'pet', followSessions: true, showGrowth: true, introduced: false, scale: 1, bodyBoxes: {}, petName: '', talkPrefs: normalizePrefs(null), talkRecent: [] };
+  return { enabled: false, role: '01-cat', mode: 'gentle', position: null, quietUntil: 0, silentDate: '', peekOnFullscreen: true, notifyMode: 'pet', followSessions: true, showGrowth: true, introduced: false, scale: 1, bodyBoxes: {}, petName: '', talkPrefs: normalizePrefs(null), talkRecent: [],
+    // 2026-11-17 r27f：单击＝逗它（play，双击才打开助理）或旧习惯单击打开（open）；第一次单击提示过没有；偶尔在任务栏上走动。
+    clickMode: 'play', clickHinted: false, walk: true };
 }
 
 // 大小（2026-10-18）：身体是原大小的 0.6–1.6 倍，按 0.01 取整。认数字和「数字样子的字符串」（手改文件时常见），
@@ -55,6 +58,9 @@ function normalize(raw, base, roleOk = builtinRole) {
   // 2026-11-12：身上显示等级与解锁的特效（来自「个人」页）；第一次出来时的自我介绍说过没有。
   if (typeof raw.showGrowth === 'boolean') out.showGrowth = raw.showGrowth;
   if (typeof raw.introduced === 'boolean') out.introduced = raw.introduced;
+  if (CLICK_MODES.includes(raw.clickMode)) out.clickMode = raw.clickMode;
+  if (typeof raw.clickHinted === 'boolean') out.clickHinted = raw.clickHinted;
+  if (typeof raw.walk === 'boolean') out.walk = raw.walk;
   const scale = parseScale(raw.scale);
   if (scale != null) out.scale = scale;
   // 2026-11-17 r27g：桌宠的名字（空串＝不起名）、对各类闲聊的回应次数、最近说过的句子（短期内不重复）。
@@ -117,4 +123,4 @@ function createSettingsStore({ dataDir, company = false, logger = console, roleO
   };
 }
 
-module.exports = { FILE, NOTIFY_MODES, SCALE_MAX, SCALE_MIN, createSettingsStore, defaults, isUrgentNotice, normalize, parseBox, parseScale };
+module.exports = { CLICK_MODES, FILE, NOTIFY_MODES, SCALE_MAX, SCALE_MIN, createSettingsStore, defaults, isUrgentNotice, normalize, parseBox, parseScale };

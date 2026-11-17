@@ -14,7 +14,7 @@
 .hub-err-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .hub-err-btn { height: 28px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--border-subtle, rgba(24,36,49,.16));
   background: transparent; color: var(--fg-strong, inherit); font: inherit; font-size: 12px; cursor: pointer; }
-.hub-err-btn.primary { background: var(--hw-brand, var(--brand, #0a59f7)); border-color: transparent; color: #fff; }
+.hub-err-btn.primary { background: var(--hw-brand, var(--brand, #0a59f7)); border-color: transparent; color: var(--hw-text-on, #fff); }
 .hub-err-btn:hover { border-color: var(--hw-brand, var(--brand, #0a59f7)); }
 .hub-err-btn:focus-visible, .hub-err-assist-btn:focus-visible, .hub-err-copy:focus-visible { outline: 2px solid var(--hw-brand, #0a59f7); outline-offset: 1px; }
 .hub-err-details { margin-top: 8px; font-size: 12px; color: var(--fg-muted, #5e6d7e); }
@@ -42,6 +42,7 @@
 /* 嵌在现有提示里的位置 */
 .hub-dialog .hub-err-assist-host { position: absolute; top: 14px; right: 14px; }
 .hub-dialog[data-hub-err-hover] { position: relative; }
+.hub-dialog-feedback-required .hub-err-assist { opacity: 1; }
 .turn-error-help { position: relative; }
 .turn-error-help .teh-title { padding-right: 168px; }
 .turn-error-help > .hub-err-assist-host { position: absolute; top: 8px; right: 8px; }

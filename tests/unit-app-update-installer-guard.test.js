@@ -98,3 +98,20 @@ test('完整安装包：后台查到自动下载，退出时静默安装且不�
   assert.deepEqual(calls[0].args, ['/S', '--updated', '/currentuser']);
   assert.equal(calls[0].opts.windowsHide, true);
 });
+
+// r34a：安装包脚本最小修复。原版「当前用户安装目录」宏在部分电脑上读越界崩溃（System.dll 0xc0000005），这里核对替换确实接上，且只换了这一处。
+test('安装包脚本：只替换当前用户安装目录宏、不再调用 SHGetKnownFolderPath、仍认 /D', () => {
+  const root = path.join(__dirname, '..');
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  assert.equal(pkg.build.nsis.include, 'build/installer.nsh');
+  const main = fs.readFileSync(path.join(root, 'build', 'installer.nsh'), 'utf8');
+  assert.match(main, /!macro customHeader[\s\S]*!macroundef setInstallModePerUser[\s\S]*!include "hub-peruser-install-mode\.nsh"/);
+  const macros = [...main.matchAll(/^!macro\s+(\S+)/gm)].map(m => m[1]);
+  assert.deepEqual(macros, ['customHeader'], '最小修复只定义 customHeader，不改安装、检查进程等其他默认行为');
+  const fix = fs.readFileSync(path.join(root, 'build', 'hub-peruser-install-mode.nsh'), 'utf8');
+  const code = fix.replace(/^\s*;.*$/gm, '');
+  assert.match(code, /!macro setInstallModePerUser/);
+  assert.doesNotMatch(code, /System::Call|SHGetKnownFolderPath/);
+  assert.match(code, /ReadRegStr \$perUserInstallationFolder HKCU/, '仍沿用上次的当前用户安装目录');
+  assert.match(code, /GetDParameter/, '仍认 /D');
+});

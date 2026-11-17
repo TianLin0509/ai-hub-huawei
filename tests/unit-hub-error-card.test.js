@@ -254,9 +254,20 @@ test('一键反馈：预填功能区、现象和原始报错；没有反馈入�
 });
 
 test('错误弹窗：只有失败、报错类才挂求助按钮', () => {
+  assert.equal(isErrorNotice('公司模型暂时用不了：CodeAgent 未收到签名初始化所需的测试输入', {}, {}), true);
   assert.equal(isErrorNotice('会话恢复失败：ENOENT', {}, {}), true);
   assert.equal(isErrorNotice('已保存', { detail: 'stack' }, {}), true);
   assert.equal(isErrorNotice('请先选择一个目录', {}, {}), false);
   assert.equal(isErrorNotice('原 Hub 仍持有写入权，失败', {}, { icon: 'lock' }), false);
   assert.equal(isErrorNotice('失败', { assist: false }, {}), false);
+});
+
+test('签名初始化错误在弹窗及会话提示里提供原有重启入口，进程清理未确认时不诱导重启', () => {
+  for (const area of ['hub-alert', 'notice']) {
+    for (const details of ['公司模型暂时用不了：首次签名初始化没完成（签名日志没有生成）',
+      '公司模型暂时用不了：CodeAgent 未收到签名初始化所需的测试输入，在生成签名日志前退出了。']) {
+      assert.match(card.knownHtml({ area, details }), /data-hub-err-act="known:proxy-restart">重新启动反代/);
+    }
+    assert.equal(card.knownHtml({ area, details: 'CodeAgent 未收到签名初始化所需的测试输入。后台进程还没确认结束，Hub 已停止重试' }), '');
+  }
 });

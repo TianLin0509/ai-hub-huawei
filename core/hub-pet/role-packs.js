@@ -42,7 +42,16 @@ function validateMeta(raw) {
   const poses = list(raw?.poses, x => POSE_NAMES.has(x));
   const sequences = list(raw?.sequences || [], x => FILE.test('seq-' + x + '.webp'));
   if (!poses || !poses.includes('idle') || !sequences) throw new Error('形象包的姿态清单无效');
-  const out = { ...raw, poses, sequences };
+  // clipped：5×5 序列图里不播的帧（2026-11-17 r27h 下载形象补帧起用）。只认包里有的序列、0–24 的帧号，别的一律不收。
+  const clipped = {};
+  if (raw?.clipped != null) {
+    if (typeof raw.clipped !== 'object' || Array.isArray(raw.clipped)) throw new Error('形象包的裁切帧清单无效');
+    for (const [name, frames] of Object.entries(raw.clipped)) {
+      if (!sequences.includes(name) || !Array.isArray(frames) || frames.length > 25 || !frames.every(f => Number.isInteger(f) && f >= 0 && f <= 24)) throw new Error('形象包的裁切帧清单无效');
+      clipped[name] = [...new Set(frames)];
+    }
+  }
+  const out = { ...raw, poses, sequences, clipped };
   return JSON.parse(JSON.stringify(out));
 }
 
@@ -125,6 +134,8 @@ function createRolePackStore({ assetsDir, dataDir, sources = SOURCES, fetchImpl 
   const installed = id => !!source(id);
   function meta(id) { return source(id)?.meta || null; }
   function assetBase(id) { return source(id)?.assetBase || null; }
+  // 下载形象的包版本（自带形象为 null）。同一形象更新后版本变了，桌宠窗口据此换图、重新量轮廓（r27i 审查第 2 项）。
+  function version(id) { const src = source(id); return src && src.kind === 'downloaded' ? src.version : null; }
 
   function listRoles() {
     const ids = new Map(ROLES.map(r => [r.id, r.name]));
@@ -134,7 +145,7 @@ function createRolePackStore({ assetsDir, dataDir, sources = SOURCES, fetchImpl 
       const src = source(id);
       const entry = catalog?.packs.find(p => p.id === id) || null;
       const thumb = path.join(assetsDir, 'thumbs', id + '.webp');
-      const preview = src ? src.assetBase + 'idle.webp' : fs.existsSync(thumb) ? `../assets/hub-pet/thumbs/${id}.webp` : null;
+      const preview = src ? src.assetBase + 'idle.webp' + (src.kind === 'downloaded' ? '?v=' + encodeURIComponent(src.version) : '') : fs.existsSync(thumb) ? `../assets/hub-pet/thumbs/${id}.webp` : null;
       const update = !!(src && src.kind === 'downloaded' && entry && compareVersion(entry.version, src.version) > 0);
       return {
         id, name: src?.name || name, bundled: src?.kind === 'bundled', installed: !!src, version: src?.version || (src?.kind === 'bundled' ? 'bundled' : null),
@@ -208,7 +219,7 @@ function createRolePackStore({ assetsDir, dataDir, sources = SOURCES, fetchImpl 
     return downloading;
   }
 
-  return { snapshot, listRoles, check, download, install, installed, meta, assetBase, cancel: () => abort?.abort(), root };
+  return { snapshot, listRoles, check, download, install, installed, meta, assetBase, version, cancel: () => abort?.abort(), root };
 }
 
 module.exports = { DEFAULT_ROLE, FILE, MAX_PACK_BYTES, SOURCES, isWebp, validateCatalog, validateMeta, validatePack, createRolePackStore };

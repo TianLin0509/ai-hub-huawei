@@ -6,14 +6,32 @@ document after a failed booking before selecting another room, recognizes both
 spellings of the booked-room response, retries short Windows status-file locks,
 and includes the configurable advance-days adapter. The successful first-choice
 path keeps the original 8-second preparation floor and opening-time submission.
-`hub_control.py`, `engine.py` and `jobs.py` are the readable overlay sources.
-The latter two were extracted unchanged from signed 2.1.2 before the focused fix.
-`scripts/build-room-control.py`
-reproducibly combines it with the official 2.1.1 package supplied via `--base`
-(renaming the original adapter to `hub_control_base.py`) and signs
-`msz-code-2.1.3.zip` locally with the release key supplied via `--key`.
-The old package and private release key are external build inputs, not bundled
-in this repository. Ordinary application builds reuse the signed 2.1.3 asset.
+The current signed 2.1.3 package was built from the official 2.1.1 base,
+retaining its adapter as `hub_control_base.py`. Ordinary Hub builds use the
+signed ZIP named in `control.json`; readable sources are not loaded directly.
+
+2026-11-16: `engine.py` and `jobs.py` now contain reviewable fixes for skipped
+room-list rows and detection failures incorrectly reported as all rooms taken.
+The first-booking "room missing" cause still needs real-page evidence; bounded
+diagnostics are emitted only on detection failure. **These source fixes are not
+in the existing signed 2.1.3 package.** Source tests do not activate them in Hub.
+`scripts/build-room-control.py` pins the SHA-256 of that existing package, retains
+all other modules, overlays the three readable sources, and signs a new component
+(default 2.1.4) using the existing release key on the authorized signing machine:
+
+```powershell
+python tests/room-booking-engine-test.py
+python tests/room-component-build-test.py
+python scripts/build-room-control.py --key <local-release-key-path> --version 2.1.4
+python scripts/build-room-control.py --check
+```
+
+Before signing, `--check` exits 2 and names the pending sources. After signing,
+it must exit 0 with `ok: true`; it verifies the signature, package size/hash and
+source parity. A separate `--out <directory>` can stage both generated files;
+check it with `--check --out <directory>`. Keep the 2.1.3 base for reproducibility
+and tests. Only the new signed ZIP and `control.json` go through release review;
+the private key stays on the signing machine and is never bundled or transferred.
 No network publishing is performed, no private key is included, and shell 2.1.0
 is unchanged. History, logs, login state, room discovery, once booking and post
 actions are supplied by the original Python process. Settings are saved only

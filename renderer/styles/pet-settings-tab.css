@@ -66,3 +66,8 @@
 .pet-tab-pair{align-items:center}
 .pet-tab-name{width:110px;height:28px;box-sizing:border-box;padding:0 8px;border:1px solid #dfe3ea;border-radius:7px;background:#fff;color:#1b2942;font:inherit;font-size:13px}
 .pet-tab-name:focus{outline:none;border-color:#3478f6}
+/* r27f2：「名字」和「暂时别说话」并成一行两半时，名字框固定窄宽（压过助理页输入框 220px 的最小宽度），左边说明至少留 120px 不被挤成一列。 */
+.pet-tab-half .pet-tab-name,.ca-settings .pet-tab-half input.pet-tab-name{width:96px;min-width:0}
+.pet-tab-half>div:first-child{flex:1 1 120px;min-width:120px}
+.pet-tab-half>.pet-tab-pair{flex:none}
+.pet-tab-half.pet-tab-wide{flex:1.5}

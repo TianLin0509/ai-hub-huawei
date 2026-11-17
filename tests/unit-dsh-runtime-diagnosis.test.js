@@ -67,6 +67,24 @@ test('只装了 DSH 桌面版：认出桌面版，并明确说桌面版不是终
   assert.match(html, /一键安装终端版/);
 });
 
+test('桌面版错误卡在短路径及超过 80 字符的空格、中文长路径下都提供安装按钮', () => {
+  const dirs = ['D:\\DSH',
+    'C:\\Users\\' + 'Long Profile Name '.repeat(8) + '\\AppData\\Local\\Programs\\DeepSeek Harness',
+    'D:\\研发项目\\' + '较长的安装目录\\'.repeat(20) + 'DeepSeek Harness'];
+  for (const dir of dirs) {
+    const details = profile.describeRuntimeIssue({ state: 'desktop-only', desktop: { dir } });
+    const known = require('../core/known-issues').matchKnownIssue({ area: 'session-create', details });
+    assert.ok(known, `desktop error must match at path length ${dir.length}`);
+    assert.equal(known.id, 'dsh-package-mismatch');
+    assert.equal(known.title, '装的是 DSH 桌面版，Hub 要用终端版');
+    assert.equal(known.action.act, 'known:dsh-repair');
+    const html = require('../renderer/hub-error-card').html({ area: 'session-create', details });
+    assert.match(html, /data-hub-err-act="known:dsh-repair"/);
+    assert.match(html, /data-hub-err-act="known:dsh-repair-global"/);
+    assert.match(html, /一键安装终端版/);
+  }
+});
+
 test('桌面版注册到 PATH 的 dsh 命令（resources\\runtime\\cli）也认作桌面版，不当成终端版', t => {
   const f = fixture(t);
   const cli = path.dirname(f.put('Apps/DSH/resources/runtime/cli/bin/dsh.cmd', '@echo off'));

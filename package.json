@@ -1,6 +1,6 @@
 {
   "name": "ai-hub-community",
-  "version": "5.6.43",
+  "version": "5.6.44",
   "description": "Local multi-agent desktop workspace using your own AI accounts",
   "main": "main-bootstrap.js",
   "scripts": {
@@ -57,6 +57,7 @@
       "createDesktopShortcut": true,
       "artifactName": "AIHubHuawei-Setup-${version}.${ext}",
       "differentialPackage": false,
+      "include": "build/installer.nsh",
       "shortcutName": "AI Hub",
       "uninstallDisplayName": "AI HUB-Huawei ${version}"
     },

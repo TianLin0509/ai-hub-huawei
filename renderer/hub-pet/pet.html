@@ -29,6 +29,12 @@
     </form>
     <div id="bubble" class="bubble" data-hit="bubble" hidden><div class="bubble-line"><span id="bubble-kind" class="bubble-kind" hidden></span><span id="bubble-text"></span></div><div id="bubble-chips" class="bubble-chips" hidden></div></div>
     <button type="button" id="dot" class="dot" data-hit="dot" hidden aria-label="未读提醒"></button>
+    <!-- 悬停快捷钮（2026-11-17 r27f）：鼠标在身上停半秒冒出，问＝问助理、信＝没看的消息、摸＝摸摸它 -->
+    <div id="quick" class="quick" data-hit="quick" hidden>
+      <button type="button" data-q="ask" title="问助理一句">问</button>
+      <button type="button" data-q="inbox" title="看没看的消息">信<i id="quick-n" hidden></i></button>
+      <button type="button" data-q="pet" title="摸摸它">摸</button>
+    </div>
     <div id="busy" class="busy" hidden><i></i><span id="busy-text"></span></div>
     <!-- 会话状态灯（2026-11-17 r27c）：每个会话一盏，转圈=在跑、绿=答完、橙=出错；点灯直达会话，超过 6 盏合并成数字 -->
     <div id="lamps" class="lamps" data-hit="lamp" hidden></div>

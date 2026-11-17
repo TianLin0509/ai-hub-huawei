@@ -103,6 +103,93 @@ test('both failed attempts retain separate sanitized CLI and host stderr facts, 
   for (const raw of ['Fixture', 'Person', '123456789', 'q'.repeat(40)]) assert.equal(serialized.includes(raw), false, raw);
 });
 
+test('no-log retry supplies argv input and skips scratch cwd safety prompts without changing the first launch', async t => {
+  const { probeNativeStamp } = await load();
+  const inputs = [];
+  const fake = launcher([{ exitCode: 1, stderr: 'Input must be provided either through stdin or as a prompt argument when using --print' },
+    { log: true, hang: true }]);
+  const result = await probeNativeStamp({ cliExe: 'C:\\X\\codeagentcli.exe', expectedVersion: '9.1.2', workRoot: temp(t), env: {},
+    pollMs: 5, timeoutMs: 150, spawnImpl(command, args, options) {
+      if (options?.env?.HUB_STAMP_ARGS) inputs.push({ args: options.env.HUB_STAMP_ARGS,
+        stdin: fs.readFileSync(options.env.HUB_STAMP_IN, 'utf8'), cwd: options.env.HUB_STAMP_CWD,
+        settings: JSON.parse(fs.readFileSync(path.join(options.env.HUB_STAMP_CWD, '..', 'settings.json'), 'utf8')) });
+      return fake.spawn(command, args, options);
+    } });
+  assert.equal(result.ok, true);
+  assert.equal(inputs.length, 2);
+  assert.match(inputs[0].stdin, /^Reply with exactly STAMP_[a-f0-9]+ and nothing else/);
+  assert.doesNotMatch(inputs[0].args, /STAMP_|--skip-safe-check/);
+  assert.equal(inputs[1].stdin, '', 'stdin cannot duplicate or consume the retry prompt');
+  assert.match(inputs[1].args, /--skip-safe-check "Reply with exactly STAMP_[a-f0-9]+ and nothing else\. Do not use tools\."$/);
+  assert.match(inputs[1].args, /--tools "" --strict-mcp-config/);
+  assert.equal(path.basename(inputs[1].cwd), 'cwd');
+  assert.notEqual(inputs[0].cwd, inputs[1].cwd);
+  assert.deepEqual(inputs[1].settings, {});
+  assert.equal(result.report.attempts[0].error, 'CLI_INPUT_MISSING');
+  assert.doesNotMatch(JSON.stringify(result.report), /STAMP_[a-f0-9]+/);
+});
+
+test('missing --print input is explained as input delivery failure without guessing a login failure', async t => {
+  const { probeNativeStamp } = await load();
+  const missing = 'Error: Input must be provided either through stdin or as a prompt argument when using --print';
+  const fake = launcher([{ exitCode: 1, stderr: missing }, { exitCode: 1, stderr: missing }]);
+  const result = await probeNativeStamp({ cliExe: 'C:\\X\\codeagentcli.exe', expectedVersion: '9.1.2', workRoot: temp(t),
+    env: {}, spawnImpl: fake.spawn, pollMs: 5, timeoutMs: 150 });
+  assert.equal(result.ok, false);
+  assert.equal(result.report.error, 'CLI_INPUT_MISSING');
+  const { signerInitFailureMessage } = await import(pathToFileURL(path.join(__dirname, '../core/company-proxy/upstream-profile.mjs')).href);
+  const message = signerInitFailureMessage('SIGNER_INIT_NO_STAMP', { detail: result.report.error, report: result.report });
+  assert.match(message, /未收到.*测试输入/);
+  assert.doesNotMatch(message, /重新启动反代/);
+  assert.match(message, /直接点「一键反馈」/);
+  assert.match(message, /一键反馈/);
+  assert.doesNotMatch(message, /已登录|登录过期|确认 CodeAgent/);
+  const blocked = signerInitFailureMessage('SIGNER_INIT_NO_STAMP', { detail: 'CLI_INPUT_MISSING',
+    report: { retrySuppressed: 'cleanup-unconfirmed' } });
+  assert.match(blocked, /后台进程还没确认结束.*停止重试/);
+  assert.doesNotMatch(blocked, /已尝试通过命令行参数补发输入|重新启动反代/);
+});
+
+test('no-log retry leaves existing CodeAgent config, root trust and credentials unchanged', async t => {
+  const { probeNativeStamp } = await load();
+  const root = temp(t), configDir = path.join(root, 'config'), home = path.join(root, 'home');
+  for (const dir of [configDir, home]) {
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, '.cac.json'), JSON.stringify({ other: 'keep', projects: { 'C:/existing': { hasTrustDialogAccepted: false } } }));
+  }
+  const credential = path.join(configDir, '.credentials.json'); fs.writeFileSync(credential, 'fixture-auth-untouched');
+  const observed = [];
+  const fake = launcher([{ exitCode: 1 }, { log: true, hang: true }]);
+  const result = await probeNativeStamp({ cliExe: 'C:\\X\\codeagentcli.exe', configDir, expectedVersion: '9.1.2', workRoot: root,
+    env: { USERPROFILE: home }, pollMs: 5, timeoutMs: 150, spawnImpl(command, args, options) {
+      if (options?.env?.HUB_STAMP_ARGS) observed.push({ cwd: options.env.HUB_STAMP_CWD,
+        states: [configDir, home].map(dir => JSON.parse(fs.readFileSync(path.join(dir, '.cac.json'), 'utf8'))) });
+      return fake.spawn(command, args, options);
+    } });
+  assert.equal(result.ok, true); assert.equal(observed.length, 2);
+  for (const attempt of observed) for (const state of attempt.states) {
+    assert.equal(state.other, 'keep'); assert.equal(state.projects['C:/existing'].hasTrustDialogAccepted, false);
+    assert.deepEqual(Object.keys(state.projects), ['C:/existing'], 'no probe cwd is added to either trust store');
+  }
+  assert.equal(fs.readFileSync(credential, 'utf8'), 'fixture-auth-untouched');
+});
+
+test('production signer failure messages keep restart protection synchronized with known-issue matching', async () => {
+  const { signerInitFailureMessage } = await import(pathToFileURL(path.join(__dirname, '../core/company-proxy/upstream-profile.mjs')).href);
+  const { matchKnownIssue } = require('../core/known-issues');
+  for (const report of [{ retried: true }, { retrySuppressed: 'cleanup-unconfirmed' }]) {
+    const message = signerInitFailureMessage('SIGNER_INIT_NO_STAMP', { detail: 'CLI_INPUT_MISSING', report });
+    assert.equal(matchKnownIssue({ area: 'notice', details: message }), null, message);
+    assert.doesNotMatch(message, /重新启动反代/);
+    assert.match(message, /一键反馈/);
+  }
+  const ordinary = signerInitFailureMessage('SIGNER_INIT_NO_STAMP', { detail: 'CLI_INPUT_MISSING', report: {} });
+  assert.equal(matchKnownIssue({ area: 'notice', details: ordinary })?.action?.act, 'known:proxy-restart');
+  const genericBlocked = signerInitFailureMessage('SIGNER_INIT_NO_STAMP', { detail: 'LOG_MISSING',
+    report: { retrySuppressed: 'cleanup-unconfirmed' } });
+  assert.equal(matchKnownIssue({ area: 'notice', details: genericBlocked }), null);
+});
+
 test('logs, explicit non-private tests and private desktop startup failure never activate the retry', async t => {
   const { probeNativeStamp } = await load();
   for (const scenario of [{ log: 'unrecognized signer output\n' }, { mode: 'hidden-console' }, { startFailed: true }]) {

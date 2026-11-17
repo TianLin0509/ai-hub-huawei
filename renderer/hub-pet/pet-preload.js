@@ -26,6 +26,10 @@ contextBridge.exposeInMainWorld('hubPet', {
   askClose: () => ipcRenderer.send('hub-pet:ask-close'),
   // 2026-11-17 r27c：点会话状态灯直达那个会话。
   openSession: (id) => ipcRenderer.send('hub-pet:open-session', String(id || '').slice(0, 160)),
+  // 2026-11-17 r27f：悬停快捷钮（问 / 信 / 摸）、系统偏好（减少动态效果）、鼠标靠近。
+  quick: (type) => ipcRenderer.send('hub-pet:quick', String(type || '').slice(0, 12)),
+  prefs: (p) => ipcRenderer.send('hub-pet:prefs', { reducedMotion: !!(p && p.reducedMotion) }),
+  onNear: (fn) => on('hub-pet:near', fn),
   onAskOpen: (fn) => on('hub-pet:ask-open', fn),
   onAskResult: (fn) => on('hub-pet:ask-result', fn),
   onState: (fn) => on('hub-pet:state', fn),

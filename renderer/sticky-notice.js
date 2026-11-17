@@ -56,7 +56,7 @@ function showStickyNotice(document, message, level = 'warning', options = {}) {
   item.setAttribute('role', level === 'error' ? 'alert' : 'status');
   Object.assign(item.style, {
     display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '12px 12px 12px 14px', borderRadius: '10px',
-    background: 'var(--hw-surface-1, #ffffff)', color: 'var(--hw-text-1, #182431)',
+    background: 'var(--hw-surface, #ffffff)', color: 'var(--hw-text-1, #182431)',
     borderLeft: `4px solid ${level === 'error' ? 'var(--hw-red, #d63b3b)' : 'var(--hw-amber, #e8780c)'}`,
     boxShadow: '0 8px 28px rgba(0,0,0,.18)', font: '13px/1.55 "Microsoft YaHei", "Segoe UI", sans-serif',
   });
@@ -70,7 +70,7 @@ function showStickyNotice(document, message, level = 'warning', options = {}) {
   close.textContent = '知道了';
   close.title = '关闭这条提示';
   Object.assign(close.style, {
-    flex: 'none', border: '1px solid var(--hw-border, #d5dae0)', borderRadius: '6px', background: 'transparent',
+    flex: 'none', border: '1px solid var(--hw-line, #d5dae0)', borderRadius: '6px', background: 'transparent',
     color: 'var(--hw-text-2, #58626d)', font: 'inherit', fontSize: '12px', padding: '2px 8px', cursor: 'pointer',
   });
   close.addEventListener('click', () => {
