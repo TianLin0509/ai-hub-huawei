@@ -58,10 +58,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "公司模型「首次签名初始化没完成」：重试时补上输入并越过 CodeAgent 安全确认；深色主题下提示卡文字看得清，出错时就地给重启或反馈按钮",
-    "x"
+    "安装包改用新版打包工具，公司电脑上手动双击安装偶发闪退的问题根治"
   ],
-  "version": "5.6.44",
+  "version": "5.6.45",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

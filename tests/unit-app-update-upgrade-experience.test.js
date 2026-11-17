@@ -403,8 +403,11 @@ for (const mode of ['cancel', 'plain']) {
     assert.equal(sidResult.status, 0, sidResult.stderr);
     const sid = sidResult.stdout.trim().split(',').pop().replace(/"/g, '');
     const resources = path.dirname(k.asar);
-    // 只限制本用例的临时安装目录；清理前恢复，不改用户或生产目录权限。
-    const acl = spawnSync('icacls.exe', [resources, '/inheritance:r', '/grant:r', '*S-1-5-32-544:(OI)(CI)F', '*S-1-5-18:(OI)(CI)F', `*${sid}:(OI)(CI)RX`, '/Q'], { windowsHide: true, encoding: 'utf8' });
+    // 显式拒绝当前用户写入：只授予 RX 不能抵消管理员组等其他有效组的 F，
+    // CI 以管理员身份运行时仍可能可写。只限制本用例临时目录，清理前恢复。
+    // 拒绝写数据/追加（在目录上对应创建文件/子目录），保留读取及清理所需的权限。
+    // 本用户也授予 F，保证普通权限运行时也会回归验证「拒绝覆盖允许」。
+    const acl = spawnSync('icacls.exe', [resources, '/inheritance:r', '/grant:r', '*S-1-5-32-544:(OI)(CI)F', '*S-1-5-18:(OI)(CI)F', `*${sid}:(OI)(CI)F`, '/deny', `*${sid}:(OI)(CI)(WD,AD)`, '/Q'], { windowsHide: true, encoding: 'utf8' });
     try {
       assert.equal(acl.status, 0, acl.stdout + acl.stderr);
       assert.throws(() => fs.writeFileSync(path.join(resources, 'probe.tmp'), 'x'), /EPERM|EACCES/);
