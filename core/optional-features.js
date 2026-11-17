@@ -22,16 +22,20 @@ const CATALOG = Object.freeze({
 function createOptionalFeatures({ dataDir, logger = console, defaults = {} } = {}) {
   const file = path.join(dataDir, FILE);
   let value = { assistant: defaults.assistant === true, forum: defaults.forum === true, attendance: defaults.attendance === true, w3: defaults.w3 === true, tray: defaults.tray === true };
+  // 用户亲手关掉（或在「还没开启」页点了「不用，收起入口」）的功能，左侧导航不再显示它（2026-11-18 用户反馈）。
+  // 只认用户自己的这一下：默认关着、从没碰过的功能照旧显示入口，点进去是说明页，新用户不会因为默认关着就找不到。
+  let hidden = new Set();
   try {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
     for (const k of Object.keys(value)) if (typeof raw?.[k] === 'boolean') value[k] = raw[k];
+    if (Array.isArray(raw?.navHidden)) hidden = new Set(raw.navHidden.filter(k => k in value));
   } catch (error) { if (error.code !== 'ENOENT') logger.warn?.('[optional-features] unreadable, all off:', error.message); }
 
   function save() {
     try {
       fs.mkdirSync(dataDir, { recursive: true });
       const tmp = file + '.' + process.pid + '.tmp';
-      fs.writeFileSync(tmp, JSON.stringify(value, null, 1) + '\n', 'utf8');
+      fs.writeFileSync(tmp, JSON.stringify({ ...value, navHidden: [...hidden] }, null, 1) + '\n', 'utf8');
       fs.renameSync(tmp, file);
     } catch (error) { logger.warn?.('[optional-features] save failed:', error.message); }
   }
@@ -39,9 +43,11 @@ function createOptionalFeatures({ dataDir, logger = console, defaults = {} } = {
   return {
     file,
     get: id => value[id] === true,
+    navHidden: id => value[id] !== true && hidden.has(id),
     set(id, on) {
       if (!(id in value)) throw new Error('未知的可选功能：' + id);
       value = { ...value, [id]: !!on };
+      if (on) hidden.delete(id); else hidden.add(id);
       save();
       return value[id];
     },

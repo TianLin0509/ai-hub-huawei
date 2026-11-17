@@ -156,6 +156,9 @@
   let deepseekRoute = deepseekProfile.DEFAULT_ROUTE;
   let configuredDeepseekRoute = deepseekProfile.DEFAULT_ROUTE;
   let deepseekRoutes = null;
+  // pi（r39）：pi:status 的结果（装没装、可用线路）；piInstalling 时按钮显示进度。
+  let piStatus = null;
+  let piInstalling = false;
   let deepseekRouteTouched = false;
   function panelKind(kind) {
     if (DEEPSEEK_PANEL_KINDS.has(kind)) return 'deepseek-acp';
@@ -1505,6 +1508,43 @@
     selectEl.dataset.builtFor = signature;
   }
 
+  // pi 没装：就地给「一键安装 pi」；装好了说明这次走哪条模型线路（开箱即用：先用 Hub 已有的钥匙）。
+  function paintPiNote() {
+    const note = document.getElementById('new-session-pi-note');
+    if (!note) return;
+    note.hidden = selectedKind !== 'pi';
+    if (note.hidden) return;
+    const text = document.getElementById('new-session-pi-note-text');
+    const install = document.getElementById('new-session-pi-install');
+    const diagnosis = piStatus?.diagnosis;
+    const ready = diagnosis?.state === 'ready';
+    note.dataset.state = !piStatus || ready ? 'info' : 'error';
+    const routes = (piStatus?.routes || []).map(route => route.label).join('、');
+    text.textContent = !piStatus ? '正在检查 pi…'
+      : piInstalling ? '正在安装 pi（Hub 自管目录，不改你的全局 npm）…'
+      : diagnosis?.state === 'none' ? '这台电脑还没有 pi。点右边「一键安装 pi」：Hub 装进自己的目录（约 1–3 分钟），不改你的全局 npm。'
+      : !ready ? diagnosis.message
+      : `pi ${diagnosis.version} 已就绪（${diagnosis.source === 'hub' ? 'Hub 安装' : '本机已装'}）。` + (routes
+        ? `模型线路：${routes}。`
+        : '没有找到 Hub 可用的模型钥匙：pi 会用它自己的配置或登录；还没配过就在 pi 终端里 /login，或在设置里填 DeepSeek Key。')
+        // 两种情况都说明降级功能（r39 审查：以前只有走 Hub 线路时才说）。
+        + 'Hub 的「问一下」与分支按钮暂不支持 pi，终端里 /fork 可用。';
+    if (install) {
+      install.hidden = !piStatus || ready;
+      install.disabled = piInstalling;
+      install.textContent = piInstalling ? '安装中…' : '一键安装 pi';
+    }
+  }
+  async function installPiFromLaunch() {
+    if (piInstalling) return;
+    piInstalling = true; paintPiNote();
+    try {
+      const result = await ipcRenderer.invoke('cli-tools:install', { id: 'pi' });
+      if (!result?.ok) setError('安装 pi 没有成功：' + (result?.error || '未知原因'));
+    } catch (error) { setError('安装 pi 没有成功：' + error.message); }
+    finally { piInstalling = false; await loadModelCatalog('pi'); paint(); }
+  }
+
   function paint() {
     if (!menuEl) return;
     menuEl.querySelectorAll('.new-session-option').forEach(button => {
@@ -1553,6 +1593,7 @@
           ? 'DeepSeek 使用 DSH；Token Plan 消耗套餐额度，API 使用 DeepSeek 官方 API 计费。'
           : `${deepseekProfile.ROUTES[deepseekRoute].label}不可用：${routeStatus.reason}。请改选另一种接入方式，Hub 不会自动替换。`;
     }
+    paintPiNote();
     paintLaunchLayout();
     const existingRow = document.getElementById('new-session-existing-path');
     menuEl.querySelectorAll('[data-project-path]').forEach(button => {
@@ -1898,6 +1939,11 @@
         return chatgptCatalog;
       });
     }
+    if (base === 'pi') return ipcRenderer.invoke('pi:status').then(status => {
+      setRuntimeModelOptions('pi', (status?.models || []).filter(m => m.id));
+      piStatus = status || null;
+      return status;
+    }).catch(error => { console.warn('[pi-status]', error.message); piStatus = null; return null; });
     if (require('../core/acp-profiles').isAcpKind(base)) return ipcRenderer.invoke('acp:settings:get').then(settings=>{
       const model=settings.providers?.[base]?.model;
       setRuntimeModelOptions(base,require('../core/acp-model-catalog').acpModelOptions(base,model));
@@ -1923,12 +1969,13 @@
   }
 
   function loadPrimaryModelCatalogs(options = {}) {
-    if (companyApi.isCompany()) return Promise.all(['claude', 'codex', 'deepseek-acp', 'codeagent'].map(kind => loadModelCatalog(kind)));
+    if (companyApi.isCompany()) return Promise.all(['claude', 'codex', 'deepseek-acp', 'codeagent', 'pi'].map(kind => loadModelCatalog(kind)));
     return Promise.all([
       loadClaudeModelCatalog(options),
       loadCodexTuningCatalog(options),
       loadModelCatalog('codeagent'),
       ...require('../core/acp-profiles').ACP_KINDS.map(kind=>loadModelCatalog(kind)),
+      loadModelCatalog('pi'),
     ]);
   }
 
@@ -2126,6 +2173,7 @@
         }
       });
     });
+    document.getElementById('new-session-pi-install')?.addEventListener('click', () => { void installPiFromLaunch(); });
     document.getElementById('new-session-deepseek-route')?.addEventListener('change', event => {
       setError('');
       void saveDeepseekRoute(event.target.value).then(paint);

@@ -914,10 +914,13 @@ async function sendToPtyImpl(sid, prompt, kind, options = {}) {
     let modelPickerScreen = null;
     try {
     const modelCommand = require('./cli-model-command').modelCommandType(kind, String(prompt || ''));
-    if (modelCommand === 'codeagent-picker') {
+    // Proxy Claude can ask to confirm a custom model in a dialog at the bottom
+    // of the real terminal. A fixed 120x30 probe can lose that dialog entirely.
+    const proxyClaudeModelCommand = modelCommand === 'claude-inline' && session?.companyRoute === 'proxy';
+    if (modelCommand === 'codeagent-picker' || proxyClaudeModelCommand) {
       try { modelPickerScreen = await require('./codeagent-model-picker').openSessionScreen(sessionManager, sid); }
       catch (error) {
-        throw Object.assign(new Error(`无法读取 CodeAgent 模型菜单，本条命令未发送：${error?.message || String(error)}`), { notSent: true });
+        throw Object.assign(new Error(`无法读取 ${proxyClaudeModelCommand ? 'Claude' : 'CodeAgent'} 模型菜单，本条命令未发送：${error?.message || String(error)}`), { notSent: true });
       }
     }
     const codexBusyBaseline = isCodexCliKind(kind) && /^\s*\//.test(String(prompt || ''))

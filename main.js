@@ -1118,6 +1118,25 @@ require('./core/cli-exit-watch').createCliExitWatch({
     petTurnFailed(sessionId, failedAt, 'CLI 已退出到系统终端，本轮没有完成。');
   },
 }).start();
+// CodeAgent 在终端里报了会话级错误（如部门模型管控 SessionRequestError），原生记录里没有：结束这一轮并把原文显示出来（core/codeagent-screen-error.js）。
+require('./core/codeagent-screen-error').createScreenErrorWatch({
+  manager: sessionManager,
+  readScreen: id => {
+    const entry = sessionManager.sessions?.get?.(id);
+    const text = sessionManager.getSessionBuffer(id);
+    return text == null ? null : { text, cols: Number(entry?.pty?.cols) || 120, rows: Number(entry?.pty?.rows) || 30 };
+  },
+  renderRows: raw => require('./core/hub-phone/session-chat').renderRows(raw),
+  onError: ({ sessionId, failedAt, kind, message }) => {
+    const session = sessionManager.getSession(sessionId);
+    sendToRenderer('turn-failed-event', {
+      hubSessionId: sessionId, transcriptPath: session ? session.transcriptPath : null, failedAt,
+      meetingId: session ? session.meetingId : null, kind, signalSource: 'codeagent-screen-error', turnId: null,
+      message, occurrenceId: `codeagent-screen-error:${sessionId}:${failedAt}`,
+    });
+    petTurnFailed(sessionId, failedAt, message);
+  },
+}).start();
 transcriptTap.on('turn-pending', (ev) => { try { stopPendingSettle.onPending(ev); } catch (error) { console.warn('[stop-settle]', error.message); } });
 
 transcriptTap.on('turn-aborted', (ev) => {
@@ -1904,7 +1923,7 @@ function createWindow() {
 
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   mainWindow.on('close', (event) => {
-    if (shutdownDrainState === 'drained' || shutdownDrainState === 'finalizing') return;
+    if (['closing-windows', 'drained', 'finalizing'].includes(shutdownDrainState)) return;
     // 「可选功能」里开了「关窗口最小化到托盘」：只藏窗口，会话照常跑（main/tray-controller.js）。
     if (trayController && trayController.interceptClose(event)) return;
     // Closing the window releases its sessions; no invisible owner remains.
@@ -1936,7 +1955,6 @@ const sessionModelCreationConfirmation = require('./main/session-model-creation'
   },
 });
 ipcMain.handle('session:model-create-decision', (_event, payload) => sessionModelCreationConfirmation.respond(payload));
-app.on('before-quit', () => sessionModelCreationConfirmation.cancelAll());
 sessionManager.on('session-model-reset', ({ sessionId }) => {
   sessionModelCreationConfirmation.cancelSession(sessionId);
   require('./core/group-chat-watcher').cancelPendingModelSubmissions(sessionId);
@@ -2621,9 +2639,7 @@ app.whenReady().then(async () => {
   lanPoolService.startWatchdog();
   powerMonitor.on('resume', () => { setTimeout(() => void lanPoolService.resume(), 5000); });
 });
-app.on('before-quit', () => { void lanPoolService.stop(); });
-// 退出时先请反代自己收尾（删状态文件、关连接）；来不及的由 will-quit 兜底结束进程。
-app.on('before-quit', () => { void companyProxyService.stop().catch(() => {}); });
+// 反代与 LAN 池在窗口确认退出后统一收尾；will-quit 最后兜底结束反代进程。
 app.on('will-quit', () => companyProxyService.killNow());
 let titleService;
 const sessionOperations = registerSessionIpc(ipcMain, {
@@ -2824,10 +2840,10 @@ try {
 function optionalFeatureList() {
   const { CATALOG } = require('./core/optional-features');
   const out = [];
-  if (companyAssistantService) out.push({ id: 'assistant', ...CATALOG.assistant, on: optionalFeatures.get('assistant') });
-  if (companyForumService) out.push({ id: 'forum', ...CATALOG.forum, on: optionalFeatures.get('forum') });
-  if (companyAttendanceService) out.push({ id: 'attendance', ...CATALOG.attendance, on: optionalFeatures.get('attendance') });
-  if (companyW3Service) out.push({ id: 'w3', ...CATALOG.w3, on: optionalFeatures.get('w3') });
+  if (companyAssistantService) out.push({ id: 'assistant', ...CATALOG.assistant, on: optionalFeatures.get('assistant'), navHidden: optionalFeatures.navHidden('assistant') });
+  if (companyForumService) out.push({ id: 'forum', ...CATALOG.forum, on: optionalFeatures.get('forum'), navHidden: optionalFeatures.navHidden('forum') });
+  if (companyAttendanceService) out.push({ id: 'attendance', ...CATALOG.attendance, on: optionalFeatures.get('attendance'), navHidden: optionalFeatures.navHidden('attendance') });
+  if (companyW3Service) out.push({ id: 'w3', ...CATALOG.w3, on: optionalFeatures.get('w3'), navHidden: optionalFeatures.navHidden('w3') });
   if (hubPetController && require('./core/distribution').featureEnabled('hubPet')) out.push({ id: 'pet', ...CATALOG.pet, on: !!hubPetController.getSettings().enabled });
   if (trayController) out.push({ id: 'tray', ...CATALOG.tray, on: optionalFeatures.get('tray') });
   return out;
@@ -3007,7 +3023,7 @@ if (webSessions) {
 let companyWebAi = null;
 // 公司版「帖子」（原「论坛」，2026-10-18；2026-11-12 加公司发文）：每天同步公司发文、稼先社区、心声社区并附 AI 摘要，数据只留在本机 Hub 数据目录。
 // 只在公司版启用（core/company-forum/gate.js）。取数用 Hub 自己的隐藏浏览器窗口（main/company-forum-browser.js）。
-let companyForumService = null, companyForumBrowser = null;
+let companyForumService = null, companyForumBrowser = null, companyForumEdge = null;
 try {
   if (require('./core/company-forum/gate').companyForumEnabled()) {
     const { CompanyForum } = require('./core/company-forum/service');
@@ -3020,14 +3036,15 @@ try {
     companyForumBrowser = require('./main/company-forum-browser').createForumBrowser({ BrowserWindow, BaseWindow, session: require('electron').session });
     // 取数先借本机 Edge 的登录状态（无头，不弹窗）：公司电脑上三个站点都能免密自动登录，不用再手动登录（2026-11-12）。
     // CLAUDE_HUB_FORUM_EDGE=0 关掉；测试把站点指到本机假站点时默认不用，=1 才用。
-    const forumEdge = process.env.CLAUDE_HUB_FORUM_EDGE === '0' || (process.env.CLAUDE_HUB_FORUM_SITES && process.env.CLAUDE_HUB_FORUM_EDGE !== '1') ? null
+    companyForumEdge = process.env.CLAUDE_HUB_FORUM_EDGE === '0' || (process.env.CLAUDE_HUB_FORUM_SITES && process.env.CLAUDE_HUB_FORUM_EDGE !== '1') ? null
       : require('./main/company-edge-browser').createEdgeBrowser({ logger: console });
-    if (forumEdge) app.on('before-quit', () => { void forumEdge.close(); });
+    // 退出可能被会议页否决（r38a），所以不在 before-quit 里关；真正退出时 will-quit 同步收掉无头 Edge（r38b），正常收尾里还有异步 close 兜底。
+    if (companyForumEdge) app.on('will-quit', () => { try { companyForumEdge.closeSync(); } catch (_) {} });
     companyForumService = new CompanyForum({
       dataDir: getHubDataDir(),
       noTimer: process.env.CLAUDE_HUB_FORUM_TIMER === '0',
       browser: companyForumBrowser,
-      edgeBrowser: forumEdge,
+      edgeBrowser: companyForumEdge,
       // 公司发文上新交给提醒总线：开着桌宠时桌宠说，没开时右下角通知卡。
       publish: notice => require('./core/company-assistant/notice-bus').noticeBus().publish(notice),
       lookupEmail: () => companyAssistantService?.accountEmail?.() || '',
@@ -4466,7 +4483,6 @@ sessionManager.on('codex-session-updated',session=>{
   const failure=session.nativeActionError || session.nativeRuntime?.reason || session.cliRuntime?.reason;
   if (failure) void launchAuth.recover(session.kind,{...session,model:session.currentModel?.id},failure);
 });
-app.on('before-quit',()=>{accountCenter.stopPump();accountCenter.adapter.dispose?.();});
 require('./main/ipc/account-center-handlers').registerAccountCenterIpc(ipcMain,accountCenter);
 const tokenUsage = new (require('./core/token-usage/service').TokenUsageService)({ dataDir: getHubDataDir(), homeDir: accountCenterHome,
   codeAgentDir: () => { try { return require('./core/codeagent-config').resolveCodeAgentConfig({ ...process.env, USERPROFILE: accountCenterHome, HOME: accountCenterHome }).configDir; } catch { return ''; } },
@@ -4483,7 +4499,6 @@ require('./main/ipc/hub-accounts-handlers').registerHubAccountsIpc(ipcMain, hubA
 // About twice a day the logins are confirmed in the background; the sidebar shows how many
 // accounts need the person.
 hubAccountsService.startAuto({ onAttention: count => sendToRenderer('hub-accounts:attention', count) });
-app.on('before-quit', () => hubAccountsService.stopAuto());
 
 require('./main/ipc/voice-input-handlers').registerVoiceInputIpc(ipcMain, {
   app, safeStorage: require('electron').safeStorage,
@@ -4629,7 +4644,7 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
           }));
           gateHeartbeats = beats;
           app.whenReady().then(() => beats.forEach((b, i) => setTimeout(() => b.start(), i * 7000).unref?.()));
-          app.on('before-quit', () => beats.forEach(b => b.stop()));
+          app.on('will-quit', () => beats.forEach(b => b.stop()));
         }
       } catch (e) { console.warn('[net-pass] 放行按钮初始化失败：', e && e.message); }
       // 检查更新和反馈同时被拦时只开一个放行窗口：进行中的那次结果大家共用。
@@ -5391,6 +5406,19 @@ async function runFinalShutdownCleanup() {
     try { action(); }
     catch (error) { errors.push({ label, message: error && error.message ? error.message : String(error) }); }
   };
+  const captureAsync = async (label, action) => {
+    try { await action(); }
+    catch (error) { errors.push({ label, message: error && error.message ? error.message : String(error) }); }
+  };
+  // These services must remain usable if a renderer cancels app.quit(). Await
+  // asynchronous stops here rather than starting a stop/restart race on veto.
+  capture('model-creation-confirmation', () => sessionModelCreationConfirmation.cancelAll());
+  await captureAsync('lan-pool', () => lanPoolService.stop());
+  await captureAsync('company-proxy', () => companyProxyService.stop());
+  await captureAsync('company-forum-edge', () => companyForumEdge?.close());
+  capture('account-center-pump', () => accountCenter.stopPump());
+  capture('account-center-adapter', () => accountCenter.adapter.dispose?.());
+  capture('hub-accounts', () => hubAccountsService.stopAuto());
   capture('desktop-notification', () => desktopNotificationController?.dispose());
   desktopNotificationController = null;
   capture('hub-pet', () => hubPetController?.dispose());
@@ -5523,6 +5551,44 @@ function flushRendererWorkscene(timeoutMs = 1500) {
   });
 }
 
+// A renderer can refuse close while a recording is being saved. Confirm that
+// every window has actually closed before terminating sessions or closing the
+// databases; otherwise an update retry would read a database already closed by
+// the cancelled quit. Leave the main window until last when another window
+// refuses, so its workscene remains visible.
+async function closeWindowsForShutdown(timeoutMs = 5000) {
+  shutdownDrainState = 'closing-windows';
+  // Desktop overlays have no unsaved content and are owned by their existing
+  // final cleanup. Closing a pet early would leave it started without a window
+  // if a content window subsequently refuses to quit.
+  const overlays = new Set([...(hubPetController?.getWindows?.() || []), desktopNotificationController?.getWindow?.()]);
+  const windows = BrowserWindow.getAllWindows().filter(win => !overlays.has(win))
+    .sort((a, b) => Number(a === mainWindow) - Number(b === mainWindow));
+  for (const win of windows) {
+    if (win.isDestroyed()) continue;
+    const contents = win.webContents;
+    await new Promise((resolve, reject) => {
+      let timer = null;
+      let settled = false;
+      const finish = error => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        win.removeListener('closed', closed);
+        contents?.removeListener('will-prevent-unload', prevented);
+        error ? reject(error) : resolve();
+      };
+      const closed = () => finish();
+      const prevented = () => finish(new Error('窗口还有未保存的内容，已取消退出；请完成保存后再试'));
+      win.once('closed', closed);
+      contents?.once('will-prevent-unload', prevented);
+      timer = setTimeout(() => finish(new Error('窗口未能关闭，已取消退出；请关闭窗口后再试')), timeoutMs);
+      try { win.close(); } catch (error) { finish(error); }
+    });
+  }
+  shutdownDrainState = 'draining';
+}
+
 function beginGracefulHubShutdown(reason, { beforeQuit } = {}) {
   if (shutdownDrainPromise) return shutdownDrainPromise;
 
@@ -5530,15 +5596,17 @@ function beginGracefulHubShutdown(reason, { beforeQuit } = {}) {
   global.__deliveryEngine?.freeze();
   global.__orchestrationService?.freeze(); global.__teamService?.freeze();
   console.log(`[shutdown] draining PTYs before Electron teardown (${reason})`);
-  // Freeze Agent League dispatch before SessionManager starts terminating PTYs.
-  // Active tasks remain durable/orphan-recoverable and the phase lease is only
-  // released by final cleanup after every PTY exit callback has settled.
-  if (agentLeagueBridge && typeof agentLeagueBridge.beginHandoff === 'function') {
-    try { agentLeagueBridge.beginHandoff(reason); }
-    catch (error) { console.warn('[shutdown] agent league handoff preparation failed:', error && error.message); }
-  }
   shutdownDrainPromise = flushRendererWorkscene()
-    .then(() => sessionManager.disposeGracefully({ logger: console, warnAfterMs: 5000, drainTimeoutMs: 15_000 }))
+    .then(() => closeWindowsForShutdown())
+    .then(() => {
+      // Do not hand off tasks until windows accept closing. Active tasks remain
+      // durable/orphan-recoverable while their PTY exit callbacks settle.
+      if (agentLeagueBridge && typeof agentLeagueBridge.beginHandoff === 'function') {
+        try { agentLeagueBridge.beginHandoff(reason); }
+        catch (error) { console.warn('[shutdown] agent league handoff preparation failed:', error && error.message); }
+      }
+      return sessionManager.disposeGracefully({ logger: console, warnAfterMs: 5000, drainTimeoutMs: 15_000 });
+    })
     .then(async (result) => {
       if (!result || result.safeToQuit !== true) {
         shutdownDrainState = 'idle';

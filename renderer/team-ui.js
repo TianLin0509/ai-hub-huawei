@@ -41,9 +41,20 @@
 
   const pendingPlan = leadSid => (teams.get(leadSid)?.plans || []).find(p => p.status === 'pending') || null;
   const sessionExists = (sessionMap, id) => !sessionMap || !sessionMap.get || !!sessionMap.get(id);
+  // 侧栏每次重绘对每个会话都问一遍「是不是某个会议的成员」，原来每问一次就把所有会议翻一遍
+  // （生产实测重绘 45 秒内耗 0.3 秒）。同一轮同步计算里会议表不变，集合在本轮结束（微任务）时丢弃。
+  let meetingSubIds = null;
+  const subSessionIds = meetings => {
+    if (meetingSubIds && meetingSubIds.meetings === meetings) return meetingSubIds.ids;
+    const ids = new Set();
+    for (const m of Object.values(meetings || {})) for (const id of m.subSessions || []) ids.add(id);
+    meetingSubIds = { meetings, ids };
+    Promise.resolve().then(() => { meetingSubIds = null; });
+    return ids;
+  };
   const canNestTeam = (leadSid, sessionMap, meetings) => sessionExists(sessionMap, leadSid)
     && !sessionMap?.get(leadSid)?.meetingId
-    && !Object.values(meetings || {}).some(m => (m.subSessions || []).includes(leadSid));
+    && !subSessionIds(meetings).has(leadSid);
 
   window.__teamUi = {
     // 挂在某位负责人下面的成员（负责人会话还在才挂，负责人关掉后成员回到顶层）。

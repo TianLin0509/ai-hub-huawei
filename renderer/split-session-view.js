@@ -27,7 +27,7 @@ function createSplitSessionView({ document: doc, window: win, sessionId, panel, 
     navigator: rendererOptions.navigator, container: overlay,
     elements: { bar: multiBar, count: multiBar.querySelector('.cms-count'), all: multiBar.querySelector('[data-multi="all"]'), copy: multiBar.querySelector('[data-multi="copy"]'), exit: multiBar.querySelector('[data-multi="exit"]') },
     getActiveSessionId: () => sessionId, getTurnById: id => state._sessionTurns.get(id),
-    extractVisibleCardText: require('./visible-card-text').extractVisibleCardText,
+    extractVisibleCardText: require('./visible-card-text').copyableCardText,
   });
   if (!multiSelect.init()) throw new Error('右屏多选控制器初始化失败');
   const navRoot = doc.createElement('nav'); navRoot.className = 'card-question-nav'; navRoot.setAttribute('aria-label', '右屏问题导航'); panel.append(navRoot);

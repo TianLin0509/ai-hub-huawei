@@ -21,9 +21,131 @@ const HOLIDAY_API = /queryHolidayCalendarDetails/;
 
 function hostOf(u) { try { return u ? `（停在 ${new URL(u).host}）` : ''; } catch { return ''; } }
 
-function attendanceUrl(domain, env = process.env) {
-  if (env.CLAUDE_HUB_ATTENDANCE_URL && env.CLAUDE_HUB_DATA_DIR) return env.CLAUDE_HUB_ATTENDANCE_URL;
-  return domain ? `https://hr.${domain}/apps/attendanceflow/#/myAttendance` : '';
+// 考勤页有两种（2026-11-17 同事反馈）：正式员工用 attendanceflow；OD 员工用 servicetimeflow，前一个页读不到他们的打卡。
+// 默认先试正式员工页，没截到打卡数据（不是要登录）再试 OD 页；哪页读成功就记下，以后先用它。也可以在考勤设置里指定。
+const PAGES = Object.freeze({
+  attendance: { label: '正式员工考勤页', path: '/apps/attendanceflow/#/myAttendance' },
+  servicetime: { label: 'OD 考勤页', path: '/apps/servicetimeflow/#/myServicetime' },
+});
+const PAGE_ORDER = Object.freeze(['attendance', 'servicetime']);
+const normalizePage = (v) => (PAGES[v] ? v : 'auto');
+
+function attendanceUrl(domain, env = process.env, page = 'attendance') {
+  if (env.CLAUDE_HUB_ATTENDANCE_URL && env.CLAUDE_HUB_DATA_DIR) {
+    // 测试替身：OD 页另给一个地址（CLAUDE_HUB_SERVICETIME_URL），没给就沿用同一个。
+    return page === 'servicetime' && env.CLAUDE_HUB_SERVICETIME_URL ? env.CLAUDE_HUB_SERVICETIME_URL : env.CLAUDE_HUB_ATTENDANCE_URL;
+  }
+  const def = PAGES[page] || PAGES.attendance;
+  return domain ? `https://hr.${domain}${def.path}` : '';
+}
+
+// 要试的页：用户指定了就只试那一页；自动时上次成功的页排第一，其余按默认顺序。
+function pagesToTry(settings = {}) {
+  if (PAGES[settings.page]) return [settings.page];
+  const last = PAGES[settings.lastPage] ? [settings.lastPage] : [];
+  return [...last, ...PAGE_ORDER.filter((p) => !last.includes(p))];
+}
+
+// OD 考勤页的接口名和字段名没在真机上核对过：不认接口名，在页面返回的 JSON 里找「一组带日期和打卡时刻的记录」。
+// 2026-11-18 审查返工：只认明确表示「实际打卡」的字段（card/clock/punch/sign），startTime/endTime、onDuty/offDuty 这类
+// 排班也会用的通用字段一律不认；排班、日历类接口整段跳过；认出不止一组且内容不一致时宁可报「读不到」，不写错考勤。
+const DATE_KEYS = ['attendanceDate', 'clockInDate', 'workDate', 'cardDate', 'serviceDate', 'recordDate', 'punchDate', 'signDate', 'date', 'day'];
+const FIRST_KEYS = ['earlyClockInTime', 'firstCardTime', 'firstClockTime', 'firstPunchTime', 'clockInTime', 'signInTime', 'firstSignTime', 'punchInTime', 'cardInTime'];
+const LAST_KEYS = ['lateClockInTime', 'lastCardTime', 'lastClockTime', 'lastPunchTime', 'clockOutTime', 'signOutTime', 'lastSignTime', 'punchOutTime', 'cardOutTime'];
+// 排班 / 日历 / 计划类：接口路径或外层字段名带这些词的，里面的时段不是打卡。
+const SCHEDULE_WORD = /shift|schedul|calendar|roster|plan|duty|holiday|排班|班次|日历|计划/i;
+const pickKey = (o, keys) => { for (const k of keys) if (o[k] != null && o[k] !== '') return o[k]; return null; };
+const clockOf = (v) => { const m = /(?:^|\D)(\d{1,2}):(\d{2})(?!\d)/.exec(String(v ?? '')); return m && Number(m[1]) < 24 ? m[1].padStart(2, '0') + ':' + m[2] : ''; };
+const dayOf = (v) => { const m = /(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/.exec(String(v ?? '')); return m ? `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}` : ''; };
+function guessRecord(o) {
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return null;
+  const first = pickKey(o, FIRST_KEYS), last = pickKey(o, LAST_KEYS);
+  const date = dayOf(pickKey(o, DATE_KEYS) || first || last);
+  const a = clockOf(first), b = clockOf(last);
+  if (!date || (!a && !b)) return null;
+  return { attendanceDate: date, earlyClockInTime: a || b, lateClockInTime: b || a, earlyClockTag: o.earlyClockTag || '', lateClockTag: o.lateClockTag || '' };
+}
+function guessRecords(captured) {
+  const found = [];
+  const visit = (v, depth, key) => {
+    if (depth > 5 || v == null || typeof v !== 'object') return;
+    if (key && SCHEDULE_WORD.test(key)) return;
+    if (Array.isArray(v)) {
+      const recs = v.map(guessRecord).filter(Boolean);
+      if (recs.length && recs.length * 2 >= v.length) found.push(recs);
+      for (const x of v.slice(0, 50)) visit(x, depth + 1, '');
+      return;
+    }
+    for (const [k, x] of Object.entries(v)) visit(x, depth + 1, k);
+  };
+  for (const r of captured || []) {
+    let p = '';
+    try { p = new URL(String(r.url)).pathname; } catch { p = String(r.url || ''); }
+    if (SCHEDULE_WORD.test(p)) continue;
+    visit(r.json, 0, '');
+  }
+  if (!found.length) return null;
+  // 多组候选：同一份数据重复出现可以，内容互相矛盾就拿不准，按读不到处理。
+  const sig = (recs) => JSON.stringify(recs.map((x) => [x.attendanceDate, x.earlyClockInTime, x.lateClockInTime]).sort());
+  return found.every((x) => sig(x) === sig(found[0])) ? found[0] : null;
+}
+// 没认出数据时记下页面调过哪些接口（只留路径末两段，不带参数和内容），下次反馈里就能看到 OD 页实际用的接口名。
+// 路径里可能夹着工号、姓名拼音、会话号、令牌，单看字符种类分不出来（纯字母的令牌也有），所以按路径结构处理：
+// 1. 紧跟在 profile、session、user、token 这类「身份名词」后面的那一段是取值，一律换成 *；
+// 2. 其余段只有能整段拆成常见接口用词（query、attendance、clock、record、list 等）才原样保留，拆不开的都换成 *。
+const API_WORDS = new Set(('api apis rest service services servicetime time times flow flows attend attendance attendances companion document documents '
+  + 'clock clockin clockout card cards punch record records list lists query get fetch load search find detail details info data page pages paging '
+  + 'month monthly day daily week weekly date dates holiday holidays calendar calendars shift shifts schedule schedules work workday workdays '
+  + 'user users profile profiles session sessions account accounts employee employees person staff member members auth login logout token tokens '
+  + 'config configs setting settings menu menus home index common base public portal ess self current sign signin signout checkin checkout '
+  + 'duty overtime leave leaves apply approval approve process task tasks todo message messages notice notices count summary stat stats statistics '
+  + 'report reports export sync check status type types dict dictionary enum enums org orgs dept department unit lang resource resources permission '
+  + 'permissions role roles batch history absence exception exceptions abnormal rule rules result results view views init item items location area '
+  + 'zone timezone team group project version upload file image log logs event events health ping refresh mobile web app front gateway open inner '
+  + 'internal external hr pc h5 by of for to in on all new my').split(' '));
+const SHORT_OK = new Set(['hr', 'pc', 'h5', 'by', 'of', 'to', 'in', 'on', 'my']);
+const ID_NOUNS = new Set('user users profile profiles session sessions employee employees emp person persons people staff member members account accounts token tokens uid id ids key keys ticket tickets sid auth'.split(' '));
+const VERSION_SEG = /^v\d{1,2}$/i;
+function splitsIntoWords(word) {
+  // 小写串能否整段拆成 API_WORDS 里的词（动态规划），短词只认白名单里的几个，避免随便拼出人名或令牌。
+  const ok = [true];
+  for (let i = 1; i <= word.length; i++) {
+    ok[i] = false;
+    for (let j = Math.max(0, i - 16); j < i && !ok[i]; j++) {
+      const w = word.slice(j, i);
+      ok[i] = ok[j] && API_WORDS.has(w) && (w.length >= 3 || SHORT_OK.has(w));
+    }
+  }
+  return ok[word.length];
+}
+function isStaticApiSegment(seg) {
+  if (VERSION_SEG.test(seg)) return true;
+  if (!/^[A-Za-z][A-Za-z_-]{0,39}$/.test(seg)) return false;
+  // 驼峰和下划线、连字符都拆开逐个看：queryAttendList → query attend list。
+  const parts = seg.replace(/([a-z])([A-Z])/g, '$1 $2').split(/[\s_-]+/).filter(Boolean);
+  return parts.length > 0 && parts.every((x) => splitsIntoWords(x.toLowerCase()));
+}
+function maskPath(segments) {
+  return segments.map((x, i) => {
+    const prev = i > 0 ? segments[i - 1].toLowerCase() : '';
+    return ID_NOUNS.has(prev) || !isStaticApiSegment(x) ? '*' : x;
+  });
+}
+function apiPaths(captured) {
+  const out = [];
+  for (const r of captured || []) {
+    try {
+      const p = maskPath(new URL(r.url).pathname.split('/').filter(Boolean)).slice(-2).join('/');
+      if (p && /[A-Za-z]/.test(p) && !out.includes(p)) out.push(p);
+    } catch { /* 不是完整网址 */ }
+  }
+  return out.slice(0, 8);
+}
+// 写进错误、日志前：网址只留主机名（路径和参数里可能有身份信息），邮箱打码。
+function scrubError(text) {
+  return String(text || '')
+    .replace(/\b(?:https?|wss?):\/\/([A-Za-z0-9.:-]+)[\x21-\x7e]*/gi, (_, host) => host)
+    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '***@***');
 }
 
 function holidaysFrom(list) {
@@ -53,7 +175,8 @@ class CompanyAttendance {
     const own = normalizeDomain(s.domain || '');
     const fromEmail = companyDomain.companyDomainOf((() => { try { return this.deps.accountEmail?.() || ''; } catch { return ''; } })());
     const known = own || fromEmail ? null : companyDomain.knownDomain(this.deps.dataDir);
-    return { domain: own || fromEmail || known.domain, domainFrom: own ? 'settings' : fromEmail ? 'assistant-email' : known.from, autoDaily: s.autoDaily !== false, workTime: calc.normalizeWorkTime(s.workTime).workTime };
+    return { domain: own || fromEmail || known.domain, domainFrom: own ? 'settings' : fromEmail ? 'assistant-email' : known.from, autoDaily: s.autoDaily !== false, workTime: calc.normalizeWorkTime(s.workTime).workTime,
+      page: normalizePage(s.page), lastPage: PAGES[s.lastPage] ? s.lastPage : '' };
   }
   // 设置里没有时自动找（内置默认、WeLink 账号），找到就记下，用户不用手填。
   async ensureDomain() {
@@ -68,6 +191,7 @@ class CompanyAttendance {
     // 填公司邮箱或域名都行。
     if (patch.domain !== undefined) s.domain = String(patch.domain).includes('@') ? domainFromEmail(patch.domain) : normalizeDomain(patch.domain);
     if (patch.autoDaily !== undefined) s.autoDaily = !!patch.autoDaily;
+    if (patch.page !== undefined) s.page = normalizePage(patch.page);
     if (patch.workTime !== undefined) {
       if (patch.workTime === null) delete s.workTime;
       else {
@@ -139,17 +263,23 @@ class CompanyAttendance {
     } catch { return null; }
   }
 
-  async capture(url) {
+  async capture(url, page = 'attendance') {
     const tries = [];
+    const od = page === 'servicetime';
     if (this.deps.browser) {
-      const cap = await this.deps.browser.capture({ url, clickText: '打卡记录', clickUnless: CARD_API, api: /attendanceCompanion|attendanceDocument/, maxMs: 30000, loginGraceMs: 25000 });
+      // OD 页的接口名还不知道：收下页面全部 JSON 响应，再按内容认。
+      const cap = await this.deps.browser.capture({ url, clickText: '打卡记录', clickUnless: CARD_API, api: od ? null : /attendanceCompanion|attendanceDocument/, maxMs: 30000, loginGraceMs: 25000 });
       const card = (cap.json || []).find((r) => CARD_API.test(String(r.url)) && (Array.isArray(r.json) || Array.isArray(r.json?.data)));
       const hol = (cap.json || []).find((r) => HOLIDAY_API.test(String(r.url)));
       const pick = (r) => (r ? (Array.isArray(r.json) ? r.json : r.json?.data) : null);
       if (card) return { ok: true, via: 'hub', records: pick(card), holidays: pick(hol) };
-      tries.push({ via: 'hub', needsLogin: !!cap.needsLogin, error: cap.needsLogin ? `需要登录${hostOf(cap.finalUrl)}` : '没截到打卡记录' });
+      const guessed = od && !cap.needsLogin ? guessRecords(cap.json) : null;
+      if (guessed) return { ok: true, via: 'hub', records: guessed, holidays: pick(hol) };
+      const seen = od && !cap.needsLogin ? apiPaths(cap.json) : [];
+      tries.push({ via: 'hub', needsLogin: !!cap.needsLogin, error: cap.needsLogin ? `需要登录${hostOf(cap.finalUrl)}` : '没截到打卡记录' + (seen.length ? `（页面接口：${seen.join('、')}）` : '') });
     }
-    if (this.deps.edgeCapture) {
+    // 无头 Edge 只认正式员工页的打卡接口；OD 页只用 Hub 窗口。
+    if (this.deps.edgeCapture && !od) {
       const r = await this.deps.edgeCapture({ url });
       if (r.ok) return r;
       tries.push({ via: 'edge', needsLogin: !!r.needsLogin, error: r.error || (r.needsLogin ? '需要登录' : '失败') });
@@ -165,21 +295,30 @@ class CompanyAttendance {
       st.lastAttemptAt = at;
       this.write('state', st);
       this.changed();
-      const url = attendanceUrl(await this.ensureDomain().catch(() => ''));
+      const domain = await this.ensureDomain().catch(() => '');
       let entry;
-      if (!url) entry = { at, reason, ok: false, needsDomain: true, error: '没能自动找到公司域名（助理设置、WeLink 账号里都没有公司邮箱）：在下面填一下你的公司邮箱就行' };
+      if (!attendanceUrl(domain)) entry = { at, reason, ok: false, needsDomain: true, error: '没能自动找到公司域名（助理设置、WeLink 账号里都没有公司邮箱）：在下面填一下你的公司邮箱就行' };
       else {
-        let r;
-        try { r = await this.capture(url); } catch (e) { r = { ok: false, error: e.message }; }
+        // 依次试各考勤页，读到就停；要登录时不换页（各页是同一个登录）。
+        let r, page;
+        const fails = [];
+        for (page of pagesToTry(this.settings())) {
+          try { r = await this.capture(attendanceUrl(domain, process.env, page), page); } catch (e) { r = { ok: false, error: e.message }; }
+          if (r.ok || r.needsLogin) break;
+          fails.push(`${PAGES[page].label}：${r.error || '失败'}`);
+        }
+        if (!r.ok && !r.needsLogin && fails.length > 1) r = { ...r, error: fails.join('；'), triedPages: true };
         if (r.ok && Array.isArray(r.records)) {
           const merged = calc.mergeRecords(this.read('records', []), r.records, at);
           this.write('records', merged.list);
           const hol = holidaysFrom(r.holidays);
           if (Object.keys(hol).length) this.write('holidays', { ...this.read('holidays', {}), ...hol });
-          entry = { at, reason, ok: true, via: r.via, got: r.records.length, added: merged.added, updated: merged.updated };
+          entry = { at, reason, ok: true, via: r.via, page, got: r.records.length, added: merged.added, updated: merged.updated };
+          const saved = this.read('settings', {});
+          if (saved.lastPage !== page) this.write('settings', { ...saved, lastPage: page });
           st.lastSuccessAt = at;
           st.lastSuccessDay = this.todayKey();
-        } else entry = { at, reason, ok: false, needsLogin: !!r.needsLogin, error: r.error || '失败' };
+        } else entry = { at, reason, ok: false, needsLogin: !!r.needsLogin, triedPages: !!r.triedPages, error: scrubError(r.error) || '失败' };
       }
       st.log = [entry, ...(st.log || [])].slice(0, LOG_KEEP);
       st.lastResult = entry;
@@ -190,7 +329,7 @@ class CompanyAttendance {
   }
 
   async login() {
-    const url = attendanceUrl(await this.ensureDomain().catch(() => ''));
+    const url = attendanceUrl(await this.ensureDomain().catch(() => ''), process.env, pagesToTry(this.settings())[0]);
     if (!url) return { ok: false, error: '没能自动找到公司域名：在考勤设置里填一下你的公司邮箱就行' };
     if (!this.deps.browser?.login) return Promise.resolve({ ok: false, error: '登录窗口不可用' });
     return this.deps.browser.login({ url, base: url, title: '登录（AI Hub 考勤）' });
@@ -204,7 +343,7 @@ class CompanyAttendance {
     const staleDays = lastSuccess ? Math.floor((this.now().getTime() - lastSuccess) / 86400000) : null;
     return {
       ok: true, today: this.todayKey(), syncing: !!this.syncing, settings, rules: calc.rulesFromWorkTime(settings.workTime),
-      url: attendanceUrl(settings.domain), records, holidays: this.read('holidays', {}),
+      url: attendanceUrl(settings.domain, process.env, pagesToTry(settings)[0]), pages: Object.entries(PAGES).map(([id, p]) => ({ id, label: p.label })), records, holidays: this.read('holidays', {}),
       lastResult: st.lastResult || null, lastSuccessAt: st.lastSuccessAt || null, lastAttemptAt: st.lastAttemptAt || null,
       log: (st.log || []).slice(0, 10), staleDays, gapRisk: staleDays != null && staleDays >= 6,
       firstDate: records.length ? records[0].date : null,
@@ -213,4 +352,4 @@ class CompanyAttendance {
   changed() { try { this.deps.onChanged?.(); } catch { /* 界面没开 */ } }
 }
 
-module.exports = { CompanyAttendance, attendanceUrl, holidaysFrom };
+module.exports = { CompanyAttendance, attendanceUrl, holidaysFrom, guessRecords, pagesToTry, apiPaths, scrubError };

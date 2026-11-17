@@ -204,18 +204,23 @@ test('审查第 3 项：往上甩、高屏（4K 150%/200%、竖屏）最后一�
   assert.equal(flyAt(p.steps[0], p.steps[0].durationMs).y, p.final.y);
 });
 
-test('审查第 3 项：真实控制器向上甩到高屏，窗口最后停的位置＝存下的位置', async t => {
+test('审查第 3 项：真实控制器向上甩到高屏，窗口最后停的位置＝存下的位置', t => {
+  // r40：拖动采样和落地动画都按 Date.now() 计时、由 setInterval 驱动。以前用真实 sleep 推光标，
+  // Windows 计时器 15.6ms 一格、负载一高 sleep(20) 就被拉长，光标实际变慢（实测 882 < 900 DIP/s），单跑 3 次挂 2 次。
+  // 改成模拟时钟：时间只按这里写的毫秒数走，每 1ms 推一步，计时器按各自到点的时刻触发，结果和机器快慢无关。
+  t.mock.timers.enable({ apis: ['setInterval', 'setTimeout', 'Date'], now: NOON });
+  const advance = ms => { for (let i = 0; i < ms; i++) t.mock.timers.tick(1); };
   const r = rig(t, { area: { x: 0, y: 0, width: 2560, height: 2112 } });
   const home = r.c.getWindow().getBounds();
   r.dbg({ op: 'cursor', pos: { x: home.x + 140, y: 900 } });
   r.ipcMain.emit('hub-pet:press', r.pet(), { target: 'pet' });
-  // 慢慢拖到 y≈760（窗口），再快速往上一甩
-  for (let y = 900; y >= 760; y -= 20) { r.dbg({ op: 'cursor', pos: { x: home.x + 140, y } }); await sleep(40); }
-  for (let y = 740; y >= 560; y -= 30) { r.dbg({ op: 'cursor', pos: { x: home.x + 140, y } }); await sleep(20); }
+  // 慢慢拖到 y≈760（窗口，500 DIP/s），再快速往上一甩（1500 DIP/s）
+  for (let y = 900; y >= 760; y -= 20) { r.dbg({ op: 'cursor', pos: { x: home.x + 140, y } }); advance(40); }
+  for (let y = 740; y >= 560; y -= 30) { r.dbg({ op: 'cursor', pos: { x: home.x + 140, y } }); advance(20); }
   r.ipcMain.emit('hub-pet:release', r.pet());
   const rel = r.dbg({ op: 'state' }).lastRelease;
   assert.equal(rel && rel.fling, true, '算甩：' + JSON.stringify(rel));
-  await sleep(1700);
+  advance(1700);
   const b = r.c.getWindow().getBounds();
   assert.deepEqual({ x: b.x, y: b.y }, r.c.getSettings().position, '窗口停的位置就是存的位置');
 });

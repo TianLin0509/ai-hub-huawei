@@ -10,6 +10,7 @@
 //       --git-version latest|2.56.0.windows.4（Git for Windows，取 npm 国内镜像上的完整 tar.bz2，和 GitHub 发布的 sha256 核对）
 //       --dsh-version 0.2.1-rc.2 --dsh-tui-version 0.16.1   --dsh-from <已装好的运行环境目录>（直接打包它，不再 npm install）
 //       --node-version v22.x.y（默认取 22 系列最新）   --registry https://registry.npmmirror.com
+//       --pi-version 1.5.2（pi 终端 Agent，--only 里写 pi 才打）
 //       --mirror-claude（Claude Code 也放一份到自家源，默认只写官方地址；许可见报告）
 //
 // 产物：<out>/components/components.json（已签名）和 <out>/components/<组件>/<版本>/<文件>。
@@ -21,7 +22,8 @@ const { execFile } = require('child_process');
 const { packTgz, listTree, extractTgz } = require('../core/cli-tools/tar');
 const catalogLib = require('../core/cli-tools/catalog');
 
-const DEFAULTS = { registry: 'https://registry.npmmirror.com', claude: 'latest', codex: 'latest', dsh: '0.2.1-rc.2', dshTui: '0.16.1', node: '22', git: 'latest' };
+const DEFAULTS = { registry: 'https://registry.npmmirror.com', claude: 'latest', codex: 'latest', dsh: '0.2.1-rc.2', dshTui: '0.16.1', node: '22', git: 'latest',
+  pi: require('../core/pi-cli-profile').PI_VERSION };
 const GIT_MIRROR = 'https://registry.npmmirror.com/-/binary/git-for-windows';
 const GIT_RELEASES = 'https://api.github.com/repos/git-for-windows/git/releases/tags';
 const NPMJS = 'https://registry.npmjs.org';
@@ -42,6 +44,7 @@ function parseArgs(argv) {
     else if (a === '--dsh-tui-version') o.dshTui = next();
     else if (a === '--dsh-from') o.dshFrom = path.resolve(next());
     else if (a === '--node-version') o.node = next();
+    else if (a === '--pi-version') o.pi = next();
     else if (a === '--git-version') o.git = next();
     else if (a === '--registry') o.registry = next().replace(/\/+$/, '');
     else if (a === '--mirror-claude') o.mirrorClaude = true;
@@ -135,6 +138,34 @@ async function planDsh(o) {
   return { id: 'dsh', name: 'DSH 运行环境', version, dsh, tui, file: `dsh-runtime-${dsh}-tui-${tui}-win32-x64.tgz`, license: 'MIT（@deepseek-ai/dsh、@deepseek-harness-tui/dsh-tui；依赖各自许可）',
     preferOfficial: false, mirror: true, official: [],
     install: { requires: ['node'], minNode: 22, versionArgs: ['--version'], check: ['node_modules/@deepseek-ai/dsh/lib/bin.js', 'node_modules/@deepseek-harness-tui/dsh-tui/package.json'] } };
+}
+// pi（r39）：@earendil-works/pi-coding-agent 连同依赖装好后整包打成 tgz，和 DSH 一样由 Hub 用 node 跑入口脚本。
+async function planPi(o) {
+  const { PI_PACKAGE, PI_ENTRY } = require('../core/pi-cli-profile');
+  return { id: 'pi', name: 'pi 终端 Agent', version: o.pi, pkg: PI_PACKAGE, file: `pi-runtime-${o.pi}.tgz`, license: 'MIT（@earendil-works/pi-coding-agent；依赖各自许可）',
+    preferOfficial: false, mirror: true, official: [],
+    install: { requires: ['node'], minNode: 22, versionArgs: ['--version'], check: ['node_modules/' + PI_ENTRY] } };
+}
+async function buildPi(p, dir, staging, o) {
+  const root = path.join(staging, 'pi-runtime');
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify({ name: 'ai-hub-pi-runtime', private: true, dependencies: { [p.pkg]: p.version } }, null, 2));
+  const npmCli = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  if (!fs.existsSync(npmCli)) throw new Error('找不到 npm：' + npmCli);
+  log(`npm install ${p.pkg}@${p.version}（${o.registry}）…`);
+  await run(process.execPath, [npmCli, 'install', '--omit=dev', '--no-audit', '--no-fund', '--registry', o.registry], { cwd: root });
+  for (const rel of p.install.check) if (!fs.existsSync(path.join(root, ...rel.split('/')))) throw new Error('pi 运行环境不完整：' + rel);
+  p.probeVersion = await run(process.execPath, [path.join(root, ...p.install.check[0].split('/')), '--version']);
+  const entries = listTree(path.join(root, 'node_modules'), 'node_modules');
+  for (const name of ['package.json', 'package-lock.json']) if (fs.existsSync(path.join(root, name))) entries.push({ name, file: path.join(root, name) });
+  log(`打包 pi 运行环境：${entries.length} 个文件…`);
+  const dest = path.join(dir, p.file);
+  await packTgz(entries, dest);
+  const h = await hashFile(dest);
+  p.licenseDetail = `${p.pkg} ${JSON.parse(fs.readFileSync(path.join(root, 'node_modules', p.pkg, 'package.json'), 'utf8')).license || '未写'}`;
+  p.fileCount = entries.length;
+  return { file: dest, bytes: fs.statSync(dest).size, sha256: h.sha256 };
 }
 async function planNode(o) {
   let version = o.node;
@@ -291,7 +322,7 @@ async function main() {
     console.log('公钥（写进 core/cli-tools/catalog.js 的 PUBLIC_KEY_HEX）：' + publicKey.export({ type: 'spki', format: 'der' }).toString('hex'));
     return;
   }
-  const planners = { claude: planClaude, codex: planCodex, dsh: planDsh, node: planNode, git: planGit };
+  const planners = { claude: planClaude, codex: planCodex, dsh: planDsh, node: planNode, git: planGit, pi: planPi };
   const plans = [];
   for (const id of o.only) plans.push(await planners[id](o));
   log('计划：');
@@ -315,7 +346,7 @@ async function main() {
     const dir = p.mirror ? path.join(outRoot, p.id, p.version) : path.join(o.out, 'official-only', p.id, p.version);
     fs.mkdirSync(dir, { recursive: true });
     log(`== ${p.name} ${p.version}`);
-    const built = p.id === 'dsh' ? await buildDsh(p, dir, staging, o) : p.id === 'node' ? await buildNode(p, dir, staging)
+    const built = p.id === 'dsh' ? await buildDsh(p, dir, staging, o) : p.id === 'pi' ? await buildPi(p, dir, staging, o) : p.id === 'node' ? await buildNode(p, dir, staging)
       : p.id === 'git' ? await buildGit(p, dir, staging) : await buildNpmTarball(p, dir, staging);
     const rel = `${p.id}/${p.version}/${p.file}`;
     // 不放自家源的组件（默认 Claude Code）：文件仍留在输出目录方便核对，但不进目录的 url，也不用上传。

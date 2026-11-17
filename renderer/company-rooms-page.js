@@ -1,6 +1,22 @@
 'use strict';
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const PAGES = [['overview', '总览'], ['plan', '抢订计划'], ['post', '会后动作'], ['history', '历史'], ['logs', '运行日志'], ['settings', '设置']];
+// 抢订计划的一句话说明（2026-11-17 同事反馈「看不出什么时候抢什么会议室」）：把放号时刻、提前天数、会议日、时段和房间顺序连成一句。
+function planSummary({ days = [], span = '', rooms = [], advanceDays = 7, openTime = '', switchNext = true } = {}) {
+  const W = ['一', '二', '三', '四', '五', '六', '日'];
+  const picked = W.filter((_, i) => days.includes(i + 1)).map(d => '周' + d);
+  const open = String(openTime || '').slice(0, 5) || '放号时刻';
+  if (!picked.length || !span || !rooms.length) {
+    const miss = [!picked.length && '勾选会议在周几', !span && '填开始时间和时长', !rooms.length && '添加至少一间会议室'].filter(Boolean);
+    return `还差：${miss.join('、')}。填好后，Hub 会在每天 ${open} 放号时，替你预订 ${advanceDays} 天后那天的会议室。`;
+  }
+  const order = rooms.length > 3 ? `${rooms.slice(0, 3).join(' → ')} 等 ${rooms.length} 间` : rooms.join(' → ');
+  const sorted = [...new Set(days)].sort((a, b) => a - b).join(',');
+  const which = sorted === '1,2,3,4,5,6,7' ? '' : sorted === '1,2,3,4,5' ? '周一至周五' : picked.join('、');
+  const when = which ? `如果 ${advanceDays} 天后那天是${which}，就替你预订那天` : `替你预订 ${advanceDays} 天后那天`;
+  return `按现在的设置：每天 ${open} 放号时，${when} ${span} 的会议室，按 ${order} 的顺序${rooms.length > 1 ? (switchNext ? '，前一间被抢走就换下一间' : '，只抢第一间') : ''}。`;
+}
+
 function roomReadiness(rules = {}, status = {}) {
   const rooms = rules.优先会议室 || [];
   const plan = rooms.length > 0 && rooms.length <= 30 && rooms.every(r => typeof r === 'string' && r.trim() && r.trim().length <= 120);
@@ -158,8 +174,8 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
   }
   function plan() {
     const rooms = draft.优先会议室;
-    return `<section>${head('会议')}<div class="cr-form">${field('主题', '会议主题', 'text', 'maxlength="120"')}${field('开始时间', '开始时间', 'time', 'step="1800"')}${field('时长小时', '时长 · 小时', 'number', 'min="0" max="12" step="1"')}${select('时长分钟', '时长 · 分钟', [0, 30])}</div><p class="cr-hint">时长为 30 分钟至 12 小时，结束时间不能跨天。</p>
-      <div class="cr-field cr-days-field"><span>哪几天要抢<em>　按目标日期</em></span><div class="cr-days">${['一', '二', '三', '四', '五', '六', '日'].map((d, i) => `<label class="cr-dy" title="周${d}"><input type="checkbox" data-cr-day="${i + 1}"${draft.抢订日.includes(i + 1) ? ' checked' : ''}><span>${d}</span></label>`).join('')}</div></div><p class="cr-hint">${escape(`每天 ${hm(sched().openTime)} 放号，抢 ${sched().advanceDays} 天后的同一天。`)}</p></section>
+    return `<p class="cr-plan-sum" data-cr-slot="plan-summary" role="status"></p><section>${head('会议')}<div class="cr-form">${field('主题', '会议主题', 'text', 'maxlength="120"')}${field('开始时间', '开始时间', 'time', 'step="1800"')}${field('时长小时', '时长 · 小时', 'number', 'min="0" max="12" step="1"')}${select('时长分钟', '时长 · 分钟', [0, 30])}</div><p class="cr-hint">时长为 30 分钟至 12 小时，结束时间不能跨天。</p>
+      <div class="cr-field cr-days-field"><span>会议在周几<em>　按开会那天算，不是抢的那天</em></span><div class="cr-days">${['一', '二', '三', '四', '五', '六', '日'].map((d, i) => `<label class="cr-dy" title="周${d}"><input type="checkbox" data-cr-day="${i + 1}"${draft.抢订日.includes(i + 1) ? ' checked' : ''}><span>${d}</span></label>`).join('')}</div></div><p class="cr-hint">${escape(`每天 ${hm(sched().openTime)} 放号，能订 ${sched().advanceDays} 天后那天的会议室；所以想要周一的会议室，要在 ${sched().advanceDays} 天前的放号时刻去抢，Hub 会按时替你抢。`)}</p></section>
       <section>${head('优先会议室', `<span class="cr-n cr-num">${rooms.length} / 30</span><span class="cr-sp"></span>${button('read-rooms', icon('download', 14) + '从页面读取', 'ghost', 'cr-btn-sm')}`)}<p class="cr-hint cr-hint-top">按从上到下的顺序尝试，可拖动排序或点上下移，直接编辑名称。</p>
       <ol class="cr-rooms">${rooms.map((name, i) => `<li class="cr-rc${i === 0 ? ' first' : ''}" draggable="true" data-cr-room-row="${i}"><span class="cr-grip" aria-hidden="true">${icon('grip', 16)}</span><span class="cr-rc-n cr-num">${i + 1}</span><input class="cr-rc-name" aria-label="第 ${i + 1} 优先会议室" data-cr-room-name="${i}" value="${escape(name)}">${i === 0 ? '<span class="cr-tag blue">首选</span>' : ''}<span class="cr-ops"><button type="button" class="cr-icon-btn" data-cr-op="up" data-index="${i}" aria-label="上移 ${escape(name)}" title="上移"${!i ? ' disabled' : ''}>${icon('arrowU', 15)}</button><button type="button" class="cr-icon-btn" data-cr-op="down" data-index="${i}" aria-label="下移 ${escape(name)}" title="下移"${i === rooms.length - 1 ? ' disabled' : ''}>${icon('arrowD', 15)}</button><button type="button" class="cr-icon-btn" data-cr-op="delete" data-index="${i}" aria-label="删除 ${escape(name)}" title="删除">${icon('x', 15)}</button></span></li>`).join('')}</ol>${rooms.length ? '' : '<p class="cr-empty">还没有会议室。在下面填写全名添加，或点「从页面读取」。</p>'}
       <div class="cr-add"><input class="cr-input" data-cr-new-room aria-label="会议室全名" placeholder="会议室全名，需与网页一致">${button('add', icon('plus', 14) + '添加', 'sec', 'cr-btn-sm')}</div><div class="cr-picker-slot" data-cr-slot="room-picker"></div>${check('抢订设置.抢不到换下一间', '首选被抢走时，自动换下一间（约 20–30 秒）')}</section>`;
@@ -197,6 +213,8 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
     footer.hidden = !['plan', 'post', 'settings'].includes(tab);
     logsShown = null;
     slot('content').scrollTop = 0; updateLive();
+    // 组件还没接通时 updateLive 不刷新计划侧栏：一句话说明要一进页就有。
+    if (tab === 'plan') updatePlanSide();
   }
   function updateControls() {
     if (!host) return;
@@ -232,7 +250,8 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
     slot('save-state').textContent = dirty ? '有未保存的修改 · 切页会保留' : state.running ? '运行中，停止后可修改设置' : '设置已与本机组件同步';
   }
   function updatePlanSide() {
-    const cal = slot('calendar'), kv = slot('plan-kv');
+    const cal = slot('calendar'), kv = slot('plan-kv'), sum = slot('plan-summary');
+    if (sum) sum.textContent = planSummary({ days: draft.抢订日 || [], span: span(), rooms: (draft.优先会议室 || []).filter(Boolean), advanceDays: sched().advanceDays, openTime: sched().openTime, switchNext: draft.抢订设置?.抢不到换下一间 !== false });
     if (!cal || !kv) return;
     const days = draft.抢订日 || [], target = /^(\d{4})-(\d{2})-(\d{2})/.exec(effTarget() || '');
     const dates = [];
@@ -477,4 +496,4 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
   document.addEventListener('click', e => { if (e.target.closest('#scene-rail button:not(#btn-company-rooms)')) close(); });
   return { open, close };
 }
-module.exports = { createCompanyRoomsPage, roomReadiness };
+module.exports = { createCompanyRoomsPage, roomReadiness, planSummary };

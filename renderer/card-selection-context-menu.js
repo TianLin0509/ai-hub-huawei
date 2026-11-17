@@ -10,9 +10,18 @@ function createCardSelectionContextMenuController({
   copyText,
   expandText = text => text,
   pushToChatgpt,
+  markdown = null,
   requestAnimationFrameFn = requestAnimationFrame,
 }) {
   let selectedText = '';
+  let selectedMarkdown = '';
+  function syncMarkdownToggle() {
+    const item = menuEl.querySelector?.('[data-action="toggle-md"]');
+    if (!item) return;
+    const on = !!markdown?.markdownPreferred?.();
+    item.setAttribute('aria-checked', String(on));
+    item.textContent = (on ? '✓ ' : '') + 'Ctrl+C 和复制按钮都给 Markdown';
+  }
 
   function nodeElement(node) {
     if (!node) return null;
@@ -33,6 +42,11 @@ function createCardSelectionContextMenuController({
   function open(text, x, y) {
     if (!text || !String(text).trim()) return false;
     selectedText = String(text);
+    // 菜单一开就把选区转好：点菜单项时选区可能已经变了。
+    try { selectedMarkdown = markdown?.selectionToMarkdown ? markdown.selectionToMarkdown(window) : ''; } catch { selectedMarkdown = ''; }
+    const mdItem = menuEl.querySelector?.('[data-action="copy-md"]');
+    if (mdItem) mdItem.hidden = !markdown;
+    syncMarkdownToggle();
     menuEl.style.display = 'block';
     menuEl.style.left = `${x}px`;
     menuEl.style.top = `${y}px`;
@@ -47,9 +61,22 @@ function createCardSelectionContextMenuController({
   function close() {
     menuEl.style.display = 'none';
     selectedText = '';
+    selectedMarkdown = '';
   }
 
-  async function runAction(action, text = selectedText) {
+  async function runAction(action, text = selectedText, md = selectedMarkdown) {
+    if (action === 'toggle-md') {
+      const on = !markdown?.markdownPreferred?.();
+      markdown?.setMarkdownPreferred?.(on);
+      syncMarkdownToggle();
+      return { ok: true, markdown: on };
+    }
+    if (action === 'copy-md') {
+      const value = String(md || '').trim() ? String(md) : expandText(String(text || ''));
+      if (!value.trim()) return { ok: false, error: '没有选中文字。' };
+      const result = await copyText(value, { source: 'card-context-menu-md' });
+      return { ...result, copied: result?.ok === true };
+    }
     const value = expandText(String(text || ''));
     if (!value.trim()) return { ok: false, error: '没有选中文字。' };
     if (action === 'copy') {
@@ -91,9 +118,9 @@ function createCardSelectionContextMenuController({
     for (const button of menuEl.querySelectorAll('.context-menu-item')) {
       button.addEventListener('click', async () => {
         const action = button.dataset.action;
-        const value = selectedText;
+        const value = selectedText, md = selectedMarkdown;
         close();
-        await runAction(action, value);
+        await runAction(action, value, md);
       });
     }
     return true;

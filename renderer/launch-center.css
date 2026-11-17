@@ -469,3 +469,7 @@
 .session-config-section.lcc .session-tuning-grid > :is(#new-session-model-field, #new-session-account-field, .session-tuning-field) { grid-column: auto; }
 .lcc-tag.soft { background: var(--surface-raised, #eef0f4); color: var(--fg-muted); }
 .lcc-tag.risk { background: color-mix(in srgb, #d4483f 14%, transparent); color: #b42318; }
+/* pi（r39）：选中 pi 时在 AI 列表下面就地说明装没装、走哪条模型线路，没装时旁边就是「一键安装 pi」。 */
+#new-session-pi-note:not([hidden]) { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 0 0; padding: 8px 12px; font-size: 12px; line-height: 1.6; }
+#new-session-pi-note[data-state='error'] { color: #c2410c; }
+#new-session-pi-note #new-session-pi-install { flex: none; }

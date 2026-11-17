@@ -65,9 +65,17 @@ function readOauthAccount(home) {
     // nested file from an old explicit CLAUDE_CONFIG_DIR must never shadow it.
     const file = path.basename(home) === '.claude'
       ? path.join(path.dirname(home), '.claude.json') : path.join(home, '.claude.json');
-    return JSON.parse(fs.readFileSync(file, 'utf8')).oauthAccount || {};
+    // .claude.json 常有数 MB（项目历史都在里面），账号页每个号都要读一遍，主线程实测一次 0.9 秒（2026-11-18）。
+    // 文件没变（修改时间与大小相同）就用上次解析出的身份。
+    const st = fs.statSync(file);
+    const cached = oauthAccountCache.get(file);
+    if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) return cached.value;
+    const value = JSON.parse(fs.readFileSync(file, 'utf8')).oauthAccount || {};
+    oauthAccountCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, value });
+    return value;
   } catch { return {}; }
 }
+const oauthAccountCache = new Map();
 
 function accountLabel(home) {
   return String(readOauthAccount(home).emailAddress || '');

@@ -246,6 +246,20 @@ function probeList(ctx) {
     });
   }
 
+  // pi（r39）：开源终端编码 Agent。没装时旁边给一键安装（Hub 自管目录，不改全局 npm）。
+  if (kindAllowed('pi')) {
+    add('pi', 'pi（终端编码 Agent）', 'env-check', async () => {
+      const NAME = 'pi（终端编码 Agent）';
+      const profile = require('./pi-cli-profile');
+      const d = ctx.diagnosePi ? ctx.diagnosePi(env) : profile.diagnosePi(env);
+      if (d.state === 'ready') return entry('pi', NAME, 'env-check', STATUS.ok, `v${d.version} · ${d.entryPath}${d.source === 'hub' ? '（Hub 一键安装的）' : ''}`);
+      const fixes = [{ label: '一键安装 pi', act: 'pi-install' }, RECHECK];
+      return entry('pi', NAME, 'env-check', STATUS.warn, d.state === 'none' ? '没装（要用 pi 会话时再装）' : d.message, {
+        installed: false, cause: d.message, fixes, raw: d.message,
+        steps: ['点「一键安装 pi」：Hub 把 pi 装进自己的目录，不改你的全局 npm；没有 Node.js 22 时顺带装好', '装好后点「重新检测」'] });
+    });
+  }
+
   if (platform === 'win32') {
     add('git-bash', 'Git Bash', 'env-check', async () => {
       // 先全局找（注册表、各硬盘、VS / GitHub Desktop 自带的），找到就不提示安装，免得重复装。

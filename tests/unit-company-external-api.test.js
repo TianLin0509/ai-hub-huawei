@@ -220,6 +220,69 @@ test('company defaults apply only to tools without prior sessions, including res
   }
 });
 
+test('company proxy model switches accept only the route catalog and preserve the selected model and account settings', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-proxy-switch-'));
+  const previous = { data: process.env.CLAUDE_HUB_DATA_DIR, startup: process.env.CLAUDE_HUB_CODEAGENT_STARTUP_PROBE };
+  process.env.CLAUDE_HUB_DATA_DIR = root; process.env.CLAUDE_HUB_CODEAGENT_STARTUP_PROBE = '0';
+  t.after(() => {
+    if (previous.data === undefined) delete process.env.CLAUDE_HUB_DATA_DIR; else process.env.CLAUDE_HUB_DATA_DIR = previous.data;
+    if (previous.startup === undefined) delete process.env.CLAUDE_HUB_CODEAGENT_STARTUP_PROBE; else process.env.CLAUDE_HUB_CODEAGENT_STARTUP_PROBE = previous.startup;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const companyModels = require('../core/company-model-proxy').MODEL_IDS;
+  const sessions = new Map();
+  for (const kind of ['claude', 'claude-resume', 'codex']) {
+    const home = path.join(root, kind); fs.mkdirSync(home);
+    fs.writeFileSync(path.join(home, 'settings.json'), JSON.stringify({ model: 'original-model', keep: true }));
+    sessions.set(kind, { id: kind, kind, companyRoute: 'proxy', claudeConfigDir: home, companyProxyAccount: 'personal' });
+  }
+  sessions.set('subscription', { id: 'subscription', kind: 'claude' });
+  const handlers = new Map();
+  require('../main/ipc/session-handlers').registerSessionIpc({ handle: (name, fn) => handlers.set(name, fn), on() {} }, {
+    sessionManager: { getSession: id => sessions.get(id), getAllSessions: () => [], codeagentPoolActiveCounts: () => ({}),
+      updateSessionMeta: (id, fields) => Object.assign(sessions.get(id), fields) }, sendToRenderer() {},
+  });
+  const prepare = handlers.get('prepare-session-model-switch'), confirm = handlers.get('confirm-session-model-switch');
+  for (const kind of ['claude', 'claude-resume']) {
+    for (const model of companyModels) {
+      assert.equal((await prepare(null, { sessionId: kind, modelId: model })).ok, true, `${kind} prepares ${model}`);
+      const settings = path.join(sessions.get(kind).claudeConfigDir, 'settings.json');
+      fs.writeFileSync(settings, JSON.stringify({ model, keep: true }));
+      const result = await confirm(null, { sessionId: kind, modelId: model });
+      assert.equal(result.ok, true); assert.equal(result.preference.restored, true);
+      assert.equal(sessions.get(kind).currentModel.id, model); assert.equal(sessions.get(kind).fixedModel, model);
+      assert.equal(sessions.get(kind).companyProxyAccount, 'personal');
+      assert.deepEqual(JSON.parse(fs.readFileSync(settings, 'utf8')), { model: 'original-model', keep: true });
+    }
+  }
+  for (const model of companyModels) {
+    assert.equal((await confirm(null, { sessionId: 'codex', modelId: model })).ok, true);
+    assert.equal(sessions.get('codex').currentModel.id, model, 'company model is not normalized to an official Codex model');
+  }
+  for (const model of ['unknown-model', 'GLM-stale', 'claude-opus-5', 'bad\nmodel']) {
+    assert.equal((await prepare(null, { sessionId: 'claude', modelId: model })).ok, false);
+    assert.equal((await confirm(null, { sessionId: 'claude', modelId: model })).ok, false);
+  }
+  for (const model of companyModels) {
+    assert.equal((await prepare(null, { sessionId: 'subscription', modelId: model })).ok, false);
+    assert.equal((await confirm(null, { sessionId: 'subscription', modelId: model })).ok, false);
+  }
+});
+
+test('Claude custom-model confirmation matches the exact requested model before accepting the dialog', () => {
+  const { parseClaudeModelSwitchConfirmation, modelCommandAcknowledged } = require('../core/cli-model-command');
+  const dialog = target => `Switch model?\nYour next response will be slower and use more tokens\n❯ 1. Yes, switch to ${target}\n  2. No, go back\n`;
+  for (const model of require('../core/company-model-proxy').MODEL_IDS) {
+    const screen = dialog(model);
+    assert.deepEqual(parseClaudeModelSwitchConfirmation(screen, model), { target: model, number: 1, cursor: 1 });
+    assert.equal(modelCommandAcknowledged('claude-inline', screen, ''), true);
+    assert.equal(parseClaudeModelSwitchConfirmation(screen, 'other-model'), null);
+  }
+  assert.equal(parseClaudeModelSwitchConfirmation(dialog('Opus 5.5'), 'claude-opus-5-5').target, 'Opus 5.5');
+  assert.equal(parseClaudeModelSwitchConfirmation(dialog('deepseek-v4.1-flash-1017-extra'), 'deepseek-v4.1-flash-1017'), null);
+  assert.equal(parseClaudeModelSwitchConfirmation('Switch model?\n1. Yes, switch to deepseek-v4.1-flash-1017\n2. No, go back', 'deepseek-v4.1-flash-1017'), null);
+});
+
 test('external single-session tools do not become company dream runtimes but can be group members', () => {
   for (const kind of [...api.KINDS, 'powershell']) {
     assert.doesNotThrow(() => policy.assertKind(kind));

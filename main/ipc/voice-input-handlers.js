@@ -196,7 +196,9 @@ function registerVoiceInputIpc(ipcMain, { safeStorage, app, createStream = optio
   ipcMain.handle('voice:audio', async (e, { id, data } = {}) => { await owned(e, id).stream.audio(data); return true; });
   ipcMain.handle('voice:stop', async (e, id) => { if (!await owned(e, id).stream.finish()) throw new Error('停止录音失败'); return true; });
   ipcMain.handle('voice:cancel', (e, id) => { if (streams.get(e.sender.id)?.id === id) cancelOwner(e.sender.id); return true; });
-  app.on('before-quit', () => { for (const senderId of streams.keys()) cancelOwner(senderId); getLocal(read())?.stop(); getSpeaker(read())?.stop(); });
+  // before-quit can be cancelled by a window with unsaved recording content.
+  // Keep its streams and workers alive until Electron really reaches quit.
+  app.on('will-quit', () => { for (const senderId of streams.keys()) cancelOwner(senderId); getLocal(read())?.stop(); getSpeaker(read())?.stop(); });
   // 运行环境常驻（不占显存）：启动后稍等再拉起，不拖慢 Hub 启动；第一次说话只需装模型约 5 秒。
   const warmEnv = setTimeout(() => {
     try {

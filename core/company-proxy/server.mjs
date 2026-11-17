@@ -174,15 +174,21 @@ export function loginNeededMessage({ personal = false, poolAccounts = 0 } = {}) 
 }
 
 // Same response, but onEnd runs once when its body is fully read, fails, or is cancelled.
+// onEnd receives { chunks, firstMs, lastMs } (ms since the body was handed over): lets the log show whether the
+// upstream streamed (many chunks spread over time) or answered in one burst at the end (2026-11-17 feedback:
+// "DSH 回答不是流式的，执行完才一次显示").
 export function releaseOnEnd(response, onEnd) {
   const reader = response.body.getReader();
-  let ended = false;
-  const end = () => { if (!ended) { ended = true; try { onEnd(); } catch { /* bookkeeping only */ } } };
+  const began = Date.now();
+  let ended = false, chunks = 0, firstMs = null, lastMs = null;
+  const end = () => { if (!ended) { ended = true; try { onEnd({ chunks, firstMs, lastMs }); } catch { /* bookkeeping only */ } } };
   const body = new ReadableStream({
     async pull(controller) {
       try {
         const { value, done } = await reader.read();
-        if (done) { controller.close(); end(); } else controller.enqueue(value);
+        if (done) { controller.close(); end(); return; }
+        chunks++; lastMs = Date.now() - began; if (firstMs === null) firstMs = lastMs;
+        controller.enqueue(value);
       } catch (error) { end(); controller.error(error); }
     },
     cancel(reason) { end(); return reader.cancel(reason).catch(() => {}); },
@@ -310,7 +316,11 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
         log(`${kind} ${body.model} -> HTTP ${response.status} via ${router.accountFor(sessionTag) || '-'} in ${Date.now() - started}ms`);
         if (!response.body) return response;
         handedOff = true; // the body now releases the slot
-        return releaseOnEnd(response, done);
+        const headersMs = Date.now() - started;
+        return releaseOnEnd(response, timing => {
+          done();
+          if (response.ok && timing?.chunks) log(`${kind} ${body.model} stream: ${timing.chunks} chunks, first +${timing.firstMs}ms, last +${timing.lastMs}ms after headers (${headersMs}ms)`);
+        });
       } catch (error) {
         stats.failed++;
         const code = typeof error?.code === 'string' && SAFE_CODE.test(error.code) ? error.code : 'UPSTREAM_CALL_FAILED';
@@ -334,7 +344,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
     catch (error) { const msg = String(error?.message || 'conversion failed').slice(0, 160); log(`${name} request rejected before upstream: ${msg}`); stats.failed++; stats.lastError = `${name}: ${msg}`; throw error; }
   } });
   const proxy = createProxy({ provider: gated, accessKey: key, timeoutMs: opts.timeoutMs, maxBodyBytes: 64 * 1024 * 1024,
-    onEvent: e => { if (e.type !== 'request_finished') log(`proxy event ${e.type}`); },
+    onEvent: e => { if (e.type !== 'request_finished') log(`proxy event ${e.type}`); else if (e.detail) log(`upstream HTTP ${e.status} reason: ${e.detail}`); },
     protocolAdapters: { '/v1/messages': logged('claude', claude), '/v1/responses': logged('codex', codex), '/v1/chat/completions': logged('dsh', dsh) } });
   const keyBytes = Buffer.from(key);
   // Returns { sessionTag, pin } for a valid "<key>[.<tag>]" credential, otherwise null.

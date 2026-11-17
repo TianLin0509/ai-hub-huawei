@@ -53,7 +53,7 @@ const {
 const { marked } = require('marked');
 const DOMPurify = require('dompurify');
 const { fileURLToPath } = require('url');
-const { extractVisibleCardText } = require('./visible-card-text.js');
+const { extractVisibleCardText, copyableCardText } = require('./visible-card-text.js');
 const { applyCardDisplaySettings } = require('./card-display-settings.js');
 const {
   GC_WORKING_FRESH_MS,
@@ -279,7 +279,8 @@ const directClipboard = Object.create(clipboard);
 directClipboard.writeText = clipboard.writeText.bind(clipboard);
 const clipboardController = createClipboardController({ document, window, clipboard: directClipboard,
   writeTextVerified: (text, formats) => ipcRenderer.invoke('clipboard:write-text', text, formats),
-  expandText: pasteChips.expandPasteMarkers });
+  expandText: pasteChips.expandPasteMarkers,
+  selectionMarkdown: win => { const md = require('./markdown-copy'); return md.markdownPreferred() ? md.selectionToMarkdown(win) : ''; } });
 clipboardController.init();
 require('./clipboard-routing').routeClipboardWrites({ clipboard, navigator,
   copyText: (text, options) => clipboardController.copyText(text, options) });
@@ -1404,6 +1405,11 @@ function showDormantResumePlaceholder(session, error = null, { checking = false 
   copy.append(title, detail);
   panel.append(spinner, copy);
   terminalPanelEl.appendChild(panel);
+  // pi 会话存的线路缺钥匙（r39 审查）：就地补 Key，保存后直接重新唤醒，不让用户去设置页找。
+  if (error) {
+    void require('./pi-route-key-fix').mountPiRouteKeyFix(copy, { session, modelId: sessionModelId(session), ipc: ipcRenderer, replaceEl: detail,
+      onRetry: () => selectSession(session.id) }).catch(err => console.warn('[pi-route-key-fix]', err && err.message));
+  }
 }
 
 
@@ -2773,7 +2779,7 @@ const cardMultiSelectController = createCardMultiSelectController({
   copyText: (text, options) => clipboardController.copyText(text, options),
   getActiveSessionId: () => activeSessionId,
   getTurnById: (turnId) => window._sessionTurns && window._sessionTurns.get(turnId),
-  extractVisibleCardText,
+  extractVisibleCardText: copyableCardText,
 });
 // init 失败（index.html 漂移、操作条节点没了）必须出声：否则圆圈画得出来、
 // 点了没反应，用户只会觉得"卡了"。
@@ -3453,7 +3459,8 @@ ipcRenderer.on('turn-aborted-event', (_event, payload) => {
 
 ipcRenderer.on('turn-failed-event', (_event, payload) => {
   const { hubSessionId, failedAt, turnId, kind, message, occurrenceId } = payload || {};
-  const cliExited = isCodeAgentKind(kind) && payload.signalSource === 'cli-exited-to-shell';
+  // 以及 CodeAgent 屏幕上的会话级报错（core/codeagent-screen-error.js）。
+  const cliExited = isCodeAgentKind(kind) && (payload.signalSource === 'cli-exited-to-shell' || payload.signalSource === 'codeagent-screen-error');
   if (!hubSessionId || (!isTranscriptCliKind(kind) && !cliExited)) return;
   const session = sessions.get(hubSessionId);
   if (!session || session.status === 'dormant') return;
@@ -3804,7 +3811,7 @@ document.addEventListener('click', async (e) => {
   if (action === 'copy') {
     // 复制用户实际看到的回答正文，不复制 markdown 围栏、toolCalls 原始块，
     // 也不把 hover 出来的 Copy/Bash/展开按钮混进剪贴板。
-    const visibleText = extractVisibleCardText(card.querySelector('.turn-body'));
+    const visibleText = copyableCardText(card.querySelector('.turn-body'));
     if (btn.disabled) return;
     const orig = btn.textContent;
     btn.disabled = true;
@@ -5583,7 +5590,8 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       //   凡是卡片视图能渲染的 kind 都该立刻出卡，判据统一走这两个 helper。
       const cardCapableKind = !!kind && (isClaudeFamily(kind) || isTranscriptCliKind(kind));
       const acpQueueing = session?.runtimeBackend === 'acp' && ['running','waiting'].includes(session.nativeRuntime?.state);
-      const optimisticReceipt = isNativeAgent(session) || isDshCliSession(session) || isCodeAgentKind(kind)
+      // pi（r39）和 DSH 一样：发送回执以终端里 pi 记下的那条为准，临时卡带上回执号才能被它认领，不会显示两张。
+      const optimisticReceipt = isNativeAgent(session) || isDshCliSession(session) || /^pi(?:-resume)?$/.test(String(kind || '')) || isCodeAgentKind(kind)
         || (session?.purpose === 'hub-assistant' && !nativeCommand && !ptyCommand)
         ? { clientSubmissionId } : {};
       if ((pane.isCard ? pane.isCard() : currentView === 'card') && cardCapableKind && !acpQueueing && typeof mountOptimisticUserCard === 'function') {
@@ -6251,7 +6259,8 @@ async function selectSession(id, opts = {}) {
     void resumeDormantSession(id, { ...opts, selectIntent: intent }).catch((error) => {
       console.warn('[resume-session] dormant wake failed:', error);
       if (activeSessionId === id) showDormantResumePlaceholder(session, error);
-      require('./ui-feedback').showHubAlert(`会话恢复失败：${error && error.message ? error.message : String(error)}`);
+      // pi 的失败原因（含缺钥匙时的补 Key 输入框）已经写在当前页上，不再叠一个弹窗挡住它。
+      if (!(activeSessionId === id && /^pi(?:-resume)?$/.test(String(session.kind || '')))) require('./ui-feedback').showHubAlert(`会话恢复失败：${error && error.message ? error.message : String(error)}`);
     });
     return;
   }
@@ -9083,6 +9092,7 @@ const cardSelectionContextMenu = createCardSelectionContextMenuController({
   clipboard,
   copyText: (text, options) => clipboardController.copyText(text, options),
   expandText: pasteChips.expandPasteMarkers,
+  markdown: require('./markdown-copy'),
 });
 cardSelectionContextMenu.init();
 

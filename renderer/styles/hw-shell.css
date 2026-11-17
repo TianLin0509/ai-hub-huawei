@@ -20,15 +20,16 @@
 }
 
 /* ---------- 宽度：默认 64px 图标栏（2026-11-05 改回小栏）；「设置 → 导航显示文字」切回定稿宽版；
-   用户在「显示参数」里调过就用用户的值 ---------- */
-:root[data-hw-shell]:not([data-display-mode="phone"]):not(.hub-rail-preview):not(.hub-rail-hidden):not(.hub-rail-unpinned) {
+   用户在「显示参数」里调过就用用户的值。
+   非固定时鼠标移到左缘弹出的预览和固定时同宽（2026-11-18：曾只给预览 44px，图标栏文字被截成半个字）---------- */
+:root[data-hw-shell]:not([data-display-mode="phone"]):not(.hub-rail-hidden) {
   --hub-rail-slot: var(--display-rail-width, 64px); --hub-rail-open: var(--display-rail-width, 64px);
 }
-:root[data-hw-shell][data-hw-rail-pref="wide"]:not([data-display-mode="phone"]):not(.hub-rail-preview):not(.hub-rail-hidden):not(.hub-rail-unpinned) {
+:root[data-hw-shell][data-hw-rail-pref="wide"]:not([data-display-mode="phone"]):not(.hub-rail-hidden) {
   --hub-rail-slot: var(--display-rail-width, 248px); --hub-rail-open: var(--display-rail-width, 248px);
 }
 @media (max-width: 1360px) {
-  :root[data-hw-shell][data-hw-rail-pref="wide"]:not([data-display-mode="phone"]):not(.hub-rail-preview):not(.hub-rail-hidden):not(.hub-rail-unpinned) {
+  :root[data-hw-shell][data-hw-rail-pref="wide"]:not([data-display-mode="phone"]):not(.hub-rail-hidden) {
     --hub-rail-slot: var(--display-rail-width, 232px); --hub-rail-open: var(--display-rail-width, 232px);
   }
 }

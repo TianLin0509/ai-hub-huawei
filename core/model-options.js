@@ -15,6 +15,8 @@ const MODEL_OPTIONS_BY_KIND = {
   qwen: require('./acp-model-catalog').acpModelOptions('qwen'),
   'deepseek-acp': require('./acp-model-catalog').acpModelOptions('deepseek-acp'),
   glm: require('./acp-model-catalog').acpModelOptions('glm'),
+  // pi（r39）：可用线路随本机钥匙变化，启动中心打开时经 pi:status 填进运行时清单。
+  pi: [],
   claude: [
     { id: 'claude-opus-5-5[1m]', label: 'Opus 5.5 (1M context)' },
     { id: 'claude-opus-5-5',     label: 'Opus 5.5' },
@@ -206,6 +208,8 @@ const MODEL_SWITCH_STRATEGY_BY_KIND = Object.freeze({
   qwen: 'acp-native',
   'deepseek-acp': 'acp-native',
   glm: 'acp-native',
+  // pi：/model 线路/模型、/thinking 档位，由观察扩展报回确认（core/pi-cli-session.js configure）。
+  pi: 'acp-native',
   // agy 1.3.3: `/model <id>` switches in place and prints "Model set to <label>".
   gemini: 'agy-inline',
   // 公司 CodeAgent：在它自己的 /model 菜单里选（交互模式不认 --model，2026-10-13 公司真机三轮排查）。

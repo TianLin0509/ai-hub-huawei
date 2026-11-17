@@ -29,6 +29,21 @@ function registerAcpIpc(ipcMain, {sessionManager} = {}) {
     return session.readToolResult(reference);
   });
   ipcMain.handle('acp:settings:get', () => publicSettings(getConfig()));
+  // pi（r39）：装没装、能用哪些模型线路。只读文件，不起进程；钥匙不出主进程。
+  ipcMain.handle('pi:status', () => {
+    const pi = require('../../core/pi-cli-profile');
+    const config = getConfig(), dataDir = require('../../core/data-dir').getHubDataDir();
+    return { diagnosis: pi.diagnosePi(process.env), models: pi.piModelOptions(config, process.env, { dataDir }),
+      defaultModel: pi.defaultPiModel(config, process.env, { dataDir }),
+      routes: pi.availableRoutes(config, process.env, { dataDir }).map(route => ({ id: route.id, label: pi.ROUTE_LABELS[route.id] })) };
+  });
+  // pi 会话存的模型这次能不能用（r39 审查 P1）：缺钥匙时返回线路和要补的 Key，界面就地给输入框。不返回钥匙本身。
+  ipcMain.handle('pi:route-check', (_event, { model, profileId } = {}) => {
+    const pi = require('../../core/pi-cli-profile');
+    const dataDir = require('../../core/data-dir').getHubDataDir();
+    const result = pi.piRouteCheck(String(model || ''), getConfig(), process.env, { dataDir, profileId: String(profileId || '') });
+    return result.ok ? { ok: true } : { ok: false, route: result.route, label: result.label, keyField: result.keyField, model: result.model, message: result.message };
+  });
   ipcMain.handle('acp:settings:save', (_event, request = {}) => {
     try {
       const configPath = getConfigPath();

@@ -120,4 +120,25 @@ async function installDshWithUserNpm({ env = process.env, signal, run = runNpm, 
   if (missingShim) throw new Error(`npm 已装好 DSH，但全局命令入口 ${missingShim} 没有生成，终端里还不能直接用 dsh`);
   return { version, prefix, tuiName, tuiVersion: metadata.version, source: 'user-npm' };
 }
-module.exports = { npmInvocation, runNpm, killNpmTree, installDshWithUserNpm, globalLayout };
+// pi（r39）：组件目录里还没有 pi 时的后备——按用户自己的 npm 配置（registry、代理）把固定版本装进 Hub 自管目录。
+// node：将来跑 pi 用的 Node（调用方已核过 >=22.19）；probe(node, [入口, '--version'])：真跑一次入口，通过才算装好（r39 审查）。
+async function installPiWithUserNpm({ env = process.env, signal, run = runNpm, onProgress = () => {}, targetRoot = null, node = '', probe = null } = {}) {
+  if (typeof targetRoot !== 'string' || !path.isAbsolute(targetRoot)) throw new Error('pi 安装目标必须显式指定绝对路径');
+  if (!node || typeof probe !== 'function') throw new Error('pi 安装缺少可用的 Node.js 或试运行步骤，没有开始安装');
+  const { PI_PACKAGE, PI_ENTRY, PI_VERSION } = require('../pi-cli-profile');
+  onProgress({ phase: 'npm-fallback' });
+  fs.mkdirSync(targetRoot, { recursive: true });
+  await run(['install', '--prefix', targetRoot, '--no-audit', '--no-fund', PI_PACKAGE + '@' + PI_VERSION], { env, signal });
+  const entry = path.join(targetRoot, 'node_modules', ...PI_ENTRY.split('/'));
+  let installed = null;
+  try { installed = JSON.parse(fs.readFileSync(path.join(targetRoot, 'node_modules', PI_PACKAGE, 'package.json'), 'utf8')); } catch {}
+  if (!fs.existsSync(entry) || installed?.version !== PI_VERSION) throw new Error(`npm 已执行，但 pi ${PI_VERSION} 没有就绪`);
+  onProgress({ phase: 'probing' });
+  try { await probe(node, [entry, '--version']); }
+  catch (error) {
+    if (error.cancelled || error.name === 'AbortError') throw error;
+    throw new Error(`npm 已装好 pi ${PI_VERSION} 的文件，但用 ${node} 试运行没有通过（${error.killed ? '90 秒内没有响应' : String(error.stderr || error.message || '').trim().slice(0, 200)}），没有登记为装好`);
+  }
+  return { version: PI_VERSION, prefix: targetRoot, source: 'user-npm', node };
+}
+module.exports = { npmInvocation, runNpm, killNpmTree, installDshWithUserNpm, installPiWithUserNpm, globalLayout };

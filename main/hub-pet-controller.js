@@ -1400,7 +1400,7 @@ function createHubPetController({
     if (debug) ipcMain.removeHandler?.('hub-pet:debug');
   }
 
-  return { start, stop, dispose, setSignal, setSettings, setProfile, celebrate, petted, roleList, notify, routeDesktopNotice, canNotify, sessionSeen, announceUpdate, isActive: () => enabled() && started && alive(), getWindow: () => win, getSettings: () => settings.get(), _evaluate: evaluate, _speech: speech, _roles: roles, _reply: reply, _chatterTrack: chatterTrack,
+  return { start, stop, dispose, setSignal, setSettings, setProfile, celebrate, petted, roleList, notify, routeDesktopNotice, canNotify, sessionSeen, announceUpdate, isActive: () => enabled() && started && alive(), getWindow: () => win, getWindows: () => [win, menuWin].filter(Boolean), getSettings: () => settings.get(), _evaluate: evaluate, _speech: speech, _roles: roles, _reply: reply, _chatterTrack: chatterTrack,
     _restoreRememberedRole: restoreRememberedRole, _autoRole: () => ({ ...autoRole }) };
 }
 

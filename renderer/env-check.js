@@ -179,6 +179,15 @@
       await run();
       return;
     }
+    if (act === 'pi-install') {
+      setMessage('正在安装 pi（Hub 自管目录，不改你的全局 npm，通常 1–3 分钟）…');
+      const r = await ipcRenderer.invoke('cli-tools:install', { id: 'pi' }).catch(error => ({ ok: false, error: error.message }));
+      if (r?.state) cliState = r.state;
+      if (!r?.ok) { setMessage('pi 没装好：' + (r?.error || r?.state?.tools?.pi?.error || '未知原因'), true); return; }
+      setMessage('pi 已装好，正在重新检测…');
+      await run();
+      return;
+    }
     // DSH 分情况补齐（2026-11-17）：默认装 Hub 自管的运行环境；用户明确点「装到我的全局 npm」才按界面包要求配套装进全局目录。
     if (act === 'dsh-install' || act === 'dsh-install-global') {
       const toGlobal = act === 'dsh-install-global';

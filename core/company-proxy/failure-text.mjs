@@ -22,8 +22,14 @@ export function failureStep(code = '') {
   return '';
 }
 
-const HTTP_MEANING = status => status === 400 ? '请求格式不被接受' : status === 401 || status === 403 ? '登录或权限被拒绝（打开 CodeAgent 重新登录一下）'
+// 401 = the company service did not accept the login; 403 = it knows who you are but refused this call
+// (login revoked elsewhere, no permission for this model, or quota used up). Claude Code adds its own
+// "Please run /login" to any 401/403; that would start an Anthropic login, which does not help here.
+const HTTP_MEANING = status => status === 400 ? '请求格式不被接受' : status === 401 ? '公司服务不认这次登录'
+  : status === 403 ? '公司服务拒绝了这次调用，常见是登录已在别处失效、账号没有这个模型的权限或额度用完'
   : status === 404 ? '接口地址不对' : status === 413 ? '请求太大' : status === 429 ? '限流' : status >= 500 ? '公司服务端出错' : '请求被拒绝';
+const HTTP_ADVICE = status => status === 401 ? '打开 CodeAgent 重新登录一下；不用在 Claude Code 里运行 /login。'
+  : status === 403 ? '先在 CodeAgent 里用同一个模型发一句试试，不行就重新登录 CodeAgent；不用在 Claude Code 里运行 /login。' : '';
 
 /** Before the stream: the provider threw. -> plain words with the step and a short code. */
 export function preStreamMessage(error, { timedOut = false } = {}) {
@@ -33,21 +39,63 @@ export function preStreamMessage(error, { timedOut = false } = {}) {
   return `公司模型这次没有回复：卡在「${step || '调用公司上游'}」这一步${code ? `（${code}）` : ''}。可以直接重试；反复出现请到「设置 → 自有 API」看公司模型反代的状态。`;
 }
 
-// Only short plain text from an upstream error body, with anything URL- or host-like removed.
+// Credentials and personal fields an upstream error body may echo back. The detail is shown in the UI and also
+// written to diagnostics/company-model-proxy.log (r38b review P1), so it is masked here, before either sees it.
+// Separator between a field name and its value: `key: v`, `key=v`, JSON `"key":"v"`, escaped `\"key\":\"v\"`.
+const SEP = String.raw`((?:\\*["'])?\s*[:=：]\s*(?:\\*["'])?)`;
+// Cookie / Set-Cookie carry many name=value pairs (theme=light; SESSION=…; JSESSIONID=…): mask the whole header
+// value up to the end of the line or a quote (r38b re-review P1, 2026-11-18). Authorization schemes such as Digest
+// carry several comma-separated parts: mask up to the line end, a quote or `;`.
+const COOKIE_HEADER = new RegExp(String.raw`(?<![A-Za-z0-9_-])(set-cookie|cookie)${SEP}[^\r\n"'\\]+`, 'gi');
+const AUTH_HEADER = new RegExp(String.raw`(?<![A-Za-z0-9_-])(proxy-authorization|authorization)${SEP}[^\r\n;]+`, 'gi');
+const FIELD_NAMES = [
+  'x-api-key', String.raw`api[-_]?key`, 'apikey', String.raw`access[-_]?key`, String.raw`secret[-_]?key`, String.raw`private[-_]?key`,
+  // Any token / session / ticket style name: access_token, x-csrf-token, SESSION, JSESSIONID, PHPSESSID, ticket, jwt.
+  String.raw`[A-Za-z0-9_-]*(?:token(?!s)|session|sessid|ticket|csrf|xsrf|jwt|secret|credential|passw(?:or)?d)[A-Za-z0-9_-]*`,
+  'pwd', 'sid', 'signature', 'sign', 'ak', 'sk',
+  String.raw`employee(?:[-_]?(?:id|no|number))?`, String.raw`emp[-_]?no`, String.raw`staff[-_]?id`, String.raw`user[-_]?(?:id|name)`,
+  'username', 'uid', 'account', '工号', '账号', '口令', '密码',
+].join('|');
+// A value right after an opening quote runs to the closing quote (a quoted password may contain spaces);
+// otherwise it runs to the next space or delimiter, skipping a leading scheme word (Bearer / Basic / Token).
+const SECRET_FIELDS = new RegExp(String.raw`(?<![A-Za-z0-9_])(${FIELD_NAMES})${SEP}(?:(?<=["'])[^"'\\\r\n]+|(?:(?:bearer|basic|token)\s+)?[^\s"',;&，；]{2,})`, 'gi');
+export function redactSecrets(text) {
+  return String(text || '')
+    .replace(/\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{4,}/gi, '$1 <已隐去>')
+    .replace(COOKIE_HEADER, '$1$2<已隐去>')
+    .replace(AUTH_HEADER, '$1$2<已隐去>')
+    .replace(SECRET_FIELDS, '$1$2<已隐去>')
+    .replace(/\beyJ[A-Za-z0-9_-]{6,}(?:\.[A-Za-z0-9_-]{4,}){1,2}/g, '<令牌已隐去>')
+    .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '<邮箱>')
+    // Long opaque strings (keys, tokens, signatures) and long digit runs (employee or phone numbers).
+    .replace(/[A-Za-z0-9_+/=-]{24,}/g, m => (/\d/.test(m) && /[A-Za-z]/.test(m) ? '<已隐去>' : m))
+    .replace(/(?<![A-Za-z0-9_])[A-Za-z]?\d{7,}(?![A-Za-z0-9_])/g, '<编号已隐去>');
+}
+
+// Only short plain text from an upstream error body, with credentials masked and anything URL- or host-like removed.
 export function safeUpstreamDetail(text) {
   let message = '';
   try {
     const json = JSON.parse(text);
-    const m = json?.error?.message ?? json?.message ?? json?.msg ?? json?.error;
-    if (typeof m === 'string') message = m;
-  } catch { /* not JSON: no detail */ }
-  message = message.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, '').replace(/\b[\w-]+(?:\.[\w-]+){2,}\b/g, '').replace(/\s+/g, ' ').trim();
+    // Company gateways answer in several shapes; take the first readable reason, then a bare code.
+    const pick = [json?.error?.message, json?.message, json?.msg, json?.errorMessage, json?.error_msg, json?.errMsg,
+      json?.detail, json?.error_description, json?.error, json?.data?.message, json?.data?.msg]
+      .find(v => typeof v === 'string' && v.trim());
+    const code = [json?.error?.code, json?.code, json?.errorCode, json?.error_code, json?.error?.type]
+      .find(v => (typeof v === 'string' && v.trim()) || Number.isFinite(v));
+    message = pick ? String(pick) : code !== undefined ? `错误码 ${code}` : '';
+  } catch {
+    // Not JSON: an HTML page here means a gateway or firewall answered, not the model service.
+    if (/^\s*<(?:!doctype|html|head|body)/i.test(String(text || ''))) message = '上游回的是网页而不是接口错误，多半是网关或防火墙拦下了';
+  }
+  message = redactSecrets(message).replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, '').replace(/\b[\w-]+(?:\.[\w-]+){2,}\b/g, '').replace(/\s+/g, ' ').trim();
   return message.slice(0, 160);
 }
 
 /** Before the stream: the upstream answered with an HTTP error. */
 export function upstreamHttpMessage(status, detail = '') {
-  return `公司模型上游返回 HTTP ${status}（${HTTP_MEANING(status)}）${detail ? '：' + detail : ''}。`;
+  const advice = HTTP_ADVICE(status);
+  return `公司模型上游返回 HTTP ${status}（${HTTP_MEANING(status)}）${detail ? '：' + detail : ''}。${advice}`;
 }
 
 /** After the stream started: why it broke, in plain words. */

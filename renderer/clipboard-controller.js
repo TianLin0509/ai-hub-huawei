@@ -55,6 +55,8 @@ function createClipboardController({
   renderFeedback = true,
   // 选区文字的最后一道转换：会话输入框的粘贴块在 DOM 里是内部标记，复制时要换回原文。
   expandText = text => text,
+  // 选区换成 Markdown（只在用户打开「复制为 Markdown」时由 renderer 注入）；返回空字符串就照旧用纯文本。
+  selectionMarkdown = null,
 } = {}) {
   const delays = Array.from(retryDelaysMs || DEFAULT_RETRY_DELAYS_MS)
     .map(value => Math.max(0, Number(value) || 0));
@@ -186,6 +188,13 @@ function createClipboardController({
     });
   }
 
+  function markdownFor(target) {
+    if (typeof selectionMarkdown !== 'function' || isTerminalTarget(target)) return '';
+    const element = elementForTarget(target);
+    if (element?.closest?.('textarea, input, [contenteditable="true"]')) return '';
+    try { return String(selectionMarkdown(window) || ''); } catch { return ''; }
+  }
+
   function handleKeydown(event) {
     if (!event || event.isComposing || event.altKey || !(event.ctrlKey || event.metaKey)) return false;
     const key = String(event.key || '').toLowerCase();
@@ -193,7 +202,7 @@ function createClipboardController({
     // xterm deliberately keeps bare Ctrl+C as SIGINT when it has no selection.
     // Its selected-text path calls copyText() directly from renderer.js.
     if (isTerminalTarget(event.target)) return false;
-    const text = expandText(readSelectedText(event.target, window));
+    const text = markdownFor(event.target) || expandText(readSelectedText(event.target, window));
     if (!text) return false;
     event.preventDefault?.();
     event.stopImmediatePropagation?.();
@@ -206,12 +215,13 @@ function createClipboardController({
     // 菜单复制也立即走同一写入方，不能留下一个稍后修复旧选区的定时器。
     if (!event || event.defaultPrevented) return;
     const rawText = readSelectedText(event.target, window);
-    const text = expandText(rawText);
+    const markdown = markdownFor(event.target);
+    const text = markdown || expandText(rawText);
     if (!text) return;
     // Preserve the native menu's rich-text format as well as the verified plain text.
     let html;
     const selection = window?.getSelection?.();
-    if (text === rawText && !elementForTarget(event.target)?.closest?.('input, textarea') && selection?.rangeCount && selection.getRangeAt && document?.createElement) {
+    if ((markdown || text === rawText) && !elementForTarget(event.target)?.closest?.('input, textarea') && selection?.rangeCount && selection.getRangeAt && document?.createElement) {
       const fragment = document.createElement('div');
       fragment.appendChild(selection.getRangeAt(0).cloneContents());
       html = fragment.innerHTML;

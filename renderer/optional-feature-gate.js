@@ -13,6 +13,8 @@ const CSS = `
 .of-gate-box .of-gate-row { display: flex; gap: 10px; align-items: center; margin-top: 18px; }
 .of-gate-box button { padding: 6px 18px; border-radius: 8px; border: 1px solid #3478f6; background: #3478f6; color: #fff; font: inherit; font-size: 13px; cursor: pointer; }
 .of-gate-box button:disabled { opacity: .6; cursor: default; }
+.of-gate-box button.of-gate-quiet { background: transparent; border-color: transparent; color: var(--fg-muted, #6b7080); padding: 6px 8px; }
+.of-gate-box button.of-gate-quiet:hover { color: var(--fg, #1f2329); text-decoration: underline; }
 .of-gate-box .of-gate-err { color: #c0392b; font-size: 12px; }
 .of-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-muted, #6b7080); white-space: nowrap; }
 .of-badge b { color: #3478f6; font-weight: 500; }
@@ -22,6 +24,8 @@ const CSS = `
 :root[data-hw-shell] .of-gate-box .of-gate-state, :root[data-hw-shell] .of-gate-box .of-gate-cost, :root[data-hw-shell] .of-badge, :root[data-hw-shell] .of-badge button { color: var(--hw-text-2); }
 :root[data-hw-shell] .of-gate-box .of-gate-err { color: var(--hw-red); }
 :root[data-hw-shell] .of-gate-box button { border-color: var(--hw-brand); background: var(--hw-brand); color: var(--hw-text-on); }
+:root[data-hw-shell] .of-gate-box button.of-gate-quiet { border-color: transparent; background: transparent; color: var(--hw-text-2); }
+:root[data-hw-shell] .of-gate-box button.of-gate-quiet:hover { color: var(--hw-text-1); }
 :root[data-hw-shell] .of-badge b { color: var(--hw-brand); }`;
 
 function createFeatureGate({ document, window, id, page, badgeSlot, onEnabled = () => {}, showMessage }) {
@@ -44,13 +48,20 @@ function createFeatureGate({ document, window, id, page, badgeSlot, onEnabled = 
     if (entry && !entry.on) {
       gate.innerHTML = `<div class="of-gate-box"><h2>${esc(entry.name)}</h2><div class="of-gate-state">可选功能 · 未开启</div>
         <p>${esc(entry.desc)}</p><p class="of-gate-cost">${esc(entry.cost)}。关着时后台不为它花时间。</p>
-        <div class="of-gate-row"><button type="button" data-of-gate="on">开启${esc(entry.name)}</button><span class="of-gate-err" hidden></span></div>
-        <p class="of-gate-cost">以后可在设置菜单「🧩 可选功能」里关掉。</p></div>`;
+        <div class="of-gate-row"><button type="button" data-of-gate="on">开启${esc(entry.name)}</button>${entry.navHidden ? '' : '<button type="button" class="of-gate-quiet" data-of-gate="hide" title="左侧导航不再显示这个入口；以后可在设置菜单「🧩 可选功能」里打开">不用，收起左侧入口</button>'}<span class="of-gate-err" hidden></span></div>
+        <p class="of-gate-cost">以后可在设置菜单「🧩 可选功能」里开关；关掉的功能不在左侧导航显示。</p></div>`;
     }
     if (entry && entry.on) badge.innerHTML = `可选功能 · <b>已开启</b><button type="button" data-of-gate="off" title="关掉后后台不再为它取数">关闭</button>`;
     return on;
   }
   gate.addEventListener('click', async event => {
+    const hide = event.target.closest('[data-of-gate="hide"]');
+    if (hide) {
+      hide.disabled = true;
+      try { await api().set(id, false); render(); showMessage?.(`已收起「${entry?.name || ''}」的左侧入口，要用时在设置菜单「🧩 可选功能」里打开`); }
+      catch (error) { const err = gate.querySelector('.of-gate-err'); err.textContent = error.message; err.hidden = false; hide.disabled = false; }
+      return;
+    }
     const btn = event.target.closest('[data-of-gate="on"]');
     if (!btn) return;
     btn.disabled = true;

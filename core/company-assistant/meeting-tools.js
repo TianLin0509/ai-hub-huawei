@@ -20,6 +20,7 @@ class MeetingTools {
     fs.writeFileSync(this.endpoint(m.id, question), JSON.stringify({url:this.bridge.url,token}),{mode:0o600});
     }
   }
+  unbind(m) { for (const [token, sid] of [...this.tokens]) if (sid === m.sessionId || sid === m.questionSessionId) this.tokens.delete(token); }
   entry(sessionId) { const id=this.m.ids().find(id=>{const m=this.m.load(id);return m.sessionId===sessionId||m.questionSessionId===sessionId;}); if(!id)throw new Error('会议会话不存在');return {name:'meeting',command:this.m.deps.nodeExecutable||process.execPath,args:[path.join(__dirname,'meeting-mcp.js')],env:{ELECTRON_RUN_AS_NODE:'1',HUB_MEETING_ENDPOINT:this.endpoint(id,this.m.load(id).questionSessionId===sessionId)}}; }
   async invoke(r) {
     const id=this.m.ids().find(id=>{const m=this.m.load(id);return m.sessionId===r.callerSessionId||m.questionSessionId===r.callerSessionId;});if(!id||!r.callerSessionId)throw new Error('工具仅供所属会议会话使用');

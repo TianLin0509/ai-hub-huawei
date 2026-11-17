@@ -326,3 +326,72 @@ test('提交时：标题里的标记去掉；留着骨架占位词的给一条�
   assert.deepEqual(second.warnings, []);
   assert.equal(f.make.status(job.id).state, 'done');
 });
+
+test('交付后用户在助理会话里接着要求改：那一问收工后再提交生成新版本；同一问里改满两轮仍截止', t => {
+  const f = fixture(t), sk = listSkeletons()[0];
+  const job = f.make.start({ skeletonId: sk.id, brief: '讲清两项改进的收益' }).job;
+  const first = f.make.submit({ jobId: job.id, spec: sk.spec });
+  assert.equal(f.make.status(job.id).state, first.warnings.length ? 'revising' : 'done');
+  // 同一问还在进行：交付后不再接收（守住每问最多改两轮）
+  if (!first.warnings.length) assert.throws(() => f.make.submit({ jobId: job.id, spec: sk.spec }), /已经结束/);
+  f.chats[0].state = 'done';
+  const before = f.make.status(job.id);
+  assert.equal(before.state, 'done');
+  assert.throws(() => f.make.submit({ jobId: job.id, spec: sk.spec }), /已经结束/);
+  f.chats.push({ id: 'chat-2', q: '把标题改成方向一与方向二', state: 'running' }); f.ppt.activeChat = 'chat-2';
+  const again = f.make.submit({ jobId: job.id, spec: { ...sk.spec, title: '改版：方向一与方向二' } });
+  assert.ok(again.ok);
+  const after = f.make.status(job.id);
+  assert.equal(after.rev, before.rev + 1);
+  assert.equal(after.spec.title, '改版：方向一与方向二');
+  assert.ok(fs.existsSync(after.path));
+  // 样例页没有助理会话：仍然不接收
+  const ex = f.make.example(sk.id).job;
+  assert.throws(() => f.make.submit({ jobId: ex.id, spec: sk.spec }), /已经结束/);
+});
+
+test('等待中写明卡在哪一步：排队、CodeAgent 启动、已开始写', t => {
+  const f = fixture(t), sk = listSkeletons()[0];
+  const job = f.make.start({ skeletonId: sk.id, brief: '讲清收益' }).job;
+  assert.match(f.make.status(job.id).waiting, /排队中/);
+  Object.assign(f.chats[0], { state: 'running', notReadySince: Date.now() - 3 * 60000 });
+  assert.match(f.make.status(job.id).waiting, /CodeAgent 还在启动（已等 3 分钟）/);
+  f.chats[0].answeringAt = Date.now();
+  assert.match(f.make.status(job.id).waiting, /已开始写/);
+  f.chats[0].state = 'done';
+  assert.equal(f.make.status(job.id).waiting, undefined);
+});
+
+// r38b 审查 P2：修改那一问还在跑时，首问早已收工；旧做法每次提交都重开、轮次清零，6 次全成功，状态也被提前置为交付。
+test('交付后的修改绑定到修改那一问：同一问超过两轮被拒、进度看这一问，下一条修改才重新给两轮', t => {
+  const f = fixture(t), sk = listSkeletons()[0];
+  const job = f.make.start({ skeletonId: sk.id, brief: '讲清两项改进的收益' }).job;
+  const bad = { ...sk.spec, title: '定位语：还没换' }; // 每次都带自查提醒
+  f.make.submit({ jobId: job.id, spec: bad });
+  f.chats[0].state = 'done';
+  assert.equal(f.make.status(job.id).state, 'done');
+  f.chats.push({ id: 'chat-2', q: '再改改', state: 'running' }); f.ppt.activeChat = 'chat-2';
+  const results = [];
+  for (let i = 0; i < 6; i++) {
+    try { f.make.submit({ jobId: job.id, spec: bad }); results.push('ok'); } catch (error) { results.push(error.message); }
+    const st = f.make.status(job.id);
+    results.push(st.state);
+  }
+  assert.deepEqual(results.slice(0, 6), ['ok', 'revising', 'ok', 'revising', 'ok', 'done'], '首交后的修改那一问：提交三次（两轮修改）');
+  assert.match(results[6], /这一问里已提交并修改过两轮/);
+  assert.match(results[8], /这一问里已提交并修改过两轮/);
+  const mid = f.make.status(job.id);
+  assert.equal(mid.rev, 4);
+  assert.equal(mid.submits, 3);
+  // 修改那一问还在跑、还有轮次时，状态不因首问已收工而提前交付；等待文案跟着这一问
+  f.chats.push({ id: 'chat-3', q: '标题再短一点', state: 'running', answeringAt: Date.now() }); f.ppt.activeChat = 'chat-3';
+  f.make.submit({ jobId: job.id, spec: bad });
+  const during = f.make.status(job.id);
+  assert.equal(during.state, 'revising');
+  assert.equal(during.submits, 1);
+  assert.equal(during.turnChatId, 'chat-3');
+  assert.match(during.waiting, /已开始写/);
+  // 这一问收工：已生成的那一版交付
+  f.chats[2].state = 'done';
+  assert.equal(f.make.status(job.id).state, 'done');
+});

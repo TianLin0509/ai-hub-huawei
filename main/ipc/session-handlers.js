@@ -397,14 +397,17 @@ function registerSessionIpc(ipcMain, deps) {
     const targetModel = typeof payload.modelId === 'string' ? payload.modelId.trim() : '';
     const session = sessionId ? sessionManager.getSession(sessionId) : null;
     const kind = String(session && session.kind || '').replace(/-resume$/, '').toLowerCase();
-    if (!session || kind !== 'claude' || !isClaudeModelSelection(targetModel)) {
+    const companyProxy = session?.companyRoute === 'proxy';
+    const validModel = companyProxy ? require('../../core/company-model-proxy').MODEL_IDS.includes(targetModel) : isClaudeModelSelection(targetModel);
+    if (!session || kind !== 'claude' || !validModel) {
       return { ok: false, error: 'invalid-claude-switch', message: '无法为当前会话准备 Claude 模型切换' };
     }
     try {
       if (claudeModelPreferenceGuards.has(sessionId)) {
         await restoreClaudePreferenceGuard(sessionId, { waitForWrite: false });
       }
-      const snapshot = captureClaudeModelPreference(targetModel);
+      const snapshot = captureClaudeModelPreference(targetModel, companyProxy
+        ? { configDir: session.claudeConfigDir || session.claudeRuntimeHome } : undefined);
       const timer = setTimeout(() => {
         void restoreClaudePreferenceGuard(sessionId).then(restored => {
           if (restored && restored.status === 'restore-failed') {
@@ -491,12 +494,14 @@ function registerSessionIpc(ipcMain, deps) {
     }
     const kind = String(session.kind || '').replace(/-resume$/, '').toLowerCase();
     const local = (session.companyRoute === 'local' || session.cliApiProfileId) && ['codex', 'claude'].includes(kind);
+    const companyProxy = session.companyRoute === 'proxy' && ['codex', 'claude'].includes(kind);
     let localOptions;
     if (local) {
       try { localOptions = localCliModels(session).models; }
       catch (error) { return { ok: false, message: error.message }; }
     }
-    const valid = local ? localOptions.some(model => model.id === modelId) : kind === 'codex'
+    const valid = companyProxy ? require('../../core/company-model-proxy').MODEL_IDS.includes(modelId)
+      : local ? localOptions.some(model => model.id === modelId) : kind === 'codex'
       ? isCodexConversationModelId(modelId)
       : kind === 'claude'
         ? isClaudeModelSelection(modelId)
@@ -509,7 +514,7 @@ function registerSessionIpc(ipcMain, deps) {
           ? /^(?:gemini|claude|gpt-oss)[\w.-]+$/.test(modelId)
         : false;
     if (!valid) return { ok: false, error: 'invalid-model', message: '该模型不属于当前 CLI 的会话模型目录' };
-    if (kind === 'codex' && !local) modelId = require('../../core/model-options').normalizeCodexSessionModel(modelId);
+    if (kind === 'codex' && !local && !companyProxy) modelId = require('../../core/model-options').normalizeCodexSessionModel(modelId);
     // DeepSeek on Claude Code：终端里切的是接入方式对应的真实模型名，Hub 记显示用的 id。
     if (kind === 'deepseek-claude') {
       const profile = require('../../core/deepseek-claude-profile');

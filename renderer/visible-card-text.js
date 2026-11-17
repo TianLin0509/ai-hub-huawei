@@ -68,4 +68,11 @@ function extractVisibleCardText(root) {
     .trim();
 }
 
-module.exports = { extractVisibleCardText };
+// 复制按钮用：打开了「复制为 Markdown」时给 Markdown（公式带 $），否则照旧给看到的纯文本。
+function copyableCardText(root) {
+  const md = require('./markdown-copy');
+  if (md.markdownPreferred()) { const out = md.elementToMarkdown(root); if (out) return out; }
+  return extractVisibleCardText(root);
+}
+
+module.exports = { extractVisibleCardText, copyableCardText };

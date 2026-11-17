@@ -245,6 +245,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       for (const op of ['open-full','save-video']) root.querySelector(`[data-act="${op}"]`).disabled = !canReplayFull(rec);
       for (const op of ['play','extract']) root.querySelector(`[data-act="${op}"]`).disabled = !replayable;
       root.querySelector('[data-act="delete-video"]').disabled = !replayable || !!capture?.running;
+      root.querySelector('[data-act="delete-meeting"]').disabled = !m || ['recording', 'paused'].includes(m.state) || !!capture?.running;
       el('seek').max = String(Math.max(0, (m?.capturedMs || 0) / 1000));
       el('recording-status').textContent = rec?.deleted ? '录像已删除，纪要、转写和截图都保留' : rec ? `本地录像已保存至 ${time(rec.savedThrough)} · ${(rec.bytes / 1024 / 1024).toFixed(1)} MB${rec.full?.status === 'writing' ? ' · 保存中' : ''}` : m ? '此会议没有录像，仍可查看截图与录音' : '材料仅保存到本机';
       el('gaps').textContent = [...(rec?.gaps || []), ...(rec?.openGap ? [{...rec.openGap,end:null}] : [])].map(g => `${time(g.at)}—${g.end==null || g.open ? '未恢复' : time(g.end)} ${g.reason}`).join('；');
@@ -346,6 +347,16 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
     else if (op === 'open-full') { if (!id) throw new Error('先选择会议'); await call('meeting-open-full', { id }); }
     else if (op === 'play' && playback && !el('player').paused) { el('player').pause(); return; }
     else if (op === 'delete-video') { if (!id) throw new Error('先选择会议'); const done = await call('meeting-delete-video', { id }); if (!done.canceled) { resetPlayer(); message(`录像已删除，腾出 ${size(done.freed)}。纪要、转写和截图都保留。`); await refresh(); } }
+    else if (op === 'delete-meeting') {
+      if (!id) throw new Error('先选择会议');
+      const target = id, m = state?.meeting?.id === target ? state.meeting : null, title = m?.title || '这场会议';
+      const video = m?.recording?.bytes ? `，含录像 ${size(m.recording.bytes)}` : '';
+      const ok = await require('./ui-feedback').confirmHubAction(`删除「${title}」${video}？\n纪要、原话、截图、录音和录像都会删掉，不能恢复。只删这一场，其他会议和专业词库不受影响。`,
+        { document, title: '删除这场会议？', acceptLabel: '删除这场会议', danger: true });
+      if (!ok || id !== target) return;
+      const done = await call('meeting-delete', { id: target });
+      selectMeeting(''); message(`已删除「${done.title || title}」，其他会议不受影响。`); await refresh(); return;
+    }
     else if (op === 'save-video') { if (!id) throw new Error('先选择会议'); const saved = await call('meeting-save-video', { id }); if (saved.file) message('视频已保存：' + saved.file); }
     else if (op === 'play') { const rec=state.meeting?.recording, first=canReplayFull(rec)?rec.full:rec?.segments.find(s=>s.status==='ready'); await playAt(Number(root.querySelector('[data-m="seek-seconds"]').value)*1000 || first?.at || 0,true); }
     else if (op === 'extract') { const at=playback ? playbackTime(root.querySelector('[data-m="player"]').currentTime) : Number(root.querySelector('[data-m="seek-seconds"]').value)*1000; const requested = id; const result=await call('meeting-frames',{id,timesMs:[Math.round(at)]}); if(requested!==id)return; view('evidence', '录像回查'); const frame=result.frames[0]; root.querySelector('[data-m="evidence"]').innerHTML=`<p>录像回查 · ${time(frame.at)}</p><img class="meeting-slide" src="data:image/jpeg;base64,${frame.data}" alt="从录像提取的画面">`; addPptLookup(frame.path); }

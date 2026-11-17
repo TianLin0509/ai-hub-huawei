@@ -152,3 +152,15 @@ test('空计划或明确登录失效不可启动，重启后的未检查状态�
   assert.equal(roomReadiness({ 优先会议室: ['  '] }, { loginState: true }).ready, false);
   assert.equal(roomReadiness({ 优先会议室: ['会议室 A'] }, { loginState: true, loginNeeded: true }).ready, false);
 });
+
+test('抢订计划一句话说明：写清什么时候抢、抢哪天哪个时段、按什么顺序', () => {
+  const { planSummary } = require('../renderer/company-rooms-page');
+  const s = planSummary({ days: [1, 3], span: '14:00–15:00', rooms: ['A101', 'B202'], advanceDays: 7, openTime: '12:00:00' });
+  assert.match(s, /每天 12:00 放号时，如果 7 天后那天是周一、周三，就替你预订那天 14:00–15:00 的会议室，按 A101 → B202 的顺序，前一间被抢走就换下一间/);
+  const missing = planSummary({ days: [], span: '', rooms: [], advanceDays: 3, openTime: '08:00:00' });
+  assert.match(missing, /还差：勾选会议在周几、填开始时间和时长、添加至少一间会议室/);
+  assert.match(missing, /3 天后/);
+  assert.match(planSummary({ days: [1, 2, 3, 4, 5], span: '09:00–10:00', rooms: ['A'], openTime: '12:00' }), /如果 7 天后那天是周一至周五，就替你预订那天 09:00–10:00 的会议室/);
+  assert.match(planSummary({ days: [7, 1, 2, 3, 4, 5, 6], span: '09:00–10:00', rooms: ['A'], openTime: '12:00' }), /每天 12:00 放号时，替你预订 7 天后那天 09:00–10:00 的会议室，按 A 的顺序。/);
+  assert.match(planSummary({ days: [5], span: '09:00–10:00', rooms: ['A', 'B', 'C', 'D'], switchNext: false, openTime: '12:00' }), /A → B → C 等 4 间 的顺序，只抢第一间/);
+});

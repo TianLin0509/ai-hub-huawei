@@ -22,7 +22,7 @@
 // ---------------------------------------------------------------------------
 // 'deepseek-claude'（2026-10-11）：DeepSeek 跑在 Claude Code 上，保留历史会话恢复；
 //   旧的 'deepseek'（Codex 运行时 / 迁移前 Claude 兼容）只为恢复历史会话保留。见 core/deepseek-claude-profile.js。
-const ALL_AI_KINDS = ['claude', 'gemini', 'codex', 'deepseek', 'kimi', 'qwen', 'deepseek-acp', 'glm', 'codeagent', 'deepseek-claude'];
+const ALL_AI_KINDS = ['claude', 'gemini', 'codex', 'deepseek', 'kimi', 'qwen', 'deepseek-acp', 'glm', 'codeagent', 'deepseek-claude', 'pi'];
 // Offered by the group-creation and writing-member pickers.
 // 2026-10-12: Antigravity (gemini kind) rejoins as a full member: bracketed-paste
 // submit, PreInvocation/Stop hooks, pre-trusted folders and native branches.
@@ -61,10 +61,12 @@ const KIND_LABELS = {
   glm: '智谱',
   codeagent: 'CodeAgent',
   'deepseek-claude': 'DeepSeek',
+  // r39（2026-11-18）：开源终端编码 Agent pi（core/pi-cli-profile.js）。
+  pi: 'pi',
 };
 
 // Initial titles used by provider harnesses, shared with auto-title eligibility.
-const HARNESS_LABELS = { qwen: '千问 · Qwen Code', 'deepseek-acp': 'DeepSeek · DSH (DeepSeek Harness)', glm: '智谱 · ZCode' };
+const HARNESS_LABELS = { qwen: '千问 · Qwen Code', 'deepseek-acp': 'DeepSeek · DSH (DeepSeek Harness)', glm: '智谱 · ZCode', pi: 'pi · 终端编码 Agent' };
 
 // ---------------------------------------------------------------------------
 // Claude 家族（共享 Claude Code CLI 引擎）：
@@ -158,7 +160,7 @@ function kindRegexAlternation() {
 //   返回家族字符串：claude / gemini / gpt / deepseek
 // ---------------------------------------------------------------------------
 // 群聊记忆系统的家族存储 key 集合（去重 canonical 后）
-const FAMILY_KINDS = ['claude', 'gemini', 'gpt', 'deepseek', 'kimi', 'qwen', 'glm', 'codeagent'];
+const FAMILY_KINDS = ['claude', 'gemini', 'gpt', 'deepseek', 'kimi', 'qwen', 'glm', 'codeagent', 'pi'];
 const _FAMILY_SET = new Set(FAMILY_KINDS);
 
 function canonicalAiKind(rawKind) {
@@ -171,6 +173,7 @@ function canonicalAiKind(rawKind) {
   if (rawKind === 'deepseek-claude' || rawKind === 'deepseek-claude-resume') return 'deepseek';
   if (rawKind === 'kimi-resume') return 'kimi';
   if (rawKind === 'codeagent-resume') return 'codeagent';
+  if (rawKind === 'pi-resume') return 'pi';
   const out = rawKind || 'unknown';
   // [Phase 4 silent-failure-hunt] 静默 fall-through 会让未来新加的 kind（如 'mistral'）
   //   生成预期外的 .md 文件，且 _runLegacyMigration 不会归档它（因为不在 FAMILY_SET）。

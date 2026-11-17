@@ -20,7 +20,18 @@
   .optional-features-dialog .of-err { color: #c0392b; font-size: 12px; margin-top: 8px; }
   .optional-features-dialog .of-note { font-size: 12px; color: var(--fg-muted, #6b7080); margin: 0 0 4px; }`;
 
-  function emit() { window.dispatchEvent(new CustomEvent('hub-optional-features', { detail: list })); }
+  // 关着的功能收起左侧导航入口（2026-11-18 用户反馈）：主进程给 navHidden（用户在这里选过、且这项关着），
+  // 这里只在 <html> 上记一个属性，CSS 按属性藏对应按钮；入口按钮由各页面脚本异步插入，用 CSS 不怕插入先后。
+  const NAV_BUTTONS = { assistant: '#btn-company-assistant', forum: '#btn-company-forum', attendance: '#btn-company-attendance', w3: '#btn-company-w3' };
+  const navStyle = document.createElement('style');
+  navStyle.id = 'optional-features-nav-style';
+  navStyle.textContent = Object.entries(NAV_BUTTONS).map(([id, sel]) => `:root[data-of-nav-hidden~="${id}"] ${sel}`).join(', ') + ' { display: none !important; }';
+  document.head.appendChild(navStyle);
+  function applyNav() {
+    const hidden = list.filter(f => NAV_BUTTONS[f.id] && f.navHidden && !f.on).map(f => f.id).join(' ');
+    if (hidden) document.documentElement.dataset.ofNavHidden = hidden; else delete document.documentElement.dataset.ofNavHidden;
+  }
+  function emit() { applyNav(); window.dispatchEvent(new CustomEvent('hub-optional-features', { detail: list })); }
   async function refresh() {
     try { list = (await ipcRenderer.invoke('optional-features:list')) || []; } catch (_) { list = []; }
     emit(); return list;
@@ -38,7 +49,7 @@
     dialog = document.createElement('dialog');
     dialog.className = 'app-update-dialog optional-features-dialog';
     dialog.innerHTML = `
-      <div class="au-head"><div class="au-title"><strong>可选功能</strong><span>默认都关着，用到哪个开哪个；关掉后后台不再为它花时间</span></div>
+      <div class="au-head"><div class="au-title"><strong>可选功能</strong><span>默认都关着，用到哪个开哪个；关掉后后台不再为它花时间，左侧导航也不再显示它</span></div>
         <button type="button" class="au-close" data-of="close" title="关闭">✕</button></div>
       <div class="au-body"><div data-of="items"></div><div class="of-err" data-of="err" hidden></div></div>
       <div class="au-foot"><button type="button" class="au-btn primary" data-of="close">完成</button></div>`;

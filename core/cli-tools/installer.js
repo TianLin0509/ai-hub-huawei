@@ -18,7 +18,7 @@ const registry = require('./registry');
 const { extractTgz } = require('./tar');
 
 const CATALOG_TTL_MS = 10 * 60 * 1000;
-const NAMES = { claude: 'Claude Code', codex: 'Codex', dsh: 'DSH 运行环境', node: 'Node.js 运行环境', git: 'Git for Windows' };
+const NAMES = { claude: 'Claude Code', codex: 'Codex', dsh: 'DSH 运行环境', node: 'Node.js 运行环境', git: 'Git for Windows', pi: 'pi 终端 Agent' };
 const gitBash = require('../git-bash');
 
 function resolveFetch(fetchImpl) {
@@ -38,16 +38,23 @@ function runVersion(file, args, { timeoutMs = 90000, env = process.env } = {}) {
   });
 }
 
-// 本机的 Node 能不能给 DSH 用：PATH 上第一个 node.exe，版本 >= minNode。
-async function pathNodeUsable(env, minNode, run = runVersion) {
-  // 和启动 DSH 用同一套查找（core/local-node.js）：PATH 之外的常见目录、CodeAgent 自带的 Node 也算本机有。
-  const file = require('../local-node').findNode({ env, minMajor: 0 });
+// 本机的 Node 能不能用：版本 >= minNode。minNode 可以是大版本 22，也可以是完整版本 "22.19.0"（pi 要 22.19，r39 审查）。
+async function pathNodeUsable(env, minNode, run = runVersion, name = 'DSH') {
+  // 和启动时用同一套查找（core/local-node.js）：PATH 之外的常见目录、CodeAgent 自带的 Node 也算本机有。
+  const local = require('../local-node');
+  const file = local.findNode({ env, minVersion: String(minNode) }) || local.findNode({ env, minMajor: 0 });
   if (!file) return { ok: false, reason: '本机没有 Node.js' };
   try {
     const out = await run(file, ['--version'], { timeoutMs: 15000, env });
-    const major = Number((/^v?(\d+)\./.exec(out) || [])[1]);
-    return major >= minNode ? { ok: true, file, version: out } : { ok: false, reason: `本机 Node.js 版本是 ${out}，DSH 需要 ${minNode} 或更新` };
+    return local.versionAtLeast(out, minNode) ? { ok: true, file, version: out } : { ok: false, reason: `本机 Node.js 版本是 ${out}，${name} 需要 ${minNode} 或更新` };
   } catch { return { ok: false, reason: '本机的 Node.js 启动不了' }; }
+}
+// 组件要求的最低 Node：组件目录里写的是大版本（老版本 Hub 只认整数），pi 另按包里 engines 的完整版本（22.19.0）核。
+function requiredNode(component) {
+  const min = component.install?.minNode || 22;
+  if (component.id !== 'pi') return min;
+  const pi = require('../pi-cli-profile').PI_MIN_NODE;
+  return require('../local-node').versionAtLeast(String(min), pi) ? min : pi;
 }
 
 const BUSY_CODES = ['EPERM', 'EBUSY', 'EACCES'];
@@ -260,9 +267,12 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
       // DSH 没有自己的 exe：用它将来要用的 node（Hub 刚装的，或本机 PATH 上的）跑一次入口脚本。
       let probe = null;
       if (component.install.versionArgs && component.install.bin) probe = [path.join(unpack, ...component.install.bin.split('/')), component.install.versionArgs];
-      else if (component.install.versionArgs && component.id === 'dsh') {
-        const node = registry.managedBin('node', env) || require('../local-node').findNode({ env });
-        if (node) probe = [node, [path.join(unpack, 'node_modules', ...registry.DSH_RUNTIME_FILES[0].split('/')), ...component.install.versionArgs]];
+      else if (component.install.versionArgs && ['dsh', 'pi'].includes(component.id)) {
+        const node = component.id === 'pi' ? require('../pi-cli-profile').nodeFor(env)
+          : registry.managedBin('node', env) || require('../local-node').findNode({ env });
+        if (!node && component.id === 'pi') throw new Error(`${component.name}需要 Node.js ${requiredNode(component)} 或更新版本，本机没有找到，没有登记为装好`);
+        const entry = component.id === 'pi' ? require('../pi-cli-profile').PI_ENTRY : registry.DSH_RUNTIME_FILES[0];
+        if (node) probe = [node, [path.join(unpack, 'node_modules', ...entry.split('/')), ...component.install.versionArgs]];
       }
       if (probe) {
         progress({ phase: 'probing' });
@@ -319,6 +329,32 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
     return gitSearch;
   }
 
+  // pi 的 npm 后备：先保证有 22.19 以上的 Node。本机没有就从组件目录补装 Hub 自管的 Node（和主路径一样），补不上就说清楚。
+  async function ensurePiNode(signal, progress) {
+    const pi = require('../pi-cli-profile');
+    let node = pi.nodeFor(env);
+    if (node) return node;
+    let reason = '';
+    try {
+      const cat = catalog || await loadCatalog(signal);
+      const comp = cat.components.find(c => c.id === 'node');
+      if (!comp) reason = '组件目录里没有 Node.js';
+      else if (!require('../local-node').versionAtLeast(comp.version, pi.PI_MIN_NODE)) reason = `组件目录里的 Node.js 是 ${comp.version}，不够新`;
+      else {
+        const step = { index: 1, count: 2, name: comp.name };
+        progress({ phase: 'downloading', step, received: 0, total: comp.files[0].bytes });
+        await installOne(comp, signal, patch => progress({ ...patch, step }));
+        node = pi.nodeFor(env);
+        if (!node) reason = 'Hub 装好的 Node.js 没有通过版本检查';
+      }
+    } catch (e) {
+      if (e.cancelled || signal.aborted) throw e;
+      reason = e.message;
+    }
+    if (node) return node;
+    throw new Error(`pi 需要 Node.js ${pi.PI_MIN_NODE} 或更新版本，本机没有找到，Hub 也没能补装（${reason}）。请先安装 Node.js ${pi.PI_MIN_NODE} 或更新版本，再点一次「一键安装 pi」`);
+  }
+
   async function install(id, { repair = false, target } = {}) {
     if (!registry.IDS.includes(id) || id === 'node') throw new Error('不认识的组件');
     if (busy) {
@@ -351,9 +387,12 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
       const main = cat.components.find(c => c.id === id);
       if (!main) throw new Error(`组件目录里还没有${NAMES[id]}，请联系管理员上传`);
       const plan = [main];
-      if (main.install.requires?.includes('node') && !registry.managed('node', env)) {
-        const minNode = main.install.minNode || 22;
-        const check = nodeUsable ? await nodeUsable(minNode) : await pathNodeUsable(env, minNode, run);
+      const minNode = requiredNode(main);
+      const hubNode = registry.managed('node', env);
+      const local = require('../local-node');
+      // Hub 自管的 Node 也要核版本（r39 审查：以前有就跳过，22.0 的自管 Node 也当够用）。
+      if (main.install.requires?.includes('node') && !(hubNode && local.versionAtLeast(local.nodeVersion(hubNode.bin) || hubNode.version, minNode))) {
+        const check = nodeUsable ? await nodeUsable(minNode) : await pathNodeUsable(env, minNode, run, NAMES[id]);
         if (!check.ok) {
           const node = cat.components.find(c => c.id === 'node');
           if (!node) throw new Error(`${check.reason}，组件目录里也没有 Node.js，请先安装 Node.js ${minNode} 或更新版本`);
@@ -373,7 +412,32 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
       set(id, { phase: 'done', received: total, total, error: null, version: main.version, finishedAt: Date.now() });
     } } catch (error) {
       const cancelled = error.cancelled || signal.aborted;
-      if (id === 'dsh' && !repair && !cancelled && !/签名|校验不一致|文件大小不对/.test(error.message)) {
+      // pi（r39）：组件目录里还没有 pi 或下载失败时，按用户自己的 npm 配置装进 Hub 自管目录（不改全局 npm）。
+      if (id === 'pi' && !cancelled && !/签名|校验不一致|文件大小不对/.test(error.message)) {
+        const targetRoot = path.join(root(), 'pi', 'user-npm');
+        try {
+          // 后备也要先有够版本的 Node（r39 审查：以前只看文件和版本号就报装好，Node 不够或入口跑不起来也算成功）。
+          const node = await ensurePiNode(signal, patch => set(id, { ...patch, fallbackReason: error.message }));
+          const result = await require('./npm-fallback').installPiWithUserNpm({ env, signal, run: npmRun, targetRoot, node,
+            probe: (file, args) => retryBusy(() => run(file, args, { env }), { ...busyRetry, signal }),
+            onProgress: patch => set(id, { ...patch, fallbackReason: error.message, step: null }) });
+          const installed = registry.readInstalled(root());
+          installed.tools.pi = { version: result.version, dir: path.relative(root(), targetRoot), installedAt: Date.now() };
+          registry.writeInstalled(root(), installed);
+          set(id, { phase: 'done', error: null, blocked: null, version: result.version, source: result.source, finishedAt: Date.now() });
+        } catch (npmError) {
+          const stopped = signal.aborted || npmError.name === 'AbortError';
+          // 试运行没过：以前登记过的同一目录已被覆盖成跑不起来的文件，撤掉登记，体检如实显示没装好。
+          try {
+            const installed = registry.readInstalled(root());
+            if (installed.tools.pi && path.resolve(root(), installed.tools.pi.dir) === path.resolve(targetRoot)) {
+              delete installed.tools.pi; registry.writeInstalled(root(), installed);
+            }
+          } catch (_) {}
+          set(id, { phase: stopped ? 'cancelled' : 'error', error: stopped ? null
+            : `${error.message}；按你的 npm 配置安装 pi 也没有成功：${String(npmError.stderr || npmError.message).slice(0, 800)}`, blocked: error.blocked || null });
+        }
+      } else if (id === 'dsh' && !repair && !cancelled && !/签名|校验不一致|文件大小不对/.test(error.message)) {
         try {
           const targetRoot = path.join(root(), 'dsh', 'user-npm');
           const result = await require('./npm-fallback').installDshWithUserNpm({ env, signal, run: npmRun, targetRoot,

@@ -109,6 +109,48 @@ class MeetingCompanion {
     if (next !== m.title) { m.title = next; this.save(m); }
     return m;
   }
+  // 删除一场会议（2026-11-18 用户反馈：会议记录缺少删除）：只删这一场的文件夹（纪要、原话、截图、录音、录像）
+  // 并关掉它自己的理解 / 问答会话；词库、声纹和其他会议不动。采集中或正在整理时不删，免得删到一半又被写回。
+  // 「正在整理 / 回答」按持久的作业状态和会话是否在回复来判断：轮询锁只在一次 tick 内存在，AI 等待回复期间是空的。
+  removeBlocker(id) {
+    const m = this.load(id);
+    if (ACTIVE.has(m.state)) return '会议还在采集，先点「结束会议」再删';
+    const working = this.lanes.has(id + ':job') || this.lanes.has(id + ':questionJob')
+      || (m.job && m.job.state !== 'error') || (m.questionJob && m.questionJob.state !== 'error')
+      || m.answers.some(q => ['queued', 'running'].includes(q.state))
+      || [m.sessionId, m.questionSessionId].some(sid => sid && this.deps.getSession?.(sid) && this.a.sessionBusy?.(sid));
+    if (working) return '这场会议的 AI 正在整理纪要或回答问题，等它完成后再删';
+    if (this.recording.repairs.has(id) || (this.asrBusy && this.pendingAsr.has(id))) return '这场会议正在转写或修复录像，稍等几秒再删';
+    return '';
+  }
+  async remove(id) {
+    const dir = this.dir(id); this.removing ||= new Set();
+    if (this.removing.has(id)) throw new Error('这场会议正在删除，请稍候');
+    const blocked = this.removeBlocker(id); if (blocked) throw new Error(blocked);
+    // 从这里起后台轮询跳过这一场，关会话期间不会再派出新的整理或问答。
+    // 关会话期间用户新提交的整理、问答、重试转写请求记在 removeInterrupted，关完后放弃删除（请求被接受就不能随后删目录）。
+    this.removing.add(id); (this.removeInterrupted ||= new Set()).delete(id);
+    try {
+      const m = this.load(id);
+      for (const sid of new Set([m.sessionId, m.questionSessionId].filter(Boolean))) {
+        if (!this.deps.getSession?.(sid)) continue;
+        try {
+          if (typeof this.deps.closeSession !== 'function') throw new Error('关闭会话服务尚未就绪');
+          const result = await this.deps.closeSession(sid);
+          if (result?.ok === false || this.deps.getSession?.(sid)) throw new Error(result?.error || '会话仍在运行');
+        } catch (e) { throw new Error(`这场会议的 AI 会话没能关闭（${e.message}），会议没有删，可稍后再试`); }
+      }
+      // 关会话要等一会儿，期间用户可能又提了问题：再核一遍。
+      const again = this.removeBlocker(id); if (again) throw new Error(again);
+      if (this.removeInterrupted.has(id)) throw new Error('删除期间又提交了整理或转写请求，会议没有删；等它完成后再删');
+      this.tools.unbind?.(m);
+      this.pending.delete(id); this.pendingAsr.delete(id); this.live?.delete(id); this.keepAwake((this.live?.size || 0) > 0);
+      this.good?.delete(id); this.corrupt?.delete(id); this.listCache?.delete(id); this.recording.errors.delete(id);
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+      this.a.changed?.();
+      return { id, title: m.title };
+    } finally { this.removing.delete(id); this.removeInterrupted.delete(id); }
+  }
   list() {
     this.listCache ||= new Map();
     const ids = this.ids(), present = new Set(ids);
@@ -182,6 +224,7 @@ class MeetingCompanion {
     else if (op === 'ask') { const q = String(value || '').trim(); if (!q || q.length > 10000) throw new Error('请输入不超过一万字的问题'); m.answers.push({ id: randomUUID(), q, state: 'queued', queuedAt: this.now() }); if (m.questionJob?.state === 'error') m.questionJob = null; m.questionError = ''; }
     else throw new Error('当前状态不支持这个操作');
     if (['ask', 'retry-question'].includes(op)) delete m.questionCleanupError;
+    if (this.removing?.has(id) && ['understand', 'ask', 'retry-question', 'retry-asr'].includes(op)) (this.removeInterrupted ||= new Set()).add(id);
     this.save(m); this.start(); void this.tick(); return this.status(id);
   }
   status(id) {
@@ -207,6 +250,7 @@ class MeetingCompanion {
   async transcribeOne() {
     if (this.asrBusy || !this.asr.status().ready) return;
     for (const id of this.pendingAsr) {
+      if (this.removing?.has(id)) continue;
       const m = this.load(id), e = m.events.find(e => e.kind === 'audio' && e.asr === 'pending'); if (!e) continue;
       this.asrBusy = true;
       try {
@@ -237,6 +281,7 @@ class MeetingCompanion {
     void this.transcribeOne();
     const tasks = [];
     for (const id of [...this.pending]) for (const slot of ['job', 'questionJob']) {
+      if (this.removing?.has(id)) continue;
       const key = id + ':' + slot; if (this.lanes.has(key)) continue;
       this.lanes.add(key);
       tasks.push(this.runLane(id, slot).catch(e => { this.lastError = e.message; }).finally(() => { this.lanes.delete(key); this.busy = this.lanes.size > 0; }));

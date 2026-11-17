@@ -239,10 +239,12 @@
                       <button class="new-session-option" data-kind="kimi" aria-pressed="false"><span class="ai-logo logo-kimi"></span>Kimi Code · K3</button>
                       <button class="new-session-option" data-kind="qwen" aria-pressed="false"><span class="ai-logo logo-qwen"></span>千问 · Qwen Code</button>
                       <button class="new-session-option" data-kind="glm" aria-pressed="false"><span class="ai-logo logo-glm"></span>智谱 · ZCode</button>
+                      <button class="new-session-option" data-kind="pi" aria-pressed="false" title="开源终端编码 Agent pi：用 Hub 已有的 DeepSeek / 套餐 / 公司模型钥匙，或 pi 自己的登录"><span class="ai-logo logo-pi"></span>pi · 终端 Agent</button>
                       <button class="new-session-option" data-kind="codeagent" aria-pressed="false"><span class="ai-logo logo-codeagent"></span>CodeAgent · 公司内网</button>
                       <button class="new-session-option" data-kind="gemini" aria-pressed="false"><span class="ai-logo logo-gemini"></span>Antigravity CLI</button>
                       <button class="new-session-option" data-kind="powershell" aria-pressed="false"><span class="ai-logo logo-powershell"></span>PowerShell</button>
                     </div>
+                    <div class="session-tuning-note" id="new-session-pi-note" role="status" hidden><span id="new-session-pi-note-text"></span> <button type="button" class="tuning-default-btn" id="new-session-pi-install" hidden>一键安装 pi</button></div>
                     <section class="session-config-section" id="new-session-config-section" aria-labelledby="new-session-tuning-label">
                     <div class="session-config-heading"><div><strong id="new-session-tuning-label">启动配置</strong><span id="new-session-default-status" role="status">新建会话将沿用这组配置</span></div><button type="button" id="new-session-model-default" class="tuning-default-btn" hidden></button></div>
                     <label class="session-tuning-field" id="new-session-deepseek-route-field" hidden><span>消费通道</span><select id="new-session-deepseek-route" aria-describedby="new-session-deepseek-route-note"><option value="tokenplan">Token Plan 套餐</option><option value="api">DeepSeek 官方 API</option></select></label>
@@ -352,6 +354,9 @@
       </div>
       <div class="context-menu" id="card-selection-context-menu" style="display:none">
         <button class="context-menu-item" data-action="copy">复制</button>
+        <button class="context-menu-item" data-action="copy-md" title="标题、列表、表格、代码块保留 Markdown 记号，公式写成 $…$ / $$…$$，可直接粘进 Obsidian">复制为 Markdown</button>
+        <div class="context-menu-separator"></div>
+        <button class="context-menu-item" data-action="toggle-md" role="menuitemcheckbox" aria-checked="false">Ctrl+C 和复制按钮都给 Markdown</button>
       </div>
       <div class="context-menu" id="path-link-context-menu" style="display:none">
         <button class="context-menu-item" data-action="copy-abs-path"

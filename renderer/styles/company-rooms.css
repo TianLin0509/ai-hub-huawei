@@ -70,6 +70,8 @@
 .cr-hint { margin-top:10px; font-size:13px; color:var(--hw-text-3); overflow-wrap:anywhere; }
 .cr-hint:empty { display:none; }
 .cr-hint-top { margin:-6px 0 12px; }
+.cr-plan-sum { margin:0 0 14px; padding:10px 14px; border-radius:var(--hw-r-item); background:var(--hw-brand-soft); font-size:var(--hw-fs-13); line-height:1.6; color:var(--hw-text-1); }
+.cr-plan-sum:empty { display:none; }
 .cr-empty { padding:14px 0; font-size:var(--hw-fs-13); color:var(--hw-text-3); }
 .cr-error { font-size:var(--hw-fs-13); color:var(--hw-red); overflow-wrap:anywhere; }
 

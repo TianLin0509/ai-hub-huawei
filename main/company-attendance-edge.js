@@ -22,6 +22,11 @@ function findEdge(env = process.env) {
   return '';
 }
 
+// 登录状态副本里记下是哪个 Hub 进程建的：陈旧目录回收（company-edge-browser.js sweepStale）见到建它的进程还活着就不动。
+const OWNER_FILE = 'hub-owner.json';
+function markOwner(tmp, pid = process.pid) {
+  try { fs.writeFileSync(path.join(tmp, OWNER_FILE), JSON.stringify({ pid, at: Date.now() })); } catch { /* 写不上只是少一层保护：回收前还有改名探测 */ }
+}
 function copyProfile(tmp, env = process.env) {
   const src = path.join(env.LOCALAPPDATA || '', 'Microsoft', 'Edge', 'User Data');
   if (!fs.existsSync(src)) return { copied: 0, error: '本机没有 Edge 用户资料' };
@@ -52,6 +57,7 @@ async function captureWithEdge({ url, timeoutMs = 90000, loginGraceMs = LOGIN_GR
   const edge = findEdge(env);
   if (!edge) return { ok: false, via: 'edge', error: '本机没有找到 Edge' };
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-attendance-'));
+  markOwner(tmp);
   const port = 9300 + Math.floor(Math.random() * 600);
   const prof = copyProfile(tmp, env);
   let proc = null, ws = null;
@@ -126,4 +132,4 @@ async function captureWithEdge({ url, timeoutMs = 90000, loginGraceMs = LOGIN_GR
   return result;
 }
 
-module.exports = { captureWithEdge, findEdge, copyProfile, CARD_API, HOLIDAY_API, KEEP_API, LOGIN_GRACE_MS };
+module.exports = { captureWithEdge, findEdge, copyProfile, markOwner, OWNER_FILE, CARD_API, HOLIDAY_API, KEEP_API, LOGIN_GRACE_MS };

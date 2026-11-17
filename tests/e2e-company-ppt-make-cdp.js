@@ -116,7 +116,7 @@ async function main() {
     await click('[data-pptk="start"]');
     await wait('/先写一句/.test(document.querySelector("[data-ppt-notice]").textContent)', 'empty brief notice');
     const seed = await c.eval(`ipcRenderer.invoke('company-assistant:ppt-make-example',{skeletonId:${j('gain-steps')}})`);
-    await c.eval(`(()=>{const invoke=ipcRenderer.invoke.bind(ipcRenderer);window.__mk={phase:'waiting',calls:[],invoke};const id=${j(seed.job.id)},waiting={id,kind:'make',skeleton:'夹具',state:'waiting_agent',startedAt:Date.now(),rev:0,submits:0};
+    await c.eval(`(()=>{const invoke=ipcRenderer.invoke.bind(ipcRenderer);window.__mk={phase:'waiting',calls:[],invoke};const id=${j(seed.job.id)},waiting={id,kind:'make',skeleton:'夹具',state:'waiting_agent',startedAt:Date.now(),rev:0,submits:0,waiting:'排队中：PPT 素材助理还在答前一个问题，答完就轮到这一页'};
       ipcRenderer.invoke=async(ch,a)=>{const name=ch.replace('company-assistant:','');
         if(name==='ppt-make-start'){window.__mk.calls.push([name,a]);waiting.startedAt=Date.now();return{ok:true,job:waiting}}
         if(name==='ppt-make-status'&&a.jobId===id){if(window.__mk.phase==='waiting')return{ok:true,job:waiting};if(window.__mk.phase==='submit'){window.__mk.phase='done';await invoke('company-assistant:ppt-make-rerender',{jobId:id,spec:${j(MODEL_SPEC)}})}return invoke(ch,a)}
@@ -125,6 +125,8 @@ async function main() {
     await click('[data-pptk-brief]'); await c.send('Input.insertText', { text: '两项改进叠加后，指标提升，数据待补' });
     await click('[data-pptk="start"]');
     await wait('document.querySelector(".pptk-busy b")?.textContent==="正在让助理写页面内容…"', 'waiting state');
+    await wait('[...document.querySelectorAll(".pptk-busy small")].some(e=>/^排队中：/.test(e.textContent))', 'waiting step shown');
+    result.checks.push('生成中写明卡在哪一步（夹具：排队中），与已用时间同屏显示');
     await wait('/已用 [1-9]\\d* 秒/.test(document.querySelector("[data-pptk-clock]")?.textContent||"")', 'elapsed clock', 8000);
     assert.deepEqual(await c.eval('window.__mk.calls[0]'), ['ppt-make-start', { skeletonId: await c.eval('document.querySelector(".pptk-sk.on").dataset.id'), brief: '两项改进叠加后，指标提升，数据待补' }]);
     await oneScreen('生成中');

@@ -24,6 +24,8 @@ function createMeetingHandlers(service) {
       if (response !== 0) return { ok: true, canceled: true };
       return { ok: true, ...m.recording.deleteVideo(r.id) };
     },
+    // 删除整场会议：二次确认在页面里做（Hub 自己的确认框，不弹系统窗口），这里只执行。
+    'meeting-delete': async r => ({ ok: true, ...(await m.remove(r.id)) }),
     'meeting-frames': async r => ({ ok: true, frames: await m.frames.extract(r.id, r) }),
     'meeting-asr-install': () => ({ ok: true, asr: m.asr.install() }),
     'meeting-glossary': () => ({ ok: true, text: m.glossary.text() }),

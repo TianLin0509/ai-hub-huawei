@@ -35,7 +35,7 @@ function meetingTemplate() {
         <div class="meeting-speakers" data-m="speakers" hidden></div>
         <label class="meeting-menu-field">专业词库（所有会议共用）<textarea data-m="glossary" rows="4" spellcheck="false" placeholder="每行一个词，如 OLLA&#10;欧亚=OLLA：把识别成「欧亚」的改成 OLLA"></textarea></label>
         <div class="meeting-glossary-hints" data-m="glossary-hints" hidden><span data-m="glossary-hint-text"></span><button class="ca-btn" data-act-local="add-hints">加入词库</button></div>
-        <div class="meeting-video-usage"><span data-m="video-total"></span><button class="ca-btn" data-act="delete-video" disabled>删除这场的录像</button></div>
+        <div class="meeting-video-usage"><span data-m="video-total"></span><button class="ca-btn" data-act="delete-video" disabled>删除这场的录像</button><button class="ca-btn meeting-delete-btn" data-act="delete-meeting" disabled title="删除这场会议的全部记录，删除前会再确认一次">删除这场会议</button></div>
         <label class="meeting-menu-field">自动更新理解<select data-m="interval" aria-label="自动更新间隔">${[[0,'关闭'],[1,'每 1 分钟'],[3,'每 3 分钟'],[5,'每 5 分钟'],[10,'每 10 分钟']].map(([v,l]) => `<option value="${v}">${l}</option>`).join('')}</select></label>
         <label class="meeting-menu-field" data-m="engine-field" hidden>会议 AI（终端 · 模型）<select data-m="engine" aria-label="会议 AI"></select></label>
         <label class="meeting-menu-field" data-m="fast-model-field">快速档模型<select data-m="fast-model" aria-label="快速档模型"></select></label>

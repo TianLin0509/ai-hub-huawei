@@ -357,6 +357,10 @@ async function parseProviderTranscript(args = {}, deps) {
       return { turns: isDshBranchView(record, parseOpts) ? await withInheritedBranchTurns(args, deps, session, dshTurns, parseOpts, transcriptPath) : dshTurns,
         transcriptPath, source: 'provider-cli', error: null };
     }
+    // pi（r39）：休眠会话直接读 pi 自己的会话文件。
+    if (String(record?.kind || inKind).replace(/-resume$/, '') === 'pi' && transcriptPath && /\.jsonl$/i.test(transcriptPath)) {
+      return { turns: require('../../core/pi-cli-session').readPiCliTranscript(transcriptPath, parseOpts), transcriptPath, source: 'provider-cli', error: null };
+    }
     // Cards and native sessions share one projection; legacy DeepSeek-Claude keeps its parser.
     const nativeProjection = typeof deps.parseClaudeTranscriptToNativeTurns === 'function'
       && !/^deepseek-legacy/.test(String(runtimeKind || ''));

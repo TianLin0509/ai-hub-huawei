@@ -24,7 +24,9 @@ function parseClaudeModelSwitchConfirmation(screen,modelId) {
   const dialog=text.slice(header),yes=dialog.match(/(?:^|\s)([❯›>]?)\s*(\d+)\.\s*Yes, switch to (.+?)(?=\s+[❯›>]?\s*\d+\.\s*No, go back(?:\s|$))/s);
   const no=dialog.match(/(?:^|\s)([❯›>]?)\s*(\d+)\.\s*No, go back(?:\s|$)/);
   if(!yes||!no||(!yes[1]&&!no[1])||yes[1]&&no[1])return null;
-  if(modelId){
+  // Custom endpoints show the exact model ID, including its hyphens and dots;
+  // official Claude models use display names such as "Opus 5.5" instead.
+  if(modelId&&yes[3].trim().toLowerCase()!==String(modelId).trim().toLowerCase()){
     const expected=String(modelId).replace(/^claude-/,'').replace(/\[1m\]$/,'').replace(/-20\d{6}$/,'').replace(/-/g,' ');
     const actual=yes[3].trim().replace(/\./g,' ').replace(/\s+/g,' ');
     const a=actual.toLowerCase(),e=expected.toLowerCase();

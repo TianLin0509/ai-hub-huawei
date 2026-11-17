@@ -71,8 +71,9 @@ function candidateDirs(env = process.env) {
 }
 
 const versionMemo = new Map();
-function nodeMajor(file, run) {
-  let st; try { st = fs.statSync(file); } catch { return 0; }
+// 读这个 node 的完整版本 "22.19.0"；读不出返回 ''。按文件（大小、修改时间）缓存。
+function nodeVersion(file, run) {
+  let st; try { st = fs.statSync(file); } catch { return ''; }
   const key = file + '|' + st.size + '|' + st.mtimeMs;
   if (!run && versionMemo.has(key)) return versionMemo.get(key);
   let out = '';
@@ -83,17 +84,30 @@ function nodeMajor(file, run) {
       out = String(r.stdout || '');
     }
   } catch { out = ''; }
-  const major = Number((/^v?(\d+)\./.exec(out.trim()) || [])[1]) || 0;
-  if (!run) versionMemo.set(key, major);
-  return major;
+  const m = /^v?(\d+)\.(\d+)(?:\.(\d+))?/.exec(out.trim());
+  const version = m ? `${Number(m[1])}.${Number(m[2])}.${Number(m[3] || 0)}` : '';
+  // 只记住读出来的版本：电脑很忙时 --version 超时会读成空，记住它这个进程就再也认不出本机的 Node（r39 实测：重开 Hub 后 pi 报没有 Node）。
+  if (!run && version && Number(m[1]) > 0) versionMemo.set(key, version);
+  return version;
+}
+function nodeMajor(file, run) { return Number(nodeVersion(file, run).split('.')[0]) || 0; }
+
+// version 是否不低于 min。min 可以是大版本数字 22，也可以是完整版本 "22.19.0"（r39 审查：pi 要 22.19，只看大版本会把 22.0–22.18 当成可用）。
+function versionAtLeast(version, min) {
+  const parse = v => { const m = /^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(String(v == null ? '' : v).trim()); return m ? [Number(m[1]), Number(m[2] || 0), Number(m[3] || 0)] : null; };
+  const a = parse(version), b = parse(min);
+  if (!a) return false;
+  if (!b) return true;
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
+  return true;
 }
 
-// 返回第一个版本够的 node 绝对路径；找不到返回 ''。run 仅供测试替换取版本的方式。
-function findNode({ env = process.env, minMajor = 22, run = null } = {}) {
+// 返回第一个版本够的 node 绝对路径；找不到返回 ''。minVersion（如 "22.19.0"）给了就按完整版本比，否则按 minMajor。run 仅供测试替换取版本的方式。
+function findNode({ env = process.env, minMajor = 22, minVersion = null, run = null } = {}) {
   for (const dir of candidateDirs(env)) {
     const file = path.join(dir, EXE);
     if (!path.isAbsolute(file) || !isFile(file)) continue;
-    if (nodeMajor(file, run) >= minMajor) return file;
+    if (minVersion ? versionAtLeast(nodeVersion(file, run), minVersion) : nodeMajor(file, run) >= minMajor) return file;
   }
   return '';
 }
@@ -101,4 +115,4 @@ function findNode({ env = process.env, minMajor = 22, run = null } = {}) {
 // 给报错提示用：列出找过的几类位置。
 const SEARCHED_HINT = 'PATH、C:\\Program Files\\nodejs、nvm、scoop、CodeAgent 自带的 Node';
 
-module.exports = { findNode, candidateDirs, SEARCHED_HINT };
+module.exports = { findNode, candidateDirs, nodeVersion, versionAtLeast, SEARCHED_HINT };

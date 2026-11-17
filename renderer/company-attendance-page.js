@@ -143,6 +143,7 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
     if (!status.records.length) {
       return `<div class="att-empty"><h2>还没有考勤数据</h2><p>${status.syncing ? '正在打开考勤页读取最近 8 天，通常半分钟，最长约 3 分钟。' : esc(status.lastResult?.error || '开启后每天会在后台读一次；也可以现在就读。')}</p>
         ${status.lastResult?.needsDomain && !status.settings?.domain ? '<div class="att-row"><input class="att-input" data-f="quickDomain" placeholder="你的公司邮箱，例如 name@corp.example"><button type="button" class="att-btn primary" data-att="quick-domain">保存并读取</button></div>' : ''}
+        ${status.lastResult?.triedPages || (status.lastResult && !status.lastResult.ok && status.settings?.page && status.settings.page !== 'auto') ? `<div class="att-row"><span>考勤页</span>${pageSelect(status.settings?.page, 'quickPage')}<button type="button" class="att-btn primary" data-att="quick-page">保存并读取</button></div>` : ''}
         <div class="att-row">${status.lastResult?.needsLogin ? '<button type="button" class="att-btn primary" data-att="login">登录考勤</button>' : ''}<button type="button" class="att-btn${status.lastResult?.needsLogin ? '' : ' primary'}" data-att="sync">现在读取</button></div></div>`;
     }
     const m = vm.month;
@@ -206,6 +207,11 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
     if (body && hl) body.scrollTop = Math.max(0, hl.offsetTop - body.clientHeight / 2);
   }
 
+  // 考勤页选择：自动（先正式员工页、读不到再 OD 页，记住读成功的那页）或指定一页。
+  function pageSelect(value, field) {
+    const opts = [['auto', '自动（先正式员工页，再 OD 页）'], ...(status.pages || []).map(p => [p.id, '只用 ' + p.label])];
+    return `<select class="att-input" data-f="${field}">${opts.map(([v, t]) => `<option value="${v}"${(value || 'auto') === v ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select>`;
+  }
   function renderPanel() {
     const el = page.querySelector('[data-slot="panel"]');
     el.hidden = !panelOpen;
@@ -219,9 +225,10 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
         下午 <input type="time" data-w="pmStart" value="${esc(wt.pmStart)}"> – <input type="time" data-w="pmEnd" value="${esc(wt.pmEnd)}"></div>
         <div class="att-time-row">晚上 <input type="time" data-w="eveningFrom" value="${esc(wt.eveningFrom)}"> 之后算加班（默认下班后 30 分钟）<button type="button" class="att-btn" data-att="worktime-reset">恢复默认</button></div></div>
       <label class="att-check"><input type="checkbox" data-f="autoDaily" ${s.autoDaily !== false ? 'checked' : ''}> 每天自动读取一次（当天读到就不再访问）</label>
+      <label class="att-field"><span>考勤页</span>${pageSelect(s.page, 'page')}</label>
       <p class="att-note">读取地址：${esc(status.url || '正在自动查找公司域名…')}${s.domainFrom && s.domainFrom !== 'settings' ? '（域名是自动找到的）' : ''}</p>
       <div class="att-row"><button type="button" class="att-btn" data-att="login">在 Hub 里登录考勤</button><span class="att-sp"></span><button type="button" class="att-btn" data-att="settings">取消</button><button type="button" class="att-btn primary" data-att="save">保存</button></div>
-      ${status.log?.length ? `<h3>最近读取</h3><ul class="att-log">${status.log.slice(0, 6).map(e => `<li><span>${when(e.at)}</span><span class="${e.ok ? 'ok' : 'bad'}">${e.ok ? '成功' : '失败'}</span><span>${e.ok ? `拿到 ${e.got} 天，新增 ${e.added}，更新 ${e.updated}${e.via === 'edge' ? '（无头 Edge）' : ''}` : esc(e.error)}</span></li>`).join('')}</ul>` : ''}</div>`;
+      ${status.log?.length ? `<h3>最近读取</h3><ul class="att-log">${status.log.slice(0, 6).map(e => `<li><span>${when(e.at)}</span><span class="${e.ok ? 'ok' : 'bad'}">${e.ok ? '成功' : '失败'}</span><span>${e.ok ? `拿到 ${e.got} 天，新增 ${e.added}，更新 ${e.updated}${e.via === 'edge' ? '（无头 Edge）' : ''}${e.page === 'servicetime' ? '（OD 考勤页）' : ''}` : esc(e.error)}</span></li>`).join('')}</ul>` : ''}</div>`;
   }
 
   function render() {
@@ -245,6 +252,10 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
       if (!(saved?.settings?.domain || saved?.domain)) { showMessage?.('没认出公司域名，请填完整的公司邮箱，例如 name@corp.example'); return; }
       return action('sync', el);
     }
+    if (name === 'quick-page') {
+      await call('set-settings', { page: page.querySelector('[data-f="quickPage"]').value });
+      return action('sync', el);
+    }
     if (name === 'worktime-reset') {
       for (const [k, val] of Object.entries(A.DEFAULT_WORK_TIME)) { const i = page.querySelector(`[data-w="${k}"]`); if (i) i.value = val; }
       return;
@@ -256,7 +267,7 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
       for (const i of page.querySelectorAll('[data-w]')) workTime[i.dataset.w] = i.value;
       const check = A.normalizeWorkTime(workTime);
       if (!check.ok) { showMessage?.('核心工作时间不对：' + check.error); return; }
-      await call('set-settings', { domain: v('domain').value, autoDaily: v('autoDaily').checked, workTime });
+      await call('set-settings', { domain: v('domain').value, autoDaily: v('autoDaily').checked, page: v('page').value, workTime });
       panelOpen = false; await load(); showMessage?.('考勤设置已保存'); return;
     }
     if (name === 'login') { el.disabled = true; try { const r = await call('login'); showMessage?.(r?.ok ? '已登录，正在读取考勤' : (r?.error || '登录窗口已关闭')); } finally { el.disabled = false; await load(); } return; }

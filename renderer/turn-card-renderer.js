@@ -1339,7 +1339,7 @@ listen('click', (e) => {
     e.preventDefault();e.stopPropagation();
     const text=require('./conversation-message-view').responseCards(responseCopy.closest('.turn-card'))
       .filter(card=>card.dataset.phase!=='activity')
-      .map(card=>require('./visible-card-text').extractVisibleCardText(card.querySelector('.turn-body'))).filter(Boolean).join('\n\n');
+      .map(card=>require('./visible-card-text').copyableCardText(card.querySelector('.turn-body'))).filter(Boolean).join('\n\n');
     Promise.resolve(clipboardApi.writeText(text)).then(()=>{responseCopy.textContent='已复制';})
       .catch(error=>{responseCopy.textContent='复制失败';console.warn('[conversation-response-copy]',error);});
     return;
@@ -1347,7 +1347,7 @@ listen('click', (e) => {
   const messageCopy = e.target.closest('[data-action="conversation-copy"]');
   if(messageCopy) {
     e.preventDefault();e.stopPropagation();
-    const text=require('./visible-card-text').extractVisibleCardText(messageCopy.closest('.conversation-entry'));
+    const text=require('./visible-card-text').copyableCardText(messageCopy.closest('.conversation-entry'));
     Promise.resolve(clipboardApi.writeText(text)).then(()=>{messageCopy.textContent='已复制';})
       .catch(error=>{messageCopy.textContent='复制失败';console.warn('[conversation-copy]',error);});
     return;

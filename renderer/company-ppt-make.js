@@ -55,7 +55,7 @@ function createPptMake({ root, ipcRenderer, notice }) {
       return;
     }
     const slide = svg ? `<div class="pptk-slide${running ? ' dim' : ''}">${svg}</div>` : '';
-    const wait = running ? `<div class="pptk-busy" role="status"><i class="pptk-spin" aria-hidden="true"></i><b>${esc(running.text)}</b><span data-pptk-clock>已用 ${seconds(running.from)} 秒</span>${job?.state === 'waiting_agent' ? '<small>通常 1–3 分钟，可以先去做别的，回来还在这里。</small>' : ''}</div>` : '';
+    const wait = running ? `<div class="pptk-busy" role="status"><i class="pptk-spin" aria-hidden="true"></i><b>${esc(running.text)}</b><span data-pptk-clock>已用 ${seconds(running.from)} 秒</span>${job?.waiting ? `<small>${esc(job.waiting)}</small>` : ''}${job?.state === 'waiting_agent' ? '<small>通常 1–3 分钟，可以先去做别的，回来还在这里。</small>' : ''}</div>` : '';
     const failed = failure ? `<div class="pptk-fail" role="alert"><strong>这一页没有生成出来</strong><p>${esc(failure)}</p><p>下一步：点「重试」再生成一次；想先看版式，点「先看骨架样子」。</p><div class="pptk-actions"><button type="button" class="pptw-btn pri" data-pptk="start">重试</button><button type="button" class="pptw-btn sec" data-pptk="example">先看骨架样子</button></div></div>` : '';
     stage.innerHTML = failed || (slide + wait) || '<p class="pptw-empty">选一个骨架，点「先看骨架样子」。</p>';
     clearInterval(clock); clock = null;
@@ -101,6 +101,17 @@ function createPptMake({ root, ipcRenderer, notice }) {
     clearTimeout(pollTimer);
     if (ACTIVE.includes(job.state) && shown) pollTimer = setTimeout(() => { void poll(); }, 1500);
     else if (group.some(j => ACTIVE.includes(j.state)) && shown) pollTimer = setTimeout(() => { void refreshGroup(); }, 2500);
+    // 助理写的页交付后，用户还可能在助理会话里要它接着改：慢速看一眼有没有新版本（只读内存里的任务，不碰模型）。
+    else if (job.kind === 'make' && job.chatId && shown) pollTimer = setTimeout(() => { void watchFollowUp(); }, 5000);
+  }
+  // 只在有了新版本或又开始改时才接手刷新，不打断用户正在手改的页面说明。
+  async function watchFollowUp() {
+    if (!job || !shown) return;
+    const seen = job;
+    let next; try { next = (await call('ppt-make-status', { jobId: seen.id })).job; } catch { return; }
+    if (job !== seen || !shown) return;
+    if (next.rev !== seen.rev || next.state !== seen.state) { if (!editing) await take(next); else pollTimer = setTimeout(() => { void watchFollowUp(); }, 5000); }
+    else pollTimer = setTimeout(() => { void watchFollowUp(); }, 5000);
   }
   // 当前看的这一版已写完、别的版还在写：只刷新方案条上的状态，不重画预览，也不打断正在改的页面说明。
   async function refreshGroup() {

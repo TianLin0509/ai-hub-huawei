@@ -49,7 +49,7 @@ test('non-CodeAgent sessions are left alone', () => {
 
 test('renderer lets the cli-exited failure event through for CodeAgent only', () => {
   const src = require('node:fs').readFileSync(require.resolve('../renderer/renderer.js'), 'utf8');
-  assert.match(src, /isCodeAgentKind\(kind\) && payload\.signalSource === 'cli-exited-to-shell'/);
+  assert.match(src, /isCodeAgentKind\(kind\) && \(payload\.signalSource === 'cli-exited-to-shell'/);
   const main = require('node:fs').readFileSync(require.resolve('../main.js'), 'utf8');
   assert.match(main, /signalSource: 'cli-exited-to-shell'/);
 });

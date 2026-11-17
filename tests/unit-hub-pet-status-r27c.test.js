@@ -248,7 +248,7 @@ test('r27d-3：真实失败事件 → err:true 通知 → 橙灯与「出错了�
   assert.equal(r.state().dots, 0, '重复上报按 id 去重，不另起一张');
   // main.js 两条权威失败路径都接上了，中止路径没有
   const main = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
-  assert.equal((main.match(/petTurnFailed\(/g) || []).length, 3, '定义 + Codex 失败 + CLI 退回终端');
+  assert.equal((main.match(/petTurnFailed\(/g) || []).length, 4, '定义 + Codex 失败 + CLI 退回终端 + CodeAgent 屏幕报错');
   const aborted = main.slice(main.indexOf("transcriptTap.on('turn-aborted'"), main.indexOf("transcriptTap.on('turn-error'"));
   assert.ok(aborted.length > 0 && !aborted.includes('petTurnFailed'), '中止不亮橙灯');
 });

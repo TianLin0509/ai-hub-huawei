@@ -86,6 +86,17 @@ const guideLines = sk => [
   JSON.stringify(sk.spec),
 ];
 
+// 做页任务卡在哪一步（2026-11-17 反馈「PPT制作 十分钟未出结果」：页面只显示已用时间，看不出在排队、在等 CodeAgent 启动还是在写）。
+function waitingText(chat, now) {
+  if (!chat) return '';
+  const min = t => Math.max(1, Math.round((now - t) / 60000));
+  if (chat.state === 'queued') return '排队中：PPT 素材助理还在答前一个问题，答完就轮到这一页';
+  if (chat.notReadySince && !chat.answeringAt) return `CodeAgent 还在启动（已等 ${min(chat.notReadySince)} 分钟）：要登录或确认的话，请打开「PPT 素材助理」会话处理`;
+  if (chat.answeringAt) return '助理已开始写页面内容';
+  if (chat.state === 'running') return '正在打开助理会话';
+  return '';
+}
+
 class PptMake {
   constructor(ppt) { this.ppt = ppt; this.a = ppt.a; this.jobs = new Map(); this.pack = null; }
   dir() { return path.join(this.a.dir, 'ppt-make'); }
@@ -218,7 +229,21 @@ class PptMake {
   // 工具 ppt_make：模型提交页面说明。每次提交都生成并交付；有自查提醒且还有修改轮次时，让模型按提醒再改。
   submit({ jobId, spec, skeletonId } = {}) {
     const job = this.job(jobId);
-    if (!ACTIVE.includes(job.state)) throw new Error('这次做页任务已经结束，不再接收提交');
+    // 交付后用户在助理会话里接着要求改（2026-11-17 反馈：「ppt做完一版后让其修改就无法落到文件上了」）：
+    // 由助理写的页（有 chatId）在那一问收工之后再提交，当作用户要的新一轮修改，重新给两轮自查修改的机会；
+    // 同一问里改满两轮仍然截止（那一问还没收工）。
+    // 新一轮绑定到用户这次要求修改的那一问（r38b 审查 P2：旧做法只看首问已收工，修改那一问还在跑时
+    // 每次提交都能重开、轮次清零，限次被绕过；状态也按首问判断，正在改的页被提前当成交付）：
+    if (!ACTIVE.includes(job.state)) {
+      const chats = this.a.chat();
+      const chat = job.kind === 'make' && job.chatId ? chats.find(c => c.id === job.chatId) : null;
+      if (!chat || !['done', 'error'].includes(chat.state)) throw new Error('这次做页任务已经结束，不再接收提交');
+      const turnId = this.ppt.activeChat || '';
+      const turn = turnId && turnId !== job.chatId ? chats.find(c => c.id === turnId) : null;
+      if (!turn || !['queued', 'running'].includes(turn.state)) throw new Error('这次做页任务已经结束，不再接收提交');
+      if (job.turnChatId === turn.id) throw new Error('这一问里已提交并修改过两轮，这一版已交付；请直接向用户说明剩余提醒，用户再提修改时可以接着改');
+      Object.assign(job, { state: 'revising', submits: 0, error: '', turnChatId: turn.id });
+    }
     if (job.submits >= MAX_SUBMITS) throw new Error('已提交并修改过两轮，这一版已交付；请直接向用户说明剩余提醒');
     if (typeof spec === 'string') spec = JSON.parse(spec); // 有的模型把对象参数写成 JSON 字符串
     if (!spec || typeof spec !== 'object') throw new Error('spec 应为页面说明对象');
@@ -238,15 +263,17 @@ class PptMake {
   }
   status(jobId) {
     const job = this.job(jobId);
+    let waiting = '';
     if (ACTIVE.includes(job.state)) {
-      const chat = this.a.chat().find(c => c.id === job.chatId);
+      const chat = this.a.chat().find(c => c.id === (job.turnChatId || job.chatId)); // 交付后的修改看修改那一问
+      waiting = waitingText(chat, this.a.now());
       if (chat && ['done', 'error'].includes(chat.state)) {
         // 修改途中助理收工：已生成的那一版照常交付，剩余提醒留给用户看。
         if (job.state === 'revising') job.state = 'done';
         else { job.state = 'error'; job.error = chat.state === 'error' ? (chat.error || '助理这一轮没有完成') : '助理这一轮没有提交页面内容'; }
       }
     }
-    return { ...job };
+    return { ...job, ...(ACTIVE.includes(job.state) && waiting ? { waiting } : {}) };
   }
   // 用户手改页面说明后重新生成；改过的样例算用户自己的页。
   rerender(jobId, spec) {

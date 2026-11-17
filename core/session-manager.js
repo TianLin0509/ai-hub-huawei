@@ -1769,7 +1769,9 @@ class SessionManager extends EventEmitter {
     const freshLaunch = require('./session-history-state').isFreshLaunch(kind, opts);
     const isAcp = isAcpKind(kind);
     const isDshCli = kind.replace(/-resume$/, '') === 'deepseek-acp';
-    const isProviderCli = isDshCli || (['qwen','glm'].includes(kind.replace(/-resume$/, '')) && require('./agent-runtime-mode').agentRuntimeMode() !== 'native');
+    // pi（r39）：终端里的 pi + Hub 观察扩展，和 DSH 同属 provider CLI（core/pi-cli-session.js）。
+    const isPiCli = kind.replace(/-resume$/, '') === 'pi';
+    const isProviderCli = isDshCli || isPiCli || (['qwen','glm'].includes(kind.replace(/-resume$/, '')) && require('./agent-runtime-mode').agentRuntimeMode() !== 'native');
     const isClaude = kind === 'claude' || kind === 'claude-resume';
     const isGemini = kind === 'gemini' || kind === 'gemini-resume';
     const isDeepSeek = kind === 'deepseek' || kind === 'deepseek-resume';
@@ -2539,7 +2541,10 @@ class SessionManager extends EventEmitter {
     }
     if (isCodex && opts.codexAccountAttempt) sessionEnv.CLAUDE_HUB_CODEX_ACCOUNT_ATTEMPT = opts.codexAccountAttempt;
     let ptyProcess;
-    try { ptyProcess = isDshCli
+    try { ptyProcess = isPiCli
+      ? new (require('./pi-cli-session').PiCliSession)(require('./pi-cli-profile').buildPiCliOptions(kind,
+        {...opts,id,cwd:spawnCwd},getConfig(),getHubDataDir(),sessionEnv))
+      : isDshCli
       ? new (require('./dsh-cli-session').DshCliSession)(require('./dsh-cli-profile').buildDshCliOptions(kind,
         {...opts,id,cwd:spawnCwd},getConfig(),getHubDataDir(),sessionEnv))
       : isAcp
@@ -2636,6 +2641,10 @@ class SessionManager extends EventEmitter {
         : !shouldPickCodeAgentModel(opts)
         ? { id: '', displayName: expected ? require('./codeagent-models').modelLabel(expected) : require('./codeagent-models').PLACEHOLDER_LABEL }
         : { id: mid, displayName: require('./codeagent-models').modelLabel(mid) };
+    } else if (isPiCli) {
+      // 线路/模型（如 deepseek/deepseek-flash）；没有 Hub 线路时由 pi 自己定，等观察扩展报回再补上。
+      const mid = ptyProcess.options.model || '';
+      currentModel = { id: mid, displayName: mid || 'pi 默认模型' };
     }
 
     const effectiveCodexMcpProfile = isCodexRuntime

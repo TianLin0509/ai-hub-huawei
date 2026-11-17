@@ -202,7 +202,7 @@ export function createProxy({ provider, accessKey, maxBodyBytes = 4 * 1024 * 102
         res.writeHead(upstream.status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...(retry ? { 'retry-after': retry } : {}) });
         res.end(JSON.stringify({ type: 'error', error: { type: upstream.status === 429 ? 'rate_limit_error' : upstream.status === 401 || upstream.status === 403 ? 'authentication_error' : 'api_error',
           message: upstreamHttpMessage(upstream.status, detail) } }));
-        notify({ type: 'request_finished', status: upstream.status });
+        notify({ type: 'request_finished', status: upstream.status, ...(detail ? { detail } : {}) });
         return;
       }
       const type = upstream.headers.get('content-type') || 'application/octet-stream';

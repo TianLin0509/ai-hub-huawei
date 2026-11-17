@@ -341,6 +341,10 @@ function createResumeSessionHandler(deps) {
       codexResumePicker: codexMissingSid && !freshUnboundAgentLeague,
         codexSid: effectiveCodexSid,
         ...(meta.acpSid ? { acpSid: meta.acpSid } : {}),
+        // pi（r39）：恢复用它自己的会话文件（--session <文件>），文件不在了再按 acpSid 让 pi 自己找。
+        ...(/^pi(?:-resume)?$/.test(String(meta.kind || '')) && meta.transcriptPath ? { piSessionFile: meta.transcriptPath } : {}),
+        // pi 凭据来源（r39 二次返工）：首次是 pi:native 的会话恢复时仍用 pi 自己的配置，不当成 Hub 线路缺钥匙。
+        ...(/^pi(?:-resume)?$/.test(String(meta.kind || '')) && meta.acpProfileId ? { piProfileId: meta.acpProfileId } : {}),
       ...(meta.nativeRuntime ? {nativeRuntime:meta.nativeRuntime} : {}),
       ...((lazyCodex || unstartedCodex || lazyClaude) ? {lazyStart:true} : {}),
       ...(meta.codexApprovalPolicy ? {approvalPolicy:meta.codexApprovalPolicy} : {}),

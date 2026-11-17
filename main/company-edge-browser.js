@@ -9,12 +9,48 @@ const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { collectScript, clickScript, DETAIL_SCRIPT } = require('./company-forum-browser');
-const { findEdge, copyProfile } = require('./company-attendance-edge');
+const { findEdge, copyProfile, markOwner, OWNER_FILE } = require('./company-attendance-edge');
 
 const LOGIN_WORDS = /账号登录|扫码登录|密码登录|统一身份认证|统一认证|请输入(?:账号|密码|工号)|忘记密码/;
 const delay = ms => new Promise(r => setTimeout(r, ms));
 const within = (p, ms, fallback) => Promise.race([p, delay(ms).then(() => fallback)]);
 const hostOf = u => { try { return new URL(u).host; } catch { return ''; } };
+// 临时目录里是 Edge 登录状态的副本（含 Cookie）。Hub 被强退、崩溃或退出时来不及删，会一直留在 %TEMP%
+// （2026-11-17 用户反馈：陈旧 user-data-dir 累积）。下次启动无头 Edge 前，把超过 STALE_MS 的旧副本删掉。
+// 在用的目录一个文件也不能删（r38b 审查：递归删在碰到被锁文件前，已经把没锁的 Preferences 删掉了），所以删之前两道确认：
+//   1. 建它的 Hub 进程（hub-owner.json 里的 pid）还活着：不动；
+//   2. 先把整个目录改名：Windows 上目录里有文件被别的进程打开时改名会失败，说明还在用，跳过、一个文件都不碰；
+//      改名成功才递归删改名后的目录（新路径没有进程认识，不会被删到一半时又被用起来）。
+// 考勤（company-attendance-edge.js）的副本同样处理。
+const STALE_PREFIXES = ['hub-posts-', 'hub-attendance-'];
+const STALE_MS = 6 * 3600000; // 一次同步或考勤只要几分钟；留足余量，不碰还在用的副本
+function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+}
+function ownerAlive(full) {
+  try { return pidAlive(Number(JSON.parse(fs.readFileSync(path.join(full, OWNER_FILE), 'utf8')).pid)); } catch { return false; }
+}
+function sweepStale({ dir = os.tmpdir(), now = Date.now(), staleMs = STALE_MS, keep = '', logger = console } = {}) {
+  let removed = 0, names = [];
+  try { names = fs.readdirSync(dir); } catch { return 0; }
+  for (const name of names) {
+    if (!STALE_PREFIXES.some(prefix => name.startsWith(prefix))) continue;
+    const full = path.join(dir, name);
+    if (keep && path.resolve(full) === path.resolve(keep)) continue;
+    try {
+      const st = fs.statSync(full);
+      if (!st.isDirectory() || now - st.mtimeMs < staleMs) continue;
+      if (ownerAlive(full)) continue;
+      const moved = `${full}-sweep${process.pid}x${Math.random().toString(36).slice(2, 8)}`;
+      fs.renameSync(full, moved); // 失败（EBUSY/EPERM/EACCES）= 还有文件被占着：整个目录原样留着
+      fs.rmSync(moved, { recursive: true, force: true });
+      removed += 1;
+    } catch { /* 正被占用或没权限：下次再试 */ }
+  }
+  if (removed) logger.info?.(`[company-forum] 清掉 ${removed} 个陈旧的 Edge 临时目录`);
+  return removed;
+}
 
 function createEdgeBrowser({ logger = console, env = process.env, idleMs = 20000 } = {}) {
   let inst = null, idleTimer = null, busy = Promise.resolve();
@@ -22,7 +58,9 @@ function createEdgeBrowser({ logger = console, env = process.env, idleMs = 20000
   async function start() {
     const edge = findEdge(env);
     if (!edge) throw new Error('本机没有找到 Edge');
+    sweepStale({ logger });
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-posts-'));
+    markOwner(tmp);
     const prof = copyProfile(tmp, env);
     const port = 9300 + Math.floor(Math.random() * 600);
     let proc = null;
@@ -44,6 +82,16 @@ function createEdgeBrowser({ logger = console, env = process.env, idleMs = 20000
     }
     await delay(800);
     try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 8, retryDelay: 500 }); } catch (e) { logger.warn?.('[company-forum] Edge 临时目录未删净', e.code || e.message); }
+  }
+  // Hub 退出时同步收尾：before-quit 不等异步任务，异步删目录会被进程退出打断（临时目录就是这样留下的）。
+  function stopSync() {
+    clearTimeout(idleTimer); idleTimer = null;
+    const cur = inst; inst = null;
+    if (!cur) return;
+    if (cur.proc?.pid && cur.proc.exitCode === null) {
+      try { spawnSync('taskkill.exe', ['/PID', String(cur.proc.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 }); } catch { try { cur.proc.kill(); } catch { /* 已退 */ } }
+    }
+    try { fs.rmSync(cur.tmp, { recursive: true, force: true, maxRetries: 4, retryDelay: 250 }); } catch (e) { logger.warn?.('[company-forum] Edge 临时目录未删净，下次启动时再清', e.code || e.message); }
   }
   async function stop() { clearTimeout(idleTimer); idleTimer = null; const cur = inst; inst = null; if (cur) await kill(cur); }
 
@@ -135,7 +183,7 @@ function createEdgeBrowser({ logger = console, env = process.env, idleMs = 20000
     }));
   }
   function close() { return stop(); }
-  return { capture, detail, close };
+  return { capture, detail, close, closeSync: stopSync };
 }
 
-module.exports = { createEdgeBrowser };
+module.exports = { createEdgeBrowser, sweepStale, STALE_PREFIXES };
