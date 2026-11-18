@@ -52,7 +52,29 @@ function validateMeta(raw) {
     }
   }
   const out = { ...raw, poses, sequences, clipped };
+  if (raw?.credit != null) out.credit = validateCredit(raw.credit);
+  else delete out.credit;
   return JSON.parse(JSON.stringify(out));
+}
+
+// 形象来源与授权（2026-11-18 r49b，拟人形象起用）：作者链、协议、条款原话、改动说明、协议全文。只收纯文本，
+// 设置页按文本显示（不当 HTML 解析）；网址只收 https。字段超长或类型不对整包拒收，免得把半截署名装上去。
+const CREDIT_TEXT = { summary: 200, changes: 600, note: 300, legal: 40000 };
+function validateCredit(raw) {
+  const bad = () => { throw new Error('形象包的署名信息无效'); };
+  const text = (v, max, need) => { if (v == null && !need) return ''; if (typeof v !== 'string' || v.length > max || (need && !v.trim())) bad(); return v; };
+  const url = v => { if (v == null || v === '') return ''; if (typeof v !== 'string' || v.length > 300 || !/^https:\/\/[^\s]+$/.test(v)) bad(); return v; };
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) bad();
+  const list = (v, max) => { if (v == null) return []; if (!Array.isArray(v) || v.length > max) bad(); return v; };
+  const out = { summary: text(raw.summary, CREDIT_TEXT.summary, true) };
+  out.authors = list(raw.authors, 8).map(a => (a && typeof a === 'object' ? { name: text(a.name, 80, true), role: text(a.role, 120), url: url(a.url) } : bad()));
+  if (raw.license != null) {
+    if (typeof raw.license !== 'object' || Array.isArray(raw.license)) bad();
+    out.license = { name: text(raw.license.name, 120, true), url: url(raw.license.url) };
+  }
+  out.terms = list(raw.terms, 8).map(t => (t && typeof t === 'object' ? { quote: text(t.quote, 400, true), source: text(t.source, 120), url: url(t.url) } : bad()));
+  for (const k of ['changes', 'note', 'legal']) out[k] = text(raw[k], CREDIT_TEXT[k]);
+  return out;
 }
 
 // 校验整个包，返回 { id, version, name, description, meta, buffers: { 文件名: Buffer } }。
@@ -80,7 +102,8 @@ function validateCatalog(raw) {
     if (!p || typeof p.id !== 'string' || !ID.test(p.id) || ids.has(p.id) || typeof p.version !== 'string' || !VERSION.test(p.version) || p.file !== `${p.id}-${p.version}.json`
       || !Number.isSafeInteger(p.bytes) || p.bytes < 1 || p.bytes > MAX_PACK_BYTES || !/^[a-f0-9]{64}$/.test(p.sha256)) throw new Error('形象包清单字段无效');
     ids.add(p.id);
-    return { id: p.id, version: p.version, file: p.file, bytes: p.bytes, sha256: p.sha256, name: String(p.name || p.id).slice(0, 20), description: String(p.description || '').slice(0, 120) };
+    return { id: p.id, version: p.version, file: p.file, bytes: p.bytes, sha256: p.sha256, name: String(p.name || p.id).slice(0, 20), description: String(p.description || '').slice(0, 120),
+      ...(typeof p.credit === 'string' && p.credit.trim() ? { credit: p.credit.slice(0, 200) } : {}) };
   });
   return { schema: 1, version: raw.version, packs };
 }
@@ -147,10 +170,12 @@ function createRolePackStore({ assetsDir, dataDir, sources = SOURCES, fetchImpl 
       const thumb = path.join(assetsDir, 'thumbs', id + '.webp');
       const preview = src ? src.assetBase + 'idle.webp' + (src.kind === 'downloaded' ? '?v=' + encodeURIComponent(src.version) : '') : fs.existsSync(thumb) ? `../assets/hub-pet/thumbs/${id}.webp` : null;
       const update = !!(src && src.kind === 'downloaded' && entry && compareVersion(entry.version, src.version) > 0);
+      // 署名：装好的用包里的全文；没装的先给目录里的一句话，下载后再看全文。
+      const credit = src?.meta?.credit ? { ...src.meta.credit, full: true } : entry?.credit ? { summary: entry.credit, full: false } : null;
       return {
         id, name: src?.name || name, bundled: src?.kind === 'bundled', installed: !!src, version: src?.version || (src?.kind === 'bundled' ? 'bundled' : null),
         bytes: src ? (src.kind === 'downloaded' ? dirBytes(src.dir) : null) : (entry ? entry.bytes : null),
-        available: !!entry, update, preview,
+        available: !!entry, update, preview, credit,
         // preview 相对 renderer/hub-pet/ 写的；主窗口（renderer/index.html）用 previewMain。
         previewMain: preview && preview.startsWith('../assets/') ? preview.slice(3) : preview,
       };
@@ -222,4 +247,4 @@ function createRolePackStore({ assetsDir, dataDir, sources = SOURCES, fetchImpl 
   return { snapshot, listRoles, check, download, install, installed, meta, assetBase, version, cancel: () => abort?.abort(), root };
 }
 
-module.exports = { DEFAULT_ROLE, FILE, MAX_PACK_BYTES, SOURCES, isWebp, validateCatalog, validateMeta, validatePack, createRolePackStore };
+module.exports = { DEFAULT_ROLE, FILE, MAX_PACK_BYTES, SOURCES, isWebp, validateCatalog, validateCredit, validateMeta, validatePack, createRolePackStore };

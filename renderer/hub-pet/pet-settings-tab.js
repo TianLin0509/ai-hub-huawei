@@ -51,7 +51,7 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
       const img = r.previewMain ? `<img src="${esc(r.previewMain)}" alt="" draggable="false">` : '<span class="pet-tab-noimg"></span>';
       return `<div class="pet-tab-card${current ? ' current' : ''}${r.installed ? ' installed' : ' remote'}" data-role="${esc(r.id)}"${r.installed && !current ? ' role="button" tabindex="0" title="点击换成' + esc(r.name) + '"' : ''}>
           <div class="pet-tab-pic">${img}${current ? '<span class="pet-tab-check" aria-hidden="true"></span>' : ''}</div>
-          <b>${esc(r.name)}</b><span class="pet-tab-status">${esc(status)}</span>${action}</div>`;
+          <b>${esc(r.name)}</b><span class="pet-tab-status">${esc(status)}</span>${action}${r.credit ? `<button type="button" class="pet-tab-credit" data-pet="credit" data-id="${esc(r.id)}">形象来源与授权</button>` : ''}</div>`;
     };
     const checking = st.phase === 'checking';
     const checkNote = checking ? '正在连接形象目录…' : st.phase === 'error' && !st.failedId ? st.error : '';
@@ -68,7 +68,7 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
       <div class="pet-tab-head"><h4>形象</h4><span class="pet-tab-note${st.phase === 'error' && !st.failedId ? ' bad' : ''}">${esc(checkNote)}</span>
         <button type="button" class="pet-tab-mini" data-pet="check"${checking || activeId ? ' disabled' : ''}>检查新形象</button></div>
       ${st.failedId && st.error ? `<p class="pet-tab-note bad">${esc(st.error)}</p>` : ''}
-      <div class="pet-tab-grid">${roles.map(card).join('')}</div>
+      <div class="pet-tab-grid${roles.length > 6 ? ' compact' : ''}">${roles.map(card).join('')}</div>
       <div class="pet-tab-row">
         <div><b>大小与位置</b><small>拖动滑块调大小，脚的位置不动；拖到哪里就记住哪里。</small></div>
         <div class="pet-tab-size"><input type="range" min="${SIZE_MIN}" max="${SIZE_MAX}" step="1" value="${sizePct(s.scale)}" data-pet-size aria-label="桌宠大小"><span data-pet-size-label>${sizePct(s.scale)}%</span>
@@ -174,6 +174,7 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
       if (kind === 'sizeReset') return void save({ scale: 1 });
       if (kind === 'saveName') return void saveName();
       if (kind === 'resetTalk') return void save({ resetTalk: true });
+      if (kind === 'credit') { const r = ((packs && packs.roles) || (data && data.roles) || []).find(x => x.id === btn.dataset.id); if (r && r.credit) showCredit(r); return; }
       if (kind === 'check') { void ipcRenderer.invoke('hub-pet:roles-check').then(r => { if (r) packs = r; render(); }); return; }
       if (kind === 'download') {
         void ipcRenderer.invoke('hub-pet:role-download', btn.dataset.id).then(async r => { if (r) packs = r; data = (await ipcRenderer.invoke('hub-pet:get-settings')) || data; render(); });
@@ -184,6 +185,38 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
     const cardEl = event.target.closest('.pet-tab-card.installed:not(.current)');
     if (cardEl) void save({ role: cardEl.dataset.role });
   });
+  // 形象来源与授权（2026-11-18 r49b）：拟人形象来自社区作者，按协议要署名、写明改动、附协议全文。
+  // 全部按纯文本放进去（textContent），网址只显示、可选中复制，不在 Hub 里打开。
+  function showCredit(r) {
+    const c = r.credit;
+    const old = document.querySelector('.pet-credit-mask');
+    if (old) old.remove();
+    const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+    const mask = el('div', 'pet-credit-mask');
+    const box = el('div', 'pet-credit');
+    box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true'); box.setAttribute('aria-label', r.name + ' 的形象来源与授权');
+    const head = el('div', 'pet-credit-head');
+    head.append(el('b', '', r.name + ' · 形象来源与授权'));
+    const close = el('button', 'pet-tab-mini', '关闭'); close.type = 'button'; close.dataset.creditClose = '1';
+    head.append(close);
+    box.append(head, el('p', 'pet-credit-summary', c.summary));
+    const body = el('div', 'pet-credit-body');
+    const section = (title, nodes) => { if (!nodes.length) return; const sec = el('section'); sec.append(el('h5', '', title), ...nodes); body.append(sec); };
+    const link = u => (u ? [el('span', 'pet-credit-url', u)] : []);
+    section('作者', (c.authors || []).map(a => { const p = el('p'); p.append(el('b', '', a.name), el('span', '', a.role ? '：' + a.role : ''), ...link(a.url)); return p; }));
+    if (c.license) { const p = el('p'); p.append(el('span', '', c.license.name), ...link(c.license.url)); section('协议', [p]); }
+    section('作者原话', (c.terms || []).map(t => { const p = el('p'); p.append(el('q', '', t.quote), el('small', '', t.source ? '—— ' + t.source : ''), ...link(t.url)); return p; }));
+    if (c.changes) section('本形象包的改动', [el('p', '', c.changes)]);
+    if (c.note) section('说明', [el('p', '', c.note)]);
+    if (c.legal) section('协议全文', [el('pre', 'pet-credit-legal', c.legal)]);
+    else if (!c.full) section('协议全文', [el('p', 'pet-credit-muted', '下载这个形象后可在这里看完整的署名、条款原话和协议全文。')]);
+    box.append(body);
+    mask.append(box);
+    mask.addEventListener('click', e => { if (e.target === mask || (e.target.dataset && e.target.dataset.creditClose)) mask.remove(); });
+    mask.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); mask.remove(); } });
+    document.body.append(mask);
+    close.focus();
+  }
   function saveName() {
     const el = container.querySelector('input[data-pet-name]');
     if (el) void save({ petName: el.value });
@@ -199,6 +232,7 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
       return;
     }
     if (event.key !== 'Enter' && event.key !== ' ') return;
+    if (event.target.closest('button')) return;   // 卡片里的按钮（下载、形象来源）回车走按钮自己的点击，不顺带换形象
     const cardEl = event.target.closest('.pet-tab-card.installed:not(.current)');
     if (cardEl) { event.preventDefault(); void save({ role: cardEl.dataset.role }); }
   });

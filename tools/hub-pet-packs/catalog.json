@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "version": "1.1.0",
+ "version": "1.2.0",
  "packs": [
   {
    "id": "05-rabbit",
@@ -37,6 +37,36 @@
    "sha256": "ceddd6a9dcb6258791f12e821979f6638f810a535b73f695ac5c06e2f737aec5",
    "name": "玄凤",
    "description": "玄凤鹦鹉，会用翅膀敲键盘、眨眼、竖冠羽、歪头、侧眼瞄、挥翅膀；高清图"
+  },
+  {
+   "id": "19-whale-maid",
+   "version": "1.2.0",
+   "file": "19-whale-maid-1.2.0.json",
+   "bytes": 1199696,
+   "sha256": "5a7d600683481efdb603d92576bfab142d517c96825bfd488da1943c23b36ab2",
+   "name": "鲸鱼娘",
+   "description": "女仆鲸鱼娘，dsh-pet 动画，带打字和待机小动作",
+   "credit": "原型：上善无形；设计：ZipZipPipe；动画：dsh-pet。CC BY-NC-SA 4.0，不可商用"
+  },
+  {
+   "id": "21-claude-girl",
+   "version": "1.2.0",
+   "file": "21-claude-girl-1.2.0.json",
+   "bytes": 1389616,
+   "sha256": "ac9cb65685cd4f0761850a0be0a8803786a9ba7fd07738bac7b2f6811733957f",
+   "name": "Claude 娘",
+   "description": "橙发 Claude 娘，ai-pet-7in1 动画，带打字和待机小动作",
+   "credit": "原设计：ZipZipPipe；Q 版参考：ApprenTice；动画：Houraiji9。CC BY-NC-SA 4.0，不可商用"
+  },
+  {
+   "id": "23-gpt-girl",
+   "version": "1.2.0",
+   "file": "23-gpt-girl-1.2.0.json",
+   "bytes": 182088,
+   "sha256": "a4c3a317b87cf466a5e4d153cc3e8e4604c0a2e4d5dff7a68e6027f922989529",
+   "name": "GPT 娘",
+   "description": "白龙 GPT 娘，Q 版立牌",
+   "credit": "原设计：ZipZipPipe；Q 版立牌：ZipZipPipe-character-pack。CC BY-NC-SA 4.0，不可商用"
   }
  ]
 }

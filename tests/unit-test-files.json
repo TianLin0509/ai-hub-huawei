@@ -237,6 +237,7 @@
   "tests/unit-hub-pet-role-pack-frames.test.js",
   "tests/unit-hub-pet-role-update-r27i2.test.js",
   "tests/unit-hub-pet-role-packs-v110.test.js",
+  "tests/unit-hub-pet-role-packs-r49b.test.js",
   "tests/unit-hub-shutdown-retry.test.js",
   "tests/unit-host-shell-tail.test.js",
   "tests/unit-feedback-intranet-send.test.js"

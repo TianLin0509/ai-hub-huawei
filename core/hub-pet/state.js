@@ -14,6 +14,10 @@ const ROLES = Object.freeze([
   { id: '07-shiba', name: '柴犬' },
   { id: '09-hamster', name: '仓鼠' },
   { id: '11-cockatiel', name: '玄凤' },
+  // 拟人形象（2026-11-18 r49b）：在线下载，包里带形象来源与授权全文，设置页卡片上可点开看。
+  { id: '19-whale-maid', name: '鲸鱼娘' },
+  { id: '21-claude-girl', name: 'Claude 娘' },
+  { id: '23-gpt-girl', name: 'GPT 娘' },
 ]);
 
 const SHOW_MS = 8000;           // 气泡停留 8 秒后收成小圆点

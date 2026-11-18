@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const R = require('../core/hub-pet/role-packs');
+const { compareVersion } = require('../core/appearance-packs');
 
 const DIR = path.join(__dirname, '..', 'tools', 'hub-pet-packs');
 const IDS = ['05-rabbit', '07-shiba', '09-hamster', '11-cockatiel'];
@@ -23,11 +24,11 @@ function webpSize(buf) {
 
 const catalog = JSON.parse(fs.readFileSync(path.join(DIR, 'catalog.json'), 'utf8'));
 
-test('目录能过客户端校验，顶层与 4 个形象都是 1.1.0', () => {
+// 目录顶层版本随后续新形象升高（r49b 加拟人形象后为 1.2.0），这里只核对这 4 个形象仍在、仍是 1.1.0。
+test('目录能过客户端校验，4 个形象都在且是 1.1.0，顶层版本不低于 1.1.0', () => {
   R.validateCatalog(catalog);
-  assert.equal(catalog.version, '1.1.0');
-  assert.deepEqual(catalog.packs.map(p => p.id).sort(), IDS);
-  for (const p of catalog.packs) assert.equal(p.version, '1.1.0');
+  assert.ok(compareVersion(catalog.version, '1.1.0') >= 0);
+  for (const id of IDS) assert.equal(catalog.packs.find(p => p.id === id)?.version, '1.1.0', id);
 });
 
 for (const id of IDS) {
