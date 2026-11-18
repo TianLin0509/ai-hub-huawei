@@ -2048,7 +2048,7 @@ function paintAppToolbarForView(label) {
   if (label !== '无线') window.__wirelessHide?.();
   if (label !== '云端') window.__cloudHide?.();
   if (label !== '团队') window.__teamHide?.();
-  if (label !== '替身') window.__avatarHide?.();
+  if (label !== '分身') window.__avatarHide?.();
   if (label !== 'AI 网页') window.__webSessionHide?.();
   if (label !== '网页圆桌') window.__webRoundtableHide?.();
   if (!toolbarCrumbEl || !toolbarActionsEl) return;
@@ -2221,7 +2221,7 @@ document.addEventListener('bridge-threads-updated', () => {
 });
 
 function currentAppToolbarView() {
-  for (const [id, label] of [['web-session-panel', 'AI 网页'], ['web-roundtable-panel', '网页圆桌'], ['team-page', '团队'], ['avatar-page', '替身'], ['cloud-page', '云端'], ['assistant-page', '助理'], ['wireless-page', '无线'], ['account-page', '账号'], ['hub-workspace', '资源与回顾'], ['memo-panel', '速记']]) {
+  for (const [id, label] of [['web-session-panel', 'AI 网页'], ['web-roundtable-panel', '网页圆桌'], ['team-page', '团队'], ['avatar-page', '分身'], ['cloud-page', '云端'], ['assistant-page', '助理'], ['wireless-page', '无线'], ['account-page', '账号'], ['hub-workspace', '资源与回顾'], ['memo-panel', '速记']]) {
     if (panelIsVisible(document.getElementById(id))) return label;
   }
   for (const view of APP_TOOLBAR_VIEWS) {

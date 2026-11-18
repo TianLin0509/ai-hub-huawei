@@ -147,6 +147,10 @@ if (group === '--version') {
   list = dir === '1' ? list.slice(0, count) : list.slice(-count);
   const body = list.map(m => `{"at":"","atAccountList":[],"content":${JSON.stringify(m.content)},"contentType":"TEXT_MSG","groupId":"g-phone","groupType":0,"msgId":${m.msgId},"receiver":"g-phone","sender":${JSON.stringify(m.sender)},"serverSendTime":${m.serverSendTime}}`);
   out(`{"respData":{"chatInfo":[${body.join(',')}],"msgTotalCount":${list.length}},"resultCode":"0","resultContext":"Operate Success"}`);
+} else if (group === 'im' && sub === 'recall-message') {
+  out('{"code":0,"message":"success"}');
+} else if (group === 'im' && sub === 'send-to-group' && process.env.WELINK_STANDIN_ANY_GROUP === '1') {
+  out('{"code":0,"message":"success","data":{"msgId":"900100"}}'); // 测试开关：任意群都能发，回执带消息编号
 } else if (group === 'im' && sub === 'send-to-group') {
   if (arg('--group-id') !== 'g-phone') { process.stderr.write('group not found\n'); process.exitCode = 1; }
   else { addPhoneMessage('user001', arg('--text') || ''); out('{"code":0,"message":"success"}'); }

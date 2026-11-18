@@ -59,9 +59,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "桌宠新增拟人形象：鲸鱼娘、Claude 娘、GPT 娘（设置里可看形象来源与授权）"
+    "助理能读到群里「回复」消息的正文"
   ],
-  "version": "5.6.52",
+  "version": "5.6.53",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

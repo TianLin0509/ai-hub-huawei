@@ -145,7 +145,12 @@ function listIn(obj, keys = []) {
 const textOf = v => {
   if (v == null) return '';
   if (typeof v === 'string') { const s = v.trim(); if (/^[{[]/.test(s)) { try { return textOf(JSON.parse(s)); } catch { /* 原样 */ } } return v; }
-  if (typeof v === 'object') return String(first(v, ['text', 'content', 'msg', 'title', 'body']) ?? '');
+  if (typeof v === 'object') {
+    let card = v.cardContext;
+    if (typeof card === 'string') { try { card = JSON.parse(card); } catch { card = null; } }
+    if (card?.replyMsg?.content) return textOf(card.replyMsg.content); // 群里「回复」一条消息：正文在回复卡片里
+    return String(first(v, ['text', 'content', 'msg', 'title', 'body']) ?? first(card || {}, ['title']) ?? '');
+  }
   return String(v);
 };
 

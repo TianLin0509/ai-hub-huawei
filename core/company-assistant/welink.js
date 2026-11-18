@@ -45,11 +45,19 @@ function addMemberAllowed(list, addMember) {
   return !!account && groups.includes(opt('--group-id')) && opt('--user-account') === account && !list.some(a => /[\r\n]/.test(a));
 }
 
-function checkArgs(args, { allowSetup = false, sendGroup = '', sendUser = '', addMember = null } = {}) {
+// 第四处（2026-11-18）：本人在页面上点「撤回」，只许撤回调用方给定的会话里、给定编号的那一条。
+function recallAllowed(list, recall) {
+  if (!recall || list[0] !== 'im' || list[1] !== 'recall-message' || list.length !== 6) return false;
+  const opt = name => { const i = list.indexOf(name); return i >= 2 && i % 2 === 0 ? list[i + 1] : undefined; };
+  return (opt('--group-id') ?? opt('--user-account')) === String(recall.conv) && opt('--message-id') === String(recall.messageId);
+}
+
+function checkArgs(args, { allowSetup = false, sendGroup = '', sendUser = '', addMember = null, recall = null } = {}) {
   const list = Array.isArray(args) ? args.map(String) : [];
   const [group, sub = ''] = list;
   if (sendAllowed(list, sendGroup, sendUser)) return list; // 发出的文字可以有换行
   if (addMemberAllowed(list, addMember)) return list;
+  if (recallAllowed(list, recall)) return list;
   const ok = group === '--version' ? list.length === 1 : (READ_ONLY[group] || []).includes(group === 'version' ? '' : sub)
     || (allowSetup && (SETUP[group] || []).includes(sub));
   if (!ok) throw Object.assign(new Error(`助理只能用 welink-cli 的查询命令，拒绝执行：${[group, sub].filter(Boolean).join(' ') || '（空）'}`), { code: 'WELINK_NOT_ALLOWED' });
@@ -146,8 +154,8 @@ async function findCliDeep({ env = process.env, fsModule = fs, execFileImpl, tim
 
 // 跑一条 welink-cli。.js 结尾的是测试用的假程序，用 Hub 自己的程序以 Node 方式运行。
 // onData：边跑边拿到目前为止的全部输出（扫码登录要在命令结束前把二维码显示出来）。
-function run(args, { cli, timeoutMs = 30000, allowSetup = false, sendGroup = '', sendUser = '', addMember = null, env = process.env, spawnFn = spawn, onData = null, signal = null } = {}) {
-  const list = checkArgs(args, { allowSetup, sendGroup, sendUser, addMember });
+function run(args, { cli, timeoutMs = 30000, allowSetup = false, sendGroup = '', sendUser = '', addMember = null, recall = null, env = process.env, spawnFn = spawn, onData = null, signal = null } = {}) {
+  const list = checkArgs(args, { allowSetup, sendGroup, sendUser, addMember, recall });
   if (!cli) return Promise.reject(Object.assign(new Error('没找到 welink-cli：请在当前页面点「一键安装」或「查找或一键安装」'), { code: 'WELINK_MISSING' }));
   const isScript = /\.(?:c?js)$/i.test(cli);
   const cmd = isScript ? process.execPath : cli;

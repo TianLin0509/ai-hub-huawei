@@ -40,6 +40,7 @@ function textOf(raw, normalized) {
   let content = raw?.content ?? normalized?.content;
   if (typeof content === 'string' && /^\s*[{[]/.test(content)) { try { content = JSON.parse(content); } catch { /* 原样 */ } }
   if (content && typeof content === 'object') {
+    if (content.cardContext) { const body = D.textOf(content); if (body.trim()) return body.trim(); } // 回复卡片的正文
     const pick = keys => { for (const k of keys) { const v = content[k]; if (typeof v === 'string' && v.trim()) return v.trim(); } return ''; };
     const file = pick(['fileName', 'file_name', 'name']), title = pick(['title', 'cardTitle', 'subject']), body = pick(['text', 'content', 'msg', 'body', 'desc', 'digest']);
     if (file) return `[文件] ${file}`;
