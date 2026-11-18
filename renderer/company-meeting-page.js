@@ -429,6 +429,8 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       el('speakers').addEventListener('change', e => { const sid = e.target.dataset?.speaker; if (id && sid) void call('meeting-control', { id, op: 'speaker-name', value: { id: Number(sid), name: e.target.value } }).then(() => refresh()).catch(err => message(err.message)); });
       el('interval').addEventListener('change', e => { if (id) void call('meeting-control', { id, op: 'interval', value: Number(e.target.value) }).then(() => refresh()).catch(err => message(err.message)); });
       el('engine').addEventListener('change', e => { if (id) void call('meeting-control', { id, op: 'engine', value: e.target.value }).then(() => refresh()).catch(err => message(err.message)); });
+      el('engine').addEventListener('focus', () => { void modelSync.read(); });
+      el('model-catalog-retry').addEventListener('click', () => { void modelSync.retry(); });
       el('fast-model').addEventListener('change', e => { if (id) void call('meeting-control', { id, op: 'fast-model', value: e.target.value }).then(() => refresh()).catch(err => message(err.message)); });
       el('note').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); root.querySelector('[data-act="mark"]').click(); } });
       el('question').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); root.querySelector('[data-act="ask"]').click(); } });
@@ -441,7 +443,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       player.addEventListener('ended',()=>{if(!playback||playback.spans)return;const next=state.meeting?.recording?.segments.find(s=>s.status==='ready'&&s.at>playback.segment.at);if(next){if(next.at>playback.segment.end+1000)message(`跳过未录制时段 ${time(playback.segment.end)}—${time(next.at)}`);void playAt(Math.max(next.at,playback.segment.end),true).catch(e=>message(e.message));}});
       poll = setInterval(() => { if (!root.hidden || capture?.running) void refresh().catch(e => message(e.message)); }, 2500);
     }
-    if (!root.isConnected) parent.append(root); root.hidden = false; await refresh(); if (!sourceList.length) await action('sources');
+    if (!root.isConnected) parent.append(root); root.hidden = false; void modelSync.read(); await refresh(); if (!sourceList.length) await action('sources');
   }
   async function showEvidence(seq) {
     const e = state.meeting?.events.find(e => e.seq === seq); if (!e) return;
@@ -495,6 +497,17 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
   // 下载被公司代理拦下时，就地给「放行下载服务器」按钮（renderer/net-pass-view.js，和一键更新共用）。
   let netPass = null, netPassLast = null;
   const ipcRenderer = (() => { try { return require('electron').ipcRenderer; } catch { return null; } })();
+  const modelSync = require('./company-meeting-models').createMeetingModelSync({ ipcRenderer,
+    onUpdate: () => refresh(),
+    onCatalog: catalog => {
+      if (!root) return;
+      const loading = catalog.state === 'loading', failed = catalog.state === 'failed';
+      el('model-catalog').hidden = !loading && !failed;
+      el('model-catalog-status').textContent = loading ? '正在读取账号可用模型，通常几秒，最久约 3 分钟；现有选项仍可使用。'
+        : failed ? `模型清单读取失败：${catalog.error || '请稍后重试'}。现有选项仍可使用。` : '';
+      el('model-catalog-retry').hidden = !failed;
+    },
+  });
   function renderAsrPass(asr){
     const slot=el('asr-pass'); if(!slot)return;
     if(!asr.blocked||!ipcRenderer){slot.hidden=true;slot.innerHTML='';return;}
@@ -518,6 +531,6 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
     if(request!==playRequest||meetingId!==id)return;playback=r;video.currentTime=r.offsetMs/1000;root.querySelector('[data-m="play-time"]').textContent=time(at);if(autoplay)await video.play();
   }
   window.addEventListener('beforeunload', e => { if (capture?.running || capture?.queue.length || capture?.saving || capture?.recorder?.queue.length || capture?.recorder?.saving) { e.preventDefault(); e.returnValue = false; } });
-  return { open, close: () => { if (root) { root.hidden = true; el('player').pause(); el('evidence').querySelector('audio')?.pause(); } }, dispose: () => { clearInterval(poll); clearInterval(meterTimer); thumbsObserver?.disconnect(); void capture?.dispose().catch(e => message(e.message)); } };
+  return { open, close: () => { if (root) { root.hidden = true; el('player').pause(); el('evidence').querySelector('audio')?.pause(); } }, dispose: () => { modelSync.dispose(); clearInterval(poll); clearInterval(meterTimer); thumbsObserver?.disconnect(); void capture?.dispose().catch(e => message(e.message)); } };
 }
 module.exports = { createCompanyMeetingPage };

@@ -9,12 +9,15 @@ const { validateManifest, planUpdate, currentRuntime, compareVersions, isNotable
 const { checkManifests, downloadWithFallback } = require('../core/app-update/downloader');
 const { stageIncremental, stagingPaths, launchHelper, takeLastResult, canWriteDir } = require('../core/app-update/apply');
 const { verifyLocalFiles } = require('../core/app-update/payload');
+const launchGuard = require('../core/app-update/launch-guard');
 
 const STARTUP_CHECK_DELAY_MS = 20000;
 const PERIODIC_CHECK_MS = 6 * 60 * 60 * 1000;
 // 小版本静默送达：只改末位的版本不打扰用户（不弹窗、不挂红点），但也要真的送到。后台下载校验，用户下次关闭 Hub 时隐藏替换、不重开，
 // 下次打开就是新版，并由更新日志告诉用户多了什么。装在受保护目录（要管理员授权）的不静默，仍走设置菜单。用户可以在更新窗口里关掉。
 const QUIET_OFF_FILE = 'quiet-updates-off.flag';
+// 上一轮升级留下的进度与标记，多久没动过算残留（r43）。
+const STALE_UPGRADE_MS = 10 * 60 * 1000;
 const canary = require('../core/app-update/canary');
 const catalogLib = require('../core/app-update/version-catalog');
 
@@ -46,6 +49,8 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   // 拉起新程序用的干净环境与工作目录（core/clean-launch-env.js，2026-10-19）：main.js 传入；没传时按当前环境现算。
   prepareLaunch = () => require('../core/clean-launch-env').prepareHubLaunch({ env, isPackaged, appRoot: app && typeof app.getAppPath === 'function' ? app.getAppPath() : undefined }),
   restartWait = () => null,
+  // 点了「立即重启」但 Hub 没退出、回到「已下载好」时通知调用方（main.js 用它放开公司版的等待重启，r43）。
+  onApplyCancelled = () => {},
   // 点「立即重启」后最多等替换脚本留下「已开始」标记这么久，看不到就不退出（杀软重的电脑上 PowerShell 启动就要好几秒）。
   helperStartWaitMs = Number(env.AI_HUB_UPDATE_HELPER_WAIT_MS) || 15000,
   // 小版本静默送达（11-07 定：先不上线）：默认关，代码保留；测试或日后放开时传 true 或设 AI_HUB_QUIET_UPDATE=1。
@@ -65,6 +70,31 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   let confirmedIds = [];
 
   try { lastResult = takeLastResult(dataDir); } catch (error) { logger.warn?.('[app-update] 读取上次结果失败：', error.message); }
+  // 上次升级半路断了、没留下结果（替换脚本还在等旧窗口时电脑重启或被结束，r43）：进度停在「进行中 / 没换成」、
+  // （脚本正常结束一定会写成完成 / 放弃 / 已取消 / 最终失败，只有被打断才会停在这两种）
+  // 版本比当前新、脚本已不在，就当作一次没成的升级，界面照「没升成」处理（提示原因、这一版重新提醒）。
+  if (!lastResult) {
+    try {
+      const sp = stagingPaths(dataDir);
+      const pr = JSON.parse(fs.readFileSync(sp.progress, 'utf8').replace(/^﻿/, ''));
+      if (pr && (pr.state === 'running' || (pr.state === 'failed' && pr.need)) && pr.version && compareVersions(pr.version, currentVersion) > 0 && !launchGuard.lockHeld(sp.lock)) {
+        lastResult = { ok: false, version: pr.version, from: pr.from || currentVersion, rolledBack: false, quiet: false, interrupted: true,
+          reason: pr.reason || '上次升级在「' + (pr.label || '替换') + '」这一步中断了（升级小窗被关掉后电脑重启或程序被结束），没有换上新版本' };
+        fs.rmSync(sp.progress, { force: true });
+      }
+    } catch (_) {}
+  }
+  // 上一轮升级留下的进度、按钮选择、标记（r43）：替换脚本已不在（没占着 helper.lock）、且 10 分钟没动过的才清掉。
+  // 刚升级完重新打开时进度小窗还在读 progress.json（「升级完成」显示几秒后自己关），删早了它读不到状态就关不掉。
+  try {
+    const sp = stagingPaths(dataDir);
+    if (!launchGuard.lockHeld(sp.lock)) {
+      for (const x of [sp.progress, sp.decision, sp.focus, sp.started, sp.cancel]) {
+        let old = false; try { old = Date.now() - fs.statSync(x).mtimeMs > STALE_UPGRADE_MS; } catch (_) {}
+        if (old) fs.rmSync(x, { force: true });
+      }
+    }
+  } catch (_) {}
   if (lastResult) state.lastResult = lastResult;
   state.quietEnabled = quietEnabled();
   state.quietFeature = !!quietDelivery;
@@ -93,7 +123,8 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       await checking;
       return discarded ? check({ silent, quietAllowed }) : state;
     }
-    if (['downloading', 'ready'].includes(state.phase)) return state;
+    // 正在应用（已点「立即重启」）时不另查：否则会把界面改成「有新版本」，盖掉替换进度（r43）。
+    if (['downloading', 'ready', 'applying'].includes(state.phase)) return state;
     checking = (async () => {
       if (!silent) emit({ phase: 'checking', error: null });
       const fetchFn = resolveFetch(fetchImpl);
@@ -443,14 +474,14 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     } else {
       try { fs.rmSync(staged.paths.started, { force: true }); fs.rmSync(staged.paths.cancel, { force: true }); } catch (_) {}
       launchHelper(staged.paths, { env: launch ? launch.env : env, spawnImpl });
-      emit({ phase: 'applying' });
+      emit({ phase: 'applying', applyCancelled: null });
       // 替换脚本被组策略（AllSigned、AppLocker）或杀软拦住时不会开始执行；先等它留下「已开始」标记再退出，
       // 约 15 秒看不到就不退出，如实告诉用户，仍是当前版本，可重试或改用完整安装包。留一个放弃标记，脚本晚到时看到就退出，不会过后再多开一个 Hub。
       const startedAt = Date.now();
       const poll = () => {
         let seen = false;
         try { seen = fs.existsSync(staged.paths.started); } catch (_) {}
-        if (seen) { try { app.quit(); } catch (error) { logger.warn?.('[app-update] 退出失败：', error.message); } return; }
+        if (seen) { watchApplying(staged.paths); try { app.quit(); } catch (error) { logger.warn?.('[app-update] 退出失败：', error.message); } return; }
         if (Date.now() - startedAt >= helperStartWaitMs) {
           try { fs.writeFileSync(staged.paths.cancel, new Date().toISOString()); } catch (_) {}
           emit({ phase: 'error', error: '更新程序没能启动（可能被安全软件或组策略拦截），Hub 没有退出，仍是当前版本。可以点「重试」，或改用完整安装包更新。' });
@@ -461,6 +492,36 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       setTimeout(poll, 300);
       return state;
     }
+  }
+
+  // 退出被取消后回到「已下载好」（r43，2026-11-18）。以前点「立即重启」后 Hub 的退出被拦下（会议有未保存内容、会话没收尾完等），
+  // 替换脚本在进度小窗里停在第 1 步干等 90 秒（用户看到的「卡住」），之后放弃；旧 Hub 却一直停在「正在应用」：
+  // 弹窗没有按钮，同一版本的提醒已经弹过，后台检查也不会再弹，自动更新就此失效。现在两路兜底，回到「已就绪」并说明原因，可以再点「立即重启」：
+  //   1) main.js 退出被取消时直接告诉控制器（applyCancelled）：留下放弃标记，替换脚本立即结束、进度小窗随之关闭；
+  //   2) 替换脚本因任何原因先结束了（helper.lock 被放开）而本进程还活着：同样回到「已就绪」。
+  let applyWatch = null;
+  function watchApplying(paths) {
+    clearInterval(applyWatch);
+    const since = Date.now();
+    applyWatch = setInterval(() => {
+      if (state.phase !== 'applying') { clearInterval(applyWatch); applyWatch = null; return; }
+      if (Date.now() - since < 3000) return;
+      let held = true;
+      try { held = launchGuard.lockHeld(paths.lock); } catch (_) {}
+      if (!held) applyCancelled('替换程序已经结束，但 Hub 没有退出');
+    }, 1000);
+    applyWatch.unref?.();
+  }
+  function applyCancelled(reason = '') {
+    if (state.phase !== 'applying' || !staged || staged.installer) return state;
+    clearInterval(applyWatch); applyWatch = null;
+    try { fs.writeFileSync(staged.paths.cancel, new Date().toISOString()); } catch (_) {}
+    // 替换脚本放弃时写的「没有升级」结果是给下次启动看的；本进程已经在界面上说了，不留到下次再报一遍。
+    try { takeLastResult(dataDir); } catch (_) {}
+    const why = String(reason || '').trim();
+    try { onApplyCancelled(why); } catch (_) {}
+    return emit({ phase: 'ready', error: null, applyCancelled: { at: new Date().toISOString(),
+      reason: `Hub 没有退出，这次没有升级${why ? `（${why}）` : ''}。新版本已经下好，处理完后再点「立即重启」即可。` } });
   }
 
   function useConfig(next) {
@@ -500,8 +561,8 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       reason: r.reason || null, blocked: !!r.blocked })) };
   }
 
-  return { check, probeSources, listVersions, rollbackTo, returnToLatest, restoreBackup, pinCurrent, download, cancel, apply, applyOnQuit, setQuietEnabled, setPreviewEnabled, getState: () => state, view, startBackgroundChecks, useConfig, dismissLastResult, lastResult: () => lastResult,
-    dispose: () => { clearTimeout(timer); if (abort) abort.abort(); if (checkAbort) checkAbort.abort(); } };
+  return { check, probeSources, listVersions, rollbackTo, returnToLatest, restoreBackup, pinCurrent, download, cancel, apply, applyCancelled, applyOnQuit, setQuietEnabled, setPreviewEnabled, getState: () => state, view, startBackgroundChecks, useConfig, dismissLastResult, lastResult: () => lastResult,
+    dispose: () => { clearTimeout(timer); clearInterval(applyWatch); if (abort) abort.abort(); if (checkAbort) checkAbort.abort(); } };
 }
 
 // { mode:'auto' } 有在途问题时回 needsConfirm；'wait' 答完再重启；'now' 立即重启（在途的记下、重启后接着做）；'cancel' 取消等待。

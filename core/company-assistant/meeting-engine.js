@@ -1,6 +1,6 @@
 'use strict';
 // 会议伴侣用哪个终端（CodeAgent / Claude Code / Codex）配哪个模型（2026-11-08）。
-// 按公司对照评测排出的优先级（每档一份），从本机装了、并且接上了这个模型的组合里挑第一个；
+// 自动档先用账号明确保存且仍可选的默认模型；没有明确配置时再按公司对照评测优先级挑选。
 // 用户在「更多」里手动选了就用他选的。没有任何组合可用时退回 CodeAgent + 账号默认模型（老行为）。
 const LABEL = { codeagent: 'CodeAgent', claude: 'Claude Code', codex: 'Codex' };
 const FAMILY_LABEL = { glm: 'GLM', ds: 'DeepSeek', native: '账号默认模型' };
@@ -27,14 +27,23 @@ function engines(available = {}) {
   }
   return out;
 }
-function rank(list, speed) {
+// 账号明确保存的默认模型优先；必须仍在该账号的模型清单内，不猜别的客户端有同样权限。
+function accountDefault({ dataDir, personalDir, fsModule } = {}) {
+  const known = require('../codeagent-model-route').personalModels({ dataDir, personalDir, ...(fsModule ? { fsModule } : {}) });
+  return known.written && known.defaultModel && !known.configMismatch ? `codeagent|${known.defaultModel}` : '';
+}
+function rank(list, speed, preferred = '') {
   const order = PRIORITY[speed] || PRIORITY.normal;
-  const score = e => { const i = order.indexOf(`${e.harness}:${e.family}`); return i < 0 ? order.length : i; };
+  const score = e => {
+    if (preferred && e.id.toLowerCase() === preferred.toLowerCase()) return -1;
+    const i = order.indexOf(`${e.harness}:${e.family}`);
+    return i < 0 ? order.length : i;
+  };
   return [...list].sort((a, b) => score(a) - score(b));
 }
-function recommended(available, speed) { return rank(engines(available), speed)[0] || null; }
+function recommended(available, speed, preferred = '') { return rank(engines(available), speed, preferred)[0] || null; }
 // m.engine：用户手选的组合 id；旧会议的「快速档模型」仍按 CodeAgent 用。
-function choose(m, available, speed = m.speed || 'normal') {
+function choose(m, available, speed = m.speed || 'normal', preferred = '') {
   const list = engines(available);
   if (m.engine) {
     const hit = list.find(e => e.id === m.engine);
@@ -42,6 +51,6 @@ function choose(m, available, speed = m.speed || 'normal') {
     return hit;
   }
   if (speed === 'fast' && m.fastModel) return { id: `codeagent|${m.fastModel}`, harness: 'codeagent', model: m.fastModel, family: family(m.fastModel), label: `${LABEL.codeagent} · ${m.fastModel}` };
-  return recommended(available, speed) || { id: 'codeagent|', harness: 'codeagent', model: '', family: 'native', label: LABEL.codeagent };
+  return recommended(available, speed, preferred) || { id: 'codeagent|', harness: 'codeagent', model: '', family: 'native', label: LABEL.codeagent };
 }
-module.exports = { LABEL, PRIORITY, family, engines, rank, recommended, choose };
+module.exports = { LABEL, PRIORITY, family, engines, rank, recommended, choose, accountDefault };

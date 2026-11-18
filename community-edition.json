@@ -59,9 +59,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "一键反馈改走公司内网：先送到维护人电脑，不再直发阿里云；维护人电脑不在线时自动存好、稍后补发"
+    "修复：升级时叉掉进度小窗后再也不自动更新；退出被拦时更新会回到已就绪并说明原因，没升成的版本会再提醒一次"
   ],
-  "version": "5.6.48",
+  "version": "5.6.49",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

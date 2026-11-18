@@ -11,6 +11,7 @@ const { MeetingFrames } = require('./meeting-frames');
 const { MeetingTools } = require('./meeting-tools');
 const { compactEvents, relevant, modelOptions, fastModel, selectedModel } = require('./meeting-context');
 const engine = require('./meeting-engine');
+const { isSafeModelId } = require('../codeagent-models');
 const ACTIVE = new Set(['recording', 'paused']);
 // 理解速度三档（2026-10-25 用户：强调实时性）：每轮最多带几张新截图、回答写多长、是否鼓励回查。
 const SPEEDS = {
@@ -229,21 +230,29 @@ class MeetingCompanion {
   }
   status(id) {
     const models = modelOptions(this.deps), meeting = id ? this.load(id) : null, speed = meeting?.speed || 'normal';
-    const engines = this.deps.meetingTerminals ? engine.rank(engine.engines(this.terminals()), speed) : [];
+    const engines = this.deps.meetingTerminals ? engine.rank(engine.engines(this.terminals()), speed, this.deps.meetingDefaultEngine?.() || '') : [];
     return { ok: true, meetings: this.list(), meeting, asr: this.asr.status(), models, defaultFastModel: fastModel(models),
       engines: engines.map(({ id, label }) => ({ id, label })), recommendedEngine: engines[0]?.id || '', recordingError: this.recording.errors.get(id) || '' };
   }
   // 本机装了哪些终端、各接上了哪些模型（一分钟内复用，找命令要扫 PATH）。测试和老接线没有 meetingTerminals 时只有 CodeAgent。
   terminals() {
-    if (this.termCache && this.now() - this.termCache.at < 60000) return this.termCache.value;
-    const t = this.deps.meetingTerminals?.() || { codeagent: true }, models = modelOptions(this.deps);
+    const preferred = this.deps.meetingDefaultEngine?.() || '';
+    const models = modelOptions(this.deps), modelKey = JSON.stringify(models);
+    // 账号探测异步补齐清单后立即更新候选；终端安装检测仍复用一分钟。
+    const fresh = this.termCache && this.now() - this.termCache.at < 60000;
+    if (fresh && this.termCache.preferred === preferred && this.termCache.modelKey === modelKey) return this.termCache.value;
+    const t = fresh && this.termCache.preferred === preferred ? this.termCache.terminals : this.deps.meetingTerminals?.() || { codeagent: true };
+    // 新数据目录可能尚无菜单缓存；账号解析器已确认的默认值仍是可选模型。
+    // 只补空菜单，不覆盖已有清单，也不为未安装的终端制造选项。
+    const defaultModel = preferred.startsWith('codeagent|') ? preferred.slice('codeagent|'.length) : '';
+    if (t.codeagent && !models.length && isSafeModelId(defaultModel)) models.push({ id: defaultModel, label: defaultModel });
     const value = { codeagent: t.codeagent ? (models.length ? models : [{ id: '', label: '' }]) : null, claude: t.claude || null, codex: t.codex || null };
-    this.termCache = { at: this.now(), value }; return value;
+    this.termCache = { at: fresh ? this.termCache.at : this.now(), preferred, modelKey, terminals: t, value }; return value;
   }
   // 这场会议理解会话用的终端和模型。key 变了就换会话（shouldRotate）。
   engineFor(m) {
     if (!this.deps.meetingTerminals) { const model = selectedModel(m, this.deps); return { harness: 'codeagent', model, key: model, label: 'CodeAgent' }; }
-    const e = engine.choose(m, this.terminals());
+    const e = engine.choose(m, this.terminals(), m.speed || 'normal', this.deps.meetingDefaultEngine?.() || '');
     return { harness: e.harness, model: e.model, key: e.id, label: e.label };
   }
   asset(id, seq) { const m = this.load(id), e = m.events.find(e => e.seq === Number(seq)); if (!e?.file || !/^(page|system|mic)-\d+\.(jpg|wav)$/.test(e.file)) throw new Error('材料不存在'); const file = path.join(this.dir(id), e.file); return { kind: e.kind, path: file, data: fs.readFileSync(file).toString('base64') }; }

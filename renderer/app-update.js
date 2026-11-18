@@ -180,6 +180,7 @@
         + `<ul class="au-sources">${sourceRows()}</ul>`;
       foot = '<button class="au-btn" data-au="cancel">取消</button>';
     } else if (s.phase === 'ready') {
+      if (s.applyCancelled) body += `<div class="au-msg warn" data-au-cancelled>${esc(s.applyCancelled.reason)}</div>`;
       body += `<div class="au-msg ok">新版本已从「${esc(s.readySource)}」下载并校验通过。${plan && plan.kind === 'incremental' ? '点「立即重启」后先保存会话、关闭窗口，屏幕中间会出现升级进度小窗（第几步、已等多久），换好后自动打开新版，通常 10–40 秒；期间不用再点图标。替换失败会自动恢复旧版本，可在小窗里一键重试。' : '点「立即安装」会打开安装程序，并关闭当前窗口。'}${plan && plan.kind === 'incremental' && s.needsAdmin ? '<br>程序装在受保护的目录里，重启时 Windows 会弹出确认框，请点「是」授权这一次替换；Hub 本身仍以普通权限运行。' : ''}</div>`
         + `<ul class="au-sources">${sourceRows()}</ul>`;
       foot = `<button class="au-btn" data-au="close">稍后</button><button class="au-btn primary" data-au="apply">${plan && plan.kind === 'incremental' ? '立即重启' : '立即安装'}</button>`;
@@ -263,6 +264,8 @@
   // 直到用户从设置菜单点开这个版本的更新为止。两个标记按版本号记在本机，换了新版本重新提醒。
   const PROMPTED_KEY = 'hub:appUpdate:promptedVersion';
   const SEEN_KEY = 'hub:appUpdate:seenVersion';
+  // 自己点的升级没成后补过提醒的版本：同一个失败版本只补一次，再失败也不再补（r43 返工）。
+  const RETRY_KEY = 'hub:appUpdate:retryPromptedVersion';
   const readKey = key => { try { return localStorage.getItem(key) || ''; } catch { return ''; } };
   const writeKey = (key, value) => { try { localStorage.setItem(key, value); } catch {} };
   function pendingVersion() {
@@ -360,7 +363,13 @@
     menu.appendChild(item);
   }
 
-  const update = next => { state = next; render(); renderPill(); renderBadge(); renderUnread(); maybePromptOnce(); };
+  // 点了「立即重启」但 Hub 没退出、这次没升级（r43）：把更新窗口重新打开，说清原因，「立即重启」还在，不用重新下载。
+  let cancelSeen = '';
+  const update = next => {
+    state = next; render(); renderPill(); renderBadge(); renderUnread(); maybePromptOnce();
+    const c = state && state.phase === 'ready' && state.applyCancelled;
+    if (c && c.at !== cancelSeen) { cancelSeen = c.at; openDialog(); }
+  };
   ipcRenderer.on('app-update:state', (_e, next) => update(next));
   ipcRenderer.on('net-pass:state', (_e, next) => { netPass = next; if (dialog && !confirmInfo) render(); });
   let refreshTimer = null;
@@ -369,8 +378,18 @@
   setInterval(() => { if (state && state.restartWait) refresh(); }, 30000);
   addMenuEntry();
   ipcRenderer.invoke('app-update:get-state').then(initial => {
-    update(initial);
     const r = initial && initial.lastResult;
+    // 用户自己点的升级没成（进度小窗被关掉、旧窗口没退出、替换失败已还原……）：只对没升成的这个版本，
+    // 「只自动提醒一次」作废、只改末位也照常提醒，后台检查查到它时再提醒一次，不让一次没成就再也不提醒（r43）。
+    // 例外只给这一个版本：之后别的小版本仍按「不主动提醒」处理；同一个失败版本只补一次（r43 返工）。
+    if (r && !r.ok && !r.quiet && r.version && readKey(RETRY_KEY) !== String(r.version)) {
+      const failed = String(r.version);
+      writeKey(RETRY_KEY, failed);
+      if (readKey(PROMPTED_KEY) === failed) { try { localStorage.removeItem(PROMPTED_KEY); } catch {} }
+      if (readKey(SEEN_KEY) === failed) { try { localStorage.removeItem(SEEN_KEY); } catch {} }
+      revealed = failed;
+    }
+    update(initial);
     if (r) {
       void ipcRenderer.invoke('app-update:dismiss-result');
       // 有更新日志时右下角会列出这次多了什么（renderer/whats-new.js），这里就不再多弹一条。

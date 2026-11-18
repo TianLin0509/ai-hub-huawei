@@ -462,3 +462,26 @@ test('管理员副本替换成功：普通权限父脚本重开，成功进度�
     assert.equal(guard.deferToRunningUpgrade({ dataDir: k.dataDir }), false);
   } finally { k.done(); }
 });
+
+test('r43 退出被取消（Hub 留下放弃标记）：替换脚本不再在第 1 步干等，立即结束、进度为已取消、不替换不重开、放开锁', winOnly, async () => {
+  const k = makeCase({ waitSeconds: 60, relaunch: true });
+  const marker = path.join(k.dataDir, 'relaunched.flag');
+  k.setPlan({ exe: PS, args: ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', `Set-Content -LiteralPath '${q(marker)}' -Value x`] });
+  const oldHub = spawn(PS, ['-NoProfile', '-NonInteractive', '-Command', 'Start-Sleep -Seconds 60'], { windowsHide: true, stdio: 'ignore' });
+  k.kids.push(oldHub);
+  k.setPlan({ pid: oldHub.pid });
+  const helper = k.start();
+  assert.ok(await k.waitFor(() => k.progress()?.step === 1 && k.progress()?.state === 'running'), '在第 1 步等旧窗口');
+  const t0 = Date.now();
+  fs.writeFileSync(k.p.cancel, new Date().toISOString());
+  await exited(helper);
+  assert.ok(Date.now() - t0 < 5000, `放弃标记后很快结束（${Date.now() - t0} ms）`);
+  assert.equal(k.progress().state, 'cancelled', '进度小窗看到已取消会自动关闭');
+  assert.equal(fs.existsSync(k.p.result), false, '不留「没有升级」的结果：Hub 已在界面上说明');
+  assert.equal(guard.lockHeld(k.p.lock), false, '锁已放开：Hub 的看门狗与下次启动都不会被拦');
+  assert.equal(guard.deferToRunningUpgrade({ dataDir: k.dataDir }), false, '再点图标照常启动');
+  await sleep(800);
+  assert.equal(fs.existsSync(marker), false, '没有再拉起旧版');
+  assert.equal(fs.readFileSync(k.asar, 'utf8'), 'old-asar');
+  k.done();
+});

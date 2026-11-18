@@ -2922,6 +2922,11 @@ try {
       isSessionProcessAlive: id => sessionProcessAlive(id),
       // CodeAgent 的原生记录是 Claude 格式，按 Claude 读最终回答；会议伴侣也可能开在 Codex 上（2026-11-08），按 Codex 读。
       readFinals: meta => { const r = live.read({ ...meta, id: meta.id || meta.hubId, kind: /^codex/.test(String(meta.kind || '')) ? 'codex' : 'claude' }); return r && r.available ? r.records : []; },
+      // 自动档跟随个人账号明确保存且仍在清单内的默认模型；未配置时沿用会议评测排序。
+      meetingDefaultEngine: () => {
+        const personalDir = require('./core/codeagent-config').resolveCodeAgentConfig(process.env).configDir;
+        return require('./core/company-assistant/meeting-engine').accountDefault({ dataDir: getHubDataDir(), personalDir });
+      },
       // 会议伴侣能用的终端和模型（core/company-assistant/meeting-engine.js）：装了才列；公司版的 Claude Code / Codex 要设成「公司模型」才算接上。
       meetingTerminals: () => {
         const setup = require('./core/community-setup'), cfg = getHubConfig(), proxy = require('./core/company-model-proxy');
@@ -4661,7 +4666,9 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
         // 值得提醒的新版本（改了 x 或 y）由桌宠说一声；只改末位的照旧静默（2026-11-09）。
         sendToRenderer: (channel, payload) => { sendToRenderer(channel, payload); if (channel === 'app-update:state' && payload && payload.phase === 'available' && payload.latest && payload.latest.notify) { try { hubPetController?.announceUpdate?.(payload.latest.version); } catch (_) {} } },
         unblock: unblockOwn, unblockInteractive: url => gateVisible(gatePageFor(url)), isOwnUrl: url => ownHosts.isOwnUrl(url, ownConfig), unblockPassed: () => ownUnblocker.passed(),
-        restartWait: () => companyHubAdmin()?.restartWaitView?.() || null });
+        restartWait: () => companyHubAdmin()?.restartWaitView?.() || null,
+        // 替换脚本先结束而 Hub 没退出（r43）：公司版的等待重启同样放开。
+        onApplyCancelled: reason => { try { Promise.resolve(companyHubAdmin()?.quitCancelled?.(reason)).catch(() => {}); } catch (_) {} } });
       registerAppUpdateIpc(ipcMain, appUpdate, { gate: { apply: opts => { const admin = companyHubAdmin(); return admin && typeof admin.localApply === 'function' ? admin.localApply(opts) : null; } } });
       appUpdateControllerRef = appUpdate;
       // CLI 一键安装（2026-11-07）：组件目录和一键更新放在同一台自家主机，被放行页拦住时共用同一个放行器。
@@ -5521,8 +5528,12 @@ async function runFinalShutdownCleanup() {
   return { clean: errors.length === 0, errors };
 }
 
-function restoreWindowAfterFailedShutdown() {
+function restoreWindowAfterFailedShutdown(reason = '') {
   trayController?.resetQuitting();
+  // 点「立即重启」后退出被取消（r43）：一键更新回到「已下载好」，替换脚本和进度小窗随之结束，不再停在第 1 步干等。
+  // 公司版「立即重启」经等待重启的关口（gate）：同时放开它，不然 3 分钟内再点「立即重启」会被当成「已在重启中」悄悄吞掉。
+  try { appUpdateControllerRef?.applyCancelled?.(reason); } catch (error) { console.warn('[shutdown] app-update cancel failed:', error && error.message); }
+  try { Promise.resolve(companyHubAdmin()?.quitCancelled?.(reason)).catch(error => console.warn('[shutdown] restart gate cancel failed:', error && error.message)); } catch (error) { console.warn('[shutdown] restart gate cancel failed:', error && error.message); }
   try {
     if (!mainWindow || mainWindow.isDestroyed()) {
       createWindow();
@@ -5625,7 +5636,7 @@ function beginGracefulHubShutdown(reason, { beforeQuit } = {}) {
         shutdownDrainState = 'idle';
         shutdownDrainPromise = null;
         console.error('[shutdown] PTY drain did not reach a safe state; close was cancelled and may be retried', result);
-        restoreWindowAfterFailedShutdown();
+        restoreWindowAfterFailedShutdown('有会话没能安全收尾');
         global.__deliveryEngine?.startWatching(); global.__orchestrationService?.unfreeze(); global.__teamService?.unfreeze();
         return result;
       }
@@ -5654,7 +5665,7 @@ function beginGracefulHubShutdown(reason, { beforeQuit } = {}) {
       shutdownDrainState = 'idle';
       shutdownDrainPromise = null;
       console.error('[shutdown] PTY drain failed; refusing unsafe Electron teardown:', error && error.stack || error);
-      restoreWindowAfterFailedShutdown();
+      restoreWindowAfterFailedShutdown(error && error.message ? error.message : '');
       global.__deliveryEngine?.startWatching(); global.__orchestrationService?.unfreeze(); global.__teamService?.unfreeze();
       return { safeToQuit: false, error: error && error.message ? error.message : String(error) };
     });
