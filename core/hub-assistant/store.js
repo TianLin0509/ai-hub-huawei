@@ -7,7 +7,12 @@ class AssistantStore {
   constructor(dir) {
     fs.mkdirSync(dir, { recursive:true });
     this.db = new DatabaseSync(path.join(dir,'assistant.sqlite'));
-    this.db.exec(`PRAGMA busy_timeout=3000; CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+    this.db.exec('PRAGMA busy_timeout=3000');
+    // 2026-11-18: in rollback-journal mode each small write created, synced and deleted a journal
+    // poll). WAL + NORMAL makes such a write ~0.01 ms. Switching needs a moment without other
+    // connections; if one is open, keep the current mode and try again on the next start.
+    try { this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;'); } catch { /* stays in the old mode */ }
+    this.db.exec(`CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS actions(id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,payload TEXT NOT NULL,state TEXT NOT NULL,result TEXT,updated INTEGER NOT NULL);`);
   }
   get(key) { const row=this.db.prepare('SELECT value FROM meta WHERE key=?').get(key); return row ? JSON.parse(row.value) : null; }

@@ -59,10 +59,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "修复：会议有未保存内容时退出被拦后，再次更新不再报错；公司模型切换按真实确认；Claude Code 403 等报错讲清原因；做页交付后还能继续改；会议记录可以删除；侧栏悬停时显示完整；关掉的功能不再占左侧入口",
-    "新增：支持 pi 作为第四个 Agent 框架（和 Claude Code、Codex、DSH 并列，可一键安装）；OD 考勤页自动识别；复制可得 Markdown（设置里开启）。修复：退出被拦后再次更新不再报错；公司模型切换按真实确认；Claude Code 403 等报错讲清原因；做页交付后还能改；会议记录可删除；侧栏悬停显示完整；关掉的功能不占左侧入口"
+    "一键反馈改走公司内网：先送到维护人电脑，不再直发阿里云；维护人电脑不在线时自动存好、稍后补发"
   ],
-  "version": "5.6.47",
+  "version": "5.6.48",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

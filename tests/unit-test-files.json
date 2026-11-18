@@ -100,6 +100,7 @@
   "tests/unit-lan-pool.test.js",
   "tests/unit-lan-pool-dashboard.test.js",
   "tests/unit-cli-tools.test.js",
+  "tests/unit-cli-components-merge.test.js",
   "tests/unit-company-assistant-digest.test.js",
   "tests/unit-company-assistant-metering.test.js",
   "tests/unit-persist-empty-list-guard.test.js",
@@ -232,5 +233,7 @@
   "tests/unit-hub-pet-role-pack-frames.test.js",
   "tests/unit-hub-pet-role-update-r27i2.test.js",
   "tests/unit-hub-pet-role-packs-v110.test.js",
-  "tests/unit-hub-shutdown-retry.test.js"
+  "tests/unit-hub-shutdown-retry.test.js",
+  "tests/unit-host-shell-tail.test.js",
+  "tests/unit-feedback-intranet-send.test.js"
 ]

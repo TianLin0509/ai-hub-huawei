@@ -16,11 +16,27 @@
 //   都要求出现在行首、tail 末尾结束（^/(?:\n|^) 锚 + $\s*$ 锚）
 const HOST_SHELL_PROMPT_RE = /(?:^|\n)\s*(?:PS [A-Za-z]:\\[^\n]*?>\s*(?:\n\s*>>\s*)*$|[\w-]+@[^\s]+:[^\s]*?\$\s*$|\$\s*$|[A-Za-z]:\\[^\n]*?>\s*$)/;
 
+// Same result as .replace(/\x1b\][^\x07]*\x07/g, '') but linear. That regex rescans to the
+// end of the buffer for every OSC with no BEL after it (Claude ends titles with ESC \),
+// which took 2.8 s on a 1 MB terminal ring (2026-11-18 profile). Once no BEL follows an
+// OSC start, no later OSC can match either, so the rest is kept as is.
+function removeBelOscs(text) {
+  let out = '', from = 0;
+  for (;;) {
+    const start = text.indexOf('\x1b]', from);
+    if (start < 0) break;
+    const bel = text.indexOf('\x07', start + 2);
+    if (bel < 0) break;
+    out += text.slice(from, start);
+    from = bel + 1;
+  }
+  return from ? out + text.slice(from) : text;
+}
+
 function stripAnsi(buf) {
-  return String(buf || '')
+  return removeBelOscs(String(buf || '')
     .replace(/\x1b\[(\d*)C/g, (_match, count) => ' '.repeat(Math.min(Number(count) || 1, 200)))
-    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
-    .replace(/\x1b\][^\x07]*\x07/g, '')
+    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, ''))
     .replace(/\x1b[()][0-9A-Za-z]/g, '')
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '')
     .replace(/\r/g, '');
@@ -35,7 +51,14 @@ const SEQUENCE_PARAM = /[0-9;?[()]/;
 function safeTailStart(raw, cut) {
   // OSC: stripAnsi removes from the first ESC ] after a BEL up to the next BEL,
   // which may lie far before the cut (a long window title).
-  if (raw.lastIndexOf('\x1b]', cut - 1) > raw.lastIndexOf('\x07', cut - 1)) return -1;
+  // Claude ends its title OSC with ST (ESC \), not BEL, so this case is common; falling
+  // back to cleaning the whole 1 MB ring cost 100–190 ms per prompt (2026-11-18 profile).
+  // stripAnsi deletes such an OSC through the next BEL; with no BEL after the cut nothing
+  // is deleted across it, and with one the tail can start right after that BEL.
+  if (raw.lastIndexOf('\x1b]', cut - 1) > raw.lastIndexOf('\x07', cut - 1)) {
+    const bel = raw.indexOf('\x07', cut);
+    if (bel >= 0) return bel + 1 < raw.length ? safeTailStart(raw, bel + 1) : -1;
+  }
   // CSI and charset sequences are short: step back over their parameters to the ESC.
   let start = cut;
   while (start > 0 && cut - start < 64 && SEQUENCE_PARAM.test(raw[start - 1])) start -= 1;

@@ -2,7 +2,8 @@
 'use strict';
 // 打 CLI 一键安装的组件包（2026-11-07），在发布机上跑；只生成文件，不上传任何地方。
 //
-//   node scripts/build-cli-components.js --out D:\AI-Artifacts\cli-components --key <私钥.pem>
+//   node scripts/build-cli-components.js --only pi --base https://<自家主机>/hub-update/components/components.json --out D:\AI-Artifacts\cli-components --key <私钥.pem>
+//   node scripts/build-cli-components.js --only claude,codex,dsh,node,git,pi --out <目录> --key <私钥.pem>   全量重打，不需要底目录
 //   node scripts/build-cli-components.js --dry-run                 只打印计划（会查版本号，不下载）
 //   node scripts/build-cli-components.js --gen-key <私钥.pem>      生成签名钥匙对，打印公钥（写进 core/cli-tools/catalog.js）
 //
@@ -12,6 +13,10 @@
 //       --node-version v22.x.y（默认取 22 系列最新）   --registry https://registry.npmmirror.com
 //       --pi-version 1.5.2（pi 终端 Agent，--only 里写 pi 才打）
 //       --mirror-claude（Claude Code 也放一份到自家源，默认只写官方地址；许可见报告）
+//       --base <线上 components.json 的 https 地址或本地文件>（r41：以线上目录为底增量合并，验签后其余组件原样保留）
+//         不加 --base 时，输出目录里已有的 components.json 就是底目录，同样先用程序内置公钥验签，验不过、读不懂都直接停
+//       --fresh（新目录：components.json 只含 --only 里的组件，不读任何底目录，不能和 --base 同用；
+//         输出目录里旧组件的包文件不删，只是不再列进目录。不加时，只打部分组件又没有底目录会直接报错）
 //
 // 产物：<out>/components/components.json（已签名）和 <out>/components/<组件>/<版本>/<文件>。
 // 上传时把 <out>/components 整个目录原样放到自家主机的 /hub-update/components/ 下。
@@ -48,10 +53,13 @@ function parseArgs(argv) {
     else if (a === '--git-version') o.git = next();
     else if (a === '--registry') o.registry = next().replace(/\/+$/, '');
     else if (a === '--mirror-claude') o.mirrorClaude = true;
+    else if (a === '--base') o.base = next();
+    else if (a === '--fresh') o.fresh = true;
     else if (a === '--dry-run') o.dryRun = true;
     else if (a === '--help' || a === '-h') o.help = true;
     else throw new Error('不认识的参数：' + a);
   }
+  if (o.base && o.fresh) throw new Error('--base 和 --fresh 不能同时用：--base 以线上目录为底合并，--fresh 是只含 --only 组件的新目录');
   for (const id of o.only) if (!catalogLib.IDS.includes(id)) throw new Error('不认识的组件：' + id);
   return { ...DEFAULTS, ...o };
 }
@@ -110,6 +118,42 @@ function run(file, args, opts = {}) {
 
 async function npmMeta(registry, pkg, spec) { return getJson(`${registry}/${pkg}/${encodeURIComponent(spec)}`); }
 function officialTarballs(pkg, file) { return [`https://registry.npmmirror.com/${pkg}/-/${file}`, `${NPMJS}/${pkg}/-/${file}`]; }
+
+// ---------- 增量合并（r41） ----------
+// 读底目录：https 地址或本地文件；必须用程序里的公钥（或测试传入的 key）验签通过，返回原始 components（不做归一化，保证原样保留）。
+async function loadBase(src, { key = catalogLib.publicKey(), fetchText = getText } = {}) {
+  const text = /^https:\/\//i.test(src) ? await fetchText(src) : fs.readFileSync(src, 'utf8');
+  const raw = JSON.parse(text);
+  catalogLib.validateCatalog(raw, { key });
+  return raw.components || [];
+}
+// 定底目录（r41 返工）：--fresh 不要底目录；--base 用指定的；否则用输出目录里已有的 components.json。
+// 本地已有的那份和 --base 一样先验签——没签名、被改过、JSON 坏了都直接报错，免得把不可信条目重新签成可信目录；只有文件不存在才算没有底目录。
+async function resolveBase(o, outRoot, opts = {}) {
+  if (o.fresh) return { previous: [], from: null };
+  if (o.base) return { previous: await loadBase(o.base, opts), from: o.base };
+  const local = path.join(outRoot, 'components.json');
+  if (!fs.existsSync(local)) return { previous: [], from: null };
+  try { return { previous: await loadBase(local, opts), from: local }; }
+  catch (error) { throw new Error(`输出目录里已有的 ${local} 验证不通过（${error.message}），不拿它当底目录；请改用 --base <线上 components.json>，或确认要新目录时加 --fresh`); }
+}
+// 底目录里不在 only 里的组件原样保留，再放进这次新打的；按 IDS 顺序排。
+function mergeComponents(previous, rebuilt, only) {
+  const kept = (previous || []).filter(c => c && !only.includes(c.id)).map(c => JSON.parse(JSON.stringify(c)));
+  const all = [...kept, ...rebuilt];
+  const ids = all.map(c => c.id);
+  if (new Set(ids).size !== ids.length) throw new Error('合并后有重复的组件：' + ids.join(','));
+  return all.sort((a, b) => catalogLib.IDS.indexOf(a.id) - catalogLib.IDS.indexOf(b.id));
+}
+// 签名前后核对：底目录里不在 only 里的组件，必须一个不少、逐字节相同。
+function assertKept(previous, merged, only) {
+  for (const c of previous || []) {
+    if (!c || only.includes(c.id)) continue;
+    const hit = merged.find(m => m.id === c.id);
+    if (!hit) throw new Error(`合并后丢了组件 ${c.id}`);
+    if (JSON.stringify(hit) !== JSON.stringify(c)) throw new Error(`合并后组件 ${c.id} 的条目变了`);
+  }
+}
 
 // ---------- 各组件的计划 ----------
 async function planClaude(o) {
@@ -313,7 +357,7 @@ async function buildGit(p, dir, staging) {
 
 async function main() {
   const o = parseArgs(process.argv.slice(2));
-  if (o.help) { console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(2, 17).join('\n')); return; }
+  if (o.help) { console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(2, 22).join('\n')); return; }
   if (o.genKey) {
     if (fs.existsSync(o.genKey)) throw new Error('钥匙文件已存在，不覆盖：' + o.genKey);
     const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
@@ -321,6 +365,18 @@ async function main() {
     fs.writeFileSync(o.genKey, privateKey.export({ type: 'pkcs8', format: 'pem' }), { mode: 0o600 });
     console.log('公钥（写进 core/cli-tools/catalog.js 的 PUBLIC_KEY_HEX）：' + publicKey.export({ type: 'spki', format: 'der' }).toString('hex'));
     return;
+  }
+  // 先定底目录再查版本：底目录不可信、或只打部分却没有底目录时，在联网和下载之前就停。
+  let previous = [], outRoot = null;
+  if (!o.dryRun) {
+    if (!o.out) throw new Error('请用 --out 指定输出目录');
+    outRoot = path.join(o.out, 'components');
+    const base = await resolveBase(o, outRoot);
+    previous = base.previous;
+    if (base.from) log(`底目录：${base.from}（验签通过，${previous.map(c => c.id + '@' + c.version).join(' ') || '空'}）`);
+    else if (o.fresh) log('--fresh：新目录只含 ' + o.only.join(',') + '，输出目录里旧组件的包文件不删、不列进目录');
+    const partial = catalogLib.IDS.some(id => !o.only.includes(id));
+    if (partial && !previous.length && !o.fresh) throw new Error('只打部分组件（' + o.only.join(',') + '）却没有底目录，会丢掉其他组件；请加 --base <线上 components.json>，或确认要新目录时加 --fresh');
   }
   const planners = { claude: planClaude, codex: planCodex, dsh: planDsh, node: planNode, git: planGit, pi: planPi };
   const plans = [];
@@ -331,15 +387,10 @@ async function main() {
     log(`  ${p.id.padEnd(6)} ${p.version.padEnd(24)} ${p.file}  [${where}${p.preferOfficial ? '，官方优先' : ''}]  许可：${p.license}`);
   }
   if (o.dryRun) { log('--dry-run：没有下载、没有写文件'); return; }
-  if (!o.out) throw new Error('请用 --out 指定输出目录');
   if (!o.key) log('警告：没有 --key，组件目录不签名；Hub 会拒绝未签名的目录');
-  const outRoot = path.join(o.out, 'components');
   const staging = path.join(o.out, '.staging');
   fs.mkdirSync(staging, { recursive: true });
-  // 已有目录就在它上面增量更新（--only 只重打其中几个时，其余组件保留）。
-  let previous = [];
-  try { previous = JSON.parse(fs.readFileSync(path.join(outRoot, 'components.json'), 'utf8')).components || []; } catch (_) {}
-  const components = previous.filter(c => !o.only.includes(c.id));
+  const rebuilt = [];
   const summary = [];
   for (const p of plans) {
     // 不放自家源的组件放到 official-only/，免得和要上传的文件混在一起被误传。
@@ -350,12 +401,13 @@ async function main() {
       : p.id === 'git' ? await buildGit(p, dir, staging) : await buildNpmTarball(p, dir, staging);
     const rel = `${p.id}/${p.version}/${p.file}`;
     // 不放自家源的组件（默认 Claude Code）：文件仍留在输出目录方便核对，但不进目录的 url，也不用上传。
-    components.push({ id: p.id, name: p.name, version: p.version, kind: 'tgz', license: p.license, preferOfficial: p.preferOfficial,
+    rebuilt.push({ id: p.id, name: p.name, version: p.version, kind: 'tgz', license: p.license, preferOfficial: p.preferOfficial,
       files: [{ name: p.file, bytes: built.bytes, sha256: built.sha256, ...(p.mirror ? { url: rel } : {}), ...(p.official.length ? { official: p.official } : {}) }],
       install: p.install });
     summary.push({ id: p.id, version: p.version, file: rel, bytes: built.bytes, upload: p.mirror, probe: p.probeVersion || '', files: p.fileCount || null, license: p.licenseDetail || p.license });
   }
-  components.sort((a, b) => catalogLib.IDS.indexOf(a.id) - catalogLib.IDS.indexOf(b.id));
+  const components = mergeComponents(previous, rebuilt, o.only);
+  assertKept(previous, components, o.only);
   let catalog = { schema: 1, publishedAt: new Date().toISOString(), components };
   if (o.key) {
     const privateKey = crypto.createPrivateKey(fs.readFileSync(o.key));
@@ -364,6 +416,8 @@ async function main() {
     if (pub !== catalogLib.PUBLIC_KEY_HEX) log('警告：这把私钥和程序里的公钥对不上，Hub 会拒绝这份目录');
     catalogLib.validateCatalog(catalog, { key: crypto.createPublicKey(privateKey) });
   } else catalogLib.validateCatalog(catalog, { key: null });
+  assertKept(previous, catalog.components, o.only);
+  fs.mkdirSync(outRoot, { recursive: true });
   fs.writeFileSync(path.join(outRoot, 'components.json'), JSON.stringify(catalog, null, 2) + '\n', 'utf8');
   fs.rmSync(staging, { recursive: true, force: true });
   log('完成：' + path.join(outRoot, 'components.json'));
@@ -372,4 +426,4 @@ async function main() {
 }
 
 if (require.main === module) main().catch(error => { console.error('[cli-components] 失败：' + error.message); process.exit(1); });
-module.exports = { parseArgs };
+module.exports = { parseArgs, loadBase, resolveBase, mergeComponents, assertKept };

@@ -4674,16 +4674,24 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
         // 启动 40 秒后在后台全局找一遍 Git Bash（隐藏的 PowerShell 读注册表和硬盘列表），新会话能用上别处装的 Git。
         setTimeout(() => { try { cliToolsInstallerRef?.refreshGit?.(); } catch (_) {} }, 40000).unref?.();
       } catch (e) { console.warn('[cli-tools] 一键安装初始化失败：', e && e.message); }
-      // 一键反馈（2026-10-29）：设置菜单「一键反馈」→ 脱敏诊断包提交到自家阿里云；被拦自动放行，发不出就存到「下载」。
+      // 一键反馈（2026-10-29）：设置菜单「一键反馈」→ 脱敏诊断包；阿里云路径被拦自动放行，发不出就存到「下载」。
+      // r42（2026-11-18）：成员版只经公司内网发给维护人电脑上的收件机；公开版在公司内（连得上内源）同样走内网，公司外才发阿里云。
+      // 内网发不到进待发队列，后台每 10 分钟补发。
       try {
         const { createHubFeedbackService, registerHubFeedbackIpc } = require('./main/hub-feedback-service');
-        registerHubFeedbackIpc(ipcMain, createHubFeedbackService({
+        const feedbackEdition = distribution.target === 'company' ? (distribution.featureEnabled('memberUpgrade') ? 'public' : 'member') : null;
+        const feedbackService = createHubFeedbackService({
+          edition: feedbackEdition,
+          receiverAddress: feedbackEdition ? require('./core/feedback-receiver-address').createReceiverAddress({ dataDir: getHubDataDir(), fetchImpl: (...args) => require('electron').net.fetch(...args) }) : null,
           endpoint: ownHosts.feedbackEndpoint(ownConfig), logsDir: path.join(getHubDataDir(), 'logs'), unblock: unblockOwn, onPassed: () => ownUnblocker.passed(),
           // 放行后提交仍被拦：在看不见的窗口里直接提交（走浏览器网络栈，拦截页出现在窗口里就点放行），见 core/net-unblock.js postInHiddenWindow。
           // 公开版不在后台窗口里自动点放行（2026-11-08 用户）：被拦就提示用户打开放行页自己点。
           windowPost: autoUnblock ? (url, body) => ownHosts.isOwnUrl(url, ownConfig) ? netUnblock.postInHiddenWindow(BrowserWindow, url, body) : Promise.resolve({ error: '不是自家地址' }) : null,
-          downloadsDir: () => app.getPath('downloads'),
-          info: () => ({ productName: distribution.productName, edition: distribution.editionBadge || distribution.target || '',
+          // 隔离实例（E2E）存到自己的数据目录，不写进真实的「下载」文件夹。
+          downloadsDir: () => isIsolatedHub() ? path.join(getHubDataDir(), 'downloads') : app.getPath('downloads'),
+          // edition 带上「·成员版 / ·公开版」并另带 target（r42 与阿里云侧约定）：阿里云据此拒收新版成员版，旧客户端不受影响。
+          info: () => ({ productName: distribution.productName, target: distribution.target || '',
+            edition: (distribution.editionBadge || distribution.target || '') + (feedbackEdition ? (feedbackEdition === 'member' ? '·成员版' : '·公开版') : ''),
             version: distribution.editionVersion || app.getVersion(), electron: process.versions.electron, platform: `${process.platform} ${require('os').release()}`,
             // 运行快照（借鉴同类工具的诊断包）：会话数、各类会话数、主进程内存、系统剩余内存、已运行时长。
             runtime: (() => { try {
@@ -4691,7 +4699,12 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
               const kinds = {}; for (const e of list) { const k = e?.info?.kind || e?.kind || '?'; kinds[k] = (kinds[k] || 0) + 1; }
               const os = require('os'), mb = n => Math.round(n / 1048576);
               return `会话 ${list.length} 个（${Object.entries(kinds).map(([k, n]) => `${k} ${n}`).join('、') || '无'}）· 主进程内存 ${mb(process.memoryUsage().rss)} MB · 系统剩余 ${mb(os.freemem())}/${mb(os.totalmem())} MB · 已运行 ${Math.round(process.uptime() / 60)} 分钟`;
-            } catch (e) { return '读取失败：' + e.message; } })() }) }));
+            } catch (e) { return '读取失败：' + e.message; } })() }) });
+        registerHubFeedbackIpc(ipcMain, feedbackService);
+        // AI_HUB_FEEDBACK_RETRY_MS 只供隔离 E2E 缩短补发间隔；正常每 10 分钟一轮、启动 1 分钟后先试一次。
+        const retryMs = Number(process.env.AI_HUB_FEEDBACK_RETRY_MS) || 0;
+        feedbackService.startRetry(retryMs > 0 ? { intervalMs: retryMs, firstDelayMs: retryMs } : undefined);
+        app.on('will-quit', () => feedbackService.stopRetry());
       } catch (e) { console.warn('[hub-feedback] 一键反馈初始化失败：', e && e.message); }
       ipcMain.handle('edition:state', () => ({ enabled: memberUpgrade, unlocked: memberUpgrade && editionChannel.wasUnlocked(getHubDataDir()),
         switched: memberUpgrade && !!editionChannel.readChannel(getHubDataDir()) }));
