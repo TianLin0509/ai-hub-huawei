@@ -59,9 +59,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "修复：升级时叉掉进度小窗后再也不自动更新；退出被拦时更新会回到已就绪并说明原因，没升成的版本会再提醒一次"
+    "组件下载在公司里稳定优先走内源（原来内源回应约 1 秒、只等 0.5 秒，常落回 GitHub）"
   ],
-  "version": "5.6.49",
+  "version": "5.6.50",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

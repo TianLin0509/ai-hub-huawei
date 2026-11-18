@@ -2,7 +2,7 @@
 // 公司内源优先（r21，2026-11-16）：在公司电脑上，各组件的大文件先试公司内源（openx 社区上本产品的项目）
 // （黄区实测约 24 MB/s，阿里云约 1.2 MB/s）。版本清单照旧从 GitHub / 阿里云取，这里只换「字节从哪儿来」：
 // 按文件名在内源的发布版本里找同名附件，下载后仍按清单的大小和 sha256 核对（downloader.js 的 downloadOne）。
-// 公司外（在家、外网）连不上内源：3 秒内没回就记下「连不上」，30 分钟内不再试，所以外网用户最多多等一次 3 秒。
+// 公司外（在家、外网）连不上内源：3 秒内没回就记下「连不上」，5 分钟内不再试，所以外网用户每 5 分钟最多多等一次 3 秒。
 // 找不到、校验不对、连不上都静默回到原来的下载源，不报错。
 //
 // 内源地址与开关在 openx-config.js：只在公开版生效（2026-11-16 定）；成员版关闭，不探测、不下载、不改源顺序，行为和以前完全一样。
@@ -22,13 +22,17 @@ const ALLOWED_HOST = (() => { try { return CONFIG ? new URL(CONFIG.fileSite).hos
 // 本版本是否启用内源：公开版 true，成员版 false（见 openx-config.js）。
 const EDITION_ON = !!(CONFIG && CONFIG.enabledInEdition);
 const REACH_TIMEOUT_MS = 3000;
-const UNREACHABLE_TTL_MS = 30 * 60 * 1000;
+// 列表都取不到才算「连不上」；一次慢响应不该让内源停用太久（r44 审查）：5 分钟后再试。
+const UNREACHABLE_TTL_MS = 5 * 60 * 1000;
 const LIST_TTL_MS = 10 * 60 * 1000;
 // r24：组件包发一次能用很久，期间 Hub 每版都会新增内源版本；列表多取一些，组件版本靠版本名直接命中（只查 1 次详情）。
 const LIST_PAGE_SIZE = 100;
 const MAX_DETAIL_QUERIES = 8;
-// 状态未知（还没探测过）时，下载最多等内源这么久；没结果就先走原源，探测在后台继续，供下一次下载用。
-const UNKNOWN_BUDGET_MS = 500;
+// 状态未知（还没探测过，或上次探测已过 10 分钟）时，下载最多等内源这么久；没结果就先走原源，探测在后台继续，供下一次下载用。
+// 2026-11-18 公司电脑实测：内源版本列表一次约 0.9–1.05 秒、详情约 0.12 秒。原来只等 0.5 秒，在公司里几乎总是等不到，
+// 组件下载于是落回 GitHub（同事反馈「还是优先 GitHub」）。改为与探测超时相同的 3 秒：公司里稳定命中内源；
+// 公司外最多多等一次 3 秒，随后标记连不上 5 分钟，期间直接走原源。
+const UNKNOWN_BUDGET_MS = REACH_TIMEOUT_MS;
 
 let state = freshState();
 function freshState() {
@@ -114,7 +118,11 @@ async function find({ file, version, release, fetchImpl, signal, api = DEFAULT_A
         const data = await getJson(fetchImpl, `${api}by_id?id=${encodeURIComponent(rec.id)}`, signal, timeoutMs);
         packages = Array.isArray(data.binaryPackages) ? data.binaryPackages : [];
         state.details.set(rec.id, packages);
-      } catch (error) { return unreachable(error); }
+      } catch (error) {
+        // 列表能取到说明内源是通的：单个版本详情超时或出错只放弃这一次查找，不把整个内源标成连不上（r44 审查）。
+        if (signal && signal.aborted) return miss('已取消');
+        return miss(`内源版本详情没取到：${error && error.message ? error.message : error}`);
+      }
     }
     const hit = packages.find(p => p && String(p.originalFileName || '').toLowerCase() === key && safeUrl(p.url));
     if (hit) return { url: safeUrl(hit.url), releaseId: rec.id, releaseVersion: String(rec.version || '') };
@@ -146,7 +154,7 @@ async function loadList({ fetchImpl, api, projectId, timeoutMs, now }) {
   return state.listing;
 }
 
-// 内源现在的状态：up（10 分钟内连上过）/ down（30 分钟内连不上过）/ unknown（还没探测）。
+// 内源现在的状态：up（10 分钟内连上过）/ down（5 分钟内连不上过）/ unknown（还没探测）。
 function reachability({ now = Date.now } = {}) {
   if (now() < state.unreachableUntil) return 'down';
   if (state.list && now() - state.listAt <= LIST_TTL_MS) return 'up';
