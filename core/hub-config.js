@@ -197,6 +197,8 @@ function getConfig() {
     consolidation: normalizeConsolidationConfig(rawConfig.consolidation),
     // 工作台运维：服务器健康检查和安全恢复 worktree 根目录。
     operations: normalizeOperationsConfig(rawConfig.operations),
+    // 负责人组队（main/team/service.js）：autoApproveLeads（默认开，false 关回人工批准）。
+    team: rawConfig.team && typeof rawConfig.team === 'object' && !Array.isArray(rawConfig.team) ? { ...rawConfig.team } : {},
   };
 
   return require('./company-api-config').applyCompanyConfig(_cachedConfig, rawConfig);

@@ -133,6 +133,7 @@ function toEditableConfig(config) {
     aliyunMetricsUrl: operations.aliyunMonitor.metricsUrl,
     aliyunBearerToken: operations.aliyunMonitor.bearerToken,
     operationsRestoreRoot: operations.restoreRoot,
+    teamAutoApproveLeads: config.team?.autoApproveLeads !== false,
   };
 }
 
@@ -298,6 +299,9 @@ function buildConfigJsonUpdate(existing, newConfig) {
         },
         ...(H('operationsRestoreRoot') ? { restoreRoot: newConfig.operationsRestoreRoot } : {}),
       }),
+    } : {}),
+    ...(H('teamAutoApproveLeads') ? {
+      team: { ...(existing.team && typeof existing.team === 'object' && !Array.isArray(existing.team) ? existing.team : {}), autoApproveLeads: newConfig.teamAutoApproveLeads !== false },
     } : {}),
   };
 

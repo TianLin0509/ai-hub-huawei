@@ -6,7 +6,6 @@
 
 // ---- 纯函数（单测直接调用，见 tests/unit-company-assistant-page-chat.test.js）----
 const escHtml = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const unescHtml = v => String(v ?? '').replace(/&(amp|lt|gt|quot|#39);/g, (_, k) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" }[k]));
 // PPT 入口发起的问答归 PPT 页，不在助理页显示。
 const visibleChat = list => (Array.isArray(list) ? list : []).filter(c => c && c.entry !== 'ppt');
 // 旧格式回答：开头一段「> **Hub 核实的查询范围**」引用块。剥出来当查询范围明细，正文只留后面的部分。
@@ -34,17 +33,11 @@ function sourceLabels(sources) {
   if (Array.isArray(sources)) return Object.fromEntries(sources.filter(s => s && s.id).map(s => [String(s.id), String(s.label || '')]));
   return sources && typeof sources === 'object' ? sources : {};
 }
-// 正文里的出处编号 [msg:…] [meeting:…]（旧写法 mtg:）[cal:…] [mail:…]（或包在行内代码里）换成灰色小标签；点开看出处。作用在已转义 / 已净化的 HTML 上。
-const SOURCE_RE = /<code>\[([^\]<>]+)\]<\/code>|\[([^\]<>]+)\]/g;
-const SOURCE_ID = /^(?:msg|meeting|mtg|cal|mail):\S+$/;
+// 正文里的出处编号 [msg:…] [meeting:…]（旧写法 mtg:）[cal:…] [mail:…]（或包在行内代码里）换成灰色小标签；点开看出处。
+// 识别规则放在 renderer/assistant-source-marks.js，和主页的助理会话卡片共用（2026-11-18：主页那边原来直接显示编号原文）。
 function tagSources(html, labelOf = () => '出处') {
-  return String(html || '').replace(SOURCE_RE, (all, coded, plain, offset, whole) => {
-    // 链接文字 [..](..) 与属性里的方括号不动。
-    if (whole[offset + all.length] === '(' || /=["'][^"']*$/.test(whole.slice(Math.max(0, offset - 200), offset))) return all;
-    const ids = unescHtml(coded ?? plain).split(/[,，;；、]\s*|\s+/).map(s => s.trim()).filter(Boolean);
-    if (!ids.length || !ids.every(id => SOURCE_ID.test(id))) return all;
-    return ids.map(id => `<button type="button" class="ca-src-tag" data-ca="source:${escHtml(id)}" title="查看出处">${escHtml(labelOf(id) || '出处')}</button>`).join('');
-  });
+  return require('./assistant-source-marks').replaceSourceMarks(html, ids => ids.map(id =>
+    `<button type="button" class="ca-src-tag" data-ca="source:${escHtml(id)}" title="查看出处">${escHtml(labelOf(id) || '出处')}</button>`).join(''));
 }
 // 「今天」栏折叠：存 localStorage；从没设过时，窗口窄于 1100px 默认收起。
 const TODAY_FOLD_KEY = 'hub.companyAssistant.todayFolded';
@@ -631,7 +624,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     const head = '<div class="ca-source-head"><h2>查看出处</h2><button type="button" class="ca-btn small" data-ca="close-panel">关闭</button></div>';
     panel.innerHTML = `<div class="ca-source" role="dialog" aria-label="查看出处">${head}<p class="ca-note">正在读取本机原文…</p></div>`;
     try {
-      const result = await call('source', { source, day: day || data.day });
+      const result = await call('source', { source, day: day || data?.day });
       if (panel.dataset.kind !== 'source' || panel.dataset.source !== source) return;
       const fullWhen = at => at ? new Date(at).toLocaleString('zh-CN', { hour12: false }) : '时间未提供';
       let html;
@@ -897,6 +890,13 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
   window.__companyAssistantOpenSession = async () => {
     try { const r = await call('open-session'); close(); await openSession(r.sessionId); }
     catch (error) { showMessage?.('助理会话没能打开：' + error.message); }
+  };
+  // 主页的助理会话卡片点正文里的「出处」标签（renderer/turn-card-renderer.js）：打开助理页，右侧照常显示本机原文。
+  window.__companyAssistantShowSource = async source => {
+    const id = String(source || '');
+    if (!id) return;
+    await open();
+    await openSource(id);
   };
   document.addEventListener('click', e => { if (page && !page.hidden && e.target.closest('#scene-rail button:not(#btn-company-assistant)')) close(); });
   ipcRenderer.on('company-assistant:changed', () => { if (page && !page.hidden) void load().catch(() => {}); });

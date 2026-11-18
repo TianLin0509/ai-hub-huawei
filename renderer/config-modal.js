@@ -413,6 +413,7 @@ function createConfigModalController({
       savedCardDisplay = setCardDisplayForm(cfg);
       setNotificationForm(cfg);
       setOperationsForm(cfg);
+      if (configEl('cfg-team-auto-approve')) configEl('cfg-team-auto-approve').checked = cfg.teamAutoApproveLeads !== false;
       updateClaudeBackendControls();
       updateConfigSummaries();
       configEl('config-save').disabled=false;
@@ -539,6 +540,7 @@ function createConfigModalController({
         notificationNotifyGroupChats: notificationForm.notificationNotifyGroupChats,
         feishuTarget: notificationForm.feishuTarget,
         ...operationsForm,
+        ...(configEl('cfg-team-auto-approve') ? { teamAutoApproveLeads: !!configEl('cfg-team-auto-approve').checked } : {}),
       };
       if (newConfig.feishuTarget && !/^(?:oc|ou)_[A-Za-z0-9_-]{6,256}$/.test(newConfig.feishuTarget)) {
         msg.textContent = '飞书接收对象 ID 必须以 oc_（会话/群聊）或 ou_（用户）开头。';

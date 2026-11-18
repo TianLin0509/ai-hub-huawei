@@ -710,6 +710,33 @@
   color: var(--turn-body-fg);
 }
 
+/* 公司助理回答里的出处编号（[mail:…]、[msg:…] 等）换成的小标签：规则见 renderer/assistant-source-marks.js，
+   点一下由助理页显示本机原文。只有助理会话的卡片会出现，别的会话正文不受影响。 */
+.turn-source-tag {
+  display: inline-flex;
+  align-items: center;
+  max-width: 220px;
+  margin: 0 3px;
+  padding: 0 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--text-muted, #888) 22%, transparent);
+  background: color-mix(in srgb, var(--text-muted, #888) 12%, transparent);
+  color: var(--text-muted, #888);
+  font: inherit;
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: 1px;
+  cursor: pointer;
+}
+.turn-source-tag:hover,
+.turn-source-tag:focus-visible {
+  background: color-mix(in srgb, var(--text-muted, #888) 24%, transparent);
+  color: var(--text-primary);
+}
+
 /* === Spec 2 · S8: thinking 折叠块 (assistant only, default collapsed) === */
 .turn-thinking {
   margin-top: 6px;

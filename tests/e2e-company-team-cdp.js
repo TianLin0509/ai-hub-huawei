@@ -57,6 +57,8 @@ async function run() {
   assert.equal(JSON.parse(markerText).target, 'company', 'Run in the company edition');
   for (const dir of [DATA, WORK, ART, CONTROL]) fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(WORK, '.aiwork-root'), '');
+  // 本用例逐步验证「待批准 → 界面批准」路径，显式关掉负责人组队自动批准（2026-11-18 起默认开）。
+  fs.writeFileSync(path.join(DATA, 'config.json'), JSON.stringify({ team: { autoApproveLeads: false } }), 'utf8');
   const glm = 'GLM-5.2-WX-Auto', ds = 'deepseek-v4-flash-0731';
   seed(PERSONAL, 'p-fixture', glm);
   const a = pool.addAccount(DATA, { note: '研发夹具' });

@@ -96,8 +96,23 @@ function createTurnCardRenderer(options = {}) {
     queueMicrotask(() => { modelLoadQueued = false; refreshModelLoads(); });
   }
 
+  // 助理回答的最后一行是 Hub 的收工回执，提问里就写明「这一行不会显示给用户」；多段回答和进展行同样处理。
+  function stripAssistantReceipts(turn) {
+    const { stripReceiptMarks } = require('./assistant-source-marks');
+    const strip = list => Array.isArray(list)
+      ? list.map(item => (item && typeof item.text === 'string' ? { ...item, text: stripReceiptMarks(item.text) } : item))
+      : list;
+    return { ...turn,
+      ...(typeof turn.text === 'string' ? { text: stripReceiptMarks(turn.text) } : {}),
+      ...(Array.isArray(turn.replySegments) ? { replySegments: strip(turn.replySegments) } : {}),
+      ...(Array.isArray(turn.chatProcessMessages) ? { chatProcessMessages: strip(turn.chatProcessMessages) } : {}) };
+  }
+
   function prepareTurnForRender(sessionId, turn, opts = {}) {
     const session = opts.session || getSessionContext(sessionId) || null;
+    // 公司助理会话（core/company-assistant/service.js 的 purpose）：回答里带只给 Hub 看的标记——
+    // 出处编号 [mail:…] 等换成「出处」标签（renderTurnCard 里做），收工回执 [助理回执:…] 这里就剥掉。
+    const assistantMarks = session?.purpose === 'company-assistant';
     if (turn?.role === 'user') {
       const assistantContext=require('../core/assistant-context-display').assistantContextDisplay(turn.text,session?.purpose)
         ||require('../core/hub-assistant/delegated-prompt').delegatedPromptDisplay(turn.text);
@@ -109,11 +124,12 @@ function createTurnCardRenderer(options = {}) {
         require('../core/phone-prompt-origin').promptsFor(sessionId));
       return { ...turn, simpleChat: true, stopped: require('./card-edit-resend').isStoppedUserTurn(turn, win.localStorage, sessionId),
         attachmentCwd: session?.cwd || opts.cwd || turn.attachmentCwd,
-        assistantContext, ...(phoneOrigin ? { phoneOrigin: true } : {}),
+        assistantContext, ...(phoneOrigin ? { phoneOrigin: true } : {}), ...(assistantMarks ? { assistantSourceMarks: true } : {}),
         receiptAuthoritative, promptReceipt: feedback.promptReceipt(session, turn.clientSubmissionId,
           {authoritative: receiptAuthoritative, deliveryStatus: turn.deliveryStatus}) };
     }
     if (!turn || turn.role !== 'assistant') return turn;
+    if (assistantMarks) turn = stripAssistantReceipts(turn);
     let toolCalls = Array.isArray(turn.toolCalls) ? turn.toolCalls : [];
     const live = session && Array.isArray(session.liveToolActivities) ? session.liveToolActivities : [];
     if (live.length && session.livePresentationCardId === turn.id) {
@@ -129,7 +145,7 @@ function createTurnCardRenderer(options = {}) {
       cwd: session && session.cwd || opts.cwd || null,
     });
     return { ...presentationTurn, kind: assistantKindFor(session, presentationTurn), simpleChat: true, presentation,
-      assistantIdentity: session?.purpose === 'hub-assistant' };
+      assistantIdentity: session?.purpose === 'hub-assistant', ...(assistantMarks ? { assistantSourceMarks: true } : {}) };
   }
 
   // 2026-10-12：DeepSeek 跑在 Claude Code 上时记录是 Claude 格式，解析出的回答身份是 claude；
@@ -628,7 +644,10 @@ function renderTurnCard(turn, context = {}) {
   // body reads like every other answer, matching Codex's card density.
   const nativeChip = turn.nativeActivity && !isProgress
     ? `<span class="turn-branch-chip turn-native-chip" title="Claude 自行发起的回合${turn.nativeOrigin?.kind ? '：' + escapeHtml(turn.nativeOrigin.kind) : ''}">后台</span>` : '';
-  const body = (isProgress && !emptyNative ? require('./conversation-message-view').renderProgressRow(turn,
+  // 公司助理会话（prepareTurnForRender 打的标）：正文里的出处编号 [mail:…] [msg:…] 换成灰色「出处」标签，
+  // 点开交给助理页显示本机原文；别的会话一个字符都不动。
+  const sourceTags = html => turn.assistantSourceMarks ? require('./assistant-source-marks').tagSourceMarks(html, escapeHtml) : html;
+  const body = sourceTags(isProgress && !emptyNative ? require('./conversation-message-view').renderProgressRow(turn,
     {escapeHtml,renderMarkdown:renderMarkdownPreservingLocalPaths,foldLong:false,actions:renderCardActions(turn, context)})
     : emptyNative ? `<span class="turn-native-outcome">${escapeHtml(emptyNative)}</span>`
     : (!isUser && require('./conversation-message-view').renderReplySegments(turn,
@@ -675,8 +694,8 @@ function renderTurnCard(turn, context = {}) {
 
   const progressMessages = turn.chatProcessMessages || [];
   const progressHtml = isSimple && progressMessages.length
-    ? require('./conversation-message-view').renderMessageSequence(progressMessages,
-      { escapeHtml, renderMarkdown: renderMarkdownPreservingLocalPaths, foldLong: false }) : '';
+    ? sourceTags(require('./conversation-message-view').renderMessageSequence(progressMessages,
+      { escapeHtml, renderMarkdown: renderMarkdownPreservingLocalPaths, foldLong: false })) : '';
   const processCount = Number(presentation.activityCount || 0);
   // The activity preview shows only the latest items; warnings count the full reply.
   const processFailures = (turn.toolCalls || []).map(normalizeToolActivity).filter(a => a.status === 'failed' || a.isError === true).length;
@@ -879,6 +898,15 @@ function postProcessLongTextFold(cardEl) {
 // 全局 click handler: 长文本展开/折叠
 listen('click', (e) => {
   if (!options.root && e.target.closest('[data-split-secondary]')) return;
+  // 助理回答里的「出处」标签：助理页负责读本机原文（renderer/company-assistant-page.js）。
+  const sourceTag = e.target.closest && e.target.closest('[data-action="assistant-source"]');
+  if (sourceTag) {
+    e.preventDefault(); e.stopPropagation();
+    const show = win.__companyAssistantShowSource;
+    if (typeof show !== 'function') return;
+    Promise.resolve(show(sourceTag.dataset.source || '')).catch(error => console.warn('[assistant-source]', error));
+    return;
+  }
   const bridgeAction = e.target.closest('[data-bridge-action]');
   if (bridgeAction) {
     e.preventDefault(); e.stopPropagation();

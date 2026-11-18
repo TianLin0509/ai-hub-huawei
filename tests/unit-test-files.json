@@ -93,6 +93,7 @@
   "tests/unit-claude-prefix-fork.test.js",
   "tests/unit-codeagent-prefix-branch.test.js",
   "tests/unit-company-assistant-page-chat.test.js",
+  "tests/unit-assistant-source-marks.test.js",
   "tests/unit-company-assistant-session-pool.test.js",
   "tests/unit-welink-robust.test.js",
   "tests/unit-company-phone-extra-ids.test.js",

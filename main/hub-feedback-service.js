@@ -49,15 +49,7 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
       const saved = JSON.parse(fs.readFileSync(contactFile, 'utf8'));
       if (typeof saved.contact === 'string') return contactText(saved.contact);
     } catch { /* No saved preference yet. */ }
-    try {
-      const auth = JSON.parse(fs.readFileSync(path.join(dataDir, 'company-assistant', 'auth.json'), 'utf8'));
-      if (auth.state === 'online' && auth.login?.ok && contactText(auth.login.uid)) return contactText(auth.login.uid);
-    } catch { /* The assistant may not have checked WeLink yet. */ }
-    try {
-      const identity = JSON.parse(fs.readFileSync(path.join(dataDir, 'profile', 'profile.json'), 'utf8')).identity;
-      if (identity?.from === 'welink') return contactText(identity.uid);
-    } catch { /* The local identity is optional. */ }
-    return '';
+    return contactText(require('../core/welink-account').localWelinkAccount(dataDir));
   }
 
   function saveContact({ contact } = {}) {

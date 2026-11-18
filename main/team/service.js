@@ -1,7 +1,8 @@
 'use strict';
 // 负责人组队（2026-11-01 用户）：任何会话都能当负责人。负责人提交招人计划（几个会话、各用哪个账号、各做什么），
 // 用户在侧栏批准后 Hub 才建子会话，子会话挂在负责人下面。负责人与成员直接互发消息；成员之间默认不直连，
-// 由负责人开放。招人只认界面上的批准（decide 只从 IPC 进来），模型无论怎么调接口都绕不过这一步。
+// 由负责人开放。招人默认按规则自动批准（2026-11-18）：账号与模型按批准时同一套号池校验，每位负责人成员上限照旧；
+// 设置里关掉「负责人组队自动批准」（config team.autoApproveLeads=false）后，回到只认界面上的批准（decide 只从 IPC 进来）。
 // 调用入口：hookServer 的 POST /api/team（共享 token + 与 sessionId 绑定的 CLAUDE_HUB_TEAM_TOKEN），
 // 命令行 scripts/hub-team.js 包了一层。投递复用普通会话的提交闭环（submitPrompt），插话复用群聊的 injector。
 const fs = require('node:fs');
@@ -31,7 +32,10 @@ function createTeamService(deps) {
     getHubDataDir, sessionManager, sendToRenderer = () => {}, logger = console, now = () => Date.now(),
     createSession, submitPrompt, injectPrompt = null, restartSession = null, reconcileTurn = null,
     listAccounts = () => ({ rows: [] }), commandPath = () => '', wakeSession = null,
+    getConfig = () => ({}),
   } = deps;
+  // 主进程传 autoApproveLeadsDefault=true（默认开）；单测等未传时保持人工批准。
+  const autoApproveLeads = () => (getConfig()?.team?.autoApproveLeads ?? deps.autoApproveLeadsDefault) === true;
   const teams = new Map();
   const sending = new Set();
   const decisions = new Map(); // 同一负责人审批串行，不阻塞其他团队。
@@ -232,7 +236,7 @@ function createTeamService(deps) {
       return { role, task, kind, account, cwd, title: String(raw?.title || role).trim().slice(0, 40), model };
     }) };
   }
-  function propose(callerSid, args) {
+  async function propose(callerSid, args) {
     if(!/^codeagent(?:-resume)?$/.test(sessionManager.getSession(callerSid)?.kind || ''))throw Error('公司组队请从 CodeAgent 会话提交计划');
     if (teamOfMember(callerSid)) throw Error('成员不能招人；需要人手请向负责人提');
     let team = teamOfLead(callerSid);
@@ -245,6 +249,13 @@ function createTeamService(deps) {
     const item = { id: newId('plan'), status: 'pending', ...plan, submittedAt: now() };
     team.plans.push(item);
     save(team);
+    if (autoApproveLeads()) {
+      // 与界面批准走同一条 decide：账号、模型、成员上限的校验和报错完全一致；校验不过时计划留在待批准。
+      let result;
+      try { result = await decide({ leadSid: callerSid, planId: item.id, approve: true, note: '', byRule: true }); }
+      catch (error) { throw Error(`${error.message || error}（未自动批准：计划留在侧栏「待批准」，可修改后重新提交，或由${approver}在界面处理）`); }
+      return { ...result, planId: item.id, note: '已按规则自动批准；账号与模型已按号池校验。设置里可关掉「负责人组队自动批准」改回人工批准。' };
+    }
     return { planId: item.id, status: 'pending', note: `计划已提交，等${approver}在 Hub 侧栏（你这个会话那一行的「待批准」）批准。批准前不会建任何会话；批准或驳回的结果会作为一条消息发给你。` };
   }
 
@@ -259,7 +270,7 @@ function createTeamService(deps) {
     result.then(clear, clear);
     return result;
   }
-  async function decideNow({ leadSid, planId, approve, note = '', edits = null }) {
+  async function decideNow({ leadSid, planId, approve, note = '', edits = null, byRule = false }) {
     if (frozen) throw Error('Hub 正在关闭');
     const team = teamOfLead(leadSid);
     const plan = team?.plans.find(p => p.id === planId);
@@ -282,6 +293,7 @@ function createTeamService(deps) {
       plan.members=normalizePlan({...plan,members},team).members;
     }
     plan.status = 'approved'; plan.decidedAt = now(); plan.note = note;
+    if (byRule) plan.approvedByRule = true;
     // 首个 await 前预留本计划全部编号和名额，落盘后才启动会话。
     let nextId = Math.max(0, ...team.members.map(m => Number(m.memberId.slice(1)) || 0));
     for (const spec of plan.members) {
@@ -320,7 +332,7 @@ function createTeamService(deps) {
     }
     save(team);
     const roster = created.map(m => `${m.memberId} ${m.title}（${m.role}${m.account ? '，账号 ' + m.account : ''}）`).join('；');
-    enqueue(team, 'hub', LEAD, `${approver}批准了招人计划 ${plan.id}${note ? '（备注：' + note + '）' : ''}。已建成员：${roster || '无'}。` +
+    enqueue(team, 'hub', LEAD, `${byRule ? '已按规则自动批准' : approver + '批准了'}招人计划 ${plan.id}${note ? '（备注：' + note + '）' : ''}。已建成员：${roster || '无'}。` +
       (failed.length ? `未建成：${failed.join('；')}。` : '') + '已创建成员的开工任务已排队；用 status 查看全队状态。', { wake: true });
     return { ok: true, status: 'approved', created: created.map(m => m.memberId), failed };
   }

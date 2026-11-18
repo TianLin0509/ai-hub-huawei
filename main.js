@@ -3160,6 +3160,8 @@ if (require('./core/distribution').featureEnabled('leadTeam')) try {
     restartSession: id => sessionOperations.restartSession(id),
     listAccounts: () => require('./main/team/codeagent-accounts').listTeamAccounts({ dataDir: getHubDataDir(), sessionManager }),
     commandPath: () => teamCommand,
+    // 2026-11-18：负责人招人默认按规则自动批准；设置里「负责人组队自动批准」（config team.autoApproveLeads=false）可关。
+    getConfig: getHubConfig, autoApproveLeadsDefault: true,
     // 收件人休眠时叫醒：只认侧栏登记为休眠的会话（用户关掉的会话不复活）。
     wakeSession: async id => {
       if (!require('./main/team/wake').canWakeTeamSession(id, lastPersistedSessions, sessionManager.getSession(id))) return false;

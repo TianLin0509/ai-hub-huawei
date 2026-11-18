@@ -18,6 +18,7 @@ const {
 } = require('../core/session-attention-state.js');
 const { sessionRuntimeIssue } = require('../core/session-runtime-issue.js');
 const { KIND_LABELS, ALL_AI_KINDS } = require('../core/ai-kinds.js');
+const welinkUserGroups = null;
 const { sessionDisplayTitle } = require('../core/session-title-guards.js');
 // 右下角「国内正常 / 异常」只关 Kimi / DeepSeek 这类直连的国内 AI；发行版里一个都没有（公司纯净版只有 CodeAgent）就不显示
 // （2026-10-13 用户要求删掉）。
@@ -528,7 +529,7 @@ function _sessionWarningText(session) {
     const domesticLabel = !egress ? '国内检测中' : domestic?.ok ? '国内正常' : '国内异常';
     const markup =
       '<div class="strip-resources" title="点击 CPU / 内存查看进程，点击硬盘释放空间">' + metric('CPU', cpuPct) + gpuMetric + metric('内存', memoryPct) + diskMetric + '</div>' +
-      `<div class="strip-network"><button type="button" class="strip-route-row strip-route-foreign strip-proxy" title="${escapeHtml(foreignTitle)}"${ackAttr}><span class="strip-route-dot ${routeClass(displayRoute, proxyShort ? alert : null)}"></span><span>${routeLabel}</span><span class="strip-location">${escapeHtml(location)}</span>${clashDelay ? `<span class="strip-delay" data-state="known">${clashDelay.delayMs}<small>ms</small></span>` : proxy?.clashDelay?.status === 'timeout' ? '<span class="strip-delay" data-state="timeout">节点超时</span>' : ''}</button>` +
+      `<div class="strip-network">${welinkUserGroups ? welinkUserGroups.userGroupsButtonHtml() : ''}<button type="button" class="strip-route-row strip-route-foreign strip-proxy" title="${escapeHtml(foreignTitle)}"${ackAttr}><span class="strip-route-dot ${routeClass(displayRoute, proxyShort ? alert : null)}"></span><span>${routeLabel}</span><span class="strip-location">${escapeHtml(location)}</span>${clashDelay ? `<span class="strip-delay" data-state="known">${clashDelay.delayMs}<small>ms</small></span>` : proxy?.clashDelay?.status === 'timeout' ? '<span class="strip-delay" data-state="timeout">节点超时</span>' : ''}</button>` +
       transfer + (showDomesticRoute() ? `<span class="strip-route-row strip-route-domestic" title="${escapeHtml(domesticTitle)}"><span class="strip-route-dot ${routeClass(domestic)}"></span>${domesticLabel}</span>` : '') + '</div>';
     if (stripEl._resourceMarkup === markup) return;
     stripEl._resourceMarkup = markup;
