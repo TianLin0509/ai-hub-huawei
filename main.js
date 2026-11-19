@@ -3026,6 +3026,28 @@ if (webSessions) {
   } catch (error) { console.error('[web-roundtable] 网页圆桌未启动：', error.message); }
 }
 let companyWebAi = null;
+// 分身 Beta（接替「替身」，2026-11-19 起公开版也带）：每个分身一个常驻 CodeAgent 会话，提醒和起草，本人点了才发；数据只在本机。
+let avatarService = null;
+try {
+  if (companyAssistantService) {
+    const avatarIpc = require('./main/ipc/avatar-handlers');
+    const avatarHistory = new (require('./core/hub-assistant/live-history').LiveHistory)();
+    avatarService = new (require('./core/avatar/fleet').FleetService)({
+      dataDir: getHubDataDir(), getAssistant: () => companyAssistantService, runAi: runCompanyAi,
+      createSession: (kind, opts) => sessionOperations.createSession({ kind, opts }),
+      sendPrompt: (sessionId, text, clientSubmissionId) => promptOperations.submitPrompt(null, { sessionId, text, clientSubmissionId, waitForCliReady: true }),
+      lastFinal: id => { const meta = sessionManager.getSession(id); const result = meta && avatarHistory.read({ ...meta, id: meta.id || meta.hubId || id, kind: 'claude' }); return result?.available ? result.records?.at(-1) : null; },
+      getSession: id => sessionManager.getSession(id),
+      closeSession: id => require('./core/company-ai-tasks').closeOwnedSession(sessionManager, id),
+      listBackends: () => avatarIpc.listAvatarBackends({ dataDir: getHubDataDir(), sessionManager }),
+      onChanged: () => sendToRenderer('avatar:changed', {}),
+    });
+    avatarService.start();
+    const earlierAvatarPlan = sessionManager.extraMcpProvider;
+    sessionManager.setExtraMcpProvider(request => (request?.opts?.purpose === 'avatar-agent' ? {} : earlierAvatarPlan ? earlierAvatarPlan(request) : null));
+  }
+  require('./main/ipc/avatar-handlers').registerAvatarIpc(ipcMain, () => avatarService, { dialog: require('electron').dialog, getWindow: () => mainWindow });
+} catch (error) { console.error('[avatar] 分身未启动：', error.message); }
 // 公司版「帖子」（原「论坛」，2026-10-18；2026-11-12 加公司发文）：每天同步公司发文、稼先社区、心声社区并附 AI 摘要，数据只留在本机 Hub 数据目录。
 // 只在公司版启用（core/company-forum/gate.js）。取数用 Hub 自己的隐藏浏览器窗口（main/company-forum-browser.js）。
 let companyForumService = null, companyForumBrowser = null, companyForumEdge = null;

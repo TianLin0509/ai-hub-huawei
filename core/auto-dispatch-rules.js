@@ -11,8 +11,8 @@
 // 提问工具名可改（CodeAgent 若改过名字）：AI_HUB_CODEAGENT_CHOICE_TOOLS=名1,名2，或 providers.codeagent.choiceTools=[...]。
 const { createHash } = require('node:crypto');
 
-const AUTO_PURPOSES = Object.freeze(['company-assistant', 'company-forum', 'company-ai']);
-const TEXT_TASK_PURPOSES = Object.freeze(['company-ai']);
+const AUTO_PURPOSES = Object.freeze(['company-assistant', 'company-forum', 'company-ai', 'avatar-agent']);
+const TEXT_TASK_PURPOSES = Object.freeze(['company-ai', 'avatar-agent']);
 const isAutoDispatchPurpose = purpose => AUTO_PURPOSES.includes(String(purpose || ''));
 
 const RULE_LABEL = '自动分配任务规则';

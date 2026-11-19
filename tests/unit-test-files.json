@@ -213,6 +213,8 @@
   "tests/unit-company-assistant-archive.test.js",
   "tests/unit-tray-controller.test.js",
   "tests/unit-session-memory-suspend.test.js",
+  "tests/unit-avatar.test.js",
+  "tests/unit-avatar-personal-row.test.js",
   "tests/unit-codeagent-parenthesized-model.test.js",
   "tests/unit-release-publish.test.js",
   "tests/unit-hub-feedback-contact.test.js",

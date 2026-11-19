@@ -59,9 +59,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "反馈收件机免设置（本机即收件地址时自动开启、端口占用每分钟自愈、状态栏「反馈 N」与翻页列表）；组队在号池没号时自动用个人账号，「重复账号」提示改人话"
+    "新增「分身」Beta（左侧栏）：可建多个分身替你盯消息、起草回复、答群里的问题，生效范围、上下文、账号模型和前缀都能自定义；所有消息都由你点了才发，页面右上角可一键反馈"
   ],
-  "version": "5.6.54",
+  "version": "5.6.55",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

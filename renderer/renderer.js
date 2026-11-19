@@ -9425,6 +9425,24 @@ try {
   window.__webSessionAfterLeave = () => { setShellNavActive('home'); refreshAppToolbar(); };
 } catch (error) { console.warn('[web-sessions] AI 网页未启动：', error.message); }
 document.getElementById('btn-team')?.remove();
+// 分身 Beta（2026-11-19 起公开版也带）：只在公司电脑上有服务；问到了才把入口亮出来。
+{
+  const avatarButton = document.getElementById('btn-avatar');
+  const avatarPage = require('./avatar-page').createAvatarPage({
+    document, window, ipcRenderer, selectSession: id => selectSession(id, { forceScrollBottom: true }),
+    closeOtherPanels: () => {
+      window.hubWorkspaces?.close(); memoryPanel.close(); capabilityPanel.close(); accountCenterPanel.close();
+      for (const key of ['__teamHide', '__cloudHide', '__assistantHide', '__companyAssistantHide', '__companyMeetingHide', '__companyRoomsHide', '__companyForumHide', '__companyAttendanceHide', '__companyW3Hide', '__profileHide', '__wirelessHide', '__writingHide', '__rulesHide', '__xresearchHide', '__studyHide', '__ranHide', '__webSessionHide', '__webRoundtableHide']) window[key]?.();
+    },
+    showMessage: message => showToast(message),
+  });
+  window.__avatarHide = () => avatarPage.close();
+  avatarButton?.addEventListener('click', () => avatarPage.open());
+  ipcRenderer.invoke('avatar:status').then(state => {
+    if (!avatarButton) return;
+    if (state?.missing) avatarButton.remove(); else { avatarButton.hidden = false; avatarButton.style.display = ''; }
+  }).catch(() => avatarButton?.remove());
+}
 const openConfigModal = configModal.open;
 // 右下角回执小卡上的齿轮：打开配置并停在「桌面回执」（2026-11-11）。
 ipcRenderer.on('desktop-notification:open-settings', async () => {

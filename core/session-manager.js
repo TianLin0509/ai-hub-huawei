@@ -472,10 +472,10 @@ function buildClaudePtyLaunch(id, kind, opts, cwd, env, cv) {
 // 个人号读到它（优先级高于账号自己的 settings.json，--model 也压不过）就报「模型不存在」，再把 deepseek 回写进 ~/.cac。
 // 公司真机 Q-1020-01：不带时个人号在该目录 2/2 报错；带上后 1/1 正常用 GLM，项目级与账号配置都不再被回写，号 1 照常用 DeepSeek。
 // 用户自己开的会话不加，可能依赖项目级配置。
-function codeAgentReadOnly(opts) { return !!opts && ['company-assistant', 'company-forum', 'company-ai'].includes(opts.purpose); }
+function codeAgentReadOnly(opts) { return !!opts && ['company-assistant', 'company-forum', 'company-ai', 'avatar-agent'].includes(opts.purpose); }
 // 靠号的配置目录 settings.json 定模型（号池同步配置时写；个人账号只在默认就是它时才用），开起来后再在 /model 菜单里选中它（2026-10-20）。
 function codeAgentRouteModel(opts) {
-  return '';
+  if (!opts || opts.purpose !== 'avatar-agent' || typeof opts.codeagentRouteModel !== 'string') return '';
   const id = opts.codeagentRouteModel.trim();
   return require('./codeagent-models').isSafeModelId(id) ? id : '';
 }
