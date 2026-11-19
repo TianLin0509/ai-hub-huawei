@@ -580,6 +580,32 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       reason: r.reason || null, blocked: !!r.blocked }))] };
   }
 
+  // r58：程序更新与版本回退的下载源标识，和 download() 查内源的参数一致（appOpenxOptions）。
+  // 「app-update」看当前要下的包（还没检查过就看清单里的增量包）；「app-version:<版本>」看回退到该版本要下的完整更新包。
+  {
+    const pts = require('../core/app-update/download-points');
+    const spec = (version, file) => {
+      const o = appOpenxOptions(version);
+      return file ? { items: [{ file, release: o.release, version }], strict: !!o.strict } : null;
+    };
+    pts.register('app-update', async () => {
+      if (!manifest) { try { await check({ silent: true, quietAllowed: false }); } catch (_) {} }
+      if (!manifest) return null;
+      const file = plan && plan.asset ? plan.asset.file : (manifest.incremental && manifest.incremental.file) || (manifest.installer && manifest.installer.file);
+      return spec(manifest.version, file);
+    });
+    // 「下载完整安装包」手动入口：先找内源上的安装包，没有再用阿里云地址（renderer/app-update.js manualDownload）。
+    pts.register('app-installer', async () => {
+      if (!manifest || !manifest.installer) return null;
+      return spec(manifest.version, manifest.installer.file);
+    });
+    pts.register('app-version:', async point => {
+      const version = String(point).slice('app-version:'.length);
+      if (!versionList) { try { await listVersions(); } catch (_) {} }
+      const entry = (versionList || []).find(v => v.version === version);
+      return entry && entry.incremental ? spec(version, entry.incremental.file) : null;
+    });
+  }
   return { check, probeSources, listVersions, rollbackTo, returnToLatest, restoreBackup, pinCurrent, download, cancel, apply, applyCancelled, applyOnQuit, setQuietEnabled, setPreviewEnabled, getState: () => state, view, startBackgroundChecks, useConfig, dismissLastResult, lastResult: () => lastResult,
     dispose: () => { clearTimeout(timer); clearInterval(applyWatch); if (abort) abort.abort(); if (checkAbort) checkAbort.abort(); } };
 }

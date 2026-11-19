@@ -26,6 +26,8 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
   container.classList.add('pet-tab');
   container.innerHTML = '<p class="pet-tab-note">正在读取桌宠设置…</p>';
 
+  // r58：有可下载/可更新的形象时，显示「下载源：公司内源」。
+  const sourceView = require('../download-source-view');
   function render() {
     if (!data) return;
     if (!data.available) { container.innerHTML = '<p class="pet-tab-note">这个版本没有桌宠。</p>'; return; }
@@ -67,6 +69,7 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
       </div>
       <div class="pet-tab-head"><h4>形象</h4><span class="pet-tab-note${st.phase === 'error' && !st.failedId ? ' bad' : ''}">${esc(checkNote)}</span>
         <button type="button" class="pet-tab-mini" data-pet="check"${checking || activeId ? ' disabled' : ''}>检查新形象</button></div>
+      ${roles.some(r => !r.installed || r.update) ? sourceView.slotHtml('pet-role') : ''}
       ${st.failedId && st.error ? `<p class="pet-tab-note bad">${esc(st.error)}</p>` : ''}
       <div class="pet-tab-grid${roles.length > 6 ? ' compact' : ''}">${roles.map(card).join('')}</div>
       <div class="pet-tab-row">
@@ -126,6 +129,7 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
           <label class="pet-tab-switch"><input type="checkbox" data-pet="walk"${s.walk !== false ? ' checked' : ''}><span></span></label>
         </div>
       </div>`;
+    if (container.querySelector('[data-dl-source]')) void sourceView.fill(container, { ipcRenderer }).catch(() => {});
     if (typing) {
       const el = container.querySelector('input[data-pet-name]');
       if (el) { el.value = typing.value; el.focus(); try { el.setSelectionRange(typing.start, typing.end); } catch (_) {} }

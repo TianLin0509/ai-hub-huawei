@@ -203,6 +203,8 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       el('setup-asr').textContent = speech.setupText;
       el('setup-asr-install').hidden = !speech.install;
       el('setup-asr-install').textContent = speech.installLabel;
+      // r58：本地转写包的下载源标识，最多每分钟刷新一次（render 很频繁）。
+      if (!(Date.now() - Number(root.dataset.dlSourceAt || 0) < 60000)) { root.dataset.dlSourceAt = String(Date.now()); void require('./download-source-view').fill(root).catch(() => {}); }
       root.querySelectorAll('[data-act="install"]').forEach(button => { button.disabled = speech.installing; });
       if (asr.ready) el('record-only-confirm').hidden = true;
       const phase = m ? recordingInterrupted() ? '已中断' : ({ recording: capture?.paused ? '已暂停' : '采集中', paused:'已暂停', ended:'已结束', interrupted:'采集已中断' })[m.state] : '尚未开始';

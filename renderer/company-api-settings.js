@@ -77,6 +77,7 @@
     const needPass = block && netPass && (netPass.needed || (netPassLast?.results || []).some(r => r.result === 'blocked'));
     netPassView.ensureCss();
     slot.innerHTML = (needPass ? netPassView.boxHtml(netPass, { last: netPassLast }) : '') + block;
+    void require('./download-source-view').fill(slot, { ipcRenderer });
     netPassView.bind(slot, { ipcRenderer, onUpdate: (next, last) => { if (next) netPass = next; netPassLast = last; renderCliBlock(target, kind); } });
     slot.querySelector('[data-cli-action="install"]')?.addEventListener('click', () => void runInstall(target, kind));
     slot.querySelector('[data-cli-action="install-git"]')?.addEventListener('click', () => void runGitInstall(target, kind));

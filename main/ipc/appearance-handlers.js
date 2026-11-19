@@ -11,6 +11,15 @@ function registerAppearanceIpc(ipcMain, { dataDir, sendToRenderer = () => {}, en
       const size = image.getSize();
       if (image.isEmpty() || !size.width || !size.height || size.width > 2048 || size.height > 2048) throw new Error('头像图片损坏或尺寸超限，原有头像保持不变');
     } });
+  // r58：外观包的下载源标识，和 appearance-packs.js download() 查内源的版本名、文件名一致（appearance-<包版本>）。
+  // 目录还没读过时只替用户查一次（check 会推送界面状态，不能每次刷新标识都查，否则界面会反复刷新）。
+  let catalogTried = false;
+  require('../../core/app-update/download-points').register('appearance', async () => {
+    let catalog = store.snapshot().catalog;
+    if (!catalog && !catalogTried) { catalogTried = true; try { await store.check(); } catch (_) {} catalog = store.snapshot().catalog; }
+    const packs = catalog && Array.isArray(catalog.packs) ? catalog.packs : [];
+    return packs.length ? { items: packs.map(p => ({ file: p.file, release: `appearance-${p.version}`, version: p.version })) } : null;
+  });
   ipcMain.handle('appearance:get', () => store.snapshot());
   ipcMain.handle('appearance:save', (_e, prefs) => store.savePreferences(prefs));
   ipcMain.handle('appearance:check', () => store.check());

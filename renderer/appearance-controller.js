@@ -74,6 +74,7 @@
     const catalog = s.catalog || data.catalog;
     const active = s.phase === 'downloading', checking = s.phase === 'checking';
     return `<div class="appearance-heading"><div><h3>按需下载头像包</h3><p>只下载喜欢的套装，下载后可离线使用，无需重启。</p></div><button class="appearance-btn primary" data-action="check" ${active || checking ? 'disabled' : ''}>${checking ? '正在检查…' : '检查更新'}</button></div>
+      ${require('./download-source-view').slotHtml('appearance', 'div')}
       <div class="appearance-source-list">${(s.sources || []).map(src => { const c = [...(s.attempts || []), ...(s.checks || [])].find(c => c.id === src.id); return `<div><b>${esc(src.name)}</b><span>${c ? c.status === 'downloading' ? '正在下载' : c.status === 'ok' || c.ok ? '连接正常' : esc(c.reason || '等待') : '点击检查后连接'}</span></div>`; }).join('')}</div>
       ${active ? `<div class="appearance-download"><progress max="${progress?.total || 1}" value="${progress?.received || 0}"></progress><p>${esc(progress?.sourceName || '正在连接下载源')} · ${bytes(progress?.received || 0)} / ${progress ? bytes(progress.total) : '正在获取'} · ${progress?.speed ? `${bytes(progress.speed)}/秒` : '正在估算速度'} · ${progress?.etaSec != null ? `剩余约 ${progress.etaSec} 秒` : '正在估算剩余时间'}</p><button class="appearance-btn" data-action="cancel">取消下载</button></div>` : ''}
       ${s.error ? `<p class="appearance-status bad" role="alert">${esc(s.error)}</p>` : s.phase === 'installed' ? '<p class="appearance-status">已下载，进入「整套头像」即可预览和使用。</p>' : ''}
@@ -86,6 +87,7 @@
     const focus = document.activeElement?.id;
     dialog.innerHTML = `<div class="appearance-head"><div><strong>AI 头像与图标</strong><span>主题里的个性化外观</span></div><button class="appearance-close" data-action="close" aria-label="关闭">×</button></div><div class="appearance-tabs" role="tablist">${tabs.map(([id, name]) => `<button role="tab" aria-selected="${tab === id}" data-tab="${id}">${name}</button>`).join('')}</div><div class="appearance-layout"><section class="appearance-content">${tab === 'packs' ? packList() : tab === 'individual' ? individual() : tab === 'icons' ? individual(true) : online()}</section>${preview()}</div><div class="appearance-foot"><span class="appearance-feedback" role="status">${esc(message)}</span><button class="appearance-btn" data-action="reset">恢复默认</button><button class="appearance-btn primary" data-action="close">完成</button></div>`;
     dialog.querySelector('.appearance-content').scrollTop = scroll;
+    if (dialog.querySelector('[data-dl-source]')) void require('./download-source-view').fill(dialog).catch(() => {});
     if (focus) dialog.querySelector(`#${CSS.escape(focus)}`)?.focus();
   }
   const upload = document.createElement('input');

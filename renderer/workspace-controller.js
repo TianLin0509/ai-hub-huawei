@@ -1558,6 +1558,10 @@
       install.hidden = !piStatus || ready;
       install.disabled = piInstalling;
       install.textContent = piInstalling ? '安装中…' : '一键安装 pi';
+      // r58：要装 pi 时，按钮旁显示「下载源：公司内源」（pi 与配套 Node 的内源状态）。
+      let slot = document.querySelector('[data-dl-source="cli:pi"]');
+      if (!install.hidden && !slot) { install.insertAdjacentHTML('afterend', require('./download-source-view').slotHtml('cli:pi', 'span')); slot = document.querySelector('[data-dl-source="cli:pi"]'); }
+      if (slot) { slot.hidden = install.hidden; if (!install.hidden) void require('./download-source-view').fill(slot).catch(() => {}); }
     }
   }
   async function installPiFromLaunch() {

@@ -68,6 +68,18 @@ function createHubPetController({
   // 形象：程序自带的（公司版只带小猫、企鹅）+ 在线下载到数据目录的（core/hub-pet/role-packs.js）。
   const roles = createRolePackStore({ assetsDir, dataDir, logger, fetchImpl, ...(roleSources ? { sources: roleSources } : {}),
     emit: (channel, payload) => { try { sendToRenderer?.(channel, payload); } catch (_) {} } });
+  // r58：桌宠形象包的下载源标识，和 role-packs.js download() 查内源的版本名、文件名一致（pet-role-<包版本>）。
+  // 「pet-role:<id>」只看这一个形象；「pet-role」看目录里全部可下载的形象。
+  // 目录还没读过时只替用户查一次（check 会推送界面状态，每次刷新都查会让设置页反复重画）。
+  let roleCatalogTried = false;
+  require('../core/app-update/download-points').register('pet-role', async point => {
+    let catalog = roles.snapshot().catalog;
+    if (!catalog && !roleCatalogTried) { roleCatalogTried = true; try { await roles.check(); } catch (_) {} catalog = roles.snapshot().catalog; }
+    const id = String(point).split(':')[1] || '';
+    const packs = (catalog && Array.isArray(catalog.packs) ? catalog.packs : []).filter(p => !id || p.id === id);
+    return packs.length ? { items: packs.map(p => ({ file: p.file, release: `pet-role-${p.version}`, version: p.version })) } : null;
+  });
+  require('../core/app-update/download-points').register('pet-role:', point => require('../core/app-update/download-points').lookup('pet-role')(point));
   // 设置里记住的形象：装了的，或者是在线可下载的已知形象（2026-10-18：2.1.8 选了兔子等的用户升级后，
   // 记忆不能因为一次别的设置写盘就被改成小猫；显示时没装照样先用小猫，见 currentRole）。
   const knownRole = id => ROLES.some(r => r.id === id);

@@ -2,6 +2,8 @@
 // 启动中心「一键安装」的界面文字（2026-11-07）：把安装器状态（core/cli-tools/installer.js）翻成人话。
 // 只做纯函数，弹窗怎么接线见 renderer/company-api-settings.js。
 
+// r58：每个一键安装区块都带「下载源：公司内源」一行（renderer/download-source-view.js），点之前就能看到会不会走内源。
+const sourceView = require('./download-source-view');
 const TOOL_FOR_KIND = Object.freeze({ claude: 'claude', codex: 'codex', 'deepseek-acp': 'dsh' });
 const TOOL_NAMES = Object.freeze({ claude: 'Claude Code', codex: 'Codex', dsh: 'DSH 运行环境', git: 'Git for Windows' });
 const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -51,7 +53,7 @@ function gitBlockHtml(state) {
     : `<button type="button" data-cli-action="install-git"${otherBusy ? ' disabled' : ''}>${view.retry ? '重试安装 Git' : '一键安装 Git for Windows'}</button>`;
   const bar = view.busy ? `<div class="cli-install-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"${view.percent == null ? '' : ` aria-valuenow="${view.percent}"`}><span style="width:${view.percent == null ? 100 : view.percent}%"${view.percent == null ? ' data-indeterminate="1"' : ''}></span></div>` : '';
   const status = view.text ? `<p class="cli-install-status" role="status" aria-live="polite">${esc(tool.phase === 'checking' ? '正在全局查找本机的 Git，没有再下载…' : view.text)}</p>` : '';
-  return `<div class="cli-install cli-install-git" data-cli-tool="git" data-cli-phase="${esc(tool.phase || 'idle')}">${view.busy ? '' : intro}${bar}${status}`
+  return `<div class="cli-install cli-install-git" data-cli-tool="git" data-cli-phase="${esc(tool.phase || 'idle')}">${view.busy ? '' : intro}${sourceView.slotHtml('cli:git')}${bar}${status}`
     + `<div class="cli-install-actions">${button}</div></div>`;
 }
 
@@ -64,7 +66,7 @@ function installBlockHtml(kind, state) {
   const entry = (state.catalog || []).find(c => c.id === id);
   const size = entry && entry.bytes ? `（约 ${Math.max(1, Math.round(entry.bytes / 1024 / 1024))} MB${id === 'dsh' ? '，没有 Node.js 时另加约 30 MB' : ''}）` : '';
   const otherBusy = state.busy && state.busy !== id;
-  const intro = `<p class="cli-install-intro">Hub 替你下载并装好 ${esc(TOOL_NAMES[id])}${esc(size)}：装在你自己的用户目录，不需要管理员权限，也不用去官网。</p>`;
+  const intro = `<p class="cli-install-intro">Hub 替你下载并装好 ${esc(TOOL_NAMES[id])}${esc(size)}：装在你自己的用户目录，不需要管理员权限，也不用去官网。先从公司内源下载，内源没有或连不上时自动改用阿里云。</p>`;
   const label = view.retry ? '重试' : '一键安装';
   const button = view.done ? ''
     : view.busy ? '<button type="button" data-cli-action="cancel">取消</button>'
@@ -75,7 +77,7 @@ function installBlockHtml(kind, state) {
   const busyNote = otherBusy ? `<p class="cli-install-note">正在安装${esc(TOOL_NAMES[state.busy] || '其他组件')}，装完再装这个。</p>` : '';
   const git = id === 'claude' ? gitBlockHtml(state) : '';
   const advice = !git && view.done && state.advice && state.advice[id] ? `<p class="cli-install-note">${esc(state.advice[id])}</p>` : '';
-  return `<div class="cli-install" data-cli-tool="${id}" data-cli-phase="${esc(tool && tool.phase || 'idle')}">${view.done ? '' : intro}${bar}`
+  return `<div class="cli-install" data-cli-tool="${id}" data-cli-phase="${esc(tool && tool.phase || 'idle')}">${view.done ? '' : intro}${view.done ? '' : sourceView.slotHtml('cli:' + id)}${bar}`
     + `<p class="cli-install-status" role="status" aria-live="polite">${esc(view.text)}</p>${blocked}${busyNote}${advice}`
     + `${button ? `<div class="cli-install-actions">${button}</div>` : ''}</div>${git}`;
 }

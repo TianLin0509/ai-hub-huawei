@@ -118,6 +118,7 @@
     return `<div class="vp-confirm"><div><h3>回退到 v${esc(i.version)}？</h3>
       <div>· 先把设置和本地数据库等小文件备份到数据目录 backups/ 下，出问题可一键还原。</div>
       <div>· 下载 v${esc(i.version)} 的完整更新包（${mb(i.bytes)}），只换程序文件，会话和数据保留。</div>
+      ${require('./download-source-view').slotHtml('app-version:' + i.version, 'div')}
       ${i.supportsPin ? '<div>· 回退后固定在这一版：不再自动更新、不再提醒；随时可以「回到最新版」。</div>'
         : '<div>· 这一版还不认识「固定版本」：它会照常提示更新，想留在这一版就别点更新；以后想回到最新版，用设置菜单里的「检查更新」。</div>'}
       ${upd && upd.previewEnabled ? '<div>· 会同时关闭「抢先版」，否则旧版会在后台自动升回最新版。</div>' : ''}
@@ -134,6 +135,7 @@
       + `<label class="vp-follow"><input type="checkbox" data-vp="follow" ${follow ? 'checked' : ''} ${busy || rollbackPhase() ? 'disabled' : ''}> 跟随最新版（默认）</label>`
       + `<button class="vp-close" data-vp="close" aria-label="关闭">✕</button></div>${bannerHtml()}`
       + `<div class="vp-body"><div class="vp-list">${listHtml()}</div><div class="vp-detail">${detailHtml()}</div></div><div class="vp-foot">${footHtml()}</div>${confirmHtml()}</div>`;
+    if (dialog.querySelector('[data-dl-source]')) void require('./download-source-view').fill(dialog).catch(() => {});
   }
 
   function renderChip() {

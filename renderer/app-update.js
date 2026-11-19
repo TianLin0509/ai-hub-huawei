@@ -89,7 +89,7 @@
     const source = distribution.updateConfig.sources?.find(s => s.files && s.name === state?.latest?.sourceName)
       || distribution.updateConfig.sources?.find(s => s.files);
     if (!file || !state?.latest?.version || !source) return null;
-    return { url: require('../core/app-update/downloader').fileUrl(source, state.latest.version, file), label: '下载完整安装包' };
+    return { url: require('../core/app-update/downloader').fileUrl(source, state.latest.version, file), label: '下载完整安装包（内源优先）', point: 'app-installer' };
   }
 
   function sourceRows() {
@@ -251,7 +251,14 @@
         confirmInfo = next && next.needsConfirm ? next.confirm : null;
         if (next && next.phase) update(next); else render();
       }
-      else if (action === 'manual') { const manual = manualDownload(); if (manual) shell.openExternal(manual.url); }
+      else if (action === 'manual') {
+        // r58：先在浏览器里打开公司内源上的安装包；内源没有或连不上，再打开阿里云地址。
+        const manual = manualDownload();
+        if (manual) {
+          const viaOpenx = manual.point ? await ipcRenderer.invoke('download-source:open', { point: manual.point }).catch(() => null) : null;
+          if (!viaOpenx || !viaOpenx.ok) shell.openExternal(manual.url);
+        }
+      }
       else if (action === 'allow-open') {
         const button = event.target.closest('[data-au]');
         const url = button.dataset.url || '';

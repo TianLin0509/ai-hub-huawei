@@ -1,5 +1,6 @@
 [
   "tests/unit-app-update-source-status.test.js",
+  "tests/unit-download-source-status.test.js",
   "tests/unit-token-usage.test.js",
   "tests/unit-pi-cli.test.js",
   "tests/unit-app-update-download-promote.test.js",

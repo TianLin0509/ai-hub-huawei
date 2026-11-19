@@ -13,6 +13,10 @@
   let tab = 'features', cliState = null, doctorState = null, installing = new Set(), recheckOnFocus = false;
   const COMPONENTS = new Set(['codeagent', 'claude', 'codex', 'dsh', 'git-bash', 'node', 'welink', 'ppt-doctor']);
   const INSTALLABLE = new Set(['claude', 'codex', 'dsh']);
+  // r58：组件中心每个会下载的组件都显示「下载源：公司内源」（renderer/download-source-view.js）。
+  const sourceView = require('./download-source-view');
+  const SOURCE_LABEL = { 'ppt-doctor': 'PPT Doctor 本体', 'ppt-ocr': '识别组件' };
+  const SOURCE_POINT = { claude: 'cli:claude', codex: 'cli:codex', dsh: 'cli:dsh', git: 'cli:git', 'git-bash': 'cli:git', codeagent: 'codeagent', welink: 'welink', pi: 'cli:pi', node: 'cli:node', 'ppt-doctor': ['ppt-doctor', 'ppt-ocr'] };
   const ACTIVE = new Set(['checking', 'downloading', 'extracting', 'verifying', 'installing']);
 
   function injectStyle() {
@@ -125,11 +129,12 @@
         return `<li class="ec-item ec-${esc(item.status)}${open ? ' expanded' : ''}" data-ec-id="${esc(item.id)}">
           <div class="ec-row"><span class="ec-dot" aria-hidden="true"></span>
             <div class="ec-main"><div class="ec-name">${esc(item.name)}<span class="ec-state">${STATE[item.status] || ''}</span></div>
-              <div class="ec-detail${item.id === 'app-update' ? ' ec-update-sources' : ''}" title="${esc(item.detail)}">${esc(item.detail)}</div>${tab === 'components' ? progressHtml(item.id) : ''}</div>
+              <div class="ec-detail${item.id === 'app-update' ? ' ec-update-sources' : ''}" title="${esc(item.detail)}">${esc(item.detail)}</div>${tab === 'components' ? progressHtml(item.id) : ''}${tab === 'components' && SOURCE_POINT[item.id] ? [].concat(SOURCE_POINT[item.id]).map(p => sourceView.slotHtml(p, 'div', SOURCE_LABEL[p] || '')).join('') : ''}</div>
             <div class="ec-actions">${fixButtons(item)}${canExpand ? `<button type="button" class="ec-more" data-ec-toggle="${esc(item.id)}" aria-expanded="${open}">${open ? '收起' : '详情'}</button>` : ''}</div></div>
           ${open ? `<div class="ec-expand">${expandHtml(item)}</div>` : ''}</li>`;
       }).join('');
     }
+    if (tab === 'components') void sourceView.fill(list, { ipcRenderer });
     const meta = dialog.querySelector('[data-ec="meta"]');
     meta.textContent = result?.ms != null ? `用时 ${(result.ms / 1000).toFixed(1)} 秒` : '';
     dialog.querySelector('[data-ec="rerun"]').disabled = !!running;

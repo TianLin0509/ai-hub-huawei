@@ -4803,7 +4803,24 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
   }
   // 没有下载源的发行版也注册，界面据 available:false 只显示手动安装说明。
   require('./main/cli-tools-ipc').registerCliToolsIpc(ipcMain, { installer: cliToolsInstallerRef });
+  // r58：命令行组件的下载源标识，和 installer.js installOne() 下载时查内源的版本名、文件名一致（cli-<id>-<版本>）。
+  if (cliToolsInstallerRef) require('./core/app-update/download-points').register('cli:', async point => {
+    const cat = await cliToolsInstallerRef.loadCatalog();
+    const want = point.slice(4);
+    // 配套 Node 只在本机没有可用 Node 时才会下载（installer.js 同口径），那时才一起看内源。
+    let needNode = false;
+    if (want === 'dsh' || want === 'pi') {
+      try { needNode = !(require('./core/cli-tools/registry').managedBin('node', process.env) || require('./core/local-node').findNode({ env: process.env })); } catch (_) { needNode = false; }
+    }
+    const ids = needNode ? [want, 'node'] : [want];
+    const items = ids.map(id => (cat.components || []).find(c => c.id === id)).filter(Boolean)
+      .map(c => ({ file: c.files[0].name, release: `cli-${c.id}-${c.version}`, version: c.version }));
+    return items.length ? { items } : null;
+  });
 }
+// r58：所有下载点的「下载源：公司内源」标识（download-source:status），各组件在 core/app-update/download-points.js 登记。
+require('./main/download-points-register').registerStaticDownloadPoints({});
+require('./main/download-source-ipc').registerDownloadSourceIpc(ipcMain, {});
 require('./main/ipc/capability-handlers').registerCapabilityIpc(ipcMain,
   capabilityService);
 
