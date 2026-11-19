@@ -18,13 +18,18 @@ function backendOptions(backend = {}, pickAccount = () => '') {
 class AgentSessions {
   constructor(deps) { this.d = deps; this.now = deps.now || (() => Date.now()); this.pollMs = deps.pollMs || 1000; this.starting = new Map(); }
   alive(id) { const s = id ? this.d.getSession(id) : null; return !!s && s.status !== 'dormant' && s.status !== 'closed'; }
-  async close(id) { if (id) { try { await this.d.closeSession(id); } catch { /* 下次启动时清理 */ } } }
+  // 返回是否已关掉。关不掉（会话还在）时 ensure 不另开新会话，免得旧会话和它的插件进程树一直挂着、越积越多（2026-11-19）。
+  async close(id) {
+    if (!id) return true;
+    try { await this.d.closeSession(id); } catch { /* 下面按会话还在不在判断 */ }
+    return !this.d.getSession(id);
+  }
   // 活着且没到换新线就接着用，否则开一个新的。
   async ensure(av, session, cwd) {
     if (session?.id && this.alive(session.id) && (session.questions || 0) < MAX_QUESTIONS) return session;
     if (this.starting.has(av.id)) return this.starting.get(av.id);
     const work = (async () => {
-      if (session?.id) await this.close(session.id);
+      if (session?.id && !(await this.close(session.id))) throw new Error('上一个分身会话还没关掉，下一轮再试');
       const id = randomUUID();
       const addDirs = (av.sources || []).map(s => (s.type === 'dir' ? s.path : require('node:path').dirname(s.path)));
       const created = await this.d.createSession('codeagent', { id, cwd, title: `分身 · ${av.name}`, purpose: PURPOSE, autonomous: true, noInheritCursor: true, openInBackground: true,

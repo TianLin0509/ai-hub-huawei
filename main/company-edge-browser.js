@@ -7,9 +7,10 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawn, spawnSync } = require('child_process');
 const { collectScript, clickScript, DETAIL_SCRIPT } = require('./company-forum-browser');
-const { findEdge, copyProfile, markOwner, OWNER_FILE } = require('./company-attendance-edge');
+const { copyProfile, OWNER_FILE } = require('./company-attendance-edge');
+const { launchHeadlessEdge } = require('./edge-headless');
+const { getChildLifecycle } = require('../core/child-lifecycle');
 
 const LOGIN_WORDS = /账号登录|扫码登录|密码登录|统一身份认证|统一认证|请输入(?:账号|密码|工号)|忘记密码/;
 const delay = ms => new Promise(r => setTimeout(r, ms));
@@ -22,7 +23,7 @@ const hostOf = u => { try { return new URL(u).host; } catch { return ''; } };
 //   2. 先把整个目录改名：Windows 上目录里有文件被别的进程打开时改名会失败，说明还在用，跳过、一个文件都不碰；
 //      改名成功才递归删改名后的目录（新路径没有进程认识，不会被删到一半时又被用起来）。
 // 考勤（company-attendance-edge.js）的副本同样处理。
-const STALE_PREFIXES = ['hub-posts-', 'hub-attendance-'];
+const STALE_PREFIXES = ['hub-posts-', 'hub-attendance-', 'hub-w3-', 'hub-edge-']; // 门户待办（hub-w3）的副本以前没人回收（2026-11-19 补）
 const STALE_MS = 6 * 3600000; // 一次同步或考勤只要几分钟；留足余量，不碰还在用的副本
 function pidAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -52,60 +53,42 @@ function sweepStale({ dir = os.tmpdir(), now = Date.now(), staleMs = STALE_MS, k
   return removed;
 }
 
-function createEdgeBrowser({ logger = console, env = process.env, idleMs = 20000 } = {}) {
-  let inst = null, idleTimer = null, busy = Promise.resolve();
+function createEdgeBrowser({ logger = console, env = process.env, idleMs = 20000, maxLifeMs = 20 * 60000, lifecycle = getChildLifecycle() } = {}) {
+  let inst = null, idleTimer = null, busy = Promise.resolve(), inPage = 0, starting = null;
 
+  // 起 Edge 走统一层：先拿名额（和门户待办、考勤共用，默认同时 1 个），登记 PID，最长 20 分钟后强收。
   async function start() {
-    const edge = findEdge(env);
-    if (!edge) throw new Error('本机没有找到 Edge');
     sweepStale({ logger });
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-posts-'));
-    markOwner(tmp);
-    const prof = copyProfile(tmp, env);
-    const port = 9300 + Math.floor(Math.random() * 600);
-    let proc = null;
-    try {
-      if (!prof.copied) throw new Error(prof.error || '复制 Edge 登录状态失败');
-      proc = spawn(edge, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${tmp}`, '--no-first-run', '--no-default-browser-check',
-        '--disable-extensions', '--window-size=1400,900', 'about:blank'], { windowsHide: true, stdio: 'ignore' });
-      for (let i = 0; i < 40; i += 1) {
-        await delay(500);
-        try { await (await fetch(`http://127.0.0.1:${port}/json/version`)).json(); return { proc, tmp, port }; } catch { /* 还没起来 */ }
-      }
-      throw new Error('无头 Edge 没有启动');
-    } catch (error) { await kill({ proc, tmp }); throw error; }
+    return launchHeadlessEdge({ purpose: '帖子取数', tag: 'hub-posts', env, logger, lifecycle, maxLifeMs,
+      prepare: tmp => { const prof = copyProfile(tmp, env); if (!prof.copied) throw new Error(prof.error || '复制 Edge 登录状态失败'); } });
   }
-  // 按进程号结束整棵 Edge 进程树（只动自己启动的这一个），再删临时目录（登录状态副本）。
-  async function kill({ proc, tmp }) {
-    if (proc?.pid && proc.exitCode === null) {
-      try { spawnSync('taskkill.exe', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 }); } catch { try { proc.kill(); } catch { /* 已退 */ } }
-    }
-    await delay(800);
-    try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 8, retryDelay: 500 }); } catch (e) { logger.warn?.('[company-forum] Edge 临时目录未删净', e.code || e.message); }
-  }
+  // 按进程号结束整棵 Edge 进程树（只动自己启动的这一个），再删临时目录（登录状态副本），交还名额。
+  async function kill(cur) { if (cur) await cur.close(); }
   // Hub 退出时同步收尾：before-quit 不等异步任务，异步删目录会被进程退出打断（临时目录就是这样留下的）。
   function stopSync() {
     clearTimeout(idleTimer); idleTimer = null;
     const cur = inst; inst = null;
-    if (!cur) return;
-    if (cur.proc?.pid && cur.proc.exitCode === null) {
-      try { spawnSync('taskkill.exe', ['/PID', String(cur.proc.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 }); } catch { try { cur.proc.kill(); } catch { /* 已退 */ } }
-    }
-    try { fs.rmSync(cur.tmp, { recursive: true, force: true, maxRetries: 4, retryDelay: 250 }); } catch (e) { logger.warn?.('[company-forum] Edge 临时目录未删净，下次启动时再清', e.code || e.message); }
+    if (cur) cur.closeSync();
   }
   async function stop() { clearTimeout(idleTimer); idleTimer = null; const cur = inst; inst = null; if (cur) await kill(cur); }
+  // 别的功能在排队、或内存紧张时：闲着（没有页面在用）就立刻收掉，不等 20 秒闲置。
+  lifecycle.onIdleClose?.(() => { if (inst && !inPage) void stop(); });
 
   // 开一个新标签页，接上调试协议；api 匹配的 JSON 响应收进 out。
   async function withPage(api, fn) {
     clearTimeout(idleTimer); idleTimer = null;
-    if (inst && inst.proc.exitCode !== null) { await kill(inst); inst = null; }
-    if (!inst) inst = await start();
-    const { port } = inst;
-    let target = null, ws = null;
+    inPage += 1;
+    let target = null, ws = null, port = 0;
     try {
-      target = await (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' })).json();
+      if (inst && inst.closed) { await kill(inst); inst = null; }
+      if (!inst) { starting = starting || start(); try { inst = await starting; } finally { starting = null; } }
+      port = inst.port;
+      target = await (await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT', signal: AbortSignal.timeout(10000) })).json();
       ws = new WebSocket(target.webSocketDebuggerUrl);
-      await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = () => reject(new Error('连接无头 Edge 失败')); });
+      await new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('连接无头 Edge 超时')), 10000);
+        ws.onopen = () => { clearTimeout(t); resolve(); }; ws.onerror = () => { clearTimeout(t); reject(new Error('连接无头 Edge 失败')); };
+      });
       let id = 0;
       const pending = new Map(), watch = new Map(), out = [];
       const send = (method, params = {}) => within(new Promise(resolve => { id += 1; pending.set(id, resolve); ws.send(JSON.stringify({ id, method, params })); }), 8000, null);
@@ -130,7 +113,9 @@ function createEdgeBrowser({ logger = console, env = process.env, idleMs = 20000
       return await fn({ send, run, out });
     } finally {
       try { ws?.close(); } catch { /* 已关 */ }
-      if (target?.id) { try { await within(fetch(`http://127.0.0.1:${port}/json/close/${target.id}`), 3000, null); } catch { /* 进程已退 */ } }
+      if (target?.id && port) { try { await within(fetch(`http://127.0.0.1:${port}/json/close/${target.id}`), 3000, null); } catch { /* 进程已退 */ } }
+      inPage -= 1;
+      clearTimeout(idleTimer);
       idleTimer = setTimeout(() => { void stop(); }, idleMs);
       idleTimer.unref?.();
     }

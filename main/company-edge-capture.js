@@ -6,16 +6,13 @@
 //   - 不改用户自己的 Edge 资料，不弹窗（--headless=new + windowsHide），结束按进程号收掉整棵进程树并删临时目录。
 // 考勤的取数（company-attendance-edge.js）是「旁路截接口」的做法，和这里互不影响。
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
-const { spawn, spawnSync } = require('child_process');
-const { findEdge } = require('./company-attendance-edge');
+const { launchHeadlessEdge, findEdge } = require('./edge-headless');
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
-// 正在跑的无头 Edge（Hub 退出时 killAll 一并收掉，不留进程和临时目录）。
+// 正在跑的无头 Edge（Hub 退出时 killAll 一并收掉，不留进程和临时目录）。起停、名额、超时强收都在 edge-headless.js + core/child-lifecycle.js。
 const running = new Set();
-function killTree(pid) { try { spawnSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, timeout: 10000 }); } catch { /* 已退 */ } }
-function killAll() { for (const p of running) { if (p.pid && p.exitCode === null) killTree(p.pid); } running.clear(); }
+function killAll() { for (const h of running) { try { h.closeSync(); } catch { /* 已退 */ } } running.clear(); }
 // 登录页常要十几秒才自动跳回（真机见过登录页自身加载 25 秒），连续停留这么久才算真的要登录。
 const LOGIN_GRACE_MS = 45000;
 const PAGE_STATE = `(() => { const t = document.body ? document.body.innerText : '';
@@ -38,33 +35,29 @@ function copyLogin(tmp, env = process.env) {
 
 function looksLikeLogin(st, onTarget) { return !!(st && (st.hasPassword || (st.hasQr && !onTarget))); }
 
-async function getJson(url) { const r = await fetch(url); return r.json(); }
+async function getJson(url) { const r = await fetch(url, { signal: AbortSignal.timeout(3000) }); return r.json(); }
 
 /* 返回 { ok, value, needsLogin, error, finalHost, tookMs, via:'edge' } */
 async function runInEdge({ url, readyUrl, script, accept = null, signal = null, timeoutMs = 120000, loginGraceMs = LOGIN_GRACE_MS, pollMs = 700, tag = 'hub-edge', logger = console, env = process.env } = {}) {
   const started = Date.now();
   const result = { ok: false, via: 'edge', value: null, needsLogin: false, error: '', finalHost: '', tookMs: 0 };
-  const edge = findEdge(env);
-  if (!edge) { result.error = '本机没有找到 Edge'; return result; }
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), tag + '-'));
-  const port = 9300 + Math.floor(Math.random() * 600);
-  copyLogin(tmp, env);
-  let proc = null, ws = null;
-  const deadline = started + timeoutMs;
+  if (!findEdge(env)) { result.error = '本机没有找到 Edge'; return result; }
+  let edge = null, ws = null, deadline = started + timeoutMs;
   try {
-    proc = spawn(edge, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${tmp}`,
-      '--no-first-run', '--no-default-browser-check', '--disable-extensions', 'about:blank'], { windowsHide: true, stdio: 'ignore' });
-    let spawnError = null;
-    proc.on('error', (e) => { spawnError = e; });
-    running.add(proc);
+    edge = await launchHeadlessEdge({ purpose: tag === 'hub-w3' ? '门户待办取数' : '内网页面取数', tag, env, logger, signal, maxLifeMs: timeoutMs + 60000, prepare: tmp => { copyLogin(tmp, env); } });
+    running.add(edge);
+    deadline = Date.now() + timeoutMs; // 排队等名额的时间不算进取数期限（审查 #4）
     let page = null;
-    for (let i = 0; i < 60 && !page && !spawnError; i += 1) {
-      await delay(400);
-      try { page = (await getJson(`http://127.0.0.1:${port}/json/list`)).find((t) => t.type === 'page'); } catch { /* 还没起来 */ }
+    for (let i = 0; i < 20 && !page; i += 1) {
+      try { page = (await getJson(`http://127.0.0.1:${edge.port}/json/list`)).find((t) => t.type === 'page'); } catch { /* 还没起来 */ }
+      if (!page) await delay(300);
     }
-    if (!page) throw new Error(spawnError ? `无头 Edge 启动失败（${spawnError.code || spawnError.message}）` : '无头 Edge 没有启动');
+    if (!page) throw new Error('无头 Edge 没有启动');
     ws = new WebSocket(page.webSocketDebuggerUrl);
-    await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = () => reject(new Error('连接无头 Edge 失败')); });
+    await new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('连接无头 Edge 超时')), 10000);
+      ws.onopen = () => { clearTimeout(t); resolve(); }; ws.onerror = () => { clearTimeout(t); reject(new Error('连接无头 Edge 失败')); };
+    });
     let id = 0;
     const pending = new Map();
     // 每个请求最多等到总期限；连接断开时，所有在等的请求立刻以 closed 收尾。
@@ -87,7 +80,7 @@ async function runInEdge({ url, readyUrl, script, accept = null, signal = null, 
     while (Date.now() < deadline && !result.ok) {
       await delay(pollMs);
       if (signal?.aborted) { lastError = '已取消'; break; }
-      if (closed) { lastError = '和无头 Edge 的连接断了'; break; }
+      if (closed || edge.closed) { lastError = '和无头 Edge 的连接断了'; break; }
       st = (await send('Runtime.evaluate', { expression: PAGE_STATE, returnByValue: true }))?.result?.result?.value || {};
       result.finalHost = st.host || result.finalHost;
       // 到了目标页就不再按「二维码」字样判登录：门户首页顶栏自己就有二维码入口（真机上因此误判过）。
@@ -119,10 +112,7 @@ async function runInEdge({ url, readyUrl, script, accept = null, signal = null, 
     result.error = /^spawn /.test(String(e.message)) ? `无头 Edge 启动失败（${e.code || e.message}）` : e.message;
   } finally {
     try { ws?.close(); } catch { /* 已关 */ }
-    if (proc?.pid && proc.exitCode === null) killTree(proc.pid);
-    if (proc) running.delete(proc);
-    await delay(800);
-    try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 8, retryDelay: 500 }); } catch (e) { logger.warn?.(`[${tag}] 临时目录未删净`, e.code || e.message); }
+    if (edge) { running.delete(edge); await edge.close(); }
   }
   result.tookMs = Date.now() - started;
   return result;

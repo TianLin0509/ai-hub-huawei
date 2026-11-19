@@ -261,7 +261,8 @@ function callCliLlm(provider, prompt, timeoutMs) {
     let stderr = '';
     let settled = false;
     const finish = (fn, value) => { if (!settled) { settled = true; clearTimeout(timer); fn(value); } };
-    const timer = setTimeout(() => { try { child.kill(); } catch {} finish(reject, new Error(`${provider} 调用超时`)); }, timeoutMs);
+    // 超时按 PID 结束整棵树（shell:true 时根只是 cmd，2026-11-19）。
+    const timer = setTimeout(() => { if (!require('./child-lifecycle').defaultKillTree(child.pid)) { try { child.kill(); } catch {} } finish(reject, new Error(`${provider} 调用超时`)); }, timeoutMs);
     child.stdout.on('data', d => { stdout += d; });
     child.stderr.on('data', d => { stderr += d; });
     child.on('error', e => finish(reject, new Error(`${provider} 启动失败: ${e.message}`)));

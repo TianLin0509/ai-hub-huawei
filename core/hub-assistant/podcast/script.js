@@ -24,7 +24,7 @@ function claudeWriter({ model = 'claude-opus-5-5', exe, cwd, timeoutMs = 6 * 600
     const env = { ...process.env }; for (const k of STRIP) delete env[k];
     const bin = exe || require('../../account-adapters').resolveClaudeExe(env);
     const child = spawnImpl(bin, ['-p', '--model', model, '--tools', ''], { cwd, env, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-    let out = '', err = ''; const timer = setTimeout(() => { child.kill(); reject(new Error('Claude 写稿超时')); }, timeoutMs);
+    let out = '', err = ''; const timer = setTimeout(() => { if (!require('../../child-lifecycle').defaultKillTree(child.pid)) { try { child.kill(); } catch {} } reject(new Error('Claude 写稿超时')); }, timeoutMs);
     child.stdout.on('data', d => { out += d; }); child.stderr.on('data', d => { err += d; });
     child.on('error', e => { clearTimeout(timer); reject(e); });
     child.on('close', code => { clearTimeout(timer); const t = out.trim(); if (code === 0 && t.length > 200) resolve(t); else reject(new Error('Claude 写稿失败：' + (err || t).slice(0, 200))); });

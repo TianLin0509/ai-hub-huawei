@@ -73,9 +73,12 @@ class CompanyAiTasks {
   }
   close(){this.closed=true;for(const item of this.queue.splice(0)){item.cancelled=true;void this.finish(item,Error('Hub 已关闭，请重新提交'));}for(const item of this.active)item.cancelled=true;}
 }
-async function closeOwnedSession(manager,id) {
+async function closeOwnedSession(manager,id,{prepareSweep=require('./session-close-sweep').prepareCloseSweep}={}) {
+  // 关之前记下整棵进程树，关完补杀 MCP 插件等孤儿（2026-11-19，core/session-close-sweep.js）。
+  let sweep=null; try { sweep=await prepareSweep(manager,id); } catch { sweep=null; }
   const result=await manager.closeSessionRecoverably(id,{reason:'company-ai-complete'});
   if(result?.ok===false && manager.getSession(id)) manager.closeSession(id);
   if(manager.getSession(id)) throw Error('CodeAgent 任务会话尚未关闭');
+  try { sweep?.schedule(); } catch { /* 补杀安排不上不影响关闭 */ }
 }
 module.exports={CompanyAiTasks,closeOwnedSession};

@@ -247,5 +247,6 @@
   "tests/unit-host-shell-tail.test.js",
   "tests/unit-feedback-intranet-send.test.js",
   "tests/unit-api-gateway-config.test.js",
-  "tests/unit-api-gateway-proxy.test.mjs"
+  "tests/unit-api-gateway-proxy.test.mjs",
+  "tests/unit-child-lifecycle.test.js"
 ]

@@ -118,7 +118,12 @@ function registerMemoryReleaseIpc(ipcMain, deps = {}) {
   }
 
   ipcMain.handle('get-memory-release-plan', async () => {
-    try { return await scan(); } catch (error) {
+    try {
+      const plan = await scan();
+      // Hub 自己登记的后台浏览器与子进程（当前几个、排队、最近回收）：同事自查用（2026-11-19）。
+      if (plan && typeof deps.getChildStatus === 'function') { try { plan.lifecycle = deps.getChildStatus(); } catch { /* 拿不到不影响清单 */ } }
+      return plan;
+    } catch (error) {
       logger.warn('[群聊] 内存释放清单扫描失败:', error && error.message);
       return { ok: false, error: String(error && error.message || error), items: [] };
     }

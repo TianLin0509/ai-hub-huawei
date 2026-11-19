@@ -4,29 +4,15 @@
 //   - 不改用户自己的 Edge 资料，不弹窗（--headless=new + windowsHide），结束即删临时目录；
 //   - 打卡明细接口的请求体是加密串，所以不自己拼请求，只让页面自己取、旁路接住。
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
-const { spawn } = require('child_process');
+const { launchHeadlessEdge, connectCdp, findEdge, markOwner, OWNER_FILE } = require('./edge-headless');
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 const CARD_API = /queryCardRecord/;
 const HOLIDAY_API = /queryHolidayCalendarDetails/;
 const KEEP_API = /attendanceCompanion|attendanceDocument/;
 
-function findEdge(env = process.env) {
-  const roots = [env['ProgramFiles(x86)'], env.ProgramFiles, 'C:/Program Files (x86)', 'C:/Program Files'].filter(Boolean);
-  for (const r of roots) {
-    const p = path.join(r, 'Microsoft', 'Edge', 'Application', 'msedge.exe');
-    if (fs.existsSync(p)) return p;
-  }
-  return '';
-}
-
-// 登录状态副本里记下是哪个 Hub 进程建的：陈旧目录回收（company-edge-browser.js sweepStale）见到建它的进程还活着就不动。
-const OWNER_FILE = 'hub-owner.json';
-function markOwner(tmp, pid = process.pid) {
-  try { fs.writeFileSync(path.join(tmp, OWNER_FILE), JSON.stringify({ pid, at: Date.now() })); } catch { /* 写不上只是少一层保护：回收前还有改名探测 */ }
-}
+// findEdge / markOwner 统一放在 edge-headless.js（2026-11-19 生命周期层），这里转出给老调用方。
 function copyProfile(tmp, env = process.env) {
   const src = path.join(env.LOCALAPPDATA || '', 'Microsoft', 'Edge', 'User Data');
   if (!fs.existsSync(src)) return { copied: 0, error: '本机没有 Edge 用户资料' };
@@ -42,7 +28,7 @@ function copyProfile(tmp, env = process.env) {
   return { copied, failed };
 }
 
-async function getJson(url) { const r = await fetch(url); return r.json(); }
+async function getJson(url) { const r = await fetch(url, { signal: AbortSignal.timeout(3000) }); return r.json(); }
 
 // 公司单点登录常先闪一下登录页再自动跳回（11-08 公司真机：一见密码框就判「需要登录」是误判），
 // 所以登录页要连续停留这么久才算真的要登录。
@@ -53,35 +39,24 @@ const CLICK_CARD = `(() => { const els = [...document.querySelectorAll('a,button
   if (!els.length) return false; els[0].click(); return true; })()`;
 
 /* 返回 { ok, records, holidays, needsLogin, error, via:'edge' } */
-async function captureWithEdge({ url, timeoutMs = 90000, loginGraceMs = LOGIN_GRACE_MS, pollMs = 2000, logger = console, env = process.env } = {}) {
-  const edge = findEdge(env);
-  if (!edge) return { ok: false, via: 'edge', error: '本机没有找到 Edge' };
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-attendance-'));
-  markOwner(tmp);
-  const port = 9300 + Math.floor(Math.random() * 600);
-  const prof = copyProfile(tmp, env);
-  let proc = null, ws = null;
+async function captureWithEdge({ url, timeoutMs = 90000, loginGraceMs = LOGIN_GRACE_MS, pollMs = 2000, logger = console, env = process.env, signal = null } = {}) {
   const result = { ok: false, via: 'edge', records: null, holidays: null, needsLogin: false, error: '' };
-  const deadline = Date.now() + timeoutMs;
+  if (!findEdge(env)) { result.error = '本机没有找到 Edge'; return result; }
+  let edge = null, cdp = null;
   try {
-    if (!prof.copied) throw new Error(prof.error || '复制 Edge 登录状态失败');
-    proc = spawn(edge, ['--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${tmp}`,
-      '--no-first-run', '--no-default-browser-check', '--disable-extensions', 'about:blank'], { windowsHide: true, stdio: 'ignore' });
+    // 最长运行时间 = 取数期限 + 1 分钟余量：页面卡死、调试协议没回应时由登记层按 PID 收掉整棵 Edge（2026-11-19 压测：以前会一直挂到 Hub 退出）。
+    edge = await launchHeadlessEdge({ purpose: '考勤取数', tag: 'hub-attendance', env, logger, signal, maxLifeMs: timeoutMs + 60000,
+      prepare: tmp => { const prof = copyProfile(tmp, env); if (!prof.copied) throw new Error(prof.error || '复制 Edge 登录状态失败'); } });
+    const deadline = Date.now() + timeoutMs;
     let page = null;
-    for (let i = 0; i < 40 && !page; i += 1) {
-      await delay(500);
-      try { page = (await getJson(`http://127.0.0.1:${port}/json/list`)).find((t) => t.type === 'page'); } catch { /* 还没起来 */ }
+    for (let i = 0; i < 20 && !page; i += 1) {
+      try { page = (await getJson(`http://127.0.0.1:${edge.port}/json/list`)).find((t) => t.type === 'page'); } catch { /* 还没起来 */ }
+      if (!page) await delay(300);
     }
     if (!page) throw new Error('无头 Edge 没有启动');
-    ws = new WebSocket(page.webSocketDebuggerUrl);
-    await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = () => reject(new Error('连接无头 Edge 失败')); });
-    let id = 0;
-    const pending = new Map();
     const watch = new Map();
-    const send = (method, params = {}) => new Promise((resolve) => { id += 1; pending.set(id, resolve); ws.send(JSON.stringify({ id, method, params })); });
-    ws.onmessage = async (ev) => {
-      let m; try { m = JSON.parse(ev.data); } catch { return; }
-      if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); return; }
+    let send = null;
+    cdp = await connectCdp(page.webSocketDebuggerUrl, { onEvent: async (m) => {
       if (m.method === 'Network.responseReceived') {
         const u = String(m.params.response?.url || '');
         if (KEEP_API.test(u) && /json/i.test(m.params.response?.mimeType || '')) watch.set(m.params.requestId, u);
@@ -95,15 +70,20 @@ async function captureWithEdge({ url, timeoutMs = 90000, loginGraceMs = LOGIN_GR
           if (HOLIDAY_API.test(u)) result.holidays = Array.isArray(json) ? json : (Array.isArray(json?.data) ? json.data : null);
         } catch { /* 不是 JSON */ }
       }
-    };
+    } });
+    send = cdp.send;
     await send('Network.enable');
     await send('Page.enable');
     await send('Page.navigate', { url });
-    const evalState = async () => (await send('Runtime.evaluate', { expression: PAGE_STATE, returnByValue: true }))?.result?.result?.value || {};
-    let st = {}, clicked = false, loginSince = 0;
+    let st = {}, clicked = false, loginSince = 0, stuck = 0;
     while (Date.now() < deadline) {
       await delay(pollMs);
-      st = await evalState();
+      if (signal?.aborted) { result.error = '已取消'; break; }
+      if (cdp.closed || edge.closed) { result.error = '和无头 Edge 的连接断了'; break; }
+      const raw = await send('Runtime.evaluate', { expression: PAGE_STATE, returnByValue: true });
+      if (raw?.timeout) { stuck += 1; if (stuck >= 3) { result.error = '考勤页没有响应（页面卡住）'; break; } continue; }
+      stuck = 0;
+      st = raw?.result?.result?.value || {};
       if (st.hasPassword || st.hasQr) {
         loginSince = loginSince || Date.now();
         if (Date.now() - loginSince >= loginGraceMs) { result.needsLogin = true; result.error = `需要登录（停在 ${st.host || '登录页'}）`; break; }
@@ -115,19 +95,16 @@ async function captureWithEdge({ url, timeoutMs = 90000, loginGraceMs = LOGIN_GR
       }
       if (result.records) { await delay(800); break; }
     }
-    if (result.records) result.ok = true;
+    if (result.records) { result.ok = true; result.error = ''; }
+    else if (result.error) { /* 已写明原因 */ }
     else if (!result.needsLogin && loginSince) { result.needsLogin = true; result.error = `需要登录（停在 ${st.host || '登录页'}）`; }
     else if (!result.needsLogin) result.error = clicked ? '打开了打卡记录，但没收到数据' : '考勤页没有出现「打卡记录」';
   } catch (e) {
     result.error = e.message;
   } finally {
-    // 按进程号结束整棵 Edge 进程树（只动自己启动的这一个）：只杀主进程时子进程还占着文件，临时目录（登录状态副本）删不掉。
-    try { ws?.close(); } catch { /* 已关 */ }
-    if (proc?.pid && proc.exitCode === null) {
-      try { require('child_process').spawnSync('taskkill.exe', ['/PID', String(proc.pid), '/T', '/F'], { windowsHide: true, timeout: 10000 }); } catch { try { proc.kill(); } catch { /* 已退 */ } }
-    }
-    await delay(800);
-    try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 8, retryDelay: 500 }); } catch (e) { logger.warn?.('[company-attendance] 临时目录未删净', e.code || e.message); }
+    // 按进程号结束整棵 Edge 进程树（只动自己启动的这一个）并删临时目录（登录状态副本）。
+    cdp?.close();
+    if (edge) await edge.close();
   }
   return result;
 }

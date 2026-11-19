@@ -2643,6 +2643,17 @@ const lanPoolService = new (require('./main/lan-pool-service').LanPoolService)({
   // 共享停摆、地址变化、主机掉线或恢复：用会话提示条告诉用户，不让共享悄悄失效。
   onNotice: notice => sendToRenderer('session-notice', { message: notice.text, level: notice.persistent ? 'warning' : 'info', persistent: notice.persistent === true }),
 });
+// 后台子进程生命周期登记（2026-11-19，同事反馈后台 Edge 越开越多把内存撑满）：无头 Edge 起来就登记 PID、启动时间、用途；
+// 同时最多 1 个、多的排队，超时按 PID 强收整棵树，内存紧张先等或这次不开；Hub 退出时收掉，下次启动只清自己登记过的遗留（core/child-lifecycle.js）。
+const childLifecycle = require('./core/child-lifecycle').initChildLifecycle({ dataDir: getHubDataDir(), logger: console });
+app.whenReady().then(() => {
+  const t = setTimeout(() => {
+    void childLifecycle.reclaimOrphans().catch(error => console.warn('[child-lifecycle] 启动清理遗留失败：', error.message));
+    try { require('./main/company-edge-browser').sweepStale({ logger: console }); } catch (_) { /* 公开版没有帖子页 */ }
+  }, 8000);
+  t.unref?.();
+});
+app.on('will-quit', () => { try { childLifecycle.shutdownSync(); } catch (_) {} });
 app.whenReady().then(async () => {
   await companyProxyService.syncWithConfig();
   if (!getHubConfig().companyCli) return;
@@ -3640,6 +3651,7 @@ registerMemoryReleaseIpc(ipcMain, {
   appVersion: app.getVersion(),
   dataDir: getHubDataDir(),
   getSessionManager: () => sessionManager,
+  getChildStatus: () => childLifecycle.status(),
   logger: console,
 });
 registerDesktopOrganizerIpc(ipcMain, { dataDir: getHubDataDir(), shell });

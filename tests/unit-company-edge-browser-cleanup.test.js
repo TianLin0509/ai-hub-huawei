@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const { sweepStale, STALE_PREFIXES } = require('../main/company-edge-browser');
 
-test('只回收超过时限的 hub-posts- / hub-attendance- 目录，别的和新近的不动', t => {
+test('只回收超过时限的 hub-posts- / hub-attendance- / hub-w3- 目录，别的和新近的不动', t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'edge-sweep-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const make = (name, ageMs) => {
@@ -16,12 +16,14 @@ test('只回收超过时限的 hub-posts- / hub-attendance- 目录，别的和�
   };
   const oldPosts = make('hub-posts-old', 7 * 3600000), oldAtt = make('hub-attendance-old', 30 * 3600000);
   const fresh = make('hub-posts-fresh', 60000), other = make('someone-else', 30 * 3600000), kept = make('hub-posts-kept', 30 * 3600000);
+  const oldW3 = make('hub-w3-old', 8 * 3600000);
   const removed = sweepStale({ dir, keep: kept, logger: {} });
-  assert.equal(removed, 2);
+  assert.equal(removed, 3);
+  assert.equal(fs.existsSync(oldW3), false);
   assert.equal(fs.existsSync(oldPosts), false);
   assert.equal(fs.existsSync(oldAtt), false);
   assert.ok(fs.existsSync(fresh) && fs.existsSync(other) && fs.existsSync(kept));
-  assert.deepEqual(STALE_PREFIXES, ['hub-posts-', 'hub-attendance-']);
+  assert.deepEqual(STALE_PREFIXES, ['hub-posts-', 'hub-attendance-', 'hub-w3-', 'hub-edge-']);
 });
 
 test('Hub 真正退出时走同步收尾（will-quit；before-quit 可能被会议页否决，不在那里关）', () => {

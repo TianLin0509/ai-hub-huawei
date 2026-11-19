@@ -141,7 +141,9 @@ function createAutoTitleManager(deps) {
       let child;
       try { child = spawn(line, { cwd, env, shell: true, windowsHide: true }); }
       catch (error) { console.warn('[auto-title] codeagent spawn failed:', error.message); resolve(''); return; }
-      const timer = setTimeout(() => { try { child.kill(); } catch {} }, timeoutMs);
+      // shell:true 时根是 cmd，真正的 CLI 和它拉起的插件在下面：超时按 PID 结束整棵树（2026-11-19，以前只杀 cmd，CLI 成孤儿）。
+      const killTree = () => { if (!require('../core/child-lifecycle').defaultKillTree(child.pid)) { try { child.kill(); } catch {} } };
+      const timer = setTimeout(killTree, timeoutMs);
       child.stdout.on('data', d => { out += d; if (out.length > 20000) out = out.slice(-20000); });
       let err = '';
       child.stderr.on('data', d => { err = (err + d).slice(-2000); });

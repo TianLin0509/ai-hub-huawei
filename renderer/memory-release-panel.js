@@ -73,6 +73,20 @@ function attachMemoryReleasePanel({ document: doc, request, execute, escapeHtml,
       + `${meta ? `<small>${meta}</small>` : ''}${parts}${note}</div><b class="mr-size">${formatGB(item.wsBytes)}</b></label>`;
   }
 
+  // Hub 自己登记的后台浏览器与子进程（2026-11-19）：当前几个、上限、排队、最近回收几条，方便自查「后台 Edge 有没有越开越多」。
+  function lifecycleSection(lc) {
+    if (!lc || !lc.ok) return '';
+    const edges = (lc.active || []).filter(a => a.kind === 'edge');
+    const queued = (lc.queued && lc.queued.edge) || 0;
+    const limit = (lc.limits && lc.limits.edge) || 1;
+    const now = edges.length
+      ? edges.map(a => `<div class="mr-confirm-row"><span>${esc(a.purpose || '后台浏览器')} · PID ${a.pid}</span><b>已运行 ${Math.max(0, Math.round(a.ageSec / 60))} 分钟</b></div>`).join('')
+      : '<div class="mr-empty">现在没有后台 Edge 在运行</div>';
+    const recent = (lc.recent || []).slice(0, 3).map(r => `<div class="mr-confirm-row"><span>${esc(r.purpose || r.kind)} · ${esc(r.reason)}</span><b>${new Date(r.at).toLocaleTimeString()}</b></div>`).join('');
+    const low = lc.memory && lc.memory.low ? '<div class="mr-warn">可用内存偏低：新的后台浏览器会先等内存回落，等不到就这次不开、稍后自动重试。</div>' : '';
+    return `<section class="mr-section"><h4>Hub 后台浏览器<span>同时最多 ${limit} 个${queued ? `，排队 ${queued} 个` : ''}；超时自动回收，退出和下次启动都会清理</span></h4>${low}${now}${recent}</section>`;
+  }
+
   function renderList() {
     const items = plan.items || [];
     const chosen = selectedItems();
@@ -86,7 +100,7 @@ function attachMemoryReleasePanel({ document: doc, request, execute, escapeHtml,
     }).join('');
     const warn = plan.totals?.hubWindowsWithoutManifest
       ? `<div class="mr-warn">有 ${plan.totals.hubWindowsWithoutManifest} 个 Hub 窗口还是旧版本，看不到它们的会话状态；重启那些窗口后即可分会话显示。</div>` : '';
-    panel.innerHTML = `${head()}<div class="mr-scroll">${memoryBar(plan.memory)}${warn}${sections}</div>`
+    panel.innerHTML = `${head()}<div class="mr-scroll">${memoryBar(plan.memory)}${warn}${lifecycleSection(plan.lifecycle)}${sections}</div>`
       + `<div class="mr-footer"><span>已勾选 ${chosen.length} 项</span>`
       + `<button type="button" class="mr-primary" data-mr-review="true"${chosen.length ? '' : ' disabled'}>释放约 ${formatGB(chosenBytes)}</button></div>`;
   }
