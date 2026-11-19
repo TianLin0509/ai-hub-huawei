@@ -36,6 +36,9 @@ function isModelValidForKind(kind, modelId) {
   if (base === 'claude') return isClaudeModelSelection(value);
   if (base === 'codex') return isCodexConversationModelId(value);
   if (base === 'chatgpt') return value.startsWith('chatgpt-web/');
+  // CodeAgent 的模型清单按账号运行时读（serve / 菜单），静态清单是空的：以前存进去的默认模型读回来一律被这里扔掉，
+  // 「设为默认」看着成功、下次谁都读不到（2026-11-19 反馈 3b805ace）。启动时会再按这个号的权限清单核一次（hubDefaultModel）。
+  if (base === 'codeagent') return true;
   const known = MODEL_OPTIONS_BY_KIND[base];
   // 该 kind 压根没有模型概念（powershell 之类）→ 一律拒绝。
   if (!Array.isArray(known) || !known.length) return false;

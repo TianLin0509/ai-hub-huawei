@@ -28,9 +28,10 @@ function fixture(t, extra = {}, a) {
   return { doctor, dir, rows, children, seen, assistant, deps, spool: () => [...doctor.server.sessions.values()][0].spool };
 }
 
+// 每个请求的进度只在「写进度 → 出结果」之间可见：机器忙时轮询间隔会拉长，100ms 的窗口会被整个跳过（11-20 发车 5.6.64 偶发失败）；放到 500ms。
 test('常驻复用同一进程，多个请求不串结果且只清理自己的结果', async t => {
   const f = fixture(t), progress = [];
-  const results = await Promise.all(['search', 'read', 'report'].map((action, i) => f.doctor.call(action, { echo: i, delayMs: 100 }, { onProgress: value => progress.push(value) })));
+  const results = await Promise.all(['search', 'read', 'report'].map((action, i) => f.doctor.call(action, { echo: i, delayMs: 500 }, { onProgress: value => progress.push(value) })));
   assert.deepEqual(results.map(result => result.echo), [0, 1, 2]);
   assert.equal(new Set(results.map(result => result.serverPid)).size, 1);
   assert.equal(f.rows().filter(row => row.phase === 'launch').length, 1);

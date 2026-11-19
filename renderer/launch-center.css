@@ -416,6 +416,8 @@
 .launch-select-option.active { background: var(--surface-hover); }
 .launch-select-option.selected { color: var(--brand-text); font-weight: 600; }
 .launch-select-option.disabled { opacity: .5; cursor: default; }
+.launch-select-option.unavailable { color: var(--fg-muted); }
+.launch-select-cap { margin: 4px 0 0; padding: 6px 10px 2px; border-top: 1px solid var(--border-subtle, var(--border-mid)); color: var(--fg-muted); font-size: 11px; }
 .launch-select-option .codeagent-model-usage { margin-left: 8px; color: var(--fg-muted); font-size: 11px; font-weight: 400; font-variant-numeric: tabular-nums; }
 .launch-select-option .codeagent-model-usage[data-level='warn'] { color: var(--status-warning); }
 .launch-select-option .codeagent-model-usage[data-level='danger'] { color: var(--status-danger); }

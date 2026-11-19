@@ -156,7 +156,37 @@ class RoomBooking {
     state.history = this.offlineRetry.history(state.history);
     return state;
   }
+  // 可选功能「会议室」关着（2026-11-19 反馈 1b517a0b）：不轮询、不自动开抢、不拉起组件进程。默认开，由 main.js 按开关设。
+  setEnabled(on) { this.off = !on; if (this.off) this.close(); }
+  // 关之前先确认不会让已经安排好的抢订落空；返回拦下的原因，空串表示可以关。
+  offBlocker() {
+    const s = this.status();
+    let helper = null;
+    try { helper = this.helper(); } catch { helper = null; }
+    if (s.running || this.settings().enabled) return '自动抢订还开着，关掉会让之后的放号抢订落空；先在会议室页点「暂停」再关';
+    if (s.loginBusy) return '会议室助手正在登录，等登录结束再关';
+    if (s.connected && helper?.controlBusy) return '会议室组件正在执行操作（如读取会议室），等它做完再关';
+    if (Array.isArray(helper?.pending) && helper.pending.length) return `还有 ${helper.pending.length} 个会后动作（提醒或自动释放）等着执行，关掉会落空；先在会议室页处理掉再关`;
+    if (this.offlineRetry.active()) return '正在等网络恢复后自动补抢，先在会议室页停掉补抢再关';
+    if (this.starting) return '会议室组件正在启动，稍等几秒再关';
+    return '';
+  }
+  // 关掉：停轮询，并结束 Hub 拉起的会议室组件进程（只按登记的进程号、核对过程序路径才结束），之后不常驻。
+  async shutdown() {
+    this.setEnabled(false);
+    let helper = null;
+    try { helper = this.helper(); } catch { helper = null; }
+    const exe = this.settings().exePath;
+    if (!this.status().connected || !helper?.pid || !exe) return { stopped: false };
+    await component.stopManagedHelper(helper, exe);
+    // 结束命令返回不代表进程真的没了：最多等 5 秒核一次，还在就报错（main.js 会把开关恢复成开着）。
+    for (let i = 0; i < 25 && processAlive(Number(helper.pid)); i++) await new Promise(r => setTimeout(r, 200));
+    if (processAlive(Number(helper.pid))) throw new Error('会议室组件进程没有结束');
+    this.child = null;
+    return { stopped: true };
+  }
   start() {
+    if (this.off) return;
     this.offlineRetry.start();
     if (this.deps.noTimer || this.timer) return;
     this.timer = setInterval(() => { void this.tick().catch(e => { this.error = e.message; this.a.changed(); }); }, 15000);
@@ -194,6 +224,7 @@ class RoomBooking {
   // Preparing the embedded control component does not start a booking. Only the
   // explicit start command (or an already enabled schedule) may enter daemon mode.
   async ensure({ user = false } = {}) {
+    if (this.off) throw new Error('会议室已在「可选功能」里关闭；在会议室页点「开启会议室」后再用');
     if (this.starting) return this.starting;
     this.starting = (async () => {
       const runtime = this.deps.roomCommand ? null
@@ -300,7 +331,7 @@ class RoomBooking {
     this.loginTold = needLogin;
   }
   async tick() {
-    if (this.ticking || !this.home()) return;
+    if (this.off || this.ticking || !this.home()) return;
     this.ticking = true;
     try {
       const now = this.a.now(), d = new Date(now), minute = d.getHours() * 60 + d.getMinutes();

@@ -24,7 +24,7 @@ test('1 守护独立于助理启动，暂停助理保留已启用的守护，定
   const boot = section('main.js', '    companyAssistantService.startTools();', '    const bridgeMcpPlan');
   for (const enabled of [false, true]) {
     let starts = 0;
-    vm.runInNewContext(boot, { companyAssistantService: { startTools() {}, rooms: { start() { starts++; } }, start() {} }, optionalFeatures: { get: () => enabled } });
+    vm.runInNewContext(boot, { companyAssistantService: { startTools() {}, rooms: { setEnabled() {}, start() { starts++; } }, start() {} }, optionalFeatures: { get: () => enabled } });
     assert.equal(starts, 1);
   }
   for (const enabled of [false, true]) {

@@ -11,6 +11,9 @@ const childProcess = require('child_process');
 
 const INTERNET_SETTINGS = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';
 const CACHE_MS = 60 * 1000;
+// VPN 网卡和 xGate 进程要起 PowerShell + tasklist 才查得到（每次约 0.3–0.5 秒 CPU），状态很少变：
+// 2026-11-20 起 3 分钟查一次（原来跟着出口探测每分钟一次）；出口国家仍以每分钟的实测为准。
+const TUNNEL_CACHE_MS = 3 * 60 * 1000;
 
 function run(execFileImpl, file, args) {
   return new Promise(resolve => {
@@ -78,7 +81,7 @@ function createWindowsNetworkContext(options = {}) {
 
   async function tunnel() {
     if (platform !== 'win32') return { xgate: false, vpn: null };
-    if (tunnelCache && now() - tunnelCache.at < CACHE_MS) return tunnelCache.value;
+    if (tunnelCache && now() - tunnelCache.at < TUNNEL_CACHE_MS) return tunnelCache.value;
     const encoded = Buffer.from(VPN_ADAPTER_SCRIPT, 'utf16le').toString('base64');
     const [tasks, adapters] = await Promise.all([
       run(execFileImpl, 'tasklist.exe', ['/FI', 'IMAGENAME eq SPES5.exe', '/FO', 'CSV', '/NH']),

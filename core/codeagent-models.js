@@ -568,7 +568,7 @@ function settingsProviderModels(configDir, fsModule = fs) {
 }
 
 // 目录只来自成功的账号读取；KNOWN 仅供 modelLabel 取显示名，不冒充权限。
-function modelOptions(dataDir, { configDir = null, accountKey = 'personal' } = {}) {
+function modelOptions(dataDir, { configDir = null, accountKey = 'personal', includeUnavailable = false } = {}) {
   const catalog = readModelCatalog(dataDir, { configDir, accountKey });
   if (!catalog) return [];
   const configured = configuredModels(configDir);
@@ -594,7 +594,47 @@ function modelOptions(dataDir, { configDir = null, accountKey = 'personal' } = {
     listed.push({ id: row.id, label: row.providerName ? `${row.id} · ${row.providerName}` : row.id, source: 'settings',
       description: `CodeAgent 配置里自配的模型${row.providerName ? `（供应商 ${row.providerName}）` : ''}，账号清单里还没读到` });
   }
-  return listed;
+  // 没有权限 / 用不了的模型（2026-11-19 反馈 3b805ace、群里两次「模型列表只保留能用的」）：不删，排到最后、标 unavailable 并写明原因，
+  // 下拉里收进「暂不可用」一组，点了只说明原因、不切换。includeUnavailable 只给界面用；启动选型、后台对回模型名照旧只看能用的。
+  // 避让记录是「这个号用它报错」，按账号整体判；供应商停用只说明那一家用不了，同名模型在别的供应商可用时照常可选（Codex 审查 P2-2），
+  // 所以停用供应商的模型只在清单里别处都没有时才补成置灰项。
+  // 只从 settings.json 补进来的自配模型，清单没证实它可用：它所在供应商被 serve 报停用时同样置灰（Codex 复审 P2）。
+  const avoided = unavailableModels(dataDir, { accountKey });
+  const providerOff = unavailableModels(dataDir, { accountKey, catalog, avoid: false });
+  const reasonOf = option => avoided.get(option.id.toLowerCase()) || (option.source === 'settings' ? providerOff.get(option.id.toLowerCase()) : '') || '';
+  const usable = listed.filter(option => !reasonOf(option));
+  if (!includeUnavailable) return usable;
+  const greyed = listed.filter(option => reasonOf(option)).map(option => ({ ...option, unavailable: true, unavailableReason: reasonOf(option) }));
+  for (const [key, reason] of providerOff) {
+    const row = (catalog.unavailable || []).find(item => item.id.toLowerCase() === key);
+    if (!row || ids.has(key)) continue;
+    ids.add(key);
+    greyed.push({ id: row.id, label: row.provider ? `${modelLabel(row.id)} · ${row.provider}` : modelLabel(row.id), source: catalog.source, unavailable: true, unavailableReason: reason });
+  }
+  return [...usable, ...greyed];
+}
+
+// 这个号用不了的模型 → 原因（键为小写模型名）。依据只有两条，都是 CodeAgent / 后端亲口说的，不靠猜：
+//   1. serve 报了、但所在供应商状态不是 available（codeagent-model-probe.js unavailable）；
+//   2. 用它报过「模型不存在或配置有误」、还没恢复的避让记录（codeagent-quota.js markModelAvoid）。
+function unavailableModels(dataDir, { accountKey = 'personal', catalog = null, avoid = true } = {}) {
+  const out = new Map();
+  for (const row of (catalog && Array.isArray(catalog.unavailable) ? catalog.unavailable : [])) {
+    if (row && isSafeModelId(row.id)) out.set(row.id.toLowerCase(), `CodeAgent 报这个模型所在的供应商${row.provider ? `「${row.provider}」` : ''}当前不可用${row.status ? `（状态 ${row.status}）` : ''}，这个号暂时用不了；供应商恢复后会自动回到可选列表`);
+  }
+  if (!avoid) return out;
+  try {
+    // 只认还在避让期里的记录（probeAt 未到）；过了试探时间的放回可选列表，让一次成功回答能解除。出错时号的清单里本来就有它的，不置灰。
+    const list = require('./codeagent-quota').activeModelAvoid(dataDir)[accountKey || 'personal'] || {};
+    for (const [key, entry] of Object.entries(list)) {
+      if (!entry || key === '*' || !isSafeModelId(entry.model)) continue;
+      if (Array.isArray(entry.have) && entry.have.some(m => String(m).toLowerCase() === String(entry.model).toLowerCase())) continue;
+      const when = Number(entry.lastHitAt) ? new Date(Number(entry.lastHitAt)) : null;
+      const at = when ? `${String(when.getMonth() + 1).padStart(2, '0')}-${String(when.getDate()).padStart(2, '0')} ${String(when.getHours()).padStart(2, '0')}:${String(when.getMinutes()).padStart(2, '0')}` : '';
+      out.set(key, `用它时后端报「模型不存在或配置有误」${at ? `（最近一次 ${at}）` : ''}，多半是这个号没有它的权限；开通后在 CodeAgent 里用它成功回答一次就会回到可选列表`);
+    }
+  } catch { /* 读不到避让记录：只按供应商状态判断 */ }
+  return out;
 }
 
 module.exports = {
@@ -626,6 +666,7 @@ module.exports = {
   MODEL_MENU_PARSER_VERSION,
   appendModelLog,
   modelOptions,
+  unavailableModels,
   settingsProviderModels,
   readModelCatalog,
   contextWindowFor,

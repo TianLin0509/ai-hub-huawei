@@ -170,7 +170,11 @@ function parseProviders(data) {
   const skipped = [];
   for (const provider of Array.isArray(data && data.providers) ? data.providers : []) {
     if (provider && provider.status && provider.status !== 'available') {
-      skipped.push({ id: text(provider.id) || '?', status: text(provider.status), models: provider.models && typeof provider.models === 'object' ? Object.keys(provider.models).length : 0 });
+      const ids = provider.models && typeof provider.models === 'object' ? Object.entries(provider.models).map(([key, info]) => text(info && info.id) || text(key)) : [];
+      // modelIds（2026-11-19 反馈「模型列表只保留能用的」）：下拉把这些模型收进「暂不可用」一组并写明原因，不再悄悄消失。
+      skipped.push({ id: text(provider.id) || '?', status: text(provider.status), models: ids.length,
+        modelIds: ids.filter(id => id && id !== 'default' && require('./model-id').isSafeModelId(id)).slice(0, 30),
+        label: text(provider.display_name || provider.name) || text(provider.id) });
       continue;
     }
     const map = provider && provider.models && typeof provider.models === 'object' ? provider.models : {};

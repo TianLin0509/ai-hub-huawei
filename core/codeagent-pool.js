@@ -318,11 +318,13 @@ function chooseAccountModel(own, known) {
 // 写的是菜单外的内部别名（例如 MiniMax-M2.7-CodeAgentCLI，CLI 实际按它跑，不能改判成别的）。
 // single：挑号和选型用（见 strictDefaultModel 的例外）——写的不在清单里、而探测过的清单只有一个模型时就是它。
 // 2026-10-22 起手动新建的会话也用（core/session-manager.js 的启动核对 + 启动中心「默认」那一项的显示，main/ipc/session-handlers.js 的 codeagent:models）。
+const BUILTIN_PREFIX = /^(?:w3|built-in|builtin)\//i;
 function personalDefaultModel(own, known, { single = false } = {}) {
   const models = (known && known.models) || [];
   const pick = m => models.find(x => x.toLowerCase() === String(m || '').toLowerCase()) || '';
   const written = typeof own === 'string' ? own.trim() : '';
-  if (written) return pick(written) || pick(written + '-Auto') || (single && known && known.authoritative && models.length === 1 ? models[0] : '');
+  const bare = written.replace(BUILTIN_PREFIX, '');
+  if (written) return pick(written) || pick(written + '-Auto') || (bare !== written ? pick(bare) || pick(bare + '-Auto') : '') || (single && known && known.authoritative && models.length === 1 ? models[0] : '');
   return (known && known.probedAt ? pick(known.defaultModel) : '') || pick(require('./codeagent-models').DEFAULT_MODEL);
 }
 // 号池号的默认模型（账号即模型、切号开关关着时，2026-10-19 审核）：和个人号一样严格——settings.json 写了 model、且在清单里
@@ -337,7 +339,8 @@ function strictDefaultModel(written, models, { authoritative = false } = {}) {
   const list = models || [];
   const only = authoritative && list.length === 1 ? { model: list[0], note: '', ...(w ? { written: w } : {}) } : null;
   if (!w) return only || { model: '', note: 'missing' };
-  const hit = list.find(m => String(m).toLowerCase() === w.toLowerCase()) || list.find(m => String(m).toLowerCase() === (w + '-Auto').toLowerCase());
+  const bare = w.replace(BUILTIN_PREFIX, '');
+  const hit = [w, w + '-Auto', bare, bare + '-Auto'].map(name => list.find(m => String(m).toLowerCase() === name.toLowerCase())).find(Boolean);
   return hit ? { model: hit, note: '' } : only || { model: '', note: 'not-in-list', written: w };
 }
 function describeDefaultNote(note, written = '') {

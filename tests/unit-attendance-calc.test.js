@@ -179,3 +179,54 @@ test('只有今天或未来记录：年度不产生已出勤月份、峰值和�
   assert.equal(y.latestLeave, null);
   assert.equal(y.firstDate, null);
 });
+
+/* 弹性工作制（2026-11-20）：默认关；开启后工作日按「在岗 − 午休 − 晚饭段 − 规定工时」算 */
+test('弹性工作制默认关：口径与原来完全一致', () => {
+  const r = A.rulesFromWorkTime({});
+  assert.equal(r.flex, undefined);
+  assert.deepEqual(A.calcRules(r), { amEnd: 540, pmStart: 1080, owePerWorkday: 30 });
+  assert.deepEqual(A.rulesFromWorkTime({}, { on: false, coreStart: '08:00' }), r);
+});
+
+test('弹性工作制：按在岗时长算，准点上班的人结果与固定制相同，晚到的人不再白得加班', () => {
+  const fixed = { rules: A.calcRules(A.rulesFromWorkTime({})) };
+  const flex = { rules: A.calcRules(A.rulesFromWorkTime({}, { on: true })) };
+  const net = (o, a, b) => A.buildDays([card('2026-11-16', a, b)], o)[0].net;
+  assert.equal(net(fixed, '09:00', '20:00'), 90);
+  assert.equal(net(flex, '09:00', '20:00'), 90);            // 660 − 午休 60 − 晚饭 30 − 480
+  assert.equal(net(fixed, '08:00', '17:00'), 30);           // 固定制：08–09 算早上加班
+  assert.equal(net(flex, '08:00', '17:00'), 0);             // 弹性：正好 8 小时
+  assert.equal(net(fixed, '10:00', '19:30'), 60);           // 固定制：晚到 1 小时不扣，18 点后照算
+  assert.equal(net(flex, '10:00', '19:30'), 0);
+  const noDinner = { rules: A.calcRules(A.rulesFromWorkTime({}, { on: true, dinnerBreak: false })) };
+  assert.equal(net(noDinner, '10:00', '19:00'), 0);         // 不扣晚饭段时 10–19 正好 8 小时
+  const d = A.buildDays([card('2026-11-16', '10:30', '15:00')], flex)[0];
+  assert.equal(d.coreLate, true); assert.equal(d.coreEarly, true); assert.equal(d.net, -270);
+});
+
+test('弹性工作制：只有一次打卡标缺卡不扣，周末仍整段算加班', () => {
+  const flex = { rules: A.calcRules(A.rulesFromWorkTime({}, { on: true })) };
+  const one = A.buildDays([card('2026-11-16', '09:00')], flex)[0];
+  assert.equal(one.singlePunch, true); assert.equal(one.net, 0); assert.equal(one.owe, 0);
+  const sat = A.buildDays([card('2026-11-21', '10:00', '14:00')], flex)[0];
+  assert.equal(sat.kind, 'weekend'); assert.equal(sat.net, 240); assert.equal(sat.flex, undefined);
+  const s = A.summarize(A.buildDays([card('2026-11-16', '09:00'), card('2026-11-17', '10:30', '20:00')], flex));
+  assert.equal(s.singlePunchDays, 1); assert.equal(s.coreMiss, 1);
+});
+
+test('弹性工作制：几点能走按今天上班卡累计工时并跳过休息段', () => {
+  assert.equal(A.leaveAfterCounted(600, 480, [[750, 810], [1050, 1080]]), 1170);
+  assert.equal(A.leaveAfterCounted(800, 60, [[750, 810]]), 870);
+  const flex = { rules: A.calcRules(A.rulesFromWorkTime({}, { on: true })) };
+  const days = A.buildDays([card('2026-11-16', '09:00', '18:00'), card('2026-11-17', '10:00')], flex);
+  const m = A.monthReport(days, '2026-11', '2026-11-17', flex);
+  // 今天 10:00 到；每天可加班 = (80h − 已净加班) / 剩余工作日，走的时间 = 10:00 起累计 8h + 可加班
+  assert.equal(m.leaveBy, A.leaveAfterCounted(600, 480 + m.perDayAllowance, flex.rules.breaks));
+});
+
+test('弹性工作制设置校验', () => {
+  assert.equal(A.normalizeFlex({ on: true, coreStart: '16:00', coreEnd: '10:00' }).ok, false);
+  assert.equal(A.normalizeFlex({ dailyHours: 0 }).ok, false);
+  assert.deepEqual(A.normalizeFlex(undefined).flex, { ...A.DEFAULT_FLEX });
+  assert.equal(A.normalizeFlex({ on: true, dailyHours: '7.5' }).flex.dailyHours, 7.5);
+});

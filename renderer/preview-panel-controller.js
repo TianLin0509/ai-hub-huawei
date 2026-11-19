@@ -2288,6 +2288,7 @@ function createPreviewPanelController({
     closePreviewFind: options => previewFind.close(options),
     openQuickOpen,
     closeQuickOpen,
+    getRecentFiles: () => recentQuickOpenItems(),
     copyPreviewContent,
     copyPreviewPath,
     showPreviewNotice,

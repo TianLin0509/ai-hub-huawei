@@ -127,13 +127,26 @@ function createPptMake({ root, ipcRenderer, notice }) {
     catch (error) { failure = error.message; job = null; draw(); }
   }
   // 本页面自己发起、几秒内就回来的步骤：显示「正在生成 PPT…」和已用时间。
+  // 连点几个骨架时只认最后一次：先回来的旧样例不盖掉新的。
+  let genSeq = 0;
   async function generating(work) {
+    const mine = ++genSeq;
     busy = { text: '正在生成 PPT…', from: Date.now() }; failure = null; editing = false; drawStage();
-    try { const r = await work(); busy = null; await take(r.job); }
-    catch (error) { busy = null; failure = error.message; drawStage(); }
+    try { const r = await work(); if (mine !== genSeq) return; busy = null; await take(r.job); }
+    catch (error) { if (mine !== genSeq) return; busy = null; failure = error.message; drawStage(); }
   }
   async function act(name, b) {
-    if (name === 'pick') { selected = b.dataset.id; drawList(); return; }
+    // 用户接着做了别的（正式生成、粘贴/改说明、换方案）：在途的旧样例作废，回来也不盖掉（Codex 审查）。
+    if (['start', 'auto', 'paste', 'edit', 'variant', 'rerender', 'paste-go'].includes(name) && busy && genSeq) { genSeq++; busy = null; }
+    // 选了骨架，预览跟着换成它的样例（反馈 15916092：以前只换了高亮，中间还是上一个骨架）。
+    // 助理正在写、正在改页面说明，或中间是刚生成的结果时不自动换，免得把结果挤掉；改为提示一句。
+    if (name === 'pick') {
+      if (b.dataset.id === selected && job?.kind === 'example' && !failure) return;
+      selected = b.dataset.id; drawList();
+      if (editing || (job && ACTIVE.includes(job.state)) || group.some(j => ACTIVE.includes(j.state))) return;
+      if (job && job.kind !== 'example' && !failure && !busy) { notice(`已选「${skeleton()?.name || ''}」。中间还是刚才生成的结果；点「先看骨架样子」看这个骨架的样例。`); return; }
+      return generating(() => call('ppt-make-example', { skeletonId: selected }));
+    }
     if (name === 'prev' || name === 'next') { listPage += name === 'next' ? 1 : -1; drawList(); return; }
     if (name === 'pack') {
       b.disabled = true; notice('正在生成整套模板…');

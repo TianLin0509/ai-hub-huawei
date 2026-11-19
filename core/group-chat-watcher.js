@@ -14,7 +14,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { detectHostShellTakeover, detectCodexThreadEnded } = require('./host-shell-detector.js');
+const { detectHostShellTakeover, detectMissingCliCommand, detectCodexThreadEnded } = require('./host-shell-detector.js');
 const { isClaudeFamily, isCodexCliKind, isCodeAgentKind } = require('./ai-kinds.js');
 // Antigravity (agy) owns the gemini kind; it honours bracketed paste and reports
 // work start through its PreInvocation hook, like Claude/Codex.
@@ -860,8 +860,13 @@ async function sendToPtyImpl(sid, prompt, kind, options = {}) {
   if (require('./ai-kinds').isAiKind(String(kind).replace(/-resume$/, ''))
       && detectHostShellTakeover(sessionManager.getSessionBuffer(sid) || '')) {
     sessionManager.setGroupChatReady(sid, false);
-    throw Object.assign(new Error('CLI 已退出到系统终端，消息未发送；请先重启会话'),
-      { notSent:true, code:'cli-exited' });
+    // 终端停在「找不到命令」上时直说缺哪个程序（反馈 08441c2e）：文案对上已知问题 cli-missing，提示里带一键安装。
+    const missing = detectMissingCliCommand(sessionManager.getSessionBuffer(sid) || '');
+    const missingName = { claude:'Claude Code', codex:'Codex', codeagent:'CodeAgent', gemini:'Gemini CLI', kimi:'Kimi Code' }[missing];
+    throw Object.assign(new Error(missingName
+      ? `未找到 ${missingName} CLI：终端里「${missing}」无法识别，CLI 没有启动，消息未发送`
+      : 'CLI 已退出到系统终端，消息未发送；请先重启会话'),
+      { notSent:true, code:'cli-exited', ...(missing ? { missingCli: missing } : {}) });
   }
 
   if ((options.restartContinuation || sessionManager.restartContinuationSessions?.has(sid)) && ['kimi','kimi-resume','deepseek','deepseek-resume'].includes(kind)) {

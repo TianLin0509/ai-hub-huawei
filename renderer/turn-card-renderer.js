@@ -144,7 +144,10 @@ function createTurnCardRenderer(options = {}) {
     const presentation = buildTurnPresentation(presentationTurn, {
       cwd: session && session.cwd || opts.cwd || null,
     });
-    return { ...presentationTurn, kind: assistantKindFor(session, presentationTurn), simpleChat: true, presentation,
+    const shownKind = assistantKindFor(session, presentationTurn);
+    // Claude 格式记录被改写成 deepseek 头像的回合，实际是 Claude Code 在答（旧 DeepSeek 会话），标识按它来（复审补点）
+    const agentKind = presentationTurn.kind === 'claude' && shownKind !== presentationTurn.kind ? 'deepseek-legacy' : undefined;
+    return { ...presentationTurn, kind: shownKind, ...(agentKind ? { agentKind } : {}), simpleChat: true, presentation,
       assistantIdentity: session?.purpose === 'hub-assistant', ...(assistantMarks ? { assistantSourceMarks: true } : {}) };
   }
 
@@ -623,6 +626,10 @@ function renderTurnCard(turn, context = {}) {
   const cls = (isUser ? 'turn-card user' : 'turn-card assistant') + (turn.inherited ? ' inherited' : '') + (teamFold ? ' team-notice' : '');
   const who = teamSender ? teamSender.label : teamFold?.kind === 'kickoff' ? '负责人' : isUser ? '用户' : (turn.model || (turn.source==='antigravity-cli' ? 'Antigravity' : turn.source==='acp' ? require('../core/ai-kinds').getKindLabel(turn.kind) : turn.kind) || 'Claude');
   const ts = turn.ts ? formatAbsoluteTime(turn.ts) : '';
+  // 回答旁的 Agent 标识（2026-11-19 J 席）：名字写的是模型，这里补「哪个程序在答」；名字里已经写了就不重复。
+  const agentLabel = !isUser && !turn.assistantIdentity ? require('../core/ai-kinds').getAgentLabel(turn.agentKind || turn.kind) : '';
+  const agentBadge = agentLabel && !String(who).toLowerCase().includes(agentLabel.toLowerCase())
+    ? `<span class="turn-agent-badge" data-agent="${escapeHtml(String(turn.kind || '').replace(/-resume$/, ''))}" title="由 ${escapeHtml(agentLabel)} 回答">${escapeHtml(agentLabel)}</span>` : '';
 
   // 头像分支
   let avatarHtml;
@@ -706,7 +713,7 @@ function renderTurnCard(turn, context = {}) {
     ${avatarHtml}
     <div class="turn-content">
       <div class="turn-head">
-        <span class="turn-who">${escapeHtml(who)}</span>
+        <span class="turn-who">${escapeHtml(who)}</span>${agentBadge}
         ${!isUser && turn.phase ? `<span class="conversation-phase">${turn.phase === 'final_answer' ? '结果' : turn.phase === 'commentary' ? '进展' : turn.phase === 'activity' ? '活动记录' : '消息'}</span>` : ''}
         ${!isUser && !isSimple ? require('./conversation-header-activity').renderHeaderActivity('', '', true) : ''}
         ${turn.inherited ? '<span class="turn-branch-chip" title="分支前的对话，继承自父会话">分支前</span>' : ''}${nativeChip}${isUser && turn.steer ? '<span class="turn-branch-chip turn-steer-chip" title="这条消息是在执行中插话，DSH 在当前步骤结束后收到">插话</span>' : ''}${isUser && turn.phoneOrigin ? '<span class="turn-branch-chip turn-phone-chip" title="这句话是从手机 App 发给会话的">手机</span>' : ''}

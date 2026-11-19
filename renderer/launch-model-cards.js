@@ -80,6 +80,8 @@ function defaultPick(kind, provider) {
     const models = gatewayModels(provider);
     return { source: 'gateway', model: models.some(m => m.id === provider.model) ? provider.model : models[0]?.id || provider.model || '' };
   }
+  // DSH 存的是自有接口（2026-11-20 起可用）：默认选自有卡，不再悄悄切到公司模型。
+  if (kind === 'deepseek-acp' && provider.backend === 'api') return { source: 'own', model: provider.model || '' };
   if (provider.backend === 'proxy' || kind === 'deepseek-acp' || provider.companyDefault === true && provider.backend === 'local') {
     const models = companyModels(provider);
     const model = models.some(m => m.id === provider.model) ? provider.model : models[0]?.id || '';
@@ -98,7 +100,7 @@ function saveRequest(kind, provider, pick) {
   if (pick.source === 'company') {
     return provider.backend === 'proxy' && !onGateway(provider) && provider.model === pick.model ? null : { kind, backend: 'proxy', model: pick.model };
   }
-  if (kind === 'deepseek-acp') return null;
+  if (kind === 'deepseek-acp') return provider.backend === 'proxy' && provider.own?.backend === 'api' ? { kind, backend: 'own' } : null;
   if (provider.apiProfiles?.length) return { kind, useLocal: true };
   return provider.backend === 'proxy' || provider.companyDefault === true ? { kind, backend: 'own' } : null;
 }
@@ -157,6 +159,10 @@ function cardsFor(kind, provider, status, pick, { codeagentInstalled = null } = 
       name: profile.label, detail: profile.model, source: 'api', sourceText: '自有 API', state: 'ready',
       statusText: profile.baseURL, tip: profile.baseURL,
       checked: pick?.source === 'api' && pick.profileId === profile.id });
+  } else if (provider.own?.backend === 'api') {
+    // DSH 只有填过自有接口才有自有卡（公司版 DSH 没有可沿用的本机配置）。
+    cards.push({ id: 'own', name: provider.own.model || '自有接口', detail: '', source: 'own', sourceText: '自有接口', state: 'ready',
+      statusText: '用你在「自有 API」里填的接口', tip: '直连你自己的 OpenAI 兼容接口和 Key，不走公司模型和 API 网关。', checked: pick?.source === 'own' });
   }
   // 正走 API 网关的工具，网关模型卡排在最前；否则排在公司模型后面。
   // 走 API 网关的用户多半没有 CodeAgent：公司模型此刻用不了就不显示那两张卡，免得一屏「公司上游信息不全」（E2E 截图发现）。

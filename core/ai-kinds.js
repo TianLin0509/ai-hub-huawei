@@ -138,6 +138,27 @@ function isWebStyleKind(kind) {
   return isClaudeWebKind(kind) || isCodexWebKind(kind);
 }
 
+// 会话背后跑的是哪个 Agent 程序（2026-11-19 J 席，体验 3）：模型图标只说明「哪家模型」，
+// 同一个 DeepSeek 可能跑在 Claude Code、Codex 或 DSH 上，行为差别很大，所以会话顶栏和回答旁单独标出程序名。
+const AGENT_LABELS = {
+  claude: 'Claude Code',
+  'deepseek-claude': 'Claude Code',
+  'deepseek-legacy': 'Claude Code',
+  codex: 'Codex',
+  deepseek: 'Codex',
+  codeagent: 'CodeAgent',
+  'deepseek-acp': 'DSH',
+  gemini: 'Antigravity',
+  kimi: 'Kimi CLI',
+  qwen: 'Qwen Code',
+  glm: 'ZCode',
+  pi: 'pi',
+};
+function getAgentLabel(kind) {
+  const base = String(kind || '').replace(/-resume$/, '');
+  return AGENT_LABELS[base] || '';
+}
+
 function getKindLabel(kind) {
   if (kind === 'deepseek-legacy' || kind === 'deepseek-legacy-resume') return KIND_LABELS.deepseek;
   return KIND_LABELS[kind] || kind || 'AI';
@@ -252,6 +273,8 @@ module.exports = {
   isCodexWebKind,
   isWebStyleKind,
   getKindLabel,
+  AGENT_LABELS,
+  getAgentLabel,
   kindRegexAlternation,
   // Phase 4 群聊记忆家族级共享
   canonicalAiKind,

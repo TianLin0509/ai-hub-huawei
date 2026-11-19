@@ -3,7 +3,27 @@
 // 只认报错里明确出现的错误码 / 状态码，认不出就返回 null，调用方保持原样，不硬猜。
 // 顺序有讲究：磁盘满、端口占用这类具体的排在「没权限」「网络」这类笼统的前面。
 
+// 「出错就地一键修」（2026-11-19 负责人勾选体验第 5 项）：Agent 会话最常见的三类报错——CLI 已退出、签名没完成、模型不存在——
+// 统一成「原因一句话 + 一个对症按钮」。action.act 以 known: 开头，由 renderer/hub-error-card.js 统一执行；
+// 认不出对症动作的报错，错误卡上的主按钮是「一键反馈（带日志）」。core/known-issues.js 命中时以它的解法和按钮为准。
 const RULES = [
+  { kind: 'cli-exited', test: /CLI 已退出到(?:系统终端|命令行)|cli-exited-to-shell/i,
+    title: 'CLI 已经退出了',
+    cause: '这个会话里的 Agent 命令行程序已经结束，终端回到了 PowerShell，消息没有发出去。点「重启会话」重新拉起它，原来的对话接着用。',
+    steps: [],
+    action: { label: '重启会话', act: 'known:session-restart' } },
+  // 「后台进程还没确认结束」「仍然没有送达」时 Hub 已经停止重试、要求一键反馈（与 core/known-issues.js company-proxy-failed 同一排除），
+  // 这里不认，落到兜底的「一键反馈（带日志）」，不诱导再次启动探测（Codex 复审 P2）。
+  { kind: 'signer-init', test: /^(?![\s\S]*(?:后台进程还没确认结束|仍然没有送达))[\s\S]*(?:首次签名初始化没完成|签名初始化所需的测试输入)/,
+    title: '公司模型的签名还没准备好',
+    cause: 'Hub 要先在后台启动一次 CodeAgent 取签名信息，这一步没做完，所以公司模型暂时用不了。点「重新启动反代」再取一次。',
+    steps: [],
+    action: { label: '重新启动反代', act: 'known:proxy-restart' } },
+  { kind: 'model-missing', test: /模型不存在|原模型不可用|model[^\n]{0,60}(?:not found|does not exist|is not available|not_found_error)|(?:invalid|unknown) model|not_found_error[^\n]{0,80}model/i,
+    title: '这个模型现在用不了',
+    cause: '账号没有这个模型的权限，或者模型名已经换代、写错了。点「换模型」从这个账号能用的模型里挑一个继续。',
+    steps: [],
+    action: { label: '换模型', act: 'known:switch-model' } },
   { kind: 'disk-full', test: /\bENOSPC\b|no space left on device|磁盘空间不足|磁盘已满/i,
     title: '磁盘空间不够了',
     cause: '要写文件的那个盘已经满了，程序写不进去。',
@@ -12,7 +32,8 @@ const RULES = [
     title: '端口被别的程序占用了',
     cause: '要用的本机端口已经被另一个程序（常见是上一次没退干净的同一个程序）占着。',
     steps: ['关掉重复打开的同类程序，或稍等半分钟让它自己退出', '还不行就重启一次 AI HUB'] },
-  { kind: 'not-found', test: /\bENOENT\b|\bis not recognized as an internal or external command\b|command not found|找不到(?:指定的)?(?:文件|路径|程序)|系统找不到/i,
+  // PowerShell 找不到命令（中英文，反馈 08441c2e）：「无法将“claude”项识别为 cmdlet…」「is not recognized as the name of a cmdlet」「CommandNotFoundException」。
+  { kind: 'not-found', test: /\bENOENT\b|\bis not recognized as an internal or external command\b|is not recognized as the name of a cmdlet|CommandNotFoundException|无法将.{0,60}项识别为|command not found|找不到(?:指定的)?(?:文件|路径|程序)|系统找不到/i,
     title: '找不到需要的程序或文件',
     cause: '要运行的程序没装、装在了别的位置，或者要读的文件已经被移走或删掉。',
     steps: ['确认相关工具已经安装（安装后最好重启一次 AI HUB）', '如果是你自己指定过的路径，检查那个位置的文件还在不在'] },
@@ -27,7 +48,8 @@ const RULES = [
   { kind: 'auth', test: /\b401\b|unauthori[sz]ed|authentication|登录(?:已)?(?:过期|失效)|未登录/i,
     title: '登录失效了',
     cause: '这个账号的登录已经过期或被注销。',
-    steps: ['到「账号」页重新登录一次', '登录后回来再试，刚才的内容不会丢'] },
+    steps: ['到「账号」页重新登录一次', '登录后回来再试，刚才的内容不会丢'],
+    action: { label: '重新登录', act: 'known:open-accounts' } },
   { kind: 'forbidden', test: /\b403\b|forbidden|无权限|没有访问权限/i,
     title: '没有访问权限',
     cause: '账号已登录，但对方服务不允许这个账号做这件事，或者被公司网络策略拦了。',
@@ -46,7 +68,7 @@ function humanizeError(raw) {
   const text = String(raw == null ? '' : (raw && raw.message) || raw).slice(0, 4000);
   if (!text.trim()) return null;
   const rule = RULES.find(item => item.test.test(text));
-  return rule ? { kind: rule.kind, title: rule.title, cause: rule.cause, steps: rule.steps.slice() } : null;
+  return rule ? { kind: rule.kind, title: rule.title, cause: rule.cause, steps: rule.steps.slice(), action: rule.action ? { ...rule.action } : null } : null;
 }
 
 module.exports = { humanizeError, RULES };

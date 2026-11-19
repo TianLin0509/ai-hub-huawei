@@ -680,7 +680,7 @@ function registerSessionIpc(ipcMain, deps) {
       const pool = require('../../core/codeagent-pool');
       const asOptions = (key, dir) => {
         const models = require('../../core/codeagent-models');
-        return models.modelOptions(getHubDataDir(), { accountKey: key, configDir: dir });
+        return models.modelOptions(getHubDataDir(), { accountKey: key, configDir: dir, includeUnavailable: true });
       };
       const catalogFor = (key, dir) => {
         const catalog = require('../../core/codeagent-models').readModelCatalog(getHubDataDir(), { accountKey: key, configDir: dir });
@@ -707,7 +707,10 @@ function registerSessionIpc(ipcMain, deps) {
         const defaults = [...new Set(usable.map(a => sameCase(a.models, pool.plannedModel(a.dir, { idle: !a.activeSessions }))))];
         const options = [];
         for (const account of usable) for (const option of asOptions(account.id, account.dir)) {
-          if (!options.some(item => item.id.toLowerCase() === option.id.toLowerCase())) options.push(option);
+          const at = options.findIndex(item => item.id.toLowerCase() === option.id.toLowerCase());
+          // 同名模型：只要有一个号能用就算能用（自动挑号会挑能用的号），可用项替换先到的置灰项（Codex 审查 P2-3）。
+          if (at < 0) options.push(option);
+          else if (options[at].unavailable && !option.unavailable) options[at] = option;
         }
         const catalogs = usable.map(account => catalogFor(account.id, account.dir));
         const error = [...new Set(catalogs.map(catalog => catalog.error).filter(Boolean))].join('；');

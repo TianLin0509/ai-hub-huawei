@@ -25,7 +25,7 @@ const KINDS = [
 ];
 const FALLBACK = { kind: 'other', title: '模型服务返回了错误', detail: '可以先重试；还不行就换个模型，或者把原始报错反馈给维护人。', actions: ['retry', 'model', 'feedback'] };
 
-const ACTION_LABELS = { retry: '重试这一条', model: '换个模型', accounts: '打开账号页', compact: '压缩上下文', 'new-session': '开新会话', feedback: '一键反馈' };
+const ACTION_LABELS = { retry: '重试这一条', model: '换个模型', accounts: '打开账号页', compact: '压缩上下文', 'new-session': '开新会话', feedback: '一键反馈', 'ask-hub': '问问 Hub' };
 
 function isErrorLine(text) { return ERROR_LINE.test(String(text || '')); }
 
@@ -38,8 +38,14 @@ function classifyError(text) {
   return KINDS.find(rule => rule.test.test(value)) || FALLBACK;
 }
 
-function renderHelp(info, escapeHtml) {
-  const buttons = info.actions.map(action => `<button type="button" class="teh-btn" data-teh="${action}">${escapeHtml(ACTION_LABELS[action])}</button>`).join('');
+// 「问问 Hub」（2026-11-19 J 席）：常显在对症按钮后面，带上这条报错打开底栏的问问 Hub 面板；面板没装上时不出现。
+function askHubReady(win = typeof window !== 'undefined' ? window : null) {
+  return !!(win && typeof win.__hubHelpAsk?.ask === 'function');
+}
+
+function renderHelp(info, escapeHtml, { askHub = askHubReady() } = {}) {
+  const buttons = info.actions.map(action => `<button type="button" class="teh-btn" data-teh="${action}">${escapeHtml(ACTION_LABELS[action])}</button>`).join('')
+    + (askHub ? `<button type="button" class="teh-btn" data-teh="ask-hub" title="照使用说明书马上告诉你这是什么问题、下一步怎么做（不开新会话，只读）">${escapeHtml(ACTION_LABELS['ask-hub'])}</button>` : '');
   return `<div class="teh-title">${escapeHtml(info.title)}</div><div class="teh-detail">${escapeHtml(info.detail)}</div><div class="teh-actions">${buttons}</div>`;
 }
 
@@ -60,7 +66,8 @@ function enhanceCard(card) {
   help.dataset.copyExclude = '';
   help.innerHTML = renderHelp(info, s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])))
     // 右上角悬停才出现的「问问 Agent」「一键反馈」（5.5.24，renderer/hub-error-card.js）。
-    + require('./hub-error-card').assistHtml({ area: 'model-service', title: info.title, symptom: info.detail, details: last.textContent.trim() });
+    // 「问问 Hub」已在上面的常显按钮里，悬停求助区不再重复。
+    + require('./hub-error-card').assistHtml({ area: 'model-service', title: info.title, symptom: info.detail, details: last.textContent.trim() }, { askHub: false });
   const raw = doc.createElement('details');
   raw.className = 'teh-raw';
   raw.innerHTML = '<summary>原始报错</summary>';
@@ -79,6 +86,14 @@ function runAction(action, { card, document: doc, window: win, ipcRenderer }) {
     return true;
   }
   if (action === 'accounts') { doc.getElementById('btn-rail-accounts')?.click(); return true; }
+  if (action === 'ask-hub') {
+    const helpAsk = win.__hubHelpAsk;
+    if (!helpAsk || typeof helpAsk.ask !== 'function') return false;
+    const help = card.querySelector('.turn-error-help');
+    const raw = (card.querySelector('.teh-raw')?.textContent || '').replace(/^原始报错/, '').trim();
+    helpAsk.ask(require('./hub-error-card').askHubQuestion({ area: 'model-service', title: help?.querySelector('.teh-title')?.textContent || '', symptom: help?.querySelector('.teh-detail')?.textContent || '', details: raw }));
+    return true;
+  }
   if (action === 'feedback') {
     const help = card.querySelector('.turn-error-help');
     const raw = (card.querySelector('.teh-raw')?.textContent || '').replace(/^原始报错/, '').trim();
@@ -104,4 +119,4 @@ function install({ document: doc, window: win, ipcRenderer }) {
   });
 }
 
-module.exports = { classifyError, isErrorLine, enhanceCard, runAction, install, ACTION_LABELS };
+module.exports = { classifyError, isErrorLine, enhanceCard, renderHelp, runAction, install, ACTION_LABELS };

@@ -42,6 +42,8 @@ const TOOLS_VERSION = 6;
 // 会话工具的接通判定（v3.1.1）：助理会话起来这么久还没收到工具进程的接通信号，就算「未接上」。
 const TOOLS_HELLO_GRACE_MS = 90000;
 const PREWARM_TTL_MS = 5 * 60000;
+// 点「扫码登录」后多久还没出二维码算「慢」：再点一次就重开一个登录命令（2026-11-19）。
+const LOGIN_QR_SLOW_MS = 20000;
 const PREWARM_START_GRACE_MS = 90000;
 const PREWARM_BUSY_MAX_MS = 10 * 60000;
 const DEFAULT_SETTINGS = Object.freeze({
@@ -2028,18 +2030,39 @@ class CompanyAssistant {
   }
 
   // ---- 手动登录与日历初始化 ----
-  async login() {
+  async login(options = {}) {
     if (this.manualLoginStart) return this.manualLoginStart;
-    this.manualLoginStart = this.startLogin().finally(() => { this.manualLoginStart = null; });
+    this.manualLoginStart = this.startLogin(options).finally(() => { this.manualLoginStart = null; });
     return this.manualLoginStart;
+  }
+  // 退出 WeLink 登录（2026-11-19，回应「扫码有信息安全顾虑」）：本人在设置里点，跑 welink-cli auth logout 清掉本机凭据。
+  // 之后自动续期不再尝试、也不弹「续期没成功」，直到本人再扫码。
+  // 退出、扫码、清除重扫排成一条队（Codex 复审 P1）：退出没跑完时点的扫码，等退出完再开，不会被退出抹掉、也不会抢在退出前写回凭据。
+  logout() {
+    if (this.loggingOut) return this.loggingOut;
+    this.loggingOut = this.logoutUnlocked().finally(() => { this.loggingOut = null; });
+    return this.loggingOut;
+  }
+  async logoutUnlocked() {
+    if (this.manualLoginStart) await this.manualLoginStart.catch(() => {});
+    this.loginStop?.abort();
+    if (this.loginDone) await this.loginDone.catch(() => {});
+    // 先停掉正在跑的自动续期，免得它在 logout 之后又把登录续上或把状态改回去。
+    this.auth.signedOut();
+    if (this.auth.pending) await this.auth.pending.catch(() => {});
+    const r = await this.rawWelink(['auth', 'logout'], { allowSetup: true, timeoutMs: 30000 });
+    this.loginFlow = null;
+    this.auth.signedOut();
+    return { ok: r.code === 0, output: D.short(r.stdout + r.stderr, 300) };
   }
   // 扫码面板要的东西都从登录输出里取（2026-10-22 v3.1.1，welink-cli 1.0.14 真机格式见 welink.js）：
   // qr 只收能放进 <img> 的（字符画转成的 SVG、data URI、图片路径）；登录网页存 url，只当「在浏览器打开」的兜底链接；
   // progress 是等待扫码 / 已扫码 / 失败；输出像是编码不对时存一份诊断文件，面板提示改用链接。
   loginFlowFrom(text, extra = {}) {
     const prev = this.loginFlow || {}, found = welink.qrFromLoginOutput(text);
-    const flow = { ...prev, ...extra, text: text.slice(-4000), qr: found && found.kind !== 'url' ? found : prev.qr || null,
-      url: welink.loginUrlFromOutput(text) || prev.url || null, progress: welink.loginProgress(text) || prev.progress || null };
+    const flow = { ...prev, ...extra, text: welink.scrubLine(text.slice(-4000)), qr: found && found.kind !== 'url' ? found : prev.qr || null,
+      url: welink.loginUrlFromOutput(text) || prev.url || null, progress: welink.loginProgress(text) || prev.progress || null,
+      cause: welink.loginDiagnosis(text) || null };
     if (!flow.qr && !prev.garbled && welink.loginOutputGarbled(text)) {
       flow.garbled = true;
       try {
@@ -2048,19 +2071,25 @@ class CompanyAssistant {
         fs.mkdirSync(dir, { recursive: true });
         // 只存这次 auth login 的输出（扫码前没有令牌；万一有 token= 之类也抹掉）。
         flow.diag = path.join(dir, `${stamp}-welink-login-output.txt`);
-        fs.writeFileSync(flow.diag, text.replace(/((?:token|ticket|secret|password)\w*\s*[:=]\s*)\S+/gi, '$1***'), 'utf8');
+        fs.writeFileSync(flow.diag, welink.scrubLine(text), 'utf8');
       } catch (error) { console.warn('[company-assistant] 保存扫码诊断失败', error.message); }
     }
     return flow;
   }
-  async startLogin() {
+  async startLogin({ restart = false, clean = false } = {}) {
     // 输出里已经报超时/失败、进程却还没退时，「重新获取二维码」先结束这一次，再开新的。
-    if (this.loginFlow && this.loginFlow.state === 'waiting' && this.loginFlow.progress?.phase !== 'failed') return this.loginFlow;
+    // 2026-11-19：二维码迟迟不出（等了 20 秒还没有）或本人点了「重新获取」，也结束这一次重开——以前会一直返回那个没有二维码的旧流程。
+    if (this.loggingOut) await this.loggingOut.catch(() => {});
+    const f = this.loginFlow, stale = f && !f.qr && !f.progress?.phase && this.now() - (f.startedAt || 0) > LOGIN_QR_SLOW_MS;
+    if (f && f.state === 'waiting' && f.progress?.phase !== 'failed' && !restart && !clean && !stale) return f;
     if (this.loginDone) { this.loginStop?.abort(); await this.loginDone.catch(() => {}); }
+    // 本机凭据损坏时：先退出旧登录（清掉 credentials.json）再扫码，CLI 自己的提示就是这么要求的。
+    // 清除重扫时先等后台核对收尾、且不认清除前的「在线」结论（Codex 复审 P2）。
     if (this.auth.pending) {
       await this.auth.pending;
-      if (this.auth.status().state === 'online') return { state: 'ok' };
+      if (!clean && this.auth.status().state === 'online') return { state: 'ok' };
     }
+    if (clean) await this.rawWelink(['auth', 'logout'], { allowSetup: true, timeoutMs: 30000 }).catch(() => {});
     this.loginFlow = { state: 'waiting', startedAt: this.now(), qr: null, url: null, progress: null, text: '' };
     this.changed();
     // Hub exit aborts this signal; welink.run then ends the login process tree by PID.
@@ -2091,7 +2120,11 @@ class CompanyAssistant {
         if (snap?.quick) { this.auth.manualSucceeded(snap.login); this.loginFlow = { ...this.loginFlow, state: 'ok' }; this.changed(); return; }
         if (snap?.login?.ok) { this.auth.manualSucceeded(snap.login); this.loginFlow = { ...this.loginFlow, state: 'ok' }; const day = D.dayKey(this.now()); if (!this.brief(day) || this.brief(day).by === 'none') void this.generateBrief().catch(() => {}); }
         // 命令结束、核对后仍没登录：转成失败并给出原因，面板才会出「重新获取二维码」，不停在「正在核对」。
-        else if (this.loginFlow?.state === 'finished') this.loginFlow = { ...this.loginFlow, state: 'failed', error: '登录命令已结束，但没查到已登录' + (this.loginFlow.code ? `（退出码 ${this.loginFlow.code}）` : '') };
+        // 2026-11-19：认得出原因（桌面端没开、登录在另一台电脑、网络……）就说原因，认不出才说「没查到已登录」并附 CLI 最后一行。
+        else if (this.loginFlow?.state === 'finished') {
+          const c = this.loginFlow.cause, last = welink.scrubLine(String(this.loginFlow.text || '').split(/\r\n|\n|\r/).map(l => l.trim()).filter(l => l && !/^[+|]/.test(l)).pop() || '');
+          this.loginFlow = { ...this.loginFlow, state: 'failed', error: c ? c.title : '登录命令已结束，但没查到已登录' + (this.loginFlow.code ? `（退出码 ${this.loginFlow.code}）` : '') + (last ? '：' + last.slice(0, 160) : '') };
+        }
         this.changed();
       });
     this.loginDone = done;

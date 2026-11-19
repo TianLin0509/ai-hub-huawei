@@ -51,16 +51,28 @@ function ctxAttrs({ area, title, symptom, details } = {}) {
     + (details ? ` data-hub-err-details="${esc(clip(details, MAX_DETAILS))}"` : '');
 }
 
-function assistButtons(env) {
+// 「问问 Hub」（2026-11-19 J 席）：带上报错文字打开底栏的问问 Hub 面板（renderer/help-ask-ui.js），照使用说明书马上答，
+// 不开新会话、不读文件；和「问问 Agent」（开会话深查）并存。面板没装上（window.__hubHelpAsk 不在）时不出现。
+const ASK_HUB_TITLE = '照使用说明书马上告诉你这是什么问题、下一步怎么做（不开新会话，只读）';
+function askHubAvailable(env) {
+  if (env && typeof env.askHub === 'boolean') return env.askHub;
+  return typeof window !== 'undefined' && typeof window.__hubHelpAsk?.ask === 'function';
+}
+function askHubButton(className, env) {
+  return askHubAvailable(env) ? `<button type="button" class="${className}" data-hub-err-assist="ask-hub" title="${ASK_HUB_TITLE}">问问 Hub</button>` : '';
+}
+
+function assistButtons(env, { askHub = false } = {}) {
   const ask = askState(env);
   const askBtn = `<button type="button" class="hub-err-assist-btn" data-hub-err-assist="ask"${ask.ok ? ' title="开一个 Agent 会话，把这个报错发给它帮你排查"' : ` disabled title="${esc(ask.reason || '没有可用的 Agent')}"`}>问问 Agent</button>`;
   const fbBtn = feedbackAvailable(env) ? '<button type="button" class="hub-err-assist-btn" data-hub-err-assist="feedback" title="把这个报错连同日志发给维护人">一键反馈</button>' : '';
-  return `<span class="hub-err-assist" role="group" aria-label="求助">${askBtn}${fbBtn}</span>`;
+  const hubBtn = askHub ? askHubButton('hub-err-assist-btn', env) : '';
+  return `<span class="hub-err-assist" role="group" aria-label="求助">${hubBtn}${askBtn}${fbBtn}</span>`;
 }
 
 // 嵌进现有提示（弹窗、常驻提示条、更新弹窗）：外层带上下文属性，悬停外层时按钮淡入。
 function assistHtml(ctx = {}, env) {
-  return `<span class="hub-err-assist-host" ${ctxAttrs(ctx)}>${assistButtons(env)}</span>`;
+  return `<span class="hub-err-assist-host" ${ctxAttrs(ctx)}>${assistButtons(env, { askHub: true })}</span>`;
 }
 
 // 已知问题（core/known-issues.js）：标题下直接给「已知解法」；能一键做的配主按钮（known: 开头，由本模块处理）。
@@ -75,20 +87,29 @@ function knownHtml(ctx = {}, { withAction = true } = {}) {
 // showDetails=false：原始报错只交给求助按钮带走，卡片上不再重复显示（例如原因一句就是原文时）。
 function html({ area = '', title = '', cause = '', steps, actions, details = '', severity = 'error', symptom = '', showDetails = true } = {}, env) {
   const known = matchKnownIssue({ area, title, cause, details });
-  const human = (!cause || !(steps && steps.length)) && details ? humanizeError(details) : null;
-  const why = cause || human?.cause || '';
+  const matched = details ? humanizeError(details) : null;
+  const human = (!cause || !(steps && steps.length)) ? matched : null;
+  // 命中已知问题时它的解法就是那句原因，不再叠一段笼统的翻译（「原因一句话 + 一个对症按钮」，2026-11-19）。
+  const why = cause || (known ? '' : human?.cause) || '';
   const list = (Array.isArray(steps) && steps.length ? steps : human?.steps || []).filter(Boolean);
   const head = title || known?.title || human?.title || '出了点问题';
   const level = ['error', 'warning', 'info'].includes(severity) ? severity : 'error';
-  const all = [known?.action, ...(known?.more || []), ...(Array.isArray(actions) ? actions : [])].filter(a => a && a.label && a.act);
+  // 对症按钮：已知问题的 > 报错翻译表的（重启会话 / 换模型 / 重新登录 / 重启反代）> 都认不出时「一键反馈（带日志）」。
+  const caller = (Array.isArray(actions) ? actions : []).filter(a => a && a.label && a.act);
+  const fix = known?.action || matched?.action
+    || (!caller.length && level === 'error' && feedbackAvailable(env) ? { label: '一键反馈（带日志）', act: 'known:feedback' } : null);
+  const all = [fix, ...(known?.more || []), ...caller].filter(a => a && a.label && a.act);
+  // 认不出的报错也给一句原因，告诉用户下一步只要做什么。
+  const reason = why || (fix && fix.act === 'known:feedback' ? 'Hub 认不出这个报错的具体原因。点「一键反馈（带日志）」，报错和本机日志会一起发给维护人。' : '');
   const buttons = all.map((a, i) => `<button type="button" class="hub-err-btn${i === 0 ? ' primary' : ''}" data-hub-err-act="${esc(a.act)}">${esc(a.label)}</button>`).join('');
   return `<div class="hub-err-card" data-severity="${level}" role="${level === 'error' ? 'alert' : 'status'}"${known ? ` data-known-issue="${esc(known.id)}"` : ''} ${ctxAttrs({ area, title: head, symptom: symptom || why, details })}>`
     + assistButtons(env)
     + `<div class="hub-err-title">${esc(head)}</div>`
     + (known ? knownHtml({ area, title, cause, details }, { withAction: false }) : '')
-    + (why ? `<div class="hub-err-cause">${esc(why)}</div>` : '')
+    + (reason ? `<div class="hub-err-cause">${esc(reason)}</div>` : '')
     + (list.length ? `<ol class="hub-err-steps">${list.map(s => `<li>${esc(s)}</li>`).join('')}</ol>` : '')
-    + (buttons ? `<div class="hub-err-actions">${buttons}</div>` : '')
+    // data-hub-err-slot="ask-hub"：报错卡旁常显的「问问 Hub」（2026-11-19 J 席），排在对症按钮后面。
+    + `<div class="hub-err-actions">${buttons}<span class="hub-err-slot" data-hub-err-slot="ask-hub">${askHubButton('hub-err-btn hub-err-ask-hub', env)}</span></div>`
     + (details && showDetails ? `<details class="hub-err-details"><summary>技术详情</summary><div class="hub-err-details-body"><button type="button" class="hub-err-copy" data-hub-err-copy>复制</button><pre>${esc(clip(details, MAX_DETAILS))}</pre></div></details>` : '')
     + '</div>';
 }
@@ -287,7 +308,7 @@ function createHubAssist({ invoke, createSession, selectSession = () => {}, clos
 }
 
 // ---- 错误轻提示：停留更久，带「详情」可展开成错误卡 ----
-function showErrorToast(doc, message, { area = 'toast', ms = 8000 } = {}) {
+function showErrorToast(doc, message, { area = 'toast', ms = 8000, sessionId = '' } = {}) {
   const text = String(message || '').trim();
   if (!text) return null;
   let el = doc.getElementById('hub-err-toast');
@@ -296,14 +317,32 @@ function showErrorToast(doc, message, { area = 'toast', ms = 8000 } = {}) {
   el.id = 'hub-err-toast';
   el.className = 'hub-err-toast';
   el.setAttribute('role', 'alert');
+  // 报错所属会话：一键动作（重启会话、换模型）经 closest('[data-session-id]') 只作用在它上面。
+  if (sessionId) el.dataset.sessionId = String(sessionId);
   const known = humanizeError(text);
+  // 命中已知问题且能一键做的（例如找不到 Claude Code → 一键安装）：按钮直接放在提示旁边，不用先点「详情」。
+  let issue = null;
+  try { issue = matchKnownIssue({ area, details: text }); } catch { issue = null; }
+  const fix = issue?.action || known?.action;
+  const quick = fix ? `<button type="button" class="hub-err-toast-btn primary" data-hub-err-act="${esc(fix.act)}">${esc(fix.label)}</button>` : '';
+  // 「问问 Hub」从这条提示取报错文字（contextOf 找最近的 data-hub-err-area）。
+  el.dataset.hubErrArea = area || 'toast';
+  el.dataset.hubErrTitle = clip(text.split(/\r?\n/)[0], 200);
+  el.dataset.hubErrDetails = clip(text, MAX_DETAILS);
   el.innerHTML = `<div class="hub-err-toast-row"><span class="hub-err-toast-text">${esc(text)}</span>`
+    + quick
+    + askHubButton('hub-err-toast-btn', undefined)
     + '<button type="button" class="hub-err-toast-btn" data-hub-err-toast="detail">详情</button>'
     + '<button type="button" class="hub-err-toast-btn" data-hub-err-toast="close" aria-label="关闭">×</button></div>';
   let timer = null;
-  const arm = () => { clearTimeout(timer); timer = setTimeout(() => { if (!el.classList.contains('expanded')) el.remove(); }, ms); };
+  const arm = () => { clearTimeout(timer); timer = setTimeout(() => { if (!el.classList.contains('expanded') && !el.classList.contains('pinned')) el.remove(); }, ms); };
   el.addEventListener('mouseenter', () => clearTimeout(timer));
   el.addEventListener('mouseleave', arm);
+  // 一键动作要跑一会儿（安装约 1 分钟），进度写在按钮上：按下就不再自动消失。
+  // 用 pointerdown：点击本身由 install() 在 document 捕获阶段处理并停止冒泡，到不了这里的 click。
+  el.addEventListener('pointerdown', event => {
+    if (event.target.closest?.('[data-hub-err-act]')) { clearTimeout(timer); el.classList.add('pinned'); }
+  });
   el.addEventListener('click', event => {
     const act = event.target.closest?.('[data-hub-err-toast]')?.dataset.hubErrToast;
     if (act === 'close') { clearTimeout(timer); el.remove(); }
@@ -311,7 +350,7 @@ function showErrorToast(doc, message, { area = 'toast', ms = 8000 } = {}) {
       clearTimeout(timer);
       el.classList.add('expanded');
       event.target.closest('[data-hub-err-toast]').remove();
-      el.insertAdjacentHTML('beforeend', html({ area, title: known?.title || text.split(/\r?\n/)[0].slice(0, 80), cause: known ? known.cause : text, steps: known?.steps, details: text }));
+      el.insertAdjacentHTML('beforeend', html({ area, title: issue?.title || known?.title || text.split(/\r?\n/)[0].slice(0, 80), cause: known ? known.cause : text, steps: known?.steps, details: text }));
     }
   });
   doc.body.appendChild(el);
@@ -320,13 +359,19 @@ function showErrorToast(doc, message, { area = 'toast', ms = 8000 } = {}) {
 }
 
 // ---- 已知问题的一键动作 ----
+// 会话 id 只有字母数字和连字符；别的字符一律当作找不到，不拼进选择器。
+function cssEscape(value) { return /^[\w-]+$/.test(String(value)) ? String(value) : '__invalid__'; }
+// 只用报错自己的归属（会话里的卡片、带 sessionId 的轻提示）；没有归属时不猜当前会话，免得重启了别的正在干活的会话（Codex 复审 P2）。
+function errorSessionId(button) {
+  return button.closest?.('[data-session-id]')?.dataset.sessionId || '';
+}
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function waitFor(fn, ms, step = 250) {
   const end = Date.now() + ms;
   while (Date.now() < end) { const v = fn(); if (v) return v; await sleep(step); }
   return null;
 }
-async function runKnownAction(act, button, { doc, ipcRenderer, closeOverlays }) {
+async function runKnownAction(act, button, { doc, win, ipcRenderer, closeOverlays }) {
   const label = button.textContent;
   const say = text => { if (button.isConnected) button.textContent = text; };
   const done = (text, ms = 2600) => {
@@ -347,6 +392,33 @@ async function runKnownAction(act, button, { doc, ipcRenderer, closeOverlays }) 
       finally { setTimeout(() => { unmount(); host.remove(); }, 6500); }
       if (!result?.ok) throw new Error(result?.error || 'DSH 安装没有成功');
       return done('已装好，请重新新建会话', 6000);
+    }
+    // 找不到 Claude Code / Codex（core/known-issues.js cli-missing）：装一份 Hub 自管的，不动用户已有的安装。
+    if (/^known:cli-install:(claude|codex)$/.test(act)) {
+      const id = act.split(':')[2];
+      say('正在安装（约 1 分钟）…');
+      const result = await ipcRenderer.invoke('cli-tools:install', { id });
+      if (!result?.ok) throw new Error(result?.error || '安装没有成功');
+      return done('已装好，请在会话上点「重启」', 8000);
+    }
+    // 重启会话 / 换模型（core/error-humanize.js cli-exited、model-missing）：作用在报错所在的会话——
+    // 卡片在会话里就用那个会话，轻提示没有归属时用正在看的那个会话的输入框。
+    if (act === 'known:session-restart' || act === 'known:switch-model') {
+      const sessionId = errorSessionId(button);
+      if (!sessionId) return done('认不出是哪个会话出的错，请在那个会话上右键「重启」', 5000);
+      if (act === 'known:switch-model') {
+        const chip = doc.querySelector(`.floating-input-bar[data-session-id="${cssEscape(sessionId)}"] .composer-model`);
+        if (!chip) return done('这个会话没有模型菜单', 4000);
+        chip.click();
+        return done(label, 0);
+      }
+      say('正在重启…');
+      // 和右键「重启」同一条路（renderer/renderer.js restartSessionInPlace）：重启期间保持打开，聊天框照常挂回。
+      const r = typeof win?.__hubRestartSessionInPlace === 'function' ? await win.__hubRestartSessionInPlace(sessionId) : await ipcRenderer.invoke('restart-session', sessionId);
+      if (r && r.ok === false) throw new Error(r.message || r.error || '重启没有成功');
+      // 修好了：轻提示里的这条报错已经过时，稍后收起（卡片里的保留，方便对照）。
+      setTimeout(() => button.closest?.('#hub-err-toast')?.remove(), 1500);
+      return done('已重启，可以重新发送', 5000);
     }
     if (act === 'known:open-accounts') { closeOverlays(); doc.getElementById('btn-rail-accounts')?.click(); return done(label, 0); }
     if (act === 'known:welink-login') {
@@ -376,6 +448,12 @@ async function runKnownAction(act, button, { doc, ipcRenderer, closeOverlays }) 
         return done((opened && opened.ok ? '没成功，已打开官方下载页手动下载：' : '没成功：') + (r.error || r.message || ''), 12000);
       }
       return done((r && r.message) || '已结束', r && r.phase === 'done' ? 6000 : 10000);
+    }
+    // CodeAgent 账号用不了（core/known-issues.js codeagent-account-unusable）：打开个人账号的 W3 登录窗口。
+    if (act === 'known:codeagent-personal-login') {
+      const r = await ipcRenderer.invoke('codeagent-pool:personal-login');
+      if (r && r.ok === false) throw new Error(r.error || '登录窗口没能打开');
+      return done('已打开登录窗口：登录成功后点「重新启动反代」', 10000);
     }
     if (act === 'known:proxy-restart') {
       say('正在重新启动…');
@@ -414,6 +492,9 @@ async function runKnownAction(act, button, { doc, ipcRenderer, closeOverlays }) 
 }
 
 // ---- 安装：全局接口 + 点击委托 ----
+function askHubQuestion(ctx = {}) {
+  return require('./help-ask-ui').errorQuestion({ ...ctx, areaLabel: ctx.area ? areaLabel(ctx.area) : '' });
+}
 function contextOf(button, sessionKind) {
   const host = button.closest('[data-hub-err-area]');
   if (!host) return {};
@@ -447,6 +528,13 @@ function install({ document: doc, window: win, ipcRenderer, sessionKind = null }
     openFeedback: () => (win.__hubFeedback?.open ? prefill => win.__hubFeedback.open(prefill) : null),
     notify: (message, level) => (typeof win.showToast === 'function' ? win.showToast(message, level) : showErrorToast(doc, message)),
   });
+  // 问问 Hub 面板是右侧抽屉：先收起挡在上面的模态弹窗，再带着报错提问。
+  const askHub = ctx => {
+    const helpAsk = win.__hubHelpAsk;
+    if (!helpAsk || typeof helpAsk.ask !== 'function') return { ok: false, reason: '这个版本没有问问 Hub' };
+    closeOverlays();
+    return helpAsk.ask(askHubQuestion(ctx));
+  };
   win.HubErrorCard = { html, assistHtml, knownHtml, showErrorToast: (message, options) => showErrorToast(doc, message, options) };
   win.HubAssist = assist;
 
@@ -461,6 +549,8 @@ function install({ document: doc, window: win, ipcRenderer, sessionKind = null }
     const knownBtn = event.target.closest?.('[data-hub-err-act^="known:"]');
     if (knownBtn) {
       event.preventDefault(); event.stopPropagation();
+      // 「一键反馈（带日志）」：认不出对症动作的报错的主按钮，和求助区的「一键反馈」同一条路。
+      if (knownBtn.dataset.hubErrAct === 'known:feedback') { if (!knownBtn.disabled) assist.feedback(contextOf(knownBtn, sessionKind)); return; }
       if (!knownBtn.disabled) void runKnownAction(knownBtn.dataset.hubErrAct, knownBtn, { doc, win, ipcRenderer, closeOverlays });
       return;
     }
@@ -470,6 +560,7 @@ function install({ document: doc, window: win, ipcRenderer, sessionKind = null }
     event.stopPropagation();
     const ctx = contextOf(button, sessionKind);
     if (button.dataset.hubErrAssist === 'feedback') { assist.feedback(ctx); return; }
+    if (button.dataset.hubErrAssist === 'ask-hub') { askHub(ctx); return; }
     button.disabled = true;
     const label = button.textContent;
     button.textContent = '正在打开…';
@@ -489,4 +580,4 @@ function install({ document: doc, window: win, ipcRenderer, sessionKind = null }
   return assist;
 }
 
-module.exports = { html, assistHtml, knownHtml, createHubAssist, buildPrompt, troubleshootManualPath, CONCLUSION_FORMAT, showErrorToast, install, areaLabel, AREA_LABELS };
+module.exports = { html, assistHtml, knownHtml, createHubAssist, askHubQuestion, buildPrompt, troubleshootManualPath, CONCLUSION_FORMAT, showErrorToast, install, areaLabel, AREA_LABELS };

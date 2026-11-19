@@ -113,6 +113,34 @@ async function run() {
     evidence.workTime.after = await c.eval(netText);
     evidence.workTime.rules = await c.eval(`document.querySelector('#company-attendance-page .att-rules')?.innerText || ''`);
     await c.eval(`(()=>{const r=document.querySelector('#company-attendance-page .att-rules');r&&r.scrollIntoView()})()`); await shot('10-加班口径-自定义后');
+    // 弹性工作制（2026-11-20）：恢复默认工作时间 → 勾选弹性制、核心时段 10:00–16:00、每天 8 小时 → 保存；月净加班应按在岗时长重算。
+    evidence.flex = { fixedNet: await c.eval(`document.querySelector('#company-attendance-page .att-hero .v')?.textContent || ''`) };
+    await clickSel('#company-attendance-page [data-att="settings"]'); await sleep(300);
+    if (!(await c.eval(`!!document.querySelector('#company-attendance-page [data-x="on"]')`))) { await clickSel('#company-attendance-page [data-att="settings"]'); await sleep(300); }
+    await clickSel('#company-attendance-page [data-att="worktime-reset"]');
+    await clickSel('#company-attendance-page [data-x="on"]');
+    await shot('11-设置-弹性工作制');
+    await clickSel('#company-attendance-page [data-att="save"]'); await sleep(800);
+    await c.eval(`document.querySelector('#company-attendance-page .att-scroll').scrollTop=0`);
+    await wait(`/弹性制/.test(document.querySelector('#company-attendance-page .att-hero-sub')?.textContent||'')`, 'flex hero', 10000);
+    evidence.flex.flexNet = await c.eval(`document.querySelector('#company-attendance-page .att-hero .v')?.textContent || ''`);
+    evidence.flex.heroSub = await c.eval(`document.querySelector('#company-attendance-page .att-hero-sub')?.textContent || ''`);
+    evidence.flex.saved = await c.eval(`ipcRenderer.invoke('company-attendance:status').then(s=>({flex:s.settings.flex,rulesFlex:s.rules.flex,coreStart:s.rules.coreStart}))`);
+    evidence.flex.pageScrolls = await c.eval(`(()=>{const p=document.querySelector('#company-attendance-page .att-scroll');return [p.scrollHeight,p.clientHeight]})()`);
+    await shot('12-弹性制-首屏');
+    await clickSel('#company-attendance-page .att-day[data-date="2026-11-05"]');
+    await wait(`document.querySelector('#company-attendance-page .att-dpanel')`, 'flex drawer');
+    await clickSel('#company-attendance-page [data-att="view"][data-v="time"]'); await sleep(300);
+    await shot('13-弹性制-时间轴');
+    await clickSel('#company-attendance-page [data-att="view"][data-v="ledger"]');
+    await wait(`document.querySelector('#company-attendance-page .att-ledger')`, 'flex ledger');
+    evidence.flex.ledgerHead = await c.eval(`document.querySelector('#company-attendance-page .att-ledger thead')?.innerText || ''`);
+    await shot('14-弹性制-账本');
+    await clickSel('#company-attendance-page .att-x'); await sleep(300);
+    await c.eval(`(()=>{const r=document.querySelector('#company-attendance-page .att-rules');if(r){r.setAttribute('open','');r.scrollIntoView()}})()`);
+    evidence.flex.rules = await c.eval(`document.querySelector('#company-attendance-page .att-rules')?.innerText || ''`);
+    await shot('15-弹性制-加班口径');
+    await c.eval(`document.querySelector('#company-attendance-page .att-scroll').scrollTop=0`);
     evidence.layout = await c.eval(`(()=>{const p=document.getElementById('company-attendance-page');const r=s=>{const e=p.querySelector(s);if(!e)return null;const b=e.getBoundingClientRect();return [Math.round(b.top),Math.round(b.height)]};return {pageTop:p.style.top,pageScroll:p.scrollTop,head:r('.att-head'),panel:r('.att-panel'),scroll:r('.att-scroll'),scrollTop:p.querySelector('.att-scroll').scrollTop}})()`);
     evidence.fonts = await c.eval(`(()=>{const s={};for(const e of document.querySelectorAll('#company-attendance-page *')){if(!e.offsetParent)continue;const own=[...e.childNodes].some(n=>n.nodeType===3&&n.textContent.trim());if(!own)continue;const f=parseFloat(getComputedStyle(e).fontSize);s[f]=(s[f]||0)+1}return s})()`);
     evidence.overflowX = await c.eval(`(()=>{const p=document.querySelector('#company-attendance-page .att-scroll');return p.scrollWidth>p.clientWidth})()`);
@@ -123,7 +151,7 @@ async function run() {
     if (hub) await gracefulQuit(hub).catch(() => {});
     srv.close();
   }
-  console.log(JSON.stringify({ out, error: evidence.error || null, sync: evidence.sync, rendererErrors: evidence.rendererErrors.length, overflowX: evidence.overflowX }));
+  console.log(JSON.stringify({ out, error: evidence.error || null, sync: evidence.sync, rendererErrors: evidence.rendererErrors.length, overflowX: evidence.overflowX, flex: evidence.flex && { fixedNet: evidence.flex.fixedNet, flexNet: evidence.flex.flexNet } }));
   if (evidence.error) process.exitCode = 1;
 }
 run();

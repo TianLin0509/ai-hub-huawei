@@ -40,7 +40,8 @@ const upstreamOf = c => (c?.upstream === 'gateway' ? 'gateway' : 'company');
 function connection(raw, kind) {
   if (kind === 'deepseek-acp') {
     const c = raw.acp?.companyApi || {};
-    return c.backend === 'proxy' ? { backend: 'proxy', model: c.model || '', upstream: upstreamOf(c) } : c;
+    if (c.backend === 'proxy') return { backend: 'proxy', model: c.model || '', upstream: upstreamOf(c) };
+    return c.baseURL || c.apiKey || c.model ? { baseURL: c.baseURL || '', apiKey: c.apiKey || '', model: c.model || '' } : {};
   }
   const p = raw.providers?.[kind] || {};
   if (p.backend === 'proxy') return { backend: 'proxy', model: p.model || '', upstream: upstreamOf(p) };
@@ -50,13 +51,12 @@ function connection(raw, kind) {
 function backendOf(p) { return p.backend === 'proxy' ? 'proxy' : (p.baseURL || p.apiKey || p.model) ? 'api' : 'local'; }
 // The tool's own source while company models are chosen (kept so the launch center can switch back in one click).
 function ownStash(raw, kind) {
-  if (kind === 'deepseek-acp') return null;
-  const o = raw.providers?.[kind]?.own_api;
+  const o = kind === 'deepseek-acp' ? raw.acp?.companyApi?.own_api : raw.providers?.[kind]?.own_api;
   return o && typeof o === 'object' ? { baseURL: o.base_url || '', apiKey: o.api_key || '', model: o.model || '', wireApi: o.wire_api || 'responses' } : null;
 }
 // own: what the launch center's own-source card starts (Claude/Codex): 自有接口 (api) with its model, or CLI 默认 (local).
+// DSH（2026-11-20）：公司版 DSH 没有「CLI 本机配置」可沿用，自有来源只有自有接口；没填过就是 local（启动中心不显示自有卡）。
 function ownSource(raw, kind) {
-  if (kind === 'deepseek-acp') return null;
   const p = connection(raw, kind);
   const o = p.backend === 'proxy' ? ownStash(raw, kind) || {} : p;
   return { backend: (o.baseURL || o.apiKey || o.model) ? 'api' : 'local', model: o.model || '' };
@@ -96,7 +96,12 @@ function withSettings(raw, request = {}) {
     if (gateway && !gatewayStore().configured(dataDir())) throw new Error('请先在「API 网关」里粘贴 API key 并保存');
     const model = gateway ? gatewayStore().resolveModel(dataDir(), request.model) : proxyModels().normalizeModel(request.model);
     const upstream = gateway ? { upstream: 'gateway' } : {};
-    if (kind === 'deepseek-acp') return { ...raw, acp: { ...raw.acp, companyApi: { backend: 'proxy', model, ...upstream } } };
+    if (kind === 'deepseek-acp') {
+      // 切到公司模型或 API 网关时留住 DSH 的自有接口，启动中心一键切回（2026-11-20）。
+      const cur = raw.acp?.companyApi || {};
+      const keep = cur.backend === 'proxy' ? cur.own_api : (cur.baseURL || cur.apiKey || cur.model) ? { base_url: cur.baseURL || '', api_key: cur.apiKey || '', model: cur.model || '' } : null;
+      return { ...raw, acp: { ...raw.acp, companyApi: { backend: 'proxy', model, ...upstream, ...(keep ? { own_api: keep } : {}) } } };
+    }
     const { base_url, api_key, wire_api, own_api, upstream: _upstream, ...rest } = raw.providers?.[kind] || {};
     // Keep the tool's own interface (address, Key, model) to switch back to it later from the launch center.
     const current = connection(raw, kind);
@@ -106,9 +111,12 @@ function withSettings(raw, request = {}) {
   }
   // Launch center "own source" card: back to the kept own interface, or to the CLI's own configuration.
   if (request.backend === 'own') {
-    if (kind === 'deepseek-acp') throw new Error('DSH 在公司版只能用公司模型');
     const current = connection(raw, kind);
     const own = current.backend === 'proxy' ? ownStash(raw, kind) : current;
+    if (kind === 'deepseek-acp') {
+      if (!own?.baseURL) throw new Error('DSH 还没有保存过自有接口：请到「设置 → 自有 API → DSH → 自有接口」填写地址和模型');
+      return { ...raw, acp: { ...raw.acp, companyApi: { baseURL: own.baseURL, apiKey: own.apiKey || '', model: own.model || '' } } };
+    }
     const { own_api, upstream: _up, ...rest } = raw.providers?.[kind] || {};
     const p = own && (own.baseURL || own.apiKey || own.model) ? own : { baseURL: '', apiKey: '', model: '', wireApi: 'responses' };
     return { ...raw, providers: { ...raw.providers, [kind]: { ...rest, backend: 'api', base_url: p.baseURL, api_key: p.apiKey, model: p.model,
@@ -142,9 +150,12 @@ function applyCompanyConfig(config, raw) {
   }
   config.codexApiWireApi = connection(raw, 'codex').wireApi || 'responses';
   const dsh = connection(raw, 'deepseek-acp');
-  config.dshBackend = dsh.backend === 'proxy' ? 'proxy' : 'local';
+  // DSH 自有接口（2026-11-20）：填了接口地址就直连（core/company-model-proxy.js dshOwnRoute），不再一律当「没配」。
+  config.dshBackend = dsh.backend === 'proxy' ? 'proxy' : dsh.baseURL ? 'api' : 'local';
   config.dshUpstream = dsh.backend === 'proxy' ? dsh.upstream : '';
-  config.dshApiModel = dsh.backend === 'proxy' ? (dsh.model || (dsh.upstream === 'gateway' ? gatewayStore().PREFERRED_MODEL : proxyModels().DEFAULT_MODEL)) : '';
+  config.dshApiModel = dsh.backend === 'proxy' ? (dsh.model || (dsh.upstream === 'gateway' ? gatewayStore().PREFERRED_MODEL : proxyModels().DEFAULT_MODEL)) : dsh.model || '';
+  config.dshApiBaseUrl = config.dshBackend === 'api' ? dsh.baseURL : '';
+  config.dshApiKey = config.dshBackend === 'api' ? dsh.apiKey || '' : '';
   config.companyProxyEnabled = anyProxy(raw);
   config.proxy = '';
   return config;
@@ -155,7 +166,12 @@ function assertLaunchConfigured(kind, config) {
   const gatewayReady = () => { if (!gatewayStore().configured(dataDir())) throw new Error('API 网关还没配置好：请到「设置 → 模型线路 → API 网关」粘贴 key 并保存。'); };
   if (kind === 'deepseek-acp') {
     if (config.dshBackend === 'proxy') { if (config.dshUpstream === 'gateway') gatewayReady(); return; }
-    throw new Error('DSH 请先在「自有 API」里选择「公司模型（经本机反代）」，或先使用 Claude Code、Codex。');
+    if (config.dshBackend === 'api') {
+      baseUrl(config.dshApiBaseUrl);
+      if (!config.dshApiModel) throw new Error('DSH 自有接口还没填模型名：请到「设置 → 自有 API → DSH → 自有接口」点「测试连接」选一个模型后保存。');
+      return;
+    }
+    throw new Error('DSH 还没选模型来源：请到「设置 → 自有 API → DSH」选「API 网关」（部门发的 key）、「公司模型」（CodeAgent 账号）或「自有接口」（自己的 OpenAI 兼容地址）。');
   }
   if (config[kind + 'Backend'] === 'proxy') {
     if (config[kind + 'Upstream'] === 'gateway') { gatewayReady(); return; }

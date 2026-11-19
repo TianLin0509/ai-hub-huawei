@@ -39,6 +39,9 @@ function createHelpAskService({ getHubDataDir, distribution = require('../core/d
     const controller = new AbortController();
     running = controller;
     try {
+      // 报错卡带进来的文字可能含令牌、本机路径、工号、Cookie：交给模型和写记录前统一脱敏（复审补点）
+      const { redact } = require('../core/hub-feedback');
+      question = redact(String(question || ''));
       const result = await engine.ask({ question, history, signal: controller.signal });
       record({ at: new Date().toISOString(), q: String(question || '').slice(0, 300), ok: !!result.ok, engine: result.engine || '',
         model: result.model || '', ms: result.ms || 0, timedOut: !!result.timedOut, cancelled: !!result.cancelled, error: result.ok ? '' : String(result.error || '').slice(0, 300) });

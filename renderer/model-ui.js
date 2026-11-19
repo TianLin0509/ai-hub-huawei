@@ -405,7 +405,26 @@ function createModelUiController({
     // CodeAgent：每个模型旁的今日用量、负载、Credit 系数（/model 菜单里读到的，core/codeagent-usage-menu.js）；没数据不显示。
     const usageEntry = /^codeagent/.test(String(kind)) && globalThis.codeagentQuotaBar && typeof globalThis.codeagentQuotaBar.usageFor === 'function'
       ? globalThis.codeagentQuotaBar.usageFor(session.codeagentPoolAccount || 'personal') : null;
+    // 这个号用不了的模型（core/codeagent-models.js unavailableModels，2026-11-19 反馈「模型列表只保留能用的」）：
+    // 排在最后单列「暂不可用」，画灰，点了只在菜单里说明原因、不切换。
+    let greyedHeading = false;
     options.forEach((opt) => {
+      if (opt.unavailable) {
+        if (!greyedHeading) { greyedHeading = true; const cap = document.createElement('div'); cap.className = 'model-picker-cap'; cap.textContent = '暂不可用 · 点了看原因'; menu.appendChild(cap); }
+        const item = document.createElement('div');
+        item.className = 'model-picker-item disabled unavailable';
+        item.dataset.modelId = opt.id;
+        item.title = opt.unavailableReason || '这个号暂时用不了它';
+        item.innerHTML = `<span class="model-picker-check"></span><span class="model-picker-label">${escapeHtml(opt.label)}</span>`;
+        item.addEventListener('click', (event) => {
+          event.stopPropagation();
+          menu.querySelector('.model-picker-note[data-unavailable-note]')?.remove();
+          const note = menuNote(menu, `${opt.label} 暂时用不了：${opt.unavailableReason || '这个号暂时用不了它'}。`, 'warning');
+          note.dataset.unavailableNote = '1';
+        });
+        menu.appendChild(item);
+        return;
+      }
       const item = document.createElement('div');
       item.className = 'model-picker-item';
       if (!strategy) item.classList.add('disabled');

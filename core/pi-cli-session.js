@@ -215,6 +215,9 @@ class PiCliSession extends EventEmitter {
     if (this.runtime.state === 'waiting') throw Object.assign(new Error('pi 正在等你在终端里确认，处理后可继续发送'), { notSent: true });
     if (this.pending) throw Object.assign(new Error('上一条消息还在等 pi 确认，请稍候再发'), { notSent: true });
     const command = text.trimStart().startsWith('/');
+    // pi 一个模型都没有（没登录、Hub 也没有可用线路）：消息送进去 pi 只在终端里提示，Hub 这边石沉大海。当场说清，不送。
+    if (!command && !this.currentModel) throw Object.assign(new Error('pi 还没有可用的模型，这条消息没有发出。'
+      + '请在 pi 终端里 /login 登录或 /model 选模型；也可以在 Hub 设置里填 DeepSeek Key，或接入公司模型 / API 网关后新建 pi 会话'), { notSent: true });
     // pi 的输入框运行中也能收：回车会作为插话（steer），在当前步骤结束后送到。
     const steer = !command && this.runtime.state === 'running';
     const id = options.clientSubmissionId || randomUUID();

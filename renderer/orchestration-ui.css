@@ -46,3 +46,31 @@
 .mr-orch-decision.d-pass { color: #067647; }
 .mr-orch-decision.d-rework { color: #b42318; }
 .mr-orch-decision.d-open { color: #b54708; }
+
+/* 小队模式（2026-11-19）：进度条里的每一棒 + 设置弹层 */
+.mr-squad-steps { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.mr-squad-step { padding: 1px 8px; border-radius: 10px; border: 1px solid var(--border-subtle); background: var(--surface-card, transparent); font-size: 11.5px; white-space: nowrap; }
+.mr-squad-step.is-running { background: var(--accent, var(--mark-indigo)); border-color: var(--accent, var(--mark-indigo)); color: #fff; }
+.mr-squad-step.is-done { color: var(--status-success, #1a7f45); border-color: currentColor; }
+.mr-squad-step.is-failed, .mr-squad-step.is-stopped { color: var(--status-danger, #d1372b); border-color: currentColor; }
+.mr-squad-pop {
+  position: fixed; z-index: 2000; width: 420px; max-width: calc(100vw - 24px); padding: 14px 16px;
+  background: var(--surface-elevated, var(--surface-card, #fff)); color: var(--fg-strong, var(--text));
+  border: 1px solid var(--border-subtle); border-radius: 10px; box-shadow: 0 8px 28px rgba(0, 0, 0, .18); font-size: 13px;
+}
+.mr-squad-pop h3 { margin: 0 0 4px; font-size: 15px; }
+.mr-squad-intro, .mr-squad-notes { color: var(--fg-muted); line-height: 1.6; margin: 0 0 8px; }
+.mr-squad-notes { padding-left: 18px; font-size: 12px; }
+.mr-squad-warn, .mr-squad-error { color: var(--status-danger, #d1372b); margin: 4px 0; }
+.mr-squad-field { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; color: var(--fg-muted); }
+.mr-squad-field select, .mr-squad-field input {
+  padding: 5px 8px; font: inherit; color: var(--fg-strong, var(--text)); background: var(--surface-card, transparent);
+  border: 1px solid var(--border-mid, var(--border-subtle)); border-radius: var(--radius-sm, 6px);
+}
+.mr-squad-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.mr-squad-buttons button {
+  padding: 4px 12px; font-size: 13px; cursor: pointer; border: 1px solid var(--border-mid, var(--border-subtle));
+  border-radius: var(--radius-sm, 6px); background: var(--surface-card, transparent); color: var(--fg-strong, var(--text));
+}
+.mr-squad-buttons button.primary { background: var(--accent, var(--mark-indigo)); border-color: var(--accent, var(--mark-indigo)); color: #fff; }
+.mr-squad-buttons button:disabled { opacity: .5; cursor: not-allowed; }

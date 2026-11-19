@@ -127,6 +127,10 @@ function collectTree(rootPid, childrenMap) {
   return seen;
 }
 
+const SHARED_SCAN_MS = 1_500;
+// 按采集函数分组共享（默认都是同一个 execFile），测试注入的假采集函数各自成组。
+const sharedScans = new WeakMap();
+
 function createProcessInspector(options = {}) {
   const execFile = options.execFile || execFileAsync;
   const now = options.now || Date.now;
@@ -143,7 +147,7 @@ function createProcessInspector(options = {}) {
   let previousCpu = new Map();
   let previousSampledAt = 0;
 
-  async function runOnce() {
+  async function enumerate() {
     const encoded = encodePowerShellCommand(PS_SCRIPT);
     const result = await execFile(powershellPath, [
       '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded,
@@ -162,6 +166,29 @@ function createProcessInspector(options = {}) {
       .map(normalizeRow)
       .filter(Boolean);
     if (processes.length === 0) throw new Error('process enumeration returned no rows');
+    return processes;
+  }
+
+  // 多个模块各自建了检查器，同一时刻常常一起要全机进程表；默认采集方式下共用
+  // 同一次正在跑的采集和 1.5 秒内的结果，少起几次 powershell。各实例的 CPU 增量照旧各算各的。
+  async function sharedEnumerate(fresh) {
+    if (options.powershellPath) return enumerate();
+    let sharedScan = sharedScans.get(execFile);
+    if (!sharedScan) { sharedScan = { rows: null, at: 0, pending: null }; sharedScans.set(execFile, sharedScan); }
+    // force 是要最新的（比如结束进程后确认它没了），不复用旧结果也不搭正在跑的那一趟。
+    if (fresh) return enumerate().then((rows) => { sharedScan.rows = rows; sharedScan.at = Date.now(); return rows; });
+    const t = Date.now();
+    if (sharedScan.rows && t - sharedScan.at >= 0 && t - sharedScan.at < SHARED_SCAN_MS) return sharedScan.rows;
+    if (!sharedScan.pending) {
+      sharedScan.pending = enumerate()
+        .then((rows) => { sharedScan.rows = rows; sharedScan.at = Date.now(); return rows; })
+        .finally(() => { sharedScan.pending = null; });
+    }
+    return sharedScan.pending;
+  }
+
+  async function runOnce(fresh) {
+    const processes = (await sharedEnumerate(fresh)).map(row => ({ ...row }));
 
     const sampledAt = now();
     const nextCpu = new Map();
@@ -202,7 +229,7 @@ function createProcessInspector(options = {}) {
     if (pending) return pending;
     pending = (async () => {
       try {
-        const value = await runOnce();
+        const value = await runOnce(force);
         cache = value;
         return value;
       } catch (err) {

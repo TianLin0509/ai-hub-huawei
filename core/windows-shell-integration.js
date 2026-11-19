@@ -399,6 +399,11 @@ function ensureWindowsShellIntegration({
  * 更新后任务栏就还是旧的。图标文件随解包目录一起更新（package.json asarUnpack），启动时把
  * 指向本程序的快捷方式图标改指向它。只改图标一项（'update'），每次启动最多写一遍；
  * 15 秒一拍的看门狗不调用这里，所以就算资源管理器把图标改回去也不会来回改。
+ *
+ * 2026-11-19（反馈 1e407a67「任务栏图标空白」）：同一台电脑先用安装版、后改用免安装版（或挪走/卸载了旧的），
+ * 任务栏固定项还指向已经不存在的旧 exe。两份程序同一个 AUMID，运行中的窗口被并进这个固定项，Windows 读不到
+ * 它的图标，就显示成空白。这里把「指向的 exe 已不存在、且带 Hub 的 AUMID」的快捷方式改指向当前程序和图标
+ * （保留快捷方式里原有的启动参数）；指向另一份还在的程序的，是用户自己的选择，不动。只有遇到这种死链的人才会被改到。
  */
 function refreshPackagedShortcutIcons({
   shell,
@@ -422,7 +427,24 @@ function refreshPackagedShortcutIcons({
   for (const file of candidates) {
     let details = null;
     try { if (!fsModule.existsSync(file)) continue; details = shell.readShortcutLink(file); } catch { continue; }
-    if (!details || normalizeWinPath(details.target) !== normalizeWinPath(execPath)) continue;
+    if (!details) continue;
+    if (normalizeWinPath(details.target) !== normalizeWinPath(execPath)) {
+      // 只认带 Hub 自己 AUMID 的（安装程序和 Hub 建的快捷方式都带）；只是 exe 同名不算（Codex 审查）。
+      const ours = details.appUserModelId === HUB_APP_USER_MODEL_ID;
+      if (!details.target || !ours || fsModule.existsSync(details.target)) continue;
+      // 只认「盘在、文件没了」：网络路径、暂时拔掉的移动盘或没挂上的盘，exe 可能只是暂时看不到，不动。
+      const root = path.parse(path.resolve(String(details.target))).root;
+      if (!root || root.startsWith(path.sep + path.sep) || root.startsWith('//') || !fsModule.existsSync(root)) continue;
+      try {
+        if (shell.writeShortcutLink(file, 'update', { target: execPath, cwd: path.dirname(execPath), icon: iconPath, iconIndex: 0 })) {
+          changed.push(file);
+          logger.log?.(`[windows-shell] ${path.basename(file)} 指向的程序已不存在（${details.target}），改指向当前程序`);
+        }
+      } catch (error) {
+        logger.warn?.(`[windows-shell] 失效快捷方式改指向失败 ${path.basename(file)}：${error.message}`);
+      }
+      continue;
+    }
     const icon = String(details.icon || '').replace(/,\s*-?\d+$/, '');
     if (normalizeWinPath(icon) === normalizeWinPath(iconPath)) continue;
     try {

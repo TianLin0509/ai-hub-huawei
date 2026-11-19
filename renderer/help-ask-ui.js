@@ -48,6 +48,19 @@ function answerBlocks(text) {
 
 function seconds(ms) { return ms >= 1000 ? `${Math.round(ms / 1000)} 秒` : `${ms} 毫秒`; }
 
+// 报错 → 问问 Hub 的提问：现象在前、原始报错截短在后，总长不超过面板输入上限（2000 字）。
+function errorQuestion({ areaLabel = '', title = '', symptom = '', details = '' } = {}, max = 2000) {
+  const cut = (v, n) => { const t = String(v == null ? '' : v).trim(); return t.length > n ? t.slice(0, n) + '…' : t; };
+  const lines = ['我在 Hub 里遇到一个报错：这是什么问题？我下一步该怎么做？'];
+  if (areaLabel) lines.push(`出错的地方：${cut(areaLabel, 40)}`);
+  if (title) lines.push(`界面提示：${cut(title, 200)}`);
+  if (symptom && symptom !== title) lines.push(`说明：${cut(symptom, 300)}`);
+  const head = lines.join('\n');
+  const room = max - head.length - 10;
+  if (details && room > 80 && String(details).trim() !== String(title).trim()) return `${head}\n原始报错：\n${cut(details, room)}`;
+  return head;
+}
+
 function attachHelpAsk({ document: doc, ipcRenderer, openPath = p => doc.defaultView?.openPreviewPanel?.(p, { preview: true }),
   openFeedback = prefill => doc.defaultView?.__hubFeedback?.open?.(prefill), now = Date.now } = {}) {
   if (!doc || !ipcRenderer || doc.getElementById('help-ask-panel')) return null;
@@ -215,7 +228,27 @@ function attachHelpAsk({ document: doc, ipcRenderer, openPath = p => doc.default
   function close() {
     if (!state.open) return;
     if (sending) void cancel(); // 关面板即取消，不在后台继续耗额度
+    askSeq += 1; // 检测引擎期间关掉面板：那次报错提问作废，不在后台发
     state.open = false; panel.hidden = true; syncButton();
+  }
+
+  // 报错卡旁的「问问 Hub」（2026-11-19 J 席）：带上报错文字打开面板并直接提问。
+  // 报错文字先放进输入框当草稿，发出去才清空：正在答上一题、没有可用引擎时都留在框里，装好引擎后点「提问」就能接着问。
+  // 检测引擎期间又点了别的报错：以最后一次为准；面板关了就不发。
+  let askSeq = 0;
+  function ask(question) {
+    const q = String(question || '').trim().slice(0, input.maxLength);
+    if (!state.open) open();
+    if (!q) return { ok: false, reason: 'empty' };
+    input.value = q;
+    if (sending) return { ok: true, queued: true };
+    const seq = ++askSeq;
+    void refresh().then(() => {
+      if (seq !== askSeq || !state.open || sending) return;
+      if (info && !info.engine) return; // 引导装引擎，问题留在输入框
+      if (input.value.trim() === q) void submit();
+    });
+    return { ok: true };
   }
 
   doc.addEventListener('click', event => {
@@ -225,7 +258,7 @@ function attachHelpAsk({ document: doc, ipcRenderer, openPath = p => doc.default
   });
   doc.addEventListener('keydown', event => { if (event.key === 'Escape' && state.open && panel.contains(doc.activeElement)) close(); });
   doc.defaultView?.addEventListener('resize', place);
-  return { open, close, cancel, isOpen: () => state.open, panel, submit };
+  return { open, close, cancel, ask, isOpen: () => state.open, panel, submit };
 }
 
-module.exports = { BUTTON_TITLE, SUGGESTIONS, helpAskButtonHtml, attachHelpAsk, answerBlocks, _state: state };
+module.exports = { BUTTON_TITLE, SUGGESTIONS, helpAskButtonHtml, attachHelpAsk, answerBlocks, errorQuestion, _state: state };

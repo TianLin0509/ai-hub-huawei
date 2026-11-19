@@ -7,6 +7,7 @@
  *   - 规定每天 8 小时，比额定多 0.5 小时，每个出勤工作日扣 0.5 小时，按月统计；
  *   - 周末、法定节假日整段在岗都算加班；月末周六是正常上班日，按工作日算；
  *   - 只算有打卡的时段，同一天离开后又回来，中间不算。
+ * 弹性工作制（可选，默认关）见 DEFAULT_FLEX 处说明。
  * 时间统一用「当天 00:00 起的分钟数」，次日凌晨为 1440 以上。 */
 
 const DEFAULT_RULES = Object.freeze({
@@ -42,11 +43,64 @@ function normalizeWorkTime(w = {}) {
   for (const key of Object.keys(t)) text[key] = clockText(t[key]);
   return { ok: !error, error, workTime: text, minutes: t };
 }
-function rulesFromWorkTime(w) {
+// 弹性工作制（2026-11-20，反馈「考勤不适用弹性工作制」）：默认关。开启后工作日不再看「几点前 / 几点后」，
+// 而是「当天在岗时长 − 不计工时的休息段 − 每日规定工时」= 当天净加班（可为负）；核心时段只用来标出没覆盖到的日子。
+// 休息段：午休（核心工作时间里的上午下班–下午上班）一律不计；晚饭段（下午下班–晚上加班起算）可选，默认也不计，
+// 这样按 09:00 准点上班的人，开不开弹性结果一样。周末、节假日仍整段算加班。
+const DEFAULT_FLEX = Object.freeze({ on: false, coreStart: '10:00', coreEnd: '16:00', dailyHours: 8, dinnerBreak: true });
+function normalizeFlex(f = {}) {
+  const src = f && typeof f === 'object' ? f : {};
+  const cs = toMinutes(src.coreStart ?? DEFAULT_FLEX.coreStart), ce = toMinutes(src.coreEnd ?? DEFAULT_FLEX.coreEnd);
+  const hours = Number(src.dailyHours ?? DEFAULT_FLEX.dailyHours);
+  let error = '';
+  if (cs == null || ce == null || cs >= 1440 || ce >= 1440) error = '核心时段要填成 时:分';
+  else if (cs >= ce) error = '核心时段的开始要早于结束';
+  else if (cs < 300) error = '核心时段不能早于 05:00（05:00 前算前一天）';
+  else if (!Number.isFinite(hours) || hours < 1 || hours > 16) error = '每日工时要在 1 到 16 小时之间';
+  const okVals = !error;
+  const flex = {
+    on: !!src.on,
+    coreStart: okVals ? clockText(cs) : DEFAULT_FLEX.coreStart,
+    coreEnd: okVals ? clockText(ce) : DEFAULT_FLEX.coreEnd,
+    dailyHours: okVals ? Math.round(hours * 4) / 4 : DEFAULT_FLEX.dailyHours,
+    dinnerBreak: src.dinnerBreak === undefined ? DEFAULT_FLEX.dinnerBreak : !!src.dinnerBreak,
+  };
+  return { ok: okVals, error, flex };
+}
+
+function rulesFromWorkTime(w, flexIn) {
   const n = normalizeWorkTime(w);
   const t = n.ok ? n.minutes : normalizeWorkTime(DEFAULT_WORK_TIME).minutes;
   const rated = (t.amEnd - t.amStart) + (t.pmEnd - t.pmStart);
-  return { amEnd: t.amStart, pmStart: t.eveningFrom, owePerWorkday: Math.max(0, REQUIRED_DAILY - rated), ratedMinutes: rated, workTime: n.ok ? n.workTime : { ...DEFAULT_WORK_TIME } };
+  const base = { amEnd: t.amStart, pmStart: t.eveningFrom, owePerWorkday: Math.max(0, REQUIRED_DAILY - rated), ratedMinutes: rated, workTime: n.ok ? n.workTime : { ...DEFAULT_WORK_TIME } };
+  const f = normalizeFlex(flexIn).flex;
+  if (!f.on) return base;
+  const breaks = [[t.amEnd, t.pmStart]];
+  if (f.dinnerBreak && t.eveningFrom > t.pmEnd) breaks.push([t.pmEnd, t.eveningFrom]);
+  return { ...base, flex: true, flexSettings: f, coreStart: toMinutes(f.coreStart), coreEnd: toMinutes(f.coreEnd), dailyRequired: Math.round(f.dailyHours * 60), breaks: breaks.filter(([a, b]) => b > a) };
+}
+// 计算用的口径子集（界面和后台红线提醒共用，免得两处各拼一份漏掉弹性字段）。
+function calcRules(r = {}) {
+  const out = { amEnd: r.amEnd, pmStart: r.pmStart, owePerWorkday: r.owePerWorkday };
+  if (r.flex) Object.assign(out, { flex: true, coreStart: r.coreStart, coreEnd: r.coreEnd, dailyRequired: r.dailyRequired, breaks: r.breaks || [] });
+  return out;
+}
+// 某段在岗时间里扣掉休息段后实际计工时的分钟数。
+function countedMinutes(a, b, breaks = []) {
+  let v = Math.max(0, b - a);
+  for (const [p, q] of breaks) v -= overlap(a, b, p, q);
+  return Math.max(0, v);
+}
+// 从 start 起要累计 need 分钟计工时，跳过休息段，最早几点能走。
+function leaveAfterCounted(start, need, breaks = []) {
+  let t = start, left = Math.max(0, need);
+  const bs = breaks.slice().sort((x, y) => x[0] - y[0]);
+  for (const [p, q] of bs) {
+    if (q <= t) continue;
+    if (p > t) { const run = p - t; if (run >= left) return t + left; left -= run; }
+    t = Math.max(t, q);
+  }
+  return t + left;
 }
 
 const WEEK = ['日', '一', '二', '三', '四', '五', '六'];
@@ -152,27 +206,40 @@ function buildDays(records, opts = {}) {
   for (const x of by.values()) {
     x.segs.sort((p, q) => p.a - q.a);
     const kind = dayKind(x.date, opts);
-    let span = 0, otAm = 0, otPm = 0, otRest = 0;
+    const first = x.segs[0];
+    const last = x.segs[x.segs.length - 1];
+    const singlePunch = x.segs.length === 1 && first.a === first.b;
+    const flexDay = !!rules.flex && isWorkKind(kind);
+    let span = 0, otAm = 0, otPm = 0, otRest = 0, worked = 0;
     for (const s of x.segs) {
       span += s.b - s.a;
       if (!isWorkKind(kind)) otRest += s.b - s.a;
+      else if (flexDay) worked += countedMinutes(s.a, s.b, rules.breaks);
       else {
         otAm += overlap(s.a, s.b, rules.dayStart, rules.amEnd);
         otPm += overlap(s.a, s.b, rules.pmStart, rules.dayStart + 1440);
       }
     }
     const d = parseDate(x.date);
-    const first = x.segs[0];
-    const last = x.segs[x.segs.length - 1];
-    const ot = otAm + otPm + otRest;
-    const owe = isWorkKind(kind) ? rules.owePerWorkday : 0;
+    let ot, owe, extra = {};
+    if (flexDay) {
+      // 只有一次打卡时算不出在岗时长：不计加班也不扣，单独标「缺卡」，免得一天扣满 8 小时。
+      const diff = singlePunch ? 0 : worked - rules.dailyRequired;
+      ot = Math.max(0, diff); owe = Math.max(0, -diff);
+      extra = { worked, required: singlePunch ? 0 : rules.dailyRequired, flex: true,
+        coreLate: !singlePunch && first.a > rules.coreStart, coreEarly: !singlePunch && last.b < rules.coreEnd };
+    } else {
+      ot = otAm + otPm + otRest;
+      owe = isWorkKind(kind) ? rules.owePerWorkday : 0;
+    }
     days.push({
       date: x.date, weekday: d.getDay(), weekdayName: WEEK[d.getDay()], kind, segs: x.segs,
       arrive: first.a, leave: last.b, arriveTag: first.ta, leaveTag: last.tb,
       span, otAm, otPm, otRest, ot, owe, net: ot - owe,
-      singlePunch: x.segs.length === 1 && first.a === first.b,
+      singlePunch,
       nightReturn: x.segs.some((s) => s.moved),
       manual: x.segs.some((s) => s.ta === '手' || s.tb === '手'),
+      ...extra,
     });
   }
   return days.sort((p, q) => (p.date < q.date ? 1 : -1));
@@ -207,12 +274,13 @@ function completedDays(days, todayKey) {
 }
 
 function summarize(days) {
-  const r = { days: days.length, workdays: 0, restDays: 0, span: 0, am: 0, pm: 0, rest: 0, gross: 0, owe: 0, net: 0, late22: 0, leaveSum: 0, arriveSum: 0 };
+  const r = { days: days.length, workdays: 0, restDays: 0, span: 0, am: 0, pm: 0, rest: 0, gross: 0, owe: 0, net: 0, late22: 0, leaveSum: 0, arriveSum: 0, worked: 0, coreMiss: 0, singlePunchDays: 0 };
   for (const x of days) {
     r.span += x.span; r.am += x.otAm; r.pm += x.otPm; r.rest += x.otRest; r.gross += x.ot; r.owe += x.owe;
     if (isWorkKind(x.kind)) {
       r.workdays += 1; r.leaveSum += x.leave; r.arriveSum += x.arrive;
       if (x.leave >= 22 * 60) r.late22 += 1;
+      if (x.flex) { r.worked += x.worked || 0; if (x.coreLate || x.coreEarly) r.coreMiss += 1; if (x.singlePunch) r.singlePunchDays += 1; }
     } else r.restDays += 1;
   }
   r.net = r.gross - r.owe;
@@ -237,7 +305,13 @@ function monthReport(days, ym, todayKey, opts = {}) {
   const budget = rules.monthCap - s.net;
   const perDay = left > 0 ? budget / left : null;
   const amAvg = s.workdays ? s.am / s.workdays : 0;
-  const leaveBy = perDay != null && perDay >= 0 ? rules.pmStart + perDay + rules.owePerWorkday - amAvg : null;
+  let leaveBy = perDay != null && perDay >= 0 ? rules.pmStart + perDay + rules.owePerWorkday - amAvg : null;
+  // 弹性制：今天几点走取决于几点到。今天已有上班卡就按它，没有就按本月平均到岗，再累计「规定工时 + 每天可加班」并跳过休息段。
+  if (rules.flex && leaveBy != null) {
+    const todayRec = isCurrent ? (days || []).find((x) => x.date === todayKey) : null;
+    const arrive = todayRec ? todayRec.arrive : s.avgArrive;
+    leaveBy = arrive == null ? null : leaveAfterCounted(arrive, rules.dailyRequired + perDay, rules.breaks);
+  }
   return {
     ym, ...s, monthWorkdays: total, leftWorkdays: left, projected, cap: rules.monthCap,
     over: s.net > rules.monthCap, willExceed: projected > rules.monthCap,
@@ -285,7 +359,7 @@ function fmtClock(min) {
 }
 
 module.exports = {
-  DEFAULT_RULES, DEFAULT_WORK_TIME, normalizeWorkTime, rulesFromWorkTime, WEEK, toMinutes, parseDate, dateKey, shiftDay, lastSaturday, dayKind, isWorkKind,
+  DEFAULT_RULES, DEFAULT_WORK_TIME, DEFAULT_FLEX, normalizeWorkTime, normalizeFlex, rulesFromWorkTime, calcRules, countedMinutes, leaveAfterCounted, WEEK, toMinutes, parseDate, dateKey, shiftDay, lastSaturday, dayKind, isWorkKind,
   normalizeRecord, mergeRecords, buildDays, monthWorkdays, remainingWorkdays, completedDays, summarize,
   monthReport, yearReport, fmtHours, fmtHm, fmtClock,
 };

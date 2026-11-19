@@ -30,14 +30,19 @@ const BACKGROUND_BATCH_MS = 250;
 function getTerminalBatchDelay(sessionManager, sessionId) {
   if (!sessionManager || typeof sessionManager.getSession !== 'function') return LIVE_BATCH_MS;
   const session = sessionManager.getSession(sessionId);
-  // 独立会话永远实时；群聊成员只有未聚焦时降频。
-  if (!session || !session.meetingId) return LIVE_BATCH_MS;
-  return sessionManager.focusedSessionId === sessionId ? LIVE_BATCH_MS : BACKGROUND_BATCH_MS;
+  if (!session) return LIVE_BATCH_MS;
+  const focused = sessionManager.focusedSessionId;
+  // 2026-11-20：独立会话原来不管看没看都 8ms 推一次（多个后台会话同时出字 = 每个约 125 次/秒进程间消息）。
+  // 现在和群聊成员一样：正在看的实时，其余 250ms 合并，数据一条不丢；切过去时 main.js 立即把攒着的推上去。
+  // 还不知道焦点（启动初期渲染层没报过）时保持实时。
+  if (!session.meetingId && !focused) return LIVE_BATCH_MS;
+  return focused === sessionId ? LIVE_BATCH_MS : BACKGROUND_BATCH_MS;
 }
 
-// 是否是「后台成员」——调用方据此决定要不要额外发一个轻量活动指示给房间。
+// 是否是「后台成员」——调用方据此决定要不要额外发一个轻量活动指示给房间（只对群聊成员）。
 function isBackgroundMember(sessionManager, sessionId) {
-  return getTerminalBatchDelay(sessionManager, sessionId) > LIVE_BATCH_MS;
+  const session = sessionManager && typeof sessionManager.getSession === 'function' ? sessionManager.getSession(sessionId) : null;
+  return !!(session && session.meetingId) && getTerminalBatchDelay(sessionManager, sessionId) > LIVE_BATCH_MS;
 }
 
 // 保留旧名字给外部调用点/测试：现在**任何会话的输出都要转发**，差别只在节奏。

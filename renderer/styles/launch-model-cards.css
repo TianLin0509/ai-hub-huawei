@@ -52,6 +52,11 @@
 }
 .crumb-model-route[data-route="proxy"] { background: var(--hw-brand-soft, #E7EFFE); color: var(--hw-brand, #0A59F7); }
 .crumb-model-route { flex: none; }
+/* 标题栏 Agent 标识（2026-11-19）：这个会话由哪个程序运行，紧跟状态点，排在模型线路前。 */
+.crumb-agent {
+  flex: none; margin-left: 8px; padding: 0 7px; border: 1px solid var(--hw-line, var(--border-subtle, #dfe3ea)); border-radius: 4px;
+  font-size: 11.5px; line-height: 18px; white-space: nowrap; color: var(--hw-text-2, var(--fg-muted));
+}
 /* API 网关排队中（2026-11-19）：首字前等待 10–30 秒常见，用暖色提示「在排队，不是卡住」。 */
 .crumb-model-route[data-gateway-waiting="1"] { background: #fdf3e0; color: #9a6a12; }
 /* 启动中心「用部门 API key」卡与就地配置（2026-11-19 同事反馈找不到入口） */

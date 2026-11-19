@@ -67,4 +67,23 @@ function recheckLaunchChoice({ dataDir, configDir, accountKey = 'personal', firs
     current, currentNewer: settingsAt > last.at, last: last.model, first });
 }
 
-module.exports = { FILE, lastModel, lastEntry, rememberModel, chooseLaunchModel, recheckLaunchChoice };
+// Hub 里「设为默认」的 CodeAgent 模型（config.json models.defaults.codeagent，2026-11-19 反馈 3b805ace「CodeAgent 设置默认模型不生效」、
+// 11e2dc81「怎么关掉默认的 W3 模型」、24908907「热帖整理、助理会话用的默认模型不对」）。以前它只决定启动中心下拉预选哪项，
+// 而启动中心对 CodeAgent 一律显示「沿用」、不带选型标记，助理、热帖整理等自动会话也只看 CodeAgent 自己 settings.json 的 model，
+// 于是界面显示「默认 ✓」，实际谁都没用它。现在：用户没在这次明确选模型的新会话（手动、助理、热帖整理、AI 助理问答、Hub 助理）都先用它。
+// 只在这个号的模型清单可靠（authoritative）且清单里有它时才用；不在清单里（换号、权限收回）就照旧按账号默认，并在日志里写明原因。
+// 返回 { model, reason }：model 为空表示不用；reason：unset / list-unknown / not-in-list / applied。
+function hubDefaultModel(config, { models, authoritative, blocked = null } = {}) {
+  let saved = '';
+  try { saved = require('./default-model-preference').readDefaultModels(config || {}).codeagent || ''; } catch { saved = ''; }
+  if (!saved) return { model: '', reason: 'unset' };
+  const list = Array.isArray(models) ? models.filter(Boolean) : [];
+  if (!authoritative || !list.length) return { model: '', reason: 'list-unknown', saved };
+  const bare = String(saved).replace(/^(?:w3|built-in|builtin)\//i, '');
+  const hit = list.find(m => eq(m, saved)) || list.find(m => eq(m, bare)) || list.find(m => eq(m, bare + '-Auto'));
+  // 这个号用它报过「模型不存在」（界面已置灰，Codex 审查 P2-4）：不套，回到账号默认。
+  if (hit && blocked && typeof blocked.has === 'function' && blocked.has(hit.toLowerCase())) return { model: '', reason: 'unavailable', saved };
+  return hit ? { model: hit, reason: 'applied', saved } : { model: '', reason: 'not-in-list', saved };
+}
+
+module.exports = { FILE, lastModel, lastEntry, rememberModel, chooseLaunchModel, recheckLaunchChoice, hubDefaultModel };

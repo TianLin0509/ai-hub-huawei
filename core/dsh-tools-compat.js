@@ -36,6 +36,9 @@ function objectFields(source, start) {
 }
 function modeAcceptsNative(mode) {
   if (!mode) return null;
+  // dsh-tools 0.2.2 起 mode 字段改成 z.never()（说明写「Removed. Mount a native or PTC tool executor instead.」）：
+  // 再写 mode:'native' 会让 tools 插件校验失败、DSH 整个起不来（2026-11-20 隔离 E2E 实测：「DSH CLI 启动未确认」）。
+  if (/\b(?:Schema|z|s)\.never\s*\(/.test(mode)) return false;
   if (/\b(?:Schema|z|s)\.(?:string|String)\s*\(/.test(mode)) return true;
   if (/['"]native['"]/.test(mode)) return true;
   if (/\b(?:nullable|null|enum|union|const|literal)\b/i.test(mode)) return false;

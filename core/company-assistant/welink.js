@@ -21,7 +21,7 @@ const READ_ONLY = Object.freeze({
   '--version': [''],
 });
 // Hub 可自动维护登录、初始化日历；会话只读包装不开放这两条。
-const SETUP = Object.freeze({ auth: ['login'], mail: ['autodiscover'] });
+const SETUP = Object.freeze({ auth: ['login', 'logout'], mail: ['autodiscover'] });
 
 // 唯一放行的写命令（2026-10-18 用户同意）：手机对话往他自己选定的那个群发文字（phone.js）。
 // 只有 Hub 主进程传 sendGroup（设置里选定的群号）时才放行，而且群号必须一字不差；助理会话用的 welink-ro 永远不传。
@@ -91,16 +91,22 @@ function isCliFile(file) {
 function resolveCli({ env = process.env, configured = '', fsModule = fs, now = Date.now, execFileImpl = execFile } = {}) {
   const pick = [env.CLAUDE_HUB_WELINK_CLI, configured].find(p => p && isCliFile(p) && fsModule.existsSync(p));
   if (pick) return pick;
-  for (const dir of npmPrefixes(env, fsModule)) { const hit = cliUnder(dir, fsModule); if (hit) return hit; }
-  // 保留单次运行的只读包装能力：PATH 上的 exe 或 npm cmd 的兄弟 exe 可立即找到。
-  for (const dir of String(env.PATH || env.Path || '').split(path.delimiter).filter(Boolean)) {
-    const hit = cliUnder(dir.replace(/^"|"$/g, ''), fsModule);
-    if (hit) return hit;
-  }
   let caches = cliCaches.get(env);
   if (!caches) { caches = new WeakMap(); cliCaches.set(env, caches); }
   let cache = caches.get(fsModule);
-  if (!cache) { cache = { path: null, pending: false, at: -Infinity }; caches.set(fsModule, cache); }
+  if (!cache) { cache = { path: null, pending: false, at: -Infinity, missKey: null, missAt: -Infinity }; caches.set(fsModule, cache); }
+  // 2026-11-20 实测：没装 welink-cli 的电脑上，状态查询每次都把 PATH 每个目录再查两遍，空闲 1 分钟约 3700 次文件检查。
+  // 同一份 PATH 刚扫过没找到，10 秒内不再重扫（装好后最多 10 秒认到；设置里记的路径、环境变量指定的路径不受影响）。
+  const scanKey = String(env.PATH || env.Path || '');
+  if (!(cache.missKey === scanKey && now() - cache.missAt < 10000)) {
+    for (const dir of npmPrefixes(env, fsModule)) { const hit = cliUnder(dir, fsModule); if (hit) return hit; }
+    // 保留单次运行的只读包装能力：PATH 上的 exe 或 npm cmd 的兄弟 exe 可立即找到。
+    for (const dir of scanKey.split(path.delimiter).filter(Boolean)) {
+      const hit = cliUnder(dir.replace(/^"|"$/g, ''), fsModule);
+      if (hit) return hit;
+    }
+    cache.missKey = scanKey; cache.missAt = now();
+  }
   if (cache.path && fsModule.existsSync(cache.path)) return cache.path;
   cache.path = null;
   if (cache.pending || now() - cache.at < 60000) return null;
@@ -348,14 +354,60 @@ function loginUrlFromOutput(text) {
   const any = s.match(/https:\/\/[^\s"<>]+/g);
   return any ? any[any.length - 1] : null;
 }
+// 扫码登录没成功的原因（2026-11-19，依据黄区真机 welink-cli 1.0.20 exe 里的原文）：
+// 登录分三段——向服务器要二维码（qrcode/generate）→ 等手机扫码（qrcode/status）→ 用授权码换令牌（qrcode/login，回 sign/nonce/timestamp），
+// 期间还要经 WebSocket 向「本机 WeLink 桌面端」（127.0.0.1）取一份签名。后两段出错时 CLI 只打一行英文，以前 Hub 只说「没查到已登录」。
+// 排在前面的优先：同一次输出里既有网络错又有桌面端错时，按桌面端说。
+const LOGIN_CAUSES = Object.freeze([
+  { id: 'credentials', re: /credentials\s+corrupted|Credential\s+signature\s+verification\s+failed|Credential\s+decryption\s+failed/i,
+    title: '这台电脑上保存的 WeLink 登录信息损坏了', next: '点「清除并重新扫码」：Hub 先清掉本机旧的登录信息，再出新二维码。', action: 'relogin-clean' },
+  { id: 'pc-version', re: /WeLink\s+PC\s+version\s+may\s+be\s+incompatible/i,
+    title: 'WeLink 桌面端版本太旧', next: '把这台电脑上的 WeLink 桌面端升级到最新版，再点「重新获取二维码」。' },
+  { id: 'pc-busy', re: /WeLink\s+PC\s+may\s+be\s+busy|WeLink\s+PC\s+verification\s+timeout/i,
+    title: 'WeLink 桌面端暂时没回应', next: '等几秒再点「重新获取二维码」；仍不行就退出并重新打开 WeLink 桌面端。' },
+  { id: 'pc', re: /Cannot\s+connect\s+to\s+WeLink\s+PC|ensure\s+WeLink\s+PC\s+is\s+running|WeLink\s+PC\s+not\s+running|check\s+if\s+WeLink\s+PC\s+is\s+responding|WebSocket\s+Connect\s+Timeout/i,
+    title: '这台电脑上的 WeLink 桌面端没开或没响应', next: 'welink-cli 登录时要向本机的 WeLink 桌面端取一份签名。请打开这台电脑上的 WeLink 桌面端并登录本人账号，再点「重新获取二维码」。' },
+  { id: 'other-device', re: /sign\/nonce\/timestamp|invalid\s+sign\s+data|auth_sign_ws_failed|Sign\s+WebSocket\s+Failed|unknown_ws_error/i,
+    title: '没拿到登录签名：你的 WeLink 可能正登录在另一台电脑上', next: 'WeLink 同一时间只能在一台电脑上登录。请在这台电脑的 WeLink 桌面端登录本人账号（另一台会下线），确认登上后点「重新获取二维码」。' },
+  { id: 'code', re: /授权码(?:为空|已过期|无效)/,
+    title: '这次扫码的授权已失效', next: '点「重新获取二维码」再扫一次，扫完记得在手机上点确认。' },
+  { id: 'timeout', re: /QR\s+code\s+(?:scan\s+|login\s+)?time[d\s-]*out/i,
+    title: '二维码超时了，没等到扫码', next: '点「重新获取二维码」，出码后尽快用手机 WeLink 扫。' },
+  { id: 'qr-request', re: /QR\s+code\s+request\s+failed|Failed\s+to\s+parse\s+QR\s+code\s+response|Invalid\s+QR\s+code\s+response/i,
+    title: '没能从 WeLink 服务器拿到二维码', next: '多半是这台电脑没连上公司网络，或请求被公司代理拦了。确认已连公司网络后点「重新获取二维码」；仍不行点「一键反馈」。' },
+  { id: 'agent', re: /Agent\s+login\s+failed|授权码登录失败/i,
+    title: 'WeLink 服务器没接受这次登录', next: '点「重新获取二维码」再扫一次。连续不行时，常见原因是 WeLink 正登录在另一台电脑上，或账号还没开通 WeLink CLI；可点「一键反馈」带上日志。' },
+  { id: 'network', re: /Polling\s+error|Timeout\s+was\s+reached|Connection\s+timeout|Failed\s+to\s+resolve|Could\s+not\s+resolve|ECONNREFUSED|ETIMEDOUT|ECONNRESET/i,
+    title: '登录途中网络断了', next: '确认这台电脑连着公司网络，再点「重新获取二维码」。' },
+]);
+// 登录原文要显示在界面、带进一键反馈：先抹掉令牌、签名、授权头和长串编码（Codex 复审：JSON 里带引号的字段、Bearer 也要抹）。
+function scrubLine(text) {
+  return String(text || '')
+    .replace(/\b(Bearer|Basic)\s+[^\s"',}]+/gi, '$1 ***')
+    .replace(/(["']?\b(?:[\w-]*token|ticket|secret|password|sign|nonce|authorization|auth_code|uuid)["']?\s*[:=]\s*["']?)(?!(?:Bearer|Basic) \*\*\*)[^\s"',}]+/gi, '$1***')
+    // 长串编码：至少含一个字母或数字（二维码边框「+-----+」不算）。
+    .replace(/(?=[A-Za-z0-9+/_=-]*[A-Za-z0-9])[A-Za-z0-9+/_=-]{32,}/g, '***');
+}
+const LOGIN_STEP_LINE = /Token\s+expired,\s+refreshing|Token\s+refresh\s+failed|Proceeding\s+with\s+QR\s+code\s+login|Sign\s+data\s+expired\s+or\s+missing|Token\s+invalid\s+while\s+sign\s+expired|Obtaining\s+sign\s+via\s+WebSocket/i;
+function loginDiagnosis(text) {
+  const lines = String(text || '').split(/\r\n|\n|\r/).map(l => l.trim()).filter(Boolean);
+  for (const c of LOGIN_CAUSES) {
+    const line = lines.filter(l => c.re.test(l)).pop();
+    if (line) return { id: c.id, title: c.title, next: c.next, action: c.action || 'login', line: scrubLine(line).slice(0, 200) };
+  }
+  return null;
+}
 // 登录进度（显示用）：Waiting for scan... (elapsed N seconds) → 等待扫码；Scan successful → 已扫码；timeout/failed → 失败及原因。
+// 上面那张原因表里认得的行（如「Cannot connect to WeLink PC.」不含 fail/error 字样）也算失败。
 function loginProgress(text) {
   const lines = String(text || '').split(/\r\n|\n|\r/).map(l => l.trim()).filter(Boolean);
   let phase = null, elapsed = null, reason = '';
   for (const line of lines) {
     if (/^https?:\/\//i.test(line) || /not\s+displayed\s+correctly/i.test(line)) continue;
+    // 1.0.20 登录开头先试着刷新旧令牌，失败了接着出二维码；扫码后取签名前也会打「Sign data expired…」。这些是过程，不是失败。
+    if (LOGIN_STEP_LINE.test(line)) continue;
     const wait = /Waiting\s+for\s+scan/i.test(line);
-    if (/Scan\s+successful/i.test(line)) { phase = 'scanned'; reason = ''; } else if (/time[d\s-]*out|expired|fail|error|超时|失败|过期/i.test(line)) { phase = 'failed'; reason = line.slice(0, 200); } else if (wait) {
+    if (/Scan\s+successful/i.test(line)) { phase = 'scanned'; reason = ''; } else if (/time[d\s-]*out|expired|fail|error|超时|失败|过期/i.test(line) || LOGIN_CAUSES.some(c => c.re.test(line))) { phase = 'failed'; reason = scrubLine(line).slice(0, 200); } else if (wait) {
       phase = 'waiting'; reason = '';
       const n = /elapsed\s+(\d+)\s*s/i.exec(line); elapsed = n ? Number(n[1]) : elapsed ?? 0;
     } else if (!phase && /Obtaining\s+QR\s+code/i.test(line)) phase = 'obtaining';
@@ -405,4 +457,4 @@ function friendlyError(error) {
 }
 
 module.exports = { READ_ONLY, SETUP, checkArgs, isCliFile, resolveCli, findCliDeep, npmPrefixes, cliUnder, run, parseJson, parseJsonBig, groupMessages, groupMembers, loginState, calendarNeedsSetup,
-  qrFromLoginOutput, qrMatrixFromBlocks, qrBlocksFromMatrix, qrSvgDataUri, loginOutputGarbled, loginUrlFromOutput, loginProgress, loginNeedsScan, friendlyError, SPAWN_RETRY, AUTH_FAILURE };
+  qrFromLoginOutput, qrMatrixFromBlocks, qrBlocksFromMatrix, qrSvgDataUri, loginOutputGarbled, loginUrlFromOutput, loginProgress, loginNeedsScan, loginDiagnosis, LOGIN_CAUSES, scrubLine, friendlyError, SPAWN_RETRY, AUTH_FAILURE };

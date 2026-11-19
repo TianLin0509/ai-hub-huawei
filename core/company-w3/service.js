@@ -29,6 +29,28 @@ function readyUrlOf(url) {
   try { origin = new URL(url).origin; } catch { return /^$/; }
   return new RegExp('^' + origin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/(next/index\\w*\\.html)?$');
 }
+// 读不到门户时归成几类（2026-11-19 反馈 3b80a678、群里「刷新多次、免密已开仍打不开」）：页面按类写清原因和下一步。
+//   domain 没找到公司域名 · no-edge 本机没有 Edge · edge 后台浏览器没起来或中途断开 · login 停在登录页、没拿到账号
+//   unreachable 门户页面没打开（网络 / 代理）· timeout 打开了但查询超时 · query 查询出错 · other 其他
+function failureKind(r = {}) {
+  if (r.needsDomain) return 'domain';
+  const e = String(r.error || '');
+  if (r.needsLogin || /页面还没登录好|没有返回账号/.test(e)) return 'login';
+  if (/没有找到 Edge/.test(e)) return 'no-edge';
+  if (/无头 Edge 启动失败|无头 Edge 没有启动|连接无头 Edge|和无头 Edge 的连接断了|没有可用的取数方式/.test(e)) return 'edge';
+  if (/查询超时/.test(e)) return 'timeout';
+  if (/页面没有打开/.test(e)) return 'unreachable';
+  if (/查询出错|没有返回内容/.test(e)) return 'query';
+  return 'other';
+}
+// 盘符路径（C:\Users\…、D:/…）和网络路径（\\server\…）换成占位。
+function scrubPaths(text) {
+  // 先把 Users\用户名（含空格）整段换掉，再把剩下的路径换成占位。
+  return String(text).replace(/(Users|用户)[\\/][^\\/'"）)，。\r\n]+/gi, '$1\\<用户>')
+    .replace(/[A-Za-z]:[\\/][^\s'"）)，。]*/g, '<路径>').replace(/\\\\[^\s'"）)，。]+/g, '<路径>');
+}
+const LOG_FILE = 'company-w3.log';
+const LOG_MAX_BYTES = 128 * 1024;
 function dayKey(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
 
 class CompanyW3 {
@@ -109,8 +131,10 @@ class CompanyW3 {
           entry = { at, reason, ok: true, complete, tookMs: r.tookMs || 0, todo: snap.todo.length, apply: snap.apply.length, added: snap.added.todo.length, done: snap.done.todo.length, newDocs: snap.added.docs.length, partial: snap.partial, notices: notices.length };
           if (complete) st.lastSuccessAt = at;
           else st.lastPartialAt = at;
-        } else entry = { at, reason, ok: false, needsLogin: !!r.needsLogin, tookMs: r.tookMs || 0, error: r.error || '门户没有返回账号信息' };
+        } else entry = { at, reason, ok: false, needsLogin: !!r.needsLogin, tookMs: r.tookMs || 0, error: r.error || '门户没有返回账号信息', finalHost: r.finalHost || '', loginCopy: r.loginCopy || null };
       }
+      if (!entry.ok) entry.kind = failureKind(entry);
+      this.logLine(entry);
       st.log = [entry, ...(st.log || [])].slice(0, LOG_KEEP);
       st.lastResult = entry;
       this.write('state', st);
@@ -119,6 +143,18 @@ class CompanyW3 {
     return this.syncing;
   }
 
+  // 每次取数一行写进 logs/company-w3.log（只记结果类别、停在哪个域名、耗时、登录状态复制情况，不记待办内容），一键反馈会带上最近的日志。
+  logLine(entry) {
+    try {
+      const dir = path.join(this.deps.dataDir, 'logs'), file = path.join(dir, LOG_FILE);
+      fs.mkdirSync(dir, { recursive: true });
+      try { if (fs.statSync(file).size > LOG_MAX_BYTES) fs.writeFileSync(file, fs.readFileSync(file, 'utf8').slice(-LOG_MAX_BYTES / 2).replace(/^[^\n]*\n/, ''), 'utf8'); } catch { /* 还没有日志 */ }
+      const { at, reason, ok, kind, complete, tookMs, finalHost, loginCopy, needsLogin } = entry;
+      // 异常文字里可能带本机路径（含用户名），落盘前换成占位并截短。
+      const error = entry.error ? scrubPaths(entry.error).slice(0, 200) : entry.error;
+      fs.appendFileSync(file, JSON.stringify({ at, reason, ok, kind, complete, tookMs, error, finalHost, needsLogin, loginCopy, domainFrom: this.settings().domainFrom }) + '\n', 'utf8');
+    } catch { /* 日志写不进不影响取数 */ }
+  }
   snapshot() { return this.read('snapshot', null); }
   status() {
     const st = this.read('state', {});
@@ -150,4 +186,4 @@ class CompanyW3 {
   changed() { try { this.deps.onChanged?.(); } catch { /* 界面没开 */ } }
 }
 
-module.exports = { CompanyW3, portalUrl, readyUrlOf, DAY_START_HOUR };
+module.exports = { CompanyW3, portalUrl, readyUrlOf, failureKind, scrubPaths, DAY_START_HOUR };

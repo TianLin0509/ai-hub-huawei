@@ -93,6 +93,26 @@ function registerFirstRunIpc(ipcMain, { dataDir, isCompany, send, envCheck, tool
     void start(wanted).catch(error => console.warn('[first-run] 准备没跑完：' + error.message));
     return { ok: true };
   });
+
+  // 新同事首次引导（core/first-steps.js，2026-11-19 体验 8）：首页「连接你的 AI」的三步。
+  // 隔离实例（测试）默认不显示，设 AI_HUB_FIRST_STEPS=1 才显示，免得改变其他界面测试的首页。
+  const steps = require('../../core/first-steps');
+  ipcMain.handle('first-steps:state', (_event, request = {}) => {
+    try {
+      const decision = steps.decide({ state: steps.readState(dataDir()), sessionsCount: Math.max(0, Number(request.sessionsCount) || 0),
+        prepState: prep.readState(dataDir()), isolated: require('../../core/data-dir').isIsolatedHub(), forced: process.env.AI_HUB_FIRST_STEPS === '1' });
+      if (decision.write) steps.writeState(dataDir(), decision.write);
+      return { show: decision.show, reason: decision.reason, state: decision.state, firstPrompt: steps.FIRST_PROMPT };
+    } catch (error) { return { show: false, reason: 'error', error: error.message }; }
+  });
+  ipcMain.handle('first-steps:update', (_event, request = {}) => {
+    const state = steps.readState(dataDir()) || {};
+    const next = { ...state };
+    if (request.pick && typeof request.pick.kind === 'string') next.pick = { kind: request.pick.kind, model: String(request.pick.model || '') };
+    if (request.dismiss) next.dismissedAt = Date.now();
+    if (request.complete) { next.completedAt = Date.now(); next.completedBy = 'user'; }
+    return { ok: steps.writeState(dataDir(), next), state: next };
+  });
 }
 
 module.exports = { registerFirstRunIpc, cliFile };

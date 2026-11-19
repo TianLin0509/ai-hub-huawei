@@ -467,12 +467,19 @@ export function signerInitFailureMessage(code, { version, timeoutMs, detail, rep
     STAMP_NOT_PARSED: '签名记录格式认不出', STAMP_VERSION_MISMATCH: '签名记录的版本和安装的 CodeAgent 不一致' }[detail];
   const earlyExit = report?.cliStarted && report.stoppedBy === 'exit' && Number.isFinite(report.elapsedMs)
     ? `本次探测约 ${(report.elapsedMs / 1000).toFixed(1)} 秒后 CodeAgent 就退出了（退出码 ${Number.isInteger(report.cliExitCode) ? report.cliExitCode : '未知'}）${report.logExists === false ? '，未生成签名日志' : ''}。\n` : '';
+  // 探测里 CodeAgent 正常起来、几秒后自己以非 0 退出码结束、没写签名日志（反馈 11e4dff3 等 3 人 5 条，2026-11-19 m4 定界）：
+  // 同一台电脑上 serve 的模型清单也是空的，多半是 CodeAgent 账号本身用不了，重启反代解决不了，要先把话说到账号上。
+  const accountSuspect = !!(report?.cliStarted && report.stoppedBy === 'exit' && Number.isInteger(report.cliExitCode)
+    && report.cliExitCode !== 0 && report.logExists === false);
+  const accountHint = accountSuspect ? 'CodeAgent 一启动就报错退出，最常见的原因是 CodeAgent 账号本身现在用不了：没登录、登录过期，或这个号没有模型权限。\n' : '';
   const launchHint = report?.launchFailure === 'private-desktop'
     ? 'Windows 没能建立安全的后台运行环境，已停止启动；请用一键反馈附带诊断。\n'
     : report?.retrySuppressed === 'cleanup-unconfirmed' ? '上一次后台进程还没确认结束，已停止重试；请用一键反馈附带诊断。\n' : '';
-  return `公司模型暂时用不了：首次签名初始化没完成（${why}${step ? '：' + step : ''}）。\n` + earlyExit + launchHint +
+  return `公司模型暂时用不了：首次签名初始化没完成（${why}${step ? '：' + step : ''}）。\n` + earlyExit + accountHint + launchHint +
     `这一步会在后台启动 CodeAgent 命令行（不弹窗、不登录、不刷新登录），读取 CodeAgent ${version || ''} 的签名信息；首次启动没有留下日志时会换一种安全的后台方式重试一次。\n` +
-    '处理办法：确认 CodeAgent 已安装、已登录，在命令行里能正常对话；然后到「设置 → 自有 API」点「重新启动反代」再试一次。';
+    (accountSuspect
+      ? '处理办法：先点「个人账号重新登录」用自己的 W3 账号登录，登录成功后点「重新启动反代」，再新建会话；还不行点「问问 Agent」看日志。'
+      : '处理办法：确认 CodeAgent 已安装、已登录，在命令行里能正常对话；然后到「设置 → 自有 API」点「重新启动反代」再试一次。');
 }
 
 /**

@@ -42,6 +42,10 @@ if (group === '--version') {
   addPhoneMessage(arg('--sender') || 'user001', arg('--text') || '', arg('--at') ? Number(arg('--at')) : Date.now()); // --at：模拟旧消息
 } else if (group === 'auth' && sub === 'status') {
   out(loggedIn() ? 'UID: user001\nUser Token: VALID\n' : 'UID: user001\nUser Token: EXPIRED\n');
+} else if (group === 'auth' && sub === 'logout') {
+  // 2026-11-19：「退出 WeLink 登录」——清掉登录（真机原文见 welink-cli 1.0.20）。
+  if (stateFile) fs.writeFileSync(stateFile, 'expired');
+  out('All credentials and configuration have been cleared.\n');
 } else if (group === 'auth' && sub === 'login') {
   // 2026-10-22（v3.1.1）：按公司真机 welink-cli 1.0.14 的格式（回执 Q-1021-14）在 stdout 上用半块字符画二维码，
   // 矩阵是 welink-login-qr.json 里离线生成的真实二维码（内容 qrcode_content），框外四周各留 1 个白模块；框后是登录网页地址。
@@ -54,7 +58,16 @@ if (group === '--version') {
   const timeoutOutcome = words.includes('timeout');
   const scanWord = words.find(w => /^scan=\d+$/.test(w));
   const scanMs = Number(scanWord ? scanWord.slice(5) : process.env.WELINK_STANDIN_SCAN_MS || 2000);
-  if (mode === 'legacy') {
+  // 2026-11-19 新增三种失败（原文取自黄区真机 welink-cli 1.0.20）：
+  //   pc-missing（扫码后连不上本机 WeLink 桌面端）/ other-device（服务器没回 sign/nonce，常见于 WeLink 登录在另一台电脑）/
+  //   qr-fail=<毫秒>（要二维码卡住这么久后失败，模拟「点了扫码不弹二维码」）。
+  const afterScan = words.includes('pc-missing') ? 'Obtaining sign via WebSocket...\nError: Cannot connect to WeLink PC.\nPlease ensure WeLink PC is running.\n'
+    : words.includes('other-device') ? 'Response missing required fields (sign/nonce/timestamp).\n' : '';
+  const qrFail = words.find(w => /^qr-fail=\d+$/.test(w));
+  if (qrFail) {
+    out('Obtaining QR code...\n');
+    setTimeout(() => { out('QR code request failed (status 504)\n'); process.exitCode = 1; }, Number(qrFail.slice(8)));
+  } else if (mode === 'legacy') {
     out('请用 WeLink 扫码登录：\ndata:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==\n');
     setTimeout(() => { if (stateFile) fs.writeFileSync(stateFile, 'ok'); out('登录成功\n'); }, scanMs);
   } else {
@@ -75,8 +88,9 @@ if (group === '--version') {
     if (timeoutOutcome) setTimeout(() => { clearInterval(tick); out('\nQR code login timeout, please try again.\n'); process.exitCode = 1; }, scanMs);
     else setTimeout(() => {
       clearInterval(tick);
-      if (stateFile) fs.writeFileSync(stateFile, 'ok');
       out('\nScan successful! Obtaining login credentials...\n');
+      if (afterScan) { setTimeout(() => { out(afterScan); process.exitCode = 1; }, 800); return; }
+      if (stateFile) fs.writeFileSync(stateFile, 'ok');
       setTimeout(() => out('Login successful.\n'), 1500); // 真机换令牌要一会儿：面板此时显示「已扫码，正在登录…」
     }, scanMs);
   }

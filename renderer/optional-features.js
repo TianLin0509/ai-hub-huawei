@@ -22,7 +22,7 @@
 
   // 关着的功能收起左侧导航入口（2026-11-18 用户反馈）：主进程给 navHidden（用户在这里选过、且这项关着），
   // 这里只在 <html> 上记一个属性，CSS 按属性藏对应按钮；入口按钮由各页面脚本异步插入，用 CSS 不怕插入先后。
-  const NAV_BUTTONS = { assistant: '#btn-company-assistant', forum: '#btn-company-forum', attendance: '#btn-company-attendance', w3: '#btn-company-w3' };
+  const NAV_BUTTONS = { assistant: '#btn-company-assistant', forum: '#btn-company-forum', attendance: '#btn-company-attendance', w3: '#btn-company-w3', rooms: '#btn-company-rooms' };
   const navStyle = document.createElement('style');
   navStyle.id = 'optional-features-nav-style';
   navStyle.textContent = Object.entries(NAV_BUTTONS).map(([id, sel]) => `:root[data-of-nav-hidden~="${id}"] ${sel}`).join(', ') + ' { display: none !important; }';

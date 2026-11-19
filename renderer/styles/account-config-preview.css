@@ -289,6 +289,8 @@
 .model-picker-item.current { background: rgba(var(--rgb-brand-soft), 0.12); }
 .model-picker-item.disabled { opacity: 0.55; cursor: default; }
 .model-picker-item.disabled:hover { background: transparent; }
+.model-picker-item.unavailable { cursor: help; }
+.model-picker-cap { margin-top: 4px; padding: 6px 10px 2px; border-top: 1px solid var(--border-subtle, rgba(0,0,0,.08)); color: var(--fg-muted); font-size: 11px; }
 .model-picker-check { width: 12px; color: var(--brand-text); text-align: center; }
 .model-picker-label { flex: 1; font-weight: 500; }
 .model-picker-id { color: var(--mark-slate); font-size: 10px; font-family: var(--font-mono, ui-monospace, monospace); }

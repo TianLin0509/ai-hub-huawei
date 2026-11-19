@@ -7,6 +7,14 @@
 // 顺序就是优先级：更具体的排前面（证书被拦截排在「被公司网络拦截」前）。
 // 只管「给出解法」，不改原有的报错流程；认不出的不硬套。
 
+const CLI_NAMES = { claude: 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI', kimi: 'Kimi Code' };
+const CLI_IDS = { 'claude code': 'claude', codex: 'codex', 'gemini cli': 'gemini', 'kimi code': 'kimi' };
+function cliMissingId(m) {
+  if (m[1]) return CLI_IDS[m[1].toLowerCase()] || '';
+  return String(m[2] || m[3] || m[4] || '').toLowerCase();
+}
+function cliMissingName(m) { return m[1] || CLI_NAMES[cliMissingId(m)] || 'CLI'; }
+
 const KNOWN_ISSUES = [
   // DSH 没配套装好（2026-11-17 起分情况讲，core/dsh-cli-profile.js describeRuntimeIssue）：只装了桌面版的单独讲清「桌面版不是终端版」。
   // 一键修复默认装 Hub 自管的运行环境、不改全局 npm；「装到我的全局 npm」才按界面包要求配套装进用户自己的目录。
@@ -38,11 +46,22 @@ const KNOWN_ISSUES = [
     fix: '点「一键升级」：Hub 在后台运行 codeagent update，不弹命令行窗口；升级失败时会打开官方下载页让你下载重装。',
     action: { label: '一键升级', act: 'known:codeagent-upgrade' } },
   { id: 'cli-missing',
-    // core/community-provider.js「未找到 Claude Code CLI。请从首页「安装说明」安装 …」。
-    test: /未找到\s*(Claude Code|Codex|Gemini CLI|Kimi Code)\s*CLI/i,
-    title: m => `这台电脑上没找到 ${m[1]}`,
-    fix: m => `从首页「安装说明」装好 ${m[1]}，回到新建会话点「重新检测」，再到「账号」页登录。`,
-    action: null },
+    // core/community-provider.js「未找到 Claude Code CLI。请从首页「安装说明」安装 …」；
+    // core/group-chat-watcher.js 发送时终端停在 PowerShell「找不到命令」上（反馈 08441c2e）；
+    // PowerShell 原文：中文「无法将“claude”项识别为 cmdlet…」、英文「The term 'claude' is not recognized…」、
+    // 两种语言共有的「ObjectNotFound: (claude:String) [], CommandNotFoundException」（写成绝对路径时括号里是完整路径）。
+    test: /未找到\s*(Claude Code|Codex|Gemini CLI|Kimi Code)\s*CLI|无法将\s*["“]?(claude|codex|gemini|kimi)["”]?\s*项识别|The term\s+'(claude|codex|gemini|kimi)'\s+is not recognized|\((?:[^()\n]*[\\/])?(claude|codex|gemini|kimi)(?:\.exe|\.cmd)?:String\)[^\n]*CommandNotFoundException/i,
+    title: m => `这台电脑上没找到 ${cliMissingName(m)}`,
+    fix: m => {
+      const name = cliMissingName(m), id = cliMissingId(m);
+      return (id === 'claude' || id === 'codex')
+        ? `终端里找不到 ${name} 的程序，CLI 没启动起来，消息没有发出去。先在会话上点「重启」再试（Hub 会按检测到的完整路径启动）；还不行就点「一键安装 ${name}」（Hub 自管的一份，约 1 分钟，不改你已有的安装），装好后重启会话。`
+        : `从首页「安装说明」装好 ${name}，回到新建会话点「重新检测」，再到「账号」页登录。`;
+    },
+    action: m => {
+      const id = cliMissingId(m);
+      return id === 'claude' || id === 'codex' ? { label: `一键安装 ${cliMissingName(m)}`, act: `known:cli-install:${id}` } : null;
+    } },
   { id: 'claude-git-bash', areas: ['session-create', 'model-service', 'hub-alert'],
     // core/community-setup.js advisories「没找到 Git for Windows（Git Bash）…」；Claude Code 自己的「requires a shell tool. Git Bash was not found…」。
     test: /Git for Windows|git-bash|Git Bash/i,
@@ -55,6 +74,15 @@ const KNOWN_ISSUES = [
     title: '公司模型反代还在准备',
     fix: '反代刚启动或正在初始化（首次约 10–20 秒），稍等它就绪就能用；点下面的按钮会等它准备好后自动重试。',
     action: { label: '等它就绪后重试', act: 'known:proxy-wait' } },
+  // 签名探测里 CodeAgent 起来后自己以非 0 退出码结束、没写签名日志（core/company-proxy/upstream-profile.mjs signerInitFailureMessage
+  // 「约 N 秒后 CodeAgent 就退出了（退出码 1），未生成签名日志」；反馈 11e4dff3 等 3 人 5 条）：多半是账号本身用不了，
+  // 「重新启动反代」对它无效，主按钮换成个人账号重新登录（main/ipc/session-handlers.js codeagent-pool:personal-login）。排在 company-proxy-failed 前。
+  { id: 'codeagent-account-unusable', areas: ['company-proxy', 'session-create', 'codeagent', 'model-service', 'hub-alert', 'notice'],
+    test: /^(?![\s\S]*(?:后台进程还没确认结束|仍然没有送达))[\s\S]*首次签名初始化没完成[\s\S]{0,400}?CodeAgent 就退出了（退出码 ([1-9]\d*)），未生成签名日志/,
+    title: 'CodeAgent 账号现在用不了',
+    fix: m => `Hub 在后台试着启动 CodeAgent 取签名信息，它几秒后自己以退出码 ${m[1]} 结束了。最常见的原因是这个 CodeAgent 账号没登录、登录过期，或没有模型权限，光重新启动反代解决不了。先点「个人账号重新登录」用自己的 W3 账号登录，登录成功后点「重新启动反代」，再新建会话；还不行点「问问 Agent」让它看日志。`,
+    action: { label: '个人账号重新登录', act: 'known:codeagent-personal-login' },
+    more: [{ label: '重新启动反代', act: 'known:proxy-restart' }] },
   { id: 'company-proxy-failed', areas: ['company-proxy', 'session-create', 'codeagent', 'model-service', 'hub-alert', 'notice'],
     // main/company-proxy-service.js「公司模型反代没能启动」「反复退出，已停止自动重启」；core/company-proxy/server.mjs「公司模型反代启动失败：」。
     test: /^(?![\s\S]*(?:后台进程还没确认结束|仍然没有送达))[\s\S]*(?:公司模型反代(?:没能启动|反复退出|启动失败)|首次签名初始化没完成|CodeAgent 未收到签名初始化所需的测试输入)/,
@@ -112,7 +140,8 @@ function matchKnownIssue({ area = '', title = '', details = '', cause = '' } = {
     const m = issue.test.exec(text);
     if (!m) continue;
     const pick = v => (typeof v === 'function' ? v(m) : v);
-    return { id: issue.id, title: pick(issue.title), fix: pick(issue.fix), action: issue.action ? { ...issue.action, ...(issue.actionLabel && pick(issue.actionLabel) ? { label: pick(issue.actionLabel) } : {}) } : null,
+    const action = pick(issue.action);
+    return { id: issue.id, title: pick(issue.title), fix: pick(issue.fix), action: action ? { ...action,...(issue.actionLabel && pick(issue.actionLabel) ? { label: pick(issue.actionLabel) } : {}) } : null,
       more: (issue.more || []).map(a => ({ ...a })) };
   }
   return null;

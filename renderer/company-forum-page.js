@@ -3,7 +3,7 @@
 // 布局（一个页签一屏，不靠滚动条）：页头（同步状态、刷新、设置）→ 来源页签「发文 / 心声 / 稼先 / AI 看点」→ 当前来源的几个榜并排成列：
 //   发文三列（政策讲话 / 公司文件 / 公告），心声两列（24小时点击 / 24小时回复），稼先一个榜拆成两列。
 //   每列按可用高度算一页放几条，放不下的翻页；每条：名次、标题（点开用系统浏览器打开原文）、文号或阅读回复 · 时间、一句话摘要。
-//   新出现的发文带「新」标，页签上显示新发文条数。
+//   新出现的发文带「新」标，页签上显示新发文条数；点开看过的不再算新。
 // 某个站没能自动登录时，在它那一页显示「登录」按钮（弹出 Hub 自己的浏览器窗口，登录一次以后自动同步）。
 // 写法同助理页：盖在主区域上的一层，点左侧其他按钮自动关闭。左侧按钮只在公司版（gate.js）插入。
 function createCompanyForumPage({ document, window, ipcRenderer, closeOtherPanels = () => {}, showMessage }) {
@@ -90,11 +90,23 @@ function createCompanyForumPage({ document, window, ipcRenderer, closeOtherPanel
   const postKey = (site, title) => site + '|' + title;
   const sites = () => [...data.sites].sort((a, b) => (ORDER.indexOf(a.id) + 99) % 99 - (ORDER.indexOf(b.id) + 99) % 99);
   const entryOf = id => data.snapshot?.sites?.find(x => x.id === id) || null;
-  const isNew = p => !!p.firstSeen && data.now - p.firstSeen < NEW_MS;
+  // 点开看过的帖子不再标「新」（反馈 1d615be8：同步完点开看了仍显示「新」）。只记在本机 localStorage，键为「站点|标题」，48 小时后自动清掉。
+  const SEEN_KEY = 'hub.companyForum.seen.v1';
+  // 键用帖子自己的 id / 链接（同标题不同帖不串），都没有才用标题。
+  const SEEN_TTL = 2 * NEW_MS;
+  const seenKey = (siteId, p) => siteId + '|' + (p.id || p.url || p.title);
+  const fresh = at => Date.now() - at < SEEN_TTL;
+  let seen = (() => { try { const v = JSON.parse(window.localStorage?.getItem(SEEN_KEY) || '{}') || {}; for (const k of Object.keys(v)) if (!fresh(v[k])) delete v[k]; return v; } catch { return {}; } })();
+  function markSeen(key) {
+    seen[key] = Date.now();
+    for (const k of Object.keys(seen)) if (!fresh(seen[k])) delete seen[k];
+    try { window.localStorage?.setItem(SEEN_KEY, JSON.stringify(seen)); } catch { /* 存不下就只在本次打开期间生效 */ }
+  }
+  const isNew = (p, siteId) => !!p.firstSeen && data.now - p.firstSeen < NEW_MS && !(siteId && seen[seenKey(siteId, p)] && fresh(seen[seenKey(siteId, p)]));
   function sourcesHtml() {
     const tabs = sites().map(s => {
-      const entry = entryOf(s.id), fresh = (entry?.lists || []).flatMap(l => l.posts).filter(isNew).length;
-      const mark = entry?.needsLogin ? '<i class="cf-dot warn" title="没能自动登录"></i>' : entry && !entry.ok ? '<i class="cf-dot warn" title="没取到"></i>' : fresh ? `<i class="cf-new-n" title="24 小时内新出现的发文">${fresh} 新</i>` : '';
+      const entry = entryOf(s.id), fresh = (entry?.lists || []).flatMap(l => l.posts).filter(p => isNew(p, s.id)).length;
+      const mark = entry?.needsLogin ? '<i class="cf-dot warn" title="没能自动登录"></i>' : entry && !entry.ok ? '<i class="cf-dot warn" title="没取到"></i>' : fresh ? `<i class="cf-new-n" title="24 小时内新出现、还没点开看过的发文">${fresh} 新</i>` : '';
       return `<button type="button" role="tab" class="cf-source${source === s.id ? ' on' : ''}" data-cf="source" data-source="${s.id}" title="${esc(s.name)}">${esc(s.short)}${mark}</button>`;
     });
     const n = (data.snapshot?.overview || []).length;
@@ -158,10 +170,10 @@ function createCompanyForumPage({ document, window, ipcRenderer, closeOtherPanel
   }
   function postHtml(site, p) {
     const meta = [p.code, p.board, p.views != null ? '阅读 ' + num(p.views) : '', p.replies != null ? '回复 ' + num(p.replies) : '', p.likes != null ? '赞 ' + num(p.likes) : '', p.author, p.time ? when(p.time) : ''].filter(Boolean).map(esc).join(' · ');
-    const badge = isNew(p) ? '<i class="cf-new">新</i>' : '';
+    const badge = isNew(p, site.id) ? '<i class="cf-new">新</i>' : '';
     const title = p.url ? `<a href="#" class="cf-post-title" data-cf="open" data-url="${esc(p.url)}" title="${esc(p.title)}（点开用系统浏览器打开原文）">${badge}${esc(p.title)}</a>` : `<span class="cf-post-title plain" title="没取到链接">${badge}${esc(p.title)}</span>`;
     const sum = p.summary || p.abstract || '';
-    return `<li class="cf-post" data-key="${esc(postKey(site.id, p.title))}"><span class="cf-rank${p.rank <= 3 ? ' top' : ''}">${p.rank}</span><div class="cf-post-main">${title}<div class="cf-meta" title="${esc(sum)}">${meta}${sum ? `<span class="cf-sum">${meta ? ' — ' : ''}${esc(sum)}</span>` : ''}</div></div></li>`;
+    return `<li class="cf-post" data-key="${esc(postKey(site.id, p.title))}" data-seen="${esc(seenKey(site.id, p))}"><span class="cf-rank${p.rank <= 3 ? ' top' : ''}">${p.rank}</span><div class="cf-post-main">${title}<div class="cf-meta" title="${esc(sum)}">${meta}${sum ? `<span class="cf-sum">${meta ? ' — ' : ''}${esc(sum)}</span>` : ''}</div></div></li>`;
   }
   function panelHtml() {
     const s = data.settings;
@@ -207,7 +219,11 @@ function createCompanyForumPage({ document, window, ipcRenderer, closeOtherPanel
     }
     if (name === 'source') { source = el.dataset.source; render(); return; }
     if (name === 'page') { pageNo[el.dataset.key] = Math.max(0, Number(el.dataset.to) || 0); render(); return; }
-    if (name === 'open') { await call('open-url', { url: el.dataset.url }); return; }
+    if (name === 'open') {
+      const key = el.closest('.cf-post')?.dataset.seen;
+      if (key) { markSeen(key); render(); }
+      await call('open-url', { url: el.dataset.url }); return;
+    }
     if (name === 'login') { el.disabled = true; await call('login', { site: el.dataset.site }); await load(); return; }
     if (name === 'summarize') { await call('summarize'); await load(); return; }
     if (name === 'jump') {

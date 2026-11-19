@@ -2207,7 +2207,7 @@ test('model cards: two company models + the own source, status in plain words, r
   assert.equal(badge({ state: 'running', accounts: [{ id: 'a1', kind: 'pool', models: ['deepseek-v4.1-flash-1017'], modelsAuthoritative: true }, { id: 'personal', kind: 'personal' }] }, 'GLM-5.2-WX').text, '可用 · 个人号');
 });
 
-test('company API settings: picking company models keeps the own interface, the own card restores it; DSH has no own source', () => {
+test('company API settings: picking company models keeps the own interface, the own card restores it; DSH own source only once saved', () => {
   const api = require('../core/company-api-config');
   let raw = { providers: { codex: { backend: 'api', base_url: 'https://own.example/v1', api_key: 'sk-own', model: 'own-1', wire_api: 'chat' } } };
   raw = api.withSettings(raw, { kind: 'codex', backend: 'proxy', model: 'GLM-5.2-WX' });
@@ -2224,8 +2224,9 @@ test('company API settings: picking company models keeps the own interface, the 
   r2 = api.withSettings(r2, { kind: 'claude', backend: 'own' });
   assert.equal(api.settings(r2).claude.backend, 'local');
   assert.equal(api.settings({}).claude.companyModels.length, 2, 'company models listed even before choosing them');
-  assert.equal(api.settings({})['deepseek-acp'].own, null);
-  assert.throws(() => api.withSettings({}, { kind: 'deepseek-acp', backend: 'own' }), /只能用公司模型/);
+  // 2026-11-20 起 DSH 也有自有接口（tests/unit-own-model-dsh.test.js）：没填过时是 local，切回会说清没保存过。
+  assert.deepEqual(api.settings({})['deepseek-acp'].own, { backend: 'local', model: '' });
+  assert.throws(() => api.withSettings({}, { kind: 'deepseek-acp', backend: 'own' }), /还没有保存过自有接口/);
 });
 
 test('session card / title bar route: model, company model and the pool alias for the session tag', () => {

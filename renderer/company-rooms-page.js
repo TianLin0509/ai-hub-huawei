@@ -68,7 +68,7 @@ function dayLabel(iso) {
 }
 function resultTone(status) { return status === '成功' ? 'green' : status === '失败' ? 'red' : ''; }
 function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanels = () => {}, showMessage }) {
-  let host, footer, state = {}, draft = copy(DEFAULTS), tab = 'overview', dirty = false, busy = false, polling = false, timer, clockTimer, generation = 0, loaded = false, logCleared = '', logsShown = null;
+  let host, gate = null, footer, state = {}, draft = copy(DEFAULTS), tab = 'overview', dirty = false, busy = false, polling = false, timer, clockTimer, generation = 0, loaded = false, logCleared = '', logsShown = null;
   const changed = new Set();
   let draggedRoom = null;
   // 抢订节奏（提前天数 + 开放时刻）由 Hub 按园区推断并保存；schedChanged 表示设置页改过、保存时一起存。
@@ -113,6 +113,18 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
       <div class="cr-content" data-cr-slot="content"></div><footer class="cr-footer">${button('save', '保存设置', 'pri')}<span class="cr-save-state" data-cr-slot="save-state">设置保存在这台电脑</span></footer></div><aside class="cr-side" data-cr-slot="side" hidden></aside></div>`;
     footer = host.querySelector('.cr-footer');
     document.body.append(host);
+    // 可选功能「会议室」（默认开，2026-11-19 反馈 1b517a0b）：关着时盖一层说明和「开启」，不读状态、不拉起组件。
+    gate = require('./optional-feature-gate').createFeatureGate({ document, window, id: 'rooms', page: host, showMessage,
+      badgeSlot: b => host.querySelector('[data-cr-op="refresh"]')?.before(b), onEnabled: () => {} });
+    // 停在本页时被关掉：立刻停掉页面自己的轮询和时钟。
+    // 从关到开（页面上点「开启」或在设置里打开）：停在本页就恢复轮询；只认这一跳，免得和打开页面时的启动重复。
+    let roomsOn = null;
+    window.addEventListener('hub-optional-features', () => {
+      const on = !gate || gate.isOn();
+      if (!on) { clearInterval(timer); clearInterval(clockTimer); timer = null; clockTimer = null; }
+      else if (roomsOn === false && host && !host.hidden) void startLive();
+      roomsOn = on;
+    });
     host.addEventListener('input', event => {
       const e = event.target;
       if (e.matches('[data-cr-sched-field]')) { schedDraft.advanceDays = Number(e.value); dirty = true; schedChanged = true; }
@@ -357,7 +369,7 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
     slot('countdown-note').textContent = open ? `${whenLabel(open)}${state.connected && state.serverNow ? '（按服务器时间）' : ''}` : '接通后显示';
   }
   async function refresh() {
-    if (polling) return;
+    if (polling || (gate && !gate.isOn())) return;
     polling = true; const epoch = generation;
     try {
       const next = (await call('room-details')).rooms;
@@ -489,7 +501,13 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
     build(); closeOtherPanels();
     for (const key of ['__companyAssistantHide', '__companyMeetingHide', '__companyForumHide', '__companyAttendanceHide', '__companyW3Hide', '__profileHide', '__assistantHide', '__teamHide', '__avatarHide', '__cloudHide', '__wirelessHide', '__rulesHide', '__writingHide', '__xresearchHide', '__studyHide', '__ranHide']) window[key]?.();
     generation++; host.hidden = false; nav.classList.add('active'); window.setShellNavActive?.('company-rooms'); document.body.classList.add('company-rooms-page-open'); place(); render();
-    window.addEventListener('resize', place); clearInterval(timer); clearInterval(clockTimer);
+    window.addEventListener('resize', place); clearInterval(timer); clearInterval(clockTimer); timer = null; clockTimer = null;
+    if (gate && !(await gate.check())) return;
+    await startLive();
+  }
+  async function startLive() {
+    if (!host || host.hidden) return;
+    clearInterval(timer); clearInterval(clockTimer);
     timer = setInterval(() => { void refresh(); }, 3000); clockTimer = setInterval(updateClock, 1000);
     await refresh();
     if (!state.connected && state.available && !state.preparing && !state.error && !busy) await act('connect');

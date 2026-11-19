@@ -57,9 +57,12 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
   const profile = config.acp || {};
   const entry = profile.providers?.[kind];
   // 公司版 DSH 选了「公司模型」：经本机反代用 CodeAgent 账号（core/company-model-proxy.js），不走套餐和 DeepSeek 备用线路。
+  // 选了「自有接口」：用户自己的 OpenAI 兼容地址直连（2026-11-20），其余启动步骤与公司模型相同。
   const companyRoute = kind === 'deepseek-acp' && config.companyCli && config.dshBackend === 'proxy'
     ? require('./company-model-proxy').dshRoute({ dataDir, sessionId: opts.id, model: opts.model || config.dshApiModel, account: opts.companyProxyAccount,
-      gateway: config.dshUpstream === 'gateway' }) : null;
+      gateway: config.dshUpstream === 'gateway' })
+    : kind === 'deepseek-acp' && config.companyCli && config.dshBackend === 'api'
+      ? require('./company-model-proxy').dshOwnRoute({ baseURL: config.dshApiBaseUrl, apiKey: config.dshApiKey, model: config.dshApiModel }) : null;
   // 套餐额度用完且配了 DeepSeek Key 时，DeepSeek 旧 Harness 整条会话改走 DeepSeek 官方 API；千问 / GLM 等重置（core/token-plan-fallback.js）。
   const fallback = require('./token-plan-fallback');
   const requestedRoute = kind === 'deepseek-acp' ? opts.deepseekRoute : undefined;
@@ -91,12 +94,13 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
     const back = fallback.tokenPlanModel(model);
     model = catalog.acpModelOptions(kind).some(m => m.id === back) ? back : entry.model;
   }
-  const models = companyRoute ? (config.dshUpstream === 'gateway'
+  const models = companyRoute ? (companyRoute.own ? [{ id: model, label: model, source: 'own-api' }] : config.dshUpstream === 'gateway'
       ? require('./company-model-proxy').gatewayModelIds(dataDir).map(id => ({ id, label: id, source: 'company-proxy' }))
       : require('./company-model-proxy').MODELS.map(m => ({ ...m, source: 'company-proxy' })))
     : deepseekRoute ? fallback.FALLBACK_MODELS.map(id => ({ id, label: id, source: 'deepseek-api' }))
     : catalog.acpModelOptions(kind, model);
-  if(!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(model))throw new Error('请填写套餐模型 ID，不可切到其他供应商命名空间');
+  // 自有接口的模型名按网关同口径放宽（部门平台的模型名常带 / 或 :）。
+  if(!(companyRoute?.own ? /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/ : /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/).test(model))throw new Error(companyRoute?.own ? `DSH 自有接口的模型名「${model}」格式不对：只能含字母、数字和 . _ : / -，请在设置里点「测试连接」从列表里选` : '请填写套餐模型 ID，不可切到其他供应商命名空间');
   let mcpServers=[];
   if(opts.assistantMcpServers) {
     if(opts.purpose!=='hub-assistant'||!Array.isArray(opts.assistantMcpServers)
@@ -123,7 +127,7 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
   const baseURL = companyRoute ? companyRoute.baseURL : deepseekRoute ? fallback.DEEPSEEK_API_BASE : profile.baseURL || PLAN_BASE_URL;
   // A shared subscription credential must never be routed to an unrelated host.
   if (!companyRoute && !deepseekRoute && baseURL.replace(/\/$/, '') !== PLAN_BASE_URL) throw new Error('套餐 profile 只允许已核对的阿里云 Token Plan 端点');
-  const profileId = companyRoute ? 'company-proxy:' + kind : (deepseekRoute ? fallback.DEEPSEEK_ROUTE_PREFIX : fallback.TOKEN_PLAN_ROUTE_PREFIX) + kind;
+  const profileId = companyRoute ? (companyRoute.own ? 'own-api:' : 'company-proxy:') + kind : (deepseekRoute ? fallback.DEEPSEEK_ROUTE_PREFIX : fallback.TOKEN_PLAN_ROUTE_PREFIX) + kind;
   const sessionRoot = path.join(dataDir, 'acp', createHash('sha256').update(opts.id).digest('hex'));
   const home = path.join(sessionRoot, 'home');
   if (opts.acpFork) {
@@ -159,7 +163,8 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
     const providerId = companyRoute ? companyRoute.providerId : 'bailian-tpp';
     if (companyRoute) {
       env[companyRoute.keyEnv] = key;
-      require('./company-model-proxy').applyEndpointNoProxy(env, { origin: companyRoute.baseURL });
+      // 自有接口沿用系统代理设置（和 Claude Code / Codex 的自有接口一致）；只有本机反代必须绕开代理。
+      if (!companyRoute.own) require('./company-model-proxy').applyEndpointNoProxy(env, { origin: companyRoute.baseURL });
     } else env.BAILIAN_API_KEY = key;
     // authenticate persists the native provider credential in this isolated
     // profile. DSH rejects that write if the same key is injected read-only

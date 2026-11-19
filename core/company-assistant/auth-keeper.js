@@ -36,6 +36,11 @@ class AuthKeeper {
       ...(renewed ? { lastRenewAt: this.a.now() } : {}) });
   }
   manualSucceeded(login) { this.online(login); }
+  // 本人在设置里点了「退出 WeLink 登录」（2026-11-19）：停掉自动续期，不发「续期没成功」提醒，等本人再扫码（manualSucceeded 会恢复）。
+  signedOut() {
+    this.controller?.abort();
+    this.set({ state: 'signed-out', login: { ok: false, reason: 'expired', checkedAt: this.a.now() }, error: '', scanAttempts: 0, notified: false, noticeId: '', lastOkUid: null, lastCheckAt: this.a.now() });
+  }
   notifyScan() {
     if (this.closed || this.current.state !== 'needs-scan' || this.current.notified) return;
     const id = this.current.noticeId || 'welink-login-' + this.a.now();
@@ -81,6 +86,8 @@ class AuthKeeper {
         if (ms > CHECK_MS) return this.status();
       }
       this.set({ login, lastCheckAt: now, ...(!login.ok && this.current.state === 'online' ? { state: 'unknown', error: '等待自动续期' } : {}) });
+      // 本人主动退出过：只记录状态，不自动去跑 auth login。
+      if (!login.ok && this.current.state === 'signed-out') { this.set({ login, lastCheckAt: now }); return this.status(); }
       // A network/parse failure is not proof of expiry and must not launch login.
       if (!login.ok && login.reason !== 'expired') { this.set({ state: 'unknown', error: login.error || '暂时无法确认 WeLink 登录，稍后自动重查' }); return this.status(); }
       if (!login.ok && this.current.scanAttempts >= SCAN_LIMIT) this.set({ state: 'needs-scan', error: '' });
@@ -97,20 +104,20 @@ class AuthKeeper {
         } });
         scan = scan || needsScan(resultLogin.stdout + resultLogin.stderr);
       } catch (error) {
-        if (this.closed) return this.status();
+        if (this.closed || this.current.state === 'signed-out') return this.status();
         timedOut = !scan && error.code === 'WELINK_TIMEOUT';
         if (!scan && !timedOut) {
           this.set({ state: early ? 'online' : 'unknown', error: early ? '' : '自动续期没能完成：' + error.message });
           return this.status();
         }
       } finally { this.controller = null; }
-      if (this.closed) return this.status();
+      if (this.closed || this.current.state === 'signed-out') return this.status();
       // Early renewal that asked for a QR code or timed out: the login process is already ended;
       // keep the valid login and let the normal flow handle it once the token has really expired.
       if (early && (scan || timedOut)) { this.set({ state: 'online', error: '' }); return this.status(); }
       if (!scan && resultLogin?.code === 0) {
         const after = await this.a.rawWelink(['auth', 'status']);
-        if (this.closed) return this.status();
+        if (this.closed || this.current.state === 'signed-out') return this.status();
         const confirmed = { ...W.loginState(after.stdout + '\n' + after.stderr), checkedAt: this.a.now() };
         if (after.code === 0 && confirmed.ok) {
           this.online(confirmed, true);
@@ -132,7 +139,7 @@ class AuthKeeper {
       this.set({ state: 'needs-scan', scanAttempts: attempts, error: '' });
       this.notifyScan();
     } catch (error) {
-      if (!this.closed) this.set({ state: 'unknown', lastCheckAt: now, error: error.message, login: { ok: false, reason: error.code === 'WELINK_MISSING' ? 'missing' : 'error', checkedAt: now } });
+      if (!this.closed) this.set({ state: this.current.state === 'signed-out' ? 'signed-out' : 'unknown', lastCheckAt: now, error: error.message, login: { ok: false, reason: error.code === 'WELINK_MISSING' ? 'missing' : 'error', checkedAt: now } });
     }
     return this.status();
   }

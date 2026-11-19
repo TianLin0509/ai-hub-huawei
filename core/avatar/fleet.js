@@ -99,20 +99,31 @@ class FleetService {
   // 指定的群和人轮流增量读，每轮最多 6 个；被限流就停在这一轮。
   async readHot(owner, fleet, convs) {
     const a = this.assistant(), hot = [...new Set(fleet.avatars.filter(v => v.enabled && v.kind === 'pick').flatMap(v => v.targets.filter(t => t.action !== 'watch').map(t => t.id)))];
+    if (!hot.length) { this.readError = ''; return; }
+    // 2026-11-20 运行时风暴排查：原来只有限流才停，登录过期、CLI 坏了时每 30 秒照样连起 6 次 welink-cli 全失败。
+    // 现在：单个群读不了只跳过它（不挡后面的群）；限流或命令本身出错就停在这一轮；
+    // 一轮里一个都没读成才按连续失败轮数退避（1、2、4… 分钟，最长 10 分钟）；读成功一次就恢复。
+    if (this.now() < (this.readBackoffUntil || 0)) return; // 退避期间保留上次的出错原因给页面看
     this.readError = '';
-    if (!hot.length) return;
     const names = D.namesOf(convs), count = Math.min(hot.length, HOT_PER_TICK);
+    let tried = 0, ok = 0, done = 0;
     for (let i = 0; i < count; i += 1) {
+      done = i + 1;
       const id = hot[(this.hotAt + i) % hot.length], conv = convs.find(c => c.id === id); if (!conv) continue;
       const newest = this.messages(id).at(-1)?.key;
       const args = ['im', 'query-history-message', conv.group ? '--group-id' : '--user-account', id, '--query-count', '50', ...(newest ? ['--message-id', newest, '--query-direction', '1'] : [])];
+      tried += 1;
       try {
         const r = await a.welink(args, { priority: 'background', timeoutMs: 20000 }), raw = welink.parseJson(r.stdout);
         if (r.code !== 0 || !raw) { this.readError = welink.friendlyError(r.stderr || r.stdout || '读取消息失败'); continue; }
         this.merge(id, D.messages(raw, conv, owner, { myName: this.myName(), names }));
-      } catch (e) { this.readError = e.code === WELINK_RATE_LIMITED ? 'WeLink 限流，稍后自动继续' : e.message; if (e.code === WELINK_RATE_LIMITED) break; }
+        ok += 1;
+      } catch (e) { this.readError = e.code === WELINK_RATE_LIMITED ? 'WeLink 限流，稍后自动继续' : e.message; break; }
     }
-    this.hotAt = (this.hotAt + count) % hot.length;
+    if (tried && !ok) { this.readFails = (this.readFails || 0) + 1; this.readBackoffUntil = this.now() + Math.min(600000, 60000 * 2 ** (this.readFails - 1)); }
+    else if (ok) this.readFails = 0;
+    // 从停下的下一个接着读，出错的那个不会每轮都排在最前面。
+    this.hotAt = (this.hotAt + done) % hot.length;
   }
 
   // ---- 每轮 ----
@@ -431,9 +442,19 @@ class FleetService {
   sessionOf(avatarId) { const owner = this.need(), id = this.state(owner, avatarId).session?.id; return { ok: true, sessionId: id && this.sessions.alive(id) ? id : '' }; }
 
   targets() {
-    const owner = this.need(), snap = this.snapshot(), roster = this.legacy.roster(owner), titles = this.legacy.read(owner, 'titles.json', {});
+    // 群/人名单来自助理的 WeLink 消息快照（2026-11-20：群友截图「还没读到群，请稍等」一直不变）。
+    // 读不到时说清是哪一种：没登录 WeLink、助理还没取到会话、还是取数出错；界面据此提示并自动重试。
+    const owner0 = this.owner();
+    if (!owner0) return { ok: true, groups: [], people: [], ready: false, reason: '还没确认 WeLink 登录：先到左侧「助理」页扫码登录，登录后这里会自动出现群' };
+    const snap0 = this.snapshot();
+    if (!snap0 || !Array.isArray(snap0.conversations) || !snap0.conversations.length) {
+      const login = this.login();
+      return { ok: true, groups: [], people: [], ready: false, reason: !login.ok ? `${login.reason}（到左侧「助理」页重新登录）`
+        : this.readError ? `读 WeLink 消息出错：${this.readError}` : '助理还没取到 WeLink 会话列表，一般 1 分钟内就有，这里会自动刷新' };
+    }
+    const owner = owner0, snap = snap0, roster = this.legacy.roster(owner), titles = this.legacy.read(owner, 'titles.json', {});
     const rows = (snap?.conversations || []).map(c => ({ id: c.id, name: c.name || c.id, type: c.group ? 'group' : 'user', count: (snap.messages?.[c.id] || []).length, title: titles[c.id]?.title || '', leader: !!roster.people?.[c.id]?.protected }));
-    return { ok: true, groups: rows.filter(r => r.type === 'group'), people: rows.filter(r => r.type === 'user') };
+    return { ok: true, ready: true, groups: rows.filter(r => r.type === 'group'), people: rows.filter(r => r.type === 'user') };
   }
   login() {
     const a = this.assistant(), auth = a?.auth?.status?.(), snap = this.snapshot();

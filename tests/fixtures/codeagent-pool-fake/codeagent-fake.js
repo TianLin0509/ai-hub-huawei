@@ -77,7 +77,11 @@ if (args[0] === 'serve') {
   if (process.env.CODEAGENT_POOL_FAKE_NO_SERVE === '1') { process.stderr.write('Unknown command: serve\n'); process.exit(2); }
   const models = Object.fromEntries(accountModels().map(id => [id, { id, display_name: id, max_context_tokens: 202752, originCoefficient: '1x', isIdle: false, load: 'low' }]));
   const file = path.join(require('os').tmpdir(), `codeagent-pool-fake-providers-${process.pid}.json`);
-  fs.writeFileSync(file, JSON.stringify({ providers: [{ id: 'w3', status: 'available', models }], busyIdleDefinition: { discount_status: '闲时2折进行中' },
+  // CODEAGENT_POOL_FAKE_DISABLED_PROVIDER=名字:模型1,模型2（只在测试里打开）：再报一个状态为 disabled 的供应商，测「暂不可用」一组。
+  const disabled = String(process.env.CODEAGENT_POOL_FAKE_DISABLED_PROVIDER || '');
+  const extra = disabled.includes(':') ? [{ id: 'team', display_name: disabled.split(':')[0], status: 'disabled',
+    models: Object.fromEntries(disabled.split(':')[1].split(',').filter(Boolean).map(id => [id, { id, display_name: id }])) }] : [];
+  fs.writeFileSync(file, JSON.stringify({ providers: [{ id: 'w3', status: 'available', models }, ...extra], busyIdleDefinition: { discount_status: '闲时2折进行中' },
     creditUsage: { quotas: [{ type: 'CPM', used: 1000, total: 400000, remaining: 399000, resetAt: '2026-11-14 00:00:00' },
       { type: 'CPD_Peak', used: 50, total: 20000, remaining: 19950, resetAt: '2026-10-31 00:00:00' }] } }));
   // 每个模型的配额：今日 29.16M / 400M（7.29%），和公司 /model 菜单实录同一组数

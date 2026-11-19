@@ -63,6 +63,8 @@
 .hub-err-toast-text { flex: 1; white-space: pre-line; overflow-wrap: anywhere; max-height: 30vh; overflow: auto; }
 .hub-err-toast-btn { flex: none; padding: 0 8px; border: 1px solid var(--border-subtle, rgba(24,36,49,.16)); border-radius: 6px; background: transparent;
   color: var(--fg-muted, #5e6d7e); font: inherit; font-size: 12px; line-height: 22px; cursor: pointer; }
+.hub-err-toast-btn.primary { background: var(--hw-brand, var(--brand, #0a59f7)); border-color: transparent; color: var(--hw-text-on, #fff); }
+.hub-err-toast-btn:disabled { opacity: .7; cursor: default; }
 .hub-err-toast.expanded { width: min(560px, 92vw); }
 .hub-err-toast.expanded .hub-err-toast-text { display: none; }
 .hub-err-toast.expanded .hub-err-toast-row { justify-content: flex-end; }

@@ -118,6 +118,22 @@ test('考勤设置：核心工作时间可保存、可恢复默认，不合理�
   assert.equal(svc.settings().workTime.amStart, '09:00');
 });
 
+test('考勤设置：弹性工作制默认关，可开启、部分更新、关回默认，不合理时拒绝', () => {
+  const dir = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'att-flex-'));
+  const svc = new (require('../core/company-attendance/service').CompanyAttendance)({ dataDir: dir, noTimer: true });
+  assert.equal(svc.settings().flex.on, false);
+  assert.equal(svc.status().rules.flex, undefined);
+  svc.setSettings({ flex: { on: true, coreStart: '09:30', coreEnd: '15:30' } });
+  assert.equal(svc.status().rules.flex, true);
+  assert.equal(svc.status().rules.coreStart, 570);
+  svc.setSettings({ flex: { dailyHours: 7.5 } });
+  assert.equal(svc.settings().flex.coreStart, '09:30');
+  assert.equal(svc.status().rules.dailyRequired, 450);
+  assert.throws(() => svc.setSettings({ flex: { coreStart: '17:00' } }), /弹性工作制设置不对/);
+  svc.setSettings({ flex: null });
+  assert.equal(svc.settings().flex.on, false);
+});
+
 test('OD 考勤页：正式员工页读不到时自动换 OD 页，按内容认出记录并记住', async () => {
   const urls = [];
   const { svc } = make({ hub: async (req) => {

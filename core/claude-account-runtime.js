@@ -173,14 +173,22 @@ async function mirrorAccess({ home, profile, credentials, lockTimeoutMs = 9000 }
 // switches left one account's device id under another's login; whatever the
 // cause (an old runtime, a CLI writing back a stale copy), this restores it
 // before a launch and on every background refresh, and records each repair.
+// 2026-11-20：后台每 30 秒对每个 Claude 会话查一次，每次都要整份解析两个 .claude.json（大的约 1 MB）。
+// 两个文件的修改时间和大小都没变、上次查过是一致的，就直接算一致，不再解析；有任何一个变了照常全量核对。
+const driftClean = new Map();
+function fileSig(file) { try { const st = fs.statSync(file); return `${st.mtimeMs}:${st.size}`; } catch { return ''; } }
 function identityDrift(home, profile) {
   const file = path.join(home, '.claude.json');
+  const sourceFile = globalConfigPath(profile.home);
+  const s1 = fileSig(file), s2 = fileSig(sourceFile), sig = `${profile.id || ''}|${s1}|${s2}`;
+  if (s1 && s2 && driftClean.get(home) === sig) return null;
   const state = readJson(file, true);
-  const source = readJson(globalConfigPath(profile.home), true);
+  const source = readJson(sourceFile, true);
   if (!state || typeof state !== 'object' || Array.isArray(state) || !source?.oauthAccount) return null;
   const want = accountIdentity(source);
   const same = state.oauthAccount?.accountUuid === want.oauthAccount.accountUuid
     && DEVICE_KEYS.every(key => (state[key] || undefined) === want[key]);
+  if (same) { if (driftClean.size > 500) driftClean.clear(); driftClean.set(home, sig); } else driftClean.delete(home);
   return same ? null : { file, state, want };
 }
 const shortHash = value => value ? require('crypto').createHash('sha256').update(String(value)).digest('hex').slice(0, 8) : '-';

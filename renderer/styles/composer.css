@@ -513,3 +513,12 @@
 
 .codeagent-stop-toast, .codeagent-stop-toast * { -webkit-app-region: no-drag; }
 .codeagent-stop-toast { position:fixed; right:24px; bottom:28px; z-index:100000; display:flex; align-items:center; gap:12px; max-width:calc(100vw - 48px); padding:10px 15px; border-radius:10px; color:var(--fg-default); background:var(--surface-raised); box-shadow:0 8px 28px #0005; font-size:13px; }
+/* 发送失败的「重发」条（renderer/composer-resend-strip.js）：挂在输入栏正上方，不自己消失。 */
+.composer-resend-strip { position: absolute; left: 12px; right: 12px; bottom: calc(100% + 6px); z-index: 99; display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 12px; border: 1px solid var(--border-mid, rgba(24,36,49,.16)); border-left: 3px solid var(--hw-red, #cf0a2c); border-radius: 10px; background: var(--surface-raised, #fff); box-shadow: var(--shadow-lg, 0 6px 20px rgba(0,0,0,.12)); color: var(--fg-default, inherit); font-size: 12.5px; line-height: 1.5; }
+.composer-resend-strip[hidden] { display: none; }
+.composer-resend-strip[data-kind="uncertain"] { border-left-color: var(--hw-amber, #e8780c); }
+.composer-resend-msg { flex: 1; min-width: 0; }
+.composer-resend-btn { flex: none; padding: 3px 12px; border: 0; border-radius: 6px; background: var(--hw-brand, #0a59f7); color: #fff; font-size: 12.5px; cursor: pointer; }
+.composer-resend-btn:hover { filter: brightness(1.08); }
+.composer-resend-close { flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--fg-muted, #5e6d7e); font-size: 15px; line-height: 22px; cursor: pointer; }
+.composer-resend-close:hover { background: var(--surface-hover, rgba(0,0,0,.06)); }

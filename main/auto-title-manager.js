@@ -117,7 +117,24 @@ function createAutoTitleManager(deps) {
     try { return require('../core/codeagent-config').isCodeAgentInstalled(); } catch { return false; }
   }
 
+  // 2026-11-20 运行时风暴排查：每个新会话、新群聊各起一个 CodeAgent 起名（一次 30–90 秒），一次开 N 个会话就同时跑 N 个。
+  // 现在同时最多 2 个，其余排队；排队超过 20 个的直接用兜底名（兜底名在调用前已经写上，不影响使用）。
+  const TITLE_MAX = 2, TITLE_QUEUE_MAX = 20;
+  let titleRunning = 0; const titleQueue = [];
   function generateTitleViaCodeAgent(text, scope = 'session', timeoutMs = 150000) {
+    if (titleRunning >= TITLE_MAX) {
+      if (titleQueue.length >= TITLE_QUEUE_MAX) return Promise.resolve('');
+      return new Promise(resolve => titleQueue.push(() => resolve(generateTitleViaCodeAgent(text, scope, timeoutMs))));
+    }
+    titleRunning += 1;
+    let released = false, guard = null;
+    const done = () => { if (released) return; released = true; clearTimeout(guard); titleRunning -= 1; const next = titleQueue.shift(); if (next) next(); };
+    // 读配置同步抛错也要还名额；子进程超时后迟迟不触发 close 时，超时再过 15 秒强制还名额，不让后面的起名永远排队。
+    const run = Promise.resolve().then(() => runTitleViaCodeAgent(text, scope, timeoutMs));
+    const late = new Promise(resolve => { guard = setTimeout(() => resolve(''), timeoutMs + 15000); guard.unref?.(); });
+    return Promise.race([run, late]).catch(() => '').finally(done);
+  }
+  function runTitleViaCodeAgent(text, scope, timeoutMs) {
     const { resolveCodeAgentConfig, commandHead, DEFAULT_MODEL } = require('../core/codeagent-config');
     const config = resolveCodeAgentConfig(process.env);
     // 起名只需要问题的大意：压成一行并去掉 cmd 会解释的字符，作为单个参数安全地穿过 .bat 包装。

@@ -34,12 +34,29 @@ function readProbed(file) {
     const windows = raw.source === 'serve' ? contextWindows(models, raw.contextWindows) : {};
     return models.length ? { models, defaultModel: cleanModelId(raw.defaultModel), at: raw.at || null, source: raw.source || 'menu', parserVersion: raw.parserVersion,
       ...(Object.keys(windows).length ? { contextWindows: windows } : {}),
-      ...(Array.isArray(raw.details) ? { details: raw.details } : {}) } : null;
+      ...(Array.isArray(raw.details) ? { details: raw.details } : {}),
+      ...(Array.isArray(raw.unavailable) ? { unavailable: raw.unavailable.slice(0, 40).map(row => ({ id: cleanModelId(row && row.id),
+        provider: String(row && row.provider || '').slice(0, 60), status: String(row && row.status || '').slice(0, 30) })).filter(row => row.id) } : {}) } : null;
   } catch { return null; }
+}
+
+// serve 报了、但供应商状态不是 available 的模型（codeagent-serve.js parseProviders 的 skipped，2026-11-19 反馈「模型列表只保留能用的」）：
+// 落盘给下拉放进「暂不可用」一组并写明原因，不再悄悄消失。
+function unavailableFromSkipped(skipped) {
+  const out = [];
+  for (const row of Array.isArray(skipped) ? skipped : []) {
+    for (const raw of Array.isArray(row && row.modelIds) ? row.modelIds : []) {
+      const id = cleanModelId(raw);
+      if (!id || out.length >= 40 || out.some(item => item.id.toLowerCase() === id.toLowerCase())) continue;
+      out.push({ id, provider: String(row.label || row.id || '').slice(0, 60), status: String(row.status || '').slice(0, 30) });
+    }
+  }
+  return out;
 }
 
 function writeProbed(file, result) {
   if (!Array.isArray(result.models) || !result.models.length) return;
+  const unavailable = unavailableFromSkipped(result.skipped);
   const windows = result.source === 'serve' ? contextWindows(result.models, Object.fromEntries(
     (Array.isArray(result.details) ? result.details : []).map(model => [String(model.id || ''), model.contextWindow]))) : {};
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -47,7 +64,8 @@ function writeProbed(file, result) {
   fs.writeFileSync(tmp, JSON.stringify({ schema: 1, models: result.models, defaultModel: result.defaultModel || '', at: new Date().toISOString(),
     source: result.source || 'menu', ...((result.source || 'menu') === 'menu' ? { parserVersion: require('./codeagent-models').MODEL_MENU_PARSER_VERSION } : {}),
     ...(Object.keys(windows).length ? { contextWindows: windows } : {}),
-    ...(Array.isArray(result.details) ? { details: result.details.map(({ id, label, provider, providerLabel }) => ({ id, label, provider, providerLabel })) } : {}) }, null, 2) + '\n', 'utf8');
+    ...(Array.isArray(result.details) ? { details: result.details.map(({ id, label, provider, providerLabel }) => ({ id, label, provider, providerLabel })) } : {}),
+    ...(unavailable.length ? { unavailable } : {}) }, null, 2) + '\n', 'utf8');
   fs.renameSync(tmp, file);
 }
 
@@ -231,4 +249,4 @@ async function probeModels({ command, configDirEnv, configDir, cwd, dataDir, env
   }
 }
 
-module.exports = { NEEDS_LOGIN, MODELS_FILE, COMMANDS_ONLY_TIMEOUT_MS, MODEL_PROBE_TIMEOUT_MS, probeModels, readProbed, writeProbed, modelsFromPicker, cleanModelId };
+module.exports = { NEEDS_LOGIN, MODELS_FILE, COMMANDS_ONLY_TIMEOUT_MS, MODEL_PROBE_TIMEOUT_MS, probeModels, readProbed, writeProbed, unavailableFromSkipped, modelsFromPicker, cleanModelId };

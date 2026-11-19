@@ -52,19 +52,42 @@ class DshCliSession extends EventEmitter {
   lifecycle(type, extra = {}) { this.emit('lifecycle', { type, hubSessionId: this.options.id,
     kind: this.options.kind, threadId: this.threadId, turnId: this.runtime.turnId, signalSource: 'provider-cli', ...extra }); }
   start() { return this.ready ||= this.launch(); }
+  // 终端尾巴写日志前：去控制符，并把启动环境里的 Key/Token 值与常见密钥形态打码（终端里可能回显配置值，复审补点）
+  safeTail(n) {
+    let t = String(this.output || '').replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/\x1b\][^\x07]*\x07/g, '').replace(/\s+/g, ' ').trim().slice(-n);
+    const env = (this.options && this.options.launch && this.options.launch.env) || {};
+    for (const [k, v] of Object.entries(env)) if (/KEY|TOKEN|SECRET|PASSWORD/i.test(k) && v && String(v).length >= 6) t = t.split(String(v)).join('***');
+    try { t = require('./hub-feedback').redact(t); } catch { /* 打码工具不可用时至少已去掉启动环境里的值 */ }
+    return t.replace(/sk-[A-Za-z0-9_-]{12,}/g, 'sk-***');
+  }
   async launch() {
     const ready = new Promise((resolve, reject) => { this.readyResolve = resolve; this.readyReject = reject; });
     this.tail = new JsonlTail(this.log, row => { try { this.observe(row); } catch (error) { this.fail(error); } });
     await this.tail.start();
     if (this.closed) throw new Error('DSH CLI 已关闭');
-    this.startTimer = setTimeout(() => this.fail(new Error('DSH CLI 启动未确认，请查看终端')), 60000);
+    // DSH 冷启动要装载上百个插件：11-20 隔离实测空机 26–34 秒，整机 CPU 满载时超过 60 秒，原来的 60 秒会把正常启动判成失败。
+    const startMs = Number(process.env.AI_HUB_DSH_START_TIMEOUT_MS) > 0 ? Number(process.env.AI_HUB_DSH_START_TIMEOUT_MS) : 150000;
+    this.startTimer = setTimeout(() => {
+      const tail = this.safeTail(300);
+      console.warn(`[dsh-cli] start not confirmed in ${startMs}ms (pid ${this.pty?.pid}, ${String(this.output || '').length} bytes out); terminal tail: ${tail}`);
+      this.fail(new Error(`DSH 启动 ${Math.round(startMs / 1000)} 秒还没就绪：电脑很忙时首次启动会更慢，可点「后台」看终端里停在哪一步；关掉会话重开一次，仍不行请「一键反馈」。`));
+    }, startMs);
     try {
       this.pty = require('./pty-host').spawnPty(require('node-pty'), this.options.launch.command, this.options.launch.args, {
         cwd: this.options.cwd, env: { ...this.options.launch.env, AI_HUB_DSH_EVENT_LOG: this.log, AI_HUB_DSH_ASK_DIR: this.askDir },
         cols: this.cols || 120, rows: this.rows || 35, name: 'xterm-256color', useConpty: true, conptyInheritCursor: false });
       require('./pty-process-owner').recordPtySpawn(this.pty);
-      this.pty.onData(data => { this.output = ((this.output || '') + data).slice(-32768); this.emit('data', data); });
-      this.pty.onExit(info => { this.closed = true; this.fail(new Error('DSH CLI 已退出')); this.dispose(); this.emit('exit', info); });
+      this.pty.onData(data => {
+        this.output = ((this.output || '') + data).slice(-32768); this.emit('data', data);
+        // DSH 明确报「startup failed」后不会自己退出：一看到就立即失败，不干等启动超时（复审补点）
+        if (!this.readyDone && !this.startFailedSeen && /startup failed/i.test(this.output)) {
+          this.startFailedSeen = true; clearTimeout(this.startTimer);
+          console.warn(`[dsh-cli] startup failed (pid ${this.pty?.pid}); terminal tail: ${this.safeTail(300)}`);
+          // 等 1.5 秒把后面的「Failed plugins …」也收进来，fail() 会据此写出是哪个插件、哪条校验
+          setTimeout(() => { if (!this.readyDone) this.fail(new Error('DSH 启动失败：终端里报了 startup failed，可点「后台」看具体原因；仍不行请「一键反馈」。')); }, 1500);
+        }
+      });
+      this.pty.onExit(info => { if (!this.readyDone) console.warn(`[dsh-cli] exited before ready: ${JSON.stringify(info)}; terminal tail: ${this.safeTail(600)}`); this.closed = true; this.fail(new Error('DSH CLI 已退出')); this.dispose(); this.emit('exit', info); });
     } catch (error) { this.fail(error); this.dispose(); }
     return ready;
   }
@@ -98,6 +121,15 @@ class DshCliSession extends EventEmitter {
       const missing = [...new Set([...String(this.output).matchAll(/Cannot find (?:package|module) '(@deepseek-ai\/dsh-[\w.-]+)'/g)].map(m => m[1]))];
       const where = /imported from (.+?)[\\/]node_modules[\\/]@deepseek/.exec(String(this.output))?.[1];
       error = new Error(`DSH CLI 终端运行环境不完整${missing.length ? `：缺同代插件 ${missing.slice(0, 4).join('、')}` : ''}${where ? `（启动目录 ${where.trim()}）` : ''}。` + require('./dsh-cli-profile').DSH_REPAIR_HINT);
+    } else if (/startup failed/i.test(this.output || '')) {
+      // DSH 自己报「startup failed」（插件配置校验不过等）：以前只显示「启动未确认，请查看终端」，用户看不到原因（2026-11-20）。
+      // 只取插件名和第一行校验信息，不带原始诊断（DSH 提示原始诊断里可能有配置值）。
+      const plain = String(this.output).replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/\x1b\][^\x07]*\x07/g, '');
+      const m = /Failed plugins[^\n]*\n\s*([\w@./-]+)\s*\n(?:\s*Package:\s*([\w@./-]+)\s*\n)?\s*([^\n]{0,160})(?:\n\s*(-[^\n]{0,160}))?/.exec(plain);
+      const line = /startup failed:\s*([^\r\n]{0,220})/i.exec(plain)?.[1]?.trim();
+      const detail = m ? `插件 ${m[1]}${m[2] ? `（${m[2]}）` : ''}：${[m[3], m[4]].filter(Boolean).map(s => s.trim()).join(' ')}`
+        : line && !/^dsh: startup failed/i.test(line) ? line.replace(/\s*\(provider=[^)]*\)/, '') : '';
+      error = new Error(`DSH 启动失败${detail ? `——${detail}` : ''}。多半是 DSH 版本和这版 Hub 不配套：请先升级 Hub 到最新版；仍不行点「一键修复 DSH」，或「一键反馈」把这句发给维护人。`);
     }
     for (const [id, waiter] of this.sideAsks) { clearTimeout(waiter.timer); waiter.reject(new Error('DSH 终端已断开：' + error.message)); this.sideAsks.delete(id); }
     clearTimeout(this.startTimer); this.readyReject?.(error);
@@ -164,7 +196,7 @@ class DshCliSession extends EventEmitter {
         this.prefWatcher = fs.watch(path.join(this.options.home, '.dsh-tui'), { persistent: false }, (_event, file) => {
           if (['model.json', 'effort.json'].includes(String(file))) this.observePreferences(String(file));
         });
-        this.readyResolve?.(); return;
+        this.readyDone = true; this.readyResolve?.(); return;
       }
       await new Promise(resolve => setTimeout(resolve, 50));
     }

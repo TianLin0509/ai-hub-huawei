@@ -44,6 +44,29 @@ function withProfile(raw, request) {
     const next = { id, label, baseURL: api.baseUrl(request.baseURL), apiKey, model,
       ...(kind === 'codex' ? { wireApi: api.wireApi(request.wireApi || previous.wireApi || 'responses') } : {}) };
     if (index < 0) list.push(next); else list[index] = next;
+  } else if (request.profileAction === 'delete') {
+    // 删除（2026-11-20，群诉求：自有 API 只能加不能删）：已开的会话用的是启动时落盘的那一版，不受影响。
+    // 删的是当前选中的：改选剩下的第一个；一个不剩就回到「沿用本机配置」。
+    list.splice(index, 1);
+    const { own_api, ...rest } = provider;
+    const wasSelected = provider.selected_api_profile === id;
+    const next = wasSelected ? list[0] : list.find(item => item.id === provider.selected_api_profile);
+    // 没删到正在用的，或这个工具此刻走公司模型 / API 网关：只改列表，不动当前线路。
+    // 走公司模型 / 网关时留着的「切回用的自有接口」若正是被删的账号，一并换掉（Codex 审查 P2：删了还能切回去用）。
+    if (!wasSelected || provider.backend !== 'api') {
+      const removed = profiles(raw, kind)[index];
+      const stash = provider.own_api;
+      const stale = stash && removed && stash.base_url === removed.baseURL && stash.api_key === removed.apiKey && stash.model === removed.model;
+      const { own_api: _stale, ...kept } = provider;
+      const fresh = stale && wasSelected && list[0] ? { own_api: { base_url: list[0].baseURL, api_key: list[0].apiKey, model: list[0].model,
+        ...(kind === 'codex' ? { wire_api: list[0].wireApi } : {}) } } : {};
+      return { ...raw, providers: { ...raw.providers, [kind]: { ...(stale ? { ...kept, ...fresh } : provider), api_profiles: list,
+        selected_api_profile: wasSelected ? (stale && list[0] ? list[0].id : '') : provider.selected_api_profile || '' } } };
+    }
+    if (!next) return { ...raw, providers: { ...raw.providers, [kind]: { ...rest, api_profiles: list, selected_api_profile: '',
+      backend: 'api', base_url: '', api_key: '', model: '', ...(kind === 'codex' ? { wire_api: 'responses' } : {}) } } };
+    return { ...raw, providers: { ...raw.providers, [kind]: { ...rest, api_profiles: list, selected_api_profile: next.id, backend: 'api',
+      base_url: next.baseURL, api_key: next.apiKey, model: next.model, ...(kind === 'codex' ? { wire_api: next.wireApi } : {}) } } };
   } else if (request.profileAction !== 'select') throw new Error('API 账号操作无效');
   const selected = list.find(item => item.id === id);
   const { own_api, ...rest } = provider;

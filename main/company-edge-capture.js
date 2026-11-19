@@ -19,18 +19,29 @@ const PAGE_STATE = `(() => { const t = document.body ? document.body.innerText :
   return { host: location.host, href: location.origin + location.pathname, ready: document.readyState,
     hasPassword: !!document.querySelector('input[type=password]'), hasQr: /扫码登录|二维码/.test(t.slice(0, 3000)) }; })()`;
 
+// 复制本机 Edge 的登录状态。用 Edge 最近用的那个用户资料（Local State 里的 profile.last_used，公司账号常在「Profile 1」），
+// 找不到再用 Default；复制进临时目录的 Default。返回复制了哪个资料、Cookies 拿没拿到（Edge 开着时 Cookies 可能被占用），写进诊断。
+function edgeProfileOf(src) {
+  try {
+    const last = JSON.parse(fs.readFileSync(path.join(src, 'Local State'), 'utf8'))?.profile?.last_used;
+    if (typeof last === 'string' && /^(Default|Profile \d{1,4})$/.test(last) && fs.existsSync(path.join(src, last, 'Network', 'Cookies'))) return last;
+  } catch { /* 读不到就用 Default */ }
+  return 'Default';
+}
 function copyLogin(tmp, env = process.env) {
   const src = path.join(env.LOCALAPPDATA || '', 'Microsoft', 'Edge', 'User Data');
-  if (!fs.existsSync(src)) return 0;
-  let copied = 0;
-  for (const f of ['Local State', 'Default/Network/Cookies', 'Default/Preferences']) {
+  const info = { profile: '', copied: 0, cookies: false };
+  if (!fs.existsSync(src)) return info;
+  info.profile = edgeProfileOf(src);
+  for (const [from, to] of [['Local State', 'Local State'], [info.profile + '/Network/Cookies', 'Default/Network/Cookies'], [info.profile + '/Preferences', 'Default/Preferences']]) {
     try {
-      fs.mkdirSync(path.dirname(path.join(tmp, f)), { recursive: true });
-      fs.copyFileSync(path.join(src, f), path.join(tmp, f));
-      copied += 1;
+      fs.mkdirSync(path.dirname(path.join(tmp, to)), { recursive: true });
+      fs.copyFileSync(path.join(src, from), path.join(tmp, to));
+      info.copied += 1;
+      if (/Cookies$/.test(to)) info.cookies = true;
     } catch { /* 复制不到就靠安全客户端登录 */ }
   }
-  return copied;
+  return info;
 }
 
 function looksLikeLogin(st, onTarget) { return !!(st && (st.hasPassword || (st.hasQr && !onTarget))); }
@@ -40,11 +51,11 @@ async function getJson(url) { const r = await fetch(url, { signal: AbortSignal.t
 /* 返回 { ok, value, needsLogin, error, finalHost, tookMs, via:'edge' } */
 async function runInEdge({ url, readyUrl, script, accept = null, signal = null, timeoutMs = 120000, loginGraceMs = LOGIN_GRACE_MS, pollMs = 700, tag = 'hub-edge', logger = console, env = process.env } = {}) {
   const started = Date.now();
-  const result = { ok: false, via: 'edge', value: null, needsLogin: false, error: '', finalHost: '', tookMs: 0 };
+  const result = { ok: false, via: 'edge', value: null, needsLogin: false, error: '', finalHost: '', tookMs: 0, loginCopy: null };
   if (!findEdge(env)) { result.error = '本机没有找到 Edge'; return result; }
   let edge = null, ws = null, deadline = started + timeoutMs;
   try {
-    edge = await launchHeadlessEdge({ purpose: tag === 'hub-w3' ? '门户待办取数' : '内网页面取数', tag, env, logger, signal, maxLifeMs: timeoutMs + 60000, prepare: tmp => { copyLogin(tmp, env); } });
+    edge = await launchHeadlessEdge({ purpose: tag === 'hub-w3' ? '门户待办取数' : '内网页面取数', tag, env, logger, signal, maxLifeMs: timeoutMs + 60000, prepare: tmp => { result.loginCopy = copyLogin(tmp, env); } });
     running.add(edge);
     deadline = Date.now() + timeoutMs; // 排队等名额的时间不算进取数期限（审查 #4）
     let page = null;
@@ -118,4 +129,4 @@ async function runInEdge({ url, readyUrl, script, accept = null, signal = null, 
   return result;
 }
 
-module.exports = { runInEdge, looksLikeLogin, killAll, LOGIN_GRACE_MS };
+module.exports = { runInEdge, looksLikeLogin, killAll, copyLogin, edgeProfileOf, LOGIN_GRACE_MS };

@@ -68,6 +68,10 @@ function mountSection({ document, window, ipcRenderer }) {
     '    <option value="off">关闭：都不弹，只留到点提醒、出错这类要紧的</option>',
     '  </select>',
     '  <p class="config-reading-note" id="cfg-notify-mode-note">左栏的未读标记不受影响；小卡右上角的齿轮也能回到这里。</p>',
+    '  <label for="cfg-codeagent-cli-notify" id="cfg-codeagent-cli-notify-row" style="display:none;align-items:flex-start;gap:8px;margin-top:10px;cursor:pointer">',
+    '    <input type="checkbox" id="cfg-codeagent-cli-notify" style="margin:3px 0 0;flex:none;width:auto;height:auto;padding:0">',
+    '    <span style="display:flex;flex-direction:column;gap:2px"><strong style="font-size:13px">CodeAgent 自己也弹完成提醒</strong><small class="config-reading-note" style="margin:0">默认不勾：答完只由 Hub 提醒一次，不再重复。勾上后之后新开或重启的 CodeAgent 会话会自己再弹一条；只想留 CodeAgent 的，把上面选成「关闭」。</small></span>',
+    '  </label>',
     '</div>',
   ].join('\n');
   const notifyAnchor = host.querySelector('.config-notification-title');
@@ -98,7 +102,12 @@ function mountSection({ document, window, ipcRenderer }) {
     roleEl.value = data.settings.role;
     modeEl.value = data.settings.mode;
   }
-  async function refresh() { try { fill(await ipcRenderer.invoke('hub-pet:get-settings')); } catch (_) {} }
+  const cliRow = notifySection.querySelector('#cfg-codeagent-cli-notify-row');
+  const cliEl = notifySection.querySelector('#cfg-codeagent-cli-notify');
+  function fillCli(r) { if (!r || r.ok === false) return; cliRow.style.display = r.available ? 'flex' : 'none'; cliEl.checked = !!r.own; }
+  async function refreshCli() { try { fillCli(await ipcRenderer.invoke('codeagent-cli-notify:get')); } catch (_) {} }
+  cliEl.addEventListener('change', async () => { try { fillCli(await ipcRenderer.invoke('codeagent-cli-notify:set', { own: cliEl.checked })); } catch (_) {} });
+  async function refresh() { void refreshCli(); try { fill(await ipcRenderer.invoke('hub-pet:get-settings')); } catch (_) {} }
   async function save(patch) { try { fill(await ipcRenderer.invoke('hub-pet:set-settings', patch)); } catch (_) {} }
   notifyEl.addEventListener('change', () => save({ notifyMode: notifyEl.value }));
   enabledEl.addEventListener('change', () => save({ enabled: enabledEl.checked }));

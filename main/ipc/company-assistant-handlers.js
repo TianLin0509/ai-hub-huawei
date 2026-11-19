@@ -20,7 +20,9 @@ function registerCompanyAssistantIpc(ipcMain, service) {
     source: request => service.sourceContext(String(request?.source || ''), request?.day),
     'set-settings': request => ({ ok: true, settings: service.setSettings(request || {}) }),
     memory: request => service.memory.execute(request || { op: 'list' }, { fromSettings: true }),
-    login: async () => ({ ok: true, flow: await service.login() }),
+    login: async request => ({ ok: true, flow: await service.login({ restart: !!request?.restart, clean: !!request?.clean }) }),
+    // 2026-11-19：设置里「退出 WeLink 登录」——清掉本机 welink-cli 凭据并停掉自动续期。
+    'welink-logout': async () => ({ ok: true, ...(await service.logout()) }),
     'setup-calendar': request => service.setupCalendar(String(request?.email || '')),
     // 「手机」设置页（2026-10-18）：选群、开关、推送范围；测试消息只发到选定的群。
     // 找 welink-cli（2026-10-19）：「再找一次」立刻全盘找；「手动选择…」弹系统选择框。

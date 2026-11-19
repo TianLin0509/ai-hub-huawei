@@ -175,7 +175,7 @@ class CompanyAttendance {
     const own = normalizeDomain(s.domain || '');
     const fromEmail = companyDomain.companyDomainOf((() => { try { return this.deps.accountEmail?.() || ''; } catch { return ''; } })());
     const known = own || fromEmail ? null : companyDomain.knownDomain(this.deps.dataDir);
-    return { domain: own || fromEmail || known.domain, domainFrom: own ? 'settings' : fromEmail ? 'assistant-email' : known.from, autoDaily: s.autoDaily !== false, workTime: calc.normalizeWorkTime(s.workTime).workTime,
+    return { domain: own || fromEmail || known.domain, domainFrom: own ? 'settings' : fromEmail ? 'assistant-email' : known.from, autoDaily: s.autoDaily !== false, workTime: calc.normalizeWorkTime(s.workTime).workTime, flex: calc.normalizeFlex(s.flex).flex,
       page: normalizePage(s.page), lastPage: PAGES[s.lastPage] ? s.lastPage : '' };
   }
   // 设置里没有时自动找（内置默认、WeLink 账号），找到就记下，用户不用手填。
@@ -198,6 +198,14 @@ class CompanyAttendance {
         const n = calc.normalizeWorkTime(patch.workTime);
         if (!n.ok) throw new Error('核心工作时间不对：' + n.error);
         s.workTime = n.workTime;
+      }
+    }
+    if (patch.flex !== undefined) {
+      if (patch.flex === null) delete s.flex;
+      else {
+        const n = calc.normalizeFlex({ ...calc.normalizeFlex(s.flex).flex, ...patch.flex });
+        if (!n.ok) throw new Error('弹性工作制设置不对：' + n.error);
+        s.flex = n.flex;
       }
     }
     this.write('settings', s);
@@ -241,7 +249,7 @@ class CompanyAttendance {
       const holidays = {};
       for (const k of Object.keys(status.holidays || {})) holidays[k] = true;
       const r = status.rules || calc.rulesFromWorkTime({});
-      const opts = { holidays, rules: { amEnd: r.amEnd, pmStart: r.pmStart, owePerWorkday: r.owePerWorkday } };
+      const opts = { holidays, rules: calc.calcRules(r) };
       const today = status.today, days = calc.buildDays(status.records || [], opts);
       const m = calc.monthReport(days, today.slice(0, 7), today, opts);
       if (!(m.willExceed || m.over) || m.workdays < 2 || !calc.isWorkKind(calc.dayKind(today, opts))) return null;
@@ -342,7 +350,7 @@ class CompanyAttendance {
     const lastSuccess = st.lastSuccessAt ? Date.parse(st.lastSuccessAt) : 0;
     const staleDays = lastSuccess ? Math.floor((this.now().getTime() - lastSuccess) / 86400000) : null;
     return {
-      ok: true, today: this.todayKey(), syncing: !!this.syncing, settings, rules: calc.rulesFromWorkTime(settings.workTime),
+      ok: true, today: this.todayKey(), syncing: !!this.syncing, settings, rules: calc.rulesFromWorkTime(settings.workTime, settings.flex),
       url: attendanceUrl(settings.domain, process.env, pagesToTry(settings)[0]), pages: Object.entries(PAGES).map(([id, p]) => ({ id, label: p.label })), records, holidays: this.read('holidays', {}),
       lastResult: st.lastResult || null, lastSuccessAt: st.lastSuccessAt || null, lastAttemptAt: st.lastAttemptAt || null,
       log: (st.log || []).slice(0, 10), staleDays, gapRisk: staleDays != null && staleDays >= 6,

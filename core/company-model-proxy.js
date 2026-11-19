@@ -37,12 +37,26 @@ function codexWindowsSandbox(env = process.env) {
 function proxyDir(dataDir) { return path.join(dataDir, 'company-model-proxy'); }
 function endpointFile(dataDir) { return path.join(proxyDir(dataDir), 'endpoint.json'); }
 
+// 本进程自己起的反代实际在听的端口（反馈 38a58107，2026-11-19）：同一数据目录开着两个 Hub 时，endpoint.json 只有一份，
+// 后开的那个因默认端口被占换了新端口并写进文件，关掉后先开的 Hub 再新建会话就读到已关的端口，报 ECONNREFUSED。
+// 本进程的反代在跑时一律用它自己的端口和 Key（成对存：两个 Hub 同时首次启动时，文件里的 Key 可能是另一个生成的，
+// Codex 复核 P2）；没在跑（已停、启动中）才读文件。
+const liveEndpoints = new Map();
+const liveKey = dataDir => path.resolve(String(dataDir || '')).toLowerCase();
+const validKey = key => /^[A-Za-z0-9]{32,128}$/.test(String(key || ''));
+function noteLiveEndpoint(dataDir, endpoint) {
+  const port = endpoint && endpoint.port, key = endpoint && endpoint.key;
+  if (Number.isSafeInteger(port) && port > 0 && port <= 65535 && validKey(key)) liveEndpoints.set(liveKey(dataDir), { port, key });
+  else liveEndpoints.delete(liveKey(dataDir));
+}
 function readEndpoint(dataDir) {
+  const live = liveEndpoints.get(liveKey(dataDir));
+  let value = null;
   try {
-    const value = JSON.parse(fs.readFileSync(endpointFile(dataDir), 'utf8'));
-    if (/^[A-Za-z0-9]{32,128}$/.test(value.key) && Number.isSafeInteger(value.port) && value.port >= 0 && value.port <= 65535) return value;
+    const parsed = JSON.parse(fs.readFileSync(endpointFile(dataDir), 'utf8'));
+    if (validKey(parsed.key) && Number.isSafeInteger(parsed.port) && parsed.port >= 0 && parsed.port <= 65535) value = parsed;
   } catch { /* first use */ }
-  return null;
+  return live ? { ...(value || {}), port: live.port, key: live.key } : value;
 }
 function writeEndpoint(dataDir, value) {
   fs.mkdirSync(proxyDir(dataDir), { recursive: true });
@@ -219,8 +233,10 @@ function applyCodexEnv(env, { dataDir, sessionId, model, projectDir, account, ga
 // DSH：OpenAI chat 形态，挂在独立的 provider 下；联网、遥测和插件市场相关功能关掉（公司模型没有对应能力）。
 // 'web' 服务本身保留：终端界面建会话时要等它就绪（关掉它会报 tool-web waiting for web 并退出），
 // 它背后的搜索与抓取提供方都关掉，联网工具也关掉。
+// 不再关 plugin-manager（2026-11-20）：新版 DSH（0.2.2）的标准智能体预设里自带 tool-plugin-manager，它等 pluginManager 服务；
+// 关掉服务后建智能体失败（「failed to create agent … tool-plugin-manager: waiting for pluginManager」），DSH 直接退出。
 const DSH_DISABLED = ['deepseek-account', 'llm-deepseek', 'llm-deepseek-account', 'web-search-deepseek', 'web-deepseek-api',
-  'web-fetch-http', 'tool-web', 'otel', 'session-telemetry-otel', 'session-log-deepseek', 'plugin-package-inventory-deepseek', 'plugin-manager', 'tool-plugin-manager'];
+  'web-fetch-http', 'tool-web', 'otel', 'session-telemetry-otel', 'session-log-deepseek', 'plugin-package-inventory-deepseek', 'tool-plugin-manager'];
 function dshRoute({ dataDir, sessionId, model, account, gateway = false }) {
   const endpoint = requireEndpoint(dataDir, { gateway });
   const ids = gateway ? gatewayModelIds(dataDir) : MODEL_IDS;
@@ -231,6 +247,24 @@ function dshRoute({ dataDir, sessionId, model, account, gateway = false }) {
       models: ids.map(id => ({ id, contextWindow: 128000, maxTokens: 16384, reasoningEfforts: { high: 'high' },
         compat: { supportsDeveloperRole: false, thinkingFormat: 'deepseek', supportsStore: false, maxTokensField: 'max_tokens' } })) },
     disabledPatches: DSH_DISABLED.map(id => ({ id, disabled: true })),
+  };
+}
+
+// DSH 的「自有接口」（2026-11-20，群诉求：部门自有模型 DSH 下接不上）：用户在「自有 API → DSH → 自有接口」填的
+// OpenAI 兼容地址、Key、模型直连，不经本机反代、不用 CodeAgent 账号。和公司模型一样关掉 DeepSeek 自家账号、联网等插件。
+const OWN_PROVIDER_ID = 'hub-own-api';
+const OWN_KEY_ENV = 'AI_HUB_DSH_OWN_KEY';
+function dshOwnRoute({ baseURL, apiKey, model }) {
+  const base = String(baseURL || '').trim().replace(/\/+$/, '');
+  if (!/^https?:\/\//i.test(base)) throw new Error('DSH 自有接口还没填接口地址：请到「设置 → 自有 API → DSH → 自有接口」填写 OpenAI 兼容地址（通常以 /v1 结尾），或改选「API 网关」。');
+  const id = String(model || '').trim();
+  if (!id) throw new Error('DSH 自有接口还没填模型名：请到「设置 → 自有 API → DSH → 自有接口」点「测试连接」选一个模型后保存。');
+  return {
+    providerId: OWN_PROVIDER_ID, keyEnv: OWN_KEY_ENV, key: String(apiKey || '').trim() || 'none', baseURL: base, model: id, own: true,
+    providerConfig: { api: 'openai-completions', baseURL: base, apiKeyEnv: OWN_KEY_ENV, retryPolicy: { mode: 'normal', maxRetries: 1 }, reasoning: 'high',
+      models: [{ id, contextWindow: 128000, maxTokens: 16384, reasoningEfforts: { high: 'high' },
+        compat: { supportsDeveloperRole: false, thinkingFormat: 'deepseek', supportsStore: false, maxTokensField: 'max_tokens' } }] },
+    disabledPatches: DSH_DISABLED.map(name => ({ id: name, disabled: true })),
   };
 }
 
@@ -292,6 +326,6 @@ function chosenZone(dataDir) {
 module.exports = {
   ZONE_CHOICES, upstreamFile, readUpstreamConfig, setUpstreamZone, chosenZone,
   MODELS, MODEL_IDS, DEFAULT_MODEL, DEFAULT_PORT, KEY_ENV, PROVIDER_ID, LABEL, GATEWAY_LABEL, GATEWAY_SUFFIX, usesGateway, gatewayModelIds, CODEX_WINDOWS_SANDBOX_DEFAULT, codexWindowsSandbox,
-  proxyDir, endpointFile, readEndpoint, ensureEndpoint, setEndpointPort, sessionTag, sessionKey, normalizePin, normalizeModel, launchModel,
-  applyNoProxy, applyEndpointNoProxy, usesProxy, applyClaudeEnv, codexCatalog, codexHome, ensureCodexHome, applyCodexEnv, dshRoute, findNodeOnPath,
+  proxyDir, endpointFile, readEndpoint, noteLiveEndpoint, ensureEndpoint, setEndpointPort, sessionTag, sessionKey, normalizePin, normalizeModel, launchModel,
+  applyNoProxy, applyEndpointNoProxy, usesProxy, applyClaudeEnv, codexCatalog, codexHome, ensureCodexHome, applyCodexEnv, dshRoute, dshOwnRoute, findNodeOnPath,
 };

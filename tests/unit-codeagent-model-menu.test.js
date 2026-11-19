@@ -1023,7 +1023,7 @@ test('new-session model option tooltips retain the unconfirmed description and u
   const start = source.indexOf('    const wanted = nativeCodeagentOption + listed.map');
   const end = source.indexOf('\n    }', start) + 6;
   const select = { dataset: {}, innerHTML: '' }, listed = [{ id: IDS[2], label: IDS[2], description: '账号模型探测清单中有' }];
-  const context = vm.createContext({ modelSelect: select, listed, selectedKind: 'codeagent', nativeCodeagentOption: '', usageAttrs: () => '', escapeHtml: String,
+  const context = vm.createContext({ modelSelect: select, listed, selectedKind: 'codeagent', nativeCodeagentOption: '', usageAttrs: () => '', escapeHtml: String, greyedHtml: '',
     choiceValue: require('../core/codeagent-model-choice').choiceValue });
   vm.runInContext(`{${source.slice(start, end)}\n}`, context);
   assert.match(select.innerHTML, /title="账号模型探测清单中有"/);
@@ -1708,7 +1708,8 @@ test('new-session CodeAgent without reliable models retains the default option, 
   const context = vm.createContext({ document, selectedKind: 'codeagent', showAccount: false, selectedModel: '', modelTouchedByUser: false,
     launchModelOptions: () => [], companyApiKind: () => false, resolveDefaultModel: () => '', defaultModelConfig: () => ({}),
     codeagentDefaultModel: '', codeagentUsesPool: () => false, codeagentManualPick: () => '', usageAttrs: () => '', escapeHtml: String,
-    companyProvider: {}, paintModelCards: () => {} });
+    companyProvider: {}, paintModelCards: () => {},
+    codeagentUnavailableOptions: [], UNAVAILABLE_PREFIX: 'unavailable:', codeagentFollowCli: false, codeagentHubDefaultOption: () => null, selectedCodeagentRoute: {} });
   const start = source.indexOf("    const label = document.getElementById('new-session-tuning-label');"), end = source.indexOf("    const effortLabel =", start);
   vm.runInContext(`(() => {${source.slice(start, end)}\n})()`, context);
   assert.equal(elements.get('new-session-tuning').hidden, false); assert.equal(elements.get('new-session-config-section').hidden, false);

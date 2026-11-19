@@ -84,6 +84,23 @@ function detectHostShellTakeover(rawBuffer) {
   return HOST_SHELL_PROMPT_RE.test(cleanTail(rawBuffer, 500));
 }
 
+// 回到宿主 PowerShell 的原因是「找不到 CLI 程序」（反馈 08441c2e，2026-11-19）：PowerShell 不论中英文都打
+// 「CategoryInfo : ObjectNotFound: (claude:String) [], CommandNotFoundException」（绝对路径时括号里是完整路径）。
+// ConPTY 会折行，去掉控制序列与空白后再认；只看尾部，并且取最后一次，旧的报错被新输出盖过就不算。
+const MISSING_CLI_RE = /ObjectNotFound:\((?:[^()]*[\\/])?(claude|codex|codeagent|codeagentcli|gemini|kimi)(?:\.exe|\.cmd|\.ps1|\.bat)?:String\)\[\],CommandNotFoundException/gi;
+function detectMissingCliCommand(rawBuffer) {
+  if (!rawBuffer) return null;
+  const compact = cleanTail(rawBuffer, 2000).replace(/\s+/g, '');
+  let last = null;
+  for (const m of compact.matchAll(MISSING_CLI_RE)) last = m;
+  if (!last) return null;
+  // 报错之后又有了别的命令输出（不只是提示符）就不算。
+  const after = compact.slice(last.index + last[0].length);
+  if (after.replace(/\+FullyQualifiedErrorId:CommandNotFoundException/i, '').replace(/PS[A-Za-z]:\\[^>]*>/g, '').length > 0) return null;
+  const command = last[1].toLowerCase();
+  return command === 'codeagentcli' ? 'codeagent' : command;
+}
+
 // Codex 0.153 的 /new 在同一个 TUI 里结束当前线程时，先打印
 // "To continue this session, run codex resume, then select … (<旧线程 id>)"，再以
 // source=startup 报新线程的 SessionStart（2026-09-26 真机实测，不是 clear）。只认带着
@@ -149,6 +166,7 @@ module.exports = {
   stripAnsi,
   cleanTail,
   detectHostShellTakeover,
+  detectMissingCliCommand,
   detectCodexThreadEnded,
   createAuthBannerMonitor,
 };

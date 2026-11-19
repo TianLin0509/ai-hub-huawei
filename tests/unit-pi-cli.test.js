@@ -473,3 +473,80 @@ test('返工：pi 报过的会话文件不在（一句没聊过）就开新的�
   const legacy = pi.buildPiCliOptions('pi', { id: 'b', cwd: 'D:\w', acpSid: 'sid-1' }, {}, tmp(), env);
   assert.deepEqual(legacy.launch.args.slice(-2), ['--session', 'sid-1']);
 });
+
+// 2026-11-20 同事反馈「pi 报错」：部门 API key（网关）用户的 pi 会话以前不看网关设置，一律走 CodeAgent 那条公司上游。
+test('公司版 pi：DSH 选了 API 网关上游时，pi 的公司线路也走网关（钥匙带 __gw、模型用网关模型、显示「API 网关」）', async () => {
+  const gateway = require('../core/api-gateway');
+  const proxy = require('../core/company-model-proxy');
+  const pi = require('../core/pi-cli-profile');
+  const MODELS = ['qwen-aw-35b', 'deepseek-v4.1-flash', 'qwen3.8-27b', 'glm-5.3-flash'];
+  const dir = tmp();
+  const fakeSafe = { isEncryptionAvailable: () => true, encryptString: s => Buffer.from('enc:' + s), decryptString: b => String(b).replace(/^enc:/, '') };
+  const fetchImpl = async url => url.endsWith('/models') ? new Response(JSON.stringify({ data: MODELS.map(id => ({ id })) }), { status: 200 }) : new Response('{}', { status: 404 });
+  await gateway.save(dir, { apiKey: 'sk-good', model: 'deepseek-v4.1-flash' }, { safeStorage: fakeSafe, fetchImpl });
+  proxy.ensureEndpoint(dir);
+  const gwConfig = { companyCli: true, dshBackend: 'proxy', dshUpstream: 'gateway', dshApiModel: 'deepseek-v4.1-flash' };
+  const [route] = pi.availableRoutes(gwConfig, {}, { dataDir: dir, sessionId: 's1' });
+  assert.equal(route.id, 'company');
+  assert.equal(route.gateway, true);
+  assert.match(route.key, /__gw$/, '会话钥匙带网关标记，反代据此转给网关');
+  assert.deepEqual(route.models, MODELS);
+  assert.equal(route.defaultModel, 'deepseek-v4.1-flash');
+  assert.equal(pi.routeLabel(route), 'API 网关');
+  assert.ok(pi.piModelOptions(gwConfig, {}, { dataDir: dir }).every(o => o.label.endsWith('· API 网关')));
+  assert.equal(pi.defaultPiModel(gwConfig, {}, { dataDir: dir }), 'company-proxy/deepseek-v4.1-flash');
+  // CodeAgent 用户（反代走公司上游，或 DSH 没选反代）：照旧走公司上游，不带网关标记。
+  for (const config of [{ companyCli: true, dshBackend: 'proxy', dshUpstream: 'company' }, { companyCli: true, dshBackend: 'local', dshUpstream: '' }]) {
+    const [r] = pi.availableRoutes(config, {}, { dataDir: dir, sessionId: 's2' });
+    assert.equal(r.gateway, false);
+    assert.doesNotMatch(r.key, /__gw/);
+    assert.deepEqual(r.models, proxy.MODEL_IDS);
+    assert.equal(pi.routeLabel(r), '公司模型');
+  }
+});
+
+// 2026-11-18 同事反馈、11-20 黄区真机复现：Hub 经扩展注册给 pi 的模型缺 input，pi 1.5.2 发消息时读 model.input.includes 崩溃。
+test('Hub 注册给 pi 的模型（Token Plan、公司模型）都带 input，pi 发消息时不会读到 undefined', async () => {
+  const pi = require('../core/pi-cli-profile');
+  const env = baseEnv({ NPM_CONFIG_PREFIX: fakeRuntime() });
+  const out = pi.buildPiCliOptions('pi', { id: 'hub-in', cwd: 'D:\w' }, { acp: { apiKey: 'plan-key' } }, tmp(), env);
+  const providers = JSON.parse(out.launch.env.AI_HUB_PI_PROVIDERS);
+  const models = Object.values(providers).flatMap(p => p.models);
+  assert.ok(models.length > 0);
+  for (const m of models) assert.deepEqual(m.input, ['text'], m.id);
+  const proxy = require('../core/company-model-proxy');
+  const dir = tmp(); proxy.ensureEndpoint(dir);
+  const [company] = pi.availableRoutes({ companyCli: true }, {}, { dataDir: dir, sessionId: 's' });
+  assert.ok(company.providerConfig.models.every(m => Array.isArray(m.input) && m.input.includes('text')));
+});
+
+test('pi 一个模型都没有时发消息：当场报「还没有可用的模型」并标为未发送，不送进终端', async () => {
+  const { PiCliSession } = require('../core/pi-cli-session');
+  const session = new PiCliSession({ id: 'hub-nm', cwd: 'D:\w', model: '', eventDir: tmp(), launch: { command: 'node', args: [], env: {} } });
+  session.ready = Promise.resolve();
+  session.runtime = { ...session.runtime, connection: 'connected', state: 'idle' };
+  session.observe({ type: 'bound', sessionId: 'sid-nm', cwd: 'D:\w', model: { provider: 'unknown', id: 'unknown' } });
+  const written = [];
+  session.pty = { write: data => written.push(data) };
+  await assert.rejects(session.send('你好'), e => e.notSent === true && /还没有可用的模型/.test(e.message));
+  assert.equal(written.length, 0);
+  session.dispose();
+});
+
+test('公司线路换了上游（CodeAgent ↔ API 网关）后恢复旧会话：模型不在新模型表里就用这条线路的默认模型，不把不存在的模型交给 pi', async () => {
+  const gateway = require('../core/api-gateway');
+  const proxy = require('../core/company-model-proxy');
+  const pi = require('../core/pi-cli-profile');
+  const MODELS = ['qwen-aw-35b', 'deepseek-v4.1-flash'];
+  const dir = tmp();
+  const fakeSafe = { isEncryptionAvailable: () => true, encryptString: s => Buffer.from('enc:' + s), decryptString: b => String(b).replace(/^enc:/, '') };
+  await gateway.save(dir, { apiKey: 'sk-good', model: 'deepseek-v4.1-flash' }, { safeStorage: fakeSafe,
+    fetchImpl: async url => url.endsWith('/models') ? new Response(JSON.stringify({ data: MODELS.map(id => ({ id })) }), { status: 200 }) : new Response('{}', { status: 404 }) });
+  proxy.ensureEndpoint(dir);
+  const env = baseEnv({ NPM_CONFIG_PREFIX: fakeRuntime() });
+  const config = { companyCli: true, dshBackend: 'proxy', dshUpstream: 'gateway' };
+  const old = pi.buildPiCliOptions('pi-resume', { id: 'r1', cwd: 'D:\w', model: 'company-proxy/' + proxy.MODEL_IDS[0], piProfileId: 'pi:company' }, config, dir, env);
+  assert.deepEqual(old.launch.args.slice(3, 7), ['--provider', 'company-proxy', '--model', 'deepseek-v4.1-flash']);
+  const kept = pi.buildPiCliOptions('pi-resume', { id: 'r2', cwd: 'D:\w', model: 'company-proxy/qwen-aw-35b', piProfileId: 'pi:company' }, config, dir, env);
+  assert.deepEqual(kept.launch.args.slice(3, 7), ['--provider', 'company-proxy', '--model', 'qwen-aw-35b'], '在网关模型表里的照旧');
+});

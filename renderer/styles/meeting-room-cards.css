@@ -202,8 +202,13 @@ body.mr-card-compare-on .mr-ft.compare-selected:hover {
   border-top: 1px solid var(--border-subtle);
   background: rgba(var(--rgb-info), 0.04);
   align-items: center;
-  max-height: 90px;
+  /* 群聊面板是纵向弹性布局：窗口矮时这一行会被压扁，下面几条引用（连同 ✕）缩进输入框底下点不到（反馈 2e624281，1100×700 放 5 条引用可复现）。
+     不许压缩；5 条引用最多三行，放得下；真放不下才在这一行里滚动。 */
+  flex-shrink: 0;
+  max-height: 104px;
   overflow-y: auto;
+  position: relative;
+  z-index: 1;
 }
 .mr-gc-quote-chip {
   display: inline-flex;

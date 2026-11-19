@@ -11,12 +11,14 @@ function viewModel(status, now = new Date()) {
   const holidays = {};
   for (const k of Object.keys(status?.holidays || {})) holidays[k] = true;
   const r = status?.rules || A.rulesFromWorkTime({});
-  const opts = { holidays, rules: { amEnd: r.amEnd, pmStart: r.pmStart, owePerWorkday: r.owePerWorkday } };
+  const opts = { holidays, rules: A.calcRules(r) };
   const today = status?.today || A.dateKey(now);
-  const days = A.completedDays(A.buildDays(status?.records || [], opts), today);
+  // 月报、年报自己会排除今天；把今天也交给月报，弹性制才能按今天的上班卡推算几点走。
+  const all = A.buildDays(status?.records || [], opts);
+  const days = A.completedDays(all, today);
   const ym = today.slice(0, 7);
-  const month = A.monthReport(days, ym, today, opts);
-  const year = A.yearReport(days, Number(today.slice(0, 4)), today, opts);
+  const month = A.monthReport(all, ym, today, opts);
+  const year = A.yearReport(all, Number(today.slice(0, 4)), today, opts);
   return { days, today, ym, month, year, opts, work: r };
 }
 
@@ -101,7 +103,7 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
   function kpi(label, value, unit, note, cls = '') { return `<div class="att-card att-kpi"><div class="l">${label}</div><div class="v ${cls}">${value}<small>${unit}</small></div><div class="n">${note}</div></div>`; }
   function strip(list) {
     return `<div class="att-strip">${list.slice().reverse().map(x => `<button type="button" class="att-day${A.isWorkKind(x.kind) ? '' : ' rest'}" data-att="day" data-date="${x.date}">
-      <span class="t">${md(x.date)} 周${x.weekdayName}</span><span class="v">+${hm(x.ot)}</span><span class="m">${clk(x.arrive)}–${clk(x.leave)}</span>${x.leave >= 1320 ? '<i class="dot"></i>' : ''}</button>`).join('')}</div>`;
+      <span class="t">${md(x.date)} 周${x.weekdayName}</span><span class="v">${x.flex ? (x.singlePunch ? '缺卡' : (x.net < 0 ? '' : '+') + hm(x.net)) : '+' + hm(x.ot)}</span><span class="m">${clk(x.arrive)}–${clk(x.leave)}</span>${x.leave >= 1320 ? '<i class="dot"></i>' : ''}</button>`).join('')}</div>`;
   }
   function yearHtml() {
     const y = vm.year, cap = 80 * 60, max = Math.max(cap * 1.25, ...y.months.filter(m => m.hasData).map(m => m.net));
@@ -131,6 +133,15 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
   }
   function rulesHtml() {
     const w = vm.work, t = w.workTime;
+    if (w.flex) {
+      const f = w.flexSettings;
+      return `<details class="att-rules"><summary>加班怎么算（弹性工作制）</summary><ul>
+      <li>工作日不看几点到几点：当天在岗时长，扣掉午休 ${t.amEnd}–${t.pmStart}${f.dinnerBreak ? `、晚饭 ${t.pmEnd}–${t.eveningFrom}` : ''}，再减规定 ${f.dailyHours} 小时，就是当天净加班（不足为负）。</li>
+      <li>核心时段 ${f.coreStart}–${f.coreEnd}：晚于开始才到、早于结束就走的工作日会标出来，只做提醒，不另扣时间。</li>
+      <li>当天只有一次打卡时算不出在岗时长，标「缺卡」，不计加班也不扣。</li>
+      <li>周末、节假日整段在岗都算加班；月末周六是正常上班日，和工作日一样算。一天从 05:00 算起。</li>
+      <li>统计只到昨天；「守住 80 小时」按今天的上班卡（没有就按本月平均到岗）推算几点走。可在「考勤设置」里关掉弹性制。</li></ul></details>`;
+    }
     const owe = w.owePerWorkday ? `规定每天 8 小时，每个出勤工作日扣 ${h1(w.owePerWorkday)} 小时，按月统计` : '已满 8 小时，工作日不扣';
     return `<details class="att-rules"><summary>加班怎么算</summary><ul>
       <li>核心工作时间 ${t.amStart}–${t.amEnd}、${t.pmStart}–${t.pmEnd}，共 ${h1(w.ratedMinutes)} 小时；${owe}。可在「考勤设置」里改成你自己的时间。</li>
@@ -149,9 +160,9 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
     const m = vm.month;
     const hero = `<section class="att-card att-hero"><div class="att-hero-num"><div class="l">${Number(vm.ym.slice(5))} 月净加班 · 统计至昨日</div>
         <div class="v">${h1(m.net)}<small>小时</small></div><div class="n">相当于多上了 <b>${m.equivalentDays.toFixed(1)}</b> 天班（每天 8 小时）</div></div>
-        <div class="att-hero-cap">${capBar()}<div class="att-hero-sub">加班 ${h1(m.gross)} − 扣除 ${h1(m.owe)}（${m.workdays} 个工作日 × ${h1(vm.work.owePerWorkday)}）· 本月 ${m.monthWorkdays} 个工作日</div></div></section>`;
+        <div class="att-hero-cap">${capBar()}<div class="att-hero-sub">${vm.work.flex ? `弹性制 · 多出 ${h1(m.gross)} − 不足 ${h1(m.owe)}（${m.workdays} 个工作日，每天规定 ${vm.work.flexSettings.dailyHours} 小时）${m.coreMiss ? ` · ${m.coreMiss} 天没覆盖核心时段` : ''}${m.singlePunchDays ? ` · ${m.singlePunchDays} 天缺卡未计` : ''}` : `加班 ${h1(m.gross)} − 扣除 ${h1(m.owe)}（${m.workdays} 个工作日 × ${h1(vm.work.owePerWorkday)}）`} · 本月 ${m.monthWorkdays} 个工作日</div></div></section>`;
     const k = `<div class="att-kpis">${
-      kpi('工作日平均离开', m.avgLeave != null ? A.fmtClock(m.avgLeave) : '—', '', m.avgLeave != null ? `比 ${vm.work.workTime.eveningFrom} 晚 ${hm(Math.max(0, m.avgLeave - vm.work.pmStart))} · ${m.workdays} 天里 ${m.late22} 天过了 22 点` : '本月还没有工作日记录')}${
+      kpi('工作日平均离开', m.avgLeave != null ? A.fmtClock(m.avgLeave) : '—', '', m.avgLeave != null ? vm.work.flex ? `平均 ${A.fmtClock(m.avgArrive)} 到 · ${m.workdays} 天里 ${m.late22} 天过了 22 点` : `比 ${vm.work.workTime.eveningFrom} 晚 ${hm(Math.max(0, m.avgLeave - vm.work.pmStart))} · ${m.workdays} 天里 ${m.late22} 天过了 22 点` : '本月还没有工作日记录')}${
       kpi('折算日均工时', h1(m.convertedDaily), '小时', `规定 8 小时 + 日均净加班 ${h1(m.avgNetPerWorkday)}`)}${
       m.leftWorkdays && m.leaveBy != null && m.perDayAllowance >= 0
         ? kpi('守住 80 小时', A.fmtClock(m.leaveBy), '前离开', `剩 ${m.leftWorkdays} 个工作日 · 每天净加班 ≤ ${h1(m.perDayAllowance)}h`, m.willExceed ? 'red' : '')
@@ -164,20 +175,29 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
     const X = v => ((v - 300) / 1440 * 100).toFixed(2) + '%', W = v => (v / 1440 * 100).toFixed(2) + '%';
     let h = `<div class="att-tl"><div></div><div class="ax">${[[5, 300], [9, 540], [13, 780], [18, 1080], [22, 1320], ['次日 2', 1560]].map(([t, v]) => `<span style="left:${X(v)}">${t}</span>`).join('')}</div><div class="r">加班</div><div></div>`;
     for (const x of list) {
-      let tr = `<div class="tr">${A.isWorkKind(x.kind) ? `<div class="std" style="left:${X(540)};width:${W(210)}"></div><div class="std" style="left:${X(810)};width:${W(240)}"></div>` : ''}`;
+      const R = vm.opts.rules;
+      const bands = R.flex ? [[R.coreStart, R.coreEnd]] : [[540, 750], [810, 1050]];
+      let tr = `<div class="tr">${A.isWorkKind(x.kind) ? bands.map(([p, q]) => `<div class="std" style="left:${X(p)};width:${W(q - p)}"></div>`).join('') : ''}`;
       for (const s of x.segs) {
-        const AM = vm.opts.rules.amEnd, PM = vm.opts.rules.pmStart;
-        const parts = A.isWorkKind(x.kind) ? [[s.a, Math.min(s.b, AM), 1], [Math.max(s.a, AM), Math.min(s.b, PM), 0], [Math.max(s.a, PM), s.b, 1]] : [[s.a, s.b, 1]];
+        const AM = R.amEnd, PM = R.pmStart;
+        // 弹性制的工作日按时长算，不分哪一段是加班：整段画成在岗。
+        const parts = !A.isWorkKind(x.kind) ? [[s.a, s.b, 1]] : R.flex ? [[s.a, s.b, 0]] : [[s.a, Math.min(s.b, AM), 1], [Math.max(s.a, AM), Math.min(s.b, PM), 0], [Math.max(s.a, PM), s.b, 1]];
         for (const p of parts) if (p[1] > p[0]) tr += `<div class="br${p[2] ? ' ot' : ''}" style="left:${X(p[0])};width:${W(p[1] - p[0])}"></div>`;
         tr += `<span class="pt" style="left:${X(s.a)}">${badge(s.ta)}</span><span class="pt" style="left:${X(s.b)}">${badge(s.tb)}</span>`;
         tr += s.b - s.a < 90 ? `<span class="tx" style="left:${X((s.a + s.b) / 2)}">${clk(s.a)}–${clk(s.b)}</span>` : `<span class="tx" style="left:${X(s.a)}">${clk(s.a)}</span><span class="tx" style="left:${X(s.b)}">${clk(s.b)}</span>`;
       }
-      const tags = [KIND[x.kind] ? `<span class="att-tag ${A.isWorkKind(x.kind) ? 'mute' : 'blue'}">${KIND[x.kind]}</span>` : '', x.leave >= 1320 ? '<span class="att-tag amber">22 点后离开</span>' : '', x.nightReturn ? '<span class="att-tag amber">凌晨回来过</span>' : '', x.manual ? '<span class="att-tag mute">有手动卡</span>' : ''].join('');
-      h += `<div class="dd${x.date === drawer.focus ? ' hl' : ''}">${md(x.date)}<small>周${x.weekdayName}</small></div>${tr}</div><div class="hh">+${hm(x.ot)}</div><div class="tg">${tags}</div>`;
+      const tags = [KIND[x.kind] ? `<span class="att-tag ${A.isWorkKind(x.kind) ? 'mute' : 'blue'}">${KIND[x.kind]}</span>` : '', x.leave >= 1320 ? '<span class="att-tag amber">22 点后离开</span>' : '', x.nightReturn ? '<span class="att-tag amber">凌晨回来过</span>' : '', x.manual ? '<span class="att-tag mute">有手动卡</span>' : '', x.flex && x.singlePunch ? '<span class="att-tag amber">缺卡 · 未计</span>' : '', x.coreLate ? '<span class="att-tag amber">核心时段后才到</span>' : '', x.coreEarly ? '<span class="att-tag amber">核心时段前离开</span>' : ''].join('');
+      h += `<div class="dd${x.date === drawer.focus ? ' hl' : ''}">${md(x.date)}<small>周${x.weekdayName}</small></div>${tr}</div><div class="hh">${x.flex ? (x.net < 0 ? '' : '+') + hm(x.net) : '+' + hm(x.ot)}</div><div class="tg">${tags}</div>`;
     }
     return h + '</div>';
   }
   function ledgerHtml(list, sum) {
+    if (vm.work.flex) {
+      const frow = x => `<tr class="${x.date === drawer.focus ? 'hl' : ''}${A.isWorkKind(x.kind) ? '' : ' rest'}"><td>${md(x.date)}</td><td>周${x.weekdayName}</td><td>${clk(x.arrive)} ${badge(x.arriveTag)}</td><td>${clk(x.leave)} ${badge(x.leaveTag)}</td><td class="r">${hm(x.span)}</td><td class="r">${x.flex ? (x.singlePunch ? '缺卡' : hm(x.worked)) : '—'}</td><td class="r">${x.flex && x.required ? hm(x.required) : '—'}</td><td class="r">${x.otRest ? hm(x.otRest) : '—'}</td><td class="r"><b>${x.net < 0 ? '' : '+'}${hm(x.net)}</b></td></tr>`;
+      return `<table class="att-ledger"><thead><tr><th>日期</th><th>星期</th><th>首次</th><th>末次</th><th class="r">在岗</th><th class="r">计工时</th><th class="r">规定</th><th class="r">周末/假日</th><th class="r">净加班</th></tr></thead><tbody>
+      <tr class="sum"><td colspan="4">合计 · 工作日 ${sum.workdays} 天 · 周末/假日 ${sum.restDays} 天</td><td class="r">${h1(sum.span)}</td><td class="r">${h1(sum.worked)}</td><td class="r">—</td><td class="r">${h1(sum.rest)}</td><td class="r">${h1(sum.net)}h</td></tr>
+      ${list.map(frow).join('')}</tbody></table>`;
+    }
     const row = x => `<tr class="${x.date === drawer.focus ? 'hl' : ''}${A.isWorkKind(x.kind) ? '' : ' rest'}"><td>${md(x.date)}</td><td>周${x.weekdayName}</td><td>${clk(x.arrive)} ${badge(x.arriveTag)}</td><td>${clk(x.leave)} ${badge(x.leaveTag)}</td><td class="r">${hm(x.span)}</td><td class="r">${x.otAm ? x.otAm + '′' : '—'}</td><td class="r">${x.otPm ? hm(x.otPm) : '—'}</td><td class="r">${x.otRest ? hm(x.otRest) : '—'}</td><td class="r">${x.owe ? '−0h30' : '—'}</td><td class="r"><b>${x.net < 0 ? '' : '+'}${hm(x.net)}</b></td></tr>`;
     return `<table class="att-ledger"><thead><tr><th>日期</th><th>星期</th><th>首次</th><th>末次</th><th class="r">在岗</th><th class="r">早上</th><th class="r">晚上</th><th class="r">周末/假日</th><th class="r">扣除</th><th class="r">净加班</th></tr></thead><tbody>
       <tr class="sum"><td colspan="4">合计 · 工作日 ${sum.workdays} 天 · 周末/假日 ${sum.restDays} 天</td><td class="r">${h1(sum.span)}</td><td class="r">${h1(sum.am)}</td><td class="r">${h1(sum.pm)}</td><td class="r">${h1(sum.rest)}</td><td class="r">−${h1(sum.owe)}</td><td class="r">${h1(sum.net)}h</td></tr>
@@ -200,7 +220,7 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
         <span class="att-seg"><button type="button" data-att="view" data-v="time" class="${drawer.view === 'time' ? 'on' : ''}">时间轴</button><button type="button" data-att="view" data-v="ledger" class="${drawer.view === 'ledger' ? 'on' : ''}">账本</button></span>
         <span class="att-dsum">净加班 <b>${h1(sum.net)}</b> 小时</span>
         <button type="button" class="att-x" data-att="close" aria-label="关闭">×</button></div>
-      <div class="att-dnote">浅蓝块 = 额定上班 · 橙线 = 算加班 · 智 / 手 = 智能 / 手动打卡</div>
+      <div class="att-dnote">${vm.work.flex ? '浅蓝块 = 核心时段 · 蓝线 = 工作日在岗（按时长算）· 橙线 = 周末/假日' : '浅蓝块 = 额定上班 · 橙线 = 算加班'} · 智 / 手 = 智能 / 手动打卡</div>
       <div class="att-dbody">${list.length ? (drawer.view === 'time' ? timelineHtml(list) : ledgerHtml(list, sum)) : '<div class="att-empty"><p>这个月没有记录</p></div>'}</div></aside>`;
     // 只滚抽屉自己的列表：scrollIntoView 会连带滚动整页外框，把页头推出视口。
     const body = el.querySelector('.att-dbody'), hl = drawer.focus && el.querySelector('.hl');
@@ -218,12 +238,18 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
     if (!panelOpen) { el.innerHTML = ''; return; }
     const s = status.settings || {};
     const wt = s.workTime || A.DEFAULT_WORK_TIME;
+    const fx = s.flex || A.DEFAULT_FLEX;
     el.innerHTML = `<div class="att-card att-settings"><h2>考勤设置</h2>
       <label class="att-field"><span>公司域名（考勤地址用它拼出）</span><input data-f="domain" value="${esc(s.domain || '')}" placeholder="自动找到；也可填公司邮箱或域名"></label>
       <div class="att-field"><span>核心工作时间（加班按它算）</span>
         <div class="att-time-row">上午 <input type="time" data-w="amStart" value="${esc(wt.amStart)}"> – <input type="time" data-w="amEnd" value="${esc(wt.amEnd)}">
         下午 <input type="time" data-w="pmStart" value="${esc(wt.pmStart)}"> – <input type="time" data-w="pmEnd" value="${esc(wt.pmEnd)}"></div>
         <div class="att-time-row">晚上 <input type="time" data-w="eveningFrom" value="${esc(wt.eveningFrom)}"> 之后算加班（默认下班后 30 分钟）<button type="button" class="att-btn" data-att="worktime-reset">恢复默认</button></div></div>
+      <div class="att-field"><label class="att-check"><input type="checkbox" data-x="on" ${fx.on ? 'checked' : ''}> 弹性工作制：工作日按在岗时长算加班，不看几点到几点</label>
+        <div class="att-time-row">核心时段 <input type="time" data-x="coreStart" value="${esc(fx.coreStart)}"> – <input type="time" data-x="coreEnd" value="${esc(fx.coreEnd)}">
+        每天规定 <input type="number" class="att-num" data-x="dailyHours" min="1" max="16" step="0.5" value="${esc(fx.dailyHours)}"> 小时
+        <label class="att-check inline"><input type="checkbox" data-x="dinnerBreak" ${fx.dinnerBreak ? 'checked' : ''}> 晚饭段（下午下班到晚上加班起算）不计工时</label></div>
+        <div class="att-hint">午休按上面的「上午下班–下午上班」扣除；没覆盖核心时段的日子只标出来，不另扣。</div></div>
       <label class="att-check"><input type="checkbox" data-f="autoDaily" ${s.autoDaily !== false ? 'checked' : ''}> 每天自动读取一次（当天读到就不再访问）</label>
       <label class="att-field"><span>考勤页</span>${pageSelect(s.page, 'page')}</label>
       <p class="att-note">读取地址：${esc(status.url || '正在自动查找公司域名…')}${s.domainFrom && s.domainFrom !== 'settings' ? '（域名是自动找到的）' : ''}</p>
@@ -267,7 +293,11 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
       for (const i of page.querySelectorAll('[data-w]')) workTime[i.dataset.w] = i.value;
       const check = A.normalizeWorkTime(workTime);
       if (!check.ok) { showMessage?.('核心工作时间不对：' + check.error); return; }
-      await call('set-settings', { domain: v('domain').value, autoDaily: v('autoDaily').checked, page: v('page').value, workTime });
+      const x = f => page.querySelector(`[data-x="${f}"]`);
+      const flex = { on: x('on').checked, coreStart: x('coreStart').value, coreEnd: x('coreEnd').value, dailyHours: Number(x('dailyHours').value), dinnerBreak: x('dinnerBreak').checked };
+      const fcheck = A.normalizeFlex(flex);
+      if (flex.on && !fcheck.ok) { showMessage?.('弹性工作制设置不对：' + fcheck.error); return; }   // 没开弹性制不校验它（复审补点）
+      await call('set-settings', { domain: v('domain').value, autoDaily: v('autoDaily').checked, page: v('page').value, workTime, flex });
       panelOpen = false; await load(); showMessage?.('考勤设置已保存'); return;
     }
     if (name === 'login') { el.disabled = true; try { const r = await call('login'); showMessage?.(r?.ok ? '已登录，正在读取考勤' : (r?.error || '登录窗口已关闭')); } finally { el.disabled = false; await load(); } return; }

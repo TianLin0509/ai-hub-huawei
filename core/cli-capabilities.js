@@ -17,7 +17,7 @@ function selectedDsh({ env = process.env, forProbe = false } = {}) {
   const config = require('./hub-config').getConfig();
   const runtime = require('./dsh-cli-profile').resolveDshCliRuntime(config?.acp?.providers?.['deepseek-acp'] || {}, env);
   let node = config?.acp?.nodePath;
-  if (!node && config.companyCli && config.dshBackend === 'proxy') {
+  if (!node && config.companyCli && ['proxy', 'api'].includes(config.dshBackend)) {
     if (forProbe) node = require('./cli-tools/registry').managedBin('node', env) || require('./local-node').findNode({env});
     else node = dshNodes.get(runtime.entryPath);
   }

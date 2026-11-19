@@ -109,7 +109,6 @@ class ClaudeNativeSession extends EventEmitter {
     this.completedResultIds = new Set([...this.records.values(), ...this.activities.records.values()]
       .map(record => record.providerResultId || record.resultId).filter(Boolean));
     this.foregroundState = 'idle';
-    this.items = new Map();
     this.closed = false;
     this.closePromise = null;
     this.ready = null;
@@ -691,7 +690,7 @@ class ClaudeNativeSession extends EventEmitter {
         this.lifecycle('agent-turn-started', record, { status: 'running', accepted: true, startedAt: record.startedAt });
       }
       if (message.type === 'assistant') {
-        this.items.set(message.message?.id || message.uuid, message);
+        // 2026-11-20：原来每条回复整帧存进 this.items，没有任何地方读、也从不删，长会话主进程内存只增不减；已去掉。
         if (typeof message.message?.model === 'string' && message.message.model) outputOwner.model = message.message.model;
         // A slash command is executed by the engine itself and answered with a
         // local_command_source frame instead of a model reply. Keep that output

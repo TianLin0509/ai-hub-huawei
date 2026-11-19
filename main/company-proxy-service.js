@@ -178,6 +178,8 @@ class CompanyProxyService {
   async start() {
     this.stopping = false;
     this.endpoint = null;
+    // 本进程的反代端口在就绪后才登记（core/company-model-proxy.js noteLiveEndpoint）；启动前先清掉上一轮的。
+    this.proxy().noteLiveEndpoint(this.dataDir, null);
     const endpoint = this.proxy().ensureEndpoint(this.dataDir);
     fs.mkdirSync(path.dirname(this.logPath()), { recursive: true });
     const stateFile = path.join(this.proxy().proxyDir(this.dataDir), 'proxy-state.json');
@@ -217,6 +219,8 @@ class CompanyProxyService {
     if (this.stopping || this.child !== child) return this.status();
     this.endpoint = { ...endpoint, port: ready.port, pid: child.pid };
     this.proxy().setEndpointPort(this.dataDir, ready.port);
+    // 同一数据目录另一个 Hub 之后改写 endpoint.json，本进程新建的会话仍连自己的反代（反馈 38a58107）。
+    this.proxy().noteLiveEndpoint(this.dataDir, { port: ready.port, key: endpoint.key });
     await this.poll();
     if (!this.timer) { this.timer = setInterval(() => void this.poll(), POLL_MS); this.timer.unref?.(); }
     return this.status();
@@ -238,6 +242,7 @@ class CompanyProxyService {
   onExit(child, code, signal) {
     if (this.child !== child) return;
     this.child = null;
+    this.proxy().noteLiveEndpoint(this.dataDir, null);
     if (this.stopping) { this.setState('stopped'); return; }
     this.logger.warn?.(`[company-proxy] exited unexpectedly (code ${code}, signal ${signal})`);
     if (this.restarts < 1) {
@@ -358,6 +363,7 @@ class CompanyProxyService {
       child.once('exit', () => { clearTimeout(timer); resolve(); });
     });
     if (this.child === child) this.child = null;
+    this.proxy().noteLiveEndpoint(this.dataDir, null);
     this.setState('stopped');
   }
 

@@ -1145,7 +1145,8 @@ diskReleasePanel = require('./disk-release-panel').attachDiskReleasePanel({
   },
 });
 // 底栏「问问 Hub」（2026-11-19）：照随包的使用说明书答疑，只读一次性问答（renderer/help-ask-ui.js）。
-try { require('./help-ask-ui.js').attachHelpAsk({ document, ipcRenderer }); } catch (error) { console.warn('[help-ask] 界面初始化失败：', error.message); }
+// window.__hubHelpAsk：报错卡旁的「问问 Hub」按钮靠它带上报错文字打开面板（renderer/hub-error-card.js）；没装上时按钮不出现。
+try { const helpAsk = require('./help-ask-ui.js').attachHelpAsk({ document, ipcRenderer }); if (helpAsk) window.__hubHelpAsk = helpAsk; } catch (error) { console.warn('[help-ask] 界面初始化失败：', error.message); }
 // 桌宠「硬盘快满」卡片点开这里（2026-11-09）。
 window.__hubOpenDiskRelease = () => diskReleasePanel?.open();
 require('./vpn-traffic-panel').attachVpnTrafficPanel({
@@ -2134,6 +2135,17 @@ function paintAppToolbarForSession(sessionId, session, cached) {
   paintTerminalRuntimeStatus(statusDot, session);
 
   crumb.append(workspaceBtn, crumbSep, titleSpan, statusDot);
+  // Agent 标识（2026-11-19 J 席）：这个会话背后是 Claude Code / Codex / CodeAgent / DSH 哪个程序，紧跟状态点。
+  // 2026-08 迁移前的 DeepSeek 会话 kind 仍是 deepseek、实际跑 Claude Code：按运行时判定（复审补点）
+  const agentLabel = require('../core/ai-kinds').getAgentLabel(require('../core/session-capabilities').runtimeKindForSession(session) || session.kind);
+  if (agentLabel) {
+    const agentChip = document.createElement('span');
+    agentChip.className = 'crumb-agent';
+    agentChip.dataset.agent = String(session.kind || '').replace(/-resume$/, '');
+    agentChip.textContent = agentLabel;
+    agentChip.title = `这个会话由 ${agentLabel} 运行`;
+    crumb.append(agentChip);
+  }
   paintCrumbModelRoute(session);
   paintCrumbBridge(sessionId);
 
@@ -4534,8 +4546,17 @@ function measureFloatingBarVisualHeight(bar) {
 const { beginPromptDelivery, applyPromptReceipt } = require('./prompt-delivery-state.js');
 const floatingPromptDeliveries = new Map();
 
+// 发送失败待重发的那条，按会话记住（renderer/composer-resend-strip.js）；输入框重建后照样挂出提示条。
+const composerResendPending = new Map();
+
 function updateFloatingPromptReceipt(receipt) {
   if (!receipt?.sessionId) return;
+  if (receipt.status === 'confirmed' && receipt.clientSubmissionId) {
+    require('./composer-resend-strip').forgetConfirmed(composerResendPending, receipt.sessionId, receipt.clientSubmissionId);
+    for (const bar of document.querySelectorAll('.floating-input-bar')) {
+      if (bar.dataset.sessionId === receipt.sessionId) bar._resendStrip?.clearIfSubmission(receipt.clientSubmissionId);
+    }
+  }
   const state = floatingPromptDeliveries.get(receipt.sessionId);
   if (!applyPromptReceipt(state, receipt)) return;
   paintNativePromptReceipts(receipt.sessionId);
@@ -4580,10 +4601,11 @@ function clearFloatingInputStuck(bar) {
   if (existing) existing.remove();
 }
 
-function reportFloatingSendFailure(sessionId, inputBox, text, reason) {
+function reportFloatingSendFailure(sessionId, inputBox, text, reason, submissionId = '') {
   const restored = !!inputBox && !readContenteditablePlainText(inputBox) && !!text;
   if (restored) { replaceContenteditableText(inputBox, text); saveFloatingInputDraft(sessionId, inputBox); }
-  showToast(`发送失败：${reason}。${restored ? '原文已放回输入框；' : ''}请先在终端核对是否已收到，再决定是否重发`, 'error');
+  showToast(`发送失败：${reason}。${restored ? '原文已放回输入框；' : ''}请先在终端核对是否已收到，再决定是否重发`, 'error', { sessionId });
+  inputBox?.closest?.('.floating-input-bar')?._resendStrip?.show({ text, reason, uncertain: true, submissionId });
 }
 
 function lockFloatingInputBarGeometry(bar) {
@@ -4755,6 +4777,8 @@ async function restartSessionInPlace(sessionId) {
   if (result && result.ok === false) restartInPlaceFailed(sessionId, result.message || '会话重启失败');
   return result;
 }
+// 报错卡「重启会话」一键修（renderer/hub-error-card.js）走同一条路。
+window.__hubRestartSessionInPlace = restartSessionInPlace;
 // 重启没成功、会话停在休眠：还停在它上面的话，把「正在唤醒」换成失败说明（再点左栏会话可重试），不留一直转圈的占位。
 function restartInPlaceFailed(sessionId, message) {
   const session = sessions.get(sessionId);
@@ -4983,6 +5007,15 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   const commandFeedback = require('./codex-command-feedback').createCodexCommandFeedback(document, bar);
   let commandFeedbackSequence = 0;
   bar.dataset.sessionId = sessionId;
+  // 发送失败后挂在输入框上方的「重发」条：重发交回本输入框的 sendInput（session:send-prompt 闭环）。
+  bar._resendStrip = require('./composer-resend-strip').createResendStrip(document, bar, {
+    store: composerResendPending, key: sessionId,
+    resend: () => sendInput(),
+    restoreText: (text) => {
+      // 输入框还空着才放回原文；用户已经改过就按改过的发。
+      if (text && !readContenteditablePlainText(inputBox)) { replaceContenteditableText(inputBox, text); saveFloatingInputDraft(sessionId, inputBox); }
+    },
+  });
   const codexControls = createCodexNativeControls({
     sessionId, invoke: (channel, payload) => ipcRenderer.invoke(channel, payload),
     openExternal: url => shell.openExternal(url),
@@ -5629,6 +5662,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     const nativeCommand = isNativeAgent(sessions.get(sessionId)) && text.trimStart().startsWith('/');
     const feedbackSequence = ++commandFeedbackSequence;
     commandFeedback.clear();
+    bar._resendStrip?.clear();
     if (nativeCommand) commandFeedback.show(text.trim(), '正在执行…');
 
     // 立即清 UI；原生会话继续在 Hub 输入框接收下一条消息。
@@ -5716,6 +5750,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
         catch (restoreError) { inputBox.textContent = text; console.warn('[floating-input] draft restore failed:', restoreError); }
       }
       showToast('消息未发送：' + (error.message || '界面准备异常') + '。原文保留在输入框，可重试', 'error');
+      bar._resendStrip?.show({ text, reason: error.message || '界面准备异常' });
       return;
     }
     const delivery = nativeCommand ? null : beginPromptDelivery(clientSubmissionId);
@@ -5760,7 +5795,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       if (floatingPromptDeliveries.get(sessionId) !== delivery) {
         if (delivery.status !== 'confirmed' && result?.receipt?.status !== 'confirmed' && !result?.ok && !result?.unconfirmed) {
           const excerpt = text.replace(/\s+/g, ' ').slice(0, 32);
-          showToast(`较早的消息${result?.notSent ? '未发送' : '发送未完成'}（${excerpt}）：${result?.message || result?.error || '发送失败'}。可按↑找回原文${result?.notSent ? '' : '，请先到后台核对'}`, 'error');
+          showToast(`较早的消息${result?.notSent ? '未发送' : '发送未完成'}（${excerpt}）：${result?.message || result?.error || '发送失败'}。可按↑找回原文${result?.notSent ? '' : '，请先到后台核对'}`, 'error', { sessionId });
         }
         return;
       }
@@ -5793,7 +5828,8 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
         delivery.dismissed = true;
         updateFloatingPromptReceipt({ sessionId, clientSubmissionId, status: 'failed' });
         if (!readContenteditablePlainText(inputBox)) { replaceContenteditableText(inputBox, text); saveFloatingInputDraft(sessionId, inputBox); }
-        showToast('消息未发送：' + (result.message || 'CLI 暂时不能接收输入'), 'error');
+        showToast('消息未发送：' + (result.message || 'CLI 暂时不能接收输入'), 'error', { sessionId });
+        bar._resendStrip?.show({ text, reason: result.message || 'CLI 暂时不能接收输入' });
         for (const other of document.querySelectorAll('.floating-input-bar')) {
           if (other.dataset.sessionId === sessionId) clearFloatingInputStuck(other);
         }
@@ -5813,7 +5849,8 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
           replaceContenteditableText(inputBox, text); saveFloatingInputDraft(sessionId, inputBox);
         }
         if (result?.notSent) {
-          showToast('消息未发送：' + (result.message || '连接暂不可用'), 'error');
+          showToast('消息未发送：' + (result.message || '连接暂不可用'), 'error', { sessionId });
+          bar._resendStrip?.show({ text, reason: result.message || '连接暂不可用' });
           for (const other of document.querySelectorAll('.floating-input-bar')) {
             if (other.dataset.sessionId === sessionId) clearFloatingInputStuck(other);
           }
@@ -5823,7 +5860,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       // 明确失败仍要告知：输入框在发送前已清空，
       // 这里说明原因并把原文放回（可能已部分写进终端，所以提示先核对，不自动重发）。
       if (!result?.ok && !result?.unconfirmed) {
-        reportFloatingSendFailure(sessionId, inputBox, text, result?.message || result?.error || '发送失败');
+        reportFloatingSendFailure(sessionId, inputBox, text, result?.message || result?.error || '发送失败', clientSubmissionId);
         return;
       }
     }).catch((err) => {
@@ -5838,7 +5875,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       if (delivery.status === 'confirmed' || delivery.status === 'content-mismatch') return;
       console.warn('[floating-input] send-prompt IPC failed:', err && err.message);
       if (isNativeAgent(session)) showToast('发送未完成：' + err.message, 'error');
-      else reportFloatingSendFailure(sessionId, inputBox, text, err && err.message || '发送通道异常');
+      else reportFloatingSendFailure(sessionId, inputBox, text, err && err.message || '发送通道异常', clientSubmissionId);
       updateFloatingPromptReceipt({ sessionId, clientSubmissionId, status: 'failed' });
     });
   }
@@ -8450,9 +8487,10 @@ function ptyToolQuestionText(toolName, toolInput) {
 // renderer 里有 14 处调用 showToast，却一直没有定义（调用即 ReferenceError，
 // 之前只在少见的原生分支里，没人撞上）。复用群聊分叉已有的轻提示。
 // 错误类（5.5.24）：2.6 秒来不及读，改成停留 8 秒、悬停不消失，带「详情」可展开成错误卡（含求助按钮）。
-function showToast(message, level) {
+function showToast(message, level, options = {}) {
   if (message === '已停止') return require('./composer-codeagent-input').showStopToast(document, message);
-  if (level === 'error') return require('./hub-error-card').showErrorToast(document, String(message || ''));
+  // options.sessionId：这条报错属于哪个会话，提示上的「重启会话」「换模型」只作用在它上面（不猜当前会话）。
+  if (level === 'error') return require('./hub-error-card').showErrorToast(document, String(message || ''), options.sessionId ? { sessionId: options.sessionId } : undefined);
   require('./groupchat-fork-ui.js').showForkToast(document, String(message || ''), 'info');
 }
 
@@ -9118,6 +9156,9 @@ const keyboardShortcuts = createKeyboardShortcuts({
   closeSession: closeSessionAsSleep,
   createWorkspaceSession: (kind) => launchCenter.open('session', { kind }),
   copyText: text => clipboardController.copyText(text, { source: 'terminal-shortcut' }),
+  getRecentFiles: () => previewPanel.getRecentFiles(),
+  openFile: filePath => openPreviewPanel(filePath, { preview: true }),
+  showMessage: message => showToast(message),
 });
 keyboardShortcuts.init();
 // Ctrl+鼠标滚轮：指针下是终端就调终端字号，其余（卡片、群聊、沉浸阅读）调阅读缩放，与 Ctrl+= / Ctrl+- 同一设置。
@@ -9541,6 +9582,8 @@ document.getElementById('btn-team')?.remove();
   }).catch(() => avatarButton?.remove());
 }
 const openConfigModal = configModal.open;
+// 设置弹窗顶部的「搜设置和功能」（2026-11-20 体验 1）：与 Ctrl+K 同一份功能索引。
+require('./feature-search.js').mountSettingsSearch({ document, window, showMessage: message => showToast(message) });
 // 右下角回执小卡上的齿轮：打开配置并停在「桌面回执」（2026-11-11）。
 ipcRenderer.on('desktop-notification:open-settings', async () => {
   try { await openConfigModal(); } catch (_) {}

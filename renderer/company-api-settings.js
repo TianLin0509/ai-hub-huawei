@@ -327,6 +327,66 @@
       finally { save.disabled = false; }
     };
   }
+  // 自有接口「测试连接」（2026-11-20）：请求一次模型列表，结果就地写清；模型名给下拉候选，地址缺 /v1 时自动补。
+  // Claude Code 只认 Anthropic 格式：能列出模型的多半是 OpenAI 兼容接口，就地给「改用 API 网关接入」（Hub 本机转格式）。
+  function bindOwnTest(target, kind, profileId) {
+    const button = target.querySelector('[data-api-action="own-test"]');
+    if (!button) return;
+    button.onclick = async () => {
+      const form = target.querySelector('form[data-api-form]'), status = form.querySelector('[role="status"]'), hint = form.querySelector('[data-own-hint]');
+      const baseURL = form.elements.baseURL.value.trim(), apiKey = form.elements.apiKey.value.trim();
+      hint.hidden = true; hint.innerHTML = '';
+      if (!baseURL) { status.textContent = '先填接口地址再测试（例如 http://xxx/v1）。'; form.elements.baseURL.focus(); return; }
+      button.disabled = true; status.textContent = '正在测试连接…（请求一次模型列表，不发对话、不耗额度）';
+      try {
+        const r = await ipcRenderer.invoke('company-api:probe', { kind, baseURL, apiKey, profileId });
+        if (!r?.ok) { status.textContent = '测试没通过：' + (r?.error || '未知原因'); return; }
+        if (r.baseURL) form.elements.baseURL.value = r.baseURL;
+        const model = form.elements.model;
+        if (!r.models.includes(model.value.trim())) model.value = r.models.includes('deepseek-v4.1-flash') ? 'deepseek-v4.1-flash' : r.models[0];
+        // 用普通下拉框列出接口上的模型（不用 datalist：Electron 里弹 datalist 候选框有崩溃风险），选了就填进模型框。
+        const pick = form.querySelector('[data-own-model-pick]'), select = form.querySelector('[data-own-model-select]');
+        if (pick && select) {
+          select.innerHTML = r.models.map(id => `<option value="${esc(id)}"${id === model.value ? ' selected' : ''}>${esc(id)}</option>`).join('');
+          select.onchange = () => { model.value = select.value; };
+          pick.hidden = false;
+        }
+        status.textContent = `连接正常：接口上有 ${r.models.length} 个模型${r.baseURL ? '，地址已自动补上 /v1' : ''}；模型已填「${model.value}」，可在「接口上的模型」里换。点「${editing() ? '保存修改' : '保存配置'}」生效。`
+          + (r.keyUsed === 'none' ? '（没填 Key 也连上了；如果发消息报 key 无效，请补上 Key）' : '');
+        if (kind === 'claude') {
+          hint.hidden = false;
+          hint.innerHTML = '<p>这个地址能列出模型，多半是 <strong>OpenAI 兼容接口</strong>。Claude Code 只认 Anthropic 格式，直接填进来发消息常会报 404 或格式错误。'
+            + '想用 Claude Code 就改用「API 网关」接入：Hub 在本机把请求转成 OpenAI 格式，地址、Key、模型照用这一份。</p>'
+            + '<button type="button" data-api-action="own-to-gateway">改用 API 网关接入</button>';
+          hint.querySelector('[data-api-action="own-to-gateway"]').onclick = async event => {
+            const key = form.elements.apiKey.value.trim(), go = event.currentTarget;
+            if (!key) { status.textContent = '请在「API Key」里再粘贴一次 key，然后点「改用 API 网关接入」（已保存的 Key 不会转给网关）。'; form.elements.apiKey.focus(); return; }
+            // 网关是各工具共用的一份（Codex 审查 P1）：已配了别的网关地址时，先说清会影响谁，再点一次才替换。
+            const g0 = snapshot?.gateway, wanted = form.elements.baseURL.value.trim().replace(/\/+$/, '');
+            const users = KINDS.filter(k => k !== kind && snapshot?.providers?.[k]?.backend === 'proxy' && snapshot.providers[k].upstream === 'gateway').map(k => LABELS[k]);
+            if (g0?.keySet && String(g0.baseURL || '').replace(/\/+$/, '') !== wanted && go.dataset.confirm !== '1') {
+              go.dataset.confirm = '1'; go.textContent = '确认替换 API 网关';
+              status.textContent = `这台电脑已经配了 API 网关（${g0.baseURL}）${users.length ? `，${users.join('、')} 正在用它` : ''}。改用这个地址后，${users.length ? '它们之后发的消息也会转到新地址' : '原来的网关配置会被替换'}。确定就再点一次「确认替换 API 网关」。`;
+              return;
+            }
+            go.disabled = true; status.textContent = '正在改用 API 网关接入…';
+            try {
+              const g = await ipcRenderer.invoke('api-gateway:save', { baseURL: form.elements.baseURL.value.trim(), apiKey: key, model: form.elements.model.value.trim(), useFor: [kind] });
+              if (!g?.ok) { status.textContent = '没改成：' + (g?.error || '未知原因'); go.disabled = false; return; }
+              const fresh = await ipcRenderer.invoke('company-api:get');
+              if (fresh?.ok) snapshot = fresh;
+              viewMode[kind] = 'gateway';
+              const chosen = form.elements.model.value.trim();
+              render(kind);
+              dialog.querySelector('form [role="status"]').textContent = `已改用 API 网关接入。新建 Claude Code 会话经本机转给这个接口（${chosen}）。`;
+            } catch (error) { status.textContent = '没改成：' + error.message; go.disabled = false; }
+          };
+        }
+      } catch (error) { status.textContent = '测试没通过：' + error.message; }
+      finally { button.disabled = false; }
+    };
+    const editing = () => !!target.querySelector('[data-api-action="profile-delete"]');
+  }
   function render(kind) {
     const target = makeDialog();
     const value = snapshot?.providers?.[kind] || {};
@@ -347,13 +407,36 @@
       + (profileId ? `<label>账号名称<input name="label" value="${esc(editing?.label)}" maxlength="80" required placeholder="例如：供应商 A · 账号 1"></label>` : '')
       + `<label>接口地址<input name="baseURL" type="url" value="${esc(own.baseURL)}" placeholder="留空沿用本机配置" autocomplete="off" spellcheck="false"></label>`
       + `<label>API Key<input name="apiKey" type="password" placeholder="${own.apiKeySet ? '已保存；留空保留原 Key' : '可选；留空沿用本机登录'}" autocomplete="off" spellcheck="false"></label>`
-      + `<label>模型<input name="model" value="${esc(own.model)}" placeholder="留空沿用 CLI 配置的模型" autocomplete="off" spellcheck="false"></label>`
+      + `<label>模型<input name="model" value="${esc(own.model)}" placeholder="${kind === 'deepseek-acp' ? '必填；点「测试连接」从列表里选' : '留空沿用 CLI 配置的模型'}" autocomplete="off" spellcheck="false"></label><label data-own-model-pick hidden>接口上的模型<select data-own-model-select></select></label>`
       + (kind === 'codex' ? `<label>接口协议<select name="wireApi"><option value="responses"${own.wireApi === 'chat' ? '' : ' selected'}>responses（默认）</option><option value="chat"${own.wireApi === 'chat' ? ' selected' : ''}>chat</option></select></label>` : '')
-      + (kind === 'deepseek-acp' ? '<p class="company-api-note">可先保存接口。DSH 自有接口的运行接入尚未就绪，DSH 会话请选「公司模型」，或先使用 Claude Code、Codex。</p>' : '<p class="company-api-note">Key 仅保存在本机配置中，重新打开时不会显示。进行中的会话保持原配置。</p>')
-      + '<p class="company-api-message" role="status" aria-live="polite"></p><footer><button type="button" data-api-action="local">沿用本机配置</button><button type="button" data-api-action="close">取消</button><button type="submit" class="primary">保存配置</button></footer></form>');
+      + (kind === 'deepseek-acp' ? '<p class="company-api-note">填 OpenAI 兼容接口（如部门自有模型平台，地址一般以 /v1 结尾）、Key 和模型名，DSH 直连这个接口，不走公司模型和 API 网关。先点「测试连接」核对地址和 Key，并从列表里选模型。部门发的是 API 网关 key 时，用上面的「API 网关」更省事。</p>'
+        : '<p class="company-api-note">Key 仅保存在本机配置中，重新打开时不会显示。进行中的会话保持原配置。可先点「测试连接」核对地址和 Key。</p>')
+      + '<p class="company-api-message" role="status" aria-live="polite"></p><div class="company-api-own-hint" data-own-hint hidden></div><footer>'
+      + '<button type="button" data-api-action="own-test">测试连接</button>'
+      + (editing ? '<button type="button" data-api-action="profile-delete">删除此账号</button>' : '')
+      + `<button type="button" data-api-action="local">${kind === 'deepseek-acp' ? '清空自有接口' : '沿用本机配置'}</button><button type="button" data-api-action="close">取消</button><button type="submit" class="primary">${editing ? '保存修改' : '保存配置'}</button></footer></form>`);
     target.querySelector('[data-api-action="close"]').onclick = close;
     const profileSelect = target.querySelector('[data-api-profile]');
     if (profileSelect) profileSelect.onchange = () => { viewProfile[kind] = profileSelect.value; render(kind); };
+    bindOwnTest(target, kind, profileId && profileId !== 'new' ? profileId : '');
+    const deleteButton = target.querySelector('[data-api-action="profile-delete"]');
+    if (deleteButton) deleteButton.onclick = async () => {
+      const status = target.querySelector('[role="status"]');
+      if (deleteButton.dataset.confirm !== '1') {
+        deleteButton.dataset.confirm = '1'; deleteButton.textContent = '确认删除';
+        status.textContent = `再点一次「确认删除」删掉「${editing.label}」。已开的会话不受影响，新建会话不再能选它。`;
+        return;
+      }
+      deleteButton.disabled = true;
+      try {
+        const result = await ipcRenderer.invoke('company-api:save', { kind, profileAction: 'delete', profileId: editing.id });
+        if (!result?.ok) throw new Error(result?.error || '删除失败');
+        snapshot = result;
+        delete viewProfile[kind];
+        render(kind);
+        dialog.querySelector('form [role="status"]').textContent = `已删除「${editing.label}」。`;
+      } catch (error) { status.textContent = '没删成：' + error.message; deleteButton.disabled = false; }
+    };
     target.querySelector('[data-api-action="local"]').onclick = async event => {
       event.currentTarget.disabled = true;
       try {
@@ -363,7 +446,7 @@
         delete viewProfile[kind];
         delete viewMode[kind];
         render(kind);
-        dialog.querySelector('[role="status"]').textContent = '已清除 Hub 的接口覆盖；新建会话沿用本机配置。';
+        dialog.querySelector('[role="status"]').textContent = kind === 'deepseek-acp' ? '已清空 DSH 自有接口。DSH 会话请选「API 网关」或「公司模型」。' : '已清除 Hub 的接口覆盖；新建会话沿用本机配置。';
       } catch (error) { target.querySelector('[role="status"]').textContent = error.message; }
       finally { event.currentTarget?.removeAttribute('disabled'); }
     };
@@ -389,7 +472,8 @@
         form.elements.apiKey.value = '';
         form.elements.apiKey.required = false;
         form.elements.apiKey.placeholder = result.providers?.[kind]?.apiKeySet ? '已保存；留空保留原 Key' : '可选；留空沿用本机登录';
-        status.textContent = kind === 'deepseek-acp' ? '配置已保存，运行接入尚未就绪。' : '已保存。新建会话使用这些设置。';
+        status.textContent = kind === 'deepseek-acp' ? (result.providers?.[kind]?.backend === 'api' ? `已保存。新建 DSH 会话直连这个接口（${result.providers[kind].model || '未填模型'}）。` : '已清空 DSH 自有接口。')
+          : '已保存。新建会话使用这些设置。';
       } catch (error) { status.textContent = '保存失败：' + error.message; }
       finally { save.disabled = false; }
     };

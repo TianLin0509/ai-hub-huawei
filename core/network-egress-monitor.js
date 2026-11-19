@@ -479,7 +479,10 @@ function createNetworkEgressMonitor(options = {}) {
   async function getStatus({ force = false } = {}) {
     const shortRetry = cached && cached.alert
       && (cached.alert.type === 'vpn_unavailable' || cached.alert.type === 'vpn_probe_retrying');
-    const ttl = shortRetry ? failureCacheMs : cacheMs;
+    // 2026-11-20：VPN 断着时原来每次底栏刷新（15 秒）都重跑一轮 curl 探测，断一晚上约 1400 次。
+    // 现在确认失败用的头一次仍 5 秒内重试，之后按连续失败次数翻倍，最长 2 分钟；恢复后立即回到正常节奏。
+    const streak = Math.max(1, Number(cached && cached.consecutiveForeignFailures) || 1);
+    const ttl = shortRetry ? Math.min(Math.max(failureCacheMs, cacheMs * 2), failureCacheMs * 2 ** (streak - 1)) : cacheMs;
     if (!force && cached && now() - cached.checkedAt < ttl) return cached;
     if (inFlight) return inFlight;
     inFlight = sample().finally(() => { inFlight = null; });

@@ -704,6 +704,18 @@
   letter-spacing: 0.3px;
   opacity: 0.85;
 }
+/* 回答旁的 Agent 标识（Claude Code / Codex / CodeAgent / DSH…，renderer/turn-card-renderer.js）：灰色细标，不抢模型名。 */
+.turn-agent-badge {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid var(--hw-line, var(--border-subtle, #dfe3ea));
+  border-radius: 4px;
+  color: var(--hw-text-2, var(--turn-meta-fg));
+  font-size: 10.5px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.msg-overlay .conversation-response-continuation .turn-agent-badge { display: none; }
 .turn-card.inherited { opacity: 0.9; }
 .turn-body {
   margin-top: 4px;

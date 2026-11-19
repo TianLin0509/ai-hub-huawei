@@ -52,3 +52,6 @@
 .company-api-dialog .company-api-new{font-style:normal;font-size:11px;font-weight:600;color:var(--hw-brand,#0a59f7);background:var(--hw-brand-soft,#e7effe);border-radius:6px;padding:0 6px;margin-left:4px}
 .company-api-dialog .company-api-check{display:flex;align-items:center;gap:8px;flex-direction:row}
 .company-api-dialog .company-api-check input{width:auto;margin:0}
+/* 自有接口「测试连接」后的就地提示（2026-11-20） */
+.company-api-dialog .company-api-own-hint{margin:6px 0 0;padding:8px 10px;border-radius:6px;background:var(--hw-bg-subtle,#f3f6fb);font-size:var(--hw-fs-12,12px);line-height:1.6}
+.company-api-dialog .company-api-own-hint p{margin:0 0 6px}

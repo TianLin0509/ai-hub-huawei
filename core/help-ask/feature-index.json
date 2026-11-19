@@ -1,0 +1,984 @@
+{
+ "$comment": "设置页搜索与 Ctrl+K 命令面板用的功能/设置索引，由 tools/help-manual/build-help-manual.js 从界面代码生成，不要手改。",
+ "version": "5.6.63",
+ "items": [
+  {
+   "id": "f001",
+   "kind": "page",
+   "name": "主页",
+   "where": "左侧导航",
+   "desc": "新建普通会话、新建 AI 群聊、连接你的 AI（安装状态与 API key 入口）",
+   "steps": [
+    {
+     "click": "#btn-home"
+    }
+   ]
+  },
+  {
+   "id": "f002",
+   "kind": "page",
+   "name": "账号",
+   "where": "左侧导航",
+   "desc": "登录状态与接入配置",
+   "steps": [
+    {
+     "click": "#btn-rail-accounts"
+    }
+   ]
+  },
+  {
+   "id": "f003",
+   "kind": "page",
+   "name": "助理",
+   "where": "左侧导航",
+   "desc": "今天的工作与对话（只读 WeLink，数据只留本机）；可选功能，默认关",
+   "steps": [
+    {
+     "click": "#btn-company-assistant"
+    }
+   ],
+   "optional": "assistant",
+   "fallback": [
+    {
+     "click": "#options-optional-features"
+    },
+    {
+     "highlight": {
+      "selector": ".optional-features-dialog .of-item",
+      "text": "助理"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f004",
+   "kind": "page",
+   "name": "会议",
+   "where": "左侧导航",
+   "desc": "采集、回放与会议理解",
+   "steps": [
+    {
+     "click": "#btn-company-meeting"
+    }
+   ]
+  },
+  {
+   "id": "f005",
+   "kind": "page",
+   "name": "PPT",
+   "where": "左侧导航",
+   "desc": "AI 找页与图片转可编辑",
+   "steps": [
+    {
+     "click": "#btn-company-ppt"
+    }
+   ]
+  },
+  {
+   "id": "f006",
+   "kind": "page",
+   "name": "会议室",
+   "where": "左侧导航",
+   "desc": "自动抢订与计划",
+   "steps": [
+    {
+     "click": "#btn-company-rooms"
+    }
+   ]
+  },
+  {
+   "id": "f007",
+   "kind": "page",
+   "name": "考勤",
+   "where": "左侧导航",
+   "desc": "打卡记录、加班统计与 80 小时红线（数据只留本机）；可选功能，默认关",
+   "steps": [
+    {
+     "click": "#btn-company-attendance"
+    }
+   ],
+   "optional": "attendance",
+   "fallback": [
+    {
+     "click": "#options-optional-features"
+    },
+    {
+     "highlight": {
+      "selector": ".optional-features-dialog .of-item",
+      "text": "考勤"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f008",
+   "kind": "page",
+   "name": "门户",
+   "where": "左侧导航",
+   "desc": "自己的待办、申请和公司要闻（数据只留本机）；可选功能，默认关",
+   "steps": [
+    {
+     "click": "#btn-company-w3"
+    }
+   ],
+   "optional": "w3",
+   "fallback": [
+    {
+     "click": "#options-optional-features"
+    },
+    {
+     "highlight": {
+      "selector": ".optional-features-dialog .of-item",
+      "text": "门户待办"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f009",
+   "kind": "page",
+   "name": "帖子",
+   "where": "左侧导航",
+   "desc": "公司发文和心声、稼先今天的热帖与摘要（数据只留本机）；可选功能，默认关",
+   "steps": [
+    {
+     "click": "#btn-company-forum"
+    }
+   ],
+   "optional": "forum",
+   "fallback": [
+    {
+     "click": "#options-optional-features"
+    },
+    {
+     "highlight": {
+      "selector": ".optional-features-dialog .of-item",
+      "text": "帖子"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f010",
+   "kind": "page",
+   "name": "规则",
+   "where": "左侧导航",
+   "desc": "Agent 默认带上的规则",
+   "steps": [
+    {
+     "click": "#btn-rules"
+    }
+   ]
+  },
+  {
+   "id": "f011",
+   "kind": "page",
+   "name": "分身 Beta",
+   "where": "左侧导航",
+   "desc": "替你盯消息、写回复，你点了才发；只在公司电脑上有服务时显示",
+   "steps": [
+    {
+     "click": "#btn-avatar"
+    }
+   ]
+  },
+  {
+   "id": "f012",
+   "kind": "page",
+   "name": "个人（头像）",
+   "where": "左侧导航",
+   "desc": "个人页：等级、成就与使用热力图",
+   "steps": [
+    {
+     "click": "#btn-profile"
+    }
+   ]
+  },
+  {
+   "id": "f013",
+   "kind": "page",
+   "name": "主题",
+   "where": "左侧导航",
+   "desc": "换主题皮肤；菜单里「AI 头像与图标 →」换 AI 头像",
+   "steps": [
+    {
+     "click": "#btn-theme"
+    }
+   ]
+  },
+  {
+   "id": "f014",
+   "kind": "page",
+   "name": "设置",
+   "where": "左侧导航",
+   "desc": "设置菜单（见 2.4）",
+   "steps": [
+    {
+     "click": "#btn-options"
+    }
+   ]
+  },
+  {
+   "id": "f015",
+   "kind": "menu",
+   "name": "自动休眠",
+   "where": "设置菜单",
+   "desc": "自动休眠：后台每 5 分钟巡检，连续 5 小时没有输入输出的会话自动休眠；点这一项立即扫描",
+   "steps": [
+    {
+     "click": "#options-suspend-idle"
+    }
+   ]
+  },
+  {
+   "id": "f016",
+   "kind": "menu",
+   "name": "设置",
+   "where": "设置菜单",
+   "desc": "打开配置弹窗（见 2.5）",
+   "steps": [
+    {
+     "click": "#options-settings"
+    }
+   ]
+  },
+  {
+   "id": "f017",
+   "kind": "menu",
+   "name": "检查更新",
+   "where": "设置菜单",
+   "desc": "手动检查并安装新版本（末位小版本不弹窗，要在这里点）",
+   "steps": [
+    {
+     "click": "#options-check-update"
+    }
+   ]
+  },
+  {
+   "id": "f018",
+   "kind": "menu",
+   "name": "功能体检与组件中心",
+   "where": "设置菜单",
+   "desc": "功能体检与组件中心：检查各功能依赖，一键安装 Claude Code、Codex、DSH、PPT Doctor 等",
+   "steps": [
+    {
+     "click": "#options-env-check"
+    }
+   ]
+  },
+  {
+   "id": "f019",
+   "kind": "menu",
+   "name": "一键反馈",
+   "where": "设置菜单",
+   "desc": "一键反馈：写一句现象，附带脱敏的版本环境和日志尾部发给维护人（见第 6 节）",
+   "steps": [
+    {
+     "click": "#options-feedback"
+    }
+   ]
+  },
+  {
+   "id": "f020",
+   "kind": "menu",
+   "name": "可选功能",
+   "where": "设置菜单",
+   "desc": "打开或关闭助理、帖子、考勤、门户待办、托盘、桌宠（见 2.6）",
+   "steps": [
+    {
+     "click": "#options-optional-features"
+    }
+   ]
+  },
+  {
+   "id": "f021",
+   "kind": "menu",
+   "name": "快捷键",
+   "where": "设置菜单",
+   "desc": "全部快捷键",
+   "steps": [
+    {
+     "click": "#options-shortcuts"
+    }
+   ]
+  },
+  {
+   "id": "f022",
+   "kind": "menu",
+   "name": "版本与回退",
+   "where": "设置菜单",
+   "desc": "查看已装版本，必要时回退到旧版本",
+   "steps": [
+    {
+     "click": "#options-versions"
+    }
+   ]
+  },
+  {
+   "id": "f023",
+   "kind": "menu",
+   "name": "更新日志",
+   "where": "设置菜单",
+   "desc": "每个版本改了什么",
+   "steps": [
+    {
+     "click": "#options-whats-new"
+    }
+   ]
+  },
+  {
+   "id": "f024",
+   "kind": "config",
+   "name": "号池内网共享",
+   "where": "设置 → ⚙️ 设置",
+   "desc": "连接团队主机，或向同事共享本机号池（点「管理共享」）",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": {
+      "selector": ".company-api-settings-entry",
+      "text": "号池内网共享"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f025",
+   "kind": "config",
+   "name": "自有 API",
+   "where": "设置 → ⚙️ 设置",
+   "desc": "Claude Code、Codex、DSH 各自选「公司模型」「API 网关（部门 API key）」或「自己的接口」；留空沿用 CLI 本机登录与配置（点「配置接口」）",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": {
+      "selector": ".company-api-settings-entry",
+      "text": "自有 API"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f026",
+   "kind": "config",
+   "name": "会话原模型不可用时",
+   "where": "设置 → ⚙️ 设置",
+   "desc": "会话固定创建或手动选择的模型。自动模式只换同家族可用型号；跨家族须手动确认，暂停状态不会因恢复或重启解除。",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": "#cfg-model-unavailable-policy"
+    }
+   ]
+  },
+  {
+   "id": "f027",
+   "kind": "config-section",
+   "name": "助理桌宠",
+   "where": "设置 → ⚙️ 设置",
+   "desc": "立即生效",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": {
+      "selector": ".config-section-label",
+      "text": "助理桌宠"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f028",
+   "kind": "config",
+   "name": "在桌面角落显示桌宠",
+   "where": "设置 → ⚙️ 设置 → 助理桌宠",
+   "desc": "Hub 开着时出现；会话答完、提醒都由它告诉你，点卡片直接打开。右键可问助理，或让它安静一小时。",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": "#cfg-hub-pet-enabled"
+    }
+   ]
+  },
+  {
+   "id": "f029",
+   "kind": "config",
+   "name": "角色",
+   "where": "设置 → ⚙️ 设置 → 助理桌宠",
+   "desc": "",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": "#cfg-hub-pet-role"
+    }
+   ]
+  },
+  {
+   "id": "f030",
+   "kind": "config",
+   "name": "说话频率",
+   "where": "设置 → ⚙️ 设置 → 助理桌宠",
+   "desc": "温和：只说助理的提醒；活泼：再加早上问候、久坐提醒；安静：只亮小圆点。每小时最多开口 3 次。",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": "#cfg-hub-pet-mode"
+    }
+   ]
+  },
+  {
+   "id": "f031",
+   "kind": "config-section",
+   "name": "桌面回执",
+   "where": "设置 → ⚙️ 设置",
+   "desc": "会话答完、提醒弹在哪 · 立即生效 左栏的未读标记不受影响；小卡右上角的齿轮也能回到这里。",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": "#cfg-notify-mode"
+    }
+   ]
+  },
+  {
+   "id": "f032",
+   "kind": "config",
+   "name": "CodeAgent 自己也弹完成提醒",
+   "where": "设置 → ⚙️ 设置 → 桌面回执",
+   "desc": "默认不勾：答完只由 Hub 提醒一次，不再重复。勾上后之后新开或重启的 CodeAgent 会话会自己再弹一条；只想留 CodeAgent 的，把上面选成「关闭」。",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": "#cfg-codeagent-cli-notify"
+    }
+   ]
+  },
+  {
+   "id": "f033",
+   "kind": "config-section",
+   "name": "工作台服务器状态",
+   "where": "设置 → ⚙️ 设置",
+   "desc": "阿里云 / 自建健康端点",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": {
+      "selector": ".config-section-label",
+      "text": "工作台服务器状态"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f034",
+   "kind": "config",
+   "name": "在工作台监控服务器",
+   "where": "设置 → ⚙️ 设置 → 工作台服务器状态",
+   "desc": "主进程按需读取健康端点；未配置时不会自动探测任何公网地址。",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": "#cfg-aliyun-enabled"
+    }
+   ]
+  },
+  {
+   "id": "f035",
+   "kind": "config",
+   "name": "显示名称",
+   "where": "设置 → ⚙️ 设置 → 工作台服务器状态",
+   "desc": "",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": "#cfg-aliyun-label"
+    }
+   ]
+  },
+  {
+   "id": "f036",
+   "kind": "config",
+   "name": "健康检查 URL",
+   "where": "设置 → ⚙️ 设置 → 工作台服务器状态",
+   "desc": "",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": "#cfg-aliyun-health-url"
+    }
+   ]
+  },
+  {
+   "id": "f037",
+   "kind": "config",
+   "name": "指标 URL",
+   "where": "设置 → ⚙️ 设置 → 工作台服务器状态",
+   "desc": "",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": "#cfg-aliyun-metrics-url"
+    }
+   ]
+  },
+  {
+   "id": "f038",
+   "kind": "config",
+   "name": "Checkpoint 恢复目录",
+   "where": "设置 → ⚙️ 设置 → 工作台服务器状态",
+   "desc": "指标 JSON 可返回 storage.totalBytes / usedBytes / usagePct；保存后回到工作台刷新即可验证。",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": "#cfg-operations-restore-root"
+    }
+   ]
+  },
+  {
+   "id": "f039",
+   "kind": "config-section",
+   "name": "普通会话卡片",
+   "where": "设置 → ⚙️ 设置",
+   "desc": "调整后立即预览",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": {
+      "selector": ".config-section-label",
+      "text": "普通会话卡片"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f040",
+   "kind": "config",
+   "name": "正文字号",
+   "where": "设置 → ⚙️ 设置 → 普通会话卡片",
+   "desc": "",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": "#cfg-card-font-size"
+    }
+   ]
+  },
+  {
+   "id": "f041",
+   "kind": "config",
+   "name": "字体风格",
+   "where": "设置 → ⚙️ 设置 → 普通会话卡片",
+   "desc": "默认已从 13px 调到 15px；代码块用等宽字体，字号跟着正文字号和 Ctrl+滚轮一起缩放。公式由本地 KaTeX 离线渲染。",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": "#cfg-card-font-family"
+    }
+   ]
+  },
+  {
+   "id": "f042",
+   "kind": "config",
+   "name": "回车键",
+   "where": "设置 → ⚙️ 设置 → 普通会话卡片",
+   "desc": "单会话、群聊和助理的输入框都按这个来，选择后立即生效。",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": "#cfg-composer-enter"
+    }
+   ]
+  },
+  {
+   "id": "f043",
+   "kind": "config",
+   "name": "新建会话默认工作目录",
+   "where": "设置 → ⚙️ 设置 → 普通会话卡片",
+   "desc": "新建会话选「默认工作目录」时开在这里，保存后下一个新会话生效；已有会话不动。",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": "#cfg-workspace-root"
+    }
+   ]
+  },
+  {
+   "id": "f044",
+   "kind": "config",
+   "name": "号池额度栏位置",
+   "where": "设置 → ⚙️ 设置 → 普通会话卡片",
+   "desc": "有两个及以上账号时才显示，选择后立即生效。",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": "#cfg-codeagent-quota-placement"
+    }
+   ]
+  },
+  {
+   "id": "f045",
+   "kind": "config-section",
+   "name": "负责人组队",
+   "where": "设置 → ⚙️ 设置",
+   "desc": "保存后对新提交的招人计划生效",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": {
+      "selector": ".config-section-label",
+      "text": "负责人组队"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f046",
+   "kind": "config",
+   "name": "负责人组队自动批准",
+   "where": "设置 → ⚙️ 设置 → 负责人组队",
+   "desc": "默认开：负责人提交招人计划后，账号和模型按号池校验通过即直接建成员，不用再到侧栏点「待批准」。关掉后回到人工批准。",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": "#cfg-team-auto-approve"
+    }
+   ]
+  },
+  {
+   "id": "f047",
+   "kind": "optional",
+   "name": "助理",
+   "where": "设置 → 🧩 可选功能",
+   "desc": "整理每日简报、提醒待处理的 WeLink 消息，并回答工作问题。会议和会议室可以单独使用。",
+   "steps": [
+    {
+     "click": "#options-optional-features"
+    },
+    {
+     "highlight": {
+      "selector": ".optional-features-dialog .of-item",
+      "text": "助理"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f048",
+   "kind": "optional",
+   "name": "帖子",
+   "where": "设置 → 🧩 可选功能",
+   "desc": "公司发文（政策讲话、公司文件、公告）和心声、稼先今天的热帖，附 AI 摘要；发文上新会提醒",
+   "steps": [
+    {
+     "click": "#options-optional-features"
+    },
+    {
+     "highlight": {
+      "selector": ".optional-features-dialog .of-item",
+      "text": "帖子"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f049",
+   "kind": "optional",
+   "name": "考勤",
+   "where": "设置 → 🧩 可选功能",
+   "desc": "读自己的打卡记录，统计加班、80 小时红线和年度工时",
+   "steps": [
+    {
+     "click": "#options-optional-features"
+    },
+    {
+     "highlight": {
+      "selector": ".optional-features-dialog .of-item",
+      "text": "考勤"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f050",
+   "kind": "optional",
+   "name": "门户待办",
+   "where": "设置 → 🧩 可选功能",
+   "desc": "读公司门户首页上自己的待办、提的申请和公司文件；新待办、拖了很久的待办和卡住的申请会提醒",
+   "steps": [
+    {
+     "click": "#options-optional-features"
+    },
+    {
+     "highlight": {
+      "selector": ".optional-features-dialog .of-item",
+      "text": "门户待办"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f051",
+   "kind": "optional",
+   "name": "会议室",
+   "where": "设置 → 🧩 可选功能",
+   "desc": "按你的规则每天放号时自动抢订会议室，结果和快开会了由桌宠或通知卡提醒",
+   "steps": [
+    {
+     "click": "#options-optional-features"
+    },
+    {
+     "highlight": {
+      "selector": ".optional-features-dialog .of-item",
+      "text": "会议室"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f052",
+   "kind": "optional",
+   "name": "关窗口时最小化到托盘",
+   "where": "设置 → 🧩 可选功能",
+   "desc": "点窗口右上角的关闭只把 Hub 收到右下角托盘，会话照常在后台跑；单击托盘图标打开，右键「退出 AI Hub」才真正退出",
+   "steps": [
+    {
+     "click": "#options-optional-features"
+    },
+    {
+     "highlight": {
+      "selector": ".optional-features-dialog .of-item",
+      "text": "关窗口时最小化到托盘"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f053",
+   "kind": "optional",
+   "name": "再打开 Hub 时提示切过去",
+   "where": "设置 → 🧩 可选功能",
+   "desc": "已经开着一个 AI Hub 时再双击图标，先问一句「已在运行，切过去？」；选「再开一个」照样能开两个",
+   "steps": [
+    {
+     "click": "#options-optional-features"
+    },
+    {
+     "highlight": {
+      "selector": ".optional-features-dialog .of-item",
+      "text": "再打开 Hub 时提示切过去"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f054",
+   "kind": "optional",
+   "name": "桌宠",
+   "where": "设置 → 🧩 可选功能",
+   "desc": "桌面角落的小猫：会话答完、提醒、会议室结果都由它举卡片告诉你，右键还能问助理",
+   "steps": [
+    {
+     "click": "#options-optional-features"
+    },
+    {
+     "highlight": {
+      "selector": ".optional-features-dialog .of-item",
+      "text": "桌宠"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f055",
+   "kind": "page-setting",
+   "name": "公司域名",
+   "where": "考勤 → 设置",
+   "desc": "考勤地址用它拼出",
+   "steps": [
+    {
+     "click": "#btn-company-attendance"
+    },
+    {
+     "click": "#company-attendance-page [data-att=\"settings\"]",
+     "unless": "#company-attendance-page .att-settings"
+    },
+    {
+     "highlight": "#company-attendance-page [data-f=\"domain\"]"
+    }
+   ],
+   "optional": "attendance",
+   "fallback": [
+    {
+     "click": "#options-optional-features"
+    },
+    {
+     "highlight": {
+      "selector": ".optional-features-dialog .of-item",
+      "text": "考勤"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f056",
+   "kind": "page-setting",
+   "name": "核心工作时间",
+   "where": "考勤 → 设置",
+   "desc": "加班按它算",
+   "steps": [
+    {
+     "click": "#btn-company-attendance"
+    },
+    {
+     "click": "#company-attendance-page [data-att=\"settings\"]",
+     "unless": "#company-attendance-page .att-settings"
+    },
+    {
+     "highlight": "#company-attendance-page [data-w=\"amStart\"]"
+    }
+   ],
+   "optional": "attendance",
+   "fallback": [
+    {
+     "click": "#options-optional-features"
+    },
+    {
+     "highlight": {
+      "selector": ".optional-features-dialog .of-item",
+      "text": "考勤"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f057",
+   "kind": "page-setting",
+   "name": "考勤页",
+   "where": "考勤 → 设置",
+   "desc": "默认「自动（先正式员工页，再 OD 页）」，也可以指定只用某一页（OD 同事可直接选 OD 考勤页）",
+   "steps": [
+    {
+     "click": "#btn-company-attendance"
+    },
+    {
+     "click": "#company-attendance-page [data-att=\"settings\"]",
+     "unless": "#company-attendance-page .att-settings"
+    },
+    {
+     "highlight": "#company-attendance-page [data-f=\"page\"]"
+    }
+   ],
+   "optional": "attendance",
+   "fallback": [
+    {
+     "click": "#options-optional-features"
+    },
+    {
+     "highlight": {
+      "selector": ".optional-features-dialog .of-item",
+      "text": "考勤"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f058",
+   "kind": "page-setting",
+   "name": "每天自动读取一次",
+   "where": "考勤 → 设置",
+   "desc": "当天读到就不再访问",
+   "steps": [
+    {
+     "click": "#btn-company-attendance"
+    },
+    {
+     "click": "#company-attendance-page [data-att=\"settings\"]",
+     "unless": "#company-attendance-page .att-settings"
+    },
+    {
+     "highlight": "#company-attendance-page [data-f=\"autoDaily\"]"
+    }
+   ],
+   "optional": "attendance",
+   "fallback": [
+    {
+     "click": "#options-optional-features"
+    },
+    {
+     "highlight": {
+      "selector": ".optional-features-dialog .of-item",
+      "text": "考勤"
+     }
+    }
+   ]
+  }
+ ]
+}

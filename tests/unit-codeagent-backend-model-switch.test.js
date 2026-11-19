@@ -75,7 +75,7 @@ test('serve parsing records providers it skipped, with status and model count', 
     { id: 'my-provider', status: 'unavailable', models: { a: { id: 'a' }, b: { id: 'b' } } },
   ] });
   assert.deepEqual(parsed.models.map(m => m.id), ['dsv4-dspark']);
-  assert.deepEqual(parsed.skipped, [{ id: 'my-provider', status: 'unavailable', models: 2 }]);
+  assert.deepEqual(parsed.skipped, [{ id: 'my-provider', status: 'unavailable', models: 2, modelIds: ['a', 'b'], label: 'my-provider' }]);
   const source = fs.readFileSync(path.join(__dirname, '..', 'main', 'ipc', 'session-handlers.js'), 'utf8');
   assert.match(source, /skippedProviders: served\.skipped\.map/, 'serve-read log names the skipped providers');
 });

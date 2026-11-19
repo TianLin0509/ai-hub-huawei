@@ -4,6 +4,19 @@
 // 写法同考勤页：盖在主区域上的一层，点左侧其他按钮自动关闭；默认关闭，由可选功能开关（optional-feature-gate）开启。
 const TABS = [['todo', '待办'], ['apply', '申请'], ['news', '公司要闻']];
 const NEWS_COLS = [['policy', '政策与讲话'], ['corporate', '公司文件'], ['bulletins', '公告']];
+// 读不到门户时按原因说清下一步（2026-11-19 反馈 3b80a678）：类别由 core/company-w3/service.js 的 failureKind 给。
+// at = 停在哪个域名；按钮：retry 重试、portal 在浏览器打开门户、feedback 一键反馈（带门户日志）、domain 就地填域名。
+const FAILURES = {
+  domain: { title: '没找到公司域名', why: () => '门户地址要用公司域名拼出来，这台电脑的助理、帖子设置里都没找到。', next: '在下面填公司邮箱或域名，点「保存并重试」。', acts: ['domain'] },
+  'no-edge': { title: '这台电脑没找到 Edge 浏览器', why: () => '门户是在后台用无头 Edge 读的（不弹窗），没有 Edge 就读不了。', next: '安装或修复 Microsoft Edge 后点「重试」。', acts: ['retry', 'feedback'] },
+  edge: { title: '后台浏览器没起来', why: r => '这次后台的无头 Edge 没能启动或中途断开（' + (r.error || '') + '）。', next: '点「重试」；连着几次都这样，点「一键反馈」，会带上门户日志。', acts: ['retry', 'feedback'] },
+  login: { title: '门户停在登录页，后台没能自动登录', why: r => '后台浏览器借用你本机 Edge 的登录状态和公司电脑的免密登录；这次等了 45 秒仍停在' + (r.finalHost ? ' ' + r.finalHost : '登录页') + '。', next: '① 点「在浏览器打开门户」，确认不用输密码就能进首页（要输密码或扫码就先登录一次）；② 回来点「重试」。免密已开仍不行，点「一键反馈」。', acts: ['portal', 'retry', 'feedback'] },
+  unreachable: { title: '门户页面没打开', why: r => '后台浏览器停在' + (r.finalHost ? ' ' + r.finalHost : '空白页') + '，多半是公司网络、VPN 或代理这会儿连不上门户。', next: '点「在浏览器打开门户」看能不能打开：能打开就回来点「重试」，打不开先检查网络。', acts: ['portal', 'retry', 'feedback'] },
+  timeout: { title: '门户打开了，但读待办超时', why: () => '门户这会儿响应慢，查询没在 2 分钟内返回。', next: '过一两分钟点「重试」；连着几次都这样，点「一键反馈」。', acts: ['retry', 'feedback'] },
+  query: { title: '门户的查询出错了', why: r => r.error || '', next: '点「重试」；连着几次都这样，点「一键反馈」，门户可能改版了。', acts: ['retry', 'feedback'] },
+  other: { title: '这次没读到', why: r => r.error || '', next: '点「重试」；连着几次都这样，点「一键反馈」，会带上门户日志。', acts: ['retry', 'feedback'] },
+};
+function failureOf(r = {}) { return FAILURES[r.kind] || (r.needsDomain ? FAILURES.domain : r.needsLogin ? FAILURES.login : FAILURES.other); }
 
 function createCompanyW3Page({ document, window, ipcRenderer, closeOtherPanels = () => {}, showMessage }) {
   let page = null, status = null, timer = null, gate = null, tab = 'todo', detail = null;
@@ -38,6 +51,7 @@ function createCompanyW3Page({ document, window, ipcRenderer, closeOtherPanels =
         <div class="w3p-status" data-slot="status"></div>
         <button type="button" class="w3p-btn" data-w3="sync" title="现在打开门户首页读一次">刷新</button>
       </header>
+      <div class="w3p-alert" data-slot="alert" hidden></div>
       <div class="w3p-body" data-slot="body"></div>
       <div class="w3p-drawer" data-slot="drawer" hidden></div>`;
     document.body.append(page);
@@ -62,7 +76,7 @@ function createCompanyW3Page({ document, window, ipcRenderer, closeOtherPanels =
   function statusHtml() {
     const s = status;
     if (s.syncing) return '<span class="w3p-chip run">正在读取门户…</span>';
-    if (s.lastResult && !s.lastResult.ok) return `<span class="w3p-chip bad" title="${esc(s.lastResult.error)}">${s.lastResult.needsLogin ? '门户需要登录' : '上次读取失败'} · ${when(s.lastResult.at)}</span>`;
+    if (s.lastResult && !s.lastResult.ok) return `<span class="w3p-chip bad" title="${esc(s.lastResult.error)}">${esc(failureOf(s.lastResult).title)} · ${when(s.lastResult.at)}</span>`;
     if (s.lastSuccessAt) return `<span class="w3p-chip ok">${when(s.lastSuccessAt)} 读取</span>`;
     return '<span class="w3p-chip">还没读取过</span>';
   }
@@ -113,11 +127,26 @@ function createCompanyW3Page({ document, window, ipcRenderer, closeOtherPanels =
   function emptyState() {
     const r = status.lastResult;
     if (status.syncing || !r) return '<div class="w3p-blank"><b>正在打开门户读取…</b><p>后台用无头浏览器打开门户首页，一般 10 秒左右，不会弹窗。</p></div>';
-    return `<div class="w3p-blank"><b>${r.needsLogin ? '门户需要登录' : '这次没读到'}</b><p>${esc(r.error || '')}</p><p>${r.needsLogin ? '公司电脑一般会自动登录；若一直停在登录页，先在 Edge 里打开一次门户并登录，再点刷新。' : '可能是公司网络暂时打不开门户，过一会儿点刷新再试。'}</p><button type="button" class="w3p-btn primary" data-w3="sync">刷新</button></div>`;
+    return `<div class="w3p-blank" data-fail-kind="${esc(r.kind || '')}">${failHtml(r)}</div>`;
+  }
+  function failHtml(r, compact = false) {
+    const f = failureOf(r);
+    const canFeedback = !!window.__hubFeedback?.open;
+    const btn = { retry: `<button type="button" class="w3p-btn primary${compact ? ' sm' : ''}" data-w3="sync">重试</button>`,
+      portal: status?.url ? `<button type="button" class="w3p-btn${compact ? ' sm' : ''}" data-w3="open" data-url="${esc(status.url)}">在浏览器打开门户</button>` : '',
+      feedback: canFeedback ? `<button type="button" class="w3p-btn${compact ? ' sm' : ''}" data-w3="feedback">一键反馈（带门户日志）</button>` : '',
+      domain: `<span class="w3p-domain"><input type="text" data-w3-domain placeholder="公司邮箱或域名" aria-label="公司邮箱或域名"><button type="button" class="w3p-btn primary${compact ? ' sm' : ''}" data-w3="save-domain">保存并重试</button></span>` };
+    const acts = f.acts.map(a => btn[a]).join('');
+    if (compact) return `<b>${esc(f.title)}</b><span title="${esc(f.why(r) + f.next)}">${esc(f.next)}</span><span class="w3p-alert-acts">${acts}</span>`;
+    return `<b>${esc(f.title)}</b><p>${esc(f.why(r))}</p><p class="w3p-next">下一步：${esc(f.next)}</p><div class="w3p-acts">${acts}</div>`;
   }
   function render() {
     if (!page || !status) return;
     page.querySelector('[data-slot="status"]').innerHTML = statusHtml();
+    // 以前读到过、这次失败：照常显示旧数据，上面一条细横幅写原因和下一步。
+    const alert = page.querySelector('[data-slot="alert"]'), last = status.lastResult;
+    const showAlert = !!(status.lastSuccessAt && last && !last.ok && !status.syncing);
+    alert.hidden = !showAlert; alert.innerHTML = showAlert ? failHtml(last, true) : '';
     page.querySelector('[data-slot="tabs"]').innerHTML = tabsHtml();
     const btn = page.querySelector('[data-w3="sync"]'); if (btn) btn.disabled = !!status.syncing;
     page.querySelector('[data-slot="body"]').innerHTML = !status.lastSuccessAt ? emptyState() : tab === 'apply' ? applyHtml() : tab === 'news' ? newsHtml() : todoHtml();
@@ -149,6 +178,18 @@ function createCompanyW3Page({ document, window, ipcRenderer, closeOtherPanels =
     if (name === 'detail') { detail = { kind: el.dataset.kind, i: Number(el.dataset.i) }; renderDrawer(); return; }
     if (name === 'close') { detail = null; renderDrawer(); return; }
     if (name === 'open') { const url = el.dataset.url; if (url) await ipcRenderer.invoke('open-external-url', url); return; }
+    if (name === 'feedback') {
+      const r = status?.lastResult || {};
+      window.__hubFeedback?.open?.({ description: `门户读取不到：${failureOf(r).title}（${r.error || '无详细原因'}${r.finalHost && !String(r.error || '').includes(r.finalHost) ? '，停在 ' + r.finalHost : ''}，${when(r.at)}）
+日志附在下面的 company-w3.log 里。` });
+      return;
+    }
+    if (name === 'save-domain') {
+      const v = String(page.querySelector('[data-w3-domain]')?.value || '').trim();
+      if (!v) { showMessage?.('先填公司邮箱或域名'); return; }
+      await call('set-settings', { domain: v });
+      name = 'sync';
+    }
     if (name === 'sync') {
       status = { ...(status || {}), syncing: true }; render();
       try { status = await call('sync'); } finally { await load().catch(() => {}); }

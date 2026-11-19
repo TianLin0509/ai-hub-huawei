@@ -1361,6 +1361,8 @@ function createGroupChatDispatcher(deps) {
     _dispatchSeq,
     shouldDispatch,
     onSubmission,
+    // 小队模式：同一轮里每位成员各收各的任务（memberId → 文本）；没给的成员仍收 userInput。
+    perMemberInput,
   } = {}) {
     if (shouldDispatch && !shouldDispatch()) return { status: 'error', cancelledBeforeDispatch: true, reason: '文件进度已变化或用户已停止', turnNum: null };
     const turnStartedAt = Date.now();
@@ -1485,7 +1487,7 @@ function createGroupChatDispatcher(deps) {
       if (silent) {
         return await dispatchInternalPrompt(meetingId, meeting, targetMembers, userInput || '', turnTimeoutMs, workflowRun, () => !interruptedSinceStart() && (!shouldDispatch || shouldDispatch()));
       }
-      if (!silent) maybeAutoTitleMeetingFromPrompt(meetingId, userInput || '');
+      if (!silent) maybeAutoTitleMeetingFromPrompt(meetingId, (typeof displayUserInput === 'string' ? displayUserInput : userInput) || '');
 
       for (const member of members) {
         try { transcriptTap.clearStreamingBuf(member.sid); }
@@ -1553,7 +1555,7 @@ function createGroupChatDispatcher(deps) {
         // keep the existing conversation delta, including manual "continue".
         const needsFileProtocol = fileProtocolKey && orch.state.devFilePromptReceipts?.[member.sid]?.key !== fileProtocolKey;
         const basePrompt = DevDiscuss.appendDiscussBlock(
-          orch.buildFirstDelta(member.sid, userInput || '', systemPromptText, {
+          orch.buildFirstDelta(member.sid, (perMemberInput && typeof perMemberInput[member.memberId] === 'string' ? perMemberInput[member.memberId] : userInput) || '', systemPromptText, {
             currentUserMessageAppended: begin.didAppendUserMessage,
             ensureRulesReceipt: OrchestrationRules.enabled(meeting),
             roster,

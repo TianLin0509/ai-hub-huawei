@@ -2007,6 +2007,8 @@ const terminalOutputBatcher = new TerminalOutputBatcher({
   },
 });
 
+sessionManager.onFocusChanged = (sessionId) => { if (sessionId) terminalOutputBatcher.flush(sessionId); };
+
 sessionManager.onData = (sessionId, data, seq) => {
   // 未聚焦的群聊成员**降频转发，不再丢弃**。旧实现直接 return，让 xterm 在未聚焦
   // 期间收不到任何数据，切过去只能靠回灌一段截断的 ANSI 流重建画面 —— 对 alt-screen
@@ -2272,15 +2274,36 @@ groupChatDispatcher = createGroupChatDispatcher({
   transcriptTap,
 });
 
+// 小队模式（2026-11-19）：群里设一位负责人，成员做完自动交回。没开小队的群照旧走下面的路由。
+const routeUserGroupTurn = (meetingId, args) => global.__devFileEngine
+  ? global.__devFileEngine.userTurn(meetingId, args)
+  : groupChatDispatcher.dispatchGroupChatTurn(meetingId, args);
+try {
+  global.__squadEngine = require('./main/groupchat/squad-engine').createSquadEngine({
+    getHubDataDir, meetingManager, sendToRenderer, logger: console,
+    getDispatcher: () => groupChatDispatcher,
+    getMembers: meeting => groupChatDispatcher.groupMembersForMeeting(meeting, { includeDormant: true }),
+    ensureMemberReady: (meeting, memberId) => global.__loopEngine.ensureMemberReady(meeting, memberId),
+    interruptMeetingTurn: (meetingId, options) => groupChatDispatcher.interruptMeetingTurn(meetingId, options),
+    getOrchestrator: meetingId => groupchat.getOrchestrator(getHubDataDir(), meetingId),
+  });
+  require('./main/groupchat/squad-engine').registerSquadIpc(ipcMain, () => global.__squadEngine);
+} catch (e) { console.warn('[squad] engine init failed:', e && e.message); }
+
 registerGroupchatTurnIpc(ipcMain, {
-  dispatchGroupChatTurn: (meetingId, args) => global.__devFileEngine
-    ? global.__devFileEngine.userTurn(meetingId, args)
-    : groupChatDispatcher.dispatchGroupChatTurn(meetingId, args),
+  dispatchGroupChatTurn: (meetingId, args) => global.__squadEngine
+    ? global.__squadEngine.userTurn(meetingId, args, routeUserGroupTurn)
+    : routeUserGroupTurn(meetingId, args),
   interruptGroupChatTurn: (meetingId, options) => groupChatDispatcher.interruptMeetingTurn(meetingId, {
     ...options, targetSids: global.__devFileEngine?.interruptSids(meetingId) || [],
   }),
-  stopLoop: (meetingId, options) => global.__deliveryEngine?.stop(meetingId) || global.__devFileEngine?.stop(meetingId)
-    || (global.__loopEngine ? global.__loopEngine.stopLoop(meetingId, options) : false),
+  // 小队先停（不短路），其余引擎照原顺序。
+  stopLoop: (meetingId, options) => {
+    const squadStopped = !!global.__squadEngine?.stop(meetingId, { quiet: true });
+    const other = global.__deliveryEngine?.stop(meetingId) || global.__devFileEngine?.stop(meetingId)
+      || (global.__loopEngine ? global.__loopEngine.stopLoop(meetingId, options) : false);
+    return squadStopped || other;
+  },
 });
 
 // Phase 2b：main 进程循环引擎（崩溃续跑 + 成员 wake），复用 dispatcher。try 包裹，绝不影响启动。
@@ -2885,12 +2908,20 @@ function optionalFeatureList() {
   if (companyForumService) out.push({ id: 'forum', ...CATALOG.forum, on: optionalFeatures.get('forum'), navHidden: optionalFeatures.navHidden('forum') });
   if (companyAttendanceService) out.push({ id: 'attendance', ...CATALOG.attendance, on: optionalFeatures.get('attendance'), navHidden: optionalFeatures.navHidden('attendance') });
   if (companyW3Service) out.push({ id: 'w3', ...CATALOG.w3, on: optionalFeatures.get('w3'), navHidden: optionalFeatures.navHidden('w3') });
+  if (companyAssistantService?.rooms) out.push({ id: 'rooms', ...CATALOG.rooms, on: optionalFeatures.get('rooms'), navHidden: optionalFeatures.navHidden('rooms') });
   if (hubPetController && require('./core/distribution').featureEnabled('hubPet')) out.push({ id: 'pet', ...CATALOG.pet, on: !!hubPetController.getSettings().enabled });
   if (trayController) out.push({ id: 'tray', ...CATALOG.tray, on: optionalFeatures.get('tray') });
+  out.push({ id: 'multiOpen', ...CATALOG.multiOpen, on: optionalFeatures.get('multiOpen') });
   return out;
 }
 ipcMain.handle('optional-features:list', () => optionalFeatureList());
-ipcMain.handle('optional-features:set', (_event, request = {}) => {
+// CodeAgent 自己的完成提醒（反馈 1ce04c14）：默认关，只留 Hub 的桌面回执；设置「桌面回执」下可勾回来。
+ipcMain.handle('codeagent-cli-notify:get', () => ({ ok: true, available: require('./core/distribution').kindAllowed('codeagent'), own: require('./core/codeagent-cli-notify').getCliNotify() }));
+ipcMain.handle('codeagent-cli-notify:set', (_event, request = {}) => {
+  try { return { ok: true, available: true, own: require('./core/codeagent-cli-notify').setCliNotify(request.own === true) }; }
+  catch (error) { return { ok: false, error: error.message }; }
+});
+ipcMain.handle('optional-features:set', async (_event, request = {}) => {
   try {
     const id = String(request.id || ''), on = request.on === true;
     if (id === 'pet') {
@@ -2910,9 +2941,21 @@ ipcMain.handle('optional-features:set', (_event, request = {}) => {
       optionalFeatures.set('w3', on);
       // 刚开启就取一次，用户不用等到下一个时刻才看到内容。
       if (on) { companyW3Service.start(); void companyW3Service.sync({ reason: 'enable' }).catch(() => {}); } else companyW3Service.close();
+    } else if (id === 'rooms' && companyAssistantService?.rooms) {
+      const rooms = companyAssistantService.rooms;
+      if (!on) { const why = rooms.offBlocker(); if (why) throw new Error(why); }
+      if (on) { optionalFeatures.set('rooms', true); rooms.setEnabled(true); rooms.start(); }
+      else {
+        // 先停轮询、结束组件，成功了才记成关闭；结束失败就恢复原样并告诉用户，不留「显示已关、组件还在」的状态。
+        try { await rooms.shutdown(); }
+        catch (error) { rooms.setEnabled(true); rooms.start(); throw new Error('会议室组件没能结束，开关保持开启：' + error.message); }
+        optionalFeatures.set('rooms', false);
+      }
     } else if (id === 'tray' && trayController) {
       optionalFeatures.set('tray', on);
       trayController.sync();
+    } else if (id === 'multiOpen') {
+      optionalFeatures.set('multiOpen', on);
     } else throw new Error('这个版本没有这项功能');
     const list = optionalFeatureList();
     sendToRenderer('optional-features:changed', list);
@@ -3017,6 +3060,8 @@ try {
         ...(notice.kind === 'digest' ? { noticeId: notice.id } : {}) }); } catch (error) { console.warn('[company-assistant] notification', error.message); }
     });
     companyAssistantService.startTools();
+    // 会议室可在「可选功能」里关（默认开，2026-11-19）：关着时不轮询、不拉起会议室组件。
+    companyAssistantService.rooms.setEnabled(optionalFeatures.get('rooms'));
     companyAssistantService.rooms.start();
     // start 失败（例如磁盘满）不能连带让下面的 IPC 注册落空，否则助理、会议、会议室、PPT 页全部不可用。
     if (optionalFeatures.get('assistant')) { try { companyAssistantService.start(); } catch (error) { console.error('[company-assistant] 启动出错，继续注册接口：', error && error.message); } }
@@ -3254,6 +3299,14 @@ claudeAccountSwitch.start();
 // 红线（2026-10-26）：专用出口账号的配置目录每分钟核对一次，被任何程序改回共享代理就立刻改回专线并留痕。
 {
   const guardLog = path.join(getHubDataDir(), 'claude-egress-guard.jsonl');
+  // 2026-11-20：这份日志原来每 5 分钟每个账号记一行、从不切分（本机实测已 19 MB/13 万行）。
+  // 现在出口自查只记状态变化；纠正事件照记；超过 4 MB 改名留一份旧的再重新开始。
+  const appendGuardLog = (obj) => {
+    try {
+      try { if (fs.statSync(guardLog).size > 4 * 1024 * 1024) fs.renameSync(guardLog, guardLog + '.1'); } catch { /* 还没有文件 */ }
+      fs.appendFileSync(guardLog, JSON.stringify({ at: new Date().toISOString(), ...obj }) + '\n');
+    } catch { /* 写日志失败不影响核对 */ }
+  };
   const guard = () => {
     try {
       const tools = require('./core/claude-subscription-profiles'), config = getHubConfig();
@@ -3263,7 +3316,7 @@ claudeAccountSwitch.start();
         sharedEnv: (() => { try { return tools.sharedNetworkEnv(config); } catch { return null; } })(),
         onDrift: event => {
           console.warn('[claude-egress-guard]', JSON.stringify(event));
-          try { fs.appendFileSync(guardLog, JSON.stringify({ at: new Date().toISOString(), ...event }) + '\n'); } catch {}
+          appendGuardLog(event);
         },
       });
     } catch (error) { console.warn('[claude-egress-guard] ' + error.message); }
@@ -3272,7 +3325,10 @@ claudeAccountSwitch.start();
   setInterval(guard, 60_000).unref?.();
   // 专线出口 IP 每 5 分钟经专线自查一次；VPS 发现 IP 不符会直接断开专线，这里负责用系统通知告诉用户原因。
   const lastEgress = new Map();
+  let egressRunning = false; // 上一轮还没查完（账号多、专线不通时每个要等 15 秒）就不叠一轮新的
   const egressCheck = async () => {
+    if (egressRunning) return;
+    egressRunning = true;
     try {
       const tools = require('./core/claude-subscription-profiles'), config = getHubConfig();
       const profiles = tools.normalizeProfiles(config.claudeSubscriptionProfiles).map(p => { try { return tools.resolveProfile(config, p.id); } catch { return p; } });
@@ -3291,7 +3347,7 @@ claudeAccountSwitch.start();
       }
       for (const r of results) {
         const previous = lastEgress.get(r.id); lastEgress.set(r.id, r.state);
-        try { fs.appendFileSync(guardLog, JSON.stringify({ at: new Date().toISOString(), egress: r }) + '\n'); } catch {}
+        if (previous !== r.state) appendGuardLog({ egress: r });
         if (previous === r.state || (previous === undefined && r.state === 'ok')) continue;
         const body = r.state === 'mismatch' && r.id === 'shared' ? `出口 IP 变成了 ${r.ip}（原为 ${r.expected}）。请核对 Clash 的 17891 入口，确认前不要使用这两个账号。`
           : r.state === 'mismatch' ? `出口 IP 变成了 ${r.ip}（应为 ${r.expected}）。VPS 会自动断开这条专线，请勿继续使用该账号。`
@@ -3301,6 +3357,7 @@ claudeAccountSwitch.start();
         console.warn('[claude-egress-check]', r.id, r.state, r.ip || '');
       }
     } catch (error) { console.warn('[claude-egress-check] ' + error.message); }
+    finally { egressRunning = false; }
   };
   setTimeout(egressCheck, 30_000).unref?.();
   setInterval(egressCheck, 5 * 60_000).unref?.();
@@ -3761,9 +3818,11 @@ const hookServer = http.createServer((req, res) => {
   const isEscapeHome = req.method === 'POST' && req.url === '/api/escape-home';
   // 网页圆桌 MCP（core/web-roundtable）经这里用「AI 网页」的登录提问（2026-10-28）。令牌在 Hub 控制文件里，只有本机同一用户能读。
   const isWebAsk = req.method === 'POST' && ['/api/web-ask', '/api/web-ask-status', '/api/web-ask-collect'].includes(req.url);
+  // 多开提示（core/hub-instance-prompt.js，2026-11-20）：后开的 Hub 问「你还在吗」（ping）、请求「切到前台」（focus）。令牌同控制文件。
+  const isInstanceFocus = req.method === 'POST' && req.url === '/api/instance-focus';
   const isResearchFetch = false;
   // plan 2026-05-05 阶段 0: 群聊记忆 MCP 回调（loopback）。
-  if (!isTeam && !isHook && !isStatus && !isResearchFetch && !isEscapeHome && !isNativeOwnership && !isResearchAccount && !isWebAsk) {
+  if (!isTeam && !isHook && !isStatus && !isResearchFetch && !isEscapeHome && !isNativeOwnership && !isResearchAccount && !isWebAsk && !isInstanceFocus) {
     res.writeHead(404); res.end('{}'); return;
   }
 
@@ -3827,6 +3886,24 @@ const hookServer = http.createServer((req, res) => {
         sharedRuntime:pty?.sharedRuntime===true,
       }));
       res.writeHead(200); res.end(JSON.stringify({ pid:process.pid, sessions })); return;
+    }
+    if (isInstanceFocus) {
+      if (parsed.token !== HOOK_TOKEN) { res.writeHead(403); res.end('{}'); return; }
+      // 正在退出（更新重启、远程重启的老进程还在收尾）不算「在运行」，后开的那个就不提示。
+      const shuttingDown = shutdownDrainState !== 'idle' || !!shutdownDrainPromise;
+      const startedAt = Math.round(Date.now() - process.uptime() * 1000);
+      if (parsed.action === 'focus') {
+        if (shuttingDown || !mainWindow || mainWindow.isDestroyed()) {
+          res.writeHead(503); res.end(JSON.stringify({ ok: false, shuttingDown, error: shuttingDown ? '这个 Hub 正在退出' : '窗口不在' })); return;
+        }
+        const focused = focusPrimaryWindow();
+        // Windows 不让后台进程直接抢前台：短暂置顶一下再放开，窗口才会真的到最前，而不只是任务栏闪一下。
+        try { if (focused && !keepIsolatedE2EWindowHidden()) { mainWindow.setAlwaysOnTop(true); mainWindow.moveTop(); mainWindow.focus(); setTimeout(() => { try { if (!mainWindow.isDestroyed()) mainWindow.setAlwaysOnTop(false); } catch (_) {} }, 300); } }
+        catch (error) { console.warn('[multi-open] 置顶切换失败：', error && error.message); }
+        console.log('[multi-open] 后开的 Hub 请求切到这里，已拉到前台');
+        res.writeHead(200); res.end(JSON.stringify({ ok: !!focused, pid: process.pid, startedAt })); return;
+      }
+      res.writeHead(200); res.end(JSON.stringify({ ok: true, pid: process.pid, shuttingDown, startedAt })); return;
     }
     // 2026-05-16 maintainer：外部 HTTP 救援 — tools/hub-escape.ps1 调这条路由触发 escapeToHome()
     if (isEscapeHome) {
@@ -5279,7 +5356,7 @@ app.whenReady().then(async () => {
     let hubLaunchExePath = startShellIntegration(HUB_IS_PACKAGED ? process.execPath : resolveHubLaunchExePath(brandingOptions));
 
     // 安装版：一键更新换了图标、exe 还是旧的 —— 把开始菜单、桌面、任务栏固定项里指向本程序的快捷方式图标改指向新图标。
-    if (HUB_IS_PACKAGED && hubIconPath !== process.execPath) {
+    if (HUB_IS_PACKAGED && hubIconPath !== process.execPath && !isIsolatedHub()) {   // 隔离测试实例不碰真实快捷方式（复审补点）
       try {
         const { refreshPackagedShortcutIcons, getShortcutPaths } = require('./core/windows-shell-integration');
         const changed = refreshPackagedShortcutIcons({
@@ -5503,6 +5580,28 @@ app.whenReady().then(async () => {
   } catch (e) {
     console.warn('[hub-control] init failed:', e.message);
   }
+  // 多开提示（体验 7）：已经有一个 Hub 在跑时问「切过去？」。不等它，启动照常往下走；隔离测试实例默认不问。
+  if (!isIsolatedHub() || process.env.CLAUDE_HUB_MULTI_OPEN_PROMPT === '1') {
+    void require('./core/hub-instance-prompt').promptIfAnotherHubRunning({
+      dataDir: getHubDataDir(),
+      enabled: () => optionalFeatures.get('multiOpen'),
+      setSuppressed: () => { optionalFeatures.set('multiOpen', false); sendToRenderer('optional-features:changed', optionalFeatureList()); },
+      showMessageBox: options => {
+        // 隔离端到端测试：原生弹窗会真的出现在桌面上，按环境变量自动作答（0=切过去，1=再开一个），只记日志。
+        const answer = isIsolatedHub() ? process.env.CLAUDE_HUB_MULTI_OPEN_PROMPT_ANSWER : '';
+        if (answer === '0' || answer === '1') {
+          console.log(`[multi-open] (测试自动作答 ${answer}) ${options.message} | ${options.detail.replace(/\s+/g, ' ')} | 按钮 ${options.buttons.join('/')}`);
+          return Promise.resolve({ response: Number(answer), checkboxChecked: false });
+        }
+        return mainWindow && !mainWindow.isDestroyed() ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options);
+      },
+      quit: () => app.quit(),
+    }).then(result => {
+      if (result.action !== 'switch-failed') return;
+      const options = { type: 'info', title: 'AI Hub', message: '没能切过去', detail: '已开的那个 Hub 没有响应，这个窗口照常可用。', buttons: ['知道了'], noLink: true };
+      return mainWindow && !mainWindow.isDestroyed() ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options);
+    }).catch(error => console.warn('[multi-open] 提示失败：', error && error.message));
+  }
 
   traceStartup('startAgentScanner');
   startAgentScanner();
@@ -5721,7 +5820,7 @@ function beginGracefulHubShutdown(reason, { beforeQuit } = {}) {
   if (shutdownDrainPromise) return shutdownDrainPromise;
 
   shutdownDrainState = 'draining';
-  global.__deliveryEngine?.freeze();
+  global.__deliveryEngine?.freeze(); global.__squadEngine?.freeze();
   global.__orchestrationService?.freeze(); global.__teamService?.freeze();
   console.log(`[shutdown] draining PTYs before Electron teardown (${reason})`);
   shutdownDrainPromise = flushRendererWorkscene()

@@ -299,6 +299,8 @@
     let seen = '';
     try { seen = localStorage.getItem(HINT_KEY) || ''; } catch { seen = ''; }
     if (!current || (!refresh && seen === current)) return;
+    // 首页新同事引导在时不再出这条（体检入口在引导第一步里，renderer/first-steps.js）。
+    if (window.__firstSteps?.active?.()) return;
     const existing = document.getElementById('env-check-hint');
     if (existing && !refresh) return;
     existing?.remove();

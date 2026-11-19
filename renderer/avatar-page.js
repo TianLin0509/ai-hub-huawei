@@ -67,7 +67,18 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
   const typing = () => { const el = document.activeElement; return !!el && page?.contains(el) && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) && el.type !== 'checkbox'; };
   // 后台刷新不清掉操作报错（发送失败的提示要留到下一次操作）。
   async function load({ soft = false } = {}) { try { accept(await call('status')); if (!soft) error = ''; } catch (e) { error = e.message; } if (!(soft && typing())) render(); }
-  async function loadTargets() { try { targets = await call('targets'); render(); } catch { targets = targets || { groups: [], people: [] }; } }
+  // 群/人名单：读不到时带原因（没登录、助理还没取到会话、取数出错）；向导或「范围」页开着且还没读到时每 5 秒再读一次，最多 3 分钟。
+  let targetsTimer = null, targetsTries = 0;
+  async function loadTargets(retry = false) {
+    if (!retry) targetsTries = 0;
+    try { targets = await call('targets'); }
+    catch (e) { targets = { groups: targets?.groups || [], people: targets?.people || [], ready: false, reason: e.message || '读群列表出错' }; }
+    render();
+    clearTimeout(targetsTimer); targetsTimer = null;
+    const waiting = !!page && !page.hidden && (wiz?.step === 2 || ['scope', 'ctx'].includes(tab)) && !(targets?.groups || []).length;
+    if (waiting && targetsTries < 36) { targetsTries++; targetsTimer = setTimeout(() => void loadTargets(true), 5000); }
+  }
+  const noGroupsText = () => (targets?.reason ? targets.reason : targets ? '还没读到群，正在自动刷新' : '正在读群列表…') + (targetsTries >= 36 ? '（3 分钟还没读到：到左侧「助理」页看 WeLink 是否在更新）' : '');
   async function run(label, op, payload) {
     busy = label; error = ''; render();
     try { const r = await call(op, payload); accept(r); return r; } catch (e) { error = e.message; return null; } finally { busy = ''; render(); }
@@ -207,7 +218,7 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     if (wiz.step === 1) return `<div class="avx-ov"><div class="avx-md">${title}<div class="avx-mb"><p class="avx-m">选一个最接近的用途，之后什么都能改。</p><div class="avx-tpls wide">${TEMPLATES.map(tplCard).join('')}</div></div></div></div>`;
     const need = wiz.tpl === 'qa' || wiz.tpl === 'blank', groups = targets?.groups || [], people = targets?.people || [], ready = !need || wiz.targets.length > 0, rows = data.backends.rows;
     const pill = (x, list, op) => `<button class="avx-pk ${list.some(t => t.id === x.id) ? 'on' : ''}" data-av="${op}" data-id="${esc(x.id)}" data-n="${esc(x.name)}" data-ty="${x.type}">${esc(x.name)}</button>`;
-    const scopeHtml = need ? `<h3>它管哪些群或人？</h3><label class="avx-lb">群</label><div class="avx-chips">${groups.map(x => pill(x, wiz.targets, 'wiz-target')).join('') || '<span class="avx-m">还没读到群，请稍等</span>'}</div>${wiz.tpl === 'blank' ? `<label class="avx-lb">人</label><div class="avx-chips">${people.map(x => pill(x, wiz.targets, 'wiz-target')).join('')}</div>` : ''}`
+    const scopeHtml = need ? `<h3>它管哪些群或人？</h3><label class="avx-lb">群</label><div class="avx-chips">${groups.map(x => pill(x, wiz.targets, 'wiz-target')).join('') || `<span class="avx-m">${esc(noGroupsText())}</span>`}</div>${wiz.tpl === 'blank' ? `<label class="avx-lb">人</label><div class="avx-chips">${people.map(x => pill(x, wiz.targets, 'wiz-target')).join('')}</div>` : ''}`
       : `<h3>它会管这些</h3><div class="avx-q">${wiz.tpl === 'watch' ? '全部会话。新建的群和新联系人自动包含。' : '所有私聊，以及群里 @我 的消息。'}</div><label class="avx-lb">不想让它看的群（可选）</label><div class="avx-chips">${groups.map(x => pill(x, wiz.skip, 'wiz-skip')).join('')}</div>`;
     return `<div class="avx-ov"><div class="avx-md">${title}<div class="avx-mb"><div class="avx-w2"><div>${scopeHtml}<p class="avx-m mt">${wiz.tpl === 'watch' ? '只提醒，不会替你发任何消息。' : '写好草稿后由你点发送，不会自动发言。'}</p></div>
       <div class="avx-card tint"><h3>已经替你配好</h3><div class="avx-li"><span>名字</span><small>${esc(wiz.name)}</small></div><div class="avx-li"><span>人设</span><small>${wiz.persona ? '你写的' : '从近期发言生成'}</small></div><div class="avx-li"><span>知识</span><small>${wiz.tpl === 'qa' ? '所选群的历史问答' : '最近的对话'}</small></div><div class="avx-li"><span>后端</span><small>${esc(rows.find(r => r.id === wiz.account)?.label || '自动选择')}</small></div><button class="avx-btn s mt" data-av="wiz-adv">${wiz.adv ? '收起高级设置' : '高级设置'}</button>

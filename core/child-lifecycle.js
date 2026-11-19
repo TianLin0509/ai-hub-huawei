@@ -170,7 +170,7 @@ function createChildLifecycle({ dataDir = '', env = process.env, limits = {}, no
       const queued = new Promise((resolve, reject) => {
         const waiter = { resolve, purpose, at: now() };
         const timer = setTimeout(() => { s.queue.splice(s.queue.indexOf(waiter), 1); reject(Object.assign(new Error(`后台浏览器正被别的功能占用，排队超过 ${Math.round(waitMs / 60000)} 分钟，稍后自动重试`), { code: 'CHILD_QUEUE_TIMEOUT' })); }, waitMs);
-        timer.unref?.();
+        // 不 unref：排队是真实在等的事，要撑住事件循环（CI 上 unref 后进程提前结束、排队超时永不触发）
         waiter.resolve = () => { clearTimeout(timer); resolve(); };
         signal?.addEventListener?.('abort', () => { const i = s.queue.indexOf(waiter); if (i >= 0) { s.queue.splice(i, 1); clearTimeout(timer); reject(Object.assign(new Error('已取消'), { code: 'ABORT_ERR' })); } }, { once: true });
         s.queue.push(waiter);

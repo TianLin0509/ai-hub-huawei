@@ -413,7 +413,15 @@ function registerPromptSubmitIpc(ipcMain, deps) {
     notify();
     return result;
   };
-  ipcMain.handle('session:send-prompt', submitPrompt);
+  // 新同事首次引导第 3 步「发第一句话」（core/first-steps.js）：任何一句真正提交成功后记一次；之后整个进程不再碰文件。
+  ipcMain.handle('session:send-prompt', async (event, request) => {
+    const result = await submitPrompt(event, request);
+    if (result?.ok) {
+      try { if (require('../../core/first-steps').notePromptSent(require('../../core/data-dir').getHubDataDir())) event?.sender?.send?.('first-steps:changed', {}); }
+      catch { /* 只影响首页引导的打勾 */ }
+    }
+    return result;
+  });
   ipcMain.handle('codeagent:stop-diagnostic', (_event, request = {}) => {
     require('../../core/codeagent-stop-log').recordCodeAgentStop({
       at: new Date().toISOString(), stopId: require('node:crypto').randomUUID(), sessionId: request.sessionId,

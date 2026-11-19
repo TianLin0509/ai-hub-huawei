@@ -160,6 +160,8 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     gate = require('./optional-feature-gate').createFeatureGate({ document, window, id: 'assistant', page, showMessage,
       badgeSlot: badge => page.querySelector('.ca-head-right').prepend(badge), onEnabled: () => { void startData(); } });
     // Esc 关掉盖在上面的设置和出处。
+    // 扫码安全说明展开后，状态刷新重画面板时保持展开（2026-11-19）。
+    page.addEventListener('toggle', event => { if (event.target.matches?.('.ca-login-safety')) safetyOpen[event.target.dataset.where || 'panel'] = event.target.open; }, true);
     page.addEventListener('keydown', event => {
       const panel = page.querySelector('[data-slot="panel"]');
       if (event.key === 'Escape' && ['settings', 'source'].includes(panel.dataset.kind) && !panel.hidden) closePanel();
@@ -270,6 +272,17 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     const c = connectionState(data), ready = c.kind === 'online';
     return `<article class="ca-onboarding" data-connection="${c.kind}"><h2>${esc(ready ? '正在获取今天的工作信息' : c.title)}</h2><p>${esc(c.detail)}</p><div class="ca-onboarding-steps" aria-label="接入进度"><span>${data.cliFound ? '✓' : '1'} 安装工具</span><span>${ready ? '✓' : '2'} 确认登录</span><span>${ready && data.refreshedAt ? '✓' : '3'} 获取工作信息</span></div>${c.action ? `<button type="button" class="ca-btn primary" data-ca="${c.action}">${esc(c.label)}</button>` : ''}${c.alt ? `<button type="button" class="ca-btn" data-ca="${c.alt}">${esc(c.altLabel)}</button>` : ''}${!data.cliFound ? '<button type="button" class="ca-btn" data-ca="pick-cli">手动选择…</button>' + installGuide() : ''}<p class="ca-note">接通前也可以直接提问，讨论已有的材料。</p>${!ready && ['missing', 'login', 'unknown'].includes(c.kind) && window.HubErrorCard ? window.HubErrorCard.assistHtml({ area: 'welink', title: c.title, symptom: c.detail, details: [c.title, c.detail, data.cliSearch?.error].filter(Boolean).join(' · ') }) : ''}</article>`;
   }
+  // 扫码安全说明（2026-11-19，回应「扫码登录有信息安全顾虑」）：扫码授权的是什么、凭据存哪、怎么撤销。依据黄区真机 welink-cli 1.0.20。
+  // 扫码面板和设置页各记各的展开状态：设置页默认收起，免得把下面的内容挤出一屏。
+  const safetyOpen = { panel: false, settings: false };
+  function loginSafetyNote(where = 'panel') {
+    return `<details class="ca-login-safety" data-where="${where}"${safetyOpen[where] ? ' open' : ''}><summary>扫码授权的是什么？数据存在哪？怎么撤销？</summary><ul>
+      <li><b>授权给谁：</b>这台电脑上的 welink-cli（WeLink 官方命令行工具 @welink/welink-cli）。扫码等于在手机 WeLink 上确认「允许这台电脑上的 welink-cli 以我的身份使用 WeLink」，和新电脑扫码登录 WeLink 桌面端是同一类确认。Hub 目前只接了扫码这一种登录方式。</li>
+      <li><b>Hub 用它做什么：</b>助理只调用查询类命令（消息、会议、日程、邮件、通讯录）；发消息只在你自己开启的功能里、发给你选定的群，或你在页面上点了「发送」的那一条。Hub 不读取、不保存、不上传登录令牌。</li>
+      <li><b>数据存哪：</b>登录凭据由 welink-cli 存在本机 <code>%USERPROFILE%\\.welink-cli\\credentials.json</code>，新版按「这台电脑 + 你的 Windows 账号」加密。助理取到的工作信息存在本机的助理数据目录；你提问时，相关片段交给你在 Hub 里选的模型作答。</li>
+      <li><b>怎么撤销：</b>在助理设置的「WeLink 登录」里点「退出 WeLink 登录」，Hub 运行 <code>welink-cli auth logout</code> 清掉本机凭据和 welink-cli 的配置，之后不再自动续期；重新登录后如果邮件、日历取不到，再点一次「配置邮件和日历」。</li>
+      <li><b>同一时间只能一台：</b>WeLink 同一时间只能登录在一台电脑上；在别的电脑登录后，这台会掉线，回到这台再扫码即可。</li></ul></details>`;
+  }
   function loginPanel() {
     const f = data.loginFlow;
     if (!f || f.state === 'ok') return '';
@@ -282,18 +295,28 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     if (failed || scanned) { /* 不显示 */ } else if (f.qr?.kind === 'blocks') qr = `<img class="ca-qr ca-qr-blocks" src="${esc(f.qr.value)}" width="${Number(f.qr.px) || ''}" height="${Number(f.qr.px) || ''}" alt="WeLink 登录二维码">`;
     else if (f.qr?.kind === 'data') qr = `<img class="ca-qr" src="${esc(f.qr.value)}" alt="WeLink 登录二维码">`;
     else if (f.qr?.kind === 'file') qr = `<img class="ca-qr" src="${esc('file:///' + f.qr.value.replace(/\\/g, '/'))}" alt="WeLink 登录二维码">`;
+    // 2026-11-19：失败时按原因说人话（welink.loginDiagnosis：桌面端没开、登录在另一台电脑、网络、授权失效……），CLI 原文放小字备查。
+    const cause = failed ? f.cause : null;
     const reason = p.phase === 'failed' ? p.reason : f.error;
-    const state = failed ? '登录没成功：' + esc(reason || '') : scanned ? '已扫码，正在登录…'
+    // 点了「扫码登录」、CLI 还没把二维码画出来：说明在要码，并给「重新获取」，不再显示一句「扫下面的二维码」而下面什么都没有。
+    const noQrYet = f.state === 'waiting' && !failed && !scanned && !f.qr && !f.garbled && p.phase !== 'waiting';
+    const state = failed ? (cause ? '<b>登录没成功：' + esc(cause.title) + '</b>' : '登录没成功：' + esc(reason || '原因没认出来')) : scanned ? '已扫码，正在登录…'
+      : noQrYet ? '正在向 WeLink 服务器要二维码…一般几秒就出来。'
       // 字符画已经输出完（进入等待扫码）却没能还原成二维码：同样提示改用链接，下面附上原样输出备查。
       : { waiting: f.garbled || (!f.qr && p.phase === 'waiting') ? '二维码显示失败，请用下方链接。' : '用手机 WeLink 扫下面的二维码；扫完这里会自动刷新。', finished: '登录命令已结束，正在核对登录状态…', ok: '' }[f.state] || '';
+    const nextLine = cause ? `<p class="ca-login-next">${esc(cause.next)}</p><p class="ca-note">原文：${esc(cause.line)}</p>`
+      : failed ? '<p class="ca-login-next">点「重新获取二维码」再试一次。WeLink 同一时间只能登录在一台电脑上：如果你的 WeLink 正登录在另一台电脑，先在这台电脑的 WeLink 桌面端登录本人账号再扫码。</p>' : '';
     const tickLine = f.state === 'waiting' && !failed && p.phase === 'waiting' ? `<p class="ca-qr-status">等待扫码 · ${Number(p.elapsed) || 0} 秒</p>` : '';
-    const link = !scanned && /^https:\/\//i.test(f.url || '') ? `<p class="ca-qr-link">二维码扫不出来？<button type="button" class="ca-link" data-ca="open-login-url">在浏览器打开</button></p>` : '';
+    const link = !scanned && !failed && /^https:\/\//i.test(f.url || '') ? `<p class="ca-qr-link">二维码扫不出来？<button type="button" class="ca-link" data-ca="open-login-url">在浏览器打开</button></p>` : '';
     // 认不出的输出原样给出来（排查用）；框还在流式输出（obtaining）、判成乱码或已结束时不贴。
     const raw = !f.qr && f.text && !f.garbled && !failed && !scanned && p.phase !== 'obtaining' ? `<pre class="ca-qr-text">${esc(f.text.slice(-3000))}</pre>` : '';
-    const retry = failed || (f.state === 'finished' && !scanned) ? '<button type="button" class="ca-btn primary" data-ca="login">重新获取二维码</button>' : '';
+    const retry = cause?.action === 'relogin-clean' ? '<button type="button" class="ca-btn primary" data-ca="login-clean">清除并重新扫码</button>'
+      : failed || (f.state === 'finished' && !scanned) ? '<button type="button" class="ca-btn primary" data-ca="login-retry">重新获取二维码</button>'
+        : noQrYet ? '<button type="button" class="ca-btn" data-ca="login-retry">还没出来？重新获取</button>' : '';
     // 失败时写明用的是哪个 welink-cli、什么版本（2026-11-12：同事 cmd 里能登录、Hub 里不行，原因是 Hub 用着另一份旧版）。
     const which = failed && data.cliPath ? `<p class="ca-note" title="${esc(data.cliPath)}">Hub 用的是 welink-cli${data.cliVersion ? ' ' + esc(data.cliVersion) : ''}：${esc(data.cliPath)}；和命令行里不是同一个时，可在设置里切换。</p>` : '';
-    return `<div class="ca-login"><b>扫码登录 WeLink</b><p>${state}</p>${which}${qr}${tickLine}${link}${raw}<div class="ca-row"><button type="button" class="ca-btn" data-ca="close-panel">收起</button>${retry}</div></div>`;
+    const help = failed && window.HubErrorCard ? window.HubErrorCard.assistHtml({ area: 'welink', title: 'WeLink 扫码登录没成功', symptom: cause ? cause.title : reason || '', details: [cause?.title, cause?.line || reason, data.cliVersion ? 'welink-cli ' + data.cliVersion : ''].filter(Boolean).join(' · ') }) : '';
+    return `<div class="ca-login" data-hub-err-hover><b>扫码登录 WeLink</b><p>${state}</p>${nextLine}${which}${qr}${tickLine}${link}${raw}<div class="ca-row"><button type="button" class="ca-btn" data-ca="close-panel">收起</button>${retry}${help}</div>${loginSafetyNote()}</div>`;
   }
 
   // ---- 右栏「今天」（原今日简报）----
@@ -585,7 +608,17 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       try { await call('stop-chat', { id: arg }); } catch (error) { showMessage?.('没停下：' + error.message); }
       await load(); return;
     }
-    if (verb === 'login') { button.disabled = true; const panel = page.querySelector('[data-slot="panel"]'); panel.dataset.kind = 'login'; await call('login'); await load(); return; }
+    if (verb === 'login' || verb === 'login-retry' || verb === 'login-clean') {
+      button.disabled = true; const panel = page.querySelector('[data-slot="panel"]'); panel.dataset.kind = 'login';
+      await call('login', verb === 'login-retry' ? { restart: true } : verb === 'login-clean' ? { clean: true } : undefined); await load(); return;
+    }
+    // 退出 WeLink 登录（2026-11-19）：点一次变成「确认退出」，5 秒内再点才执行（不弹系统对话框）。
+    if (verb === 'welink-logout') {
+      if (button.dataset.armed !== '1') { button.dataset.armed = '1'; button.textContent = '确认退出？再点一次'; setTimeout(() => { if (button.isConnected) { button.dataset.armed = ''; button.textContent = '退出 WeLink 登录'; } }, 5000); return; }
+      button.disabled = true;
+      try { const r = await call('welink-logout'); showMessage?.(r.ok ? '已退出 WeLink 登录，本机凭据和 welink-cli 配置已清除；需要时扫码重新登录，之后如邮件、日历取不到再点一次「配置邮件和日历」' : '退出命令没成功：' + (r.output || '')); } catch (error) { showMessage?.('退出没成功：' + error.message); }
+      await load(); const sp = page.querySelector('[data-slot="panel"]'); if (sp.dataset.kind === 'settings' && !sp.hidden) openSettings(); return;
+    }
     if (verb === 'open-login-url') { const url = data.loginFlow?.url || ''; if (/^https:\/\//i.test(url)) await require('electron').shell.openExternal(url); return; }
     if (verb === 'close-panel') { closePanel(); return; }
     if (verb === 'settings') return openSettings();
@@ -775,7 +808,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     const d = data, s = d.settings;
     const connection = connectionState(d);
     const loginLine = !d.cliFound ? cliChip(d) + installGuide()
-      : connection.kind === 'online' ? `<span class="ca-chip ok">已登录</span><span class="ca-note">账号 ${esc(d.auth.login.uid || '')}</span>`
+      : connection.kind === 'online' ? `<span class="ca-chip ok">已登录</span><span class="ca-note">账号 ${esc(d.auth.login.uid || '')}</span><button type="button" class="ca-btn small" data-ca="welink-logout">退出 WeLink 登录</button>`
         : `<span class="ca-chip warn">${esc(connection.title)}</span><span class="ca-note">${esc(connection.detail)}</span>${connection.action ? `<button type="button" class="ca-btn small primary" data-ca="${connection.action}">${esc(connection.label)}</button>` : ''}${connection.alt ? `<button type="button" class="ca-btn small" data-ca="${connection.alt}">${esc(connection.altLabel)}</button>` : ''}`;
     const from = s.emailFrom === 'welink' ? '从 WeLink 账号自动读到' : s.emailFrom === 'git' ? '从本机 Git 自动读到（公司域名已核对）' : s.email ? '你填写的' : '';
     const snapRows = querySnapshotRows(d);
@@ -794,7 +827,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       <div class="ca-row"><span class="ca-note" data-slot="work-dir" title="${esc(wd.path || '')}">${wd.path ? esc(wd.path) + (wd.from === 'recent' ? '（自动：最近一次新建会话的目录，只读）' : '（你选的，可读写）') : wd.from === 'manual-missing' ? `你选的 ${esc(wd.missing || '')} 已不存在，暂不告诉助理；重新选择或改回跟随最近会话` : '还没有：新建一个会话后自动用它的目录，或手动选择'}</span>
         <button type="button" class="ca-btn small" data-ca="pick-work-dir">选择文件夹</button>${wd.from === 'manual' || wd.from === 'manual-missing' ? '<button type="button" class="ca-btn small" data-ca="reset-work-dir">跟随最近会话</button>' : ''}</div>
       <p class="ca-note">提问时告诉助理你的文件在这里。自动取到的目录只让它读；手动选过的才允许它在这里写文件。助理自己的数据仍放在助理数据目录。</p></fieldset>`;
-    return `<fieldset><legend>WeLink 登录</legend><div class="ca-row">${loginLine}</div></fieldset>${cliLine}${workDirLine}${storageLine}
+    return `<fieldset><legend>WeLink 登录</legend><div class="ca-row">${loginLine}</div>${d.cliFound ? loginSafetyNote('settings') : ''}</fieldset>${cliLine}${workDirLine}${storageLine}
       <fieldset class="col"><legend>公司邮箱（邮件和日历要用）</legend>
         <div class="ca-row">${s.emailFrom === 'welink' && s.email ? `<span>邮箱（自动读取）：${esc(s.email)}</span>` : `<input type="email" data-f="email" placeholder="自动读取失败，可补填公司邮箱" value="${esc(s.email || '')}">`}<button type="button" class="ca-btn primary" data-x="mail">${d.calendarNeedsSetup ? '配置邮件和日历' : '重新配置'}</button>${from ? `<span class="ca-note">${from}</span>` : ''}</div>
         <p class="ca-note" data-f="mail-msg">${d.calendarNeedsSetup ? '还没接入。' : '已接入。'}只让 welink-cli 按邮箱找一次公司邮件服务器，不发邮件。</p></fieldset>

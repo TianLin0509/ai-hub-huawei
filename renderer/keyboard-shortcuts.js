@@ -2,6 +2,7 @@ const { supportsForkSession } = require('../core/session-capabilities.js');
 const { compareSidebarPlacement } = require('./session-list-renderer.js');
 const { isBlockingModalOpen, isElementOpen } = require('./modal-layer-guard.js');
 const { isCodexOwnedTranscript, navigateCodexTranscript } = require('./terminal-input-controller');
+const featureSearch = require('./feature-search.js');
 
 function createKeyboardShortcuts({
   document,
@@ -20,6 +21,9 @@ function createKeyboardShortcuts({
   closeSession,
   createWorkspaceSession,
   copyText,
+  getRecentFiles,
+  openFile,
+  showMessage,
 }) {
   const createSession = kind => typeof createWorkspaceSession === 'function'
     ? createWorkspaceSession(kind)
@@ -262,6 +266,7 @@ function createKeyboardShortcuts({
 
   // ===== #3 命令面板 (Cmd+K) =====
   // 居中 overlay：对当前会话标题模糊匹配跳转 + 新建各类会话 / 切侧栏 / 回主界面。
+  // 2026-11-20 起还搜功能入口和设置项（core/help-ask/feature-index.json，与设置弹窗的搜索框同一份）和当前会话最近预览的文件。
   // 键盘优先（↑↓ 选择、Enter 执行、Esc/点遮罩 关）。数据与回调全部复用已注入的
   // sessions / selectSession / ipcRenderer / toggleSidebar / escapeToHome，
   // DOM 与样式动态创建——不依赖 index.html / renderer.js / CSS 文件改动。
@@ -305,7 +310,7 @@ function createKeyboardShortcuts({
     const input = document.createElement('input');
     input.className = 'hub-cmdk-input';
     input.type = 'text';
-    input.placeholder = '跳转会话 / 新建 / 命令…';
+    input.placeholder = '搜会话、功能、设置、最近文件…（考勤、回车、工作目录）';
     input.spellcheck = false;
     const list = document.createElement('div');
     list.className = 'hub-cmdk-list';
@@ -355,13 +360,41 @@ function createKeyboardShortcuts({
     return false;
   }
 
+  // 功能与设置：只在输入了字时出现（空白时列表照旧是会话和命令）；当前版本没有的入口不列。
+  function _cmdkFeatureItems(q) {
+    if (!q) return [];
+    const win = typeof window !== 'undefined' ? window : null;
+    const notify = msg => (typeof showMessage === 'function' ? showMessage(msg) : showShortcutNotice(msg));
+    return featureSearch.availableResults(document, win, featureSearch.searchFeatures(q, undefined, { limit: 6 }))
+      .map(({ item, mode }) => ({
+        label: item.name,
+        sub: mode === 'enable' ? item.where + ' · 未开启' : item.where,
+        run: () => { void featureSearch.runFeature(item, { document, window: win, showMessage: notify }); },
+      }));
+  }
+
+  // 最近文件：当前会话最近预览过的文件（与 Ctrl+O 的「最近」同源），回车在预览里打开。
+  function _cmdkFileItems(q) {
+    if (typeof getRecentFiles !== 'function' || typeof openFile !== 'function') return [];
+    let files = [];
+    try { files = getRecentFiles() || []; } catch (_) { return []; }
+    return files
+      .filter(f => f && f.path && (_cmdkFuzzy(q, f.name) || (q && String(f.path).toLowerCase().includes(q.toLowerCase()))))
+      .slice(0, q ? 5 : 3)
+      .map(f => ({ label: f.name || f.path, sub: '最近文件', title: f.path, run: () => openFile(f.path) }));
+  }
+
   function _cmdkRender(query) {
     const q = (query || '').trim();
     const sess = getSortedVisibleSessionIds()
       .map(id => sessions.get(id)).filter(Boolean)
-      .map(s => ({ label: s.title || s.kind || s.id, sub: s.kind || 'session', run: () => selectSession(s.id) }));
-    const all = sess.concat(_cmdkActions());
-    _cmdkItems = all.filter(it => _cmdkFuzzy(q, it.label) || _cmdkFuzzy(q, it.sub));
+      .map(s => ({ label: s.title || s.kind || s.id, sub: s.kind || 'session', run: () => selectSession(s.id) }))
+      .filter(it => _cmdkFuzzy(q, it.label) || _cmdkFuzzy(q, it.sub));
+    const actions = _cmdkActions().filter(it => _cmdkFuzzy(q, it.label) || _cmdkFuzzy(q, it.sub));
+    // 输入了字：功能与设置排最前，然后会话、最近文件、命令；空白时照旧会话在前。
+    _cmdkItems = q
+      ? _cmdkFeatureItems(q).concat(sess, _cmdkFileItems(q), actions)
+      : sess.concat(_cmdkFileItems(q), actions);
     _cmdkSel = 0;
     const { list } = _cmdk;
     if (_cmdkItems.length === 0) {
@@ -369,7 +402,7 @@ function createKeyboardShortcuts({
       return;
     }
     list.innerHTML = _cmdkItems.map((it, i) =>
-      `<div class="hub-cmdk-item${i === 0 ? ' sel' : ''}" data-idx="${i}"><span>${_cmdkEsc(it.label)}</span><span class="sub">${_cmdkEsc(it.sub)}</span></div>`
+      `<div class="hub-cmdk-item${i === 0 ? ' sel' : ''}" data-idx="${i}"${it.title ? ` title="${_cmdkEsc(it.title)}"` : ''}><span>${_cmdkEsc(it.label)}</span><span class="sub">${_cmdkEsc(it.sub)}</span></div>`
     ).join('');
   }
 

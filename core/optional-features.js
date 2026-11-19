@@ -14,14 +14,18 @@ const CATALOG = Object.freeze({
   forum: { name: '帖子', desc: '公司发文（政策讲话、公司文件、公告）和心声、稼先今天的热帖，附 AI 摘要；发文上新会提醒', cost: '开着时工作日早上在后台用无头 Edge（借本机 Edge 的登录状态，不弹窗）取一次，之后每小时只重看发文；没登录会每 30 分钟重试' },
   attendance: { name: '考勤', desc: '读自己的打卡记录，统计加班、80 小时红线和年度工时', cost: '开着时每天在后台打开一次考勤页（隐藏窗口，取不到时用无头 Edge），当天取到就不再访问' },
   w3: { name: '门户待办', desc: '读公司门户首页上自己的待办、提的申请和公司文件；新待办、拖了很久的待办和卡住的申请会提醒', cost: '开着时每天早上 6 点后在后台用无头 Edge 打开一次门户首页（约 10 秒、不弹窗），当天取到就不再访问；页面上可随时手动刷新' },
+  // 会议室（2026-11-19 反馈 1b517a0b：占后台资源希望能关）：和其他可选功能不同，默认开——老用户的行为不变；关掉后不再常驻。
+  rooms: { name: '会议室', desc: '按你的规则每天放号时自动抢订会议室，结果和快开会了由桌宠或通知卡提醒', cost: '开着时每 15 秒看一次抢订结果；打开过会议室页后，后台常驻一个会议室组件进程（约几十到一百多 MB 内存）' },
   tray: { name: '关窗口时最小化到托盘', desc: '点窗口右上角的关闭只把 Hub 收到右下角托盘，会话照常在后台跑；单击托盘图标打开，右键「退出 AI Hub」才真正退出', cost: '几乎没有，只多一个托盘图标' },
+  // 多开提示（2026-11-20 体验 7）：默认开；已开着 Hub 时再打开会问「切过去？」。经常有意开两个的人可以关掉。
+  multiOpen: { name: '再打开 Hub 时提示切过去', desc: '已经开着一个 AI Hub 时再双击图标，先问一句「已在运行，切过去？」；选「再开一个」照样能开两个', cost: '没有，只在打开 Hub 时看一眼' },
   pet: { name: '桌宠', desc: '桌面角落的小猫：会话答完、提醒、会议室结果都由它举卡片告诉你，右键还能问助理', cost: '开着时一直有一个置顶的小窗口，每 0.1 秒看一次光标是否碰到它' },
 });
 
 // defaults 只给隔离测试用（main.js 在用环境变量强开助理/论坛的隔离实例里传 true，老的端到端测试照旧能直接用）。
 function createOptionalFeatures({ dataDir, logger = console, defaults = {} } = {}) {
   const file = path.join(dataDir, FILE);
-  let value = { assistant: defaults.assistant === true, forum: defaults.forum === true, attendance: defaults.attendance === true, w3: defaults.w3 === true, tray: defaults.tray === true };
+  let value = { assistant: defaults.assistant === true, forum: defaults.forum === true, attendance: defaults.attendance === true, w3: defaults.w3 === true, rooms: defaults.rooms !== false, tray: defaults.tray === true, multiOpen: defaults.multiOpen !== false };
   // 用户亲手关掉（或在「还没开启」页点了「不用，收起入口」）的功能，左侧导航不再显示它（2026-11-18 用户反馈）。
   // 只认用户自己的这一下：默认关着、从没碰过的功能照旧显示入口，点进去是说明页，新用户不会因为默认关着就找不到。
   let hidden = new Set();

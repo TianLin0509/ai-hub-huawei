@@ -105,12 +105,12 @@ async function main() {
     await click('.pptk-sk:nth-child(4)');
     const picked = await text('.pptk-sk.on b');
     assert.match(await text('[data-pptk-chain]'), /^论证链：/);
-    await click('[data-pptk="example"]');
+    // 只点骨架、不点「先看骨架样子」：预览自己换成新骨架的样例（反馈 15916092）。
     await wait(`document.querySelector("[data-pptk-cap] span")?.textContent===${j(picked)} && !document.querySelector(".pptk-busy")`, 'switched example');
     assert.notEqual(await c.eval('document.querySelector(".pptk-slide").innerHTML.length'), firstSvg, '换了骨架，预览跟着换');
     await oneScreen('切换骨架');
     await shot('02-switch-skeleton');
-    result.checks.push(`切换到「${picked}」并点「先看骨架样子」：预览换成该骨架的示意页`);
+    result.checks.push(`点选「${picked}」：不用再点「先看骨架样子」，预览自动换成该骨架的示意页`);
 
     // 3) 生成这一页：没写内容先就地提醒；写了以后显示人话状态和已用时间；模型提交（夹具）后右栏出现提醒与图位
     await click('[data-pptk="start"]');

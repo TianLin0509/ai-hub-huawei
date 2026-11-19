@@ -86,15 +86,19 @@ function tokenPlanModels() {
     return [...new Set(ids)];
   } catch { return []; }
 }
+// 每个模型都写 input（反馈 03243735）：pi 读模型时直接调 model.input.includes("image")，registerProvider 这条路不补默认值，缺了就报 reading 'includes'。
 // 本次可用的线路，按默认优先顺序。company 只在公司版、且反代端点在时出现。
 function availableRoutes(config = {}, env = process.env, { dataDir, sessionId } = {}) {
   const routes = [];
   if (config.companyCli) {
     try {
-      const route = require('./company-model-proxy').dshRoute({ dataDir, sessionId: sessionId || 'pi-catalog', model: config.dshApiModel });
-      routes.push({ id: 'company', provider: route.providerId, keyEnv: route.keyEnv, key: route.key,
-        providerConfig: { name: '公司模型', baseUrl: route.baseURL, api: 'openai-completions', apiKey: '$' + route.keyEnv,
-          models: route.providerConfig.models.map(m => ({ id: m.id, name: m.id, reasoning: true, contextWindow: m.contextWindow, maxTokens: m.maxTokens,
+      // 部门 API key 用户（DSH 选的是反代里的 API 网关上游）：pi 和 DSH 走同一条网关，会话钥匙带网关标记、模型用网关上的模型。
+      // 以前这里不看网关设置，一律走 CodeAgent 那条公司上游：没装 CodeAgent 的网关用户一发消息就报错（2026-11-20 同事反馈）。
+      const gateway = config.dshBackend === 'proxy' && config.dshUpstream === 'gateway';
+      const route = require('./company-model-proxy').dshRoute({ dataDir, sessionId: sessionId || 'pi-catalog', model: config.dshApiModel, gateway });
+      routes.push({ id: 'company', provider: route.providerId, keyEnv: route.keyEnv, key: route.key, gateway,
+        providerConfig: { name: gateway ? 'API 网关' : '公司模型', baseUrl: route.baseURL, api: 'openai-completions', apiKey: '$' + route.keyEnv,
+          models: route.providerConfig.models.map(m => ({ id: m.id, name: m.id, reasoning: true, input: ['text'], contextWindow: m.contextWindow, maxTokens: m.maxTokens,
             compat: m.compat, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } })) },
         models: route.providerConfig.models.map(m => m.id), defaultModel: route.model });
     } catch (_) { /* 反代没配好：公司版这条线不可用，下面的线路照常 */ }
@@ -106,11 +110,13 @@ function availableRoutes(config = {}, env = process.env, { dataDir, sessionId } 
   const planModels = tokenPlanModels();
   if (planKey && planModels.length) routes.push({ id: 'tokenplan', provider: 'hub-tokenplan', keyEnv: 'AI_HUB_PI_TOKEN_PLAN_KEY', key: planKey,
     providerConfig: { name: 'Token Plan 套餐', baseUrl: PLAN_BASE_URL, api: 'openai-completions', apiKey: '$AI_HUB_PI_TOKEN_PLAN_KEY',
-      models: planModels.map(id => ({ id, name: id, reasoning: true, contextWindow: 128000, maxTokens: 16384, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } })) },
+      models: planModels.map(id => ({ id, name: id, reasoning: true, input: ['text'], contextWindow: 128000, maxTokens: 16384, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } })) },
     models: planModels, defaultModel: planModels[0] });
   return routes;
 }
 const ROUTE_LABELS = { company: '公司模型', deepseek: 'DeepSeek API', tokenplan: 'Token Plan', native: 'pi 自己的登录' };
+// 线路显示名：公司线路走的是 API 网关时写「API 网关」，免得网关用户以为用的是 CodeAgent 账号。
+const routeLabel = route => route.gateway ? 'API 网关' : ROUTE_LABELS[route.id];
 // Hub 线路的 provider 名 → 线路、缺什么、在哪补（缺钥匙时就地提示用）。
 // hubOnly：这个 provider 只有 Hub 注入才存在（套餐、公司模型）；deepseek 是 pi 自带的 provider 名，用户也可能在 pi 自己的配置里配了它。
 const HUB_PROVIDERS = {
@@ -145,7 +151,7 @@ function piRouteCheck(model, config = {}, env = process.env, extra = {}) {
 function piModelOptions(config = {}, env = process.env, extra = {}) {
   const options = [];
   for (const route of availableRoutes(config, env, extra)) {
-    for (const id of route.models) options.push({ id: `${route.provider}/${id}`, label: `${id} · ${ROUTE_LABELS[route.id]}`, source: 'pi-' + route.id });
+    for (const id of route.models) options.push({ id: `${route.provider}/${id}`, label: `${id} · ${routeLabel(route)}`, source: 'pi-' + route.id });
   }
   if (!options.length) options.push({ id: '', label: 'pi 自己的默认模型（在 pi 里 /login 或 /model）', source: 'pi-native' });
   return options;
@@ -180,6 +186,9 @@ function buildPiCliOptions(kind, opts, config = {}, dataDir, baseEnv = process.e
   const problem = model ? savedRouteProblem(model, routes, source) : null;
   if (problem) throw Object.assign(new Error(problem.message), { code: 'PI_ROUTE_KEY_MISSING', piRoute: problem });
   if (!model && routes[0]) { route = routes[0]; provider = route.provider; id = route.defaultModel; model = `${provider}/${id}`; }
+  // 公司线路换了上游（CodeAgent 公司模型 ↔ API 网关）：会话存的模型在这边不存在，原样交给 pi 只会报找不到模型。
+  // 和 DSH 一样改用这条线路的默认模型（标题栏的模型名会跟着变，看得见）。线路本身（计费来源）没变，只是同一条线路上模型表换了。
+  if (route?.id === 'company' && id && !route.models.includes(id)) { id = route.defaultModel; model = `${provider}/${id}`; }
   const env = { ...baseEnv };
   for (const name of Object.keys(env)) {
     if (/^(CLAUDE_HUB_(TOKEN|PORT|SESSION)|AI_TEAM_HUB_CALLBACK|CODEX_THREAD|CODEX_SESSION)/.test(name)
@@ -206,5 +215,5 @@ function buildPiCliOptions(kind, opts, config = {}, dataDir, baseEnv = process.e
     profileId: 'pi:' + (route ? route.id : 'native'), launch: { command: node, args, env } };
 }
 
-module.exports = { PI_PACKAGE, PI_ENTRY, PI_VERSION, PI_MIN_NODE, LEGACY_PACKAGE, PI_INSTALL_HINT, ROUTE_LABELS,
+module.exports = { PI_PACKAGE, PI_ENTRY, PI_VERSION, PI_MIN_NODE, LEGACY_PACKAGE, PI_INSTALL_HINT, ROUTE_LABELS, routeLabel,
   resolvePiRuntime, diagnosePi, nodeFor, savedRouteProblem, savedRouteSource, piRouteCheck, availableRoutes, piModelOptions, defaultPiModel, splitModel, buildPiCliOptions, userRoots };

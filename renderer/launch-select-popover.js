@@ -76,8 +76,14 @@ function installSelectPopover({ document, window, root }) {
           const heading = document.createElement('div'); heading.className = 'caa-menu-cap'; heading.textContent = option.dataset.accountSection; el.appendChild(heading);
         }
       }
+      // 通用小标题（data-section）：CodeAgent 模型下拉的「暂不可用」一组用它（renderer/workspace-controller.js）。
+      if (select.dataset.accountList !== '1' && option.dataset && option.dataset.section) {
+        const heading = document.createElement('div'); heading.className = 'launch-select-cap'; heading.setAttribute('role', 'presentation');
+        heading.textContent = option.dataset.section; el.appendChild(heading);
+      }
       const item = document.createElement('div');
       item.className = 'launch-select-option';
+      if (option.dataset && option.dataset.unavailable === '1') item.classList.add('unavailable');
       item.id = `${el.id}-opt-${index}`;
       item.setAttribute('role', 'option');
       item.dataset.value = option.value;

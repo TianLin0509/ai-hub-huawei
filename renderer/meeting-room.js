@@ -46,6 +46,19 @@ if (typeof document !== 'undefined') (function () {
   const ConversationControls = require('./conversation-workflow-controls.js');
   const ConversationRelay = require('./conversation-relay.js');
   const OrchUI = require('./orchestration-ui.js');
+  // 小队模式（2026-11-19）：负责人派工、成员做完自动交回。状态变了就重画顶栏、进度条和群聊记录。
+  const SquadUI = require('./squad-ui.js');
+  SquadUI.onChange(meetingId => {
+    const meeting = meetingData[meetingId];
+    if (!meeting || meetingId !== activeMeetingId) return;
+    try { renderHeader(meeting); _updateInputPreflight(meeting); } catch (error) { console.warn('[squad] ui refresh failed:', error.message); }
+    const box = document.getElementById('mr-input-box');
+    if (box && meeting.groupChat) {
+      if (SquadUI.enabled(meeting)) box.dataset.placeholder = SquadUI.PLACEHOLDER;
+      else if (box.dataset.placeholder === SquadUI.PLACEHOLDER) box.dataset.placeholder = 'AI 群聊：发送给点亮头像的成员，执行中也可补充';
+    }
+    if (meeting.groupChat) refreshGroupChatPanel(meeting).catch(error => console.warn('[squad] panel refresh failed:', error.message));
+  });
   OrchUI.init(meetingId => {
     const m = meetingData[meetingId];
     if (!m || activeMeetingId !== meetingId) return;
@@ -2378,7 +2391,7 @@ if (typeof document !== 'undefined') (function () {
     const isUser = message.role === 'user';
     const slot = isUser ? null : memberBySid[message.sid];
     const slotCls = slot ? ` slot-${(slot.slotIndex || 0) + 1}` : '';
-    const label = isUser ? (isDispatchCard(message)?(OrchUI.dispatchLabel(message) || '工作流'):'我') : (message.speaker || (slot && slot.displayLabel) || 'AI');
+    const label = isUser ? (isDispatchCard(message)?(OrchUI.dispatchLabel(message) || SquadUI.dispatchLabel(message) || '工作流'):'我') : (message.speaker || (slot && slot.displayLabel) || 'AI');
     // 投委会发言（committeeAct）：幕次 badge + 气泡左侧色条标识（折叠交给通用「长回答折叠」，不重复做）
     const cAct = message.committeeAct || '';
     let actBadge = '';
@@ -2473,6 +2486,10 @@ if (typeof document !== 'undefined') (function () {
         : status === 'absent' ? '本轮已跳过该 AI，无回答。'
         : '本轮未提取到内容。点「同步」从 transcript 重新提取。';
       body = `<div class="mr-gc-md mr-gc-empty-placeholder">${escapeHtml(ph)}</div>`;
+    } else if (isUser && isDispatchCard(message) && SquadUI.dispatchLabel(message)) {
+      // 小队：派工卡片第一行就是「负责人派给 @X：任务」，交回卡片第一行是「Hub 交回 · 第 n 轮」；点开看原文。
+      const firstLine = String(contentStr || '').split(/\r?\n/).map(s => s.trim()).find(Boolean) || '';
+      body = `<details class="mr-gc-dispatch-details mr-orch-dispatch"><summary>${escapeHtml(firstLine.replace(/^【|】$/g, '').slice(0, 120))}</summary><div class="mr-gc-md conversation-user-text">${escapeHtml(contentStr || '')}</div></details>`;
     } else if (isUser && isDispatchCard(message) && OrchUI.dispatchLabel(message)) {
       // 编排群：Hub 给负责人的通知、负责人派给成员的问题，默认折叠，点开看原文。
       const notice = message.dispatch.kind === 'orch-notice';
@@ -5471,6 +5488,11 @@ if (typeof document !== 'undefined') (function () {
       return;
     }
     row.style.display = '';
+    if (!OrchUI.enabled(current) && SquadUI.enabled(current)) {
+      SquadUI.renderStrip(row, current, { onError: message => _showGcEscapeNotice(message, 'error') });
+      _updateInputHistoryButton(current);
+      return;
+    }
     if (OrchUI.enabled(current)) {
       OrchUI.renderStrip(row, current, { escapeHtml, onError: message => _showGcEscapeNotice(message, 'error') });
       _updateInputHistoryButton(current);
@@ -6364,7 +6386,7 @@ if (typeof document !== 'undefined') (function () {
       <!-- 2026-06-28 maintainer：删 header 进度条（与标题旁 meta 的"已N轮·本轮N/M"文字信息重叠），保留 meta。_updateHeaderProgress 的 progEl 分支会因元素缺失自动跳过。 -->
       <div class="mr-header-right">
         ${layoutButtonsHtml ? `<div class="mr-header-primary-actions">${layoutButtonsHtml}</div>` : ''}
-        <div class="mr-header-primary-actions">${gcMembersBtnHtml}${gcMessageScopeHtml}${meeting.groupChat ? `<button type="button" class="mr-header-btn${_gcToolsExpanded[meeting.id] ? ' active' : ''}" id="mr-btn-group-tools" aria-expanded="${!!_gcToolsExpanded[meeting.id]}" aria-controls="mr-gc-tools" title="展开或收起搜索与本轮进度">群聊工具</button>` : ''}${viewToggleHtml}</div>
+        <div class="mr-header-primary-actions">${gcMembersBtnHtml}${gcMessageScopeHtml}${OrchUI.enabled(meeting) ? '' : SquadUI.headerButton(meeting)}${meeting.groupChat ? `<button type="button" class="mr-header-btn${_gcToolsExpanded[meeting.id] ? ' active' : ''}" id="mr-btn-group-tools" aria-expanded="${!!_gcToolsExpanded[meeting.id]}" aria-controls="mr-gc-tools" title="展开或收起搜索与本轮进度">群聊工具</button>` : ''}${viewToggleHtml}</div>
         <div class="mr-header-secondary-actions" aria-label="会议工具">
           <button class="mr-header-btn" id="mr-btn-add-sub" title="${meeting.groupChat ? '添加新的 AI 成员' : '添加子会话'}">${meeting.groupChat ? '+ 成员' : '+ 添加'}</button>
           ${meeting.workspace ? `<button class="btn-zoom btn-file-manager-toggle" id="mr-btn-files" title="打开当前工作目录的文件管理" aria-label="打开当前工作目录的文件管理" aria-pressed="false"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.8 4.4A1.4 1.4 0 0 1 3.2 3h3l1.3 1.4h5.3a1.4 1.4 0 0 1 1.4 1.4v6a1.4 1.4 0 0 1-1.4 1.4H3.2a1.4 1.4 0 0 1-1.4-1.4Z"/><path d="M5 7.2h6M5 9.5h4"/></svg></button>` : ''}
@@ -6421,6 +6443,18 @@ if (typeof document !== 'undefined') (function () {
       if (state) _renderGcPanelInto(panel, meeting, state, { scroll });
       renderHeader(meeting);
     });
+    const squadBtn = document.getElementById('mr-btn-squad');
+    if (squadBtn) squadBtn.addEventListener('click', () => {
+      SquadUI.openSettings(meetingData[meeting.id] || meeting, squadBtn, {
+        setParticipants: async indexes => {
+          const updated = await _setMeetingParticipants(meetingData[meeting.id] || meeting, indexes);
+          if (activeMeetingId === updated.id) { renderHeader(updated); _updateInputPreflight(updated); }
+          if (updated.groupChat) await refreshGroupChatPanel(updated);
+        },
+        onError: message => _showGcEscapeNotice(message, 'error'),
+      });
+    });
+    if (meeting.groupChat && !SquadUI.view(meeting)) SquadUI.load(meeting.id).catch(error => console.warn('[squad] load failed:', error.message));
     const groupToolsBtn = document.getElementById('mr-btn-group-tools');
     if (groupToolsBtn) groupToolsBtn.addEventListener('click', () => {
       if (memberSplit?.mode() === 'two') setGroupLayout('overview', meeting);
@@ -7150,6 +7184,7 @@ if (typeof document !== 'undefined') (function () {
       inputBox.dataset.placeholder = zeroParticipantsSelected
         ? 'AI 群聊：请先点亮至少一位成员头像'
         : 'AI 群聊：发送给点亮头像的成员，执行中也可补充';
+      if (SquadUI.enabled(meeting)) inputBox.dataset.placeholder = SquadUI.PLACEHOLDER;
     }
     if (DevFile.enabled(meeting)) {
       inputBox.dataset.placeholder = DevFile.isSolo(meeting)

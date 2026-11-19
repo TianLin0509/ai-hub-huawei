@@ -66,6 +66,9 @@ class PhoneChannel {
   constructor(assistant, deps = {}) {
     this.a = assistant; this.deps = deps; this.now = assistant.now;
     this.timers = []; this.polling = false; this.watching = false; this.outbox = Promise.resolve(); this.backoffUntil = 0;
+    // 2026-11-20 运行时风暴排查：每 6 秒起一次 welink-cli，开着手机对话就是每小时约 600 次。群里安静久了放慢：
+    // 10 分钟没有新消息（谁发的都算）、Hub 也没往群里发，改 15 秒一查；30 分钟改 30 秒；一有新消息或 Hub 发了话立刻回到 6 秒。
+    this.lastTalkAt = this.now(); this.lastPollStartAt = 0;
   }
   settings() { return { ...DEFAULT_PHONE, ...(this.a.settings().phone || {}) }; }
   active() { const p = this.settings(); return !!(p.enabled && p.groupId); }
@@ -101,7 +104,12 @@ class PhoneChannel {
 
   // ---- 收 ----
   async poll() {
-    if (!this.active() || this.polling || this.now() < this.backoffUntil) return;
+    if (!this.active()) { this.wasActive = false; return; }
+    if (!this.wasActive) { this.wasActive = true; this.lastTalkAt = this.now(); } // 刚开启手机对话：从正常节奏起步，不沿用 Hub 启动以来的安静时长
+    if (this.polling || this.now() < this.backoffUntil) return;
+    const quiet = this.now() - this.lastTalkAt, gap = quiet > 30 * 60000 ? 30000 : quiet > 10 * 60000 ? 15000 : 0;
+    if (gap && this.now() - this.lastPollStartAt < gap - 500) return;
+    this.lastPollStartAt = this.now();
     this.polling = true;
     const p = this.settings(), now = this.now();
     try {
@@ -122,6 +130,7 @@ class PhoneChannel {
         if (top === null || m.n > top) top = m.n;
         if ((cursor !== null && m.n <= cursor) || seen.has(m.id)) continue;
         seen.add(m.id);
+        if (!fresh || (m.at && now - m.at < FRESH_MS)) this.lastTalkAt = this.now(); // 首次取历史时只认 2 分钟内的新消息
         const text = m.text.trim();
         if (!text) continue;
         // 小微助手和别人的消息不理；记在往来里并写明发件账号：真机上要是本人账号和发件人格式对不上，一眼能看出来。
@@ -153,6 +162,7 @@ class PhoneChannel {
     if (targetGroup) p.groupId = targetGroup;
     if (!p.groupId) return Promise.resolve(false);
     const parts = chunks(plain(text));
+    this.lastTalkAt = this.now();
     this.outbox = this.outbox.then(async () => {
       for (let i = 0; i < parts.length; i += 1) {
         const body = PREFIX + (parts.length > 1 ? `（${i + 1}/${parts.length}）` : '') + parts[i];

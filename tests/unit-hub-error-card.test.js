@@ -93,7 +93,7 @@ test('已知问题表：代码里的真实文案能命中对应条目', () => {
   assert.equal(id('hub-alert', '共享端口已被其他程序占用；关闭共享后换一个端口'), 'port-in-use');
   assert.equal(id('model-service', 'API Error token消耗过快， 已达到4亿上限'), 'codeagent-quota');
   assert.equal(id('session-create', '所选账号当前不可用，请到「账号」页登录或恢复使用后再试'), 'account-unavailable');
-  assert.ok(KNOWN_ISSUES.length >= 8 && KNOWN_ISSUES.length <= 14);
+  assert.ok(KNOWN_ISSUES.length >= 8 && KNOWN_ISSUES.length <= 16);
 });
 
 test('已知问题表：功能区不符不套用；端口号能从报错里取出来；认不出返回 null', () => {
@@ -103,7 +103,8 @@ test('已知问题表：功能区不符不套用；端口号能从报错里取�
   assert.match(port.title, /端口 3456/);
   assert.match(port.fix, /Get-NetTCPConnection -LocalPort 3456/);
   assert.equal(matchKnownIssue({ area: 'hub-alert', details: '一切正常' }), null);
-  for (const issue of KNOWN_ISSUES) assert.ok(!issue.action || /^known:/.test(issue.action.act), issue.id);
+  // action 可以是函数（按匹配结果给不同的一键动作，如 cli-missing 按 CLI 给 known:cli-install:<id>），只校验静态的。
+  for (const issue of KNOWN_ISSUES) assert.ok(!issue.action || typeof issue.action === 'function' || /^known:/.test(issue.action.act), issue.id);
 });
 
 test('错误卡命中已知问题：标题下给「已知解法」，一键动作排第一个当主按钮，求助按钮照样在', () => {

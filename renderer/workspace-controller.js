@@ -129,6 +129,22 @@
   // 两处必须同一口径——摘要写空就是不承诺，那也确实是按配置里写的起。
   let codeagentDefaultModel = '';
   let codeagentCatalog = null;
+  // 这个号用不了的模型（main codeagent:models 标 unavailable 的，core/codeagent-models.js unavailableModels）：不进可选清单，
+  // 下拉最后单列「暂不可用」一组，选了只说明原因（2026-11-19 反馈：模型列表只保留能用的）。
+  let codeagentUnavailableOptions = [];
+  const UNAVAILABLE_PREFIX = '\u0001unavailable:';
+  // 用户在启动中心明确选了「跟随 CodeAgent」那一项：这次不套 Hub 设的默认模型。
+  let codeagentFollowCli = false;
+  let codeagentUnavailableNote = '';
+  // Hub 里「设为默认」的 CodeAgent 模型在这个号当前清单里对应的那一项（大小写、w3/ 前缀、-Auto 后缀同 core hubDefaultModel）。
+  function codeagentHubDefaultOption(options) {
+    const saved = String(hubDefaultModels.codeagent || '');
+    if (!saved) return null;
+    const bare = saved.replace(/^(?:w3|built-in|builtin)\//i, '');
+    const find = name => options.find(option => option.id.toLowerCase() === name.toLowerCase() && !option.provider)
+      || options.find(option => option.id.toLowerCase() === name.toLowerCase());
+    return find(saved) || find(bare) || find(bare + '-Auto') || null;
+  }
   const codeagentModelLabel = id => { try { return require('../core/codeagent-models').modelLabel(id); } catch { return id; } };
   // 个人账号的登录状态（号池列表里的 personal.state）：不是 ready 时在账号下拉和说明里写出来。
   const personalStateText = () => accountState(codeagentPool.personal, { personal: true }).detail || '';
@@ -1100,6 +1116,19 @@
   function paintDefaultModelButton() {
     const button = document.getElementById('new-session-model-default');
     if (!button) return;
+    // CodeAgent 选了「跟随 CodeAgent」、而 Hub 里存着默认模型：按钮改成「改回跟随 CodeAgent」，点了清掉 Hub 的默认，
+    // 以后新会话、助理、热帖整理都用 CodeAgent 自己的默认模型（2026-11-19 反馈 11e2dc81「怎么关掉默认的模型」的反方向）。
+    const clearCodeagent = selectedKind === 'codeagent' && !selectedModel && !!hubDefaultModels.codeagent;
+    button.dataset.action = clearCodeagent ? 'clear-codeagent' : '';
+    if (clearCodeagent) {
+      button.hidden = false;
+      button.disabled = defaultsSaving || accountSaving || submitting;
+      button.textContent = defaultsSaving ? '正在保存…' : '改回跟随 CodeAgent';
+      button.title = `现在 Hub 默认用 ${hubDefaultModels.codeagent}；点了以后新会话、助理和热帖整理都用 CodeAgent 自己的默认模型`;
+      const status = document.getElementById('new-session-default-status');
+      if (status) status.textContent = `Hub 默认模型：${hubDefaultModels.codeagent} · 这次跟随 CodeAgent`;
+      return;
+    }
     const supported = !!selectedModel;
     button.hidden = !supported;
     if (!supported) return;
@@ -1347,7 +1376,9 @@
       return;
     }
 
-    if (!options.some(option => option.id === selectedModel)) {
+    // 明确选了「跟随 CodeAgent」：保持空，不被 Hub 默认补回来（否则「改回跟随 CodeAgent」按钮出不来）。
+    if (selectedKind === 'codeagent' && codeagentFollowCli && !modelTouchedByUser) selectedModel = '';
+    else if (!options.some(option => option.id === selectedModel)) {
       selectedModel = companyApiKind(selectedKind) ? (options[0]?.id || '') : resolveDefaultModel(selectedKind, defaultModelConfig(), options.map(option => option.id));
     }
     if (selectedKind === 'codeagent' && !options.length) selectedModel = '';
@@ -1366,17 +1397,26 @@
     };
     const nativeCodeagentOption = selectedKind === 'codeagent'
       ? (codeagentDefault
-        ? `<option value="" title="${escapeHtml(codeagentDefault + ' · 这个号的默认模型，启动后不切换')}"${usageAttrs(codeagentDefault)}>${escapeHtml(codeagentModelLabel(codeagentDefault) + '（默认）')}</option>`
+        ? `<option value="" title="${escapeHtml(codeagentDefault + ' · 这个号的默认模型，启动后不切换')}"${usageAttrs(codeagentDefault)}>${escapeHtml(codeagentModelLabel(codeagentDefault) + (hubDefaultModels.codeagent ? '（跟随 CodeAgent）' : '（默认）'))}</option>`
         : '<option value="">沿用 CLI 当前模型</option>') : '';
     const listed = codeagentDefault ? options.filter(option => option.provider || option.id.toLowerCase() !== codeagentDefault.toLowerCase()) : options;
     const choiceValue = option => selectedKind === 'codeagent' ? modelChoice.choiceValue(option) : option.id;
-    const wanted = nativeCodeagentOption + listed.map(option => `${choiceValue(option)}\u0000${option.label}${selectedKind === 'codeagent' ? option.description || '' : ''}${usageAttrs(option.id)}`).join('|');
+    // 用不了的模型排在最后单列一组（launch-select-popover.js 按 data-section 画小标题、data-unavailable 画灰），选了只说明原因。
+    const greyed = selectedKind === 'codeagent' ? codeagentUnavailableOptions.filter(option => !listed.some(item => item.id.toLowerCase() === option.id.toLowerCase())) : [];
+    const greyedHtml = greyed.map((option, index) => `<option value="${escapeHtml(UNAVAILABLE_PREFIX + option.id)}" data-unavailable="1"${index === 0 ? ' data-section="暂不可用 · 选了看原因"' : ''} title="${escapeHtml(option.unavailableReason || '这个号暂时用不了它')}">${escapeHtml(option.label)}</option>`).join('');
+    const wanted = nativeCodeagentOption + listed.map(option => `${choiceValue(option)}\u0000${option.label}${selectedKind === 'codeagent' ? option.description || '' : ''}${usageAttrs(option.id)}`).join('|') + greyedHtml;
     if (modelSelect.dataset.builtFor !== wanted) {
       modelSelect.innerHTML = nativeCodeagentOption + listed
         .map(option => `<option value="${escapeHtml(choiceValue(option))}"${selectedKind === 'codeagent' && option.description ? ` title="${escapeHtml(option.description)}"` : ''}${usageAttrs(option.id)}>${escapeHtml(option.label)}</option>`)
-        .join('');
+        .join('') + greyedHtml;
       modelSelect.dataset.builtFor = wanted;
     }
+    // Hub 里「设为默认」的 CodeAgent 模型（core/codeagent-launch-model.js hubDefaultModel，2026-11-19 反馈「设置默认模型不生效」）：
+    // 没点选过、也没选「跟随 CodeAgent」时，下拉就显示它，启动也按它（主进程同一口径，清单里没有它时两边都回到账号默认）。
+    // 它正好就是 CodeAgent 自己的默认时，显示「沿用」那一项即可（主进程也不开菜单）。
+    const hubPickRaw = selectedKind === 'codeagent' && !modelTouchedByUser && !codeagentFollowCli ? codeagentHubDefaultOption(options) : null;
+    const hubPick = hubPickRaw && !(codeagentDefault && !hubPickRaw.provider && hubPickRaw.id.toLowerCase() === codeagentDefault.toLowerCase()) ? hubPickRaw : null;
+    if (hubPick) { selectedModel = hubPick.id; selectedCodeagentRoute = modelChoice.routeFields(hubPick); }
     // 之前点选过的模型正好是这个号的默认模型：按「沿用」处理（不切换，免得启动后再走一遍 /model 菜单）。
     if (codeagentDefault && modelTouchedByUser && !selectedCodeagentRoute.codeagentModelProvider && String(selectedModel || '').toLowerCase() === codeagentDefault.toLowerCase()) modelTouchedByUser = false;
     // CodeAgent 的模型选项（2026-10-20 隐藏，2026-10-29 用户要恢复）：默认一项是这个号启动会用的模型（main codeagent:models 的
@@ -1384,7 +1424,8 @@
     const modelField = document.getElementById('new-session-model-field');
     const useCards = companyApiKind(selectedKind) && !!companyProvider[selectedKind];
     if (modelField) modelField.hidden = useCards;
-    modelSelect.value = selectedKind === 'codeagent' && !modelTouchedByUser ? '' : selectedKind === 'codeagent' && selectedCodeagentRoute.codeagentModelProvider
+    modelSelect.value = hubPick ? choiceValue(hubPick)
+      : selectedKind === 'codeagent' && !modelTouchedByUser ? '' : selectedKind === 'codeagent' && selectedCodeagentRoute.codeagentModelProvider
       ? modelChoice.choiceValue({ id: selectedModel, provider: selectedCodeagentRoute.codeagentModelProvider, providerLabel: selectedCodeagentRoute.codeagentModelProviderLabel, menuLabel: selectedCodeagentRoute.codeagentModelMenuLabel }) : selectedModel;
     paintModelCards(useCards);
 
@@ -1510,11 +1551,12 @@
     if (warning) {
       const saved = hubLaunchDefaults[selectedKind] || {};
       const unavailable = [];
-      if (hubDefaultModels[selectedKind] && !options.some(o => o.id === hubDefaultModels[selectedKind])) unavailable.push('默认模型');
+      if (hubDefaultModels[selectedKind] && (selectedKind === 'codeagent' ? options.length && !codeagentHubDefaultOption(options) : !options.some(o => o.id === hubDefaultModels[selectedKind]))) unavailable.push('默认模型');
       if (showEffort && saved.effort && !effortOptionsFor(selectedKind, selectedModel).some(([v]) => v === saved.effort)) unavailable.push('默认思考强度');
       if (showCodexTier && saved.codexSpeedTier && !codexTierOptionsFor(selectedModel).some(([v]) => v === saved.codexSpeedTier)) unavailable.push('默认速度');
       const notices = [];
       if (unavailable.length) notices.push(`${unavailable.join('、')}当前不可用，已显示可用选项，请确认后创建。`);
+      if (selectedKind === 'codeagent' && codeagentUnavailableNote) notices.push(codeagentUnavailableNote);
       if (showFast && selectedFastMode) notices.push('快速模式可能影响回复记录；卡片收不到回复时可关闭。');
       if (selectedKind === 'codex' && codexTuningCatalog?.refreshError) notices.push('在线模型目录刷新失败，当前使用缓存；下次打开会重试。');
       warning.textContent = notices.join(' ');
@@ -1673,6 +1715,9 @@
     const options = launchModelOptions(selectedKind);
     if (options.length === 0) return '';
     const effortTag = EFFORT_PICKER ? ` · ${selectedEffort}` : '';
+    // 显示的是 Hub 默认模型时，摘要也写它（和下拉、启动同一口径）。
+    const hubTag = selectedKind === 'codeagent' && !modelTouchedByUser && !codeagentFollowCli ? codeagentHubDefaultOption(options) : null;
+    if (hubTag) return `${hubTag.label}${effortTag}`;
     if (selectedKind === 'codeagent' && !modelTouchedByUser) return codeagentDefaultModel ? `${codeagentModelLabel(codeagentDefaultModel)}${effortTag}` : (EFFORT_PICKER ? selectedEffort : '');
     const model = options.find(option => option.id === selectedModel && (!selectedCodeagentRoute.codeagentModelProvider || option.provider === selectedCodeagentRoute.codeagentModelProvider));
     const modelLabel = model ? model.label : selectedModel;
@@ -1765,6 +1810,8 @@
     claudeAccountTouched = false;
     loadClaudeRanking(revision);
     tuningMemory.clear();
+    // 「跟随 CodeAgent」只管这一次新建（Codex 审查 P2-1）：重开面板回到 Hub 默认。
+    codeagentFollowCli = false; codeagentUnavailableNote = '';
     for (const kind of Object.keys(companyPick)) delete companyPick[kind];
     accountNotice = '';
     tuningTouchedByUser = false;
@@ -1996,9 +2043,13 @@
       if (unavailable) { setRuntimeModelOptions('codeagent', []); return null; }
       return ipcRenderer.invoke('codeagent:models', { account: codeagentUsesPool() ? 'pool' : 'personal', poolAccount: codeagentManualPick() || undefined });
     }).then(result => {
-      if (result && Array.isArray(result.options)) setRuntimeModelOptions('codeagent', result.options);
+      if (result && Array.isArray(result.options)) {
+        setRuntimeModelOptions('codeagent', result.options.filter(option => !option.unavailable));
+        codeagentUnavailableOptions = result.options.filter(option => option.unavailable);
+      }
       codeagentCatalog = result?.catalog || null;
       codeagentDefaultModel = result && typeof result.defaultModel === 'string' ? result.defaultModel : '';
+      if (codeagentUnavailableOptions.some(option => option.id.toLowerCase() === codeagentDefaultModel.toLowerCase())) codeagentDefaultModel = '';
       return result;
     }).catch(error => { console.warn('[codeagent-models]', error.message); return null; });
     return Promise.resolve(null);
@@ -2028,6 +2079,8 @@
     if (DEEPSEEK_ROUTE_KINDS.has(selectedKind) && !companyApiKind(selectedKind)) opts.deepseekRoute = deepseekRoute;
     if (selectedKind === 'codeagent') opts.codeagentModelPick = modelTouchedByUser;
     if (selectedKind === 'codeagent' && modelTouchedByUser) Object.assign(opts, selectedCodeagentRoute);
+    // 明确选了「跟随 CodeAgent」：主进程不套 Hub 默认模型；没点选时由主进程按 Hub 默认 / 账号默认定（和下拉显示同一口径）。
+    if (selectedKind === 'codeagent' && !modelTouchedByUser && codeagentFollowCli) opts.codeagentFollowCli = true;
     if (selectedKind === 'codeagent' && codeagentPoolRequested()) {
       opts.codeagentAccount = 'pool';
       const pick = codeagentManualPick();
@@ -2220,7 +2273,7 @@
       codeagentPoolPick = event.target.value;
       try { localStorage.setItem(CODEAGENT_POOL_PICK_KEY, codeagentPoolPick); } catch { /* 隐私模式 */ }
       // 换了号：模型回到这个号的默认（上一个号点选的模型这个号未必有权限）
-      modelTouchedByUser = false; codeagentDefaultModel = '';
+      modelTouchedByUser = false; codeagentDefaultModel = ''; codeagentFollowCli = false; codeagentUnavailableNote = '';
       setError('');
       paint();
       void loadModelCatalog('codeagent').then(paint);
@@ -2240,7 +2293,7 @@
         if (choice.mode === 'pool-manual') codeagentPoolPick = choice.pick;
       } else codeagentAccount = ['pool', 'pool-manual'].includes(event.target.value) ? event.target.value : 'personal';
       try { localStorage.setItem(CODEAGENT_ACCOUNT_KEY, codeagentAccount); localStorage.setItem(CODEAGENT_POOL_PICK_KEY, codeagentPoolPick); } catch { /* 隐私模式 */ }
-      modelTouchedByUser = false; codeagentDefaultModel = '';
+      modelTouchedByUser = false; codeagentDefaultModel = ''; codeagentFollowCli = false; codeagentUnavailableNote = '';
       setError('');
       paint();
       // 每个号能用的模型不同：换账号后按新账号重新取模型菜单。
@@ -2250,10 +2303,21 @@
     document.getElementById('new-session-project-refresh')?.addEventListener('click', loadPreparedProjects);
     if (modelSelect) {
       modelSelect.addEventListener('change', () => {
+        // 「暂不可用」一组：不切换，原地说明原因，下拉回到原来的选择。
+        if (selectedKind === 'codeagent' && modelSelect.value.startsWith(UNAVAILABLE_PREFIX)) {
+          const id = modelSelect.value.slice(UNAVAILABLE_PREFIX.length);
+          const row = codeagentUnavailableOptions.find(option => option.id === id);
+          codeagentUnavailableNote = `${row ? row.label : id} 暂时用不了：${row?.unavailableReason || '这个号暂时用不了它'}。`;
+          modelSelect.dataset.builtFor = '';
+          paint();
+          return;
+        }
+        codeagentUnavailableNote = '';
         const choice = selectedKind === 'codeagent' ? modelChoice.decodeChoice(modelSelect.value) : { id: modelSelect.value };
         selectedModel = choice.id;
         selectedCodeagentRoute = modelChoice.routeFields(choice);
         modelTouchedByUser = selectedKind !== 'codeagent' || !!selectedModel;
+        if (selectedKind === 'codeagent') codeagentFollowCli = !selectedModel;
         tuningTouchedByUser = true;
         paint();
       });
@@ -2269,6 +2333,20 @@
         defaultsSaving = true;
         configReadRevision++;
         paintDefaultModelButton();
+        if (defaultModelButton.dataset.action === 'clear-codeagent') {
+          try {
+            const result = await ipcRenderer.invoke('session:set-default-model', { kind: 'codeagent', model: '' });
+            if (!result || !result.ok) throw new Error((result && result.error) || '保存失败');
+            hubDefaultModels = result.defaultModels || {};
+            configReadRevision++;
+            setError('');
+          } catch (error) {
+            setError(`改回跟随 CodeAgent 失败：${error && error.message ? error.message : error}`);
+          }
+          defaultsSaving = false;
+          paint();
+          return;
+        }
         try {
           const result = await ipcRenderer.invoke('session:set-launch-defaults', {
             kind,

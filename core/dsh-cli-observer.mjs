@@ -10,7 +10,10 @@ export function apply(ctx) {
   if (!file) throw new Error('Missing Hub native DSH event log');
   const append = row => fs.appendFileSync(file, JSON.stringify(row) + '\n');
   let root;
-  const isRoot = agent => ctx.agents.roots().includes(agent);
+  // 新版 DSH（0.2.2）去掉了 agents.roots()，只剩 list()；子智能体在会话头里标 origin: 'subagent'（2026-11-20 隔离实测：
+  // 老写法让 dsh-tui 直接崩溃「ctx.agents.roots is not a function」）。
+  const isRoot = agent => typeof ctx.agents.roots === 'function' ? ctx.agents.roots().includes(agent)
+    : ctx.agents.list().includes(agent) && agent.session?.header?.origin !== 'subagent';
   // /fork creates a detached root; only the TUI's foreground discovery record
   // can change Hub's binding. /new and /resume publish that record themselves.
   const bindForeground = () => {

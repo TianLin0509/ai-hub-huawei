@@ -399,6 +399,15 @@ function createNativeClaudeDriver(id, kind, opts, cwd, env, legacy) {
 //   已有历史    → --resume <id>
 //   id 已分配但从未开聊（原生时代的懒启动席位）→ --session-id <同一个 id>
 //   --continue / 选择器 → 身份未知，等第一个 hook 上报
+// PTY 里启动 Claude Code 用的程序：与首页检测同一套查找（PATH → npm 全局 → ~\.local\bin → Hub 一键安装的）。
+function claudePtyExecutable(env, platform = process.platform) {
+  if (platform !== 'win32') return null;
+  try {
+    const found = require('./community-setup').findCommand('claude', env, platform);
+    return found && path.isAbsolute(found) ? found : null;
+  } catch { return null; }
+}
+
 function buildClaudePtyLaunch(id, kind, opts, cwd, env, cv) {
   const hubDataDir = getHubDataDir();
   const mcp = buildClaudeMeetingMcpArgs({ cwd, hubDataDir, mcpConfigFile: opts.mcpConfigFile,
@@ -455,7 +464,11 @@ function buildClaudePtyLaunch(id, kind, opts, cwd, env, cv) {
   const quote = value => /^[A-Za-z0-9_.:=\/\\-]+$/.test(String(value)) ? String(value) : quotePowerShellLiteral(value);
   const compatibleArgs = require('./cli-capabilities').filterArgs('claude', args).args;
   require('./claude-connection-settings').assertSettingsSupport(connection, compatibleArgs);
-  const cmd = ' claude ' + [...identity, ...compatibleArgs].map(quote).join(' ') + '\r\n';
+  // 用 Hub 已探测到的绝对路径启动（反馈 08441c2e，2026-11-19）：官方安装器装在 ~\.local\bin、npm 全局目录不在 PATH 上时，
+  // 首页检测说「已安装」，PTY 里的裸命令 claude 却报「无法将“claude”项识别」退回 PowerShell。找不到时照旧用裸命令。
+  const exe = claudePtyExecutable(env);
+  const head = exe ? ' & ' + quotePowerShellLiteral(exe) + ' ' : ' claude ';
+  const cmd = head + [...identity, ...compatibleArgs].map(quote).join(' ') + '\r\n';
   return { cmd, sessionId, fast, connectionNotice: connection.notice };
 }
 
@@ -475,6 +488,8 @@ function buildClaudePtyLaunch(id, kind, opts, cwd, env, cv) {
 // 公司真机 Q-1020-01：不带时个人号在该目录 2/2 报错；带上后 1/1 正常用 GLM，项目级与账号配置都不再被回写，号 1 照常用 DeepSeek。
 // 用户自己开的会话不加，可能依赖项目级配置。
 function codeAgentReadOnly(opts) { return !!opts && ['company-assistant', 'company-forum', 'company-ai', 'avatar-agent'].includes(opts.purpose); }
+// 模型由调度方指定、不套 Hub「设为默认」CodeAgent 模型的会话（2026-11-19，见 _createSession 的 hubDefaultTarget）。
+const HUB_DEFAULT_SKIP_PURPOSES = ['avatar-agent'];
 // 靠号的配置目录 settings.json 定模型（号池同步配置时写；个人账号只在默认就是它时才用），开起来后再在 /model 菜单里选中它（2026-10-20）。
 function codeAgentRouteModel(opts) {
   if (!opts || opts.purpose !== 'avatar-agent' || typeof opts.codeagentRouteModel !== 'string') return '';
@@ -1875,6 +1890,30 @@ class SessionManager extends EventEmitter {
         throw new Error(`个人账号此刻的默认模型是 ${personal.defaultModel || '未知'}，不改个人账号的默认模型；${routeModel} 请用号池里有它权限的号`);
       }
     }
+    // Hub「设为默认」的 CodeAgent 模型（core/codeagent-launch-model.js hubDefaultModel）：这次没明确选模型的新会话先用它。
+    // 模型由调度方指定的会话（HUB_DEFAULT_SKIP_PURPOSES）不套；用户在启动中心明确选了「跟随 CodeAgent」（codeagentFollowCli）也不套。
+    let hubDefaultTarget = '';
+    if (isCodeAgent && freshLaunch && !opts.fixedModel && !opts.codeagentUserModel && !opts.codeagentFollowCli && !shouldPickCodeAgentModel(opts)
+        && !codeAgentRouteModel(opts) && !HUB_DEFAULT_SKIP_PURPOSES.includes(opts.purpose)) {
+      try {
+        const pool = require('./codeagent-pool');
+        const known = codeagentPool
+          ? { models: codeagentPool.account.models || [], authoritative: !!codeagentPool.account.modelsAuthoritative }
+          : pool.accountModels(codeagentConfig.configDir, undefined, pool.personalModelsFile(getHubDataDir()));
+        const blocked = require('./codeagent-models').unavailableModels(getHubDataDir(), { accountKey: codeagentPool ? codeagentPool.account.id : 'personal' });
+        const result = require('./codeagent-launch-model').hubDefaultModel(getConfig(), { ...known, blocked });
+        if (result.reason !== 'unset') {
+          hubDefaultTarget = result.model;
+          const current = (codeagentPool && codeagentPool.model) || pool.readSettingsModel(codeagentConfig.configDir);
+          require('./codeagent-models').appendModelLog(getHubDataDir(), { event: 'hub-default', session: String(id).slice(0, 8), account: codeagentPool ? '号池' : '个人',
+            purpose: opts.purpose, saved: result.saved, use: result.model || '-', cli: current || '-', reason: result.reason });
+          // 手动会话：CodeAgent 自己记着的就是它时不开菜单（省掉约 1 分钟的 /model 等待）；自动会话在下面按目标模型选。
+          if (hubDefaultTarget && !codeAgentReadOnly(opts) && String(current || '').toLowerCase() !== hubDefaultTarget.toLowerCase()) {
+            opts = { ...opts, model: hubDefaultTarget, codeagentModelPick: true, codeagentAccountModel: hubDefaultTarget };
+          }
+        }
+      } catch (error) { console.warn('[codeagent] 读 Hub 默认模型出错，按账号默认启动：' + error.message); hubDefaultTarget = ''; }
+    }
     // 公司模型（经本机反代）的 Claude Code / Codex / DSH：启动中心选的号（companyProxyPick），或恢复 / 分支带来的号
     // （companyProxyAccount）。选定的号整段会话固定用，反代不给它换号（core/company-proxy-account.js）。
     let companyProxyPin = null;
@@ -1898,9 +1937,9 @@ class SessionManager extends EventEmitter {
       // 个人账号一律选它纠正后的默认模型：新开时它就是指定模型（上面已核对），恢复时按此刻的默认照常起，不选回当初的模型。
       // 号的权限清单探测过且只有一个模型时就选它，不管 settings.json 写的什么（2026-10-20 公司真机：CodeAgent 启动时把默认模型写回 deepseek）。
       const pool = require('./codeagent-pool');
-      const target = codeagentPool ? codeAgentRouteModel(opts) || codeagentPool.model
+      const target = hubDefaultTarget || (codeagentPool ? codeAgentRouteModel(opts) || codeagentPool.model
           || pool.strictDefaultModel(pool.readSettingsModel(codeagentPool.account.dir), codeagentPool.account.models, { authoritative: !!codeagentPool.account.modelsAuthoritative }).model || ''
-        : codeAgentExpectedModel({}, { configDir: codeagentConfig.configDir, single: true });
+        : codeAgentExpectedModel({}, { configDir: codeagentConfig.configDir, single: true }));
       // 不需要或暂时不该开菜单时直接发问题（2026-10-21 同事公司 Hub：自动选模型 13 次全失败、每次都耽误发问题）：
       // 恢复的会话上一轮就是目标模型作答、这个号连续 3 次没选成（4 小时熔断）。见 core/codeagent-auto-pick.js。
       // 配置里写的默认模型不再作为跳过的依据（2026-10-22 用户：明明是 DeepSeek 号却按 GLM 起来，写着的值不可信）。
@@ -1925,7 +1964,7 @@ class SessionManager extends EventEmitter {
     // 其余一律不猜、保持原样（清单未知、清单有多个模型、配置写的值本来就在清单里或能归进清单——GLM-5.2-WX 这种分档名也算，
     // 那四种能确定的情形都轮不到这里）。选之前先看这个号的熔断，跳过了在模型日志里写清楚原因。
     // 号池号的手动会话不走这里：启动前 syncSharedConfig 已按号写好自己的模型（_resolveCodeAgentPool），没有这个问题。
-    if (isCodeAgent && freshLaunch && !opts.fixedModel && !codeAgentReadOnly(opts) && !codeagentPool) {
+    if (isCodeAgent && freshLaunch && !opts.fixedModel && !codeAgentReadOnly(opts) && !codeagentPool && !hubDefaultTarget) {
       const route = require('./codeagent-model-route');
       const readPersonal = single => {
         try { return route.personalModels({ dataDir: getHubDataDir(), personalDir: codeagentConfig.configDir, single }); }
@@ -2476,6 +2515,8 @@ class SessionManager extends EventEmitter {
       // Only a newly created child environment is changed. relaunchCli reuses
       // the existing shell; its command builder must never mutate process.env.
       const auth = require('./codeagent-launch-env').applyAccountEnv(sessionEnv, codeagentConfig);
+      // 完成提醒只留一个（反馈 1ce04c14）：默认关掉 CodeAgent 自己的桌面通知，留 Hub 的桌面回执。
+      try { require('./codeagent-cli-notify').applyCliNotifyEnv(sessionEnv); } catch (error) { console.warn('[codeagent] 完成提醒开关读取失败：' + error.message); }
       // 原工作目录已不存在、回落到主目录时，CLI 的 --resume 只看新目录对应的记录桶：
       // 先把记录复制过去，否则会"有记录却恢复失败"，重启也没用（A1-15）。
       if (cwdFellBack && opts.resumeCCSessionId && !opts.forkCCSessionId) {
@@ -2727,7 +2768,7 @@ class SessionManager extends EventEmitter {
       ...((() => {
         const cv = getLaunchValues();
         if (!cv.COMPANY_CLI) return {};
-        const route = isClaude ? cv.CLAUDE_BACKEND : isCodex ? cv.CODEX_BACKEND : isDshCli ? (getConfig().dshBackend === 'proxy' ? 'proxy' : null) : null;
+        const route = isClaude ? cv.CLAUDE_BACKEND : isCodex ? cv.CODEX_BACKEND : isDshCli ? (['proxy', 'api'].includes(getConfig().dshBackend) ? getConfig().dshBackend : null) : null;
         const upstream = route === 'proxy' ? (isClaude ? cv.CLAUDE_UPSTREAM : isCodex ? cv.CODEX_UPSTREAM : getConfig().dshUpstream) : '';
         return ['proxy', 'api', 'local'].includes(route) ? { companyRoute: route, ...(upstream === 'gateway' ? { companyUpstream: 'gateway' } : {}),
           ...(route === 'proxy' && companyProxyPin ? { companyProxyAccount: companyProxyPin.id, companyProxyLabel: companyProxyPin.label } : {}) } : {};
@@ -4183,6 +4224,8 @@ try {
 
   setFocusedSession(sessionId) {
     this.focusedSessionId = sessionId;
+    // 切到某个会话时，把它在后台合并期间攒着的终端输出立即推上去（main.js 接）。
+    try { this.onFocusChanged?.(sessionId); } catch { /* 推送失败不影响切换 */ }
   }
 
   markRead(sessionId) {
@@ -5126,6 +5169,7 @@ module.exports = {
   dismissCodexRateLimitDialog,
   clearSessionManagerConfigCache,
   _private: {
+    claudePtyExecutable,
     buildNativeCodexOptions,
     sharedCodexRuntimeEnabled,
     ensureCodexCwdTrusted,
