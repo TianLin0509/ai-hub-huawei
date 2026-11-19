@@ -58,7 +58,8 @@ async function previousIndex(){
   if(process.env.AI_HUB_PREVIOUS_INDEX){
     try{const hit=pick(JSON.parse(fs.readFileSync(process.env.AI_HUB_PREVIOUS_INDEX,'utf8')));if(hit){console.log(`上一版文件索引来自本机文件（${hit.index.length} 个文件）`);return hit;}}catch(error){console.warn('读取上一版索引失败：'+error.message);}
   }
-  for(const src of (edition.update.sources||[])){
+  // 成员迁移版（2026-11-19）：自己改从统一渠道更新，但差量要对着老成员手上的上一版做，所以先看 legacyUpdate。
+  for(const src of ((edition.legacyUpdate||edition.update).sources||[])){
     if(!src||!src.manifest)continue;
     try{
       const response=await fetch(src.manifest,{cache:'no-store'});

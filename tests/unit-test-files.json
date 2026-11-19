@@ -248,5 +248,6 @@
   "tests/unit-feedback-intranet-send.test.js",
   "tests/unit-api-gateway-config.test.js",
   "tests/unit-api-gateway-proxy.test.mjs",
-  "tests/unit-child-lifecycle.test.js"
+  "tests/unit-child-lifecycle.test.js",
+  "tests/unit-sealed-modules.test.js"
 ]

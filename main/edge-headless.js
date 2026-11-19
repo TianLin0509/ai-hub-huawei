@@ -40,21 +40,33 @@ async function readPort(tmp, proc, waitMs) {
 // 返回 { proc, port, tmp, close(), closeSync() }；失败抛错（名额、内存、启动失败）。
 // prepare(tmp) 在启动前调用（复制登录状态等），抛错即放弃且已收尾。
 async function launchHeadlessEdge({ purpose, owner = '', tag = 'hub-edge', env = process.env, prepare = null, extraArgs = [], maxLifeMs = 10 * 60000,
-  startWaitMs = 20000, waitMs, signal = null, logger = console, lifecycle = getChildLifecycle() } = {}) {
-  const edge = findEdge(env);
+  startWaitMs = 20000, waitMs, signal = null, logger = console, lifecycle = getChildLifecycle(), edgePath = '', spawnFn = spawn } = {}) {
+  const edge = edgePath || findEdge(env);
   if (!edge) throw new Error('本机没有找到 Edge');
   const release = await lifecycle.acquire('edge', { purpose, waitMs, signal });
-  let tmp = '', proc = null, regId = '', closed = false;
+  let tmp = '', proc = null, regId = '', closed = false, released = false, waitingExit = false;
   const cleanupDir = () => { if (tmp) { try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 }); } catch (e) { logger.warn?.(`[${tag}] Edge 临时目录未删净，下次启动时再清`, e.code || e.message); } } };
+  const releaseOnce = () => { if (!released) { released = true; release(); } };
+  const procAlive = () => !!(proc && proc.pid && !proc.spawnError && proc.exitCode === null && proc.signalCode == null);
   function closeSync() {
-    if (closed) return; closed = true;
+    if (released) return;
+    closed = true;
     // 按 PID 结束整棵树 + 删目录 + 注销；进程已自己退出并注销过时只删目录。
-    if (!regId || !lifecycle.reclaim(regId, '用完已关')) cleanupDir();
-    release();
+    const reclaimed = !!regId && lifecycle.reclaim(regId, '用完已关');
+    if (!reclaimed && procAlive()) {
+      // 结束失败（拒绝访问、taskkill 超时）且进程还活着：名额不交还，否则下一个功能又能开一个新 Edge，越积越多（审查 P2-3）。
+      // 登记仍在，看门狗会接着收；进程真正退出时再删目录、交还名额。调用方再 close 一次也会重试结束。
+      if (!waitingExit) { waitingExit = true; proc.once('exit', () => { cleanupDir(); releaseOnce(); }); }
+      logger.warn?.(`[${tag}] 无头 Edge 结束失败，名额先不交还，等它退出（pid=${proc.pid}）`);
+      return;
+    }
+    if (!reclaimed) cleanupDir();
+    releaseOnce();
   }
   async function close() {
-    if (closed) return;
+    if (released) return;
     closeSync();
+    if (!released) return;
     await delay(300);
     if (tmp && fs.existsSync(tmp)) { await delay(800); cleanupDir(); }
   }
@@ -64,7 +76,7 @@ async function launchHeadlessEdge({ purpose, owner = '', tag = 'hub-edge', env =
     if (prepare) await prepare(tmp);
     if (signal?.aborted) throw Object.assign(new Error('已取消'), { code: 'ABORT_ERR' });
     const startedAt = Date.now();
-    proc = spawn(edge, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${tmp}`, '--no-first-run', '--no-default-browser-check',
+    proc = spawnFn(edge, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${tmp}`, '--no-first-run', '--no-default-browser-check',
       '--disable-extensions', '--disable-background-mode', ...extraArgs, 'about:blank'], { windowsHide: true, stdio: 'ignore' });
     proc.on('error', e => { proc.spawnError = e; });
     if (proc.pid) regId = lifecycle.register({ pid: proc.pid, kind: 'edge', purpose, owner, userDataDir: tmp, maxLifeMs, startedAt });

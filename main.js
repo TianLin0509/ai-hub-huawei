@@ -4765,9 +4765,18 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
         feedbackService.startRetry(retryMs > 0 ? { intervalMs: retryMs, firstDelayMs: retryMs } : undefined);
         app.on('will-quit', () => feedbackService.stopRetry());
       } catch (e) { console.warn('[hub-feedback] 一键反馈初始化失败：', e && e.message); }
-      ipcMain.handle('edition:state', () => ({ enabled: memberUpgrade, unlocked: memberUpgrade && editionChannel.wasUnlocked(getHubDataDir()),
-        switched: memberUpgrade && !!editionChannel.readChannel(getHubDataDir()) }));
+      const sealedModules = require('./core/sealed-modules');
+      const sealedMode = sealedModules.present();
+      ipcMain.handle('edition:state', () => (sealedMode
+        ? { enabled: !sealedModules.loaded(), sealed: true, unlocked: !sealedModules.loaded() && editionChannel.wasUnlocked(getHubDataDir()), switched: sealedModules.loaded() || sealedModules.hasCachedKey(getHubDataDir()) }
+        : { enabled: memberUpgrade, unlocked: memberUpgrade && editionChannel.wasUnlocked(getHubDataDir()), switched: memberUpgrade && !!editionChannel.readChannel(getHubDataDir()) }));
+      ipcMain.handle('edition:relaunch', () => { app.relaunch(); app.quit(); return { ok: true }; });
       ipcMain.handle('edition:switch', async (_e, payload = {}) => {
+        if (sealedMode) {
+          if (sealedModules.loaded()) return { ok: false, message: '这个版本不需要' };
+          const r = await sealedModules.unlockWithCode(typeof payload.code === 'string' ? payload.code : '', { dataDir: getHubDataDir() });
+          return r.ok ? { ok: true, sealed: true } : { ok: false, reason: r.reason, message: r.message };
+        }
         if (!memberUpgrade) return { ok: false, message: '这个版本不需要' };
         const code = typeof payload.code === 'string' ? payload.code : '';
         const verify = () => editionChannel.verify(code, { fetchImpl: (...args) => require('electron').net.fetch(...args) });

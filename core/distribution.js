@@ -46,7 +46,12 @@ module.exports = Object.freeze({
   rulesChannel: (marker && marker.rulesChannel) || 'public',
   // 发行目标名（公司版是 company）；主仓库为 null。
   target: marker && marker.target ? String(marker.target) : null,
-  featureEnabled: name => !(marker && marker.features && marker.features[name] === false),
+  featureEnabled: name => {
+    let override;
+    try { override = require('./sealed-modules').featureOverride(name); } catch { override = undefined; }
+    if (override !== undefined) return override !== false;
+    return !(marker && marker.features && marker.features[name] === false);
+  },
   allowedKinds,
   kindAllowed,
   makeKindFilter,

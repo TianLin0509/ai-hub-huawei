@@ -94,13 +94,50 @@ test('登记写进数据目录、用完注销；Hub 退出时同步收掉自己�
   const lc = createChildLifecycle({ dataDir, watchMs: 0, ...plenty, killTree: pid => { killed.push(pid); return true; } });
   const id1 = lc.register({ pid: process.pid, kind: 'edge', purpose: 'x' });
   lc.register({ pid: process.pid, kind: 'edge', purpose: 'y' });
-  const saved = () => JSON.parse(fs.readFileSync(lc.file, 'utf8')).entries;
+  const saved = () => { try { return JSON.parse(fs.readFileSync(lc.file, 'utf8')).entries; } catch { return []; } };
   assert.equal(saved().length, 2);
   lc.unregister(id1);
   assert.equal(saved().length, 1);
   lc.shutdownSync();
   assert.deepEqual(killed, [process.pid]);
   assert.equal(saved().length, 0);
+  assert.equal(fs.existsSync(lc.file), false, '登记清空后不留空文件');
+});
+
+test('审查 P2-2：A/B 两个 Hub 共用数据目录交替登记，互不覆盖；B 崩掉后 A 重启能按登记收回 B 的 Edge', async t => {
+  const dataDir = tmpDir(t);
+  const hubA = process.pid, hubB = 2147480001; // B 用不存在的进程号，代表「之后崩掉的那个 Hub」
+  const A = createChildLifecycle({ dataDir, watchMs: 0, ...plenty, hubPid: hubA, killTree: () => true });
+  const B = createChildLifecycle({ dataDir, watchMs: 0, ...plenty, hubPid: hubB, killTree: () => true });
+  A.register({ pid: process.pid, kind: 'edge', purpose: 'A1', startedAt: 1000 });
+  B.register({ pid: process.ppid, kind: 'edge', purpose: 'B1', startedAt: 2000 });
+  A.register({ pid: process.pid, kind: 'edge', purpose: 'A2', startedAt: 3000 });
+  const all = () => fs.readdirSync(A.dir).filter(n => n.endsWith('.json')).flatMap(n => JSON.parse(fs.readFileSync(path.join(A.dir, n), 'utf8')).entries.map(e => e.purpose)).sort();
+  assert.deepEqual(all(), ['A1', 'A2', 'B1'], '三条登记都在（修前只剩 A1/A2）');
+  assert.notEqual(A.file, B.file);
+  // B 崩掉（不走 shutdown），A 侧另起一个新实例做启动清理：B 的那份被找到，PID+启动时间对得上就结束。
+  const killed = [];
+  const C = createChildLifecycle({ dataDir, watchMs: 0, ...plenty, hubPid: 999997, killTree: pid => { killed.push(pid); return true; },
+    probeStarts: async pids => new Map(pids.map(p => [p, p === process.ppid ? 2000 : 1])) });
+  const r = await C.reclaimOrphans();
+  assert.deepEqual(killed, [process.ppid], '只结束 B 登记的那个');
+  assert.equal(r.checked, 1, 'A 还活着，它那份原样不动');
+  assert.equal(fs.existsSync(B.file), false, 'B 的登记收完即删');
+  assert.deepEqual(JSON.parse(fs.readFileSync(A.file, 'utf8')).entries.map(e => e.purpose), ['A1', 'A2']);
+});
+
+test('审查 P2-2：新 Hub 复用了已崩 Hub 的 PID，不覆盖它留下的登记，启动清理照样收', async t => {
+  const dataDir = tmpDir(t);
+  const dir = path.join(dataDir, 'runtime', 'child-registry'); fs.mkdirSync(dir, { recursive: true });
+  const me = 999996;
+  fs.writeFileSync(path.join(dir, `hub-${me}.json`), JSON.stringify({ hubPid: me, entries: [{ id: 'old', hubPid: me, pid: process.pid, startedAt: 50000, kind: 'edge', userDataDir: '' }] }));
+  const killed = [];
+  const lc = createChildLifecycle({ dataDir, watchMs: 0, ...plenty, hubPid: me, killTree: pid => { killed.push(pid); return true; }, probeStarts: async () => new Map([[process.pid, 50000]]) });
+  lc.register({ pid: process.ppid, kind: 'edge', purpose: '新的' });
+  const r = await lc.reclaimOrphans();
+  assert.equal(r.killed, 1);
+  assert.deepEqual(killed, [process.pid]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(lc.file, 'utf8')).entries.map(e => e.purpose), ['新的']);
 });
 
 test('分身：旧会话关不掉时不另开新会话', async () => {
@@ -155,4 +192,36 @@ test('审查 #2：结束失败时保留登记；查不到启动时间时遗留�
   const r = await lc2.reclaimOrphans();
   assert.equal(r.killed, 0);
   assert.ok(JSON.parse(fs.readFileSync(file, 'utf8')).entries.some(e => e.id === 'old'));
+});
+
+// 审查 P2-3：Edge 结束失败（进程还活着）时不交还名额，等它真正退出再交还；否则同时开着的 Edge 会越积越多。
+function fakeEdgeEnv({ reclaimOk }) {
+  const { EventEmitter } = require('events');
+  const proc = Object.assign(new EventEmitter(), { pid: 424242, exitCode: null, signalCode: null });
+  const calls = { released: 0, reclaim: 0 };
+  const lifecycle = { acquire: async () => () => { calls.released += 1; }, register: () => 'edge-1', unregister: () => true,
+    reclaim: () => { calls.reclaim += 1; return reclaimOk(); } };
+  const opts = { purpose: 't', edgePath: 'fake-msedge.exe', spawnFn: () => proc, lifecycle, startWaitMs: 30, logger: { warn() {}, info() {} } };
+  return { proc, calls, opts };
+}
+test('审查 P2-3：Edge 结束失败时名额不交还，进程退出后才交还并删临时目录', async () => {
+  const { launchHeadlessEdge } = require('../main/edge-headless');
+  const { proc, calls, opts } = fakeEdgeEnv({ reclaimOk: () => false });
+  let tmp = '';
+  await assert.rejects(launchHeadlessEdge({ ...opts, prepare: async d => { tmp = d; } }), /没有启动/);
+  assert.equal(calls.reclaim, 1);
+  assert.equal(calls.released, 0, '进程还活着，名额不交还（修前这里是 1）');
+  assert.ok(fs.existsSync(tmp), '目录留给退出后再删');
+  proc.exitCode = 1; proc.emit('exit', 1);
+  assert.equal(calls.released, 1, '真正退出后交还一次');
+  assert.equal(fs.existsSync(tmp), false);
+  proc.emit('exit', 1);
+  assert.equal(calls.released, 1, '不重复交还');
+});
+test('审查 P2-3：结束成功、或进程本来就已退出，照常立即交还名额', async () => {
+  const { launchHeadlessEdge } = require('../main/edge-headless');
+  for (const env of [fakeEdgeEnv({ reclaimOk: () => true }), (() => { const e = fakeEdgeEnv({ reclaimOk: () => false }); e.proc.exitCode = 0; return e; })()]) {
+    await assert.rejects(launchHeadlessEdge(env.opts));
+    assert.equal(env.calls.released, 1);
+  }
 });

@@ -50,6 +50,19 @@ try {
   deferredToUpgrade = require('./core/app-update/launch-guard.js').deferToRunningUpgrade({ dataDir: require('./core/data-dir.js').getHubDataDir() });
 } catch (_) { deferredToUpgrade = false; }
 
+// 包内加密模块（core/sealed-modules.js，2026-11-19）：本机有钥匙且能解开才接管 require 与页面文件，必须在加载 main.js 之前。
+// 没钥匙、没密文或解不开都什么也不做，程序按不带这些功能的版本运行。
+if (!deferredToUpgrade) {
+  try {
+    const sealed = require('./core/sealed-modules.js');
+    const st = sealed.installMain({ dataDir: require('./core/data-dir.js').getHubDataDir(), ipcMain: require('electron').ipcMain });
+    process.__hubSealed = st;
+    if (st.loaded) app.once('ready', () => { try { sealed.attachSession(require('electron').session.defaultSession); } catch (error) { process.__hubSealedAttachError = error && error.message; } });
+  } catch (error) {
+    process.__hubSealed = { present: false, loaded: false, reason: 'error', error: error && error.message ? error.message : String(error) };
+  }
+}
+
 if (deferredToUpgrade) {
   app.exit(0);
   setTimeout(() => process.exit(0), 1500).unref?.();

@@ -3,7 +3,7 @@
 // 起因（隔离压测实测）：无头 Edge 每个实例约 14 个进程、700+ MB；帖子、门户待办、考勤各开各的、没有总上限，
 // 4 个同时跑就是 56 个 Edge 进程约 3 GB；考勤页卡死时调试协议请求没有超时，那个 Edge 一直挂到 Hub 退出。
 // 这里统一做五件事：
-//   1. 登记：每个后台子进程起来就记下 PID、启动时间、用途、归属、临时目录、最晚结束时间，写到数据目录 runtime/child-registry.json；
+//   1. 登记：每个后台子进程起来就记下 PID、启动时间、用途、归属、临时目录、最晚结束时间，写到数据目录 runtime/child-registry/hub-<Hub PID>.json（每个 Hub 只写自己那份，多开不互相覆盖）；
 //   2. 名额：同一类（如 edge）同时最多 N 个，多出的排队，先到先得；
 //   3. 超时强收：过了最晚结束时间还没结束的，按 PID 结束整棵进程树（taskkill /PID /T /F）并删临时目录；
 //   4. 遗留清理：Hub 启动时只看自己登记过、且登记它的 Hub 进程已经不在的条目，PID 和启动时间都对得上才结束；
@@ -61,26 +61,42 @@ function removeDir(dir) {
 
 function createChildLifecycle({ dataDir = '', env = process.env, limits = {}, now = () => Date.now(), killTree = defaultKillTree, probeStarts = defaultProbeStarts,
   freeMem = () => os.freemem(), totalMem = () => os.totalmem(), watchMs = DEFAULT_WATCH_MS, logger = console, hubPid = process.pid } = {}) {
-  const file = dataDir ? path.join(dataDir, 'runtime', 'child-registry.json') : '';
+  // 每个 Hub 实例只写自己名下的一份（审查 P2-2：原来共用一个文件、各拿旧快照整份覆盖，A/B 双开会稳定丢掉对方的 Edge 登记）。
+  // 启动清理时扫目录里所有份，外加旧版的单文件 runtime/child-registry.json。
+  const dir = dataDir ? path.join(dataDir, 'runtime', 'child-registry') : '';
+  const file = dir ? path.join(dir, `hub-${hubPid}.json`) : '';
+  const legacyFile = dataDir ? path.join(dataDir, 'runtime', 'child-registry.json') : '';
   const lim = {};
   for (const [k, v] of Object.entries({ ...DEFAULT_LIMITS, ...limits })) lim[k] = envLimit(env, k, v);
   const entries = new Map(); // id → entry
   const slots = new Map(); // kind → { used, queue: [] }
   const idleClosers = new Set();
   const recent = [];
-  let seq = 0, watchTimer = null, foreign = [];
-  // 先把文件里别的 Hub（含上次崩掉的）登记的条目读进来：启动清理之前就有新登记写文件时不会把它们冲掉（审查 #3）。
-  if (file) { try { foreign = (JSON.parse(fs.readFileSync(file, 'utf8')).entries || []).filter(e => e && e.hubPid !== hubPid); } catch { foreign = []; } }
+  let seq = 0, watchTimer = null;
+  // 同名文件已存在 = 上一个用过这个 PID 的 Hub 留下的（它已经不在了，PID 被我复用）：改名留给启动清理去收，不被我覆盖（审查 #3）。
+  if (file && fs.existsSync(file)) { try { fs.renameSync(file, path.join(dir, `hub-${hubPid}-prev-${now()}.json`)); } catch { /* 改不了名就留着，启动清理照样会读 */ } }
 
+  function writeEntries(target, list) {
+    if (!list.length) { try { fs.unlinkSync(target); } catch { /* 本来就没有 */ } return; }
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    const tmp = `${target}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ updatedAt: now(), hubPid, entries: list }), 'utf8');
+    fs.renameSync(tmp, target);
+  }
   function persist() {
     if (!file) return;
     try {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      const mine = [...entries.values()].map(e => ({ id: e.id, hubPid, pid: e.pid, startedAt: e.startedAt, kind: e.kind, purpose: e.purpose, owner: e.owner, userDataDir: e.userDataDir || '' }));
-      const tmp = `${file}.${hubPid}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify({ updatedAt: now(), entries: [...foreign, ...mine] }), 'utf8');
-      fs.renameSync(tmp, file);
+      writeEntries(file, [...entries.values()].map(e => ({ id: e.id, hubPid, pid: e.pid, startedAt: e.startedAt, kind: e.kind, purpose: e.purpose, owner: e.owner, userDataDir: e.userDataDir || '' })));
     } catch (e) { logger.warn?.('[child-lifecycle] 登记文件写不进去', e.code || e.message); }
+  }
+  // 目录里不属于我的登记文件（别的 Hub、上次崩掉的 Hub、PID 被我复用前的那个 Hub、旧版单文件）。
+  function otherFiles() {
+    const out = [];
+    if (legacyFile && fs.existsSync(legacyFile)) out.push(legacyFile);
+    let names = [];
+    try { names = fs.readdirSync(dir); } catch { names = []; }
+    for (const n of names) if (/^hub-\d+(?:-prev-\d+)?\.json$/.test(n) && path.join(dir, n) !== file) out.push(path.join(dir, n));
+    return out;
   }
   function note(entry, reason, extra = {}) {
     recent.unshift({ at: now(), pid: entry.pid, kind: entry.kind, purpose: entry.purpose, reason, ...extra });
@@ -184,34 +200,44 @@ function createChildLifecycle({ dataDir = '', env = process.env, limits = {}, no
     if (next) next.resolve(); else s.used = Math.max(0, s.used - 1);
   }
 
-  // 启动时清理遗留：只认登记文件里、登记它的 Hub 已不在的条目；PID 活着且启动时间对得上才结束。
+  // 启动时清理遗留：扫所有不属于我的登记文件，只认登记它的 Hub 已不在的条目；PID 活着且启动时间对得上才结束。
+  // 别的 Hub 还在运行的那份文件原样不动（它自己维护）。
   async function reclaimOrphans() {
     if (!file) return { checked: 0, killed: 0, cleaned: 0 };
-    let saved = [];
-    try { saved = JSON.parse(fs.readFileSync(file, 'utf8')).entries || []; } catch { return { checked: 0, killed: 0, cleaned: 0 }; }
-    const stale = [], alive = [], keep = [];
-    for (const e of saved) {
-      if (!e || !Number.isInteger(e.pid)) continue;
-      if (e.hubPid !== hubPid && pidAlive(e.hubPid)) alive.push(e); else if (e.hubPid !== hubPid) stale.push(e);
+    const groups = [];
+    for (const f of otherFiles()) {
+      let saved;
+      try { saved = JSON.parse(fs.readFileSync(f, 'utf8')).entries || []; } catch { continue; }
+      const owner = (path.basename(f).match(/^hub-(\d+)(-prev-)?/) || []);
+      const ownerPid = Number(owner[1]);
+      if (ownerPid && !owner[2] && ownerPid !== hubPid && pidAlive(ownerPid)) continue; // 活着的别的 Hub 的那份
+      const stale = [], alive = [];
+      for (const e of saved) {
+        if (!e || !Number.isInteger(e.pid)) continue;
+        // 同 PID 的条目不可能是我登记的（我只写自己那份），说明是 PID 被我复用前的那个 Hub 留下的。
+        if (e.hubPid !== hubPid && pidAlive(e.hubPid)) alive.push(e); else stale.push(e);
+      }
+      groups.push({ f, stale, alive, keep: [] });
     }
-    foreign = alive; // 另一个还在运行的 Hub 登记的，原样保留
+    const allStale = groups.flatMap(g => g.stale);
+    const live = allStale.filter(e => pidAlive(e.pid));
+    const starts = live.length ? await probeStarts([...new Set(live.map(e => e.pid))]) : new Map();
     let killed = 0, cleaned = 0;
-    const live = stale.filter(e => pidAlive(e.pid));
-    const starts = live.length ? await probeStarts(live.map(e => e.pid)) : new Map();
-    for (const e of stale) {
-      const at = starts.get(e.pid);
-      // 进程还活着却没查到启动时间（查询失败）：这次不动，留到下次再核对，不丢记录。
-      if (!at && pidAlive(e.pid)) { keep.push(e); continue; }
-      const same = at && e.startedAt && Math.abs(at - e.startedAt) <= START_TOLERANCE_MS;
-      if (same && !killTree(e.pid) && pidAlive(e.pid)) { keep.push(e); continue; }
-      if (same) killed += 1;
-      if (e.userDataDir && removeDir(e.userDataDir)) cleaned += 1;
-      note(e, same ? '上次 Hub 遗留，已结束' : '上次 Hub 遗留（进程已不在或号码被复用，只清目录）', { killed: !!same });
+    for (const g of groups) {
+      for (const e of g.stale) {
+        const at = starts.get(e.pid);
+        // 进程还活着却没查到启动时间（查询失败）：这次不动，留到下次再核对，不丢记录。
+        if (!at && pidAlive(e.pid)) { g.keep.push(e); continue; }
+        const same = at && e.startedAt && Math.abs(at - e.startedAt) <= START_TOLERANCE_MS;
+        if (same && !killTree(e.pid) && pidAlive(e.pid)) { g.keep.push(e); continue; }
+        if (same) killed += 1;
+        if (e.userDataDir && removeDir(e.userDataDir)) cleaned += 1;
+        note(e, same ? '上次 Hub 遗留，已结束' : '上次 Hub 遗留（进程已不在或号码被复用，只清目录）', { killed: !!same });
+      }
+      try { writeEntries(g.f, [...g.alive, ...g.keep]); } catch (e) { logger.warn?.('[child-lifecycle] 遗留登记写不回去', e.code || e.message); }
     }
-    foreign = [...alive, ...keep];
-    persist();
-    if (stale.length) logger.info?.(`[child-lifecycle] 启动清理：上次遗留 ${stale.length} 条，结束 ${killed} 个进程树，删 ${cleaned} 个临时目录`);
-    return { checked: stale.length, killed, cleaned };
+    if (allStale.length) logger.info?.(`[child-lifecycle] 启动清理：上次遗留 ${allStale.length} 条，结束 ${killed} 个进程树，删 ${cleaned} 个临时目录`);
+    return { checked: allStale.length, killed, cleaned };
   }
 
   // Hub 退出时同步收尾：自己登记的全部按 PID 结束。
@@ -228,7 +254,7 @@ function createChildLifecycle({ dataDir = '', env = process.env, limits = {}, no
     return { ok: true, limits: { ...lim }, used, queued, active, recent: recent.slice(0, 10), memory: memory() };
   }
 
-  return { register, unregister, reclaim, acquire, onIdleClose, closeIdle, memory, reclaimOrphans, shutdownSync, status, watchTick, file };
+  return { register, unregister, reclaim, acquire, onIdleClose, closeIdle, memory, reclaimOrphans, shutdownSync, status, watchTick, file, dir };
 }
 
 let shared = null;

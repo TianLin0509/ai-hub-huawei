@@ -59,11 +59,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "修复后台 Edge 越开越多、把内存占满的问题：帖子、门户待办、考勤共用一个后台浏览器，同时最多 1 个、其余排队；页面卡住时自动回收，Hub 退出和下次启动都会清理遗留",
-    "后台 AI 任务（分身、助理任务）的会话关闭时，一并结束它拉起的插件进程，不再留下残留进程；分身会话不再加载插件",
-    "「内存与进程」面板新增「Hub 后台浏览器」：看得到当前开了几个、是否在排队、最近回收了哪些"
+    "从本版起只发一个版本"
   ],
-  "version": "5.6.61",
+  "version": "5.6.62",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

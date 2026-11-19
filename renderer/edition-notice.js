@@ -23,12 +23,32 @@
   `;
   const snoozed = () => { try { return Date.now() < Number(localStorage.getItem(SNOOZE_KEY) || 0); } catch { return false; } };
 
-  function show() {
-    const style = document.createElement('style'); style.textContent = css; document.head.appendChild(style);
+  let styled = false;
+  const addStyle = () => { if (styled) return; styled = true; const style = document.createElement('style'); style.textContent = css; document.head.appendChild(style); };
+  function showSealedDone() {
+    addStyle();
+    document.getElementById('edition-switch-notice')?.close?.();
+    const dialog = document.createElement('dialog');
+    dialog.className = 'edn-dialog'; dialog.id = 'edition-sealed-done';
+    dialog.innerHTML = '<div class="edn-head">扩展功能已解锁</div><div class="edn-body"><p>口令正确。重启 Hub 后即可使用，以后不用再输。</p></div>'
+      + '<div class="edn-foot"><button class="edn-btn" data-edn="later">稍后重启</button><button class="edn-btn primary" data-edn="relaunch">立即重启</button></div>';
+    dialog.addEventListener('close', () => dialog.remove());
+    dialog.addEventListener('click', event => {
+      const action = event.target.closest('[data-edn]')?.dataset.edn;
+      if (action === 'later') dialog.close();
+      else if (action === 'relaunch') void ipcRenderer.invoke('edition:relaunch').catch(() => {});
+    });
+    document.body.appendChild(dialog);
+    dialog.showModal();
+  }
+
+  function show(sealed = false) {
+    addStyle();
     const dialog = document.createElement('dialog');
     dialog.className = 'edn-dialog'; dialog.id = 'edition-switch-notice';
-    dialog.innerHTML = '<div class="edn-head">升级到完整版</div><div class="edn-body">'
-      + '<p>这台电脑以前开通过扩展功能。输入一次口令，就会升级到完整版，以后也从完整版的地址自动更新。</p>'
+    dialog.innerHTML = '<div class="edn-head">' + (sealed ? '启用扩展功能' : '升级到完整版') + '</div><div class="edn-body">'
+      + (sealed ? '<p>这台电脑以前开通过扩展功能。输入一次口令即可继续使用，不用重装。</p>'
+        : '<p>这台电脑以前开通过扩展功能。输入一次口令，就会升级到完整版，以后也从完整版的地址自动更新。</p>')
       + '<input class="edn-input" type="password" autocomplete="off" spellcheck="false" placeholder="口令" data-edn="code">'
       + '<div class="edn-msg" data-edn="msg"></div></div>'
       + '<div class="edn-foot"><button class="edn-btn" data-edn="later">以后再说</button><button class="edn-btn primary" data-edn="go">升级</button></div>';
@@ -50,6 +70,7 @@
         }
         input.select(); return;
       }
+      if (r.sealed) { dialog.close(); showSealedDone(); return; }
       msg().textContent = `口令正确，完整版 v${r.version} 可以下载了。`;
       setTimeout(() => { dialog.close(); window.__appUpdate?.open?.(); }, 900);
     };
@@ -85,6 +106,7 @@
       }
       document.removeEventListener('keydown', onKey, true);
       document.getElementById('options-menu')?.style.setProperty('display', 'none');
+      if (r.sealed) { showSealedDone(); return; }
       window.__appUpdate?.open?.();
     };
     const onKey = e => {
@@ -99,12 +121,12 @@
     document.addEventListener('keydown', onKey, true);
   }
 
-  window.__editionNotice = { show };
+  window.__editionNotice = { show, showSealedDone };
   ipcRenderer.invoke('edition:state').then(s => { if (s && s.enabled && !s.switched) watchSettings(); }).catch(() => {});
   setTimeout(async () => {
     const s = await ipcRenderer.invoke('edition:state').catch(() => null);
     if (!s || !s.enabled || !s.unlocked || s.switched || snoozed()) return;
-    if (document.querySelector('dialog[open]')) { setTimeout(() => { if (!document.querySelector('dialog[open]')) show(); }, 30000); return; }
-    show();
+    if (document.querySelector('dialog[open]')) { setTimeout(() => { if (!document.querySelector('dialog[open]')) show(!!s.sealed); }, 30000); return; }
+    show(!!s.sealed);
   }, DELAY_MS);
 })();
