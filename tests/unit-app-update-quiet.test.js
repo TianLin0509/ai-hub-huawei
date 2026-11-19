@@ -64,13 +64,29 @@ test('只改末位：后台查到就自动下载好，退出时隐藏启动替�
   assert.equal(c.applyOnQuit(), false, '只替换一次');
 });
 
-test('用户手动打开「检查更新」查到的不算静默，退出时不自动替换', async () => {
-  const { c } = setup();
+// O①（2026-11-20）：用户自己点「下载更新」、下好后点「稍后」或叉掉更新窗，以前关 Hub 时这个包被丢掉，
+// 下次打开这一版已提醒过、红点也消了，就再也不提醒（群友：叉掉小窗后不再自动升）。现在关 Hub 时一样换上、不重开。
+test('用户自己下好、没点重启：关 Hub 时照样换上，不重开（O①）', async () => {
+  const { c, dataDir, spawned } = setup();
   await c.check({ silent: false });
   assert.equal(c.getState().phase, 'available');
   await c.download();
   assert.equal(c.getState().phase, 'ready');
   assert.ok(!c.getState().quiet);
+  assert.equal(c.applyOnQuit(), true);
+  assert.equal(spawned.length, 1);
+  const plan = JSON.parse(fs.readFileSync(path.join(dataDir, 'app-update', 'plan.json'), 'utf8'));
+  assert.equal(plan.relaunch, false);
+  assert.equal(plan.quiet, true, '不弹进度窗、不拦用户紧接着的打开');
+  assert.equal(c.applyOnQuit(), false, '只替换一次');
+});
+
+test('用户关掉自动更新：自己下好没重启的包关 Hub 时不换', async () => {
+  const { c } = setup();
+  c.setQuietEnabled(false);
+  await c.check({ silent: false });
+  await c.download();
+  assert.equal(c.getState().phase, 'ready');
   assert.equal(c.applyOnQuit(), false);
 });
 
@@ -301,7 +317,15 @@ test('替换脚本：文件被占用时重试，放开后换上', winOnly, async
   k.done();
 });
 
-test('静默送达默认关（11-07 定先不上线）：不开时只提醒、不后台下载，设置里也不显示勾选', async () => {
+test('静默送达默认开（2026-11-20 K），AI_HUB_QUIET_UPDATE=0 整体关掉', async () => {
+  const mk = env => createAppUpdateController({ app: { quit() {} }, config: { sources: [SRC], releasePage: '' }, dataDir: tmp('quiet-def-'), currentVersion: '5.5.13',
+    fetchImpl: async () => { throw new Error('offline'); }, isPackaged: true, resourcesPath: tmp('quiet-def-res-'), env, logger: { warn() {} }, prepareLaunch: () => null });
+  assert.equal(mk({}).getState().quietFeature, true);
+  assert.equal(mk({}).getState().quietEnabled, true);
+  assert.equal(mk({ AI_HUB_QUIET_UPDATE: '0' }).getState().quietFeature, false);
+});
+
+test('关掉静默送达时：只提醒、不后台下载，设置里也不显示勾选', async () => {
   const { c } = setup({ quietDelivery: false });
   await c.check({ silent: true });
   await new Promise(r => setTimeout(r, 200));
@@ -327,4 +351,120 @@ test('启动替换脚本：经 cmd start /b 转一手，不带 detached，只用
   assert.equal(opts.stdio, 'ignore');
   assert.deepEqual(opts.env, { X: '1' });
   assert.equal(calls[1], 'unref');
+});
+
+// O：关 Hub 时顺手替换没成（脚本已回滚）：这一版不再后台反复下、反复试，交给界面挂点提醒。
+test('上次静默替换失败：同一版本不再后台自动下载', async () => {
+  const first = setup();
+  fs.mkdirSync(path.join(first.dataDir, 'app-update'), { recursive: true });
+  fs.writeFileSync(path.join(first.dataDir, 'app-update', 'last-result.json'), JSON.stringify({ ok: false, version: '5.5.14', from: '5.5.13', quiet: true, reason: '文件被占用', rolledBack: true }));
+  const { createAppUpdateController: create } = require('../main/app-update-controller.js');
+  const requests = [];
+  const c = create({ quietDelivery: true, app: { quit() {} }, config: { sources: [SRC], releasePage: '' }, dataDir: first.dataDir, currentVersion: '5.5.13',
+    fetchImpl: async url => { requests.push(String(url)); return respJson({ schema: 1, version: '5.5.14', notes: [], runtime: { electron: '41.2.0', native: {} },
+      incremental: { file: 'X-5.5.14-update.gz', bytes: 4096, sha256: 'a'.repeat(64) }, installer: { file: 'X-Setup-5.5.14.exe', bytes: 4096, sha256: 'b'.repeat(64) } }); },
+    isPackaged: true, resourcesPath: first.res, env: { AI_HUB_UPDATE_RESOURCES: first.res }, logger: { warn() {} }, prepareLaunch: () => null });
+  assert.equal(c.getState().lastResult.quiet, true);
+  await c.check({ silent: true });
+  await new Promise(r => setTimeout(r, 100));
+  assert.equal(c.getState().phase, 'available');
+  assert.ok(!requests.some(u => u.endsWith('.gz')), '没有再后台下载');
+});
+
+// O②：免安装版遇到完整安装包——安装程序会装到另一处，原目录仍是旧版。不走安装程序，就地给免安装包。
+test('免安装版 + 完整安装包：不下载安装程序，给原因（O②）', async () => {
+  const res = tmp('portable-res-');
+  fs.writeFileSync(path.join(res, 'app.asar'), crypto.randomBytes(512));
+  const m = { schema: 1, version: '5.5.14', notes: [], runtime: { electron: '99.0.0', native: {} }, installer: { file: 'AIHubHuawei-Setup-5.5.14.exe', bytes: 4096, sha256: 'a'.repeat(64) } };
+  const requests = [];
+  const c = createAppUpdateController({ quietDelivery: true, app: { quit() {} }, config: { sources: [SRC], releasePage: '' }, dataDir: tmp('portable-data-'), currentVersion: '5.5.13',
+    fetchImpl: async url => { requests.push(String(url)); return respJson(m); }, isPackaged: true, resourcesPath: res, env: { AI_HUB_UPDATE_RESOURCES: res, AI_HUB_UPDATE_PORTABLE: '1' },
+    logger: { warn() {} }, prepareLaunch: () => null });
+  await c.check({ silent: true });
+  await new Promise(r => setTimeout(r, 100));
+  const st = c.getState();
+  assert.equal(st.phase, 'available');
+  assert.equal(st.plan.kind, 'full');
+  assert.equal(st.plan.portable, true);
+  assert.match(st.plan.reason, /免安装/);
+  assert.ok(!requests.some(u => u.endsWith('.exe')), '没有后台静默下载安装程序');
+  const after = await c.download();
+  assert.equal(after.phase, 'error');
+  assert.match(after.error, /免安装包/);
+  assert.equal(c.applyOnQuit(), false);
+  const { portableZipName } = require('../main/app-update-controller.js');
+  assert.equal(portableZipName('AIHubHuawei-Setup-5.5.14.exe', '5.5.14'), 'AIHubHuawei-5.5.14-win-x64.zip');
+  assert.equal(portableZipName('Other.exe', '5.5.14'), 'Other.exe');
+});
+
+// O③：装在受保护目录（安装时选了「所有用户」）：检查结果标出来，界面就地说明并给完整安装包；不静默下载、不在退出时换。
+test('受保护目录：标 protectedDir，不后台下载（O③）', { skip: process.platform !== 'win32' }, async () => {
+  const { c, requests, res } = setup();
+  const { execFileSync } = require('node:child_process');
+  // 去掉当前用户对目录的写权限（只拒绝写，读不受影响），测完恢复。
+  const user = `${process.env.USERDOMAIN}\\${process.env.USERNAME}`;
+  execFileSync('icacls', [res, '/deny', `${user}:(OI)(CI)(W)`], { windowsHide: true, stdio: 'ignore' });
+  try {
+    await c.check({ silent: true });
+    await new Promise(r => setTimeout(r, 100));
+    const st = c.getState();
+    assert.equal(st.phase, 'available');
+    assert.equal(st.plan.protectedDir, true);
+    assert.ok(!requests.some(u => u.endsWith('.gz')));
+  } finally {
+    execFileSync('icacls', [res, '/remove:d', user], { windowsHide: true, stdio: 'ignore' });
+  }
+});
+
+// —— Codex 审查返工（2026-11-20）——
+test('审查 P1：清单写 quiet:false 时，用户下好没重启的包关 Hub 也不自动换', async () => {
+  const { c, setManifest } = setup();
+  setManifest({ quiet: false });
+  await c.check({ silent: false });
+  await c.download();
+  assert.equal(c.getState().phase, 'ready');
+  assert.equal(c.applyOnQuit(), false);
+});
+
+test('审查 P2-2：上一个替换脚本还占着锁（点过立即重启又被取消）时，关 Hub 不再启动替换', async () => {
+  const guard = require('../core/app-update/launch-guard.js');
+  const { c, spawned } = setup();
+  await c.check({ silent: false });
+  await c.download();
+  const real = guard.lockHeld;
+  guard.lockHeld = () => true;
+  try { assert.equal(c.applyOnQuit(), false); assert.equal(spawned.length, 0); }
+  finally { guard.lockHeld = real; }
+  assert.equal(c.applyOnQuit(), true, '锁放开后照常换');
+});
+
+test('审查 P2-3：后台静默下载被公司放行页拦住时，不弹可见的放行窗口', async () => {
+  const res = tmp('quiet-block-res-');
+  fs.writeFileSync(path.join(res, 'app.asar'), crypto.randomBytes(2048));
+  const m = { schema: 1, version: '5.5.14', notes: [], runtime: { electron: '41.2.0', native: {} },
+    incremental: { file: 'X-5.5.14-update.gz', bytes: 4096, sha256: 'a'.repeat(64) }, installer: { file: 'X-Setup-5.5.14.exe', bytes: 4096, sha256: 'b'.repeat(64) } };
+  const html = Buffer.from('<!DOCTYPE html><html><body>proxy</body></html>');
+  const fetchImpl = async url => String(url).endsWith('latest.json') ? respJson(m)
+    : { ok: true, status: 200, headers: { get: k => (k === 'content-type' ? 'text/html' : k === 'content-length' ? String(html.length) : '') },
+      text: async () => html.toString(), arrayBuffer: async () => html.buffer.slice(html.byteOffset, html.byteOffset + html.length), body: { getReader() { let sent = false; return { read: async () => (sent ? { done: true } : (sent = true, { done: false, value: html })), cancel: async () => {} }; } } };
+  let interactive = 0;
+  const c = createAppUpdateController({ quietDelivery: true, app: { quit() {} }, config: { sources: [SRC], releasePage: '' }, dataDir: tmp('quiet-block-data-'), currentVersion: '5.5.13', fetchImpl,
+    isOwnUrl: () => true, unblockInteractive: async () => { interactive += 1; },
+    isPackaged: true, resourcesPath: res, env: { AI_HUB_UPDATE_RESOURCES: res }, logger: { warn() {} }, prepareLaunch: () => null });
+  await c.check({ silent: true });
+  await settle(c, ['available']);
+  await new Promise(r => setTimeout(r, 200));
+  assert.equal(interactive, 0);
+  assert.equal(c.getState().quietPending, false, '送不到：界面会挂点');
+});
+
+test('审查 P2-4：后台下载失败后 quietPending=false，界面据此挂点', async () => {
+  const { c } = setup({ fail: true });
+  await c.check({ silent: true });
+  await new Promise(r => setTimeout(r, 300));
+  assert.equal(c.getState().phase, 'available');
+  assert.equal(c.getState().quietPending, false);
+  const { c: ok } = setup();
+  await ok.check({ silent: true });
+  assert.equal(ok.getState().quietPending, true, '会后台送达的版本标 true');
 });

@@ -37,7 +37,7 @@ async function setup({ dataDir = tmp('cancel-data-'), spawnImpl, download = true
   const fetchImpl = async url => { url = String(url); if (url.endsWith('latest.json')) { manifestFetches += 1; return respJson(m); } if (url.endsWith('.gz')) return respFile(gz); return { ok: false, status: 404, headers: { get: () => '' } }; };
   let quits = 0;
   const started = () => fs.writeFileSync(stagingPaths(dataDir).started, 'x');
-  const c = createAppUpdateController({ app: { quit() { quits += 1; } }, config: { sources: [SRC], releasePage: '' }, dataDir, currentVersion: '5.6.43', fetchImpl,
+  const c = createAppUpdateController({ app: { quit() { quits += 1; } }, config: { sources: [SRC], releasePage: '' }, dataDir, currentVersion: '5.6.43', fetchImpl, quietDelivery: false,
     isPackaged: true, resourcesPath: res, env: { AI_HUB_UPDATE_RESOURCES: res }, logger: { warn() {} }, prepareLaunch: () => null, helperStartWaitMs: 3000,
     spawnImpl: spawnImpl || (() => { setTimeout(started, 50); return { unref() {} }; }) });
   if (download) { await c.check({ silent: false }); await c.download(); assert.equal(c.getState().phase, 'ready'); }

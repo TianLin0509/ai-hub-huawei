@@ -268,9 +268,10 @@ test('更新没有发布页时，完整安装计划使用清单文件名和实�
   await f.clickManual();
   assert.deepEqual(f.opened, ['https://b.example.invalid/v1.0.1/Hub-Setup-1.0.1.exe']);
 });
-test('更新保留已有发布页入口', async () => {
+// O④（2026-11-20）：写了发布页也先找公司内源上的完整包，内源没有或连不上才打开发布页。
+test('有发布页时：按钮先找内源，找不到再打开发布页', async () => {
   const f = await updatePage({ releasePage: 'https://example.invalid/releases' });
-  assert.match(f.dialog.innerHTML, /打开发布页手动下载/);
+  assert.match(f.dialog.innerHTML, /下载完整安装包（内源优先）/);
   await f.clickManual(); assert.deepEqual(f.opened, ['https://example.invalid/releases']);
 });
 test('缺清单、缺下载源或仅有增量文件时，不显示无效下载按钮或发布页提示', async () => {

@@ -308,7 +308,9 @@ function createHubAssist({ invoke, createSession, selectSession = () => {}, clos
 }
 
 // ---- 错误轻提示：停留更久，带「详情」可展开成错误卡 ----
-function showErrorToast(doc, message, { area = 'toast', ms = 8000, sessionId = '' } = {}) {
+// resendText / terminalTail（2026-11-20）：「CLI 已退出、消息未发送」时，提示旁多一个「重启会话并重发」，下面列终端最后几行（退出原因，已脱敏）。
+// resendUncertain：等确认时 CLI 才退出，这条可能已被 CLI 收下——主按钮改回「重启会话」，重发降为次按钮并写明先核对，免得发两遍（Codex 复审）。
+function showErrorToast(doc, message, { area = 'toast', ms = 8000, sessionId = '', resendText = '', terminalTail = [], resendUncertain = false } = {}) {
   const text = String(message || '').trim();
   if (!text) return null;
   let el = doc.getElementById('hub-err-toast');
@@ -324,16 +326,31 @@ function showErrorToast(doc, message, { area = 'toast', ms = 8000, sessionId = '
   let issue = null;
   try { issue = matchKnownIssue({ area, details: text }); } catch { issue = null; }
   const fix = issue?.action || known?.action;
-  const quick = fix ? `<button type="button" class="hub-err-toast-btn primary" data-hub-err-act="${esc(fix.act)}">${esc(fix.label)}</button>` : '';
+  const tail = (Array.isArray(terminalTail) ? terminalTail : []).map(line => String(line || '').slice(0, 160)).filter(Boolean).slice(-5);
+  const resend = !!(resendText && fix && fix.act === 'known:session-restart');
+  if (resend) el._hubResendText = String(resendText);
+  const quick = resend && resendUncertain
+    ? `<button type="button" class="hub-err-toast-btn primary" data-hub-err-act="${esc(fix.act)}">重启会话</button>`
+      + '<button type="button" class="hub-err-toast-btn" data-hub-err-act="known:session-restart-resend">确认没收到，重启并重发</button>'
+    : resend
+    ? '<button type="button" class="hub-err-toast-btn primary" data-hub-err-act="known:session-restart-resend">重启会话并重发</button>'
+      + `<button type="button" class="hub-err-toast-btn" data-hub-err-act="${esc(fix.act)}">只重启</button>`
+    : fix ? `<button type="button" class="hub-err-toast-btn primary" data-hub-err-act="${esc(fix.act)}">${esc(fix.label)}</button>` : '';
+  const caution = resend && resendUncertain ? '<div class="hub-err-toast-note">这条可能已被 CLI 收下：先看对话里有没有它，没有再点「确认没收到，重启并重发」，否则会发两遍。</div>' : '';
+  // 详情和一键反馈带上终端尾部，事后定位退出原因不用再找日志。
+  const detailsText = tail.length ? `${text}\n终端最后几行：\n${tail.join('\n')}` : text;
   // 「问问 Hub」从这条提示取报错文字（contextOf 找最近的 data-hub-err-area）。
   el.dataset.hubErrArea = area || 'toast';
   el.dataset.hubErrTitle = clip(text.split(/\r?\n/)[0], 200);
-  el.dataset.hubErrDetails = clip(text, MAX_DETAILS);
+  el.dataset.hubErrDetails = clip(detailsText, MAX_DETAILS);
   el.innerHTML = `<div class="hub-err-toast-row"><span class="hub-err-toast-text">${esc(text)}</span>`
     + quick
     + askHubButton('hub-err-toast-btn', undefined)
     + '<button type="button" class="hub-err-toast-btn" data-hub-err-toast="detail">详情</button>'
-    + '<button type="button" class="hub-err-toast-btn" data-hub-err-toast="close" aria-label="关闭">×</button></div>';
+    + '<button type="button" class="hub-err-toast-btn" data-hub-err-toast="close" aria-label="关闭">×</button></div>'
+    + caution
+    + (tail.length ? `<div class="hub-err-toast-tail"><span>终端最后几行（退出原因）</span><pre>${esc(tail.join('\n'))}</pre></div>` : '');
+  if (tail.length || resend) ms = Math.max(ms, 20000);
   let timer = null;
   const arm = () => { clearTimeout(timer); timer = setTimeout(() => { if (!el.classList.contains('expanded') && !el.classList.contains('pinned')) el.remove(); }, ms); };
   el.addEventListener('mouseenter', () => clearTimeout(timer));
@@ -350,7 +367,7 @@ function showErrorToast(doc, message, { area = 'toast', ms = 8000, sessionId = '
       clearTimeout(timer);
       el.classList.add('expanded');
       event.target.closest('[data-hub-err-toast]').remove();
-      el.insertAdjacentHTML('beforeend', html({ area, title: issue?.title || known?.title || text.split(/\r?\n/)[0].slice(0, 80), cause: known ? known.cause : text, steps: known?.steps, details: text }));
+      el.insertAdjacentHTML('beforeend', html({ area, title: issue?.title || known?.title || text.split(/\r?\n/)[0].slice(0, 80), cause: known ? known.cause : text, steps: known?.steps, details: detailsText }));
     }
   });
   doc.body.appendChild(el);
@@ -419,6 +436,23 @@ async function runKnownAction(act, button, { doc, win, ipcRenderer, closeOverlay
       // 修好了：轻提示里的这条报错已经过时，稍后收起（卡片里的保留，方便对照）。
       setTimeout(() => button.closest?.('#hub-err-toast')?.remove(), 1500);
       return done('已重启，可以重新发送', 5000);
+    }
+    // 重启会话并重发（2026-11-20）：重启 → 等 CLI 就绪（发送时 waitForCliReady，最多约 60 秒）→ 把这条原文再发一次。
+    if (act === 'known:session-restart-resend') {
+      const sessionId = errorSessionId(button);
+      const text = button.closest?.('#hub-err-toast')?._hubResendText || '';
+      if (!sessionId || !text) return done('认不出要重发哪条消息，请重启后手动发送（原文在输入框里）', 5000);
+      say('正在重启…');
+      const r = typeof win?.__hubRestartSessionInPlace === 'function' ? await win.__hubRestartSessionInPlace(sessionId) : await ipcRenderer.invoke('restart-session', sessionId);
+      // CLI 启动就退出、还没拿到原生会话 ID 时，Hub 现有的重启策略不允许原地重启（没有可恢复的记录）：照实说下一步。
+      if (r && r.ok === false && r.error === 'native-session-id-missing') throw new Error('这个会话的 CLI 一启动就退出了，还没有对话记录，不能原地重启；请新建会话再发（原文在输入框）');
+      if (r && r.ok === false) throw new Error(r.message || r.error || '重启没有成功');
+      say('已重启，等就绪后重发…');
+      const sent = await ipcRenderer.invoke('session:send-prompt', { sessionId, text, clientSubmissionId: require('node:crypto').randomUUID(), waitForCliReady: true });
+      if (!sent || (sent.ok === false && !sent.unconfirmed)) throw new Error(`已重启，但重发没成功：${sent?.message || sent?.error || '原因不明'}。原文还在输入框，可以直接再发`);
+      try { win?.__hubClearFloatingDraftIf?.(sessionId, text); } catch { /* 清不掉只是输入框里多留一份原文 */ }
+      setTimeout(() => button.closest?.('#hub-err-toast')?.remove(), 1500);
+      return done(sent.unconfirmed ? '已重发，送达待确认' : '已重启并重发', 5000);
     }
     if (act === 'known:open-accounts') { closeOverlays(); doc.getElementById('btn-rail-accounts')?.click(); return done(label, 0); }
     if (act === 'known:welink-login') {
@@ -580,4 +614,4 @@ function install({ document: doc, window: win, ipcRenderer, sessionKind = null }
   return assist;
 }
 
-module.exports = { html, assistHtml, knownHtml, createHubAssist, askHubQuestion, buildPrompt, troubleshootManualPath, CONCLUSION_FORMAT, showErrorToast, install, areaLabel, AREA_LABELS };
+module.exports = { html, assistHtml, knownHtml, createHubAssist, askHubQuestion, buildPrompt, troubleshootManualPath, CONCLUSION_FORMAT, showErrorToast, install, areaLabel, AREA_LABELS, runKnownAction };

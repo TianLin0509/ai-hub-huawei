@@ -2,6 +2,8 @@
 // 有出处的短条目；原始聊天与消息快照仍在原处，记忆不复制整段历史。
 const { randomUUID } = require('node:crypto');
 const D = require('./data');
+const { findSecret } = require('../secret-guard');
+const SECRET_BLOCKED = '密钥已拦截，不进记忆；请在设置里的 API 配置保存';
 const TYPES = ['person', 'group', 'preference', 'routine'];
 const MAX_ITEMS = 15; // 每类，按 Claude v3.1 设计
 const MAX_CONTEXT = 1200;
@@ -92,6 +94,8 @@ class AssistantMemory {
       return { ok: true, forgotten: item.id };
     }
     if (op !== 'save') throw new Error('记忆操作只能是 search/list/save/forget');
+    // 密钥拦截（2026-11-20）：先于长度检查，超长的 key 也给同一句提示；命中整条不写。
+    if (findSecret(args.key) || findSecret(args.text)) throw new Error(SECRET_BLOCKED);
     const key = clean(args.key, 40), text = clean(args.text, 60), kind = args.kind || 'preference';
     if (String(args.key || '').trim().length > 40) throw new Error('记忆key最多40字，请用稳定的简短称呼');
     if (!key || !text || !TYPES.includes(kind)) throw new Error('记忆需要简短的 key、text；kind 为 person/group/preference/routine');
@@ -117,4 +121,4 @@ class AssistantMemory {
     return { ok: true, item: this.public(item), updated: !!existing, evicted: evicted ? this.public(evicted) : null };
   }
 }
-module.exports = { AssistantMemory, TYPES, MAX_ITEMS, MAX_CONTEXT, terms };
+module.exports = { AssistantMemory, TYPES, MAX_ITEMS, MAX_CONTEXT, SECRET_BLOCKED, terms };

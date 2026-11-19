@@ -125,6 +125,12 @@ function registerAppUtilityIpc(ipcMain, deps) {
     return mainWindow ? mainWindow.isFocused() : false;
   });
 
+  // 会话卡片里用户点了「显示网络图片」：主进程取回图片转 data: 地址（core/remote-image-fetch.js）。
+  ipcMain.handle('card-media:fetch-remote-image', (_event, url) => {
+    const remote = require('../../core/remote-image-fetch.js');
+    return remote.fetchRemoteImage(url, { fetch: remote.createElectronSingleHopFetch(require('electron').net) });
+  });
+
   ipcMain.handle('save-clipboard-image', () => {
     return saveClipboardImage(deps);
   });

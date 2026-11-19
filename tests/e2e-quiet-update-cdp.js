@@ -1,6 +1,6 @@
 'use strict';
 // 小版本静默送达的真实链路：隔离 Hub（隐藏窗口）+ 本机更新源 + 临时安装目录。
-// 启动后自动查到只改末位的新版 → 后台下载校验 → 界面不打扰 → 真实退出 Hub → 替换脚本隐藏替换、不重开 → 结果文件可读。
+// 启动后自动查到只改末位的新版（默认开，2026-11-20）→ 后台下载校验 → 不弹窗、设置挂小点 + 底栏一行 → 真实退出 Hub → 替换脚本隐藏替换、不重开 → 结果文件可读。
 const fs = require('node:fs');
 const os = require('node:os');
 const net = require('node:net');
@@ -55,7 +55,7 @@ const check = (results, name, ok, detail = '') => { results.push({ name, ok: !!o
       AI_HUB_WORKSPACE_ROOT: path.join(root, 'work'), CLAUDE_CONFIG_DIR: path.join(root, 'claude'), CODEX_HOME: path.join(root, 'codex'), HUB_SESSION_SEARCH_DISABLE_NATIVE: '1',
       CLAUDE_HUB_ASSISTANT_TIMER: '0', CLAUDE_HUB_FORUM_TIMER: '0', CLAUDE_HUB_CODEAGENT_STARTUP_PROBE: '0',
       AI_HUB_UPDATE_SOURCES: JSON.stringify([{ id: 'local', name: '本机', manifest: `http://127.0.0.1:${port}/latest.json`, files: `http://127.0.0.1:${port}/v{version}/` }]),
-      AI_HUB_UPDATE_RESOURCES: resources, AI_HUB_QUIET_UPDATE: '1', AI_HUB_UPDATE_FORCE_APPLY: '1', AI_HUB_UPDATE_STARTUP_DELAY_MS: '1000' } });
+      AI_HUB_UPDATE_RESOURCES: resources, AI_HUB_UPDATE_FORCE_APPLY: '1', AI_HUB_UPDATE_STARTUP_DELAY_MS: '1000' } });
     c = await connectFirstPage(hub);
     let state = null;
     for (const end = Date.now() + 90000; Date.now() < end;) {
@@ -68,7 +68,9 @@ const check = (results, name, ok, detail = '') => { results.push({ name, ok: !!o
     check(results, '只请求了清单和增量包', requests.includes('/latest.json') && requests.some(u => u.endsWith('-update.gz')), requests.join(' '));
     check(results, '没有弹更新窗口', !(await c.eval(`!!document.querySelector('dialog.app-update-dialog[open]')`)));
     check(results, '标题栏没有更新提示', !(await c.eval(`!!document.getElementById('hub-update-pill')`)));
-    check(results, '设置按钮没有红点', !(await c.eval(`document.getElementById('btn-options')?.classList.contains('update-has-unread')`)));
+    // 2026-11-20（第三批 K）：下好后设置挂小点、会话栏底部一行「已就绪，重启生效」，仍不弹窗。
+    check(results, '设置按钮挂小点', await c.eval(`document.getElementById('btn-options')?.classList.contains('update-has-unread')`));
+    check(results, '底栏一行「已就绪，重启生效」', /已就绪，重启生效/.test(await c.eval(`document.getElementById('hub-update-ready')?.textContent || ''`)));
     check(results, '安装目录还没动', fs.readFileSync(path.join(resources, 'app.asar'), 'utf8') === 'old-asar');
     await c.close().catch(() => {});
     await gracefulQuit(hub);

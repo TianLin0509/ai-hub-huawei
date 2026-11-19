@@ -38,6 +38,12 @@ function appOpenxOptions(version, editionOn = require('../core/app-update/openx-
   return { release: require('../core/app-update/openx-source').memberReleaseName(version), strict: true };
 }
 
+// 免安装包文件名（package.json build.win.artifactName）：安装包 <名>-Setup-<版本>.exe → <名>-<版本>-win-x64.zip；认不出就仍给安装包。
+function portableZipName(installerFile, version) {
+  const m = /^(.+)-Setup-(\d+\.\d+\.\d+)\.exe$/i.exec(String(installerFile || ''));
+  return m && m[2] === String(version) ? `${m[1]}-${m[2]}-win-x64.zip` : installerFile;
+}
+
 function resolveSources(config, env) {
   if (env.AI_HUB_UPDATE_SOURCES) {
     const list = JSON.parse(env.AI_HUB_UPDATE_SOURCES);
@@ -60,8 +66,11 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   onApplyCancelled = () => {},
   // 点「立即重启」后最多等替换脚本留下「已开始」标记这么久，看不到就不退出（杀软重的电脑上 PowerShell 启动就要好几秒）。
   helperStartWaitMs = Number(env.AI_HUB_UPDATE_HELPER_WAIT_MS) || 15000,
-  // 小版本静默送达（11-07 定：先不上线）：默认关，代码保留；测试或日后放开时传 true 或设 AI_HUB_QUIET_UPDATE=1。
-  quietDelivery = env.AI_HUB_QUIET_UPDATE === '1' }) {
+  // 小版本静默送达：11-07 定先不上线；2026-11-20（第三批 K / 第四批 O）改为默认开——只改末位的版本后台下好，
+  // 设置图标挂小点、底栏一行「已就绪，重启生效」，关 Hub 时换上、下次打开生效；更新窗里可关。设 AI_HUB_QUIET_UPDATE=0 整体关掉。
+  quietDelivery = env.AI_HUB_QUIET_UPDATE !== '0',
+  // 本机是不是免安装版（zip 解压即用，目录里没有卸载程序）：完整安装包会装到另一处，原目录仍是旧版（O②）。测试可注入。
+  portableCopy = null }) {
   const productName = () => { try { return (config && config.productName) || (isPackaged && app && typeof app.getName === 'function' && app.getName()) || 'AI Hub'; } catch (_) { return 'AI Hub'; } };
   let baseSources = resolveSources(config, env);
   let previewEnabled = canary.read(dataDir).enabled === true;
@@ -76,12 +85,15 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   let state = { phase: 'idle', current: currentVersion, sourceEdition, internalSource: initialInternalSource(), sources: sources.map(s => ({ id: s.id, name: s.name })), releasePage, canApply: isPackaged || env.AI_HUB_UPDATE_FORCE_APPLY === '1' };
   let manifest = null, plan = null, abort = null, checkAbort = null, staged = null, checking = null, lastResult = null, timer = null;
   const quietTried = new Set();
+  let skipQuitApply = false;
   const quietOffFile = () => path.join(stagingPaths(dataDir).root, QUIET_OFF_FILE);
   const quietEnabled = () => { if (!quietDelivery && !(previewEnabled && canary.read(dataDir).enabled === true)) return false; try { return !fs.existsSync(quietOffFile()); } catch (_) { return true; } };
   // 查版本时清单里就是这一版的源：下载先走它们，查不到或版本不同的源只留作后备，免得先报一次 404（旧 GitHub 库改私有后实测，2026-10-28）。
   let confirmedIds = [];
 
   try { lastResult = takeLastResult(dataDir); } catch (error) { logger.warn?.('[app-update] 读取上次结果失败：', error.message); }
+  // 关 Hub 时顺手替换没成（O）：这一版不再后台反复下、反复试，改由界面挂点提醒用户手动更新。
+  if (lastResult && !lastResult.ok && lastResult.quiet && lastResult.version) quietTried.add(String(lastResult.version));
   // 上次升级半路断了、没留下结果（替换脚本还在等旧窗口时电脑重启或被结束，r43）：进度停在「进行中 / 没换成」、
   // （脚本正常结束一定会写成完成 / 放弃 / 已取消 / 最终失败，只有被打断才会停在这两种）
   // 版本比当前新、脚本已不在，就当作一次没成的升级，界面照「没升成」处理（提示原因、这一版重新提醒）。
@@ -110,6 +122,14 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   if (lastResult) state.lastResult = lastResult;
   state.quietEnabled = quietEnabled();
   state.quietFeature = !!quietDelivery;
+  const isPortable = () => {
+    if (typeof portableCopy === 'boolean') return portableCopy;
+    // 测试与隔离模拟：AI_HUB_UPDATE_PORTABLE=1/0 指定；用 AI_HUB_UPDATE_RESOURCES 模拟安装目录时默认按安装版。
+    if (env.AI_HUB_UPDATE_PORTABLE === '1' || env.AI_HUB_UPDATE_PORTABLE === '0') return env.AI_HUB_UPDATE_PORTABLE === '1';
+    if (!isPackaged || env.AI_HUB_UPDATE_RESOURCES) return false;
+    try { return !require('../core/portable-desktop-shortcut').isInstalledCopy(process.execPath); } catch (_) { return false; }
+  };
+  state.portable = isPortable();
   state.previewEnabled = previewEnabled;
   // 固定版本（回退后）：自动更新与更新提醒暂停；回退没换上就清掉固定并告诉用户（version-catalog.js）。
   let pinned = null, versionList = null;
@@ -183,11 +203,23 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       // 完整安装包能否无人值守：安装目录不用授权就能写（个人安装，或关了授权提示的管理员）才算（2026-11-15）。
       let unattended = plan.kind !== 'full';
       if (plan.kind === 'full') { try { unattended = !!(resDir && canWriteDir(resDir)); } catch (_) { unattended = false; } }
-      plan = { ...plan, variant, asset, silent: unattended };
+      // 免安装版遇到完整安装包（O②）：安装程序会装到「本机程序」另一处，桌面快捷方式指向的免安装目录仍是旧版，
+      // 用户看到的就是「下完重启还是旧版」。不走安装程序，就地给「下载新的免安装包」。
+      const portableFull = plan.kind === 'full' && isPortable();
+      if (portableFull) { unattended = false; plan = { ...plan, reason: '免安装版不能用安装程序原地升级（会装到另一处，原目录仍是旧版）。请下载新的免安装包，解压覆盖原目录' }; }
+      // 装在受保护目录（例如安装时选了「所有用户」→ Program Files，O③）：每次替换都要管理员授权；公司电脑常常没有，就永远升不上。
+      let protectedDir = false;
+      if (plan.kind === 'incremental' && resDir && state.canApply) { try { protectedDir = !canWriteDir(resDir); } catch (_) { protectedDir = false; } }
+      plan = { ...plan, variant, asset, silent: unattended, ...(portableFull ? { portable: true } : {}), ...(protectedDir ? { protectedDir: true } : {}) };
       const checked = emit({ phase: plan.kind === 'none' ? 'none' : 'available', checks, internalSource, checkedAt: new Date().toISOString(), error: null,
         latest: { version: manifest.version, notes: manifest.notes, publishedAt: manifest.publishedAt, sourceName: best.name, installer: manifest.installer, notify: isNotableUpdate(currentVersion, manifest.version), canary: manifest.canary || null },
-        plan: { kind: plan.kind, variant: plan.variant, reason: plan.reason, silent: plan.silent, bytes: plan.asset ? plan.asset.bytes : 0, file: plan.asset ? plan.asset.file : null } });
-      if (quietAllowed && shouldQuietDownload(resDir)) void quietDownload();
+        plan: { kind: plan.kind, variant: plan.variant, reason: plan.reason, silent: plan.silent, bytes: plan.asset ? plan.asset.bytes : 0, file: plan.asset ? plan.asset.file : null,
+          ...(plan.portable ? { portable: true } : {}), ...(plan.protectedDir ? { protectedDir: true } : {}) } });
+      // quietPending（Codex 审查 P2-4）：这一版会不会由后台送达。界面据此决定小版本挂不挂点——送不到（下载失败、远程停更、
+      // 受保护目录、用户关了）就挂点，不再「以为会送到」而整版沉默。
+      const willQuiet = shouldQuietDownload(resDir);
+      emit({ quietPending: willQuiet });
+      if (quietAllowed && willQuiet) void quietDownload();
       return checked;
     })().catch(error => emit({ phase: silent ? 'idle' : 'error', error: `检查更新失败：${error.message}` }))
       .finally(() => { checking = null; checkAbort = null; });
@@ -222,10 +254,10 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       const result = await download();
       // 下载途中用户固定了版本（审查 P2-4）：下好的静默包直接丢弃，不留到退出时替换。
       if (pinned) { staged = null; return void emit({ phase: 'idle', quiet: false, error: null }); }
-      if (result.phase !== 'ready') { logger.warn?.('[app-update] 静默下载没有完成：', result.error || result.phase); emit({ phase: 'available', quiet: false, error: null }); }
+      if (result.phase !== 'ready') { logger.warn?.('[app-update] 静默下载没有完成：', result.error || result.phase); emit({ phase: 'available', quiet: false, quietPending: false, error: null }); }
     } catch (error) {
       logger.warn?.('[app-update] 静默下载出错：', error.message);
-      emit({ phase: 'available', quiet: false, error: null });
+      emit({ phase: 'available', quiet: false, quietPending: false, error: null });
     }
   }
   // 已下好还没换上的静默包：定时再看一眼清单。远程写了 quiet:false 就不再替换，又发了新版就丢掉旧包，回到正常检查。
@@ -244,9 +276,17 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       return false;
     }
   }
-  // 退出时替换：只处理静默下好的增量包，不重开程序、不弹任何东西；失败时脚本自己回滚，下次打开时只记日志。
+  // 退出时替换：静默下好的包，以及用户自己点了「下载更新」、下好后点了「稍后」或叉掉更新窗的增量包（O①，2026-11-20）——
+  // 以前后者在关 Hub 时被丢掉，下次打开这一版已提醒过、红点也已消掉，就再也不提醒（群友：叉掉小窗后不再自动升）。
+  // 不重开程序、不弹任何东西；失败时脚本自己回滚，下次打开时设置挂点提醒。受保护目录（要管理员授权）不在退出时换。
   function applyOnQuit() {
-    if (pinned || state.phase !== 'ready' || !state.quiet || !quietEnabled() || !staged || staged.needsAdmin) return false;
+    if (pinned || skipQuitApply || state.phase !== 'ready' || !quietEnabled() || !staged || staged.needsAdmin) return false;
+    if (!state.quiet && staged.installer) return false;
+    // 远程总开关（清单 quiet:false，Codex 审查 P1）：退出时一律不自动换；用户点「立即重启」不受影响。
+    if (manifest && manifest.quiet === false) return false;
+    // 点过「立即重启」又被取消（applyCancelled）后马上关 Hub：上一个替换脚本可能还在等旧窗口退出（占着 helper.lock），
+    // 这时删放弃标记会让它按 relaunch=true 接着换并重开程序（Codex 审查 P2-2）。它还在就不动，下次关 Hub 再换。
+    try { if (staged.paths && launchGuard.lockHeld(staged.paths.lock)) return false; } catch (_) {}
     if (staged.installer) {
       // 静默下好的完整安装包：退出时静默安装，不重开程序（和增量包一样，下次打开就是新版）。
       try {
@@ -279,7 +319,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       if (on) fs.rmSync(quietOffFile(), { force: true });
       else { fs.mkdirSync(path.dirname(quietOffFile()), { recursive: true }); fs.writeFileSync(quietOffFile(), new Date().toISOString(), 'utf8'); }
     } catch (error) { logger.warn?.('[app-update] 保存自动更新开关失败：', error.message); }
-    return emit({ quietEnabled: quietEnabled() });
+    return emit({ quietEnabled: quietEnabled(), ...(quietEnabled() ? {} : { quietPending: false }) });
   }
 
   async function tryUnblock(url) {
@@ -290,6 +330,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   async function download(_afterRecheck = false) {
     if (!manifest || !plan || plan.kind === 'none') throw new Error('还没有可下载的新版本，请先检查更新');
     if (state.phase === 'downloading') return state;
+    if (plan.portable) return emit({ phase: 'error', attempts: [], error: plan.reason });
     const asset = plan.asset;
     const p = stagingPaths(dataDir);
     const dest = path.join(p.downloads, asset.file);
@@ -308,7 +349,8 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     if (blockedOwn && unblock && await tryUnblock(blockedOwn.url)) { result = await runDownload(); if (result.ok) { try { unblockPassed(); } catch (_) {} } }
     // 下载是用户点的：后台放行没成功就在 Hub 里弹出放行页，放行后接着下（2026-11-08 用户定）。
     const stillBlocked = !result.ok && !result.cancelled && (result.attempts || []).find(a => a.blocked && isOwnUrl(a.url));
-    if (stillBlocked && unblockInteractive) {
+    // 后台静默下载不弹可见的放行窗口（Codex 审查 P2-3）：只有用户自己点的下载才弹。
+    if (stillBlocked && unblockInteractive && !state.quiet) {
       try { await unblockInteractive(stillBlocked.url); } catch (error) { logger.warn?.('[app-update] 放行窗口出错：', error.message); }
       result = await runDownload();
       if (result.ok) { try { unblockPassed(); } catch (_) {} }
@@ -454,6 +496,8 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   function restoreBackup(dir) {
     catalogLib.assertNoOtherHub(dataDir);
     const res = catalogLib.scheduleRestore(dataDir, dir);
+    // 还原要重启：这次退出不顺手替换（Codex 审查 P2-5），免得替换脚本和重启后的新进程撞在一起。
+    skipQuitApply = true;
     setTimeout(() => { try { app.relaunch(); app.quit(); } catch (error) { logger.warn?.('[app-update] 还原后重启失败：', error.message); } }, 300);
     return res;
   }
@@ -595,9 +639,11 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       return spec(manifest.version, file);
     });
     // 「下载完整安装包」手动入口：先找内源上的安装包，没有再用阿里云地址（renderer/app-update.js manualDownload）。
+    // 启动时的失败提示里也有这个按钮（O④），那时可能还没检查过：先静默查一次。免安装版找同版本的免安装包（zip）。
     pts.register('app-installer', async () => {
+      if (!manifest) { try { await check({ silent: true, quietAllowed: false }); } catch (_) {} }
       if (!manifest || !manifest.installer) return null;
-      return spec(manifest.version, manifest.installer.file);
+      return spec(manifest.version, isPortable() ? portableZipName(manifest.installer.file, manifest.version) : manifest.installer.file);
     });
     pts.register('app-version:', async point => {
       const version = String(point).slice('app-version:'.length);
@@ -633,4 +679,4 @@ function registerAppUpdateIpc(ipcMain, controller, { gate = null } = {}) {
   ipcMain.handle('app-update:set-preview', (_e, on) => controller.setPreviewEnabled(on === true));
 }
 
-module.exports = { createAppUpdateController, registerAppUpdateIpc, resolveSources, appOpenxOptions };
+module.exports = { createAppUpdateController, registerAppUpdateIpc, resolveSources, appOpenxOptions, portableZipName };

@@ -687,7 +687,8 @@ if (typeof document !== 'undefined') (function () {
       const math = require('./markdown-math-guard');
       const mathGuard = math.guardMarkdownMath(_normalizeMarkdownPathBreaks(text));
       const pathGuard = guardMarkdownLocalPaths(mathGuard.text);
-      const html = require('./card-markdown').parseCardMarkdown(_markedCache, pathGuard.text);
+      const cardMarkdown = require('./card-markdown');
+      const html = cardMarkdown.parseCardMarkdown(_markedCache, pathGuard.text);
       const sanitized = restoreMarkdownLocalPaths(
         _domPurifyCache.sanitize(html, { ADD_ATTR: ['data-path', 'class'] }),
         pathGuard,
@@ -697,6 +698,8 @@ if (typeof document !== 'undefined') (function () {
       //   （已 escape），data-path 也是从同一字符串复制，无注入风险。
       const wrapper = document.createElement('div');
       wrapper.innerHTML = math.restoreMarkdownMath(sanitized, mathGuard);
+      // 会议室没接卡片图片处理：内嵌图片保持「可点开的缩略图按钮」，不退化成纯文字。
+      cardMarkdown.restoreDataImageThumbs(wrapper);
       if (typeof window.renderMathInElement === 'function') window.renderMathInElement(wrapper, {
         delimiters: [{left:'$$',right:'$$',display:true},{left:'\\[',right:'\\]',display:true},{left:'\\(',right:'\\)',display:false},{left:'$',right:'$',display:false}],
         ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code', 'option'],

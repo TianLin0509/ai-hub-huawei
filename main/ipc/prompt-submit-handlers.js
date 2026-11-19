@@ -322,6 +322,8 @@ function registerPromptSubmitIpc(ipcMain, deps) {
           ...(result.message ? {message:result.message} : {}),
           ...(result.error ? {error:result.error} : {}),
           ...(result.code ? {code:result.code} : {}),
+          // CLI 已退出时终端最后几行（已脱敏，≤5 行）：界面提示里给用户看退出原因（2026-11-20）。
+          ...(Array.isArray(result.terminalTail) ? {terminalTail:result.terminalTail.slice(-5)} : {}),
           ...(result.input ? {input:result.input} : {}),
           // 明确没执行（例如 Codex 收尾中拒绝斜杠命令）：渲染层据此退回原文、不亮「补发」。
           ...(result.notSent ? {notSent:true} : {}),
@@ -334,7 +336,7 @@ function registerPromptSubmitIpc(ipcMain, deps) {
       } catch (error) {
         if (receipt) receipts.finish(receipt, { ok: false });
         logger.warn('[prompt-submit] send threw:', error && error.message);
-        return { ok: false, error: 'send-threw', message: error && error.message, kind, ...(error?.notSent ? {notSent:true, ...(error.code === 'cli-exited' ? {code:'cli-exited'} : {})} : {}) };
+        return { ok: false, error: 'send-threw', message: error && error.message, kind, ...(error?.notSent ? {notSent:true, ...(error.code === 'cli-exited' ? {code:'cli-exited', ...(Array.isArray(error.terminalTail) ? { terminalTail: error.terminalTail } : {}), ...(error.missingCli ? { missingCli: error.missingCli } : {})} : {})} : {}) };
       } finally {
         if (awaitLateLocalAck) armLateLocalCommandAck(clearObserver, sessionId, clientSubmissionId, localCommand);
         else clearObserver?.dispose();

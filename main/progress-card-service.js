@@ -306,7 +306,8 @@ function createProgressCardService({
     ipcMain.handle('progress-cards:get', () => ({ ok: true, cards: snapshot(), at: now() }));
     ipcMain.on('progress-cards:running', (_e, ids) => setRunning(ids));
   }
-  return { start, stop, tick, snapshot, registerIpc, setRunning, _tracked: tracked };
+  // isRunning 也给「在跑一览」用（2026-11-20）：同一套「在跑」判断，侧栏、进展页和一览不打架。
+  return { start, stop, tick, snapshot, registerIpc, setRunning, isRunning, _tracked: tracked };
 }
 
 module.exports = { createProgressCardService, writtenCardPaths, cardsInOwnDirectory, humanMessageTimes, recentDialogue, tidyGhost, haikuSummarizer, GHOST_PROMPT };

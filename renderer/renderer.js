@@ -4601,9 +4601,16 @@ function clearFloatingInputStuck(bar) {
   if (existing) existing.remove();
 }
 
-function reportFloatingSendFailure(sessionId, inputBox, text, reason, submissionId = '') {
+function reportFloatingSendFailure(sessionId, inputBox, text, reason, submissionId = '', result = null) {
   const restored = !!inputBox && !readContenteditablePlainText(inputBox) && !!text;
   if (restored) { replaceContenteditableText(inputBox, text); saveFloatingInputDraft(sessionId, inputBox); }
+  // 等确认时 CLI 退回了命令行（2026-11-20）：CLI 可能在退出前已经收下这条，重发可能发两遍（Codex 复审），
+  // 所以主按钮是「重启会话」，重发降为次按钮并提示先核对；同样列终端最后几行。
+  if (result?.error === 'cli-exited') {
+    showToast(`发送失败：${reason}。${restored ? '原文已放回输入框。' : ''}`, 'error', { sessionId, resendText: text, resendUncertain: true, terminalTail: Array.isArray(result.terminalTail) ? result.terminalTail : [] });
+    inputBox?.closest?.('.floating-input-bar')?._resendStrip?.show({ text, reason, uncertain: true, submissionId });
+    return;
+  }
   showToast(`发送失败：${reason}。${restored ? '原文已放回输入框；' : ''}请先在终端核对是否已收到，再决定是否重发`, 'error', { sessionId });
   inputBox?.closest?.('.floating-input-bar')?._resendStrip?.show({ text, reason, uncertain: true, submissionId });
 }
@@ -4779,6 +4786,13 @@ async function restartSessionInPlace(sessionId) {
 }
 // 报错卡「重启会话」一键修（renderer/hub-error-card.js）走同一条路。
 window.__hubRestartSessionInPlace = restartSessionInPlace;
+// 「重启会话并重发」发出去后：输入框里还是那段原文就清掉，免得用户再点一次发成两条；用户已改过的不动。
+window.__hubClearFloatingDraftIf = (sessionId, text) => {
+  const box = document.querySelector(`.floating-input-bar[data-session-id="${CSS.escape(String(sessionId || ''))}"] .floating-input-box`);
+  if (!box || readContenteditablePlainText(box).trim() !== String(text || '').trim()) return false;
+  replaceContenteditableText(box, ''); floatingInputDrafts.delete(sessionId); saveFloatingInputDraft(sessionId, box);
+  return true;
+};
 // 重启没成功、会话停在休眠：还停在它上面的话，把「正在唤醒」换成失败说明（再点左栏会话可重试），不留一直转圈的占位。
 function restartInPlaceFailed(sessionId, message) {
   const session = sessions.get(sessionId);
@@ -5828,7 +5842,10 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
         delivery.dismissed = true;
         updateFloatingPromptReceipt({ sessionId, clientSubmissionId, status: 'failed' });
         if (!readContenteditablePlainText(inputBox)) { replaceContenteditableText(inputBox, text); saveFloatingInputDraft(sessionId, inputBox); }
-        showToast('消息未发送：' + (result.message || 'CLI 暂时不能接收输入'), 'error', { sessionId });
+        // CLI 已退出（2026-11-20）：提示旁给「重启会话并重发」一键，并带上终端最后几行作退出原因；找不到 CLI 的走一键安装，不给重发。
+        const exited = result.code === 'cli-exited' && !result.missingCli;
+        if (exited) showToast('消息未发送：' + (result.message || 'CLI 已退出'), 'error', { sessionId, resendText: text, terminalTail: Array.isArray(result.terminalTail) ? result.terminalTail : [] });
+        else showToast('消息未发送：' + (result.message || 'CLI 暂时不能接收输入'), 'error', { sessionId });
         bar._resendStrip?.show({ text, reason: result.message || 'CLI 暂时不能接收输入' });
         for (const other of document.querySelectorAll('.floating-input-bar')) {
           if (other.dataset.sessionId === sessionId) clearFloatingInputStuck(other);
@@ -5860,7 +5877,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       // 明确失败仍要告知：输入框在发送前已清空，
       // 这里说明原因并把原文放回（可能已部分写进终端，所以提示先核对，不自动重发）。
       if (!result?.ok && !result?.unconfirmed) {
-        reportFloatingSendFailure(sessionId, inputBox, text, result?.message || result?.error || '发送失败', clientSubmissionId);
+        reportFloatingSendFailure(sessionId, inputBox, text, result?.message || result?.error || '发送失败', clientSubmissionId, result);
         return;
       }
     }).catch((err) => {
@@ -8490,7 +8507,11 @@ function ptyToolQuestionText(toolName, toolInput) {
 function showToast(message, level, options = {}) {
   if (message === '已停止') return require('./composer-codeagent-input').showStopToast(document, message);
   // options.sessionId：这条报错属于哪个会话，提示上的「重启会话」「换模型」只作用在它上面（不猜当前会话）。
-  if (level === 'error') return require('./hub-error-card').showErrorToast(document, String(message || ''), options.sessionId ? { sessionId: options.sessionId } : undefined);
+  if (level === 'error') {
+    const extra = { ...(options.sessionId ? { sessionId: options.sessionId } : {}), ...(options.resendText ? { resendText: options.resendText } : {}), ...(options.resendUncertain ? { resendUncertain: true } : {}),
+      ...(Array.isArray(options.terminalTail) && options.terminalTail.length ? { terminalTail: options.terminalTail } : {}) };
+    return require('./hub-error-card').showErrorToast(document, String(message || ''), Object.keys(extra).length ? extra : undefined);
+  }
   require('./groupchat-fork-ui.js').showForkToast(document, String(message || ''), 'info');
 }
 

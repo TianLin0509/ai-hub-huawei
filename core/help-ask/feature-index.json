@@ -1,6 +1,6 @@
 {
  "$comment": "设置页搜索与 Ctrl+K 命令面板用的功能/设置索引，由 tools/help-manual/build-help-manual.js 从界面代码生成，不要手改。",
- "version": "5.6.63",
+ "version": "5.6.64",
  "items": [
   {
    "id": "f001",

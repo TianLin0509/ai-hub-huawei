@@ -6,7 +6,7 @@
 //   accounts 返回号池 rows；用 account 指定账号，model 可选且须在该账号的 models 清单里。
 //   省略 model 时沿用账号模型；不支持修改推理档位和速度。
 //   hub-team propose --plan-file 计划.json        计划：{"goal":"…","members":[{"role":"…","task":"…","kind":"codeagent","account":"…","model":"…","cwd":"…","title":"…"}]}
-//   hub-team send --to lead|m1 --message "…" [--no-wake] [--interrupt]
+//   hub-team send --to lead|m1 --message "…" [--no-wake] [--interrupt] [--deliver]
 //   hub-team send --to m1 --message-file 消息.md
 //   hub-team read --id msg-xxx                 读取完整原文；仅本队负责人和消息参与者可读
 //   hub-team allow --a m1 --b m2 [--off] [--reason "…"]
@@ -38,8 +38,8 @@ function buildRequest(argv) {
     }
     case 'send': {
       const message = opt['message-file'] ? readUtf8(opt['message-file']) : opt.message;
-      if (!opt.to || typeof message !== 'string') throw Error('用法：send --to lead|m1 --message "…"（或 --message-file 文件）[--no-wake] [--interrupt]');
-      return { action, args: { to: String(opt.to), message, wake: !opt['no-wake'], interrupt: !!opt.interrupt } };
+      if (!opt.to || typeof message !== 'string') throw Error('用法：send --to lead|m1 --message "…"（或 --message-file 文件）[--no-wake] [--interrupt] [--deliver]');
+      return { action, args: { to: String(opt.to), message, wake: !opt['no-wake'], interrupt: !!opt.interrupt, ...(opt.deliver ? { deliver: true } : {}) } };
     }
     case 'read': {
       if (typeof opt.id !== 'string' || !opt.id.trim()) throw Error('用法：read --id <消息编号>');

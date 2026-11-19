@@ -138,6 +138,12 @@ class HubTools {
       if (args.op === 'status') return { ok: true, job: this.a.ppt.imgtext.snapshot(args.jobId) };
       throw new Error('转字工具只支持 status 与 build');
     }
+    if (name === 'running_overview') {
+      // 和侧栏「在跑一览」同一份数据；助理自己的问答会话、论坛等不归它管的会话不列。
+      const view = this.deps.runningOverview?.({ exclude: s => !this.manageable(s) });
+      if (!view) throw new Error('这台 Hub 还没提供在跑一览，请改用 list_sessions');
+      return { overview: view.text, counts: view.counts, note: '一行一个会话，原样转述；⚠ 是程序发现的矛盾，照带不解释，不要自己补状态。要细节再用 read_session。' };
+    }
     if (name === 'list_sessions') {
       return { sessions: this.rows().map(r => ({ ...r, lastActiveAt: r.lastActiveAt ? new Date(r.lastActiveAt).toLocaleString('zh-CN', { hour12: false }) : null })),
         note: 'state：stuck=卡住等确认或选择（可用 press_keys 回答），running=运行中，reply=答完在等回复，idle=空闲，closed=没打开。' };

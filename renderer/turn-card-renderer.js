@@ -205,6 +205,12 @@ const detailControls = createCardDetailControls({
   },
   openAttachment: options.openAttachment,
 });
+// 回答里的图片与 mermaid 图（renderer/card-media.js）：本地图片限会话工作目录，mermaid 离线渲染。
+const cardMedia = require('./card-media').createCardMedia({
+  document: doc, window: win, copyText: options.copyText,
+  getCwd: sessionId => getSessionContext(sessionId)?.cwd || null,
+  fetchRemoteImage: bridgeIpc ? url => bridgeIpc.invoke('card-media:fetch-remote-image', url) : null,
+});
 
 // === Spec 3 · UI 方案 E (CardCluster) — 工具簇 ===
 // 多 tool 同 turn 合并显示：1 行 cluster summary 默认折叠，展开后是工具列表。
@@ -425,6 +431,7 @@ function _postProcessTurnCard(card, sessionId, deferActivity = false) {
   if (typeof postProcessToolResults === 'function') postProcessToolResults(card);
   const bodyEl = card.querySelector('.turn-body');
   if (bodyEl && typeof wrapPathLinksInElement === 'function') wrapPathLinksInElement(bodyEl, { sessionId, skipCodeBlocks: true });
+  try { cardMedia.processCard(card, { sessionId }); } catch (error) { console.warn('[card-media]', error && error.message); }
   postProcessCardMath(card);
   require('./turn-error-help').enhanceCard(card);
   if (typeof postProcessLongTextFold === 'function') postProcessLongTextFold(card);
@@ -1369,6 +1376,7 @@ if (!options.root) win._mountSessionTurnCard = mountSessionTurnCard;
 // click handler — code-copy + code-expand/collapse
 listen('click', (e) => {
   if (!options.root && e.target.closest('[data-split-secondary]')) return;
+  if (cardMedia.onClick(e)) return;
   const responseCopy = e.target.closest('[data-action="conversation-response-copy"]');
   if (responseCopy) {
     e.preventDefault();e.stopPropagation();
@@ -1455,6 +1463,7 @@ listen('click', (e) => {
     rerenderTurn,
     postProcessCardCodeBlocks,
     postProcessCardMath,
+    _cardMedia: cardMedia,
     postProcessLongTextFold,
     postProcessToolResults,
     mountTurnCard,

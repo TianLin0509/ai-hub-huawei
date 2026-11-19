@@ -79,9 +79,15 @@ function cleanTail(rawBuffer, chars) {
   return stripAnsi(raw).slice(-chars);
 }
 
+// PowerShell 改窗口标题用 ESC ] 0;… ESC \ 结尾（ST），stripAnsi 只去掉 ESC 本身，标题残渣
+// 「]0;C:\WINDOWS\…\powershell.exe\」会粘在提示符前面，提示符不在行首就认不出 CLI 已退出，
+// 正文被粘进 PowerShell 当命令执行（2026-11-20 隔离 Hub 实测）。认提示符前把这段残渣换成换行。
+const PROMPT_TITLE_RESIDUE_RE = /\]\d+;[^\n\x07]*?\\(?=PS [A-Za-z]:\\)/g;
+function cleanPromptTitles(text) { return String(text || '').replace(PROMPT_TITLE_RESIDUE_RE, '\n'); }
+
 function detectHostShellTakeover(rawBuffer) {
   if (!rawBuffer) return false;
-  return HOST_SHELL_PROMPT_RE.test(cleanTail(rawBuffer, 500));
+  return HOST_SHELL_PROMPT_RE.test(cleanPromptTitles(cleanTail(rawBuffer, 500)));
 }
 
 // 回到宿主 PowerShell 的原因是「找不到 CLI 程序」（反馈 08441c2e，2026-11-19）：PowerShell 不论中英文都打
@@ -166,6 +172,7 @@ module.exports = {
   stripAnsi,
   cleanTail,
   detectHostShellTakeover,
+  cleanPromptTitles,
   detectMissingCliCommand,
   detectCodexThreadEnded,
   createAuthBannerMonitor,

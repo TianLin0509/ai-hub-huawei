@@ -25,6 +25,20 @@ const RECEIPT_WAIT_MS = 3 * 60 * 1000;
 const LEAD = 'lead';
 const PERSONAL_MEMBER_LIMIT = 3; // 个人账号上同时干活的成员数；超出的成员消息留在队列里。
 const PERSONAL_CLAIM_MS = 30 * 1000; // 刚提交、回合状态还没变成运行中时先占住名额。
+// 交付即收工：成员用 --deliver 交付后，交付消息送进负责人会话、负责人这一轮处理完（不在运行）且至少过了这么久，
+// 又没再给它派活，就让它离队并休眠，腾出内存。
+// 本段与下面的拉起退避、全队空转提醒共用一个总开关 config team.antiStall（默认开；=false 完全回到旧行为）。
+const RELEASE_AFTER_ACK_MS = 60 * 1000;
+// 自动拉起：离线/休眠的收件人有消息排队时由 Hub 拉起，前两次间隔 1 分钟，之后最多每 10 分钟一次；
+// 拉起失败够 2 次才合并提醒负责人。
+const WAKE_RETRY_MS = 60 * 1000;
+const REVIVE_COOLDOWN_MS = 10 * 60 * 1000;
+const REVIVE_ALERT_AFTER = 2;
+// 全队空转：负责人与在队成员都空闲这么久、没有排队消息，提醒负责人一次。
+const IDLE_TEAM_MS = 20 * 60 * 1000;
+// 离队休眠暂时不成（还在忙、刚有活动、正被看着）时，心跳每分钟再试；其余原因（置顶等）是用户的意思，不再尝试。
+const SUSPEND_RETRY_ERRORS = ['pty-turn-unfinished', 'native-turn-unfinished', 'native-session-id-missing', 'suspend-pending',
+  'focused', 'codeagent-not-settled', 'recently-active'];
 
 const newId = prefix => `${prefix}-${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`;
 
@@ -36,13 +50,15 @@ function createTeamService(deps) {
     createSession, submitPrompt, injectPrompt = null, restartSession = null, reconcileTurn = null,
     listAccounts = () => ({ rows: [] }), commandPath = () => '', wakeSession = null,
     getConfig = () => ({}),
+    // 运行表里没有的会话，侧栏是否登记为可恢复（休眠）；用户主动关闭的返回 false。未接入时一律按不在运行处理。
+    isResumable = () => false,
   } = deps;
   // 主进程传 autoApproveLeadsDefault=true（默认开）；单测等未传时保持人工批准。
   const autoApproveLeads = () => (getConfig()?.team?.autoApproveLeads ?? deps.autoApproveLeadsDefault) === true;
+  const antiStall = () => getConfig()?.team?.antiStall !== false;
   const teams = new Map();
   const sending = new Set();
   const decisions = new Map(); // 同一负责人审批串行，不阻塞其他团队。
-  const wakeTried = new Map();   // sid → 上次尝试唤醒的时间：休眠的收件人一分钟内只叫一次
   const alerted = new Map();
   const modelWaits = new Map();
   const personalClaims = new Map(); // sid → 最近一次向个人账号成员提交消息的时间
@@ -184,10 +200,19 @@ function createTeamService(deps) {
     if (id === LEAD) return { memberId: LEAD, sid: team.leadSid, role: '负责人' };
     return (team.members || []).find(m => m.memberId === id && m.sid && m.status === 'active') || null;
   }
+  // 真休眠的会话会从运行表删除：靠侧栏持久记录区分「休眠可叫醒」和「用户已关闭」。
+  function offlineState(sid) {
+    if (!antiStall()) return 'missing';
+    try { return isResumable(sid) ? 'dormant' : 'missing'; } catch { return 'missing'; }
+  }
+  // 自动拉起的冷却、失败次数与提醒标记落盘在 team.revive[成员编号]，Hub 重启后照样按退避走；老数据没有就是零。
+  const reviveOf = (team, id) => team.revive?.[id] || { at: 0, failures: 0, error: '' };
+  function setRevive(team, id, rec) { team.revive ||= {}; team.revive[id] = rec; }
+  function clearRevive(team, id) { if (!team.revive?.[id]) return false; delete team.revive[id]; return true; }
   function sessionState(sid) {
     const s = sessionManager.getSession(sid);
     if (modelWaitFor(sid)) return 'waiting-model';
-    if (!s) return 'missing';
+    if (!s) return offlineState(sid);
     if (s.status === 'dormant') return 'dormant';
     return sessionManager.isAgentTurnActive(sid) ? 'running' : 'idle';
   }
@@ -205,7 +230,8 @@ function createTeamService(deps) {
   function publicView(team) {
     return {
       leadSid: team.leadSid, createdAt: team.createdAt, updatedAt: team.updatedAt,
-      members: (team.members || []).map(m => ({ memberId: m.memberId, sid: m.sid, role: m.role, kind: m.kind, account: m.account || '', ...(m.account === PERSONAL_ACCOUNT_ID ? { sharedNote: PERSONAL_SHARED_NOTE } : {}), title: m.title, status: m.status, state: m.status === 'dismissed' ? 'dismissed' : sessionState(m.sid), reason: modelWaitFor(m.sid)?.reason || '', ...(m.model ? {model:m.model} : {}) })),
+      members: (team.members || []).map(m => ({ memberId: m.memberId, sid: m.sid, role: m.role, kind: m.kind, account: m.account || '', ...(m.account === PERSONAL_ACCOUNT_ID ? { sharedNote: PERSONAL_SHARED_NOTE } : {}), title: m.title, status: m.status, state: m.status === 'dismissed' ? 'dismissed' : sessionState(m.sid), reason: modelWaitFor(m.sid)?.reason || '', ...(m.model ? {model:m.model} : {}),
+        ...(m.dismissReason ? { dismissReason: m.dismissReason } : {}), ...(m.deliveredAt ? { delivered: true } : {}) })),
       plans: (team.plans || []).map(p => ({ id: p.id, status: p.status, goal: p.goal, members: p.members, submittedAt: p.submittedAt, decidedAt: p.decidedAt || 0, note: p.note || '' })),
       grants: (team.grants || []).slice(),
       messages: (team.messages || []).map(m => deliveryView(team, m)),
@@ -255,6 +281,7 @@ function createTeamService(deps) {
     if(!/^codeagent(?:-resume)?$/.test(sessionManager.getSession(callerSid)?.kind || ''))throw Error('公司组队请从 CodeAgent 会话提交计划');
     if (teamOfMember(callerSid)) throw Error('成员不能招人；需要人手请向负责人提');
     let team = teamOfLead(callerSid);
+    require('../../core/secret-guard').assertPlanFree(args);
     const plan = normalizePlan(args, team);
     if (!team) {
       team = { leadSid: callerSid, createdAt: now(), updatedAt: now(), plans: [], members: [], grants: [], messages: [] };
@@ -362,6 +389,7 @@ function createTeamService(deps) {
       '',
       '通信规矩：',
       `- 向负责人汇报：\`"${cmd}" send --to lead --message "结论 + 文件路径"\`；不急的加 \`--no-wake\`（不叫醒负责人；攒满 8 条或最老一条超过 30 分钟时，负责人空闲就会收到）。`,
+      ...(antiStall() ? [`- 任务做完、交可验收的结果时加 \`--deliver\`（\`"${cmd}" send --to lead --deliver --message "…"\`）：负责人收到并处理完后，Hub 让你离队休眠、腾出内存；要返工负责人直接发消息，Hub 会叫醒你接着干。汇报进度、提问、卡住时不加。`] : []),
       `- 消息写结论和证据路径；超过约 ${NOTICE_LIMIT} 字自动保存完整正文，通知提供原文路径。用 read --id <消息编号> 可取原文。`,
       '- 要和其他成员直接交流，先向负责人说明原因，由负责人开放。',
       `- 看全队：\`"${cmd}" status\`。`,
@@ -386,14 +414,28 @@ function createTeamService(deps) {
     const found = teamOfLead(callerSid) ? { team: teamOfLead(callerSid), member: { memberId: LEAD, sid: callerSid } } : teamOfMember(callerSid);
     if (!found) throw Error('你还不在任何团队里；负责人先用 propose 提交招人计划');
     const { team, member: caller } = found;
-    const target = memberById(team, String(args.to || ''));
+    const toId = String(args.to || '');
     const text = String(args.message || '');
     if (!text.trim()) throw Error('message 不能为空');
+    const deliver = antiStall() && args.deliver === true;
+    if (deliver && (caller.memberId === LEAD || toId !== LEAD)) throw Error('--deliver 只用于成员向负责人交付结果（send --to lead --deliver）');
+    const rec = caller.memberId === LEAD ? (team.members || []).find(m => m.memberId === toId) : null;
+    // 交付后被 Hub 收工的成员：负责人再派活就叫回它（同一会话、上下文还在），不用重新招人。
+    if (rec?.status === 'dismissed' && rec.dismissReason === 'delivered' && rec.sid) {
+      if (sessionState(rec.sid) === 'missing') throw Error(`${toId} 的会话已被关闭，需要人手请重新提交计划`);
+      if (teamOfMember(rec.sid) || teamOfLead(rec.sid)) throw Error(`${toId} 的会话离队后已加入别的团队或成了负责人，不能叫回；需要人手请重新提交计划`);
+      if (occupiedSlots(team) >= MAX_MEMBERS) throw Error(`每位负责人最多 ${MAX_MEMBERS} 名成员，先让用不上的成员离队再叫回 ${toId}`);
+      rec.status = 'active'; rec.recalledAt = now();
+      for (const key of ['dismissedAt', 'dismissReason', 'suspendPending', 'suspendError', 'suspendedAt']) delete rec[key];
+    }
+    const target = memberById(team, toId);
     if (!target || target.memberId === caller.memberId) throw Error('to 写本队另一位成员编号（负责人是 lead，成员是 m1、m2…）');
     const peer = caller.memberId !== LEAD && target.memberId !== LEAD;
     if (peer && !(team.grants || []).includes(pair(caller.memberId, target.memberId))) throw Error('成员之间直接交流要负责人先开放；请先发给 lead 说明原因');
-    const wake = target.memberId === LEAD ? args.wake !== false : true;
+    const wake = target.memberId === LEAD ? (deliver || args.wake !== false) : true;
     const interrupt = caller.memberId === LEAD && args.interrupt === true;
+    // 负责人给已交付的成员派新活：交付作废，它重新算在干活，不会被收工。
+    if (rec && rec.deliveredAt) for (const key of ['deliveredAt', 'deliverMsgId', 'deliverSentAt']) delete rec[key];
     // 先完整落盘再排队；不能把只剩前半段的合同当成功投递。
     const id = newId('msg'), at = now();
     const archiveDir = path.join(dir(), 'messages', team.leadSid);
@@ -402,10 +444,16 @@ function createTeamService(deps) {
     if (bodyPath) fs.writeFileSync(bodyPath, text, { encoding: 'utf8', flag: 'wx' });
     fs.writeFileSync(path.join(archiveDir, id + '.json'), JSON.stringify({ id, from: caller.memberId, to: target.memberId, at, text, bodyPath }), { encoding: 'utf8', flag: 'wx' });
     const notice = bodyPath ? `正文已完整保存（${text.length} 字符），执行前先读：${bodyPath}\n以下仅为预览：${text.slice(0, 240)}…` : text;
-    const item = enqueue(team, caller.memberId, target.memberId, notice, { id, at, wake, interrupt, bodyPath });
+    if (deliver) {
+      // 交付消息送进负责人会话、负责人处理完后再离队休眠，见 releaseDelivered。
+      const self = (team.members || []).find(m => m.memberId === caller.memberId);
+      if (self) { self.deliveredAt = at; self.deliverMsgId = id; delete self.deliverSentAt; }
+    }
+    const item = enqueue(team, caller.memberId, target.memberId, notice, { id, at, wake, interrupt, bodyPath, ...(deliver ? { deliver: true } : {}) });
     if (peer) enqueue(team, caller.memberId, LEAD, `（抄送）${caller.memberId} → ${target.memberId}：${text.slice(0, 160)}${text.length > 160 ? '…（摘要，原文见消息编号）' : ''}`, { wake: false, copy: true, sourceId: id, copyTo: target.memberId });
     return { messageId: item.id, bodyPath, status: 'queued', note: target.memberId === LEAD
-      ? (wake ? '已排队，负责人空闲时送达（会叫醒它）。' : '已留言，负责人下次被叫醒时一起送达。')
+      ? (deliver ? (antiStall() ? '已作为交付发给负责人（会叫醒它）。负责人收到并处理完后，Hub 让你离队休眠；要返工它会直接叫醒你。' : '已作为交付发给负责人（会叫醒它）。')
+        : wake ? '已排队，负责人空闲时送达（会叫醒它）。' : '已留言，负责人下次被叫醒时一起送达。')
       : (interrupt ? '对方忙时直接插进它当前的工作，空闲时作为新任务送达。' : '已排队，对方空闲时送达。') };
   }
   function read(callerSid, args) {
@@ -461,32 +509,42 @@ function createTeamService(deps) {
       if (target.kind === 'powershell' || sessionManager.getSession(target.sid)?.kind === 'powershell') {
         // 只在隔离测试里出现的非 AI 成员：消息记为已处理，不往终端里敲字。
         for (const m of items) { m.state = 'sent'; m.via = 'not-ai'; m.sentAt = now(); }
+        if (to === LEAD) noteDeliverySent(team, items);
         save(team); continue;
       }
       let state = sessionState(target.sid);
       if (modelWaits.get(target.sid)?.recovered) {
         const live = sessionManager.getSession(target.sid);
-        state = !live ? 'missing' : live.status === 'dormant' ? 'dormant' : sessionManager.isAgentTurnActive(target.sid) ? 'running' : 'idle';
+        state = !live ? offlineState(target.sid) : live.status === 'dormant' ? 'dormant' : sessionManager.isAgentTurnActive(target.sid) ? 'running' : 'idle';
       }
       if (state === 'dormant' && personalSlotsFull(target)) continue; // 轮到它再叫醒
       if (state === 'missing' || state === 'dormant') {
-        // Hub 会让空闲会话自动休眠：有消息要送时把它叫醒（只叫侧栏里登记为休眠的会话，关掉的不复活）。
-        if (typeof wakeSession === 'function' && now() - (wakeTried.get(target.sid) || 0) > 60000) {
-          wakeTried.set(target.sid, now());
+        // Hub 会让空闲会话自动休眠：有消息要送时把它拉起（只拉侧栏里登记为休眠的会话，关掉的不复活）。
+        // 冷却：前两次间隔 1 分钟，之后每 10 分钟最多一次；失败次数供心跳合并提醒负责人。
+        const rec = { ...reviveOf(team, to) };
+        const gap = antiStall() && rec.failures >= REVIVE_ALERT_AFTER ? REVIVE_COOLDOWN_MS : WAKE_RETRY_MS;
+        if (typeof wakeSession === 'function' && !(rec.at && now() - rec.at < gap)) {
+          rec.at = now(); setRevive(team, to, rec); save(team); // 先落盘再拉起：重启不重置冷却
           sending.add(lock);
           const stopWake = failure => {
+            clearRevive(team, to);
             for (const item of items) { item.state = 'failed'; item.error = String(failure.message || '已取消恢复，待发消息保持停止').slice(0, 300); }
             save(team);
             if (to !== LEAD) enqueue(team, 'hub', LEAD, `${to} 的恢复已停止，原待发任务未发送；${failure.message || '需要时请重新发起'}。`, { wake: true });
           };
+          let error = '';
           try {
             const result = await wakeSession(target.sid);
-            if (result?.stopped && result.notSent !== false) stopWake(result);
-          } catch (error) {
-            if (error.stopped && error.notSent !== false) stopWake(error);
-            else logger.warn?.('[team] 唤醒失败', target.sid, error.message);
-          }
-          finally { sending.delete(lock); }
+            if (result?.stopped && result.notSent !== false) { stopWake(result); continue; }
+            if (result === false) error = '侧栏里没有可恢复的记录（可能已被关闭）';
+            else if (['missing', 'dormant'].includes(sessionState(target.sid))) error = '拉起后会话仍未运行';
+          } catch (e) {
+            if (e.stopped && e.notSent !== false) { stopWake(e); continue; }
+            error = String(e?.message || e).slice(0, 160) || '拉起失败';
+            logger.warn?.('[team] 唤醒失败', target.sid, error);
+          } finally { sending.delete(lock); }
+          if (error) { rec.failures += 1; rec.error = error; setRevive(team, to, rec); } else clearRevive(team, to);
+          save(team);
         }
         continue;
       }
@@ -564,7 +622,10 @@ function createTeamService(deps) {
             const reason = result.message || result.error || '未发送（发送时被停止）';
             batch.forEach(m => { m.state = 'failed'; m.error = String(reason).slice(0, 300); });
             if (to !== LEAD) enqueue(team, 'hub', LEAD, `发给 ${to} 的消息没送达：${String(reason).slice(0, 200)}。内容保留，可用 status 查看后核对。`);
-          } else if (result?.ok === true) batch.forEach(m => { m.state = 'sent'; m.notSent = false; m.sentAt = now(); });
+          } else if (result?.ok === true) {
+            batch.forEach(m => { m.state = 'sent'; m.notSent = false; m.sentAt = now(); });
+            if (to === LEAD) noteDeliverySent(team, batch);
+          }
           else markUnconfirmed(team, batch, to, '提交未返回明确回执');
         }
       } catch (error) {
@@ -582,7 +643,17 @@ function createTeamService(deps) {
       }
     }
   }
-  function leadDue(items) {
+  // 交付消息进了负责人会话：从这一刻起等负责人处理完，再让该成员离队休眠（见 releaseDelivered）。
+  function noteDeliverySent(team, batch) {
+    for (const m of batch.filter(x => x.deliver)) {
+      const rec = (team.members || []).find(x => x.memberId === m.from);
+      if (rec && rec.deliverMsgId === m.id) rec.deliverSentAt = m.sentAt;
+    }
+  }
+  // Hub 的旁听通知（passive，如「m3 已交付、已离队休眠」）只是记录，自己不触发投递，跟着下一批正式消息一起送。
+  function leadDue(all) {
+    const items = all.filter(m => !m.passive);
+    if (!items.length) return false;
     if (items.some(m => m.wake !== false) || items.length >= NOWAKE_MAX_COUNT) return true;
     return now() - Math.min(...items.map(m => Number(m.at) || now())) >= NOWAKE_MAX_AGE_MS;
   }
@@ -622,15 +693,20 @@ function createTeamService(deps) {
   function lastOutputAt(sid) {
     return typeof sessionManager.getGroupChatLastActivity === 'function' ? Number(sessionManager.getGroupChatLastActivity(sid)) || 0 : 0;
   }
-  // 心跳巡检：只读、零 token。成员运行中却长时间无输出，或会话已不在而有消息排队，就叫醒负责人说明。
+  // 心跳巡检：只读、零 token。成员运行中却长时间无输出、离线且自动拉起失败够次数、全队空转，就叫醒负责人说明；
+  // 交付后负责人已处理完的成员在这里离队休眠。
   function watch() {
     const t = now();
     if (t - lastWatch < WATCH_MS) return;
     lastWatch = t;
     for (const team of teams.values()) {
+      let changed = false;
+      const offline = [];
       for (const m of team.members || []) {
+        if (m.status === 'dismissed' && m.suspendPending) { if (antiStall()) suspendDismissed(team, m); continue; }
         if (m.status !== 'active' || !m.sid) continue;
         const state = sessionState(m.sid);
+        if ((state === 'running' || state === 'idle') && clearRevive(team, m.memberId)) changed = true;
         if (state === 'running') {
           const last = lastOutputAt(m.sid);
           if (!last || t - last < STALL_MS) { if (alerted.get(m.sid)?.kind === 'stall') alerted.delete(m.sid); continue; }
@@ -645,11 +721,80 @@ function createTeamService(deps) {
           if (t - oldest < MISSING_ALERT_MS) continue;
           const key = 'missing:' + oldest;
           if (alerted.get(m.sid)?.key === key) continue;
+          if (antiStall() && typeof wakeSession === 'function') {
+            // 先由投递循环自动拉起；拉起失败够次数才提醒负责人，同一次巡检合并成一条；提醒标记落盘，重启后不重复提醒。
+            const rec = team.revive?.[m.memberId];
+            if (!rec || rec.failures < REVIVE_ALERT_AFTER || rec.alertKey === key) continue;
+            offline.push({ m, key, waiting: waiting.length, failures: rec.failures, error: rec.error });
+            continue;
+          }
           alerted.set(m.sid, { kind: 'missing', key });
           enqueue(team, 'hub', LEAD, `${m.memberId}（${m.title}）的会话${state === 'dormant' ? '已休眠且没能叫醒' : '已不在运行（进程退出或被关闭）'}，有 ${waiting.length} 条消息送不到，最早一条已等 ${Math.round((t - oldest) / 60000)} 分钟。用 restart --member ${m.memberId} 重启后会自动补送。`);
         } else if (alerted.has(m.sid)) alerted.delete(m.sid);
       }
+      if (offline.length) {
+        for (const x of offline) { team.revive[x.m.memberId].alertKey = x.key; changed = true; }
+        const tries = Math.max(...offline.map(x => x.failures));
+        const reason = offline.find(x => x.error)?.error;
+        enqueue(team, 'hub', LEAD, `${offline.map(x => x.m.memberId).join('、')} 未能启动，Hub 已尝试自动拉起 ${tries} 次失败${reason ? '（' + reason.slice(0, 60) + '）' : ''}，${offline.reduce((n, x) => n + x.waiting, 0)} 条消息待送；之后每 10 分钟再试一次。可看侧栏或 restart --member <编号> 重试。`);
+      }
+      if (antiStall() && releaseDelivered(team, t)) changed = true;
+      if (antiStall() && watchIdle(team, t)) changed = true;
+      if (changed) save(team);
     }
+  }
+  // 交付即收工：成员 --deliver 的交付消息已送进负责人会话、负责人这一轮处理完（不在运行）且过了
+  // RELEASE_AFTER_ACK_MS，又没再给它派活、它自己也停下了 → 离队并休眠。负责人之后再 send 给它，Hub 叫回原会话。
+  function releaseDelivered(team, t) {
+    const released = [];
+    for (const m of team.members || []) {
+      if (m.status !== 'active' || !m.deliveredAt || !m.deliverSentAt || t - m.deliverSentAt < RELEASE_AFTER_ACK_MS) continue;
+      if (sessionState(team.leadSid) === 'running') continue;
+      if ((team.messages || []).some(x => x.to === m.memberId && ['queued', 'sending', 'waiting-model'].includes(x.state))) continue;
+      if (sessionState(m.sid) === 'running') continue;
+      m.status = 'dismissed'; m.dismissedAt = t; m.dismissReason = 'delivered'; m.suspendPending = true;
+      for (const key of ['deliveredAt', 'deliverMsgId', 'deliverSentAt']) delete m[key];
+      team.grants = (team.grants || []).filter(g => !g.split(':').includes(m.memberId));
+      suspendDismissed(team, m);
+      released.push(m.memberId);
+    }
+    if (!released.length) return false;
+    enqueue(team, 'hub', LEAD, `${released.join('、')} 已交付、你已收到，Hub 已让它离队休眠（会话保留在侧栏）。要它返工直接 send --to <编号>，Hub 会叫醒原会话接着干。`, { wake: false, passive: true });
+    return true;
+  }
+  // 离队休眠：进程退出、内存释放，会话保留在侧栏，点开即恢复。还在忙、刚有活动或正被看着的，由心跳每分钟再试。
+  function suspendDismissed(team, m) {
+    const live = m.sid && sessionManager.getSession(m.sid);
+    if (!live || live.status === 'dormant' || typeof sessionManager.suspendSession !== 'function') { delete m.suspendPending; return false; }
+    let result;
+    try {
+      result = sessionManager.suspendSession(m.sid, { reason: m.dismissReason === 'delivered' ? 'team-delivered' : 'team-dismissed',
+        excludeFocused: true, excludePinned: true, requireSettledCodeAgent: true, minIdleMs: RELEASE_AFTER_ACK_MS });
+    } catch (error) { logger.warn?.('[team] 离队休眠失败', m.sid, error.message); return false; }
+    if (result?.ok) { delete m.suspendPending; delete m.suspendError; m.suspendedAt = now(); save(team); return true; }
+    const error = result?.error || 'unknown';
+    m.suspendError = error;
+    if (!SUSPEND_RETRY_ERRORS.includes(error)) delete m.suspendPending;
+    save(team);
+    return false;
+  }
+  // 全队空转：负责人与所有在队成员都空闲（含已休眠）超过 20 分钟、没有排队消息、没有待批计划，提醒负责人一次。
+  // 「同一段」以成员活动和非 Hub 消息为界：提醒后负责人自己的输出不算新的一段，避免每 20 分钟催一次。
+  function watchIdle(team, t) {
+    const active = (team.members || []).filter(m => m.status === 'active' && m.sid && m.kind !== 'powershell');
+    if (!active.length || (team.plans || []).some(p => p.status === 'pending')) return false;
+    if ((team.members || []).some(m => m.status === 'creating')) return false;
+    if ((team.messages || []).some(m => !m.copy && !m.passive && ['queued', 'sending', 'waiting-model'].includes(m.state))) return false;
+    const idle = sid => ['idle', 'dormant'].includes(sessionState(sid));
+    if (!idle(team.leadSid) || !active.every(m => idle(m.sid))) return false;
+    const real = (team.messages || []).filter(m => m.from !== 'hub');
+    const memberMark = Math.max(0, ...active.map(m => Math.max(lastOutputAt(m.sid), Number(m.joinedAt) || 0, Number(m.recalledAt) || 0)),
+      ...real.map(m => Math.max(Number(m.at) || 0, Number(m.sentAt) || 0)));
+    const lastActive = Math.max(memberMark, lastOutputAt(team.leadSid));
+    if (!lastActive || t - lastActive < IDLE_TEAM_MS || (team.idleAlertAt || 0) >= memberMark) return false;
+    team.idleAlertAt = t;
+    enqueue(team, 'hub', LEAD, `全队已空闲 ${Math.round((t - lastActive) / 60000)} 分钟，没有排队消息。请决定：继续派活（send），还是收尾（dismiss 成员）。`);
+    return true;
   }
   function markUnconfirmed(team, items, to, error) {
     const warning = '可能已送达，请先核对对方会话再决定是否重发';
@@ -733,7 +878,8 @@ function createTeamService(deps) {
     return {
       you: member.memberId, leadSid: team.leadSid,
       members: [{ memberId: LEAD, title: sessionManager.getSession(team.leadSid)?.title || '负责人', state: sessionState(team.leadSid), reason: modelWaitFor(team.leadSid)?.reason || '', runtime: runtimeOf(team.leadSid) }]
-        .concat((team.members || []).map(m => ({ memberId: m.memberId, title: m.title, role: m.role, kind: m.kind, account: m.account, ...(m.model ? { model: m.model } : {}), runtime: runtimeOf(m.sid), status: m.status, state: m.status === 'dismissed' ? 'dismissed' : sessionState(m.sid), reason: modelWaitFor(m.sid)?.reason || '' }))),
+        .concat((team.members || []).map(m => ({ memberId: m.memberId, title: m.title, role: m.role, kind: m.kind, account: m.account, ...(m.model ? { model: m.model } : {}), runtime: runtimeOf(m.sid), status: m.status, state: m.status === 'dismissed' ? 'dismissed' : sessionState(m.sid), reason: modelWaitFor(m.sid)?.reason || '',
+          ...(m.deliveredAt ? { delivered: true } : {}), ...(m.dismissReason ? { dismissReason: m.dismissReason } : {}) }))),
       plans: member.memberId === LEAD ? (team.plans || []).map(p => ({ id: p.id, status: p.status, size: p.members.length, note: p.note || '' })) : undefined,
       grants: team.grants,
       messages: mine.map(m => deliveryView(team, m)),

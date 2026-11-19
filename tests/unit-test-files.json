@@ -67,6 +67,7 @@
   "tests/unit-team-notice-fold.test.js",
   "tests/unit-team-background.test.js",
   "tests/unit-team-heartbeat.test.js",
+  "tests/unit-team-deliver-release.test.js",
   "tests/unit-team-message-evidence.test.js",
   "tests/unit-team-sidebar.test.js",
   "tests/unit-verified-clipboard.test.js",
@@ -161,6 +162,7 @@
   "tests/unit-attention-jump.test.js",
   "tests/unit-session-export.test.js",
   "tests/unit-app-update-quiet.test.js",
+  "tests/unit-app-update-patch-notice.test.js",
   "tests/unit-app-update-version-rollback.test.js",
   "tests/unit-app-update-version-rollback-review.test.js",
   "tests/unit-app-update-version-rollback-rework2.test.js",
@@ -280,5 +282,9 @@
   "tests/unit-windows-shell-dead-shortcut.test.js",
   "tests/unit-composer-resend-strip.test.js",
   "tests/unit-hub-instance-prompt.test.js",
-  "tests/unit-own-model-dsh.test.js"
+  "tests/unit-own-model-dsh.test.js",
+  "tests/unit-company-w3-fallback-login.test.js",
+  "tests/unit-card-media.test.js",
+  "tests/unit-running-overview.test.js",
+  "tests/unit-cli-exit-resend.test.js"
 ]

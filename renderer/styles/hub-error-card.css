@@ -84,3 +84,11 @@
 .pptw-guide > .hub-err-assist-host, .ca-onboarding > .hub-err-assist-host { position: absolute; top: 10px; right: 10px; }
 .ca-onboarding { position: relative; }
 .pptw-guide > .hub-err-known { flex-basis: 100%; }
+
+/* 「CLI 已退出」提示下列终端最后几行（2026-11-20）：等宽小字，最多 5 行，给用户和一键反馈看退出原因。 */
+.hub-err-toast-tail { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border-subtle, rgba(24,36,49,.16)); }
+.hub-err-toast-tail > span { color: var(--fg-muted, #5e6d7e); font-size: 12px; }
+.hub-err-toast-tail pre { margin: 3px 0 0; max-height: 7.5em; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; font: 11.5px/1.5 Consolas, "Microsoft YaHei", monospace; color: var(--fg-strong, #182431); }
+.hub-err-toast.expanded .hub-err-toast-tail { display: none; }
+.hub-err-toast-note { margin-top: 6px; color: var(--hw-warning, #b45309); font-size: 12px; line-height: 1.5; }
+.hub-err-toast.expanded .hub-err-toast-note { display: none; }

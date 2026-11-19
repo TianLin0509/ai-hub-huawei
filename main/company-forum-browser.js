@@ -8,6 +8,10 @@
 // 后台抓取窗口挂在隐藏宿主下（同桌宠）；用户主动打开的登录窗口独立显示并取得焦点。
 const LOGIN_WORDS = /账号登录|扫码登录|密码登录|统一身份认证|统一认证|请输入(?:账号|密码|工号)|忘记密码/;
 const delay = ms => new Promise(r => setTimeout(r, ms));
+// 页面在哪、是不是登录页（备用路线 evaluate 用；判法同无头 Edge 那条）。
+const PAGE_STATE = `(() => { const t = document.body ? document.body.innerText : '';
+  return { host: location.host, href: location.origin + location.pathname, ready: document.readyState,
+    hasPassword: !!document.querySelector('input[type=password]'), hasQr: /扫码登录|二维码/.test(t.slice(0, 3000)) }; })()`;
 
 // 在页面里执行：收帖子链接、指定板块的链接和文字行。
 function collectScript(sections) {
@@ -167,38 +171,104 @@ function createForumBrowser({ BrowserWindow, BaseWindow = null, session = null, 
       } finally { t.stop(); if (!win.isDestroyed()) win.destroy(); }
     });
   }
+  // 在隐藏窗口里打开 url，落到 readyUrl 且加载完后执行页面内的异步脚本 script，accept 通过才算数（门户待办的备用路线，2026-11-20）。
+  // 返回值和无头 Edge 那条（company-edge-capture.js 的 runInEdge）同形：{ ok, value, needsLogin, error, finalHost, tookMs, via:'hub' }。
+  // 用 Hub 自己的窗口和登录分区，不拉起任何浏览器进程；和论坛、考勤同一个排队，同一时刻只有一个窗口，结束即销毁。
+  function evaluate({ url, readyUrl, script, accept = null, signal = null, maxMs = 90000, loginGraceMs = 15000, pollMs = 700 }) {
+    return serial(async () => {
+      const started = Date.now();
+      if (signal?.aborted) return { ok: false, via: 'hub', value: null, needsLogin: false, error: '已取消', finalHost: '', tookMs: 0 };
+      const result = { ok: false, via: 'hub', value: null, needsLogin: false, error: '', finalHost: '', tookMs: 0 };
+      const win = makeWindow();
+      // 取消（功能被关掉）：立刻销毁窗口，正在等的加载或查询也不再等（复审 #1）。
+      const CANCEL = Symbol('cancel');
+      let onAbort = null;
+      const cancelled = new Promise((r) => { onAbort = () => { if (!win.isDestroyed()) win.destroy(); r(CANCEL); }; signal?.addEventListener?.('abort', onAbort, { once: true }); });
+      const step = (p) => Promise.race([p, cancelled]);
+      try {
+        if (await step(load(win, url)) === CANCEL) throw CANCEL;
+        let loginSince = 0, lastError = '';
+        while (Date.now() - started < maxMs && !result.ok) {
+          await delay(pollMs);
+          if (win.isDestroyed()) { lastError = 'Hub 窗口被关掉了'; break; }
+          const st0 = await step(run(win, PAGE_STATE));
+          if (st0 === CANCEL) throw CANCEL;
+          const st = st0 || {};
+          if (st.host) result.finalHost = st.host;
+          const onTarget = readyUrl.test(String(st.href || ''));
+          if (st.hasPassword || (st.hasQr && !onTarget)) {
+            loginSince = loginSince || Date.now();
+            if (Date.now() - loginSince >= loginGraceMs) break;
+            continue;
+          }
+          loginSince = 0;
+          if (!onTarget || st.ready !== 'complete') continue;
+          let value;
+          try { value = await step(within(win.webContents.executeJavaScript(script, true), Math.max(5000, maxMs - (Date.now() - started)), undefined)); } catch (error) { lastError = '页面里的查询出错：' + String(error.message).slice(0, 160); continue; }
+          if (value === CANCEL || signal?.aborted) throw CANCEL;
+          if (value === undefined) { lastError = '页面里的查询超时'; break; }
+          if (value == null) { lastError = '页面里的查询没有返回内容'; continue; }
+          if (typeof accept === 'function' && !accept(value)) { lastError = '页面还没登录好'; continue; }
+          result.value = value; result.ok = true;
+        }
+        if (signal?.aborted) throw CANCEL;
+        if (!result.ok) {
+          result.needsLogin = !!loginSince || lastError === '页面还没登录好';
+          result.error = result.needsLogin ? `需要登录（停在 ${result.finalHost || '登录页'}）` : (lastError || `页面没有打开（停在 ${result.finalHost || '空白页'}）`);
+        }
+      } catch (error) {
+        // 取消不是「要登录」：不能让服务层据此作废保存的登录（复审 #2）。
+        if (error === CANCEL) Object.assign(result, { ok: false, value: null, needsLogin: false, cancelled: true, error: '已取消' });
+        else result.error = error.message;
+      } finally { signal?.removeEventListener?.('abort', onAbort); if (!win.isDestroyed()) win.destroy(); }
+      result.tookMs = Date.now() - started;
+      return result;
+    });
+  }
   // 登录：可见窗口，用户自己登录；回到站点且页面不再是登录页（连续 3 秒）就关掉并返回 ok。用户关窗返回 ok:false。
-  function login({ url, base, site = '', title = '登录（AI Hub 论坛）', timeoutMs = 10 * 60000 }) {
+  // doneScript（可选）：页面内脚本返回 true 才算登录好（门户用账号查询判定，比看页面文字准）；不传时按页面文字判，和原来一样。
+  function login({ url, base, site = '', title = '登录（AI Hub 论坛）', timeoutMs = 10 * 60000, doneScript = '' }) {
     if (loginWin && !loginWin.isDestroyed()) { loginWin.show(); loginWin.focus(); return Promise.resolve({ ok: false, reason: 'already-open', site: loginSite }); }
     const want = (() => { try { return new URL(base || url).host; } catch { return ''; } })();
     const win = loginWin = makeWindow({ show: true, title });
     loginSite = site;
     return new Promise(resolve => {
-      let done = false, okSince = 0;
+      let done = false, okSince = 0, checking = false;
       const finish = (ok, error = '') => { if (done) return; done = true; clearInterval(timer); if (!win.isDestroyed()) win.destroy(); loginWin = null; loginSite = ''; resolve(error ? { ok, error } : { ok }); };
       win.on('closed', () => finish(false));
       win.webContents.on('did-fail-load', (_event, code, description, _url, isMainFrame) => {
         if (isMainFrame && code !== -3) finish(false, '登录页面没打开：' + description);
       });
       const started = Date.now();
+      // 每秒查一次；上一次还没查完（机器忙时页面脚本可能要几秒）就跳过这一拍，不叠着查（2026-11-20 压测：重叠的检查互相把「连续 3 秒」清零）。
       const timer = setInterval(async () => {
+        if (checking) return;
+        checking = true;
+        try { await tick(); } finally { checking = false; }
+      }, 1000);
+      async function tick() {
         if (win.isDestroyed()) return finish(false);
         if (Date.now() - started > timeoutMs) return finish(false, '登录超时，请重试');
         let host = '';
         try { host = new URL(win.webContents.getURL()).host; } catch { /* 还没加载 */ }
-        const page = host === want ? await run(win, '({ n: document.body ? document.body.innerText.length : 0, t: document.body ? document.body.innerText.slice(0, 3000) : "" })') : null;
-        const fine = page && page.n > 60 && !(LOGIN_WORDS.test(page.t) && page.n < 4000);
+        let fine;
+        if (doneScript) fine = host === want && await run(win, doneScript) === true;
+        else {
+          const page = host === want ? await run(win, '({ n: document.body ? document.body.innerText.length : 0, t: document.body ? document.body.innerText.slice(0, 3000) : "" })') : null;
+          fine = page && page.n > 60 && !(LOGIN_WORDS.test(page.t) && page.n < 4000);
+        }
+        if (win.isDestroyed() || done) return;
         if (!fine) { okSince = 0; return; }
         if (!okSince) okSince = Date.now();
         if (Date.now() - okSince >= 3000) finish(true);
-      }, 1000);
+      }
       void load(win, url).catch(error => { logger.warn?.('[company-forum] login load', error.message); finish(false, '登录页面没打开：' + error.message); });
     });
   }
   function close() { try { if (loginWin && !loginWin.isDestroyed()) loginWin.destroy(); } catch { /* 已关 */ } try { if (owner && !owner.isDestroyed?.()) owner.destroy?.(); } catch { /* 已关 */ } }
   // 退出登录：清掉这个分区里的登录状态。
   async function clearLogin() { if (!session) return; await session.fromPartition(partition).clearStorageData(); }
-  return { capture, detail, login, close, clearLogin };
+  return { capture, detail, evaluate, login, close, clearLogin };
 }
 
 module.exports = { createForumBrowser, collectScript, clickScript, DETAIL_SCRIPT };

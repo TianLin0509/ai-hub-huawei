@@ -47,6 +47,7 @@ const allTools = [
   { name: 'ppt_materials', description: '查团队PPT素材库（PPT Doctor 素材库与团队素材包，一个素材是一个原生形状：栏头、光带、箭头、编号、卡片等）。不填 query 和 category 先看分类与数量；按分类或名称词筛，返回名称、分类、素材文件与页码。用户要做页、改页或问用什么版式元素时用；推荐时写素材名和分类，告诉用户在 PPT 页「素材」Tab 选中后点「插入到当前 PPT」。只读。', annotations: { readOnlyHint: true }, inputSchema: schema({ query: string, category: string, offset: { type: 'integer', minimum: 0 }, limit: { type: 'integer', minimum: 1, maximum: 50 } }) },
   { name: 'ppt_make', description: '提交做页任务的页面说明，Hub 生成可编辑PPT。只在提问给了 jobId 的做页任务里用；spec 是页面说明对象，结构沿用提问里的示意内容。返回 path 和自查提醒 warnings；warnings 非空时按提醒修改后再提交一次，最多修改两轮。', inputSchema: schema({ jobId: string, skeletonId: { type: 'string', description: '自动选骨架任务里填这一版用的骨架编号' }, spec: { type: 'object', description: '页面说明：title、可选 note，以及 col / row 版面树；叶子是带 type 的组件' } }, ['jobId', 'spec']) },
   { name: 'ppt_make_skeleton', description: '取一个做页骨架的示意内容（页面说明 JSON）。只在「自动选骨架」的做页任务里用：id 是提问骨架目录里的编号。', inputSchema: schema({ id: string }, ['id']) },
+  { name: 'running_overview', description: '在跑一览：程序生成的只读快照，按「在等你回复 / 卡住嫌疑 / 运行中 / 刚完成」分组，每行写会话名、类型、状态、多久没输出、进展卡第一句、组队角色，带 ⚠ 矛盾提示。用户问「在跑什么」「进展怎么样」「哪些任务还在跑」「总结一下正在跑的任务」时先调它，照表转述。', annotations: { readOnlyHint: true }, inputSchema: schema({}) },
   { name: 'list_sessions', description: '列出这台电脑 Hub 里的会话：编号、标题、目录、状态（stuck 卡住等确认 / running 运行中 / reply 答完等回复 / idle 空闲 / closed 没打开）。用户问「现在有哪些会话」「谁卡住了」时先调它。', annotations: { readOnlyHint: true }, inputSchema: schema({}) },
   { name: 'read_session', description: '看一个会话的最新回答（默认末尾 4000 字）；卡住时附终端画面（题目和选项）。用户问某个会话做到哪了时用。', annotations: { readOnlyHint: true }, inputSchema: schema({ sessionId: id, maxChars: { type: 'number' }, screen: { type: 'boolean', description: '没卡住也要看终端画面时填 true' } }, ['sessionId']) },
   { name: 'send_session', description: '给一个空闲或答完的会话发一段话（推进、追问、改要求），直接执行。会话关着会先自动恢复。发出后 Hub 自动盯着它，做完或卡住时提醒用户（开了手机对话推到手机群，没开弹电脑桌面通知），不用轮询。', inputSchema: schema({ sessionId: id, text: string }, ['sessionId', 'text']) },
@@ -59,7 +60,7 @@ const allTools = [
 // 按会话用途只挂需要的工具（5.5.11）：工具描述每次请求都要读，少挂一个就少读一段。
 // desk=电脑上问助理，phone=手机上问，两者都带多会话管理（5.6.2：电脑上原先没挂，助理答「查不到其他会话」）；ppt=PPT 页，brief=每天的简报；没给的旧会话挂全部（升级前开的会话）。
 const WELINK = ['welink_find', 'welink_inbox', 'welink_message', 'welink_meetings', 'welink_mail', 'welink_history'];
-const SESSIONS = ['list_sessions', 'read_session', 'send_session', 'create_session', 'watch_session', 'press_keys', 'stop_session'];
+const SESSIONS = ['running_overview', 'list_sessions', 'read_session', 'send_session', 'create_session', 'watch_session', 'press_keys', 'stop_session'];
 const TOOLSETS = {
   desk: [...WELINK, 'portal_todo', 'assistant_memory', 'pet_remind', ...SESSIONS],
   phone: [...WELINK, 'portal_todo', 'assistant_memory', 'pet_remind', ...SESSIONS],

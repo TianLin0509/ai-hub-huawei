@@ -16,10 +16,14 @@ const FAILURES = {
   query: { title: '门户的查询出错了', why: r => r.error || '', next: '点「重试」；连着几次都这样，点「一键反馈」，门户可能改版了。', acts: ['retry', 'feedback'] },
   other: { title: '这次没读到', why: r => r.error || '', next: '点「重试」；连着几次都这样，点「一键反馈」，会带上门户日志。', acts: ['retry', 'feedback'] },
 };
-function failureOf(r = {}) { return FAILURES[r.kind] || (r.needsDomain ? FAILURES.domain : r.needsLogin ? FAILURES.login : FAILURES.other); }
+// 备用登录（2026-11-20）：停在登录页时，再给一个「在 Hub 里登录一次门户」——Hub 自己的登录窗口，登录一次后先用它读。
+const HUB_LOGIN = { title: '门户停在登录页，后台没能自动登录', why: r => '后台浏览器借用你本机 Edge 的登录状态和公司电脑的免密登录；这次等了 45 秒仍停在' + (r.finalHost ? ' ' + r.finalHost : '登录页') + '（Edge 开着时常借不到登录状态）。',
+  next: '点「在 Hub 里登录一次门户」，在弹出的窗口里登录一次，之后 Hub 自己记着这份登录读门户；也可以照旧在浏览器打开门户确认后点「重试」。', acts: ['hublogin', 'portal', 'retry', 'feedback'] };
+function failureOf(r = {}, s = null) {
+  if (s?.hubLogin?.available && (r.kind === 'login' || (!r.kind && r.needsLogin))) return HUB_LOGIN; return FAILURES[r.kind] || (r.needsDomain ? FAILURES.domain : r.needsLogin ? FAILURES.login : FAILURES.other); }
 
 function createCompanyW3Page({ document, window, ipcRenderer, closeOtherPanels = () => {}, showMessage }) {
-  let page = null, status = null, timer = null, gate = null, tab = 'todo', detail = null;
+  let page = null, status = null, timer = null, gate = null, tab = 'todo', detail = null, loggingIn = false;
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const two = n => String(n).padStart(2, '0');
   const when = at => { if (!at) return '—'; const d = new Date(at), t = new Date(); const c = `${two(d.getHours())}:${two(d.getMinutes())}`; return d.toDateString() === t.toDateString() ? '今天 ' + c : `${d.getMonth() + 1}/${d.getDate()} ${c}`; };
@@ -76,7 +80,8 @@ function createCompanyW3Page({ document, window, ipcRenderer, closeOtherPanels =
   function statusHtml() {
     const s = status;
     if (s.syncing) return '<span class="w3p-chip run">正在读取门户…</span>';
-    if (s.lastResult && !s.lastResult.ok) return `<span class="w3p-chip bad" title="${esc(s.lastResult.error)}">${esc(failureOf(s.lastResult).title)} · ${when(s.lastResult.at)}</span>`;
+    if (loggingIn) return '<span class="w3p-chip run">登录窗口已打开，登录好会自动关掉…</span>';
+    if (s.lastResult && !s.lastResult.ok) return `<span class="w3p-chip bad" title="${esc(s.lastResult.error)}">${esc(failureOf(s.lastResult, s).title)} · ${when(s.lastResult.at)}</span>`;
     if (s.lastSuccessAt) return `<span class="w3p-chip ok">${when(s.lastSuccessAt)} 读取</span>`;
     return '<span class="w3p-chip">还没读取过</span>';
   }
@@ -130,9 +135,10 @@ function createCompanyW3Page({ document, window, ipcRenderer, closeOtherPanels =
     return `<div class="w3p-blank" data-fail-kind="${esc(r.kind || '')}">${failHtml(r)}</div>`;
   }
   function failHtml(r, compact = false) {
-    const f = failureOf(r);
+    const f = failureOf(r, status);
     const canFeedback = !!window.__hubFeedback?.open;
-    const btn = { retry: `<button type="button" class="w3p-btn primary${compact ? ' sm' : ''}" data-w3="sync">重试</button>`,
+    const btn = { hublogin: `<button type="button" class="w3p-btn primary${compact ? ' sm' : ''}" data-w3="hub-login"${loggingIn ? ' disabled' : ''}>${loggingIn ? '登录窗口已打开…' : '在 Hub 里登录一次门户'}</button>`,
+      retry: `<button type="button" class="w3p-btn${f.acts.includes('hublogin') ? '' : ' primary'}${compact ? ' sm' : ''}" data-w3="sync">重试</button>`,
       portal: status?.url ? `<button type="button" class="w3p-btn${compact ? ' sm' : ''}" data-w3="open" data-url="${esc(status.url)}">在浏览器打开门户</button>` : '',
       feedback: canFeedback ? `<button type="button" class="w3p-btn${compact ? ' sm' : ''}" data-w3="feedback">一键反馈（带门户日志）</button>` : '',
       domain: `<span class="w3p-domain"><input type="text" data-w3-domain placeholder="公司邮箱或域名" aria-label="公司邮箱或域名"><button type="button" class="w3p-btn primary${compact ? ' sm' : ''}" data-w3="save-domain">保存并重试</button></span>` };
@@ -182,6 +188,16 @@ function createCompanyW3Page({ document, window, ipcRenderer, closeOtherPanels =
       const r = status?.lastResult || {};
       window.__hubFeedback?.open?.({ description: `门户读取不到：${failureOf(r).title}（${r.error || '无详细原因'}${r.finalHost && !String(r.error || '').includes(r.finalHost) ? '，停在 ' + r.finalHost : ''}，${when(r.at)}）
 日志附在下面的 company-w3.log 里。` });
+      return;
+    }
+    if (name === 'hub-login') {
+      if (loggingIn) return;
+      loggingIn = true; render();
+      let r;
+      try { r = await ipcRenderer.invoke('company-w3:login'); } finally { loggingIn = false; await load().catch(() => {}); }
+      if (r?.ok) showMessage?.('门户登录好了，正在用这份登录读取待办…');
+      else if (r?.reason === 'already-open') showMessage?.('已经有一个登录窗口开着，请在那个窗口里登录');
+      else if (r?.error) showMessage?.('没有登录成功：' + r.error);
       return;
     }
     if (name === 'save-domain') {

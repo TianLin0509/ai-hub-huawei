@@ -381,6 +381,15 @@ async function writeSubmitFallbackSignals(sessionManager, sid, kind, tries = 1, 
 //   core/group-chat-cli-ready-detector.js（marker + buffer 静默双门 + monotonic guard）。
 //   timeout 提到 60s 兜底（Claude Opus 1M 启动 + 配置加载在慢机可能 30s+）。
 // 启动被提示框或别的画面挡住、问题发不出去时，把当时的屏幕记到本地日志，只弹一次的提醒也能事后查到原文。
+// 终端最后几行（≤5 行、每行 ≤160 字，去控制符、脱敏家目录/用户名/密钥）：「CLI 已退出」提示里给用户看的退出原因。
+function terminalTailLines(buffer, max = 5) {
+  const { sanitize } = require('./env-check');
+  return require('./host-shell-detector').cleanPromptTitles(stripAnsi(String(buffer || '').slice(-20000))).split(/[\r\n]+/)
+    .map(line => line.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').trim()).filter(Boolean)
+    // 再过一遍密钥规则（Codex 复审）：sanitize 只认 sk-/Bearer 等带前缀的；部门 Key 常是无前缀长串或 JSON 字段，命中就整行隐去。
+    .slice(-max).map(line => (require('./secret-guard').findSecret(line) ? '（这一行疑似含密钥，已隐去）' : sanitize(line).slice(0, 160)));
+}
+
 async function logStartupBlock(sid, reason, buffer, { dataDir, makeScreen } = {}) {
   let screen = null;
   try {
@@ -861,12 +870,16 @@ async function sendToPtyImpl(sid, prompt, kind, options = {}) {
       && detectHostShellTakeover(sessionManager.getSessionBuffer(sid) || '')) {
     sessionManager.setGroupChatReady(sid, false);
     // 终端停在「找不到命令」上时直说缺哪个程序（反馈 08441c2e）：文案对上已知问题 cli-missing，提示里带一键安装。
+    const exitBuffer = sessionManager.getSessionBuffer(sid) || '';
     const missing = detectMissingCliCommand(sessionManager.getSessionBuffer(sid) || '');
     const missingName = { claude:'Claude Code', codex:'Codex', codeagent:'CodeAgent', gemini:'Gemini CLI', kimi:'Kimi Code' }[missing];
+    // 退出原因（2026-11-20 根因调查）：12 个「已退出」事件里 3 个缺终端证据。带上终端最后几行（脱敏）给提示和一键反馈，屏幕尾部同时记进启动阻塞日志。
+    const terminalTail = terminalTailLines(exitBuffer);
+    await logStartupBlock(sid, 'cli-exited', exitBuffer);
     throw Object.assign(new Error(missingName
       ? `未找到 ${missingName} CLI：终端里「${missing}」无法识别，CLI 没有启动，消息未发送`
       : 'CLI 已退出到系统终端，消息未发送；请先重启会话'),
-      { notSent:true, code:'cli-exited', ...(missing ? { missingCli: missing } : {}) });
+      { notSent:true, code:'cli-exited', ...(missing ? { missingCli: missing } : {}), ...(terminalTail.length ? { terminalTail } : {}) });
   }
 
   if ((options.restartContinuation || sessionManager.restartContinuationSessions?.has(sid)) && ['kimi','kimi-resume','deepseek','deepseek-resume'].includes(kind)) {
@@ -1185,8 +1198,11 @@ async function sendToPtyImpl(sid, prompt, kind, options = {}) {
       }
       // 等确认期间 CLI 退回了命令行：明确报失败（不是 notSent，退出前正文可能已写进 CLI）。
       if (!acknowledgement && cliExitedDuringAck) {
+        const exitBuffer = sessionManager.getSessionBuffer(sid) || '';
+        const terminalTail = terminalTailLines(exitBuffer);
+        await logStartupBlock(sid, 'cli-exited-during-ack', exitBuffer);
         return { ok: false, sendStatus: 'cli-exited', error: 'cli-exited', enterAttempts, acknowledgementSource: null,
-          message: 'CLI 已退出到命令行，消息可能没有被接收，未补回车' };
+          message: 'CLI 已退出到命令行，消息可能没有被接收，未补回车', ...(terminalTail.length ? { terminalTail } : {}) };
       }
       if (!acknowledgement) {
         console.warn(`[group-chat] ${kind} prompt submission not acknowledged for ${sid.slice(0, 8)} after late Enter recovery`);
@@ -1557,6 +1573,7 @@ module.exports = {
   init,
   waitCliReady,
   logStartupBlock,
+  terminalTailLines,
   sendToPty,
   openCodeAgentCommands,
   codeAgentInputAction,

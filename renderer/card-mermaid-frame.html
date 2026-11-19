@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- mermaid 画图沙箱框架（由 renderer/card-media.js 以 sandbox="allow-scripts" 装入，不给同源）。
+     沙箱框架是不透明来源，读不到任何本地文件，也拿不到主页面的 require、DOM 和 Cookie；
+     mermaid 代码由主页面经 postMessage 发进来、作为内联脚本执行，画完把 SVG 或错误发回去。
+     安全策略：不许联网、不许加载文件，只许内嵌（data:）图片与字体。 -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; font-src data:">
+</head>
+<body>
+<script>
+(function () {
+  window.addEventListener('message', function (event) {
+    if (event.source !== window.parent) return;
+    var data = event.data || {};
+    function reply(message) { message.type = 'result'; message.seq = data.seq; window.parent.postMessage(message, '*'); }
+    function fail(error) { reply({ ok: false, error: String((error && error.message) || error) }); }
+    if (data.type === 'load') {
+      try {
+        if (!window.mermaid) {
+          var script = document.createElement('script');
+          script.textContent = String(data.code || '');
+          document.head.appendChild(script);
+        }
+        if (!window.mermaid) throw new Error('mermaid 组件缺失');
+        window.mermaid.initialize(data.config);
+        reply({ ok: true });
+      } catch (error) { fail(error); }
+      return;
+    }
+    if (data.type !== 'render' || !window.mermaid) return;
+    Promise.resolve()
+      .then(function () { return window.mermaid.parse(data.source); })
+      .then(function () { return window.mermaid.render(data.id, data.source); })
+      .then(function (result) { reply({ ok: true, svg: result.svg }); }, fail);
+  });
+  window.parent.postMessage({ type: 'ready', ok: true }, '*');
+})();
+</script>
+</body>
+</html>

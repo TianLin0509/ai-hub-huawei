@@ -2391,6 +2391,21 @@ try {
   progressCards.start();
 } catch (error) { console.error('[progress-cards] initialization failed:', error.message); }
 
+// 在跑一览（2026-11-20）：侧栏按钮和公司助理 running_overview 工具共用的只读快照，只读现有会话字段、进展卡和组队表。
+let runningOverview = null;
+try {
+  runningOverview = require('./core/running-overview').createRunningOverview({
+    getSessions: () => sessionManager.getAllSessions(),
+    getCards: () => progressCards?.snapshot() || [],
+    getTeams: () => global.__teamService?.listTeams?.() || [],
+    isAgentTurnActive: id => sessionManager.isAgentTurnActive(id),
+    isReportedRunning: progressCards?.isRunning ? s => progressCards.isRunning(s) : null,
+    // 会话条目上实时记的终端输出时间（getAllSessions 的信息里没有它）。
+    getLastOutputAt: id => sessionManager.getGroupChatLastActivity(id),
+  });
+  ipcMain.handle('running-overview:get', () => ({ ok: true, ...runningOverview.get() }));
+} catch (error) { console.error('[running-overview] initialization failed:', error.message); }
+
 // 子 Agent 进度一行字（2026-10-29）：只盯卡片视图正在看的会话，读子 Agent 记录，推「2 个子任务进行中 · 最近一步：…」。
 try {
   require('./main/subagent-progress-service.js').createSubagentProgressService({
@@ -3023,6 +3038,7 @@ try {
       // 手机对话（2026-10-18，core/company-assistant/phone.js 与 hub-tools.js）：助理用这些看会话、推进会话、卡住时替用户按键。
       getAllSessions: () => sessionManager.getAllSessions(),
       listKnownSessions: () => lastPersistedSessions.map(meta => ({ ...meta, id: meta.hubId || meta.id })),
+      runningOverview: options => runningOverview?.get(options) || null,
       readTerminalScreen: id => {
         const entry = sessionManager.sessions?.get?.(id);
         const text = sessionManager.getSessionBuffer(id);
@@ -3212,14 +3228,25 @@ try {
 } catch (error) { console.error('[profile] 个人页未启动：', error.message); }
 // 公司版「门户待办」（2026-11-12）：每天 3 次在后台用无头 Edge 读公司门户首页上自己的待办、申请和公司文件，
 // 新待办和久拖的事交给提醒总线（桌宠或通知卡），助理经 portal_todo 工具查本机快照。默认关闭（可选功能 w3），关着时不访问门户。
-let companyW3Service = null;
+let companyW3Service = null, companyW3Browser = null;
+// 只给隔离测试用：登录页停留多久判「要登录」（默认 45 秒，压测缩短）；必须是非生产数据目录且在测试窗口模式下，生产实例改不了（审查 #3）。
+const W3_TEST_GRACE_MS = HIDDEN_E2E_DATA_DIR_SAFE && process.env.CLAUDE_HUB_E2E_WINDOW_MODE && Number(process.env.CLAUDE_HUB_W3_LOGIN_GRACE_MS) > 0 ? Number(process.env.CLAUDE_HUB_W3_LOGIN_GRACE_MS) : 0;
+function companyW3HubBrowser() {
+  return companyForumBrowser || companyAttendanceBrowser
+    || (companyW3Browser ||= require('./main/company-forum-browser').createForumBrowser({ BrowserWindow, BaseWindow, session: require('electron').session }));
+}
 try {
   if (require('./core/company-w3/gate').companyW3Enabled()) {
     const { CompanyW3 } = require('./core/company-w3/service');
     companyW3Service = new CompanyW3({
       dataDir: getHubDataDir(),
       noTimer: process.env.CLAUDE_HUB_W3_TIMER === '0',
-      edgeRun: opts => require('./main/company-edge-capture').runInEdge(opts),
+      edgeRun: opts => require('./main/company-edge-capture').runInEdge(W3_TEST_GRACE_MS ? { ...opts, loginGraceMs: W3_TEST_GRACE_MS } : opts),
+      // 备用路线（原路线停在登录页时用户主动点登录才启用）：Hub 自己的窗口和登录分区，和论坛、考勤共用一个窗口队列与登录窗口，
+      // 不拉起浏览器进程；用到时才建（没开论坛、考勤的用户也只在点登录后才建）。
+      hubRun: opts => companyW3HubBrowser().evaluate(opts),
+      hubLogin: opts => companyW3HubBrowser().login(opts),
+      ...(W3_TEST_GRACE_MS ? { hubLoginGraceMs: W3_TEST_GRACE_MS } : {}),
       onChanged: () => sendToRenderer('company-w3:changed', {}),
       publish: notice => require('./core/company-assistant/notice-bus').noticeBus().publish(notice),
     });
@@ -3277,6 +3304,8 @@ if (require('./core/distribution').featureEnabled('leadTeam')) try {
     commandPath: () => teamCommand,
     // 2026-11-18：负责人招人默认按规则自动批准；设置里「负责人组队自动批准」（config team.autoApproveLeads=false）可关。
     getConfig: getHubConfig, autoApproveLeadsDefault: true,
+    // 真休眠的会话不在运行表里：按侧栏登记区分「休眠可叫醒」与「用户已关闭」（与 wakeSession 同一判断）。
+    isResumable: id => require('./main/team/wake').canWakeTeamSession(id, lastPersistedSessions, sessionManager.getSession(id)),
     // 收件人休眠时叫醒：只认侧栏登记为休眠的会话（用户关掉的会话不复活）。
     wakeSession: async id => {
       if (!require('./main/team/wake').canWakeTeamSession(id, lastPersistedSessions, sessionManager.getSession(id))) return false;
@@ -5664,7 +5693,7 @@ async function runFinalShutdownCleanup() {
   capture('company-web-ai', () => companyWebAi?.close());
   capture('company-forum', () => { companyForumService?.close(); companyForumBrowser?.close(); });
   capture('company-attendance', () => { companyAttendanceService?.close(); if (companyAttendanceBrowser !== companyForumBrowser) companyAttendanceBrowser?.close(); });
-  capture('company-w3', () => { companyW3Service?.close(); require('./main/company-edge-capture').killAll(); });
+  capture('company-w3', () => { companyW3Service?.close(); companyW3Browser?.close(); require('./main/company-edge-capture').killAll(); });
   capture('hub-orchestration', () => global.__orchestrationService?.stop());
   capture('hub-team', () => global.__teamService?.stop());
   capture('hub-phone', () => phoneService?.close());

@@ -20,23 +20,35 @@ function parseCardMarkdown(marked, text) {
         });
       }
       if (token.type !== 'image') return;
-      if (/^data:image\/(?:png|jpe?g|gif|webp|bmp|avif|svg\+xml)[;,]/i.test(token.href || '')) {
-        token.type = 'text';
-        token.text = '<button type="button" class="conversation-image-thumb" data-action="card-open-image"'
-          + ' data-image-src="' + escapeHtml(token.href) + '">'
-          + escapeHtml(token.text || '查看图片') + '</button>';
-        token.escaped = true;
-        delete token.tokens;
-        return;
-      }
-      const label = /^data:/i.test(token.href || '')
-        ? token.text || '查看图片'
-        : token.href || token.text || '查看图片';
-      token.type = 'link';
-      token.text = label;
-      token.tokens = [{ type: 'text', raw: label, text: label }];
+      // 图片先输出成占位：文字仍是原来的地址（没经过 card-media 时照旧可读、可点路径），
+      // 卡片挂上后由 renderer/card-media.js 按安全规则换成真图片。
+      const href = token.href || '';
+      const label = /^data:/i.test(href) ? token.text || '查看图片' : href || token.text || '查看图片';
+      token.type = 'text';
+      token.text = '<span class="card-md-image" data-md-image-src="' + escapeHtml(href) + '"'
+        + ' data-md-image-alt="' + escapeHtml(token.text || '') + '">'
+        + (/^data:/i.test(href) ? escapeHtml(label) : '<a href="' + escapeHtml(href) + '">' + escapeHtml(label) + '</a>') + '</span>';
+      token.escaped = true;
+      delete token.tokens;
     },
   });
 }
 
-module.exports = { parseCardMarkdown };
+// 没接图片处理的页面（如群聊会议室）用：data: 内嵌图片恢复成原来那个「可点开的缩略图按钮」，
+// 点击由 card-detail-controls 的 card-open-image 处理；其余图片保持占位里的原地址链接。
+function restoreDataImageThumbs(root) {
+  if (!root?.querySelectorAll) return root;
+  const doc = root.ownerDocument || root;
+  for (const holder of root.querySelectorAll('.card-md-image[data-md-image-src]')) {
+    const src = holder.getAttribute('data-md-image-src') || '';
+    if (!/^data:image\/(?:png|jpe?g|gif|webp|bmp|avif|svg\+xml)[;,]/i.test(src)) continue;
+    const button = doc.createElement('button');
+    button.type = 'button'; button.className = 'conversation-image-thumb';
+    button.setAttribute('data-action', 'card-open-image'); button.setAttribute('data-image-src', src);
+    button.textContent = holder.getAttribute('data-md-image-alt') || '查看图片';
+    holder.replaceWith(button);
+  }
+  return root;
+}
+
+module.exports = { parseCardMarkdown, restoreDataImageThumbs };

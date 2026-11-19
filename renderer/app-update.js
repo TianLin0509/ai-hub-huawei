@@ -72,6 +72,13 @@
   #btn-options.update-has-unread .rail-utility-label:after { content: ''; position: absolute; top: -1px; right: -8px; width: 6px; height: 6px; background: #ff755c; border-radius: 50%; }
   #options-check-update.update-has-unread:after { content: ''; display: inline-block; width: 6px; height: 6px; background: #ff755c; border-radius: 50%; margin: 0 0 7px 6px; }
   #options-check-update.update-has-unread { font-weight: 600; }
+  .au-ready-line { display: flex; align-items: center; gap: 8px; margin: 6px 10px 8px; padding: 6px 10px; border-radius: 8px; font-size: 12px; line-height: 1.4;
+    background: #ecf7f0; color: #24704a; cursor: pointer; }
+  .au-ready-line:before { content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; background: #2f9e62; }
+  .au-ready-line span { flex: 1; min-width: 0; }
+  .au-ready-line button { border: 0; background: transparent; color: inherit; font: inherit; font-weight: 600; cursor: pointer; padding: 0 2px; }
+  .au-ready-line.fixed { position: fixed; left: 12px; bottom: 10px; z-index: 900; max-width: 320px; box-shadow: 0 6px 18px rgba(30,24,60,.12); }
+  .au-toast .au-btn { margin: 8px 8px 0 0; padding: 4px 12px; font-size: 12px; }
   .au-toast { position: fixed; right: 20px; top: 56px; z-index: 10050; max-width: 420px; padding: 10px 14px; border-radius: 10px; font-size: 13px;
     background: var(--surface-raised, #fff); border: 1px solid var(--border-subtle, #e3e1ea); box-shadow: 0 10px 30px rgba(30,24,60,.16); }
   `;
@@ -83,13 +90,39 @@
   const mb = n => n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round((n || 0) / 1024))} KB`;
   const eta = s => s == null ? '' : s >= 60 ? `剩余约 ${Math.ceil(s / 60)} 分钟` : `剩余约 ${Math.max(1, s)} 秒`;
 
+  // 手动下载完整包（O④，2026-11-20）：一律先找公司内源上的包（download-source:open），内源没有或连不上再打开备用地址——
+  // 写了发布页的版本用发布页，否则用更新源上的安装包地址。以前写了发布页就直接打开发布页（外网），不先找内源。
   function manualDownload() {
-    if (state?.releasePage) return { url: state.releasePage, label: '打开发布页手动下载' };
+    const portable = !!state?.portable;
+    const label = portable ? '下载新的免安装包（内源优先）' : '下载完整安装包（内源优先）';
+    if (state?.releasePage) return { url: state.releasePage, label, point: 'app-installer' };
     const file = state?.latest?.installer?.file || (state?.plan?.kind === 'full' ? state.plan.file : null);
     const source = distribution.updateConfig.sources?.find(s => s.files && s.name === state?.latest?.sourceName)
       || distribution.updateConfig.sources?.find(s => s.files);
     if (!file || !state?.latest?.version || !source) return null;
-    return { url: require('../core/app-update/downloader').fileUrl(source, state.latest.version, file), label: '下载完整安装包（内源优先）', point: 'app-installer' };
+    const name = portable ? portableZip(file, state.latest.version) : file;
+    return { url: require('../core/app-update/downloader').fileUrl(source, state.latest.version, name), label, point: 'app-installer' };
+  }
+  // 与主进程 portableZipName 同一规则（package.json build.win.artifactName）。
+  function portableZip(file, version) {
+    const m = /^(.+)-Setup-(\d+\.\d+\.\d+)\.exe$/i.exec(String(file || ''));
+    return m && m[2] === String(version) ? `${m[1]}-${m[2]}-win-x64.zip` : file;
+  }
+  // 「去内源下载完整包」（O④）：先在浏览器里打开内源上的包；内源没有或连不上，打开阿里云地址；还没查到版本时先打开更新窗查一次。
+  async function openManual() {
+    const viaOpenx = await ipcRenderer.invoke('download-source:open', { point: 'app-installer' }).catch(() => null);
+    if (viaOpenx && viaOpenx.ok) return true;
+    const manual = manualDownload();
+    if (manual) { shell.openExternal(manual.url); return true; }
+    openDialog(); void ipcRenderer.invoke('app-update:check');
+    return false;
+  }
+  // 受保护目录（Program Files）或免安装版时，说清为什么、下一步做什么（O②③）。
+  function installHint(plan) {
+    if (!plan) return '';
+    if (plan.portable) return '<div class="au-msg warn" data-au-hint="portable">这台电脑用的是免安装版，这一版要换运行库，安装程序会装到另一处、原来的目录仍是旧版。请点「下载新的免安装包」，解压覆盖原目录（数据不在程序目录里，不会丢）。</div>';
+    if (plan.protectedDir) return '<div class="au-msg warn" data-au-hint="protected">程序装在受保护的目录（安装时选了「所有用户」，例如 Program Files），每次更新都要管理员授权。电脑没有管理员权限时更新会失败：请点下面的「下载完整安装包」重装一次，安装时选「仅为我安装」，以后就能自动更新（数据不会丢）。</div>';
+    return '';
   }
 
   function sourceRows() {
@@ -167,7 +200,7 @@
         + `<div class="au-plan"><b>${plan.kind === 'incremental' ? '程序更新（不含运行库）' : '完整安装包'} · ${mb(plan.bytes)}</b>${esc(plan.reason)}</div>` : '')
       + '</div>';
     let body = versions, foot = '';
-    const quietBox = s.quietFeature ? `<label class="au-quiet"><input type="checkbox" data-au="quiet"${s.quietEnabled === false ? '' : ' checked'}> 小版本自动更新：后台下载，下次打开 Hub 时生效，不打断工作</label>` : '';
+    const quietBox = s.quietFeature ? `<label class="au-quiet"><input type="checkbox" data-au="quiet"${s.quietEnabled === false ? '' : ' checked'}> 自动更新：小版本在后台下好；下好的更新在关闭 Hub 时换上，下次打开生效，不打断工作</label>` : '';
     if (s.phase === 'checking') {
       body += '<div class="au-msg info">正在向各个更新源查询最新版本…</div>';
       foot = '<button class="au-btn" data-au="close">关闭</button>';
@@ -176,8 +209,12 @@
       foot = '<button class="au-btn" data-au="close">好的</button>';
     } else if (s.phase === 'available') {
       if (latest && latest.notes && latest.notes.length) body += `<div class="au-section">本次更新</div><ul class="au-notes">${latest.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>`;
+      body += installHint(plan);
       body += `<div class="au-section">更新源（按顺序尝试，失败自动换下一个）</div><ul class="au-sources">${(s.attempts && s.attempts.length) ? sourceRows() : checkRows()}</ul>${allowBox()}`;
-      foot = '<button class="au-btn" data-au="close">稍后</button><button class="au-btn primary" data-au="download">下载更新</button>';
+      const manualA = (plan && (plan.portable || plan.protectedDir)) ? manualDownload() : null;
+      foot = '<button class="au-btn" data-au="close">稍后</button>'
+        + (plan && plan.portable ? (manualA ? `<button class="au-btn primary" data-au="manual">${esc(manualA.label)}</button>` : '')
+          : `${manualA ? `<button class="au-btn" data-au="manual">${esc(manualA.label)}</button>` : ''}<button class="au-btn primary" data-au="download">下载更新</button>`);
     } else if (s.phase === 'downloading') {
       // r59：统一进度条（进度、速度、剩余时间、来源），和其他安装一个样式。
       const p = s.progress || {};
@@ -189,18 +226,20 @@
       if (s.applyCancelled) body += `<div class="au-msg warn" data-au-cancelled>${esc(s.applyCancelled.reason)}</div>`;
       body += `<div class="au-msg ok">新版本已从「${esc(s.readySource)}」下载并校验通过。${plan && plan.kind === 'incremental' ? '点「立即重启」后先保存会话、关闭窗口，屏幕中间会出现升级进度小窗（第几步、已等多久），换好后自动打开新版，通常 10–40 秒；期间不用再点图标。替换失败会自动恢复旧版本，可在小窗里一键重试。' : '点「立即安装」会打开安装程序，并关闭当前窗口。'}${plan && plan.kind === 'incremental' && s.needsAdmin ? '<br>程序装在受保护的目录里，重启时 Windows 会弹出确认框，请点「是」授权这一次替换；Hub 本身仍以普通权限运行。' : ''}</div>`
         + `<ul class="au-sources">${sourceRows()}</ul>`;
-      foot = `<button class="au-btn" data-au="close">稍后</button><button class="au-btn primary" data-au="apply">${plan && plan.kind === 'incremental' ? '立即重启' : '立即安装'}</button>`;
+      if (plan && plan.kind === 'incremental' && !s.needsAdmin && s.quietEnabled !== false) body += '<div class="au-msg info" data-au-onquit>不急的话点「稍后」：关闭 Hub 时会自动换上，下次打开就是新版。</div>';
+      const manualR = s.needsAdmin ? manualDownload() : null;
+      foot = `${manualR ? `<button class="au-btn" data-au="manual">${esc(manualR.label)}</button>` : ''}<button class="au-btn" data-au="close">稍后</button><button class="au-btn primary" data-au="apply">${plan && plan.kind === 'incremental' ? '立即重启' : '立即安装'}</button>`;
     } else if (s.phase === 'applying') {
       body += '<div class="au-msg info">正在保存会话并关闭窗口，随后屏幕中间会出现升级进度小窗，换好后自动打开新版（通常 10–40 秒）。期间不用再点图标，点了也只会回到进度小窗。</div>';
     } else if (s.phase === 'error') {
       // 5.5.24：命中已知问题（如安装包校验失败、被公司网络拦截）直接给解法和一键按钮；悬停这条出现「问问 Agent」「一键反馈」。
       const card = window.HubErrorCard;
       const manual = manualDownload();
-      const error = (s.error || '更新失败').replace('或打开发布页手动下载安装包。', s.releasePage ? '或打开发布页手动下载安装包。'
-        : manual ? '或点「下载完整安装包」手动安装。' : '或点「重试」重新检查。');
+      const error = (s.error || '更新失败').replace('或打开发布页手动下载安装包。', manual ? '或点「下载完整安装包」手动安装（先从公司内源下）。' : '或点「重试」重新检查。');
       const reasons = [...(s.attempts || []), ...(s.checks || [])].filter(a => a && a.reason && !a.informational).map(a => `${a.name || a.id || '更新源'}：${a.reason}`);
       const ctx = { area: 'app-update', title: '一键更新没有完成', symptom: error, details: [error, ...reasons].join('\n') };
       body += `<div class="au-msg bad">${card ? card.assistHtml(ctx) : ''}${esc(error)}</div>${card ? card.knownHtml(ctx) : ''}`;
+      if (plan && plan.portable) body += installHint(plan);
       if (s.attempts?.length || s.checks?.length) body += `<div class="au-section">各下载源的结果</div><ul class="au-sources">${s.attempts?.length ? sourceRows() : checkRows()}</ul>`;
       else if (s.checks && s.checks.length) body += `<div class="au-section">更新源</div><ul class="au-sources">${checkRows()}</ul>`;
       body += allowBox();
@@ -252,11 +291,7 @@
       }
       else if (action === 'manual') {
         // r58：先在浏览器里打开公司内源上的安装包；内源没有或连不上，再打开阿里云地址。
-        const manual = manualDownload();
-        if (manual) {
-          const viaOpenx = manual.point ? await ipcRenderer.invoke('download-source:open', { point: manual.point }).catch(() => null) : null;
-          if (!viaOpenx || !viaOpenx.ok) shell.openExternal(manual.url);
-        }
+        if (manualDownload()) await openManual();
       }
       else if (action === 'allow-open') {
         const button = event.target.closest('[data-au]');
@@ -279,6 +314,7 @@
   const SEEN_KEY = 'hub:appUpdate:seenVersion';
   // 自己点的升级没成后补过提醒的版本：同一个失败版本只补一次，再失败也不再补（r43 返工）。
   const RETRY_KEY = 'hub:appUpdate:retryPromptedVersion';
+  const ADMIN_RE = /管理员授权|没有写入安装目录的权限/;
   const readKey = key => { try { return localStorage.getItem(key) || ''; } catch { return ''; } };
   const writeKey = (key, value) => { try { localStorage.setItem(key, value); } catch {} };
   function pendingVersion() {
@@ -287,14 +323,26 @@
   }
   // 只改末位的小更新（latest.notify === false）不主动提醒：弹窗、红点、左上角标签都按「没有新版本」处理，
   // 直到用户自己在设置里点「检查更新」看到它（revealed）。x / y 变了的更新照常提醒（2026-10-24 用户）。
+  // 2026-11-20（K / O）：小版本仍不弹窗，但下好了（已就绪）要挂小点、底栏一行「已就绪，重启生效」；
+  // 后台送不到的（受保护目录、免安装版要换运行库、用户关了自动更新）也挂小点，不再整版隐藏、永远升不上。
   let revealed = '';
+  // 主进程说了算（quietPending：这一版会不会由后台送达）；老版本主进程没给时按计划推断。
+  function quietDeliverable() {
+    if (state && typeof state.quietPending === 'boolean') return state.quietPending;
+    const plan = state && state.plan;
+    return !!(state && state.quietEnabled && plan && plan.kind === 'incremental' && !plan.protectedDir);
+  }
   function noticeVersion() {
     const version = pendingVersion();
-    return version && state.latest.notify === false && revealed !== version ? '' : version;
+    if (!version || state.latest.notify !== false || revealed === version) return version;
+    if (state.phase === 'ready') return version;
+    return state.phase === 'available' && !quietDeliverable() ? version : '';
   }
   function maybePromptOnce() {
     const version = noticeVersion();
     if (!version || state.phase !== 'available' || readKey(PROMPTED_KEY) === version) return;
+    // 小版本只挂点不弹窗（自己点开过或没升成的除外）。
+    if (state.latest.notify === false && revealed !== version) return;
     writeKey(PROMPTED_KEY, version);
     // 用户自己从设置里点开、正看着弹窗时查到的新版本，算已看过，不再挂红点。
     if (dialog) { writeKey(SEEN_KEY, version); renderUnread(); return; }
@@ -339,7 +387,8 @@
     // 「有新版本」改由弹窗 + 设置红点提醒；标题栏只在下载中 / 已就绪时提示进度和重启。
     const wait = state && state.restartWait;
     // 静默送达的小版本在后台下载、关闭时替换，标题栏不提示；用户自己从设置打开更新窗口时照常能看到。
-    const show = wait || (state && !state.quiet && ['ready', 'downloading'].includes(state.phase) && state.latest && state.plan?.kind !== 'none');
+    // 已就绪改由底栏一行提示（K），标题栏只在下载中 / 等待重启时提示。
+    const show = wait || (state && !state.quiet && state.phase === 'downloading' && state.latest && state.plan?.kind !== 'none');
     if (!show) { pill?.remove(); return; }
     if (!pill) {
       pill = document.createElement('button');
@@ -351,6 +400,33 @@
     pill.textContent = wait ? (wait.count ? `等 ${wait.count} 个${wait.bridgeCount === wait.count ? '问题' : '任务'}答完再重启 · 最晚 ${hhmm(wait.deadline)}` : '马上重启')
       : state.phase === 'ready' ? `v${state.latest.version} 已就绪，重启生效` : state.phase === 'downloading' ? `正在下载 v${state.latest.version}` : `有新版本 v${state.latest.version}`;
     pill.title = '点击查看更新';
+  }
+
+  // 底栏一行（K）：「新版本 vX 已就绪，重启生效」，点它打开更新窗；放在左侧会话栏底部，没有会话栏时贴左下角。
+  function renderReadyLine() {
+    let line = document.getElementById('hub-update-ready');
+    const show = state && !state.pinned && !state.restartWait && state.phase === 'ready' && state.latest && !state.latest.rollback && state.plan?.kind !== 'none';
+    if (!show) { line?.remove(); return; }
+    if (!line) {
+      line = document.createElement('div');
+      line.id = 'hub-update-ready'; line.className = 'au-ready-line'; line.setAttribute('role', 'status');
+      line.addEventListener('click', event => {
+        const v = pendingVersion(); if (v) { writeKey(SEEN_KEY, v); renderUnread(); }
+        if (event.target.closest('[data-au-line="apply"]')) {
+          void ipcRenderer.invoke('app-update:apply', { mode: 'auto' }).then(next => {
+            if (next && next.needsConfirm) { confirmInfo = next.confirm; openDialog(); } else if (next && next.phase) update(next);
+          }).catch(() => openDialog());
+          return;
+        }
+        openDialog();
+      });
+      const sidebar = document.getElementById('session-sidebar');
+      if (sidebar) sidebar.appendChild(line); else { line.classList.add('fixed'); document.body.appendChild(line); }
+    }
+    const incremental = state.plan?.kind === 'incremental';
+    const onQuit = incremental && !state.needsAdmin && state.quietEnabled !== false;
+    line.title = onQuit ? '关闭 Hub 时自动换上，下次打开就是新版；也可以现在重启' : '点击查看更新';
+    line.innerHTML = `<span>新版本 v${esc(state.latest.version)} 已就绪，重启生效</span><button type="button" data-au-line="apply">${incremental ? '立即重启' : '立即安装'}</button>`;
   }
 
   function toast(html, ms = 8000) {
@@ -379,7 +455,7 @@
   // 点了「立即重启」但 Hub 没退出、这次没升级（r43）：把更新窗口重新打开，说清原因，「立即重启」还在，不用重新下载。
   let cancelSeen = '';
   const update = next => {
-    state = next; render(); renderPill(); renderBadge(); renderUnread(); maybePromptOnce();
+    state = next; render(); renderPill(); renderBadge(); renderUnread(); renderReadyLine(); maybePromptOnce();
     const c = state && state.phase === 'ready' && state.applyCancelled;
     if (c && c.at !== cancelSeen) { cancelSeen = c.at; openDialog(); }
   };
@@ -395,12 +471,15 @@
     // 用户自己点的升级没成（进度小窗被关掉、旧窗口没退出、替换失败已还原……）：只对没升成的这个版本，
     // 「只自动提醒一次」作废、只改末位也照常提醒，后台检查查到它时再提醒一次，不让一次没成就再也不提醒（r43）。
     // 例外只给这一个版本：之后别的小版本仍按「不主动提醒」处理；同一个失败版本只补一次（r43 返工）。
-    if (r && !r.ok && !r.quiet && r.version && readKey(RETRY_KEY) !== String(r.version)) {
+    // O①（2026-11-20）：再失败也不能彻底沉默——每次没升成都重新挂红点（弹窗仍只补一次），关 Hub 时顺手替换没成的也挂点。
+    if (r && !r.ok && r.version) {
       const failed = String(r.version);
-      writeKey(RETRY_KEY, failed);
-      if (readKey(PROMPTED_KEY) === failed) { try { localStorage.removeItem(PROMPTED_KEY); } catch {} }
       if (readKey(SEEN_KEY) === failed) { try { localStorage.removeItem(SEEN_KEY); } catch {} }
       revealed = failed;
+      if (!r.quiet && readKey(RETRY_KEY) !== failed) {
+        writeKey(RETRY_KEY, failed);
+        if (readKey(PROMPTED_KEY) === failed) { try { localStorage.removeItem(PROMPTED_KEY); } catch {} }
+      } else writeKey(PROMPTED_KEY, failed);
     }
     update(initial);
     if (r) {
@@ -408,10 +487,27 @@
       // 有更新日志时右下角会列出这次多了什么（renderer/whats-new.js），这里就不再多弹一条。
       if (r.ok) { if (!window.__whatsNew?.hasUnread?.()) toast(`✅ 已更新到 <b>v${esc(r.version)}</b>`); }
       // 静默替换失败时脚本已回滚，下一版还会再试，不打扰用户；原因留在日志里。
+      // 关 Hub 时顺手替换没成：脚本已回滚，只在设置上挂点（上面），不弹提示；原因留在日志里。
       else if (r.quiet && !r.restoreFailed) console.warn('[app-update] 静默更新没有完成：', r.reason);
-      else if (r.quiet) toast(`⚠️ 后台更新到 v${esc(r.version)} 没有完成，也没能恢复原来的文件：${esc(r.reason)}。如果用着不正常，请用完整安装包重装。`, 30000);
-      else toast(`⚠️ 更新到 v${esc(r.version)} 没有完成${r.rolledBack ? '，已恢复原来的版本' : ''}：${esc(r.reason)}`, 15000);
+      // O④：失败提示里就地给原因和「去内源下载完整包」按钮，不用再到群里问。
+      else failToast(r.quiet ? `⚠️ 后台更新到 v${esc(r.version)} 没有完成，也没能恢复原来的文件：${esc(r.reason)}。如果用着不正常，请用完整安装包重装。`
+        : `⚠️ 更新到 v${esc(r.version)} 没有完成${r.rolledBack ? '，已恢复原来的版本' : ''}：${esc(r.reason)}${ADMIN_RE.test(String(r.reason || '')) ? '<br>电脑没有管理员权限时：点下面按钮下载完整安装包重装一次，安装时选「仅为我安装」，以后就能自动更新（数据不会丢）。' : ''}`);
     }
   }).catch(() => {});
+  // 失败提示（O④）：原因 + 「去内源下载完整包」+「再试一次」；30 秒后自动消失，点了按钮立即消失。
+  function failToast(html) {
+    const el = document.createElement('div');
+    el.className = 'au-toast'; el.setAttribute('data-au-fail', '1');
+    el.innerHTML = `${html}<div><button type="button" class="au-btn primary" data-au-t="manual">去内源下载完整包</button><button type="button" class="au-btn" data-au-t="retry">再试一次</button><button type="button" class="au-btn" data-au-t="close">知道了</button></div>`;
+    el.addEventListener('click', event => {
+      const act = event.target.closest('[data-au-t]')?.dataset.auT;
+      if (!act) return;
+      el.remove();
+      if (act === 'manual') void openManual();
+      else if (act === 'retry') { openDialog(); void ipcRenderer.invoke('app-update:check'); }
+    });
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 30000);
+  }
   window.__appUpdate = { open: openDialog, state: () => state };
 })();

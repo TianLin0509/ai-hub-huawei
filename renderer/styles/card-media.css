@@ -1,0 +1,30 @@
+/* 会话卡片里的图片与 mermaid 图（renderer/card-media.js，反馈 24156241） */
+.card-md-image { display: inline; }
+.card-md-image[data-md-image-state="shown"] { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 4px; max-width: 100%; margin: 6px 0; vertical-align: top; }
+.card-md-image-thumb, .card-mermaid-thumb {
+  display: block; max-width: 100%; padding: 0; background: transparent; border: 1px solid rgba(137,154,180,.3);
+  border-radius: 6px; cursor: zoom-in; overflow: hidden;
+}
+.card-md-image-thumb:hover, .card-mermaid-thumb:hover { border-color: rgba(52,120,246,.7); }
+.card-md-image-img { display: block; max-width: min(100%, 640px); max-height: 420px; object-fit: contain; }
+.card-md-image-caption { font-size: 11px; opacity: .7; overflow-wrap: anywhere; }
+.card-md-image-note, .card-mermaid-note { margin-left: 6px; font-size: 11px; opacity: .75; }
+.card-mermaid-note { display: block; margin: 4px 0 0; }
+.card-media-btn {
+  padding: 2px 8px; margin: 0 2px; font-size: 11px; color: inherit; background: rgba(137,154,180,.09);
+  border: 1px solid rgba(137,154,180,.35); border-radius: 5px; cursor: pointer;
+}
+.card-media-btn:hover { background: rgba(52,120,246,.14); }
+.card-mermaid-figure { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin: 4px 0; }
+/* 图表固定白底：mermaid 默认配色是深色字，在深色主题里也要看得清。 */
+.card-mermaid-thumb { background: #fff; padding: 10px; overflow-x: auto; }
+.card-mermaid-img { display: block; max-width: 100%; height: auto; max-height: 560px; object-fit: contain; }
+.card-mermaid-bar { display: flex; gap: 4px; flex-wrap: wrap; }
+.code-block-wrap.card-mermaid-rendered > .code-copy,
+.code-block-wrap.card-mermaid-rendered:not(.card-mermaid-show-source) > .code-toggle { display: none; }
+.card-media-dialog { width: min(1400px, calc(100vw - 40px)); max-height: 92vh; }
+.card-media-dialog-tools { display: flex; gap: 8px; }
+.card-media-zoom { display: flex; justify-content: center; background: #fff; border-radius: 6px; padding: 12px; overflow: auto; max-height: calc(92vh - 90px); }
+.card-media-zoom-img { max-width: 100%; max-height: calc(92vh - 120px); object-fit: contain; cursor: zoom-in; }
+.card-media-zoom-img.card-media-zoom-vector { width: 100%; height: calc(92vh - 130px); }
+.card-media-zoom-img.card-media-actual { max-width: none; max-height: none; cursor: zoom-out; }
