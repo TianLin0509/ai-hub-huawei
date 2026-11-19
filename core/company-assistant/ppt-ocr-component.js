@@ -137,7 +137,7 @@ function createOcrComponentInstaller(deps = {}) {
     const fetch = require('../own-gate').gatedFetch(require('./fetch-util').resolveFetch(deps.fetchImpl));
     const root = doctorDataDir(env), target = path.join(root, 'ocr');
     const job = path.join(root, '.hub-ocr-' + randomUUID());
-    set({ phase: 'checking', message: '正在读取识别组件清单…', error: null, received: 0, total: 0, percent: 0 });
+    set({ phase: 'checking', message: '正在读取识别组件清单…', error: null, received: 0, total: 0, percent: 0, speed: 0, etaSec: null, sourceId: null, sourceName: null, openxMiss: null });
     try {
       // 内源优先：读清单的同时先在后台探测内源版本列表，第一个请求就打到内源；随后下载包时内源状态已知。
       if (deps.openx !== false) require('../app-update/openx-source').prewarm({ ...(deps.openx || {}), env, fetchImpl: fetch });
@@ -147,11 +147,11 @@ function createOcrComponentInstaller(deps = {}) {
       await fsp.mkdir(job, { recursive: true });
       const bases = [base, ...sources({ ...deps, env }).filter(u => u !== base)];
       const result = await download({ gate: true, version,
-        sources: bases.map(b => ({ id: new URL(b).hostname, name: new URL(b).hostname, url: new URL(ar.name, b).href })),
+        sources: bases.map(b => ({ id: new URL(b).hostname, name: require('../app-update/downloader').friendlySourceName(b), url: new URL(ar.name, b).href })),
         openx: deps.openx === false ? false : { release: `ocr-${version}`, env, ...(deps.openx || {}) },   // 探测预算用内源默认的 3 秒
         expect: { file: openxFile(version), bytes: ar.size, sha256: ar.hash },
         dest: path.join(job, 'component.zip'), fetchImpl: fetch, signal,
-        onProgress: p => set({ received: p.received, total: p.total, percent: p.total ? Math.min(99, Math.floor(p.received / p.total * 100)) : 0,
+        onProgress: p => set({ received: p.received, total: p.total, speed: p.speed, etaSec: p.etaSec, sourceId: p.sourceId, sourceName: p.sourceName, openxMiss: p.openxMiss || null, percent: p.total ? Math.min(99, Math.floor(p.received / p.total * 100)) : 0,
           message: `正在下载识别组件 v${version} ${p.total ? Math.min(99, Math.floor(p.received / p.total * 100)) + '%' : ''}${p.sourceName ? '（' + p.sourceName + '）' : ''}` }) });
       if (!result.ok) throw new Error(result.cancelled ? '已取消' : '识别组件下载失败：' + (result.attempts || []).map(a => `${a.name}：${a.reason}`).join('；'));
       if (signal.aborted) throw new Error('已取消');

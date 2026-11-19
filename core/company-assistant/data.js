@@ -165,14 +165,26 @@ function eventSource(base, raw, startEvidence) {
   return { sourceId: `${base}:r${recordHash(raw)}`, sourceBaseId: base,
     occurrenceId: `${base}:t${recordHash(Number.isFinite(startEvidence.at) ? startEvidence.at : startEvidence)}` };
 }
-function meetings(raw) {
-  return listIn(raw, ['meetings', 'data']).map(m => {
+// 已取消的会议（2026-11-18 群反馈：取消了的会还被检索、识别成今天的会）。
+// WeLink 会议接口的取消字段没有真机样本，只认明确的写法：布尔取消标记为真、状态字段的值恰好是 cancel/cancelled/已取消。
+// 不看标题（2026-11-19 审查：主题被人写成「已取消:」开头的正常会会被误滤）；拿不准的（状态是数字码等）照旧保留。
+// 取消字段待真实样本核对（2026-11-19 远程取样未成功）：字段缺失或值拿不准时一律不过滤。
+const CANCEL_FLAGS = ['isCancelled', 'isCanceled', 'cancelled', 'canceled', 'isCancel'];
+const CANCEL_STATES = ['meetingStatus', 'meetingState', 'conferenceState', 'confStatus', 'status', 'state'];
+function isCancelledMeeting(m) {
+  if (!m || typeof m !== 'object') return false;
+  if (CANCEL_FLAGS.some(k => m[k] === true || m[k] === 'true')) return true;
+  return CANCEL_STATES.some(k => typeof m[k] === 'string' && /^(?:cancel(?:l?ed)?|已取消)$/i.test(m[k].trim()));
+}
+// withCancelled：分页汇总要知道哪些实例被取消（撤回前页的正常版本、按实例计数），此时保留取消的行并标 cancelled。
+function meetings(raw, { withCancelled = false } = {}) {
+  return listIn(raw, ['meetings', 'data']).filter(m => withCancelled || !isCancelledMeeting(m)).map(m => {
     const id = String(first(m, ['meetingId', 'enMeetingId', 'id', 'confId']) ?? '');
     const times = eventTimes(m, ['meetingStartTime', 'startTime', 'start', 'estimatedStartTime'], ['meetingEndTime', 'endTime', 'end', 'estimatedEndTime']);
     const users = Array.isArray(m.meetingUsers) ? m.meetingUsers : [];
     return { ...eventSource('meeting:' + id, m, times.timeEvidence.start), id, subject: String(first(m, ['subject', 'topic', 'title']) ?? '（无主题）'), ...times,
       location: String(first(m, ['location', 'room']) ?? ''), attendees: users.length,
-      hasFiles: Array.isArray(m.files) ? m.files.length : 0 };
+      hasFiles: Array.isArray(m.files) ? m.files.length : 0, ...(withCancelled && isCancelledMeeting(m) ? { cancelled: true } : {}) };
   }).filter(m => m.id);
 }
 
@@ -410,4 +422,4 @@ function eventInRange(m, range) {
   return true;
 }
 
-module.exports = { DISPLAY_ZONE, dayKey, clock, displayTime, dateParts, timeValue, toMs, explicitBoolean, listIn, textOf, short, namesOf, messageRecords, conversationRecords, messageId, meetings, calendarEvents, isCancelledCalendarEvent, conversations, messages, mails, awaiting, reviewAnchor, relatedGroups, sourceIndex, todaysMeetings, unresolvedMeetings, eventTimeUnknown, eventInRange, mergeMeetings };
+module.exports = { DISPLAY_ZONE, dayKey, clock, displayTime, dateParts, timeValue, toMs, explicitBoolean, listIn, textOf, short, namesOf, messageRecords, conversationRecords, messageId, meetings, isCancelledMeeting, calendarEvents, isCancelledCalendarEvent, conversations, messages, mails, awaiting, reviewAnchor, relatedGroups, sourceIndex, todaysMeetings, unresolvedMeetings, eventTimeUnknown, eventInRange, mergeMeetings };

@@ -1561,17 +1561,22 @@
       // r58：要装 pi 时，按钮旁显示「下载源：公司内源」（pi 与配套 Node 的内源状态）。
       let slot = document.querySelector('[data-dl-source="cli:pi"]');
       if (!install.hidden && !slot) { install.insertAdjacentHTML('afterend', require('./download-source-view').slotHtml('cli:pi', 'span')); slot = document.querySelector('[data-dl-source="cli:pi"]'); }
-      if (slot) { slot.hidden = install.hidden; if (!install.hidden) void require('./download-source-view').fill(slot).catch(() => {}); }
+      if (slot) { slot.hidden = install.hidden || piInstalling; if (!install.hidden) void require('./download-source-view').fill(slot).catch(() => {}); }
     }
   }
   async function installPiFromLaunch() {
     if (piInstalling) return;
     piInstalling = true; paintPiNote();
+    // r59：按钮下方挂统一进度条（进度、速度、剩余时间、来源）。
+    const button = document.querySelector('[data-dl-source="cli:pi"]') || null;
+    let host = document.querySelector('[data-pi-dlp]');
+    if (!host && button) { button.insertAdjacentHTML('afterend', '<div data-pi-dlp></div>'); host = document.querySelector('[data-pi-dlp]'); }
+    const unmount = require('./download-progress-view').mount(host, 'cli:pi', { title: '安装 pi', ipcRenderer });
     try {
       const result = await ipcRenderer.invoke('cli-tools:install', { id: 'pi' });
       if (!result?.ok) setError('安装 pi 没有成功：' + (result?.error || '未知原因'));
     } catch (error) { setError('安装 pi 没有成功：' + error.message); }
-    finally { piInstalling = false; await loadModelCatalog('pi'); paint(); }
+    finally { piInstalling = false; setTimeout(unmount, 7000); await loadModelCatalog('pi'); paint(); }
   }
 
   function paint() {

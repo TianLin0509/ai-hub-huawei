@@ -296,7 +296,9 @@ async function downloadAll({ sources, version, expect, dest, fetchImpl, signal, 
       }
     }
   }
-  const result = await downloadFromSources({ sources: openxOn && openxSource.publicOrder((openx && openx.env) || process.env) ? orderSources(sources) : sources, version, expect, dest, fetchImpl, signal, onProgress, onAttempt, idleTimeoutMs, connectTimeoutMs, attempts });
+  // r59：内源没命中时，后面各源的进度带上 openxMiss（原因），统一进度条把来源标成「备用」并写明为什么没走内源。
+  const fallbackProgress = openxNote && onProgress ? p => onProgress({ ...p, openxMiss: openxNote.reason || (openxNote.status === 'failed' ? '内源下载失败' : '内源没有这个包') }) : onProgress;
+  const result = await downloadFromSources({ sources: openxOn && openxSource.publicOrder((openx && openx.env) || process.env) ? orderSources(sources) : sources, version, expect, dest, fetchImpl, signal, onProgress: fallbackProgress, onAttempt, idleTimeoutMs, connectTimeoutMs, attempts });
   return openxNote ? { ...result, openx: openxNote } : result;
 }
 // 公开版下载源顺序（2026-11-16 定）：公司内源 openx → GitHub → 其他官方源 → 阿里云（自家服务器只做最后兜底）。
@@ -316,6 +318,13 @@ function sourceRank(source) {
   if (id === 'github' || GITHUB_HOST.test(host)) return 0;
   if (/^aliyun/.test(id) || [source.url, source.files, source.manifest].some(u => u && OWN_MIRROR_PREFIXES.some(p => String(u).startsWith(p)))) return 2;
   return 1;
+}
+// 下载源的人话名（r59 统一进度条用）：自家下载服务器 → 阿里云，GitHub → GitHub，其余用主机名。
+function friendlySourceName(url) {
+  const u = String(url || '');
+  if (OWN_MIRROR_PREFIXES.some(p => u.startsWith(p))) return '阿里云';
+  let host = ''; try { host = new URL(u).hostname; } catch (_) { return ''; }
+  return GITHUB_HOST.test(host) ? 'GitHub' : host;
 }
 function orderSources(sources) {
   return (sources || []).map((s, i) => ({ s, i, r: sourceRank(s) })).sort((a, b) => a.r - b.r || a.i - b.i).map(x => x.s);
@@ -342,4 +351,4 @@ async function downloadFromSources({ sources, version, expect, dest, fetchImpl, 
   return { ok: false, cancelled: !!(signal && signal.aborted), attempts };
 }
 
-module.exports = { orderSources, alreadyComplete, promote, checkManifests, downloadWithFallback, fileUrl, looksLikeWebPage, reasonOf, fmtBytes };
+module.exports = { friendlySourceName, orderSources, alreadyComplete, promote, checkManifests, downloadWithFallback, fileUrl, looksLikeWebPage, reasonOf, fmtBytes };

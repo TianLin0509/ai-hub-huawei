@@ -71,7 +71,10 @@ function registerEnvCheckIpc(ipcMain, deps) {
         // 识别组件一键更新（r54）：和 PPT 页的【一键更新】共用同一个安装器，同时点只装一次。
         const ppt = deps.assistant()?.ppt;
         if (!ppt?.ocr) throw new Error('这个版本没有 PPT 联动');
-        const state = await ppt.ocr.install();
+        // r59：安装过程推给组件中心画统一进度条。
+        const off = ppt.ocr.onState?.(s => deps.send?.('components:ocr-state', s));
+        let state;
+        try { state = await ppt.ocr.install(); } finally { off?.(); }
         if (ppt.doctor) ppt.doctor.cached = null;
         return state.phase === 'done' ? { ok: true, message: state.message } : { ok: false, error: state.error || state.message || '更新未完成' };
       }

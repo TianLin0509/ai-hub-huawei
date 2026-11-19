@@ -179,11 +179,10 @@
       body += `<div class="au-section">更新源（按顺序尝试，失败自动换下一个）</div><ul class="au-sources">${(s.attempts && s.attempts.length) ? sourceRows() : checkRows()}</ul>${allowBox()}`;
       foot = '<button class="au-btn" data-au="close">稍后</button><button class="au-btn primary" data-au="download">下载更新</button>';
     } else if (s.phase === 'downloading') {
-      const p = s.progress || {}, pct = p.total ? Math.min(100, p.received / p.total * 100) : 0;
+      // r59：统一进度条（进度、速度、剩余时间、来源），和其他安装一个样式。
+      const p = s.progress || {};
       const current = (s.attempts || []).find(a => a.status === 'downloading');
-      body += `<div class="au-section">正在从「${esc(current ? current.name : '…')}」下载</div>`
-        + `<div class="au-progress"><i style="width:${pct.toFixed(1)}%"></i></div>`
-        + `<div class="au-progress-meta"><span>${mb(p.received || 0)} / ${mb(p.total || 0)}${p.speed ? ` · ${mb(p.speed)}/s` : ''}</span><span>${eta(p.etaSec)}</span></div>`
+      body += require('./download-progress-view').html({ ...p, sourceId: p.sourceId || (current && current.id), sourceName: p.sourceName || (current && current.name), phase: p.total ? 'downloading' : 'connecting' }, { title: `下载 v${(latest && latest.version) || ''} 更新包` })
         + `<ul class="au-sources">${sourceRows()}</ul>`;
       foot = '<button class="au-btn" data-au="cancel">取消</button>';
     } else if (s.phase === 'ready') {

@@ -59,7 +59,12 @@ function createCodeAgentSetup({ document, ipcRenderer }) {
     const say = state => {
       const target = dialog; if (!target?.isConnected || !state?.message) return;
       target.dataset.installTouched = '1';
-      target.querySelector('[role="status"]').textContent = state.message;
+      // r59：安装进行中显示统一进度条（官方安装程序不报字节，用动态条 + 当前步骤 + 来源）。
+      const active = installClient.active(state);
+      let host = target.querySelector('[data-setup-dlp]');
+      if (!host) { target.querySelector('[role="status"]').insertAdjacentHTML('afterend', '<div data-setup-dlp></div>'); host = target.querySelector('[data-setup-dlp]'); }
+      host.innerHTML = active ? require('./download-progress-view').html({ phase: state.phase === 'verifying' ? 'verifying' : 'installing', message: state.message, sourceName: 'CodeAgent 官方渠道' }, { title: '安装 CodeAgent' }) : '';
+      target.querySelector('[role="status"]').textContent = active ? '' : state.message;
       target.querySelector('[data-setup="csop"]').hidden = !(state.downloadPage && /need-download|error/.test(state.phase));
       target.querySelector('[data-setup="install"]').disabled = installClient.active(state);
     };

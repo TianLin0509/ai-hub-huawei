@@ -47,7 +47,7 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
       <div class="pptw-scroll"><div class="pptw-body">
       <div class="pptw-guide-slot" data-ppt-guide-slot></div>
       <div class="pptw-tool-hint" data-ppt-tool-hint></div>
-      <p data-ppt-notice class="pptw-notice" role="status" aria-live="polite"></p>
+      <p data-ppt-notice class="pptw-notice" role="status" aria-live="polite"></p><div data-ppt-dlp class="pptw-dlp"></div>
       <section class="pptw-workspace" data-ppt-search-panel><div class="pptw-main">
         <div class="pptw-hero"><span class="pptw-hero-kicker"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.2 6.3 6.3 2.2-6.3 2.2L12 19.5l-2.2-6.3L3.5 11l6.3-2.2z"/></svg>AI 找页</span><h2>说清这页要讲什么，AI 帮你翻遍素材库</h2><p>AI 会换几种说法检索、逐页读原文核对，再告诉你推荐哪几页、为什么；关键词命中同时即时显示</p></div>
         <form data-ppt-form class="pptw-search"><label for="company-ppt-query" class="pptw-sr">描述要找的页面</label><div class="pptw-bar"><svg class="pptw-bar-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><input id="company-ppt-query" data-ppt-query autocomplete="off" placeholder="描述这页要讲什么，例如：证明 MU 配对增益的外场对比页"><label class="pptw-folder-label" for="company-ppt-folder"><span class="pptw-sr">素材范围</span><select id="company-ppt-folder" data-ppt-folder><option value="">全部素材文件夹</option></select></label><button type="submit" data-ppt-search class="pptw-btn pri pptw-ai-go" title="AI 检索 + 关键词即时命中（回车）"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.2 6.3 6.3 2.2-6.3 2.2L12 19.5l-2.2-6.3L3.5 11l6.3-2.2z"/></svg>AI 找页</button></div>
@@ -300,7 +300,7 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
     const component = ['needs_component', 'updating'].includes(job.state), updating = job.state === 'updating';
     const componentActions = component ? `<button type="button" class="pptw-btn pri" data-ppt="conversion-update-component"${updating ? ' disabled' : ''}>${updating ? `正在更新${job.progress ? ' ' + Number(job.progress) + '%' : '…'}` : job.resume === 'build' ? '一键更新并继续' : '一键更新'}</button>` : '';
     const doctorUpgrade = job.needsDoctorUpgrade ? '<button type="button" class="pptw-btn pri" data-ppt="doctor-install">一键升级 Doctor（内源优先）</button>' + sourceView.slotHtml('ppt-doctor', 'span') : '';
-    const componentNote = component ? `${sourceView.slotHtml('ppt-ocr', 'span')}<span>只更新 PPT Doctor 的识别组件，不改动 Doctor 本体和素材库；更新完自动继续这张图${job.resume === 'build' ? '（沿用 CodeAgent 已提交的修正）' : ''}。</span>${updating ? `<span class="pptw-conv-bar" aria-hidden="true"><i style="width:${Math.max(3, Math.min(100, Number(job.progress) || 0))}%"></i></span>` : ''}` : '';
+    const componentNote = component ? `${sourceView.slotHtml('ppt-ocr', 'span')}<span>只更新 PPT Doctor 的识别组件，不改动 Doctor 本体和素材库；更新完自动继续这张图${job.resume === 'build' ? '（沿用 CodeAgent 已提交的修正）' : ''}。</span>${updating ? require('./download-progress-view').html({ ...(job.download || {}), phase: job.download?.phase || 'connecting', message: job.download?.phase === 'downloading' ? '' : job.step }, { title: '更新识别组件' }) : ''}` : '';
     // 主区：画面 + 当前状态 + 可用操作。AI 处理中画面底部才有流光（只用于 AI 思考中）。
     page.querySelector('[data-ppt-conversion]').innerHTML = `<div class="pptw-conv-main" data-conversion-state="${esc(job.state)}"><div class="pptw-conv-stage${running && !updating ? ' pptw-thinking' : ''}">${preview ? `<img class="pptw-conversion-preview" src="${esc(preview)}" alt="图片转字近似预览">` : '<span class="pptw-empty">识别完成后在这里显示预览</span>'}</div><div class="pptw-conv-status"><b class="${job.state === 'error' ? 'is-error' : ''}">${esc(job.error || job.step || job.state)}</b>${r ? `<span>已生成可编辑PPT · ${esc(r.mode === 'image_fallback' ? 'OCR与图像算法处理，尚未经Agent看图核对' : 'Agent已提交差异')} · 预览为近似效果，需在PowerPoint中复核。</span>${r.pixel_gate?.passed === false ? '<span class="is-warn">质量检查尚未通过，请核对右侧复核项。</span>' : ''}` : ''}${componentNote}</div><div class="pptw-conv-actions">${r ? '<button type="button" class="pptw-btn pri" data-ppt="conversion-open">打开 PPT</button>' : ''}${componentActions}${doctorUpgrade}${recovery}${job.state === 'error' && job.seed && !job.needsDoctorUpgrade ?`<button type="button" class="pptw-btn ${job.needsOutputCheck ? 'sec' : 'pri'}" data-ppt="conversion-retry">${retryLabel}</button><button type="button" class="pptw-btn sec" data-ppt="conversion-fallback">${job.needsOutputCheck ? '已检查产物，用 OCR 初稿装配' : '先用 OCR 初稿装配'}</button>` : ''}</div></div>`;
     void sourceView.fill(page.querySelector('[data-ppt-conversion]'), { ipcRenderer });
@@ -384,14 +384,21 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
     if (name === 'conversion-workdir') return call('ppt-imgtext-workdir', { jobId: lastConversionId() });
     if (name === 'doctor-install') {
       button.disabled = true; notice('正在下载并安装 PPT Doctor，可能需要几分钟，不会动原来的安装。');
-      const progress = (_event, state) => { if (state?.message) notice(state.message + (state.phase === 'downloading' && state.total > 0 && state.received > 0 ? ` ${Math.min(99, Math.floor(state.received / state.total * 100))}%` : '')); };
+      // r59：统一进度条（进度、速度、剩余时间、来源），放在提示行下面，切页签也看得到。
+      const bar = state => { const host = page && page.querySelector('[data-ppt-dlp]'); if (host) host.innerHTML = state ? require('./download-progress-view').html({ ...state, message: state.phase === 'downloading' ? '' : state.message }, { title: '安装 PPT Doctor' }) : ''; };
+      const progress = (_event, state) => { if (!state) return; bar(state); };
+      bar({ phase: 'connecting' });
       ipcRenderer.on('components:doctor-state', progress);
+      let ok = false;
       try {
         const r = await ipcRenderer.invoke('components:doctor-install');
         if (!r?.ok) { notice(r?.error || '安装未完成，可以重试或用镜像下载'); return; }
-        notice(r.state?.message || 'PPT Doctor 已安装');
+        ok = true; bar({ ...(r.state || {}), phase: 'done', message: r.state?.message || 'PPT Doctor 已安装' }); notice('');
         const status = await call('ppt-status'); if (status?.ppt) renderStatus(status.ppt);
-      } finally { ipcRenderer.removeListener('components:doctor-state', progress); button.disabled = false; }
+      } finally {
+        ipcRenderer.removeListener('components:doctor-state', progress); button.disabled = false;
+        if (ok) setTimeout(() => bar(null), 6000); else bar(null);
+      }
       return;
     }
     if (name === 'download' || name === 'download-backup') {

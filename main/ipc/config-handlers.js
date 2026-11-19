@@ -134,7 +134,66 @@ function toEditableConfig(config) {
     aliyunBearerToken: operations.aliyunMonitor.bearerToken,
     operationsRestoreRoot: operations.restoreRoot,
     teamAutoApproveLeads: config.team?.autoApproveLeads !== false,
+    ...workspaceRootForm(config),
   };
+}
+
+// 「新建会话默认工作目录」表单字段：设置值、环境变量（只读，优先）、当前实际生效的目录。
+function workspaceRootForm(config = {}) {
+  const storageRoots = require('../../core/storage-roots.js');
+  const envRoot = String(process.env.AI_HUB_WORKSPACE_ROOT || '').trim();
+  let effective = '';
+  try { effective = new (require('../../core/workspace-service.js').WorkspaceService)().getWorkspaceRoot(); } catch {}
+  return {
+    defaultWorkspaceRoot: config.defaultWorkspaceRoot || '',
+    workspaceRootEnv: envRoot,
+    workspaceRootEffective: effective || storageRoots.sessionWorkspaceRoot() || '',
+    // 启动时设置里的目录不存在或不合法、已当没设（main.js），设置页据此提示。
+    workspaceRootInvalid: storageRoots.configuredWorkspaceRootError() || '',
+  };
+}
+
+// 默认工作目录不能落在 Hub 自己的程序目录、数据目录里（含生产与社区版默认数据目录）。
+function hubProtectedDirs() {
+  const path = require('path');
+  const os = require('os');
+  const dirs = [path.resolve(__dirname, '..', '..'), path.dirname(process.execPath),
+    path.join(os.homedir(), '.claude-session-hub'), path.join(os.homedir(), '.ai-hub-community')];
+  try { dirs.push(require('../../core/data-dir.js').getHubDataDir()); } catch {}
+  return dirs.filter(Boolean);
+}
+
+// 启动时重新校验设置里的根（main.js）：不存在、或落在不允许的位置，就当没设。
+function defaultRootCheckOptions() {
+  return { home: require('os').homedir(), protectedDirs: hubProtectedDirs() };
+}
+
+function startupDefaultWorkspaceRoot(value) {
+  return require('../../core/storage-roots.js').setConfiguredWorkspaceRoot(value, { ...defaultRootCheckOptions(), requireExisting: true });
+}
+
+// 空值 = 恢复默认；非空必须是绝对路径、不能是盘根/主目录/Hub 目录，不存在就建（建不了说明路径不能用）。
+// 新建的或空的目录顺手放 .aiwork-root 标记：这是专门给新会话用的工作根，直接平铺；
+// 已有内容又没标记的（可能是 C:\Workspace 这类组织根）不补，仍走原来的组织根守卫。
+function validateDefaultWorkspaceRoot(value, checkOpts = defaultRootCheckOptions()) {
+  const raw = String(value || '').trim();
+  if (!raw) return { ok: true, value: '' };
+  const path = require('path');
+  const reason = require('../../core/storage-roots.js').defaultRootRejectReason(raw, checkOpts);
+  if (reason) return { ok: false, message: reason };
+  let flat = false;
+  try {
+    const existed = fs.existsSync(raw);
+    fs.mkdirSync(raw, { recursive: true });
+    if (!fs.statSync(raw).isDirectory()) return { ok: false, message: '这个路径是文件，不是文件夹' };
+    const { WORK_ROOT_MARKER } = require('../../core/workspace-service.js');
+    const marker = path.join(raw, WORK_ROOT_MARKER);
+    if (!existed || fs.readdirSync(raw).length === 0) fs.writeFileSync(marker, '');
+    flat = fs.existsSync(marker);
+  } catch (error) {
+    return { ok: false, message: `建不了这个文件夹：${error && error.code || error && error.message || '未知原因'}` };
+  }
+  return { ok: true, value: path.resolve(raw), flat };
 }
 
 const NOTIFICATION_UPDATE_FIELDS = [
@@ -299,6 +358,14 @@ function buildConfigJsonUpdate(existing, newConfig) {
         },
         ...(H('operationsRestoreRoot') ? { restoreRoot: newConfig.operationsRestoreRoot } : {}),
       }),
+    } : {}),
+    ...(H('defaultWorkspaceRoot') ? {
+      workspace: (() => {
+        const base = existing.workspace && typeof existing.workspace === 'object' && !Array.isArray(existing.workspace) ? { ...existing.workspace } : {};
+        const value = String(newConfig.defaultWorkspaceRoot || '').trim();
+        if (value) base.default_root = value; else delete base.default_root;
+        return base;
+      })(),
     } : {}),
     ...(H('teamAutoApproveLeads') ? {
       team: { ...(existing.team && typeof existing.team === 'object' && !Array.isArray(existing.team) ? existing.team : {}), autoApproveLeads: newConfig.teamAutoApproveLeads !== false },
@@ -690,9 +757,19 @@ function registerConfigIpc(ipcMain, deps) {
       return { success: false, error: 'config_read_failed' };
     }
 
+    const hasWorkspaceRoot = Object.prototype.hasOwnProperty.call(newConfig || {}, 'defaultWorkspaceRoot');
+    if (hasWorkspaceRoot) {
+      const checked = validateDefaultWorkspaceRoot(newConfig.defaultWorkspaceRoot);
+      if (!checked.ok) return { success: false, error: 'workspace_root_invalid', message: checked.message };
+      newConfig = { ...newConfig, defaultWorkspaceRoot: checked.value };
+    }
     const merged = buildConfigJsonUpdate(existing, newConfig);
     saveConfig(merged);
     clearSessionManagerConfigCache();
+    if (hasWorkspaceRoot) {
+      require('../../core/storage-roots.js').setConfiguredWorkspaceRoot(newConfig.defaultWorkspaceRoot);
+      sendToRenderer('workspace-root-changed', workspaceRootForm({ defaultWorkspaceRoot: newConfig.defaultWorkspaceRoot }));
+    }
     if (NOTIFICATION_UPDATE_FIELDS.some(key => Object.prototype.hasOwnProperty.call(newConfig, key))) {
       sendToRenderer('completion-notification-config-changed', completionNotificationState());
     }
@@ -726,6 +803,10 @@ function registerConfigIpc(ipcMain, deps) {
 }
 
 module.exports = {
+  validateDefaultWorkspaceRoot,
+  startupDefaultWorkspaceRoot,
+  hubProtectedDirs,
+  workspaceRootForm,
   buildConfigJsonUpdate,
   completionNotificationState,
   registerConfigIpc,

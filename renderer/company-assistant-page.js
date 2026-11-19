@@ -255,7 +255,8 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     const s = d.cliSearch || {};
     if (s.state === 'searching') return `<span class="ca-chip run">正在查找 welink-cli…${CLI_STAGE[s.stage] ? '（' + CLI_STAGE[s.stage] + '）' : ''}</span>`;
     const inst = d.cliInstall || {};
-    if (['checking', 'downloading', 'verifying'].includes(inst.phase)) return `<span class="ca-chip run">${esc(inst.message || '正在安装 welink-cli…')}</span>`;
+    // r59：统一进度条（内部 npm 源不报字节，用动态条 + 当前步骤 + 来源）。
+    if (['checking', 'downloading', 'verifying'].includes(inst.phase)) return `<div class="ca-dlp" style="flex:1 1 100%;min-width:240px">${require('./download-progress-view').html({ phase: inst.phase, message: inst.message || '正在安装 welink-cli…', sourceName: '公司内部 npm 源' }, { title: '安装 welink-cli' })}</div>`;
     const installBtn = d.cliInstallAvailable ? `<button type="button" class="ca-btn small primary" data-ca="install-cli">${inst.phase === 'error' ? '重试安装' : '一键安装'}</button>` : '';
     return `<span class="ca-chip bad">${inst.phase === 'error' ? esc(inst.error || '安装未完成') : s.state === 'error' ? '查找未完成' : '尚未检测到 welink-cli'}</span>${installBtn}<button type="button" class="ca-btn small" data-ca="find-cli">再找一次</button><button type="button" class="ca-btn small" data-ca="pick-cli">手动选择…</button>`;
   }
@@ -616,6 +617,13 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       if (!r.canceled) { await load(); reopenSettings(); showMessage?.('助理数据目录已保存，重启 Hub 后生效'); }
       return;
     }
+    if (verb === 'pick-work-dir' || verb === 'reset-work-dir') {
+      try {
+        const r = await call(verb === 'pick-work-dir' ? verb : 'set-settings', verb === 'reset-work-dir' ? { workDir: '' } : {});
+        if (!r.canceled) { await load(); reopenSettings(); showMessage?.(verb === 'reset-work-dir' ? '工作目录改回跟随最近一次新建会话' : '工作目录已保存，下一个问题起生效'); }
+      } catch (error) { showMessage?.('没有保存：' + error.message); }
+      return;
+    }
   }
 
   async function openSource(source, day) {
@@ -781,7 +789,12 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       ${storage.restartRequired ? `<p class="ca-note">已保存：${esc(storage.requested)}；重启 Hub 后生效。</p>` : ''}
       ${storage.error ? `<p class="ca-note" role="alert">${esc(storage.error)}</p>` : ''}
       <p class="ca-note">留空使用默认位置。重启时复制全部助理数据，设置文件仍留在默认位置；已有数据的目标目录直接使用。旧目录保留，确认新目录正常后可手动删除旧数据（默认目录的 settings.json 请保留）。换目录后，CodeAgent 的旧会话不会出现在新目录的历史里。</p></fieldset>` : '';
-    return `<fieldset><legend>WeLink 登录</legend><div class="ca-row">${loginLine}</div></fieldset>${cliLine}${storageLine}
+    const wd = d.workDir || {};
+    const workDirLine = `<fieldset class="col"><legend>我的工作目录</legend>
+      <div class="ca-row"><span class="ca-note" data-slot="work-dir" title="${esc(wd.path || '')}">${wd.path ? esc(wd.path) + (wd.from === 'recent' ? '（自动：最近一次新建会话的目录，只读）' : '（你选的，可读写）') : wd.from === 'manual-missing' ? `你选的 ${esc(wd.missing || '')} 已不存在，暂不告诉助理；重新选择或改回跟随最近会话` : '还没有：新建一个会话后自动用它的目录，或手动选择'}</span>
+        <button type="button" class="ca-btn small" data-ca="pick-work-dir">选择文件夹</button>${wd.from === 'manual' || wd.from === 'manual-missing' ? '<button type="button" class="ca-btn small" data-ca="reset-work-dir">跟随最近会话</button>' : ''}</div>
+      <p class="ca-note">提问时告诉助理你的文件在这里。自动取到的目录只让它读；手动选过的才允许它在这里写文件。助理自己的数据仍放在助理数据目录。</p></fieldset>`;
+    return `<fieldset><legend>WeLink 登录</legend><div class="ca-row">${loginLine}</div></fieldset>${cliLine}${workDirLine}${storageLine}
       <fieldset class="col"><legend>公司邮箱（邮件和日历要用）</legend>
         <div class="ca-row">${s.emailFrom === 'welink' && s.email ? `<span>邮箱（自动读取）：${esc(s.email)}</span>` : `<input type="email" data-f="email" placeholder="自动读取失败，可补填公司邮箱" value="${esc(s.email || '')}">`}<button type="button" class="ca-btn primary" data-x="mail">${d.calendarNeedsSetup ? '配置邮件和日历' : '重新配置'}</button>${from ? `<span class="ca-note">${from}</span>` : ''}</div>
         <p class="ca-note" data-f="mail-msg">${d.calendarNeedsSetup ? '还没接入。' : '已接入。'}只让 welink-cli 按邮箱找一次公司邮件服务器，不发邮件。</p></fieldset>

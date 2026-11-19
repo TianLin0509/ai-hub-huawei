@@ -142,6 +142,30 @@ function createConfigModalController({
     return readOperationsForm();
   }
 
+  // 新建会话默认工作目录：环境变量 AI_HUB_WORKSPACE_ROOT 设了就以它为准，输入框只读并说明原因。
+  function setWorkspaceRootForm(config = {}) {
+    const input = configEl('cfg-workspace-root');
+    if (!input) return;
+    const envRoot = config.workspaceRootEnv || '';
+    input.value = envRoot ? envRoot : (config.defaultWorkspaceRoot || '');
+    input.placeholder = config.workspaceRootEffective || '';
+    input.disabled = !!envRoot;
+    input.dataset.envLocked = envRoot ? '1' : '';
+    if (configEl('cfg-workspace-root-pick')) configEl('cfg-workspace-root-pick').disabled = !!envRoot;
+    const note = configEl('cfg-workspace-root-note');
+    if (note) note.textContent = envRoot
+      ? '当前由环境变量 AI_HUB_WORKSPACE_ROOT 指定，这里改不了；去掉环境变量后才按这里的设置。'
+      : config.workspaceRootInvalid
+        ? `${config.workspaceRootInvalid}（现在用的是 ${config.workspaceRootEffective || '默认位置'}）`
+        : `新建会话选「默认工作目录」时开在这里${config.defaultWorkspaceRoot ? '' : `（现在是 ${config.workspaceRootEffective || '默认位置'}）`}，保存后下一个新会话生效；已有会话不动。`;
+  }
+
+  function readWorkspaceRootForm() {
+    const input = configEl('cfg-workspace-root');
+    if (!input || input.dataset.envLocked === '1') return {};
+    return { defaultWorkspaceRoot: input.value.trim() };
+  }
+
   function setNotificationTestStatus(message, state = '') {
     const status = configEl('config-notification-status');
     if (!status) return;
@@ -413,6 +437,7 @@ function createConfigModalController({
       savedCardDisplay = setCardDisplayForm(cfg);
       setNotificationForm(cfg);
       setOperationsForm(cfg);
+      setWorkspaceRootForm(cfg);
       if (configEl('cfg-team-auto-approve')) configEl('cfg-team-auto-approve').checked = cfg.teamAutoApproveLeads !== false;
       updateClaudeBackendControls();
       updateConfigSummaries();
@@ -518,6 +543,13 @@ function createConfigModalController({
     const cardFamily = configEl('cfg-card-font-family');
     if (cardSize) cardSize.addEventListener('input', previewCardDisplay);
     if (cardFamily) cardFamily.addEventListener('change', previewCardDisplay);
+    const rootPick = configEl('cfg-workspace-root-pick');
+    if (rootPick) rootPick.addEventListener('click', async () => {
+      try {
+        const picked = await ipcRenderer.invoke('workspace:pick-default-root');
+        if (picked && configEl('cfg-workspace-root')) configEl('cfg-workspace-root').value = picked;
+      } catch {}
+    });
     const notificationTest = configEl('config-notification-test');
     if (notificationTest) notificationTest.addEventListener('click', testCompletionNotification);
     modal.addEventListener('click', (e) => { if (e.target === modal) closeConfigModal(); });
@@ -536,6 +568,7 @@ function createConfigModalController({
         sessionModelUnavailablePolicy: configEl('cfg-model-unavailable-policy')?.value || 'auto-switch-notify',
         proxy: document.getElementById('cfg-proxy').value.trim() || undefined,
         ...readCardDisplayForm(),
+        ...readWorkspaceRootForm(),
         notificationIncludePreview: notificationForm.notificationIncludePreview,
         notificationNotifyGroupChats: notificationForm.notificationNotifyGroupChats,
         feishuTarget: notificationForm.feishuTarget,
@@ -576,6 +609,9 @@ function createConfigModalController({
           }
           renderAccountUsage();
           savedCardDisplay = setCardDisplayForm(newConfig);
+          if ('defaultWorkspaceRoot' in newConfig) {
+            try { setWorkspaceRootForm(await ipcRenderer.invoke('get-hub-config-raw')); } catch {}
+          }
           try { document.dispatchEvent(new CustomEvent('hub-config-saved', { detail: newConfig })); } catch {}
           msg.textContent = notificationTarget
             ? (notificationForm.notificationTargetEnabled
@@ -586,7 +622,7 @@ function createConfigModalController({
           msg.style.display = 'block';
           setTimeout(() => { msg.style.display = 'none'; }, 4000);
         } else {
-          throw new Error('save failed');
+          throw new Error(result && result.message || 'save failed');
         }
       } catch (err) {
         msg.textContent = '保存失败: ' + (err.message || '未知错误');

@@ -10,14 +10,14 @@
   const STATE = { ok: '正常', warn: '注意', bad: '有问题', off: '不适用', pending: '检测中' };
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   let dialog = null, result = null, running = null, expanded = new Set(), message = '', messageBad = false;
-  let tab = 'features', cliState = null, doctorState = null, installing = new Set(), recheckOnFocus = false;
+  let tab = 'features', cliState = null, doctorState = null, ocrState = null, installing = new Set(), recheckOnFocus = false;
   const COMPONENTS = new Set(['codeagent', 'claude', 'codex', 'dsh', 'git-bash', 'node', 'welink', 'ppt-doctor']);
   const INSTALLABLE = new Set(['claude', 'codex', 'dsh']);
   // r58：组件中心每个会下载的组件都显示「下载源：公司内源」（renderer/download-source-view.js）。
   const sourceView = require('./download-source-view');
   const SOURCE_LABEL = { 'ppt-doctor': 'PPT Doctor 本体', 'ppt-ocr': '识别组件' };
   const SOURCE_POINT = { claude: 'cli:claude', codex: 'cli:codex', dsh: 'cli:dsh', git: 'cli:git', 'git-bash': 'cli:git', codeagent: 'codeagent', welink: 'welink', pi: 'cli:pi', node: 'cli:node', 'ppt-doctor': ['ppt-doctor', 'ppt-ocr'] };
-  const ACTIVE = new Set(['checking', 'downloading', 'extracting', 'verifying', 'installing']);
+  const ACTIVE = new Set(['checking', 'downloading', 'extracting', 'verifying', 'installing', 'probing', 'npm-fallback']);
 
   function injectStyle() {
     if (document.getElementById('env-check-style')) return;
@@ -83,11 +83,17 @@
       : `<button type="button" class="ec-btn" data-ec-install="${esc(id)}" ${another ? 'disabled title="请等待当前 CLI 安装结束"' : ''}>${componentState(id)?.phase === 'error' ? '重试安装' : esc(label || '一键安装')}</button>`;
   }
   function progressHtml(id) {
+    // PPT Doctor 一行下面还挂着「识别组件」的更新进度（r59）。
+    const ocr = id === 'ppt-doctor' && ocrState && ACTIVE.has(ocrState.phase) ? require('./download-progress-view').html({ ...ocrState, message: ocrState.phase === 'downloading' ? '' : ocrState.message }, { title: '更新识别组件' }) : '';
+    return oneProgressHtml(id) + ocr;
+  }
+  function oneProgressHtml(id) {
     const s = componentState(id); if (!s || s.phase === 'idle') return '';
     const labels = { checking: '正在检查安装来源…', downloading: '正在下载…', extracting: '正在解压…', verifying: '正在校验…', installing: '正在安装…', done: '安装完成', cancelled: '已取消安装', error: '安装未完成' };
     const detail = s.error || s.message || labels[s.phase] || '正在处理…';
-    const percent = s.total > 0 ? Math.min(100, Math.floor((s.received || 0) * 100 / s.total)) : null;
-    return `<div class="ec-progress" role="status">${esc(detail)}${ACTIVE.has(s.phase) && percent !== null ? ` · ${percent}%` : ''}${ACTIVE.has(s.phase) && s.etaSec > 0 ? ` · 预计剩余 ${Math.ceil(s.etaSec)} 秒` : ''}${ACTIVE.has(s.phase) && percent !== null ? `<progress max="100" value="${percent}" aria-label="安装进度"></progress>` : ''}</div>`;
+    // r59：进行中和刚装完都用统一进度条（进度、速度、剩余时间、来源）；取消、出错只留一行字。
+    if (ACTIVE.has(s.phase) || s.phase === 'done') return require('./download-progress-view').html({ ...s, message: s.phase === 'downloading' ? '' : detail }, { attrs: 'role="status"' });
+    return `<div class="ec-progress" role="status">${esc(detail)}</div>`;
   }
   function featureHtml() {
     const features = result?.features || require('../core/feature-readiness').featureReadiness(result?.items || []);
@@ -321,6 +327,7 @@
   window.__componentCenter = { open: () => open({ tab: 'components' }) };
   ipcRenderer.on('cli-tools:state', (_event, state) => { cliState = state; if (dialog?.open && tab === 'components') render(); });
   ipcRenderer.on('components:doctor-state', (_event, state) => { doctorState = state; if (dialog?.open && tab === 'components') render(); });
+  ipcRenderer.on('components:ocr-state', (_event, state) => { ocrState = state; if (dialog?.open && tab === 'components') render(); });
   ipcRenderer.on('first-run:event', (_event, event) => { if (event.type === 'done') showHint(true); });
   window.addEventListener('focus', () => { if (recheckOnFocus && dialog?.open) { recheckOnFocus = false; void run(); } });
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true }); else start();

@@ -25,11 +25,18 @@ function createMeetingHandlers(service) {
       return { ok: true, ...m.recording.deleteVideo(r.id) };
     },
     // 删除整场会议：二次确认在页面里做（Hub 自己的确认框，不弹系统窗口），这里只执行。
-    'meeting-delete': async r => ({ ok: true, ...(await m.remove(r.id)) }),
+    'meeting-delete': async r => ({ ok: true, ...(await m.remove(r.id, { alsoCopies: r.alsoCopies === true })) }),
     'meeting-frames': async r => ({ ok: true, frames: await m.frames.extract(r.id, r) }),
     'meeting-asr-install': () => ({ ok: true, asr: m.asr.install() }),
     'meeting-glossary': () => ({ ok: true, text: m.glossary.text() }),
     'meeting-glossary-save': r => ({ ok: true, ...m.glossary.save(r.text), text: m.glossary.text() }),
+    // 打开材料文件夹：选了会议就打开这一场的文件夹（不在了就报错，不建空文件夹冒充），没选就打开会议总目录（不存在时先建好）。
+    'meeting-open-folder': async r => {
+      const fs = require('node:fs'), dir = r?.id ? m.dir(r.id) : m.root;
+      if (r?.id) { if (!fs.existsSync(dir)) throw new Error(`这场会议的文件夹不在了：${dir}，可能被移走或删除了`); }
+      else fs.mkdirSync(dir, { recursive: true });
+      const error = await require('electron').shell.openPath(dir); if (error) throw new Error(error); return { ok: true, dir };
+    },
     'meeting-export': async r => { const file = m.export(r.id); require('electron').shell.showItemInFolder(file); return { ok: true, file }; },
     'meeting-sources': async () => {
       const sources = await require('electron').desktopCapturer.getSources({ types: ['window', 'screen'], thumbnailSize: { width: 320, height: 180 } });

@@ -68,6 +68,7 @@ function page(file, invoke, distribution = {}) {
     if (name === './codeagent-setup') return { createCodeAgentSetup: () => ({ accept() {}, subscribe() {}, showGuide() { opened.push('bundled-guide'); } }) };
     if (name === './net-pass-view') return { ensureCss() {}, boxHtml: () => '', bind() {} };
     if (name === './download-source-view') return { ensureCss() {}, slotHtml: () => '', html: () => '', fill: async () => [] };
+    if (name === './download-progress-view') return { ensureCss() {}, html: () => '', mount: () => () => {}, subscribe: () => () => {} };
     if (name === '../core/app-update/downloader') return require('../core/app-update/downloader');
     if (name === '../core/app-update/source-view' || name === '../core/app-update/openx-config') return require(name);
     throw new Error('Unexpected require: ' + name);

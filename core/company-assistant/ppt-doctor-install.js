@@ -47,7 +47,7 @@ function createDoctorInstaller({ dataDir, onState = () => {}, configure, fetchIm
     const root = path.resolve(dataDir, 'tools', 'ppt-doctor');
     const job = path.join(root, 'install-' + randomUUID());
     let registered = false;
-    set({ phase: 'checking', message: '正在读取安装清单…', error: null, received: 0, total: 0 });
+    set({ phase: 'checking', message: '正在读取安装清单…', error: null, received: 0, total: 0, speed: 0, etaSec: null, sourceId: null, sourceName: null, openxMiss: null });
     try {
       await fs.mkdir(job, { recursive: true });
       let chosen = null;
@@ -81,8 +81,8 @@ function createDoctorInstaller({ dataDir, onState = () => {}, configure, fetchIm
           const sizedByOpenx = sane(bytes);
           if (!sizedByOpenx) bytes = await externalSize();
           const fetchArchive = (n, viaOpenx) => {
-            set({ phase: 'downloading', message: '正在下载 PPT Doctor…', version: meta.version, latestVersion: meta.latestVersion, total: n });
-            return download({ gate: true, sources: [{ id: 'doctor', name: new URL(base).hostname, url: meta.url }],
+            set({ phase: 'downloading', message: '正在下载 PPT Doctor…', version: meta.version, latestVersion: meta.latestVersion, total: n, received: 0, speed: 0, etaSec: null, sourceId: null, sourceName: null, openxMiss: null });
+            return download({ gate: true, sources: [{ id: 'doctor', name: require('../app-update/downloader').friendlySourceName(meta.url), url: meta.url }],
               version: meta.version, openx: viaOpenx ? openx : false, expect: { file, bytes: n, sha256: meta.sha256 },
               dest: path.join(job, 'package.zip'), fetchImpl: fetch, signal,
               onProgress: progress => set(progress) });

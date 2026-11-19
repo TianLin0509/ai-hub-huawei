@@ -31,7 +31,7 @@ const minutes = sec => sec == null ? '' : sec < 90 ? `约 ${Math.max(1, Math.rou
 class MeetingAsr {
   constructor(root, { pack = PACK, sources = SOURCES, fetchImpl, spawnImpl = spawn, worker = WORKER, threads = 2 } = {}) {
     Object.assign(this, { root, pack, sources, fetchImpl, spawnImpl, worker, threads });
-    this.phase = ''; this.error = ''; this.blocked = false; this.child = null; this.pending = new Map(); this.seq = 0;
+    this.phase = ''; this.progress = null; this.error = ''; this.blocked = false; this.child = null; this.pending = new Map(); this.seq = 0;
   }
   get home() { return path.join(this.root, 'sv', this.pack.version); }
   get readyFile() { return path.join(this.home, 'ready.json'); }
@@ -42,7 +42,7 @@ class MeetingAsr {
   engine() { return fs.existsSync(this.readyFile) ? 'sensevoice' : fs.existsSync(path.join(this.root, 'ready.json')) ? 'whisper' : ''; }
   status() {
     const engine = this.engine();
-    return { ready: !!engine, engine, phase: this.phase, error: this.error, blocked: this.blocked, sizeText: fmtBytes(this.total),
+    return { ready: !!engine, engine, phase: this.phase, progress: this.progress, error: this.error, blocked: this.blocked, sizeText: fmtBytes(this.total),
       upgrade: engine === 'whisper', voiceprint: engine === 'sensevoice' && fs.existsSync(path.join(this.home, 'model', 'voiceprint.onnx')) };
   }
   // 新包装好之前，旧引擎照常可用；install() 总是装新包（「重新安装」也走这里）。
@@ -50,9 +50,11 @@ class MeetingAsr {
     if (this.installing) return this.status();
     if (this.engine() === 'sensevoice') return this.status();
     this.closed = false; this.error = ''; this.blocked = false; this.phase = '准备下载本地转写组件';
+    // r59：结构化进度给统一进度条（已下/总量/速度/剩余/来源），phase 文本照旧留给旧界面和日志。
+    this.progress = { phase: 'connecting', message: '正在连接下载源…' };
     this.installing = this.installPack()
-      .then(() => { this.phase = ''; })
-      .catch(e => { this.phase = ''; this.error = e.blocked ? '下载被公司网络拦下了：先点下面「放行下载服务器」，放行后再点「重新安装」。' : '安装未完成，可重试：' + e.message; this.blocked = !!e.blocked; })
+      .then(() => { this.phase = ''; this.progress = null; })
+      .catch(e => { this.phase = ''; this.progress = null; this.error = e.blocked ? '下载被公司网络拦下了：先点下面「放行下载服务器」，放行后再点「重新安装」。' : '安装未完成，可重试：' + e.message; this.blocked = !!e.blocked; })
       .finally(() => { this.installing = null; });
     return this.status();
   }
@@ -73,7 +75,10 @@ class MeetingAsr {
         const result = await downloadWithFallback({ gate: true, sources: this.sources, version: this.pack.version, dest: file,
           openx: { release: `meeting-asr-${this.pack.version}`, unknownBudgetMs: 6000, maxMs: 6000 }, fetchImpl: doFetch, signal: this.abort.signal,
           expect: { file: part.file, bytes: part.size, sha256: part.sha256 },
-          onProgress: p => { const got = done + p.received, rate = (fetched + p.received) / Math.max(1, (Date.now() - started) / 1000); this.phase = `下载本地转写组件 ${fmtBytes(got)} / ${fmtBytes(total)}${fetched + p.received > 2 * 1024 * 1024 ? ' · 还要' + minutes((total - got) / rate) : ''} · ${p.sourceName}`; } });
+          onProgress: p => { const got = done + p.received, rate = (fetched + p.received) / Math.max(1, (Date.now() - started) / 1000); this.phase = `下载本地转写组件 ${fmtBytes(got)} / ${fmtBytes(total)}${fetched + p.received > 2 * 1024 * 1024 ? ' · 还要' + minutes((total - got) / rate) : ''} · ${p.sourceName}`;
+            this.progress = { phase: 'downloading', received: got, total, speed: p.speed, etaSec: fetched + p.received > 2 * 1024 * 1024 ? Math.round((total - got) / rate) : null,
+              sourceId: p.sourceId, sourceName: p.sourceName, openxMiss: p.openxMiss || null };
+            require('../app-update/progress-bus').emit('meeting-asr', this.progress); } });
         fetched += part.size;
         if (!result.ok) {
           const blocked = result.attempts.some(a => a.blocked);
@@ -82,7 +87,7 @@ class MeetingAsr {
       }
       done += part.size;
     }
-    this.phase = '校验并解压组件';
+    this.phase = '校验并解压组件'; this.progress = { ...(this.progress || {}), phase: 'extracting', step: null, message: '正在校验并解压组件…' }; require('../app-update/progress-bus').emit('meeting-asr', this.progress);
     const stage = this.home + '.staging';
     fs.rmSync(stage, { recursive: true, force: true }); fs.mkdirSync(path.join(stage, 'model'), { recursive: true });
     for (const f of this.pack.files) {
@@ -93,7 +98,7 @@ class MeetingAsr {
       if (await sha256File(out) !== f.sha256) throw new Error(`${f.name} 拼合后校验不一致，请重试`);
       if (f.extract) { await this.unzip(out, path.join(stage, f.extract)); fs.rmSync(out, { force: true }); }
     }
-    this.phase = '试运行本地识别';
+    this.phase = '试运行本地识别'; this.progress = { ...(this.progress || {}), phase: 'probing', message: '正在试运行本地识别…' }; require('../app-update/progress-bus').emit('meeting-asr', this.progress);
     await this.smoke(stage);
     fs.rmSync(this.home, { recursive: true, force: true }); fs.renameSync(stage, this.home);
     fs.writeFileSync(this.readyFile, JSON.stringify({ version: this.pack.version, engine: this.pack.engine, at: Date.now() }));

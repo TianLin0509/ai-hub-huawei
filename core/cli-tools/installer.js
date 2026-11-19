@@ -147,7 +147,12 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
       catalog: catalog ? catalog.components.map(c => ({ id: c.id, name: c.name, version: c.version, license: c.license,
         bytes: c.files.reduce((n, f) => n + f.bytes, 0) })) : null };
   }
-  const set = (id, patch) => { tools[id] = { ...tools[id], ...patch }; try { onState(snapshot()); } catch (_) {} };
+  // r59：同时推到下载进度总线（point = cli:<id>），没接 cli-tools:state 的入口也能挂统一进度条。
+  const set = (id, patch) => {
+    tools[id] = { ...tools[id], ...patch };
+    try { onState(snapshot()); } catch (_) {}
+    if (patch.phase || patch.received != null) { try { require('../app-update/progress-bus').emit('cli:' + id, { ...tools[id], message: '' }); } catch (_) {} }
+  };
   // 「装到我的全局 npm」/ 修复用户自己那份：装进用户已有的那个目录（核心或界面包所在处）；用户什么都没装时，
   // 明确选了全局（target: 'user-global'）才问 npm 的全局目录（npm prefix -g，读用户自己的 npm 配置）。
   async function dshRepairRoot(target, signal) {
@@ -231,7 +236,7 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
       const expect = { file: file.name, bytes: file.bytes, sha256: file.sha256 };
       const go = () => downloadWithFallback({ sources: list, version: component.version, openx: { release: `cli-${component.id}-${component.version}` }, expect, dest: download,
         fetchImpl: resolveFetch(fetchImpl), signal, idleTimeoutMs, connectTimeoutMs,
-        onProgress: p => progress({ phase: 'downloading', received: p.received, total: p.total, speed: p.speed, sourceName: p.sourceName }),
+        onProgress: p => progress({ phase: 'downloading', received: p.received, total: p.total, speed: p.speed, etaSec: p.etaSec, sourceId: p.sourceId, sourceName: p.sourceName, openxMiss: p.openxMiss || null }),
         onAttempt: attempts => progress({ attempts: attempts.map(a => ({ name: a.name, status: a.status, reason: a.reason, blocked: !!a.blocked, url: a.url })) }) });
       let result = await go();
       const blocked = !result.ok && !result.cancelled && (result.attempts || []).find(a => a.blocked);
@@ -364,7 +369,7 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
     busy = id;
     abort = new AbortController();
     const signal = abort.signal;
-    set(id, { phase: 'checking', error: null, blocked: null, received: 0, total: 0, files: 0, attempts: [], step: null });
+    set(id, { phase: 'checking', error: null, blocked: null, received: 0, total: 0, speed: 0, etaSec: null, sourceId: null, sourceName: null, openxMiss: null, files: 0, attempts: [], step: null });
     try { work: {
       // repair（「装到我的全局 npm」）：按界面包要求把配套版本以 npm 全局模式装进用户自己的目录（生成 dsh.cmd，终端里能直接用）。
       // 不带 repair 的默认动作永远装进 Hub 自管目录，与识别到哪个目录、设置里指定了哪个目录无关，绝不写用户目录

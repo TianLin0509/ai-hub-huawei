@@ -142,6 +142,7 @@ function render(state, isPublic) {
       if (id === '../core/app-update/source-view') return require(id);
       if (id === 'electron') return { ipcRenderer: { on() {}, invoke: async k => k === 'app-update:get-state' ? state : null }, shell: {} };
       if (id === './net-pass-view') return { ensureCss() {}, bind() {}, boxHtml() { return ''; } };
+      if (id === './download-progress-view') return require('../renderer/download-progress-view');
       throw new Error(id);
     } };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../renderer/app-update.js'), 'utf8'), context);

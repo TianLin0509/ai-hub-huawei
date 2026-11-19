@@ -115,7 +115,7 @@ class WorkspaceService {
 
   getWorkspaceRoot() {
     if (this.workspaceRoot) return this.path.resolve(this.workspaceRoot);
-    const override = storageRoots.workspaceRoot();
+    const override = storageRoots.sessionWorkspaceRoot();
     if (override) return this.path.resolve(override);
     if (this.isIsolatedHub()) return this.path.join(this.getHubDataDir(), 'workspaces', 'user');
     return this.path.join(this.os.homedir(), 'Workspaces');
@@ -191,6 +191,8 @@ class WorkspaceService {
   // 聚合根守卫只对用户用 AI_HUB_WORKSPACE_ROOT 指定的根生效（那里才可能是 C:\Workspace 这类目录）。
   isFlatWorkRoot() {
     if (this._isHubDefaultRoot()) return true;
+    // Hub 设置里选的目录和环境变量一样过标记守卫（m5 审查 2026-11-19）：选的是 C:\Workspace 这类组织根时
+    // 仍然落 _scratch。保存设置时，新建的或空的目录会自动补标记（config-handlers），所以常见情况仍直接平铺。
     try {
       return this.fs.existsSync(this.path.join(this.getWorkspaceRoot(), WORK_ROOT_MARKER));
     } catch {
@@ -199,7 +201,7 @@ class WorkspaceService {
   }
 
   _isHubDefaultRoot() {
-    if (this.workspaceRoot || storageRoots.workspaceRoot()) return false;
+    if (this.workspaceRoot || storageRoots.sessionWorkspaceRoot()) return false;
     try { return !this.isIsolatedHub(); } catch { return false; }
   }
 
@@ -940,6 +942,7 @@ class WorkspaceService {
 
 module.exports = {
   WorkspaceService,
+  WORK_ROOT_MARKER,
   DEFAULT_RECOMMENDED_CATEGORIES,
   isPathInside,
   normalizeKey,

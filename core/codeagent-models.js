@@ -275,7 +275,42 @@ function expectModelSwitch(sessionId, modelId, { settingsOnly = false } = {}) {
   else pendingModelSwitches.set(sessionId, { model: id, after: Date.now() });
 }
 
-function observeModel(session, value, { at = Date.now() } = {}) {
+// 模型名里的版本号（家族名后面第一个「主版本.小版本」）：maas-glm-5-3-260814 → 5.3、GLM-5.2-WX-Auto → 5.2、deepseek-v4.1-flash → 4.1、
+// qwen3.8-27b → 3.8、MiniMax-M2.7 → 2.7。主版本只认 1～2 位，deepseek0731 这类日期样的写法认不出就返回空（空的不参与判断）。
+const FAMILY_TOKEN = { glm: 'glm', deepseek: 'deepseek', minimax: 'minimax', qwen: 'qwen' };
+function modelVersion(value) {
+  const id = clean(value).toLowerCase();
+  const token = FAMILY_TOKEN[modelFamily(id)];
+  const at = token ? id.indexOf(token) : -1;
+  if (at < 0) return '';
+  const match = /^[\s_.-]{0,2}[vm]?(\d{1,2})(?![\d])(?:[._-](\d{1,2})(?![\d]))?/.exec(id.slice(at + token.length));
+  return match ? (match[2] ? `${Number(match[1])}.${Number(match[2])}` : String(Number(match[1]))) : '';
+}
+// 两个版本号是否算同一代：主版本不同、或两边都带小版本且小版本不同，才算换代。
+// 只带主版本的一边（glm-5.1 的后端名 maas-glm-5-260814 只读出 5）和同主版本的任何小版本都算同一代，不判成换代。
+function versionsDiffer(a, b) {
+  const [majorA, minorA] = String(a || '').split('.'), [majorB, minorB] = String(b || '').split('.');
+  if (!majorA || !majorB) return false;
+  if (majorA !== majorB) return true;
+  return minorA !== undefined && minorB !== undefined && minorA !== minorB;
+}
+const isAutoModel = value => /(?:^|[-_.(\s])auto(?:$|[-_.)\s(])/i.test(clean(value));
+
+// 后台换了模型、回答里只有后端模型名（maas-glm-5-3-260814）时，对回这个号模型清单里的哪一项：
+// 同一家、同版本号的候选里，CodeAgent 配置当前的默认模型（/model 回车会写它）优先，否则只有一个候选才算认出；认不出返回空。
+function resolveObservedSwitch(actualId, { options = [], defaultModel = '' } = {}) {
+  const id = clean(actualId), family = modelFamily(id), version = modelVersion(id);
+  if (!family || !version) return '';
+  const ids = [...new Set((Array.isArray(options) ? options : []).map(option => clean(option && (option.id ?? option))).filter(isSafeModelId))];
+  const exact = ids.find(other => other.toLowerCase() === id.toLowerCase());
+  if (exact) return exact;
+  const candidates = ids.filter(other => modelFamily(other) === family && modelVersion(other) && !versionsDiffer(modelVersion(other), version));
+  const preferred = candidates.find(other => other.toLowerCase() === clean(defaultModel).toLowerCase());
+  return preferred || (candidates.length === 1 ? candidates[0] : '');
+}
+
+// resolveSwitch(actualId)：可选，后台换模型时把实际模型对回清单里的一项（main.js 用 resolveObservedSwitch 接账号清单和默认模型）。
+function observeModel(session, value, { at = Date.now(), resolveSwitch = null } = {}) {
   if (!isCodeAgentSession(session)) return null;
   const id = clean(value);
   if (!isSafeModelId(id)) return null;
@@ -299,7 +334,35 @@ function observeModel(session, value, { at = Date.now() } = {}) {
   pendingModelSwitches.delete(sessionId);
   const switchMismatch = expected && expected.toLowerCase() !== normalizeModel(id).toLowerCase();
   let mismatch = null;
-  if (switchMismatch || !sameId && !sameFamily) {
+  let backendSwitch = null;
+  // 2026-11-19 反馈（5.6.2 用户）：在后台（终端里 /model）把 maas-glm-5.2… 换成 GLM-5.3 后，回答已是 maas-glm-5-3-…，
+  // 输入框下方的模型仍写旧的。原因是同一家一律当作 Auto 分流、保留原选择。具体模型（非 Auto）不会自己换代：
+  // 同一家但版本号变了，就是用户换了模型——显示跟着改；能对回清单里的一项时连固定模型一起改，恢复会话也用它。
+  const versionSwitch = !expected && !sameId && sameFamily && !isAutoModel(currentId)
+    && versionsDiffer(modelVersion(currentId), modelVersion(id));
+  // 同一次换代只记一次：对不回清单时固定模型不动，下一轮 currentId 仍是旧的固定模型，不拦会每轮重写会话信息、每轮记日志。
+  const priorSwitch = session.codeagentBackendSwitch && typeof session.codeagentBackendSwitch === 'object' ? session.codeagentBackendSwitch : null;
+  const alreadyNoted = versionSwitch && priorSwitch && clean(priorSwitch.from).toLowerCase() === currentId.toLowerCase()
+    && clean(priorSwitch.actual).toLowerCase() === id.toLowerCase() && clean(current.id).toLowerCase() === id.toLowerCase();
+  if (versionSwitch && !alreadyNoted) {
+    let resolved = '';
+    try { resolved = typeof resolveSwitch === 'function' ? clean(resolveSwitch(id)) : ''; } catch { resolved = ''; }
+    if (resolved && isSafeModelId(resolved) && resolved.toLowerCase() !== currentId.toLowerCase()) {
+      fields.currentModel = { id: resolved, displayName: modelLabel(resolved) };
+      fields.codeagentUserModel = resolved;
+      if (session.fixedModel) { fields.fixedModel = resolved; fields.modelPinSource = 'cli'; }
+      if (priorSwitch) fields.codeagentBackendSwitch = null;
+    } else if (!resolved || resolved.toLowerCase() !== currentId.toLowerCase()) {
+      // 对不回清单：只把显示改成实际模型；固定模型不能换成后端名（拿它启动会失败）。记下这次换代（from＝当时的固定模型），
+      // 恢复会话时由 session-model-pin 改用 CodeAgent 自己记着的默认模型（终端里 /model 会写它），不按旧固定模型撤掉用户的选择。
+      fields.currentModel = { id, displayName: modelLabel(id) };
+      fields.codeagentBackendSwitch = { from: currentId, actual: id, at: Number.isFinite(at) ? at : Date.now() };
+      resolved = '';
+    }
+    if (fields.currentModel) backendSwitch = { from: currentId, to: fields.currentModel.id, resolved: !!resolved };
+  } else if (alreadyNoted) {
+    // 已记过的换代：什么都不改（codeagentActualModel 也没变），返回 null，不再写会话信息和日志。
+  } else if (switchMismatch || !sameId && !sameFamily) {
     if (!session.fixedModel) fields.currentModel = { id, displayName: modelLabel(id) };
     const requested = switchMismatch ? expected : currentId;
     if (requested) {
@@ -308,7 +371,7 @@ function observeModel(session, value, { at = Date.now() } = {}) {
         ...(session.fixedModel ? { fixedModel: session.fixedModel } : {}), ...(switchMismatch ? { manualSwitch: true } : {}) };
     }
   }
-  return Object.keys(fields).length || settingsOnlyVerification ? { fields, mismatch, ...(settingsOnlyVerification ? { settingsOnlyVerification } : {}) } : null;
+  return Object.keys(fields).length || settingsOnlyVerification ? { fields, mismatch, ...(backendSwitch ? { backendSwitch } : {}), ...(settingsOnlyVerification ? { settingsOnlyVerification } : {}) } : null;
 }
 
 function mismatchNotice(mismatch) {
@@ -476,6 +539,34 @@ function readModelCatalog(dataDir, { configDir = null, accountKey = 'personal' }
   return menu ? { models: menu.models, at: new Date(menu.seenAt).toISOString(), source: 'menu' } : null;
 }
 
+// 用户在 CodeAgent 里自配的模型（公司回执 Q-1119-12，官方《自定义模型配置指南》）：settings.json 的 enterprise.providers 是命名 map，
+// 每个供应商有 mainModel / smallModel / deepModel / vlModel 四个模型位（modelCapabilities 的键也是模型名）。1.2605.03-IN.3 起全部激活。
+// 2026-11-18 反馈（5.6.47）：配了很多内部模型，下拉只出现 serve 报的 5 个。serve 清单之外的自配模型从这里补上，标明来自配置。
+// 只读模型名和供应商名，不碰 apiKey / apiBaseUrl。
+// vlModel（视觉模型）只负责看图，不能当对话模型选，不进下拉；只出现在 vlModel 位的模型，modelCapabilities 里列了也不收。
+const PROVIDER_MODEL_KEYS = ['mainModel', 'smallModel', 'deepModel'];
+function settingsProviderModels(configDir, fsModule = fs) {
+  if (!configDir) return [];
+  let data = null;
+  try { data = JSON.parse(String(fsModule.readFileSync(path.join(configDir, 'settings.json'), 'utf8')).replace(/^\uFEFF/, '')); } catch { return []; }
+  const providers = data && data.enterprise && data.enterprise.providers;
+  if (!providers || typeof providers !== 'object' || Array.isArray(providers)) return [];
+  const out = [];
+  const entries = Object.entries(providers).slice(0, 50).filter(([, entry]) => entry && typeof entry === 'object');
+  const chatIds = new Set(entries.flatMap(([, entry]) => PROVIDER_MODEL_KEYS.map(key => clean(typeof entry[key] === 'string' ? entry[key] : '').toLowerCase())));
+  const visionOnly = new Set(entries.map(([, entry]) => clean(typeof entry.vlModel === 'string' ? entry.vlModel : '').toLowerCase())
+    .filter(id => id && !chatIds.has(id)));
+  for (const [name, entry] of entries) {
+    const caps = entry.modelCapabilities && typeof entry.modelCapabilities === 'object' && !Array.isArray(entry.modelCapabilities) ? Object.keys(entry.modelCapabilities) : [];
+    for (const raw of [...PROVIDER_MODEL_KEYS.map(key => entry[key]), ...caps]) {
+      const id = clean(typeof raw === 'string' ? raw : '');
+      if (!isSafeModelId(id) || visionOnly.has(id.toLowerCase()) || out.some(row => row.id.toLowerCase() === id.toLowerCase())) continue;
+      out.push({ id, providerName: clean(name).slice(0, 60) });
+    }
+  }
+  return out;
+}
+
 // 目录只来自成功的账号读取；KNOWN 仅供 modelLabel 取显示名，不冒充权限。
 function modelOptions(dataDir, { configDir = null, accountKey = 'personal' } = {}) {
   const catalog = readModelCatalog(dataDir, { configDir, accountKey });
@@ -494,8 +585,16 @@ function modelOptions(dataDir, { configDir = null, accountKey = 'personal' } = {
   // 只有 GLM-5.2-WX-Auto 能用。它出现在回答记录（实际模型）和分档配置里，列出来用户一选就失败，所以有「名字-Auto」时去掉它。
   // 账号清单里明确列出的照留（那是 CodeAgent 自己说这个账号能选的）。
   const ids = new Set(options.map(option => option.id.toLowerCase()));
-  return options.filter(option => configured.authoritative && configured.models.some(id => id.toLowerCase() === option.id.toLowerCase())
+  const listed = options.filter(option => configured.authoritative && configured.models.some(id => id.toLowerCase() === option.id.toLowerCase())
     || !ids.has(option.id.toLowerCase() + '-auto'));
+  // 自配模型里 serve / 菜单清单没有的，排在后面；选它照常走 CodeAgent 自己的 /model 菜单确认，菜单里也没有会就地报失败。
+  for (const row of settingsProviderModels(configDir)) {
+    if (ids.has(row.id.toLowerCase())) continue;
+    ids.add(row.id.toLowerCase());
+    listed.push({ id: row.id, label: row.providerName ? `${row.id} · ${row.providerName}` : row.id, source: 'settings',
+      description: `CodeAgent 配置里自配的模型${row.providerName ? `（供应商 ${row.providerName}）` : ''}，账号清单里还没读到` });
+  }
+  return listed;
 }
 
 module.exports = {
@@ -512,6 +611,9 @@ module.exports = {
   isCodeAgentSession,
   dormantDisplayModel,
   observeModel,
+  modelVersion,
+  versionsDiffer,
+  resolveObservedSwitch,
   expectModelSwitch,
   mismatchNotice,
   configuredModels,
@@ -524,6 +626,7 @@ module.exports = {
   MODEL_MENU_PARSER_VERSION,
   appendModelLog,
   modelOptions,
+  settingsProviderModels,
   readModelCatalog,
   contextWindowFor,
   contextFromUsage,

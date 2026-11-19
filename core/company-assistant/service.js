@@ -33,6 +33,7 @@ const { PetReminders } = require('./pet-reminders');
 const AC = require('./answer-context');
 const { AssistantDigest, DIGEST_HOURS, visibleDigest, SOURCE_KEEP_MS } = require('./digest');
 const { prepareDataRoot, validateDataRoot } = require('./data-root');
+const isDirectory = dir => { try { return fs.statSync(dir).isDirectory(); } catch { return false; } };
 
 const PURPOSE = 'company-assistant';
 const QUERY_DIAGNOSTIC_SEEN = new Set();
@@ -47,6 +48,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   enabled: true, briefTime: '08:20', summaryTime: '18:00', waitHours: 4, digestHours: 0, prepMinutes: 15, maxPerHour: 3, refreshMinutes: 10,
   watchGroups: [], keywords: [], myName: '', workdays: [1, 2, 3, 4, 5], cliPath: '', email: '', emailFrom: '', chips: [], phone: DEFAULT_PHONE,
   lookbackHours: 36, maxConversations: 0, answerStyle: 'guided', answerEffort: '', dataRoot: '',
+  workDir: '', // 「我的工作目录」（2026-11-19）：空 = 自动取最近一次新建会话用过的目录
 });
 // 输入框上方的常用问题（设计稿 B）。fill=true 的只填进输入框，等补全再发。
 const BUILTIN_CHIPS = Object.freeze([
@@ -227,6 +229,14 @@ class CompanyAssistant {
     fs.renameSync(tmp, this.file(name));
   }
   settings() { const s = this.read('settings.json', {}); return { ...DEFAULT_SETTINGS, ...s }; }
+  // 会议页要一并列出的其他目录（2026-11-19）：默认目录、设置里的自定义目录、上次启用的目录、以前用过的目录。
+  // 设置文件始终在默认目录里；读不到就只看默认目录。
+  meetingRootCandidates() {
+    let s = {};
+    try { s = JSON.parse(fs.readFileSync(path.join(this.defaultDir, 'settings.json'), 'utf8')) || {}; } catch { s = {}; }
+    const dirs = [this.defaultDir, s.dataRoot, s.dataRootActive, ...(Array.isArray(s.dataRootHistory) ? s.dataRootHistory : [])];
+    return dirs.filter(d => typeof d === 'string' && d.trim() && path.isAbsolute(d.trim())).map(d => path.join(path.resolve(d.trim()), 'workspace', 'meetings'));
+  }
   // 判定「等你回复」用的设置：带上 CodeAgent 的待回复复核结论（只读，不写回 settings.json）（2026-11-16）
   judgeSettings(s = this.settings()) {
     const now = this.now(), sizes = {};
@@ -259,6 +269,11 @@ class CompanyAssistant {
     if ('keywords' in patch) next.keywords = (Array.isArray(patch.keywords) ? patch.keywords : String(patch.keywords || '').split(/[,，、\s]+/)).map(w => String(w).trim()).filter(Boolean).slice(0, 30);
     if (Array.isArray(patch.workdays)) next.workdays = [...new Set(patch.workdays.map(Number).filter(d => Number.isInteger(d) && d >= 0 && d <= 6))];
     if ('myName' in patch) next.myName = String(patch.myName || '').trim().slice(0, 30);
+    if ('workDir' in patch) {
+      const dir = String(patch.workDir || '').trim();
+      if (dir && (!path.isAbsolute(dir) || !isDirectory(dir))) throw new Error('工作目录要选一个已存在的文件夹');
+      next.workDir = dir ? path.resolve(dir) : '';
+    }
     if ('cliPath' in patch) next.cliPath = String(patch.cliPath || '').trim();
     // cliPathManual（2026-11-12）：路径是用户亲手选的才算数；自动找到并记下的，发现更高版本时会被换掉。
     if ('cliPath' in patch) next.cliPathManual = !!next.cliPath && patch.cliPathManual === true;
@@ -1747,8 +1762,29 @@ class CompanyAssistant {
     job.materialItems = (String(material.text || '').match(/\[(?:msg|mail|mtg|meeting|cal):/g) || []).length;
     const book = AC.playbook(material.intents), cut = book.indexOf('\n\n作答手册 · ');
     const general = cut < 0 ? book : book.slice(0, cut), specific = cut < 0 ? '' : book.slice(cut + 2);
-    const parts = [specific, `当前时间（上海）：${D.displayTime(now)}`, this.memory.context(job.prompt), material.text, this.sessionsBlock(job.prompt), this.recentHistory(job)].filter(Boolean);
+    const parts = [specific, `当前时间（上海）：${D.displayTime(now)}`, this.workDirLine(), this.memory.context(job.prompt), material.text, this.sessionsBlock(job.prompt), this.recentHistory(job)].filter(Boolean);
     return [this.instructions(toolset), general, '---', ...parts, '---', job.prompt].join('\n\n');
+  }
+  // 「我的工作目录」（2026-11-19，管家 r38d 方案 A）：助理会话的当前目录仍是助理自己的 workspace（data/ 等相对路径照旧），
+  // 只在提问里告诉它用户的文件在哪。没手动设时取最近一次新建的普通会话的目录（开箱即用）。
+  userWorkDir() {
+    const manual = this.settings().workDir;
+    // 手动选的目录被删了就不再注入（也不退回自动取）：用户明确选过，换成别的目录反而会让助理读错地方。
+    if (manual) return isDirectory(manual) ? { path: manual, from: 'manual' } : { path: '', from: 'manual-missing', missing: manual };
+    let sessions = [];
+    try { sessions = [...(this.deps.getAllSessions?.() || []), ...(this.deps.listKnownSessions?.() || [])]; } catch { /* 读不到会话就当没有 */ }
+    const own = p => { const rel = path.relative(this.dir, p); return !rel || (!rel.startsWith('..') && !path.isAbsolute(rel)); };
+    const usable = s => s && s.cwd && path.isAbsolute(String(s.cwd)) && !own(String(s.cwd)) && (this.tools ? this.tools.manageable(s) : !s.purpose);
+    const latest = sessions.filter(usable).sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0))[0];
+    return latest ? { path: path.resolve(String(latest.cwd)), from: 'recent' } : { path: '', from: '' };
+  }
+  workDirLine() {
+    const wd = this.userWorkDir();
+    if (!wd.path) return '';
+    // 只有用户在设置里亲手选的目录才放开写；自动取到的只说明位置、可以读（维护人 2026-11-19 拍板）。
+    return wd.from === 'manual'
+      ? `我的工作目录：${wd.path}（我说的文件、要你读或写的我的文件都在这里，用完整路径访问；这是当前目录以外唯一可以写文件的位置。助理自己的 data/ 等仍在当前目录。）`
+      : `我的工作目录：${wd.path}（我说的文件多半在这里，可以用完整路径读；不要往这里写文件，要写就写在当前目录。助理自己的 data/ 等仍在当前目录。）`;
   }
   // 问到其他会话时，Hub 把会话现状直接附在提问里：「有哪些会话在跑」不用再调一次工具就能答（公司模型一次工具往返要十来秒）。
   sessionsBlock(question) {
@@ -1762,6 +1798,8 @@ class CompanyAssistant {
     if ((toolset === 'desk' || toolset === 'phone') && this.guided()) return this.composeGuided(job, toolset);
     const parts = [`当前时间（上海）：${D.displayTime(this.now())}`];
     if (toolset === 'desk' || toolset === 'phone') {
+      const workDir = this.workDirLine();
+      if (workDir) parts.push(workDir);
       try { this.memory.seedDefaults?.(); } catch { /* 记忆文件写不了不影响回答 */ }
       const memory = this.memory.context(job.prompt);
       if (memory) parts.push(memory);
@@ -2079,6 +2117,7 @@ class CompanyAssistant {
     const next = this.nextBriefAt(s, now);
     const sid = st.sessionId || null;
     return { ok: true, enabled: s.enabled, now, day, settings: s,
+      workDir: this.userWorkDir(),
       dataDirectory: { current: this.dir, default: this.defaultDir, requested: s.dataRoot || this.defaultDir, restartRequired: path.resolve(s.dataRoot || this.defaultDir) !== path.resolve(this.dir), error: this.dataRootError },
       chips: [...BUILTIN_CHIPS, ...s.chips.map(c => ({ ...c, custom: true }))],
       cliFound: !!this.cli(), cliPath: this.cli() || '', cliVersion: this.cliVersion(), cliChoice: this.cliChoice(), cliSearch: this.cliSearch || { state: 'idle' }, cliInstall: this.cliInstaller.snapshot(), cliInstallAvailable: this.cliInstaller.available(), auth: this.auth.status(), login: this.auth.status().login || snap?.login || null, loginFlow: this.loginFlow, calendarNeedsSetup: !!snap?.calendarNeedsSetup, mailSetup: snap?.mailSetup || null,

@@ -843,6 +843,7 @@ function registerSessionIpc(ipcMain, deps) {
       require('../../core/codeagent-models').appendModelLog(options.dataDir, {
         event: 'serve-read', account: key, ok: !!served?.ok, ms: served?.readyMs, reason,
         ...(served?.ok ? { models: (served.models || []).join('+') } : { error: served?.error || '未知' }),
+        ...(served?.skipped?.length ? { skippedProviders: served.skipped.map(p => `${p.id}:${p.status}:${p.models}`).join('+') } : {}),
       });
       if (served?.ok) {
         if (served.models?.length) {

@@ -89,12 +89,14 @@ test('outbox is resent when the receiver comes back, and cleared after delivery'
   assert.deepEqual(f.calls.aliyun, []);
 });
 
-test('outbox items older than 7 days are dropped without sending', async t => {
+test('outbox items older than 30 days are dropped without sending (7-day-old items are kept)', async t => {
   let clock = Date.parse('2026-11-01T00:00:00Z');
   const f = fixture(t, { intranet: offline, now: () => clock });
   await f.svc.send({ description: '旧的' });
   assert.equal(f.outbox().length, 1);
   clock += 7 * 24 * 60 * 60 * 1000 + 1000;
+  assert.deepEqual(await f.svc.flushOutbox(), { sent: 0, expired: 0, left: 1 }, '7 天的还留着（11-18 黑洞后放宽）');
+  clock += 23 * 24 * 60 * 60 * 1000;
   const before = f.calls.intranet.length;
   assert.deepEqual(await f.svc.flushOutbox(), { sent: 0, expired: 1, left: 0 });
   assert.equal(f.calls.intranet.length, before);

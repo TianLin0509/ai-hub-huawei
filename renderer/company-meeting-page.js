@@ -184,6 +184,18 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
     }, { root: el('timeline'), rootMargin: '200px' });
     el('timeline').querySelectorAll('[data-thumb]').forEach(img => thumbsObserver.observe(img));
   }
+  // 材料位置（2026-11-19 用户反馈「升级后找不到以前会议的录屏、纪要」）：写明当前文件夹；旧目录并进来的、读不出的都说清在哪。
+  function renderStorage(st) {
+    if (!st) return;
+    const where = `材料保存在 ${st.root}`, notes = [];
+    for (const x of st.extra || []) notes.push(`另有 ${x.count} 场在以前的数据目录 ${x.dir}，已一并列出`);
+    if (st.corrupt?.length) notes.push(`${st.corrupt.length} 场的记录文件读不出，原文件仍在 ${st.corrupt[0].dir}${st.corrupt.length > 1 ? ' 等处' : ''}`);
+    for (const c of st.copies || []) notes.push(`这场会议在 ${c.dir} 还有一份（${({ older: '较旧', newer: '较新' })[c.relation] || '时间相同'}），当前显示的是 ${st.current}`);
+    if (st.dataRootError) notes.push(st.dataRootError);
+    if (el('storage-text').textContent !== where) { el('storage-text').textContent = where; el('storage-text').title = where; }
+    const note = notes.join('；');
+    if (el('storage-note').textContent !== note) { el('storage-note').textContent = note; el('storage-note').hidden = !note; }
+  }
   async function refresh() {
     if (!root?.isConnected || refreshing) return;
     refreshing = true;
@@ -192,12 +204,15 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       if (requested !== id) return;
       state = next;
       const m = state.meeting, asr = state.asr || {};
+      if (state.meetingError) message(`这场会议暂时读不出：${state.meetingError}。文件仍在原处，其他会议不受影响。`);
       const history = '<option value="">历史会议…</option>' + state.meetings.map(x => `<option value="${esc(x.id)}" ${x.id === id ? 'selected' : ''}>${esc(x.title)} · ${shortDate(x.startedAt)}${x.videoBytes ? ' · ' + size(x.videoBytes) : ''}</option>`).join('');
       renderSpeakers(m); renderGlossaryHints(m);
       const videoTotal = state.meetings.reduce((n, x) => n + (x.videoBytes || 0), 0);
       el('video-total').textContent = videoTotal ? `全部录像占用 ${size(videoTotal)}` : '';
+      renderStorage(state.storage);
       if (el('history').dataset.html !== history) { el('history').innerHTML = history; el('history').dataset.html = history; }
-      el('asr').textContent = asr.error || asr.phase || (asr.upgrade ? `本地转写可用（旧引擎，较慢）。升级到新引擎更快、中文更准，约 ${asr.sizeText}。` : asr.ready ? `本地转写已就绪 · ${asr.voiceprint ? '自动区分发言人 · ' : ''}CPU 模式` : `首次使用需下载本地转写组件（约 ${asr.sizeText || '300 MB'}，断了可续）；未安装也可先录音，之后补转写。`);
+      el('asr').textContent = asr.error || (asr.progress ? '正在安装本地转写组件，可以先录音，装好后自动补转写。' : asr.phase) || (asr.upgrade ? `本地转写可用（旧引擎，较慢）。升级到新引擎更快、中文更准，约 ${asr.sizeText}。` : asr.ready ? `本地转写已就绪 · ${asr.voiceprint ? '自动区分发言人 · ' : ''}CPU 模式` : `首次使用需下载本地转写组件（约 ${asr.sizeText || '300 MB'}，断了可续）；未安装也可先录音，之后补转写。`);
+      asrBar(asr.progress);
       renderAsrPass(asr);
       const speech = meetingAsrState(asr, m);
       el('setup-asr').textContent = speech.setupText;
@@ -345,6 +360,7 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
     }
     else if (op === 'snap') await capture.frame(true);
     else if (op === 'mark') { if (capture.paused) throw new Error('请先继续采集'); capture.enqueue({ kind: 'mark', at: capture.elapsed(), text: root.querySelector('[data-m="note"]').value || '重点' }); root.querySelector('[data-m="note"]').value = ''; await capture.frame(true); }
+    else if (op === 'open-folder') { await call('meeting-open-folder', { id }); }
     else if (op === 'export') { if (!id) throw new Error('先选择会议'); await call('meeting-export', { id }); }
     else if (op === 'open-full') { if (!id) throw new Error('先选择会议'); await call('meeting-open-full', { id }); }
     else if (op === 'play' && playback && !el('player').paused) { el('player').pause(); return; }
@@ -353,11 +369,17 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       if (!id) throw new Error('先选择会议');
       const target = id, m = state?.meeting?.id === target ? state.meeting : null, title = m?.title || '这场会议';
       const video = m?.recording?.bytes ? `，含录像 ${size(m.recording.bytes)}` : '';
-      const ok = await require('./ui-feedback').confirmHubAction(`删除「${title}」${video}？\n纪要、原话、截图、录音和录像都会删掉，不能恢复。只删这一场，其他会议和专业词库不受影响。`,
+      const ok = await require('./ui-feedback').confirmHubAction(`删除「${title}」${video}？\n纪要、原话、截图、录音和录像都会删掉，不能恢复。只删这一场，其他会议和专业词库不受影响。${state?.storage?.copies?.length ? '\n另一个目录还有这场会议的一份，下一步再选要不要一起删。' : ''}`,
         { document, title: '删除这场会议？', acceptLabel: '删除这场会议', danger: true });
       if (!ok || id !== target) return;
-      const done = await call('meeting-delete', { id: target });
-      selectMeeting(''); message(`已删除「${done.title || title}」，其他会议不受影响。`); await refresh(); return;
+      // 同一场在别的目录还有一份：再问一次要不要一起删，默认（取消、Esc）只删当前显示的这份。
+      const copies = state?.storage?.copies || [];
+      const alsoCopies = copies.length > 0 && await require('./ui-feedback').confirmHubAction(`另一个目录还有这场会议的一份（${({ older: '较旧', newer: '较新' })[copies[0].relation] || '时间相同'}）：\n${copies.map(c => c.dir).join('\n')}\n\n默认只删当前显示的这份，另一份留在原处、不再显示；选「一起删」会把它也删掉，不能恢复。`,
+        { document, title: '另一份也删吗？', acceptLabel: '一起删', cancelLabel: '只删显示的这份', danger: true });
+      if (id !== target) return;
+      const done = await call('meeting-delete', { id: target, alsoCopies });
+      const keptNote = done.kept?.length ? `另一份仍在 ${done.kept[0]}，已不再显示。` : '';
+      selectMeeting(''); message(done.warning || `已删除「${done.title || title}」，其他会议不受影响。${keptNote}`); await refresh(); return;
     }
     else if (op === 'save-video') { if (!id) throw new Error('先选择会议'); const saved = await call('meeting-save-video', { id }); if (saved.file) message('视频已保存：' + saved.file); }
     else if (op === 'play') { const rec=state.meeting?.recording, first=canReplayFull(rec)?rec.full:rec?.segments.find(s=>s.status==='ready'); await playAt(Number(root.querySelector('[data-m="seek-seconds"]').value)*1000 || first?.at || 0,true); }
@@ -510,6 +532,14 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       el('model-catalog-retry').hidden = !failed;
     },
   });
+  // r59：本地转写包下载的统一进度条（两处：顶部本地转写行、「本地转写」折叠区）。2.5 秒轮询之间由进度总线实时推。
+  let asrBusSub = null;
+  function asrBar(progress) {
+    if (!root) return;
+    if (!asrBusSub && ipcRenderer) asrBusSub = require('./download-progress-view').subscribe('meeting-asr', p => asrBar(p), ipcRenderer);
+    const html = progress ? require('./download-progress-view').html(progress, { title: '下载本地转写组件' }) : '';
+    root.querySelectorAll('[data-asr-dlp]').forEach(host => { if (host.dataset.html !== html) { host.innerHTML = html; host.dataset.html = html; } });
+  }
   function renderAsrPass(asr){
     const slot=el('asr-pass'); if(!slot)return;
     if(!asr.blocked||!ipcRenderer){slot.hidden=true;slot.innerHTML='';return;}

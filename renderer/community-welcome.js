@@ -27,7 +27,9 @@
       + '<div id="community-providers" role="status">正在检查安装情况…</div>'
       + '<div class="community-setup-actions"><button id="community-accounts" type="button">登录 / 检查账号</button>'
       + '<button id="community-refresh" type="button">重新检测</button>'
-      + '<button id="community-guide" type="button">安装说明</button></div>'
+      + '<button id="community-guide" type="button">安装说明</button>'
+      // 「问问 Hub」的文字入口（2026-11-19 负责人：新同事从首页也能发现；点击由 renderer/help-ask-ui.js 统一接管 [data-help-ask]）
+      + '<a href="#" id="community-help-ask" class="community-help-ask" data-help-ask title="照使用说明书回答功能在哪、设置怎么改">有问题？问问 Hub</a></div>'
       + '<p id="community-advisory" class="community-setup-note" hidden></p>'
       + (require('../core/distribution').target === 'company'
         ? '<p id="community-thanks" class="community-setup-note">🎉 5.6 正式版 · 感谢各位先锋测试官的共创：你们提的每一条反馈，都变成了今天的开箱即用。</p>'
@@ -61,6 +63,9 @@
               if (provider.id === 'codeagent') return codeagentSetup.showGuide();
               if (require('../core/distribution').target !== 'company' || !['claude', 'codex', 'dsh'].includes(provider.id)) return shell.openExternal(provider.docs);
               install.disabled = true; install.textContent = '安装中…';
+              // r59：统一进度条挂在这一行下面。
+              const host = document.createElement('div'); item.append(host);
+              const unmount = require('./download-progress-view').mount(host, 'cli:' + provider.id, { title: '安装 ' + provider.name, ipcRenderer });
               try {
                 const state = await ipcRenderer.invoke('cli-tools:state');
                 if (!state?.available) return shell.openExternal(provider.docs);
@@ -68,7 +73,7 @@
                 if (!result?.ok) throw new Error(result?.error || '安装没完成，请重试');
                 await refresh();
               } catch (error) { advisory.textContent = `安装没完成：${error.message}。可点「安装」重试，或查看安装说明。`; advisory.hidden = false; }
-              finally { install.disabled = false; install.textContent = '安装'; }
+              finally { install.disabled = false; install.textContent = '安装'; setTimeout(() => { unmount(); host.remove(); }, 6500); }
             };
             item.append(' ', install);
           }

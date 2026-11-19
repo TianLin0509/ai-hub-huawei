@@ -7,6 +7,12 @@ const sourceStatus = require('../core/app-update/source-status');
 // 各下载点的 spec 由组件模块自己登记到 core/app-update/download-points.js（编号或以「:」结尾的前缀）。
 function registerDownloadSourceIpc(ipcMain, { fetchImpl, env = process.env } = {}) {
   const lookup = point => require('../core/app-update/download-points').lookup(point);
+  // r59：进度总线 → 所有窗口（界面按 point 认领自己的进度条）。
+  require('../core/app-update/progress-bus').on(progress => {
+    let windows = [];
+    try { windows = require('electron').BrowserWindow.getAllWindows(); } catch (_) { return; }
+    for (const w of windows) { try { if (!w.isDestroyed()) w.webContents.send('download-progress:update', progress); } catch (_) {} }
+  });
   // 「内源上找什么」按下载点缓存 3 分钟（读失败缓存 1 分钟），同一时刻同一个点只解析一次：
   // 有的点要先读外网清单（PPT Doctor、识别组件、素材包），界面刷新很频繁，不能每次都去读。
   const specs = new Map();   // point → { at, ttl, promise }

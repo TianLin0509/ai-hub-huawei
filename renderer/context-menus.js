@@ -27,6 +27,8 @@ function createSessionContextMenuController({
   notify,
   copyText,
   wakeDormantSession,
+  // 重启当前打开的会话时，重启期间保持选中并显示「正在唤醒」（renderer.js restartSessionInPlace）。
+  restartSession = sessionId => ipcRenderer.invoke('restart-session', sessionId),
   confirmAction = (message, options) => require('./ui-feedback').confirmHubAction(message, { document, ...options }),
   selectMeeting = null,
   requestRename = null,
@@ -296,7 +298,7 @@ function createSessionContextMenuController({
             return;
           }
           try {
-            const result = await ipcRenderer.invoke('restart-session', sid);
+            const result = await restartSession(sid);
             if (result && result.ok === false) {
               showNotice(result.message || '会话重启失败，请稍后重试。');
             }

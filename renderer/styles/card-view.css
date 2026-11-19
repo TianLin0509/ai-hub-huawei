@@ -1283,7 +1283,8 @@
   border: 1px solid var(--machine-border);
   border-radius: 6px;
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: 11.5px;
+  /* 跟随「显示参数 · 正文字号」和 Ctrl+滚轮/Ctrl+加减（--main-zoom）；默认仍是 11.5px。 */
+  font-size: calc(11.5px * var(--card-code-scale, 1) * var(--main-zoom, 1));
   line-height: 1.5;
   overflow-x: auto;
 }

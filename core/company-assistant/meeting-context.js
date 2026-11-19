@@ -35,8 +35,9 @@ function relevant(question, events, k = 12) {
   const keep = new Set(scored.sort((a, b) => b[0] - a[0]).slice(0, k).map(x => x[1].seq));
   return events.filter(e => keep.has(e.seq));
 }
+// 用户在 CodeAgent settings.json 里自配的模型（source: 'settings'）只进会话的模型下拉，账号清单里没读到，不拿来自动挑快速模型、也不进会议的快速模型清单。
 function modelOptions(deps) {
-  return (deps.meetingModels ? deps.meetingModels() : localModelOptions(deps.dataDir)).filter(m => isSafeModelId(m.id));
+  return (deps.meetingModels ? deps.meetingModels() : localModelOptions(deps.dataDir)).filter(m => isSafeModelId(m.id) && m.source !== 'settings');
 }
 function fastModel(models) {
   return models.find(m => m.fast === true || m.speed === 'fast' || /(?:fast|flash|lite|极速|快速)/i.test(`${m.id} ${m.label}`))?.id

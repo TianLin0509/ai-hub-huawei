@@ -4,6 +4,8 @@
 
 // r58：每个一键安装区块都带「下载源：公司内源」一行（renderer/download-source-view.js），点之前就能看到会不会走内源。
 const sourceView = require('./download-source-view');
+// r59：进度统一用 renderer/download-progress-view.js（进度条 + 已下/总量 + 速度 + 剩余时间 + 来源）。
+const progressBar = require('./download-progress-view');
 const TOOL_FOR_KIND = Object.freeze({ claude: 'claude', codex: 'codex', 'deepseek-acp': 'dsh' });
 const TOOL_NAMES = Object.freeze({ claude: 'Claude Code', codex: 'Codex', dsh: 'DSH 运行环境', git: 'Git for Windows' });
 const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -29,6 +31,15 @@ function progressView(tool) {
   }
 }
 
+// 统一进度条：下载中显示字节/速度/来源；校验、解压、试运行等阶段显示动态条 + 一句话。
+function barHtml(tool, title, override = '') {
+  const t = tool || { phase: 'idle' };
+  const view = progressView(t);
+  if (!view.busy && !view.done) return '';
+  const message = t.phase === 'downloading' ? '' : override || progressView({ ...t, step: null }).text;
+  return progressBar.html({ ...t, message }, { title });
+}
+
 const sizeText = (state, id) => {
   const entry = (state.catalog || []).find(c => c.id === id);
   return entry && entry.bytes ? `约 ${Math.max(1, Math.round(entry.bytes / 1024 / 1024))} MB` : '';
@@ -51,9 +62,9 @@ function gitBlockHtml(state) {
     + `点一键安装时 Hub 先在这台电脑上全局找一遍，已有就直接用；没有才下载${esc(size ? '（' + size + '）' : '')}，装在你的用户目录，不需要管理员权限。</p>`;
   const button = view.busy ? '<button type="button" data-cli-action="cancel">取消</button>'
     : `<button type="button" data-cli-action="install-git"${otherBusy ? ' disabled' : ''}>${view.retry ? '重试安装 Git' : '一键安装 Git for Windows'}</button>`;
-  const bar = view.busy ? `<div class="cli-install-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"${view.percent == null ? '' : ` aria-valuenow="${view.percent}"`}><span style="width:${view.percent == null ? 100 : view.percent}%"${view.percent == null ? ' data-indeterminate="1"' : ''}></span></div>` : '';
-  const status = view.text ? `<p class="cli-install-status" role="status" aria-live="polite">${esc(tool.phase === 'checking' ? '正在全局查找本机的 Git，没有再下载…' : view.text)}</p>` : '';
-  return `<div class="cli-install cli-install-git" data-cli-tool="git" data-cli-phase="${esc(tool.phase || 'idle')}">${view.busy ? '' : intro}${sourceView.slotHtml('cli:git')}${bar}${status}`
+  const bar = view.busy ? barHtml(tool, '安装 Git for Windows', tool.phase === 'checking' ? '正在全局查找本机的 Git，没有再下载…' : '') : '';
+  const status = view.text && !view.busy ? `<p class="cli-install-status" role="status" aria-live="polite">${esc(view.text)}</p>` : '';
+  return `<div class="cli-install cli-install-git" data-cli-tool="git" data-cli-phase="${esc(tool.phase || 'idle')}">${view.busy ? '' : intro}${view.busy ? '' : sourceView.slotHtml('cli:git')}${bar}${status}`
     + `<div class="cli-install-actions">${button}</div></div>`;
 }
 
@@ -71,15 +82,14 @@ function installBlockHtml(kind, state) {
   const button = view.done ? ''
     : view.busy ? '<button type="button" data-cli-action="cancel">取消</button>'
     : `<button type="button" class="primary" data-cli-action="install"${otherBusy ? ' disabled' : ''}>${label}</button>`;
-  const bar = view.busy || view.done
-    ? `<div class="cli-install-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"${view.percent == null ? '' : ` aria-valuenow="${view.percent}"`}><span style="width:${view.percent == null ? 100 : view.percent}%"${view.percent == null ? ' data-indeterminate="1"' : ''}></span></div>` : '';
+  const bar = barHtml(tool, `安装 ${TOOL_NAMES[id]}`);
   const blocked = view.blocked ? `<p class="cli-install-note">公司网络拦截了下载。<button type="button" data-cli-action="open-pass" data-url="${esc(view.blocked)}">打开放行页</button>，放行后自动重试。</p>` : '';
   const busyNote = otherBusy ? `<p class="cli-install-note">正在安装${esc(TOOL_NAMES[state.busy] || '其他组件')}，装完再装这个。</p>` : '';
   const git = id === 'claude' ? gitBlockHtml(state) : '';
   const advice = !git && view.done && state.advice && state.advice[id] ? `<p class="cli-install-note">${esc(state.advice[id])}</p>` : '';
-  return `<div class="cli-install" data-cli-tool="${id}" data-cli-phase="${esc(tool && tool.phase || 'idle')}">${view.done ? '' : intro}${view.done ? '' : sourceView.slotHtml('cli:' + id)}${bar}`
-    + `<p class="cli-install-status" role="status" aria-live="polite">${esc(view.text)}</p>${blocked}${busyNote}${advice}`
+  return `<div class="cli-install" data-cli-tool="${id}" data-cli-phase="${esc(tool && tool.phase || 'idle')}">${view.done ? '' : intro}${view.done || view.busy ? '' : sourceView.slotHtml('cli:' + id)}${bar}`
+    + `${view.busy || view.done ? '' : `<p class="cli-install-status" role="status" aria-live="polite">${esc(view.text)}</p>`}${blocked}${busyNote}${advice}`
     + `${button ? `<div class="cli-install-actions">${button}</div>` : ''}</div>${git}`;
 }
 
-module.exports = { TOOL_FOR_KIND, TOOL_NAMES, progressView, installBlockHtml, gitBlockHtml };
+module.exports = { TOOL_FOR_KIND, TOOL_NAMES, progressView, barHtml, installBlockHtml, gitBlockHtml };

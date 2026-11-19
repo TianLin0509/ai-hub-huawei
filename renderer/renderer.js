@@ -1144,6 +1144,8 @@ diskReleasePanel = require('./disk-release-panel').attachDiskReleasePanel({
     return () => ipcRenderer.removeListener('disk-release-progress', listener);
   },
 });
+// 底栏「问问 Hub」（2026-11-19）：照随包的使用说明书答疑，只读一次性问答（renderer/help-ask-ui.js）。
+try { require('./help-ask-ui.js').attachHelpAsk({ document, ipcRenderer }); } catch (error) { console.warn('[help-ask] 界面初始化失败：', error.message); }
 // 桌宠「硬盘快满」卡片点开这里（2026-11-09）。
 window.__hubOpenDiskRelease = () => diskReleasePanel?.open();
 require('./vpn-traffic-panel').attachVpnTrafficPanel({
@@ -1987,8 +1989,11 @@ require('./toolbar-more').initToolbarMore({
 const backstageButton = document.getElementById('btn-backstage');
 const backstageMenu = require('./backstage-menu').createBackstageMenu({ document,
   isSplit: () => !!sessionSplit?.isBackstage(),
-  onSingle: () => { sessionSplit?.leaveBackstage(); syncBackstageButton(); },
-  onSplit: async () => { await sessionSplit.showBackstage(); syncBackstageButton(); noteBackstageOpen(activeSessionId); },
+  onSingle: () => { sessionSplit?.leaveBackstage(); syncBackstageButton(); rememberBackstageLayoutForSession(activeSessionId, currentView === 'pty' ? 'pty' : 'card'); },
+  onSplit: async () => {
+    await sessionSplit.showBackstage(); syncBackstageButton(); noteBackstageOpen(activeSessionId);
+    if (sessionSplit.isBackstage()) rememberBackstageLayoutForSession(activeSessionId, 'split');
+  },
   onError: error => require('./ui-feedback').showHubAlert(error.message),
 });
 const turnSpeedDisplay = require('./turn-speed-display').createTurnSpeedDisplay(document,
@@ -3956,9 +3961,56 @@ const _cardOverlayFollowBottomBySession = new Map();
 // Legacy view choices remain compatible with explicit tools; ordinary navigation
 // always starts with cards, independently of the underlying CLI runtime.
 const cardViewSessions = readCardViewSessions(localStorage);
+// 按会话记住「后台显示方式」（2026-11-18 反馈）：只记用户亲手点的后台按钮和后台显示方式菜单。
+const backstageLayoutMemory = require('../core/backstage-layout-memory.js');
+const backstageLayoutBySession = backstageLayoutMemory.readBackstageLayouts(localStorage);
+function rememberBackstageLayoutForSession(sessionId, layout) {
+  if (backstageLayoutMemory.rememberBackstageLayout(backstageLayoutBySession, sessionId, layout)) {
+    backstageLayoutMemory.writeBackstageLayouts(localStorage, backstageLayoutBySession);
+  }
+}
 function selectionViewModeForSession(sessionId, session) {
   const cardCapable = !!session && session.kind !== 'powershell';
+  if (cardCapable && backstageLayoutMemory.backstageLayoutFor(backstageLayoutBySession, sessionId) === 'pty') return 'pty';
   return selectionViewModeFor(cardViewSessions, sessionId, { cardCapable });
+}
+// 切回一个上次停在「左右并排」的会话：等它的终端就绪后重新并排（最多等约 6 秒；期间用户切走或改了布局就不动）。
+// 6 秒内没就绪（典型是休眠会话）：先显示卡片并轻提示一次，之后会话醒来、终端就绪时再恢复一次（m5 审查 2026-11-19）。
+let _backstageRestoreTimer = null;
+let _backstageRestorePending = null;
+function restoreBackstageLayout(sessionId, attempt = 0) {
+  clearTimeout(_backstageRestoreTimer); _backstageRestoreTimer = null;
+  if (_backstageRestorePending && _backstageRestorePending !== sessionId) _backstageRestorePending = null;
+  if (backstageLayoutMemory.backstageLayoutFor(backstageLayoutBySession, sessionId) !== 'split') { _backstageRestorePending = null; return; }
+  if (!sessionSplit || activeSessionId !== sessionId || currentAppToolbarView() || sessionSplit.isBackstage() || sessionSplit.layout?.() === 'two') return;
+  const session = sessions.get(sessionId);
+  const ready = session && session.status !== 'dormant' && terminalCache.has(sessionId);
+  if (!ready) {
+    if (attempt < 20) _backstageRestoreTimer = setTimeout(() => restoreBackstageLayout(sessionId, attempt + 1), 300);
+    else if (_backstageRestorePending !== sessionId) {
+      _backstageRestorePending = sessionId;
+      showToast(session && session.status === 'dormant'
+        ? '这个会话在休眠，先显示卡片；唤醒后自动恢复左右并排'
+        : '终端还没就绪，先显示卡片；就绪后自动恢复左右并排');
+    }
+    return;
+  }
+  _backstageRestorePending = null;
+  sessionSplit.showBackstage()
+    .then(() => syncBackstageButton())
+    .catch(error => {
+      if (attempt < 20 && activeSessionId === sessionId) _backstageRestoreTimer = setTimeout(() => restoreBackstageLayout(sessionId, attempt + 1), 300);
+      else console.warn('[backstage] restore split failed:', error && error.message);
+    });
+}
+// 等过头的那个会话后来醒了 / 状态变了：再试一次恢复左右并排（仍只在它是当前会话时）。
+// 休眠会话唤醒时走 session-created（换成活会话），其余状态变化走 session-updated，两条都接。
+for (const channel of ['session-created', 'session-updated']) {
+  ipcRenderer.on(channel, (_e, payload) => {
+    const id = payload && payload.session && payload.session.id;
+    if (!id || id !== _backstageRestorePending) return;
+    setTimeout(() => { if (_backstageRestorePending === id && activeSessionId === id) restoreBackstageLayout(id); }, 0);
+  });
 }
 function rememberViewModeForSession(sessionId, mode) {
   if (rememberViewMode(cardViewSessions, sessionId, mode)) writeCardViewSessions(localStorage, cardViewSessions);
@@ -3969,6 +4021,7 @@ function forgetViewModeForSession(sessionId) {
   }
   _cardOverlayFollowBottomBySession.delete(sessionId);
   if (forgetViewMode(cardViewSessions, sessionId)) writeCardViewSessions(localStorage, cardViewSessions);
+  rememberBackstageLayoutForSession(sessionId, 'card');
 }
 let _terminalRuntimeStatusTicker = null;
 const { createCardQuestionNavigator } = require('./card-question-navigator.js');
@@ -4399,7 +4452,7 @@ function recoverVisibleActiveTerminalSurface() {
 document.addEventListener('click', (e) => {
   const btn = e.target.closest('#btn-backstage');
   if (btn && !btn.hidden && sessionSplit?.isBackstage()) {
-    sessionSplit.leaveBackstage(); syncBackstageButton(); return;
+    sessionSplit.leaveBackstage(); syncBackstageButton(); rememberBackstageLayoutForSession(activeSessionId, 'card'); return;
   }
   if (btn && !btn.hidden && sessionSplit?.isSecondaryFocused()) {
     sessionSplit.secondary().toggleMode();
@@ -4409,6 +4462,7 @@ document.addEventListener('click', (e) => {
   if (btn && !btn.hidden && activeSessionId && !currentAppToolbarView()) {
     applyViewMode(currentView === 'pty' ? 'card' : 'pty');
     if (currentView === 'pty') noteBackstageOpen(activeSessionId);
+    rememberBackstageLayoutForSession(activeSessionId, currentView === 'pty' ? 'pty' : 'card');
   } else if (btn) {
     noteBackstageOpen(activeSessionId, { ignored: btn.hidden ? 'button-hidden' : !activeSessionId ? 'no-session' : `page:${currentAppToolbarView()}` });
   }
@@ -4672,11 +4726,43 @@ async function reconnectSession(sessionId) {
       if (typeof updateFloatingBarState === 'function') updateFloatingBarState();
       return;
     }
-    const result = await ipcRenderer.invoke('restart-session', sessionId);
+    const result = await restartSessionInPlace(sessionId);
     if (result && result.ok === false) failed(result.message || '会话重启失败');
   } catch (error) {
     failed(error && error.message ? error.message : String(error));
   }
+}
+
+// 重启当前打开的会话（右键「重启」、输入框「重连」，2026-11-19 修 5.6.43 反馈「点会话重启后聊天框和左侧功能栏都消失」）。
+// 重启 = 主进程先休眠再按原生会话恢复。以前休眠那一刻渲染层把当前会话取消选中、主区只挂上 home-active 和空状态
+// （没走真正的回主页），恢复完成时又因「当前选中的不是它」不再切回——主区空白、聊天框不见，切走再切回才正常。
+// 这里记下「重启期间保持打开」：休眠时仍选中它、主区显示「正在唤醒」，恢复后由 session-created 照常挂回终端和聊天框。
+// 只管用户当前正看着的会话；重启后台会话、或重启期间用户切走了，都不抢画面。
+const _restartKeepOpen = new Set();
+async function restartSessionInPlace(sessionId) {
+  const keepOpen = activeSessionId === sessionId && !activeMeetingId;
+  if (keepOpen) _restartKeepOpen.add(sessionId);
+  let result;
+  try {
+    result = await ipcRenderer.invoke('restart-session', sessionId);
+  } catch (error) {
+    result = null;
+    restartInPlaceFailed(sessionId, error && error.message ? error.message : String(error));
+    throw error;
+  } finally {
+    _restartKeepOpen.delete(sessionId);
+  }
+  if (result && result.ok === false) restartInPlaceFailed(sessionId, result.message || '会话重启失败');
+  return result;
+}
+// 重启没成功、会话停在休眠：还停在它上面的话，把「正在唤醒」换成失败说明（再点左栏会话可重试），不留一直转圈的占位。
+function restartInPlaceFailed(sessionId, message) {
+  const session = sessions.get(sessionId);
+  if (!session || session.status !== 'dormant') return;
+  session._resumePending = false;
+  paintSidebarResumePending(sessionId, false);
+  if (activeSessionId === sessionId) showDormantResumePlaceholder(session, new Error(message));
+  scheduleSessionListRender();
 }
 
 // 换场景（输入框「场景」按钮，2026-10-13）：一律新开一个同设置的会话，场景记在 purpose 上（core/session-scenes.js）。
@@ -6209,6 +6295,7 @@ async function selectSession(id, opts = {}) {
   // showTerminal owns the history request (and the cached-view fast path).
   // Selecting a session must not start a second load through applyViewMode.
   applyViewMode(targetView, { remember: false, skipPreviousCardCapture: true });
+  if (!opts.inspectOnly) setTimeout(() => restoreBackstageLayout(id), 0);
   if (completionNotificationToggle) completionNotificationToggle.refreshTarget();
   cardMultiSelectController.setVisible(currentView === 'card' && !!activeSessionId);
   paintSidebarActiveTarget({ sessionId: id });
@@ -9071,6 +9158,7 @@ const sessionContextMenu = createSessionContextMenuController({
   renderSessionList: scheduleSessionListRender,
   schedulePersist,
   wakeDormantSession: (sessionId) => resumeDormantSession(sessionId, { forceScrollBottom: true }),
+  restartSession: sessionId => restartSessionInPlace(sessionId),
   // 群聊分支建出新群聊/新成员后，直接把用户带到那间房里。
   selectMeeting: (meetingId) => { void selectMeeting(meetingId); },
 });
@@ -9862,7 +9950,14 @@ ipcRenderer.on('session-suspended', (_e, { sessionId, session }) => {
   clearTerminalActivitySession(sessionId);
   disposeCachedTerminal(sessionId);
   nativeDraftControllers.delete(sessionId);
-  if (activeSessionId === sessionId) {
+  if (activeSessionId === sessionId && _restartKeepOpen.has(sessionId)) {
+    // 用户正看着它点了重启：保持选中，主区显示「正在唤醒」，恢复后 session-created 按当前选中照常挂回（restartSessionInPlace）。
+    local._resumePending = true;
+    paintSidebarResumePending(sessionId, true);
+    ipcRenderer.send('focus-session', { sessionId: null });
+    cardMultiSelectController.setVisible(false);
+    showDormantResumePlaceholder(local);
+  } else if (activeSessionId === sessionId) {
     activeSessionId = null;
     if (fileManagerPanel) fileManagerPanel.close();
     completionNotificationToggle.refreshTarget();

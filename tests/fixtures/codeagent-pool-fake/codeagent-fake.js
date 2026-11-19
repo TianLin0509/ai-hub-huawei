@@ -18,6 +18,11 @@ if (args[0] === '--version') {
   process.stdout.write('1.2615.02.01 (codeAgentCLI)\n', () => process.exit(0));
   return;
 }
+// CODEAGENT_POOL_FAKE_HELP_SETTINGS=1：--help 像 1.2615.02.05 一样列出 --settings（Hub 据此用 --settings 固定会话模型）。
+if (args[0] === '--help' && process.env.CODEAGENT_POOL_FAKE_HELP_SETTINGS === '1') {
+  process.stdout.write('Usage: codeagent [options]\n  --settings <file-or-json>  Load additional settings\n  --resume <id>\n', () => process.exit(0));
+  return;
+}
 const configDir = process.env.CODEAGENT3_CONFIG_DIR || '';
 const log = process.env.CODEAGENT_POOL_FAKE_LOG;
 const resumeAt = args.indexOf('--resume');
@@ -61,6 +66,9 @@ function accountModels() {
     const entry = Object.values(raw).find(v => v && typeof v === 'object');
     accountId = String(entry && entry.accountId || '');
   } catch { /* 没登录 */ }
+  // CODEAGENT_POOL_FAKE_MODELS=a,b,c：这个号的模型清单（serve 和 /model 菜单同一份），用来测长清单。
+  const listed = String(process.env.CODEAGENT_POOL_FAKE_MODELS || '').split(',').map(m => m.trim()).filter(Boolean);
+  if (listed.length) return listed;
   return /^z/i.test(accountId) ? ['deepseek-v4-flash-0731'] : ['GLM-5.2-WX-Auto'];
 }
 // serve 模式（2026-10-30，Hub 先经 serve 读模型清单）：交给假 serve（codeagent-serve-fake），清单和 /model 菜单一致；
@@ -102,7 +110,38 @@ if (process.env.CLAUDE_HUB_E2E === '1' && process.env.CODEAGENT_TEAM_FAKE_CONTRO
   return;
 }
 let typed = '';
-process.stdin.on('data', chunk => {
+// CODEAGENT_POOL_FAKE_ANSWER_MODEL_FILE=<文件>：普通消息也回答——写原生记录（回答的 model 取文件里当时写的，模拟在后台 /model 换了模型），
+// 再按配置目录登记的 hook 报 UserPromptSubmit / Stop，Hub 照真 CLI 的路径读到「实际模型」。
+const answerModelFile = process.env.CODEAGENT_POOL_FAKE_ANSWER_MODEL_FILE || '';
+function answer(text) {
+  if (!transcript) return;
+  const uuid = crypto.randomUUID();
+  fs.appendFileSync(transcript, JSON.stringify({ type: 'user', sessionId, cwd, uuid, timestamp: new Date().toISOString(), message: { role: 'user', content: text } }) + '\n');
+  fireHook('UserPromptSubmit', 'prompt', { prompt: text, prompt_id: uuid });
+  let model = 'fixture-no-model';
+  try { model = fs.readFileSync(answerModelFile, 'utf8').trim() || model; } catch { /* 没写就用占位 */ }
+  fs.appendFileSync(transcript, JSON.stringify({ type: 'assistant', sessionId, cwd, uuid: crypto.randomUUID(), parentUuid: uuid, timestamp: new Date().toISOString(),
+    message: { id: 'msg_' + crypto.randomUUID().replace(/-/g, ''), role: 'assistant', model, content: [{ type: 'text', text: '夹具已收到：' + text }], stop_reason: 'end_turn',
+      usage: { input_tokens: 10, output_tokens: 5 } } }) + '\n');
+  fireHook('Stop', 'stop', { last_assistant_message: '夹具已收到：' + text });
+}
+let pasteBuffer = null;
+if (answerModelFile) process.stdin.on('data', chunk => {
+  // Hub 发消息用括号粘贴（ESC[200~ … ESC[201~），再单独补回车；粘贴内容当正文，不当作 Esc。
+  const text = chunk.toString('utf8').replace(/\x1b\[200~/g, '\u0001').replace(/\x1b\[201~/g, '\u0002');
+  for (const ch of text) {
+    if (ch === '\u0001') { pasteBuffer = ''; continue; }
+    if (ch === '\u0002') { typed += pasteBuffer || ''; pasteBuffer = null; continue; }
+    if (pasteBuffer !== null) { pasteBuffer += ch; continue; }
+    if (ch === '\x1b') { typed = ''; prompt(); continue; }
+    if (ch === '\r' || ch === '\n') {
+      const line = typed.trim(); typed = '';
+      if (line === '/model') menu(); else { if (line) answer(line); prompt(); }
+    } else if (ch === '\x7f' || ch === '\b') typed = typed.slice(0, -1);
+    else if (ch >= ' ') typed += ch;
+  }
+});
+else process.stdin.on('data', chunk => {
   const text = chunk.toString('utf8');
   if (text.includes('\x1b')) { typed = ''; prompt(); return; }
   for (const ch of text) {

@@ -45,7 +45,7 @@
   .vp-confirm{position:absolute;inset:0;background:rgba(20,24,31,.28);display:flex;align-items:center;justify-content:center}
   .vp-confirm>div{width:470px;background:var(--hw-surface,#fff);border-radius:10px;padding:18px 20px;box-shadow:0 8px 30px rgba(0,0,0,.18);font-size:13px;line-height:1.7}
   .vp-confirm h3{margin:0 0 8px;font-size:15px}.vp-confirm .vp-row{display:flex;gap:10px;justify-content:flex-end;margin-top:14px}
-  .vp-progress{height:6px;background:rgba(52,120,246,.15);border-radius:3px;overflow:hidden;width:220px}.vp-progress i{display:block;height:100%;background:#3478f6}
+  .vp-dlp{flex:1;min-width:0;margin-right:auto}.vp-dlp .dlp{margin:0}
   #vp-pinned-chip{position:fixed;right:16px;bottom:14px;z-index:9000;display:flex;gap:8px;align-items:center;padding:6px 8px 6px 12px;border-radius:18px;background:var(--hw-surface,#fff);border:1px solid #3478f6;font:12px "Microsoft YaHei",sans-serif;color:var(--fg-default,#1f2329);box-shadow:0 2px 10px rgba(0,0,0,.08)}
   #vp-pinned-chip button{border:0;border-radius:12px;padding:3px 10px;background:#3478f6;color:#fff;cursor:pointer;font-size:12px}`;
   function ensureCss() { if (document.getElementById('vp-css')) return; const s = document.createElement('style'); s.id = 'vp-css'; s.textContent = CSS; document.head.appendChild(s); }
@@ -82,12 +82,13 @@
 
   function footHtml() {
     const i = selItem(), phase = rollbackPhase();
-    if (phase === 'downloading') { const p = upd.progress || {}; const pct = p.total ? Math.round(p.received / p.total * 100) : 0;
-      return `<span class="vp-msg">正在下载 v${esc(upd.latest.version)} 的完整更新包 ${pct}%</span><div class="vp-progress"><i style="width:${pct}%"></i></div><button class="vp-btn" data-vp="cancel">取消</button>`; }
+    // r59：统一进度条（进度、速度、剩余时间、来源）。
+    const bar = title => `<div class="vp-dlp">${require('./download-progress-view').html({ ...(upd.progress || {}), phase: upd.progress && upd.progress.total ? 'downloading' : 'connecting' }, { title })}</div>`;
+    if (phase === 'downloading') return bar(`下载 v${upd.latest.version} 的完整更新包`) + '<button class="vp-btn" data-vp="cancel">取消</button>';
     if (phase === 'ready') return `<span class="vp-msg">v${esc(upd.latest.version)} 已下载并校验好，重启后生效；设置和数据库已做一致备份</span><button class="vp-btn primary" data-vp="apply">立即重启回退</button>`;
     if (phase === 'applying') return '<span class="vp-msg">正在重启并换上旧版…</span>';
     if (upd && upd.phase === 'ready' && !pinned()) return `<span class="vp-msg">最新版 v${esc(upd.latest?.version)} 已下载好</span><button class="vp-btn primary" data-vp="apply">${upd.plan && upd.plan.kind === 'full' ? '立即安装最新版' : '立即重启到最新版'}</button>`;
-    if (upd && upd.phase === 'downloading' && !pinned()) return `<span class="vp-msg">正在下载最新版…</span>`;
+    if (upd && upd.phase === 'downloading' && !pinned()) return bar(`下载最新版${upd.latest && upd.latest.version ? ' v' + upd.latest.version : ''}`);
     const canRoll = i && !i.current && !busy;
     return `<span class="vp-msg">${esc(message || (upd && upd.phase === 'error' && upd.error) || '')}</span>`
       + (retry && message ? `<button class="vp-btn" data-vp="retry" ${busy ? 'disabled' : ''}>重试</button>` : '')

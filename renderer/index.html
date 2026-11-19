@@ -953,7 +953,7 @@
               </select>
             </div>
           </div>
-          <p class="config-reading-note">默认已从 13px 调到 15px；代码块仍使用等宽字体。公式由本地 KaTeX 离线渲染。</p>
+          <p class="config-reading-note">默认已从 13px 调到 15px；代码块用等宽字体，字号跟着正文字号和 Ctrl+滚轮一起缩放。公式由本地 KaTeX 离线渲染。</p>
           <div class="config-field" id="cfg-composer-enter-field">
             <label for="cfg-composer-enter">回车键</label>
             <select id="cfg-composer-enter">
@@ -961,6 +961,14 @@
               <option value="newline">回车换行，Ctrl+回车发送</option>
             </select>
             <p class="config-reading-note">单会话、群聊和助理的输入框都按这个来，选择后立即生效。</p>
+          </div>
+          <div class="config-field" id="cfg-workspace-root-field">
+            <label for="cfg-workspace-root">新建会话默认工作目录 <span class="config-label-hint">（留空 = 默认）</span></label>
+            <div class="config-workspace-root-row" style="display:flex;gap:8px">
+              <input type="text" id="cfg-workspace-root" spellcheck="false" style="flex:1;min-width:0">
+              <button type="button" class="config-test-btn" id="cfg-workspace-root-pick">选择…</button>
+            </div>
+            <p class="config-reading-note" id="cfg-workspace-root-note">新建会话选「默认工作目录」时开在这里，保存后下一个新会话生效；已有会话不动。</p>
           </div>
           <div class="config-field" id="cfg-codeagent-quota-placement-field" hidden>
             <label for="cfg-codeagent-quota-placement">号池额度栏位置</label>

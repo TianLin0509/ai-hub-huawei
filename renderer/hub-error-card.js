@@ -339,7 +339,12 @@ async function runKnownAction(act, button, { doc, ipcRenderer, closeOverlays }) 
     if (act === 'known:dsh-repair' || act === 'known:dsh-repair-global') {
       const toGlobal = act === 'known:dsh-repair-global';
       say(toGlobal ? '正在装进全局 npm…' : '正在安装（约 1 分钟）…');
-      const result = await ipcRenderer.invoke('cli-tools:install', toGlobal ? { id: 'dsh', repair: true, target: 'user-global' } : { id: 'dsh' });
+      // r59：按钮下方挂统一进度条（Hub 自管安装走组件下载，有进度/速度/来源）。
+      const host = doc.createElement('div'); host.className = 'hub-error-dlp'; button.insertAdjacentElement('afterend', host);
+      const unmount = toGlobal ? () => {} : require('./download-progress-view').mount(host, 'cli:dsh', { title: '安装 DSH 运行环境', ipcRenderer });
+      let result;
+      try { result = await ipcRenderer.invoke('cli-tools:install', toGlobal ? { id: 'dsh', repair: true, target: 'user-global' } : { id: 'dsh' }); }
+      finally { setTimeout(() => { unmount(); host.remove(); }, 6500); }
       if (!result?.ok) throw new Error(result?.error || 'DSH 安装没有成功');
       return done('已装好，请重新新建会话', 6000);
     }

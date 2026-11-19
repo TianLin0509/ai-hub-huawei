@@ -165,8 +165,14 @@ const text = value => (typeof value === 'string' ? value.trim() : '');
 
 function parseProviders(data) {
   const models = [];
+  // 没收进来的供应商（status 不是 available）记下 id、status、模型数，写进 serve-read 日志：2026-11-18 反馈「配了很多模型只出现 5 个」，
+  // 当时日志只有收进来的 5 个，看不出其余供应商是被这里丢掉了还是 serve 本来就没报（公司回执 Q-1119-12：自配供应商的 status 取值没有文档）。
+  const skipped = [];
   for (const provider of Array.isArray(data && data.providers) ? data.providers : []) {
-    if (provider && provider.status && provider.status !== 'available') continue;
+    if (provider && provider.status && provider.status !== 'available') {
+      skipped.push({ id: text(provider.id) || '?', status: text(provider.status), models: provider.models && typeof provider.models === 'object' ? Object.keys(provider.models).length : 0 });
+      continue;
+    }
     const map = provider && provider.models && typeof provider.models === 'object' ? provider.models : {};
     for (const [key, info] of Object.entries(map)) {
       const id = text(info && info.id) || text(key);
@@ -182,7 +188,7 @@ function parseProviders(data) {
   const credit = (Array.isArray(data && data.creditUsage && data.creditUsage.quotas) ? data.creditUsage.quotas : [])
     .map(q => ({ type: text(q && q.type), used: num(q && q.used), total: num(q && q.total), remaining: num(q && q.remaining), resetAt: text(q && q.resetAt) }))
     .filter(q => q.type && q.total !== null);
-  return { models, credit, discount: text(data && data.busyIdleDefinition && data.busyIdleDefinition.discount_status) };
+  return { models, credit, discount: text(data && data.busyIdleDefinition && data.busyIdleDefinition.discount_status), skipped };
 }
 
 function parseQuota(data) {
@@ -197,14 +203,14 @@ async function readAccount(options) {
     const providers = await get('/api/v2/config/providers');
     if (!providers.ok) return { ok: false, error: `读模型清单失败：${providers.error}` };
     const parsed = parseProviders(providers.data);
-    if (!parsed.models.length) return { ok: false, error: 'serve 返回的模型清单是空的' };
+    if (!parsed.models.length) return { ok: false, error: 'serve 返回的模型清单是空的', skipped: parsed.skipped };
     const quotas = {};
     for (const model of parsed.models) {
       const quota = await get(`/api/v2/model/${encodeURIComponent(model.id)}/quota`, { retries: 1 });
       if (quota.ok) quotas[model.id] = parseQuota(quota.data);
     }
     return { ok: true, source: 'serve', models: [...new Set(parsed.models.map(m => m.id))], details: parsed.models, credit: parsed.credit,
-      discount: parsed.discount, quotas, at: new Date().toISOString() };
+      discount: parsed.discount, quotas, at: new Date().toISOString(), skipped: parsed.skipped };
   });
 }
 

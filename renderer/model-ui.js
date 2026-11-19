@@ -13,6 +13,8 @@ const { speedControl } = require('../core/session-speed.js');
 
 function modelPickerIdText(option) {
   if (option.disabled && option.upgradeTo) return `需 ${option.upgradeTo}+`;
+  // CodeAgent 配置里自配、账号清单还没读到的模型（core/codeagent-models.js settingsProviderModels）：标「自配」，不重复写一遍模型名。
+  if (option.source === 'settings') return '自配';
   return String(option.label).toLowerCase() === String(option.id).toLowerCase() ? '' : option.id;
 }
 

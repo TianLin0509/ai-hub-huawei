@@ -113,6 +113,10 @@
 .meeting-video-usage{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px;margin-bottom:10px;font-size:var(--hw-fs-12);color:var(--hw-text-2)}
 .meeting-video-usage>span{flex:1 1 auto;min-width:0}
 .meeting-video-usage .meeting-delete-btn:not(:disabled){color:var(--hw-red)}
+.meeting-storage{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:var(--hw-fs-12);color:var(--hw-text-2)}
+.meeting-storage>span{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-all}
+.meeting-storage>.ca-btn{flex:none}
+.meeting-storage-note{margin:-4px 0 10px;font-size:var(--hw-fs-12);color:var(--hw-text-2);word-break:break-all}
 .meeting-rate{height:28px;font-size:var(--hw-fs-12)}
 .meeting-menu-actions{display:flex;flex-direction:column;gap:2px;border-top:1px solid var(--hw-line);padding-top:10px;margin-top:12px}
 .meeting-menu-actions>.ca-btn{justify-content:flex-start;background:transparent;border-radius:var(--hw-r-sm);font-weight:400}

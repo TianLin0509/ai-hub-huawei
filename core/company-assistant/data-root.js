@@ -88,6 +88,9 @@ function prepareDataRoot(defaultDir) {
       if (copied && settings.cliPath && inside(path.join(source, 'tools', 'welink-cli'), path.resolve(settings.cliPath))) {
         settings.cliPath = path.join(target, path.relative(source, settings.cliPath));
       }
+      // 换目录时记下离开的目录：目标已有数据时不会复制，旧目录里后来新建的会议要靠这份记录在会议页里找回（2026-11-19）。
+      const history = Array.isArray(settings.dataRootHistory) ? settings.dataRootHistory.filter(d => typeof d === 'string') : [];
+      settings.dataRootHistory = [...history.filter(d => path.resolve(d) !== path.resolve(source)), source].slice(-8);
       settings.dataRootActive = target;
       saveSettings(defaultDir, settings);
       if (copied) fs.unlinkSync(marker);

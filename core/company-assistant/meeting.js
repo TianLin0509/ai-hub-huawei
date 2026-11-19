@@ -50,19 +50,112 @@ class MeetingCompanion {
     this.recording = new MeetingRecording(this); this.glossary = new MeetingGlossary(a.dir);
     this.frames = new MeetingFrames(this); this.tools = new MeetingTools(this);
   }
+  // 会议材料可能分在几个目录：当前助理数据目录，加上默认目录、设置过的自定义目录和以前用过的数据目录（2026-11-19 用户反馈「升级后找不到以前会议」）。
+  // 自定义目录启用失败会回退默认目录、换回旧目录时目标已有数据不会复制，这两种情况下旧会议只是留在另一个目录里，这里把它们一并列出来，原地读写、不复制。
+  // 同一编号几个目录都有（迁移复制过、两边都录过）时显示较新的那份（meeting.json、纪要等材料里最晚的修改时间），另一份在材料位置里提示；
+  // 删过的会议记在墓碑里，不会从另一个目录的副本里复活。
+  roots() {
+    if (!this.rootList) {
+      const primary = path.resolve(this.root), seen = new Set([primary.toLowerCase()]), extra = [];
+      let candidates = [];
+      try { candidates = this.a.meetingRootCandidates?.() || []; } catch { candidates = []; }
+      for (const r of candidates) {
+        if (typeof r !== 'string' || !path.isAbsolute(r)) continue;
+        const dir = path.resolve(r), key = dir.toLowerCase();
+        if (!seen.has(key)) { seen.add(key); extra.push(dir); }
+      }
+      this.rootList = [primary, ...extra];
+    }
+    return this.rootList;
+  }
+  // 墓碑放在固定的默认目录（设置也在那儿），换数据目录后仍对所有目录生效；默认目录写不进时再写一份到当前目录，读时两份合并。
+  tombstoneFiles() { return [...new Set([this.a.defaultDir && path.join(this.a.defaultDir, 'meeting-tombstones.json'), path.join(this.root, '.deleted-meetings.json')].filter(Boolean))]; }
+  tombstones() {
+    if (!this.deletedIds) {
+      this.deletedIds = new Set();
+      const all = new Set([...this.tombstoneFiles(), ...this.roots().map(r => path.join(r, '.deleted-meetings.json'))]); // 以前当前目录里写下的备份墓碑也认
+      this.badTombstones = new Set(); this.lockedTombstones = new Set();
+      for (const f of all) {
+        let text;
+        try { text = fs.readFileSync(f, 'utf8'); } catch (e) { if (e && e.code !== 'ENOENT') this.lockedTombstones.add(f); continue; } // 没有就跳过；暂时读不了（被占用等）的记下来，本轮不覆盖它，免得里面的编号丢掉、已删的会议复活
+        try { const v = JSON.parse(text); if (Array.isArray(v)) { v.forEach(x => this.deletedIds.add(x)); continue; } } catch { /* 坏了，下面按编号捞 */ }
+        // 文件坏了（断电留下半截）：能认出的会议编号照样算删过，写新墓碑前先把坏文件备份，不整份覆盖掉。
+        for (const id of text.match(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/g) || []) this.deletedIds.add(id);
+        this.badTombstones.add(f);
+      }
+    }
+    return this.deletedIds;
+  }
+  // 返回是否至少有一份墓碑落盘。
+  bury(id) {
+    const set = this.tombstones(); set.add(id);
+    for (const f of this.tombstoneFiles()) {
+      try {
+        if (this.lockedTombstones?.has(f)) continue;                     // 读不了的不覆盖，换下一处
+        if (this.badTombstones?.has(f)) { fs.copyFileSync(f, `${f}.bad-${Date.now()}`); this.badTombstones.delete(f); } // 备份不下来就不覆盖，换下一处
+        fs.mkdirSync(path.dirname(f), { recursive: true }); const tmp = f + '.tmp'; fs.writeFileSync(tmp, JSON.stringify([...set]), 'utf8'); fs.renameSync(tmp, f); return true;
+      } catch { /* 换下一处 */ }
+    }
+    return false;
+  }
+  // 一份会议材料最近一次改动的时间：meeting.json 和文件夹里纪要、导出等材料取最晚的。
+  freshness(dir) {
+    let t = -1;
+    try { t = fs.statSync(path.join(dir, 'meeting.json')).mtimeMs; } catch { return -1; }
+    try { for (const f of fs.readdirSync(dir, { withFileTypes: true })) if (f.isFile()) try { t = Math.max(t, fs.statSync(path.join(dir, f.name)).mtimeMs); } catch {} } catch {}
+    return t;
+  }
+  // 编号 → 所在目录。几个目录都有同一场时取较新的那份（一样新时当前目录优先），其余的记在 copies 里；删过的不算。
+  scan() {
+    const found = new Map(), dead = this.tombstones(), prev = this.where;
+    const pinned = new Map(); // 所在目录暂时读不了、沿用上次位置的会议：不按新旧改选，免得读不到时间就换到另一份副本上
+    this.roots().forEach(root => {
+      let names = [];
+      try { names = fs.readdirSync(root).filter(s => /^[a-f0-9-]{36}$/.test(s)); }
+      catch (e) {
+        // 目录暂时读不了（被占用、网络盘掉线，可能报任何错误码）不等于里面没有会议：已认过的会议沿用上次的位置，
+        // 免得把这场的读写临时改到另一份副本上；这些会议读不出时在列表里记为读不出。
+        if (prev) { names = [...prev].filter(([, r]) => r === root).map(([id]) => id); names.forEach(id => pinned.set(id, root)); }
+      }
+      for (const id of names) if (!dead.has(id)) { if (!found.has(id)) found.set(id, []); if (!found.get(id).includes(root)) found.get(id).push(root); }
+    });
+    const where = new Map(), copies = new Map();
+    for (const [id, roots] of found) {
+      if (roots.length === 1) { where.set(id, roots[0]); continue; }
+      const ranked = roots.map((root, i) => ({ root, i, t: this.freshness(path.join(root, id)) })).sort((a, b) => b.t - a.t || a.i - b.i);
+      const shown = ranked.find(x => x.root === pinned.get(id)) || ranked[0];
+      where.set(id, shown.root);
+      copies.set(id, ranked.filter(x => x !== shown).map(x => ({ dir: path.join(x.root, id), relation: x.t < shown.t ? 'older' : x.t > shown.t ? 'newer' : 'same' })));
+    }
+    this.where = where; this.copies = copies;
+    return where;
+  }
+  // 这场会议在别的目录里的其他副本（页面材料位置提示、删除确认用）。
+  copiesOf(id) { if (!this.where) this.scan(); return this.copies?.get(id) || []; }
   // 只返回读得出来的会议：单场 meeting.json 坏了不能拖垮其他会议和助理的启动。
   // 坏的那场记在 corrupt 里（录像和音频文件原样保留），读成功过一次的不再重复解析。
   ids() {
-    let names = [];
-    try { names = fs.readdirSync(this.root).filter(s => /^[a-f0-9-]{36}$/.test(s)); } catch { return []; }
+    const names = [...this.scan().keys()];
     this.good ||= new Set(); this.corrupt ||= new Map();
+    for (const id of this.corrupt.keys()) if (!this.where.has(id)) this.corrupt.delete(id);
     return names.filter(id => {
       if (this.good.has(id)) return true;
       try { this.load(id); this.good.add(id); this.corrupt.delete(id); return true; }
       catch (e) { this.corrupt.set(id, e.message); return false; }
     });
   }
-  dir(id) { if (!/^[a-f0-9-]{36}$/.test(String(id))) throw new Error('会议编号无效'); return path.join(this.root, id); }
+  dir(id) {
+    if (!/^[a-f0-9-]{36}$/.test(String(id))) throw new Error('会议编号无效');
+    if (!this.where?.has(id) && this.roots().length > 1) this.scan();
+    return path.join(this.where?.get(id) || this.root, id);
+  }
+  // 页面「材料位置」：当前目录、旧目录里并进来的场数、读不出的场数。
+  storage() {
+    const where = this.where || this.scan(), primary = this.root, extra = new Map();
+    for (const [id, root] of where) if (root !== this.roots()[0] && (this.good?.has(id))) extra.set(root, (extra.get(root) || 0) + 1);
+    return { root: primary, extra: [...extra].map(([dir, count]) => ({ dir, count })),
+      corrupt: [...(this.corrupt || new Map())].map(([id, error]) => ({ id, dir: this.dir(id), error })), dataRootError: this.a.dataRootError || '' };
+  }
   load(id) { const m = read(path.join(this.dir(id), 'meeting.json'), null); if (!m) throw new Error('会议不存在'); return m; }
   trackPending(m) {
     const audio = m.events.some(e => e.kind === 'audio' && e.asr === 'pending');
@@ -89,7 +182,8 @@ class MeetingCompanion {
     void this.tools.start().catch(e => { this.lastError = e.message; });
     if (!this.recovered) {
       for (const id of this.ids()) {
-        const m = this.load(id), interrupted = ACTIVE.has(m.state);
+        let m; try { m = this.load(id); } catch (e) { this.corrupt?.set(id, e.message); continue; } // 暂时读不了的一场不拖垮启动
+        const interrupted = ACTIVE.has(m.state);
         if (interrupted || m.recording?.full?.status === 'writing') {
           this.recording.recover(m);
           if (interrupted) { m.state = 'interrupted'; m.error = '上次采集已中断，已保存材料可继续转写与整理；开始新会议可重新采集。'; }
@@ -124,7 +218,8 @@ class MeetingCompanion {
     if (this.recording.repairs.has(id) || (this.asrBusy && this.pendingAsr.has(id))) return '这场会议正在转写或修复录像，稍等几秒再删';
     return '';
   }
-  async remove(id) {
+  // alsoCopies：同一场在别的目录还有副本时，用户在确认框里选了「一起删」才删副本；默认只删当前显示的这份并记墓碑，副本留在原处、不再显示。
+  async remove(id, { alsoCopies = false } = {}) {
     const dir = this.dir(id); this.removing ||= new Set();
     if (this.removing.has(id)) throw new Error('这场会议正在删除，请稍候');
     const blocked = this.removeBlocker(id); if (blocked) throw new Error(blocked);
@@ -148,20 +243,32 @@ class MeetingCompanion {
       this.pending.delete(id); this.pendingAsr.delete(id); this.live?.delete(id); this.keepAwake((this.live?.size || 0) > 0);
       this.good?.delete(id); this.corrupt?.delete(id); this.listCache?.delete(id); this.recording.errors.delete(id);
       fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+      // 先记墓碑，再按用户选择删别的目录里的副本：副本留着或删不掉（被占用）都不会从列表里冒出来。
+      const others = this.roots().map(root => path.join(root, id)).filter(copy => copy !== dir && fs.existsSync(copy));
+      const buried = this.bury(id), kept = []; this.where?.delete(id); this.copies?.delete(id);
+      for (const copy of others) {
+        if (!alsoCopies) { kept.push(copy); continue; }
+        try { fs.rmSync(copy, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }); } catch { kept.push(copy); }
+      }
       this.a.changed?.();
-      return { id, title: m.title };
+      // 墓碑写不进、另一份还在：如实告诉用户，重启后它会重新出现，需要手动删那个文件夹。
+      const warning = !buried && kept.length ? `另一个目录里还有一份：${kept[0]}，删除记录没写进去，重启后可能重新出现，请手动删除这个文件夹` : '';
+      return { id, title: m.title, ...(kept.length ? { kept } : {}), ...(warning ? { warning } : {}) };
     } finally { this.removing.delete(id); this.removeInterrupted.delete(id); }
   }
   list() {
     this.listCache ||= new Map();
     const ids = this.ids(), present = new Set(ids);
     for (const id of this.listCache.keys()) if (!present.has(id)) this.listCache.delete(id);
+    // 逐场读：某一场（或它所在的目录）暂时读不了，只把这场记为读不出，其他会议照常列出。
     return ids.map(id => {
-      const { mtimeMs, size } = fs.statSync(path.join(this.dir(id), 'meeting.json')), cached = this.listCache.get(id);
-      if (cached?.mtimeMs === mtimeMs && cached.size === size) return cached.summary;
-      const m = this.load(id), summary = { id, title: m.title, startedAt: m.startedAt, state: m.state, pages: m.events.filter(e => e.kind === 'slide').length, videoBytes: m.recording?.bytes || 0 };
-      this.listCache.set(id, { mtimeMs, size, summary }); return summary;
-    }).sort((a, b) => b.startedAt - a.startedAt);
+      try {
+        const { mtimeMs, size } = fs.statSync(path.join(this.dir(id), 'meeting.json')), cached = this.listCache.get(id);
+        if (cached?.mtimeMs === mtimeMs && cached.size === size) return cached.summary;
+        const m = this.load(id), summary = { id, title: m.title, startedAt: m.startedAt, state: m.state, pages: m.events.filter(e => e.kind === 'slide').length, videoBytes: m.recording?.bytes || 0 };
+        this.listCache.set(id, { mtimeMs, size, summary }); return summary;
+      } catch (e) { this.good?.delete(id); this.listCache.delete(id); (this.corrupt ||= new Map()).set(id, e.message); return null; }
+    }).filter(Boolean).sort((a, b) => b.startedAt - a.startedAt);
   }
   create({ title, sourceName, audio = [], speed = 'normal' } = {}) {
     this.start();
@@ -229,9 +336,12 @@ class MeetingCompanion {
     this.save(m); this.start(); void this.tick(); return this.status(id);
   }
   status(id) {
-    const models = modelOptions(this.deps), meeting = id ? this.load(id) : null, speed = meeting?.speed || 'normal';
+    // 选中的这场暂时读不了，不能拖垮整页刷新：列表、材料位置照常返回，错误单独带回。
+    let meeting = null, meetingError = '';
+    if (id) { try { meeting = this.load(id); } catch (e) { meetingError = e.message; this.corrupt?.set(id, e.message); } }
+    const models = modelOptions(this.deps), speed = meeting?.speed || 'normal';
     const engines = this.deps.meetingTerminals ? engine.rank(engine.engines(this.terminals()), speed, this.deps.meetingDefaultEngine?.() || '') : [];
-    return { ok: true, meetings: this.list(), meeting, asr: this.asr.status(), models, defaultFastModel: fastModel(models),
+    return { ok: true, meetings: this.list(), storage: { ...this.storage(), ...(id && meeting ? { current: this.dir(id), copies: this.copiesOf(id) } : {}) }, meeting, ...(meetingError ? { meetingError } : {}), asr: this.asr.status(), models, defaultFastModel: fastModel(models),
       engines: engines.map(({ id, label }) => ({ id, label })), recommendedEngine: engines[0]?.id || '', recordingError: this.recording.errors.get(id) || '' };
   }
   // 本机装了哪些终端、各接上了哪些模型（一分钟内复用，找命令要扫 PATH）。测试和老接线没有 meetingTerminals 时只有 CodeAgent。

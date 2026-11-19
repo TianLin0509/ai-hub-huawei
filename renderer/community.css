@@ -53,3 +53,6 @@
 .api-gw-hit span { flex:1; }
 .api-gw-hit code { font-size:12px; background:#fff; border-radius:5px; padding:1px 5px; }
 #community-setup #api-gateway-start .api-gw-hit button {height:30px !important; padding:0 12px !important; border-radius:8px !important; background:#2f6bff !important; border:1px solid #2f6bff !important; color:#fff !important; font-weight:600 !important; cursor:pointer !important; }
+
+.community-setup-actions .community-help-ask { align-self:center; margin-left:auto; font-size:12px; color:var(--brand,#3478f6); text-decoration:none; opacity:.85; }
+.community-setup-actions .community-help-ask:hover { text-decoration:underline; opacity:1; }

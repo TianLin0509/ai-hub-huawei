@@ -16,9 +16,18 @@ function createPptMaterials({ root, ipcRenderer, notice, doctorState = () => '' 
 
   root.innerHTML = `<nav class="pptm-cats" data-pptm-cats aria-label="素材分类"></nav>
     <div class="pptm-main"><div class="pptm-bar"><div class="pptw-bar pptm-search"><svg class="pptw-bar-ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg><label class="pptw-sr" for="company-ppt-material-query">按名称筛选素材</label><input id="company-ppt-material-query" data-pptm-query autocomplete="off" placeholder="按名称筛选，例如：栏头、箭头、光带"></div><span class="pptm-count" data-pptm-count></span><button type="button" class="pptw-btn ghost sm" data-pptm="team-pack" data-pptm-team hidden></button><span data-dl-source="ppt-materials" data-pptm-team-src hidden></span><button type="button" class="pptw-btn ghost sm" data-pptm="pack" title="直接打开团队素材包（.pptx），不导入 Doctor 也能用">打开素材包…</button><button type="button" class="pptw-btn ghost sm" data-pptm="refresh">刷新</button></div>
+    <div class="pptm-dlp" data-pptm-dlp></div>
     <div class="pptm-grid" data-pptm-grid></div><div class="pptm-pager" data-pptm-pager></div></div>
     <aside class="pptm-detail" data-pptm-detail aria-label="选中素材"></aside>`;
   const $ = sel => root.querySelector(sel);
+  // r59：团队素材包下载的统一进度条（进度、速度、剩余时间、来源）；完成 30 秒后收起。
+  let dlpTimer = null;
+  require('./download-progress-view').subscribe('ppt-materials', state => {
+    const host = $('[data-pptm-dlp]'); if (!host) return;
+    clearTimeout(dlpTimer);
+    host.innerHTML = state.phase === 'error' ? '' : require('./download-progress-view').html(state, { title: '下载团队素材包' });
+    if (state.phase === 'done') dlpTimer = setTimeout(() => { host.innerHTML = ''; }, 30000);
+  }, ipcRenderer);
 
   // ---- 预览：Doctor 的 PNG > pptx 读出来画的 SVG（fit 到形状外框）
   function thumbHtml(item) {

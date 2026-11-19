@@ -48,6 +48,8 @@ const RESUME_META_FIELDS = [
   'codeagentRouteModel',
   // 否则休眠 / 重启后显示名和侧栏图标退回占位或清单第一项（2026-10-18 用户反馈 v2.1.11）。
   'codeagentActualModel',
+  // 后台 /model 换代但对不回清单时的记录（core/codeagent-models.js observeModel）：恢复会话据此改用 CodeAgent 默认模型。
+  'codeagentBackendSwitch',
   'codeagentRequestedModel',
   'codeagentLaunchModel',
   'codeagentForkSourceSessionId',

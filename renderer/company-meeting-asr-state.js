@@ -5,7 +5,8 @@ function meetingAsrState(asr = {}, meeting = null) {
   const failed = audio.filter(event => event.asr === 'error').length;
   const installing = !!asr.phase;
   const size = asr.sizeText || '300 MB';
-  const setupText = asr.error ? `本地转写：${asr.error}` : installing ? `本地转写：${asr.phase}`
+  // r59：有结构化进度时，数字由下方统一进度条显示，这里只留一句话。
+  const setupText = asr.error ? `本地转写：${asr.error}` : installing && asr.progress ? '本地转写：正在安装，可以先录音，装好后自动补转写' : installing ? `本地转写：${asr.phase}`
     : asr.upgrade ? `本地转写：旧引擎可用但较慢，建议升级（约 ${size}，更快、中文更准）` : asr.ready ? '本地转写：已就绪' : `本地转写：未安装（约 ${size}）`;
   const install = !asr.ready || !!asr.error || !!asr.upgrade;
   const reviewReady = !!meeting?.summary && !audio.length && !meeting.finalRequested

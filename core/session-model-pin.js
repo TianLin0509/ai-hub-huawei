@@ -30,6 +30,10 @@ function modelPinFields(session = {}) {
   if (typeof session.modelConfirmationRequired === 'boolean') fields.modelConfirmationRequired = session.modelConfirmationRequired;
   if (typeof session.modelUnavailableReason === 'string') fields.modelUnavailableReason = session.modelUnavailableReason.slice(0, 300);
   if (typeof session.modelPinSource === 'string') fields.modelPinSource = session.modelPinSource.slice(0, 80);
+  const sw = session.codeagentBackendSwitch;
+  if (sw && models.isSafeModelId(sw.from) && models.isSafeModelId(sw.actual)) {
+    fields.codeagentBackendSwitch = { from: sw.from.trim(), actual: sw.actual.trim(), at: Number(sw.at) || 0 };
+  }
   const change = session.modelChange;
   if (change === null) fields.modelChange = null;
   if (change && models.isSafeModelId(change.from) && models.isSafeModelId(change.to)) {
@@ -70,6 +74,18 @@ function resolveCodeAgentPin(opts, { dataDir, configDir, command, pool = null, f
   const requested = opts.codeagentModelPick === true || opts.resumeCCSessionId || opts.forkCCSessionId ? opts.model : '';
   let fixedModel = opts.fixedModel || opts.codeagentUserModel || requested || defaultModel || '';
   if (!models.isSafeModelId(fixedModel)) fixedModel = '';
+  // 恢复会话用最后一次确认的模型（2026-11-19 审查）：用户在终端里 /model 换了代、回答里只有对不回清单的后端名时，固定模型还是旧的；
+  // 照它启动会把用户的新选择撤掉。这时 CodeAgent 自己记着的默认模型（/model 回车写的就是它）和回答同一家、版本也对得上，就按它启动。
+  // 只在固定模型仍是换代前那个时生效：之后用户在 Hub 里重新选过模型，记录自然失效。
+  const backendSwitch = opts.codeagentBackendSwitch;
+  let pinSource = '';
+  if (fixedModel && backendSwitch && String(backendSwitch.from || '').toLowerCase() === fixedModel.toLowerCase()
+      && models.isSafeModelId(defaultModel) && defaultModel.toLowerCase() !== fixedModel.toLowerCase()
+      && models.modelFamily(defaultModel) && models.modelFamily(defaultModel) === models.modelFamily(backendSwitch.actual)
+      && !!models.modelVersion(defaultModel) && !models.versionsDiffer(models.modelVersion(defaultModel), models.modelVersion(backendSwitch.actual))) {
+    fixedModel = defaultModel.trim();
+    pinSource = 'cli';
+  }
   if (!fixedModel && known.authoritative && list.length === 1) fixedModel = list[0];
   if (fixedModel) fixedModel = accounts.personalDefaultModel(fixedModel, { models: list, authoritative: known.authoritative }) || fixedModel;
   // 只由 CodeAgent 默认模型推出来的（用户没指定）：用户已为它确认过替代模型，就直接用替代，不再每个新会话问一次。
@@ -93,7 +109,7 @@ function resolveCodeAgentPin(opts, { dataDir, configDir, command, pool = null, f
     modelChange = { from: fixedModel, to: next, reason, at: Date.now() };
     fixedModel = next;
   } else if (match(fixedModel)) fixedModel = match(fixedModel);
-  return { ...modelPinFields(opts), fixedModel, modelPinSource: modelChange ? 'auto-switch' : opts.modelPinSource || 'created',
+  return { ...modelPinFields(opts), fixedModel, modelPinSource: modelChange ? 'auto-switch' : pinSource || opts.modelPinSource || 'created',
     modelChange: modelChange || opts.modelChange || null, modelChanged: !!modelChange, settingsSupported };
 }
 

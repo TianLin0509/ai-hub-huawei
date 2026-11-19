@@ -638,7 +638,16 @@ test('install dialog: plain-words progress for every phase, retry on failure, no
   const at = tool => view.installBlockHtml('claude', { ...base, busy: tool.phase === 'done' || tool.phase === 'error' ? null : 'claude', tools: { claude: tool } });
   assert.match(at({ phase: 'checking' }), /正在读取组件目录/);
   const dl = at({ phase: 'downloading', received: 1024 * 1024, total: 4 * 1024 * 1024, sourceName: '阿里云', step: { index: 1, count: 2, name: 'Node.js 运行环境' } });
-  assert.match(dl, /下载中 1\.0 \/ 4\.0 MB（第 1\/2 项：Node\.js 运行环境） · 来自阿里云/);
+  // r59：统一进度条——标题带第几项，数字行「已下 / 总量 · 速度」，来源单独一个标签。
+  assert.match(dl, /安装 Claude Code · 第 1\/2 项：Node\.js 运行环境/);
+  assert.match(dl, /1\.0 MB \/ 4\.0 MB · 测速中/);
+  assert.match(dl, /来源 <b>阿里云<\/b>/);
+  const fast = at({ phase: 'downloading', received: 2 * 1024 * 1024, total: 4 * 1024 * 1024, speed: 1024 * 1024, etaSec: 2, sourceId: 'openx', sourceName: '公司内源' });
+  assert.match(fast, /2\.0 MB \/ 4\.0 MB · 1\.0 MB\/s · 还要 2 秒/);
+  assert.match(fast, /data-kind="internal">来源 <b>公司内源<\/b>/);
+  const miss = at({ phase: 'downloading', received: 1, total: 4, sourceId: 'aliyun', sourceName: '阿里云', openxMiss: '内源上没有这个文件' });
+  assert.match(miss, /data-kind="fallback">来源 <b>阿里云（备用）<\/b>/);
+  assert.match(miss, /没走公司内源：内源上没有这个文件/);
   assert.match(dl, /aria-valuenow="25"/);
   assert.match(dl, /data-cli-action="cancel"/);
   assert.doesNotMatch(dl, /data-cli-action="install"/);
@@ -671,7 +680,7 @@ test('install dialog: plain-words progress for every phase, retry on failure, no
   const gitAt = tool => view.installBlockHtml('claude', { ...base, git: null, busy: ['done', 'error'].includes(tool.phase) ? null : 'git', tools: { git: tool } });
   assert.match(gitAt({ phase: 'checking' }), /正在全局查找本机的 Git/);
   assert.match(gitAt({ phase: 'checking' }), /data-cli-action="install" disabled/, 'Claude 的按钮在装 Git 时不能点');
-  assert.match(gitAt({ phase: 'downloading', received: 1024 * 1024, total: 2 * 1024 * 1024 }), /下载中 1\.0 \/ 2\.0 MB/);
+  assert.match(gitAt({ phase: 'downloading', received: 1024 * 1024, total: 2 * 1024 * 1024 }), /1\.0 MB \/ 2\.0 MB/);
   assert.match(gitAt({ phase: 'error', error: '超时' }), /重试安装 Git/);
   assert.match(view.installBlockHtml('claude', { ...base, tools: { git: { phase: 'done', found: 'D:\\PortableGit\\bin\\bash.exe' } } }), /已经有 Git Bash（D:\\PortableGit\\bin\\bash\.exe），不用重复安装/);
   assert.match(view.installBlockHtml('claude', { ...base, tools: { git: { phase: 'done' } } }), /Git for Windows 已装好/);

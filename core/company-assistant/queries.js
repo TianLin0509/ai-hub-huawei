@@ -110,8 +110,9 @@ function meetingArgs(now, page = 1, size = MEETING_PAGE_MAX, range = null, type 
 async function collectMeetings(runJson, now, { size = MEETING_PAGE_MAX, maxPages = 30, range = null, type = '1', diagnose = async () => {} } = {}) {
   type = meetingType(type);
   size = meetingPageSize(size); // 参数与短页判断必须使用同一个实际页大小。
-  const found = new Map(), instances = new Map();
-  const coverage = { status: 'partial', reason: 'page-limit', pages: 0, total: null, invalid: 0, instances: 0, versionConflicts: 0, scope: `指定日期范围内${meetingTypeLabel(type)}的 WeLink 会议（type=${type}）`, queryType: type, queryTypes: [type] };
+  // cancelledIds：被取消的会议实例（同编号同开始时间）；allIds：取到的全部实例（含取消），用来和接口总数比对；seen：全部记录版本，判断重复页。
+  const found = new Map(), instances = new Map(), cancelledIds = new Set(), allIds = new Set(), seen = new Set();
+  const coverage = { status: 'partial', reason: 'page-limit', pages: 0, total: null, invalid: 0, instances: 0, cancelled: 0, versionConflicts: 0, scope: `指定日期范围内${meetingTypeLabel(type)}的 WeLink 会议（type=${type}）`, queryType: type, queryTypes: [type] };
   for (let page = 1; page <= maxPages; page += 1) {
     let raw;
     try { raw = await runJson(`${meetingTypeLabel(type)}会议`, meetingArgs(now, page, size, range, type)); }
@@ -126,8 +127,9 @@ async function collectMeetings(runJson, now, { size = MEETING_PAGE_MAX, maxPages
       && raw.data.total === 0 && raw.data.page === page && raw.data.size === size
       && !Object.prototype.hasOwnProperty.call(raw.data, 'data');
     if (!Array.isArray(raw.data?.data) && !emptyPage) { await diagnose('meeting query-list', raw); coverage.reason = 'invalid-shape'; coverage.status = found.size ? 'partial' : 'failed'; break; }
-    const records = emptyPage ? [] : raw.data.data, rows = D.meetings(raw);
-    const previous = found.size;
+    const records = emptyPage ? [] : raw.data.data, parsed = D.meetings(raw, { withCancelled: true });
+    const rows = parsed.filter(r => !r.cancelled), previous = seen.size;
+    for (const row of parsed) { seen.add(row.sourceId); allIds.add(row.occurrenceId || row.sourceId); if (row.cancelled) cancelledIds.add(row.occurrenceId || row.sourceId); }
     // 完全相同记录的分页重叠可消除；同编号的不同实例/记录版本全部保留。
     for (const row of rows) {
       found.set(row.sourceId, { ...row, queryTypes: [type] });
@@ -137,19 +139,25 @@ async function collectMeetings(runJson, now, { size = MEETING_PAGE_MAX, maxPages
       if (previousVersions === 1 && versions.size === 2) coverage.versionConflicts += 1;
     }
     coverage.instances = instances.size;
-    coverage.invalid += records.length - rows.length;
+    coverage.invalid += records.length - parsed.length;
     coverage.timeUnknown = (coverage.timeUnknown || 0) + rows.filter(D.eventTimeUnknown).length;
     const total = Number(raw.data.total);
     // 越界空页报告 total=0，并不表示前页的正总数消失；取不足时仍须报 early-end。
     if (raw.data.total != null && Number.isFinite(total) && total >= 0
       && !(records.length === 0 && total === 0 && coverage.total > 0)) coverage.total = total;
-    if (rows.length && found.size === previous) { coverage.reason = 'repeated-page'; break; }
+    if (parsed.length && seen.size === previous) { coverage.reason = 'repeated-page'; break; }
     // 总数可能包含分页重叠，记录版本数也不是独立实例数；满页继续取到真实边界。
     if (records.length < size) { coverage.reason = 'exhausted'; break; }
   }
+  // 某页取消、前页同一实例的正常版本一起撤掉，不算版本冲突，也不计入实例数。
+  coverage.cancelled = cancelledIds.size;
+  for (const id of cancelledIds) if ((instances.get(id)?.size || 0) > 1) coverage.versionConflicts -= 1;
+  coverage.instances = [...instances.keys()].filter(id => !cancelledIds.has(id)).length;
   if (coverage.reason === 'exhausted') {
-    const fewer = coverage.total !== null && instances.size < coverage.total;
-    const more = coverage.total !== null && instances.size > coverage.total;
+    // 接口总数里含已取消的会：按实例（含取消的）计数后比对，同一场在多页重复出现只算一次。
+    const counted = allIds.size;
+    const fewer = coverage.total !== null && counted < coverage.total;
+    const more = coverage.total !== null && counted > coverage.total;
     coverage.status = coverage.invalid || coverage.timeUnknown || coverage.versionConflicts || fewer || more ? 'partial' : 'complete';
     coverage.reason = coverage.timeUnknown ? 'unknown-time' : coverage.invalid ? 'invalid-record' : coverage.versionConflicts ? 'version-conflict' : fewer ? 'early-end' : more ? 'total-mismatch' : 'exhausted';
   }
@@ -157,15 +165,16 @@ async function collectMeetings(runJson, now, { size = MEETING_PAGE_MAX, maxPages
     'invalid-record': '部分会议缺少时间或编号', 'unknown-time': '部分会议的时间或时区待核对', 'early-end': '会议实例数少于接口报告的总数', 'total-mismatch': '会议实例数超过接口报告的总数，查询期间数据可能变化',
     'version-conflict': `${coverage.versionConflicts} 个会议实例存在不同记录版本，待核对`, 'repeated-page': '会议接口重复返回已取得的记录', exhausted: '会议查询完成' }[coverage.reason];
   if (coverage.versionConflicts && coverage.reason !== 'version-conflict') coverage.reasonLabel += `；${coverage.versionConflicts} 个会议实例存在不同记录版本，待核对`;
-  return { meetings: [...found.values()].sort((a, b) => a.start - b.start), coverage };
+  if (coverage.cancelled) coverage.reasonLabel += `；已过滤 ${coverage.cancelled} 场已取消会议`;
+  return { meetings: [...found.values()].filter(r => !cancelledIds.has(r.occurrenceId || r.sourceId)).sort((a, b) => a.start - b.start), coverage, cancelledIds: [...cancelledIds] };
 }
 
 async function collectMeetingAgenda(runJson, now, options = {}) {
   // Q-1021-09：type1 不包含已结束会议；分别查两类，不能把 type4 推断为仅本人。
-  const queryTypes = ['1', '2'], found = new Map(), instances = new Map(), byType = {};
+  const queryTypes = ['1', '2'], found = new Map(), instances = new Map(), byType = {}, cancelledAll = new Set();
   for (const type of queryTypes) {
     const result = await collectMeetings(runJson, now, { ...options, type });
-    byType[type] = result.coverage;
+    byType[type] = result.coverage; for (const id of result.cancelledIds || []) cancelledAll.add(id);
     for (const row of result.meetings) {
       const prior = found.get(row.sourceId);
       found.set(row.sourceId, { ...row, queryTypes: [...new Set([...(prior?.queryTypes || []), type])] });
@@ -173,6 +182,8 @@ async function collectMeetingAgenda(runJson, now, options = {}) {
       versions.add(row.sourceId); instances.set(id, versions);
     }
   }
+  // 一类里取消、另一类里还是正常版本的同一实例，以取消为准。
+  for (const [key, row] of found) if (cancelledAll.has(row.occurrenceId || row.sourceId)) { found.delete(key); instances.delete(row.occurrenceId || row.sourceId); }
   const meetings = [...found.values()].sort((a, b) => a.start - b.start);
   const parts = Object.values(byType), versionConflicts = [...instances.values()].filter(x => x.size > 1).length;
   const complete = parts.every(x => x.status === 'complete') && !versionConflicts;

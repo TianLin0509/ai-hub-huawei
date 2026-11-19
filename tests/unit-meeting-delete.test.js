@@ -165,3 +165,15 @@ test('关闭会议会话失败：不删文件，如实报错，之后可重试',
   await m.remove(a.id);
   assert.equal(fs.existsSync(m.dir(a.id)), false, '会话关掉后重试成功');
 });
+
+test('墓碑文件暂时读不了（被占用）时，删别的会议不会整份覆盖它，已删的会议不会复活', async t => {
+  const m = companion(t);
+  const f = m.tombstoneFiles()[0];
+  const oldId = '11111111-2222-3333-4444-555555555555';
+  fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify([oldId]), 'utf8');
+  const real = fs.readFileSync;
+  fs.readFileSync = function (p, ...rest) { if (path.resolve(String(p)) === path.resolve(f)) { const e = new Error('busy'); e.code = 'EBUSY'; throw e; } return real.call(fs, p, ...rest); };
+  try { m.deletedIds = null; m.bury('66666666-7777-8888-9999-000000000000'); }
+  finally { fs.readFileSync = real; }
+  assert.ok(JSON.parse(fs.readFileSync(f, 'utf8')).includes(oldId), '读不了的墓碑不能被不含旧编号的新内容覆盖');
+});

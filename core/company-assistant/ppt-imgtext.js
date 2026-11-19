@@ -72,12 +72,12 @@ class PptImgtext {
     if (job.state === 'updating') return this.snapshot(id);
     if (job.state !== 'needs_component') throw new Error('这次转字不需要更新识别组件');
     if (!this.ppt.ocr) throw new Error('这个版本不能在 Hub 里更新识别组件，请在 PPT Doctor 的「设置 → 组件」里更新');
-    job.state = 'updating'; job.step = '正在准备更新识别组件…'; job.error = ''; job.progress = 0; this.a.changed();
+    job.state = 'updating'; job.step = '正在准备更新识别组件…'; job.error = ''; job.progress = 0; job.download = null; this.a.changed();
     job.updating = this.runUpdate(job).finally(() => { job.updating = null; this.a.changed(); });
     return this.snapshot(id);
   }
   async runUpdate(job) {
-    const off = this.ppt.ocr.onState?.(s => { if (job.state === 'updating') { job.step = s.message || job.step; job.progress = s.percent || 0; this.a.changed(); } });
+    const off = this.ppt.ocr.onState?.(s => { if (job.state === 'updating') { job.step = s.message || job.step; job.progress = s.percent || 0; job.download = { phase: s.phase, received: s.received, total: s.total, speed: s.speed, etaSec: s.etaSec, sourceId: s.sourceId, sourceName: s.sourceName, openxMiss: s.openxMiss || null }; this.a.changed(); } });
     let result;
     try { result = await this.ppt.ocr.install(); }
     catch (error) { result = { phase: 'error', error: error.message }; }

@@ -71,6 +71,7 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
         <button type="button" class="pet-tab-mini" data-pet="check"${checking || activeId ? ' disabled' : ''}>检查新形象</button></div>
       ${roles.some(r => !r.installed || r.update) ? sourceView.slotHtml('pet-role') : ''}
       ${st.failedId && st.error ? `<p class="pet-tab-note bad">${esc(st.error)}</p>` : ''}
+      ${activeId ? require('../download-progress-view').html({ ...(st.progress || {}), phase: st.progress && st.progress.total ? 'downloading' : 'connecting' }, { title: `下载桌宠形象「${(roles.find(r => r.id === activeId) || {}).name || activeId}」` }) : ''}
       <div class="pet-tab-grid${roles.length > 6 ? ' compact' : ''}">${roles.map(card).join('')}</div>
       <div class="pet-tab-row">
         <div><b>大小与位置</b><small>拖动滑块调大小，脚的位置不动；拖到哪里就记住哪里。</small></div>

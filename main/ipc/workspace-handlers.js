@@ -318,6 +318,18 @@ function registerWorkspaceIpc(ipcMain, deps) {
     return workspace;
   });
 
+  // Hub 设置 ·「新建会话默认工作目录」的「选择…」按钮：只返回路径，保存由 save-hub-config 做。
+  ipcMain.handle('workspace:pick-default-root', async () => {
+    const result = await dialog.showOpenDialog({
+      title: '选择新建会话默认工作目录',
+      defaultPath: workspaceService.getWorkspaceRoot(),
+      properties: ['openDirectory', 'createDirectory'],
+      buttonLabel: '使用此文件夹',
+    });
+    if (!result || result.canceled || !result.filePaths || !result.filePaths[0]) return null;
+    return result.filePaths[0];
+  });
+
   ipcMain.handle('workspace:pick-archive-parent', async () => {
     const result = await dialog.showOpenDialog({
       title: '选择正式项目所在文件夹',

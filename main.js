@@ -625,6 +625,10 @@ sessionManager.on('codex-lifecycle', event => {
   transcriptTap.emit(ev.type, ev);
 });
 const meetingManager = new MeetingRoomManager();
+// Hub 设置里的「新建会话默认工作目录」先于工作区服务生效（环境变量 AI_HUB_WORKSPACE_ROOT 仍优先）。
+// 启动时重新校验：目录不存在、是盘根/主目录/Hub 目录就当没设，设置页显示原因。
+try { require('./main/ipc/config-handlers.js').startupDefaultWorkspaceRoot(getHubConfig().defaultWorkspaceRoot); }
+catch (error) { console.warn('[workspace] default root setting:', error && error.message); }
 const workspaceService = new WorkspaceService();
 let networkEgressProbe;
 if (process.env.CLAUDE_HUB_E2E === '1' && process.env.CLAUDE_HUB_EGRESS_FIXTURE) {
@@ -936,12 +940,22 @@ async function observeCodeAgentModel(hubSessionId, ev, transcriptPath, source = 
         sendToRenderer('status-event', { sessionId: hubSessionId, ...context });
       }
     }
-    const observed = session && modelId ? codeAgentModels.observeModel(session, modelId, { at: modelAt }) : null;
+    // 后台（终端里 /model）换了模型时，把回答里的后端模型名对回这个号的模型清单（同版本号候选里优先 CodeAgent 当前默认模型）。
+    const resolveSwitch = actual => {
+      const guard = require('./core/codeagent-default-model-guard');
+      const dir = guard.sessionConfigDir(session, { dataDir: getHubDataDir() });
+      const options = codeAgentModels.modelOptions(getHubDataDir(), { accountKey: session.codeagentPoolAccount || 'personal', configDir: dir });
+      let defaultModel = '';
+      try { defaultModel = JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8').replace(/^﻿/, '')).model || ''; } catch { defaultModel = ''; }
+      return codeAgentModels.resolveObservedSwitch(actual, { options, defaultModel });
+    };
+    const observed = session && modelId ? codeAgentModels.observeModel(session, modelId, { at: modelAt, resolveSwitch }) : null;
     if (observed || !modelId) {
       codeAgentModels.appendModelLog(getHubDataDir(), {
         event: 'observe', via: source, session: String(hubSessionId || '').slice(0, 8),
         current: session?.currentModel?.id, actual: modelId || '(none)', transcript: file ? 'yes' : 'no',
         switched: observed?.fields?.currentModel?.id,
+        ...(observed?.backendSwitch ? { backendSwitch: observed.backendSwitch.resolved ? 'menu' : 'display-only' } : {}),
       });
     }
     if (!observed) return;
@@ -3197,6 +3211,13 @@ if (require('./core/distribution').featureEnabled('btwAsk')) try {
   registerAskAsideIpc(ipcMain, askAsideService);
   app.on('will-quit', () => { void askAsideService.dispose(); });
 } catch (error) { console.error('[ask-aside] service unavailable:', error.message); }
+// 问问 Hub（2026-11-19）：底栏答疑面板，照随包的《使用说明书》一次性后台问答，只读、不建会话（main/help-ask-service.js）。
+try {
+  const { createHelpAskService, registerHelpAskIpc } = require('./main/help-ask-service');
+  const helpAskService = createHelpAskService({ getHubDataDir });
+  registerHelpAskIpc(ipcMain, helpAskService);
+  app.on('will-quit', () => { helpAskService.dispose(); });
+} catch (error) { console.error('[help-ask] service unavailable:', error.message); }
 // 负责人组队：用户在侧栏批准后创建 CodeAgent 成员，命令安装在当前用户数据目录。
 if (require('./core/distribution').featureEnabled('leadTeam')) try {
   const teamCommand = path.join(getHubDataDir(), 'team', process.platform === 'win32' ? 'hub-team.cmd' : 'hub-team.sh');
@@ -4733,6 +4754,11 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
         // 启动 40 秒后在后台全局找一遍 Git Bash（隐藏的 PowerShell 读注册表和硬盘列表），新会话能用上别处装的 Git。
         setTimeout(() => { try { cliToolsInstallerRef?.refreshGit?.(); } catch (_) {} }, 40000).unref?.();
       } catch (e) { console.warn('[cli-tools] 一键安装初始化失败：', e && e.message); }
+      // 收件地址只建一份（2026-11-19 黑洞复盘）：一键反馈、反馈收件机、一键入群共用同一个取地址实例——同一份缓存、同一次 10 分钟记忆，
+      // 「重新取地址」对三处同时生效，修一处三处都好。
+      let feedbackReceiverAddressRef = null;
+      const sharedFeedbackReceiverAddress = () => feedbackReceiverAddressRef || (feedbackReceiverAddressRef = require('./core/feedback-receiver-address')
+        .createReceiverAddress({ dataDir: getHubDataDir(), fetchImpl: (...args) => require('electron').net.fetch(...args) }));
       // 一键反馈（2026-10-29）：设置菜单「一键反馈」→ 脱敏诊断包；阿里云路径被拦自动放行，发不出就存到「下载」。
       // r42（2026-11-18）：成员版只经公司内网发给维护人电脑上的收件机；公开版在公司内（连得上内源）同样走内网，公司外才发阿里云。
       // 内网发不到进待发队列，后台每 10 分钟补发。
@@ -4741,7 +4767,7 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
         const feedbackEdition = distribution.target === 'company' ? (distribution.featureEnabled('memberUpgrade') ? 'public' : 'member') : null;
         const feedbackService = createHubFeedbackService({
           edition: feedbackEdition,
-          receiverAddress: feedbackEdition ? require('./core/feedback-receiver-address').createReceiverAddress({ dataDir: getHubDataDir(), fetchImpl: (...args) => require('electron').net.fetch(...args) }) : null,
+          receiverAddress: feedbackEdition ? sharedFeedbackReceiverAddress() : null,
           endpoint: ownHosts.feedbackEndpoint(ownConfig), logsDir: path.join(getHubDataDir(), 'logs'), unblock: unblockOwn, onPassed: () => ownUnblocker.passed(),
           // 放行后提交仍被拦：在看不见的窗口里直接提交（走浏览器网络栈，拦截页出现在窗口里就点放行），见 core/net-unblock.js postInHiddenWindow。
           // 公开版不在后台窗口里自动点放行（2026-11-08 用户）：被拦就提示用户打开放行页自己点。

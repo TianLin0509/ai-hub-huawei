@@ -25,6 +25,26 @@ function packSources(deps = {}) {
   return require('../app-update/downloader').orderSources(list.map(url => ({ url }))).map(s => s.url);
 }
 const sha256 = buf => crypto.createHash('sha256').update(buf).digest('hex');
+// r59：边收边报进度（统一进度条要已下/总量/速度/来源）；没有回调或拿不到流时照旧一次读完。
+async function readBody(response, onProgress, source, total) {
+  if (!onProgress || !response.body || typeof response.body.getReader !== 'function') return Buffer.from(await response.arrayBuffer());
+  const size = Number(total) || Number(response.headers.get('content-length')) || 0;
+  const reader = response.body.getReader(), chunks = [];
+  let received = 0, at = Date.now(), lastBytes = 0, speed = 0;
+  const report = () => onProgress({ phase: 'downloading', received, total: size, speed, etaSec: speed > 0 && size ? Math.max(0, Math.round((size - received) / speed)) : null,
+    sourceId: source.id, sourceName: source.name, openxMiss: source.openxMiss || null });
+  report();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(Buffer.from(value)); received += value.length;
+    const now = Date.now();
+    if (now - at >= 250) { const inst = (received - lastBytes) / Math.max(0.001, (now - at) / 1000); speed = speed ? speed * 0.7 + inst * 0.3 : inst; at = now; lastBytes = received; report(); }
+  }
+  report();
+  return Buffer.concat(chunks);
+}
+const hostOf = url => require('../app-update/downloader').friendlySourceName(url);
 const newerVersion = (a, b) => { const x = String(a).split('.').map(Number), y = String(b || '0.0.0').split('.').map(Number); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i]; return false; };
 
 // 依次试各下载源，取第一个给出有效清单的。
@@ -48,13 +68,13 @@ async function teamPackManifest(deps = {}) {
   throw new Error(`团队素材包暂时下载不了：${reasons[reasons.length - 1]}。请检查网络后重试，或用「打开素材包…」打开同事发来的素材包文件`);
 }
 // 逐个源下载素材包文件，返回第一个 sha256 对得上的；都不行时说清原因。
-async function teamPackArchive(fetch, manifest, bases) {
+async function teamPackArchive(fetch, manifest, bases, onProgress = null, openxMiss = null) {
   let mismatch = false, last = '';
   for (const base of bases) {
     try {
       const response = await fetch(new URL('component.zip', base).href, { signal: AbortSignal.timeout(180000) });
       if (!response.ok) { last = `HTTP ${response.status}`; continue; }
-      const archive = Buffer.from(await response.arrayBuffer());
+      const archive = await readBody(response, onProgress, { id: hostOf(base), name: hostOf(base), openxMiss }, manifest.archive.size);
       if (sha256(archive) === manifest.archive.hash) return archive;
       mismatch = true;
     } catch (error) { last = require('../app-update/downloader').reasonOf(error); }
@@ -75,9 +95,9 @@ async function teamPackFromOpenx(fetch, manifest, opts = {}) {
     const response = await fetch(hit.url, { signal: AbortSignal.timeout(180000), redirect: 'error' });
     if (response.status >= 300 && response.status < 400) throw new Error(`HTTP ${response.status}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const archive = Buffer.from(await response.arrayBuffer());
+    const archive = await readBody(response, opts && opts.onProgress, { id: 'openx', name: '公司内源' }, manifest.archive.size);
     if (sha256(archive) === manifest.archive.hash) return archive;
-  } catch (_) { /* 内源不可用：静默回原源 */ }
+  } catch (_) { /* 内源不可用：回原源（r59 起进度条会标「备用」并写原因） */ }
   if (hit) openxSource.markBad(file);
   return null;
 }
@@ -177,17 +197,26 @@ class PptMaterials {
   }
   // 一键下载（或更新）团队素材包：下载 → 两层 sha256 校验 → 确认读得出素材 → 换掉旧文件。
   installTeamPack() {
-    if (!this.installing) this.installing = this.downloadTeamPack().finally(() => { this.installing = null; });
+    const bus = require('../app-update/progress-bus');
+    if (!this.installing) this.installing = this.downloadTeamPack()
+      .then(r => { bus.emit('ppt-materials', { phase: 'done', message: `团队素材包 v${r.version} 已就绪，共 ${r.items} 个素材` }); return r; },
+        error => { bus.emit('ppt-materials', { phase: 'error', error: error.message }); throw error; })
+      .finally(() => { this.installing = null; });
     return this.installing;
   }
   async downloadTeamPack() {
     const { base, manifest } = await teamPackManifest(this.deps);
     const fetch = require('../own-gate').gatedFetch(require('./fetch-util').resolveFetch(this.deps.pptDownloadFetch));
     // 公开版内源优先（r21）：openx 上有 pptutor-materials-<版本>.zip 且校验对就用它，否则照旧走原下载源；成员版不试内源。
-    let archive = await teamPackFromOpenx(fetch, manifest, this.deps.openx);
+    const bus = require('../app-update/progress-bus'), onProgress = p => bus.emit('ppt-materials', p);
+    bus.emit('ppt-materials', { phase: 'connecting' });
+    const openxOn = this.deps.openx !== false && require('../app-update/openx-source').enabled((this.deps.openx && this.deps.openx.env) || process.env);
+    let archive = await teamPackFromOpenx(fetch, manifest, this.deps.openx === false ? false : { ...(this.deps.openx || {}), onProgress });
     // 包文件按 给出清单的源 → 其余源（GitHub → 阿里云高速 → 阿里云）逐个试，都按选定清单的 sha256 核对；
     // 某个源上包文件 404、断线或内容不对，换下一个源（2026-11-16 审查：原来只从给出清单的源取，失败就报错）。
-    if (!archive) archive = await teamPackArchive(fetch, manifest, [base, ...packSources(this.deps).filter(u => u !== base)]);
+    if (!archive) archive = await teamPackArchive(fetch, manifest, [base, ...packSources(this.deps).filter(u => u !== base)], onProgress,
+      openxOn ? require('../app-update/openx-source').lastReason() || '内源下载失败' : null);
+    bus.emit('ppt-materials', { phase: 'verifying', message: '正在校验并读取素材…' });
     const dir = this.teamPackDir(), stamp = `${process.pid}-${Date.now()}`;
     // 临时文件不用 .pptx 后缀（5.6.2）：公司电脑的文档安全软件会扫描并占住新写出的 Office 文件，
     // 紧跟着的改名、删除报 EPERM（2026-11-11 用户截图）。清理一律尽力而为，删不掉的留给下次。

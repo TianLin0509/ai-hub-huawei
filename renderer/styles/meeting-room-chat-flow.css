@@ -560,7 +560,7 @@
   border: 0;
   background: transparent;
   color: inherit;
-  font-size: 12px;
+  font-size: calc(12px * var(--card-code-scale, 1) * var(--main-zoom, 1));
   line-height: 1.6;
 }
 .mr-gc-anchor {

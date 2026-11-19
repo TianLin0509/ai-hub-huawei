@@ -23,10 +23,16 @@
     if (fix.act === 'codeagent-login') recheckOnFocus = true;
     // DSH 一键补齐（2026-11-17）：默认 Hub 自管；「装到我的全局 npm」才装进用户的 npm 全局目录。
     const dsh = fix.act === 'dsh-install' ? { id: 'dsh' } : fix.act === 'dsh-install-global' ? { id: 'dsh', repair: true, target: 'user-global' } : null;
+    // r59：Hub 自管安装（DSH、Git）在这一行下面挂统一进度条。
+    const cliId = dsh && !dsh.target ? 'dsh' : fix.act === 'git-install' ? 'git' : '';
+    const line = cliId && root?.querySelector(`[data-fr="${row.id}"]`);
+    const host = line ? line.appendChild(document.createElement('div')) : null;
+    const unmount = host ? require('./download-progress-view').mount(host, 'cli:' + cliId, { title: cliId === 'git' ? '安装 Git for Windows' : '安装 DSH 运行环境', ipcRenderer }) : () => {};
     const result = await (dsh ? ipcRenderer.invoke('cli-tools:install', dsh)
       : fix.act === 'git-install' ? ipcRenderer.invoke('cli-tools:install', { id: 'git' })
       : fix.act === 'codeagent-login' ? ipcRenderer.invoke('codeagent-pool:personal-login')
       : ipcRenderer.invoke('env-check:fix', { id: row.id, act: fix.act, url: fix.url }));
+    setTimeout(() => { unmount(); host?.remove(); }, 6500);
     if (fix.act === 'proxy-restart') return rerun();
     if (result && result.ok === false) { const cell = root?.querySelector(`[data-fr="${row.id}"] .fr-d`); if (cell) cell.textContent = result.error || '没能完成'; return; }
     if (fix.act === 'git-install' || dsh) return rerun();

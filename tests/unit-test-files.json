@@ -1,6 +1,7 @@
 [
   "tests/unit-app-update-source-status.test.js",
   "tests/unit-download-source-status.test.js",
+  "tests/unit-download-progress-view.test.js",
   "tests/unit-token-usage.test.js",
   "tests/unit-pi-cli.test.js",
   "tests/unit-app-update-download-promote.test.js",
@@ -55,6 +56,7 @@
   "tests/unit-codeagent-accounts-page.test.js",
   "tests/unit-codeagent-bundled-skills.test.js",
   "tests/unit-codeagent-model-menu.test.js",
+  "tests/unit-codeagent-backend-model-switch.test.js",
   "tests/unit-company-external-api.test.js",
   "tests/unit-codeagent-quota-panel.test.js",
   "tests/unit-codeagent-quota-view.test.js",
@@ -93,6 +95,7 @@
   "tests/unit-dsh-branch-cards.test.js",
   "tests/unit-dsh-asar-unpack.test.js",
   "tests/unit-ask-aside-engines.test.js",
+  "tests/unit-help-ask.test.js",
   "tests/unit-claude-prefix-fork.test.js",
   "tests/unit-codeagent-prefix-branch.test.js",
   "tests/unit-company-assistant-page-chat.test.js",
@@ -205,6 +208,8 @@
   "tests/unit-install-release-launch.test.js",
   "tests/unit-meeting-launch-robust.test.js",
   "tests/unit-meeting-delete.test.js",
+  "tests/unit-meeting-storage-roots.test.js",
+  "tests/unit-meeting-cancelled-filter.test.js",
   "tests/unit-optional-features-nav.test.js",
   "tests/unit-meeting-engine.test.js",
   "tests/unit-meeting-model-sync.test.js",
@@ -246,8 +251,13 @@
   "tests/unit-hub-shutdown-retry.test.js",
   "tests/unit-host-shell-tail.test.js",
   "tests/unit-feedback-intranet-send.test.js",
+  "tests/unit-hub-feedback-mine.test.js",
   "tests/unit-api-gateway-config.test.js",
   "tests/unit-api-gateway-proxy.test.mjs",
   "tests/unit-child-lifecycle.test.js",
-  "tests/unit-sealed-modules.test.js"
+  "tests/unit-sealed-modules.test.js",
+  "tests/unit-code-font-scale.test.js",
+  "tests/unit-default-workspace-root.test.js",
+  "tests/unit-company-assistant-work-dir.test.js",
+  "tests/unit-backstage-layout-memory.test.js"
 ]

@@ -175,6 +175,8 @@ function createSessionSplit({ document: doc, window: win, primary, buttons, serv
   return {
     sync, route, focusedId, setLayout, leaveBackstage,
     isBackstage: () => !!backstage,
+    // 'backstage' = 同一会话左右并排；'two' = 两个会话分屏；'single' = 单屏。
+    layout: () => backstage ? 'backstage' : enabled ? 'two' : 'single',
     async showBackstage() {
       if (backstage) return;
       const target = focusedId();
