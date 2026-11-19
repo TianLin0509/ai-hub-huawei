@@ -22,6 +22,8 @@ const codeAgentOnly = (() => {
 })();
 
 function isInstalled() { return codeAgentOnly || installed === true; }
+// 实际检测结果（null = 还没测完）：不受「公司纯净版默认按装了处理」影响，给「是不是 API 用户」这类判断用。
+function detectedInstalled() { return installed; }
 
 function rememberKind(kind) {
   try { if (kind) localStorage.setItem(LAST_KIND_KEY, String(kind)); } catch {}
@@ -32,7 +34,9 @@ function preferredKind(validKinds = []) {
   let last = null;
   try { last = localStorage.getItem(LAST_KIND_KEY); } catch {}
   if (last && validKinds.includes(last)) return last;
-  return isInstalled() && validKinds.includes('codeagent') ? 'codeagent' : 'claude';
+  // 实测没装 CodeAgent（多半是 API 用户）就默认 Claude，让他第一眼看到「用部门 API key」；只剩 CodeAgent 可选时仍是它。
+  const useCodeagent = installed === false ? !validKinds.includes('claude') : isInstalled();
+  return useCodeagent && validKinds.includes('codeagent') ? 'codeagent' : 'claude';
 }
 
 function defaultGroupMembers(fallback) {
@@ -40,4 +44,4 @@ function defaultGroupMembers(fallback) {
   return [{ kind: 'codeagent', model: 'GLM-5.2-WX-Auto' }, { kind: 'codeagent', model: 'MiniMax-M2.7' }];
 }
 
-module.exports = { LAST_KIND_KEY, refresh, isInstalled, rememberKind, preferredKind, defaultGroupMembers };
+module.exports = { LAST_KIND_KEY, refresh, isInstalled, rememberKind, preferredKind, defaultGroupMembers, detectedInstalled };

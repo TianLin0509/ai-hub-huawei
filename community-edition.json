@@ -59,9 +59,10 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "API 网关：排队提示更准（后台小请求不再误报或清掉排队中），审查补修若干边界问题"
+    "找不到 API key 入口的问题：「新建会话」的模型卡里加了「用部门 API key」，没装 CodeAgent 时排第一并自动展开，就地粘贴 key 即可",
+    "自动识别 API 用户：在 Claude Code、Codex、Continue、OpenCode、CC Switch、VS Code 设置或环境变量里配过部门网关 key 的，Hub 会提示「检测到你用过 API 网关 key」，一键使用（只显示打码）"
   ],
-  "version": "5.6.58",
+  "version": "5.6.59",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

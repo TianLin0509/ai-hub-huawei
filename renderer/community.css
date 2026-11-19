@@ -48,3 +48,8 @@
 .api-gw-usage span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .api-gw-usage-dot { width:7px; height:7px; border-radius:50%; background:#15803d; flex:none; }
 .api-gw-usage-dot.wait { background:#e0a100; }
+/* 检测到别的工具里用过的 API 网关 key：一键用（2026-11-19） */
+.api-gw-hit { display:flex; align-items:center; gap:10px; margin-top:10px; padding:9px 12px; border-radius:9px; background:#eef4ff; font-size:13px; color:#1e3a8a; }
+.api-gw-hit span { flex:1; }
+.api-gw-hit code { font-size:12px; background:#fff; border-radius:5px; padding:1px 5px; }
+#community-setup #api-gateway-start .api-gw-hit button {height:30px !important; padding:0 12px !important; border-radius:8px !important; background:#2f6bff !important; border:1px solid #2f6bff !important; color:#fff !important; font-weight:600 !important; cursor:pointer !important; }

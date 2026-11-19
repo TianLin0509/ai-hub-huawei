@@ -54,3 +54,24 @@
 .crumb-model-route { flex: none; }
 /* API 网关排队中（2026-11-19）：首字前等待 10–30 秒常见，用暖色提示「在排队，不是卡住」。 */
 .crumb-model-route[data-gateway-waiting="1"] { background: #fdf3e0; color: #9a6a12; }
+/* 启动中心「用部门 API key」卡与就地配置（2026-11-19 同事反馈找不到入口） */
+.session-model-card[data-source="gateway-setup"] { border-style: dashed; }
+.session-model-card[data-state="suggest"] { border-color: #2f6bff; border-style: dashed; background: #f5f8ff; }
+.smc-source[data-source="gateway-setup"], .smc-source[data-source="gateway"] { background: #eef4ff; color: #2f6bff; }
+.gw-inline { margin-top: 8px; padding: 12px 14px; border: 1px solid #c9d8fb; border-radius: 10px; background: #fbfcff; font-size: 13px; }
+.gw-inline-head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
+.gw-inline-head span { color: var(--fg-muted, #5d6474); font-size: 12.5px; }
+.gw-inline-hit { display: flex; align-items: center; gap: 10px; padding: 8px 10px; margin-bottom: 6px; border-radius: 8px; background: #eef4ff; color: #1e3a8a; }
+.gw-inline-hit span { flex: 1; }
+.gw-inline-hit code { font-size: 12px; background: #fff; border-radius: 5px; padding: 1px 5px; }
+.gw-inline-form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: end; }
+.gw-inline-form label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--fg-muted, #5d6474); }
+.gw-inline-form input { height: 32px; padding: 0 10px; border: 1px solid #dfe5ef; border-radius: 8px; font: inherit; font-size: 13px; background: #fff; color: inherit; }
+.gw-inline-form input[readonly] { background: #f6f8fb; color: #4a5160; }
+.gw-inline button { height: 32px; padding: 0 14px; border-radius: 8px; border: 1px solid #d5dce8; background: #fff; font: inherit; cursor: pointer; white-space: nowrap; }
+.gw-inline button.primary { background: #2f6bff; border-color: #2f6bff; color: #fff; font-weight: 600; }
+.gw-inline button[disabled] { opacity: .55; cursor: default; }
+.gw-inline .gw-inline-link { height: auto; padding: 0 2px; border: 0; background: none; color: #2f6bff; font-size: 12px; }
+.gw-inline-msg { margin: 8px 0 0; font-size: 12.5px; color: var(--fg-muted, #5d6474); min-height: 1em; }
+.gw-inline-msg[data-state="error"] { color: #b42318; }
+.gw-inline-lab { display: flex; align-items: center; gap: 6px; min-height: 18px; }

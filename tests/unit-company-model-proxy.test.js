@@ -2184,10 +2184,14 @@ test('model cards: two company models + the own source, status in plain words, r
   // Cards: company models with source and state; own card says CLI 默认 or 自有接口.
   const running = { state: 'running', accounts: [{ id: 'a1', kind: 'pool' }, { id: 'a2', kind: 'pool' }, { id: 'personal', kind: 'personal' }] };
   const list = cards.cardsFor('claude', local, running, { source: 'company', model: 'GLM-5.2-WX' });
-  assert.deepEqual(list.map(c => [c.id, c.source, c.state, c.checked]), [['GLM-5.2-WX', 'company', 'ready', true], ['deepseek-v4.1-flash-1017', 'company', 'ready', false], ['own', 'own', 'ready', false]]);
-  assert.equal(list[0].statusText, '可用 · 号池 2 个号'); assert.equal(list[2].sourceText, 'CLI 默认');
-  assert.equal(cards.cardsFor('codex', proxyDs, running, null)[2].sourceText, '自有接口');
-  assert.equal(cards.cardsFor('deepseek-acp', { companyModels: models }, running, null).length, 2);
+  assert.deepEqual(list.map(c => [c.id, c.source, c.state, c.checked]), [['GLM-5.2-WX', 'company', 'ready', true], ['deepseek-v4.1-flash-1017', 'company', 'ready', false], ['gw-setup', 'gateway-setup', 'setup', false], ['own', 'own', 'ready', false]]);
+  assert.equal(list[0].statusText, '可用 · 号池 2 个号'); assert.equal(list[3].sourceText, 'CLI 默认');
+  assert.equal(cards.cardsFor('codex', proxyDs, running, null)[3].sourceText, '自有接口');
+  assert.equal(cards.cardsFor('deepseek-acp', { companyModels: models }, running, null).length, 3, '两张公司模型卡 + 「用部门 API key」');
+  // 没装 CodeAgent、公司模型也没跑起来：「用部门 API key」排第一并标推荐；装了 CodeAgent 的顺序不变。
+  const down = cards.cardsFor('claude', local, { state: 'not-ready', code: 'NO_CODEAGENT' }, null, { codeagentInstalled: false });
+  assert.equal(down[0].id, 'gw-setup'); assert.equal(down[0].state, 'suggest');
+  assert.equal(cards.cardsFor('claude', local, null, null, { codeagentInstalled: true })[0].source, 'company');
   const html = cards.renderCards(list, x => String(x));
   assert.match(html, /role="radio" aria-checked="true"[^>]*data-model-card="GLM-5.2-WX" data-source="company" data-state="ready"/);
   // Reasons when not ready.

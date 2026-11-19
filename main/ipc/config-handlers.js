@@ -404,15 +404,27 @@ function registerConfigIpc(ipcMain, deps) {
       return switched;
     };
     ipcMain.handle('api-gateway:get', () => ({ ok: true, ...gatewayPayload() }));
-    ipcMain.handle('api-gateway:save', async (_event, request = {}) => {
+    // 「检测到你在别的工具里用过 API 网关 key」：只回来源和打码样子，key 留在主进程（core/api-gateway-detect.js）。
+    const detector = require('../../core/api-gateway-detect');
+    ipcMain.handle('api-gateway:detect', () => {
+      try { return { ok: true, found: detector.detect(gateway.read(gatewayDir()).baseURL) }; }
+      catch (error) { return { ok: false, found: [], error: error.message }; }
+    });
+    const saveGateway = async (request, apiKey) => {
       try {
-        const result = await gateway.save(gatewayDir(), { baseURL: request.baseURL, apiKey: request.apiKey, model: request.model }, { safeStorage: safe() });
+        const result = await gateway.save(gatewayDir(), { baseURL: request.baseURL, apiKey, model: request.model }, { safeStorage: safe() });
         if (!result.ok) return { ok: false, code: result.code, error: result.message, ...gatewayPayload() };
         const kinds = Array.isArray(request.useFor) ? request.useFor.filter(k => companyApi.KINDS.includes(k)) : [];
         const switched = kinds.length ? routeKindsToGateway(kinds, result.model) : [];
         if (companyProxyService) await companyProxyService.applyGatewayChange().catch(() => {});
         return { ok: true, switched, ...gatewayPayload() };
       } catch (error) { return { ok: false, error: error.message, ...gatewayPayload() }; }
+    };
+    ipcMain.handle('api-gateway:save', (_event, request = {}) => saveGateway(request, request.apiKey));
+    ipcMain.handle('api-gateway:adopt', (_event, request = {}) => {
+      const hit = detector.take(request.id);
+      if (!hit) return { ok: false, code: 'not_found', error: '这个检测结果已过期，请重新打开后再点，或手动粘贴 key。', ...gatewayPayload() };
+      return saveGateway({ useFor: request.useFor, baseURL: hit.baseURL }, hit.key);
     });
     ipcMain.handle('api-gateway:set-model', async (_event, request = {}) => {
       try {

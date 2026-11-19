@@ -9,7 +9,7 @@
   const KINDS = ['claude', 'codex', 'deepseek-acp'];
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   // draft：用户在表单里填了还没保存成功的地址和 key，重画（报错、验证中）时原样保留，不让他重填（E2E 实测发现）。
-  let state = { gateway: null, codeagent: null, claude: null, expanded: false, editAddr: false, busy: false, error: null, justSaved: false, draft: { baseURL: null, apiKey: '' } };
+  let state = { gateway: null, codeagent: null, claude: null, expanded: false, editAddr: false, busy: false, error: null, justSaved: false, draft: { baseURL: null, apiKey: '' }, found: [] };
   let box = null;
 
   function mount() {
@@ -23,7 +23,8 @@
     }
     return true;
   }
-  const recommended = () => state.codeagent === false && !state.gateway?.keySet;
+  // 推荐（醒目卡片）：本机没有 CodeAgent，或在别的工具里检测到了 API 网关 key（多半是 API 用户）。
+  const recommended = () => (state.codeagent === false || state.found.length > 0) && !state.gateway?.keySet;
 
   function modelsHtml() {
     const g = state.gateway;
@@ -54,8 +55,11 @@
       return bind();
     }
     const err = state.error;
-    box.innerHTML = `<div class="api-gw-card${recommended() ? ' rec' : ''}"><h3>用 API key 开始${recommended() ? ' <span class="api-gw-tag">推荐 · 本机没有 CodeAgent</span>' : ''}</h3>`
-      + '<p class="api-gw-note">适合部门发了 API key、没有 CodeAgent 账号的同事。Claude Code、Codex、DSH 会话都会走这个 key。</p>'
+    const tag = state.found.length ? '推荐 · 检测到你用过 API key' : '推荐 · 本机没有 CodeAgent';
+    box.innerHTML = `<div class="api-gw-card${recommended() ? ' rec' : ''}"><h3>用 API key 开始${recommended() ? ` <span class="api-gw-tag">${tag}</span>` : ''}</h3>`
+      + '<p class="api-gw-note">适合部门发了 API key、没有 CodeAgent 账号的同事。Claude Code、Codex、DSH 会话都会走这个 key。也可以在「新建会话」的模型卡里点「用部门 API key」。</p>'
+      + (g.keySet ? '' : state.found.slice(0, 3).map(f => `<div class="api-gw-hit"><span>检测到你在「${esc(f.source)}」里用过 API 网关 key <code>${esc(f.masked)}</code></span>`
+        + `<button type="button" class="primary" data-gw="adopt" data-id="${esc(f.id)}"${state.busy ? ' disabled' : ''}>用这个 key</button></div>`).join(''))
       + `<label>网关地址 ${state.editAddr ? '' : '<span class="api-gw-tag gray">已预填</span> <button type="button" class="api-gw-link" data-gw="addr">改地址</button>'}`
       + `<input name="baseURL" value="${esc(state.draft.baseURL ?? g.baseURL)}" ${state.editAddr ? '' : 'readonly'} spellcheck="false" autocomplete="off"></label>`
       + `<label>API key <span class="api-gw-note-inline">只存在本机，用 Windows 账户加密</span>`
@@ -67,27 +71,28 @@
     bind();
   }
   function bind() {
-    box.querySelectorAll('[data-gw]').forEach(button => { button.onclick = () => void act(button.dataset.gw); });
+    box.querySelectorAll('[data-gw]').forEach(button => { button.onclick = () => void act(button.dataset.gw, button.dataset.id); });
     box.querySelectorAll('[data-gw-model]').forEach(button => { button.onclick = () => void pickModel(button.dataset.gwModel); });
     const key = box.querySelector('input[name="apiKey"]');
     if (key) key.onkeydown = event => { if (event.key === 'Enter') { event.preventDefault(); void act('save'); } };
     for (const input of box.querySelectorAll('input[name="baseURL"], input[name="apiKey"]')) input.oninput = () => { state.draft[input.name] = input.value; };
   }
-  async function act(what) {
+  async function act(what, id) {
     if (what === 'expand') { state.expanded = true; state.justSaved = false; return render(); }
     if (what === 'collapse' || what === 'done') { state.expanded = false; state.justSaved = false; state.error = null; return render(); }
     if (what === 'addr') { state.editAddr = true; return render(); }
     if (what === 'start') { state.justSaved = false; state.expanded = false; render(); document.getElementById('btn-new')?.click(); return; }
-    if (what !== 'save' || state.busy) return;
+    if (!['save', 'adopt'].includes(what) || state.busy) return;
     const baseURL = box.querySelector('input[name="baseURL"]')?.value || state.gateway.baseURL;
     const apiKey = box.querySelector('input[name="apiKey"]')?.value || '';
-    if (!apiKey && !state.gateway.keySet) { state.error = { code: 'no_key', message: '请先粘贴 API key。' }; return render(); }
+    if (what === 'save' && !apiKey && !state.gateway.keySet) { state.error = { code: 'no_key', message: '请先粘贴 API key。' }; return render(); }
     state.draft = { baseURL, apiKey };
     state.busy = true; state.error = null; render();
     try {
       // 第一次配：三种会话一起切到 API 网关（没有 CodeAgent 时它们本来就用不了公司模型）；之后只换 key 不动线路。
       const useFor = state.gateway.keySet ? [] : KINDS;
-      const result = await ipcRenderer.invoke('api-gateway:save', { baseURL, apiKey, useFor });
+      const result = what === 'adopt' ? await ipcRenderer.invoke('api-gateway:adopt', { id, useFor })
+        : await ipcRenderer.invoke('api-gateway:save', { baseURL, apiKey, useFor });
       if (result?.gateway) state.gateway = result.gateway;
       if (!result?.ok) { state.error = { code: result?.code || 'error', message: result?.error || '保存没成功，请重试。' }; return; }
       state.justSaved = true; state.expanded = false; state.editAddr = false; state.draft = { baseURL: null, apiKey: '' };
@@ -110,8 +115,10 @@
   }
   async function refresh() {
     try {
-      const [gw, setup] = await Promise.all([ipcRenderer.invoke('api-gateway:get'), ipcRenderer.invoke('community:setup')]);
+      const [gw, setup, det] = await Promise.all([ipcRenderer.invoke('api-gateway:get'), ipcRenderer.invoke('community:setup'),
+        ipcRenderer.invoke('api-gateway:detect').catch(() => null)]);
       state.gateway = gw?.gateway || state.gateway;
+      state.found = det?.found || [];
       const find = id => setup?.providers?.find(p => p.id === id);
       state.codeagent = find('codeagent') ? !!find('codeagent').installed : null;
       state.claude = find('claude') ? !!find('claude').installed : null;

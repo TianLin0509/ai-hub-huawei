@@ -1224,7 +1224,8 @@
     wrap.hidden = !show;
     if (!show) return;
     const kind = selectedKind;
-    const cards = modelCards.cardsFor(kind, companyProvider[kind], companyProxyStatus, companyPick[kind]);
+    const cards = modelCards.cardsFor(kind, companyProvider[kind], companyProxyStatus, companyPick[kind],
+      { codeagentInstalled: require('./codeagent-preference').detectedInstalled() });
     const html = modelCards.renderCards(cards, escapeHtml);
     if (list.dataset.built !== html) { list.innerHTML = html; list.dataset.built = html; }
     list.dataset.kind = kind;
@@ -1233,12 +1234,35 @@
     const picked = cards.find(card => card.checked);
     const explain = picked && picked.source === 'company' && ['needs', 'error', 'busy'].includes(picked.state) ? picked.tip : '';
     if (note) { note.hidden = !explain; note.textContent = explain; note.dataset.state = picked?.state || ''; }
+    // 推荐用 API key（没装 CodeAgent）：每次打开启动中心自动展开一次就地配置，用户不用先找到那张卡。
+    if (cards[0]?.state === 'suggest' && !gatewayAutoOpened) { gatewayAutoOpened = true; void gatewaySetup().open(); }
+  }
+
+  // 启动中心就地配 API 网关（renderer/api-gateway-inline.js）：点「用部门 API key」卡展开，保存后选中网关默认模型。
+  let gatewayInline = null, gatewayAutoOpened = false;
+  function gatewaySetup() {
+    if (!gatewayInline) gatewayInline = require('./api-gateway-inline').createGatewayInline({ document, ipcRenderer, escapeHtml,
+      onSaved: gateway => {
+        for (const kind of ['claude', 'codex', 'deepseek-acp']) companyPick[kind] = { source: 'gateway', model: gateway?.model || '' };
+        void loadHubDefaultModels({ refreshAccount: true }).then(() => loadPrimaryModelCatalogs()).then(() => {
+          if (companyApiKind(selectedKind)) { companyPick[selectedKind] = { source: 'gateway', model: gateway?.model || '' }; selectedModel = companyPickModel(selectedKind); }
+          paint();
+        }).catch(error => setError(error.message));
+      } });
+    let panel = document.getElementById('new-session-gw-setup');
+    if (!panel) {
+      panel = Object.assign(document.createElement('div'), { id: 'new-session-gw-setup', className: 'gw-inline', hidden: true });
+      document.getElementById('new-session-model-cards')?.after(panel);
+      gatewayInline.attach(panel);
+    }
+    return gatewayInline;
   }
 
   function pickModelCard(card) {
     const kind = selectedKind;
     if (!card || !companyApiKind(kind) || submitting) return;
     const id = card.dataset.modelCard;
+    if (id === 'gw-setup') { const g = gatewaySetup(); if (g.isOpen) g.close(); else void g.open(); return; }
     const apiProfile = companyProvider[kind]?.apiProfiles?.find(item => id === 'api:' + item.id);
     companyPick[kind] = apiProfile ? { source: 'api', profileId: apiProfile.id, model: apiProfile.model }
       : id === 'own' ? { source: 'own', model: '' } : id.startsWith('gw:') ? { source: 'gateway', model: id.slice(3) } : { source: 'company', model: id };
@@ -1718,6 +1742,7 @@
   }
 
   function openNewSessionModal(options = {}) {
+    gatewayAutoOpened = false; gatewayInline?.close();
     void codeagentSetup.refresh().catch(error => setError('安装检测失败：' + error.message));
     window.__codeagentAccountsHide?.();
     if (!menuEl) return;

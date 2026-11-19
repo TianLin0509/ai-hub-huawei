@@ -136,7 +136,7 @@ function memberSaveRequests(slots, providers) {
   return requests;
 }
 
-function cardsFor(kind, provider, status, pick) {
+function cardsFor(kind, provider, status, pick, { codeagentInstalled = null } = {}) {
   if (!COMPANY_KINDS.has(kind) || !provider) return [];
   const gatewayCards = gatewayModels(provider).map(m => ({ id: 'gw:' + m.id, model: m.id, name: m.id, detail: '', source: 'gateway', sourceText: 'API 网关',
     state: 'ready', statusText: m.note || '用部门 API key', tip: '经本机反代转给 API 网关，用你保存的部门 API key，不走 CodeAgent 账号。网关排队时首字可能要等 10–30 秒。',
@@ -160,7 +160,15 @@ function cardsFor(kind, provider, status, pick) {
   }
   // 正走 API 网关的工具，网关模型卡排在最前；否则排在公司模型后面。
   // 走 API 网关的用户多半没有 CodeAgent：公司模型此刻用不了就不显示那两张卡，免得一屏「公司上游信息不全」（E2E 截图发现）。
-  return onGateway(provider) ? [...gatewayCards, ...cards.filter(c => c.source !== 'company' || c.state === 'ready' || c.checked)] : [...cards.slice(0, companyModels(provider).length), ...gatewayCards, ...cards.slice(companyModels(provider).length)];
+  if (onGateway(provider)) return [...gatewayCards, ...cards.filter(c => c.source !== 'company' || c.state === 'ready' || c.checked)];
+  const companyCount = companyModels(provider).length;
+  if (gatewayCards.length) return [...cards.slice(0, companyCount), ...gatewayCards, ...cards.slice(companyCount)];
+  // 还没配 API 网关（11-19 同事反馈找不到入口）：放一张「用部门 API key」卡，点了在卡下就地配置。
+  // 这台电脑没装 CodeAgent、公司模型也还没跑起来：多半是 API 用户，把它排第一并标推荐。装了 CodeAgent 的老用户顺序不变。
+  const companyReady = codeagentInstalled !== false || cards.slice(0, companyCount).some(c => c.state === 'ready');
+  const setup = { id: 'gw-setup', name: '用部门 API key', detail: '', source: 'gateway-setup', sourceText: 'API 网关', state: companyReady ? 'setup' : 'suggest',
+    statusText: companyReady ? '没有 CodeAgent 账号时用' : '推荐：粘贴部门发的 key 就能用', tip: '部门发了 API key、没有 CodeAgent 账号的同事用这个：点一下在下面粘贴 key，Claude Code、Codex、DSH 都能用。', checked: false };
+  return companyReady ? [...cards.slice(0, companyCount), setup, ...cards.slice(companyCount)] : [setup, ...cards];
 }
 
 function renderCards(cards, escapeHtml) {

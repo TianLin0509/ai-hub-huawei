@@ -141,3 +141,41 @@ test('群聊成员：当前走公司线路时选网关模型，保存成网关�
   const plainApi = { backend: 'api', model: 'glm-5.3-flash', gatewayModels: [{ id: 'glm-5.3-flash' }] };
   assert.ok(!cards.memberSaveRequests([{ kind: 'claude', model: 'glm-5.3-flash' }], { claude: plainApi }).some(r => r.backend === 'gateway'), '没有命名 profile 的自有接口也保留');
 });
+
+test('自动识别 API 用户：在 Claude Code / Codex 设置和环境变量里找网关地址旁的 key，只回打码样子；没有网关地址的文件不取', t => {
+  const detect = require('../core/api-gateway-detect');
+  const home = tempDir(t);
+  const k1 = 'sk-' + 'a'.repeat(40), k2 = 'sk-' + 'b'.repeat(40), k3 = 'sk-' + 'c'.repeat(40), other = 'sk-' + 'z'.repeat(40);
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'settings.json'), JSON.stringify({ env: { ANTHROPIC_BASE_URL: 'http://gw.dept.example', ANTHROPIC_AUTH_TOKEN: k1 } }));
+  fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.codex', 'config.toml'), 'model_provider = "ascend"\n[model_providers.ascend]\nbase_url = "http://gw.dept.example/v1"\n');
+  fs.writeFileSync(path.join(home, '.codex', 'auth.json'), JSON.stringify({ OPENAI_API_KEY: k2 }));
+  fs.mkdirSync(path.join(home, '.continue'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.continue', 'config.json'), JSON.stringify({ apiBase: 'https://api.openai.com/v1', apiKey: other }));
+  const env = { OPENAI_BASE_URL: 'http://gw.dept.example/v1', OPENAI_API_KEY: k3, PATH: 'x' };
+  const found = detect.detect('http://gw.dept.example/v1', { env, home, appData: path.join(home, 'AppData') });
+  assert.deepEqual(found.map(f => f.source), ['环境变量', 'Claude Code 设置', 'Codex 设置']);
+  assert.ok(found.every(f => /^sk-…\w{4}$/.test(f.masked)), '界面只拿到打码样子');
+  assert.equal(JSON.stringify(found).includes(k1), false);
+  assert.deepEqual(found.map(f => detect.take(f.id).key), [k3, k1, k2]);
+  assert.equal(found.some(f => detect.take(f.id).key === other), false, '没有网关地址的配置里的 key 不取');
+  // 同一份配置里还有别家供应商：只取紧挨着网关地址的那个 key；环境变量只取同前缀的。
+  const mixed = JSON.stringify({ models: [{ apiBase: 'https://api.deepseek.com', apiKey: other }, { apiBase: 'http://gw.dept.example/v1', apiKey: k1 }] });
+  assert.deepEqual(detect.pairedKeys(mixed, 'gw.dept.example'), [k1]);
+  // 网关条目里地址和 key 之间隔着别的字段，也只取同一个对象里的 key（不按字符距离）。
+  const spread = JSON.stringify({ models: [{ title: 'o', apiBase: 'https://api.openai.com/v1', apiKey: other }, { title: 'gw', provider: 'openai', model: 'x', apiBase: 'http://gw.dept.example/v1', apiKey: k1 }] });
+  assert.deepEqual(detect.pairedKeys(spread, 'gw.dept.example'), [k1]);
+  // Codex：只认当前选中的供应商；它写了 env_key 就取那个环境变量，不取全局 OPENAI_API_KEY。
+  const H = 'gw.dept.example', gwToml = '[model_providers.gw]\nbase_url = "http://' + H + '/v1"\nenv_key = "GW_KEY"\n';
+  assert.equal(detect.codexKey('model_provider = "openai"\n' + gwToml, JSON.stringify({ OPENAI_API_KEY: other }), { GW_KEY: k1 }, H), '');
+  assert.equal(detect.codexKey('model_provider = "gw"\n' + gwToml, JSON.stringify({ OPENAI_API_KEY: other }), { GW_KEY: k1 }, H), k1);
+  assert.equal(detect.codexKey("model_provider = 'gw'\n[model_providers.gw]\nbase_url = 'http://" + H + "/v1'\nenv_key = 'GW_KEY'\n", JSON.stringify({ OPENAI_API_KEY: other }), { GW_KEY: k1 }, H), k1, 'TOML 单引号');
+  assert.equal(detect.codexKey('model_provider = "gw"\n[model_providers.gw]\nbase_url = "http://' + H + '/v1"\nenv_key = GW_KEY\n', JSON.stringify({ OPENAI_API_KEY: other }), { GW_KEY: k1 }, H), '', 'env_key 读不出就不推荐，不回退全局 key');
+  // 非 JSON（如 YAML）配不了对：不看。
+  assert.deepEqual(detect.pairedKeys('models:\n - apiBase: https://api.openai.com\n   apiKey: ' + other + '\n - apiBase: http://' + H + '/v1\n', H), []);
+  const envMixed = detect.detect('http://gw.dept.example/v1', { env: { OPENAI_BASE_URL: 'http://gw.dept.example/v1', OPENAI_API_KEY: k3, DEEPSEEK_API_KEY: other }, home: tempDir(t) });
+  assert.deepEqual(envMixed.map(f => detect.take(f.id).key), [k3]);
+  assert.notEqual(envMixed[0].id, found[0].id, '每次检测的编号都不同，旧按钮不会指到别的 key');
+  assert.deepEqual(detect.detect('http://gw.dept.example/v1', { env: {}, home: tempDir(t) }), []);
+});
