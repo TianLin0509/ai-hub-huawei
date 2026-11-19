@@ -67,6 +67,14 @@ function registerEnvCheckIpc(ipcMain, deps) {
         const state = await doctorInstaller.install();
         return state.phase === 'done' ? { ok: true, message: state.message } : { ok: false, error: state.error || state.message || '安装未完成' };
       }
+      if (act === 'ocr-install') {
+        // 识别组件一键更新（r54）：和 PPT 页的【一键更新】共用同一个安装器，同时点只装一次。
+        const ppt = deps.assistant()?.ppt;
+        if (!ppt?.ocr) throw new Error('这个版本没有 PPT 联动');
+        const state = await ppt.ocr.install();
+        if (ppt.doctor) ppt.doctor.cached = null;
+        return state.phase === 'done' ? { ok: true, message: state.message } : { ok: false, error: state.error || state.message || '更新未完成' };
+      }
       if (act === 'welink-find') {
         const assistant = deps.assistant();
         if (!assistant) throw new Error('这个版本没有助理');

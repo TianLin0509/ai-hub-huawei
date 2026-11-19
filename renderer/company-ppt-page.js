@@ -282,20 +282,29 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
   }
   const PHASES = [['识别文字', '找出文字框与位置'], ['CodeAgent 看图修正', '核对文字、位置与公式'], ['生成可编辑 PPT', '装配文本框与贴图'], ['完成', '在 PowerPoint 中对照原图复核']];
   const PHASE_OF = { seeding: 0, running: 0, waiting_agent: 1, building: 2, done: 3 };
+  // 停下来等用户操作的状态：不再轮询，也允许换一张图重新开始（needs_component = 识别组件要先更新，r54）。
+  const TERMINAL = ['done', 'error', 'needs_component'];
   function step(n, failed = false) { const panel = page.querySelector('[data-ppt-convert-panel]'); panel.dataset.step = String(n); panel.toggleAttribute('data-failed', failed); }
   function renderConversion(job) {
     page.querySelector('[data-ppt-conversion]').dataset.jobId = job.id;
     conversionId = job.id; const r = job.result, preview = fileUrl(r?.preview || job.seed?.preview), reviews = r?.reviewItems || job.seed?.reviewItems || [];
-    const running = !['done', 'error'].includes(job.state), phase = PHASE_OF[job.state] ?? 0;
+    const running = !TERMINAL.includes(job.state), phase = PHASE_OF[job.state] ?? 0;
     step(job.state === 'done' ? 3 : 2, job.state === 'error');
     const recovery = job.needsOutputCheck ? '<p class="pptw-conv-note">本次可能已有部分产物。请先检查目录，再决定是否重试。</p><button type="button" class="pptw-btn sec" data-ppt="conversion-workdir">打开产物目录</button>' : '';
     const retryLabel = job.needsOutputCheck ? '已检查产物，让 CodeAgent 重试' : '让 CodeAgent 重试';
+    // 识别组件过旧（r54）：开工前或装配时发现，都只给一个【一键更新】；更新完自动接着做，不再给两个必然失败的重试按钮。
+    const component = ['needs_component', 'updating'].includes(job.state), updating = job.state === 'updating';
+    const componentActions = component ? `<button type="button" class="pptw-btn pri" data-ppt="conversion-update-component"${updating ? ' disabled' : ''}>${updating ? `正在更新${job.progress ? ' ' + Number(job.progress) + '%' : '…'}` : job.resume === 'build' ? '一键更新并继续' : '一键更新'}</button>` : '';
+    const doctorUpgrade = job.needsDoctorUpgrade ? '<button type="button" class="pptw-btn pri" data-ppt="doctor-install">一键升级 Doctor</button>' : '';
+    const componentNote = component ? `<span>只更新 PPT Doctor 的识别组件，不改动 Doctor 本体和素材库；更新完自动继续这张图${job.resume === 'build' ? '（沿用 CodeAgent 已提交的修正）' : ''}。</span>${updating ? `<span class="pptw-conv-bar" aria-hidden="true"><i style="width:${Math.max(3, Math.min(100, Number(job.progress) || 0))}%"></i></span>` : ''}` : '';
     // 主区：画面 + 当前状态 + 可用操作。AI 处理中画面底部才有流光（只用于 AI 思考中）。
-    page.querySelector('[data-ppt-conversion]').innerHTML = `<div class="pptw-conv-main" data-conversion-state="${esc(job.state)}"><div class="pptw-conv-stage${running ? ' pptw-thinking' : ''}">${preview ? `<img class="pptw-conversion-preview" src="${esc(preview)}" alt="图片转字近似预览">` : '<span class="pptw-empty">识别完成后在这里显示预览</span>'}</div><div class="pptw-conv-status"><b class="${job.state === 'error' ? 'is-error' : ''}">${esc(job.error || job.step || job.state)}</b>${r ? `<span>已生成可编辑PPT · ${esc(r.mode === 'image_fallback' ? 'OCR与图像算法处理，尚未经Agent看图核对' : 'Agent已提交差异')} · 预览为近似效果，需在PowerPoint中复核。</span>${r.pixel_gate?.passed === false ? '<span class="is-warn">质量检查尚未通过，请核对右侧复核项。</span>' : ''}` : ''}</div><div class="pptw-conv-actions">${r ? '<button type="button" class="pptw-btn pri" data-ppt="conversion-open">打开 PPT</button>' : ''}${recovery}${job.state === 'error' && job.seed ? `<button type="button" class="pptw-btn ${job.needsOutputCheck ? 'sec' : 'pri'}" data-ppt="conversion-retry">${retryLabel}</button><button type="button" class="pptw-btn sec" data-ppt="conversion-fallback">${job.needsOutputCheck ? '已检查产物，用 OCR 初稿装配' : '先用 OCR 初稿装配'}</button>` : ''}</div></div>`;
+    page.querySelector('[data-ppt-conversion]').innerHTML = `<div class="pptw-conv-main" data-conversion-state="${esc(job.state)}"><div class="pptw-conv-stage${running && !updating ? ' pptw-thinking' : ''}">${preview ? `<img class="pptw-conversion-preview" src="${esc(preview)}" alt="图片转字近似预览">` : '<span class="pptw-empty">识别完成后在这里显示预览</span>'}</div><div class="pptw-conv-status"><b class="${job.state === 'error' ? 'is-error' : ''}">${esc(job.error || job.step || job.state)}</b>${r ? `<span>已生成可编辑PPT · ${esc(r.mode === 'image_fallback' ? 'OCR与图像算法处理，尚未经Agent看图核对' : 'Agent已提交差异')} · 预览为近似效果，需在PowerPoint中复核。</span>${r.pixel_gate?.passed === false ? '<span class="is-warn">质量检查尚未通过，请核对右侧复核项。</span>' : ''}` : ''}${componentNote}</div><div class="pptw-conv-actions">${r ? '<button type="button" class="pptw-btn pri" data-ppt="conversion-open">打开 PPT</button>' : ''}${componentActions}${doctorUpgrade}${recovery}${job.state === 'error' && job.seed && !job.needsDoctorUpgrade ?`<button type="button" class="pptw-btn ${job.needsOutputCheck ? 'sec' : 'pri'}" data-ppt="conversion-retry">${retryLabel}</button><button type="button" class="pptw-btn sec" data-ppt="conversion-fallback">${job.needsOutputCheck ? '已检查产物，用 OCR 初稿装配' : '先用 OCR 初稿装配'}</button>` : ''}</div></div>`;
     // 右栏：有复核项时列复核项，否则按真实状态画处理进展（不编造时间和百分比）。
     const items = reviews.map(item => esc(typeof item === 'string' ? item : item.message || item.reason || '请对照原图检查本页文字和位置'));
     page.querySelector('[data-ppt-conv-side]').innerHTML = items.length
       ? `<h3>复核项<span class="pptw-tag amber">${items.length} 项待看</span></h3><ul class="pptw-reviews">${items.map(t => `<li><i aria-hidden="true">!</i><span>${t}</span></li>`).join('')}</ul>`
+      : component
+        ? `<h3>需要更新识别组件</h3><p>增强转字（CodeAgent 看图修正后装配可编辑 PPT）要用新版识别组件。这台电脑上的识别组件${job.component?.installed === false ? '还没装' : job.component?.version ? ' v' + esc(job.component.version) + ' 版本较旧' : '版本较旧'}。</p><p>点【${job.resume === 'build' ? '一键更新并继续' : '一键更新'}】后 Hub 自动下载（公司内源优先）、逐个文件校验后换上，完成后自动继续这张图，不用重新选图。</p>${job.error ? `<p class="is-error">${esc(job.error)}</p>` : ''}`
       : job.state === 'error'
         ? `<h3>没有完成</h3><p>${esc(job.error || '这一步没有完成')}</p>`
         : `<h3>处理进展${running ? '<span class="pptw-dots" aria-hidden="true"><i></i><i></i><i></i></span>' : ''}</h3><ol class="pptw-phases">${PHASES.map(([t, d], k) => `<li class="${k < phase || job.state === 'done' ? 'done' : k === phase ? 'now' : ''}"><b>${t}</b><small>${k === phase && running ? esc(job.step || d) : d}</small></li>`).join('')}</ol>`;
@@ -307,7 +316,7 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
   async function startConversion(channel, args) {
     if (converting || conversionId) throw new Error('当前图片仍在处理，请等本轮完成');
     converting = true; mode(true); step(2); page.querySelector('[data-ppt-conversion]').textContent = '正在生成 OCR 初稿，通常数十秒…';
-    try { const job = await call(channel, args); renderConversion(job); if (['done', 'error'].includes(job.state)) conversionId = null; poll(); }
+    try { const job = await call(channel, args); renderConversion(job); if (TERMINAL.includes(job.state)) conversionId = null; poll(); }
     catch (error) { page.querySelector('[data-ppt-conversion]').textContent = error.message; throw error; }
     finally { converting = false; }
   }
@@ -315,7 +324,7 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
     clearTimeout(timer); if (!page || page.hidden) return;
     timer = setTimeout(async () => {
       try {
-        if (conversionId) { const r = await call('ppt-imgtext-status', { jobId: conversionId }); renderConversion(r.job); if (['done', 'error'].includes(r.job.state)) conversionId = null; }
+        if (conversionId) { const r = await call('ppt-imgtext-status', { jobId: conversionId }); renderConversion(r.job); if (TERMINAL.includes(r.job.state)) conversionId = null; }
         if (chatId) {
           const r = await call('ppt-page-state', { chatId }); renderStatus(r.ppt);
           if (ai && ai.chatId === chatId) { ai.chat = r.chat || ai.chat; ai.trace = r.trace || ai.trace; ai.phase = require('./wait-progress').assistantChatPhase(r.chat); } // 排队 / 准备中用公共等待文案（renderer/wait-progress.js）
@@ -385,7 +394,14 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
       try { await call('ppt-download-doctor', { source: name === 'download' ? 'mirror' : 'github' }); notice('已打开下载入口。安装或升级后，点「重新检查」。'); }
       finally { button.disabled = false; } return;
     }
-    if (name === 'conversion-retry' || name === 'conversion-fallback') { const r = await call(name === 'conversion-retry' ? 'ppt-imgtext-retry' : 'ppt-imgtext-fallback', { jobId: lastConversionId() }); renderConversion(r); poll(); return; }
+    if (name === 'conversion-update-component') { button.disabled = true; const r = await call('ppt-imgtext-update-component', { jobId: lastConversionId() }); renderConversion(r); poll(); return; }
+    if (name === 'conversion-retry' || name === 'conversion-fallback') {
+      const jobId = lastConversionId();
+      // 失败时也按后台的真实状态重画（例如装配时发现识别组件过旧，任务已转成「需要更新」），不留着点过的旧按钮。
+      try { const r = await call(name === 'conversion-retry' ? 'ppt-imgtext-retry' : 'ppt-imgtext-fallback', { jobId }); renderConversion(r); }
+      catch (error) { const s = await call('ppt-imgtext-status', { jobId }).catch(() => null); if (s?.job) renderConversion(s.job); throw error; }
+      poll(); return;
+    }
     const channels = { folders: 'ppt-pick-folders', index: 'ppt-index', doctor: 'ppt-pick-doctor', 'pick-index': 'ppt-pick-index' };
     if (channels[name]) { const r = await call(channels[name]); if (r?.ppt) renderStatus(r.ppt); poll(); }
   }

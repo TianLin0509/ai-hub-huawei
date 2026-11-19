@@ -35,6 +35,7 @@
   "tests/unit-company-assistant-ppt-runtime.test.js",
   "tests/unit-company-assistant-ppt-server.test.js",
   "tests/unit-company-assistant-ppt-workflow.test.js",
+  "tests/unit-company-assistant-ppt-ocr-component.test.js",
   "tests/unit-company-group-simplify.test.js",
   "tests/unit-company-meeting-flow.test.js",
   "tests/unit-company-meeting-full.test.js",

@@ -17,6 +17,8 @@ class PptLibrary {
     this.current = { available: false, files: 0, error: '', checkedAt: null };
     this.reading = null; this.materialized = '';
     this.doctor = deps.pptDoctor || new PptDoctor(assistant, deps);
+    // 识别组件一键更新（r54）：图片转字页、环境检查页共用这一个安装器（同一时刻只装一次）。
+    this.ocr = deps.pptOcrInstaller || require('./ppt-ocr-component').createOcrComponentInstaller({ env: this.env, fetchImpl: deps.pptDownloadFetch, ...(deps.openx !== undefined ? { openx: deps.openx } : {}) });
     this.imgtext = new (require('./ppt-imgtext').PptImgtext)(this);
     this.materials = new (require('./ppt-materials').PptMaterials)(this, deps);
     this.make = new (require('./ppt-make').PptMake)(this);
@@ -319,7 +321,7 @@ class PptLibrary {
       });
     return this.status();
   }
-  close() { this.indexChild?.kill(); this.indexChild = null; this.doctor.close(); this.map?.close(); }
+  close() { this.indexChild?.kill(); this.indexChild = null; this.doctor.close(); this.map?.close(); this.ocr?.cancel?.(); }
   // 回答后的出处核对（v3.1.2）：模型没调用 ppt_library op=report 时，按索引里的文稿与页数
   // 核对回答里写的「文件名 + 第 N 页」。没有索引、没有 Python 或没有引用时一句都不加。
   async citationNote(text) {

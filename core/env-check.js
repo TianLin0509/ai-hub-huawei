@@ -130,6 +130,17 @@ function probeList(ctx) {
       const ver = st.doctorVersion || st.appVersion || st.version || '';
       const download = { label: '下载 PPT Doctor', act: 'ppt-download' }, oneClick = label => ({ label, act: 'doctor-install' });
       if (st.state === 'ready' || st.state === 'empty') {
+        // 识别组件（r54）：图片转可编辑的增强转字要求新版识别组件。没装或太旧都在这一项给一键安装/更新（PPT 页开工前也会原地拦下）；
+        // 老 Doctor 不报 ocr 字段时不判断。
+        const ocr = st.ocr && typeof st.ocr === 'object' ? st.ocr : null;
+        if (ocr && ocr.assistAvailable === false) {
+          const verb = ocr.installed ? '更新' : '安装';
+          return entry('ppt-doctor', 'PPT Doctor', 'ppt-doctor', STATUS.warn, `${ver ? 'v' + ver + ' · ' : ''}已安装，识别组件需${verb}（图片转可编辑要用）`, {
+            cause: ocr.installed ? `识别组件${ocr.version ? ' v' + ocr.version : ''}版本较旧，不支持增强转字；素材检索不受影响。` : '还没装识别组件，图片转可编辑要用它；素材检索不受影响。',
+            steps: [`点「一键${verb}识别组件」，Hub 自动下载并校验后换上，不动 PPT Doctor 本体`, `${verb}后会自动重新检测`],
+            fixes: [{ label: `一键${verb}识别组件`, act: 'ocr-install' }, RECHECK],
+          });
+        }
         return entry('ppt-doctor', 'PPT Doctor', 'ppt-doctor', STATUS.ok, `${ver ? 'v' + ver + ' · ' : ''}${st.state === 'empty' ? '已安装，还没有建素材库' : '已安装，能联动'}`);
       }
       if (st.state === 'missing') {

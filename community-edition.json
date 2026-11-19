@@ -59,9 +59,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "新增「分身」Beta（左侧栏）：可建多个分身替你盯消息、起草回复、答群里的问题，生效范围、上下文、账号模型和前缀都能自定义；所有消息都由你点了才发，页面右上角可一键反馈"
+    "PPT 图片转可编辑：识别组件过旧或没装时开工前就拦下，原地一键安装/更新（内源优先下载、校验后换上），更新后自动接着转；装配时才发现过旧也只给【一键更新并继续】，保留初稿与修正续跑；环境检查 PPT 项同样带一键按钮"
   ],
-  "version": "5.6.55",
+  "version": "5.6.56",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

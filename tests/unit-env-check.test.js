@@ -176,3 +176,23 @@ test('PPT Doctor 版本：显示程序版本 doctorVersion，不显示内置引�
   const it = r.items.find(i => i.id === 'ppt-doctor');
   assert.match(it.detail, /v2\.0\.7/); assert.doesNotMatch(it.detail, /0\.4\.0/);
 });
+
+test('PPT Doctor 识别组件过旧（r54）：PPT 项显示「识别组件需更新」并带一键更新；没装时提示一键安装；老 Doctor 不报字段时不提示', async () => {
+  const run = async ocr => {
+    const assistant = { cli: () => '', auth: { status: () => ({ state: 'unknown' }) }, rawWelink: async () => ({ code: 1, stdout: '' }),
+      findCli: async () => ({ state: 'notfound' }), ppt: { doctor: { status: async () => ({ state: 'ready', doctorVersion: '2.1.2', ...(ocr ? { ocr } : {}) }) } } };
+    const r = await envCheck.runEnvCheck({ platform: 'linux', kindAllowed: () => false, setup: fakeSetup({}), assistant: () => assistant });
+    return r.items.find(i => i.id === 'ppt-doctor');
+  };
+  const old = await run({ installed: true, version: '1.0.0', assistAvailable: false });
+  assert.equal(old.status, 'warn'); assert.match(old.detail, /识别组件需更新/); assert.match(old.cause, /v1\.0\.0/);
+  assert.equal(old.fixes[0].act, 'ocr-install'); assert.equal(old.fixes[0].label, '一键更新识别组件');
+  const { featureReadiness } = require('../core/feature-readiness');
+  const feature = featureReadiness([old]).find(f => f.id === 'ppt-library');
+  assert.equal(feature.status, 'warn'); assert.match(feature.detail, /识别组件需更新/); assert.equal(feature.dependencies[0].fixes[0].act, 'ocr-install');
+  assert.equal((await run({ installed: true, version: '1.2.0', assistAvailable: true })).status, 'ok');
+  const missing = await run({ installed: false, version: '', assistAvailable: false });
+  assert.equal(missing.status, 'warn'); assert.match(missing.detail, /识别组件需安装/); assert.equal(missing.fixes[0].label, '一键安装识别组件');
+  assert.ok(JSON.stringify(missing).includes('ocr-install'));
+  assert.equal((await run(null)).status, 'ok');
+});
