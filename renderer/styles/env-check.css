@@ -53,6 +53,7 @@
 .ec-bad .ec-state { color: var(--status-danger, #c0392b); background: var(--status-danger-tint, rgba(192, 57, 43, .1)); }
 .ec-detail { margin-top: 2px; font-size: 12.5px; color: var(--fg-muted, #6b7080); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ec-item.expanded .ec-detail { white-space: normal; overflow-wrap: anywhere; }
+.ec-detail.ec-update-sources { white-space: pre-line; overflow-wrap: anywhere; }
 .ec-actions { flex: none; display: flex; align-items: center; gap: 6px; }
 .ec-more { border: 0; background: transparent; color: var(--fg-muted, #6b7080); font: inherit; font-size: 12px; cursor: pointer; padding: 4px 6px; border-radius: 6px; }
 .ec-more:hover { color: var(--fg-strong, #1f2330); background: var(--surface-sunken, #f1f1f5); }

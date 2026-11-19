@@ -5,7 +5,8 @@
 // 公司外（在家、外网）连不上内源：3 秒内没回就记下「连不上」，5 分钟内不再试，所以外网用户每 5 分钟最多多等一次 3 秒。
 // 找不到、校验不对、连不上都静默回到原来的下载源，不报错。
 //
-// 内源地址与开关在 openx-config.js：只在公开版生效（2026-11-16 定）；成员版关闭，不探测、不下载、不改源顺序，行为和以前完全一样。
+// 内源地址与开关在 openx-config.js。成员版组件（11-18）和成员版程序包（r56，11-19）也先走内源；
+// 成员版程序包只认内源上的 member-v<版本> 版本，公开版永远不碰 member-* 版本。
 // 接口（匿名可用，2026-11-16 黄区实测）：
 //   版本列表 GET {api}by_project_id?projectId=<id>&currentPage=1&pageSize=N → { code:"0", data:{ records:[{ id, version, releaseTime }] } }
 //   单个版本 GET {api}by_id?id=<id> → { data:{ binaryPackages:[{ originalFileName, url }] } }（列表里 url 可能为空，必须逐个查）
@@ -84,7 +85,7 @@ function safeUrl(u) {
 }
 
 // 在 openx 上按文件名找附件。找到返回 { url, releaseId, releaseVersion }，否则返回 null（原因记在 lastReason）。
-async function find({ file, version, release, fetchImpl, signal, api = DEFAULT_API, projectId = PROJECT_ID,
+async function find({ file, version, release, strict = false, fetchImpl, signal, api = DEFAULT_API, projectId = PROJECT_ID,
   timeoutMs = REACH_TIMEOUT_MS, env = process.env, now = Date.now } = {}) {
   const miss = reason => { state.lastReason = reason; return null; };
   if (!enabled(env)) return miss('未启用');
@@ -106,7 +107,10 @@ async function find({ file, version, release, fetchImpl, signal, api = DEFAULT_A
   const want = normVersion(release || version);
   const same = r => { const n = normVersion(r.version); return n === want || n.startsWith(want + ' '); };
   const time = r => Date.parse(r.releaseTime || '') || 0;
-  const ordered = [...state.list].sort((a, b) => same(b) - same(a) || time(b) - time(a));
+  // 成员版程序包（r56，2026-11-19）：内源上以 member-v<版本> 单独成版（文件名与公开版相同、内容不同），
+  // strict 时只查这一个版本，不往别的版本里找；不带 strict 的查找（公开版程序包、各组件）永远跳过 member-* 版本。
+  const ordered = [...state.list].filter(r => strict ? same(r) : !isMemberRelease(r.version))
+    .sort((a, b) => same(b) - same(a) || time(b) - time(a));
   let queries = 0;
   const deadline = now() + timeoutMs * 2;   // 逐个查版本详情的总预算（约 6 秒），不让找不到的文件拖太久
   for (const rec of ordered) {
@@ -214,7 +218,59 @@ async function headSize(hit, { fetchImpl, signal, timeoutMs = REACH_TIMEOUT_MS }
 // 下载或校验没过：本进程内这个文件不再走内源（避免重试时重复下一遍坏文件）。
 function markBad(file) { if (file) state.bad.add(String(file).toLowerCase()); }
 function lastReason() { return state.lastReason; }
+// 更新窗和环境体检共用的只读探测：复用下载器的列表/详情缓存，整体最多等 3 秒。
+// 只查目标版本，避免「没有该版本」时逐个查询无关组件的版本详情。
+// strict（r56）：成员版只看 member-v<版本>（release 给了就只认这个版本名）；非 strict 的版本名必须以数字开头，member-* 自然排除。
+async function probe({ version, file, release, strict = false, fetchImpl, env = process.env, api = DEFAULT_API, projectId = PROJECT_ID,
+  timeoutMs = REACH_TIMEOUT_MS, now = Date.now } = {}) {
+  const row = { id: 'openx', name: '内源（公司内网）', informational: true, ok: false, version: version || null };
+  const fail = reason => ({ ...row, status: 'failed', reason });
+  if (!enabled(env)) return { ...row, status: 'off', reason: '内源已关闭' };
+  if (!api || !projectId || typeof fetchImpl !== 'function') return fail('未配置内源或网络');
+  if (reachability({ now }) === 'down') return fail(state.lastReason.replace(/^内源连不上[：]?/, '') || '稍后再试');
+  const budget = Math.min(timeoutMs, REACH_TIMEOUT_MS);
+  const deadline = now() + budget;
+  let timer;
+  const pending = (async () => {
+    let list;
+    try { list = await loadList({ fetchImpl, api, projectId, timeoutMs: budget, now }); }
+    catch (error) {
+      state.unreachableUntil = now() + UNREACHABLE_TTL_MS;
+      state.lastReason = `内源连不上：${error.message}`;
+      return fail(error.message);
+    }
+    const want = normVersion(version);
+    const pattern = strict ? /^member-v(\d+\.\d+\.\d+)(?:\s|$)/i : /^(\d+\.\d+\.\d+)(?:\s|$)/;
+    const wantRelease = release ? normVersion(release).toLowerCase() : '';
+    const candidates = list.map(r => ({ ...r, appVersion: pattern.exec(normVersion(r.version))?.[1] }))
+      .filter(r => r.appVersion && (!want || r.appVersion === want))
+      .filter(r => !strict || !wantRelease || (n => n === wantRelease || n.startsWith(wantRelease + ' '))(normVersion(r.version).toLowerCase()))
+      .sort((a, b) => require('./manifest').compareVersions(b.appVersion, a.appVersion));
+    if (!candidates.length) return { ...row, status: 'missing' };
+    if (!file) return { ...row, status: 'ok', ok: true, version: candidates[0].appVersion };
+    for (const rec of candidates.slice(0, MAX_DETAIL_QUERIES)) {
+      if (now() >= deadline) break;
+      let packages = state.details.get(rec.id);
+      if (!packages) {
+        const data = await getJson(fetchImpl, `${api}by_id?id=${encodeURIComponent(rec.id)}`, null, Math.max(1, deadline - now()));
+        packages = Array.isArray(data.binaryPackages) ? data.binaryPackages : [];
+        state.details.set(rec.id, packages);
+      }
+      const names = (Array.isArray(file) ? file : [file]).map(f => String(f).toLowerCase());
+      if (packages.some(p => p && names.includes(String(p.originalFileName || '').toLowerCase()) && safeUrl(p.url))) {
+        return { ...row, status: 'ok', ok: true, version: rec.appVersion };
+      }
+    }
+    return now() >= deadline ? fail(`${budget / 1000} 秒内未完成探测`) : { ...row, status: 'missing' };
+  })().catch(error => fail(`版本详情没取到：${error.message}`));
+  try {
+    return await Promise.race([pending, new Promise(resolve => { timer = setTimeout(() => resolve(fail(`${budget / 1000} 秒内未完成探测`)), budget); })]);
+  } finally { clearTimeout(timer); }
+}
 const releaseName = (kind, version) => `${kind}-${normVersion(version)}`;
+const MEMBER_PREFIX = 'member-';
+const memberReleaseName = version => `${MEMBER_PREFIX}v${normVersion(version)}`;
+const isMemberRelease = name => String(name || '').trim().toLowerCase().startsWith(MEMBER_PREFIX);
 function _reset() { state = freshState(); }
 
-module.exports = { EDITION_ON, publicOrder, releaseName, find, findForDownload, headSize, prewarm, reachability, safeUrl, markBad, lastReason, enabled, normVersion, _reset, DEFAULT_API, PROJECT_ID, REACH_TIMEOUT_MS, UNKNOWN_BUDGET_MS };
+module.exports = { EDITION_ON, publicOrder, releaseName, memberReleaseName, isMemberRelease, find, findForDownload, headSize, prewarm, probe, reachability, safeUrl, markBad, lastReason, enabled, normVersion, _reset, DEFAULT_API, PROJECT_ID, REACH_TIMEOUT_MS, UNKNOWN_BUDGET_MS };

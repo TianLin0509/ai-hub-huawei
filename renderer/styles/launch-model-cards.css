@@ -52,3 +52,5 @@
 }
 .crumb-model-route[data-route="proxy"] { background: var(--hw-brand-soft, #E7EFFE); color: var(--hw-brand, #0A59F7); }
 .crumb-model-route { flex: none; }
+/* API 网关排队中（2026-11-19）：首字前等待 10–30 秒常见，用暖色提示「在排队，不是卡住」。 */
+.crumb-model-route[data-gateway-waiting="1"] { background: #fdf3e0; color: #9a6a12; }

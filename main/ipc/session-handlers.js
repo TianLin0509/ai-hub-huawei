@@ -392,13 +392,18 @@ function registerSessionIpc(ipcMain, deps) {
     }
   });
 
+  // 经本机反代的会话可切的模型：API 网关会话按网关模型表（2026-11-19），公司模型会话按公司模型表。
+  const proxyModelIds = session => session?.companyUpstream === 'gateway'
+    ? require('../../core/company-model-proxy').gatewayModelIds(require('../../core/data-dir').getHubDataDir())
+    : require('../../core/company-model-proxy').MODEL_IDS;
+
   ipcMain.handle('prepare-session-model-switch', async (_event, payload = {}) => {
     const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : '';
     const targetModel = typeof payload.modelId === 'string' ? payload.modelId.trim() : '';
     const session = sessionId ? sessionManager.getSession(sessionId) : null;
     const kind = String(session && session.kind || '').replace(/-resume$/, '').toLowerCase();
     const companyProxy = session?.companyRoute === 'proxy';
-    const validModel = companyProxy ? require('../../core/company-model-proxy').MODEL_IDS.includes(targetModel) : isClaudeModelSelection(targetModel);
+    const validModel = companyProxy ? proxyModelIds(session).includes(targetModel) : isClaudeModelSelection(targetModel);
     if (!session || kind !== 'claude' || !validModel) {
       return { ok: false, error: 'invalid-claude-switch', message: '无法为当前会话准备 Claude 模型切换' };
     }
@@ -500,7 +505,7 @@ function registerSessionIpc(ipcMain, deps) {
       try { localOptions = localCliModels(session).models; }
       catch (error) { return { ok: false, message: error.message }; }
     }
-    const valid = companyProxy ? require('../../core/company-model-proxy').MODEL_IDS.includes(modelId)
+    const valid = companyProxy ? proxyModelIds(session).includes(modelId)
       : local ? localOptions.some(model => model.id === modelId) : kind === 'codex'
       ? isCodexConversationModelId(modelId)
       : kind === 'claude'

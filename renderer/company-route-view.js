@@ -9,6 +9,9 @@ const COMPANY_KINDS = new Set(['claude', 'codex', 'deepseek-acp']);
 let sessionAccounts = {};
 let sessionAccountIds = {};
 let shared = false;
+// API 网关会话首包前在排队的（反代状态 gateway.waiting：tag -> { waitedMs, attempt }），收到时刻记下来，本地按秒往上数。
+let gatewayWaiting = {};
+let gatewayWaitingAt = 0;
 const listeners = new Set();
 
 // 和 core/company-model-proxy.js sessionTag 同一规则：会话 ID 只留字母数字、下划线和连字符，最多 64 位。
@@ -29,6 +32,16 @@ function routeInfo(session) {
   const base = String(session.kind || '').replace(/-resume$/, '');
   if (!COMPANY_KINDS.has(base)) return null;
   const model = session.currentModel?.id || '';
+  if (session.companyRoute === 'proxy' && session.companyUpstream === 'gateway') {
+    // API 网关（部门 API key，2026-11-19）：没有号；首包前排队时标出已等秒数（实测常见 10–30 秒），免得以为卡住。
+    const wait = gatewayWaiting[tagOf(session.id)];
+    const waited = wait ? Math.max(0, Math.round((wait.waitedMs + Date.now() - gatewayWaitingAt) / 1000)) : 0;
+    const queue = wait ? `网关排队中 ${waited} 秒${wait.attempt > 1 ? '（已自动重试）' : ''}` : '';
+    return { route: 'proxy', model, alias: '', source: 'API 网关', gateway: true, waiting: !!wait, waited,
+      chip: [shortModel(model), queue ? '排队' : ''].filter(Boolean).join(' · '),
+      text: [model, 'API 网关', queue].filter(Boolean).join(' · '),
+      title: `API 网关 ${model}（用部门 API key，不走 CodeAgent 账号）${queue ? '。' + queue + '：这个网关首字通常要 10–30 秒，之后会逐字出来；150 秒还没开始会自动重试一次。' : ''}` };
+  }
   if (session.companyRoute === 'proxy') {
     const pinned = !shared && session.companyProxyAccount ? (session.companyProxyLabel || (session.companyProxyAccount === 'personal' ? '个人' : '')) : '';
     const alias = pinned || sessionAccounts[tagOf(session.id)] || '';
@@ -50,7 +63,7 @@ function routeInfo(session) {
 // 号：启动中心固定的号，否则反代给这个会话分的号；还没发过消息、或走团队共享主机（号由主机分配）时为空。
 // 模型：按反代同一规则归到公司模型（core/company-model-proxy.js launchModel：含 deepseek 的归 DeepSeek，其余归 GLM）。
 function quotaTarget(session) {
-  if (!session || session.companyRoute !== 'proxy' || shared) return null;
+  if (!session || session.companyRoute !== 'proxy' || shared || session.companyUpstream === 'gateway') return null;
   if (!COMPANY_KINDS.has(String(session.kind || '').replace(/-resume$/, ''))) return null;
   const account = session.companyProxyAccount || sessionAccountIds[tagOf(session.id)] || '';
   let model = '';
@@ -61,8 +74,11 @@ function quotaTarget(session) {
 function updateStatus(status) {
   const next = status && status.sessionAccounts && typeof status.sessionAccounts === 'object' ? { ...status.sessionAccounts } : {};
   const nextIds = status && status.sessionAccountIds && typeof status.sessionAccountIds === 'object' ? { ...status.sessionAccountIds } : {};
+  const waiting = status?.gateway?.waiting && typeof status.gateway.waiting === 'object' ? status.gateway.waiting : {};
+  const waitingChanged = Object.keys(waiting).sort().join(',') !== Object.keys(gatewayWaiting).sort().join(',') || Object.keys(waiting).length > 0;
+  gatewayWaiting = { ...waiting }; gatewayWaitingAt = Date.now();
   const changed = shared !== (status?.shared === true) || JSON.stringify(next) !== JSON.stringify(sessionAccounts)
-    || JSON.stringify(nextIds) !== JSON.stringify(sessionAccountIds);
+    || JSON.stringify(nextIds) !== JSON.stringify(sessionAccountIds) || waitingChanged;
   shared = status?.shared === true;
   sessionAccounts = next;
   sessionAccountIds = nextIds;
@@ -70,5 +86,7 @@ function updateStatus(status) {
   return changed;
 }
 function onChange(fn) { listeners.add(fn); return () => listeners.delete(fn); }
+// 有会话在网关排队时，每秒刷新一次标题栏的已等秒数（反代状态每 5 秒才来一次）。
+function anyGatewayWaiting() { return Object.keys(gatewayWaiting).length > 0; }
 
-module.exports = { routeInfo, quotaTarget, updateStatus, onChange, tagOf, shortModel };
+module.exports = { routeInfo, quotaTarget, updateStatus, onChange, tagOf, shortModel, anyGatewayWaiting };

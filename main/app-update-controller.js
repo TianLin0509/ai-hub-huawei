@@ -20,6 +20,7 @@ const QUIET_OFF_FILE = 'quiet-updates-off.flag';
 const STALE_UPGRADE_MS = 10 * 60 * 1000;
 const canary = require('../core/app-update/canary');
 const catalogLib = require('../core/app-update/version-catalog');
+const openxSource = require('../core/app-update/openx-source');
 
 function resolveFetch(fetchImpl) {
   if (typeof fetchImpl === 'function') return fetchImpl;
@@ -31,6 +32,12 @@ function resolveFetch(fetchImpl) {
 }
 
 // 测试用 AI_HUB_UPDATE_SOURCES（JSON 数组）把源换成本机服务；否则用发行目标里写的。
+// 程序更新包的内源查找参数（r56）：公开版按文件名在公开版版本里找；成员版只精确查 member-v<版本>（strict）。
+function appOpenxOptions(version, editionOn = require('../core/app-update/openx-source').EDITION_ON) {
+  if (editionOn) return {};
+  return { release: require('../core/app-update/openx-source').memberReleaseName(version), strict: true };
+}
+
 function resolveSources(config, env) {
   if (env.AI_HUB_UPDATE_SOURCES) {
     const list = JSON.parse(env.AI_HUB_UPDATE_SOURCES);
@@ -61,7 +68,12 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   let sources = previewEnabled ? [...canary.previewSources(baseSources), ...baseSources] : baseSources;
   let allowSame = !!(config && config.switchEdition);
   const releasePage = (config && config.releasePage) || '';
-  let state = { phase: 'idle', current: currentVersion, sources: sources.map(s => ({ id: s.id, name: s.name })), releasePage, canApply: isPackaged || env.AI_HUB_UPDATE_FORCE_APPLY === '1' };
+  const sourceEdition = openxSource.EDITION_ON ? '公开版' : '成员版';
+  // r56：两个版本都真实探测内源；成员版只看 member-v<版本>（与下载时的 appOpenxOptions 同一口径）。
+  const initialInternalSource = () => ({ id: 'openx', name: '内源（公司内网）', informational: true, ok: false, status: 'unknown', reason: '等待检查' });
+  const probeInternalSource = async (version, file, timeoutMs) => openxSource.probe({ version, file, fetchImpl: resolveFetch(fetchImpl), env, timeoutMs,
+    ...(openxSource.EDITION_ON ? {} : { strict: true, release: version ? openxSource.memberReleaseName(version) : undefined }) });
+  let state = { phase: 'idle', current: currentVersion, sourceEdition, internalSource: initialInternalSource(), sources: sources.map(s => ({ id: s.id, name: s.name })), releasePage, canApply: isPackaged || env.AI_HUB_UPDATE_FORCE_APPLY === '1' };
   let manifest = null, plan = null, abort = null, checkAbort = null, staged = null, checking = null, lastResult = null, timer = null;
   const quietTried = new Set();
   const quietOffFile = () => path.join(stagingPaths(dataDir).root, QUIET_OFF_FILE);
@@ -141,7 +153,10 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       const checks = results.map(r => ({ id: r.id, name: r.name, ok: r.ok, version: r.ok ? r.manifest.version : null, reason: r.reason || null,
         ...(r.blocked ? { blocked: true, url: r.url } : {}) }));
       const best = results.filter(r => r.ok).sort((a, b) => compareVersions(b.manifest.version, a.manifest.version))[0];
-      if (!best) return emit({ phase: silent ? 'idle' : 'error', checks, checkedAt: new Date().toISOString(),
+      const internalSource = await probeInternalSource(best?.manifest.version, best && [best.manifest.incremental?.file, best.manifest.incrementalDelta?.file, best.manifest.installer?.file].filter(Boolean));
+      if (checkAbort.signal.aborted) return emit({ phase: 'idle', error: null });
+      checks.unshift(internalSource);
+      if (!best) return emit({ phase: silent ? 'idle' : 'error', checks, internalSource, checkedAt: new Date().toISOString(),
         error: '所有更新源都连不上，暂时查不到新版本', silentFailure: silent });
       manifest = best.manifest;
       if (manifest.canary && manifest.version === currentVersion && previewEnabled) canary.write(dataDir, { releaseSha: manifest.canary.sha, releaseVersion: currentVersion });
@@ -169,7 +184,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       let unattended = plan.kind !== 'full';
       if (plan.kind === 'full') { try { unattended = !!(resDir && canWriteDir(resDir)); } catch (_) { unattended = false; } }
       plan = { ...plan, variant, asset, silent: unattended };
-      const checked = emit({ phase: plan.kind === 'none' ? 'none' : 'available', checks, checkedAt: new Date().toISOString(), error: null,
+      const checked = emit({ phase: plan.kind === 'none' ? 'none' : 'available', checks, internalSource, checkedAt: new Date().toISOString(), error: null,
         latest: { version: manifest.version, notes: manifest.notes, publishedAt: manifest.publishedAt, sourceName: best.name, installer: manifest.installer, notify: isNotableUpdate(currentVersion, manifest.version), canary: manifest.canary || null },
         plan: { kind: plan.kind, variant: plan.variant, reason: plan.reason, silent: plan.silent, bytes: plan.asset ? plan.asset.bytes : 0, file: plan.asset ? plan.asset.file : null } });
       if (quietAllowed && shouldQuietDownload(resDir)) void quietDownload();
@@ -282,9 +297,10 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     emit({ phase: 'downloading', attempts: [], progress: { received: 0, total: asset.bytes }, error: null });
     let lastEmit = 0;
     const ordered = [...sources.filter(s => confirmedIds.includes(s.id)), ...sources.filter(s => !confirmedIds.includes(s.id))];
-    // 程序更新包：公开版先走内源；成员版的更新包不在内源上（内源只发公开版），不去内源找（2026-11-18）。
+    // 程序更新包：两个版本都先走内源（r56，2026-11-19 用户定）。成员版只认内源上的 member-v<版本>（同名不同内容，
+    // 不与公开版混用），文件名、大小、sha256 都按清单核对；内源没有或不对就回到原顺序（阿里云高速 → 阿里云 → GitHub）。
     const runDownload = () => downloadWithFallback({ sources: ordered, version: manifest.version, expect: asset, dest, fetchImpl: resolveFetch(fetchImpl), signal: abort.signal,
-      openx: require('../core/app-update/openx-source').EDITION_ON ? {} : false,
+      openx: appOpenxOptions(manifest.version),
       onAttempt: attempts => emit({ attempts }),
       onProgress: progress => { const now = Date.now(); if (now - lastEmit > 200 || progress.received === progress.total) { lastEmit = now; emit({ progress }); } } });
     let result = await runDownload();
@@ -531,7 +547,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     sources = previewEnabled ? [...canary.previewSources(baseSources), ...baseSources] : baseSources;
     allowSame = !!(next && next.switchEdition);
     manifest = null; plan = null; confirmedIds = [];
-    return emit({ phase: 'idle', sources: sources.map(s => ({ id: s.id, name: s.name })), latest: null, plan: null, error: null });
+    return emit({ phase: 'idle', internalSource: initialInternalSource(), checks: [], attempts: [], sources: sources.map(s => ({ id: s.id, name: s.name })), latest: null, plan: null, error: null });
   }
   function startBackgroundChecks() {
     if (!sources.length) return;
@@ -556,9 +572,12 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
 
   // 环境体检用（5.5.24）：只看各更新源连不连得上、清单读不读得出，不改更新状态、不触发下载、不弹放行窗口。
   async function probeSources({ timeoutMs = 7000 } = {}) {
+    const started = Date.now();
     const results = await checkManifests({ sources, fetchImpl: resolveFetch(fetchImpl), validate: validateManifest, timeoutMs });
-    return { current: currentVersion, sources: results.map(r => ({ id: r.id, name: r.name, ok: r.ok, version: r.ok ? r.manifest.version : null,
-      reason: r.reason || null, blocked: !!r.blocked })) };
+    const best = results.filter(r => r.ok).sort((a, b) => compareVersions(b.manifest.version, a.manifest.version))[0];
+    const internalSource = await probeInternalSource(best?.manifest.version, best && [best.manifest.incremental?.file, best.manifest.incrementalDelta?.file, best.manifest.installer?.file].filter(Boolean), Math.max(1, timeoutMs - (Date.now() - started)));
+    return { current: currentVersion, sources: [internalSource, ...results.map(r => ({ id: r.id, name: r.name, ok: r.ok, version: r.ok ? r.manifest.version : null,
+      reason: r.reason || null, blocked: !!r.blocked }))] };
   }
 
   return { check, probeSources, listVersions, rollbackTo, returnToLatest, restoreBackup, pinCurrent, download, cancel, apply, applyCancelled, applyOnQuit, setQuietEnabled, setPreviewEnabled, getState: () => state, view, startBackgroundChecks, useConfig, dismissLastResult, lastResult: () => lastResult,
@@ -588,4 +607,4 @@ function registerAppUpdateIpc(ipcMain, controller, { gate = null } = {}) {
   ipcMain.handle('app-update:set-preview', (_e, on) => controller.setPreviewEnabled(on === true));
 }
 
-module.exports = { createAppUpdateController, registerAppUpdateIpc, resolveSources };
+module.exports = { createAppUpdateController, registerAppUpdateIpc, resolveSources, appOpenxOptions };

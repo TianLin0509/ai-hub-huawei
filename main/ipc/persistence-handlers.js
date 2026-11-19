@@ -56,6 +56,7 @@ const RESUME_META_FIELDS = [
   'codeagentPoolLabel',
   'companyProxyAccount',
   'companyProxyLabel',
+  'companyUpstream',
   'effort',
   'contextPct',
   'contextUsed',

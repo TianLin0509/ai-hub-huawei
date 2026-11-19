@@ -1,4 +1,5 @@
 [
+  "tests/unit-app-update-source-status.test.js",
   "tests/unit-token-usage.test.js",
   "tests/unit-pi-cli.test.js",
   "tests/unit-app-update-download-promote.test.js",
@@ -243,5 +244,7 @@
   "tests/unit-hub-pet-role-packs-r49b.test.js",
   "tests/unit-hub-shutdown-retry.test.js",
   "tests/unit-host-shell-tail.test.js",
-  "tests/unit-feedback-intranet-send.test.js"
+  "tests/unit-feedback-intranet-send.test.js",
+  "tests/unit-api-gateway-config.test.js",
+  "tests/unit-api-gateway-proxy.test.mjs"
 ]

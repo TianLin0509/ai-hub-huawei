@@ -8,6 +8,9 @@
   if (!distribution.updateConfig) return;
   const { ipcRenderer, shell } = require('electron');
   const productName = distribution.productName || 'AI Hub';
+  const { sourceText } = require('../core/app-update/source-view');
+  const sourceEdition = require('../core/app-update/openx-config').enabledInEdition ? '公开版' : '成员版';
+  const subtitle = `${productName}${distribution.editionBadge ? ' · ' + distribution.editionBadge : ''} · ${sourceEdition}`;
   let state = null, dialog = null;
   let confirmInfo = null;
   // 放行下载服务器（2026-11-07，renderer/net-pass-view.js）：两台下载服务器一个按钮；新用户没放行时在弹窗里提醒。
@@ -48,7 +51,7 @@
   .au-sources { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border-subtle, #e3e1ea); border-radius: 10px; }
   .au-sources li { display: flex; gap: 10px; align-items: baseline; padding: 8px 12px; font-size: 12px; }
   .au-sources li + li { border-top: 1px solid var(--border-subtle, #eceaf2); }
-  .au-sources .au-src { width: 64px; flex: none; font-weight: 600; }
+  .au-sources .au-src { width: 112px; flex: none; font-weight: 600; }
   .au-sources .au-st { flex: 1; min-width: 0; color: var(--fg-muted, #6b7080); overflow-wrap: anywhere; }
   .au-sources .ok .au-st { color: #2f8a57; }
   .au-sources .failed .au-st { color: #b4472f; }
@@ -92,8 +95,9 @@
   function sourceRows() {
     const attempts = state.attempts || [];
     const byId = new Map(attempts.map(a => [a.id, a]));
-    return (state.sources || []).map(s => {
+    return [...(state.internalSource ? [state.internalSource] : []), ...(state.sources || [])].map(s => {
       const a = byId.get(s.id);
+      if (s.id === 'openx' && !a) return checkRow(s);
       const status = !a ? 'idle' : a.status;
       const text = !a ? (state.phase === 'downloading' ? '排队中（前一个源失败才会用）' : '未使用')
         : a.status === 'ok' ? `下载完成并校验通过 · ${mb(a.bytes)} · ${(a.ms / 1000).toFixed(1)} 秒`
@@ -104,8 +108,11 @@
   }
 
   function checkRows() {
-    return (state.checks || []).map(c => `<li class="${c.ok ? 'ok' : 'failed'}" data-source="${esc(c.id)}"><span class="au-src">${esc(c.name)}</span>`
-      + `<span class="au-st">${c.ok ? `可用，最新 v${esc(c.version)}` : `连不上：${esc(c.reason)}`}</span></li>`).join('');
+    return (state.checks || []).map(checkRow).join('');
+  }
+  function checkRow(c) {
+    const status = c.ok ? 'ok' : ['off', 'unknown', 'missing'].includes(c.status) ? 'idle' : 'failed';
+    return `<li class="${status}" data-source="${esc(c.id)}"><span class="au-src">${esc(c.name)}</span><span class="au-st">${esc(sourceText(c))}</span></li>`;
   }
 
   // 被公司代理拦截的源：在 Hub 里弹出那台主机的放行页，放行后自动重新检查（2026-11-08 用户定，不再把文件地址交给浏览器）。
@@ -149,7 +156,7 @@
         foot0 = `<button class="au-btn" data-au="close">稍后</button><button class="au-btn" data-au="apply-now">立即重启（打断 ${c.count} 个问题）</button>`
           + '<button class="au-btn primary" data-au="apply-wait">答完再重启</button>';
       }
-      dialog.innerHTML = `<div class="au-head"><img src="../claude-wx.ico" alt=""><div class="au-title"><strong>软件更新</strong><span>${esc(productName)}${distribution.editionBadge ? ' · ' + esc(distribution.editionBadge) : ''}</span></div>`
+      dialog.innerHTML = `<div class="au-head"><img src="../claude-wx.ico" alt=""><div class="au-title"><strong>软件更新</strong><span>${esc(subtitle)}</span></div>`
         + '<button class="au-close" data-au="close" aria-label="关闭">×</button></div>'
         + `<div class="au-body">${body0}</div><div class="au-foot">${foot0}</div>`;
       return;
@@ -192,10 +199,10 @@
       const manual = manualDownload();
       const error = (s.error || '更新失败').replace('或打开发布页手动下载安装包。', s.releasePage ? '或打开发布页手动下载安装包。'
         : manual ? '或点「下载完整安装包」手动安装。' : '或点「重试」重新检查。');
-      const reasons = [...(s.attempts || []), ...(s.checks || [])].filter(a => a && a.reason).map(a => `${a.name || a.id || '更新源'}：${a.reason}`);
+      const reasons = [...(s.attempts || []), ...(s.checks || [])].filter(a => a && a.reason && !a.informational).map(a => `${a.name || a.id || '更新源'}：${a.reason}`);
       const ctx = { area: 'app-update', title: '一键更新没有完成', symptom: error, details: [error, ...reasons].join('\n') };
       body += `<div class="au-msg bad">${card ? card.assistHtml(ctx) : ''}${esc(error)}</div>${card ? card.knownHtml(ctx) : ''}`;
-      if (s.attempts && s.attempts.length) body += `<div class="au-section">各下载源的结果</div><ul class="au-sources">${sourceRows()}</ul>`;
+      if (s.attempts?.length || s.checks?.length) body += `<div class="au-section">各下载源的结果</div><ul class="au-sources">${s.attempts?.length ? sourceRows() : checkRows()}</ul>`;
       else if (s.checks && s.checks.length) body += `<div class="au-section">更新源</div><ul class="au-sources">${checkRows()}</ul>`;
       body += allowBox();
       foot = `${manual ? `<button class="au-btn" data-au="manual">${manual.label}</button>` : ''}<button class="au-btn" data-au="close">关闭</button><button class="au-btn primary" data-au="retry">重试</button>`;
@@ -204,7 +211,7 @@
       foot = '<button class="au-btn" data-au="close">关闭</button><button class="au-btn primary" data-au="retry">检查更新</button>';
     }
     if (['idle', 'none', 'available', 'error'].includes(s.phase)) body += netPassView.boxHtml(netPass, { last: netPassLast });
-    dialog.innerHTML = `<div class="au-head"><img src="../claude-wx.ico" alt=""><div class="au-title"><strong>软件更新</strong><span>${esc(productName)}${distribution.editionBadge ? ' · ' + esc(distribution.editionBadge) : ''}</span></div>`
+    dialog.innerHTML = `<div class="au-head"><img src="../claude-wx.ico" alt=""><div class="au-title"><strong>软件更新</strong><span>${esc(subtitle)}</span></div>`
       + '<button class="au-close" data-au="close" aria-label="关闭">×</button></div>'
       + `<div class="au-body">${body}${quietBox}<label class="au-quiet"><input type="checkbox" data-au="preview"${s.previewEnabled ? ' checked' : ''}> 抢先版：提前接收更新并在后台体检（默认关闭）</label></div><div class="au-foot">${foot}</div>`;
     netPassView.bind(dialog, { ipcRenderer, onUpdate: (next, last) => { if (next) netPass = next; netPassLast = last; render(); } });

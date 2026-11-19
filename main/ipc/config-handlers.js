@@ -355,7 +355,7 @@ function registerConfigIpc(ipcMain, deps) {
       let dshCliReady = false;
       try { require('../../core/dsh-cli-profile').resolveDshCliRuntime(raw.acp?.providers?.['deepseek-acp']); dshCliReady = true; } catch { dshCliReady = false; }
       return { ok: true, providers: companyApi.settings(raw), dshRuntimeInstalled, dshCliReady,
-        proxy: proxyStatus() };
+        proxy: proxyStatus(), gateway: companyApi.gatewayView() };
     });
     ipcMain.handle('company-proxy:status', () => ({ ok: true, proxy: proxyStatus() }));
     ipcMain.handle('company-proxy:restart', async () => {
@@ -383,6 +383,63 @@ function registerConfigIpc(ipcMain, deps) {
         if (companyProxyService) void companyProxyService.syncWithConfig();
         return { ok: true, providers: companyApi.settings(next), proxy: proxyStatus() };
       } catch (error) { return { ok: false, error: error.message }; }
+    });
+
+    // API 网关（部门 API key 用户，2026-11-19）：欢迎页「用 API key 开始」和设置里的「API 网关」共用这几个入口。
+    // Key 只在主进程里经 safeStorage 加解密；返回给界面的只有「已保存」与否。
+    const gateway = require('../../core/api-gateway');
+    const gatewayDir = () => require('../../core/data-dir').getHubDataDir();
+    const safe = () => require('electron').safeStorage;
+    const gatewayPayload = () => ({ gateway: companyApi.gatewayView(), proxyGateway: proxyStatus()?.gateway || null, providers: companyApi.settings(readConfigJsonForUpdate()) });
+    // 把指定的工具切到「API 网关」线路（首次使用时三种一起切，之后在设置里逐个改）。
+    const routeKindsToGateway = (kinds, model) => {
+      let raw = readConfigJsonForUpdate();
+      const switched = [];
+      for (const kind of kinds) {
+        try { require('../../core/company-ai-policy').assertKind(kind); } catch { continue; }
+        raw = companyApi.withSettings(raw, { kind, backend: 'gateway', model });
+        switched.push(kind);
+      }
+      if (switched.length) { saveConfig(raw); clearSessionManagerConfigCache(); sendToRenderer('company-api:changed', { kinds: switched }); }
+      return switched;
+    };
+    ipcMain.handle('api-gateway:get', () => ({ ok: true, ...gatewayPayload() }));
+    ipcMain.handle('api-gateway:save', async (_event, request = {}) => {
+      try {
+        const result = await gateway.save(gatewayDir(), { baseURL: request.baseURL, apiKey: request.apiKey, model: request.model }, { safeStorage: safe() });
+        if (!result.ok) return { ok: false, code: result.code, error: result.message, ...gatewayPayload() };
+        const kinds = Array.isArray(request.useFor) ? request.useFor.filter(k => companyApi.KINDS.includes(k)) : [];
+        const switched = kinds.length ? routeKindsToGateway(kinds, result.model) : [];
+        if (companyProxyService) await companyProxyService.applyGatewayChange().catch(() => {});
+        return { ok: true, switched, ...gatewayPayload() };
+      } catch (error) { return { ok: false, error: error.message, ...gatewayPayload() }; }
+    });
+    ipcMain.handle('api-gateway:set-model', async (_event, request = {}) => {
+      try {
+        gateway.setModel(gatewayDir(), String(request.model || ''));
+        if (companyProxyService) await companyProxyService.applyGatewayChange().catch(() => {});
+        return { ok: true, ...gatewayPayload() };
+      } catch (error) { return { ok: false, error: error.message, ...gatewayPayload() }; }
+    });
+    ipcMain.handle('api-gateway:test', async () => {
+      const view = gateway.read(gatewayDir());
+      const key = gateway.decryptKey(gatewayDir(), safe());
+      if (!key) return { ok: false, code: 'no_key', error: '还没保存 API key', ...gatewayPayload() };
+      const started = Date.now();
+      const result = await gateway.probe({ baseURL: view.baseURL, apiKey: key });
+      return result.ok ? { ok: true, ms: Date.now() - started, models: result.models, ...gatewayPayload() }
+        : { ok: false, code: result.code, error: result.message, ...gatewayPayload() };
+    });
+    ipcMain.handle('api-gateway:usage', async () => {
+      const view = gateway.read(gatewayDir());
+      const key = gateway.decryptKey(gatewayDir(), safe());
+      if (!key) return { ok: false, code: 'no_key', error: '还没保存 API key' };
+      return gateway.usage({ baseURL: view.baseURL, apiKey: key });
+    });
+    ipcMain.handle('api-gateway:clear', async () => {
+      gateway.clear(gatewayDir());
+      if (companyProxyService) await companyProxyService.applyGatewayChange().catch(() => {});
+      return { ok: true, ...gatewayPayload() };
     });
   }
 

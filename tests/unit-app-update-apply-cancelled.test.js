@@ -155,6 +155,7 @@ function bootRenderer(initial, storage = new Map()) {
     localStorage: { getItem: k => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, String(v)), removeItem: k => storage.delete(k) },
     require(k) {
       if (k === '../core/distribution') return { updateConfig: { sources: [] }, productName: 'test' };
+      if (k === '../core/app-update/source-view' || k === '../core/app-update/openx-config') return require(k);
       if (k === 'electron') return { ipcRenderer, shell: {} };
       if (k === './net-pass-view') return { boxHtml() { return ''; }, bind() {}, ensureCss() {} };
       throw new Error(k);

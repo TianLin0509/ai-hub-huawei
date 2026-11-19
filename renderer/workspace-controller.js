@@ -17,6 +17,7 @@
     if (!pick) return '';
     if (pick.source === 'company') return pick.model;
     if (pick.source === 'api') return pick.model;
+    if (pick.source === 'gateway') return pick.model;
     if (companyProvider[kind]?.apiProfiles?.length) return '';
     const own = companyProvider[kind]?.own;
     return own && own.backend === 'api' ? own.model || '' : '';
@@ -1240,7 +1241,7 @@
     const id = card.dataset.modelCard;
     const apiProfile = companyProvider[kind]?.apiProfiles?.find(item => id === 'api:' + item.id);
     companyPick[kind] = apiProfile ? { source: 'api', profileId: apiProfile.id, model: apiProfile.model }
-      : id === 'own' ? { source: 'own', model: '' } : { source: 'company', model: id };
+      : id === 'own' ? { source: 'own', model: '' } : id.startsWith('gw:') ? { source: 'gateway', model: id.slice(3) } : { source: 'company', model: id };
     selectedModel = companyPickModel(kind);
     modelTouchedByUser = true;
     tuningTouchedByUser = true;
@@ -1664,7 +1665,7 @@
       const own = companyProvider[selectedKind]?.apiProfiles?.length ? { backend: 'local' } : companyProvider[selectedKind]?.own;
       const companySource = companyProxyStatus?.shared ? '共享号池' : '公司模型';
       const apiProfile = companyProvider[selectedKind]?.apiProfiles?.find(profile => profile.id === pick?.profileId);
-      parts.push(apiProfile ? apiProfile.label : !pick ? (companyApiBackend[selectedKind] === 'proxy' ? companySource : '') : pick.source === 'company' ? companySource : own?.backend === 'api' ? '自有接口' : 'CLI 默认');
+      parts.push(apiProfile ? apiProfile.label : !pick ? (companyApiBackend[selectedKind] === 'proxy' ? companySource : '') : pick.source === 'company' ? companySource : pick.source === 'gateway' ? 'API 网关' : own?.backend === 'api' ? '自有接口' : 'CLI 默认');
       if (companyAccountShown() && companyProxyChoice !== 'auto') {
         const account = (codeagentPool.accounts || []).find(a => a.id === companyProxyChoice);
         parts.push(companyProxyChoice === 'personal' ? '个人账号' : account ? `指定账号 · ${account.note || account.accountLabel || '未备注账号'}` : '指定账号');
@@ -1842,6 +1843,7 @@
     const own = kind === 'deepseek-acp' ? null : provider.apiProfiles?.length ? { backend: 'local' }
       : (provider.own || { backend: provider.backend === 'api' ? 'api' : 'local', model: provider.model || '' });
     const models = [...modelCards.companyModels(provider),
+      ...modelCards.gatewayModels(provider).map(m => ({ id: m.id, label: m.id + '（API 网关）' })),
       ...(provider.apiProfiles || []).map(profile => ({ id: profile.model, label: profile.label + ' · ' + profile.model })),
       ...(own ? [own.backend === 'api' ? { id: own.model || '', label: own.model ? own.model + '（自有接口）' : '自有接口默认模型' } : { id: '', label: '沿用本机 CLI 配置' }] : [])];
     companyApiModels[kind] = models;

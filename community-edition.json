@@ -59,9 +59,11 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "PPT 图片转可编辑：识别组件过旧或没装时开工前就拦下，原地一键安装/更新（内源优先下载、校验后换上），更新后自动接着转；装配时才发现过旧也只给【一键更新并继续】，保留初稿与修正续跑；环境检查 PPT 项同样带一键按钮"
+    "新增「用 API key 开始」：没有 CodeAgent 账号、只有部门 API key 的同事，在首页粘贴 key 即可用 Claude Code、Codex、DSH 三种会话（API 网关地址已预填，key 用 Windows 账户加密保存）",
+    "API 网关排队时，标题栏显示「网关排队中 N 秒」；侧栏显示网关用量；设置里新增「API 网关」模式",
+    "成员版程序更新也内源优先（内源独立版本 member-v<版本>，大小与校验不符自动回退外网）；更新窗与环境体检的更新源第一行显示「内源」，标题标明公开版/成员版"
   ],
-  "version": "5.6.56",
+  "version": "5.6.57",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

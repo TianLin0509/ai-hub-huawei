@@ -24,21 +24,44 @@ import { readPersonalAccessToken } from './personal-token.mjs';
 import { readPoolAccessToken } from './pool-token.mjs';
 import { createAccountRouter, PERSONAL } from './account-router.mjs';
 import { resolveUpstreamProfile, loadSigner, ProfileError, zoneFromLetter } from './upstream-profile.mjs';
-import { MODELS, MODEL_GLM, KIND, createClaudeAdapter, createCodexAdapter, createDshAdapter, collectAnthropicMessage } from './adapters.mjs';
+import { MODELS, MODEL_GLM, KIND, resolveModel, createClaudeAdapter, createCodexAdapter, createDshAdapter, collectAnthropicMessage } from './adapters.mjs';
+import { createGatewayProvider } from './gateway-provider.mjs';
 
 export const VERSION = 'company-model-proxy 1.0';
 const SAFE_CODE = /^[A-Za-z0-9_ .:\-]{1,120}$/;
 const TAG = /^[A-Za-z0-9_-]{1,64}$/;
 const PIN_SUFFIX = /^(.+?)__pin_([a-z0-9]{6,16}|personal)$/;
+// API 网关会话（部门 API key）：会话标识末尾带 "__gw"，请求转给网关，不经 CodeAgent 账号（gateway-provider.mjs）。
+const GATEWAY_SUFFIX = '__gw';
 
-// "<session tag>[__pin_<id>]" -> { sessionTag, pin } (pin '' = automatic), or null when malformed.
+// "<session tag>[__pin_<id>|__gw]" -> { sessionTag, pin, gateway } (pin '' = automatic), or null when malformed.
 // Sticky assignments and the session card alias stay keyed by the plain session tag.
 export function parseTag(raw) {
-  const value = String(raw ?? '');
-  const match = PIN_SUFFIX.exec(value);
+  let value = String(raw ?? '');
+  const gateway = value.endsWith(GATEWAY_SUFFIX) && value.length > GATEWAY_SUFFIX.length;
+  if (gateway) value = value.slice(0, -GATEWAY_SUFFIX.length);
+  const match = gateway ? null : PIN_SUFFIX.exec(value);
   const sessionTag = match ? match[1] : value;
   if (!TAG.test(sessionTag)) return null;
-  return { sessionTag, pin: match ? match[2] : '' };
+  return gateway ? { sessionTag, pin: '', gateway: true } : { sessionTag, pin: match ? match[2] : '' };
+}
+
+// 网关配置来自 Hub（main/company-proxy-service.js 启动反代时经环境变量给；Key 只在内存）。
+export function gatewayFromEnv(env = process.env) {
+  const baseURL = String(env.AI_HUB_API_GATEWAY_URL || '').trim().replace(/\/+$/, '');
+  const apiKey = String(env.AI_HUB_API_GATEWAY_KEY || '').trim();
+  if (!/^https?:\/\//.test(baseURL) || !apiKey) return null;
+  const models = String(env.AI_HUB_API_GATEWAY_MODELS || '').split(',').map(x => x.trim()).filter(x => /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(x));
+  const preferred = String(env.AI_HUB_API_GATEWAY_MODEL || '').trim();
+  const defaultModel = models.includes(preferred) ? preferred : (models[0] || preferred || 'deepseek-v4.1-flash');
+  const headerTimeoutMs = Number(env.AI_HUB_API_GATEWAY_HEADER_TIMEOUT_MS) > 0 ? Number(env.AI_HUB_API_GATEWAY_HEADER_TIMEOUT_MS) : 150_000;
+  return { baseURL, apiKey, models, defaultModel, headerTimeoutMs };
+}
+// 网关会话的模型名：网关表里有就原样用；别的名字（Claude Code 后台的 haiku 名、旧的公司模型名）落到默认模型。
+export function gatewayModel(gateway, name) {
+  const value = typeof name === 'string' ? name.trim() : '';
+  if (value && (gateway.models.includes(value) || !gateway.models.length)) return value;
+  return gateway.defaultModel;
 }
 
 // Account alias for plain-words errors (个人 / 号 N, the numbering of Hub's account page), never the id.
@@ -294,7 +317,31 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
 
   // ---------- request gate ----------
   const als = new AsyncLocalStorage();
-  const stats = { started: stamp(), requests: 0, ok: 0, failed: 0, inFlight: 0, queued: 0, byKind: { claude: 0, codex: 0, dsh: 0 }, byModel: {}, lastError: null };
+  // ---------- API gateway (部门 API key 会话) ----------
+  // 首包前排队中的网关请求（按请求记：同一会话常有两个并发请求，先回的那个不能把另一个的排队状态清掉——11-19 黄区实测发现），
+  // 给 Hub 显示「网关排队中」：每个会话报等得最久的那个。
+  const gatewayWaiting = new Map(); // request -> { tag, since, attempt }
+  const waitingByTag = () => { const out = {};
+    for (const w of gatewayWaiting.values()) { const cur = out[w.tag];
+      if (!cur || Date.now() - w.since > cur.waitedMs) out[w.tag] = { waitedMs: Date.now() - w.since, attempt: Math.max(w.attempt, cur?.attempt || 1) }; }
+    return out; };
+  let gatewayConfig = null, gatewayProvider = null;
+  // 换 key / 模型 / 地址时 Hub 经 POST /admin/gateway 热更新，不重启反代：同一反代上的公司会话和正在回答的网关请求都不受影响
+  // （在途请求继续用旧的 provider 跑完）。11-19 换模型审查发现原来的「重启反代」会打断别的会话。
+  const configureGateway = (config, why = 'start') => {
+    gatewayConfig = config;
+    gatewayProvider = config ? createGatewayProvider({ baseURL: config.baseURL, apiKey: config.apiKey, headerTimeoutMs: config.headerTimeoutMs,
+      ownError: (...args) => errorResponse(...args), log,
+      onWait: ({ request, sessionTag, waiting, since, attempt }) => { if (waiting) gatewayWaiting.set(request, { tag: sessionTag, since, attempt }); else gatewayWaiting.delete(request); } }) : null;
+    if (config) log(`API gateway configured (${config.models.length} models, default ${config.defaultModel}, ${why})`);
+    else if (why !== 'start') log(`API gateway cleared (${why})`);
+  };
+  const gatewayTimeoutEnv = env.AI_HUB_API_GATEWAY_HEADER_TIMEOUT_MS;
+  configureGateway(gatewayFromEnv(env));
+  // Key 读进内存后就从环境里删掉，之后反代再起的子进程（如签名初始化用的 CodeAgent CLI）不会继承它。
+  delete env.AI_HUB_API_GATEWAY_KEY; delete process.env.AI_HUB_API_GATEWAY_KEY;
+  const stats = { started: stamp(), requests: 0, ok: 0, failed: 0, inFlight: 0, queued: 0, byKind: { claude: 0, codex: 0, dsh: 0 }, byModel: {}, lastError: null,
+    gateway: { requests: 0, ok: 0, failed: 0, inFlight: 0, lastFirstMs: null } };
   let active = 0; const waiters = [];
   const acquire = () => active < opts.maxConcurrent ? (active++, Promise.resolve()) : new Promise(r => { stats.queued++; waiters.push(r); });
   const release = () => { const next = waiters.shift(); if (next) { stats.queued--; next(); } else active--; };
@@ -305,6 +352,29 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
     async complete(body, { signal } = {}) {
       const kind = body[KIND] || 'dsh', started = Date.now(), sessionTag = als.getStore()?.sessionTag || 'default', pin = als.getStore()?.pin || '';
       stats.requests++; stats.byKind[kind]++; stats.byModel[body.model] = (stats.byModel[body.model] || 0) + 1;
+      if (als.getStore()?.gateway) {
+        // 网关会话：不占公司上游的并发名额（网关自己排队），也不受公司上游是否准备好影响。
+        stats.gateway.requests++;
+        if (!gatewayProvider) { stats.failed++; stats.lastError = 'GATEWAY_NOT_CONFIGURED'; return errorResponse(503, 'API 网关还没配置好：请到「设置 → 模型线路 → API 网关」粘贴 key 并保存。'); }
+        // 在途计数：Hub 停反代前（最后一个工具不再用反代）等它们回答完。
+        stats.gateway.inFlight++;
+        let handed = false;
+        try {
+          // 「网关排队中」只跟用户真正在等的回答：Claude Code 不带工具的请求是后台小请求（起标题、判断话题），它们排队不提示，
+          // 否则回答已经出来了标题栏还显示排队（11-19 黄区实测）。
+          const track = !(kind === 'claude' && !(Array.isArray(body.tools) && body.tools.length));
+          const response = await gatewayProvider.complete(body, { signal, sessionTag, track });
+          const firstMs = Date.now() - started;
+          if (response.ok) { stats.ok++; stats.gateway.ok++; stats.gateway.lastFirstMs = firstMs; } else { stats.failed++; stats.gateway.failed++; stats.lastError = `gateway HTTP ${response.status}`; }
+          log(`${kind} ${body.model} -> gateway HTTP ${response.status} in ${firstMs}ms`);
+          if (!response.ok || !response.body) return response;
+          handed = true;
+          return releaseOnEnd(response, timing => {
+            stats.gateway.inFlight--;
+            if (timing?.chunks) log(`${kind} ${body.model} gateway stream: ${timing.chunks} chunks, last +${timing.lastMs}ms after headers (${firstMs}ms)`);
+          });
+        } finally { if (!handed) stats.gateway.inFlight--; }
+      }
       if (!startup.ready) { stats.failed++; stats.lastError = startup.code; return errorResponse(503, startup.message); }
       await acquire(); stats.inFlight++;
       // The slot is held until the response body has been read to its end (or cancelled), not just until headers.
@@ -337,7 +407,8 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
   };
 
   // ---------- HTTP ----------
-  const common = { maxTokensCap: opts.maxTokensCap, defaultModel: MODEL_GLM };
+  const common = { maxTokensCap: opts.maxTokensCap, defaultModel: MODEL_GLM,
+    resolve: name => als.getStore()?.gateway && gatewayConfig ? gatewayModel(gatewayConfig, name) : resolveModel(name, MODEL_GLM) };
   const claude = createClaudeAdapter(common), codex = createCodexAdapter(common), dsh = createDshAdapter(common);
   const logged = (name, adapter) => ({ ...adapter, convertRequest(body) {
     try { return adapter.convertRequest(body); }
@@ -361,6 +432,8 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
   const status = () => ({ ok: true, ready: startup.ready, code: startup.code, message: startup.message, missing: startup.missing, diagnostics: startup.diagnostics || null,
     zone: startup.zone, firstInit: startup.firstInit,
     version: VERSION, mock: opts.mock, pid: process.pid, port: opts.port, models: MODELS, systemCa, stats, router: router.snapshot(),
+    gateway: gatewayConfig ? { configured: true, models: gatewayConfig.models, defaultModel: gatewayConfig.defaultModel,
+      waiting: waitingByTag() } : { configured: false, waiting: {} },
     ...(mock ? { mockUpstream: mock.stats } : {}) });
   let stop; const stopped = new Promise(r => { stop = r; });
   const inner = proxy.server.listeners('request')[0];
@@ -376,6 +449,13 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
       // The shared transport checks the plain key; the tag travels in async context.
       req.headers.authorization = `Bearer ${key}`; delete req.headers['x-api-key'];
       if (req.method === 'GET' && path === '/admin/status') return json(res, 200, status());
+      if (req.method === 'POST' && path === '/admin/gateway') {
+        const b = await readJson(req);
+        configureGateway(b?.baseURL ? gatewayFromEnv({ AI_HUB_API_GATEWAY_URL: b.baseURL, AI_HUB_API_GATEWAY_KEY: b.apiKey,
+          AI_HUB_API_GATEWAY_MODELS: Array.isArray(b.models) ? b.models.join(',') : '', AI_HUB_API_GATEWAY_MODEL: b.model,
+          AI_HUB_API_GATEWAY_HEADER_TIMEOUT_MS: gatewayTimeoutEnv }) : null, 'updated by Hub');
+        return json(res, 200, { ok: true, gateway: status().gateway });
+      }
       if (req.method === 'POST' && path === '/admin/shutdown') { json(res, 200, { ok: true, stopping: true }); log('shutdown requested'); setTimeout(() => stop('shutdown'), 50); return; }
       if (req.method === 'POST' && path === '/v1/messages/count_tokens') {
         const body = await readJson(req);

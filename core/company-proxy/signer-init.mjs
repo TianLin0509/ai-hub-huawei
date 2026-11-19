@@ -51,7 +51,7 @@ function allowedRegistrySpawn(command, args, options) {
 }
 
 // Variables of the proxy process that the CodeAgent CLI must not inherit.
-const CLI_ENV_DROP = ['AI_HUB_COMPANY_PROXY_KEY', 'ELECTRON_RUN_AS_NODE', 'NODE_OPTIONS'];
+const CLI_ENV_DROP = ['AI_HUB_COMPANY_PROXY_KEY', 'AI_HUB_API_GATEWAY_KEY', 'ELECTRON_RUN_AS_NODE', 'NODE_OPTIONS'];
 
 // First-time initialization only: exactly one run of <codeagentDir>\bin\codeagentcli.exe with plain string
 // arguments. Whatever the signer passed, it runs hidden (windowsHide true), without a shell, not detached,

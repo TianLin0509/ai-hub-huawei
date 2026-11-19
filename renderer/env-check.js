@@ -125,7 +125,7 @@
         return `<li class="ec-item ec-${esc(item.status)}${open ? ' expanded' : ''}" data-ec-id="${esc(item.id)}">
           <div class="ec-row"><span class="ec-dot" aria-hidden="true"></span>
             <div class="ec-main"><div class="ec-name">${esc(item.name)}<span class="ec-state">${STATE[item.status] || ''}</span></div>
-              <div class="ec-detail" title="${esc(item.detail)}">${esc(item.detail)}</div>${tab === 'components' ? progressHtml(item.id) : ''}</div>
+              <div class="ec-detail${item.id === 'app-update' ? ' ec-update-sources' : ''}" title="${esc(item.detail)}">${esc(item.detail)}</div>${tab === 'components' ? progressHtml(item.id) : ''}</div>
             <div class="ec-actions">${fixButtons(item)}${canExpand ? `<button type="button" class="ec-more" data-ec-toggle="${esc(item.id)}" aria-expanded="${open}">${open ? '收起' : '详情'}</button>` : ''}</div></div>
           ${open ? `<div class="ec-expand">${expandHtml(item)}</div>` : ''}</li>`;
       }).join('');

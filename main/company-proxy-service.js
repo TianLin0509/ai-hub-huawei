@@ -46,8 +46,9 @@ function noticeKey(event) {
 }
 
 class CompanyProxyService {
-  constructor({ dataDir, isEnabled, onNotice = () => {}, onStatus = () => {}, logger = console, mock = process.env.AI_HUB_COMPANY_PROXY_MOCK === '1' } = {}) {
+  constructor({ dataDir, isEnabled, onNotice = () => {}, onStatus = () => {}, logger = console, mock = process.env.AI_HUB_COMPANY_PROXY_MOCK === '1', safeStorage = null } = {}) {
     this.dataDir = dataDir;
+    this.safeStorage = safeStorage; // API 网关 Key 的解密（core/api-gateway.js）
     this.isEnabled = isEnabled;
     this.onNotice = onNotice;
     this.onStatus = onStatus;
@@ -78,6 +79,8 @@ class CompanyProxyService {
     return { state: this.state, message: this.message, pid: this.child?.pid || null, port: this.endpoint?.port || null,
       mock: this.mock, restarts: this.restarts, accounts: s?.router?.accounts || [], events: (s?.router?.events || []).slice(-10),
       stats: s?.stats || null, log: this.logPath(), code: s?.code || null,
+      // API 网关：是否配置好、哪些会话首包前在排队（session tag -> { waitedMs, attempt }），给会话里的「网关排队中」提示用。
+      gateway: s?.gateway || { configured: false, waiting: {} },
       zone: s?.zone || null, chosenZone: this.proxy().chosenZone(this.dataDir), firstInit: s?.firstInit || null,
       sessionAccounts: this.sessionAccounts(s?.router?.assignments),
       // 会话 → 号 id：侧栏额度按反代会话实际用的号显示（renderer/company-route-view.js quotaTarget），不显示在界面文字里。
@@ -123,7 +126,7 @@ class CompanyProxyService {
   async stopWhenIdle({ pollMs = DRAIN_POLL_MS, maxMs = DRAIN_MAX_MS } = {}) {
     if (this.draining) return this.draining;
     const inFlight = async () => {
-      try { const s = await this.request('/admin/status'); this.lastStatus = s; return Number(s?.stats?.inFlight || 0) + Number(s?.stats?.queued || 0); }
+      try { const s = await this.request('/admin/status'); this.lastStatus = s; return Number(s?.stats?.inFlight || 0) + Number(s?.stats?.queued || 0) + Number(s?.stats?.gateway?.inFlight || 0); }
       catch { return 0; }
     };
     let busy = await inFlight();
@@ -186,6 +189,11 @@ class CompanyProxyService {
     if (process.versions.electron) env.ELECTRON_RUN_AS_NODE = '1';
     delete env.NODE_OPTIONS;
     this.proxy().applyNoProxy(env);
+    // API 网关（部门 API key）：地址、模型表和解密后的 Key 只经环境变量交给反代进程，不写文件、不进日志。
+    for (const name of ['AI_HUB_API_GATEWAY_URL', 'AI_HUB_API_GATEWAY_KEY', 'AI_HUB_API_GATEWAY_MODELS', 'AI_HUB_API_GATEWAY_MODEL']) delete env[name];
+    const g = this.gatewaySettings();
+    if (g) Object.assign(env, { AI_HUB_API_GATEWAY_URL: g.baseURL, AI_HUB_API_GATEWAY_KEY: g.apiKey,
+      AI_HUB_API_GATEWAY_MODELS: g.models.join(','), AI_HUB_API_GATEWAY_MODEL: g.model });
     const args = [...systemCaArgs(), serverScript(), '--data-dir', this.dataDir, '--port', String(endpoint.port || 0), '--parent-pid', String(process.pid)];
     if (this.mock) args.push('--mock-upstream');
     this.setState('starting', '公司模型反代正在启动…');
@@ -241,14 +249,15 @@ class CompanyProxyService {
     this.setState('failed', '公司模型反代反复退出，已停止自动重启。请在「自有 API」里点「重新启动反代」；详情见日志：' + this.logPath());
   }
 
-  async request(pathname, { method = 'GET', timeoutMs = 3000 } = {}) {
+  async request(pathname, { method = 'GET', timeoutMs = 3000, body } = {}) {
     const endpoint = this.endpoint;
     if (!endpoint?.port || endpoint.pid !== this.child?.pid) throw new Error('no endpoint');
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetch(`http://127.0.0.1:${endpoint.port}${pathname}`, { method, signal: controller.signal,
-        headers: { authorization: `Bearer ${endpoint.key}` } });
+        headers: { authorization: `Bearer ${endpoint.key}`, ...(body ? { 'content-type': 'application/json' } : {}) },
+        ...(body ? { body: JSON.stringify(body) } : {}) });
       return await response.json();
     } finally { clearTimeout(timer); }
   }
@@ -304,6 +313,31 @@ class CompanyProxyService {
       if (before === undefined || ok <= before) continue;
       try { require('../core/codeagent-usage-menu').markUsageDirty(this.dataDir, a.id); } catch { /* 读数标记失败不影响反代 */ }
     }
+  }
+
+  // 解密后的网关设置（没配 key 时为 null）；只在内存里交给反代进程。
+  gatewaySettings() {
+    try {
+      const gateway = require('../core/api-gateway');
+      const view = gateway.read(this.dataDir);
+      const apiKey = view.keySet ? gateway.decryptKey(this.dataDir, this.safeStorage) : '';
+      return apiKey ? { baseURL: view.baseURL, apiKey, models: view.models, model: view.model } : null;
+    } catch (error) { this.logger.warn?.('[company-proxy] API gateway config unreadable: ' + error.message); return null; }
+  }
+
+  // API 网关的 Key / 地址 / 模型表改了：反代在跑就热更新（不重启，不打断别的会话）；没在跑按配置决定要不要起。
+  async applyGatewayChange() {
+    if (this.child) {
+      // 失败（极少见：本机反代正忙到 3 秒不响应）时：换 key / 模型不重启反代，免得打断别的会话，新设置在反代下次启动时生效；
+      // 删除 key 则必须立刻生效，重启反代，不让它继续用已删的 key。
+      const settings = this.gatewaySettings();
+      try { await this.request('/admin/gateway', { method: 'POST', body: settings || {} }); }
+      catch (error) {
+        this.logger.warn?.('[company-proxy] gateway hot update failed: ' + error.message);
+        if (!settings) await this.restart();
+      }
+    }
+    return this.syncWithConfig();
   }
 
   async restart() {

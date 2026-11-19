@@ -56,6 +56,13 @@ function proxyBadge(status, model = '') {
   return { state: 'ready', text: '可用', tip: '经本机反代，用 CodeAgent 账号。' };
 }
 
+// API 网关（部门 API key，2026-11-19）的模型：网关配好了才有。
+function gatewayModels(provider) {
+  return (Array.isArray(provider?.gatewayModels) ? provider.gatewayModels : []).filter(m => m && typeof m.id === 'string' && m.id)
+    .map(m => ({ id: m.id, label: m.label || m.id, note: m.note || '' }));
+}
+const onGateway = provider => provider?.backend === 'proxy' && provider.upstream === 'gateway';
+
 function companyModels(provider) {
   const list = Array.isArray(provider?.companyModels) && provider.companyModels.length ? provider.companyModels
     : Array.isArray(provider?.models) ? provider.models : [];
@@ -69,6 +76,10 @@ function defaultPick(kind, provider) {
     const profile = provider.apiProfiles?.find(item => item.id === provider.selectedProfileId);
     if (profile) return { source: 'api', profileId: profile.id, model: profile.model };
   }
+  if (onGateway(provider)) {
+    const models = gatewayModels(provider);
+    return { source: 'gateway', model: models.some(m => m.id === provider.model) ? provider.model : models[0]?.id || provider.model || '' };
+  }
   if (provider.backend === 'proxy' || kind === 'deepseek-acp' || provider.companyDefault === true && provider.backend === 'local') {
     const models = companyModels(provider);
     const model = models.some(m => m.id === provider.model) ? provider.model : models[0]?.id || '';
@@ -81,8 +92,11 @@ function defaultPick(kind, provider) {
 function saveRequest(kind, provider, pick) {
   if (!pick || !provider || !COMPANY_KINDS.has(kind)) return null;
   if (pick.source === 'api') return { kind, profileAction: 'select', profileId: pick.profileId };
+  if (pick.source === 'gateway') {
+    return onGateway(provider) && provider.model === pick.model ? null : { kind, backend: 'gateway', model: pick.model };
+  }
   if (pick.source === 'company') {
-    return provider.backend === 'proxy' && provider.model === pick.model ? null : { kind, backend: 'proxy', model: pick.model };
+    return provider.backend === 'proxy' && !onGateway(provider) && provider.model === pick.model ? null : { kind, backend: 'proxy', model: pick.model };
   }
   if (kind === 'deepseek-acp') return null;
   if (provider.apiProfiles?.length) return { kind, useLocal: true };
@@ -98,8 +112,17 @@ function memberSaveRequests(slots, providers) {
     const provider = providers && providers[kind];
     if (!models.length || !provider) continue;
     const companyIds = new Set(companyModels(provider).map(m => m.id));
-    const company = models.filter(id => companyIds.has(id));
+    const gatewayIds = new Set(gatewayModels(provider).map(m => m.id));
     const apiProfile = provider.apiProfiles?.find(profile => profile.id === provider.selectedProfileId && models.every(id => id === profile.model));
+    // 当前走自有接口（没有命名 profile 的老配置）且模型就是它的模型：也算自有来源，不悄悄换到网关。
+    const ownApi = provider.backend === 'api' && models.every(id => id === provider.model);
+    // 成员模型都在网关表里：走网关线路（当前就走网关，或这些名字既不是公司模型、也不是当前选中的自有接口——从公司线路切过来的也算，11-19 审查发现）。
+    if (gatewayIds.size && models.every(id => gatewayIds.has(id)) && (onGateway(provider) || (!apiProfile && !ownApi && !models.some(id => companyIds.has(id))))) {
+      const request = saveRequest(kind, provider, { source: 'gateway', model: models[0] });
+      if (request) requests.push(request);
+      continue;
+    }
+    const company = models.filter(id => companyIds.has(id));
     if (!company.length && apiProfile) {
       requests.push({ kind, profileAction: 'select', profileId: apiProfile.id });
       continue;
@@ -115,6 +138,9 @@ function memberSaveRequests(slots, providers) {
 
 function cardsFor(kind, provider, status, pick) {
   if (!COMPANY_KINDS.has(kind) || !provider) return [];
+  const gatewayCards = gatewayModels(provider).map(m => ({ id: 'gw:' + m.id, model: m.id, name: m.id, detail: '', source: 'gateway', sourceText: 'API 网关',
+    state: 'ready', statusText: m.note || '用部门 API key', tip: '经本机反代转给 API 网关，用你保存的部门 API key，不走 CodeAgent 账号。网关排队时首字可能要等 10–30 秒。',
+    checked: pick?.source === 'gateway' && pick.model === m.id }));
   const cards = companyModels(provider).map(m => {
     const badge = proxyBadge(status, m.id);
     return { id: m.id, name: m.label === m.id ? m.id : m.label, detail: m.label === m.id ? '' : m.id, source: 'company', sourceText: status?.shared ? '共享号池' : '公司模型',
@@ -132,7 +158,9 @@ function cardsFor(kind, provider, status, pick) {
       statusText: profile.baseURL, tip: profile.baseURL,
       checked: pick?.source === 'api' && pick.profileId === profile.id });
   }
-  return cards;
+  // 正走 API 网关的工具，网关模型卡排在最前；否则排在公司模型后面。
+  // 走 API 网关的用户多半没有 CodeAgent：公司模型此刻用不了就不显示那两张卡，免得一屏「公司上游信息不全」（E2E 截图发现）。
+  return onGateway(provider) ? [...gatewayCards, ...cards.filter(c => c.source !== 'company' || c.state === 'ready' || c.checked)] : [...cards.slice(0, companyModels(provider).length), ...gatewayCards, ...cards.slice(companyModels(provider).length)];
 }
 
 function renderCards(cards, escapeHtml) {
@@ -144,4 +172,4 @@ function renderCards(cards, escapeHtml) {
     + '</button>').join('');
 }
 
-module.exports = { COMPANY_KINDS, proxyBadge, companyModels, defaultPick, saveRequest, memberSaveRequests, cardsFor, renderCards };
+module.exports = { COMPANY_KINDS, proxyBadge, companyModels, gatewayModels, defaultPick, saveRequest, memberSaveRequests, cardsFor, renderCards };

@@ -146,11 +146,13 @@ function _loadConfigValues() {
     COMPANY_CLI: config.companyCli === true,
     CLAUDE_PROXY: config.proxy,
     CLAUDE_BACKEND: config.claudeBackend,
+    CLAUDE_UPSTREAM: config.claudeUpstream || '',
     CLAUDE_API_KEY: config.claudeApiKey,
     CLAUDE_API_BASE_URL: config.claudeApiBaseUrl,
     CLAUDE_API_MODEL: config.claudeApiModel,
     DEEPSEEK_API_KEY: config.deepseekApiKey,
     CODEX_BACKEND: config.codexBackend,
+    CODEX_UPSTREAM: config.codexUpstream || '',
     CODEX_SUBSCRIPTION_PROFILE: config.codexSubscriptionProfile,
     CODEX_SUBSCRIPTION_PROFILES: config.codexSubscriptionProfiles,
     CODEX_API_KEY: config.codexApiKey,
@@ -684,7 +686,9 @@ function scheduleNativeMcpLearn(manager, id, rootPid, learn, delayMs = NATIVE_MC
 function applyClaudeSessionEnv(sessionEnv, cv, launch = {}) {
   if (cv.COMPANY_CLI && cv.CLAUDE_BACKEND === 'proxy') {
     // 公司模型：经本机反代用 CodeAgent 账号（core/company-model-proxy.js），会话 Key 带会话标识以便粘号。
-    require('./company-model-proxy').applyClaudeEnv(sessionEnv, { dataDir: getHubDataDir(), sessionId: launch.sessionId, model: launch.model || cv.CLAUDE_API_MODEL, account: launch.companyProxyAccount });
+    // 上游是 API 网关（部门 API key）时，会话 Key 带网关标记，反代转给网关（2026-11-19）。
+    require('./company-model-proxy').applyClaudeEnv(sessionEnv, { dataDir: getHubDataDir(), sessionId: launch.sessionId, model: launch.model || cv.CLAUDE_API_MODEL, account: launch.companyProxyAccount,
+      gateway: cv.CLAUDE_UPSTREAM === 'gateway' });
     return 'proxy';
   }
   if (cv.COMPANY_CLI) {
@@ -739,7 +743,8 @@ function applyClaudeSessionEnv(sessionEnv, cv, launch = {}) {
 }
 
 function resolveClaudeLaunchModel(cv, requestedModel) {
-  if (cv.COMPANY_CLI && cv.CLAUDE_BACKEND === 'proxy') return require('./company-model-proxy').launchModel(requestedModel || cv.CLAUDE_API_MODEL);
+  if (cv.COMPANY_CLI && cv.CLAUDE_BACKEND === 'proxy') return require('./company-model-proxy').launchModel(requestedModel || cv.CLAUDE_API_MODEL,
+    { gateway: cv.CLAUDE_UPSTREAM === 'gateway', dataDir: getHubDataDir() });
   if (cv.COMPANY_CLI) return requestedModel || cv.CLAUDE_API_MODEL || '';
   // The meeting creator always submits the subscription default model even
   // when the user never touched its model picker. Treat that value as an
@@ -1141,7 +1146,8 @@ function isCodexApiBackend(cv) {
 }
 
 function resolveCodexLaunchModel(cv, requestedModel) {
-  if (cv.COMPANY_CLI && cv.CODEX_BACKEND === 'proxy') return require('./company-model-proxy').launchModel(requestedModel || cv.CODEX_API_MODEL);
+  if (cv.COMPANY_CLI && cv.CODEX_BACKEND === 'proxy') return require('./company-model-proxy').launchModel(requestedModel || cv.CODEX_API_MODEL,
+    { gateway: cv.CODEX_UPSTREAM === 'gateway', dataDir: getHubDataDir() });
   if (cv.COMPANY_CLI) return require('./company-api-config').optionalText(requestedModel || cv.CODEX_API_MODEL, '模型名称');
   return normalizeCodexSessionModel(requestedModel || resolveDefaultCodexModel(cv));
 }
@@ -1874,7 +1880,9 @@ class SessionManager extends EventEmitter {
     let companyProxyPin = null;
     if (isClaude || isCodex || isDshCli) {
       const cv = getLaunchValues();
-      const viaProxy = cv.COMPANY_CLI && (isClaude ? cv.CLAUDE_BACKEND === 'proxy' : isCodex ? cv.CODEX_BACKEND === 'proxy' : isDshCli ? getConfig().dshBackend === 'proxy' : false);
+      // API 网关会话不用 CodeAgent 账号，没有「选号」。
+      const viaGateway = isClaude ? cv.CLAUDE_UPSTREAM === 'gateway' : isCodex ? cv.CODEX_UPSTREAM === 'gateway' : isDshCli ? getConfig().dshUpstream === 'gateway' : false;
+      const viaProxy = !viaGateway && cv.COMPANY_CLI && (isClaude ? cv.CLAUDE_BACKEND === 'proxy' : isCodex ? cv.CODEX_BACKEND === 'proxy' : isDshCli ? getConfig().dshBackend === 'proxy' : false);
       if (viaProxy && (opts.companyProxyPick || opts.companyProxyAccount)) {
         const model = isClaude ? resolveClaudeLaunchModel(cv, opts.model) : isCodex ? resolveCodexLaunchModel(cv, opts.model)
           : require('./company-model-proxy').launchModel(opts.model || getConfig().dshApiModel);
@@ -2292,7 +2300,7 @@ class SessionManager extends EventEmitter {
       if (cv.COMPANY_CLI && cv.CODEX_BACKEND === 'proxy') {
         // 公司模型：独立的 Codex home，提供方指向本机反代；Key 放在会话环境变量里，按会话粘号。
         require('./company-model-proxy').applyCodexEnv(sessionEnv, { dataDir: getHubDataDir(), sessionId: id,
-          model: resolveCodexLaunchModel(cv, opts.model), projectDir: spawnCwd, account: opts.companyProxyAccount });
+          model: resolveCodexLaunchModel(cv, opts.model), projectDir: spawnCwd, account: opts.companyProxyAccount, gateway: cv.CODEX_UPSTREAM === 'gateway' });
         codexSessionsRoot = path.join(sessionEnv.CODEX_HOME, 'sessions');
       } else if (isCodexApiBackend(cv)) {
         sessionEnv.CODEX_HOME = ensureCodexApiProfile(cv, spawnCwd);
@@ -2720,7 +2728,8 @@ class SessionManager extends EventEmitter {
         const cv = getLaunchValues();
         if (!cv.COMPANY_CLI) return {};
         const route = isClaude ? cv.CLAUDE_BACKEND : isCodex ? cv.CODEX_BACKEND : isDshCli ? (getConfig().dshBackend === 'proxy' ? 'proxy' : null) : null;
-        return ['proxy', 'api', 'local'].includes(route) ? { companyRoute: route,
+        const upstream = route === 'proxy' ? (isClaude ? cv.CLAUDE_UPSTREAM : isCodex ? cv.CODEX_UPSTREAM : getConfig().dshUpstream) : '';
+        return ['proxy', 'api', 'local'].includes(route) ? { companyRoute: route, ...(upstream === 'gateway' ? { companyUpstream: 'gateway' } : {}),
           ...(route === 'proxy' && companyProxyPin ? { companyProxyAccount: companyProxyPin.id, companyProxyLabel: companyProxyPin.label } : {}) } : {};
       })()),
       ...(typeof opts.contextPct === 'number' ? { contextPct: opts.contextPct } : {}),
@@ -4707,6 +4716,7 @@ try {
       ...(info.codeagentPoolAccount ? { codeagentPoolAccount: info.codeagentPoolAccount, codeagentPoolLabel: info.codeagentPoolLabel || '' } : {}),
       // 公司版线路：DSH、原生 Codex 建会话和后续更新都只发这份公开形态，漏掉它分支的标题栏和卡片就不写公司模型。
       ...(info.companyRoute ? { companyRoute: info.companyRoute } : {}),
+      ...(info.companyUpstream ? { companyUpstream: info.companyUpstream } : {}),
       ...require('./cli-api-profiles').metadata(info),
       // 公司模型会话固定用的号（启动中心选的；没有就是反代自动分配）：恢复、分支沿用，卡片和标题栏一开始就显示它。
       ...(info.companyProxyAccount ? { companyProxyAccount: info.companyProxyAccount, companyProxyLabel: info.companyProxyLabel || '' } : {}),

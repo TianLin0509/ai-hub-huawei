@@ -176,7 +176,63 @@
   function modeSwitch(mode) {
     return '<div class="company-api-mode" role="radiogroup" aria-label="接入方式">'
       + `<button type="button" role="radio" data-api-mode="proxy" aria-checked="${mode === 'proxy'}"><strong>公司模型</strong><small>${snapshot?.proxy?.shared ? '经共享主机，使用团队号池' : '通过本机公司模型通道，使用 CodeAgent 账号'}</small></button>`
-      + `<button type="button" role="radio" data-api-mode="own" aria-checked="${mode !== 'proxy'}"><strong>自有接口</strong><small>填写接口地址，或沿用 CLI 本机配置</small></button></div>`;
+      + `<button type="button" role="radio" data-api-mode="gateway" aria-checked="${mode === 'gateway'}"><strong>API 网关 <em class="company-api-new">新</em></strong><small>用部门发的 API key，不需要 CodeAgent</small></button>`
+      + `<button type="button" role="radio" data-api-mode="own" aria-checked="${mode === 'own'}"><strong>自有接口</strong><small>填写接口地址，或沿用 CLI 本机配置</small></button></div>`;
+  }
+  // API 网关（2026-11-19）：地址、Key、模型表各工具共用一份（core/api-gateway.js）；这里选这个工具用网关和它的默认模型。
+  function renderGateway(target, kind, value) {
+    const g = snapshot?.gateway || { baseURL: '', keySet: false, choices: [], model: '' };
+    const current = value.backend === 'proxy' && value.upstream === 'gateway' ? value.model : g.model;
+    const choices = g.choices?.length ? g.choices : [{ id: g.model, label: g.model, note: '' }];
+    const others = KINDS.filter(k => k !== kind && !(snapshot?.providers?.[k]?.backend === 'proxy' && snapshot.providers[k].upstream === 'gateway'));
+    target.insertAdjacentHTML('beforeend', '<form data-gateway-form>'
+      + `<label>网关地址<input name="baseURL" value="${esc(g.baseURL)}" spellcheck="false" autocomplete="off"></label>`
+      + `<label>API key<input name="apiKey" type="password" placeholder="${g.keySet ? '已加密保存；留空保留原 key' : '粘贴部门发的 key（通常以 sk- 开头）'}" spellcheck="false" autocomplete="off"></label>`
+      + `<label>默认模型<select name="model">${choices.map(c => `<option value="${esc(c.id)}"${c.id === current ? ' selected' : ''}>${esc(c.id)}${c.note ? ' — ' + esc(c.note) : ''}</option>`).join('')}</select></label>`
+      + (others.length ? `<label class="company-api-check"><input type="checkbox" name="alsoOthers"${g.keySet ? '' : ' checked'}> ${others.map(k => esc(LABELS[k])).join('、')} 也用 API 网关</label>` : '')
+      + `<div class="company-proxy-state" data-proxy-state="${g.keySet ? 'running' : 'stopped'}"><div><span class="company-proxy-dot" aria-hidden="true"></span><strong>${g.keySet ? `API 网关：key 已保存 · ${(g.models || []).length} 个模型` : 'API 网关：还没保存 key'}</strong></div>`
+      + '<p>Key 只存在本机，用 Windows 账户加密，重新打开时不显示。保存时会先请求一次模型列表来验证，不发对话、不耗额度。网关排队时首字可能要等 10–30 秒，会话里会显示「网关排队中」。</p></div>'
+      + '<p class="company-api-message" role="status" aria-live="polite"></p><footer>'
+      + `<button type="button" data-api-action="gw-test"${g.keySet ? '' : ' disabled'}>测试连接</button>`
+      + (g.keySet ? '<button type="button" data-api-action="gw-clear">删除 key</button>' : '')
+      + '<button type="button" data-api-action="close">取消</button><button type="submit" class="primary">保存配置</button></footer></form>');
+    target.querySelector('[data-api-action="close"]').onclick = close;
+    const status = () => target.querySelector('form [role="status"]');
+    target.querySelector('[data-api-action="gw-test"]').onclick = async event => {
+      event.currentTarget.disabled = true; status().textContent = '正在测试连接…';
+      try {
+        const r = await ipcRenderer.invoke('api-gateway:test');
+        status().textContent = r?.ok ? `连接正常：${(r.ms / 1000).toFixed(1)} 秒，网关有 ${r.models.length} 个模型。` : (r?.error || '测试没成功');
+      } catch (error) { status().textContent = '测试没成功：' + error.message; }
+      finally { event.currentTarget?.removeAttribute('disabled'); }
+    };
+    const clearButton = target.querySelector('[data-api-action="gw-clear"]');
+    if (clearButton) clearButton.onclick = async () => {
+      try {
+        const r = await ipcRenderer.invoke('api-gateway:clear');
+        snapshot = { ...snapshot, gateway: r.gateway, providers: r.providers || snapshot.providers };
+        render(kind);
+        dialog.querySelector('form [role="status"]').textContent = '已删除本机保存的 key。用 API 网关的会话之后发消息会提示重新粘贴 key。';
+      } catch (error) { status().textContent = '没删成：' + error.message; }
+    };
+    target.querySelector('form').onsubmit = async event => {
+      event.preventDefault();
+      const form = event.currentTarget, save = form.querySelector('[type="submit"]');
+      save.disabled = true;
+      status().textContent = '正在验证并保存…（请求一次模型列表，通常 1 秒内）';
+      try {
+        const kinds = [kind, ...(form.elements.alsoOthers?.checked ? others : [])];
+        const r = await ipcRenderer.invoke('api-gateway:save', { baseURL: form.elements.baseURL.value, apiKey: form.elements.apiKey.value, model: form.elements.model.value, useFor: kinds });
+        if (r?.gateway) snapshot = { ...snapshot, gateway: r.gateway, providers: r.providers || snapshot.providers };
+        if (!r?.ok) { status().textContent = r?.error || '保存没成功'; return; }
+        const fresh = await ipcRenderer.invoke('company-api:get');
+        if (fresh?.ok) snapshot = fresh;
+        render(kind);
+        dialog.querySelector('form [role="status"]').textContent = `已保存。新建 ${kinds.map(k => LABELS[k]).join('、')} 会话走 API 网关（${form.elements.model.value}）；进行中的会话保持原线路。`;
+        void refreshInstall().catch(() => {});
+      } catch (error) { status().textContent = '保存没成功：' + error.message; }
+      finally { save.disabled = false; }
+    };
   }
   function proxyStatusHtml(kind) {
     const proxy = snapshot?.proxy;
@@ -233,7 +289,7 @@
   }
   function renderProxy(target, kind, value) {
     const models = value.models?.length ? value.models : [{ id: 'GLM-5.2-WX', label: 'GLM-5.2-WX' }, { id: 'deepseek-v4.1-flash-1017', label: 'DeepSeek V4.1 Flash' }];
-    const current = value.backend === 'proxy' ? value.model : models[0].id;
+    const current = value.backend === 'proxy' && value.upstream !== 'gateway' ? value.model : models[0].id;
     target.insertAdjacentHTML('beforeend', '<form data-proxy-form><label>默认模型<select name="model">'
       + models.map(m => `<option value="${esc(m.id)}"${m.id === current ? ' selected' : ''}>${esc(m.label)}</option>`).join('') + '</select></label>'
       + `<div data-proxy-zone>${zoneHtml()}</div>`
@@ -273,18 +329,19 @@
   function render(kind) {
     const target = makeDialog();
     const value = snapshot?.providers?.[kind] || {};
-    const mode = viewMode[kind] || (value.backend === 'proxy' ? 'proxy' : 'own');
+    const mode = viewMode[kind] || (value.backend === 'proxy' ? (value.upstream === 'gateway' ? 'gateway' : 'proxy') : 'own');
     const profiles = kind === 'deepseek-acp' ? [] : value.apiProfiles || [];
     const profileId = viewProfile[kind] ?? value.selectedProfileId ?? '';
     const editing = profiles.find(profile => profile.id === profileId);
     const own = editing || (profileId === 'new' ? {} : value.backend === 'proxy' ? {} : value);
-    target.innerHTML = heading('自有 API', '每个工具可用公司模型，或填写自己的接口；留空沿用 CLI 本机登录与配置。')
+    target.innerHTML = heading('自有 API', '每个工具可用公司模型、部门 API 网关，或填写自己的接口；留空沿用 CLI 本机登录与配置。')
       + `<nav aria-label="API 工具">${KINDS.map(id => `<button type="button" data-api-kind="${id}" aria-pressed="${id === kind}">${LABELS[id]}</button>`).join('')}</nav>`
       + modeSwitch(mode);
     bindClose(target);
     target.querySelectorAll('[data-api-kind]').forEach(button => { button.onclick = () => render(button.dataset.apiKind); });
     target.querySelectorAll('[data-api-mode]').forEach(button => { button.onclick = () => { viewMode[kind] = button.dataset.apiMode; render(kind); }; });
     if (mode === 'proxy') { renderProxy(target, kind, value); return; }
+    if (mode === 'gateway') { renderGateway(target, kind, value); return; }
     target.insertAdjacentHTML('beforeend', `<form data-api-form>${kind !== 'deepseek-acp' ? `<label>API 账号<select data-api-profile><option value="">当前接口 / 本机配置</option>${profiles.map(profile => `<option value="${esc(profile.id)}"${profileId === profile.id ? ' selected' : ''}>${esc(profile.label)}</option>`).join('')}<option value="new"${profileId === 'new' ? ' selected' : ''}>＋ 添加 API 账号</option></select></label>` : ''}`
       + (profileId ? `<label>账号名称<input name="label" value="${esc(editing?.label)}" maxlength="80" required placeholder="例如：供应商 A · 账号 1"></label>` : '')
       + `<label>接口地址<input name="baseURL" type="url" value="${esc(own.baseURL)}" placeholder="留空沿用本机配置" autocomplete="off" spellcheck="false"></label>`

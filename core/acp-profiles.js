@@ -58,7 +58,8 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
   const entry = profile.providers?.[kind];
   // 公司版 DSH 选了「公司模型」：经本机反代用 CodeAgent 账号（core/company-model-proxy.js），不走套餐和 DeepSeek 备用线路。
   const companyRoute = kind === 'deepseek-acp' && config.companyCli && config.dshBackend === 'proxy'
-    ? require('./company-model-proxy').dshRoute({ dataDir, sessionId: opts.id, model: opts.model || config.dshApiModel, account: opts.companyProxyAccount }) : null;
+    ? require('./company-model-proxy').dshRoute({ dataDir, sessionId: opts.id, model: opts.model || config.dshApiModel, account: opts.companyProxyAccount,
+      gateway: config.dshUpstream === 'gateway' }) : null;
   // 套餐额度用完且配了 DeepSeek Key 时，DeepSeek 旧 Harness 整条会话改走 DeepSeek 官方 API；千问 / GLM 等重置（core/token-plan-fallback.js）。
   const fallback = require('./token-plan-fallback');
   const requestedRoute = kind === 'deepseek-acp' ? opts.deepseekRoute : undefined;
@@ -90,7 +91,9 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
     const back = fallback.tokenPlanModel(model);
     model = catalog.acpModelOptions(kind).some(m => m.id === back) ? back : entry.model;
   }
-  const models = companyRoute ? require('./company-model-proxy').MODELS.map(m => ({ ...m, source: 'company-proxy' }))
+  const models = companyRoute ? (config.dshUpstream === 'gateway'
+      ? require('./company-model-proxy').gatewayModelIds(dataDir).map(id => ({ id, label: id, source: 'company-proxy' }))
+      : require('./company-model-proxy').MODELS.map(m => ({ ...m, source: 'company-proxy' })))
     : deepseekRoute ? fallback.FALLBACK_MODELS.map(id => ({ id, label: id, source: 'deepseek-api' }))
     : catalog.acpModelOptions(kind, model);
   if(!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(model))throw new Error('请填写套餐模型 ID，不可切到其他供应商命名空间');

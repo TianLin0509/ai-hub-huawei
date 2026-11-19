@@ -2603,20 +2603,31 @@ require('./core/codeagent-commands-probe').commandStartup(getHubDataDir(), {
 // 公司模型反代（2026-11-06，5.5.12）：「自有 API」里任一工具选了「公司模型」才启动，随 Hub 起停；
 // 新建这类会话前先确认它已就绪。见 main/company-proxy-service.js、core/company-model-proxy.js。
 let companyProxyFailureShown = '';
+// 有没有会话种类用公司上游（CodeAgent 账号）：全部走 API 网关的用户，不提示「公司上游没准备好」这类与他无关的状态。
+const usesCompanyUpstream = () => { const c = getHubConfig();
+  return (c.claudeBackend === 'proxy' && c.claudeUpstream !== 'gateway') || (c.codexBackend === 'proxy' && c.codexUpstream !== 'gateway')
+    || (c.dshBackend === 'proxy' && c.dshUpstream !== 'gateway') || require('./core/lan-pool').read(getHubDataDir()).host?.enabled === true; };
+// 有没有会话种类走 API 网关：网关只走本机反代，共享主机的同事端也要在本机起反代（11-19 审查发现）。
+const usesGatewayRoute = () => { const c = getHubConfig();
+  return (c.claudeBackend === 'proxy' && c.claudeUpstream === 'gateway') || (c.codexBackend === 'proxy' && c.codexUpstream === 'gateway')
+    || (c.dshBackend === 'proxy' && c.dshUpstream === 'gateway'); };
 const companyProxyService = new (require('./main/company-proxy-service').CompanyProxyService)({
-  dataDir: getHubDataDir(),
-  isEnabled: () => getHubConfig().companyCli === true && !require('./core/lan-pool').read(getHubDataDir()).client?.enabled
-    && (getHubConfig().companyProxyEnabled === true || require('./core/lan-pool').read(getHubDataDir()).host?.enabled === true),
+  dataDir: getHubDataDir(), safeStorage: require('electron').safeStorage,
+  isEnabled: () => getHubConfig().companyCli === true && (usesGatewayRoute() || (!require('./core/lan-pool').read(getHubDataDir()).client?.enabled
+    && (getHubConfig().companyProxyEnabled === true || require('./core/lan-pool').read(getHubDataDir()).host?.enabled === true))),
   // 换号、退回个人号、反代起不来：用会话提示条讲给用户听（renderer.js 的 session-notice）。
   // 换号/退回个人号是常驻提示条，用户手动关（只在每类第一次时弹，见 company-proxy-service）。
   onNotice: notice => sendToRenderer('session-notice', { message: notice.text, level: 'warning', persistent: notice.persistent === true }),
   onStatus: status => {
-    if (require('./core/lan-pool').read(getHubDataDir()).client?.enabled) return;
+    if (require('./core/lan-pool').read(getHubDataDir()).client?.enabled) {
+      if (usesGatewayRoute()) sendToRenderer('company-proxy:status', { ...(lanPoolService.clientProxyStatus() || {}), gateway: status.gateway });
+      return;
+    }
     sendToRenderer('company-proxy:status', status);
     if (status.state === 'failed' && status.message !== companyProxyFailureShown) {
       companyProxyFailureShown = status.message;
       sendToRenderer('session-notice', { message: status.message, level: 'error' });
-    } else if (status.state === 'not-ready' && status.code !== 'INITIALIZING' && status.message && status.message !== companyProxyFailureShown) {
+    } else if (status.state === 'not-ready' && status.code !== 'INITIALIZING' && status.message && status.message !== companyProxyFailureShown && usesCompanyUpstream()) {
       // INITIALIZING（准备上游、首次签名初始化）是几秒到几十秒的过渡状态，只在设置弹窗里显示，不弹常驻提示条。
       // 上游没就绪（比如签名缓存不在）：原因和处理办法较长，用常驻提示条讲清楚，不让它一闪而过。
       companyProxyFailureShown = status.message;
@@ -2627,7 +2638,8 @@ const companyProxyService = new (require('./main/company-proxy-service').Company
 const lanPoolService = new (require('./main/lan-pool-service').LanPoolService)({
   dataDir: getHubDataDir(), proxyService: companyProxyService,
   onChanged: () => { sendToRenderer('lan-pool:changed', {}); sendToRenderer('codeagent-usage-changed', {});
-    sendToRenderer('company-proxy:status', lanPoolService.clientProxyStatus() || companyProxyService.status()); },
+    sendToRenderer('company-proxy:status', lanPoolService.clientProxyStatus()
+      ? { ...lanPoolService.clientProxyStatus(), gateway: companyProxyService.status().gateway } : companyProxyService.status()); },
   // 共享停摆、地址变化、主机掉线或恢复：用会话提示条告诉用户，不让共享悄悄失效。
   onNotice: notice => sendToRenderer('session-notice', { message: notice.text, level: notice.persistent ? 'warning' : 'info', persistent: notice.persistent === true }),
 });
@@ -2649,7 +2661,11 @@ const sessionOperations = registerSessionIpc(ipcMain, {
   app,
   lanPoolService,
   ensureLaunchAuth: async (kind, opts) => {
-    if (require('./core/company-model-proxy').usesProxy(kind, getHubConfig())) {
+    if (require('./core/company-model-proxy').usesGateway(kind, getHubConfig())) {
+      // API 网关会话只要本机反代在跑；公司上游（CodeAgent）准备没准备好与它无关。网关自身的问题在对话里用白话报。
+      const status = await companyProxyService.ensureRunning();
+      if (status.state === 'failed' || status.state === 'stopped') throw new Error(status.message || '本机反代没有启动，API 网关会话暂时开不了');
+    } else if (require('./core/company-model-proxy').usesProxy(kind, getHubConfig())) {
       if (lanPoolService.client()?.enabled) {
         const shared = await lanPoolService.snapshot({ force: true });
         if (!shared?.ready) throw new Error(lanPoolService.error || '共享主机模型服务尚未就绪');

@@ -20,6 +20,9 @@ const DEFAULT_PORT = 18765;
 const KEY_ENV = 'AI_HUB_COMPANY_MODEL_KEY';
 const PROVIDER_ID = 'company-proxy';
 const LABEL = '公司模型（经本机反代，用 CodeAgent 账号）';
+const GATEWAY_LABEL = 'API 网关（经本机反代）';
+const GATEWAY_SUFFIX = '__gw';
+const gatewayConfig = () => require('./api-gateway');
 // Codex 在 Windows 上的沙箱，必须和下面的 sandbox_mode = "danger-full-access" 成对使用。
 // 公司电脑实测（Q-1106-04 r7，2026-11-06）：默认的 mxc 沙箱会让 apply_patch / exec_command 实际执行失败；
 // unelevated + workspace-write 不可用（Codex 报 unelevated restricted-token sandbox cannot enforce split
@@ -70,13 +73,16 @@ const PIN_ID = /^(?:[a-z0-9]{6,16}|personal)$/;
 function normalizePin(account) { const value = String(account || '').trim(); return PIN_ID.test(value) ? value : ''; }
 // 固定了号的会话，Key 的会话标识后面带「__pin_<号>」，反代只用这个号（core/company-proxy/server.mjs parseTag）；
 // 粘号和卡片上的号仍按不带后缀的会话标识记。走团队共享主机时号由主机分配，不带后缀。
-function sessionKey(endpoint, sessionId, account = '') {
+// API 网关会话（部门 API key，2026-11-19）：会话标识后面带「__gw」，反代把它转给网关、不经 CodeAgent 账号，也不固定号。
+function sessionKey(endpoint, sessionId, account = '', { gateway = false } = {}) {
+  if (gateway) return `${endpoint.key}.${sessionTag(sessionId)}${GATEWAY_SUFFIX}`;
   const pin = endpoint.origin ? '' : normalizePin(account);
   return `${endpoint.key}.${sessionTag(sessionId)}${pin ? '__pin_' + pin : ''}`;
 }
 function origin(endpoint) { return endpoint.origin || `http://127.0.0.1:${endpoint.port}`; }
-function requireEndpoint(dataDir) {
-  const shared = require('./lan-pool').read(dataDir).client;
+function requireEndpoint(dataDir, { gateway = false } = {}) {
+  // 网关会话只走本机反代（团队共享主机没有这个人的 key）。
+  const shared = gateway ? null : require('./lan-pool').read(dataDir).client;
   if (shared?.enabled) return { origin: require('./lan-pool').address(shared.address), key: shared.key };
   const endpoint = readEndpoint(dataDir);
   if (!endpoint || !endpoint.port) throw new Error('公司模型反代还没准备好，请稍等几秒再新建会话');
@@ -94,7 +100,15 @@ function normalizeModel(model) {
 }
 
 // 会话启动时用：不认识的名字（例如别处带来的默认模型）落到默认的公司模型，不报错。
-function launchModel(model) { try { return normalizeModel(model); } catch { return DEFAULT_MODEL; } }
+// 网关会话：网关模型表里有就原样用，没有落到网关的默认模型（core/api-gateway.js）。
+function launchModel(model, { gateway = false, dataDir = '' } = {}) {
+  if (gateway) return gatewayConfig().resolveModel(dataDir, model);
+  try { return normalizeModel(model); } catch { return DEFAULT_MODEL; }
+}
+function gatewayModelIds(dataDir) {
+  const view = gatewayConfig().read(dataDir);
+  return view.models.length ? view.models : [view.model];
+}
 
 // 发往 127.0.0.1 的请求不能被系统代理或代理环境变量带走（公司电脑实测：Codex 因此一次请求都没发出去）。
 function applyNoProxy(env) {
@@ -113,13 +127,13 @@ function applyEndpointNoProxy(env, endpoint) {
   for (const name of ['NO_PROXY', 'no_proxy']) if (!env[name].split(',').includes(host)) env[name] += ',' + host;
 }
 
-function applyClaudeEnv(env, { dataDir, sessionId, model, account }) {
-  const endpoint = requireEndpoint(dataDir);
-  const chosen = launchModel(model);
+function applyClaudeEnv(env, { dataDir, sessionId, model, account, gateway = false }) {
+  const endpoint = requireEndpoint(dataDir, { gateway });
+  const chosen = launchModel(model, { gateway, dataDir });
   for (const key of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR', 'CLAUDE_CODE_SESSION_ACCESS_TOKEN', 'ANTHROPIC_API_BASE_URL']) delete env[key];
   Object.assign(env, {
     ANTHROPIC_BASE_URL: origin(endpoint),
-    ANTHROPIC_AUTH_TOKEN: sessionKey(endpoint, sessionId, account),
+    ANTHROPIC_AUTH_TOKEN: sessionKey(endpoint, sessionId, account, { gateway }),
     ANTHROPIC_MODEL: chosen,
     ANTHROPIC_DEFAULT_OPUS_MODEL: chosen, ANTHROPIC_DEFAULT_SONNET_MODEL: chosen, ANTHROPIC_DEFAULT_HAIKU_MODEL: chosen,
     ANTHROPIC_SMALL_FAST_MODEL: chosen, CLAUDE_CODE_SUBAGENT_MODEL: chosen,
@@ -136,29 +150,30 @@ const CODEX_INSTRUCTIONS = `You are a coding agent running in the Codex CLI on t
 - Shell commands run in PowerShell. Verify your work (build, tests) when practical.
 - Reply to the user in the language they use (usually Chinese). Be concise and state what you changed and how you verified it.`;
 // Codex 不认识公司模型的名字时会按通用默认值跑；给它一份目录，说明只收文字、不用联网搜索。
-function codexCatalog() {
-  const entry = slug => ({ slug, display_name: slug, description: 'Company model via local proxy',
+function codexCatalog(ids = MODEL_IDS, description = 'Company model via local proxy') {
+  const entry = slug => ({ slug, display_name: slug, description,
     default_reasoning_level: 'medium', supported_reasoning_levels: [{ effort: 'medium', description: 'Mapped to upstream thinking (high)' }],
     shell_type: 'unified_exec', visibility: 'list', supported_in_api: true, priority: 1, base_instructions: CODEX_INSTRUCTIONS, model_messages: null,
     default_reasoning_summary: 'auto', support_verbosity: false, default_verbosity: null, apply_patch_tool_type: 'freeform', web_search_tool_type: 'text',
     truncation_policy: { mode: 'bytes', limit: 10000 }, supports_image_detail_original: false, context_window: 128000, max_context_window: 128000, effective_context_window_percent: 90,
     experimental_supported_tools: [], input_modalities: ['text'], supports_search_tool: false, supports_reasoning_effort_updates: true,
     node_repl_auto_review_required: false, node_repl_disabled: true, tool_mode: null, multi_agent_version: null, multi_agent_reasoning_effort: null });
-  return { models: MODEL_IDS.map(entry) };
+  return { models: ids.map(entry) };
 }
 const tomlString = value => JSON.stringify(String(value || ''));
 
-function codexHome(dataDir) { return path.join(dataDir, 'codex-company-proxy'); }
-function ensureCodexHome(dataDir, { model, projectDir }) {
-  const endpoint = requireEndpoint(dataDir);
-  const home = codexHome(dataDir);
+// 网关会话用独立的 Codex home，免得和同时开着的公司模型会话互相改写 config.toml。
+function codexHome(dataDir, { gateway = false } = {}) { return path.join(dataDir, gateway ? 'codex-api-gateway' : 'codex-company-proxy'); }
+function ensureCodexHome(dataDir, { model, projectDir, gateway = false }) {
+  const endpoint = requireEndpoint(dataDir, { gateway });
+  const home = codexHome(dataDir, { gateway });
   fs.mkdirSync(home, { recursive: true });
   const catalog = path.join(home, 'company-model-catalog.json');
-  fs.writeFileSync(catalog, JSON.stringify(codexCatalog(), null, 2), 'utf8');
+  fs.writeFileSync(catalog, JSON.stringify(gateway ? codexCatalog(gatewayModelIds(dataDir), 'API gateway model via local proxy') : codexCatalog(), null, 2), 'utf8');
   const projectKey = path.resolve(projectDir || require('node:os').homedir());
   require('./codex-managed-config').writeHubManagedCodexConfig(path.join(home, 'config.toml'), [
     'disable_response_storage = true',
-    `model = ${tomlString(launchModel(model))}`,
+    `model = ${tomlString(launchModel(model, { gateway, dataDir }))}`,
     `model_provider = ${tomlString(PROVIDER_ID)}`,
     `model_catalog_json = ${tomlString(catalog.replace(/\\/g, '/'))}`,
     'model_reasoning_effort = "medium"',
@@ -176,7 +191,7 @@ function ensureCodexHome(dataDir, { model, projectDir }) {
     `sandbox = ${tomlString(codexWindowsSandbox())}`,
     '',
     `[model_providers.${PROVIDER_ID}]`,
-    `name = ${tomlString(LABEL)}`,
+    `name = ${tomlString(gateway ? GATEWAY_LABEL : LABEL)}`,
     `base_url = ${tomlString(origin(endpoint) + '/v1')}`,
     `env_key = ${tomlString(KEY_ENV)}`,
     'wire_api = "responses"',
@@ -192,10 +207,10 @@ function ensureCodexHome(dataDir, { model, projectDir }) {
   ].join('\n'));
   return home;
 }
-function applyCodexEnv(env, { dataDir, sessionId, model, projectDir, account }) {
-  const endpoint = requireEndpoint(dataDir);
-  env.CODEX_HOME = ensureCodexHome(dataDir, { model, projectDir });
-  env[KEY_ENV] = sessionKey(endpoint, sessionId, account);
+function applyCodexEnv(env, { dataDir, sessionId, model, projectDir, account, gateway = false }) {
+  const endpoint = requireEndpoint(dataDir, { gateway });
+  env.CODEX_HOME = ensureCodexHome(dataDir, { model, projectDir, gateway });
+  env[KEY_ENV] = sessionKey(endpoint, sessionId, account, { gateway });
   for (const key of ['OPENAI_API_KEY', 'OPENAI_BASE_URL', 'CODEX_API_KEY']) delete env[key];
   applyEndpointNoProxy(env, endpoint);
   return env.CODEX_HOME;
@@ -206,16 +221,24 @@ function applyCodexEnv(env, { dataDir, sessionId, model, projectDir, account }) 
 // 它背后的搜索与抓取提供方都关掉，联网工具也关掉。
 const DSH_DISABLED = ['deepseek-account', 'llm-deepseek', 'llm-deepseek-account', 'web-search-deepseek', 'web-deepseek-api',
   'web-fetch-http', 'tool-web', 'otel', 'session-telemetry-otel', 'session-log-deepseek', 'plugin-package-inventory-deepseek', 'plugin-manager', 'tool-plugin-manager'];
-function dshRoute({ dataDir, sessionId, model, account }) {
-  const endpoint = requireEndpoint(dataDir);
+function dshRoute({ dataDir, sessionId, model, account, gateway = false }) {
+  const endpoint = requireEndpoint(dataDir, { gateway });
+  const ids = gateway ? gatewayModelIds(dataDir) : MODEL_IDS;
   return {
-    providerId: PROVIDER_ID, keyEnv: KEY_ENV, key: sessionKey(endpoint, sessionId, account), baseURL: origin(endpoint) + '/v1',
-    model: launchModel(model),
+    providerId: PROVIDER_ID, keyEnv: KEY_ENV, key: sessionKey(endpoint, sessionId, account, { gateway }), baseURL: origin(endpoint) + '/v1',
+    model: launchModel(model, { gateway, dataDir }),
     providerConfig: { api: 'openai-completions', baseURL: origin(endpoint) + '/v1', apiKeyEnv: KEY_ENV, retryPolicy: { mode: 'normal', maxRetries: 0 }, reasoning: 'high',
-      models: MODEL_IDS.map(id => ({ id, contextWindow: 128000, maxTokens: 16384, reasoningEfforts: { high: 'high' },
+      models: ids.map(id => ({ id, contextWindow: 128000, maxTokens: 16384, reasoningEfforts: { high: 'high' },
         compat: { supportsDeveloperRole: false, thinkingFormat: 'deepseek', supportsStore: false, maxTokensField: 'max_tokens' } })) },
     disabledPatches: DSH_DISABLED.map(id => ({ id, disabled: true })),
   };
+}
+
+// 这次启动的会话是否走 API 网关（反代里的网关上游；仍算「走反代」，usesProxy 也为真）。
+function usesGateway(kind, config = {}) {
+  if (!usesProxy(kind, config)) return false;
+  const base = String(kind || '').replace(/-resume$/, '');
+  return (base === 'claude' ? config.claudeUpstream : base === 'codex' ? config.codexUpstream : config.dshUpstream) === 'gateway';
 }
 
 // 这次启动的会话是否走公司模型反代（config 为 hub-config 的合成配置）。
@@ -268,7 +291,7 @@ function chosenZone(dataDir) {
 
 module.exports = {
   ZONE_CHOICES, upstreamFile, readUpstreamConfig, setUpstreamZone, chosenZone,
-  MODELS, MODEL_IDS, DEFAULT_MODEL, DEFAULT_PORT, KEY_ENV, PROVIDER_ID, LABEL, CODEX_WINDOWS_SANDBOX_DEFAULT, codexWindowsSandbox,
+  MODELS, MODEL_IDS, DEFAULT_MODEL, DEFAULT_PORT, KEY_ENV, PROVIDER_ID, LABEL, GATEWAY_LABEL, GATEWAY_SUFFIX, usesGateway, gatewayModelIds, CODEX_WINDOWS_SANDBOX_DEFAULT, codexWindowsSandbox,
   proxyDir, endpointFile, readEndpoint, ensureEndpoint, setEndpointPort, sessionTag, sessionKey, normalizePin, normalizeModel, launchModel,
   applyNoProxy, applyEndpointNoProxy, usesProxy, applyClaudeEnv, codexCatalog, codexHome, ensureCodexHome, applyCodexEnv, dshRoute, findNodeOnPath,
 };

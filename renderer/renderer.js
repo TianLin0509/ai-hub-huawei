@@ -2173,9 +2173,18 @@ function paintCrumbModelRoute(session) {
     toolbarCrumbEl.appendChild(chip);
   }
   chip.dataset.route = info.route;
+  chip.dataset.gatewayWaiting = info.waiting ? '1' : '';
   chip.textContent = info.text;
   chip.title = info.title;
 }
+// API 网关排队提示的秒数本地每秒往上数（只在有会话排队时跑）。
+setInterval(() => {
+  try {
+    if (!companyRouteView.anyGatewayWaiting()) return;
+    const active = sessions.get(getFocusedSessionId());
+    if (active) paintCrumbModelRoute(active);
+  } catch { /* 只影响显示 */ }
+}, 1000);
 try {
   if (require('../core/distribution').target === 'company') {
     ipcRenderer.on('company-proxy:status', (_event, status) => { companyRouteView.updateStatus(status); });
@@ -10097,6 +10106,7 @@ ipcRenderer.on('session-updated', (_e, { session }) => {
   if (session.codeagentPrefixFork) local.codeagentPrefixFork = session.codeagentPrefixFork;
   if (session.codeagentPoolAccount) { local.codeagentPoolAccount = session.codeagentPoolAccount; local.codeagentPoolLabel = session.codeagentPoolLabel || ''; }
   if (session.companyRoute) local.companyRoute = session.companyRoute;
+  if (session.companyUpstream) local.companyUpstream = session.companyUpstream;
   Object.assign(local, require('../core/cli-api-profiles').metadata(session));
   if (session.companyProxyAccount) { local.companyProxyAccount = session.companyProxyAccount; local.companyProxyLabel = session.companyProxyLabel || ''; }
   let persistModel = false;
@@ -10252,6 +10262,7 @@ function persistWorkscene(flush = false) {
         ...(s.codeagentConfigDir ? { codeagentConfigDir: s.codeagentConfigDir } : {}),
         ...(s.codeagentPoolAccount ? { codeagentPoolAccount: s.codeagentPoolAccount, codeagentPoolLabel: s.codeagentPoolLabel || '' } : {}),
         ...(s.companyRoute ? { companyRoute: s.companyRoute } : {}),
+        ...(s.companyUpstream ? { companyUpstream: s.companyUpstream } : {}),
         ...require('../core/cli-api-profiles').metadata(s),
         ...(s.companyProxyAccount ? { companyProxyAccount: s.companyProxyAccount, companyProxyLabel: s.companyProxyLabel || '' } : {}),
         effort: s.effort || null,
@@ -10682,6 +10693,7 @@ sessionImmersive = require('./session-immersive').createSessionImmersiveControll
         ...(meta.codeagentConfigDir ? { codeagentConfigDir: meta.codeagentConfigDir } : {}),
         ...(meta.codeagentPoolAccount ? { codeagentPoolAccount: meta.codeagentPoolAccount, codeagentPoolLabel: meta.codeagentPoolLabel || '' } : {}),
         ...(meta.companyRoute ? { companyRoute: meta.companyRoute } : {}),
+        ...(meta.companyUpstream ? { companyUpstream: meta.companyUpstream } : {}),
         ...require('../core/cli-api-profiles').metadata(meta),
         ...(meta.companyProxyAccount ? { companyProxyAccount: meta.companyProxyAccount, companyProxyLabel: meta.companyProxyLabel || '' } : {}),
         effort: meta.effort || null,

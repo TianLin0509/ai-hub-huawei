@@ -12,3 +12,39 @@
 #community-accounts { background:#2563eb; color:#fff; border-color:#2563eb; }
 .community-setup-note { opacity:.72; }
 @media(max-height:820px) { #community-setup { margin-top:12px; padding:12px 18px; } .home-welcome { overflow-y:auto; } }
+
+/* 「用 API key 开始」（renderer/api-gateway-welcome.js，2026-11-19） */
+.api-gw { margin:4px 0 8px; }
+.api-gw-line { display:flex; align-items:center; gap:6px; font-size:13px; color:var(--fg-muted,#5d6474); }
+.api-gw-dot { width:7px; height:7px; border-radius:50%; background:#15803d; display:inline-block; }
+#community-setup #api-gateway-start .api-gw-link {border:0 !important; background:none !important; padding:0 2px !important; color:var(--accent,#2f6bff) !important; cursor:pointer !important; font:inherit !important; }
+.api-gw-card { border:1px solid var(--border-subtle,#d9e0e8); border-radius:10px; padding:14px 16px; margin:6px 0; max-width:620px; }
+.api-gw-card.rec { border-color:#b9cdfd; background:#fbfcff; }
+.api-gw-card h3 { font-size:15px; margin:0 0 4px; display:flex; align-items:center; gap:8px; }
+.api-gw-card label { display:block; font-size:12.5px; color:var(--fg-muted,#5d6474); margin:10px 0 0; }
+.api-gw-card input { display:block; width:100%; box-sizing:border-box; height:34px; margin-top:5px; padding:0 10px; border:1px solid #dfe5ef; border-radius:8px; font:inherit; font-size:13px; color:inherit; background:#fff; }
+.api-gw-card input[readonly] { background:#f6f8fb; color:#4a5160; }
+.api-gw-card input[aria-invalid="true"] { border-color:#c2362b; }
+.api-gw-tag { font-size:11.5px; font-weight:600; border-radius:6px; padding:0 7px; line-height:19px; background:#eaf1ff; color:#2f6bff; }
+.api-gw-tag.gray { background:#f1f4f9; color:#4a5160; font-weight:500; }
+.api-gw-note, .api-gw-note-inline { font-size:12.5px; color:var(--fg-muted,#6f7686); }
+.api-gw-actions { display:flex; align-items:center; gap:8px; margin-top:12px; flex-wrap:wrap; }
+#community-setup #api-gateway-start .api-gw-actions button, #community-setup #api-gateway-start .api-gw-err button {height:32px !important; padding:0 14px !important; border-radius:8px !important; border:1px solid #c9d2df !important; background:#fff !important; cursor:pointer !important; font:inherit !important; font-size:13px !important; white-space:nowrap !important; }
+#community-setup #api-gateway-start .api-gw-actions button.primary {background:#2f6bff !important; border-color:#2f6bff !important; color:#fff !important; font-weight:600 !important; }
+#community-setup #api-gateway-start .api-gw-actions button[disabled] {opacity:.55 !important; cursor:default !important; }
+.api-gw-err { display:flex; align-items:flex-start; gap:8px; margin-top:10px; padding:9px 12px; border-radius:9px; background:#fdecea; color:#7f1d1d; font-size:13px; line-height:1.6; }
+.api-gw-err span { flex:1; }
+.api-gw-msg { font-size:12.5px; color:var(--fg-muted,#5d6474); margin:8px 0 0; }
+.api-gw-ok { font-size:13px; background:#effaf3; color:#14532d; border-radius:9px; padding:8px 12px; }
+.api-gw-models { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; }
+#community-setup #api-gateway-start .api-gw-models button {text-align:left !important; border:1px solid #e3e8f0 !important; border-radius:9px !important; padding:8px 10px !important; background:#fff !important; cursor:pointer !important; font:inherit !important; font-size:12.5px !important; line-height:1.5 !important; height:auto !important; min-height:54px !important; display:block !important; white-space:normal !important; }
+#community-setup #api-gateway-start .api-gw-models button b {display:block !important; font-size:13px !important; }
+#community-setup #api-gateway-start .api-gw-models button span {color:#6f7686 !important; }
+#community-setup #api-gateway-start .api-gw-models button[aria-checked="true"] {border-color:#2f6bff !important; background:#eaf1ff !important; }
+/* 侧栏 API 网关用量（renderer/api-gateway-usage.js） */
+.api-gw-usage { display:flex; align-items:center; gap:6px; width:100%; border:0; background:none; padding:4px 6px; border-radius:8px; font:inherit; font-size:12px; color:var(--fg-muted,#5d6474); cursor:pointer; text-align:left; }
+.api-gw-usage:hover { background:rgba(47,107,255,.06); }
+.api-gw-usage b { color:var(--fg-strong,#1d1d1f); font-weight:600; white-space:nowrap; }
+.api-gw-usage span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.api-gw-usage-dot { width:7px; height:7px; border-radius:50%; background:#15803d; flex:none; }
+.api-gw-usage-dot.wait { background:#e0a100; }

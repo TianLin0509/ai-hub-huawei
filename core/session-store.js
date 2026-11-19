@@ -156,6 +156,8 @@ function _buildSessionPayload(hubId, data) {
     codeagentPoolLabel: typeof data.codeagentPoolLabel === 'string' ? data.codeagentPoolLabel : null,
     // 公司版：这个会话的模型走哪条线路（proxy 公司模型 / api 自有接口 / local CLI 默认），卡片和标题栏显示。
     companyRoute: ['proxy', 'api', 'local'].includes(data.companyRoute) ? data.companyRoute : null,
+    // 经反代的会话走的是 API 网关（部门 API key，2026-11-19）；卡片和标题栏显示「API 网关」。
+    ...(data.companyRoute === 'proxy' && data.companyUpstream === 'gateway' ? { companyUpstream: 'gateway' } : {}),
     // 公司模型会话固定用的号（core/company-proxy-account.js）；恢复、分支沿用。
     ...(typeof data.companyProxyAccount === 'string' && /^(?:[a-z0-9]{6,16}|personal)$/.test(data.companyProxyAccount)
       ? { companyProxyAccount: data.companyProxyAccount, companyProxyLabel: typeof data.companyProxyLabel === 'string' ? data.companyProxyLabel : '' } : {}),

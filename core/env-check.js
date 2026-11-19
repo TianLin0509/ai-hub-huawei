@@ -348,19 +348,23 @@ function probeList(ctx) {
       const controller = ctx.appUpdate();
       if (!controller || typeof controller.probeSources !== 'function') return entry('app-update', '一键更新下载源', 'app-update', STATUS.off, '这个版本没有一键更新');
       const r = await controller.probeSources({ timeoutMs: 7000 });
-      const ok = r.sources.filter(s => s.ok), bad = r.sources.filter(s => !s.ok);
+      const internal = r.sources.filter(s => s.informational);
+      const active = r.sources.filter(s => !s.informational);
+      const internalText = internal.map(s => `${s.name}：${require('./app-update/source-view').sourceText(s)}`).join('\n');
+      const detail = text => [text, internalText].filter(Boolean).join('\n');
+      const ok = active.filter(s => s.ok), bad = active.filter(s => !s.ok);
       const latest = ok.map(s => s.version).filter(Boolean).sort((a, b) => require('./app-update/manifest').compareVersions(b, a))[0];
       const failText = bad.map(s => `${s.name}：${s.blocked ? '被公司网络的确认页挡住' : s.reason || '连不上'}`).join('；');
-      if (!r.sources.length) return entry('app-update', '一键更新下载源', 'app-update', STATUS.off, '没有配置下载源');
+      if (!active.length) return entry('app-update', '一键更新下载源', 'app-update', STATUS.off, detail('没有配置下载源'));
       if (!ok.length) {
-        return entry('app-update', '一键更新下载源', 'app-update', STATUS.bad, '所有下载源都连不上', {
+        return entry('app-update', '一键更新下载源', 'app-update', STATUS.bad, detail('所有下载源都连不上'), {
           cause: failText, steps: ['检查网络或代理', '被确认页挡住时，打开「检查更新」按提示放行', '稍后点「重新检测」'], fixes: [{ label: '打开检查更新', act: 'open-update' }, RECHECK], raw: failText,
         });
       }
       const head = `${ok.map(s => s.name).join('、')} 连得上${latest ? ' · 最新 v' + latest : ''}`;
-      if (bad.length && !ctx.canary) return entry('app-update', '一键更新下载源', 'app-update', STATUS.warn, `${head}；${failText}`, { cause: '有一个下载源连不上，更新会自动改用能连上的那个。', fixes: [RECHECK], raw: failText });
-      if (ctx.canary) return entry('app-update', '一键更新下载源', 'app-update', STATUS.ok, head, { fingerprint: { available: ok.map(s => s.id), fallback: failText.slice(0, 200) } });
-      return entry('app-update', '一键更新下载源', 'app-update', STATUS.ok, head);
+      if (bad.length && !ctx.canary) return entry('app-update', '一键更新下载源', 'app-update', STATUS.warn, detail(`${head}；${failText}`), { cause: '有一个下载源连不上，更新会自动改用能连上的那个。', fixes: [RECHECK], raw: failText });
+      if (ctx.canary) return entry('app-update', '一键更新下载源', 'app-update', STATUS.ok, detail(head), { fingerprint: { available: ok.map(s => s.id), fallback: failText.slice(0, 200) } });
+      return entry('app-update', '一键更新下载源', 'app-update', STATUS.ok, detail(head));
     });
   }
 

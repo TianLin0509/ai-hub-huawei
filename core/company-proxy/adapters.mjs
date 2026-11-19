@@ -52,10 +52,10 @@ function normalizeClaudeMessages(messages){
   }
   return out;
 }
-export function createClaudeAdapter({defaultModel,maxTokensCap=32768,onRequest=()=>{}}){
+export function createClaudeAdapter({defaultModel,resolve=null,maxTokensCap=32768,onRequest=()=>{}}){
   return {
     convertRequest(body){
-      body.model=resolveModel(body.model,defaultModel);
+      body.model=resolve?resolve(body.model):resolveModel(body.model,defaultModel);
       const thinkingOn=object(body.thinking)&&body.thinking.type!=='disabled';
       const clean={model:body.model,messages:normalizeClaudeMessages(body.messages),stream:true};
       if(body.system!==undefined)clean.system=claudeTextBlocks(body.system);
@@ -119,7 +119,7 @@ function normalizeCodexTools(tools){
   }
   return out;
 }
-export function createCodexAdapter({defaultModel,maxTokensCap=32768,maxReasoningItems=4096,maxReasoningBytes=64*1024*1024,onRequest=()=>{}}){
+export function createCodexAdapter({defaultModel,resolve=null,maxTokensCap=32768,maxReasoningItems=4096,maxReasoningBytes=64*1024*1024,onRequest=()=>{}}){
   const store=new Map();let bytes=0;
   const toolArgs=new Map(); // call id -> original custom-tool argument text, newest maxReasoningItems kept
   const rememberToolArguments=(id,value)=>{toolArgs.delete(id);toolArgs.set(id,value);while(toolArgs.size>maxReasoningItems)toolArgs.delete(toolArgs.keys().next().value);};
@@ -132,7 +132,7 @@ export function createCodexAdapter({defaultModel,maxTokensCap=32768,maxReasoning
     convertRequest(body){
       // The transport passes this same object as `request` to the response side,
       // so the resolved model must be written back in place.
-      body.model=resolveModel(body.model,defaultModel);
+      body.model=resolve?resolve(body.model):resolveModel(body.model,defaultModel);
       const clean={};
       for(const k of Object.keys(body))if(RESPONSES_FIELDS.has(k))clean[k]=body[k];
       clean.store=false;delete clean.previous_response_id;
@@ -171,10 +171,10 @@ function chatText(content){
   if(!Array.isArray(content))return '';
   return content.map(p=>p?.type==='text'&&typeof p.text==='string'?p.text:placeholder(p?.type||'unknown')).join('\n');
 }
-export function createDshAdapter({defaultModel,maxTokensCap=32768,onRequest=()=>{}}){
+export function createDshAdapter({defaultModel,resolve=null,maxTokensCap=32768,onRequest=()=>{}}){
   return {
     convertRequest(body){
-      body.model=resolveModel(body.model,defaultModel);
+      body.model=resolve?resolve(body.model):resolveModel(body.model,defaultModel);
       const clean={};for(const k of CHAT_FIELDS)if(body[k]!==undefined)clean[k]=body[k];
       clean.stream=true;
       if(typeof clean.max_tokens!=='number'&&Number.isSafeInteger(body.max_completion_tokens))clean.max_tokens=body.max_completion_tokens;
