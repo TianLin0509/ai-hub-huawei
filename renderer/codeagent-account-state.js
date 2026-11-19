@@ -36,8 +36,8 @@ function accountState(account = {}, { personal = false } = {}) {
   if (state !== 'ready') return { usable: false, tone: 'warn', label: '需登录', detail: {
     expired: '登录已过期', 'login-required': personal ? '个人账号尚未登录' : '等待账号主人登录', unreadable: '登录凭证无法读取'
   }[state] || '请检查登录状态' };
-  if (account.sameAsPersonal || account.duplicateOf) return { usable: false, tone: 'muted', label: '重复账号',
-    detail: account.sameAsPersonal ? '与个人账号相同，不参与选号' : '与号池中的其他账号相同，不参与选号' };
+  if (account.sameAsPersonal) return { usable: false, tone: 'muted', label: '个人账号', detail: '这就是你的个人账号，组队会自动用它，不用再登进号池' };
+  if (account.duplicateOf) return { usable: false, tone: 'muted', label: '重复账号', detail: '与号池中的其他账号相同，不参与选号' };
   if (account.avoid) return { usable: false, tone: 'warn', label: account.avoid.source === 'manual' ? '暂停中（手动）' : '暂停中（额度）',
     detail: pauseReason(account.avoid) };
   return { usable: true, tone: 'ok', label: '可用', detail: '' };

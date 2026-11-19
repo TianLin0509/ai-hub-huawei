@@ -17,11 +17,14 @@ const WATCH_MS = 60 * 1000;
 const STALL_MS = 10 * 60 * 1000;
 const MISSING_ALERT_MS = 3 * 60 * 1000;
 const RETRY_BACKOFF_MS = [60 * 1000, 3 * 60 * 1000, 10 * 60 * 1000];
+const { PERSONAL_ACCOUNT_ID, PERSONAL_SHARED_NOTE } = require('./codeagent-accounts');
 const RESTART_COOLDOWN_MS = 30 * 60 * 1000;
 const NOWAKE_MAX_AGE_MS = 30 * 60 * 1000;
 const NOWAKE_MAX_COUNT = 8;
 const RECEIPT_WAIT_MS = 3 * 60 * 1000;
 const LEAD = 'lead';
+const PERSONAL_MEMBER_LIMIT = 3; // 个人账号上同时干活的成员数；超出的成员消息留在队列里。
+const PERSONAL_CLAIM_MS = 30 * 1000; // 刚提交、回合状态还没变成运行中时先占住名额。
 
 const newId = prefix => `${prefix}-${Date.now().toString(36)}-${randomBytes(3).toString('hex')}`;
 
@@ -42,6 +45,7 @@ function createTeamService(deps) {
   const wakeTried = new Map();   // sid → 上次尝试唤醒的时间：休眠的收件人一分钟内只叫一次
   const alerted = new Map();
   const modelWaits = new Map();
+  const personalClaims = new Map(); // sid → 最近一次向个人账号成员提交消息的时间
   const onModelWait = event => {
     const previousWait = modelWaits.get(event.sessionId);
     if (event.active) modelWaits.set(event.sessionId, event);
@@ -188,10 +192,20 @@ function createTeamService(deps) {
     return sessionManager.isAgentTurnActive(sid) ? 'running' : 'idle';
   }
 
+  // 个人账号的并发名额按全 Hub 算：多个负责人共用同一个号。
+  function personalSlotsFull(target) {
+    if (target?.account !== PERSONAL_ACCOUNT_ID) return false;
+    let busy = 0;
+    for (const team of teams.values()) for (const m of team.members || []) {
+      if (m.account !== PERSONAL_ACCOUNT_ID || m.status !== 'active' || !m.sid || m.sid === target.sid) continue;
+      if (sessionState(m.sid) === 'running' || sending.has(team.leadSid + ':' + m.memberId) || now() - (personalClaims.get(m.sid) || 0) < PERSONAL_CLAIM_MS) busy++;
+    }
+    return busy >= PERSONAL_MEMBER_LIMIT;
+  }
   function publicView(team) {
     return {
       leadSid: team.leadSid, createdAt: team.createdAt, updatedAt: team.updatedAt,
-      members: (team.members || []).map(m => ({ memberId: m.memberId, sid: m.sid, role: m.role, kind: m.kind, account: m.account || '', title: m.title, status: m.status, state: m.status === 'dismissed' ? 'dismissed' : sessionState(m.sid), reason: modelWaitFor(m.sid)?.reason || '', ...(m.model ? {model:m.model} : {}) })),
+      members: (team.members || []).map(m => ({ memberId: m.memberId, sid: m.sid, role: m.role, kind: m.kind, account: m.account || '', ...(m.account === PERSONAL_ACCOUNT_ID ? { sharedNote: PERSONAL_SHARED_NOTE } : {}), title: m.title, status: m.status, state: m.status === 'dismissed' ? 'dismissed' : sessionState(m.sid), reason: modelWaitFor(m.sid)?.reason || '', ...(m.model ? {model:m.model} : {}) })),
       plans: (team.plans || []).map(p => ({ id: p.id, status: p.status, goal: p.goal, members: p.members, submittedAt: p.submittedAt, decidedAt: p.decidedAt || 0, note: p.note || '' })),
       grants: (team.grants || []).slice(),
       messages: (team.messages || []).map(m => deliveryView(team, m)),
@@ -224,6 +238,7 @@ function createTeamService(deps) {
       let model='';
       {
         const row=(accountList.rows || []).find(a=>a.id===account);
+        if(row?.personal&&!row.usable)throw Error(`第 ${i+1} 人没有可用账号：${row.unavailableReason || '个人账号暂不可用'}`);
         if(!row || !row.usable)throw Error(`第 ${i+1} 人的号池账号不可用，请用 accounts 查看并选择可用账号`);
         model=String(raw?.model || '').trim();
         if(model&&!require('../../core/codeagent-models').isSafeModelId(model))throw Error(`第 ${i+1} 人的模型名称无效`);
@@ -254,7 +269,7 @@ function createTeamService(deps) {
       let result;
       try { result = await decide({ leadSid: callerSid, planId: item.id, approve: true, note: '', byRule: true }); }
       catch (error) { throw Error(`${error.message || error}（未自动批准：计划留在侧栏「待批准」，可修改后重新提交，或由${approver}在界面处理）`); }
-      return { ...result, planId: item.id, note: '已按规则自动批准；账号与模型已按号池校验。设置里可关掉「负责人组队自动批准」改回人工批准。' };
+      return { ...result, planId: item.id, note: `已按规则自动批准；账号与模型已按号池校验。设置里可关掉「负责人组队自动批准」改回人工批准。${result.sharedAccountNote || ''}` };
     }
     return { planId: item.id, status: 'pending', note: `计划已提交，等${approver}在 Hub 侧栏（你这个会话那一行的「待批准」）批准。批准前不会建任何会话；批准或驳回的结果会作为一条消息发给你。` };
   }
@@ -309,9 +324,9 @@ function createTeamService(deps) {
       const memberId = spec.memberId;
       const member = team.members.find(m => m.memberId === memberId);
       try {
-        // 未选模型时沿用所选号池账号的默认模型。
+        // 未选模型时沿用所选账号的默认模型；个人账号和普通个人会话走同一条启动路径。
         const opts = { cwd: spec.cwd || lead?.cwd || undefined, title: spec.title, workspaceLabel: spec.title, openInBackground: true,
-          codeagentAccount: 'pool', codeagentPoolPick: spec.account,
+          ...(spec.account === PERSONAL_ACCOUNT_ID ? { codeagentAccount: 'personal' } : { codeagentAccount: 'pool', codeagentPoolPick: spec.account }),
           modelCreationContext: `负责人 ${lead?.title || leadSid} / 新成员 ${spec.title || spec.role}` };
         if (spec.model) { opts.model = spec.model; opts.codeagentModelPick = true; }
         const session = await createSession({ kind: spec.kind, opts });
@@ -331,10 +346,11 @@ function createTeamService(deps) {
       }
     }
     save(team);
-    const roster = created.map(m => `${m.memberId} ${m.title}（${m.role}${m.account ? '，账号 ' + m.account : ''}）`).join('；');
+    const roster = created.map(m => `${m.memberId} ${m.title}（${m.role}${m.account ? '，账号 ' + (m.account === PERSONAL_ACCOUNT_ID ? '个人账号' : m.account) : ''}）`).join('；');
+    const sharedAccountNote = created.some(m => m.account === PERSONAL_ACCOUNT_ID) ? `用个人账号的成员：${PERSONAL_SHARED_NOTE}。同时最多 ${PERSONAL_MEMBER_LIMIT} 位在干活，其余自动排队。` : '';
     enqueue(team, 'hub', LEAD, `${byRule ? '已按规则自动批准' : approver + '批准了'}招人计划 ${plan.id}${note ? '（备注：' + note + '）' : ''}。已建成员：${roster || '无'}。` +
-      (failed.length ? `未建成：${failed.join('；')}。` : '') + '已创建成员的开工任务已排队；用 status 查看全队状态。', { wake: true });
-    return { ok: true, status: 'approved', created: created.map(m => m.memberId), failed };
+      (failed.length ? `未建成：${failed.join('；')}。` : '') + '已创建成员的开工任务已排队；用 status 查看全队状态。' + sharedAccountNote, { wake: true });
+    return { ok: true, status: 'approved', created: created.map(m => m.memberId), failed, ...(sharedAccountNote ? { sharedAccountNote } : {}) };
   }
 
   function kickoff(team, member, spec, plan) {
@@ -452,6 +468,7 @@ function createTeamService(deps) {
         const live = sessionManager.getSession(target.sid);
         state = !live ? 'missing' : live.status === 'dormant' ? 'dormant' : sessionManager.isAgentTurnActive(target.sid) ? 'running' : 'idle';
       }
+      if (state === 'dormant' && personalSlotsFull(target)) continue; // 轮到它再叫醒
       if (state === 'missing' || state === 'dormant') {
         // Hub 会让空闲会话自动休眠：有消息要送时把它叫醒（只叫侧栏里登记为休眠的会话，关掉的不复活）。
         if (typeof wakeSession === 'function' && now() - (wakeTried.get(target.sid) || 0) > 60000) {
@@ -497,7 +514,9 @@ function createTeamService(deps) {
           save(team); continue;
         } finally { sending.delete(lock); }
       }
+      if (personalSlotsFull(target)) continue;
       sending.add(lock);
+      if (target.account === PERSONAL_ACCOUNT_ID) personalClaims.set(target.sid, now());
       const batch = to === LEAD ? items : [items[0]];
       const submissionId = batch.map(item => item.id).join(':').slice(0, 160);
       let confirmedNotSent = false;
@@ -556,6 +575,7 @@ function createTeamService(deps) {
         } else markUnconfirmed(team, batch, to, error.message || error);
       } finally {
         sending.delete(lock);
+        if (batch.every(item => ['queued', 'failed'].includes(item.state))) personalClaims.delete(target.sid);
         for (const item of batch) if (!['sending', 'waiting-model'].includes(item.state)) delete item.modelWait;
         save(team);
         if ((team.messages || []).some(m => ready(m) && m.to === to)) setImmediate(() => flush(team).catch(() => {}));
@@ -620,7 +640,7 @@ function createTeamService(deps) {
           enqueue(team, 'hub', LEAD, `${m.memberId}（${m.title}）显示在运行中，但已 ${Math.round((t - last) / 60000)} 分钟没有任何终端输出，可能卡住；发给它的消息会一直排队。先看一眼它的会话，确认卡住再用 restart --member ${m.memberId}。`);
         } else if (state === 'missing' || state === 'dormant') {
           const waiting = (team.messages || []).filter(x => x.to === m.memberId && x.state === 'queued');
-          if (!waiting.length) continue;
+          if (!waiting.length || (state === 'dormant' && personalSlotsFull(m))) continue;
           const oldest = Math.min(...waiting.map(x => Number(x.at) || t));
           if (t - oldest < MISSING_ALERT_MS) continue;
           const key = 'missing:' + oldest;
@@ -695,7 +715,8 @@ function createTeamService(deps) {
     else if (m.state === 'sent') reason = '提交已确认；不代表对方已阅读或完成任务';
     else if (m.state === 'queued' && !(m.retryAt > now())) {
       const state = target ? sessionState(target.sid) : 'missing';
-      reason = state === 'running' ? (m.waitReason || '等待对方回合结束') : state === 'dormant' ? '等待唤醒会话' : state === 'missing' ? '目标会话不可用' :
+      reason = ['idle', 'dormant'].includes(state) && personalSlotsFull(target) ? `个人账号上已有 ${PERSONAL_MEMBER_LIMIT} 位成员在干活，排队等空位`
+        : state === 'running' ? (m.waitReason || '等待对方回合结束') : state === 'dormant' ? '等待唤醒会话' : state === 'missing' ? '目标会话不可用' :
         m.to === LEAD && m.wake === false ? '留言等待负责人唤醒或批量送达' : '等待投递';
     }
     if (wait) reason = wait.reason;
@@ -774,7 +795,11 @@ function createTeamService(deps) {
   function start() { sessionManager.off?.('session-model-wait', onModelWait); sessionManager.on?.('session-model-wait', onModelWait); sessionManager.off?.('session-submission-handoff', onSubmissionHandoff); sessionManager.on?.('session-submission-handoff', onSubmissionHandoff); load(); if (!timer) { timer = setInterval(tick, TICK_MS); timer.unref?.(); } }
   function stop() { clearInterval(timer); timer = null; sessionManager.off?.('session-model-wait', onModelWait); sessionManager.off?.('session-submission-handoff', onSubmissionHandoff); }
 
-  function accounts() { return { ...listAccounts(), note: 'id 填进计划 account，model 从该账号 models 清单选择；省略 model 沿用账号设置。用户在批准时可改账号和模型。' }; }
+  function accounts() {
+    const list = listAccounts();
+    return { ...list, note: 'id 填进计划 account，model 从该账号 models 清单选择；省略 model 沿用账号设置。用户在批准时可改账号和模型。'
+      + (list.recommendedId === PERSONAL_ACCOUNT_ID ? `号池没有可用号，成员会用个人账号：${PERSONAL_SHARED_NOTE}。` : '') };
+  }
   return { start, stop, invoke, decide, accounts, listTeams, teamOfLead, teamOfMember, flush: lead => { const t = teamOfLead(lead); return t ? flush(t) : null; },
     freeze: () => { frozen = true; }, unfreeze: () => { frozen = false; }, watch: () => { lastWatch = 0; watch(); } };
 }

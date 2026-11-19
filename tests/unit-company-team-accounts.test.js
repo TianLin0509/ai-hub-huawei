@@ -23,7 +23,8 @@ test('company team accounts use pool permissions, load, duplicate and avoid stat
     sessionManager: { codeagentPoolActiveCounts: () => ({ [ids[0]]: 2 }) } });
   let result = get();
   assert.equal(result.recommendedId, ids[1]);
-  assert.deepEqual(result.rows.map(r => r.usable), [true, true, false, false, false]);
+  assert.deepEqual(result.rows.map(r => r.usable), [true, true, false, false, false, true]);
+  assert.equal(result.rows[5].id, 'personal');
   assert.deepEqual(result.rows[0].models, ['GLM-5.2']); assert.equal(result.rows[0].modelsAuthoritative, true);
   assert.equal(result.rows[0].activeSessions, 2);
   assert.ok(!JSON.stringify(result).includes('test-secret'));
@@ -102,4 +103,55 @@ test('real team accounts reject paused proposals and recheck model pauses before
   const approved = await service.decide({ leadSid: 'lead-0001', planId: plan.planId, approve: true });
   assert.equal(approved.created.length, 1);
   assert.equal(created[0].opts.codeagentPoolPick, ids[0]);
+});
+
+function personalOnly(t, { login = true, poolIdentity = '' } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'team-personal-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const dataDir = path.join(root, 'data'), personal = path.join(root, 'personal');
+  fs.mkdirSync(personal); fs.mkdirSync(dataDir);
+  const seed = (dir, accountId) => {
+    fs.writeFileSync(path.join(dir, '.credentials.json'), JSON.stringify({ idaasOAuth: { accountId, xAuthToken: 'fixture-secret', expiresAt: Date.now() + 3600000 } }));
+    fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ model: 'GLM-5.2' }));
+    require('../core/codeagent-model-probe').writeProbed(path.join(dir, 'hub-models.json'), { models: ['GLM-5.2'], defaultModel: 'GLM-5.2' });
+  };
+  if (login) seed(personal, 'me');
+  const before = login ? fs.readFileSync(path.join(personal, '.credentials.json'), 'utf8') : '';
+  let poolId = '';
+  if (poolIdentity) { poolId = pool.addAccount(dataDir); seed(pool.accountDir(dataDir, poolId), poolIdentity); }
+  const list = () => listTeamAccounts({ dataDir, sessionManager: {}, env: { AI_HUB_CODEAGENT_CONFIG_DIR: personal } });
+  return { dataDir, personal, list, poolId, before, seed };
+}
+
+test('empty pool recommends the personal account, and a usable pool account still wins', t => {
+  const h = personalOnly(t);
+  let result = h.list();
+  assert.equal(result.recommendedId, 'personal');
+  const row = result.rows.find(r => r.id === 'personal');
+  assert.equal(row.usable, true); assert.equal(row.label, '个人账号（与负责人共用额度）');
+  assert.match(row.sharedNote, /共用同一个号的额度与并发/);
+  assert.ok(!JSON.stringify(result).includes('fixture-secret'));
+  assert.equal(fs.readFileSync(path.join(h.personal, '.credentials.json'), 'utf8'), h.before, 'personal credentials stay untouched');
+  const id = pool.addAccount(h.dataDir); h.seed(pool.accountDir(h.dataDir, id), 'other');
+  result = h.list();
+  assert.equal(result.recommendedId, id); assert.equal(result.rows.find(r => r.id === 'personal').usable, true);
+});
+
+test('logging the personal account into the pool explains that teams already use it', t => {
+  const h = personalOnly(t, { poolIdentity: 'me' }), result = h.list();
+  const duplicate = result.rows.find(r => r.id === h.poolId);
+  assert.equal(duplicate.usable, false);
+  assert.equal(duplicate.unavailableReason, '这就是你的个人账号，组队会自动用它，不用再登进号池');
+  assert.equal(result.recommendedId, 'personal');
+  const state = require('../renderer/codeagent-account-state').accountState({ state: 'ready', sameAsPersonal: true });
+  assert.equal(state.detail, pool.SAME_AS_PERSONAL_NOTE); assert.equal(state.usable, false);
+});
+
+test('no recommendation when the personal account is not logged in or is paused', t => {
+  const missing = personalOnly(t, { login: false }).list();
+  assert.equal(missing.recommendedId, ''); assert.match(missing.rows.find(r => r.id === 'personal').unavailableReason, /还没登录/);
+  const h = personalOnly(t);
+  quota.markAvoid(h.dataDir, 'personal', { source: 'manual', until: null });
+  const paused = h.list();
+  assert.equal(paused.recommendedId, ''); assert.equal(paused.rows.find(r => r.id === 'personal').unavailableReason, '暂停中');
 });

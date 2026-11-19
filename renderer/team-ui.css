@@ -3,6 +3,7 @@
 .team-pending-badge { margin-right:4px; padding:0 6px; border-radius:var(--hw-r-pill); font-size:12px; line-height:16px; color:var(--hw-text-on); background:var(--hw-amber); border:0; cursor:pointer; vertical-align:1px; }
 .team-pending-badge:hover { filter:brightness(.94); }
 .team-member-tag { display:inline-block; margin-right:4px; padding:0 4px; border-radius:var(--hw-r-xs); font-size:12px; line-height:16px; color:var(--hw-brand); background:var(--hw-brand-soft); vertical-align:1px; }
+.team-member-tag.shared { color:var(--hw-text-3); background:var(--hw-surface-3); }
 .team-member-tag.dismissed { color:var(--hw-text-3); background:var(--hw-surface-3); text-decoration:line-through; }
 .team-modal-backdrop { position:fixed; inset:0; z-index:9000; background:rgba(24,36,49,.28); backdrop-filter:blur(2px); font-family:var(--hw-font); color:var(--hw-text-1); -webkit-app-region:no-drag; }
 .team-modal-backdrop * { box-sizing:border-box; }

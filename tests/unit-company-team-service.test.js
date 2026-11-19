@@ -247,3 +247,59 @@ test('a member dismissed during reconciliation never receives the pending task',
   assert.equal(h.sent.length,0);
   assert.equal((await h.service.invoke('lead-0001','status')).messages.find(m=>m.id===messageId).state,'failed');
 });
+
+const flushTimes = async (h, n = 4) => { for (let i = 0; i < n; i++) { await new Promise(r => setImmediate(r)); await h.service.flush('lead-0001'); } };
+const personalService = (t, extra = {}) => {
+  let clock = 1000000; const running = new Set();
+  const h = harness(t, {}, null, { now: () => clock, listAccounts: () => ({ recommendedId: 'personal', rows: [
+    { id: 'personal', personal: true, usable: true, models: ['GLM-5.2'], modelsAuthoritative: true, sharedNote: '共用额度说明' }] }), ...extra });
+  h.deps.sessionManager.isAgentTurnActive = id => running.has(id);
+  return { ...h, running, advance: ms => { clock += ms; } };
+};
+const worker = i => ({ role: `成员${i}`, task: `任务${i}` });
+
+test('an empty pool recruits on the personal account through the ordinary personal launch path', async t => {
+  const h = personalService(t);
+  const accounts = await h.service.invoke('lead-0001', 'accounts');
+  assert.match(accounts.note, /号池没有可用号/);
+  const plan = await h.service.invoke('lead-0001', 'propose', { goal: '单号组队', members: [worker(1)] });
+  const approved = await h.service.decide({ leadSid: 'lead-0001', planId: plan.planId, approve: true });
+  assert.deepEqual(approved.created, ['m1']); assert.match(approved.sharedAccountNote, /共用同一个号的额度与并发/);
+  assert.equal(h.created[0].opts.codeagentAccount, 'personal'); assert.equal(h.created[0].opts.codeagentPoolPick, undefined);
+  const team = h.service.listTeams()[0];
+  assert.equal(team.members[0].account, 'personal'); assert.match(team.members[0].sharedNote, /共用同一个号/);
+  await flushTimes(h);
+  assert.ok(h.sent.some(s => s.sid === 'member-1xxx' && s.text.includes('组队开工')));
+  assert.ok(h.sent.some(s => s.sid === 'lead-0001' && s.text.includes('共用同一个号的额度与并发')), 'the lead receipt states the cost');
+});
+
+test('members beyond the personal limit queue without errors and start when a slot frees', async t => {
+  const h = personalService(t);
+  const plan = await h.service.invoke('lead-0001', 'propose', { goal: '单号组队', members: [1, 2, 3, 4].map(worker) });
+  const approved = await h.service.decide({ leadSid: 'lead-0001', planId: plan.planId, approve: true });
+  assert.equal(approved.created.length, 4); assert.deepEqual(approved.failed, []);
+  const kicked = () => h.sent.filter(s => s.text.includes('组队开工')).map(s => s.sid);
+  await flushTimes(h, 6);
+  assert.deepEqual(kicked(), ['member-1xxx', 'member-2xxx', 'member-3xxx']);
+  const waiting = h.service.listTeams()[0].messages.find(m => m.to === 'm4');
+  assert.equal(waiting.state, 'queued'); assert.match(waiting.reason, /排队等空位/);
+  for (const sid of kicked()) h.running.add(sid);
+  h.advance(31000); await flushTimes(h);
+  assert.equal(kicked().length, 3, 'running members keep their slots after the claim expires');
+  h.running.delete('member-2xxx'); await flushTimes(h);
+  assert.deepEqual(kicked(), ['member-1xxx', 'member-2xxx', 'member-3xxx', 'member-4xxx']);
+});
+
+test('the personal limit does not apply to pool members', async t => {
+  const h = harness(t), plan = await h.service.invoke('lead-0001', 'propose', { goal: '号池', members: [1, 2, 3, 4].map(i => ({ ...worker(i), account: 'pool-a', model: 'GLM-5.2' })) });
+  await h.service.decide({ leadSid: 'lead-0001', planId: plan.planId, approve: true });
+  await flushTimes(h, 6);
+  assert.equal(h.sent.filter(s => s.text.includes('组队开工')).length, 4);
+  assert.ok(h.created.every(r => r.opts.codeagentAccount === 'pool' && r.opts.codeagentPoolPick === 'pool-a'));
+});
+
+test('an unavailable personal account gives the login reason instead of a pool error', async t => {
+  const h = personalService(t, { listAccounts: () => ({ recommendedId: '', rows: [{ id: 'personal', personal: true, usable: false, unavailableReason: '个人账号还没登录，请先在左栏「账号」登录' }] }) });
+  await assert.rejects(h.service.invoke('lead-0001', 'propose', { goal: '单号', members: [{ ...worker(1), account: 'personal' }] }), /还没登录/);
+  assert.equal(h.created.length, 0);
+});

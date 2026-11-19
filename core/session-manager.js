@@ -1679,7 +1679,8 @@ class SessionManager extends EventEmitter {
       account = accounts.find(a => a.id === opts.codeagentPoolPick);
       if (!account) throw new Error('选的号池账号已不在号池里，请重新选择');
       if (account.state !== 'ready') throw new Error(`${who(account)} 需要号主重新登录，未启动会话`);
-      if (account.sameAsPersonal || account.duplicateOf) throw new Error(`${who(account)} 和别的号重复，不能单独使用`);
+      if (account.sameAsPersonal) throw new Error(pool.SAME_AS_PERSONAL_NOTE);
+      if (account.duplicateOf) throw new Error(`${who(account)} 和别的号重复，不能单独使用`);
       if (account.avoid) throw new Error(`${who(account)} 已暂停使用，请在左栏「账号」恢复后再新建会话`);
     } else {
       const personalCandidate = bridge ? null : this._personalAutoCandidate(personalConfig, dataDir);

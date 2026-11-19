@@ -113,3 +113,4 @@ svg.caa-i.caa-sm{width:14px;height:14px}svg.caa-i.caa-lg{width:20px;height:20px}
   outline: 2px solid var(--hw-brand);
   outline-offset: -2px;
 }
+.caa-status-cell>.caa-cell-sub.caa-full { white-space:normal; overflow:visible; text-overflow:clip; line-height:1.4; }

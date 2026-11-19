@@ -41,13 +41,15 @@ v0.4.1 · 随 AI Hub 安装，适用于已启用组队的公司版 CodeAgent。
    - `rows`：每个号一行，字段有 `id`、`label`、`state`、`usable`、`activeSessions`、`models`、`modelsAuthoritative`、`defaultModel`，不可用时附原因。
 
    选号只看 `usable=true`，同一个号上的会话越少越好。号池没有额度百分比，不要估算余量。同一账号上多开会话共享该账号的限额，只有分到不同账号才可能分摊。
+
+   `rows` 里 `id` 为 `personal` 的一行是个人账号。号池没有可用号时，`recommendedId` 就是它，只有一个号也能直接组队。选了它要告诉用户：这些成员和你共用同一个号的额度与并发，人多会变慢；想更快可以在号池再登一个别的号。个人账号上同时最多 3 位成员在干活，其余成员的消息自动排队，不用重新提交。
 2. **写计划文件**（UTF-8 JSON），再 `propose --plan-file 计划.json`：
    ```json
    {"goal":"这批人一起要完成什么",
     "members":[{"role":"分工（边界）","task":"开工任务，长的写任务书路径","title":"侧栏显示名","cwd":"工作目录","account":"号池账号 id","model":"模型"}]}
    ```
    - 计划只写上面模板里的这些字段。每人必须写 `role`、`task`。`title`、`cwd` 可选，`cwd` 必须是已存在的目录。
-   - `account` 可省略，省略时用 `recommendedId`。没有可用号会直接报错。
+   - `account` 可省略，省略时用 `recommendedId`。号池和个人账号都不可用时才会报错。
    - `model` 可省略，省略时沿用该号的默认模型（`defaultModel`）。要指定就从该号的 `models` 清单里选。`modelsAuthoritative=true` 时清单外的模型会被拒绝。
    - 成员类型固定是 CodeAgent，`kind` 不用写。
    - 在每人的 `task` 里写一句选这个模型的理由（按第 4 节），不新增计划字段，供用户批准时判断。

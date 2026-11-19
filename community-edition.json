@@ -59,9 +59,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "助理能读到群里「回复」消息的正文"
+    "反馈收件机免设置（本机即收件地址时自动开启、端口占用每分钟自愈、状态栏「反馈 N」与翻页列表）；组队在号池没号时自动用个人账号，「重复账号」提示改人话"
   ],
-  "version": "5.6.53",
+  "version": "5.6.54",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

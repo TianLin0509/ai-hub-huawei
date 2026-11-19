@@ -156,7 +156,7 @@ async function run() {
     const lead = await invoke('create-session', { kind: 'codeagent', opts: { cwd: WORK, title: '公司组队验收负责人', codeagentAccount: 'pool', codeagentPoolPick: a, model: glm, codeagentModelPick: true } });
     ok('负责人是 CodeAgent 会话', !!lead?.id);
     const accounts = await command(lead.id, ['accounts']);
-    ok('accounts 返回号池和逐号模型权限', accounts.kind === 'codeagent' && accounts.rows.length === 2 && accounts.rows.every(r => r.usable && r.models.length === 1));
+    ok('accounts 返回号池和逐号模型权限', accounts.kind === 'codeagent' && accounts.rows.filter(r => !r.personal).length === 2 && accounts.rows.every(r => r.usable && r.models.length === 1));
     assert.equal(accounts.rows.find(r => r.id === a).modelsAuthoritative, true);
     assert.equal(accounts.rows.find(r => r.id === b).modelsAuthoritative, false);
     ok('accounts 不暴露凭证内容或账号目录', !JSON.stringify(accounts).includes('local-fixture-only') && !accounts.rows.some(r => r.dir || r.accessToken));
@@ -208,7 +208,7 @@ async function run() {
     await setViewport(1440, 900);
     await click(`[data-team-approve="${lead.id}"]`);
     await wait(() => cdp.eval("!!document.querySelector('.team-modal') && !document.querySelector('[data-team-act=approve]').disabled"), 'accounts loaded');
-    ok('审批界面显示号池和每人模型，不显示 Claude/Codex 额度列', await cdp.eval("(()=>{const e=document.querySelector('.team-modal');return document.querySelectorAll('[data-team-model]').length===2 && e.textContent.includes('号池账号') && !/Claude|Codex|5h|7d|\\u7530\\u54e5/.test(e.textContent)})()"));
+    ok('审批界面显示号池和每人模型，不显示 Claude/Codex 额度列', await cdp.eval("(()=>{const e=document.querySelector('.team-modal');return document.querySelectorAll('[data-team-model]').length===2 && e.textContent.includes('账号') && !/Claude|Codex|5h|7d|\\u7530\\u54e5/.test(e.textContent)})()"));
     ok('审批表没有水平溢出', await cdp.eval("(()=>{const e=document.querySelector('.team-modal');return e.scrollWidth<=e.clientWidth+1})()"));
     ok('模型权限未核实仅在对应账号行显示', await cdp.eval("document.querySelector('[data-team-model-hint=\"0\"]').getBoundingClientRect().height===0 && document.querySelector('[data-team-model-hint=\"1\"]').getBoundingClientRect().height>0"));
     await shot('02-company-approval'); await click('[data-team-act="approve"]');

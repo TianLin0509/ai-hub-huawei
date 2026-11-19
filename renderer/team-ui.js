@@ -100,7 +100,7 @@
       if (plan) return `${toggle}<button type="button" class="team-pending-badge" data-team-approve="${esc(id)}" title="负责人提交了招人计划（${plan.members.length} 人），点开批准或驳回">待批准</button>`;
       if (teams.get(id)?.members.length) return toggle + '<span class="sl-orch-tag" title="负责人：下面挂着它招的成员会话">负责人</span>';
       const m = this.memberInfo(id);
-      return m ? `<span class="team-member-tag${m.status === 'dismissed' ? ' dismissed' : ''}" title="${esc(m.role)}${m.status === 'dismissed' ? '（已离队）' : ''}">${esc(m.memberId)}</span>` : '';
+      return m ? `<span class="team-member-tag${m.status === 'dismissed' ? ' dismissed' : ''}" title="${esc(m.role)}${m.status === 'dismissed' ? '（已离队）' : ''}">${esc(m.memberId)}</span>${m.sharedNote && m.status !== 'dismissed' ? `<span class="team-member-tag shared" title="${esc(m.sharedNote)}">共用</span>` : ''}` : '';
     },
     openApproval,
   };
@@ -166,7 +166,7 @@
           <div class="team-member-heading"><b>${esc(m.role || m.title)}</b><div class="team-sub">${m.title && m.title !== m.role ? esc(m.title) + ' · ' : ''}${m.kind === 'codeagent' ? 'CodeAgent' : esc(m.kind)}</div></div><span class="team-col-no">${i + 1}</span></div>
         <div class="team-task"><strong>${esc(firstTask)}</strong>${taskRest.length ? '\n' + esc(taskRest.join('\n')) : ''}</div>
         <div class="team-workdir" title="${esc(m.cwd || '与负责人相同目录')}">${esc(m.cwd || '与负责人相同目录')}</div>
-        <div class="team-member-fields"><label><span>号池账号</span><select data-team-account="${i}" data-team-kind="${esc(m.kind)}">${options}</select></label>
+        <div class="team-member-fields"><label><span>账号</span><select data-team-account="${i}" data-team-kind="${esc(m.kind)}">${options}</select><div class="team-sub" data-team-account-hint="${i}" hidden></div></label>
           <label><span>模型</span><select data-team-model="${i}"><option value="${esc(m.model || '')}">${esc(m.model || '沿用账号模型')}</option></select><div class="team-sub" data-team-model-hint="${i}" hidden>模型权限未核实</div></label></div>
       </section>`;
     }).join('');
@@ -228,6 +228,8 @@
           const fill=initial=>{
             const row=rows.find(a=>a.id===sel.value),chosen=initial?model.value:'';
             sel.title = row ? accountText(row) : sel.value;
+            const accountHint=modal.querySelector(`[data-team-account-hint="${sel.dataset.teamAccount}"]`);
+            accountHint.textContent=row?.sharedNote||'';accountHint.hidden=!row?.sharedNote;
             modal.querySelector(`[data-team-model-hint="${sel.dataset.teamAccount}"]`).hidden=!row || row.modelsAuthoritative===true;
             const available=row?.models || [];
             model.innerHTML=`<option value="">沿用账号模型${row?.defaultModel?' · '+esc(row.defaultModel):''}</option>`+available.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join('');

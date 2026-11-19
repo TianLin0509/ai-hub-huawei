@@ -105,6 +105,8 @@ function accountState(creds, now = Date.now()) {
   return 'ready';
 }
 
+const SAME_AS_PERSONAL_NOTE = '这就是你的个人账号，组队会自动用它，不用再登进号池';
+
 function listAccounts(dataDir, { activeCounts = {}, personalAccountId = '', now = Date.now(), fsModule = fs } = {}) {
   const { accounts } = readRegistry(dataDir);
   const seen = new Map();
@@ -592,7 +594,7 @@ function importLocal(dataDir, sourceDir, { note = '', personalDir = '', env = pr
   const candidate = localCandidates(dataDir, { personalDir, env, now, fsModule })
     .find(c => path.resolve(c.dir).toLowerCase() === path.resolve(String(sourceDir || '')).toLowerCase());
   if (!candidate) throw new Error('这个目录不在本机已登录的 CodeAgent 目录里');
-  if (candidate.isPersonal || candidate.sameAsPersonal) throw new Error('这是个人账号，不放进号池');
+  if (candidate.isPersonal || candidate.sameAsPersonal) throw new Error(SAME_AS_PERSONAL_NOTE);
   if (candidate.alreadyInPool) throw new Error('这个号已经在号池里');
   if (candidate.state !== 'ready') throw new Error('这个目录的登录已过期，请先重新登录');
   const id = addAccount(dataDir, { note: note || candidate.name, personalDir });
@@ -614,6 +616,7 @@ function importLocal(dataDir, sourceDir, { note = '', personalDir = '', env = pr
 }
 
 module.exports = {
+  SAME_AS_PERSONAL_NOTE,
   withPauseStatus,
   accountModels, personalModelsFile, probeCwd,
   localCandidates, importLocal,
