@@ -28,18 +28,20 @@ function stage(operation,signal,code,onLate) {
   });
 }
 
-function requestBody(body,modelMap,experimentalNativeThinking,experimentalCodexControls) {
+function requestBody(body,modelMap,experimentalNativeThinking,experimentalCodexControls,thinkingModel=id=>NATIVE_THINKING_MODELS.has(id)) {
   check(object(body),'L1_REQUEST_INVALID',422);
+  // 不支持思考参数的模型（能力表见 model-catalog.cjs）：去掉思考字段照常回答，不因为客户端开了思考就整条拒掉。
+  if(typeof body.model==='string'&&modelMap.get(body.model)===body.model&&!thinkingModel(body.model)&&(own(body,'thinking')||own(body,'reasoning_effort'))){body={...body};delete body.thinking;delete body.reasoning_effort;}
   check(Object.keys(body).every(key=>TOP_FIELDS.has(key)||(experimentalNativeThinking&&(key==='thinking'||key==='reasoning_effort'))||(experimentalCodexControls&&(key==='tool_choice'||key==='parallel_tool_calls'))),'L1_REQUEST_FIELD_UNVERIFIED',422);
   check(typeof body.model==='string'&&modelMap.has(body.model),'L1_MODEL_NOT_ALLOWED',422);
   if(experimentalCodexControls){
-    check(NATIVE_THINKING_MODELS.has(body.model)&&modelMap.get(body.model)===body.model,'L1_CODEX_MODEL_UNVERIFIED',422);
+    check(modelMap.get(body.model)===body.model,'L1_CODEX_MODEL_UNVERIFIED',422);
     check(body.tool_choice==='auto'&&body.parallel_tool_calls===true,'L1_CODEX_CONTROLS_INVALID',422);
-    check(own(body,'thinking')&&own(body,'reasoning_effort'),'L1_THINKING_PAIR_REQUIRED',422);
+    if(thinkingModel(body.model))check(own(body,'thinking')&&own(body,'reasoning_effort'),'L1_THINKING_PAIR_REQUIRED',422);
   }
   if(own(body,'thinking')||own(body,'reasoning_effort')){
     // Explicit experiment against the native vendor contract; company forwarding is not yet verified.
-    check(experimentalNativeThinking&&NATIVE_THINKING_MODELS.has(body.model)&&modelMap.get(body.model)===body.model,'L1_THINKING_MODEL_UNVERIFIED',422);
+    check(experimentalNativeThinking&&thinkingModel(body.model)&&modelMap.get(body.model)===body.model,'L1_THINKING_MODEL_UNVERIFIED',422);
     check(own(body,'thinking')&&own(body,'reasoning_effort'),'L1_THINKING_PAIR_REQUIRED',422);
     fields(body.thinking,['type'],'L1_THINKING_INVALID');
     check(own(body.thinking,'type')&&body.thinking.type==='enabled'&&body.reasoning_effort==='high','L1_THINKING_INVALID',422);
@@ -88,7 +90,7 @@ function requestBody(body,modelMap,experimentalNativeThinking,experimentalCodexC
 
 /** No defaults for identity, signing metadata, model mapping, endpoint, client id or credential source.
  * The endpoint and client id come from the local upstream profile (CodeAgent package or user config). */
-function buildPersonalL1Provider({readAccessToken,getIdentity,signer,modelMap,endpoint,appId,sessionId:fixedSessionId,fetchImpl=globalThis.fetch,testOnlyAllowLoopback=false,experimentalNativeThinking=false,experimentalCodexControls=false,onDiagnostic=event=>process.stderr.write(event.code+'\n')}={}) {
+function buildPersonalL1Provider({readAccessToken,getIdentity,signer,modelMap,thinkingModel,endpoint,appId,sessionId:fixedSessionId,fetchImpl=globalThis.fetch,testOnlyAllowLoopback=false,experimentalNativeThinking=false,experimentalCodexControls=false,onDiagnostic=event=>process.stderr.write(event.code+'\n')}={}) {
   check(typeof readAccessToken==='function'&&typeof getIdentity==='function'&&typeof fetchImpl==='function');
   check(typeof experimentalNativeThinking==='boolean');
   check(typeof experimentalCodexControls==='boolean'&&(!experimentalCodexControls||experimentalNativeThinking));
@@ -111,18 +113,26 @@ function buildPersonalL1Provider({readAccessToken,getIdentity,signer,modelMap,en
   const production=url.protocol==='https:'&&url.pathname==='/api/v2/chat/completions';
   const loopback=testOnlyAllowLoopback===true&&url.protocol==='http:'&&['127.0.0.1','[::1]'].includes(url.hostname)&&url.pathname==='/api/v2/chat/completions';
   check((production||loopback)&&!url.username&&!url.password&&!url.search&&!url.hash,'L1_ENDPOINT_UNVERIFIED');
-  check(object(modelMap)&&Object.keys(modelMap).length>0,'L1_MODEL_MAPPING_REQUIRED');
-  const models=new Map(Object.entries(modelMap));
-  for(const [client,wire] of models)check(MODEL_ID.test(client)&&typeof wire==='string'&&MODEL_ID.test(wire),'L1_MODEL_MAPPING_INVALID');
+  // modelMap 可以是函数：反代按公司模型目录现取（目录刷新后新模型立即可用）；每次取到的都按同一规则核对。
+  const readMap=()=>{
+    const value=typeof modelMap==='function'?modelMap():modelMap;
+    check(object(value)&&Object.keys(value).length>0,'L1_MODEL_MAPPING_REQUIRED');
+    const map=new Map(Object.entries(value));
+    for(const [client,wire] of map)check(MODEL_ID.test(client)&&typeof wire==='string'&&MODEL_ID.test(wire),'L1_MODEL_MAPPING_INVALID');
+    return map;
+  };
+  check(thinkingModel===undefined||thinkingModel===null||typeof thinkingModel==='function');
+  const thinks=typeof thinkingModel==='function'?id=>thinkingModel(id)===true:id=>NATIVE_THINKING_MODELS.has(id);
+  readMap();
   check(fixedSessionId===undefined||(typeof fixedSessionId==='string'&&UUID.test(fixedSessionId)));
   const sessionId=fixedSessionId||randomUUID();
   return Object.freeze({
-    async listModels({signal}={}) {if(signal?.aborted)throw error('L1_ABORTED',499);return [...models.keys()];},
+    async listModels({signal}={}) {if(signal?.aborted)throw error('L1_ABORTED',499);return [...readMap().keys()];},
     async complete(body,{signal}={}) {
       try {
       if(signal?.aborted)throw error('L1_ABORTED',499);
       // Reject unknown capabilities before touching credentials or signing.
-      const {serialized,wireModel}=requestBody(body,models,experimentalNativeThinking,experimentalCodexControls);
+      const {serialized,wireModel}=requestBody(body,readMap(),experimentalNativeThinking,experimentalCodexControls,thinks);
       const token=await stage(()=>readAccessToken({signal}),signal,'L1_ACCESS_TOKEN_FAILED');
       check(headerText(token)&&!/[\x00-\x20\x7f]/.test(token),'L1_ACCESS_TOKEN_INVALID');
       const identity=await stage(()=>getIdentity(token,{signal}),signal,'L1_IDENTITY_FAILED');

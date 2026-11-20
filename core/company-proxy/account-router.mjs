@@ -44,7 +44,9 @@ const baseModel = value => String(value || '').trim().toLowerCase().replace(/-au
 const listsModel = (account, model) => Array.isArray(account.models) && account.models.some(m => baseModel(m) === baseModel(model));
 // true when the account may serve the model; only an authoritative list refuses.
 export function accountHasModel(account, model) {
-  if (!model || account.kind === 'personal') return true;
+  // 个人号的 CodeAgent 菜单清单不可靠，一直不按模型过滤；拉到过公司模型目录（catalogAuthoritative）就按目录：
+  // 个人号没有的模型不再派给它（以前会一路发到上游才回 404「模型未注册」）。
+  if (!model || (account.kind === 'personal' && account.catalogAuthoritative !== true)) return true;
   if (account.modelsAuthoritative !== true || !Array.isArray(account.models) || !account.models.length) return true;
   return listsModel(account, model);
 }

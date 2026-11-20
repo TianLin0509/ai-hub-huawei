@@ -96,6 +96,7 @@
   "tests/unit-session-search-recent-memory.test.js",
   "tests/unit-session-search-codeagent-recent.test.js",
   "tests/unit-company-model-proxy.test.js",
+  "tests/unit-company-model-catalog.test.js",
   "tests/unit-company-proxy-account-pick.test.js",
   "tests/unit-company-proxy-login-kinds.test.mjs",
   "tests/unit-company-proxy-environment.test.mjs",

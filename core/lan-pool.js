@@ -8,7 +8,8 @@ const crypto = require('node:crypto');
 const os = require('node:os');
 const VERSION = '1.0.0';
 const DEFAULT_PORT = 18766;
-const MODEL_IDS = ['GLM-5.2-WX', 'deepseek-v4.1-flash-1017'];
+// 共享出去的模型 = 本机反代的公司模型清单（跟 CodeAgent 模型目录走，core/company-model-proxy.js）。
+const modelIds = () => require('./company-model-proxy').companyModelIds();
 const file = dataDir => path.join(dataDir, 'lan-pool', 'settings.json');
 const empty = () => ({ host: { enabled: false, port: DEFAULT_PORT, members: [] }, client: null });
 function read(dataDir) {
@@ -98,7 +99,7 @@ function bindAddress(value) {
 }
 const numeric = v => typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null;
 const quantity = v => numeric(v) ?? (typeof v === 'string' && /^[\d,.]+\s*[KMBT]?$/i.test(v) && v.length <= 32 ? v : null);
-const modelName = v => MODEL_IDS.find(id => id.toLowerCase() === String(v || '').replace(/-auto$/i, '').toLowerCase()) || '';
+const modelName = v => { try { const hit = require('./company-proxy/model-catalog.cjs').resolveModel(v, require('./company-model-proxy').companyModels()); return ['exact', 'menu', 'version'].includes(hit.how) ? hit.id : ''; } catch { return ''; } };
 function bucket(v) { return v ? { pct: numeric(v.pct), used: quantity(v.used), total: quantity(v.total) } : null; }
 function usage(entry) {
   if (!entry) return null;
@@ -127,7 +128,7 @@ function quotaSnapshot(snapshot, router = {}, now = Date.now()) {
         creditReadingAt: numeric(r.creditReadingAt), defaultModel: modelName(r.defaultModel), refresh: { status: 'idle' },
         models: Array.isArray(a?.models) ? [...new Set(a.models.map(modelName).filter(Boolean))] : [], modelsAuthoritative: a?.modelsAuthoritative === true };
     });
-  return { ok: true, shared: true, version: VERSION, checkedAt: now, serveEnabled: true, rows, models: MODEL_IDS,
+  return { ok: true, shared: true, version: VERSION, checkedAt: now, serveEnabled: true, rows, models: modelIds(),
     message: '共享主机最近一次额度读数；所有同事共同消耗，刷新只同步读数' };
 }
 // Shown to the host in the pool view so they know which Hub version a colleague runs.
@@ -154,4 +155,5 @@ async function fetchSnapshot(client, { timeoutMs = 5000 } = {}) {
       : e.code === 'ECONNREFUSED' ? '主机在线但没有开启共享（或 Hub 未运行）' : '无法连接共享主机，请确认主机开机、Hub 在运行，以及主机地址没有变化')));
   });
 }
-module.exports = { VERSION, DEFAULT_PORT, MODEL_IDS, read, write, address, port, bindAddress, addMember, revoke, authenticate, publicSettings, quotaSnapshot, fetchSnapshot, isPrivateAddress, localAddresses, formatInvite, parseInvite };
+module.exports = { VERSION, DEFAULT_PORT, read, write, address, port, bindAddress, addMember, revoke, authenticate, publicSettings, quotaSnapshot, fetchSnapshot, isPrivateAddress, localAddresses, formatInvite, parseInvite };
+Object.defineProperty(module.exports, 'MODEL_IDS', { enumerable: true, get: modelIds });

@@ -10,12 +10,17 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-const MODELS = Object.freeze([
-  Object.freeze({ id: 'GLM-5.2-WX', label: 'GLM-5.2-WX' }),
-  Object.freeze({ id: 'deepseek-v4.1-flash-1017', label: 'DeepSeek V4.1 Flash' }),
-]);
-const MODEL_IDS = MODELS.map(m => m.id);
-const DEFAULT_MODEL = MODEL_IDS[0];
+// 公司模型清单跟 CodeAgent 自己的模型目录走（2026-11-20）：反代按账号拉目录、存到 <数据目录>/company-model-proxy/model-catalog.json，
+// 这里现读那份文件（读不到用内置的 GLM-5.2-WX、DeepSeek V4.1 Flash）。MODELS / MODEL_IDS / DEFAULT_MODEL 是现取的 getter，
+// 启动中心、设置页、会话切模型、Codex 目录、DSH 模型表都读这同一份，CodeAgent 里新出的模型不用发版就能选。
+const modelCatalog = require('./company-proxy/model-catalog.cjs');
+const hubDataDir = () => { try { return require('./data-dir').getHubDataDir(); } catch { return ''; } };
+function companyModels(dataDir = hubDataDir()) {
+  const list = dataDir ? modelCatalog.modelsFor(dataDir) : modelCatalog.unionModels(null);
+  return list.map(m => Object.freeze({ id: m.id, label: m.label || m.id, ...(m.input ? { input: m.input } : {}), ...(m.output ? { output: m.output } : {}), thinking: !!m.thinking }));
+}
+const companyModelIds = dataDir => companyModels(dataDir).map(m => m.id);
+const companyDefaultModel = dataDir => modelCatalog.defaultModel(companyModels(dataDir)).id;
 const DEFAULT_PORT = 18765;
 const KEY_ENV = 'AI_HUB_COMPANY_MODEL_KEY';
 const PROVIDER_ID = 'company-proxy';
@@ -103,21 +108,22 @@ function requireEndpoint(dataDir, { gateway = false } = {}) {
   return endpoint;
 }
 
-function normalizeModel(model) {
+// 名字 → 公司模型（规则同反代，model-catalog.cjs resolveModel）：以前带 glm 的一律落到 GLM-5.2-WX，要 5.3 也给 5.2；
+// 现在目录里有就用它，要的版本没有就报错说明可选项。
+function normalizeModel(model, dataDir) {
   const value = String(model || '').trim();
-  if (!value) return DEFAULT_MODEL;
-  if (MODEL_IDS.includes(value)) return value;
-  const lower = value.toLowerCase();
-  if (lower.includes('glm')) return MODEL_IDS[0];
-  if (lower.includes('deepseek')) return MODEL_IDS[1];
-  throw new Error(`公司模型只支持 ${MODEL_IDS.join('、')}`);
+  const models = companyModels(dataDir);
+  if (!value) return modelCatalog.defaultModel(models).id;
+  const hit = modelCatalog.resolveModel(value, models);
+  if (hit.how === 'default') throw new Error(`公司模型只支持 ${models.map(m => m.id).join('、')}`);
+  return hit.id;
 }
 
 // 会话启动时用：不认识的名字（例如别处带来的默认模型）落到默认的公司模型，不报错。
 // 网关会话：网关模型表里有就原样用，没有落到网关的默认模型（core/api-gateway.js）。
 function launchModel(model, { gateway = false, dataDir = '' } = {}) {
   if (gateway) return gatewayConfig().resolveModel(dataDir, model);
-  try { return normalizeModel(model); } catch { return DEFAULT_MODEL; }
+  try { return normalizeModel(model, dataDir || undefined); } catch { return companyDefaultModel(dataDir || undefined); }
 }
 function gatewayModelIds(dataDir) {
   const view = gatewayConfig().read(dataDir);
@@ -164,12 +170,14 @@ const CODEX_INSTRUCTIONS = `You are a coding agent running in the Codex CLI on t
 - Shell commands run in PowerShell. Verify your work (build, tests) when practical.
 - Reply to the user in the language they use (usually Chinese). Be concise and state what you changed and how you verified it.`;
 // Codex 不认识公司模型的名字时会按通用默认值跑；给它一份目录，说明只收文字、不用联网搜索。
-function codexCatalog(ids = MODEL_IDS, description = 'Company model via local proxy') {
+function codexCatalog(ids = companyModelIds(), description = 'Company model via local proxy', known = companyModels()) {
+  // 上下文按公司目录给的输入上限，不超过以前一直用的 128000（目录里更小的模型按它自己的）。
+  const windowOf = slug => { const m = known.find(x => x.id === slug); return m && m.input ? Math.min(m.input, 128000) : 128000; };
   const entry = slug => ({ slug, display_name: slug, description,
     default_reasoning_level: 'medium', supported_reasoning_levels: [{ effort: 'medium', description: 'Mapped to upstream thinking (high)' }],
     shell_type: 'unified_exec', visibility: 'list', supported_in_api: true, priority: 1, base_instructions: CODEX_INSTRUCTIONS, model_messages: null,
     default_reasoning_summary: 'auto', support_verbosity: false, default_verbosity: null, apply_patch_tool_type: 'freeform', web_search_tool_type: 'text',
-    truncation_policy: { mode: 'bytes', limit: 10000 }, supports_image_detail_original: false, context_window: 128000, max_context_window: 128000, effective_context_window_percent: 90,
+    truncation_policy: { mode: 'bytes', limit: 10000 }, supports_image_detail_original: false, context_window: windowOf(slug), max_context_window: windowOf(slug), effective_context_window_percent: 90,
     experimental_supported_tools: [], input_modalities: ['text'], supports_search_tool: false, supports_reasoning_effort_updates: true,
     node_repl_auto_review_required: false, node_repl_disabled: true, tool_mode: null, multi_agent_version: null, multi_agent_reasoning_effort: null });
   return { models: ids.map(entry) };
@@ -183,7 +191,7 @@ function ensureCodexHome(dataDir, { model, projectDir, gateway = false }) {
   const home = codexHome(dataDir, { gateway });
   fs.mkdirSync(home, { recursive: true });
   const catalog = path.join(home, 'company-model-catalog.json');
-  fs.writeFileSync(catalog, JSON.stringify(gateway ? codexCatalog(gatewayModelIds(dataDir), 'API gateway model via local proxy') : codexCatalog(), null, 2), 'utf8');
+  fs.writeFileSync(catalog, JSON.stringify(gateway ? codexCatalog(gatewayModelIds(dataDir), 'API gateway model via local proxy') : codexCatalog(companyModelIds(dataDir), undefined, companyModels(dataDir)), null, 2), 'utf8');
   const projectKey = path.resolve(projectDir || require('node:os').homedir());
   require('./codex-managed-config').writeHubManagedCodexConfig(path.join(home, 'config.toml'), [
     'disable_response_storage = true',
@@ -239,7 +247,7 @@ const DSH_DISABLED = ['deepseek-account', 'llm-deepseek', 'llm-deepseek-account'
   'web-fetch-http', 'tool-web', 'otel', 'session-telemetry-otel', 'session-log-deepseek', 'plugin-package-inventory-deepseek', 'tool-plugin-manager'];
 function dshRoute({ dataDir, sessionId, model, account, gateway = false }) {
   const endpoint = requireEndpoint(dataDir, { gateway });
-  const ids = gateway ? gatewayModelIds(dataDir) : MODEL_IDS;
+  const ids = gateway ? gatewayModelIds(dataDir) : companyModelIds(dataDir);
   return {
     providerId: PROVIDER_ID, keyEnv: KEY_ENV, key: sessionKey(endpoint, sessionId, account, { gateway }), baseURL: origin(endpoint) + '/v1',
     model: launchModel(model, { gateway, dataDir }),
@@ -325,7 +333,11 @@ function chosenZone(dataDir) {
 
 module.exports = {
   ZONE_CHOICES, upstreamFile, readUpstreamConfig, setUpstreamZone, chosenZone,
-  MODELS, MODEL_IDS, DEFAULT_MODEL, DEFAULT_PORT, KEY_ENV, PROVIDER_ID, LABEL, GATEWAY_LABEL, GATEWAY_SUFFIX, usesGateway, gatewayModelIds, CODEX_WINDOWS_SANDBOX_DEFAULT, codexWindowsSandbox,
+  companyModels, companyModelIds, companyDefaultModel, DEFAULT_PORT, KEY_ENV, PROVIDER_ID, LABEL, GATEWAY_LABEL, GATEWAY_SUFFIX, usesGateway, gatewayModelIds, CODEX_WINDOWS_SANDBOX_DEFAULT, codexWindowsSandbox,
   proxyDir, endpointFile, readEndpoint, noteLiveEndpoint, ensureEndpoint, setEndpointPort, sessionTag, sessionKey, normalizePin, normalizeModel, launchModel,
   applyNoProxy, applyEndpointNoProxy, usesProxy, applyClaudeEnv, codexCatalog, codexHome, ensureCodexHome, applyCodexEnv, dshRoute, dshOwnRoute, findNodeOnPath,
 };
+// 现取的清单（旧代码按常量读，名字保留）。
+Object.defineProperty(module.exports, 'MODELS', { enumerable: true, get: () => companyModels() });
+Object.defineProperty(module.exports, 'MODEL_IDS', { enumerable: true, get: () => companyModelIds() });
+Object.defineProperty(module.exports, 'DEFAULT_MODEL', { enumerable: true, get: () => companyDefaultModel() });

@@ -24,8 +24,10 @@ import { readPersonalAccessToken } from './personal-token.mjs';
 import { readPoolAccessToken } from './pool-token.mjs';
 import { createAccountRouter, PERSONAL } from './account-router.mjs';
 import { resolveUpstreamProfile, loadSigner, ProfileError, zoneFromLetter } from './upstream-profile.mjs';
-import { MODELS, MODEL_GLM, KIND, resolveModel, createClaudeAdapter, createCodexAdapter, createDshAdapter, collectAnthropicMessage } from './adapters.mjs';
+import { KIND, createClaudeAdapter, createCodexAdapter, createDshAdapter, collectAnthropicMessage } from './adapters.mjs';
 import { createGatewayProvider } from './gateway-provider.mjs';
+// 公司模型目录（和 CodeAgent 同一个目录接口，按账号拉）：CommonJS，Hub 主进程也用同一份解析与匹配规则。
+const modelCatalog = createRequire(import.meta.url)('./model-catalog.cjs');
 
 export const VERSION = 'company-model-proxy 1.0';
 const SAFE_CODE = /^[A-Za-z0-9_ .:\-]{1,120}$/;
@@ -152,8 +154,16 @@ function modelsOf(dataDir, id) {
   } catch { return undefined; }
 }
 
+// 这个号在公司模型目录里能用的模型（上游模型名）：目录拉到过就以它为准（权威），比 Hub 账号页读的 CodeAgent 菜单名更准——
+// 菜单名「GLM-5.3-Auto(Volcano-MaaS)」和实际发给上游的模型名不是同一个字串。
+function catalogModelsOf(catalog, id) {
+  const entry = catalog && catalog.accounts && catalog.accounts[id];
+  const models = entry && Array.isArray(entry.models) ? entry.models.map(m => m && m.id).filter(Boolean) : [];
+  return models.length ? { models, modelsAuthoritative: true, catalogAuthoritative: true } : null;
+}
+
 // Pool registry, manual/automatic pauses kept by Hub's account page and each account's models.
-export function poolAccounts(dataDir, now = Date.now(), personalCredential = '') {
+export function poolAccounts(dataDir, now = Date.now(), personalCredential = '', catalog = null) {
   const root = join(dataDir, 'codeagent-pool');
   const registry = readJsonSync(join(root, 'pool.json'));
   const avoid = readJsonSync(join(root, 'quota-avoid.json'))?.accounts || {};
@@ -164,10 +174,11 @@ export function poolAccounts(dataDir, now = Date.now(), personalCredential = '')
   const list = (Array.isArray(registry?.accounts) ? registry.accounts : [])
     .filter(a => a && typeof a.id === 'string' && /^[a-z0-9]{6,16}$/.test(a.id))
     .map(a => {
-      const models = modelsOf(dataDir, a.id);
+      const models = catalogModelsOf(catalog, a.id) || modelsOf(dataDir, a.id);
       return { id: a.id, kind: 'pool', paused: paused(a.id), credentialFile: join(root, 'accounts', a.id, '.credentials.json'), ...(models || {}) };
     });
-  list.push({ id: PERSONAL, kind: 'personal', paused: paused(PERSONAL), ...(personalCredential ? { credentialFile: personalCredential } : {}) });
+  list.push({ id: PERSONAL, kind: 'personal', paused: paused(PERSONAL), ...(personalCredential ? { credentialFile: personalCredential } : {}),
+    ...(catalogModelsOf(catalog, PERSONAL) || {}) });
   return list;
 }
 
@@ -295,6 +306,83 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
   const upstreamReady = prepareUpstream();
   if (opts.mock) await upstreamReady; // the mock is instant; tests see ready as soon as the port is open
 
+  // ---------- company model catalog ----------
+  // 反代可用的模型 = 各账号 CodeAgent 模型目录的并集（model-catalog.cjs）。上游准备好后拉一次，之后每 30 分钟一次；
+  // 客户端要了目录里没有的版本时（可能刚上线新模型）提前补拉一次（最快 1 分钟一次）。拉不到就用上次存的，都没有用内置的两个。
+  const catalog = { cache: modelCatalog.readCache(opts.dataDir), models: [], source: 'builtin', refreshedAt: null, lastError: null, running: null, lastAttempt: 0 };
+  const applyCatalog = () => {
+    catalog.models = modelCatalog.unionModels(catalog.cache);
+    catalog.source = catalog.cache && Object.keys(catalog.cache.accounts || {}).length ? 'catalog' : 'builtin';
+  };
+  applyCatalog();
+  const CATALOG_REFRESH_MS = 30 * 60 * 1000, CATALOG_RETRY_MS = 60 * 1000;
+  const fetchAccountCatalog = async account => {
+    const p = upstream.profile;
+    const token = account.kind === 'personal'
+      ? await readPersonalAccessToken({ credentialPath: p.personalCredential, expiryUnit: 'milliseconds', minValidityMs: 60000, timeoutMs: 10000 })
+      : await readPoolAccessToken({ poolRoot: join(opts.dataDir, 'codeagent-pool'), accountId: account.id, minValidityMs: 60000, timeoutMs: 10000 });
+    const idRes = await fetch(p.identityUrl, { method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15000),
+      headers: { 'Content-Type': 'application/json', 'X-Auth-Token': token, Accept: 'application/json' }, body: '{}' });
+    if (idRes.status !== 200) { await idRes.body?.cancel().catch(() => {}); throw Object.assign(new Error('identity'), { code: `IDENTITY_HTTP_${idRes.status}` }); }
+    const detail = await idRes.json();
+    const user = (p.identityAccountField ? detail?.data?.[p.identityAccountField] : ''), dept = p.identityDeptField ? detail?.data?.[p.identityDeptField] || '' : '';
+    if (typeof user !== 'string' || !user) throw Object.assign(new Error('identity'), { code: 'IDENTITY_UNVERIFIED' });
+    const headers = { 'Content-Type': 'application/json', 'X-AUTH-TOKEN': token, 'Agent-Type': 'AgentCenter', area: p.zone,
+      'plugin-version': `cli-${p.codeagentVersion}`, 'x-error-propagation': 'true', 'app-id': p.appId, 'x-agent-client-version': p.codeagentVersion,
+      'x-agent-user-account': user, ...(dept ? { depart: dept, 'x-agent-user-department': dept } : {}) };
+    const res = await fetch(new URL(modelCatalog.CATALOG_PATH, p.identityUrl).href, { method: 'GET', redirect: 'error', headers, signal: AbortSignal.timeout(15000) });
+    if (res.status !== 200) { await res.body?.cancel().catch(() => {}); throw Object.assign(new Error('catalog'), { code: `CATALOG_HTTP_${res.status}` }); }
+    const raw = await res.text();
+    if (raw.length > 2 * 1024 * 1024) throw Object.assign(new Error('catalog'), { code: 'CATALOG_TOO_LARGE' });
+    return modelCatalog.parseCatalog(JSON.parse(raw));
+  };
+  const refreshCatalog = why => {
+    if (opts.mock || !upstream?.profile?.identityUrl) return Promise.resolve(false);
+    if (catalog.running) return catalog.running;
+    if (why !== 'start' && why !== 'timer' && Date.now() - catalog.lastAttempt < CATALOG_RETRY_MS) return Promise.resolve(false);
+    catalog.lastAttempt = Date.now();
+    catalog.running = (async () => {
+      const before = catalog.models.map(m => m.id).join(',');
+      const next = { schema: 1, at: Date.now(), accounts: { ...(catalog.cache?.accounts || {}) } };
+      const accounts = poolAccounts(opts.dataDir, Date.now(), upstream.profile.personalCredential);
+      for (const id of Object.keys(next.accounts)) if (!accounts.some(a => a.id === id)) delete next.accounts[id]; // 号已移出号池
+      const failed = [];
+      for (const account of accounts) {
+        try {
+          const models = await fetchAccountCatalog(account);
+          if (models.length) next.accounts[account.id] = { at: Date.now(), models }; else failed.push(`${account.id}:EMPTY`);
+        } catch (error) { failed.push(`${account.id}:${SAFE_CODE.test(String(error?.code || '')) ? error.code : (error?.name || 'FAILED')}`); }
+      }
+      catalog.cache = next; applyCatalog();
+      catalog.refreshedAt = stamp(); catalog.lastError = failed.length ? failed.join(' ') : null;
+      const after = catalog.models.map(m => m.id).join(',');
+      try { modelCatalog.writeCache(opts.dataDir, next); } catch (error) { log(`model catalog not saved: ${error?.code || 'write failed'}`); }
+      log(`model catalog ${why}: ${catalog.models.length} models [${after}]${after !== before ? ` (was [${before}])` : ''}; accounts ok ${accounts.length - failed.length}/${accounts.length}${failed.length ? ' failed ' + failed.join(' ') : ''}`);
+      return after !== before;
+    })().catch(error => { catalog.lastError = String(error?.code || 'REFRESH_FAILED'); log(`model catalog ${why} failed: ${catalog.lastError}`); return false; })
+      .finally(() => { catalog.running = null; });
+    return catalog.running;
+  };
+  upstreamReady.then(() => {
+    if (!startup.ready) return;
+    refreshCatalog('start');
+    setInterval(() => { refreshCatalog('timer'); }, CATALOG_REFRESH_MS).unref();
+  });
+  // 客户端给的模型名 → 上游模型名（规则见 model-catalog.cjs resolveModel）。
+  const resolveCompanyModel = name => {
+    try {
+      const hit = modelCatalog.resolveModel(name, catalog.models);
+      if (hit.how === 'retired-upgrade') log(`model ${String(name).slice(0, 80)} not in catalog any more; using newer ${hit.id}`);
+      return hit.id;
+    } catch (error) {
+      if (error?.code !== 'MODEL_NOT_IN_CATALOG') throw error;
+      refreshCatalog('miss').catch(() => {});
+      throw Object.assign(new Error(error.message + '。如果 CodeAgent 里刚出现这个模型，等 1 分钟再试'), { code: 'unsupported_protocol', status: 422 });
+    }
+  };
+  const catalogModelMap = () => Object.fromEntries(catalog.models.map(m => [m.id, m.id]));
+  const thinkingModel = id => modelCatalog.capabilities(id).thinking;
+
   const makeProvider = (account, { sessionTag, kind, onCredentialFailure }) => {
     const p = upstream.profile;
     let readAccessToken;
@@ -309,10 +397,10 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
       identityAccountField: p.identityAccountField, identityDeptField: p.identityDeptField || '',
       ...(p.testOnlyIdentityPath ? { testOnlyIdentityPath: p.testOnlyIdentityPath } : {}),
       upstreamSessionId: uuidFrom(sessionTag + ':' + account.id),
-      experimentalNativeThinking: true, experimentalCodexControls: kind === 'codex',
+      experimentalNativeThinking: true, experimentalCodexControls: kind === 'codex', modelMap: catalogModelMap, thinkingModel,
       ...(upstream.testOrigin ? { testOnlyLoopbackOrigin: upstream.testOrigin } : {}) });
   };
-  const router = createAccountRouter({ listAccounts: () => poolAccounts(opts.dataDir, Date.now(), upstream?.profile?.personalCredential), makeProvider, statSync: opts.mock ? null : statSync,
+  const router = createAccountRouter({ listAccounts: () => poolAccounts(opts.dataDir, Date.now(), upstream?.profile?.personalCredential, catalog.cache), makeProvider, statSync: opts.mock ? null : statSync,
     onEvent: e => log(`account ${e.type} session=${String(e.session).slice(0, 8)} ${e.account || ''}${e.from ? ' from=' + e.from : ''}${e.to ? ' to=' + e.to : ''}${e.reason ? ' reason=' + e.reason : ''}`) });
 
   // ---------- request gate ----------
@@ -348,7 +436,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
   const errorResponse = (status, message, extra = {}) => new Response(JSON.stringify({ type: 'error', error: { type: status === 429 ? 'rate_limit_error' : status === 401 ? 'authentication_error' : status === 400 ? 'invalid_request_error' : 'api_error', message } }),
     { status, headers: { 'content-type': 'application/json; charset=utf-8', [OWN_RESPONSE_HEADER]: '1', ...extra } });
   const gated = {
-    listModels: async () => [...MODELS],
+    listModels: async () => catalog.models.map(m => m.id),
     async complete(body, { signal } = {}) {
       const kind = body[KIND] || 'dsh', started = Date.now(), sessionTag = als.getStore()?.sessionTag || 'default', pin = als.getStore()?.pin || '';
       stats.requests++; stats.byKind[kind]++; stats.byModel[body.model] = (stats.byModel[body.model] || 0) + 1;
@@ -376,6 +464,9 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
         } finally { if (!handed) stats.gateway.inFlight--; }
       }
       if (!startup.ready) { stats.failed++; stats.lastError = startup.code; return errorResponse(503, startup.message); }
+      // 输出长度按目录给这个模型的上限截（目录里有的才截；没写的照旧只受全局上限约束）。
+      const outputCap = catalog.models.find(m => m.id === body.model)?.output;
+      if (Number.isSafeInteger(outputCap) && outputCap > 0 && Number.isSafeInteger(body.max_tokens) && body.max_tokens > outputCap) body.max_tokens = outputCap;
       await acquire(); stats.inFlight++;
       // The slot is held until the response body has been read to its end (or cancelled), not just until headers.
       let held = true, handedOff = false;
@@ -407,8 +498,8 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
   };
 
   // ---------- HTTP ----------
-  const common = { maxTokensCap: opts.maxTokensCap, defaultModel: MODEL_GLM,
-    resolve: name => als.getStore()?.gateway && gatewayConfig ? gatewayModel(gatewayConfig, name) : resolveModel(name, MODEL_GLM) };
+  const common = { maxTokensCap: opts.maxTokensCap, defaultModel: modelCatalog.defaultModel(catalog.models).id,
+    resolve: name => als.getStore()?.gateway && gatewayConfig ? gatewayModel(gatewayConfig, name) : resolveCompanyModel(name) };
   const claude = createClaudeAdapter(common), codex = createCodexAdapter(common), dsh = createDshAdapter(common);
   const logged = (name, adapter) => ({ ...adapter, convertRequest(body) {
     try { return adapter.convertRequest(body); }
@@ -431,7 +522,8 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
   const json = (res, status, value) => { res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }); res.end(JSON.stringify(value)); };
   const status = () => ({ ok: true, ready: startup.ready, code: startup.code, message: startup.message, missing: startup.missing, diagnostics: startup.diagnostics || null,
     zone: startup.zone, firstInit: startup.firstInit,
-    version: VERSION, mock: opts.mock, pid: process.pid, port: opts.port, models: MODELS, systemCa, stats, router: router.snapshot(),
+    version: VERSION, mock: opts.mock, pid: process.pid, port: opts.port, models: catalog.models.map(m => m.id),
+    modelCatalog: { source: catalog.source, refreshedAt: catalog.refreshedAt, lastError: catalog.lastError, models: catalog.models.map(m => ({ id: m.id, label: m.label })) }, systemCa, stats, router: router.snapshot(),
     gateway: gatewayConfig ? { configured: true, models: gatewayConfig.models, defaultModel: gatewayConfig.defaultModel,
       waiting: waitingByTag() } : { configured: false, waiting: {} },
     ...(mock ? { mockUpstream: mock.stats } : {}) });

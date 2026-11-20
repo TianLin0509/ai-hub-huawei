@@ -38,7 +38,8 @@ function wire({ signer, readAccessToken = readPersonalAccessToken, fetchImpl = g
   identityUrl: configuredIdentityUrl, chatUrl: configuredChatUrl, appId, expectedVersion, credentialPath,
   onDiagnostic = event => process.stderr.write(event.code + '\n'), identityTimeoutMs = 10000,
   maxIdentityBytes = 128 * 1024, testOnlyLoopbackOrigin, experimentalNativeThinking = false, experimentalCodexControls = false,
-  beforeGenerationDispatch, upstreamSessionId, identityAccountField, identityDeptField = '', testOnlyIdentityPath = '/identity', onIdentityRegion } = {}) {
+  beforeGenerationDispatch, upstreamSessionId, identityAccountField, identityDeptField = '', testOnlyIdentityPath = '/identity', onIdentityRegion,
+  modelMap = null, thinkingModel = null } = {}) {
   requireFact(typeof identityAccountField === 'string' && FIELD.test(identityAccountField) && typeof identityDeptField === 'string' &&
     (identityDeptField === '' || FIELD.test(identityDeptField)), 'COMPANY_IDENTITY_FIELDS_UNCONFIGURED');
   requireFact(onIdentityRegion === undefined || typeof onIdentityRegion === 'function');
@@ -172,7 +173,8 @@ function wire({ signer, readAccessToken = readPersonalAccessToken, fetchImpl = g
           return result;
         } catch { state.errorCode = 'COMPANY_SIGNATURE_FAILED'; throw failure(state.errorCode); }
       } },
-    modelMap: { 'GLM-5.2-WX': 'GLM-5.2-WX', 'deepseek-v4.1-flash-1017': 'deepseek-v4.1-flash-1017' },
+    // 反代按公司模型目录给（函数，每次请求现取）；没给时是 11-06 真机验证过的两个模型。
+    modelMap: modelMap || { 'GLM-5.2-WX': 'GLM-5.2-WX', 'deepseek-v4.1-flash-1017': 'deepseek-v4.1-flash-1017' }, thinkingModel,
     endpoint: chatUrl, appId, sessionId: upstreamSessionId, experimentalNativeThinking, experimentalCodexControls,
     fetchImpl: async (url, options) => {
       // Trusted factory closure only. No request, token, identity or endpoint is exposed to it.
