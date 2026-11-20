@@ -71,7 +71,7 @@ def check_bundle(bundle, api, source_dir=None):
     return {'ok': not pending, 'version': manifest['version'], 'pendingSources': pending}
 
 
-def build(base, source_dir, out, version, key_path, release_date):
+def build(base, source_dir, out, version, key_path, release_date, note=None):
     files = base_files(base)
     api = signing_api(files)
     key = bytes.fromhex(Path(key_path).read_text(encoding='utf-8').strip())
@@ -80,7 +80,7 @@ def build(base, source_dir, out, version, key_path, release_date):
     code = code_bytes(files, source_dir, version)
     name = f'msz-code-{version}.zip'
     manifest = {'app': 'mishu-terminator', 'version': version, 'shell': 1, 'date': release_date,
-                'notes': ['修复会议室列表漏读及识别失败误报满员，增加查找失败诊断'],
+                'notes': [note or '修复会议室列表漏读及识别失败误报满员，增加查找失败诊断'],
                 'code': {'file': name, 'size': len(code), 'sha256': hashlib.sha256(code).hexdigest()}}
     manifest['signature'] = api['sign'](key, payload(manifest)).hex()
     out = Path(out)
@@ -97,6 +97,7 @@ def main():
     parser.add_argument('--version', default='2.1.4')
     parser.add_argument('--date', default=date.today().isoformat())
     parser.add_argument('--out', type=Path, default=BUNDLE)
+    parser.add_argument('--note', help='One-line release note stored in the signed manifest')
     parser.add_argument('--check', action='store_true')
     args = parser.parse_args()
     if args.check:
@@ -105,7 +106,7 @@ def main():
         if not args.key:
             parser.error('--key is required to sign; use --check for a read-only check')
         date.fromisoformat(args.date)
-        result = build(args.base, BUNDLE, args.out, args.version, args.key, args.date)
+        result = build(args.base, BUNDLE, args.out, args.version, args.key, args.date, args.note)
     print(json.dumps(result, ensure_ascii=False))
     return 0 if result['ok'] else 2
 

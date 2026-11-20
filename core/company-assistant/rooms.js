@@ -294,6 +294,44 @@ class RoomBooking {
     }
     throw new Error('秘书尚未回报结果，请查看当前状态；没有自动重复执行');
   }
+  // 2026-11-20：Hub 升级后，常驻的旧组件进程不会自己换新版（抢订提速修复在 2.1.4 里）。
+  // 远离放号时段、组件空闲（只在守护里等下一次放号）时自动换上新版，原来开着的守护照旧恢复；
+  // 放号前 45 分钟到放号后 15 分钟、正在立即抢/测试/登录、有会后动作或补抢在等时都不动。
+  async upgradeIdleHelper(live, minute, win, now) {
+    if (this.deps.roomCommand || !live.connected || this.upgrading || now - (this.lastUpgrade || 0) < 30 * 60000) return;
+    let helper, desired;
+    try {
+      helper = this.helper();
+      desired = component.manifest(path.join(this.deps.roomBundle || path.join(__dirname, 'room-component'), 'control.json')).version;
+    } catch { return; }
+    const num = v => String(v || '').split('.').map(Number).reduce((n, x) => n * 1000 + x, 0);
+    if (!helper?.version || num(helper.version) >= num(desired)) return;
+    if (minute >= win.from - 15 && minute < win.to + 15) return;
+    if (live.loginBusy || helper.controlBusy || (live.running && live.mode !== 'daemon')) return;
+    if ((Array.isArray(helper.pending) && helper.pending.length) || this.offlineRetry.active()) return;
+    const resume = !!(live.running && this.settings().enabled);
+    this.upgrading = true; this.lastUpgrade = now;
+    try {
+      // 守护在跑时组件拒绝被结束：先内部暂停（不改「自动抢订」开关），等它真的停下再换。
+      if (live.running) {
+        await this.command('pause', {}, { internal: true });
+        const end = Date.now() + 15000;
+        while (this.helper()?.running && Date.now() < end) await new Promise(r => setTimeout(r, 300));
+      }
+      await this.reconnect();
+      console.log(`[company-assistant] 会议室组件已自动从 ${helper.version} 换到 ${desired}`);
+    } catch (e) {
+      console.warn('[company-assistant] 会议室组件自动换新版没做成：', e.message);
+    }
+    try {
+      if (resume) {
+        try { await this.command('start'); } catch { await new Promise(r => setTimeout(r, 3000)); await this.command('start'); }
+      }
+    } catch (e) {
+      this.a.bus?.publish?.({ id: 'room-upgrade:' + new Date(now).toISOString().slice(0, 10), kind: 'room', notify: true, page: 'rooms', tone: 'bad',
+        cta: '打开会议室', title: '会议室自动抢订需要重新开启', text: '会议室组件换新版后没能恢复自动抢订：' + e.message + '。打开会议室页点「开始」即可。' });
+    } finally { this.upgrading = false; }
+  }
   // 桌宠联动（2026-11-09）：抢订有了新结果、订到的会快开始、会议室助手要重新登录，都交给提醒总线，
   // 开着桌宠时由桌宠举卡片说（点开到会议室页），没开桌宠时照旧是右下角通知卡。每件事只说一次。
   tellPet(added, history, live, now) {
@@ -341,6 +379,7 @@ class RoomBooking {
       if (this.settings().enabled && minute >= win.from && minute < win.to && !live.connected && now - this.lastStart >= 10 * 60000) {
         this.lastStart = now; await this.command('start');
       }
+      await this.upgradeIdleHelper(live, minute, win, now);
       const history = this.readHistory();
       const idOf = r => createHash('sha256').update(JSON.stringify(r)).digest('hex');
       const stored = this.a.state(), prior = stored.roomSeen;

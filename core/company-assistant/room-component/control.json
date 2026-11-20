@@ -1,15 +1,15 @@
 {
   "app": "mishu-terminator",
-  "version": "2.1.3",
+  "version": "2.1.4",
   "shell": 1,
-  "date": "2026-11-16",
+  "date": "2026-11-20",
   "notes": [
-    "首选被抢后重载页面换下一间；状态文件占用重试；支持按园区提前天数"
+    "抢订提速：等列表再判、被占即换、开抢前备好候选、记录预定接口"
   ],
   "code": {
-    "file": "msz-code-2.1.3.zip",
-    "size": 73209,
-    "sha256": "80e93dbc11543ba1d6d502dac2e7037f6463e25bdd280997be61711cb203f6de"
+    "file": "msz-code-2.1.4.zip",
+    "size": 78690,
+    "sha256": "fc06e8773d2fa637d5284a5eb12f640ca7f17b126fc3cde52cecc58b066f37d9"
   },
-  "signature": "06159b42b0cdf6188a7bedf8c7d6fccea6800c4dc35c8a70ae49149bdfd63044da2c53206074faeac2feeebe9eded9ce04701039fc7c18fbf73bd917f316c708"
+  "signature": "3626b9ade7619e0c6ada94ed3696e777c2d80a2036c8342b091413e8c1e48600bc55d20025d4f425a39c4b30f19480322d49d49774fe84c4de4236355ad49209"
 }

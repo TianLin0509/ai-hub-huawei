@@ -1,5 +1,14 @@
 # Secretary control component
 
+2026-11-20: current signed control package is **2.1.4** (built by
+`scripts/build-room-control.py` from the 2.1.3 base plus readable
+`engine.py`/`jobs.py`/`hub_control.py`). It waits for the room list instead of a
+single fixed-delay check, stops clicking a room once it is reported taken,
+pre-arms up to two backup rooms in extra tabs (never submitted before the
+primary is taken), logs booking API responses, and keeps the 2.1.4 overlay of
+the 11-16 detection fixes. Hub replaces an idle older helper automatically
+outside the opening window. See docs/company-room-page.md (2026-11-20).
+
 This is the meeting-room component embedded in the company edition of Hub.
 2026-11-16: the current signed control package is **2.1.3**. It reloads the
 document after a failed booking before selecting another room, recognizes both

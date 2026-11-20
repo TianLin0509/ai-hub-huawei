@@ -12,6 +12,7 @@ import math
 import os
 import threading
 import time
+from urllib.parse import urlparse
 from datetime import datetime, timedelta
 
 from . import config as C
@@ -20,6 +21,10 @@ from .clock import wait_until
 PROFILE_LOCK = threading.Lock()  # 浏览器资料夹同一时刻只能被一个浏览器用
 
 TAKEN_WORDS = ("冲突", "已被预定", "已被预订", "已被占用")
+ROOM_LIST_WAIT = 25.0  # 弹窗里等会议室列表出现的上限（秒）
+# 只记录预定类接口：路径里排除查询、用户信息与埋点，正文截短，只写本机日志。
+BOOKING_API_SKIP = ("rooms:search", "users:batchGet", "/users/", "subareas", "/areas/", "system-configs",
+                    "timezones", "cacheArea", "permission", "menu")
 
 JS_PAGE_STATE = """() => {
   const i = document.querySelector('input.ev_textField_input');
@@ -277,6 +282,10 @@ class LoginRequired(Exception):
     pass
 
 
+class BackupLate(Exception):
+    """预备候选到了截止时刻还没备好：放弃这一间，首选照常提交。"""
+
+
 def _short(e):
     s = str(e).strip().splitlines()
     return s[0][:160] if s else type(e).__name__
@@ -304,11 +313,22 @@ class Booker:
         os.makedirs(C.path("screenshots"), exist_ok=True)
 
     # ---------- 基础 ----------
+    def _check_deadline(self):
+        d = getattr(self, "deadline", None)
+        if d is not None and time.time() > d:
+            raise BackupLate("离开放时刻太近")
+
+    def _cap(self, ms):
+        """有截止时刻（预备候选）时，把浏览器等待上限压到截止前。"""
+        d = getattr(self, "deadline", None)
+        return ms if d is None else max(1000, min(ms, int((d - time.time()) * 1000)))
+
     def sleep(self, s):
         end = time.time() + s * self.factor
         while True:
             if self.stop.is_set():
                 raise StopRequested()
+            self._check_deadline()
             left = end - time.time()
             if left <= 0:
                 return
@@ -377,6 +397,7 @@ class Booker:
             raise RuntimeError(f"找不到可用的浏览器（Edge、Chrome 都没启动成功）：{_short(last)}")
         self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
         self.page.set_default_timeout(15000)
+        self.watch_booking_api(self.page)
 
     def close(self):
         for fn in (lambda: self.ctx and self.ctx.close(), lambda: self.pw and self.pw.stop()):
@@ -396,6 +417,7 @@ class Booker:
         while time.time() < deadline:
             if self.stop.is_set():
                 raise StopRequested()
+            self._check_deadline()
             try:
                 st = self.page.evaluate(JS_PAGE_STATE)
             except Exception:
@@ -421,8 +443,8 @@ class Booker:
             self.calibrated = False
             ok, why = self.wait_for_form(timeout=15)
         else:
-            self.page.goto(self.url, wait_until="domcontentloaded", timeout=60000)
-            ok, why = self.wait_for_form()
+            self.page.goto(self.url, wait_until="domcontentloaded", timeout=self._cap(60000))
+            ok, why = self.wait_for_form(timeout=self._cap(45000) / 1000)
         if not ok:
             self.shot("login_required")
             raise LoginRequired(why)
@@ -465,6 +487,43 @@ class Booker:
         if not self.page.evaluate(JS_CLICK_DATE_TAB, date_slash):
             self.warn(f"会议室弹窗里没找到日期 {date_slash} 的标签，按弹窗默认日期继续")
         self.sleep(2)
+        self.wait_room_list(date_slash)
+
+    def wait_room_list(self, date_slash, timeout=ROOM_LIST_WAIT):
+        """等到优先列表里至少一间出现在弹窗里再去判断空闲。
+
+        2026-11-19、11-20 两天 11:59 高峰时，固定等 6 秒后看一眼就判「没找到」，
+        四间全部误判，12:00 没有提交（同一弹窗 12:12 再开 0.3 秒就出列表）。
+        这里改为每 0.3 秒看一次，过半时重点一次日期标签让页面重新查询。
+        返回等待秒数；超时返回 None，由后续逐间检查给出 missing 原因。
+        """
+        rooms = [r for r in self.cfg["优先会议室"] if r]
+        if not rooms:
+            return 0.0
+        t0 = time.monotonic()
+        nudged = False
+        while True:
+            if self.stop.is_set():
+                raise StopRequested()
+            try:
+                if any(self.page.evaluate(JS_ROOM_Y, r) is not None for r in rooms):
+                    waited = time.monotonic() - t0
+                    if waited >= 0.5:
+                        self.log(f"会议室列表加载较慢，多等了 {waited:.1f} 秒才出现")
+                    return waited
+            except Exception:
+                pass  # 页面正在重绘
+            waited = time.monotonic() - t0
+            if waited >= timeout:
+                self.warn(f"等了 {timeout:.0f} 秒，弹窗里仍没出现优先列表中的会议室")
+                return None
+            if not nudged and waited >= timeout / 2:
+                nudged = True
+                try:
+                    self.page.evaluate(JS_CLICK_DATE_TAB, date_slash)
+                except Exception:
+                    pass
+            self.sleep_real(0.3)
 
     def _calibrate(self, y):
         """找出「网格起始时间」（默认 8:30）那一格的 X 坐标和格宽。
@@ -590,6 +649,49 @@ class Booker:
                 self.log_room_diagnostic(room, st, date_slash)
         return None
 
+    def watch_booking_api(self, page):
+        """把预定类接口的返回（状态码与正文前 200 字）写进本机运行日志，用来弄清开抢那一刻服务器怎么判。"""
+        def on_response(r):
+            try:
+                if r.request.method != "POST" or "/meetingroom/" not in r.url:
+                    return
+                if any(k in r.url for k in BOOKING_API_SKIP):
+                    return
+                try:
+                    body = " ".join(r.text().split())[:200]
+                except Exception:
+                    body = ""
+                t = self.clock.now() if self.clock else datetime.now()
+                path = urlparse(r.url).path[-80:]
+                self.log(f"[预定接口] {path} → HTTP {r.status} {body}（收到时约 {t:%H:%M:%S}.{t.microsecond // 1000:03d}）")
+            except Exception:
+                pass
+        page.on("response", on_response)
+
+    def arm_backup(self, date_slash, exclude, deadline=None):
+        """同一浏览器另开标签页，填好表、选好下一间空闲会议室但不提交。返回 (标签页, 会议室) 或 None。
+
+        首选被占时直接在这个标签页点「预定」，不再走「重载页面→填表→开弹窗」那约 15–30 秒。
+        """
+        main = self.page
+        self.deadline = deadline  # time.time() 口径；到点抛 BackupLate，首选不受影响
+        page = self.ctx.new_page()
+        page.set_default_timeout(self._cap(15000))
+        self.watch_booking_api(page)
+        self.page = page
+        room = None
+        try:
+            room = self.prepare(date_slash, exclude=exclude)
+        finally:
+            self.page = main
+            self.deadline = None
+            if room is None:
+                try:
+                    page.close()
+                except Exception:
+                    pass
+        return (page, room) if room else None
+
     def selection_failure(self):
         checks = getattr(self, "room_checks", [])
         if checks and all(state == "taken" for _, state in checks):
@@ -680,25 +782,44 @@ class Booker:
         """等到 open_at（服务器时钟）后连续点「预定」。返回 (结果, 文案)。
         结果：success / taken / fail / unknown
         """
+        try:
+            self.page.bring_to_front()  # 新开的候选标签页会抢到前台；提交页放回前台免得被节流
+        except Exception:
+            pass
         base = self.page.evaluate(JS_VISIBLE_TEXTS)
         if open_at is not None and self.clock.now() < open_at:
             self.log(f"已就绪，等待开放时刻 {open_at:%H:%M:%S}")
             if not wait_until(self.clock, open_at, self.stop):
                 raise StopRequested()
-        last_err, gone = None, False
+        last_err, gone, silent = None, False, False
         for attempt in range(1, max_retries + 1):
             clicked = self.page.evaluate(JS_CLICK_BOOK)
             t = self.clock.now()
             self.log(f"第 {attempt} 次点「预定」{'' if clicked else '（没找到按钮）'}  服务器时间 {t:%H:%M:%S}.{t.microsecond // 1000:03d}")
-            self.sleep_real(0.5)
-            st = self.page.evaluate(JS_RESULT, base)
-            self.shot(f"grab_attempt_{tag}_{attempt}")
+            # 原来固定等 0.5 秒再看结果；改为每 60 毫秒看一次、最多仍等 0.5 秒，结果一出来就往下走。
+            seen_until = time.monotonic() + 0.5
+            while True:
+                st = self.page.evaluate(JS_RESULT, base)
+                if st["s"] != "unknown" or time.monotonic() >= seen_until:
+                    break
+                self.sleep_real(0.06)
             if st["s"] == "success":
                 self.shot(f"grab_success_{tag}")
                 return "success", st["m"]
+            self.shot(f"grab_attempt_{tag}_{attempt}")
             if st["s"] == "error":
                 last_err = st["m"]
                 self.log(f"页面提示：{last_err}", "warn")
+                if any(w in last_err for w in TAKEN_WORDS):
+                    if silent:
+                        # 前面某次点击 0.5 秒内没回音、之后才说「已被预定」：可能正是自己那次订上了。
+                        # 不换下一间，免得一人订两间；交给人工核验。
+                        self.shot(f"grab_final_{tag}")
+                        return "unknown", f"前一次点击没等到结果，随后提示「{last_err}」，可能已是自己订上，未再换房，请到 WeLink 核对"
+                    # 被别人订走是终局：同一间再点只会得到同样提示（11-12、11-16 各白点 4 次、约 3 秒），立即换下一间。
+                    break
+            elif clicked:
+                silent = True
             if not clicked and not self.page.evaluate(JS_HAS_BOOK_BUTTON):
                 gone = True
                 break

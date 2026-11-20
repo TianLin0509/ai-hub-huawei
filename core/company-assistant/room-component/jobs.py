@@ -103,21 +103,29 @@ class Runner:
                 self.phase("prepare", "bad", note)
                 res.update(status=status, note=note)
                 return self._finish(res, td)
-            lead = s["提前填表秒数"]
+            lead = self.lead_seconds()
             margin = (open_at - self.clock.now()).total_seconds() if open_at else None
             msg = f"已选好 {room}，用时 {prep_s:.0f} 秒"
             if margin is not None and margin < 0 and not test:
                 self.log(f"准备完成时已过开放时刻 {-margin:.1f} 秒：提前量 {lead} 秒不够，建议调大", "warn")
                 notes.append(f"准备晚了 {-margin:.0f} 秒")
             self.phase("prepare", "ok", msg)
+            armed = [(b.page, room)] + self._arm_backups(b, date_slash, room, open_at, test)
+            if len(armed) > 1:
+                names = "、".join(r for _, r in armed)
+                self.log(f"已备好 {len(armed)} 间（{names}）：首选被占时立即提交下一间", "ok")
+                self.phase("prepare", "ok", f"已备好 {len(armed)} 间：{names}")
             if test:
                 self.phase("submit", "skip", "测试模式，不提交")
-                res.update(status="测试", room=room, note=("；".join(b.warnings) or f"填表用时 {prep_s:.0f} 秒，没有异常"))
+                done = f"备好 {len(armed)} 间（{'、'.join(r for _, r in armed)}），填表用时 {prep_s:.0f} 秒"
+                res.update(status="测试", room=room, note=("；".join(b.warnings) or f"{done}，没有异常"))
                 return self._finish(res, td)
 
             tried = []
             deadline = (open_at or self.clock.now()) + timedelta(minutes=3)
             rounds = 0
+            queue = armed[1:]
+            b.page = armed[0][0]
             while True:
                 rounds += 1
                 self.phase("submit", "run", f"提交中：{room}")
@@ -137,11 +145,17 @@ class Runner:
                 self.log(f"{room} 没抢到：{text}", "warn")
                 if outcome == "taken":
                     tried.append(room)
-                if not s.get("抢不到换下一间", True) or self.clock.now() > deadline or rounds >= 4:
+                if not s.get("抢不到换下一间", True) or self.clock.now() > deadline or rounds >= 3 + len(armed):
                     res.update(status="失败", room=None)
                     notes.append(text)
                     self.phase("submit", "bad", f"没抢到：{text}")
                     break
+                # 只有明确「被别人订走」才立即换已备好的候选；其他失败可能其实已订上，走原来的重载核对路径。
+                if queue and outcome == "taken":
+                    b.page, room = queue.pop(0)
+                    self.log(f"立即提交已备好的下一间：{room}")
+                    self.phase("submit", "run", f"首选没抢到，立即提交已备好的 {room}")
+                    continue
                 self.phase("submit", "run", "首选没抢到，重新打开页面换下一间…")
                 nxt = b.prepare(date_slash, exclude=tried, retry=True)
                 if nxt is None:
@@ -171,6 +185,40 @@ class Runner:
         finally:
             b.close()
 
+    def backup_count(self):
+        """开抢前在其他标签页预先备好的候选间数（首选之外），默认 2，0 表示关闭。"""
+        n = self.cfg["抢订设置"].get("预备候选间数", 2)
+        return n if type(n) is int and 0 <= n <= 3 else 2
+
+    def lead_seconds(self):
+        """开始填表的提前量：每多备一间约多花 25–35 秒，保证首选永远先备好。"""
+        lead = int(self.cfg["抢订设置"]["提前填表秒数"])
+        extra = max(0, min(self.backup_count(), len(self.cfg["优先会议室"]) - 1))
+        return max(lead, 60 + 35 * extra)
+
+    def _arm_backups(self, b, date_slash, first, open_at, test):
+        armed, used = [], [first]
+        for _ in range(self.backup_count()):
+            deadline = None
+            if not test:
+                left = (open_at - self.clock.now()).total_seconds() if open_at else 0
+                if left < 40:
+                    self.log("离开放时刻不足 40 秒，不再预备更多候选，首选照常提交")
+                    break
+                deadline = time.time() + left - 5  # 开放前 5 秒必须收手
+            try:
+                got = b.arm_backup(date_slash, used, deadline)
+            except StopRequested:
+                raise
+            except Exception as e:  # 含候选页登录异常、超时：只放弃候选，首选照常提交
+                self.log(f"预备候选没做成（{_short(e)}），不影响首选", "warn")
+                break
+            if not got:
+                break
+            armed.append(got)
+            used.append(got[1])
+        return armed
+
     def _finish(self, res, td):
         C.add_history(res["date"], td, res["status"], res["room"], res.get("note", ""))
         level = "ok" if res["status"] in ("成功", "测试") else "bad"
@@ -194,7 +242,7 @@ class Runner:
             target = open_at.date() + timedelta(weeks=1)
             pre_min = int(s.get("登录预检提前分钟", 15) or 0)
             precheck_at = open_at - timedelta(minutes=pre_min)
-            prepare_at = open_at - timedelta(seconds=int(s["提前填表秒数"]))
+            prepare_at = open_at - timedelta(seconds=self.lead_seconds())
             weekday_ok = target.isoweekday() in self.cfg.get("抢订日", list(range(1, 8)))
             dup = C.already_booked(target.strftime("%Y-%m-%d"), self.cfg)
             if on_schedule:

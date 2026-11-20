@@ -97,6 +97,8 @@ marked.use({
     },
   },
 });
+// 中文旁的 **加粗：** 能闭合（卡片、群聊、文件预览共用这个 marked 单例）。
+require('./markdown-cjk-emphasis.js').installCjkEmphasis(marked);
 const { installScrollDebug } = require('./scroll-debug.js');
 const { createMemoPanel } = require('./memo-panel.js');
 const { installSessionFirstNavigation } = require('./session-first-navigation.js');

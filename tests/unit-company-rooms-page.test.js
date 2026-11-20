@@ -33,9 +33,9 @@ function rig(t) {
   return { root, now, assistant, rooms, write };
 }
 
-test('signed room adapter is version 2.1.3 and the shipped payload matches its hash', () => {
+test('signed room adapter is version 2.1.4 and the shipped payload matches its hash', () => {
   const manifest = component.manifest(path.join(bundle, 'control.json'));
-  assert.equal(manifest.version, '2.1.3');
+  assert.equal(manifest.version, '2.1.4');
   assert.ok(component.verified(path.join(bundle, manifest.code.file), manifest.code));
 });
 

@@ -1,11 +1,14 @@
 'use strict';
 
+const { installCjkEmphasis } = require('./markdown-cjk-emphasis.js');
+
 const escapeHtml = value => String(value || '').replace(/[&<>"']/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 // Card bodies show image destinations as links. Keep this per parse so file
 // previews and other Markdown surfaces still use the normal image renderer.
 function parseCardMarkdown(marked, text) {
+  installCjkEmphasis(marked);
   return marked.parse(text, {
     breaks: true,
     gfm: true,
