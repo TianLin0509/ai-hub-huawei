@@ -15,6 +15,9 @@ const ENGINE_WAIT = { codeagent: '20–30 秒', claude: '10–20 秒', codex: '2
 const state = { open: false };
 
 const STYLE = `
+/* 底栏按钮在任何页面都能点：面板要压过整页视图（公司助理、会议、论坛、个人页等 z-index 880）、左栏（1000）和底栏（1100），
+   低于各类对话框（5000 起）。以前沿用侧栏答疑的 820，在这些页面上点了会开在页面背后、看着像没反应（2026-11-20 用户反馈）。 */
+.ask.help-ask-panel { z-index:1150; }
 #sidebar-strip .strip-help-ask { display:inline-flex; align-items:center; gap:3px; flex:none; height:22px; padding:0 7px 0 6px; margin-right:4px; border:1px solid var(--border-subtle, #d7dde6); border-radius:11px; background:transparent; color:var(--brand, #3478f6); font:500 11px/1 var(--font-sans, 'Microsoft YaHei', sans-serif); white-space:nowrap; cursor:pointer; }
 #sidebar-strip .strip-help-ask svg { width:12px; height:12px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
 #sidebar-strip .strip-help-ask:hover, #sidebar-strip .strip-help-ask[aria-expanded='true'] { background:var(--brand-tint, #eaf2ff); border-color:var(--brand, #3478f6); }

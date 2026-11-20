@@ -235,3 +235,13 @@ test('--help 没探测到 --tools（关不掉工具）时，这家引擎不用�
   assert.equal(readOnlyCapable(CLAUDE_HELP), true);
   assert.equal(readOnlyCapable(CODEAGENT_HELP), true);
 });
+
+test('底栏「问问 Hub」在整页视图上也看得见：面板层级高于整页视图、左栏和底栏，低于对话框（2026-11-20 反馈：只有主页能弹出）', () => {
+  const ui = fs.readFileSync(path.join(ROOT, 'renderer/help-ask-ui.js'), 'utf8');
+  const z = Number(/\.ask\.help-ask-panel\s*\{\s*z-index:(\d+)/.exec(ui)?.[1]);
+  const css = fs.readdirSync(path.join(ROOT, 'renderer/styles')).filter(f => f.endsWith('.css')).map(f => fs.readFileSync(path.join(ROOT, 'renderer/styles', f), 'utf8')).join('\n');
+  const pageZ = [...css.matchAll(/\.(?:company-[\w-]+-page|assistant-page|avatar-page|codeagent-accounts-page|profile-page)\s*\{[^}]*z-index:\s*(\d+)/g)].map(m => Number(m[1]));
+  assert.ok(pageZ.length >= 5, '找到整页视图的层级');
+  assert.ok(z > Math.max(...pageZ, 1000, 1100), `面板 ${z} 要高于整页视图 ${Math.max(...pageZ)}、左栏 1000、底栏 1100`);
+  assert.ok(z < 5000, '低于对话框');
+});

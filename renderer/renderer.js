@@ -4461,6 +4461,14 @@ function recoverVisibleActiveTerminalSurface() {
   return true;
 }
 
+function sessionStageCovered() {
+  const stage = document.getElementById('terminal-panel');
+  if (!stage) return false;
+  const r = stage.getBoundingClientRect();
+  if (!r.width || !r.height) return false;
+  const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+  return !!hit && !stage.contains(hit) && !!hit.closest('[class*="-page"]');
+}
 document.addEventListener('click', (e) => {
   const btn = e.target.closest('#btn-backstage');
   if (btn && !btn.hidden && sessionSplit?.isBackstage()) {
@@ -4472,6 +4480,15 @@ document.addEventListener('click', (e) => {
     return;
   }
   if (btn && !btn.hidden && activeSessionId && !currentAppToolbarView()) {
+    // 会话区被公司助理、会议、论坛、个人页这类整页视图盖着时，点「后台」以前只在背后切了视图、看着没反应（2026-11-20 按钮探针）：
+    // 先把会话切回前台，用户马上看到切换结果。
+    if (sessionStageCovered()) {
+      const id = activeSessionId;
+      // 各整页视图都在 window 上登记了 __xxxHide（互相切换时用的就是它们）；会话自身不一定关得掉公司页，这里全部关掉。
+      for (const key of Object.keys(window)) { if (/^__\w+Hide$/.test(key) && typeof window[key] === 'function') { try { window[key](); } catch { /* 页面已关 */ } } }
+      void Promise.resolve(selectSession(id)).then(() => { if (activeSessionId === id && currentView !== 'pty') { applyViewMode('pty'); noteBackstageOpen(id); rememberBackstageLayoutForSession(id, 'pty'); } syncBackstageButton(); }).catch(() => {});
+      return;
+    }
     applyViewMode(currentView === 'pty' ? 'card' : 'pty');
     if (currentView === 'pty') noteBackstageOpen(activeSessionId);
     rememberBackstageLayoutForSession(activeSessionId, currentView === 'pty' ? 'pty' : 'card');
