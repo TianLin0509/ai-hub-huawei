@@ -694,7 +694,7 @@ test('install dialog wiring: one click installs, progress events re-render, succ
   assert.match(source, /ipcRenderer\.on\('cli-tools:state'/);
   assert.match(source, /data-cli-install="\$\{kind\}"/);
   const run = source.slice(source.indexOf('async function runInstall'), source.indexOf('function showInstall'));
-  assert.ok(run.indexOf('await refreshInstall()') > run.indexOf("invoke('cli-tools:install'"), 're-detect after installing');
+  assert.ok(run.search(/await refreshInstall\(/) > run.indexOf("invoke('cli-tools:install'"), 're-detect after installing');
   for (const kind of ['deepseek-acp', 'claude']) assert.ok(source.includes(kind === 'claude' ? 'heading(`安装 ${LABELS[kind]}`' : "heading('安装 DSH 运行环境'"));
   const ipc = fs.readFileSync(path.join(__dirname, '..', 'main', 'cli-tools-ipc.js'), 'utf8');
   for (const channel of ['cli-tools:state', 'cli-tools:install', 'cli-tools:cancel']) assert.ok(ipc.includes(`'${channel}'`), channel);

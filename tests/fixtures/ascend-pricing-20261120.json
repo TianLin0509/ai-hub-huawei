@@ -1,0 +1,18 @@
+{
+  "success": true,
+  "data": [
+    { "model_name": "qwen3.8-27b", "quota_type": 0, "model_ratio": 0, "model_price": 0, "owner_by": "", "completion_ratio": 0, "enable_groups": ["max", "free", "default", "vip"], "supported_endpoint_types": ["openai"], "tags": "多模态,256K上下文", "description": "- 上下文256K\n- 支持多模态图片理解", "vendor_id": 3 },
+    { "model_name": "qwen-aw-35b", "quota_type": 0, "model_ratio": 0, "model_price": 0, "owner_by": "", "completion_ratio": 0, "enable_groups": ["default", "free"], "supported_endpoint_types": ["openai"], "tags": "", "description": "", "vendor_id": 3 },
+    { "model_name": "qwen3.8-flash-next", "quota_type": 0, "model_ratio": 0, "model_price": 0, "owner_by": "", "completion_ratio": 0, "enable_groups": ["default"], "supported_endpoint_types": ["openai"], "tags": "", "description": "", "vendor_id": 3 },
+    { "model_name": "platform-tts", "quota_type": 0, "model_ratio": 0, "model_price": 0, "owner_by": "", "completion_ratio": 0, "enable_groups": ["default", "vip"], "supported_endpoint_types": ["openai"], "tags": "", "description": "" },
+    { "model_name": "minimax-h3", "quota_type": 0, "model_ratio": 0, "model_price": 0, "owner_by": "", "completion_ratio": 0, "enable_groups": ["vip", "default"], "supported_endpoint_types": ["openai"], "tags": "文生视频,图生视频", "description": "使用指南wiki：<内部链接已略>" },
+    { "model_name": "qwen-image-2.1", "quota_type": 0, "model_ratio": 0, "model_price": 0, "owner_by": "", "completion_ratio": 0, "enable_groups": ["vip", "default"], "supported_endpoint_types": ["image-generation", "openai"], "tags": "文生图片,图生图片", "description": "使用指南wiki：<内部链接已略>" },
+    { "model_name": "deepseek-v4.1-flash", "quota_type": 0, "model_ratio": 0, "model_price": 0, "owner_by": "", "completion_ratio": 0, "enable_groups": ["vip", "max", "free"], "supported_endpoint_types": ["openai"], "tags": "", "description": "上下文256K，支持多模态", "vendor_id": 4 },
+    { "model_name": "glm-5.3-flash", "quota_type": 0, "model_ratio": 0, "model_price": 0, "owner_by": "", "completion_ratio": 0, "enable_groups": ["vip", "free", "max"], "supported_endpoint_types": ["anthropic", "openai"], "tags": "", "description": "", "vendor_id": 1 }
+  ],
+  "vendors": [{ "id": 1, "name": "智谱" }, { "id": 3, "name": "千问" }, { "id": 4, "name": "DeepSeek" }],
+  "group_ratio": { "default": 1, "free": 0.01, "max": 10 },
+  "usable_group": { "default": "默认分组，不保障SLA", "free": "免费分组，个人资料中签到可无限使用，不保障SLA", "max": "余额杀手，模型响应速度快" },
+  "supported_endpoint": { "openai": { "path": "/v1/chat/completions", "method": "POST" }, "anthropic": { "path": "/v1/messages", "method": "POST" }, "image-generation": { "path": "/v1/images/generations", "method": "POST" } },
+  "auto_groups": []
+}

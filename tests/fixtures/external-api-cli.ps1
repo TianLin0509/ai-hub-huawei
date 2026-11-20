@@ -1,6 +1,11 @@
 # API launch probe: no provider connection and no credential body in evidence.
 param([string]$Kind, [Parameter(ValueFromRemainingArguments=$true)][string[]]$Rest)
 $ErrorActionPreference = 'Stop'
+# 定位中心试跑（--version）只答版本、不记启动记录：测试数的是会话启动次数（2026-11-21）。
+if ($Rest -contains '--version' -or $Rest -contains '-v') {
+  if ($Kind -eq 'codex') { Write-Output 'codex-cli 0.200.0' } else { Write-Output '2.1.999 (Claude Code)' }
+  exit 0
+}
 $model = ''
 for ($i = 0; $i -lt $Rest.Count - 1; $i++) {
   if ($Rest[$i] -eq '--model' -or $Rest[$i] -eq '-m') { $model = $Rest[$i + 1] }

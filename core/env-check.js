@@ -72,6 +72,52 @@ function entry(id, name, area, status, detail, extra = {}) {
 }
 const RECHECK = { label: '重新检测', act: 'recheck' };
 
+// ---------- 定位中心（2026-11-20）----------
+// 有 ctx.locator（主进程注入 core/harness-locator）时，各 CLI 那一行用定位中心的结论：extra.locate 放完整结论，cause 放 reason，fixes 放 fixes。
+// 打开体检就重查一次（试跑最多约 7 秒）；没查完先给缓存里上次的结论，查完经 harness:changed 推给界面。都拿不到时回到原来的检测。
+const LOCATE_WAIT_MS = 7000;
+// 一次体检只跑一轮（2026-11-21）：第一行要结论时调一次 locateAll（各 CLI 并发试跑），其余行都用这一轮的结果，不再各自重查。
+// 轮次挂在 ctx.locateRound 上，runEnvCheck 每次新开一轮；不在这一轮里的 CLI（没启用的）才单独查一次。
+function locateRound(ctx) {
+  if (!ctx.locateRound) ctx.locateRound = {};
+  const round = ctx.locateRound;
+  // fresh（2026-11-21）：「重新体检」传 true，真重测；打开体检传 false，2 分钟内的结论直接复用。没传（老调用方）按 true。
+  if (!round.all) round.all = Promise.resolve().then(() => ctx.locator.locateAll({ fresh: ctx.locateFresh !== false, reason: 'open' })).catch(() => ({}));
+  return round;
+}
+async function locateFor(ctx, id) {
+  const locator = ctx.locator;
+  if (!locator) return null;
+  const round = locateRound(ctx);
+  let r = null;
+  try {
+    r = await withTimeout(round.all.then(all => {
+      if (all && all[id]) return all[id];
+      if (!round.single) round.single = new Map();
+      if (!round.single.has(id)) round.single.set(id, locator.locate(id, { fresh: ctx.locateFresh !== false, reason: 'open' }));
+      return round.single.get(id);
+    }), LOCATE_WAIT_MS, () => null);
+  } catch { r = null; }
+  return r || locator.peek(id) || null;
+}
+function locateRow(id, name, area, r, { notFoundStatus = STATUS.warn, notFoundDetail, extraFixes = [] } = {}) {
+  const c = r.chosen;
+  const rt = (c && c.runtime) || {};
+  const nodeNote = rt.node && rt.nodeSource ? `（Node ${rt.nodeVersion || '?'}，${rt.nodeSource}）` : '';
+  const fixes = [...(r.fixes || []), ...extraFixes.filter(f => !(r.fixes || []).some(x => x.act === f.act && x.url === f.url))];
+  const base = { installed: r.verdict !== 'not-found', locate: r, extra: { locate: r } };
+  if (r.verdict === 'ok') return entry(id, name, area, STATUS.ok, `${c.version ? 'v' + c.version + ' · ' : ''}${c.path}${c.source === 'hub-managed' ? '（Hub 一键安装的）' : ''}${nodeNote}`, base);
+  const steps = {
+    unavailable: ['稍后点「重新检测」；Hub 也会在后台每 10 分钟再试一次'],
+    'too-old': ['按旁边的按钮升级或安装新版', '装好后点「重新检测」'],
+    broken: ['按旁边的按钮修复，或点「手动选择程序…」指定一个能用的', '修好后点「重新检测」'],
+    'not-found': ['没装过就按旁边的按钮安装', '装在别处就点「手动选择程序…」指定程序位置', '装好后点「重新检测」，不用重启 Hub'],
+  }[r.verdict] || ['稍后点「重新检测」'];
+  const status = r.verdict === 'not-found' ? notFoundStatus : STATUS.warn;
+  const detail = r.verdict === 'not-found' ? (notFoundDetail || r.reason) : r.reason;
+  return entry(id, name, area, status, detail, { ...base, cause: r.reason, steps, fixes, raw: c && c.reason && c.reason !== r.reason ? c.reason : '' });
+}
+
 // ---------- 各项检测 ----------
 // ctx：主进程注入的依赖，见 main/ipc/env-check-handlers.js。都可以缺省，缺了就跳过对应项。
 
@@ -162,6 +208,13 @@ function probeList(ctx) {
 
   if (kindAllowed('codeagent')) {
     add('codeagent', 'CodeAgent', 'codeagent', async () => {
+      const located = await locateFor(ctx, 'codeagent');
+      if (located) {
+        const check = ctx.codeagentVersionCheck || require('./codeagent-version-check');
+        const downloadFix = check.DOWNLOAD_PAGE ? [{ label: '打开下载页', act: 'open-url', url: check.DOWNLOAD_PAGE }] : [];
+        if (located.verdict === 'not-found' && !isCompany) return entry('codeagent', 'CodeAgent', 'codeagent', STATUS.off, '没装（只有公司电脑需要）', { installed: false, locate: located, extra: { locate: located } });
+        return locateRow('codeagent', 'CodeAgent', 'codeagent', located, { notFoundStatus: STATUS.bad, notFoundDetail: '没找到 CodeAgent', extraFixes: located.verdict === 'ok' ? [] : downloadFix });
+      }
       const configured = ctx.codeagentCommand ? ctx.codeagentCommand() : '';
       const found = (configured && require('./codeagent-config').commandFile(configured, env)) || setup.findCommand('codeagent', env, platform);
       const check = ctx.codeagentVersionCheck || require('./codeagent-version-check');
@@ -195,6 +248,8 @@ function probeList(ctx) {
   for (const [id, name, docs] of [['claude', 'Claude Code', 'https://code.claude.com/docs/en/setup'], ['codex', 'Codex', 'https://developers.openai.com/codex/cli/']]) {
     if (!kindAllowed(id)) continue;
     add(id, name, 'env-check', async () => {
+      const located = await locateFor(ctx, id);
+      if (located) return locateRow(id, name, 'env-check', located, { notFoundDetail: `没装（要用 ${name} 会话时再装）` });
       const found = setup.findCommand(id, env, platform);
       if (!found) {
         return entry(id, name, 'env-check', STATUS.warn, `没装（要用 ${name} 会话时再装）`, {
@@ -213,6 +268,13 @@ function probeList(ctx) {
   if (kindAllowed('deepseek-acp')) {
     add('dsh', 'DSH（DeepSeek 终端）', 'env-check', async () => {
       const NAME = 'DSH（DeepSeek 终端）';
+      const located = await locateFor(ctx, 'dsh');
+      if (located) {
+        const row = locateRow('dsh', NAME, 'env-check', located, { notFoundDetail: '没装（要用 DeepSeek · DSH 会话时再装）',
+          // 公司网络里 npm 默认源被代理挡（407）、内部源没有界面包：不引导装到全局 npm，只给 Hub 自管的一键补齐。
+          extraFixes: located.verdict === 'ok' || isCompany ? [] : [{ label: '装到我的全局 npm', act: 'dsh-install-global' }] });
+        return { ...row, dsh: { state: located.verdict === 'ok' ? 'ready' : located.reasonCode || located.verdict } };
+      }
       const config = ctx.getConfig ? ctx.getConfig() : {};
       const entryCfg = config?.acp?.providers?.['deepseek-acp'];
       const profile = require('./dsh-cli-profile');
@@ -261,6 +323,8 @@ function probeList(ctx) {
   if (kindAllowed('pi')) {
     add('pi', 'pi（终端编码 Agent）', 'env-check', async () => {
       const NAME = 'pi（终端编码 Agent）';
+      const located = await locateFor(ctx, 'pi');
+      if (located) return locateRow('pi', NAME, 'env-check', located, { notFoundDetail: '没装（要用 pi 会话时再装）' });
       const profile = require('./pi-cli-profile');
       const d = ctx.diagnosePi ? ctx.diagnosePi(env) : profile.diagnosePi(env);
       if (d.state === 'ready') return entry('pi', NAME, 'env-check', STATUS.ok, `v${d.version} · ${d.entryPath}${d.source === 'hub' ? '（Hub 一键安装的）' : ''}`);
@@ -330,6 +394,14 @@ function probeList(ctx) {
       if (!p.enabled && (s.state === 'stopped' || !s.state)) return entry('company-proxy', '公司模型反代', 'company-proxy', STATUS.off, '没有工具选「公司模型」，不需要启动');
       if (s.state === 'running') return entry('company-proxy', '公司模型反代', 'company-proxy', STATUS.ok, `已就绪${s.port ? ' · 本机端口 ' + s.port : ''}${s.mock ? '（模拟上游）' : ''}`);
       if (s.state === 'starting' || s.state === 'draining') return entry('company-proxy', '公司模型反代', 'company-proxy', STATUS.warn, s.message || '正在启动', { fixes: [RECHECK] });
+      if (s.state === 'not-ready' && s.code === 'PROFILE_INCOMPLETE' && (s.missing || []).includes('codeagentVersion')) {
+        // 缺的是 CodeAgent 本身（没装或读不到版本）：处理入口就放在这一行，装好或修好后一键重启反代。
+        return entry('company-proxy', '公司模型反代', 'company-proxy', STATUS.warn, s.message, {
+          cause: '公司模型要借用本机 CodeAgent 的登录和签名，反代没找到 CodeAgent，或读不到它的版本号。',
+          steps: ['看上面「CodeAgent」一行是否正常；没装就先装', '装在非默认位置时，到 CodeAgent 设置里填程序位置', '然后点「重新启动反代」'],
+          fixes: [{ label: '打开 CodeAgent 设置', act: 'open-codeagent' }, { label: '重新启动反代', act: 'proxy-restart' }, RECHECK], raw: s.code,
+        });
+      }
       if (s.state === 'not-ready') {
         return entry('company-proxy', '公司模型反代', 'company-proxy', STATUS.warn, s.message || '已启动，但公司上游还没准备好', {
           cause: '反代在跑，但连公司模型服务还没成功（首次签名初始化约 10–20 秒；区域选错或登录过期也会这样）。',
@@ -394,6 +466,15 @@ function probeList(ctx) {
       }
     });
   }
+  // Node.js 这一行的判断逻辑照旧（要看哪些 CLI 需要 Node），另带上定位中心的结论，界面据 extra.locate 出结论卡。
+  const nodeProbe = probes.find(p => p.id === 'node');
+  if (nodeProbe && ctx.locator) {
+    const legacy = nodeProbe.run;
+    nodeProbe.run = async () => {
+      const [row, located] = await Promise.all([legacy(), locateFor(ctx, 'node')]);
+      return located ? { ...row, locate: located, extra: { ...(row.extra || {}), locate: located } } : row;
+    };
+  }
   if (ctx.canary) {
     const required = new Set(['codeagent', 'codeagent-trust', 'codeagent-signer', 'company-model-config', 'company-proxy', 'attendance-domain', 'attendance-page', 'canary-pages', 'app-update', 'data-dir', 'disk']);
     return probes.filter(p => required.has(p.id));
@@ -417,6 +498,7 @@ async function readWelinkLogin(assistant) {
 // 各项并行跑、各自限时；一项抛错或超时只影响它自己。
 async function runEnvCheck(ctx = {}, { timeoutMs = ITEM_TIMEOUT_MS, now = Date.now } = {}) {
   const startedAt = now();
+  if (ctx.locator) ctx = { ...ctx, locateRound: {} };
   const probes = probeList(ctx);
   const items = await Promise.all(probes.map(async probe => {
     const t0 = now();

@@ -15,7 +15,14 @@ function openTerminal(command,args,env){
 }
 // The official Claude installer puts claude.exe in ~/.local/bin; a Hub started before the
 // install may not have that folder on PATH yet. PATH wins when it already has claude.exe.
+// 2026-11-20 起先问定位中心（core/harness-locator）：和体检、建会话同一份结论；npm 装的 claude.cmd 转发到包里的 claude.exe 时直接用那个 exe。
+// 账号页用 execFile 直接起它（不经命令行壳），所以只认原生程序；定位中心没有原生的才走下面原来的查找。
 function resolveClaudeExe(env){
+ try{
+  for(const c of require('./harness-locator').quickAll('claude',{env})){
+   if(c.form&&c.form.kind==='native')return c.form.exe;
+  }
+ }catch(error){console.warn('[account] 定位中心不可用：'+error.message);}
  const key=Object.keys(env).find(k=>k.toLowerCase()==='path')||'PATH';
  for(const dir of String(env[key]||'').split(path.delimiter).filter(Boolean)){const f=path.join(dir.replace(/^"|"$/g,''),'claude.exe');if(fs.existsSync(f))return f;}
  const local=path.join(env.USERPROFILE||os.homedir(),'.local','bin','claude.exe');

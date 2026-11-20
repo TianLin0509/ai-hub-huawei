@@ -30,20 +30,28 @@ function registerEnvCheckIpc(ipcMain, deps) {
     discoverAttendanceDomain: deps.discoverAttendanceDomain,
     probeAttendancePage: deps.probeAttendancePage,
     codeagentCommand: () => require('../../core/codeagent-config').resolveCodeAgentConfig(process.env).command,
+    // 定位中心（2026-11-20）：各 CLI 那一行用它的结论。主进程没建好时（老测试夹具）不传，回到原来的检测。
+    ...(deps.locator ? { locator: deps.locator() } : {}),
   });
 
-  async function run({ canary = false } = {}) {
+  // fresh：「重新体检」为 true（定位中心真重测），打开体检为 false（复用 2 分钟内的结论）；不传按 true。
+  async function run({ canary = false, fresh = true } = {}) {
     if (canary) return envCheck.runEnvCheck({ ...context(), canary: true });
-    // 连点「重新体检」时共用进行中的那一次。
-    if (running) return running;
-    running = envCheck.runEnvCheck(context()).then(result => {
+    fresh = fresh !== false;
+    // 连点「重新体检」时共用进行中的那一次；进行中的是复用缓存的那种、这次要真重测时，等它结束再重测一轮。
+    if (running && (!fresh || running.fresh)) return running;
+    if (running) await running.catch(() => {});
+    if (running && running.fresh) return running;
+    const job = envCheck.runEnvCheck({ ...context(), locateFresh: fresh }).then(result => {
       last = result;
       return { ok: true, ...result, features: require('../../core/feature-readiness').featureReadiness(result.items), report: envCheck.formatReport(result) };
-    }).catch(error => ({ ok: false, error: error.message })).finally(() => { running = null; });
-    return running;
+    }).catch(error => ({ ok: false, error: error.message })).finally(() => { if (running === job) running = null; });
+    job.fresh = fresh;
+    running = job;
+    return job;
   }
 
-  ipcMain.handle('env-check:run', () => run());
+  ipcMain.handle('env-check:run', (_event, request = {}) => run({ fresh: !request || request.fresh !== false }));
   ipcMain.handle('components:state', () => ({ doctor: doctorInstaller.snapshot() }));
   ipcMain.handle('components:doctor-install', async () => {
     if (!deps.assistant()?.ppt?.doctor) return { ok: false, error: '这个版本没有 PPT 联动' };
@@ -56,6 +64,17 @@ function registerEnvCheckIpc(ipcMain, deps) {
     const id = String(request.id || ''), act = String(request.act || '');
     const item = last?.items?.find(x => x.id === id) || null;
     try {
+      // 定位中心的修复动作（合同 v1：harness-pick / harness-clear-manual / harness-borrow-node / harness-repair）。返回最新的定位结论。
+      if (act.startsWith('harness-') && deps.locator) {
+        const locator = deps.locator();
+        const handlers = require('./harness-locator-handlers');
+        const target = String(request.target || request.harnessId || id);
+        const result = await handlers.applyFix(locator, { ...request, id: target, act }, { pick: handlers.makePick(locator), installTool: require('../../core/harness-locator').installTool });
+        if (!result) return { ok: true, canceled: true };
+        const ok = result.verdict === 'ok' && !result.repairError;
+        return { ok: result.reasonCode !== 'manual-path-failed' && !result.repairError, locate: result,
+          message: ok ? `${result.label} 能用了` : result.repairError ? `没补齐：${result.repairError}` : result.reason, ...(result.reasonCode === 'manual-path-failed' ? { error: result.reason } : {}) };
+      }
       if (act === 'welink-install') {
         const assistant = deps.assistant();
         if (!assistant) throw new Error('这个版本没有助理');

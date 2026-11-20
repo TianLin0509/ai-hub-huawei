@@ -269,3 +269,45 @@ test('审查回归：小群新来 @所有人，旧的 AI 结论失效；人数�
   await svc.maybeSizeGroups(NOW + 25 * 3600e3);
   assert.equal(calls, 2);
 });
+
+// 2026-11-21（rsi-j）：「已经回复了，等你回复还一直提醒」。群里用 WeLink「回复」引用那条 @我 的消息，
+// 真机是 CARD_MSG，content 里 cardContext.preMsg.messageID 指向被回复的那条（长整数）。
+const BIG = '89752925199499859';
+const quotedReply = (preId, body) => JSON.stringify({ cardContext: JSON.stringify({ replyMsg: { content: body } }).replace(/}$/, `,"preMsg":{"messageID":${preId},"content":"原话"}}`) });
+
+test('解析：回复卡片带出被回复消息的编号，长整数不丢精度', () => {
+  const raw = { chatInfo: [{ msgId: '1', sender: 'me', content: quotedReply(BIG, '好的我来看'), contentType: 'CARD_MSG', serverSendTime: NOW }] };
+  const [m] = D.messages(raw, { id: 'g', name: 'g', group: true }, 'me');
+  assert.equal(m.text, '好的我来看');
+  assert.equal(m.replyTo, BIG);
+  const plain = D.messages({ chatInfo: [{ msgId: '2', sender: 'x', content: '普通消息', contentType: 'TEXT_MSG', serverSendTime: NOW }] }, { id: 'g', name: 'g', group: true }, 'me');
+  assert.equal(plain[0].replyTo, '');
+});
+
+test('群里引用回复了那条 @我：算已回复，不再推送「等你回复」', () => {
+  const s = snap([['g', true, [['甲', '请确认材料', 300, { atMe: true, key: BIG, sourceId: 'msg:g:' + BIG }], ['乙', '别的话题', 299], ['我', '已确认，没问题', 290, { replyTo: BIG }]]]]);
+  const settings = { waitHours: 1, workdays: [0, 1, 2, 3, 4, 5, 6] };
+  const item = D.awaiting(s, settings, { now: NOW })[0];
+  assert.equal(item.level, 'settled');
+  assert.equal(item.judge, 'quoted-reply');
+  assert.equal(R.dueNotices({ snapshot: s, settings, now: NOW }).some(n => n.kind === 'awaiting-reply'), false);
+  // 引用回复的是别人的消息，不能替这条 @我 结案
+  const other = snap([['g', true, [['甲', '请确认材料', 300, { atMe: true }], ['乙', '我分享个消息', 299], ['我', '收到', 290, { replyTo: 'k1' }]]]]);
+  assert.notEqual(D.awaiting(other, {}, { now: NOW })[0].level, 'settled');
+});
+
+test('甲、乙先后 @我，我只引用回复了甲：甲结案不弹，乙仍弹（宁多提醒不漏）', () => {
+  const settings = { waitHours: 1, workdays: [0, 1, 2, 3, 4, 5, 6] };
+  const s = snap([['g', true, [['甲', '请确认材料', 300, { atMe: true, key: 'a1', sourceId: 'msg:g:a1' }], ['乙', '方案也帮忙看下', 295, { atMe: true, key: 'b1', sourceId: 'msg:g:b1' }],
+    ['我', '材料没问题', 290, { replyTo: 'a1' }]]]]);
+  const list = D.awaiting(s, settings, { now: NOW });
+  assert.equal(list.find(m => m.key === 'a1').level, 'settled');
+  assert.equal(list.find(m => m.key === 'b1').level, 'strong');
+  const pushed = R.dueNotices({ snapshot: s, settings, now: NOW }).filter(n => n.kind === 'awaiting-reply').map(n => n.detail.source);
+  assert.deepEqual(pushed, ['msg:g:b1']);
+});
+
+test('升级前缓存的旧消息行没有 replyTo 字段，也能从原始 content 认出引用回复', () => {
+  const s = snap([['g', true, [['甲', '请确认材料', 300, { atMe: true, key: BIG }], ['我', '好的我来看', 290, { content: quotedReply(BIG, '好的我来看') }]]]]);
+  assert.equal(D.awaiting(s, {}, { now: NOW })[0].level, 'settled');
+});

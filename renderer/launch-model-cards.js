@@ -13,6 +13,10 @@ function shortReason(status) {
   if (code === 'INITIALIZING') return { state: 'busy', text: '公司模型准备中' };
   if (code === 'ZONE_UNKNOWN') return { state: 'needs', text: '需要选择区域' };
   if (/^SIGNER_INIT/.test(code)) return { state: 'needs', text: '首次签名初始化未完成' };
+  // 缺的只是 CodeAgent（没装或读不到版本）时直说，不笼统写「上游信息不全」。
+  if (code === 'PROFILE_INCOMPLETE' && (status?.missing || []).includes('codeagentVersion')) {
+    return { state: 'needs', text: /没找到 CodeAgent/.test(String(status?.message || '')) ? '没找到 CodeAgent' : '读不到 CodeAgent 版本' };
+  }
   if (code === 'PROFILE_INCOMPLETE') return { state: 'needs', text: '公司上游信息不全' };
   return { state: 'needs', text: '公司上游还没准备好' };
 }

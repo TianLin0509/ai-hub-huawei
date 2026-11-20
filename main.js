@@ -2997,6 +2997,19 @@ try {
   toolDiscovery = handlers.createHubToolDiscovery({ dataDir: getHubDataDir(), onChanged: tool => sendToRenderer('tool-discovery:changed', { tool }) });
   handlers.registerToolDiscoveryIpc(ipcMain, toolDiscovery);
 } catch (error) { console.error('[tool-discovery] 自动发现未启动：', error.message); }
+// 定位中心（2026-11-20，HUB-H 第一期）：各 CLI 唯一的查找入口。启动时先给上次的结论（peek），1.5 秒后在后台逐个试跑；
+// 每 2 分钟只看路径在不在、每 10 分钟重读版本；结论变了推 harness:changed。CodeAgent 手动选的路径两边同步。
+try {
+  const harness = require('./core/harness-locator');
+  const KIND = { dsh: 'deepseek-acp', antigravity: 'gemini' };
+  const locator = harness.configure({ dataDir: getHubDataDir(), enabled: id => id === 'node' || require('./core/distribution').kindAllowed(KIND[id] || id) });
+  locator.onManual = (id, file) => {
+    if (id !== 'codeagent' || !toolDiscovery) return;
+    try { toolDiscovery.store.setChoice('codeagent', file); require('./core/codeagent-config').setDiscoveredCommand(file || ''); } catch (_) {}
+  };
+  require('./main/ipc/harness-locator-handlers').registerHarnessLocatorIpc(ipcMain, { locator, send: sendToRenderer, installTool: harness.installTool });
+  locator.start();
+} catch (error) { console.error('[harness-locator] 定位中心未启动：', error.message); }
 // CodeAgent 一键安装 / 升级（2026-11-16）：没装或太旧时，界面上的「一键安装 / 一键升级」都走这里。
 try { require('./main/ipc/codeagent-install-handlers').registerCodeAgentInstallIpc(ipcMain, { dataDir: getHubDataDir(), toolDiscovery, send: sendToRenderer }); }
 catch (error) { console.error('[codeagent-install] 一键安装未启动：', error.message); }
@@ -3810,6 +3823,7 @@ const firstRunEnvCheck = require('./main/ipc/env-check-handlers').registerEnvChe
   } : {}),
   ...(require('./core/distribution').updateConfig ? { appUpdate: () => appUpdateControllerRef } : {}),
   getConfig: () => require('./core/hub-config').getConfig(),
+  locator: () => require('./core/harness-locator').get(),
   openExternal: url => shell.openExternal(url),
   openPath: dir => shell.openPath(dir),
   discoverAttendanceDomain: () => {
@@ -4869,7 +4883,9 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
         const cliSources = require('./core/cli-tools/catalog').catalogSources({ config: distribution.updateConfig });
         cliToolsInstallerRef = createCliInstaller({ sources: cliSources, unblock: unblockOwn, isOwnUrl: url => ownHosts.isOwnUrl(url, ownConfig),
           getDshEntry: () => getHubConfig().acp?.providers?.['deepseek-acp'] || {},
-          unblockPassed: () => ownUnblocker.passed(), onState: state => sendToRenderer('cli-tools:state', state) });
+          unblockPassed: () => ownUnblocker.passed(), onState: state => { sendToRenderer('cli-tools:state', state); try { require('./core/harness-locator').noteInstallState(state); } catch (_) {} } });
+        // 定位中心的「一键补齐」经这个安装器装（只装 Hub 自管目录）。
+        try { require('./core/harness-locator').setInstaller(async req => { const st = await cliToolsInstallerRef.install(String(req.id || ''), {}); const t = st.tools[req.id] || {}; return { ok: t.phase === 'done', error: t.error || null }; }); } catch (_) {}
         // 启动 40 秒后在后台全局找一遍 Git Bash（隐藏的 PowerShell 读注册表和硬盘列表），新会话能用上别处装的 Git。
         setTimeout(() => { try { cliToolsInstallerRef?.refreshGit?.(); } catch (_) {} }, 40000).unref?.();
       } catch (e) { console.warn('[cli-tools] 一键安装初始化失败：', e && e.message); }

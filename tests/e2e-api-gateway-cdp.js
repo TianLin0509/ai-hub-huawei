@@ -3,6 +3,9 @@
 //   全新用户 → 首页「用 API key 开始」→ 改地址指向模拟网关 → 粘 key →「保存并继续」→ 选默认模型
 //   → 启动中心默认选中网关模型卡 → 新建 Claude Code 会话 → 发消息 → 首包前标题栏显示「网关排队中」→ 回答出现
 //   → 侧栏显示网关用量 → 设置里该工具是「API 网关」模式；配置文件里没有明文 key。
+// 2026-11-20 API 网关体检：保存 key 后后台自动体检一次 → 设置里右栏有分组（free）和能力表：能用 / 首字 / 工具 / 思考 / 上下文 / 接口，
+//   503「分组下没有渠道」的模型显示「不对你的 free 分组开放」并给「换个模型」；1440×900 下弹窗一屏放下、不出纵向滚动。
+//   截图另存到 HUB_E2E_SHOT_DIR（默认同产物目录）。
 // 真实 Claude Code CLI 运行；反代由 Hub 照常启动；网关是本进程里的模拟 OpenAI 兼容网关（无公司网络、无真实 key）。
 //   node tests/e2e-api-gateway-cdp.js        （产物：HUB_E2E_ARTIFACT_DIR 或 artifacts/api-gateway）
 // 真实网关模式（只在公司黄区跑）：E2E_GATEWAY_KEY_FILE=<本人受保护的 key 文件>，可选 HUB_E2E_EXE=<已装 Hub 的 exe 副本>。
@@ -17,6 +20,8 @@ const { launchIsolatedHub, gracefulQuit } = require('./helpers/hub-launcher');
 const { connectFirstPage } = require('./helpers/cdp-client');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const out = path.resolve(process.env.HUB_E2E_ARTIFACT_DIR || 'artifacts/api-gateway');
+const shotsDir = path.resolve(process.env.HUB_E2E_SHOT_DIR || out);
+const PRICING = fs.readFileSync(path.join(__dirname, 'fixtures', 'ascend-pricing-20261120.json'), 'utf8');
 const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
 const KEY_FILE = process.env.E2E_GATEWAY_KEY_FILE || '';
 const REAL = !!KEY_FILE;
@@ -42,12 +47,37 @@ const textOf = content => typeof content === 'string' ? content : Array.isArray(
 async function startGateway() {
   const server = http.createServer(async (req, res) => {
     const chunks = []; for await (const c of req) chunks.push(c);
+    // 网关公开目录：不要 key（11-20 黄区实测还原的样本）。
+    if (req.url === '/api/pricing') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(PRICING); }
     if (req.headers.authorization !== 'Bearer ' + KEY) { report.gateway.authFailures++; res.writeHead(401, { 'content-type': 'application/json' }); return res.end('{"error":{"message":"Invalid token","type":"new_api_error"}}'); }
     if (req.url === '/v1/models') { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ data: MODELS.map(id => ({ id, object: 'model' })), object: 'list' })); }
     if (req.url.startsWith('/api/usage/token')) { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ code: true, data: { total_used: 25103, total_granted: 0, total_available: -25103, unlimited_quota: true, expires_at: 0 } })); }
     if (req.url !== '/v1/chat/completions') { res.writeHead(404); return res.end(); }
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
     report.gateway.chats++; report.gateway.models.push(body.model);
+    // 一键体检的试跑请求（带 get_time 工具的一句话）：四个模型四种回法，覆盖能力表的各种格子。
+    if (body.tools?.[0]?.function?.name === 'get_time' && body.messages?.length === 1) {
+      report.gateway.healthProbes = (report.gateway.healthProbes || 0) + 1;
+      if (body.model === 'qwen3.8-27b') { res.writeHead(503, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ error: { code: 'model_not_found', message: 'No available channel for model qwen3.8-27b under group free (distributor)', type: 'new_api_error' } })); }
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      const put = (obj, tight) => res.write((tight ? 'data:' : 'data: ') + JSON.stringify(obj) + '\n\n');
+      const hid = 'chatcmpl-hc';
+      await sleep(body.model === 'glm-5.3-flash' ? 900 : 300);
+      report.gateway.probeBodies = [...(report.gateway.probeBodies || []), { model: body.model, noThink: body.chat_template_kwargs?.enable_thinking === false }];
+      if (body.model === 'qwen-aw-35b' && body.chat_template_kwargs?.enable_thinking !== false) {
+        // 11-20 黄区实测：开着思考时整段都是思考、到上限没正文（finish=length）；帧格式空格不一。
+        for (const c of ['用户要', '查时间', '先想想']) put({ id: hid, choices: [{ index: 0, delta: { reasoning: c } }] }, true);
+        put({ id: hid, choices: [{ index: 0, delta: {}, finish_reason: 'length' }] });
+      } else if (body.model === 'qwen-aw-35b') { // 关了思考：直接回正文（每段带空 tool_calls、data: 后没空格）
+        for (const c of ['现在', '是下午三点']) put({ id: hid, choices: [{ index: 0, delta: { content: c, tool_calls: [] } }] }, true);
+        put({ id: hid, choices: [{ index: 0, delta: { tool_calls: [] }, finish_reason: 'stop' }] }, true);
+      } else {
+        if (body.model === 'glm-5.3-flash') put({ id: hid, choices: [{ index: 0, delta: { reasoning_content: '要查时间，调用工具。' } }] });
+        put({ id: hid, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_hc', type: 'function', function: { name: 'get_time', arguments: '{}' } }] } }] });
+        put({ id: hid, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] });
+      }
+      return res.end('data: [DONE]\n\n');
+    }
     const lastUser = [...(body.messages || [])].reverse().find(m => m.role === 'user');
     const asked = /GW_MARKER_\w+/.exec(textOf(lastUser?.content))?.[0];
     // Claude Code 的后台小请求（标题、话题判断等）立即回；带标记的主请求先「排队」再回，用来看排队提示。
@@ -70,7 +100,7 @@ async function startGateway() {
 async function main() {
   // 公司真机上本脚本借已装 Hub 的 exe 当 node 跑（ELECTRON_RUN_AS_NODE）；不能把它带给被测 Hub。
   delete process.env.ELECTRON_RUN_AS_NODE;
-  fs.mkdirSync(out, { recursive: true });
+  fs.mkdirSync(out, { recursive: true }); fs.mkdirSync(shotsDir, { recursive: true });
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-api-gateway-'));
   report.root = root;
   const home = path.join(root, 'home'), data = path.join(root, 'data'), claudeDir = path.join(root, 'claude');
@@ -109,7 +139,7 @@ async function main() {
   async function shot(name) {
     await sleep(300);
     const image = await cdp.send('Page.captureScreenshot', { format: 'png' });
-    const file = path.join(out, `${stamp}-apigw-${name}-claude18.png`);
+    const file = path.join(shotsDir, `${stamp}-apigw-${name}-m3.png`);
     fs.writeFileSync(file, Buffer.from(image.data, 'base64'));
     report.screenshots.push(file);
   }
@@ -179,7 +209,7 @@ async function main() {
     await click('#terminal-panel .floating-input-send');
     let queued = false;
     const sentAt = Date.now();
-    const qEnd = Date.now() + (REAL ? 60000 : FIRST_CHUNK_DELAY_MS + 8000);
+    const qEnd = Date.now() + (REAL ? 60000 : FIRST_CHUNK_DELAY_MS + 45000); // 机器满载时 Claude Code 起得慢（就绪标记 20 秒等不到），多给点时间
     while (Date.now() < qEnd && !queued) { queued = await cdp.eval('document.getElementById("toolbar-model-route")?.textContent.includes("网关排队中")').catch(() => false); if (!queued) await sleep(400); }
     if (queued) await shot('05-queue');
     report.queueShown = queued;
@@ -204,9 +234,50 @@ async function main() {
     await cdp.eval('window.__companyApiOpen("claude")');
     await until('!!document.querySelector("#company-api-dialog [data-gateway-form]")', 'settings gateway form', 20000);
     check('设置里 Claude Code 是「API 网关」模式，key 显示为已保存', await cdp.eval('document.querySelector("#company-api-dialog [data-api-mode=gateway]").getAttribute("aria-checked")==="true" && document.querySelector("#company-api-dialog").innerText.includes("key 已保存")'));
-    await click('#company-api-dialog [data-api-action="gw-test"]');
-    await until('document.querySelector("#company-api-dialog [role=status]")?.textContent.includes("连接正常")', 'gateway test', 20000);
-    await shot('07-settings');
+    // 5. 网关体检：保存 key 时后台已自动体检一次，打开设置就能看到能力表。
+    const row = id => `document.querySelector('#company-api-dialog [data-api-gw-row="${id}"]')`;
+    await until(`!!document.querySelector('#company-api-dialog [data-api-gw-health] tbody tr[data-api-gw-state]')`, 'health table', 60000);
+    const groupText = await cdp.eval('document.querySelector("#company-api-dialog [data-api-gw-group]").innerText');
+    report.groupText = groupText;
+    check('右栏写明分组', REAL ? /你的 key 在 \S+ 分组/.test(groupText) : groupText.includes('你的 key 在 free 分组'));
+    if (!REAL) {
+      check('保存 key 后自动体检过（没点按钮就有结果）', (report.gateway.healthProbes || 0) >= 4);
+      check('能力表：deepseek 能用、会用工具、上下文 256K', await cdp.eval(`${row('deepseek-v4.1-flash')}?.dataset.apiGwState === 'ok' && /256K/.test(${row('deepseek-v4.1-flash')}.innerText) && ${row('deepseek-v4.1-flash')}.innerText.includes('会')`));
+      check('能力表：glm 有思考、接口含 Anthropic', await cdp.eval(`${row('glm-5.3-flash')}.innerText.includes('有') && ${row('glm-5.3-flash')}.innerText.includes('Anthropic')`));
+      check('能力表：只出思考的 qwen-aw-35b 标「想太久没回答」、首正文「没出」，给「关闭思考」', await cdp.eval(`${row('qwen-aw-35b')}?.dataset.apiGwState === 'slow' && ${row('qwen-aw-35b')}.innerText.includes('没出') && ${row('qwen-aw-35b')}.innerText.includes('想太久没回答') && !!${row('qwen-aw-35b')}.querySelector('[data-api-gw-act="no-think"]')`));
+      check('能力表：glm 首字分「思考 / 正文」两个数', await cdp.eval(`/[\\d.]+ \\/ [\\d.]+/.test(${row('glm-5.3-flash')}.innerText)`));
+      check('能力表：503 分组无渠道显示「不对你的 free 分组开放」+ 换个模型按钮，不说成网络问题', await cdp.eval(`${row('qwen3.8-27b')}?.dataset.apiGwState === 'fail' && ${row('qwen3.8-27b')}.innerText.includes('不对你的 free 分组开放') && !${row('qwen3.8-27b')}.innerText.includes('网络') && !!${row('qwen3.8-27b')}.querySelector('[data-api-gw-act="switch-model"]')`));
+      check('看不到的模型说清开给谁', groupText.includes('qwen3.8-flash-next（只开给 default）'));
+    }
+    check('1440×900 下弹窗一屏放下：不溢出、不出纵向滚动', await cdp.eval('(()=>{const e=document.getElementById("company-api-dialog"),r=e.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight&&e.scrollHeight<=e.clientHeight+1&&e.scrollWidth<=e.clientWidth+1})()'));
+    check('标题旁显示网关地址（同事靠它认出是哪个网关），不再指向不存在的「模型线路」', await cdp.eval(`(() => {
+      const d = document.getElementById('company-api-dialog'); const host = d.querySelector('[data-api-gw-host]')?.textContent || '';
+      const url = d.querySelector('input[name=baseURL]')?.value || '';
+      return !!host && url.includes(host) && !d.innerText.includes('模型线路');
+    })()`));
+    await shot('07-settings-health');
+    if (!REAL) {
+      await click('#company-api-dialog [data-api-gw-row="qwen3.8-27b"] [data-api-gw-act="switch-model"]');
+      check('点「换个模型」：默认模型换成能用且会调工具的', await cdp.eval('["deepseek-v4.1-flash","glm-5.3-flash"].includes(document.querySelector("#company-api-dialog select[name=model]").value) && document.querySelector("#company-api-dialog [role=status]").textContent.includes("已把默认模型换成")'));
+      await click('#company-api-dialog [data-api-gw-row="qwen3.8-27b"] summary');
+      check('网关原话在详情里', await cdp.eval(`${row('qwen3.8-27b')}.querySelector('details code')?.textContent.includes('No available channel')`));
+    }
+    if (!REAL) {
+      await click('#company-api-dialog [data-api-gw-row="qwen-aw-35b"] [data-api-gw-act="no-think"]');
+      await until(`document.querySelector('#company-api-dialog [role=status]')?.textContent.includes('已对 qwen-aw-35b 关闭思考')`, 'no-think saved', 10000);
+      check('点「关闭思考」：按模型存进设置', JSON.parse(fs.readFileSync(path.join(data, 'api-gateway', 'gateway.json'), 'utf8')).noThinking?.includes('qwen-aw-35b'));
+    }
+    const probesBefore = report.gateway.healthProbes || 0;
+    await click('#company-api-dialog [data-api-action="gw-health"]');
+    await until('document.querySelector("#company-api-dialog [role=status]")?.textContent.includes("体检完成")', 'healthcheck again', REAL ? 300000 : 60000);
+    if (!REAL) {
+      check('再点「一键体检」重测全部 4 个对话模型', (report.gateway.healthProbes || 0) - probesBefore === 4);
+      check('关闭思考后试跑带 enable_thinking=false，qwen-aw-35b 直接回答、标「已关闭」', report.gateway.probeBodies.slice(-4).some(b => b.model === 'qwen-aw-35b' && b.noThink)
+        && await cdp.eval(`${row('qwen-aw-35b')}?.dataset.apiGwState === 'ok' && ${row('qwen-aw-35b')}.innerText.includes('已关')`));
+    }
+    report.healthStatus = await cdp.eval('document.querySelector("#company-api-dialog [role=status]").textContent');
+    check('再体检后弹窗仍一屏放下', await cdp.eval('(()=>{const e=document.getElementById("company-api-dialog");return e.scrollHeight<=e.clientHeight+1&&e.getBoundingClientRect().bottom<=innerHeight})()'));
+    await shot('08-health-again');
     report.uiChecksPassed = true;
   } catch (error) {
     report.error = error.stack;

@@ -474,6 +474,7 @@ function registerConfigIpc(ipcMain, deps) {
         const savedFits = stored.apiKey && stored.baseURL && (same(stored.baseURL, base) || same(stored.baseURL, base + '/v1'));
         if (!String(request.apiKey || '').trim() && stored.apiKey && !savedFits) return { ok: false, code: 'key_needed', error: '接口地址和保存时不一样了：已保存的 Key 只会发往原来的地址。请在「API Key」里重新粘贴 Key 再测试。' };
         const apiKey = String(request.apiKey || '').trim() || (savedFits ? stored.apiKey : '');
+        // 自有接口不是网关：网关口径的人话里「网关」换成「接口」。
         const own = text => String(text || '').replace(/API 网关|网关/g, '接口');
         let result = await require('../../core/api-gateway').probe({ baseURL: base, apiKey: apiKey || 'none' });
         let fixed = '';
@@ -491,7 +492,8 @@ function registerConfigIpc(ipcMain, deps) {
     const gateway = require('../../core/api-gateway');
     const gatewayDir = () => require('../../core/data-dir').getHubDataDir();
     const safe = () => require('electron').safeStorage;
-    const gatewayPayload = () => ({ gateway: companyApi.gatewayView(), proxyGateway: proxyStatus()?.gateway || null, providers: companyApi.settings(readConfigJsonForUpdate()) });
+    const gatewayPayload = () => ({ gateway: companyApi.gatewayView(), proxyGateway: proxyStatus()?.gateway || null, providers: companyApi.settings(readConfigJsonForUpdate()),
+      health: gateway.healthView(gatewayDir()), catalog: gateway.catalogSummary(gatewayDir()) });
     // 把指定的工具切到「API 网关」线路（首次使用时三种一起切，之后在设置里逐个改）。
     const routeKindsToGateway = (kinds, model) => {
       let raw = readConfigJsonForUpdate();
@@ -511,6 +513,22 @@ function registerConfigIpc(ipcMain, deps) {
       try { return { ok: true, found: detector.detect(gateway.read(gatewayDir()).baseURL) }; }
       catch (error) { return { ok: false, found: [], error: error.message }; }
     });
+    // 一键体检：逐个对话模型流式试跑一句，每测完一个推一次进度。同一时间只跑一轮，重复点直接等这一轮的结果。
+    // 跑完把首字时间交给反代，首包等待上限随之自适应。开箱即用：新填的 key 保存成功后在后台自动跑一次（不管从哪个入口保存）。
+    let healthRun = null;
+    const startHealthcheck = () => {
+      if (healthRun) return healthRun;
+      healthRun = (async () => {
+        try {
+          const r = await gateway.healthcheck(gatewayDir(), { safeStorage: safe(), onProgress: row => sendToRenderer('api-gateway:health-progress', row) });
+          if (r.ok && companyProxyService) await companyProxyService.applyGatewayChange().catch(() => {});
+          const { health, choices, catalog, ...rest } = r;
+          return { ...rest, ...gatewayPayload() };
+        } catch (error) { return { ok: false, error: error.message, ...gatewayPayload() }; }
+        finally { healthRun = null; sendToRenderer('api-gateway:health-done', {}); }
+      })();
+      return healthRun;
+    };
     const saveGateway = async (request, apiKey) => {
       try {
         const result = await gateway.save(gatewayDir(), { baseURL: request.baseURL, apiKey, model: request.model }, { safeStorage: safe() });
@@ -518,7 +536,8 @@ function registerConfigIpc(ipcMain, deps) {
         const kinds = Array.isArray(request.useFor) ? request.useFor.filter(k => companyApi.KINDS.includes(k)) : [];
         const switched = kinds.length ? routeKindsToGateway(kinds, result.model) : [];
         if (companyProxyService) await companyProxyService.applyGatewayChange().catch(() => {});
-        return { ok: true, switched, ...gatewayPayload() };
+        if (apiKey) void startHealthcheck();
+        return { ok: true, switched, healthRunning: !!healthRun, ...gatewayPayload() };
       } catch (error) { return { ok: false, error: error.message, ...gatewayPayload() }; }
     };
     ipcMain.handle('api-gateway:save', (_event, request = {}) => saveGateway(request, request.apiKey));
@@ -548,6 +567,20 @@ function registerConfigIpc(ipcMain, deps) {
       const key = gateway.decryptKey(gatewayDir(), safe());
       if (!key) return { ok: false, code: 'no_key', error: '还没保存 API key' };
       return gateway.usage({ baseURL: view.baseURL, apiKey: key });
+    });
+    // 打开设置时刷新网关公开目录（不用 key、不耗额度，约 0.1 秒）；拿不到保留上一版。
+    ipcMain.handle('api-gateway:catalog', async () => {
+      try { const r = await gateway.refreshCatalog(gatewayDir()); return { ok: r.ok, stale: r.stale, code: r.code, ...gatewayPayload() }; }
+      catch (error) { return { ok: false, error: error.message, ...gatewayPayload() }; }
+    });
+    ipcMain.handle('api-gateway:healthcheck', () => startHealthcheck());
+    // 能力表里「关闭思考 / 恢复思考」：按模型存，立即热更新给反代（新请求生效，在途的不受影响）。
+    ipcMain.handle('api-gateway:set-thinking', async (_event, request = {}) => {
+      try {
+        gateway.setThinking(gatewayDir(), String(request.model || ''), request.enabled !== false);
+        if (companyProxyService) await companyProxyService.applyGatewayChange().catch(() => {});
+        return { ok: true, ...gatewayPayload() };
+      } catch (error) { return { ok: false, error: error.message, ...gatewayPayload() }; }
     });
     ipcMain.handle('api-gateway:clear', async () => {
       gateway.clear(gatewayDir());

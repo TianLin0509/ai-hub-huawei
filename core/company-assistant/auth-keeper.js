@@ -15,6 +15,16 @@ const safeDiagnostic = text => String(text || '').replace(/((?:token|ticket|secr
 // Same recognition as the manual login panel (welink.loginNeedsScan): block-character QR art, data URI,
 // image path, URL, plus the fixed prompt lines of welink-cli 1.0.14 (Q-1021-14).
 const needsScan = text => W.loginNeedsScan(text);
+// 自动续期没成功时说清卡在哪（2026-11-21）：1.0.20 续期要先向本机 WeLink 桌面端取签名，桌面端没开或登录在另一台电脑，
+// 续期就转成要扫码。以前只说「自动续期没成功，点这里扫码」，同事以为令牌坏了；其实把桌面端开起来，Hub 半小时内自己续上。
+const PC_CAUSES = new Set(['pc', 'pc-busy', 'pc-version', 'other-device']);
+function renewHint(cause) {
+  if (!cause) return null;
+  const text = PC_CAUSES.has(cause.id)
+    ? `${cause.title}。打开并登录这台电脑上的 WeLink 桌面端后，Hub 会在半小时内自动续上，不用扫码；急用可以现在扫码登录。`
+    : `${cause.title}。${cause.next}`;
+  return { id: cause.id, title: cause.title, text, line: cause.line };
+}
 
 class AuthKeeper {
   constructor(a) {
@@ -32,20 +42,20 @@ class AuthKeeper {
   status() { return { ...this.current }; }
   set(patch) { if (this.closed) return; this.current = { ...this.current, ...patch }; this.a.write('auth.json', this.current); this.a.changed(); }
   online(login, renewed = false) {
-    this.set({ state: 'online', login, error: '', lastCheckAt: this.a.now(), scanAttempts: 0, notified: false, noticeId: '', lastOkAt: this.a.now(), lastOkUid: login?.uid || this.current.lastOkUid || null,
+    this.set({ state: 'online', login, error: '', renewCause: null, lastCheckAt: this.a.now(), scanAttempts: 0, notified: false, noticeId: '', lastOkAt: this.a.now(), lastOkUid: login?.uid || this.current.lastOkUid || null,
       ...(renewed ? { lastRenewAt: this.a.now() } : {}) });
   }
   manualSucceeded(login) { this.online(login); }
   // 本人在设置里点了「退出 WeLink 登录」（2026-11-19）：停掉自动续期，不发「续期没成功」提醒，等本人再扫码（manualSucceeded 会恢复）。
   signedOut() {
     this.controller?.abort();
-    this.set({ state: 'signed-out', login: { ok: false, reason: 'expired', checkedAt: this.a.now() }, error: '', scanAttempts: 0, notified: false, noticeId: '', lastOkUid: null, lastCheckAt: this.a.now() });
+    this.set({ state: 'signed-out', login: { ok: false, reason: 'expired', checkedAt: this.a.now() }, error: '', renewCause: null, scanAttempts: 0, notified: false, noticeId: '', lastOkUid: null, lastCheckAt: this.a.now() });
   }
   notifyScan() {
     if (this.closed || this.current.state !== 'needs-scan' || this.current.notified) return;
     const id = this.current.noticeId || 'welink-login-' + this.a.now();
     this.set({ noticeId: id });
-    if (this.a.publish({ id, kind: 'welink-login', title: 'WeLink 自动续期没成功', text: '自动续期连续两次没完成；点助理左栏的 WeLink 一行扫码登录即可继续。', at: this.a.now() })) this.set({ notified: true });
+    if (this.a.publish({ id, kind: 'welink-login', title: 'WeLink 自动续期没成功', text: this.current.renewCause?.text || '自动续期连续两次没完成；点助理左栏的 WeLink 一行扫码登录即可继续。', at: this.a.now() })) this.set({ notified: true });
   }
   close() { this.closed = true; this.controller?.abort(); }
   check({ force = false, known = null, refresh = true } = {}) {
@@ -96,18 +106,21 @@ class AuthKeeper {
       // 已在提示扫码时的悄悄重试不改界面状态，「扫码登录」一行照常显示。
       this.set({ state: this.current.state === 'needs-scan' ? 'needs-scan' : 'renewing', lastAttemptAt: now, error: '' });
       this.controller = new AbortController();
-      let scan = false, timedOut = false;
+      let scan = false, timedOut = false, seen = '';
       let resultLogin;
       try {
         resultLogin = await this.a.rawWelink(['auth', 'login'], { allowSetup: true, timeoutMs: 90000, signal: this.controller.signal, onData: text => {
+          seen = text;
           if (needsScan(text)) { scan = true; this.controller.abort(); }
         } });
+        seen = resultLogin.stdout + '\n' + resultLogin.stderr;
         scan = scan || needsScan(resultLogin.stdout + resultLogin.stderr);
       } catch (error) {
         if (this.closed || this.current.state === 'signed-out') return this.status();
         timedOut = !scan && error.code === 'WELINK_TIMEOUT';
         if (!scan && !timedOut) {
-          this.set({ state: early ? 'online' : 'unknown', error: early ? '' : '自动续期没能完成：' + error.message });
+          const hint = renewHint(W.loginDiagnosis(seen));
+          this.set({ state: early ? 'online' : 'unknown', renewCause: early ? null : hint, error: early ? '' : '自动续期没能完成：' + (hint ? hint.text : error.message) });
           return this.status();
         }
       } finally { this.controller = null; }
@@ -126,17 +139,18 @@ class AuthKeeper {
           return this.status();
         }
       }
+      const hint = renewHint(W.loginDiagnosis(seen));
       if (!scan && !timedOut) {
-        this.set({ state: early ? 'online' : 'unknown', error: early ? '' : '自动续期未成功，十分钟后再试；也可手动登录' });
+        this.set({ state: early ? 'online' : 'unknown', renewCause: early ? null : hint, error: early ? '' : hint ? '自动续期没成功：' + hint.text : '自动续期未成功，十分钟后再试；也可手动登录' });
         return this.status();
       }
       // A QR request or a timeout both count; two in a row stop auto login and ask for a scan.
       const attempts = this.current.scanAttempts + 1;
       if (attempts < SCAN_LIMIT) {
-        this.set({ state: 'unknown', scanAttempts: attempts, error: '自动续期没成功，十分钟后再试；也可点「扫码登录」' });
+        this.set({ state: 'unknown', scanAttempts: attempts, renewCause: hint, error: hint ? '自动续期没成功：' + hint.text : '自动续期没成功，十分钟后再试；也可点「扫码登录」' });
         return this.status();
       }
-      this.set({ state: 'needs-scan', scanAttempts: attempts, error: '' });
+      this.set({ state: 'needs-scan', scanAttempts: attempts, renewCause: hint, error: '' });
       this.notifyScan();
     } catch (error) {
       if (!this.closed) this.set({ state: this.current.state === 'signed-out' ? 'signed-out' : 'unknown', lastCheckAt: now, error: error.message, login: { ok: false, reason: error.code === 'WELINK_MISSING' ? 'missing' : 'error', checkedAt: now } });
@@ -144,4 +158,4 @@ class AuthKeeper {
     return this.status();
   }
 }
-module.exports = { AuthKeeper, CHECK_MS, RETRY_MS, SCAN_LIMIT, SLOW_RETRY_MS, authFailure, needsScan };
+module.exports = { renewHint, AuthKeeper, CHECK_MS, RETRY_MS, SCAN_LIMIT, SLOW_RETRY_MS, authFailure, needsScan };

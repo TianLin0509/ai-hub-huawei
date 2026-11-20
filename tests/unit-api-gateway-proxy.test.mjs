@@ -43,7 +43,7 @@ test('回包归一化：reasoning 改名 reasoning_content，模型名回写成�
 test('网关错误白话：坏 key 401、模型不存在改成 400（不让客户端白重试）、限流 429', () => {
   assert.equal(explainGatewayError(401, '{"error":{"message":"Invalid token"}}').status, 401);
   const missing = explainGatewayError(503, '{"error":{"code":"model_not_found","message":"No available channel"}}');
-  assert.equal(missing.status, 400); assert.match(missing.message, /没有这个模型/);
+  assert.equal(missing.status, 400); assert.match(missing.message, /没有这个模型|不对你的分组开放/);
   assert.equal(explainGatewayError(429, '').status, 429);
   assert.equal(explainGatewayError(500, 'x').status, 500);
 });
@@ -178,7 +178,7 @@ test('真实反代：模型表为空时名字原样透传——网关说没有�
     body: JSON.stringify({ model, stream: true, messages: [{ role: 'user', content: 'hi' }] }) });
   const missing = await ask('no-such-model');
   assert.equal(missing.status, 400);
-  assert.match(JSON.stringify(await missing.json()), /没有这个模型/);
+  assert.match(JSON.stringify(await missing.json()), /没有这个模型|不对你的分组开放/);
   const before = gw.seen.length;
   const hang = await ask('hang-forever');
   assert.equal(hang.status, 504);

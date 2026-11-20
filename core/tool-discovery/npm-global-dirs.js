@@ -44,6 +44,8 @@ function runText(file, args, { timeoutMs = 15000, env = process.env, execFileImp
   });
 }
 
+const REG_USER_ENV = 'HKCU\\Environment';
+const REG_SYSTEM_ENV = 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment';
 // 注册表里最新的用户级 + 系统级 PATH（展开 %VAR%）。不是 Windows 或读不到时返回 []。
 async function registryPathDirs({ env = process.env, execFileImpl, platform = process.platform } = {}) {
   if (platform !== 'win32') return [];
@@ -55,7 +57,8 @@ async function registryPathDirs({ env = process.env, execFileImpl, platform = pr
       const m = /Path\s+REG_(?:EXPAND_)?SZ\s+(.+)/i.exec(await runText('reg.exe', ['query', key, '/v', 'Path'], { execFileImpl, env }));
       return m ? expand(m[1].trim()) : '';
     };
-    joined = [await read('HKCU\Environment'), await read('HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment')].filter(Boolean).join(';');
+    // 键名里的反斜杠要写成 \\（以前写成 'HKCU\Environment'，JS 把 \E 当成 E，实际查的是 HKCUEnvironment，两个键都查不到）。
+    joined = [await read(REG_USER_ENV), await read(REG_SYSTEM_ENV)].filter(Boolean).join(';');
   }
   const out = [];
   for (const dir of joined.split(';').map(s => s.trim().replace(/^"|"$/g, '')).filter(Boolean)) if (!out.includes(dir)) out.push(dir);
@@ -69,4 +72,4 @@ async function npmConfigPrefix({ env = process.env, freshDirs = [], execFileImpl
   return String(out).trim().split(/\r?\n/).pop()?.trim() || '';
 }
 
-module.exports = { npmPrefixes, pathDirs, registryPathDirs, npmConfigPrefix, runText };
+module.exports = { npmPrefixes, pathDirs, registryPathDirs, npmConfigPrefix, runText, REG_USER_ENV, REG_SYSTEM_ENV };

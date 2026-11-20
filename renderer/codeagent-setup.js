@@ -15,12 +15,13 @@ function createCodeAgentSetup({ document, ipcRenderer }) {
     if (changed) for (const listener of listeners) listener(current);
     return result;
   }
+  // scan 的结果按定位中心当前生效的那份标「当前在用」（2026-11-21），说明里的版本号和体检一致。
   // scan：先让 Hub 重新扫一遍常见安装位置（2026-11-07，core/tool-discovery：PATH、npm 全局目录、注册表里最新的 PATH、常用安装目录），再判断装没装。
   let lastScan = null;
   function refresh({ scan = false } = {}) {
     if (pending && !scan) return pending;
     pending = Promise.resolve()
-      .then(() => scan ? ipcRenderer.invoke('tool-discovery:list', { tool: 'codeagent', force: true }).then(r => { lastScan = r?.ok === false ? null : r; }, () => { lastScan = null; }) : null)
+      .then(() => scan ? ipcRenderer.invoke('tool-discovery:list', { tool: 'codeagent', force: true }).then(r => r?.ok === false ? null : require('./tool-version-picker').alignWithLocator(r, require('./harness-client').createHarnessClient(ipcRenderer))).then(r => { lastScan = r; }, () => { lastScan = null; }) : null)
       .then(() => ipcRenderer.invoke('community:setup')).then(accept).finally(() => { pending = null; });
     return pending;
   }
@@ -82,6 +83,18 @@ function createCodeAgentSetup({ document, ipcRenderer }) {
     dialog.querySelector('[data-setup="pick"]').onclick = async () => {
       const target = dialog;
       try {
+        // 2026-11-20 起和其他 CLI 一样走定位中心：选完先试跑，通过才保存；没通过如实显示原因，原设置不动。
+        const picked = await require('./harness-client').createHarnessClient(ipcRenderer).pickPath('codeagent');
+        if (!picked.missing) {
+          if (!picked.value || !target?.isConnected) return;
+          const view = require('./harness-view');
+          const m = view.pickMessage(picked.value);
+          // 只有试跑结论是「能用」才算选成功（v1.2 定位中心也只在能用时保存）；其他一律只报原因，不提示「可以新建会话」（2026-11-21 审查第 1 条）。
+          if (!view.pickSucceeded(picked.value)) { target.querySelector('[role="status"]').textContent = m.text; return; }
+          lastScan = null; await refresh({ scan: true });
+          if (target.isConnected) target.querySelector('[role="status"]').textContent = m.text + '。可以关闭说明，到账号页登录或直接新建会话。';
+          return;
+        }
         const r = await ipcRenderer.invoke('tool-discovery:pick', { tool: 'codeagent' });
         if (!r || r.canceled || !target?.isConnected) return;
         if (r.ok === false) throw new Error(r.error || '没能使用这个程序');

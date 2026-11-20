@@ -36,3 +36,30 @@ test('每一类都给出标题、说明和至少一个能点的动作', () => {
     assert.ok(info.title && info.detail && info.actions.length >= 1, sample);
   }
 });
+
+// 2026-11-21 审查：deepseek-v4.1-flash 的 403 原来落到「登录过期 → 打开账号页」——「没有…使用权限」中间限 20 字，
+// 而「「deepseek-v4.1-flash」」就有 21 字。这里用代理真正会写出的句子（core/api-gateway-errors.js 同一份口径）回归。
+test('API 网关：长模型名的 403 / 分组无渠道 / 下线都认成「模型用不了」，不再引去账号页', () => {
+  const gatewayErrors = require('../core/api-gateway-errors');
+  const FREE = ['qwen-aw-35b', 'deepseek-v4.1-flash', 'qwen3.8-27b', 'glm-5.3-flash'];
+  const body = message => JSON.stringify({ error: { message, type: 'new_api_error' } });
+  const line = (status, raw, ctx) => {
+    const sentence = gatewayErrors.sentence(gatewayErrors.classify({ status, body: raw, ...ctx }));
+    return `API Error: ${status} ${JSON.stringify({ type: 'error', error: { type: 'permission_error', message: sentence } })}`;
+  };
+  for (const model of ['deepseek-v4.1-flash', 'qwen3.8-27b', 'some-very-long-model-name-2026-preview-instruct']) {
+    for (const usable of [FREE, []]) {
+      const ctx = { model, usable, group: 'free' };
+      for (const raw of [body(`该令牌无权使用模型：${model}（模型不在白名单中）`), body('forbidden'), '']) {
+        const text = line(403, raw, ctx);
+        assert.equal(kind(text), 'gateway-model', text);
+        assert.ok(!classifyError(text).actions.includes('accounts'), '不引去账号页');
+      }
+      assert.equal(kind(line(503, body(`No available channel for model ${model} under group free`), ctx)), 'gateway-model');
+      assert.equal(kind(line(404, body(`model ${model} not found`), ctx)), 'gateway-model');
+    }
+  }
+  assert.equal(kind(line(401, body('Invalid token'), {})), 'gateway-key');
+  assert.equal(kind(line(403, body('用户额度不足，剩余额度：0'), { model: 'deepseek-v4.1-flash' })), 'gateway-quota');
+  assert.equal(kind('API Error: 403 {"error":{"type":"permission_error","message":"Forbidden"}}'), 'auth', '非网关的 403 仍按登录失效');
+});

@@ -11,13 +11,11 @@ const DEFAULT_BASE_URL = 'http://models.ascend.huawei.com/v1';
 // 11-19 黄区实测最快、会调用工具；网关上没有它时退到列表第一个。
 const PREFERRED_MODEL = 'deepseek-v4.1-flash';
 const PROBE_TIMEOUT_MS = 10_000;
-// 已知模型的白话说明（实测得来）；不认识的模型只显示名字。
-const MODEL_NOTES = Object.freeze({
-  'deepseek-v4.1-flash': '推荐 · 最快，会调用工具',
-  'glm-5.3-flash': '推理模型 · 先思考再回答，较慢',
-  'qwen3.8-27b': '通用 · 写作和问答',
-  'qwen-aw-35b': '通用 · 写作和问答',
-});
+// 模型说明不再写死（2026-11-20）：能力以一键体检结果为准（core/api-gateway-healthcheck.js），
+// 上下文取网关公开目录的真实值（core/api-gateway-catalog.js），报错口径见 core/api-gateway-errors.js。
+const catalogStore = () => require('./api-gateway-catalog');
+const healthStore = () => require('./api-gateway-healthcheck');
+const errors = () => require('./api-gateway-errors');
 
 function dir(dataDir) { return path.join(dataDir, 'api-gateway'); }
 function file(dataDir) { return path.join(dir(dataDir), 'gateway.json'); }
@@ -67,6 +65,11 @@ function read(dataDir) {
     model: models.includes(raw.model) ? raw.model : defaultModelOf(models),
     checkedAt: Number(raw.checkedAt) || 0,
     unlimited: raw.unlimited === true,
+    // 网关目录推出来的分组（free / max / default / vip），保存 key 与一键体检时更新。
+    group: typeof raw.group === 'string' ? raw.group : '',
+    groupExact: raw.groupExact === true,
+    // 用户「对这个模型关闭思考」的模型（本机代理给它们的请求注入 chat_template_kwargs.enable_thinking=false）。
+    noThinking: cleanModels(raw.noThinking),
   };
 }
 function normalizeBaseUrlSafe(value) { try { return normalizeBaseUrl(value); } catch { return DEFAULT_BASE_URL; } }
@@ -85,19 +88,38 @@ function resolveModel(dataDir, model) {
   if (value && (view.models.includes(value) || !view.models.length)) return value;
   return view.model;
 }
+// 下拉框说明：能力以一键体检结果为准（首字、工具、思考、上下文），没体检过只写目录里的上下文。
 function modelChoices(dataDir) {
   const view = read(dataDir);
-  return view.models.map(id => ({ id, label: id, note: MODEL_NOTES[id] || '' }));
+  const health = healthStore().read(dataDir)?.results || {};
+  const catalog = catalogStore().cached(dataDir, view.baseURL);
+  return view.models.map(id => {
+    const r = health[id];
+    const known = catalog?.models?.find(m => m.id === id);
+    const ctx = known?.context || 0;
+    const note = r ? healthStore().note({ ...r, context: r.context || ctx }) : ctx ? `上下文 ${Math.round(ctx / 1000)}K · 还没体检` : '';
+    return { id, label: id, note, ...(r ? { ok: r.ok, firstMs: r.firstMs, tools: r.tools, thinking: r.thinking } : {}) };
+  });
+}
+// 给本机代理和会话配置用：各模型的上下文上限（目录真实值，取不到用保守默认）与最近体检的首字时间。
+function contextOf(dataDir, id) {
+  const catalog = catalogStore().cached(dataDir, read(dataDir).baseURL);
+  return catalog ? catalogStore().contextOf(catalog, id) : catalogStore().DEFAULT_CONTEXT;
+}
+function firstTokenMs(dataDir) {
+  const results = healthStore().read(dataDir)?.results || {};
+  return Object.fromEntries(Object.entries(results).filter(([, r]) => r?.ok && Number(r.firstMs) > 0).map(([id, r]) => [id, Number(r.firstMs)]));
+}
+// 对话模型过滤：目录里标成生图 / 视频 / 语音的去掉；目录拿不到时只按名字判断。
+function chatOnly(ids, catalog) {
+  const byId = new Map((catalog?.models || []).map(m => [m.id, m]));
+  return ids.filter(id => (byId.has(id) ? byId.get(id).chat : catalogStore().isChatModel({ id, endpoints: [], tags: [] })));
 }
 
-// 网关错误 → 用户看得懂的一句话 + 下一步。11-19 实测：坏 key 401「Invalid token」；不存在的模型 503 model_not_found。
-function explainHttp(status, body = '') {
-  let detail = '';
-  try { const e = JSON.parse(body)?.error; detail = String(e?.code || e?.message || ''); } catch { detail = String(body || ''); }
-  if (status === 401 || status === 403) return { code: 'bad_key', message: 'key 无效：网关不认这个 key。请检查是否复制完整（通常以 sk- 开头），重新粘贴后再试。' };
-  if (/model_not_found/i.test(detail)) return { code: 'model_not_found', message: '网关上没有这个模型，请在模型列表里换一个。' };
-  if (status === 429) return { code: 'rate_limited', message: '网关限流了，请稍等一会儿再试。' };
-  return { code: 'http_' + status, message: `网关返回 HTTP ${status}，请稍后重试；一直不行请联系网关管理员。` };
+// 网关错误 → 一句人话 + 修复按钮（口径在 core/api-gateway-errors.js，本机代理共用）。
+function explainHttp(status, body = '', ctx = {}) {
+  const e = errors().classify({ status, body, ...ctx });
+  return { code: e.code, message: e.message, title: e.title, actions: e.actions, detail: e.detail };
 }
 
 // 超时覆盖到读完正文：网关先回响应头、正文卡住时，「正在验证」也会在 timeoutMs 内结束（11-19 换模型审查发现）。
@@ -117,13 +139,13 @@ async function probe({ baseURL, apiKey, fetchImpl = globalThis.fetch, timeoutMs 
   try {
     response = await fetchText(fetchImpl, base + '/models', { headers: { authorization: 'Bearer ' + apiKey, accept: 'application/json' } }, timeoutMs);
   } catch {
-    return { ok: false, code: 'unreachable', message: `连不上网关：${Math.round(timeoutMs / 1000)} 秒内没有响应。常见原因是电脑不在公司内网（例如在家没连 VPN），或网关地址不对。连上内网后点「重试」。` };
+    return { ok: false, code: 'unreachable', title: '连不上网关', actions: ['retry', 'tutorial'], detail: '', message: `连不上网关：${Math.round(timeoutMs / 1000)} 秒内没有响应。常见原因是电脑不在公司内网（例如在家没连 VPN），或网关地址不对。连上内网后点「重试」。` };
   }
   const { text } = response;
   if (!response.ok) return { ok: false, ...explainHttp(response.status, text) };
   let models = [];
   try { models = cleanModels((JSON.parse(text)?.data || []).map(m => m?.id)); } catch { models = []; }
-  if (!models.length) return { ok: false, code: 'no_models', message: '网关连上了，但没有返回任何可用模型。请联系网关管理员确认这个 key 的模型权限。' };
+  if (!models.length) return { ok: false, code: 'no_models', title: '没有可用模型', actions: ['group-help', 'rekey'], detail: '', message: '网关连上了，但没有返回任何可用模型。请联系网关管理员确认这个 key 的模型权限。' };
   return { ok: true, models };
 }
 
@@ -148,12 +170,77 @@ async function save(dataDir, { baseURL, apiKey, model } = {}, { safeStorage, fet
   if (!key) throw new Error('请粘贴 API key');
   const result = await probe({ baseURL: base, apiKey: key, fetchImpl });
   if (!result.ok) return result;
+  // 同时读一次网关公开目录：去掉生图 / 语音等非对话模型、推出 key 所在分组。目录拿不到不影响保存。
+  const { catalog } = await catalogStore().refresh(dataDir, { baseURL: base, fetchImpl });
   const raw = readRaw(dataDir);
-  const chosen = result.models.includes(model) ? model : (result.models.includes(raw.model) ? raw.model : defaultModelOf(result.models));
-  const next = { ...raw, baseURL: base, models: result.models, model: chosen, checkedAt: Date.now() };
+  const next = { ...raw, baseURL: base, ...modelFields(result.models, catalog, raw, model), checkedAt: Date.now() };
   if (apiKey) next.encryptedKey = safeStorage.encryptString(key).toString('base64');
   writeRaw(dataDir, next);
-  return { ok: true, ...read(dataDir), choices: modelChoices(dataDir) };
+  return { ok: true, ...read(dataDir), choices: modelChoices(dataDir), catalog: catalogSummary(dataDir) };
+}
+// key 能用的模型（/v1/models）+ 目录 → 存盘字段：对话模型表、默认模型、分组。对话模型一个都没有时保留全部，免得表变空。
+function modelFields(keyModels, catalog, raw, wanted) {
+  const chat = chatOnly(keyModels, catalog);
+  const models = chat.length ? chat : keyModels;
+  const chosen = models.includes(wanted) ? wanted : (models.includes(raw.model) ? raw.model : defaultModelOf(models));
+  const inferred = catalog ? catalogStore().inferGroup(catalog, keyModels) : { group: raw.group || '', exact: raw.groupExact === true };
+  return { models, keyModels, model: chosen, group: inferred.group || '', groupExact: !!inferred.exact };
+}
+const keyModelsOf = raw => (cleanModels(raw.keyModels).length ? cleanModels(raw.keyModels) : cleanModels(raw.models));
+// 界面「分组说明」用：分组、各分组白话、key 看不到的对话模型开给哪些分组、被排除的非对话模型。
+function catalogSummary(dataDir) {
+  const catalog = catalogStore().cached(dataDir, read(dataDir).baseURL);
+  if (!catalog) return null;
+  return { ...catalogStore().summarize(catalog, keyModelsOf(readRaw(dataDir))), at: catalog.at || 0 };
+}
+// 打开设置时：只刷新公开目录（不用 key、不耗额度）；拿不到保留上一版。
+async function refreshCatalog(dataDir, { fetchImpl } = {}) {
+  const view = read(dataDir);
+  const r = await catalogStore().refresh(dataDir, { baseURL: view.baseURL, fetchImpl });
+  if (r.ok && view.keySet) {
+    const raw = readRaw(dataDir);
+    const keyModels = keyModelsOf(raw);
+    if (keyModels.length) writeRaw(dataDir, { ...raw, ...modelFields(keyModels, r.catalog, raw, raw.model) });
+  }
+  return { ok: r.ok, stale: r.stale, code: r.code || '', catalog: catalogSummary(dataDir) };
+}
+
+// 一键体检：刷新目录 → 用 key 读模型表 → 逐个对话模型流式试跑一句 → 存能力表。
+// 模型表拉取失败不覆盖旧表；单个模型失败只记在它那一行。
+async function healthcheck(dataDir, { safeStorage, fetchImpl = globalThis.fetch, onProgress, concurrency, firstTimeoutMs, totalTimeoutMs } = {}) {
+  const view = read(dataDir);
+  const key = decryptKey(dataDir, safeStorage);
+  if (!key) return { ok: false, code: 'no_key', title: '还没填 key', actions: ['rekey'], detail: '', message: '还没保存 API key：先粘贴 key 并保存，保存后会自动体检一次。' };
+  const started = Date.now();
+  const { catalog } = await catalogStore().refresh(dataDir, { baseURL: view.baseURL, fetchImpl });
+  const listed = await probe({ baseURL: view.baseURL, apiKey: key, fetchImpl });
+  if (!listed.ok) return listed;
+  const raw = readRaw(dataDir);
+  const fields = modelFields(listed.models, catalog, raw, raw.model);
+  writeRaw(dataDir, { ...raw, ...fields, checkedAt: Date.now() });
+  const results = await healthStore().run({ baseURL: view.baseURL, apiKey: key, models: fields.models, catalog, group: fields.group,
+    fetchImpl, onProgress, concurrency, firstTimeoutMs, totalTimeoutMs, noThinking: read(dataDir).noThinking });
+  const record = { schema: 1, at: Date.now(), ms: Date.now() - started, group: fields.group, results: Object.fromEntries(results.map(r => [r.id, r])) };
+  try { healthStore().write(dataDir, record); } catch { /* 写不进缓存时这次结果照样返回 */ }
+  return { ok: true, health: healthView(dataDir) || { at: record.at, ms: record.ms, group: record.group, rows: results }, ...read(dataDir),
+    choices: modelChoices(dataDir), catalog: catalogSummary(dataDir) };
+}
+// 能力表：按当前模型表排，没体检过的模型标 pending。
+function healthView(dataDir) {
+  const h = healthStore().read(dataDir);
+  if (!h) return null;
+  const rows = read(dataDir).models.map(id => ({ ...(h.results[id] || { id, pending: true }), context: h.results[id]?.context || contextOf(dataDir, id) }));
+  return { at: h.at, ms: h.ms, group: h.group, rows };
+}
+// 对某个模型关闭 / 恢复思考（按模型存，各工具共用）。
+function setThinking(dataDir, model, enabled) {
+  const raw = readRaw(dataDir);
+  const id = String(model || '');
+  if (!cleanModels([id]).length) throw new Error('模型名不对');
+  const list = cleanModels(raw.noThinking).filter(x => x !== id);
+  if (!enabled) list.push(id);
+  writeRaw(dataDir, { ...raw, noThinking: list });
+  return read(dataDir);
 }
 function setModel(dataDir, model) {
   const raw = readRaw(dataDir);
@@ -169,5 +256,6 @@ function clear(dataDir) {
   return read(dataDir);
 }
 
-module.exports = { DEFAULT_BASE_URL, PREFERRED_MODEL, MODEL_NOTES, file, read, configured, decryptKey, resolveModel, modelChoices,
-  normalizeBaseUrl, normalizeKey, explainHttp, probe, usage, save, setModel, clear };
+module.exports = { DEFAULT_BASE_URL, PREFERRED_MODEL, file, read, configured, decryptKey, resolveModel, modelChoices,
+  normalizeBaseUrl, normalizeKey, explainHttp, probe, usage, save, setModel, setThinking, clear,
+  contextOf, firstTokenMs, chatOnly, catalogSummary, refreshCatalog, healthcheck, healthView };

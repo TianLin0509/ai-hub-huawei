@@ -26,6 +26,15 @@
   const SOURCE_LABEL = { 'ppt-doctor': 'PPT Doctor 本体', 'ppt-ocr': '识别组件' };
   const SOURCE_POINT = { claude: 'cli:claude', codex: 'cli:codex', dsh: 'cli:dsh', git: 'cli:git', 'git-bash': 'cli:git', codeagent: 'codeagent', welink: 'welink', pi: 'cli:pi', node: 'cli:node', 'ppt-doctor': ['ppt-doctor', 'ppt-ocr'] };
   const ACTIVE = new Set(['checking', 'downloading', 'extracting', 'verifying', 'installing', 'probing', 'npm-fallback']);
+  // 本机 CLI 定位结论（2026-11-20，HUB-H 第一期）：体检行带 extra.locate 时画成结论卡（renderer/harness-view.js），
+  // 选择文件、清掉手动路径、复制诊断经定位中心（renderer/harness-client.js → harness:* IPC）。
+  const hxView = require('./harness-view');
+  const hxClient = require('./harness-client');
+  const harness = hxClient.createHarnessClient(ipcRenderer);
+  const checkedOpen = new Set();
+  // 一键补齐等定位中心修复没成功时的原因（已打码），按定位中心 id 记，显示在那一行按钮旁边；下次点或复检能用后清掉。
+  const repairErrors = new Map();
+  const locateOf = item => item && item.extra && item.extra.locate && item.extra.locate.verdict ? item.extra.locate : null;
 
   function injectStyle() {
     if (document.getElementById('env-check-style')) return;
@@ -50,6 +59,7 @@
       <div class="ec-head">
         <div class="ec-title"><strong>功能体检与组件中心</strong><div class="ec-summary" data-ec="summary">正在检测…</div></div>
         <button type="button" class="ec-btn" data-ec="copy" title="复制成纯文本，路径和账号已脱敏，可以直接贴给别人">复制体检结果</button>
+        <button type="button" class="ec-btn" data-ec="copy-diag" title="复制各 CLI 查过的位置和结论，用户名已打码，可以直接贴给维护人" hidden>复制全部诊断</button>
         <button type="button" class="ec-btn primary" data-ec="rerun">重新体检</button>
         <button type="button" class="ec-close" data-ec="close" aria-label="关闭">✕</button>
       </div>
@@ -124,6 +134,26 @@
       + (item.raw ? `<details><summary>原始信息</summary><pre>${esc(item.raw)}</pre></details>` : '') + '</div>';
   }
 
+  // 结论卡（有 extra.locate 的行）：首行是结论标签和来源/版本/Node，第二行是一句人话；展开看候选、查过的位置、手动路径和复制诊断。
+  // 能用的行也能展开：同事要确认 Hub 用的是哪一份，或改用别处装的那份。
+  // 体检判为「不适用」的行（不需要的 Node、非公司电脑的 CodeAgent）保持灰色「不适用」和体检原话，不换成定位中心的红色「没找到」，
+  // 和顶部计数一致（2026-11-21 审查第 5 条）；展开仍能看定位中心查过哪些位置。
+  function locateRowHtml(item, loc) {
+    const open = expanded.has(item.id);
+    const off = item.status === 'off';
+    const status = item.status || hxView.verdictOf(loc.verdict).tone;
+    const reason = off ? String(item.detail || STATE.off) : hxView.reasonText(loc);
+    const buttons = fixButtons(item);
+    const rowActs = [...buttons.matchAll(/data-ec-fix="[^"]*:(\d+)"/g)].map(m => (item.fixes || [])[Number(m[1])]?.act).filter(Boolean);
+    const repairError = repairErrors.get(loc.id);
+    return `<li class="ec-item ec-${esc(status)} hx-row${open ? ' expanded' : ''}" data-ec-id="${esc(item.id)}" data-hx-verdict="${esc(off ? 'off' : loc.verdict)}">
+      <div class="ec-row"><span class="ec-dot" aria-hidden="true"></span>
+        <div class="ec-main"><div class="ec-name hx-name">${esc(item.name)}${off ? `<span class="ec-state">${STATE.off}</span>` : hxView.headHtml(loc)}</div>
+          <div class="ec-detail" title="${esc(reason)}">${esc(reason)}</div>${repairError ? `<div class="ec-progress hx-repair-error" role="alert" data-hx-repair-error="${esc(loc.id)}">没补齐：${esc(repairError)}</div>` : ''}${tab === 'components' ? progressHtml(item.id) : ''}${tab === 'components' && SOURCE_POINT[item.id] ? [].concat(SOURCE_POINT[item.id]).map(p => sourceView.slotHtml(p, 'div', SOURCE_LABEL[p] || '')).join('') : ''}</div>
+        <div class="ec-actions">${buttons}<button type="button" class="ec-more" data-ec-toggle="${esc(item.id)}" aria-expanded="${open}">${open ? '收起' : '详情'}</button></div></div>
+      ${open ? `<div class="ec-expand">${hxView.panelHtml(loc, { checkedOpen: checkedOpen.has(loc.id), rowActs })}</div>` : ''}</li>`;
+  }
+
   function render() {
     if (!dialog) return;
     dialog.querySelector('[data-ec="summary"]').innerHTML = summaryHtml();
@@ -138,6 +168,8 @@
       list.innerHTML = featureHtml();
     } else {
       list.innerHTML = items.map(item => {
+        const loc = locateOf(item);
+        if (loc) return locateRowHtml(item, loc);
         const canExpand = item.status === 'warn' || item.status === 'bad';
         const open = canExpand && expanded.has(item.id);
         return `<li class="ec-item ec-${esc(item.status)}${open ? ' expanded' : ''}" data-ec-id="${esc(item.id)}">
@@ -153,18 +185,22 @@
     meta.textContent = result?.ms != null ? `用时 ${(result.ms / 1000).toFixed(1)} 秒` : '';
     dialog.querySelector('[data-ec="rerun"]').disabled = !!running;
     dialog.querySelector('[data-ec="copy"]').disabled = !result?.report;
+    dialog.querySelector('[data-ec="copy-diag"]').hidden = !(result?.items || []).some(locateOf);
     setMessage(message, messageBad);
   }
 
-  async function run() {
+  // 体检本身（core/env-check）每个 CLI 行都会让定位中心试跑一次，界面不再先跑一遍 locate-all，
+  // 否则每次「重新体检」要串行试跑两轮、等待约翻倍（2026-11-21 审查第 4 条）。fresh 透传给主进程，供它决定用不用缓存。
+  async function run({ fresh = false } = {}) {
     if (running) return running;
     running = (async () => {
       render();
-      try { result = await ipcRenderer.invoke('env-check:run'); }
+      try { result = await ipcRenderer.invoke('env-check:run', { fresh }); }
       catch (error) { result = { ok: false, error: error.message }; }
       // 默认展开第一项红色，用户一眼看到原因。
       const firstBad = (result?.items || []).find(i => i.status === 'bad');
       if (firstBad && !expanded.size) expanded.add(firstBad.id);
+      for (const item of result?.items || []) { const loc = locateOf(item); if (loc && loc.verdict === 'ok') repairErrors.delete(loc.id); }
       return result;
     })().finally(() => { running = null; render(); });
     render();
@@ -179,10 +215,74 @@
     setMessage('已复制体检结果（路径和账号已脱敏）');
   }
 
+  // 复制诊断：定位中心给的文本已打码（用户目录写成 %USERPROFILE%，用户名写成 <user>）。ids 不给就是全部 CLI。
+  async function copyDiagnosis(ids) {
+    let text = '';
+    try { text = await harness.diagnosisText(ids); } catch (error) { setMessage('诊断没取到：' + error.message, true); return; }
+    if (!text) { setMessage(harness.missing ? '这个版本还不能导出诊断，请点「复制体检结果」' : '诊断是空的，请先点「重新体检」', true); return; }
+    await hxClient.copyText(text);
+    setMessage(ids ? '已复制这一项的诊断（用户名已打码），可以直接贴给维护人' : '已复制全部 CLI 的诊断（用户名已打码），可以直接贴给维护人');
+  }
+
+  // 定位中心返回新结论：就地替换对应的行，不等整轮体检。
+  function applyLocate(id, loc) {
+    if (!loc || !result?.items) return false;
+    let hit = false;
+    for (const item of result.items) {
+      const cur = locateOf(item);
+      if (cur && cur.id === id) { item.extra = { ...item.extra, locate: loc }; item.fixes = loc.fixes || item.fixes; item.cause = loc.reason || item.cause; hit = true; }
+    }
+    return hit;
+  }
+
+  async function harnessAct(id, act, fix = {}) {
+    try {
+      if (act === 'pick') {
+        setMessage('请在弹出的窗口里选择程序文件；选好后 Hub 先试跑一次，通过才会用它…');
+        const r = await harness.pickPath(id);
+        if (r.missing) { setMessage('这个版本还不能手动指定路径，请升级 Hub 后再试', true); return; }
+        if (!r.value) { setMessage(''); return; }
+        const m = hxView.pickMessage(r.value);
+        if (hxView.pickSucceeded(r.value)) { applyLocate(id, r.value); render(); setMessage(m.text); void run(); return; }
+        // 没通过：选的那份没保存。返回值里的 chosen 是试跑失败的那份，不能拿来画「Hub 将用这个」；
+        // 重新取一次定位中心当前真正生效的结论再画（2026-11-21 审查第 1 条）。
+        setMessage(m.text, true);
+        const now = await harness.locate(id).catch(() => null);
+        if (now && now.value && applyLocate(id, now.value)) render();
+        setMessage(m.text, true);
+        return;
+      }
+      if (act === 'clear') {
+        setMessage('正在清掉手动路径并重新查找…');
+        const r = await harness.clearPath(id);
+        if (r.missing) { setMessage('这个版本还不能清掉手动路径，请升级 Hub 后再试', true); return; }
+        applyLocate(id, r.value); render();
+        setMessage('已改回自动查找。' + (r.value?.reason || ''));
+        void run();
+        return;
+      }
+      if (act === 'harness-repair') { repairErrors.delete(id); render(); }
+      setMessage({ 'harness-borrow-node': '正在改用另一份 Node 并试跑…', 'harness-repair': '正在补齐缺的部分（可能要一两分钟）…' }[act] || '正在处理…');
+      const r = await harness.applyFix(id, act, fix);
+      if (r.missing) { setMessage('这个版本还不支持这个按钮，请升级 Hub 后再试', true); return; }
+      // 一键补齐失败（如公司代理 407）：把主进程给的原因原样（打码后）挂在这一行按钮旁，不只说「还没好」（2026-11-21 审查第 2 条）。
+      const failed = r.value?.repairError ? hxView.maskUser(r.value.repairError) : '';
+      if (failed) repairErrors.set(id, failed); else repairErrors.delete(id);
+      applyLocate(id, r.value); render();
+      const ok = r.value?.verdict === 'ok' && !failed;
+      setMessage(failed ? '没补齐：' + failed : (ok ? '处理好了：' : '还没好：') + (r.value?.reason || ''), !ok);
+      if (!failed) void run();
+    } catch (error) { setMessage('没做成：' + error.message, true); }
+  }
+
   async function doFix(item, fix) {
     const act = fix.act;
     const leave = () => dialog?.close();
-    if (act === 'recheck') return run();
+    if (act === 'recheck') return run({ fresh: true });
+    const hxId = fix.id || locateOf(item)?.id || item.id;
+    if (act === 'harness-pick') return harnessAct(hxId, 'pick');
+    if (act === 'harness-clear-manual') return harnessAct(hxId, 'clear');
+    if (act === 'harness-borrow-node' || act === 'harness-repair') return harnessAct(hxId, act, fix);
     if (act === 'open-assistant') {
       // 公司版的旧助理按钮是藏着的，先找公司助理（2026-11-20 按钮排查）；都没有就就地说明。
       const target = document.getElementById('btn-company-assistant') || document.getElementById('btn-assistant');
@@ -253,6 +353,14 @@
     return fix ? { item, fix } : null;
   }
 
+  // 展开后整行尽量放进可见区；放不下时至少让行头（含「收起」按钮）留在首屏，不用滚着找。
+  function revealRow(id) {
+    const row = dialog?.querySelector(`[data-ec-id="${id}"]`);
+    if (!row) return;
+    row.scrollIntoView({ block: 'nearest' });
+    row.querySelector('.ec-row')?.scrollIntoView({ block: 'nearest' });
+  }
+
   function onClick(event) {
     const t = event.target;
     const tabButton = t.closest('[data-ec-tab]');
@@ -262,17 +370,32 @@
       const id = component.dataset.ecComponent;
       if (id === 'company-proxy' && result?.items?.find(i => i.id === id)?.status === 'off') { dialog.close(); window.__companyApiOpen?.(); return; }
       tab = COMPONENTS.has(id) ? 'components' : 'environment'; expanded.add(id); render();
-      dialog.querySelector(`[data-ec-id="${id}"]`)?.scrollIntoView({ block: 'nearest' }); return;
+      revealRow(id); return;
     }
     const installButton = t.closest('[data-ec-install]');
     if (installButton) { void install(installButton.dataset.ecInstall); return; }
     const cancel = t.closest('[data-ec-cancel]');
     if (cancel) { void ipcRenderer.invoke(cancel.dataset.ecCancel === 'ppt-doctor' ? 'components:doctor-cancel' : 'cli-tools:cancel').catch(e => setMessage(e.message, true)); return; }
     if (t === dialog || t.closest('[data-ec="close"]')) { dialog.close(); return; }
-    if (t.closest('[data-ec="rerun"]')) { void run(); return; }
+    if (t.closest('[data-ec="rerun"]')) { void run({ fresh: true }); return; }
     if (t.closest('[data-ec="copy"]')) { void copyReport(); return; }
+    if (t.closest('[data-ec="copy-diag"]')) { void copyDiagnosis(); return; }
+    const hxChecked = t.closest('[data-hx-checked]');
+    if (hxChecked) {
+      const id = hxChecked.dataset.hxChecked, opening = !checkedOpen.has(id);
+      if (opening) checkedOpen.add(id); else checkedOpen.delete(id);
+      render();
+      if (opening) { const row = dialog.querySelector(`[data-hx-verdict] [data-hx-checked="${id}"]`)?.closest('[data-ec-id]'); if (row) revealRow(row.dataset.ecId); }
+      return;
+    }
+    const hxBtn = t.closest('[data-hx-act]');
+    if (hxBtn) {
+      const id = hxBtn.dataset.hxId, act = hxBtn.dataset.hxAct;
+      if (act === 'copy') void copyDiagnosis([id]); else void harnessAct(id, act);
+      return;
+    }
     const toggle = t.closest('[data-ec-toggle]');
-    if (toggle) { const id = toggle.dataset.ecToggle; if (expanded.has(id)) expanded.delete(id); else expanded.add(id); render(); return; }
+    if (toggle) { const id = toggle.dataset.ecToggle; if (expanded.has(id)) { expanded.delete(id); render(); } else { expanded.add(id); render(); revealRow(id); } return; }
     const fixBtn = t.closest('[data-ec-fix]');
     // 错误卡里的主操作按钮（data-hub-err-act="env-check:<项>:<序号>"）也走这里；卡片自带的求助按钮由错误卡自己处理。
     const cardBtn = !fixBtn && t.closest('[data-hub-err-act^="env-check:"]');
@@ -280,14 +403,23 @@
     if (hit) { event.preventDefault(); event.stopPropagation(); void doFix(hit.item, hit.fix); }
   }
 
+  // focus：定位中心的 id（启动中心点「跑不起来 / 版本太低」的卡片时），直接展开那一项的结论卡。
   async function open(options = {}) {
-    tab = options.tab || 'features';
+    const focusRow = () => {
+      const item = options.focus && (result?.items || []).find(i => locateOf(i)?.id === options.focus || i.id === options.focus);
+      if (!item) return;
+      tab = COMPONENTS.has(item.id) ? 'components' : 'environment'; expanded.add(item.id); render();
+      revealRow(item.id);
+    };
+    tab = options.tab || (options.focus ? (COMPONENTS.has(options.focus) ? 'components' : 'environment') : 'features');
     ensureDialog();
     if (!dialog.open) dialog.showModal();
     render();
+    focusRow();
     await Promise.all([run(), ipcRenderer.invoke('cli-tools:state').then(s => { cliState = s; }).catch(() => {}),
       ipcRenderer.invoke('components:state').then(s => { doctorState = s.doctor; }).catch(() => {})]);
     render();
+    focusRow();
   }
 
   // ---------- 入口 ----------
@@ -343,6 +475,7 @@
   ipcRenderer.on('cli-tools:state', (_event, state) => { cliState = state; if (dialog?.open && tab === 'components') render(); });
   ipcRenderer.on('components:doctor-state', (_event, state) => { doctorState = state; if (dialog?.open && tab === 'components') render(); });
   ipcRenderer.on('components:ocr-state', (_event, state) => { ocrState = state; if (dialog?.open && tab === 'components') render(); });
+  harness.onChange((id, loc) => { if (applyLocate(id, loc) && dialog?.open) render(); });
   ipcRenderer.on('first-run:event', (_event, event) => { if (event.type === 'done') showHint(true); });
   window.addEventListener('focus', () => { if (recheckOnFocus && dialog?.open) { recheckOnFocus = false; void run(); } });
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true }); else start();

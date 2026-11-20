@@ -18,7 +18,13 @@
   async function doFix(fix, row) {
     if (fix.act === 'recheck') return rerun();
     if (fix.act === 'open-gate') { await ipcRenderer.invoke('net-pass:open-window', fix.url); return rerun(); }
-    if (fix.act === 'open-codeagent') { await ipcRenderer.invoke('tool-discovery:pick', { tool: 'codeagent' }); return rerun(); }
+    if (fix.act === 'open-codeagent') {
+      // 手动选 CodeAgent 只经定位中心记账（harness:pick-path / set-path），没通过试跑就在这一行说原因、不保存。
+      const r = await require('./first-run-codeagent-pick').pickCodeAgent(ipcRenderer, fix);
+      if (r.canceled) return;
+      if (!r.ok) { const cell = root?.querySelector(`[data-fr="${row.id}"] .fr-d`); if (cell) cell.textContent = r.error; return; }
+      return rerun();
+    }
     if (fix.act === 'open-update') { window.__appUpdate?.open?.(); return; }
     if (fix.act === 'codeagent-login') recheckOnFocus = true;
     // DSH 一键补齐（2026-11-17）：默认 Hub 自管；「装到我的全局 npm」才装进用户的 npm 全局目录。

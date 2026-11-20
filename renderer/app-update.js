@@ -17,9 +17,13 @@
   const netPassView = require('./net-pass-view');
   let netPass = null, netPassLast = null;
 
+  // 按钮栏常驻（2026-11-21）：弹窗竖排，标题与按钮栏固定，只有中间说明区（.au-body）滚动；发布说明再长，「下载更新」也一直在视口里。
   const css = `
-  .app-update-dialog { position: fixed; inset: 0; margin: auto; height: fit-content; max-height: calc(100vh - 48px); overflow: auto; width: min(560px, calc(100vw - 48px)); padding: 0; border: 1px solid var(--border-subtle, #e3e1ea); border-radius: 14px;
+  .app-update-dialog { position: fixed; inset: 0; margin: auto; height: fit-content; max-height: calc(100vh - 48px); overflow: hidden; width: min(560px, calc(100vw - 48px)); padding: 0; border: 1px solid var(--border-subtle, #e3e1ea); border-radius: 14px;
     background: var(--surface-raised, #fff); color: var(--fg-default, #1f2330); box-shadow: 0 24px 60px rgba(30, 24, 60, .22); font: inherit; }
+  .app-update-dialog[open] { display: flex; flex-direction: column; }
+  .app-update-dialog > .au-head, .app-update-dialog > .au-foot { flex: none; }
+  .app-update-dialog > .au-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
   .app-update-dialog::backdrop { background: rgba(24, 20, 40, .38); }
   .au-head { display: flex; align-items: center; gap: 12px; padding: 18px 20px 12px; }
   .au-head img { width: 34px; height: 34px; border-radius: 8px; }
@@ -39,6 +43,9 @@
   .au-notes { margin: 0 0 12px; padding-left: 18px; }
   .au-quiet { display: flex; align-items: center; gap: 6px; margin: 10px 0 6px; font-size: 12px; color: var(--fg-muted, #6b7080); cursor: pointer; }
   .au-notes li { margin: 2px 0; }
+  .au-notes-more { list-style: none; margin-left: -18px; }
+  .au-notes-more button { border: 0; background: transparent; padding: 2px 0; color: var(--brand, #8b5cf6); font: inherit; font-size: 12.5px; cursor: pointer; }
+  .au-notes-more button:hover { text-decoration: underline; }
   .au-section { font-size: 12px; font-weight: 600; color: var(--fg-muted, #6b7080); margin: 10px 0 6px; }
   .au-progress { height: 8px; border-radius: 99px; background: var(--surface-sunken, #eeedf4); overflow: hidden; }
   .au-allow { margin: 10px 0 4px; padding: 10px 12px; border-radius: 10px; background: var(--surface-sunken, #f6f5fa); font-size: 12.5px; }
@@ -62,7 +69,7 @@
   .au-msg.info { background: var(--surface-sunken, #f6f5fa); color: var(--fg-muted, #6b7080); }
   .au-msg.warn { background: #fff6e5; color: #8a5a00; }
   .au-wait-list { margin: 4px 0 8px; padding-left: 18px; font-size: 12px; color: var(--fg-muted, #6b7080); }
-  .au-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px 18px; }
+  .au-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px 18px; border-top: 1px solid var(--border-subtle, #eceaf2); background: var(--surface-raised, #fff); }
   .au-btn { padding: 7px 16px; border-radius: 8px; border: 1px solid var(--border-subtle, #dcd9e6); background: var(--surface-raised, #fff); color: inherit; font: inherit; font-size: 13px; cursor: pointer; }
   .au-btn:hover { background: var(--surface-sunken, #f6f5fa); }
   .au-btn.primary { background: var(--brand, #8b5cf6); border-color: var(--brand, #8b5cf6); color: #fff; font-weight: 600; }
@@ -172,6 +179,19 @@
   function waitBlock(w) {
     return `<div class="au-msg warn" data-au-wait>${esc(w.text)}。期间新问题先排队，答完立即重启；到点还没答完的先记下、重启后自动接着做。</div>${waitItems(w.items)}`;
   }
+  // 发布说明默认只列前几条，其余折叠成一行「还有 N 条更新 · 展开」（2026-11-21）；展开状态按版本记，换了版本重新折叠。
+  const NOTES_SHOWN = 5;
+  let notesOpenFor = '';
+  function notesHtml(latest) {
+    const notes = latest.notes;
+    const open = notesOpenFor === String(latest.version);
+    const shown = open || notes.length <= NOTES_SHOWN ? notes : notes.slice(0, NOTES_SHOWN);
+    const rest = notes.length - NOTES_SHOWN;
+    const more = notes.length <= NOTES_SHOWN ? ''
+      : open ? '<li class="au-notes-more"><button type="button" data-au="notes-less">收起</button></li>'
+        : `<li class="au-notes-more"><button type="button" data-au="notes-more">还有 ${rest} 条更新 · 展开</button></li>`;
+    return `<ul class="au-notes" data-au-notes="${notes.length}">${shown.map(n => `<li>${esc(n)}</li>`).join('')}${more}</ul>`;
+  }
   function render() {
     if (!dialog || !state) return;
     const w = state.restartWait;
@@ -208,7 +228,7 @@
       body += `<div class="au-msg ok">已是最新版本 v${esc(s.current)}。</div><div class="au-section">更新源</div><ul class="au-sources">${checkRows()}</ul>${allowBox()}`;
       foot = '<button class="au-btn" data-au="close">好的</button>';
     } else if (s.phase === 'available') {
-      if (latest && latest.notes && latest.notes.length) body += `<div class="au-section">本次更新</div><ul class="au-notes">${latest.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>`;
+      if (latest && latest.notes && latest.notes.length) body += `<div class="au-section">本次更新</div>${notesHtml(latest)}`;
       body += installHint(plan);
       body += `<div class="au-section">更新源（按顺序尝试，失败自动换下一个）</div><ul class="au-sources">${(s.attempts && s.attempts.length) ? sourceRows() : checkRows()}</ul>${allowBox()}`;
       const manualA = (plan && (plan.portable || plan.protectedDir)) ? manualDownload() : null;
@@ -275,6 +295,7 @@
     try {
       if (action === 'quiet') { await ipcRenderer.invoke('app-update:set-quiet', event.target.checked); return; }
       if (action === 'preview') { await ipcRenderer.invoke('app-update:set-preview', event.target.checked); await ipcRenderer.invoke('app-update:check'); return; }
+      if (action === 'notes-more' || action === 'notes-less') { notesOpenFor = action === 'notes-more' ? String(state?.latest?.version || '') : ''; render(); return; }
       if (action === 'close') { confirmInfo = null; dialog?.close(); }
       else if (action === 'retry') { await ipcRenderer.invoke('app-update:check'); }
       else if (action === 'download') {

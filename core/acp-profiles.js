@@ -79,7 +79,11 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
   if (companyRoute && !profile.nodePath) { try { hubNode = require('./cli-tools/registry').managedBin('node', baseEnv); } catch (_) {} }
   // 本机 Node 不只看 PATH：常见安装目录、nvm、CodeAgent 自带的 Node 也认（core/local-node.js，2026-11-12）。
   const localNode = require('./local-node');
-  const nodePath = profile.nodePath || (companyRoute ? hubNode || localNode.findNode({ env: baseEnv }) : '');
+  // 定位中心给 DSH 选中的那份 Node 优先（2026-11-21 审查返工）：体检试跑用哪份 Node，建会话就用哪份，
+  // 否则本机 Node 22 + 借用 CodeAgent 的 Node 24 时，体检绿灯、建会话却用 22 起不来。
+  let locatorNode = null;
+  if (companyRoute && !profile.nodePath) { try { const l = require('./harness-locator').launchSpec('dsh', { env: baseEnv }); locatorNode = l && !l.pending && l.node ? l.node.path : null; } catch (_) {} }
+  const nodePath = profile.nodePath || (companyRoute ? locatorNode || hubNode || localNode.findNode({ env: baseEnv }) : '');
   if (companyRoute && !nodePath) throw new Error(`DSH 需要本机的 Node.js 22 或更新版本，在${localNode.SEARCHED_HINT}里都没找到：请安装 Node.js 22+（装好后不用重启 Hub）再新建会话`);
   if (!entry?.entryPath || !nodePath || (!entry.model && !companyRoute)) throw new Error('请配置原生 Harness 路径、Node 路径和套餐模型');
   for (const file of [entry.entryPath, nodePath]) {

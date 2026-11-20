@@ -38,7 +38,7 @@ test('首次保存：先验证再加密落盘，默认模型选 deepseek-v4.1-fl
   const onDisk = fs.readFileSync(gateway.file(dir), 'utf8');
   assert.doesNotMatch(onDisk, /sk-good/);
   assert.equal(gateway.decryptKey(dir, fakeSafe), 'sk-good');
-  assert.ok(r.choices.find(c => c.id === 'glm-5.3-flash').note.includes('推理'));
+  assert.equal(r.choices.find(c => c.id === 'glm-5.3-flash').note, '', '能力不再写死：没体检、没目录时不编说明（体检后见 unit-ascend-healthcheck）');
 });
 
 test('key 错误或网关不通：不落盘，返回白话原因与下一步', async t => {

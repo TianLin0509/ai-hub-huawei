@@ -128,3 +128,13 @@ test('finds WeLinkPC.exe from the welink: protocol registration, else install di
   const byLnk = await FW.findWelinkDesktop({ env: { ProgramData: 'C:\\PD' }, fsModule: { existsSync: () => false, readdirSync: d => { if (!tree[d]) throw new Error('nope'); return tree[d]; } }, execFileImpl: noReg });
   assert.equal(byLnk.path, path.join(menu, 'WeLink_Desktop', 'WeLink Desktop.lnk'), '跳过 WeLink Meeting');
 });
+
+test('the sign/nonce/timestamp error (WeLink client closed or logged out) becomes an actionable message', async t => {
+  const fk = fakeWelink({ exitCode: 1 });
+  fk.w.run = async () => ({ code: 1, stdout: '', stderr: 'Error: Response missing required fields (sign/nonce/timestamp).' });
+  const f = fixture(t, { welink: fk.w });
+  const r = await f.svc.sendWelink({ description: 'x' });
+  assert.equal(r.clientDown, true);
+  assert.match(r.reason, /WeLink 没打开或没登录/);
+  assert.equal(FW.friendlySendError('账号不存在').clientDown, false);
+});

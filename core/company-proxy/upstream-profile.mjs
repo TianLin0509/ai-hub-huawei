@@ -372,6 +372,12 @@ async function registryInstallDirs() {
   } catch { return []; }
 }
 /** 返回含 bin\\codeagentcli.exe 的安装目录；都没有返回 ''。 */
+// main 经 AI_HUB_CODEAGENT_VERSION 传来的版本，只在它说的是同一份安装（AI_HUB_CODEAGENT_INSTALL_DIR）时才算数。
+export function hubKnownVersion(env, codeagentDir) {
+  const version = text(env.AI_HUB_CODEAGENT_VERSION), dir = installRootOf(env.AI_HUB_CODEAGENT_INSTALL_DIR);
+  if (!/^\d[0-9A-Za-z.+-]{0,40}$/.test(version) || !dir || !codeagentDir) return '';
+  return dir.toLowerCase() === installRootOf(codeagentDir).toLowerCase() ? version : '';
+}
 export async function findCodeAgentDir({ env = process.env, exists = hasCodeAgentCli, registry = registryInstallDirs, fallback = DEFAULT_CODEAGENT_DIR } = {}) {
   const pathKey = Object.keys(env).find(k => k.toLowerCase() === 'path');
   // Hub 认定的那份排第一（main 经 AI_HUB_CODEAGENT_INSTALL_DIR 传来：会话实际用的 CodeAgent，含 npm 转发入口、手选路径），
@@ -595,6 +601,13 @@ export async function resolveUpstreamProfile({ dataDir, env = process.env, versi
     profile.codeagentVersion = await versionReader(profile.codeagentDir);
     if (profile.codeagentVersion) profile.sources.codeagentVersion = 'installed';
   }
+  // Registry and "codeagentcli --version" both came back empty, but Hub itself already read the version of this very
+  // install (the "codeagent --version" it runs for sessions, with the user's CodeAgent environment): use that one.
+  if (!profile.codeagentVersion && !profile.codeagentMissing) {
+    note('codeagentVersion', 'hub:codeagent --version');
+    const hubVersion = hubKnownVersion(env, profile.codeagentDir);
+    if (hubVersion) { profile.codeagentVersion = hubVersion; profile.sources.codeagentVersion = 'hub'; }
+  }
   if (profile.signerMode === 'native' && !profile.signerCacheEnv) {
     profile.signerCacheEnv = 'HWTRAN_AUTH_DIR'; profile.sources.signerCacheEnv = 'hub:native-signer';
   }
@@ -606,8 +619,14 @@ export async function resolveUpstreamProfile({ dataDir, env = process.env, versi
   const labels = { identityUrl: '身份接口地址', identityFields: '身份字段名', chatUrl: '模型接口地址', appId: '客户端标识',
     codeagentVersion: 'CodeAgent 版本', signerCacheEnv: '签名缓存变量名' };
   for (const key of Object.keys(labels)) if (key === 'identityFields' ? !profile.identityAccountField : !profile[key]) missing.push(key);
+  // CodeAgent itself not found or its version unreadable: that is the one thing to fix first. The model host is only
+  // missing because the zone is not known yet, and the zone is detected (CodeAgent config, identity answer) or asked
+  // for in Settings once CodeAgent is readable. Listing it here as well ("公司上游信息不全：模型接口地址、CodeAgent 版本、
+  // 所在区域", feedback 2026-11-14..20) named three problems where there is one, and Settings showed no zone choice.
+  const zoneOnlyChat = !profile.zone && zoneNeeded && missing.includes('chatUrl');
+  if (zoneOnlyChat && missing.includes('codeagentVersion')) missing.splice(missing.indexOf('chatUrl'), 1);
   // The model host needs the zone; without it the chat URL cannot be built, and Settings asks for it.
-  if (!profile.zone && zoneNeeded && missing.includes('chatUrl')) {
+  else if (zoneOnlyChat) {
     if (missing.length === 1) {
       const error = new ProfileError('ZONE_UNKNOWN', '公司模型暂时用不了：还没识别出你所在的区域（蓝区 / 绿区 / 黄区）。Hub 在 CodeAgent 的配置里没找到区域；' +
         '模型接口地址按区域不同，不能替你猜。请在「设置 → 自有 API → 公司模型」的「所在区域」里选择，选好后会自动重启反代。', ['zone']);
@@ -623,7 +642,10 @@ export async function resolveUpstreamProfile({ dataDir, env = process.env, versi
     const versionHint = !missing.includes('codeagentVersion') ? ''
       : profile.codeagentMissing ? '\n这台电脑上没找到 CodeAgent 程序（codeagentcli.exe）：查过默认目录、PATH、常见安装目录和系统安装记录。请先安装 CodeAgent，并在命令行里登录、对话一次，然后到「设置 → 自有 API」点「重新启动反代」。'
         : '\n找到了 CodeAgent，但它没有报出版本号。请在命令行运行 codeagent --version 确认能正常启动，然后到「设置 → 自有 API」点「重新启动反代」。';
-    const error = new ProfileError('PROFILE_INCOMPLETE', '公司上游信息不全：' + missing.map(k => labels[k]).join('、') +
+    const onlyCodeAgent = missing.length === 1 && missing[0] === 'codeagentVersion';
+    const head = !onlyCodeAgent ? '公司上游信息不全：' + missing.map(k => labels[k]).join('、')
+      : profile.codeagentMissing ? '公司模型暂时用不了：这台电脑上没找到 CodeAgent' : '公司模型暂时用不了：读不到 CodeAgent 版本';
+    const error = new ProfileError('PROFILE_INCOMPLETE', head +
       '\n找过：' + missing.map(k => `${labels[k]}（${(tried[k] || []).join('、') || '无'}）`).join('；') + versionHint, missing);
     error.diagnostics = diagnostics();
     throw error;

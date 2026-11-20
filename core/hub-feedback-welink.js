@@ -104,6 +104,16 @@ async function findWelinkDesktop({ env = process.env, fsModule = fs, execFileImp
   return { path: null, via: null };
 }
 
+// welink-cli 发消息前要向本机 WeLink 桌面客户端（127.0.0.1:14114）取签名；客户端没开或掉登录时只报
+// 「Response missing required fields (sign/nonce/timestamp)」（2026-11-21 公司真机 Q-1121-01：客户端被同账号另一台设备挤下线，
+// auth status 仍显示 token valid）。翻成用户能照做的话。
+const CLIENT_DOWN = /sign\/nonce\/timestamp|用户未登录|14114/i;
+function friendlySendError(reason) {
+  return CLIENT_DOWN.test(String(reason || ''))
+    ? { clientDown: true, reason: '电脑上的 WeLink 没打开或没登录（welink-cli 要靠它发消息）。请打开并登录 WeLink 后再点一次，或者直接点「复制并打开 WeLink」' }
+    : { clientDown: false, reason };
+}
+
 // welink-cli 回执是否真发出去了（与手机对话同一套判断）；发出去返回空串，否则返回原因。
 function sendReceiptError(result, parseJson) {
   if (!result || result.code !== 0) return String((result && (result.stderr || result.stdout)) || '发送命令失败').trim().slice(0, 200);
@@ -114,4 +124,4 @@ function sendReceiptError(result, parseJson) {
   return '';
 }
 
-module.exports = { MAINTAINER_WELINK, CHUNK, MAX_CHARS, compactFeedback, chunks, findWelinkDesktop, exeFromCommand, sendReceiptError };
+module.exports = { friendlySendError, MAINTAINER_WELINK, CHUNK, MAX_CHARS, compactFeedback, chunks, findWelinkDesktop, exeFromCommand, sendReceiptError };

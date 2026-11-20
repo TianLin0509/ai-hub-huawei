@@ -7,9 +7,19 @@
 //   「API Error token消耗过快， 已达到4亿上限」、「API Error: 模型 "deepseek-v4-flash-0731" 不存在或配置有误，请检查模型配置」、
 //   一键反馈 20261102：「Error: 模型 "…" 不存在或配置有误，请检查模型配置」。
 // 其余英文形式来自同内核 CLI 的公开错误文档（401 登录失效、429 限流、5xx 服务异常、prompt is too long），公司真机出现新样本时补进来。
+// 网关名（成员版带品牌、公开版不带）与本机代理报错的中性前缀「API 网关：」，见 core/api-gateway-errors.js。
 const ERROR_LINE = /^\s*(?:API\s*Error\b|Error:\s*模\s*型\s)/i;
 
 const KINDS = [
+  // API 网关（2026-11-20）：本机代理已把网关报错翻成「API 网关：…」开头的人话（core/api-gateway-errors.js 的 ERROR_PREFIX），
+  // 这几类要先认，否则「网关」二字会落到下面的「服务连不上 / 网络波动」，key 无效会落到「登录过期 → 账号页」。
+  { kind: 'gateway-key', test: /API 网关：key 无效/,
+    title: 'API key 无效', detail: '网关不认这把 key（复制不完整、过期或被禁用）。到设置里重新粘贴 key 就好，对话不会丢。', actions: ['gateway-settings'] },
+  // 模型名长短不定（「deepseek-v4.1-flash」带书名号 21 字，原来限 20 字就落到「登录过期」），所以同一行内不限长度，只认这几句固定话。
+  { kind: 'gateway-model', test: /API 网关：[^\n]*?(?:不对你的[^\n]*?分组开放|没有[^\n]*?使用权限|网关上已经没有)/,
+    title: '这个模型现在用不了', detail: '这个模型不对你的分组开放、没有权限或已下线。换一个模型继续就行，对话不会丢；能用哪些模型见设置里的「一键体检」。', actions: ['model', 'gateway-settings'] },
+  { kind: 'gateway-quota', test: /API 网关：.{0,40}额度/,
+    title: 'API key 的额度用完了', detail: 'free 分组可以在网关模型服务网页的个人资料里签到续上额度，也可以找管理员加额度。对话不会丢。', actions: ['model', 'gateway-settings'] },
   { kind: 'auth', test: /\b401\b|\b403\b|authentication|unauthori[sz]ed|forbidden|token[^\n]{0,40}expired|expired[^\n]{0,40}token|\/login|重新登录|未登录|登录(?:已)?(?:过期|失效)/i,
     title: '登录过期了', detail: '这个账号的登录已经失效，重新登录一次就好，刚才的对话不会丢。', actions: ['accounts', 'retry'] },
   { kind: 'model', test: /模\s*型[^\n]{0,100}(?:不\s*存\s*在|配\s*置\s*有\s*误)|model[^\n]{0,80}(?:not\s*found|does\s*not\s*exist|not\s*available)|无权限使用/i,
@@ -25,7 +35,7 @@ const KINDS = [
 ];
 const FALLBACK = { kind: 'other', title: '模型服务返回了错误', detail: '可以先重试；还不行就换个模型，或者把原始报错反馈给维护人。', actions: ['retry', 'model', 'feedback'] };
 
-const ACTION_LABELS = { retry: '重试这一条', model: '换个模型', accounts: '打开账号页', compact: '压缩上下文', 'new-session': '开新会话', feedback: '一键反馈', 'ask-hub': '问问 Hub' };
+const ACTION_LABELS = { 'gateway-settings': '打开网关设置', retry: '重试这一条', model: '换个模型', accounts: '打开账号页', compact: '压缩上下文', 'new-session': '开新会话', feedback: '一键反馈', 'ask-hub': '问问 Hub' };
 
 function isErrorLine(text) { return ERROR_LINE.test(String(text || '')); }
 
@@ -86,6 +96,7 @@ function runAction(action, { card, document: doc, window: win, ipcRenderer }) {
     return true;
   }
   if (action === 'accounts') { doc.getElementById('btn-rail-accounts')?.click(); return true; }
+  if (action === 'gateway-settings') { win.__companyApiOpen?.('claude'); return true; }
   if (action === 'ask-hub') {
     const helpAsk = win.__hubHelpAsk;
     if (!helpAsk || typeof helpAsk.ask !== 'function') return false;

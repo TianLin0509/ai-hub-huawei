@@ -128,3 +128,20 @@ test('读模型太慢不拖住，默认模型不行换下一个；指纹读文�
   assert.equal(prep.fingerprint(f).size, 3); assert.equal(prep.fingerprint(path.join(dir, 'no')), null);
   assert.equal(prep.writeState(dir, { schema: 1 }), true); assert.equal(prep.readState(dir).schema, 1);
 });
+
+test('手动选 CodeAgent 只经定位中心记账：弹框走 harness:pick-path，已知路径走 harness:set-path，不再调旧的 tool-discovery:pick', async () => {
+  const { pickCodeAgent } = require('../renderer/first-run-codeagent-pick');
+  const calls = [];
+  const ipc = answer => ({ invoke: async (ch, req) => { calls.push([ch, req]); return answer; } });
+  assert.deepEqual(await pickCodeAgent(ipc(null)), { canceled: true });
+  assert.deepEqual(calls.pop(), ['harness:pick-path', { id: 'codeagent' }]);
+  const ok = { verdict: 'ok', chosen: { path: 'C:\CA\codeagent.exe' } };
+  assert.equal((await pickCodeAgent(ipc(ok), { act: 'open-codeagent', path: 'C:\CA\codeagent.exe' })).ok, true);
+  assert.deepEqual(calls.pop(), ['harness:set-path', { id: 'codeagent', path: 'C:\CA\codeagent.exe' }]);
+  const bad = await pickCodeAgent(ipc({ verdict: 'broken', reasonCode: 'manual-path-failed', reason: '你选的 X 没通过试跑' }));
+  assert.equal(bad.ok, false); assert.match(bad.error, /没通过试跑/);
+  assert.equal((await pickCodeAgent(ipc({ ok: false, error: '不认识的 CLI' }))).error, '不认识的 CLI');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'first-run-prep.js'), 'utf8');
+  assert.ok(!src.includes('tool-discovery:pick'), '首次准备不再走旧的记账口');
+  assert.match(src, /first-run-codeagent-pick'\)\.pickCodeAgent\(ipcRenderer, fix\)/);
+});

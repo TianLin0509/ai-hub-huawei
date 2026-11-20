@@ -46,7 +46,21 @@ function runtimeAt(root, source) {
 
 // 找 pi：用户自己装的优先，Hub 一键安装的那份兜底。只读文件、不起进程，体检和新建会话随时可以调。
 // legacy：只找到旧包名 @mariozechner/pi-coding-agent（作者已标记弃用，扩展接口不同），提示升级而不是硬跑。
+// 2026-11-20 起先问定位中心（core/harness-locator）：以命令为准——解析 pi.cmd / pi.ps1 命令壳、读包的 bin 找真实入口，
+// 不再写死 dist/bundle/cli.js；.npmrc 的 prefix、pnpm、volta、nvm、fnm、注册表最新 PATH 都认。定位中心没找到时仍按下面原来的目录找一遍。
 function resolvePiRuntime(env = process.env) {
+  try {
+    let legacy = null;
+    for (const c of require('./harness-locator').quickAll('pi', { env })) {
+      const f = c.form;
+      if (!f || f.kind !== 'node' || !f.pkg) continue;
+      const m = /^(.*?)[\\/]node_modules[\\/]/i.exec(f.script);
+      const root = m ? m[1] : f.pkg.dir;
+      if (f.pkg.name === LEGACY_PACKAGE) { legacy = legacy || { legacy: true, root, version: f.pkg.version || '' }; continue; }
+      if (f.pkg.name === PI_PACKAGE) return { root, entryPath: f.script, source: c.source === 'hub-managed' ? 'hub' : 'user', version: f.pkg.version || '', engines: f.pkg.engines || null };
+    }
+    if (legacy) return legacy;
+  } catch (_) { /* 定位中心不可用时用下面原来的查找 */ }
   for (const root of userRoots(env)) { const hit = runtimeAt(root, 'user'); if (hit) return hit; }
   try {
     const m = require('./cli-tools/registry').managed('pi', env);
@@ -57,8 +71,16 @@ function resolvePiRuntime(env = process.env) {
   return legacy ? { legacy: true, root: legacy, version: readJson(path.join(legacy, 'node_modules', LEGACY_PACKAGE, 'package.json'))?.version || '' } : null;
 }
 // 给 pi 用的 Node：Hub 一键安装的那份优先，但也要核版本（以前直接返回，没看版本）；不够就在本机找 22.19 以上的。
-function nodeFor(env = process.env) {
+// 2026-11-20 起和定位中心同一套 Node 清单（多了注册表最新 PATH、fnm、volta、CodeAgent 自带的 OCHOME 下的 node-v*），按优先级取第一份够新的。
+function nodeFor(env = process.env, minVersion = PI_MIN_NODE) {
   const local = require('./local-node');
+  try {
+    const locator = require('./harness-locator').get();
+    const { nodeCandidates } = require('./harness-locator/node-pick');
+    const ctx = locator.ctx(require('./harness-locator/specs').spec('pi'), locator.sameEnv(env) ? {} : { env });
+    for (const c of nodeCandidates(ctx)) if (local.versionAtLeast(locator.cachedNodeVersion(c.file) || local.nodeVersion(c.file), minVersion)) return c.file;
+    return '';
+  } catch (_) { /* 定位中心不可用时用下面原来的查找 */ }
   try {
     const hub = require('./cli-tools/registry').managedBin('node', env);
     if (hub && local.versionAtLeast(local.nodeVersion(hub), PI_MIN_NODE)) return hub;

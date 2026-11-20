@@ -4,9 +4,35 @@
 // 点开是这个选择器：列出版本号、路径、来源，最新的标「推荐·最新」，选完经 tool-discovery:use 写回设置。
 // 页面只需要把 hintHtml / switchHtml 的结果插进去：带 data-tvp-open 的按钮由这里统一接管点击；
 // 选完会在 document 上派发 tool-version-changed 事件（detail: { tool, summary }），页面据此刷新。
+// CodeAgent（2026-11-21 审查第 6 条）：定位中心（core/harness-locator）是唯一记账处——切换经 harness:set-path 试跑、能用才保存，
 const LABEL = { welink: 'welink-cli', 'ppt-doctor': 'PPT Doctor', codeagent: 'CodeAgent' };
 const VIA = { path: '系统路径', npm: 'npm 全局目录', install: '安装目录', manual: '手动指定', env: '环境变量', disk: '硬盘搜索' };
 const instances = new WeakMap();
+const LOCATOR_TOOLS = new Set(['codeagent']);
+const samePath = (a, b) => !!(a && b && String(a).toLowerCase() === String(b).toLowerCase());
+
+async function alignWithLocator(summary, harness) {
+  if (!summary || !LOCATOR_TOOLS.has(summary.tool) || !harness) return summary;
+  let r;
+  try { r = await harness.locate(summary.tool); } catch { return summary; }
+  const chosen = r && !r.missing && r.value && r.value.chosen;
+  if (!chosen || !chosen.path) return summary;
+  const candidates = (summary.candidates || []).map(c => ({ ...c, current: samePath(c.path, chosen.path) }));
+  const current = candidates.find(c => c.current) || { path: chosen.path, version: chosen.version, current: true };
+  return { ...summary, candidates, current };
+}
+
+// 切换到选中的那份：CodeAgent 走定位中心（能用才保存，失败抛出原因），其他工具照旧。
+async function useVersion({ ipcRenderer, harness, tool, path }) {
+  if (LOCATOR_TOOLS.has(tool)) {
+    const r = await harness.setPath(tool, path);
+    if (!r.value || r.value.verdict !== 'ok') throw new Error((r.value && r.value.reason) || '试跑没通过，原来的设置没有改动');
+    return { tool, located: r.value };
+  }
+  const r = await ipcRenderer.invoke('tool-discovery:use', { tool, path });
+  if (!r || r.ok === false) throw new Error(r?.error || '没能切换');
+  return r;
+}
 
 function esc(value) {
   return String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -42,10 +68,12 @@ function createToolVersionPicker({ document, ipcRenderer }) {
   if (instances.has(document)) return instances.get(document);
   ensureStyle(document);
   let dialog = null;
+  let harness = null;
+  try { harness = require('./harness-client').createHarnessClient(ipcRenderer); } catch { harness = null; }
   async function list(tool, force) {
     const r = await ipcRenderer.invoke('tool-discovery:list', { tool, force });
     if (!r || r.ok === false) throw new Error(r?.error || '没能列出版本');
-    return r;
+    return alignWithLocator(r, harness);
   }
   function close() { if (dialog?.open) dialog.close(); }
   async function open(tool) {
@@ -95,12 +123,11 @@ function createToolVersionPicker({ document, ipcRenderer }) {
       const chosen = summary.candidates.find(c => c.path === selected);
       message('正在切换…');
       try {
-        const r = await ipcRenderer.invoke('tool-discovery:use', { tool, path: selected });
-        if (!r || r.ok === false) throw new Error(r?.error || '没能切换');
+        const r = await useVersion({ ipcRenderer, harness, tool, path: selected });
         document.dispatchEvent(new CustomEvent('tool-version-changed', { detail: { tool, summary: r } }));
         message(`已切换到 ${versionText(chosen?.version)}`);
         setTimeout(close, 600);
-      } catch (error) { message('切换失败：' + error.message); button.disabled = false; }
+      } catch (error) { message('切换失败：' + String(error.message).replace(/[。.]$/, '') + '。原来的设置没有改动。'); button.disabled = false; }
     };
     target.addEventListener('close', () => { target.remove(); if (dialog === target) dialog = null; }, { once: true });
     await load(false);
@@ -125,4 +152,4 @@ if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   } catch { /* 不在 Hub 页面里（单元测试）时不自动挂 */ }
 }
 
-module.exports = { createToolVersionPicker, hintHtml, switchHtml, versionText, LABEL };
+module.exports = { createToolVersionPicker, hintHtml, switchHtml, versionText, LABEL, alignWithLocator, useVersion };

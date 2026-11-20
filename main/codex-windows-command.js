@@ -23,7 +23,35 @@ function pathDirs(env) {
   return String(env[pathKey] || '').split(path.delimiter).map(dir => dir.trim().replace(/^"|"$/g, '')).filter(Boolean);
 }
 
+// 2026-11-20 起改为问定位中心（core/harness-locator）：顺序同上，另外认注册表里最新的 PATH、.npmrc 的 prefix、pnpm / volta / nvm / fnm；
+// 有试跑过的结论时用试跑通过的那份。返回值的形状不变：.exe → native，.cmd/.bat 命令壳 → npm。
+const SOURCE_NAMES = { 'env-override': 'CODEX_INSTALL_DIR', 'npm-prefix': 'APPDATA', path: 'PATH', official: 'official-installer', 'hub-managed': 'hub-tools' };
 function locateWindowsCodex(env = process.env) {
+  let list = null;
+  try { list = require('../core/harness-locator').quickAll('codex', { env, platform: 'win32' }); }
+  catch (error) { console.warn('[codex] 定位中心不可用，改用旧的查找：' + error.message); }
+  if (list) {
+    for (const c of list) {
+      const source = SOURCE_NAMES[c.source] || c.source;
+      if (/\.exe$/i.test(c.path)) return { kind: 'native', command: c.path, source };
+      if (/\.(?:cmd|bat)$/i.test(c.path)) return { kind: 'npm', shim: c.path, source };
+      // 只有 codex.ps1、或只在 npm 目录的 node_modules 里找到包（没有命令壳）：直接用定位中心解析好的启动命令（包里自带的 codex.exe），
+      // 和体检试跑的是同一条；不经 PowerShell 跑 .ps1。
+      const launch = launchOf(c, env);
+      if (launch) return { kind: 'native', command: launch.command, args: launch.args || [], env: launch.env, source, via: c.path };
+    }
+    return null;
+  }
+  return locateWindowsCodexLegacy(env);
+}
+function launchOf(cand, env) {
+  if (!cand.form || !['node', 'native'].includes(cand.form.kind)) return null;
+  try {
+    const launch = require('../core/harness-locator').get().launchFor('codex', cand, { env });
+    return launch && launch.command && !launch.shell && !launch.pending ? launch : null;
+  } catch { return null; }
+}
+function locateWindowsCodexLegacy(env) {
   if (env.CODEX_INSTALL_DIR) {
     const explicit = path.join(env.CODEX_INSTALL_DIR, 'codex.exe');
     if (isFile(explicit)) return { kind: 'native', command: explicit, source: 'CODEX_INSTALL_DIR' };
@@ -52,36 +80,17 @@ function locateWindowsCodex(env = process.env) {
 function resolveNpmShim(env, shim, options = {}) {
   const match = fs.readFileSync(shim, 'utf8').match(/"([^"\r\n]*[\\/]bin[\\/]codex(?:-managed)?\.js)"/i);
   if (!match) throw new Error('无法解析 Codex npm 启动器：' + shim);
-  const script = match[1].replace(/%dp0%/gi, path.dirname(shim) + path.sep);
-  const source = fs.readFileSync(script, 'utf8');
-  const packageRoot = path.resolve(path.dirname(script), '..');
-  const arch = options.arch || process.arch;
-  const triple = { x64: 'x86_64', arm64: 'aarch64' }[arch];
-  if (!triple) throw new Error('不支持的 Codex Windows 架构：' + arch);
-  let vendor = path.join(packageRoot, 'vendor');
-  try {
-    vendor = path.join(path.dirname(createRequire(script).resolve(`@openai/codex-win32-${arch}/package.json`)), 'vendor');
-  } catch (error) {
-    if (error.code !== 'MODULE_NOT_FOUND') throw error;
-  }
-  const target = path.join(vendor, triple + '-pc-windows-msvc');
-  const command = ['bin', 'codex'].map(dir => path.join(target, dir, 'codex.exe')).find(file => fs.existsSync(file));
-  if (!command) throw new Error('Codex 原生程序不存在：' + target);
-  const managed = source.match(/CODEX_MANAGED_PACKAGE_ROOT:\s*("(?:[^"\\]|\\.)*")/);
-  const launchEnv = { ...env, CODEX_MANAGED_PACKAGE_ROOT: managed ? JSON.parse(managed[1]) : packageRoot };
-  for (const key of ['NPM', 'BUN', 'PNPM', 'VITE_PLUS']) delete launchEnv['CODEX_MANAGED_BY_' + key];
-  launchEnv.CODEX_MANAGED_BY_NPM = '1';
-  const pathKey = Object.keys(launchEnv).find(key => key.toLowerCase() === 'path') || 'PATH';
-  const pathDir = path.join(target, 'path');
-  if (fs.existsSync(pathDir)) launchEnv[pathKey] = pathDir + path.delimiter + (launchEnv[pathKey] || '');
-  return { command, args: [], env: launchEnv };
+  return resolveCodexScript(env, match[1].replace(/%~?dp0%?/gi, path.dirname(shim) + path.sep), options);
 }
+// npm / pnpm / volta 装的 Codex：实现在 core/harness-locator/codex-npm.js（定位中心和这里共用）。
+function resolveCodexScript(env, script, options = {}) { return require('../core/harness-locator/codex-npm').resolveCodexScript(env, script, options); }
 
 function resolveWindowsCodex(env = process.env, options = {}) {
   if (options.shim) return resolveNpmShim(env, options.shim, options);
   const found = locateWindowsCodex(env);
   if (!found) throw new Error('未找到 Codex CLI：请安装官方 Codex（原生安装器或 npm），装好后重新检测。');
   if (found.kind === 'npm') return resolveNpmShim(env, found.shim, options);
+  if (found.via) return { command: found.command, args: found.args || [], env: found.env || { ...env } };
   // The official native installer ships a self-contained codex.exe; run it as-is.
   const launchEnv = { ...env };
   // Hub 装的 Codex：和 npm 版一样把自带的 rg 等工具目录（codex-path）放进 PATH。
@@ -105,4 +114,4 @@ function ensureCodexOnSessionPath(sessionEnv) {
   return true;
 }
 
-module.exports = { resolveWindowsCodex, locateWindowsCodex, ensureCodexOnSessionPath };
+module.exports = { resolveWindowsCodex, locateWindowsCodex, ensureCodexOnSessionPath, resolveCodexScript };

@@ -10,6 +10,10 @@
   // WeLink 模式（2026-11-21）：公司内用户的反馈直接发到维护人 WeLink，内网收件机的发送与待发提示都隐藏。
   let wl = null;
   const TO_INTRANET = '发给维护人（公司内网），帮你排查问题';
+  // 2026-11-20（HUB-H 第一期）：附上本机各 CLI 查过的位置和结论（定位中心打码后的文本，renderer/harness-client.js），
+  // 维护人不用再来回问「装在哪、用的哪个 Node」。主进程还没有定位中心时不附，其他照旧。
+  const harness = require('./harness-client').createHarnessClient(ipcRenderer);
+  const diagnosis = () => harness.diagnosisText().catch(() => '');
 
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const css = `
@@ -100,8 +104,11 @@
       const p = await ipcRenderer.invoke('hub-feedback:preview', {});
       if (!contactEdited && !sending && p && typeof p.contact === 'string') dialog.querySelector('[data-hf="contact"]').value = p.contact;
       const items = (p && p.items) || [];
-      dialog.querySelector('[data-hf="items"]').innerHTML = (items.map(i => `<li>${esc(i.name)}${i.detail ? ' · ' + esc(i.detail) : ''}</li>`).join('') || '<li>只有问题描述</li>')
-        ;
+      const diag = await diagnosis();
+      // 诊断放第一条：清单区域只露出前几行，这条最需要同事知道。
+      const rows = (diag ? [`<li>本机 CLI 识别诊断 · 各 CLI 查过的位置和结论（${diag.split(/\r?\n/).length} 行，用户名已打码）</li>`] : [])
+        .concat(items.map(i => `<li>${esc(i.name)}${i.detail ? ' · ' + esc(i.detail) : ''}</li>`));
+      dialog.querySelector('[data-hf="items"]').innerHTML = rows.join('') || '<li>只有问题描述</li>';
       void refreshOutbox();
     } catch (error) {
       dialog.querySelector('[data-hf="items"]').innerHTML = `<li>整理附带内容失败：${esc(error.message)}</li>`;
@@ -184,7 +191,8 @@
     const onProgress = (_e, p) => { if (p && p.phase === 'intranet') message('info', '正在发给维护人（公司内网）…'); else if (p && p.click)message('info', p.phase === 'unblocking' ? `公司网络要求放行，正在后台自动放行（第 ${p.click}/${p.maxClicks} 次）…` : p.phase === 'window' ? `改用后台窗口直接提交（第 ${p.click} 次）…` : `已点放行，正在重发（第 ${p.click}/${p.maxClicks} 轮）…`); };
     ipcRenderer.on('hub-feedback:progress', onProgress);
     let r;
-    try { r = await ipcRenderer.invoke('hub-feedback:send', { description: desc, contact: dialog.querySelector('[data-hf="contact"]').value }); }
+    const full = require('./harness-view').appendDiagnosis(desc, await diagnosis());
+    try { r = await ipcRenderer.invoke('hub-feedback:send', { description: full, contact: dialog.querySelector('[data-hf="contact"]').value }); }
     catch (error) { r = { ok: false, reason: error.message }; }
     finally { ipcRenderer.removeListener('hub-feedback:progress', onProgress); }
     sending = false;

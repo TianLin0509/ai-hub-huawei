@@ -1,0 +1,33 @@
+/* 设置 → 自有 API → API 网关：左表单 + 右侧分组说明与能力表，一屏放下（2026-11-20）。沿用弹窗自己的 hw 变量。 */
+.company-api-dialog.api-gw-wide{width:min(1120px,calc(100vw - 48px))}
+.company-api-dialog .api-gw-layout{display:grid;grid-template-columns:minmax(300px,380px) minmax(0,1fr);gap:var(--hw-sp-6,24px);align-items:start}
+.company-api-dialog .api-gw-layout form label{margin:var(--hw-sp-3,12px) 0}
+.company-api-dialog .api-gw-layout form .company-proxy-state{margin:var(--hw-sp-3,12px) 0}
+.company-api-dialog .api-gw-layout footer{flex-wrap:wrap;margin-top:var(--hw-sp-3,12px)}
+.company-api-dialog .api-gw-intro{margin:0 0 var(--hw-sp-2,8px);font-size:var(--hw-fs-12,12px)}
+.company-api-dialog .api-gw-aside{display:flex;flex-direction:column;gap:var(--hw-sp-3,12px);min-width:0}
+.company-api-dialog .api-gw-aside h3{margin:0;font-size:var(--hw-fs-14,14px);font-weight:600}
+.company-api-dialog .api-gw-aside p{margin:var(--hw-sp-1,4px) 0 0;font-size:var(--hw-fs-12,12px)}
+.company-api-dialog .api-gw-group{padding:var(--hw-sp-3,12px) var(--hw-sp-4,16px);border-radius:var(--hw-r-md,16px);background:var(--hw-surface-2,#f7f8fa);transition:box-shadow .3s}
+.company-api-dialog .api-gw-group.api-gw-flash{box-shadow:0 0 0 2px var(--hw-brand,#0a59f7)}
+.company-api-dialog .api-gw-group small{font-weight:400;color:var(--hw-text-3,#8a939d)}
+.company-api-dialog .api-gw-group ul{margin:var(--hw-sp-1,4px) 0 0;padding-left:20px;font-size:var(--hw-fs-12,12px);line-height:1.7;color:var(--hw-text-2,#58626d)}
+.company-api-dialog .api-gw-aside summary{cursor:pointer;font-size:var(--hw-fs-12,12px);color:var(--hw-brand,#0a59f7);margin-top:var(--hw-sp-1,4px)}
+.company-api-dialog .api-gw-health header{display:flex;align-items:baseline;justify-content:space-between;gap:var(--hw-sp-3,12px);margin-bottom:var(--hw-sp-2,8px)}
+.company-api-dialog .api-gw-health table{width:100%;border-collapse:collapse;font-size:var(--hw-fs-12,12px)}
+.company-api-dialog .api-gw-health th,.company-api-dialog .api-gw-health td{padding:6px 8px;text-align:left;vertical-align:top;border-bottom:1px solid var(--hw-line,rgba(24,36,49,.08))}
+.company-api-dialog .api-gw-health thead th{font-weight:500;color:var(--hw-text-2,#58626d);white-space:nowrap}
+.company-api-dialog .api-gw-health tbody th{font-weight:500;white-space:nowrap}
+.company-api-dialog .api-gw-health td p{margin:2px 0 4px;color:var(--hw-text-2,#58626d)}
+.company-api-dialog .api-gw-health code{display:block;margin-top:4px;padding:4px 8px;border-radius:6px;background:var(--hw-surface-3,#edeff2);font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere}
+.company-api-dialog .api-gw-acts{display:flex;flex-wrap:wrap;gap:6px}
+.company-api-dialog .api-gw-acts button,.company-api-dialog .api-gw-guide button{padding:2px 12px;font-size:var(--hw-fs-12,12px)}
+.company-api-dialog .api-gw-yes{color:var(--hw-green,#1a9e5c)}
+.company-api-dialog .api-gw-no{color:var(--hw-red,#d63b3b)}
+.company-api-dialog .api-gw-dim{color:var(--hw-text-3,#8a939d)}
+.company-api-dialog .api-gw-warn{color:var(--hw-amber,#e8780c)}
+.company-api-dialog .api-gw-health td button{padding:0 8px;font-size:11px;margin-left:4px}
+.company-api-dialog .api-gw-health .api-gw-nowrap{white-space:nowrap}
+.company-api-dialog .api-gw-health td p{margin:2px 0}
+.company-api-dialog .api-gw-guide ol{margin:var(--hw-sp-1,4px) 0;padding-left:20px;font-size:var(--hw-fs-12,12px);line-height:1.7}
+@media (max-width:900px){.company-api-dialog .api-gw-layout{grid-template-columns:1fr}}

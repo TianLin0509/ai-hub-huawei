@@ -114,6 +114,7 @@
   "tests/unit-company-assistant-session-pool.test.js",
   "tests/unit-welink-robust.test.js",
   "tests/unit-welink-login-diagnosis.test.js",
+  "tests/unit-welink-telemetry-noise.test.js",
   "tests/unit-company-phone-extra-ids.test.js",
   "tests/unit-company-assistant-answer-context.test.js",
   "tests/unit-lan-pool.test.js",
@@ -270,6 +271,8 @@
   "tests/unit-avatar-targets-reason.test.js",
   "tests/unit-api-gateway-config.test.js",
   "tests/unit-api-gateway-proxy.test.mjs",
+  "tests/unit-ascend-healthcheck.test.mjs",
+  "tests/unit-company-proxy-unpacked-load.test.mjs",
   "tests/unit-child-lifecycle.test.js",
   "tests/unit-edge-headless-relaunch.test.js",
   "tests/unit-sealed-modules.test.js",
@@ -301,5 +304,11 @@
   "tests/unit-i18n-dom.test.js",
   "tests/unit-company-proxy-idle-timeout.test.js",
   "tests/unit-archive-temp-run.test.js",
-  "tests/unit-codeagent-bypass-warning.test.js"
+  "tests/unit-codeagent-bypass-warning.test.js",
+  "tests/unit-harness-view.test.js",
+  "tests/unit-harness-ui-rework.test.js",
+  "tests/unit-harness-locator.test.js",
+  "tests/unit-company-proxy-nonstream-idle.test.js",
+  "tests/unit-company-proxy-codeagent-version.test.js",
+  "tests/unit-send-while-choice-menu.test.js"
 ]

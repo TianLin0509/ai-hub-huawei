@@ -91,7 +91,12 @@ function prependPath(env, dirs) {
 }
 
 // 用户自己装的 Claude Code：PATH 里的 claude.exe / claude.cmd、npm 全局、官方安装器的 ~/.local/bin。
+// 2026-11-20 起先问定位中心：除了 Hub 自己装的那份，排第一的就是用户的（PATH、注册表最新 PATH、npm 全局、官方安装器……）。
 function userClaude(env) {
+  try {
+    const own = require('../harness-locator').quickAll('claude', { env, platform: 'win32' }).find(c => c.source !== 'hub-managed' && /\.(?:exe|cmd)$/i.test(c.path));
+    return own ? { dir: path.dirname(own.path), onPath: own.source === 'path' } : null;
+  } catch (_) { /* 定位中心不可用时用下面原来的查找 */ }
   const dirs = pathDirs(env);
   for (const dir of dirs) for (const name of ['claude.exe', 'claude.cmd']) if (isFile(path.join(dir, name))) return { dir, onPath: true };
   const extra = [env.APPDATA ? path.join(env.APPDATA, 'npm') : null, path.join(env.USERPROFILE || os.homedir(), '.local', 'bin')].filter(Boolean);

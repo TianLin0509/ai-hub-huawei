@@ -390,6 +390,27 @@ function terminalTailLines(buffer, max = 5) {
     .slice(-max).map(line => (require('./secret-guard').findSecret(line) ? '（这一行疑似含密钥，已隐去）' : sanitize(line).slice(0, 160)));
 }
 
+// 回答进行中，Claude / Codex 停在权限确认或提问菜单上（会话早已过了启动后的一分钟，上面的启动期检查不管）：
+// 这时粘贴进去的第二条消息会被菜单吞掉，紧跟的回车还会替用户选中高亮项（通常是「Yes」）——
+// 消息没执行，还替人批准了一次工具调用（2026-11-21 单测复现「执行中发的第二条消息没执行」）。
+// 只读终端缓冲（无界面 xterm 回放成最后一屏，core/choice-menu-screen.js 认菜单），不发任何按键。
+// skip(lines)：命中就不算拒发菜单，交给后面的专用处理（CodeAgent 的 bypass 警告框由 codeagent-input-guard 自动选 Yes）。
+async function visibleChoiceMenu(sessionManager, sid, { makeScreen, skip } = {}) {
+  const buffer = String(sessionManager.getSessionBuffer?.(sid) || '');
+  // 快速排除：最近输出里没有「光标符号 + 编号选项」就不可能有菜单，不必回放。
+  if (!/[❯›▶►→]\s*\d{1,2}[.)]\s/.test(stripAnsi(buffer.slice(-8000)))) return null;
+  let screen = null;
+  try {
+    screen = (makeScreen || require('./claude-trust-dialog.js').createTrustScreen)();
+    if (!screen) return null;
+    screen.write(buffer.slice(-200000));
+    const lines = await screen.lines();
+    if (skip && skip(lines)) return null;
+    return require('./choice-menu-screen').detectChoiceMenu(lines);
+  } catch { return null; }
+  finally { try { screen?.dispose(); } catch { /* 已释放 */ } }
+}
+
 async function logStartupBlock(sid, reason, buffer, { dataDir, makeScreen } = {}) {
   let screen = null;
   try {
@@ -949,6 +970,16 @@ async function sendToPtyImpl(sid, prompt, kind, options = {}) {
     if (options.submissionReceipt?.resolved) return alreadySubmitted();
     // The native editor replaces the entire draft and preserves multi-line
     // content. Do not clear first: a failed editor handoff must keep the draft.
+    // CodeAgent 的「Bypass Permissions mode」警告框不在这里拒发：下面的 codeAgentInputGuard.check 会按会话权限档替用户选「Yes, I accept」
+    // 或拒发（rsi-c）；这里先拦就永远走不到那一步，Hub 重启后恢复、框晚出现的会话会一直「未发送」。
+    const menu = await visibleChoiceMenu(sessionManager, sid, { skip: isCodeAgentKind(kind)
+      ? lines => !!require('./claude-trust-dialog.js').detectBypassWarningInLines(lines) : null });
+    if (menu) {
+      await logStartupBlock(sid, 'cli-choice-pending', sessionManager.getSessionBuffer(sid) || '');
+      const what = menu.kind === 'permission' ? '权限确认' : '选择题';
+      throw Object.assign(new Error(`终端里有一个${what}在等你选（${String(menu.question || '').slice(0, 60)}），这条消息未发送：`
+        + '现在发，回车会替你选中高亮的那一项。请先在终端里选好，再重发这条。'), { notSent: true, code: 'cli-choice-pending', choiceKind: menu.kind });
+    }
     const usedCodexEditorInput = isCodexCliKind(kind)
       && await sessionManager.tryLoadCodexEditorInput?.(sid, prompt, { attachments: options.attachments || [] });
     if (!usedCodexEditorInput) await clearCodexInputLine(sessionManager, sid, kind);
@@ -1581,7 +1612,7 @@ module.exports = {
   extractStreamingText,
   cleanBufLen,
   checkHostShellTakeover,
-  _private: { writePromptToSession, writeSubmitSignal, clearCodexInputLine },
+  _private: { writePromptToSession, writeSubmitSignal, clearCodexInputLine, visibleChoiceMenu },
   _autoRecoverSend,           // 新增（测试 + 同模块调用）
   inspectPromptSubmissionState,
   resendCurrentPrompt,         // 新增（main.js IPC handler 调用）

@@ -566,5 +566,6 @@
   "偏好简洁、专业、无人物头像": "Clean, professional, no character avatars",
   "水墨留白": "Ink wash",
   "喜欢克制、安静与东方审美": "Restrained, quiet, Eastern aesthetics",
-  "自己挑几个 AI 同场讨论": "Pick several AIs to discuss together"
+  "自己挑几个 AI 同场讨论": "Pick several AIs to discuss together",
+  "读不到 CodeAgent 版本": "Cannot read the CodeAgent version"
 }

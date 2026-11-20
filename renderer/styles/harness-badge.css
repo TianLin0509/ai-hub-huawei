@@ -1,0 +1,3 @@
+/* 启动中心卡片上的 CLI 结论徽标（2026-11-20，renderer/company-api-settings.js 的 paintLocated）：
+   跑不起来用红色，其余（未安装、版本太低、暂时不可用）沿用原来的琥珀色。 */
+.new-session-option .company-cli-status[data-verdict="broken"]:not(:empty) { color: var(--hw-red, var(--status-danger, #c0392b)); }

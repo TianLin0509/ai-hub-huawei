@@ -59,8 +59,16 @@ function readJson(file) { try { return JSON.parse(fs.readFileSync(file, 'utf8').
 function sameDir(a, b) { return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase(); }
 function coreAt(root) {
   const modules = path.join(root, 'node_modules');
-  if (!fs.existsSync(path.join(modules, RUNTIME_FILES[0]))) return null;
-  return { root, modules, entryPath: path.join(modules, RUNTIME_FILES[0]), version: readJson(path.join(modules, '@deepseek-ai/dsh/package.json'))?.version || '' };
+  let entryPath = path.join(modules, RUNTIME_FILES[0]);
+  const pkg = readJson(path.join(modules, '@deepseek-ai/dsh/package.json'));
+  // 入口以包的 bin 为准（公司内部镜像的包布局可能不同，2026-11-20）；读不到 bin 时仍认原来的 lib/bin.js。
+  if (!fs.existsSync(entryPath) && pkg) {
+    const bin = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin && (pkg.bin.dsh || Object.values(pkg.bin)[0]);
+    const alt = bin ? path.join(modules, '@deepseek-ai', 'dsh', bin) : '';
+    if (alt && fs.existsSync(alt)) entryPath = alt;
+  }
+  if (!fs.existsSync(entryPath)) return null;
+  return { root, modules, entryPath, version: pkg?.version || '' };
 }
 function tuiAt(root) {
   const modules = path.join(root, 'node_modules');
@@ -77,6 +85,18 @@ function resolveFrom(dir, name) {
   for (;;) {
     const file = path.join(cur, 'node_modules', name, 'package.json');
     if (fs.existsSync(file)) return { version: readJson(file)?.version || '' };
+    const up = path.dirname(cur);
+    if (up === cur) return null;
+    cur = up;
+  }
+}
+// 从某个目录往上（Node 解析包的规矩）找终端界面包：npm link 的源码自建版，界面包常在工作区的 node_modules 里（定位中心用）。
+function tuiNear(dir) {
+  let cur = dir;
+  try { cur = fs.realpathSync(dir); } catch (_) {}
+  for (;;) {
+    const hit = tuiAt(cur);
+    if (hit) return hit;
     const up = path.dirname(cur);
     if (up === cur) return null;
     cur = up;
@@ -114,6 +134,12 @@ function findDshDesktop(env = process.env) {
     const hit = names.filter(n => /deepseek|^dsh/i.test(n)).map(n => path.join(programs, n)).find(isApp);
     if (hit) return { dir: hit, via: 'programs' };
   }
+  // 桌面版在 %APPDATA%\DSH Desktop\host-commands\<profile>\generations\<id>\bin（或 cli\<id>\bin）生成的命令（以 multica 源码为准，2026-11-20）。
+  try {
+    const { dshDesktopDirs } = require('./harness-locator/sources');
+    const hit = dshDesktopDirs({ env, fs, platform: process.platform }).find(d => !d.empty && ['dsh.exe', 'dsh.cmd', 'dsh.bat'].some(n => fs.existsSync(path.join(d.path, n))));
+    if (hit) return { dir: hit.path, via: 'host-commands' };
+  } catch (_) { /* 只影响这一条线索 */ }
   for (const dir of get('PATH').split(path.delimiter).map(d => d.trim().replace(/^"|"$/g, '')).filter(Boolean)) {
     const m = /^(.*?)[\\/]resources[\\/]runtime[\\/]cli(?:[\\/]bin)?[\\/]?$/i.exec(dir);
     if (m && ['dsh.cmd', 'dsh'].some(n => fs.existsSync(path.join(dir, n)))) return { dir: m[1], via: 'path' };
@@ -142,6 +168,16 @@ function candidateRoots(env) {
     if (fs.existsSync(file)) push(readJson(file)?.root, 'recorded');
   } catch (_) {}
   if (env.APPDATA) push(path.join(env.APPDATA, 'npm'), 'npm-global');
+  // 2026-11-20：定位中心以命令为准找到的 dsh（解析 dsh.cmd / dsh.ps1 命令壳、npm link 的源码自建版、注册表最新 PATH、fnm / volta 等），
+  // 它们的核心所在的全局目录也当候选；核心包不在 node_modules 里（内源版、源码自建）时按包自己的目录。
+  try {
+    for (const c of require('./harness-locator').quickAll('dsh', { env })) {
+      const f = c.form;
+      if (!f || f.kind !== 'node' || !f.pkg || c.source === 'hub-managed') continue;
+      const m = /^(.*?)[\\/]node_modules[\\/]@deepseek-ai[\\/]dsh[\\/]/i.exec(f.script);
+      if (m) push(m[1], 'user');
+    }
+  } catch (_) { /* 定位中心不可用时只看下面原来的目录 */ }
   for (const r of userInstalledRoots(env)) push(r, 'user');
   for (const r of programsRoots(env)) push(r, 'programs');
   return list;
@@ -317,4 +353,5 @@ function buildDshCliOptions(kind, opts, config, dataDir, env) {
       'deepseek-acp': { ...acp.providers?.['deepseek-acp'], entryPath: runtime.entryPath } } },
   }, dataDir, env);
 }
-module.exports = { resolveDshCliRuntime, diagnoseDshRuntime, describeRuntimeIssue, findDshDesktop, pairedModules, buildDshCliOptions, userInstalledRoots, tuiPackageAt, DSH_REPAIR_HINT };
+module.exports = { resolveDshCliRuntime, diagnoseDshRuntime, describeRuntimeIssue, findDshDesktop, pairedModules, buildDshCliOptions, userInstalledRoots, tuiPackageAt, DSH_REPAIR_HINT,
+  TUI_PACKAGES, RUNTIME_FILES, coreAt, tuiAt, tuiNear, peerCheck };

@@ -163,7 +163,7 @@ function applyCompanyConfig(config, raw) {
 function assertLaunchConfigured(kind, config) {
   kind = baseKind(kind);
   if (!isCompany() || !KINDS.includes(kind)) return;
-  const gatewayReady = () => { if (!gatewayStore().configured(dataDir())) throw new Error('API 网关还没配置好：请到「设置 → 模型线路 → API 网关」粘贴 key 并保存。'); };
+  const gatewayReady = () => { if (!gatewayStore().configured(dataDir())) throw new Error('API 网关还没配置好：请到「设置 → 自有 API → API 网关」粘贴 key 并保存。'); };
   if (kind === 'deepseek-acp') {
     if (config.dshBackend === 'proxy') { if (config.dshUpstream === 'gateway') gatewayReady(); return; }
     if (config.dshBackend === 'api') {

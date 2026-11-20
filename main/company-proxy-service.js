@@ -72,13 +72,19 @@ class CompanyProxyService {
   }
 
   proxy() { return require('../core/company-model-proxy'); }
+  // Hub 建会话用的那条 codeagent 命令读到的版本（codeagent-version-probe：8 秒超时、10 分钟内复用）；读不到返回 ''。
+  async hubCodeAgentVersion() {
+    const command = require('../core/codeagent-config').resolveCodeAgentConfig(process.env).command;
+    const version = await require('../core/codeagent-version-probe').codeagentVersion(command);
+    return /^\d[0-9A-Za-z.+-]{0,40}$/.test(String(version || '')) ? String(version) : '';
+  }
   logPath() { return path.join(this.dataDir, 'diagnostics', 'company-model-proxy.log'); }
 
   status() {
     const s = this.lastStatus;
     return { state: this.state, message: this.message, pid: this.child?.pid || null, port: this.endpoint?.port || null,
       mock: this.mock, restarts: this.restarts, accounts: s?.router?.accounts || [], events: (s?.router?.events || []).slice(-10),
-      stats: s?.stats || null, log: this.logPath(), code: s?.code || null,
+      stats: s?.stats || null, log: this.logPath(), code: s?.code || null, missing: Array.isArray(s?.missing) ? s.missing.slice(0, 10) : [],
       // API 网关：是否配置好、哪些会话首包前在排队（session tag -> { waitedMs, attempt }），给会话里的「网关排队中」提示用。
       gateway: s?.gateway || { configured: false, waiting: {} },
       zone: s?.zone || null, chosenZone: this.proxy().chosenZone(this.dataDir), firstInit: s?.firstInit || null,
@@ -188,14 +194,25 @@ class CompanyProxyService {
     delete env.AI_HUB_CODEAGENT_INSTALL_DIR;
     try { const dir = require('../core/codeagent-config').codeagentInstallDir(process.env); if (dir) env.AI_HUB_CODEAGENT_INSTALL_DIR = dir; }
     catch (error) { this.logger.warn?.('[company-proxy] CodeAgent install dir not found: ' + error.message); }
+    // 同一份 CodeAgent 的版本号：反代自己读注册表和 codeagentcli --version 都读不到时（反馈「公司上游信息不全：缺 CodeAgent 版本」），
+    // 用 Hub 建会话时读到的那个（10 分钟内复用，最多等 8 秒），不让用户手填。
+    delete env.AI_HUB_CODEAGENT_VERSION;
+    if (!this.mock && env.AI_HUB_CODEAGENT_INSTALL_DIR) {
+      const version = await this.hubCodeAgentVersion().catch(() => '');
+      if (version) env.AI_HUB_CODEAGENT_VERSION = version;
+    }
     if (process.versions.electron) env.ELECTRON_RUN_AS_NODE = '1';
     delete env.NODE_OPTIONS;
     this.proxy().applyNoProxy(env);
     // API 网关（部门 API key）：地址、模型表和解密后的 Key 只经环境变量交给反代进程，不写文件、不进日志。
-    for (const name of ['AI_HUB_API_GATEWAY_URL', 'AI_HUB_API_GATEWAY_KEY', 'AI_HUB_API_GATEWAY_MODELS', 'AI_HUB_API_GATEWAY_MODEL']) delete env[name];
+    for (const name of ['AI_HUB_API_GATEWAY_URL', 'AI_HUB_API_GATEWAY_KEY', 'AI_HUB_API_GATEWAY_MODELS', 'AI_HUB_API_GATEWAY_MODEL',
+      'AI_HUB_API_GATEWAY_FIRST_MS', 'AI_HUB_API_GATEWAY_GROUP', 'AI_HUB_API_GATEWAY_NO_THINK']) delete env[name];
     const g = this.gatewaySettings();
+    // 首字时间（一键体检测的）与分组：反代据此定各模型的首包等待上限、把「分组下没有渠道」讲成人话。
     if (g) Object.assign(env, { AI_HUB_API_GATEWAY_URL: g.baseURL, AI_HUB_API_GATEWAY_KEY: g.apiKey,
-      AI_HUB_API_GATEWAY_MODELS: g.models.join(','), AI_HUB_API_GATEWAY_MODEL: g.model });
+      AI_HUB_API_GATEWAY_MODELS: g.models.join(','), AI_HUB_API_GATEWAY_MODEL: g.model,
+      AI_HUB_API_GATEWAY_FIRST_MS: JSON.stringify(g.firstTokenMs || {}), AI_HUB_API_GATEWAY_GROUP: g.group || '',
+      AI_HUB_API_GATEWAY_NO_THINK: (g.noThinking || []).join(',') });
     const args = [...systemCaArgs(), serverScript(), '--data-dir', this.dataDir, '--port', String(endpoint.port || 0), '--parent-pid', String(process.pid)];
     if (this.mock) args.push('--mock-upstream');
     this.setState('starting', '公司模型反代正在启动…');
@@ -326,7 +343,8 @@ class CompanyProxyService {
       const gateway = require('../core/api-gateway');
       const view = gateway.read(this.dataDir);
       const apiKey = view.keySet ? gateway.decryptKey(this.dataDir, this.safeStorage) : '';
-      return apiKey ? { baseURL: view.baseURL, apiKey, models: view.models, model: view.model } : null;
+      return apiKey ? { baseURL: view.baseURL, apiKey, models: view.models, model: view.model,
+        firstTokenMs: gateway.firstTokenMs(this.dataDir), group: view.group || '', noThinking: view.noThinking || [] } : null;
     } catch (error) { this.logger.warn?.('[company-proxy] API gateway config unreadable: ' + error.message); return null; }
   }
 

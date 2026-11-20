@@ -56,8 +56,20 @@ export function gatewayFromEnv(env = process.env) {
   const models = String(env.AI_HUB_API_GATEWAY_MODELS || '').split(',').map(x => x.trim()).filter(x => /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(x));
   const preferred = String(env.AI_HUB_API_GATEWAY_MODEL || '').trim();
   const defaultModel = models.includes(preferred) ? preferred : (models[0] || preferred || 'deepseek-v4.1-flash');
-  const headerTimeoutMs = Number(env.AI_HUB_API_GATEWAY_HEADER_TIMEOUT_MS) > 0 ? Number(env.AI_HUB_API_GATEWAY_HEADER_TIMEOUT_MS) : 150_000;
-  return { baseURL, apiKey, models, defaultModel, headerTimeoutMs };
+  // 首包等待：环境变量给了就固定用它；不给（默认）按模型自适应（gateway-provider.mjs）。
+  const headerTimeoutMs = Number(env.AI_HUB_API_GATEWAY_HEADER_TIMEOUT_MS) > 0 ? Number(env.AI_HUB_API_GATEWAY_HEADER_TIMEOUT_MS) : 0;
+  // 一键体检测到的各模型首字毫秒（JSON），和 key 所在分组（报错时说「不对你的 free 分组开放」用）。
+  let firstTokenMs = {};
+  try {
+    const parsed = JSON.parse(String(env.AI_HUB_API_GATEWAY_FIRST_MS || '{}'));
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      firstTokenMs = Object.fromEntries(Object.entries(parsed).filter(([id, ms]) => models.includes(id) && Number(ms) > 0).map(([id, ms]) => [id, Number(ms)]));
+    }
+  } catch { firstTokenMs = {}; }
+  const group = /^[A-Za-z0-9_-]{1,32}$/.test(String(env.AI_HUB_API_GATEWAY_GROUP || '')) ? String(env.AI_HUB_API_GATEWAY_GROUP) : '';
+  // 用户「对这个模型关闭思考」的模型（逗号分隔）：反代给它们的请求注入 enable_thinking=false。
+  const noThinking = String(env.AI_HUB_API_GATEWAY_NO_THINK || '').split(',').map(x => x.trim()).filter(x => /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(x));
+  return { baseURL, apiKey, models, defaultModel, headerTimeoutMs, firstTokenMs, group, noThinking };
 }
 // 网关会话的模型名：网关表里有就原样用；别的名字（Claude Code 后台的 haiku 名、旧的公司模型名）落到默认模型。
 export function gatewayModel(gateway, name) {
@@ -228,6 +240,37 @@ export function releaseOnEnd(response, onEnd) {
     cancel(reason) { end(); return reader.cancel(reason).catch(() => {}); },
   });
   return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+}
+
+// 非流式 Claude 调用的时限（2026-11-21）：跟流式路径（transport.mjs）一样按「空闲」计——上游每来一块数据就重新计时，
+// 连续 timeoutMs 没数据才断；另有 maxDurationMs 绝对上限（缺省 60 分钟）防挂死。以前这里是 15 分钟总时限，
+// 上游一直在正常出数据的长回答也会在第 900 秒被掐断。
+export function idleDeadline({ timeoutMs, maxDurationMs = Math.max(timeoutMs, 60 * 60 * 1000) }) {
+  if (!Number.isSafeInteger(maxDurationMs) || maxDurationMs < timeoutMs) throw new Error('maxDurationMs must be an integer not below timeoutMs');
+  const controller = new AbortController();
+  let idle = null, done = false;
+  const abort = () => { if (done) return; done = true; clearTimeout(idle); clearTimeout(hard); controller.abort(new Error('Request deadline exceeded')); };
+  const arm = () => { clearTimeout(idle); idle = setTimeout(abort, timeoutMs); idle.unref?.(); };
+  const hard = setTimeout(abort, maxDurationMs); hard.unref?.();
+  arm();
+  return { signal: controller.signal, abort, touch: () => { if (!done) arm(); },
+    clear: () => { done = true; clearTimeout(idle); clearTimeout(hard); } };
+}
+
+// 同一个上游回复，但每读到一块就续一次命（deadline.touch）。
+export function touchOnEachChunk(response, touch) {
+  if (!response.body) return response;
+  const body = response.body.pipeThrough(new TransformStream({ transform(chunk, controller) { touch(); controller.enqueue(chunk); } }));
+  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+}
+
+// 非流式 Claude 请求：上游按流式拉，攒成一条 Message；上游非 2xx 原样交回（passthrough）。
+export async function completeNonStreamingMessage({ complete, adapter, converted, original, deadline }) {
+  const upstreamResponse = await complete(converted, { signal: deadline.signal });
+  if (!upstreamResponse.ok) return { passthrough: upstreamResponse };
+  deadline.touch();
+  const live = touchOnEachChunk(upstreamResponse, deadline.touch);
+  return { message: await collectAnthropicMessage(await adapter.convertResponse(live, { signal: deadline.signal, request: original })) };
 }
 
 const uuidFrom = value => {
@@ -419,6 +462,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
   const configureGateway = (config, why = 'start') => {
     gatewayConfig = config;
     gatewayProvider = config ? createGatewayProvider({ baseURL: config.baseURL, apiKey: config.apiKey, headerTimeoutMs: config.headerTimeoutMs,
+      firstTokenMs: config.firstTokenMs, models: config.models, group: config.group, noThinking: config.noThinking,
       ownError: (...args) => errorResponse(...args), log,
       onWait: ({ request, sessionTag, waiting, since, attempt }) => { if (waiting) gatewayWaiting.set(request, { tag: sessionTag, since, attempt }); else gatewayWaiting.delete(request); } }) : null;
     if (config) log(`API gateway configured (${config.models.length} models, default ${config.defaultModel}, ${why})`);
@@ -443,7 +487,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
       if (als.getStore()?.gateway) {
         // 网关会话：不占公司上游的并发名额（网关自己排队），也不受公司上游是否准备好影响。
         stats.gateway.requests++;
-        if (!gatewayProvider) { stats.failed++; stats.lastError = 'GATEWAY_NOT_CONFIGURED'; return errorResponse(503, 'API 网关还没配置好：请到「设置 → 模型线路 → API 网关」粘贴 key 并保存。'); }
+        if (!gatewayProvider) { stats.failed++; stats.lastError = 'GATEWAY_NOT_CONFIGURED'; return errorResponse(503, 'API 网关还没配置好：请到「设置 → 自有 API → API 网关」粘贴 key 并保存。'); }
         // 在途计数：Hub 停反代前（最后一个工具不再用反代）等它们回答完。
         stats.gateway.inFlight++;
         let handed = false;
@@ -545,6 +589,8 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
         const b = await readJson(req);
         configureGateway(b?.baseURL ? gatewayFromEnv({ AI_HUB_API_GATEWAY_URL: b.baseURL, AI_HUB_API_GATEWAY_KEY: b.apiKey,
           AI_HUB_API_GATEWAY_MODELS: Array.isArray(b.models) ? b.models.join(',') : '', AI_HUB_API_GATEWAY_MODEL: b.model,
+          AI_HUB_API_GATEWAY_FIRST_MS: b.firstTokenMs && typeof b.firstTokenMs === 'object' ? JSON.stringify(b.firstTokenMs) : '', AI_HUB_API_GATEWAY_GROUP: b.group || '',
+          AI_HUB_API_GATEWAY_NO_THINK: Array.isArray(b.noThinking) ? b.noThinking.join(',') : '',
           AI_HUB_API_GATEWAY_HEADER_TIMEOUT_MS: gatewayTimeoutEnv }) : null, 'updated by Hub');
         return json(res, 200, { ok: true, gateway: status().gateway });
       }
@@ -573,23 +619,21 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
             req.once('aborted', () => replay.emit('aborted'));
             return inner(replay, res);
           }
-          const controller = new AbortController(); res.once('close', () => { if (!res.writableEnded) controller.abort(); });
-          const timer = setTimeout(() => controller.abort(), opts.timeoutMs);
+          const deadline = idleDeadline({ timeoutMs: opts.timeoutMs }); res.once('close', () => { if (!res.writableEnded) deadline.abort(); });
           try {
             body.stream = true;
             const original = { ...body };
             const converted = logged('claude', claude).convertRequest(body);
-            const upstreamResponse = await gated.complete(converted, { signal: controller.signal });
-            if (!upstreamResponse.ok) { res.writeHead(upstreamResponse.status, { 'content-type': upstreamResponse.headers.get('content-type') || 'application/json' }); res.end(Buffer.from(await upstreamResponse.arrayBuffer())); return; }
-            const message = await collectAnthropicMessage(await claude.convertResponse(upstreamResponse, { signal: controller.signal, request: original }));
-            return json(res, 200, message);
+            const result = await completeNonStreamingMessage({ complete: (b, o) => gated.complete(b, o), adapter: claude, converted, original, deadline });
+            if (result.passthrough) { const up = result.passthrough; res.writeHead(up.status, { 'content-type': up.headers.get('content-type') || 'application/json' }); res.end(Buffer.from(await up.arrayBuffer())); return; }
+            return json(res, 200, result.message);
           } catch (error) {
             if (!res.headersSent) {
               const code = error?.code === 'unsupported_protocol' && error.status >= 400 && error.status < 500 ? error.status : 502;
               return json(res, code, { type: 'error', error: { type: code === 502 ? 'api_error' : 'invalid_request_error', message: code === 502 ? 'The request did not complete' : String(error.message).slice(0, 300) } });
             }
             res.destroy(); return;
-          } finally { clearTimeout(timer); }
+          } finally { deadline.clear(); }
         }
         return inner(req, res);
       });

@@ -27,6 +27,7 @@ function searchDirs(command, env, platform) {
   return dirs;
 }
 
+const LOCATOR_IDS = Object.freeze({ claude: 'claude', gemini: 'gemini', kimi: 'kimi', node: 'node', dsh: 'dsh', pi: 'pi', agy: 'antigravity' });
 function findCommand(command, env = process.env, platform = process.platform) {
   // Code Agent 的命令可以配置成完整路径（例如没有这个 CLI 的电脑上的测试替身）。
   if (command === 'codeagent') {
@@ -39,6 +40,14 @@ function findCommand(command, env = process.env, platform = process.platform) {
   if (command === 'codex' && platform === 'win32') {
     const found = require('../main/codex-windows-command').locateWindowsCodex(env);
     return found ? (found.command || found.shim) : null;
+  }
+  // 定位中心认识的 CLI（2026-11-20）：改为问定位中心，和体检、建会话、账号页同一份结论；返回能在终端里直接运行的那个文件（.exe/.cmd/.bat）。
+  if (platform === 'win32' && LOCATOR_IDS[command]) {
+    try {
+      const list = require('./harness-locator').quickAll(LOCATOR_IDS[command], { env, platform });
+      const hit = list.find(c => /\.(?:exe|cmd|bat)$/i.test(c.path));
+      return hit ? hit.path : null;
+    } catch (error) { console.warn('[community-setup] 定位中心不可用，改用旧的查找：' + error.message); }
   }
   const extensions = platform === 'win32' ? ['.exe', '.cmd', '.bat'] : [''];
   for (const dir of searchDirs(command, env, platform)) for (const extension of extensions) {

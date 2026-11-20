@@ -33,6 +33,7 @@
 .ec-dependency:hover { background: var(--surface-sunken, #f4f4f8); }
 .ec-progress { font-size: 12px; line-height: 1.7; margin-top: 4px; overflow-wrap: anywhere; color: var(--fg-muted, #6b7080); }
 .ec-progress progress { display: block; width: 100%; height: 5px; margin: 5px 0; accent-color: var(--brand, #3478f6); }
+.ec-progress.hx-repair-error { color: var(--status-danger, #c0392b); }
 .ec-list { margin: 0; padding: 0; list-style: none; }
 .ec-item { border-bottom: 1px solid var(--border-subtle, #ececf2); }
 .ec-item:last-child { border-bottom: 0; }
@@ -77,3 +78,31 @@
 .ec-hint-go:hover { background: var(--brand-tint, rgba(52, 120, 246, .08)); }
 .ec-hint-close { border: 0; background: transparent; color: var(--fg-muted, #6b7080); font-size: 15px; cursor: pointer; padding: 2px 8px; border-radius: 6px; }
 .ec-hint-close:hover { background: var(--surface-sunken, #f1f1f5); }
+
+/* 本机 CLI 结论卡（2026-11-20，renderer/harness-view.js）：结论标签沿用体检的绿/黄/红语义；展开后列候选和查过的位置。 */
+.hx-name { min-width: 0; }
+.hx-verdict { flex: none; font-size: 11.5px; font-weight: 500; padding: 0 7px; border-radius: 999px; line-height: 18px; white-space: nowrap; }
+.hx-verdict.hx-ok { color: var(--status-success, #15803d); background: var(--status-success-tint, rgba(21, 128, 61, .1)); }
+.hx-verdict.hx-warn { color: var(--status-warning, #b45309); background: var(--status-warning-tint, rgba(217, 119, 6, .12)); }
+.hx-verdict.hx-bad { color: var(--status-danger, #c0392b); background: var(--status-danger-tint, rgba(192, 57, 43, .1)); }
+.hx-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 400; color: var(--fg-muted, #6b7080); }
+.hx-panel { padding: 8px 12px 10px; border-radius: 10px; background: var(--surface-sunken, #f5f5f8); font-size: 12.5px; line-height: 1.6; }
+.hx-sub { font-size: 12px; color: var(--fg-muted, #6b7080); margin-bottom: 2px; }
+.hx-cands { margin: 0 0 6px; padding: 0; list-style: none; }
+.hx-cand { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; padding: 4px 0; border-bottom: 1px solid var(--border-subtle, #e6e6ee); }
+.hx-cand:last-child { border-bottom: 0; }
+.hx-use { font-size: 11.5px; font-weight: 600; color: var(--brand, #3478f6); }
+.hx-cand-meta { font-size: 12px; color: var(--fg-muted, #6b7080); }
+.hx-path { flex-basis: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: Consolas, monospace; font-size: 11.5px; color: var(--fg-strong, #1f2330); }
+.hx-cand-reason { flex-basis: 100%; font-size: 12px; color: var(--fg-muted, #6b7080); }
+.hx-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.hx-grow { flex: 1; }
+.hx-when { font-size: 11.5px; color: var(--fg-muted, #6b7080); }
+.hx-toggle { border: 0; background: transparent; color: var(--brand, #3478f6); font: inherit; font-size: 12px; cursor: pointer; padding: 2px 0; }
+.hx-checked { flex-basis: 100%; order: 9; margin: 4px 0 0; padding: 0; list-style: none; max-height: 168px; overflow: auto; }
+.hx-checked li { display: grid; grid-template-columns: 36px minmax(120px, 210px) minmax(0, 1fr); column-gap: 8px; align-items: baseline; padding: 1px 0; font-size: 12px; }
+.hx-checked .hx-path { flex-basis: auto; color: var(--fg-muted, #6b7080); }
+.hx-checked .hx-note { grid-column: 2 / -1; color: var(--fg-muted, #6b7080); }
+.hx-r { font-weight: 600; color: var(--fg-muted, #6b7080); }
+.hx-r-found .hx-r { color: var(--status-success, #15803d); }
+.hx-r-error .hx-r { color: var(--status-danger, #c0392b); }

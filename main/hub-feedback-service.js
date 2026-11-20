@@ -514,6 +514,11 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
       } catch (error) { reason = (error && error.message) || '发送出错'; }
       if (reason) {
         logEvent({ via: 'welink', error: reason, part: i + 1, parts: parts.length });
+        const nice = W.friendlySendError(reason);
+        if (nice.clientDown) {
+          recordHistory(hkey, { ...hbase, status: 'failed', reason: 'WeLink 客户端没打开或没登录' });
+          return { ok: false, clientDown: true, reason: (i ? `前 ${i} 段已发出；` : '') + nice.reason, text, savedTo };
+        }
         recordHistory(hkey, { ...hbase, status: 'failed', reason });
         return { ok: false, reason: (i ? `前 ${i} 段已发出，第 ${i + 1} 段没发出去：` : '') + reason, text, savedTo };
       }

@@ -238,6 +238,20 @@ const conversationRecords = raw => recordsAt(raw, ['conversation_info', 'convers
 const messageId = m => first(m, ['msgId', 'msg_id', 'message_id', 'messageId', 'id']);
 const explicitBoolean = v => v === true || v === 1 || (typeof v === 'string' && /^(true|1)$/i.test(v.trim()));
 
+// 群里「回复」某条消息（2026-11-21 真机样本）：CARD_MSG，content 里 cardContext.preMsg.messageID 是被回复那条的编号（长整数）。
+// 每层先把长整数编号改成字符串再解析，避免 JSON.parse 舍入后对不上；取不到就返回空串（按没有引用处理）。
+const BIG_ID_RE = /("(?:messageID|messageId|msgId|msg_id)"\s*:\s*)(\d{15,})/g;
+const objOf = v => {
+  if (v && typeof v === 'object') return v;
+  if (typeof v === 'string' && /^\s*\{/.test(v)) { try { return JSON.parse(v.replace(BIG_ID_RE, '$1"$2"')); } catch { /* 不是 JSON */ } }
+  return null;
+};
+function replyTargetOf(content) {
+  const pre = objOf(objOf(objOf(content)?.cardContext)?.preMsg);
+  const id = pre && first(pre, ['messageID', 'messageId', 'msgId', 'msg_id']);
+  return id == null ? '' : String(id);
+}
+
 // 一个会话的历史消息。me：本人账号（auth status 的 UID），用来判断「最后一句是不是我说的」「有没有 @ 我」。
 // 真机字段（Q-1018-04、Q-1018-10）：列表在 chatInfo 里；msgId（长整数）、sender（账号，和 auth status 的 UID 同格式）、content、contentType、
 // serverSendTime（毫秒）、at（这条有没有 @ 人）、atAccountList（被点名 @ 的账号；@所有人 时是空数组）。
@@ -259,7 +273,7 @@ function messages(raw, conv, me, { myName = '', names = null } = {}) {
     const atFlag = explicitBoolean(m.at), atSelf = first(m, ['atself', 'atSelf', 'at_self']);
     const atMe = !mine && (explicitBoolean(atSelf) || (!!me && atList.includes(String(me))) || (!!myName && text.includes('@' + myName)));
     const atAll = !mine && !atMe && (explicitBoolean(first(m, ['atall', 'atAll', 'at_all'])) || atFlag && !atList.length);
-    return { sourceId: `msg:${conv.id}:${key}`, conv: conv.id, convName: conv.name, group: conv.group, key, at, sender, account, mine, atMe, atAll, text, content, contentType,
+    return { sourceId: `msg:${conv.id}:${key}`, conv: conv.id, convName: conv.name, group: conv.group, key, at, sender, account, mine, atMe, atAll, text, content, contentType, replyTo: replyTargetOf(content),
       displayTime: displayTime(at), timeStatus: time.status === 'known' ? 'known' : 'unknown', timeEvidence: time,
       mentionEvidence: { at: m.at ?? null, atself: atSelf ?? null, atAccountList: atList },
       preview: short(text, 200) || (contentType ? `［非文字消息 · ${contentType}］` : '［消息正文为空］') };
@@ -343,10 +357,13 @@ function awaiting(snapshot, settings = {}, { now, review } = {}) {
       const next = list[list.indexOf(hit) + 1];
       const responded = next && next.at > hit.at && emojiReply(next);
       if (responded) level = 'settled';
+      // 用 WeLink「回复」引用了这条消息：回复关联明确，算已回复（2026-11-21，反馈「已经回复了还一直提醒」）。
+      const quoted = list.some(m => m.mine && (m.replyTo ?? replyTargetOf(m.content)) === hit.key); // 升级前缓存的旧行没有 replyTo，现解析
+      if (quoted) level = 'settled';
       // 小群 @所有人：我之后在群里说过话就算回应过了（点名 @我 仍按原口径不自动结案）
       if (!named && !aiLevel && list.some(m => m.mine && m.at > hit.at)) level = 'settled';
       out.push({ ...hit, since: hit.at, needsReplyReview: true, level, ...(named ? {} : { atAllSmallGroup: true }), ...extra,
-        ...(responded ? { judge: 'emoji-reply', aiVerdict: undefined, aiReason: undefined } : {}) });
+        ...(responded || quoted ? { judge: quoted ? 'quoted-reply' : 'emoji-reply', aiVerdict: undefined, aiReason: undefined } : {}) });
     }
   }
   return out.sort((a, b) => (LEVEL_ORDER[a.level] - LEVEL_ORDER[b.level]) || a.since - b.since);

@@ -10,6 +10,11 @@ function home(env = process.env) { return env.AI_HUB_ANTIGRAVITY_HOME || env.CLA
 function configRoot(env = process.env) { return path.join(home(env), '.gemini', 'antigravity-cli'); }
 function resolveCommand(env = process.env) {
   if (env.AI_HUB_ANTIGRAVITY_COMMAND) return env.AI_HUB_ANTIGRAVITY_COMMAND;
+  // 2026-11-20 起先问定位中心（同一份结论）；它没有找到 agy 程序时仍按下面原来的位置找一遍。
+  try {
+    const hit = require('./harness-locator').quickAll('antigravity', { env }).find(c => c.form && c.form.kind === 'native');
+    if (hit) return hit.path;
+  } catch (_) { /* 定位中心不可用 */ }
   const key = Object.keys(env).find(k => k.toLowerCase() === 'path');
   const dirs = String(env[key] || '').split(path.delimiter).filter(Boolean);
   dirs.push(path.join(env.LOCALAPPDATA || path.join(home(env), 'AppData', 'Local'), 'agy', 'bin'));

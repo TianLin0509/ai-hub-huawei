@@ -69,6 +69,8 @@ function page(file, invoke, distribution = {}) {
     if (name === './net-pass-view') return { ensureCss() {}, boxHtml: () => '', bind() {} };
     if (name === './download-source-view') return { ensureCss() {}, slotHtml: () => '', html: () => '', fill: async () => [] };
     if (name === './download-progress-view') return { ensureCss() {}, html: () => '', mount: () => () => {}, subscribe: () => () => {} };
+    if (name === './harness-view') return require('../renderer/harness-view');
+    if (name === './harness-client') { const missing = async () => ({ missing: true }); return { createHarnessClient: () => ({ peekAll: missing, locateAll: missing, locate: missing, pickPath: missing, clearPath: missing, applyFix: missing, diagnosisText: async () => '', onChange: () => () => {} }) }; }
     if (name === '../core/app-update/downloader') return require('../core/app-update/downloader');
     if (name === '../core/app-update/source-view' || name === '../core/app-update/openx-config') return require(name);
     throw new Error('Unexpected require: ' + name);

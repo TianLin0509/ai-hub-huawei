@@ -271,7 +271,7 @@ test('upstream profile names what is missing in plain words', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cmp-profile-'));
   try {
     await assert.rejects(resolveUpstreamProfile({ dirFinder: async () => '', dataDir, env: { TEMP: dataDir }, versionReader: async () => '', packageFinder: async () => '', archiveReader: async () => '' }),
-      e => e.code === 'PROFILE_INCOMPLETE' && /CodeAgent 版本/.test(e.message) && !e.missing.includes('adapterPackage') && e.missing.includes('chatUrl'));
+      e => e.code === 'PROFILE_INCOMPLETE' && /CodeAgent 版本/.test(e.message) && !e.missing.includes('adapterPackage') && !e.missing.includes('chatUrl') && e.missing.includes('codeagentVersion'));
     const cache = path.join(dataDir, 'cache');
     fs.mkdirSync(cache);
     fs.writeFileSync(path.join(cache, 'codeagent-version-stamp'), '9.1.2\n123\n');

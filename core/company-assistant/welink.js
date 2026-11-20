@@ -158,6 +158,14 @@ async function findCliDeep({ env = process.env, fsModule = fs, execFileImpl, tim
   return found.length ? { path: found[0].path, via: found[0].via, paths: found } : { path: null, via: null, paths: [] };
 }
 
+// welink-cli 自己上报使用统计（Telemetry）失败时打的告警行（2026-11-21，群里多人原文）：
+//   [WARN] Telemetry: report error: HTTP request failed: Could not connect to server (code=7) | detail: Failed to connect to proxyhk... port 8080 ...
+// 1.0.20 exe 里同类行共 5 种：posting to / report failed / report succeeded / report error / unknown error in async report / emit code。
+// 上报走公司代理，代理不通就打这一行，和登录、查询成败无关。以前它含 fail/error 字样，扫码面板据此判「登录没成功」并藏起二维码，
+// 邮件日历配置、手机对话的报错也把它当原因显示。只认行首（可带时间戳）的 [级别] Telemetry，查询结果 JSON 里的文字不受影响。
+const TELEMETRY_NOISE = /^[^\S\r\n]*(?:[^\s"[]+[^\S\r\n]+){0,2}(?:\[(?:WARN|WARNING|ERROR|INFO|DEBUG)\][^\S\r\n]*Telemetry\b|Telemetry\s*:\s*(?:report|posting\s+to|unknown\s+error\s+in\s+async|emit\s+code)\b)[^\r\n]*(?:\r\n|\n|\r|$)/gim;
+const dropNoise = text => String(text || '').replace(TELEMETRY_NOISE, '');
+
 // 跑一条 welink-cli。.js 结尾的是测试用的假程序，用 Hub 自己的程序以 Node 方式运行。
 // onData：边跑边拿到目前为止的全部输出（扫码登录要在命令结束前把二维码显示出来）。
 function run(args, { cli, timeoutMs = 30000, allowSetup = false, sendGroup = '', sendUser = '', addMember = null, recall = null, env = process.env, spawnFn = spawn, onData = null, signal = null } = {}) {
@@ -186,13 +194,13 @@ function run(args, { cli, timeoutMs = 30000, allowSetup = false, sendGroup = '',
     const aborted = () => stop(Object.assign(new Error('已停止这次 WeLink 登录'), { code: 'WELINK_ABORTED' }));
     const timer = setTimeout(() => stop(Object.assign(new Error(`welink-cli 超过 ${Math.round(timeoutMs / 1000)} 秒没返回：${list.slice(0, 2).join(' ')}`), { code: 'WELINK_TIMEOUT' })), timeoutMs);
     signal?.addEventListener('abort', aborted, { once: true });
-    const tell = () => { if (onData) { try { onData(out + err); } catch { /* 显示失败不影响命令 */ } } };
+    const tell = () => { if (onData) { try { onData(dropNoise(out) + dropNoise(err)); } catch { /* 显示失败不影响命令 */ } } };
     // 按 UTF-8 解码且跨数据块拼字（二维码的 █▀▄ 各占 3 个字节，按块各自转字符串会把切开的字变成乱码）。
     child.stdout?.setEncoding?.('utf8'); child.stderr?.setEncoding?.('utf8');
     child.stdout?.on('data', d => { out += d; tell(); });
     child.stderr?.on('data', d => { err += d; tell(); });
     child.on('error', e => { if (done) return; done = true; clearTimeout(timer); clearTimeout(cleanupTimer); signal?.removeEventListener('abort', aborted); reject(e); });
-    child.on('close', code => { if (done) return; done = true; clearTimeout(timer); clearTimeout(cleanupTimer); signal?.removeEventListener('abort', aborted); if (stopping) reject(stopping); else resolve({ code, stdout: out, stderr: err }); });
+    child.on('close', code => { if (done) return; done = true; clearTimeout(timer); clearTimeout(cleanupTimer); signal?.removeEventListener('abort', aborted); if (stopping) reject(stopping); else resolve({ code, stdout: dropNoise(out), stderr: dropNoise(err) }); });
   });
 }
 
@@ -390,7 +398,7 @@ function scrubLine(text) {
 }
 const LOGIN_STEP_LINE = /Token\s+expired,\s+refreshing|Token\s+refresh\s+failed|Proceeding\s+with\s+QR\s+code\s+login|Sign\s+data\s+expired\s+or\s+missing|Token\s+invalid\s+while\s+sign\s+expired|Obtaining\s+sign\s+via\s+WebSocket/i;
 function loginDiagnosis(text) {
-  const lines = String(text || '').split(/\r\n|\n|\r/).map(l => l.trim()).filter(Boolean);
+  const lines = dropNoise(text).split(/\r\n|\n|\r/).map(l => l.trim()).filter(Boolean);
   for (const c of LOGIN_CAUSES) {
     const line = lines.filter(l => c.re.test(l)).pop();
     if (line) return { id: c.id, title: c.title, next: c.next, action: c.action || 'login', line: scrubLine(line).slice(0, 200) };
@@ -400,7 +408,7 @@ function loginDiagnosis(text) {
 // 登录进度（显示用）：Waiting for scan... (elapsed N seconds) → 等待扫码；Scan successful → 已扫码；timeout/failed → 失败及原因。
 // 上面那张原因表里认得的行（如「Cannot connect to WeLink PC.」不含 fail/error 字样）也算失败。
 function loginProgress(text) {
-  const lines = String(text || '').split(/\r\n|\n|\r/).map(l => l.trim()).filter(Boolean);
+  const lines = dropNoise(text).split(/\r\n|\n|\r/).map(l => l.trim()).filter(Boolean);
   let phase = null, elapsed = null, reason = '';
   for (const line of lines) {
     if (/^https?:\/\//i.test(line) || /not\s+displayed\s+correctly/i.test(line)) continue;
@@ -457,4 +465,4 @@ function friendlyError(error) {
 }
 
 module.exports = { READ_ONLY, SETUP, checkArgs, isCliFile, resolveCli, findCliDeep, npmPrefixes, cliUnder, run, parseJson, parseJsonBig, groupMessages, groupMembers, loginState, calendarNeedsSetup,
-  qrFromLoginOutput, qrMatrixFromBlocks, qrBlocksFromMatrix, qrSvgDataUri, loginOutputGarbled, loginUrlFromOutput, loginProgress, loginNeedsScan, loginDiagnosis, LOGIN_CAUSES, scrubLine, friendlyError, SPAWN_RETRY, AUTH_FAILURE };
+  dropNoise, qrFromLoginOutput, qrMatrixFromBlocks, qrBlocksFromMatrix, qrSvgDataUri, loginOutputGarbled, loginUrlFromOutput, loginProgress, loginNeedsScan, loginDiagnosis, LOGIN_CAUSES, scrubLine, friendlyError, SPAWN_RETRY, AUTH_FAILURE };

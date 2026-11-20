@@ -40,15 +40,64 @@
     return `<header><div><h2>${esc(title)}</h2><p>${esc(hint)}</p></div><button type="button" class="company-api-close" aria-label="关闭">×</button></header>`;
   }
   function bindClose(target) { target.querySelector('.company-api-close').onclick = close; }
-  async function refreshInstall() {
+  // 启动中心徽标（2026-11-20，HUB-H 第一期）：先画定位中心的缓存结论（harness:peek-all，不起进程，1 秒内出），
+  // 再用 harness:locate-all 刷新；五种结论各有说法（能用不出徽标），收到 harness:changed 就地改一个按钮。
+  // CodeAgent 的徽标由启动中心自己画（renderer/workspace-controller.js），这里不重复。
+  // 主进程还没有定位中心（旧主进程）时，按原来的 community:setup / company-api:get 判断。
+  const hxView = require('./harness-view');
+  const harness = require('./harness-client').createHarnessClient(ipcRenderer);
+  const BADGE_KINDS = ['claude', 'codex', 'deepseek', 'pi', 'kimi', 'gemini'];
+  const located = Object.create(null);
+  function badgeOf(button) {
+    let badge = button.querySelector('.company-cli-status');
+    if (!badge) { badge = document.createElement('small'); badge.className = 'company-cli-status'; button.append(badge); }
+    return badge;
+  }
+  function paintLocated(kind) {
+    const button = document.querySelector(`.new-session-option[data-kind="${kind}"]`);
+    const result = located[hxView.KIND_TO_ID[kind]];
+    if (!button || !result?.verdict) return false;
+    const b = hxView.badge(result);
+    // 能用、暂时不可用（沿用上次能用的那份）都照常新建会话；其余点卡片时先说明怎么处理。
+    button.dataset.installed = result.verdict === 'ok' || result.verdict === 'unavailable' ? '1' : '0';
+    button.dataset.harness = result.verdict;
+    const badge = badgeOf(button);
+    badge.textContent = b.text; badge.hidden = !b.text; badge.title = b.title;
+    badge.dataset.verdict = result.verdict;
+    if (!document.getElementById('harness-badge-style')) document.head.append(Object.assign(document.createElement('link'), { id: 'harness-badge-style', rel: 'stylesheet', href: 'styles/harness-badge.css' }));
+    return true;
+  }
+  function acceptLocated(all) {
+    if (!all || typeof all !== 'object') return 0;
+    let n = 0;
+    for (const [id, result] of Object.entries(all)) if (result?.verdict) { located[id] = result; n++; }
+    return n;
+  }
+  async function refreshLocated({ fresh = false } = {}) {
+    const peek = await harness.peekAll().catch(() => ({ missing: true }));
+    if (peek.missing) return false;
+    acceptLocated(peek.value);
+    for (const kind of BADGE_KINDS) paintLocated(kind);
+    const run = harness.locateAll({ fresh }).then(r => { if (!r.missing) acceptLocated(r.value); }).catch(error => console.warn('[launch] 定位中心刷新失败：', error.message))
+      .then(() => { for (const kind of BADGE_KINDS) paintLocated(kind); });
+    // fresh（装完、点「重新检测」）：等试跑结果出来再返回，调用方据此判断装好没有。
+    if (fresh) await run;
+    return true;
+  }
+  // fresh：装完、点「重新检测」时不用定位中心的 2 分钟缓存；启动和打开启动中心时走缓存。
+  async function refreshInstall({ fresh = false } = {}) {
+    const harnessReady = refreshLocated({ fresh });
     setup = await ipcRenderer.invoke('community:setup');
+    if (await harnessReady) {
+      for (const kind of BADGE_KINDS) paintLocated(kind);
+      return setup;
+    }
     for (const kind of ['claude', 'codex']) {
       const button = document.querySelector(`.new-session-option[data-kind="${kind}"]`);
       const provider = setup.providers?.find(p => p.id === kind);
       if (!button || !provider) continue;
       button.dataset.installed = provider.installed ? '1' : '0';
-      let badge = button.querySelector('.company-cli-status');
-      if (!badge) { badge = document.createElement('small'); badge.className = 'company-cli-status'; button.append(badge); }
+      const badge = badgeOf(button);
       badge.textContent = provider.installed ? '' : '未安装';
       badge.hidden = provider.installed;
     }
@@ -113,7 +162,7 @@
     let ready = false;
     if (result?.ok) {
       try {
-        await refreshInstall();
+        await refreshInstall({ fresh: true });
         ready = kind === 'deepseek-acp' ? document.querySelector('.new-session-option[data-kind="deepseek"]')?.dataset.installed === '1'
           : !!setup?.providers?.find(p => p.id === kind)?.installed;
       } catch { ready = false; }
@@ -156,7 +205,7 @@
     target.querySelector('[data-api-action="refresh"]').onclick = async event => {
       event.currentTarget.disabled = true;
       try {
-        await refreshInstall();
+        await refreshInstall({ fresh: true });
         if (setup.providers?.find(p => p.id === kind)?.installed) { await open(kind); return; }
         target.querySelector('[role="status"]').textContent = '还未检测到 CLI。请完成安装后重试，或检查安装目录是否已加入 PATH。';
       } catch { target.querySelector('[role="status"]').textContent = '检测失败，请稍后重试。'; }
@@ -180,45 +229,121 @@
       + `<button type="button" role="radio" data-api-mode="gateway" aria-checked="${mode === 'gateway'}"><strong>API 网关 <em class="company-api-new">新</em></strong><small>用部门发的 API key，不需要 CodeAgent</small></button>`
       + `<button type="button" role="radio" data-api-mode="own" aria-checked="${mode === 'own'}"><strong>自有接口</strong><small>填写接口地址，或沿用 CLI 本机配置</small></button></div>`;
   }
-  // API 网关（2026-11-19）：地址、Key、模型表各工具共用一份（core/api-gateway.js）；这里选这个工具用网关和它的默认模型。
+  // API 网关（2026-11-19 接入，11-20 加一键体检）：地址、Key、模型表各工具共用一份（core/api-gateway.js）；这里选这个工具用网关和它的默认模型。
+  // 左边表单，右边分组说明 + 能力表 + 上手说明（renderer/api-gateway-health.js），1440 宽一屏放下。
+  // 打开时刷新网关公开目录（不用 key）；key 已存但还没体检过就自动体检一次（开箱即用）。
+  const gwHealth = require('./api-gateway-health');
+  let gwExtra = { health: null, catalog: null, loaded: false, running: false };
+  let gwProgressBound = false;
   function renderGateway(target, kind, value) {
+    gwHealth.ensureStyle();
+    if (gwExtra.for !== dialog) gwExtra = { ...gwExtra, loaded: false, for: dialog }; // 每次打开设置都刷新一次目录
     const g = snapshot?.gateway || { baseURL: '', keySet: false, choices: [], model: '' };
     const current = value.backend === 'proxy' && value.upstream === 'gateway' ? value.model : g.model;
-    const choices = g.choices?.length ? g.choices : [{ id: g.model, label: g.model, note: '' }];
     const others = KINDS.filter(k => k !== kind && !(snapshot?.providers?.[k]?.backend === 'proxy' && snapshot.providers[k].upstream === 'gateway'));
-    target.insertAdjacentHTML('beforeend', '<form data-gateway-form>'
+    const optionsHtml = (gw, chosen) => {
+      const choices = gw.choices?.length ? gw.choices : [{ id: gw.model, label: gw.model, note: '' }];
+      return choices.map(c => `<option value="${esc(c.id)}"${c.id === chosen ? ' selected' : ''}>${esc(c.id)}${c.note ? ' — ' + esc(c.note) : ''}</option>`).join('');
+    };
+    const gwHost = (() => { try { return new URL(g.baseURL).host; } catch { return ''; } })();
+    target.insertAdjacentHTML('beforeend', '<div class="api-gw-layout"><form data-gateway-form>'
+      // 界面不写平台名（公开版用词合规，2026-11-21 负责人定）：标题旁显示预填的网关地址，同事靠它认出是哪个网关。
+      + `<p class="company-api-note api-gw-intro">API 网关${gwHost ? ` <code class="api-gw-host" data-api-gw-host>${esc(gwHost)}</code>` : ''}：只填部门发的 key，地址已预填。Claude Code、Codex、DSH 都能用。</p>`
       + `<label>网关地址<input name="baseURL" value="${esc(g.baseURL)}" spellcheck="false" autocomplete="off"></label>`
       + `<label>API key<input name="apiKey" type="password" placeholder="${g.keySet ? '已加密保存；留空保留原 key' : '粘贴部门发的 key（通常以 sk- 开头）'}" spellcheck="false" autocomplete="off"></label>`
-      + `<label>默认模型<select name="model">${choices.map(c => `<option value="${esc(c.id)}"${c.id === current ? ' selected' : ''}>${esc(c.id)}${c.note ? ' — ' + esc(c.note) : ''}</option>`).join('')}</select></label>`
-      + (others.length ? `<label class="company-api-check"><input type="checkbox" name="alsoOthers"${g.keySet ? '' : ' checked'}> ${others.map(k => esc(LABELS[k])).join('、')} 也用 API 网关</label>` : '')
-      + `<div class="company-proxy-state" data-proxy-state="${g.keySet ? 'running' : 'stopped'}"><div><span class="company-proxy-dot" aria-hidden="true"></span><strong>${g.keySet ? `API 网关：key 已保存 · ${(g.models || []).length} 个模型` : 'API 网关：还没保存 key'}</strong></div>`
-      + '<p>Key 只存在本机，用 Windows 账户加密，重新打开时不显示。保存时会先请求一次模型列表来验证，不发对话、不耗额度。网关排队时首字可能要等 10–30 秒，会话里会显示「网关排队中」。</p></div>'
+      + `<label>默认模型<select name="model">${optionsHtml(g, current)}</select></label>`
+      + (others.length ? `<label class="company-api-check"><input type="checkbox" name="alsoOthers"${g.keySet ? '' : ' checked'}> ${others.map(k => esc(LABELS[k])).join('、')} 也用网关</label>` : '')
+      + `<div class="company-proxy-state" data-proxy-state="${g.keySet ? 'running' : 'stopped'}"><div><span class="company-proxy-dot" aria-hidden="true"></span><strong>${g.keySet ? `网关：key 已保存 · ${(g.models || []).length} 个对话模型${g.group ? ` · ${esc(g.group)} 分组` : ''}` : '网关：还没保存 key'}</strong></div>`
+      + '<p>Key 只存在本机，用 Windows 账户加密。保存时先请求一次模型列表验证，再自动体检一次（每个模型发一句极短的话，free 分组几乎不耗额度）。</p></div>'
       + '<p class="company-api-message" role="status" aria-live="polite"></p><footer>'
-      + `<button type="button" data-api-action="gw-test"${g.keySet ? '' : ' disabled'}>测试连接</button>`
+      + `<button type="button" data-api-action="gw-health"${g.keySet ? '' : ' disabled'}>一键体检</button>`
       + (g.keySet ? '<button type="button" data-api-action="gw-clear">删除 key</button>' : '')
-      + '<button type="button" data-api-action="close">取消</button><button type="submit" class="primary">保存配置</button></footer></form>');
+      + '<button type="button" data-api-action="close">取消</button><button type="submit" class="primary">保存配置</button></footer></form>'
+      + `<div data-api-gw-slot>${gwHealth.asideHtml({ gateway: g, ...gwExtra }, gwExtra.running)}</div></div>`);
     target.querySelector('[data-api-action="close"]').onclick = close;
+    const form = target.querySelector('form[data-gateway-form]');
     const status = () => target.querySelector('form [role="status"]');
-    target.querySelector('[data-api-action="gw-test"]').onclick = async event => {
-      event.currentTarget.disabled = true; status().textContent = '正在测试连接…';
-      try {
-        const r = await ipcRenderer.invoke('api-gateway:test');
-        status().textContent = r?.ok ? `连接正常：${(r.ms / 1000).toFixed(1)} 秒，网关有 ${r.models.length} 个模型。` : (r?.error || '测试没成功');
-      } catch (error) { status().textContent = '测试没成功：' + error.message; }
-      finally { event.currentTarget?.removeAttribute('disabled'); }
+    const hooks = {
+      shell,
+      focusKey: () => { form.elements.apiKey.focus(); status().textContent = '把 key 重新粘贴到「API key」里，点「保存配置」。'; },
+      rerun: () => void runHealth(),
+      // 关闭 / 恢复某个模型的思考：存进设置、热更新给反代；表里这一行就地改成「已关闭」，下次体检按新设置试跑。
+      setThinking: async (id, enabled) => {
+        if (!id) return;
+        const r = await ipcRenderer.invoke('api-gateway:set-thinking', { model: id, enabled }).catch(error => ({ ok: false, error: error.message }));
+        if (!r?.ok) { status().textContent = '没改成：' + (r?.error || '未知原因'); return; }
+        adopt(r);
+        if (gwExtra.health?.rows) gwExtra.health = { ...gwExtra.health, rows: gwExtra.health.rows.map(x => (x.id === id ? { ...x, noThinking: !enabled } : x)) };
+        paintAside();
+        status().textContent = enabled ? `已恢复 ${id} 的思考。` : `已对 ${id} 关闭思考：之后的新请求直接回答，不再先想。点「一键体检」可以看关掉后的首字时间。`;
+      },
+      pickModel: (id, from) => {
+        if (!id) { status().textContent = '体检里还没有能用的模型，先点「一键体检」看看各模型的情况。'; return; }
+        form.elements.model.value = id;
+        status().textContent = `已把默认模型换成 ${id}${from ? `（${from} 暂不可用）` : ''}，点「保存配置」生效。`;
+      },
     };
+    const paintAside = () => {
+      const slot = target.querySelector('[data-api-gw-slot]');
+      if (!slot) return;
+      slot.innerHTML = gwHealth.asideHtml({ gateway: snapshot?.gateway || g, ...gwExtra }, gwExtra.running);
+      gwHealth.bind(slot, { gateway: snapshot?.gateway || g, ...gwExtra }, hooks);
+    };
+    const adopt = r => {
+      if (!r) return;
+      if (r.gateway) snapshot = { ...snapshot, gateway: r.gateway, providers: r.providers || snapshot?.providers };
+      if ('health' in r) gwExtra.health = r.health;
+      if ('catalog' in r) gwExtra.catalog = r.catalog;
+      gwExtra.loaded = true;
+      const select = form.isConnected ? form.elements.model : null;
+      if (select && r.gateway) { const keep = select.value; select.innerHTML = optionsHtml(r.gateway, r.gateway.models?.includes(keep) ? keep : r.gateway.model); }
+    };
+    async function runHealth() {
+      const button = target.querySelector('[data-api-action="gw-health"]');
+      if (button) button.disabled = true;
+      gwExtra.running = true; paintAside();
+      status().textContent = '正在体检：每个模型发一句极短的话，测首字时间、工具调用和思考，约 10–60 秒…';
+      try {
+        const r = await ipcRenderer.invoke('api-gateway:healthcheck');
+        gwExtra.running = false; adopt(r); paintAside();
+        if (!r?.ok) { status().textContent = '体检没完成：' + (r?.message || r?.error || '未知原因'); return; }
+        const rows = gwExtra.health?.rows || [];
+        const ok = rows.filter(x => x.ok), tools = ok.filter(x => x.tools === true);
+        status().textContent = `体检完成：${rows.length} 个对话模型里 ${ok.length} 个能用${tools.length ? `，${tools.length} 个会调用工具` : ''}${ok.length < rows.length ? '；不能用的看右边原因和按钮' : ''}。`;
+      } catch (error) { gwExtra.running = false; paintAside(); status().textContent = '体检没完成：' + error.message; }
+      finally { const b = target.querySelector('[data-api-action="gw-health"]'); if (b && snapshot?.gateway?.keySet) b.disabled = false; }
+    }
+    if (!gwProgressBound) {
+      gwProgressBound = true;
+      ipcRenderer.on('api-gateway:health-progress', (_event, row) => {
+        const slot = dialog?.querySelector('[data-api-gw-slot]');
+        if (!slot || !row?.id) return;
+        gwHealth.updateRow(slot, row);
+      });
+    }
+    paintAside();
+    target.querySelector('[data-api-action="gw-health"]').onclick = () => void runHealth();
+    // 打开时：刷新公开目录；已存 key 但还没体检过 → 自动体检一次。
+    if (!gwExtra.loaded) {
+      void ipcRenderer.invoke('api-gateway:catalog').then(r => {
+        if (!form.isConnected) return;
+        adopt(r); paintAside();
+        if (snapshot?.gateway?.keySet && !gwExtra.health && !gwExtra.running) void runHealth();
+      }).catch(() => {});
+    }
     const clearButton = target.querySelector('[data-api-action="gw-clear"]');
     if (clearButton) clearButton.onclick = async () => {
       try {
         const r = await ipcRenderer.invoke('api-gateway:clear');
         snapshot = { ...snapshot, gateway: r.gateway, providers: r.providers || snapshot.providers };
         render(kind);
-        dialog.querySelector('form [role="status"]').textContent = '已删除本机保存的 key。用 API 网关的会话之后发消息会提示重新粘贴 key。';
+        dialog.querySelector('form [role="status"]').textContent = '已删除本机保存的 key。用网关的会话之后发消息会提示重新粘贴 key。';
       } catch (error) { status().textContent = '没删成：' + error.message; }
     };
-    target.querySelector('form').onsubmit = async event => {
+    form.onsubmit = async event => {
       event.preventDefault();
-      const form = event.currentTarget, save = form.querySelector('[type="submit"]');
+      const save = form.querySelector('[type="submit"]');
+      const typedKey = form.elements.apiKey.value.trim();
       save.disabled = true;
       status().textContent = '正在验证并保存…（请求一次模型列表，通常 1 秒内）';
       try {
@@ -228,8 +353,11 @@
         if (!r?.ok) { status().textContent = r?.error || '保存没成功'; return; }
         const fresh = await ipcRenderer.invoke('company-api:get');
         if (fresh?.ok) snapshot = fresh;
+        gwExtra = { health: r.health ?? gwExtra.health, catalog: r.catalog ?? gwExtra.catalog, loaded: true, running: false, for: dialog };
         render(kind);
-        dialog.querySelector('form [role="status"]').textContent = `已保存。新建 ${kinds.map(k => LABELS[k]).join('、')} 会话走 API 网关（${form.elements.model.value}）；进行中的会话保持原线路。`;
+        dialog.querySelector('form [role="status"]').textContent = `已保存。新建 ${kinds.map(k => LABELS[k]).join('、')} 会话走网关（${snapshot?.gateway?.model || form.elements.model.value}）；进行中的会话保持原线路。`;
+        // 新填的 key：主进程已在后台开始体检，这里接上它显示进度（同一轮，不会重复发请求）。
+        if (typedKey || r.healthRunning) dialog.querySelector('[data-api-action="gw-health"]')?.click();
         void refreshInstall().catch(() => {});
       } catch (error) { status().textContent = '保存没成功：' + error.message; }
       finally { save.disabled = false; }
@@ -399,6 +527,7 @@
       + `<nav aria-label="API 工具">${KINDS.map(id => `<button type="button" data-api-kind="${id}" aria-pressed="${id === kind}">${LABELS[id]}</button>`).join('')}</nav>`
       + modeSwitch(mode);
     bindClose(target);
+    target.classList.toggle('api-gw-wide', mode === 'gateway'); // 网关页左右两栏，一屏放下
     target.querySelectorAll('[data-api-kind]').forEach(button => { button.onclick = () => render(button.dataset.apiKind); });
     target.querySelectorAll('[data-api-mode]').forEach(button => { button.onclick = () => { viewMode[kind] = button.dataset.apiMode; render(kind); }; });
     if (mode === 'proxy') { renderProxy(target, kind, value); return; }
@@ -507,6 +636,12 @@
     // installation immediately and cannot accidentally submit a session.
     document.getElementById('new-session-menu')?.addEventListener('click', event => {
       const button = event.target.closest('.new-session-option[data-kind]');
+      // 找到了但跑不起来 / 版本太低：打开体检里这一项的结论卡（原因、修复按钮、查过的位置），不弹「未安装」说明。
+      if (button && BADGE_KINDS.includes(button.dataset.kind) && ['broken', 'too-old'].includes(button.dataset.harness) && window.__envCheck?.open) {
+        event.preventDefault(); event.stopImmediatePropagation();
+        void window.__envCheck.open({ focus: hxView.KIND_TO_ID[button.dataset.kind] });
+        return;
+      }
       if (button && ['claude', 'codex', 'deepseek'].includes(button.dataset.kind) && button.dataset.installed === '0') {
         event.preventDefault(); event.stopImmediatePropagation(); showInstall(button.dataset.kind === 'deepseek' ? 'deepseek-acp' : button.dataset.kind);
       }
@@ -533,7 +668,23 @@
     });
     window.__companyApiOpen = open;
     void refreshInstall().catch(() => {});
-    document.getElementById('community-refresh')?.addEventListener('click', () => void refreshInstall().catch(() => {}));
+    // 定位中心的结论变了（轮询、自愈、装完）：只改对应的那个按钮。
+    harness.onChange((id, result) => {
+      if (!result?.verdict) return;
+      located[id] = result;
+      for (const kind of BADGE_KINDS) if (hxView.KIND_TO_ID[kind] === id) paintLocated(kind);
+    });
+    // 打开启动中心时刷新一次（定位中心 2 分钟内走缓存，不重复试跑）。
+    const menu = document.getElementById('new-session-menu');
+    if (menu && typeof MutationObserver === 'function') {
+      let shown = false;
+      new MutationObserver(() => {
+        const now = menu.getClientRects().length > 0;
+        if (now && !shown) void refreshLocated().catch(() => {});
+        shown = now;
+      }).observe(menu, { attributes: true, attributeFilter: ['style', 'class', 'hidden'] });
+    }
+    document.getElementById('community-refresh')?.addEventListener('click', () => void refreshInstall({ fresh: true }).catch(() => {}));
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true }); else init();
 })();

@@ -129,6 +129,8 @@ function gatewayModelIds(dataDir) {
   const view = gatewayConfig().read(dataDir);
   return view.models.length ? view.models : [view.model];
 }
+// 网关模型的上下文上限：网关目录里的真实值（如 256K），取不到用保守默认 128000（core/api-gateway-catalog.js）。
+function gatewayModels(dataDir) { return gatewayModelIds(dataDir).map(id => ({ id, input: gatewayConfig().contextOf(dataDir, id) })); }
 
 // 发往 127.0.0.1 的请求不能被系统代理或代理环境变量带走（公司电脑实测：Codex 因此一次请求都没发出去）。
 function applyNoProxy(env) {
@@ -170,9 +172,10 @@ const CODEX_INSTRUCTIONS = `You are a coding agent running in the Codex CLI on t
 - Shell commands run in PowerShell. Verify your work (build, tests) when practical.
 - Reply to the user in the language they use (usually Chinese). Be concise and state what you changed and how you verified it.`;
 // Codex 不认识公司模型的名字时会按通用默认值跑；给它一份目录，说明只收文字、不用联网搜索。
-function codexCatalog(ids = companyModelIds(), description = 'Company model via local proxy', known = companyModels()) {
+function codexCatalog(ids = companyModelIds(), description = 'Company model via local proxy', known = companyModels(), { cap = 128000 } = {}) {
   // 上下文按公司目录给的输入上限，不超过以前一直用的 128000（目录里更小的模型按它自己的）。
-  const windowOf = slug => { const m = known.find(x => x.id === slug); return m && m.input ? Math.min(m.input, 128000) : 128000; };
+  // 网关模型（cap: Infinity）按网关目录的真实值。
+  const windowOf = slug => { const m = known.find(x => x.id === slug); return m && m.input ? Math.min(m.input, cap) : 128000; };
   const entry = slug => ({ slug, display_name: slug, description,
     default_reasoning_level: 'medium', supported_reasoning_levels: [{ effort: 'medium', description: 'Mapped to upstream thinking (high)' }],
     shell_type: 'unified_exec', visibility: 'list', supported_in_api: true, priority: 1, base_instructions: CODEX_INSTRUCTIONS, model_messages: null,
@@ -191,7 +194,7 @@ function ensureCodexHome(dataDir, { model, projectDir, gateway = false }) {
   const home = codexHome(dataDir, { gateway });
   fs.mkdirSync(home, { recursive: true });
   const catalog = path.join(home, 'company-model-catalog.json');
-  fs.writeFileSync(catalog, JSON.stringify(gateway ? codexCatalog(gatewayModelIds(dataDir), 'API gateway model via local proxy') : codexCatalog(companyModelIds(dataDir), undefined, companyModels(dataDir)), null, 2), 'utf8');
+  fs.writeFileSync(catalog, JSON.stringify(gateway ? codexCatalog(gatewayModelIds(dataDir), 'API gateway model via local proxy', gatewayModels(dataDir), { cap: Infinity }) : codexCatalog(companyModelIds(dataDir), undefined, companyModels(dataDir)), null, 2), 'utf8');
   const projectKey = path.resolve(projectDir || require('node:os').homedir());
   require('./codex-managed-config').writeHubManagedCodexConfig(path.join(home, 'config.toml'), [
     'disable_response_storage = true',
@@ -248,11 +251,12 @@ const DSH_DISABLED = ['deepseek-account', 'llm-deepseek', 'llm-deepseek-account'
 function dshRoute({ dataDir, sessionId, model, account, gateway = false }) {
   const endpoint = requireEndpoint(dataDir, { gateway });
   const ids = gateway ? gatewayModelIds(dataDir) : companyModelIds(dataDir);
+  const contextOf = id => (gateway ? gatewayConfig().contextOf(dataDir, id) : 128000);
   return {
     providerId: PROVIDER_ID, keyEnv: KEY_ENV, key: sessionKey(endpoint, sessionId, account, { gateway }), baseURL: origin(endpoint) + '/v1',
     model: launchModel(model, { gateway, dataDir }),
     providerConfig: { api: 'openai-completions', baseURL: origin(endpoint) + '/v1', apiKeyEnv: KEY_ENV, retryPolicy: { mode: 'normal', maxRetries: 0 }, reasoning: 'high',
-      models: ids.map(id => ({ id, contextWindow: 128000, maxTokens: 16384, reasoningEfforts: { high: 'high' },
+      models: ids.map(id => ({ id, contextWindow: contextOf(id), maxTokens: 16384, reasoningEfforts: { high: 'high' },
         compat: { supportsDeveloperRole: false, thinkingFormat: 'deepseek', supportsStore: false, maxTokensField: 'max_tokens' } })) },
     disabledPatches: DSH_DISABLED.map(id => ({ id, disabled: true })),
   };
