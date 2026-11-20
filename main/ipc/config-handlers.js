@@ -433,6 +433,12 @@ function registerConfigIpc(ipcMain, deps) {
       try { return { ok: true, proxy: await companyProxyService.restart() }; }
       catch (error) { return { ok: false, error: error.message, proxy: companyProxyService.status() }; }
     });
+    ipcMain.handle('company-proxy:refresh-models', async () => {
+      if (deps.lanPoolService?.client()?.enabled) return { ok: false, error: '共享模型的清单由主机那台电脑管理' };
+      if (!companyProxyService) return { ok: false, error: '反代服务不可用' };
+      try { const r = await companyProxyService.refreshModels(); return { ok: r?.ok !== false, error: r?.error, catalog: r?.modelCatalog || null, changed: !!r?.changed }; }
+      catch (error) { return { ok: false, error: error.message }; }
+    });
     ipcMain.handle('company-proxy:set-zone', async (_event, request = {}) => {
       if (deps.lanPoolService?.client()?.enabled) return { ok: false, error: '共享模型的区域由主机管理员设置', proxy: proxyStatus() };
       if (!companyProxyService) return { ok: false, error: '反代服务不可用' };

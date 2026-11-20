@@ -59,9 +59,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "公司模型（经本机反代）跟 CodeAgent 自己的模型目录保持一致：CodeAgent 里新出的模型（如 GLM-5.3）自动出现在 Claude Code / Codex / DSH 的模型选择里，每 30 分钟同步一次；要了没有的版本会明说，不再悄悄换成 GLM-5.2"
+    "公司模型清单改为打开 Hub 时取一次，不再每 30 分钟定时刷；启动中心模型卡上方加「刷新模型列表」按钮，CodeAgent 出了新模型点一下就有；DeepSeek 卡恢复显示「DeepSeek V4.1 Flash」"
   ],
-  "version": "5.6.71",
+  "version": "5.6.72",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

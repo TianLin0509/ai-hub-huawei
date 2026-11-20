@@ -93,12 +93,17 @@ function writeCache(dataDir, cache) {
   fs.writeFileSync(tmp, JSON.stringify(cache, null, 1), 'utf8');
   try { fs.renameSync(tmp, file); } catch (error) { try { fs.unlinkSync(tmp); } catch { /* gone */ } throw error; }
 }
+// 目录里的菜单名就是上游名（如 deepseek-v4.1-flash-1017）时，沿用以前界面上的好读名字（DeepSeek V4.1 Flash）。
+function friendlyLabel(m) {
+  const known = BUILTIN.find(b => b.id === m.id);
+  return known && (!m.label || m.label === m.id) ? known.label : (m.label || m.id);
+}
 /** 各账号目录的并集（个人号在前）；一个都没有时用兜底。 */
 function unionModels(cache) {
   const out = [];
   const ids = cache && cache.accounts ? Object.keys(cache.accounts).sort((a, b) => (a === 'personal' ? -1 : b === 'personal' ? 1 : 0)) : [];
   for (const id of ids) for (const m of (cache.accounts[id] && cache.accounts[id].models) || []) {
-    if (m && SAFE_ID.test(m.id) && !out.some(x => x.id.toLowerCase() === m.id.toLowerCase())) out.push({ ...m, ...capabilities(m.id) });
+    if (m && SAFE_ID.test(m.id) && !out.some(x => x.id.toLowerCase() === m.id.toLowerCase())) out.push({ ...m, label: friendlyLabel(m), ...capabilities(m.id) });
   }
   return out.length ? out : BUILTIN.map(m => ({ ...m, textOnly: true, ...capabilities(m.id) }));
 }

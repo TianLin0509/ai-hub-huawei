@@ -2219,6 +2219,25 @@
       const step = event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -1 : 1;
       pickModelCard(cards[(at + step + cards.length) % cards.length]);
     });
+    // 「刷新模型列表」：让本机反代马上去 CodeAgent 重取模型目录，再按新目录重画模型卡（2026-11-20 定：不定时刷，打开 Hub 取一次 + 手动）。
+    document.getElementById('new-session-model-refresh')?.addEventListener('click', async event => {
+      const button = event.currentTarget, msg = document.getElementById('new-session-model-refresh-msg');
+      const kind = selectedKind, before = new Set(modelCards.companyModels(companyProvider[kind]).map(m => m.id));
+      button.disabled = true; button.textContent = '正在从 CodeAgent 获取…'; if (msg) msg.textContent = '';
+      let text;
+      try {
+        const r = await ipcRenderer.invoke('company-proxy:refresh-models');
+        if (!r?.ok) text = `没刷新成功：${r?.error || '没取到模型目录'}，先用原来的清单`;
+        else {
+          for (const k of Object.keys(companyProvider)) if (companyApiKind(k)) await loadCompanyApiCatalog(k);
+          const now = modelCards.companyModels(companyProvider[kind]), added = now.filter(m => !before.has(m.id)).map(m => m.label || m.id);
+          text = `已从 CodeAgent 取到 ${now.length} 个模型${added.length ? '，新增 ' + added.join('、') : '，和原来一样'}${r.catalog?.lastError ? '（有的号没取到，沿用它上次的清单）' : ''}`;
+        }
+      } catch (error) { text = `没刷新成功：${error.message}`; }
+      button.disabled = false; button.textContent = '刷新模型列表';
+      if (msg) { msg.textContent = text; msg.title = text; }
+      paint();
+    });
     if (companyApi.isCompany()) {
       ipcRenderer.on('company-proxy:status', (_event, status) => {
         companyProxyStatus = status || null;

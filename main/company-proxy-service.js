@@ -330,6 +330,14 @@ class CompanyProxyService {
     } catch (error) { this.logger.warn?.('[company-proxy] API gateway config unreadable: ' + error.message); return null; }
   }
 
+  // 启动中心「刷新模型」：让反代马上重拉各账号的 CodeAgent 模型目录（5 个号顺序拉，通常几秒；单号最长 30 秒）。
+  // 反代还没起（没用过公司模型）就先起它，起来时本来就会拉一次，这次请求等那一次拉完。
+  async refreshModels() {
+    const status = await this.ensureReady();
+    if (status.state !== 'running') throw new Error(status.message || '公司模型暂时用不了');
+    return this.request('/admin/refresh-models', { method: 'POST', timeoutMs: 180000 });
+  }
+
   // API 网关的 Key / 地址 / 模型表改了：反代在跑就热更新（不重启，不打断别的会话）；没在跑按配置决定要不要起。
   async applyGatewayChange() {
     if (this.child) {

@@ -307,15 +307,16 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
   if (opts.mock) await upstreamReady; // the mock is instant; tests see ready as soon as the port is open
 
   // ---------- company model catalog ----------
-  // 反代可用的模型 = 各账号 CodeAgent 模型目录的并集（model-catalog.cjs）。上游准备好后拉一次，之后每 30 分钟一次；
-  // 客户端要了目录里没有的版本时（可能刚上线新模型）提前补拉一次（最快 1 分钟一次）。拉不到就用上次存的，都没有用内置的两个。
+  // 反代可用的模型 = 各账号 CodeAgent 模型目录的并集（model-catalog.cjs）。模型很少变（2026-11-20 定）：打开 Hub、反代上游准备好后拉一次；
+  // 启动中心「刷新模型」按钮手动拉（POST /admin/refresh-models）；客户端要了目录里没有的版本时补拉一次（最快 1 分钟一次）。
+  // 拉不到就用上次存的，都没有用内置的两个。
   const catalog = { cache: modelCatalog.readCache(opts.dataDir), models: [], source: 'builtin', refreshedAt: null, lastError: null, running: null, lastAttempt: 0 };
   const applyCatalog = () => {
     catalog.models = modelCatalog.unionModels(catalog.cache);
     catalog.source = catalog.cache && Object.keys(catalog.cache.accounts || {}).length ? 'catalog' : 'builtin';
   };
   applyCatalog();
-  const CATALOG_REFRESH_MS = 30 * 60 * 1000, CATALOG_RETRY_MS = 60 * 1000;
+  const CATALOG_RETRY_MS = 60 * 1000;
   const fetchAccountCatalog = async account => {
     const p = upstream.profile;
     const token = account.kind === 'personal'
@@ -339,7 +340,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
   const refreshCatalog = why => {
     if (opts.mock || !upstream?.profile?.identityUrl) return Promise.resolve(false);
     if (catalog.running) return catalog.running;
-    if (why !== 'start' && why !== 'timer' && Date.now() - catalog.lastAttempt < CATALOG_RETRY_MS) return Promise.resolve(false);
+    if (why === 'miss' && Date.now() - catalog.lastAttempt < CATALOG_RETRY_MS) return Promise.resolve(false);
     catalog.lastAttempt = Date.now();
     catalog.running = (async () => {
       const before = catalog.models.map(m => m.id).join(',');
@@ -354,7 +355,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
         } catch (error) { failed.push(`${account.id}:${SAFE_CODE.test(String(error?.code || '')) ? error.code : (error?.name || 'FAILED')}`); }
       }
       catalog.cache = next; applyCatalog();
-      catalog.refreshedAt = stamp(); catalog.lastError = failed.length ? failed.join(' ') : null;
+      catalog.refreshedAt = stamp(); catalog.lastError = failed.length ? failed.join(' ') : null; catalog.lastOk = accounts.length - failed.length;
       const after = catalog.models.map(m => m.id).join(',');
       try { modelCatalog.writeCache(opts.dataDir, next); } catch (error) { log(`model catalog not saved: ${error?.code || 'write failed'}`); }
       log(`model catalog ${why}: ${catalog.models.length} models [${after}]${after !== before ? ` (was [${before}])` : ''}; accounts ok ${accounts.length - failed.length}/${accounts.length}${failed.length ? ' failed ' + failed.join(' ') : ''}`);
@@ -366,7 +367,6 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
   upstreamReady.then(() => {
     if (!startup.ready) return;
     refreshCatalog('start');
-    setInterval(() => { refreshCatalog('timer'); }, CATALOG_REFRESH_MS).unref();
   });
   // 客户端给的模型名 → 上游模型名（规则见 model-catalog.cjs resolveModel）。
   const resolveCompanyModel = name => {
@@ -547,6 +547,16 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
           AI_HUB_API_GATEWAY_MODELS: Array.isArray(b.models) ? b.models.join(',') : '', AI_HUB_API_GATEWAY_MODEL: b.model,
           AI_HUB_API_GATEWAY_HEADER_TIMEOUT_MS: gatewayTimeoutEnv }) : null, 'updated by Hub');
         return json(res, 200, { ok: true, gateway: status().gateway });
+      }
+      if (req.method === 'POST' && path === '/admin/refresh-models') {
+        if (!opts.mock && !startup.ready) return json(res, 409, { ok: false, error: '公司模型还没准备好，稍后再刷新', modelCatalog: status().modelCatalog });
+        if (!opts.mock && !upstream?.profile?.identityUrl) return json(res, 200, { ok: false, error: '公司上游信息不全，取不到模型目录', modelCatalog: status().modelCatalog });
+        catalog.lastOk = null;
+        const changed = await refreshCatalog('manual');
+        // 一个号都没取到（登录过期、断网等）：报没刷新成功，不拿旧缓存冒充（独立审查 2026-11-20）。合成上游不连 CodeAgent，按成功算。
+        if (!opts.mock && catalog.lastOk === 0) return json(res, 200, { ok: false, error: `一个号都没取到模型目录（${catalog.lastError || '原因不明'}）`, modelCatalog: status().modelCatalog });
+        if (!opts.mock && catalog.lastOk === null) return json(res, 200, { ok: false, error: catalog.lastError || '这次没取成', modelCatalog: status().modelCatalog });
+        return json(res, 200, { ok: true, changed, modelCatalog: status().modelCatalog });
       }
       if (req.method === 'POST' && path === '/admin/shutdown') { json(res, 200, { ok: true, stopping: true }); log('shutdown requested'); setTimeout(() => stop('shutdown'), 50); return; }
       if (req.method === 'POST' && path === '/v1/messages/count_tokens') {

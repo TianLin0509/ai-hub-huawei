@@ -67,6 +67,7 @@ test('Hub 侧清单现读反代存的目录；没有目录时是内置的两个'
       personal: { at: Date.now(), models: catalog.parseCatalog(REAL) }, abc1234: { at: Date.now(), models: catalog.parseCatalog(COLLEAGUE) } } });
     assert.deepEqual(proxy.companyModelIds(dataDir), ['GLM-5.2-WX', 'deepseek-v4.1-flash-1017', 'maas-glm-5-3-260814'], '个人号在前，号池补上');
     assert.equal(proxy.normalizeModel('glm-5.3', dataDir), 'maas-glm-5-3-260814');
+    assert.equal(proxy.companyModels(dataDir)[1].label, 'DeepSeek V4.1 Flash', '目录里菜单名就是上游名时沿用以前的好读名字');
     assert.throws(() => proxy.normalizeModel('glm-5.9', dataDir), /没有 glm-5\.9/);
     assert.equal(proxy.launchModel('glm-5.9', { dataDir }), 'GLM-5.2-WX', '启动时不认识的落到默认、不报错（同以前）');
     const codex = proxy.codexCatalog(proxy.companyModelIds(dataDir), undefined, proxy.companyModels(dataDir));
@@ -116,6 +117,9 @@ test('反代进程：按目录列模型、新模型直接可用、Qwen 去掉思
     assert.equal(status.mockUpstream.byModel['GLM-5.2-WX'], undefined, '没有一条被悄悄换成 5.2');
     assert.equal(status.mockUpstream.thinkingRequests, 1, '只有 GLM 那条带思考');
     assert.equal(status.modelCatalog.source, 'catalog');
+    const manual = await (await fetch(base + '/admin/refresh-models', { method: 'POST', headers: { authorization: `Bearer ${key}` } })).json();
+    assert.equal(manual.ok, true, '启动中心「刷新模型列表」走的接口');
+    assert.equal(manual.modelCatalog.models.length, 4);
   } finally {
     try { await fetch(base + '/admin/shutdown', { method: 'POST', headers: { authorization: `Bearer ${key}` } }); } catch { /* gone */ }
     await new Promise(r => { if (child.exitCode !== null) r(); else { child.once('exit', r); setTimeout(() => { child.kill(); r(); }, 5000); } });

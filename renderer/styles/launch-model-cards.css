@@ -80,3 +80,10 @@
 .gw-inline-msg { margin: 8px 0 0; font-size: 12.5px; color: var(--fg-muted, #5d6474); min-height: 1em; }
 .gw-inline-msg[data-state="error"] { color: #b42318; }
 .gw-inline-lab { display: flex; align-items: center; gap: 6px; min-height: 18px; }
+
+/* 2026-11-20：「刷新模型列表」——模型很少变，打开 Hub 取一次，CodeAgent 出了新模型时手动点。 */
+.session-model-cards-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.smc-refresh { padding: 0; border: 0; background: none; font-size: 11px; line-height: 16px; color: var(--hw-blue, #3478f6); cursor: pointer; }
+.smc-refresh:hover:not(:disabled) { text-decoration: underline; }
+.smc-refresh:disabled { color: var(--hw-text-2, var(--fg-muted)); cursor: default; }
+.smc-refresh-msg { font-size: 11px; line-height: 16px; color: var(--hw-text-2, var(--fg-muted)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
