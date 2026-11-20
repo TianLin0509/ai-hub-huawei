@@ -277,7 +277,7 @@ function createFileManagerFeatures(o) {
     if (name === 'preview') { const node = [...el.tree.querySelectorAll('[data-fm-node]')].find(n => n.dataset.path === paths[0]); if (node) await o.activateEntry(node); return; }
     if (name === 'external' || name === 'reveal') {
       const r = await ipc.invoke(name === 'external' ? 'open-path' : 'show-in-folder', paths[0]);
-      if (typeof r === 'string' && r || r?.error) throw new Error(r.error || r); return;
+      if (typeof r === 'string' && r || r?.error) throw new Error(require('../core/human-readable').humanErrorText(r.error || r)); return;
     }
     if (name === 'conversation' || name === 'target-conversation') {
       let target;
@@ -349,8 +349,8 @@ function createFileManagerFeatures(o) {
     for (const job of result.jobs) {
       const row = element('div', 'fm-job'); row.dataset.state = job.state;
       row.append(element('div', '', `${job.target === 'company' ? '公司' : 'ChatGPT'} · ${labels[job.state] || job.state}`), element('small', '', (job.paths || []).map(p => path.basename(p)).join('、')));
-      if (job.error) row.append(element('p', 'fm-job-error', typeof job.error === 'string' ? job.error : JSON.stringify(job.error)));
-      if (job.result?.skipped?.length) row.append(element('p', '', `已跳过：${job.result.skipped.map(x => typeof x === 'string' ? x : JSON.stringify(x)).join('、')}`));
+      if (job.error) row.append(element('p', 'fm-job-error', require('../core/human-readable').humanErrorText(job.error)));
+      if (job.result?.skipped?.length) row.append(element('p', '', `已跳过：${job.result.skipped.map(x => typeof x === 'string' ? x : [x.path && path.basename(x.path), x.reason || x.error].filter(Boolean).join('：') || require('../core/human-readable').humanErrorText(x)).join('、')}`));
       if (job.state === 'queued') row.append(button('取消', '', async () => { await invoke('cancel-transfer', { id: job.id }); await loadJobs(); }));
       if (job.state === 'failed') row.append(button('重试…', '', () => action(job.target, job.paths, job.root)));
       if (['unknown', 'prepared', 'completed'].includes(job.state)) row.append(button('已在目标端核实…', '', async () => {

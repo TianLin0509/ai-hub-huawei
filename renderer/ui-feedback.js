@@ -9,12 +9,15 @@ const GLYPHS = {
   warning: 'm12 3 10 18H2ZM12 9v5m0 3h.01',
 };
 function noticeContent(message, options = {}) {
-  const raw = String(message ?? '');
+  const raw = message instanceof Error ? message.message : message && typeof message === 'object'
+    ? (() => { try { return JSON.stringify(message, null, 2); } catch { return String(message); } })() : String(message ?? '');
   const occupied = /active writer|原 Hub 仍持有|已有.*写入权/i.test(raw);
+  // 2026-11-20 用户反馈：报错不给人读英文前缀和 JSON。正文换成人话，原文进「查看技术详情」。
+  const human = require('../core/human-readable').humanError(message instanceof Error || typeof message !== 'object' || message === null ? raw : message);
   return {
-    title: options.title || (occupied ? '这个会话正在另一窗口中使用' : /失败|错误|无法/.test(raw) ? '操作未完成' : '请留意这条提示'),
-    body: occupied ? '请先在原 Hub 窗口结束该会话，再回来恢复。当前窗口没有启动第二个任务。' : raw,
-    detail: occupied ? raw : options.detail || '',
+    title: options.title || (occupied ? '这个会话正在另一窗口中使用' : /失败|错误|无法|Error/i.test(raw) ? '操作未完成' : '请留意这条提示'),
+    body: occupied ? '请先在原 Hub 窗口结束该会话，再回来恢复。当前窗口没有启动第二个任务。' : human.text,
+    detail: occupied ? raw : [options.detail, human.detail].filter(Boolean).join('\n\n'),
     icon: occupied ? 'lock' : options.danger ? 'warning' : 'info',
   };
 }

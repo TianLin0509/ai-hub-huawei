@@ -600,7 +600,11 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       else if (r && r.count === 0) showMessage?.('没有需要复核的等你回复');
       await load(); return;
     }
-    if (verb === 'source' && String(arg).startsWith('w3:')) { document.getElementById('btn-company-w3')?.click(); return; }
+    if (verb === 'source' && String(arg).startsWith('w3:')) {
+      const w3 = document.getElementById('btn-company-w3');
+      if (w3) w3.click(); else showMessage?.('门户页没有开启：到「选项 → 可选功能」打开「门户待办」后再点');
+      return;
+    }
     if (verb === 'source') return openSource(arg, button.dataset.sourceDay);
     if (verb === 'retry') { await call('retry-chat', { id: arg }); await load(); return; }
     if (verb === 'stop') {

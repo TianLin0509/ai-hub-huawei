@@ -6893,7 +6893,9 @@ const registerLocalPathLinks = createTerminalLinkRegistrar({
 // immediately before the user's typed text. Without this the 60-char
 // preview is pure path and the real question is truncated away.
 function buildPreviewFromUserMessage(raw) {
-  let clean = String(raw).replace(HUB_IMG_PATH_RE, ' ').replace(/\s+/g, ' ').trim();
+  // 助理前台的提问外面包着 Hub 资料信封（JSON）：侧栏、回复提醒和桌宠只显示用户原话（2026-11-20）。
+  const plain = require('../core/assistant-context-display').assistantContextPlainText(String(raw));
+  let clean = String(plain).replace(HUB_IMG_PATH_RE, ' ').replace(/\s+/g, ' ').trim();
   if (!clean) return '';
   return clean.length > 60 ? clean.substring(0, 58) + '…' : clean;
 }

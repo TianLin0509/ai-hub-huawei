@@ -293,5 +293,5 @@ test('审查回归：Edge 启动失败只报这次失败，不抛出到 Hub', as
 
 test('审查回归：晨报里的门户条目点开的是门户页', () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'company-assistant-page.js'), 'utf8');
-  assert.match(src, /verb === 'source' && String\(arg\)\.startsWith\('w3:'\)\) \{ document\.getElementById\('btn-company-w3'\)\?\.click\(\)/);
+  assert.match(src, /verb === 'source' && String\(arg\)\.startsWith\('w3:'\)\) \{\s*const w3 = document\.getElementById\('btn-company-w3'\);\s*if \(w3\) w3\.click\(\); else showMessage/);
 });

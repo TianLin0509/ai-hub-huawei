@@ -55,9 +55,17 @@ function phaseLabel(phase) {
 }
 function renderActivity(message,escapeHtml) {
   return `<details class="conversation-activity"><summary>活动 · ${message.toolCalls.length} 项 · 展开执行记录</summary>`
-    + message.toolCalls.map(t=>`<div class="conversation-tool"><strong>${escapeHtml(t.name || '工具')}</strong> · ${escapeHtml(({completed:'已完成',running:'进行中',failed:'失败',unknown:'结果未确认'})[t.status] || t.status || '待确认')}`
-      + `<pre>${escapeHtml(typeof t.input==='string' ? t.input : JSON.stringify(t.input || {},null,2))}</pre>`
-      + (t.output ? `<pre>${escapeHtml(typeof t.output==='string' ? t.output : JSON.stringify(t.output,null,2))}</pre>` : '')+'</div>').join('')+'</details>';
+    + message.toolCalls.map(t=>{
+      const raw=`<pre>${escapeHtml(typeof t.input==='string' ? t.input : JSON.stringify(t.input || {},null,2))}</pre>`
+        + (t.output ? `<pre>${escapeHtml(typeof t.output==='string' ? t.output : JSON.stringify(t.output,null,2))}</pre>` : '');
+      // 2026-11-20：MCP 工具说人话，原始入参与结果收进「查看原始数据」。
+      const human=require('../core/human-readable').toolHumanSummary({name:t.name,input:t.input,
+        result:typeof t.output==='string' ? t.output : t.output==null ? '' : JSON.stringify(t.output)});
+      const status=human?.statusText || ({completed:'已完成',running:'进行中',failed:'失败',unknown:'结果未确认'})[t.status] || t.status || '待确认';
+      return `<div class="conversation-tool"><strong>${escapeHtml(human ? human.title : (t.name || '工具'))}</strong>${human?.subject ? ' ' + escapeHtml(human.subject) : ''} · ${escapeHtml(status)}`
+        + (human ? (human.lines.length ? `<ul class="tc-human">${human.lines.map(l=>`<li>${escapeHtml(l)}</li>`).join('')}</ul>` : '')
+          + `<details class="tc-raw"><summary>查看原始数据</summary>${raw}</details>` : raw)+'</div>';
+    }).join('')+'</details>';
 }
 function renderSequenceActivity(messages, escapeHtml) {
   const activities = (messages || []).filter(m => m?.toolCalls?.length);

@@ -242,7 +242,7 @@ function createCodeagentAccountsPage({ document, window = document.defaultView, 
     locateId = typeof accountId === 'string' ? accountId : ''; locateUntil = 0;
     if (locateId) { state.filter = 'all'; state.view = 'accounts'; }
     build(); configModal?.close(); closeOtherPanels();
-    for (const hook of ['__companyAssistantHide', '__companyMeetingHide', '__companyRoomsHide', '__companyPptHide', '__assistantHide', '__cloudHide', '__wirelessHide', '__rulesHide', '__writingHide', '__xresearchHide', '__studyHide', '__ranHide']) window[hook]?.();
+    for (const hook of ['__companyAssistantHide', '__companyMeetingHide', '__companyRoomsHide', '__companyPptHide', '__companyForumHide', '__companyAttendanceHide', '__companyW3Hide', '__profileHide', '__teamHide', '__avatarHide', '__assistantHide', '__cloudHide', '__wirelessHide', '__rulesHide', '__writingHide', '__xresearchHide', '__studyHide', '__ranHide']) window[hook]?.();
     page.hidden = false; document.body.classList.add('codeagent-accounts-page-open');
     document.getElementById('btn-rail-accounts')?.classList.add('active'); document.getElementById('btn-rail-accounts')?.setAttribute('aria-expanded', 'true'); window.setShellNavActive?.('btn-rail-accounts');
     window.addEventListener('resize', place); place(); render();

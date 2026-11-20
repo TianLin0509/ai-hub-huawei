@@ -27,12 +27,15 @@ function notificationTime(session) {
   );
 }
 
+const { assistantContextPlainText } = require('../core/assistant-context-display.js');
+
 function notificationPayload(session, readyCount, newCount) {
-  const body = String(
+  // 助理前台的旧预览可能还是 Hub 资料信封（JSON），弹窗和桌宠只显示原话（2026-11-20）。
+  const body = String(assistantContextPlainText(String(
     session.replyReadyText
     || session.lastOutputPreview
     || '本轮回答已经完成，点击回到会话查看。',
-  ).trim().slice(0, 240);
+  ))).trim().slice(0, 240);
   return {
     sessionId: String(session.id),
     title: String(session.title || 'AI 会话').trim().slice(0, 100),

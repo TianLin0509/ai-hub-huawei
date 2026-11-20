@@ -36,7 +36,10 @@
     dialog.addEventListener('click', event => {
       const action = event.target.closest('[data-edn]')?.dataset.edn;
       if (action === 'later') dialog.close();
-      else if (action === 'relaunch') void ipcRenderer.invoke('edition:relaunch').catch(() => {});
+      else if (action === 'relaunch') {
+        const b = event.target.closest('[data-edn]'); b.disabled = true; const label = b.textContent; b.textContent = '正在重启…';
+        void ipcRenderer.invoke('edition:relaunch').catch(error => { b.disabled = false; b.textContent = label; window.__hubToast?.('没能自动重启：' + (error?.message || '请手动关闭再打开 Hub')); });
+      }
     });
     document.body.appendChild(dialog);
     dialog.showModal();
@@ -65,7 +68,7 @@
         // 被公司网络放行页拦着：给按钮在 Hub 里打开放行页，用户点完回来再点「升级」（公开版不在后台自动点，2026-11-08 用户）。
         if (r && (r.reason === 'blocked' || r.reason === 'network') && r.url) {
           const a = document.createElement('a'); a.href = '#'; a.textContent = ' 打开放行页';
-          a.addEventListener('click', event => { event.preventDefault(); void ipcRenderer.invoke('net-pass:open-window', r.url).catch(() => {}); });
+          a.addEventListener('click', event => { event.preventDefault(); void ipcRenderer.invoke('net-pass:open-window', r.url).catch(error => window.__hubToast?.('放行页没打开：' + (error?.message || '未知原因'))); });
           msg().appendChild(a);
         }
         input.select(); return;

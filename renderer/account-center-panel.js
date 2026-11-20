@@ -472,7 +472,8 @@ function createAccountCenterPanel({ document, ipcRenderer, escapeHtml: esc, conf
     else if (e.target.matches?.('[data-account-env]') && accountEdit) accountEdit.loginEnv = e.target.value;
   });
   document.addEventListener('click', e => {
-    if (e.target.closest('#btn-rail-accounts')) { if (page.hidden) void open(); else close(); }
+    // 体检、报错卡等处用模拟点击（isTrusted=false）当「去账号页」：只打开，页已开着时不把它关掉（2026-11-20 按钮排查）。
+    if (e.target.closest('#btn-rail-accounts')) { if (page.hidden) void open(); else if (e.isTrusted !== false) close(); }
     else if (e.target.closest('#scene-rail button') && !page.hidden) close();
     if (e.target.closest('#btn-config-accounts')) void open();
   });

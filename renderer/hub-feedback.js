@@ -71,7 +71,7 @@
       catch { copyBtn.textContent = '复制失败，请打开上面的文件手动复制'; }
     });
     const unblock = box.querySelector('[data-hf-unblock]');
-    if (unblock) unblock.addEventListener('click', event => { event.preventDefault(); void ipcRenderer.invoke('net-pass:open-window', unblock.dataset.hfUnblock, { method: 'POST' }).catch(() => {}); });
+    if (unblock) unblock.addEventListener('click', event => { event.preventDefault(); void ipcRenderer.invoke('net-pass:open-window', unblock.dataset.hfUnblock, { method: 'POST' }).catch(error => window.__hubToast?.('放行页没打开：' + (error?.message || '未知原因'))); });
   }
 
   // prefill.description：从错误卡「一键反馈」进来时预填现象、功能区和原始报错（5.5.24），用户可以改了再发。

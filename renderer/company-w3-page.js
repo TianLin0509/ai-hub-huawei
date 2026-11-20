@@ -198,6 +198,7 @@ function createCompanyW3Page({ document, window, ipcRenderer, closeOtherPanels =
       if (r?.ok) showMessage?.('门户登录好了，正在用这份登录读取待办…');
       else if (r?.reason === 'already-open') showMessage?.('已经有一个登录窗口开着，请在那个窗口里登录');
       else if (r?.error) showMessage?.('没有登录成功：' + r.error);
+      else showMessage?.('登录没有完成（登录窗口被关掉了），需要时再点一次');
       return;
     }
     if (name === 'save-domain') {

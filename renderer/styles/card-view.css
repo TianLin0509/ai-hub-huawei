@@ -886,6 +886,15 @@
 }
 .tc-row-name { color: var(--tool-call-name); font-weight: 600; flex-shrink: 0; }
 .tc-row-cmd { color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 2026-11-20 · 工具结果说人话：几行要点在上，原始数据折叠在下 */
+.tc-human { margin: 6px 0 4px 22px; padding: 0; font-size: 12.5px; line-height: 1.65; color: var(--text-primary); }
+.tc-human li { margin: 1px 0; }
+.tc-raw { margin: 2px 0 4px 10px; }
+.tc-raw > summary { cursor: pointer; font-size: 11.5px; color: var(--text-muted); list-style-position: inside; }
+.tc-raw > summary:hover { color: var(--text-primary); }
+.tc-human-status.ok { color: var(--mark-green); border-color: rgba(var(--rgb-success), .38); }
+.tc-human-status.warn { color: var(--mark-amber); border-color: rgba(var(--rgb-warning), .42); }
+.tc-human-status.bad { color: var(--mark-red); border-color: rgba(var(--rgb-danger), .42); }
 
 /* 2026-09-03 · ROI #4: the old post-hoc tool cluster now doubles as a live,
    compact activity rail. Existing tc-* selectors remain for compatibility. */

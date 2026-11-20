@@ -938,9 +938,9 @@ class CodexNativeSession extends EventEmitter {
         const result = await request('mcpServerStatus/list',{threadId:this.threadId,...(cursor ? {cursor} : {}),limit:100});
         all.push(...(result.data || [])); cursor = result.nextCursor;
       } while (cursor);
-      printResult(JSON.stringify({profile:this.options.mcpProfile,servers:all},null,2));
+      printResult(require('./human-readable').humanCommandOutput({profile:this.options.mcpProfile,servers:all}));
     } else if (command === '/status' || command === '/help') {
-      printResult(command === '/status' ? JSON.stringify(this.runtime,null,2)
+      printResult(command === '/status' ? require('./human-readable').humanCommandOutput(this.runtime)
           : require('./codex-native-commands').HELP);
     } else if (command === '/plan') {
       await require('./codex-native-mode').configureMode(this, value === 'off' ? 'default' : 'plan', intent);

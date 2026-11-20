@@ -19,6 +19,11 @@ function createCodexNativeControls({ sessionId, invoke, document: doc = document
     if (className) el.className = className;
     return el;
   };
+  // 2026-11-20：授权请求先说人话（命令、文件、权限），原始数据折叠备查。
+  const humanRows = value => require('../core/human-readable').humanFields(value, { max: 6 }).map(([label, text]) => {
+    const line = node('p'); line.append(node('span', label + '：', 'codex-native-field'), node('b', text)); return line;
+  });
+  const rawFold = (title, value) => { const fold = node('details'); fold.append(node('summary', title), node('pre', JSON.stringify(value, null, 2))); return fold; };
   const action = async (payload, form, error) => {
     const buttons = [...form.querySelectorAll('button,select')];
     buttons.forEach(b => { b.disabled = true; });
@@ -65,7 +70,7 @@ function createCodexNativeControls({ sessionId, invoke, document: doc = document
       const submit=node('button','提交回答');submit.type='submit';controls.append(submit);button('取消',()=>reply({outcome:{outcome:'cancelled'}}));
     } else if (request.method === 'session/request_permission') {
       form.append(node('strong','原生 Harness 请求授权'),node('p',p.toolCall?.title || p.reason || ''));
-      if (p.toolCall?.rawInput) form.append(node('pre',JSON.stringify(p.toolCall.rawInput,null,2)));
+      if (p.toolCall?.rawInput) form.append(...humanRows(p.toolCall.rawInput), rawFold('查看原始请求', p.toolCall.rawInput));
       for (const option of p.options || []) button(option.name || option.optionId,
         () => reply({outcome:{outcome:'selected',optionId:option.optionId}}));
       button('取消', () => reply({outcome:{outcome:'cancelled'}}));
@@ -175,7 +180,7 @@ function createCodexNativeControls({ sessionId, invoke, document: doc = document
         form.append(node('strong', change.path), node('pre', change.diff || '文件内容未随请求提供'));
       }
       if (request.method === 'item/permissions/requestApproval') {
-        form.append(node('pre', JSON.stringify(p.permissions || {}, null, 2)));
+        form.append(...humanRows(p.permissions || {}));
         form.append(node('p', '授权仅用于当前轮次。'));
       }
       const details = node('details');

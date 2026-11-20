@@ -249,7 +249,14 @@ function _renderToolRow(tc, index = 0) {
     ? `<span class="turn-activity-duration">${escapeHtml(_fmtDuration(Number(activity.durationMs)))}</span>`
     : '';
   const exit = activity.exitCode !== null ? `<span class="turn-activity-exit">exit ${escapeHtml(activity.exitCode)}</span>` : '';
-  const head = `<span class="turn-activity-kind kind-${escapeHtml(activity.kind || 'other')}" aria-hidden="true"></span><span class="tc-row-name">${name}</span>${cmd ? ` <span class="tc-row-cmd">${cmd}</span>` : ''}<span class="turn-activity-row-meta">${duration}${exit}${_activityStatusHtml(activity)}</span>`;
+  // 2026-11-20 用户反馈：MCP 工具（助理开会话、派活、记备忘…）的标题和结果说人话，原始 JSON 收进「查看原始数据」。
+  const human = _toolHuman(activity);
+  const shownName = human ? escapeHtml(human.title) : name;
+  const shownCmd = human ? escapeHtml(human.subject || '') : cmd;
+  const statusHtml = human && human.statusText
+    ? `<span class="turn-activity-status tc-human-status ${escapeHtml(human.tone || '')}" data-activity-status="${escapeHtml(activity.status || '')}">${escapeHtml(human.statusText)}</span>`
+    : _activityStatusHtml(activity);
+  const head = `<span class="turn-activity-kind kind-${escapeHtml(activity.kind || 'other')}" aria-hidden="true"></span><span class="tc-row-name"${human ? ` title="${name}"` : ''}>${shownName}</span>${shownCmd ? ` <span class="tc-row-cmd">${shownCmd}</span>` : ''}<span class="turn-activity-row-meta">${duration}${exit}${statusHtml}</span>`;
   const hasResult = typeof activity.result === 'string' && activity.result.length > 0;
   const activityAttrs = ` data-activity-id="${escapeHtml(activity.id || `activity-${index}`)}" data-activity-kind="${escapeHtml(activity.kind || 'other')}"`;
   if (!hasResult) return `<div class="tc-row turn-activity-item"${activityAttrs}>${head}</div>`;
@@ -261,18 +268,25 @@ function _renderToolRow(tc, index = 0) {
     ? activity.result.slice(0, _TOOL_RESULT_HARD_LIMIT)
     : activity.result;
   const sizeText = rawLen.toLocaleString('zh-CN') + ' 字符';
-  const errBadge = isErr ? '<span class="tc-row-errbadge">✗ 错误</span>' : '';
+  const errBadge = isErr && !(human && human.statusText) ? '<span class="tc-row-errbadge">✗ 错误</span>' : '';
+  const humanLines = human && human.lines.length
+    ? `<ul class="tc-human">${human.lines.map(line => `<li>${escapeHtml(line)}</li>`).join('')}</ul><details class="tc-raw"><summary>查看原始数据</summary>`
+    : '';
   return `<details class="tc-row tc-row-with-result turn-activity-item${isErr ? ' tc-row-err' : ''}" data-tool-result-len="${rawLen}"${activityAttrs}>
     <summary class="tc-row-head">${head}${errBadge}<span class="tc-row-actions"><button class="tc-row-preview-btn" data-action="tc-toggle-preview" type="button" title="预览工具返回">👁 预览</button></span></summary>
-    <div class="tc-result-wrap">
+    ${humanLines}<div class="tc-result-wrap">
       <div class="tc-result-toolbar">
         <span class="tc-result-meta">${deferred ? '预览 · 全文按需读取' : truncated ? `预览 ${_TOOL_RESULT_HARD_LIMIT.toLocaleString('zh-CN')} / ${sizeText} · 全文保留` : sizeText}</span>
         ${truncated ? '<button class="tc-result-full" data-action="tc-open-full-result" type="button">查看全文</button>' : ''}
         <button class="tc-result-copy" data-action="tc-copy-result" type="button" title="复制全文">📋 复制</button>
       </div>
       <pre class="tc-result${isErr ? ' tc-result-err' : ''}" data-result-raw>${escapeHtml(body)}</pre>
-    </div>
+    </div>${humanLines ? '</details>' : ''}
   </details>`;
+}
+
+function _toolHuman(activity) {
+  try { return require('../core/human-readable').toolHumanSummary(activity); } catch { return null; }
 }
 
 function renderToolCluster(turnId, toolCalls, total = toolCalls?.length || 0) {

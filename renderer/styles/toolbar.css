@@ -40,7 +40,7 @@
    这些面板是 body 下 position:fixed、z-index:880 的一层，工具栏只有 120，菜单跟着工具栏排在它们下面。
    只在工具栏自己的弹出层打开时把整条工具栏抬到面板之上（仍低于 1000 起的对话框），平时层级不变。 */
 /* 旧的恢复会话等 .modal-overlay 只有 200：它开着时不抬，免得菜单越过遮罩（Codex 审查）。 */
-:root:not(:has(.modal-overlay:not([hidden]):not(.hidden):not([style*="display:none"]):not([style*="display: none"]))) .app-toolbar:has(#toolbar-more-menu:not([hidden]), #display-preset-settings:not([hidden]), #backstage-menu:not([hidden])) {
+:root:not(:has(.modal-overlay:not([hidden]):not(.hidden):not([style*="display:none"]):not([style*="display: none"]))) .app-toolbar:has(#toolbar-more-menu:not([hidden]), #display-preset-settings:not([hidden]), #backstage-menu:not([hidden]), .touch-tools-toast:not([hidden])) {
   z-index: 990;
 }
 

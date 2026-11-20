@@ -175,7 +175,12 @@
     const act = fix.act;
     const leave = () => dialog?.close();
     if (act === 'recheck') return run();
-    if (act === 'open-assistant') { leave(); document.getElementById('btn-assistant')?.click(); return; }
+    if (act === 'open-assistant') {
+      // 公司版的旧助理按钮是藏着的，先找公司助理（2026-11-20 按钮排查）；都没有就就地说明。
+      const target = document.getElementById('btn-company-assistant') || document.getElementById('btn-assistant');
+      if (!target || target.hidden) { setMessage('这个版本没有助理页，请升级到最新版本后再试'); return; }
+      leave(); target.click(); return;
+    }
     if (act === 'open-codeagent') { leave(); (window.__codeagentAccountsOpen || window.__companyApiOpen)?.(); return; }
     if (act === 'open-cli-install') { tab = 'components'; render(); return; }
     if (act === 'open-company-api') { leave(); window.__companyApiOpen?.(); return; }

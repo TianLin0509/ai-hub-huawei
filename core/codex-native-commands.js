@@ -66,9 +66,9 @@ async function extendedCommand(session, command, value, request) {
       }
       result = {...result,data:rows};
     }
-    return { output: JSON.stringify(result, null, 2) };
+    return { output: require('./human-readable').humanCommandOutput(result) };
   }
-  if (command === '/context') return {output: session.tokenUsage ? JSON.stringify(session.tokenUsage, null, 2) : '引擎尚未返回上下文用量；完成一次对话后可再次查询。'};
+  if (command === '/context') return {output: session.tokenUsage ? require('./human-readable').humanCommandOutput(session.tokenUsage) : '引擎尚未返回上下文用量；完成一次对话后可再次查询。'};
   if (command === '/diff') {
     const {execFile} = require('child_process');
     const run = require('util').promisify(execFile);

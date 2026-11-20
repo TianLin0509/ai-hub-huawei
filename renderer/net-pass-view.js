@@ -68,6 +68,7 @@ function bind(root, { ipcRenderer, onUpdate = () => {} }) {
       let opened = null;
       try { opened = await ipcRenderer.invoke('net-pass:open-window', button.dataset.page); } catch (_) {}
       if (opened && opened.status) onUpdate(opened.status, null);
+      else if (!opened) window.__hubToast?.('放行页没打开，请稍后再试');
     }
   });
 }

@@ -132,9 +132,20 @@ function createClaudeNativeControls({ sessionId, ipcRenderer, onHistory, onResto
           }
         }
       } else {
+        // 2026-11-20：授权卡先说人话（要跑什么命令、改哪个文件），原始请求折叠备查。
+        const rows = require('../core/human-readable').humanFields(request.raw.input, { max: 6 });
+        for (const [label, value] of rows) {
+          const line = document.createElement('p');
+          const key = document.createElement('span'); key.textContent = label + '：'; key.style.color = 'var(--text-muted)';
+          const val = document.createElement('b'); val.textContent = value; val.style.overflowWrap = 'anywhere';
+          line.append(key, val); box.append(line);
+        }
+        const raw = document.createElement('details');
+        const summary = document.createElement('summary'); summary.textContent = '查看原始请求';
         const detail = document.createElement('pre');
         detail.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;max-height:18vh;overflow:auto';
-        detail.textContent = JSON.stringify(request.raw.input, null, 2); box.append(detail);
+        detail.textContent = JSON.stringify(request.raw.input, null, 2);
+        raw.append(summary, detail); box.append(raw);
       }
       const allow = document.createElement('button'); allow.type = 'submit';
       allow.textContent = inputs.length ? '提交回答' : '允许本次';

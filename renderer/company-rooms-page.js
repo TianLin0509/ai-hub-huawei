@@ -310,7 +310,7 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
       connection.innerHTML = `<span>${escape(message)}${progress}${blocked ? `<br>公司网络拦截了下载。<button type="button" class="cr-btn-sm" data-room-open-pass="${escape(blocked.url)}">打开放行页</button>` : ''}</span>${state.loginNeeded ? button('login', '打开登录', 'sec', 'cr-btn-sm') : available ? button('connect', '重新接通', 'sec', 'cr-btn-sm') : button('install', d.error ? '重新下载会议室组件' : '下载会议室组件', 'sec', 'cr-btn-sm')}`;
       // r58：会议室组件还要下载时，旁边显示「下载源：公司内源」。
       if (!d.installed) { connection.insertAdjacentHTML('beforeend', require('./download-source-view').slotHtml('room-runtime', 'span')); void require('./download-source-view').fill(connection, { ipcRenderer }); }
-      connection.querySelector('[data-room-open-pass]')?.addEventListener('click', event => { event.currentTarget.disabled = true; void ipcRenderer.invoke('net-pass:open-window', event.currentTarget.dataset.roomOpenPass).catch(() => {}); });
+      connection.querySelector('[data-room-open-pass]')?.addEventListener('click', event => { event.currentTarget.disabled = true; const b = event.currentTarget; void ipcRenderer.invoke('net-pass:open-window', b.dataset.roomOpenPass).then(() => window.__hubToast?.('放行页已打开：放行后回来点「重新下载」'), error => { b.disabled = false; window.__hubToast?.('放行页没打开：' + (error?.message || '未知原因')); }); });
     }
     if (tab === 'overview') {
       const tgt = effTarget(), after = `开放日 ${sched().advanceDays} 天后`;
