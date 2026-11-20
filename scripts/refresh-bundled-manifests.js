@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 'use strict';
-// r60（2026-11-20）：刷新随程序发布的两份下载清单快照，发版时由 member-release.js 自动调用。
+// r60（2026-11-20）：刷新随程序发布的下载清单快照，发版时由 member-release.js 自动调用。
 // 用途：公司网络把阿里云整个拦掉时（403 / 确认页），Hub 读不到组件目录和 PPT Doctor 清单，内源上明明有包也装不了；
 // 有了快照就照快照去内源下，文件仍按快照里的 sha256 核对。
 //   core/cli-tools/catalog-snapshot.json                     命令行组件目录（原样保存，带签名，Hub 用同一把公钥验签）
 //   core/company-assistant/ppt-doctor-manifest-snapshot.json PPT Doctor 清单（只留版本与完整包字段，去掉逐文件列表）
+//   core/company-assistant/ppt-materials-manifest-snapshot.json 团队素材包清单（r60b：阿里云被拦时 GitHub 上只有旧版清单）
 // 读不到或校验不过就保留旧快照、不报错（快照旧一点只是装到稍旧的版本）。
 // 用法：node scripts/refresh-bundled-manifests.js [--check]   --check 只报告是否需要刷新，不写文件。
 const fs = require('node:fs');
@@ -13,6 +14,8 @@ const path = require('node:path');
 const ROOT = path.resolve(__dirname, '..');
 const CLI_FILE = 'core/cli-tools/catalog-snapshot.json';
 const DOCTOR_FILE = 'core/company-assistant/ppt-doctor-manifest-snapshot.json';
+const NL = String.fromCharCode(10);
+const MATERIALS_FILE = 'core/company-assistant/ppt-materials-manifest-snapshot.json';
 
 async function getText(url, timeoutMs = 15000) {
   const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), redirect: 'error', cache: 'no-store' });
@@ -52,10 +55,24 @@ async function doctorManifest(root) {
   throw new Error(`PPT Doctor 清单读不到（${errors.join('；')}）`);
 }
 
+async function materialsManifest(root) {
+  const { packSources, validTeamManifest } = require(path.join(root, 'core/company-assistant/ppt-materials'));
+  const errors = [];
+  // 只读阿里云的两个地址（GitHub 上的是旧版清单，不能拿来刷新快照）。
+  for (const base of packSources({ openx: false }).filter(u => !u.includes('github.com'))) {
+    try {
+      const raw = JSON.parse(await getText(new URL('component.json', base).href));
+      if (!validTeamManifest(raw)) throw new Error('清单格式不对');
+      return { file: MATERIALS_FILE, content: JSON.stringify(raw, null, 1) + NL, label: `团队素材包清单 ${raw.version}` };
+    } catch (error) { errors.push(error.message); }
+  }
+  throw new Error(`团队素材包清单读不到（${errors.join('；')}）`);
+}
+
 // 返回内容有变化的快照 [{ file, content, label }]；读不到的写进 warnings，不抛错。
 async function fetchBundledManifests(root = ROOT) {
   const changed = [], warnings = [];
-  for (const get of [cliCatalog, doctorManifest]) {
+  for (const get of [cliCatalog, doctorManifest, materialsManifest]) {
     try {
       const item = await get(root);
       let old = '';
@@ -70,7 +87,7 @@ function writeBundled(root, changed) {
   for (const item of changed) fs.writeFileSync(path.join(root, item.file), item.content, 'utf8');
 }
 
-module.exports = { fetchBundledManifests, writeBundled, CLI_FILE, DOCTOR_FILE };
+module.exports = { fetchBundledManifests, writeBundled, CLI_FILE, DOCTOR_FILE, MATERIALS_FILE };
 
 if (require.main === module) {
   (async () => {

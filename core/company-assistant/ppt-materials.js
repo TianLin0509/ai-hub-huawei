@@ -46,23 +46,41 @@ async function readBody(response, onProgress, source, total) {
 }
 const hostOf = url => require('../app-update/downloader').friendlySourceName(url);
 const newerVersion = (a, b) => { const x = String(a).split('.').map(Number), y = String(b || '0.0.0').split('.').map(Number); for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i]; return false; };
+const hex64 = v => /^[0-9a-f]{64}$/.test(v || '');
+const validTeamManifest = m => !!m && m.kind === 'materials' && /^\d+\.\d+\.\d+$/.test(m.version) && hex64(m.files?.[TEAM_PACK_FILE]?.hash) && hex64(m.archive?.hash);
+// r60b：随程序发布的团队素材包清单快照（发版时 scripts/refresh-bundled-manifests.js 刷新）；读不到或格式不对返回 null。
+function bundledTeamManifest() {
+  try {
+    const m = JSON.parse(fs.readFileSync(path.join(__dirname, 'ppt-materials-manifest-snapshot.json'), 'utf8').replace(/^\uFEFF/, ''));
+    return validTeamManifest(m) ? m : null;
+  } catch { return null; }
+}
 
 // 依次试各下载源，取第一个给出有效清单的。
 async function teamPackManifest(deps = {}) {
   const fetch = require('../own-gate').gatedFetch(require('./fetch-util').resolveFetch(deps.pptDownloadFetch));
   const { reasonOf } = require('../app-update/downloader');
   const reasons = [];
-  let gateNote = '';
+  let gateNote = '', found = null;
   for (const base of packSources(deps)) {
     try {
       const response = await fetch(new URL('component.json', base).href, { signal: AbortSignal.timeout(12000) });
       if (!response.ok) throw new Error(`清单 HTTP ${response.status}`);
       const manifest = JSON.parse((await response.text()).replace(/^\uFEFF/, ''));
-      const hex = v => /^[0-9a-f]{64}$/.test(v || '');
-      if (manifest?.kind !== 'materials' || !/^\d+\.\d+\.\d+$/.test(manifest.version) || !hex(manifest.files?.[TEAM_PACK_FILE]?.hash) || !hex(manifest.archive?.hash)) throw new Error('清单格式不对（可能被网络拦截页替换）');
-      return { base, manifest };
+      if (!validTeamManifest(manifest)) throw new Error('清单格式不对（可能被网络拦截页替换）');
+      found = { base, manifest };
+      break;
     } catch (error) { reasons.push(reasonOf(error)); if (error.blocked || error.passed) gateNote = error.message; }
   }
+  // r60b（2026-11-20 绿区实测）：公司网络拦了阿里云时只剩 GitHub 上的旧清单（1.0.0），而内源上放的是新版（1.1.0）
+  // → 界面显示「内源暂缺」、装到旧包。程序自带一份阿里云清单快照：读到的清单比快照旧（或一个都读不到）就按快照去内源下，
+  // 内源也没下成时退回读到的旧清单（fallback），从原下载源装。
+  const snap = deps.bundledTeamManifest !== undefined ? deps.bundledTeamManifest : bundledTeamManifest();
+  const openxOn = deps.openx !== false && require('../app-update/openx-source').enabled((deps.openx && deps.openx.env) || process.env);
+  if (snap && openxOn && (!found || newerVersion(snap.version, found.manifest.version))) {
+    return { base: found ? found.base : packSources(deps)[0], manifest: snap, bundled: true, ...(found ? { fallback: found } : {}) };
+  }
+  if (found) return found;
   // 被公司网络确认页拦住的，直接说放行的事（core/own-gate.js），不拿最后一个源的原因顶替。
   if (gateNote) throw new Error(gateNote);
   throw new Error(`团队素材包暂时下载不了：${reasons[reasons.length - 1]}。请检查网络后重试，或用「打开素材包…」打开同事发来的素材包文件`);
@@ -205,7 +223,7 @@ class PptMaterials {
     return this.installing;
   }
   async downloadTeamPack() {
-    const { base, manifest } = await teamPackManifest(this.deps);
+    let { base, manifest, fallback } = await teamPackManifest(this.deps);
     const fetch = require('../own-gate').gatedFetch(require('./fetch-util').resolveFetch(this.deps.pptDownloadFetch));
     // 公开版内源优先（r21）：openx 上有 pptutor-materials-<版本>.zip 且校验对就用它，否则照旧走原下载源；成员版不试内源。
     const bus = require('../app-update/progress-bus'), onProgress = p => bus.emit('ppt-materials', p);
@@ -214,6 +232,8 @@ class PptMaterials {
     let archive = await teamPackFromOpenx(fetch, manifest, this.deps.openx === false ? false : { ...(this.deps.openx || {}), onProgress });
     // 包文件按 给出清单的源 → 其余源（GitHub → 阿里云高速 → 阿里云）逐个试，都按选定清单的 sha256 核对；
     // 某个源上包文件 404、断线或内容不对，换下一个源（2026-11-16 审查：原来只从给出清单的源取，失败就报错）。
+    // r60b：按快照没从内源下成，退回在线读到的（较旧的）清单，从原下载源装。
+    if (!archive && fallback) ({ base, manifest } = fallback);
     if (!archive) archive = await teamPackArchive(fetch, manifest, [base, ...packSources(this.deps).filter(u => u !== base)], onProgress,
       openxOn ? require('../app-update/openx-source').lastReason() || '内源下载失败' : null);
     bus.emit('ppt-materials', { phase: 'verifying', message: '正在校验并读取素材…' });
@@ -378,4 +398,4 @@ function transferMaterial(file, page, mode) {
   });
 }
 
-module.exports = { PptMaterials, teamPackFromOpenx, teamPackArchive, packSources, readDoctorLibrary, readPack, doctorDataDir, transferMaterial, teamPackManifest, MARKER, TEAM_PACK_FILE, TEAM_PACK_SOURCES };
+module.exports = { PptMaterials, bundledTeamManifest, validTeamManifest, teamPackFromOpenx, teamPackArchive, packSources, readDoctorLibrary, readPack, doctorDataDir, transferMaterial, teamPackManifest, MARKER, TEAM_PACK_FILE, TEAM_PACK_SOURCES };
