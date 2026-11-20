@@ -41,6 +41,13 @@ function registerStaticDownloadPoints({ fetchImpl } = {}) {
         return { items: [{ file, release: `ppt-doctor-${meta.version}`, version: meta.version }], timeoutMs: 6000 };
       } catch (error) { last = error; }
     }
+    // r60：清单读不到（公司网络拦了阿里云）时用程序自带的清单快照，和 ppt-doctor-install.js 安装时一致。
+    const snap = require('../core/company-assistant/ppt-doctor-install').bundledDoctorManifest();
+    if (snap) {
+      const meta = fullArchive(snap, MIRROR_MANIFEST_URLS[0]);
+      const file = require('node:path').posix.basename(new URL(meta.url).pathname);
+      return { items: [{ file, release: `ppt-doctor-${meta.version}`, version: meta.version }], timeoutMs: 6000 };
+    }
     throw last || new Error('PPT Doctor 清单读不到');
   });
   // PPT 识别组件：ppt-ocr-component.js perform()，release ocr-<版本>，文件 pptdoctor-ocr-<版本>.zip。

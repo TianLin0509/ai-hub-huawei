@@ -1,0 +1,181 @@
+{
+  "schema": 1,
+  "publishedAt": "2026-11-17T20:07:25.181Z",
+  "components": [
+    {
+      "id": "claude",
+      "name": "Claude Code",
+      "version": "2.1.319",
+      "kind": "tgz",
+      "license": "Anthropic 专有许可（见包内 LICENSE.md）",
+      "preferOfficial": true,
+      "files": [
+        {
+          "name": "claude-code-win32-x64-2.1.319.tgz",
+          "bytes": 160447830,
+          "sha256": "c0ee4d619513c3df90b37ff71578b109e061c1a896986f3bcf472c29a9644734",
+          "url": "claude/2.1.319/claude-code-win32-x64-2.1.319.tgz",
+          "official": [
+            "https://registry.npmmirror.com/@anthropic-ai/claude-code-win32-x64/-/claude-code-win32-x64-2.1.319.tgz",
+            "https://registry.npmjs.org/@anthropic-ai/claude-code-win32-x64/-/claude-code-win32-x64-2.1.319.tgz"
+          ]
+        }
+      ],
+      "install": {
+        "strip": "package",
+        "bin": "claude.exe",
+        "pathDirs": [
+          "."
+        ],
+        "versionArgs": [
+          "--version"
+        ]
+      }
+    },
+    {
+      "id": "codex",
+      "name": "Codex",
+      "version": "0.167.0",
+      "kind": "tgz",
+      "license": "Apache-2.0",
+      "preferOfficial": false,
+      "files": [
+        {
+          "name": "codex-0.167.0-win32-x64.tgz",
+          "bytes": 181015521,
+          "sha256": "075304c882f6618eb73037bdd1164f942516f214108540bdbb9130eff4ab1e08",
+          "url": "codex/0.167.0/codex-0.167.0-win32-x64.tgz",
+          "official": [
+            "https://registry.npmmirror.com/@openai/codex/-/codex-0.167.0-win32-x64.tgz",
+            "https://registry.npmjs.org/@openai/codex/-/codex-0.167.0-win32-x64.tgz"
+          ]
+        }
+      ],
+      "install": {
+        "strip": "package/vendor/x86_64-pc-windows-msvc",
+        "bin": "bin/codex.exe",
+        "pathDirs": [
+          "bin",
+          "codex-path"
+        ],
+        "versionArgs": [
+          "--version"
+        ]
+      }
+    },
+    {
+      "id": "dsh",
+      "name": "DSH 运行环境",
+      "version": "0.2.1-rc.2+tui.0.16.1",
+      "kind": "tgz",
+      "license": "MIT（@deepseek-ai/dsh、@deepseek-harness-tui/dsh-tui；依赖各自许可）",
+      "preferOfficial": false,
+      "files": [
+        {
+          "name": "dsh-runtime-0.2.1-rc.2-tui-0.16.1-win32-x64.tgz",
+          "bytes": 220856302,
+          "sha256": "0e0fdb83af595ecc0b6d64335e054bc4077077e5397ae879ee264477b8305dcd",
+          "url": "dsh/0.2.1-rc.2+tui.0.16.1/dsh-runtime-0.2.1-rc.2-tui-0.16.1-win32-x64.tgz"
+        }
+      ],
+      "install": {
+        "requires": [
+          "node"
+        ],
+        "minNode": 22,
+        "versionArgs": [
+          "--version"
+        ],
+        "check": [
+          "node_modules/@deepseek-ai/dsh/lib/bin.js",
+          "node_modules/@deepseek-harness-tui/dsh-tui/package.json"
+        ]
+      }
+    },
+    {
+      "id": "node",
+      "name": "Node.js 运行环境",
+      "version": "22.23.4",
+      "kind": "tgz",
+      "license": "MIT（Node.js）",
+      "preferOfficial": false,
+      "files": [
+        {
+          "name": "node-v22.23.4-win-x64.tgz",
+          "bytes": 34261585,
+          "sha256": "1228afb78bc61e217beb58d5cdfd6bdd920b96e9702202770547f04d5c83bdde",
+          "url": "node/22.23.4/node-v22.23.4-win-x64.tgz"
+        }
+      ],
+      "install": {
+        "bin": "node.exe",
+        "pathDirs": [
+          "."
+        ],
+        "versionArgs": [
+          "--version"
+        ]
+      }
+    },
+    {
+      "id": "git",
+      "name": "Git for Windows",
+      "version": "2.56.0+windows.4",
+      "kind": "tgz",
+      "license": "GPL-2.0（Git for Windows）",
+      "preferOfficial": false,
+      "files": [
+        {
+          "name": "git-for-windows-2.56.0.4-64-bit.tgz",
+          "bytes": 135647850,
+          "sha256": "4d431100e2dbe0c857312a9ce3fbe6e50bdd37abe51d64749cfaa7a861e47e7c",
+          "url": "git/2.56.0+windows.4/git-for-windows-2.56.0.4-64-bit.tgz"
+        }
+      ],
+      "install": {
+        "bin": "cmd/git.exe",
+        "pathDirs": [
+          "cmd"
+        ],
+        "versionArgs": [
+          "--version"
+        ],
+        "check": [
+          "bin/bash.exe",
+          "usr/bin/bash.exe",
+          "usr/bin/ls.exe",
+          "usr/bin/grep.exe"
+        ]
+      }
+    },
+    {
+      "id": "pi",
+      "name": "pi 终端 Agent",
+      "version": "1.5.2",
+      "kind": "tgz",
+      "license": "MIT（@earendil-works/pi-coding-agent；依赖各自许可）",
+      "preferOfficial": false,
+      "files": [
+        {
+          "name": "pi-runtime-1.5.2.tgz",
+          "bytes": 24877659,
+          "sha256": "a288a2ce72ed21f8391d2beb9a9d075da0e6cb30ba0befd542fe29cb2fe5180b",
+          "url": "pi/1.5.2/pi-runtime-1.5.2.tgz"
+        }
+      ],
+      "install": {
+        "requires": [
+          "node"
+        ],
+        "minNode": 22,
+        "versionArgs": [
+          "--version"
+        ],
+        "check": [
+          "node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"
+        ]
+      }
+    }
+  ],
+  "signature": "7420c13dc1dfa789054a79c430c9fbfa7a931f829ee26200b88052a870df80bc3e626667127e13b00de2a5887126e1003f23240c4a1966b3f48e0a8864bfb20a"
+}

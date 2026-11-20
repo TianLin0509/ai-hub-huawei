@@ -93,11 +93,11 @@ async function find({ file, version, release, strict = false, fetchImpl, signal,
   if (!file || typeof fetchImpl !== 'function') return miss('没有文件名或网络');
   const key = String(file).toLowerCase();
   if (state.bad.has(key)) return miss('这个文件上次在内源校验没过');
-  if (now() < state.unreachableUntil) return miss('内源连不上（稍后再试）');
+  if (now() < state.unreachableUntil) return miss(downText());
   const unreachable = error => {
     if (signal && signal.aborted) return miss('已取消');
-    state.unreachableUntil = now() + UNREACHABLE_TTL_MS;
-    return miss(`内源连不上：${error && error.message ? error.message : error}`);
+    markDown(error, now);
+    return miss(`内源连不上：${errText(error)}`);
   };
   try { await loadList({ fetchImpl, api, projectId, timeoutMs, now }); } catch (error) { return unreachable(error); }
 
@@ -158,6 +158,28 @@ async function loadList({ fetchImpl, api, projectId, timeoutMs, now }) {
   return state.listing;
 }
 
+// r60：记住「为什么连不上」（第一次失败的真实原因与时间），之后 5 分钟内跳过时也照实说，不再只写「稍后再试」。
+function errText(error) {
+  const msg = error && error.message ? error.message : String(error || '');
+  const code = error && error.cause && error.cause.code ? `（${error.cause.code}）` : '';
+  if (error && (error.name === 'TimeoutError' || /timeout|aborted due to timeout/i.test(msg))) return `超时没响应${code}`;
+  return msg + code;
+}
+function markDown(error, now = Date.now) {
+  state.unreachableUntil = now() + UNREACHABLE_TTL_MS;
+  state.down = { reason: errText(error), at: now() };
+}
+function downText() {
+  return state.down && state.down.reason ? `内源连不上：${state.down.reason}（5 分钟内自动重试）` : '内源连不上（稍后再试）';
+}
+// 排错信息（给界面「复制排错信息」用）：状态、最近一次失败原因和时间。不含地址与凭据。
+function diagnostics({ now = Date.now } = {}) {
+  return { reachability: reachability({ now }), down: state.down || null,
+    listAgeSec: state.list ? Math.round((now() - state.listAt) / 1000) : null, lastReason: state.lastReason || '' };
+}
+// 用户点「重测」：清掉「5 分钟内不再试」和「这个文件上次校验没过」的标记，马上真的去连一次。
+function clearDown() { state.unreachableUntil = 0; state.bad.clear(); }
+
 // 内源现在的状态：up（10 分钟内连上过）/ down（5 分钟内连不上过）/ unknown（还没探测）。
 function reachability({ now = Date.now } = {}) {
   if (now() < state.unreachableUntil) return 'down';
@@ -169,8 +191,8 @@ function reachability({ now = Date.now } = {}) {
 function prewarm({ fetchImpl, api = DEFAULT_API, projectId = PROJECT_ID, timeoutMs = REACH_TIMEOUT_MS, env = process.env, now = Date.now } = {}) {
   if (!enabled(env) || !api || !projectId || typeof fetchImpl !== 'function' || reachability({ now }) !== 'unknown') return null;
   return loadList({ fetchImpl, api, projectId, timeoutMs, now }).catch(error => {
-    state.unreachableUntil = now() + UNREACHABLE_TTL_MS;
-    state.lastReason = `内源连不上：${error && error.message ? error.message : error}`;
+    markDown(error, now);
+    state.lastReason = `内源连不上：${errText(error)}`;
     return null;
   });
 }
@@ -180,7 +202,7 @@ function prewarm({ fetchImpl, api = DEFAULT_API, projectId = PROJECT_ID, timeout
 async function findForDownload(args = {}) {
   const now = args.now || Date.now;
   const r = reachability({ now });
-  if (r === 'down') { state.lastReason = '内源连不上（稍后再试）'; return null; }
+  if (r === 'down') { state.lastReason = downText(); return null; }
   const pending = find(args);
   if (r === 'up' && args.maxMs == null) return pending;
   const budget = r === 'up' ? args.maxMs : Math.min(args.unknownBudgetMs ?? UNKNOWN_BUDGET_MS, args.maxMs ?? Infinity);
@@ -235,9 +257,9 @@ async function probe({ version, file, release, strict = false, fetchImpl, env = 
     let list;
     try { list = await loadList({ fetchImpl, api, projectId, timeoutMs: budget, now }); }
     catch (error) {
-      state.unreachableUntil = now() + UNREACHABLE_TTL_MS;
-      state.lastReason = `内源连不上：${error.message}`;
-      return fail(error.message);
+      markDown(error, now);
+      state.lastReason = `内源连不上：${errText(error)}`;
+      return fail(errText(error));
     }
     const want = normVersion(version);
     const pattern = strict ? /^member-v(\d+\.\d+\.\d+)(?:\s|$)/i : /^(\d+\.\d+\.\d+)(?:\s|$)/;
@@ -273,4 +295,4 @@ const memberReleaseName = version => `${MEMBER_PREFIX}v${normVersion(version)}`;
 const isMemberRelease = name => String(name || '').trim().toLowerCase().startsWith(MEMBER_PREFIX);
 function _reset() { state = freshState(); }
 
-module.exports = { EDITION_ON, publicOrder, releaseName, memberReleaseName, isMemberRelease, find, findForDownload, headSize, prewarm, probe, reachability, safeUrl, markBad, lastReason, enabled, normVersion, _reset, DEFAULT_API, PROJECT_ID, REACH_TIMEOUT_MS, UNKNOWN_BUDGET_MS };
+module.exports = { diagnostics, clearDown, EDITION_ON, publicOrder, releaseName, memberReleaseName, isMemberRelease, find, findForDownload, headSize, prewarm, probe, reachability, safeUrl, markBad, lastReason, enabled, normVersion, _reset, DEFAULT_API, PROJECT_ID, REACH_TIMEOUT_MS, UNKNOWN_BUDGET_MS };

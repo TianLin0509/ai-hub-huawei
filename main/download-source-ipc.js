@@ -31,7 +31,8 @@ function registerDownloadSourceIpc(ipcMain, { fetchImpl, env = process.env } = {
     if (!pending) return sourceStatus.view('missing', { reason: '这个下载点还没登记内源' });
     let spec;
     try { spec = await pending; }
-    catch (error) { return sourceStatus.view('down', { reason: `读不到组件清单：${error && error.message ? error.message : error}` }); }
+    // r60：清单读不到（多半是公司网络拦了阿里云）和内源连不上是两回事，分开显示，免得误以为内源坏了。
+    catch (error) { return { ...sourceStatus.view('nolist', { reason: error && error.message ? error.message : String(error) }), point: String(point) }; }
     if (!spec) return sourceStatus.view('missing', { reason: '组件清单里没有这一项' });
     const fetch = typeof fetchImpl === 'function' ? fetchImpl : (...args) => require('electron').net.fetch(...args);
     const value = await sourceStatus.check(spec, { fetchImpl: fetch, env, fresh, ...(spec.timeoutMs ? { timeoutMs: spec.timeoutMs } : {}) });
@@ -53,9 +54,26 @@ function registerDownloadSourceIpc(ipcMain, { fetchImpl, env = process.env } = {
     await require('electron').shell.openExternal(hit.url);
     return { ok: true, via: 'openx', url: hit.url };
   }
+  // r60：「复制排错信息」——这个下载点的状态、原因、内源最近一次失败的原因和时间。不含地址与凭据。
+  async function diagnostics(point) {
+    const s = await status(point, { fresh: false });
+    const o = require('../core/app-update/openx-source').diagnostics();
+    let version = '';
+    try { version = require('electron').app.getVersion(); } catch (_) {}
+    const at = ms => (ms ? new Date(ms).toLocaleString('zh-CN', { hour12: false }) : '');
+    return [
+      `AI Hub ${version} · 下载点 ${point} · ${new Date().toLocaleString('zh-CN', { hour12: false })}`,
+      `状态：${s.status} · ${s.text || ''}`,
+      s.reason ? `原因：${s.reason}` : '',
+      `公司内源：${o.reachability === 'up' ? '连得上' : o.reachability === 'down' ? '连不上' : '还没探测'}${o.listAgeSec != null ? `（${o.listAgeSec} 秒前读到过版本列表）` : ''}`,
+      o.down ? `内源最近一次失败：${o.down.reason}（${at(o.down.at)}）` : '',
+      o.lastReason ? `内源最近一次查找：${o.lastReason}` : '',
+    ].filter(Boolean).join('\n');
+  }
+  ipcMain.handle('download-source:diagnostics', (_event, request = {}) => diagnostics(String(request.point || '')));
   ipcMain.handle('download-source:open', (_event, request = {}) => openInternal(request.point));
   ipcMain.handle('download-source:status', (_event, request = {}) => status(request.point, { fresh: request.fresh === true }));
-  return { status, openInternal };
+  return { status, openInternal, diagnostics };
 }
 
 module.exports = { registerDownloadSourceIpc };

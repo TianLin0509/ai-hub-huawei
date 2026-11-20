@@ -272,33 +272,50 @@ async function downloadAll({ sources, version, expect, dest, fetchImpl, signal, 
   let openxNote = null;
   // 成员版（内源不生效）：不探测、不改源顺序，和以前完全一样；公开版：内源 → GitHub → 阿里云。
   const openxOn = openx !== false && openxSource.enabled((openx && openx.env) || process.env);
+  // 从内源下一次：成功返回结果；失败记下原因返回 null（取消时返回取消结果）。
+  const viaOpenx = async hit => {
+    const source = { id: 'openx', name: '公司内源' };
+    const attempt = { ...source, url: hit.url, status: 'downloading', startedAt: Date.now() };
+    attempts.push(attempt);
+    onAttempt && onAttempt(attempts.map(a => ({ ...a })));
+    try {
+      // 内源附件不跟随重定向：入口地址已核过白名单，跳转目标不再放行。
+      const r = await downloadOne({ source, url: hit.urls || hit.url, expect, dest, fetchImpl, signal, onProgress, idleTimeoutMs,
+        connectTimeoutMs: Math.min(connectTimeoutMs, openxSource.REACH_TIMEOUT_MS), redirect: 'error' });
+      Object.assign(attempt, { status: 'ok', bytes: r.bytes, ms: r.ms });
+      onAttempt && onAttempt(attempts.map(a => ({ ...a })));
+      return { ok: true, source, attempts, openx: { status: 'ok', releaseVersion: hit.releaseVersion, ms: r.ms } };
+    } catch (error) {
+      attempts.pop();
+      if (signal && signal.aborted) return { ok: false, cancelled: true, attempts };
+      openxSource.markBad(expect.file);
+      openxNote = { status: 'failed', reason: reasonOf(error) };
+      onAttempt && onAttempt(attempts.map(a => ({ ...a })));
+      return null;
+    }
+  };
   if (openxOn) {
     const hit = await openxSource.findForDownload({ ...openx, file: expect.file, version, fetchImpl, signal });
     if (!hit) openxNote = { status: 'skipped', reason: openxSource.lastReason() };
     else {
-      const source = { id: 'openx', name: '公司内源' };
-      const attempt = { ...source, url: hit.url, status: 'downloading', startedAt: Date.now() };
-      attempts.push(attempt);
-      onAttempt && onAttempt(attempts.map(a => ({ ...a })));
-      try {
-        // 内源附件不跟随重定向：入口地址已核过白名单，跳转目标不再放行。
-        const r = await downloadOne({ source, url: hit.urls || hit.url, expect, dest, fetchImpl, signal, onProgress, idleTimeoutMs,
-          connectTimeoutMs: Math.min(connectTimeoutMs, openxSource.REACH_TIMEOUT_MS), redirect: 'error' });
-        Object.assign(attempt, { status: 'ok', bytes: r.bytes, ms: r.ms });
-        onAttempt && onAttempt(attempts.map(a => ({ ...a })));
-        return { ok: true, source, attempts, openx: { status: 'ok', releaseVersion: hit.releaseVersion, ms: r.ms } };
-      } catch (error) {
-        attempts.pop();
-        if (signal && signal.aborted) return { ok: false, cancelled: true, attempts };
-        openxSource.markBad(expect.file);
-        openxNote = { status: 'failed', reason: reasonOf(error) };
-        onAttempt && onAttempt(attempts.map(a => ({ ...a })));
-      }
+      const r = await viaOpenx(hit);
+      if (r) return r;
     }
   }
   // r59：内源没命中时，后面各源的进度带上 openxMiss（原因），统一进度条把来源标成「备用」并写明为什么没走内源。
   const fallbackProgress = openxNote && onProgress ? p => onProgress({ ...p, openxMiss: openxNote.reason || (openxNote.status === 'failed' ? '内源下载失败' : '内源没有这个包') }) : onProgress;
   const result = await downloadFromSources({ sources: openxOn && openxSource.publicOrder((openx && openx.env) || process.env) ? orderSources(sources) : sources, version, expect, dest, fetchImpl, signal, onProgress: fallbackProgress, onAttempt, idleTimeoutMs, connectTimeoutMs, attempts });
+  // r60：内源当时只是没在几秒内查完（不是连不上），备用源又全失败（如公司网络拦了阿里云）：等内源查完再试一次。
+  if (!result.ok && !result.cancelled && openxOn && openxNote && openxNote.status === 'skipped' && openxSource.reachability() !== 'down') {
+    const hit = await openxSource.find({ ...openx, file: expect.file, version, fetchImpl, signal }).catch(() => null);
+    if (hit) {
+      const before = attempts.length;
+      const r = await viaOpenx(hit);
+      // 成功时只留内源这一条（与内源第一次就命中时一致），前面失败的备用源记录不带出去。
+      if (r && r.ok) { attempts.splice(0, before); return { ...r, attempts: attempts.slice() }; }
+      if (r) return r;
+    } else openxNote = { status: 'skipped', reason: openxSource.lastReason() };
+  }
   return openxNote ? { ...result, openx: openxNote } : result;
 }
 // 公开版下载源顺序（2026-11-16 定）：公司内源 openx → GitHub → 其他官方源 → 阿里云（自家服务器只做最后兜底）。

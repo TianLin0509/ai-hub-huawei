@@ -119,6 +119,14 @@ async function removeQuietly(target) {
 
 const GIT_ADVICE = '没找到 Git for Windows：Claude Code 会改用 PowerShell 执行命令（官方预览功能，复杂命令偶尔不如 bash 顺手），建议装上 Git for Windows。';
 
+// r60：随程序发布的组件目录快照（scripts/refresh-bundled-manifests.js 在发版时刷新）；验签不过或没有快照返回 null。
+function bundledCatalog(validate) {
+  try {
+    const raw = JSON.parse(require('node:fs').readFileSync(path.join(__dirname, 'catalog-snapshot.json'), 'utf8').replace(/^\uFEFF/, ''));
+    return validate(raw);
+  } catch (_) { return null; }
+}
+
 function attemptsText(attempts) {
   return (attempts || []).map(a => `${a.name}：${a.status === 'ok' ? '可用' : a.reason || '失败'}`).join('；');
 }
@@ -128,7 +136,7 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
   idleTimeoutMs, connectTimeoutMs, logger = console, npmRun, getDshEntry = () => ({}), busyRetry = {},
   processLines = runningCommandLines } = {}) {
   const root = () => registry.toolsRoot(env);
-  let catalog = null, catalogAt = 0, catalogFrom = [];
+  let catalog = null, catalogAt = 0, catalogFrom = [], catalogNote = '';
   let busy = null, abort = null;
   const tools = {};
   for (const id of registry.IDS) tools[id] = { phase: 'idle' };
@@ -144,6 +152,7 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
       if (!git && installed.claude) advice = { claude: GIT_ADVICE };
     }
     return { available: sources.length > 0, busy, tools: JSON.parse(JSON.stringify(tools)), installed, advice, git,
+      catalogNote: catalogNote || null,
       catalog: catalog ? catalog.components.map(c => ({ id: c.id, name: c.name, version: c.version, license: c.license,
         bytes: c.files.reduce((n, f) => n + f.bytes, 0) })) : null };
   }
@@ -192,8 +201,18 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
     const ok = results.filter(r => r.ok);
     if (!ok.length) {
       const why = results.map(r => `${r.name}：${r.reason}`).join('；');
+      // r60（2026-11-20 同事反馈）：公司网络有时把阿里云整个拦掉（403 / 确认页），目录读不到，内源上明明有包也装不了。
+      // 改用随程序发布的目录快照（同一把公钥验签）；文件照旧先从内源下、按目录核 sha256。快照每次发版时刷新。
+      if (signal && signal.aborted) throw new Error('已取消');
+      const snap = bundledCatalog(validate);
+      if (snap) {
+        // 快照只缓存 1 分钟（在线目录是 10 分钟）：网络恢复或点「重测」后很快换回在线目录。
+        catalog = snap; catalogAt = Date.now() - CATALOG_TTL_MS + 60 * 1000; catalogFrom = sources; catalogNote = `在线下载源读不到组件目录（${why}），用程序自带的目录`;
+        return catalog;
+      }
       throw Object.assign(new Error(`读不到组件目录（${why}）`), { blocked: results.find(r => r.blocked)?.url || null });
     }
+    catalogNote = '';
     // 取发布时间最新的那份目录（高速镜像每 5 分钟才同步一次，刚发的组件可能只在旧服务器上）；一样新时按源的顺序。
     // 目录和它一样新的源排在前面下载；其余的源留作后备（文件可能还在）。
     const when = r => Date.parse(r.manifest.publishedAt) || 0;

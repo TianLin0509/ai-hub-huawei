@@ -137,6 +137,17 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
     } finally { clearTimeout(timer); }
   }
 
+  // 几个地址都失败时，原因要每个都说：只报最后一个会把前面 IP 的真实原因（超时、拒收）盖成「计算机名域名解析失败」
+  // （2026-11-20 同事截图：IP 在前、计算机名在后，界面只剩「域名解析失败」，误导排查）。
+  const DNS_RE = /域名解析失败/;
+  function combineFailures(fails) {
+    if (fails.length <= 1) return fails[0];
+    const label = url => { try { const h = new URL(url).hostname; return /^\d{1,3}(\.\d{1,3}){3}$/.test(h) ? `IP 地址 ${h}` : '计算机名'; } catch { return url; } };
+    const main = fails.find(f => f.r.rejected) || fails.find(f => !DNS_RE.test(f.r.reason || '')) || fails[fails.length - 1];
+    const parts = fails.map(f => `${label(f.url)}：${String(f.r.reason || '').replace(/^连不上维护人电脑[：:]?/, '') || '失败'}`);
+    return { url: main.url, r: { ...main.r, offline: fails.every(f => f.r.offline), reason: `连不上维护人电脑（${fails.length} 个地址都试过）——${parts.join('；')}` } };
+  }
+
   // 依次试内源上发布的每个收件地址，有一个收下就算送到。
   async function sendIntranet(body) {
     const addr = await resolveAddress();
@@ -146,10 +157,13 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
       return { ok: false, offline: true, reason: lastDelivery.reason };
     }
     let last = null;
+    const fails = [];
     for (const url of addr.urls) {
       last = await postIntranet(url, body);
       if (last.ok) break;
+      fails.push({ url, r: last });
     }
+    if (!last.ok) last = combineFailures(fails).r;
     lastDelivery = { at: now(), ok: !!last.ok, step: last.ok ? 'sent' : last.rejected ? 'rejected' : 'deliver', reason: last.ok ? '' : last.reason };
     return last;
   }
@@ -305,6 +319,7 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
       return lastDiag;
     }
     let last = null;
+    const fails = [];
     for (const url of addr.urls) {
       const ctl = new AbortController();
       const timer = setTimeout(() => ctl.abort(), PING_TIMEOUT_MS);
@@ -316,8 +331,10 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
       } catch (error) {
         last = { step: 'network', reason: ctl.signal.aborted ? `${PING_TIMEOUT_MS / 1000} 秒内没连上维护人电脑（网络不通或端口被隔离）` : netReason(error) };
       } finally { clearTimeout(timer); }
+      fails.push({ url, r: { ...last, rejected: last.step === 'rejected', offline: true } });
     }
-    lastDiag = { at: now(), ok: false, ...last };
+    const merged = combineFailures(fails).r;
+    lastDiag = { at: now(), ok: false, step: merged.step, reason: merged.reason };
     return lastDiag;
   }
 

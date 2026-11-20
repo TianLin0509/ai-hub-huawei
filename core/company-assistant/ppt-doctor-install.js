@@ -36,8 +36,14 @@ async function findExecutable(root) {
   throw new Error('安装包里没有找到 PPT Doctor 程序');
 }
 
+// r60：随程序发布的 PPT Doctor 清单快照（只含版本与完整包校验值；scripts/refresh-bundled-manifests.js 在发版时刷新）。
+function bundledDoctorManifest() {
+  try { return JSON.parse(require('node:fs').readFileSync(path.join(__dirname, 'ppt-doctor-manifest-snapshot.json'), 'utf8').replace(/^\uFEFF/, '')); }
+  catch (_) { return null; }
+}
+
 function createDoctorInstaller({ dataDir, onState = () => {}, configure, fetchImpl, sources = MIRROR_MANIFEST_URLS,
-  download = downloadWithFallback, extract = extractZip, verify = capability } = {}) {
+  download = downloadWithFallback, extract = extractZip, verify = capability, bundledManifest = bundledDoctorManifest } = {}) {
   let state = { phase: 'idle' }, pending = null, abort = null;
   const snapshot = () => ({ ...state });
   const set = patch => { state = { ...state, ...patch }; try { onState(snapshot()); } catch { /* a closed view must not interrupt installation */ } };
@@ -52,15 +58,28 @@ function createDoctorInstaller({ dataDir, onState = () => {}, configure, fetchIm
       await fs.mkdir(job, { recursive: true });
       let chosen = null;
       const failures = [];
-      for (const base of sources) {
+      // r60：清单地址都读不到时（公司网络拦了阿里云），最后用程序自带的清单快照：完整包从内源下，按快照里的 sha256 核对。
+      const tries = [...sources.map(base => ({ base })), ...(bundledManifest && sources.length ? [{ base: sources[0], bundled: true }] : [])];
+      const tried = new Set();
+      for (const { base, bundled } of tries) {
         if (signal.aborted) throw new Error('已取消');
         try {
-          const response = await fetch(base, { signal: AbortSignal.any([signal, AbortSignal.timeout(12000)]), redirect: 'error' });
-          if (!response.ok) throw new Error(`清单 HTTP ${response.status}`);
-          if (Number(response.headers.get('content-length')) > 2 * 1024 * 1024) throw new Error('安装清单过大');
-          const body = await response.text();
-          if (Buffer.byteLength(body) > 2 * 1024 * 1024) throw new Error('安装清单过大');
-          const meta = fullArchive(JSON.parse(body.replace(/^\uFEFF/, '')), base);
+          let manifest;
+          if (bundled) {
+            manifest = bundledManifest();
+            if (!manifest) throw new Error('程序自带的清单不可用');
+          } else {
+            const response = await fetch(base, { signal: AbortSignal.any([signal, AbortSignal.timeout(12000)]), redirect: 'error' });
+            if (!response.ok) throw new Error(`清单 HTTP ${response.status}`);
+            if (Number(response.headers.get('content-length')) > 2 * 1024 * 1024) throw new Error('安装清单过大');
+            const body = await response.text();
+            if (Buffer.byteLength(body) > 2 * 1024 * 1024) throw new Error('安装清单过大');
+            manifest = JSON.parse(body.replace(/^\uFEFF/, ''));
+          }
+          const meta = fullArchive(manifest, base);
+          // 自带清单和刚才在线读到、已经下载失败的是同一个包：不再重复下一遍。
+          if (bundled && tried.has(meta.sha256)) continue;
+          tried.add(meta.sha256);
           // 公司内源（r24）：公开版按文件名在 openx 找同名附件（大文件是 .000/.001… 分片），版本名固定为 ppt-doctor-<完整包版本>。
           // 清单没给大小：内源命中就用内源附件的大小，外网 ZIP 的 HEAD 被拦、超时也不影响走内源（r24 审查阻断项）；
           // 内源没有才问外网 HEAD。找内源总共最多等 6 秒；内容最终都按清单的 sha256 核对。
@@ -122,4 +141,4 @@ function createDoctorInstaller({ dataDir, onState = () => {}, configure, fetchIm
   }
   return { snapshot, install() { if (!pending) pending = perform().finally(() => { pending = null; }); return pending; }, cancel() { abort?.abort(); return snapshot(); } };
 }
-module.exports = { fullArchive, createDoctorInstaller, extractZip, findExecutable };
+module.exports = { fullArchive, createDoctorInstaller, extractZip, findExecutable, bundledDoctorManifest };
