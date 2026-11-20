@@ -21,7 +21,8 @@ function createCodexNativeControls({ sessionId, invoke, document: doc = document
   };
   // 2026-11-20：授权请求先说人话（命令、文件、权限），原始数据折叠备查。
   const humanRows = value => require('../core/human-readable').humanFields(value, { max: 6 }).map(([label, text]) => {
-    const line = node('p'); line.append(node('span', label + '：', 'codex-native-field'), node('b', text)); return line;
+    const line = node('p'), val = node('b', text); val.dataset.i18nSkip = ''; // 字段值是请求原文，英文模式不翻
+    line.append(node('span', label + '：', 'codex-native-field'), val); return line;
   });
   const rawFold = (title, value) => { const fold = node('details'); fold.append(node('summary', title), node('pre', JSON.stringify(value, null, 2))); return fold; };
   const action = async (payload, form, error) => {
@@ -175,7 +176,7 @@ function createCodexNativeControls({ sessionId, invoke, document: doc = document
       const operation = p.operation || {};
       const command = p.command || operation.command;
       if (command) form.append(node('pre', Array.isArray(command) ? command.join(' ') : command));
-      if (p.cwd || operation.cwd) form.append(node('p', '工作目录：' + (p.cwd || operation.cwd)));
+      if (p.cwd || operation.cwd) form.append(node('p', `工作目录：${p.cwd || operation.cwd}`));
       for (const change of operation.changes || []) {
         form.append(node('strong', change.path), node('pre', change.diff || '文件内容未随请求提供'));
       }

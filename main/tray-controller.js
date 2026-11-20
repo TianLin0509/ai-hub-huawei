@@ -36,6 +36,13 @@ function createTrayController({ Tray, Menu, getIcon, getMainWindow, focusWindow,
     destroyTray();
   }
 
+  // 界面语言切换后重建托盘菜单（菜单文字在建菜单时按当前语言翻译）。
+  function refresh() {
+    if (!tray) return;
+    destroyTray();
+    sync();
+  }
+
   // 主窗口 close 事件里先问它：返回 true 表示已藏到托盘，调用方别再走退出流程。
   function interceptClose(event) {
     if (quitting || !isEnabled()) return false;
@@ -53,6 +60,7 @@ function createTrayController({ Tray, Menu, getIcon, getMainWindow, focusWindow,
 
   return {
     sync,
+    refresh,
     interceptClose,
     markQuitting() { quitting = true; },
     resetQuitting() { quitting = false; },

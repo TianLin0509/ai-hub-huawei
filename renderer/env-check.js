@@ -9,6 +9,14 @@
   const current = (() => { try { return String(require('../core/distribution').editionVersion || require('../package.json').version || ''); } catch { return ''; } })();
   const STATE = { ok: '正常', warn: '注意', bad: '有问题', off: '不适用', pending: '检测中' };
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const i18n = (() => { try { return require('../core/i18n'); } catch { return null; } })();
+  // 英文模式下「名称：说明；名称：说明」整段拼好后词典对不上，改成逐段翻译再拼；中文模式原样，显示文字不变（2026-11-20 i18n）。
+  const namedDetail = (name, detail) => (i18n && i18n.isEnglish() ? `${i18n.translate(String(name))}: ${i18n.translate(String(detail))}` : `${name}：${detail}`);
+  const featureDetail = f => {
+    if (!(i18n && i18n.isEnglish())) return f.detail;
+    const blocked = (f.dependencies || []).filter(d => d.status !== 'ok');
+    return blocked.length ? blocked.map(d => namedDetail(d.name, d.detail)).join('; ') : f.detail;
+  };
   let dialog = null, result = null, running = null, expanded = new Set(), message = '', messageBad = false;
   let tab = 'features', cliState = null, doctorState = null, ocrState = null, installing = new Set(), recheckOnFocus = false;
   const COMPONENTS = new Set(['codeagent', 'claude', 'codex', 'dsh', 'git-bash', 'node', 'welink', 'ppt-doctor']);
@@ -97,7 +105,7 @@
   }
   function featureHtml() {
     const features = result?.features || require('../core/feature-readiness').featureReadiness(result?.items || []);
-    return features.map(f => `<li class="ec-item ec-${esc(f.status)}"><div class="ec-row"><span class="ec-dot" aria-hidden="true"></span><div class="ec-main"><div class="ec-name">${esc(f.name)}<span class="ec-state">${esc(f.label)}</span></div><div class="ec-detail ec-wrap">${esc(f.detail)}</div></div></div><div class="ec-dependencies">${f.dependencies.map(d => `<button type="button" class="ec-dependency ec-${esc(d.status)}" data-ec-component="${esc(d.id)}">${esc(d.name)} · ${STATE[d.status] || '未检测'}</button>`).join('')}</div></li>`).join('');
+    return features.map(f => `<li class="ec-item ec-${esc(f.status)}"><div class="ec-row"><span class="ec-dot" aria-hidden="true"></span><div class="ec-main"><div class="ec-name">${esc(f.name)}<span class="ec-state">${esc(f.label)}</span></div><div class="ec-detail ec-wrap">${esc(featureDetail(f))}</div></div></div><div class="ec-dependencies">${f.dependencies.map(d => `<button type="button" class="ec-dependency ec-${esc(d.status)}" data-ec-component="${esc(d.id)}">${esc(d.name)} · ${STATE[d.status] || '未检测'}</button>`).join('')}</div></li>`).join('');
   }
 
   // 展开：优先用统一错误卡（5.5.24 B 线提供）；没有时用简版说明。
@@ -106,7 +114,7 @@
     const card = tab === 'components' ? null : window.HubErrorCard;
     if (card && typeof card.html === 'function') {
       try {
-        return card.html({ area: item.area || 'env-check', title: `${item.name}：${item.detail}`, cause: item.cause || '', steps,
+        return card.html({ area: item.area || 'env-check', title: namedDetail(item.name, item.detail), cause: item.cause || '', steps,
           actions: (item.fixes || []).map((f, i) => ({ label: f.label, act: `env-check:${item.id}:${i}` })),
           details: item.raw || '', severity: item.status === 'bad' ? 'error' : 'warning' });
       } catch (error) { console.warn('[env-check] 错误卡渲染失败，改用简版：', error.message); }

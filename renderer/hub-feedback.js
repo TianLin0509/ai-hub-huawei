@@ -7,6 +7,8 @@
   if (!distribution.updateConfig) return;
   const { ipcRenderer, shell } = require('electron');
   let dialog = null, sending = false, contactEdited = false, via = '', lastText = '';
+  // WeLink 模式（2026-11-21）：公司内用户的反馈直接发到维护人 WeLink，内网收件机的发送与待发提示都隐藏。
+  let wl = null;
   const TO_INTRANET = '发给维护人（公司内网），帮你排查问题';
 
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -37,12 +39,14 @@
         <textarea data-hf="desc" placeholder="例如：CodeAgent 会话卡片一直不显示回答，后台终端里是有的"></textarea>
         <div class="au-section">联系方式（可不填）</div>
         <input class="hf-contact" data-hf="contact" maxlength="160" placeholder="工号或姓名，方便回访">
-        <div class="au-section">会一起附带（已自动隐去密钥、口令、邮箱和用户目录）</div>
+        <div class="au-section" data-hf="items-title">会一起附带（已自动隐去密钥、口令、邮箱和用户目录）</div>
         <ul class="hf-items" data-hf="items"><li>正在整理…</li></ul>
         <div data-hf="outbox" hidden></div>
         <div data-hf="msg"></div>
       </div>
       <div class="au-foot"><button type="button" class="au-btn" data-hf="mine" style="margin-right:auto">我的反馈</button><button type="button" class="au-btn" data-hf="cancel">取消</button>
+        <button type="button" class="au-btn" data-hf="wl-copy" hidden title="把反馈内容复制好，再打开电脑上的 WeLink，自己粘贴发给维护人">复制并打开 WeLink</button>
+        <button type="button" class="au-btn primary" data-hf="wl-send" hidden title="用本机 welink-cli 直接私聊发给维护人">一键发到 WeLink</button>
         <button type="button" class="au-btn primary" data-hf="send">发送</button></div>`;
     document.body.appendChild(dialog);
     const q = name => dialog.querySelector(`[data-hf="${name}"]`);
@@ -51,6 +55,8 @@
     q('cancel').addEventListener('click', close);
     dialog.addEventListener('cancel', event => { if (sending) event.preventDefault(); });
     q('send').addEventListener('click', () => void send());
+    q('wl-send').addEventListener('click', () => void sendWelink());
+    q('wl-copy').addEventListener('click', () => void copyOpenWelink());
     q('mine').addEventListener('click', () => { if (!sending) { dialog.close(); void openMine(); } });
     q('contact').addEventListener('input', () => {
       contactEdited = true;
@@ -81,6 +87,7 @@
     if (!sending) {
       dialog.querySelector('[data-hf="send"]').disabled = false;
       dialog.querySelector('[data-hf="send"]').textContent = '发送';
+      dialog.querySelector('[data-hf="wl-send"]').textContent = '一键发到 WeLink';
       message('', '');
     }
     const desc = dialog.querySelector('[data-hf="desc"]');
@@ -99,12 +106,71 @@
     } catch (error) {
       dialog.querySelector('[data-hf="items"]').innerHTML = `<li>整理附带内容失败：${esc(error.message)}</li>`;
     }
+    try { wl = await ipcRenderer.invoke('hub-feedback:welink-state'); } catch { wl = null; }
+    if (wl && wl.enabled) { applyWelinkMode(); return; }
+    // 公开版离开公司网络后回到旧的「发送」（之前进过 WeLink 模式时按钮要还原）。
+    dialog.querySelector('[data-hf="send"]').hidden = false;
+    dialog.querySelector('[data-hf="wl-copy"]').hidden = dialog.querySelector('[data-hf="wl-send"]').hidden = true;
     // 发到哪儿（r42）：公司内网的维护人电脑，还是公司外用户的阿里云。公开版要探一次内源，最多约 3 秒。
     try {
       const r = await ipcRenderer.invoke('hub-feedback:route');
       via = (r && r.via) || '';
       if (via === 'intranet') dialog.querySelector('[data-hf="to"]').textContent = TO_INTRANET;
     } catch { /* 沿用默认文案 */ }
+  }
+
+  // WeLink 模式的按钮：装了 welink-cli 时「一键发到 WeLink」为主按钮，没装时只留「复制并打开 WeLink」。
+  function applyWelinkMode() {
+    const q = name => dialog.querySelector(`[data-hf="${name}"]`);
+    q('to').textContent = `直接发到维护人的 WeLink（账号 ${wl.to}）`;
+    q('items-title').textContent = 'WeLink 消息里带：问题描述、版本与系统、最近报错几行（已隐去密钥、口令、邮箱）；下面这些完整内容存到你的「下载」文件夹';
+    q('send').hidden = true;
+    q('wl-copy').hidden = false;
+    q('wl-send').hidden = !wl.cli;
+    q('wl-copy').classList.toggle('primary', !wl.cli);
+    paintOutbox(outbox);
+    if (!sending && !wl.cli) message('info', `这台电脑没装 welink-cli，点「复制并打开 WeLink」：内容会复制好并打开 WeLink，搜 <b>${esc(wl.to)}</b> 粘贴（Ctrl+V）发送即可。`);
+  }
+  function welinkBusy(on, btnName, label) {
+    sending = on;
+    for (const n of ['wl-send', 'wl-copy']) dialog.querySelector(`[data-hf="${n}"]`).disabled = on;
+    if (btnName) dialog.querySelector(`[data-hf="${btnName}"]`).textContent = label;
+  }
+  function welinkInput() {
+    const desc = dialog.querySelector('[data-hf="desc"]').value;
+    if (!desc.trim()) { message('warn', '请先写一句遇到了什么问题'); dialog.querySelector('[data-hf="desc"]').focus(); return null; }
+    return { description: desc, contact: dialog.querySelector('[data-hf="contact"]').value };
+  }
+  const savedLine = r => r && r.savedTo ? `<br><small>完整诊断包存在：<span class="hf-path">${esc(r.savedTo)}</span> <a href="#" data-hf-open="${esc(r.savedTo)}">打开所在文件夹</a></small>` : '';
+  async function sendWelink() {
+    if (sending) return;
+    const input = welinkInput(); if (!input) return;
+    welinkBusy(true, 'wl-send', '正在发送…');
+    message('info', '正在用 welink-cli 发到维护人的 WeLink…');
+    let r;
+    try { r = await ipcRenderer.invoke('hub-feedback:welink-send', input); } catch (error) { r = { ok: false, reason: error.message }; }
+    welinkBusy(false, 'wl-send', r && r.ok ? '已发送' : '一键发到 WeLink');
+    if (r && r.ok) {
+      message('ok', `已发到维护人的 WeLink（${esc(r.to)}）${r.parts > 1 ? `，分 ${r.parts} 条` : ''}，在你的 WeLink 聊天记录里也能看到。${savedLine(r)}`);
+      dialog.querySelector('[data-hf="desc"]').value = '';
+      return;
+    }
+    message('bad', `没发出去：${esc((r && r.reason) || '未知原因')}<br>可以点「复制并打开 WeLink」，粘贴发给 <b>${esc(wl.to)}</b>。${savedLine(r)}`);
+  }
+  async function copyOpenWelink() {
+    if (sending) return;
+    const input = welinkInput(); if (!input) return;
+    welinkBusy(true, 'wl-copy', '正在复制…');
+    let r;
+    try { r = await ipcRenderer.invoke('hub-feedback:welink-copy-open', input); } catch (error) { r = { ok: false, reason: error.message }; }
+    welinkBusy(false, 'wl-copy', '复制并打开 WeLink');
+    lastText = (r && r.text) || '';
+    if (!r || !r.copied) {
+      message('bad', `复制没成功：${esc((r && r.reason) || '剪贴板被占用')}。${lastText ? '<a href="#" data-hf-copy>再复制一次</a>，' : ''}或打开下面的文件手动复制。${savedLine(r)}`);
+      return;
+    }
+    const opened = r.opened ? '已打开 WeLink' : `WeLink 没能自动打开（${esc(r.openReason || '未知原因')}），请自己打开 WeLink`;
+    message('ok', `已复制反馈内容，${opened}。在 WeLink 里搜 <b>${esc(r.to)}</b>，打开对话后粘贴（Ctrl+V）发送。${savedLine(r)}`);
   }
 
   async function send() {
@@ -200,7 +266,8 @@
     m('list').innerHTML = r.items.map(x => {
       const [label, tone] = STATUS[x.status] || ['未知', 'warn'];
       const when = x.createdAt ? new Date(x.createdAt).toLocaleString() : '';
-      const sub = x.status === 'delivered' ? `${when} · 收件编号 ${x.receiptId}${x.via === 'aliyun' ? '（阿里云）' : ''}` : `${when}${x.reason ? ' · ' + x.reason : ''}`;
+      const sub = x.status === 'delivered' && x.via === 'welink' ? `${when} · ${x.receiptId === 'WeLink' ? '已发到维护人 WeLink' : x.receiptId}`
+        : x.status === 'delivered' ? `${when} · 收件编号 ${x.receiptId}${x.via === 'aliyun' ? '（阿里云）' : ''}` : `${when}${x.reason ? ' · ' + x.reason : ''}`;
       return `<div class="hfm-row"><div class="hfm-top"><span class="hfm-title">${esc(x.summary || '（没有描述）')}</span>`
         + `${x.fixedIn ? `<span class="hfm-tag fix">已修于 v${esc(x.fixedIn)}</span>` : ''}<span class="hfm-tag ${tone}">${label}</span></div>`
         + `<div class="hfm-sub" title="${esc(sub)}">${esc(sub)}</div></div>`;
@@ -228,7 +295,7 @@
   const when = ms => { const d = new Date(ms); return `${d.getMonth() + 1}-${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
   function paintOutbox(st, note = '') {
     outbox = st;
-    const pending = st && st.ok ? Number(st.pending) || 0 : 0;
+    const pending = st && st.ok && !(wl && wl.enabled) ? Number(st.pending) || 0 : 0;
     const footer = document.getElementById('hub-system-footer');
     if (pending && !marker && footer) {
       marker = document.createElement('button'); marker.type = 'button'; marker.id = 'hub-feedback-outbox-marker';
@@ -266,7 +333,7 @@
   }
 
   addMenuEntry();
-  void refreshOutbox();
+  void ipcRenderer.invoke('hub-feedback:welink-state').then(st => { wl = st; paintOutbox(outbox); }).catch(() => {}).finally(() => void refreshOutbox());
   setInterval(() => void refreshOutbox(), 60 * 1000);
   window.__hubFeedback = { open, refreshOutbox, openMine };
 })();

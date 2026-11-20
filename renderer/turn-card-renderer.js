@@ -267,7 +267,7 @@ function _renderToolRow(tc, index = 0) {
   const body = truncated
     ? activity.result.slice(0, _TOOL_RESULT_HARD_LIMIT)
     : activity.result;
-  const sizeText = rawLen.toLocaleString('zh-CN') + ' 字符';
+  const sizeText = `${rawLen.toLocaleString('zh-CN')} 字符`;
   const errBadge = isErr && !(human && human.statusText) ? '<span class="tc-row-errbadge">✗ 错误</span>' : '';
   const humanLines = human && human.lines.length
     ? `<ul class="tc-human">${human.lines.map(line => `<li>${escapeHtml(line)}</li>`).join('')}</ul><details class="tc-raw"><summary>查看原始数据</summary>`
@@ -580,7 +580,8 @@ function renderTurnSpeed(turn) {
 // === Spec 1 v0.9.0 · turn 卡片渲染 ===
 function renderCardActions(turn, context = {}) {
   const user = turn.role === 'user', activity = turn.phase === 'activity';
-  const copy = activity ? '' : '<button class="ta-btn" data-action="copy" title="复制" aria-label="复制这条消息">复制</button>';
+  const copy = activity ? '' : '<button class="ta-btn" data-action="copy" title="复制" aria-label="复制这条消息">复制</button>'
+    + '<button class="ta-btn ta-quote" data-action="quote" title="引用到输入框：发送时带上来源，让 AI 知道你说的是哪一段" aria-label="引用这条消息">引用</button>';
   const multi = '<button class="ta-btn ta-multi" data-action="multi-select">多选</button>';
   let fork = '';
   if (context.mainCard && !options.root) {
@@ -712,7 +713,7 @@ function renderTurnCard(turn, context = {}) {
     let summaryLabel = '💭 思考过程';
     if (turn.thinking.length > 5120) {
       const previewRaw = turn.thinking.slice(0, 200).replace(/\s+/g, ' ').trim();
-      summaryLabel = `💭 思考过程 (前 200 字符: ${escapeHtml(previewRaw)}…)`;
+      summaryLabel = `💭 思考过程 (前 200 字符: <span class="turn-thinking-preview">${escapeHtml(previewRaw)}</span>…)`; // 预览是思考原文，英文模式不翻
     }
     thinkingHtml = `<details class="turn-thinking">
         <summary class="turn-thinking-summary">${summaryLabel}</summary>

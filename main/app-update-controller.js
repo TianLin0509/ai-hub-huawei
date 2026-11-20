@@ -58,6 +58,8 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   // 自家阿里云被公司网络放行页拦住时：在看不见的窗口里自动放行一次再重试（core/net-unblock.js，2026-10-29 用户选默认开、无感）。
   // unblock(url) → 是否点到了放行按钮；isOwnUrl(url) → 是不是自家地址（GitHub 被拦不碰）。
   unblock = null, unblockInteractive = null, isOwnUrl = () => false, unblockPassed = () => {},
+  // 内源版本清单验签用的公钥（只给单测换测试密钥；正式运行用 core/app-update/manifest-signing.js 内置公钥）。
+  manifestPublicKey,
   env = process.env, fetchImpl, resourcesPath = process.resourcesPath, isPackaged = !!(app && app.isPackaged), spawnImpl = spawn,
   // 拉起新程序用的干净环境与工作目录（core/clean-launch-env.js，2026-10-19）：main.js 传入；没传时按当前环境现算。
   prepareLaunch = () => require('../core/clean-launch-env').prepareHubLaunch({ env, isPackaged, appRoot: app && typeof app.getAppPath === 'function' ? app.getAppPath() : undefined }),
@@ -88,6 +90,19 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   let skipQuitApply = false;
   const quietOffFile = () => path.join(stagingPaths(dataDir).root, QUIET_OFF_FILE);
   const quietEnabled = () => { if (!quietDelivery && !(previewEnabled && canary.read(dataDir).enabled === true)) return false; try { return !fs.existsSync(quietOffFile()); } catch (_) { return true; } };
+  // rsi-e：外网清单（GitHub、阿里云）全部读不到时，再从公司内源读同一份 latest.json（core/app-update/openx-source.js fetchManifest）。
+  // 公司网络拦了阿里云、又没外网权限的同事以前「检查更新」永远报错；有任一外网源能读到时完全不走这里。
+  // 内源清单要验签、版本不低于当前，总共最多 8 秒（budgetMs 可再收紧，如环境体检只给剩余时间）。
+  const withInternalManifest = async (results, signal, budgetMs) => {
+    if (results.some(r => r.ok) || (signal && signal.aborted)) return results;
+    try {
+      const r = await openxSource.fetchManifest({ fetchImpl: resolveFetch(fetchImpl), validate: validateManifest, signal, env, currentVersion,
+        publicKey: manifestPublicKey, ...(budgetMs != null ? { timeoutMs: budgetMs } : {}) });
+      if (!r.ok) logger.warn?.('[app-update] 内源版本清单未采用：' + r.reason);
+      return [...results, r];
+    }
+    catch (error) { logger.warn?.('[app-update] 内源版本清单兜底出错：', error.message); return results; }
+  };
   // 查版本时清单里就是这一版的源：下载先走它们，查不到或版本不同的源只留作后备，免得先报一次 404（旧 GitHub 库改私有后实测，2026-10-28）。
   let confirmedIds = [];
 
@@ -170,6 +185,8 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
         // 放行成功：清掉放行器的连续失败计数（不然累计 3 次就进 30 分钟冷却）
         if (results.some(r => r.ok && r.id === blockedOwn.id)) { try { unblockPassed(); } catch (_) {} }
       }
+      results = await withInternalManifest(results, checkAbort.signal);
+      if (checkAbort.signal.aborted) return emit({ phase: 'idle', error: null });
       const checks = results.map(r => ({ id: r.id, name: r.name, ok: r.ok, version: r.ok ? r.manifest.version : null, reason: r.reason || null,
         ...(r.blocked ? { blocked: true, url: r.url } : {}) }));
       const best = results.filter(r => r.ok).sort((a, b) => compareVersions(b.manifest.version, a.manifest.version))[0];
@@ -617,7 +634,14 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   // 环境体检用（5.5.24）：只看各更新源连不连得上、清单读不读得出，不改更新状态、不触发下载、不弹放行窗口。
   async function probeSources({ timeoutMs = 7000 } = {}) {
     const started = Date.now();
-    const results = await checkManifests({ sources, fetchImpl: resolveFetch(fetchImpl), validate: validateManifest, timeoutMs });
+    const external = await checkManifests({ sources, fetchImpl: resolveFetch(fetchImpl), validate: validateManifest, timeoutMs });
+    // 内源清单只用体检剩下的时间，到点就中断，体检总时长不因内源变长（rsi-e 返工）。
+    const remaining = timeoutMs - (Date.now() - started);
+    const probeAbort = new AbortController();
+    const probeTimer = setTimeout(() => probeAbort.abort(), Math.max(1, remaining));
+    let results;
+    try { results = remaining > 0 ? await withInternalManifest(external, probeAbort.signal, remaining) : external; }
+    finally { clearTimeout(probeTimer); }
     const best = results.filter(r => r.ok).sort((a, b) => compareVersions(b.manifest.version, a.manifest.version))[0];
     const internalSource = await probeInternalSource(best?.manifest.version, best && [best.manifest.incremental?.file, best.manifest.incrementalDelta?.file, best.manifest.installer?.file].filter(Boolean), Math.max(1, timeoutMs - (Date.now() - started)));
     return { current: currentVersion, sources: [internalSource, ...results.map(r => ({ id: r.id, name: r.name, ok: r.ok, version: r.ok ? r.manifest.version : null,

@@ -45,7 +45,8 @@ import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import { join, isAbsolute, basename, dirname, delimiter } from 'node:path';
 import { homedir } from 'node:os';
-import { pathToFileURL } from 'node:url';
+import { pathToFileURL, fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { initializeCacheOnlySigner } from './signer-init.mjs';
 import { probeNativeStamp, writeStampCache, configDirOf } from './native-stamp.mjs';
 import { createNativeSigner, findNativeRuntime } from './native-signer.mjs';
@@ -447,6 +448,11 @@ export function signerInitReason(tried, version) {
 }
 /** Plain-words reason and fix when the first-time initialization did not produce a cache. */
 export function signerInitFailureMessage(code, { version, timeoutMs, detail, report } = {}) {
+  if (detail === 'CLI_MODEL_REJECTED') {
+    return '公司模型暂时用不了：首次签名初始化没完成（CodeAgent 认为没有可用的模型，提示用 --model 指定后就退出了，签名日志没有生成）。\n' +
+      `Hub 探测时已指定模型${report?.model ? ' ' + report.model : ''}${report?.retried ? '，并换了一个模型重试' : ''}，仍被拒绝。\n` +
+      '处理办法：在命令行打开 CodeAgent，用 /model 选一个自己能用的模型并正常对话一次，然后到「设置 → 自有 API」点「重新启动反代」；还不行点「一键反馈」附带诊断。';
+  }
   if (detail === 'CLI_INPUT_MISSING') {
     const next = report?.retrySuppressed === 'cleanup-unconfirmed'
       ? '后台进程还没确认结束，Hub 已停止重试；请点「一键反馈」附带诊断。'
@@ -658,12 +664,55 @@ export async function resolveUpstreamProfile({ dataDir, env = process.env, versi
 // init is bounded by this timeout. The adapter's own CLI run is limited to 15 s by the signer itself.
 export const SIGNER_INIT_TIMEOUT_MS = 60_000;
 
+// The probe runs CodeAgent with empty settings (--settings {} --setting-sources ''), so the user's default model is not
+// loaded. CodeAgent 1.2615.02.05 then sees an empty model, prints a hint to pick one with --model and exits 1 before
+// writing the signer log (company report 2026-11-20: 6 of 7 starts failed). Older releases had a built-in default.
+// The probe therefore always names a model, in this order: upstream.json stampProbeModel, the default model in the
+// user's CodeAgent settings (unless the account's own model list excludes it), the account's model list, the cached
+// company model catalog, and Hub's long-standing default. The first two different ones are used (the second on retry).
+export const STAMP_PROBE_DEFAULT_MODEL = 'GLM-5.2-WX-Auto';
+const PROBE_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:()-]{0,79}$/;
+const OTHER_CLI_MODEL = /^(?:claude-|fable|opus|sonnet|haiku|gpt-|o\d|gemini|chatgpt-web)/i;
+function hubModule(name) {
+  const here = fileURLToPath(import.meta.url);
+  for (const file of [here, here.replace(/app\.asar\.unpacked([\\/])/, 'app.asar$1')]) {
+    try { return createRequire(file)(name); } catch { /* try the next location */ }
+  }
+  return null;
+}
+const readConfiguredModels = configDir => (configDir ? hubModule('../codeagent-models.js')?.configuredModels?.(configDir) : null) || null;
+const readCatalogCache = dataDir => hubModule('./model-catalog.cjs')?.readCache?.(dataDir) || null;
+/** -> { models: [up to 2 model ids], source: category of the first }. Never throws. */
+export function stampProbeModels(profile, { dataDir = '', readConfigured = readConfiguredModels, readCatalog = readCatalogCache } = {}) {
+  const out = [];
+  let source = '';
+  const add = (id, from) => {
+    const value = text(id);
+    if (!PROBE_MODEL.test(value) || OTHER_CLI_MODEL.test(value)) return;
+    if (out.some(m => m.toLowerCase() === value.toLowerCase())) return;
+    if (!out.length) source = from;
+    out.push(value);
+  };
+  add(profile?.stampProbeModel, 'config:upstream.json');
+  let configured = null;
+  try { configured = readConfigured(configDirOf(profile?.personalCredential || '')); } catch { configured = null; }
+  const list = Array.isArray(configured?.models) ? configured.models.filter(m => typeof m === 'string') : [];
+  const def = text(configured?.defaultModel);
+  if (def && (!configured?.authoritative || list.some(m => m.toLowerCase() === def.toLowerCase()))) add(def, 'codeagent:settings');
+  for (const id of list) add(id, configured?.authoritative ? 'codeagent:account-models' : 'codeagent:config');
+  let cache = null;
+  try { cache = dataDir ? readCatalog(dataDir) : null; } catch { cache = null; }
+  for (const m of cache?.accounts?.personal?.models || []) add(m?.menuId || m?.id, 'hub:model-catalog');
+  add(STAMP_PROBE_DEFAULT_MODEL, 'hub:default');
+  return { models: out.slice(0, 2), source };
+}
+
 /**
  * Loads the built-in signer, or an explicitly configured legacy adapter.
  * First use runs a hidden CodeAgent probe with one safe no-log retry; the stamp must match the installed version.
  * -> { signer, adapterSha256, firstInit: { ran, ms, reason, cliRuns } }
  */
-export async function loadSigner(profile, { workDir, timeoutMs = SIGNER_INIT_TIMEOUT_MS, testOnlySpawnDelegate, stampProbe = probeNativeStamp } = {}) {
+export async function loadSigner(profile, { workDir, timeoutMs = SIGNER_INIT_TIMEOUT_MS, testOnlySpawnDelegate, stampProbe = probeNativeStamp, modelReaders } = {}) {
   const native = profile.signerMode === 'native' || !profile.adapterPackage;
   if (native && !isSignerVersion(profile.codeagentVersion)) throw new ProfileError('SIGNER_VERSION', '无法核实 CodeAgent 版本，请检查安装是否完整');
   let sha = 'hub-native', signerFile = '';
@@ -699,16 +748,17 @@ export async function loadSigner(profile, { workDir, timeoutMs = SIGNER_INIT_TIM
     const workRoot = join(workDir, 'first-init');
     await mkdir(workRoot, { recursive: true });
     let result;
+    const probeModels = stampProbeModels(profile, { dataDir: dirname(workDir), ...(modelReaders || {}) });
     try {
       result = await stampProbe({ cliExe: join(profile.codeagentDir, 'bin', 'codeagentcli.exe'), configDir: configDirOf(profile.personalCredential),
-        expectedVersion: profile.codeagentVersion, workRoot, timeoutMs: probeTimeoutMs, model: profile.stampProbeModel || '',
-        ...(native ? { nativeRuntimeDir: runtimeDir } : {}) });
+        expectedVersion: profile.codeagentVersion, workRoot, timeoutMs: probeTimeoutMs, model: probeModels.models[0] || '',
+        fallbackModel: probeModels.models[1] || '', ...(native ? { nativeRuntimeDir: runtimeDir } : {}) });
     } catch (error) {
       const code = /^[A-Z0-9_]{1,40}$/.test(error?.code || '') ? error.code : 'unknown';
       result = { ok: false, report: { ran: true, cliStarted: false, cliExitCode: null, stoppedBy: 'start-failed',
         consoleMode: 'unknown', logExists: false, logBytes: 0, elapsedMs: Date.now() - started, stderrPreview: [], error: 'PROBE_FAILED:' + code } };
     }
-    probe = result.report;
+    probe = { ...result.report, modelSource: probeModels.source || null };
     if (!result.ok) {
       const code = probe.error === 'SIGNER_NATIVE_FILES_MISSING' ? 'SIGNER_NATIVE_FILES_MISSING'
         : probe.error === 'CLI_TIMEOUT' ? 'SIGNER_INIT_TIMEOUT' : probe.cliStarted ? 'SIGNER_INIT_NO_STAMP' : 'SIGNER_INIT_CLI_FAILED';

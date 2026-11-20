@@ -16,6 +16,7 @@ function loadConfig() {
   try { return require('./openx-config'); } catch (_) { return null; }
 }
 const CONFIG = loadConfig();
+const signing = require('./manifest-signing');
 const DEFAULT_API = CONFIG ? CONFIG.api : '';
 const PROJECT_ID = CONFIG ? CONFIG.projectId : 0;
 // 只接受内源自己域名下的 https 附件地址：防止接口返回的地址把下载带到别处（内容另有 sha256 兜底）。
@@ -289,10 +290,97 @@ async function probe({ version, file, release, strict = false, fetchImpl, env = 
     return await Promise.race([pending, new Promise(resolve => { timer = setTimeout(() => resolve(fail(`${budget / 1000} 秒内未完成探测`)), budget); })]);
   } finally { clearTimeout(timer); }
 }
+// 版本清单兜底（rsi-e，2026-11-20；返工 2026-11-21）：公司网络拦了阿里云、又没有外网权限的同事，GitHub 和阿里云的 latest.json 都读不到，
+// 「检查更新」永远报错、一直停在旧版（11-20 群里两位同事）。发版时内源每个程序版本（v<版本>）附带同一份 latest.json
+// 和它的离线签名 latest.json.sig，外网清单全部失败时从这里读：取内源上版本号最高、带 latest.json 的程序版本。采信条件（缺一条都当内源没有清单）：
+//   1. 签名用 Hub 内置公钥验过（manifest-signing.js）——内源谁都能传文件，不验签等于把升级交给任何能上传的人；
+//   2. 清单里的版本号和内源版本名一致；3. 版本不低于当前版本（防回退），主版本最多比当前高 1（防一次跳到离谱版本）。
+// 整个过程（列表、详情、清单、签名）总共不超过 8 秒；内源 5 分钟内刚连不上过就直接跳过。之后照常按清单的大小和 sha256 核对下载的文件。
+// member-* 版本不看（与程序包下载同一口径）。
+const MANIFEST_FILE = 'latest.json';
+const MANIFEST_BUDGET_MS = 8000;
+async function fetchManifest({ fetchImpl, validate, signal, currentVersion, publicKey, api = DEFAULT_API, projectId = PROJECT_ID, env = process.env,
+  timeoutMs = MANIFEST_BUDGET_MS, now = Date.now } = {}) {
+  const startedAt = now();
+  const result = (ok, extra) => ({ id: 'openx-manifest', name: '公司内源 · 版本清单', ok, ms: now() - startedAt, ...extra });
+  if (!enabled(env)) return result(false, { reason: '内源已关闭' });
+  if (!api || !projectId || typeof fetchImpl !== 'function' || typeof validate !== 'function') return result(false, { reason: '未配置内源' });
+  if (reachability({ now }) === 'down') return result(false, { reason: downText() });
+  const budget = Math.max(0, Math.min(Number(timeoutMs) || 0, MANIFEST_BUDGET_MS));
+  if (budget <= 0) return result(false, { reason: '没有剩余时间读内源版本清单' });
+  const { compareVersions } = require('./manifest');
+  const deadline = startedAt + budget;
+  const left = () => Math.max(1, deadline - now());
+  // 总预算：到点或外部取消时一起中断所有在途请求。
+  const ac = new AbortController();
+  let timer, stop;
+  const overBudget = new Promise(resolve => { stop = resolve; timer = setTimeout(() => { ac.abort(); resolve('timeout'); }, budget); });
+  // 外部取消（用户点了取消、体检到点）：立刻返回，不等列表请求自己超时。
+  const onAbort = () => { ac.abort(); stop('cancel'); };
+  if (signal) { if (signal.aborted) onAbort(); else signal.addEventListener('abort', onAbort, { once: true }); }
+  const getText = async url => {
+    const res = await fetchImpl(url, { signal: ac.signal, cache: 'no-store', redirect: 'error' });
+    if (res && res.status >= 300 && res.status < 400) throw new Error(`内源要求跳转（HTTP ${res.status}），不跟随`);
+    if (!res || !res.ok) throw new Error(`内源返回 HTTP ${res && res.status}`);
+    return typeof res.arrayBuffer === 'function' ? Buffer.from(await res.arrayBuffer()) : Buffer.from(String(await res.text()), 'utf8');
+  };
+  const work = (async () => {
+    let list;
+    try { list = await loadList({ fetchImpl, api, projectId, timeoutMs: left(), now }); }
+    catch (error) {
+      if (ac.signal.aborted && !(signal && signal.aborted)) return result(false, { reason: `${budget / 1000} 秒内没读完内源版本清单` });
+      markDown(error, now); state.lastReason = `内源连不上：${errText(error)}`;
+      return result(false, { reason: `内源连不上：${errText(error)}` });
+    }
+    const releases = list.map(r => ({ ...r, appVersion: /^(\d+\.\d+\.\d+)(?:\s|$)/.exec(normVersion(r.version))?.[1] }))
+      .filter(r => r.appVersion)
+      .sort((a, b) => compareVersions(b.appVersion, a.appVersion));
+    for (const rec of releases.slice(0, 3)) {
+      if (ac.signal.aborted) break;
+      let packages = state.details.get(rec.id);
+      if (!packages) {
+        const data = await getJson(fetchImpl, `${api}by_id?id=${encodeURIComponent(rec.id)}`, ac.signal, left());
+        packages = Array.isArray(data.binaryPackages) ? data.binaryPackages : [];
+        state.details.set(rec.id, packages);
+      }
+      const pick = name => packages.find(p => p && String(p.originalFileName || '').toLowerCase() === name && safeUrl(p.url));
+      const hit = pick(MANIFEST_FILE);
+      if (!hit) continue;
+      const sigHit = pick(MANIFEST_FILE + signing.SIG_FILE_SUFFIX);
+      if (!sigHit) return result(false, { reason: `内源 v${rec.appVersion} 的版本清单没有签名，不采用` });
+      const [raw, sig] = await Promise.all([getText(safeUrl(hit.url)), getText(safeUrl(sigHit.url))]);
+      if (!signing.verifyManifest(raw, sig.toString('utf8'), publicKey)) return result(false, { reason: `内源 v${rec.appVersion} 的版本清单签名不对，不采用` });
+      const manifest = await validate(JSON.parse(raw.toString('utf8').replace(/^\uFEFF/, '')));
+      const v = normVersion(manifest.version);
+      if (v !== rec.appVersion) return result(false, { reason: `内源 v${rec.appVersion} 附带的清单写的是 v${manifest.version}，不采用` });
+      if (currentVersion) {
+        const cur = normVersion(currentVersion);
+        if (compareVersions(v, cur) < 0) return result(false, { reason: `内源清单 v${v} 比当前 v${cur} 还旧，不采用` });
+        if (Number(v.split('.')[0]) > Number(cur.split('.')[0]) + 1) return result(false, { reason: `内源清单 v${v} 主版本跳得太多（当前 v${cur}），不采用` });
+      }
+      return result(true, { manifest, releaseVersion: String(rec.version || '') });
+    }
+    if (ac.signal.aborted) return result(false, { reason: signal && signal.aborted ? '已取消' : `${budget / 1000} 秒内没读完内源版本清单` });
+    return result(false, { reason: '内源上的程序版本还没有附带版本清单' });
+  })().catch(error => {
+    if (signal && signal.aborted) return result(false, { reason: '已取消' });
+    if (ac.signal.aborted) return result(false, { reason: `${budget / 1000} 秒内没读完内源版本清单` });
+    return result(false, { reason: `内源版本清单没读到：${error && error.message ? error.message : error}` });
+  });
+  try {
+    const first = await Promise.race([work, overBudget]);
+    if (first === 'cancel') return result(false, { reason: '已取消' });
+    return first === 'timeout' ? result(false, { reason: `${budget / 1000} 秒内没读完内源版本清单` }) : first;
+  } finally {
+    clearTimeout(timer);
+    if (signal) signal.removeEventListener('abort', onAbort);
+  }
+}
+
 const releaseName = (kind, version) => `${kind}-${normVersion(version)}`;
 const MEMBER_PREFIX = 'member-';
 const memberReleaseName = version => `${MEMBER_PREFIX}v${normVersion(version)}`;
 const isMemberRelease = name => String(name || '').trim().toLowerCase().startsWith(MEMBER_PREFIX);
 function _reset() { state = freshState(); }
 
-module.exports = { diagnostics, clearDown, EDITION_ON, publicOrder, releaseName, memberReleaseName, isMemberRelease, find, findForDownload, headSize, prewarm, probe, reachability, safeUrl, markBad, lastReason, enabled, normVersion, _reset, DEFAULT_API, PROJECT_ID, REACH_TIMEOUT_MS, UNKNOWN_BUDGET_MS };
+module.exports = { fetchManifest, MANIFEST_BUDGET_MS, diagnostics, clearDown, EDITION_ON, publicOrder, releaseName, memberReleaseName, isMemberRelease, find, findForDownload, headSize, prewarm, probe, reachability, safeUrl, markBad, lastReason, enabled, normVersion, _reset, DEFAULT_API, PROJECT_ID, REACH_TIMEOUT_MS, UNKNOWN_BUDGET_MS };

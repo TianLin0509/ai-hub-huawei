@@ -18,6 +18,7 @@ const TICK_MS = 10 * 60 * 1000;
 const LOG_KEEP = 30;
 const CARD_API = /queryCardRecord/;
 const HOLIDAY_API = /queryHolidayCalendarDetails/;
+const DNS_FAIL = /ERR_NAME_NOT_RESOLVED|ERR_NAME_RESOLUTION_FAILED/;
 
 function hostOf(u) { try { return u ? `（停在 ${new URL(u).host}）` : ''; } catch { return ''; } }
 
@@ -172,7 +173,7 @@ class CompanyAttendance {
 
   settings() {
     const s = this.read('settings', {});
-    const own = normalizeDomain(s.domain || '');
+    const own = companyDomain.siteDomain(s.domain || '');
     const fromEmail = companyDomain.companyDomainOf((() => { try { return this.deps.accountEmail?.() || ''; } catch { return ''; } })());
     const known = own || fromEmail ? null : companyDomain.knownDomain(this.deps.dataDir);
     return { domain: own || fromEmail || known.domain, domainFrom: own ? 'settings' : fromEmail ? 'assistant-email' : known.from, autoDaily: s.autoDaily !== false, workTime: calc.normalizeWorkTime(s.workTime).workTime, flex: calc.normalizeFlex(s.flex).flex,
@@ -232,7 +233,7 @@ class CompanyAttendance {
     if (st.lastSuccessDay === this.todayKey()) return false;
     // 上次因为没找到域名失败、现在找到了：不用等 1 小时。
     // （旧版本的这类失败没有 needsDomain 标记，按报错文字认。）
-    const domainFail = st.lastResult && !st.lastResult.ok && (st.lastResult.needsDomain || /公司域名/.test(String(st.lastResult.error || '')));
+    const domainFail = st.lastResult && !st.lastResult.ok && (st.lastResult.needsDomain || (!st.lastResult.dnsFail && /公司域名/.test(String(st.lastResult.error || ''))));
     if (domainFail && this.settings().domain) return allowNight || now.getHours() >= 6;
     if (!allowNight && now.getHours() < 6) return false;
     return !st.lastAttemptAt || now.getTime() - Date.parse(st.lastAttemptAt) >= RETRY_MS;
@@ -316,6 +317,10 @@ class CompanyAttendance {
           fails.push(`${PAGES[page].label}：${r.error || '失败'}`);
         }
         if (!r.ok && !r.needsLogin && fails.length > 1) r = { ...r, error: fails.join('；'), triedPages: true };
+        // 地址解析不到（ERR_NAME_NOT_RESOLVED）：换哪个考勤页都没用，说清两种可能，界面就地给改域名的输入框。
+        if (!r.ok && !r.needsLogin && DNS_FAIL.test(String(r.error || ''))) {
+          r = { ...r, dnsFail: true, triedPages: false, error: `打不开 hr.${domain}（这个地址解析不到）：多半是这台电脑现在没连公司内网（在外面先连 VPN 或回到公司网络），或者公司域名不对。连上内网后点「现在读取」；域名不对就在下面改成公司主域名再读。` };
+        }
         if (r.ok && Array.isArray(r.records)) {
           const merged = calc.mergeRecords(this.read('records', []), r.records, at);
           this.write('records', merged.list);
@@ -326,7 +331,7 @@ class CompanyAttendance {
           if (saved.lastPage !== page) this.write('settings', { ...saved, lastPage: page });
           st.lastSuccessAt = at;
           st.lastSuccessDay = this.todayKey();
-        } else entry = { at, reason, ok: false, needsLogin: !!r.needsLogin, triedPages: !!r.triedPages, error: scrubError(r.error) || '失败' };
+        } else entry = { at, reason, ok: false, needsLogin: !!r.needsLogin, triedPages: !!r.triedPages, ...(r.dnsFail ? { dnsFail: true } : {}), error: scrubError(r.error) || '失败' };
       }
       st.log = [entry, ...(st.log || [])].slice(0, LOG_KEEP);
       st.lastResult = entry;

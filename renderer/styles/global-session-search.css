@@ -238,3 +238,57 @@
   0%, 30% { box-shadow: 0 0 0 3px rgba(var(--rgb-success), .5); }
   100% { box-shadow: 0 0 0 0 rgba(var(--rgb-success), 0); }
 }
+
+/* 深色两套皮肤（深色、冷杉）：历史会话页跟随宿主主题。
+   上面那套浅紫阅读色是给浅色皮肤定的；深色下它与工作区自带的深色工具条、阅读页混在一起，
+   出现「白底列表 + 深底阅读页里深灰字」（5.6.65 反馈：深色主题下历史会话看不清）。
+   这里把弹窗里重定义的颜色变量交还宿主，再把写死的浅色换成宿主语义色。
+   选择器列表用 :where，权重只算前缀，后写的专门规则（主按钮、阅读页页签）才能盖过通用规则。 */
+:root:is([data-theme='dark'],[data-theme='frost']) .session-search-overlay {
+  --bg-primary:inherit;--bg-secondary:inherit;--bg-tertiary:inherit;
+  --text-primary:inherit;--text-secondary:inherit;--text-muted:inherit;
+  --fg-default:inherit;--fg-muted:inherit;--fg-strong:inherit;--fg-faint:inherit;
+  --border:inherit;--accent-blue:inherit;--accent-green:inherit;
+  --rgb-neutral:inherit;--rgb-success:inherit;--rgb-canvas:inherit;
+  --turn-body-fg:inherit;
+  color-scheme:dark;color:var(--fg-default);background:var(--surface-canvas);
+}
+:root:is([data-theme='dark'],[data-theme='frost']) .session-search-overlay :where(
+  .session-search-command,.session-search-header,.session-search-result,.session-search-reader-sheet,
+  .session-search-footer,.session-search-toolbar,.session-search-advanced,.session-search-index-details) {
+  background:var(--surface-raised);border-color:var(--border-subtle);color:var(--fg-default);
+}
+:root:is([data-theme='dark'],[data-theme='frost']) .session-search-overlay :where(.session-search-box,.session-search-preview-tabs) { border-color:var(--border-subtle); }
+:root:is([data-theme='dark'],[data-theme='frost']) .session-search-overlay :where(.session-search-result:hover,.session-search-chip:hover,.session-search-widen:hover,.session-search-action:hover,.session-search-load-more:hover) { background:var(--surface-hover); }
+:root:is([data-theme='dark'],[data-theme='frost']) .session-search-overlay :where(.session-search-result.active,.session-search-chip.active,.session-search-scope-tabs button.active,.session-search-filter-toggle.active,.session-search-filter-toggle[aria-expanded=true]) {
+  background:var(--brand-tint);color:var(--brand-text);border-color:var(--brand-tint-border);
+}
+:root:is([data-theme='dark'],[data-theme='frost']) .session-search-overlay :where(
+  .session-search-box input,.session-search-result-title,.session-search-preview-heading h3,.session-search-intro h1,
+  .session-search-preview-text,.session-search-native-card .turn-body,.session-search-native-card .turn-body :is(h1,h2,h3,h4,h5,h6,strong),
+  .session-search-empty strong,.session-search-preview-empty strong) { color:var(--fg-strong); }
+:root:is([data-theme='dark'],[data-theme='frost']) .session-search-overlay :where(
+  .session-search-chip,.session-search-chip b,.session-search-result-summary,.session-search-filter,.session-search-filter select,
+  .session-search-filter-toggle,.session-search-scope-tabs button,.session-search-conditions,.session-search-agent-filters,.session-search-specific-providers,
+  .session-search-result-question,.session-search-result-snippet,.session-search-result-project,.session-search-result-provider,.session-search-result-time,
+  .session-search-footer,.session-search-footer kbd,.session-search-key,.session-search-index-status,.session-search-back,.session-search-back kbd,
+  .session-search-preview-heading p,.session-search-preview-meta,.session-search-preview-tabs button,.session-search-empty,.session-search-preview-empty,
+  .session-search-intro>span,.session-search-intro p,.session-search-suggestions,.session-search-suggestions button,.session-search-progress,
+  .session-search-index-details,.session-search-close,.session-search-box>svg,.session-search-result-enter,.session-search-brand i) { color:var(--fg-muted); }
+:root:is([data-theme='dark'],[data-theme='frost']) .session-search-overlay .session-search-box input::placeholder { color:var(--fg-faint); }
+:root:is([data-theme='dark'],[data-theme='frost']) .session-search-overlay :where(
+  .session-search-filter select,.session-search-filter-toggle,.session-search-action,.session-search-load-more,.session-search-new-results,
+  .session-search-index-details button,.session-search-footer kbd,.session-search-result-icon,.session-search-native-card .turn-body pre) {
+  background:var(--surface-sunken);border-color:var(--border-subtle);color:var(--fg-default);
+}
+:root:is([data-theme='dark'],[data-theme='frost']) .session-search-overlay .session-search-filter option { color:var(--fg-default);background:var(--surface-raised); }
+:root:is([data-theme='dark'],[data-theme='frost']) .session-search-overlay :where(.session-search-key,.session-search-back kbd,.session-search-close,.session-search-suggestions button) { border-color:var(--border-mid); }
+:root:is([data-theme='dark'],[data-theme='frost']) .session-search-overlay .session-search-preview-tabs .session-search-action { background:transparent;border-color:transparent;color:var(--fg-muted); }
+:root:is([data-theme='dark'],[data-theme='frost']) .session-search-overlay .session-search-action.primary { color:var(--cta-fg);background:var(--cta-bg);border-color:var(--cta-border); }
+:root:is([data-theme='dark'],[data-theme='frost']) .session-search-overlay .session-search-preview-turn.user { background:var(--surface-sunken);border-color:var(--border-subtle); }
+:root:is([data-theme='dark'],[data-theme='frost']) .session-search-overlay :where(.session-search-result mark,.session-search-preview-text mark) { color:var(--fg-strong);background:rgba(var(--rgb-brand),.32); }
+:root:is([data-theme='dark'],[data-theme='frost']) .session-search-overlay .session-search-reader-scrim { background:rgba(0,0,0,.45); }
+:root:is([data-theme='dark'],[data-theme='frost']) .session-search-overlay .session-search-progress-track { background:var(--surface-sunken); }
+:root:is([data-theme='dark'],[data-theme='frost']) .session-search-overlay :where(.session-search-widen,.session-search-native-card .turn-body a,.session-search-preview-turn.match .session-search-preview-meta) { color:var(--brand-text); }
+:root:is([data-theme='dark'],[data-theme='frost']) .session-search-overlay :where(.session-search-box:focus-within) { box-shadow:inset 0 -2px var(--brand); }
+:root:is([data-theme='dark'],[data-theme='frost']) .session-search-overlay .session-search-preview-tabs .session-search-action.active { color:var(--brand-text);box-shadow:inset 0 -2px var(--brand); }

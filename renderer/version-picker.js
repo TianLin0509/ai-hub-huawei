@@ -32,6 +32,7 @@
   .vp-tag{font-size:11px;padding:1px 6px;border-radius:9px;background:rgba(52,120,246,.12);color:#3478f6}
   .vp-tag.cur{background:rgba(40,160,90,.14);color:#1f8a4c}
   .vp-pager{margin-top:auto;display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--fg-muted,#6b7280);padding-top:8px}
+  html[lang="en"] .vp-pager{gap:8px}html[lang="en"] .vp-pager>span:last-child{white-space:nowrap;flex:none}
   .vp-hidden{font-size:12px;color:var(--fg-muted,#6b7280);margin-top:6px}
   .vp-detail{padding:14px 20px;display:flex;flex-direction:column;min-height:0}
   .vp-detail h3{margin:0 0 6px;font-size:15px}.vp-detail h4{margin:12px 0 4px;font-size:13px;color:var(--fg-muted,#6b7280)}

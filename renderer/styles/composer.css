@@ -522,3 +522,57 @@
 .composer-resend-btn:hover { filter: brightness(1.08); }
 .composer-resend-close { flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--fg-muted, #5e6d7e); font-size: 15px; line-height: 22px; cursor: pointer; }
 .composer-resend-close:hover { background: var(--surface-hover, rgba(0,0,0,.06)); }
+
+/* 卡片引用（card-quote.js，2026-11-20）：复用粘贴块，只换外观——左边一道强调色竖线，和普通粘贴块区分开。 */
+.mr-input-box .fi-paste-chip {
+  display: inline-block;
+  font-size: 0;
+  line-height: 0;
+  vertical-align: baseline;
+  margin: 0 2px;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill, 999px);
+  background: var(--bg-tertiary, rgba(127,127,127,.12));
+  color: var(--text-secondary);
+  cursor: default;
+  user-select: all;
+  white-space: nowrap;
+}
+.mr-input-box .fi-paste-chip::before {
+  content: attr(data-label);
+  font: 12px/1.6 var(--font-sans, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif);
+}
+.fi-paste-chip[data-kind="quote"] {
+  max-width: min(420px, 90%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-radius: 6px;
+  border-color: color-mix(in srgb, var(--accent-blue, #3478f6) 45%, var(--border));
+  border-left: 3px solid var(--accent-blue, #3478f6);
+  background: color-mix(in srgb, var(--accent-blue, #3478f6) 9%, transparent);
+  color: var(--text-primary);
+}
+.fi-paste-preview[data-kind="quote"] .fi-paste-preview-body {
+  border-left: 3px solid var(--accent-blue, #3478f6);
+  margin: 8px 12px;
+  padding: 0 10px;
+  font-family: var(--font-sans, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.card-quote-float {
+  position: fixed;
+  z-index: 100002;
+  padding: 3px 10px;
+  border: 1px solid var(--accent-blue, #3478f6);
+  border-radius: 6px;
+  background: var(--accent-blue, #3478f6);
+  color: #fff;
+  font: 12px/1.5 var(--font-sans, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .22);
+  cursor: pointer;
+}
+.card-quote-float[hidden] { display: none; }
+.card-quote-float:hover { filter: brightness(1.08); }
+.context-menu .context-menu-item[hidden] { display: none; }

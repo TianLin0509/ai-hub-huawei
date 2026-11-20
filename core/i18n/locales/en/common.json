@@ -1,0 +1,18 @@
+{
+  "未知原因": "Unknown reason",
+  "AI 网页": "AI Web",
+  "用量账号": "Usage accounts",
+  "恢复默认": "Reset to default",
+  "随机": "Random",
+  "项目": "Projects",
+  "引用会话": "Quote session",
+  "置底": "Move to bottom",
+  "通知未配": "Notifications not set",
+  "阅读": "Reading",
+  "查看后台输出": "View background output",
+  "选择 AI、模型和工作文件夹。这个文件夹是 AI 查看材料、处理文件的起点；第一次可以选准备好的材料文件夹。": "Choose an AI, a model and a working folder. The AI reads materials and works on files starting from this folder; the first time, you can pick a folder with your materials ready.",
+  "中转参数已保存备用；当前订阅模式不会读取或发送中转 Key。": "Relay settings are saved for later; subscription mode never reads or sends the relay key.",
+  "新建会话选「默认工作目录」时开在这里，保存后下一个新会话生效；已有会话不动。": "New sessions that choose Default working directory open here; applies to the next new session after saving, existing sessions are unchanged.",
+  "未配置飞书接收对象，点击进入设置": "No Feishu recipient set; click to open Settings",
+  "关闭提示": "Dismiss"
+}

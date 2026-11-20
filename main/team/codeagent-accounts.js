@@ -31,6 +31,11 @@ function listTeamAccounts({ dataDir, sessionManager, env = process.env }) {
     defaultModel: pool.plannedModel(a.dir, { idle: a.activeSessions === 0 }),
     unavailableReason: a.sameAsPersonal ? pool.SAME_AS_PERSONAL_NOTE : a.duplicateOf ? '重复账号'
       : a.avoid ? '暂停中' : a.state !== 'ready' ? '登录状态不可用' : '',
+    // 号池这份自己的暂停/登录状态单独带出：同一人时也只在这份本身能用（已登录、没暂停）才按本尊建成员，
+    // 暂停或登录过期的照旧拒绝，不借本尊绕过暂停。
+    paused: !!a.avoid,
+    // 和个人账号或号池里别的号是同一个人：计划里点名它时按它本尊建成员（2026-11-20 单号组队）。
+    ...(a.sameAsPersonal ? { sameAs: PERSONAL_ACCOUNT_ID } : a.duplicateOf ? { sameAs: a.duplicateOf } : {}),
   }));
   const usablePool = accounts.filter(a => rows.find(r => r.id === a.id)?.usable);
   const personal = personalCandidate({ dataDir, personalDir, credentials, sessionManager });

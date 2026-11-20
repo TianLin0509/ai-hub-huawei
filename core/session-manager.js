@@ -694,6 +694,8 @@ function buildCodeAgentPtyLaunch(id, kind, opts, cwd, env, config, auth = null, 
   if (resumeHistoryMissing) console.warn(`[codeagent] ${String(id || '').slice(0, 8)} resume requested for ${String(opts.resumeCCSessionId).slice(0, 8)} but no history found under ${config.configDir}; starting a new conversation`);
   return { cmd, sessionId, ...pin, requiresMenu: !!requestedModel && !(settingsFile && launchArgs.includes('--settings')),
     ...(resumeHistoryMissing ? { resumeHistoryMissing: true } : {}), model: requestedModel,
+    // 按 bypass 档启动：第一次用这个档的配置目录会弹「Bypass Permissions mode」确认框，启动后自动选 Yes（见 _createSession）。
+    bypassLaunch: permissionMode === 'bypassPermissions' && launchArgs.includes('--permission-mode'),
     settingsModel: settingsFile && launchArgs.includes('--settings') ? settingsModel : '', ...(memberMcpLearn ? { memberMcpLearn } : {}),
     // 老版本 CodeAgent 不认 --permission-mode 时参数被去掉，会话按 CodeAgent 自己的配置跑：用户选了非默认档要告诉他。
     ...(permissionMode !== 'bypassPermissions' && droppedFlags.includes('--permission-mode') ? { permissionModeDropped: permissionMode } : {}) };
@@ -2537,7 +2539,7 @@ class SessionManager extends EventEmitter {
       // Only a newly created child environment is changed. relaunchCli reuses
       // the existing shell; its command builder must never mutate process.env.
       const auth = require('./codeagent-launch-env').applyAccountEnv(sessionEnv, codeagentConfig);
-      // 完成提醒只留一个（反馈 1ce04c14）：默认关掉 CodeAgent 自己的桌面通知，留 Hub 的桌面回执。
+      // 完成提醒只留一个（反馈 1ce04c14）：默认 Hub 回执或桌宠在提醒时关掉 CodeAgent 自己的桌面通知（core/codeagent-cli-notify.js）。
       try { require('./codeagent-cli-notify').applyCliNotifyEnv(sessionEnv); } catch (error) { console.warn('[codeagent] 完成提醒开关读取失败：' + error.message); }
       // 原工作目录已不存在、回落到主目录时，CLI 的 --resume 只看新目录对应的记录桶：
       // 先把记录复制过去，否则会"有记录却恢复失败"，重启也没用（A1-15）。
@@ -3255,6 +3257,15 @@ class SessionManager extends EventEmitter {
         if (trustTimer) { clearTimeout(trustTimer); trustTimer = null; }
         try { trustSub.dispose(); } catch {}
       }, codeagentLaunch ? 90000 : 45000));
+
+      // CodeAgent 第一次用 bypass 档时的「Bypass Permissions mode」确认框（2026-11-20 一键反馈 v5.6.64）：默认高亮 No, exit，
+      // 不点掉时模型菜单、第一条消息都卡住，输入守卫报「终端里有未关闭的菜单」。会话本来就是按这个档启动的，替用户选 Yes。
+      if (codeagentLaunch && codeagentLaunch.bypassLaunch) {
+        const stopBypassWatch = require('./claude-trust-dialog.js').watchBypassWarning(ptyProcess, {
+          onAccepted: dialog => console.log(`[bypass-warning] ${String(id).slice(0, 8)} 自动确认 Bypass Permissions 提示（光标行 ${dialog.cursorRow} → 确认行 ${dialog.acceptRow}）`),
+        });
+        pendingTimers.push(setTimeout(stopBypassWatch, 90000));
+      }
 
       // 与 8c5c6928 之前的 PTY 时代同一套投递：PowerShell 首屏安静 200ms 后敲入命令，
       // 3 秒安全兜底。所有参数都是启动前确定的，与原生后端同源。
@@ -4530,6 +4541,7 @@ try {
     // CodeAgent 的群聊隔离 overlay 不传；模型专属设置由启动器单独处理。
     let isolation = isClaudeCli && !isCodeAgentKind(baseKind) ? buildGroupChatIsolationFlags(meetingId || autonomous) : '';
     let cmd;
+    let relaunchBypass = false;
     if (isCodeAgentKind(runtimeKind)) {
       // 原地重拉开一个新的 CLI 进程（同 Claude）。它不认 --session-id，新身份要等 hook 上报：
       // 先清掉旧绑定并标记待绑定，否则新进程的 hook 会因 id 不同被当成外来会话丢弃。
@@ -4561,6 +4573,7 @@ try {
         Object.assign(s.info, require('./session-model-pin').modelPinFields(launch));
       }
       s.codeagentRelaunchNeedsMenu = launch.requiresMenu;
+      relaunchBypass = launch.bypassLaunch === true;
       if (launch.permissionModeDropped) this.emit('session-notice', { sessionId, level: 'warning', persistent: true,
         message: codeAgentPermissionDroppedMessage(launch.permissionModeDropped) });
       if (launch.memberMcpLearn) scheduleNativeMcpLearn(this, sessionId, Number(s.pty?.pid), launch.memberMcpLearn);
@@ -4734,6 +4747,10 @@ try {
     const compatibilityMessage = [cliState.compatibilityNotice, effortMessage].filter(Boolean).join('；');
     if (compatibilityMessage) this.emit('session-notice', { sessionId, message: compatibilityMessage, level: 'warning' });
     s.pty.write(cmd);
+    // 原地重拉也是一个新 CodeAgent 进程：按 bypass 档启动时同样盯一次确认框（与 _createSession 一致）。
+    if (relaunchBypass) require('./claude-trust-dialog.js').watchBypassWarning(s.pty, {
+      onAccepted: dialog => console.log(`[bypass-warning] ${String(sessionId).slice(0, 8)} 重拉后自动确认 Bypass Permissions 提示（光标行 ${dialog.cursorRow} → 确认行 ${dialog.acceptRow}）`),
+    });
     if (isCodexCliKind(runtimeKind)) {
       this._recordManagedCodexLaunch(sessionId, cmd, options.trigger || 'relaunch');
     }

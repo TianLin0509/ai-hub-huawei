@@ -70,6 +70,19 @@ test('失败后 1 小时内不重试，0–6 点不访问', async () => {
   assert.equal(svc.shouldRun(), false);
 });
 
+// 审查发现：解析失败的提示里有「公司域名」四个字，曾被当成旧版「找不到域名」而绕过 1 小时节流，不在内网时每次定时都去撞。
+test('地址解析不到之后 1 小时内不重试', async () => {
+  const { svc, setNow } = make({ hub: async ({ url }) => { throw new Error(`ERR_NAME_NOT_RESOLVED (-105) loading '${url}'`); } });
+  const e = await svc.sync();
+  assert.equal(e.dnsFail, true);
+  assert.match(e.error, /公司域名/);
+  assert.equal(svc.shouldRun(), false);
+  setNow('2026-11-07T09:30:00');
+  assert.equal(svc.shouldRun(), false);
+  setNow('2026-11-07T10:01:00');
+  assert.equal(svc.shouldRun(), true);
+});
+
 // 成员版内置默认域名，这条只在没有默认值的公开版里成立。
 test('不知道域名时不访问，给出可操作的提示', { skip: !!require('../core/company-domain').DEFAULT_DOMAIN }, async () => {
   let called = false;

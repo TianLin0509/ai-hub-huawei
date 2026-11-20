@@ -113,6 +113,36 @@ async function run() {
     ok('号池页说明完整显示，没有被截断', await cdp.eval(`(()=>{const e=document.querySelector('[data-ca-account="${duplicate}"] .caa-status-cell>.caa-cell-sub');return e.textContent===${JSON.stringify(DUPLICATE)}&&e.scrollWidth<=e.clientWidth+1&&e.scrollHeight<=e.clientHeight+1})()`));
     ok('账号页在 1440 宽下没有水平溢出', await cdp.eval("document.documentElement.scrollWidth<=innerWidth+1"));
     await shot('03-accounts-duplicate');
+
+    // 负责人照着 accounts 点名了号池里那份重复登录的号：照样招到人，成员落在个人账号上（2026-11-20 单号组队）。
+    await click('#btn-home'); // 回到主界面再批准：账号页盖住侧栏时点不到「待批准」
+    const dupPlan = path.join(ROOT, 'plan-dup.json');
+    fs.writeFileSync(dupPlan, JSON.stringify({ goal: '点名重复号也能组队', members: [{ title: '点名重复号', role: '复核', task: '核对点名重复号的组队', account: duplicate }] }));
+    const dupProposed = await command(lead.id, ['propose', '--plan-file', dupPlan]);
+    if (APPROVAL === 'manual') {
+      ok('点名重复号的计划进入待批准', dupProposed.status === 'pending');
+      await wait(() => cdp.eval(`!!document.querySelector('[data-team-approve="${lead.id}"]')`), 'dup pending badge');
+      // 已有成员在跑时侧栏会频繁重画，按下和松开之间角标可能被换掉；像用户一样没弹出就再点一次。
+      for (let i = 0; i < 5 && !(await cdp.eval("!!document.querySelector('.team-modal')")); i++) { await click(`[data-team-approve="${lead.id}"]`); await sleep(1500); }
+      await wait(() => cdp.eval("!!document.querySelector('.team-modal') && !document.querySelector('[data-team-act=approve]').disabled"), 'dup approval ready')
+        .catch(async e => { throw Error(e.message + ' ' + await cdp.eval(`JSON.stringify({modal:!!document.querySelector('.team-modal'),disabled:document.querySelector('[data-team-act=approve]')?.disabled,err:document.querySelector('.team-error')?.textContent,acc:[...document.querySelectorAll('[data-team-account]')].map(s=>s.value)})`)); });
+      ok('审批框把重复号换成个人账号', await cdp.eval(`document.querySelector('[data-team-account="0"]').value==='personal'`));
+      await click('[data-team-act="approve"]');
+    } else ok('点名重复号的计划自动批准建成', dupProposed.status === 'approved' && dupProposed.created.length === 1);
+    const team2 = await wait(async () => { const t = (await invoke('team:list')).result[0]; return t?.members.length === 2 && t.members[1].status === 'active' && t; }, 'dup member active', 60000);
+    ok('点名重复号的成员记在个人账号上', team2.members[1].account === 'personal');
+    await wait(() => launches().some(v => v.hubSession === team2.members[1].sid), 'dup member launch', 60000);
+    ok('点名重复号的成员从个人配置目录启动', launches().some(v => v.hubSession === team2.members[1].sid && path.resolve(v.configDir) === path.resolve(PERSONAL)));
+
+    // 首页与建群弹窗：多 AI 分工统一推荐负责人组队，群聊定位为自己挑成员同场讨论。
+    await click('#btn-home');
+    await wait(() => cdp.eval(`!!document.querySelector('#home-create-group')&&document.querySelector('#home-create-group').getBoundingClientRect().height>0`), 'home visible');
+    ok('首页两张入口卡写明各自用途', await cdp.eval(`document.querySelector('#home-create-session').textContent.includes('自己组队招人')&&document.querySelector('#home-create-group').textContent.includes('同场讨论')`));
+    await shot('04-home-entries');
+    await click('#home-create-group');
+    await wait(() => cdp.eval(`(()=>{const e=document.querySelector('#mcm-team-tip');return !!e&&e.getBoundingClientRect().height>0})()`), 'group modal tip');
+    ok('建群弹窗推荐负责人组队且没有溢出', await cdp.eval(`(()=>{const e=document.querySelector('#mcm-team-tip');return e.textContent.includes('需要的话组队做')&&e.scrollWidth<=e.clientWidth+1})()`));
+    await shot('05-group-modal-tip');
     ok('个人凭据未被改动', fs.readFileSync(path.join(PERSONAL, '.credentials.json'), 'utf8') === credentialsBefore);
   } catch (e) {
     failure = e; if (cdp) await shot('failure').catch(() => {});

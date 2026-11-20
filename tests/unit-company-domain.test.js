@@ -49,3 +49,39 @@ test('考勤：填邮箱或域名都能存成域名；旧版域名失败记录�
   put(dir, 'company-attendance/state.json', { lastAttemptAt: new Date().toISOString(), lastResult: { ok: false, error: '还不知道公司域名：请在考勤设置里填写' } });
   assert.equal(svc.shouldRun(), new Date().getHours() >= 6);
 });
+
+// 2026-11-20 反馈：合作方邮箱的同事在 5.6.65 上两个考勤页都报 ERR_NAME_NOT_RESOLVED。
+// 公司电脑实测 hr.<合作方域名> 解析不到、hr.<主域名> 正常：按邮箱推出的合作方域名要换成主域名。
+test('合作方邮箱：考勤、门户等内网地址用公司主域名，不用邮箱域名', { skip: !D.DEFAULT_DOMAIN }, async () => {
+  const partner = [...D.PARTNER_MAIL][0];
+  assert.equal(D.companyDomainOf(`someone@${partner}`), D.DEFAULT_DOMAIN);
+  assert.equal(D.siteDomain(partner.toUpperCase()), D.DEFAULT_DOMAIN);
+  assert.equal(D.siteDomain('acme.example'), 'acme.example');
+  const dir = tmp();
+  put(dir, 'company-domain.json', { domain: partner, from: 'welink' });          // 旧版本按 WeLink 邮箱记下的
+  assert.equal(D.knownDomain(dir).domain, D.DEFAULT_DOMAIN);
+  // 考勤：助理邮箱、手填的旧值都纠正，读取地址拼在主域名上
+  const urls = [];
+  const svc = new CompanyAttendance({ dataDir: dir, noTimer: true, accountEmail: () => `someone@${partner}`,
+    edgeCapture: async ({ url }) => { urls.push(url); return { ok: true, via: 'edge', records: [] }; } });
+  assert.equal(svc.settings().domain, D.DEFAULT_DOMAIN);
+  svc.setSettings({ domain: `someone@${partner}` });
+  assert.equal(svc.settings().domain, D.DEFAULT_DOMAIN);
+  await svc.sync();
+  assert.equal(new URL(urls[0]).hostname, `hr.${D.DEFAULT_DOMAIN}`);
+});
+
+test('考勤地址解析不到：不来回换页，说清是没连内网还是域名不对，并标出要就地改域名', async () => {
+  const dir = tmp();
+  const urls = [];
+  const svc = new CompanyAttendance({ dataDir: dir, noTimer: true, accountEmail: () => 'someone@corp.example',
+    browser: { capture: async ({ url }) => { urls.push(url); throw new Error(`ERR_NAME_NOT_RESOLVED (-105) loading '${url}'`); } } });
+  const e = await svc.sync();
+  assert.equal(e.ok, false);
+  assert.equal(e.dnsFail, true);
+  assert.equal(e.triedPages, false);
+  assert.equal(e.needsDomain, undefined);                 // 不触发「找到域名就立刻重试」，免得每次定时都去撞
+  assert.match(e.error, /hr\.corp\.example.*解析不到.*内网.*域名不对/);
+  assert.doesNotMatch(e.error, /ERR_NAME|loading|https?:/);
+  assert.equal(urls.length, 2);                           // 两个考勤页各试一次
+});

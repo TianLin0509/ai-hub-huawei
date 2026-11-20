@@ -485,3 +485,9 @@
 .session-permission-note[data-risk='1'] > span { color: var(--fg-muted); }
 .session-permission-note .tuning-default-btn { flex-shrink: 0; min-height: 26px; padding: 3px 10px; border: 1px solid var(--border-mid); border-radius: 6px; background: var(--surface-card); color: var(--fg-strong); font-family: inherit; font-size: 11px; cursor: pointer; }
 .session-permission-note .tuning-default-btn[hidden] { display: none; }
+
+/* 英文界面（2026-11-20 i18n launch 组）：侧栏顶部「启动 | 搜索历史」两列等宽，英文「Launch ▾」放不下会变「La…」。
+   只在英文下让启动列多占一点，搜索按钮超长时省略号（悬停有完整提示）；中文样式不变。 */
+html[lang="en"] body #session-sidebar .sidebar-header { grid-template-columns: minmax(118px, 1.15fr) minmax(0, 1fr); }
+html[lang="en"] body #session-sidebar #btn-global-search { overflow: hidden; }
+html[lang="en"] body #session-sidebar #btn-global-search span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -45,6 +45,12 @@ function filterSearchEntries(entries, { scope = 'all', agent = 'all', providers 
     && (since == null || (Number(entry.updatedAt) >= since && Number(entry.updatedAt) <= now)));
 }
 
+// 归档、置顶管理是按会话浏览，不是按时间搜：归档里本来就是今天以前的会话，沿用「最近 7 天」会把
+// 一周前归档的会话全部筛掉（5.6.65 反馈：历史会话里看不到已归档会话）。侧栏入口一直这样做，页签切换也一样。
+function timeRangeForScope(scope, current) {
+  return scope === 'dormant' || scope === 'pinned' ? 'all' : current;
+}
+
 function filterSearchHits(hits, entries) {
   const hubIds = new Set(entries.filter(e => e.hubSessionId).map(e => e.hubSessionId));
   const meetingIds = new Set(entries.filter(e => e.meetingId).map(e => e.meetingId));
@@ -1028,6 +1034,7 @@ function createGlobalSessionSearch(options) {
     const button = event.target.closest('[data-scope]');
     if (!button) return;
     setScope(button.dataset.scope);
+    timeSelect.value = timeRangeForScope(activeScope, timeSelect.value);
     if (REMEMBERED_SCOPES.includes(activeScope)) { try { window.localStorage.setItem(SCOPE_STORAGE_KEY, activeScope); } catch { /* Optional UI preference. */ } }
     scheduleSearch();
   });
@@ -1119,4 +1126,5 @@ module.exports = {
   formatSearchTime,
   indexProgressModel,
   normalizeTerms,
+  timeRangeForScope,
 };

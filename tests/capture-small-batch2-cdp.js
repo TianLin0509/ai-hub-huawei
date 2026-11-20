@@ -1,7 +1,7 @@
 'use strict';
 //   门户：假门户停在登录页 → 失败页写清原因和按钮；改成能读 → 点「重试」读到数据；再停在登录页 → 旧数据上方出横幅；点「一键反馈」带原因打开反馈框。
 //   会议室：在可选功能里关掉 → 会议室页盖「未开启」说明，不拉起组件；可选功能清单里有「会议室」。
-//   完成提醒：设置「桌面回执」下有「CodeAgent 自己也弹完成提醒」，默认不勾，勾上能存住。
+//   完成提醒：设置「桌面回执」下有「CodeAgent 自带的完成提醒」，默认自动，改成保留能存住（11-20 起三档，见 tests/e2e-codeagent-cli-notify.js）。
 // 用法：node tests/capture-small-batch2-cdp.js --out <新目录>
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), net = require('node:net'), http = require('node:http');
 const { launchIsolatedHub, gracefulQuit } = require('./helpers/hub-launcher');
@@ -110,12 +110,12 @@ async function run() {
     // 完成提醒设置
     await c.eval(`require('electron').ipcRenderer.emit('desktop-notification:open-settings', {}, {})`);
     await wait(`(()=>{const r=document.getElementById('cfg-codeagent-cli-notify-row');return r&&r.style.display!=='none'&&r.offsetParent})()`, 'cli notify row', 20000);
-    ev.cliDefault = await c.eval(`document.getElementById('cfg-codeagent-cli-notify').checked`);
+    ev.cliDefault = await c.eval(`document.getElementById('cfg-codeagent-cli-notify').value`);
     await c.eval(`document.getElementById('cfg-notify-mode-section').scrollIntoView({block:'center'})`);
     await shot('06-设置-完成提醒只留一个');
-    await click('#cfg-codeagent-cli-notify'); await sleep(800);
+    await c.eval(`(()=>{const e=document.getElementById('cfg-codeagent-cli-notify');e.value='own';e.dispatchEvent(new Event('change',{bubbles:true}))})()`); await sleep(800);
     const cliFile = path.join(data, 'codeagent-cli-notify.json');
-    ev.cliSaved = fs.existsSync(cliFile) ? JSON.parse(fs.readFileSync(cliFile, 'utf8')).own : null;
+    ev.cliSaved = fs.existsSync(cliFile) ? JSON.parse(fs.readFileSync(cliFile, 'utf8')).mode : null;
   } catch (error) { ev.error = error.message; try { const s = await c.send('Page.captureScreenshot', { format: 'png' }); fs.writeFileSync(path.join(out, '20261119-smallE-error.png'), Buffer.from(s.data, 'base64')); } catch { /* */ } }
   finally {
     fs.writeFileSync(path.join(out, '20261119-smallE-evidence.json'), JSON.stringify(ev, null, 2));

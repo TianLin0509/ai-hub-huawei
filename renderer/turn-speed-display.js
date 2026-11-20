@@ -19,11 +19,11 @@ function speedDisplay(metric) {
   const generation = metric.generation && Number.isFinite(metric.generation.tokensPerSecond)
     && metric.generation.tokensPerSecond > 0 ? metric.generation : null;
   const rate = generation ? rateText(generation.tokensPerSecond) : whole;
-  const tail = `${metric.includesReasoning ? '输出含推理 token。' : ''}${mode ? '该轮速度档：' + mode + '。' : '该轮速度档未记录。'}`;
+  const tail = `${metric.includesReasoning ? '输出含推理 token。' : ''}${mode ? `该轮速度档：${mode}。` : '该轮速度档未记录。'}`;
   const wholeLine = `整轮速度 ≈${whole} tok/s：${metric.outputTokens} 个输出 token ÷ 整轮 ${durationText(metric.elapsedMs)}`;
   const title = generation
     ? `生成速度 ≈${rate} tok/s：${generation.outputTokens} 个输出 token ÷ 模型生成用时 ${durationText(generation.activeMs)}`
-      + `（${generation.calls ? generation.calls + ' 次调用，' : ''}${methods[generation.method] || ''}）。`
+      + `（${generation.calls ? `${generation.calls} 次调用，` : ''}${methods[generation.method] || ''}）。`
       + '每次调用从发出请求算到最后一段输出，含首字前的排队和读上下文，比纯出字速度略低。\n'
       + `${wholeLine}，其中工具、子代理和等待约 ${durationText(Math.max(0, metric.elapsedMs - generation.activeMs))}。${tail}`
     : `${wholeLine}。包含等待和工具执行时间，不代表纯生成速度；这一轮的记录不足以单独算出模型生成用时。${tail}`;

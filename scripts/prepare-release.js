@@ -107,7 +107,9 @@ async function main(){
       filesIndex:packed.index,
       installer:{file:setup.name,bytes:setup.bytes,sha256:setup.sha256}};
     fs.writeFileSync(path.join(dist,'latest.json'),JSON.stringify(latest,null,2)+'\n');
-    for(const name of [updateName,...(delta?[deltaName]:[]),'latest.json'])extra.push({name,sha256:crypto.createHash('sha256').update(fs.readFileSync(path.join(dist,name))).digest('hex')});
+    // 内源清单兜底要验签（rsi-e）：发版机有私钥就同时产出 latest.json.sig；没有只警告、不挡发版（见 scripts/sign-manifest.js）。
+    const signedManifest=require('./sign-manifest').signFile(path.join(dist,'latest.json')).signed;
+    for(const name of [updateName,...(delta?[deltaName]:[]),'latest.json',...(signedManifest?['latest.json.sig']:[])])extra.push({name,sha256:crypto.createHash('sha256').update(fs.readFileSync(path.join(dist,name))).digest('hex')});
   }
   fs.writeFileSync(path.join(dist,'SHA256SUMS.txt'),assets.map(a=>a.sha256+'  '+a.name).concat(manifestHash+'  release-manifest.json',...extra.map(a=>a.sha256+'  '+a.name)).join('\n')+'\n');
   console.log(JSON.stringify({version,sha,assets,extra}));

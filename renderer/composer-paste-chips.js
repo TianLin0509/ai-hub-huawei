@@ -51,11 +51,19 @@ function shouldCollapseReplace(text) {
   return value.length >= REPLACE_MIN_CHARS || countLines(value) >= REPLACE_MIN_LINES;
 }
 
-function registerPaste(text) {
+// meta 可选：卡片引用（card-quote.js）复用同一套块，带 kind:'quote' 与自己的标签、预览标题。
+function registerPaste(text, meta = null) {
   const value = String(text || '');
   seq += 1;
   const id = 'p' + seq.toString(36) + Math.random().toString(36).slice(2, 6);
-  store.set(id, { text: value, lines: countLines(value), chars: value.length });
+  const entry = { text: value, lines: countLines(value), chars: value.length };
+  if (meta && meta.kind) {
+    entry.kind = String(meta.kind);
+    if (meta.label) entry.label = String(meta.label);
+    if (meta.title) entry.title = String(meta.title);
+    if (meta.previewText != null) entry.previewText = String(meta.previewText);
+  }
+  store.set(id, entry);
   return id;
 }
 
@@ -77,8 +85,13 @@ function expandPasteMarkers(text) {
   });
 }
 
+function chipKind(entry) {
+  return (entry && entry.kind) || 'paste';
+}
+
 function chipLabel(entry, index) {
-  return `[粘贴文本 #${index} · ${entry.lines} 行]`;
+  if (entry && entry.label) return entry.label;
+  return `[粘贴文本 #${index} · ${entry ? entry.lines : 0} 行]`;
 }
 
 function escapeAttr(value) {
@@ -88,7 +101,7 @@ function escapeAttr(value) {
 function chipHtml(id, index) {
   const entry = pasteEntry(id);
   return `<span class="fi-paste-chip" contenteditable="false" data-paste-id="${escapeAttr(id)}" data-paste-index="${index}"`
-    + ` data-label="${escapeAttr(chipLabel(entry, index))}">${MARK_START}${id}${MARK_END}</span>`;
+    + ` data-kind="${escapeAttr(chipKind(entry))}" data-label="${escapeAttr(chipLabel(entry, index))}">${MARK_START}${id}${MARK_END}</span>`;
 }
 
 function createChipElement(document, id, index) {
@@ -98,22 +111,25 @@ function createChipElement(document, id, index) {
   chip.contentEditable = 'false';
   chip.dataset.pasteId = id;
   chip.dataset.pasteIndex = String(index);
+  chip.dataset.kind = chipKind(entry);
   chip.dataset.label = chipLabel(entry, index);
   chip.textContent = `${MARK_START}${id}${MARK_END}`;
   return chip;
 }
 
-function nextChipIndex(inputEl) {
-  return inputEl.querySelectorAll('.fi-paste-chip').length + 1;
+// 粘贴块和引用块各自编号，互不挤占。
+function nextChipIndex(inputEl, kind = 'paste') {
+  return Array.from(inputEl.querySelectorAll('.fi-paste-chip'))
+    .filter(chip => (chip.dataset.kind || 'paste') === kind).length + 1;
 }
 
 /**
  * 在光标处插入一个粘贴块。走 execCommand('insertHTML') 以保留原生撤销栈；
  * 若浏览器剥掉了块的属性（没找到对应元素），退回 Range 直接插入。
  */
-function insertPasteChip(inputEl, text, { document, window }) {
-  const id = registerPaste(text);
-  const index = nextChipIndex(inputEl);
+function insertPasteChip(inputEl, text, { document, window, meta = null }) {
+  const id = registerPaste(text, meta);
+  const index = nextChipIndex(inputEl, chipKind(pasteEntry(id)));
   let inserted = false;
   try {
     inserted = document.execCommand('insertHTML', false, chipHtml(id, index));
@@ -162,13 +178,14 @@ function renderRawComposerText(inputEl, raw, { document }) {
   inputEl.textContent = '';
   const value = String(raw || '');
   let last = 0;
-  let index = 0;
+  const counters = {};
   for (const match of value.matchAll(MARKER_RE)) {
     if (match.index > last) inputEl.appendChild(document.createTextNode(value.slice(last, match.index)));
     const entry = pasteEntry(match[1]);
     if (entry) {
-      index += 1;
-      inputEl.appendChild(createChipElement(document, match[1], index));
+      const kind = chipKind(entry);
+      counters[kind] = (counters[kind] || 0) + 1;
+      inputEl.appendChild(createChipElement(document, match[1], counters[kind]));
     } else {
       inputEl.appendChild(document.createTextNode(LOST_PLACEHOLDER));
     }
@@ -222,13 +239,16 @@ function show(chip, { document, window }) {
   if (!entry) return;
   activeChip = chip;
   const el = popover(document);
-  el.querySelector('.fi-paste-preview-head strong').textContent = `粘贴文本 #${chip.dataset.pasteIndex || '?'}`;
-  el.querySelector('.fi-paste-preview-head span').textContent = `${entry.lines} 行 · ${entry.chars.toLocaleString()} 字`;
-  const shown = entry.text.length > PREVIEW_MAX_CHARS ? entry.text.slice(0, PREVIEW_MAX_CHARS) : entry.text;
+  const quote = chipKind(entry) === 'quote';
+  el.dataset.kind = chipKind(entry);
+  el.querySelector('.fi-paste-preview-head strong').textContent = entry.title || `粘贴文本 #${chip.dataset.pasteIndex || '?'}`;
+  const source = entry.previewText != null ? entry.previewText : entry.text;
+  el.querySelector('.fi-paste-preview-head span').textContent = `${countLines(source)} 行 · ${source.length.toLocaleString()} 字`;
+  const shown = source.length > PREVIEW_MAX_CHARS ? source.slice(0, PREVIEW_MAX_CHARS) : source;
   el.querySelector('.fi-paste-preview-body').textContent = shown;
-  const hiddenLines = entry.lines - countLines(shown);
+  const hiddenLines = countLines(source) - countLines(shown);
   el.querySelector('.fi-paste-preview-foot').textContent = (hiddenLines > 0 ? `… 另有 ${hiddenLines} 行未显示 · ` : '')
-    + '发送时自动展开为原文 · 退格可整块删除';
+    + (quote ? '发送时以「> 引用」格式放在这个位置 · 退格可整块删除' : '发送时自动展开为原文 · 退格可整块删除');
   el.hidden = false;
   el.scrollTop = 0;
   el.querySelector('.fi-paste-preview-body').scrollTop = 0;

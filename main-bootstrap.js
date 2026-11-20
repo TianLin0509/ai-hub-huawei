@@ -43,6 +43,11 @@ try {
   process.__hubGpuModeError = error && error.message ? error.message : String(error);
 }
 
+// 在压缩包里直接双击运行（core/archive-temp-run.js，2026-11-20）：压缩软件的临时目录随时被清，提醒先解压。
+try {
+  process.__hubArchiveRun = require('./core/archive-temp-run.js').warnIfRunningFromArchive({ app, dialog: require('electron').dialog });
+} catch (_) { /* 提醒失败不影响启动 */ }
+
 // 升级途中又点了图标（core/app-update/launch-guard.js，2026-11-13）：把焦点交给升级进度小窗后立即退出，
 // 不打开旧版、不占住要替换的文件。放在加载 main.js 之前，越早退出越不挡替换。
 let deferredToUpgrade = false;

@@ -20,16 +20,23 @@ function isNewlineKey(event, mode) {
   return event.key === 'Enter' && mode === 'newline' && !event.ctrlKey && !event.metaKey && !event.shiftKey;
 }
 function placeholderFor(mode, base = '输入消息…') {
-  return `${base}（${mode === 'newline' ? 'Enter 换行，Ctrl+Enter 发送' : 'Enter 发送，Shift+Enter 换行'}）`;
+  const text = `${base}（${mode === 'newline' ? 'Enter 换行，Ctrl+Enter 发送' : 'Enter 发送，Shift+Enter 换行'}）`;
+  // 输入框是可编辑区（整页翻译层不进去），占位文字放在 data-placeholder 里：这里按当前语言取词；中文模式原样返回
+  return require('../core/i18n').translate(text);
 }
 // 设置页的下拉：选了立刻生效，已经打开的输入框也换占位文字。
 function bindSetting({ document: doc, storage }) {
   const select = doc.getElementById('cfg-composer-enter');
   if (!select) return;
   select.value = readMode(storage);
+  const updatePlaceholders = mode => {
+    doc.querySelectorAll('.floating-input-box, #mr-input-box').forEach(box => box.setAttribute('data-placeholder', placeholderFor(mode, box.dataset.placeholderBase || undefined)));
+  };
   select.addEventListener('change', () => {
     const mode = writeMode(storage, select.value);
-    doc.querySelectorAll('.floating-input-box, #mr-input-box').forEach(box => box.setAttribute('data-placeholder', placeholderFor(mode, box.dataset.placeholderBase || undefined)));
+    updatePlaceholders(mode);
   });
+  const unsubscribe = require('../core/i18n').onLanguageChange(() => updatePlaceholders(readMode(storage)));
+  doc.defaultView?.addEventListener('unload', unsubscribe, { once: true });
 }
 module.exports = { STORAGE_KEY, readMode, writeMode, isSendKey, isNewlineKey, placeholderFor, bindSetting };

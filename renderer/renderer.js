@@ -54,6 +54,7 @@ const { marked } = require('marked');
 const DOMPurify = require('dompurify');
 const { fileURLToPath } = require('url');
 const { extractVisibleCardText, copyableCardText } = require('./visible-card-text.js');
+const cardQuote = require('./card-quote.js');
 const { applyCardDisplaySettings } = require('./card-display-settings.js');
 const {
   GC_WORKING_FRESH_MS,
@@ -1355,9 +1356,9 @@ function formatRelativeTime(ts) {
   const now = Math.floor(Date.now() / 1000);
   const diff = now - parseInt(ts);
   if (diff < 60) return '刚刚';
-  if (diff < 3600) return Math.floor(diff / 60) + '分钟前';
-  if (diff < 86400) return Math.floor(diff / 3600) + '小时前';
-  if (diff < 604800) return Math.floor(diff / 86400) + '天前';
+  if (diff < 3600) return `${Math.floor(diff / 60)}分钟前`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}小时前`;
+  if (diff < 604800) return `${Math.floor(diff / 86400)}天前`;
   return formatBeijingMonthDay(parseInt(ts) * 1000);
 }
 
@@ -3813,6 +3814,36 @@ function getCardSessionId(cardEl) {
     || null;
 }
 
+// 卡片引用（2026-11-20，card-quote.js）：整卡或选中片段放进「这张卡所属会话」的输入框。
+// 输入框归属沿用 edit-resend 的判断：卡片不属于当前会话时拒绝，避免引用串到别的会话。
+function resolveComposerForCard(card) {
+  const groupMember = card.closest('[data-group-member]');
+  if (groupMember) return document.getElementById('mr-input-box');
+  const cardSid = getCardSessionId(card);
+  const liveSid = card.closest('[data-split-secondary]') ? sessionSplit?.secondary()?.sessionId
+    : (typeof activeSessionId !== 'undefined' && activeSessionId) || null;
+  if (cardSid && liveSid && String(cardSid) !== String(liveSid)) return null;
+  return card.closest('.terminal-panel')?.querySelector('.floating-input-box') || null;
+}
+
+function quoteCardIntoComposer(card, text, { partial = false } = {}) {
+  const inputEl = card && resolveComposerForCard(card);
+  if (!inputEl) {
+    showPreviewNotice('找不到这张卡片所属会话的输入框，先切到该会话再引用。', 'error');
+    return { ok: false };
+  }
+  const turn = getTurnFromCard(card);
+  const source = {
+    who: card.querySelector('.turn-who')?.textContent || '',
+    role: turn?.role || (card.classList.contains('user') ? 'user' : 'assistant'),
+    ts: turn?.ts,
+    partial,
+  };
+  const result = cardQuote.insertQuoteIntoComposer(inputEl, { text, source }, { document, window, pasteChips });
+  if (!result.ok) showPreviewNotice(result.error || '没有可引用的文字。', 'error');
+  return result;
+}
+
 document.addEventListener('click', async (e) => {
   const btn = e.target.closest('.ta-btn');
   if (!btn) return;
@@ -3833,6 +3864,15 @@ document.addEventListener('click', async (e) => {
     await require('./card-prefix-fork').forkBeforeTurn({ turn, session: sessions.get(getCardSessionId(card)), button: btn,
       invoke: (channel, payload) => ipcRenderer.invoke(channel, payload), notify: showToast, selectSession,
       openNewSession: () => window.WorkspaceController.openNewSessionModal({ kind: 'codeagent' }) });
+    return;
+  }
+
+  if (action === 'quote') {
+    // 整卡引用用原始 Markdown（列表编号、代码块、表格都在，正是模型当初写的样子）；
+    // 拿不到时退回卡片上看到的正文（和「复制」同一口径）。
+    const raw = turn.role === 'user' ? (turn.assistantContext?.userText ?? turn.text) : turn.text;
+    quoteCardIntoComposer(card, (typeof raw === 'string' && raw.trim()) ? raw
+      : extractVisibleCardText(card.querySelector('.turn-body')));
     return;
   }
 
@@ -5615,8 +5655,11 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
 
     thinkingChip.hidden = !rail.thinking.visible;
     if (rail.thinking.visible) {
-      if (thinkingChipLabel.textContent !== '推理 · ' + require('./ui-labels').effortLabel(rail.thinking.label)) {
-        thinkingChipLabel.textContent = '推理 · ' + require('./ui-labels').effortLabel(rail.thinking.label);
+      // 比较记下的中文原文而不是 textContent：英文模式下 textContent 已被翻译层换成英文（2026-11-20 i18n）
+      const thinkingLabelText = '推理 · ' + require('./ui-labels').effortLabel(rail.thinking.label);
+      if (thinkingChipLabel.dataset.rawLabel !== thinkingLabelText) {
+        thinkingChipLabel.dataset.rawLabel = thinkingLabelText;
+        thinkingChipLabel.textContent = thinkingLabelText;
       }
       thinkingChip.dataset.interactive = rail.thinking.interactive || webRoute ? '1' : '0';
       thinkingChipCaret.hidden = !(rail.thinking.interactive || webRoute);
@@ -9283,8 +9326,20 @@ const cardSelectionContextMenu = createCardSelectionContextMenuController({
   copyText: (text, options) => clipboardController.copyText(text, options),
   expandText: pasteChips.expandPasteMarkers,
   markdown: require('./markdown-copy'),
+  quoteText: (text, card) => quoteCardIntoComposer(card, text, { partial: true }),
 });
 cardSelectionContextMenu.init();
+// 选中卡片正文后浮出「引用」。只认消息卡片（.turn-card）的正文，输入框、终端、预览里不出现。
+// 公司版保留选区的 Markdown 格式（加粗、列表、代码），转换失败时退回纯文本。
+cardQuote.createSelectionQuoteButton({
+  document, window,
+  findCard: node => {
+    const card = node.closest && node.closest('.msg-overlay .turn-card');
+    return card && node.closest('.turn-body') ? card : null;
+  },
+  readSelection: () => require('./markdown-copy').selectionToMarkdown(window),
+  onQuote: (card, text) => quoteCardIntoComposer(card, text, { partial: true }),
+}).init();
 
 const pathLinkContextMenu = createPathLinkContextMenuController({
   document,
@@ -9634,6 +9689,7 @@ document.getElementById('btn-team')?.remove();
   }).catch(() => avatarButton?.remove());
 }
 const openConfigModal = configModal.open;
+window.__hubOpenConfigModal = openConfigModal; // 截图与验收脚本用（tests/capture-i18n-cdp.js）
 // 设置弹窗顶部的「搜设置和功能」（2026-11-20 体验 1）：与 Ctrl+K 同一份功能索引。
 require('./feature-search.js').mountSettingsSearch({ document, window, showMessage: message => showToast(message) });
 // 右下角回执小卡上的齿轮：打开配置并停在「桌面回执」（2026-11-11）。
@@ -11383,7 +11439,7 @@ if (process && process.env && process.env.CLAUDE_HUB_E2E === '1') {
           sessions.set(sessionId, {
             id: sessionId,
             kind: 'codex',
-            title: '问题导航 E2E',
+            title: '问题导航 E2E', // i18n-ignore 测试夹具数据
             status: 'idle',
             createdAt: Date.now(),
             lastMessageTime: Date.now(),
@@ -11406,7 +11462,7 @@ if (process && process.env && process.env.CLAUDE_HUB_E2E === '1') {
           overlay.classList.remove('hidden');
           window._sessionTurns.clear();
         }
-        const answerParagraph = '这是用于拉开卡片距离的回答段落，保持真实 Markdown 卡片的高度和滚动行为。';
+        const answerParagraph = '这是用于拉开卡片距离的回答段落，保持真实 Markdown 卡片的高度和滚动行为。'; // i18n-ignore 测试夹具数据
         for (let offset = 0; offset < count; offset += 1) {
           const index = start + offset;
           window._mountSessionTurnCard(sessionId, {
@@ -11414,15 +11470,15 @@ if (process && process.env && process.env.CLAUDE_HUB_E2E === '1') {
             role: 'user',
             kind: 'codex',
             text: index === 7
-              ? '问题 7：这是实时追加的新问题，导航轨应自动出现新节点。'
-              : `问题 ${index}：请分析第 ${index} 个方案的收益、风险与下一步。`,
+              ? '问题 7：这是实时追加的新问题，导航轨应自动出现新节点。' // i18n-ignore 测试夹具数据
+              : `问题 ${index}：请分析第 ${index} 个方案的收益、风险与下一步。`, // i18n-ignore 测试夹具数据
             ts: Date.now() + offset * 2,
           }, { kind: 'codex' });
           window._mountSessionTurnCard(sessionId, {
             id: `answer-${index}`,
             role: 'assistant',
             kind: 'codex',
-            text: `### 回答 ${index}\n\n${Array(7).fill(answerParagraph).join('\n\n')}`,
+            text: `### 回答 ${index}\n\n${Array(7).fill(answerParagraph).join('\n\n')}`, // i18n-ignore 测试夹具数据
             ts: Date.now() + offset * 2 + 1,
           }, { kind: 'codex' });
         }

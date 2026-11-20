@@ -55,7 +55,7 @@ function mountComposerSceneChip({ composer, tuningControls, before, sessionId, g
     const session = getSession();
     const show = !!(data && data.scenes && data.scenes.length > 1 && eligible(session));
     chip.hidden = !show;
-    if (show) chip.textContent = '场景 · ' + labelOf(data, current());
+    if (show) chip.textContent = `场景 · ${labelOf(data, current())}`;
     return data;
   }
 
@@ -66,8 +66,7 @@ function mountComposerSceneChip({ composer, tuningControls, before, sessionId, g
     if (pending) {
       const target = data.scenes.find(s => s.id === pending);
       menu.innerHTML = `<div class="cs-confirm"><div class="cs-title">换到「${esc(target?.label || pending)}」</div>`
-        + '<p>这个会话已经聊过。AI 接续旧会话时会沿用开头那份提示词，中途换不掉，所以会新开一个「'
-        + esc(target?.label || pending) + '」会话，输入框里自动放好对这段聊天的引用；原会话保留在左侧。</p>'
+        + `<p>这个会话已经聊过。AI 接续旧会话时会沿用开头那份提示词，中途换不掉，所以会新开一个「${esc(target?.label || pending)}」会话，输入框里自动放好对这段聊天的引用；原会话保留在左侧。</p>`
         + `<div class="cs-actions"><button type="button" class="cs-cancel">取消</button><button type="button" class="cs-go" data-go="${esc(pending)}">新开「${esc(target?.label || pending)}」会话并引用</button></div></div>`;
       return;
     }

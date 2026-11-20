@@ -5,7 +5,8 @@
  *   - 额定上班 09:00–12:30、13:30–17:30，共 7.5 小时；
  *   - 工作日 09:00 前（05:00 起）和 18:00 后算加班；
  *   - 规定每天 8 小时，比额定多 0.5 小时，每个出勤工作日扣 0.5 小时，按月统计；
- *   - 周末、法定节假日整段在岗都算加班；月末周六是正常上班日，按工作日算；
+ *   - 周末、法定节假日在岗都算加班，但扣掉午休（12:30–13:30）和晚饭（17:30–18:00）时段，和公司考勤系统一致；
+ *     月末周六是正常上班日，按工作日算；
  *   - 只算有打卡的时段，同一天离开后又回来，中间不算。
  * 弹性工作制（可选，默认关）见 DEFAULT_FLEX 处说明。
  * 时间统一用「当天 00:00 起的分钟数」，次日凌晨为 1440 以上。 */
@@ -17,6 +18,7 @@ const DEFAULT_RULES = Object.freeze({
   owePerWorkday: 30,      // 每个出勤工作日扣 0.5 小时
   monthCap: 80 * 60,      // 月净加班红线 80 小时
   lastSaturdayIsWorkday: true,
+  restBreaks: [[750, 810], [1050, 1080]], // 周末、节假日不计加班的休息段：午休、晚饭
 });
 
 // 核心工作时间（用户可在考勤设置里改，各公司、各人不一样）。加班口径由它推出：
@@ -72,7 +74,10 @@ function rulesFromWorkTime(w, flexIn) {
   const n = normalizeWorkTime(w);
   const t = n.ok ? n.minutes : normalizeWorkTime(DEFAULT_WORK_TIME).minutes;
   const rated = (t.amEnd - t.amStart) + (t.pmEnd - t.pmStart);
-  const base = { amEnd: t.amStart, pmStart: t.eveningFrom, owePerWorkday: Math.max(0, REQUIRED_DAILY - rated), ratedMinutes: rated, workTime: n.ok ? n.workTime : { ...DEFAULT_WORK_TIME } };
+  // 周末、节假日加班扣掉的休息段（2026-11-20 反馈：加班日 09:06–18:08，公司考勤系统算 7.53 小时 = 9h02 − 午休 1h − 晚饭 0.5h）。
+  // 跟着核心工作时间走：午休 = 上午下班–下午上班，晚饭 = 下午下班–晚上加班起算。
+  const restBreaks = [[t.amEnd, t.pmStart], [t.pmEnd, t.eveningFrom]].filter(([a, b]) => b > a);
+  const base = { amEnd: t.amStart, pmStart: t.eveningFrom, owePerWorkday: Math.max(0, REQUIRED_DAILY - rated), ratedMinutes: rated, restBreaks, workTime: n.ok ? n.workTime : { ...DEFAULT_WORK_TIME } };
   const f = normalizeFlex(flexIn).flex;
   if (!f.on) return base;
   const breaks = [[t.amEnd, t.pmStart]];
@@ -82,6 +87,7 @@ function rulesFromWorkTime(w, flexIn) {
 // 计算用的口径子集（界面和后台红线提醒共用，免得两处各拼一份漏掉弹性字段）。
 function calcRules(r = {}) {
   const out = { amEnd: r.amEnd, pmStart: r.pmStart, owePerWorkday: r.owePerWorkday };
+  if (Array.isArray(r.restBreaks)) out.restBreaks = r.restBreaks;
   if (r.flex) Object.assign(out, { flex: true, coreStart: r.coreStart, coreEnd: r.coreEnd, dailyRequired: r.dailyRequired, breaks: r.breaks || [] });
   return out;
 }
@@ -213,7 +219,7 @@ function buildDays(records, opts = {}) {
     let span = 0, otAm = 0, otPm = 0, otRest = 0, worked = 0;
     for (const s of x.segs) {
       span += s.b - s.a;
-      if (!isWorkKind(kind)) otRest += s.b - s.a;
+      if (!isWorkKind(kind)) otRest += countedMinutes(s.a, s.b, rules.restBreaks);
       else if (flexDay) worked += countedMinutes(s.a, s.b, rules.breaks);
       else {
         otAm += overlap(s.a, s.b, rules.dayStart, rules.amEnd);

@@ -31,6 +31,8 @@ const ARCH = 'win32-x64-';
 const MAX_LOG_BYTES = 1024 * 1024;
 const POWERSHELL = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
 const TASKKILL = 'C:\\Windows\\System32\\taskkill.exe';
+// The CLI's own "no model, use --model" hint; the probe prompt asks for a fixed token, so an answer never contains it.
+const MODEL_HINT = /--model\b/;
 
 // Keep the feedback-equivalent credential rules here: this module also runs from
 // app.asar.unpacked, where its parent directory has no hub-feedback.js.
@@ -309,7 +311,7 @@ async function probeNativeStampOnce({ cliExe, configDir, expectedVersion, workRo
   env = process.env, spawnImpl = nodeSpawn, powershell = POWERSHELL, pollMs = 250, privateDesktop = true, nativeRuntimeDir,
   now = Date.now, waitFor = waitForExit } = {}, privateStartProcess = false) {
   const started = now();
-  const report = { ran: true, cliStarted: false, cliExitCode: null, stoppedBy: null, logExists: false, logBytes: 0, logLines: 0,
+  const report = { model: model || '', ran: true, cliStarted: false, cliExitCode: null, stoppedBy: null, logExists: false, logBytes: 0, logLines: 0,
     markerMatched: false, stampParsed: false, logVersionStatus: 'unknown', envDropped: 0, consoleMode: 'unknown',
     tempCategory: 'hub-work-temp', elapsedMs: 0, error: null, stderrPreview: [], stderrPreviewTruncated: false,
     hostStderrPreview: [], hostStderrPreviewTruncated: false };
@@ -428,6 +430,11 @@ async function probeNativeStampOnce({ cliExe, configDir, expectedVersion, workRo
     const stderr = await readLog(launcherEnv.HUB_STAMP_ERR);
     const preview = stderrPreview(stderr.text, { env });
     report.stderrPreview = preview.lines; report.stderrPreviewTruncated = preview.truncated || stderr.bytes > MAX_LOG_BYTES;
+    // CodeAgent 1.2615.02.05 with no usable model prints a hint naming --model (stdout) and exits 1 without a signer log.
+    if (!stamp && report.cliStarted && report.stoppedBy === 'exit' && !report.logExists) {
+      const stdout = await readLog(launcherEnv.HUB_STAMP_OUT);
+      if (MODEL_HINT.test(String(stdout.text || '').slice(0, 8192)) || MODEL_HINT.test(String(stderr.text || '').slice(0, 8192))) report.error = 'CLI_MODEL_REJECTED';
+    }
     if (!stamp && report.cliStarted && report.stoppedBy === 'exit' &&
       preview.lines.some(line => line.includes('Input must be provided either through stdin or as a prompt argument when using --print'))) {
       report.error = 'CLI_INPUT_MISSING';
@@ -454,7 +461,9 @@ export async function probeNativeStamp(options = {}) {
   first.report.cliRuns = first.report.cliStarted ? 1 : 0;
   if (first.ok || options.privateDesktop === false || first.report.consoleMode !== 'private-desktop' || !first.report.cliStarted || first.report.logExists !== false) return first;
   if (!first.report.cleanupConfirmed) { first.report.retrySuppressed = 'cleanup-unconfirmed'; return first; }
-  const second = await probeNativeStampOnce({ ...options, privateDesktop: true }, true);
+  // The first model was rejected: the retry names the next candidate (older CLIs accept --model as well).
+  const model = first.report.error === 'CLI_MODEL_REJECTED' && options.fallbackModel ? options.fallbackModel : options.model;
+  const second = await probeNativeStampOnce({ ...options, model, privateDesktop: true }, true);
   const attempts = [{ ...first.report }, { ...second.report }];
   second.report = { ...second.report, retried: true, attempts,
     cliRuns: attempts.reduce((count, report) => count + (report.cliStarted ? 1 : 0), 0), elapsedMs: now() - started };

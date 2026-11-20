@@ -56,7 +56,7 @@
   if (!featureEnabled('launchEffort')) {
     // 副标题和文案同一开关：公司版不讲「提供方」「工作根」。
     const setText = (selector, text) => { const el = document.querySelector(selector); if (el) el.textContent = text; };
-    setText('#launch-intent-group small', '多个 AI 一起讨论、分工');
+    setText('#launch-intent-group small', '自己挑几个 AI 同场讨论');
     setText('#launch-intent-resume small', '接着聊以前的会话');
     setText('#launch-center-group-panel .launch-center-panel-head span', '选好成员和工作目录，就能开始');
     setText('#launch-center-resume-panel .launch-center-panel-head span', '点一下，在原来的文件夹里接着聊');

@@ -11,9 +11,11 @@ function createCardSelectionContextMenuController({
   expandText = text => text,
   pushToChatgpt,
   markdown = null,
+  quoteText = null,
   requestAnimationFrameFn = requestAnimationFrame,
 }) {
   let selectedText = '';
+  let selectedCard = null;
   let selectedMarkdown = '';
   function syncMarkdownToggle() {
     const item = menuEl.querySelector?.('[data-action="toggle-md"]');
@@ -39,9 +41,13 @@ function createCardSelectionContextMenuController({
     return value.trim() ? value : '';
   }
 
-  function open(text, x, y) {
+  function open(text, x, y, card = null) {
     if (!text || !String(text).trim()) return false;
     selectedText = String(text);
+    selectedCard = card || null;
+    // 「引用到输入框」只在消息卡片上有意义：输入框、文件预览里选中的文字不给这一项。
+    const quoteItem = menuEl.querySelector?.('[data-action="quote"]');
+    if (quoteItem) quoteItem.hidden = !(selectedCard && typeof quoteText === 'function');
     // 菜单一开就把选区转好：点菜单项时选区可能已经变了。
     try { selectedMarkdown = markdown?.selectionToMarkdown ? markdown.selectionToMarkdown(window) : ''; } catch { selectedMarkdown = ''; }
     const mdItem = menuEl.querySelector?.('[data-action="copy-md"]');
@@ -62,9 +68,14 @@ function createCardSelectionContextMenuController({
     menuEl.style.display = 'none';
     selectedText = '';
     selectedMarkdown = '';
+    selectedCard = null;
   }
 
-  async function runAction(action, text = selectedText, md = selectedMarkdown) {
+  async function runAction(action, text = selectedText, md = selectedMarkdown, card = selectedCard) {
+    if (action === 'quote') {
+      if (typeof quoteText !== 'function' || !card) return { ok: false, error: '这里的文字不能引用。' };
+      return quoteText(String(md || text || ''), card);
+    }
     if (action === 'toggle-md') {
       const on = !markdown?.markdownPreferred?.();
       markdown?.setMarkdownPreferred?.(on);
@@ -99,7 +110,8 @@ function createCardSelectionContextMenuController({
       if (!event.target?.closest || event.target.closest('.xterm')) return;
       if (!event.target.closest('.turn-card, #preview-body, input, textarea, [contenteditable="true"]')) return;
       const value = readSelectedText(event.target, window);
-      if (!value || !open(value, event.clientX, event.clientY)) return;
+      const card = event.target.closest('.msg-overlay .turn-card');
+      if (!value || !open(value, event.clientX, event.clientY, card)) return;
       event.preventDefault();
       if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
       else event.stopPropagation();
@@ -118,9 +130,9 @@ function createCardSelectionContextMenuController({
     for (const button of menuEl.querySelectorAll('.context-menu-item')) {
       button.addEventListener('click', async () => {
         const action = button.dataset.action;
-        const value = selectedText, md = selectedMarkdown;
+        const value = selectedText, md = selectedMarkdown, card = selectedCard;
         close();
-        await runAction(action, value, md);
+        await runAction(action, value, md, card);
       });
     }
     return true;

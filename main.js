@@ -2905,6 +2905,15 @@ const optionalFeatures = require('./core/optional-features').createOptionalFeatu
 });
 // 关窗口最小化到托盘（2026-11-12）：开关也放「可选功能」，默认关。
 var trayController = null;
+// 界面语言（2026-11-20）：默认中文，设置里选 English 才切英文；对话框/菜单/托盘/通知统一按词典翻译（main/i18n-main.js）。
+try {
+  require('./main/i18n-main').installMainI18n({
+    electron: require('electron'), ipcMain,
+    hubConfig: require('./core/hub-config'),
+    getWindows: () => BrowserWindow.getAllWindows(),
+    onChange: () => { try { trayController && trayController.refresh && trayController.refresh(); } catch (_) {} },
+  });
+} catch (error) { console.warn('[i18n] setup failed:', error && error.message); }
 try {
   trayController = require('./main/tray-controller').createTrayController({
     Tray, Menu,
@@ -2930,10 +2939,14 @@ function optionalFeatureList() {
   return out;
 }
 ipcMain.handle('optional-features:list', () => optionalFeatureList());
-// CodeAgent 自己的完成提醒（反馈 1ce04c14）：默认关，只留 Hub 的桌面回执；设置「桌面回执」下可勾回来。
-ipcMain.handle('codeagent-cli-notify:get', () => ({ ok: true, available: require('./core/distribution').kindAllowed('codeagent'), own: require('./core/codeagent-cli-notify').getCliNotify() }));
+// CodeAgent 自己的完成提醒（反馈 1ce04c14；11-20 改三档）：默认 auto＝Hub 回执或桌宠在提醒时关掉 CodeAgent 自己的，可改回。
+function codeagentCliNotifyReply() {
+  const m = require('./core/codeagent-cli-notify');
+  return { ok: true, available: require('./core/distribution').kindAllowed('codeagent'), ...m.state() };
+}
+ipcMain.handle('codeagent-cli-notify:get', () => { try { return codeagentCliNotifyReply(); } catch (error) { return { ok: false, error: error.message }; } });
 ipcMain.handle('codeagent-cli-notify:set', (_event, request = {}) => {
-  try { return { ok: true, available: true, own: require('./core/codeagent-cli-notify').setCliNotify(request.own === true) }; }
+  try { require('./core/codeagent-cli-notify').setMode(String(request.mode || '')); return codeagentCliNotifyReply(); }
   catch (error) { return { ok: false, error: error.message }; }
 });
 ipcMain.handle('optional-features:set', async (_event, request = {}) => {
@@ -4874,6 +4887,21 @@ require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataD
         const feedbackService = createHubFeedbackService({
           edition: feedbackEdition,
           receiverAddress: feedbackEdition ? sharedFeedbackReceiverAddress() : null,
+          // 公司版改走 WeLink（2026-11-21）：一键发送用本机 welink-cli（与助理同一份，登录过期会自动续期），没装就复制并打开 WeLink 客户端。
+          welink: feedbackEdition ? (() => {
+            const W = require('./core/company-assistant/welink');
+            const FW = require('./core/hub-feedback-welink');
+            const findCli = () => { try { return companyAssistantService?.cli?.() || W.resolveCli({}); } catch { return null; } };
+            const writeClipboard = require('./core/verified-clipboard.js').createVerifiedClipboardWriter({ clipboard: require('electron').clipboard });
+            return { to: FW.MAINTAINER_WELINK, hasCli: () => !!findCli(), parseJson: W.parseJson, writeClipboard,
+              run: (args, opts) => companyAssistantService?.welink ? companyAssistantService.welink(args, opts) : W.run(args, { ...opts, cli: findCli() }),
+              openDesktop: async () => {
+                const hit = await FW.findWelinkDesktop();
+                if (!hit.path) return { ok: false, reason: '没找到 WeLink 桌面客户端' };
+                const err = await shell.openPath(hit.path);
+                return err ? { ok: false, via: hit.via, reason: err } : { ok: true, via: hit.via };
+              } };
+          })() : null,
           endpoint: ownHosts.feedbackEndpoint(ownConfig), logsDir: path.join(getHubDataDir(), 'logs'), unblock: unblockOwn, onPassed: () => ownUnblocker.passed(),
           // 放行后提交仍被拦：在看不见的窗口里直接提交（走浏览器网络栈，拦截页出现在窗口里就点放行），见 core/net-unblock.js postInHiddenWindow。
           // 公开版不在后台窗口里自动点放行（2026-11-08 用户）：被拦就提示用户打开放行页自己点。

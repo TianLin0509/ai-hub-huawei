@@ -52,10 +52,10 @@ function rowView(s, now = Date.now()) {
 }
 
 function greeting(date = new Date()) {
-  const week = '日一二三四五六'[date.getDay()];
+  const week = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][date.getDay()];
   const hour = date.getHours();
   const part = hour < 6 ? '夜深了' : hour < 12 ? '上午好' : hour < 14 ? '中午好' : hour < 18 ? '下午好' : '晚上好';
-  return `${date.getMonth() + 1} 月 ${date.getDate()} 日 周${week} · ${part}`;
+  return `${date.getMonth() + 1} 月 ${date.getDate()} 日 ${week} · ${part}`;
 }
 
 function mount({ document: doc, getSessions, selectSession, escapeHtml }) {

@@ -453,6 +453,7 @@ function _ensureModal() {
         <button class="mcm-close" aria-label="关闭">×</button>
       </div>
       <div class="mcm-body">
+        <p class="mcm-team-tip" id="mcm-team-tip">群聊适合自己挑几个 AI 同场讨论、对比看法。只想把一件事分给几个 AI 做完，更推荐新开一个 CodeAgent 会话、说一句「需要的话组队做」，它会自己当负责人招队友，单个账号也行。</p>
         <div class="mcm-name-row">
           <label class="mcm-name-label" for="mcm-title-input">房名（可选）</label>
           <input id="mcm-title-input" class="mcm-title-input" type="text" maxlength="40"

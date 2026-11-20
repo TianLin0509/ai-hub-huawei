@@ -129,7 +129,7 @@ function mountSlashPicker({ document, window, input, anchor, sessionId, getSessi
     choices = ranked.slice(0, RENDER_LIMIT);
     index = Math.max(0, Math.min(index, choices.length - 1));
     pop.querySelector('.hub-slash-kind').textContent = catalog?.label || '';
-    pop.querySelector('.hub-slash-count').textContent = catalog ? (query ? '匹配 ' + ranked.length + ' 项' : ranked.length + ' 项') : '';
+    pop.querySelector('.hub-slash-count').textContent = catalog ? (query ? `匹配 ${ranked.length} 项` : `${ranked.length} 项`) : '';
     pop.querySelector('.hub-slash-src').textContent = catalog?.sourceNote || '';
     let html = '', group = null;
     choices.forEach((item, i) => {
@@ -147,7 +147,7 @@ function mountSlashPicker({ document, window, input, anchor, sessionId, getSessi
         + (item.source && item.source !== '内置' ? '<span class="hub-slash-tag">' + esc(item.source) + '</span>' : '') + '</span></div>';
     });
     if (!choices.length) html = '<div class="hub-slash-empty">' + (loading && !catalog ? '正在读取命令与技能…'
-      : error ? esc(error) : query ? '没有匹配「' + esc(query) + '」的命令或技能 · 按 Enter 原样发送' : '没有可列出的命令或技能') + '</div>';
+      : error ? esc(error) : query ? `没有匹配「${esc(query)}」的命令或技能 · 按 Enter 原样发送` : '没有可列出的命令或技能') + '</div>';
     list.innerHTML = html;
     list.querySelector('[aria-selected=true]')?.scrollIntoView?.({ block: 'nearest' });
     position();
@@ -159,7 +159,7 @@ function mountSlashPicker({ document, window, input, anchor, sessionId, getSessi
       if (disposed || generation !== request) return;
       if (result?.ok) { catalog = result; error = ''; }
       else if (!catalog) error = result?.error || (result?.reason === 'no-session' ? '会话未在运行，重连后可查看命令和技能' : '这个会话暂不支持命令列表');
-    } catch (reason) { if (!catalog) error = '读取命令与技能失败：' + reason.message; }
+    } catch (reason) { if (!catalog) error = `读取命令与技能失败：${reason.message}`; }
     loading = false; paint();
   }
   function open(next) {

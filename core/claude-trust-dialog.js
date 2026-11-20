@@ -153,6 +153,78 @@ function detectTrustDialogInRows(entries, { cursorOnTrustIsEnough = false } = {}
   return { cursorRow, trustRow, delta, keys };
 }
 
+// 「Bypass Permissions mode」警告框（2026-11-20 一键反馈 v5.6.64，公司 CodeAgent 真实画面）：
+//   WARNING: CodeAgent running in Bypass Permissions mode … ❯ 1. No, exit / 2. Yes, I accept · Enter to confirm · Esc to cancel
+// Hub 以 --permission-mode bypassPermissions 启动（启动中心的缺省档），这个配置目录第一次用这个档时 CLI 要人确认一次。
+// 默认高亮「No, exit」，Esc 也是取消：以前输入守卫按 Esc 关菜单，框关不掉、消息发不出（「终端里有未关闭的菜单」）。
+// 只在同时认出警告字样、「No, exit」、「Yes, I accept」那一行和光标行时给出按键（移到 Yes 再回车），否则 null。
+const BYPASS_PROMPT_RE = /Bypass\s+Permissions\s+mode/i;
+const BYPASS_ACCEPT_RE = /^\s*(?:[❯›▶>]\s*)?2\.\s*Yes,\s*I\s+accept\s*$/i;
+const BYPASS_NO_RE = /^\s*(?:[❯›▶>]\s*)?1\.\s*No,\s*exit\s*$/i;
+// 警告字样到选项之间是几段说明文字（真实画面约 9 行），留足余量。
+const MAX_BYPASS_BLOCK_ROWS = 20;
+// 公司 CodeAgent 的输入框行：行首竖线后跟提示符，例如「 │ > Anything I can assist you with? │」。
+const BOXED_INPUT_ROW_RE = /^\s*│\s*[>❯]/;
+function detectBypassWarningInLines(lines) {
+  const entries = (Array.isArray(lines) ? lines : []).map((line, index) => [index + 1, String(line || '')]);
+  // 菜单块：最后一处警告字样之后、MAX_BYPASS_BLOCK_ROWS 行以内，第一组「No, exit」紧接着「Yes, I accept」。
+  let promptIndex = -1;
+  entries.forEach(([, line], index) => { if (BYPASS_PROMPT_RE.test(line)) promptIndex = index; });
+  if (promptIndex < 0) return null;
+  const noIndex = entries.findIndex(([, line], index) => index > promptIndex && BYPASS_NO_RE.test(line));
+  if (noIndex < 0 || noIndex - promptIndex > MAX_BYPASS_BLOCK_ROWS) return null;
+  if (!BYPASS_ACCEPT_RE.test(entries[noIndex + 1]?.[1] || '')) return null;
+  const noRow = entries[noIndex][0], acceptRow = entries[noIndex + 1][0];
+  // 光标必须落在这两项之一上；两项之后再出现光标符号（例如输入框的 ❯），或公司 CodeAgent 带竖线的输入框行
+  // （「│ > …」「│ ❯ …」），说明框只是没清掉的历史：这时按 Down+Enter 会把输入框里用户已有的文字提交出去，不按键。
+  const cursorOn = [noIndex, noIndex + 1].filter(index => startsWithCursorMarker(entries[index][1]));
+  if (cursorOn.length !== 1) return null;
+  if (entries.slice(noIndex + 2).some(([, line]) => startsWithCursorMarker(line) || BOXED_INPUT_ROW_RE.test(line))) return null;
+  const cursorRow = entries[cursorOn[0]][0];
+  const delta = acceptRow - cursorRow;
+  const keys = [];
+  for (let step = 0; step < Math.abs(delta); step += 1) keys.push(delta > 0 ? '\x1b[B' : '\x1b[A');
+  keys.push('\r');
+  return { cursorRow, acceptRow, delta, keys };
+}
+
+// 启动后盯一段时间屏幕：认出警告框、画面稳定 1.2 秒后按 detectBypassWarningInLines 给的键选「Yes, I accept」，只按一次。
+// pty 只需 onData(cb) → { dispose }、write(key)。返回 dispose。
+function watchBypassWarning(pty, { createScreen = createTrustScreen, onAccepted = () => {}, timeoutMs = 90000,
+  settleMs = 1200, pollMs = 400, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
+  const screen = createScreen();
+  if (!screen || !pty || typeof pty.onData !== 'function') return () => {};
+  let done = false, timer = null, seenAt = 0, sub = null;
+  const stop = () => {
+    if (done) return;
+    done = true;
+    if (timer) clearTimer(timer);
+    clearTimer(deadline);
+    try { sub && sub.dispose(); } catch {}
+    screen.dispose();
+  };
+  const check = async () => {
+    timer = null;
+    if (done) return;
+    const dialog = detectBypassWarningInLines(await screen.lines());
+    if (done) return;
+    if (!dialog) { seenAt = 0; return; }
+    if (!seenAt) seenAt = Date.now();
+    if (Date.now() - seenAt < settleMs) { timer = setTimer(check, pollMs); return; }
+    stop();
+    dialog.keys.forEach((key, index) => setTimer(() => { try { pty.write(key); } catch {} }, index * 80));
+    onAccepted(dialog);
+  };
+  sub = pty.onData(data => {
+    if (done) return;
+    screen.write(data);
+    if (!timer) timer = setTimer(check, pollMs);
+  });
+  const deadline = setTimer(stop, timeoutMs);
+  deadline?.unref?.();
+  return stop;
+}
+
 // 用真正的终端模拟器还原屏幕。公司 Code Agent 的界面框架（opentui）逐格上色、只重画变化的格子，
 // 上面的简易重放还原不出版式；屏幕开得比真实终端大，绝对定位照样落在正确的行列上，不用跟随 resize。
 function createTrustScreen({ cols = 300, rows = 100 } = {}) {
@@ -183,7 +255,10 @@ function createTrustScreen({ cols = 300, rows = 100 } = {}) {
 }
 
 module.exports = {
+  BYPASS_PROMPT_RE,
   CONFIRM_HINT_RE,
+  detectBypassWarningInLines,
+  watchBypassWarning,
   createTrustScreen,
   detectTrustDialogInLines,
   MAX_MENU_DISTANCE,

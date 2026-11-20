@@ -235,3 +235,6 @@
 .prompt-composition-dialog .pc-unavailable .pc-size { color: #c9a03f; }
 .prompt-composition-dialog .pc-path { font: 11px Consolas, monospace; color: var(--text-muted); overflow-wrap: anywhere; margin-bottom: 4px; }
 .prompt-composition-dialog .pc-part pre { max-height: 45vh; margin: 4px 0 10px; }
+
+/* 英文界面（session 组 2026-11-20）：等待提示的括号由全角「（」换成半角「(」后前面要空一格；中文不受影响 */
+html[lang="en"] .wait-progress-hint { margin-left: .3em; }

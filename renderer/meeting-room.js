@@ -420,9 +420,10 @@ if (typeof document !== 'undefined') (function () {
     _updateInputPreflight(meetingData[activeMeetingId]);
   }
 
-  function _addQuoteChip(meeting, sid, text, sourceTurn = null) {
+  // 2026-11-20 统一引用：群聊和单会话卡片用同一套引用（card-quote.js）——引用块直接放进输入框，
+  // 可预览、退格整块删，发送时展开成「> 引用自【成员 · 第N轮 · 回答】：」。旧的输入框上方芯片不再新增。
+  function _addQuoteChip(meeting, sid, text, sourceTurn = null, { partial = false } = {}) {
     if (!sid || !text || !text.trim()) return;
-    if (_gcQuoteChips.length >= 5) return;  // 最多 5 条引用 (避免 prompt 爆炸)
     const slots = _getGcSlots(meeting);
     const slotIndex = slots.findIndex(s => s && s.sid === sid);
     const slot = (slotIndex >= 0 && slotIndex < slots.length) ? slots[slotIndex] : null;
@@ -430,13 +431,13 @@ if (typeof document !== 'undefined') (function () {
     const cached = _gcPanelState[meeting.id];
     const turnsArr = (cached && Array.isArray(cached.turns)) ? cached.turns : [];
     const turnN = Number(sourceTurn) || (turnsArr.length > 0 ? (turnsArr[turnsArr.length - 1].n || turnsArr.length) : 1);
-    _gcQuoteChips.push({
-      sid, slotIndex,
-      slotLabel: slot.label || sid.slice(0, 8),
-      turnN,
-      text: text.trim(),  // Preserve the complete passage selected by the user.
-    });
-    _renderQuoteChips();
+    const input = document.getElementById('mr-input-box');
+    if (!input) return;
+    require('./card-quote.js').insertQuoteIntoComposer(input, {
+      text,  // 选了多少引多少，不截断
+      source: { who: slot.label || sid.slice(0, 8), role: 'assistant', round: turnN, partial },
+    }, { document, window, pasteChips: _pasteChips });
+    _updateInputPreflight(meeting);
   }
 
   function _clearQuoteChips() {
@@ -467,9 +468,9 @@ if (typeof document !== 'undefined') (function () {
     if (!_gcQuoteFloatBtn) {
       _gcQuoteFloatBtn = document.createElement('button');
       _gcQuoteFloatBtn.id = 'mr-gc-quote-float-btn';
-      _gcQuoteFloatBtn.className = 'mr-gc-quote-float-btn';
+      _gcQuoteFloatBtn.className = 'card-quote-float';
       _gcQuoteFloatBtn.type = 'button';
-      _gcQuoteFloatBtn.textContent = '💎 引用追问';
+      _gcQuoteFloatBtn.textContent = '❝ 引用';
       _gcQuoteFloatBtn.title = '把选中文本作为引用加入下一轮 prompt (Phase 3 F6)';
       document.body.appendChild(_gcQuoteFloatBtn);
       _gcQuoteFloatBtn.addEventListener('mousedown', (e) => e.preventDefault()); // 防失焦清选区
@@ -478,11 +479,12 @@ if (typeof document !== 'undefined') (function () {
         const fText = _gcQuoteFloatBtn.dataset.text;
         const mid = activeMeetingId;
         const meeting = meetingData[mid];
-        if (fSid && fText && meeting && _gcQuoteFloatBtn.dataset.meetingId === mid) {
-          _addQuoteChip(meeting, fSid, fText, _gcQuoteFloatBtn.dataset.turn);
-        }
         _gcQuoteFloatBtn.style.display = 'none';
+        // 先清掉卡片里的选区，再放引用：引用会把光标留在输入框里，之后清选区会把光标也清掉，接着打的字就跑到开头去了。
         try { window.getSelection().removeAllRanges(); } catch {}
+        if (fSid && fText && meeting && _gcQuoteFloatBtn.dataset.meetingId === mid) {
+          _addQuoteChip(meeting, fSid, fText, _gcQuoteFloatBtn.dataset.turn, { partial: true });
+        }
       });
     }
     _gcQuoteFloatBtn.dataset.meetingId = activeMeetingId;

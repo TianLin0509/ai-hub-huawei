@@ -49,6 +49,7 @@ jobs:
             dist/*-update.gz
             dist/*-update-delta.gz
             dist/latest.json
+            dist/latest.json.sig
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
@@ -77,4 +78,4 @@ jobs:
         run: |
           cd release
           sha256sum --check SHA256SUMS.txt
-          gh release create "$RELEASE_TAG" --prerelease --title "AI Hub Community $RELEASE_TAG" --notes "Windows x64. Portable install needs no Node, Git or Python. Download install-release.ps1 and run it in PowerShell; it installs $RELEASE_TAG by default (same as -Version $RELEASE_TAG). Read docs/AGENT-QUICKSTART.md for agent installation and docs/CUSTOMIZE.md to build a company Hub. Use your own AI account; model access requires official login." *.exe *.zip install-release.ps1 release-manifest.json SHA256SUMS.txt $(ls *-update.gz *-update-delta.gz latest.json 2>/dev/null)
+          gh release create "$RELEASE_TAG" --prerelease --title "AI Hub Community $RELEASE_TAG" --notes "Windows x64. Portable install needs no Node, Git or Python. Download install-release.ps1 and run it in PowerShell; it installs $RELEASE_TAG by default (same as -Version $RELEASE_TAG). Read docs/AGENT-QUICKSTART.md for agent installation and docs/CUSTOMIZE.md to build a company Hub. Use your own AI account; model access requires official login." *.exe *.zip install-release.ps1 release-manifest.json SHA256SUMS.txt $(ls *-update.gz *-update-delta.gz latest.json latest.json.sig 2>/dev/null)

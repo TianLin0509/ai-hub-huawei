@@ -33,20 +33,20 @@ test('逐日加班与 11 月净加班', () => {
   const by = Object.fromEntries(days.map((x) => [x.date, x]));
   assert.equal(by['2026-11-02'].ot, 18 + 281);
   assert.equal(by['2026-11-03'].ot, 303);
-  assert.equal(by['2026-11-07'].ot, 383);
+  assert.equal(by['2026-11-07'].ot, 383 - 30); // 周六 16:03–22:26，扣晚饭 17:30–18:00
   assert.equal(by['2026-11-07'].owe, 0);
   assert.equal(by['2026-11-05'].manual, true);
   const m = A.monthReport(days, '2026-11', '2026-11-08');
-  assert.equal(m.gross, 1586);
+  assert.equal(m.gross, 1556);
   assert.equal(m.owe, 150);
-  assert.equal(m.net, 1436);
+  assert.equal(m.net, 1406);
   assert.equal(m.workdays, 5);
   assert.equal(m.monthWorkdays, 22);
   assert.equal(m.leftWorkdays, 17);
   assert.equal(m.late22, 3);
   assert.ok(m.willExceed);
-  assert.equal(Math.round(m.projected / 60), 105);
-  assert.equal(A.fmtClock(m.leaveBy), '21:37');
+  assert.equal(Math.round(m.projected / 60), 103);
+  assert.equal(A.fmtClock(m.leaveBy), '21:39');
 });
 
 test('合并：同一天以新抓到的为准，并统计新增与更新', () => {
@@ -66,17 +66,17 @@ test('坏数据被跳过，不抛错', () => {
   assert.equal(r.list.length, 0);
 });
 
-test('节假日整段算加班', () => {
+test('节假日在岗算加班（扣午休）', () => {
   const days = A.buildDays([{ attendanceDate: '2026-10-02', earlyClockInTime: '10:00', lateClockInTime: '15:00' }], { holidays: { '2026-10-02': true } });
   assert.equal(days[0].kind, 'holiday');
-  assert.equal(days[0].ot, 300);
+  assert.equal(days[0].ot, 300 - 60); // 10:00–15:00 扣午休 12:30–13:30
   assert.equal(days[0].owe, 0);
 });
 
 test('年度统计', () => {
   const y = A.yearReport(A.buildDays(RAW), 2026, '2026-11-08');
   assert.equal(y.monthsWithData, 2);
-  assert.equal(y.months[10].net, 1436);
+  assert.equal(y.months[10].net, 1406);
   assert.equal(y.months[9].net, 120 - 30);
   assert.equal(y.overMonths, 0);
   assert.equal(y.peakMonth.month, 11);
@@ -149,8 +149,8 @@ test('月末工作日今天仍有预算，次日自动结算；未传今天时�
 
 test('今天是周末、节假日或月末周六：不结算，历史分类和加班不变', () => {
   const cases = [
-    ['2026-11-07', {}, 'weekend', 300],
-    ['2026-10-02', { holidays: { '2026-10-02': true } }, 'holiday', 300],
+    ['2026-11-07', {}, 'weekend', 240],
+    ['2026-10-02', { holidays: { '2026-10-02': true } }, 'holiday', 240],
     ['2026-10-31', {}, 'lastSaturday', -30],
   ];
   for (const [today, opts, kind, net] of cases) {
@@ -184,7 +184,7 @@ test('只有今天或未来记录：年度不产生已出勤月份、峰值和�
 test('弹性工作制默认关：口径与原来完全一致', () => {
   const r = A.rulesFromWorkTime({});
   assert.equal(r.flex, undefined);
-  assert.deepEqual(A.calcRules(r), { amEnd: 540, pmStart: 1080, owePerWorkday: 30 });
+  assert.deepEqual(A.calcRules(r), { amEnd: 540, pmStart: 1080, owePerWorkday: 30, restBreaks: [[750, 810], [1050, 1080]] });
   assert.deepEqual(A.rulesFromWorkTime({}, { on: false, coreStart: '08:00' }), r);
 });
 
@@ -209,7 +209,7 @@ test('弹性工作制：只有一次打卡标缺卡不扣，周末仍整段算�
   const one = A.buildDays([card('2026-11-16', '09:00')], flex)[0];
   assert.equal(one.singlePunch, true); assert.equal(one.net, 0); assert.equal(one.owe, 0);
   const sat = A.buildDays([card('2026-11-21', '10:00', '14:00')], flex)[0];
-  assert.equal(sat.kind, 'weekend'); assert.equal(sat.net, 240); assert.equal(sat.flex, undefined);
+  assert.equal(sat.kind, 'weekend'); assert.equal(sat.net, 180); assert.equal(sat.flex, undefined); // 10–14 扣午休 1 小时
   const s = A.summarize(A.buildDays([card('2026-11-16', '09:00'), card('2026-11-17', '10:30', '20:00')], flex));
   assert.equal(s.singlePunchDays, 1); assert.equal(s.coreMiss, 1);
 });
@@ -229,4 +229,24 @@ test('弹性工作制设置校验', () => {
   assert.equal(A.normalizeFlex({ dailyHours: 0 }).ok, false);
   assert.deepEqual(A.normalizeFlex(undefined).flex, { ...A.DEFAULT_FLEX });
   assert.equal(A.normalizeFlex({ on: true, dailyHours: '7.5' }).flex.dailyHours, 7.5);
+});
+
+/* 2026-11-20 反馈：加班日 09:06–18:08，公司考勤系统算 7.53 小时，Hub 算成 9h02（没扣午休和晚饭）。 */
+test('周末、节假日加班扣午休和晚饭，和公司考勤系统一致', () => {
+  const sun = (a, b, o) => A.buildDays([card('2026-11-15', a, b)], o)[0];
+  const def = { rules: A.calcRules(A.rulesFromWorkTime({})) };
+  const d = sun('09:06', '18:08', def);
+  assert.equal(d.kind, 'weekend');
+  assert.equal(d.span, 542);
+  assert.equal(d.ot, 452);
+  assert.equal((d.ot / 60).toFixed(2), '7.53');
+  assert.equal(sun('09:06', '18:08').ot, 452);                                   // 不传口径时用默认休息段
+  assert.equal(sun('09:06', '18:08', { rules: A.calcRules(A.rulesFromWorkTime({}, { on: true })) }).ot, 452); // 弹性制同样扣
+  assert.equal(sun('14:00', '17:00', def).ot, 180);                              // 不碰休息段不扣
+  // 休息段跟着核心工作时间走：午休 12:00–13:00、下班 17:00、晚上 18:00 起算 → 扣 1h + 1h
+  const own = { rules: A.calcRules(A.rulesFromWorkTime({ amStart: '08:30', amEnd: '12:00', pmStart: '13:00', pmEnd: '17:00', eveningFrom: '18:00' })) };
+  assert.equal(sun('09:00', '19:00', own).ot, 600 - 120);
+  // 法定假日同样扣
+  const hol = A.buildDays([card('2026-10-02', '09:06', '18:08')], { ...def, holidays: { '2026-10-02': true } })[0];
+  assert.equal(hol.kind, 'holiday'); assert.equal(hol.ot, 452);
 });

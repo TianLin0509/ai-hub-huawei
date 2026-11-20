@@ -502,3 +502,4 @@
 #meeting-create-modal.mcm-embedded .mcm-body{padding:0 20px 16px}
 #meeting-create-modal.mcm-embedded .mcm-footer{padding:14px 20px 0}
 @media(prefers-reduced-motion:reduce){#meeting-create-modal *{animation:none!important;transition:none!important}}
+.mcm-team-tip{margin:0 0 10px;font-size:12px;line-height:1.5;color:var(--hw-text-3,var(--text-dim,var(--fg-muted)))}

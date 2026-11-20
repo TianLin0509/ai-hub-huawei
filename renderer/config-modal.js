@@ -63,6 +63,13 @@ function createConfigModalController({
     return document.getElementById(id);
   }
 
+  // 界面语言（2026-11-20）：选项直接反映当前生效的语言，改动立即生效并写进 config.json。
+  function syncLanguageSelect() {
+    const select = configEl('cfg-ui-language');
+    if (!select) return;
+    try { select.value = require('../core/i18n').getLanguage(); } catch { select.value = 'zh-CN'; }
+  }
+
   function readCardDisplayForm() {
     return normalizeCardDisplayConfig({
       cardFontSize: configEl('cfg-card-font-size')?.value,
@@ -415,6 +422,7 @@ function createConfigModalController({
       modal = document.getElementById('config-modal');
     }
     if (!modal) return;
+    syncLanguageSelect();
   
     // 加载当前配置；读取失败时禁止保存旧表单。
     configEl('config-save').disabled=true;
@@ -543,6 +551,18 @@ function createConfigModalController({
     const cardFamily = configEl('cfg-card-font-family');
     if (cardSize) cardSize.addEventListener('input', previewCardDisplay);
     if (cardFamily) cardFamily.addEventListener('change', previewCardDisplay);
+    const languageSelect = configEl('cfg-ui-language');
+    if (languageSelect) languageSelect.addEventListener('change', async () => {
+      const hint = configEl('cfg-ui-language-hint');
+      languageSelect.disabled = true;
+      try {
+        const result = await ipcRenderer.invoke('i18n:set-language', languageSelect.value);
+        if (hint) hint.textContent = result && result.language === 'en' ? '已切换 · Switched to English' : '已切换 · 已切回简体中文';
+      } catch (error) {
+        if (hint) hint.textContent = '切换失败 · Failed: ' + (error && error.message || error);
+        syncLanguageSelect();
+      } finally { languageSelect.disabled = false; }
+    });
     const rootPick = configEl('cfg-workspace-root-pick');
     if (rootPick) rootPick.addEventListener('click', async () => {
       try {

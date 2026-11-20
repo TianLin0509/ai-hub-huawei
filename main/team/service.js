@@ -260,12 +260,22 @@ function createTeamService(deps) {
       const kind = String(raw?.kind || 'codeagent').trim();
       if (!role || !task) throw Error(`第 ${i + 1} 人要写 role（分工）和 task（开工任务，可写任务书路径）`);
       if (!allowedKinds.includes(kind)) throw Error(`第 ${i + 1} 人的 kind 只能是 ${allowedKinds.join(' / ')}`);
-      const account = String(raw?.account || accountList.recommendedId || '').trim();
+      let account = String(raw?.account || accountList.recommendedId || '').trim();
       let model='';
       {
-        const row=(accountList.rows || []).find(a=>a.id===account);
+        const rows=accountList.rows || [];
+        let row=rows.find(a=>a.id===account);
+        // 点名的号和个人账号（或号池里另一个号）是同一个人：换成那个本尊，单号也能组队，不再报「重复」。
+        // 只有号池这份本身已登录、没暂停时才换；暂停或登录过期的按原因拒绝，不借本尊绕过暂停。
+        if(row&&!row.usable&&row.sameAs){
+          const hint=accountList.recommendedId?`，请省略 account 用推荐的 ${accountList.recommendedId}`:'';
+          if(row.paused)throw Error(`第 ${i+1} 人的号池账号不可用（暂停中：这个号在号池里被暂停或避让，暂停期间不分配给成员）${hint}`);
+          if(row.state!=='ready')throw Error(`第 ${i+1} 人的号池账号不可用（未登录：${row.state==='expired'?'这个号在号池里的登录已过期':'这个号在号池里没有可用登录'}，请先在左栏「账号」重新登录）${hint}`);
+          const same=rows.find(a=>a.id===row.sameAs&&a.usable);
+          if(same){row=same;account=same.id;}
+        }
         if(row?.personal&&!row.usable)throw Error(`第 ${i+1} 人没有可用账号：${row.unavailableReason || '个人账号暂不可用'}`);
-        if(!row || !row.usable)throw Error(`第 ${i+1} 人的号池账号不可用，请用 accounts 查看并选择可用账号`);
+        if(!row || !row.usable)throw Error(`第 ${i+1} 人的号池账号不可用${row?.unavailableReason ? '（' + row.unavailableReason + '）' : ''}，请用 accounts 查看并选择可用账号${accountList.recommendedId ? '，或省略 account 用推荐的 ' + accountList.recommendedId : ''}`);
         model=String(raw?.model || '').trim();
         if(model&&!require('../../core/codeagent-models').isSafeModelId(model))throw Error(`第 ${i+1} 人的模型名称无效`);
         // Valid model intent is resolved by the shared creation policy after approval.

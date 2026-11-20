@@ -33,13 +33,25 @@ function bundledConptyWanted(env = process.env) {
 let fallbackLogged = false;
 // 与 pty.spawn 同参；只在 Windows + useConpty 时加 useConptyDll，失败一次就按系统 ConPTY 重来。
 function spawnPty(ptyModule, file, args, options = {}) {
-  if (options.useConpty === false || !bundledConptyWanted()) return ptyModule.spawn(file, args, options);
+  if (options.useConpty === false || !bundledConptyWanted()) return explainedSpawn(ptyModule, file, args, options);
   try {
     // 标出用的是自带 ConPTY：它会把括号粘贴里的换行（LF）当成 Ctrl+Enter 键，开了 kitty 键盘协议的程序（pi）收到的是键码（r39 实测）。
     return Object.assign(ptyModule.spawn(file, args, { useConpty: true, ...options, useConptyDll: true }), { hubBundledConpty: true });
   } catch (error) {
     if (!fallbackLogged) { fallbackLogged = true; console.warn('[pty-host] 自带 ConPTY 启动失败，退回系统 ConPTY：', error && error.message); }
-    return ptyModule.spawn(file, args, options);
+    return explainedSpawn(ptyModule, file, args, options);
+  }
+}
+
+// 原生模块加载失败（conpty.node 被删、在压缩包临时目录里运行）时，界面上只看到一串英文路径。
+// 换成能照着做的话，原始报错留在 cause 和日志里（core/archive-temp-run.js）。
+function explainedSpawn(ptyModule, file, args, options) {
+  try { return ptyModule.spawn(file, args, options); }
+  catch (error) {
+    const message = require('./archive-temp-run').nativeLoadMessage(error);
+    if (!message) throw error;
+    console.warn('[pty-host] 终端原生模块加载失败：', error && error.message);
+    throw Object.assign(new Error(message, { cause: error }), { code: 'PTY_NATIVE_MISSING' });
   }
 }
 

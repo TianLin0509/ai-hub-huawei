@@ -1,6 +1,6 @@
 {
  "$comment": "设置页搜索与 Ctrl+K 命令面板用的功能/设置索引，由 tools/help-manual/build-help-manual.js 从界面代码生成，不要手改。",
- "version": "5.6.69",
+ "version": "5.6.73",
  "items": [
   {
    "id": "f001",
@@ -367,6 +367,22 @@
   {
    "id": "f026",
    "kind": "config",
+   "name": "界面语言 / Language",
+   "where": "设置 → ⚙️ 设置",
+   "desc": "选择后立即生效 · Applies immediately",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": "#cfg-ui-language"
+    }
+   ]
+  },
+  {
+   "id": "f027",
+   "kind": "config",
    "name": "会话原模型不可用时",
    "where": "设置 → ⚙️ 设置",
    "desc": "会话固定创建或手动选择的模型。自动模式只换同家族可用型号；跨家族须手动确认，暂停状态不会因恢复或重启解除。",
@@ -381,7 +397,7 @@
    ]
   },
   {
-   "id": "f027",
+   "id": "f028",
    "kind": "config-section",
    "name": "助理桌宠",
    "where": "设置 → ⚙️ 设置",
@@ -400,7 +416,7 @@
    ]
   },
   {
-   "id": "f028",
+   "id": "f029",
    "kind": "config",
    "name": "在桌面角落显示桌宠",
    "where": "设置 → ⚙️ 设置 → 助理桌宠",
@@ -416,7 +432,7 @@
    ]
   },
   {
-   "id": "f029",
+   "id": "f030",
    "kind": "config",
    "name": "角色",
    "where": "设置 → ⚙️ 设置 → 助理桌宠",
@@ -432,7 +448,7 @@
    ]
   },
   {
-   "id": "f030",
+   "id": "f031",
    "kind": "config",
    "name": "说话频率",
    "where": "设置 → ⚙️ 设置 → 助理桌宠",
@@ -448,7 +464,7 @@
    ]
   },
   {
-   "id": "f031",
+   "id": "f032",
    "kind": "config-section",
    "name": "桌面回执",
    "where": "设置 → ⚙️ 设置",
@@ -464,11 +480,11 @@
    ]
   },
   {
-   "id": "f032",
+   "id": "f033",
    "kind": "config",
-   "name": "CodeAgent 自己也弹完成提醒",
+   "name": "CodeAgent 自带的完成提醒",
    "where": "设置 → ⚙️ 设置 → 桌面回执",
-   "desc": "默认不勾：答完只由 Hub 提醒一次，不再重复。勾上后之后新开或重启的 CodeAgent 会话会自己再弹一条；只想留 CodeAgent 的，把上面选成「关闭」。",
+   "desc": "",
    "steps": [
     {
      "click": "#options-settings",
@@ -480,7 +496,7 @@
    ]
   },
   {
-   "id": "f033",
+   "id": "f034",
    "kind": "config-section",
    "name": "工作台服务器状态",
    "where": "设置 → ⚙️ 设置",
@@ -499,7 +515,7 @@
    ]
   },
   {
-   "id": "f034",
+   "id": "f035",
    "kind": "config",
    "name": "在工作台监控服务器",
    "where": "设置 → ⚙️ 设置 → 工作台服务器状态",
@@ -515,7 +531,7 @@
    ]
   },
   {
-   "id": "f035",
+   "id": "f036",
    "kind": "config",
    "name": "显示名称",
    "where": "设置 → ⚙️ 设置 → 工作台服务器状态",
@@ -531,7 +547,7 @@
    ]
   },
   {
-   "id": "f036",
+   "id": "f037",
    "kind": "config",
    "name": "健康检查 URL",
    "where": "设置 → ⚙️ 设置 → 工作台服务器状态",
@@ -547,7 +563,7 @@
    ]
   },
   {
-   "id": "f037",
+   "id": "f038",
    "kind": "config",
    "name": "指标 URL",
    "where": "设置 → ⚙️ 设置 → 工作台服务器状态",
@@ -563,7 +579,7 @@
    ]
   },
   {
-   "id": "f038",
+   "id": "f039",
    "kind": "config",
    "name": "Checkpoint 恢复目录",
    "where": "设置 → ⚙️ 设置 → 工作台服务器状态",
@@ -579,7 +595,7 @@
    ]
   },
   {
-   "id": "f039",
+   "id": "f040",
    "kind": "config-section",
    "name": "普通会话卡片",
    "where": "设置 → ⚙️ 设置",
@@ -598,7 +614,7 @@
    ]
   },
   {
-   "id": "f040",
+   "id": "f041",
    "kind": "config",
    "name": "正文字号",
    "where": "设置 → ⚙️ 设置 → 普通会话卡片",
@@ -614,7 +630,7 @@
    ]
   },
   {
-   "id": "f041",
+   "id": "f042",
    "kind": "config",
    "name": "字体风格",
    "where": "设置 → ⚙️ 设置 → 普通会话卡片",
@@ -630,7 +646,7 @@
    ]
   },
   {
-   "id": "f042",
+   "id": "f043",
    "kind": "config",
    "name": "回车键",
    "where": "设置 → ⚙️ 设置 → 普通会话卡片",
@@ -646,7 +662,7 @@
    ]
   },
   {
-   "id": "f043",
+   "id": "f044",
    "kind": "config",
    "name": "新建会话默认工作目录",
    "where": "设置 → ⚙️ 设置 → 普通会话卡片",
@@ -662,7 +678,7 @@
    ]
   },
   {
-   "id": "f044",
+   "id": "f045",
    "kind": "config",
    "name": "号池额度栏位置",
    "where": "设置 → ⚙️ 设置 → 普通会话卡片",
@@ -678,7 +694,7 @@
    ]
   },
   {
-   "id": "f045",
+   "id": "f046",
    "kind": "config-section",
    "name": "负责人组队",
    "where": "设置 → ⚙️ 设置",
@@ -697,7 +713,7 @@
    ]
   },
   {
-   "id": "f046",
+   "id": "f047",
    "kind": "config",
    "name": "负责人组队自动批准",
    "where": "设置 → ⚙️ 设置 → 负责人组队",
@@ -713,7 +729,7 @@
    ]
   },
   {
-   "id": "f047",
+   "id": "f048",
    "kind": "optional",
    "name": "助理",
    "where": "设置 → 🧩 可选功能",
@@ -731,7 +747,7 @@
    ]
   },
   {
-   "id": "f048",
+   "id": "f049",
    "kind": "optional",
    "name": "帖子",
    "where": "设置 → 🧩 可选功能",
@@ -749,7 +765,7 @@
    ]
   },
   {
-   "id": "f049",
+   "id": "f050",
    "kind": "optional",
    "name": "考勤",
    "where": "设置 → 🧩 可选功能",
@@ -767,7 +783,7 @@
    ]
   },
   {
-   "id": "f050",
+   "id": "f051",
    "kind": "optional",
    "name": "门户待办",
    "where": "设置 → 🧩 可选功能",
@@ -785,7 +801,7 @@
    ]
   },
   {
-   "id": "f051",
+   "id": "f052",
    "kind": "optional",
    "name": "会议室",
    "where": "设置 → 🧩 可选功能",
@@ -803,7 +819,7 @@
    ]
   },
   {
-   "id": "f052",
+   "id": "f053",
    "kind": "optional",
    "name": "关窗口时最小化到托盘",
    "where": "设置 → 🧩 可选功能",
@@ -821,7 +837,7 @@
    ]
   },
   {
-   "id": "f053",
+   "id": "f054",
    "kind": "optional",
    "name": "再打开 Hub 时提示切过去",
    "where": "设置 → 🧩 可选功能",
@@ -839,7 +855,7 @@
    ]
   },
   {
-   "id": "f054",
+   "id": "f055",
    "kind": "optional",
    "name": "桌宠",
    "where": "设置 → 🧩 可选功能",
@@ -857,7 +873,7 @@
    ]
   },
   {
-   "id": "f055",
+   "id": "f056",
    "kind": "page-setting",
    "name": "公司域名",
    "where": "考勤 → 设置",
@@ -888,7 +904,7 @@
    ]
   },
   {
-   "id": "f056",
+   "id": "f057",
    "kind": "page-setting",
    "name": "核心工作时间",
    "where": "考勤 → 设置",
@@ -919,7 +935,7 @@
    ]
   },
   {
-   "id": "f057",
+   "id": "f058",
    "kind": "page-setting",
    "name": "考勤页",
    "where": "考勤 → 设置",
@@ -950,7 +966,7 @@
    ]
   },
   {
-   "id": "f058",
+   "id": "f059",
    "kind": "page-setting",
    "name": "每天自动读取一次",
    "where": "考勤 → 设置",

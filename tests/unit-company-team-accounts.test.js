@@ -155,3 +155,68 @@ test('no recommendation when the personal account is not logged in or is paused'
   const paused = h.list();
   assert.equal(paused.recommendedId, ''); assert.equal(paused.rows.find(r => r.id === 'personal').unavailableReason, '暂停中');
 });
+
+test('a plan naming the pool copy of the personal account still recruits on the personal account', async t => {
+  const h = personalOnly(t, { poolIdentity: 'me' }), created = [];
+  const { createTeamService } = require('../main/team/service');
+  const service = createTeamService({ getHubDataDir: () => h.dataDir, listAccounts: h.list,
+    sessionManager: { getSession: id => id === 'lead-0001' ? { id, kind: 'codeagent' } : null, isAgentTurnActive: () => false },
+    createSession: async request => { created.push(request); return { id: 'member-000' + created.length, kind: 'codeagent' }; },
+    submitPrompt: async () => ({ ok: true }),
+  });
+  t.after(() => { service.freeze(); service.stop(); });
+  assert.equal(h.list().rows.find(r => r.id === h.poolId).sameAs, 'personal');
+  const plan = await service.invoke('lead-0001', 'propose', { goal: 'single account team', members: [
+    { account: h.poolId, role: 'dev', task: 'build' }, { role: 'review', task: 'check' }] });
+  assert.deepEqual(service.listTeams()[0].plans[0].members.map(m => m.account), ['personal', 'personal']);
+  const approved = await service.decide({ leadSid: 'lead-0001', planId: plan.planId, approve: true });
+  assert.equal(approved.created.length, 2);
+  assert.deepEqual(created.map(r => r.opts.codeagentAccount), ['personal', 'personal']);
+  assert.ok(created.every(r => !r.opts.codeagentPoolPick));
+  assert.equal(fs.readFileSync(path.join(h.personal, '.credentials.json'), 'utf8'), h.before, 'personal credentials stay untouched');
+});
+
+test('a paused account named in a plan is still rejected, and the error points to the recommended account', async t => {
+  const h = personalOnly(t, { poolIdentity: 'other' });
+  quota.markAvoid(h.dataDir, h.poolId, { source: 'manual', until: null });
+  const { createTeamService } = require('../main/team/service');
+  const service = createTeamService({ getHubDataDir: () => h.dataDir, listAccounts: h.list,
+    sessionManager: { getSession: id => id === 'lead-0001' ? { id, kind: 'codeagent' } : null, isAgentTurnActive: () => false },
+    createSession: async () => { throw Error('must not create'); }, submitPrompt: async () => ({ ok: true }),
+  });
+  t.after(() => { service.freeze(); service.stop(); });
+  await assert.rejects(service.invoke('lead-0001', 'propose', { goal: 'g', members: [{ account: h.poolId, role: 'r', task: 't' }] }),
+    /账号不可用（暂停中）.*省略 account 用推荐的 personal/);
+});
+
+function teamService(h) {
+  const { createTeamService } = require('../main/team/service');
+  return createTeamService({ getHubDataDir: () => h.dataDir, listAccounts: h.list,
+    sessionManager: { getSession: id => id === 'lead-0001' ? { id, kind: 'codeagent' } : null, isAgentTurnActive: () => false },
+    createSession: async () => { throw Error('must not create'); }, submitPrompt: async () => ({ ok: true }),
+  });
+}
+
+test('the pool copy of the personal account that is paused is rejected, not swapped to the personal account', async t => {
+  const h = personalOnly(t, { poolIdentity: 'me' });
+  quota.markAvoid(h.dataDir, h.poolId, { source: 'manual', until: null });
+  const row = h.list().rows.find(r => r.id === h.poolId);
+  assert.equal(row.sameAs, 'personal'); assert.equal(row.paused, true);
+  const service = teamService(h);
+  t.after(() => { service.freeze(); service.stop(); });
+  await assert.rejects(service.invoke('lead-0001', 'propose', { goal: 'g', members: [{ account: h.poolId, role: 'r', task: 't' }] }),
+    /账号不可用（暂停中.*省略 account 用推荐的 personal/);
+  assert.equal(service.listTeams()[0]?.plans?.length || 0, 0);
+});
+
+test('the pool copy of the personal account whose login expired is rejected as not logged in', async t => {
+  const h = personalOnly(t, { poolIdentity: 'me' });
+  fs.writeFileSync(path.join(pool.accountDir(h.dataDir, h.poolId), '.credentials.json'),
+    JSON.stringify({ idaasOAuth: { accountId: 'me', xAuthToken: 'fixture-secret', expiresAt: Date.now() - 3600000 } }));
+  const row = h.list().rows.find(r => r.id === h.poolId);
+  assert.equal(row.sameAs, 'personal'); assert.equal(row.state, 'expired'); assert.equal(row.paused, false);
+  const service = teamService(h);
+  t.after(() => { service.freeze(); service.stop(); });
+  await assert.rejects(service.invoke('lead-0001', 'propose', { goal: 'g', members: [{ account: h.poolId, role: 'r', task: 't' }] }),
+    /账号不可用（未登录：这个号在号池里的登录已过期.*省略 account 用推荐的 personal/);
+});

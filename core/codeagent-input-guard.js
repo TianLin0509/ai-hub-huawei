@@ -7,6 +7,8 @@ const CODEAGENT_RECOVER_WAIT_MS = 3000;
 const CODEAGENT_INPUT_POLL_MS = 100;
 const CODEAGENT_INPUT_READ_WAIT_MS = 1000;
 const CODEAGENT_MENU_CLOSE_WAIT_MS = 1000;
+// 选了「Yes, I accept」后 CLI 要再过一会儿才画出输入框。
+const CODEAGENT_BYPASS_ACCEPT_WAIT_MS = 5000;
 const CODEAGENT_INPUT_RESIDUAL = 'codeagent-input-residual';
 const controllers = new WeakMap();
 
@@ -83,7 +85,7 @@ function createCodeAgentInputGuard(manager, {
         screen = await openScreen(sid); reason = 'screen-read-failed';
         if (expired) { screen.dispose(); throw new Error('input-read-timeout'); }
         const lines = await screen.lines(); reason = 'frame-inspection-failed'; const input = inputSnapshot(lines);
-        return inspectScreen ? { ...input, menu: choiceMenuOpen(lines),
+        return inspectScreen ? { ...input, menu: choiceMenuOpen(lines), bypass: require('./claude-trust-dialog').detectBypassWarningInLines(lines),
           screenState: require('./terminal-runtime-state').classifyTerminalRuntime(session(sid).kind, lines).state } : input;
       })();
       const snapshot = await Promise.race([operation, new Promise((_, reject) => {
@@ -96,14 +98,28 @@ function createCodeAgentInputGuard(manager, {
       return { state: 'unknown', text: '', readFailed: true };
     } finally { clearTimer(timer); screen?.dispose(); }
   }
+  // 与 session-manager 启动时一致：权限档为空落到缺省 bypassPermissions。
+  const bypassSession = sid => {
+    const mode = manager.getSession(sid)?.permissionMode;
+    return !mode || mode === 'bypassPermissions';
+  };
   async function closeMenu(sid, snapshot) {
-    if (!snapshot.menu) return { ok: true, snapshot };
-    manager.writeToSession(sid, '\x1b');
-    const deadline = now() + CODEAGENT_MENU_CLOSE_WAIT_MS;
+    // 「Bypass Permissions mode」警告框：Esc 等于「No, exit」，关不掉。只有会话本来就按 bypass 档启动
+    // （权限档为空即 Hub 缺省 bypass，或明确选了 bypassPermissions）才替用户选「Yes, I accept」
+    // （core/claude-trust-dialog.js detectBypassWarningInLines）；其它档照旧按 Esc / 拒发。
+    const accept = !!snapshot.bypass && bypassSession(sid);
+    // 非 bypass 档却出现这个框：Esc 等于退出，一个键都不按，拒发并请用户到终端处理。
+    if (snapshot.bypass && !accept) return { ok: false, notSent: true, code: 'codeagent-menu-open', message: '终端里有未关闭的菜单，请到终端确认' };
+    if (!snapshot.menu && !accept) return { ok: true, snapshot };
+    if (accept) {
+      diagnose('bypass-warning-accepted', { stage: 'menu-close', sendBlocked: false });
+      for (const [index, key] of snapshot.bypass.keys.entries()) { if (index) await sleep(80); manager.writeToSession(sid, key); }
+    } else manager.writeToSession(sid, '\x1b');
+    const deadline = now() + (accept ? CODEAGENT_BYPASS_ACCEPT_WAIT_MS : CODEAGENT_MENU_CLOSE_WAIT_MS);
     do {
       await sleep(CODEAGENT_INPUT_POLL_MS);
       const after = await read(sid, CODEAGENT_INPUT_READ_WAIT_MS, true, 'menu-close');
-      if (!after.readFailed && !after.menu && (after.state !== 'unknown' || after.screenState === 'running')) return { ok: true, snapshot: after };
+      if (!after.readFailed && !after.menu && !(accept && after.bypass) && (after.state !== 'unknown' || after.screenState === 'running')) return { ok: true, snapshot: after };
     } while (now() < deadline);
     return { ok: false, notSent: true, code: 'codeagent-menu-open', message: '终端里有未关闭的菜单，请到终端确认' };
   }

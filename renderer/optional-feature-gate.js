@@ -2,7 +2,7 @@
 // 可选功能在各自页面里的开关（2026-10-30 用户：设置菜单之外，每个页面里也看得到开没开）。
 // 关着：整页盖一层「还没开启」，写明用途和开销，一个「开启」按钮；开着：页面里放一个小标记「可选功能 · 已开启」，旁边可关。
 // 状态和开关都走 renderer/optional-features.js（window.__optionalFeatures）。
-const CSS = `
+const CSS = /* i18n-ignore：样式表，内含中文注释不显示 */ `
 .of-gate { position: absolute; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; background: var(--bg, #f5f6f8); }
 .of-gate[hidden] { display: none; }
 .of-gate-box { max-width: 460px; padding: 28px 32px; border-radius: 12px; background: var(--surface, #fff); border: 1px solid var(--border-subtle, #e4e6ec); font-family: "Microsoft YaHei", sans-serif; }

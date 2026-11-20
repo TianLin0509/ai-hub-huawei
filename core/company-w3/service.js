@@ -73,7 +73,7 @@ class CompanyW3 {
 
   settings() {
     const s = this.read('settings', {});
-    const own = normalizeDomain(s.domain || '');
+    const own = companyDomain.siteDomain(s.domain || '');
     const known = own ? null : companyDomain.knownDomain(this.deps.dataDir);
     return { domain: own || known.domain, domainFrom: own ? 'settings' : known.from, auto: s.auto !== false, remind: s.remind !== false };
   }

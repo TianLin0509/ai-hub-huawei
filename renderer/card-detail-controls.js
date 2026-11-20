@@ -4,7 +4,7 @@ const { pathToFileURL } = require('node:url');
 
 function attachmentInfo(attachment = {}, index = 0, cwd) {
   let target = attachment.path || attachment.url || '';
-  let src = '', name = attachment.name || '图片 ' + (index + 1);
+  let src = '', name = attachment.name || `图片 ${index + 1}`;
   try {
     if (attachment.path) {
       if (!path.isAbsolute(target)) {
@@ -32,15 +32,15 @@ function renderImageAttachments(attachments, { escapeHtml: esc, cwd } = {}) {
     const info = attachmentInfo(a, i, cwd);
     const title = info.src.startsWith('data:') ? info.name : info.target || info.name;
     return '<button type="button" class="conversation-image-thumb" data-action="card-open-image"'
-      + ' data-image-index="' + i + '" title="' + esc(title) + '" aria-label="查看图片：' + esc(info.name) + '"'
+      + ' data-image-index="' + i + '" title="' + esc(title) + '" aria-label="' + `查看图片：${esc(info.name)}` + '"'
       + (info.src ? '' : ' disabled') + '>'
       + '<span class="conversation-image-error"' + (info.src ? ' hidden' : '') + '>'
       + esc(info.error || '图片暂不可用') + '</span><span class="conversation-image-name">' + esc(title) + '</span></button>';
   };
-  return '<div class="conversation-attachments" aria-label="附件 · ' + attachments.length + ' 张图片">'
+  return '<div class="conversation-attachments" aria-label="' + `附件 · ${attachments.length} 张图片` + '">'
     + '<div class="conversation-image-list">' + attachments.slice(0, 4).map(render).join('') + '</div>'
-    + (attachments.length > 4 ? '<details class="conversation-images-more"><summary>另有 ' + (attachments.length - 4)
-      + ' 张图片</summary><div class="conversation-image-list">' + attachments.slice(4).map((a, i) => render(a, i + 4)).join('')
+    + (attachments.length > 4 ? '<details class="conversation-images-more"><summary>' + `另有 ${attachments.length - 4} 张图片`
+      + '</summary><div class="conversation-image-list">' + attachments.slice(4).map((a, i) => render(a, i + 4)).join('')
       + '</div></details>' : '') + '</div>';
 }
 
@@ -89,7 +89,7 @@ function createCardDetailControls({ document: doc, window: win, clipboard, resol
       const full = await resolveResult(button);
       await clipboard.writeText(full);
       button.textContent = '已复制全文';
-    } catch (error) { reportError('复制失败：' + error.message); }
+    } catch (error) { reportError(`复制失败：${error.message}`); }
   }
   async function openResult(button) {
     const reportError = errorReporter(button);
@@ -97,7 +97,7 @@ function createCardDetailControls({ document: doc, window: win, clipboard, resol
     button.disabled = true;
     try {
       const full = await resolveResult(button), size = 50000;
-      const modal = dialog('工具返回 · 完整来源 ' + full.length.toLocaleString('zh-CN') + ' 字符');
+      const modal = dialog(`工具返回 · 完整来源 ${full.length.toLocaleString('zh-CN')} 字符`);
       const toolbar = doc.createElement('div'); toolbar.className = 'card-detail-dialog-tools';
       const label = doc.createElement('span'), prev = doc.createElement('button'), next = doc.createElement('button');
       const copy = doc.createElement('button'), download = doc.createElement('button'), pre = doc.createElement('pre');
@@ -105,7 +105,7 @@ function createCardDetailControls({ document: doc, window: win, clipboard, resol
       prev.textContent = '上一段'; next.textContent = '下一段'; copy.textContent = '复制全文'; download.textContent = '下载全文';
       for (const b of [prev, next, copy, download]) b.type = 'button';
       const paint = () => {
-        label.textContent = '第 ' + (page + 1) + ' / ' + Math.max(1, Math.ceil(full.length / size)) + ' 段';
+        label.textContent = `第 ${page + 1} / ${Math.max(1, Math.ceil(full.length / size))} 段`;
         pre.textContent = full.slice(page * size, (page + 1) * size);
         prev.disabled = page === 0; next.disabled = (page + 1) * size >= full.length;
       };
@@ -113,7 +113,7 @@ function createCardDetailControls({ document: doc, window: win, clipboard, resol
       next.addEventListener('click', () => { page++; paint(); });
       copy.addEventListener('click', async () => {
         try { await clipboard.writeText(full); copy.textContent = '已复制全文'; }
-        catch (error) { message(modal, '复制失败：' + error.message); }
+        catch (error) { message(modal, `复制失败：${error.message}`); }
       });
       download.addEventListener('click', () => {
         let url;
@@ -122,12 +122,12 @@ function createCardDetailControls({ document: doc, window: win, clipboard, resol
           const a = doc.createElement('a'); a.href = url;
           a.download = new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-tool-output.txt';
           modal.appendChild(a); a.click(); a.remove();
-        } catch (error) { message(modal, '下载失败：' + error.message); }
+        } catch (error) { message(modal, `下载失败：${error.message}`); }
         finally { if (url) setTimeout(() => win.URL.revokeObjectURL(url), 10000); }
       });
       toolbar.append(label, prev, next, copy, download); modal.append(toolbar, pre);
       paint(); modal.showModal();
-    } catch (error) { reportError('无法查看全文：' + error.message); }
+    } catch (error) { reportError(`无法查看全文：${error.message}`); }
     finally { button.disabled = false; }
   }
   async function openImage(button) {
@@ -155,7 +155,7 @@ function createCardDetailControls({ document: doc, window: win, clipboard, resol
       img.src = info.src; source.className = 'card-detail-image-source';
       source.textContent = info.src.startsWith('data:') ? '本条消息的内嵌图片' : info.target;
       modal.append(img, source); modal.showModal();
-    } catch (error) { reportError('图片预览失败：' + error.message); }
+    } catch (error) { reportError(`图片预览失败：${error.message}`); }
   }
   listen(root || doc, 'error', event => {
     const img = event.target;

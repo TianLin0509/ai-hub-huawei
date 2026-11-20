@@ -68,10 +68,15 @@ function mountSection({ document, window, ipcRenderer }) {
     '    <option value="off">关闭：都不弹，只留到点提醒、出错这类要紧的</option>',
     '  </select>',
     '  <p class="config-reading-note" id="cfg-notify-mode-note">左栏的未读标记不受影响；小卡右上角的齿轮也能回到这里。</p>',
-    '  <label for="cfg-codeagent-cli-notify" id="cfg-codeagent-cli-notify-row" style="display:none;align-items:flex-start;gap:8px;margin-top:10px;cursor:pointer">',
-    '    <input type="checkbox" id="cfg-codeagent-cli-notify" style="margin:3px 0 0;flex:none;width:auto;height:auto;padding:0">',
-    '    <span style="display:flex;flex-direction:column;gap:2px"><strong style="font-size:13px">CodeAgent 自己也弹完成提醒</strong><small class="config-reading-note" style="margin:0">默认不勾：答完只由 Hub 提醒一次，不再重复。勾上后之后新开或重启的 CodeAgent 会话会自己再弹一条；只想留 CodeAgent 的，把上面选成「关闭」。</small></span>',
-    '  </label>',
+    '  <div class="config-field" id="cfg-codeagent-cli-notify-row" style="display:none;margin-top:10px">',
+    '    <label for="cfg-codeagent-cli-notify">CodeAgent 自带的完成提醒</label>',
+    '    <select id="cfg-codeagent-cli-notify" aria-label="CodeAgent 自带的完成提醒">',
+    '      <option value="auto">自动（推荐）：Hub 回执或桌宠在提醒时关掉，免得重复</option>',
+    '      <option value="hub">总是关掉：只留 Hub 的</option>',
+    '      <option value="own">保留：CodeAgent 自己也提醒</option>',
+    '    </select>',
+    '    <p class="config-reading-note" id="cfg-codeagent-cli-notify-note"></p>',
+    '  </div>',
     '</div>',
   ].join('\n');
   const notifyAnchor = host.querySelector('.config-notification-title');
@@ -104,11 +109,19 @@ function mountSection({ document, window, ipcRenderer }) {
   }
   const cliRow = notifySection.querySelector('#cfg-codeagent-cli-notify-row');
   const cliEl = notifySection.querySelector('#cfg-codeagent-cli-notify');
-  function fillCli(r) { if (!r || r.ok === false) return; cliRow.style.display = r.available ? 'flex' : 'none'; cliEl.checked = !!r.own; }
+  const cliNote = notifySection.querySelector('#cfg-codeagent-cli-notify-note');
+  function fillCli(r) {
+    if (!r || r.ok === false) return;
+    cliRow.style.display = r.available ? '' : 'none';
+    cliEl.value = r.mode || 'auto';
+    cliNote.textContent = (r.suppress ? '现在：新开的 CodeAgent 会话关掉自带提醒，只由 Hub 提醒。'
+      : '现在：新开的 CodeAgent 会话保留自带提醒' + (r.hubNotifies ? '，Hub 也会提醒。' : '（Hub 回执已关、桌宠没开）。'))
+      + '已开着的会话重启后生效。';
+  }
   async function refreshCli() { try { fillCli(await ipcRenderer.invoke('codeagent-cli-notify:get')); } catch (_) {} }
-  cliEl.addEventListener('change', async () => { try { fillCli(await ipcRenderer.invoke('codeagent-cli-notify:set', { own: cliEl.checked })); } catch (_) {} });
+  cliEl.addEventListener('change', async () => { try { fillCli(await ipcRenderer.invoke('codeagent-cli-notify:set', { mode: cliEl.value })); } catch (_) {} });
   async function refresh() { void refreshCli(); try { fill(await ipcRenderer.invoke('hub-pet:get-settings')); } catch (_) {} }
-  async function save(patch) { try { fill(await ipcRenderer.invoke('hub-pet:set-settings', patch)); } catch (_) {} }
+  async function save(patch) { try { fill(await ipcRenderer.invoke('hub-pet:set-settings', patch)); } catch (_) {} void refreshCli(); }
   notifyEl.addEventListener('change', () => save({ notifyMode: notifyEl.value }));
   enabledEl.addEventListener('change', () => save({ enabled: enabledEl.checked }));
   roleEl.addEventListener('change', () => save({ role: roleEl.value }));

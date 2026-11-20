@@ -8,7 +8,7 @@ import { preStreamMessage, upstreamHttpMessage, safeUpstreamDetail, midStreamMes
 // the caller still has to write the protocol's error frame after the headers.
 // `owned` are the upstream streams behind `source` (.pipe() does not pass destroy back to them); they are
 // destroyed too, which cancels the upstream body and frees its connection.
-async function pump(source, res, signal, owned = []) {
+async function pump(source, res, signal, owned = [], onChunk = () => {}) {
   const { once } = await import('node:events');
   const all = [source, ...owned];
   const stop = () => { for (const s of all) if (!s.destroyed) s.destroy(signal.reason); };
@@ -16,6 +16,7 @@ async function pump(source, res, signal, owned = []) {
   try {
     for await (const chunk of source) {
       signal.throwIfAborted();
+      onChunk();
       if (!res.write(chunk)) await Promise.race([once(res, 'drain'), once(res, 'close')]);
       if (res.destroyed) throw signal.reason || new Error('Client disconnected');
     }
@@ -94,11 +95,12 @@ async function beforeAbort(operation, signal) {
 // provider.complete(body, { signal }) -> standard fetch Response (SSE on success)
 // It owns credentials, signature, upstream authentication and model access.
 export function createProxy({ provider, accessKey, maxBodyBytes = 4 * 1024 * 1024,
-  timeoutMs = 120000, onEvent = () => {}, protocolAdapters = {} }) {
+  timeoutMs = 120000, maxDurationMs = Math.max(timeoutMs, 60 * 60 * 1000), onEvent = () => {}, protocolAdapters = {} }) {
   if (!provider?.complete || !provider?.listModels) throw new Error('Provider contract is required');
   if (typeof accessKey !== 'string' || accessKey.length < 16) throw new Error('Dedicated local key must have at least 16 characters');
   if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes <= 0) throw new Error('maxBodyBytes must be a positive safe integer');
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2147483647) throw new Error('timeoutMs must be a supported positive integer');
+  if (!Number.isSafeInteger(maxDurationMs) || maxDurationMs < timeoutMs || maxDurationMs > 2147483647) throw new Error('maxDurationMs must be an integer not below timeoutMs');
   const notify = event => {
     try { Promise.resolve(onEvent(event)).catch(() => process.stderr.write('Local proxy event observer failed\n')); }
     catch { process.stderr.write('Local proxy event observer failed\n'); }
@@ -129,8 +131,13 @@ export function createProxy({ provider, accessKey, maxBodyBytes = 4 * 1024 * 102
       if (res.destroyed || res.writableEnded) return;
       try { res.end(errorFrameFor(streamPath, message)); } catch { res.destroy(); }
     };
-    const timer = setTimeout(() => {
+    // 超时按「空闲」计（2026-11-20 一键反馈 v5.6.65）：以前 timeoutMs 是整个请求的总时限（15 分钟），
+    // Codex 一轮长回答一直在正常输出，也会在第 900 秒被掐断（「回复中途超时断开」）。现在等回头和流式输出期间，
+    // 每转发一块数据就重新计时，连续 timeoutMs 没有数据才断；另留 maxDurationMs 绝对上限（缺省 60 分钟）防挂死。
+    const onDeadline = () => {
+      if (timedOut) return;
       timedOut = true;
+      clearTimeout(timer); clearTimeout(hardTimer);
       aborter.abort(new Error('Request deadline exceeded'));
       if (!res.headersSent && !res.destroyed) {
         res.shouldKeepAlive = false;
@@ -139,8 +146,17 @@ export function createProxy({ provider, accessKey, maxBodyBytes = 4 * 1024 * 102
       } else if (!res.writableEnded && !res.destroyed) {
         if (streamPath) failStream(midStreamMessage(null, { timedOut: true })); else res.destroy();
       }
-    }, timeoutMs);
+    };
+    let timer = setTimeout(onDeadline, timeoutMs);
     timer.unref();
+    const hardTimer = setTimeout(onDeadline, maxDurationMs);
+    hardTimer.unref();
+    const touch = () => {
+      if (timedOut) return;
+      clearTimeout(timer);
+      timer = setTimeout(onDeadline, timeoutMs);
+      timer.unref();
+    };
     try {
       const pathname = new URL(req.url, 'http://127.0.0.1').pathname;
       const authorization = typeof req.headers.authorization === 'string' ? req.headers.authorization : '';
@@ -238,9 +254,9 @@ export function createProxy({ provider, accessKey, maxBodyBytes = 4 * 1024 * 102
         streamComplete = tracker.complete;
         const source = Readable.fromWeb(upstream.body);
         source.once('error', error => tracker.stream.destroy(error)); // .pipe() does not forward source errors
-        await pump(source.pipe(tracker.stream), res, pumpStop.signal, [source]);
+        await pump(source.pipe(tracker.stream), res, pumpStop.signal, [source], touch);
       }
-      else if (upstream.body) await pump(Readable.fromWeb(upstream.body), res, pumpStop.signal);
+      else if (upstream.body) await pump(Readable.fromWeb(upstream.body), res, pumpStop.signal, [], touch);
       else res.end();
       notify({ type: 'request_finished', status: upstream.status, ...(closedAfterDone ? { clientClosedAfterDone: true } : {}) });
     } catch (error) {
@@ -262,7 +278,7 @@ export function createProxy({ provider, accessKey, maxBodyBytes = 4 * 1024 * 102
         if (streamPath && !aborter.signal.aborted) failStream(midStreamMessage(error));
         else res.destroy();
       }
-    } finally { clearTimeout(timer); }
+    } finally { clearTimeout(timer); clearTimeout(hardTimer); }
   });
   server.requestTimeout = timeoutMs;
   return {

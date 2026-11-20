@@ -45,7 +45,7 @@ function runVersion(file, { args = ['--version'], timeoutMs = 6000, env = proces
     };
     try {
       if (process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(file)) {
-        const line = `"call "${String(file).replace(/"/g, '')}" ${args.join(' ')}"`;
+        const line = `"call "${String(file).replace(/\x22/g, '')}" ${args.join(' ')}"`;
         child = run('cmd.exe', ['/d', '/s', '/c', line], { windowsHide: true, windowsVerbatimArguments: true, encoding: 'utf8', env, maxBuffer: 256 * 1024 }, callback);
       } else {
         child = run(file, args, { windowsHide: true, encoding: 'utf8', env, maxBuffer: 256 * 1024 }, callback);

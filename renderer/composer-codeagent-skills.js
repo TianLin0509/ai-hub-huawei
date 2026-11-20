@@ -45,7 +45,7 @@ function insertSkillTag(input, skill, { document, window, session, focus = true,
   const remove = document.createElement('button');
   remove.type = 'button';
   remove.className = 'fi-skill-remove';
-  remove.setAttribute('aria-label', '删除技能 ' + skill.name);
+  remove.setAttribute('aria-label', `删除技能 ${skill.name}`);
   remove.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); removeSkillTag(input); onChange(); input.focus(); });
   chip.appendChild(remove); // The × is CSS content, so it never becomes prompt text.
   const old = input.querySelector(TAG);
@@ -157,8 +157,7 @@ function commandProbeText(status, now = Date.now()) {
     const at = new Date(status.at), time = Number.isFinite(at.getTime()) ? at.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }) : '';
     const reason = String(status.reason || '未知原因').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 120);
     const remaining = Number(status.retryAt) - now;
-    return '命令列表读取失败：' + reason + (time ? '（' + time + '）' : '')
-      + (remaining > 0 ? '；冷却剩余 ' + Math.ceil(remaining / 60000) + ' 分钟' : '');
+    return `命令列表读取失败：${reason}${time ? `（${time}）` : ''}${remaining > 0 ? `；冷却剩余 ${Math.ceil(remaining / 60000)} 分钟` : ''}`;
   }
   return '尚未读取命令列表';
 }
@@ -172,7 +171,7 @@ async function openTerminalCommand({ session, state, text, openTerminal, send, n
     if (result?.code === 'codeagent-input-residual') return result;
     if (!result?.ok || result.notSent || result.sendStatus === 'stuck') throw new Error(result?.message || result?.error || '命令提交未确认，请在终端核对');
     return result;
-  } catch (error) { notify('终端命令未发送：' + error.message, 'error'); return { ok: false }; }
+  } catch (error) { notify(`终端命令未发送：${error.message}`, 'error'); return { ok: false }; }
 }
 
 const CSS = `
@@ -276,7 +275,7 @@ function mountCodeAgentSkillPicker({ document, window, input, host, before, sess
   function paint({ preserveSelection = false } = {}) {
     const selected = preserveSelection ? choices[index] : null;
     let recent = [];
-    try { recent = readRecentSkills(storage, getSession()); } catch (reason) { error = '最近使用读取失败：' + reason.message; }
+    try { recent = readRecentSkills(storage, getSession()); } catch (reason) { error = `最近使用读取失败：${reason.message}`; }
     const rows = mode === 'slash' ? slashChoices(skills, commands, query, recent) : skillChoices(skills, query, recent);
     footer.hidden = mode === 'slash' || !add;
     keys.hidden = mode !== 'slash';

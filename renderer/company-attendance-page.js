@@ -28,6 +28,11 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const h1 = m => A.fmtHours(m);
   const hm = m => A.fmtHm(m);
+  // 净加班为负（月初、加班少于每天扣除）时说「少上了」，不写「多上了 −0.6 天」。
+  const moreLess = d => (d < 0 ? '少上了' : '多上了');
+  // 每天卡片、时间轴都显示当天净加班（已扣每日扣除），和账本「净加班」列、月合计对得上。
+  // 以前固定制显示的是扣除前的加班，18:20 走的工作日显示 +0h20，实际净 −0h10，同事以为算错（2026-11-20 反馈「应该是负的」）。
+  const signedNet = x => (x.net < 0 ? '' : '+') + hm(x.net);
   const clk = m => (m == null ? '—' : A.fmtClock(m) + (m >= 1440 ? '<sup class="att-next">+1</sup>' : ''));
   const md = k => `${Number(k.slice(5, 7))}/${k.slice(8, 10)}`;
   const when = at => { if (!at) return '—'; const d = new Date(at), t = new Date(); const c = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; return d.toDateString() === t.toDateString() ? '今天 ' + c : `${d.getMonth() + 1}/${d.getDate()} ${c}`; };
@@ -97,13 +102,20 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
     const m = vm.month, out = [];
     if (m.over) out.push(`<div class="att-alert">本月净加班已到 <b>${h1(m.net)}</b> 小时，超过 80 小时红线 <b>${h1(m.net - m.cap)}</b> 小时，可能会被提示加班过长。</div>`);
     else if (m.willExceed && m.workdays >= 2) out.push(`<div class="att-alert"><b>加班过长预警</b>按当前节奏，本月净加班约 <b>${Math.round(m.projected / 60)}</b> 小时，会超过 80 小时红线。想守住：剩下 ${m.leftWorkdays} 个工作日，每天净加班不超过 <b>${h1(Math.max(0, m.perDayAllowance))}</b> 小时${m.leaveBy != null ? `，约 <b>${A.fmtClock(m.leaveBy)}</b> 前离开` : ''}，周末不来。</div>`);
+    // 有历史数据时空状态页不显示，地址解析失败的提示和改域名的框放在这里。
+    if (status.lastResult?.dnsFail && !status.syncing) out.push(`<div class="att-alert warn">${esc(status.lastResult.error)}${domainRow()}</div>`);
     if (status.gapRisk) out.push(`<div class="att-alert warn">已经 ${status.staleDays} 天没读到考勤了。考勤页只保留最近 8 天，再过 ${Math.max(0, 8 - status.staleDays)} 天会出现记录缺口，请点「刷新」或检查登录。</div>`);
     return out.join('');
+  }
+  // 就地改公司域名：没找到域名、或地址解析不到时显示，填好一键「保存并读取」。
+  function domainRow() {
+    const cur = status.lastResult?.dnsFail ? status.settings?.domain || '' : '';
+    return `<div class="att-row"><span>公司域名</span><input class="att-input" data-f="quickDomain" value="${esc(cur)}" placeholder="你的公司邮箱，例如 name@corp.example"><button type="button" class="att-btn primary" data-att="quick-domain">保存并读取</button></div>`;
   }
   function kpi(label, value, unit, note, cls = '') { return `<div class="att-card att-kpi"><div class="l">${label}</div><div class="v ${cls}">${value}<small>${unit}</small></div><div class="n">${note}</div></div>`; }
   function strip(list) {
     return `<div class="att-strip">${list.slice().reverse().map(x => `<button type="button" class="att-day${A.isWorkKind(x.kind) ? '' : ' rest'}" data-att="day" data-date="${x.date}">
-      <span class="t">${md(x.date)} 周${x.weekdayName}</span><span class="v">${x.flex ? (x.singlePunch ? '缺卡' : (x.net < 0 ? '' : '+') + hm(x.net)) : '+' + hm(x.ot)}</span><span class="m">${clk(x.arrive)}–${clk(x.leave)}</span>${x.leave >= 1320 ? '<i class="dot"></i>' : ''}</button>`).join('')}</div>`;
+      <span class="t">${md(x.date)} 周${x.weekdayName}</span><span class="v">${x.flex && x.singlePunch ? '缺卡' : signedNet(x)}</span><span class="m">${clk(x.arrive)}–${clk(x.leave)}</span>${x.leave >= 1320 ? '<i class="dot"></i>' : ''}</button>`).join('')}</div>`;
   }
   function yearHtml() {
     const y = vm.year, cap = 80 * 60, max = Math.max(cap * 1.25, ...y.months.filter(m => m.hasData).map(m => m.net));
@@ -128,7 +140,7 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
     if (y.latestLeave) facts.push(`<div><span>最晚一次离开</span><b>${md(y.latestLeave.date)} · ${clk(y.latestLeave.leave)}</b></div>`);
     facts.push(`<div><span>周末 / 节假日到岗</span><b>${y.restDays} 天</b></div>`);
     return `<section class="att-card att-year"><h2>${y.year} 年<small>从 ${y.firstDate ? md(y.firstDate) : '—'} 开始记录 · 点柱子看当月明细</small></h2>
-      <div class="att-year-top"><div class="att-year-big"><div class="l">全年净加班</div><div class="v">${h1(y.net)}<small>小时</small></div><div class="n">≈ 多上了 ${y.equivalentDays.toFixed(1)} 天班 · 在岗 ${h1(y.span)} 小时</div></div><div class="att-year-chart">${svg}</div></div>
+      <div class="att-year-top"><div class="att-year-big"><div class="l">全年净加班</div><div class="v">${h1(y.net)}<small>小时</small></div><div class="n">≈ ${moreLess(y.equivalentDays)} ${Math.abs(y.equivalentDays).toFixed(1)} 天班 · 在岗 ${h1(y.span)} 小时</div></div><div class="att-year-chart">${svg}</div></div>
       <div class="att-facts">${facts.join('')}</div></section>`;
   }
   function rulesHtml() {
@@ -139,27 +151,27 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
       <li>工作日不看几点到几点：当天在岗时长，扣掉午休 ${t.amEnd}–${t.pmStart}${f.dinnerBreak ? `、晚饭 ${t.pmEnd}–${t.eveningFrom}` : ''}，再减规定 ${f.dailyHours} 小时，就是当天净加班（不足为负）。</li>
       <li>核心时段 ${f.coreStart}–${f.coreEnd}：晚于开始才到、早于结束就走的工作日会标出来，只做提醒，不另扣时间。</li>
       <li>当天只有一次打卡时算不出在岗时长，标「缺卡」，不计加班也不扣。</li>
-      <li>周末、节假日整段在岗都算加班；月末周六是正常上班日，和工作日一样算。一天从 05:00 算起。</li>
+      <li>周末、节假日在岗都算加班，扣掉午休 ${t.amEnd}–${t.pmStart} 和晚饭 ${t.pmEnd}–${t.eveningFrom}（和公司考勤系统一致）；月末周六是正常上班日，和工作日一样算。一天从 05:00 算起。</li>
       <li>统计只到昨天；「守住 80 小时」按今天的上班卡（没有就按本月平均到岗）推算几点走。可在「考勤设置」里关掉弹性制。</li></ul></details>`;
     }
     const owe = w.owePerWorkday ? `规定每天 8 小时，每个出勤工作日扣 ${h1(w.owePerWorkday)} 小时，按月统计` : '已满 8 小时，工作日不扣';
     return `<details class="att-rules"><summary>加班怎么算</summary><ul>
       <li>核心工作时间 ${t.amStart}–${t.amEnd}、${t.pmStart}–${t.pmEnd}，共 ${h1(w.ratedMinutes)} 小时；${owe}。可在「考勤设置」里改成你自己的时间。</li>
       <li>工作日 ${t.amStart} 前和 ${t.eveningFrom} 后算加班；一天从 05:00 算起，凌晨 05:00 前的打卡算前一天。</li>
-      <li>周末、节假日整段在岗都算加班；月末周六是正常上班日，和工作日一样算。节假日以考勤系统的假期日历为准。</li>
+      <li>周末、节假日在岗都算加班，扣掉午休 ${t.amEnd}–${t.pmStart} 和晚饭 ${t.pmEnd}–${t.eveningFrom}（和公司考勤系统一致）；月末周六是正常上班日，和工作日一样算。节假日以考勤系统的假期日历为准。</li>
       <li>统计只到昨天，今天的打卡留待次日结算，不参与工时、加班、扣除及平均值；剩余工作日包含今天。</li>
       <li>只算有打卡的时段：同一天离开后又回来，中间不算。考勤页只给最近 8 天，Hub 每天读一次并按日期拼起来。</li></ul></details>`;
   }
   function bodyHtml() {
     if (!status.records.length) {
       return `<div class="att-empty"><h2>还没有考勤数据</h2><p>${status.syncing ? '正在打开考勤页读取最近 8 天，通常半分钟，最长约 3 分钟。' : esc(status.lastResult?.error || '开启后每天会在后台读一次；也可以现在就读。')}</p>
-        ${status.lastResult?.needsDomain && !status.settings?.domain ? '<div class="att-row"><input class="att-input" data-f="quickDomain" placeholder="你的公司邮箱，例如 name@corp.example"><button type="button" class="att-btn primary" data-att="quick-domain">保存并读取</button></div>' : ''}
+        ${(status.lastResult?.needsDomain && !status.settings?.domain) || status.lastResult?.dnsFail ? domainRow() : ''}
         ${status.lastResult?.triedPages || (status.lastResult && !status.lastResult.ok && status.settings?.page && status.settings.page !== 'auto') ? `<div class="att-row"><span>考勤页</span>${pageSelect(status.settings?.page, 'quickPage')}<button type="button" class="att-btn primary" data-att="quick-page">保存并读取</button></div>` : ''}
         <div class="att-row">${status.lastResult?.needsLogin ? '<button type="button" class="att-btn primary" data-att="login">登录考勤</button>' : ''}<button type="button" class="att-btn${status.lastResult?.needsLogin ? '' : ' primary'}" data-att="sync">现在读取</button></div></div>`;
     }
     const m = vm.month;
     const hero = `<section class="att-card att-hero"><div class="att-hero-num"><div class="l">${Number(vm.ym.slice(5))} 月净加班 · 统计至昨日</div>
-        <div class="v">${h1(m.net)}<small>小时</small></div><div class="n">相当于多上了 <b>${m.equivalentDays.toFixed(1)}</b> 天班（每天 8 小时）</div></div>
+        <div class="v">${h1(m.net)}<small>小时</small></div><div class="n">相当于${moreLess(m.equivalentDays)} <b>${Math.abs(m.equivalentDays).toFixed(1)}</b> 天班（每天 8 小时）</div></div>
         <div class="att-hero-cap">${capBar()}<div class="att-hero-sub">${vm.work.flex ? `弹性制 · 多出 ${h1(m.gross)} − 不足 ${h1(m.owe)}（${m.workdays} 个工作日，每天规定 ${vm.work.flexSettings.dailyHours} 小时）${m.coreMiss ? ` · ${m.coreMiss} 天没覆盖核心时段` : ''}${m.singlePunchDays ? ` · ${m.singlePunchDays} 天缺卡未计` : ''}` : `加班 ${h1(m.gross)} − 扣除 ${h1(m.owe)}（${m.workdays} 个工作日 × ${h1(vm.work.owePerWorkday)}）`} · 本月 ${m.monthWorkdays} 个工作日</div></div></section>`;
     const k = `<div class="att-kpis">${
       kpi('工作日平均离开', m.avgLeave != null ? A.fmtClock(m.avgLeave) : '—', '', m.avgLeave != null ? vm.work.flex ? `平均 ${A.fmtClock(m.avgArrive)} 到 · ${m.workdays} 天里 ${m.late22} 天过了 22 点` : `比 ${vm.work.workTime.eveningFrom} 晚 ${hm(Math.max(0, m.avgLeave - vm.work.pmStart))} · ${m.workdays} 天里 ${m.late22} 天过了 22 点` : '本月还没有工作日记录')}${
@@ -171,6 +183,17 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
     return alerts() + hero + k + days + yearHtml() + rulesHtml();
   }
 
+  // 周末、节假日的一段在岗：午休、晚饭不算加班，画成普通在岗（蓝），其余画成加班（橙）。
+  function restParts(a, b, breaks = []) {
+    const out = []; let t = a;
+    for (const [p, q] of breaks.slice().sort((x, y) => x[0] - y[0])) {
+      if (q <= t || p >= b) continue;
+      if (p > t) out.push([t, p, 1]);
+      out.push([Math.max(t, p), Math.min(b, q), 0]); t = Math.min(b, q);
+    }
+    if (t < b) out.push([t, b, 1]);
+    return out;
+  }
   function timelineHtml(list) {
     const X = v => ((v - 300) / 1440 * 100).toFixed(2) + '%', W = v => (v / 1440 * 100).toFixed(2) + '%';
     let h = `<div class="att-tl"><div></div><div class="ax">${[[5, 300], [9, 540], [13, 780], [18, 1080], [22, 1320], ['次日 2', 1560]].map(([t, v]) => `<span style="left:${X(v)}">${t}</span>`).join('')}</div><div class="r">加班</div><div></div>`;
@@ -181,13 +204,13 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
       for (const s of x.segs) {
         const AM = R.amEnd, PM = R.pmStart;
         // 弹性制的工作日按时长算，不分哪一段是加班：整段画成在岗。
-        const parts = !A.isWorkKind(x.kind) ? [[s.a, s.b, 1]] : R.flex ? [[s.a, s.b, 0]] : [[s.a, Math.min(s.b, AM), 1], [Math.max(s.a, AM), Math.min(s.b, PM), 0], [Math.max(s.a, PM), s.b, 1]];
+        const parts = !A.isWorkKind(x.kind) ? restParts(s.a, s.b, R.restBreaks) : R.flex ? [[s.a, s.b, 0]] : [[s.a, Math.min(s.b, AM), 1], [Math.max(s.a, AM), Math.min(s.b, PM), 0], [Math.max(s.a, PM), s.b, 1]];
         for (const p of parts) if (p[1] > p[0]) tr += `<div class="br${p[2] ? ' ot' : ''}" style="left:${X(p[0])};width:${W(p[1] - p[0])}"></div>`;
         tr += `<span class="pt" style="left:${X(s.a)}">${badge(s.ta)}</span><span class="pt" style="left:${X(s.b)}">${badge(s.tb)}</span>`;
         tr += s.b - s.a < 90 ? `<span class="tx" style="left:${X((s.a + s.b) / 2)}">${clk(s.a)}–${clk(s.b)}</span>` : `<span class="tx" style="left:${X(s.a)}">${clk(s.a)}</span><span class="tx" style="left:${X(s.b)}">${clk(s.b)}</span>`;
       }
       const tags = [KIND[x.kind] ? `<span class="att-tag ${A.isWorkKind(x.kind) ? 'mute' : 'blue'}">${KIND[x.kind]}</span>` : '', x.leave >= 1320 ? '<span class="att-tag amber">22 点后离开</span>' : '', x.nightReturn ? '<span class="att-tag amber">凌晨回来过</span>' : '', x.manual ? '<span class="att-tag mute">有手动卡</span>' : '', x.flex && x.singlePunch ? '<span class="att-tag amber">缺卡 · 未计</span>' : '', x.coreLate ? '<span class="att-tag amber">核心时段后才到</span>' : '', x.coreEarly ? '<span class="att-tag amber">核心时段前离开</span>' : ''].join('');
-      h += `<div class="dd${x.date === drawer.focus ? ' hl' : ''}">${md(x.date)}<small>周${x.weekdayName}</small></div>${tr}</div><div class="hh">${x.flex ? (x.net < 0 ? '' : '+') + hm(x.net) : '+' + hm(x.ot)}</div><div class="tg">${tags}</div>`;
+      h += `<div class="dd${x.date === drawer.focus ? ' hl' : ''}">${md(x.date)}<small>周${x.weekdayName}</small></div>${tr}</div><div class="hh">${signedNet(x)}</div><div class="tg">${tags}</div>`;
     }
     return h + '</div>';
   }
@@ -198,7 +221,7 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
       <tr class="sum"><td colspan="4">合计 · 工作日 ${sum.workdays} 天 · 周末/假日 ${sum.restDays} 天</td><td class="r">${h1(sum.span)}</td><td class="r">${h1(sum.worked)}</td><td class="r">—</td><td class="r">${h1(sum.rest)}</td><td class="r">${h1(sum.net)}h</td></tr>
       ${list.map(frow).join('')}</tbody></table>`;
     }
-    const row = x => `<tr class="${x.date === drawer.focus ? 'hl' : ''}${A.isWorkKind(x.kind) ? '' : ' rest'}"><td>${md(x.date)}</td><td>周${x.weekdayName}</td><td>${clk(x.arrive)} ${badge(x.arriveTag)}</td><td>${clk(x.leave)} ${badge(x.leaveTag)}</td><td class="r">${hm(x.span)}</td><td class="r">${x.otAm ? x.otAm + '′' : '—'}</td><td class="r">${x.otPm ? hm(x.otPm) : '—'}</td><td class="r">${x.otRest ? hm(x.otRest) : '—'}</td><td class="r">${x.owe ? '−0h30' : '—'}</td><td class="r"><b>${x.net < 0 ? '' : '+'}${hm(x.net)}</b></td></tr>`;
+    const row = x => `<tr class="${x.date === drawer.focus ? 'hl' : ''}${A.isWorkKind(x.kind) ? '' : ' rest'}"><td>${md(x.date)}</td><td>周${x.weekdayName}</td><td>${clk(x.arrive)} ${badge(x.arriveTag)}</td><td>${clk(x.leave)} ${badge(x.leaveTag)}</td><td class="r">${hm(x.span)}</td><td class="r">${x.otAm ? x.otAm + '′' : '—'}</td><td class="r">${x.otPm ? hm(x.otPm) : '—'}</td><td class="r">${x.otRest ? hm(x.otRest) : '—'}</td><td class="r">${x.owe ? hm(-x.owe) : '—'}</td><td class="r"><b>${x.net < 0 ? '' : '+'}${hm(x.net)}</b></td></tr>`;
     return `<table class="att-ledger"><thead><tr><th>日期</th><th>星期</th><th>首次</th><th>末次</th><th class="r">在岗</th><th class="r">早上</th><th class="r">晚上</th><th class="r">周末/假日</th><th class="r">扣除</th><th class="r">净加班</th></tr></thead><tbody>
       <tr class="sum"><td colspan="4">合计 · 工作日 ${sum.workdays} 天 · 周末/假日 ${sum.restDays} 天</td><td class="r">${h1(sum.span)}</td><td class="r">${h1(sum.am)}</td><td class="r">${h1(sum.pm)}</td><td class="r">${h1(sum.rest)}</td><td class="r">−${h1(sum.owe)}</td><td class="r">${h1(sum.net)}h</td></tr>
       ${list.map(row).join('')}</tbody></table>`;

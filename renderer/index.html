@@ -7,6 +7,8 @@
   <script src="sealed-boot.js"></script>
   <!-- 主题引导：必须在样式表之前同步执行，先把 <html data-theme> 打上，避免首帧闪深色 -->
   <script src="theme-bootstrap.js"></script>
+  <!-- 界面语言（2026-11-20）：只有设置里选了 English 才启用整页翻译；中文模式不做任何事 -->
+  <script src="i18n-boot.js"></script>
   <link rel="stylesheet" href="../node_modules/@xterm/xterm/css/xterm.css">
   <link rel="stylesheet" href="styles/hw-tokens.css">
   <link rel="stylesheet" href="styles.css">
@@ -100,6 +102,15 @@
   <link rel="stylesheet" href="styles/hub-error-card.css">
   <link rel="stylesheet" href="styles/home-recent.css">
   <link rel="stylesheet" href="styles/controls.css" id="controls-layer">
+  <!-- 英文界面专用排版（2026-11-20，shell 组）：只在 html[lang="en"] 下生效，中文界面不受影响。 -->
+  <style id="i18n-en-shell">
+    /* 侧栏「启动」按钮：Launch 比「启动」宽，收窄内边距让整词放得下 */
+    html[lang="en"] body #new-session-wrapper #btn-new { padding: 0 6px !important; gap: 3px !important; }
+    /* 左侧功能导航窄栏：英文标签字号略小、允许溢出到栏边几像素，避免 Acco… / Setti… 截断 */
+    html[lang="en"] body #scene-rail :is(.btn-label, .rail-utility-label) { font-size: 10.5px !important; letter-spacing: -0.1px !important; overflow: visible !important; text-overflow: clip !important; }
+    html[lang="en"] body #scene-rail :is(.cw-current, .rail-group-current, .active, [aria-current="page"]) > :is(.btn-label, .rail-utility-label) { letter-spacing: -0.45px !important; }
+    html[lang="en"] body #scene-rail #btn-profile .btn-label { overflow: hidden !important; text-overflow: ellipsis !important; }
+  </style>
 </head>
 <body>
   <div class="app-container" id="app-container">
@@ -361,6 +372,7 @@
       </div>
       <div class="context-menu" id="card-selection-context-menu" style="display:none">
         <button class="context-menu-item" data-action="copy">复制</button>
+        <button class="context-menu-item" data-action="quote" hidden>引用到输入框</button>
         <button class="context-menu-item" data-action="copy-md" title="标题、列表、表格、代码块保留 Markdown 记号，公式写成 $…$ / $$…$$，可直接粘进 Obsidian">复制为 Markdown</button>
         <div class="context-menu-separator"></div>
         <button class="context-menu-item" data-action="toggle-md" role="menuitemcheckbox" aria-checked="false">Ctrl+C 和复制按钮都给 Markdown</button>
@@ -394,12 +406,12 @@
               <button class="home-welcome-portal" id="home-create-session" type="button" data-home-create="session">
                 <span class="home-welcome-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 4v-4H3V6a2 2 0 0 1 2-2Z"/><path d="M8 9h8M8 13h5"/></svg></span>
                 <svg class="home-welcome-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 18 18 6M8 6h10v10"/></svg>
-                <strong>新建普通会话</strong><span class="home-welcome-description">一个 AI，专注完成你的任务。</span>
+                <strong>新建普通会话</strong><span class="home-welcome-description">一个 AI 专注完成任务；活多时让它自己组队招人。</span>
               </button>
               <button class="home-welcome-portal secondary" id="home-create-group" type="button" data-home-create="group">
                 <span class="home-welcome-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="2" y="3" width="14" height="12" rx="3"/><path d="M7 15v4l5-4M19 8h1a2 2 0 0 1 2 2v9h-3v3l-5-3h-3M6 8h6"/></svg></span>
                 <svg class="home-welcome-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 18 18 6M8 6h10v10"/></svg>
-                <strong>新建 AI 群聊</strong><span class="home-welcome-description">多个 AI，共同讨论与分工协作。</span>
+                <strong>新建 AI 群聊</strong><span class="home-welcome-description">自己挑几个 AI，同场讨论、对比看法。</span>
               </button>
               <p id="home-welcome-error" class="home-welcome-error" role="alert" hidden></p>
             </div>
@@ -885,6 +897,14 @@
       <div class="config-modal-body">
         <div id="config-main-view">
           <p class="config-hint">配置全局代理、通知与显示；账号登录和 AI 接入方式已统一移至左侧「权限」。</p>
+          <div class="config-field config-language-field" data-i18n-skip>
+            <label for="cfg-ui-language">界面语言 / Language</label>
+            <select id="cfg-ui-language">
+              <option value="zh-CN">简体中文</option>
+              <option value="en">English (Beta)</option>
+            </select>
+            <p class="config-hint" id="cfg-ui-language-hint">选择后立即生效 · Applies immediately</p>
+          </div>
           <div class="config-field">
             <label for="cfg-model-unavailable-policy">会话原模型不可用时</label>
             <select id="cfg-model-unavailable-policy">

@@ -104,7 +104,7 @@ function createClaudeNativeControls({ sessionId, ipcRenderer, onHistory, onResto
       box.className = 'codex-native-request';
       box.dataset.epoch = String(runtime.epoch);
       const title = document.createElement('strong');
-      title.textContent = request.method === 'claude/requestUserInput' ? 'Claude 需要你回答' : '工具审批：' + request.params.toolName;
+      title.textContent = request.method === 'claude/requestUserInput' ? 'Claude 需要你回答' : `工具审批：${request.params.toolName}`;
       box.append(title);
       const inputs = [];
       if (request.method === 'claude/requestUserInput') {
@@ -137,7 +137,7 @@ function createClaudeNativeControls({ sessionId, ipcRenderer, onHistory, onResto
         for (const [label, value] of rows) {
           const line = document.createElement('p');
           const key = document.createElement('span'); key.textContent = label + '：'; key.style.color = 'var(--text-muted)';
-          const val = document.createElement('b'); val.textContent = value; val.style.overflowWrap = 'anywhere';
+          const val = document.createElement('b'); val.textContent = value; val.style.overflowWrap = 'anywhere'; val.dataset.i18nSkip = ''; // 字段值是请求原文（命令、路径），英文模式不翻
           line.append(key, val); box.append(line);
         }
         const raw = document.createElement('details');

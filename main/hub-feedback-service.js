@@ -35,7 +35,9 @@ const MAX_CLICKS = 3;
 
 function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock = null, onPassed = () => {}, downloadsDir, now = () => Date.now(), logger = console,
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), onProgress = () => {}, windowPost = null,
-  edition = null, receiverAddress = null, intranetFetch = null, outboxDir = null }) {
+  edition = null, receiverAddress = null, intranetFetch = null, outboxDir = null, welink = null }) {
+  // welink（2026-11-21）：{ to, hasCli(), run(args, opts), parseJson, openDesktop(), writeClipboard(text) }。
+  // 给了就在公司内（成员版恒是；公开版连得上内源时）改走 WeLink：一键发送 / 复制并打开 WeLink，内网收件机入口隐藏。
   // edition：'member' 只走内网；'public' 按内源是否连得上分流；不给（主仓库与旧单测）= 只走阿里云，与以前一样。
   // receiverAddress：{ resolve() → { urls, openxReachable } }；intranetFetch：直连内网用的 fetch（不走系统代理）。
   const fetchFn = fetchImpl || ((...args) => require('electron').net.fetch(...args));
@@ -471,7 +473,73 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
     return { ok: false, reason: r.reason, savedTo: saveLocal(b.text), ...(r.blocked ? { blocked: true, url: endpoint } : {}) };
   }
 
-  return { preview, send, saveContact, route, flushOutbox, startRetry, stopRetry, outboxItems, diagnose, status, retryNow, mine, fixedInFor };
+  // ---- WeLink（2026-11-21）----
+  // 这次是否走 WeLink：配了 welink，且属于公司内用户（与 route() 判断内网一致）。
+  async function welinkState() {
+    if (!welink) return { ok: true, enabled: false };
+    if (await route() !== 'intranet') return { ok: true, enabled: false };
+    let cli = false;
+    try { cli = !!welink.hasCli(); } catch { /* 当没装 */ }
+    return { ok: true, enabled: true, to: welink.to, cli };
+  }
+  function compactFor(description, contact) {
+    return require('../core/hub-feedback-welink').compactFeedback({ info: info(), description, contact, logsDir, now: now() });
+  }
+  function fullBundle(description, contact) {
+    return collectBundle({ info: info(), description, contact, logsDir, dataDir: path.dirname(logsDir), now: now() }).text;
+  }
+  // 一键发送：用本机 welink-cli 以用户自己的身份私聊维护人；长的切成两段。发不出去时界面引导改用「复制并打开 WeLink」。
+  async function sendWelink({ description = '', contact = '' } = {}) {
+    if (!String(description).trim()) return { ok: false, reason: '请先写一句遇到了什么问题' };
+    if (!welink) return { ok: false, reason: '这个版本没有开 WeLink 反馈' };
+    saveContact({ contact });
+    const W = require('../core/hub-feedback-welink');
+    const text = compactFor(description, contact);
+    const savedTo = saveLocal(fullBundle(description, contact));
+    const hkey = 'w:' + now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const hbase = { summary: firstLine(description), via: 'welink' };
+    let hasCli = false;
+    try { hasCli = !!welink.hasCli(); } catch { /* 当没装 */ }
+    if (!hasCli) {
+      recordHistory(hkey, { ...hbase, status: 'failed', reason: '本机没装 welink-cli' });
+      return { ok: false, noCli: true, reason: '本机没装 welink-cli，没法自动发送', text, savedTo };
+    }
+    const parts = W.chunks(text);
+    for (let i = 0; i < parts.length; i++) {
+      const body = (parts.length > 1 ? `（${i + 1}/${parts.length}）` : '') + parts[i];
+      let reason = '';
+      try {
+        const r = await welink.run(['im', 'send-to-user', '--receiver', welink.to, '--text', body], { sendUser: welink.to, timeoutMs: 30000 });
+        reason = W.sendReceiptError(r, welink.parseJson);
+      } catch (error) { reason = (error && error.message) || '发送出错'; }
+      if (reason) {
+        logEvent({ via: 'welink', error: reason, part: i + 1, parts: parts.length });
+        recordHistory(hkey, { ...hbase, status: 'failed', reason });
+        return { ok: false, reason: (i ? `前 ${i} 段已发出，第 ${i + 1} 段没发出去：` : '') + reason, text, savedTo };
+      }
+    }
+    logEvent({ via: 'welink', sent: parts.length });
+    recordHistory(hkey, { ...hbase, status: 'delivered', receiptId: 'WeLink', deliveredAt: now(), reason: '' });
+    return { ok: true, via: 'welink', parts: parts.length, to: welink.to, savedTo };
+  }
+  // 复制并打开 WeLink：精简版写进剪贴板，再把 WeLink 桌面客户端打开（已开着就是切到前台）。用户自己搜维护人账号、粘贴发送。
+  async function copyOpenWelink({ description = '', contact = '' } = {}) {
+    if (!String(description).trim()) return { ok: false, reason: '请先写一句遇到了什么问题' };
+    if (!welink) return { ok: false, reason: '这个版本没有开 WeLink 反馈' };
+    saveContact({ contact });
+    const text = compactFor(description, contact);
+    const savedTo = saveLocal(fullBundle(description, contact));
+    let copied = false;
+    try { const c = await welink.writeClipboard(text); copied = !!(c && c.ok); } catch { /* 下面提示 */ }
+    let opened = { ok: false, reason: '' };
+    try { opened = (await welink.openDesktop()) || opened; } catch (error) { opened = { ok: false, reason: error.message }; }
+    logEvent({ via: 'welink-copy', copied, opened: !!opened.ok, openVia: opened.via || null, openError: opened.ok ? null : (opened.reason || null) });
+    recordHistory('c:' + now().toString(36) + Math.random().toString(36).slice(2, 6), { summary: firstLine(description), via: 'welink', status: copied ? 'delivered' : 'failed',
+      receiptId: copied ? '已复制，待本人在 WeLink 发送' : '', reason: copied ? '' : '复制失败' });
+    return { ok: copied, copied, opened: !!opened.ok, openReason: opened.reason || '', to: welink.to, text, savedTo };
+  }
+
+  return { preview, send, saveContact, route, flushOutbox, startRetry, stopRetry, outboxItems, diagnose, status, retryNow, mine, fixedInFor, welinkState, sendWelink, copyOpenWelink };
 }
 
 function registerHubFeedbackIpc(ipcMain, service) {
@@ -480,6 +548,9 @@ function registerHubFeedbackIpc(ipcMain, service) {
   ipcMain.handle('hub-feedback:status', () => service.status());
   ipcMain.handle('hub-feedback:mine', (_e, payload) => service.mine(payload || {}));
   ipcMain.handle('hub-feedback:retry', async () => { try { return await service.retryNow(); } catch (e) { return { ok: false, error: e.message }; } });
+  ipcMain.handle('hub-feedback:welink-state', async () => { try { return await service.welinkState(); } catch (e) { return { ok: false, enabled: false, error: e.message }; } });
+  ipcMain.handle('hub-feedback:welink-send', async (_e, payload) => { try { return await service.sendWelink(payload || {}); } catch (e) { return { ok: false, reason: e.message }; } });
+  ipcMain.handle('hub-feedback:welink-copy-open', async (_e, payload) => { try { return await service.copyOpenWelink(payload || {}); } catch (e) { return { ok: false, reason: e.message }; } });
   ipcMain.handle('hub-feedback:save-contact', (_e, payload) => service.saveContact(payload || {}));
   ipcMain.handle('hub-feedback:send', (e, payload) => service.send({ ...(payload || {}), onProgress: p => { try { e.sender.send('hub-feedback:progress', p); } catch {} } }));
 }
