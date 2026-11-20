@@ -15,7 +15,7 @@
 
 - 私人模块（个人投研、学习陪伴、投资相关的群聊场景与 prompt、公司内部中转、本机专用工具与生图池、私人网关）不在发行文件里。
 - CLI 状态回报（hook）改由 Windows PowerShell 执行并由 Hub 解析，上游使用 Python。这样便携版不需要 Python 或 Node。两边的解析结果由上游的契约测试逐字段比对。
-- Hub 启动的 Claude 会话带 `--permission-mode bypassPermissions`；上游把同样的档位写进全局 `~/.claude/settings.json`，社区版不改用户的全局配置。
+- Hub 启动的 Claude 会话默认带 `--permission-mode bypassPermissions`（启动中心可改，见 `core/permission-modes.js`）；上游把同样的档位写进全局 `~/.claude/settings.json`，社区版不改用户的全局配置。
 - 数据目录 `%USERPROFILE%\.ai-hub-community`、产品名、Windows 应用标识和快捷方式都与上游分开，两者可以并存。
 - 默认不使用本机代理，API 模式指向官方地址。
 

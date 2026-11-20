@@ -9,6 +9,26 @@
 param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Rest)
 $ErrorActionPreference = 'Stop'
 
+# The Hub probes --version/--help (core/codeagent-capabilities.js) and drops launch flags the help does not list.
+if ($Rest -contains '--version') { Write-Output '2.1.322 (Claude Code)'; exit 0 }
+if ($Rest -contains '--help') {
+  Write-Output @'
+Usage: claude [options] [command] [prompt]
+  --model <model>
+  --effort <level>  (choices: "low", "medium", "high", "xhigh", "max")
+  --permission-mode <mode>  (choices: "acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan")
+  --settings <file-or-json>
+  --mcp-config <configs...>
+  --strict-mcp-config
+  --add-dir <directories...>
+  --append-system-prompt-file <file>
+  --session-id <uuid>
+  -r, --resume [value]
+  --fork-session
+'@
+  exit 0
+}
+
 $sid = $null
 for ($i = 0; $i -lt $Rest.Count - 1; $i++) {
   if ($Rest[$i] -eq '--session-id' -or $Rest[$i] -eq '--resume') { $sid = $Rest[$i + 1] }
@@ -59,6 +79,9 @@ function Add-Entry($entry) { [IO.File]::AppendAllText($transcript, ($entry | Con
 # The real CLI reads its terminal as UTF-8; Windows PowerShell 5.1 defaults to the OEM code page.
 [Console]::InputEncoding = $utf8
 [Console]::OutputEncoding = $utf8
+$permissionMode = 'unset'
+for ($i = 0; $i -lt $Rest.Count - 1; $i++) { if ($Rest[$i] -eq '--permission-mode') { $permissionMode = $Rest[$i + 1] } }
+Write-Trace "permission-mode: $permissionMode"
 Invoke-Hook 'SessionStart' @{ session_id = $sid; transcript_path = $transcript; cwd = $cwd; hook_event_name = 'SessionStart'; source = 'startup' }
 # Same footer text the real CLI shows once its prompt is ready.
 Write-Host 'Fake Claude ready  ? for shortcuts'
@@ -75,6 +98,22 @@ while ($true) {
   $userId = [guid]::NewGuid().ToString()
   Add-Entry @{ type = 'user'; uuid = $userId; sessionId = $sid; timestamp = $now; cwd = $cwd; message = @{ role = 'user'; content = $prompt } }
   Invoke-Hook 'UserPromptSubmit' @{ session_id = $sid; transcript_path = $transcript; cwd = $cwd; hook_event_name = 'UserPromptSubmit'; prompt = $prompt }
+  # Like the real CLI: outside bypassPermissions a Bash call stops on a permission dialog until the user answers.
+  $toolUseId = 'toolu_' + [guid]::NewGuid().ToString('N')
+  if ($prompt -like 'run-tool*' -and $permissionMode -ne 'bypassPermissions') {
+    Invoke-Hook 'PreToolUse' @{ session_id = $sid; transcript_path = $transcript; cwd = $cwd; hook_event_name = 'PreToolUse'; tool_name = 'Bash'; tool_use_id = $toolUseId; tool_input = @{ command = 'echo fake' } }
+    Invoke-Hook 'PermissionRequest' @{ session_id = $sid; transcript_path = $transcript; cwd = $cwd; hook_event_name = 'PermissionRequest'; tool_name = 'Bash'; tool_input = @{ command = 'echo fake' } }
+    Invoke-Hook 'Notification' @{ session_id = $sid; transcript_path = $transcript; cwd = $cwd; hook_event_name = 'Notification'; notification_type = 'permission_prompt'; message = 'Claude needs your permission to use Bash' }
+    Write-Host 'Bash command: echo fake'
+    Write-Host 'Do you want to proceed?'
+    Write-Host '> 1. Yes'
+    Write-Host '  2. No, and tell Claude what to do differently (esc)'
+    $answer = [Console]::In.ReadLine()
+    Write-Trace "permission answer: $answer"
+    # The real TUI redraws once the dialog is answered; leaving the menu on screen would read as still waiting.
+    Write-Host -NoNewline ([string][char]27 + '[2J' + [string][char]27 + '[H')
+    Invoke-Hook 'PostToolUse' @{ session_id = $sid; transcript_path = $transcript; cwd = $cwd; hook_event_name = 'PostToolUse'; tool_name = 'Bash'; tool_use_id = $toolUseId; tool_input = @{ command = 'echo fake' }; tool_response = @{ stdout = 'fake'; stderr = ''; interrupted = $false } }
+  }
   Start-Sleep -Milliseconds 300
   $reply = "FAKE-REPLY: $prompt"
   Write-Host $reply

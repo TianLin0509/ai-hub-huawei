@@ -425,10 +425,10 @@ test('compact rows align names and descriptions, show aliases and highlight text
   const popup = f.document.body.querySelector('.fi-skill-picker'), item = popup.querySelector('.fi-skill-option');
   assert.equal(item.querySelector('.fi-skill-name').textContent, '/new (clear)'); assert.equal(item.querySelector('mark').textContent, 'cle');
   assert.equal(item.querySelector('small').textContent, '<b>short description</b>'); assert.equal(item.querySelector('b'), null);
-  const keys = popup.querySelector('.fi-skill-keys'); assert.equal(keys.hidden, false); assert.equal(keys.textContent, '↑↓ 选择 · Enter 确认 · Esc 关闭');
+  const keys = popup.querySelector('.fi-skill-keys'); assert.equal(keys.hidden, false); assert.equal(keys.textContent, '↑↓ 选择 · Enter/Tab 插入 · Esc 关闭');
   assert.equal(popup.querySelector('.fi-skill-list').contains(keys), false);
   const style = f.document.getElementById('fi-codeagent-skills-style').textContent;
-  assert.match(style, /grid-template-columns:minmax\(130px,40%\) minmax\(0,1fr\)/); assert.match(style, /height:28px/); assert.match(style, /max-height:360px/);
+  assert.match(style, /grid-template-columns:minmax\(130px,40%\) minmax\(0,1fr\)/); assert.match(style, /height:32px/); assert.match(style, /max-height:380px/);
   f.controller.onKeyDown(event('keydown', { key: 'Enter' })); assert.equal(f.input.textContent, '/new ');
   f.input.textContent = '/<b>'; f.caret(4); f.input.dispatchEvent(event('input')); await new Promise(setImmediate);
   const skill = popup.querySelectorAll('.fi-skill-option').find(row => row.querySelector('.fi-skill-name').textContent === '/<b>-skill');
@@ -666,7 +666,7 @@ test('actual renderer key handler keeps IME, popup Enter/Esc, ordinary send and 
   assert.ok(match);
   let sends = 0, focuses = 0;
   const handle = vm.runInNewContext(`(e) => {${match[1]}\n}`, {
-    codeagentSkills: f.controller, sendInput: () => { sends += 1; }, inputHistory: null,
+    codeagentSkills: f.controller, slashPicker: null, sendInput: () => { sends += 1; }, inputHistory: null,
     isNativeAgent: () => false, sessions: new Map(), sessionId: 'test', terminal: { focus: () => { focuses += 1; } },
     focusAfterSend: () => { focuses += 1; },
     require: id => require(path.join(__dirname, '..', 'renderer', id)), localStorage: { getItem: () => null },

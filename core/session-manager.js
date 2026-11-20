@@ -117,11 +117,13 @@ function normalizeCodexEffort(value) {
   const normalized = String(value || '').trim().toLowerCase();
   return CODEX_EFFORT_LEVELS.has(normalized) ? normalized : CODEX_REASONING_EFFORT;
 }
-function buildCodexReasoningConfigArg(effort = CODEX_REASONING_EFFORT) {
+// permissionMode：启动中心为 Codex 选的权限模式（core/permission-modes.js codexPermissionArgs），缺省完全放开。
+function buildCodexReasoningConfigArg(effort = CODEX_REASONING_EFFORT, permissionMode = 'bypassPermissions') {
+  const permission = require('./permission-modes').codexPermissionArgs(permissionMode);
   return [
     ` -c 'model_reasoning_effort="${effort}"'`,
-    ` -c 'approval_policy="never"'`,
-    ` -c 'sandbox_mode="danger-full-access"'`,
+    ` -c 'approval_policy="${permission.approval}"'`,
+    ` -c 'sandbox_mode="${permission.sandbox}"'`,
     ` -c 'windows.sandbox="unelevated"'`,
     ` -c 'notice.hide_full_access_warning=true'`,
     // 以下两项以前写进用户全局 config.toml / version.json，现在只对本次启动生效（见 codex-user-config-guard.js）。
@@ -289,8 +291,10 @@ function shouldUseClaudeFastSettings(cv, opts = {}) {
   return process.env.CLAUDE_HUB_NO_FAST !== '1' && !isClaudeApiBackend(cv || getConfigValues());
 }
 
-// Claude CLI 的自动化档位。人类会话由用户逐条批准工具调用；autonomous 会话没有
-// 人在场，任何一次权限询问都会把 PTY 停在弹窗上直到超时，所以必须显式旁路。
+// Claude CLI 的权限档位。Hub 启动的会话缺省一律 bypassPermissions（免确认，与私人版体验一致）；
+// 用户可在启动中心为自己开的会话另选档位（core/permission-modes.js），选择落盘在 info.permissionMode，
+// 恢复、重启、原地重拉都带回。autonomous / 组队 / 群聊会话没有人在场，任何一次权限询问都会把 PTY
+// 停在弹窗上直到超时，所以它们不带 permissionMode、走这个缺省旁路。
 // 只接受白名单值，避免非法 IPC 字符串被拼进 PowerShell 命令行。
 const CLAUDE_PERMISSION_MODES = new Set(['bypassPermissions', 'acceptEdits', 'plan', 'default']);
 
@@ -353,7 +357,7 @@ function createNativeClaudeDriver(id, kind, opts, cwd, env, legacy) {
   const launchArgs = buildClaudeNativeArgs({ model: legacy ? normalizeLegacyDeepSeekClaudeModel(opts.model) : opts.model,
     effort: legacy || process.env.CLAUDE_HUB_NO_EFFORT_MAX === '1' ? null
       : require('./cli-capabilities').claudeEffort(opts.effort || 'max'),
-    permissionMode: opts.permissionMode || 'bypassPermissions',
+    permissionMode: (opts.autonomous === true ? null : require('./permission-modes').normalize('claude', opts.permissionMode)) || 'bypassPermissions',
     appendSystemPromptFile: opts.appendSystemPromptFile, systemPromptFile: opts.systemPromptFile,
     disableSlashCommands: opts.disableSlashCommands === true, noChrome: opts.claudeNoChrome === true, tools: opts.claudeTools, settingsFile,
     addDirs: claudeNativeAddDirs(opts.addDirs), settingSources: opts.settingSources,
@@ -429,7 +433,8 @@ function buildClaudePtyLaunch(id, kind, opts, cwd, env, cv) {
   const args = buildClaudeNativeArgs({ model: opts.model, omitModel: cv.COMPANY_CLI && !opts.model,
     effort: process.env.CLAUDE_HUB_NO_EFFORT_MAX === '1' ? null
       : require('./cli-capabilities').claudeEffort(CLAUDE_EFFORT_LEVELS.has(opts.effort) ? opts.effort : 'max'),
-    permissionMode: opts.permissionMode || 'bypassPermissions',
+    // 不认的值（如 Claude 不开放的 auto）落回缺省 bypass，不让建会话直接失败。
+    permissionMode: require('./permission-modes').normalize('claude', opts.permissionMode) || 'bypassPermissions',
     appendSystemPromptFile: opts.appendSystemPromptFile, systemPromptFile: opts.systemPromptFile,
     disableSlashCommands: opts.disableSlashCommands === true, noChrome: opts.claudeNoChrome === true, tools: opts.claudeTools, settingsFile,
     addDirs: claudeNativeAddDirs(opts.addDirs), settingSources: opts.settingSources,
@@ -624,7 +629,8 @@ function buildCodeAgentPtyLaunch(id, kind, opts, cwd, env, config, auth = null, 
     }
   }
   if (EFFORTS.includes(opts.effort)) args.push('--effort', opts.effort);
-  args.push('--permission-mode', CLAUDE_PERMISSION_MODES.has(opts.permissionMode) ? opts.permissionMode : 'bypassPermissions');
+  const permissionMode = require('./permission-modes').normalize('codeagent', opts.permissionMode) || 'bypassPermissions';
+  args.push('--permission-mode', permissionMode);
   if (opts.appendSystemPromptFile) args.push('--append-system-prompt-file', String(opts.appendSystemPromptFile));
   // ~/.cac.json、工作目录 .mcp.json、local 作用域里登记的，只读收集后写一份到 Hub 数据目录交给 --mcp-config，不改成员的配置文件。
   // 用户目录取会话环境（真实启动时由 process.env 来）；环境里没有用户目录（单测夹具）就不扫。
@@ -688,7 +694,19 @@ function buildCodeAgentPtyLaunch(id, kind, opts, cwd, env, config, auth = null, 
   if (resumeHistoryMissing) console.warn(`[codeagent] ${String(id || '').slice(0, 8)} resume requested for ${String(opts.resumeCCSessionId).slice(0, 8)} but no history found under ${config.configDir}; starting a new conversation`);
   return { cmd, sessionId, ...pin, requiresMenu: !!requestedModel && !(settingsFile && launchArgs.includes('--settings')),
     ...(resumeHistoryMissing ? { resumeHistoryMissing: true } : {}), model: requestedModel,
-    settingsModel: settingsFile && launchArgs.includes('--settings') ? settingsModel : '', ...(memberMcpLearn ? { memberMcpLearn } : {}) };
+    settingsModel: settingsFile && launchArgs.includes('--settings') ? settingsModel : '', ...(memberMcpLearn ? { memberMcpLearn } : {}),
+    // 老版本 CodeAgent 不认 --permission-mode 时参数被去掉，会话按 CodeAgent 自己的配置跑：用户选了非默认档要告诉他。
+    ...(permissionMode !== 'bypassPermissions' && droppedFlags.includes('--permission-mode') ? { permissionModeDropped: permissionMode } : {}) };
+}
+
+function codexNativePermission(kind, opts = {}) {
+  const mode = (opts.autonomous === true || opts.meetingId ? null : require('./permission-modes').normalize(kind, opts.permissionMode)) || 'bypassPermissions';
+  return require('./permission-modes').codexPermissionArgs(mode);
+}
+
+function codeAgentPermissionDroppedMessage(mode) {
+  const label = require('./permission-modes').MODES[mode]?.label || mode;
+  return `本机 CodeAgent 版本较旧，不认启动参数 --permission-mode，所选「${label}」没有生效，会话按 CodeAgent 自己的设置运行。可在会话里按 Shift+Tab 切换模式，或升级 CodeAgent。`;
 }
 
 // 只记录、写一行日志，不结束任何进程；这一会话里已经起的重复由膨胀回收兜底。失败只影响学习，不影响会话。
@@ -1451,8 +1469,10 @@ function buildNativeCodexOptions(info, opts, env) {
     'windows.sandbox':'unelevated', 'notice.hide_full_access_warning':true };
   if (info.contextMax) threadConfig.model_context_window = info.contextMax;
   if (opts.codexInstructionFile) threadConfig.model_instructions_file = opts.codexInstructionFile;
-  const approvalPolicy = opts.approvalPolicy || 'never';
-  const sandbox = opts.sandbox || 'danger-full-access';
+  // 显式的审批/沙箱（老会话落盘值、内部调用）优先；否则按启动中心为 Codex 选的权限模式（同 PTY 路径）。
+  const nativePermission = codexNativePermission(info && info.kind, opts);
+  const approvalPolicy = opts.approvalPolicy || nativePermission.approval;
+  const sandbox = opts.sandbox || nativePermission.sandbox;
   return {
     mcpProfile:profile,
     processArgs:Object.entries(config).flatMap(([key,value]) => ['-c',key+'='+require('./agent-user-context').codexTomlValue(value)]),
@@ -1596,6 +1616,8 @@ class SessionManager extends EventEmitter {
 
   createSession(kind = 'powershell', opts = {}) {
     require('./company-ai-policy').assertKind(kind);
+    // 群聊成员没有人盯着终端：权限模式只给用户自己开的会话，群聊（含从普通会话分支到群聊）一律走缺省旁路。
+    if (opts && opts.meetingId && opts.permissionMode) { opts = { ...opts }; delete opts.permissionMode; }
     const id = opts.id || uuid();
     if (opts._openLeaseNonce) {
       if (this.sessions.has(id) || this.openLeases?.get(id)?.nonce!==opts._openLeaseNonce) throw new Error('会话打开预约已失效');
@@ -2726,7 +2748,7 @@ class SessionManager extends EventEmitter {
       titleRevision: Number(opts.titleRevision) || 0,
       status: 'idle',
       ...(isNativeCodex ? {runtimeBackend:'codex-app-server',nativeRuntime:ptyProcess.runtime,
-        codexApprovalPolicy:opts.approvalPolicy || 'never',codexSandbox:opts.sandbox || 'danger-full-access'} : {}),
+        codexApprovalPolicy:opts.approvalPolicy || codexNativePermission(kind, opts).approval,codexSandbox:opts.sandbox || codexNativePermission(kind, opts).sandbox} : {}),
       ...(isAcp ? {runtimeBackend:'acp',nativeRuntime:ptyProcess.runtime,acpSid:opts.acpSid || null,
         cliRuntime:isProviderCli?{...ptyProcess.runtime,source:'provider-cli',observedAt:Date.now()}:null,
         acpProfileId:ptyProcess.options.profileId,acpCapabilities:{},acpConfigOptions:[]} : {}),
@@ -2817,6 +2839,9 @@ class SessionManager extends EventEmitter {
       // resume 能重建同一套旁路（权限、plugin 隔离、strict MCP、关 fast）；漏掉任何
       // 一项，重启后的 Agent 都会在下一次自动 prompt 时静默卡住。
       ...(opts.autonomous === true ? { autonomous: true } : {}),
+      // 启动中心选的权限模式（core/permission-modes.js）：落盘后恢复、重启、分支、原地重拉都沿用，不悄悄变回完全放开。
+      ...(opts.autonomous !== true && require('./permission-modes').normalize(kind, opts.permissionMode)
+        ? { permissionMode: opts.permissionMode } : {}),
       // 记录经过 runtime 白名单归一化的 effort，让 resume / fork / relaunch
       // 沿用同一档位。不要直接存 opts.effort：否则非法 IPC 值虽然首次启动会
       // 回落，却会污染元数据并在后续恢复时再次扩散。
@@ -3138,6 +3163,10 @@ class SessionManager extends EventEmitter {
       if (!opts.modelCreationContext) setTimeout(() => this.emit('session-notice', { sessionId: id, level: 'warning', persistent: true,
         message: require('./session-model-pin').modelChangeMessage(codeagentLaunch.modelChange) }), 0);
     }
+    if (codeagentLaunch && codeagentLaunch.permissionModeDropped) {
+      setTimeout(() => this.emit('session-notice', { sessionId: id, level: 'warning', persistent: true,
+        message: codeAgentPermissionDroppedMessage(codeagentLaunch.permissionModeDropped) }), 0);
+    }
     if (codeagentLaunch && codeagentLaunch.resumeHistoryMissing) {
       setTimeout(() => this.emit('session-notice', { sessionId: id, level: 'warning',
         message: '没有找到这个会话之前的对话记录（可能已被清理或配置目录换过），这次是一段新对话，AI 不记得之前聊过的内容。' }), 0);
@@ -3298,34 +3327,34 @@ class SessionManager extends EventEmitter {
       // Codex 的 model_reasoning_effort 是推理深度；fast 则由下面独立的
       // service_tier 控制，两者都不能和 Claude fastMode 混为一谈。
       // 非法值一律回落 max；群聊与普通 Session 一样尊重逐成员的 effort / service_tier。
-      const codexReasoningArg = buildCodexReasoningConfigArg(normalizeCodexEffort(opts.effort))
+      // 权限模式只认用户在启动中心为 Codex 选的（群聊成员在 createSession 入口已去掉）；DeepSeek 等走 Codex 运行时的照旧完全放开。
+      const codexPermissionMode = (opts.autonomous === true ? null : require('./permission-modes').normalize(kind, opts.permissionMode)) || 'bypassPermissions';
+      const codexBypassFlag = require('./permission-modes').codexPermissionArgs(codexPermissionMode).flag;
+      const codexReasoningArg = buildCodexReasoningConfigArg(normalizeCodexEffort(opts.effort), codexPermissionMode)
         + require('./codex-user-config-guard').codexStatusLineConfigArg(sessionEnv.CODEX_HOME || null)
         + buildCodexSpeedTierArg(effectiveCodexSpeedTier)
         + buildCodexContextWindowArg(effectiveContextMax);
       const codexInstructionFile = opts.codexInstructionFile || null;
       let cmd;
       if (opts.codexForkSid) {
-        cmd = ` codex fork ${opts.codexForkSid} --dangerously-bypass-approvals-and-sandbox${codexModelArg}${codexReasoningArg}`;
+        cmd = ` codex fork ${opts.codexForkSid}${codexBypassFlag}${codexModelArg}${codexReasoningArg}`;
       } else if (opts.useResume && opts.codexSid) {
         // Level 1: precise resume by sid
-        cmd = ` codex resume ${opts.codexSid} --dangerously-bypass-approvals-and-sandbox${codexModelArg}${codexReasoningArg}`;
+        cmd = ` codex resume ${opts.codexSid}${codexBypassFlag}${codexModelArg}${codexReasoningArg}`;
       } else if (kind.endsWith('-resume') || opts.codexResumePicker) {
         // Native id is unknown: show the picker.  Exact ids must win even when
         // the persisted public kind is "codex-resume" or "deepseek-resume".
-        cmd = ` codex resume --dangerously-bypass-approvals-and-sandbox${codexModelArg}${codexReasoningArg}`;
+        cmd = ` codex resume${codexBypassFlag}${codexModelArg}${codexReasoningArg}`;
       } else if (opts.useResume) {
         // Level 2 degradation: no sid recorded → use --last
-        cmd = ` codex resume --last --dangerously-bypass-approvals-and-sandbox${codexModelArg}${codexReasoningArg}`;
+        cmd = ` codex resume --last${codexBypassFlag}${codexModelArg}${codexReasoningArg}`;
       } else {
         // Research mode：完全 bypass approvals + sandbox（含 MCP 工具调用、shell 命令、文件写）
         // 避免任何 "Allow ... ?" 弹窗阻塞投研讨论流程；
         // 安全约束完全靠 prompt/covenant 软约束（已强化"不要改代码 / 不要 git / 不要删除"）
         // opts.model 让 meeting-create-modal 选定的非默认 model（如 gpt-5.4）生效。
-        if (opts.codexBypassApprovals) {
-          cmd = ` codex --dangerously-bypass-approvals-and-sandbox${codexModelArg}${codexReasoningArg}`;
-        } else {
-          cmd = ` codex --dangerously-bypass-approvals-and-sandbox${codexModelArg}${codexReasoningArg}`;
-        }
+        // 群聊等后台会话不带 permissionMode，codexBypassFlag 就是原来的旁路参数（opts.codexBypassApprovals 两个分支本来相同，已合并）。
+        cmd = ` codex${codexBypassFlag}${codexModelArg}${codexReasoningArg}`;
         // 注：曾尝试 --no-alt-screen 改善观感，实测无明显改善 + Enter 提交失效 → 撤回。
         // 渲染观感问题改由"持久化 AI 群聊面板"（直接展示干净回答预览）绕过。
       }
@@ -4518,6 +4547,7 @@ try {
         ...require('./session-model-pin').migrateModelPin(s.info),
         mcpProfile: s.info && s.info.mcpProfile, appendSystemPromptFile: relaunchRules ? relaunchRules.file : undefined,
         purpose: s.info && s.info.purpose,
+        ...(s.info && s.info.permissionMode ? { permissionMode: s.info.permissionMode } : {}),
         codeagentModelPick: false,
       }, s.info && s.info.cwd, s.pty.options?.env || process.env, config, null, pool);
       s.codeagentSettingsActive = !!launch.settingsModel;
@@ -4531,6 +4561,8 @@ try {
         Object.assign(s.info, require('./session-model-pin').modelPinFields(launch));
       }
       s.codeagentRelaunchNeedsMenu = launch.requiresMenu;
+      if (launch.permissionModeDropped) this.emit('session-notice', { sessionId, level: 'warning', persistent: true,
+        message: codeAgentPermissionDroppedMessage(launch.permissionModeDropped) });
       if (launch.memberMcpLearn) scheduleNativeMcpLearn(this, sessionId, Number(s.pty?.pid), launch.memberMcpLearn);
       Object.assign(s.info, { ccSessionId: undefined, transcriptPath: undefined, codeagentIdentityPending: true, codeagentModelPick: false });
       cmd = launch.cmd;
@@ -4541,12 +4573,14 @@ try {
       dismissCodexRateLimitDialog(undefined, codexConfigDir);
       // relaunch 要沿用会话自己选过的档位；群聊成员也不例外。
       const codexRelaunchModel = resolveCodexLaunchModel(apiLaunch?.values || getConfigValues(), modelId);
-      const codexReasoningArg = buildCodexReasoningConfigArg(normalizeCodexEffort(s.info && s.info.effort))
+      const codexRelaunchPermission = (s.info && s.info.autonomous === true ? null
+        : require('./permission-modes').normalize(s.info && s.info.kind, s.info && s.info.permissionMode)) || 'bypassPermissions';
+      const codexReasoningArg = buildCodexReasoningConfigArg(normalizeCodexEffort(s.info && s.info.effort), codexRelaunchPermission)
         + require('./codex-user-config-guard').codexStatusLineConfigArg(codexConfigDir)
         + buildCodexSpeedTierArg(resolveCodexSpeedTier(runtimeKind, s.info && s.info.codexSpeedTier))
         + buildCodexContextWindowArg(resolveCodexContextWindow(codexRelaunchModel, s.info && s.info.contextMax, { configDir: codexConfigDir }));
       ensureCodexMcpEntries(codexConfigDir, [], CODEX_MANAGED_MCP_NAMES);
-      cmd = ` codex --dangerously-bypass-approvals-and-sandbox${codexRelaunchModel ? ' --model ' + quotePowerShellLiteral(codexRelaunchModel) : ''}${codexReasoningArg}${this._sceneRelaunchFlags(s, 'codex')}`;
+      cmd = ` codex${require('./permission-modes').codexPermissionArgs(codexRelaunchPermission).flag}${codexRelaunchModel ? ' --model ' + quotePowerShellLiteral(codexRelaunchModel) : ''}${codexReasoningArg}${this._sceneRelaunchFlags(s, 'codex')}`;
       const relaunchMcpProfile = resolveCodexMcpProfile(runtimeKind, s.info && s.info.mcpProfile);
       const relaunchMcpEntries = relaunchMcpProfile === 'none' ? [] : s.codexMcpEntries;
       cmd += buildCodexEphemeralMcpArgs([...(relaunchMcpEntries || []), ...(s.codexPinnedMcpEntries || [])]);
@@ -4644,7 +4678,10 @@ try {
           hubDataDir: getHubDataDir(),
         });
       const mcpFlag = compatibleClaudeMcpArgs(mcpPlan);
-      const relaunchPermissionFlag = supportedClaudeFragment('--permission-mode', claudePermissionModeArg({ autonomous }));
+      // 与新建一致：用户选过的档位沿用，否则缺省 bypass（以前普通会话这里不带参数，会落到本机 Claude 自己的默认）。
+      const relaunchPermission = autonomous ? 'bypassPermissions'
+        : (require('./permission-modes').normalize('claude', s.info && s.info.permissionMode) || 'bypassPermissions');
+      const relaunchPermissionFlag = supportedClaudeFragment('--permission-mode', claudePermissionModeArg({ permissionMode: relaunchPermission }));
       // 原地重拉是一个全新的 Claude 进程，按当前规则重新写进系统提示。
       const relaunchRules = this.hubRulesSystemPrompt({}, s.info && s.info.purpose);
       if (s.info) s.info.hubRulesSystem = SessionManager.hubRulesRecord(relaunchRules);
@@ -4780,6 +4817,7 @@ try {
       ...(info.mcpProfile !== undefined ? { mcpProfile: info.mcpProfile } : {}),
       ...(info.fastMode !== undefined ? { fastMode: info.fastMode } : {}),
       ...(info.autonomous !== undefined ? { autonomous: info.autonomous } : {}),
+      ...(info.permissionMode ? { permissionMode: info.permissionMode } : {}),
       ...(info.effort !== undefined ? { effort: info.effort } : {}),
       ...(info.codexSpeedTier !== undefined ? { codexSpeedTier: info.codexSpeedTier } : {}),
       ...(info.geminiChatId !== undefined ? { geminiChatId: info.geminiChatId } : {}),
@@ -5182,6 +5220,7 @@ module.exports = {
     resolveCodexLaunchModel,
     shouldUseClaudeFastSettings,
     claudePermissionModeArg,
+    buildCodexReasoningConfigArg,
     buildClaudePtyLaunch,
     createNativeClaudeDriver,
     buildCodeAgentPtyLaunch,

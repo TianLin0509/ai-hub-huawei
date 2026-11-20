@@ -1302,6 +1302,50 @@
     document.querySelector(`#new-session-model-cards [data-model-card="${CSS.escape(id)}"]`)?.focus();
   }
 
+  // 权限模式（core/permission-modes.js）：按工具记住上次（renderer/launch-last-permission.js），本次打开里点选的优先。
+  const permissionModes = require('../core/permission-modes');
+  const lastPermission = require('./launch-last-permission');
+  let permissionPick = Object.create(null);
+  function currentPermissionMode(kind = selectedKind) {
+    if (!permissionModes.supportsSwitch(kind)) return permissionModes.DEFAULT_MODE;
+    return permissionModes.normalize(kind, permissionPick[kind]) || lastPermission.recall(localStorage, kind);
+  }
+  function paintPermission() {
+    const field = document.getElementById('new-session-permission-field');
+    const select = document.getElementById('new-session-permission');
+    const note = document.getElementById('new-session-permission-note');
+    const desc = document.getElementById('new-session-permission-desc');
+    const reset = document.getElementById('new-session-permission-reset');
+    if (!field || !select) return;
+    const show = selectedKind !== 'powershell';
+    field.hidden = !show;
+    if (note) note.hidden = !show;
+    if (!show) return;
+    const supported = permissionModes.supportsSwitch(selectedKind);
+    const options = supported ? permissionModes.optionsFor(selectedKind)
+      : [{ id: permissionModes.DEFAULT_MODE, label: `${permissionModes.MODES[permissionModes.DEFAULT_MODE].label}（${permissionModes.UNSUPPORTED_NOTE}）`, desc: '' }];
+    const signature = selectedKind + '|' + options.map(option => option.id).join(',');
+    if (select.dataset.builtFor !== signature) {
+      select.innerHTML = options.map(option => `<option value="${escapeHtml(option.id)}" title="${escapeHtml(option.desc)}">${escapeHtml(option.label)}</option>`).join('');
+      select.dataset.builtFor = signature;
+    }
+    const mode = currentPermissionMode();
+    select.value = mode;
+    select.disabled = !supported || submitting;
+    field.classList.toggle('is-unsupported', !supported);
+    if (desc) {
+      desc.textContent = !supported ? `这个工具${permissionModes.UNSUPPORTED_NOTE}权限模式，始终完全放开：${permissionModes.BYPASS_RISK}`
+        : mode === permissionModes.DEFAULT_MODE ? `完全放开：${permissionModes.BYPASS_RISK}`
+        : permissionModes.describe(selectedKind, mode) + (mode === 'default' || mode === 'acceptEdits' ? ' 需要确认时会话显示「等待输入」，点进终端选择即可。' : '');
+    }
+    if (note) note.dataset.risk = mode === permissionModes.DEFAULT_MODE ? '1' : '';
+    if (reset) {
+      const stored = supported && lastPermission.recall(localStorage, selectedKind) !== permissionModes.DEFAULT_MODE;
+      reset.hidden = !supported || (!stored && mode === permissionModes.DEFAULT_MODE);
+      reset.disabled = submitting;
+    }
+  }
+
   function paintTuning() {
     const accountField=document.getElementById('new-session-account-field');
     const accountSelect=document.getElementById('new-session-account');
@@ -1640,6 +1684,7 @@
     });
 
     paintTuning();
+    paintPermission();
     // 账号下拉一更新就同步左栏：后面的代码偶尔在启动早期出错时，左栏也不会停在旧状态（2026-11-01 实测 5 次 1 次）。
     paintLaunchLayout();
 
@@ -1816,6 +1861,7 @@
     accountNotice = '';
     tuningTouchedByUser = false;
     modelTouchedByUser = false;
+    permissionPick = Object.create(null);
     const details = document.getElementById('new-session-tuning-details');
     if (details) details.open = false;
     const { kindAllowed } = require('../core/distribution');
@@ -2081,6 +2127,7 @@
     if (selectedKind === 'codeagent' && modelTouchedByUser) Object.assign(opts, selectedCodeagentRoute);
     // 明确选了「跟随 CodeAgent」：主进程不套 Hub 默认模型；没点选时由主进程按 Hub 默认 / 账号默认定（和下拉显示同一口径）。
     if (selectedKind === 'codeagent' && !modelTouchedByUser && codeagentFollowCli) opts.codeagentFollowCli = true;
+    if (permissionModes.supportsSwitch(selectedKind)) opts.permissionMode = currentPermissionMode();
     if (selectedKind === 'codeagent' && codeagentPoolRequested()) {
       opts.codeagentAccount = 'pool';
       const pick = codeagentManualPick();
@@ -2143,6 +2190,7 @@
       const session = await createSession(selectedKind, { workspace, opts: tuningOpts() });
       require('./codeagent-preference').rememberKind(selectedKind);
       require('./launch-last-workspace').remember(localStorage, { mode: workspaceMode, workspace });
+      if (permissionModes.supportsSwitch(selectedKind)) lastPermission.remember(localStorage, selectedKind, currentPermissionMode());
       closeNewSessionModal();
       return session;
     } catch (error) {
@@ -2388,6 +2436,21 @@
       fastCheckbox.addEventListener('change', () => {
         tuningTouchedByUser = true;
         selectedFastMode = !!fastCheckbox.checked;
+        paint();
+      });
+    }
+    const permissionSelect = document.getElementById('new-session-permission');
+    if (permissionSelect) {
+      permissionSelect.addEventListener('change', () => {
+        permissionPick[selectedKind] = permissionModes.normalize(selectedKind, permissionSelect.value) || permissionModes.DEFAULT_MODE;
+        paint();
+      });
+    }
+    const permissionReset = document.getElementById('new-session-permission-reset');
+    if (permissionReset) {
+      permissionReset.addEventListener('click', () => {
+        lastPermission.forget(localStorage, selectedKind);
+        permissionPick[selectedKind] = permissionModes.DEFAULT_MODE;
         paint();
       });
     }

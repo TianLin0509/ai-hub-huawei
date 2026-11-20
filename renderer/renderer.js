@@ -4325,7 +4325,7 @@ function _updateStreamingIndicator(sessionId) {
 // remember=false 用于「按会话恢复视图」这种回放场景：那不是用户在表达偏好，
 // 不该反过来覆盖记忆。用户点切换按钮走默认的 remember=true。
 function applyViewMode(mode, { remember = true, skipPreviousCardCapture = false } = {}) {
-  if (mode !== 'card') for (const bar of document.querySelectorAll('.floating-input-bar')) bar._codeagentSkills?.close();
+  if (mode !== 'card') for (const bar of document.querySelectorAll('.floating-input-bar')) { bar._codeagentSkills?.close(); bar._slashPicker?.close(); }
   sessionSplit?.leaveBackstage();
   // A native Claude session has a read-only backstage like Codex: engine output
   // is delivered to its terminal, input still goes through the composer
@@ -5083,7 +5083,8 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   const inputBox = document.createElement('div');
   inputBox.className = 'floating-input-box';
   inputBox.contentEditable = 'true';
-  inputBox.setAttribute('data-placeholder', require('./composer-enter-key').placeholderFor(require('./composer-enter-key').readMode(localStorage)));
+  if (require('../core/composer-slash-family').slashFamily(sessions.get(sessionId)) || isCodeAgentKind(sessions.get(sessionId)?.kind)) inputBox.dataset.placeholderBase = '输入消息，/ 查看命令和技能…';
+  inputBox.setAttribute('data-placeholder', require('./composer-enter-key').placeholderFor(require('./composer-enter-key').readMode(localStorage), inputBox.dataset.placeholderBase || undefined));
   if (!floatingInputDrafts.has(sessionId)) {
     try {
       const draft = require('./composer-codeagent-skills').readSkillDraft(localStorage, sessionId, sessions.get(sessionId));
@@ -5377,6 +5378,13 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     openModel: () => modelUi.showModelPicker(modelChip, sessionId), storage: localStorage, notify: showToast,
   });
   bar._codeagentSkills = codeagentSkills;
+  // Claude Code、Codex、DSH、pi 的「/」命令与技能选择框（CodeAgent 用上面那套，这里返回 null）。
+  const slashPicker = require('./composer-slash-picker').mountSlashPicker({
+    document, window, input: inputBox, anchor: composer, sessionId, getSession: () => sessions.get(sessionId), ipcRenderer,
+    readText: () => readContenteditablePlainText(inputBox), replaceText: text => replaceContenteditableText(inputBox, text),
+    saveDraft: () => saveFloatingInputDraft(sessionId, inputBox), storage: localStorage,
+  });
+  bar._slashPicker = slashPicker;
   const claudeAccountChip = require('./composer-claude-account').mountClaudeAccountChip({
     document, tuningControls, sessionId, getSession: () => sessions.get(sessionId), ipcRenderer,
   });
@@ -5922,6 +5930,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     // ↑/↓ 同理：候选词翻页也用方向键，抢过来会让中文输入没法选词。
     if (e.isComposing || e.keyCode === 229) return;
     if (codeagentSkills?.onKeyDown(e)) return;
+    if (slashPicker?.onKeyDown(e)) return;
     const enterKey = require('./composer-enter-key'), enterMode = enterKey.readMode(localStorage);
     if (enterKey.isSendKey(e, enterMode)) {
       e.preventDefault();
@@ -6040,6 +6049,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       composerTools.dispose();
       composerScene.dispose();
       codeagentSkills?.dispose();
+      slashPicker?.dispose();
       claudeAccountChip.dispose();
       codexAccountChip.dispose();
       promptPolish.dispose();
@@ -6312,7 +6322,7 @@ ipcRenderer.on('session-persistence-error', (_event, error) => {
 async function selectSession(id, opts = {}) {
   // 点开了这个会话：桌宠小圆点里它的「已完成」就拿掉（2026-11-09）。
   try { ipcRenderer.send('hub-pet:session-seen', String(id || '')); } catch (_) {}
-  for (const bar of document.querySelectorAll('.floating-input-bar')) bar._codeagentSkills?.close();
+  for (const bar of document.querySelectorAll('.floating-input-bar')) { bar._codeagentSkills?.close(); bar._slashPicker?.close(); }
   window.hubWorkspaces?.close();
   if (!opts.splitBypass && sessionSplit?.routesSelection()) return sessionSplit.route(id, undefined, opts);
   sessionSplit?.usePrimary();
@@ -10269,6 +10279,7 @@ ipcRenderer.on('session-updated', (_e, { session }) => {
   if (claudeAccountChanged) schedulePersist();
 
   if (session.mcpProfile) local.mcpProfile = session.mcpProfile;
+  if (session.permissionMode) local.permissionMode = session.permissionMode;
   if (typeof session.fastMode === 'boolean') local.fastMode = session.fastMode;
   if (session.codexSpeedTier) local.codexSpeedTier = session.codexSpeedTier;
   if (session.kimiSid) local.kimiSid = session.kimiSid;
@@ -10480,6 +10491,7 @@ function persistWorkscene(flush = false) {
         codexAuthGeneration: s.codexAuthGeneration || 0,
         deepseekRoute: s.deepseekRoute || null,
         mcpProfile: s.mcpProfile || null,
+        permissionMode: s.permissionMode || null,
         fastMode: typeof s.fastMode === 'boolean' ? s.fastMode : null,
         codexSpeedTier: s.codexSpeedTier || null,
         geminiChatId: s.geminiChatId || null,
@@ -10687,7 +10699,7 @@ function createSecondarySessionView(sessionId, panel, options = {}) {
         return {
           resize,
           setMode(mode, visible) {
-            if (mode !== 'card' || !visible) host.querySelector('.floating-input-bar')?._codeagentSkills?.close();
+            if (mode !== 'card' || !visible) { host.querySelector('.floating-input-bar')?._codeagentSkills?.close(); host.querySelector('.floating-input-bar')?._slashPicker?.close(); }
             if (visible && mode === 'card' && viewMode !== 'card') void host.querySelector('.floating-input-bar')?._codeagentSkills?.refresh();
             viewMode = mode; shown = visible;
             cached._codexBackstage?.setVisible(visible && mode === 'pty');
@@ -10914,6 +10926,7 @@ sessionImmersive = require('./session-immersive').createSessionImmersiveControll
         codexAutoSwitch: meta.codexAutoSwitch === true,
         codexAuthGeneration: meta.codexAuthGeneration || 0,
         mcpProfile: meta.mcpProfile || null,
+        permissionMode: meta.permissionMode || null,
         fastMode: typeof meta.fastMode === 'boolean' ? meta.fastMode : null,
         codexSpeedTier: meta.codexSpeedTier || null,
         geminiChatId: meta.geminiChatId || null,

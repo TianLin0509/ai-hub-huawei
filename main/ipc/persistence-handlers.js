@@ -27,6 +27,7 @@ const RESUME_META_FIELDS = [
   'mcpProfile',
   'fastMode',
   'autonomous',
+  'permissionMode',
   'codexSpeedTier',
   'geminiChatId',
   'antigravityProfile',

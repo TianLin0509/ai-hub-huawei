@@ -80,7 +80,10 @@ function loadSkillDraft(storage, sessionId, text, session) {
 function clearSkillDraft(storage, sessionId) { storage.removeItem(DRAFT_KEY + sessionId); }
 
 function slashQuery(text, caret, { composing = false, hasSkill = false } = {}) {
-  if (composing || hasSkill || !text.startsWith('/') || !Number.isInteger(caret) || caret < 1) return null;
+  if (composing || hasSkill || !Number.isInteger(caret) || caret < 1) return null;
+  // 中文标点模式下按 / 打出的是「、」：整个输入框只有这一个字时也唤起（2026-11-20 定）。
+  if (text === '、') return '';
+  if (!text.startsWith('/')) return null;
   const end = text.search(/\s/);
   if (caret > (end < 0 ? text.length : end)) return null;
   return text.slice(1, end < 0 ? undefined : end).toLowerCase();
@@ -178,20 +181,23 @@ const CSS = `
 .fi-skill-chip[data-late] { border-color:var(--status-warning); }
 .fi-skill-remove { border:0; background:none; color:var(--fg-muted); cursor:pointer; padding:0 2px; }
 .fi-skill-remove::after { content:'×'; }
-.fi-skill-picker { position:fixed; z-index:10020; width:min(440px,calc(100vw - 24px)); max-height:360px; display:flex; flex-direction:column; border:1px solid var(--border-subtle); border-radius:10px; background:var(--surface-raised); color:var(--fg-default); box-shadow:0 8px 28px #0003; padding:8px; font-size:12px; }
+.fi-skill-picker { position:fixed; z-index:10020; width:min(520px,calc(100vw - 24px)); max-height:380px; display:flex; flex-direction:column; border:1px solid var(--border-mid); border-radius:12px; background:var(--surface-raised); color:var(--fg-default); box-shadow:0 14px 36px rgba(24,39,75,.13),0 2px 6px rgba(24,39,75,.06); padding:6px; font-size:12.5px; }
+:root[data-theme='dark'] .fi-skill-picker { box-shadow:0 16px 40px rgba(0,0,0,.5); }
 .fi-skill-picker[hidden] { display:none; }
 .fi-skill-search { width:100%; box-sizing:border-box; padding:7px; color:inherit; background:var(--surface-sunken); border:1px solid var(--border-subtle); border-radius:5px; flex-shrink:0; }
 .fi-skill-list { overflow-y:auto; min-height:30px; flex:1 1 auto; }
 .fi-skill-option,.fi-skill-add { width:100%; text-align:left; background:none; color:inherit; border:0; border-radius:5px; padding:8px; cursor:pointer; }
-.fi-skill-option { display:grid;grid-template-columns:minmax(130px,40%) minmax(0,1fr);gap:10px;align-items:center;height:28px;box-sizing:border-box;padding:4px 8px; }
-.fi-skill-name { min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
-.fi-skill-name mark { color:inherit;background:var(--surface-sunken);font-weight:700; }
-.fi-skill-option:hover,.fi-skill-option[aria-selected=true],.fi-skill-footer button[aria-selected=true] { background:var(--surface-sunken); }
+.fi-skill-option { position:relative;display:grid;grid-template-columns:minmax(130px,40%) minmax(0,1fr);gap:10px;align-items:center;height:32px;box-sizing:border-box;padding:4px 10px;border-radius:7px; }
+.fi-skill-name { min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-family:var(--font-mono,"Cascadia Mono",Consolas,monospace);font-size:13px;color:var(--fg-strong); }
+.fi-skill-name mark { color:var(--brand-text);background:none;font-weight:700; }
+.fi-skill-option:hover { background:var(--surface-hover); }
+.fi-skill-option[aria-selected=true],.fi-skill-footer button[aria-selected=true] { background:var(--brand-tint); }
+.fi-skill-option[aria-selected=true]::before { content:"";position:absolute;left:0;top:8px;bottom:8px;width:2px;border-radius:2px;background:var(--brand); }
 .fi-skill-option small { display:block; min-width:0;color:var(--fg-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
 .fi-skill-group,.fi-skill-note { padding:6px 8px; color:var(--fg-muted); }
 .fi-skill-note:empty { display:none; }
-.fi-skill-group { font-size:11px; }
-.fi-skill-keys { padding:6px 8px;color:var(--fg-muted);font-size:11px;flex-shrink:0; }
+.fi-skill-group { font-size:11.5px;color:var(--fg-faint); }
+.fi-skill-keys { padding:7px 8px 3px;margin-top:4px;border-top:1px solid var(--border-subtle);color:var(--fg-faint);font-size:11.5px;flex-shrink:0; }
 .fi-skill-keys[hidden] { display:none; }
 .fi-skill-footer { display:flex; border-top:1px solid var(--border-subtle); margin-top:5px; flex-shrink:0; }
 .fi-skill-footer[hidden] { display:none; }
@@ -220,7 +226,7 @@ function mountCodeAgentSkillPicker({ document, window, input, host, before, sess
   retry.addEventListener('mousedown', event => event.preventDefault());
   retry.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); void refresh({ force: true }); });
   const footer = document.createElement('div'); footer.className = 'fi-skill-footer';
-  const keys = document.createElement('div'); keys.className = 'fi-skill-keys'; keys.textContent = '↑↓ 选择 · Enter 确认 · Esc 关闭'; keys.hidden = true;
+  const keys = document.createElement('div'); keys.className = 'fi-skill-keys'; keys.textContent = '↑↓ 选择 · Enter/Tab 插入 · Esc 关闭'; keys.hidden = true;
   let add = null;
   add = document.createElement('button'); add.type = 'button'; add.className = 'fi-skill-add'; add.textContent = '添加技能';
   footer.append(add);
@@ -255,9 +261,9 @@ function mountCodeAgentSkillPicker({ document, window, input, host, before, sess
       const name = row.command.name.toLowerCase();
       if (name === 'skills') { replaceText(''); changed(); open('button'); return; }
       if (name === 'model') { close(); replaceText(''); changed(); openModel(); return; }
-      replaceText(readText().replace(/^\/\S*\s?/, '/' + row.command.name + ' ')); close(); changed(); input.focus(); return;
+      replaceText(readText().replace(/^(?:\/\S*|、)\s?/, '/' + row.command.name + ' ')); close(); changed(); input.focus(); return;
     }
-    if (mode === 'slash') replaceText(readText().replace(/^\/\S*\s?/, ''));
+    if (mode === 'slash') replaceText(readText().replace(/^(?:\/\S*|、)\s?/, ''));
     insertSkillTag(input, row.skill, { document, window, session: getSession(), onChange: changed });
     close(); changed();
   }
@@ -348,7 +354,7 @@ function mountCodeAgentSkillPicker({ document, window, input, host, before, sess
     else if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && mode === 'slash' && index === 0 && isSkillsMenuCommand(getSession(), readText())) { replaceText(''); changed(); open('button'); }
     else if (['ArrowDown', 'ArrowUp'].includes(event.key) && choices.length && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
       index = (index + (event.key === 'ArrowDown' ? 1 : choices.length - 1)) % choices.length; paint();
-    } else if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && choices.length) choose(choices[index]);
+    } else if ((event.key === 'Enter' || (event.key === 'Tab' && mode === 'slash')) && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && choices.length) choose(choices[index]);
     else return false;
     event.preventDefault(); return true;
   }

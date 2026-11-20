@@ -22,7 +22,7 @@ hook 由系统自带的 Windows PowerShell 执行：没有 `CLAUDE_HUB_SESSION_I
 
 ## 自动执行
 
-Hub 启动的 Claude 会话带 `--permission-mode bypassPermissions`，Codex 会话带 Codex 的免确认参数，AI 可以直接改动工作目录里的文件并运行命令。这只作用于 Hub 启动的会话。请只在愿意交给 AI 的目录里使用，不要把 hook 端口或调试端口暴露到公网。
+Hub 启动的会话默认免确认：Claude / CodeAgent 会话带 `--permission-mode bypassPermissions`，Codex 会话带 Codex 的免确认参数，AI 可以直接改动工作目录里的文件并运行命令。Claude Code、CodeAgent 与 Codex 可在启动中心改成需要确认的权限模式（Hub 按工具记住上次的选择，恢复和重启沿用）；组队、群聊等后台会话始终免确认。这只作用于 Hub 启动的会话。请只在愿意交给 AI 的目录里使用，不要把 hook 端口或调试端口暴露到公网。
 
 ## 发布前检查
 

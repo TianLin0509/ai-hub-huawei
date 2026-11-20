@@ -364,6 +364,8 @@ function createResumeSessionHandler(deps) {
       // autonomous 会话恢复后仍然没有人在终端前：权限旁路、plugin 隔离和 strict
       // MCP 必须一起带回来，缺一项下一次自动 Prompt 就会停在弹窗上等到超时。
       ...(meta.autonomous === true ? { autonomous: true } : {}),
+      // 启动中心选的权限模式：休眠恢复、重启、切号重启都带回，不悄悄变回完全放开（主进程按 kind 白名单再核一次）。
+      ...(meta.permissionMode && meta.autonomous !== true ? { permissionMode: meta.permissionMode } : {}),
       ...(meta.codexSpeedTier ? { codexSpeedTier: meta.codexSpeedTier } : {}),
       geminiChatId: isGemini ? (meta.geminiChatId || null) : null,
       ...(isGemini ? {antigravityProfile:meta.antigravityProfile || null,

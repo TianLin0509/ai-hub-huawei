@@ -48,7 +48,7 @@ function skillEntries(root, { entries, text, warning }) {
       if (!m) return '';
       return (/^[>|][+-]?$/.test(m[1]) ? m[2] || '' : m[1]).trim().replace(/^(['"])([\s\S]*)\1$/, '$2').replace(/\s+/g, ' ');
     };
-    out.push({ name: field('name') || entry.name, description: field('description'), argumentHint: field('argument-hint'),
+    out.push({ name: field('name') || entry.name, description: field('description'), argumentHint: field('argument-hint'), userInvocable: field('user-invocable'),
       dir, file, origin: field('origin'), hash: createHash('sha256').update(s.replace(/\r\n/g, '\n')).digest('hex') });
   }
   return out;
@@ -293,4 +293,4 @@ if (!isMainThread) {
   try { parentPort.postMessage({ok:true,data:collectCapabilities(workerData)}); }
   catch(error) { parentPort.postMessage({ok:false,error:error.message}); }
 }
-module.exports = { collectCapabilities, tomlFlags, scanCodeAgentSkills };
+module.exports = { collectCapabilities, tomlFlags, scanCodeAgentSkills, skillEntries };

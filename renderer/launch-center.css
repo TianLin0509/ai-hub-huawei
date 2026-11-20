@@ -475,3 +475,13 @@
 #new-session-pi-note:not([hidden]) { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 0 0; padding: 8px 12px; font-size: 12px; line-height: 1.6; }
 #new-session-pi-note[data-state='error'] { color: #c2410c; }
 #new-session-pi-note #new-session-pi-install { flex: none; }
+/* 启动中心「权限模式」（core/permission-modes.js）：占满一行放下 4–5 档分段按钮；说明一行，选完全放开时带风险提示。 */
+/* 权限模式在任何工具、任何布局下都独占整行（Codex 是 6 列网格，2026-11-20 负责人返工），说明紧接在下一行。 */
+.session-config-section .session-tuning-grid[data-kind] > :is(.session-permission-field,.session-permission-note) { grid-column: 1 / -1; }
+.session-permission-field.is-unsupported select { color: var(--fg-muted); }
+.session-config-section .session-permission-note { display: flex; align-items: center; gap: 10px; margin: -6px 0 0; line-height: 1.5; }
+.session-config-section .session-permission-note[hidden] { display: none; }
+.session-permission-note > span { flex: 1; min-width: 0; }
+.session-permission-note[data-risk='1'] > span { color: var(--fg-muted); }
+.session-permission-note .tuning-default-btn { flex-shrink: 0; min-height: 26px; padding: 3px 10px; border: 1px solid var(--border-mid); border-radius: 6px; background: var(--surface-card); color: var(--fg-strong); font-family: inherit; font-size: 11px; cursor: pointer; }
+.session-permission-note .tuning-default-btn[hidden] { display: none; }

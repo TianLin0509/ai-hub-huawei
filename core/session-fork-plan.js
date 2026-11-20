@@ -85,6 +85,9 @@ function planSessionFork({ source, siblingPool = [], meeting = null, rendererTit
   // 同理：MCP 档位和 fast 开关也要跟着分支走，否则从 Lean/关 fast 的会话
   // 拉出来的分支会被悄悄拉回 Full / 开 fast。
   if (source.mcpProfile) opts.mcpProfile = source.mcpProfile;
+  // 分支（含 CodeAgent 截断分支）沿用源会话的权限模式，不悄悄变回完全放开。
+  // 分支到群聊的成员没人盯终端，不带（createSession 对群聊成员也会再去掉一次）。
+  if (source.permissionMode && source.autonomous !== true && !meeting) opts.permissionMode = source.permissionMode;
   if (source.fastMode === false) opts.fastMode = false;
   if (source.codexSpeedTier) opts.codexSpeedTier = source.codexSpeedTier;
   if (typeof source.contextMax === 'number') opts.contextMax = source.contextMax;

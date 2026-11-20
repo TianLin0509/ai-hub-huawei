@@ -128,6 +128,8 @@ function _buildSessionPayload(hubId, data) {
     // Agent 联赛这类无人值守会话。Hub 重启后必须知道它仍是 autonomous，否则
     // resume 出来的 Agent 会丢掉权限旁路与 strict MCP，下一次自动 Prompt 静默卡住。
     autonomous: data.autonomous === true ? true : null,
+    // 启动中心选的权限模式（core/permission-modes.js）：漏了它，从会话文件恢复时会悄悄变回完全放开。
+    permissionMode: typeof data.permissionMode === 'string' ? data.permissionMode : null,
     // Codex service_tier 档：'inherit' 等于没选，不落盘（null）。
     // inherit is an explicit choice. Dropping it would make a resumed Codex
     // session fall back to Hub's Standard default and silently change speed.

@@ -110,6 +110,7 @@ function collapseDormantNativeDuplicates(sessionMap) {
         'claudeConfigDir',
         'codexProfileLabel',
         'mcpProfile',
+        'permissionMode',
         'codexSpeedTier',
       ]) {
         if (keep[field] == null && duplicate[field] != null) keep[field] = duplicate[field];

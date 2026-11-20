@@ -626,6 +626,25 @@ function registerSessionIpc(ipcMain, deps) {
       return { ok: true, ...inventory, commands: require('../../core/codeagent-command-cache').readCommands(dataDir, session), commandsProbe: commandsProbeScheduler.state(session) };
     } catch (error) { return { ok: false, error: '读取技能失败：' + error.message, skills: [] }; }
   });
+  const slashCatalogCache = new Map();
+  // 输入框「/」选择框（2026-11-20）：Claude Code、Codex、DSH、pi 的命令与技能清单；CodeAgent 仍走 codeagent:skills。
+  ipcMain.handle('composer:slash-catalog', async (_event, payload = {}) => {
+    try {
+      const session = sessionManager.getSession(payload.sessionId);
+      if (!session) return { ok: false, reason: 'no-session' };
+      const acpCommands = sessionManager.sessions?.get?.(payload.sessionId)?.pty?.commands || null;
+      // 同一会话 15 秒内重复打开直接用上次的清单（读目录约 20 ms，打开一次读一次没必要）；新装的技能最多晚 15 秒出现。
+      const hit = slashCatalogCache.get(payload.sessionId);
+      if (hit && Date.now() - hit.at < 15000 && hit.acpCommands === acpCommands) return hit.result;
+      const result = await new Promise((resolve, reject) => setImmediate(() => {
+        try { resolve(require('../../core/composer-slash-catalog').catalogFor(session, { dataDir: require('../../core/data-dir').getHubDataDir(), acpCommands })); }
+        catch (error) { reject(error); }
+      }));
+      if (result.ok) slashCatalogCache.set(payload.sessionId, { at: Date.now(), acpCommands, result });
+      if (slashCatalogCache.size > 50) slashCatalogCache.delete(slashCatalogCache.keys().next().value);
+      return result;
+    } catch (error) { return { ok: false, error: '读取命令与技能失败：' + error.message }; }
+  });
   const skillInstaller = require('../../core/codeagent-skill-install').createSkillInstaller({
     getSession: id => sessionManager.getSession(id), dataDir: require('../../core/data-dir').getHubDataDir(),
     openExternal: url => require('electron').shell.openExternal(url),
@@ -1791,6 +1810,7 @@ function registerSessionIpc(ipcMain, deps) {
       ...(old.codexProfile ? { codexProfile: old.codexProfile } : {}),
       ...(old.claudeProfile ? {claudeProfile:old.claudeProfile,claudeConfigDir:old.claudeConfigDir} : {}),
       ...(old.mcpProfile ? { mcpProfile: old.mcpProfile } : {}),
+      ...(old.permissionMode ? { permissionMode: old.permissionMode } : {}),
       ...(old.fastMode === false ? { fastMode: false } : {}),
       ...(old.codexSpeedTier ? { codexSpeedTier: old.codexSpeedTier } : {}),
       ...(typeof old.contextMax === 'number' ? { contextMax: old.contextMax } : {}),

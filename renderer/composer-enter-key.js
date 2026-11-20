@@ -29,7 +29,7 @@ function bindSetting({ document: doc, storage }) {
   select.value = readMode(storage);
   select.addEventListener('change', () => {
     const mode = writeMode(storage, select.value);
-    doc.querySelectorAll('.floating-input-box, #mr-input-box').forEach(box => box.setAttribute('data-placeholder', placeholderFor(mode)));
+    doc.querySelectorAll('.floating-input-box, #mr-input-box').forEach(box => box.setAttribute('data-placeholder', placeholderFor(mode, box.dataset.placeholderBase || undefined)));
   });
 }
 module.exports = { STORAGE_KEY, readMode, writeMode, isSendKey, isNewlineKey, placeholderFor, bindSetting };
