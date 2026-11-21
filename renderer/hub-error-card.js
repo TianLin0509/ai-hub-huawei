@@ -454,6 +454,16 @@ async function runKnownAction(act, button, { doc, win, ipcRenderer, closeOverlay
       setTimeout(() => button.closest?.('#hub-err-toast')?.remove(), 1500);
       return done(sent.unconfirmed ? '已重发，送达待确认' : '已重启并重发', 5000);
     }
+    // 去后台（2026-11-21）：终端输入框里留着字、消息发不出去时，切到报错所属会话的后台终端（renderer.js __hubOpenBackstage）。
+    if (act === 'known:open-backstage') {
+      const sessionId = errorSessionId(button);
+      if (!sessionId) return done('认不出是哪个会话，请点顶栏右侧的「后台」', 5000);
+      closeOverlays();
+      const r = typeof win?.__hubOpenBackstage === 'function' ? await win.__hubOpenBackstage(sessionId) : null;
+      if (!r || r.ok === false) return done('没切过去，请点顶栏右侧的「后台」', 5000);
+      setTimeout(() => button.closest?.('#hub-err-toast')?.remove(), 600);
+      return done(label, 0);
+    }
     if (act === 'known:open-accounts') { closeOverlays(); doc.getElementById('btn-rail-accounts')?.click(); return done(label, 0); }
     if (act === 'known:welink-login') {
       closeOverlays();

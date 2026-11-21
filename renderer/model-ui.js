@@ -351,6 +351,7 @@ function createModelUiController({
       empty.className = 'model-picker-empty';
       empty.textContent = /^codeagent(?:-resume)?$/.test(kind) ? '沿用 CLI 当前模型' : '该会话类型没有可用模型目录';
       menu.appendChild(empty);
+      appendBackstageModelHint(menu, session);
       return;
     }
     if (automaticCodeAgent) {
@@ -454,6 +455,16 @@ function createModelUiController({
       }
       menu.appendChild(item);
     });
+    appendBackstageModelHint(menu, session);
+  }
+
+  // 下拉底部一行（2026-11-21，同事多次问「选不到想要的模型」）：这里列的是 Hub 认得的目录，
+  // CLI 自己的 /model 面板里可能还有更多，指一下路。只给终端里能用 /model 的会话显示。
+  function appendBackstageModelHint(menu, session) {
+    const text = backstageModelHint(session);
+    if (!text) return;
+    const note = menuNote(menu, text);
+    note.classList.add('model-picker-backstage-hint');
   }
 
   async function showModelPicker(badgeEl, sessionId) {
@@ -1094,7 +1105,22 @@ function createModelUiController({
   };
 }
 
+// 哪些会话在下拉底部提示「更多模型在后台用 /model 切」：终端（PTY）里跑的 Claude Code、Codex、CodeAgent。
+// 原生接入（Claude 流式、Codex app-server、DSH/pi 的 ACP）没有 /model 终端面板，Hub 自动建的 CodeAgent 会话不让换模型，都不显示。
+const BACKSTAGE_MODEL_KINDS = new Set(['claude', 'deepseek-claude', 'deepseek-legacy', 'codex', 'codeagent']);
+const NATIVE_BACKENDS = new Set(['claude-stream-json', 'codex-app-server', 'acp']);
+function backstageModelHint(session) {
+  if (!session) return '';
+  const kind = String(session.kind || '').replace(/-resume$/, '');
+  if (!BACKSTAGE_MODEL_KINDS.has(kind)) return '';
+  if (session.agentRuntime && session.agentRuntime !== 'pty') return '';
+  if (NATIVE_BACKENDS.has(String(session.runtimeBackend || ''))) return '';
+  if (session._codeagentAutomatic && !session.modelConfirmationRequired && !session._codeagentModelRecovery) return '';
+  return '更多模型：点顶栏「后台」，在终端里输入 /model 切换';
+}
+
 module.exports = {
+  backstageModelHint,
   compatibleEffort,
   createModelUiController,
   modelClass,

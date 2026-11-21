@@ -34,13 +34,14 @@ function showStopToast(document, message) {
   return toast;
 }
 
-function createCodeAgentInputRecovery({ invoke, notify, isRunning }) {
+// sessionId：「终端输入框未能清空」按报错提示显示，旁边的「去后台」要知道切到哪个会话（2026-11-21）。
+function createCodeAgentInputRecovery({ invoke, notify, isRunning, sessionId = '' }) {
   return {
     async stop(diagnostic = {}) {
       if (!isRunning()) { notify('回答已结束', 'info'); return; }
       const result = await invoke('codeagent:input-stop', { ...diagnostic, rendererState: 'running' });
       if (!result?.ok) { notify(result?.message || '停止失败，请到终端确认', 'warning'); return; }
-      if (result.cleared === false) { notify('终端输入框未能清空，请到终端确认后再发送', 'warning'); return result; }
+      if (result.cleared === false) { notify('终端输入框未能清空，请到终端确认后再发送', 'error', sessionId ? { sessionId } : {}); return result; }
       if (result.notSent) return; // The send result restores this unsent draft exactly once.
       notify('已停止', 'info');
       return result;

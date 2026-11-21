@@ -55,3 +55,5 @@
 /* 自有接口「测试连接」后的就地提示（2026-11-20） */
 .company-api-dialog .company-api-own-hint{margin:6px 0 0;padding:8px 10px;border-radius:6px;background:var(--hw-bg-subtle,#f3f6fb);font-size:var(--hw-fs-12,12px);line-height:1.6}
 .company-api-dialog .company-api-own-hint p{margin:0 0 6px}
+/* 「自有 API」内容比一屏高时（1440×900 实测 899 > 852），底部「保存配置」被挤到下面要滚动才看见：底栏贴底常驻（2026-11-21） */
+#company-api-dialog footer{position:sticky;bottom:0;z-index:1;margin-bottom:calc(-1 * var(--hw-sp-6,24px));padding:var(--hw-sp-3,12px) 0 var(--hw-sp-6,24px);background:var(--hw-surface,#fff)}

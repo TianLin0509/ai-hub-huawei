@@ -5,7 +5,10 @@ function connectionState(data = {}) {
   if (!data.cliFound) {
     const search = data.cliSearch || {}, install = data.cliInstall || {};
     if (['checking', 'downloading', 'verifying'].includes(install.phase)) return { kind: 'searching', title: '正在安装 WeLink 连接工具', detail: install.message || '正在安装，完成后会继续登录。', action: '', label: '' };
-    if (search.state === 'searching') return { kind: 'searching', title: '正在查找 WeLink 连接工具', detail: '后台正在查找 welink-cli，找到后会继续检查连接。', action: '', label: '' };
+    // 全盘查找可能要一两分钟（实测约 2 分钟）；能一键安装时不把按钮藏起来：安装会先等这次查找，找到已装的就直接用。
+    if (search.state === 'searching') return data.cliInstallAvailable
+      ? { kind: 'searching', title: '正在查找 WeLink 连接工具', detail: '后台正在各个硬盘里找已经装好的 welink-cli，可能要一两分钟。不想等可以直接点一键安装：找到已装的就直接用，没有再装。', action: 'install-cli', label: '一键安装' }
+      : { kind: 'searching', title: '正在查找 WeLink 连接工具', detail: '后台正在查找 welink-cli，找到后会继续检查连接。', action: '', label: '' };
     if (data.cliInstallAvailable && search.state !== 'searching') {
       const failed = install.phase === 'error';
       return { kind: 'missing', title: failed ? 'WeLink 工具安装没成功' : '先接入 WeLink', detail: failed ? `${install.error} 可以重试，或手动选择已经安装的工具。` : '这台电脑还没有 welink-cli，它负责读取当前账号可见的消息、会议和邮件。点一键安装即可，不需要 Node，也不需要管理员权限。', action: 'install-cli', label: failed ? '重试安装' : '一键安装', alt: 'find-cli', altLabel: '已安装，重新检测' };

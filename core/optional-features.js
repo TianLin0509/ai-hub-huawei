@@ -29,17 +29,21 @@ function createOptionalFeatures({ dataDir, logger = console, defaults = {} } = {
   // 用户亲手关掉（或在「还没开启」页点了「不用，收起入口」）的功能，左侧导航不再显示它（2026-11-18 用户反馈）。
   // 只认用户自己的这一下：默认关着、从没碰过的功能照旧显示入口，点进去是说明页，新用户不会因为默认关着就找不到。
   let hidden = new Set();
+  // 首次点关闭时问过「退出 / 最小化到托盘」没有（2026-11-21 同事反馈关窗直接退出、找不到托盘设置）：问过一次就记住，不再问。
+  // 用户在「可选功能」里亲手开关过托盘，也算已经选过。
+  let closeAsked = false;
   try {
     const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
     for (const k of Object.keys(value)) if (typeof raw?.[k] === 'boolean') value[k] = raw[k];
     if (Array.isArray(raw?.navHidden)) hidden = new Set(raw.navHidden.filter(k => k in value));
+    closeAsked = raw?.closeAsked === true;
   } catch (error) { if (error.code !== 'ENOENT') logger.warn?.('[optional-features] unreadable, all off:', error.message); }
 
   function save() {
     try {
       fs.mkdirSync(dataDir, { recursive: true });
       const tmp = file + '.' + process.pid + '.tmp';
-      fs.writeFileSync(tmp, JSON.stringify({ ...value, navHidden: [...hidden] }, null, 1) + '\n', 'utf8');
+      fs.writeFileSync(tmp, JSON.stringify({ ...value, navHidden: [...hidden], closeAsked }, null, 1) + '\n', 'utf8');
       fs.renameSync(tmp, file);
     } catch (error) { logger.warn?.('[optional-features] save failed:', error.message); }
   }
@@ -52,8 +56,18 @@ function createOptionalFeatures({ dataDir, logger = console, defaults = {} } = {
       if (!(id in value)) throw new Error('未知的可选功能：' + id);
       value = { ...value, [id]: !!on };
       if (on) hidden.delete(id); else hidden.add(id);
+      if (id === 'tray') closeAsked = true;
       save();
       return value[id];
+    },
+    // 还没问过、托盘也没开：第一次点关闭时就地问一句。
+    closePromptPending: () => !closeAsked && value.tray !== true,
+    // 记住关窗的选择：tray=true 打开「关窗口时最小化到托盘」，false 保持直接退出。
+    rememberCloseChoice(tray) {
+      closeAsked = true;
+      value = { ...value, tray: !!tray };
+      save();
+      return value.tray;
     },
   };
 }

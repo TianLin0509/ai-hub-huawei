@@ -391,7 +391,9 @@
     if (proxy?.shared) return '<p class="company-api-note">账号登录、区域和号池调度由共享主机管理，同事端无需设置。</p>';
     const chosen = proxy?.chosenZone?.zone || '';
     const unknown = proxy?.code === 'ZONE_UNKNOWN';
-    const text = proxy?.mock ? '模拟上游（测试用）不按区域路由。' : proxy?.zone?.text || (unknown ? '还没识别出你所在的区域（蓝区 / 绿区 / 黄区），请在下面选择。选错了，公司模型的请求会全部失败。'
+    // 本机没有 CodeAgent 时区域永远读不出来，别一直显示「正在识别…」。
+    const noCodeAgent = Array.isArray(proxy?.missing) && proxy.missing.includes('codeagentVersion');
+    const text = proxy?.mock ? '模拟上游（测试用）不按区域路由。' : proxy?.zone?.text || (noCodeAgent ? '这台电脑上没找到 CodeAgent，没法自动识别区域。装好 CodeAgent 并登录后会自动识别；也可以先在上面直接选。没有 CodeAgent 账号时，改用「API 网关」或「自有接口」。' : unknown ? '还没识别出你所在的区域（蓝区 / 绿区 / 黄区），请在下面选择。选错了，公司模型的请求会全部失败。'
       : proxy?.state === 'running' || proxy?.state === 'not-ready' ? '正在识别…' : '反代启动后显示识别结果。');
     const options = [['', '自动识别（读 CodeAgent 的配置）'], ...Object.entries(ZONE_NAMES)];
     return `<div class="company-proxy-zone${unknown ? ' company-proxy-warn' : ''}" data-zone-state="${unknown ? 'unknown' : proxy?.zone?.zone ? 'known' : 'pending'}">`

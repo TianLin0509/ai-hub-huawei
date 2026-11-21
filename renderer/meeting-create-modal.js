@@ -667,7 +667,7 @@ function _showError(text) {
     const footer = _modalEl.querySelector('.mcm-footer');
     if (footer) footer.before(bar);
   }
-  bar.textContent = `创建失败：${text}`;
+  bar.textContent = `创建失败：${require('./ipc-error-text').cleanIpcError(text)}`;
 }
 
 function _clearError() {

@@ -65,6 +65,7 @@
    "core/env-check.js",
    "main/tray-controller.js",
    "renderer/app-update.js",
+   "renderer/app-update-menu-status.js",
    "renderer/backend-update-notice.js",
    "renderer/codeagent-version-notice.js",
    "renderer/env-check.js",

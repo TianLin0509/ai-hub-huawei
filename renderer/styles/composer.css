@@ -294,6 +294,15 @@
 .composer-chip-icon { width: 26px; padding: 0; justify-content: center; }
 .composer-chip-caret { opacity: .6; }
 
+/* 输入框下方的 Agent 标识（renderer.js composerAgentTag）：宽窗口顶栏已有，只在顶栏面包屑被挤没的窄窗口显示。 */
+.composer-agent-tag { display: none; }
+@media (max-width: 1240px) {
+  .composer-agent-tag:not([hidden]) {
+    display: inline-flex; align-items: center; flex: none; height: 20px; padding: 0 5px; border: 1px solid var(--border-subtle); border-radius: 4px;
+    font-size: 11px; white-space: nowrap; color: var(--fg-muted);
+  }
+}
+
 .composer-model {
   color: var(--fg-default);
   background: rgba(var(--rgb-neutral), .08);

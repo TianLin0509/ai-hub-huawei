@@ -2922,6 +2922,23 @@ try {
     focusWindow: () => focusPrimaryWindow(),
     quit: () => app.quit(),
     isEnabled: () => optionalFeatures.get('tray') && !keepIsolatedE2EWindowHidden(),
+    // 首次点关闭时问「最小化到托盘 / 退出」（2026-11-21）。隔离测试实例默认不问（关窗口要直接走退出），
+    // 专测这个选择框时设 CLAUDE_HUB_CLOSE_PROMPT=1。
+    closeChoice: {
+      pending: () => optionalFeatures.closePromptPending()
+        && (process.env.CLAUDE_HUB_CLOSE_PROMPT === '1' || (!process.env.CLAUDE_HUB_E2E_WINDOW_MODE && process.env.CLAUDE_HUB_E2E !== '1')),
+      ask: win => {
+        const tc = require('./main/tray-controller');
+        // 隔离测试实例不弹原生框：按 CLAUDE_HUB_CLOSE_PROMPT_ANSWER（逗号分隔，依次用）作答。
+        if (process.env.CLAUDE_HUB_E2E_WINDOW_MODE && process.env.CLAUDE_HUB_CLOSE_PROMPT_ANSWER) {
+          const answers = process.env.CLAUDE_HUB_CLOSE_PROMPT_ANSWER.split(',');
+          process.env.CLAUDE_HUB_CLOSE_PROMPT_ANSWER = answers.slice(1).join(',');
+          return ['tray', 'quit', 'cancel'].includes(answers[0]) ? answers[0] : 'cancel';
+        }
+        return tc.closeChoiceFromButton(dialog.showMessageBoxSync(win, tc.closeChoiceDialogOptions()));
+      },
+      remember: tray => optionalFeatures.rememberCloseChoice(tray),
+    },
     title: 'AI Hub',
   });
 } catch (error) { console.warn('[tray] setup failed:', error && error.message); }

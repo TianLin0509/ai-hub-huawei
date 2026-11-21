@@ -219,5 +219,7 @@
   "没存上：{0}。开关已恢复成原来的样子，请再点一次；还不行就点「设置 → 一键反馈」告诉维护人。": "Not saved: {0}. The switch is back to its previous state; please try again. If it still fails, use Settings → Feedback to tell the maintainer.",
   "没存上：Hub 没有收到保存结果。开关已恢复成原来的样子，请再点一次；还不行就重启 Hub 再试。": "Not saved: Hub got no save result. The switch is back to its previous state; please try again, or restart Hub and retry.",
   "写设置文件失败": "failed to write the settings file",
-  "这次改动已生效，但没存进设置文件：{0}。重启 Hub 后会恢复原样；腾出磁盘空间或解除只读后再改一次即可保存。": "This change is in effect but was not saved to the settings file: {0}. It will revert after Hub restarts; free up disk space or remove the read-only state, then change it again to save."
+  "这次改动已生效，但没存进设置文件：{0}。重启 Hub 后会恢复原样；腾出磁盘空间或解除只读后再改一次即可保存。": "This change is in effect but was not saved to the settings file: {0}. It will revert after Hub restarts; free up disk space or remove the read-only state, then change it again to save.",
+  "后台正在各个硬盘里找已经装好的 welink-cli，可能要一两分钟。不想等可以直接点一键安装：找到已装的就直接用，没有再装。": "Searching your drives for an installed welink-cli; this can take a minute or two. To skip the wait, click One-click install: an existing install is used if found, otherwise it is installed.",
+  "这台电脑上没找到 CodeAgent，没法自动识别区域。装好 CodeAgent 并登录后会自动识别；也可以先在上面直接选。没有 CodeAgent 账号时，改用「API 网关」或「自有接口」。": "CodeAgent was not found on this computer, so the zone cannot be detected automatically. It is detected once CodeAgent is installed and signed in; you can also pick it above now. Without a CodeAgent account, use \"API gateway\" or \"Own endpoint\" instead."
 }

@@ -16,6 +16,14 @@ function cliMissingId(m) {
 function cliMissingName(m) { return m[1] || CLI_NAMES[cliMissingId(m)] || 'CLI'; }
 
 const KNOWN_ISSUES = [
+  // 终端输入框里还留着没发出去的字（renderer/renderer.js、renderer/composer-codeagent-input.js「终端输入框未能清空，请到终端确认后再发送」；
+  // core/group-chat-watcher.js「终端输入行已有内容或尚未确认空白，请先在终端处理」）。同事反馈不知道「终端」在哪（2026-11-19）：
+  // 按钮直接切到这个会话的后台终端。
+  { id: 'terminal-input-residual',
+    test: /终端输入框未能清空|终端输入行已有内容|终端消息未清空/,
+    title: '终端里还有没发出去的字',
+    fix: '点「去后台」切到这个会话的后台终端，看一眼输入行：没用的字按退格删掉，或按回车把它发出去；处理完回到卡片再发送。',
+    action: { label: '去后台', act: 'known:open-backstage' } },
   // DSH 没配套装好（2026-11-17 起分情况讲，core/dsh-cli-profile.js describeRuntimeIssue）：只装了桌面版的单独讲清「桌面版不是终端版」。
   // 一键修复默认装 Hub 自管的运行环境、不改全局 npm；「装到我的全局 npm」才按界面包要求配套装进用户自己的目录。
   { id: 'dsh-package-mismatch',

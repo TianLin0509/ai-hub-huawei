@@ -77,8 +77,11 @@
   .au-btn:disabled { opacity: .5; cursor: default; }
   #btn-options.update-has-unread .rail-utility-label { position: relative; }
   #btn-options.update-has-unread .rail-utility-label:after { content: ''; position: absolute; top: -1px; right: -8px; width: 6px; height: 6px; background: #ff755c; border-radius: 50%; }
-  #options-check-update.update-has-unread:after { content: ''; display: inline-block; width: 6px; height: 6px; background: #ff755c; border-radius: 50%; margin: 0 0 7px 6px; }
+  #options-check-update.update-has-unread .au-menu-label:after { content: ''; display: inline-block; width: 6px; height: 6px; background: #ff755c; border-radius: 50%; margin: 0 0 7px 6px; }
   #options-check-update.update-has-unread { font-weight: 600; }
+  #options-check-update .au-menu-status { display: block; margin-top: 1px; font-size: 11px; font-weight: 400; color: var(--fg-muted, #6b7080); white-space: nowrap; }
+  #options-check-update .au-menu-status[hidden] { display: none; }
+  #options-check-update .au-menu-status[data-pending="1"] { color: var(--brand, #3478f6); }
   .au-ready-line { display: flex; align-items: center; gap: 8px; margin: 6px 10px 8px; padding: 6px 10px; border-radius: 8px; font-size: 12px; line-height: 1.4;
     background: #ecf7f0; color: #24704a; cursor: pointer; }
   .au-ready-line:before { content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; background: #2f9e62; }
@@ -380,7 +383,7 @@
     }
     const item = document.getElementById('options-check-update');
     if (item) {
-      item.textContent = version ? `⬆️ 有新版本 v${version}` : '⬆️ 检查更新';
+      paintMenuEntry(item, version);
       item.classList.toggle('update-has-unread', unread);
     }
   }
@@ -457,11 +460,30 @@
     setTimeout(() => el.remove(), ms);
   }
 
+  // 菜单项：标题 +（小字）版本状态。小版本不弹窗也不挂红点，但打开菜单就能看到「有新版本 x.y.z」或「已是最新」。
+  function paintMenuEntry(item, version = noticeVersion()) {
+    let label = item.querySelector('.au-menu-label');
+    let status = item.querySelector('.au-menu-status');
+    if (!label) {
+      item.textContent = '';
+      label = document.createElement('span'); label.className = 'au-menu-label';
+      status = document.createElement('small'); status.className = 'au-menu-status';
+      item.append(label, status);
+    }
+    label.textContent = version ? `⬆️ 有新版本 v${version}` : '⬆️ 检查更新';
+    const text = require('./app-update-menu-status').menuStatusText(state, { labelVersion: version });
+    status.textContent = text;
+    status.hidden = !text;
+    status.dataset.pending = /^有新版本|已就绪|正在下载/.test(text) ? '1' : '';
+  }
+
   function addMenuEntry() {
     const menu = document.getElementById('options-menu');
     if (!menu || document.getElementById('options-check-update')) return;
     const item = document.createElement('div');
+    // 先写纯文字：说明书的界面地图（tools/help-manual）按这一句认出「检查更新」；paintMenuEntry 再换成 标题 + 状态。
     item.className = 'options-item'; item.id = 'options-check-update'; item.textContent = '⬆️ 检查更新';
+    paintMenuEntry(item);
     item.addEventListener('click', () => {
       menu.style.display = 'none';
       const version = pendingVersion();

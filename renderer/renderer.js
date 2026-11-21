@@ -4845,6 +4845,18 @@ async function restartSessionInPlace(sessionId) {
 }
 // 报错卡「重启会话」一键修（renderer/hub-error-card.js）走同一条路。
 window.__hubRestartSessionInPlace = restartSessionInPlace;
+// 报错旁的「去后台」（renderer/hub-error-card.js known:open-backstage）：切到这个会话并打开后台终端，和点顶栏「后台」同一条路。
+window.__hubOpenBackstage = async sessionId => {
+  if (!sessionId || !sessions.has(sessionId)) return { ok: false };
+  for (const key of Object.keys(window)) { if (/^__\w+Hide$/.test(key) && typeof window[key] === 'function') { try { window[key](); } catch { /* 页面已关 */ } } }
+  if (activeSessionId !== sessionId) await selectSession(sessionId);
+  if (activeSessionId !== sessionId) return { ok: false };
+  if (currentView !== 'pty') applyViewMode('pty');
+  noteBackstageOpen(sessionId);
+  rememberBackstageLayoutForSession(sessionId, 'pty');
+  syncBackstageButton();
+  return { ok: currentView === 'pty' };
+};
 // 「重启会话并重发」发出去后：输入框里还是那段原文就清掉，免得用户再点一次发成两条；用户已改过的不动。
 window.__hubClearFloatingDraftIf = (sessionId, text) => {
   const box = document.querySelector(`.floating-input-bar[data-session-id="${CSS.escape(String(sessionId || ''))}"] .floating-input-box`);
@@ -5056,7 +5068,7 @@ function openCodeAgentSkillsMenu(sessionId, pane = {}, command = '/skills') {
     send: text => {
       const request = { sessionId, text, clientSubmissionId: require('node:crypto').randomUUID(), waitForCliReady: true, codeagentInteractiveCommand: true };
       return ipcRenderer.invoke('session:send-prompt', request).then(result => {
-        if (result?.code === 'codeagent-input-residual') showToast('终端输入框未能清空，请到终端确认后再发送', 'warning');
+        if (result?.code === 'codeagent-input-residual') showToast('终端输入框未能清空，请到终端确认后再发送', 'error', { sessionId });
         return result;
       });
     },
@@ -5149,7 +5161,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     if (!isCodeAgentKind(sessions.get(sessionId)?.kind)) return null;
     const recovery = require('./composer-codeagent-input');
     bar._codeagentInputRecovery = recovery.createCodeAgentInputRecovery({
-      notify: showToast,
+      notify: showToast, sessionId,
       invoke: (channel, payload) => ipcRenderer.invoke(channel, { ...payload, sessionId }),
       isRunning: () => recovery.codeAgentCanStop(sessions.get(sessionId), getSessionRuntimeTruth(sessions.get(sessionId)).state),
     });
@@ -5275,6 +5287,17 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   modelChipCaret.textContent = '▾';
   modelChip.append(modelChipLogo, modelChipLabel, modelChipCaret);
   attachModelPickerHandler(modelChip, sessionId);
+  // 窄窗口下顶栏面包屑会被挤没，里面的 Agent 标识跟着看不见（2026-11-21 隔离实测：宽度 1100 起被截掉）。
+  // 输入框下方补一个同样的标识，只在窄窗口显示（styles/composer.css 的 .composer-agent-tag）。
+  const composerAgentTag = document.createElement('span');
+  composerAgentTag.className = 'composer-agent-tag';
+  {
+    const s = sessions.get(sessionId);
+    const label = s ? require('../core/ai-kinds').getAgentLabel(require('../core/session-capabilities').runtimeKindForSession(s) || s.kind) : '';
+    composerAgentTag.textContent = label;
+    composerAgentTag.hidden = !label;
+    if (label) composerAgentTag.title = `这个会话由 ${label} 运行`;
+  }
 
   // 思考档 chip：只对**实测**支持的 CLI 渲染，判据在 composerThinkingChip。
   // Codex 的档位和模型在同一个原生面板里选，所以点它复用同一个选择器；
@@ -5364,7 +5387,8 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
         else {
           const result = await ipcRenderer.invoke('codeagent:input-stop', { sessionId, ...diagnostic });
           if (result?.ok && !result.notSent) turnCardRenderer.markUserStopped(sessionId, stoppedCard);
-          showToast(result?.ok ? (result.cleared === false ? '终端输入框未能清空，请到终端确认后再发送' : '已停止') : result?.message || '停止失败，请到终端确认', result?.ok ? 'info' : 'warning');
+          if (result?.ok && result.cleared === false) showToast('终端输入框未能清空，请到终端确认后再发送', 'error', { sessionId });
+          else showToast(result?.ok ? '已停止' : result?.message || '停止失败，请到终端确认', result?.ok ? 'info' : 'warning');
         }
       }
       catch { showToast('停止失败，请到终端确认', 'warning'); }
@@ -5409,7 +5433,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   secondaryActions.append(bridgeToolbar);
   const tuningControls = document.createElement('div');
   tuningControls.className = 'composer-tuning-controls';
-  tuningControls.append(attachBtn, secondaryActions, modelChip, thinkingChip, speedChip);
+  tuningControls.append(attachBtn, secondaryActions, composerAgentTag, modelChip, thinkingChip, speedChip);
   const codeagentSkills = require('./composer-codeagent-skills').mountCodeAgentSkillPicker({
     document, window, input: inputBox, host: tuningControls, before: speedChip, sessionId,
     getSession: () => sessions.get(sessionId), ipcRenderer,
@@ -5859,7 +5883,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
         if (delivery) delivery.dismissed = true;
         if (!wasRunning && session.runtimeTruth === optimisticRuntimeTruth && session.runtimeTruth?.state === RUNTIME_STARTING) session.runtimeTruth = previousRuntimeTruth;
         require('./composer-codeagent-input').restoreRecoveredPrompt(inputBox, { text, skill: submittedSkill }, { document, window, session, onChange: () => saveFloatingInputDraft(sessionId, inputBox) });
-        showToast('终端输入框未能清空，请到终端确认后再发送', 'warning');
+        showToast('终端输入框未能清空，请到终端确认后再发送', 'error', { sessionId });
         clearFloatingInputStuck(bar);
         return;
       }

@@ -87,3 +87,13 @@
 .smc-refresh:hover:not(:disabled) { text-decoration: underline; }
 .smc-refresh:disabled { color: var(--hw-text-2, var(--fg-muted)); cursor: default; }
 .smc-refresh-msg { font-size: 11px; line-height: 16px; color: var(--hw-text-2, var(--fg-muted)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 深色主题下「用部门 API key」卡与就地配置区：上面写死的浅色底会让标题白字看不见（2026-11-21） */
+:root:is([data-theme='dark'],[data-theme='frost']) .session-model-card[data-state="suggest"] { background: var(--hw-surface-2); border-color: var(--hw-brand); }
+:root:is([data-theme='dark'],[data-theme='frost']) .smc-source[data-source="gateway-setup"],
+:root:is([data-theme='dark'],[data-theme='frost']) .smc-source[data-source="gateway"] { background: var(--hw-brand-soft); color: var(--hw-brand); }
+:root:is([data-theme='dark'],[data-theme='frost']) .gw-inline { background: var(--hw-surface-2); border-color: var(--hw-line-strong); }
+:root:is([data-theme='dark'],[data-theme='frost']) .gw-inline-hit { background: var(--hw-brand-soft); color: var(--hw-text-1); }
+:root:is([data-theme='dark'],[data-theme='frost']) .gw-inline-hit code { background: var(--hw-surface-3); }
+:root:is([data-theme='dark'],[data-theme='frost']) .gw-inline-form input { background: var(--hw-surface-3); border-color: var(--hw-line-strong); color: var(--hw-text-1); }
+:root:is([data-theme='dark'],[data-theme='frost']) .gw-inline-form input[readonly] { background: var(--hw-surface-2); color: var(--hw-text-2); }
+:root:is([data-theme='dark'],[data-theme='frost']) .gw-inline button:not(.primary):not(.gw-inline-link) { background: var(--hw-surface-3); border-color: var(--hw-line-strong); color: var(--hw-text-1); }
