@@ -167,7 +167,7 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
       return `<div class="att-empty"><h2>还没有考勤数据</h2><p>${status.syncing ? '正在打开考勤页读取最近 8 天，通常半分钟，最长约 3 分钟。' : esc(status.lastResult?.error || '开启后每天会在后台读一次；也可以现在就读。')}</p>
         ${(status.lastResult?.needsDomain && !status.settings?.domain) || status.lastResult?.dnsFail ? domainRow() : ''}
         ${status.lastResult?.triedPages || (status.lastResult && !status.lastResult.ok && status.settings?.page && status.settings.page !== 'auto') ? `<div class="att-row"><span>考勤页</span>${pageSelect(status.settings?.page, 'quickPage')}<button type="button" class="att-btn primary" data-att="quick-page">保存并读取</button></div>` : ''}
-        <div class="att-row">${status.lastResult?.needsLogin ? '<button type="button" class="att-btn primary" data-att="login">登录考勤</button>' : ''}<button type="button" class="att-btn${status.lastResult?.needsLogin ? '' : ' primary'}" data-att="sync">现在读取</button></div></div>`;
+        <div class="att-row">${status.lastResult?.needsLogin ? '<button type="button" class="att-btn primary" data-att="login">登录考勤</button>' : ''}<button type="button" class="att-btn${status.lastResult?.needsLogin ? '' : ' primary'}" data-att="sync"${status.syncing ? ' disabled aria-busy="true"' : ''}>${status.syncing ? '读取中…' : '现在读取'}</button></div></div>`;
     }
     const m = vm.month;
     const hero = `<section class="att-card att-hero"><div class="att-hero-num"><div class="l">${Number(vm.ym.slice(5))} 月净加班 · 统计至昨日</div>
@@ -286,6 +286,8 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
     page.querySelector('[data-slot="status"]').innerHTML = statusHtml();
     page.querySelector('[data-slot="body"]').innerHTML = bodyHtml();
     page.querySelector('[data-att="drawer"]').hidden = !status.records.length;
+    // 读取进行中：顶部「刷新」也置灰，免得一边写着「正在读取」一边还能再点（11-21 深查 #11）。
+    page.querySelectorAll('[data-att="sync"]').forEach(b => { b.disabled = !!status.syncing; });
     // 设置面板开着时不重画：定时刷新会冲掉用户正在填的内容。
     if (!panelOpen || !page.querySelector('[data-slot="panel"] .att-settings')) renderPanel();
     renderDrawer();

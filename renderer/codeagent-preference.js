@@ -44,4 +44,20 @@ function defaultGroupMembers(fallback) {
   return [{ kind: 'codeagent', model: 'GLM-5.2-WX-Auto' }, { kind: 'codeagent', model: 'MiniMax-M2.7' }];
 }
 
-module.exports = { LAST_KIND_KEY, refresh, isInstalled, rememberKind, preferredKind, defaultGroupMembers, detectedInstalled };
+// 新建 AI 群聊的默认成员按本机实际能用的 AI 选（11-21 全新用户深查 #9）：
+// kinds 是可选成员（界面顺序），available(kind) 返回 true 能用 / false 确认没装 / null 还不知道。
+// CodeAgent 实测装了（或公司纯净版还没测完）→ 两个 CodeAgent；否则从确认能用的里挑两个（只有一种就同一种开两个）；
+// 一个都没有、且每种都确认没装 → 仍给 fallback，但 missing=true，界面就地说明缺什么、去哪装。
+function groupMembersFor(kinds = [], available = () => null, fallback = []) {
+  const list = (kinds || []).filter(Boolean);
+  const ca = available('codeagent');
+  if (list.includes('codeagent') && (ca === true || (ca === null && isInstalled()))) {
+    return { members: [{ kind: 'codeagent', model: 'GLM-5.2-WX-Auto' }, { kind: 'codeagent', model: 'MiniMax-M2.7' }], missing: false };
+  }
+  const ready = list.filter(kind => kind !== 'codeagent' && available(kind) === true);
+  if (ready.length) return { members: [ready[0], ready[1] || ready[0]].map(kind => ({ kind })), missing: false };
+  const allMissing = list.length > 0 && list.every(kind => available(kind) === false);
+  return { members: fallback.map(x => ({ ...x })), missing: allMissing };
+}
+
+module.exports = { LAST_KIND_KEY, refresh, isInstalled, rememberKind, preferredKind, defaultGroupMembers, groupMembersFor, detectedInstalled };

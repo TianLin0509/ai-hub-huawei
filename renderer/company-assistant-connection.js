@@ -25,4 +25,22 @@ function connectionState(data = {}) {
   return { kind: 'unknown', alt: 'login', altLabel: '扫码登录', title: 'WeLink 连接尚未确认', detail: auth.error || login?.error || '工具已找到，还需要确认登录状态。若检查失败，请核对公司网络和工具是否可运行。', action: 'refresh', label: '重新检查并取数' };
 }
 
-module.exports = { connectionState };
+// 输入框左上的一行状态（11-21 全新用户深查 #12）：按实际能不能答显示，不在什么都没接时写「已就绪」。
+// 助理靠本机 CodeAgent 作答；codeagentInstalled 为 false 时说清没装、给安装入口。WeLink 没接上时说明只能讨论已有材料，入口同连接提示。
+// 返回 { text, busy, tone, action, label }；action 为空时不放按钮。
+function composerState(data = {}, { codeagentInstalled = null } = {}) {
+  if (data.job) {
+    const text = (data.job.type === 'brief' ? '助理正在整理今天的摘要…' : '助理正在回答…') + (data.queued ? `（还有 ${data.queued} 个排队）` : '');
+    return { text, busy: true, tone: '', action: '', label: '' };
+  }
+  if (codeagentInstalled === false) {
+    return { text: '还不能提问：这台电脑没找到 CodeAgent，助理靠它回答', busy: false, tone: 'bad', action: 'install-codeagent', label: '安装 CodeAgent' };
+  }
+  const c = connectionState(data);
+  if (c.kind !== 'online') {
+    return { text: 'WeLink 还没接上：可以提问，但只能讨论已有材料，查不到消息、会议和邮件', busy: false, tone: 'warn', action: c.action || '', label: c.label || '' };
+  }
+  return { text: '已就绪 · 只读，草稿你自己发', busy: false, tone: '', action: '', label: '' };
+}
+
+module.exports = { connectionState, composerState };

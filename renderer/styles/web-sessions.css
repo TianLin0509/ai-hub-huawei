@@ -46,6 +46,7 @@ body.sidebar-web-mode .web-session-list { display: block; }
 .ws-tools svg { width: 16px; height: 16px; }
 .ws-status { flex: none; padding: 4px 12px; font-size: 12px; color: var(--fg-muted); border-bottom: 1px solid var(--border-subtle); }
 .ws-status.bad { color: #d64545; }
+.ws-status button { margin: 4px 0; padding: 4px 10px; border: 1px solid var(--border-mid); border-radius: 5px; background: var(--surface-card); color: var(--brand-text); font: inherit; cursor: pointer; }
 .ws-slot { flex: 1 1 auto; min-height: 0; background: var(--surface-canvas, #fff); }
 
 /* 启动中心「AI 网页」 */

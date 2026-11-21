@@ -6,7 +6,7 @@
 // closeChoice（2026-11-21，同事反馈「点关闭直接退出，找不到最小化到托盘」）：托盘没开、也从没选过时，
 // 第一次点关闭就地问一句「最小化到托盘 / 退出」，选择记住，之后在「可选功能」里随时改。
 //   { pending(): bool, ask(win): 'tray' | 'quit' | 'cancel', remember(tray: bool) }
-function createTrayController({ Tray, Menu, getIcon, getMainWindow, focusWindow, quit, isEnabled, closeChoice = null, logger = console, title = 'AI Hub' }) {
+function createTrayController({ Tray, Menu, getIcon, getMainWindow, focusWindow, quit, isEnabled, canNotify = () => true, closeChoice = null, logger = console, title = 'AI Hub' }) {
   let tray = null;
   let quitting = false;
   let hintShown = false;
@@ -71,7 +71,7 @@ function createTrayController({ Tray, Menu, getIcon, getMainWindow, focusWindow,
     try { ensureTray(); } catch (error) { logger.warn?.('[tray] 托盘图标没建起来，按原样退出：', error && error.message); return false; }
     event.preventDefault();
     win.hide();
-    if (!hintShown && typeof tray.displayBalloon === 'function') {
+    if (!hintShown && canNotify() && typeof tray.displayBalloon === 'function') {
       hintShown = true;
       try { tray.displayBalloon({ title, content: '已最小化到托盘，单击图标打开；右键可退出。', noSound: true }); } catch (_) {}
     }

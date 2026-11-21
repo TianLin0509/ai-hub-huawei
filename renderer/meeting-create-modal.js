@@ -34,6 +34,9 @@ let _sceneHintLoad = 0;
 let _modalEl = null;
 let _isGroupChat = true;
 let _groupSlots = DEFAULT_GROUP_MEMBERS.map(x => ({ ...x }));
+let _membersEdited = false;
+let _membersLoad = 0;
+let _membersReady = Promise.resolve();
 let _escListener = null;
 let _meetingWorkspace = null;
 // 群聊与单会话同一个默认档：工作根（2026-08-31 平铺决策）。
@@ -250,8 +253,29 @@ function _normalizeSlotSpec(spec = {}) {
   };
 }
 
+// 本机能不能用这种 AI：CodeAgent 看安装检测；Claude Code / Codex / DSH 看启动中心卡片上的安装结论（data-installed）。
+function _kindAvailable(kind) {
+  if (kind === 'codeagent') return require('./codeagent-preference').detectedInstalled();
+  const button = document.querySelector(`.new-session-option[data-kind="${kind === 'deepseek-acp' ? 'deepseek' : kind}"]`);
+  const flag = button && button.dataset ? button.dataset.installed : undefined;
+  return flag === '1' ? true : flag === '0' ? false : null;
+}
+let _membersMissing = false;
+function _defaultGroupMembers() {
+  const kinds = GROUP_MEMBER_KINDS.filter(k => MODEL_KINDS.has(k) && !HIDDEN_CREATE_KINDS.has(k));
+  const picked = require('./codeagent-preference').groupMembersFor(kinds, _kindAvailable, DEFAULT_GROUP_MEMBERS);
+  _membersMissing = picked.missing;
+  return picked.members;
+}
+// 一个能用的 AI 都没有：在成员区就地说明，并给「去新建会话」入口（那里点 AI 卡可一键安装，也能粘贴部门 API key）。
+function _paintMembersNote() {
+  const note = _modalEl && _modalEl.querySelector('#mcm-members-missing');
+  if (!note) return;
+  note.hidden = !_membersMissing;
+}
+
 function _cloneSlots(slots) {
-  return (slots || require('./codeagent-preference').defaultGroupMembers(DEFAULT_GROUP_MEMBERS)).map(x => _normalizeSlotSpec(x));
+  return (slots || _defaultGroupMembers()).map(x => _normalizeSlotSpec(x));
 }
 
 async function _loadSceneHints() {
@@ -274,11 +298,23 @@ async function _loadSceneHints() {
 }
 
 function _resetMembers() {
-  _groupSlots = _cloneSlots(require('./codeagent-preference').defaultGroupMembers(DEFAULT_GROUP_MEMBERS));
+  const load = ++_membersLoad;
+  _membersEdited = false;
+  _membersMissing = false;
+  _groupSlots = [];
   _renderSlots();
+  _paintMembersNote();
   const input = _modalEl.querySelector('#mcm-title-input');
   input.value = '';
   input.placeholder = '例如：帮我拆解这个问题，给出可执行方案';
+  // 公司版在检测前会把 CodeAgent 当作已安装；等真实结果再选默认成员。
+  // 等待期间的手动选人，以及关掉后重新打开的成员，都不能被旧回调覆盖。
+  _membersReady = require('./codeagent-preference').refresh(ipcRenderer).then(() => {
+    if (load !== _membersLoad || _membersEdited) return;
+    _groupSlots = _cloneSlots(_defaultGroupMembers());
+    _renderSlots();
+    _paintMembersNote();
+  });
 }
 
 function _slotHtml(i, spec, isGroup) {
@@ -385,7 +421,13 @@ function _syncGroupSlotsFromDom({ strict = false } = {}) {
 //   成员数也不设上限——实际基本停在 3 人，但那是用户的选择，不该由代码写死。
 function _nextGroupMemberKind() {
   // 公司版：新加的成员默认还是 CodeAgent，要换工具在成员卡的「AI」下拉里改。
-  if (companyApi.isCompany() && GROUP_MEMBER_KINDS.includes('codeagent')) return 'codeagent';
+  // 确认没装 CodeAgent 时改用第一个确认能用的 AI（11-21 深查 #9）。
+  if (companyApi.isCompany() && GROUP_MEMBER_KINDS.includes('codeagent')) {
+    if (_kindAvailable('codeagent') !== false) return 'codeagent';
+    const ready = GROUP_MEMBER_KINDS.find(kind => kind !== 'codeagent' && MODEL_KINDS.has(kind) && _kindAvailable(kind) === true);
+    if (ready) return ready;
+    return (_groupSlots[0] && _groupSlots[0].kind) || 'codeagent';
+  }
   const present = new Set(_groupSlots.map(slot => slot.kind));
   return GROUP_MEMBER_KINDS.find(kind => !present.has(kind))
     || GROUP_MEMBER_KINDS[_groupSlots.length % GROUP_MEMBER_KINDS.length];
@@ -484,6 +526,7 @@ function _ensureModal() {
           <strong>成员配置</strong>
           <span>${require('../core/distribution').kindAllowed('deepseek') ? '需要第三视角时再添加 DeepSeek。' : ''}可继续加人，同一种 AI 也能多开。${PLAIN_COPY ? '每位成员可以选不同的模型。' : '每位成员可独立选择模型、思考强度、速度与 MCP。'}</span>
         </div>
+        <div class="mcm-members-missing" id="mcm-members-missing" role="status" hidden><span>这台电脑上还没有能用的 AI：CodeAgent、Claude Code、Codex、DSH 都没装，现在建群会失败。到「新建会话」点一个 AI 按提示一键安装；有部门 API key 的也在那里粘贴。装好后回来就能建群。</span><button type="button" class="mcm-workspace-button" id="mcm-members-missing-go">去新建会话</button></div>
         <div class="mcm-slots"></div>
         <button type="button" class="mcm-add-member" id="mcm-add-member">+ 添加成员</button>
       </div>
@@ -527,13 +570,23 @@ function _orchestrationPayload() {
 }
 
 function _bindEvents() {
+  const slots = _modalEl.querySelector('.mcm-slots');
+  slots.addEventListener('change', () => { _membersEdited = true; }, true);
+  slots.addEventListener('click', event => {
+    if (event.target.closest('[data-remove-member]')) _membersEdited = true;
+  }, true);
   _modalEl.querySelector('.mcm-close').addEventListener('click', closeMeetingCreateModal);
   _modalEl.querySelector('.mcm-cancel').addEventListener('click', closeMeetingCreateModal);
   _modalEl.querySelector('.mcm-create').addEventListener('click', (event) => {
     event.preventDefault();
     void _onCreate();
   });
+  _modalEl.querySelector('#mcm-members-missing-go').addEventListener('click', () => {
+    if (window.LaunchCenter && typeof window.LaunchCenter.selectIntent === 'function') window.LaunchCenter.selectIntent('session');
+    else if (window.LaunchCenter && typeof window.LaunchCenter.open === 'function') window.LaunchCenter.open('session');
+  });
   _modalEl.querySelector('#mcm-add-member').addEventListener('click', () => {
+    _membersEdited = true;
     _syncGroupSlotsFromDom();
     const nextKind = _nextGroupMemberKind();
     _groupSlots.push(_normalizeSlotSpec({ kind: nextKind }));
@@ -589,7 +642,7 @@ async function _onCreate() {
   try {
     // 即使用户在模型目录异步返回前立刻点创建，也要先用真实目录重新归一化。
     // 否则 gpt-5.5 可能把 fallback 里的 max 带进 CLI（该模型真实只支持到 xhigh）。
-    await window.WorkspaceController.loadSessionDefaults();
+    await Promise.all([_membersReady, window.WorkspaceController.loadSessionDefaults()]);
     _syncGroupSlotsFromDom({ strict: true });
     _renderSlots();
     // 读取 DOM 也必须在 try 内。历史状态或第三方样式脚本一旦留下残缺 slot / 未选
@@ -740,6 +793,7 @@ function openMeetingCreateModal(mode = 'general', options = {}) {
 }
 
 function closeMeetingCreateModal() {
+  ++_membersLoad;
   if (_modalEl) _modalEl.style.display = 'none';
   if (_escListener) {
     document.removeEventListener('keydown', _escListener);

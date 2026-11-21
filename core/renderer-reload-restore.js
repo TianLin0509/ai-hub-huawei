@@ -33,13 +33,21 @@ function hasAttention(session) {
 }
 
 // 落盘的标记是不是还属于当前这一轮（Codex 复审 2026-11-21：上一轮的「等你输入」不能压过主进程记下的新一轮运行）。
-//   等你输入：只有主进程说这一轮还在进行、且落盘晚于这一轮开始时才算数；回合已结束就不再等。
+//   等你输入：进行中按本轮开始时间判断；回合结束后的提问也有效，但落盘不能早于最近已知回合边界。
 //   已回复：主进程记下的新一轮开始晚于那次回复（用户已经接着发了），不再补回。
 function attentionStillCurrent(session, meta) {
   const live = session && session.liveTurn;
   const liveStart = live ? Number(live.startedAt) || 0 : 0;
   const waiting = meta.attentionState === 'needs-input' || (meta.needsUserInput === true && meta.attentionState !== 'reply-ready');
-  if (waiting) return !!live && (Number(meta.updatedAt) || 0) >= liveStart;
+  if (waiting) {
+    const updatedAt = Number(meta.updatedAt) || 0;
+    if (live) return updatedAt >= liveStart;
+    const latestBoundary = Math.max(
+      Number(session.runStartedAt) || 0, Number(session.lastRunStartedAt) || 0, Number(session.lastCompletedAt) || 0,
+      Number(meta.runStartedAt) || 0, Number(meta.lastRunStartedAt) || 0, Number(meta.lastCompletedAt) || 0,
+    );
+    return latestBoundary > 0 && updatedAt >= latestBoundary;
+  }
   if (live && liveStart > (Number(meta.lastCompletedAt) || 0)) return false;
   return true;
 }

@@ -115,7 +115,7 @@ async function publishRelease(options = {}, deps = {}) {
     || path.join(env.RUNNER_TOOL_CACHE || os.tmpdir(), 'aihub-release-assets'));
   const { sourceSha } = readIdentity(dir, tag);
   if (env.GITHUB_SHA) requireFact(sourceSha === env.GITHUB_SHA, 'Release manifest does not match the CI commit');
-  const run = deps.run || ((args, opts) => spawnSync('gh', args, opts));
+  const run = deps.run || ((args, opts) => spawnSync('gh', args, { ...opts, windowsHide: true }));
   const now = deps.now || Date.now, sleep = deps.sleep || delay, log = deps.log || console.log;
   const deadline = now() + config.totalTimeoutMs;
   function gh(args, timeoutMs = config.apiTimeoutMs) {

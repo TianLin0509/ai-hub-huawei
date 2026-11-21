@@ -1,0 +1,9 @@
+{
+  "· 上下文窗口 {0} tokens": "· Context window {0} tokens",
+  "· 上下文窗口未知": "· Context window unknown",
+  "上下文窗口未知": "Context window unknown",
+  "上下文未知": "Context unknown",
+  "模型目录窗口 {0} tokens": "Catalog context window {0} tokens",
+  "{0}（高倍率分组）": "{0} (higher-rate group)",
+  "{0}（免费分组）": "{0} (free group)"
+}

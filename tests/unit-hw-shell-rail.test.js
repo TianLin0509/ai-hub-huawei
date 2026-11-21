@@ -119,6 +119,7 @@ test('icon rail shows a one-line 12px name under every icon without widening the
   const rule = css.match(/data-hw-rail="narrow"[^{]*> \.btn-label,[^{]*> \.rail-utility-label \{([^}]*)\}/);
   assert.ok(rule, 'narrow rail has a label rule for nav and utility buttons');
   for (const decl of ['display: block !important', 'var(--hw-fs-12)', 'white-space: nowrap', 'text-overflow: ellipsis']) assert.ok(rule[1].includes(decl), decl);
-  assert.match(css, /data-hw-rail="narrow"[^{]*\{\s*flex-direction: column;[^}]*width: 44px; height: 46px;/, 'buttons stack icon over name');
+  assert.match(css, /data-hw-rail="narrow"[^{]*\{\s*flex-direction: column;[^}]*width: var\(--hw-rail-control-width\); height: 46px;/, 'buttons stack icon over name and fit custom widths');
+  assert.match(css, /--hw-rail-control-width:\s*min\(44px, calc\(var\(--hub-rail-slot\) - 10px\)\)/, 'default 64px slot keeps 44px buttons');
   assert.match(css, /:root\[data-hw-shell\]:not\(\[data-display-mode="phone"\]\)[^{]*\{\s*--hub-rail-slot: var\(--display-rail-width, 64px\)/, 'slot stays 64px');
 });

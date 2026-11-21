@@ -17,7 +17,8 @@ const modelCatalog = require('./company-proxy/model-catalog.cjs');
 const hubDataDir = () => { try { return require('./data-dir').getHubDataDir(); } catch { return ''; } };
 function companyModels(dataDir = hubDataDir()) {
   const list = dataDir ? modelCatalog.modelsFor(dataDir) : modelCatalog.unionModels(null);
-  return list.map(m => Object.freeze({ id: m.id, label: m.label || m.id, ...(m.input ? { input: m.input } : {}), ...(m.output ? { output: m.output } : {}), thinking: !!m.thinking }));
+  return list.map(m => Object.freeze({ id: m.id, label: m.label || m.id, contextWindow: m.contextWindow > 0 ? m.contextWindow : null,
+    ...(m.input ? { input: m.input } : {}), ...(m.output ? { output: m.output } : {}), thinking: !!m.thinking }));
 }
 const companyModelIds = dataDir => companyModels(dataDir).map(m => m.id);
 const companyDefaultModel = dataDir => modelCatalog.defaultModel(companyModels(dataDir)).id;

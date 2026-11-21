@@ -150,7 +150,7 @@ async function run() {
     const hasField = await c.eval(`!!document.getElementById('cfg-workspace-root')`);
     note('2 设置里有「新建会话默认工作目录」', hasField);
     if (hasField) {
-      await c.eval(`document.getElementById('cfg-workspace-root').scrollIntoView({block:'center'})`);
+      await c.eval(`window.__hubSettingsTabs?.reveal(document.getElementById('cfg-workspace-root'));document.getElementById('cfg-workspace-root').scrollIntoView({block:'center'})`);
       await sleep(300);
       await shot('2a-hub-settings-before-save');
       await click('#cfg-workspace-root');
@@ -168,7 +168,7 @@ async function run() {
       const saved = JSON.parse(fs.readFileSync(path.join(DATA, 'config.json'), 'utf8'));
       note('2 config.json workspace', saved.workspace);
     } else {
-      await c.eval(`document.getElementById('cfg-composer-enter')?.scrollIntoView({block:'center'})`);
+      await c.eval(`window.__hubSettingsTabs?.reveal(document.getElementById('cfg-composer-enter'));document.getElementById('cfg-composer-enter')?.scrollIntoView({block:'center'})`);
       await sleep(300);
       await shot('2a-hub-settings-before-save');
     }

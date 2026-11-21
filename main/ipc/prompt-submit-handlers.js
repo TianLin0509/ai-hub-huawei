@@ -150,7 +150,25 @@ function registerPromptSubmitIpc(ipcMain, deps) {
   //   每会话只留最后一条，且只在内存里 —— 不做持久化，prompt 可能含敏感内容。
   const lastPromptBySid = new Map();
   const latestRequestBySid = new Map();
+  // 忙时发出、交给 CLI 排队的消息：CLI 没执行就把原文交还界面（core/busy-queued-watch.js）。
+  const { createBusyQueuedWatch, fileUserPromptCount } = require('../../core/busy-queued-watch');
+  const busyQueued = deps.busyQueuedWatch || createBusyQueuedWatch({
+    isSessionAlive: sid => !!sessionManager.getSession(sid),
+    processToken: sid => sessionManager.getSessionProcessToken?.(sid) ?? null,
+    isTurnActive: sid => sessionManager.isAgentTurnActive?.(sid) === true,
+    cliExited: sid => require('../../core/host-shell-detector').detectHostShellTakeover(sessionManager.getSessionBuffer?.(sid) || ''),
+    transcriptPromptCount: (sid, text, since) => {
+      const kind = resolveKind(sid) || '';
+      const file = isCodexCliKind(kind) ? transcriptTap?.getCodexRolloutPath?.(sid) : transcriptTap?.getClaudeTranscriptPath?.(sid);
+      return fileUserPromptCount(file, text, since, { kind });
+    },
+    notify: payload => sendToRenderer('session:queued-prompt-unsent', payload),
+    notifyExecuted: payload => sendToRenderer('session:queued-prompt-executed', payload),
+    logger,
+    ...(deps.busyQueuedOptions || {}),
+  });
   const receipts = new PromptSubmissionReceipts(payload => {
+    if (['confirmed', 'content-mismatch'].includes(payload?.status)) busyQueued.resolve(payload.sessionId, payload.clientSubmissionId);
     try { sendToRenderer('session:prompt-receipt', payload); }
     catch (error) { logger.warn('[prompt-submit] receipt broadcast failed:', error && error.message); }
     try { deps.onPromptReceipt?.(payload); }
@@ -172,11 +190,15 @@ function registerPromptSubmitIpc(ipcMain, deps) {
     const text = unwrapClaudePasteEnvelope(event.text);
     return text !== event.text && receipts.observe({ ...event, text });
   };
-  const onTranscriptPrompt = event => observePrompt(event);
+  const onTranscriptPrompt = event => {
+    busyQueued.observePrompt(event?.hubSessionId || event?.sessionId, event?.text);
+    return observePrompt(event);
+  };
   const onProviderPrompt = event => {
     // Native UserPromptSubmit carries the actual body. Codex can write its
     // matching rollout UserMessage much later than the bounded submit wait.
     if (!['claude-user-prompt-submit', 'codex-user-prompt-submit'].includes(event?.signalSource)) return;
+    busyQueued.observePrompt(event.sessionId, event.prompt);
     observePrompt({ ...event, text: event.prompt });
   };
   transcriptTap?.on('prompt-submitted', onTranscriptPrompt);
@@ -217,6 +239,7 @@ function registerPromptSubmitIpc(ipcMain, deps) {
     const kind = resolveKind(sessionId);
     if (!kind) return { ok: false, notSent: true, error: 'no-session' };
     const originalPrompt = text;
+    busyQueued.noteSubmitted(sessionId, text);
     // Host-provided context preparation happens before receipt fingerprints and
     // before the first PTY write, for both the UI and assistant tool callers.
     // Local commands retain their native meaning and do not receive context.
@@ -286,6 +309,8 @@ function registerPromptSubmitIpc(ipcMain, deps) {
         ? identitySwitch.observeClaudeLocalCommand(sessionManager, sessionId, localCommand,
           require('../../core/claude-local-command-acks').parseLocalCommand(text).args) : null;
       let awaitLateLocalAck = false;
+      // 上一轮还在跑：这条会由 CLI 自己排队。记下来，CLI 没执行时提醒（busy-queued-watch）。
+      const busyAtSend = !!receipt && !receipt.nativeOnly && !native && sessionManager.isAgentTurnActive?.(sessionId) === true;
       try {
         // requireReady:false —— 输入框就摆在用户面前，CLI 已经在跑；
         //   再走一次 60s 冷启动 ready 轮询会把「打完字立刻发」变成有时干等几十秒。
@@ -299,6 +324,9 @@ function registerPromptSubmitIpc(ipcMain, deps) {
           ...(clearObserver ? { localCommandObserver: clearObserver } : {}),
         });
         if (receipt) receipts.finish(receipt, result || { ok: false });
+        const queuedWhileBusy = busyAtSend && result && result.ok !== false && !result.notSent && !result.stopped
+          && ['delivered', 'unconfirmed'].includes(receipt.status);
+        if (queuedWhileBusy) busyQueued.track({ sessionId, clientSubmissionId, text: originalPrompt, dispatchedAt: receipt.dispatchedAt, kind });
         if (!result || result === false) {
           return { ok: false, error: 'send-failed', kind };
         }
@@ -332,6 +360,7 @@ function registerPromptSubmitIpc(ipcMain, deps) {
           ...(result.unconfirmed ? {unconfirmed:true} : {}),
           ...(result.threadId ? {threadId:result.threadId,turnId:result.turnId} : {}),
           ...(receipt ? { receipt: receipts.snapshot(receipt) } : {}),
+          ...(queuedWhileBusy ? { queuedWhileBusy: true } : {}),
         };
       } catch (error) {
         if (receipt) receipts.finish(receipt, { ok: false });
@@ -521,11 +550,12 @@ function registerPromptSubmitIpc(ipcMain, deps) {
       transcriptTap?.removeListener('prompt-submitted', onTranscriptPrompt);
       sessionManager.removeListener?.('agent-turn-started', onProviderPrompt);
       receipts.prune(() => false);
+      busyQueued.dispose();
       lastPromptBySid.clear();
       latestRequestBySid.clear();
       assistantSubmissions.clear();
     },
-    _test: { lastPromptBySid, firstLine, enqueue, pruneClosedSessions },
+    _test: { lastPromptBySid, firstLine, enqueue, pruneClosedSessions, busyQueued },
   };
 }
 

@@ -19,6 +19,13 @@ const LOG_KEEP = 30;
 const CARD_API = /queryCardRecord/;
 const HOLIDAY_API = /queryHolidayCalendarDetails/;
 const DNS_FAIL = /ERR_NAME_NOT_RESOLVED|ERR_NAME_RESOLUTION_FAILED/;
+// 连接层失败（浏览器原始报错，如 ERR_CONNECTION_CLOSED (-100) loading '…'）：翻成人话并给下一步，原始代码留在括号里方便排查（11-21 深查 #11）。
+const NET_FAIL = /\b(ERR_(?:CONNECTION_(?:CLOSED|REFUSED|RESET|TIMED_OUT|ABORTED|FAILED)|INTERNET_DISCONNECTED|ADDRESS_UNREACHABLE|NETWORK_CHANGED|NETWORK_ACCESS_DENIED|TIMED_OUT|PROXY_CONNECTION_FAILED|TUNNEL_CONNECTION_FAILED|SSL_PROTOCOL_ERROR|EMPTY_RESPONSE))\b/;
+function netFailMessage(domain, error) {
+  const code = (String(error || '').match(NET_FAIL) || [])[1];
+  if (!code) return '';
+  return `连不上考勤页 hr.${domain}（网络报错 ${code}）：多半是这台电脑现在没连公司内网（在外面先连 VPN 或回到公司网络），也可能是网络刚好抖了一下。连上内网后点「现在读取」重试；一直这样就点「一键反馈」。`;
+}
 
 function hostOf(u) { try { return u ? `（停在 ${new URL(u).host}）` : ''; } catch { return ''; } }
 
@@ -321,6 +328,9 @@ class CompanyAttendance {
         if (!r.ok && !r.needsLogin && DNS_FAIL.test(String(r.error || ''))) {
           r = { ...r, dnsFail: true, triedPages: false, error: `打不开 hr.${domain}（这个地址解析不到）：多半是这台电脑现在没连公司内网（在外面先连 VPN 或回到公司网络），或者公司域名不对。连上内网后点「现在读取」；域名不对就在下面改成公司主域名再读。` };
         }
+        else if (!r.ok && !r.needsLogin && NET_FAIL.test(String(r.error || ''))) {
+          r = { ...r, netFail: true, triedPages: false, error: netFailMessage(domain, r.error) };
+        }
         if (r.ok && Array.isArray(r.records)) {
           const merged = calc.mergeRecords(this.read('records', []), r.records, at);
           this.write('records', merged.list);
@@ -331,7 +341,7 @@ class CompanyAttendance {
           if (saved.lastPage !== page) this.write('settings', { ...saved, lastPage: page });
           st.lastSuccessAt = at;
           st.lastSuccessDay = this.todayKey();
-        } else entry = { at, reason, ok: false, needsLogin: !!r.needsLogin, triedPages: !!r.triedPages, ...(r.dnsFail ? { dnsFail: true } : {}), error: scrubError(r.error) || '失败' };
+        } else entry = { at, reason, ok: false, needsLogin: !!r.needsLogin, triedPages: !!r.triedPages, ...(r.dnsFail ? { dnsFail: true } : {}), ...(r.netFail ? { netFail: true } : {}), error: scrubError(r.error) || '失败' };
       }
       st.log = [entry, ...(st.log || [])].slice(0, LOG_KEEP);
       st.lastResult = entry;
@@ -365,4 +375,4 @@ class CompanyAttendance {
   changed() { try { this.deps.onChanged?.(); } catch { /* 界面没开 */ } }
 }
 
-module.exports = { CompanyAttendance, attendanceUrl, holidaysFrom, guessRecords, pagesToTry, apiPaths, scrubError };
+module.exports = { CompanyAttendance, attendanceUrl, holidaysFrom, guessRecords, pagesToTry, apiPaths, scrubError, netFailMessage };

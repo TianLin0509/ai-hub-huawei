@@ -163,7 +163,7 @@ test('2、6 等待可打开会话，失败显示 CodeAgent 修复卡，错误文
   context.data.chat[0].stopped = true; assert.ok(!context.chatList().includes('<aside>'));
 });
 test('7 连接尚未确认时保留扫码按钮', () => {
-  const context = { data: { cliFound: true, auth: { state: 'unknown' } }, connectionState, onboardingShown: () => true, esc, window: {} };
+  const context = { data: { cliFound: true, auth: { state: 'unknown' } }, connectionState, onboardingShown: () => true, esc, window: {}, codeagentPref: { detectedInstalled: () => null } };
   vm.createContext(context); vm.runInContext(section(assistant, '  function onboarding() {', '\n  function '), context);
   assert.match(context.onboarding(), /data-ca="login">扫码登录/);
 });

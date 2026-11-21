@@ -140,14 +140,14 @@ test('missing --print input is explained as input delivery failure without guess
   const { signerInitFailureMessage } = await import(pathToFileURL(path.join(__dirname, '../core/company-proxy/upstream-profile.mjs')).href);
   const message = signerInitFailureMessage('SIGNER_INIT_NO_STAMP', { detail: result.report.error, report: result.report });
   assert.match(message, /未收到.*测试输入/);
-  assert.doesNotMatch(message, /重新启动反代/);
+  assert.doesNotMatch(message, /重新启动模型通道/);
   assert.match(message, /直接点「一键反馈」/);
   assert.match(message, /一键反馈/);
   assert.doesNotMatch(message, /已登录|登录过期|确认 CodeAgent/);
   const blocked = signerInitFailureMessage('SIGNER_INIT_NO_STAMP', { detail: 'CLI_INPUT_MISSING',
     report: { retrySuppressed: 'cleanup-unconfirmed' } });
   assert.match(blocked, /后台进程还没确认结束.*停止重试/);
-  assert.doesNotMatch(blocked, /已尝试通过命令行参数补发输入|重新启动反代/);
+  assert.doesNotMatch(blocked, /已尝试通过命令行参数补发输入|重新启动模型通道/);
 });
 
 test('no-log retry leaves existing CodeAgent config, root trust and credentials unchanged', async t => {
@@ -180,7 +180,7 @@ test('production signer failure messages keep restart protection synchronized wi
   for (const report of [{ retried: true }, { retrySuppressed: 'cleanup-unconfirmed' }]) {
     const message = signerInitFailureMessage('SIGNER_INIT_NO_STAMP', { detail: 'CLI_INPUT_MISSING', report });
     assert.equal(matchKnownIssue({ area: 'notice', details: message }), null, message);
-    assert.doesNotMatch(message, /重新启动反代/);
+    assert.doesNotMatch(message, /重新启动模型通道/);
     assert.match(message, /一键反馈/);
   }
   const ordinary = signerInitFailureMessage('SIGNER_INIT_NO_STAMP', { detail: 'CLI_INPUT_MISSING', report: {} });

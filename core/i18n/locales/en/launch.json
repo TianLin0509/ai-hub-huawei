@@ -156,7 +156,7 @@
   "头像包已导入，可以预览并使用。": "Avatar pack imported; you can preview and use it now.",
   "快速开始": "Quick start",
   "连接你的 AI": "Connect your AI",
-  "CodeAgent 使用本机登录；Claude Code、Codex 和 DSH 在设置中配置自有 API。": "CodeAgent uses this computer's sign-in; set up your own API for Claude Code, Codex and DSH in Settings.",
+  "CodeAgent 使用本机登录；Claude Code、Codex 和 DSH 直接用下面的部门 API key，也可以在设置里换成自己的接口。": "CodeAgent uses this computer's sign-in; Claude Code, Codex and DSH can use the department API key below, or switch to your own endpoint in Settings.",
   "使用这台电脑上你自己的账号，已有的 CLI 登录可直接复用。": "Uses your own accounts on this computer; existing CLI sign-ins are reused directly.",
   "正在检查安装情况…": "Checking installation…",
   "登录 / 检查账号": "Sign in / Check account",
@@ -567,5 +567,17 @@
   "水墨留白": "Ink wash",
   "喜欢克制、安静与东方审美": "Restrained, quiet, Eastern aesthetics",
   "自己挑几个 AI 同场讨论": "Pick several AIs to discuss together",
-  "读不到 CodeAgent 版本": "Cannot read the CodeAgent version"
+  "读不到 CodeAgent 版本": "Cannot read the CodeAgent version",
+  "常用": "General",
+  "外观与输入": "Display & input",
+  "桌宠与回执": "Pet & notifications",
+  "通知": "Notifications",
+  "高级": "Advanced",
+  "设置分类": "Settings categories",
+  "更多选项": "More options",
+  "要先接通会议室组件（上方下载或连接），接通后才能登录": "Connect the meeting-room component first (download or connect above); sign-in is available once connected",
+  "正在打开登录页…": "Opening the sign-in page…",
+  "守护运行中，先停止守护再登录": "Guard is running; stop it before signing in",
+  "正在处理上一步，稍等": "Finishing the previous step, please wait",
+  "正在读取配置…": "Loading settings…"
 }

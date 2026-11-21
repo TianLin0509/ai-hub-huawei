@@ -221,5 +221,15 @@
   "写设置文件失败": "failed to write the settings file",
   "这次改动已生效，但没存进设置文件：{0}。重启 Hub 后会恢复原样；腾出磁盘空间或解除只读后再改一次即可保存。": "This change is in effect but was not saved to the settings file: {0}. It will revert after Hub restarts; free up disk space or remove the read-only state, then change it again to save.",
   "后台正在各个硬盘里找已经装好的 welink-cli，可能要一两分钟。不想等可以直接点一键安装：找到已装的就直接用，没有再装。": "Searching your drives for an installed welink-cli; this can take a minute or two. To skip the wait, click One-click install: an existing install is used if found, otherwise it is installed.",
-  "这台电脑上没找到 CodeAgent，没法自动识别区域。装好 CodeAgent 并登录后会自动识别；也可以先在上面直接选。没有 CodeAgent 账号时，改用「API 网关」或「自有接口」。": "CodeAgent was not found on this computer, so the zone cannot be detected automatically. It is detected once CodeAgent is installed and signed in; you can also pick it above now. Without a CodeAgent account, use \"API gateway\" or \"Own endpoint\" instead."
+  "这台电脑上没找到 CodeAgent，没法自动识别区域。装好 CodeAgent 并登录后会自动识别；也可以先在上面直接选。没有 CodeAgent 账号时，改用「API 网关」或「自有接口」。": "CodeAgent was not found on this computer, so the zone cannot be detected automatically. It is detected once CodeAgent is installed and signed in; you can also pick it above now. Without a CodeAgent account, use \"API gateway\" or \"Own endpoint\" instead.",
+  "这台电脑上还没有能用的 AI：CodeAgent、Claude Code、Codex、DSH 都没装，现在建群会失败。到「新建会话」点一个 AI 按提示一键安装；有部门 API key 的也在那里粘贴。装好后回来就能建群。": "No usable AI on this computer yet: CodeAgent, Claude Code, Codex and DSH are all missing, so creating a group would fail. Go to New session, pick an AI and follow the one-click install; if you have a department API key, paste it there too. Come back once it is installed.",
+  "去新建会话": "Go to New session",
+  "读取中…": "Reading…",
+  "连不上考勤页 hr.{0}（网络报错 {1}）：多半是这台电脑现在没连公司内网（在外面先连 VPN 或回到公司网络），也可能是网络刚好抖了一下。连上内网后点「现在读取」重试；一直这样就点「一键反馈」。": "Can't reach the attendance page hr.{0} (network error {1}): this computer is most likely not on the company intranet (connect VPN or return to the office network), or the network just blipped. Once connected, click Read now to retry; if it keeps happening, click One-click feedback.",
+  "还不能提问：这台电脑没找到 CodeAgent，助理靠它回答": "Can't ask yet: CodeAgent was not found on this computer, and the assistant needs it to answer",
+  "WeLink 还没接上：可以提问，但只能讨论已有材料，查不到消息、会议和邮件": "WeLink is not connected: you can ask, but only about existing material; messages, meetings and mail are unavailable",
+  "已改为{0}，正在重新启动模型通道…": "Changed to {0}, restarting model channel…",
+  "已改为自动识别，正在重新启动模型通道…": "Changed to auto-detect, restarting model channel…",
+  "已重新启动模型通道": "Model channel restarted",
+  "提问要靠本机 CodeAgent 回答，装好 CodeAgent 后才能提问。": "Answers come from CodeAgent on this computer; install CodeAgent before asking."
 }

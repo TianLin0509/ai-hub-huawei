@@ -269,6 +269,11 @@ function createHubPetController({
     try { return inMeeting() === true; } catch (_) { return false; }
   }
   function gate(spokenAt, item) {
+    // Recheck queued/current notices as well as newly arriving ones. Changing
+    // the routing setting must also withdraw an already displayed pet bubble.
+    if (item?.notify && item.kind !== 'disk' && item.kind !== 'growth' && !petTakes(item)) {
+      return { ok: false, reason: 'notification-mode' };
+    }
     return speakGate(settings.get(), { now: clock(), pose, fullscreen: fullscreen || screenFull, meeting: meetingNow() }, spokenAt, item);
   }
 

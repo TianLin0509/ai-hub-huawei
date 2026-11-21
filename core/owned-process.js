@@ -26,7 +26,7 @@ function probeStartedAt(pid) {
     const script=`$ErrorActionPreference='Stop'; try { $p=Get-Process -Id ${pid}; [DateTimeOffset]::new($p.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds() } catch { exit 2 }`;
     return Number(execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{encoding:'utf8',windowsHide:true,timeout:5000}).trim());
   }
-  return Date.parse(execFileSync('ps',['-p',String(pid),'-o','lstart='],{encoding:'utf8',timeout:5000}).trim());
+  return Date.parse(execFileSync('ps',['-p',String(pid),'-o','lstart='],{windowsHide:true,encoding:'utf8',timeout:5000}).trim());
 }
 function startedAt(pid) {
   if (pid === process.pid) return Date.now() - process.uptime()*1000;

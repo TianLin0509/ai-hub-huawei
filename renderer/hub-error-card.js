@@ -497,7 +497,7 @@ async function runKnownAction(act, button, { doc, win, ipcRenderer, closeOverlay
     if (act === 'known:codeagent-personal-login') {
       const r = await ipcRenderer.invoke('codeagent-pool:personal-login');
       if (r && r.ok === false) throw new Error(r.error || '登录窗口没能打开');
-      return done('已打开登录窗口：登录成功后点「重新启动反代」', 10000);
+      return done('已打开登录窗口：登录成功后点「重新启动模型通道」', 10000);
     }
     if (act === 'known:proxy-restart') {
       say('正在重新启动…');

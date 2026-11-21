@@ -53,7 +53,7 @@ async function main() {
     for (const width of [1440, 1280]) for (const theme of ['dark', 'codex']) {
       await c.send('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false });
       await c.eval(`document.documentElement.dataset.theme=${JSON.stringify(theme)};document.querySelector('#btn-home')?.click()`);
-      const message = '公司模型暂时用不了：CodeAgent 未收到签名初始化所需的测试输入，在生成签名日志前退出了。\n请点「重新启动反代」重试，仍未恢复时点「一键反馈」附带诊断。';
+      const message = '公司模型暂时用不了：CodeAgent 未收到签名初始化所需的测试输入，在生成签名日志前退出了。\n请点「重新启动模型通道」重试，仍未恢复时点「一键反馈」附带诊断。';
       await c.eval(`(()=>{document.getElementById('hub-sticky-notices')?.remove();document.getElementById('r33-card')?.remove();
         const notices=require('../renderer/sticky-notice');notices.showStickyNotice(document,${JSON.stringify(message)},'error');
         notices.showStickyNotice(document,'当前模型暂不可用，请选择其他模型后继续。','warning');

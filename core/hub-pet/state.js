@@ -72,7 +72,7 @@ function decidePose(ctx = {}) {
 }
 
 // 硬门禁：命中时连正在显示的气泡也撤下（安静档、安静一小时、今天静音、全屏、开会）。
-const HARD_GATES = new Set(['quiet-mode', 'quiet-hour', 'silent-today', 'fullscreen', 'meeting']);
+const HARD_GATES = new Set(['quiet-mode', 'quiet-hour', 'silent-today', 'fullscreen', 'meeting', 'notification-mode']);
 
 // 现在能不能开口；不能就只亮小圆点。返回 { ok, reason }。
 // settings：{ mode, quietUntil, silentDate }；ctx：{ now, pose, fullscreen }

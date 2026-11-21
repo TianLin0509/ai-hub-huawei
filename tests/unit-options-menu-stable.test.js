@@ -43,6 +43,11 @@ test('设置菜单靠 transform 居中（前提：动画若再写 transform 就�
   assert.match(rule.body, /transform:\s*translate\(-50%,\s*-50%\)/);
 });
 
+test('居中的设置菜单解除底边约束，按内容撑开而非只剩半个视口', () => {
+  const rules = topLevelRules(read('rail.css')).filter(r => /\.scene-rail\s+\.options-menu/.test(r.selector));
+  assert.ok(rules.some(r => /bottom:\s*auto\s*!important/.test(r.body)));
+});
+
 test('rail 里设置菜单最终用的弹入动画不改 transform，菜单从第一帧起就在最终位置', () => {
   const css = read('rail.css');
   const rules = topLevelRules(css).filter(r => /\.scene-rail\s+\.options-menu/.test(r.selector) && /animation\s*:/.test(r.body));

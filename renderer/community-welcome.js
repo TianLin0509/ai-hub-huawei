@@ -22,7 +22,7 @@
     section.setAttribute('aria-label', '快速开始');
     section.innerHTML = '<div class="community-setup-text"><h2>连接你的 AI</h2>'
       + (require('../core/distribution').target === 'company'
-        ? '<p>CodeAgent 使用本机登录；Claude Code、Codex 和 DSH 在设置中配置自有 API。</p></div>'
+        ? '<p>CodeAgent 使用本机登录；Claude Code、Codex 和 DSH 直接用下面的部门 API key，也可以在设置里换成自己的接口。</p></div>'
         : '<p>使用这台电脑上你自己的账号，已有的 CLI 登录可直接复用。</p></div>')
       + '<div id="community-providers" role="status">正在检查安装情况…</div>'
       + '<div class="community-setup-actions"><button id="community-accounts" type="button">登录 / 检查账号</button>'

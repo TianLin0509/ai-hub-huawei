@@ -1,0 +1,8 @@
+{
+  "查看已有历史": "View saved history",
+  "新建会话（保留此会话）": "New session (keep this session)",
+  "会话未能启动，原有记录已保留。请重试或新建会话。": "The session could not start. Your saved history is preserved. Retry or create a new session.",
+  "这条消息显示失败，原始记录仍保留。可切到后台终端查看，或重新打开会话重试。": "This message could not be displayed. The original record is preserved. View the background terminal or reopen the session to retry.",
+  "这条消息没有正文，可切到后台终端查看。": "This message has no body. Check the background terminal for details.",
+  "这个会话尚未建立可分支的对话身份。请先在原会话发送一条消息并等回答完成，再加入群聊；若已有回答仍失败，请重新打开原会话后重试，或在群聊里新增成员。原会话记录会保留。": "This session has no conversation identity available for branching. Send a message in the original session, wait for the answer, then add it to the group. If it already has an answer, reopen the original session and retry, or add a new group member. The original history is preserved."
+}

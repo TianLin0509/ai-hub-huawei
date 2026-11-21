@@ -114,6 +114,12 @@
 }
 .mcm-member-caption strong { font-size: 13px; }
 .mcm-member-caption span { color: var(--text-dim, var(--fg-muted)); font-size: 11px; }
+/* 本机没有能用的 AI 时的就地说明（11-21 深查 #9）。 */
+.mcm-members-missing { display: flex; align-items: center; gap: 12px; margin: 0 0 10px; padding: 9px 12px; border-radius: var(--radius-md, 8px);
+  border: 1px solid var(--warning-border, rgba(217, 119, 6, .45)); background: var(--warning-bg, rgba(217, 119, 6, .08)); color: var(--text, inherit); font-size: 12px; line-height: 1.55; }
+.mcm-members-missing[hidden] { display: none; }
+.mcm-members-missing span { flex: 1; }
+.mcm-members-missing button { flex: none; }
 
 .mcm-slot {
   position: relative;

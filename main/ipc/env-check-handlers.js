@@ -107,7 +107,7 @@ function registerEnvCheckIpc(ipcMain, deps) {
         const restart = deps.proxyRestart;
         if (!restart) throw new Error('这个版本没有公司模型反代');
         await restart();
-        return { ok: true, message: '已重新启动反代' };
+        return { ok: true, message: '已重新启动模型通道' };
       }
       if (act === 'ppt-download') {
         // 镜像不可用时退到 GitHub 备用入口（和 PPT 页的两个下载按钮同一套地址）。

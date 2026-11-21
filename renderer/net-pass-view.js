@@ -24,25 +24,40 @@ const CSS = `
 const STATE_TEXT = { ok: '可以访问', blocked: '被公司网络拦截，需要放行', checking: '检查中…', unknown: '还没检查' };
 function hostText(h) { return h.state === 'error' ? (h.reason || '连不上') : STATE_TEXT[h.state] || ''; }
 
+function completionText(status, last) {
+  if (status.running) return '';
+  const results = last?.results || [];
+  if (status.hosts.every(h => h.state === 'ok')) return results.some(r => r.first === 'blocked') ? '放行成功' : '本来就可以访问，无需放行';
+  if (!last) return '';
+  if (results.some(r => r.timedOut) || status.hosts.some(h => h.state === 'error' && h.reason === '连接超时')) return '放行超时，请重试';
+  if (last?.error || results.some(r => r.result !== 'ok') || status.hosts.some(h => h.state === 'error' || h.state === 'blocked')) return '放行失败，请重试';
+  if (results.some(r => r.first === 'blocked')) return '放行成功';
+  return '';
+}
+
 // status：core/net-pass.js status() 的结果；last：上一次 passAll 的结果（可空）；compact：都能访问时只显示一行。
 function boxHtml(status, { last = null, compact = true } = {}) {
   if (!status || !status.available || !Array.isArray(status.hosts) || !status.hosts.length) return '';
+  // A new automatic run supersedes the dialog's previous manual result.
+  if (Array.isArray(status.results)) last = status;
   const serverWord = status.hosts.some(h => h.bridge) ? '服务器' : '下载服务器';
   const running = !!status.running;
+  const completion = completionText(status, last);
+  const note = completion ? `<span role="status">${esc(completion)}</span>` : '';
   const rows = status.hosts.map(h => `<li class="np-${esc(h.state)}"><span class="np-name">${esc(h.name)}</span><span class="np-st">${esc(hostText(h))}</span></li>`).join('');
-  const stillBlocked = last && Array.isArray(last.results) ? last.results.filter(r => r.result === 'blocked') : [];
+  const stillBlocked = last && Array.isArray(last.results) ? last.results.filter(r => r.result === 'blocked' && status.hosts.some(h => h.host === r.host && h.state === 'blocked')) : [];
   const runBtn = `<button type="button" class="primary" data-np="run"${running ? ' disabled' : ''}>${running ? '正在放行…' : '放行' + serverWord}</button>`;
   if (!status.needed && !stillBlocked.length) {
-    if (!compact) return `<div class="np-box"><b>${serverWord}</b><ul>${rows}</ul><div class="np-actions">${runBtn}</div></div>`;
+    if (!compact) return `<div class="np-box"><b>${serverWord}</b><ul>${rows}</ul>${note}<div class="np-actions">${runBtn}</div></div>`;
     const names = status.hosts.map(h => `${esc(h.name)}：${esc(hostText(h))}`).join(' · ');
-    return `<p class="np-line">${serverWord} ${names}<button type="button" data-np="run"${running ? ' disabled' : ''}>${running ? '正在放行…' : '重新放行'}</button></p>`;
+    return `<p class="np-line">${serverWord} ${names}${note}<button type="button" data-np="run"${running ? ' disabled' : ''}>${running ? '正在放行…' : '重新放行'}</button></p>`;
   }
   const manual = stillBlocked.length
     ? `<p>还有没放行的，点下面的按钮会在 Hub 里打开放行页，点「继续访问」或「接受」即可，放行后窗口自动关闭核对一次。</p><div class="np-actions">${stillBlocked
       .map(r => `<button type="button" data-np="open" data-page="${esc(r.page)}">打开放行页「${esc(r.name)}」</button>`).join('')}</div>` : '';
   return `<div class="np-box np-need" data-np-box><b>第一次使用请先放行${serverWord}</b>`
     + `公司网络对新网站要先确认一次，没放行时${status.hosts.some(h => h.bridge) ? '下载或通道连接' : '下载'}会很慢或失败。点下面的按钮，Hub 会在后台把 ${status.hosts.length} 台${serverWord}一起放行，只需点一次。`
-    + `<ul>${rows}</ul><div class="np-actions">${runBtn}</div>${manual}</div>`;
+    + `<ul>${rows}</ul>${note}<div class="np-actions">${runBtn}</div>${manual}</div>`;
 }
 
 let cssDone = false;
@@ -63,6 +78,9 @@ function bind(root, { ipcRenderer, onUpdate = () => {} }) {
       button.disabled = true; button.textContent = '正在放行…';
       let result = null;
       try { result = await ipcRenderer.invoke('net-pass:run'); } catch (_) { result = null; }
+      button.disabled = false;
+      button.textContent = result ? '重新放行' : '放行失败，请重试';
+      if (!result) { onUpdate(null, { error: true }); return; }
       onUpdate(result, result);
     } else if (button.dataset.np === 'open') {
       let opened = null;

@@ -518,18 +518,7 @@ function aiLetterFallback(kind) {
 
 // === Spec 3 · W7 头部 metadata pills ===
 // 工具数已经进入活动轨；这里只保留 token / context / duration（user 卡片仅字数）。
-// model context window 用模糊匹配（实际 model id 多变如 "claude-opus-4-7[1m]"），匹配不到默认 200k。
-function _modelCtxWindow(model) {
-  if (!model) return 200000;
-  const m = String(model).toLowerCase();
-  if (m.includes('k3') || m.includes('kimi')) return 1048576;
-  if (m.includes('1m') || m.includes('opus-4')) return 1000000;
-  if (m.includes('gemini')) return 1000000;
-  if (m.includes('sonnet')) return 200000;
-  if (m.includes('haiku')) return 200000;
-  if (m.includes('gpt')) return 128000;
-  return 200000;
-}
+// 只用这一轮原生记录报告的窗口；名字不代表账号或线路实际可用的上下文长度。
 function _fmtTokens(n) {
   if (!n) return '0';
   if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
@@ -560,9 +549,11 @@ function _renderMetaPills(turn, compact = false) {
   const contextTokens = turn.usage && (Object.hasOwn(turn.usage, 'context_tokens')
     ? turn.usage.context_tokens : turn.usage.input_tokens);
   if (typeof contextTokens === 'number' && contextTokens >= 0) {
-    const win = turn.usage.context_window || _modelCtxWindow(turn.model);
-    const pct = Math.min(100, Math.round(contextTokens / win * 100));
-    pills.push(`<span class="pill pill-ctx">📊 ${pct}% ctx</span>`);
+    const win = Number(turn.usage.context_window);
+    if (Number.isFinite(win) && win > 0) {
+      const pct = Math.min(100, Math.round(contextTokens / win * 100));
+      pills.push(`<span class="pill pill-ctx" title="${win.toLocaleString()} tokens">📊 ${pct}% ctx</span>`);
+    } else pills.push('<span class="pill pill-ctx">上下文未知</span>');
   }
   const durationMs = turn.durationMs ?? (turn.tsEnd > turn.ts ? turn.tsEnd - turn.ts : null);
   if (typeof durationMs === 'number' && Number.isFinite(durationMs) && durationMs >= 0) {
@@ -635,6 +626,16 @@ function confirmCardResend({ text, sessionLabel }) {
 }
 
 function renderTurnCard(turn, context = {}) {
+  try { return renderTurnCardContent(turn, context); }
+  catch (error) {
+    console.warn('[turn-card] render failed:', turn?.id, error);
+    // Keep the original turn in the store. One malformed message must not
+    // disappear or prevent the rest of the conversation from being displayed.
+    return `<div class="turn-card ${turn?.role === 'user' ? 'user' : 'assistant'} turn-render-error" data-turn-id="${escapeHtml(String(turn?.id || ''))}"><div class="turn-body" role="status"><p>这条消息显示失败，原始记录仍保留。可切到后台终端查看，或重新打开会话重试。</p><details><summary>技术详情</summary><pre>${escapeHtml(String(error?.message || error))}</pre></details><pre>${escapeHtml(typeof turn?.text === 'string' ? turn.text : '')}</pre></div></div>`;
+  }
+}
+
+function renderTurnCardContent(turn, context = {}) {
   if (turn.role === 'divider') return `<div class="turn-card command-divider" data-turn-id="${escapeHtml(turn.id)}" role="separator"><span>${escapeHtml(turn.text)}</span></div>`;
   // turn = { id, role: 'user'|'assistant', text, ts, model?, kind?, toolCalls? }
   const isUser = turn.role === 'user';
@@ -667,7 +668,10 @@ function renderTurnCard(turn, context = {}) {
       : `<span class="turn-avatar av-letter">${escapeHtml(aiLetterFallback(turn.kind))}</span>`;
   }
 
-  const emptyNative = !turn.text && ({completed:'本轮已完成，没有回答正文',interrupted:'本轮已中断',failed:'本轮执行失败'})[turn.nativeOutcome];
+  const emptyNative = !String(turn.text || '').trim() && (({completed:'本轮已完成，没有回答正文',interrupted:'本轮已中断',failed:'本轮执行失败'})[turn.nativeOutcome]
+    || (!turn.toolCalls?.length && !turn.attachments?.length && !turn.replySegments?.length
+      && !(typeof turn.thinking === 'string' && turn.thinking.trim()) && !turn.presentation?.activities?.length
+      && '这条消息没有正文，可切到后台终端查看。'));
   // An engine-initiated turn (channel input, scheduled task) that could not
   // continue an earlier card is marked in the head, not above the body: the
   // body reads like every other answer, matching Codex's card density.
@@ -1284,7 +1288,7 @@ function mountSessionTurnCard(sessionId, turn, opts = {}) {
     const prevTurn = state._sessionTurns.get(turn.id);
     const prevSig = _turnRenderSigs.get(turn.id) || turnRenderSignature(prevTurn);
     const nextSig = turnRenderSignature(turnForRender2);
-    if (prevSig === nextSig) {
+    if (prevSig === nextSig && !existing.classList.contains('turn-render-error')) {
       state._sessionTurns.set(turn.id, turnForRender2);
       _turnRenderSigs.set(turn.id, nextSig);
       // 负载不参与正文签名；相同回答也要更新这个独立节点。

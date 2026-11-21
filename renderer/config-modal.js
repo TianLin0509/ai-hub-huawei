@@ -457,18 +457,19 @@ function createConfigModalController({
     }
     if (options.accountsOnly) { showConfigDetail(options.provider || 'codex'); return; }
     showConfigMainView();
+    document.defaultView?.__hubSettingsTabs?.activate('general');
     modal.classList.remove('hidden');
     if (options && options.notificationSetup === true) {
       setNotificationTestStatus('先填写飞书接收对象并发送测试；进入重要会话后，再为该会话单独开启通知。', 'working');
       const card = configEl('config-notification-card');
-      try { card?.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch {}
+      try { document.defaultView?.__hubSettingsTabs?.reveal(card); card?.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch {}
       setTimeout(() => {
         try { configEl('cfg-feishu-target')?.focus(); } catch {}
       }, 0);
     }
     if (options && options.operationsSetup === true) {
       const card = configEl('cfg-aliyun-enabled')?.closest('.config-operations-card');
-      try { card?.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch {}
+      try { document.defaultView?.__hubSettingsTabs?.reveal(card); card?.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch {}
       setTimeout(() => {
         try { configEl('cfg-aliyun-health-url')?.focus(); } catch {}
       }, 0);
@@ -596,18 +597,24 @@ function createConfigModalController({
         ...(configEl('cfg-team-auto-approve') ? { teamAutoApproveLeads: !!configEl('cfg-team-auto-approve').checked } : {}),
       };
       if (newConfig.feishuTarget && !/^(?:oc|ou)_[A-Za-z0-9_-]{6,256}$/.test(newConfig.feishuTarget)) {
+        document.defaultView?.__hubSettingsTabs?.reveal(configEl('cfg-feishu-target'));
+        configEl('cfg-feishu-target')?.focus();
         msg.textContent = '飞书接收对象 ID 必须以 oc_（会话/群聊）或 ou_（用户）开头。';
         msg.className = 'config-save-msg error';
         msg.style.display = 'block';
         return;
       }
       if (notificationForm.notificationTargetEnabled && !newConfig.feishuTarget) {
+        document.defaultView?.__hubSettingsTabs?.reveal(configEl('cfg-feishu-target'));
+        configEl('cfg-feishu-target')?.focus();
         msg.textContent = '启用飞书通知前，请先填写飞书接收对象 ID。';
         msg.className = 'config-save-msg error';
         msg.style.display = 'block';
         return;
       }
       if (operationsForm.aliyunMonitorEnabled && !/^https?:\/\//i.test(operationsForm.aliyunHealthUrl)) {
+        document.defaultView?.__hubSettingsTabs?.reveal(configEl('cfg-aliyun-health-url'));
+        configEl('cfg-aliyun-health-url')?.focus();
         msg.textContent = '启用服务器监控前，请填写有效的 HTTP(S) 健康检查 URL。';
         msg.className = 'config-save-msg error';
         msg.style.display = 'block';

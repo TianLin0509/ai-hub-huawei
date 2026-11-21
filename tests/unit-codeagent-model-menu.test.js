@@ -64,11 +64,11 @@ test('context limits use the session account and exact model, with the existing 
   assert.deepEqual(models.contextWindowFor(cfg, [id.toLowerCase()], fs, { dataDir: dir }), { window: 400000, source: 'serve' });
   assert.deepEqual(models.contextWindowFor(account, [id], fs, { dataDir: dir, accountKey: 'abcdef12' }), { window: 800000, source: 'serve' });
   assert.deepEqual(models.contextWindowFor(cfg, [id]), { window: 200000, source: 'account' });
-  assert.deepEqual(models.contextWindowFor(cfg, ['Other-Model'], fs, { dataDir: dir }), { window: 200000, source: 'estimated' });
+  assert.deepEqual(models.contextWindowFor(cfg, ['Other-Model'], fs, { dataDir: dir }), { window: null, source: 'unknown' });
   probe.writeProbed(pool.personalModelsFile(dir), { source: 'serve', models: [id] });
   assert.deepEqual(models.contextWindowFor(cfg, [id], fs, { dataDir: dir }), { window: 200000, source: 'account' });
   probe.writeProbed(path.join(account, probe.MODELS_FILE), { models: [id], details: [{ id, contextWindow: 400000 }] });
-  assert.deepEqual(models.contextWindowFor(account, [id], fs, { dataDir: dir, accountKey: 'abcdef12' }), { window: 200000, source: 'estimated' });
+  assert.deepEqual(models.contextWindowFor(account, [id], fs, { dataDir: dir, accountKey: 'abcdef12' }), { window: null, source: 'unknown' });
 });
 
 test('probe context metadata excludes invalid limits and models outside the account catalog', t => {

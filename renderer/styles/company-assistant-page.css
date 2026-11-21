@@ -134,6 +134,10 @@
 .ca-cbox:focus-within{box-shadow:0 0 0 4px var(--hw-brand-soft)}
 .ca-cstate{display:flex;align-items:center;gap:6px;font-size:var(--hw-fs-12);color:var(--hw-text-3)}
 .ca-cstate i{width:6px;height:6px;border-radius:50%;background:var(--hw-text-3)}
+.ca-cstate i.bad{background:var(--hw-red)}
+.ca-cstate i.warn{background:var(--hw-amber)}
+.ca-cstate[data-tone="bad"]{color:var(--hw-text-2)}
+.ca-cstate .ca-btn{margin-left:4px}
 .ca-cstate i.run{background:var(--hw-brand);animation:hw-ca-breath var(--hw-think-period) ease-in-out infinite}
 .ca-cbox textarea{width:100%;min-height:48px;max-height:160px;padding:6px 2px;border:0;outline:0;resize:none;background:transparent;color:var(--hw-text-1);font:inherit;font-size:var(--hw-fs-14);line-height:1.6}
 .ca-cbox textarea::placeholder{color:var(--hw-text-3)}

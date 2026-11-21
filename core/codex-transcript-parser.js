@@ -14,11 +14,14 @@ const {
 const { isSyntheticUserEntry, isSyntheticUserText, displayUserText, hubAttachedFields } = require('./synthetic-user-filter.js');
 const {
   codexAgentMessageEventFromRecord,
+  codexTaskErrorEventFromRecord,
   codexToolActivityEventFromRecord,
   codexUserMessageEventFromRecord,
   normalizeCodexItemType,
 } = require('./transcript-payload-utils.js');
 const { activityDetail, activityKind } = require('./turn-presentation.js');
+// 这一轮以报错收尾时接在卡片正文末尾的那一段的开头；renderer/turn-error-help.js 认这个开头给出处理按钮。
+const CODEX_TURN_ERROR_PREFIX = 'API Error（这一轮没有完成）: ';
 
 const DEFAULT_CODEX_SESSIONS_ROOT = path.join(os.homedir(), '.codex', 'sessions');
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -418,7 +421,22 @@ function parseCodexRolloutEntries(entries) {
 
   const flushAssistant = () => {
     if (!pendingAssistant) return;
-    const text = (pendingAssistant.finalText || pendingAssistant.agentMessages.join('\n\n') || '').trim();
+    const answer = (pendingAssistant.finalText || pendingAssistant.agentMessages.join('\n\n') || '').trim();
+    // 这一轮以报错收尾（断流、限额等，rollout 记在 task_complete.error）：报错接在已输出的半截回答后面，
+    // 卡片据最后一段给出「重试这一条」等按钮（renderer/turn-error-help.js），不再像正常答完。
+    const failed = !!pendingAssistant.turnError && !pendingAssistant.aborted;
+    const errorText = failed ? CODEX_TURN_ERROR_PREFIX + pendingAssistant.turnError : '';
+    const text = failed ? [answer, errorText].filter(Boolean).join('\n\n') : answer;
+    if (failed) {
+      // 拆卡优先读取 displayMessages，整轮 text 的末尾不会单独显示。
+      pendingAssistant.displayMessages.push({
+        id: `${pendingAssistant.id || `codex-assistant-${turns.length}`}-error`,
+        text: errorText, phase: 'final_answer',
+        providerTurnId: pendingAssistant.providerTurnId,
+        ts: pendingAssistant.tsEnd || pendingAssistant.ts,
+        tsEnd: pendingAssistant.tsEnd || pendingAssistant.ts,
+      });
+    }
     if (text || pendingAssistant.toolCalls.length || pendingAssistant.displayMessages.length) {
       if (pendingAssistant.completed) {
         pendingAssistant.toolCalls = pendingAssistant.toolCalls.map(tool => (
@@ -438,9 +456,9 @@ function parseCodexRolloutEntries(entries) {
         ts: pendingAssistant.ts,
         speedStartedAt: pendingAssistant.taskStartedAt,
         tsEnd: pendingAssistant.tsEnd || pendingAssistant.ts,
-        stopReason: pendingAssistant.completed ? 'task_complete' : 'partial_commentary',
-        // 与原生卡片同一字段：卡片据此显示「本轮已完成 / 已中断」。仍在进行的一轮留空。
-        nativeOutcome: pendingAssistant.aborted ? 'interrupted' : pendingAssistant.completed ? 'completed' : null,
+        stopReason: failed ? 'task_error' : pendingAssistant.completed ? 'task_complete' : 'partial_commentary',
+        // 与原生卡片同一字段：卡片据此显示「本轮已完成 / 已中断 / 执行失败」。仍在进行的一轮留空。
+        nativeOutcome: pendingAssistant.aborted ? 'interrupted' : failed ? 'failed' : pendingAssistant.completed ? 'completed' : null,
         durationMs: pendingAssistant.durationMs || undefined,
         ...(usage ? { usage } : {}),
         generation: pendingAssistant.generation,
@@ -449,7 +467,7 @@ function parseCodexRolloutEntries(entries) {
         speedTier: require('./turn-speed-metrics').speedTier(pendingAssistant.context?.service_tier),
         toolCalls: pendingAssistant.toolCalls,
         displayMessages: pendingAssistant.displayMessages,
-        source: pendingAssistant.completed ? 'codex_rollout' : 'codex_rollout_streaming',
+        source: pendingAssistant.completed || failed ? 'codex_rollout' : 'codex_rollout_streaming',
         sourceIndex: pendingAssistant.sourceIndex,
         sourceEndIndex: pendingAssistant.sourceEndIndex,
       }));
@@ -577,6 +595,16 @@ function parseCodexRolloutEntries(entries) {
       }
       if (eventType === 'turn_aborted') {
         if (pendingAssistant) pendingAssistant.aborted = true;
+        return;
+      }
+      const taskError = eventType === 'task_complete' ? codexTaskErrorEventFromRecord(obj) : null;
+      if (taskError) {
+        const pending = ensurePendingAssistant(index);
+        pending.id = pending.id || _makeTurnId('codex-assistant', obj, index);
+        pending.ts = pending.ts || toMs(obj.timestamp);
+        pending.tsEnd = taskError.completedAt || toMs(obj.timestamp);
+        pending.turnError = taskError.message.replace(/\s+/g, ' ').slice(0, 600);
+        if (Number.isFinite(taskError.durationMs)) pending.durationMs = taskError.durationMs;
         return;
       }
       if (eventType === 'task_complete' && pendingAssistant && !payload.error) {

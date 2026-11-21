@@ -71,7 +71,9 @@ function parseCatalog(data) {
     let input = num(src.input) || num(entry.input), output = num(src.output) || num(entry.output);
     let textOnly = true;
     try { const mod = typeof src.modalities === 'string' ? JSON.parse(src.modalities) : src.modalities; textOnly = !mod || !Array.isArray(mod.input) || mod.input.every(x => x === 'text'); } catch { textOnly = true; }
-    out.push({ id, label: labelOf(text(entry.name) || menuId), menuId, input, output, textOnly, ...capabilities(id) });
+    // 目录的总窗口是显示元数据；input/output 继续供原有请求路径使用。
+    const contextWindow = num(src.context) || num(entry.context);
+    out.push({ id, label: labelOf(text(entry.name) || menuId), menuId, input, output, contextWindow, textOnly, ...capabilities(id) });
   }
   return out;
 }

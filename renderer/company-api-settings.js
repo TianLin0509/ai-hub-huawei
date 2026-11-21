@@ -407,7 +407,7 @@
     select.onchange = async () => {
       const status = target.querySelector('[role="status"]'), zone = select.value;
       select.disabled = true;
-      status.textContent = zone ? `已改为${ZONE_NAMES[zone]}，正在重启反代…` : '已改为自动识别，正在重启反代…';
+      status.textContent = zone ? `已改为${ZONE_NAMES[zone]}，正在重新启动模型通道…` : '已改为自动识别，正在重新启动模型通道…';
       try {
         const result = await ipcRenderer.invoke('company-proxy:set-zone', { zone });
         snapshot = { ...snapshot, proxy: result?.proxy || snapshot?.proxy };

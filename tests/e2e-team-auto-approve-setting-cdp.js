@@ -39,7 +39,7 @@ async function run() {
     };
     await open();
     ok('全新用户：开关默认勾选', await checked());
-    const box = await cdp.eval("(()=>{const e=document.getElementById('cfg-team-auto-approve-field');e.scrollIntoView({block:'center'});const r=e.getBoundingClientRect();return {w:r.width,h:r.height,text:e.innerText}})()");
+    const box = await cdp.eval("(()=>{const e=document.getElementById('cfg-team-auto-approve-field');window.__hubSettingsTabs?.reveal(e);e.scrollIntoView({block:'center'});const r=e.getBoundingClientRect();return {w:r.width,h:r.height,text:e.innerText}})()");
     ok('开关可见且文案为「负责人组队自动批准」', box.w > 0 && box.h > 0 && box.text.includes('负责人组队自动批准'));
     await sleep(300);
     const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });

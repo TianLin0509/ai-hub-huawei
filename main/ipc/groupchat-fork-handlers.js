@@ -34,6 +34,23 @@ function baseKind(kind) {
   return String(kind || '').replace(/-resume$/, '');
 }
 
+// A dormant sidebar snapshot can predate the last hook binding. Reuse only
+// the authoritative record for this Hub id, under the same provider/account.
+function recoverForkSource(session, loadSessionFile) {
+  if (!session || isSafeNativeSessionId(nativeSessionIdentity(session)?.value)
+      || session.codeagentIdentityPending || session.codeagentPrefixFork || typeof loadSessionFile !== 'function') return session;
+  const saved = loadSessionFile(session.id, { strict: true });
+  if (!saved || (saved.hubId || saved.id) !== session.id || baseKind(saved.kind) !== baseKind(session.kind)) return session;
+  if (session.status !== 'dormant' && (!session.transcriptPath || session.transcriptPath !== saved.transcriptPath)) return session;
+  for (const field of ['cwd', 'claudeConfigDir', 'claudeProfile', 'claudeAuthGeneration', 'codeagentConfigDir', 'codeagentPoolAccount', 'codexProfile', 'codexSessionsRoot', 'acpProfileId', 'cliApiProfileId', 'companyRoute', 'companyProxyAccount']) {
+    if ((session[field] ?? '') !== (saved[field] ?? '')) return session;
+  }
+  const identity = nativeSessionIdentity(saved);
+  if (!isSafeNativeSessionId(identity?.value)) return session;
+  return { ...session, [identity.field]: identity.value,
+    transcriptPath: saved.transcriptPath || null };
+}
+
 function meetingTitleBranchIndex(baseTitle, meetings) {
   const prefix = `${baseTitle}（分支`;
   let max = 0;
@@ -88,6 +105,7 @@ function registerGroupChatForkIpc(ipcMain, deps) {
 
   /** 这个会话现在能不能被分支进群聊。拒绝要说清楚原因，不能只给一句“不行”。 */
   function forkabilityOf(session) {
+    session = recoverForkSource(session, sessionStore?.loadSessionFile);
     if (!session) return { ok: false, error: 'session-not-found', message: '会话不存在或尚未启动' };
     if (!GROUP_FORKABLE_KINDS.has(baseKind(session.kind))) {
       return {
@@ -104,13 +122,14 @@ function registerGroupChatForkIpc(ipcMain, deps) {
       return {
         ok: false,
         error: 'native-session-id-missing',
-        message: '这个会话还没绑定原生会话 ID（通常是一次都还没对话过），等它答完一轮再试',
+        message: '这个会话尚未建立可分支的对话身份。请先在原会话发送一条消息并等回答完成，再加入群聊；若已有回答仍失败，请重新打开原会话后重试，或在群聊里新增成员。原会话记录会保留。',
       };
     }
     return { ok: true };
   }
 
   async function forkSessionIntoMeeting(meetingId, source, overrides = {}) {
+    source = recoverForkSource(source, sessionStore?.loadSessionFile);
     const sourceMeeting = source.meetingId && typeof meetingManager.getMeeting === 'function'
       ? meetingManager.getMeeting(source.meetingId)
       : null;
@@ -436,4 +455,4 @@ function registerGroupChatForkIpc(ipcMain, deps) {
   return { forkabilityOf, forkSessionIntoMeeting };
 }
 
-module.exports = { GROUP_FORKABLE_KINDS, meetingTitleBranchIndex, registerGroupChatForkIpc };
+module.exports = { GROUP_FORKABLE_KINDS, meetingTitleBranchIndex, registerGroupChatForkIpc, recoverForkSource };

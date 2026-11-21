@@ -16,9 +16,9 @@ const RULES = [
   // 这里不认，落到兜底的「一键反馈（带日志）」，不诱导再次启动探测（Codex 复审 P2）。
   { kind: 'signer-init', test: /^(?![\s\S]*(?:后台进程还没确认结束|仍然没有送达))[\s\S]*(?:首次签名初始化没完成|签名初始化所需的测试输入)/,
     title: '公司模型的签名还没准备好',
-    cause: 'Hub 要先在后台启动一次 CodeAgent 取签名信息，这一步没做完，所以公司模型暂时用不了。点「重新启动反代」再取一次。',
+    cause: 'Hub 要先在后台启动一次 CodeAgent 取签名信息，这一步没做完，所以公司模型暂时用不了。点「重新启动模型通道」再取一次。',
     steps: [],
-    action: { label: '重新启动反代', act: 'known:proxy-restart' } },
+    action: { label: '重新启动模型通道', act: 'known:proxy-restart' } },
   { kind: 'model-missing', test: /模型不存在|原模型不可用|model[^\n]{0,60}(?:not found|does not exist|is not available|not_found_error)|(?:invalid|unknown) model|not_found_error[^\n]{0,80}model/i,
     title: '这个模型现在用不了',
     cause: '账号没有这个模型的权限，或者模型名已经换代、写错了。点「换模型」从这个账号能用的模型里挑一个继续。',

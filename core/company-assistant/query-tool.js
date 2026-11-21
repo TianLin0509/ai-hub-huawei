@@ -54,6 +54,11 @@ class AssistantQuery {
     if (data.expiresAt <= this.a.now()) throw new Error('查询分页已过期，请重新查询以取得一致的数据');
     const owner = this.owner();
     if (!data.owner || !owner || owner !== data.owner) throw new Error('WeLink 登录身份已改变或尚未核实，请重新查询');
+    if (data.kind === 'meetings') {
+      data.items = data.items.filter(x => !D.isCancelledMeeting(x));
+      data.counts = { ...data.counts, meetings: data.items.filter(x => String(x.sourceId).startsWith('meeting:')).length,
+        calendar: data.items.filter(x => String(x.sourceId).startsWith('cal:')).length, unknownTime: data.items.filter(D.eventTimeUnknown).length };
+    }
     return data;
   }
   save(data) {

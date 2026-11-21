@@ -122,6 +122,20 @@ while ($true) {
     Start-Sleep -Seconds $seconds
     Invoke-Hook 'PostToolUse' @{ session_id = $sid; transcript_path = $transcript; cwd = $cwd; hook_event_name = 'PostToolUse'; tool_name = 'Bash'; tool_use_id = $toolUseId; tool_input = @{ command = "sleep $seconds" }; tool_response = @{ stdout = ''; stderr = ''; interrupted = $false } }
   }
+  # 'queue-test <sec> <keep|drop|exit>': a busy turn with the real CLI's active status line, so a message sent meanwhile
+  # is queued by the terminal (tests/e2e-busy-queued-send-cdp.js). keep = run it afterwards, drop = discard the queued
+  # input (what an Esc interrupt or a lost queue looks like to the Hub), exit = the CLI quits before running it.
+  if ($prompt -match '^queue-test\s+(\d+)\s+(keep|drop|exit)') {
+    $seconds = [int]$Matches[1]; $how = $Matches[2]
+    Write-Host '* Working... (esc to interrupt)'
+    Start-Sleep -Seconds $seconds
+    if ($how -eq 'exit') { Write-Trace 'queue-test exit'; exit 0 }
+    if ($how -eq 'drop') {
+      try { $Host.UI.RawUI.FlushInputBuffer() } catch { }
+      while ([Console]::KeyAvailable) { [void][Console]::ReadKey($true) }
+      Write-Trace 'queue-test dropped queued input'
+    }
+  }
   Start-Sleep -Milliseconds 300
   $reply = "FAKE-REPLY: $prompt"
   Write-Host $reply

@@ -268,7 +268,7 @@ class CompanyProxyService {
       void this.ensureRunning().catch(() => {});
       return;
     }
-    this.setState('failed', '公司模型反代反复退出，已停止自动重启。请在「自有 API」里点「重新启动反代」；详情见日志：' + this.logPath());
+    this.setState('failed', '公司模型反代反复退出，已停止自动重启。请在「自有 API」里点「重新启动模型通道」；详情见日志：' + this.logPath());
   }
 
   async request(pathname, { method = 'GET', timeoutMs = 3000, body } = {}) {

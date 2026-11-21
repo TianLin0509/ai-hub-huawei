@@ -4353,6 +4353,9 @@ try {
     const s = this.sessions.get(sessionId);
     if (s && threadSid) s.codexEndedThreadSid = String(threadSid);
   }
+  // 当前这条会话背后的 CLI 进程（重启、重连后换成新对象）。只做同一性比较，不交给界面。
+  getSessionProcessToken(sessionId) { return this.sessions.get(sessionId)?.pty || null; }
+
   getSessionOutputMark(sessionId) {
     const s = this.sessions.get(sessionId);
     return s ? Number(s.outputChars) || 0 : 0;

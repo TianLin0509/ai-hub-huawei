@@ -105,7 +105,7 @@ function runningCommandLines() {
       execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command',
         '[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-CimInstance Win32_Process | ForEach-Object { $_.ExecutablePath; $_.CommandLine }'],
       { windowsHide: true, timeout: 20000, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }, done);
-    } else execFile('ps', ['-axo', 'command='], { timeout: 20000, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }, done);
+    } else execFile('ps', ['-axo', 'command='], { windowsHide: true, timeout: 20000, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }, done);
   });
 }
 function referencedBy(lines, dir) {

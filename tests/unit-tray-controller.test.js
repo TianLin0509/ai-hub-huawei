@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { createTrayController } = require('../main/tray-controller');
 
-function harness(enabled = true) {
+function harness(enabled = true, options = {}) {
   const state = { enabled, trays: [], focused: 0, quits: 0 };
   class Tray {
     constructor() { this.handlers = {}; this.destroyed = false; this.balloons = 0; state.trays.push(this); }
@@ -18,11 +18,20 @@ function harness(enabled = true) {
   const ctl = createTrayController({
     Tray, Menu, getIcon: () => ({}), getMainWindow: () => win,
     focusWindow: () => { state.focused += 1; win.visible = true; },
-    quit: () => { state.quits += 1; }, isEnabled: () => state.enabled, logger: { warn() {} },
+    quit: () => { state.quits += 1; }, isEnabled: () => state.enabled, logger: { warn() {} }, ...options,
   });
   return { state, win, ctl };
 }
 const closeEvent = () => ({ prevented: false, preventDefault() { this.prevented = true; } });
+
+test('关闭通知时托盘不弹气球，托盘隐藏和点击恢复照常可用', () => {
+  const { state, ctl, win } = harness(true, { canNotify: () => false });
+  ctl.interceptClose(closeEvent());
+  assert.equal(state.trays[0].balloons, 0);
+  assert.equal(win.visible, false);
+  state.trays[0].handlers.click();
+  assert.equal(win.visible, true);
+});
 
 test('开关关着：关窗口照常退出，不建托盘', () => {
   const { state, ctl } = harness(false);

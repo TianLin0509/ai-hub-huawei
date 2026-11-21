@@ -16,13 +16,21 @@ function createComposerContext(document) {
   return {
     element,
     update(context, label = '') {
-      element.hidden = !context?.visible || !Number.isFinite(context.percent);
+      element.hidden = !context?.visible;
       if (element.hidden) {
         value.textContent = '';
         element.removeAttribute('title');
         element.removeAttribute('aria-label');
         return;
       }
+      if (!Number.isFinite(context.percent)) {
+        value.textContent = '未知';
+        ring.hidden = true;
+        element.title = context.title || '上下文窗口未知';
+        element.setAttribute('aria-label', context.ariaLabel || '上下文窗口未知');
+        return;
+      }
+      ring.hidden = false;
       const remaining = 100 - context.percent;
       value.textContent = `${remaining}%`;
       ring.dataset.level = context.level;

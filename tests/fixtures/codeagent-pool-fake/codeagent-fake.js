@@ -81,7 +81,9 @@ if (args[0] === 'serve') {
   const disabled = String(process.env.CODEAGENT_POOL_FAKE_DISABLED_PROVIDER || '');
   const extra = disabled.includes(':') ? [{ id: 'team', display_name: disabled.split(':')[0], status: 'disabled',
     models: Object.fromEntries(disabled.split(':')[1].split(',').filter(Boolean).map(id => [id, { id, display_name: id }])) }] : [];
-  fs.writeFileSync(file, JSON.stringify({ providers: [{ id: 'w3', status: 'available', models }, ...extra], busyIdleDefinition: { discount_status: '闲时2折进行中' },
+  const providers = process.env.CODEAGENT_POOL_FAKE_PROVIDER_FILE
+    ? JSON.parse(fs.readFileSync(process.env.CODEAGENT_POOL_FAKE_PROVIDER_FILE, 'utf8')) : [{ id: 'w3', status: 'available', models }, ...extra];
+  fs.writeFileSync(file, JSON.stringify({ providers, busyIdleDefinition: { discount_status: '闲时2折进行中' },
     creditUsage: { quotas: [{ type: 'CPM', used: 1000, total: 400000, remaining: 399000, resetAt: '2026-11-14 00:00:00' },
       { type: 'CPD_Peak', used: 50, total: 20000, remaining: 19950, resetAt: '2026-10-31 00:00:00' }] } }));
   // 每个模型的配额：今日 29.16M / 400M（7.29%），和公司 /model 菜单实录同一组数

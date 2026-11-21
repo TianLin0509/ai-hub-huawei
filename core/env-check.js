@@ -389,7 +389,7 @@ function probeList(ctx) {
     add('company-proxy', '公司模型反代', 'company-proxy', async () => {
       const p = ctx.proxy();
       if (!p) return entry('company-proxy', '公司模型反代', 'company-proxy', STATUS.off, '这个版本没有公司模型');
-      const fix = [{ label: '重新启动反代', act: 'proxy-restart' }, { label: '打开设置', act: 'open-company-api' }];
+      const fix = [{ label: '重新启动模型通道', act: 'proxy-restart' }, { label: '打开设置', act: 'open-company-api' }];
       const s = p.status || {};
       if (!p.enabled && (s.state === 'stopped' || !s.state)) return entry('company-proxy', '公司模型反代', 'company-proxy', STATUS.off, '没有工具选「公司模型」，不需要启动');
       if (s.state === 'running') return entry('company-proxy', '公司模型反代', 'company-proxy', STATUS.ok, `已就绪${s.port ? ' · 本机端口 ' + s.port : ''}${s.mock ? '（模拟上游）' : ''}`);
@@ -398,19 +398,19 @@ function probeList(ctx) {
         // 缺的是 CodeAgent 本身（没装或读不到版本）：处理入口就放在这一行，装好或修好后一键重启反代。
         return entry('company-proxy', '公司模型反代', 'company-proxy', STATUS.warn, s.message, {
           cause: '公司模型要借用本机 CodeAgent 的登录和签名，反代没找到 CodeAgent，或读不到它的版本号。',
-          steps: ['看上面「CodeAgent」一行是否正常；没装就先装', '装在非默认位置时，到 CodeAgent 设置里填程序位置', '然后点「重新启动反代」'],
-          fixes: [{ label: '打开 CodeAgent 设置', act: 'open-codeagent' }, { label: '重新启动反代', act: 'proxy-restart' }, RECHECK], raw: s.code,
+          steps: ['看上面「CodeAgent」一行是否正常；没装就先装', '装在非默认位置时，到 CodeAgent 设置里填程序位置', '然后点「重新启动模型通道」'],
+          fixes: [{ label: '打开 CodeAgent 设置', act: 'open-codeagent' }, { label: '重新启动模型通道', act: 'proxy-restart' }, RECHECK], raw: s.code,
         });
       }
       if (s.state === 'not-ready') {
         return entry('company-proxy', '公司模型反代', 'company-proxy', STATUS.warn, s.message || '已启动，但公司上游还没准备好', {
           cause: '反代在跑，但连公司模型服务还没成功（首次签名初始化约 10–20 秒；区域选错或登录过期也会这样）。',
-          steps: ['等半分钟后点「重新检测」', '一直不好就打开设置看区域和登录', '再不行点「重新启动反代」'], fixes: [RECHECK, ...fix], raw: s.code || '',
+          steps: ['等半分钟后点「重新检测」', '一直不好就打开设置看区域和登录', '再不行点「重新启动模型通道」'], fixes: [RECHECK, ...fix], raw: s.code || '',
         });
       }
       return entry('company-proxy', '公司模型反代', 'company-proxy', STATUS.bad, s.message || '没能启动', {
         cause: '反代进程起不来或反复退出，选了「公司模型」的会话会发不出消息。',
-        steps: ['点「重新启动反代」', '还不行就点「一键反馈」，诊断包里带日志'], fixes: fix, raw: s.message || '',
+        steps: ['点「重新启动模型通道」', '还不行就点「一键反馈」，诊断包里带日志'], fixes: fix, raw: s.message || '',
       });
     });
   }

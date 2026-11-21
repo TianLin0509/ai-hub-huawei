@@ -75,6 +75,7 @@ function createDesktopNotificationController({
   setTimeoutFn = setTimeout,
   clearTimeoutFn = clearTimeout,
   waitForPaint = ms => new Promise(resolve => setTimeout(resolve, ms)),
+  now = Date.now,
 } = {}) {
   if (typeof BrowserWindow !== 'function') throw new Error('BrowserWindow is required');
   if (!ipcMain || typeof ipcMain.on !== 'function') throw new Error('ipcMain is required');
@@ -82,8 +83,11 @@ function createDesktopNotificationController({
   let readyPromise = null;
   let autoHideTimer = null;
   let disposed = false;
+  let generation = 0;
+  const recent = new Map();
 
   function hide() {
+    generation++;
     if (autoHideTimer) clearTimeoutFn(autoHideTimer);
     autoHideTimer = null;
     if (notificationWindow && !notificationWindow.isDestroyed()) notificationWindow.hide();
@@ -158,7 +162,16 @@ function createDesktopNotificationController({
   async function show(payload) {
     if (disposed) return false;
     const normalized = normalizeDesktopNotificationPayload(payload);
-    if (!normalized) return false;
+    if (!normalized || !canShow(normalized)) return false;
+    // Claim before the first await and before routing to the pet. A renderer
+    // reload or parallel completion reports must not replay the same event.
+    const stable = Number(payload.completedAt) > 0 || !!normalized.noticeId;
+    const key = JSON.stringify([normalized.sessionId, normalized.kind, normalized.noticeKind, normalized.tone,
+      normalized.noticeId || (stable ? normalized.completedAt : [normalized.title, normalized.body])]);
+    if (recent.has(key) && (stable || now() - recent.get(key) < 15000)) return false;
+    recent.set(key, now());
+    while (recent.size > 2048) recent.delete(recent.keys().next().value);
+    const request = ++generation;
     if (typeof route === 'function') {
       let taken = false;
       try { taken = route(normalized) === true; }
@@ -167,7 +180,9 @@ function createDesktopNotificationController({
     }
     const win = ensureWindow();
     const loaded = await readyPromise;
-    if (!loaded || disposed || !win || win.isDestroyed()) return false;
+    if (!loaded || disposed || !win || win.isDestroyed() || request !== generation || !canShow(normalized)) {
+      recent.delete(key); return false;
+    }
     const mainWindow = typeof getMainWindow === 'function' ? getMainWindow() : null;
     win.setBounds(notificationBounds(screen, mainWindow, normalized.body ? NOTIFICATION_HEIGHT : NOTIFICATION_HEIGHT_TITLE_ONLY), false);
     win.webContents.send('desktop-notification:payload', normalized);
@@ -175,8 +190,10 @@ function createDesktopNotificationController({
     // frame when shown in the same tick as the DOM update. Give Chromium one
     // short compositor window, then show without taking keyboard focus.
     await waitForPaint(48);
-    if (disposed || !notificationWindow || notificationWindow !== win || win.isDestroyed()) return false;
-    if (canShow()) win.showInactive();
+    if (disposed || !notificationWindow || notificationWindow !== win || win.isDestroyed() || request !== generation || !canShow(normalized)) {
+      recent.delete(key); return false;
+    }
+    win.showInactive();
     if (autoHideTimer) clearTimeoutFn(autoHideTimer);
     // Destroy after the visible lifetime instead of retaining a hidden
     // BrowserWindow. A hidden auxiliary window can otherwise keep Electron

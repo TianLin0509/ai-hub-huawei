@@ -130,7 +130,11 @@ function createWebSessionsUi({ document, window, ipcRenderer, beforeShow = () =>
     if (!item) return;
     panel.querySelector('.ws-who').innerHTML = `${logoHtml(item)}<strong>${esc(item.displayTitle)}</strong><span>${esc(item.siteName)} · ${esc(item.identityLabel)}</span>`;
     const msg = panelError || (item.status === 'error' ? item.error : item.status === 'loading' ? '网页加载中…' : '');
-    statusEl.hidden = !msg; statusEl.textContent = msg; statusEl.classList.toggle('bad', !!panelError || item.status === 'error');
+    statusEl.hidden = !msg && !item.verificationRequired;
+    statusEl.innerHTML = item.verificationRequired
+      ? `<span>网站的人机验证已持续超过 30 秒，可能不接受内嵌浏览器或当前网络。请在系统浏览器里完成验证并继续使用；两边的登录和验证状态不会自动同步。</span> <button type="button" data-ws-nav="external">在系统浏览器里完成验证</button>`
+      : esc(msg);
+    statusEl.classList.toggle('bad', !!panelError || item.status === 'error');
     syncBounds();
   }
   panel.addEventListener('click', event => {

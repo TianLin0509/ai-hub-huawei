@@ -2333,6 +2333,11 @@ class TranscriptTap extends EventEmitter {
     return this._codex.getRolloutPath(hubSessionId);
   }
 
+  // 忙时排队消息看护（core/busy-queued-watch.js）：只读当前绑定的 Claude transcript 路径。
+  getClaudeTranscriptPath(hubSessionId) {
+    return this._claude._bound.get(hubSessionId)?.transcriptPath || null;
+  }
+
   async bindCodexFromHook(hubSessionId, options = {}) {
     try { return await this._codex.bindFromHook(hubSessionId, options); }
     catch (e) {

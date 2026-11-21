@@ -499,5 +499,18 @@
   "发送时以「> 引用」格式放在这个位置 · 退格可整块删除": "Sent here as a \"> quote\" block · Backspace removes the whole block",
   "引用到输入框：发送时带上来源，让 AI 知道你说的是哪一段": "Quote in input box: the source is included when sent, so the AI knows which part you mean",
   "引用这条消息": "Quote this message",
-  "引用": "Quote"
+  "引用": "Quote",
+  "排队的消息没有执行：{0}。原文已放回输入框": "A queued message did not run: {0}. The text is back in the input box",
+  "这条是在上一条还没跑完时发的，排在终端里；终端程序在执行它之前退出或重启了": "it was sent while the previous message was still running and was queued in the terminal; the terminal program exited or restarted before running it",
+  "这条是在上一条还没跑完时发的，排在终端里；上一条结束后它没有开始执行（可能被 Esc 中断退回了终端输入框）": "it was sent while the previous message was still running and was queued in the terminal; it did not start after the previous one finished (Esc may have put it back in the terminal input)",
+  "终端没有执行这条排队的消息": "The terminal did not run this queued message",
+  "上一条还没跑完：这条已排在终端里，上一条结束后执行；没执行的话会放回输入框提醒你": "The previous message is still running: this one is queued in the terminal and runs after it. If it does not run, it comes back to the input box with a notice",
+  "排队的消息没有执行：{0}。原文在输入框上方的重发条里，输入框里正在写的内容没动": "A queued message did not run: {0}. The text is in the resend bar above the input box; what you are typing was left untouched",
+  "刚才提示没执行的那条，终端后来执行了；已撤下重发提示": "The message reported as not run was run by the terminal after all; the resend notice has been removed",
+  "原文已放回输入框": "The text is back in the input box",
+  "原文保存在这条提示里，点按钮直接发出（不动输入框里正在写的内容）": "The text is kept in this notice; click the button to send it directly (what you are typing stays untouched)",
+  "（还有 {0} 条待处理）": " ({0} more pending)",
+  "这条消息可能没送到：{0}。{1}，请先到终端看一眼是否已收到{2}": "This message may not have been delivered: {0}. {1}; check the terminal first to see whether it arrived{2}",
+  "消息没发出去：{0}。{1}{2}": "Message not sent: {0}. {1}{2}",
+  "关闭这条提示": "Close this notice"
 }

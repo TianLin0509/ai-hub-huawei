@@ -86,7 +86,7 @@ class PersonalChrome {
     if (!this.identities.includes(identityId)) throw Error('未知的账号身份：' + identityId);
     if (!this.ready()) throw Object.assign(Error('你的浏览器还没准备好'), { code: 'PERSONAL_NOT_READY' });
     return new Promise((resolve, reject) => {
-      const child = this.spawn(this.executable(), this.launchArgs(identityId, urls), { env: this.env, detached: true, stdio: 'ignore' });
+      const child = this.spawn(this.executable(), this.launchArgs(identityId, urls), { env: this.env, detached: true, stdio: 'ignore', windowsHide: false });
       child.once('error', reject);
       child.once('spawn', () => { child.unref(); resolve({ identity: identityId, mode: 'personal', pid: child.pid }); });
     });

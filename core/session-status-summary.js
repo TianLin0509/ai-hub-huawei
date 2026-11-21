@@ -119,6 +119,7 @@ const COMPOSER_CTX_DANGER_AT = 90;
 function composerContextRing(session) {
   const raw = session?.contextPct == null || session.contextPct === '' ? NaN : Number(session.contextPct);
   if (!Number.isFinite(raw)) {
+    if (Number(session?.contextUsed) > 0) return { visible: true, percent: null, level: 'ok', title: '上下文窗口未知', ariaLabel: '上下文窗口未知' };
     return { visible: false, percent: null, level: 'ok', title: '', ariaLabel: '' };
   }
   const percent = Math.max(0, Math.min(100, Math.round(raw)));
@@ -154,7 +155,15 @@ function composerModelChip(session) {
   const id = model ? String(model.id || '').trim() : '';
   const displayName = model ? String(model.displayName || '').trim() : '';
   // 徽章一直用 displayName 优先、id 兜底；chip 沿用同一口径，避免两处显示不同的名字。
-  const label = displayName || id;
+  let label = displayName || id;
+  const provider = session?.codeagentModelProvider || model?.provider;
+  if (baseKind(session) === 'codeagent' && provider && label) {
+    const rawLabel = session?.codeagentModelProviderLabel || model?.providerLabel || provider;
+    const groupLabel = require('./codeagent-model-choice').providerDisplayLabel(provider, rawLabel);
+    const suffix = ` · ${rawLabel}`;
+    if (label.endsWith(suffix)) label = label.slice(0, -suffix.length);
+    if (!label.endsWith(` · ${groupLabel}`)) label += ` · ${groupLabel}`;
+  }
   const pending = session && session._modelSwitchPending
     ? String(session._modelSwitchPending.label || session._modelSwitchPending.id || '').trim()
     : '';

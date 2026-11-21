@@ -16,7 +16,7 @@ test('报错翻译表：三类会话报错各有对症动作', () => {
   const cases = [
     ['CLI 已退出到系统终端，消息未发送；请先重启会话', 'cli-exited', 'known:session-restart', '重启会话'],
     ['CLI 已退出到命令行，消息可能没有被接收，未补回车', 'cli-exited', 'known:session-restart', '重启会话'],
-    ['公司模型暂时用不了：首次签名初始化没完成（CodeAgent 命令行在 60 秒内没有结束）。', 'signer-init', 'known:proxy-restart', '重新启动反代'],
+    ['公司模型暂时用不了：首次签名初始化没完成（CodeAgent 命令行在 60 秒内没有结束）。', 'signer-init', 'known:proxy-restart', '重新启动模型通道'],
     ['API Error: 400 模型不存在或配置有误', 'model-missing', 'known:switch-model', '换模型'],
     ['API Error: 404 {"type":"error","error":{"type":"not_found_error","message":"model: claude-x"}}', 'model-missing', 'known:switch-model', '换模型'],
     ['The model `gpt-9` does not exist or you do not have access to it.', 'model-missing', 'known:switch-model', '换模型'],
@@ -75,7 +75,7 @@ test('错误卡：认不出的报错也有一句原因，告诉用户点一键�
   assert.match(html, /hub-err-cause">Hub 认不出这个报错的具体原因。点「一键反馈（带日志）」/);
 });
 
-test('Codex 复审 P2：签名失败但 Hub 已停止重试时不给「重新启动反代」，主按钮是一键反馈', () => {
+test('Codex 复审 P2：签名失败但 Hub 已停止重试时不给「重新启动模型通道」，主按钮是一键反馈', () => {
   for (const tail of ['后台进程还没确认结束，Hub 已停止重试；请点「一键反馈」附带诊断。', 'Hub 已尝试通过命令行参数补发输入，仍然没有送达；请直接点「一键反馈」附带诊断。']) {
     const raw = '公司模型暂时用不了：首次签名初始化没完成（CodeAgent 命令行跑完了，但没有留下签名信息）。\n' + tail;
     assert.equal(humanizeError(raw), null);

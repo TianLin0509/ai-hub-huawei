@@ -72,17 +72,27 @@ function createNetPass({ hosts = [], bridgeHosts = () => [], dataDir, fetchImpl,
     } finally { clearTimeout(timer); }
   }
 
+  // 同步接到队尾，避免多个等待者在上一轮结束后同时打开放行窗口。
+  function enqueue(action, extraStatus = () => ({})) {
+    const previous = running;
+    const task = (previous ? previous.catch(() => {}) : Promise.resolve()).then(action).finally(() => {
+      if (running === task) running = null;
+      try { onChange({ ...status(), ...extraStatus() }); } catch (_) {}
+    });
+    running = task;
+    return task;
+  }
+
   // 只查一遍（打开面板、启动后）：已经确认能访问的这次会话里不重复查。
   async function refresh({ force = false } = {}) {
-    if (running) return running;
-    running = (async () => {
+    if (running) { await running; return status(); }
+    await enqueue(async () => {
       for (const h of listHosts()) {
         const l = live.get(h.host);
         if (!force && l && l.state === 'ok') continue;
         await probe(h);
       }
-    })().finally(() => { running = null; try { onChange(status()); } catch (_) {} });
-    await running;
+    });
     return status();
   }
 
@@ -90,24 +100,22 @@ function createNetPass({ hosts = [], bridgeHosts = () => [], dataDir, fetchImpl,
   // 放行一台：先查；拦着的在看不见的窗口里点放行，再查；还不行就在 Hub 里弹出放行页（visible=false 时不弹）。
   async function passOne(h, { visible = true } = {}) {
     const first = await probe(h);
-    let r = first, clicked = false;
+    let r = first, clicked = false, timedOut = false;
     if (r === 'blocked' && openGate) {
-      try { const g = await openGate(h.page); clicked = !!(g && g.clicked); }
+      try { const g = await openGate(h.page); clicked = !!(g && g.clicked); timedOut = !!g?.timedOut; }
       catch (error) { logger.warn?.('[net-pass] 放行窗口出错：', error.message); }
       r = await probe(h);
     }
     // 后台没放行成功：在 Hub 里弹出放行页，继续自动点，用户也能手动点（2026-11-08 用户定）。
     if (r === 'blocked' && openVisible && visible) {
-      try { await openVisible(h.page); } catch (error) { logger.warn?.('[net-pass] 放行窗口出错：', error.message); }
+      try { const g = await openVisible(h.page); timedOut = timedOut || !!g?.timedOut; } catch (error) { logger.warn?.('[net-pass] 放行窗口出错：', error.message); }
       r = await probe(h);
     }
-    return { host: h.host, name: h.name, first, result: r, clicked, page: h.page };
+    return { host: h.host, name: h.name, first, result: r, clicked, timedOut: r !== 'ok' && (timedOut || live.get(h.host)?.reason === '连接超时'), page: h.page };
   }
   async function passAll() {
-    if (running) await running.catch(() => {});
     const results = [];
-    running = (async () => { for (const h of listHosts()) results.push(await passOne(h)); })().finally(() => { running = null; });
-    await running;
+    await enqueue(async () => { for (const h of listHosts()) results.push(await passOne(h)); }, () => ({ results }));
     return { ...status(), results };
   }
   // 某个下载失败时问一句（core/own-gate.js）：这个地址所在的主机是不是被拦了？被拦就放行。
@@ -116,10 +124,8 @@ function createNetPass({ hosts = [], bridgeHosts = () => [], dataDir, fetchImpl,
     let host = ''; try { host = new URL(String(url)).host.toLowerCase(); } catch (_) { return false; }
     const h = listHosts().find(x => x.host === host);
     if (!h) return false;
-    if (running) await running.catch(() => {});
     let one = null;
-    running = (async () => { one = await passOne(h, { visible: interactive }); })().finally(() => { running = null; try { onChange(status()); } catch (_) {} });
-    await running;
+    await enqueue(async () => { one = await passOne(h, { visible: interactive }); });
     if (!one || one.first !== 'blocked') return false;
     return one.result === 'ok' ? 'passed' : 'blocked';
   }

@@ -83,6 +83,8 @@ function sessionModelId(session) {
   if (require('./codeagent-models').isSafeModelId(session.fixedModel)) candidate = session.fixedModel;
   else if (session.currentModel && typeof session.currentModel === 'object') {
     candidate = session.currentModel.id || null;
+  } else if (typeof session.currentModel === 'string') {
+    candidate = session.currentModel;
   } else if (session.model && typeof session.model === 'object') {
     candidate = session.model.id || null;
   } else if (typeof session.model === 'string') {

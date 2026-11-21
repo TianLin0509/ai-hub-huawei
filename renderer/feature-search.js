@@ -143,7 +143,8 @@ async function runSteps(document, steps) {
       el.click();
     } else if (step.highlight) {
       // 等它真正显示出来（配置弹窗读完配置才打开、可选功能弹窗是异步画的），否则滚动和高亮都落空。
-      const el = await waitFor(() => { const e = findTarget(document, step.highlight); return e && e.getClientRects().length ? e : null; });
+      // 设置弹窗分了页签（renderer/config-settings-tabs.js）：目标在别的页签时先切过去。
+      const el = await waitFor(() => { const e = findTarget(document, step.highlight); if (e) document.defaultView?.__hubSettingsTabs?.reveal(e); return e && e.getClientRects().length ? e : null; });
       if (!el) return { ok: false, missing: typeof step.highlight === 'string' ? step.highlight : step.highlight.text };
       highlight(document, el);
     }

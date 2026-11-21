@@ -1,4 +1,8 @@
 [
+  "tests/unit-model-metadata-rsi-a6.test.js",
+  "tests/unit-notification-storm.test.js",
+  "tests/unit-windows-hide-guard.test.js",
+  "tests/unit-web-sessions-verification.test.js",
   "tests/unit-app-update-source-status.test.js",
   "tests/unit-download-source-status.test.js",
   "tests/unit-download-progress-view.test.js",
@@ -315,5 +319,12 @@
   "tests/unit-options-menu-stable.test.js",
   "tests/unit-silent-fail-pass-pet.test.js",
   "tests/unit-rsis-fresh-user.test.js",
-  "tests/unit-rsi-p-ux-defaults.test.js"
+  "tests/unit-rsi-p-ux-defaults.test.js",
+  "tests/unit-busy-queued-send.test.js",
+  "tests/unit-codex-turn-error-card.test.js",
+  "tests/unit-rsit-fresh-misleading.test.js",
+  "tests/unit-one-screen-layout.test.js",
+  "tests/unit-rsi-rail-width.test.js",
+  "tests/unit-session-recovery-rsi-z.test.js",
+  "tests/unit-boot-splash.test.js"
 ]

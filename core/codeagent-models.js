@@ -462,10 +462,10 @@ function recordMenu(dataDir, labels, { key = 'personal', complete = false, now =
 // 2026-10-13 公司版：输入框旁的上下文圆环一直不显示。Claude 的占比来自状态栏回调，CodeAgent 会话没有接状态栏
 // （Hub 不改同事 CodeAgent 配置里的状态栏）。改为每轮回答后从原生记录里这一轮的用量算：
 // 已用 = 输入 + 缓存写入 + 缓存读取 + 输出 token；上限优先取该账号 serve 清单的 max_context_tokens，再取配置的 contextWindow，
-// 按「会话当前模型 → 回答实际模型」的顺序找；清单里都没有时按 200K 估（windowSource=estimated）。
-const DEFAULT_CONTEXT_WINDOW = 200000;
+// 按「会话当前模型 → 回答实际模型」的顺序找；没有权威上限时保留未知，不猜窗口和占比。
+const DEFAULT_CONTEXT_WINDOW = null;
 
-function contextWindowFor(configDir, modelIds = [], fsModule = fs, { dataDir = null, accountKey = 'personal' } = {}) {
+function contextWindowFor(configDir, modelIds = [], fsModule = fs, { dataDir = null, accountKey = 'personal', provider = '' } = {}) {
   if (dataDir) {
     const probe = require('./codeagent-model-probe');
     const file = accountKey === 'personal' ? require('./codeagent-pool').personalModelsFile(dataDir)
@@ -473,6 +473,15 @@ function contextWindowFor(configDir, modelIds = [], fsModule = fs, { dataDir = n
     const cached = file ? probe.readProbed(file) : null;
     if (cached?.source === 'serve') {
       for (const id of modelIds) {
+        const rows = (cached.details || []).filter(row => clean(row.id).toLowerCase() === clean(id).toLowerCase());
+        const selected = provider ? rows.filter(row => row.provider === provider) : rows;
+        if (rows.length > 1 || provider && rows.length && !rows.some(row => row.provider === provider)) {
+          const sizes = selected.map(row => Number(row.contextWindow));
+          if (sizes.length && sizes.every(size => Number.isFinite(size) && size >= 1000 && size === sizes[0])) {
+            return { window: Math.round(sizes[0]), source: 'serve' };
+          }
+          return { window: null, source: 'unknown' };
+        }
         const size = cached.contextWindows?.[clean(id).toLowerCase()];
         if (size) return { window: size, source: 'serve' };
       }
@@ -497,14 +506,15 @@ function contextWindowFor(configDir, modelIds = [], fsModule = fs, { dataDir = n
     const key = clean(id).toLowerCase();
     if (key && windows[key]) return { window: windows[key], source: 'account' };
   }
-  return { window: DEFAULT_CONTEXT_WINDOW, source: 'estimated' };
+  return { window: null, source: 'unknown' };
 }
 
 function contextFromUsage(usage, window) {
-  if (!usage || typeof usage !== 'object' || !(window > 0)) return null;
+  if (!usage || typeof usage !== 'object') return null;
   const n = key => (Number.isFinite(Number(usage[key])) && Number(usage[key]) > 0 ? Number(usage[key]) : 0);
   const used = n('input_tokens') + n('cache_creation_input_tokens') + n('cache_read_input_tokens') + n('output_tokens');
   if (!(used > 0)) return null;
+  if (!(window > 0)) return { contextUsed: used, contextEffectiveMax: null, contextPct: null };
   return { contextUsed: used, contextEffectiveMax: window, contextPct: Math.round(used / window * 1000) / 10 };
 }
 
@@ -577,7 +587,9 @@ function modelOptions(dataDir, { configDir = null, accountKey = 'personal', incl
   const routed = row => row.provider && (providers.size > 1 || !/^(?:w3|built-in)$/i.test(row.provider));
   const options = catalog.models.filter(isSafeModelId).flatMap(id => {
     const own = details.filter(row => row.id.toLowerCase() === id.toLowerCase());
-    return own.length ? own.map(row => ({ id, label: routed(row) ? `${row.label || modelLabel(id)} · ${row.providerLabel || row.provider}` : row.label && row.label !== id ? row.label : modelLabel(id), source: catalog.source,
+    return own.length ? own.map(row => ({ id, label: routed(row) ? `${row.label || modelLabel(id)} · ${require('./codeagent-model-choice').providerDisplayLabel(row.provider, row.providerLabel)}` : row.label && row.label !== id ? row.label : modelLabel(id), source: catalog.source,
+      contextWindow: catalog.source === 'serve' && Number.isFinite(Number(row.contextWindow || (own.length === 1 && catalog.contextWindows?.[id.toLowerCase()])))
+        ? Number(row.contextWindow || (own.length === 1 && catalog.contextWindows?.[id.toLowerCase()])) || null : null,
       ...(routed(row) ? { provider: row.provider, providerLabel: row.providerLabel || row.provider, menuLabel: row.label || id } : {}) }))
       : [{ id, label: modelLabel(id), source: catalog.source }];
   });
@@ -602,6 +614,9 @@ function modelOptions(dataDir, { configDir = null, accountKey = 'personal', incl
   const avoided = unavailableModels(dataDir, { accountKey });
   const providerOff = unavailableModels(dataDir, { accountKey, catalog, avoid: false });
   const reasonOf = option => avoided.get(option.id.toLowerCase()) || (option.source === 'settings' ? providerOff.get(option.id.toLowerCase()) : '') || '';
+  for (const option of listed) {
+    if (!(option.contextWindow >= 1000)) option.contextWindow = contextWindowFor(configDir, [option.id], fs, { dataDir, accountKey, provider: option.provider || '' }).window;
+  }
   const usable = listed.filter(option => !reasonOf(option));
   if (!includeUnavailable) return usable;
   const greyed = listed.filter(option => reasonOf(option)).map(option => ({ ...option, unavailable: true, unavailableReason: reasonOf(option) }));

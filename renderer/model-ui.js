@@ -15,6 +15,7 @@ function modelPickerIdText(option) {
   if (option.disabled && option.upgradeTo) return `需 ${option.upgradeTo}+`;
   // CodeAgent 配置里自配、账号清单还没读到的模型（core/codeagent-models.js settingsProviderModels）：标「自配」，不重复写一遍模型名。
   if (option.source === 'settings') return '自配';
+  if (option.provider && String(option.label).toLowerCase().startsWith(String(option.id).toLowerCase() + ' · ')) return '';
   return String(option.label).toLowerCase() === String(option.id).toLowerCase() ? '' : option.id;
 }
 
@@ -441,9 +442,14 @@ function createModelUiController({
       item.title = opt.disabled && opt.upgradeTo
         ? `${opt.description || opt.id} · 需要 Claude Code ${opt.upgradeTo}+`
         : (opt.description || opt.id);
+      if (session.kind?.startsWith('codeagent')) {
+        item.title += opt.contextWindow > 0 ? ` · 上下文窗口 ${Number(opt.contextWindow).toLocaleString()} tokens` : ' · 上下文窗口未知';
+      }
       const idText = modelPickerIdText(opt);
+      const contextText = session.kind?.startsWith('codeagent') && Object.hasOwn(opt, 'contextWindow')
+        ? (opt.contextWindow > 0 ? `${Number(opt.contextWindow) / 1000}K ctx` : '上下文未知') : '';
       item.innerHTML = `<span class="model-picker-check">${current ? '✓' : ''}</span>`
-        + `<span class="model-picker-label">${escapeHtml(opt.label)}</span>`
+        + `<span class="model-picker-label">${escapeHtml(opt.label)}${contextText ? `<small class="model-picker-context">${escapeHtml(contextText)}</small>` : ''}</span>`
         + codeagentUsageSpan(usageEntry, opt.id)
         + (idText ? `<span class="model-picker-id">${escapeHtml(idText)}</span>` : '');
       if (strategy && !opt.disabled && !(session && session._modelSwitchPending)) {

@@ -13,9 +13,9 @@ const BOX_MAX = 0.45;          // 透明边最多占身体框的比例，防止�
 const BOX_ROLES_MAX = 24;
 
 // 桌面回执去哪（2026-11-11 用户反馈右下角回执太烦）：pet＝桌宠开着时由桌宠说、没开时弹右下角小卡（默认，不漏）；
-// popup＝一律右下角小卡；off＝不弹，只留要紧的（到点提醒、出错、待办到期、登录失效、考勤、硬盘快满）。
+// popup＝一律右下角小卡；off＝不弹，只留要紧的（到点提醒、出错、待办到期、登录失效、考勤、硬盘快满、会前提醒）。
 const NOTIFY_MODES = Object.freeze(['pet', 'popup', 'off']);
-const URGENT_KINDS = new Set(['reminder', 'hub-reminder', 'commitment-due', 'welink-login', 'attendance', 'disk']);
+const URGENT_KINDS = new Set(['reminder', 'hub-reminder', 'commitment-due', 'welink-login', 'attendance', 'disk', 'meeting-prep']);
 const isUrgentNotice = n => !!n && (n.tone === 'bad' || URGENT_KINDS.has(String(n.kind || '')) || URGENT_KINDS.has(String(n.noticeKind || '')));
 
 const CLICK_MODES = Object.freeze(['play', 'open']);

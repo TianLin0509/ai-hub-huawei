@@ -42,7 +42,10 @@ function isErrorLine(text) { return ERROR_LINE.test(String(text || '')); }
 function classifyError(text) {
   const whole = String(text || '').trim();
   // 真实报错是一行短文字；回答里拿「API Error」开头来解释的，通常很长或是带句号的整句。
-  if (whole.length > 800 || /[。！？]$/.test(whole)) return null;
+  // Hub 自己接在 Codex 报错回合末尾的那段（core/codex-transcript-parser.js 的 CODEX_TURN_ERROR_PREFIX）一定是报错，
+  // 公司反代的中文报错以句号结尾（「……这一轮没有完成，请重试。」），不能被下面的句号规则挡掉。
+  const hubMarked = /^API Error（这一轮没有完成）: /.test(whole);
+  if (whole.length > 800 || (!hubMarked && /[。！？]$/.test(whole))) return null;
   const value = whole.slice(0, 2000);
   if (!isErrorLine(value)) return null;
   return KINDS.find(rule => rule.test.test(value)) || FALLBACK;

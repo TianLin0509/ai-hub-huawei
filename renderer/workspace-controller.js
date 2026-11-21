@@ -345,7 +345,7 @@
     // 群聊成员走的也是这里，所以「设为默认」对群聊同样生效。
     // 公司版 Claude Code / Codex / DSH 没指定模型时（群聊成员刚换成这个工具）：用启动中心保存的来源和模型，也就是上次选的。
     const savedCompanyModel = () => {
-      const id = modelCards.defaultPick(kind, companyProvider[kind])?.model;
+      const id = modelCards.defaultPick(kind, companyProvider[kind], { codeagentInstalled: require('./codeagent-preference').detectedInstalled() })?.model;
       return modelOptions.some(option => option.id === id) ? id : modelOptions[0]?.id || '';
     };
     const model = companyApiKind(kind) ? (modelOptions.some(option => option.id === modelId) ? modelId : savedCompanyModel()) : modelOptions.some(option => option.id === modelId)
@@ -1976,7 +1976,11 @@
     companyApiModels[kind] = models;
     setRuntimeModelOptions(kind, models);
     // 本次打开里没点过卡：默认选保存的来源和模型（也就是上次选的）。点过就保留点选，不被重新读配置冲掉。
-    if (!companyPick[kind]) companyPick[kind] = modelCards.defaultPick(kind, provider);
+    // 默认卡要看本机有没有 CodeAgent（没有就不默认公司模型），先等这次检测出结果（已测过时立即返回）。
+    if (!companyPick[kind]) {
+      const codeagentInstalled = await require('./codeagent-preference').refresh(ipcRenderer).catch(() => null);
+      if (!companyPick[kind]) companyPick[kind] = modelCards.defaultPick(kind, provider, { codeagentInstalled });
+    }
     if (selectedKind === kind) selectedModel = companyPickModel(kind);
     // 账号下拉（公司模型）：和 CodeAgent 同一份号池状态。读不到不挡建会话，自动挑号照常可用。
     await ipcRenderer.invoke('codeagent-pool:list').then(status => {

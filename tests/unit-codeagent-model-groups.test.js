@@ -33,7 +33,7 @@ test('serve keeps same model under max and free, and cache reload exposes both r
   const options = models.modelOptions(dir);
   assert.equal(options.length, 2);
   assert.deepEqual(options.map(row => row.provider), ['max', 'free']);
-  assert.deepEqual(options.map(row => row.label), [`${ID} · max`, `${ID} · free`]);
+  assert.deepEqual(options.map(row => row.label), [`${ID} · max（高倍率分组）`, `${ID} · free（免费分组）`]);
 });
 
 test('the account page displays provider-qualified permissions instead of collapsing model names', () => {

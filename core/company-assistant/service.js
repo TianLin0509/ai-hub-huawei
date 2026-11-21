@@ -1213,7 +1213,7 @@ class CompanyAssistant {
   agentSnapshot(snap) {
     // 内部原值保留，给模型的副本只保留已换算文字，避免自行按UTC再算一遍。
     const display = x => { const { start, end, timeEvidence, ...rest } = x; return { ...rest, startDisplay: x.startDisplay || D.displayTime(start), endDisplay: x.endDisplay || D.displayTime(end) }; };
-    return { ...snap, meetings: (snap.meetings || []).map(display), calendar: (snap.calendar || []).map(display) };
+    return { ...snap, meetings: (snap.meetings || []).filter(x => !D.isCancelledMeeting(x)).map(display), calendar: (snap.calendar || []).filter(x => !D.isCancelledCalendarEvent(x)).map(display) };
   }
   // 本人邮箱：设置优先，再读 WeLink；最后只接受域名与已知公司域名相同的 Git 全局邮箱，找到后共用。
   async accountEmail(s = this.settings()) {

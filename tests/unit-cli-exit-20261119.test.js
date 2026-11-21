@@ -106,7 +106,7 @@ test('③ 签名初始化：CodeAgent 起来几秒就以非 0 退出、没写日
   const text = signerInitFailureMessage('SIGNER_INIT_NO_STAMP', { version: '1.2615.02.02-03', detail: 'LOG_MISSING', report });
   assert.match(text, /CodeAgent 账号本身现在用不了/);
   assert.match(text, /个人账号重新登录/);
-  assert.doesNotMatch(text, /点「重新启动反代」再试一次/);
+  assert.doesNotMatch(text, /点「重新启动模型通道」再试一次/);
   const { matchKnownIssue } = require('../core/known-issues');
   const m = matchKnownIssue({ area: 'session-create', details: '创建失败：' + text });
   assert.equal(m.id, 'codeagent-account-unusable');
@@ -114,7 +114,7 @@ test('③ 签名初始化：CodeAgent 起来几秒就以非 0 退出、没写日
   assert.deepEqual(m.action, { label: '个人账号重新登录', act: 'known:codeagent-personal-login' });
   assert.deepEqual(m.more.map(a => a.act), ['known:proxy-restart']);
   // 旧版文案（5.6.47 用户贴的原文）也认。
-  const old = '创建失败：公司模型暂时用不了：首次签名初始化没完成（CodeAgent 命令行跑完了，但没有留下签名信息：签名日志没有生成）。\n本次探测约 10.2 秒后 CodeAgent 就退出了（退出码 1），未生成签名日志。\n处理办法：…点「重新启动反代」再试一次。';
+  const old = '创建失败：公司模型暂时用不了：首次签名初始化没完成（CodeAgent 命令行跑完了，但没有留下签名信息：签名日志没有生成）。\n本次探测约 10.2 秒后 CodeAgent 就退出了（退出码 1），未生成签名日志。\n处理办法：…点「重新启动模型通道」再试一次。';
   assert.equal(matchKnownIssue({ area: 'session-create', details: old }).id, 'codeagent-account-unusable');
   // 超时、退出码 0、清理未确认这些别的原因仍归「反代没能启动」。
   const timeout = signerInitFailureMessage('SIGNER_INIT_TIMEOUT', { timeoutMs: 60000, report: { cliStarted: true, stoppedBy: 'timeout' } });

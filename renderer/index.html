@@ -91,6 +91,7 @@
   <link rel="stylesheet" href="styles/session-immersive.css">
 <link rel="stylesheet" href="styles/zoom-label.css">
   <link rel="stylesheet" href="styles/appearance.css">
+  <link rel="stylesheet" href="styles/boot-splash.css">
   <link rel="stylesheet" href="styles/account-quota-panel.css">
   <link rel="stylesheet" href="styles/hw-shell.css">
   <link rel="stylesheet" href="styles/hw-mid.css">
@@ -102,6 +103,7 @@
   <link rel="stylesheet" href="styles/hub-error-card.css">
   <link rel="stylesheet" href="styles/home-recent.css">
   <link rel="stylesheet" href="styles/controls.css" id="controls-layer">
+  <link rel="stylesheet" href="styles/one-screen.css">
   <!-- 英文界面专用排版（2026-11-20，shell 组）：只在 html[lang="en"] 下生效，中文界面不受影响。 -->
   <style id="i18n-en-shell">
     /* 侧栏「启动」按钮：Launch 比「启动」宽，收窄内边距让整词放得下 */
@@ -211,6 +213,7 @@
           <div class="options-theme-picker" id="options-theme-picker" role="radiogroup" aria-label="选择主题"></div>
           <div class="options-theme-note">默认冷白工作室；CLI 终端随冷白主题适配浅色。手动选择会保存。</div>
           <button type="button" id="options-appearance">AI 头像与图标 →</button>
+          <button type="button" id="options-boot-splash">开场动画 →</button>
         </div>
       </div>
       <div class="options-wrapper">
@@ -887,6 +890,8 @@
   <script src="progress-view.js"></script>
   <script src="running-overview.js"></script>
   <script src="subagent-progress-view.js"></script>
+  <script src="config-settings-tabs.js"></script>
+  <script src="launch-more-options.js"></script>
 
   <div id="config-modal" class="config-modal-overlay hidden">
     <div class="config-modal-content">
@@ -1027,5 +1032,6 @@
   </div>
 
 <script src="appearance-controller.js"></script>
+<script src="boot-splash.js"></script>
 </body>
 </html>

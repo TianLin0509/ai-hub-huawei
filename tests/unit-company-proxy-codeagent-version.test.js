@@ -29,7 +29,7 @@ test('version unreadable and zone unknown: one plain problem (CodeAgent), not th
   assert.deepEqual(error.missing, ['codeagentVersion']);
   assert.match(error.message, /^公司模型暂时用不了：读不到 CodeAgent 版本/);
   assert.doesNotMatch(error.message, /所在区域|模型接口地址|上游信息不全/);
-  assert.match(error.message, /重新启动反代/);
+  assert.match(error.message, /重新启动模型通道/);
 });
 
 test('CodeAgent not found at all: says so', async () => {

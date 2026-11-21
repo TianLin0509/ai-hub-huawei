@@ -1406,13 +1406,35 @@ function showDormantResumePlaceholder(session, error = null, { checking = false 
   title.textContent = error ? '会话唤醒失败' : checking ? '正在检查会话…' : '正在唤醒会话…';
   const detail = document.createElement('span');
   detail.textContent = error
-    ? `${String(error && error.message || error)}。再次点击左侧会话可重试。`
+    ? `${String(error && error.message || error).replace(/[。.!！?？]+$/, '')}。再次点击左侧会话可重试。`
     : `${session.title || 'Session'} · ${checking ? '正在确认会话可用' : '正在恢复原生 CLI 与历史上下文'}`;
   copy.append(title, detail);
   panel.append(spinner, copy);
   terminalPanelEl.appendChild(panel);
   // pi 会话存的线路缺钥匙（r39 审查）：就地补 Key，保存后直接重新唤醒，不让用户去设置页找。
   if (error) {
+    const history = document.createElement('button');
+    history.className = 'hub-button';
+    history.textContent = '查看已有历史';
+    history.addEventListener('click', () => {
+      if (activeSessionId !== session.id) return;
+      // Reading the transcript is independent of starting a CLI writer.
+      panel.remove();
+      applyViewMode('card', { remember: false });
+      if (overlay) overlay.classList.remove('hidden');
+      void loadSessionHistoryToOverlay(session.id).catch(err => {
+        if (activeSessionId === session.id) showDormantResumePlaceholder(session, err);
+      });
+    });
+    const fresh = document.createElement('button');
+    fresh.className = 'hub-button';
+    fresh.textContent = '新建会话（保留此会话）';
+    fresh.addEventListener('click', () => window.WorkspaceController.openNewSessionModal({ kind: session.kind,
+      ...(session.cwd ? { workspace: { path: session.cwd, label: session.workspaceLabel || session.title || '' } } : {}) }));
+    const actions = document.createElement('div');
+    actions.className = 'session-resume-actions';
+    actions.append(history, fresh);
+    copy.append(actions);
     void require('./pi-route-key-fix').mountPiRouteKeyFix(copy, { session, modelId: sessionModelId(session), ipc: ipcRenderer, replaceEl: detail,
       onRetry: () => selectSession(session.id) }).catch(err => console.warn('[pi-route-key-fix]', err && err.message));
   }
@@ -4627,6 +4649,52 @@ function updateFloatingPromptReceipt(receipt) {
 
 ipcRenderer.on('session:prompt-receipt', (_event, receipt) => updateFloatingPromptReceipt(receipt));
 
+// 忙时发出、排在终端里的那条 CLI 没执行（主进程 core/busy-queued-watch.js 判定）：原文放回输入框，挂「确认没收到，重发」条。
+// 不自动重发：CLI 可能把它退回了自己的输入框，或已在别处执行，由用户看一眼终端再决定。
+function handleQueuedPromptUnsent(payload) {
+  const sessionId = payload?.sessionId;
+  const text = typeof payload?.text === 'string' ? payload.text : '';
+  if (!sessionId || !text.trim() || !sessions.has(sessionId)) return false;
+  const reason = String(payload.reason || '终端没有执行这条排队的消息');
+  const entry = { text, reason, uncertain: true, submissionId: payload.clientSubmissionId || '' };
+  let shown = false, restored = false;
+  for (const bar of document.querySelectorAll('.floating-input-bar')) {
+    if (bar.dataset.sessionId !== sessionId) continue;
+    const inputBox = bar.querySelector('.floating-input-box');
+    // 输入框里已有用户在写的新内容就不覆盖：原文只留在重发条里。
+    if (inputBox && !readContenteditablePlainText(inputBox).trim()) { replaceContenteditableText(inputBox, text); saveFloatingInputDraft(sessionId, inputBox); }
+    if (inputBox && readContenteditablePlainText(inputBox).trim() === text.trim()) restored = true;
+    if (bar._resendStrip) { bar._resendStrip.show(entry); shown = true; }
+  }
+  if (!shown) {
+    // 会话在后台：追加进待重发列表（不顶掉先前的），切过去时提示条照样在。
+    require('./composer-resend-strip').rememberPending(composerResendPending, sessionId, entry);
+    if (!floatingInputDrafts.get(sessionId)) { floatingInputDrafts.set(sessionId, text); restored = true; }
+  }
+  if (restored) showToast(`排队的消息没有执行：${reason}。原文已放回输入框`, 'warning', { sessionId });
+  else showToast(`排队的消息没有执行：${reason}。原文在输入框上方的重发条里，输入框里正在写的内容没动`, 'warning', { sessionId });
+  return true;
+}
+ipcRenderer.on('session:queued-prompt-unsent', (_event, payload) => handleQueuedPromptUnsent(payload));
+
+// 报告过「没执行」的那条后来 CLI 又执行了（迟到）：撤下它的重发条；输入框里还原样放着它的话一并清掉，免得重复发。
+function handleQueuedPromptExecuted(payload) {
+  const sessionId = payload?.sessionId, id = payload?.clientSubmissionId;
+  if (!sessionId || !id) return false;
+  require('./composer-resend-strip').forgetConfirmed(composerResendPending, sessionId, id);
+  const text = String(payload.text || '').trim();
+  for (const bar of document.querySelectorAll('.floating-input-bar')) {
+    if (bar.dataset.sessionId !== sessionId) continue;
+    bar._resendStrip?.clearIfSubmission(id);
+    const inputBox = bar.querySelector('.floating-input-box');
+    if (text && inputBox && readContenteditablePlainText(inputBox).trim() === text) { replaceContenteditableText(inputBox, ''); clearFloatingInputDraft(sessionId); }
+  }
+  if (text && floatingInputDrafts.get(sessionId)?.trim() === text) floatingInputDrafts.delete(sessionId);
+  showToast('刚才提示没执行的那条，终端后来执行了；已撤下重发提示', 'info', { sessionId });
+  return true;
+}
+ipcRenderer.on('session:queued-prompt-executed', (_event, payload) => handleQueuedPromptExecuted(payload));
+
 ipcRenderer.on('session:command-updated', (_event, event) => {
   requestCardIncrementalRefresh(event.sessionId, { reason: 'command' });
 });
@@ -4893,10 +4961,16 @@ async function switchSessionScene(sessionId, sceneId, inputBox, { fresh }) {
   const newId = require('crypto').randomUUID();
   if (draft) floatingInputDrafts.set(newId, draft);
   const purpose = require('../core/session-scenes').scenePurpose(sceneId);
+  const sourceModel = require('../core/session-capabilities').sessionModelId(s);
   const opts = {
     id: newId, cwd: s.cwd,
+    ...require('../core/cli-api-profiles').metadata(s),
+    ...require('../core/codeagent-model-choice').routeFields(s),
+    ...(s.codeagentPoolAccount ? { codeagentPoolAccount: s.codeagentPoolAccount } : {}),
+    ...(s.companyProxyAccount ? { companyProxyAccount: s.companyProxyAccount } : {}),
     ...(s.workspaceLabel ? { workspaceLabel: s.workspaceLabel } : {}),
-    ...(s.currentModel?.id ? { model: s.currentModel.id } : {}),
+    ...(sourceModel ? { model: sourceModel } : {}),
+    ...(sourceModel && String(s.kind).startsWith('codeagent') ? { fixedModel: sourceModel, codeagentModelPick: true } : {}),
     ...(s.effort ? { effort: s.effort } : {}),
     ...(s.codexProfile ? { codexProfile: s.codexProfile } : {}),
     // A new scene is a new conversation: keep its chosen account, never reuse
@@ -5095,10 +5169,14 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   // 发送失败后挂在输入框上方的「重发」条：重发交回本输入框的 sendInput（session:send-prompt 闭环）。
   bar._resendStrip = require('./composer-resend-strip').createResendStrip(document, bar, {
     store: composerResendPending, key: sessionId,
-    resend: () => sendInput(),
-    restoreText: (text) => {
-      // 输入框还空着才放回原文；用户已经改过就按改过的发。
-      if (text && !readContenteditablePlainText(inputBox)) { replaceContenteditableText(inputBox, text); saveFloatingInputDraft(sessionId, inputBox); }
+    inputHas: text => !!String(text || '').trim() && readContenteditablePlainText(inputBox).trim() === String(text).trim(),
+    // 输入框空着或里面就是这段原文：放回再按正常发送走；输入框里是用户新写的草稿：不动它，直接发这条原文。
+    resend: text => {
+      const current = readContenteditablePlainText(inputBox).trim();
+      if (!current || current === String(text).trim()) {
+        if (!current) { replaceContenteditableText(inputBox, text); saveFloatingInputDraft(sessionId, inputBox); }
+        sendInput();
+      } else sendInput(text);
     },
   });
   const codexControls = createCodexNativeControls({
@@ -5741,15 +5819,17 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   //   （main/ipc/prompt-submit-handlers.js → core/group-chat-watcher.sendToPty），
   //   与群聊派发同一条实现；渲染进程只负责清 UI 和展示"没提交"这件事。
 
-  function sendInput() {
+  // overrideText：重发条直接发某条原文（rsi-q 返工）。不读、不清输入框，用户正在写的新草稿原样保留。
+  function sendInput(overrideText) {
+    const override = typeof overrideText === 'string' && overrideText.trim() ? overrideText : null;
     { const current = sessions.get(sessionId);
       if (require('./session-background-tasks').isBackgroundPurpose(current?.purpose) && isSessionCardWorking(current)) { showToast(require('./session-background-tasks').BUSY_NOTICE, 'info'); return; } }
     const skillComposer = require('./composer-codeagent-skills');
-    const userText = skillComposer.skillPrompt(inputBox, readContenteditablePlainText(inputBox), sessions.get(sessionId));
-    const submittedSkill = skillComposer.selectedSkill(inputBox);
+    const userText = override ?? skillComposer.skillPrompt(inputBox, readContenteditablePlainText(inputBox), sessions.get(sessionId));
+    const submittedSkill = override ? null : skillComposer.selectedSkill(inputBox);
     const skillAccount = { kind: sessions.get(sessionId)?.kind, codeagentPoolAccount: sessions.get(sessionId)?.codeagentPoolAccount };
     if (!userText || !userText.trim()) return;
-    if (!skillComposer.selectedSkill(inputBox)
+    if (!override && !skillComposer.selectedSkill(inputBox)
         && (skillComposer.isSkillsMenuCommand(sessions.get(sessionId), userText) || bar._codeagentSkills?.isCommand(userText))) {
       const command = '/' + (bar._codeagentSkills?.isCommand(userText) || userText.trim().split(/\s/)[0].slice(1)).toLowerCase();
       void openCodeAgentSkillsMenu(sessionId, { ...pane, composer: bar }, command === '/skills' || command === '/model' ? command : userText).then(result => {
@@ -5757,7 +5837,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       });
       return;
     }
-    const skillWarning = skillComposer.installationWarning(skillComposer.selectedSkill(inputBox), sessions.get(sessionId));
+    const skillWarning = override ? null : skillComposer.installationWarning(skillComposer.selectedSkill(inputBox), sessions.get(sessionId));
     if (skillWarning) showToast(skillWarning, 'warning');
     const acpSession=sessions.get(sessionId);
     if(acpSession?.runtimeBackend==='acp') {
@@ -5770,7 +5850,8 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     const nativeCommand = isNativeAgent(sessions.get(sessionId)) && text.trimStart().startsWith('/');
     const feedbackSequence = ++commandFeedbackSequence;
     commandFeedback.clear();
-    bar._resendStrip?.clear();
+    // 只撤下与这段原文相同的那条待重发；别的没发出的消息还挂着（同会话可能有好几条）。
+    bar._resendStrip?.forgetText(text);
     if (nativeCommand) commandFeedback.show(text.trim(), '正在执行…');
 
     // 立即清 UI；原生会话继续在 Hub 输入框接收下一条消息。
@@ -5790,8 +5871,10 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
         inputHistory.push(sessionId, userText);
         historyCursor.reset();
       }
-      replaceContenteditableText(inputBox, '');
-      clearFloatingInputDraft(sessionId);
+      if (!override) {
+        replaceContenteditableText(inputBox, '');
+        clearFloatingInputDraft(sessionId);
+      }
       terminal.scrollToBottom();
       session = (typeof sessions !== 'undefined' && sessions && typeof sessions.get === 'function')
         ? sessions.get(sessionId) : null;
@@ -5860,6 +5943,12 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       showToast('消息未发送：' + (error.message || '界面准备异常') + '。原文保留在输入框，可重试', 'error');
       bar._resendStrip?.show({ text, reason: error.message || '界面准备异常' });
       return;
+    }
+    // 上一轮还在跑：这条由终端里的 CLI 排队。发出这一刻就说清楚（确认要等 CLI 开工，可能要十几秒）；
+    //   主进程看着它，CLI 没执行会放回输入框提醒（core/busy-queued-watch.js）。DSH 插话另有提示。
+    if (wasRunning && !nativeCommand && session?.agentRuntime === 'pty' && !isNativeAgent(session) && !isDshCliSession(session)
+        && !require('../core/codeagent-command-policy').isPtyLocalCommand(session, text)) {
+      showToast('上一条还没跑完：这条已排在终端里，上一条结束后执行；没执行的话会放回输入框提醒你', 'info', { sessionId });
     }
     const delivery = nativeCommand ? null : beginPromptDelivery(clientSubmissionId);
     optimisticRuntimeTruth = session?.runtimeTruth;
@@ -6600,7 +6689,10 @@ document.getElementById('acp-settings-open')?.addEventListener('click', () => {
     .catch(error => require('./ui-feedback').showHubAlert('ACP 配置未打开：' + error.message));
 });
 
+// 启动中心之上的弹窗（安装说明等）里的点击和 Esc 只归那层弹窗，不连带关掉启动中心（launch-center-controller.js eventFromLayerAbove）。
+const { eventFromLayerAbove } = require('./launch-center-controller.js');
 document.addEventListener('mousedown', (e) => {
+  if (eventFromLayerAbove(e, wrapperEl, document)) return;
   if (!wrapperEl.contains(e.target) && menuEl.style.display !== 'none') launchCenter.close();
 });
 
@@ -6614,6 +6706,7 @@ menuEl.addEventListener('mousedown', (e) => {
 // ESC 关闭任意打开的侧栏 modal
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
+  if (eventFromLayerAbove(e, wrapperEl, document)) return;
   if (menuEl && menuEl.style.display !== 'none') launchCenter.close();
 });
 
@@ -9720,7 +9813,7 @@ require('./feature-search.js').mountSettingsSearch({ document, window, showMessa
 ipcRenderer.on('desktop-notification:open-settings', async () => {
   try { await openConfigModal(); } catch (_) {}
   const el = document.getElementById('cfg-notify-mode-section');
-  if (el) { el.scrollIntoView({ block: 'center' }); document.getElementById('cfg-notify-mode')?.focus(); }
+  if (el) { window.__hubSettingsTabs?.reveal(el); el.scrollIntoView({ block: 'center' }); document.getElementById('cfg-notify-mode')?.focus(); }
 });
 const setCodexProfileForm = configModal.setCodexProfileForm;
 document.addEventListener('hub-config-saved', () => {
@@ -10677,6 +10770,7 @@ async function resumeDormantSession(hubId, opts = {}) {
     // as profile / MCP policy / rollout root from disappearing on one path.
     pendingResume.promise = ipcRenderer.invoke('resume-session', buildSessionResumeMeta(dormant));
     resumed = await pendingResume.promise;
+    if (!resumed || resumed.id !== hubId) throw new Error('会话未能启动，原有记录已保留。请重试或新建会话。');
   } catch (error) {
     if (_pendingDormantResumes.get(hubId) === pendingResume) {
       _pendingDormantResumes.delete(hubId);

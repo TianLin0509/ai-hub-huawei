@@ -242,6 +242,20 @@ test('安静档下通知只亮小圆点；带页面去处的通知（会议室�
   assert.deepEqual(r.toHub.filter(x => x.channel === 'hub-pet:open-page').pop().payload, { page: 'rooms' });
 });
 
+test('关闭回执立即收起已排入桌宠的普通气泡；要紧提醒仍按原设置处理', t => {
+  const r = rig(t);
+  r.c.setSettings({ enabled: true });
+  r.c.notify({ sessionId: 'done-before-off', title: 'Before off', completedAt: 1 });
+  assert.equal(r.state().bubble.title, 'Before off');
+  r.c.setSettings({ notifyMode: 'off' });
+  assert.equal(r.state().bubble, null);
+  assert.equal(r.state().dots, 1, '历史通知保留为圆点，不再自动弹出');
+  r.c.notify({ sessionId: 'urgent-after-off', title: 'Important', tone: 'bad', completedAt: 2 });
+  assert.equal(r.state().bubble.title, 'Important');
+  r.c.setSettings({ notifyMode: 'popup' });
+  assert.equal(r.state().bubble, null, '改为小卡后，桌宠也立即停止说旧通知');
+});
+
 test('会话在跑：桌宠敲键盘并标出个数；设置里关了「陪着干活」就不跟', t => {
   const r = rig(t);
   r.c.setSettings({ enabled: true });

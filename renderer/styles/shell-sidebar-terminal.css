@@ -712,6 +712,8 @@
 .session-resume-pending strong { color: var(--text-primary); font-size: 16px; }
 .session-resume-pending span:not(.session-resume-spinner) { font-size: 12px; }
 .session-resume-pending.failed strong { color: var(--accent-red); }
+.session-resume-pending.failed > div { max-width: min(680px, calc(100% - 80px)); overflow-wrap: anywhere; }
+.session-resume-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .session-resume-spinner {
   width: 22px;
   height: 22px;

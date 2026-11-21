@@ -28,8 +28,19 @@ const IDENTITIES = Object.freeze({ main: '主', alt: '副' });
 // 与普通会话一致（main/session-auto-suspend.js 的 AUTO_SUSPEND_IDLE_MS）。
 const IDLE_MS = 5 * 60 * 60 * 1000;
 const POLL_MS = 2000;
+const VERIFICATION_WAIT_MS = 30000;
 // 登录常用弹窗（OAuth）留在 Hub 里完成；其余新窗口交给系统浏览器。
 const AUTH_HOST = /(^|\.)(accounts\.google\.com|auth\.openai\.com|auth0\.openai\.com|appleid\.apple\.com|login\.microsoftonline\.com|login\.live\.com|github\.com|open\.weixin\.qq\.com|graph\.qq\.com|passport\.[\w.-]+|login\.[\w.-]+|auth\.[\w.-]+)$/i;
+const VERIFICATION_HOST = /^(challenges\.cloudflare\.com|(?:[\w-]+\.)?hcaptcha\.com|(?:[\w-]+\.)?recaptcha\.net)$/i;
+const SITE_HOSTS = new Set(Object.values(SITES).map(s => new URL(s.url).hostname));
+function storageOriginAllowed(value) {
+  try { const u = new URL(value); return u.protocol === 'https:' && (SITE_HOSTS.has(u.hostname) || AUTH_HOST.test(u.hostname) || VERIFICATION_HOST.test(u.hostname)); }
+  catch { return false; }
+}
+// Scope the automation flag to remote AI pages; the Hub's own debugging/rescue port stays available.
+function pagePreferences(ses) {
+  return { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, disableBlinkFeatures: 'AutomationControlled' };
+}
 
 // 页面里可见的「停止生成」按钮 = 正在回答。各家写法不同，用文字、aria-label、data-testid 一起认。
 // 只看元素有没有排版位置，不逐个算样式：每 2 秒跑一次，按钮多的页面上逐个算样式会拖慢网页。
@@ -37,7 +48,10 @@ const PROBE = `(()=>{const vis=e=>!!e&&e.getClientRects().length>0;
  const stop=[...document.querySelectorAll('button,[role="button"]')].some(b=>{if(!vis(b))return false;
   const t=[b.getAttribute('aria-label'),b.getAttribute('data-testid'),b.getAttribute('title'),(b.innerText||'').slice(0,40)].join(' ');
   return /(^|\\b|[\\s-])(stop|停止|中止|终止)/i.test(t)&&!/stop sharing|停止共享|语音|voice|录音|朗读|read aloud/i.test(t);});
- return {generating:stop,title:document.title||'',url:location.href};})()`;
+ const challenge=/^(just a moment|attention required|security verification|verify (?:you are|that you are) human|请稍候|安全验证|人机验证)(?:[.!…\\s-]|$)/i.test(document.title||'')
+  ||[...document.querySelectorAll('h1,h2,[role="heading"]')].some(e=>vis(e)&&/^(verify (?:you are|that you are) human|verifying (?:you are|that you are) human|checking your browser|请完成.{0,8}验证|请验证您是人类|人机验证|安全验证)[.!…\\s]*$/i.test((e.innerText||'').trim()))
+  ||[...document.querySelectorAll('iframe[src*="challenges.cloudflare.com"],iframe[src*="hcaptcha.com"],iframe[src*="recaptcha"]')].some(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>=100&&r.height>=30&&s.visibility!=='hidden'&&s.display!=='none'&&Number(s.opacity)!==0;});
+ return {generating:stop,challenge,title:document.title||'',url:location.href};})()`;
 
 // 端到端测试用本地夹具页代替真实官网；只在隔离数据目录（CLAUDE_HUB_DATA_DIR）下生效，生产实例永远打开官网。
 function siteUrl(key, env = process.env) {
@@ -149,7 +163,7 @@ function createWebSessions({ dataDir, getWindow, WebContentsView, BrowserWindow,
     const l = live.get(item.id), site = SITES[item.site];
     const status = !l ? 'dormant' : l.phase === 'error' ? 'error' : l.generating ? 'running' : l.phase === 'loading' ? 'loading' : 'ready';
     return { ...item, siteName: site.name, logo: site.logo, identityLabel: IDENTITIES[item.identity],
-      displayTitle: item.customTitle || item.title || site.name, status, error: l?.error || '' };
+      displayTitle: item.customTitle || item.title || site.name, status, error: l?.error || '', verificationRequired: !!l?.verificationRequired };
   }
   function state(extra = {}) {
     const other = owned ? null : currentOwner();
@@ -174,8 +188,11 @@ function createWebSessions({ dataDir, getWindow, WebContentsView, BrowserWindow,
     }
     if (!site.honest) ses.setUserAgent(browserUserAgent(app?.userAgentFallback || ses.getUserAgent()));
     const allowed = new Set(['clipboard-read', 'clipboard-sanitized-write', 'fullscreen', 'media', 'pointerLock']);
-    ses.setPermissionRequestHandler((_wc, permission, callback) => callback(allowed.has(permission)));
-    ses.setPermissionCheckHandler((_wc, permission) => allowed.has(permission));
+    const storage = new Set(['storage-access', 'top-level-storage-access']);
+    ses.setPermissionRequestHandler((_wc, permission, callback, details) => callback(allowed.has(permission)
+      || (storage.has(permission) && storageOriginAllowed(details?.requestingUrl))));
+    ses.setPermissionCheckHandler((_wc, permission, origin) => allowed.has(permission)
+      || (storage.has(permission) && storageOriginAllowed(origin)));
     configured.add(partition);
     return ses;
   }
@@ -200,17 +217,17 @@ function createWebSessions({ dataDir, getWindow, WebContentsView, BrowserWindow,
     const site = SITES[item.site];
     const ses = configure(partition, site);
     // backgroundThrottling 关掉：网页圆桌会让没在显示的网页在后台答题，默认的后台节流会拖慢它的计时器和渲染。
-    const view = new WebContentsView({ webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, spellcheck: false, backgroundThrottling: false } });
+    const view = new WebContentsView({ webPreferences: { ...pagePreferences(ses), spellcheck: false, backgroundThrottling: false } });
     // 网站第一帧画出来之前显示白底，不露出窗口底下的黑色。
     view.setBackgroundColor('#ffffff');
-    l = { view, phase: 'loading', error: '', generating: false, stopStreak: 0, runStreak: 0 };
+    l = { view, phase: 'loading', error: '', generating: false, stopStreak: 0, runStreak: 0, challengeSince: null, verificationRequired: false };
     live.set(item.id, l);
     const wc = view.webContents;
     wc.setWindowOpenHandler(({ url, features }) => {
       let host = '';
       try { const u = new URL(url); if (!['https:', 'http:'].includes(u.protocol)) return { action: 'deny' }; host = u.hostname; } catch { return { action: 'deny' }; }
-      if (AUTH_HOST.test(host) || /width=|height=|popup/i.test(features || '')) {
-        return { action: 'allow', overrideBrowserWindowOptions: { width: 520, height: 720, autoHideMenuBar: true, title: '登录', webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false } } };
+      if (AUTH_HOST.test(host) || VERIFICATION_HOST.test(host) || host === new URL(site.url).hostname || /width=|height=|popup/i.test(features || '')) {
+        return { action: 'allow', overrideBrowserWindowOptions: { width: 520, height: 720, autoHideMenuBar: true, title: '登录', webPreferences: pagePreferences(ses) } };
       }
       void shell.openExternal(url);
       return { action: 'deny' };
@@ -408,6 +425,15 @@ function createWebSessions({ dataDir, getWindow, WebContentsView, BrowserWindow,
       let probe = null;
       if (l.phase !== 'error') probe = await wc.executeJavaScript(PROBE, false).catch(() => null);
       if (probe) {
+        const wasRequired = l.verificationRequired;
+        if (probe.challenge) {
+          if (l.challengeSince === null) l.challengeSince = t;
+        } else if (l.phase === 'ready' && probe.url && probe.url !== 'about:blank') {
+          l.challengeSince = null;
+        }
+        // Reload loops briefly expose empty documents; only a loaded normal page clears the wait.
+        l.verificationRequired = l.challengeSince !== null && t - l.challengeSince >= VERIFICATION_WAIT_MS;
+        if (wasRequired !== l.verificationRequired) emit();
         // 连续两次看到才算开始、连续两次看不到才算结束：页面切换时按钮会闪一下。
         if (probe.generating) { l.runStreak++; l.stopStreak = 0; } else { l.stopStreak++; l.runStreak = 0; }
         if (!l.generating && l.runStreak >= 2) { l.generating = true; item.lastActiveAt = t; emit(); }

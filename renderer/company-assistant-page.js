@@ -78,7 +78,9 @@ const secondsText = ms => { const s = Math.max(0, Math.round(ms / 1000)); return
 
 function createCompanyAssistantPage({ document, window, ipcRenderer, openSession, closeOtherPanels = () => {}, showMessage }) {
   const { ASSISTANT_AVATAR_SRC, USER_AVATAR_SRC } = require('./chat-avatar');
-  const { connectionState } = require('./company-assistant-connection');
+  const { connectionState, composerState } = require('./company-assistant-connection');
+  // 助理靠本机 CodeAgent 回答：打开时测一次装没装（结果缓存），输入框状态据此如实显示。
+  const codeagentPref = require('./codeagent-preference');
   const toolPicker = require('./tool-version-picker').createToolVersionPicker({ document, ipcRenderer });
   const { queryRows, refreshNotice } = require('./company-assistant-query-status');
   const { renderMessageBody } = require('./conversation-message-view');
@@ -270,7 +272,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
   function onboarding() {
     if (!onboardingShown()) return '';
     const c = connectionState(data), ready = c.kind === 'online';
-    return `<article class="ca-onboarding" data-connection="${c.kind}"><h2>${esc(ready ? '正在获取今天的工作信息' : c.title)}</h2><p>${esc(c.detail)}</p><div class="ca-onboarding-steps" aria-label="接入进度"><span>${data.cliFound ? '✓' : '1'} 安装工具</span><span>${ready ? '✓' : '2'} 确认登录</span><span>${ready && data.refreshedAt ? '✓' : '3'} 获取工作信息</span></div>${c.action ? `<button type="button" class="ca-btn primary" data-ca="${c.action}">${esc(c.label)}</button>` : ''}${c.alt ? `<button type="button" class="ca-btn" data-ca="${c.alt}">${esc(c.altLabel)}</button>` : ''}${!data.cliFound ? '<button type="button" class="ca-btn" data-ca="pick-cli">手动选择…</button>' + installGuide() : ''}<p class="ca-note">接通前也可以直接提问，讨论已有的材料。</p>${!ready && ['missing', 'login', 'unknown'].includes(c.kind) && window.HubErrorCard ? window.HubErrorCard.assistHtml({ area: 'welink', title: c.title, symptom: c.detail, details: [c.title, c.detail, data.cliSearch?.error].filter(Boolean).join(' · ') }) : ''}</article>`;
+    return `<article class="ca-onboarding" data-connection="${c.kind}"><h2>${esc(ready ? '正在获取今天的工作信息' : c.title)}</h2><p>${esc(c.detail)}</p><div class="ca-onboarding-steps" aria-label="接入进度"><span>${data.cliFound ? '✓' : '1'} 安装工具</span><span>${ready ? '✓' : '2'} 确认登录</span><span>${ready && data.refreshedAt ? '✓' : '3'} 获取工作信息</span></div>${c.action ? `<button type="button" class="ca-btn primary" data-ca="${c.action}">${esc(c.label)}</button>` : ''}${c.alt ? `<button type="button" class="ca-btn" data-ca="${c.alt}">${esc(c.altLabel)}</button>` : ''}${!data.cliFound ? '<button type="button" class="ca-btn" data-ca="pick-cli">手动选择…</button>' + installGuide() : ''}<p class="ca-note">${codeagentPref.detectedInstalled() === false ? '提问要靠本机 CodeAgent 回答，装好 CodeAgent 后才能提问。' : '接通前也可以直接提问，讨论已有的材料。'}</p>${!ready && ['missing', 'login', 'unknown'].includes(c.kind) && window.HubErrorCard ? window.HubErrorCard.assistHtml({ area: 'welink', title: c.title, symptom: c.detail, details: [c.title, c.detail, data.cliSearch?.error].filter(Boolean).join(' · ') }) : ''}</article>`;
   }
   // 扫码安全说明（2026-11-19，回应「扫码登录有信息安全顾虑」）：扫码授权的是什么、凭据存哪、怎么撤销。依据黄区真机 welink-cli 1.0.20。
   // 扫码面板和设置页各记各的展开状态：设置页默认收起，免得把下面的内容挤出一屏。
@@ -491,9 +493,11 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       const chip = `<button type="button" class="ca-chip-btn${c.custom ? ' custom' : ''}" data-ca="chip:${i}" title="${esc(c.text)}">${esc(c.label)}</button>`;
       return c.custom ? `<span class="ca-chip-wrap">${chip}<button type="button" class="ca-chip-del" data-ca="del-chip:${i - customChipStart}" title="删除常用：${esc(c.label)}" aria-label="删除常用：${esc(c.label)}">×</button></span>` : chip;
     }).join('') + '<button type="button" class="ca-chip-btn add" data-ca="save-chip" title="把输入框里的问题存成常用">＋ 存为常用</button>';
-    const job = data.job ? (data.job.type === 'brief' ? '助理正在整理今天的摘要…' : '助理正在回答…') + (data.queued ? `（还有 ${data.queued} 个排队）` : '') : '已就绪 · 只读，草稿你自己发';
+    const cs = composerState(data, { codeagentInstalled: codeagentPref.detectedInstalled() });
     const jobEl = page.querySelector('[data-slot="job"]');
-    jobEl.innerHTML = `<i class="${data.job ? 'run' : ''}"></i>${esc(job)}`;
+    const jobHtml = `<i class="${cs.busy ? 'run' : cs.tone}"></i><span>${esc(cs.text)}</span>${cs.action ? `<button type="button" class="ca-btn small" data-ca="${esc(cs.action)}">${esc(cs.label)}</button>` : ''}`;
+    if (jobEl.dataset.html !== jobHtml) { jobEl.innerHTML = jobHtml; jobEl.dataset.html = jobHtml; }
+    jobEl.dataset.tone = cs.tone;
     page.querySelectorAll('[data-ca="refresh"]').forEach(b => { b.disabled = !!data.refreshing; });
   }
   async function load() { data = await call('status'); render(); }
@@ -568,6 +572,8 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     if (verb === 'today-fold') { folded = !isFolded(); saveTodayFolded(window.localStorage, folded); render(); return; }
     if (verb === 'cov') { if (openCoverage.has(arg)) openCoverage.delete(arg); else openCoverage.add(arg); render(); return; }
     if (verb === 'ask-about') return askAbout(arg);
+    // 没装 CodeAgent：打开启动中心并选中 CodeAgent，那里就地给安装说明。
+    if (verb === 'install-codeagent') { close(); window.LaunchCenter?.open?.('session', { kind: 'codeagent' }); return; }
     // 点了就有回应（2026-11-06）：先说在干什么；结束后一定给结论——没连上就说原因，以前登录没认出时什么提示都没有，看起来像没点上。
     if (verb === 'refresh') {
       button.disabled = true;
@@ -921,6 +927,8 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
   }
   async function startData() {
     if (!page || page.hidden) return;
+    // 开启后才测 CodeAgent（未开启的提示层不读任何数据）；结果出来后重画输入框状态。
+    void codeagentPref.refresh(ipcRenderer).then(() => { if (page && !page.hidden && data) render(); }).catch(() => {});
     clearInterval(timer); timer = setInterval(() => { void load().catch(() => {}); }, 20000);
     clearInterval(tick); tick = setInterval(tickElapsed, 1000);
     try {

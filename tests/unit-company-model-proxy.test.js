@@ -619,7 +619,7 @@ test('proxy service: starts with the Hub, restarts once after a crash, then expl
     assert.equal(service.restarts, 1);
     service.child.kill();
     await waitFor(() => service.state === 'failed', 'second crash');
-    assert.match(service.status().message, /反复退出.*重新启动反代/);
+    assert.match(service.status().message, /反复退出.*重新启动模型通道/);
     assert.equal((await service.restart()).state, 'running');
   } finally { await service.stop(); }
   assert.equal(service.state, 'stopped');
@@ -1349,7 +1349,7 @@ test('first-time signer init failures are explained with diagnostics: no stamp, 
   assert.equal(noStamp.code, 'SIGNER_INIT_NO_STAMP');
   assert.match(noStamp.message, /首次签名初始化没完成（CodeAgent 命令行跑完了，但没有留下签名信息：签名日志没有生成）/);
   assert.match(noStamp.message, /不弹窗、不登录、不刷新登录/);
-  assert.match(noStamp.message, /重新启动反代/);
+  assert.match(noStamp.message, /重新启动模型通道/);
   assert.equal(noStamp.firstInit.ran, true);
   assert.deepEqual([noStamp.firstInit.probe.cliExitCode, noStamp.firstInit.probe.logExists, noStamp.firstInit.probe.logLines, noStamp.firstInit.probe.markerMatched, noStamp.firstInit.probe.stampParsed], [0, false, 0, false, false]);
   const marker = await loadSigner(f.profile, { workDir: f.workDir, stampProbe: fakeProbe([], { ok: false, report: { logExists: true, logLines: 3, error: 'MARKER_MISSING' } }) }).catch(e => e);

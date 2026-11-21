@@ -14,7 +14,7 @@ const { Worker, isMainThread, parentPort } = require('node:worker_threads');
 
 if (!isMainThread && parentPort) {
   parentPort.on('message', ({ id, file, args, options }) => {
-    execFile(file, args, { ...options, encoding: 'utf8' }, (error, stdout, stderr) => {
+    execFile(file, args, { ...options, windowsHide: true, encoding: 'utf8' }, (error, stdout, stderr) => {
       parentPort.postMessage(error
         ? { id, error: { message: error.message, code: error.code, killed: error.killed, signal: error.signal }, stdout, stderr }
         : { id, stdout, stderr });
@@ -63,7 +63,7 @@ function createOffMainExecFile({ WorkerImpl = Worker, fallback = execFile } = {}
     try { target = ensureWorker(); }
     catch {
       // No worker available: keep the feature working on the main thread.
-      return new Promise((resolve, reject) => fallback(file, args, { ...options, encoding: 'utf8' },
+      return new Promise((resolve, reject) => fallback(file, args, { ...options, windowsHide: true, encoding: 'utf8' },
         (error, stdout, stderr) => (error ? reject(Object.assign(error, { stdout, stderr })) : resolve({ stdout, stderr }))));
     }
     return new Promise((resolve, reject) => {

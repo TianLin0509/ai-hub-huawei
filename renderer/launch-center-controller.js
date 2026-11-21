@@ -14,6 +14,19 @@ const PLAIN_INTENT_COPY = require('../core/distribution').featureEnabled('launch
   resume: '接着聊以前的 CodeAgent 会话',
 });
 
+// 启动中心之上又弹了一层模态窗（如「安装 Codex」，挂在 body 上的 <dialog>）：Esc 和点遮罩只该关上面那层。
+// 事件落在这层里、或此刻有这样一层开着时，返回 true，启动中心的「点外面 / Esc 关闭」就不处理（11-21 全新用户深查 #8）。
+function eventFromLayerAbove(event, wrapperEl, documentRef) {
+  const inWrapper = node => !!(wrapperEl && node && typeof wrapperEl.contains === 'function' && wrapperEl.contains(node));
+  const target = event && event.target;
+  const layer = target && typeof target.closest === 'function' ? target.closest('dialog[open]') : null;
+  if (layer && !inWrapper(layer)) return true;
+  if (event && event.type === 'keydown' && documentRef && typeof documentRef.querySelectorAll === 'function') {
+    return [...documentRef.querySelectorAll('dialog[open]')].some(d => !inWrapper(d) && (typeof d.matches !== 'function' || d.matches(':modal')));
+  }
+  return false;
+}
+
 function normalizeLaunchIntent(value) {
   return LAUNCH_INTENTS.includes(value) ? value : 'session';
 }
@@ -227,5 +240,6 @@ module.exports = {
   INTENT_COPY,
   LAUNCH_INTENTS,
   createLaunchCenterController,
+  eventFromLayerAbove,
   normalizeLaunchIntent,
 };

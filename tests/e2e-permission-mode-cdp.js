@@ -89,6 +89,10 @@ async function main() {
     await click(`.launch-select-option[data-value="${value}"]`);
     return 'dropdown';
   }
+  // 2026-11-21 起账号、MCP、权限模式等次要项默认收在「更多选项」里（renderer/launch-more-options.js），先用鼠标点开。
+  async function expandMore() {
+    if (await cdp.eval('(()=>{const b=document.getElementById("new-session-more-toggle");return !!b&&!b.hidden&&b.getBoundingClientRect().width>0&&b.getAttribute("aria-expanded")!=="true"})()')) await click('#new-session-more-toggle');
+  }
   async function openLauncher() {
     if (!(await cdp.eval('document.getElementById("home-create-session")?.getBoundingClientRect().width > 0'))) await click('#btn-home');
     await until('document.getElementById("home-create-session")?.getBoundingClientRect().width > 0', 'home visible');
@@ -96,6 +100,7 @@ async function main() {
     await until('document.querySelector("#new-session-submit")?.getBoundingClientRect().width > 0', 'launch center open');
     await click('.new-session-option[data-kind="claude"]');
     await until('!document.getElementById("new-session-permission-field").hidden', 'permission field shown for Claude');
+    await expandMore();
   }
   try {
     await launch('perm-mode');
@@ -241,6 +246,7 @@ async function main() {
       await cdp.eval(`window.WorkspaceController.openNewSessionModal({ kind: ${JSON.stringify(kind)} })`);
       await until('document.querySelector("#new-session-submit")?.getBoundingClientRect().width > 0', 'launcher for ' + kind);
       await sleep(900);
+      await expandMore();
       const layout = await cdp.eval(`(()=>{const f=document.getElementById('new-session-permission-field'),n=document.getElementById('new-session-permission-note'),g=document.getElementById('new-session-tuning');
         const visible=f&&!f.hidden&&f.getBoundingClientRect().width>0;if(visible)f.scrollIntoView({block:'center'});
         const fr=f.getBoundingClientRect(),nr=n.getBoundingClientRect(),gr=g.getBoundingClientRect();

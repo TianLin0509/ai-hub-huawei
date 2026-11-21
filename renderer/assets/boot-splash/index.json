@@ -1,0 +1,526 @@
+{
+ "schema": 1,
+ "version": "1.0.0",
+ "items": [
+  {
+   "id": "claude-01",
+   "name": "Claude · 雪夜仰望",
+   "who": "claude",
+   "anim": "soft",
+   "weather": "snow",
+   "bundled": false
+  },
+  {
+   "id": "claude-02",
+   "name": "Claude · 雨中透明伞",
+   "who": "claude",
+   "anim": "soft",
+   "weather": "rain",
+   "bundled": false
+  },
+  {
+   "id": "claude-03",
+   "name": "Claude · 挥手问好",
+   "who": "claude",
+   "anim": "soft",
+   "weather": "bokeh",
+   "bundled": false
+  },
+  {
+   "id": "claude-04",
+   "name": "Claude · 回眸",
+   "who": "claude",
+   "anim": "soft",
+   "weather": "dust",
+   "bundled": false
+  },
+  {
+   "id": "claude-05",
+   "name": "Claude · 冬夜热饮",
+   "who": "claude",
+   "anim": "soft",
+   "weather": "snow",
+   "bundled": false
+  },
+  {
+   "id": "claude-06",
+   "name": "Claude · 夜樱",
+   "who": "claude",
+   "anim": "soft",
+   "weather": "petals",
+   "bundled": false
+  },
+  {
+   "id": "claude-07",
+   "name": "Claude · 浴衣仙女棒",
+   "who": "claude",
+   "anim": "soft",
+   "weather": "sparks",
+   "bundled": false
+  },
+  {
+   "id": "claude-08",
+   "name": "Claude · 雨窗咖啡馆",
+   "who": "claude",
+   "anim": "soft",
+   "weather": "rain",
+   "bundled": false
+  },
+  {
+   "id": "claude-09",
+   "name": "Claude · 天台指星",
+   "who": "claude",
+   "anim": "soft",
+   "weather": "stars",
+   "bundled": false
+  },
+  {
+   "id": "claude-10",
+   "name": "Claude · 萤火夏夜",
+   "who": "claude",
+   "anim": "soft",
+   "weather": "fireflies",
+   "bundled": false
+  },
+  {
+   "id": "claude-11",
+   "name": "Claude · 雪中拉弓",
+   "who": "claude",
+   "anim": "rush",
+   "weather": "snow",
+   "bundled": false
+  },
+  {
+   "id": "claude-12",
+   "name": "Claude · 击剑",
+   "who": "claude",
+   "anim": "rush",
+   "weather": "dust",
+   "bundled": false
+  },
+  {
+   "id": "claude-13",
+   "name": "Claude · 雨中持刀",
+   "who": "claude",
+   "anim": "rush",
+   "weather": "rain",
+   "bundled": false
+  },
+  {
+   "id": "claude-14",
+   "name": "Claude · 举剑凝视",
+   "who": "claude",
+   "anim": "rush",
+   "weather": "embers",
+   "bundled": false
+  },
+  {
+   "id": "claude-15",
+   "name": "Claude · 舰长敬礼",
+   "who": "claude",
+   "anim": "rush",
+   "weather": "stars",
+   "bundled": false
+  },
+  {
+   "id": "claude-16",
+   "name": "Claude · 弓道",
+   "who": "claude",
+   "anim": "rush",
+   "weather": "petals",
+   "bundled": false
+  },
+  {
+   "id": "claude-17",
+   "name": "Claude · 扛剑骑士",
+   "who": "claude",
+   "anim": "rush",
+   "weather": "embers",
+   "bundled": false
+  },
+  {
+   "id": "claude-18",
+   "name": "Claude · 掌心魔法阵",
+   "who": "claude",
+   "anim": "rush",
+   "weather": "sparks",
+   "bundled": true
+  },
+  {
+   "id": "claude-19",
+   "name": "Claude · 机车骑手",
+   "who": "claude",
+   "anim": "rush",
+   "weather": "bokeh",
+   "bundled": false
+  },
+  {
+   "id": "claude-20",
+   "name": "Claude · 迎风立剑",
+   "who": "claude",
+   "anim": "rush",
+   "weather": "embers",
+   "bundled": false
+  },
+  {
+   "id": "codex-01",
+   "name": "Codex · 雪夜仰望",
+   "who": "codex",
+   "anim": "soft",
+   "weather": "snow",
+   "bundled": false
+  },
+  {
+   "id": "codex-02",
+   "name": "Codex · 雨中透明伞",
+   "who": "codex",
+   "anim": "soft",
+   "weather": "rain",
+   "bundled": false
+  },
+  {
+   "id": "codex-03",
+   "name": "Codex · 挥手问好",
+   "who": "codex",
+   "anim": "soft",
+   "weather": "bokeh",
+   "bundled": false
+  },
+  {
+   "id": "codex-04",
+   "name": "Codex · 回眸",
+   "who": "codex",
+   "anim": "soft",
+   "weather": "dust",
+   "bundled": false
+  },
+  {
+   "id": "codex-05",
+   "name": "Codex · 冬夜热饮",
+   "who": "codex",
+   "anim": "soft",
+   "weather": "snow",
+   "bundled": false
+  },
+  {
+   "id": "codex-06",
+   "name": "Codex · 夜樱",
+   "who": "codex",
+   "anim": "soft",
+   "weather": "petals",
+   "bundled": false
+  },
+  {
+   "id": "codex-07",
+   "name": "Codex · 浴衣仙女棒",
+   "who": "codex",
+   "anim": "soft",
+   "weather": "sparks",
+   "bundled": false
+  },
+  {
+   "id": "codex-08",
+   "name": "Codex · 雨窗咖啡馆",
+   "who": "codex",
+   "anim": "soft",
+   "weather": "rain",
+   "bundled": false
+  },
+  {
+   "id": "codex-09",
+   "name": "Codex · 天台指星",
+   "who": "codex",
+   "anim": "soft",
+   "weather": "stars",
+   "bundled": false
+  },
+  {
+   "id": "codex-10",
+   "name": "Codex · 萤火夏夜",
+   "who": "codex",
+   "anim": "soft",
+   "weather": "fireflies",
+   "bundled": false
+  },
+  {
+   "id": "codex-11",
+   "name": "Codex · 雪中拉弓",
+   "who": "codex",
+   "anim": "rush",
+   "weather": "snow",
+   "bundled": false
+  },
+  {
+   "id": "codex-12",
+   "name": "Codex · 击剑",
+   "who": "codex",
+   "anim": "rush",
+   "weather": "dust",
+   "bundled": false
+  },
+  {
+   "id": "codex-13",
+   "name": "Codex · 雨中持刀",
+   "who": "codex",
+   "anim": "rush",
+   "weather": "rain",
+   "bundled": false
+  },
+  {
+   "id": "codex-14",
+   "name": "Codex · 举剑凝视",
+   "who": "codex",
+   "anim": "rush",
+   "weather": "embers",
+   "bundled": false
+  },
+  {
+   "id": "codex-15",
+   "name": "Codex · 舰长敬礼",
+   "who": "codex",
+   "anim": "rush",
+   "weather": "stars",
+   "bundled": false
+  },
+  {
+   "id": "codex-16",
+   "name": "Codex · 弓道",
+   "who": "codex",
+   "anim": "rush",
+   "weather": "petals",
+   "bundled": false
+  },
+  {
+   "id": "codex-17",
+   "name": "Codex · 扛剑骑士",
+   "who": "codex",
+   "anim": "rush",
+   "weather": "embers",
+   "bundled": false
+  },
+  {
+   "id": "codex-18",
+   "name": "Codex · 掌心魔法阵",
+   "who": "codex",
+   "anim": "rush",
+   "weather": "sparks",
+   "bundled": true
+  },
+  {
+   "id": "codex-19",
+   "name": "Codex · 机车骑手",
+   "who": "codex",
+   "anim": "rush",
+   "weather": "bokeh",
+   "bundled": false
+  },
+  {
+   "id": "codex-20",
+   "name": "Codex · 迎风立剑",
+   "who": "codex",
+   "anim": "rush",
+   "weather": "embers",
+   "bundled": false
+  },
+  {
+   "id": "deepseek-01",
+   "name": "DeepSeek · 雪夜仰望",
+   "who": "deepseek",
+   "anim": "soft",
+   "weather": "snow",
+   "bundled": false
+  },
+  {
+   "id": "deepseek-02",
+   "name": "DeepSeek · 雨中透明伞",
+   "who": "deepseek",
+   "anim": "soft",
+   "weather": "rain",
+   "bundled": false
+  },
+  {
+   "id": "deepseek-03",
+   "name": "DeepSeek · 挥手问好",
+   "who": "deepseek",
+   "anim": "soft",
+   "weather": "bokeh",
+   "bundled": false
+  },
+  {
+   "id": "deepseek-04",
+   "name": "DeepSeek · 回眸",
+   "who": "deepseek",
+   "anim": "soft",
+   "weather": "dust",
+   "bundled": false
+  },
+  {
+   "id": "deepseek-05",
+   "name": "DeepSeek · 冬夜热饮",
+   "who": "deepseek",
+   "anim": "soft",
+   "weather": "snow",
+   "bundled": false
+  },
+  {
+   "id": "deepseek-06",
+   "name": "DeepSeek · 夜樱",
+   "who": "deepseek",
+   "anim": "soft",
+   "weather": "petals",
+   "bundled": false
+  },
+  {
+   "id": "deepseek-07",
+   "name": "DeepSeek · 浴衣仙女棒",
+   "who": "deepseek",
+   "anim": "soft",
+   "weather": "sparks",
+   "bundled": false
+  },
+  {
+   "id": "deepseek-08",
+   "name": "DeepSeek · 雨窗咖啡馆",
+   "who": "deepseek",
+   "anim": "soft",
+   "weather": "rain",
+   "bundled": false
+  },
+  {
+   "id": "deepseek-09",
+   "name": "DeepSeek · 天台指星",
+   "who": "deepseek",
+   "anim": "soft",
+   "weather": "stars",
+   "bundled": false
+  },
+  {
+   "id": "deepseek-10",
+   "name": "DeepSeek · 萤火夏夜",
+   "who": "deepseek",
+   "anim": "soft",
+   "weather": "fireflies",
+   "bundled": false
+  },
+  {
+   "id": "deepseek-11",
+   "name": "DeepSeek · 雪中拉弓",
+   "who": "deepseek",
+   "anim": "rush",
+   "weather": "snow",
+   "bundled": false
+  },
+  {
+   "id": "deepseek-12",
+   "name": "DeepSeek · 击剑",
+   "who": "deepseek",
+   "anim": "rush",
+   "weather": "dust",
+   "bundled": false
+  },
+  {
+   "id": "deepseek-13",
+   "name": "DeepSeek · 雨中持刀",
+   "who": "deepseek",
+   "anim": "rush",
+   "weather": "rain",
+   "bundled": false
+  },
+  {
+   "id": "deepseek-14",
+   "name": "DeepSeek · 举剑凝视",
+   "who": "deepseek",
+   "anim": "rush",
+   "weather": "embers",
+   "bundled": false
+  },
+  {
+   "id": "deepseek-15",
+   "name": "DeepSeek · 舰长敬礼",
+   "who": "deepseek",
+   "anim": "rush",
+   "weather": "stars",
+   "bundled": false
+  },
+  {
+   "id": "deepseek-16",
+   "name": "DeepSeek · 弓道",
+   "who": "deepseek",
+   "anim": "rush",
+   "weather": "petals",
+   "bundled": false
+  },
+  {
+   "id": "deepseek-17",
+   "name": "DeepSeek · 扛剑骑士",
+   "who": "deepseek",
+   "anim": "rush",
+   "weather": "embers",
+   "bundled": false
+  },
+  {
+   "id": "deepseek-18",
+   "name": "DeepSeek · 掌心魔法阵",
+   "who": "deepseek",
+   "anim": "rush",
+   "weather": "sparks",
+   "bundled": true
+  },
+  {
+   "id": "deepseek-19",
+   "name": "DeepSeek · 机车骑手",
+   "who": "deepseek",
+   "anim": "rush",
+   "weather": "bokeh",
+   "bundled": false
+  },
+  {
+   "id": "deepseek-20",
+   "name": "DeepSeek · 迎风立剑",
+   "who": "deepseek",
+   "anim": "rush",
+   "weather": "embers",
+   "bundled": false
+  },
+  {
+   "id": "galaxy-halo",
+   "name": "群星 · 光环",
+   "who": "hub",
+   "anim": "galaxy",
+   "weather": "stars",
+   "bundled": false
+  },
+  {
+   "id": "galaxy-orbit",
+   "name": "群星 · 星轨",
+   "who": "hub",
+   "anim": "galaxy",
+   "weather": "stars",
+   "bundled": false
+  },
+  {
+   "id": "galaxy-constellation",
+   "name": "群星 · 星座",
+   "who": "hub",
+   "anim": "galaxy",
+   "weather": "stars",
+   "bundled": true
+  },
+  {
+   "id": "galaxy-trails",
+   "name": "群星 · 流光",
+   "who": "hub",
+   "anim": "galaxy",
+   "weather": "stars",
+   "bundled": false
+  },
+  {
+   "id": "galaxy-reflection",
+   "name": "群星 · 倒影",
+   "who": "hub",
+   "anim": "galaxy",
+   "weather": "stars",
+   "bundled": false
+  }
+ ]
+}

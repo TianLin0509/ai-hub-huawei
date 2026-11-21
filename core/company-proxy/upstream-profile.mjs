@@ -457,13 +457,13 @@ export function signerInitFailureMessage(code, { version, timeoutMs, detail, rep
   if (detail === 'CLI_MODEL_REJECTED') {
     return '公司模型暂时用不了：首次签名初始化没完成（CodeAgent 认为没有可用的模型，提示用 --model 指定后就退出了，签名日志没有生成）。\n' +
       `Hub 探测时已指定模型${report?.model ? ' ' + report.model : ''}${report?.retried ? '，并换了一个模型重试' : ''}，仍被拒绝。\n` +
-      '处理办法：在命令行打开 CodeAgent，用 /model 选一个自己能用的模型并正常对话一次，然后到「设置 → 自有 API」点「重新启动反代」；还不行点「一键反馈」附带诊断。';
+      '处理办法：在命令行打开 CodeAgent，用 /model 选一个自己能用的模型并正常对话一次，然后到「设置 → 自有 API」点「重新启动模型通道」；还不行点「一键反馈」附带诊断。';
   }
   if (detail === 'CLI_INPUT_MISSING') {
     const next = report?.retrySuppressed === 'cleanup-unconfirmed'
       ? '后台进程还没确认结束，Hub 已停止重试；请点「一键反馈」附带诊断。'
       : report?.retried ? 'Hub 已尝试通过命令行参数补发输入，仍然没有送达；请直接点「一键反馈」附带诊断。'
-        : '请点「重新启动反代」重试，仍未恢复时点「一键反馈」附带诊断。';
+        : '请点「重新启动模型通道」重试，仍未恢复时点「一键反馈」附带诊断。';
     return '公司模型暂时用不了：CodeAgent 未收到签名初始化所需的测试输入，在生成签名日志前退出了。\n' +
       next;
   }
@@ -490,8 +490,8 @@ export function signerInitFailureMessage(code, { version, timeoutMs, detail, rep
   return `公司模型暂时用不了：首次签名初始化没完成（${why}${step ? '：' + step : ''}）。\n` + earlyExit + accountHint + launchHint +
     `这一步会在后台启动 CodeAgent 命令行（不弹窗、不登录、不刷新登录），读取 CodeAgent ${version || ''} 的签名信息；首次启动没有留下日志时会换一种安全的后台方式重试一次。\n` +
     (accountSuspect
-      ? '处理办法：先点「个人账号重新登录」用自己的 W3 账号登录，登录成功后点「重新启动反代」，再新建会话；还不行点「问问 Agent」看日志。'
-      : '处理办法：确认 CodeAgent 已安装、已登录，在命令行里能正常对话；然后到「设置 → 自有 API」点「重新启动反代」再试一次。');
+      ? '处理办法：先点「个人账号重新登录」用自己的 W3 账号登录，登录成功后点「重新启动模型通道」，再新建会话；还不行点「问问 Agent」看日志。'
+      : '处理办法：确认 CodeAgent 已安装、已登录，在命令行里能正常对话；然后到「设置 → 自有 API」点「重新启动模型通道」再试一次。');
 }
 
 /**
@@ -629,7 +629,7 @@ export async function resolveUpstreamProfile({ dataDir, env = process.env, versi
   else if (zoneOnlyChat) {
     if (missing.length === 1) {
       const error = new ProfileError('ZONE_UNKNOWN', '公司模型暂时用不了：还没识别出你所在的区域（蓝区 / 绿区 / 黄区）。Hub 在 CodeAgent 的配置里没找到区域；' +
-        '模型接口地址按区域不同，不能替你猜。请在「设置 → 自有 API → 公司模型」的「所在区域」里选择，选好后会自动重启反代。', ['zone']);
+        '模型接口地址按区域不同，不能替你猜。请在「设置 → 自有 API → 公司模型」的「所在区域」里选择，选好后会自动重新启动模型通道。', ['zone']);
       error.zone = profile.zoneInfo;
       error.diagnostics = diagnostics();
       // In-process only (never serialized): lets the proxy ask the identity service for the region letter.
@@ -640,8 +640,8 @@ export async function resolveUpstreamProfile({ dataDir, env = process.env, versi
   }
   if (missing.length) {
     const versionHint = !missing.includes('codeagentVersion') ? ''
-      : profile.codeagentMissing ? '\n这台电脑上没找到 CodeAgent 程序（codeagentcli.exe）：查过默认目录、PATH、常见安装目录和系统安装记录。请先安装 CodeAgent，并在命令行里登录、对话一次，然后到「设置 → 自有 API」点「重新启动反代」。'
-        : '\n找到了 CodeAgent，但它没有报出版本号。请在命令行运行 codeagent --version 确认能正常启动，然后到「设置 → 自有 API」点「重新启动反代」。';
+      : profile.codeagentMissing ? '\n这台电脑上没找到 CodeAgent 程序（codeagentcli.exe）：查过默认目录、PATH、常见安装目录和系统安装记录。请先安装 CodeAgent，并在命令行里登录、对话一次，然后到「设置 → 自有 API」点「重新启动模型通道」。'
+        : '\n找到了 CodeAgent，但它没有报出版本号。请在命令行运行 codeagent --version 确认能正常启动，然后到「设置 → 自有 API」点「重新启动模型通道」。';
     const onlyCodeAgent = missing.length === 1 && missing[0] === 'codeagentVersion';
     const head = !onlyCodeAgent ? '公司上游信息不全：' + missing.map(k => labels[k]).join('、')
       : profile.codeagentMissing ? '公司模型暂时用不了：这台电脑上没找到 CodeAgent' : '公司模型暂时用不了：读不到 CodeAgent 版本';

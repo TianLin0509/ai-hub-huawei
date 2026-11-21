@@ -95,7 +95,7 @@ function spawnServe({ command, port, token, configDir, cwd, env }) {
   if (process.platform === 'win32') {
     return spawn('cmd.exe', ['/d', '/s', '/c', `"call ${head} ${args}"`], { cwd, env, windowsHide: true, windowsVerbatimArguments: true, stdio: 'ignore' });
   }
-  return spawn('/bin/sh', ['-c', `${head} ${args}`], { cwd, env, stdio: 'ignore', detached: false });
+  return spawn('/bin/sh', ['-c', `${head} ${args}`], { cwd, env, windowsHide: true, stdio: 'ignore', detached: false });
 }
 
 // 同一时间只起一个临时 serve：公司电脑内存紧，一个就占约 0.5 GB。

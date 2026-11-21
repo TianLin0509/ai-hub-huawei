@@ -84,19 +84,18 @@ const KNOWN_ISSUES = [
     action: { label: '等它就绪后重试', act: 'known:proxy-wait' } },
   // 签名探测里 CodeAgent 起来后自己以非 0 退出码结束、没写签名日志（core/company-proxy/upstream-profile.mjs signerInitFailureMessage
   // 「约 N 秒后 CodeAgent 就退出了（退出码 1），未生成签名日志」；反馈 11e4dff3 等 3 人 5 条）：多半是账号本身用不了，
-  // 「重新启动反代」对它无效，主按钮换成个人账号重新登录（main/ipc/session-handlers.js codeagent-pool:personal-login）。排在 company-proxy-failed 前。
   { id: 'codeagent-account-unusable', areas: ['company-proxy', 'session-create', 'codeagent', 'model-service', 'hub-alert', 'notice'],
     test: /^(?![\s\S]*(?:后台进程还没确认结束|仍然没有送达))[\s\S]*首次签名初始化没完成[\s\S]{0,400}?CodeAgent 就退出了（退出码 ([1-9]\d*)），未生成签名日志/,
     title: 'CodeAgent 账号现在用不了',
-    fix: m => `Hub 在后台试着启动 CodeAgent 取签名信息，它几秒后自己以退出码 ${m[1]} 结束了。最常见的原因是这个 CodeAgent 账号没登录、登录过期，或没有模型权限，光重新启动反代解决不了。先点「个人账号重新登录」用自己的 W3 账号登录，登录成功后点「重新启动反代」，再新建会话；还不行点「问问 Agent」让它看日志。`,
+    fix: m => `Hub 在后台试着启动 CodeAgent 取签名信息，它几秒后自己以退出码 ${m[1]} 结束了。最常见的原因是这个 CodeAgent 账号没登录、登录过期，或没有模型权限，光重新启动模型通道解决不了。先点「个人账号重新登录」用自己的 W3 账号登录，登录成功后点「重新启动模型通道」，再新建会话；还不行点「问问 Agent」让它看日志。`,
     action: { label: '个人账号重新登录', act: 'known:codeagent-personal-login' },
-    more: [{ label: '重新启动反代', act: 'known:proxy-restart' }] },
+    more: [{ label: '重新启动模型通道', act: 'known:proxy-restart' }] },
   { id: 'company-proxy-failed', areas: ['company-proxy', 'session-create', 'codeagent', 'model-service', 'hub-alert', 'notice'],
     // main/company-proxy-service.js「公司模型反代没能启动」「反复退出，已停止自动重启」；core/company-proxy/server.mjs「公司模型反代启动失败：」。
     test: /^(?![\s\S]*(?:后台进程还没确认结束|仍然没有送达))[\s\S]*(?:公司模型反代(?:没能启动|反复退出|启动失败)|首次签名初始化没完成|CodeAgent 未收到签名初始化所需的测试输入)/,
     title: '公司模型反代没能启动',
     fix: '先重新启动一次反代；还不行就点「问问 Agent」让它看反代日志找原因。',
-    action: { label: '重新启动反代', act: 'known:proxy-restart' } },
+    action: { label: '重新启动模型通道', act: 'known:proxy-restart' } },
   { id: 'update-corrupt', areas: ['app-update'],
     // core/app-update/downloader.js「文件校验不一致」「文件不完整」「文件大小不对」。
     test: /文件校验不一致|文件不完整|文件大小不对|收到的内容比应有的/,

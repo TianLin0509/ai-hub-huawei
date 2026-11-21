@@ -232,11 +232,15 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
     if (!host) return;
     const readiness = roomReadiness(draft, state);
     const checklist = slot('first-use');
+    // 「登录 / 检查登录」灰着时写明原因（2026-11-21：首次用户看到灰按钮不知道为什么）。
+    const loginWhy = !state.connected ? '要先接通会议室组件（上方下载或连接），接通后才能登录'
+      : state.loginBusy ? '正在打开登录页…' : state.running ? '守护运行中，先停止守护再登录'
+      : (busy || state.controlBusy) ? '正在处理上一步，稍等' : !loaded ? '正在读取配置…' : '';
     if (checklist) {
       checklist.hidden = (readiness.plan && readiness.login) || !!state.running;
       const html = readiness.ready
         ? head('登录尚未检查') + '<p class="cr-side-p">可以启动守护，组件会在抢订前自动检查登录；如登录失效，会提醒你重新登录。</p>'
-        : head(`还差 ${readiness.missing} 步`) + `${!readiness.login ? `<p class="cr-side-p">① 登录会议室网页 ${button('login', '登录 / 检查登录', 'sec', 'cr-btn-sm')}</p>` : ''}${!readiness.plan ? `<p class="cr-side-p">② 在抢订计划里加会议室 ${button('plan', '去填抢订计划', 'sec', 'cr-btn-sm')}</p>` : ''}`;
+        : head(`还差 ${readiness.missing} 步`) + `${!readiness.login ? `<p class="cr-side-p">① 登录会议室网页 ${button('login', '登录 / 检查登录', 'sec', 'cr-btn-sm')}${loginWhy ? `<small class="cr-why" data-cr-slot="login-why">${escape(loginWhy)}</small>` : ''}</p>` : ''}${!readiness.plan ? `<p class="cr-side-p">② 在抢订计划里加会议室 ${button('plan', '去填抢订计划', 'sec', 'cr-btn-sm')}</p>` : ''}`;
       if (checklist.dataset.html !== html) { checklist.innerHTML = html; checklist.dataset.html = html; }
     }
     const locked = busy || !state.connected || state.running || state.loginBusy || state.controlBusy;
@@ -256,6 +260,7 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
       if (op === 'once') b.disabled ||= !readiness.ready;
       // 规则不是 7 天而组件还只会抢 7 天：启动和立即抢会白跑，按钮停用，原因写在旁边的节奏卡里。
       if ((op === 'start' || op === 'once') && schedBlocked()) b.disabled = true;
+      if (op === 'login') b.title = b.disabled && loginWhy ? loginWhy : '';
       if (op === 'login' && b.closest('.cr-side-b')) { b.classList.toggle('cr-btn-pri', readiness.plan && !readiness.ready); b.classList.toggle('cr-btn-sec', !(readiness.plan && !readiness.ready)); }
       if (op === 'pause') b.hidden = !state.running;
     });

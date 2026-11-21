@@ -243,7 +243,9 @@
    2026-11-21：上面那条弹入动画的 transform 会顶掉居中的 transform，动画放完（约 160ms）整块菜单才跳到正中，
    位移约 120×230px；这段时间里点「一键反馈」等项，落点已经不在菜单上，菜单被当成点外面关掉，弹窗不出来。
    设置菜单只做淡入、不动 transform，从第一帧起就在最终位置。tests/unit-options-menu-stable.test.js 守着。 */
-.scene-rail .options-menu { animation: rail-options-fade-in 160ms ease-out; }
+/* The centered menu must size to its contents. A remaining bottom anchor
+   constrains it to half the viewport and clips the final feedback item. */
+.scene-rail .options-menu { bottom: auto !important; animation: rail-options-fade-in 160ms ease-out; }
 @keyframes rail-options-fade-in {
   from { opacity: 0; }
   to   { opacity: 1; }

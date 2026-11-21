@@ -57,14 +57,20 @@ function unavailableFromSkipped(skipped) {
 function writeProbed(file, result) {
   if (!Array.isArray(result.models) || !result.models.length) return;
   const unavailable = unavailableFromSkipped(result.skipped);
+  const details = Array.isArray(result.details) ? result.details : [];
+  // Same model in different groups can have different limits. The model-only
+  // index may only contain an unambiguous value; group evidence stays in details.
+  const unambiguous = details.filter(row => details.filter(other => String(other.id).toLowerCase() === String(row.id).toLowerCase())
+    .every(other => Number(other.contextWindow) === Number(row.contextWindow)));
   const windows = result.source === 'serve' ? contextWindows(result.models, Object.fromEntries(
-    (Array.isArray(result.details) ? result.details : []).map(model => [String(model.id || ''), model.contextWindow]))) : {};
+    unambiguous.map(model => [String(model.id || ''), model.contextWindow]))) : {};
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify({ schema: 1, models: result.models, defaultModel: result.defaultModel || '', at: new Date().toISOString(),
     source: result.source || 'menu', ...((result.source || 'menu') === 'menu' ? { parserVersion: require('./codeagent-models').MODEL_MENU_PARSER_VERSION } : {}),
     ...(Object.keys(windows).length ? { contextWindows: windows } : {}),
-    ...(Array.isArray(result.details) ? { details: result.details.map(({ id, label, provider, providerLabel }) => ({ id, label, provider, providerLabel })) } : {}),
+    ...(Array.isArray(result.details) ? { details: result.details.map(({ id, label, provider, providerLabel, contextWindow }) => ({ id, label, provider, providerLabel,
+      ...(result.source === 'serve' && Number.isFinite(Number(contextWindow)) && Number(contextWindow) >= 1000 ? { contextWindow: Math.round(Number(contextWindow)) } : {}) })) } : {}),
     ...(unavailable.length ? { unavailable } : {}) }, null, 2) + '\n', 'utf8');
   fs.renameSync(tmp, file);
 }

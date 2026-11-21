@@ -551,6 +551,10 @@ let windowsShellWatchdog = null;
 
 let mainWindow;
 let desktopNotificationController = null;
+function desktopNoticesAllowed(payload = {}) {
+  return hubPetController?.getSettings?.()?.notifyMode !== 'off'
+    || require('./core/hub-pet/settings').isUrgentNotice(payload);
+}
 let hubPetController = null;
 // 桌宠「敲键盘」看的是助理会话本轮是否还在跑（CLI hook 报告的状态）。
 const HUB_PET_ASSISTANT_PURPOSES = new Set(['company-assistant', 'hub-assistant']);
@@ -932,7 +936,7 @@ async function observeCodeAgentModel(hubSessionId, ev, transcriptPath, source = 
     if (session && usage) {
       const configDir = session.codeagentConfigDir || require('./core/codeagent-config').resolveCodeAgentConfig(process.env).configDir;
       const { window } = codeAgentModels.contextWindowFor(configDir, [session.currentModel?.id, modelId], fs,
-        { dataDir: getHubDataDir(), accountKey: session.codeagentPoolAccount || 'personal' });
+        { dataDir: getHubDataDir(), accountKey: session.codeagentPoolAccount || 'personal', provider: session.codeagentModelProvider || session.currentModel?.provider || '' });
       const context = codeAgentModels.contextFromUsage(usage, window);
       if (context && (context.contextUsed !== session.contextUsed || context.contextEffectiveMax !== session.contextEffectiveMax)) {
         const withContext = sessionManager.updateSessionMeta(hubSessionId, context);
@@ -1712,8 +1716,8 @@ function createWindow() {
       getMainWindow: () => mainWindow,
       focusPrimaryWindow,
       sendToRenderer,
-      canShow: () => !keepIsolatedE2EWindowHidden()
-        || process.env.CLAUDE_HUB_E2E_SHOW_NOTIFICATION === '1',
+      canShow: payload => desktopNoticesAllowed(payload) && (!keepIsolatedE2EWindowHidden()
+        || process.env.CLAUDE_HUB_E2E_SHOW_NOTIFICATION === '1'),
       // 开着桌宠时，通知由桌宠举卡片说；桌宠没开或被收起时照旧弹这张卡（2026-11-09）。
       route: payload => hubPetController?.routeDesktopNotice?.(payload) === true,
       logger: console,
@@ -2922,6 +2926,7 @@ try {
     focusWindow: () => focusPrimaryWindow(),
     quit: () => app.quit(),
     isEnabled: () => optionalFeatures.get('tray') && !keepIsolatedE2EWindowHidden(),
+    canNotify: () => desktopNoticesAllowed(),
     // 首次点关闭时问「最小化到托盘 / 退出」（2026-11-21）。隔离测试实例默认不问（关窗口要直接走退出），
     // 专测这个选择框时设 CLAUDE_HUB_CLOSE_PROMPT=1。
     closeChoice: {
@@ -3425,7 +3430,9 @@ claudeAccountSwitch.start();
           : r.state === 'mismatch' ? `出口 IP 变成了 ${r.ip}（应为 ${r.expected}）。VPS 会自动断开这条专线，请勿继续使用该账号。`
           : r.state === 'unreachable' ? `专线连不上：可能是网络问题，也可能是 VPS 发现出口 IP 不符已断开。该账号会话会失败，不会改走其他线路。`
           : `专线已恢复，出口 IP ${r.ip}。`;
-        try { new (require('electron').Notification)({ title: `Claude ${r.label}`, body }).show(); } catch {}
+        if (desktopNoticesAllowed({ tone: r.state === 'ok' ? '' : 'bad' })) {
+          try { new (require('electron').Notification)({ title: `Claude ${r.label}`, body }).show(); } catch {}
+        }
         console.warn('[claude-egress-check]', r.id, r.state, r.ip || '');
       }
     } catch (error) { console.warn('[claude-egress-check] ' + error.message); }
@@ -4768,6 +4775,8 @@ try {
 require('./main/ipc/session-scenes-handlers').registerSessionScenesIpc(ipcMain,{dataDir:getHubDataDir(),shell});
 // 主题资源只在用户点击时联网；加载和切换不影响任何 CLI 会话。
 require('./main/ipc/appearance-handlers').registerAppearanceIpc(ipcMain, { dataDir: getHubDataDir(), sendToRenderer });
+// 开场动画（2026-11-22）：默认群星，随包三套，其余按需下载；隔离测试实例默认不播。
+require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { dataDir: getHubDataDir(), sendToRenderer, isolated: isIsolatedHub() });
 // 一键更新（2026-10-13，公司版）：只有发行目标写了下载源才开启；主仓库没有这个入口。
 {
   const distribution = require('./core/distribution');

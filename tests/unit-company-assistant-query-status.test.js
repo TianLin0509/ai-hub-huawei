@@ -256,14 +256,14 @@ test('cancelled rows never inflate table-invalid counts or hide real pagination 
   assert.match(result.coverage.reasonLabel, /已过滤 1 条已取消日程/);
 });
 
-test('a synthetic calendar table without isCancelled keeps its original behavior even when Status says Cancelled', async () => {
+test('a synthetic calendar table preserves explicit cancellation in its Status column', async () => {
   const raw = Q.parseCalendarTable('Subject Start End Location Status Organizer ItemId\n------- ----- --- -------- ------ --------- ------\n测试日程  2026-11-02T12:05:00+08:00  2026-11-02T12:35:00+08:00  room  Cancelled  organizer  test-id');
   const result = await Q.collectCalendar(async () => raw, RANGE);
-  assert.equal(result.events.length, 1);
-  assert.equal(result.coverage.cancelled, 0);
+  assert.equal(result.events.length, 0);
+  assert.equal(result.coverage.cancelled, 1);
   assert.equal(result.coverage.invalid, 0);
   assert.equal(result.coverage.status, 'complete');
-  assert.equal(result.coverage.reasonLabel, '日程查询完成');
+  assert.equal(result.coverage.reasonLabel, '日程查询完成；已过滤 1 条已取消日程');
 });
 
 test('cancelled calendar meetings disappear from collected facts, briefs, preparation and overbooking notices', async t => {

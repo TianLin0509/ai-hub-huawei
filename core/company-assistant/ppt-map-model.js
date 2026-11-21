@@ -23,7 +23,7 @@ function runOnce({ command, args, input = '', cwd, env, timeoutMs, signal, spawn
     try {
       child = process.platform === 'win32'
         ? spawnImpl('cmd.exe', ['/d', '/s', '/c', `"call ${line}"`], { cwd, env, windowsHide: true, windowsVerbatimArguments: true })
-        : spawnImpl('/bin/sh', ['-c', line], { cwd, env });
+        : spawnImpl('/bin/sh', ['-c', line], { cwd, env, windowsHide: true });
     } catch (error) { resolve({ code: -1, stdout: '', stderr: error.message }); return; }
     let stdout = '', stderr = '', timedOut = false, aborted = false, done = false;
     const finish = result => { if (done) return; done = true; clearTimeout(timer); signal?.removeEventListener?.('abort', onAbort); resolve(result); };

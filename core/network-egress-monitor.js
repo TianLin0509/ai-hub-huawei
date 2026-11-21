@@ -131,7 +131,7 @@ function normalizeRouteResult(result, route, now = Date.now()) {
 
 function execFileUtf8(execFileImpl, file, args, options) {
   return new Promise((resolve, reject) => {
-    execFileImpl(file, args, options, (error, stdout, stderr) => {
+    execFileImpl(file, args, { ...options, windowsHide: true }, (error, stdout, stderr) => {
       if (error) {
         error.stdout = stdout;
         error.stderr = stderr;

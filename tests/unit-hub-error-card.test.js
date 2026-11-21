@@ -267,7 +267,7 @@ test('签名初始化错误在弹窗及会话提示里提供原有重启入口�
   for (const area of ['hub-alert', 'notice']) {
     for (const details of ['公司模型暂时用不了：首次签名初始化没完成（签名日志没有生成）',
       '公司模型暂时用不了：CodeAgent 未收到签名初始化所需的测试输入，在生成签名日志前退出了。']) {
-      assert.match(card.knownHtml({ area, details }), /data-hub-err-act="known:proxy-restart">重新启动反代/);
+      assert.match(card.knownHtml({ area, details }), /data-hub-err-act="known:proxy-restart">重新启动模型通道/);
     }
     assert.equal(card.knownHtml({ area, details: 'CodeAgent 未收到签名初始化所需的测试输入。后台进程还没确认结束，Hub 已停止重试' }), '');
   }

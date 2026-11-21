@@ -1,0 +1,73 @@
+/* 「一个 Tab 一屏」（2026-11-21）：1440×900 下主页、启动中心、设置、会议室不出纵向滚动。
+   只调布局与间距，不改各页面的取值和行为；回归测试 tests/e2e-one-screen-cdp.js。 */
+
+/* ── 设置弹窗：按类分页签（renderer/config-settings-tabs.js） ── */
+.cfg-tabs { display: flex; gap: 2px; width: max-content; max-width: 100%; margin: 0 0 14px; padding: 3px; border-radius: var(--hw-r-pill, 999px); background: var(--hw-surface-3, var(--surface-sunken, #edeff2)); }
+.cfg-tabs .cfg-tab { height: 30px; padding: 0 16px; border: 0; border-radius: var(--hw-r-pill, 999px); background: transparent; color: var(--hw-text-2, var(--fg-muted)); font: inherit; font-size: 13px; white-space: nowrap; cursor: pointer; }
+.cfg-tabs .cfg-tab:hover { color: var(--hw-text-1, var(--fg-strong)); }
+.cfg-tabs .cfg-tab[aria-selected="true"] { background: var(--hw-surface, var(--surface-raised, #fff)); color: var(--hw-text-1, var(--fg-strong)); font-weight: 600; box-shadow: var(--hw-e1, 0 1px 2px rgba(0,0,0,.08)); }
+.cfg-tabs .cfg-tab:focus-visible { outline: 2px solid var(--hw-brand, var(--brand, #3478f6)); outline-offset: 1px; }
+.cfg-tabs .cfg-tab[hidden] { display: none; }
+#config-main-view > .cfg-tab-off { display: none !important; }
+/* 弹窗高度固定在一屏以内：标题与保存按钮常驻，页签内容在中间。 */
+#config-modal .config-modal-content { display: flex; flex-direction: column; }
+#config-modal .config-modal-body { flex: 1 1 auto; min-height: 0; overflow: auto; }
+/* 切页签时弹窗高度不跳：主视图在时固定一个高度，保存 / 取消贴底。 */
+#config-modal .config-modal-content:has(#config-main-view:not(.hidden)) { height: min(700px, 90vh); }
+#config-modal .config-modal-content:has(#config-main-view:not(.hidden)) .config-modal-body { display: flex; flex-direction: column; }
+#config-modal .config-modal-content:has(#config-main-view:not(.hidden)) #config-main-view { flex: 1 0 auto; }
+
+/* ── 主页：首次使用（「连接你的 AI」在页面上）时收紧，「保存并继续」留在首屏 ── */
+#terminal-panel .home-welcome:has(#community-setup:not([hidden])) .home-welcome-head { padding-top: 14px; padding-bottom: 6px; }
+#terminal-panel .home-welcome:has(#community-setup:not([hidden])) .home-welcome-body { padding-top: 6px; padding-bottom: 14px; }
+#terminal-panel .home-welcome:has(#community-setup:not([hidden])) .ec-hint { margin-bottom: 10px; }
+#terminal-panel .home-welcome:has(#community-setup:not([hidden])) .home-welcome-eyebrow { margin-bottom: 8px; }
+#terminal-panel .home-welcome:has(#community-setup:not([hidden])) #home-welcome-title { margin-bottom: 14px; font-size: 24px; }
+/* 两张入口卡改成横排：图标在左，标题与说明在右，箭头靠右居中。 */
+#terminal-panel .home-welcome:has(#community-setup:not([hidden])) .home-welcome-portal { min-height: 0; display: grid; grid-template-columns: 38px minmax(0, 1fr); column-gap: 14px; align-items: center; padding: 14px 44px 14px 18px; }
+#terminal-panel .home-welcome:has(#community-setup:not([hidden])) .home-welcome-portal .home-welcome-icon { grid-row: 1 / span 2; margin: 0; }
+#terminal-panel .home-welcome:has(#community-setup:not([hidden])) .home-welcome-portal strong { grid-column: 2; margin-top: 0; }
+#terminal-panel .home-welcome:has(#community-setup:not([hidden])) .home-welcome-portal .home-welcome-description { grid-column: 2; margin-top: 1px; padding-right: 0; }
+#terminal-panel .home-welcome:has(#community-setup:not([hidden])) .home-welcome-arrow { top: 50%; bottom: auto; right: 18px; transform: translateY(-50%); }
+#terminal-panel .home-welcome:has(#community-setup:not([hidden])) #community-setup { margin-top: 12px; padding: 14px 20px; }
+#terminal-panel .home-welcome:has(#community-setup:not([hidden])) #community-setup h2 { margin-bottom: 4px; }
+#terminal-panel .home-welcome:has(#community-setup:not([hidden])) #community-setup p { margin: 4px 0; }
+#terminal-panel .home-welcome:has(#community-setup:not([hidden])) #community-providers { margin: 8px 0; }
+#terminal-panel .home-welcome:has(#community-setup:not([hidden])) .community-setup-actions { margin: 8px 0 4px; }
+#terminal-panel .home-welcome:has(#community-setup:not([hidden])) #community-thanks { margin: 4px 0 0; }
+
+/* ── 会议室：右侧「守护」栏收紧行距，首屏放下全部按钮与「下一次」 ── */
+.cr-side .cr-side-h { padding-top: 14px; }
+.cr-side .cr-side-b { padding-top: 8px; padding-bottom: 10px; }
+.cr-side .cr-sched { margin-top: 8px; padding: 10px 12px; }
+.cr-side .cr-acts { gap: 6px; margin-top: 10px; }
+.cr-side .cr-acts .cr-btn { height: 34px; }
+.cr-side .cr-h-sm { margin: 14px 0 6px; }
+.cr-side .cr-kv { row-gap: 6px; }
+/* 第 ① 步按钮灰掉时，旁边写一句为什么。 */
+.cr-why { display: inline; margin-left: 8px; color: var(--hw-text-3, var(--fg-muted)); font-size: var(--hw-fs-12, 12px); line-height: 1.5; }
+.cr-why[hidden] { display: none; }
+
+/* ── 启动中心：次要选项收进「更多选项」（renderer/launch-more-options.js），工作目录卡压成两行 ── */
+#new-session-config-section.lc-more-collapsed :is(#new-session-company-account-field, #new-session-mcp-field, #new-session-fast-field, #new-session-codex-tier-field, #new-session-permission-field, #new-session-permission-note, #new-session-company-account-note) { display: none !important; }
+.lc-more-toggle { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 34px; margin: 10px 0 0; padding: 0 12px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--surface-card, var(--surface-raised)); color: var(--fg-default); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.lc-more-toggle[hidden] { display: none; }
+.lc-more-toggle:hover { border-color: var(--border-mid); }
+.lc-more-toggle:focus-visible { outline: 2px solid var(--brand, #3478f6); outline-offset: 1px; }
+.lc-more-label { flex: none; font-weight: 600; color: var(--fg-strong); }
+.lc-more-summary { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--fg-muted); }
+.lc-more-chev { flex: none; width: 7px; height: 7px; margin-right: 2px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: translateY(-2px) rotate(45deg); color: var(--fg-muted); }
+.lc-more-toggle[aria-expanded="true"] .lc-more-chev { transform: translateY(2px) rotate(-135deg); }
+.lc-more-toggle[aria-expanded="true"] { margin-bottom: 4px; }
+.new-session-menu .session-config-section { margin-top: 14px; }
+.new-session-menu .session-create-body > .menu-group-label { padding-top: 10px; }
+.new-session-menu .session-workspace-choice { min-height: 0; padding: 9px 10px; align-items: start; }
+.new-session-menu .session-workspace-choice small { line-height: 1.45; }
+.new-session-menu .session-create-body { padding-bottom: 8px; }
+.new-session-menu .session-create-body > .menu-group-label:first-child { padding-top: 4px; }
+.new-session-menu .session-config-section { padding: 12px 16px; }
+.new-session-menu .session-config-heading { margin-bottom: 8px; }
+.new-session-menu .session-config-heading > div { flex-direction: row; align-items: baseline; flex-wrap: wrap; column-gap: 10px; row-gap: 2px; }
+.new-session-menu #new-session-config-section.lc-more-collapsed .session-model-cards-wrap { margin-bottom: 0; }
+.new-session-menu .session-model-card { min-height: 0; gap: 4px; padding: 9px 12px 8px; }
+.new-session-menu .gw-inline { margin-top: 6px; padding: 10px 14px; }

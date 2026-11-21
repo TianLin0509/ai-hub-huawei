@@ -70,12 +70,20 @@ const onGateway = provider => provider?.backend === 'proxy' && provider.upstream
 function companyModels(provider) {
   const list = Array.isArray(provider?.companyModels) && provider.companyModels.length ? provider.companyModels
     : Array.isArray(provider?.models) ? provider.models : [];
-  return list.filter(m => m && typeof m.id === 'string' && m.id).map(m => ({ id: m.id, label: m.label || m.id }));
+  return list.filter(m => m && typeof m.id === 'string' && m.id).map(m => ({ id: m.id, label: m.label || m.id,
+    ...(m.contextWindow > 0 ? { contextWindow: m.contextWindow } : {}) }));
 }
 
 // 打开启动中心时默认选中的卡：该工具在「自有 API」里保存的来源和模型（也就是上次选的）。
-function defaultPick(kind, provider) {
+// 配过部门 API key 选 API 网关，否则选这个工具自己的来源；不默认选公司模型，免得一点创建就把设置改写成公司模型再报错（11-21 全新用户深查 #6）。
+function defaultPick(kind, provider, { codeagentInstalled = null } = {}) {
   if (!provider) return null;
+  const untouched = provider.companyDefault === true && provider.backend === 'local';
+  if (untouched && codeagentInstalled === false) {
+    const gateway = gatewayModels(provider);
+    if (gateway.length) return { source: 'gateway', model: gateway[0].id };
+    if (kind !== 'deepseek-acp') return { source: 'own', model: provider.own?.model || provider.model || '' };
+  }
   if (provider.backend === 'api' && provider.selectedProfileId) {
     const profile = provider.apiProfiles?.find(item => item.id === provider.selectedProfileId);
     if (profile) return { source: 'api', profileId: profile.id, model: profile.model };
@@ -86,7 +94,7 @@ function defaultPick(kind, provider) {
   }
   // DSH 存的是自有接口（2026-11-20 起可用）：默认选自有卡，不再悄悄切到公司模型。
   if (kind === 'deepseek-acp' && provider.backend === 'api') return { source: 'own', model: provider.model || '' };
-  if (provider.backend === 'proxy' || kind === 'deepseek-acp' || provider.companyDefault === true && provider.backend === 'local') {
+  if (provider.backend === 'proxy' || kind === 'deepseek-acp' || untouched) {
     const models = companyModels(provider);
     const model = models.some(m => m.id === provider.model) ? provider.model : models[0]?.id || '';
     return { source: 'company', model };
@@ -150,7 +158,9 @@ function cardsFor(kind, provider, status, pick, { codeagentInstalled = null } = 
   const cards = companyModels(provider).map(m => {
     const badge = proxyBadge(status, m.id);
     return { id: m.id, name: m.label === m.id ? m.id : m.label, detail: m.label === m.id ? '' : m.id, source: 'company', sourceText: status?.shared ? '共享号池' : '公司模型',
-      state: badge.state, statusText: badge.text, tip: badge.tip, checked: pick?.source === 'company' && pick.model === m.id };
+      state: badge.state, statusText: badge.text,
+      tip: `${badge.tip} · ${m.contextWindow > 0 ? `模型目录窗口 ${Number(m.contextWindow).toLocaleString()} tokens` : '上下文窗口未知'}`,
+      checked: pick?.source === 'company' && pick.model === m.id };
   });
   if (kind !== 'deepseek-acp') {
     const own = provider.apiProfiles?.length ? { backend: 'local' }

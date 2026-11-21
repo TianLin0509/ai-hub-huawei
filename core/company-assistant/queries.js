@@ -18,6 +18,8 @@ const calendarTableHeader = lines => lines.findIndex((line, i) => ['Subject', 'S
 function parseCalendarTable(output) {
   const lines = String(output || '').trim().split(/\r?\n/), header = calendarTableHeader(lines);
   if (header < 0) return null;
+  const columns = lines[header].trim().split(/[\s|]+/).filter(Boolean);
+  const tailColumns = columns.slice(columns.findIndex(c => /^end$/i.test(c)) + 1, columns.findIndex(c => /^itemid$/i.test(c)));
   const rows = lines.slice(header + 2).filter(line => line.trim()), events = [], separators = new Set(), timeFormats = new Set();
   let tableInvalid = 0;
   for (const line of rows) {
@@ -28,7 +30,14 @@ function parseCalendarTable(output) {
     const [start, end] = times.slice(-2), endAt = end.index + end[0].length, last = /\S+\s*$/.exec(line);
     const hasId = last && last.index >= endAt, token = hasId ? last[0].trim() : '';
     const tail = line.slice(endAt, hasId ? last.index : line.length).trim().split(/ {2,}/);
-    events.push({ subject: line.slice(0, start.index).trim(), start: start[0], end: end[0], location: tail.length >= 3 ? tail[0] : '', itemId: /(?:\.\.\.|…)$/.test(token) ? '' : token });
+    // 已知表头有 Status；只有列边界清楚且列数吻合时才读取取消证据，不把地点/组织者的字样猜作状态。
+    // 数据行仍为合成兼容样例，真机格式待核对；单空格等歧义行维持原来的保留策略。
+    const cells = line.slice(endAt, hasId ? last.index : line.length).trim().replace(/^\|\s*|\s*\|$/g, '').split(/\s*\|\s*| {2,}/);
+    const cancelled = hasId && columns.at(-1)?.toLowerCase() === 'itemid' && cells.length === tailColumns.length && tailColumns.some((key, i) =>
+      /^(?:status|state)$/i.test(key) ? D.isCancelledCalendarEvent({ status: cells[i] })
+        : /^(?:is_?cancelled|is_?canceled|cancelled|canceled)$/i.test(key) && D.isCancelledCalendarEvent({ isCancelled: cells[i] }));
+    events.push({ subject: line.slice(0, start.index).trim(), start: start[0], end: end[0], location: tail.length >= 3 ? tail[0] : '', itemId: /(?:\.\.\.|…)$/.test(token) ? '' : token,
+      ...(cancelled ? { cancelled: true } : {}) });
   }
   return { events, tableInvalid, tableFormat: { totalRows: rows.length, parsedRows: events.length, invalidRows: tableInvalid, separators: [...separators].sort(), timeFormats: [...timeFormats].sort() } };
 }

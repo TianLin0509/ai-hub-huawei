@@ -166,11 +166,13 @@ function eventSource(base, raw, startEvidence) {
     occurrenceId: `${base}:t${recordHash(Number.isFinite(startEvidence.at) ? startEvidence.at : startEvidence)}` };
 }
 // 已取消的会议（2026-11-18 群反馈：取消了的会还被检索、识别成今天的会）。
-// WeLink 会议接口的取消字段没有真机样本，只认明确的写法：布尔取消标记为真、状态字段的值恰好是 cancel/cancelled/已取消。
+// WeLink 会议接口的取消字段没有真机样本；日历原有样例仅核对 isCancelled。
+// 会议和日历共用兼容规则：布尔取消标记为真、状态字段恰好为 cancel/cancelled/已取消。
+// PascalCase（Exchange 风格）及 snake_case 是兼容假设，不代表公司接口已验证。
 // 不看标题（2026-11-19 审查：主题被人写成「已取消:」开头的正常会会被误滤）；拿不准的（状态是数字码等）照旧保留。
 // 取消字段待真实样本核对（2026-11-19 远程取样未成功）：字段缺失或值拿不准时一律不过滤。
-const CANCEL_FLAGS = ['isCancelled', 'isCanceled', 'cancelled', 'canceled', 'isCancel'];
-const CANCEL_STATES = ['meetingStatus', 'meetingState', 'conferenceState', 'confStatus', 'status', 'state'];
+const CANCEL_FLAGS = ['isCancelled', 'isCanceled', 'cancelled', 'canceled', 'isCancel', 'IsCancelled', 'IsCanceled', 'is_cancelled', 'is_canceled'];
+const CANCEL_STATES = ['meetingStatus', 'meetingState', 'conferenceState', 'confStatus', 'eventStatus', 'calendarStatus', 'status', 'state', 'Status', 'State'];
 function isCancelledMeeting(m) {
   if (!m || typeof m !== 'object') return false;
   if (CANCEL_FLAGS.some(k => m[k] === true || m[k] === 'true')) return true;
@@ -188,7 +190,7 @@ function meetings(raw, { withCancelled = false } = {}) {
   }).filter(m => m.id);
 }
 
-function isCancelledCalendarEvent(event) { return event?.isCancelled === true || event?.isCancelled === 'true'; }
+function isCancelledCalendarEvent(event) { return isCancelledMeeting(event); }
 function calendarEvents(raw) {
   const anonymous = new Map();
   return listIn(raw, ['events', 'items', 'value', 'calendars']).map((e, i) => {
@@ -389,8 +391,8 @@ function relatedGroups(snapshot, { keywords = [], since = 0 } = {}) {
 // 出处表：sourceId → 这一条原始记录（简报核对与「看出处」都用它）。
 function sourceIndex(snapshot) {
   const map = new Map();
-  for (const m of snapshot.meetings || []) map.set(m.sourceId, { kind: 'meeting', label: `会议 · ${m.allDay ? m.displayRange : clock(m.start)} ${m.subject}`, item: m });
-  for (const e of snapshot.calendar || []) map.set(e.sourceId, { kind: 'calendar', label: `日程 · ${e.allDay ? e.displayRange : clock(e.start)} ${e.subject}`, item: e });
+  for (const m of snapshot.meetings || []) if (!isCancelledMeeting(m)) map.set(m.sourceId, { kind: 'meeting', label: `会议 · ${m.allDay ? m.displayRange : clock(m.start)} ${m.subject}`, item: m });
+  for (const e of snapshot.calendar || []) if (!isCancelledCalendarEvent(e)) map.set(e.sourceId, { kind: 'calendar', label: `日程 · ${e.allDay ? e.displayRange : clock(e.start)} ${e.subject}`, item: e });
   for (const list of Object.values(snapshot.messages || {})) for (const m of list) map.set(m.sourceId, { kind: 'message', label: `${m.group ? '群 ' + m.convName : '私聊'} · ${m.sender}${m.at ? ' ' + clock(m.at) : ''}`, item: m });
   for (const m of snapshot.mails || []) map.set(m.sourceId, { kind: 'mail', label: `邮件 · ${m.from} · ${m.subject}`, item: m });
   return map;
@@ -400,10 +402,10 @@ function sourceIndex(snapshot) {
 function todaysMeetings(snapshot, day) {
   const dayStart = Date.parse(day + 'T00:00:00+08:00'), range = { start: dayStart, end: dayStart + 86400000 };
   const inDay = x => Number.isFinite(x.start) ? eventInRange(x, range) : x.allDay && x.timeStatus === 'date-only' && (x.startDate === day || x.endDate && x.dateEndExclusive !== null && x.startDate <= day && (x.dateEndExclusive ? day < x.endDate : day <= x.endDate));
-  return [...(snapshot.meetings || []), ...(snapshot.calendar || [])].filter(inDay).sort((a, b) => (a.start || 0) - (b.start || 0));
+  return [...(snapshot.meetings || []), ...(snapshot.calendar || [])].filter(m => !isCancelledMeeting(m) && inDay(m)).sort((a, b) => (a.start || 0) - (b.start || 0));
 }
 function unresolvedMeetings(snapshot) {
-  return [...(snapshot.meetings || []), ...(snapshot.calendar || [])].filter(m => !Number.isFinite(m.start) && !(m.allDay && m.timeStatus === 'date-only' && m.startDate));
+  return [...(snapshot.meetings || []), ...(snapshot.calendar || [])].filter(m => !isCancelledMeeting(m) && !Number.isFinite(m.start) && !(m.allDay && m.timeStatus === 'date-only' && m.startDate));
 }
 // 同一场会的合并显示（2026-11-05 用户定「2 合并」）：WeLink 会议与邮箱日程主题相同（忽略空白和标点）、
 // 开始与结束时间相差都不超过 1 分钟的，合成一条，标「WeLink + 日历」；两条原始记录的出处都保留在 sources 里。
@@ -411,6 +413,7 @@ function unresolvedMeetings(snapshot) {
 const meetingKey = subject => String(subject || '').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
 const sameTime = (a, b) => Number.isFinite(a) && Number.isFinite(b) ? Math.abs(a - b) <= 60000 : !Number.isFinite(a) && !Number.isFinite(b);
 function mergeMeetings(rows) {
+  rows = rows.filter(m => !isCancelledMeeting(m));
   const out = [], used = new Set();
   const isCal = m => String(m.sourceId || '').startsWith('cal:');
   rows.forEach((m, i) => {
@@ -431,6 +434,7 @@ function eventTimeUnknown(m) {
   return !Number.isFinite(m.start);
 }
 function eventInRange(m, range) {
+  if (isCancelledMeeting(m)) return false;
   if (Number.isFinite(m.start)) return m.start < range.end && (Number.isFinite(m.end) ? m.end > range.start : m.start >= range.start);
   if (m.allDay && m.timeStatus === 'date-only' && m.startDate) {
     const last = m.endDate && m.endDate >= m.startDate ? (m.dateEndExclusive === true ? shiftDate(m.endDate, -1) : m.endDate) : m.startDate;

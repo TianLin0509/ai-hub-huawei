@@ -84,8 +84,43 @@ test('renderer: an older needs-input mark does not hide a newer running turn', (
   const current = { liveTurn: { startedAt: 2000 } };
   assert.equal(restorePersistedAttention(current, { attentionState: 'needs-input', needsUserInput: true, updatedAt: 2500, waitingText: '要我继续吗' }), true);
   assert.equal(current.attentionState, 'needs-input', 'waiting inside the same live turn comes back');
-  const ended = {};
-  assert.equal(restorePersistedAttention(ended, { attentionState: 'needs-input', needsUserInput: true, updatedAt: 9999 }), false, 'turn already over: nothing to wait for');
+});
+
+test('renderer: an answer finished awaiting confirmation still waits for input after reload', () => {
+  const entry = { info: { id: 'a', kind: 'claude', agentRuntime: 'pty', status: 'idle' }, agentTurnActive: false };
+  assert.equal(liveTurnSnapshot(entry), null, 'Stop has already ended the turn');
+  const restored = { ...entry.info };
+  const meta = {
+    attentionState: 'needs-input', needsUserInput: true, replyReady: false,
+    waitingReason: 'question', waitingText: '是否继续？',
+    lastRunStartedAt: 1000, lastCompletedAt: 2000, updatedAt: 2100,
+  };
+  assert.equal(restorePersistedAttention(restored, meta), true);
+  assert.equal(restored.attentionState, 'needs-input');
+  assert.equal(restored.needsUserInput, true);
+  assert.equal(restored.waitingText, '是否继续？');
+  assert.equal(restored.waitingReason, 'question');
+  assert.equal(getSessionRuntimeTruth(restored, { now: 2200 }).state, 'waiting', 'sidebar still shows waiting, not completed');
+  assert.equal(liveTurnObservation(restored, 2200), null, 'a finished turn is not restarted');
+});
+
+test('renderer: an expired waiting mark is not restored without a live turn', () => {
+  const meta = { attentionState: 'needs-input', needsUserInput: true, lastCompletedAt: 1000, updatedAt: 1500 };
+  for (const boundary of ['lastCompletedAt', 'lastRunStartedAt', 'runStartedAt']) {
+    const restored = { [boundary]: 2000 };
+    restorePersistedAttention(restored, meta);
+    assert.equal(restored.attentionState, undefined, `waiting predates session.${boundary}`);
+    assert.notEqual(restored.needsUserInput, true);
+    const persisted = {};
+    restorePersistedAttention(persisted, { ...meta, [boundary]: 2000 });
+    assert.equal(persisted.attentionState, undefined, `waiting predates meta.${boundary}`);
+  }
+  assert.equal(restorePersistedAttention({}, { attentionState: 'needs-input', needsUserInput: true, updatedAt: 9999 }), false, 'unknown turn boundary is not enough to restore waiting');
+  const missingTimestamp = { lastCompletedAt: 2000 };
+  assert.equal(restorePersistedAttention(missingTimestamp, { attentionState: 'needs-input', needsUserInput: true }), false);
+  const atBoundary = { lastCompletedAt: 2000 };
+  restorePersistedAttention(atBoundary, { attentionState: 'needs-input', needsUserInput: true, updatedAt: 2000 });
+  assert.equal(atBoundary.attentionState, 'needs-input', 'equal timestamps can share the same saved millisecond');
 });
 
 test('renderer: a reply the user already followed up on is not marked unread-ready again', () => {
