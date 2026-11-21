@@ -114,6 +114,14 @@ while ($true) {
     Write-Host -NoNewline ([string][char]27 + '[2J' + [string][char]27 + '[H')
     Invoke-Hook 'PostToolUse' @{ session_id = $sid; transcript_path = $transcript; cwd = $cwd; hook_event_name = 'PostToolUse'; tool_name = 'Bash'; tool_use_id = $toolUseId; tool_input = @{ command = 'echo fake' }; tool_response = @{ stdout = 'fake'; stderr = ''; interrupted = $false } }
   }
+  # 'slow-tool <sec>': a Bash call that keeps running for <sec> seconds (tests/e2e-reload-restore-running-cdp.js).
+  if ($prompt -match '^slow-tool\s+(\d+)') {
+    $seconds = [int]$Matches[1]
+    Invoke-Hook 'PreToolUse' @{ session_id = $sid; transcript_path = $transcript; cwd = $cwd; hook_event_name = 'PreToolUse'; tool_name = 'Bash'; tool_use_id = $toolUseId; tool_input = @{ command = "sleep $seconds" } }
+    Write-Host "Running Bash: sleep $seconds"
+    Start-Sleep -Seconds $seconds
+    Invoke-Hook 'PostToolUse' @{ session_id = $sid; transcript_path = $transcript; cwd = $cwd; hook_event_name = 'PostToolUse'; tool_name = 'Bash'; tool_use_id = $toolUseId; tool_input = @{ command = "sleep $seconds" }; tool_response = @{ stdout = ''; stderr = ''; interrupted = $false } }
+  }
   Start-Sleep -Milliseconds 300
   $reply = "FAKE-REPLY: $prompt"
   Write-Host $reply

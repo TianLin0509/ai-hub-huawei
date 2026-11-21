@@ -449,6 +449,9 @@
 .config-reading-grid output { float: right; color: var(--link-hover); font-size: 12px; font-variant-numeric: tabular-nums; }
 .config-reading-grid input[type="range"] { padding: 7px 0; accent-color: #58a6ff; cursor: pointer; }
 .config-reading-note { margin: 4px 0 18px; color: var(--fg-muted); font-size: 11.5px; line-height: 1.55; }
+/* 桌宠 / 桌面回执保存没成功时的原因（renderer/hub-pet/hub-settings.js，2026-11-21） */
+.config-reading-note.config-save-error { color: var(--danger, #c0392b); }
+.config-reading-note.config-save-error[hidden] { display: none; }
 .config-notification-title { margin-top: 18px; }
 .config-notification-card { margin-bottom: 18px; padding: 12px; border: 1px solid var(--border-mid); border-radius: var(--radius-md); background: var(--surface-raised); }
 .config-operations-title { margin-top: 18px; }

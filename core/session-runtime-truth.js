@@ -124,6 +124,7 @@ function runtimeSourceLabel(source) {
   if (value.startsWith('pty-codex-input-ready')) return 'PTY 当前屏幕：Codex 输入框就绪';
   if (value.startsWith('pty-claude-active') || value.startsWith('pty-claude-interrupt')) return 'PTY 当前屏幕：Claude 活动态';
   if (value.startsWith('pty-claude-input-ready')) return 'PTY 当前屏幕：Claude 输入框就绪';
+  if (value === 'hub-reload-turn-active') return '界面重载前在跑（主进程记录）';
   if (value === 'claude-tool-start') return 'Claude PreToolUse';
   if (value === 'claude-subagent-start') return 'Claude SubagentStart';
   if (value === 'claude-task-start') return 'Claude TaskCreated';

@@ -10,6 +10,7 @@
   const netPassView = require('./net-pass-view');
   let netPass = null, netPassLast = null;
   let cliState = null;
+  const cliPassNote = {};   // 「打开放行页」没成功的原因，按工具记，重画区块时还在
   let snapshot = null;
   let setup = null;
   let dialog = null;
@@ -122,7 +123,7 @@
   function renderCliBlock(target, kind) {
     const slot = target?.querySelector(`[data-cli-install="${kind}"]`);
     if (!slot) return;
-    const block = cliView.installBlockHtml(kind, cliState);
+    const block = cliView.installBlockHtml(kind, cliState, { passNote: cliPassNote[kind] || '' });
     const needPass = block && netPass && (netPass.needed || (netPassLast?.results || []).some(r => r.result === 'blocked'));
     netPassView.ensureCss();
     slot.innerHTML = (needPass ? netPassView.boxHtml(netPass, { last: netPassLast }) : '') + block;
@@ -132,9 +133,13 @@
     slot.querySelector('[data-cli-action="install-git"]')?.addEventListener('click', () => void runGitInstall(target, kind));
     slot.querySelector('[data-cli-action="open-pass"]')?.addEventListener('click', async event => {
       const button = event.currentTarget;
-      button.disabled = true;
-      try { await ipcRenderer.invoke('net-pass:open-window', button.dataset.url); } catch (_) {}
-      void runInstall(target, kind);
+      button.disabled = true; button.textContent = '正在打开放行页…';
+      let opened = null, failure = null;
+      try { opened = await ipcRenderer.invoke('net-pass:open-window', button.dataset.url); } catch (error) { failure = error; }
+      const outcome = cliView.passOutcome(opened, failure);
+      cliPassNote[kind] = outcome.note;
+      if (outcome.retry) return void runInstall(target, kind);
+      if (dialog === target) renderCliBlock(target, kind);
     });
     for (const b of slot.querySelectorAll('[data-cli-action="cancel"]')) b.addEventListener('click', () => void ipcRenderer.invoke('cli-tools:cancel').catch(() => {}));
   }
@@ -151,6 +156,7 @@
   }
   async function runInstall(target, kind) {
     const id = cliView.TOOL_FOR_KIND[kind];
+    cliPassNote[kind] = '';
     cliState = { ...cliState, busy: id, tools: { ...cliState?.tools, [id]: { phase: 'checking' } } };
     renderCliBlock(target, kind);
     let result;

@@ -50,6 +50,7 @@ function mountSection({ document, window, ipcRenderer }) {
     '    <div class="config-field"><label for="cfg-hub-pet-mode">说话频率</label><select id="cfg-hub-pet-mode"></select></div>',
     '  </div>',
     '  <p class="config-reading-note">温和：只说助理的提醒；活泼：再加早上问候、久坐提醒；安静：只亮小圆点。每小时最多开口 3 次。</p>',
+    '  <p class="config-reading-note config-save-error" id="cfg-hub-pet-save-error" role="alert" hidden></p>',
     '</div>',
   ].join('\n');
   const proxyField = host.querySelector('.config-field');
@@ -68,6 +69,7 @@ function mountSection({ document, window, ipcRenderer }) {
     '    <option value="off">关闭：都不弹，只留到点提醒、出错这类要紧的</option>',
     '  </select>',
     '  <p class="config-reading-note" id="cfg-notify-mode-note">左栏的未读标记不受影响；小卡右上角的齿轮也能回到这里。</p>',
+    '  <p class="config-reading-note config-save-error" id="cfg-notify-mode-save-error" role="alert" hidden></p>',
     '  <div class="config-field" id="cfg-codeagent-cli-notify-row" style="display:none;margin-top:10px">',
     '    <label for="cfg-codeagent-cli-notify">CodeAgent 自带的完成提醒</label>',
     '    <select id="cfg-codeagent-cli-notify" aria-label="CodeAgent 自带的完成提醒">',
@@ -118,14 +120,34 @@ function mountSection({ document, window, ipcRenderer }) {
       : '现在：新开的 CodeAgent 会话保留自带提醒' + (r.hubNotifies ? '，Hub 也会提醒。' : '（Hub 回执已关、桌宠没开）。'))
       + '已开着的会话重启后生效。';
   }
+  // 保存没成功（2026-11-21）：以前吞掉错误，开关看着变了、其实没存上。现在在这一块下面写原因和下一步；
+  // 调用失败时重读一次，让开关回到真实状态。下次存好就清掉。
+  const { saveFailureText } = require('./pet-save-status');
+  const petError = section.querySelector('#cfg-hub-pet-save-error');
+  const notifyError = notifySection.querySelector('#cfg-notify-mode-save-error');
+  const showError = (box, text) => { if (!box) return; box.textContent = text || ''; box.hidden = !text; };
   async function refreshCli() { try { fillCli(await ipcRenderer.invoke('codeagent-cli-notify:get')); } catch (_) {} }
-  cliEl.addEventListener('change', async () => { try { fillCli(await ipcRenderer.invoke('codeagent-cli-notify:set', { mode: cliEl.value })); } catch (_) {} });
+  cliEl.addEventListener('change', async () => {
+    let r = null, failure = null;
+    try { r = await ipcRenderer.invoke('codeagent-cli-notify:set', { mode: cliEl.value }); } catch (error) { failure = error; }
+    if (!failure && r && r.ok !== false) { showError(notifyError, ''); fillCli(r); return; }
+    showError(notifyError, `「CodeAgent 自带的完成提醒」没存上：${(failure && failure.message) || (r && r.error) || 'Hub 没有收到保存结果'}。已恢复成原来的选项，请再选一次。`);
+    void refreshCli();
+  });
   async function refresh() { void refreshCli(); try { fill(await ipcRenderer.invoke('hub-pet:get-settings')); } catch (_) {} }
-  async function save(patch) { try { fill(await ipcRenderer.invoke('hub-pet:set-settings', patch)); } catch (_) {} void refreshCli(); }
-  notifyEl.addEventListener('change', () => save({ notifyMode: notifyEl.value }));
-  enabledEl.addEventListener('change', () => save({ enabled: enabledEl.checked }));
-  roleEl.addEventListener('change', () => save({ role: roleEl.value }));
-  modeEl.addEventListener('change', () => save({ mode: modeEl.value }));
+  async function save(patch, box) {
+    let result = null, failure = null;
+    try { result = await ipcRenderer.invoke('hub-pet:set-settings', patch); } catch (error) { failure = error; }
+    const text = saveFailureText(result, failure);
+    showError(petError, box === petError ? text : '');
+    showError(notifyError, box === notifyError ? text : '');
+    if (result) fill(result); else void refresh();
+    void refreshCli();
+  }
+  notifyEl.addEventListener('change', () => save({ notifyMode: notifyEl.value }, notifyError));
+  enabledEl.addEventListener('change', () => save({ enabled: enabledEl.checked }, petError));
+  roleEl.addEventListener('change', () => save({ role: roleEl.value }, petError));
+  modeEl.addEventListener('change', () => save({ mode: modeEl.value }, petError));
 
   // 配置弹窗每次打开时重读一次（桌宠右键「收起」或换角色后，这里要跟着变）。
   const modal = document.getElementById('config-modal');

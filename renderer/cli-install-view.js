@@ -68,8 +68,22 @@ function gitBlockHtml(state) {
     + `<div class="cli-install-actions">${button}</div></div>`;
 }
 
+// 「打开放行页」的结果怎么说（2026-11-21）：以前不管放没放行都直接重装一次，没打开时用户只看到「安装又失败一次」。
+// opened：net-pass:open-window 的返回（{ passed, closed, timedOut, error }）；error：调用本身抛出的错误。
+// 返回 { retry, note }：retry 为真才自动重试安装；note 写在「打开放行页」按钮旁，说清原因和下一步。
+function passOutcome(opened, error) {
+  const again = '可以再点一次「打开放行页」，在页面上点「继续访问」或「接受」；放行后窗口会自己关，Hub 接着重试安装。';
+  if (error) return { retry: false, note: `放行页没打开：${(error && error.message) || error}。${again}` };
+  if (!opened) return { retry: false, note: `放行页没打开（Hub 没有收到结果）。${again}` };
+  if (opened.passed) return { retry: true, note: '' };
+  if (opened.error) return { retry: false, note: `放行页没打开：${opened.error}。${again}` };
+  if (opened.timedOut) return { retry: false, note: `放行页开了 3 分钟还没放行，窗口已自动关闭。${again}` };
+  return { retry: false, note: `放行页已关闭，但还没放行成功，所以这次没有重试安装。${again}` };
+}
+
 // 弹窗里的一键安装区块。state：cli-tools:state 的快照；没有下载源时返回空串，弹窗只留手动安装说明。
-function installBlockHtml(kind, state) {
+// opts.passNote：上一次「打开放行页」没成功的原因（passOutcome 的 note），显示在放行按钮旁。
+function installBlockHtml(kind, state, opts = {}) {
   const id = TOOL_FOR_KIND[kind];
   if (!id || !state || !state.available) return '';
   const tool = state.tools && state.tools[id];
@@ -83,7 +97,8 @@ function installBlockHtml(kind, state) {
     : view.busy ? '<button type="button" data-cli-action="cancel">取消</button>'
     : `<button type="button" class="primary" data-cli-action="install"${otherBusy ? ' disabled' : ''}>${label}</button>`;
   const bar = barHtml(tool, `安装 ${TOOL_NAMES[id]}`);
-  const blocked = view.blocked ? `<p class="cli-install-note">公司网络拦截了下载。<button type="button" data-cli-action="open-pass" data-url="${esc(view.blocked)}">打开放行页</button>，放行后自动重试。</p>` : '';
+  const passNote = view.blocked && opts.passNote ? `<p class="cli-install-note cli-install-pass-note" role="alert">${esc(opts.passNote)}</p>` : '';
+  const blocked = view.blocked ? `<p class="cli-install-note">公司网络拦截了下载。<button type="button" data-cli-action="open-pass" data-url="${esc(view.blocked)}">打开放行页</button>，放行后自动重试。</p>${passNote}` : '';
   const busyNote = otherBusy ? `<p class="cli-install-note">正在安装${esc(TOOL_NAMES[state.busy] || '其他组件')}，装完再装这个。</p>` : '';
   const git = id === 'claude' ? gitBlockHtml(state) : '';
   const advice = !git && view.done && state.advice && state.advice[id] ? `<p class="cli-install-note">${esc(state.advice[id])}</p>` : '';
@@ -92,4 +107,4 @@ function installBlockHtml(kind, state) {
     + `${button ? `<div class="cli-install-actions">${button}</div>` : ''}</div>${git}`;
 }
 
-module.exports = { TOOL_FOR_KIND, TOOL_NAMES, progressView, barHtml, installBlockHtml, gitBlockHtml };
+module.exports = { TOOL_FOR_KIND, TOOL_NAMES, progressView, barHtml, installBlockHtml, gitBlockHtml, passOutcome };

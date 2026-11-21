@@ -96,6 +96,8 @@ function createSettingsStore({ dataDir, company = false, logger = console, roleO
   const migrate = company && raw && typeof raw === 'object' && raw.optInV !== OPT_IN_V;
   if (migrate) value = { ...value, enabled: false };
 
+  // 最近一次写盘失败的原因（2026-11-21）：以前只记日志，设置页上开关看着变了、重启后又回去。成功写一次就清空。
+  let saveError = null;
   function save() {
     dirty = false;
     try {
@@ -103,7 +105,11 @@ function createSettingsStore({ dataDir, company = false, logger = console, roleO
       const tmp = file + '.' + process.pid + '.tmp';
       fs.writeFileSync(tmp, JSON.stringify({ ...value, optInV: OPT_IN_V }, null, 1) + '\n', 'utf8');
       fs.renameSync(tmp, file);
-    } catch (error) { logger.warn?.('[hub-pet] settings save failed:', error.message); }
+      saveError = null;
+    } catch (error) {
+      saveError = { code: error.code || '', message: error.message || String(error) };
+      logger.warn?.('[hub-pet] settings save failed:', error.message);
+    }
   }
 
   if (migrate) save();
@@ -120,6 +126,7 @@ function createSettingsStore({ dataDir, company = false, logger = console, roleO
     },
     flush() { if (dirty) save(); },
     isDirty: () => dirty,
+    lastSaveError: () => (saveError ? { ...saveError } : null),
   };
 }
 

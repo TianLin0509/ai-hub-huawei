@@ -53,6 +53,7 @@
   "tests/unit-company-team-wiring.test.js",
   "tests/unit-group-answer-recovery.test.js",
   "tests/unit-renderer-crash-recovery.test.js",
+  "tests/unit-renderer-reload-restore.test.js",
   "tests/unit-session-search-first-build.test.js",
   "tests/unit-window-keep-rendering.test.js",
   "tests/unit-company-room-offline-retry.test.js",
@@ -310,5 +311,7 @@
   "tests/unit-harness-locator.test.js",
   "tests/unit-company-proxy-nonstream-idle.test.js",
   "tests/unit-company-proxy-codeagent-version.test.js",
-  "tests/unit-send-while-choice-menu.test.js"
+  "tests/unit-send-while-choice-menu.test.js",
+  "tests/unit-options-menu-stable.test.js",
+  "tests/unit-silent-fail-pass-pet.test.js"
 ]

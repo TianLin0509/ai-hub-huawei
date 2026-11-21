@@ -203,5 +203,21 @@
   "日志 {0} · 最后 {1} 行": "Log {0} · Last {1} lines",
   "日志 {0}": "Log {0}",
   "最后 {0} 行": "Last {0} lines",
-  "{0}：{1}": "{0}: {1}"
+  "{0}：{1}": "{0}: {1}",
+  "可以再点一次「打开放行页」，在页面上点「继续访问」或「接受」；放行后窗口会自己关，Hub 接着重试安装。": "Click \"Open unblock page\" again and choose \"Continue\" or \"Accept\" on the page; the window closes itself once unblocked and Hub retries the install.",
+  "放行页没打开：{0}。{1}": "The unblock page did not open: {0}. {1}",
+  "放行页没打开（Hub 没有收到结果）。{0}": "The unblock page did not open (Hub got no result). {0}",
+  "放行页开了 3 分钟还没放行，窗口已自动关闭。{0}": "The unblock page stayed open for 3 minutes without being unblocked and was closed. {0}",
+  "放行页已关闭，但还没放行成功，所以这次没有重试安装。{0}": "The unblock page was closed before unblocking succeeded, so the install was not retried. {0}",
+  "正在打开放行页…": "Opening unblock page…",
+  "Hub 没有收到保存结果": "Hub got no save result",
+  "「CodeAgent 自带的完成提醒」没存上：{0}。已恢复成原来的选项，请再选一次。": "\"CodeAgent built-in completion alert\" was not saved: {0}. The previous option is restored; please choose again.",
+  "没有写入权限（数据目录可能是只读的，或被安全软件拦了）": "no write permission (the data folder may be read-only or blocked by security software)",
+  "数据目录所在的盘是只读的": "the drive holding the data folder is read-only",
+  "磁盘空间满了": "the disk is full",
+  "设置文件正被别的程序占用": "the settings file is in use by another program",
+  "没存上：{0}。开关已恢复成原来的样子，请再点一次；还不行就点「设置 → 一键反馈」告诉维护人。": "Not saved: {0}. The switch is back to its previous state; please try again. If it still fails, use Settings → Feedback to tell the maintainer.",
+  "没存上：Hub 没有收到保存结果。开关已恢复成原来的样子，请再点一次；还不行就重启 Hub 再试。": "Not saved: Hub got no save result. The switch is back to its previous state; please try again, or restart Hub and retry.",
+  "写设置文件失败": "failed to write the settings file",
+  "这次改动已生效，但没存进设置文件：{0}。重启 Hub 后会恢复原样；腾出磁盘空间或解除只读后再改一次即可保存。": "This change is in effect but was not saved to the settings file: {0}. It will revert after Hub restarts; free up disk space or remove the read-only state, then change it again to save."
 }

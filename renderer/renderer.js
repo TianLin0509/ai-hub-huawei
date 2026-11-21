@@ -11018,6 +11018,28 @@ sessionImmersive = require('./session-immersive').createSessionImmersiveControll
     }
   }
 
+  // 界面重新载入后接回在跑、未读和等待状态（core/renderer-reload-restore.js）：这些标记只在界面里，
+  // 卡死自救或崩溃恢复重载后会全部丢失（2026-11-20 生产两次重载各丢 4 个会话的运行状态）。
+  {
+    const reloadRestore = require('../core/renderer-reload-restore');
+    const persistedById = new Map((persisted && Array.isArray(persisted.sessions) ? persisted.sessions : []).map(meta => [meta.hubId, meta]));
+    let restoredTurns = 0, restoredAttention = 0;
+    for (const s of existing) {
+      const live = sessions.get(s.id);
+      if (!live) continue;
+      if (reloadRestore.restorePersistedAttention(live, persistedById.get(s.id))) restoredAttention += 1;
+      const observation = isNativeSession(live) ? null : reloadRestore.liveTurnObservation(live);
+      delete live.liveTurn; // 只在这一刻用；之后的状态以 hook / transcript 为准。
+      if (!observation) continue;
+      live._agentWorking = 'hook';
+      live._runSource = 'semantic';
+      live._lastOutputTs = Date.now();
+      if (!live.runStartedAt) live.runStartedAt = observation.startedAt;
+      if (observeSessionRuntime(live, observation).applied) restoredTurns += 1;
+    }
+    if (restoredTurns || restoredAttention) console.info(`[reload-restore] running=${restoredTurns} attention=${restoredAttention}`);
+  }
+
   const collapsedNativeSessions = collapseDormantNativeDuplicates(sessions);
   if (collapsedNativeSessions.length) {
     console.info(`[resume] consolidated ${collapsedNativeSessions.length} duplicate dormant transcript shell(s)`);

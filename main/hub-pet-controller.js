@@ -1126,7 +1126,13 @@ function createHubPetController({
       quietHour: s.quietUntil > t, silentToday: s.silentDate === localDateKey(t), running: alive() };
   }
   ipcMain.handle('hub-pet:get-settings', (event) => (fromMain(event) ? publicSettings() : null));
-  ipcMain.handle('hub-pet:set-settings', (event, patch) => (fromMain(event) ? (setSettings(patch), publicSettings()) : null));
+  // 写盘失败时带上 saveError（{ code, message }），设置页据此在开关旁说「没存上」；拖滑块的 live 不写盘，不带。
+  ipcMain.handle('hub-pet:set-settings', (event, patch) => {
+    if (!fromMain(event)) return null;
+    setSettings(patch);
+    const saveError = patch && patch.live === true ? null : settings.lastSaveError();
+    return saveError ? { ...publicSettings(), saveError } : publicSettings();
+  });
   // 形象下载：只在用户点「下载 / 检查新形象」时联网；进度经 hub-pet:roles-state 推给主窗口。
   ipcMain.handle('hub-pet:roles', (event) => (fromMain(event) ? roles.snapshot() : null));
   ipcMain.handle('hub-pet:roles-check', (event) => (fromMain(event) ? roles.check() : null));

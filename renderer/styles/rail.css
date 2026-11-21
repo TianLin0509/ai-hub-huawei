@@ -239,6 +239,16 @@
   to   { opacity: 1; transform: translateX(0); }
 }
 
+/* 设置菜单最终是屏幕居中的弹窗（shell-sidebar-terminal.css 用 left/top:50% + transform 居中，!important 压过上面的贴边定位）。
+   2026-11-21：上面那条弹入动画的 transform 会顶掉居中的 transform，动画放完（约 160ms）整块菜单才跳到正中，
+   位移约 120×230px；这段时间里点「一键反馈」等项，落点已经不在菜单上，菜单被当成点外面关掉，弹窗不出来。
+   设置菜单只做淡入、不动 transform，从第一帧起就在最终位置。tests/unit-options-menu-stable.test.js 守着。 */
+.scene-rail .options-menu { animation: rail-options-fade-in 160ms ease-out; }
+@keyframes rail-options-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
 /* ---- 折叠态：只折侧栏，rail 永远在 ---- */
 /* 展开按钮原来贴在 app-body 左边 8px，那正好压在 rail 的 logo 上；挪到 rail 右侧。 */
 #app-body > .btn-expand-sidebar {

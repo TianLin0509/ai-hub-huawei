@@ -24,6 +24,8 @@
 //   4. 卡死自救：页面心跳连续 30 秒没来，就先记下当时的代码和内存，再结束界面进程，走第 1 条的重新载入，
 //      不让窗口一直冻着。观察到的卡顿最长 18 秒后自己缓过来，30 秒留出余量。电脑睡眠唤醒、主进程自己
 //      被卡住时，主进程这边的计时也停了，那段时间不算界面没心跳。AI_HUB_STALL_RESCUE_SEC 改秒数，0 关掉。
+//      只在窗口处于前台时计时：后台窗口的界面进程被系统降到最低优先级，CPU 满载时会长时间没心跳但并没卡死
+//      （2026-11-20 两次误杀，见 rescue 计时处的说明）。
 const url = require('url');
 const path = require('path');
 
@@ -168,7 +170,7 @@ function installRendererCrashRecovery(win, {
   function rescueStall(silentMs) {
     if (rescuing || pendingRecovery) return;
     rescuing = true;
-    log('renderer-stall-rescue', { silentMs, now: sampleMemory() });
+    log('renderer-stall-rescue', { silentMs, focused: foreground(), now: sampleMemory() });
     try {
       if (typeof contents.forcefullyCrashRenderer !== 'function') throw new Error('forcefullyCrashRenderer missing');
       contents.forcefullyCrashRenderer();
@@ -191,6 +193,14 @@ function installRendererCrashRecovery(win, {
     if (hung) hung = false;
   };
   ipcMain?.on?.(HEARTBEAT_CHANNEL, onBeat);
+  const foreground = () => {
+    try { return !win.isDestroyed() && win.isVisible() && !win.isMinimized() && win.isFocused(); } catch { return false; }
+  };
+  // 窗口从最小化/隐藏回来时，后台那段没有心跳不算：重新起算，免得一还原就误报卡住（11-20 记到一次 403 秒的误报）。
+  const resetSilence = () => { if (lastBeat) lastBeat = now(); if (hung) hungAt = now(); };
+  win.on('restore', resetSilence);
+  win.on('show', resetSilence);
+  win.on('focus', resetSilence);
   let lastTick = 0;
   const stallTimer = setIntervalFn(() => {
     const t = now();
@@ -203,7 +213,12 @@ function installRendererCrashRecovery(win, {
       return;
     }
     if (hung) {
-      // 已经判定卡住后，窗口被最小化也照样计时：界面线程还卡着，最小化不会让它缓过来。
+      // 只在窗口处于前台（有焦点、没最小化）时计时（2026-11-21）。窗口被别的窗口盖住或最小化后，
+      // Chromium 把界面进程降成最低优先级（本机实测后台界面进程 priority=Idle）；电脑 CPU 跑满时它会
+      // 几十秒轮不到 CPU，心跳停掉，但这不是卡死——切回前台优先级恢复就缓过来了。11-20 两次自救都发生在
+      // 窗口失去焦点后 2 秒内、两个 4 核测试任务正在跑，强制重载反而让侧栏丢了在跑状态。
+      // 用户回到窗口后从头计 30 秒，真卡死照样自救。
+      if (!foreground()) { hungAt = t; if (lastBeat) lastBeat = t; return; }
       const silent = t - (lastBeat || hungAt);
       if (rescueStallMs > 0 && silent >= rescueStallMs) rescueStall(silent);
       return;

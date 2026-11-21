@@ -4768,8 +4768,10 @@ try {
   }
 
   getAllSessions() {
+    const { liveTurnSnapshot } = require('./renderer-reload-restore');
+    // liveTurn：终端会话这一轮还在进行。界面重新载入后据此接回「运行中」（core/renderer-reload-restore.js）。
     return Array.from(this.sessions.values())
-      .map(s => ({ ...s.info }))
+      .map(s => { const live = liveTurnSnapshot(s); return live ? { ...s.info, liveTurn: live } : { ...s.info }; })
       .sort(compareLatestReplyDesc);
   }
 

@@ -419,6 +419,8 @@
   "PTY 当前屏幕：Codex 输入框就绪": "PTY screen: Codex input ready",
   "PTY 当前屏幕：Claude 活动态": "PTY screen: Claude active",
   "PTY 当前屏幕：Claude 输入框就绪": "PTY screen: Claude input ready",
+  "界面重载前在跑（主进程记录）": "Running before UI reload (main process record)",
+  "界面重新载入前这一轮还在进行（主进程记录）": "This turn was still running before the UI reloaded (main process record)",
   "Transcript 用户消息": "Transcript user message",
   "提交后 PTY 输出": "PTY output after submit",
   "Claude Notification：{0}": "Claude Notification: {0}",

@@ -23,6 +23,7 @@ function fakeWindow() {
   win.isDestroyed = () => false;
   win.isVisible = () => true;
   win.isMinimized = () => false;
+  win.isFocused = () => true;
   return win;
 }
 
@@ -161,9 +162,7 @@ test(`stall rescue: heartbeat silent ${RESCUE_STALL_MS / 1000}s ends the stuck r
   tick(STALL_MS + 2000);
   assert.ok(h.logs.some(l => l.event === 'renderer-memory-at-hang'), 'hang noticed first');
   assert.equal(h.win.webContents.killed, 0, 'not rescued at the hang threshold');
-  // 卡住以后用户最小化窗口，照样计时
-  h.win.isMinimized = () => true;
-  tick(RESCUE_STALL_MS - STALL_MS - 4000);
+  tick(RESCUE_STALL_MS - STALL_MS - 6000);
   assert.equal(h.win.webContents.killed, 0, 'still waiting below the rescue threshold');
   tick(4000);
   assert.equal(h.win.webContents.killed, 1, 'stuck renderer ended');
@@ -174,6 +173,40 @@ test(`stall rescue: heartbeat silent ${RESCUE_STALL_MS / 1000}s ends the stuck r
   h.runTimers();
   assert.deepEqual(h.reloads.map(r => r.reason), ['stall']);
   assert.ok(h.logs.some(l => l.event === 'renderer-memory-at-gone' && l.detail.reason === 'stall' && l.detail.gone === 'killed'));
+});
+
+// 2026-11-20 生产：窗口被别的窗口盖住（失焦）后界面进程降到 Idle 优先级，CPU 满载时 30 秒没心跳被误杀。
+test('stall rescue only counts while the window is in the foreground; refocus restarts the count', () => {
+  const h = harness();
+  const stall = h.intervals.find(i => i.ms === 2000);
+  const tick = ms => { for (let left = ms; left > 0; left -= 2000) { h.advance(Math.min(2000, left)); stall.fn(); } };
+  h.ipcMain.emit(HEARTBEAT_CHANNEL, { sender: h.win.webContents }, 'visible');
+  tick(STALL_MS + 2000);
+  assert.ok(h.logs.some(l => l.event === 'renderer-memory-at-hang'), 'hang still logged for diagnosis');
+  h.win.isFocused = () => false;           // 用户切到别的窗口，Hub 被盖住
+  tick(RESCUE_STALL_MS * 4);
+  assert.equal(h.win.webContents.killed, 0, 'background window is starved, not killed');
+  h.win.isMinimized = () => true;          // 最小化同样不算
+  tick(RESCUE_STALL_MS * 2);
+  assert.equal(h.win.webContents.killed, 0);
+  h.win.isMinimized = () => false; h.win.isFocused = () => true; h.win.emit('focus');
+  tick(RESCUE_STALL_MS - 4000);
+  assert.equal(h.win.webContents.killed, 0, 'count restarts when the user comes back');
+  tick(4000);
+  assert.equal(h.win.webContents.killed, 1, 'still frozen in front of the user: rescued');
+  assert.ok(h.logs.some(l => l.event === 'renderer-stall-rescue' && l.detail.focused === true));
+});
+
+test('restoring a minimized window does not report its quiet background time as a hang', () => {
+  const h = harness();
+  const stall = h.intervals.find(i => i.ms === 2000);
+  const tick = ms => { for (let left = ms; left > 0; left -= 2000) { h.advance(Math.min(2000, left)); stall.fn(); } };
+  h.ipcMain.emit(HEARTBEAT_CHANNEL, { sender: h.win.webContents }, 'visible');
+  h.win.isMinimized = () => true;
+  tick(400 * 1000);                        // 最小化 6 分多钟，页面不出心跳
+  h.win.isMinimized = () => false; h.win.emit('restore');
+  tick(2000);
+  assert.ok(!h.logs.some(l => l.event === 'renderer-memory-at-hang'), 'no false hang right after restore');
 });
 
 test('stall rescue ignores time the main process itself was not running (sleep / main busy)', () => {

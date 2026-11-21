@@ -22,6 +22,9 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
   let data = null;        // hub-pet:get-settings 的结果
   let packs = null;       // hub-pet:roles 的结果（含下载状态）
   let busy = false;
+  // 保存没成功（2026-11-21）：原因写在出事的那个开关旁边（替换那一行的说明小字），下次存好就清掉。
+  const { saveFailureText } = require('./pet-save-status');
+  let saveError = '', saveAnchor = '';
 
   container.classList.add('pet-tab');
   container.innerHTML = '<p class="pet-tab-note">正在读取桌宠设置…</p>';
@@ -135,6 +138,19 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
       const el = container.querySelector('input[data-pet-name]');
       if (el) { el.value = typing.value; el.focus(); try { el.setSelectionRange(typing.start, typing.end); } catch (_) {} }
     }
+    paintSaveError();
+  }
+  // 找到出事的开关所在那一行，用红字换掉说明小字；找不到（如换形象）就写在「形象」标题旁。
+  function paintSaveError() {
+    if (!saveError) return;
+    const anchor = saveAnchor && container.querySelector(saveAnchor);
+    const row = anchor && anchor.closest('.pet-tab-half, .pet-tab-row');
+    const small = row && row.querySelector('small');
+    const slot = small || container.querySelector('.pet-tab-head .pet-tab-note');
+    if (!slot) return;
+    slot.textContent = saveError;
+    slot.classList.add('bad', 'pet-tab-save-error');
+    slot.setAttribute('role', 'alert');
   }
 
   // 大小滑块（2026-10-18 用户：连续调）：拖动时边拖边改（约 60ms 一次，不重画分页免得打断拖动）。
@@ -147,7 +163,8 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
     if (final) {
       clearTimeout(sizeTimer); sizeTimer = null;
       sizeSent = null;
-      void ipcRenderer.invoke('hub-pet:set-settings', { scale: sizeWant / 100 }).then(next => { if (next) { data = next; render(); } }).catch(() => {});
+      const done = (next, error) => { if (next) data = next; saveError = saveFailureText(next, error); saveAnchor = saveError ? '[data-pet-size]' : ''; render(); };
+      void ipcRenderer.invoke('hub-pet:set-settings', { scale: sizeWant / 100 }).then(next => done(next, null), error => done(null, error));
       return;
     }
     if (sizeTimer) return;
@@ -160,25 +177,31 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
       data = settings; packs = roles || packs; render();
     } catch (error) { container.innerHTML = `<p class="pet-tab-note bad">读取桌宠设置失败：${esc(error.message)}</p>`; }
   }
-  async function save(patch) {
+  // anchor：触发这次保存的控件选择器，没存上时原因写在它旁边。
+  async function save(patch, anchor = '') {
     if (busy) return;
     busy = true;
-    try { const next = await ipcRenderer.invoke('hub-pet:set-settings', patch); if (next) data = next; packs = (await ipcRenderer.invoke('hub-pet:roles')) || packs; }
-    catch (_) {} finally { busy = false; render(); }
+    let next = null, failure = null;
+    try { next = await ipcRenderer.invoke('hub-pet:set-settings', patch); if (next) data = next; }
+    catch (error) { failure = error; }
+    try { packs = (await ipcRenderer.invoke('hub-pet:roles')) || packs; } catch (_) { /* 形象列表下次再读 */ }
+    saveError = saveFailureText(next, failure); saveAnchor = saveError ? anchor : '';
+    busy = false; render();
   }
 
   container.addEventListener('click', event => {
     const btn = event.target.closest('[data-pet]');
     if (btn && !btn.disabled) {
       const kind = btn.dataset.pet;
-      if (kind === 'mode') return void save({ mode: btn.dataset.id });
-      if (kind === 'notifyMode') return void save({ notifyMode: btn.dataset.id });
-      if (kind === 'quietHour') return void save({ quietHour: !data.quietHour });
-      if (kind === 'silentToday') return void save({ silentToday: !data.silentToday });
-      if (kind === 'resetPosition') return void save({ resetPosition: true });
-      if (kind === 'sizeReset') return void save({ scale: 1 });
+      const at = `[data-pet="${kind}"]`;
+      if (kind === 'mode') return void save({ mode: btn.dataset.id }, at);
+      if (kind === 'notifyMode') return void save({ notifyMode: btn.dataset.id }, at);
+      if (kind === 'quietHour') return void save({ quietHour: !data.quietHour }, at);
+      if (kind === 'silentToday') return void save({ silentToday: !data.silentToday }, at);
+      if (kind === 'resetPosition') return void save({ resetPosition: true }, at);
+      if (kind === 'sizeReset') return void save({ scale: 1 }, at);
       if (kind === 'saveName') return void saveName();
-      if (kind === 'resetTalk') return void save({ resetTalk: true });
+      if (kind === 'resetTalk') return void save({ resetTalk: true }, at);
       if (kind === 'credit') { const r = ((packs && packs.roles) || (data && data.roles) || []).find(x => x.id === btn.dataset.id); if (r && r.credit) showCredit(r); return; }
       if (kind === 'check') { void ipcRenderer.invoke('hub-pet:roles-check').then(r => { if (r) packs = r; render(); }); return; }
       if (kind === 'download') {
@@ -224,7 +247,7 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
   }
   function saveName() {
     const el = container.querySelector('input[data-pet-name]');
-    if (el) void save({ petName: el.value });
+    if (el) void save({ petName: el.value }, '[data-pet="saveName"]');
   }
   // 中文输入法：确认候选字的那一下 Enter 属于输入法（isComposing / keyCode 229），不算提交；
   // 有的环境在 compositionend 之后紧跟一个 Enter，也一并放过，下一次 Enter 再保存（r27g 审查第 2 项）。
@@ -254,7 +277,7 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
     if (range) { sizeWant = Number(range.value); pushSize(true); return; }
     if (event.target.closest('input[data-pet-name]')) return;   // 名字点「保存」或回车才存
     const input = event.target.closest('input[data-pet]');
-    if (input) void save({ [input.dataset.pet]: input.checked });
+    if (input) void save({ [input.dataset.pet]: input.checked }, `input[data-pet="${input.dataset.pet}"]`);
   });
   // 下载进度：主进程每有进展就推一次。分页被拆掉后（面板关了又重建）第一次收到推送时退订。
   let seen = false;
