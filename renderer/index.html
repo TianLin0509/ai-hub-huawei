@@ -1001,6 +1001,19 @@
             </div>
             <p class="config-reading-note" id="cfg-workspace-root-note">新建会话选「默认工作目录」时开在这里，保存后下一个新会话生效；已有会话不动。</p>
           </div>
+          <div class="config-field" id="cfg-work-file-root-field">
+            <label for="cfg-work-file-root">Hub 工作文件根目录 <span class="config-label-hint">（留空 = 保持原位置）</span></label>
+            <div style="display:flex;gap:6px;align-items:center">
+              <input type="text" id="cfg-work-file-root" spellcheck="false" style="flex:1;min-width:0">
+              <button type="button" class="config-test-btn" id="cfg-work-file-root-pick">选择…</button>
+            </div>
+            <p class="config-reading-note">保存后重启 Hub，对新建工作目录生效；已有内容留在原处，可手动移动。单独指定的会话和会议室目录仍按原设置。</p>
+            <div style="display:flex;gap:6px;align-items:center">
+              <select id="cfg-work-file-original" aria-label="原目录" style="flex:1;min-width:0"></select>
+              <button type="button" class="config-test-btn" id="cfg-work-file-open-original">打开原目录</button>
+            </div>
+            <p class="config-reading-note" id="cfg-work-file-root-status" role="status"></p>
+          </div>
           <div class="config-field" id="cfg-codeagent-quota-placement-field" hidden>
             <label for="cfg-codeagent-quota-placement">号池额度栏位置</label>
             <select id="cfg-codeagent-quota-placement">

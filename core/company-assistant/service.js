@@ -172,7 +172,7 @@ class CompanyAssistant {
     this.dir = storage.dir;
     this.dataRootError = storage.error;
     this.metering = new (require('./metering').TaskMetering)(this.dir, deps, this.now);
-    this.workspace = path.join(this.dir, 'workspace');
+    this.workspace = require('../work-file-root').directory('assistant-workspace', path.join(this.dir, 'workspace'));
     this.bus = deps.bus || noticeBus();
     // 三条互不阻塞的队列（5.5.11）：问答、简报、PPT 页各排各的，简报和 PPT 检索不再挡住提问。
     this.lanes = { chat: { name: 'chat', queue: [], job: null, pumping: false }, brief: { name: 'brief', queue: [], job: null, pumping: false }, ppt: { name: 'ppt', queue: [], job: null, pumping: false } };
@@ -219,7 +219,7 @@ class CompanyAssistant {
   set queue(value) { this.lanes.chat.queue = value; }
   get job() { return this.lanes.chat.job; }
   set job(value) { this.lanes.chat.job = value; }
-  get pptWorkspace() { return path.join(this.dir, 'ppt-workspace'); }
+  get pptWorkspace() { return require('../work-file-root').directory('ppt-workspace', path.join(this.dir, 'ppt-workspace')); }
 
   // ---- 本地文件（只在这台电脑的 Hub 数据目录里） ----
   file(name) { return path.join(name === 'settings.json' ? this.defaultDir : this.dir, name); }
@@ -237,7 +237,8 @@ class CompanyAssistant {
     let s = {};
     try { s = JSON.parse(fs.readFileSync(path.join(this.defaultDir, 'settings.json'), 'utf8')) || {}; } catch { s = {}; }
     const dirs = [this.defaultDir, s.dataRoot, s.dataRootActive, ...(Array.isArray(s.dataRootHistory) ? s.dataRootHistory : [])];
-    return dirs.filter(d => typeof d === 'string' && d.trim() && path.isAbsolute(d.trim())).map(d => path.join(path.resolve(d.trim()), 'workspace', 'meetings'));
+    return [...dirs.filter(d => typeof d === 'string' && d.trim() && path.isAbsolute(d.trim())).map(d => path.join(path.resolve(d.trim()), 'workspace', 'meetings')),
+      ...require('../work-file-root').previousDirectories('assistant-workspace', path.join(this.dir, 'workspace')).map(d => path.join(d, 'meetings'))];
   }
   // 判定「等你回复」用的设置：带上 CodeAgent 的待回复复核结论（只读，不写回 settings.json）（2026-11-16）
   judgeSettings(s = this.settings()) {
@@ -1832,7 +1833,7 @@ class CompanyAssistant {
       if (this.deps.getSession(id)) return id;
     }
     id = randomUUID();
-    const cwd = path.join(this.deps.dataDir, 'assistant-runtime', key);
+    const cwd = path.join(require('../work-file-root').directory('analysis-workspaces', path.join(this.deps.dataDir, 'assistant-runtime')), key);
     fs.mkdirSync(cwd, { recursive: true });
     // Register before creation: extraMcpProvider runs while creating the session.
     this.saveState({ teamSessionIds: { ...this.state().teamSessionIds, [key]: id } });

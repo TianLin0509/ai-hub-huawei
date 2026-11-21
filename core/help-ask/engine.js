@@ -113,7 +113,7 @@ function createHelpAskEngine({ dataDir, edition = 'public', env = process.env, g
   codexMcpNames = e => require('../ask-aside-codex').configuredMcpNames([path.join(e.CODEX_HOME || path.join(os.homedir(), '.codex'), 'config.toml')]),
   readManual = file => fs.readFileSync(file, 'utf8'), manualPath = () => manualFile(edition),
   now = Date.now, totalMs = TOTAL_MS } = {}) {
-  const cwd = path.join(dataDir, 'help-ask', 'cwd');
+  const cwd = require('../work-file-root').directory('help-workspace', path.join(dataDir, 'help-ask', 'cwd'));
   const helpCache = new Map(); // 引擎 → --help 文本（看支持哪些参数）
 
   function detect() {

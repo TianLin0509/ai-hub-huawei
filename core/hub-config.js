@@ -187,6 +187,8 @@ function getConfig() {
     cardFontFamily: normalizeCardFontFamily(getConfigValue('cardFontFamily', 'HUB_UI_CARD_FONT_FAMILY', 'ui.card_font_family', DEFAULTS.ui_card_font_family)),
     // 新建会话默认工作目录（Hub 设置）。环境变量 AI_HUB_WORKSPACE_ROOT 优先，由 core/storage-roots.js 处理。
     defaultWorkspaceRoot: typeof rawConfig.workspace?.default_root === 'string' ? rawConfig.workspace.default_root.trim() : '',
+    workFileRoot: typeof rawConfig.work_files?.root === 'string' ? rawConfig.work_files.root.trim() : '',
+    workFileRootHistory: Array.isArray(rawConfig.work_files?.history) ? rawConfig.work_files.history : [],
     // Claude / Codex 的会话后端。默认 pty（真实 CLI + 卡片旁读）；native 只是回退开关。
     agentRuntime: getConfigValue('agentRuntime', 'CLAUDE_HUB_AGENT_RUNTIME', 'runtime.agent', 'pty'),
     // Only an explicit false turns the watchdog off; an absent or malformed

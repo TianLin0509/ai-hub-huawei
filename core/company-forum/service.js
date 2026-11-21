@@ -37,7 +37,7 @@ class CompanyForum {
     this.deps = deps;
     this.now = deps.now || (() => Date.now());
     this.dir = path.join(deps.dataDir, 'company-forum');
-    this.workspace = path.join(this.dir, 'workspace');
+    this.workspace = require('../work-file-root').directory('forum-workspace', path.join(this.dir, 'workspace'));
     this.job = null;
     this.syncing = null;
     this.pendingLoginSites = new Set();

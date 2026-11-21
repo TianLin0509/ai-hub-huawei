@@ -135,10 +135,34 @@ function toEditableConfig(config) {
     operationsRestoreRoot: operations.restoreRoot,
     teamAutoApproveLeads: config.team?.autoApproveLeads !== false,
     ...workspaceRootForm(config),
+    ...workFileRootForm(config),
   };
 }
 
 // 「新建会话默认工作目录」表单字段：设置值、环境变量（只读，优先）、当前实际生效的目录。
+function workFileRootForm(config = {}) {
+  return { workFileRoot: config.workFileRoot || '', workFileRootActive: require('../../core/work-file-root').current(),
+    workFileRootInvalid: require('../../core/work-file-root').configuredRootError(),
+    workFileOriginalDirs: originalWorkDirectories(config) };
+}
+function originalWorkDirectories(config = {}) {
+  const path = require('path'), os = require('os');
+  const data = require('../../core/data-dir').getHubDataDir();
+  let assistant = path.join(data, 'company-assistant');
+  try {
+    const s = JSON.parse(fs.readFileSync(path.join(assistant, 'settings.json'), 'utf8'));
+    assistant = s.dataRootActive || s.dataRoot || assistant;
+  } catch {}
+  return [...new Set([path.join(os.homedir(), 'Workspaces'), config.defaultWorkspaceRoot,
+    process.env.AI_HUB_WORKSPACE_ROOT, path.join(assistant, 'workspace'), path.join(assistant, 'ppt-workspace'),
+    path.join(assistant, 'meeting-room'), path.join(data, 'company-forum', 'workspace'),
+    path.join(data, 'workspaces'), path.join(os.homedir(), 'AI-Artifacts'),
+    require('../../core/storage-roots').workspaceRoot({ fallback: 'C:/Work' }),
+    require('../../core/storage-roots').workspaceRoot({ fallback: 'D:/AIWork' }),
+    config.workFileRoot, require('../../core/work-file-root').current(),
+    ...require('../../core/work-file-root').previousDirectories('assistant-workspace', null).map(p => path.dirname(p)),
+  ].filter(p => typeof p === 'string' && p.trim() && path.isAbsolute(p)))];
+}
 function workspaceRootForm(config = {}) {
   const storageRoots = require('../../core/storage-roots.js');
   const envRoot = String(process.env.AI_HUB_WORKSPACE_ROOT || '').trim();
@@ -364,6 +388,14 @@ function buildConfigJsonUpdate(existing, newConfig) {
         const base = existing.workspace && typeof existing.workspace === 'object' && !Array.isArray(existing.workspace) ? { ...existing.workspace } : {};
         const value = String(newConfig.defaultWorkspaceRoot || '').trim();
         if (value) base.default_root = value; else delete base.default_root;
+        return base;
+      })(),
+    } : {}),
+    ...(H('workFileRoot') ? {
+      work_files: (() => {
+        const base = { ...existing.work_files }, old = base.root;
+        base.root = String(newConfig.workFileRoot || '').trim();
+        base.history = [...new Set([...(Array.isArray(base.history) ? base.history : []), old].filter(r => typeof r === 'string' && r && r !== base.root))];
         return base;
       })(),
     } : {}),
@@ -809,6 +841,16 @@ function registerConfigIpc(ipcMain, deps) {
     }
   });
 
+  ipcMain.handle('work-files:open-original', async (_e, index) => {
+    const dirs = originalWorkDirectories(getConfig());
+    if (!Number.isInteger(index) || !dirs[index]) return { ok: false, message: '请选择原目录。' };
+    try {
+      if (!fs.statSync(dirs[index]).isDirectory()) throw new Error('原目录不存在。');
+      const error = await require('electron').shell.openPath(dirs[index]);
+      return error ? { ok: false, message: error } : { ok: true };
+    } catch (e) { return { ok: false, message: '原目录无法打开：' + (e.code || e.message) }; }
+  });
+
   ipcMain.handle('save-hub-config', (_e, newConfig) => {
     let existing;
     try {
@@ -824,6 +866,15 @@ function registerConfigIpc(ipcMain, deps) {
       return { success: false, error: 'config_read_failed' };
     }
 
+    if (Object.prototype.hasOwnProperty.call(newConfig || {}, 'workFileRoot')) {
+      const raw = String(newConfig.workFileRoot || '').trim();
+      // Unrelated saves must not probe an offline work disk.
+      if (raw !== (existing.work_files?.root || '')) {
+        const checked = require('../../core/work-file-root').validate(raw, defaultRootCheckOptions());
+        if (!checked.ok) return { success: false, error: 'work_file_root_invalid', message: checked.message };
+        newConfig = { ...newConfig, workFileRoot: checked.value };
+      }
+    }
     const hasWorkspaceRoot = Object.prototype.hasOwnProperty.call(newConfig || {}, 'defaultWorkspaceRoot');
     if (hasWorkspaceRoot) {
       const checked = validateDefaultWorkspaceRoot(newConfig.defaultWorkspaceRoot);
@@ -870,6 +921,7 @@ function registerConfigIpc(ipcMain, deps) {
 }
 
 module.exports = {
+  workFileRootForm,
   validateDefaultWorkspaceRoot,
   startupDefaultWorkspaceRoot,
   hubProtectedDirs,

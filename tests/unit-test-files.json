@@ -283,6 +283,7 @@
   "tests/unit-sealed-modules.test.js",
   "tests/unit-code-font-scale.test.js",
   "tests/unit-default-workspace-root.test.js",
+  "tests/unit-work-file-root.test.js",
   "tests/unit-company-assistant-work-dir.test.js",
   "tests/unit-backstage-layout-memory.test.js",
   "tests/unit-terminal-output-policy.test.js",

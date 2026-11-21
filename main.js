@@ -629,6 +629,7 @@ sessionManager.on('codex-lifecycle', event => {
   transcriptTap.emit(ev.type, ev);
 });
 const meetingManager = new MeetingRoomManager();
+require('./core/work-file-root').configureAtStartup(getHubConfig().workFileRoot, getHubConfig().workFileRootHistory);
 // Hub 设置里的「新建会话默认工作目录」先于工作区服务生效（环境变量 AI_HUB_WORKSPACE_ROOT 仍优先）。
 // 启动时重新校验：目录不存在、是盘根/主目录/Hub 目录就当没设，设置页显示原因。
 try { require('./main/ipc/config-handlers.js').startupDefaultWorkspaceRoot(getHubConfig().defaultWorkspaceRoot); }

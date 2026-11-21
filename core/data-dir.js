@@ -27,7 +27,7 @@ function getHubTranscriptDir() {
 }
 
 function getMeetingWorkspaceDir(meetingId) {
-  return path.join(getHubDataDir(), 'workspaces', meetingId);
+  return path.join(require('./work-file-root').directory('group-workspaces', path.join(getHubDataDir(), 'workspaces')), meetingId);
 }
 
 module.exports = {

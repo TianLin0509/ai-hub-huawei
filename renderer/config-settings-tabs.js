@@ -17,7 +17,7 @@ const RULES = [
   ['shared', '.hub-feature-search, .cfg-tabs'],
   ['pet', '#cfg-hub-pet, #cfg-notify-mode-section'],
   ['notify', '.config-notification-title, #config-notification-card'],
-  ['advanced', '.config-operations-title, .config-operations-card, #cfg-team-auto-approve-field'],
+  ['advanced', '.config-operations-title, .config-operations-card, #cfg-team-auto-approve-field, #cfg-work-file-root-field'],
   ['display', '.config-reading-title, #cfg-card-font-size, #cfg-composer-enter-field, #cfg-workspace-root-field, #cfg-codeagent-quota-placement-field'],
   ['general', '.company-api-settings-entry, .config-language-field, #cfg-model-unavailable-policy, #cfg-proxy, #btn-config-accounts, .config-hint'],
 ];

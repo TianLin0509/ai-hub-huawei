@@ -151,6 +151,22 @@ function createConfigModalController({
 
   // 新建会话默认工作目录：环境变量 AI_HUB_WORKSPACE_ROOT 设了就以它为准，输入框只读并说明原因。
   function setWorkspaceRootForm(config = {}) {
+    const fileRoot = configEl('cfg-work-file-root');
+    if (fileRoot) fileRoot.value = config.workFileRoot || '';
+    const originals = configEl('cfg-work-file-original');
+    if (originals) {
+      originals.textContent = '';
+      (config.workFileOriginalDirs || []).forEach((p, index) => {
+        const option = document.createElement('option'); option.value = index; option.textContent = p; originals.appendChild(option);
+      });
+    }
+    const fileStatus = configEl('cfg-work-file-root-status');
+    if (fileStatus) fileStatus.textContent = config.workFileRootInvalid
+      ? `工作文件根目录不可用，已恢复原默认位置：${config.workFileRootInvalid}`
+      : (config.workFileRoot || '') !== (config.workFileRootActive || '')
+        ? '已保存，重启 Hub 后使用新位置。' : '';
+    const filePick = configEl('cfg-work-file-root-pick');
+    if (filePick) filePick.textContent = config.workFileRootInvalid ? '重新选择' : '选择…';
     const input = configEl('cfg-workspace-root');
     if (!input) return;
     const envRoot = config.workspaceRootEnv || '';
@@ -565,6 +581,18 @@ function createConfigModalController({
       } finally { languageSelect.disabled = false; }
     });
     const rootPick = configEl('cfg-workspace-root-pick');
+    configEl('cfg-work-file-root-pick')?.addEventListener('click', async () => {
+      try {
+        const picked = await ipcRenderer.invoke('workspace:pick-default-root');
+        if (picked) configEl('cfg-work-file-root').value = picked;
+      } catch (e) { configEl('cfg-work-file-root-status').textContent = '选择目录失败：' + e.message; }
+    });
+    configEl('cfg-work-file-open-original')?.addEventListener('click', async () => {
+      try {
+        const result = await ipcRenderer.invoke('work-files:open-original', Number(configEl('cfg-work-file-original').value));
+        configEl('cfg-work-file-root-status').textContent = result.ok ? '' : result.message;
+      } catch (e) { configEl('cfg-work-file-root-status').textContent = '原目录无法打开：' + e.message; }
+    });
     if (rootPick) rootPick.addEventListener('click', async () => {
       try {
         const picked = await ipcRenderer.invoke('workspace:pick-default-root');
@@ -590,6 +618,7 @@ function createConfigModalController({
         proxy: document.getElementById('cfg-proxy').value.trim() || undefined,
         ...readCardDisplayForm(),
         ...readWorkspaceRootForm(),
+        workFileRoot: configEl('cfg-work-file-root')?.value.trim() || '',
         notificationIncludePreview: notificationForm.notificationIncludePreview,
         notificationNotifyGroupChats: notificationForm.notificationNotifyGroupChats,
         feishuTarget: notificationForm.feishuTarget,
@@ -636,7 +665,7 @@ function createConfigModalController({
           }
           renderAccountUsage();
           savedCardDisplay = setCardDisplayForm(newConfig);
-          if ('defaultWorkspaceRoot' in newConfig) {
+          if ('defaultWorkspaceRoot' in newConfig || 'workFileRoot' in newConfig) {
             try { setWorkspaceRootForm(await ipcRenderer.invoke('get-hub-config-raw')); } catch {}
           }
           try { document.dispatchEvent(new CustomEvent('hub-config-saved', { detail: newConfig })); } catch {}
@@ -649,6 +678,10 @@ function createConfigModalController({
           msg.style.display = 'block';
           setTimeout(() => { msg.style.display = 'none'; }, 4000);
         } else {
+          if (result?.error === 'work_file_root_invalid') {
+            document.defaultView?.__hubSettingsTabs?.reveal(configEl('cfg-work-file-root'));
+            configEl('cfg-work-file-root')?.focus();
+          }
           throw new Error(result && result.message || 'save failed');
         }
       } catch (err) {

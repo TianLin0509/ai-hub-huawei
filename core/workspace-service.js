@@ -117,16 +117,23 @@ class WorkspaceService {
     if (this.workspaceRoot) return this.path.resolve(this.workspaceRoot);
     const override = storageRoots.sessionWorkspaceRoot();
     if (override) return this.path.resolve(override);
+    const workFiles = require('./work-file-root').current();
+    if (workFiles) return this.path.join(workFiles, 'workspaces');
     if (this.isIsolatedHub()) return this.path.join(this.getHubDataDir(), 'workspaces', 'user');
     return this.path.join(this.os.homedir(), 'Workspaces');
   }
 
-  // 仍按平铺工作根对待的旧根：来自 AI_HUB_LEGACY_WORKSPACE_ROOTS，且必须带 .aiwork-root 标记。
+  // 环境变量里的旧根须带标记；Hub 自己生成的默认根和历史根也保持原路径归属。
   getLegacyWorkspaceRoots() {
     const current = this.getWorkspaceRoot();
-    const configured = this.legacyWorkspaceRoots === null
+    let configured = this.legacyWorkspaceRoots === null
       ? storageRoots.legacyWorkspaceRoots({ current })
       : this.legacyWorkspaceRoots;
+    const workFiles = require('./work-file-root');
+    const managed = this.legacyWorkspaceRoots === null && (workFiles.current() || workFiles.previousDirectories('workspaces', null).length)
+      ? workFiles.previousDirectories('workspaces', this.isIsolatedHub()
+        ? this.path.join(this.getHubDataDir(), 'workspaces', 'user') : this.path.join(this.os.homedir(), 'Workspaces')) : [];
+    configured = [...configured, ...managed];
     const currentKey = normalizeKey(current);
     const seen = new Set([currentKey]);
     const roots = [];
@@ -137,7 +144,7 @@ class WorkspaceService {
       if (seen.has(key)) continue;
       seen.add(key);
       try {
-        if (!this.fs.existsSync(this.path.join(resolved, WORK_ROOT_MARKER))) continue;
+        if (!managed.some(r => normalizeKey(r) === key) && !this.fs.existsSync(this.path.join(resolved, WORK_ROOT_MARKER))) continue;
       } catch { continue; }
       roots.push(resolved);
     }

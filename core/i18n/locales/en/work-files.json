@@ -1,0 +1,20 @@
+{
+  "Hub 工作文件根目录": "Hub work files root",
+  "（留空 = 保持原位置）": "(empty = keep current locations)",
+  "保存后重启 Hub，对新建工作目录生效；已有内容留在原处，可手动移动。单独指定的会话和会议室目录仍按原设置。": "Save and restart Hub to use this location for new work folders. Existing content stays where it is and can be moved manually. Explicit session and meeting room paths keep their own settings.",
+  "原目录": "Original folder",
+  "打开原目录": "Open original folder",
+  "已保存，重启 Hub 后使用新位置。": "Saved. Restart Hub to use the new location.",
+  "工作文件根目录不可用，已恢复原默认位置：{0}": "The work files root is unavailable. Hub is using the original default locations: {0}",
+  "重新选择": "Choose again",
+  "选择目录失败：": "Could not select folder: ",
+  "原目录无法打开：": "Could not open original folder: ",
+  "请选择原目录。": "Please select an original folder.",
+  "原目录不存在。": "The original folder does not exist.",
+  "这个路径是文件，不是文件夹": "This path is a file, not a folder",
+  "目标磁盘可用空间不足 256 MB，请换一个位置或清理空间。": "The target disk has less than 256 MB available. Choose another location or free up space.",
+  "目标目录无法写入或无法检查磁盘空间：": "The target folder is not writable or its free disk space could not be checked: ",
+  "目标目录无法写入或无法检查磁盘空间：{0}": "The target folder is not writable or its free disk space could not be checked: {0}",
+  "目标目录不存在或所在磁盘未连接：": "The target folder does not exist or its disk is disconnected: ",
+  "目标目录不存在或所在磁盘未连接：{0}": "The target folder does not exist or its disk is disconnected: {0}"
+}

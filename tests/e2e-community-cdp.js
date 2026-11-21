@@ -123,7 +123,10 @@ async function main() {
         assert.equal(await cdp.eval('sessions.size'), 0);
         await shot('02-company-missing-cli-guidance');
         await click('#codeagent-install-guide .company-api-close');
-        await until('!document.querySelector("#codeagent-install-guide") && !document.getElementById("new-session-submit").getBoundingClientRect().width', 'guide and launch form are closed');
+        // 关安装说明只关它自己，启动中心和已选配置保留（rsi-t #8）；再用启动中心自己的关闭按钮收起。
+        await until('!document.querySelector("#codeagent-install-guide") && document.getElementById("new-session-submit").getBoundingClientRect().width > 0', 'guide closes, launch form stays');
+        await click('#new-session-close');
+        await until('!document.getElementById("new-session-submit").getBoundingClientRect().width', 'launch form is closed');
         await click('#btn-rail-accounts');
         await until('!document.getElementById("codeagent-accounts-page")?.hidden && !!document.querySelector("[data-ca=install-guide]")', 'standalone company accounts page opens with installation guidance');
         assert.ok(await cdp.eval('document.getElementById("codeagent-accounts-page").textContent.includes("未检测到 CodeAgent")'), 'clean machine consistently reports missing installation');

@@ -25,7 +25,7 @@ class PhotoAssistant{
   if(!session){
    if(r.state==='confirmed')throw Error('拍图助理原会话暂未恢复，请在左侧会话栏打开后继续');
    const defaults=await a.deps.getDefaults?.(r.kind)||{};
-   const cwd=r.cwd||defaults.cwd||path.join(require('../storage-roots').workspaceRoot({fallback:'D:/AIWork'}),require('./ledger').localDay(Date.now()).replace(/-/g,'')+'-拍图助理');
+   const cwd=r.cwd||defaults.cwd||path.join(require('../work-file-root').directory('photo-assistant',require('../storage-roots').workspaceRoot({fallback:'D:/AIWork'})),require('./ledger').localDay(Date.now()).replace(/-/g,'')+'-拍图助理');
    fs.mkdirSync(cwd,{recursive:true});r={...r,cwd};a.store.set(KEY,r);
    session=await a.deps.createSession(r.kind,{...defaults,id:r.id,model:r.model,effort:r.effort||null,cwd,title:'拍图助理',name:'拍图助理',userRenamed:true,purpose:PURPOSE,mcpProfile:'none',autonomous:true,noInheritCursor:true,hiddenFromSidebar:false});
   }

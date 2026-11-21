@@ -76,7 +76,7 @@ class PhoneChannel{
  saveAttachment(a){
   const fs=require('node:fs'),path=require('node:path');
   const now=new Date(Date.now()+8*3600000),day=now.toISOString().slice(0,10).replace(/-/g,''),hms=now.toISOString().slice(11,19).replace(/:/g,'');
-  const dir=path.join(this.inboxRoot||require('../storage-roots').workspaceRoot({fallback:'C:/Work'}),day+'-手机分享');fs.mkdirSync(dir,{recursive:true});
+  const dir=path.join(this.inboxRoot||require('../work-file-root').directory('phone-inbox',require('../storage-roots').workspaceRoot({fallback:'C:/Work'})),day+'-手机分享');fs.mkdirSync(dir,{recursive:true});
   const safe=String(a.name||'文件').replace(/[\\/:*?"<>|\u0000-\u001f]/g,'_').replace(/^\.+/,'').slice(-100)||'文件';
   const file=path.join(dir,hms+'-'+safe),data=Buffer.from(a.data,'base64');if(data.length>5.5*1024*1024)throw Error('分享的文件超过 5MB');
   fs.writeFileSync(file,data);return file;

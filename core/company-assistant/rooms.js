@@ -72,7 +72,7 @@ class RoomBooking {
       phase: status ? status.phase : 'unavailable', error: (status && status.error) || info.error || this.runtime?.error || '' };
   }
   settings() { return this.a.settings().rooms || {}; }
-  home() { return this.deps.roomHome || this.settings().home || path.join(this.a.dir, 'meeting-room'); }
+  home() { return this.deps.roomHome || this.settings().home || require('../work-file-root').directory('meeting-room', path.join(this.a.dir, 'meeting-room')); }
   file(...parts) { return path.join(this.home(), ...parts); }
   helper() { return this.home() ? readJson(this.file('hub-control', 'status.json'), null) : null; }
   status() {

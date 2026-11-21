@@ -130,12 +130,13 @@ function legacyWorkspaceRoots({ env = process.env, current } = {}) {
 
 function artifactsRoot({ env = process.env, home = os.homedir() } = {}) {
   const override = clean(env && env.AI_HUB_ARTIFACTS_ROOT);
-  return override ? path.resolve(override) : path.join(home, 'AI-Artifacts');
+  return override ? path.resolve(override) : require('./work-file-root').directory('artifacts', path.join(home, 'AI-Artifacts'));
 }
 
 // 旧产物位置：只用于读取/对外提供存量文件，不再往里写（桌面目录尤其如此）。
 function legacyArtifactsRoots({ home = os.homedir() } = {}) {
-  return [path.join(home, 'AI-Artifacts'), path.join(home, 'Desktop', 'claude-artifacts')];
+  return [path.join(home, 'AI-Artifacts'), path.join(home, 'Desktop', 'claude-artifacts'),
+    ...require('./work-file-root').previousDirectories('artifacts', null)];
 }
 
 // 读取 / 对外提供文件时信任的根（手机发图、口播资料等）。
@@ -147,6 +148,12 @@ function trustedFileRoots({ dataDir, env = process.env, home = os.homedir(), wor
     ...legacyWorkspaceRoots({ env, current }),
     artifactsRoot({ env, home }),
     ...legacyArtifactsRoots({ home }),
+    ...(require('./work-file-root').current() ? [
+      require('./work-file-root').directory('phone-inbox', null),
+      require('./work-file-root').directory('photo-assistant', null),
+    ] : []),
+    ...require('./work-file-root').previousDirectories('phone-inbox', null),
+    ...require('./work-file-root').previousDirectories('photo-assistant', null),
   ]);
 }
 
