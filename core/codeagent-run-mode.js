@@ -20,4 +20,4 @@ function withRunModeInJson(raw, mode) {
   return { ...raw, runtime: { ...runtime, codeagentRunMode: normalizeRunMode(mode) } };
 }
 
-module.exports = { PTY, SERVE, normalizeRunMode, usesServeRuntime, withRunModeInJson };
+module.exports = { PTY, SERVE, EXCLUDED_PURPOSES, normalizeRunMode, usesServeRuntime, withRunModeInJson };

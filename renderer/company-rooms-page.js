@@ -72,7 +72,7 @@ function resultTone(status) { return status === '成功' ? 'green' : status === 
 function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanels = () => {}, showMessage }) {
   let host, gate = null, footer, state = {}, draft = copy(DEFAULTS), tab = 'overview', dirty = false, busy = false, polling = false, timer, clockTimer, generation = 0, loaded = false, logCleared = '', logsShown = null;
   const changed = new Set();
-  let draggedRoom = null;
+  let draggedRoom = null, settingsTab = 'booking';
   // 抢订节奏（提前天数 + 开放时刻）由 Hub 按园区推断并保存；schedChanged 表示设置页改过、保存时一起存。
   let schedDraft = { advanceDays: 7 }, schedChanged = false, pendingOp = '';
   const sched = () => state.schedule || { advanceDays: 7, openTime: draft.抢订设置.开放时间 || '12:00:00', source: 'default', text: '' };
@@ -139,6 +139,7 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
     });
     host.addEventListener('click', event => {
       const b = event.target.closest('button'); if (!b || b.disabled) return;
+      if (b.dataset.crSettingsTab) { settingsTab = b.dataset.crSettingsTab; updateSettingsTab(); return; }
       if (b.dataset.crTab) { tab = b.dataset.crTab; render(); return; }
       if (b.dataset.crOp) void act(b.dataset.crOp, b);
     });
@@ -210,10 +211,19 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
       <section>${head('待执行', '<span class="cr-n cr-num" data-cr-slot="pending-n"></span>')}<div class="cr-items" data-cr-slot="pending"></div><p class="cr-hint">关闭页面后仍会继续执行；电脑关机错过的提醒会自动作废。</p></section>`;
   }
   function settings() {
-    return `<section>${head('抢订节奏')}<div class="cr-sets">${setRow('开放时间', escape('预订系统每天放号的时刻 · ' + sourceLabel()), input('抢订设置.开放时间', '开放时间', 'time', 'step="1"'))}${setRow('提前天数', escape('抢几天后的会议室 · ' + sourceLabel()), `<input class="cr-input" data-cr-sched-field="advanceDays" type="number" min="1" max="14" step="1" value="${escape(schedDraft.advanceDays)}" aria-label="提前天数">`)}${setRow('提前填表 · 秒', '开放前把表单填好，只差提交', input('抢订设置.提前填表秒数', '提前填表秒数', 'number', 'min="5" max="600"'))}${setRow('整点连点', '开放那一刻连续提交：次数 / 间隔毫秒', `${input('抢订设置.最大重试次数', '整点连点次数', 'number', 'min="1" max="30"')}${input('抢订设置.重试间隔毫秒', '连点间隔毫秒', 'number', 'min="50" max="3000" step="50"')}`)}${setRow('登录预检 · 提前分钟', '发现登录过期会提醒你', input('抢订设置.登录预检提前分钟', '登录预检提前分钟', 'number', 'min="0" max="180"'))}${setRow('按 WeLink 服务器时间对齐整点', '本机时间不准也不影响', toggle('抢订设置.校准服务器时间', '按 WeLink 服务器时间对齐整点'))}</div></section>
-      <section>${head('电脑')}<div class="cr-sets">${setRow('守护期间阻止电脑自动睡眠', '合上笔记本仍可能睡眠', toggle('系统.守护时阻止睡眠', '守护期间阻止电脑自动睡眠'))}</div><p class="cr-hint">启动与更新由 AI Hub 统一管理，会议室组件不另设开机启动和自动更新。</p></section>
-      <section>${head('页面适配')}<p class="cr-hint cr-hint-top">页面改版时再调整；先用总览里的「测试填表」核对。</p><div class="cr-sets">${setRow('预订页地址', '', input('高级.网址', '预订页地址', 'url'), true)}${setRow('浏览器', '', choice('高级.浏览器', '浏览器', ['自动', 'Edge', 'Chrome', '内置Chromium']))}${setRow('welink-cli 路径', '留空自动查找', input('高级.welink-cli路径', 'welink-cli 路径'), true)}${setRow('自动标定时间网格', '关闭后使用下面的手动标定', toggle('高级.自动标定网格', '自动标定时间网格'))}${setRow('手动标定', '起点 X / 格子宽度 / 首格时间', `${input('高级.网格起点X', '手动标定起点 X', 'number', 'min="0" max="3000"')}${input('高级.格子宽度', '格子宽度', 'number', 'min="10" max="100"')}${input('高级.网格起始时间', '首格时间', 'time')}`, true)}</div></section>
-      <section>${head('本机数据')}<div class="cr-sets">${setRow('数据目录', `<span class="cr-path">${escape(state.home || '')}</span>`, button('folder-data', icon('folder', 14) + '打开数据目录', 'sec', 'cr-btn-sm'))}</div><p class="cr-hint">配置、历史和登录资料保留在本机。组件随 Hub 更新。</p></section>`;
+    return `<nav class="cr-seg cr-settings-tabs" aria-label="会议室设置分类">${[['booking', '抢订节奏'], ['computer', '电脑'], ['page', '页面适配'], ['data', '本机数据']].map(([id, label]) => `<button type="button" data-cr-settings-tab="${id}" aria-pressed="${settingsTab === id}">${label}</button>`).join('')}</nav><section data-cr-settings-panel="booking">${head('抢订节奏')}<div class="cr-sets">${setRow('开放时间', escape('预订系统每天放号的时刻 · ' + sourceLabel()), input('抢订设置.开放时间', '开放时间', 'time', 'step="1"'))}${setRow('提前天数', escape('抢几天后的会议室 · ' + sourceLabel()), `<input class="cr-input" data-cr-sched-field="advanceDays" type="number" min="1" max="14" step="1" value="${escape(schedDraft.advanceDays)}" aria-label="提前天数">`)}${setRow('提前填表 · 秒', '开放前把表单填好，只差提交', input('抢订设置.提前填表秒数', '提前填表秒数', 'number', 'min="5" max="600"'))}${setRow('整点连点', '开放那一刻连续提交：次数 / 间隔毫秒', `${input('抢订设置.最大重试次数', '整点连点次数', 'number', 'min="1" max="30"')}${input('抢订设置.重试间隔毫秒', '连点间隔毫秒', 'number', 'min="50" max="3000" step="50"')}`)}${setRow('登录预检 · 提前分钟', '发现登录过期会提醒你', input('抢订设置.登录预检提前分钟', '登录预检提前分钟', 'number', 'min="0" max="180"'))}${setRow('按 WeLink 服务器时间对齐整点', '本机时间不准也不影响', toggle('抢订设置.校准服务器时间', '按 WeLink 服务器时间对齐整点'))}</div></section>
+      <section data-cr-settings-panel="computer">${head('电脑')}<div class="cr-sets">${setRow('守护期间阻止电脑自动睡眠', '合上笔记本仍可能睡眠', toggle('系统.守护时阻止睡眠', '守护期间阻止电脑自动睡眠'))}</div><p class="cr-hint">启动与更新由 AI Hub 统一管理，会议室组件不另设开机启动和自动更新。</p></section>
+      <section data-cr-settings-panel="page">${head('页面适配')}<p class="cr-hint cr-hint-top">页面改版时再调整；先用总览里的「测试填表」核对。</p><div class="cr-sets">${setRow('预订页地址', '', input('高级.网址', '预订页地址', 'url'), true)}${setRow('浏览器', '', choice('高级.浏览器', '浏览器', ['自动', 'Edge', 'Chrome', '内置Chromium']))}${setRow('welink-cli 路径', '留空自动查找', input('高级.welink-cli路径', 'welink-cli 路径'), true)}${setRow('自动标定时间网格', '关闭后使用下面的手动标定', toggle('高级.自动标定网格', '自动标定时间网格'))}${setRow('手动标定', '起点 X / 格子宽度 / 首格时间', `${input('高级.网格起点X', '手动标定起点 X', 'number', 'min="0" max="3000"')}${input('高级.格子宽度', '格子宽度', 'number', 'min="10" max="100"')}${input('高级.网格起始时间', '首格时间', 'time')}`, true)}</div></section>
+      <section data-cr-settings-panel="data">${head('本机数据')}<div class="cr-sets">${setRow('数据目录', `<span class="cr-path">${escape(state.home || '')}</span>`, button('folder-data', icon('folder', 14) + '打开数据目录', 'sec', 'cr-btn-sm'))}</div><p class="cr-hint">配置、历史和登录资料保留在本机。组件随 Hub 更新。</p></section>`;
+  }
+  function updateSettingsTab() {
+    host.querySelectorAll('[data-cr-settings-panel]').forEach(panel => { panel.hidden = panel.dataset.crSettingsPanel !== settingsTab; });
+    host.querySelectorAll('[data-cr-settings-tab]').forEach(button => {
+      const active = button.dataset.crSettingsTab === settingsTab;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
+    });
+    slot('content').scrollTop = 0;
   }
   function historyPage() {
     return `<section>${head('最近 50 次', `<span class="cr-n" data-cr-slot="history-counts"></span><span class="cr-sp"></span>${button('folder-screenshots', icon('open', 14) + '打开截图目录', 'ghost', 'cr-btn-sm')}`)}<div class="cr-tbl cr-tbl-wide" data-cr-slot="history"></div></section>`;
@@ -227,6 +237,7 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
     const side = slot('side'), sheet = host.querySelector('.cr-sheet');
     host.querySelector('.cr-col').append(footer); // detach before the side panel is rebuilt
     slot('content').innerHTML = tab === 'overview' ? overview() : tab === 'plan' ? plan() : tab === 'post' ? postPage() : tab === 'settings' ? settings() : tab === 'history' ? historyPage() : logsPage();
+    if (tab === 'settings') updateSettingsTab();
     side.innerHTML = tab === 'overview' ? overviewSide() : tab === 'plan' ? planSide() : '';
     side.hidden = !side.innerHTML; sheet.classList.toggle('cr-solo', side.hidden);
     if (tab === 'plan') { footer.classList.add('cr-footer-side'); side.append(footer); } else footer.classList.remove('cr-footer-side');

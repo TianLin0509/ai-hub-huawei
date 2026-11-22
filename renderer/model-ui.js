@@ -11,6 +11,15 @@ const { EFFORT_DESCRIPTIONS } = require('../core/codex-model-catalog.js');
 const { compareCliVersions } = require('../core/claude-model-discovery.js');
 const { speedControl } = require('../core/session-speed.js');
 
+// 菜单只显示整数 K；整百万用 M。精确 token 数仍保留在悬停提示中。
+function formatContextWindow(value) {
+  const tokens = Number(value);
+  if (!Number.isFinite(tokens) || tokens <= 0) return '上下文未知';
+  const thousands = Math.round(tokens / 1000);
+  if (thousands >= 1000 && thousands % 1000 === 0) return `${thousands / 1000}M`;
+  return tokens < 1000 ? String(Math.round(tokens)) : `${thousands}K`;
+}
+
 function modelPickerIdText(option) {
   if (option.disabled && option.upgradeTo) return `需 ${option.upgradeTo}+`;
   // CodeAgent 配置里自配、账号清单还没读到的模型（core/codeagent-models.js settingsProviderModels）：标「自配」，不重复写一遍模型名。
@@ -447,7 +456,7 @@ function createModelUiController({
       }
       const idText = modelPickerIdText(opt);
       const contextText = session.kind?.startsWith('codeagent') && Object.hasOwn(opt, 'contextWindow')
-        ? (opt.contextWindow > 0 ? `${Number(opt.contextWindow) / 1000}K ctx` : '上下文未知') : '';
+        ? (opt.contextWindow > 0 ? `${formatContextWindow(opt.contextWindow)} ctx` : '上下文未知') : '';
       item.innerHTML = `<span class="model-picker-check">${current ? '✓' : ''}</span>`
         + `<span class="model-picker-label">${escapeHtml(opt.label)}${contextText ? `<small class="model-picker-context">${escapeHtml(contextText)}</small>` : ''}</span>`
         + codeagentUsageSpan(usageEntry, opt.id)
@@ -1126,6 +1135,7 @@ function backstageModelHint(session) {
 }
 
 module.exports = {
+  formatContextWindow,
   backstageModelHint,
   compatibleEffort,
   createModelUiController,

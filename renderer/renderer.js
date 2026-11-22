@@ -467,6 +467,8 @@ function disarmPtyBurstFallback(sessionOrId, settledAt = Date.now()) {
 
 function canUsePtyBurstFallback(session, now = Date.now()) {
   if (isNativeSession(session)) return false;
+  if (isCodeAgentKind(session?.kind)
+      && classifySessionRuntimeFrame(session, terminalActivityMonitor.extractLiveScreenLines(session.id)).state === 'waiting') return false;
   if (!isAiRuntimeSession(session)) return true;
   const at = Number(now) || Date.now();
   return at >= (Number(session._ptyBurstCooldownUntil) || 0)
@@ -2026,19 +2028,53 @@ const turnSpeedDisplay = require('./turn-speed-display').createTurnSpeedDisplay(
 let sessionImmersive = null;
 // CodeAgent ACP 试点：看后台时才接真实终端，离开后由主进程保温几分钟再关。
 let serveTerminalSession = null;
+// Claude Code、DSH 卡片试点：点「后台」时主进程把会话接力到真实终端，离开后保温 3 分钟再换回卡片。
+let cardRelaySession = null;
+// 真实终端冷启动的几秒盖一层过渡动画；已开着的终端不显示。
+const terminalWarmup = require('./terminal-warmup').createTerminalWarmup({ document, window,
+  hostFor: () => (sessionSplit?.isBackstage() && document.querySelector('.session-pane-right > .terminal-panel')) || terminalPanelEl });
+function syncCardRelay(active, showing) {
+  const target = active?.cardRunMode === 'card' && showing ? activeSessionId : null;
+  if (target === cardRelaySession) return;
+  if (cardRelaySession) void ipcRenderer.invoke('card-relay:terminal', { sessionId: cardRelaySession, action: 'detach' });
+  cardRelaySession = target;
+  if (!target) return;
+  ipcRenderer.invoke('card-relay:terminal', { sessionId: target, action: 'attach' })
+    .then(result => {
+      if (result?.pending) showToast(result.message, 'info');
+      else if (result && result.ok === false) {
+        terminalWarmup.cancel(target);
+        if (!result.notified) showToast(`打开真实终端失败：${result.message || '未知错误'}`, 'error');
+      }
+    })
+    .catch(error => { terminalWarmup.cancel(target); showToast(`打开真实终端失败：${error.message}`, 'error'); });
+}
+ipcRenderer.on('card-relay-switch', (_event, { sessionId, phase, terminal } = {}) => {
+  if (phase === 'start') {
+    if (activeSessionId !== sessionId || activeMeetingId) return;
+    _restartKeepOpen.add(sessionId);
+    _xresearchRequestedSessionViews.set(sessionId, currentView);
+    if (terminal) terminalWarmup.begin(sessionId);
+  } else _restartKeepOpen.delete(sessionId);
+});
 function syncServeTerminal() {
   const active = activeSessionId && sessions.get(activeSessionId);
   const showing = !currentAppToolbarView() && (currentView === 'pty' || !!sessionSplit?.isBackstage());
+  if (terminalWarmup.activeSession() && (!showing || terminalWarmup.activeSession() !== activeSessionId)) terminalWarmup.cancel();
+  syncCardRelay(active, showing);
   const target = active?.codeagentRunMode === 'serve' && showing ? activeSessionId : null;
   if (target === serveTerminalSession) return;
   if (serveTerminalSession) void ipcRenderer.invoke('codeagent-serve:terminal', { sessionId: serveTerminalSession, action: 'detach' });
   serveTerminalSession = target;
   if (!target) return;
   const terminal = terminalCache.get(target)?.terminal;
-  const hint = setTimeout(() => { if (serveTerminalSession === target) terminal?.write('\r\n正在连接真实终端，约 3 秒…\r\n'); }, 200);
+  terminalWarmup.begin(target);
   ipcRenderer.invoke('codeagent-serve:terminal', { sessionId: target, action: 'attach', cols: terminal?.cols, rows: terminal?.rows })
-    .then(result => { clearTimeout(hint); if (!result?.ok) terminal?.write(`\r\n终端连接失败：${result?.message || '未知错误'}\r\n`); })
-    .catch(error => { clearTimeout(hint); terminal?.write(`\r\n终端连接失败：${error.message}\r\n`); });
+    .then(result => {
+      if (result?.reused || !result?.ok) terminalWarmup.cancel(target);
+      if (!result?.ok) terminal?.write(`\r\n终端连接失败：${result?.message || '未知错误'}\r\n`);
+    })
+    .catch(error => { terminalWarmup.cancel(target); terminal?.write(`\r\n终端连接失败：${error.message}\r\n`); });
 }
 
 function syncBackstageButton(visible = !currentAppToolbarView() && !!activeSessionId) {
@@ -4672,7 +4708,7 @@ function handleQueuedPromptUnsent(payload) {
   const sessionId = payload?.sessionId;
   const text = typeof payload?.text === 'string' ? payload.text : '';
   if (!sessionId || !text.trim() || !sessions.has(sessionId)) return false;
-  const reason = String(payload.reason || '终端没有执行这条排队的消息');
+  const reason = require('./composer-resend-strip').reasonText(payload.reason, '终端没有执行这条排队的消息');
   const entry = { text, reason, uncertain: true, submissionId: payload.clientSubmissionId || '' };
   let shown = false, restored = false;
   for (const bar of document.querySelectorAll('.floating-input-bar')) {
@@ -4746,6 +4782,7 @@ function clearFloatingInputStuck(bar) {
 }
 
 function reportFloatingSendFailure(sessionId, inputBox, text, reason, submissionId = '', result = null) {
+  reason = require('./composer-resend-strip').reasonText(reason);
   const restored = !!inputBox && !readContenteditablePlainText(inputBox) && !!text;
   if (restored) { replaceContenteditableText(inputBox, text); saveFloatingInputDraft(sessionId, inputBox); }
   // 等确认时 CLI 退回了命令行（2026-11-20）：CLI 可能在退出前已经收下这条，重发可能发两遍（Codex 复审），
@@ -6009,7 +6046,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       if (floatingPromptDeliveries.get(sessionId) !== delivery) {
         if (delivery.status !== 'confirmed' && result?.receipt?.status !== 'confirmed' && !result?.ok && !result?.unconfirmed) {
           const excerpt = text.replace(/\s+/g, ' ').slice(0, 32);
-          showToast(`较早的消息${result?.notSent ? '未发送' : '发送未完成'}（${excerpt}）：${result?.message || result?.error || '发送失败'}。可按↑找回原文${result?.notSent ? '' : '，请先到后台核对'}`, 'error', { sessionId });
+          showToast(`较早的消息${result?.notSent ? '未发送' : '发送未完成'}（${excerpt}）：${require('./composer-resend-strip').reasonText(result?.message || result?.error, '发送失败')}。可按↑找回原文${result?.notSent ? '' : '，请先到后台核对'}`, 'error', { sessionId });
         }
         return;
       }
@@ -6041,11 +6078,14 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       if (!result?.ok && result?.notSent && session?.agentRuntime === 'pty') {
         delivery.dismissed = true;
         updateFloatingPromptReceipt({ sessionId, clientSubmissionId, status: 'failed' });
+        // 菜单未关闭且没有新输出时，也要撤销本次发送的乐观工作状态。
+        if (isCodeAgentKind(kind)) terminalActivityMonitor.observeRuntimeState(sessionId);
         if (!readContenteditablePlainText(inputBox)) { replaceContenteditableText(inputBox, text); saveFloatingInputDraft(sessionId, inputBox); }
         // CLI 已退出（2026-11-20）：提示旁给「重启会话并重发」一键，并带上终端最后几行作退出原因；找不到 CLI 的走一键安装，不给重发。
         const exited = result.code === 'cli-exited' && !result.missingCli;
         if (exited) showToast('消息未发送：' + (result.message || 'CLI 已退出'), 'error', { sessionId, resendText: text, terminalTail: Array.isArray(result.terminalTail) ? result.terminalTail : [] });
-        else showToast('消息未发送：' + (result.message || 'CLI 暂时不能接收输入'), 'error', { sessionId });
+        // 菜单拒收只显示常驻重发条；其他失败仍保留安装、重启等原有恢复入口。
+        else if (result.missingCli || !isCodeAgentKind(kind) || session._ptyRuntimeReason !== 'codeagent-model-menu' || !bar._resendStrip) showToast('消息未发送：' + (result.message || 'CLI 暂时不能接收输入'), 'error', { sessionId });
         bar._resendStrip?.show({ text, reason: result.message || 'CLI 暂时不能接收输入' });
         for (const other of document.querySelectorAll('.floating-input-bar')) {
           if (other.dataset.sessionId === sessionId) clearFloatingInputStuck(other);
@@ -6086,7 +6126,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
         return;
       }
       if (floatingPromptDeliveries.get(sessionId) !== delivery) {
-        if (delivery.status !== 'confirmed') showToast(`较早的消息提交未确认（${text.replace(/\s+/g, ' ').slice(0, 32)}）：${err.message || '发送通道异常'}。请到后台核对，可按↑找回原文`, 'error');
+        if (delivery.status !== 'confirmed') showToast(`较早的消息提交未确认（${text.replace(/\s+/g, ' ').slice(0, 32)}）：${require('./composer-resend-strip').reasonText(err.message)}。请到后台核对，可按↑找回原文`, 'error');
         return;
       }
       if (delivery.status === 'confirmed' || delivery.status === 'content-mismatch') return;
@@ -7283,6 +7323,7 @@ document.addEventListener('click', (e) => {
 // --- Terminal buffer reading and activity monitor ---
 function classifySessionRuntimeFrame(session, lines) {
   if (isNativeSession(session)) return { state: 'unknown', confidence: 'none', reason: 'native-only' };
+  if (isCodeAgentKind(session?.kind)) return classifyTerminalRuntime('codeagent', lines);
   if (isClaudeRuntimeSession(session)) return classifyTerminalRuntime('claude', lines);
   if (session && isCodexKind(session.kind)) return classifyTerminalRuntime('codex', lines);
   return { state: 'unknown', confidence: 'none', reason: 'unsupported-runtime', evidence: '' };
@@ -7507,7 +7548,7 @@ function ptyObservationSidebarSignature(session, at) {
 function applyPtyRuntimeObservation(session, runtime, observedAt = Date.now()) {
   if (isNativeSession(session)) return false;
   if (!session || !runtime || session.status === 'dormant') return false;
-  if (!isClaudeRuntimeSession(session) && !isCodexKind(session.kind)) return false;
+  if (!isClaudeRuntimeSession(session) && !isCodexKind(session.kind) && !isCodeAgentKind(session.kind)) return false;
 
   const at = Number(observedAt) || Date.now();
   const sidebarBefore = ptyObservationSidebarSignature(session, at);
@@ -7604,7 +7645,9 @@ function applyPtyRuntimeObservation(session, runtime, observedAt = Date.now()) {
     // An input-ready frame is the missing-completion escape hatch. It does not
     // fabricate transcript text or unread counts; a delayed authoritative Stop
     // hook/task_complete can still enrich the card afterwards.
-    if (!wasRunning) return false;
+    const codeagentMenu = isCodeAgentKind(session.kind)
+      && (runtime.reason === 'codeagent-model-menu' || session._ptyRuntimeReason === 'codeagent-model-menu');
+    if (!wasRunning && !codeagentMenu) return false;
     if (runtime.state === 'idle' && claudeBackgroundKeepsRunning(session._claudeBackgroundTasks)) {
       return false;
     }
@@ -7612,7 +7655,7 @@ function applyPtyRuntimeObservation(session, runtime, observedAt = Date.now()) {
     if (runtime.state === 'waiting') clearPtyInputReadyCandidate(session);
     const runStartedAt = Number(session.runStartedAt) || Number(session._ptyFallbackArmedAt) || 0;
     if (runtime.state === 'idle'
-        && !session._ptyRuntimeSawRunning
+        && !codeagentMenu && !session._ptyRuntimeSawRunning
         && (!runStartedAt || at - runStartedAt < PTY_RUNTIME_SUBMIT_PENDING_MS)) {
       return false;
     }
@@ -7633,7 +7676,7 @@ function applyPtyRuntimeObservation(session, runtime, observedAt = Date.now()) {
     } else if (sessionNeedsUserInput(session)) {
       clearSessionAttention(session);
     }
-    if (isCodexKind(session.kind)) {
+    if (isCodexKind(session.kind) || isCodeAgentKind(session.kind)) {
       clearCodexCardWorking(session.id);
     } else {
       session._agentWorking = null;
@@ -7740,7 +7783,7 @@ const terminalActivityMonitor = createTerminalActivityMonitor({
   },
   classifyRuntimeState: classifySessionRuntimeFrame,
   onRuntimeState: applyPtyRuntimeObservation,
-  canObserveRuntimeState: (session) => isClaudeRuntimeSession(session) || !!(session && isCodexKind(session.kind)),
+  canObserveRuntimeState: (session) => isClaudeRuntimeSession(session) || !!(session && (isCodexKind(session.kind) || isCodeAgentKind(session.kind))),
 });
 const {
   getQuestionsSignature,
@@ -8078,6 +8121,7 @@ ipcRenderer.on('codex-backstage-updated', (_event, event) => {
   terminalCache.get(event.sessionId)?._codexBackstage?.notify(event);
 });
 ipcRenderer.on('terminal-data', (_e, { sessionId, data, seq }) => {
+  terminalWarmup.output(sessionId, data);
   noteStreamDisconnect(sessionId, data);
   const cached = terminalCache.get(sessionId);
   if (!cached) return;

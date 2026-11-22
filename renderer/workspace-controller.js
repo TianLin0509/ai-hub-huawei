@@ -24,6 +24,9 @@
   };
   const launchModelOptions = kind => companyApiKind(kind) ? (companyApiModels[kind] || []) : modelOptionsFor(kind);
   const accountRisk = require('./account-risk-state');
+  // 字段说明：纯说明进标签旁的 ⓘ 悬停卡，要处理的提示才留在原位（renderer/launch-field-hint.js，2026-11-22）。
+  const fieldHint = require('./launch-field-hint');
+  fieldHint.installHintClickGuard(document);
   const path = require('path');
   const {
     modelOptionsFor,
@@ -297,6 +300,10 @@
   // 当前选择，避免把用户刚选的值改掉。
   let tuningTouchedByUser = false;
   let codeagentRunMode = 'pty';
+  // Claude Code、DSH 的卡片试点：只给经本机反代的公司模型和 API 网关线路。
+  let cardRunModes = {};
+  const cardRunEligible = (kind = selectedKind) => ['claude', 'deepseek-acp'].includes(kind) && companyApiKind(kind)
+    && (companyPick[kind] ? ['company', 'gateway'].includes(companyPick[kind].source) : companyApiBackend[kind] === 'proxy');
   // CodeAgent 只有本次明确选了具体模型才打开原生 /model 菜单；
   // 调思考强度或 MCP 不表示选过模型，切换 AI 类型时这份意图也分别记忆。
   let modelTouchedByUser = false;
@@ -315,6 +322,7 @@
       hubDefaultModels = (config && config.defaultModels) || {};
       hubLaunchDefaults = readLaunchDefaults(config);
       codeagentRunMode = config?.codeagentRunMode === 'serve' ? 'serve' : 'pty';
+      cardRunModes = config?.cardRunModes || {};
       if ((!accountSaving || refreshAccount) && revision===configReadRevision) {
         codexAccounts=(config.codexSubscriptionProfiles || []).map(p=>({...p,email:config.codexProfileIdentities?.[p.id] || ''}));
         codexAccountId=config.codexSubscriptionProfile || '';
@@ -1158,14 +1166,14 @@
     field?.classList.toggle('caa-account-field', companyAccounts);
     if (select) select.hidden = companyAccounts;
     if (control) control.hidden = !companyAccounts;
-    if (field?.querySelector('span')) field.querySelector('span').textContent = companyAccounts ? '账号' : '用量账号';
+    fieldHint.setLabelText(fieldHint.fieldLabel(field), companyAccounts ? '账号' : '用量账号');
     if (note) note.hidden = !show;
     const manual = show && codeagentAccount === 'pool-manual';
     if (pickField) pickField.hidden = !manual || companyAccounts;
     if (selectedKind === 'codeagent' && codeagentSetup.current?.installed === false) {
       if (field) field.hidden = true;
       if (pickField) pickField.hidden = true;
-      if (note) { note.hidden = false; note.textContent = 'CodeAgent 未安装。请先查看安装说明，安装后再选择账号与模型。'; }
+      fieldHint.setFieldHint(note, 'CodeAgent 未安装。请先查看安装说明，安装后再选择账号与模型。', { level: 'warn', label: fieldHint.fieldLabel(field) });
       return;
     }
     if (!show || !select) return;
@@ -1204,13 +1212,17 @@
       pickSelect.value = codeagentPoolPick || codeagentManualPick();
       pickSelect.disabled = submitting;
     }
-    if (note) note.textContent = codeagentSelectionUnavailable()
+    // 不可用、个人账号有问题（含需登录的「登录」按钮）留在原位；其余是纯说明，进「账号」标签旁的 ⓘ。
+    const unavailableNow = codeagentSelectionUnavailable();
+    const accountHintIssue = unavailableNow || (!codeagentUsesPool() && !!personalIssue);
+    fieldHint.setFieldHint(note, unavailableNow
       ? '当前账号不可用，请到「账号」页登录、恢复使用或添加账号。'
       : !codeagentUsesPool()
       ? (personalIssue ? `个人账号提示：${personalIssue}。仍可创建会话，在会话「后台」按提示处理。` : '个人账号：用你自己登录的 CodeAgent，和以前一样。')
       // 一个号固定一个模型（2026-10-20 用户）：启动中心不再有 CodeAgent 模型菜单，这里不再提它。
       : manual ? '指定账号：整段会话固定使用这个号及其默认模型。'
-      : '自动挑号会跳过暂停或需登录的号，其他号都不可用时才用个人账号；整段会话固定使用选中的账号。';
+      : '自动挑号会跳过暂停或需登录的号，其他号都不可用时才用个人账号；整段会话固定使用选中的账号。',
+    { level: unavailableNow ? 'error' : accountHintIssue ? 'warn' : 'info', label: fieldHint.fieldLabel(field) });
     if (note && !codeagentUsesPool() && accountState(personal, { personal: true }).label === '需登录') {
       require('./sticky-notice').appendCodeAgentLoginButton(document, note, ipcRenderer);
     }
@@ -1235,7 +1247,8 @@
       control.disabled = submitting;
       control.title = select.selectedOptions[0]?.textContent || '选择账号';
     }
-    if (note) note.textContent = codeagentPoolError ? `${codeagentPoolError}；仍可选「自动挑号」。` : view.note;
+    fieldHint.setFieldHint(note, codeagentPoolError ? `${codeagentPoolError}；仍可选「自动挑号」。` : view.note,
+      { level: view.unavailable ? 'error' : codeagentPoolError ? 'warn' : 'info', label: fieldHint.fieldLabel(field) });
   }
 
   let launchConfigLayout = null, launchAccountCtx = null;
@@ -1340,12 +1353,16 @@
         : mode === permissionModes.DEFAULT_MODE ? `完全放开：${permissionModes.BYPASS_RISK}`
         : permissionModes.describe(selectedKind, mode) + (mode === 'default' || mode === 'acceptEdits' ? ' 需要确认时会话显示「等待输入」，点进终端选择即可。' : '');
     }
-    if (note) note.dataset.risk = mode === permissionModes.DEFAULT_MODE ? '1' : '';
+    const risky = mode === permissionModes.DEFAULT_MODE;
+    if (note) note.dataset.risk = risky ? '1' : '';
     if (reset) {
       const stored = supported && lastPermission.recall(localStorage, selectedKind) !== permissionModes.DEFAULT_MODE;
       reset.hidden = !supported || (!stored && mode === permissionModes.DEFAULT_MODE);
       reset.disabled = submitting;
     }
+    // 档位说明（含「完全放开」的风险提示）进「权限模式」旁的 ⓘ，完全放开时图标染成琥珀色；下面只在要「恢复默认」时留一个小按钮。
+    fieldHint.setIconHint(fieldHint.fieldLabel(field), desc?.textContent || '', { tone: risky ? 'risk' : 'info' });
+    if (note) { note.dataset.hintLevel = 'status'; note.hidden = !reset || reset.hidden; }
   }
 
   function paintRunMode() {
@@ -1353,15 +1370,25 @@
     const select = document.getElementById('new-session-run-mode');
     const note = document.getElementById('new-session-run-mode-note');
     if (!field || !select) return;
-    const show = selectedKind === 'codeagent';
+    const cardKind = cardRunEligible();
+    const show = selectedKind === 'codeagent' || cardKind;
     field.hidden = !show;
     if (note) note.hidden = !show;
     if (!show) return;
-    select.value = codeagentRunMode;
     select.disabled = submitting;
-    if (note) note.textContent = codeagentRunMode === 'serve'
+    if (cardKind) {
+      const card = cardRunModes[selectedKind] === 'card';
+      const name = selectedKind === 'claude' ? 'Claude Code' : 'DSH';
+      select.value = card ? 'serve' : 'pty';
+      fieldHint.setFieldHint(note, card
+        ? `ACP 试点：平时看卡片，点「后台」时同一会话切到真实终端（${selectedKind === 'claude' ? '约 2 到 6 秒' : '约 5 到 15 秒，电脑忙时更久'}），回到卡片 3 分钟后自动换回。之后新建的 ${name} 会话都用它。`
+        : `PTY：一直开着真实终端，和现在一样。之后新建的 ${name} 会话都用它。`, { label: fieldHint.fieldLabel(field) });
+      return;
+    }
+    select.value = codeagentRunMode;
+    fieldHint.setFieldHint(note, codeagentRunMode === 'serve'
       ? 'ACP 试点：平时看卡片，点「后台」才打开真实终端，关掉终端 AI 继续跑。之后新建的 CodeAgent 会话都用它。试点暂不支持思考强度和 Hub 自带的 MCP 工具，需要时请用 PTY。'
-      : 'PTY：一直开着真实终端，和现在一样。之后新建的 CodeAgent 会话都用它。';
+      : 'PTY：一直开着真实终端，和现在一样。之后新建的 CodeAgent 会话都用它。', { label: fieldHint.fieldLabel(field) });
   }
 
   function paintTuning() {
@@ -1377,10 +1404,18 @@
     const selectedAccount=isAntigravityAccount ? antigravityAccountId : isClaudeAccount ? launchClaudeAccountId() : codexAccountId;
     const showAccount=!companyApiKind(selectedKind) && (isAntigravityAccount || selectedKind === 'codex' && codexBackend !== 'api' || isClaudeAccount && claudeBackend !== 'api');
     if (accountField) accountField.hidden=!showAccount;
+    // 读取失败、正在切换、刚同步、风控留在原位一行；推荐理由和「新建 / 已有会话用哪个号」是纯说明，进「用量账号」旁的 ⓘ。
+    let accountHintText='';
     if (accountNote) {
-      accountNote.hidden=!showAccount;
-      accountNote.textContent=accountReadError || (accountSaving ? '正在切换用量账号…' : accountNotice)
-        || (isAntigravityAccount ? '新建会话使用所选 Antigravity 账号；已有会话保持原账号。首次使用请到账号页完成此账号授权。' : isClaudeAccount ? claudeRecommendationNote()+'新建会话使用所选账号；已有会话恢复、重启仍用原账号。首次使用请到账号页完成此账号授权。' : '新建会话使用所选账号；此会话随后独立换号，恢复和重启仍用会话自己的账号。');
+      const risk = showAccount ? accountRisk.describe(accountKind, pendingAccountId || selectedAccount) : '';
+      accountNote.dataset.accountRisk = risk ? '1' : '';
+      const info = isAntigravityAccount ? '新建会话使用所选 Antigravity 账号；已有会话保持原账号。首次使用请到账号页完成此账号授权。' : isClaudeAccount ? claudeRecommendationNote()+'新建会话使用所选账号；已有会话恢复、重启仍用原账号。首次使用请到账号页完成此账号授权。' : '新建会话使用所选账号；此会话随后独立换号，恢复和重启仍用会话自己的账号。';
+      const [text, level] = risk ? ['⚠ 所选账号' + risk + '。建议换一个账号。', 'warn']
+        : accountReadError ? [accountReadError, 'error'] : accountSaving ? ['正在切换用量账号…', 'status']
+        : accountNotice ? [accountNotice, 'status'] : [info, 'info'];
+      fieldHint.setFieldHint(accountNote, text, { level, label: fieldHint.fieldLabel(accountField) });
+      if (!showAccount) accountNote.hidden = true;
+      accountHintText = showAccount && level === 'info' ? text : '';
     }
     if (accountSelect) {
       const signature=JSON.stringify(accounts);
@@ -1393,13 +1428,8 @@
       accountSelect.value=pendingAccountId || selectedAccount;
       accountSelect.disabled=accountSaving || submitting || !accounts.length || !!accountReadError;
     }
-    if (accountNote && showAccount) {
-      const risk = accountRisk.describe(accountKind, pendingAccountId || selectedAccount);
-      accountNote.dataset.accountRisk = risk ? '1' : '';
-      if (risk) accountNote.textContent = '⚠ 所选账号' + risk + '。建议换一个账号。';
-    }
     // C 布局（launch-config-layout.js）左栏账号列表用的同一份数据。
-    launchAccountCtx={kind:selectedKind,showAccount,accounts,selectedId:pendingAccountId || selectedAccount,disabled:accountSaving || submitting || !accounts.length || !!accountReadError,ranking:isClaudeAccount ? claudeRanking : null};
+    launchAccountCtx={kind:selectedKind,showAccount,accounts,selectedId:pendingAccountId || selectedAccount,disabled:accountSaving || submitting || !accounts.length || !!accountReadError,ranking:isClaudeAccount ? claudeRanking : null,hint:accountHintText};
     paintCodeagentAccount();
     paintCompanyAccount();
     const label = document.getElementById('new-session-tuning-label');
@@ -1650,15 +1680,18 @@
     const ready = diagnosis?.state === 'ready';
     note.dataset.state = !piStatus || ready ? 'info' : 'error';
     const routes = (piStatus?.routes || []).map(route => route.label).join('、');
-    text.textContent = !piStatus ? '正在检查 pi…'
-      : piInstalling ? '正在安装 pi（Hub 自管目录，不改你的全局 npm）…'
-      : diagnosis?.state === 'none' ? '这台电脑还没有 pi。点右边「一键安装 pi」：Hub 装进自己的目录（约 1–3 分钟），不改你的全局 npm。'
-      : !ready ? diagnosis.message
-      : `pi ${diagnosis.version} 已就绪（${diagnosis.source === 'hub' ? 'Hub 安装' : '本机已装'}）。` + (routes
+    // 一行短句留在原位（状态、要不要装），线路与降级功能等说明进句末的 ⓘ（2026-11-22：说明不喧宾夺主）。
+    const [headline, detail] = !piStatus ? ['正在检查 pi…', '']
+      : piInstalling ? ['正在安装 pi…', 'Hub 装进自己的目录，不改你的全局 npm。']
+      : diagnosis?.state === 'none' ? ['这台电脑还没有 pi，点右边「一键安装 pi」。', 'Hub 装进自己的目录（约 1–3 分钟），不改你的全局 npm。']
+      : !ready ? [diagnosis.message, '']
+      : [`pi ${diagnosis.version} 已就绪（${diagnosis.source === 'hub' ? 'Hub 安装' : '本机已装'}）。`, (routes
         ? `模型线路：${routes}。`
         : '没有找到 Hub 可用的模型钥匙：pi 会用它自己的配置或登录；还没配过就在 pi 终端里 /login，或在设置里填 DeepSeek Key。')
         // 两种情况都说明降级功能（r39 审查：以前只有走 Hub 线路时才说）。
-        + 'Hub 的「问一下」与分支按钮暂不支持 pi，终端里 /fork 可用。';
+        + 'Hub 的「问一下」与分支按钮暂不支持 pi，终端里 /fork 可用。'];
+    fieldHint.setLabelText(text, headline);
+    fieldHint.setIconHint(text, detail);
     if (install) {
       install.hidden = !piStatus || ready;
       install.disabled = piInstalling;
@@ -1726,12 +1759,12 @@
     const routeNote = document.getElementById('new-session-deepseek-route-note');
     const routeStatus = deepseekRouteStatus(deepseekRoute);
     if (routeNote) {
-      routeNote.hidden = !showRoute;
       routeNote.dataset.state = routeStatus.available ? 'info' : 'error';
-      routeNote.textContent = !showRoute ? ''
+      fieldHint.setFieldHint(routeNote, !showRoute ? ''
         : routeStatus.available
           ? 'DeepSeek 使用 DSH；Token Plan 消耗套餐额度，API 使用 DeepSeek 官方 API 计费。'
-          : `${deepseekProfile.ROUTES[deepseekRoute].label}不可用：${routeStatus.reason}。请改选另一种接入方式，Hub 不会自动替换。`;
+          : `${deepseekProfile.ROUTES[deepseekRoute].label}不可用：${routeStatus.reason}。请改选另一种接入方式，Hub 不会自动替换。`,
+      { level: routeStatus.available ? 'info' : 'error', label: fieldHint.fieldLabel(routeField) });
     }
     paintPiNote();
     paintLaunchLayout();
@@ -2152,6 +2185,7 @@
     if (selectedKind === 'codeagent' && !modelTouchedByUser && codeagentFollowCli) opts.codeagentFollowCli = true;
     if (permissionModes.supportsSwitch(selectedKind)) opts.permissionMode = currentPermissionMode();
     if (selectedKind === 'codeagent' && codeagentRunMode === 'serve') opts.codeagentRunMode = 'serve';
+    if (cardRunEligible() && cardRunModes[selectedKind] === 'card') opts.cardRunMode = 'card';
     if (selectedKind === 'codeagent' && codeagentPoolRequested()) {
       opts.codeagentAccount = 'pool';
       const pick = codeagentManualPick();
@@ -2485,6 +2519,15 @@
     const runModeSelect = document.getElementById('new-session-run-mode');
     if (runModeSelect) {
       runModeSelect.addEventListener('change', async () => {
+        if (cardRunEligible()) {
+          const kind = selectedKind;
+          const before = cardRunModes[kind] || 'pty';
+          cardRunModes = { ...cardRunModes, [kind]: runModeSelect.value === 'serve' ? 'card' : 'pty' };
+          paint();
+          const saved = await ipcRenderer.invoke('session:set-card-run-mode', { kind, mode: cardRunModes[kind] }).catch(error => ({ ok: false, error: error.message }));
+          if (!saved?.ok) { cardRunModes = { ...cardRunModes, [kind]: before }; setError(`保存运行方式失败：${saved?.error || '未知错误'}`); paint(); }
+          return;
+        }
         const previous = codeagentRunMode;
         codeagentRunMode = runModeSelect.value === 'serve' ? 'serve' : 'pty';
         paint();

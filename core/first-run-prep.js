@@ -153,7 +153,7 @@ function createPrep({ isCompany, deps, emit = () => {} }) {
       await step('models', 14000, async () => {
         const r = await limited(deps.readModels(), 14000, { pending: true });
         if (r.pending) return { status: ST.off, detail: '读得比较慢，已转到后台继续' };
-        if (r.skipped) return { status: ST.off, detail: '第一次建会话时读取' };
+        if (r.skipped === true) return { status: ST.off, detail: '第一次建会话时读取' };
         return r.ok ? { status: ST.ok, detail: r.models.slice(0, 4).join('、') } : { status: ST.warn, detail: `这次没读到：${String(r.error || '').slice(0, 120)}，建会话时会再读`, fixes: [RECHECK] };
       });
     })();

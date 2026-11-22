@@ -111,8 +111,8 @@ const until = async (fn, label, ms = 90000) => { const end = Date.now() + ms; wh
     await c.send('Emulation.setDeviceMetricsOverride', { width: 1366, height: 680, deviceScaleFactor: 1, mobile: false });
     await click('[data-cr-tab="settings"]');
     const sizes = await c.eval(`(() => {const p=${q('#company-rooms-page')}, c=${q('[data-cr-slot="content"]')}, b=${q('[data-cr-op="save"]')}.getBoundingClientRect(); return {overflow:p.scrollWidth>p.clientWidth,scroll:c.scrollHeight>c.clientHeight,save:b.bottom<=innerHeight};})()`);
-    assert.equal(sizes.overflow, false); assert.equal(sizes.scroll, true); assert.equal(sizes.save, true); await shot('07-short-screen');
-    result.checks.push('1366x680: settings scroll, save remains visible, no horizontal overflow');
+    assert.equal(sizes.overflow, false); assert.equal(sizes.scroll, false); assert.equal(sizes.save, true); await shot('07-short-screen');
+    result.checks.push('1366x680: settings fit one screen, save remains visible, no horizontal overflow');
     await click('#btn-company-assistant'); assert.equal(await c.eval(`${q('#company-rooms-page')}.hidden`), true);
     await click('#btn-company-meeting'); await click('#btn-company-rooms'); assert.equal(await c.eval(`${q('#company-meeting-page')}.hidden`), true);
     await click('#btn-home'); assert.equal(await c.eval(`${q('#company-rooms-page')}.hidden`), true);

@@ -7,6 +7,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { destinationError, loadError } = require('./web-session-load-error');
 
 // honest：不冒充 Chrome，如实报 Electron。用 Google 账号登录的网站要这样：Google 发现「自称 Chrome、内核特征却对不上」会拒绝登录
 // （「此浏览器或应用可能不安全」）。2026-10-26 实测：只改身份字符串冒充 Chrome 6 次全被拒；用户在登录实验台亲手走
@@ -108,7 +109,11 @@ function createWebSessions({ dataDir, getWindow, WebContentsView, BrowserWindow,
     // 旧版本存下的首页宣传语标题（如「阿里 AI 助手」）清掉，侧栏改显示网站名，等真正的对话标题出现。
     for (const i of items) if (i.title && !cleanTitle(i.title, SITES[i.site])) i.title = '';
     // 停在登录页的旧记录：下次直接打开网站首页（登录页地址里常带一次性参数）。
-    for (const i of items) { try { if (LOGIN_PATH.test(new URL(i.url).pathname)) i.url = siteUrl(i.site); } catch { i.url = siteUrl(i.site); } }
+    for (const i of items) { try {
+      if (LOGIN_PATH.test(new URL(i.url).pathname) || destinationError(i.site, siteUrl(i.site), i.url)) {
+        i.url = siteUrl(i.site); i.title = '';
+      }
+    } catch { i.url = siteUrl(i.site); } }
   } catch (e) { if (e.code !== 'ENOENT') logger.warn('[web-sessions] 记录无法读取，按空列表启动：', e.message); }
   const live = new Map(); // id → { view, phase, error, generating, stopStreak, runStreak }
   // 登录存储同时只能由一个 Hub 进程打开（2026-10-25 实测：第二个进程读不到、也存不下 Cookie，表现为每开一个 Hub 都要重新登录）。
@@ -213,6 +218,10 @@ function createWebSessions({ dataDir, getWindow, WebContentsView, BrowserWindow,
     let l = live.get(item.id);
     if (l && !l.view.webContents.isDestroyed()) return l;
     assertOwner();
+    // 旧记录可能已经保存了风险页；唤醒时也修正，覆盖列表刷新重新读盘的情况。
+    if (destinationError(item.site, siteUrl(item.site), item.url)) {
+      item.url = siteUrl(item.site); item.title = ''; persist();
+    }
     const partition = partitionFor(item);
     const site = SITES[item.site];
     const ses = configure(partition, site);
@@ -234,19 +243,40 @@ function createWebSessions({ dataDir, getWindow, WebContentsView, BrowserWindow,
     });
     wc.on('context-menu', (_e, params) => contextMenu(wc, params));
     wc.on('did-create-window', win => { if (!site.honest) void applyBrowserProfile(win.webContents, { blank: false }); });
+    const fail = (code, description) => {
+      const message = loadError(siteUrl(item.site), code, description);
+      if (!message) return;
+      l.phase = 'error'; l.error = message; l.generating = false;
+      l.challengeSince = null; l.verificationRequired = false; emit();
+    };
+    const checkDestination = url => {
+      const message = destinationError(item.site, siteUrl(item.site), url);
+      if (message) {
+        l.phase = 'error'; l.error = message; l.generating = false;
+        l.challengeSince = null; l.verificationRequired = false; emit();
+      }
+      return !message;
+    };
     wc.on('did-start-loading', () => { l.phase = 'loading'; l.error = ''; emit(); });
-    wc.on('did-stop-loading', () => { if (l.phase !== 'error') l.phase = 'ready'; emit(); });
+    wc.on('did-stop-loading', () => { if (l.phase !== 'error' && checkDestination(wc.getURL())) l.phase = 'ready'; emit(); });
     wc.on('did-fail-load', (_e, code, description, _url, isMainFrame) => {
-      if (isMainFrame && code !== -3) { l.phase = 'error'; l.error = `网页未能打开：${description}（可点刷新重试）`; emit(); }
+      if (isMainFrame) fail(code, description);
     });
     wc.on('render-process-gone', () => { l.phase = 'error'; l.error = '网页进程已停止，点刷新即可恢复'; l.generating = false; emit(); });
     wc.on('page-title-updated', (_e, title) => {
+      if (!checkDestination(wc.getURL())) return;
       const t = cleanTitle(title, SITES[item.site]);
       if (t && t !== item.title) { item.title = t; persist(); emit(); }
     });
-    wc.on('did-navigate', (_e, url) => remember(item, url));
-    wc.on('did-navigate-in-page', (_e, url, isMainFrame) => { if (isMainFrame) remember(item, url); });
-    const load = () => wc.loadURL(item.url || siteUrl(item.site)).catch(e => { if (e.code !== 'ERR_ABORTED') { l.phase = 'error'; l.error = `网页未能打开：${e.message}`; emit(); } });
+    const navigated = url => {
+      if (!checkDestination(url)) return;
+      l.error = ''; l.phase = 'loading'; remember(item, url); emit();
+    };
+    wc.on('did-navigate', (_e, url) => navigated(url));
+    wc.on('did-navigate-in-page', (_e, url, isMainFrame) => { if (isMainFrame) { if (checkDestination(url)) remember(item, url); } });
+    // 初次加载与手动重试共用错误处理，避免 Promise 拒绝把友好提示覆盖成原始错误码。
+    l.load = url => wc.loadURL(url).catch(e => fail(e.code ?? e.errno, e.message));
+    const load = () => l.load(item.url || siteUrl(item.site));
     if (site.honest) void load();
     else void applyBrowserProfile(wc).finally(() => { if (!wc.isDestroyed()) void load(); });
     return l;
@@ -263,7 +293,9 @@ function createWebSessions({ dataDir, getWindow, WebContentsView, BrowserWindow,
     } catch (e) { logger.warn('[web-sessions] 浏览器描述未能完整设置，按默认打开：', e.message); }
   }
   function remember(item, url) {
-    try { const u = new URL(url); if (!['https:', 'http:'].includes(u.protocol)) return; if (LOGIN_PATH.test(u.pathname)) return; } catch { return; }
+    try { const u = new URL(url); if (!['https:', 'http:'].includes(u.protocol)) return;
+      if (LOGIN_PATH.test(u.pathname) || AUTH_HOST.test(u.hostname) || destinationError(item.site, siteUrl(item.site), url)) return;
+    } catch { return; }
     if (item.url !== url) { item.url = url; persist(); }
   }
 
@@ -357,13 +389,19 @@ function createWebSessions({ dataDir, getWindow, WebContentsView, BrowserWindow,
   function navigate(id, action) {
     const item = find(id), l = live.get(id);
     if (!item) throw new Error('这个网页会话已不存在');
-    if (action === 'external') { void shell.openExternal(item.url || siteUrl(item.site)); return state(); }
+    if (action === 'external') { void shell.openExternal(l?.phase === 'error' ? siteUrl(item.site) : item.url || siteUrl(item.site)); return state(); }
     if (!l) return state();
     const wc = l.view.webContents;
     if (action === 'back' && wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack();
     else if (action === 'forward' && wc.navigationHistory.canGoForward()) wc.navigationHistory.goForward();
-    else if (action === 'reload') { l.phase = 'loading'; l.error = ''; if (!wc.getURL()) void wc.loadURL(item.url || siteUrl(item.site)).catch(() => {}); else wc.reload(); }
-    else if (action === 'home') void wc.loadURL(siteUrl(item.site)).catch(() => {});
+    else if (action === 'reload') {
+      const target = item.url || siteUrl(item.site);
+      const wasError = l.phase === 'error';
+      l.phase = 'loading'; l.error = '';
+      if (wasError || !wc.getURL() || destinationError(item.site, siteUrl(item.site), wc.getURL())) void l.load(target);
+      else wc.reload();
+    }
+    else if (action === 'home') void l.load(siteUrl(item.site));
     emit();
     return state();
   }
@@ -381,7 +419,7 @@ function createWebSessions({ dataDir, getWindow, WebContentsView, BrowserWindow,
     await settle(l, wc);
     const target = fresh ? siteUrl(item.site) : url && sameOrigin(url, item.site) && url !== wc.getURL() ? url : '';
     if (target) {
-      await wc.loadURL(target).catch(e => { if (e.code !== 'ERR_ABORTED') throw new Error('网页未能打开：' + e.message); });
+      await l.load(target);
       await settle(l, wc);
     }
     return { wc, item };

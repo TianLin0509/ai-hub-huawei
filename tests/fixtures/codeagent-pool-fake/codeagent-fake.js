@@ -126,9 +126,8 @@ function answer(text) {
   fireHook('UserPromptSubmit', 'prompt', { prompt: text, prompt_id: uuid });
   let model = 'fixture-no-model';
   try { model = fs.readFileSync(answerModelFile, 'utf8').trim() || model; } catch { /* 没写就用占位 */ }
-  // CODEAGENT_POOL_FAKE_MENU_SELECT=1：照公司 CodeAgent 的优先级定这一问的模型——每次请求重读 --settings 文件，
-  // 文件里写了 model 就用它（优先级最高，压过菜单里刚选的）；没写才用菜单里选的；都没有用上面的文件。
-  if (menuSelect) model = launchSettingsModel() || sessionModel || model;
+  // CLI 1.2615.02.03 真机：--settings 只在启动时定模型，活着时 /model 的选择优先。
+  if (menuSelect) model = sessionModel || model;
   // Optional test-only runtime result, independent of menu/config precedence.
   // This simulates authoritative provider evidence, not terminal confirmation.
   try { model = fs.readFileSync(process.env.CODEAGENT_POOL_FAKE_RUNTIME_MODEL_FILE, 'utf8').trim() || model; } catch {}
@@ -143,7 +142,7 @@ function launchSettingsModel() {
   if (settingsAt < 0) return '';
   try { return String(JSON.parse(fs.readFileSync(args[settingsAt + 1], 'utf8')).model || '').trim(); } catch { return ''; }
 }
-let sessionModel = '', menuOpen = false, menuCursor = 0, pendingEsc = null, pendingKeys = '';
+let sessionModel = launchSettingsModel(), menuOpen = false, menuCursor = 0, pendingEsc = null, pendingKeys = '';
 function drawMenu() {
   const models = accountModels();
   out('\x1b[2J\x1b[H  Select model    ✕\r\n\r\n  Built-in\r\n');

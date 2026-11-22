@@ -94,18 +94,21 @@ test('首次账号提示旁的登录按钮可直接调用个人账号登录，�
     codeagentSetup: { current: { installed: true } }, codeagentPool: { personal, accounts: [] }, codeagentPoolError: '',
     codeagentPoolPick: '', codeagentManualPick: () => '', personalStateText: () => state.accountState(personal, { personal: true }).detail,
     autoCandidateCount: () => 0, codeagentUsesPool: () => false, codeagentSelectionUnavailable: () => false,
-    escapeHtml: text => text, submitting: false, ...state,
+    escapeHtml: text => text, submitting: false, ...state, fieldHint: require('../renderer/launch-field-hint'),
     ipcRenderer: { invoke: async channel => { calls.push(channel); return { ok: true }; } },
     require: () => require('../renderer/sticky-notice.js') };
   const fn = read('renderer/workspace-controller.js').match(/  function paintCodeagentAccount\(\) \{[\s\S]*?\n  }(?=\s*function paintCompanyAccount)/)[0];
   vm.runInNewContext(`${fn}\npaintCodeagentAccount();`, context);
   assert.match(note.textContent, /尚未登录/);
+  assert.equal(note.hidden, false, '需登录是要处理的提示，留在原位');
   assert.equal(note.children[0].textContent, '登录');
   await note.children[0].listeners.click();
   assert.deepEqual(calls, ['codeagent-pool:personal-login']);
   personal.present = true; personal.state = 'ready';
   vm.runInNewContext(`${fn}\npaintCodeagentAccount();`, context);
   assert.equal(note.children.length, 0);
+  assert.match(note.textContent, /个人账号：/);
+  assert.equal(note.hidden, true, '纯说明收进标签旁的 ⓘ，不占版面');
   personal.avoid = { source: 'manual' };
   vm.runInNewContext(`${fn}\npaintCodeagentAccount();`, context);
   assert.equal(note.children.length, 0);

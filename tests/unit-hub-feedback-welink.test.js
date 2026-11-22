@@ -26,10 +26,10 @@ function fixture(t, { welink, edition = 'member' } = {}) {
   });
   return { root, svc, intranetCalls: () => intranetCalls };
 }
-function fakeWelink({ cli = true, receipt = { code: 0 }, exitCode = 0 } = {}) {
-  const calls = { run: [], clip: [], open: 0 };
-  return { calls, w: { to: FW.MAINTAINER_WELINK, hasCli: () => cli, parseJson: W.parseJson,
-    run: async (args, opts) => { calls.run.push({ args, opts }); W.checkArgs(args, { sendUser: opts.sendUser }); return { code: exitCode, stdout: JSON.stringify(receipt), stderr: exitCode ? 'not logged in' : '' }; },
+function fakeWelink({ cli = true, receipt = { code: 0 }, exitCode = 0, uid = 'fixture-sender', authFails = false } = {}) {
+  const calls = { run: [], auth: [], clip: [], open: 0 };
+  return { calls, w: { to: 'fixture-maintainer', hasCli: () => cli, parseJson: W.parseJson,
+    run: async (args, opts) => { if (args[0] === 'auth') { calls.auth.push(args); if (authFails) throw Error('status unavailable'); return { code: 0, stdout: `UID: ${uid || ''}\nUser Token: VALID` }; } calls.run.push({ args, opts }); W.checkArgs(args, { sendUser: opts.sendUser }); return { code: exitCode, stdout: JSON.stringify(receipt), stderr: exitCode ? 'not logged in' : '' }; },
     writeClipboard: async text => { calls.clip.push(text); return { ok: true }; },
     openDesktop: async () => { calls.open++; return { ok: true, via: 'protocol' }; } } };
 }
@@ -37,7 +37,7 @@ function fakeWelink({ cli = true, receipt = { code: 0 }, exitCode = 0 } = {}) {
 test('member edition reports WeLink mode with the maintainer account and whether welink-cli exists', async t => {
   const { w } = fakeWelink({ cli: false });
   const f = fixture(t, { welink: w });
-  assert.deepEqual(await f.svc.welinkState(), { ok: true, enabled: true, to: 'l00807938', cli: false });
+  assert.deepEqual(await f.svc.welinkState(), { ok: true, enabled: true, to: 'fixture-maintainer', cli: false });
   const plain = fixture(t, {});
   assert.equal((await plain.svc.welinkState()).enabled, false, '没配 welink（主仓库）保持旧行为');
 });
@@ -49,8 +49,8 @@ test('one-click send DMs the maintainer through welink-cli with a redacted compa
   assert.equal(r.ok, true);
   assert.equal(fk.calls.run.length, 1);
   const { args, opts } = fk.calls.run[0];
-  assert.deepEqual(args.slice(0, 4), ['im', 'send-to-user', '--receiver', 'l00807938']);
-  assert.equal(opts.sendUser, 'l00807938', '白名单只放行这个收信账号');
+  assert.deepEqual(args.slice(0, 4), ['im', 'send-to-user', '--receiver', 'fixture-maintainer']);
+  assert.equal(opts.sendUser, 'fixture-maintainer', '白名单只放行这个收信账号');
   const text = args[5];
   assert.match(text, /会话卡片不显示回答/);
   assert.match(text, /5\.6\.70/);
@@ -94,7 +94,7 @@ test('copy-and-open writes the compact text to the clipboard and opens the WeLin
   const fk = fakeWelink({ cli: false });
   const f = fixture(t, { welink: fk.w });
   const r = await f.svc.copyOpenWelink({ description: '模型列表是空的' });
-  assert.equal(r.copied, true); assert.equal(r.opened, true); assert.equal(r.to, 'l00807938');
+  assert.equal(r.copied, true); assert.equal(r.opened, true); assert.equal(r.to, 'fixture-maintainer');
   assert.equal(fk.calls.clip.length, 1); assert.match(fk.calls.clip[0], /模型列表是空的/);
   assert.equal(fk.calls.open, 1);
   assert.equal(fk.calls.run.length, 0, '不调用 welink-cli');
@@ -137,4 +137,39 @@ test('the sign/nonce/timestamp error (WeLink client closed or logged out) become
   assert.equal(r.clientDown, true);
   assert.match(r.reason, /WeLink 没打开或没登录/);
   assert.equal(FW.friendlySendError('账号不存在').clientDown, false);
+});
+
+
+test('self-send is stopped before sending and saved with a readable reason', async t => {
+  const fk = fakeWelink({ uid: 'FIXTURE-MAINTAINER' });
+  const f = fixture(t, { welink: fk.w });
+  const r = await f.svc.sendWelink({ description: 'self-send probe' });
+  assert.equal(r.ok, false);
+  assert.equal(r.selfSend, true);
+  assert.equal(r.reason, FW.SELF_SEND_REASON);
+  assert.equal(fk.calls.auth.length, 1);
+  assert.equal(fk.calls.run.length, 0, 'self-send probe');
+  assert.match(r.text, /self-send probe/);
+  assert.ok(fs.existsSync(r.savedTo));
+  assert.equal(f.svc.mine().items[0].reason, FW.SELF_SEND_REASON);
+});
+
+test('server self-send rejection is mapped even when status does not identify the account', async t => {
+  for (const authFails of [false, true]) {
+    const fk = fakeWelink({ uid: null, authFails, receipt: { code: 400, message: 'illegal param. not allow to send messages to self' } });
+    const f = fixture(t, { welink: fk.w });
+    const r = await f.svc.sendWelink({ description: 'send probe' });
+    assert.equal(r.selfSend, true);
+    assert.equal(r.reason, FW.SELF_SEND_REASON);
+    assert.doesNotMatch(r.reason, /illegal param/);
+    assert.equal(f.svc.mine().items[0].reason, FW.SELF_SEND_REASON);
+  }
+});
+
+test('unknown or unavailable account status preserves normal sending', async t => {
+  for (const opts of [{ uid: null }, { authFails: true }]) {
+    const fk = fakeWelink(opts);
+    assert.equal((await fixture(t, { welink: fk.w }).svc.sendWelink({ description: 'send probe' })).ok, true);
+    assert.equal(fk.calls.run.length, 1);
+  }
 });

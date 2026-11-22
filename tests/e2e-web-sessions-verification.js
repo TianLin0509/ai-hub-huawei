@@ -22,7 +22,15 @@ async function main() {
   let mode = 'challenge', hub, ui, page;
   const report = { providerNetworkTested: false, checks: [], root };
   const server = http.createServer((req, res) => {
+    if (mode === 'network-error') { req.socket.destroy(); return; }
+    if (mode === 'blocked' && req.headers.host.startsWith('127.0.0.1:')) {
+      res.writeHead(302, { Location: `http://localhost:${server.address().port}/proxycontrolwarn/httpwarning_2902.html` });
+      res.end(); return;
+    }
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    if (req.url.startsWith('/proxycontrolwarn/')) {
+      res.end('<!doctype html><meta charset="utf-8"><title>HIS Proxy Notification</title><h1>公司网络风险提示</h1>'); return;
+    }
     if (req.url.startsWith('/frame')) {
       res.setHeader('Set-Cookie', 'frame_cookie=kept; Max-Age=3600; Path=/; SameSite=None; Secure');
       res.end('<!doctype html><title>Verification iframe</title><body>Verification frame<script>localStorage.setItem("frame_storage","kept");parent.postMessage({fixture:true,cookie:document.cookie,storage:localStorage.getItem("frame_storage"),webdriver:navigator.webdriver},"*");</script>'); return;
@@ -102,6 +110,33 @@ async function main() {
     report.checks.push('30-second inline banner and one-click system-browser navigation, 1440px screenshot');
     mode = 'ready'; await page.send('Page.reload');
     await until(() => ui.eval(`document.querySelector('.ws-status').hidden`), 'warning clears after verification');
+    const layout = async () => {
+      const result = await ui.eval(`(()=>{const p=document.querySelector('#web-session-panel'),s=p.querySelector('.ws-status'),r=s.getBoundingClientRect();return {overflow:p.scrollHeight>p.clientHeight,bodyOverflow:document.documentElement.scrollHeight>innerHeight,bottom:r.bottom,height:r.height,retry:!!s.querySelector('[data-ws-nav="reload"]'),external:!!s.querySelector('[data-ws-nav="external"]'),text:s.innerText};})()`);
+      assert.equal(result.overflow, false); assert.equal(result.bodyOverflow, false);
+      assert.equal(result.retry, true); assert.equal(result.external, true);
+      assert.ok(result.height < 65, JSON.stringify(result));
+      await until(async () => (await invoke('web-sessions:list')).view.bounds.y >= result.bottom - 1, 'native view below error banner');
+      return result;
+    };
+    mode = 'blocked'; await click('.ws-tools [data-ws-nav="reload"]');
+    await until(() => ui.eval(`document.querySelector('.ws-status').innerText.includes('公司网络拦截')`), 'HIS risk-page notice');
+    await layout(); await shot('blocked-1440');
+    const safeUrl = (await invoke('web-sessions:list')).items[0].url;
+    assert.ok(safeUrl.startsWith(fixture)); assert.ok(!safeUrl.includes('proxycontrolwarn'));
+    await click('.ws-status [data-ws-nav="external"]');
+    assert.equal((await invoke('verification-test:external')).at(-1), fixture + '?site=deepseek');
+    mode = 'ready'; await click('.ws-status [data-ws-nav="reload"]');
+    await until(() => ui.eval(`document.querySelector('.ws-status').hidden`), 'retry returns to target after HIS redirect');
+    report.checks.push('HIS cross-origin redirect: concise notice, retry and browser buttons, safe target preserved, no scrolling at 1440×900');
+
+    mode = 'network-error'; await click('.ws-tools [data-ws-nav="reload"]');
+    await until(() => ui.eval(`document.querySelector('.ws-status').classList.contains('bad')`), 'real local net failure');
+    const failure = await layout();
+    assert.match(failure.text, /无法连接.*重试/); assert.doesNotMatch(failure.text, /ERR_/);
+    await shot('network-error-1440');
+    mode = 'ready'; await click('.ws-status [data-ws-nav="reload"]');
+    await until(() => ui.eval(`document.querySelector('.ws-status').hidden`), 'retry recovers from local net error');
+    report.checks.push('actual local net failure: friendly notice, buttons and successful mouse retry; banner clears, no scrolling at 1440×900');
     const items = (await invoke('web-sessions:list')).items;
     const id = items[0].id;
     await invoke('verification-test:flush');

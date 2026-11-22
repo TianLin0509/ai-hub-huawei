@@ -74,6 +74,7 @@ function toMaskedConfig(config) {
     defaultModels: config.defaultModels || {},
     launchDefaults: config.launchDefaults || {},
     codeagentRunMode: config.codeagentRunMode || 'pty',
+    cardRunModes: config.cardRunModes || {},
     notificationEnabled: notifications.enabled,
     notificationIncludePreview: notifications.includePreview,
     notificationNotifyGroupChats: notifications.notifyGroupChats,
@@ -828,6 +829,18 @@ function registerConfigIpc(ipcMain, deps) {
   });
 
   // 启动中心的 CodeAgent「运行方式」：改了就记住，之后新建的 CodeAgent 会话默认用它，已有会话不变。
+  ipcMain.handle('session:set-card-run-mode', (_e, payload = {}) => {
+    try {
+      const cardMode = require('../../core/card-run-mode');
+      if (!cardMode.supportsCardKind(payload.kind)) throw new Error('这个工具没有卡片运行方式');
+      saveConfig(cardMode.withCardModeInJson(readConfigJsonForUpdate(), payload.kind, payload.mode));
+      clearSessionManagerConfigCache();
+      return { ok: true, mode: cardMode.normalizeCardMode(payload.mode) };
+    } catch (error) {
+      return { ok: false, error: error && error.message ? error.message : String(error) };
+    }
+  });
+
   ipcMain.handle('session:set-codeagent-run-mode', (_e, payload = {}) => {
     try {
       const runMode = require('../../core/codeagent-run-mode');

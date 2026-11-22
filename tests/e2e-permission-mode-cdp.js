@@ -256,7 +256,8 @@ async function main() {
       await shot(`09-harness-${kind}`);
       if (layout.visible) {
         assert.ok(layout.fieldWidth >= layout.gridWidth - 2, `${kind}: 权限模式独占整行 ${layout.fieldWidth}/${layout.gridWidth}`);
-        assert.ok(layout.noteWidth >= layout.gridWidth - 2, `${kind}: 说明独占整行 ${layout.noteWidth}/${layout.gridWidth}`);
+        // 说明进了「权限模式」旁的 ⓘ（2026-11-22）；下面那行只在需要「恢复默认」时出现，出现时仍独占整行。
+        assert.ok(layout.noteWidth === 0 || layout.noteWidth >= layout.gridWidth - 2, `${kind}: 说明独占整行 ${layout.noteWidth}/${layout.gridWidth}`);
         assert.ok(layout.noteHeight <= 60, `${kind}: 说明没有被挤成竖条（高 ${layout.noteHeight}px）`);
       }
     }

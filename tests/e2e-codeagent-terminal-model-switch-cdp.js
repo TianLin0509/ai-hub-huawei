@@ -1,9 +1,7 @@
 'use strict';
 // 2026-11-20 反馈「CodeAgent 我都切了 GLM5.3，还是 DS4.1」的隔离 Hub 复现与验收。
-// 假 CodeAgent（tests/fixtures/codeagent-pool-fake，CODEAGENT_POOL_FAKE_MENU_SELECT=1）照公司 CLI 的优先级回答：
-// 每次请求重读 --settings 文件，文件里有 model 就用它，没有才用 /model 菜单里选的。
-// Menu-only output leaves the pin unchanged. A later transcript-confirmed GLM
-// answer (injected by the simulated provider) authorizes the pin/settings update.
+// 按 CLI 1.2615.02.03 真机优先级：--settings 在启动时生效，进程活着时 /model 优先。
+// GLM 创建 → 终端切 DS → 连续两轮 DS → 休眠唤醒后继续 DS；判据是恢复后的实际回答。
 // 不连模型。用法：node tests/e2e-codeagent-terminal-model-switch-cdp.js
 const assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), net = require('node:net');
@@ -19,10 +17,9 @@ const freePort = () => new Promise(resolve => { const s = net.createServer(); s.
 async function main() {
   const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-terminal-model-'));
   const DATA = path.join(ROOT, 'data'), WORK = path.join(ROOT, 'work'), PROJECT = path.join(WORK, 'terminal-model'), PERSONAL = path.join(ROOT, 'personal'), ANSWER = path.join(ROOT, 'answer-model.txt');
-  const runtimeModel = path.join(ROOT, 'runtime-model.txt');
   for (const dir of [DATA, WORK, PROJECT, PERSONAL, OUT]) fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(PERSONAL, '.credentials.json'), JSON.stringify({ idaasOAuth: { xAuthToken: 'local-fixture-only', accountId: 'a00000001', expiresAt: Date.now() + 72 * 3600e3 } }));
-  fs.writeFileSync(path.join(PERSONAL, 'settings.json'), JSON.stringify({ model: DS }));
+  fs.writeFileSync(path.join(PERSONAL, 'settings.json'), JSON.stringify({ model: GLM }));
   fs.writeFileSync(ANSWER, 'fixture-fallback');
   const command = path.join(ROOT, 'codeagent.cmd'), router = path.join(ROOT, 'codeagent-router.cjs');
   fs.writeFileSync(router, `require(${JSON.stringify(path.join(REPO, 'tests/fixtures/codeagent-pool-fake/codeagent-fake.js'))});`);
@@ -78,8 +75,8 @@ async function main() {
   try {
     hub = await launchIsolatedHub({ entryPath: REPO, cwd: REPO, dataDir: DATA, port: await freePort(), label: 'terminal-model-f1', windowMode: 'hidden', extraEnv: {
       AI_HUB_WORKSPACE_ROOT: WORK, AI_HUB_CODEAGENT_COMMAND: command, AI_HUB_CODEAGENT_CONFIG_DIR: PERSONAL, AI_HUB_CODEAGENT_SERVE: '1',
-      CODEAGENT_POOL_FAKE_MODELS: [DS, GLM].join(','), CODEAGENT_POOL_FAKE_HELP_SETTINGS: '1', CODEAGENT_POOL_FAKE_ANSWER_MODEL_FILE: ANSWER,
-      CODEAGENT_POOL_FAKE_RUNTIME_MODEL_FILE: runtimeModel,
+      CODEAGENT_POOL_FAKE_MODELS: [GLM, DS].join(','), CODEAGENT_POOL_FAKE_HELP_SETTINGS: '1', CODEAGENT_POOL_FAKE_ANSWER_MODEL_FILE: ANSWER,
+      CODEAGENT_POOL_FAKE_LOG: path.join(OUT, 'fake-starts.log'),
       CODEAGENT_POOL_FAKE_MENU_SELECT: '1', CODEAGENT_POOL_FAKE_KEYLOG: path.join(OUT, 'fake-keys.log'),
       AI_HUB_CODEAGENT_POOL_SCAN_ROOT: path.join(ROOT, 'scan'), CLAUDE_HUB_CODEAGENT_STARTUP_PROBE: '0',
       CLAUDE_CONFIG_DIR: path.join(ROOT, 'claude'), CODEX_HOME: path.join(ROOT, 'codex'), HUB_SESSION_SEARCH_DISABLE_NATIVE: '1',
@@ -92,40 +89,55 @@ async function main() {
     for (let i = 0; i < 200; i++) { try { if ((JSON.parse(fs.readFileSync(personalFile, 'utf8')).models || []).length === 2) break; } catch {} await sleep(150); }
     check('serve catalog read (DeepSeek + GLM)', JSON.parse(fs.readFileSync(personalFile, 'utf8')).models.length === 2);
 
-    const created = await invoke('create-session', { kind: 'codeagent', opts: { cwd: PROJECT, title: '终端换模型验收', codeagentAccount: 'personal', model: DS, codeagentModelPick: true } });
+    const created = await invoke('create-session', { kind: 'codeagent', opts: { cwd: PROJECT, title: '终端换模型验收', codeagentAccount: 'personal', model: GLM, codeagentModelPick: true } });
     assert(created?.id, JSON.stringify(created));
     const id = created.id;
     await c.eval(`selectSession(${JSON.stringify(id)})`);
     const launchFile = path.join(DATA, 'codeagent-launch', `${id.replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
     await until(`!!document.querySelector('.floating-input-bar[data-session-id="${id}"] .floating-input-box')`, 'input box');
     for (let i = 0; i < 100 && !fs.existsSync(launchFile); i++) await sleep(100);
-    check('the session was launched with a --settings file pinning DeepSeek', JSON.parse(fs.readFileSync(launchFile, 'utf8')).model === DS);
+    check('创建时 --settings 指定 GLM', JSON.parse(fs.readFileSync(launchFile, 'utf8')).model === GLM);
     await sleep(1500);
     await send(id, '第一问');
-    check('first answer uses DeepSeek', (await waitAnswer(1, 'first answer')) === DS);
+    check('第一轮实际使用 GLM', (await waitAnswer(1, 'first answer')) === GLM);
 
-    // 用户在终端里自己 /model，选第 2 项 GLM（逐键敲，和人手一样）
+    // 用户在终端里自己 /model，选第 2 项 DS（逐键敲，和人手一样）
     await type(id, '/model'); await sleep(200); await type(id, '\r'); await sleep(600);
     await type(id, '\x1b[B'); await sleep(300); await type(id, '\r'); await sleep(1500);
     report.launchAfterSwitch = fs.readFileSync(launchFile, 'utf8');
-    check('terminal output alone cannot rewrite the launch pin', JSON.parse(report.launchAfterSwitch).model === DS);
+    check('只有菜单回显时还不改启动模型', JSON.parse(report.launchAfterSwitch).model === GLM);
     await shot('01-after-terminal-switch');
     await send(id, '第二问');
     const second = await waitAnswer(2, 'second answer');
     report.secondAnswer = second;
-    check(`the display follows the actual pinned DeepSeek answer (got ${second})`, second === DS);
+    check(`进程活着时菜单选择优先，第二轮实际为 DS（${second}）`, second === DS);
     await until(`document.querySelector('.floating-input-bar[data-session-id="${id}"] .composer-actual-model')?.textContent.includes(${JSON.stringify(DS)})`, 'actual model shows DeepSeek');
-    // Simulate a CLI/provider that actually switched: only its next assistant
-    // record can authorize the Hub to replace the launch pin.
-    fs.writeFileSync(runtimeModel, GLM);
     await send(id, '第三问');
-    check('a transcript-confirmed GLM answer changes the model', (await waitAnswer(3, 'GLM record')) === GLM);
-    await until(`document.querySelector('.floating-input-bar[data-session-id="${id}"] .composer-model')?.textContent.includes(${JSON.stringify(GLM)})`, 'chip shows GLM', 15000);
-    check('the model chip under the input box shows GLM', true);
-    check('resume keeps GLM', (await c.eval(`sessions.get(${JSON.stringify(id)}).fixedModel`)) === GLM);
-    check('the launch settings now follow transcript-confirmed GLM', JSON.parse(fs.readFileSync(launchFile, 'utf8')).model === GLM);
+    check('第三轮继续实际使用 DS', (await waitAnswer(3, 'DS record')) === DS);
+    await until(`document.querySelector('.floating-input-bar[data-session-id="${id}"] .composer-model')?.textContent.includes(${JSON.stringify(DS)})`, 'chip shows DS', 15000);
+    check('输入框模型显示已跟随 DS', true);
+    check('启动设置已跟随记录中的 DS', JSON.parse(fs.readFileSync(launchFile, 'utf8')).model === DS);
     await until(`document.querySelector('.floating-input-bar[data-session-id="${id}"] .composer-actual-model')?.textContent.includes('终端里已切到')`, 'inline actual model notice');
-    await shot('02-second-answer-glm');
+    await shot('02-answer-ds');
+    const readStarts = () => fs.readFileSync(path.join(OUT, 'fake-starts.log'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line));
+    const native = readStarts().find(row => row.hubSession === id && row.args)?.sessionId;
+    check('已取得实际 CLI 的原生会话身份', !!native);
+    check('休眠成功', (await invoke('suspend-session', { sessionId: id }))?.ok === true);
+    await until(`sessions.get(${JSON.stringify(id)})?.status === 'dormant'`, 'session dormant');
+    await click(`.session-item[data-session-id="${id}"]`);
+    await until(`sessions.get(${JSON.stringify(id)})?.status === 'idle'`, 'session awake');
+    let resumed;
+    for (let i = 0; i < 150; i++) {
+      resumed = readStarts().find(row => row.hubSession === id && row.resumed && row.sessionId === native && row.args?.includes('--settings'));
+      if (resumed) break;
+      await sleep(200);
+    }
+    check('唤醒时确实用 --resume 恢复原会话', !!resumed);
+    check('唤醒的 --settings 仍指定 DS', JSON.parse(fs.readFileSync(launchFile, 'utf8')).model === DS);
+    await send(id, '唤醒后第四问');
+    check('唤醒后实际回答仍为新模型 DS', (await waitAnswer(4, 'wake answer')) === DS);
+    check('唤醒后 Hub 显示仍为 DS', (await c.eval(`sessions.get(${JSON.stringify(id)}).fixedModel`)) === DS);
+    await shot('03-awake-ds');
     report.passed = true;
   } catch (error) {
     report.error = error.stack;

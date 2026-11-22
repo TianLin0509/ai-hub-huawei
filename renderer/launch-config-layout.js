@@ -51,7 +51,7 @@ function createLaunchConfigLayout({ document, ipcRenderer, escapeHtml: esc }) {
     : `<span class="lcc-pill ${level(pct)}"><i style="width:${Math.max(0, Math.min(100, pct))}%"></i><span>${name} 余 ${pct}%</span></span>`;
 
   function paintAccounts(ctx) {
-    const { kind, showAccount, accounts = [], selectedId, disabled, ranking } = ctx;
+    const { kind, showAccount, accounts = [], selectedId, disabled, ranking, hint = '' } = ctx;
     const on = !!showAccount && accounts.length > 0;
     body.classList.toggle('has-accounts', on);
     left.hidden = !on;
@@ -59,7 +59,10 @@ function createLaunchConfigLayout({ document, ipcRenderer, escapeHtml: esc }) {
     if (!on) { left.innerHTML = ''; delete left.dataset.html; return; }
     const provider = QUOTA_PROVIDER[kind];
     const rows = new Map((ranking?.rows || []).map(r => [r.id, r]));
-    const html = `<div class="lcc-h">用量账号</div>` + accounts.map(a => {
+    // 账号说明（推荐理由、新建 / 已有会话用哪个号）放标题旁的 ⓘ，悬停看（launch-field-hint.js 同一规则）。
+    const hintIcon = hint ? `<span class="field-hint-icon" tabindex="0" role="img" data-tip-side="top" data-hub-tip-focus="1" data-tone="info" title="${esc(hint)}" aria-label="${esc('说明：' + hint)}"></span>` : '';
+    const head = `<div class="lcc-h">用量账号</div>`;
+    const html = (hintIcon ? head.replace('</div>', hintIcon + '</div>') : head) + accounts.map(a => {
       const r = rows.get(a.id), q = quota[provider]?.[a.id];
       const p5 = r ? r.spare5h : q ? q.remain5h : null, p7 = r ? r.spare7d : q ? q.remain7d : null;
       const sessions = r ? r.running + r.idle : null;

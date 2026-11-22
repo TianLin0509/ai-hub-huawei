@@ -27,3 +27,5 @@
 .hub-tip[data-side='top']::before { bottom: -5px; left: calc(var(--hub-tip-caret, 20px) - 4.5px); border-left: 0; border-top: 0; }
 .hub-tip[data-side='right']::before { left: -5px; top: calc(var(--hub-tip-caret, 16px) - 4.5px); border-right: 0; border-top: 0; }
 .hub-tip[data-side='left']::before { right: -5px; top: calc(var(--hub-tip-caret, 16px) - 4.5px); border-left: 0; border-bottom: 0; }
+/* 启动中心字段说明（launch-field-hint.js 的 ⓘ 图标）：窄一点、行距松一点，读起来像一段说明而不是标签。 */
+.hub-tip.is-hint { max-width: min(320px, calc(100vw - 16px)); padding: 8px 11px; font-size: 12px; line-height: 1.6; color: var(--fg-default); }

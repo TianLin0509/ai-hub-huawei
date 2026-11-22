@@ -15,7 +15,10 @@
 /* 切页签时弹窗高度不跳：主视图在时固定一个高度，保存 / 取消贴底。 */
 #config-modal .config-modal-content:has(#config-main-view:not(.hidden)) { height: min(700px, 90vh); }
 #config-modal .config-modal-content:has(#config-main-view:not(.hidden)) .config-modal-body { display: flex; flex-direction: column; }
-#config-modal .config-modal-content:has(#config-main-view:not(.hidden)) #config-main-view { flex: 1 0 auto; }
+#config-modal .config-modal-content:has(#config-main-view:not(.hidden)) #config-main-view { flex: 1 1 auto; min-height: 0; overflow: auto; }
+#config-modal .config-modal-actions, #config-modal .config-save-msg { flex-shrink: 0; }
+#config-main-view [data-hint-level="info"][hidden] { display: none; }
+#cfg-team-auto-approve-field .field-hint-icon { display: inline-flex; }
 
 /* ── 主页：首次使用（「连接你的 AI」在页面上）时收紧，「保存并继续」留在首屏 ── */
 #terminal-panel .home-welcome:has(#community-setup:not([hidden])) .home-welcome-head { padding-top: 14px; padding-bottom: 6px; }
@@ -48,6 +51,16 @@
 .cr-why { display: inline; margin-left: 8px; color: var(--hw-text-3, var(--fg-muted)); font-size: var(--hw-fs-12, 12px); line-height: 1.5; }
 .cr-why[hidden] { display: none; }
 
+/* 会议室设置分组切换，控件保留在 DOM 中，切换时不丢草稿。 */
+.cr-settings-tabs { flex: none; align-self: flex-start; margin: 0; }
+.cr-content:has(.cr-settings-tabs) { gap: 14px; }
+/* 首次使用的组件提示也占空间，计划的两组表单并排放置。 */
+.cr-content:has(.cr-plan-sum) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-content: start; gap: 16px 24px; }
+.cr-content:has(.cr-plan-sum) .cr-plan-sum { grid-column: 1 / -1; margin-bottom: 0; }
+.cr-content:has(.cr-plan-sum) .cr-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.cr-content:has(.cr-plan-sum) .cr-area { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.cr-content:has(.cr-plan-sum) .cr-area-l { grid-column: 1 / -1; }
+
 /* ── 启动中心：次要选项收进「更多选项」（renderer/launch-more-options.js），工作目录卡压成两行 ── */
 #new-session-config-section.lc-more-collapsed :is(#new-session-company-account-field, #new-session-mcp-field, #new-session-fast-field, #new-session-codex-tier-field, #new-session-permission-field, #new-session-permission-note, #new-session-company-account-note) { display: none !important; }
 .lc-more-toggle { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 34px; margin: 10px 0 0; padding: 0 12px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--surface-card, var(--surface-raised)); color: var(--fg-default); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
@@ -72,9 +85,90 @@
 .new-session-menu .session-model-card { min-height: 0; gap: 4px; padding: 9px 12px 8px; }
 .new-session-menu .gw-inline { margin-top: 6px; padding: 10px 14px; }
 
+/* ── 启动中心字段说明（2026-11-22：说明不喧宾夺主，renderer/launch-field-hint.js）──
+   纯说明收进标签后的 ⓘ，悬停 / 聚焦时在上方弹白卡；要用户处理的提示留在原位，只一行小字、不再是整块米色底。 */
+.field-hint-icon { display: inline-flex; align-items: center; justify-content: center; flex: none; box-sizing: border-box; width: 13px; height: 13px; margin-left: 4px; vertical-align: -2px; border: 1px solid currentColor; border-radius: 50%; color: var(--fg-muted); opacity: .55; font: 600 9px/1 Georgia, "Times New Roman", serif; font-style: italic; cursor: help; transition: opacity .12s ease, color .12s ease; }
+.field-hint-icon::before { content: 'i'; }
+.field-hint-icon[hidden] { display: none; }
+.field-hint-icon:hover, .field-hint-icon:focus-visible { opacity: 1; color: var(--brand-text, #3478f6); outline: none; }
+.field-hint-icon:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--brand, #3478f6) 35%, transparent); }
+.field-hint-icon[data-tone="risk"] { color: #b45309; opacity: .8; }
+:root[data-theme='dark'] .field-hint-icon[data-tone="risk"] { color: #f5b35a; }
+.session-tuning-field > span:has(> .field-hint-icon:not([hidden])) { display: inline-flex; align-items: center; }
+.new-session-menu .session-tuning-note[data-hint-level],
+.new-session-menu .session-model-cards-note,
+.new-session-menu #new-session-tuning-warning { margin: 6px 0 0; padding: 0; border-radius: 0; background: transparent; color: var(--fg-muted); font-size: 11px; line-height: 1.5; }
+.new-session-menu :is(.session-tuning-note, .session-model-cards-note)[data-hint-level="warn"],
+.new-session-menu .session-model-cards-note:not([data-state="error"]),
+.new-session-menu #new-session-tuning-warning,
+.new-session-menu #new-session-account-note[data-account-risk="1"] { color: #b45309; }
+.new-session-menu :is(.session-tuning-note, .session-model-cards-note):is([data-hint-level="error"], [data-state="error"]) { color: #c2410c; }
+:root[data-theme='dark'] .new-session-menu :is(.session-tuning-note, .session-model-cards-note, #new-session-tuning-warning):is([data-hint-level="warn"], [data-state="needs"], [data-state="busy"], #new-session-tuning-warning) { color: #f5b35a; }
+.new-session-menu .session-tuning-note[data-hint-level] button { margin-left: 8px; min-height: 22px; padding: 1px 10px; border: 1px solid var(--border-mid); border-radius: 6px; background: var(--surface-card); color: var(--fg-strong); font: inherit; font-size: 11px; vertical-align: baseline; cursor: pointer; }
+.new-session-menu .session-tuning-note[data-hint-level] button:hover:not(:disabled) { border-color: var(--brand, #3478f6); color: var(--brand-text, #3478f6); }
+/* 权限模式：说明进了 ⓘ，下面只在需要时留一个「恢复默认」小按钮。 */
+.new-session-menu .session-config-section .session-permission-note { margin: -4px 0 0; }
+.new-session-menu .session-permission-note > #new-session-permission-desc { display: none; }
+/* pi 状态行：一行短句 + ⓘ，按钮在右边。 */
+.new-session-menu #new-session-pi-note:not([hidden]) { padding: 4px 2px; background: transparent; font-size: 12px; }
+#new-session-pi-note-text { display: inline-flex; align-items: center; min-width: 0; }
+
 /* ── 矮屏（2026-11-22）：公司黄区笔记本 2560×1600、240% 缩放，逻辑分辨率约 1024×640。
    设置弹窗用满屏高、收紧间距，五个页签仍各一屏（tests/e2e-one-screen-cdp.js 同时测 1440×900 与 1024×640）。 ── */
 @media (max-height: 760px) {
+  .company-rooms-page .cr-top { min-height: 44px; padding-bottom: 6px; gap: 6px; }
+  .company-rooms-page .cr-sub { display: none; }
+  .company-rooms-page .cr-seg button { padding: 0 9px; }
+  .cr-content { padding: 12px 20px; gap: 12px; }
+  .cr-banner { margin: 8px 20px 0; padding: 8px 12px; gap: 10px; }
+  .cr-content .cr-h { margin-bottom: 6px; }
+  .cr-content .cr-hint { margin-top: 4px; }
+  .cr-content .cr-days-field { margin-top: 8px; }
+  .cr-content .cr-empty { padding: 6px 0; }
+  .cr-content .cr-opts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .cr-content .cr-opt { padding: 10px; gap: 6px; }
+  .cr-content .cr-opt p { font-size: 12px; }
+  .cr-content .cr-form-post { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) auto; }
+  .cr-content:has(.cr-form-post) { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); align-content: start; }
+  .cr-content:has(.cr-form-post) > section:first-child { grid-column: 1 / -1; }
+  .cr-banner { flex-wrap: wrap; gap: 4px 12px; padding: 6px 10px; font-size: 12px; }
+  .cr-banner > span { flex: 1 1 65%; }
+  .cr-banner > :last-child { flex: 1 1 100%; }
+  .cr-content .cr-input { height: 32px; }
+  .cr-content .cr-form { gap: 8px; }
+  .cr-content .cr-days { gap: 5px; }
+  .cr-content .cr-dy span { width: 30px; height: 30px; font-size: 13px; }
+  .cr-content .cr-plan-sum { padding: 6px 10px; font-size: 12px; line-height: 1.4; }
+  .cr-sheet:has(.cr-plan-sum) { grid-template-columns: minmax(0, 1fr) 220px; }
+  .cr-content:has(.cr-plan-sum) { padding: 8px 12px; gap: 8px 16px; }
+  .cr-content:has([data-cr-slot="first-use"]) { padding: 6px 12px; gap: 4px; }
+  .cr-content .cr-count { flex-direction: row; padding: 8px 12px; gap: 14px; }
+  .cr-content:has([data-cr-slot="first-use"]) .cr-empty { padding: 2px 0; }
+  .cr-content .cr-big { font-size: 30px; }
+  .cr-content .cr-facts > div { padding: 0 8px; }
+  .cr-content .cr-facts b { font-size: 13px; }
+  .cr-content .cr-journey { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+  .cr-content .cr-jy { padding: 6px; gap: 2px; }
+  .cr-content .cr-jy-ic { display: none; }
+  .cr-content .cr-jy b, .cr-content .cr-jy p { font-size: 12px; }
+  .cr-side .cr-side-b { padding: 6px 12px; }
+  .cr-side .cr-side-p, .cr-side .cr-kv, .cr-side .cr-sched { font-size: 12px; line-height: 1.4; }
+  .cr-side .cr-sched { margin-top: 6px; padding: 8px; }
+  .cr-side .cr-sched > p { margin-bottom: 6px; }
+  .cr-side .cr-sched-row { gap: 4px; margin-bottom: 6px; }
+  .cr-side .cr-sched-row label { gap: 3px; }
+  .cr-side .cr-sched-row .cr-input { height: 28px; padding: 0 4px; font-size: 12px; }
+  .cr-side .cr-sched-row input[type="number"] { width: 40px; }
+  .cr-side .cr-sched-row input[type="time"] { width: 84px; }
+  .cr-side .cr-acts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; margin-top: 6px; }
+  .cr-side .cr-acts .cr-btn { height: 30px; padding: 0 5px; font-size: 12px; }
+  .cr-side .cr-h-sm { min-height: 24px; margin: 8px 0 4px; }
+  .cr-side .cr-kv { row-gap: 4px; }
+  .cr-content:has(.cr-settings-tabs) { padding: 8px 12px; gap: 8px; }
+  .cr-content:has(.cr-settings-tabs) .cr-set { min-height: 42px; padding: 3px 0; }
+  .cr-content:has(.cr-settings-tabs) .cr-set b { font-size: 13px; line-height: 1.3; }
+  .cr-content:has(.cr-settings-tabs) .cr-set p { font-size: 12px; line-height: 1.3; }
+  .cr-content:has(.cr-settings-tabs) .cr-h { min-height: 24px; margin-bottom: 4px; }
   #config-modal .config-modal-content:has(#config-main-view:not(.hidden)) { height: calc(100vh - 16px); max-height: calc(100vh - 16px); }
   #config-modal .config-modal-header { padding-top: 12px; }
   #config-modal .config-modal-body { padding-top: 8px; padding-bottom: 12px; }

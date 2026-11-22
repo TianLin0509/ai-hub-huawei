@@ -39,6 +39,7 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
   // welink（2026-11-21）：{ to, hasCli(), run(args, opts), parseJson, openDesktop(), writeClipboard(text) }。
   // 给了就在公司内（成员版恒是；公开版连得上内源时）改走 WeLink：一键发送 / 复制并打开 WeLink，内网收件机入口隐藏。
   // edition：'member' 只走内网；'public' 按内源是否连得上分流；不给（主仓库与旧单测）= 只走阿里云，与以前一样。
+  let selfUid; // 本机 WeLink 账号，查到一次就记住（判断维护人自己点反馈）
   // receiverAddress：{ resolve() → { urls, openxReachable } }；intranetFetch：直连内网用的 fetch（不走系统代理）。
   const fetchFn = fetchImpl || ((...args) => require('electron').net.fetch(...args));
   const dataDir = path.dirname(logsDir);
@@ -504,6 +505,23 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
       recordHistory(hkey, { ...hbase, status: 'failed', reason: '本机没装 welink-cli' });
       return { ok: false, noCli: true, reason: '本机没装 welink-cli，没法自动发送', text, savedTo };
     }
+    const selfSend = () => {
+      recordHistory(hkey, { ...hbase, status: 'failed', reason: W.SELF_SEND_REASON });
+      return { ok: false, selfSend: true, reason: W.SELF_SEND_REASON, text, savedTo };
+    };
+    // 复用 CLI 的登录状态解析；查不到账号时仍尝试发送，由服务端回执兜底。
+    // 总预算 3 秒且查到一次就记住：CLI 排队或限流时不能把普通用户的发送拖慢（Codex 审：最坏可多等 90 秒）。
+    try {
+      if (selfUid === undefined) {
+        const status = await Promise.race([
+          welink.run(['auth', 'status'], { timeoutMs: 3000 }),
+          new Promise(resolve => setTimeout(() => resolve(null), 3000).unref?.()),
+        ]);
+        const { uid } = status && status.code === 0 ? require('../core/company-assistant/welink').loginState(status.stdout) : {};
+        if (uid) selfUid = uid.trim().toLowerCase();
+      }
+      if (selfUid && selfUid === String(welink.to).trim().toLowerCase()) return selfSend();
+    } catch { /* 状态探测失败不影响普通用户发送 */ }
     const parts = W.chunks(text);
     for (let i = 0; i < parts.length; i++) {
       const body = (parts.length > 1 ? `（${i + 1}/${parts.length}）` : '') + parts[i];
@@ -515,6 +533,7 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
       if (reason) {
         logEvent({ via: 'welink', error: reason, part: i + 1, parts: parts.length });
         const nice = W.friendlySendError(reason);
+        if (nice.selfSend) return selfSend();
         if (nice.clientDown) {
           recordHistory(hkey, { ...hbase, status: 'failed', reason: 'WeLink 客户端没打开或没登录' });
           return { ok: false, clientDown: true, reason: (i ? `前 ${i} 段已发出；` : '') + nice.reason, text, savedTo };

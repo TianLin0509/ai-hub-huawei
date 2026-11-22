@@ -59,7 +59,7 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
   // 公司版 DSH 选了「公司模型」：经本机反代用 CodeAgent 账号（core/company-model-proxy.js），不走套餐和 DeepSeek 备用线路。
   // 选了「自有接口」：用户自己的 OpenAI 兼容地址直连（2026-11-20），其余启动步骤与公司模型相同。
   const companyRoute = kind === 'deepseek-acp' && config.companyCli && config.dshBackend === 'proxy'
-    ? require('./company-model-proxy').dshRoute({ dataDir, sessionId: opts.id, model: opts.model || config.dshApiModel, account: opts.companyProxyAccount,
+    ? require('./company-model-proxy').dshRoute({ dataDir, sessionId: opts.dshCardKeyTag || opts.id, model: opts.model || config.dshApiModel, account: opts.companyProxyAccount,
       gateway: config.dshUpstream === 'gateway' })
     : kind === 'deepseek-acp' && config.companyCli && config.dshBackend === 'api'
       ? require('./company-model-proxy').dshOwnRoute({ baseURL: config.dshApiBaseUrl, apiKey: config.dshApiKey, model: config.dshApiModel }) : null;
@@ -132,7 +132,8 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
   // A shared subscription credential must never be routed to an unrelated host.
   if (!companyRoute && !deepseekRoute && baseURL.replace(/\/$/, '') !== PLAN_BASE_URL) throw new Error('套餐 profile 只允许已核对的阿里云 Token Plan 端点');
   const profileId = companyRoute ? (companyRoute.own ? 'own-api:' : 'company-proxy:') + kind : (deepseekRoute ? fallback.DEEPSEEK_ROUTE_PREFIX : fallback.TOKEN_PLAN_ROUTE_PREFIX) + kind;
-  const sessionRoot = path.join(dataDir, 'acp', createHash('sha256').update(opts.id).digest('hex'));
+  // DSH 卡片试点：共享 ACP 进程和接力的真实终端必须读同一份原生会话，所以按线路范围共用目录。
+  const sessionRoot = path.join(dataDir, 'acp', opts.dshCardScope ? 'card-' + opts.dshCardScope : createHash('sha256').update(opts.id).digest('hex'));
   const home = path.join(sessionRoot, 'home');
   if (opts.acpFork) {
     const source = fs.realpathSync(opts.acpFork.home);
@@ -184,13 +185,14 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
           compat: { thinkingFormat: 'deepseek', supportsDeveloperRole: false } })) } } },
     };
     writeJson(path.join(env.DSH_HOME, 'settings.yaml'), settings);
-    const patch = path.join(sessionRoot, opts.dshCliRuntime ? 'cli-route.yaml' : 'acp-route.yaml');
+    const patchName = (opts.dshCliRuntime && !opts.dshCardAcp ? 'cli-route' : 'acp-route') + (opts.dshCardScope ? '-' + createHash('sha256').update(opts.id).digest('hex').slice(0, 16) : '') + '.yaml';
+    const patch = path.join(sessionRoot, patchName);
     const routePatches = [{ id: 'llm-pi-ai', config: settings['llm-pi-ai'] },
       { id: 'agent-default-model', config: settings['agent-default-model'] },
       { id: 'acp', config: { provider: providerId, model } }];
     if (companyRoute) routePatches.unshift(...companyRoute.disabledPatches,
       ...require('./dsh-tools-compat').companyToolsPatch({ modules: opts.dshCliRuntime?.modules, entryPath: entry.entryPath }));
-    if (opts.dshCliRuntime) {
+    if (opts.dshCliRuntime && !opts.dshCardAcp) {
       args[args.indexOf(entry.entryPath)] = dshRuntimeFile('dsh-cli-launch.mjs');
       env.AI_HUB_DSH_CLI_ENTRY = entry.entryPath;
       const profileHome = path.join(env.DSH_HOME, 'profiles/hub-cli');
@@ -221,6 +223,8 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
             : { transport: 'streamable-http', url: s.url, headers: Object.fromEntries((s.headers || []).map(e => [e.name, e.value])) }),
         },
       })) });
+    } else if (opts.dshCardAcp) {
+      Object.assign(env, { DSH_PERMISSION_MODE: 'danger-full-access' });
     } else if (entry.bridgePath) {
       if (!path.isAbsolute(entry.bridgePath) || !fs.existsSync(path.join(entry.bridgePath, 'package.json'))) throw new Error('DeepSeek ACP 扩展包路径无效');
       const scope = path.join(env.DSH_HOME, 'profiles/acp/node_modules/@openma');
@@ -241,13 +245,13 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
       env.AI_HUB_DSH_BRIDGE = entry.bridgePath;
     }
     // 进展卡提醒（2026-10-24）：DSH 没有 shell 钩子，用插件做和 Claude / Codex 钩子相同的两条提醒。
-    routePatches.push({ insert: [{ id: 'hub-card-reminder', name: dshRuntimeFile('dsh-card-reminder.mjs') }] });
+    if (!opts.dshCardAcp) routePatches.push({ insert: [{ id: 'hub-card-reminder', name: dshRuntimeFile('dsh-card-reminder.mjs') }] });
     // Keep the native tool and explicit user decisions available; ordinary
     // implementation choices belong to the agent in Hub's delegated workflow.
     routePatches.push({ id: 'system-prompt', config: { personaSuffix:
       '你正在 AI Hub 中协作。对用户已经授权的任务持续执行到可交付；先通过读取项目和工具查清可查证的信息。常规实现细节由你选择合理方案并执行，汇报必要的假设与取舍。仅当缺少用户独有的信息、选择会实质改变目标或造成显著返工、或用户规则要求审批时，使用 ask_user_question 等待回答。用户明确要求比较或选择时正常提问。需要用户决定的事项由用户亲自回答。' } });
     writeJson(patch, routePatches);
-    args.push('--profile', opts.dshCliRuntime ? 'hub-cli' : 'acp', '--patch', patch);
+    args.push('--profile', opts.dshCliRuntime && !opts.dshCardAcp ? 'hub-cli' : 'acp', '--patch', patch);
   } else {
     if (!entry.backendPath || !path.isAbsolute(entry.backendPath) || !fs.existsSync(entry.backendPath)) throw new Error('缺少原生 ZCode 后端路径');
     Object.assign(env, { ZCODE_BIN: entry.backendPath, ZCODE_NODE: profile.nodePath, ZCODE_MODEL: model,

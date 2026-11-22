@@ -77,7 +77,7 @@
     const copyBtn = box.querySelector('[data-hf-copy]');
     if (copyBtn) copyBtn.addEventListener('click', event => {
       event.preventDefault();
-      try { require('electron').clipboard.writeText(lastText); copyBtn.textContent = '已复制，可以贴到 WeLink 发给维护人'; }
+      try { require('electron').clipboard.writeText(lastText); copyBtn.textContent = copyBtn.hasAttribute('data-hf-self') ? '已复制' : '已复制，可以贴到 WeLink 发给维护人'; }
       catch { copyBtn.textContent = '复制失败，请打开上面的文件手动复制'; }
     });
     const unblock = box.querySelector('[data-hf-unblock]');
@@ -157,6 +157,11 @@
     let r;
     try { r = await ipcRenderer.invoke('hub-feedback:welink-send', input); } catch (error) { r = { ok: false, reason: error.message }; }
     welinkBusy(false, 'wl-send', r && r.ok ? '已发送' : '一键发到 WeLink');
+    if (r && r.selfSend) {
+      lastText = r.text || '';
+      message('warn', `${esc(r.reason)} <a href="#" data-hf-copy data-hf-self>复制内容</a>${savedLine(r)}`);
+      return;
+    }
     if (r && r.ok) {
       message('ok', `已发到维护人的 WeLink（${esc(r.to)}）${r.parts > 1 ? `，分 ${r.parts} 条` : ''}，在你的 WeLink 聊天记录里也能看到。${savedLine(r)}`);
       dialog.querySelector('[data-hf="desc"]').value = '';

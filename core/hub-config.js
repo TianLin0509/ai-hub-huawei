@@ -192,6 +192,7 @@ function getConfig() {
     // Claude / Codex 的会话后端。默认 pty（真实 CLI + 卡片旁读）；native 只是回退开关。
     agentRuntime: getConfigValue('agentRuntime', 'CLAUDE_HUB_AGENT_RUNTIME', 'runtime.agent', 'pty'),
     codeagentRunMode: require('./codeagent-run-mode').normalizeRunMode(rawConfig.runtime?.codeagentRunMode),
+    cardRunModes: require('./card-run-mode').cardModesFrom(rawConfig.runtime?.cardRunModes),
     // Only an explicit false turns the watchdog off; an absent or malformed
     // value keeps CLI-parity behaviour rather than silently disabling it.
     claudeQuotaAutoResume: String(getConfigValue('claudeQuotaAutoResume', 'HUB_CLAUDE_QUOTA_AUTO_RESUME',

@@ -125,6 +125,10 @@ function classifyClaude(lines) {
 // 输入框占位变成「补充指令（Enter 排队等待发送）...」；空闲时占位是「Anything I can assist you with?」，
 // 底栏「Bypass (Cycle shift+tab) | <模型>」。认不出时按 Claude 的规则判（测试替身跑的是 Claude 界面）。
 function classifyCodeAgent(lines) {
+  // 菜单可能盖在上一轮的 Running 行上；先识别原生菜单，重绘不代表正在执行任务。
+  if (require('./codeagent-model-picker').modelDialogVisible(lines)) {
+    return observation(RUNTIME_WAITING, 'codeagent-model-menu', '请到「后台」选择模型，或按 Esc 退出菜单');
+  }
   const waiting = waitingObservation(lines);
   if (waiting) return waiting;
   const liveTail = lines.slice(-16);

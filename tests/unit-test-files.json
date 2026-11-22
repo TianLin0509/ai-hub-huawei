@@ -1,9 +1,12 @@
 [
+  "tests/unit-codeagent-resume-model.test.js",
+  "tests/unit-r9-ui-small.test.js",
   "tests/unit-f2-backdrop-image-pet.test.js",
   "tests/unit-model-metadata-rsi-a6.test.js",
   "tests/unit-notification-storm.test.js",
   "tests/unit-windows-hide-guard.test.js",
   "tests/unit-web-sessions-verification.test.js",
+  "tests/unit-web-session-load-error.test.js",
   "tests/unit-app-update-source-status.test.js",
   "tests/unit-download-source-status.test.js",
   "tests/unit-download-progress-view.test.js",
@@ -159,6 +162,7 @@
   "tests/unit-meeting-empty-segment.test.js",
   "tests/unit-boot-storage-failure.test.js",
   "tests/unit-hub-feedback-size.test.js",
+  "tests/unit-hub-feedback-welink.test.js",
   "tests/unit-card-blockquote-tasklist-css.test.js",
   "tests/unit-rules-toast-click-through.test.js",
   "tests/unit-input-history-quota.test.js",
@@ -329,9 +333,11 @@
   "tests/unit-codex-turn-error-card.test.js",
   "tests/unit-rsit-fresh-misleading.test.js",
   "tests/unit-one-screen-layout.test.js",
+  "tests/unit-launch-field-hint.test.js",
   "tests/unit-rsi-rail-width.test.js",
   "tests/unit-session-recovery-rsi-z.test.js",
   "tests/unit-boot-splash.test.js",
   "tests/unit-codeagent-serve-session.test.js",
+  "tests/unit-card-relay-pilot.test.js",
   "tests/unit-f2b-file-image.test.js"
 ]

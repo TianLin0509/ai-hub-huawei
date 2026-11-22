@@ -34,6 +34,17 @@ test('明确没发出：显示原因和「重发」，默认隐藏', () => {
   assert.equal(strip.element.dataset.kind, 'not-sent');
 });
 
+test('原因带句末标点时拼接只保留一个句号，保留正文内的路径和小数', () => {
+  const { strip, msg } = mount({ inputHas: () => true });
+  for (const reason of ['模型选择界面。', '模型选择界面。。 ', '模型选择界面.', '模型选择界面！']) {
+    strip.clear(); strip.show({ text: '原文', reason });
+    assert.match(msg.textContent, /模型选择界面。原文已放回输入框/);
+    assert.doesNotMatch(msg.textContent, /。。/);
+  }
+  strip.clear(); strip.show({ text: '原文', reason: 'C:/test/cli.exe 1.2。', uncertain: true });
+  assert.match(msg.textContent, /cli\.exe 1\.2。原文/);
+});
+
 test('送达未知：先提醒核对终端，按钮写「确认没收到，重发」', () => {
   const { strip, msg, retry } = mount({});
   strip.show({ text: 'x', reason: '发送通道异常', uncertain: true });

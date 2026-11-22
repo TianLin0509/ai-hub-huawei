@@ -156,6 +156,8 @@ function _buildSessionPayload(hubId, data) {
     codeagentPoolAccount: typeof data.codeagentPoolAccount === 'string' ? data.codeagentPoolAccount : null,
     codeagentConfigDir: typeof data.codeagentConfigDir === 'string' ? data.codeagentConfigDir : null,
     ...(data.codeagentRunMode === 'serve' ? { codeagentRunMode: 'serve' } : {}),
+    // 卡片试点：Hub 重启后回到卡片方式，不记「当时开着终端」。
+    ...(data.cardRunMode === 'card' ? { cardRunMode: 'card', ...(typeof data.cardScope === 'string' && /^[a-f0-9]{24}$/.test(data.cardScope) ? { cardScope: data.cardScope } : {}) } : {}),
     codeagentPoolLabel: typeof data.codeagentPoolLabel === 'string' ? data.codeagentPoolLabel : null,
     // 公司版：这个会话的模型走哪条线路（proxy 公司模型 / api 自有接口 / local CLI 默认），卡片和标题栏显示。
     companyRoute: ['proxy', 'api', 'local'].includes(data.companyRoute) ? data.companyRoute : null,

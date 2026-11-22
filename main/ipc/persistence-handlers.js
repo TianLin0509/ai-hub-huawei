@@ -12,6 +12,8 @@ const RESUME_META_FIELDS = [
   'codexSid',
   'acpSid',
   'codeagentRunMode',
+  'cardRunMode',
+  'cardScope',
   'acpProfileId',
   'acpCapabilities',
   'runtimeBackend',

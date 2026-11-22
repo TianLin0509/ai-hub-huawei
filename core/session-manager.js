@@ -365,6 +365,8 @@ function createNativeClaudeDriver(id, kind, opts, cwd, env, legacy) {
   const journal = new NativeAgentJournal({ directory: path.join(hubDataDir, 'native-agent-submissions'), sessionId: id });
   const fixture = process.env.CLAUDE_HUB_CLAUDE_STREAM_FIXTURE;
   if (fixture && !process.env.CLAUDE_HUB_DATA_DIR) throw new Error('Claude protocol fixtures require isolated Hub data');
+  const cardMode = require('./card-run-mode');
+  const cardLaunch = !fixture && cardMode.usesCardDriver(kind, opts, getConfig()) ? cardMode.claudeCardLaunch(env) : null;
   // A seat that never started has a Hub-assigned session ID but no conversation
   // behind it. Resuming that ID would fail ("no conversation found"), so it is
   // relaunched under the same identity instead -- provided the engine really
@@ -386,6 +388,7 @@ function createNativeClaudeDriver(id, kind, opts, cwd, env, legacy) {
     restoredRecords: records,
     restoredActivities: journal.listActivities(), persistActivity: data => journal.saveActivity(data),
     persistSubmission: data => journal.saveSubmission(data), persistLifecycle: event => journal.saveLifecycle(event),
+    ...(cardLaunch || {}),
     ...(fixture ? { executable: process.execPath,
       commandArgs: [fixture, '--fixture=' + (process.env.CLAUDE_HUB_CLAUDE_FIXTURE_MODE || 'normal')],
       env: { ...env, ELECTRON_RUN_AS_NODE: '1' } } : {}),
@@ -529,7 +532,7 @@ function codeagentLaunchModel(model, { pool = null, dataDir } = {}) {
     return (known.models || []).find(m => String(m).toLowerCase() === String(model).toLowerCase()) || '';
   } catch { return ''; }
 }
-// 每个会话一份只写模型的设置文件；长期开着的会话每次请求仍需读取它。
+// 每个会话一份只写模型的启动设置；恢复前按最后实际回答更新，避免撤销终端选择。
 const LAUNCH_SETTINGS_DIR = 'codeagent-launch';
 function writeCodeAgentLaunchSettings(dataDir, id, model) {
   const dir = path.join(dataDir, LAUNCH_SETTINGS_DIR);
@@ -613,6 +616,12 @@ function buildCodeAgentPtyLaunch(id, kind, opts, cwd, env, config, auth = null, 
   const args = ['--disable-update', '--skip-safe-check'];
   if (bridge) args.push('--setting-sources', 'user');
   const pinOptions = { dataDir: hubDataDir, configDir: config.configDir, command: config.command, pool };
+  // N3 真机：--settings 在恢复进程时会覆盖终端 /model 的选择，启动前重读该会话最后实际回答。
+  if (opts.resumeCCSessionId && !opts.forkCCSessionId && !opts.codeagentPrefixFork && !opts.codeagentModelProvider
+    && isUuid(opts.resumeCCSessionId)) {
+    const file = findNativeClaudeHistory(opts.resumeCCSessionId, { cwd, env: historyEnv });
+    if (file) opts = { ...opts, ...require('./codeagent-resume-model').resumeModelFields({ ...opts, id }, file, pinOptions) };
+  }
   let pin = require('./session-model-pin').resolveCodeAgentPin(opts, pinOptions);
   const inheritModel = !pin.fixedModel;
   let requestedModel = pin.fixedModel || null;
@@ -736,6 +745,18 @@ const NATIVE_MCP_LEARN_DELAY_MS = 75_000;
 let nativeMcpInspector = null;
 function scheduleNativeMcpLearn(manager, id, rootPid, learn, delayMs = NATIVE_MCP_LEARN_DELAY_MS) {
   return null;
+}
+
+// DSH 卡片试点：同线路、同模型的会话共用一个 ACP 进程（core/dsh-card-host.js）。
+function createDshCardDriver({ id, kind, opts, cwd, env, scope }) {
+  const host = require('./dsh-card-host').acquireDshCardHost(scope);
+  try {
+    const built = require('./dsh-cli-profile').buildDshCliOptions(kind, { ...opts, id, cwd, dshCardAcp: true, dshCardScope: scope, dshCardKeyTag: host.tag },
+      getConfig(), getHubDataDir(), env);
+    host.setLaunch({ ...built.launch, cwd: built.home });
+    // 原生 ACP 没有「权限模式」配置项；和终端方式一样的完全权限，由 permissionPolicy=bypass 逐次确认工具请求。
+    return new (require('./dsh-card-session').DshCardSession)({ ...built, defaultMode: null, host, terminalLog: opts.dshTerminalLog || undefined });
+  } catch (error) { host.release(); throw error; }
 }
 
 function applyClaudeSessionEnv(sessionEnv, cv, launch = {}) {
@@ -1837,9 +1858,15 @@ class SessionManager extends EventEmitter {
     const isCodeAgentServe = require('./codeagent-run-mode').usesServeRuntime(kind, opts) && (!kind.endsWith('-resume') || !!opts.resumeCCSessionId);
     const isAcp = isAcpKind(kind) || isCodeAgentServe;
     const isDshCli = kind.replace(/-resume$/, '') === 'deepseek-acp';
+    // Claude Code、DSH 卡片试点（core/card-run-mode.js）：cardTerminal 表示这次接力到真实终端，走下面现有的 PTY 启动。
+    const cardRunMode = require('./card-run-mode');
+    const isCardSession = cardRunMode.isCardSession(kind, opts, getConfig());
+    const usesCardDriver = cardRunMode.usesCardDriver(kind, opts, getConfig());
+    const isDshCard = usesCardDriver && isDshCli;
+    const dshCardScope = isCardSession && isDshCli ? (opts.cardScope || cardRunMode.dshCardScope(getConfig(), opts)) : null;
     // pi（r39）：终端里的 pi + Hub 观察扩展，和 DSH 同属 provider CLI（core/pi-cli-session.js）。
     const isPiCli = kind.replace(/-resume$/, '') === 'pi';
-    const isProviderCli = isDshCli || isPiCli || (['qwen','glm'].includes(kind.replace(/-resume$/, '')) && require('./agent-runtime-mode').agentRuntimeMode() !== 'native');
+    const isProviderCli = (isDshCli && !isDshCard) || isPiCli || (['qwen','glm'].includes(kind.replace(/-resume$/, '')) && require('./agent-runtime-mode').agentRuntimeMode() !== 'native');
     const isClaude = kind === 'claude' || kind === 'claude-resume';
     const isGemini = kind === 'gemini' || kind === 'gemini-resume';
     const isDeepSeek = kind === 'deepseek' || kind === 'deepseek-resume';
@@ -1854,7 +1881,7 @@ class SessionManager extends EventEmitter {
     // 公司 Code Agent：Claude 形态的 CLI，只有 PTY 运行方式（没有原生后端）。
     const isCodeAgent = isCodeAgentKind(kind);
     // Claude / Codex 默认跑 PTY 里的真实 CLI；原生后端只在回退开关打开时使用。
-    const nativeAgentRuntime = require('./agent-runtime-mode').usesNativeAgentRuntime(kind);
+    const nativeAgentRuntime = require('./agent-runtime-mode').usesNativeAgentRuntime(kind) || (isClaude && usesCardDriver);
     const isNativeCodex = isCodex && nativeAgentRuntime;
     const isPtyAgent = isProviderCli || (isCodeAgent && !isCodeAgentServe) || isDeepSeekClaude || ((isClaude || isCodex) && !nativeAgentRuntime) || (isDeepSeek && !isDeepSeekLegacy);
     const webRoute = isCodex && !getLaunchValues().COMPANY_CLI && require('./chatgpt-web-models').chatgptWebRoute(opts.model);
@@ -2642,9 +2669,11 @@ class SessionManager extends EventEmitter {
       : isPiCli
       ? new (require('./pi-cli-session').PiCliSession)(require('./pi-cli-profile').buildPiCliOptions(kind,
         {...opts,id,cwd:spawnCwd},getConfig(),getHubDataDir(),sessionEnv))
+      : isDshCard
+      ? createDshCardDriver({ id, kind, opts, cwd: spawnCwd, env: sessionEnv, scope: dshCardScope })
       : isDshCli
       ? new (require('./dsh-cli-session').DshCliSession)(require('./dsh-cli-profile').buildDshCliOptions(kind,
-        {...opts,id,cwd:spawnCwd},getConfig(),getHubDataDir(),sessionEnv))
+        {...opts,id,cwd:spawnCwd,...(dshCardScope ? {dshCardScope} : {})},getConfig(),getHubDataDir(),sessionEnv))
       : isAcp
       ? new (isProviderCli ? (kind.replace(/-resume$/, '') === 'qwen' ? require('./qwen-cli-session').QwenCliSession : require('./martty-cli-session').MarttyCliSession) : require('./acp-session').AcpSession)(buildAcpOptions(kind,
         {...opts,id,cwd:spawnCwd},getConfig(),getHubDataDir(),sessionEnv))
@@ -2779,6 +2808,7 @@ class SessionManager extends EventEmitter {
       ...(isNativeCodex ? {runtimeBackend:'codex-app-server',nativeRuntime:ptyProcess.runtime,
         codexApprovalPolicy:opts.approvalPolicy || codexNativePermission(kind, opts).approval,codexSandbox:opts.sandbox || codexNativePermission(kind, opts).sandbox} : {}),
       ...(isCodeAgentServe ? { codeagentRunMode: 'serve' } : {}),
+      ...(isCardSession ? { cardRunMode: 'card', cardTerminal: opts.cardTerminal === true, ...(dshCardScope ? { cardScope: dshCardScope } : {}) } : {}),
       ...(isAcp ? {runtimeBackend:'acp',nativeRuntime:ptyProcess.runtime,acpSid:opts.acpSid || opts.resumeCCSessionId || null,
         cliRuntime:isProviderCli?{...ptyProcess.runtime,source:'provider-cli',observedAt:Date.now()}:null,
         acpProfileId:ptyProcess.options.profileId,acpCapabilities:{},acpConfigOptions:[]} : {}),
@@ -3125,6 +3155,7 @@ class SessionManager extends EventEmitter {
         publish();
       });
       if (isCodeAgentServe) ptyProcess.on('serve-fallback', event => this.emit('codeagent-serve-fallback', { sessionId: id, reason: event.reason }));
+      if (isDshCard) ptyProcess.on('card-fallback', event => this.emit('card-run-fallback', { sessionId: id, reason: event.reason }));
       ptyProcess.on('thread-reset', () => { info.codexSid=null; info.transcriptPath=null; publish(); });
       ptyProcess.on('choices', choices => { info.nativeThreadChoices = choices; publish(); });
       ptyProcess.on('migration-draft', text => { info.nativeMigrationDraft=text; publish(); });
@@ -4818,6 +4849,7 @@ try {
       // 千问 / GLM 走终端时没有 runtimeBackend，卡片提示（如 Token Plan 改道说明）也要随更新送到界面。
       ...(isAcpKind(info.kind) ? {cliRuntime:info.cliRuntime||null,nativeActionError:info.nativeActionError || null} : {}),
       ...(isCodeAgentKind(info.kind) ? { codeagentRunMode: info.codeagentRunMode === 'serve' ? 'serve' : 'pty' } : {}),
+      ...(require('./card-run-mode').supportsCardKind(info.kind) ? { cardRunMode: info.cardRunMode === 'card' ? 'card' : 'pty', cardTerminal: info.cardTerminal === true } : {}),
       ...(isAcpKind(info.kind) || info.codeagentRunMode === 'serve' ? {acpSid:info.acpSid,acpProfileId:info.acpProfileId,
         acpCapabilities:info.acpCapabilities,acpConfigOptions:info.acpConfigOptions} : {}),
       ...(info.runtimeBackend ? {runtimeBackend:info.runtimeBackend,nativeRuntime:info.nativeRuntime,

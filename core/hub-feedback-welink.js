@@ -108,7 +108,10 @@ async function findWelinkDesktop({ env = process.env, fsModule = fs, execFileImp
 // 「Response missing required fields (sign/nonce/timestamp)」（2026-11-21 公司真机 Q-1121-01：客户端被同账号另一台设备挤下线，
 // auth status 仍显示 token valid）。翻成用户能照做的话。
 const CLIENT_DOWN = /sign\/nonce\/timestamp|用户未登录|14114/i;
+const SELF_SEND_REASON = '你就是维护人，本机发给自己会被 WeLink 拒绝；反馈已保存在『我的反馈』，可复制内容';
 function friendlySendError(reason) {
+  if (/not\s+allow\s+to\s+send\s+messages\s+to\s+self/i.test(String(reason || '')))
+    return { clientDown: false, selfSend: true, reason: SELF_SEND_REASON };
   return CLIENT_DOWN.test(String(reason || ''))
     ? { clientDown: true, reason: '电脑上的 WeLink 没打开或没登录（welink-cli 要靠它发消息）。请打开并登录 WeLink 后再点一次，或者直接点「复制并打开 WeLink」' }
     : { clientDown: false, reason };
@@ -124,4 +127,4 @@ function sendReceiptError(result, parseJson) {
   return '';
 }
 
-module.exports = { friendlySendError, MAINTAINER_WELINK, CHUNK, MAX_CHARS, compactFeedback, chunks, findWelinkDesktop, exeFromCommand, sendReceiptError };
+module.exports = { friendlySendError, SELF_SEND_REASON, MAINTAINER_WELINK, CHUNK, MAX_CHARS, compactFeedback, chunks, findWelinkDesktop, exeFromCommand, sendReceiptError };

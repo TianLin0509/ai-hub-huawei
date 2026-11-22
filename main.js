@@ -960,10 +960,9 @@ async function observeCodeAgentModel(hubSessionId, ev, transcriptPath, source = 
     const resolveSwitch = actual => {
       const guard = require('./core/codeagent-default-model-guard');
       const dir = guard.sessionConfigDir(session, { dataDir: getHubDataDir() });
-      const options = codeAgentModels.modelOptions(getHubDataDir(), { accountKey: session.codeagentPoolAccount || 'personal', configDir: dir });
-      let defaultModel = '';
-      try { defaultModel = JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8').replace(/^﻿/, '')).model || ''; } catch { defaultModel = ''; }
-      return codeAgentModels.resolveObservedSwitch(actual, { options, defaultModel });
+      return require('./core/codeagent-resume-model').resolveAccountModel(actual, {
+        dataDir: getHubDataDir(), configDir: dir, accountKey: session.codeagentPoolAccount || 'personal',
+      });
     };
     const observed = session && modelId ? codeAgentModels.observeModel(session, modelId, { at: modelAt, resolveSwitch, followActual: true }) : null;
     if (observed || !modelId) {

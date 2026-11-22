@@ -690,6 +690,7 @@ module.exports = {
   dormantDisplayModel,
   observeModel,
   modelVersion,
+  isAutoModel,
   versionsDiffer,
   resolveObservedSwitch,
   expectModelSwitch,

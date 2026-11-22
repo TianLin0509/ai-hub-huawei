@@ -761,5 +761,9 @@
   "更多模型：点顶栏「后台」，在终端里输入 /model 切换": "More models: click \"Console\" in the top bar and type /model in the terminal",
   "正在连接真实终端，约 3 秒…": "Connecting the real terminal, about 3 seconds…",
   "终端连接失败：{0}": "Terminal connection failed: {0}",
+  "打开真实终端失败：{0}": "Failed to open the real terminal: {0}",
+  "正在打开真实终端": "Opening the real terminal",
+  "第一次需要几秒，之后 3 分钟内再开是秒开": "The first open takes a few seconds. Reopening within 3 minutes is instant.",
+  "还在连接，可以先回卡片继续对话": "Still connecting. You can go back to the cards and keep chatting.",
   "停止失败": "Stop failed"
 }

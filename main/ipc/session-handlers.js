@@ -351,6 +351,28 @@ function registerSessionIpc(ipcMain, deps) {
     } catch (error) { return { ok: false, message: error.message }; }
   });
 
+  const cardRelay = new (require('../../core/card-relay').CardRelay)({
+    sessions: { getRaw: id => sessionManager.sessions?.get(id), updateMeta: (id, fields) => sessionManager.updateSessionMeta(id, fields) },
+    restart: id => restartAuthorizedSession(id, null, { relaunch: true, cardSwitch: true }),
+    notify: (sessionId, level, message) => sendToRenderer('session-notice', { sessionId, level, persistent: level === 'error', message }),
+    onSwitch: (sessionId, phase, terminal) => sendToRenderer('card-relay-switch', { sessionId, phase, terminal }),
+    ...(Number(process.env.AI_HUB_CARD_TERMINAL_KEEP_MS) > 0 ? { keepMs: Number(process.env.AI_HUB_CARD_TERMINAL_KEEP_MS) } : {}),
+  });
+  ipcMain.handle('card-relay:terminal', async (_event, { sessionId, action } = {}) => {
+    try { return action === 'attach' ? await cardRelay.attach(sessionId) : cardRelay.detach(sessionId); }
+    catch (error) { return { ok: false, message: error.message }; }
+  });
+  sessionManager.on?.('card-run-fallback', ({ sessionId, reason }) => {
+    console.warn('[card-relay] 改回 PTY：', sessionId, reason);
+    cardRelay.forget(sessionId);
+    sessionManager.updateSessionMeta(sessionId, { cardRunMode: 'pty', cardTerminal: false });
+    Promise.resolve(restartAuthorizedSession(sessionId, null, { relaunch: true, serveFallback: true, cardSwitch: true })).then(result => {
+      const ok = result && result.ok !== false;
+      sendToRenderer('session-notice', { sessionId: result?.id || sessionId, level: ok ? 'warning' : 'error', persistent: true,
+        message: ok ? '结构化通道多次中断，这个会话已自动改回终端方式，历史和上下文都在。' : `自动改回终端失败：${result?.message || '未知错误'}，可从侧栏休眠后恢复。` });
+    }).catch(error => console.warn('[card-relay] 改回 PTY 失败：', error.message));
+  });
+
   // serve 连续恢复失败：把这个会话改回独立 PTY，用同一份记录继续。
   sessionManager.on?.('codeagent-serve-fallback', ({ sessionId, reason }) => {
     console.warn('[codeagent-serve] 改回 PTY：', sessionId, reason);
@@ -948,7 +970,7 @@ function registerSessionIpc(ipcMain, deps) {
   }
   // 真正退出时停掉自动读取，并结束正在跑的临时 serve（手动刷新、读模型清单起的也算），否则它会留在后台。
   require('../../core/codeagent-quota-auto-refresh').installQuotaQuitCleanup({ app,
-    stopAutoRefresh: () => quotaAutoRefresh?.stop(), shutdownServes: () => { require('../../core/codeagent-serve-host').shutdownHosts(); return require('../../core/codeagent-serve').shutdownTempServes(); } });
+    stopAutoRefresh: () => quotaAutoRefresh?.stop(), shutdownServes: () => { require('../../core/dsh-card-host').shutdownDshCardHosts(); require('../../core/codeagent-serve-host').shutdownHosts(); return require('../../core/codeagent-serve').shutdownTempServes(); } });
   if (deps.lanPoolService) deps.lanPoolService.quotaReader = () => quotaPanel.snapshot();
   ipcMain.handle('codeagent:quota-panel', async (_event, payload = {}) => {
     try {
@@ -1788,7 +1810,7 @@ function registerSessionIpc(ipcMain, deps) {
     if (old.purpose === 'xresearch-research') {
       return { ok: false, error: 'protected-session', message: '扩展投研任务不能从这里重启' };
     }
-    const native = sessionManager.getNativeClaude?.(sessionId);
+    const native = options.cardSwitch ? null : sessionManager.getNativeClaude?.(sessionId);
     if (native) {
       return native.reconnect({ stopActive: true }).then(() => sessionManager.getSession(sessionId))
         .catch(error => ({ ok: false, error: 'native-reconnect-failed', message: error.message }));

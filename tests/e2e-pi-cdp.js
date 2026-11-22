@@ -156,7 +156,8 @@ async function realConversation() {
   let id;
   try {
     await openLaunchCenterOnPi(s);
-    const note = await s.cdp.eval('document.getElementById("new-session-pi-note-text").textContent');
+    // 线路说明在状态句末的 ⓘ 悬停卡里（2026-11-22 说明不喧宾夺主），连同短句一起读。
+    const note = await s.cdp.eval('(t => t.textContent + " " + (t.querySelector(".field-hint-icon")?.getAttribute("aria-label") || ""))(document.getElementById("new-session-pi-note-text"))');
     assert.match(note, useMock ? /自己的配置或登录/ : /DeepSeek API/, '线路说明：' + note);
     const models = await s.cdp.eval('[...document.querySelectorAll("#new-session-model-cards [data-model-id], #new-session-model-cards button")].map(b => b.dataset.modelId || b.textContent.trim())');
     report.checks.push((useMock ? '模拟模型、无 Hub 钥匙时' : '有 DeepSeek Key 时') + '线路说明：' + note + '；模型选项：' + JSON.stringify(models));
@@ -216,7 +217,8 @@ async function missingPlanKey() {
   let id, model;
   try {
     await openLaunchCenterOnPi(s);
-    const note = await s.cdp.eval('document.getElementById("new-session-pi-note-text").textContent');
+    // 线路说明在状态句末的 ⓘ 悬停卡里（2026-11-22 说明不喧宾夺主），连同短句一起读。
+    const note = await s.cdp.eval('(t => t.textContent + " " + (t.querySelector(".field-hint-icon")?.getAttribute("aria-label") || ""))(document.getElementById("new-session-pi-note-text"))');
     assert.match(note, /Token Plan/, '只有套餐 Key 时线路是 Token Plan：' + note);
     const before = JSON.stringify(await s.cdp.eval('[...sessions.keys()]'));
     await s.click('#new-session-submit');

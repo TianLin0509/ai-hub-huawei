@@ -15,6 +15,8 @@
 // 不覆盖用户正在写的新草稿。原文在不在输入框里由 inputHas(text) 实时判断，提示照实说。
 
 // store/key（可选）：按会话记住待重发的列表。切换会话、输入框重建后，新输入框照样挂出提示条。
+const { reasonText } = require('../core/message-text');
+
 function createResendStrip(doc, host, { resend, inputHas = () => false, store = null, key = '' } = {}) {
   const strip = doc.createElement('div');
   strip.className = 'composer-resend-strip';
@@ -41,7 +43,7 @@ function createResendStrip(doc, host, { resend, inputHas = () => false, store = 
   const render = () => {
     const entry = entries[0];
     if (!entry) { strip.hidden = true; return; }
-    const why = String(entry.reason || '').trim() || '发送通道异常';
+    const why = reasonText(entry.reason);
     const where = inputHas(entry.text) ? '原文已放回输入框' : '原文保存在这条提示里，点按钮直接发出（不动输入框里正在写的内容）';
     const more = entries.length > 1 ? `（还有 ${entries.length - 1} 条待处理）` : '';
     msg.textContent = entry.uncertain
@@ -113,4 +115,4 @@ function rememberPending(store, key, entry) {
   store.set(key, list);
 }
 
-module.exports = { createResendStrip, forgetConfirmed, rememberPending };
+module.exports = { createResendStrip, forgetConfirmed, rememberPending, reasonText };

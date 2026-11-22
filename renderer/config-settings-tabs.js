@@ -45,6 +45,14 @@ function createSettingsTabs({ document, window }) {
   const view = document.getElementById('config-main-view');
   const modal = document.getElementById('config-modal');
   if (!view || !modal) return null;
+  // 高级页只留操作项，长说明收进标签旁的悬停提示；状态与报错仍在原位。
+  const { setFieldHint } = require('./launch-field-hint');
+  const rootField = document.getElementById('cfg-work-file-root-field');
+  const rootNote = rootField?.querySelector('p.config-reading-note:not([role="status"])');
+  if (rootNote) setFieldHint(rootNote, rootNote.textContent, { label: rootField.querySelector('label') });
+  const teamField = document.getElementById('cfg-team-auto-approve-field');
+  const teamNote = teamField?.querySelector('small');
+  if (teamNote) setFieldHint(teamNote, teamNote.textContent, { label: teamField.querySelector('strong') });
   const bar = document.createElement('div');
   bar.className = 'cfg-tabs';
   bar.id = 'cfg-tabs';

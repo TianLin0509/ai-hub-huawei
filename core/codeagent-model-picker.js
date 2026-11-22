@@ -819,7 +819,7 @@ function notSent(message, code = 'codeagent-model-pick-failed') {
 }
 function failureMessage(result, inputReady) {
   if (result?.loginRequired) return result.message;
-  const reason = result?.message || '所选模型未完成切换';
+  const reason = require('./message-text').reasonText(result?.message, '所选模型未完成切换');
   return inputReady
     ? `${reason}。普通输入框已恢复，本条消息未发送；再次发送将沿用 CodeAgent 当前模型，也可以先重新选择模型。`
     : `${reason}。本条消息未发送；请点“后台”退出模型菜单，恢复普通输入框后再发送，或重新选择模型。`;
@@ -919,7 +919,7 @@ async function beforePrompt(manager, sid, { allowUnready = false, isChoiceDialog
       if (usable) {
         failures.delete(sid);
         manager.emit?.('session-notice', { sessionId: sid, level: 'warning', persistent: true,
-          message: `${failure.result?.message || '自动选择模型没成功'}。输入框已恢复，本条消息将沿用 CodeAgent 当前模型发送；也可以重新选择模型。` });
+          message: `${require('./message-text').reasonText(failure.result?.message, '自动选择模型没成功')}。输入框已恢复，本条消息将沿用 CodeAgent 当前模型发送；也可以重新选择模型。` });
       } else {
         failure.reported = true;
         throw notSent(failureMessage(failure.result, usable));

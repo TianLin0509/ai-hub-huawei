@@ -1,0 +1,33 @@
+/* 后台终端第一次打开时的过渡动画：五色星点盘旋汇聚成 Hub 方块，3 秒一轮，终端画出内容就淡出。 */
+.terminal-warmup { --warmup-bg: #0b1220; --warmup-core: #fff; position: fixed; z-index: 90; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; overflow: hidden; color: #e8eef8; background: radial-gradient(circle at 50% 44%, rgba(92, 130, 255, .16), transparent 260px), var(--warmup-bg); font-size: 12px; pointer-events: none; animation: terminal-warmup-in .16s ease-out both; }
+.terminal-warmup.is-light { --warmup-core: #3478f6; color: #1f2a3a; }
+.terminal-warmup.is-leaving { animation: terminal-warmup-out .2s ease-in both; }
+.terminal-warmup strong { margin-top: 8px; font-size: 14px; font-weight: 600; }
+.terminal-warmup span { opacity: .68; }
+.terminal-warmup-stage { position: relative; width: 104px; height: 104px; }
+.terminal-warmup-star { position: absolute; left: 50%; top: 50%; width: 7px; height: 7px; margin: -3.5px; border-radius: 50%; background: var(--c); box-shadow: 0 0 10px var(--c); animation: terminal-warmup-orbit 3s cubic-bezier(.55, .06, .45, .94) infinite; }
+.terminal-warmup-core { position: absolute; left: 50%; top: 50%; width: 24px; height: 24px; margin: -12px; border-radius: 7px; background: var(--warmup-core); box-shadow: 0 0 22px rgba(130, 165, 255, .8); opacity: 0; animation: terminal-warmup-core 3s ease-out infinite; }
+.terminal-warmup-ring { position: absolute; left: 50%; top: 50%; width: 30px; height: 30px; margin: -15px; border: 1.5px solid rgba(130, 165, 255, .75); border-radius: 50%; opacity: 0; animation: terminal-warmup-ring 3s ease-out infinite; }
+@keyframes terminal-warmup-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes terminal-warmup-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes terminal-warmup-orbit {
+  0% { opacity: .35; transform: rotate(var(--a)) translateX(44px) scale(.7); }
+  18% { opacity: 1; }
+  62% { opacity: 1; transform: rotate(calc(var(--a) + 420deg)) translateX(10px) scale(1); }
+  70%, 100% { opacity: 0; transform: rotate(calc(var(--a) + 460deg)) translateX(0) scale(.2); }
+}
+@keyframes terminal-warmup-core {
+  0%, 62% { opacity: 0; transform: scale(0) rotate(-20deg); }
+  72% { opacity: 1; transform: scale(1.18) rotate(0); }
+  80%, 92% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(.7); }
+}
+@keyframes terminal-warmup-ring {
+  0%, 66% { opacity: 0; transform: scale(.5); }
+  72% { opacity: .9; }
+  100% { opacity: 0; transform: scale(2.8); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .terminal-warmup-star, .terminal-warmup-ring { display: none; }
+  .terminal-warmup-core { opacity: 1; animation: none; }
+}

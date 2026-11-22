@@ -15,6 +15,14 @@ const good = (over = {}) => ({
 });
 const run = (over, mode, isCompany = true) => prep.createPrep({ isCompany, deps: good(over) }).run(mode);
 
+test('模型清单：成功结果里的空 skipped 数组不表示跳过，只有布尔 true 才跳过', async () => {
+  const success = await run({ readModels: async () => ({ ok: true, models: ['GLM', 'DeepSeek'], skipped: [] }) });
+  assert.equal(success.rows.models.status, 'ok');
+  assert.equal(success.rows.models.detail, 'GLM、DeepSeek');
+  const skipped = await run({ readModels: async () => ({ skipped: true }) });
+  assert.equal(skipped.rows.models.status, 'off');
+});
+
 test('什么时候显示：没做过全屏，指纹变了只同步，有遗留问题小提示，其余不打扰', () => {
   assert.equal(prep.decide(null, fp), 'full');
   assert.equal(prep.decide({ schema: prep.SCHEMA - 1, fingerprint: fp }, fp), 'full');

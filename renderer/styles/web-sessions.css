@@ -44,7 +44,10 @@ body.sidebar-web-mode .web-session-list { display: block; }
 .ws-tools button { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--fg-muted); cursor: pointer; }
 .ws-tools button:hover { background: var(--surface-overlay, rgba(127,127,127,.1)); color: var(--fg-default); }
 .ws-tools svg { width: 16px; height: 16px; }
-.ws-status { flex: none; padding: 4px 12px; font-size: 12px; color: var(--fg-muted); border-bottom: 1px solid var(--border-subtle); }
+.ws-status { flex: none; display: flex; align-items: center; gap: 8px; padding: 4px 12px; font-size: 12px; color: var(--fg-muted); border-bottom: 1px solid var(--border-subtle); }
+.ws-status[hidden] { display: none; }
+.ws-status span { flex: 1; min-width: 0; }
+.ws-status button { flex: none; white-space: nowrap; }
 .ws-status.bad { color: #d64545; }
 .ws-status button { margin: 4px 0; padding: 4px 10px; border: 1px solid var(--border-mid); border-radius: 5px; background: var(--surface-card); color: var(--brand-text); font: inherit; cursor: pointer; }
 .ws-slot { flex: 1 1 auto; min-height: 0; background: var(--surface-canvas, #fff); }

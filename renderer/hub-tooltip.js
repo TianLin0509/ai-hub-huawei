@@ -23,7 +23,8 @@ function parseTip(text) {
 }
 
 // 放在哪边：优先 下 → 上；贴近左右边缘的元素（侧栏、右侧看板）改成朝屏幕中间的一侧。
-function placement(rect, card, view) {
+// prefer='top'（元素带 data-tip-side="top"，如启动中心字段标签旁的 ⓘ）：先放上方，免得盖住标签下面的下拉框；放不下再翻到下方。
+function placement(rect, card, view, prefer = '') {
   const gap = 10;
   const fits = {
     bottom: rect.bottom + gap + card.height <= view.height,
@@ -31,13 +32,15 @@ function placement(rect, card, view) {
     right: rect.right + gap + card.width <= view.width,
     left: rect.left - gap - card.width >= 0,
   };
-  const order = rect.right > view.width * 0.72 ? ['left', 'bottom', 'top', 'right']
+  const order = prefer === 'top' ? ['top', 'bottom', 'right', 'left']
+    : rect.right > view.width * 0.72 ? ['left', 'bottom', 'top', 'right']
     : rect.left < view.width * 0.22 && rect.width < view.width * 0.3 ? ['right', 'bottom', 'top', 'left']
       : ['bottom', 'top', 'right', 'left'];
   const side = order.find(s => fits[s]) || order[0];
   let x, y;
   if (side === 'bottom' || side === 'top') {
-    x = rect.left + rect.width / 2 - card.width / 2;
+    // 小图标（prefer=top）：卡片从图标处向右展开、箭头靠左，不往左探进旁边的导航栏。
+    x = prefer === 'top' ? rect.left + rect.width / 2 - 24 : rect.left + rect.width / 2 - card.width / 2;
     y = side === 'bottom' ? rect.bottom + gap : rect.top - gap - card.height;
   } else {
     x = side === 'right' ? rect.right + gap : rect.left - gap - card.width;
@@ -112,9 +115,10 @@ function installHubTooltip(doc = globalThis.document, { win = globalThis.window,
     if (!fill(el)) return;
     card.hidden = false;
     card.classList.remove('is-on');
+    card.classList.toggle('is-hint', !!el.dataset?.hubTipFocus);
     const view = { width: doc.documentElement.clientWidth, height: doc.documentElement.clientHeight };
     const box = card.getBoundingClientRect();
-    const pos = placement(el.getBoundingClientRect(), { width: box.width, height: box.height }, view);
+    const pos = placement(el.getBoundingClientRect(), { width: box.width, height: box.height }, view, el.dataset?.tipSide || '');
     card.dataset.side = pos.side;
     card.style.left = pos.x + 'px';
     card.style.top = pos.y + 'px';
@@ -159,6 +163,21 @@ function installHubTooltip(doc = globalThis.document, { win = globalThis.window,
   doc.addEventListener('keydown', () => hideNow(), true);
   doc.addEventListener('scroll', event => { if (!card.contains(event.target)) hideNow(); }, true);
   win?.addEventListener?.('blur', hideNow);
+  // 键盘可达（data-hub-tip-focus，如启动中心的 ⓘ 说明图标）：Tab 聚焦即显示，失焦收起。
+  doc.addEventListener('focusin', event => {
+    const el = event.target?.closest?.('[data-hub-tip-focus]');
+    if (!el || el === anchor || !target(el)) return;
+    hideNow();
+    if (el.hasAttribute('title')) {
+      const text = el.getAttribute('title');
+      if (!text) return;
+      el.setAttribute('data-hub-tip', text);
+      el.removeAttribute('title');
+    }
+    anchor = el;
+    show(el);
+  }, true);
+  doc.addEventListener('focusout', event => { if (anchor && event.target === anchor) scheduleHide(); }, true);
 
   const api = {
     registerRich(selector, build) { rich.push({ selector, build }); },

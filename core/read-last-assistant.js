@@ -137,9 +137,9 @@ async function readLastAssistantMessage(transcriptPath, { maxBytes = MAX_TAIL_BY
   return result && { ...result };
 }
 
-// 回执与 main.js 异步补记实际模型之间有竞争，发回执那一刻直接读一次。只读文件尾部（最多 maxBytes），读不到返回空串。
-function readLastAssistantModelSync(transcriptPath, { maxBytes = MAX_TAIL_BYTES } = {}) {
-  if (!transcriptPath) return '';
+// 恢复启动前同步读最后实际回答，连同时间戳检查显式选型的屏障；只读文件尾部，读不到返回 null。
+function readLastAssistantMessageSync(transcriptPath, { maxBytes = MAX_TAIL_BYTES } = {}) {
+  if (!transcriptPath) return null;
   let fd;
   try {
     fd = fs.openSync(transcriptPath, 'r');
@@ -156,7 +156,7 @@ function readLastAssistantModelSync(transcriptPath, { maxBytes = MAX_TAIL_BYTES 
         if (!entry || entry.isSidechain) continue;
         const model = entry.message && typeof entry.message.model === 'string' ? entry.message.model.trim() : '';
         // 合成的占位回答（如被打断时 CLI 自己写的 <synthetic>）不算模型。
-        if (model && !model.startsWith('<')) return model;
+        if (model && !model.startsWith('<')) return lastAssistantResult(entry);
       }
     }
   } catch {
@@ -164,7 +164,11 @@ function readLastAssistantModelSync(transcriptPath, { maxBytes = MAX_TAIL_BYTES 
   } finally {
     if (fd !== undefined) { try { fs.closeSync(fd); } catch {} }
   }
-  return '';
+  return null;
 }
 
-module.exports = { readLastAssistantMessage, readLastAssistantModelSync, MAX_TAIL_BYTES };
+function readLastAssistantModelSync(transcriptPath, opts) {
+  return readLastAssistantMessageSync(transcriptPath, opts)?.model?.trim() || '';
+}
+
+module.exports = { readLastAssistantMessage, readLastAssistantMessageSync, readLastAssistantModelSync, MAX_TAIL_BYTES };

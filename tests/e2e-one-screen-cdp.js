@@ -175,6 +175,34 @@ async function main() {
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
   }
 
+  async function checkRooms(prefix) {
+    const tabs = await cdp.eval('[...document.querySelectorAll(".cr-top [data-cr-tab]")].map(b=>b.dataset.crTab)');
+    assert.deepEqual(tabs, ['overview', 'plan', 'post', 'history', 'logs', 'settings']);
+    for (const tab of tabs) {
+      await click(`.cr-top [data-cr-tab="${tab}"]`);
+      await sleep(300);
+      await noScroll(`${prefix}rooms-${tab}`, '.cr-sheet');
+      if (['plan', 'post', 'settings'].includes(tab)) assert.ok(await cdp.eval(IN_VIEW('[data-cr-op="save"]')), `${tab} 保存按钮在首屏`);
+      if (tab === 'settings') {
+        const fields = await cdp.eval('[...document.querySelectorAll("[data-cr-settings-panel] [data-cr-field]")].map(e=>e.dataset.crField)');
+        assert.equal(fields.length, 14, '保留全部设置控件');
+        for (const group of ['booking', 'computer', 'page', 'data']) {
+          await click(`[data-cr-settings-tab="${group}"]`);
+          await sleep(150);
+          assert.equal(await cdp.eval('document.querySelectorAll("[data-cr-settings-panel]:not([hidden])").length'), 1);
+          assert.ok(await cdp.eval(IN_VIEW(`[data-cr-settings-panel="${group}"]`)), `${group} 设置分组完整可见`);
+          await noScroll(`${prefix}rooms-settings-${group}`, '.cr-sheet');
+          const remaining = await cdp.eval('[...document.querySelectorAll("[data-cr-settings-panel] [data-cr-field]")].map(e=>e.dataset.crField)');
+          assert.deepEqual(remaining, fields, '切换分组保留所有设置控件');
+          await shot(`${prefix}17-rooms-settings-${group}`);
+        }
+        await click('[data-cr-settings-tab="booking"]');
+      }
+      await shot(`${prefix}17-rooms-${tab}`);
+    }
+    report.checks.push(`${prefix}会议室：六个子页签及四组设置均无纵向滚动，设置控件完整保留`);
+  }
+
   try {
     await launch();
     await until('typeof window.__hubOpenConfigModal === "function"', 'renderer ready', 60000);
@@ -247,6 +275,12 @@ async function main() {
     report.measures.roomsLoginWhy = why;
     if (why.button && why.disabled) assert.ok(why.why.length > 0, '第 ① 步登录按钮灰着时写明原因');
     report.checks.push(`会议室：守护栏与内容都不滚动；第 ① 步登录按钮${why.disabled ? `灰着，旁边写着「${why.why}」` : '可用'}`);
+    await checkRooms('1440x900-');
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1024, height: 640, deviceScaleFactor: 1, mobile: false });
+    await sleep(500);
+    await checkRooms('1024x640-');
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+    await sleep(500);
 
     // 深色主题
     await click('#btn-theme');
@@ -261,6 +295,7 @@ async function main() {
     report.passed = true;
   } catch (error) {
     report.error = error.stack;
+    if (error.logTail) report.launchLog = error.logTail;
     if (cdp) await shot('failure').catch(() => {});
     throw error;
   } finally {
