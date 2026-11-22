@@ -1,5 +1,6 @@
 'use strict';
 const nativeRuntime = require('./native-agent-runtime.js');
+const { isNoUpdateReply } = require('./team-silent-reply');
 
 const ATTENTION_NONE = 'none';
 const ATTENTION_NEEDS_INPUT = 'needs-input';
@@ -235,11 +236,15 @@ function applyReplyCompleted(session, event = {}) {
   if (!event.keepRunning) session.runStartedAt = null;
 
   if (session.status !== 'dormant') session.status = event.keepRunning ? 'running' : 'idle';
+  // 静默回执不算新回复，之前尚未读的内容仍然保留。
+  const silent = !event.needsUserInput && isNoUpdateReply(text);
   if (event.needsUserInput) {
     _applyAttentionState(session, ATTENTION_NEEDS_INPUT, {
       reason: event.reason,
       text,
     });
+  } else if (silent) {
+    // 保留原有提醒状态。
   } else if (event.seenByUser) {
     _applyAttentionState(session, ATTENTION_NONE);
   } else {
@@ -247,7 +252,7 @@ function applyReplyCompleted(session, event = {}) {
   }
 
   let unreadIncremented = false;
-  if (!event.seenByUser && event.incrementUnread !== false) {
+  if (!silent && !event.seenByUser && event.incrementUnread !== false) {
     session.unreadCount = Math.max(0, Number(session.unreadCount) || 0) + 1;
     unreadIncremented = true;
   }
@@ -257,6 +262,7 @@ function applyReplyCompleted(session, event = {}) {
     turnId,
     version: clock.version,
     unreadIncremented,
+    silent,
     attentionState: attentionStateOf(session),
   };
 }

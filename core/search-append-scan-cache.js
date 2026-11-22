@@ -59,9 +59,10 @@ function sameIdentity(entry, stat) {
 class AppendScanCache {
   constructor({
     minFileBytes = 1024 * 1024,
-    maxEntryKeptBytes = 16 * 1024 * 1024,
-    // Retained records cost about 1.35x their JSON size in V8 heap.
-    maxTotalKeptBytes = 24 * 1024 * 1024,
+    // 长会话过滤后也可能超过 16MB，放宽后才能复用已扫描的记录。
+    maxEntryKeptBytes = 64 * 1024 * 1024,
+    // 成员版按清单 B 控制总量为 64MB，保留原有淘汰机制；实际堆占用约为 JSON 的 1.35 倍。
+    maxTotalKeptBytes = 64 * 1024 * 1024,
     maxEntries = 16,
     maxSeenKeys = 50_000,
   } = {}) {

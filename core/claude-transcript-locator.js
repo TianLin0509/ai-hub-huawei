@@ -36,19 +36,43 @@ function claudeProjectRoots(homeDir = defaultHomeDir()) {
   return roots;
 }
 
+// 卡片刷新会反复按编号查找记录；命中只确认文件仍在，未命中最多缓存 3 秒。
+// CodeAgent 各账号有独立目录，缓存必须区分根目录及其查找顺序。
+const transcriptLookupCache = new Map();
+const TRANSCRIPT_MISS_TTL_MS = 3000;
+const lookupPath = value => process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
+const lookupKey = (id, homeDir, roots) => JSON.stringify([lookupPath(homeDir), id, roots ? roots.map(lookupPath) : null]);
+function rememberTranscript(key, entry) {
+  if (!transcriptLookupCache.has(key) && transcriptLookupCache.size >= 2000) {
+    transcriptLookupCache.delete(transcriptLookupCache.keys().next().value);
+  }
+  transcriptLookupCache.set(key, entry);
+}
+
 function findTranscriptByCCSessionId(ccSessionId, homeDir = defaultHomeDir(), projectsRoots = null) {
   if (!ccSessionId) return null;
-  for (const projectsDir of projectsRoots || claudeProjectRoots(homeDir)) {
+  const key = lookupKey(ccSessionId, homeDir, projectsRoots);
+  const cached = transcriptLookupCache.get(key);
+  if (cached) {
+    if (cached.path && fs.existsSync(cached.path)) return cached.path;
+    if (!cached.path && Date.now() - cached.at < TRANSCRIPT_MISS_TTL_MS) return null;
+    transcriptLookupCache.delete(key);
+  }
+  const roots = projectsRoots || claudeProjectRoots(homeDir);
+  let found = null;
+  for (const projectsDir of roots) {
     try {
       const entries = fs.readdirSync(projectsDir, { withFileTypes: true });
       for (const d of entries) {
         if (!d.isDirectory()) continue;
         const candidate = path.join(projectsDir, d.name, ccSessionId + '.jsonl');
-        if (fs.existsSync(candidate)) return candidate;
+        if (fs.existsSync(candidate)) { found = candidate; break; }
       }
     } catch {}
+    if (found) break;
   }
-  return null;
+  rememberTranscript(key, { path: found, at: Date.now(), roots: roots.map(lookupPath), home: lookupPath(homeDir), id: ccSessionId });
+  return found;
 }
 
 // Claude CLI buckets transcripts by cwd: every non-alphanumeric char becomes '-'.
@@ -91,6 +115,15 @@ function migrateTranscriptsForCwdChange(opts = {}) {
       }
       fs.mkdirSync(targetDir, { recursive: true });
       fs.copyFileSync(source, target);
+      // 归档后旧副本仍存在；同步同账号的缓存，避免续写后卡片一直读取旧记录。
+      for (const entry of transcriptLookupCache.values()) {
+        if (entry.home !== lookupPath(homeDir) || entry.id !== ccSessionId) continue;
+        if ((entry.path && lookupPath(entry.path) === lookupPath(source))
+            || (!entry.path && entry.roots.includes(lookupPath(projectsDir)))) {
+          entry.path = target;
+          entry.at = Date.now();
+        }
+      }
       result.copied.push(target);
     } catch (error) {
       result.errors.push(`${ccSessionId}: ${error && error.message ? error.message : String(error)}`);

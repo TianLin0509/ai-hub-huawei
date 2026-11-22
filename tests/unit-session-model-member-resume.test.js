@@ -137,6 +137,7 @@ test('team member can restart, suspend, and resume through the sidebar IPC', asy
   assert.ok(createdStart >= 0 && createdEnd > createdStart && resumeStart >= 0 && resumeEnd > resumeStart);
   const listeners = new Map();
   const context = { sessions: new Map([[created.id, dormant]]), activeSessionId: created.id,
+    dormantResumeWatch: { start() {}, finish() {}, isTimedOut: () => false }, selectSession() {},
     sessionOpenIntent: 1, _pendingDormantResumes: new Map(), buildSessionResumeMeta,
     ipcRenderer: { on: (name, handler) => listeners.set(name, handler), invoke },
     require: id => require(path.join(__dirname, '../renderer', id)),

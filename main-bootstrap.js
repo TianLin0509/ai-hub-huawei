@@ -68,6 +68,17 @@ if (!deferredToUpgrade) {
   }
 }
 
+// 网络用量与上传限制（core/net-guard.js，2026-11-23）：放在包内模块之后（限制规则可能在包内模块里）、main.js 之前，
+// 赶在任何模块发请求、建窗口和 session 之前装好。普通安装没有限制模块，这里什么都不做。
+if (!deferredToUpgrade) {
+  try {
+    const { session, net } = require('electron');
+    process.__hubNetGuard = require('./core/net-guard.js').installAll({ app, session, net });
+  } catch (error) {
+    process.__hubNetGuardError = error && error.message ? error.message : String(error);
+  }
+}
+
 if (deferredToUpgrade) {
   app.exit(0);
   setTimeout(() => process.exit(0), 1500).unref?.();

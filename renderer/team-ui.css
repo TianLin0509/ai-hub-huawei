@@ -1,4 +1,6 @@
 
+/* 静默回执保留原记录，卡片里不占位置。 */
+.turn-card.assistant.no-update { display:none !important; }
 /* CDCCBCC C: approval keeps the existing whole-plan actions. */
 .team-pending-badge { margin-right:4px; padding:0 6px; border-radius:var(--hw-r-pill); font-size:12px; line-height:16px; color:var(--hw-text-on); background:var(--hw-amber); border:0; cursor:pointer; vertical-align:1px; }
 .team-pending-badge:hover { filter:brightness(.94); }

@@ -10,7 +10,8 @@ const OK_MARK = 'AI HUB 服务';
 async function probeOnce(fetchFn, url, init, isOk, timeoutMs) {
   let response;
   try {
-    response = await fetchFn(url, { ...init, redirect: 'manual', cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) });
+    // 经网络用量与上传限制（core/net-guard.js）：心跳只发固定的空对象 {}。
+    response = await require('./net-guard').getGate().send(fetchFn, url, { ...init, redirect: 'manual', cache: 'no-store', signal: AbortSignal.timeout(timeoutMs) });
   } catch (error) {
     const msg = String(error && error.message || error);
     if (/redirect/i.test(msg)) return { state: 'gate', detail: '请求被跳转' };

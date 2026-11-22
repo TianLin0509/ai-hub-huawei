@@ -44,7 +44,7 @@ test('long multiline body survives delivery, disk reload and rolling queue pruni
   assert.equal(fs.readFileSync(r.bodyPath, 'utf8'), text);
   const delivered = h.sent.at(-1).text;
   assert.ok(delivered.includes(r.bodyPath));
-  assert.ok(delivered.includes(r.messageId));
+  assert.ok(delivered.includes('#' + r.seq));
   assert.ok(delivered.length < 1800, '完整正文不再塞进通知');
   h.service.teamOfLead('lead-001').messages = [];
   const file = path.join(h.root, 'teams', 'lead-001.json');
@@ -72,16 +72,16 @@ test('peer copies coalesce by pair without losing original ids or waking the lea
   await h.invoke('lead-001', 'allow', { memberA: 'm1', memberB: 'm2', allow: true });
   await h.settle(); h.sent.length = 0;
   const ids = [];
-  for (let i = 0; i < 4; i++) ids.push((await h.invoke('member-001', 'send', { to: 'm2', message: `第${i}次：` + '证据'.repeat(240) })).messageId);
+  for (let i = 0; i < 4; i++) ids.push(await h.invoke('member-001', 'send', { to: 'm2', message: `第${i}次：` + '证据'.repeat(240) }));
   await h.settle();
   assert.equal(h.sent.filter(m => m.id === 'lead-001').length, 0);
-  await h.invoke('member-002', 'send', { to: 'lead', message: '交付就绪' });
+  await h.invoke('member-002', 'send', { to: 'lead', message: '交付就绪', wake: true });
   await h.settle();
   const lead = h.sent.filter(m => m.id === 'lead-001').at(-1).text;
   assert.equal((lead.match(/（抄送汇总）/g) || []).length, 1);
-  for (const id of ids) {
-    assert.ok(lead.includes(id));
-    assert.ok((await h.invoke('lead-001', 'read', { messageId: id })).text.includes('证据'));
+  for (const { messageId, seq } of ids) {
+    assert.ok(lead.includes('#' + seq));
+    assert.ok((await h.invoke('lead-001', 'read', { messageId })).text.includes('证据'));
   }
   assert.ok(lead.includes('交付就绪'));
   assert.ok(lead.length < 1400);

@@ -8,10 +8,11 @@ const { createCodeAgentQuotaPanel } = require('../renderer/codeagent-quota-panel
 
 function fakeEl() {
   const classes = new Set();
-  return { hidden: false, innerHTML: '', dataset: {}, style: {},
+  const events = {};
+  return { hidden: false, innerHTML: '', dataset: {}, style: {}, events,
     classList: { add: (...c) => c.forEach(x => classes.add(x)), remove: (...c) => c.forEach(x => classes.delete(x)),
       toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)), contains: c => classes.has(c) },
-    setAttribute() {}, before() {}, remove() {}, append() {}, addEventListener() {}, removeEventListener() {},
+    setAttribute() {}, before() {}, remove() {}, append() {}, addEventListener: (name, fn) => { events[name] = fn; }, removeEventListener() {},
     querySelector: () => null, querySelectorAll: () => [], contains: () => false };
 }
 function memoryStorage(initial = {}) {
@@ -117,4 +118,33 @@ test('placement defaults to right, survives reloads, ignores unknown values and 
   assert.deepEqual(seen, ['bottom']);
   assert.equal(createQuotaPlacement({ storage }).get(), 'bottom');
   assert.equal(createQuotaPlacement({ storage: memoryStorage({ [STORAGE_KEY]: 'junk' }) }).get(), 'right');
+});
+
+test('右键隐藏只影响本机显示，全组隐藏后标题仍可恢复，重开保留偏好', async () => {
+  const storage = memoryStorage(), rows = [read, { ...read, id: 'a2' }];
+  const first = mount({ storage, rows });
+  await first.panel.whenIdle();
+  first.root.contains = () => true;
+  function menu(targets) {
+    let prevented = false;
+    first.root.events.contextmenu({ target: { closest: selector => targets[selector] || null }, preventDefault: () => { prevented = true; } });
+    return prevented;
+  }
+  assert.equal(menu({}), false, '右键空白不恢复');
+  for (const id of ['a1', 'a2']) {
+    assert.equal(menu({ '.qp-row, .qp-ring': { dataset: { qpAccount: id } } }), true);
+  }
+  assert.equal(first.panel.view().rows.length, 0);
+  assert.equal(first.root.hidden, false, '全组隐藏仍有标题入口');
+  assert.match(first.root.innerHTML, /号池额度/);
+  assert.equal(rows.length, 2, '后端账号未被删改');
+  const again = mount({ storage, rows });
+  await again.panel.whenIdle();
+  assert.equal(again.panel.view().rows.length, 0);
+  assert.deepEqual(again.panel.getState().hidden, ['a1', 'a2']);
+  again.panel.destroy();
+  assert.equal(menu({ '.qp-h h3, .qp-info, .qp-rail > [data-qp-action="expand"]': {} }), true);
+  assert.deepEqual(first.panel.getState().hidden, []);
+  assert.equal(first.panel.view().rows.length, 2);
+  first.panel.destroy();
 });

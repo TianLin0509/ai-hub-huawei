@@ -43,7 +43,7 @@ function createResumeSessionHandler(deps) {
     resumeOpts.codexMcpEntries = [...(resumeOpts.codexMcpEntries || []), entry];
   }
 
-  return async function resumeSession(meta, runtimeOptions = {}) {
+  async function openSession(meta, runtimeOptions = {}) {
     if (!meta || !meta.hubId) return null;
     // 只消费本次调用提供的覆盖，磁盘里的历史选型标记不代表新的操作意图。
     const launchOverrides = meta.launchOverrides;
@@ -458,6 +458,25 @@ function createResumeSessionHandler(deps) {
 
     return session;
     } finally { sessionManager.cancelReservedOpen?.(reservedId,reservation); }
+  }
+
+  const pendingResumes = new Map();
+  return function resumeSession(meta, runtimeOptions = {}) {
+    const id = meta?.hubId;
+    if (!id) return Promise.resolve(null);
+    // 超时和重试不取消旧任务：先复用在途启动，再核对运行表，最后才允许新建进程。
+    if (pendingResumes.has(id)) return pendingResumes.get(id);
+    const live = sessionManager.getSession(id);
+    if (live) {
+      sendToRenderer('session-created', { session: live });
+      return Promise.resolve(live);
+    }
+    // 先登记再做认证/预约，避免这些异步步骤尚未结束时重入。
+    const pending = Promise.resolve().then(() => openSession(meta, runtimeOptions)).finally(() => {
+      if (pendingResumes.get(id) === pending) pendingResumes.delete(id);
+    });
+    pendingResumes.set(id, pending);
+    return pending;
   };
 }
 

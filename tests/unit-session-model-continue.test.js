@@ -180,15 +180,82 @@ test('closing a session cancels only its pending model decisions', async () => {
   gate.respond({ requestId: events[1].requestId, modelId: NEXT }); assert.equal(await second, NEXT);
 });
 
-function ordinaryApi(t, f) {
+function ordinaryApi(t, f, inputAction = async () => ({ ok: true })) {
   // The composer/input guard is a separate terminal-snapshot boundary; this
   // fixture tests the actual prompt IPC, receipts, model gate and send pipeline.
-  t.mock.method(watcher, 'codeAgentInputAction', async () => ({ ok: true }));
+  t.mock.method(watcher, 'codeAgentInputAction', inputAction);
   const api = require('../main/ipc/prompt-submit-handlers').registerPromptSubmitIpc({ handle: (name, fn) => f.handlers?.set(name, fn) }, {
     sessionManager: f.manager, sendToRenderer() {}, logger: { warn() {} },
   });
   t.after(() => api.dispose()); return api;
 }
+
+for (const stage of ['input', 'model', 'picker']) test(`T4：send-prompt 在 ${stage} 等待超时后返回失败，迟到就绪不补发`, async t => {
+  const f = fixture(t);
+  let release;
+  const blocked = new Promise(resolve => { release = resolve; });
+  ordinaryApi(t, f, stage === 'input' ? () => blocked : undefined);
+  if (stage === 'model') t.mock.method(f.manager, 'ensureSessionModelReady', () => blocked);
+  if (stage === 'picker') {
+    const picker = require('../core/codeagent-model-picker');
+    t.mock.method(picker, 'isPicking', () => true);
+    t.mock.method(picker, 'waitForPick', () => blocked);
+  }
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const pending = f.handlers.get('session:send-prompt')(null, {
+    sessionId: f.info.id, text: '超时不能补发', clientSubmissionId: `t4-timeout-${stage}`,
+  });
+  await flush();
+  t.mock.timers.tick(120001);
+  const result = await pending;
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'CODEAGENT_SEND_TIMEOUT');
+  assert.equal(result.notSent, true);
+  assert.match(result.message, /120 秒.*未发送/);
+  assert.equal(f.requests.length, 0);
+  assert.equal(f.sent.length, 0);
+  release({ ok: true });
+  await flush();
+  assert.equal(f.sent.length, 0, '超时后的原提交已经撤销');
+  Object.assign(f.info, { fixedModel: NEXT, codeagentModelPick: false, modelConfirmationRequired: false });
+  const retry = await f.handlers.get('session:send-prompt')(null, {
+    sessionId: f.info.id, text: '用户重新发送', clientSubmissionId: `t4-retry-${stage}`,
+  });
+  assert.equal(retry.ok, true, '迟到检查收尾后，用户可以正常重发');
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.sent[0].text, '用户重新发送');
+});
+
+test('T4：send-prompt 输入检查拒收时返回明确原因', async t => {
+  const f = fixture(t); ordinaryApi(t, f, async () => {
+    throw Object.assign(new Error('终端拒收：模型菜单尚未关闭'), { code: 'codeagent-menu-open' });
+  });
+  const result = await f.handlers.get('session:send-prompt')(null, { sessionId: f.info.id, text: '拒收测试' });
+  assert.equal(result.ok, false);
+  assert.equal(result.notSent, true);
+  assert.equal(result.code, 'codeagent-menu-open');
+  assert.match(result.message, /模型菜单尚未关闭/);
+  assert.equal(f.sent.length, 0);
+});
+
+test('T4：交给 CLI 后丢失确认，超时必须报告结果未知以免重复发送', async t => {
+  const f = fixture(t); ordinaryApi(t, f);
+  let finish;
+  t.mock.method(watcher, 'sendToPty', (_sid, _text, _kind, options) => {
+    options.onSubmissionHandoff();
+    return new Promise(resolve => { finish = resolve; });
+  });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const pending = f.handlers.get('session:send-prompt')(null, { sessionId: f.info.id, text: '确认丢失' });
+  await flush(); t.mock.timers.tick(120001);
+  const result = await pending;
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'CODEAGENT_SEND_TIMEOUT');
+  assert.equal(result.unconfirmed, true);
+  assert.equal(result.notSent, undefined);
+  assert.match(result.message, /避免重复发送/);
+  finish({ ok: true }); await flush();
+});
 
 test('codeagent-models blocked send-prompt IPC returns an explicit unsent error without awaiting a model decision', async t => {
   const f = fixture(t); ordinaryApi(t, f);

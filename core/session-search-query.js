@@ -213,8 +213,11 @@ class QuerySnapshot {
         const eventPredicate=this.timed && field==='eventTime'
           ? ` AND ((scope<>'title' AND event_id<>'last-output-preview' AND timestamp>0 AND timestamp>=? AND timestamp<=?) OR (scope='title' AND session_key IN (SELECT value FROM json_each(?))))` : '';
         const eventArgs=eventPredicate?[from??0,to??Number.MAX_SAFE_INTEGER,JSON.stringify([...this.rangeSessions])]:[];
+        // 空词搜全部对话时，范围内会话集合就是答案，不再对整张正文表做第二遍去重扫描。
+        const rangeIsAnswer=this.timed && field==='eventTime' && request.scopes.includes('user') && request.scopes.includes('assistant');
         const scoped=this.memoryDocs
           ? new Set(this.memoryDocs.filter(d=>d.timestamp>0 && d.timestamp>=(from??0) && d.timestamp<=(to??Number.MAX_SAFE_INTEGER) && d.event_id!=='last-output-preview').map(d=>d.session_key))
+          : rangeIsAnswer ? this.rangeSessions
           : new Set(this.db.prepare(`SELECT DISTINCT session_key FROM docs WHERE scope IN (${request.scopes.map(()=>'?')})${eventPredicate}`).all(...request.scopes,...eventArgs).map(r=>r.session_key));
         this.finalResults = [...this.allowed].filter(key=>scoped.has(key)).map(key=>{
           const row={...this.sessions.get(key), matchCount:0, titleOnly:true, indexed:true, newestMatchedEventAt:null,

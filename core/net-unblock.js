@@ -252,7 +252,10 @@ async function openVisibleGateWindow(BrowserWindow, url, { parent = null, show =
       } catch (_) { /* 页面正在跳转：下一轮再看 */ }
       if (!done) timer = setTimeout(tick, wait);
     };
-    if (post) win.loadURL(url, { postData: [{ type: 'rawData', bytes: Buffer.from(JSON.stringify(post), 'utf8') }], extraHeaders: 'Content-Type: application/json\n' }).catch(() => {});
+    // 经网络用量与上传限制（core/net-guard.js）：放行窗口只 POST 固定的空对象 {}；不允许就只打开页面、不提交。
+    let postOk = !!post;
+    if (post) { try { require('./net-guard').getGate().prepare(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(post) }); } catch { postOk = false; } }
+    if (postOk) win.loadURL(url, { postData: [{ type: 'rawData', bytes: Buffer.from(JSON.stringify(post), 'utf8') }], extraHeaders: 'Content-Type: application/json\n' }).catch(() => {});
     else win.loadURL(url).catch(() => {});
     timer = setTimeout(tick, pollMs);
   });
@@ -270,6 +273,9 @@ async function postInHiddenWindow(BrowserWindow, url, body, { loadTimeoutMs = 30
   const stopBlockingDownloads = blockDownloads(win);
   try {
     wc.once('did-navigate', (_e, _url, code) => { result.status = code; });
+    // 经网络用量与上传限制（core/net-guard.js）：不允许就不打开窗口提交。
+    try { require('./net-guard').getGate().prepare(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); }
+    catch (error) { return { ...result, error: error.message, outboundBlocked: true }; }
     const postData = [{ type: 'rawData', bytes: Buffer.from(JSON.stringify(body), 'utf8') }];
     try { await timeout(win.loadURL(url, { postData, extraHeaders: 'Content-Type: application/json\n' }), loadTimeoutMs, '提交'); }
     catch (error) { result.loadError = error.message; if (wc.isLoading()) await timeout(new Promise(r => wc.once('did-stop-loading', r)), loadTimeoutMs, '提交').catch(() => {}); }

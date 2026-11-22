@@ -1014,6 +1014,7 @@ test('dormant selection executes the original open-status and resume path with e
     const context = { session, id: HUB, opts: {}, intent: 1, sessionOpenIntent: 1, activeSessionId: HUB,
       targetView: 'card', forceScrollBottom: false, sessions: new Map([[HUB, session]]),
       _pendingDormantResumes: new Map(), paintSidebarResumePending: noop,
+      dormantResumeWatch: { start: noop, finish: noop, isTimedOut: () => false },
       showDormantResumePlaceholder: noop, scheduleSessionListRender: noop,
       acknowledgeSessionFailureState: () => false, schedulePersist: noop,
       ipcRenderer: { send: noop, invoke: async (channel, id) => { calls.push([channel, id]); return { available: true }; } },

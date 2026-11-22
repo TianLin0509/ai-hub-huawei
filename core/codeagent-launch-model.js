@@ -14,6 +14,15 @@ const path = require('path');
 const FILE = 'codeagent-last-model.json';
 const eq = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
 
+// 启动中心传 true，程序化新建也可能直接传模型名；两种都表示本次明确选型。
+// 只有 model 元数据而没有选型标记时，仍沿用原来的默认/恢复规则。
+function explicitModel(opts = {}) {
+  const pick = opts.codeagentModelPick;
+  const model = opts.model || (typeof pick === 'string' ? pick : '');
+  return (pick === true || typeof pick === 'string' && eq(pick, model))
+    && require('./model-id').isSafeModelId(model) ? model.trim() : '';
+}
+
 function readAll(dataDir) {
   try {
     const data = JSON.parse(fs.readFileSync(path.join(dataDir, FILE), 'utf8'));
@@ -86,4 +95,4 @@ function hubDefaultModel(config, { models, authoritative, blocked = null } = {})
   return hit ? { model: hit, reason: 'applied', saved } : { model: '', reason: 'not-in-list', saved };
 }
 
-module.exports = { FILE, lastModel, lastEntry, rememberModel, chooseLaunchModel, recheckLaunchChoice, hubDefaultModel };
+module.exports = { FILE, explicitModel, lastModel, lastEntry, rememberModel, chooseLaunchModel, recheckLaunchChoice, hubDefaultModel };

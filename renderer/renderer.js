@@ -1389,7 +1389,7 @@ function paintSidebarResumePending(sessionId, pending) {
   }
 }
 
-function showDormantResumePlaceholder(session, error = null, { checking = false } = {}) {
+function showDormantResumePlaceholder(session, error = null, { checking = false, timedOut = false } = {}) {
   if (!terminalPanelEl || !session) return;
   suspendInactiveTerminalRenderers(null);
   terminalPanelEl.classList.remove('home-active');
@@ -1398,22 +1398,30 @@ function showDormantResumePlaceholder(session, error = null, { checking = false 
   if (overlay) overlay.classList.add('hidden');
   if (emptyStateEl) emptyStateEl.style.display = 'none';
   const panel = document.createElement('div');
-  panel.className = `session-resume-pending${error ? ' failed' : ''}`;
+  panel.className = `session-resume-pending${error || timedOut ? ' failed' : ''}`;
   const spinner = document.createElement('span');
   spinner.className = 'session-resume-spinner';
   spinner.setAttribute('aria-hidden', 'true');
   const copy = document.createElement('div');
   const title = document.createElement('strong');
-  title.textContent = error ? '会话唤醒失败' : checking ? '正在检查会话…' : '正在唤醒会话…';
+  title.textContent = timedOut ? '唤醒没有完成' : error ? '会话唤醒失败' : checking ? '正在检查会话…' : '正在唤醒会话…';
   const detail = document.createElement('span');
   detail.textContent = error
     ? `${String(error && error.message || error).replace(/[。.!！?？]+$/, '')}。再次点击左侧会话可重试。`
     : `${session.title || 'Session'} · ${checking ? '正在确认会话可用' : '正在恢复原生 CLI 与历史上下文'}`;
-  copy.append(title, detail);
-  panel.append(spinner, copy);
+  copy.append(title);
+  if (!timedOut) copy.append(detail);
+  if (!timedOut) panel.append(spinner);
+  panel.append(copy);
   terminalPanelEl.appendChild(panel);
   // pi 会话存的线路缺钥匙（r39 审查）：就地补 Key，保存后直接重新唤醒，不让用户去设置页找。
-  if (error) {
+  if (error || timedOut) {
+    const retry = document.createElement('button');
+    retry.className = 'hub-button';
+    retry.textContent = '重试';
+    retry.addEventListener('click', () => {
+      if (activeSessionId === session.id) void selectSession(session.id, { resumeRetry: true });
+    });
     const history = document.createElement('button');
     history.className = 'hub-button';
     history.textContent = '查看已有历史';
@@ -1429,14 +1437,16 @@ function showDormantResumePlaceholder(session, error = null, { checking = false 
     });
     const fresh = document.createElement('button');
     fresh.className = 'hub-button';
-    fresh.textContent = '新建会话（保留此会话）';
+    fresh.textContent = timedOut ? '新开会话接着聊' : '新建会话（保留此会话）';
     fresh.addEventListener('click', () => window.WorkspaceController.openNewSessionModal({ kind: session.kind,
       ...(session.cwd ? { workspace: { path: session.cwd, label: session.workspaceLabel || session.title || '' } } : {}) }));
     const actions = document.createElement('div');
     actions.className = 'session-resume-actions';
-    actions.append(history, fresh);
+    actions.append(retry);
+    if (!timedOut) actions.append(history);
+    actions.append(fresh);
     copy.append(actions);
-    void require('./pi-route-key-fix').mountPiRouteKeyFix(copy, { session, modelId: sessionModelId(session), ipc: ipcRenderer, replaceEl: detail,
+    if (!timedOut) void require('./pi-route-key-fix').mountPiRouteKeyFix(copy, { session, modelId: sessionModelId(session), ipc: ipcRenderer, replaceEl: detail,
       onRetry: () => selectSession(session.id) }).catch(err => console.warn('[pi-route-key-fix]', err && err.message));
   }
 }
@@ -6602,6 +6612,14 @@ async function selectSession(id, opts = {}) {
   // CLI restart never looks like a dropped click.
   if (session.status === 'dormant') {
     if (opts.inspectOnly) return;
+    // 重选侧栏保留原来的超时结果；只有显式重试才重新计时。
+    if (dormantResumeWatch.isTimedOut(id) && !opts.resumeRetry) {
+      const pending = _pendingDormantResumes.get(id);
+      if (pending) pending.selectIntent = intent;
+      showDormantResumePlaceholder(session, null, { timedOut: true });
+      return;
+    }
+    dormantResumeWatch.start(id, { restart: opts.resumeRetry === true });
     // Paint navigation before the main process checks ownership. No CLI or
     // transcript is opened until that check succeeds; an occupied session
     // stays on the placeholder, and a newer selection cancels this intent.
@@ -6624,11 +6642,12 @@ async function selectSession(id, opts = {}) {
       scheduleSessionListRender();
     };
     let opening;
-    try { opening = await ipcRenderer.invoke('session:open-status', id); }
+    try { opening = await ipcRenderer.invoke('session:open-status', id, { reconcile: opts.resumeRetry === true }); }
     catch (error) { opening = { available: false, message: error.message || String(error) }; }
     if (intent !== sessionOpenIntent || activeSessionId !== id) { clearChecking(); return; }
     if (!opening?.available) {
       clearChecking();
+      dormantResumeWatch.finish(id);
       showDormantResumePlaceholder(session, new Error(opening?.message || '会话占用状态暂时无法确认'));
       return;
     }
@@ -6643,16 +6662,15 @@ async function selectSession(id, opts = {}) {
     // signature and put the session straight back under “运行异常”.
     const acknowledgedFailure = acknowledgeSessionFailureState(session, { render: false });
     if (acknowledgedFailure) schedulePersist();
-    session._resumePending = true;
-    paintSidebarResumePending(id, true);
+    session._resumePending = !dormantResumeWatch.isTimedOut(id);
+    paintSidebarResumePending(id, session._resumePending);
     ipcRenderer.send('focus-session', { sessionId: null });
-    showDormantResumePlaceholder(session);
+    showDormantResumePlaceholder(session, null, { timedOut: dormantResumeWatch.isTimedOut(id) });
     scheduleSessionListRender();
     void resumeDormantSession(id, { ...opts, selectIntent: intent }).catch((error) => {
       console.warn('[resume-session] dormant wake failed:', error);
-      if (activeSessionId === id) showDormantResumePlaceholder(session, error);
-      // pi 的失败原因（含缺钥匙时的补 Key 输入框）已经写在当前页上，不再叠一个弹窗挡住它。
-      if (!(activeSessionId === id && /^pi(?:-resume)?$/.test(String(session.kind || '')))) require('./ui-feedback').showHubAlert(`会话恢复失败：${error && error.message ? error.message : String(error)}`);
+      if (activeSessionId === id && intent === sessionOpenIntent && sessions.get(id)?.status === 'dormant') showDormantResumePlaceholder(session, error);
+      // 当前页已有失败原因和恢复按钮；过期请求不能弹窗打断新选择。
     });
     return;
   }
@@ -8712,7 +8730,7 @@ ipcRenderer.on('hook-event', (_e, payload = {}) => {
     updateFloatingBarState();
     scheduleSessionListRender();
   }
-  else if (event === 'prompt') onPromptSubmittedFromHook(sessionId, eventAt, { provider: payload.provider, turnId, injected: injectedContinuation === true });
+  else if (event === 'prompt') onPromptSubmittedFromHook(sessionId, eventAt, { provider: payload.provider, turnId, injected: injectedContinuation === true, programMessage: isProgramMessagePrompt(latestUserMessage) });
   else if (event === 'stop-failure') onClaudeStopFailure(sessionId, eventAt, {
     error,
     errorDetails,
@@ -8845,6 +8863,9 @@ function ptyPermissionText(toolName, toolInput) {
   return `等待授权：${toolName}` + (detail ? '\n' + (detail.length > 400 ? detail.slice(0, 398) + '…' : detail) : '');
 }
 
+function isProgramMessagePrompt(text) {
+  return typeof text === 'string' && require('./team-notice-identity').isTeamMessage(text);
+}
 function onPromptSubmittedFromHook(sessionId, submittedAt = Date.now(), options = {}) {
   const session = sessions.get(sessionId);
   if (!session) return;
@@ -8853,7 +8874,7 @@ function onPromptSubmittedFromHook(sessionId, submittedAt = Date.now(), options 
   // <task-notification> 续跑一轮，并照样发 UserPromptSubmit。这不是用户发言：
   // 未读要留着，后台任务清单也要留到这一轮的 Stop 带来新清单为止。
   const injected = options.injected === true;
-  const transition = applyPromptSubmitted(session, { submittedAt, turnId: options.turnId, acknowledgesReply: !injected });
+  const transition = applyPromptSubmitted(session, { submittedAt, turnId: options.turnId, acknowledgesReply: !injected && options.programMessage !== true });
   if (!transition.applied) return;
   session.currentCardActivity = null;
   session.liveToolActivities = [];
@@ -9040,7 +9061,7 @@ function onPromptSubmittedFromTranscriptEvent(payload) {
   if (!isTranscriptCliKind(kind) && session.runtimeBackend !== 'claude-stream-json') return;
   if (session.status === 'dormant') return;
 
-  const transition = applyPromptSubmitted(session, { submittedAt, turnId });
+  const transition = applyPromptSubmitted(session, { submittedAt, turnId, acknowledgesReply: !isProgramMessagePrompt(text) });
   if (!transition.applied) return;
   session.currentCardActivity = null;
   session.liveToolActivities = [];
@@ -10000,8 +10021,19 @@ if (typeof MeetingRoom !== 'undefined') {
 }
 
 const _pendingDormantResumes = new Map();
+const dormantResumeWatch = require('./dormant-resume-watch').createDormantResumeWatch({
+  onTimeout(id) {
+    const session = sessions.get(id);
+    if (!session || session.status !== 'dormant') { dormantResumeWatch.finish(id); return; }
+    session._resumePending = false;
+    paintSidebarResumePending(id, false);
+    scheduleSessionListRender();
+    if (activeSessionId === id) showDormantResumePlaceholder(session, null, { timedOut: true });
+  },
+});
 
 ipcRenderer.on('session-created', async (_e, { session }) => {
+  dormantResumeWatch.finish(session.id);
   nativeSessionBootstrap.record(session, { created: true });
   // When resuming a dormant session, the hubId matches an existing dormant
   // entry. Merge live PTY info on top of the dormant metadata so title /
@@ -10807,6 +10839,7 @@ const restartController = require('./hub-restart-controller').createHubRestartCo
 // Wake a dormant session: call main to spawn PTY with --resume, then wait for
 // session-created which will replace the dormant entry.
 async function resumeDormantSession(hubId, opts = {}) {
+  dormantResumeWatch.start(hubId);
   const existingPending = _pendingDormantResumes.get(hubId);
   if (existingPending) {
     if (opts.forceScrollBottom === true) existingPending.forceScrollBottom = true;
@@ -10814,15 +10847,18 @@ async function resumeDormantSession(hubId, opts = {}) {
     return existingPending.promise || null;
   }
   const dormant = sessions.get(hubId);
-  if (!dormant || dormant.status !== 'dormant') return dormant || null;
+  if (!dormant || dormant.status !== 'dormant') {
+    dormantResumeWatch.finish(hubId);
+    return dormant || null;
+  }
   const pendingResume = {
     forceScrollBottom: opts.forceScrollBottom === true,
     selectIntent: opts.selectIntent ?? null,
     promise: null,
   };
   _pendingDormantResumes.set(hubId, pendingResume);
-  dormant._resumePending = true;
-  paintSidebarResumePending(hubId, true);
+  dormant._resumePending = !dormantResumeWatch.isTimedOut(hubId);
+  paintSidebarResumePending(hubId, dormant._resumePending);
   scheduleSessionListRender();
   // Keep title / pinned / preview so UI stays stable through the resume.
   let resumed;
@@ -10834,6 +10870,7 @@ async function resumeDormantSession(hubId, opts = {}) {
     resumed = await pendingResume.promise;
     if (!resumed || resumed.id !== hubId) throw new Error('会话未能启动，原有记录已保留。请重试或新建会话。');
   } catch (error) {
+    dormantResumeWatch.finish(hubId);
     if (_pendingDormantResumes.get(hubId) === pendingResume) {
       _pendingDormantResumes.delete(hubId);
     }
@@ -10842,6 +10879,7 @@ async function resumeDormantSession(hubId, opts = {}) {
     scheduleSessionListRender();
     throw error;
   }
+  dormantResumeWatch.finish(hubId);
   if (resumed && resumed.cwdFellBackFrom) {
     require('./ui-feedback').showHubAlert(`原工作目录已不存在：\n${resumed.cwdFellBackFrom}\n\n会话已回落到：\n${resumed.cwd}\n\n请先重定位或归档 workspace；不要在聚合根继续写文件。`);
   }
@@ -10869,6 +10907,11 @@ async function resumeDormantSession(hubId, opts = {}) {
     });
   }
   if (s) scheduleSessionListRender();
+  // IPC 回包先于推送时也接回当前会话，移除等待/超时占位。
+  if (s?.status === 'dormant' && activeSessionId === hubId
+      && (pendingResume.selectIntent == null || pendingResume.selectIntent === sessionOpenIntent)) {
+    void selectSession(hubId, { forceScrollBottom: pendingResume.forceScrollBottom });
+  }
   return resumed || null;
 }
 window.resumeDormantSession = resumeDormantSession;

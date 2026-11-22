@@ -20,6 +20,8 @@ body.preview-immersive-active .account-quota-panel { display: none !important; }
 
 .cq-head { flex: none; display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 6px 0 12px; }
 .cq-head strong { font-size: 12.5px; color: var(--fg-strong, var(--fg-default)); white-space: nowrap; }
+.cq-info { color: var(--fg-muted); font-size: 12px; cursor: help; }
+.qp-info { color: var(--hw-text-3); font-size: var(--hw-fs-12); cursor: help; }
 .cq-logo { width: 13px; height: 13px; flex: none; }
 .cq-collapse { margin-left: auto; width: 20px; height: 22px; color: var(--fg-muted); font-size: 13px; border-radius: 5px; }
 .cq-collapse:hover { background: var(--surface-hover); color: var(--fg-default); }

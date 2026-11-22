@@ -33,12 +33,16 @@ class CompanyWebAi {
     });
   }
   async request(root,op,body) {
-    const response=await this.fetch(root+'/'+op,{method:'POST',redirect:'error',headers:{'Content-Type':'application/json','X-Hub-AI-Client':this.capability,'X-Weekly-Request':'1',Origin:new URL(root).origin},body:JSON.stringify(body),signal:AbortSignal.timeout(15000)});
+    // 经网络用量与上传限制（core/net-guard.js）发送。
+    const response=await require('./net-guard').getGate().send(this.fetch,root+'/'+op,{method:'POST',redirect:'error',headers:{'Content-Type':'application/json','X-Hub-AI-Client':this.capability,'X-Weekly-Request':'1',Origin:new URL(root).origin},body:JSON.stringify(body),signal:AbortSignal.timeout(15000)});
     if(!response.ok)throw Error(`团队 AI 服务暂不可用（${response.status}）`);
     return response.json();
   }
   async poll(root) {
     if(this.closed||this.roots.get(root))return;this.roots.set(root,true);
+    // 领任务前先按上传限制试算一次结果的回写：回写不了就不领（免得任务被领走却回不去），也不再轮询。
+    const probe=require('./net-guard').getGate().inspect(root+'/complete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:'0'.repeat(36),receipt:'0'.repeat(64),text:'x'})});
+    if(probe.reason){this.onChanged({state:'error',message:'团队文字任务在这台电脑上不可用：网络策略不允许把结果发回该网站（'+probe.reason+'）'});return;}
     try{
       const claimed=await this.request(root,'claim',{});
       if(this.closed)return;

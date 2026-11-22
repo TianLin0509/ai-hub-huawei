@@ -1,8 +1,8 @@
 'use strict';
 
-// 昨日之我默认「我的提问 + 最近 7 天」走常驻内存（2026-11-05）。真实隔离 Hub + 真实 SQLite 子进程 +
-// 真实鼠标/键盘输入，不调用 AI。验收：默认范围、打字到出结果的耗时、AI 回答与 7 天前的提问
-// 默认不出现、「扩大」一次性生效、用户改过的范围与时间被记住。
+// 昨日之我默认「全部内容 + 最近 7 天」。真实隔离 Hub + 真实 SQLite 子进程 +
+// 真实鼠标/键盘输入，不调用 AI。验收：默认范围、回答可搜、无头调用过滤、旧记录扩大后可搜、
+// 「我的提问」仍走常驻内存、范围与时间记忆，以及 1440 宽一屏布局。
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -15,6 +15,8 @@ const getFreePort = () => new Promise(resolve => { const s = net.createServer();
 const ROOT = path.resolve(__dirname, '..');
 // 证据目录可用 HUB_E2E_ARTIFACTS_DIR 指到仓库外（截图、耗时、日志）。
 const OUT = process.env.HUB_E2E_ARTIFACTS_DIR || path.join(ROOT, 'artifacts', 'yesterday-fast-default');
+const ARTIFACT_PREFIX = `${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-r10-port-search`;
+const artifact = name => path.join(OUT, `${ARTIFACT_PREFIX}-${name}`);
 const DAY = 24 * 60 * 60 * 1000;
 
 function writeTranscript(root, name, rows) {
@@ -38,6 +40,9 @@ async function main() {
   writeTranscript(roots[0], 'old', [
     { type: 'user', uuid: 'u2', sessionId: 'old', cwd: temp, timestamp: iso(now - 20 * DAY), message: { role: 'user', content: 'OLDMARK 二十天前的提问' } },
     { type: 'assistant', uuid: 'a2', sessionId: 'old', cwd: temp, timestamp: iso(now - 20 * DAY + 5000), message: { role: 'assistant', content: [{ type: 'text', text: '旧回答' }] } },
+  ]);
+  writeTranscript(roots[0], 'scripted', [
+    { type: 'user', uuid: 'script-u1', sessionId: 'scripted', entrypoint: 'sdk-cli', cwd: temp, timestamp: iso(now - DAY), message: { role: 'user', content: 'SCRIPTONLY 后台评审任务' } },
   ]);
   const result = { scope: 'Real isolated Hub + real SQLite child + CDP mouse/keyboard; no AI calls', temp, checks: [], timings: {} };
   let hub, client;
@@ -92,7 +97,7 @@ async function main() {
       HUB_SESSION_SEARCH_KIMI_ROOTS: roots[2], HUB_SESSION_SEARCH_GEMINI_ROOTS: roots[3],
     } });
     client = await connectFirstPage(hub);
-    await client.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 1000, deviceScaleFactor: 1, mobile: false });
+    await client.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
     await until('renderer', () => client.eval('!!window.__hubE2E?.globalSessionSearch'));
     await until('fixtures indexed', async () => (await invoke('search-past-sessions', { query: 'OLDMARK', scopes: ['user'] })).totalSessions === 1
       && (await invoke('search-past-sessions', { query: 'FASTMARK', scopes: ['user'] })).totalSessions === 1, 60000);
@@ -101,38 +106,41 @@ async function main() {
     await until('history UI', () => client.eval('document.querySelector("#search-query")?.getBoundingClientRect().width > 0'));
     let s = await until('default state rendered', async () => { const v = await state(); return /范围/.test(v.summary) ? v : null; });
     result.defaultState = s;
-    assert.equal(s.scope, 'user'); assert.equal(s.time, '7d');
-    assert.match(s.summary, /范围：我的提问 · 最近 7 天/); assert.equal(s.widenVisible, true);
-    result.checks.push('First open defaults to 我的提问 + 最近 7 天 and shows the scope in the summary line');
+    assert.equal(s.scope, 'all'); assert.equal(s.time, '7d');
+    assert.match(s.summary, /范围：全部内容 · 最近 7 天/); assert.equal(s.widenVisible, true);
+    result.checks.push('首次打开默认全部内容 + 最近 7 天');
+    result.layout = await client.eval(`(() => { const e=document.querySelector('#search-query'); const page=e.closest('.hub-workspace-body') || document.documentElement; return {width:innerWidth,height:innerHeight,scrollHeight:page.scrollHeight,clientHeight:page.clientHeight}; })()`);
+    assert.ok(result.layout.scrollHeight <= result.layout.clientHeight + 2, JSON.stringify(result.layout));
 
     const backend = await invoke('search-past-sessions', { query: 'FASTMARK', scopes: ['user'], timeRange: '7d' });
     assert.equal(backend.searchPath, 'memory');
-    result.checks.push('Backend answers the default scope from the resident in-memory path');
+    result.checks.push('我的提问范围仍走常驻内存');
 
     result.timings.typeToResultMs = [];
     for (let i = 0; i < 5; i++) result.timings.typeToResultMs.push(await typeAndTime(i % 2 ? '仿真配置' : 'FASTMARK', 'FASTMARK'));
     result.checks.push('Typing a word shows the matching question (key-in → visible, in page)');
-    fs.writeFileSync(path.join(OUT, 'default-results.png'), Buffer.from((await client.send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
+    fs.writeFileSync(artifact('default-results.png'), Buffer.from((await client.send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
     const ipcSamples = [];
-    for (let i = 0; i < 20; i++) { const t0 = Date.now(); await invoke('search-past-sessions', { query: i % 2 ? '仿真' : 'FASTMARK', scopes: ['user'], timeRange: '7d', limit: 50 }); ipcSamples.push(Date.now() - t0); }
+    for (let i = 0; i < 20; i++) { const t0 = Date.now(); await invoke('search-past-sessions', { query: '', scopes: ['title', 'user', 'assistant'], timeRange: '7d', limit: 50 }); ipcSamples.push(Date.now() - t0); }
     result.timings.ipcRoundTripMs = ipcSamples;
 
-    await typeAndTime('ASSISTONLY', null);
+    await typeAndTime('ASSISTONLY', 'FASTMARK');
+    await typeAndTime('SCRIPTONLY', null);
     await typeAndTime('OLDMARK', null);
-    result.checks.push('By default an AI-only phrase and a 20-day-old question are not returned');
+    result.checks.push('默认能搜到 AI 回答；后台无头记录和 20 天前提问不混入近期结果');
 
     await click('#session-search-widen');
     const widened = await until('widened result', async () => { const v = await state(); return v.results.includes('OLDMARK') ? v : null; });
     assert.equal(widened.scope, 'dialogue'); assert.equal(widened.time, 'all');
     result.checks.push('「扩大到全部时间与 AI 回答」 finds the old question in one click');
-    fs.writeFileSync(path.join(OUT, 'widened.png'), Buffer.from((await client.send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
+    fs.writeFileSync(artifact('widened.png'), Buffer.from((await client.send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
 
     await closeHistory();
     await click('#btn-global-search');
-    s = await until('reopened state', async () => { const v = await state(); return v.scope === 'user' && v.time === '7d' ? v : null; }, 5000)
+    s = await until('reopened state', async () => { const v = await state(); return v.scope === 'all' && v.time === '7d' ? v : null; }, 5000)
       .catch(async error => { result.reopenDiag = { state: await state(), stored: await client.eval(`({scope:localStorage.getItem('hub.search.scope'),time:localStorage.getItem('hub.search.timeRange'),open:window.hubWorkspaces.isOpen()})`) }; throw error; });
-    assert.equal(s.scope, 'user'); assert.equal(s.time, '7d');
-    result.checks.push('Widening is one-off: reopening returns to 我的提问 + 最近 7 天');
+    assert.equal(s.scope, 'all'); assert.equal(s.time, '7d');
+    result.checks.push('扩大为一次性操作，再次打开回到全部内容 + 最近 7 天');
 
     if (await client.eval(`document.querySelector('#session-search-advanced').hidden`)) await click('#session-search-filter-toggle');
     await click('#session-search-scope-tabs [data-scope="assistant"]');
@@ -142,14 +150,14 @@ async function main() {
     s = await until('remembered state', async () => { const v = await state(); return /范围/.test(v.summary) ? v : null; });
     assert.equal(s.scope, 'assistant'); assert.equal(s.time, '3d');
     result.checks.push('A scope/time the user picked is remembered on the next open');
-    fs.writeFileSync(path.join(OUT, 'remembered.png'), Buffer.from((await client.send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
+    fs.writeFileSync(artifact('remembered.png'), Buffer.from((await client.send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
     result.passed = true;
   } catch (error) { result.error = error.stack; throw error; }
   finally {
     if (client) await client.close().catch(() => {});
-    if (hub) { fs.writeFileSync(path.join(OUT, 'hub.log'), hub.log().join('\n'), 'utf8'); await gracefulQuit(hub); }
-    fs.writeFileSync(path.join(OUT, 'result.json'), JSON.stringify(result, null, 2), 'utf8');
-    console.log(JSON.stringify({ passed: result.passed || false, checks: result.checks, timings: result.timings, reopenDiag: result.reopenDiag, afterClose: result.afterClose, error: result.error, evidence: path.join(OUT, 'result.json') }));
+    if (hub) { fs.writeFileSync(artifact('hub.log'), hub.log().join('\n'), 'utf8'); await gracefulQuit(hub); }
+    fs.writeFileSync(artifact('result.json'), JSON.stringify(result, null, 2), 'utf8');
+    console.log(JSON.stringify({ passed: result.passed || false, checks: result.checks, timings: result.timings, reopenDiag: result.reopenDiag, afterClose: result.afterClose, error: result.error, evidence: artifact('result.json') }));
   }
 }
 

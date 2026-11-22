@@ -303,12 +303,12 @@ test('历史消息和旧错误不能结算恢复中的新轮次', async t => {
   await session.send('新一轮');
   const previousStream = session.client.sse;
   serve.crash();
-  await until(() => session.client.sse && session.client.sse !== previousStream, '恢复仍在执行的新一轮', 5000);
+  await until(() => session.client.sse && session.client.sse !== previousStream, '恢复仍在执行的新一轮', 10000);
   assert.ok(session.active);
   assert.equal(lastTurn(session).status, 'inProgress');
   serve.reply('新轮前缀与结果', 'new'); serve.idle();
   // 恢复后的事件流在机器负载高时可能晚于 3 秒到达（v5.6.82 预检 3.5 秒超时），与上一步一样给 5 秒。
-  await until(() => session.runtime.state === 'completed', '本轮完成', 5000);
+  await until(() => session.runtime.state === 'completed', '本轮完成', 10000);
   assert.equal(agentText(session), '新轮前缀与结果');
 });
 

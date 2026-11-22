@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { isAiKind, getKindLabel } = require('./ai-kinds');
 const { parseClaudeTranscriptEntries } = require('./claude-transcript-parser.js');
+const { ancestorTranscripts, prependAncestorTurns } = require('./claude-transcript-lineage.js');
 const { JsonlByteScanner } = require('./jsonl-byte-scanner.js');
 const {
   parseCodexRolloutEntries,
@@ -34,7 +35,7 @@ const CODEX_SEARCH_PROJECTION_VERSION = 4;
 // 已经入库的源永远不会重新解析**。2026-08-28 给 user 文档加了注入清洗，
 // 必须靠这个版本号把全量源顶掉重来。以后再改文本投影就 +1。
 // v2：Claude 由尾部 4MB 改为流式读完整文件；剥掉 Hub 附加的梦境索引。
-const SEARCH_TEXT_PROJECTION_VERSION = 3;
+const SEARCH_TEXT_PROJECTION_VERSION = 4; // v4：并入换号前记录，清除已入库的无头调用。
 const PROJECTION_SUFFIX = `:utext-v${SEARCH_TEXT_PROJECTION_VERSION}`;
 
 function readBoundedJsonlTailText(filePath, maxBytes = DEFAULT_SEARCH_SOURCE_READ_BYTES, fsRef = fs) {
@@ -526,6 +527,18 @@ function listMeetingDescriptors(meetingDir, maps, diagnostics = []) {
   return out;
 }
 
+// 换号续接产生的新文件只保留压缩后的对话；旧段仍在同一会话运行目录里。
+// 把旧段的变化也算进签名，保证已入库的会话能随旧记录更新。
+function attachAncestorTranscripts(descriptor, diagnostics) {
+  try {
+    const files = ancestorTranscripts(descriptor.filePath);
+    if (!files.length) return;
+    descriptor.ancestorFiles = files;
+    const stamp = files.map(file => `${normalizePath(file)}:${statSignature(fs.statSync(file))}`).join('|');
+    descriptor.signature += `:ancestors-${shortHash(stamp)}`;
+  } catch (error) { recordDiscoveryError(diagnostics, `Claude ancestors ${descriptor.filePath}`, error); }
+}
+
 function addExplicitTranscriptDescriptors(descriptors, maps, diagnostics = []) {
   const knownPaths = new Set(descriptors.map(item => normalizePath(item.filePath)));
   for (const session of maps.sessions) {
@@ -567,6 +580,7 @@ function addExplicitTranscriptDescriptors(descriptors, maps, diagnostics = []) {
       ...(type === 'codex' ? { codexMeta } : {}),
     };
     descriptor.signature = `${descriptor.fileSignature}:${shortHash(normalized)}:${metadataSignature(session)}${type === 'codex' ? `:semantic-v${CODEX_SEARCH_PROJECTION_VERSION}` : ''}` + PROJECTION_SUFFIX;
+    if (type === 'claude') attachAncestorTranscripts(descriptor, diagnostics);
     descriptors.push(descriptor);
     knownPaths.add(normalized);
   }
@@ -852,18 +866,22 @@ function streamJsonlEntriesSync(filePath, lineFilter, chunkBytes = 1024 * 1024) 
 }
 
 function parseClaudeDescriptor(descriptor, options = {}) {
-  const entries = options.scanCache
-    ? options.scanCache.readRecords(descriptor.filePath, 'claude-search', { lineFilter: claudeSearchLineFilter }).map(item => item.record)
-    : streamJsonlEntriesSync(descriptor.filePath, claudeSearchLineFilter);
-  const turns = parseClaudeTranscriptEntries(entries);
+  const readEntries = filePath => (options.scanCache
+    ? options.scanCache.readRecords(filePath, 'claude-search', { lineFilter: claudeSearchLineFilter }).map(item => item.record)
+    : streamJsonlEntriesSync(filePath, claudeSearchLineFilter));
+  const entries = readEntries(descriptor.filePath);
+  const ancestorTurns = (descriptor.ancestorFiles || []).flatMap(file => parseClaudeTranscriptEntries(readEntries(file)));
+  const turns = prependAncestorTurns(ancestorTurns, parseClaudeTranscriptEntries(entries));
   // 没有 Hub 会话的记录也要知道原来的工作目录：从搜索结果恢复时 CLI 只在该目录的项目桶里找得到这段对话。
   const cwdEntry = entries.find(entry => entry && typeof entry.cwd === 'string' && entry.cwd);
   const session = sessionRecordFromDescriptor(descriptor, turns, { cwd: cwdEntry ? cwdEntry.cwd : null });
   const docs = docsFromTurns(turns, session.title, descriptor.provider);
   if (docs[0]) docs[0].timestamp = session.updatedAt;
+  // 只按明确的无头入口标记过滤；无标记的 CodeAgent 记录照常保留，Hub 绑定会话不受影响。
+  const scripted = !descriptor.hubSession && entries.find(entry => typeof entry?.entrypoint === 'string')?.entrypoint === 'sdk-cli';
   return {
     key: descriptor.key, signature: descriptor.signature, session, docs,
-    searchable: !session.meetingId, truncatedByReadGuard: false,
+    searchable: !session.meetingId && !scripted, truncatedByReadGuard: false,
   };
 }
 

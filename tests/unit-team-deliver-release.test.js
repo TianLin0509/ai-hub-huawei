@@ -359,7 +359,7 @@ test('antiStall=false ignores --deliver and preserves --no-wake as an ordinary q
   for (const key of ['deliveredAt', 'deliverMsgId', 'deliverSentAt']) {
     assert.equal(h.member('m1')[key], undefined, '不记录成员交付状态');
   }
-  await h.service.invoke('member-1xx', 'send', { to: 'lead', message: '请处理留言' });
+  await h.service.invoke('member-1xx', 'send', { to: 'lead', message: '请处理留言', wake: true });
   await h.settle();
   assert.equal(h.sent.filter(s => s.sessionId === 'lead-0001').length, 1, '普通叫醒消息到来后才一起投递');
   assert.equal(h.readTeam().messages.find(m => m.id === r.messageId).state, 'sent');

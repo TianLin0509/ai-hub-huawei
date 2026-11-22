@@ -1,4 +1,10 @@
 [
+  "tests/unit-transcript-lookup-cache.test.js",
+  "tests/unit-shortcut-backup-prune.test.js",
+  "tests/unit-account-quota-panel-refresh.test.js",
+  "tests/unit-team-port-r10.test.js",
+  "tests/unit-codeagent-new-model.test.js",
+  "tests/unit-dormant-resume-timeout.test.js",
   "tests/unit-codeagent-resume-model.test.js",
   "tests/unit-r9-ui-small.test.js",
   "tests/unit-f2-backdrop-image-pet.test.js",
@@ -107,6 +113,7 @@
   "tests/unit-public-tree-test-gate.test.js",
   "tests/unit-ci-reuse.test.js",
   "tests/unit-session-search-recent-memory.test.js",
+  "tests/unit-session-search-port.test.js",
   "tests/unit-session-search-codeagent-recent.test.js",
   "tests/unit-company-model-proxy.test.js",
   "tests/unit-company-model-catalog.test.js",

@@ -544,7 +544,7 @@ function writeCodeAgentLaunchSettings(dataDir, id, model) {
 }
 function shouldPickCodeAgentModel(opts) {
   // model 也来自分支、历史恢复和场景元数据；只有本次操作的明确意图才能打开菜单。
-  if (!opts || !opts.model || opts.codeagentModelPick !== true) return false;
+  if (!opts || !require('./codeagent-launch-model').explicitModel(opts)) return false;
   // 自动会话只认 _createSession 按号定下的模型（codeagentAccountModel），调用方带来的模型名和选型标记不认。
   return !codeAgentReadOnly(opts) || opts.codeagentAccountModel === opts.model;
 }

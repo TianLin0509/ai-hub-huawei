@@ -78,7 +78,8 @@ function resolveCodeAgentPin(opts, { dataDir, configDir, command, pool = null, f
   const list = known.models || [];
   const defaultModel = accounts.readSettingsModel(configDir);
   const match = value => list.find(id => id.toLowerCase() === String(value || '').toLowerCase());
-  const requested = opts.codeagentModelPick === true || opts.resumeCCSessionId || opts.forkCCSessionId ? opts.model : '';
+  const requested = require('./codeagent-launch-model').explicitModel(opts)
+    || (opts.resumeCCSessionId || opts.forkCCSessionId ? opts.model : '');
   let fixedModel = opts.fixedModel || opts.codeagentUserModel || requested || defaultModel || '';
   if (!models.isSafeModelId(fixedModel)) fixedModel = '';
   // 恢复会话用最后一次确认的模型（2026-11-19 审查）：用户在终端里 /model 换了代、回答里只有对不回清单的后端名时，固定模型还是旧的；

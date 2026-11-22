@@ -47,8 +47,14 @@ function readSettings(settingsPath, fsModule) {
 // 但只登记它实测支持的事件，不接管状态栏、不改全局权限模式（那份 settings.json 同事的其他工具也在用）。
 // choiceGateMatcher：另登记一条只匹配提问工具的同步 PreToolUse（ask-gate，core/auto-dispatch-rules.js）；
 // 只有 Hub 给自动分配任务会话设了标记时它才拒绝，其余会话直接放行。
+// egressGateMatcher：上传限制（core/net-guard.js，2026-11-23）的同步 PreToolUse（upload-guard）：
+// 只在限制生效的电脑上登记，只匹配会执行命令或联网的工具；其余电脑不登记、并清掉旧条目。
+const EGRESS_GATE_MATCHER = 'Bash|PowerShell|Shell|WebFetch|Execute|RunCommand|run_shell_command';
+function defaultEgressGateMatcher() {
+  try { return require('./net-guard').getGate().restricted ? EGRESS_GATE_MATCHER : null; } catch { return null; }
+}
 function ensureManagedSettings(claudeDir, { fsModule = fs, logger = console, events = null,
-  manageStatusLine = true, managePermissionMode = true, choiceGateMatcher = null } = {}) {
+  manageStatusLine = true, managePermissionMode = true, choiceGateMatcher = null, egressGateMatcher = defaultEgressGateMatcher() } = {}) {
   const settingsPath = path.join(claudeDir, 'settings.json');
   const scriptsDir = path.join(claudeDir, 'scripts');
   let changed = false;
@@ -93,6 +99,21 @@ function ensureManagedSettings(claudeDir, { fsModule = fs, logger = console, eve
   // 超时放宽到 20 秒：公司版用 PowerShell 跑，机器忙时光启动就要几秒，超时等于放行。
   const gateMatcher = typeof choiceGateMatcher === 'string' && /^[A-Za-z0-9_.:|-]{1,300}$/.test(choiceGateMatcher) ? choiceGateMatcher : null;
   if (gateMatcher) managed.push(['PreToolUse', hook('ask-gate'), gateMatcher, false, 20]);
+  const egressMatcher = typeof egressGateMatcher === 'string' && /^[A-Za-z0-9_.:|-]{1,300}$/.test(egressGateMatcher) ? egressGateMatcher : null;
+  if (egressMatcher) managed.push(['PreToolUse', hook('upload-guard'), egressMatcher, false, 20]);
+  // 清掉过时的 upload-guard（matcher 改了，或这台不再受限）：只摘 Hub 自己的条目。
+  if (Array.isArray(settings.hooks.PreToolUse)) {
+    const isEgress = h => { const c = String(h && h.command || ''); return c.includes(MANAGED_HOOK_MARKER) && /\supload-guard\s*$/.test(c); };
+    const kept = [];
+    for (const group of settings.hooks.PreToolUse) {
+      const hooks = group && Array.isArray(group.hooks) ? group.hooks : null;
+      if (!hooks || !hooks.some(isEgress) || (egressMatcher && String(group.matcher || '') === egressMatcher)) { kept.push(group); continue; }
+      const rest = hooks.filter(h => !isEgress(h));
+      changed = true;
+      if (rest.length) kept.push({ ...group, hooks: rest });
+    }
+    settings.hooks.PreToolUse = kept;
+  }
   // 清掉过时的 ask-gate（开关关掉、或提问工具名改了之后留下的）：只摘 Hub 自己的 ask-gate 条目，
   // 同一组里别人的条目原样保留，组空了才删组。
   if (Array.isArray(settings.hooks.PreToolUse)) {

@@ -1,4 +1,6 @@
 {
+  "唤醒没有完成": "The session hasn't finished waking",
+  "新开会话接着聊": "Continue in a new session",
   "CodeAgent 消息对账失败，请在后台终端查看。": "Could not reconcile CodeAgent messages. Check the background terminal.",
   "CodeAgent 状态对账失败，请在后台终端查看。": "Could not reconcile the CodeAgent session status. Check the background terminal.",
   "CodeAgent 等待结果超时，尚未确认服务端是否结束，请在后台终端查看。": "Timed out waiting for CodeAgent results. The server may still be running. Check the background terminal.",

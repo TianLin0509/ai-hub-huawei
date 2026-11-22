@@ -3381,6 +3381,8 @@ if (require('./core/distribution').featureEnabled('leadTeam')) try {
     getConfig: getHubConfig, autoApproveLeadsDefault: true,
     // 真休眠的会话不在运行表里：按侧栏登记区分「休眠可叫醒」与「用户已关闭」（与 wakeSession 同一判断）。
     isResumable: id => require('./main/team/wake').canWakeTeamSession(id, lastPersistedSessions, sessionManager.getSession(id)),
+    // 返工匹配也覆盖真休眠：同一份侧栏记录提供目录、账号与上下文占用。
+    getSessionMetadata: id => lastPersistedSessions.find(s => s.hubId === id) || null,
     // 收件人休眠时叫醒：只认侧栏登记为休眠的会话（用户关掉的会话不复活）。
     wakeSession: async id => {
       if (!require('./main/team/wake').canWakeTeamSession(id, lastPersistedSessions, sessionManager.getSession(id))) return false;

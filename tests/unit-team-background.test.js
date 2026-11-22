@@ -14,6 +14,7 @@ async function route({ existing, session, pending = false, active = 'current' })
   let handler;
   const sessions = new Map(existing ? [[session.id, existing]] : []);
   const ctx = { sessions, activeSessionId:active, activated:false,
+    dormantResumeWatch:{finish(){}},
     require:id=>require(path.join(__dirname,'../renderer',id)),
     ipcRenderer:{ on:(_name,fn)=>{handler=fn;} }, nativeSessionBootstrap:{record(){}},
     codexAccountUi:{resumeCodexAccountRestart:()=>false},

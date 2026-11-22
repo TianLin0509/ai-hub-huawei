@@ -9,11 +9,10 @@ const { projectPathKey, projectFilterFor, projectForCwd, matchesProjectFilter } 
 const { AGENT_SESSION_GROUPS, agentGroupOf, getSidebarSearchEntries } = require('./session-list-renderer.js');
 
 const FACET_STORAGE_KEY = 'hub.search.facets';
-// 2026-11-05 定：默认只搜「我的提问 + 最近 7 天」（这档走搜索进程里的常驻内存，毫秒级），
-// 用户改过的范围和时间记住，下次打开沿用。
+// 默认搜「全部内容 + 最近 7 天」，标题和 AI 回答也能找到；用户已选的范围和时间继续沿用。
 const SCOPE_STORAGE_KEY = 'hub.search.scope';
 const TIME_STORAGE_KEY = 'hub.search.timeRange';
-const DEFAULT_SEARCH_SCOPE = 'user';
+const DEFAULT_SEARCH_SCOPE = 'all';
 const DEFAULT_SEARCH_TIME = '7d';
 const REMEMBERED_SCOPES = Object.freeze(['all', 'dialogue', 'title', 'user', 'assistant']);
 // 这几档由内存直接回答，防抖缩短；其余档走全文库，保持原来的 160ms。
@@ -632,7 +631,7 @@ function createGlobalSessionSearch(options) {
       widenButton.type = 'button'; widenButton.id = 'session-search-widen'; widenButton.className = 'session-search-widen';
       widenButton.textContent = '扩大到全部时间与 AI 回答';
       widenButton.title = '本次改搜全部时间的提问和 AI 回答（走全文库，稍慢）；默认范围不变';
-      // 一次性扩大：不写进记住的范围，下次打开仍是默认的「我的提问 + 最近 7 天」。
+      // 一次性扩大：不写进记住的范围，下次打开仍沿用用户设置或「全部内容 + 最近 7 天」。
       widenButton.addEventListener('click', () => { setScope('dialogue'); timeSelect.value = 'all'; scheduleSearch(); });
       summaryRoot.after(widenButton);
     }

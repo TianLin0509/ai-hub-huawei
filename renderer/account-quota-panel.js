@@ -3,7 +3,7 @@
 // 右侧账号看板（2026-10-28 方案 C；10-29 扩到 Codex、Gemini）：按 Claude → Codex → Gemini 分段，
 // 2026-10-31 用户选定 A：每号一行，只留编号 + 5h 已用/重置 + 7d 待恢复/重置；全名与详情放悬停。
 // 2026-11-01 用户改选「填充胶囊」C：每号两行。第一行 5h、7d 两个按剩余量填色的胶囊（数字为剩余 %）+ 活跃会话数；
-// 第二行灰字：邮箱名、出口 IP、推测续费日。没有 5h 的号（Codex）一个 7d 胶囊占满两格。
+// 第二行灰字：邮箱名、出口 IP、推测续费日。没有 5h 的号保留占位，7d 读数仍与表头对齐。
 // 可收起成编号细栏。看板显示时，底栏里这三家的逐号格子各收成一格「可用/总数」，点它开关看板。
 // 数据只读 accountUsageController 的快照，不另取额度；IP 地点经 main 的缓存查询（每个 IP 查一次）。
 
@@ -12,6 +12,9 @@ const { remainingPercent, formatResetCountdown } = require('./sidebar-account-us
 const accountRisk = require('./account-risk-state');
 const riskKind = provider => (provider === 'antigravity' ? 'gemini' : provider);
 const STORAGE_KEY = 'hubClaudeQuotaPanel';
+// 仅保存本机看板偏好；不修改账号配置，也不预置任何个人账号。
+const HIDEABLE_PROVIDERS = ['claude', 'codex'];
+const prefKey = (provider, profileId) => provider + ':' + (profileId || '');
 const USABLE_MIN = 15;
 const PROVIDERS = [
   { id: 'claude', name: 'Claude', logo: 'claude' },
@@ -209,7 +212,11 @@ function createAccountQuotaPanel({
   let state = { collapsed: false };
   try { state = { ...state, ...JSON.parse(storage?.getItem(STORAGE_KEY) || '{}') }; } catch {}
   const save = () => { try { storage?.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {} };
-  let lastHtml = '';
+  if (!Array.isArray(state.hidden)) state.hidden = [];
+  state.hidden = state.hidden.filter(key => typeof key === 'string' && HIDEABLE_PROVIDERS.some(p => key.startsWith(p + ':')));
+  const shownRows = rows => rows.filter(r => !state.hidden.includes(prefKey(r.provider, r.profileId)));
+  const hiddenNote = g => g.rows.length > g.shown.length ? `，另有 ${g.rows.length - g.shown.length} 个号已在额度栏隐藏，右键标题恢复` : '';
+  let lastHtml = '', lastOuter = '';
   const summaries = {};
   const lastSummary = {};
   const locations = {};
@@ -255,6 +262,7 @@ function createAccountQuotaPanel({
     if (row.blockedBy) lines.push('现在被 ' + row.blockedBy + ' 卡住' + (row.backIn ? '，' + row.backIn + ' 后回血' : ''));
     if (row.error) lines.push('刷新失败：' + row.error);
     lines.push(row.inFlight ? '刷新中…' : '点击刷新这个账号的额度');
+    if (HIDEABLE_PROVIDERS.includes(row.provider)) lines.push('右键在额度栏隐藏，不影响账号使用');
     return lines.join('\n');
   }
 
@@ -273,32 +281,36 @@ function createAccountQuotaPanel({
     const quota = r.apiKey ? '<span class="cq-cell cq-wide cq-nodata">API Key 登录</span>'
       : empty ? `<span class="cq-cell cq-wide cq-nodata">${r.error ? '刷新失败，点击重试' : '暂无数据，点击刷新'}</span>`
         : r.has5h ? cell(r, '5h', r.remain5h, r.reset5h, now) + cell(r, '7d', r.remain7d, r.reset7d, now)
-          : cell(r, '7d', r.remain7d, r.reset7d, now, true);
+          : '<span class="cq-cell cq-nodata">—</span>' + cell(r, '7d', r.remain7d, r.reset7d, now);
     const sessions = r.provider === 'claude' && Number.isFinite(r.sessions)
-      ? `<span class="cq-sessions${r.sessions ? '' : ' is-zero'}" aria-hidden="true">${r.sessions}</span>` : r.provider === 'claude' ? '<span></span>' : '';
+      ? `<span class="cq-sessions${r.sessions ? '' : ' is-zero'}" aria-hidden="true">${r.sessions}</span>` : '<span></span>';
     const pace = paceOf(r, now);
     const paceDot = pace ? `<span class="cq-pace is-${pace.level}" aria-hidden="true"></span>` : '<span></span>';
     const risk = accountRisk.describe(riskKind(r.provider), r.profileId);
     const detail = esc((risk ? '⚠ ' + risk + '\n' : '') + tooltip(r, now));
-    return `<button type="button" class="cq-card${risk ? ' has-account-risk' : ''}${r.provider === 'claude' ? '' : ' no-sessions'}${r.current ? ' is-current' : ''}${r.recommended ? ' is-recommended' : ''}${r.inFlight ? ' is-loading' : ''}${r.error ? ' is-error' : ''}" data-cq-provider="${r.provider}" data-cq-profile="${esc(r.profileId)}" title="${detail}" aria-label="${detail}"${r.inFlight ? ' aria-busy="true"' : ''}>`
+    return `<button type="button" class="cq-card${risk ? ' has-account-risk' : ''}${r.current ? ' is-current' : ''}${r.recommended ? ' is-recommended' : ''}${r.inFlight ? ' is-loading' : ''}${r.error ? ' is-error' : ''}" data-cq-provider="${r.provider}" data-cq-profile="${esc(r.profileId)}" title="${detail}" aria-label="${detail}"${r.inFlight ? ' aria-busy="true"' : ''}>`
       + `<span class="cq-no">${r.no}${r.error ? '<span class="cq-error-mark" aria-hidden="true">!</span>' : ''}</span>${paceDot}${quota}${sessions}</button>`;
   }
 
   const usableOf = rows => rows.filter(r => r.eff !== null && r.eff >= USABLE_MIN).length;
 
-  function html(groups, now) {
+  function html(allGroups, now) {
+    // 全组隐藏仍保留标题和细栏图标，用户随时可以右键恢复。
+    const groups = allGroups.map(g => ({ ...g, shown: shownRows(g.rows) }));
     if (state.collapsed) {
-      return `<div class="cq-rail"><button type="button" class="cq-expand" data-cq-action="expand" title="展开账号看板" aria-label="展开账号看板">«</button>`
-        + groups.map(g => `<div class="cq-rail-group"><span class="ai-logo logo-${g.logo} cq-logo" title="${g.name} ${usableOf(g.rows)}/${g.rows.length} 可用" aria-hidden="true"></span>`
-          + g.rows.map(r => `<button type="button" class="cq-rail-item cq-${level(r.apiKey ? null : r.eff)}${r.current ? ' is-current' : ''}${r.recommended ? ' is-recommended' : ''}" data-cq-provider="${r.provider}" data-cq-profile="${esc(r.profileId)}" title="${esc(tooltip(r, now))}">${r.no}</button>`).join('')
-          + '</div>').join('') + '</div>';
+      const inner = `<button type="button" class="cq-expand" data-cq-action="expand" title="展开账号看板；右键恢复隐藏的号" aria-label="展开账号看板">«</button>`
+        + groups.map(g => `<div class="cq-rail-group" data-cq-group="${g.id}"><span class="ai-logo logo-${g.logo} cq-logo" title="${g.name} ${usableOf(g.shown)}/${g.shown.length} 可用${hiddenNote(g)}" aria-hidden="true"></span>`
+          + g.shown.map(r => `<button type="button" class="cq-rail-item cq-${level(r.apiKey ? null : r.eff)}${r.current ? ' is-current' : ''}${r.recommended ? ' is-recommended' : ''}" data-cq-provider="${r.provider}" data-cq-profile="${esc(r.profileId)}" title="${esc(tooltip(r, now))}">${r.no}</button>`).join('')
+          + '</div>').join('');
+      return { box: '.cq-rail', outer: '<div class="cq-rail"></div>', inner, full: '<div class="cq-rail">' + inner + '</div>' };
     }
-    return `<header class="cq-head"><strong>账号额度</strong>`
-      + `<button type="button" class="cq-collapse" data-cq-action="collapse" title="收起成细栏" aria-label="收起账号看板">»</button></header>`
-      + '<div class="cq-list">' + groups.map(g => `<section class="cq-group" data-cq-group="${g.id}">`
-        + `<h3 title="${g.name} ${g.rows.length} 个账号，${usableOf(g.rows)} 个可用 · 数字为剩余额度，时间为距重置的倒计时"><span class="cq-provider">${g.name}</span><span class="cq-count"><b>${usableOf(g.rows)}</b> / ${g.rows.length} 可用</span></h3>`
-        + `<div class="cq-columns${g.id === 'claude' ? '' : ' no-sessions'}"><span></span><span></span>${g.rows.some(r => r.has5h) ? '<span>5h 剩余</span><span>7d 剩余</span>' : '<span class="cq-wide">7d 剩余</span>'}${g.id === 'claude' ? '<span>会话</span>' : ''}</div>`
-        + '<div class="cq-rows">' + g.rows.map(r => card(r, now)).join('') + '</div></section>').join('') + '</div>';
+    const head = `<header class="cq-head"><strong>账号额度</strong><span class="cq-info" title="右键 Claude / Codex 账号可在额度栏隐藏；右键分组标题恢复该组，右键顶部恢复全部。隐藏不影响账号使用。">ⓘ</span>`
+      + `<button type="button" class="cq-collapse" data-cq-action="collapse" title="收起成细栏" aria-label="收起账号看板">»</button></header>`;
+    const inner = groups.map((g, i) => `<section class="cq-group" data-cq-group="${g.id}">`
+        + `<h3 title="${g.name} ${g.shown.length} 个账号，${usableOf(g.shown)} 个可用${hiddenNote(g)} · 数字为剩余额度，时间为距重置的倒计时"><span class="cq-provider">${g.name}</span><span class="cq-count"><b>${usableOf(g.shown)}</b> / ${g.shown.length} 可用</span></h3>`
+        + (i === 0 ? '<div class="cq-columns"><span></span><span></span><span>5h 剩余</span><span>7d 剩余</span><span>会话</span></div>' : '')
+        + '<div class="cq-rows">' + g.shown.map(r => card(r, now)).join('') + '</div></section>').join('');
+    return { box: '.cq-list', outer: head + '<div class="cq-list"></div>', inner, full: head + '<div class="cq-list">' + inner + '</div>' };
   }
 
   function ensureSummary(provider) {
@@ -349,16 +361,22 @@ function createAccountQuotaPanel({
       const g = groups.find(x => x.id === p.id);
       s.hidden = !on || !g;
       if (!g) continue;
-      const usable = usableOf(g.rows);
-      const text = `<span class="sidebar-quota-icon ai-logo logo-${p.logo}" aria-hidden="true"></span><span class="sidebar-quota-name">${p.name}</span><span class="cq-summary-text"><b>${usable}</b>/${g.rows.length}</span>`;
+      const shown = shownRows(g.rows), usable = usableOf(shown);
+      const text = `<span class="sidebar-quota-icon ai-logo logo-${p.logo}" aria-hidden="true"></span><span class="sidebar-quota-name">${p.name}</span><span class="cq-summary-text"><b>${usable}</b>/${shown.length}</span>`;
       if (text !== lastSummary[p.id]) { s.innerHTML = text; lastSummary[p.id] = text; }
-      s.title = `${p.name} ${g.rows.length} 个账号，${usable} 个可用 · 点击${state.collapsed ? '展开' : '收起'}右侧账号看板`;
+      s.title = `${p.name} ${shown.length} 个账号，${usable} 个可用${hiddenNote({ ...g, shown })} · 点击${state.collapsed ? '展开' : '收起'}右侧账号看板`;
       s.setAttribute('aria-label', s.title);
     }
     if (!on) return;
     askLocations(groups.flatMap(g => g.rows.map(r => r.egress)));
-    const next = html(groups, now);
-    if (next !== lastHtml) { root.innerHTML = next; lastHtml = next; }
+    const view = html(groups, now), next = view.full;
+    if (next !== lastHtml) {
+      // 保留滚动容器本身，分钟刷新不打断拖动；内容变化时也保留当前位置。
+      const box = lastOuter === view.outer ? root.querySelector(view.box) : null;
+      if (box) { const top = box.scrollTop; box.innerHTML = view.inner; box.scrollTop = top; }
+      else root.innerHTML = next;
+      lastHtml = next; lastOuter = view.outer;
+    }
   }
 
   root.addEventListener('click', event => {
@@ -366,6 +384,21 @@ function createAccountQuotaPanel({
     if (action) { state.collapsed = action.dataset.cqAction === 'collapse'; save(); render(); return; }
     const card = event.target.closest('[data-cq-profile]');
     if (card) Promise.resolve(refresh(card.dataset.cqProvider || 'claude', card.dataset.cqProfile)).catch(() => {}).finally(render);
+  });
+  root.addEventListener('contextmenu', event => {
+    const at = selector => event.target.closest?.(selector);
+    const card = at('[data-cq-profile]');
+    const title = !card && at('h3, .cq-logo') ? at('[data-cq-group]') : null;
+    if (card) {
+      if (!HIDEABLE_PROVIDERS.includes(card.dataset.cqProvider)) return;
+      const key = prefKey(card.dataset.cqProvider, card.dataset.cqProfile);
+      if (!state.hidden.includes(key)) state.hidden = [...state.hidden, key];
+    } else if (title && state.hidden.some(key => key.startsWith(title.dataset.cqGroup + ':'))) {
+      state.hidden = state.hidden.filter(key => !key.startsWith(title.dataset.cqGroup + ':'));
+    } else if (!title && at('.cq-head, .cq-expand') && state.hidden.length) state.hidden = [];
+    else return;
+    event.preventDefault?.();
+    save(); render();
   });
   // 倒计时按分钟走；没有新数据时 html 不变，不重建 DOM。
   setIntervalFn(render, 60000);

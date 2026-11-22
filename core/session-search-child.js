@@ -75,7 +75,7 @@ async function handle(message = {}) {
   }
   if (message.type === 'status') return withRuntime(engine.status());
   if (message.type === 'refresh') return engine.refresh(message.snapshot || {}, { force: message.force === true, immediate: message.immediate === true });
-  if (message.type === 'search') return engine.search(message.request || {}, message.snapshot || {});
+  if (message.type === 'search') return engine.search(message.request || {}, message.snapshot ?? null);
   if (message.type === 'preview') return engine.preview(message.request || {});
   if (message.type === 'memory-candidates') return require('./memory-history').candidates(engine.index, message.request || {});
   if (message.type === 'memory-export') return require('./memory-history').exportHistory(engine.index, { ...(message.request || {}), transcriptDir: engine.options.transcriptDir });

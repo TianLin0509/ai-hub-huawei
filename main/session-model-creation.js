@@ -70,8 +70,10 @@ function createModelCreationConfirmation({ sendToRenderer, onWait = () => {} }) 
 function createSessionWithModelPolicy({ kind, opts, create, requestConfirmation, sendToRenderer, contextLabel = '新建会话', operation = 'create', canCreate = () => true }) {
   if (!/^codeagent(?:-resume)?$/.test(kind)) return create(kind, opts);
   const launchOpts = { ...opts, modelCreationContext: contextLabel };
-  if (!launchOpts.fixedModel && launchOpts.codeagentModelPick === true && models.isSafeModelId(launchOpts.model)) {
-    launchOpts.fixedModel = launchOpts.model;
+  const explicitModel = require('../core/codeagent-launch-model').explicitModel(launchOpts);
+  if (!launchOpts.fixedModel && explicitModel) {
+    launchOpts.model = launchOpts.fixedModel = explicitModel;
+    launchOpts.codeagentModelPick = true;
     launchOpts.modelPinSource = 'user';
   }
   const notice = message => sendToRenderer?.('session-notice', { level: 'warning', persistent: true, message: `${contextLabel}：${message}` });

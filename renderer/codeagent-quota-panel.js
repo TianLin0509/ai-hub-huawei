@@ -2,6 +2,7 @@
 
 const { quotaView, renderQuota, renderQuotaFooter, tipHtml } = require('./codeagent-quota-panel-view');
 const STORAGE_KEY = 'hubClaudeQuotaPanel';
+const HIDDEN_STORAGE_KEY = 'hubCodeAgentQuotaHidden';
 
 function createCodeAgentQuotaPanel({ document, root, window = document.defaultView, ipcRenderer,
   storage = null, getCurrentAccountId = () => '', getCurrentModel = () => '', openAccounts = () => {}, now = Date.now,
@@ -12,6 +13,8 @@ function createCodeAgentQuotaPanel({ document, root, window = document.defaultVi
   // 宽屏默认：用户手动选过就听他的；没选过时，在第一次读到任何额度之前收成细栏，读到后自动展开一次。
   let saved = {};
   try { const raw = JSON.parse(storage?.getItem(STORAGE_KEY) || '{}'); if (raw && typeof raw === 'object') saved = raw; } catch {}
+  let hidden = [];
+  try { const raw = JSON.parse(storage?.getItem(HIDDEN_STORAGE_KEY) || '[]'); if (Array.isArray(raw)) hidden = raw.filter(id => typeof id === 'string'); } catch {}
   let chosen = typeof saved.collapsed === 'boolean';
   const wideDefault = () => chosen ? saved.collapsed : !saved.seenReading;
   let narrow = window.innerWidth <= 1360, collapsed = narrow || wideDefault();
@@ -24,19 +27,50 @@ function createCodeAgentQuotaPanel({ document, root, window = document.defaultVi
   root.classList.add('qp'); root.setAttribute('aria-label', '号池额度');
   const save = () => { try { storage?.setItem(STORAGE_KEY, JSON.stringify(saved)); } catch {} };
   const clearTip = () => { tip?.remove(); tip = null; };
-  const view = () => quotaView(snapshot, { now: now(), currentAccountId: getCurrentAccountId(), currentModel: getCurrentModel(), loadingKeys, installed: setup.current?.installed });
+  const fullView = () => quotaView(snapshot, { now: now(), currentAccountId: getCurrentAccountId(), currentModel: getCurrentModel(), loadingKeys, installed: setup.current?.installed });
+  const view = () => {
+    const current = fullView(), rows = current.rows.filter(row => !hidden.includes(row.id));
+    // 可见性仍按实际账号数决定，全隐藏也保留标题和恢复入口。
+    return { ...current, rows, total: rows.length, usable: rows.filter(row => row.usable).length, hiddenCount: current.rows.length - rows.length };
+  };
+
+  function updateHtml(html) {
+    if (!lastHtml) { root.innerHTML = html; return; }
+    const template = document.createElement('template');
+    template.innerHTML = html;
+    if (!template.content) { root.innerHTML = html; return; }
+    const wanted = [];
+    // 只保留有滚动条的两层，其余区域照常更新；提示行增减也不重建滚动容器。
+    for (const next of template.content.children) {
+      const selector = next.classList.contains('qp-list') ? '.qp-list' : next.classList.contains('qp-rail') ? '.qp-rail' : null;
+      const existing = selector && root.querySelector(selector);
+      if (existing) {
+        const top = existing.scrollTop;
+        if (existing.innerHTML !== next.innerHTML) existing.innerHTML = next.innerHTML;
+        existing.scrollTop = top;
+        wanted.push(existing);
+      } else wanted.push(next);
+    }
+    for (const child of [...root.childNodes]) if (!wanted.includes(child)) child.remove();
+    let previous = null;
+    for (const child of wanted) {
+      const following = previous ? previous.nextSibling : root.firstChild;
+      if (following !== child) root.insertBefore(child, following);
+      previous = child;
+    }
+  }
 
   function render() {
     if (disposed) return;
-    const current = view();
+    const current = view(), all = fullView();
     // 去重后多于一个号才有右侧额度栏（含收起态）；放在底栏时右侧不显示。安装说明的入口在账号页和主页。
     // 只有 1 个号时没有右侧栏，底栏照样显示它的三档额度（2026-11-07），否则单号用户哪里都看不到额度。
     const placement = getPlacement();
-    const single = !current.visible && current.rows.length === 1 && current.installed !== false;
+    const single = !all.visible && all.rows.length === 1 && all.installed !== false;
     const inFooter = !!footerRoot && (single || (current.visible && placement === 'bottom'));
     if (footerRoot) {
       footerRoot.hidden = !inFooter;
-      const footerHtml = inFooter ? renderQuotaFooter(current, { now: now() }) : '';
+      const footerHtml = inFooter ? renderQuotaFooter(all, { now: now() }) : '';
       if (footerHtml !== lastFooterHtml) { footerRoot.innerHTML = footerHtml; lastFooterHtml = footerHtml; }
     }
     const shown = current.visible && placement === 'right';
@@ -51,7 +85,7 @@ function createCodeAgentQuotaPanel({ document, root, window = document.defaultVi
       const list = root.querySelector('.qp-list'), scroll = list?.scrollTop || 0;
       const focused = root.contains(document.activeElement) ? document.activeElement : null;
       const account = focused?.dataset?.qpAccount, action = focused?.dataset?.qpAction;
-      clearTip(); root.innerHTML = html; lastHtml = html;
+      clearTip(); updateHtml(html); lastHtml = html;
       const updated = root.querySelector('.qp-list'); if (updated) updated.scrollTop = scroll;
       if (account || action) [...root.querySelectorAll('[data-qp-account], [data-qp-action]')]
         .find(el => account ? el.dataset.qpAccount === account && el.offsetHeight : el.dataset.qpAction === action && el.offsetHeight)?.focus({ preventScroll: true });
@@ -150,9 +184,22 @@ function createCodeAgentQuotaPanel({ document, root, window = document.defaultVi
       top: Math.max(8, Math.min(rect.top, window.innerHeight - tip.offsetHeight - 8)) + 'px' });
   }
   function leaveTip(event) { if (!event.relatedTarget || !event.target.closest('.qp-ring, .qp-row')?.contains(event.relatedTarget)) clearTip(); }
+  function contextMenu(event) {
+    const account = event.target.closest('.qp-row, .qp-ring');
+    if (account && root.contains(account)) {
+      const id = account.dataset.qpAccount;
+      if (!id || !fullView().rows.some(row => row.id === id)) return;
+      hidden = [...new Set([...hidden, id])];
+    } else if (event.target.closest('.qp-h h3, .qp-info, .qp-rail > [data-qp-action="expand"]') && hidden.length) hidden = [];
+    else return;
+    event.preventDefault();
+    try { storage?.setItem(HIDDEN_STORAGE_KEY, JSON.stringify(hidden)); } catch {}
+    clearTip(); render();
+  }
   const changed = () => { void load(); };
   const unsubscribeSetup = setup.subscribe(() => render());
   root.addEventListener('click', activate); root.addEventListener('keydown', activate);
+  root.addEventListener('contextmenu', contextMenu);
   footerRoot?.addEventListener('click', activate);
   root.addEventListener('pointerover', showTip); root.addEventListener('pointerout', leaveTip);
   root.addEventListener('focusin', showTip); root.addEventListener('focusout', clearTip);
@@ -161,10 +208,11 @@ function createCodeAgentQuotaPanel({ document, root, window = document.defaultVi
   const tick = setIntervalFn(() => { render(); void load(); }, 60000); tick?.unref?.();
   render(); void load(); void setup.refresh().catch(() => {});
   return { render, refresh, reload: load, view, whenIdle: () => refreshPending || cachePending || Promise.resolve(),
-    getState: () => ({ collapsed, narrow, refreshing: refreshBusy }), destroy() {
+    getState: () => ({ collapsed, narrow, refreshing: refreshBusy, hidden: [...hidden] }), destroy() {
       disposed = true; unsubscribeSetup(); ++revision; clearIntervalFn(tick); clearTimeout(messageTimer); clearTip(); placeholder.remove(); root.hidden = true;
       root.classList.remove('qp', 'is-overlay', 'is-refreshing');
       root.removeEventListener('click', activate); root.removeEventListener('keydown', activate);
+      root.removeEventListener('contextmenu', contextMenu);
       footerRoot?.removeEventListener('click', activate); if (footerRoot) { footerRoot.hidden = true; footerRoot.innerHTML = ''; }
       root.removeEventListener('pointerover', showTip); root.removeEventListener('pointerout', leaveTip);
       root.removeEventListener('focusin', showTip); root.removeEventListener('focusout', clearTip);

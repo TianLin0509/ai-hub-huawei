@@ -34,7 +34,7 @@ test('cli-exited 分支带上 terminalTail 并记启动阻塞日志；IPC 把它
   const file = path.join(__dirname, '..', 'main', 'ipc', 'prompt-submit-handlers.js');
   const localRequire = createRequire(file);
   const error = Object.assign(Error('CLI 已退出到系统终端，消息未发送；请先重启会话'), { notSent: true, code: 'cli-exited', terminalTail: ['Error: 401', 'PS ~>'] });
-  const context = vm.createContext({ module: { exports: {} }, console, process, Buffer, setTimeout, clearTimeout,
+  const context = vm.createContext({ module: { exports: {} }, console, process, Buffer, AbortController, setTimeout, clearTimeout,
     require: name => name === '../../core/group-chat-watcher.js' ? { codeAgentInputAction: async () => ({ ok: true }), sendToPty: () => { throw error; } } : localRequire(name) });
   vm.runInContext(fs.readFileSync(file, 'utf8'), context);
   const manager = new EventEmitter();

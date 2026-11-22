@@ -33,11 +33,11 @@ function freePort() {
   });
 }
 
-function windowTitle(pid) {
+function windowTitle(pid, diagnose = false) {
   try {
     return execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File',
-      path.join(__dirname, 'helpers/window-title.ps1'), '-TargetPid', String(Number(pid))], { encoding: 'utf8', windowsHide: true }).trim();
-  } catch { return ''; }
+      path.join(__dirname, 'helpers/window-title.ps1'), '-TargetPid', String(Number(pid)), ...(diagnose ? ['-Diagnose'] : [])], { encoding: 'utf8', windowsHide: true }).trim();
+  } catch (error) { return diagnose ? `读取窗口失败：${error.message}` : ''; }
 }
 
 async function main() {
@@ -88,7 +88,7 @@ async function main() {
     // 产品名和版本标注随发行目标（公司版有自己的名字）。
     const titlePrefix = `${marker.productName || 'AI Hub Community'}${marker.editionBadge ? ' ' + marker.editionBadge : ''}`;
     for (const end = Date.now() + 30000; Date.now() < end && !title.includes(titlePrefix);) { title = windowTitle(hub.pid || hub.child?.pid); await sleep(250); }
-    assert.ok(title.startsWith(`${titlePrefix} v${marker.version}（上游 ${marker.upstreamVersion}）`), title);
+    assert.ok(title.startsWith(`${titlePrefix} v${marker.version}（上游 ${marker.upstreamVersion}）`), title || `读不到窗口标题：${windowTitle(hub.pid || hub.child?.pid, true)}`);
     report.checks.push(`Window title shows the edition and upstream version: ${title.replace(/：PID \d+/, '')}`);
 
     assert.equal(await cdp.eval('document.querySelectorAll("#btn-research,#btn-study,#study-panel,[data-action=sync-chatgpt],[data-action=sync-company],[data-kind=chatgpt]").length'), 0);

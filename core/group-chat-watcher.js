@@ -564,20 +564,24 @@ function cancelPendingModelSubmissions(sid) {
 
 async function sendToPtyAttempt(sid, prompt, kind, options = {}, submission = null) {
   const ticket = isCodeAgentKind(kind) ? { cancelled: false, submitted: false, onHandoff: () => { if (submission) submission.handedOff = true; } } : null;
+  const abortSubmission = () => { ticket.cancelled = true; ticket.cancelModel?.(); ticket.endPaste?.(); ticket.stop(); };
   if (ticket) {
     ticket.stopped = new Promise(resolve => { ticket.stop = resolve; });
     ticket.finished = new Promise(resolve => { ticket.finish = resolve; });
     if (!codeAgentSubmissions.has(sid)) codeAgentSubmissions.set(sid, new Set());
     codeAgentSubmissions.get(sid).add(ticket);
     options = { ...options, codeagentSubmission: ticket };
+    options.submissionSignal?.addEventListener('abort', abortSubmission, { once: true });
+    if (options.submissionSignal?.aborted) abortSubmission();
   }
   try {
+  assertCodeAgentSubmission(options);
   // CodeAgent 新会话启动后先在 /model 菜单里选好模型（core/codeagent-model-picker.js），再发第一条，
   // 否则第一轮还是 CLI 的默认模型。选模型自己发的 /model 带 codeagentModelPick，不等自己。
   // 没有在选模型时不能多等一拍：下面「同步进入第一次提交」的约定要求同一拍里就登记（关会话能取消它）。
   const picker = require('./codeagent-model-picker');
   if (!options.codeagentModelPick && picker.isPicking(sid)) {
-    try { await picker.waitForPick(sid); }
+    try { await awaitCodeAgentSubmission(picker.waitForPick(sid), options); }
     catch (error) {
       if (!(error.modelMenuClosed && !picker.isPicking(sid)
           && _deps.sessionManager.getSession(sid)?.codeagentModelPick && typeof _deps.confirmSessionModel === 'function')) throw error;
@@ -586,7 +590,7 @@ async function sendToPtyAttempt(sid, prompt, kind, options = {}, submission = nu
   }
   if (isCodeAgentKind(kind) && !options.codeagentModelPick && typeof _deps.sessionManager.ensureSessionModelReady === 'function'
       && !String(prompt).trimStart().startsWith('/model')) {
-    try { await ensureModelBeforeSubmission(sid, options, ticket, submission); }
+    try { await awaitCodeAgentSubmission(ensureModelBeforeSubmission(sid, options, ticket, submission), options); }
     catch (error) {
       if (error.stopped || error.code === 'codeagent-stop-requested') return {
         ok: false, stopped: true, notSent: true, sendStatus: 'stopped', enterAttempts: 0,
@@ -658,6 +662,7 @@ async function sendToPtyAttempt(sid, prompt, kind, options = {}, submission = nu
   }
   } finally {
     if (ticket) {
+      options.submissionSignal?.removeEventListener('abort', abortSubmission);
       ticket.finish();
       const pending = codeAgentSubmissions.get(sid);
       pending?.delete(ticket);
@@ -766,12 +771,13 @@ async function openCodeAgentCommands(sid) {
 // handoff, never merely when the user clicks a model in the confirmation UI.
 function notifySubmissionHandoff(sid, kind, options) {
   const ticket = options.codeagentSubmission;
-  if (!isCodeAgentKind(kind) || options.codeagentModelPick || !options.clientSubmissionId || ticket?.handoffNotified) return;
+  if (!isCodeAgentKind(kind) || options.codeagentModelPick || ticket?.handoffNotified) return;
   assertCodeAgentSubmission(options);
   if (options.shouldSubmit && !options.shouldSubmit()) throw Object.assign(new Error('任务已停止，原消息未写入'), { stopped: true, notSent: true });
-  try { _deps.sessionManager.emit?.('session-submission-handoff', { sessionId: sid, clientSubmissionId: options.clientSubmissionId }); }
+  try { if (options.clientSubmissionId) _deps.sessionManager.emit?.('session-submission-handoff', { sessionId: sid, clientSubmissionId: options.clientSubmissionId }); }
   catch (error) { throw Object.assign(error, { stopped: error.retryableBeforeHandoff !== true, notSent: true }); }
   if (ticket) { ticket.handoffNotified = true; ticket.onHandoff?.(); }
+  options.onSubmissionHandoff?.();
 }
 
 async function sendToPtyImpl(sid, prompt, kind, options = {}) {

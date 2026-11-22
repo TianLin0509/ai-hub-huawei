@@ -8,7 +8,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomBytes } = require('node:crypto');
-const { delegationGuidance } = require('./member-guidance');
+const { delegationGuidance, RECEIPT_FORMAT } = require('./member-guidance');
+const { NO_UPDATE_MARK } = require('../../core/team-silent-reply');
+const { formatAbsoluteTime } = require('../../core/beijing-time');
 
 // 每位负责人名下成员数：2026-11-22 起去掉组队人数上限，由 8 提到 100，只当防失控的安全阀。
 const MAX_MEMBERS = 100;
@@ -20,8 +22,12 @@ const MISSING_ALERT_MS = 3 * 60 * 1000;
 const RETRY_BACKOFF_MS = [60 * 1000, 3 * 60 * 1000, 10 * 60 * 1000];
 const { PERSONAL_ACCOUNT_ID, PERSONAL_SHARED_NOTE } = require('./codeagent-accounts');
 const RESTART_COOLDOWN_MS = 30 * 60 * 1000;
-const NOWAKE_MAX_AGE_MS = 30 * 60 * 1000;
+const NOWAKE_MAX_AGE_MS = 20 * 60 * 1000;
 const NOWAKE_MAX_COUNT = 8;
+const LEAD_INBOX_CHARS = 6000;
+const FOOTER_FULL_EVERY_MS = 4 * 60 * 60 * 1000;
+const URGENT_RE = /卡住|阻塞|受阻|失败|报错|崩溃|拍板|请示|求助|紧急|blocked|\berror\b|\bfailed\b|\bstuck\b/i;
+const RESOURCE_ALERT_COOLDOWN_MS = 15 * 60 * 1000;
 const RECEIPT_WAIT_MS = 3 * 60 * 1000;
 const LEAD = 'lead';
 const PERSONAL_MEMBER_LIMIT = 3; // 个人账号上同时干活的成员数；超出的成员消息留在队列里。
@@ -53,6 +59,8 @@ function createTeamService(deps) {
     getConfig = () => ({}),
     // 运行表里没有的会话，侧栏是否登记为可恢复（休眠）；用户主动关闭的返回 false。未接入时一律按不在运行处理。
     isResumable = () => false,
+    getSessionMetadata = () => null,
+    memInfo = () => { const os = require('node:os'); return { free: os.freemem(), total: os.totalmem() }; },
   } = deps;
   // 主进程传 autoApproveLeadsDefault=true（默认开）；单测等未传时保持人工批准。
   const autoApproveLeads = () => (getConfig()?.team?.autoApproveLeads ?? deps.autoApproveLeadsDefault) === true;
@@ -63,6 +71,7 @@ function createTeamService(deps) {
   const alerted = new Map();
   const modelWaits = new Map();
   const personalClaims = new Map(); // sid → 最近一次向个人账号成员提交消息的时间
+  const resourceAlerted = new Map(); // 每位负责人独立去重，避免其他团队漏掉提醒。
   const onModelWait = event => {
     const previousWait = modelWaits.get(event.sessionId);
     if (event.active) modelWaits.set(event.sessionId, event);
@@ -285,7 +294,8 @@ function createTeamService(deps) {
       }
       const cwd = String(raw?.cwd || '').trim();
       if (cwd && !fs.existsSync(cwd)) throw Error(`第 ${i + 1} 人的工作目录不存在：${cwd}`);
-      return { role, task, kind, account, cwd, title: String(raw?.title || role).trim().slice(0, 40), model };
+      return { role, task, kind, account, cwd, title: String(raw?.title || role).trim().slice(0, 40), model,
+        ...(raw?.fresh === true ? { fresh: true } : {}) };
     }) };
   }
   async function propose(callerSid, args) {
@@ -294,6 +304,39 @@ function createTeamService(deps) {
     let team = teamOfLead(callerSid);
     require('../../core/secret-guard').assertPlanFree(args);
     const plan = normalizePlan(args, team);
+    const recalled = [], hints = [];
+    if (team && antiStall()) {
+      const { planRecalls, recallText } = require('./recall-match');
+      const sessionInfo = sid => {
+        const live = sessionManager.getSession(sid);
+        if (!live && !isResumable(sid)) return null;
+        const saved = getSessionMetadata(sid);
+        // CodeAgent 的占用值也可能只在侧栏记录里；运行表缺值时补齐，未知仍按新人处理。
+        const s = live ? { ...saved, ...live, contextPct: live.contextPct ?? saved?.contextPct } : saved;
+        return s ? { ...s, exists: true, inOtherTeam: !!(teamOfLead(sid) || teamOfMember(sid)) } : null;
+      };
+      const keep = [];
+      for (const d of planRecalls(plan.members, team, { now: now(), leadCwd: sessionManager.getSession(callerSid)?.cwd, sessionInfo })) {
+        const spec = plan.members[d.index];
+        if (d.action === 'recall') {
+          const rec = team.members.find(m => m.memberId === d.memberId);
+          try {
+            send(callerSid, { to: d.memberId, message: recallText(spec, rec) });
+            recalled.push({ memberId: d.memberId, insteadOf: spec.title, reason: d.reason });
+            continue;
+          } catch (error) { hints.push({ memberId: d.memberId, for: spec.title, reason: `叫回未成功（${error.message}），按计划新招` }); }
+        } else if (d.action === 'hint') hints.push({ memberId: d.memberId, for: spec.title, reason: d.reason });
+        keep.push(spec);
+      }
+      plan.members = keep;
+    }
+    const reuse = r => ({ ...r, ...(recalled.length ? { recalled } : {}), ...(hints.length ? { hints,
+      hintNote: '岗位相近的老成员可用 send --to 编号 叫回；明确要新人时在计划项中加 fresh: true。' } : {}) });
+    if (!plan.members.length) {
+      for (const p of team.plans) if (p.status === 'pending') { p.status = 'withdrawn'; p.decidedAt = now(); p.note = '负责人改为叫回原成员'; }
+      save(team);
+      return reuse({ ok: true, status: 'recalled', note: '已叫回原会话，新任务已排队；没有新建成员。' });
+    }
     if (!team) {
       team = { leadSid: callerSid, createdAt: now(), updatedAt: now(), plans: [], members: [], grants: [], messages: [] };
       teams.set(callerSid, team);
@@ -307,9 +350,9 @@ function createTeamService(deps) {
       let result;
       try { result = await decide({ leadSid: callerSid, planId: item.id, approve: true, note: '', byRule: true }); }
       catch (error) { throw Error(`${error.message || error}（未自动批准：计划留在侧栏「待批准」，可修改后重新提交，或由${approver}在界面处理）`); }
-      return { ...result, planId: item.id, note: `已按规则自动批准；账号与模型已按号池校验。设置里可关掉「负责人组队自动批准」改回人工批准。${result.sharedAccountNote || ''}` };
+      return reuse({ ...result, planId: item.id, note: `已按规则自动批准；账号与模型已按号池校验。设置里可关掉「负责人组队自动批准」改回人工批准。${result.sharedAccountNote || ''}` });
     }
-    return { planId: item.id, status: 'pending', note: `计划已提交，等${approver}在 Hub 侧栏（你这个会话那一行的「待批准」）批准。批准前不会建任何会话；批准或驳回的结果会作为一条消息发给你。` };
+    return reuse({ planId: item.id, status: 'pending', note: `计划已提交，等${approver}在 Hub 侧栏（你这个会话那一行的「待批准」）批准。批准前不会建任何会话；批准或驳回的结果会作为一条消息发给你。` });
   }
 
   // 只由界面调用（main/ipc/team-handlers.js）：用户点批准或驳回。
@@ -377,6 +420,7 @@ function createTeamService(deps) {
         save(team);
         created.push(member);
         enqueue(team, LEAD, memberId, kickoff(team, member, spec, plan), { kickoff: true });
+        resourceNotice(team);
       } catch (error) {
         spec.status = 'failed'; spec.error = String(error.message || error);
         member.status = 'failed'; member.error = spec.error;
@@ -384,7 +428,7 @@ function createTeamService(deps) {
       }
     }
     save(team);
-    const roster = created.map(m => `${m.memberId} ${m.title}（${m.role}${m.account ? '，账号 ' + (m.account === PERSONAL_ACCOUNT_ID ? '个人账号' : m.account) : ''}）`).join('；');
+    const roster = created.map(m => `${m.memberId} ${m.title}`).join('、');
     const sharedAccountNote = created.some(m => m.account === PERSONAL_ACCOUNT_ID) ? `用个人账号的成员：${PERSONAL_SHARED_NOTE}。同时最多 ${PERSONAL_MEMBER_LIMIT} 位在干活，其余自动排队。` : '';
     enqueue(team, 'hub', LEAD, `${byRule ? '已按规则自动批准' : approver + '批准了'}招人计划 ${plan.id}${note ? '（备注：' + note + '）' : ''}。已建成员：${roster || '无'}。` +
       (failed.length ? `未建成：${failed.join('；')}。` : '') + '已创建成员的开工任务已排队；用 status 查看全队状态。' + sharedAccountNote, { wake: true });
@@ -399,7 +443,7 @@ function createTeamService(deps) {
       `你的任务：${spec.task}`,
       '',
       '通信规矩：',
-      `- 向负责人汇报：\`"${cmd}" send --to lead --message "结论 + 文件路径"\`；不急的加 \`--no-wake\`（不叫醒负责人；攒满 8 条或最老一条超过 30 分钟时，负责人空闲就会收到）。`,
+      `- 向负责人汇报：\`"${cmd}" send --to lead --message "结论 + 文件路径"\`。默认留言，攒满 8 条或最老一条超过 20 分钟时负责人空闲就会收到；卡住、失败、要拍板或影响别人判断的发现，加 \`--wake\`。`,
       ...(antiStall() ? [`- 任务做完、交可验收的结果时加 \`--deliver\`（\`"${cmd}" send --to lead --deliver --message "…"\`）：负责人收到并处理完后，Hub 让你离队休眠、腾出内存；要返工负责人直接发消息，Hub 会叫醒你接着干。汇报进度、提问、卡住时不加。`] : []),
       `- 消息写结论和证据路径；超过约 ${NOTICE_LIMIT} 字自动保存完整正文，通知提供原文路径。用 read --id <消息编号> 可取原文。`,
       '- 要和其他成员直接交流，先向负责人说明原因，由负责人开放。',
@@ -407,14 +451,32 @@ function createTeamService(deps) {
       '- 在 PowerShell 里运行时，命令前加 `&`（例：`& "…hub-team.cmd" status`）。',
       `- ${delegationGuidance()}你不能再招 Hub 成员。`,
       '- 普通告知无需回执；任务、合同变更、阻塞解除确认一次即可。同一提交已审过时引用原结论。',
-      '- 里程碑、卡住、需要拍板、完成时都汇报一次。',
+      '- 普通收到、开工确认、纯进度和排期更新无需发消息。',
+      ...RECEIPT_FORMAT,
     ].join('\n');
   }
 
   // ---- 消息 ----
+  function resourceNotice(team) {
+    try {
+      const { free, total } = memInfo() || {};
+      if (!Number.isFinite(free) || free < 0 || !(total > 0)) return;
+      if (free >= 6 * 1024 ** 3 && free / total >= 0.1) return;
+      const last = resourceAlerted.get(team.leadSid), t = now();
+      if (last != null && t - last < RESOURCE_ALERT_COOLDOWN_MS) return;
+      resourceAlerted.set(team.leadSid, t);
+      enqueue(team, 'hub', LEAD, `【内存提醒，不拦人】本机可用内存只剩 ${(free / 1024 ** 3).toFixed(1)} GB（共 ${(total / 1024 ** 3).toFixed(0)} GB），新成员已创建。建议让已交付或闲置成员离队休眠，腾出内存。`, { wake: false });
+    } catch (error) { logger.warn?.('[team] 内存提醒失败', error.message); }
+  }
+  // 短号只在本队内递增；旧消息继续保留长编号。
+  function nextSeq(team) { team.msgSeq = Math.max(Number(team.msgSeq) || 0, ...(team.messages || []).map(m => Number(m.seq) || 0)) + 1; return team.msgSeq; }
+  const ref = m => m.seq ? `#${m.seq}` : m.id;
+  const srcRef = m => m.sourceSeq ? `#${m.sourceSeq}` : m.sourceId;
+  const cmdLine = (cmd, parts) => `下文 hub-team 指 \`"${cmd}"\`（调用写完整路径，PowerShell 前加 &）：${parts.join('；')}。`;
   function enqueue(team, from, to, text, extra = {}) {
     team.messages ||= [];
     const item = { id: newId('msg'), from, to, text, state: 'queued', at: now(), ...extra };
+    if (!item.seq) item.seq = nextSeq(team);
     team.messages.push(item);
     if (team.messages.length > 500) team.messages = team.messages.filter(m => m.state !== 'sent').concat(team.messages.slice(-300)).filter((m, i, a) => a.indexOf(m) === i);
     save(team);
@@ -443,26 +505,26 @@ function createTeamService(deps) {
     if (!target || target.memberId === caller.memberId) throw Error('to 写本队另一位成员编号（负责人是 lead，成员是 m1、m2…）');
     const peer = caller.memberId !== LEAD && target.memberId !== LEAD;
     if (peer && !(team.grants || []).includes(pair(caller.memberId, target.memberId))) throw Error('成员之间直接交流要负责人先开放；请先发给 lead 说明原因');
-    const wake = target.memberId === LEAD ? (deliver || args.wake !== false) : true;
+    const wake = target.memberId === LEAD ? (deliver || args.wake === true || (args.wake !== false && URGENT_RE.test(text))) : true;
     const interrupt = caller.memberId === LEAD && args.interrupt === true;
     // 负责人给已交付的成员派新活：交付作废，它重新算在干活，不会被收工。
     if (rec && rec.deliveredAt) for (const key of ['deliveredAt', 'deliverMsgId', 'deliverSentAt']) delete rec[key];
     // 先完整落盘再排队；不能把只剩前半段的合同当成功投递。
-    const id = newId('msg'), at = now();
+    const id = newId('msg'), at = now(), seq = nextSeq(team);
     const archiveDir = path.join(dir(), 'messages', team.leadSid);
     fs.mkdirSync(archiveDir, { recursive: true });
     const bodyPath = text.length > NOTICE_LIMIT ? path.join(archiveDir, id + '.md') : undefined;
     if (bodyPath) fs.writeFileSync(bodyPath, text, { encoding: 'utf8', flag: 'wx' });
-    fs.writeFileSync(path.join(archiveDir, id + '.json'), JSON.stringify({ id, from: caller.memberId, to: target.memberId, at, text, bodyPath }), { encoding: 'utf8', flag: 'wx' });
+    fs.writeFileSync(path.join(archiveDir, id + '.json'), JSON.stringify({ id, seq, from: caller.memberId, to: target.memberId, at, text, bodyPath }), { encoding: 'utf8', flag: 'wx' });
     const notice = bodyPath ? `正文已完整保存（${text.length} 字符），执行前先读：${bodyPath}\n以下仅为预览：${text.slice(0, 240)}…` : text;
     if (deliver) {
       // 交付消息送进负责人会话、负责人处理完后再离队休眠，见 releaseDelivered。
       const self = (team.members || []).find(m => m.memberId === caller.memberId);
       if (self) { self.deliveredAt = at; self.deliverMsgId = id; delete self.deliverSentAt; }
     }
-    const item = enqueue(team, caller.memberId, target.memberId, notice, { id, at, wake, interrupt, bodyPath, ...(deliver ? { deliver: true } : {}) });
-    if (peer) enqueue(team, caller.memberId, LEAD, `（抄送）${caller.memberId} → ${target.memberId}：${text.slice(0, 160)}${text.length > 160 ? '…（摘要，原文见消息编号）' : ''}`, { wake: false, copy: true, sourceId: id, copyTo: target.memberId });
-    return { messageId: item.id, bodyPath, status: 'queued', note: target.memberId === LEAD
+    const item = enqueue(team, caller.memberId, target.memberId, notice, { id, seq, at, wake, interrupt, bodyPath, ...(deliver ? { deliver: true } : {}) });
+    if (peer) enqueue(team, caller.memberId, LEAD, `（抄送）${caller.memberId} → ${target.memberId}：${text.slice(0, 160)}${text.length > 160 ? '…（摘要，原文见消息编号）' : ''}`, { wake: false, copy: true, sourceId: id, sourceSeq: seq, copyTo: target.memberId });
+    return { messageId: item.id, seq: item.seq, bodyPath, status: 'queued', note: target.memberId === LEAD
       ? (deliver ? (antiStall() ? '已作为交付发给负责人（会叫醒它）。负责人收到并处理完后，Hub 让你离队休眠；要返工它会直接叫醒你。' : '已作为交付发给负责人（会叫醒它）。')
         : wake ? '已排队，负责人空闲时送达（会叫醒它）。' : '已留言，负责人下次被叫醒时一起送达。')
       : (interrupt ? '对方忙时直接插进它当前的工作，空闲时作为新任务送达。' : '已排队，对方空闲时送达。') };
@@ -470,17 +532,31 @@ function createTeamService(deps) {
   function read(callerSid, args) {
     const found = teamOfLead(callerSid) ? { team: teamOfLead(callerSid), member: { memberId: LEAD } } : teamOfMember(callerSid);
     if (!found) throw Error('你还不在任何团队里');
-    const id = String(args.messageId || '');
-    if (!/^msg-[a-zA-Z0-9-]{1,90}$/.test(id)) throw Error('消息编号无效');
+    let id = String(args.messageId || '').trim();
     const { team, member } = found;
+    const short = /^#?(\d{1,7})$/.exec(id);
+    if (short) id = findBySeq(team, Number(short[1])) || '';
+    if (!/^msg-[a-zA-Z0-9-]{1,90}$/.test(id)) throw Error(short ? `本团队没有 #${short[1]} 这条消息` : '消息编号无效');
     let item;
     try { item = JSON.parse(fs.readFileSync(path.join(dir(), 'messages', team.leadSid, id + '.json'), 'utf8')); }
     catch (error) { if (error.code !== 'ENOENT') throw error; item = (team.messages || []).find(m => m.id === id); }
     if (!item) throw Error('本团队没有这条消息；旧版已清理的记录无法恢复');
     if (member.memberId !== LEAD && item.from !== member.memberId && item.to !== member.memberId) throw Error('只有负责人或该消息参与者能读取原文');
     const current = (team.messages || []).find(m => m.id === id);
-    return { id: item.id, from: item.from, to: item.to, at: item.at, text: item.text, bodyPath: item.bodyPath, sourceId: item.sourceId,
+    return { id: item.id, ...(item.seq ? { seq: item.seq } : {}), from: item.from, to: item.to, at: item.at, text: item.text, bodyPath: item.bodyPath, sourceId: item.sourceId,
       delivery: current ? deliveryView(team, current) : null };
+  }
+  function findBySeq(team, seq) {
+    const hit = (team.messages || []).find(m => m.seq === seq);
+    if (hit) return hit.id;
+    const archive = path.join(dir(), 'messages', team.leadSid);
+    try {
+      for (const name of fs.readdirSync(archive)) {
+        if (!/^msg-[\w-]+\.json$/.test(name)) continue;
+        try { const item = JSON.parse(fs.readFileSync(path.join(archive, name), 'utf8')); if (item.seq === seq) return item.id; } catch {}
+      }
+    } catch {}
+    return null;
   }
   const pair = (a, b) => [a, b].sort().join(':');
   function allow(callerSid, args) {
@@ -609,7 +685,7 @@ function createTeamService(deps) {
           m.sendingAt = now(); m.submissionId = submissionId;
         });
         save(team);
-        const text = batch.length === 1 && batch[0].kickoff ? batch[0].text : formatBatch(team, batch, to);
+        const text = batch.length === 1 && batch[0].kickoff ? batch[0].text : to === LEAD ? leadBatchText(team, batch) : formatBatch(team, batch, to);
         const targetSid = target.sid;
         const shouldSubmit = () => !frozen && memberById(team, to)?.sid === targetSid
           && batch.every(item => team.messages.includes(item) && ['sending', 'waiting-model'].includes(item.state));
@@ -635,7 +711,10 @@ function createTeamService(deps) {
             if (to !== LEAD) enqueue(team, 'hub', LEAD, `发给 ${to} 的消息没送达：${String(reason).slice(0, 200)}。内容保留，可用 status 查看后核对。`);
           } else if (result?.ok === true) {
             batch.forEach(m => { m.state = 'sent'; m.notSent = false; m.sentAt = now(); });
-            if (to === LEAD) noteDeliverySent(team, batch);
+            if (to === LEAD) {
+              if (team.leadFooterAt == null || now() - team.leadFooterAt >= FOOTER_FULL_EVERY_MS) team.leadFooterAt = now();
+              noteDeliverySent(team, batch);
+            }
           }
           else markUnconfirmed(team, batch, to, '提交未返回明确回执');
         }
@@ -812,6 +891,30 @@ function createTeamService(deps) {
     for (const item of items) { item.state = 'unconfirmed'; item.notSent = false; item.error = error ? `${String(error).slice(0, 200)}；${warning}` : warning; }
     if (to !== LEAD) enqueue(team, 'hub', LEAD, `发给 ${to} 的消息${warning}。用 status 查看保留的正文。`);
   }
+  const leadQuietRule = () => `对${approver}：成员消息不逐条转述，只在里程碑、坏消息或要拍板时汇报，先答最近的问题或离总目标还差多少。其余处理完只回一行 ${NO_UPDATE_MARK}（界面不显示）。`;
+  function leadFooter(team, full) {
+    return team.leadFooterAt == null || now() - team.leadFooterAt >= FOOTER_FULL_EVERY_MS
+      ? full : `（规则同前；无里程碑、坏消息或待拍板只回 ${NO_UPDATE_MARK}）`;
+  }
+  function leadBatchText(team, batch) {
+    const full = formatBatch(team, batch, LEAD);
+    const total = batch.reduce((n, m) => n + String(m.text || '').length, 0);
+    const configured = Number(getConfig()?.team?.leadInboxChars);
+    if (total <= (configured > 0 ? configured : LEAD_INBOX_CHARS)) return full;
+    const folder = path.join(dir(), 'inbox', team.leadSid), file = path.join(folder, newId('batch') + '.md');
+    try { fs.mkdirSync(folder, { recursive: true }); fs.writeFileSync(file, full, { encoding: 'utf8', flag: 'wx' }); }
+    catch (error) { logger.warn?.('[team] 长批次落盘失败，改为整批直送', error.message); return full; }
+    for (const m of batch) m.inboxFile = file;
+    const bySender = new Map();
+    for (const m of batch) { if (!bySender.has(m.from)) bySender.set(m.from, []); bySender.get(m.from).push(m); }
+    const lines = [...bySender].map(([from, ms]) => {
+      const who = from === 'hub' ? 'Hub' : from === LEAD ? '负责人' : `${from} ${team.members.find(m => m.memberId === from)?.title || ''}`.trim();
+      return `- [${who}] ${ms.length} 条 · ${ms.reduce((n, m) => n + String(m.text || '').length, 0)} 字 · ${ms.map(ref).join('、')}`;
+    });
+    return [`【团队消息 · ${batch.length} 条 · 原文已存文件】`, ...lines, `原文：${file}`,
+      `共 ${total} 字，按成员分段读完，只关注结论和要你处理的事。`,
+      leadFooter(team, cmdLine(commandPath(), ['原文 hub-team read --id <短号数字>', '回复 hub-team send --to <成员编号> --message "…"']) + leadQuietRule())].join('\n');
+  }
   function formatBatch(team, batch, to) {
     const name = id => (id === 'hub' ? 'Hub' : id === LEAD ? '负责人' : `${id} ${memberById(team, id)?.title || ''}`.trim());
     // 抄送按交流双方合并，原消息编号全部保留；旧版抄送不猜关联，原样展示。
@@ -823,17 +926,21 @@ function createTeamService(deps) {
         groups.get(key).items.push(m);
       } else notices.push({ items: [m] });
     }
+    const named = new Set();
+    const tag = id => { if (id === 'hub' || id === LEAD || named.has(id)) return id === 'hub' || id === LEAD ? name(id) : id; named.add(id); return name(id); };
     const lines = notices.map(({ items }) => {
       const m = items[items.length - 1];
-      const stamp = `${m.id} · ${new Date(m.at).toISOString()}`;
+      const stamp = `${ref(m)} ${formatAbsoluteTime(m.at, now())}`;
       const text = items.length > 1
-        ? `（抄送汇总）${m.from} → ${m.copyTo} 共 ${items.length} 条；最新摘要：${m.text.replace(/^（抄送）[^：]*：/, '')}\n最新摘要不代表此前问题已解决，判断时按编号读原文：${items.map(x => x.sourceId).join('、')}`
-        : `${m.text}${m.sourceId ? '\n原文编号：' + m.sourceId : ''}`;
-      return `- [${name(m.from)}${m.wake === false ? ' · 留言' : ''}] ${stamp}\n${text}`;
+        ? `（抄送汇总）${m.from}→${m.copyTo} ${items.length} 条，最新：${m.text.replace(/^（抄送）[^：]*：/, '')}\n（只是最新一条的摘要，判断前读原文 ${items.map(srcRef).join('、')}）`
+        : `${m.text}${m.sourceId ? '（原文 ' + srcRef(m) + '）' : ''}`;
+      return `- [${tag(m.from)}${m.wake === false ? ' · 留言' : ''}] ${stamp}\n${text}`;
     });
     const cmd = commandPath();
+    if (to === LEAD) return [`【团队消息 · ${notices.length} 条】`, ...lines, '',
+      leadFooter(team, '普通告知无需回执。' + cmdLine(cmd, ['原文 hub-team read --id <短号数字>', '回复 hub-team send --to <成员编号> --message "…"', '全队 hub-team status']) + leadQuietRule())].join('\n');
     return [`【团队消息 · ${notices.length} 条】`, ...lines, '',
-      `普通告知无需回执；处理旧消息先核对编号和当前任务。读完整原文：\`"${cmd}" read --id <消息编号>\`。`,
+      `普通告知无需回执；处理旧消息先核对编号和当前任务。读完整原文：\`"${cmd}" read --id <短号数字>\`。`,
       to === LEAD ? `回复成员：\`"${cmd}" send --to <成员编号> --message "…"\`；看全队：\`"${cmd}" status\`。`
         : `回复：\`"${cmd}" send --to ${batch[0].from === 'hub' ? LEAD : batch[0].from} --message "…"\`。`].join('\n');
   }
@@ -876,7 +983,7 @@ function createTeamService(deps) {
         m.to === LEAD && m.wake === false ? '留言等待负责人唤醒或批量送达' : '等待投递';
     }
     if (wait) reason = wait.reason;
-    return { id: m.id, from: m.from, to: m.to, targetSessionId: target?.sid || null, state: m.state, stage,
+    return { id: m.id, ...(m.seq ? { seq: m.seq } : {}), from: m.from, to: m.to, targetSessionId: target?.sid || null, state: m.state, stage,
       label: ({ 'waiting-model': '等待模型确认', queued: '排队', sending: '发送中', sent: '已送', failed: '提交失败', unconfirmed: '送达结果待核对' })[stage] || stage,
       reason, ...(wait || m.notSent === true ? { notSent: true } : {}), at: m.at, sendingAt: m.sendingAt || null, sentAt: m.sentAt || null, waitedMs,
       retryAt: m.state === 'queued' && m.retryAt > now() ? m.retryAt : null };

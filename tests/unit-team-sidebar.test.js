@@ -112,6 +112,17 @@ test('F2: unchanged team keeps DOM; member-only status, title, unread and remova
   h.renderSessionList(); assert.ok(row(h.sessionListEl, h.member.id));
 });
 
+test('负责人只按自己的未读高亮，成员新消息仍留在成员行', t => {
+  const h = setup(t);
+  h.member.unreadCount = 2;
+  h.renderSessionList();
+  assert.doesNotMatch(row(h.sessionListEl, h.lead.id).className, /need-unread/);
+  assert.match(row(h.sessionListEl, h.member.id).className, /need-unread/);
+  h.lead.unreadCount = 1;
+  h.renderSessionList();
+  assert.match(row(h.sessionListEl, h.lead.id).className, /need-unread/);
+});
+
 test('F3: CodeAgent filter retains parent and its matching member', t => {
   const h = setup(t, { modelFilter: 'codeagent' });
   assert.deepEqual([...sessionFamilies(h.lead, h.sessions)].sort(), ['codeagent']);

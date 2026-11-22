@@ -506,6 +506,8 @@ class SessionSearchEngine {
   }
 
   async search(request = {}, snapshot = {}) {
+    // null 表示本次未发送快照，不能当作空集合刷新，否则会丢失 Hub 会话关联。
+    const canRefresh = snapshot !== null;
     if (!this.statusValue.ready) {
       // 冷启动：原来这里是 `await this.refresh(...)`，也就是**第一次搜索要等整个索引
       // 建完**（本机 2429 个来源、1.8GB，要几分钟）。用户明确要求「建索引放到后台冷加载，
@@ -514,7 +516,7 @@ class SessionSearchEngine {
       // 现在改成：立刻用手上已有的索引回答（可能是空的、可能是上次的一部分），
       // 同时在后台把 refresh 踢起来，并用 indexing:true 告诉前端「全文还在建」。
       // 前端此时已经有标题层的即时结果可显示（core/title-index.js）。
-      if (!this.refreshPromise) {
+      if (canRefresh && !this.refreshPromise) {
         setImmediate(() => { this.refresh(snapshot, { force: false }).catch(() => {}); });
       }
       return {
@@ -524,7 +526,7 @@ class SessionSearchEngine {
         status: { ...this.statusValue },
       };
     }
-    if (Date.now() - this.lastRefreshAt >= this.options.refreshTtlMs && !this.refreshPromise) {
+    if (canRefresh && Date.now() - this.lastRefreshAt >= this.options.refreshTtlMs && !this.refreshPromise) {
       // 曾经是 `void this.refresh(...)`。看着像后台刷新，其实不是：refresh() 的函数体
       // 在第一个 await 之前是同步执行的，而那一段正是 collectSourceDescriptors()——
       // 要 readdir/stat 近 2000 个 transcript 并读每个 Codex rollout 的头部，实测 326ms。

@@ -393,7 +393,7 @@ async function launchIsolatedHub({
     err.termination = termination;
     throw err;
   }
-  const identityVerified = await _waitForCdpPortOwner(port, pid, 1500);
+  const identityVerified = await _waitForCdpPortOwner(port, pid, 15000); // 机器满载时 netstat 单次就要几秒
   if (!identityVerified) {
     const termination = await _terminateSpawnedChild(child);
     const err = new Error(`[${label}] CDP port ${port} is not owned by spawned PID ${pid}; refusing to attach`);
@@ -473,8 +473,8 @@ async function gracefulQuit(hub, { timeoutMs = 20_000, allowAlreadyExited = fals
   }
   const ownerChecks = captureDiagnostics ? [] : null;
   if (!hub.identityVerified || !await (captureDiagnostics
-    ? _waitForCdpPortOwner(hub.port, hub.pid, 1000, _verifyCdpPortOwner, evidence => ownerChecks.push(evidence))
-    : _waitForCdpPortOwner(hub.port, hub.pid, 1000))) {
+    ? _waitForCdpPortOwner(hub.port, hub.pid, 8000, _verifyCdpPortOwner, evidence => ownerChecks.push(evidence))
+    : _waitForCdpPortOwner(hub.port, hub.pid, 8000))) {
     // The CDP listener can disappear a fraction before Electron emits `exit`.
     // Never attach to or close an unverified port, but allow the exact spawned
     // child a short window to finish a clean shutdown on its own.

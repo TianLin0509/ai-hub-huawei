@@ -107,6 +107,21 @@ function timestampForFile(date = new Date()) {
   return date.toISOString().replace(/[-:TZ.]/g, '').slice(0, 14);
 }
 
+// 仅在新备份成功后清理同一个快捷方式的旧备份，不触碰其它快捷方式。
+function pruneShortcutBackups(shortcutPath, keepPath, fsModule = fs) {
+  const dir = path.dirname(shortcutPath);
+  const prefix = `${path.basename(shortcutPath)}.hub-invalid-`.toLowerCase();
+  let names;
+  try { names = fsModule.readdirSync(dir); } catch { return; }
+  for (const name of names) {
+    const lower = String(name).toLowerCase();
+    if (!lower.startsWith(prefix) || !lower.endsWith('.bak')) continue;
+    const full = path.join(dir, name);
+    if (normalizeWinPath(full) === normalizeWinPath(keepPath)) continue;
+    try { fsModule.rmSync(full, { force: true }); } catch {}
+  }
+}
+
 /**
  * 把桌面上"明确是 Hub 启动器"的快捷方式改指到新的 exe。
  *
@@ -300,6 +315,7 @@ function ensureWindowsShellIntegration({
         const backupPath = `${legacyPath}.hub-invalid-${timestampForFile(now())}.bak`;
         fsModule.renameSync(legacyPath, backupPath);
         result.legacyBackupPath = backupPath;
+        pruneShortcutBackups(legacyPath, backupPath, fsModule);
       }
     } catch (error) {
       result.errors.push(`错误 Electron 快捷方式退役失败：${error.message}`);
@@ -323,6 +339,7 @@ function ensureWindowsShellIntegration({
           if (!ok) throw new Error(`writeShortcutLink returned false: ${desktopLegacyPath}`);
           result.desktopShortcutUpdated = true;
           result.desktopBackupPath = backupPath;
+          pruneShortcutBackups(desktopLegacyPath, backupPath, fsModule);
         } catch (error) {
   if (false) {
             fsModule.rmSync(desktopLegacyPath, { force: true });

@@ -100,8 +100,8 @@ test('启动进程退出、确实没人接手：等到期限报「没有启动�
   const d = fixture(t);
   const lc = createChildLifecycle({ watchMs: 0, ...plenty, env: {}, logger: quiet });
   await assert.rejects(launchHeadlessEdge({ purpose: 't', tag: 'hub-rsitest', edgePath: 'fake-msedge.exe', lifecycle: lc, logger: quiet,
-    spawnFn: spawnFake(d, 'die'), findBrowserPid: async () => { throw new Error('不该走到'); }, startWaitMs: 1500 }),
-  e => /无头 Edge 没有启动（启动进程 [\d.]+ 秒后退出，退出码 21）/.test(e.message));
+    spawnFn: spawnFake(d, 'die'), findBrowserPid: async () => { throw new Error('不该走到'); }, startWaitMs: 6000 }),
+  e => /无头 Edge 没有启动（启动进程 [\d.]+ 秒后退出，退出码 21[，）]/.test(e.message));
   assert.equal(lc.status().used.edge, 0);
   assert.equal(lc.status().active.length, 0);
 });

@@ -29,6 +29,7 @@ async function route({ active, home = false, team = false, selectIntent = 7, cur
   const session = { id: 'A', kind: 'codeagent', currentModel: { id: 'm' } };
   const sessions = new Map([['A', { id: 'A', kind: 'codeagent', status: 'dormant', unreadCount: 0 }]]);
   const ctx = { sessions, activeSessionId: active, activated: false, sessionOpenIntent: currentIntent,
+    dormantResumeWatch: { finish() {} },
     require: id => require(path.join(__dirname, '../renderer', id)),
     ipcRenderer: { on: (_n, fn) => { handler = fn; } }, nativeSessionBootstrap: { record() {} },
     codexAccountUi: { resumeCodexAccountRestart: () => false },

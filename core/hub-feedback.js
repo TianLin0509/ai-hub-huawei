@@ -9,8 +9,8 @@ const os = require('node:os');
 const MAX_LOG_FILES = 8;
 const LINES_PER_LOG = 150;
 const MAX_LOG_BYTES = 512 * 1024;      // 每份只读尾部这么多
-// 整包上限按 UTF-8 字节算：公司代理单次 POST 超过约 100 KB 就 403（80 KB 能过），所以整包压到 80 KB 以内。
-const MAX_TOTAL_BYTES = 80 * 1024;
+// 整包上限按 UTF-8 字节算：公司代理单次 POST 超过约 100 KB 就 403（80 KB 能过）；2026-11-23 起单条上传小于 50 KB，整包压到 44 KB。
+const MAX_TOTAL_BYTES = 44 * 1024;
 const MAX_TOTAL_CHARS = MAX_TOTAL_BYTES;
 const MAX_DESC_BYTES = 24 * 1024;      // 用户描述最多占这么多，其余留给环境信息和日志
 const LIFECYCLE_FILES = 3;

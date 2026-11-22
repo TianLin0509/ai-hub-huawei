@@ -212,12 +212,12 @@ test('a notSent delivery that later succeeds is sent once; plain failures and un
   assert.equal(h.restarts.length, 0);
 });
 
-test('no-wake notes reach an idle lead after 30 minutes or once 8 pile up', async t => {
+test('no-wake notes reach an idle lead after 20 minutes or once 8 pile up', async t => {
   const h = harness(t);
   await oneMember(h);
   await h.service.invoke('member-1xx', 'send', { to: 'lead', message: '进度 10%', wake: false });
   await h.settle();
-  h.clock.t += 29 * MIN; await h.settle();
+  h.clock.t += 19 * MIN; await h.settle();
   assert.equal(h.sent.filter(s => s.sessionId === 'lead-0001').length, 0);
   h.clock.t += MIN; await h.settle();
   const toLead = h.sent.filter(s => s.sessionId === 'lead-0001');

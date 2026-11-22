@@ -92,6 +92,7 @@ test('null resume result clears pending state and leaves the dormant history unt
   const dormant = { id: 'old', status: 'dormant', transcriptPath: 'history.jsonl', ccSessionId: 'old-native' };
   const pending = new Map();
   const ctx = { sessions: new Map([['old', dormant]]), _pendingDormantResumes: pending,
+    dormantResumeWatch: { start() {}, finish() {}, isTimedOut: () => false },
     paintSidebarResumePending() {}, scheduleSessionListRender() {}, buildSessionResumeMeta: s => s,
     ipcRenderer: { invoke: async () => null } };
   vm.runInNewContext(text.slice(start, end), ctx);

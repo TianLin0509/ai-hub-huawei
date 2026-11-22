@@ -83,6 +83,7 @@ test('real creation callbacks reveal the containing folder and section and scrol
     await h.folders.refresh();
     const listeners = new Map(), created = recent('new-' + kind, { title: kind === 'lead' ? '负责人' : '新会话' });
     context = { console, sessions, meetings, require: createRequire(filename),
+      dormantResumeWatch: { finish() {} },
       ipcRenderer: { on: (name, fn) => listeners.set(name, fn), send() {} },
       nativeSessionBootstrap: { record() {} }, codexAccountUi: { resumeCodexAccountRestart: () => false },
       _pendingDormantResumes: new Map(), sessionOpenIntent: 0, activeSessionId: null, activeMeetingId: null,

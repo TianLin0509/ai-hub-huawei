@@ -646,7 +646,8 @@ function renderTurnCardContent(turn, context = {}) {
   // inherited = 从父会话补进来的「分支前」对话（见 core/branch-transcript-inheritance.js）。
   const teamFold = isUser ? require('./team-notice-identity').teamNoticeSummary(turn.text) : null;
   const teamSender = isUser ? require('./team-notice-identity').teamNoticeSender(turn.text) : null;
-  const cls = (isUser ? 'turn-card user' : 'turn-card assistant') + (turn.inherited ? ' inherited' : '') + (teamFold ? ' team-notice' : '');
+  const noUpdate = !isUser && require('../core/team-silent-reply').isNoUpdateReply(turn.text);
+  const cls = (isUser ? 'turn-card user' : 'turn-card assistant') + (turn.inherited ? ' inherited' : '') + (teamFold ? ' team-notice' : '') + (noUpdate ? ' no-update' : '');
   const who = teamSender ? teamSender.label : teamFold?.kind === 'kickoff' ? '负责人' : isUser ? '用户' : (turn.model || (turn.source==='antigravity-cli' ? 'Antigravity' : turn.source==='acp' ? require('../core/ai-kinds').getKindLabel(turn.kind) : turn.kind) || 'Claude');
   const ts = turn.ts ? formatAbsoluteTime(turn.ts) : '';
   // 回答旁的 Agent 标识（2026-11-19 J 席）：名字写的是模型，这里补「哪个程序在答」；名字里已经写了就不重复。

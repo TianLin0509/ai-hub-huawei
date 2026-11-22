@@ -741,7 +741,7 @@ test('explicit terminal fallback submits once; the flag never bypasses normal sk
 test('prompt IPC forwards interactive mode only for explicitly requested CodeAgent slash commands', async () => {
   const vm = require('node:vm'), { createRequire } = require('node:module'), { EventEmitter } = require('node:events');
   const file = path.join(__dirname, '..', 'main', 'ipc', 'prompt-submit-handlers.js'), localRequire = createRequire(file), calls = [];
-  const context = vm.createContext({ module: { exports: {} }, console, process, Buffer, setTimeout, clearTimeout,
+  const context = vm.createContext({ module: { exports: {} }, console, process, Buffer, AbortController, setTimeout, clearTimeout,
     require: name => name === '../../core/group-chat-watcher.js' ? { codeAgentInputAction: async () => ({ ok: true }), sendToPty: async (...args) => { calls.push(args); return { ok: true }; } } : localRequire(name),
   });
   vm.runInContext(fs.readFileSync(file, 'utf8'), context);
@@ -768,7 +768,7 @@ test('prompt preflight rejections explicitly confirm nothing was sent', async t 
   const vm = require('node:vm'), { createRequire } = require('node:module'), { EventEmitter } = require('node:events');
   const file = path.join(__dirname, '..', 'main', 'ipc', 'prompt-submit-handlers.js'), localRequire = createRequire(file);
   let writes = 0;
-  const context = vm.createContext({ module: { exports: {} }, console, process, Buffer, setTimeout, clearTimeout,
+  const context = vm.createContext({ module: { exports: {} }, console, process, Buffer, AbortController, setTimeout, clearTimeout,
     require: name => name === '../../core/group-chat-watcher.js' ? {
       codeAgentInputAction: async () => ({ ok: true }),
       sendToPty: async () => { writes++; return { ok: true }; },
@@ -796,7 +796,7 @@ test('prompt preflight rejections explicitly confirm nothing was sent', async t 
 test('team preservation reaches both the queued IPC input guard and the final PTY sender', async t => {
   const vm = require('node:vm'), { createRequire } = require('node:module'), { EventEmitter } = require('node:events');
   const file = path.join(__dirname, '..', 'main', 'ipc', 'prompt-submit-handlers.js'), localRequire = createRequire(file), calls = [], checks = [];
-  const context = vm.createContext({ module: { exports: {} }, console, process, Buffer, setTimeout, clearTimeout,
+  const context = vm.createContext({ module: { exports: {} }, console, process, Buffer, AbortController, setTimeout, clearTimeout,
     require: name => name === '../../core/group-chat-watcher.js' ? {
       codeAgentInputAction: async (...args) => { checks.push(args); return { ok: true }; },
       sendToPty: async (...args) => { calls.push(args); return { ok: true }; },
@@ -1298,7 +1298,7 @@ test('real IPC and SQLite reopen keep stopped flags; a submitted CLI echo still 
   let store = new CommandTranscriptStore(root), notSent = true;
   const handlers = new Map(), updates = [], manager = new EventEmitter();
   manager.getSession = () => ({ kind: 'codeagent', agentRuntime: 'pty' });
-  const context = vm.createContext({ module: { exports: {} }, console, process, Buffer, setTimeout, clearTimeout,
+  const context = vm.createContext({ module: { exports: {} }, console, process, Buffer, AbortController, setTimeout, clearTimeout,
     require: name => name === '../../core/group-chat-watcher.js' ? {
       codeAgentInputAction: async () => ({ ok: true }),
       sendToPty: async () => ({ ok: true, stopped: true, notSent, sendStatus: 'stopped', enterAttempts: notSent ? 0 : 1 }),
@@ -1605,7 +1605,7 @@ test('real prompt IPC auto-clears before receipts/journal; failed clear refuses 
   const handlers = new Map(), writes = [], journals = [], updates = [];
   const s = { kind: 'codeagent', agentRuntime: 'pty' }, manager = new EventEmitter(); manager.getSession = () => s;
   let residual = true, clearFailed = true;
-  const context = vm.createContext({ module: { exports: {} }, console, process, Buffer, setTimeout, clearTimeout,
+  const context = vm.createContext({ module: { exports: {} }, console, process, Buffer, AbortController, setTimeout, clearTimeout,
     require: name => name === '../../core/group-chat-watcher.js' ? {
       codeAgentInputAction: async () => { if (residual && !clearFailed) { writes.push('\x15'); residual = false; manager.emit('codeagent-input-cleared', { sessionId: 'test', text: 'old' }); } return residual ? { ok: false, notSent: true, code: 'codeagent-input-residual', input: { token: 'token', text: 'old' } } : { ok: true }; },
       sendToPty: async (...args) => { writes.push(args); return { ok: true, enterAttempts: 1 }; },

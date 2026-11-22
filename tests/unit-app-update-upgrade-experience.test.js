@@ -19,6 +19,53 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const PS = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 const q = s => String(s).replace(/'/g, "''");
 
+// 「重开」对象的替身（2026-11-23）：真 Hub 是图形程序、没有控制台；原先用 powershell.exe 冒充，
+// 替换脚本 Start-Process 它时会在用户屏幕上闪一个黑框（弹窗取证器一晚抓到 75 次，都来自这里）。
+// 改用一个图形子系统的小程序：照样写启动标记、父进程号，测的东西不变，但不再出现任何窗口。
+//   --flag <文件> 写 x；--parent <文件> 写父进程号；--json <文件> 写 {"elevated":false,"parent":父进程号}
+const PROBE_SOURCE = String.raw`
+using System; using System.IO; using System.Runtime.InteropServices;
+public static class RelaunchProbe {
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+  struct PE32 { public uint dwSize, cntUsage, th32ProcessID; public IntPtr th32DefaultHeapID; public uint th32ModuleID, cntThreads, th32ParentProcessID;
+    public int pcPriClassBase; public uint dwFlags; [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)] public string szExeFile; }
+  [DllImport("kernel32.dll")] static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint pid);
+  [DllImport("kernel32.dll", CharSet = CharSet.Auto)] static extern bool Process32First(IntPtr h, ref PE32 e);
+  [DllImport("kernel32.dll", CharSet = CharSet.Auto)] static extern bool Process32Next(IntPtr h, ref PE32 e);
+  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+  static uint Parent() {
+    uint me = (uint)System.Diagnostics.Process.GetCurrentProcess().Id;
+    IntPtr snap = CreateToolhelp32Snapshot(2, 0);
+    PE32 e = new PE32(); e.dwSize = (uint)Marshal.SizeOf(typeof(PE32));
+    try { if (Process32First(snap, ref e)) do { if (e.th32ProcessID == me) return e.th32ParentProcessID; } while (Process32Next(snap, ref e)); }
+    finally { CloseHandle(snap); }
+    return 0;
+  }
+  public static int Main(string[] a) {
+    for (int i = 0; i + 1 < a.Length; i += 2) {
+      if (a[i] == "--flag") File.WriteAllText(a[i + 1], "x");
+      else if (a[i] == "--parent") File.WriteAllText(a[i + 1], Parent().ToString());
+      else if (a[i] == "--json") File.WriteAllText(a[i + 1], "{\"elevated\":false,\"parent\":" + Parent() + "}");
+    }
+    return 0;
+  }
+}`;
+let probeExe = null;
+function relaunchProbe() {
+  if (probeExe && fs.existsSync(probeExe)) return probeExe;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-upx-probe-'));
+  const src = path.join(dir, 'probe.cs');
+  const exe = path.join(dir, 'RelaunchProbe.exe');
+  fs.writeFileSync(src, PROBE_SOURCE, 'utf8');
+  const r = spawnSync(PS, ['-NoProfile', '-NonInteractive', '-Command',
+    `Add-Type -TypeDefinition (Get-Content -Raw -LiteralPath '${q(src)}') -OutputType WindowsApplication -OutputAssembly '${q(exe)}'`],
+  { windowsHide: true, encoding: 'utf8', timeout: 120000 });
+  assert.ok(fs.existsSync(exe), `编译重开替身失败：${r.stdout}${r.stderr}`);
+  process.once('exit', () => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} });
+  probeExe = exe;
+  return exe;
+}
+
 function makeCase(extra = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-upx-'));
   const p = stagingPaths(dataDir);
@@ -210,7 +257,7 @@ test('旧窗口一直不退出（会话没保存完、Hub 取消了关闭）：�
   const k = makeCase({ waitSeconds: 2, relaunch: true });
   const marker = path.join(k.dataDir, 'relaunched.flag');
   // relaunch 用的 exe 换成一个只写标记的程序：被拉起就说明又开了一个。
-  k.setPlan({ exe: PS, args: ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', `Set-Content -LiteralPath '${q(marker)}' -Value x`] });
+  k.setPlan({ exe: relaunchProbe(), args: ['--flag', marker] });
   const oldHub = spawn(PS, ['-NoProfile', '-NonInteractive', '-Command', 'Start-Sleep -Seconds 30'], { windowsHide: true, stdio: 'ignore' });
   k.kids.push(oldHub);
   k.setPlan({ pid: oldHub.pid });
@@ -327,7 +374,7 @@ test('回滚也失败：立即停，不给重试、不自动重开，原备份�
   const k = makeCase({ assumeUi: true, simulateFailure: '模拟替换出错', simulateRestoreFailure: true, relaunch: true });
   t.after(() => k.done());
   const marker = path.join(k.dataDir, 'relaunched.flag');
-  k.setPlan({ exe: PS, args: ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', `Set-Content -LiteralPath '${q(marker)}' -Value x`] });
+  k.setPlan({ exe: relaunchProbe(), args: ['--flag', marker] });
   const seen = new Set();
   // Hold the real helper immediately before it calls Wait-Decision, so this
   // simulated fast click is guaranteed to be queued before waiting starts.
@@ -395,10 +442,8 @@ for (const mode of ['cancel', 'plain']) {
     const k = makeCase({ assumeUi: true, relaunch: true, elevateMode: mode });
     const marker = path.join(k.dataDir, 'relaunched.json');
     const launched = path.join(k.dataDir, 'relaunched.flag');
-    const script = path.join(k.dataDir, 'mark-relaunch.ps1');
-    // 入口先留启动标记；WMI 查询只用于随后核对亲缘关系，不能把查询耗时算成产品尚未重开。
-    fs.writeFileSync(script, `Set-Content -LiteralPath '${q(launched)}' -Value x; @{ elevated = [bool]$Elevated; parent = (Get-CimInstance Win32_Process -Filter "ProcessId=$PID").ParentProcessId } | ConvertTo-Json | Set-Content -LiteralPath '${q(marker)}'`, 'utf8');
-    k.setPlan({ exe: PS, args: ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-File', script] });
+    // 入口先留启动标记，再写亲缘关系，查询耗时不算成产品尚未重开。
+    k.setPlan({ exe: relaunchProbe(), args: ['--flag', launched, '--json', marker] });
     const sidResult = spawnSync(path.join(process.env.SystemRoot || 'C:\Windows', 'System32', 'whoami.exe'), ['/user', '/fo', 'csv', '/nh'], { windowsHide: true, encoding: 'utf8' });
     assert.equal(sidResult.status, 0, sidResult.stderr);
     const sid = sidResult.stdout.trim().split(',').pop().replace(/"/g, '');
@@ -441,9 +486,7 @@ test('管理员副本替换成功：普通权限父脚本重开，成功进度�
   const k = makeCase({ assumeUi: true, relaunch: true, elevateMode: 'plain' });
   try {
     const marker = path.join(k.dataDir, 'relaunched-parent.txt');
-    const script = path.join(k.dataDir, 'mark-relaunch.ps1');
-    fs.writeFileSync(script, `(Get-CimInstance Win32_Process -Filter "ProcessId=$PID").ParentProcessId | Set-Content -LiteralPath '${q(marker)}'`, 'utf8');
-    k.setPlan({ exe: PS, args: ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-File', script] });
+    k.setPlan({ exe: relaunchProbe(), args: ['--parent', marker] });
     // 普通权限模拟授权成功：仅强制进入授权分支，管理员副本仍执行原版替换逻辑，不弹真实 UAC。
     fs.writeFileSync(k.p.helper, '\uFEFF' + HELPER.replace('if (Test-Writable $p.resourcesDir)', 'if ($false)'), 'utf8');
     const helper = k.start();
@@ -466,7 +509,7 @@ test('管理员副本替换成功：普通权限父脚本重开，成功进度�
 test('r43 退出被取消（Hub 留下放弃标记）：替换脚本不再在第 1 步干等，立即结束、进度为已取消、不替换不重开、放开锁', winOnly, async () => {
   const k = makeCase({ waitSeconds: 60, relaunch: true });
   const marker = path.join(k.dataDir, 'relaunched.flag');
-  k.setPlan({ exe: PS, args: ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', `Set-Content -LiteralPath '${q(marker)}' -Value x`] });
+  k.setPlan({ exe: relaunchProbe(), args: ['--flag', marker] });
   const oldHub = spawn(PS, ['-NoProfile', '-NonInteractive', '-Command', 'Start-Sleep -Seconds 60'], { windowsHide: true, stdio: 'ignore' });
   k.kids.push(oldHub);
   k.setPlan({ pid: oldHub.pid });

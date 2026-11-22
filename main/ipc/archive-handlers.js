@@ -24,7 +24,8 @@ function registerArchiveIpc(ipcMain, deps = {}) {
   ipcMain.handle('search-past-sessions', async (_e, request = {}) => {
     try {
       if (searchService && typeof searchService.search === 'function') {
-        return await searchService.search(request, getSearchSnapshot());
+        // 只传取快照的函数，是否需要组装由搜索服务决定。
+        return await searchService.search(request, getSearchSnapshot);
       }
       const { query, limit = 50 } = request;
       return await sessionArchive.searchAcross(query, { limit });

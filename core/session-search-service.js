@@ -275,7 +275,15 @@ class SessionSearchService {
   }
 
   search(request = {}, snapshot = {}) {
-    return this._request('search', { request, snapshot });
+    // 快照含所有会话元数据，只在可能触发刷新时组装和发送，避免每次输入都拷贝。
+    const now = Date.now();
+    const due = !this._status.ready || now - (this._searchSnapshotSentAt || 0) >= this._childData.refreshTtlMs;
+    let payload = null;
+    if (due) {
+      payload = typeof snapshot === 'function' ? snapshot() : snapshot;
+      this._searchSnapshotSentAt = now;
+    }
+    return this._request('search', { request, snapshot: payload });
   }
 
   preview(request = {}) {

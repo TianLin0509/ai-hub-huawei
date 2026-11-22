@@ -69,9 +69,15 @@ function registerSessionIpc(ipcMain, deps) {
 
   const lastResizeBySid = new Map();
   ipcMain.handle('hub:feedback-ping', () => ({ok:true}));
-  ipcMain.handle('session:open-status', (_event, sessionId) => {
+  ipcMain.handle('session:open-status', (_event, sessionId, options = {}) => {
     const owner = sessionManager._openOwners?.()?.owner(sessionId, true);
-    if (!owner || (owner.pid === process.pid && sessionManager.getSession(sessionId))) return {available:true};
+    // 本 Hub 的启动预约仍在进行时允许重试；resume-session 会复用原启动任务。
+    if (!owner || owner.pid === process.pid) {
+      // 重试先核对运行表：进程已启动但原回包尚未完成时，直接接回已有会话。
+      const live = options.reconcile ? sessionManager.getSession(sessionId) : null;
+      if (live) sendToRenderer('session-created', { session: live });
+      return {available:true};
+    }
     return {available:false, message:require('../../core/session-open-ownership').occupied(owner).message};
   });
   const claudeModelPreferenceGuards = new Map();

@@ -1,6 +1,6 @@
 'use strict';
 
-// 公司版会话以 CodeAgent 为主：昨日之我默认「我的提问 + 最近 7 天」走常驻内存，
+// 公司版会话以 CodeAgent 为主：昨日之我「我的提问 + 最近 7 天」仍走常驻内存，
 // 这里守住 CodeAgent 记录走的是同一条快路径，并且「我的提问」只认用户真正说的话：
 // 普通提问、技能命令（/技能 + 参数）算；注入的 <system-reminder>、技能正文（isMeta）不算。
 // 用真实的记录目录 → 来源解析 → SQLite 索引 → 查询，不走模拟数据。
@@ -44,7 +44,9 @@ function fixture(t) {
   const index = new SqliteSessionSearchIndex(path.join(temp, 'search.sqlite'));
   // 先关库再删目录：Windows 上库文件仍打开时删不掉。
   t.after(() => { index.close(); fs.rmSync(temp, { recursive: true, force: true }); });
-  const { descriptors, maps } = collectSourceDescriptors({ claudeRoots: [claudeRoot, codeagentRoot], codeagentRoots: [codeagentRoot] });
+  const { descriptors, maps } = collectSourceDescriptors({ claudeRoots: [claudeRoot, codeagentRoot], codeagentRoots: [codeagentRoot] }, {
+    sessions: [{ hubId: 'ca-hub', kind: 'codeagent', ccSessionId: sid, title: 'TITLEONLYMARK 调度排查', cwd: temp }],
+  });
   assert.equal(descriptors.length, 2);
   for (const descriptor of descriptors) index.replaceSource(parseSourceDescriptor(descriptor, maps));
   return { index, now };
@@ -64,12 +66,22 @@ test('CodeAgent questions are answered from the resident in-memory path and labe
   assert.match(only.results[0].bestMatch.text, /CAMARK 帮我查一下调度日志/);
 });
 
+test('CodeAgent 全部内容范围能搜到标题和 AI 回答，保留提供方筛选', t => {
+  const { index } = fixture(t);
+  for (const query of ['TITLEONLYMARK', 'CAANSWER', 'CAMARK']) {
+    const found = index.search({ query, scopes: ['title', 'user', 'assistant'], timeRange: '7d', providers: ['codeagent'] });
+    assert.equal(found.totalSessions, 1, query);
+    assert.equal(found.results[0].provider, 'codeagent');
+    assert.equal(found.results[0].hubSessionId, 'ca-hub');
+  }
+});
+
 test('「我的提问」 on CodeAgent keeps skill commands but not injected reminders or skill bodies', (t) => {
   const { index } = fixture(t);
   assert.equal(search(index, 'SKILLARG').totalSessions, 1, 'skill command arguments are what the user typed');
   assert.equal(search(index, 'REMINDERONLY').totalSessions, 0, 'injected <system-reminder> is not a question');
   assert.equal(search(index, 'SKILLBODY').totalSessions, 0, 'isMeta skill body is not a question');
-  assert.equal(search(index, 'CAANSWER').totalSessions, 0, 'AI answers are outside the default scope');
+  assert.equal(search(index, 'CAANSWER').totalSessions, 0, 'AI answers are outside the user-only scope');
   assert.equal(index.search({ query: 'CAANSWER', scopes: ['user', 'assistant'], timeRange: 'all' }).totalSessions, 1);
 });
 

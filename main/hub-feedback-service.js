@@ -380,7 +380,8 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), SEND_TIMEOUT_MS);
     try {
-      const res = await fetchFn(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ctl.signal });
+      // 经网络用量与上传限制（core/net-guard.js）发送。
+      const res = await require('../core/net-guard').getGate().send(fetchFn, endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ctl.signal });
       const type = res.headers && res.headers.get ? res.headers.get('content-type') : '';
       const raw = await res.text();
       if (looksLikeWebPage(type, Buffer.from(raw.slice(0, 256)))) {

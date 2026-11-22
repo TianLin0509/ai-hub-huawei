@@ -13,7 +13,7 @@ function harness({ sendError } = {}) {
   const localRequire = createRequire(file);
   const events = [];
   let releaseSend;
-  const context = vm.createContext({ module: { exports: {} }, console, process, Buffer, setTimeout, clearTimeout,
+  const context = vm.createContext({ module: { exports: {} }, console, process, Buffer, AbortController, setTimeout, clearTimeout,
     require: name => name === '../../core/group-chat-watcher.js' ? {
       codeAgentInputAction: async () => ({ ok: true }),
       // 模拟 CLI 还在启动：发送迟迟不返回
