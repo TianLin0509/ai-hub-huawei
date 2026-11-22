@@ -59,7 +59,9 @@ class CapabilityService {
   }
   async catalog(refresh=false) {
     const projects=this.sessionManager.getAllSessions().map(s=>({cwd:s.cwd,kind:s.kind?.replace(/-resume$/,''),
-      profileHome:s.codexRuntimeHome || (s.codexSessionsRoot ? path.dirname(s.codexSessionsRoot) : null)}));
+      profileHome:s.codexRuntimeHome || (s.codexSessionsRoot ? path.dirname(s.codexSessionsRoot) : null),
+      // CodeAgent 会话实际用的配置目录（号池号各有一份），资源页按它列这个会话生效的 MCP。
+      ...(s.codeagentConfigDir ? {configDir:s.codeagentConfigDir} : {})}));
     const key=JSON.stringify(projects);
     if(this.pending) {
       const pendingKey=this.pendingKey,generation=this.pendingGeneration,data=await this.pending;

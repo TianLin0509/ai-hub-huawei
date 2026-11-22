@@ -82,7 +82,9 @@ function loginEnvHtml(c, vps, esc, edit) {
 // Claude 账号邮箱保管（2026-10-30）：界面只知道「存没存密码」；打开邮箱走该账号的登录环境（同一出口）。
 const MAIL_KIND = { outlook: 'Outlook', gmail: 'Gmail', mailcom: 'mail.com', onet: 'Onet', other: '其他邮箱' };
 function mailFieldHtml(name, label, value, esc, { type = 'text', placeholder = '' } = {}) {
-  return `<label><span>${label}</span><input class="ac-account-input" data-mail-field="${name}" type="${type}" autocomplete="off" spellcheck="false" maxlength="${name === 'note' ? 300 : 254}" placeholder="${esc(placeholder)}" value="${esc(value || '')}"></label>`;
+  // 密码类字段标签后挂 ⓘ：写明存在哪、怎么加密（renderer/credential-hints.js）。
+  const tip = type === 'password' ? require('./launch-field-hint').iconHintHtml(require('./credential-hints').mailboxSecret()) : '';
+  return `<label><span>${label}${tip}</span><input class="ac-account-input" data-mail-field="${name}" type="${type}" autocomplete="off" spellcheck="false" maxlength="${name === 'note' ? 300 : 254}" placeholder="${esc(placeholder)}" value="${esc(value || '')}"></label>`;
 }
 function mailboxHtml(c, mail, esc, edit) {
   if (!mail) return '';

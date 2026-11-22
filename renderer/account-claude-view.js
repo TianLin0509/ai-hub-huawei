@@ -130,7 +130,7 @@ function exitsPageHtml(rows, o, esc) {
 function stepsHtml(step) {
   return `<ol class="acb-steps">${STEPS.map((t, i) => `<li class="${i + 1 < step ? 'done' : i + 1 === step ? 'on' : ''}"><b>${i + 1 < step ? '✓' : i + 1}</b>${t}</li>`).join('')}</ol>`;
 }
-const mailField = (name, label, value, esc, type = 'text', placeholder = '') => `<label><span>${label}</span><input class="ac-account-input" data-wiz-field="${name}" type="${type}" autocomplete="off" spellcheck="false" maxlength="254" placeholder="${esc(placeholder)}" value="${esc(value || '')}"></label>`;
+const mailField = (name, label, value, esc, type = 'text', placeholder = '') => `<label><span>${label}${type === 'password' ? require('./launch-field-hint').iconHintHtml(require('./credential-hints').mailboxSecret()) : ''}</span><input class="ac-account-input" data-wiz-field="${name}" type="${type}" autocomplete="off" spellcheck="false" maxlength="254" placeholder="${esc(placeholder)}" value="${esc(value || '')}"></label>`;
 
 function wizardHtml(rows, o, esc) {
   const { wizard: w, vps, exits, mail, busy } = o;

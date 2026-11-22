@@ -51,6 +51,45 @@ test('a non-default CodeAgent config dir does not pick up the home-root ~/.cac.j
   assert.deepEqual(mcpNames(catalog), ['own']);
 });
 
+test('N6: an open CodeAgent session on a pool account lists the MCP registered in that account\'s own config dir', t => {
+  const dir = temp(t), home = path.join(dir, 'home'), personal = path.join(home, '.cac'), project = path.join(dir, 'proj');
+  const acct = path.join(dir, 'data', 'codeagent-pool', 'accounts', 'a1');
+  for (const d of [personal, project, acct]) fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(home, '.cac.json'), JSON.stringify({ mcpServers: { personal: { command: 'node' } } }));
+  fs.writeFileSync(path.join(acct, '.cac.json'), JSON.stringify({
+    mcpServers: { 'pool-own': { command: 'node' } },
+    projects: { [project]: { mcpServers: { 'pool-local': { command: 'node' } } } },
+  }));
+  const catalog = collectCapabilities({ homeDir: home, dataDir: path.join(dir, 'data'), codeagentConfigDir: personal,
+    projects: [{ cwd: project, kind: 'codeagent', configDir: acct }] });
+  assert.deepEqual(mcpNames(catalog), ['personal', 'pool-local', 'pool-own']);
+  const own = catalog.rows.find(r => r.id === 'mcp:pool-own');
+  assert.equal(own.sources[0].path, path.join(acct, '.cac.json'));
+  assert.equal(own.sources[0].scope, `profile:${acct}`);
+});
+
+test('N6: project .mcp.json servers turned off with disabledMcpjsonServers show as disabled', t => {
+  const dir = temp(t), home = path.join(dir, 'home'), config = path.join(home, '.cac'), project = path.join(dir, 'proj');
+  fs.mkdirSync(config, { recursive: true }); fs.mkdirSync(project, { recursive: true });
+  fs.writeFileSync(path.join(home, '.cac.json'), JSON.stringify({ projects: { [project]: { disabledMcpjsonServers: ['off-one'] } } }));
+  fs.writeFileSync(path.join(project, '.mcp.json'), JSON.stringify({ mcpServers: { 'off-one': { command: 'node' }, 'on-one': { command: 'node' } } }));
+  const catalog = collectCapabilities({ homeDir: home, dataDir: path.join(dir, 'data'), codeagentConfigDir: config, projects: [{ cwd: project, kind: 'codeagent' }] });
+  assert.equal(catalog.rows.find(r => r.id === 'mcp:off-one').sources[0].enabled, false);
+  assert.equal(catalog.rows.find(r => r.id === 'mcp:on-one').sources[0].enabled, true);
+});
+
+test('N6: when no CodeAgent .cac.json is found the catalog says why in one line instead of staying silent', t => {
+  const dir = temp(t), home = path.join(dir, 'home'), config = path.join(home, '.cac');
+  fs.mkdirSync(config, { recursive: true });
+  const catalog = collectCapabilities({ homeDir: home, dataDir: path.join(dir, 'data'), codeagentConfigDir: config });
+  const line = catalog.warnings.find(w => w.startsWith('CodeAgent：'));
+  assert.ok(line, catalog.warnings.join('\n'));
+  assert.ok(line.includes(path.join(home, '.cac.json')));
+  // 没装 CodeAgent（配置目录不存在、也没有 CodeAgent 会话）时不提示，免得别的版本多一条噪声。
+  const bare = collectCapabilities({ homeDir: path.join(dir, 'nobody'), dataDir: path.join(dir, 'data') });
+  assert.ok(!bare.warnings.some(w => w.startsWith('CodeAgent：')));
+});
+
 test('pool login window says the password goes only to CodeAgent and where the credential is stored', () => {
   const pool = loginHint(String.raw`D:\hub-data\R&D\accounts\a1`);
   assert.match(pool, /AI Hub 不读取、不保存、不外传密码/);

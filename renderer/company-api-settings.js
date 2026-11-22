@@ -267,7 +267,7 @@
       // 界面不写平台名（公开版用词合规，2026-11-21 负责人定）：标题旁显示预填的网关地址，同事靠它认出是哪个网关。
       + `<p class="company-api-note api-gw-intro">API 网关${gwHost ? ` <code class="api-gw-host" data-api-gw-host>${esc(gwHost)}</code>` : ''}：只填部门发的 key，地址已预填。Claude Code、Codex、DSH 都能用。</p>`
       + `<label>网关地址<input name="baseURL" value="${esc(g.baseURL)}" spellcheck="false" autocomplete="off"></label>`
-      + `<label>API key<input name="apiKey" type="password" placeholder="${g.keySet ? '已加密保存；留空保留原 key' : '粘贴部门发的 key（通常以 sk- 开头）'}" spellcheck="false" autocomplete="off"></label>`
+      + `<label><span>API key${require('./launch-field-hint').iconHintHtml(require('./credential-hints').gatewayKey())}</span><input name="apiKey" type="password" placeholder="${g.keySet ? '已加密保存；留空保留原 key' : '粘贴部门发的 key（通常以 sk- 开头）'}" spellcheck="false" autocomplete="off"></label>`
       + `<label>默认模型<select name="model">${optionsHtml(g, current)}</select></label>`
       + (others.length ? `<label class="company-api-check"><input type="checkbox" name="alsoOthers"${g.keySet ? '' : ' checked'}> ${others.map(k => esc(LABELS[k])).join('、')} 也用网关</label>` : '')
       + `<div class="company-proxy-state" data-proxy-state="${g.keySet ? 'running' : 'stopped'}"><div><span class="company-proxy-dot" aria-hidden="true"></span><strong>${g.keySet ? `网关：key 已保存 · ${(g.models || []).length} 个对话模型${g.group ? ` · ${esc(g.group)} 分组` : ''}` : '网关：还没保存 key'}</strong></div>`
@@ -554,7 +554,7 @@
     target.insertAdjacentHTML('beforeend', `<form data-api-form>${kind !== 'deepseek-acp' ? `<label>API 账号<select data-api-profile><option value="">当前接口 / 本机配置</option>${profiles.map(profile => `<option value="${esc(profile.id)}"${profileId === profile.id ? ' selected' : ''}>${esc(profile.label)}</option>`).join('')}<option value="new"${profileId === 'new' ? ' selected' : ''}>＋ 添加 API 账号</option></select></label>` : ''}`
       + (profileId ? `<label>账号名称<input name="label" value="${esc(editing?.label)}" maxlength="80" required placeholder="例如：供应商 A · 账号 1"></label>` : '')
       + `<label>接口地址<input name="baseURL" type="url" value="${esc(own.baseURL)}" placeholder="留空沿用本机配置" autocomplete="off" spellcheck="false"></label>`
-      + `<label>API Key<input name="apiKey" type="password" placeholder="${own.apiKeySet ? '已保存；留空保留原 Key' : '可选；留空沿用本机登录'}" autocomplete="off" spellcheck="false"></label>`
+      + `<label><span>API Key${require('./launch-field-hint').iconHintHtml(require('./credential-hints').ownApiKey())}</span><input name="apiKey" type="password" placeholder="${own.apiKeySet ? '已保存；留空保留原 Key' : '可选；留空沿用本机登录'}" autocomplete="off" spellcheck="false"></label>`
       + `<label>模型<input name="model" value="${esc(own.model)}" placeholder="${kind === 'deepseek-acp' ? '必填；点「测试连接」从列表里选' : '留空沿用 CLI 配置的模型'}" autocomplete="off" spellcheck="false"></label><label data-own-model-pick hidden>接口上的模型<select data-own-model-select></select></label>`
       + (kind === 'codex' ? `<label>接口协议<select name="wireApi"><option value="responses"${own.wireApi === 'chat' ? '' : ' selected'}>responses（默认）</option><option value="chat"${own.wireApi === 'chat' ? ' selected' : ''}>chat</option></select></label>` : '')
       + (kind === 'deepseek-acp' ? '<p class="company-api-note">填 OpenAI 兼容接口（如部门自有模型平台，地址一般以 /v1 结尾）、Key 和模型名，DSH 直连这个接口，不走公司模型和 API 网关。先点「测试连接」核对地址和 Key，并从列表里选模型。部门发的是 API 网关 key 时，用上面的「API 网关」更省事。</p>'

@@ -167,7 +167,7 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
       return `<div class="att-empty"><h2>还没有考勤数据</h2><p>${status.syncing ? '正在打开考勤页读取最近 8 天，通常半分钟，最长约 3 分钟。' : esc(status.lastResult?.error || '开启后每天会在后台读一次；也可以现在就读。')}</p>
         ${(status.lastResult?.needsDomain && !status.settings?.domain) || status.lastResult?.dnsFail ? domainRow() : ''}
         ${status.lastResult?.triedPages || (status.lastResult && !status.lastResult.ok && status.settings?.page && status.settings.page !== 'auto') ? `<div class="att-row"><span>考勤页</span>${pageSelect(status.settings?.page, 'quickPage')}<button type="button" class="att-btn primary" data-att="quick-page">保存并读取</button></div>` : ''}
-        <div class="att-row">${status.lastResult?.needsLogin ? '<button type="button" class="att-btn primary" data-att="login">登录考勤</button>' : ''}<button type="button" class="att-btn${status.lastResult?.needsLogin ? '' : ' primary'}" data-att="sync"${status.syncing ? ' disabled aria-busy="true"' : ''}>${status.syncing ? '读取中…' : '现在读取'}</button></div></div>`;
+        <div class="att-row">${status.lastResult?.needsLogin ? '<button type="button" class="att-btn primary" data-att="login">登录考勤</button>' + require('./launch-field-hint').iconHintHtml(require('./credential-hints').attendanceLogin()) : ''}<button type="button" class="att-btn${status.lastResult?.needsLogin ? '' : ' primary'}" data-att="sync"${status.syncing ? ' disabled aria-busy="true"' : ''}>${status.syncing ? '读取中…' : '现在读取'}</button></div></div>`;
     }
     const m = vm.month;
     const hero = `<section class="att-card att-hero"><div class="att-hero-num"><div class="l">${Number(vm.ym.slice(5))} 月净加班 · 统计至昨日</div>
@@ -276,7 +276,7 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
       <label class="att-check"><input type="checkbox" data-f="autoDaily" ${s.autoDaily !== false ? 'checked' : ''}> 每天自动读取一次（当天读到就不再访问）</label>
       <label class="att-field"><span>考勤页</span>${pageSelect(s.page, 'page')}</label>
       <p class="att-note">读取地址：${esc(status.url || '正在自动查找公司域名…')}${s.domainFrom && s.domainFrom !== 'settings' ? '（域名是自动找到的）' : ''}</p>
-      <div class="att-row"><button type="button" class="att-btn" data-att="login">在 Hub 里登录考勤</button><span class="att-sp"></span><button type="button" class="att-btn" data-att="settings">取消</button><button type="button" class="att-btn primary" data-att="save">保存</button></div>
+      <div class="att-row"><button type="button" class="att-btn" data-att="login">在 Hub 里登录考勤</button>${require('./launch-field-hint').iconHintHtml(require('./credential-hints').attendanceLogin())}<span class="att-sp"></span><button type="button" class="att-btn" data-att="settings">取消</button><button type="button" class="att-btn primary" data-att="save">保存</button></div>
       ${status.log?.length ? `<h3>最近读取</h3><ul class="att-log">${status.log.slice(0, 6).map(e => `<li><span>${when(e.at)}</span><span class="${e.ok ? 'ok' : 'bad'}">${e.ok ? '成功' : '失败'}</span><span>${e.ok ? `拿到 ${e.got} 天，新增 ${e.added}，更新 ${e.updated}${e.via === 'edge' ? '（无头 Edge）' : ''}${e.page === 'servicetime' ? '（OD 考勤页）' : ''}` : esc(e.error)}</span></li>`).join('')}</ul>` : ''}</div>`;
   }
 

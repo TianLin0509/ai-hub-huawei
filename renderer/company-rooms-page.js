@@ -259,7 +259,7 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
       checklist.hidden = (readiness.plan && readiness.login) || !!state.running;
       const html = readiness.ready
         ? head('登录尚未检查') + '<p class="cr-side-p">可以启动守护，组件会在抢订前自动检查登录；如登录失效，会提醒你重新登录。</p>'
-        : head(`还差 ${readiness.missing} 步`) + `${!readiness.login ? `<p class="cr-side-p">① 登录会议室网页 ${button('login', '登录 / 检查登录', 'sec', 'cr-btn-sm')}${loginWhy ? `<small class="cr-why" data-cr-slot="login-why">${escape(loginWhy)}</small>` : ''}</p>` : ''}${!readiness.plan ? `<p class="cr-side-p">② 在抢订计划里加会议室 ${button('plan', '去填抢订计划', 'sec', 'cr-btn-sm')}</p>` : ''}`;
+        : head(`还差 ${readiness.missing} 步`) + `${!readiness.login ? `<p class="cr-side-p">① 登录会议室网页 ${button('login', '登录 / 检查登录', 'sec', 'cr-btn-sm')}${require('./launch-field-hint').iconHintHtml(require('./credential-hints').roomLogin(state.home))}${loginWhy ? `<small class="cr-why" data-cr-slot="login-why">${escape(loginWhy)}</small>` : ''}</p>` : ''}${!readiness.plan ? `<p class="cr-side-p">② 在抢订计划里加会议室 ${button('plan', '去填抢订计划', 'sec', 'cr-btn-sm')}</p>` : ''}`;
       if (checklist.dataset.html !== html) { checklist.innerHTML = html; checklist.dataset.html = html; }
     }
     const locked = busy || !state.connected || state.running || state.loginBusy || state.controlBusy;

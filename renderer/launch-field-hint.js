@@ -80,4 +80,13 @@ function installHintClickGuard(doc = globalThis.document) {
   }, true);
 }
 
-module.exports = { ICON_CLASS, fieldLabel, setIconHint, setLabelText, setFieldHint, installHintClickGuard };
+// 拼 HTML 字符串的页面用（考勤、会议室、账号表单等）：同一个 ⓘ 图标的标记，悬停 / 聚焦由 hub-tooltip 显示。
+// 多行说明的第一行是卡片标题，其余各行是条目。
+function iconHintHtml(text, { tone = 'info' } = {}) {
+  const value = String(text || '');
+  if (!value) return '';
+  const attr = v => String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return `<span class="${ICON_CLASS}" tabindex="0" role="img" data-tip-side="top" data-hub-tip-focus="1" data-tone="${attr(tone)}" title="${attr(value)}" aria-label="${attr('说明：' + value)}"></span>`;
+}
+
+module.exports = { ICON_CLASS, fieldLabel, setIconHint, setLabelText, setFieldHint, installHintClickGuard, iconHintHtml };

@@ -217,21 +217,35 @@ function collectCapabilities({ homeDir, dataDir, projects = [], codeagentConfigD
   //   2026-11-22 同事反馈「CodeAgent 上有的 MCP 资源页看不到」：默认目录 ~/.cac 时，CodeAgent 把登记的 MCP 写在用户目录根下的
   //   ~/.cac.json（同 Claude Code 的 ~/.claude.json；codeagent-member-mcp.js、codeagent-models.js 早已两处都读），
   //   这里原来只读 ~/.cac/.cac.json，且超过 2 MB 就跳过，于是列不全。两处都读，同名合并来源。
+  //   2026-11-23 N6 补全：① 开着的 CodeAgent 会话各自的配置目录（号池号是 <Hub 数据目录>/codeagent-pool/accounts/<id>）也读，
+  //   它那份 .cac.json 里登记的 MCP、插件带的 MCP 照样列出；② 项目 .mcp.json 里被 disabledMcpjsonServers 关掉的标成停用；
+  //   ③ 一份登记文件都没找到时给一行原因，不再静默显示为空。
   const caDir = codeagentConfigDir || home('.cac');
-  const caStateFiles = [path.join(caDir,'.cac.json')];
-  if (path.basename(path.resolve(caDir)).toLowerCase()==='.cac') caStateFiles.push(path.join(path.dirname(path.resolve(caDir)),'.cac.json'));
-  const caStates = caStateFiles.filter(f=>fs.existsSync(f)).map(file=>({file,data:json(file,STATE_MAX_MB)}));
-  for (const {file,data} of caStates) mcpEntries({mcpServers:data.mcpServers || {}},file,'codeagent','user');
-  if (fs.existsSync(caDir)) {
-    scanSkills(path.join(caDir,'skills'),['codeagent'],'user');
-    // 从 AI Marketplace 装的技能可能再套一层（<市场>/<技能>/SKILL.md）。
-    for (const entry of entries(path.join(caDir,'skills'))) {
-      const dir=path.join(caDir,'skills',entry.name);
-      if ((entry.isDirectory() || entry.isSymbolicLink()) && !fs.existsSync(path.join(dir,'SKILL.md'))) scanSkills(dir,['codeagent'],'user');
+  const caScanned = new Map(); // 配置目录（小写绝对路径）→ 读到的状态文件
+  function codeagentHome(dir, scope) {
+    const key = path.resolve(dir).toLowerCase();
+    if (caScanned.has(key)) return caScanned.get(key);
+    const stateFiles = [path.join(dir,'.cac.json')];
+    if (path.basename(path.resolve(dir)).toLowerCase()==='.cac') stateFiles.push(path.join(path.dirname(path.resolve(dir)),'.cac.json'));
+    const states = stateFiles.filter(f=>fs.existsSync(f)).map(file=>({file,data:json(file,STATE_MAX_MB)}));
+    caScanned.set(key, states);
+    for (const {file,data} of states) mcpEntries({mcpServers:data.mcpServers || {}},file,'codeagent',scope);
+    if (fs.existsSync(dir)) {
+      scanSkills(path.join(dir,'skills'),['codeagent'],scope);
+      // 从 AI Marketplace 装的技能可能再套一层（<市场>/<技能>/SKILL.md）。
+      for (const entry of entries(path.join(dir,'skills'))) {
+        const sub=path.join(dir,'skills',entry.name);
+        if ((entry.isDirectory() || entry.isSymbolicLink()) && !fs.existsSync(path.join(sub,'SKILL.md'))) scanSkills(sub,['codeagent'],scope);
+      }
+      codeagentPlugins(dir, scope);
     }
-    codeagentPlugins(caDir);
+    return states;
   }
-  function codeagentPlugins(dir) {
+  const caStates = codeagentHome(caDir, 'user');
+  const caSessions = projects.filter(p=>p && p.kind==='codeagent');
+  if (!caStates.length && (fs.existsSync(caDir) || caSessions.length))
+    warnings.push(`CodeAgent：没找到登记 MCP 的 .cac.json（查过 ${[path.join(caDir,'.cac.json'),...(path.basename(path.resolve(caDir)).toLowerCase()==='.cac'?[path.join(path.dirname(path.resolve(caDir)),'.cac.json')]:[])].join('、')}），用户级 MCP 无从列出；CodeAgent 还没登录过或配置目录不在这里时会这样。`);
+  function codeagentPlugins(dir, scope = 'user') {
     const settingsFile=path.join(dir,'settings.json'), settings=json(settingsFile);
     const enabled=settings.enabledPlugins && typeof settings.enabledPlugins==='object' && !Array.isArray(settings.enabledPlugins) ? settings.enabledPlugins : {};
     const installed=json(path.join(dir,'plugins','installed_plugins.json')).plugins || {};
@@ -256,7 +270,7 @@ function collectCapabilities({ homeDir, dataDir, projects = [], codeagentConfigD
       const found=recorded && fs.existsSync(recorded) ? {root:recorded,version:entry.version || null} : locate(name);
       const on=enabled[name]===true;
       // 只有安装记录写了路径、路径却不在时才算「安装待核对」；没找到下载目录不代表没装（目录结构是推断的）。
-      const source={agent:'codeagent',scope:'user',path:found?.root || settingsFile,enabled:on,missing:!!recorded && !found,version:found?.version || null};
+      const source={agent:'codeagent',scope,path:found?.root || settingsFile,enabled:on,missing:!!recorded && !found,version:found?.version || null};
       const manifest=found ? pluginContents(found.root,name,'codeagent',on) : {};
       add('plugin',name,manifest.description || 'CodeAgent 插件',source);
     }
@@ -274,11 +288,19 @@ function collectCapabilities({ homeDir, dataDir, projects = [], codeagentConfigD
       const p = Object.entries(claude.projects || {}).find(([p])=>path.resolve(p).toLowerCase()===path.resolve(cwd).toLowerCase())?.[1];
       for (const [name,c] of Object.entries(p?.mcpServers || {})) add('mcp',name,'项目 MCP 服务器',{agent:kind,scope,path:home('.claude.json'),enabled:c.disabled!==true});
     } else if (kind==='codeagent') {
-      jsonMcp(path.join(cwd,'.mcp.json'),kind,scope);
-      for (const {file,data} of caStates) {
-        const p = Object.entries(data.projects || {}).find(([p])=>path.resolve(p).toLowerCase()===path.resolve(cwd).toLowerCase())?.[1];
+      // 这个会话自己的配置目录（号池号、另指定的目录）：用户级 MCP、技能、插件都从那里读。
+      const own = project.configDir && path.resolve(project.configDir).toLowerCase()!==path.resolve(caDir).toLowerCase()
+        ? codeagentHome(project.configDir, `profile:${project.configDir}`) : [];
+      const states = [...caStates, ...own];
+      const local = states.map(({file,data})=>({file,p:Object.entries(data.projects || {}).find(([p])=>path.resolve(p).toLowerCase()===path.resolve(cwd).toLowerCase())?.[1]}));
+      // 项目 .mcp.json 里的服务器要在 CodeAgent 里批准过；明确关掉的（disabledMcpjsonServers）标成停用。
+      const off = new Set(local.flatMap(({p})=>Array.isArray(p?.disabledMcpjsonServers)?p.disabledMcpjsonServers:[]));
+      const projectFile = path.join(cwd,'.mcp.json');
+      const projectMcp = json(projectFile).mcpServers;
+      if (projectMcp && typeof projectMcp==='object' && !Array.isArray(projectMcp))
+        for (const [name,c] of Object.entries(projectMcp)) mcpEntries({[name]:c},projectFile,kind,scope,{enabled:!off.has(name)});
+      for (const {file,p} of local)
         for (const [name,c] of Object.entries(p?.mcpServers || {})) add('mcp',name,'项目 MCP 服务器',{agent:kind,scope,path:file,enabled:!!c && c.disabled!==true});
-      }
     } else if (kind==='kimi') jsonMcp(path.join(cwd,'.kimi-code','mcp.json'),kind,scope);
     else if (kind==='gemini') jsonMcp(path.join(cwd,own,'mcp_config.json'),kind,scope);
     else if (kind==='qwen') jsonMcp(path.join(cwd,own,'settings.json'),kind,scope);
