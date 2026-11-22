@@ -55,7 +55,8 @@ test('startup watcher accepts the warning once, after the frame settles', async 
   const accepted = [];
   watchBypassWarning(pty, { createScreen: fakeScreen(frame), onAccepted: d => accepted.push(d), settleMs: 20, pollMs: 5, timeoutMs: 2000 });
   pty.emit('frame');
-  await new Promise(r => setTimeout(r, 150));
+  // 全量并行跑时机器忙，固定等 150ms 偶尔只来得及按下方向键（r7-F3 全量 1 次）；改成最多等 2 秒直到两个键都按完
+  for (const until = Date.now() + 2000; pty.writes.length < 2 && Date.now() < until;) await new Promise(r => setTimeout(r, 10));
   assert.deepStrictEqual(pty.writes, ['\x1b[B', '\r']);
   assert.strictEqual(accepted.length, 1);
   assert.ok(frame.disposed);

@@ -24,12 +24,19 @@ function sameSessionExecution(snapshot, manager, sessionId) {
 
 function modelPinFields(session = {}) {
   const fields = {};
+  if (models.isSafeModelId(session.actualModel?.id) && models.isSafeModelId(session.actualModel?.launchModel)) {
+    fields.actualModel = { id: session.actualModel.id, launchModel: session.actualModel.launchModel,
+      ...(session.actualModel.terminalSwitch === true ? { terminalSwitch: true } : {}) };
+  }
   for (const key of ['fixedModel', 'codeagentUserModel']) {
     if (models.isSafeModelId(session[key])) fields[key] = session[key].trim();
   }
   if (typeof session.modelConfirmationRequired === 'boolean') fields.modelConfirmationRequired = session.modelConfirmationRequired;
   if (typeof session.modelUnavailableReason === 'string') fields.modelUnavailableReason = session.modelUnavailableReason.slice(0, 300);
   if (typeof session.modelPinSource === 'string') fields.modelPinSource = session.modelPinSource.slice(0, 80);
+  if (Number.isFinite(session.modelSwitchConfirmedAt) && session.modelSwitchConfirmedAt > 0) {
+    fields.modelSwitchConfirmedAt = session.modelSwitchConfirmedAt;
+  }
   const sw = session.codeagentBackendSwitch;
   if (sw && models.isSafeModelId(sw.from) && models.isSafeModelId(sw.actual)) {
     fields.codeagentBackendSwitch = { from: sw.from.trim(), actual: sw.actual.trim(), at: Number(sw.at) || 0 };

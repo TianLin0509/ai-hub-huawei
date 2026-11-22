@@ -33,9 +33,9 @@ function rig(t) {
   return { root, now, assistant, rooms, write };
 }
 
-test('signed room adapter is version 2.1.4 and the shipped payload matches its hash', () => {
+test('signed room adapter is version 2.1.6 and the shipped payload matches its hash', () => {
   const manifest = component.manifest(path.join(bundle, 'control.json'));
-  assert.equal(manifest.version, '2.1.4');
+  assert.equal(manifest.version, '2.1.6');
   assert.ok(component.verified(path.join(bundle, manifest.code.file), manifest.code));
 });
 
@@ -163,4 +163,34 @@ test('抢订计划一句话说明：写清什么时候抢、抢哪天哪个时�
   assert.match(planSummary({ days: [1, 2, 3, 4, 5], span: '09:00–10:00', rooms: ['A'], openTime: '12:00' }), /如果 7 天后那天是周一至周五，就替你预订那天 09:00–10:00 的会议室/);
   assert.match(planSummary({ days: [7, 1, 2, 3, 4, 5, 6], span: '09:00–10:00', rooms: ['A'], openTime: '12:00' }), /每天 12:00 放号时，替你预订 7 天后那天 09:00–10:00 的会议室，按 A 的顺序。/);
   assert.match(planSummary({ days: [5], span: '09:00–10:00', rooms: ['A', 'B', 'C', 'D'], switchNext: false, openTime: '12:00' }), /A → B → C 等 4 间 的顺序，只抢第一间/);
+});
+
+test('会议室所在地域：Hub 把「地域」原样转给组件（之前不在允许的设置里会被拒）', async t => {
+  const f = rig(t); const requests = [];
+  f.rooms.ensure = async () => {};
+  f.rooms.checkSchedule = () => {};
+  const timer = setInterval(() => {
+    const dir = path.join(f.root, 'hub-control/requests');
+    if (!fs.existsSync(dir)) return;
+    for (const name of fs.readdirSync(dir).filter(x => x.endsWith('.json'))) {
+      const request = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
+      if (requests.some(x => x.id === request.id)) continue;
+      requests.push(request);
+      f.write('hub-control/replies/' + name, { requestId: request.id, ok: true });
+    }
+  }, 10);
+  try {
+    const area = { '国家/地区': '', 城市: '北京', 楼宇: '北研所B座' };
+    await f.rooms.command('configure', { 地域: area }, { user: true });
+    assert.equal(requests.length, 1);
+    assert.deepEqual(requests[0].args, { 地域: area });
+  } finally { clearInterval(timer); }
+});
+
+test('会议室页「所在地域」：默认全空、在计划页有三格输入，旧组件不支持时不发非空地域', () => {
+  const src = fs.readFileSync(path.join(__dirname, '../renderer/company-rooms-page.js'), 'utf8');
+  assert.match(src, /地域: \{ '国家\/地区': '', 城市: '', 楼宇: '' \}/);
+  for (const k of ['国家/地区', '城市', '楼宇']) assert.ok(src.includes(`box('${k}'`), k);
+  assert.match(src, /'抢订设置', '会后动作', '系统', '高级', '地域'\]\) draft\[key\]/);
+  assert.match(src, /patch\.地域 && state\.connected && !state\.capabilities\?\.includes\('area'\)/);
 });

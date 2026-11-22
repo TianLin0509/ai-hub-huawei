@@ -30,3 +30,17 @@
 .bsp-row{display:flex;gap:8px;margin-top:16px}.bsp-settings h3:not(:first-child){margin-top:20px}
 .bsp-error{color:var(--status-danger,#b4472f)}
 #options-boot-splash{display:block;width:100%;text-align:left;margin-top:8px;padding:10px 12px;border:1px solid var(--border-subtle,#e3e1ea);border-radius:8px;background:var(--surface-raised,#fff);font:inherit;font-size:13px;color:var(--fg-default,#1f2330);cursor:pointer}
+/* 原作视频（2026-11-22）：原样居中播放，不裁不盖字；卡片加署名小字 */
+.boot-splash-layer.is-video video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
+.bsp-card.orig{border-color:#c9a64a}
+.boot-splash-sub{position:absolute;left:20px;right:20px;bottom:15%;transform:translateY(50%);text-align:center;color:#fff;font-family:"Bodoni MT","Bodoni 72",Georgia,"Times New Roman",serif;font-style:italic;font-weight:400;line-height:1.2;opacity:0;pointer-events:none;
+  -webkit-text-stroke:0;text-shadow:0 0 1px #000,0 0 2px rgba(0,0,0,.9),1px 1px 0 rgba(0,0,0,.85),-1px -1px 0 rgba(0,0,0,.85),1px -1px 0 rgba(0,0,0,.85),-1px 1px 0 rgba(0,0,0,.85),0 0 .25em rgba(0,0,0,.75)}
+.boot-splash-brand{position:absolute;left:clamp(20px,2.6vw,44px);top:clamp(56px,7.5vh,84px);transform:translateY(-8px);display:flex;align-items:center;gap:12px;opacity:0;transition:opacity .7s ease-out,transform .7s ease-out;pointer-events:none;text-align:left;padding:10px 22px 10px 12px;margin:-10px 0 0 -12px;border-radius:14px;background:radial-gradient(ellipse at 35% 50%,rgba(0,0,0,.5),rgba(0,0,0,.28) 55%,rgba(0,0,0,0) 80%)}
+.boot-splash-layer.brand-on .boot-splash-brand{opacity:1;transform:none}
+.boot-splash-brand svg{width:clamp(30px,3vw,46px);height:auto;filter:drop-shadow(0 0 10px var(--glow)) drop-shadow(0 1px 2px rgba(0,0,0,.7))}
+.boot-splash-brand b{display:block;color:#fff;font:700 clamp(18px,1.85vw,30px)/1.15 'Microsoft YaHei UI','Microsoft YaHei',sans-serif;letter-spacing:.12em;text-shadow:0 0 14px var(--glow),0 1px 3px rgba(0,0,0,.85)}
+.boot-splash-brand small{display:block;margin-top:3px;color:rgba(255,255,255,.8);font:clamp(10px,.85vw,13px)/1.2 'Microsoft YaHei UI','Microsoft YaHei',sans-serif;letter-spacing:.3em;text-shadow:0 1px 3px rgba(0,0,0,.9)}
+.bsp-pick{position:absolute;left:5px;top:5px;font-style:normal;font-size:10.5px;font-weight:600;color:#3a2a00;background:#f3c75a;border-radius:4px;padding:0 5px}
+.bsp-card.orig,.bsp-card:has(.bsp-pick){border-color:#d8b24a}
+.bsp-grid.mine .bsp-pick{font-size:11.5px;padding:1px 7px}
+.bsp-grid.mine.picks{grid-template-columns:repeat(3,minmax(0,1fr))}.bsp-grid.picks .bsp-meta{font-size:14px}

@@ -103,8 +103,12 @@ function readConfigFile(full, fsModule) {
 // GLM Auto 那一项里的分档配置（tieredModelConfig），不能单独选；之前在模型段里见名就收，把它们也列了出来。
 // 有这份清单时只认清单里的 value；没有（老版本 CodeAgent）才退回在模型段里找名字。
 // 2026-10-28 同事 1.2615.02.02 自检报告：没有 enterpriseModelOptionsCache，清单在 enterpriseModelOptionsCacheV3_5（base64 编码的 JSON），
-// 同文件还有 enterpriseModelOptionsCacheV2 / enterpriseModelOptionsNewCache。按「越新越先」取第一个能解出数组的；值可能是数组、JSON 文本或 base64 的 JSON。
+// 同文件还有 enterpriseModelOptionsCacheV2 / enterpriseModelOptionsNewCache。按「越新越先」取清单；值可能是数组、JSON 文本或 base64 的 JSON。
 const ENTERPRISE_KEYS = ['enterpriseModelOptionsCacheV3_5', 'enterpriseModelOptionsCacheV2', 'enterpriseModelOptionsNewCache', 'enterpriseModelOptionsCache'];
+function parseOptionJson(text) {
+  // 2026-11-22 真机：新版缓存的清单数组后带 End。只剥这个已知尾标，其他坏数据仍按解析失败处理。
+  return JSON.parse(text.trim().replace(/\]\s*End\s*$/, ']'));
+}
 function decodeOptionList(value, depth = 0) {
   if (Array.isArray(value)) return value;
   if (depth > 3 || value == null) return null;
@@ -114,15 +118,15 @@ function decodeOptionList(value, depth = 0) {
   }
   if (typeof value !== 'string' || !value.trim()) return null;
   const text = value.trim();
-  try { return decodeOptionList(JSON.parse(text), depth + 1); } catch { /* 不是 JSON，试 base64 */ }
+  try { return decodeOptionList(parseOptionJson(text), depth + 1); } catch { /* 不是 JSON，试 base64 */ }
   if (/^[A-Za-z0-9+/=_\s-]+$/.test(text)) {
-    try { return decodeOptionList(JSON.parse(Buffer.from(text.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')), depth + 1); } catch { /* 解不开就算没有 */ }
-    // 2026-10-29 公司真机（Q-1029-12）：V3_5 是两段 base64 拼在一起——前段 `Q2FjaGVWXzU=` 解出来是标签 CacheV_5，
+    try { return decodeOptionList(parseOptionJson(Buffer.from(text.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')), depth + 1); } catch { /* 解不开就算没有 */ }
+    // 2026-10-29 公司真机（Q-1029-12）：V3_5 是两段 base64 拼在一起——前段解出来是版本标签，
     // 后段才是清单。Node 解 base64 遇到中间的 = 就停，整段解只得到标签。按 = 结尾切段，逐段解，取能解出清单的那段。
     const segments = text.replace(/\s+/g, '').split(/(?<==)(?=[A-Za-z0-9+/_-])/);
     for (const segment of segments.length > 1 ? segments : []) {
       try {
-        const inner = decodeOptionList(JSON.parse(Buffer.from(segment.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')), depth + 1);
+        const inner = decodeOptionList(parseOptionJson(Buffer.from(segment.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')), depth + 1);
         if (inner) return inner;
       } catch { /* 这一段不是清单 */ }
     }
@@ -136,7 +140,10 @@ function enterpriseOptionList(data) {
 // rank：ENTERPRISE_KEYS 里的位置，越小存法越新。两个文件都有清单时按它比新旧（configuredModels、contextWindowFor）。
 function enterpriseOptionEntry(data) {
   if (!data || typeof data !== 'object') return null;
-  for (const [rank, key] of ENTERPRISE_KEYS.entries()) { const list = decodeOptionList(data[key]); if (list && list.length) return { list, rank }; }
+  // 新字段存在但解不开时仍保留它的优先级，不能用升级前的旧字段冒充当前账号权限。
+  for (const [rank, key] of ENTERPRISE_KEYS.entries()) {
+    if (data[key] != null) return { list: decodeOptionList(data[key]), rank };
+  }
   return null;
 }
 function enterpriseModels(data) {
@@ -205,8 +212,8 @@ function configuredModels(configDir, fsModule = fs) {
     try {
       const result = readConfigFile(full, fsModule);
       if (file === 'settings.json' && result.defaultModel) defaultModel = result.defaultModel;
-      if (result.enterprise && result.enterpriseRank < enterpriseRank) { enterprise = result.enterprise; enterpriseRank = result.enterpriseRank; }
-      if (!enterprise) for (const name of result.names) names.add(name);
+      if (result.enterpriseRank >= 0 && result.enterpriseRank < enterpriseRank) { enterprise = result.enterprise; enterpriseRank = result.enterpriseRank; }
+      for (const name of result.names) names.add(name);
     } catch { /* 没有或读不了就跳过 */ }
   }
   if (enterprise) return { models: enterprise, defaultModel, authoritative: true };
@@ -271,8 +278,9 @@ function expectModelSwitch(sessionId, modelId, { settingsOnly = false } = {}) {
   const id = normalizeModel(modelId);
   if (settingsOnly) pendingSettingsOnly.set(sessionId, { model: id, after: Date.now() });
   else pendingSettingsOnly.delete(sessionId);
-  if (/(?:^|[-_.])auto(?:$|[-_.])/i.test(id)) pendingModelSwitches.delete(sessionId);
-  else pendingModelSwitches.set(sessionId, { model: id, after: Date.now() });
+  // Auto permits backend routing, but its selection still needs a freshness
+  // barrier: the /model Stop hook may otherwise undo it using the prior answer.
+  pendingModelSwitches.set(sessionId, { model: id, after: Date.now(), auto: isAutoModel(id) });
 }
 
 // 模型名里的版本号（家族名后面第一个「主版本.小版本」）：maas-glm-5-3-260814 → 5.3、GLM-5.2-WX-Auto → 5.2、deepseek-v4.1-flash → 4.1、
@@ -300,17 +308,17 @@ const isAutoModel = value => /(?:^|[-_.(\s])auto(?:$|[-_.)\s(])/i.test(clean(val
 // 同一家、同版本号的候选里，CodeAgent 配置当前的默认模型（/model 回车会写它）优先，否则只有一个候选才算认出；认不出返回空。
 function resolveObservedSwitch(actualId, { options = [], defaultModel = '' } = {}) {
   const id = clean(actualId), family = modelFamily(id), version = modelVersion(id);
-  if (!family || !version) return '';
   const ids = [...new Set((Array.isArray(options) ? options : []).map(option => clean(option && (option.id ?? option))).filter(isSafeModelId))];
   const exact = ids.find(other => other.toLowerCase() === id.toLowerCase());
   if (exact) return exact;
+  if (!family || !version) return '';
   const candidates = ids.filter(other => modelFamily(other) === family && modelVersion(other) && !versionsDiffer(modelVersion(other), version));
   const preferred = candidates.find(other => other.toLowerCase() === clean(defaultModel).toLowerCase());
   return preferred || (candidates.length === 1 ? candidates[0] : '');
 }
 
 // resolveSwitch(actualId)：可选，后台换模型时把实际模型对回清单里的一项（main.js 用 resolveObservedSwitch 接账号清单和默认模型）。
-function observeModel(session, value, { at = Date.now(), resolveSwitch = null } = {}) {
+function observeModel(session, value, { at = Date.now(), resolveSwitch = null, followActual = false } = {}) {
   if (!isCodeAgentSession(session)) return null;
   const id = clean(value);
   if (!isSafeModelId(id)) return null;
@@ -330,7 +338,7 @@ function observeModel(session, value, { at = Date.now(), resolveSwitch = null } 
   if (session.codeagentActualModel !== id) fields.codeagentActualModel = id;
   const sameId = currentId.toLowerCase() === id.toLowerCase();
   const sameFamily = !!modelFamily(id) && modelFamily(id) === modelFamily(currentId);
-  const expected = pending?.model;
+  const expected = pending?.auto ? null : pending?.model;
   pendingModelSwitches.delete(sessionId);
   const switchMismatch = expected && expected.toLowerCase() !== normalizeModel(id).toLowerCase();
   let mismatch = null;
@@ -369,6 +377,21 @@ function observeModel(session, value, { at = Date.now(), resolveSwitch = null } 
       fields.codeagentRequestedModel = requested;
       mismatch = { requested, requestedLabel: modelLabel(requested), actual: id,
         ...(session.fixedModel ? { fixedModel: session.fixedModel } : {}), ...(switchMismatch ? { manualSwitch: true } : {}) };
+    }
+  }
+  if (followActual) {
+    // Keep an Auto/menu alias when it describes this backend. A backend-only
+    // name cannot be used as a launch argument unless the account catalog maps it.
+    let target = sameId || sameFamily && (isAutoModel(currentId) || !versionsDiffer(modelVersion(currentId), modelVersion(id))) ? currentId : '';
+    if (!target && typeof resolveSwitch === 'function') {
+      try { target = clean(resolveSwitch(id)); } catch { target = ''; }
+    }
+    Object.assign(fields, require('./session-actual-model').actualModelFields(session, id, target));
+    if (target && target !== currentId) {
+      fields.codeagentUserModel = target;
+      fields.codeagentBackendSwitch = null;
+      if (!switchMismatch) mismatch = null;
+      else if (mismatch) { delete mismatch.fixedModel; mismatch.manualSwitch = true; }
     }
   }
   return Object.keys(fields).length || settingsOnlyVerification ? { fields, mismatch, ...(backendSwitch ? { backendSwitch } : {}), ...(settingsOnlyVerification ? { settingsOnlyVerification } : {}) } : null;
@@ -497,7 +520,7 @@ function contextWindowFor(configDir, modelIds = [], fsModule = fs, { dataDir = n
     for (const file of candidates) {
       let result = null;
       try { result = readConfigFile(file, fsModule); } catch { result = null; }
-      if (result && result.enterpriseRank >= 0 && result.enterpriseRank < best && Object.keys(result.windows || {}).length) {
+      if (result && result.enterpriseRank >= 0 && result.enterpriseRank < best) {
         windows = result.windows; best = result.enterpriseRank;
       }
     }

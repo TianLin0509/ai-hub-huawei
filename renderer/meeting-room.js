@@ -5075,6 +5075,12 @@ if (typeof document !== 'undefined') (function () {
     _writeJsonStorage(_INPUT_DRAFTS_STORAGE_KEY, _inputDraftByMeeting);
   }
 
+  function _savePreparedAttachmentsToDraft(meetingId, items) {
+    if (!meetingData[meetingId]) return;
+    const prior = _rawDraftByMeeting[meetingId]?.raw || _inputDraftByMeeting[meetingId] || '';
+    _setInputDraft(meetingId, prior + (prior.trim() ? '\n' : '') + items.map(item => item.path).join('\n'));
+  }
+
   function _getPromptHistory(meetingId) {
     const all = _readJsonStorage(_INPUT_HISTORY_STORAGE_KEY, {});
     const items = meetingId && Array.isArray(all[meetingId]) ? all[meetingId] : [];
@@ -5276,6 +5282,8 @@ if (typeof document !== 'undefined') (function () {
           referenceSession: referenceSessionIntoInput,
           appendText: appendToContenteditable, droppedFilePath,
           formatFilePaths: formatPastedFilePaths,
+          ipcRenderer, onOtherTarget: _savePreparedAttachmentsToDraft,
+          onError: error => window.__hubToast?.('添加附件失败：' + error.message),
           onDraft: id => _setInputDraft(id, inputBox.innerText || ''),
           onHistory: button => _togglePromptHistoryMenu(button, meetingData[activeMeetingId]),
           onExpand: () => _openLongInputEditor(meetingData[activeMeetingId]),
@@ -7218,7 +7226,8 @@ if (typeof document !== 'undefined') (function () {
     //   helper 由 renderer.js 暴露为 window.attachContenteditablePasteImage（先于 meeting-room.js 加载）。
     if (typeof window.attachContenteditablePasteImage === 'function') {
       // 长文本收成粘贴块：本文件读写输入框的地方已按「原始文本 / 展开原文」收口。
-      window.attachContenteditablePasteImage(inputBox, { collapseLongText: true });
+      window.attachContenteditablePasteImage(inputBox, { collapseLongText: true,
+        getTargetId: () => activeMeetingId, onOtherTarget: _savePreparedAttachmentsToDraft });
     }
     _pasteChips.attachPasteChipBehaviors(inputBox, { document, window });
     _ensureInputPreflightRow();

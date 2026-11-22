@@ -1,4 +1,7 @@
 {
+  "实际在用：{0}": "Actually using: {0}",
+  "实际模型已确认，但同步会话启动设置失败：{0}": "The actual model was confirmed, but updating session launch settings failed: {0}",
+  "实际在用：{0} · 终端里已切到 {1}": "Actually using: {0} · Switched in terminal to {1}",
   "· 上下文窗口 {0} tokens": "· Context window {0} tokens",
   "· 上下文窗口未知": "· Context window unknown",
   "上下文窗口未知": "Context window unknown",

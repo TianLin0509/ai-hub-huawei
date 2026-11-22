@@ -1,0 +1,13 @@
+{
+  "所在地域": "Location",
+  "国家/地区": "Country/region",
+  "城市，如 北京": "City, e.g. Beijing",
+  "楼宇，如 练秋湖F12栋": "Building, e.g. Lianqiuhu F12",
+  "会议室所在国家/地区": "Meeting room country/region",
+  "会议室所在城市": "Meeting room city",
+  "会议室所在楼宇": "Meeting room building",
+  "抢别的城市或楼宇时填，写法与网页下拉一致，中文名即可；改完先点「从页面读取」核对": "To book in another city or building, enter the name shown in the website dropdown (Chinese names are accepted), then click Read from page to check.",
+  "按从上到下的顺序尝试，可拖动排序或点上下移，直接编辑名称。所在地域留空＝不切换；要抢别的城市就填上（建议填到楼宇），再点「从页面读取」核对；清空后自动切回原来的地域。": "Rooms are tried from top to bottom. Drag or use the arrows to reorder, and edit names directly. Leave location blank to keep the website selection. To book in another city, enter its location (including the building is recommended), then click Read from page to check. Clearing the location restores the original selection.",
+  "当前会议室组件还不支持切换地域，Hub 会在空闲时自动换上新版组件，换好后这里的设置才生效。": "The current meeting room component cannot switch locations yet. Hub will update it while idle; these settings will take effect after the update.",
+  "当前会议室组件还不支持切换地域，等 Hub 自动换上新版组件后再保存地域；其他设置可先把地域清空再保存": "The current meeting room component cannot switch locations yet. Wait for Hub to update it before saving a location. To save other settings now, clear the location first."
+}

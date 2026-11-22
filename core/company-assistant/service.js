@@ -1529,6 +1529,11 @@ class CompanyAssistant {
     if (!s) return false;
     return !!this.deps.isAgentTurnActive?.(id) || s.status === 'running';
   }
+  turnApiError(id) {
+    const meta = id && (this.deps.getSession(id) || this.deps.getSessionMetadata?.(id));
+    if (!meta) return null;
+    return this.deps.readTurnApiError ? this.deps.readTurnApiError(meta) : require('./turn-api-error').lastApiError(meta.transcriptPath);
+  }
   lastFinal(id) {
     const meta = this.deps.getSession(id) || this.deps.getSessionMetadata?.(id);
     const records = meta && this.deps.readFinals ? this.deps.readFinals(meta) : [];
@@ -1605,6 +1610,10 @@ class CompanyAssistant {
       this.retire(warm);
     }
     return this.openPooled(toolset);
+  }
+  cliBackAtShell(id) {
+    try { return require('../host-shell-detector').detectHostShellTakeover(this.deps.readTerminalScreen?.(id)?.text || ''); }
+    catch { return false; } // 终端快照读不到：说不准，照旧按上限等
   }
   warmUnavailable(id) {
     if (this.sessionGone(id)) return true;
@@ -1872,6 +1881,7 @@ class CompanyAssistant {
       // 等回答时让用户看到：按哪类问题作答、Hub 已备好几条材料（体感更快，也知道它在干什么）。
       if (job.type === 'chat' && job.intents?.length) this.patchChat(job.chatId, { guide: { kinds: job.intents.map(k => AC.TITLES[k]).filter(Boolean), items: job.materialItems || 0 } });
       job.baseline = this.lastFinal(id)?.id || null;
+      job.apiErrorBaseline = this.turnApiError(id)?.id || null;
       job.sessionId = id;
       job.toolset = toolset;
       job.sentAt = null; // CLI 尚在启动/提交，90 秒送达检查此时不能回收会话。
@@ -1917,6 +1927,8 @@ class CompanyAssistant {
       const tail = receipt.terminalLastLine ? `；终端最后一行：${require('../env-check').sanitize(receipt.terminalLastLine).slice(-240)}` : '';
       const gone = this.sessionGone(id);
       if (gone) throw new Error(gone + tail);
+      // CLI 一启动就退回了 PowerShell（参数不认、版本不兼容、崩溃）：终端已经是命令提示符，再等也等不到输入框（F7 复现：白等满 5 分钟）。
+      if (this.cliBackAtShell(id)) throw new Error(`CodeAgent 启动后就退出了，这一问没有发出${tail || ''}；请打开助理会话看终端里的报错，处理后可以重问`);
       if (this.now() - since >= CLI_NOT_READY_MAX_MS) throw new Error(`CodeAgent 等了 ${Math.round((this.now() - since) / 60000)} 分钟还没启动好，这一问没有发出；请打开助理会话处理登录或确认，处理后可以重问${tail}`);
       await new Promise(resolve => setTimeout(resolve, this.deps.notReadyRetryMs ?? CLI_NOT_READY_RETRY_MS));
       if (job.stopped || this.closed) return receipt;
@@ -1944,6 +1956,20 @@ class CompanyAssistant {
     // 会话没了（关掉了、CodeAgent 进程退出）：已经写出的回答照原判定收下，没有回答就立刻报失败并说明原因。
     const gone = marked ? '' : this.sessionGone(job.sessionId);
     if (gone && !fresh) { this.failJob(job, gone); return; }
+    // 这一轮以模型接口报错收场（401 / 429 / 额度）：CLI 已停下、不会再答，立刻说明原因（以前 PPT 做页要空等 25 分钟）。
+    // 和没写标记的回答一样稳定 8 秒再判，避开 CLI 写完报错又自己重试的间隙。
+    // 放在「会话在忙」之前：CLI 以报错收场时走的是 StopFailure，Hub 可能一直把会话当成在忙（F7 隔离 Hub 实测）。
+    if (!fresh && !gone) {
+      const err = this.turnApiError(job.sessionId);
+      if (err && err.id !== job.apiErrorBaseline) {
+        if (job.apiError?.id !== err.id) job.apiError = { id: err.id, at: this.now() };
+        if (this.now() - job.apiError.at >= UNMARKED_GRACE_MS) {
+          const d = require('./turn-api-error').describe(err.text);
+          this.failJob(job, `${d.kind}，这一问没答完（${d.detail}）。限流时等一两分钟再重试；登录或额度问题请打开助理会话处理后重试`);
+        }
+        return;
+      }
+    }
     if (!marked && !gone && this.sessionBusy(job.sessionId)) { job.unmarked = null; if (this.now() - job.sentAt > limit * 2) this.failJob(job, '助理会话忙了太久'); return; }
     if (fresh && !marked && !gone && job.token) {
       // 没写标记：可能是中途的过渡话，等它稳定一会儿；期间有了新回答或又忙起来就重新计时。

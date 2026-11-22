@@ -1,5 +1,15 @@
 # Secretary control component
 
+2026-11-22: current signed control package is **2.1.5** (same build path as
+2.1.4). It adds an optional room area (`地域`: 国家/地区 / 城市 / 楼宇). When set,
+the booking dialog's cascading area selects are switched level by level and
+「查询」 is clicked before the room list is read or booked; a changed upper level
+with an empty lower level selects that level's 「不限…」 option. Empty (default)
+never touches the page, so existing users keep the page's last-used area. The
+legacy `位置筛选` key from very old configs stays unused. The dialog structure
+comes from a read-only probe of the real page (2026-11-22); browser regression:
+`ROOM_AREA_BROWSER=1 python tests/room-area-test.py`.
+
 2026-11-20: current signed control package is **2.1.4** (built by
 `scripts/build-room-control.py` from the 2.1.3 base plus readable
 `engine.py`/`jobs.py`/`hub_control.py`). It waits for the room list instead of a

@@ -64,7 +64,7 @@ class ComponentBuildTests(unittest.TestCase):
             manifest['signature'] = self.api['sign'](key_bytes, build.payload(manifest)).hex()
             (out / 'control.json').write_text(json.dumps(manifest), encoding='utf-8')
             result = build.check_bundle(out, self.api, build.BUNDLE)
-            self.assertEqual(result, {'ok': False, 'version': '2.1.3', 'pendingSources': ['engine.py', 'jobs.py']})
+            self.assertEqual(result, {'ok': False, 'version': '2.1.3', 'pendingSources': ['hub_control.py', 'engine.py', 'jobs.py']})
 
     def test_signed_roundtrip_and_tamper_detection_with_test_key(self):
         # Trust override exists only in this process and temporary test directory.

@@ -523,7 +523,8 @@ function sendToPty(sid, prompt, kind, options = {}) {
 
 async function ensureModelBeforeSubmission(sid, options, ticket, submission) {
   const manager = _deps.sessionManager;
-  const confirm = _deps.confirmSessionModel;
+  // IPC 首发需要明确结束调用；后台群聊/团队派工仍保留原消息等待用户确认。
+  const confirm = options.waitForModelConfirmation === false ? null : _deps.confirmSessionModel;
   for (;;) {
     try { await manager.ensureSessionModelReady(sid, { deferModelNotice: typeof confirm === 'function' }); return; }
     catch (error) {

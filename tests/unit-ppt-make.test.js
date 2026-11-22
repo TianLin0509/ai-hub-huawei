@@ -16,13 +16,14 @@ const tmp = t => { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ppt-make-'
 function fixture(t) {
   const dir = tmp(t), asks = [], chats = [], calls = [];
   const a = { dir, now: () => Date.now(), changed() {}, chat: () => chats,
-    ask(text, options) { const item = { id: 'chat-' + (chats.length + 1), q: text, state: 'queued' }; chats.push(item); asks.push({ text, options }); return item; } };
+    ask(text, options) { const item = { id: 'chat-' + (chats.length + 1), sessionId: 'test-session-' + (chats.length + 1), q: text, state: 'queued' }; chats.push(item); ppt.activeChat = item.id; asks.push({ text, options }); return item; } };
   const ppt = { a, deps: { openPpt: async file => { calls.push(['open', file]); return ''; }, copyPptSlide: async (file, page) => { calls.push(['insert', file, page]); return { ok: true, page: 4, target: '汇报稿.pptx' }; }, showPptInFolder: async file => { calls.push(['folder', file]); } },
     materials: { teamPackFile: () => path.join(dir, 'ppt-team-materials', TEAM_PACK_FILE) },
     previewScene: async (file, page) => buildSlideScene(file, page) };
   const make = new PptMake(ppt); ppt.make = make;
   return { dir, a, ppt, make, asks, chats, calls };
 }
+const submit = (f, args) => f.make.submit(args, { sessionId: f.chats.find(c => c.id === f.ppt.activeChat)?.sessionId });
 const pptxIn = dir => fs.existsSync(dir) ? fs.readdirSync(dir).filter(n => n.endsWith('.pptx')).sort() : [];
 
 // ---- 合成团队素材包：一页一个素材，备注里是标记 + JSON
@@ -153,32 +154,32 @@ test('任务流：建任务 → 提问带骨架、材料和规则 → 模型提�
 
   // 第 1 次提交：句末有句号 → 返回提醒，页面已经能看到这一版
   const bad = page({ type: 'text', items: ['指标提升明显。'] });
-  const first = f.make.submit({ jobId: job.id, spec: bad });
+  const first = submit(f, { jobId: job.id, spec: bad });
   assert.equal(first.ok, true); assert.match(first.warnings.join('；'), /句号/); assert.match(first.note, /再提交一次/);
   let now = f.make.status(job.id);
   assert.deepEqual([now.state, now.submits, now.rev], ['revising', 1, 1]);
   assert.ok(fs.existsSync(now.path) && now.path === first.path && path.dirname(now.path) === f.make.dir());
   assert.match(path.basename(now.path), /^\d{8}-\d{6}-\d{3}-测试页\.pptx$/);
   // 第 2 次：模型把对象写成了 JSON 字符串也收；仍有提醒
-  const second = f.make.submit({ jobId: job.id, spec: JSON.stringify(bad) });
+  const second = submit(f, { jobId: job.id, spec: JSON.stringify(bad) });
   assert.match(second.note, /再提交一次/);
   // 第 3 次（第 2 轮修改）仍有提醒：交付并说明轮次用完
-  const third = f.make.submit({ jobId: job.id, spec: bad });
+  const third = submit(f, { jobId: job.id, spec: bad });
   assert.match(third.note, /修改轮次已用完/);
   now = f.make.status(job.id);
   assert.deepEqual([now.state, now.submits, now.rev, now.report.warnings.length], ['done', 3, 3, 1]);
-  assert.throws(() => f.make.submit({ jobId: job.id, spec: bad }), /已经结束/);
+  assert.throws(() => submit(f, { jobId: job.id, spec: bad }), /已经结束/);
 
   // 没有提醒：一次就完成
   const clean = f.make.start({ skeletonId: sk.id, brief: '内容' }).job;
-  const ok = f.make.submit({ jobId: clean.id, spec: page({ type: 'image', placeholder: '指标对比曲线' }) });
+  const ok = submit(f, { jobId: clean.id, spec: page({ type: 'image', placeholder: '指标对比曲线' }) });
   assert.deepEqual([ok.warnings, ok.note], [[], undefined]);
   assert.deepEqual(f.make.status(clean.id).report.imageSlots, ['指标对比曲线']);
   assert.equal(f.make.status(clean.id).state, 'done');
 
-  assert.throws(() => f.make.submit({ jobId: '不存在', spec: bad }), /找不到这次做页任务/);
+  assert.throws(() => submit(f, { jobId: '不存在', spec: bad }), /找不到这次做页任务/);
   const loose = f.make.start({ skeletonId: sk.id, brief: '内容' }).job;
-  assert.throws(() => f.make.submit({ jobId: loose.id, spec: 42 }), /页面说明对象/);
+  assert.throws(() => submit(f, { jobId: loose.id, spec: 42 }), /页面说明对象/);
   assert.equal(f.make.status(loose.id).submits, 0);
 });
 
@@ -192,7 +193,7 @@ test('任务流：助理收工时还没提交算失败并写明原因；修改�
   assert.equal(f.make.status(broken.id).error, 'CodeAgent 没有启动');
 
   const revising = f.make.start({ skeletonId: sk.id, brief: '内容' }).job;
-  f.make.submit({ jobId: revising.id, spec: page({ type: 'text', items: ['有句号。'] }) });
+  submit(f, { jobId: revising.id, spec: page({ type: 'text', items: ['有句号。'] }) });
   assert.throws(() => f.make.rerender(revising.id, page({ type: 'gap' })), /助理还在写/);
   f.chats[2].state = 'done';
   const done = f.make.status(revising.id);
@@ -249,6 +250,7 @@ test('界面通道与工具：样例、预览、打开、插入、所在文件�
   const { HubTools } = require('../core/company-assistant/hub-tools');
   const tools = new HubTools({ dir: f.dir, ppt: f.ppt, toolsetFor: id => (id === 'ppt-session' ? 'ppt' : null), state: () => ({}), now: () => Date.now(), changed() {} });
   const started = f.make.start({ skeletonId: list.skeletons[0].id, brief: '内容' }).job;
+  f.chats.find(c => c.id === started.chatId).sessionId = 'ppt-session';
   const result = await tools.invoke({ name: 'ppt_make', arguments: { jobId: started.id, spec: page({ type: 'gap' }) }, callerSessionId: 'ppt-session' });
   assert.deepEqual([result.ok, result.warnings, fs.existsSync(result.path)], [true, [], true]);
   await assert.rejects(tools.invoke({ name: 'ppt_make', arguments: {}, callerSessionId: 'someone-else' }), /只有公司助理会话/);
@@ -294,7 +296,7 @@ test('自动选骨架：一段描述建一组任务，助理按编号取骨架�
   for (const [i, sk] of picks.entries()) {
     const guide = f.make.skeletonGuide(sk.id);
     assert.deepEqual(guide.spec, sk.spec);
-    const done = f.make.submit({ jobId: r.jobs[i].id, spec: guide.spec, skeletonId: sk.id });
+    const done = submit(f, { jobId: r.jobs[i].id, spec: guide.spec, skeletonId: sk.id });
     assert.ok(fs.existsSync(done.path));
     assert.equal(f.make.status(r.jobs[i].id).skeleton, `${r.jobs[i].variant} · ${sk.name}`);
   }
@@ -318,11 +320,11 @@ test('素材带扩展命名空间、超链接时生成的页面仍是合法文�
 test('提交时：标题里的标记去掉；留着骨架占位词的给一条提醒让助理改', t => {
   const f = fixture(t);
   const { job } = f.make.start({ skeletonId: listSkeletons()[0].id, brief: '两项改进叠加' });
-  const first = f.make.submit({ jobId: job.id, spec: { title: '定位语：两项改进叠加后提升约{r:30%}', col: [{ type: 'bar', t: '一句话结论：先做第一项' }] } });
+  const first = submit(f, { jobId: job.id, spec: { title: '定位语：两项改进叠加后提升约{r:30%}', col: [{ type: 'bar', t: '一句话结论：先做第一项' }] } });
   assert.equal(f.make.status(job.id).spec.title, '定位语：两项改进叠加后提升约30%');
   assert.ok(first.warnings.some(w => w.includes('定位语：') && w.includes('一句话结论：')), first.warnings.join('|'));
   assert.equal(f.make.status(job.id).state, 'revising');
-  const second = f.make.submit({ jobId: job.id, spec: { title: '改进效果：两项改进叠加后提升约30%', col: [{ type: 'bar', t: '先做第一项，第二项随后叠加' }] } });
+  const second = submit(f, { jobId: job.id, spec: { title: '改进效果：两项改进叠加后提升约30%', col: [{ type: 'bar', t: '先做第一项，第二项随后叠加' }] } });
   assert.deepEqual(second.warnings, []);
   assert.equal(f.make.status(job.id).state, 'done');
 });
@@ -330,16 +332,16 @@ test('提交时：标题里的标记去掉；留着骨架占位词的给一条�
 test('交付后用户在助理会话里接着要求改：那一问收工后再提交生成新版本；同一问里改满两轮仍截止', t => {
   const f = fixture(t), sk = listSkeletons()[0];
   const job = f.make.start({ skeletonId: sk.id, brief: '讲清两项改进的收益' }).job;
-  const first = f.make.submit({ jobId: job.id, spec: sk.spec });
+  const first = submit(f, { jobId: job.id, spec: sk.spec });
   assert.equal(f.make.status(job.id).state, first.warnings.length ? 'revising' : 'done');
   // 同一问还在进行：交付后不再接收（守住每问最多改两轮）
-  if (!first.warnings.length) assert.throws(() => f.make.submit({ jobId: job.id, spec: sk.spec }), /已经结束/);
+  if (!first.warnings.length) assert.throws(() => submit(f, { jobId: job.id, spec: sk.spec }), /已经结束/);
   f.chats[0].state = 'done';
   const before = f.make.status(job.id);
   assert.equal(before.state, 'done');
-  assert.throws(() => f.make.submit({ jobId: job.id, spec: sk.spec }), /已经结束/);
-  f.chats.push({ id: 'chat-2', q: '把标题改成方向一与方向二', state: 'running' }); f.ppt.activeChat = 'chat-2';
-  const again = f.make.submit({ jobId: job.id, spec: { ...sk.spec, title: '改版：方向一与方向二' } });
+  assert.throws(() => submit(f, { jobId: job.id, spec: sk.spec }), /已经结束/);
+  f.chats.push({ id: 'chat-2', sessionId: 'test-session-2', q: '把标题改成方向一与方向二', state: 'running' }); f.ppt.activeChat = 'chat-2';
+  const again = submit(f, { jobId: job.id, spec: { ...sk.spec, title: '改版：方向一与方向二' } });
   assert.ok(again.ok);
   const after = f.make.status(job.id);
   assert.equal(after.rev, before.rev + 1);
@@ -347,7 +349,7 @@ test('交付后用户在助理会话里接着要求改：那一问收工后再�
   assert.ok(fs.existsSync(after.path));
   // 样例页没有助理会话：仍然不接收
   const ex = f.make.example(sk.id).job;
-  assert.throws(() => f.make.submit({ jobId: ex.id, spec: sk.spec }), /已经结束/);
+  assert.throws(() => submit(f, { jobId: ex.id, spec: sk.spec }), /已经结束/);
 });
 
 test('等待中写明卡在哪一步：排队、CodeAgent 启动、已开始写', t => {
@@ -362,18 +364,111 @@ test('等待中写明卡在哪一步：排队、CodeAgent 启动、已开始写'
   assert.equal(f.make.status(job.id).waiting, undefined);
 });
 
+// F7（2026-11-22）：写了 5 分钟以上还没交就说明比平时久并给出路；等待中带会话编号给「看助理在做什么」；「停止」停下那一问。
+test('写得久：等待说明换成「比平时久」并带会话编号；停止后这一页报「已停止」可重试', async t => {
+  const f = fixture(t), sk = listSkeletons()[0];
+  const stopped = [];
+  f.a.stopChat = async id => { stopped.push(id); Object.assign(f.chats.find(c => c.id === id), { state: 'error', error: '已停止这一问' }); };
+  const job = f.make.start({ skeletonId: sk.id, brief: '讲清收益' }).job;
+  Object.assign(f.chats[0], { state: 'running', sessionId: 'sess-1', answeringAt: Date.now() - 2 * 60000 });
+  let st = f.make.status(job.id);
+  assert.match(st.waiting, /已开始写/); assert.equal(st.sessionId, 'sess-1');
+  f.chats[0].answeringAt = Date.now() - 6 * 60000;
+  assert.match(f.make.status(job.id).waiting, /助理已写了 6 分钟，比平时久：可以点「看助理在做什么」，或点「停止」后重试/);
+  st = (await f.make.stop(job.id)).job;
+  assert.deepEqual(stopped, ['chat-1']);
+  assert.equal(st.state, 'error'); assert.equal(st.error, '已停止这一问'); assert.equal(st.sessionId, undefined);
+  assert.equal((await f.make.stop(job.id)).job.state, 'error', '已结束的再点停止不报错');
+  assert.deepEqual(stopped, ['chat-1']);
+});
+
+test('R17：停止后重试，旧会话迟到提交不能复活旧任务或提交新任务', async t => {
+  const f = fixture(t), sk = listSkeletons()[0], logs = [];
+  t.mock.method(console, 'warn', (...args) => logs.push(args));
+  const { HubTools } = require('../core/company-assistant/hub-tools');
+  const tools = new HubTools({ dir: f.dir, ppt: f.ppt, toolsetFor: () => 'ppt', state: () => ({}), now: f.a.now, changed() {} });
+  const invoke = (jobId, callerSessionId) => tools.invoke({ name: 'ppt_make', arguments: { jobId, spec: sk.spec, sessionId: 'new-session' }, callerSessionId });
+  f.a.stopChat = async id => Object.assign(f.chats.find(c => c.id === id), { state: 'error', error: '已停止这一问', stopped: true });
+  const old = f.make.start({ skeletonId: sk.id, brief: '旧任务' }).job;
+  Object.assign(f.chats[0], { state: 'running', sessionId: 'old-session' });
+  f.ppt.activeChat = old.chatId;
+  await f.make.stop(old.id);
+  const fresh = f.make.start({ skeletonId: sk.id, brief: '重试' }).job;
+  Object.assign(f.chats[1], { state: 'running', sessionId: 'new-session' });
+  f.ppt.activeChat = fresh.chatId;
+  const before = { ...f.make.job(old.id) }, freshBefore = { ...f.make.job(fresh.id) };
+  await assert.rejects(invoke(old.id, 'old-session'), /已取消/);
+  await assert.rejects(invoke(old.id, 'new-session'), /已取消/);
+  await assert.rejects(invoke(fresh.id, 'old-session'), /当前.*会话/);
+  assert.throws(() => f.make.submit({ jobId: fresh.id, spec: sk.spec }), /当前.*会话/);
+  assert.deepEqual(f.make.job(old.id), before);
+  assert.deepEqual(f.make.job(fresh.id), freshBefore);
+  assert.deepEqual(pptxIn(f.make.dir()), []);
+  assert.equal(before.cancelled, true);
+  assert.equal(before.state, 'error');
+  assert.equal(before.error, '已停止这一问');
+  assert.equal(before.turnChatId, undefined);
+  assert.equal(logs.length, 4, '每次拒绝都记日志');
+  assert.ok(logs.every(args => args[0] === '[ppt-make] rejected submission'));
+  assert.ok((await invoke(fresh.id, 'new-session')).ok, '新任务接受新会话的提交');
+});
+
+test('R17：停止等待完成之前撤销同一问所有方案的提交资格', async t => {
+  const f = fixture(t), sk = listSkeletons()[0];
+  t.mock.method(console, 'warn', () => {});
+  let release;
+  f.a.stopChat = () => new Promise(resolve => { release = resolve; });
+  const { jobs } = f.make.startAuto({ brief: '两版方案', count: 2 });
+  Object.assign(f.chats[0], { state: 'running', sessionId: 'old-session' });
+  f.ppt.activeChat = jobs[0].chatId;
+  const stopped = f.make.stop(jobs[0].id);
+  try {
+    for (const job of jobs) {
+      assert.throws(() => f.make.submit({ jobId: job.id, spec: sk.spec }, { sessionId: 'old-session' }), /已取消/);
+      assert.equal(f.make.status(job.id).state, 'error');
+      assert.equal(f.make.job(job.id).cancelled, true);
+    }
+    assert.deepEqual(pptxIn(f.make.dir()), []);
+  } finally { release(); await stopped; }
+});
+
+test('R17：新做页轮次不能接管未取消的旧任务；正常后续修改只接受当前会话', async t => {
+  const f = fixture(t), sk = listSkeletons()[0];
+  t.mock.method(console, 'warn', () => {});
+  const old = f.make.start({ skeletonId: sk.id, brief: '旧页' }).job;
+  Object.assign(f.chats[0], { state: 'running', sessionId: 'old-session' });
+  f.ppt.activeChat = old.chatId;
+  f.make.submit({ jobId: old.id, spec: sk.spec }, { sessionId: 'old-session' });
+  f.chats[0].state = 'done';
+  f.make.status(old.id);
+  const fresh = f.make.start({ skeletonId: sk.id, brief: '另一页' }).job;
+  Object.assign(f.chats[1], { state: 'running', sessionId: 'new-session' });
+  f.ppt.activeChat = fresh.chatId;
+  const before = { ...f.make.job(old.id) };
+  assert.throws(() => f.make.submit({ jobId: old.id, spec: sk.spec }, { sessionId: 'new-session' }), /当前.*会话/);
+  assert.deepEqual(f.make.job(old.id), before);
+  f.chats[1].state = 'done';
+  f.chats.push({ id: 'followup', state: 'running', sessionId: 'followup-session' });
+  f.ppt.activeChat = 'followup';
+  assert.throws(() => f.make.submit({ jobId: old.id, spec: sk.spec }, { sessionId: 'old-session' }), /当前.*会话/);
+  assert.ok(f.make.submit({ jobId: old.id, spec: { ...sk.spec, title: '定位语：修改中' } }, { sessionId: 'followup-session' }).ok);
+  const revising = { ...f.make.job(old.id) };
+  assert.throws(() => f.make.submit({ jobId: old.id, spec: sk.spec }, { sessionId: 'old-session' }), /当前.*会话/);
+  assert.deepEqual(f.make.job(old.id), revising);
+});
+
 // r38b 审查 P2：修改那一问还在跑时，首问早已收工；旧做法每次提交都重开、轮次清零，6 次全成功，状态也被提前置为交付。
 test('交付后的修改绑定到修改那一问：同一问超过两轮被拒、进度看这一问，下一条修改才重新给两轮', t => {
   const f = fixture(t), sk = listSkeletons()[0];
   const job = f.make.start({ skeletonId: sk.id, brief: '讲清两项改进的收益' }).job;
   const bad = { ...sk.spec, title: '定位语：还没换' }; // 每次都带自查提醒
-  f.make.submit({ jobId: job.id, spec: bad });
+  submit(f, { jobId: job.id, spec: bad });
   f.chats[0].state = 'done';
   assert.equal(f.make.status(job.id).state, 'done');
-  f.chats.push({ id: 'chat-2', q: '再改改', state: 'running' }); f.ppt.activeChat = 'chat-2';
+  f.chats.push({ id: 'chat-2', sessionId: 'test-session-2', q: '再改改', state: 'running' }); f.ppt.activeChat = 'chat-2';
   const results = [];
   for (let i = 0; i < 6; i++) {
-    try { f.make.submit({ jobId: job.id, spec: bad }); results.push('ok'); } catch (error) { results.push(error.message); }
+    try { submit(f, { jobId: job.id, spec: bad }); results.push('ok'); } catch (error) { results.push(error.message); }
     const st = f.make.status(job.id);
     results.push(st.state);
   }
@@ -384,8 +479,8 @@ test('交付后的修改绑定到修改那一问：同一问超过两轮被拒�
   assert.equal(mid.rev, 4);
   assert.equal(mid.submits, 3);
   // 修改那一问还在跑、还有轮次时，状态不因首问已收工而提前交付；等待文案跟着这一问
-  f.chats.push({ id: 'chat-3', q: '标题再短一点', state: 'running', answeringAt: Date.now() }); f.ppt.activeChat = 'chat-3';
-  f.make.submit({ jobId: job.id, spec: bad });
+  f.chats.push({ id: 'chat-3', sessionId: 'test-session-3', q: '标题再短一点', state: 'running', answeringAt: Date.now() }); f.ppt.activeChat = 'chat-3';
+  submit(f, { jobId: job.id, spec: bad });
   const during = f.make.status(job.id);
   assert.equal(during.state, 'revising');
   assert.equal(during.submits, 1);

@@ -4,7 +4,7 @@
 // conventions. Capture the destination before async work: the DOM is reused
 // when the user switches rooms.
 function mountGroupComposerTools({ toolbar, input, getMeeting, referenceSession,
-  appendText, droppedFilePath, formatFilePaths, onDraft, onHistory, onExpand }) {
+  appendText, droppedFilePath, formatFilePaths, onDraft, onHistory, onExpand, ipcRenderer, onOtherTarget, onError }) {
   const document = input.ownerDocument;
   const add = (className, label, title, action) => {
     const button = document.createElement('button');
@@ -44,7 +44,7 @@ function mountGroupComposerTools({ toolbar, input, getMeeting, referenceSession,
   row.addEventListener('dragleave', event => {
     if (!row.contains(event.relatedTarget)) row.classList.remove('drop-active');
   });
-  row.addEventListener('drop', event => {
+  row.addEventListener('drop', async event => {
     row.classList.remove('drop-active');
     const meeting = getMeeting();
     if (!meeting?.groupChat || !carriesFiles(event)) return;
@@ -52,10 +52,15 @@ function mountGroupComposerTools({ toolbar, input, getMeeting, referenceSession,
     event.stopPropagation();
     const paths = Array.from(event.dataTransfer.files || []).map(droppedFilePath).filter(Boolean);
     if (!paths.length) return;
-    appendText(input, formatFilePaths(paths));
-    onDraft(meeting.id);
-    input.dispatchEvent(new document.defaultView.Event('input', { bubbles: true }));
-    input.focus();
+    const { prepareFilePaths, captureAttachmentTarget } = require('./file-attachments');
+    const insert = captureAttachmentTarget(input, { document, window: document.defaultView,
+      getTargetId: () => getMeeting()?.id, onOtherTarget, atEnd: true });
+    try {
+      const items = await prepareFilePaths(ipcRenderer, paths);
+      const current = input.innerText || '';
+      const prefix = current.trim() ? (current.endsWith('\n') ? '\n' : '\n\n') : '';
+      if (insert(items, { chips: true, prefix })) onDraft(meeting.id);
+    } catch (error) { onError?.(error); }
   });
 }
 

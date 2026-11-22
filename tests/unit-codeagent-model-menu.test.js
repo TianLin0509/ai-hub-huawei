@@ -44,7 +44,7 @@ test('serve context limits survive cache reload and reach the CodeAgent context 
       updateSessionMeta: (_sid, patch) => Object.assign(session, patch) },
     sessionStore: { markDirty: (_sid, value) => saved.push({ ...value }) },
     sendToRenderer: (name, value) => events.push({ name, value }),
-    require: name => { assert.equal(name, './core/codeagent-models'); return { ...models, recordObserved: () => false }; } });
+    require: name => { if (name === './core/session-actual-model') return { ...require('../core/session-actual-model'), readActualModel: async () => ({ model: id, ts: Date.now(), usage: { input_tokens: 90000, output_tokens: 10000 } }) }; assert.equal(name, './core/codeagent-models'); return { ...models, recordObserved: () => false }; } });
   vm.runInContext(source.slice(start, end), context);
   await context.observeCodeAgentModel(session.id, { modelId: id, usage: { input_tokens: 90000, output_tokens: 10000 } });
   const event = events.find(row => row.name === 'status-event').value;
@@ -1485,7 +1485,7 @@ test('the real model observation path emits a mismatch notice and switch-mismatc
     sessionManager: { sessions: new Map([[session.id, writer]]), getSession: () => session,
       updateSessionMeta: (_sid, patch) => Object.assign(session, patch) }, sessionStore: { markDirty() {} },
     sendToRenderer: (name, value) => events.push({ name, value }),
-    require: name => { assert.equal(name, './core/codeagent-models'); return { ...models,
+    require: name => { if (name === './core/session-actual-model') return { ...require('../core/session-actual-model'), readActualModel: async () => ({ model: 'DeepSeek-V4.1', ts: Date.now() }) }; assert.equal(name, './core/codeagent-models'); return { ...models,
       appendModelLog: (_dir, fields) => logs.push(fields), recordObserved: () => false }; },
   });
   vm.runInContext(source.slice(start, end), context);
@@ -1737,12 +1737,12 @@ test('a switch reads the searched model quotas and writes session settings using
 test('the actual answer observer logs settings-only match evidence even when model metadata did not change', async () => {
   const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8').replace(/\r\n/g, '\n');
   const start = source.indexOf('async function observeCodeAgentModel('), end = source.indexOf('\n}\n', start) + 2;
-  const session = { id: 'settings-only-answer', kind: 'codeagent', currentModel: { id: SCROLL_TARGET }, codeagentActualModel: SCROLL_TARGET }, logs = [];
+  const session = { id: 'settings-only-answer', kind: 'codeagent', currentModel: { id: SCROLL_TARGET }, codeagentActualModel: SCROLL_TARGET, actualModel: { id: SCROLL_TARGET, launchModel: SCROLL_TARGET }, fixedModel: SCROLL_TARGET }, logs = [];
   models.expectModelSwitch(session.id, SCROLL_TARGET, { settingsOnly: true });
   const context = vm.createContext({ console, codeAgentModelObservations: new WeakMap(), getHubDataDir: () => 'synthetic',
     sessionManager: { sessions: new Map([[session.id, {}]]), getSession: () => session, updateSessionMeta: () => assert.fail('no metadata changed') },
     sessionStore: { markDirty: () => assert.fail('no metadata changed') }, sendToRenderer() {},
-    require: () => ({ ...models, appendModelLog: (_dir, fields) => logs.push(fields), recordObserved: () => false }) });
+    require: name => name === './core/session-actual-model' ? { ...require('../core/session-actual-model'), readActualModel: async () => ({ model: SCROLL_TARGET, ts: Date.now() }) } : ({ ...models, appendModelLog: (_dir, fields) => logs.push(fields), recordObserved: () => false }) });
   vm.runInContext(source.slice(start, end), context);
   await context.observeCodeAgentModel(session.id, { modelId: SCROLL_TARGET });
   assert.equal(logs.find(row => row.event === 'switch-settings-only-verified').result, 'match');

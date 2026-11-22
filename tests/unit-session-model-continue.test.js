@@ -184,11 +184,58 @@ function ordinaryApi(t, f) {
   // The composer/input guard is a separate terminal-snapshot boundary; this
   // fixture tests the actual prompt IPC, receipts, model gate and send pipeline.
   t.mock.method(watcher, 'codeAgentInputAction', async () => ({ ok: true }));
-  const api = require('../main/ipc/prompt-submit-handlers').registerPromptSubmitIpc({ handle() {} }, {
+  const api = require('../main/ipc/prompt-submit-handlers').registerPromptSubmitIpc({ handle: (name, fn) => f.handlers?.set(name, fn) }, {
     sessionManager: f.manager, sendToRenderer() {}, logger: { warn() {} },
   });
   t.after(() => api.dispose()); return api;
 }
+
+test('codeagent-models blocked send-prompt IPC returns an explicit unsent error without awaiting a model decision', async t => {
+  const f = fixture(t); ordinaryApi(t, f);
+  const notices = [];
+  f.manager.on('session-notice', notice => notices.push(notice));
+  const send = () => f.handlers.get('session:send-prompt')(null, {
+    sessionId: f.info.id, text: '合成首条消息', clientSubmissionId: 'synthetic-blocked-prompt',
+  });
+  let settled = false;
+  const pending = send().then(result => { settled = true; return result; });
+  await flush();
+  assert.equal(settled, true, '模型拦截必须结束 IPC 调用');
+  const result = await pending;
+  assert.equal(result.ok, false);
+  assert.equal(result.notSent, true);
+  assert.equal(result.code, 'SESSION_MODEL_UNAVAILABLE');
+  assert.match(result.message, /原模型.*不可用/);
+  assert.equal(f.requests.length, 0);
+  assert.equal(f.sent.length, 0);
+  assert.equal(f.info.fixedModel, OLD);
+  assert.equal(f.info.modelConfirmationRequired, true);
+  assert.equal(notices.at(-1).modelUnavailable, true);
+  // 同一提交失败后手动选好模型，可以重新发送原文，不能留下挂住的队列。
+  Object.assign(f.info, { fixedModel: NEXT, codeagentModelPick: false, modelConfirmationRequired: false, modelUnavailableReason: '' });
+  assert.equal((await send()).ok, true);
+  assert.equal(f.sent.length, 1);
+});
+
+test('codeagent-models invalid current cache does not block the first submission using legacy candidates', async t => {
+  const f = fixture(t); ordinaryApi(t, f);
+  fs.rmSync(require('../core/codeagent-pool').personalModelsFile(f.root));
+  const configDir = path.join(f.root, '.cac');
+  f.info.codeagentConfigDir = configDir;
+  f.write(path.join(configDir, 'settings.json'), { model: OLD });
+  f.write(path.join(configDir, '.cac.json'), { enterpriseModelOptionsCache: [NEXT] });
+  f.write(path.join(f.root, '.cac.json'), { enterpriseModelOptionsCacheV3_5: 'synthetic invalid cache' });
+  let settled = false;
+  const pending = f.handlers.get('session:send-prompt')(null, { sessionId: f.info.id, text: '合成首发', clientSubmissionId: 'synthetic-first-prompt' })
+    .then(result => { settled = true; return result; });
+  await flush();
+  assert.equal(settled, true, '无权威清单时首发无需模型确认');
+  const result = await pending;
+  assert.equal(result.ok, true);
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.info.fixedModel, OLD);
+  assert.equal(f.requests.length, 0);
+});
 
 test('the ordinary prompt IPC keeps the original request pending and submits once after confirmation', async t => {
   const f = fixture(t), api = ordinaryApi(t, f);

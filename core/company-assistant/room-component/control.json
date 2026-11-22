@@ -1,15 +1,15 @@
 {
   "app": "mishu-terminator",
-  "version": "2.1.4",
+  "version": "2.1.6",
   "shell": 1,
-  "date": "2026-11-20",
+  "date": "2026-11-22",
   "notes": [
-    "抢订提速：等列表再判、被占即换、开抢前备好候选、记录预定接口"
+    "修复地域模糊匹配歧义及同城筛选遗留楼宇"
   ],
   "code": {
-    "file": "msz-code-2.1.4.zip",
-    "size": 78690,
-    "sha256": "fc06e8773d2fa637d5284a5eb12f640ca7f17b126fc3cde52cecc58b066f37d9"
+    "file": "msz-code-2.1.6.zip",
+    "size": 82064,
+    "sha256": "82d377960db29d948eb632b0b04394a28b42e1b3aefebccd3ba8569a54ba16fe"
   },
-  "signature": "3626b9ade7619e0c6ada94ed3696e777c2d80a2036c8342b091413e8c1e48600bc55d20025d4f425a39c4b30f19480322d49d49774fe84c4de4236355ad49209"
+  "signature": "6a2839c575412d478741dea2949550d191e951e139d344cd4a9ebd4a029150ec0509dcbb925b11d14a7cffaa02be49eb6f9a79f78231696326f15587a3a91000"
 }

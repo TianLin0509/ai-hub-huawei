@@ -11,13 +11,16 @@ const TABS = [
   { id: 'pet', label: '桌宠与回执' },
   { id: 'notify', label: '通知' },
   { id: 'advanced', label: '高级' },
+  // 2026-11-22：工作台服务器监控单独一页（原来和工作目录、组队挤在「高级」，1440×900 下超出一屏 136px）。
+  { id: 'server', label: '服务器监控' },
 ];
-// 先匹配先得：桌宠段落里也有 .config-operations-card，所以 pet 要排在 advanced 前面。
+// 先匹配先得：桌宠段落里也有 .config-operations-card，所以 pet 要排在 server 前面。
 const RULES = [
   ['shared', '.hub-feature-search, .cfg-tabs'],
   ['pet', '#cfg-hub-pet, #cfg-notify-mode-section'],
   ['notify', '.config-notification-title, #config-notification-card'],
-  ['advanced', '.config-operations-title, .config-operations-card, #cfg-team-auto-approve-field, #cfg-work-file-root-field'],
+  ['server', '.config-operations-title, .config-operations-card'],
+  ['advanced', '#cfg-team-auto-approve-field, #cfg-work-file-root-field'],
   ['display', '.config-reading-title, #cfg-card-font-size, #cfg-composer-enter-field, #cfg-workspace-root-field, #cfg-codeagent-quota-placement-field'],
   ['general', '.company-api-settings-entry, .config-language-field, #cfg-model-unavailable-policy, #cfg-proxy, #btn-config-accounts, .config-hint'],
 ];

@@ -892,7 +892,8 @@ test('the completion hook marks personal, pool and meeting-member usage dirty wi
   assert.ok(start > 0 && end > start);
   for (const session of [{ kind: 'codeagent' }, { kind: 'codeagent-resume', codeagentPoolAccount: 'pool-a' }, { kind: 'codeagent', codeagentPoolAccount: 'pool-b', meetingId: 'group' }, { kind: 'claude' }]) {
     require('node:vm').runInNewContext(source.slice(start, end), { session, hubSessionId: 'synthetic', ev: {}, getHubDataDir: () => 'data', observeCodeAgentModel() {},
-      require: name => { assert.equal(name, './core/codeagent-usage-menu'); return { markUsageDirty: (_dir, key) => calls.push(key) }; } });
+      require: name => { if (name === './core/session-actual-model') return require('../core/session-actual-model');
+        assert.equal(name, './core/codeagent-usage-menu'); return { markUsageDirty: (_dir, key) => calls.push(key) }; } });
   }
   assert.deepEqual(calls, ['personal', 'pool-a', 'pool-b']);
 });

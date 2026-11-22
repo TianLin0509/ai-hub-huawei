@@ -27,13 +27,24 @@
     dialog.id = 'company-api-dialog';
     dialog.className = 'company-api-dialog';
     dialog.setAttribute('aria-label', '自有 API');
-    dialog.addEventListener('close', () => { dialog.remove(); dialog = null; });
-    dialog.addEventListener('click', event => {
-      const box = dialog.getBoundingClientRect();
-      if (event.target === dialog && (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom)) close();
+    // 从设置里点进来的：关掉自有 API 后回到设置，不把人甩回主页（以前关完设置也没了，像「设置自己退出」）。
+    const settings = document.getElementById('config-modal');
+    const backToSettings = !!settings && !settings.classList.contains('hidden');
+    dialog.addEventListener('close', () => {
+      dialog.remove(); dialog = null;
+      if (backToSettings) settings.classList.remove('hidden');
+    });
+    // 点框外才关，且按下也得在框外：在 Key 输入框里拖选、拖出框外松开不算点框外。
+    const self = dialog;
+    require('./backdrop-dismiss.js').bindBackdropDismiss(self, {
+      isBackdrop: event => {
+        const box = self.getBoundingClientRect();
+        return event.target === self && (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom);
+      },
+      onDismiss: close,
     });
     document.body.append(dialog);
-    document.getElementById('config-modal')?.classList.add('hidden');
+    if (backToSettings) settings.classList.add('hidden');
     dialog.showModal();
     return dialog;
   }

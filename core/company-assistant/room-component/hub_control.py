@@ -25,7 +25,18 @@ GROUPS = {
     '高级': {'网址': 'url', '浏览器': ['自动', 'Edge', 'Chrome', '内置Chromium'],
              '自动标定网格': bool, '网格起点X': (0, 3000), '格子宽度': (10, 100),
              '网格起始时间': 'time', 'welink-cli路径': str},
+    # 会议室所在地域（2026-11-22）：对应预订弹窗「国家/地区 / 城市 / 楼宇」三级下拉；都空＝沿用网页上次的选择。
+    '地域': {'国家/地区': 'area', '城市': 'area', '楼宇': 'area'},
 }
+AREA_DEFAULT = {'国家/地区': '', '城市': '', '楼宇': ''}
+
+
+def ensure_area(cfg):
+    """旧配置没有「地域」：补成全空（不切换），不碰旧版遗留的「位置筛选」。"""
+    area = cfg.get('地域')
+    cfg['地域'] = {**AREA_DEFAULT, **({k: v for k, v in area.items() if k in AREA_DEFAULT and isinstance(v, str)}
+                                       if isinstance(area, dict) else {})}
+    return cfg
 
 
 def advance_days(cfg):
@@ -77,11 +88,13 @@ def validate_patch(patch):
                 valid = value in rule
             elif rule in ('clock', 'time'):
                 valid = bool(re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d' + (r':[0-5]\d' if rule == 'clock' else ''), str(value)))
+            elif rule == 'area':
+                valid = isinstance(value, str) and len(value.strip()) <= 60 and value.isprintable()
             elif rule == 'url':
                 valid = isinstance(value, str) and len(value) <= 2048 and bool(re.match(r'^https?://[^\s]+$', value))
             if not valid:
                 raise ValueError(key + '的值或范围不正确')
-        result[group] = copy.deepcopy(values)
+        result[group] = copy.deepcopy({k: v.strip() for k, v in values.items()} if group == '地域' else values)
     return result
 
 
@@ -104,6 +117,7 @@ class HubControl(base.HubControl):
         self.results = queue.Queue()
         self.read_result = {'state': 'idle', 'names': [], 'error': ''}
         self.test_result = {'state': 'idle', 'error': ''}
+        ensure_area(window.cfg)
         super().__init__(window)
         install_advance_days(window)
 
@@ -124,7 +138,7 @@ class HubControl(base.HubControl):
             h, m, sec = map(int, w.cfg['抢订设置']['开放时间'].split(':'))
             opened = now.replace(hour=h, minute=m, second=sec, microsecond=0)
             target = now.date() + timedelta(days=advance_days(w.cfg))
-        s.update(capabilities=['full-ui', 'advance-days'], targetOffsetDays=advance_days(w.cfg), loginState=w.login_state,
+        s.update(capabilities=['full-ui', 'advance-days', 'area'], targetOffsetDays=advance_days(w.cfg), loginState=w.login_state,
                  loginCheckedAt=w.login_checked_at.isoformat() if w.login_checked_at else None,
                  nextOpen=opened.isoformat(), targetDate=target.isoformat(),
                  serverNow=w.clock.now().isoformat(), controlBusy=self.work,
@@ -158,7 +172,7 @@ class HubControl(base.HubControl):
                 raise ValueError('请先停止任务，待浏览器退出后再操作')
         if op == 'configure':
             patch = validate_patch(args)
-            candidate = copy.deepcopy(w.cfg)
+            candidate = ensure_area(copy.deepcopy(w.cfg))
             for k, v in patch.items():
                 if k in GROUPS:
                     candidate[k].update(v)
@@ -187,7 +201,7 @@ class HubControl(base.HubControl):
             w.start_job('once')
         elif op == 'read-rooms':
             from .engine import read_rooms
-            cfg = copy.deepcopy(w.cfg)
+            cfg = ensure_area(copy.deepcopy(w.cfg))
             day = (datetime.now() + timedelta(days=advance_days(cfg))).strftime('%Y/%m/%d')
             self.background(op, lambda: read_rooms(cfg, lambda m, l='info': w.bus.log.emit(m, l), threading.Event(), day))
         elif op == 'test-message':

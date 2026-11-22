@@ -43,7 +43,7 @@ test('设置弹窗：直接子元素按类归到页签，小节标题跟下一�
     { id: 'something-new-from-another-module' },
   ].map(fakeEl);
   assert.deepEqual(classifyChildren(kids), [
-    'general', 'shared', 'shared', 'general', 'general', 'pet', 'general', 'advanced', 'advanced', 'pet',
+    'general', 'shared', 'shared', 'general', 'general', 'pet', 'general', 'server', 'server', 'pet',
     'notify', 'notify', 'display', 'display', 'display', 'display', 'display', 'advanced', 'advanced', 'general', 'general',
   ]);
 });
@@ -145,7 +145,7 @@ test('设置入口 reveal 后异步观察器保留通知 / 监控页签和焦点
   const operations = view.appendChild(element('', ['config-operations-card']));
   const url = operations.appendChild(element('cfg-aliyun-health-url'));
   const tabs = require('../renderer/config-settings-tabs').createSettingsTabs(f);
-  for (const [field, tab] of [[target, 'notify'], [url, 'advanced']]) {
+  for (const [field, tab] of [[target, 'notify'], [url, 'server']]) {
     modal.classList.remove('hidden');
     tabs.reveal(field);
     await Promise.resolve(); // 实际 MutationObserver 会在定时聚焦前投递。
@@ -164,7 +164,7 @@ function configFixture() {
   let active = 'advanced';
   f.window.__hubSettingsTabs = {
     activate(id) { active = id; calls.push(['activate', id]); },
-    reveal(field) { active = field?.id === 'cfg-feishu-target' || field?.id === 'config-notification-card' ? 'notify' : 'advanced'; calls.push(['reveal', field?.id]); },
+    reveal(field) { active = field?.id === 'cfg-feishu-target' || field?.id === 'config-notification-card' ? 'notify' : field?.id === 'cfg-aliyun-health-url' ? 'server' : 'advanced'; calls.push(['reveal', field?.id]); },
   };
   const controller = require('../renderer/config-modal').createConfigModalController({ document, providerModes: {}, renderAccountUsage() {},
     ipcRenderer: { async invoke(name, value) { if (name === 'save-hub-config') saves.push(value); return name === 'get-hub-config-raw' ? {} : { success: true }; } } });
@@ -185,7 +185,7 @@ test('普通打开设置先同步初始化常用页签，通知入口随后 reve
 for (const scenario of [
   { name: '接收 ID 格式错误', field: 'cfg-feishu-target', value: 'wrong', tab: 'notify', message: /ID 必须/ },
   { name: '启用通知但接收 ID 为空', field: 'cfg-feishu-target', value: '', enable: 'cfg-notification-enabled', tab: 'notify', message: /先填写飞书/ },
-  { name: '监控 URL 格式错误', field: 'cfg-aliyun-health-url', value: 'wrong', enable: 'cfg-aliyun-enabled', tab: 'advanced', message: /HTTP\(S\)/ },
+  { name: '监控 URL 格式错误', field: 'cfg-aliyun-health-url', value: 'wrong', enable: 'cfg-aliyun-enabled', tab: 'server', message: /HTTP\(S\)/ },
 ]) test(`保存校验：${scenario.name}时切到字段所在页签再聚焦并显示错误`, async () => {
   const f = configFixture();
   await f.controller.open();

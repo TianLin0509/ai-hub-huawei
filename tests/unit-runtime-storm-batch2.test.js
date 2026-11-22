@@ -10,7 +10,7 @@ function fleetCtx(fail) {
   const ctx = {
     t: 1_000_000, hotAt: 0, live: new Map(), readError: '',
     now() { return this.t; }, myName: () => '我', merge() {},
-    messages: () => [],
+    messages: () => [], hotIds: FleetService.prototype.hotIds, readOne: FleetService.prototype.readOne,
     assistant: () => ({ welink: async (args) => {
       const id = args[3]; calls.push(id);
       return fail.has(id) ? { code: 1, stderr: 'no permission', stdout: '' } : { code: 0, stdout: '{"data":[]}' };

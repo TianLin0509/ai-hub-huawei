@@ -132,7 +132,6 @@ const {
 } = require('../core/session-view-mode.js');
 const {
   createTerminalInputController,
-  formatPastedFilePaths,
   isTerminalProtocolReply,
   isCodexOwnedTranscript,
   navigateCodexTranscript,
@@ -1889,15 +1888,15 @@ function getOrCreateTerminal(sessionId) {
 
   // Drag-and-drop: dropping a file/folder into the terminal inserts its path(s).
   container.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
-  container.addEventListener('drop', (e) => {
+  container.addEventListener('drop', async (e) => {
     e.preventDefault();
     const files = Array.from(e.dataTransfer.files || []);
     if (files.length === 0) return;
-    const quoted = files.map(f => {
-      const p = f.path;
-      return /\s/.test(p) ? `"${p}"` : p;
-    }).join(' ');
-    terminal.paste(quoted);
+    try {
+      const items = await require('./file-attachments').prepareFilePaths(ipcRenderer, files.map(droppedFilePath).filter(Boolean));
+      terminal.paste(items.map(item => /\s/.test(item.path) ? `"${item.path}"` : item.path).join(' '));
+      if (items.some(item => item.resized)) showToast('已自动缩放');
+    } catch (error) { showToast('添加附件失败：' + error.message, 'error'); }
   });
 
   // Ctrl+wheel zoom — passive so xterm's own wheel-scroll stays on the
@@ -5200,6 +5199,10 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   const codexControls = createCodexNativeControls({
     sessionId, invoke: (channel, payload) => ipcRenderer.invoke(channel, payload),
     openExternal: url => shell.openExternal(url),
+    openBackstage: async () => {
+      if (activeSessionId !== sessionId) return;
+      await sessionSplit.showBackstage(); syncBackstageButton(); noteBackstageOpen(sessionId);
+    },
   });
   bar.append(codexControls.element);
   if (isNativeAgent(sessions.get(sessionId)) && sessions.get(sessionId)?.codeagentRunMode !== 'serve') terminal.options.disableStdin = true;
@@ -5355,16 +5358,14 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     inputBox.focus();
   });
 
-  // 附件：仓库现有的文件对话框只会选目录（workspace:pick），没有「选文件插入路径」
-  // 这条能力，而本卡不许动 main.js。所以按钮先不显示，只保留 composer 的拖拽落区 ——
-  // 拖进来的文件沿用粘贴文件那条 formatPastedFilePaths，行为与粘贴完全一致。
+  // 附件选择与拖入共用文件准备流程，大图发送 Hub 内的缩小副本。
   const attachBtn = document.createElement('button');
   attachBtn.type = 'button';
   attachBtn.className = 'composer-chip composer-chip-icon composer-attach';
   attachBtn.title = '添加附件';
   attachBtn.setAttribute('aria-label', '添加附件');
   attachBtn.innerHTML = '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5 12.5 20a5 5 0 0 1-7-7l8.5-8.5a3.5 3.5 0 0 1 5 5L10.5 18"/></svg>';
-  attachBtn.hidden = true;
+  attachBtn.hidden = false;
 
   // 模型 chip：不重造选择器，直接把现有的挂载函数接到它上面。
   // 头部徽章本卡先保留（T2 才删），两处指向同一个 controller。
@@ -5382,6 +5383,9 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   modelChipCaret.setAttribute('aria-hidden', 'true');
   modelChipCaret.textContent = '▾';
   modelChip.append(modelChipLogo, modelChipLabel, modelChipCaret);
+  const actualModelLabel = document.createElement('span');
+  actualModelLabel.className = 'composer-actual-model';
+  actualModelLabel.hidden = true;
   attachModelPickerHandler(modelChip, sessionId);
   // 窄窗口下顶栏面包屑会被挤没，里面的 Agent 标识跟着看不见（2026-11-21 隔离实测：宽度 1100 起被截掉）。
   // 输入框下方补一个同样的标识，只在窄窗口显示（styles/composer.css 的 .composer-agent-tag）。
@@ -5535,7 +5539,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   secondaryActions.append(bridgeToolbar);
   const tuningControls = document.createElement('div');
   tuningControls.className = 'composer-tuning-controls';
-  tuningControls.append(attachBtn, secondaryActions, composerAgentTag, modelChip, thinkingChip, speedChip);
+  tuningControls.append(attachBtn, secondaryActions, composerAgentTag, modelChip, actualModelLabel, thinkingChip, speedChip);
   const codeagentSkills = require('./composer-codeagent-skills').mountCodeAgentSkillPicker({
     document, window, input: inputBox, host: tuningControls, before: speedChip, sessionId,
     getSession: () => sessions.get(sessionId), ipcRenderer,
@@ -5604,35 +5608,18 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   });
 
   // 拖拽落区：拖进来的文件按绝对路径写进文本框。走的是粘贴文件那条
-  // formatPastedFilePaths（多文件换行分隔 —— 路径里可以有空格，空格分隔会被 CLI 拆断）。
-  const dragCarriesFiles = (event) => {
-    const types = event && event.dataTransfer && event.dataTransfer.types;
-    return !!types && Array.from(types).includes('Files');
-  };
-  composer.addEventListener('dragover', (event) => {
-    if (!dragCarriesFiles(event)) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'copy';
-    composer.classList.add('drop-active');
-  });
-  composer.addEventListener('dragleave', (event) => {
-    if (event.target === composer) composer.classList.remove('drop-active');
-  });
-  composer.addEventListener('drop', (event) => {
-    composer.classList.remove('drop-active');
-    if (!dragCarriesFiles(event)) return;
-    event.preventDefault();
-    const paths = Array.from(event.dataTransfer.files || [])
-      .map(file => droppedFilePath(file))
-      .filter(Boolean);
-    if (!paths.length) return;
-    const current = readContenteditablePlainText(inputBox);
-    const separator = current.trim() ? (current.endsWith('\n') ? '' : '\n') : '';
-    replaceContenteditableText(inputBox, `${current}${separator}${formatPastedFilePaths(paths)}`);
-    placeCaretAtContenteditableEnd(inputBox);
-    saveFloatingInputDraft(sessionId, inputBox);
-    inputBox.dispatchEvent(new Event('input', { bubbles: true }));
-    inputBox.focus();
+  // 多文件换行分隔，缩放附件的标签在发送时展开成副本路径。
+  require('./file-attachments').bindFileAttachments({ document, target: composer, button: attachBtn,
+    filePath: droppedFilePath, onError: error => showToast('添加附件失败：' + error.message, 'error'),
+    onFiles: async paths => {
+      const insert = require('./file-attachments').captureAttachmentTarget(inputBox, { document, window, atEnd: true });
+      const items = await require('./file-attachments').prepareFilePaths(ipcRenderer, paths);
+      if (!inputBox.isConnected) return;
+      const current = readContenteditablePlainText(inputBox);
+      insert(items, { chips: true, prefix: current.trim() && !current.endsWith('\n') ? '\n' : '' });
+      saveFloatingInputDraft(sessionId, inputBox);
+      inputBox.dispatchEvent(new Event('input', { bubbles: true }));
+    },
   });
 
   const contentStack = document.createElement('div');
@@ -5763,6 +5750,12 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     });
     const webRoute = require('../core/chatgpt-web-models').chatgptWebRoute(session?.currentModel?.id);
     modelChip.hidden = !rail.model.visible;
+    const actualStatus = require('../core/session-actual-model').actualModelStatus(session);
+    actualModelLabel.hidden = !actualStatus;
+    if (actualModelLabel.dataset.rawLabel !== actualStatus) {
+      actualModelLabel.dataset.rawLabel = actualStatus;
+      actualModelLabel.textContent = actualStatus;
+    }
     if (rail.model.visible) {
       const label = rail.model.pending
         ? `${rail.model.label} → ${rail.model.pending}`

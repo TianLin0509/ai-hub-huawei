@@ -126,27 +126,73 @@ function answer(text) {
   fireHook('UserPromptSubmit', 'prompt', { prompt: text, prompt_id: uuid });
   let model = 'fixture-no-model';
   try { model = fs.readFileSync(answerModelFile, 'utf8').trim() || model; } catch { /* 没写就用占位 */ }
+  // CODEAGENT_POOL_FAKE_MENU_SELECT=1：照公司 CodeAgent 的优先级定这一问的模型——每次请求重读 --settings 文件，
+  // 文件里写了 model 就用它（优先级最高，压过菜单里刚选的）；没写才用菜单里选的；都没有用上面的文件。
+  if (menuSelect) model = launchSettingsModel() || sessionModel || model;
+  // Optional test-only runtime result, independent of menu/config precedence.
+  // This simulates authoritative provider evidence, not terminal confirmation.
+  try { model = fs.readFileSync(process.env.CODEAGENT_POOL_FAKE_RUNTIME_MODEL_FILE, 'utf8').trim() || model; } catch {}
   fs.appendFileSync(transcript, JSON.stringify({ type: 'assistant', sessionId, cwd, uuid: crypto.randomUUID(), parentUuid: uuid, timestamp: new Date().toISOString(),
     message: { id: 'msg_' + crypto.randomUUID().replace(/-/g, ''), role: 'assistant', model, content: [{ type: 'text', text: '夹具已收到：' + text }], stop_reason: 'end_turn',
       usage: { input_tokens: 10, output_tokens: 5 } } }) + '\n');
   fireHook('Stop', 'stop', { last_assistant_message: '夹具已收到：' + text });
 }
+const menuSelect = process.env.CODEAGENT_POOL_FAKE_MENU_SELECT === '1';
+const settingsAt = args.indexOf('--settings');
+function launchSettingsModel() {
+  if (settingsAt < 0) return '';
+  try { return String(JSON.parse(fs.readFileSync(args[settingsAt + 1], 'utf8')).model || '').trim(); } catch { return ''; }
+}
+let sessionModel = '', menuOpen = false, menuCursor = 0, pendingEsc = null, pendingKeys = '';
+function drawMenu() {
+  const models = accountModels();
+  out('\x1b[2J\x1b[H  Select model    ✕\r\n\r\n  Built-in\r\n');
+  models.forEach((m, i) => out(`  ${i === menuCursor ? '❯' : ' '}  ${i + 1}. ${m}${i === 0 ? ' default ✓' : ''}   0x\r\n`));
+  out('\r\n  Navigate ↑ ↓ | Select enter | Back esc\r\n');
+}
 let pasteBuffer = null;
-if (answerModelFile) process.stdin.on('data', chunk => {
+function handleKeys(chunk) {
+  if (menuSelect && process.env.CODEAGENT_POOL_FAKE_KEYLOG) fs.appendFileSync(process.env.CODEAGENT_POOL_FAKE_KEYLOG, JSON.stringify({ menuOpen, chunk: chunk.toString('utf8') }) + '\n');
+  if (menuSelect && menuOpen) {
+    // 菜单里：上下键移光标（每次重画），回车选中并回显「Set model to …」，Esc 关菜单。
+    // 方向键可能被拆成「Esc」和「[B」两段到达：单独一个 Esc 先等一下，后面接着「[A/[B」就拼成方向键。
+    let keys = pendingKeys + chunk.toString('utf8');
+    pendingKeys = '';
+    if (pendingEsc) { clearTimeout(pendingEsc); pendingEsc = null; }
+    const partial = /\x1b\[?$/.exec(keys);
+    if (partial) {
+      pendingKeys = partial[0]; keys = keys.slice(0, partial.index);
+      pendingEsc = setTimeout(() => { pendingEsc = null; pendingKeys = ''; menuOpen = false; prompt(); }, 150);
+    }
+    const models = accountModels();
+    for (const key of keys.match(/\x1b\[[AB]|\x1b|\r|\n|./gs) || []) {
+      if (key === '\x1b[B') { menuCursor = Math.min(models.length - 1, menuCursor + 1); drawMenu(); }
+      else if (key === '\x1b[A') { menuCursor = Math.max(0, menuCursor - 1); drawMenu(); }
+      else if (key === '\r' || key === '\n') { sessionModel = models[menuCursor]; menuOpen = false; prompt(); out(`  ⎿  Set model to ${sessionModel}\r\n`); }
+      else if (key === '\x1b') { menuOpen = false; prompt(); }
+    }
+    return;
+  }
   // Hub 发消息用括号粘贴（ESC[200~ … ESC[201~），再单独补回车；粘贴内容当正文，不当作 Esc。
-  const text = chunk.toString('utf8').replace(/\x1b\[200~/g, '\u0001').replace(/\x1b\[201~/g, '\u0002');
-  for (const ch of text) {
+  const text = [...chunk.toString('utf8').replace(/\x1b\[200~/g, '\u0001').replace(/\x1b\[201~/g, '\u0002')];
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
     if (ch === '\u0001') { pasteBuffer = ''; continue; }
     if (ch === '\u0002') { typed += pasteBuffer || ''; pasteBuffer = null; continue; }
     if (pasteBuffer !== null) { pasteBuffer += ch; continue; }
     if (ch === '\x1b') { typed = ''; prompt(); continue; }
     if (ch === '\r' || ch === '\n') {
       const line = typed.trim(); typed = '';
-      if (line === '/model') menu(); else { if (line) answer(line); prompt(); }
+      // 同一段输入里 /model 回车后面紧跟的方向键和回车交给菜单处理（Hub 会把连续敲的键合成一段写进来）。
+      if (line === '/model') {
+        if (menuSelect) { menuOpen = true; menuCursor = 0; drawMenu(); if (i + 1 < text.length) handleKeys(text.slice(i + 1).join('')); return; }
+        menu();
+      } else { if (line) answer(line); prompt(); }
     } else if (ch === '\x7f' || ch === '\b') typed = typed.slice(0, -1);
     else if (ch >= ' ') typed += ch;
   }
-});
+}
+if (answerModelFile) process.stdin.on('data', handleKeys);
 else process.stdin.on('data', chunk => {
   const text = chunk.toString('utf8');
   if (text.includes('\x1b')) { typed = ''; prompt(); return; }

@@ -194,6 +194,10 @@
 .cr-rc-name:disabled { cursor:not-allowed; }
 .cr-ops { display:flex; gap:2px; opacity:.45; transition:opacity var(--hw-t-fast); }
 .cr-rc:hover .cr-ops, .cr-rc.first .cr-ops, .cr-rc:focus-within .cr-ops { opacity:1; }
+.cr-area { display:grid; grid-template-columns:auto 1fr 1fr 1.3fr; align-items:center; gap:var(--hw-sp-2); margin:-4px 0 10px; }
+.cr-area .cr-input { height:32px; min-width:0; }
+.cr-area-l { font-size:13px; color:var(--hw-text-2); white-space:nowrap; }
+.cr-hint.cr-area-hint { margin:-6px 0 10px; font-size:12px; }
 .cr-add { display:flex; align-items:center; gap:var(--hw-sp-2); margin-top:10px; }
 .cr-add .cr-input { height:36px; }
 .cr-picker { margin-top:12px; padding:14px 16px; border-radius:var(--hw-r-item); background:var(--hw-surface-2); }

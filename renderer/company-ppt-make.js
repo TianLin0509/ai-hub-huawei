@@ -1,7 +1,7 @@
 'use strict';
 // PPT 页「做页」Tab（2026-11-11）：左边选骨架、写一句话；中间看版式预览；右边看自查提醒、待贴图位和后续操作。
 // 一屏不滚动：骨架列表按可用高度分页，提醒和图位只列前几条。开箱即用：第一次打开就用骨架自带的示意内容出一页预览，不依赖素材包和模型。
-function createPptMake({ root, ipcRenderer, notice }) {
+function createPptMake({ root, ipcRenderer, notice, openSession = null, hasSession = () => true }) {
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const ACTIVE = ['waiting_agent', 'revising'];
   const STEP = { waiting_agent: '正在让助理写页面内容…', revising: '助理正在按自查提醒修改…' };
@@ -55,7 +55,7 @@ function createPptMake({ root, ipcRenderer, notice }) {
       return;
     }
     const slide = svg ? `<div class="pptk-slide${running ? ' dim' : ''}">${svg}</div>` : '';
-    const wait = running ? `<div class="pptk-busy" role="status"><i class="pptk-spin" aria-hidden="true"></i><b>${esc(running.text)}</b><span data-pptk-clock>已用 ${seconds(running.from)} 秒</span>${job?.waiting ? `<small>${esc(job.waiting)}</small>` : ''}${job?.state === 'waiting_agent' ? '<small>通常 1–3 分钟，可以先去做别的，回来还在这里。</small>' : ''}</div>` : '';
+    const wait = running ? `<div class="pptk-busy" role="status"><i class="pptk-spin" aria-hidden="true"></i><b>${esc(running.text)}</b><span data-pptk-clock>已用 ${seconds(running.from)} 秒</span>${job?.waiting ? `<small>${esc(job.waiting)}</small>` : ''}${job?.state === 'waiting_agent' ? '<small>通常 1–3 分钟，可以先去做别的，回来还在这里。</small>' : ''}${!busy && job && ACTIVE.includes(job.state) ? `<div class="pptk-actions">${job.sessionId && openSession ? '<button type="button" class="pptw-btn sec sm" data-pptk="watch">看助理在做什么</button>' : ''}<button type="button" class="pptw-btn ghost sm" data-pptk="stop">停止</button></div>` : ''}</div>` : '';
     const failed = failure ? `<div class="pptk-fail" role="alert"><strong>这一页没有生成出来</strong><p>${esc(failure)}</p><p>下一步：点「重试」再生成一次；想先看版式，点「先看骨架样子」。</p><div class="pptk-actions"><button type="button" class="pptw-btn pri" data-pptk="start">重试</button><button type="button" class="pptw-btn sec" data-pptk="example">先看骨架样子</button></div></div>` : '';
     stage.innerHTML = failed || (slide + wait) || '<p class="pptw-empty">选一个骨架，点「先看骨架样子」。</p>';
     clearInterval(clock); clock = null;
@@ -174,6 +174,15 @@ function createPptMake({ root, ipcRenderer, notice }) {
       failure = null; svg = ''; svgKey = ''; notice('助理会挑 3 个讲法不同的骨架各出一版，通常 3–6 分钟；写好一版就能先看一版。');
       try { const r = await call('ppt-make-auto', { brief }); group = r.jobs; await take(group[0]); }
       catch (error) { failure = error.message; drawStage(); }
+      return;
+    }
+    // 写得久或卡住时：就地打开助理会话看过程，或停下这一问再重试（2026-11-22 F7）。
+    if (name === 'watch') { if (!job?.sessionId || !openSession) return; if (!hasSession(job.sessionId)) { notice('助理会话已经关闭了，点「停止」后重试。'); return; } return openSession(job.sessionId); }
+    if (name === 'stop') {
+      if (!job || !ACTIVE.includes(job.state)) return;
+      b.disabled = true;
+      try { const r = await call('ppt-make-stop', { jobId: job.id }); await take(r.job); if (group.length) await refreshGroup(); }
+      finally { b.disabled = false; }
       return;
     }
     if (name === 'variant') { const next = group.find(j => j.id === b.dataset.id); if (next && next.id !== job?.id) { svg = ''; svgKey = ''; await take(next); } return; }

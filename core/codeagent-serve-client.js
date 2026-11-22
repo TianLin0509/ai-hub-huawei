@@ -18,6 +18,9 @@ function canonicalDir(dir) {
   try { return fs.realpathSync.native(resolved); } catch { return resolved; }
 }
 const partIndex = id => String(id || '').match(/_(\d+)$/)?.[1] ?? String(id || '');
+const PENDING_TIMEOUT_MS = 30 * 60_000;
+const RECOVERY_RESULT_MS = 30_000;
+const UNKNOWN_RESULT = '连接中断，服务端结果未知，请在后台终端查看。';
 
 function userText(info) {
   const content = info?.payload?.message?.content;
@@ -46,6 +49,12 @@ class CodeAgentServeClient extends EventEmitter {
     this.sse = null;
     this.closed = false;
     this.busyWithoutPrompt = false;
+    this.pendingTimeoutMs = PENDING_TIMEOUT_MS;
+    this.messageIds = new Set();
+    this.round = 0;
+    this.recoveryResultMs = RECOVERY_RESULT_MS;
+    this.snapshotRequired = false;
+    this.deltaReady = new Set();
     this.onHostExit = error => this.fail(error);
   }
   get proc() { return this.host?.pid ? { pid: this.host.pid } : null; }
@@ -69,6 +78,7 @@ class CodeAgentServeClient extends EventEmitter {
           try { json = JSON.parse(text); } catch { /* 部分接口只回空文本 */ }
           resolve({ status: res.statusCode, text, json });
         });
+        res.on('error', error => resolve({ status: 0, text: error.message, json: null }));
       });
       req.on('timeout', () => req.destroy(new Error('请求超时')));
       req.on('error', error => resolve({ status: 0, text: error.message, json: null }));
@@ -76,14 +86,23 @@ class CodeAgentServeClient extends EventEmitter {
       req.end();
     });
   }
-  _subscribe() {
+  _subscribe(round = this.round) {
+    if (this.closed) return Promise.reject(new Error('CodeAgent serve 连接已关闭'));
+    const previous = this.sse;
+    this.sse = null;
+    previous?.destroy();
     return new Promise((resolve, reject) => {
       const req = http.request({ host: '127.0.0.1', port: this.host.port, path: '/api/v2/event' + this.query,
         headers: { Authorization: `Bearer ${this.host.token}`, Accept: 'text/event-stream' } }, res => {
-        if (res.statusCode !== 200) { res.resume(); reject(new Error(`CodeAgent 事件流连接失败：HTTP ${res.statusCode}`)); return; }
+        req.setTimeout(0);
+        if (res.statusCode !== 200) {
+          if (this.sse === req) this.sse = null;
+          res.resume(); reject(new Error(`CodeAgent 事件流连接失败：HTTP ${res.statusCode}`)); return;
+        }
         let buffer = '';
         res.setEncoding('utf8');
         res.on('data', chunk => {
+          if (this.sse !== req || round !== this.round || this.closed) return;
           buffer += chunk.replace(/\r\n/g, '\n');
           let index;
           while ((index = buffer.indexOf('\n\n')) >= 0) {
@@ -93,16 +112,43 @@ class CodeAgentServeClient extends EventEmitter {
             if (!data) continue;
             let event;
             try { event = JSON.parse(data); } catch { continue; }
-            try { this.handleEvent(event); } catch (error) { this.fail(error); return; }
+            try { this.handleEvent(event, round); } catch (error) { this.fail(error); return; }
           }
         });
-        res.on('close', () => { if (!this.closed) this.fail(new Error('CodeAgent 事件流已断开')); });
+        res.on('error', () => this.transportLost(req, new Error('CodeAgent 事件流已断开')));
+        res.on('close', () => this.transportLost(req, new Error('CodeAgent 事件流已断开')));
         resolve();
       });
-      req.on('error', error => { if (this.sse === req && !this.closed) this.fail(error); reject(error); });
+      req.on('error', error => { this.transportLost(req, error); reject(error); });
+      req.setTimeout(20000, () => req.destroy(new Error('请求超时')));
       this.sse = req;
       req.end();
     });
+  }
+
+  // 事件流只是观察连接；断开不代表服务端停止，也不能拒绝正在等待终态的 prompt。
+  transportLost(req, error) {
+    if (this.closed || this.sse !== req) return;
+    this.sse = null;
+    // 缺口后的 delta 没有位置，只能等已证实的 SSE 全文事件重新建立起点。
+    this.snapshotRequired = true;
+    this.deltaReady.clear();
+    if (this.pending && !this.pending.recoveryTimer) {
+      const pending = this.pending;
+      pending.recoveryTimer = setTimeout(() => {
+        if (this.pending === pending) this.markUnknown();
+      }, this.recoveryResultMs);
+      pending.recoveryTimer.unref?.();
+    }
+    req.destroy();
+    this.emit('transport-disconnect', error);
+  }
+
+  markUnknown(message = UNKNOWN_RESULT) {
+    if (!this.pending || this.pending.unknown) return;
+    this.pending.unknown = true;
+    // 保留 promise、轮次及 Stop，迟到终态仍归原轮；绝不把本地期限当服务端终态。
+    this.emit('turn-unknown', message);
   }
 
   async request(method, params = {}) {
@@ -139,33 +185,52 @@ class CodeAgentServeClient extends EventEmitter {
     return { sessionId, configOptions: [], models: null, modes: null };
   }
   _prompt({ sessionId, prompt }) {
+    if (this.pending) return Promise.reject(new Error('上一轮结果尚未确认，请在后台终端查看。'));
     return new Promise((resolve, reject) => {
-      const pending = { resolve, reject, sawBusy: false, error: null, cancelled: false };
+      const pending = { resolve, reject, round: ++this.round, sawBusy: false, error: null, cancelled: false, knownMessages: new Set(this.messageIds) };
       this.pending = pending;
+      this.snapshotRequired = false;
+      pending.timer = setTimeout(() => {
+        if (this.pending !== pending) return;
+        this.markUnknown('等待结果超时，服务端结果未知，请在后台终端查看。');
+      }, this.pendingTimeoutMs);
+      pending.timer.unref?.();
       // 这一轮是用户在真实终端里发的：serve 已经在跑，只接管结果，绝不再发一遍。
       const adopting = this.adopting;
       const promptText = (prompt || []).filter(part => part.type === 'text').map(part => part.text).join('\n');
       if (adopting && adopting.text === promptText) {
         this.adopting = null;
         pending.sawBusy = true;
+        pending.submitted = true;
+        // 接管时不丢弃正在接收的终端事件；同一订阅重新绑定到本轮。
+        this.round -= 1;
+        pending.round = this.round;
         if (adopting.idle) setImmediate(() => this.finishTurn());
         return;
       }
       const parts = (prompt || []).map((part, index) => (part.type === 'image'
         ? { type: 'file', mime: part.mimeType, filename: `image-${index}`, url: `data:${part.mimeType};base64,${part.data}` }
         : { type: 'text', text: part.text }));
-      this.call('POST', `/api/v2/session/${encodeURIComponent(sessionId)}/prompt_async${this.query}`, { parts,
-        permission_mode: this.permissionMode, ...(this.systemPrompt ? { append_system_prompt: this.systemPrompt } : {}),
-        ...(this.model && this.provider ? { model: { providerID: this.provider, modelID: this.model } } : {}) }, 30000).then(res => {
+      // 新轮 POST 前切换订阅代次，旧连接队列里的回调不得作用于新轮。
+      this._subscribe(pending.round).then(() => {
+        if (this.closed || this.pending !== pending) return null;
+        pending.submitted = true;
+        return this.call('POST', `/api/v2/session/${encodeURIComponent(sessionId)}/prompt_async${this.query}`, { parts,
+          permission_mode: this.permissionMode, ...(this.systemPrompt ? { append_system_prompt: this.systemPrompt } : {}),
+          ...(this.model && this.provider ? { model: { providerID: this.provider, modelID: this.model } } : {}) }, 30000);
+      }).then(res => {
+        if (!res) return;
         if (res.status >= 200 && res.status < 300) return;
         if (this.pending !== pending) return;
         this.pending = null;
+        clearTimeout(pending.timer);
+        clearTimeout(pending.recoveryTimer);
         const error = new Error(res.status ? `CodeAgent 拒绝了这条消息：${res.status} ${res.text.slice(0, 160)}` : `发送失败：${res.text}`);
         if (!res.status) error.uncertain = true;
         reject(error);
         // 不知道 serve 收没收到：走统一的断线恢复，恢复后也不自动重发。
         if (!res.status) this.fail(error);
-      });
+      }).catch(error => { if (this.pending === pending) this.fail(error); });
     });
   }
   async notify(method, params = {}) {
@@ -199,9 +264,16 @@ class CodeAgentServeClient extends EventEmitter {
 
   update(update) { this.emit('notification', { method: 'session/update', params: { sessionId: this.sessionId, update } }); }
 
-  handleEvent(event) {
+  handleEvent(event, round = this.round) {
     const p = event.properties || {};
-    if (!this.sessionId || p.sessionID !== this.sessionId || p.backgroundQuery === true) return;
+    if (round !== this.round || !this.sessionId || p.sessionID !== this.sessionId || p.backgroundQuery === true) return;
+    if (this.pending && !this.pending.submitted) return;
+    const messageId = p.messageID || p.part?.messageID || p.info?.id;
+    if (this.pending && messageId) {
+      if (this.pending.knownMessages.has(messageId)) { this.pending.staleTail = true; return; }
+      this.pending.staleTail = false;
+    }
+    if (!this.pending && !['message.updated', 'session.status', 'session.idle'].includes(event.type)) return;
     switch (event.type) {
       case 'session.status':
         if (p.status?.type === 'busy') {
@@ -214,7 +286,8 @@ class CodeAgentServeClient extends EventEmitter {
         break;
       case 'session.idle': this.onIdle(); break;
       case 'session.error':
-        if (this.pending) {
+        if (this.pending && !this.pending.staleTail) {
+          this.pending.sawBusy = true;
           if (p.error?.name === 'MessageAbortedError' || p.result === 'aborted') this.pending.cancelled = true;
           else this.pending.error = p.error?.message || p.error?.name || 'CodeAgent 执行出错';
         }
@@ -229,6 +302,7 @@ class CodeAgentServeClient extends EventEmitter {
     }
   }
   onMessage(info) {
+    if (info?.id) this.messageIds.add(info.id);
     if (info?.role !== 'user' || !info.id || this.userMessages.has(info.id)) return;
     this.userMessages.add(info.id);
     if (this.pending) return;
@@ -253,7 +327,11 @@ class CodeAgentServeClient extends EventEmitter {
   }
   onDelta({ messageID, partID, field, delta }) {
     if (!delta || (field !== 'text' && field !== 'thinking')) return;
+    if (this.pending) this.pending.sawBusy = true;
+    if (messageID) this.messageIds.add(messageID);
+    // 恢复后的 delta 没有位置；等 SSE 全文更新再续接。
     const key = `${messageID}:${partIndex(partID)}:${field === 'text' ? 'text' : 'thinking'}`;
+    if (this.snapshotRequired && !this.deltaReady.has(key)) return;
     this.parts.set(key, (this.parts.get(key) || '') + delta);
     this.chunk(field === 'text', key, delta);
   }
@@ -262,11 +340,15 @@ class CodeAgentServeClient extends EventEmitter {
   }
   onPart(part) {
     if (!part) return;
+    if (this.pending) this.pending.sawBusy = true;
+    if (part.messageID) this.messageIds.add(part.messageID);
     if (part.type === 'text' || part.type === 'reasoning') {
       const field = part.type === 'text' ? 'text' : 'thinking';
       const key = `${part.messageID}:${partIndex(part.id)}:${field}`;
       const seen = this.parts.get(key) || '';
       const full = String(part.text || '');
+      // 流内全文追上旧前缀后，这个 part 后续的 delta 才有可靠的起点。
+      if (full.startsWith(seen)) this.deltaReady.add(key);
       if (full.length > seen.length && full.startsWith(seen)) {
         this.parts.set(key, full);
         this.chunk(part.type === 'text', key, full.slice(seen.length));
@@ -302,8 +384,10 @@ class CodeAgentServeClient extends EventEmitter {
   }
   finishTurn() {
     const pending = this.pending;
-    if (!pending || !pending.sawBusy) return;
+    if (!pending || !pending.sawBusy || pending.staleTail) return;
     this.pending = null;
+    clearTimeout(pending.timer);
+    clearTimeout(pending.recoveryTimer);
     if (pending.cancelled) pending.resolve({ stopReason: 'cancelled' });
     else if (pending.error) pending.reject(new Error(pending.error));
     else pending.resolve({ stopReason: 'end_turn' });
@@ -316,6 +400,8 @@ class CodeAgentServeClient extends EventEmitter {
     const failure = error instanceof Error ? error : new Error(String(error));
     const pending = this.pending;
     this.pending = null;
+    clearTimeout(pending?.timer);
+    clearTimeout(pending?.recoveryTimer);
     if (pending) { const uncertain = new Error(failure.message); uncertain.uncertain = true; pending.reject(uncertain); }
     this.emit('disconnect', failure);
   }

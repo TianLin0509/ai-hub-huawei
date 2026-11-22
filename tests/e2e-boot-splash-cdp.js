@@ -12,6 +12,8 @@ const { connectFirstPage } = require('./helpers/cdp-client');
 const root = path.resolve(__dirname, '..');
 const output = path.resolve(process.env.HUB_E2E_ARTIFACT_DIR || 'D:/Temp/boot-splash-e2e');
 const packs = path.join(root, 'tools', 'boot-splash-packs');
+// 原作视频不进仓库：从仓库外的目录取（没有就跳过原作那一段）。
+const videoPacks = process.env.BOOT_SPLASH_VIDEO_DIR || path.resolve(root, '..', 'video-packs');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function freePort() {
   const server = net.createServer();
@@ -26,11 +28,11 @@ async function main() {
   const served = [];
   const server = http.createServer((req, res) => {
     const name = path.basename(decodeURIComponent(req.url.split('?')[0]));
-    const file = path.join(packs, name);
+    const file = path.join(name.endsWith('.mp4') ? videoPacks : packs, name);
     served.push(name);
-    if (!/^[a-z0-9.-]+\.json$/.test(name) || !fs.existsSync(file)) { res.writeHead(404); res.end(); return; }
+    if (!/^[a-z0-9.-]+\.(json|mp4)$/.test(name) || !fs.existsSync(file)) { res.writeHead(404); res.end(); return; }
     const body = fs.readFileSync(file);
-    res.writeHead(200, { 'content-type': 'application/json', 'content-length': body.length }); res.end(body);
+    res.writeHead(200, { 'content-type': name.endsWith('.mp4') ? 'video/mp4' : 'application/json', 'content-length': body.length }); res.end(body);
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}/`;
@@ -39,7 +41,7 @@ async function main() {
   const shots = [];
   let hub, cdp;
   const open = async (extraEnv, label) => {
-    hub = await launchIsolatedHub({ dataDir, port: await freePort(), windowMode: 'background', label, extraEnv });
+    hub = await launchIsolatedHub({ dataDir, port: await freePort(), windowMode: 'background', label, extraEnv, extraArgs: ['--mute-audio'] });
     cdp = await connectFirstPage(hub);
     await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
   };
@@ -81,6 +83,14 @@ async function main() {
     assert.deepEqual(await cdp.eval('[...document.querySelectorAll("#boot-splash-dialog .bsp-card [data-preview]")].filter(b => b.classList.contains("bsp-thumb")).map(b => b.dataset.preview)'),
       ['galaxy-constellation', 'claude-18', 'codex-18', 'deepseek-18']);
     assert.equal((await prefs()).frequency, 'daily', '默认每天第一次启动播放');
+    // 「作者推荐」：三家各自 3 秒有声开场（排每家第一）+ 原作/深海
+    await click('#boot-splash-dialog [data-tab="picks"]');
+    await wait('document.querySelectorAll("#boot-splash-dialog .bsp-grid.mine .bsp-card").length === 6');
+    assert.deepEqual(await cdp.eval('[...document.querySelectorAll("#boot-splash-dialog .bsp-grid.mine .bsp-thumb")].map(b => b.dataset.get || b.dataset.preview)'),
+      ['claude-omni', 'claude-orig', 'codex-omni', 'codex-orig', 'deepseek-omni', 'deepseek-dive']);
+    const fitPicks = await cdp.eval('(() => { const c = document.querySelector("#boot-splash-dialog .bsp-content"); return [c.scrollHeight, c.clientHeight]; })()');
+    assert.ok(fitPicks[0] <= fitPicks[1] + 1, '作者推荐 6 张一屏放下：' + fitPicks);
+    await shot('03b-作者推荐');
     const fit = await cdp.eval('(() => { const c = document.querySelector("#boot-splash-dialog .bsp-content"); return [c.scrollHeight, c.clientHeight]; })()');
     // 3. 用内置 Codex 18
     await click('#boot-splash-dialog [data-tab="codex"]');
@@ -118,11 +128,42 @@ async function main() {
     await click('#boot-splash-dialog [data-tab="mine"]');
     await wait('!!document.querySelector("#boot-splash-dialog .bsp-grid.mine [data-preview=\\"deepseek-05\\"]")');
     await shot('07c-已下载多了DeepSeek05');
+    // 6b. 原作视频：Claude 页签第一张是「原作」，一键下载并使用，预览时视频真的在走
+    const hasVideo = fs.existsSync(videoPacks) && fs.readdirSync(videoPacks).some(f => f.startsWith('claude-orig-'));
+    if (hasVideo) {
+      await click('#boot-splash-dialog [data-tab="claude"]');
+      await wait('document.querySelector("#boot-splash-dialog .bsp-grid .bsp-card")?.classList.contains("orig")');
+      await shot('07d-Claude页签原作在前');
+      await click('#boot-splash-dialog .appearance-btn[data-get="claude-orig"]');
+      await wait('document.querySelector("#boot-splash-dialog .appearance-feedback")?.textContent.includes("已下载并设为开场动画")', 60000);
+      assert.equal((await prefs()).selected, 'claude-orig');
+      await click('#boot-splash-dialog .appearance-btn[data-preview="claude-orig"]');
+      await wait('(document.querySelector("#boot-splash-layer video")?.currentTime || 0) > 7.5', 15000);
+      assert.equal(await cdp.eval('document.querySelector("#boot-splash-layer video").muted'), false, '原作带原声');
+      // 片段直接从「I am Claude」前（7.5 秒）起播；字幕照原作出现
+      await wait('(document.querySelector("#boot-splash-layer video")?.currentTime || 0) > 9.3', 15000);
+      assert.equal(await cdp.eval('document.querySelector("#boot-splash-layer .boot-splash-sub").textContent'), 'I am Claude. Ask me anything.');
+      assert.ok(Number(await cdp.eval('getComputedStyle(document.querySelector("#boot-splash-layer .boot-splash-sub")).opacity')) > 0.9, '字幕看得见');
+      assert.ok(Number(await cdp.eval('getComputedStyle(document.querySelector("#boot-splash-layer .boot-splash-brand")).opacity')) > 0.9, 'AI HUB 角标叠在原作画面上');
+      await shot('07e-原作预览中-字幕');
+      // 片段到 11 秒左右淡出结束，面板回来（不播到 22 秒，后面不再接别的）
+      await wait('!document.getElementById("boot-splash-layer")', 4000);
+      await wait('document.getElementById("boot-splash-dialog").open', 1500);
+      await click('#boot-splash-dialog .appearance-btn[data-preview="claude-orig"]');
+      await wait('(document.querySelector("#boot-splash-layer video")?.currentTime || 0) > 7.6', 15000);
+      await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+      await wait('!document.getElementById("boot-splash-layer")', 2000);
+      await wait('document.getElementById("boot-splash-dialog").open', 1500);
+    }
     await gracefulQuit(hub); cdp = null; hub = null;
     // 7. 重启：改成了每次启动 → 播 DeepSeek 05，不再弹首次提示
     await open(env, 'boot-splash-2');
     await wait('!!document.getElementById("boot-splash-layer")', 20000);
-    await pause(1600); await shot('08-重启后播DeepSeek05');
+    if (hasVideo) {
+      await wait('(document.querySelector("#boot-splash-layer video")?.currentTime || 0) > 8', 20000);
+      await shot('08-重启后播原作');
+      await click('#boot-splash-layer');
+    } else { await pause(1600); await shot('08-重启后播DeepSeek05'); }
     await wait('!document.getElementById("boot-splash-layer")', 8000);
     await pause(400);
     assert.ok(!(await cdp.eval('!!document.getElementById("boot-splash-toast")')), '提示过一次就不再弹');

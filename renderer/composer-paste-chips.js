@@ -127,30 +127,38 @@ function nextChipIndex(inputEl, kind = 'paste') {
  * 在光标处插入一个粘贴块。走 execCommand('insertHTML') 以保留原生撤销栈；
  * 若浏览器剥掉了块的属性（没找到对应元素），退回 Range 直接插入。
  */
-function insertPasteChip(inputEl, text, { document, window, meta = null }) {
+function insertPasteChip(inputEl, text, { document, window, meta = null, range = null }) {
   const id = registerPaste(text, meta);
   const index = nextChipIndex(inputEl, chipKind(pasteEntry(id)));
   let inserted = false;
+  const selection = window?.getSelection?.();
+  const focused = document.activeElement === inputEl;
+  const ownsSelection = focused && selection?.rangeCount
+    && inputEl.contains(selection.getRangeAt(0).startContainer)
+    && inputEl.contains(selection.getRangeAt(0).endContainer);
   try {
-    inserted = document.execCommand('insertHTML', false, chipHtml(id, index));
+    if (focused && range) { selection.removeAllRanges(); selection.addRange(range); }
+    if (ownsSelection || (focused && range)) inserted = document.execCommand('insertHTML', false, chipHtml(id, index));
   } catch {
     inserted = false;
   }
   let chip = inserted ? inputEl.querySelector(`.fi-paste-chip[data-paste-id="${id}"]`) : null;
   if (!chip) {
     chip = createChipElement(document, id, index);
-    const selection = window.getSelection();
-    const range = selection && selection.rangeCount && inputEl.contains(selection.getRangeAt(0).startContainer)
+    const targetRange = range || (ownsSelection
       ? selection.getRangeAt(0)
-      : null;
-    if (range) {
-      range.deleteContents();
-      range.insertNode(chip);
+      : null);
+    if (targetRange) {
+      targetRange.deleteContents();
+      targetRange.insertNode(chip);
+      targetRange.setStartAfter(chip);
+      targetRange.collapse(true);
     } else {
       inputEl.appendChild(chip);
     }
   }
-  placeCaretAfter(chip, window);
+  if (range && inserted && chip) { range.setStartAfter(chip); range.collapse(true); }
+  if (focused) placeCaretAfter(chip, window);
   return id;
 }
 

@@ -94,7 +94,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--base', type=Path, default=BUNDLE / 'msz-code-2.1.3.zip')
     parser.add_argument('--key', type=Path, help='Local path on the authorized signing machine; never copy the key')
-    parser.add_argument('--version', default='2.1.4')
+    parser.add_argument('--version', default='2.1.6')
     parser.add_argument('--date', default=date.today().isoformat())
     parser.add_argument('--out', type=Path, default=BUNDLE)
     parser.add_argument('--note', help='One-line release note stored in the signed manifest')

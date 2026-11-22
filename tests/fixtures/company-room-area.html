@@ -1,0 +1,89 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>room area fixture</title>
+<style>
+body { margin:0; font:14px sans-serif; }
+.ev_Dialog_PanelContent { position:absolute; left:150px; top:100px; width:1100px; height:480px; border:1px solid #ccc; }
+.tabs span { display:inline-block; padding:12px; }
+.row { position:absolute; top:60px; left:24px; }
+.ev_selectCom { display:inline-block; width:180px; height:28px; margin-right:8px; border:1px solid #999; position:relative; vertical-align:top; }
+.ev_selectCom .val { display:block; line-height:28px; padding-left:6px; }
+.drop { position:absolute; background:#fff; border:1px solid #666; max-height:160px; overflow:auto; z-index:9; width:180px; }
+.drop div { height:30px; line-height:30px; padding-left:6px; }
+.drop div:hover { background:#eef; }
+#q { position:absolute; right:20px; top:60px; }
+</style></head>
+<body>
+<!-- 按 11-22 公司真实页面只读探针还原的结构：弹窗、三个页签、「位置」+ 三级级联下拉、「查询」。
+     ?inside=1 时选项列表挂在下拉框里面（另一种常见写法），默认挂在 body 上。 -->
+<div class="ev_Dialog_PanelContent">
+  <div class="tabs"><span>可用会议室</span><span class="active">全部会议室</span><span>我的收藏</span></div>
+  <div class="row" id="row"></div>
+  <button id="q" class="ev_button primary">查询</button>
+</div>
+<script>
+const Q = new URLSearchParams(location.search);
+const TREE = {
+  '不限国家/地区': {},
+  'China Region(研究所)': {
+    '上海(Shanghai)': ['上研金桥基地-A', '练秋湖A1栋', '练秋湖F12栋'].concat(Array.from({length: 40}, (_, i) => '练秋湖Z' + i + '栋')),
+    '北京(Beijing)': ['北研所A座', '北研所B座', '北研所C座'],
+    '成都(Chengdu)': ['成研所1号楼'],
+  },
+  'Europe Region': { '慕尼黑(Munich)': ['MRC-1'] },
+};
+const state = Q.get('start') === 'bj' ? { mode: '位置', region: 'China Region(研究所)', city: '北京(Beijing)', building: '北研所A座' }
+  : { mode: '位置', region: 'China Region(研究所)', city: '上海(Shanghai)', building: '练秋湖F12栋' };
+window.queried = [];
+const loading = { building: false };
+function options(level) {
+  if (level === 0) return ['位置', '按关键字'];
+  if (level === 1) return Object.keys(TREE);
+  if (level === 2) return ['不限区域'].concat(Object.keys(TREE[state.region] || {}));
+  if (loading.building) return ['不限楼宇'];
+  return ['不限楼宇'].concat((TREE[state.region] || {})[state.city] || []);
+}
+const keys = ['mode', 'region', 'city', 'building'];
+function closeAll() { document.querySelectorAll('.drop').forEach(d => d.remove()); }
+function render() {
+  const row = document.getElementById('row');
+  row.innerHTML = '';
+  keys.forEach((k, level) => {
+    const s = document.createElement('div');
+    s.className = 'ev_selectCom';
+    s.innerHTML = '<span class="val"></span>';
+    s.querySelector('.val').textContent = state[k];
+    s.addEventListener('click', e => {
+      if (e.target.closest('.drop')) return;
+      closeAll();
+      const d = document.createElement('div');
+      d.className = 'drop';
+      for (const o of options(level)) {
+        const it = document.createElement('div'); it.textContent = o;
+        it.addEventListener('click', ev => { ev.stopPropagation(); pick(level, o); });
+        d.appendChild(it);
+      }
+      const r = s.getBoundingClientRect();
+      if (Q.get('inside') === '1') { d.style.left = '0'; d.style.top = '30px'; s.appendChild(d); }
+      else { d.style.left = r.x + 'px'; d.style.top = (r.bottom + 2) + 'px'; document.body.appendChild(d); }
+      // 真实页面的楼宇列表很长、会把当前项滚到中间：其余选项可能在可视区外。
+      if (level === 3) d.scrollTop = d.scrollHeight;
+    });
+    row.appendChild(s);
+  });
+}
+function pick(level, o) {
+  closeAll();
+  state[keys[level]] = o;
+  if (level === 1) { state.city = '不限区域'; state.building = '不限楼宇'; }
+  if (level === 2) {
+    state.building = '不限楼宇';
+    loading.building = true;
+    setTimeout(() => { loading.building = false; }, Number(Q.get('delay') || 400));
+  }
+  render();
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeAll(); });
+document.getElementById('q').addEventListener('click', () => window.queried.push([state.region, state.city, state.building]));
+render();
+</script>
+</body></html>

@@ -73,6 +73,7 @@ function createPptHandlers(service) {
     'ppt-make-start': request => service.ppt.make.start(request),
     'ppt-make-auto': request => service.ppt.make.startAuto(request),
     'ppt-make-status': request => ({ ok: true, job: service.ppt.make.status(request?.jobId) }),
+    'ppt-make-stop': request => service.ppt.make.stop(request?.jobId),
     'ppt-make-rerender': request => service.ppt.make.rerender(request?.jobId, request?.spec),
     'ppt-make-preview': request => service.ppt.make.preview(request?.jobId),
     'ppt-make-open': request => service.ppt.make.open(request?.jobId),

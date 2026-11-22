@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "version": "1.0.1",
+ "version": "2.0.0",
  "packs": [
   {
    "id": "claude-01",
@@ -671,6 +671,72 @@
    "name": "群星 · 倒影",
    "who": "hub",
    "anim": "galaxy",
+   "weather": "stars"
+  },
+  {
+   "id": "deepseek-dive",
+   "version": "2.0.0",
+   "file": "deepseek-dive-2.0.0.mp4",
+   "bytes": 8980377,
+   "sha256": "8f261195cc09caf9bf3ff5f69479d701977091080bd6cd0f370b93b91e775691",
+   "name": "DeepSeek · 深海魔法阵",
+   "who": "deepseek",
+   "anim": "video",
+   "weather": "stars"
+  },
+  {
+   "id": "claude-orig",
+   "version": "2.0.0",
+   "file": "claude-orig-2.0.0.mp4",
+   "bytes": 44075850,
+   "sha256": "2c5a090fb589ed517cc95f749e582f9f6e5eda7b5af8ddc736b48625e74a05fe",
+   "name": "Claude · 原作·月下持剑",
+   "who": "claude",
+   "anim": "video",
+   "weather": "stars"
+  },
+  {
+   "id": "codex-orig",
+   "version": "2.0.0",
+   "file": "codex-orig-2.0.0.mp4",
+   "bytes": 45003445,
+   "sha256": "c58a9b8a0bfdd253d0b02b1de10a839965c2211980c0f7e95cc03c06ab910eec",
+   "name": "Codex · 原作·星空龙娘",
+   "who": "codex",
+   "anim": "video",
+   "weather": "stars"
+  },
+  {
+   "id": "deepseek-omni",
+   "version": "2.0.0",
+   "file": "deepseek-omni-2.0.0.mp4",
+   "bytes": 3558979,
+   "sha256": "302f8e4a9b154180358e5d14d60edfe6b701568f70e647f64ad18b38ee215551",
+   "name": "DeepSeek · 掌心法阵·有声",
+   "who": "deepseek",
+   "anim": "video",
+   "weather": "stars"
+  },
+  {
+   "id": "codex-omni",
+   "version": "2.0.0",
+   "file": "codex-omni-2.0.0.mp4",
+   "bytes": 3510964,
+   "sha256": "c8bf9dcdd2bd0ee520657ddb7dcf53dbd7fa2a1683d6430ce1a285330e3ea5ab",
+   "name": "Codex · 掌心法阵·有声",
+   "who": "codex",
+   "anim": "video",
+   "weather": "stars"
+  },
+  {
+   "id": "claude-omni",
+   "version": "2.0.0",
+   "file": "claude-omni-2.0.0.mp4",
+   "bytes": 2907126,
+   "sha256": "3812b5f63ac555aa5898b1fe34ff8c12a93ab5254c850a0a5146062cb95ef3ec",
+   "name": "Claude · 掌心法阵·有声",
+   "who": "claude",
+   "anim": "video",
    "weather": "stars"
   }
  ]

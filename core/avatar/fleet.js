@@ -15,6 +15,7 @@ const welink = require('../company-assistant/welink');
 const D = require('../company-assistant/data');
 const { WELINK_RATE_LIMITED } = require('../company-assistant/welink-gate');
 
+const WIDE_MS = 120000, WIDE_PER_TICK = 4, WIDE_LIST = 50, WIDE_PENDING_MAX = WIDE_LIST, WIDE_FAIL_MAX = 3;
 const TICK_MS = 30000, BATCH = 5, LOOKBACK_MS = 2 * 3600000, HOT_PER_TICK = 6, MAX_PARALLEL = 2, DAILY_ITEMS = 150, KEEP_LOG = 200, KEEP_LIVE = 200, HISTORY_DAYS = 90, MEMORY_TTL_MS = 86400000;
 const OPEN = new Set(['new', 'drafting', 'ready', 'remind']), INBOX = new Set(['ready', 'remind']);
 const TEXT_FILE = /\.(?:md|txt|csv|json|log)$/i;
@@ -86,6 +87,7 @@ class FleetService {
   conversationsOf(snap, fleet) {
     const map = new Map((snap?.conversations || []).map(c => [c.id, c]));
     for (const av of fleet.avatars) for (const t of av.targets || []) if (!map.has(t.id)) map.set(t.id, { id: t.id, name: t.name, group: t.type === 'group' });
+    for (const c of this.wideConvs?.values() || []) if (!map.has(c.id)) map.set(c.id, c);
     return [...map.values()];
   }
   merge(id, list) {
@@ -96,9 +98,10 @@ class FleetService {
     return rows;
   }
   messages(id) { return [...(this.live.get(id)?.values() || [])]; }
+  hotIds(fleet) { return new Set(fleet.avatars.filter(v => v.enabled && v.kind === 'pick').flatMap(v => v.targets.filter(t => t.action !== 'watch').map(t => t.id))); }
   // 指定的群和人轮流增量读，每轮最多 6 个；被限流就停在这一轮。
   async readHot(owner, fleet, convs) {
-    const a = this.assistant(), hot = [...new Set(fleet.avatars.filter(v => v.enabled && v.kind === 'pick').flatMap(v => v.targets.filter(t => t.action !== 'watch').map(t => t.id)))];
+    const hot = [...this.hotIds(fleet)];
     if (!hot.length) { this.readError = ''; return; }
     // 2026-11-20 运行时风暴排查：原来只有限流才停，登录过期、CLI 坏了时每 30 秒照样连起 6 次 welink-cli 全失败。
     // 现在：单个群读不了只跳过它（不挡后面的群）；限流或命令本身出错就停在这一轮；
@@ -110,20 +113,83 @@ class FleetService {
     for (let i = 0; i < count; i += 1) {
       done = i + 1;
       const id = hot[(this.hotAt + i) % hot.length], conv = convs.find(c => c.id === id); if (!conv) continue;
-      const newest = this.messages(id).at(-1)?.key;
-      const args = ['im', 'query-history-message', conv.group ? '--group-id' : '--user-account', id, '--query-count', '50', ...(newest ? ['--message-id', newest, '--query-direction', '1'] : [])];
       tried += 1;
-      try {
-        const r = await a.welink(args, { priority: 'background', timeoutMs: 20000 }), raw = welink.parseJson(r.stdout);
-        if (r.code !== 0 || !raw) { this.readError = welink.friendlyError(r.stderr || r.stdout || '读取消息失败'); continue; }
-        this.merge(id, D.messages(raw, conv, owner, { myName: this.myName(), names }));
-        ok += 1;
-      } catch (e) { this.readError = e.code === WELINK_RATE_LIMITED ? 'WeLink 限流，稍后自动继续' : e.message; break; }
+      const got = await this.readOne(owner, conv, names);
+      if (got === 'ok') ok += 1; else if (got === 'stop') break;
     }
     if (tried && !ok) { this.readFails = (this.readFails || 0) + 1; this.readBackoffUntil = this.now() + Math.min(600000, 60000 * 2 ** (this.readFails - 1)); }
     else if (ok) this.readFails = 0;
     // 从停下的下一个接着读，出错的那个不会每轮都排在最前面。
     this.hotAt = (this.hotAt + done) % hot.length;
+  }
+
+  // 「全部会话 / 全部群 / 全部私聊」范围的分身原来只靠助理快照（工作日 10 分钟一轮、周末 2 小时、夜里不取），
+  // 群里 @我 之后要等很久才起草，周末几乎不动（2026-11-22 反馈「起草慢」「设了只 @我 也不起草」）。
+  // 现在每 2 分钟看一次最近会话列表（1 次请求），排上来的会话进「待补」队列，每轮最多读 4 个；第一轮只记顺序不读。
+  // 待补队列覆盖完整列表页，旧的未读项优先：超出本轮名额、限流中断的下轮接着读；失败 3 次冷却后重新入队（R-08）。
+  // 置顶会话来新消息时排序不变，看不出来：每轮在名额里留 1 个给置顶区轮转，置顶 N 个时每个最长 N×2 分钟被看一次（R-09）。
+  wideKinds(fleet) {
+    const kinds = new Set();
+    for (const v of fleet.avatars) if (v.enabled && v.kind !== 'pick' && v.action !== 'watch') kinds.add(v.kind);
+    return kinds;
+  }
+  async readWide(owner, fleet, hot) {
+    const kinds = this.wideKinds(fleet), a = this.assistant();
+    if (!kinds.size || !a?.welink) return;
+    const now = this.now();
+    if (now - (this.wideAt || 0) < WIDE_MS || now < (this.readBackoffUntil || 0) || a.refreshing) return;
+    this.wideAt = now;
+    let list;
+    try {
+      const r = await a.welink(['im', 'query-recent-conversation', '--count', String(WIDE_LIST)], { priority: 'background', timeoutMs: 20000 });
+      const raw = r.code === 0 ? welink.parseJson(r.stdout) : null;
+      list = raw && D.conversationRecords(raw) !== null ? D.conversations(raw) : null;
+      if (!list) { this.readError = welink.friendlyError(r.stderr || r.stdout || '读取最近会话失败'); return; }
+    } catch (e) { this.readError = e.code === WELINK_RATE_LIMITED ? 'WeLink 限流，稍后自动继续' : e.message; return; }
+    this.wideConvs = new Map(list.map(c => [c.id, c]));
+    const order = list.map(c => c.id), prev = this.wideOrder;
+    const { conversationOrderChanges } = require('../company-assistant/service');
+    const changes = prev?.length ? conversationOrderChanges(prev, order, this.widePinned || 0) : null;
+    this.wideOrder = order; if (changes) this.widePinned = changes.pinnedHead;
+    if (!changes) return;
+    const inScope = c => !!c && !hot.has(c.id) && (kinds.has('all') || (c.group ? kinds.has('groups') : kinds.has('dm')));
+    const dead = this.wideDead || (this.wideDead = new Map()); // 连续失败 3 次的会话：30 分钟内不再试
+    const pending = (this.widePending || []).filter(x => inScope(this.wideConvs.get(x.id)));
+    for (const [id, until] of dead) if (until <= now) {
+      dead.delete(id); this.wideFails?.delete(id);
+      if (inScope(this.wideConvs.get(id)) && !pending.some(x => x.id === id)) pending.push({ id, fails: 0 });
+    }
+    for (const id of changes.changed) if (inScope(this.wideConvs.get(id)) && !dead.has(id) && !pending.some(x => x.id === id)) pending.push({ id, fails: 0 });
+    this.widePending = pending.slice(0, WIDE_PENDING_MAX);
+    // 置顶区：本轮名额里留 1 个，按上次读到的位置往后轮
+    const pins = order.slice(0, this.widePinned || 0).filter(id => inScope(this.wideConvs.get(id)) && !dead.has(id));
+    const pinAt = pins.length ? ((this.widePinAt ?? -1) + 1) % pins.length : -1, pin = pinAt >= 0 ? pins[pinAt] : null;
+    const batch = this.widePending.slice(0, pin && !this.widePending.slice(0, WIDE_PER_TICK).some(x => x.id === pin) ? WIDE_PER_TICK - 1 : WIDE_PER_TICK).map(x => x.id);
+    if (pin && !batch.includes(pin)) batch.push(pin);
+    const names = D.namesOf(list);
+    for (const id of batch) {
+      const got = await this.readOne(owner, this.wideConvs.get(id), names, 20);
+      if (got === 'stop') break; // 限流：全部留在队列里；没读到的置顶下轮还从它开始
+      if (id === pin) this.widePinAt = pinAt;
+      const i = this.widePending.findIndex(x => x.id === id);
+      if (got === 'ok') { if (i >= 0) this.widePending.splice(i, 1); this.wideFails?.delete(id); continue; }
+      // 失败的排到队尾，不挡后面；累计 3 次放弃，30 分钟后再给机会
+      const fails = (this.wideFails?.get(id) || 0) + 1;
+      (this.wideFails || (this.wideFails = new Map())).set(id, fails);
+      if (i >= 0) { const x = this.widePending.splice(i, 1)[0]; if (fails < WIDE_FAIL_MAX) this.widePending.push(x); }
+      if (fails >= WIDE_FAIL_MAX) { dead.set(id, now + 30 * 60000); this.wideFails.delete(id); }
+    }
+  }
+  // 增量读一个会话：'ok' 读成、'fail' 这个会话没读成、'stop' 限流或命令出错，本轮不再读。
+  async readOne(owner, conv, names, count = 50) {
+    const a = this.assistant(), newest = this.messages(conv.id).at(-1)?.key;
+    const args = ['im', 'query-history-message', conv.group ? '--group-id' : '--user-account', conv.id, '--query-count', String(newest ? 50 : count), ...(newest ? ['--message-id', newest, '--query-direction', '1'] : [])];
+    try {
+      const r = await a.welink(args, { priority: 'background', timeoutMs: 20000 }), raw = welink.parseJson(r.stdout);
+      if (r.code !== 0 || !raw) { this.readError = welink.friendlyError(r.stderr || r.stdout || '读取消息失败'); return 'fail'; }
+      this.merge(conv.id, D.messages(raw, conv, owner, { myName: this.myName(), names }));
+      return 'ok';
+    } catch (e) { this.readError = e.code === WELINK_RATE_LIMITED ? 'WeLink 限流，稍后自动继续' : e.message; return 'stop'; }
   }
 
   // ---- 每轮 ----
@@ -137,6 +203,7 @@ class FleetService {
       const snap = this.snapshot();
       for (const [id, list] of Object.entries(snap?.messages || {})) this.merge(id, list);
       await this.readHot(owner, fleet, this.conversationsOf(snap, fleet));
+      if (this.wideKinds(fleet).size) await this.readWide(owner, fleet, this.hotIds(fleet));
       fleet = this.fleet(owner); if (fleet.paused) return; // 读消息期间可能暂停或改了配置
       const roster = this.legacy.roster(owner), convs = this.conversationsOf(snap, fleet);
       for (const av of fleet.avatars.filter(v => v.enabled)) { this.recover(owner, av.id); this.absorb(owner, fleet, av, convs, roster); }

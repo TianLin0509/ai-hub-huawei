@@ -11,7 +11,9 @@ const TEMPLATES = Object.freeze({
   watch: { name: '帮我盯消息', kind: 'all', action: 'remind', atOnly: false, prefixed: false, memory: false, guide: '你在替本人盯消息。只挑出本人真正需要处理的：有截止时间、点名要本人做事、没人回答的直接提问、和本人负责的事相关的变化。普通通知和闲聊一律 skip。' },
   draft: { name: '帮我起草回复', kind: 'all', action: 'draft', atOnly: true, prefixed: false, memory: false, guide: '你在替本人起草回复。按本人的口吻写一条可以直接发的话，长度向本人平时的说法看齐。对方交办事情或问能不能做时，只确认理解或追问细节，接不接、什么时候给由本人定。' },
   qa: { name: '群答疑助手', kind: 'pick', action: 'draft', atOnly: false, prefixed: true, memory: true, guide: '你在群里帮本人答疑。权威答疑人说过的话就是标准答案，照原意回答；资料里没有依据的不要猜，改成 remind 交给本人。已有人答对、闲聊、道谢都 skip。回复开头写「提问人 关于『主题』：」，不 @ 人。' },
-  blank: { name: '我的分身', kind: 'pick', action: 'remind', atOnly: false, prefixed: true, memory: false, guide: '按本人在人设和补充要求里写的方式工作。' },
+  // 2026-11-22：原先默认「提醒」，同事建了「我的分身」、勾了群和「只响应 @我」却一直不起草（动作藏在目标表里没注意到）。
+  // Beta 没有自动发，起草只多给一份草稿，所以默认改成起草；已建的分身沿用原设置，由下面 applyResult 的说明指路。
+  blank: { name: '我的分身', kind: 'pick', action: 'draft', atOnly: false, prefixed: true, memory: false, guide: '按本人在人设和补充要求里写的方式工作。' },
 });
 
 const clean = R.clean;
@@ -163,6 +165,8 @@ function applyResult(item, r, av) {
   const remind = why => ({ ...out, state: 'remind', why: why || out.why || '需要你看一下' });
   if (!r) return remind('这条没有得到结果');
   if (r.action === 'skip') return item.group ? { ...out, state: 'skipped', why: out.why || '不需要处理' } : remind(out.why || '分身判断不用回，你看一眼');
+  // 动作设成「提醒」的范围不写草稿：在「为什么交给你」里说清怎么改，免得以为分身坏了。
+  if (item.action === 'remind') return remind(`${out.why || '需要你看一下'}（这里的动作设的是「提醒」，不写草稿；要草稿到「生效范围」把动作改成「起草」）`);
   if (r.action === 'remind' || item.level < 3) return remind();
   if (!reply) return remind(out.why || '分身没写出可用的草稿');
   if (av.hideModel && SELF_ID.test(reply)) return remind('草稿提到了底层模型，已拦下');

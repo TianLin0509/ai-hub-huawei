@@ -40,6 +40,42 @@ test('CodeAgent account catalog and fallback scanner preserve shared ID characte
   assert.deepEqual([...scanned], [id]);
 });
 
+for (const encoding of ['plain', 'base64', 'segments']) test(`codeagent-models decodes synthetic End-terminated options (${encoding})`, t => {
+  const dir = temp(t), configDir = path.join(dir, '.cac');
+  fs.mkdirSync(configDir);
+  const ids = ['GLM-8.1-Test', 'deepseek-8.2-test'];
+  const text = JSON.stringify(ids.map(value => ({ value, contextWindow: 128000 }))) + (encoding === 'plain' ? '\n End \n' : 'End');
+  const encode = value => Buffer.from(value, 'utf8').toString('base64');
+  const value = encoding === 'plain' ? text : encoding === 'base64' ? encode(text) : encode('SyntheticCache') + encode(text);
+  json(configDir, '.cac.json', { enterpriseModelOptionsCache: ['MiniMax-8.0-Test'] });
+  json(dir, '.cac.json', { enterpriseModelOptionsCacheV3_5: value });
+  const read = models.configuredModels(configDir);
+  assert.equal(read.authoritative, true);
+  assert.deepEqual(read.models, ids);
+  assert.equal(models.contextWindowFor(configDir, [ids[1]]).window, 128000);
+});
+
+for (const layout of ['same-file', 'home-file']) for (const malformed of ['truncated', 'unknown-tail', 'empty']) test(`codeagent-models malformed latest cache cannot make legacy options authoritative (${layout}, ${malformed})`, t => {
+  const dir = temp(t), configDir = path.join(dir, '.cac');
+  fs.mkdirSync(configDir);
+  const old = { enterpriseModelOptionsCache: [{ value: 'GLM-8.0-Test', contextWindow: 96000 }] };
+  const text = malformed === 'truncated' ? '[{"value":"deepseek-8.2-test"}'
+    : malformed === 'unknown-tail' ? '[{"value":"deepseek-8.2-test"}]Unknown' : '[]';
+  const broken = { enterpriseModelOptionsCacheV3_5: Buffer.from(text, 'utf8').toString('base64') };
+  json(configDir, '.cac.json', layout === 'same-file' ? { ...old, ...broken } : old);
+  if (layout === 'home-file') json(dir, '.cac.json', broken);
+  const read = models.configuredModels(configDir);
+  assert.equal(read.authoritative, false);
+  assert.ok(read.models.includes('GLM-8.0-Test'), '旧缓存仍可用于非权威候选');
+  assert.equal(models.contextWindowFor(configDir, ['GLM-8.0-Test']).window, null);
+});
+
+test('codeagent-models legacy-only valid options remain authoritative', t => {
+  const dir = temp(t);
+  json(dir, '.cac.json', { enterpriseModelOptionsCache: ['GLM-8.0-Test'] });
+  assert.deepEqual(models.configuredModels(dir), { models: ['GLM-8.0-Test'], defaultModel: '', authoritative: true });
+});
+
 test('personal default model repair accepts shared IDs while retaining permission checks and backup behavior', t => {
   const dir = temp(t);
   json(dir, 'settings.json', { model: 'GLM-5.2', keep: { enabled: true } });

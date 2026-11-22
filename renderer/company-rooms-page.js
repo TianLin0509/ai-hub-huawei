@@ -31,7 +31,9 @@ const SUBTITLES = { overview: '秘书终结者，每天自动抢订', plan: '定
 const DEFAULTS = { 主题: '日常会议', 开始时间: '14:00', 时长小时: 2, 时长分钟: 0, 优先会议室: [], 抢订日: [1, 2, 3, 4, 5, 6, 7],
   抢订设置: { 开放时间: '12:00:00', 提前填表秒数: 60, 最大重试次数: 5, 重试间隔毫秒: 200, 抢不到换下一间: true, 登录预检提前分钟: 15, 校准服务器时间: true },
   会后动作: { 模式: '不动作', 小鲁班ID: '', 提醒提前分钟: 5 }, 系统: { 守护时阻止睡眠: true },
-  高级: { 网址: '', 浏览器: '自动', 自动标定网格: true, 网格起点X: 472, 格子宽度: 30, 网格起始时间: '08:30', 'welink-cli路径': '' } };
+  高级: { 网址: '', 浏览器: '自动', 自动标定网格: true, 网格起点X: 472, 格子宽度: 30, 网格起始时间: '08:30', 'welink-cli路径': '' },
+  // 会议室所在地域（2026-11-22）：对应预订弹窗的三级下拉；都空＝沿用网页上次的选择，与原来一致。
+  地域: { '国家/地区': '', 城市: '', 楼宇: '' } };
 const WEEK = ['日', '一', '二', '三', '四', '五', '六'];
 // Stroke icons from the CDCCBCC design set (24×24, currentColor).
 const ICONS = {
@@ -188,9 +190,15 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
     const rooms = draft.优先会议室;
     return `<p class="cr-plan-sum" data-cr-slot="plan-summary" role="status"></p><section>${head('会议')}<div class="cr-form">${field('主题', '会议主题', 'text', 'maxlength="120"')}${field('开始时间', '开始时间', 'time', 'step="1800"')}${field('时长小时', '时长 · 小时', 'number', 'min="0" max="12" step="1"')}${select('时长分钟', '时长 · 分钟', [0, 30])}</div><p class="cr-hint">时长为 30 分钟至 12 小时，结束时间不能跨天。</p>
       <div class="cr-field cr-days-field"><span>会议在周几<em>　按开会那天算，不是抢的那天</em></span><div class="cr-days">${['一', '二', '三', '四', '五', '六', '日'].map((d, i) => `<label class="cr-dy" title="周${d}"><input type="checkbox" data-cr-day="${i + 1}"${draft.抢订日.includes(i + 1) ? ' checked' : ''}><span>${d}</span></label>`).join('')}</div></div><p class="cr-hint">${escape(`每天 ${hm(sched().openTime)} 放号，能订 ${sched().advanceDays} 天后那天的会议室；所以想要周一的会议室，要在 ${sched().advanceDays} 天前的放号时刻去抢，Hub 会按时替你抢。`)}</p></section>
-      <section>${head('优先会议室', `<span class="cr-n cr-num">${rooms.length} / 30</span><span class="cr-sp"></span>${button('read-rooms', icon('download', 14) + '从页面读取', 'ghost', 'cr-btn-sm')}`)}<p class="cr-hint cr-hint-top">按从上到下的顺序尝试，可拖动排序或点上下移，直接编辑名称。</p>
+      <section>${head('优先会议室', `<span class="cr-n cr-num">${rooms.length} / 30</span><span class="cr-sp"></span>${button('read-rooms', icon('download', 14) + '从页面读取', 'ghost', 'cr-btn-sm')}`)}<p class="cr-hint cr-hint-top">按从上到下的顺序尝试，可拖动排序或点上下移，直接编辑名称。所在地域留空＝不切换；要抢别的城市就填上（建议填到楼宇），再点「从页面读取」核对；清空后自动切回原来的地域。</p>${areaRow()}
       <ol class="cr-rooms">${rooms.map((name, i) => `<li class="cr-rc${i === 0 ? ' first' : ''}" draggable="true" data-cr-room-row="${i}"><span class="cr-grip" aria-hidden="true">${icon('grip', 16)}</span><span class="cr-rc-n cr-num">${i + 1}</span><input class="cr-rc-name" aria-label="第 ${i + 1} 优先会议室" data-cr-room-name="${i}" value="${escape(name)}">${i === 0 ? '<span class="cr-tag blue">首选</span>' : ''}<span class="cr-ops"><button type="button" class="cr-icon-btn" data-cr-op="up" data-index="${i}" aria-label="上移 ${escape(name)}" title="上移"${!i ? ' disabled' : ''}>${icon('arrowU', 15)}</button><button type="button" class="cr-icon-btn" data-cr-op="down" data-index="${i}" aria-label="下移 ${escape(name)}" title="下移"${i === rooms.length - 1 ? ' disabled' : ''}>${icon('arrowD', 15)}</button><button type="button" class="cr-icon-btn" data-cr-op="delete" data-index="${i}" aria-label="删除 ${escape(name)}" title="删除">${icon('x', 15)}</button></span></li>`).join('')}</ol>${rooms.length ? '' : '<p class="cr-empty">还没有会议室。在下面填写全名添加，或点「从页面读取」。</p>'}
       <div class="cr-add"><input class="cr-input" data-cr-new-room aria-label="会议室全名" placeholder="会议室全名，需与网页一致">${button('add', icon('plus', 14) + '添加', 'sec', 'cr-btn-sm')}</div><div class="cr-picker-slot" data-cr-slot="room-picker"></div>${check('抢订设置.抢不到换下一间', '首选被抢走时，自动换下一间（约 20–30 秒）')}</section>`;
+  }
+  // 「所在地域」一行：抢别的城市或楼宇时填，「从页面读取」和抢订都先在网页弹窗里切到这里。
+  function areaRow() {
+    const ok = !state.connected || state.capabilities?.includes('area');
+    const box = (k, ph) => `<input class="cr-input" data-cr-field="地域.${k}" aria-label="会议室所在${k}" placeholder="${ph}" maxlength="60" value="${escape(value('地域.' + k))}">`;
+    return `<div class="cr-area" title="抢别的城市或楼宇时填，写法与网页下拉一致，中文名即可；改完先点「从页面读取」核对"><span class="cr-area-l">所在地域</span>${box('国家/地区', '国家/地区')}${box('城市', '城市，如 北京')}${box('楼宇', '楼宇，如 练秋湖F12栋')}</div>${ok ? '' : '<p class="cr-hint cr-area-hint cr-error" data-cr-slot="area-hint">当前会议室组件还不支持切换地域，Hub 会在空闲时自动换上新版组件，换好后这里的设置才生效。</p>'}`;
   }
   function planSide() {
     return `<div class="cr-side-h">接下来 5 次</div><div class="cr-side-b"><div class="cr-cal" data-cr-slot="calendar"></div><dl class="cr-kv cr-kv-top" data-cr-slot="plan-kv"></dl></div>`;
@@ -384,7 +392,7 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
       }
       if (state.running && !next.running && next.connected && !busy) slot('message').textContent = '任务已结束，可在历史记录和运行日志中查看结果。';
       next.clockOffset = next.serverNow ? new Date(next.serverNow).getTime() - Date.now() : 0; state = next;
-      if (next.rules && !dirty && !busy) { draft = { ...copy(DEFAULTS), ...next.rules }; for (const key of ['抢订设置', '会后动作', '系统', '高级']) draft[key] = { ...DEFAULTS[key], ...next.preferences?.[key] }; if (next.schedule) { draft.抢订设置.开放时间 = next.schedule.openTime; schedDraft = { advanceDays: next.schedule.advanceDays }; schedChanged = false; } const first = !loaded; loaded = true; if (first || ['plan', 'post', 'settings'].includes(tab) && !host.contains(document.activeElement)) render(); }
+      if (next.rules && !dirty && !busy) { draft = { ...copy(DEFAULTS), ...next.rules }; for (const key of ['抢订设置', '会后动作', '系统', '高级', '地域']) draft[key] = { ...DEFAULTS[key], ...next.preferences?.[key] }; if (next.schedule) { draft.抢订设置.开放时间 = next.schedule.openTime; schedDraft = { advanceDays: next.schedule.advanceDays }; schedChanged = false; } const first = !loaded; loaded = true; if (first || ['plan', 'post', 'settings'].includes(tab) && !host.contains(document.activeElement)) render(); }
       updateLive();
     } catch (error) { if (epoch === generation && !host.hidden) { slot('message').textContent = '状态刷新失败：' + error.message + '；可点击刷新重试。'; } }
     finally { polling = false; }
@@ -406,6 +414,10 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
       if (status.cliPath) { draft.高级['welink-cli路径'] = status.cliPath; changed.add('高级'); }
     }
     const rules = validate(); const patch = Object.fromEntries([...changed].map(k => [k, rules[k]]));
+    if (patch.地域 && state.connected && !state.capabilities?.includes('area')) {
+      if (Object.values(patch.地域).some(v => String(v).trim())) throw Error('当前会议室组件还不支持切换地域，等 Hub 自动换上新版组件后再保存地域；其他设置可先把地域清空再保存');
+      delete patch.地域; // 旧组件不认这一项：全空时不发，免得其他设置一起保存失败
+    }
     if (Object.keys(patch).length) await call('room-command', { op: 'configure', rules: patch });
     if (schedChanged) { await call('room-schedule', { advanceDays: schedDraft.advanceDays, openTime: rules.抢订设置.开放时间 }); schedChanged = false; }
     draft = rules; dirty = false; changed.clear();

@@ -1,5 +1,6 @@
 'use strict';
-// 「一个 Tab 一屏」回归（2026-11-21）：全新用户（空 HOME、空数据目录、PATH 里没有任何 CLI）、隔离 Hub、无头 CDP、1440×900。
+// 「一个 Tab 一屏」回归（2026-11-21）：全新用户（空 HOME、空数据目录、PATH 里没有任何 CLI）、隔离 Hub、无头 CDP、1440×900；
+// 设置另在 1024×640（公司黄区笔记本逻辑分辨率）下每个页签再测一遍（2026-11-22）。
 //   1. 主页：#empty-state 不出纵向滚动，「保存并继续」在首屏内；
 //   2. 启动中心新建会话：面板不滚动，「创建会话」与「更多选项」在首屏；点开能看到权限模式，关掉重开记住状态；
 //   3. 设置：每个页签都不滚动，保存按钮在首屏；所有设置项 id 仍在页面上；搜「回车」回车后自动切到对应页签；
@@ -84,7 +85,7 @@ async function main() {
   async function noScroll(label, rootSel) {
     const list = await cdp.eval(SCROLLERS(rootSel));
     report.measures[label] = list;
-    assert.deepEqual(list, [], `${label}：1440×900 下不应出现纵向滚动（${list.join(', ')}）`);
+    assert.deepEqual(list, [], `${label}：当前视口下不应出现纵向滚动（${list.join(', ')}）`);
   }
 
   async function checkHome(prefix) {
@@ -152,6 +153,8 @@ async function main() {
     const tabs = await cdp.eval('[...document.querySelectorAll("#cfg-tabs [data-cfg-tab-btn]")].filter(b=>!b.hidden).map(b=>b.dataset.cfgTabBtn)');
     report.measures[prefix + 'settingsTabs'] = tabs;
     assert.ok(tabs.length >= 3, '设置分成至少 3 个页签');
+    // 2026-11-22：「高级」溢出过一次没被发现，这几个页签必须都在、都量到。
+    for (const must of ['general', 'display', 'pet', 'advanced', 'server']) assert.ok(tabs.includes(must), `设置页签「${must}」在`);
     for (const tab of tabs) {
       await click(`#cfg-tab-${tab}`);
       await sleep(300);
@@ -179,13 +182,19 @@ async function main() {
     await checkHome('');
     await checkLauncher('');
     await checkSettings('');
+    // 公司黄区笔记本 2560×1600、240% 缩放，逻辑分辨率约 1024×640：设置每个页签同样一屏。
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1024, height: 640, deviceScaleFactor: 1, mobile: false });
+    await sleep(500);
+    await checkSettings('small-1024x640-');
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+    await sleep(500);
 
     // 通知 / 监控入口经过异步观察器后仍在目标页签，定时聚焦也落到可见字段。
     const notificationEnabled = await cdp.eval('require("../core/distribution").featureEnabled("completionNotification")');
     if (!notificationEnabled) report.checks.push('本发行版关闭通知功能：通知入口及接收 ID 校验由单测覆盖');
     for (const [option, tab, field] of [
       ['notificationSetup', 'notify', 'cfg-feishu-target'],
-      ['operationsSetup', 'advanced', 'cfg-aliyun-health-url'],
+      ['operationsSetup', 'server', 'cfg-aliyun-health-url'],
     ]) {
       if (tab === 'notify' && !notificationEnabled) continue;
       await cdp.eval(`window.__hubOpenConfigModal({${option}:true})`);
@@ -198,7 +207,7 @@ async function main() {
     for (const [field, value, enabled, tab] of [
       ['cfg-feishu-target', 'wrong', null, 'notify'],
       ['cfg-feishu-target', '', 'cfg-notification-enabled', 'notify'],
-      ['cfg-aliyun-health-url', 'wrong', 'cfg-aliyun-enabled', 'advanced'],
+      ['cfg-aliyun-health-url', 'wrong', 'cfg-aliyun-enabled', 'server'],
     ]) {
       if (tab === 'notify' && !notificationEnabled) continue;
       await openSettings();

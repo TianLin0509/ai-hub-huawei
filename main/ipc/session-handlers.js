@@ -1530,6 +1530,24 @@ function registerSessionIpc(ipcMain, deps) {
     } catch (error) { console.warn('[codeagent] 切换模型时改会话设置文件失败，只用菜单：' + error.message); }
     return launchChange;
   }
+  // 菜单已经选中了新模型、但换不成 CodeAgent 自己的写法（自配供应商的模型、清单不是 serve 读的）时，
+  // 把会话设置文件里的旧模型去掉（2026-11-20 反馈「切了 GLM5.3 还是 DS4.1」）：它优先级最高、每次请求都重读，
+  // 留着旧模型会把菜单刚选的压回去。去掉后这个会话按菜单的选择走，和不用 --settings 启动的会话一样。
+  function releaseCodeAgentLaunchModel(sessionId, why) {
+    try {
+      const fs = require('fs');
+      const dataDir = require('../../core/data-dir').getHubDataDir();
+      const file = require('path').join(dataDir, 'codeagent-launch', `${String(sessionId).replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
+      if (!fs.existsSync(file)) return false;
+      let current = null;
+      try { current = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { current = null; }
+      if (current && typeof current === 'object' && !current.model) return false;
+      fs.writeFileSync(file + '.tmp', '{}', 'utf8');
+      fs.renameSync(file + '.tmp', file);
+      codeagentModels.appendModelLog(dataDir, { event: 'launch-settings-released', session: String(sessionId).slice(0, 8), from: current?.model || '', reason: why });
+      return true;
+    } catch (error) { console.warn('[codeagent] 去掉会话设置文件里的旧模型失败：' + error.message); return false; }
+  }
 
   const pendingModelSelections = new Map();
   async function switchCodeAgentModel(payload = {}, options = {}) {
@@ -1597,7 +1615,9 @@ function registerSessionIpc(ipcMain, deps) {
     }
     // After the native menu confirmed the provider, update only this session's
     // model overlay so its former model cannot override the next request.
-    if (provider) updateCodeAgentModelSettings(sessionId, session, modelId);
+    const overlayUpdated = provider ? updateCodeAgentModelSettings(sessionId, session, modelId) : launchChange;
+    // 菜单选中了、设置文件却没能改成新模型：去掉文件里的旧模型，免得下一问又按它发。
+    if (!overlayUpdated && result.mode !== 'settings-only') releaseCodeAgentLaunchModel(sessionId, `菜单已选 ${modelId}，换不成 CodeAgent 自己的写法`);
     // 记住这个号上次手动切到的模型，下次新建会话默认用它（core/codeagent-launch-model.js）。
     try { if (result.mode !== 'settings-only') require('../../core/codeagent-launch-model').rememberModel(require('../../core/data-dir').getHubDataDir(), (session.info && session.info.codeagentPoolAccount) || session.codeagentPoolAccount || 'personal', modelId); }
     catch (error) { console.warn('[codeagent] 记住上次选的模型失败：' + error.message); }

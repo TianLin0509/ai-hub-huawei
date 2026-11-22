@@ -1,4 +1,5 @@
 [
+  "tests/unit-f2-backdrop-image-pet.test.js",
   "tests/unit-model-metadata-rsi-a6.test.js",
   "tests/unit-notification-storm.test.js",
   "tests/unit-windows-hide-guard.test.js",
@@ -70,6 +71,7 @@
   "tests/unit-codeagent-model-menu.test.js",
   "tests/unit-codeagent-hub-default-model.test.js",
   "tests/unit-codeagent-backend-model-switch.test.js",
+  "tests/unit-codeagent-terminal-model-switch.test.js",
   "tests/unit-company-external-api.test.js",
   "tests/unit-codeagent-quota-panel.test.js",
   "tests/unit-codeagent-quota-view.test.js",
@@ -189,6 +191,7 @@
   "tests/unit-wait-progress.test.js",
   "tests/unit-read-last-assistant-cap.test.js",
   "tests/unit-company-assistant-receipt-mark.test.js",
+  "tests/unit-company-assistant-turn-api-error.test.js",
   "tests/unit-company-assistant-stop-chat.test.js",
   "tests/unit-hub-error-card.test.js",
   "tests/unit-troubleshoot-feedback.test.js",
@@ -329,5 +332,6 @@
   "tests/unit-rsi-rail-width.test.js",
   "tests/unit-session-recovery-rsi-z.test.js",
   "tests/unit-boot-splash.test.js",
-  "tests/unit-codeagent-serve-session.test.js"
+  "tests/unit-codeagent-serve-session.test.js",
+  "tests/unit-f2b-file-image.test.js"
 ]

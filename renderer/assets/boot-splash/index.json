@@ -3,6 +3,146 @@
  "version": "1.0.0",
  "items": [
   {
+   "id": "claude-omni",
+   "name": "Claude · 掌心法阵·有声",
+   "who": "claude",
+   "anim": "video",
+   "weather": "stars",
+   "bundled": false,
+   "clip": {
+    "start": 0,
+    "fadeAt": 2.75,
+    "end": 3.0,
+    "subs": [
+     [
+      "I'm Claude. Ask me anything.",
+      0.15,
+      2.95
+     ]
+    ]
+   },
+   "recommend": true
+  },
+  {
+   "id": "codex-omni",
+   "name": "Codex · 掌心法阵·有声",
+   "who": "codex",
+   "anim": "video",
+   "weather": "stars",
+   "bundled": false,
+   "clip": {
+    "start": 0,
+    "fadeAt": 2.75,
+    "end": 3.0,
+    "subs": [
+     [
+      "I'm Codex. Let's build.",
+      0.1,
+      2.95
+     ]
+    ]
+   },
+   "recommend": true
+  },
+  {
+   "id": "deepseek-omni",
+   "name": "DeepSeek · 掌心法阵·有声",
+   "who": "deepseek",
+   "anim": "video",
+   "weather": "stars",
+   "bundled": false,
+   "clip": {
+    "start": 0,
+    "fadeAt": 3.25,
+    "end": 3.5,
+    "subs": [
+     [
+      "Every depth... I have already seen.",
+      0.1,
+      3.45
+     ]
+    ]
+   },
+   "recommend": true
+  },
+  {
+   "id": "codex-orig",
+   "name": "Codex · 原作·星空龙娘",
+   "who": "codex",
+   "anim": "video",
+   "weather": "stars",
+   "bundled": false,
+   "clip": {
+    "start": 8.0,
+    "fadeAt": 11.6,
+    "end": 11.9,
+    "subs": [
+     [
+      "Every answer... is already in my hand.",
+      3.2,
+      7.2
+     ],
+     [
+      "All I lack... is your question.",
+      8.65,
+      11.6
+     ]
+    ]
+   },
+   "recommend": true,
+   "credit": "wynneceles · CC BY-NC-ND 4.0",
+   "creditUrl": "https://github.com/wynneceles/ai-boot-animations"
+  },
+  {
+   "id": "claude-orig",
+   "name": "Claude · 原作·月下持剑",
+   "who": "claude",
+   "anim": "video",
+   "weather": "stars",
+   "bundled": false,
+   "clip": {
+    "start": 7.5,
+    "fadeAt": 10.9,
+    "end": 11.2,
+    "subs": [
+     [
+      "Under the moonlight... the blade awakens.",
+      4.087,
+      7.189
+     ],
+     [
+      "I am Claude. Ask me anything.",
+      8.281,
+      11.3
+     ]
+    ]
+   },
+   "recommend": true,
+   "credit": "wynneceles · CC BY-NC-ND 4.0",
+   "creditUrl": "https://github.com/wynneceles/ai-boot-animations"
+  },
+  {
+   "id": "deepseek-dive",
+   "name": "DeepSeek · 深海魔法阵",
+   "who": "deepseek",
+   "anim": "video",
+   "weather": "stars",
+   "bundled": false,
+   "clip": {
+    "start": 0,
+    "fadeAt": 4.85,
+    "end": 5.05,
+    "subs": [
+     [
+      "Every depth... I have already seen.",
+      2.25,
+      5.0
+     ]
+    ]
+   },
+   "recommend": true
+  },
+  {
    "id": "claude-01",
    "name": "Claude · 雪夜仰望",
    "who": "claude",

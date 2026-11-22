@@ -1,8 +1,18 @@
 {
+  "CodeAgent 消息对账失败，请在后台终端查看。": "Could not reconcile CodeAgent messages. Check the background terminal.",
+  "CodeAgent 状态对账失败，请在后台终端查看。": "Could not reconcile the CodeAgent session status. Check the background terminal.",
+  "CodeAgent 等待结果超时，尚未确认服务端是否结束，请在后台终端查看。": "Timed out waiting for CodeAgent results. The server may still be running. Check the background terminal.",
+  "CodeAgent 事件流已自动恢复，继续接收当前轮次结果。": "The CodeAgent event stream has reconnected. Receiving results for the current turn.",
+  "CodeAgent 连接已断开，当前轮次结果不明，请核对原生会话。": "The CodeAgent connection was lost. The current turn's outcome is unknown. Check the native session.",
   "查看已有历史": "View saved history",
   "新建会话（保留此会话）": "New session (keep this session)",
   "会话未能启动，原有记录已保留。请重试或新建会话。": "The session could not start. Your saved history is preserved. Retry or create a new session.",
   "这条消息显示失败，原始记录仍保留。可切到后台终端查看，或重新打开会话重试。": "This message could not be displayed. The original record is preserved. View the background terminal or reopen the session to retry.",
   "这条消息没有正文，可切到后台终端查看。": "This message has no body. Check the background terminal for details.",
-  "这个会话尚未建立可分支的对话身份。请先在原会话发送一条消息并等回答完成，再加入群聊；若已有回答仍失败，请重新打开原会话后重试，或在群聊里新增成员。原会话记录会保留。": "This session has no conversation identity available for branching. Send a message in the original session, wait for the answer, then add it to the group. If it already has an answer, reopen the original session and retry, or add a new group member. The original history is preserved."
+  "这个会话尚未建立可分支的对话身份。请先在原会话发送一条消息并等回答完成，再加入群聊；若已有回答仍失败，请重新打开原会话后重试，或在群聊里新增成员。原会话记录会保留。": "This session has no conversation identity available for branching. Send a message in the original session, wait for the answer, then add it to the group. If it already has an answer, reopen the original session and retry, or add a new group member. The original history is preserved.",
+  "连接中断，服务端结果未知，请在后台终端查看。": "Connection interrupted. The server result is unknown. Check the background terminal.",
+  "上一轮结果尚未确认，请在后台终端查看。": "The previous result is not confirmed. Check the background terminal.",
+  "已重新订阅事件流，等待服务端终态确认。": "Event stream resubscribed. Waiting for the server to confirm the final result.",
+  "在后台终端查看": "View in background terminal",
+  "等待结果超时，服务端结果未知，请在后台终端查看。": "Timed out waiting for the result. The server result is unknown. Check the background terminal."
 }

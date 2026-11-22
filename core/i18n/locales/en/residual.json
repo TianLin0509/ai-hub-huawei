@@ -232,5 +232,10 @@
   "已改为{0}，正在重新启动模型通道…": "Changed to {0}, restarting model channel…",
   "已改为自动识别，正在重新启动模型通道…": "Changed to auto-detect, restarting model channel…",
   "已重新启动模型通道": "Model channel restarted",
-  "提问要靠本机 CodeAgent 回答，装好 CodeAgent 后才能提问。": "Answers come from CodeAgent on this computer; install CodeAgent before asking."
+  "提问要靠本机 CodeAgent 回答，装好 CodeAgent 后才能提问。": "Answers come from CodeAgent on this computer; install CodeAgent before asking.",
+  "图片 {0}×{1} 超过 {2}px 上限，已自动缩小到 {3}×{4} 再发送": "Image {0}\u00d7{1} exceeds the {2}px limit; scaled down to {3}\u00d7{4} before sending",
+  "{0}（这里的动作设的是「提醒」，不写草稿；要草稿到「生效范围」把动作改成「起草」）": "{0} (this scope is set to Remind, so no draft is written; to get drafts, change the action to Draft under Scope)",
+  "这次做页任务已取消，请重新生成": "This slide task was cancelled. Please generate it again.",
+  "只有当前做页会话能提交这一轮页面内容": "Only the current slide-making session can submit content for this turn.",
+  "已停止这一问": "This question was stopped."
 }

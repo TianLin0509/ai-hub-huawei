@@ -319,6 +319,7 @@ function registerPromptSubmitIpc(ipcMain, deps) {
           requireReady: request.waitForCliReady === true || sessionManager.getSession(sessionId)?.purpose === 'hub-assistant', submissionReceipt: receipt,
           clientSubmissionId, attachments:request.attachments,
           originalPrompt, codeagentSkill: request.codeagentSkill,
+          waitForModelConfirmation: request.waitForModelConfirmation,
           shouldSubmit: request.shouldSubmit,
           preserveInput: request.preserveInput === true,
           codeagentInteractiveCommand: request.codeagentInteractiveCommand === true && require('../../core/ai-kinds').isCodeAgentKind(kind) && /^\s*\/\S+/.test(text),
@@ -366,7 +367,9 @@ function registerPromptSubmitIpc(ipcMain, deps) {
       } catch (error) {
         if (receipt) receipts.finish(receipt, { ok: false });
         logger.warn('[prompt-submit] send threw:', error && error.message);
-        return { ok: false, error: 'send-threw', message: error && error.message, kind, ...(error?.notSent ? {notSent:true, ...(error.code === 'cli-exited' ? {code:'cli-exited', ...(Array.isArray(error.terminalTail) ? { terminalTail: error.terminalTail } : {}), ...(error.missingCli ? { missingCli: error.missingCli } : {})} : {})} : {}) };
+        return { ok: false, error: 'send-threw', message: error && error.message, kind,
+          ...(error?.code === 'SESSION_MODEL_UNAVAILABLE' ? { code: error.code } : {}),
+          ...(error?.notSent ? {notSent:true, ...(error.code === 'cli-exited' ? {code:'cli-exited', ...(Array.isArray(error.terminalTail) ? { terminalTail: error.terminalTail } : {}), ...(error.missingCli ? { missingCli: error.missingCli } : {})} : {})} : {}) };
       } finally {
         if (awaitLateLocalAck) armLateLocalCommandAck(clearObserver, sessionId, clientSubmissionId, localCommand);
         else clearObserver?.dispose();
@@ -447,7 +450,7 @@ function registerPromptSubmitIpc(ipcMain, deps) {
   };
   // 新同事首次引导第 3 步「发第一句话」（core/first-steps.js）：任何一句真正提交成功后记一次；之后整个进程不再碰文件。
   ipcMain.handle('session:send-prompt', async (event, request) => {
-    const result = await submitPrompt(event, request);
+    const result = await submitPrompt(event, { ...request, waitForModelConfirmation: false });
     if (result?.ok) {
       try { if (require('../../core/first-steps').notePromptSent(require('../../core/data-dir').getHubDataDir())) event?.sender?.send?.('first-steps:changed', {}); }
       catch { /* 只影响首页引导的打勾 */ }

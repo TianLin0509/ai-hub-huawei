@@ -601,7 +601,8 @@ function createConfigModalController({
     });
     const notificationTest = configEl('config-notification-test');
     if (notificationTest) notificationTest.addEventListener('click', testCompletionNotification);
-    modal.addEventListener('click', (e) => { if (e.target === modal) closeConfigModal(); });
+    // 点遮罩才关，按下也得在遮罩上：在输入框里拖选、拖到框外松开不算（同事反馈「点 API 输入框设置就退出」，2026-11-22 隔离 Hub 复现）。
+    require('./backdrop-dismiss.js').bindBackdropDismiss(modal, { onDismiss: closeConfigModal });
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && !modal.classList.contains('hidden')) {
         e.preventDefault(); closeConfigModal();

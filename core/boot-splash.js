@@ -3,6 +3,8 @@
 // 其余 61 套做成资源包按需下载。下载机制照抄桌宠形象包（core/hub-pet/role-packs.js）：catalog.json + <id>-<version>.json，
 // 逐个核对字节数与 SHA-256，内源优先多源依次尝试；只在用户点「下载」时联网；失败不影响正在用的开场动画。
 // 包只是数据：一张 webp 图写到 <数据目录>/boot-splash/packs/<id>/image.webp，不执行、不解析任何别的内容。
+// 原作视频（anim=video，2026-11-22）：目录条目直接是 <id>-<版本>.mp4，核对字节数与 SHA-256 后原样放到 packs/<id>/intro.mp4（不转码不剪辑，
+// 原作授权 CC BY-NC-ND 4.0 要求原样分发并署名，署名写在离线清单 index.json 的 credit 里）。
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -12,22 +14,28 @@ const { boundedCatalogFetch, compareVersion } = require('./appearance-packs');
 
 const MAX_PACK_BYTES = 1024 * 1024;
 const MAX_IMAGE_BYTES = 640 * 1024;
+const MAX_VIDEO_BYTES = 96 * 1024 * 1024;
 const ID = /^(?:claude|codex|deepseek|galaxy)-[a-z0-9]{2,20}$/;
 const VERSION = /^\d{1,6}\.\d{1,6}\.\d{1,6}$/;
 const WHO = new Set(['claude', 'codex', 'deepseek', 'hub']);
-const ANIM = new Set(['soft', 'rush', 'galaxy']);
+const ANIM = new Set(['soft', 'rush', 'galaxy', 'video']);
 const WEATHER = new Set(['snow', 'rain', 'bokeh', 'dust', 'petals', 'sparks', 'stars', 'fireflies', 'embers']);
 const FREQUENCIES = Object.freeze(['daily', 'always', 'off']);
 const DEFAULT_ID = 'galaxy-constellation';
 const DEFAULT_PREFERENCES = Object.freeze({ selected: DEFAULT_ID, frequency: 'daily' });
+// 2026-11-22 2.0.0 起目录里有 mp4 视频包，v5.6.79 及更早版本的校验会整份拒收 → 新目录改名 catalog-v2.json，旧 catalog.json 留给老版本。
 const SOURCES = Object.freeze([
-  { id: 'aliyun-fast', name: '阿里云高速', manifest: 'https://dl.lt-stockpartner.tech/hub-update/boot-splash/catalog.json', files: 'https://dl.lt-stockpartner.tech/hub-update/boot-splash/' },
-  { id: 'github', name: 'GitHub', manifest: 'https://github.com/TianLin0509/ai-hub-huawei/releases/download/boot-splash-v1/catalog.json', files: 'https://github.com/TianLin0509/ai-hub-huawei/releases/download/boot-splash-v1/' },
-  { id: 'aliyun', name: '阿里云', manifest: 'https://me.lt-stockpartner.tech/hub-update/boot-splash/catalog.json', files: 'https://me.lt-stockpartner.tech/hub-update/boot-splash/' },
+  { id: 'aliyun-fast', name: '阿里云高速', manifest: 'https://dl.lt-stockpartner.tech/hub-update/boot-splash/catalog-v2.json', files: 'https://dl.lt-stockpartner.tech/hub-update/boot-splash/' },
+  { id: 'github', name: 'GitHub', manifest: 'https://github.com/TianLin0509/ai-hub-huawei/releases/download/boot-splash-v1/catalog-v2.json', files: 'https://github.com/TianLin0509/ai-hub-huawei/releases/download/boot-splash-v1/' },
+  { id: 'aliyun', name: '阿里云', manifest: 'https://me.lt-stockpartner.tech/hub-update/boot-splash/catalog-v2.json', files: 'https://me.lt-stockpartner.tech/hub-update/boot-splash/' },
 ]);
 
 function isWebp(buf) {
   return Buffer.isBuffer(buf) && buf.length >= 16 && buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP';
+}
+function isMp4(file) {
+  const fd = fs.openSync(file, 'r');
+  try { const b = Buffer.alloc(12); fs.readSync(fd, b, 0, 12, 0); return b.toString('ascii', 4, 8) === 'ftyp'; } finally { fs.closeSync(fd); }
 }
 function decodeWebp(value) {
   const m = typeof value === 'string' && /^data:image\/webp;base64,([A-Za-z0-9+/]+={0,2})$/.exec(value);
@@ -53,7 +61,9 @@ function validateCatalog(raw) {
   const ids = new Set();
   const packs = raw.packs.map(p => {
     const f = fields(p, '开场动画目录条目');
-    if (ids.has(f.id) || p.file !== `${f.id}-${f.version}.json` || !Number.isSafeInteger(p.bytes) || p.bytes < 1 || p.bytes > MAX_PACK_BYTES || !/^[a-f0-9]{64}$/.test(p.sha256)) throw new Error('开场动画目录条目无效');
+    const video = f.anim === 'video';
+    if (ids.has(f.id) || p.file !== `${f.id}-${f.version}.${video ? 'mp4' : 'json'}` || !Number.isSafeInteger(p.bytes) || p.bytes < 1
+      || p.bytes > (video ? MAX_VIDEO_BYTES : MAX_PACK_BYTES) || !/^[a-f0-9]{64}$/.test(p.sha256)) throw new Error('开场动画目录条目无效');
     ids.add(f.id);
     return { ...f, file: p.file, bytes: p.bytes, sha256: p.sha256 };
   });
@@ -101,7 +111,7 @@ function createBootSplashStore({ dataDir, assetsDir = path.join(__dirname, '..',
   function installedInfo(id) {
     try {
       const info = JSON.parse(fs.readFileSync(path.join(packsDir, id, 'pack.json'), 'utf8'));
-      const image = path.join(packsDir, id, 'image.webp');
+      const image = path.join(packsDir, id, info.anim === 'video' ? 'intro.mp4' : 'image.webp');
       if (info.id !== id || !fs.existsSync(image)) return null;
       return { ...info, image };
     } catch (_) { return null; }
@@ -155,6 +165,26 @@ function createBootSplashStore({ dataDir, assetsDir = path.join(__dirname, '..',
     return snap;
   }
 
+  // 原作视频：下载器已按目录核过字节数与 SHA-256，这里只认 mp4 文件头，然后整个文件原样搬进去。
+  function installVideo(file, entry) {
+    if (!isMp4(file)) throw new Error('开场视频格式无效');
+    fs.mkdirSync(packsDir, { recursive: true });
+    const temp = path.join(packsDir, `.tmp-${entry.id}-${crypto.randomUUID()}`);
+    fs.mkdirSync(temp);
+    try {
+      fs.renameSync(file, path.join(temp, 'intro.mp4'));
+      fs.writeFileSync(path.join(temp, 'pack.json'), JSON.stringify({ id: entry.id, version: entry.version, name: entry.name, who: entry.who, anim: 'video', weather: entry.weather, installedAt: now() }));
+      const dest = path.join(packsDir, entry.id);
+      let old = null;
+      if (fs.existsSync(dest)) { old = path.join(packsDir, `.old-${entry.id}-${crypto.randomUUID()}`); fs.renameSync(dest, old); }
+      try { fs.renameSync(temp, dest); } catch (error) { if (old) fs.renameSync(old, dest); throw error; }
+      if (old) { try { fs.rmSync(old, { recursive: true, force: true }); } catch (_) {} }
+    } finally {
+      if (fs.existsSync(temp)) { try { fs.rmSync(temp, { recursive: true, force: true }); } catch (_) {} }
+    }
+    return { id: entry.id, version: entry.version };
+  }
+
   function install(raw, expected) {
     const pack = validatePack(raw);
     if (expected && (pack.id !== expected.id || pack.version !== expected.version)) throw new Error('开场动画包与目录不一致');
@@ -206,7 +236,7 @@ function createBootSplashStore({ dataDir, assetsDir = path.join(__dirname, '..',
       const result = await downloadWithFallback({ gate: true, sources, version: entry.version, openx: { release: `boot-splash-${entry.version}` }, expect: entry, dest, fetchImpl: cancellableFetch, signal: abort.signal,
         onProgress: progress => notify({ progress }), onAttempt: attempts => notify({ attempts }) });
       if (!result.ok) { notify({ phase: result.cancelled ? 'cancelled' : 'error', activeId: null, failedId: id, error: result.cancelled ? '下载已取消' : '下载没成功，可以重试；正在用的开场动画不受影响。' }); return snapshot(); }
-      try { install(readJson(dest), entry); } finally { try { fs.unlinkSync(dest); } catch (_) {} }
+      try { if (entry.anim === 'video') installVideo(dest, entry); else install(readJson(dest), entry); } finally { try { fs.unlinkSync(dest); } catch (_) {} }
       notify({ phase: 'installed', activeId: null, installedId: id, progress: null, error: null });
       return snapshot();
     })().catch(error => { notify({ phase: 'error', activeId: null, failedId: id, error: error.message }); return snapshot(); })

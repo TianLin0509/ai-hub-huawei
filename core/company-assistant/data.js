@@ -320,7 +320,18 @@ function reviewAnchor(conv, list, myName = '', settings = null) {
 const judgeShape = m => ({ mine: m.mine, kind: m.text ? 'text' : 'other', text: m.text, at: m.at });
 // 方括号也用于附件和状态占位；只剥掉明确的表情名，未知标签留作正文。
 const TEXT_EMOJI_NAMES = new Set('微笑 大笑 呲牙 露齿 笑哭 偷笑 憨笑 可爱 调皮 眨眼 害羞 得意 酷 大哭 流泪 委屈 难过 失望 惊讶 惊恐 发呆 晕 困 睡 尴尬 无语 疑问 嘘 亲亲 么么哒 爱心 心碎 玫瑰 凋谢 鲜花 咖啡 蛋糕 礼物 太阳 月亮 强 弱 赞 点赞 鼓掌 握手 拥抱 抱拳 合十 胜利 加油 OK ok'.split(' '));
-const emojiReply = m => {
+// WeLink 的大表情（表情包）发出去是图片消息（2026-11-22 黄区缓存：图片消息正文是 /:um_begin{图片地址…}/:um_end，有时显示成「[图片]」）。
+// 只认「本人发的、恰好一张图、没有任何文字、没引用别的消息」的 PICTURE_MSG；空正文、多张图、带字、引用了别条的都不算。
+// 「紧跟在这条 @ 之后」由调用处保证。截图与大表情在数据上分不出来，紧跟 @ 的单张截图同样按回应处理（多半本身就是回答）。
+const MEDIA_RE = /\/:um_begin\{[\s\S]*?\}\/:um_end|\[图片\]/g;
+const stickerReply = (m, hit) => {
+  if (!m.mine || !/^PICTURE_MSG$/i.test(String(m.contentType || ''))) return false;
+  const text = String(m.text || ''), blocks = text.match(MEDIA_RE) || [];
+  const quoted = m.replyTo ?? replyTargetOf(m.content);
+  return blocks.length === 1 && !text.replace(MEDIA_RE, '').trim() && (!quoted || quoted === hit?.key);
+};
+const emojiReply = (m, hit) => {
+  if (stickerReply(m, hit)) return true;
   if (!m.mine || RJ.asks(judgeShape(m))) return false;
   let found = false;
   const rest = String(m.text || '')
@@ -357,7 +368,7 @@ function awaiting(snapshot, settings = {}, { now, review } = {}) {
       let level = named && aiLevel === 'settled' ? 'weak' : aiLevel || 'strong';
       // 纯表情紧跟这条点名消息，且中间没有其他发言，按明确回应处理；群里普通发言仍不能结案。
       const next = list[list.indexOf(hit) + 1];
-      const responded = next && next.at > hit.at && emojiReply(next);
+      const responded = next && next.at > hit.at && emojiReply(next, hit);
       if (responded) level = 'settled';
       // 用 WeLink「回复」引用了这条消息：回复关联明确，算已回复（2026-11-21，反馈「已经回复了还一直提醒」）。
       const quoted = list.some(m => m.mine && (m.replyTo ?? replyTargetOf(m.content)) === hit.key); // 升级前缓存的旧行没有 replyTo，现解析

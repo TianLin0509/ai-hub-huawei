@@ -311,6 +311,11 @@
 .composer-model:hover,
 .composer-model:focus-visible { border-color: var(--brand-tint-border); }
 .composer-model.switching { color: var(--brand-text); border-color: var(--brand-tint-border); }
+.composer-actual-model {
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
 .composer-model-logo {
   display: inline-grid;
   place-items: center;

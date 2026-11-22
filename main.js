@@ -900,7 +900,7 @@ sessionManager.on('native-agent-lifecycle', event => {
 // Deep-summary service singleton: instantiated from config-driven fallback chain.
 // Providers tried in order; first one with a parseable response wins.
 
-// CodeAgent：回答里的真实模型才算数（请求的模型可能因为没有权限而没生效），见 core/codeagent-models.js。
+// Claude / CodeAgent / Codex: refresh from the bound transcript at turn end.
 // Stop hook 那一刻才开始盯的记录拿不到 model（尾巴从文件末尾读起），这时从记录末尾补读最后一条回答的 model。
 // 2026-10-13 公司真机：会话答了几十轮，Hub 一次实际模型都没记下（回合结束事件没走到这里）。
 // 所以 CodeAgent 的 Stop hook 也直接来这里读一次（via=stop-hook）。
@@ -912,27 +912,38 @@ async function observeCodeAgentModel(hubSessionId, ev, transcriptPath, source = 
     const writer = sessionManager.sessions.get(hubSessionId);
     const before = sessionManager.getSession(hubSessionId);
     if (!writer || !before) return;
-    const observation = {};
+    const observation = { epoch: writer.modelSubmissionEpoch };
     codeAgentModelObservations.set(writer, observation);
     const requestedModel = before.currentModel?.id;
     const codeAgentModels = require('./core/codeagent-models');
-    let modelId = ev.modelId || null;
-    let modelAt = Date.now();
-    let usage = ev.usage && typeof ev.usage === 'object' ? ev.usage : null;
-    const file = before.transcriptPath || transcriptPath || ev.transcriptPath;
-    if (file) {
-      const last = await require('./core/read-last-assistant').readLastAssistantMessage(file);
-      if (last) {
-        modelId = last.model || null;
-        modelAt = last.ts;
-        usage = last.usage || null;
-      }
-    }
+    const actualModels = require('./core/session-actual-model');
+    const file = before.transcriptPath;
+    const last = await actualModels.readActualModel(before, { file,
+      parserService: typeof transcriptParserService === 'undefined' ? null : transcriptParserService });
+    if (!last) return;
+    const modelId = last.model.trim(), modelAt = last.ts, usage = last.usage || null;
     let session = sessionManager.getSession(hubSessionId);
     if (!session || sessionManager.sessions.get(hubSessionId) !== writer
+      || ['closed', 'dormant', 'exited'].includes(session.status)
+      || writer.closeRequestedAt || writer.suspendRequestedAt || writer.confirmedExit || writer.pty?.closed
       || codeAgentModelObservations.get(writer) !== observation
       || session.currentModel?.id !== requestedModel
+      || session.fixedModel !== before.fixedModel
+      || session.ccSessionId !== before.ccSessionId || session.codexSid !== before.codexSid
+      || writer.modelSubmissionEpoch !== observation.epoch
       || session.transcriptPath !== before.transcriptPath) return;
+    // Apply the same confirmation floor to every provider, before any model
+    // or usage update. Missing/equal timestamps cannot prove a newer answer.
+    if (Number.isFinite(session.modelSwitchConfirmedAt)
+      && (!Number.isFinite(modelAt) || modelAt <= session.modelSwitchConfirmedAt)) return;
+    if (!codeAgentModels.isCodeAgentSession(session)) {
+      const fields = actualModels.actualModelFields(session, modelId);
+      if (Object.keys(fields).length) {
+        const updated = sessionManager.updateSessionMeta(hubSessionId, fields);
+        if (updated) { sessionStore.markDirty(hubSessionId, updated); sendToRenderer('session-updated', { session: updated }); }
+      }
+      return;
+    }
     // 上下文占比（输入框旁的圆环）：CodeAgent 没有状态栏回调，按这一轮的用量算，见 core/codeagent-models.js。
     if (session && usage) {
       const configDir = session.codeagentConfigDir || require('./core/codeagent-config').resolveCodeAgentConfig(process.env).configDir;
@@ -954,7 +965,7 @@ async function observeCodeAgentModel(hubSessionId, ev, transcriptPath, source = 
       try { defaultModel = JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8').replace(/^﻿/, '')).model || ''; } catch { defaultModel = ''; }
       return codeAgentModels.resolveObservedSwitch(actual, { options, defaultModel });
     };
-    const observed = session && modelId ? codeAgentModels.observeModel(session, modelId, { at: modelAt, resolveSwitch }) : null;
+    const observed = session && modelId ? codeAgentModels.observeModel(session, modelId, { at: modelAt, resolveSwitch, followActual: true }) : null;
     if (observed || !modelId) {
       codeAgentModels.appendModelLog(getHubDataDir(), {
         event: 'observe', via: source, session: String(hubSessionId || '').slice(0, 8),
@@ -964,6 +975,20 @@ async function observeCodeAgentModel(hubSessionId, ev, transcriptPath, source = 
       });
     }
     if (!observed) return;
+    if (observed.fields.fixedModel && writer.codeagentSettingsActive) {
+      // Only a transcript-confirmed, catalog-resolved launch id may replace
+      // the session's --settings pin. Unknown backend spellings stay display-only.
+      try {
+        require('./core/session-manager')._private.writeCodeAgentLaunchSettings(getHubDataDir(), hubSessionId, observed.fields.fixedModel);
+      } catch (error) {
+        delete observed.fields.fixedModel;
+        delete observed.fields.codeagentUserModel;
+        delete observed.fields.modelPinSource;
+        delete observed.fields.modelChange;
+        sendToRenderer('session-notice', { sessionId: hubSessionId, level: 'warning',
+          message: `实际模型已确认，但同步会话启动设置失败：${error.message}` });
+      }
+    }
     if (observed.settingsOnlyVerification) codeAgentModels.appendModelLog(getHubDataDir(), { event: 'switch-settings-only-verified',
       session: String(hubSessionId).slice(0, 8), ...observed.settingsOnlyVerification });
     const updated = Object.keys(observed.fields).length ? sessionManager.updateSessionMeta(hubSessionId, observed.fields) : null;
@@ -1006,6 +1031,8 @@ transcriptTap.on('turn-complete', (ev) => {
   }
   if (session && /^codeagent(?:-resume)?$/.test(String(session.kind || ''))) {
     require('./core/codeagent-usage-menu').markUsageDirty(getHubDataDir(), session.codeagentPoolAccount || 'personal');
+    void observeCodeAgentModel(hubSessionId, ev || {}, session.transcriptPath);
+  } else if (session && require('./core/session-actual-model').transcriptKind(session)) {
     void observeCodeAgentModel(hubSessionId, ev || {}, session.transcriptPath);
   }
   Promise.resolve(completionNotifier.handleTurnComplete(ev || {}, session)).catch((error) => {
@@ -4209,7 +4236,7 @@ const hookServer = http.createServer((req, res) => {
           claudeAccountSwitch.onCompleted({ sessionId: parsed.sessionId, nativeSessionId: incomingClaudeSessionId,
             promptId: parsed.promptId || null, turnId: parsed.turnId || null, at: eventAt });
           void transcriptTap.notifyClaudeStop(parsed.sessionId, parsed.transcriptPath, { turnId: parsed.turnId || parsed.promptId || null });
-          if (isCodeAgentKind(hookTargetSession.kind)) void observeCodeAgentModel(parsed.sessionId, {}, parsed.transcriptPath, 'stop-hook');
+          if (require('./core/session-actual-model').transcriptKind(hookTargetSession)) void observeCodeAgentModel(parsed.sessionId, {}, parsed.transcriptPath, 'stop-hook');
           if (softCompact) void softCompact.onStop(parsed.sessionId, { transcriptPath: parsed.transcriptPath, lastAssistantMessage: parsed.lastAssistantMessage })
             .catch(error => console.warn('[soft-compact] stop failed:', error && error.message));
         }

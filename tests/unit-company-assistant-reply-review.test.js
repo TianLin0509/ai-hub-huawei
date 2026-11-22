@@ -311,3 +311,37 @@ test('升级前缓存的旧消息行没有 replyTo 字段，也能从原始 cont
   const s = snap([['g', true, [['甲', '请确认材料', 300, { atMe: true, key: BIG }], ['我', '好的我来看', 290, { content: quotedReply(BIG, '好的我来看') }]]]]);
   assert.equal(D.awaiting(s, {}, { now: NOW })[0].level, 'settled');
 });
+
+// 2026-11-22（r7-F3）：「表情回复认不出」。WeLink 的大表情发出去是图片消息，正文是 /:um_begin{图片地址}/:um_end（黄区缓存核对过形状），
+// 文字表情已在 v5.6.39 认出，图片表情一直被当成没回。
+test('群里紧跟 @我 的本人单张图片（大表情）算表情回应；带文字的图文、别人的图片、隔了别人发言的都不算', () => {
+  const pic = '/:um_begin{https://img.example.test/x/0a1b2c3d4e5f;w:120;h:120;}/:um_end';
+  const settings = { waitHours: 1, workdays: [0, 1, 2, 3, 4, 5, 6] };
+  for (const text of [pic, '[图片]']) {
+    const s = snap([['g', true, [['甲', '请确认材料', 300, { atMe: true }], ['我', text, 290, { contentType: 'PICTURE_MSG' }]]]]);
+    const item = D.awaiting(s, settings, { now: NOW })[0];
+    assert.equal(item.level, 'settled', text);
+    assert.equal(item.judge, 'emoji-reply');
+    assert.equal(R.dueNotices({ snapshot: s, settings, now: NOW }).some(n => n.kind === 'awaiting-reply'), false);
+  }
+  const span = snap([['g', true, [['甲', '请确认材料', 300, { atMe: true }], ['我', pic + '\n这个还要再看下？', 290, { contentType: 'IMAGESPAN_MSG' }]]]]);
+  assert.equal(D.awaiting(span, {}, { now: NOW })[0].level, 'strong', '带文字的图文消息照常提醒');
+  const withText = snap([['g', true, [['甲', '请确认材料', 300, { atMe: true }], ['我', pic + ' 稍后看', 290, { contentType: 'PICTURE_MSG' }]]]]);
+  assert.equal(D.awaiting(withText, {}, { now: NOW })[0].level, 'strong');
+  const gap = snap([['g', true, [['甲', '请确认材料', 300, { atMe: true }], ['乙', '我分享个消息', 299], ['我', pic, 290, { contentType: 'PICTURE_MSG' }]]]]);
+  assert.equal(D.awaiting(gap, {}, { now: NOW })[0].level, 'strong', '回应别人的消息不能结案');
+  // 反例（R-F3 审核）：空正文、两张图、两个占位、引用了别的消息、别人发的图，都不能替这条 @ 结案
+  for (const [why, row] of [
+    ['空正文', ['我', '', 290, { contentType: 'PICTURE_MSG' }]],
+    ['两张图', ['我', pic + pic, 290, { contentType: 'PICTURE_MSG' }]],
+    ['两个占位', ['我', '[图片][图片]', 290, { contentType: 'PICTURE_MSG' }]],
+    ['引用了别的消息', ['我', pic, 290, { contentType: 'PICTURE_MSG', replyTo: 'other-msg' }]],
+    ['别人发的图', ['乙', pic, 290, { contentType: 'PICTURE_MSG' }]],
+  ]) {
+    const s = snap([['g', true, [['甲', '请确认材料', 300, { atMe: true }], row]]]);
+    assert.equal(D.awaiting(s, {}, { now: NOW })[0].level, 'strong', why);
+  }
+  // 图片引用的正是这条 @：照样算回应
+  const quotedSame = snap([['g', true, [['甲', '请确认材料', 300, { atMe: true }], ['我', pic, 290, { contentType: 'PICTURE_MSG', replyTo: 'k0' }]]]]);
+  assert.equal(D.awaiting(quotedSame, {}, { now: NOW })[0].level, 'settled');
+});

@@ -98,13 +98,16 @@ function createTerminalInputController({ document, window, ipcRenderer, clipboar
     // 先判图片会把用户手上那份文件另存成一张新截图，路径就对不上了。
     const nativeFilePath = clipboardFilePathFromNative(clipboard);
     if (nativeFilePath) {
-      paste(nativeFilePath);
+      try {
+        const [saved] = await require('./file-attachments').prepareFilePaths(ipcRenderer, [nativeFilePath]);
+        paste(savedImagePath(saved));
+      } catch (err) { window?.__hubToast?.('添加附件失败：' + err.message); }
       return;
     }
 
     const img = clipboard.readImage();
     if (!img.isEmpty()) {
-      const filePath = await ipcRenderer.invoke('save-clipboard-image');
+      const filePath = savedImagePath(await ipcRenderer.invoke('save-clipboard-image', { withInfo: true }));
       paste(filePath);
       return;
     }
@@ -125,6 +128,16 @@ function createTerminalInputController({ document, window, ipcRenderer, clipboar
   //      （execCommand 比 selection.insertNode 更稳：自动处理 caret/undo stack/IME）
   //   4. 文本粘贴显式插入 text/plain，避免 HTML 源格式进入输入框
   // 暴露为 window.attachContenteditablePasteImage 供 meeting-room.js IIFE 使用。
+  // 主进程保存时把超过上限的图按比例缩小了：插入路径照旧，另外冒一句提示，让人知道发出去的是缩小版。
+  function savedImagePath(saved) {
+    if (!saved || typeof saved === 'string') return saved || null;
+    if (saved.resized && saved.from && saved.to) {
+      const toast = window && window.__hubToast;
+      if (typeof toast === 'function') toast(`图片 ${saved.from.width}×${saved.from.height} 超过 ${saved.maxEdge || 2000}px 上限，已自动缩小到 ${saved.to.width}×${saved.to.height} 再发送`);
+    }
+    return saved.path || null;
+  }
+
   function htmlToPlainText(html) {
     if (!html) return '';
     const DOMParserCtor = window && window.DOMParser;
@@ -170,12 +183,17 @@ function createTerminalInputController({ document, window, ipcRenderer, clipboar
     inputEl.dataset.imgPasteBound = '1';
     const collapseLongText = options.collapseLongText === true;
     inputEl.addEventListener('paste', async (e) => {
-      // 文件优先于文本和图片：复制一个文件时 text/plain 本来就是空的，而图片文件
-      // 若先被图片分支接走，会被另存成一张新截图、丢掉用户真正想引用的那条路径。
+      // 文件优先于文本和位图：保留文件来源，超限图片另存缩小副本。
       const filePaths = clipboardFilePathsFromPasteEvent(e, webUtils);
       if (filePaths.length) {
         e.preventDefault();
-        insertContenteditableText(inputEl, formatPastedFilePaths(filePaths));
+        const insert = require('./file-attachments').captureAttachmentTarget(inputEl, { document, window, ...options });
+        try {
+          const items = await require('./file-attachments').prepareFilePaths(ipcRenderer, filePaths);
+          insert(items, { chips: collapseLongText,
+            insertText: text => insertContenteditableText(inputEl, text) });
+          items.forEach(savedImagePath);
+        } catch (err) { window?.__hubToast?.('添加附件失败：' + err.message); }
         return;
       }
 
@@ -206,13 +224,16 @@ function createTerminalInputController({ document, window, ipcRenderer, clipboar
 
       if (!hasClipboardImage(e)) return;
       e.preventDefault();
+      const insert = require('./file-attachments').captureAttachmentTarget(inputEl, { document, window, ...options });
       try {
-        const filePath = await ipcRenderer.invoke('save-clipboard-image');
+        const saved = await ipcRenderer.invoke('save-clipboard-image', { withInfo: true });
+        const filePath = savedImagePath(saved);
         if (!filePath) return;
         // 在 caret 位置插入路径文本（保持 selection / 维护 undo stack）
         // execCommand 在 contenteditable 里仍然可用（虽然标记 deprecated，浏览器仍支持
         // 且对 Electron renderer 是稳定 API，与 xterm.paste 等价语义）
-        insertContenteditableText(inputEl, filePath);
+        insert([typeof saved === 'string' ? { path: saved } : saved],
+          { chips: collapseLongText, insertText: text => insertContenteditableText(inputEl, text) });
       } catch (err) {
         console.warn('[paste-image] save-clipboard-image failed:', err && err.message);
       }

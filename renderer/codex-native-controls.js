@@ -5,7 +5,7 @@ const { isNativeNoticeDismissed, dismissNativeNotice } = require('./native-notic
 
 // Each form is bound to one server request and transport epoch. A state repaint
 // never replaces typed answers, and a second click cannot reply twice.
-function createCodexNativeControls({ sessionId, invoke, document: doc = document, openExternal }) {
+function createCodexNativeControls({ sessionId, invoke, document: doc = document, openExternal, openBackstage }) {
   const element = doc.createElement('section');
   element.className = 'codex-native-controls';
   element.hidden = true;
@@ -203,6 +203,7 @@ function createCodexNativeControls({ sessionId, invoke, document: doc = document
     const requests = runtime && runtime.connection === 'connected' && !cancelling ? runtime.requests || [] : [];
     const choices = session.nativeThreadChoices || [];
     const next = JSON.stringify([
+      session.codeagentRunMode,
       runtime && runtime.epoch,
       runtime?.turnId,
       requests,
@@ -225,6 +226,16 @@ function createCodexNativeControls({ sessionId, invoke, document: doc = document
     const keep = new Set(requests.map(r => JSON.stringify([runtime.epoch,r.id])));
     for (const key of forms.keys()) if (!keep.has(key)) forms.delete(key);
     const children = [];
+    if (session.codeagentRunMode === 'serve' && runtime?.submission?.status === 'unknown' && openBackstage) {
+      const row = node('div', null, 'codex-native-request');
+      const error = node('div', '', 'codex-native-error');
+      const view = node('button', '在后台终端查看'); view.type = 'button';
+      view.addEventListener('click', async () => {
+        try { await openBackstage(); } catch (err) { error.textContent = err.message; }
+      });
+      row.append(node('p', runtime.submission.error), view, error);
+      children.push(row);
+    }
     const queued=runtime?.queued || [];
     const queueKeys=new Set();
     for(const entry of queued) {

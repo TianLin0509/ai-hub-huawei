@@ -10,6 +10,7 @@ const SKELETON_DIR = path.join(__dirname, 'ppt-make-skeletons');
 const KEEP_FILES = 30;
 const MAX_SUBMITS = 3; // 首次提交 + 按自查提醒修改 2 轮
 const ACTIVE = ['waiting_agent', 'revising'];
+const SLOW_MS = 5 * 60000;
 
 // 骨架分类按汇报的论证顺序排；不在表里的分类排最后。
 const CATEGORIES = ['现状与问题', '方案与原理', '结果与增益', '规划与计划', '盘点与总结'];
@@ -92,6 +93,8 @@ function waitingText(chat, now) {
   const min = t => Math.max(1, Math.round((now - t) / 60000));
   if (chat.state === 'queued') return '排队中：PPT 素材助理还在答前一个问题，答完就轮到这一页';
   if (chat.notReadySince && !chat.answeringAt) return `CodeAgent 还在启动（已等 ${min(chat.notReadySince)} 分钟）：要登录或确认的话，请打开「PPT 素材助理」会话处理`;
+  // 写了很久还没交（2026-11-22 F7）：隔离 Hub 实测低档模型从发问到交付 15 秒、整页 46 秒；超过 5 分钟就说明比平时久，给出看过程和停止的办法。
+  if (chat.answeringAt && now - chat.answeringAt >= SLOW_MS) return `助理已写了 ${min(chat.answeringAt)} 分钟，比平时久：可以点「看助理在做什么」，或点「停止」后重试`;
   if (chat.answeringAt) return '助理已开始写页面内容';
   if (chat.state === 'running') return '正在打开助理会话';
   return '';
@@ -227,23 +230,38 @@ class PptMake {
   // 工具 ppt_make_skeleton：自动选骨架时，助理按编号取某个骨架的示意内容。
   skeletonGuide(id) { const { spec, ...info } = this.skeleton(id); return { ...info, spec, note: '沿用 spec 的结构和组件 type，把内容换成这页要讲的' }; }
   // 工具 ppt_make：模型提交页面说明。每次提交都生成并交付；有自查提醒且还有修改轮次时，让模型按提醒再改。
-  submit({ jobId, spec, skeletonId } = {}) {
+  rejectSubmission(job, sessionId, reason, message) {
+    console.warn('[ppt-make] rejected submission', { jobId: job.id, sessionId, chatId: job.turnChatId || job.chatId, reason });
+    throw new Error(message);
+  }
+  submit({ jobId, spec, skeletonId } = {}, { sessionId } = {}) {
     const job = this.job(jobId);
+    const chats = this.a.chat(), owner = chats.find(c => c.id === (job.turnChatId || job.chatId));
+    if (job.cancelled || owner?.stopped) this.rejectSubmission(job, sessionId, 'cancelled', '这次做页任务已取消，请重新生成');
+    let turn = null;
     // 交付后用户在助理会话里接着要求改（2026-11-17 反馈：「ppt做完一版后让其修改就无法落到文件上了」）：
     // 由助理写的页（有 chatId）在那一问收工之后再提交，当作用户要的新一轮修改，重新给两轮自查修改的机会；
     // 同一问里改满两轮仍然截止（那一问还没收工）。
     // 新一轮绑定到用户这次要求修改的那一问（r38b 审查 P2：旧做法只看首问已收工，修改那一问还在跑时
     // 每次提交都能重开、轮次清零，限次被绕过；状态也按首问判断，正在改的页被提前当成交付）：
     if (!ACTIVE.includes(job.state)) {
-      const chats = this.a.chat();
       const chat = job.kind === 'make' && job.chatId ? chats.find(c => c.id === job.chatId) : null;
       if (!chat || !['done', 'error'].includes(chat.state)) throw new Error('这次做页任务已经结束，不再接收提交');
       const turnId = this.ppt.activeChat || '';
-      const turn = turnId && turnId !== job.chatId ? chats.find(c => c.id === turnId) : null;
+      turn = turnId && turnId !== job.chatId ? chats.find(c => c.id === turnId) : null;
       if (!turn || !['queued', 'running'].includes(turn.state)) throw new Error('这次做页任务已经结束，不再接收提交');
       if (job.turnChatId === turn.id) throw new Error('这一问里已提交并修改过两轮，这一版已交付；请直接向用户说明剩余提醒，用户再提修改时可以接着改');
-      Object.assign(job, { state: 'revising', submits: 0, error: '', turnChatId: turn.id });
+      // 新做页任务有自己的 jobId，不能借「后续修改」接管旧页。
+      if ([...this.jobs.values()].some(j => j.id !== job.id && j.chatId === turn.id)) {
+        this.rejectSubmission(job, sessionId, 'different-job', '只有当前做页会话能提交这一轮页面内容');
+      }
     }
+    const current = turn || owner;
+    if (!sessionId || current?.sessionId !== sessionId || this.ppt.activeChat !== current?.id
+      || current.stopped || !['queued', 'running'].includes(current.state)) {
+      this.rejectSubmission(job, sessionId, 'wrong-session-or-turn', '只有当前做页会话能提交这一轮页面内容');
+    }
+    if (turn) Object.assign(job, { state: 'revising', submits: 0, error: '', turnChatId: turn.id });
     if (job.submits >= MAX_SUBMITS) throw new Error('已提交并修改过两轮，这一版已交付；请直接向用户说明剩余提醒');
     if (typeof spec === 'string') spec = JSON.parse(spec); // 有的模型把对象参数写成 JSON 字符串
     if (!spec || typeof spec !== 'object') throw new Error('spec 应为页面说明对象');
@@ -273,7 +291,23 @@ class PptMake {
         else { job.state = 'error'; job.error = chat.state === 'error' ? (chat.error || '助理这一轮没有完成') : '助理这一轮没有提交页面内容'; }
       }
     }
-    return { ...job, ...(ACTIVE.includes(job.state) && waiting ? { waiting } : {}) };
+    const sessionId = ACTIVE.includes(job.state) ? this.a.chat().find(c => c.id === (job.turnChatId || job.chatId))?.sessionId || '' : '';
+    return { ...job, ...(ACTIVE.includes(job.state) && waiting ? { waiting } : {}), ...(sessionId ? { sessionId } : {}) };
+  }
+  // 「停止」：助理写得太久或卡住时，用户就地停下这一问（同一组方案共用一问，一起停），之后可以直接重试。
+  async stop(jobId) {
+    const job = this.job(jobId);
+    if (!ACTIVE.includes(job.state)) return { ok: true, job: this.status(jobId) };
+    const chatId = job.turnChatId || job.chatId;
+    // 先撤销提交资格，再等待中断 CLI；同一问中的其他方案也一起撤销。
+    for (const item of this.jobs.values()) {
+      if ((item.turnChatId || item.chatId) !== chatId) continue;
+      item.cancelled = true;
+      if (ACTIVE.includes(item.state)) Object.assign(item, { state: 'error', error: '已停止这一问' });
+    }
+    this.a.changed();
+    if (chatId) await this.a.stopChat(chatId);
+    return { ok: true, job: this.status(jobId) };
   }
   // 用户手改页面说明后重新生成；改过的样例算用户自己的页。
   rerender(jobId, spec) {

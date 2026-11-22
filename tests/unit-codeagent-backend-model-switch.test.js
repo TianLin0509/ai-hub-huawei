@@ -59,7 +59,7 @@ test('Auto routing, Hub-requested switches and unknown versions keep the existin
 
 test('main passes the account catalog and the CodeAgent default model to the resolver and logs the switch kind', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
-  assert.match(source, /observeModel\(session, modelId, \{ at: modelAt, resolveSwitch \}\)/);
+  assert.match(source, /observeModel\(session, modelId, \{ at: modelAt, resolveSwitch, followActual: true \}\)/);
   assert.match(source, /resolveObservedSwitch\(actual, \{ options, defaultModel \}\)/);
   assert.match(source, /backendSwitch: observed\.backendSwitch\.resolved \? 'menu' : 'display-only'/);
 });

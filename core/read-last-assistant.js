@@ -88,6 +88,7 @@ async function scanLastAssistant(transcriptPath, maxBytes) {
       await fh.read(buf, 0, readLen, pos);
       for (const line of lines.feed(buf, pos === 0)) {
         const entry = assistantEntry(line);
+        if (entry?.isSidechain) continue;
         const result = entry && lastAssistantResult(entry);
         if (result) return result;
       }

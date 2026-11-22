@@ -69,7 +69,7 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
     document.body.append(page);
     page.querySelector('.pptw-settings')?.addEventListener('toggle', event => { if (event.currentTarget.open) void sourceView.fill(event.currentTarget, { ipcRenderer }); });
     materials = require('./company-ppt-materials').createPptMaterials({ root: page.querySelector('[data-ppt-materials-panel]'), ipcRenderer, notice, doctorState: () => status?.state || '' });
-    make = require('./company-ppt-make').createPptMake({ root: page.querySelector('[data-ppt-make-panel]'), ipcRenderer, notice });
+    make = require('./company-ppt-make').createPptMake({ root: page.querySelector('[data-ppt-make-panel]'), ipcRenderer, notice, hasSession, openSession: openSession ? id => { close(); return openSession(id); } : null });
     libraryMap = require('./company-ppt-map').createPptMap({ root: page.querySelector('[data-ppt-map-panel]'), ipcRenderer, notice, openPage: id => call('ppt-open', { id }) });
     page.querySelector('.pptw-tabs').addEventListener('click', e => { const t = e.target.closest('[data-ppt-tab]'); if (t) tab(t.dataset.pptTab); });
     page.querySelector('[data-ppt-form]').addEventListener('submit', e => { e.preventDefault(); void search(true); }); // 回车与「AI 找页」：AI 检索 + 关键词即时命中

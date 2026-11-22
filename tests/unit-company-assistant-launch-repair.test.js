@@ -45,7 +45,7 @@ test('1 守护独立于助理启动，暂停助理保留已启用的守护，定
 test('2 首次未就绪立刻通知，重试保留起点，就绪后进入回答阶段', async () => {
   let clock = 1000, sends = 0, changes = 0; const patches = [];
   const a = { now: () => clock, deps: { notReadyRetryMs: 0, sendPrompt: async () => { sends++; clock += 1000; return sends < 3 ? { notSent: true, error: 'cli-not-ready' } : { ok: true }; } },
-    patchChat: (id, patch) => patches.push({ id, ...patch }), changed() { changes++; }, sessionGone: () => '' };
+    patchChat: (id, patch) => patches.push({ id, ...patch }), changed() { changes++; }, sessionGone: () => '', cliBackAtShell: () => false };
   const job = { type: 'chat', chatId: 'q' };
   const receipt = await CompanyAssistant.prototype.sendWhenReady.call(a, job, 'session', '问题');
   assert.equal(receipt.ok, true); assert.equal(sends, 3); assert.equal(changes, 1);
@@ -62,7 +62,7 @@ test('2 终端尾行移除颜色与密钥，最终失败保留可操作原因', 
   assert.equal(receipt.terminalLastLine, '请登录 Bearer <密钥>');
   assert.ok(!JSON.stringify(receipt).includes('secret-value'));
   let clock = 1;
-  const a = { now: () => clock, deps: { sendPrompt: async () => { clock += 30 * 60000; return receipt; } }, patchChat() {}, changed() {}, sessionGone: () => '' };
+  const a = { now: () => clock, deps: { sendPrompt: async () => { clock += 30 * 60000; return receipt; } }, patchChat() {}, changed() {}, sessionGone: () => '', cliBackAtShell: () => false };
   await assert.rejects(CompanyAssistant.prototype.sendWhenReady.call(a, { type: 'chat' }, 's', 'q'), error => {
     assert.match(error.message, /打开助理会话.*可以重问.*终端最后一行：请登录 Bearer <密钥>/);
     assert.ok(!error.message.includes('secret-value')); return true;

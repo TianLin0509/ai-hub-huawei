@@ -66,7 +66,8 @@ function createResumeSessionHandler(deps) {
     // 显式的启动覆盖（助理切换模型/深度）在磁盘记录之后生效，否则会被旧记录里的型号盖回去。
     if (launchOverrides) {
       const { model, ...rest } = launchOverrides;
-      meta = { ...meta, ...rest, ...(model ? { model, fixedModel: model, modelPinSource: 'user', modelChange: null, modelConfirmationRequired: false, modelUnavailableReason: '', currentModel: { id: model, displayName: model } } : {}) };
+      // 和在线切换使用同一确认时刻屏障，创建时就带上，防止 tap 读到旧回答撤销本次选择。
+      meta = { ...meta, ...rest, ...(model ? { model, fixedModel: model, modelPinSource: 'user', modelSwitchConfirmedAt: Date.now(), modelChange: null, modelConfirmationRequired: false, modelUnavailableReason: '', currentModel: { id: model, displayName: model } } : {}) };
       if (model && /^codeagent(?:-resume)?$/.test(meta.kind)) {
         meta.codeagentUserModel = model;
         if (!AUTOMATIC_CODEAGENT_PURPOSES.has(meta.purpose)) codeagentModelPick = rest.codeagentModelPick !== false;

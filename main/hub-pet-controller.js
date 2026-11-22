@@ -99,7 +99,8 @@ function createHubPetController({
   let lastSent = '';
   let reminderSyncWarned = false;
   let pose = 'idle';
-  let fullscreen = false;        // 正在躲边（全屏且设置里开着「全屏时躲边」）
+  let fullscreen = false;
+  let peekPulledOut = false;     // 躲边时被用户拖出来了：这次全屏期间不再躲，全屏结束后复位        // 正在躲边（全屏且设置里开着「全屏时躲边」）
   let screenFull = false;        // 前台程序是不是全屏（关了躲边也照样不说话）
   let peekFrom = null;           // 躲边前的位置，全屏结束后回去
   let dock = null;
@@ -518,7 +519,8 @@ function createHubPetController({
   // ---------- 全屏躲边 ----------
   function setScreenFull(value) {
     screenFull = !!value;
-    setFullscreen(screenFull && settings.get().peekOnFullscreen !== false);
+    if (!screenFull) peekPulledOut = false; // 全屏结束：下次再全屏照常躲边
+    setFullscreen(screenFull && settings.get().peekOnFullscreen !== false && !peekPulledOut);
     evaluate();
   }
   function peekTarget(from, g = geom()) {
@@ -629,8 +631,16 @@ function createHubPetController({
   function dragTick() {
     if (!drag || !alive()) { stopMove(); return; }
     if (!drag.releasing && Date.now() - drag.startedAt > 120000) { onRelease(); return; }
-    if (fullscreen) return; // 躲边时只认点击，不让拖出来
     const c = cursor();
+    if (fullscreen) {
+      // 躲边（只露个头）时：没拖开只算点击；真拖开了就从边上拽出来，这次全屏期间不再躲（2026-11-22 同事反馈「桌宠拖不动」，
+      // 隔离 Hub 复现：以前躲边时按住拖，位移 0px。系统「有程序全屏」的判断也会把放映、共享、别的屏上的全屏都算进来）。
+      if (Math.hypot(c.x - drag.start.x, c.y - drag.start.y) < CLICK_SLOP) return;
+      peekPulledOut = true;
+      fullscreen = false;
+      peekFrom = null;
+      evaluate();
+    }
     if (!drag.moved && Math.hypot(c.x - drag.start.x, c.y - drag.start.y) < CLICK_SLOP) {
       // 按住不放（单击只逗它的新习惯下）：抱抱。慢慢压扁、冒爱心，记一次亲密度（和摸摸共用 3 秒一次的限制）。
       if (!drag.hug && drag.target === 'pet' && clickPlays() && Date.now() - drag.startedAt >= HUG_MS) {

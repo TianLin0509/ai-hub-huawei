@@ -2763,6 +2763,9 @@ class SessionManager extends EventEmitter {
     const info = {
       id,
       ...require('./session-model-pin').modelPinFields(opts),
+      ...(require('./codeagent-models').isSafeModelId(opts.actualModel?.id) && (opts.fixedModel || currentModel?.id) ? { actualModel: {
+        id: opts.actualModel.id, launchModel: opts.fixedModel || currentModel.id,
+      } } : {}),
       ...(opts.fixedModel || currentModel?.id ? { fixedModel: opts.fixedModel || currentModel.id, modelPinSource: opts.modelPinSource || 'created' } : {}),
       kind,
       freshLaunch,
@@ -3202,7 +3205,14 @@ class SessionManager extends EventEmitter {
     }
 
     const agentPtyLaunch = claudePtyLaunch || codeagentLaunch;
-    if (agentPtyLaunch) {
+    // serve 的监听跟随实际终端 attach/detach；PTY 仍在启动时注册。
+    if (!isCodeAgentServe && codeagentLaunch && codeagentLaunch.bypassLaunch) {
+      const stopBypassWatch = require('./claude-trust-dialog.js').watchBypassWarning(ptyProcess, {
+        onAccepted: dialog => console.log(`[bypass-warning] ${String(id).slice(0, 8)} 自动确认 Bypass Permissions 提示（光标行 ${dialog.cursorRow} → 确认行 ${dialog.acceptRow}）`),
+      });
+      pendingTimers.push(setTimeout(stopBypassWatch, 90000));
+    }
+    if (agentPtyLaunch && !isCodeAgentServe) {
       // 信任框兜底（照搬 8c5c6928）：预写没生效时（.claude.json 损坏 / 只读）才会出现。
       // 绝不盲按回车——Claude Code 默认高亮 "No, exit"。detectClaudeTrustDialog 定位到
       // 「Yes, I trust this folder」那一行给出按键；定位不出来就一个键都不发。
@@ -3284,15 +3294,6 @@ class SessionManager extends EventEmitter {
         if (trustTimer) { clearTimeout(trustTimer); trustTimer = null; }
         try { trustSub.dispose(); } catch {}
       }, codeagentLaunch ? 90000 : 45000));
-
-      // CodeAgent 第一次用 bypass 档时的「Bypass Permissions mode」确认框（2026-11-20 一键反馈 v5.6.64）：默认高亮 No, exit，
-      // 不点掉时模型菜单、第一条消息都卡住，输入守卫报「终端里有未关闭的菜单」。会话本来就是按这个档启动的，替用户选 Yes。
-      if (codeagentLaunch && codeagentLaunch.bypassLaunch) {
-        const stopBypassWatch = require('./claude-trust-dialog.js').watchBypassWarning(ptyProcess, {
-          onAccepted: dialog => console.log(`[bypass-warning] ${String(id).slice(0, 8)} 自动确认 Bypass Permissions 提示（光标行 ${dialog.cursorRow} → 确认行 ${dialog.acceptRow}）`),
-        });
-        pendingTimers.push(setTimeout(stopBypassWatch, 90000));
-      }
 
       // 与 8c5c6928 之前的 PTY 时代同一套投递：PowerShell 首屏安静 200ms 后敲入命令，
       // 3 秒安全兜底。所有参数都是启动前确定的，与原生后端同源。
@@ -4008,6 +4009,11 @@ try {
     // 成功后才提交；保留原 info 对象，PTY 事件闭包仍引用它。
     const originalInfo = session.info;
     const candidateInfo = { ...originalInfo, ...fields };
+    // Every provider commits user selections here. Keep a persistent floor:
+    // a newly started observation can still read an answer from before the pick.
+    if (fields.modelPinSource === 'user' && fields.fixedModel) {
+      candidateInfo.modelSwitchConfirmedAt = Date.now();
+    }
     session.info = candidateInfo;
     try { this._refreshOpenIdentity(sessionId); }
     finally { session.info = originalInfo; }

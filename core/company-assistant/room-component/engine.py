@@ -274,6 +274,109 @@ JS_RESULT = """(base) => {
 }"""
 
 
+# 「地域」设置的三级，对应弹窗筛选行「位置」后面的三个下拉（2026-11-22 公司真实页面只读探针）。
+AREA_LEVELS = ("国家/地区", "城市", "楼宇")
+SEP = "|@|"  # JS_AREA_LEAVES 里文字与坐标的分隔符
+
+# 弹窗筛选行里的下拉框，按从左到右：位置/按关键字、国家/地区、城市、楼宇。
+JS_AREA_SELECTS = """() => {
+  let tab = null;
+  for (const e of document.querySelectorAll('body *')) {
+    if (e.children.length <= 1 && e.textContent.trim() === '全部会议室' && e.getBoundingClientRect().height > 0) { tab = e; break; }
+  }
+  const dlg = (tab && tab.closest('.ev_Dialog_PanelContent')) || document.querySelector('.ev_Dialog_PanelContent');
+  if (!dlg) return null;
+  const all = [...dlg.querySelectorAll('.ev_selectCom')].filter(e => !e.classList.contains('order-time-select'))
+    .map(e => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height,
+      text: (e.innerText || '').trim().replace(/\\s+/g, ' ') }; })
+    .filter(s => s.w > 0 && s.h > 0);
+  if (!all.length) return { selects: [] };
+  const top = Math.min(...all.map(s => s.y));
+  return { selects: all.filter(s => Math.abs(s.y - top) < 8).sort((a, b) => a.x - b.x) };
+}"""
+
+# 页面上所有短叶子文字带坐标；点开下拉前后取差集就是选项（选项列表可能整体滚动到可视区外，只要求有尺寸）。
+# 带坐标是因为下拉框自己显示的当前值与选项同名。
+JS_AREA_LEAVES = """() => {
+  const s = [];
+  for (const e of document.querySelectorAll('body *')) {
+    if (e.children.length) continue;
+    const t = (e.textContent || '').trim();
+    if (!t || t.length > 60) continue;
+    const r = e.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) s.push(t + '|@|' + Math.round(r.x) + ',' + Math.round(r.y));
+  }
+  return s;
+}"""
+
+
+# 点选项：同名文字里取横坐标最接近该下拉的那个（下拉框自己显示的当前值也可能同名）。
+JS_AREA_PICK = """([t, x, y]) => {
+  let best = null, gap = 1e9;
+  for (const e of document.querySelectorAll('body *')) {
+    if (e.children.length || (e.textContent || '').trim() !== t) continue;
+    const r = e.getBoundingClientRect();
+    if (!r.width || !r.height) continue;
+    if (e.closest('.ev_selectCom') && Math.abs(r.y - y) < 8) continue;
+    const g = Math.abs(r.x - x);
+    if (g < gap) { gap = g; best = e; }
+  }
+  if (!best) return false;
+  best.scrollIntoView({ block: 'center' });
+  best.click();
+  return true;
+}"""
+
+
+def _origin_file():
+    return C.path("area_origin.json")
+
+
+def load_area_origin():
+    """第一次切换地域前网页原来的「国家/地区、城市、楼宇」；没有或读不了返回 None。"""
+    try:
+        with open(_origin_file(), encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list) and len(data) == len(AREA_LEVELS) and all(isinstance(x, str) and x for x in data):
+            return data
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def save_area_origin(texts):
+    if len(texts) == len(AREA_LEVELS) and all(texts):
+        tmp = _origin_file() + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(texts, f, ensure_ascii=False)
+        os.replace(tmp, _origin_file())
+
+
+def clear_area_origin():
+    try:
+        os.remove(_origin_file())
+    except OSError:
+        pass
+
+
+def match_area(options, want):
+    """「北京」能匹配「北京(Beijing)」，「beijing」也行；完全一致优先，其次括号前后任一半一致，最后唯一包含。"""
+    want = (want or "").strip()
+    if not want:
+        return None
+    low = want.lower()
+    if want in options:
+        return want
+    def halves(o):
+        head, _, tail = o.partition("(")
+        return {head.strip().lower(), tail.rstrip(")").strip().lower()} - {""}
+    hits = [o for o in options if low in halves(o)]
+    if len(hits) == 1:
+        return hits[0]
+    hits = [o for o in options if low in o.lower() and not o.startswith("不限")]
+    return hits[0] if len(hits) == 1 else None
+
+
 class StopRequested(Exception):
     pass
 
@@ -487,7 +590,104 @@ class Booker:
         if not self.page.evaluate(JS_CLICK_DATE_TAB, date_slash):
             self.warn(f"会议室弹窗里没找到日期 {date_slash} 的标签，按弹窗默认日期继续")
         self.sleep(2)
+        if self.apply_area():
+            self.page.evaluate(JS_CLICK_DATE_TAB, date_slash)
+            self.sleep(1)
         self.wait_room_list(date_slash)
+
+    # ---------- 地域（2026-11-22）----------
+    def _area_selects(self, need=1 + len(AREA_LEVELS)):
+        for _ in range(20):
+            info = self.page.evaluate(JS_AREA_SELECTS)
+            if info and len(info["selects"]) >= need:
+                return info["selects"]
+            self.sleep_real(0.3)
+        raise RuntimeError("会议室弹窗里没找到「国家/地区、城市、楼宇」三个筛选框，地域没切换；请把截图和日志发给 Hub 反馈")
+
+    def _choose(self, index, want, label):
+        """点开第 index 个筛选框，按 want 选项（或「不限…」）点选。返回实际选中的文字。"""
+        for attempt in range(3):
+            sel = self._area_selects(index + 1)[index]
+            before = set(self.page.evaluate(JS_AREA_LEAVES))
+            self.page.mouse.click(sel["x"] + sel["w"] / 2, sel["y"] + sel["h"] / 2)
+            options, t0 = [], time.monotonic()
+            while time.monotonic() - t0 < 6:
+                self.sleep_real(0.3)
+                options = []
+                for key in self.page.evaluate(JS_AREA_LEAVES):
+                    text = key.split(SEP)[0]
+                    if key not in before and text not in options:
+                        options.append(text)
+                if options:
+                    break
+            pick = match_area(options, want) if want else next((o for o in options if o.startswith("不限")), None)
+            if pick:
+                if pick == sel["text"]:
+                    self.page.keyboard.press("Escape")
+                    return pick
+                if not self.page.evaluate(JS_AREA_PICK, [pick, sel["x"], sel["y"]]):
+                    self.page.keyboard.press("Escape")
+                    raise RuntimeError(f"{label}下拉里找到了「{pick}」但点不中，地域没切换")
+                self.sleep(1.5)
+                actual = self._area_selects(index + 1)[index]["text"]
+                if actual != pick:
+                    raise RuntimeError(f"{label}选择「{pick}」后仍显示「{actual}」，请按网页上的写法修改「会议室所在地域」")
+                return pick
+            self.page.keyboard.press("Escape")
+            if options and attempt == 2:
+                matches = [o for o in options if want and want.lower() in o.lower() and not o.startswith("不限")]
+                if len(matches) > 1:
+                    shown = "、".join(matches[:12]) + ("…" if len(matches) > 12 else "")
+                    raise RuntimeError(f"{label}「{want}」匹配到多个选项：{shown}。请按网页上的完整写法修改「会议室所在地域」")
+                shown = "、".join(options[:12]) + ("…" if len(options) > 12 else "")
+                raise RuntimeError(f"{label}下拉里没有「{want}」，可选的有：{shown}。请按网页上的写法修改「会议室所在地域」")
+            self.sleep(1.5)  # 上级刚改过，下级选项可能还在加载
+        raise RuntimeError(f"{label}下拉没有展开或选项没加载出来，地域没切换；请稍后重试")
+
+    def apply_area(self):
+        """按「地域」设置在弹窗里逐级选好国家/地区、城市、楼宇再点「查询」。
+        从没设过就完全不动；设过又清空时切回第一次切换前网页原来的地域（记在 area_origin.json）。
+
+        真实页面（11-22 只读探针）：弹窗筛选行依次是「位置/按关键字」和三级级联下拉，各级都有「不限…」选项。
+        显式指定上级而下级留空时选下级的「不限…」，免得保留网页记住的旧楼宇。返回是否改过。
+        """
+        area = self.cfg.get("地域") or {}
+        wants = [str(area.get(k) or "").strip() for k in AREA_LEVELS]
+        origin = load_area_origin()
+        restoring = not any(wants)
+        if restoring:
+            # 网页会把最后一次选的地域记在服务器上（11-22 真机：选完即 POST cacheArea）。
+            # 清空设置后回到第一次切换前网页原来的地域，没切换过就完全不动。
+            if not origin:
+                return False
+            wants = origin
+        if self._area_selects(1)[0]["text"] != "位置":
+            self._choose(0, "位置", "筛选方式")
+        if not restoring and not origin:
+            save_area_origin([s["text"] for s in self._area_selects()[1:1 + len(AREA_LEVELS)]])
+        changed, done = False, []
+        for i, (label, want) in enumerate(zip(AREA_LEVELS, wants)):
+            current = self._area_selects()[i + 1]["text"]
+            # 只有完整相等才能直接跳过；别名/包含匹配须展开全部候选，不能让当前值掩盖歧义。
+            if want and current == want:
+                done.append(current)
+                continue
+            if not want and not any(wants[:i]):
+                done.append(current)
+                continue
+            if not want and current.startswith("不限"):
+                done.append(current)
+                continue
+            done.append(self._choose(i + 1, want, label))
+            changed = changed or done[-1] != current
+        if changed:
+            if not self.page.evaluate(JS_CLICK_BUTTON, "查询"):
+                raise RuntimeError("地域选好了，但弹窗里没找到「查询」按钮")
+            self.sleep(2)
+            self.log(("已切回原来的会议室地域：" if restoring else "已切换会议室地域：") + " / ".join(done))
+        if restoring:
+            clear_area_origin()
+        return changed
 
     def wait_room_list(self, date_slash, timeout=ROOM_LIST_WAIT):
         """等到优先列表里至少一间出现在弹窗里再去判断空闲。

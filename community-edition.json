@@ -59,9 +59,11 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "改了工作文件根目录后，助理报告、图片和口播仍能正常读到；资源页列全 CodeAgent 登记的 MCP；号池登录窗口写明密码不外传、凭证存在哪"
+    "「待你看」只计负责人自己和独立会话：组队成员的新回复不再计入；成员等你拍板或出错卡住时，汇总到负责人那一条，悬停写明哪个成员什么事",
+    "开场动画：Claude/Codex/DeepSeek 各新增一套约 3 秒的有声开场（带台词字幕，作者推荐里排各家第一）；资源目录改为 catalog-v2.json，老版本不受影响",
+    "设置界面拖选不再退出、桌宠能拖、五个页签一屏放下；大图粘贴/拖入/附件自动缩放；被 @ 后回大表情算已回复，只 @我 的分身默认起草；PPT 做页遇到模型报错马上说明原因并可停止重试；CodeAgent 共享后台试点断线不再误报"
   ],
-  "version": "5.6.81",
+  "version": "5.6.82",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

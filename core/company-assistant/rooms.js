@@ -9,7 +9,7 @@ const S = require('./room-schedule');
 const { RoomOfflineRetry } = require('./room-offline-retry');
 
 const SOON_MS = 10 * 60000;   // 订到的会开始前 10 分钟，桌宠提醒一次
-const RULES = ['主题', '开始时间', '时长小时', '时长分钟', '优先会议室', '抢订日', '抢订设置', '会后动作', '系统', '高级'];
+const RULES = ['主题', '开始时间', '时长小时', '时长分钟', '优先会议室', '抢订日', '抢订设置', '会后动作', '系统', '高级', '地域'];
 function readJson(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
   catch (error) { if (error.code === 'ENOENT') return fallback; throw new Error('会议室文件读取失败：' + path.basename(file) + '（' + error.message + '）'); }

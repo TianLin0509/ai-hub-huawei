@@ -7,6 +7,7 @@
   "frame": [
    "renderer/context-menus.js",
    "renderer/format-time.js",
+   "renderer/file-attachments.js",
    "renderer/hub-tooltip.js",
    "renderer/keyboard-shortcuts.js",
    "renderer/modal-layer-guard.js",
@@ -80,6 +81,7 @@
    "renderer/whats-new.js"
   ],
   "session": [
+   "core/session-actual-model.js",
    "renderer/card-detail-controls.js",
    "renderer/card-history-pager.js",
    "renderer/card-history-views.js",

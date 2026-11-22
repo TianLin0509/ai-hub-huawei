@@ -29,11 +29,36 @@ class CodeAgentServeSession extends AcpSession {
         });
       });
       client.on('request-resolved', requestId => this.resolveElsewhere(requestId));
+      client.on('turn-unknown', message => {
+        if (this.client !== client || !this.active || this.closed) return;
+        try {
+          clearTimeout(this.active.timer);
+          this.apply({ type: 'submission', submission: { ...this.runtime.submission, status: 'unknown', error: message } });
+          this.active.reject(new Error(message));
+          this.promptQueue.hold(message);
+          this.persist();
+        } catch (error) { client.fail(error); this.emit('action-error', error.message); }
+        this.emit('action-error', message);
+      });
       client.on('disconnect', error => setTimeout(() => this.recover(client, error), 0));
+      client.on('transport-disconnect', error => setTimeout(() => this.recover(client, error), 0));
       return client;
     };
   }
   print() { /* 后台显示的是真实终端，结构化输出只进卡片 */ }
+  acknowledge() {
+    const unknown = this.runtime.submission?.status === 'unknown' ? this.runtime.submission : null;
+    super.acknowledge();
+    // 迟到正文只证明已经执行，不能解除缺少终态的 unknown。
+    if (unknown) this.apply({ type: 'submission', submission: unknown });
+  }
+  finish(active, status, error, nativeResult) {
+    // 只有收到服务端终态才解除 unknown；本地等待超时不会走到这里。
+    if (this.runtime.submission?.status === 'unknown') {
+      this.apply({ type: 'submission', submission: { ...this.runtime.submission, status: 'accepted' } });
+    }
+    return super.finish(active, status, error, nativeResult);
+  }
 
   // serve 的模型跟着每条消息走，不需要 ACP 配置项；思考强度第一期不开放，明确报错，不假装切换成功。
   async configure({ model, effort } = {}, starting = false) {
@@ -61,36 +86,46 @@ class CodeAgentServeSession extends AcpSession {
   }
 
   async recover(client, error) {
-    // 恢复过程中新连接的失败由这一轮处理，不再并发开一轮；改回 PTY 只发一次。
-    if (this.closed || this.client !== client || this.recovering || this.fellBack) return;
+    if (this.closed || this.client !== client || this.fellBack) return;
+    // 正在重订时再断线也必须记下，不能让 recovering 守卫吞掉。
+    if (this.recovering) { this.recoveryAgain = true; return; }
     this.recovering = true;
     const fallBack = reason => {
       if (this.fellBack) return;
       this.fellBack = true;
       this.emit('serve-fallback', { reason });
     };
-    const now = Date.now();
-    this.failures = [...this.failures.filter(at => now - at < RECOVER_WINDOW_MS), now];
-    this.closeTerminal();
-    if (this.failures.length > RECOVER_MAX) {
-      this.recovering = false;
-      fallBack(error.message);
-      return;
-    }
-    await new Promise(resolve => setTimeout(resolve, RECOVER_DELAY_MS));
-    if (this.closed || this.client !== client) { this.recovering = false; return; }
     try {
-      const interrupted = [...this.history.values()].filter(turn => turn.status === 'inProgress');
-      for (const turn of interrupted) this.history.set(turn.id, { ...turn, status: 'interrupted', hubCompletedAt: Date.now(), error: 'CodeAgent serve 中断，这一轮没有跑完' });
-      const submission = this.runtime.submission;
-      if (submission?.status === 'unknown') this.runtime = { ...this.runtime, submission: { ...submission, status: 'reviewed' } };
-      this.active = null;
-      await this.reconnect();
-      this.emit('action-error', interrupted.length
-        ? 'CodeAgent 服务刚才中断，已自动恢复。上一轮没有跑完，没有自动重发，请看结果后决定是否再发一次。'
-        : 'CodeAgent 服务刚才中断，已自动恢复，上下文完整。');
-    } catch (recoverError) {
-      if (!this.closed && this.runtime.connection !== 'connected') fallBack(recoverError.message);
+      do {
+        this.recoveryAgain = false;
+        const now = Date.now();
+        this.failures = [...this.failures.filter(at => now - at < RECOVER_WINDOW_MS), now];
+        if (this.failures.length > RECOVER_MAX) {
+          if (this.active) client.markUnknown();
+          else fallBack(error.message);
+          return;
+        }
+        await new Promise(resolve => setTimeout(resolve, this.options.recoverDelayMs ?? RECOVER_DELAY_MS));
+        if (this.closed || this.client !== client) return;
+        if (client.closed) {
+          this.closeTerminal();
+          if (this.active) {
+            this.emit('action-error', 'CodeAgent 连接已断开，当前轮次结果不明，请核对原生会话。');
+          } else {
+            try { await this.reconnect(); }
+            catch (recoverError) { fallBack(recoverError.message); }
+          }
+          return;
+        }
+        try {
+          await client._subscribe();
+          // 给 close/error 回调机会，检查仍是同一条存活订阅。
+          await new Promise(resolve => setImmediate(resolve));
+          if (this.closed || this.client !== client) return;
+          if (!client.sse || this.recoveryAgain) { this.recoveryAgain = true; continue; }
+          this.emit('action-error', '已重新订阅事件流，等待服务端终态确认。');
+        } catch (recoverError) { error = recoverError; this.recoveryAgain = true; }
+      } while (this.recoveryAgain);
     } finally { this.recovering = false; }
   }
 
@@ -107,7 +142,11 @@ class CodeAgentServeSession extends AcpSession {
     clearTimeout(this.terminalTimer);
     this.terminalTimer = null;
     this.detachAfterOpen = null;
-    if (this.terminal) { try { this.terminal.resize(this.cols, this.rows); } catch { /* 正在退出 */ } return { ok: true, reused: true }; }
+    if (this.terminal) {
+      if (!this.stopBypassWatch) this.watchTerminal(this.terminal);
+      try { this.terminal.resize(this.cols, this.rows); } catch { /* 正在退出 */ }
+      return { ok: true, reused: true };
+    }
     this.terminalStarting ||= this._openTerminal().finally(() => { this.terminalStarting = null; });
     return this.terminalStarting;
   }
@@ -118,10 +157,12 @@ class CodeAgentServeSession extends AcpSession {
     // 终端的工作目录也要用真实长路径，否则 CodeAgent 会认为会话属于别的目录并弹确认。
     const term = this.options.spawnTerminal({ args: this.terminalArgs(), cols: this.cols, rows: this.rows, cwd: canonicalDir(this.options.cwd) });
     this.terminal = term;
+    this.watchTerminal(term);
     this.emit('data', '\x1bc');
     term.onData(data => { if (this.terminal === term) this.emit('data', data); });
     term.onExit(() => {
       if (this.terminal !== term) return;
+      this.stopTerminalWatch();
       this.terminal = null;
       this.emit('terminal-closed');
     });
@@ -130,12 +171,14 @@ class CodeAgentServeSession extends AcpSession {
     return { ok: true, reused: false, ms: Date.now() - startedAt };
   }
   detachTerminal({ delayMs = TERMINAL_KEEP_MS } = {}) {
+    this.stopTerminalWatch();
     if (!this.terminal) { if (this.terminalStarting) this.detachAfterOpen = { delayMs }; return; }
     clearTimeout(this.terminalTimer);
     this.terminalTimer = setTimeout(() => this.closeTerminal(), delayMs);
     this.terminalTimer.unref?.();
   }
   closeTerminal() {
+    this.stopTerminalWatch();
     clearTimeout(this.terminalTimer);
     this.terminalTimer = null;
     const term = this.terminal;
@@ -143,6 +186,20 @@ class CodeAgentServeSession extends AcpSession {
     if (!term) return;
     try { term.kill(); } catch { /* 已退出 */ }
     this.emit('terminal-closed');
+  }
+  watchTerminal(term) {
+    this.stopTerminalWatch();
+    if (this.options.permissionMode !== 'bypassPermissions') return;
+    const watch = this.options.watchBypassWarning || require('./claude-trust-dialog').watchBypassWarning;
+    let attached = true;
+    const stop = watch({ onData: fn => term.onData(fn), write: data => {
+      if (attached && this.terminal === term) term.write(data);
+    } });
+    this.stopBypassWatch = () => { attached = false; stop(); };
+  }
+  stopTerminalWatch() {
+    this.stopBypassWatch?.();
+    this.stopBypassWatch = null;
   }
   resize(cols, rows) {
     this.cols = cols;

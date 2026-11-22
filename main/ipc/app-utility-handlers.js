@@ -51,7 +51,22 @@ function createSystemResourceSampler(osApi = systemOs) {
   };
 }
 
-function saveClipboardImage(deps) {
+// 粘进会话的图片长边上限（2026-11-22）：Claude 接口在一轮里图多时要求每张 ≤2000×2000，超了 CLI 自己缩，
+// 缩不动就整轮报「dimensions exceed the 2000x2000px limit」（同事 v5.6.76 实遇，全屏截图 2560/3840 宽必中）。
+// 保存时就按比例缩到长边 2000，模型端本来也会降到约 1568，看图效果不变。
+const PASTE_IMAGE_MAX_EDGE = 2000;
+function fitImageToMaxEdge(image, maxEdge = PASTE_IMAGE_MAX_EDGE) {
+  const from = image.getSize();
+  const edge = Math.max(from.width, from.height);
+  if (!(edge > maxEdge)) return { image, resized: false, from, to: from };
+  const ratio = maxEdge / edge;
+  const target = { width: Math.max(1, Math.round(from.width * ratio)), height: Math.max(1, Math.round(from.height * ratio)) };
+  const scaled = image.resize({ ...target, quality: 'best' });
+  return { image: scaled, resized: true, from, to: scaled.getSize() };
+}
+
+// withInfo=true 时返回 { path, resized, from, to }（输入框据此提示「已缩小」）；不带参数仍只返回路径，兼容旧调用。
+function saveClipboardImage(deps, { withInfo = false } = {}) {
   const {
     clipboard,
     crypto,
@@ -73,12 +88,33 @@ function saveClipboardImage(deps) {
     const filename = `${timestamp}-${id}.png`;
     const filePath = path.join(imageDir, filename);
 
-    fs.writeFileSync(filePath, image.toPNG());
-    return filePath;
+    const fitted = fitImageToMaxEdge(image);
+    fs.writeFileSync(filePath, fitted.image.toPNG());
+    if (fitted.resized) logger.info?.(`[paste-image] 图片 ${fitted.from.width}×${fitted.from.height} 超过 ${PASTE_IMAGE_MAX_EDGE}px，已缩到 ${fitted.to.width}×${fitted.to.height}`);
+    return withInfo ? { path: filePath, resized: fitted.resized, from: fitted.from, to: fitted.to, maxEdge: PASTE_IMAGE_MAX_EDGE } : filePath;
   } catch (err) {
     logger.warn('[群聊] save-clipboard-image failed:', err.message);
     return null;
   }
+}
+
+// 文件入口只读原图；超限时沿用位图保存流程，在 Hub 图片目录写缩小副本。
+function prepareImageFile(deps, filePath) {
+  if (typeof filePath !== 'string' || !deps.path.isAbsolute(filePath)) throw new Error('Invalid attachment path');
+  // 只缩放能可靠解码的静态图；GIF 动图、WebP/BMP/TIFF 等解不出来的照原样附上（以前就能附，不能因缩放变成附不上）。
+  if (!/\.(png|jpe?g)$/i.test(filePath)) return { path: filePath, resized: false };
+  let image;
+  try {
+    // Buffer decoding fixes the representation at 1 pixel per DIP; @2x names
+    // must not halve the dimensions used by the attachment limit.
+    image = require('../../core/image-file-orientation').decodeImageFile(
+      deps.nativeImage || require('electron').nativeImage, deps.fs.readFileSync(filePath));
+  } catch { return { path: filePath, resized: false }; }
+  if (!image || image.isEmpty()) return { path: filePath, resized: false };
+  if (Math.max(...Object.values(image.getSize())) <= PASTE_IMAGE_MAX_EDGE) return { path: filePath, resized: false };
+  const saved = saveClipboardImage({ ...deps, clipboard: { readImage: () => image } }, { withInfo: true });
+  if (!saved) throw new Error('Cannot prepare image: ' + deps.path.basename(filePath));
+  return { ...saved, originalPath: filePath };
 }
 
 function registerAppUtilityIpc(ipcMain, deps) {
@@ -131,9 +167,10 @@ function registerAppUtilityIpc(ipcMain, deps) {
     return remote.fetchRemoteImage(url, { fetch: remote.createElectronSingleHopFetch(require('electron').net) });
   });
 
-  ipcMain.handle('save-clipboard-image', () => {
-    return saveClipboardImage(deps);
+  ipcMain.handle('save-clipboard-image', (_event, options) => {
+    return saveClipboardImage(deps, { withInfo: !!(options && options.withInfo) });
   });
+  ipcMain.handle('prepare-image-file', (_event, filePath) => prepareImageFile(deps, filePath));
 
   ipcMain.handle('get-hook-status', () => ({
     up: deps.getHookPort() !== null,
@@ -196,4 +233,7 @@ module.exports = {
   createSystemResourceSampler,
   registerAppUtilityIpc,
   saveClipboardImage,
+  prepareImageFile,
+  fitImageToMaxEdge,
+  PASTE_IMAGE_MAX_EDGE,
 };

@@ -103,6 +103,42 @@ function fakeDom() {
 const translations = { '启动中心': 'Launch Center', '准备恢复': 'Preparing to restore' };
 const i18n = { translate: value => translations[value] || value };
 
+test('会议室地域：英文翻译可见文字及 placeholder/title/aria-label，切回中文还原', () => {
+  const realI18n = require('../core/i18n');
+  realI18n.loadDictionaries();
+  realI18n.setLanguage('en');
+  const dom = fakeDom();
+  const dict = require('../core/i18n/locales/en/rooms-area.json');
+  for (const source of ['所在地域', '国家/地区', '城市，如 北京', '楼宇，如 练秋湖F12栋',
+    '会议室所在国家/地区', '会议室所在城市', '会议室所在楼宇']) assert.ok(dict[source], source);
+  const pageSource = fs.readFileSync(path.join(__dirname, '../renderer/company-rooms-page.js'), 'utf8');
+  const messages = pageSource.match(/(?:按从上到下的顺序尝试[^<]+|抢别的城市或楼宇时填，写法[^"\n]+|当前会议室组件还不支持切换地域[^<'\n]+)/g) || [];
+  assert.equal(messages.length, 4);
+  for (const source of messages) {
+    assert.ok(dict[source], source);
+  }
+  const nodes = Object.keys(dict).map(source => {
+    const input = dom.document.body.append(dom.el('input', { placeholder: source, title: source, 'aria-label': source }));
+    const text = dom.document.body.append(dom.text(source));
+    return { source, input, text };
+  });
+  const translator = createDomTranslator({ document: dom.document, i18n: realI18n });
+  try {
+    translator.start();
+    for (const { source, input, text } of nodes) {
+      assert.equal(text.nodeValue, dict[source]);
+      for (const attr of ['placeholder', 'title', 'aria-label']) assert.equal(input.getAttribute(attr), dict[source]);
+    }
+    translator.stop();
+    for (const { source, input, text } of nodes) {
+      assert.equal(text.nodeValue, source);
+      assert.equal(input.getAttribute('placeholder'), source);
+    }
+  } finally {
+    translator.stop(); realI18n.setLanguage('zh-CN');
+  }
+});
+
 test('DOM：同批重复文本/属性与父子扫描交叠，切回中文保留最新原文', () => {
   const dom = fakeDom();
   const parent = dom.document.body.append(dom.el('div', { title: '启动中心', 'aria-label': '启动中心' }));

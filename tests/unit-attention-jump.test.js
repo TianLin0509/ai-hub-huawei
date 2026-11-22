@@ -1,7 +1,7 @@
 'use strict';
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { attentionQueue, nextTarget, summary } = require('../renderer/attention-jump');
+const { attentionQueue, leadMapFrom, nextTarget, summary } = require('../renderer/attention-jump');
 const { ATTENTION_NEEDS_INPUT, ATTENTION_REPLY_READY, attentionStateOf } = require('../core/session-attention-state.js');
 
 // 用真实的状态判断函数验证两类状态的字段写法没有猜错。
@@ -47,4 +47,50 @@ test('后台用途和隐藏的会话不算；当前打开的不用再跳', () =>
   assert.equal(nextTarget(queue, 'a').id, 'b');
   assert.equal(nextTarget(queue, 'x').id, 'a');
   assert.equal(nextTarget([], 'x'), null);
+});
+
+test('负责人的成员新回复不进待你看，独立会话照算', () => {
+  const leads = new Map([['m1', 'lead'], ['m2', 'lead']]);
+  const queue = attentionQueue([
+    { id: 'lead', title: '负责人', kind: 'codeagent', lastMessageTime: 1 },
+    sessionWith('ready', 'm1', 2, { title: 'm1' }),
+    sessionWith('ready', 'solo', 3, { title: '零碎' }),
+  ], { leadOf: id => leads.get(id) || null });
+  assert.deepEqual(queue.map(row => row.session.id), ['solo']);
+});
+
+test('成员等你拍板或出错卡住汇总到负责人一条，不漏也不重复', () => {
+  const leads = new Map([['m1', 'lead'], ['m2', 'lead'], ['m3', 'lead'], ['m4', 'lead']]);
+  const queue = attentionQueue([
+    { id: 'lead', title: '负责人', kind: 'codeagent', lastMessageTime: 1 },
+    sessionWith('input', 'm1', 2, { title: 'm1' }),
+    { id: 'm2', title: 'm2', kind: 'codeagent', lastMessageTime: 3, status: 'idle', connectionIssue: { type: 'stream-disconnected', message: '连接中断' } },
+    sessionWith('ready', 'm3', 4, { title: 'm3' }),
+    { id: 'm4', title: 'm4', kind: 'codeagent', lastMessageTime: 5, status: 'dormant', connectionIssue: { type: 'stream-disconnected' } },
+  ], { leadOf: id => leads.get(id) || null });
+  assert.equal(queue.length, 1, JSON.stringify(queue.map(r => r.session.id)));
+  assert.equal(queue[0].session.id, 'lead');
+  assert.equal(queue[0].needsInput, true);
+  assert.ok(queue[0].memberAlerts.some(a => a.session.id === 'm1' && a.reason === '等你拍板'));
+  assert.ok(queue[0].memberAlerts.some(a => a.session.id === 'm2' && a.reason === '连接异常'), JSON.stringify(queue[0].memberAlerts.map(a => a.reason)));
+  assert.equal(queue[0].memberAlerts.length, 2, '成员 m3 只是有新回复、m4 已休眠，都不进汇总');
+  assert.match(summary(queue), /负责人：m1等你拍板、m2连接异常/);
+});
+
+test('负责人自己有新回复时只占一条；负责人不在侧栏时成员的拍板退回成员自己', () => {
+  const leads = new Map([['m1', 'lead'], ['x1', 'gone']]);
+  const queue = attentionQueue([
+    sessionWith('ready', 'lead', 1, { title: '负责人' }),
+    sessionWith('input', 'm1', 2, { title: 'm1' }),
+    sessionWith('input', 'x1', 3, { title: 'x1' }),
+  ], { leadOf: id => leads.get(id) || null });
+  assert.deepEqual(queue.map(row => row.session.id).sort(), ['lead', 'x1']);
+  assert.equal(queue.find(r => r.session.id === 'lead').needsInput, true);
+});
+
+test('leadMapFrom：按组队界面算出成员→负责人，没有组队界面时为空', () => {
+  const sessions = new Map([['lead', {}], ['m1', {}], ['solo', {}]]);
+  const teamUi = { isLead: id => id === 'lead', membersOf: id => (id === 'lead' ? ['m1'] : []) };
+  assert.deepEqual([...leadMapFrom(teamUi, sessions, {})], [['m1', 'lead']]);
+  assert.equal(leadMapFrom(undefined, sessions, {}).size, 0);
 });

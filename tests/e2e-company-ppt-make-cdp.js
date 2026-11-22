@@ -126,7 +126,9 @@ async function main() {
     await click('[data-pptk="start"]');
     await wait('document.querySelector(".pptk-busy b")?.textContent==="正在让助理写页面内容…"', 'waiting state');
     await wait('[...document.querySelectorAll(".pptk-busy small")].some(e=>/^排队中：/.test(e.textContent))', 'waiting step shown');
-    result.checks.push('生成中写明卡在哪一步（夹具：排队中），与已用时间同屏显示');
+    // 写得久或卡住时就地有出路（F7）：等待框里有「停止」；夹具没有会话编号，不显示「看助理在做什么」。
+    assert.equal(await c.eval('!!document.querySelector(".pptk-busy [data-pptk=stop]") && !document.querySelector(".pptk-busy [data-pptk=watch]")'), true, '等待框里有停止按钮');
+    result.checks.push('生成中写明卡在哪一步（夹具：排队中），与已用时间同屏显示，旁边有「停止」');
     await wait('/已用 [1-9]\\d* 秒/.test(document.querySelector("[data-pptk-clock]")?.textContent||"")', 'elapsed clock', 8000);
     assert.deepEqual(await c.eval('window.__mk.calls[0]'), ['ppt-make-start', { skeletonId: await c.eval('document.querySelector(".pptk-sk.on").dataset.id'), brief: '两项改进叠加后，指标提升，数据待补' }]);
     await oneScreen('生成中');

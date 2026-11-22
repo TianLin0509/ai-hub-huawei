@@ -27,7 +27,13 @@ function harness({ reply } = {}) {
     archive: { owner: () => ME, read: () => [], loadIndex: () => ({ names: {} }) },
     welink: async (args, opts = {}) => {
       welink.checkArgs(args, opts);
-      if (args[1] === 'query-history-message') { world.reads.push(args); return { code: 0, stdout: JSON.stringify({ chatInfo: [] }), stderr: '' }; }
+      if (args[1] === 'query-history-message') {
+        world.reads.push(args);
+        if (world.limitOnce?.has(args[3])) { world.limitOnce.delete(args[3]); throw Object.assign(new Error('WeLink 限流，请稍后重试'), { code: 'WELINK_RATE_LIMITED' }); }
+        if (world.failing?.has(args[3])) return { code: 1, stdout: '', stderr: 'no permission' };
+        return { code: 0, stdout: JSON.stringify({ chatInfo: (world.history || {})[args[3]] || [] }), stderr: '' };
+      }
+      if (args[1] === 'query-recent-conversation') { world.lists = (world.lists || 0) + 1; return { code: 0, stdout: JSON.stringify({ conversation_info: world.recent || [] }), stderr: '' }; }
       if (args[0] === 'search') return { code: 0, stdout: '{}', stderr: '' };
       if (world.hold) await world.hold;
       await opts.beforeRun?.(); world.sent.push({ args, opts }); return { code: 0, stdout: JSON.stringify({ code: 0, data: { msgId: '9001' } }), stderr: '' };
@@ -45,8 +51,9 @@ function harness({ reply } = {}) {
       world.final = { text: JSON.stringify(rows) + '\n' + marker }; return { ok: true };
     },
     lastFinal: () => world.final });
-  const settle = async () => { for (let i = 0; i < 200 && service.running.size; i += 1) await new Promise(r => setTimeout(r, 2)); };
-  const tick = async () => { await service.tick(); await settle(); };
+  // 等后台那一轮（创建分身时顺手触发的 tick）和起草都结束，测试里的 tick 才不会因「上一轮还在跑」被跳过。
+  const settle = async () => { for (let i = 0; i < 200 && (service.running.size || service.ticking); i += 1) await new Promise(r => setTimeout(r, 2)); };
+  const tick = async () => { await settle(); await service.tick(); await settle(); };
   const add = async input => { const r = await service.create(input); await settle(); return r.avatars.find(a => a.id === r.createdId); };
   return { service, world, tick, add, settle, cleanup: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
@@ -357,4 +364,150 @@ test('回复卡片的正文能读出来；撤回只放行给定的那一条', ()
   assert.deepEqual(welink.checkArgs(args, { recall: { conv: 'g1', messageId: '9' } }), args);
   assert.throws(() => welink.checkArgs(args, { recall: { conv: 'g2', messageId: '9' } }));
   assert.throws(() => welink.checkArgs(args, {}));
+});
+
+// 2026-11-22（r7-F3）：「设了只 @我 也不起草」——「我的分身」默认动作是提醒，勾了群和只 @我 也只会提醒。
+test('「我的分身」默认起草；动作设成提醒的，在「为什么交给你」里说清怎么改', async () => {
+  const h = harness(); const { service, world } = h;
+  try {
+    const av = await h.add({ tpl: 'blank', atOnly: true, targets: [{ id: G.id, name: G.name, type: 'group' }] });
+    assert.equal(av.action, 'draft'); assert.equal(av.targets[0].action, 'draft');
+    world.now += 60000; world.messages.g1 = [msg('g1', 'zhang', '@测试员 这个版本什么时候发？', world.now, { atMe: true })];
+    await h.tick();
+    assert.equal(service.status().items[0].state, 'ready', '只 @我 的群消息写出草稿');
+    const old = await h.add({ tpl: 'blank', targets: [{ id: H.id, name: H.name, type: 'group', action: 'remind' }] });
+    world.now += 60000; world.messages.g2 = [msg('g2', 'zhang', '@测试员 评审材料能先帮我看一下吗？', world.now, { atMe: true })];
+    await h.tick();
+    const item = service.status().items.find(i => i.avatarId === old.id && i.conv === 'g2');
+    assert.equal(item.state, 'remind');
+    assert.match(item.why, /动作设的是「提醒」.*改成「起草」/);
+  } finally { h.cleanup(); }
+});
+
+// 2026-11-22（r7-F3）：「起草慢」——全部会话范围只靠助理快照（工作日 10 分钟、周末 2 小时、夜里不取）。
+test('全部会话范围：不等助理快照，按最近会话列表的变化增量读，2 分钟内起草；第一轮只记顺序', async () => {
+  const h = harness(); const { service, world } = h;
+  try {
+    const conv = (id, name) => ({ group_id: id, group_name: name, recent_conversation_type: 'CHAT_TYPE_GROUP_MSG' });
+    world.recent = [conv('g7', '甲群'), conv('g8', '乙群')];
+    const av = await h.add({ tpl: 'draft' });              // 建好后顺手跑的那一轮就列了会话
+    assert.equal(av.kind, 'all');
+    await h.tick();
+    assert.equal(world.lists, 1); assert.equal(world.reads.length, 0, '第一轮只记顺序');
+    world.now += 30000; await h.tick();
+    assert.equal(world.lists, 1, '2 分钟内不重复列会话');
+    world.now += 100000;
+    world.recent = [conv('g8', '乙群'), conv('g7', '甲群')];
+    world.history = { g8: [{ msgId: '501', sender: 'zhang', content: '@测试员 新版本什么时候能装？', contentType: 'TEXT_MSG', serverSendTime: world.now - 5000, at: true, atAccountList: [ME] }] };
+    await h.tick();
+    // 和助理取数同一套顺序比对：排上来的会话，加上它后面那个（分不清谁动了时保守多读一个）
+    assert.deepEqual(world.reads.map(r => r[3]), ['g8', 'g7']);
+    const items = service.status().items;
+    assert.equal(items.length, 1); assert.equal(items[0].state, 'ready'); assert.equal(items[0].convName, '乙群');
+    assert.equal(world.sent.length, 0, '不能自动发');
+  } finally { h.cleanup(); }
+});
+
+test('只用指定群的分身不列最近会话，原来的请求量不变', async () => {
+  const h = harness(); const { world } = h;
+  try {
+    await h.add(group());
+    world.now += 60000; await h.tick(); world.now += 200000; await h.tick();
+    assert.equal(world.lists || 0, 0);
+  } finally { h.cleanup(); }
+});
+
+const wideConv = (id, group = true) => (group ? { group_id: id, group_name: id, recent_conversation_type: 'CHAT_TYPE_GROUP_MSG' } : { target_account: id, native_name: id, recent_conversation_type: 'CHAT_TYPE_P2P_MSG' });
+async function wideHarness() {
+  const h = harness(); await h.add({ tpl: 'draft' });
+  const step = async (ids, gapMs = 121000) => { h.world.recent = ids.map(id => wideConv(id)); h.world.now += gapMs; h.world.reads.length = 0; await h.tick(); return h.world.reads.map(r => r[3]); };
+  return { ...h, step };
+}
+test('快通道：一次排上来 10 个会话，每轮读 4 个，3 轮内全部读到', async () => {
+  const h = await wideHarness();
+  try {
+    const base = 'abcdefghij'.split('');
+    assert.deepEqual(await h.step(base), [], '第一轮只记顺序');
+    const moved = [...base].reverse();           // j…a 全部往前挪
+    const seen = new Set();
+    for (let i = 0; i < 3; i += 1) for (const id of await h.step(moved)) seen.add(id);
+    assert.deepEqual([...seen].sort(), base, '没有会话被永远落下');
+  } finally { h.cleanup(); }
+});
+test('快通道：读到一半被限流，没读的留到下轮；单个会话一直读不了，3 次后放弃、不挡后面', async () => {
+  const h = await wideHarness();
+  try {
+    await h.step(['a', 'b', 'c', 'd', 'e']);
+    h.world.limitOnce = new Set(['c']); h.world.failing = new Set(['e']);
+    const first = await h.step(['e', 'd', 'c', 'b', 'a']);
+    assert.ok(first.includes('c') && !first.includes('b'), '限流时停在这一轮');
+    const later = [];
+    for (let i = 0; i < 4; i += 1) later.push(...await h.step(['e', 'd', 'c', 'b', 'a']));
+    for (const id of ['a', 'b', 'c']) assert.ok(later.includes(id), id + ' 下轮补读');
+    assert.ok(later.filter(id => id === 'e').length <= 3, '读不了的会话最多试 3 次');
+  } finally { h.cleanup(); }
+});
+
+test('快通道：50 个会话全变动且持续重排，待补项不丢，17 轮内全部读到', async () => {
+  for (const churn of [false, true]) {
+    const h = await wideHarness();
+    try {
+      const base = Array.from({ length: 50 }, (_, i) => 'c' + String(i).padStart(2, '0'));
+      assert.deepEqual(await h.step(base), []);
+      let order = [...base].reverse();
+      const seen = new Set();
+      for (let i = 0; i < 17; i += 1) {
+        const reads = await h.step(order);
+        assert.ok(reads.length <= 4, '每轮仍最多 4 次历史请求');
+        for (const id of reads) seen.add(id);
+        assert.ok(h.service.widePending.length <= 50, '队列以列表页大小为界');
+        if (churn) order = [order.at(-1), ...order.slice(0, -1)];
+      }
+      assert.deepEqual([...seen].sort(), base, '排序稳定或持续变化，都不能丢掉最早未读的会话');
+    } finally { h.cleanup(); }
+  }
+});
+
+test('快通道：失败 3 次冷却后重新排队，按最新游标读取，仍失败时重获 3 次机会', async () => {
+  const h = await wideHarness();
+  try {
+    await h.step(['a', 'b', 'c', 'd', 'e']);
+    const order = ['e', 'd', 'c', 'b', 'a'];
+    h.world.failing = new Set(['c']);
+    const failed = [];
+    for (let i = 0; i < 5; i += 1) failed.push(...await h.step(order));
+    assert.equal(failed.filter(id => id === 'c').length, 3);
+    assert.ok(h.service.wideDead.has('c'));
+    const beforeExpiry = h.service.wideDead.get('c') - h.world.now - 60000;
+    assert.ok(!(await h.step(order, beforeExpiry)).includes('c'), '冷却未到期不读取');
+    assert.ok((await h.step(order, 2 * 60000)).includes('c'), '排序不变，冷却到期也重新入队');
+    assert.equal(h.service.wideFails.get('c'), 1, '重新计数失败次数');
+    const retry = [];
+    for (let i = 0; i < 4; i += 1) retry.push(...await h.step(order));
+    assert.equal(retry.filter(id => id === 'c').length, 2);
+    assert.ok(h.service.wideDead.has('c'));
+    h.world.failing.clear();
+    h.world.messages.c = [msg('c', ME, '收到', h.world.now)];
+    const latest = h.world.messages.c[0].key;
+    const recovered = await h.step(order, 31 * 60000);
+    assert.ok(recovered.includes('c'), '权限恢复后不用等待新排序就会重试');
+    const args = h.world.reads.find(r => r[3] === 'c');
+    assert.equal(args[args.indexOf('--message-id') + 1], latest);
+    assert.equal(args[args.indexOf('--query-direction') + 1], '1');
+    assert.ok(!h.service.wideDead.has('c') && !h.service.wideFails.has('c'));
+    assert.ok(!h.service.widePending.some(x => x.id === 'c'), '成功后出队');
+  } finally { h.cleanup(); }
+});
+
+test('快通道：置顶会话排序不变也轮流读到，每轮只占 1 个名额', async () => {
+  const h = await wideHarness();
+  try {
+    await h.step(['p1', 'p2', 'g1', 'g2']);
+    await h.step(['p1', 'p2', 'g2', 'g1']);       // 普通会话动了一次，认出置顶边界是 2
+    const reads = [];
+    for (let i = 0; i < 4; i += 1) { const r = await h.step(['p1', 'p2', 'g2', 'g1']); reads.push(r); assert.ok(r.length <= 4); }
+    const flat = reads.flat();
+    assert.ok(flat.includes('p1') && flat.includes('p2'), '两个置顶群都被看到');
+    assert.ok(reads.every(r => r.filter(id => id.startsWith('p')).length <= 1), '每轮最多 1 个置顶');
+  } finally { h.cleanup(); }
 });

@@ -73,10 +73,10 @@ async function survivorsAfter(pids, { alive = isAlive, ms = 3000, step = 200 } =
   return left;
 }
 
-// 隐藏运行命令。超时后按 PID 结束整棵进程树再返回（原来只结束最外层的 PowerShell/cmd，安装子进程会继续跑）。
+// 隐藏运行命令（11-22：结束后确认退出的等待 3 秒→10 秒，机器忙时 taskkill 已成功但进程退出要 3 秒以上，会误报没结束）。超时后按 PID 结束整棵进程树再返回（原来只结束最外层的 PowerShell/cmd，安装子进程会继续跑）。
 // 超时一旦触发就定局（2026-11-17 r25c）：包装进程在结束树期间先退出，它的 close 不能把结果改成「普通失败」；
 // 要等 taskkill 返回、并逐个确认结束前记下的整棵树都已退出，才返回；没退出的 PID 放进 survivors，交给调用方继续占用。
-function runHidden(file, args, { timeout = 60000, env, kill = killTree, tree = listTree, alive = isAlive, settleMs = 3000 } = {}) {
+function runHidden(file, args, { timeout = 60000, env, kill = killTree, tree = listTree, alive = isAlive, settleMs = 10000 } = {}) {
   return new Promise(resolve => {
     let child, done = false, timingOut = false, stdout = '', stderr = '', timer = null;
     const limit = 4 * 1024 * 1024;
