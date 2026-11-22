@@ -167,6 +167,7 @@
   "导入本机已登录的号": "Import accounts signed in locally",
   "填一个备注，例如 张工": "Add a label, such as a colleague's name",
   "号主在弹出的窗口里登录一次": "Have the owner sign in once in the window that opens",
+  "密码只交给 CodeAgent 自己的登录程序、直接发往公司认证服务，AI Hub 不读取、不保存、不外传。登录凭证由 CodeAgent 用 Windows 账户加密，只存在本机这个号自己的目录里。号池用账号密码、不用浏览器授权，是因为浏览器会沿用本机已登录的 W3 身份，登不上号主本人的号。": "The password goes only to CodeAgent's own sign-in program and straight to the company authentication service; AI Hub never reads, stores or sends it. CodeAgent encrypts the resulting credential with your Windows account and keeps it only in this account's folder on this computer. Pool accounts use username and password rather than browser sign-in because the browser reuses the W3 identity already signed in on this computer and cannot sign in the owner's own account.",
   "新建会话时选这个号": "Choose this account when starting a session",
   "额度规则：": "Quota rules:",
   "额度规则": "Quota rules",

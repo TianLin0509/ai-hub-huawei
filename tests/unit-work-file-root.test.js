@@ -6,6 +6,72 @@ const roots = require('../core/work-file-root');
 const { WorkspaceService } = require('../core/workspace-service');
 const { buildConfigJsonUpdate, workFileRootForm } = require('../main/ipc/config-handlers');
 test.afterEach(() => roots.configure());
+test('managed reports stay readable by phone HTML, images and podcast across root changes', t => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-trusted-work-files-'));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  // Podcast uses the real process environment; isolate it from developer overrides.
+  for (const key of ['AI_HUB_WORKSPACE_ROOT', 'AI_HUB_LEGACY_WORKSPACE_ROOTS', 'AI_HUB_ARTIFACTS_ROOT']) {
+    const saved = process.env[key];
+    delete process.env[key];
+    t.after(() => { if (saved === undefined) delete process.env[key]; else process.env[key] = saved; });
+  }
+  const home = path.join(tmp, 'home'), dataDir = path.join(tmp, 'data');
+  t.mock.method(os, 'homedir', () => home);
+  const storage = require('../core/storage-roots');
+  const { answerHtmlFiles } = require('../core/hub-phone/html-snapshot');
+  const { answerImages } = require('../core/hub-phone/images');
+  const { AssistantService } = require('../core/hub-assistant/service');
+  const podcast = file => AssistantService.prototype.podcastSource.call({ deps: { dataDir } }, file);
+  const trusted = () => storage.trustedFileRoots({ dataDir, env: {}, home });
+  const probe = (dir, allowed) => {
+    fs.mkdirSync(dir, { recursive: true });
+    const html = path.join(dir, 'report.html'), png = path.join(dir, 'figure.png');
+    fs.writeFileSync(html, '<p>Same report</p>');
+    fs.writeFileSync(png, Buffer.from('89504e470d0a1a0a', 'hex'));
+    assert.equal(answerHtmlFiles(`[report](${html})`, { roots: trusted() }).length, allowed ? 1 : 0, html);
+    assert.equal(answerImages(`![figure](${png})`, { roots: trusted() }).length, allowed ? 1 : 0, png);
+    if (allowed) assert.equal(podcast(html), html);
+    else assert.throws(() => podcast(html));
+  };
+  const original = [
+    path.join(dataDir, 'company-assistant', 'workspace'),
+    path.join(dataDir, 'company-assistant', 'ppt-workspace'),
+    path.join(dataDir, 'company-assistant', 'meeting-room'),
+    path.join(dataDir, 'company-forum', 'workspace'),
+    path.join(dataDir, 'help-ask', 'cwd'),
+    path.join(dataDir, 'workspaces'),
+    path.join(home, 'AI-Artifacts'),
+  ];
+  roots.configure();
+  const defaults = trusted();
+  for (const dir of original) probe(dir, true);
+  probe(path.join(tmp, 'unmanaged'), false);
+  const first = path.join(tmp, 'first'), second = path.join(tmp, 'second');
+  const names = ['workspaces', 'group-workspaces', 'assistant-workspace', 'ppt-workspace',
+    'meeting-room', 'forum-workspace', 'analysis-workspaces', 'help-workspace',
+    'phone-inbox', 'photo-assistant', 'artifacts'];
+  const check = managedRoots => {
+    for (const dir of original) probe(dir, true);
+    for (const root of managedRoots) {
+      assert.ok(!trusted().includes(root));
+      for (const name of names) probe(path.join(root, name, 'nested'), true);
+      // Parent files, unknown children, prefix lookalikes and traversal stay outside the allowlist.
+      for (const dir of [root, path.join(root, 'private'), path.join(root, 'assistant-workspace-extra'),
+        path.join(root, 'assistant-workspace', '..', 'unmanaged')]) probe(dir, false);
+    }
+    assert.equal(new Set(trusted().map(storage.pathKey)).size, trusted().length);
+  };
+  roots.configure(first);
+  check([first]);
+  roots.configure(second, [first]);
+  check([first, second]);
+  roots.configure('', [first, second]);
+  check([first, second]);
+  roots.configure();
+  assert.deepEqual(trusted(), defaults, 'unconfigured defaults do not acquire managed root permissions');
+  for (const root of [first, second]) for (const name of names) probe(path.join(root, name), false);
+});
+
 test('升级未配置：所有自动目录逐字沿用旧路径', () => {
   roots.configureAtStartup('', [], { fsModule: { statSync() { assert.fail('未配置时不检查磁盘'); } } });
   for (const name of ['workspaces', 'assistant-workspace', 'ppt-workspace', 'meeting-room', 'forum-workspace', 'phone-inbox', 'photo-assistant', 'artifacts']) {

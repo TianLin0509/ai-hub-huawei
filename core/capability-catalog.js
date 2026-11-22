@@ -83,11 +83,13 @@ function scanCodeAgentSkills(configDir, { fsModule = fs } = {}) {
   return { skills: skills.sort((a, b) => a.name.localeCompare(b.name)), warnings };
 }
 
+const STATE_MAX_MB = 64;
 function collectCapabilities({ homeDir, dataDir, projects = [], codeagentConfigDir = null }) {
   const rows = new Map(), warnings = [], scanned = new Set();
   const warn = (file, e) => { if (!['ENOENT', 'ENOTDIR'].includes(e.code)) warnings.push(`${file}：${e.message}`); };
-  const text = file => { try { if (fs.statSync(file).size > 2 * 1024 * 1024) throw Error('文件超过 2 MB，未读取'); return fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''); } catch (e) { warn(file, e); return null; } };
-  const json = file => { const s = text(file); if (s === null) return {}; try { const d=JSON.parse(s); if(!d || typeof d!=='object' || Array.isArray(d))throw Error(); return d; } catch { warnings.push(`${file}：JSON 格式无效，未读取内容`); return {}; } };
+  // 状态文件（~/.claude.json、~/.cac.json）里还存着各项目的会话历史，同事电脑上常见十几 MB（codeagent-models.js 同样放到 64 MB）。
+  const text = (file, maxMb = 2) => { try { if (fs.statSync(file).size > maxMb * 1024 * 1024) throw Error(`文件超过 ${maxMb} MB，未读取`); return fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''); } catch (e) { warn(file, e); return null; } };
+  const json = (file, maxMb) => { const s = text(file, maxMb); if (s === null) return {}; try { const d=JSON.parse(s); if(!d || typeof d!=='object' || Array.isArray(d))throw Error(); return d; } catch { warnings.push(`${file}：JSON 格式无效，未读取内容`); return {}; } };
   const entries = dir => { try { return fs.readdirSync(dir, { withFileTypes: true }).filter(e => !e.name.startsWith('.')); } catch (e) { warn(dir, e); return []; } };
   const real = p => { try { return fs.realpathSync.native(p); } catch (e) { warn(p, e); return p; } };
   function add(type, name, description, source) {
@@ -117,8 +119,8 @@ function collectCapabilities({ homeDir, dataDir, projects = [], codeagentConfigD
         transport:['stdio','http','sse','streamable-http'].includes(c.type)?c.type:(c.url ? 'HTTP' : 'stdio')});
     }
   }
-  function jsonMcp(file, agent, scope, extra = {}, bare = false) {
-    const d = json(file);
+  function jsonMcp(file, agent, scope, extra = {}, bare = false, maxMb) {
+    const d = json(file, maxMb);
     mcpEntries(bare ? d : {mcpServers:d.mcpServers || {}},file,agent,scope,extra);
     return d;
   }
@@ -190,7 +192,7 @@ function collectCapabilities({ homeDir, dataDir, projects = [], codeagentConfigD
   scanSkills(home('.qwen','skills'),['qwen'],'user');
   codexConfig(home('.codex'),'codex','user');
   codexConfig(path.join(dataDir,'deepseek-codex-profile'),'deepseek','profile');
-  const claude = jsonMcp(home('.claude.json'),'claude','user');
+  const claude = jsonMcp(home('.claude.json'),'claude','user',{},false,STATE_MAX_MB);
   jsonMcp(home('.kimi-code','mcp.json'),'kimi','user');
   jsonMcp(home('.gemini','config','mcp_config.json'),'gemini','user');
   jsonMcp(home('.qwen','settings.json'),'qwen','user');
@@ -212,9 +214,14 @@ function collectCapabilities({ homeDir, dataDir, projects = [], codeagentConfigD
   //   技能 <配置目录>/skills；MCP 在 <配置目录>/.cac.json 顶层 mcpServers（项目级在 projects[cwd].mcpServers，
   //   另认项目里的 .mcp.json）；插件开关在 settings.json 的 enabledPlugins（"<插件>@aimarket": true），
   //   下载在 <配置目录>/plugins。插件目录的内部结构没见过，按 Claude 的写法找，找不到也照样列出开关。
+  //   2026-11-22 同事反馈「CodeAgent 上有的 MCP 资源页看不到」：默认目录 ~/.cac 时，CodeAgent 把登记的 MCP 写在用户目录根下的
+  //   ~/.cac.json（同 Claude Code 的 ~/.claude.json；codeagent-member-mcp.js、codeagent-models.js 早已两处都读），
+  //   这里原来只读 ~/.cac/.cac.json，且超过 2 MB 就跳过，于是列不全。两处都读，同名合并来源。
   const caDir = codeagentConfigDir || home('.cac');
-  const caJsonFile = path.join(caDir,'.cac.json');
-  const ca = fs.existsSync(caDir) ? json(caJsonFile) : {};
+  const caStateFiles = [path.join(caDir,'.cac.json')];
+  if (path.basename(path.resolve(caDir)).toLowerCase()==='.cac') caStateFiles.push(path.join(path.dirname(path.resolve(caDir)),'.cac.json'));
+  const caStates = caStateFiles.filter(f=>fs.existsSync(f)).map(file=>({file,data:json(file,STATE_MAX_MB)}));
+  for (const {file,data} of caStates) mcpEntries({mcpServers:data.mcpServers || {}},file,'codeagent','user');
   if (fs.existsSync(caDir)) {
     scanSkills(path.join(caDir,'skills'),['codeagent'],'user');
     // 从 AI Marketplace 装的技能可能再套一层（<市场>/<技能>/SKILL.md）。
@@ -222,7 +229,6 @@ function collectCapabilities({ homeDir, dataDir, projects = [], codeagentConfigD
       const dir=path.join(caDir,'skills',entry.name);
       if ((entry.isDirectory() || entry.isSymbolicLink()) && !fs.existsSync(path.join(dir,'SKILL.md'))) scanSkills(dir,['codeagent'],'user');
     }
-    mcpEntries({mcpServers:ca.mcpServers || {}},caJsonFile,'codeagent','user');
     codeagentPlugins(caDir);
   }
   function codeagentPlugins(dir) {
@@ -269,8 +275,10 @@ function collectCapabilities({ homeDir, dataDir, projects = [], codeagentConfigD
       for (const [name,c] of Object.entries(p?.mcpServers || {})) add('mcp',name,'项目 MCP 服务器',{agent:kind,scope,path:home('.claude.json'),enabled:c.disabled!==true});
     } else if (kind==='codeagent') {
       jsonMcp(path.join(cwd,'.mcp.json'),kind,scope);
-      const p = Object.entries(ca.projects || {}).find(([p])=>path.resolve(p).toLowerCase()===path.resolve(cwd).toLowerCase())?.[1];
-      for (const [name,c] of Object.entries(p?.mcpServers || {})) add('mcp',name,'项目 MCP 服务器',{agent:kind,scope,path:caJsonFile,enabled:!!c && c.disabled!==true});
+      for (const {file,data} of caStates) {
+        const p = Object.entries(data.projects || {}).find(([p])=>path.resolve(p).toLowerCase()===path.resolve(cwd).toLowerCase())?.[1];
+        for (const [name,c] of Object.entries(p?.mcpServers || {})) add('mcp',name,'项目 MCP 服务器',{agent:kind,scope,path:file,enabled:!!c && c.disabled!==true});
+      }
     } else if (kind==='kimi') jsonMcp(path.join(cwd,'.kimi-code','mcp.json'),kind,scope);
     else if (kind==='gemini') jsonMcp(path.join(cwd,own,'mcp_config.json'),kind,scope);
     else if (kind==='qwen') jsonMcp(path.join(cwd,own,'settings.json'),kind,scope);

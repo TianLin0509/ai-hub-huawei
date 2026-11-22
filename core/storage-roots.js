@@ -142,18 +142,24 @@ function legacyArtifactsRoots({ home = os.homedir() } = {}) {
 // 读取 / 对外提供文件时信任的根（手机发图、口播资料等）。
 function trustedFileRoots({ dataDir, env = process.env, home = os.homedir(), workspaceFallback = 'C:/Work' } = {}) {
   const current = workspaceRoot({ env, fallback: workspaceFallback });
+  const workFiles = require('./work-file-root');
+  // Trust managed output directories individually, never their parent root.
+  // Original defaults remain covered by dataDir, workspace and artifact roots below.
+  const managedDirectories = [
+    'workspaces', 'group-workspaces', 'assistant-workspace', 'ppt-workspace',
+    'meeting-room', 'forum-workspace', 'analysis-workspaces', 'help-workspace',
+    'phone-inbox', 'photo-assistant', 'artifacts',
+  ];
   return dedupe([
     dataDir,
     current,
     ...legacyWorkspaceRoots({ env, current }),
     artifactsRoot({ env, home }),
     ...legacyArtifactsRoots({ home }),
-    ...(require('./work-file-root').current() ? [
-      require('./work-file-root').directory('phone-inbox', null),
-      require('./work-file-root').directory('photo-assistant', null),
-    ] : []),
-    ...require('./work-file-root').previousDirectories('phone-inbox', null),
-    ...require('./work-file-root').previousDirectories('photo-assistant', null),
+    ...managedDirectories.flatMap(name => [
+      workFiles.directory(name, null),
+      ...workFiles.previousDirectories(name, null),
+    ]),
   ]);
 }
 

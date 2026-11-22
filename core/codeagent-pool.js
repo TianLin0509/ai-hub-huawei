@@ -531,6 +531,22 @@ function poolModelOptions(dataDir, accounts) {
   return [...ids.values()].map(id => ({ id, label: models.modelLabel(id), source: 'pool' }));
 }
 
+// 登录窗口开头的说明（2026-11-22 同事反馈「要输账号密码不放心」）：写清密码交给谁、凭证存在哪、为什么不用浏览器授权。
+// 每段一行 echo；路径里合法的 cmd 特殊字符（如 D:\R&D）用 ^ 转义后原样显示，不截断命令（引号不是合法路径字符，去掉）。
+// 实测经过两层 cmd（外层 /c、内层引号里的 /k）后 & | < > ^ ( ) % 都原样输出。
+const cmdEchoText = s => String(s || '').replace(/"/g, '').replace(/[\^&|<>()%]/g, c => '^' + c);
+function loginHint(dir, { personal = false } = {}) {
+  const safeDir = cmdEchoText(dir);
+  const lines = [
+    personal ? '个人账号重新登录：请在下面输入你自己的 W3 用户名和密码。' : '请号主本人在下面输入 W3 用户名和密码。',
+    '密码只交给 CodeAgent 自己的登录程序，直接发往公司认证服务；AI Hub 不读取、不保存、不外传密码。',
+    '登录成功后 CodeAgent 把登录凭证用 Windows 账户加密，只存在本机这个目录：' + safeDir,
+    ...(personal ? [] : ['号池用账号密码、不用浏览器授权：浏览器会沿用本机已登录的 W3 身份，登不上号主本人的号。']),
+    '登录成功后关闭本窗口，回到 AI Hub 即可。',
+  ];
+  return lines.map(l => 'echo ' + l).join(' & ') + ' & echo.';
+}
+
 // 让号主在这台电脑上登录一次：开一个可见的命令行窗口，跑 CodeAgent 自己的账号密码登录（不弹浏览器，
 // 公司实测提示「W3 用户名:」）。密码只交给 CodeAgent，Hub 不经手；Hub 只看配置目录里出现凭证文件。
 // 工作目录用这个号自己的目录，避开「当前目录 .cac 凭证优先」的坑。
@@ -554,8 +570,7 @@ function openLoginWindow(dataDir, id, config, { env = process.env, spawnFn = req
   require('./codeagent-launch-env').applyAccountEnv(childEnv, { ...config, configDir: dir });
   for (const key of Object.keys(childEnv)) if (/^CODEAGENT_HUB_/.test(key) || key === 'CODEAGENT3_LAUNCHER_PID') delete childEnv[key];
   const command = /^[A-Za-z0-9_.-]+$/.test(config.command) ? config.command : `"${String(config.command).replace(/"/g, '')}"`;
-  const hint = personal ? 'echo 个人账号重新登录：请在下面输入你自己的 W3 用户名和密码。登录成功后关闭本窗口，回到 AI Hub 即可。& echo.'
-    : 'echo 请号主本人在下面输入 W3 用户名和密码。登录成功后关闭本窗口，回到 AI Hub 即可。& echo.';
+  const hint = loginHint(dir, { personal });
   const line = `start "${personal ? 'CodeAgent 个人账号登录' : 'CodeAgent 号池登录'}" cmd.exe /k "chcp 65001>nul & ${hint} & call ${command} auth login --method idaas"`;
   const child = spawnFn('cmd.exe', ['/d', '/s', '/c', line], { cwd: dir, env: childEnv, detached: true, stdio: 'ignore', windowsHide: true, windowsVerbatimArguments: true });
   child.on?.('error', () => {});
@@ -623,7 +638,7 @@ module.exports = {
   withPauseStatus,
   accountModels, personalModelsFile, probeCwd,
   localCandidates, importLocal,
-  openLoginWindow,
+  openLoginWindow, loginHint, cmdEchoText,
   POOL_DIR, poolRoot, accountDir, readRegistry, maskAccountId, readCredentials, accountState,
   listAccounts, label, pickAccount, pickAutoChoice, markAssigned, addAccount, setNote, removeAccount,
   personalLastAssignedAt, markPersonalAssigned,

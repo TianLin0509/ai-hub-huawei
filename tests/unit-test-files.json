@@ -63,6 +63,7 @@
   "tests/unit-company-room-offline-retry.test.js",
   "tests/unit-company-rooms-page.test.js",
   "tests/unit-codeagent-skills.test.js",
+  "tests/unit-codeagent-mcp-catalog.test.js",
   "tests/unit-composer-slash-picker.test.js",
   "tests/unit-codeagent-accounts-page.test.js",
   "tests/unit-codeagent-bundled-skills.test.js",
