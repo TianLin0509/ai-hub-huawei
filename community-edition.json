@@ -62,7 +62,7 @@
     "Claude Code、DSH 新增 ACP 卡片试点：启动中心可选，默认仍是 PTY，点「后台」时同一会话切到真实终端",
     "第一次打开后台终端时显示群星过渡动画，已开着的终端秒开不显示"
   ],
-  "version": "5.6.83",
+  "version": "5.6.84",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

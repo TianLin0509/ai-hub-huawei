@@ -377,8 +377,8 @@ async function launchIsolatedHub({
     exitSignal = signal || null;
   });
 
-  // 等 CDP ready (最长 30s)
-  const ver = await _waitForCDP(port, 30000);
+  // 等 CDP ready（最长 90s：发版机同时跑多个任务时，冷启动超过 30s 是常态）
+  const ver = await _waitForCDP(port, 90000);
   if (spawnError || exited) {
     const termination = exited ? null : await _terminateSpawnedChild(child);
     const err = new Error(`[${label}] hub exited before CDP ready (code=${exitCode}, signal=${exitSignal || 'none'}): ${spawnError ? spawnError.message : 'early exit'}`);
@@ -388,7 +388,7 @@ async function launchIsolatedHub({
   }
   if (!ver) {
     const termination = await _terminateSpawnedChild(child);
-    const err = new Error(`[${label}] CDP not ready within 30s`);
+    const err = new Error(`[${label}] CDP not ready within 90s`);
     err.logTail = logLines.slice(-30).join('\n');
     err.termination = termination;
     throw err;

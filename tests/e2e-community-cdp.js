@@ -87,7 +87,7 @@ async function main() {
     let title = '';
     // 产品名和版本标注随发行目标（公司版有自己的名字）。
     const titlePrefix = `${marker.productName || 'AI Hub Community'}${marker.editionBadge ? ' ' + marker.editionBadge : ''}`;
-    for (let i = 0; i < 20 && !title.includes(titlePrefix); i++) { title = windowTitle(hub.pid || hub.child?.pid); await sleep(250); }
+    for (const end = Date.now() + 30000; Date.now() < end && !title.includes(titlePrefix);) { title = windowTitle(hub.pid || hub.child?.pid); await sleep(250); }
     assert.ok(title.startsWith(`${titlePrefix} v${marker.version}（上游 ${marker.upstreamVersion}）`), title);
     report.checks.push(`Window title shows the edition and upstream version: ${title.replace(/：PID \d+/, '')}`);
 
