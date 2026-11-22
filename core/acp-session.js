@@ -532,7 +532,7 @@ class AcpSession extends EventEmitter {
     const outcome = result?.outcome;
     if (!outcome || (outcome.outcome !== 'cancelled' && !(outcome.outcome === 'selected'
       && request.params.options?.some(option => option.optionId === outcome.optionId)))) throw new Error('ACP 权限选择无效');
-    const questions = this.options.kind === 'qwen' && request.params.toolCall?._meta?.qwenQuestions;
+    const questions = ['qwen', 'codeagent'].includes(this.options.kind) && request.params.toolCall?._meta?.qwenQuestions;
     let answers;
     if (questions && outcome.outcome === 'selected' && request.params.options.find(o=>o.optionId===outcome.optionId)?.kind.startsWith('allow')) {
       answers = result.answers;

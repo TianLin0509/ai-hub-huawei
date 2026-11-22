@@ -13,6 +13,7 @@ const SEGMENTED = [
   { id: 'new-session-codex-tier', max: 4 },
   { id: 'new-session-mcp', max: 6 },
   { id: 'new-session-permission', max: 5 },
+  { id: 'new-session-run-mode', max: 2 },
 ];
 const QUOTA_PROVIDER = { claude: 'claude', codex: 'codex', gemini: 'antigravity' };
 const QUOTA_TTL = 30000;

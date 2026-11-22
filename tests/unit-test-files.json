@@ -327,5 +327,6 @@
   "tests/unit-one-screen-layout.test.js",
   "tests/unit-rsi-rail-width.test.js",
   "tests/unit-session-recovery-rsi-z.test.js",
-  "tests/unit-boot-splash.test.js"
+  "tests/unit-boot-splash.test.js",
+  "tests/unit-codeagent-serve-session.test.js"
 ]

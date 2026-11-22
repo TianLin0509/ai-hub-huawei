@@ -73,6 +73,7 @@ function toMaskedConfig(config) {
     // 新建会话面板要靠它决定预选哪个模型，不含敏感信息，原样透出。
     defaultModels: config.defaultModels || {},
     launchDefaults: config.launchDefaults || {},
+    codeagentRunMode: config.codeagentRunMode || 'pty',
     notificationEnabled: notifications.enabled,
     notificationIncludePreview: notifications.includePreview,
     notificationNotifyGroupChats: notifications.notifyGroupChats,
@@ -821,6 +822,18 @@ function registerConfigIpc(ipcMain, deps) {
       saveConfig(merged);
       clearSessionManagerConfigCache();
       return { ok: true, defaultModels: merged.models.defaults, launchDefaults: merged.launch.defaults };
+    } catch (error) {
+      return { ok: false, error: error && error.message ? error.message : String(error) };
+    }
+  });
+
+  // 启动中心的 CodeAgent「运行方式」：改了就记住，之后新建的 CodeAgent 会话默认用它，已有会话不变。
+  ipcMain.handle('session:set-codeagent-run-mode', (_e, payload = {}) => {
+    try {
+      const runMode = require('../../core/codeagent-run-mode');
+      saveConfig(runMode.withRunModeInJson(readConfigJsonForUpdate(), payload.mode));
+      clearSessionManagerConfigCache();
+      return { ok: true, mode: runMode.normalizeRunMode(payload.mode) };
     } catch (error) {
       return { ok: false, error: error && error.message ? error.message : String(error) };
     }

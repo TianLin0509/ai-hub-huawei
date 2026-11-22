@@ -199,6 +199,16 @@
 
   /* ---------------- 播放层 ---------------- */
   let layer = null;
+  // 右上角三个窗口按钮是 Windows 画的，盖不住：播放时把它们的底色和符号都调成动画底色（看不见），播完按当前主题还原。
+  const SPLASH_BG = '#040405';
+  function windowButtons(hidden) {
+    try {
+      const css = getComputedStyle(document.documentElement);
+      const pick = (...names) => names.map(n => String(css.getPropertyValue(n) || '').trim()).find(v => /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(v)) || '';
+      ipcRenderer.send('hub:titlebar-overlay', hidden ? { color: SPLASH_BG, symbolColor: SPLASH_BG }
+        : { color: pick('--surface-raised', '--bg-secondary'), symbolColor: pick('--fg-muted', '--text-secondary') });
+    } catch (_) {}
+  }
   function loadImage(src) {
     return new Promise((resolve, reject) => { const im = new Image(); im.onload = () => resolve(im); im.onerror = () => reject(new Error('开场图片读取失败')); im.src = src; });
   }
@@ -207,11 +217,12 @@
     stop();
     const A = ANIMS[spec.anim] || ANIMS.soft;
     let img;
-    try { img = await loadImage(spec.src); } catch (error) { console.warn('[boot-splash]', error.message); return; }
+    try { img = await loadImage(spec.src); } catch (error) { console.warn('[boot-splash]', error.message); if (typeof opts.onDone === 'function') opts.onDone(); return; }
     const el = document.createElement('div');
     el.className = 'boot-splash-layer'; el.id = 'boot-splash-layer';
     el.innerHTML = `<canvas></canvas><button type="button" class="boot-splash-skip">跳过 ›</button>${opts.hint ? '<button type="button" class="boot-splash-hint">✨ 点这里更换开场动画</button>' : ''}`;
     document.body.appendChild(el);
+    windowButtons(true);
     const cv = el.querySelector('canvas'), dpr = Math.min(2, window.devicePixelRatio || 1), W = window.innerWidth, H = window.innerHeight;
     cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
     const ctx = cv.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -219,7 +230,7 @@
     const c = { ctx, W, H, S, img, tone: TONE[spec.who] || TONE.hub, wx: new Weather(spec.weather, W, H, S), sp: new Sparks() };
     let t0 = performance.now(), last = t0, raf = 0, skipAt = -1, dead = false;
     const finish = () => {
-      if (dead) return; dead = true; cancelAnimationFrame(raf); el.remove(); document.removeEventListener('keydown', onKey, true);
+      if (dead) return; dead = true; cancelAnimationFrame(raf); el.remove(); windowButtons(false); document.removeEventListener('keydown', onKey, true);
       if (layer && layer.el === el) layer = null;
       if (opts.firstHint) afterHint();
       if (typeof opts.onDone === 'function') opts.onDone();
@@ -260,19 +271,22 @@
   }
 
   /* ---------------- 选择面板 ---------------- */
-  const TABS = [['hub', '群星'], ['claude', 'Claude'], ['codex', 'Codex'], ['deepseek', 'DeepSeek'], ['settings', '播放设置']];
+  // 第一个页签「已下载」：本机已有的（内置的群星 + 三套掌心魔法阵，以及下载过的），打开面板默认停在这里。
+  const TABS = [['mine', '已下载'], ['hub', '群星'], ['claude', 'Claude'], ['codex', 'Codex'], ['deepseek', 'DeepSeek'], ['settings', '播放设置']];
   const ANIM_NAME = { soft: '柔光登场', rush: '冲击登场', galaxy: '群星登场' };
-  const FREQ = [['daily', '每天第一次启动时播放', '推荐：一天看一次，不耽误事'], ['always', '每次启动都播放', '每次打开 Hub 都播'], ['off', '不播放', '直接进入 Hub']];
-  let dialog = null, data = null, tab = 'hub', message = '', busy = false;
+  const FREQ = [['daily', '每天第一次启动时播放', '默认。一天看一次，之后重启直接进入'], ['always', '每次启动都播放', '约 3 秒，点画面或按 Esc 随时跳过'], ['off', '不播放', '直接进入 Hub']];
+  const WHO_ORDER = { hub: 0, claude: 1, codex: 2, deepseek: 3 };
+  const inTab = id => (id === 'mine' ? data.items.filter(i => i.installed).sort((a, b) => WHO_ORDER[a.who] - WHO_ORDER[b.who]) : data.items.filter(i => i.who === id));
+  let dialog = null, data = null, tab = 'mine', message = '', busy = false;
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
   const kb = n => (n ? `${Math.max(1, Math.round(n / 1024))} KB` : '');
-  function card(it) {
+  function card(it, full) {
     const current = data.preferences.selected === it.id, st = data.state || {}, active = st.activeId === it.id;
     const tag = current ? '<i class="bsp-tag on">正在使用</i>' : it.installed ? `<i class="bsp-tag">${it.bundled ? '内置' : '已下载'}</i>` : `<i class="bsp-tag dl">可下载${it.bytes ? ' ' + kb(it.bytes) : ''}</i>`;
     const action = current ? `<button class="appearance-btn" data-preview="${it.id}">预览</button>`
       : it.installed ? `<button class="appearance-btn primary" data-use="${it.id}">使用</button>`
-        : `<button class="appearance-btn primary" data-get="${it.id}" ${st.activeId ? 'disabled' : ''}>${active ? '下载中…' : '下载并使用'}</button>`;
-    return `<div class="bsp-card${current ? ' current' : ''}"><button class="bsp-thumb" data-${it.installed ? 'preview' : 'get'}="${it.id}" title="${it.installed ? '点击预览' : '点击下载并使用'}"><img src="${esc(it.thumb)}" alt="">${tag}<span>${ANIM_NAME[it.anim] || ''}</span></button><div class="bsp-meta"><strong title="${esc(it.name)}">${esc(it.name.replace(/^.+? · /, ''))}</strong>${action}</div></div>`;
+        : `<button class="appearance-btn" data-get="${it.id}" ${st.activeId ? 'disabled' : ''}>${active ? '下载中…' : '下载并使用'}</button>`;
+    return `<div class="bsp-card${current ? ' current' : ''}"><button class="bsp-thumb" data-${it.installed ? 'preview' : 'get'}="${it.id}" title="${it.installed ? '点击预览' : '点击下载并使用'}"><img src="${esc(it.thumb)}" alt="">${tag}<span>${ANIM_NAME[it.anim] || ''}</span></button><div class="bsp-meta"><strong title="${esc(it.name)}">${esc(full ? it.name : it.name.replace(/^.+? · /, ''))}</strong>${action}</div></div>`;
   }
   function settings() {
     const f = data.preferences.frequency;
@@ -283,11 +297,13 @@
   function render() {
     if (!dialog || !data) return;
     const st = data.state || {}, cur = data.items.find(i => i.id === data.preferences.selected);
-    const list = tab === 'settings' ? settings() : `<div class="bsp-grid">${data.items.filter(i => i.who === tab).map(card).join('')}</div>`;
+    const mine = tab === 'mine';
+    const list = tab === 'settings' ? settings()
+      : `${mine ? '<p class="bsp-lead">本机已有的开场动画，点图片全屏预览，点「使用」下次启动就播它。更多款式在右边的群星、Claude、Codex、DeepSeek 页签里，一键下载。</p>' : ''}<div class="bsp-grid${mine ? ' mine' : ''}">${inTab(tab).map(it => card(it, mine)).join('')}</div>`;
     const progress = st.activeId ? `<div class="appearance-download">${require('./download-progress-view').html({ ...(st.progress || {}), phase: st.progress && st.progress.total ? 'downloading' : 'connecting' }, { title: '下载开场动画' })}<button class="appearance-btn" data-action="cancel">取消</button></div>` : '';
     const status = st.error ? `<span class="bsp-error" role="alert">${esc(st.error)}</span>` : esc(message);
     dialog.innerHTML = `<div class="appearance-head"><div><strong>开场动画</strong><span>当前：${esc(cur ? cur.name : '群星')} · ${esc((FREQ.find(x => x[0] === data.preferences.frequency) || FREQ[0])[1])}</span></div><button class="appearance-close" data-action="close" aria-label="关闭">×</button></div>
-      <div class="appearance-tabs" role="tablist">${TABS.map(([id, name]) => `<button role="tab" aria-selected="${tab === id}" data-tab="${id}">${name}${id === 'settings' ? '' : `<small>${data.items.filter(i => i.who === id).length}</small>`}</button>`).join('')}</div>
+      <div class="appearance-tabs" role="tablist">${TABS.map(([id, name]) => `<button role="tab" aria-selected="${tab === id}" data-tab="${id}"${id === 'mine' ? ' class="bsp-tab-mine"' : ''}>${id === 'mine' ? '★ ' : ''}${name}${id === 'settings' ? '' : `<small>${inTab(id).length}</small>`}</button>`).join('')}</div>
       <section class="bsp-content">${list}</section>
       <div class="appearance-foot">${progress}<span class="appearance-feedback" role="status">${status}</span><button class="appearance-btn primary" data-action="close">完成</button></div>`;
     if (dialog.querySelector('[data-dl-source]')) void require('./download-source-view').fill(dialog).catch(() => {});
@@ -304,7 +320,13 @@
         if (b.dataset.tab) { tab = b.dataset.tab; message = ''; render(); return; }
         if (b.dataset.action === 'close') { dialog.close(); return; }
         if (b.dataset.action === 'cancel') { void ipcRenderer.invoke('boot-splash:cancel'); return; }
-        if (b.dataset.preview) { const it = data.items.find(i => i.id === b.dataset.preview); if (it && it.src) void play(it); return; }
+        if (b.dataset.preview) {
+          const it = data.items.find(i => i.id === b.dataset.preview); if (!it || !it.src) return;
+          // 预览时先收起面板（模态框在最顶层，会挡住动画），播完或跳过后原样回来。
+          dialog.close();
+          void play(it, { onDone: () => { if (!dialog.open) { render(); dialog.showModal(); } } });
+          return;
+        }
         if (busy) return;
         busy = true;
         void (async () => {
@@ -325,8 +347,7 @@
         void ipcRenderer.invoke('boot-splash:save', { frequency: r.value }).then(next => { data = next; message = '已保存。'; render(); }).catch(error => { message = error.message; render(); });
       });
     }
-    const cur = data.items.find(i => i.id === data.preferences.selected);
-    tab = cur ? cur.who : 'hub'; message = ''; render();
+    tab = 'mine'; message = ''; render();
     if (!dialog.open) dialog.showModal();
   }
   ipcRenderer.on('boot-splash:state', (_e, state) => { if (data) { data.state = state; if (dialog?.open) render(); } });

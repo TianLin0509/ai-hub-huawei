@@ -1873,7 +1873,7 @@ function getOrCreateTerminal(sessionId) {
   });
   terminal.attachCustomWheelEventHandler((event) => {
     if (routeCodexTranscriptWheel(event)) return false;
-    if (!isNativeAgent(sessions.get(sessionId)) || event.ctrlKey || event.metaKey) return true;
+    if (!isNativeAgent(sessions.get(sessionId)) || sessions.get(sessionId)?.codeagentRunMode === 'serve' || event.ctrlKey || event.metaKey) return true;
     const viewport = terminal._core?.viewport;
     if (!viewport?.getLinesScrolled) return true;
     // Native backends display a plain output log. Scroll its logical buffer
@@ -2025,6 +2025,23 @@ const backstageMenu = require('./backstage-menu').createBackstageMenu({ document
 const turnSpeedDisplay = require('./turn-speed-display').createTurnSpeedDisplay(document,
   id => sessions.get(id), () => sessionSplit?.focusedId() || activeSessionId);
 let sessionImmersive = null;
+// CodeAgent ACP 试点：看后台时才接真实终端，离开后由主进程保温几分钟再关。
+let serveTerminalSession = null;
+function syncServeTerminal() {
+  const active = activeSessionId && sessions.get(activeSessionId);
+  const showing = !currentAppToolbarView() && (currentView === 'pty' || !!sessionSplit?.isBackstage());
+  const target = active?.codeagentRunMode === 'serve' && showing ? activeSessionId : null;
+  if (target === serveTerminalSession) return;
+  if (serveTerminalSession) void ipcRenderer.invoke('codeagent-serve:terminal', { sessionId: serveTerminalSession, action: 'detach' });
+  serveTerminalSession = target;
+  if (!target) return;
+  const terminal = terminalCache.get(target)?.terminal;
+  const hint = setTimeout(() => { if (serveTerminalSession === target) terminal?.write('\r\n正在连接真实终端，约 3 秒…\r\n'); }, 200);
+  ipcRenderer.invoke('codeagent-serve:terminal', { sessionId: target, action: 'attach', cols: terminal?.cols, rows: terminal?.rows })
+    .then(result => { clearTimeout(hint); if (!result?.ok) terminal?.write(`\r\n终端连接失败：${result?.message || '未知错误'}\r\n`); })
+    .catch(error => { clearTimeout(hint); terminal?.write(`\r\n终端连接失败：${error.message}\r\n`); });
+}
+
 function syncBackstageButton(visible = !currentAppToolbarView() && !!activeSessionId) {
   sessionImmersive?.sync(!!getReadingSurface());
   if (!backstageButton) return;
@@ -2033,6 +2050,7 @@ function syncBackstageButton(visible = !currentAppToolbarView() && !!activeSessi
   backstageButton.setAttribute('aria-pressed', String(mode === 'pty'));
   backstageButton.title = mode === 'pty' ? '返回卡片视图' : '查看后台输出';
   backstageMenu.sync(visible);
+  syncServeTerminal();
   turnSpeedDisplay.paint(visible);
 }
 
@@ -2510,12 +2528,12 @@ function showTerminal(sessionId, opts = { focus: true }) {
 
   if (!embedded) {
     cached._ptyPresentation = mountTerminalPresentation({
-      document, host: termContainer, cached, native: isNativeAgent(session), readOnly: session.readOnly,
+      document, host: termContainer, cached, native: isNativeAgent(session) && session.codeagentRunMode !== 'serve', readOnly: session.readOnly,
       openingBanner: require('../core/native-ui-labels').nativeOpeningBanner(session),
       engine: require('../core/native-ui-labels').nativeUiLabel(session),
       focusComposer: () => mountTarget.querySelector('.floating-input-box')?.focus(),
     });
-    if ((isNativeSession(session) && ['codex','codex-resume'].includes(session.kind)) || ['claude-stream-json','acp'].includes(session.runtimeBackend)) {
+    if (session.codeagentRunMode !== 'serve' && ((isNativeSession(session) && ['codex','codex-resume'].includes(session.kind)) || ['claude-stream-json','acp'].includes(session.runtimeBackend))) {
       cached._codexBackstage ||= createCodexBackstage({ document, ipcRenderer, sessionId,
         getSession:() => sessions.get(sessionId),
         renderProse:text => DOMPurify.sanitize(marked.parse(text, {async:false}), {FORBID_TAGS:['img','video','audio','iframe']}),
@@ -5184,7 +5202,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     openExternal: url => shell.openExternal(url),
   });
   bar.append(codexControls.element);
-  if (isNativeAgent(sessions.get(sessionId))) terminal.options.disableStdin = true;
+  if (isNativeAgent(sessions.get(sessionId)) && sessions.get(sessionId)?.codeagentRunMode !== 'serve') terminal.options.disableStdin = true;
 
   // ↑/↓ 召回发过的消息。模块缺席（脚本没加载）时整块功能静默关闭，
   // 输入框其余行为一字不变 —— 历史是增强，不该成为新的单点故障。
@@ -5236,7 +5254,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   }
   function ensureCodeAgentInputRecovery() {
     if (bar._codeagentInputRecovery) return bar._codeagentInputRecovery;
-    if (!isCodeAgentKind(sessions.get(sessionId)?.kind)) return null;
+    if (!isCodeAgentKind(sessions.get(sessionId)?.kind) || sessions.get(sessionId)?.codeagentRunMode === 'serve') return null;
     const recovery = require('./composer-codeagent-input');
     bar._codeagentInputRecovery = recovery.createCodeAgentInputRecovery({
       notify: showToast, sessionId,
@@ -5442,6 +5460,12 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       return;
     }
     const stopTarget = sessions.get(sessionId);
+    if (stopTarget?.codeagentRunMode === 'serve') {
+      const result = await ipcRenderer.invoke('codex:native-action', { sessionId, action: 'interrupt' }).catch(error => ({ ok: false, message: error.message }));
+      if (!result?.ok) showToast(result?.message || '停止失败', 'warning');
+      focusAfterSend();
+      return;
+    }
     if (isCodeAgentKind(stopTarget?.kind) && stopTarget.agentRuntime === 'pty') {
       const rendererState = getSessionRuntimeTruth(stopTarget).state;
       if (rendererState !== RUNTIME_RUNNING) {
@@ -5720,7 +5744,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     // authoritative evidence of work in flight) must not gate cancelling it.
     const quotaCancel = status.stopIntent === 'quota-cancel' && status.canStop;
     const codeagentStop = require('./composer-codeagent-input').codeAgentCanStop(session, getSessionRuntimeTruth(session).state);
-    const canStop = isCodeAgentKind(session?.kind) ? codeagentStop : quotaCancel || (status.canStop && composerStopAllowed(session, status.runtime));
+    const canStop = isCodeAgentKind(session?.kind) && session.codeagentRunMode !== 'serve' ? codeagentStop : quotaCancel || (status.canStop && composerStopAllowed(session, status.runtime));
     stopBtn.classList.toggle('codeagent-stop', isCodeAgentKind(session?.kind));
     if (isCodeAgentKind(session?.kind) && !stopBtn.dataset.stopping) stopBtn.textContent = '停止';
     stopBtn.classList.toggle('visible', canStop);
@@ -10624,6 +10648,7 @@ function persistWorkscene(flush = false) {
         ...(s.codeagentForkSourceSessionId ? { codeagentForkSourceSessionId: s.codeagentForkSourceSessionId } : {}),
         ...(s.codeagentPrefixFork ? { codeagentPrefixFork: s.codeagentPrefixFork } : {}),
         ...(s.codeagentConfigDir ? { codeagentConfigDir: s.codeagentConfigDir } : {}),
+        ...(s.codeagentRunMode ? { codeagentRunMode: s.codeagentRunMode } : {}),
         ...(s.codeagentPoolAccount ? { codeagentPoolAccount: s.codeagentPoolAccount, codeagentPoolLabel: s.codeagentPoolLabel || '' } : {}),
         ...(s.companyRoute ? { companyRoute: s.companyRoute } : {}),
         ...(s.companyUpstream ? { companyUpstream: s.companyUpstream } : {}),
@@ -11057,6 +11082,7 @@ sessionImmersive = require('./session-immersive').createSessionImmersiveControll
         ...(meta.codeagentForkSourceSessionId ? { codeagentForkSourceSessionId: meta.codeagentForkSourceSessionId } : {}),
         ...(meta.codeagentPrefixFork ? { codeagentPrefixFork: meta.codeagentPrefixFork } : {}),
         ...(meta.codeagentConfigDir ? { codeagentConfigDir: meta.codeagentConfigDir } : {}),
+        ...(meta.codeagentRunMode ? { codeagentRunMode: meta.codeagentRunMode } : {}),
         ...(meta.codeagentPoolAccount ? { codeagentPoolAccount: meta.codeagentPoolAccount, codeagentPoolLabel: meta.codeagentPoolLabel || '' } : {}),
         ...(meta.companyRoute ? { companyRoute: meta.companyRoute } : {}),
         ...(meta.companyUpstream ? { companyUpstream: meta.companyUpstream } : {}),

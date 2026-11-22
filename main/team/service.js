@@ -10,7 +10,8 @@ const path = require('node:path');
 const { randomBytes } = require('node:crypto');
 const { delegationGuidance } = require('./member-guidance');
 
-const MAX_MEMBERS = 8;
+// 每位负责人名下成员数：2026-11-22 起去掉组队人数上限，由 8 提到 100，只当防失控的安全阀。
+const MAX_MEMBERS = 100;
 const NOTICE_LIMIT = 1800;
 const TICK_MS = 3000;
 const WATCH_MS = 60 * 1000;

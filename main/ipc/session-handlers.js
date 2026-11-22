@@ -341,6 +341,27 @@ function registerSessionIpc(ipcMain, deps) {
     sessionManager.writeToSession(sessionId, data);
   });
 
+  ipcMain.handle('codeagent-serve:terminal', async (_event, { sessionId, action, cols, rows } = {}) => {
+    const driver = sessionManager.getNativeSession?.(sessionId);
+    if (!driver?.attachTerminal) return { ok: false, message: '这个会话不是 ACP 试点会话' };
+    try {
+      if (action === 'attach') return await driver.attachTerminal({ cols, rows });
+      driver.detachTerminal();
+      return { ok: true };
+    } catch (error) { return { ok: false, message: error.message }; }
+  });
+
+  // serve 连续恢复失败：把这个会话改回独立 PTY，用同一份记录继续。
+  sessionManager.on?.('codeagent-serve-fallback', ({ sessionId, reason }) => {
+    console.warn('[codeagent-serve] 改回 PTY：', sessionId, reason);
+    sessionManager.updateSessionMeta(sessionId, { codeagentRunMode: 'pty' });
+    Promise.resolve(restartAuthorizedSession(sessionId, null, { relaunch: true, serveFallback: true })).then(result => {
+      const ok = result && result.ok !== false;
+      sendToRenderer('session-notice', { sessionId: result?.id || sessionId, level: ok ? 'warning' : 'error', persistent: true,
+        message: ok ? 'CodeAgent 服务多次中断，这个会话已自动改回终端方式，历史和上下文都在。' : `自动改回终端失败：${result?.message || '未知错误'}，可从侧栏休眠后重新打开。` });
+    }).catch(error => console.warn('[codeagent-serve] 改回 PTY 失败：', error.message));
+  });
+
   ipcMain.handle('codex:native-action', async (_event, payload = {}) => {
     const native = sessionManager.getNativeSession?.(payload.sessionId) || sessionManager.getNativeCodex?.(payload.sessionId);
     if (!native) return {ok:false,message:'该 Codex 会话尚未接管'};
@@ -927,7 +948,7 @@ function registerSessionIpc(ipcMain, deps) {
   }
   // 真正退出时停掉自动读取，并结束正在跑的临时 serve（手动刷新、读模型清单起的也算），否则它会留在后台。
   require('../../core/codeagent-quota-auto-refresh').installQuotaQuitCleanup({ app,
-    stopAutoRefresh: () => quotaAutoRefresh?.stop(), shutdownServes: () => require('../../core/codeagent-serve').shutdownTempServes() });
+    stopAutoRefresh: () => quotaAutoRefresh?.stop(), shutdownServes: () => { require('../../core/codeagent-serve-host').shutdownHosts(); return require('../../core/codeagent-serve').shutdownTempServes(); } });
   if (deps.lanPoolService) deps.lanPoolService.quotaReader = () => quotaPanel.snapshot();
   ipcMain.handle('codeagent:quota-panel', async (_event, payload = {}) => {
     try {
@@ -1773,7 +1794,7 @@ function registerSessionIpc(ipcMain, deps) {
       // 随后旧进程退出又按「用户关闭」发出 session-closed，会话连卡片带记录一起被抹掉。
       // 改走休眠：群聊成员身份与卡片都保留，等收尾完成再按原会话恢复。
       if (options.guard && !options.guard()) return {ok:false,notSwitched:true,message:'会话状态已改变，未切换账号'};
-      const suspended = sessionManager.suspendSession(sessionId, { reason: options.reason === 'account-switch' ? 'account-switch' : 'restart' });
+      const suspended = sessionManager.suspendSession(sessionId, { reason: options.reason === 'account-switch' ? 'account-switch' : 'restart', serveFallback: options.serveFallback === true });
       if (!suspended || !suspended.ok) {
         return { ok: false, error: suspended?.error || 'restart-suspend-failed',
           message: `会话重启失败：${suspended?.message || '无法停止旧进程'}` };

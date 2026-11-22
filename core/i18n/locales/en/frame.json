@@ -758,5 +758,8 @@
   "此会话从未发送过消息，无对话历史可显示 —": "No messages have been sent in this session; there's no history to show —",
   "找不到这张卡片所属会话的输入框，先切到该会话再引用。": "Cannot find the input box of this card's session. Switch to that session first, then quote.",
   "没有可引用的文字。": "Nothing to quote.",
-  "更多模型：点顶栏「后台」，在终端里输入 /model 切换": "More models: click \"Console\" in the top bar and type /model in the terminal"
+  "更多模型：点顶栏「后台」，在终端里输入 /model 切换": "More models: click \"Console\" in the top bar and type /model in the terminal",
+  "正在连接真实终端，约 3 秒…": "Connecting the real terminal, about 3 seconds…",
+  "终端连接失败：{0}": "Terminal connection failed: {0}",
+  "停止失败": "Stop failed"
 }

@@ -461,5 +461,8 @@
   "引用到输入框": "Quote in input box",
   "CodeAgent 里新出了模型、这里还没有时点一下：马上去 CodeAgent 重新取一次能用的模型。平时打开 Hub 时已自动取过。": "Click if CodeAgent has new models that are not listed here: fetches the available models from CodeAgent again. Hub already does this on startup.",
   "一个 AI 专注完成任务；活多时让它自己组队招人。": "One AI focused on the task; when there is a lot of work, it builds its own team.",
-  "自己挑几个 AI，同场讨论、对比看法。": "Pick several AIs to discuss together and compare views."
+  "自己挑几个 AI，同场讨论、对比看法。": "Pick several AIs to discuss together and compare views.",
+  "运行方式": "Run mode",
+  "PTY（默认）": "PTY (default)",
+  "ACP 试点": "ACP pilot"
 }

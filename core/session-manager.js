@@ -701,6 +701,26 @@ function buildCodeAgentPtyLaunch(id, kind, opts, cwd, env, config, auth = null, 
     ...(permissionMode !== 'bypassPermissions' && droppedFlags.includes('--permission-mode') ? { permissionModeDropped: permissionMode } : {}) };
 }
 
+// CodeAgent ACP 试点的会话对象：账号和模型沿用 PTY 启动算好的结果，只是不再常驻终端。
+function createCodeAgentServeDriver({ id, opts, cwd, env, config, launch, ptyModule, dataDir }) {
+  const serve = require('./codeagent-serve');
+  const host = require('./codeagent-serve-host').acquireHost({ command: config.command, configDir: config.configDir, configDirEnv: config.configDirEnv, cwd: config.configDir, env });
+  let systemPrompt = '';
+  try { if (opts.appendSystemPromptFile) systemPrompt = fs.readFileSync(opts.appendSystemPromptFile, 'utf8'); }
+  catch (error) { console.warn('[codeagent-serve] 读取 Hub 规则失败：' + error.message); }
+  const terminalEnv = serve.serveEnv(env, { configDirEnv: config.configDirEnv, configDir: config.configDir });
+  const head = /^[A-Za-z0-9_.-]+$/.test(config.command) ? config.command : `"${path.normalize(String(config.command).replace(/"/g, ''))}"`;
+  const quote = value => (/^[A-Za-z0-9_.:\\/=-]+$/.test(value) ? value : `"${String(value).replace(/"/g, '')}"`);
+  try { return new (require('./codeagent-serve-session').CodeAgentServeSession)({
+    id, kind: 'codeagent', cwd, host, model: launch.fixedModel || launch.model || opts.model || '', provider: opts.codeagentModelProvider || '',
+    permissionMode: require('./permission-modes').normalize('codeagent', opts.permissionMode) || 'bypassPermissions',
+    title: opts.title || '', systemPrompt, profileId: 'codeagent-serve', resumeId: opts.resumeCCSessionId || opts.acpSid || undefined,
+    restoredRuntime: opts.nativeRuntime, storeDir: path.join(dataDir, 'acp-history'), launch: { env: terminalEnv },
+    spawnTerminal: ({ args, cols, rows, cwd: terminalCwd }) => require('./pty-host').spawnPty(ptyModule, 'cmd.exe',
+      `/d /s /c "call ${head} ${args.map(quote).join(' ')}"`, { name: 'xterm-256color', cols, rows, cwd: terminalCwd, env: terminalEnv, useConpty: true, conptyInheritCursor: false }),
+  }); } catch (error) { host.release(); throw error; }
+}
+
 function codexNativePermission(kind, opts = {}) {
   const mode = (opts.autonomous === true || opts.meetingId ? null : require('./permission-modes').normalize(kind, opts.permissionMode)) || 'bypassPermissions';
   return require('./permission-modes').codexPermissionArgs(mode);
@@ -1813,7 +1833,9 @@ class SessionManager extends EventEmitter {
     else if (this.memoryService?.hubRules?.isSystemPromptFile(opts.appendSystemPromptFile)) opts = { ...opts, appendSystemPromptFile: undefined };
     const id = opts.id || uuid();
     const freshLaunch = require('./session-history-state').isFreshLaunch(kind, opts);
-    const isAcp = isAcpKind(kind);
+    // CodeAgent ACP 试点（core/codeagent-run-mode.js）：只有明确选了才走 serve；选择历史的恢复入口仍走 PTY。
+    const isCodeAgentServe = require('./codeagent-run-mode').usesServeRuntime(kind, opts) && (!kind.endsWith('-resume') || !!opts.resumeCCSessionId);
+    const isAcp = isAcpKind(kind) || isCodeAgentServe;
     const isDshCli = kind.replace(/-resume$/, '') === 'deepseek-acp';
     // pi（r39）：终端里的 pi + Hub 观察扩展，和 DSH 同属 provider CLI（core/pi-cli-session.js）。
     const isPiCli = kind.replace(/-resume$/, '') === 'pi';
@@ -1834,7 +1856,7 @@ class SessionManager extends EventEmitter {
     // Claude / Codex 默认跑 PTY 里的真实 CLI；原生后端只在回退开关打开时使用。
     const nativeAgentRuntime = require('./agent-runtime-mode').usesNativeAgentRuntime(kind);
     const isNativeCodex = isCodex && nativeAgentRuntime;
-    const isPtyAgent = isProviderCli || isCodeAgent || isDeepSeekClaude || ((isClaude || isCodex) && !nativeAgentRuntime) || (isDeepSeek && !isDeepSeekLegacy);
+    const isPtyAgent = isProviderCli || (isCodeAgent && !isCodeAgentServe) || isDeepSeekClaude || ((isClaude || isCodex) && !nativeAgentRuntime) || (isDeepSeek && !isDeepSeekLegacy);
     const webRoute = isCodex && !getLaunchValues().COMPANY_CLI && require('./chatgpt-web-models').chatgptWebRoute(opts.model);
     const followsGlobalAccount = isCodex && !webRoute && !getLaunchValues().COMPANY_CLI && !isCodexApiBackend(getLaunchValues());
     let globalAccount = null;
@@ -2615,7 +2637,9 @@ class SessionManager extends EventEmitter {
     }
     if (isCodex && opts.codexAccountAttempt) sessionEnv.CLAUDE_HUB_CODEX_ACCOUNT_ATTEMPT = opts.codexAccountAttempt;
     let ptyProcess;
-    try { ptyProcess = isPiCli
+    try { ptyProcess = isCodeAgentServe
+      ? createCodeAgentServeDriver({ id, opts, cwd: spawnCwd, env: sessionEnv, config: codeagentConfig, launch: codeagentLaunch, ptyModule: pty, dataDir: getHubDataDir() })
+      : isPiCli
       ? new (require('./pi-cli-session').PiCliSession)(require('./pi-cli-profile').buildPiCliOptions(kind,
         {...opts,id,cwd:spawnCwd},getConfig(),getHubDataDir(),sessionEnv))
       : isDshCli
@@ -2751,7 +2775,8 @@ class SessionManager extends EventEmitter {
       status: 'idle',
       ...(isNativeCodex ? {runtimeBackend:'codex-app-server',nativeRuntime:ptyProcess.runtime,
         codexApprovalPolicy:opts.approvalPolicy || codexNativePermission(kind, opts).approval,codexSandbox:opts.sandbox || codexNativePermission(kind, opts).sandbox} : {}),
-      ...(isAcp ? {runtimeBackend:'acp',nativeRuntime:ptyProcess.runtime,acpSid:opts.acpSid || null,
+      ...(isCodeAgentServe ? { codeagentRunMode: 'serve' } : {}),
+      ...(isAcp ? {runtimeBackend:'acp',nativeRuntime:ptyProcess.runtime,acpSid:opts.acpSid || opts.resumeCCSessionId || null,
         cliRuntime:isProviderCli?{...ptyProcess.runtime,source:'provider-cli',observedAt:Date.now()}:null,
         acpProfileId:ptyProcess.options.profileId,acpCapabilities:{},acpConfigOptions:[]} : {}),
       ...(String(kind).replace(/-resume$/, '') === 'deepseek-acp' && opts.deepseekRoute ? {deepseekRoute:opts.deepseekRoute} : {}),
@@ -3081,6 +3106,7 @@ class SessionManager extends EventEmitter {
       ptyProcess.on('bound', bound => {
         if (isAcp) {
           info.acpSid = bound.threadId;
+          if (isCodeAgentServe) { info.ccSessionId = bound.threadId; info.codeagentIdentityPending = false; }
           if (bound.capabilities) info.acpCapabilities = bound.capabilities;
           if (bound.configOptions) {
             info.acpConfigOptions = bound.configOptions;
@@ -3095,6 +3121,7 @@ class SessionManager extends EventEmitter {
         if (bound.codexSpeedTier) info.codexSpeedTier = bound.codexSpeedTier;
         publish();
       });
+      if (isCodeAgentServe) ptyProcess.on('serve-fallback', event => this.emit('codeagent-serve-fallback', { sessionId: id, reason: event.reason }));
       ptyProcess.on('thread-reset', () => { info.codexSid=null; info.transcriptPath=null; publish(); });
       ptyProcess.on('choices', choices => { info.nativeThreadChoices = choices; publish(); });
       ptyProcess.on('migration-draft', text => { info.nativeMigrationDraft=text; publish(); });
@@ -3735,7 +3762,7 @@ try {
       const runtime = session.info.nativeRuntime;
       const sharedViewerDetach = options.allowSharedViewerDetach === true
         && session.pty?.control?.shared && session.pty.control.role === 'viewer';
-      if (!sharedViewerDetach && (!runtime || runtime.connection !== 'connected'
+      if (!sharedViewerDetach && !options.serveFallback && (!runtime || runtime.connection !== 'connected'
           || !['idle','completed','interrupted','failed'].includes(runtime.state)
           || runtime.backgroundTasks?.length || runtime.backgroundActivities?.length)) {
         return {ok:false,error:'native-turn-unfinished',message:'会话仍在执行、等待操作或状态待核对'};
@@ -4784,7 +4811,8 @@ try {
       ...require('./session-model-pin').modelPinFields(info),
       // 千问 / GLM 走终端时没有 runtimeBackend，卡片提示（如 Token Plan 改道说明）也要随更新送到界面。
       ...(isAcpKind(info.kind) ? {cliRuntime:info.cliRuntime||null,nativeActionError:info.nativeActionError || null} : {}),
-      ...(isAcpKind(info.kind) ? {acpSid:info.acpSid,acpProfileId:info.acpProfileId,
+      ...(isCodeAgentKind(info.kind) ? { codeagentRunMode: info.codeagentRunMode === 'serve' ? 'serve' : 'pty' } : {}),
+      ...(isAcpKind(info.kind) || info.codeagentRunMode === 'serve' ? {acpSid:info.acpSid,acpProfileId:info.acpProfileId,
         acpCapabilities:info.acpCapabilities,acpConfigOptions:info.acpConfigOptions} : {}),
       ...(info.runtimeBackend ? {runtimeBackend:info.runtimeBackend,nativeRuntime:info.nativeRuntime,
         nativeConfig:info.nativeConfig,

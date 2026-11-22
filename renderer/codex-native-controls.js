@@ -55,7 +55,7 @@ function createCodexNativeControls({ sessionId, invoke, document: doc = document
       controls.append(b);
     };
     if (request.method === 'session/request_permission' && p.toolCall?._meta?.qwenInteractionKind==='user_question') {
-      form.append(node('strong','千问需要你的回答'));
+      form.append(node('strong',p.toolCall._meta.questionTitle || '千问需要你的回答'));
       const fields=[];
       for(const [index,q] of (p.toolCall._meta.qwenQuestions || []).entries()) {
         const label=node('label',q.question || q.header);const input=node('textarea');

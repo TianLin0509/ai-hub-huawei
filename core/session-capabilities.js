@@ -178,6 +178,7 @@ function buildSessionResumeMeta(session, overrides = {}) {
     pinned: !!session.pinned,
     bottomed: !!session.bottomed && !session.pinned,
     ccSessionId: session.ccSessionId || null,
+    ...(session.codeagentRunMode ? { codeagentRunMode: session.codeagentRunMode } : {}),
     ...(session.runtimeBackend === 'claude-stream-json' ? {
       nativeConfig: session.nativeConfig || null,
     } : {}),

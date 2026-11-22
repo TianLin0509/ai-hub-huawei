@@ -296,6 +296,7 @@
   // 本轮面板里用户有没有亲手调过配置。异步回读配置后靠它决定能不能覆盖
   // 当前选择，避免把用户刚选的值改掉。
   let tuningTouchedByUser = false;
+  let codeagentRunMode = 'pty';
   // CodeAgent 只有本次明确选了具体模型才打开原生 /model 菜单；
   // 调思考强度或 MCP 不表示选过模型，切换 AI 类型时这份意图也分别记忆。
   let modelTouchedByUser = false;
@@ -313,6 +314,7 @@
       if (revision !== configReadRevision) return hubDefaultModels;
       hubDefaultModels = (config && config.defaultModels) || {};
       hubLaunchDefaults = readLaunchDefaults(config);
+      codeagentRunMode = config?.codeagentRunMode === 'serve' ? 'serve' : 'pty';
       if ((!accountSaving || refreshAccount) && revision===configReadRevision) {
         codexAccounts=(config.codexSubscriptionProfiles || []).map(p=>({...p,email:config.codexProfileIdentities?.[p.id] || ''}));
         codexAccountId=config.codexSubscriptionProfile || '';
@@ -1346,7 +1348,24 @@
     }
   }
 
+  function paintRunMode() {
+    const field = document.getElementById('new-session-run-mode-field');
+    const select = document.getElementById('new-session-run-mode');
+    const note = document.getElementById('new-session-run-mode-note');
+    if (!field || !select) return;
+    const show = selectedKind === 'codeagent';
+    field.hidden = !show;
+    if (note) note.hidden = !show;
+    if (!show) return;
+    select.value = codeagentRunMode;
+    select.disabled = submitting;
+    if (note) note.textContent = codeagentRunMode === 'serve'
+      ? 'ACP 试点：平时看卡片，点「后台」才打开真实终端，关掉终端 AI 继续跑。之后新建的 CodeAgent 会话都用它。试点暂不支持思考强度和 Hub 自带的 MCP 工具，需要时请用 PTY。'
+      : 'PTY：一直开着真实终端，和现在一样。之后新建的 CodeAgent 会话都用它。';
+  }
+
   function paintTuning() {
+    paintRunMode();
     const accountField=document.getElementById('new-session-account-field');
     const accountSelect=document.getElementById('new-session-account');
     const accountNote=document.getElementById('new-session-account-note');
@@ -2132,6 +2151,7 @@
     // 明确选了「跟随 CodeAgent」：主进程不套 Hub 默认模型；没点选时由主进程按 Hub 默认 / 账号默认定（和下拉显示同一口径）。
     if (selectedKind === 'codeagent' && !modelTouchedByUser && codeagentFollowCli) opts.codeagentFollowCli = true;
     if (permissionModes.supportsSwitch(selectedKind)) opts.permissionMode = currentPermissionMode();
+    if (selectedKind === 'codeagent' && codeagentRunMode === 'serve') opts.codeagentRunMode = 'serve';
     if (selectedKind === 'codeagent' && codeagentPoolRequested()) {
       opts.codeagentAccount = 'pool';
       const pick = codeagentManualPick();
@@ -2460,6 +2480,16 @@
         tuningTouchedByUser = true;
         selectedFastMode = !!fastCheckbox.checked;
         paint();
+      });
+    }
+    const runModeSelect = document.getElementById('new-session-run-mode');
+    if (runModeSelect) {
+      runModeSelect.addEventListener('change', async () => {
+        const previous = codeagentRunMode;
+        codeagentRunMode = runModeSelect.value === 'serve' ? 'serve' : 'pty';
+        paint();
+        const result = await ipcRenderer.invoke('session:set-codeagent-run-mode', { mode: codeagentRunMode }).catch(error => ({ ok: false, error: error.message }));
+        if (!result?.ok) { codeagentRunMode = previous; setError(`保存运行方式失败：${result?.error || '未知错误'}`); paint(); }
       });
     }
     const permissionSelect = document.getElementById('new-session-permission');

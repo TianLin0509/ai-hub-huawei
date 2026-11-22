@@ -64,14 +64,23 @@ async function main() {
     await open(env, 'boot-splash-1');
     await wait('!!document.getElementById("boot-splash-layer")', 20000);
     assert.ok(await cdp.eval('!!document.querySelector(".boot-splash-hint")'), '播放时要有「点这里更换开场动画」');
+    const shape = () => cdp.eval(`require('electron').ipcRenderer.invoke('debug:window-shape')`);
+    assert.equal((await shape()).overlay?.symbolColor, '#040405', '播放时右上角三个窗口按钮隐去（和动画底色一样）');
     await pause(1500); await shot('01-群星播放中');
     await wait('!document.getElementById("boot-splash-layer")', 8000);
     await wait('!!document.getElementById("boot-splash-toast")', 3000);
+    assert.notEqual((await shape()).overlay?.symbolColor, '#040405', '播完窗口按钮还原成主题颜色');
     await shot('02-播完提示可更换');
     // 2. 点提示打开面板（一屏放下）
     await click('#boot-splash-toast');
     await wait('!!document.querySelector("#boot-splash-dialog[open] .bsp-card")');
-    await pause(300); await shot('03-面板-群星');
+    await pause(300); await shot('03-面板-已下载');
+    // 打开面板默认停在第一个页签「已下载」：群星·星座 + 三套掌心魔法阵
+    assert.equal(await cdp.eval('document.querySelector("#boot-splash-dialog .appearance-tabs button").dataset.tab'), 'mine');
+    assert.equal(await cdp.eval('document.querySelector("#boot-splash-dialog [aria-selected=true]").dataset.tab'), 'mine');
+    assert.deepEqual(await cdp.eval('[...document.querySelectorAll("#boot-splash-dialog .bsp-card [data-preview]")].filter(b => b.classList.contains("bsp-thumb")).map(b => b.dataset.preview)'),
+      ['galaxy-constellation', 'claude-18', 'codex-18', 'deepseek-18']);
+    assert.equal((await prefs()).frequency, 'daily', '默认每天第一次启动播放');
     const fit = await cdp.eval('(() => { const c = document.querySelector("#boot-splash-dialog .bsp-content"); return [c.scrollHeight, c.clientHeight]; })()');
     // 3. 用内置 Codex 18
     await click('#boot-splash-dialog [data-tab="codex"]');
@@ -89,21 +98,28 @@ async function main() {
     assert.equal((await prefs()).selected, 'deepseek-05');
     assert.ok(served.includes('deepseek-05-1.0.0.json'), '应从资源源下载包');
     await shot('05-面板-下载并使用DeepSeek05');
-    // 5. 改成每次启动
+    // 5. 播放设置：默认「每天第一次」，改成每次启动
     await click('#boot-splash-dialog [data-tab="settings"]');
-    await wait('!!document.querySelector("#boot-splash-dialog input[value=always]")');
+    await wait('!!document.querySelector("#boot-splash-dialog input[value=daily]:checked")');
     await click('#boot-splash-dialog input[value=always]');
     await wait(`require('electron').ipcRenderer.invoke('boot-splash:get').then(s => s.preferences.frequency === 'always')`);
     await shot('06-播放设置');
     // 6. 预览后 Esc 跳过
     await click('#boot-splash-dialog .bsp-row [data-preview]');
     await wait('!!document.getElementById("boot-splash-layer")');
+    assert.ok(!(await cdp.eval('document.getElementById("boot-splash-dialog").open')), '预览时面板先收起，不挡动画');
     await pause(700); await shot('07-预览DeepSeek05');
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
     await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
     await wait('!document.getElementById("boot-splash-layer")', 1500);
+    await wait('document.getElementById("boot-splash-dialog").open', 1500);
+    await pause(300); await shot('07b-预览完面板回来');
+    // 已下载页签里多了刚下的 DeepSeek 05
+    await click('#boot-splash-dialog [data-tab="mine"]');
+    await wait('!!document.querySelector("#boot-splash-dialog .bsp-grid.mine [data-preview=\\"deepseek-05\\"]")');
+    await shot('07c-已下载多了DeepSeek05');
     await gracefulQuit(hub); cdp = null; hub = null;
-    // 7. 重启：每次启动 → 播 DeepSeek 05，不再弹首次提示
+    // 7. 重启：改成了每次启动 → 播 DeepSeek 05，不再弹首次提示
     await open(env, 'boot-splash-2');
     await wait('!!document.getElementById("boot-splash-layer")', 20000);
     await pause(1600); await shot('08-重启后播DeepSeek05');

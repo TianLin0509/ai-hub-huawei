@@ -1,6 +1,7 @@
 'use strict';
 function nativeUiLabel(session) {
   if (session?.runtimeBackend === 'claude-stream-json') return 'Claude';
+  if (session?.codeagentRunMode === 'serve') return 'CodeAgent · ACP 试点';
   return session?.runtimeBackend==='acp'
     ? require('./ai-kinds').getKindLabel(String(session.kind || '').replace(/-resume$/,''))
     : 'Codex';

@@ -11,6 +11,7 @@ const RESUME_META_FIELDS = [
   'transcriptPath',
   'codexSid',
   'acpSid',
+  'codeagentRunMode',
   'acpProfileId',
   'acpCapabilities',
   'runtimeBackend',

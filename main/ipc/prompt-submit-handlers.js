@@ -289,7 +289,8 @@ function registerPromptSubmitIpc(ipcMain, deps) {
     latestRequestBySid.set(sessionId, clientSubmissionId);
     lastPromptBySid.set(sessionId, text);
     return enqueue(sessionId, async () => {
-      if (require('../../core/ai-kinds').isCodeAgentKind(kind)) {
+      // ACP 试点会话没有常驻终端输入框，不做 PTY 输入检查。
+      if (require('../../core/ai-kinds').isCodeAgentKind(kind) && sessionManager.getSession(sessionId)?.codeagentRunMode !== 'serve') {
         const input = await groupChatWatcher.codeAgentInputAction(sessionId, 'check', { preserveInput: request.preserveInput === true, allowUnready: request.waitForCliReady === true });
         if (!input.ok) return input;
       }
@@ -401,7 +402,7 @@ function registerPromptSubmitIpc(ipcMain, deps) {
       catch (error) { logger.warn?.('[prompt-submit] early title failed:', error && error.message); }
     }
     const session = sessionManager.getSession(request.sessionId);
-    if (require('../../core/ai-kinds').isCodeAgentKind(session?.kind)) {
+    if (require('../../core/ai-kinds').isCodeAgentKind(session?.kind) && session.codeagentRunMode !== 'serve') {
       const input = await groupChatWatcher.codeAgentInputAction(request.sessionId, 'check', { preserveInput: request.preserveInput === true, allowUnready: request.waitForCliReady === true });
       if (!input.ok) return input;
     }
