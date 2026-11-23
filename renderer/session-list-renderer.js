@@ -1,6 +1,7 @@
 // 纯函数：按最新 AI 回答时间年龄分桶。pinned 永远进 recent（置顶不折叠）。
 //   recent: <24h（保持现状 UI 置顶）· mid: 24-72h · old: ≥72h
 const { isGroupChatMemberRunning } = require('../core/groupchat-running-state.js');
+const { stripNetworkPlan } = require('./sidebar-strip-diff.js');
 // 负责人组队的侧栏标签与批准弹窗（renderer/team-ui.js）随侧栏一起加载：只在真实界面里加载，单测的无 DOM 环境跳过。
 if (typeof window !== 'undefined' && typeof document !== 'undefined' && !window.__teamUi) {
   try { require('./team-ui.js'); } catch (error) { console.warn('[team-ui] 未加载：', error && error.message); }
@@ -157,6 +158,8 @@ function createSessionListRenderer(options = {}) {
   doc.addEventListener?.('bridge-threads-updated', () => { try { renderSessionList(); } catch (error) { console.warn('[session-list] bridge refresh failed:', error && error.message); } });
   // CodeAgent 会话的账号字母（renderer/session-account-badge.js）：账号表取到或登录变化后重画会话栏。
   const subscriptionAccount = typeof options.subscriptionAccount === 'function' ? options.subscriptionAccount : () => null;
+  // 低开销模式（2026-11-23 P1）：开着时内存数字旁显示浅蓝「省」徽章；没给或关闭时不出任何新元素。
+  const getLowOverhead = typeof options.getLowOverhead === 'function' ? options.getLowOverhead : () => null;
   const accountBadge = typeof options.accountBadge === 'function' ? options.accountBadge : (() => {
     const ipc = options.ipcRenderer || (typeof process !== 'undefined' && process.type === 'renderer' ? require('electron').ipcRenderer : null);
     if (!ipc || typeof ipc.invoke !== 'function') return () => null;
@@ -507,8 +510,11 @@ function _sessionWarningText(session) {
 
     const routeClass = (route, warning) => !egress ? 'pending' : warning || !route?.ok ? 'warning' : 'ok';
     const metric = (label, value) => `<span class="strip-resource${metricClass(value)}" tabindex="0" data-resource-kind="${label === 'CPU' ? 'cpu' : 'memory'}" aria-label="${label} ${value == null ? '检测中' : value + '%'}，悬停查看占用 Top 3" title="${label} ${value == null ? '检测中' : value + '%'}">${label}<b>${value == null ? '—' : value + '%'}</b><span class="strip-mini-track"><i style="width:${value == null ? 0 : Math.max(0, Math.min(100, value))}%"></i></span></span>`;
-    const gpuTitle = gpuPct == null ? 'GPU 占用率暂不可用' : `${usage.gpu.name || 'GPU'} · 占用 ${gpuPct}% · 每 10 秒采样`;
-    const gpuMetric = `<span class="strip-resource strip-gpu${metricClass(gpuPct)}" tabindex="0" title="${escapeHtml(gpuTitle)}" aria-label="${escapeHtml(gpuTitle)}">GPU<b>${gpuPct == null ? '—' : gpuPct + '%'}</b></span>`;
+    // 低开销模式（2026-11-23）：「底栏网速与显卡读数」关着时显示「关」，点一下打开设置「资源与后台」（renderer/background-features.js 接点击）。
+    const meterOffTitle = '低开销模式：网速和显卡读数没开（省一个常驻的 PowerShell 和定时的 nvidia-smi）。点一下到「设置 → 资源与后台」打开';
+    const gpuOff = !!usage.gpu?.off;
+    const gpuTitle = gpuOff ? meterOffTitle : gpuPct == null ? 'GPU 占用率暂不可用' : `${usage.gpu.name || 'GPU'} · 占用 ${gpuPct}% · 每 10 秒采样`;
+    const gpuMetric = `<span class="strip-resource strip-gpu${gpuOff ? ' strip-meter-off' : metricClass(gpuPct)}" tabindex="0"${gpuOff ? ' data-open-resources="liveMeter"' : ''} title="${escapeHtml(gpuTitle)}" aria-label="${escapeHtml(gpuTitle)}">GPU<b>${gpuOff ? '关' : gpuPct == null ? '—' : gpuPct + '%'}</b></span>`;
     const diskMetric = `<span class="strip-resource strip-disk${metricClass(diskPct)}" role="button" tabindex="0" aria-haspopup="dialog" title="${escapeHtml(`${diskRoot} 已用 ${diskPct == null ? '检测中' : diskPct + '%'}${Number.isFinite(usage.disk?.totalBytes) ? ` · 总容量 ${(usage.disk.totalBytes / 1024 ** 3).toFixed(0)} GB` : ''} · 点击释放硬盘空间`)}" aria-label="${escapeHtml(`${diskRoot} 已用 ${diskPct == null ? '检测中' : diskPct + '%'}，点击打开硬盘释放`)}">硬盘<b>${diskPct == null ? '—' : diskPct + '%'}</b><span class="strip-mini-track"><i style="width:${diskPct == null ? 0 : Math.max(0, Math.min(100, diskPct))}%"></i></span></span>`;
     const network = usage.network;
     const rate = value => {
@@ -524,15 +530,21 @@ function _sessionWarningText(session) {
     const ips = Array.isArray(network?.ips) ? network.ips : [];
     const ipTitle = ips.length ? '本机 IP：\n' + ips.map(x => `${x.name}：${x.address}`).join('\n') : '';
     const ipChip = ips.length ? `<span class="strip-ip" title="${escapeHtml(ipTitle)}" aria-label="${escapeHtml('本机 IP ' + ips[0].address)}">${escapeHtml(ips[0].address)}</span>` : '';
-    const transfer = `<span class="strip-transfer" title="${escapeHtml(networkTitle)}" aria-label="${escapeHtml(networkTitle)}"><span class="strip-download"><span class="strip-transfer-label">↓</span><b>${rate(network?.downloadBps)}</b></span><span class="strip-upload"><span class="strip-transfer-label">↑</span><b>${rate(network?.uploadBps)}</b></span>${ipChip}</span>`;
+    const transfer = network?.status === 'off'
+      ? `<span class="strip-transfer"><span class="strip-meter-off" role="button" tabindex="0" data-open-resources="liveMeter" title="${escapeHtml(meterOffTitle)}" aria-label="${escapeHtml(meterOffTitle)}">网速 关</span>${ipChip}</span>`
+      : `<span class="strip-transfer" title="${escapeHtml(networkTitle)}" aria-label="${escapeHtml(networkTitle)}"><span class="strip-download"><span class="strip-transfer-label">↓</span><b>${rate(network?.downloadBps)}</b></span><span class="strip-upload"><span class="strip-transfer-label">↑</span><b>${rate(network?.uploadBps)}</b></span>${ipChip}</span>`;
     const location = displayRoute?.ok
       ? [displayRoute.countryZh || displayRoute.country || '国家未知', displayRoute.cityZh || displayRoute.city || '城市未知'].join(' ')
       : '出口未知';
     const domesticLabel = !egress ? '国内检测中' : domestic?.ok ? '国内正常' : '国内异常';
+    const networkInner =
+      `${helpAskUi.helpAskButtonHtml()}${welinkUserGroups ? welinkUserGroups.userGroupsButtonHtml() : ''}<button type="button" class="strip-route-row strip-route-foreign strip-proxy" title="${escapeHtml(foreignTitle)}"${ackAttr}><span class="strip-route-dot ${routeClass(displayRoute, proxyShort ? alert : null)}"></span><span>${routeLabel}</span><span class="strip-location">${escapeHtml(location)}</span>${clashDelay ? `<span class="strip-delay" data-state="known">${clashDelay.delayMs}<small>ms</small></span>` : proxy?.clashDelay?.status === 'timeout' ? '<span class="strip-delay" data-state="timeout">节点超时</span>' : ''}</button>` +
+      transfer + (showDomesticRoute() ? `<span class="strip-route-row strip-route-domestic" title="${escapeHtml(domesticTitle)}"><span class="strip-route-dot ${routeClass(domestic)}"></span>${domesticLabel}</span>` : '');
+    let lowBadge = '';
+    try { lowBadge = require('./low-overhead-ui').stripBadgeHtml(getLowOverhead()); } catch { lowBadge = ''; }
     const markup =
-      '<div class="strip-resources" title="点击 CPU / 内存查看进程，点击硬盘释放空间">' + metric('CPU', cpuPct) + gpuMetric + metric('内存', memoryPct) + diskMetric + '</div>' +
-      `<div class="strip-network">${helpAskUi.helpAskButtonHtml()}${welinkUserGroups ? welinkUserGroups.userGroupsButtonHtml() : ''}<button type="button" class="strip-route-row strip-route-foreign strip-proxy" title="${escapeHtml(foreignTitle)}"${ackAttr}><span class="strip-route-dot ${routeClass(displayRoute, proxyShort ? alert : null)}"></span><span>${routeLabel}</span><span class="strip-location">${escapeHtml(location)}</span>${clashDelay ? `<span class="strip-delay" data-state="known">${clashDelay.delayMs}<small>ms</small></span>` : proxy?.clashDelay?.status === 'timeout' ? '<span class="strip-delay" data-state="timeout">节点超时</span>' : ''}</button>` +
-      transfer + (showDomesticRoute() ? `<span class="strip-route-row strip-route-domestic" title="${escapeHtml(domesticTitle)}"><span class="strip-route-dot ${routeClass(domestic)}"></span>${domesticLabel}</span>` : '') + '</div>';
+      '<div class="strip-resources" title="点击 CPU / 内存查看进程，点击硬盘释放空间">' + metric('CPU', cpuPct) + gpuMetric + metric('内存', memoryPct) + lowBadge + diskMetric + '</div>' +
+      `<div class="strip-network">${networkInner}</div>`;
     if (stripEl._resourceMarkup === markup) return;
     stripEl._resourceMarkup = markup;
     // Keep focused/hovered resource anchors alive during the telemetry heartbeat.
@@ -553,8 +565,20 @@ function _sessionWarningText(session) {
       if (currentGpu && nextGpu) {
         currentGpu.className = nextGpu.className;
         currentGpu.title = nextGpu.title;
+        if (nextGpu.dataset.openResources) currentGpu.dataset.openResources = nextGpu.dataset.openResources; else delete currentGpu.dataset.openResources;
         currentGpu.setAttribute('aria-label', nextGpu.getAttribute('aria-label'));
         currentGpu.querySelector('b').textContent = nextGpu.querySelector('b').textContent;
+      }
+      // 「省」徽章随低开销模式开关出现或消失（只在状态变了时动 DOM）。
+      const currentBadge = stripEl.querySelector('.strip-low-overhead');
+      if (!!currentBadge !== !!lowBadge) {
+        if (currentBadge) currentBadge.remove();
+        else {
+          const memoryEl = stripEl.querySelector('[data-resource-kind="memory"]');
+          const badgeTpl = doc.createElement('template');
+          badgeTpl.innerHTML = lowBadge;
+          if (memoryEl && badgeTpl.content.firstElementChild) memoryEl.after(badgeTpl.content.firstElementChild);
+        }
       }
       const currentDisk = stripEl.querySelector('.strip-disk');
       const nextDisk = template.content.querySelector('.strip-disk');
@@ -565,8 +589,20 @@ function _sessionWarningText(session) {
         currentDisk.querySelector('b').textContent = nextDisk.querySelector('b').textContent;
         currentDisk.querySelector('i').style.width = nextDisk.querySelector('i').style.width;
       }
-      stripEl.querySelector('.strip-network').innerHTML = template.content.querySelector('.strip-network').innerHTML;
+      // 网络区（2026-11-23 开销优化）：5 秒心跳里常常只有 CPU 或网速变了。网络区整段没变就不动；
+      // 只有网速那一小段变了就只换它，按钮（求助、用户群、VPN 行）不重建（见 sidebar-strip-diff.js）。
+      const netEl = stripEl.querySelector('.strip-network');
+      const plan = stripNetworkPlan(stripEl._networkParts, { inner: networkInner, transfer });
+      const curTransfer = plan === 'transfer' ? netEl?.querySelector('.strip-transfer') : null;
+      if (plan === 'transfer' && curTransfer) {
+        const t = doc.createElement('template');
+        t.innerHTML = transfer;
+        curTransfer.replaceWith(t.content.firstElementChild);
+      } else if (plan !== 'skip' && netEl) netEl.innerHTML = networkInner;
+      stripEl._stripPlans = stripEl._stripPlans || { skip: 0, transfer: 0, all: 0 };
+      stripEl._stripPlans[plan === 'transfer' && !curTransfer ? 'all' : plan]++;
     } else stripEl.innerHTML = markup;
+    stripEl._networkParts = { inner: networkInner, transfer };
     stripEl.title = '';
     stripEl.style.display = 'flex';
     // 点击 VPN 行打开流量详情（renderer/vpn-traffic-panel.js），节点变化的确认在弹层里完成。

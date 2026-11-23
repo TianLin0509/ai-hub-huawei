@@ -743,6 +743,9 @@ function codeAgentPermissionDroppedMessage(mode) {
 // 只记录、写一行日志，不结束任何进程；这一会话里已经起的重复由膨胀回收兜底。失败只影响学习，不影响会话。
 const NATIVE_MCP_LEARN_DELAY_MS = 75_000;
 let nativeMcpInspector = null;
+// 进程枚举在这台电脑上拿不到结果（黄区 3/3 返回空输出）时，本次 Hub 运行不再为每个会话白跑一次 PowerShell：
+// 去重已改为启动前静态判定（core/codeagent-member-mcp.js staticNative），学习只剩辅助诊断和纠错（veto）。
+let nativeMcpLearnBroken = '';
 function scheduleNativeMcpLearn(manager, id, rootPid, learn, delayMs = NATIVE_MCP_LEARN_DELAY_MS) {
   return null;
 }
@@ -1553,6 +1556,11 @@ class SessionManager extends EventEmitter {
   }
   sessions = new Map();
   focusedSessionId = null;
+  focusedAt = 0;
+
+  getFocusedSessionState() {
+    return { id: this.focusedSessionId || null, focusedAt: this.focusedSessionId ? Number(this.focusedAt) || 0 : 0 };
+  }
   claudeCounter = 0;
   resumeCounter = 0;
   psCounter = 0;
@@ -3668,6 +3676,50 @@ class SessionManager extends EventEmitter {
     }
   }
 
+  // 关闭 / 休眠 CodeAgent 终端时补杀进程树残余（2026-11-23，core/session-close-sweep.js createExitTreeSweep）。
+  // main 装上 sweeper 才生效；单测和公开版不装时照旧直接结束。Hub 退出走 _terminatePty，不经这里。
+  setCodeAgentExitSweep(sweeper) { this._codeagentExitSweep = sweeper || null; }
+
+  // mode：'close' | 'suspend'。返回值同 _terminatePty（true 表示已发出结束请求，含「拍完快照马上结束」的情况）。
+  _terminateWithTreeSweep(sessionId, session, { mode = 'close', arranged = false } = {}) {
+    const sweep = this._codeagentExitSweep;
+    const pty = session && session.pty;
+    const backend = session?.info?.runtimeBackend;
+    const apiBacked = ['codex-app-server', 'claude-stream-json'].includes(backend) || (backend === 'acp' && !pty?.isCliProvider);
+    const rootPid = Number(pty && pty.pid) || 0;
+    if (!sweep || arranged || !pty || apiBacked || !rootPid || session.confirmedExit || !isCodeAgentKind(session.info?.kind)
+        || this._ptyTerminationRequests.has(pty)) {
+      return this._terminatePty(session);
+    }
+    if (session._exitSweepPending) return true;
+    let plan = null;
+    try { plan = sweep.plan(rootPid, { startedAt: Number(session.startedAt) || 0 }); } catch { plan = null; }
+    const label = `session=${String(sessionId).slice(0, 8)}`;
+    if (!plan) return this._terminatePty(session);
+    if (plan.before) {
+      const result = this._terminatePty(session);
+      if (result) { try { sweep.schedule(plan.before, { rootPid, label }); } catch { /* 补杀安排不上不影响关闭 */ } }
+      return result;
+    }
+    // 缓存里没有这棵树：现拍快照（最多几秒）再结束。
+    session._exitSweepPending = true;
+    Promise.resolve(plan.pending).catch(() => []).then(before => {
+      session._exitSweepPending = false;
+      if (this.sessions.get(sessionId) !== session || session.confirmedExit || Number(session.pty?.pid) !== rootPid) return;
+      if (mode === 'suspend' && !session.suspendRequestedAt && !session.closeRequestedAt) return;
+      let result = false;
+      try { result = this._terminatePty(session); }
+      catch (error) {
+        const message = error && error.message ? error.message : String(error);
+        if (mode === 'suspend' && !session.closeRequestedAt) { session.suspendRequestedAt = 0; session.suspendReason = null; session.info.status = 'idle'; }
+        this.emit('session-notice', { sessionId, level: 'warning', message: `结束会话进程失败（${message}），可以稍后重试。` });
+        return;
+      }
+      if (result && Array.isArray(before)) { try { sweep.schedule(before, { rootPid, label }); } catch { /* 同上 */ } }
+    });
+    return true;
+  }
+
   async _readPtyProcessBirth(pid) {
     const script = `$ErrorActionPreference='Stop'; $p=Get-Process -Id ${pid}; try { [DateTimeOffset]::new($p.StartTime.ToUniversalTime()).ToUnixTimeMilliseconds() } finally { $p.Dispose() }`;
     return new Promise((resolve, reject) => {
@@ -3731,7 +3783,7 @@ try {
     return pid;
   }
 
-  closeSession(sessionId) {
+  closeSession(sessionId, options = {}) {
     const session = this.sessions.get(sessionId);
     if (!session) return;
     // An explicit close wins over an in-flight suspend request.
@@ -3749,7 +3801,7 @@ try {
       return;
     }
     if (session.confirmedExit) return this._handlePtyExit(sessionId, session.pty, session.confirmedExit);
-    this._terminatePty(session);
+    this._terminateWithTreeSweep(sessionId, session, { mode: 'close', arranged: !!(options && options.treeSweepArranged) });
     // Do NOT delete from this.sessions here — the onExit handler does it.
     // The guard in onExit (entry.pty !== ptyProcess) requires the entry to
     // still be present so it can confirm the dying pty owns the entry.
@@ -3774,7 +3826,7 @@ try {
     const unbound = isCodeAgentKind(session.info.kind) && session.info.codeagentIdentityPending === true
       && !getSessionResumeIdentity(session.info);
     if (unbound || !supportsRecoverableSuspend(session.info)) {
-      this.closeSession(sessionId);
+      this.closeSession(sessionId, { treeSweepArranged: !!options.treeSweepArranged });
       return { ok: true, sessionId, action: 'closed', recoverable: false };
     }
     const result = this.suspendSession(sessionId, {
@@ -3987,7 +4039,7 @@ try {
         this.sessions.delete(sessionId);
         this.onSessionSuspended(sessionId, session.info.meetingId || null, dormantInfo, { noPty: true });
       } else {
-        this._terminatePty(session);
+        this._terminateWithTreeSweep(sessionId, session, { mode: 'suspend', arranged: !!options.treeSweepArranged });
         this._armSuspendExitWatchdog(sessionId, session);
       }
       return { ok: true, sessionId, lastActivityAt, reason: session.suspendReason };
@@ -4344,6 +4396,9 @@ try {
 
   setFocusedSession(sessionId) {
     this.focusedSessionId = sessionId;
+    // 这次切过来的时刻（2026-11-23 低开销模式 L1）：焦点保护的 30 分钟从这里和上次输入输出中较晚的算起，
+    // 刚点开阅读的旧会话不会被立即休眠。
+    this.focusedAt = sessionId ? Date.now() : 0;
     // 切到某个会话时，把它在后台合并期间攒着的终端输出立即推上去（main.js 接）。
     try { this.onFocusChanged?.(sessionId); } catch { /* 推送失败不影响切换 */ }
   }

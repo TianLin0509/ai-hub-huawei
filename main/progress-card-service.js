@@ -177,15 +177,22 @@ function createProgressCardService({
 
   // 只读到最后一个完整行为止：换行是单字节，切点不会落在汉字中间，路径也不会被切成两半。
   // 返回 [文本, 读了多少字节]。
-  function readNew(t, budget) {
-    let st; try { st = fsImpl.statSync(t.transcriptPath); } catch { return ['', 0]; }
+  // 读盘一律异步（2026-11-23）：12 个会话同时在跑时，每轮要对每个会话的记录做 stat 和读新增部分，
+  // 同步读在磁盘忙（杀毒扫描正在写的记录）时实测把主进程卡住 1 秒以上。
+  async function readNew(t, budget) {
+    let st; try { st = await fsImpl.promises.stat(t.transcriptPath); } catch { return ['', 0]; }
     if (t.offset == null || st.size < t.offset) {                      // 第一次见到，或记录被重写变短：已认出的卡保留
       t.offset = Math.max(0, st.size - FIRST_READ_TAIL); t.aligned = t.offset === 0;
     }
     if (st.size <= t.offset || budget <= 0) return ['', 0];
     const len = Math.min(st.size - t.offset, CHUNK_BYTES, budget);
-    const buf = Buffer.alloc(len); const fd = fsImpl.openSync(t.transcriptPath, 'r');
-    try { fsImpl.readSync(fd, buf, 0, len, t.offset); } finally { fsImpl.closeSync(fd); }
+    const buf = Buffer.alloc(len);
+    const offset = t.offset;
+    try {
+      const handle = await fsImpl.promises.open(t.transcriptPath, 'r');
+      try { await handle.read(buf, 0, len, offset); } finally { await handle.close(); }
+    } catch { return ['', 0]; }
+    if (t.offset !== offset) return ['', 0];                           // 读的过程中记录被换掉（换号、续接）：这轮作废
     let end = buf.lastIndexOf(0x0a) + 1;
     if (end === 0) end = len === CHUNK_BYTES ? len : 0;              // 一行比一块还长：整块跳过；不满一块说明行还没写完，下轮再读
     t.offset += end;
@@ -194,10 +201,10 @@ function createProgressCardService({
     return [text, end];
   }
 
-  function newestCard(t) {
+  async function newestCard(t) {
     let best = null;
     for (const p of [...t.cards]) {
-      try { const st = fsImpl.statSync(p); if (st.isFile() && (!best || st.mtimeMs > best.mtimeMs)) best = { path: p, mtimeMs: st.mtimeMs }; }
+      try { const st = await fsImpl.promises.stat(p); if (st.isFile() && (!best || st.mtimeMs > best.mtimeMs)) best = { path: p, mtimeMs: st.mtimeMs }; }
       catch { t.cards.delete(p); }                                    // 卡已被删掉或挪走，不再每轮去查
     }
     return best;
@@ -237,8 +244,10 @@ function createProgressCardService({
     try {
       let tail = '';
       try {
-        const st = fsImpl.statSync(t.transcriptPath), len = Math.min(st.size, 1024 * 1024), buf = Buffer.alloc(len);
-        const fd = fsImpl.openSync(t.transcriptPath, 'r'); try { fsImpl.readSync(fd, buf, 0, len, st.size - len); } finally { fsImpl.closeSync(fd); }
+        // 异步读记录尾部（最多 1 MB），不在主线程上同步读大文件。
+        const st = await fsImpl.promises.stat(t.transcriptPath), len = Math.min(st.size, 1024 * 1024), buf = Buffer.alloc(len);
+        const handle = await fsImpl.promises.open(t.transcriptPath, 'r');
+        try { await handle.read(buf, 0, len, st.size - len); } finally { await handle.close(); }
         tail = buf.toString('utf8');
       } catch {}
       const line = tidyGhost(await summarize(GHOST_PROMPT(t.text, recentDialogue(tail))));
@@ -267,7 +276,7 @@ function createProgressCardService({
     return cards;
   }
 
-  function tick() {
+  async function tick() {
     if (busy) return; busy = true;
     try {
       const sessions = getSessions() || [], alive = new Set();
@@ -281,17 +290,17 @@ function createProgressCardService({
           t = { ...(t || {}), cards: t ? t.cards : new Set(), transcriptPath: s.transcriptPath, offset: null, aligned: false };
           tracked.set(s.id, t);
         }
-        const [chunk, used] = readNew(t, budget);
+        const [chunk, used] = await readNew(t, budget);
         budget -= used;
         if (chunk) {
           for (const p of [...writtenCardPaths(chunk, s.cwd), ...cardsInOwnDirectory(chunk, s.cwd)]) addCard(t, p);
           t.lastHumanAt = Math.max(t.lastHumanAt || 0, humanMessageTimes(chunk));
         }
-        const card = newestCard(t);
+        const card = await newestCard(t);
         if (!card) { t.cardPath = null; t.parsed = null; continue; }
         if (card.path !== t.cardPath || card.mtimeMs !== t.mtimeMs) {
           try {
-            const text = fsImpl.readFileSync(card.path, 'utf8').slice(0, CARD_MAX_BYTES);
+            const text = (await fsImpl.promises.readFile(card.path, 'utf8')).slice(0, CARD_MAX_BYTES);
             Object.assign(t, { cardPath: card.path, mtimeMs: card.mtimeMs, text, parsed: parseProgressCard(text) });
           } catch { continue; }
         }
@@ -305,7 +314,7 @@ function createProgressCardService({
     } finally { busy = false; }
   }
 
-  function start() { if (!timer) { tick(); timer = setInterval(tick, pollMs); timer.unref?.(); } }
+  function start() { if (!timer) { void tick(); timer = setInterval(() => void tick(), pollMs); timer.unref?.(); } }
   function stop() { if (timer) clearInterval(timer); timer = null; }
   function registerIpc(ipcMain) {
     ipcMain.handle('progress-cards:get', () => ({ ok: true, cards: snapshot(), at: now() }));

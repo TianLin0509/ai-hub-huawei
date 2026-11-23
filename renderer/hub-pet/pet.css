@@ -170,6 +170,8 @@ body.peeking #sparks, body.peeking #halo, body.peeking .lv { display: none; }
   animation: heart-up 1.3s ease-out var(--delay, 0s) both; }
 @keyframes heart-up { 0% { opacity: 0; transform: translateY(6px) scale(.4); } 20% { opacity: 1; transform: translateY(0) scale(1); } 100% { opacity: 0; transform: translate(var(--dx), -46px) scale(1.15); } }
 @media (prefers-reduced-motion: reduce) { #evolve-wings, #evolve-head, #sparks i, #halo, #fx *, .ncard-art { animation: none !important; } #body.evolving .cel::after { content: none; } }
+/* 软件渲染（关了硬件加速）：透明窗每帧都由 CPU 合成，停掉无限循环的装饰动画（翅膀、星光、光环），一次性的动画照旧。 */
+body.soft-gpu #evolve-wings, body.soft-gpu #sparks i, body.soft-gpu #halo { animation: none !important; }
 /* 成长卡片：金色点缀，右侧一枚徽章 */
 .ncard.growth { --accent: #d99a12; }
 .ncard-art { position: absolute; right: 12px; top: 30px; width: 46px; height: 46px; background: center / contain no-repeat; pointer-events: none; animation: art-pop 520ms cubic-bezier(.2, 1.5, .4, 1) 120ms both; }

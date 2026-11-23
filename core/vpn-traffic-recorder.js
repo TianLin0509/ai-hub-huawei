@@ -345,17 +345,51 @@ function createVpnTrafficRecorder(options = {}) {
     try { return JSON.parse(fsApi.readFileSync(lockPath, 'utf8')); } catch { return null; }
   }
 
-  function tryHoldLease() {
+  // 采样循环里的读写一律异步（2026-11-23）：租约每 5 秒续一次（读 → 改名替换 → 再读），刚被替换的小文件
+  // 常被杀毒软件扫描，同步读实测单次把主进程卡住 1.5 秒；停止、跨天这类偶发动作仍用同步版本。
+  async function readLeaseAsync() {
+    try { return JSON.parse(await fsApi.promises.readFile(lockPath, 'utf8')); } catch { return null; }
+  }
+
+  // 已停止（disposed）时放弃改名，返回 false：停止时的同步写才是最终版本，不能被在途的旧内容盖掉。
+  async function writeAtomicAsync(file, text) {
+    await fsApi.promises.mkdir(dir, { recursive: true });
+    const tmp = `${file}.${pid}.async.tmp`; // 和同步版本的临时文件分开，停止时的同步写不会撞上在途的异步写
+    await fsApi.promises.writeFile(tmp, text);
+    if (disposed) { await fsApi.promises.unlink(tmp).catch(() => {}); return false; }
+    await fsApi.promises.rename(tmp, file);
+    return true;
+  }
+
+  // 记录有改动就加一；异步写成功、且期间没有新改动，才清 dirty（写失败或写的过程中又有新数据，下一轮或停止时再写）。
+  let changeSeq = 0;
+  async function flushAsync() {
+    if (!day || !dirty || now() - lastFlushAt < flushMs) return;
+    const target = day, text = JSON.stringify(day), seq = changeSeq;
+    try {
+      const renamed = await writeAtomicAsync(dayPath(target.date), text);
+      // 改名已经发出、随后才停止：停止时的同步写可能被这次改名盖掉，用内存里的最终数据再同步补写一次。
+      if (disposed) { if (renamed) try { writeAtomic(dayPath(target.date), JSON.stringify(target)); } catch { /* 退出中，尽力而为 */ } return; }
+      lastFlushAt = now();
+      if (seq === changeSeq) dirty = false;
+    } catch (error) { lastError = `write-failed: ${error.message}`; }
+  }
+
+  async function tryHoldLease() {
     const t = now();
-    const lease = readLease();
+    const lease = await readLeaseAsync();
+    if (disposed) return false;
     const ownedByOther = lease && lease.pid !== pid && t - (Number(lease.heartbeatAt) || 0) < LEASE_STALE_MS && isPidAlive(lease.pid);
     if (ownedByOther) {
       if (holding) releaseHolding();
       return false;
     }
     try {
-      writeAtomic(lockPath, JSON.stringify({ pid, heartbeatAt: t }));
-      const check = readLease();
+      if (!(await writeAtomicAsync(lockPath, JSON.stringify({ pid, heartbeatAt: t })))) return false;
+      // 改名发出后才停止：停止时已经删了租约，这里补删，免得留下一个占着的租约文件。
+      if (disposed) { try { const l = readLease(); if (l && l.pid === pid) fsApi.unlinkSync(lockPath); } catch { /* 已删 */ } return false; }
+      const check = await readLeaseAsync();
+      if (disposed) return false;
       if (!check || check.pid !== pid) { if (holding) releaseHolding(); return false; }
     } catch { return holding; }
     lastLeaseAt = t;
@@ -432,7 +466,7 @@ function createVpnTrafficRecorder(options = {}) {
     if (disposed) return;
     const t = now();
     if (t - lastLeaseAt > 5_000 || !holding) {
-      if (!tryHoldLease()) return;
+      if (!(await tryHoldLease())) return;
     }
     let ctl;
     let snapshot;
@@ -484,13 +518,13 @@ function createVpnTrafficRecorder(options = {}) {
     }
     day.firstAt = day.firstAt || sampleAt;
     day.lastAt = sampleAt;
-    dirty = true;
+    dirty = true; changeSeq += 1;
     lastSampleAt = sampleAt;
     snapState = result.nextState;
     appByConn = nextAppByConn;
     const liveIds = new Set((snapshot.connections || []).map(c => c && c.id));
     ownerAttempted = new Set([...ownerAttempted].filter(id => liveIds.has(id)));
-    flush(false);
+    await flushAsync();
   }
 
   function schedule() {

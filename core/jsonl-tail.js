@@ -76,8 +76,24 @@ class JsonlTail {
     });
   }
 
+  async _readHeadSig(size) {
+    const n = Math.min(64, size || 0);
+    if (n <= 0) return '';
+    const fh = await fs.promises.open(this._filepath, 'r');
+    try {
+      const buf = Buffer.allocUnsafe(n);
+      const { bytesRead } = await fh.read(buf, 0, n, 0);
+      return (bytesRead === n ? buf : buf.subarray(0, bytesRead)).toString('hex');
+    } finally {
+      await fh.close();
+    }
+  }
+
   async _prepareInitialOffset() {
     const stat = await fs.promises.stat(this._filepath);
+    this._fileId = `${stat.dev || 0}:${stat.ino || 0}:${Math.round(stat.birthtimeMs || 0)}`;
+    this._mtimeMs = stat.mtimeMs;
+    if (stat.size > 0) this._headSig = await this._readHeadSig(stat.size);
     if (this._startAtEnd) {
       this._offset = stat.size;
       return;
@@ -100,16 +116,30 @@ class JsonlTail {
     this._reading = true;
     try {
       const stat = await fs.promises.stat(this._filepath);
-      if (stat.size < this._offset) {
-        // File rotation/truncation: restart instead of staying permanently
-        // beyond EOF.  Keep the same initial bound for a newly-large file.
+      const fileId = `${stat.dev || 0}:${stat.ino || 0}:${Math.round(stat.birthtimeMs || 0)}`;
+      let rotated = stat.size < this._offset || (Boolean(this._fileId) && fileId !== this._fileId);
+      if (!rotated && this._offset > 0 && stat.size > 0 && stat.mtimeMs !== this._mtimeMs && this._headSig) {
+        const currentHead = await this._readHeadSig(this._headSig.length / 2);
+        if (currentHead !== this._headSig) rotated = true;
+      }
+      if (rotated) {
+        // File rotation/truncation (including same-size atomic replacement):
+        // restart instead of staying permanently beyond EOF or skipping new content.
         this._offset = this._maxInitialBytes && stat.size > this._maxInitialBytes
           ? stat.size - this._maxInitialBytes
           : 0;
         this._discardLeadingPartialLine = this._offset > 0;
+        this._headSig = null;
         this._resetScanner();
       }
-      if (stat.size <= this._offset) return;
+      this._fileId = fileId;
+      this._mtimeMs = stat.mtimeMs;
+      if (stat.size <= this._offset) {
+        if (stat.size > 0 && (!this._headSig || (this._headSig.length < 128 && stat.size > this._headSig.length / 2))) {
+          this._headSig = await this._readHeadSig(stat.size);
+        }
+        return;
+      }
       const fh = await fs.promises.open(this._filepath, 'r');
       try {
         while (!this._closed && this._offset < stat.size) {
@@ -117,6 +147,9 @@ class JsonlTail {
           const buf = Buffer.allocUnsafe(len);
           const { bytesRead } = await fh.read(buf, 0, len, this._offset);
           if (bytesRead <= 0) break;
+          if (this._offset === 0 && this._headSig == null) {
+            this._headSig = buf.subarray(0, Math.min(64, bytesRead)).toString('hex');
+          }
           this._offset += bytesRead;
           this._maxObservedReadBytes = Math.max(this._maxObservedReadBytes, bytesRead);
           this._scanner.push(bytesRead === buf.length ? buf : buf.subarray(0, bytesRead));
@@ -127,6 +160,9 @@ class JsonlTail {
         }
       } finally {
         await fh.close();
+      }
+      if (stat.size > 0 && (!this._headSig || (this._headSig.length < 128 && stat.size > this._headSig.length / 2))) {
+        this._headSig = await this._readHeadSig(stat.size);
       }
     } catch (error) {
       // Transient IO errors such as rotation/deletion are retried on the next tick.

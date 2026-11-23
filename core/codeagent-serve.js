@@ -3,7 +3,7 @@
 //
 // 公司真机实测（Q-1030-02 / Q-1030-03，CodeAgent 1.2615.02.03）：
 // - 参数只认 --host / --port / --token / --config-dir；token 由调用方给，接口都要 `Authorization: Bearer <token>`（不带一律 401）。
-// - 已在跑的会话自带 serve 用的是它自己的 token，外部拿不到，所以不复用，按需临时起一个。
+// - 已在跑的 PTY 会话自带 serve 用的是它自己的 token，外部拿不到，不复用；Hub 自己起的共享 serve（codeagent-serve-host）token 在手，直接借用。
 // - 临时起一个约 2.7 秒就绪，进程树约 470–550 MB（一个 serve 常驻要占这么多，所以用完就关，不常驻）。
 // - 没有可用的关闭接口（/api/v1/server/shutdown 是 404），用完按进程树结束；万一 bun 打包的进程脱离父进程，再按端口结束。
 // - 模型清单和账号额度：GET /api/v2/config/providers；单个模型的分钟 / 小时 / 天配额：GET /api/v2/model/<模型>/quota。
@@ -111,7 +111,61 @@ function withTempServe(options, fn) {
   return next;
 }
 
-async function runTempServe({ command, configDirEnv, configDir, cwd, env = process.env, readyTimeoutMs = 30000, spawnImpl = spawnServe } = {}, fn) {
+// ---------------------------------------------------------------- 影子用户目录（2026-11-23 黄区实测 Probe 6/7B）
+// 普通 serve 无视 --config-dir，照读用户目录下 ~/.cac.json 顶层登记的全部 MCP：读一次额度要连带冷起 31 个子进程、约 1.5 GB。
+// 把临时 serve 的 USERPROFILE/HOME 指向一个影子目录，里面的 .cac.json 是真实那份去掉 mcpServers 的副本（其他状态原样保留），
+// --config-dir 仍指原账号目录读凭据：实测子进程 31 → 1、/api/v2/config/providers 与 /api/v1/session 照常 200。
+// 真实 .cac.json 读不懂时：号池号用空配置（实测可行）；个人号不冒险，照旧用真实用户目录。
+// 影子目录固定一个、反复复用（内容没变不重写），不会越积越多。AI_HUB_CODEAGENT_SERVE_SHADOW_HOME=0 可关。
+const SHADOW_DIR_NAME = 'codeagent-serve-shadow-home';
+function stripMcpServers(state) {
+  const out = { ...state };
+  delete out.mcpServers;
+  if (out.projects && typeof out.projects === 'object' && !Array.isArray(out.projects)) {
+    out.projects = Object.fromEntries(Object.entries(out.projects).map(([dir, p]) => {
+      if (!p || typeof p !== 'object' || Array.isArray(p)) return [dir, p];
+      const { mcpServers, ...rest } = p; void mcpServers; return [dir, rest];
+    }));
+  }
+  out.mcpServers = {};
+  return out;
+}
+// 返回影子目录路径；不该用或准备失败返回 ''（调用方照旧用真实用户目录）。
+function prepareShadowHome({ env = process.env, dataDir = '', configDir = '', isPool = null, fsModule = fs } = {}) {
+  if (env.AI_HUB_CODEAGENT_SERVE_SHADOW_HOME === '0') return '';
+  const realHome = env.USERPROFILE || env.HOME || require('os').homedir();
+  if (!realHome) return '';
+  let pool = isPool;
+  if (pool == null) { try { pool = !!(dataDir && require('./codeagent-pool').poolDirMatch(dataDir, configDir)); } catch { pool = false; } }
+  let body;
+  let raw = null;
+  try { raw = fsModule.readFileSync(path.join(realHome, '.cac.json'), 'utf8'); } catch { raw = null; }
+  if (raw == null) body = { mcpServers: {} };
+  else {
+    let parsed = null;
+    try { parsed = JSON.parse(raw.replace(/^\uFEFF/, '')); } catch { parsed = null; }
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) body = stripMcpServers(parsed);
+    else if (pool) body = { mcpServers: {} };
+    else return '';
+  }
+  const dir = path.join(dataDir || require('os').tmpdir(), 'runtime', SHADOW_DIR_NAME);
+  const file = path.join(dir, '.cac.json');
+  const text = JSON.stringify(body, null, 2) + '\n';
+  try {
+    fsModule.mkdirSync(dir, { recursive: true });
+    let same = false; try { same = fsModule.readFileSync(file, 'utf8') === text; } catch { /* 还没有 */ }
+    if (!same) { const tmp = `${file}.${process.pid}.tmp`; fsModule.writeFileSync(tmp, text, { encoding: 'utf8', mode: 0o600 }); fsModule.renameSync(tmp, file); }
+  } catch { return ''; }
+  return dir;
+}
+function applyShadowHome(childEnv, dir) {
+  if (!dir) return childEnv;
+  childEnv.USERPROFILE = dir;
+  childEnv.HOME = dir;
+  return childEnv;
+}
+
+async function runTempServe({ command, configDirEnv, configDir, cwd, env = process.env, dataDir = '', readyTimeoutMs = 30000, spawnImpl = spawnServe, shadowHome = prepareShadowHome } = {}, fn) {
   if (shuttingDown) return { ok: false, error: 'Hub 正在退出' };
   if (!command || !configDir) return { ok: false, error: '缺少 CodeAgent 命令或配置目录' };
   const started = Date.now();
@@ -121,7 +175,10 @@ async function runTempServe({ command, configDirEnv, configDir, cwd, env = proce
   let proc;
   // 工作目录不存在时 spawn 直接报 ENOENT（新装 Hub 的 probe-cwd 还没建过；读屏那条路会先建）
   try { fs.mkdirSync(cwd || configDir, { recursive: true }); } catch { /* 交给 spawn 报错 */ }
-  try { proc = spawnImpl({ command, port, token, configDir, cwd: cwd || configDir, env: serveEnv(env, { configDirEnv, configDir }) }); }
+  // 影子用户目录只换给这一个临时进程；--config-dir 显式指向原账号目录，个人号凭据仍从真实的 ~/.cac 读。
+  let shadow = '';
+  try { shadow = shadowHome ? shadowHome({ env, dataDir, configDir }) : ''; } catch { shadow = ''; }
+  try { proc = spawnImpl({ command, port, token, configDir, cwd: cwd || configDir, env: applyShadowHome(serveEnv(env, { configDirEnv, configDir }), shadow) }); }
   catch (error) { return { ok: false, error: `启动 CodeAgent serve 失败：${error.message}` }; }
   if (proc.pid) activeServes.set(proc.pid, port);
   let exited = false, exitCode = null, spawnError = '';
@@ -202,8 +259,27 @@ function parseQuota(data) {
 }
 
 // 读一个账号：模型清单 + 账号额度 + 每个模型的配额。models 为空当失败（调用方回落读屏）。
-async function readAccount(options) {
-  return withTempServe(options, async ({ get }) => {
+// 账号已有 Hub 自己起的共享 serve（core/codeagent-serve-host.js，token 由 Hub 持有）时直接借它读，不再冷起临时 serve；
+// 借用期间占一个引用，读完归还（不打断它的空闲关闭计时以外的任何事）。借用失败（连不上）再退回临时 serve。
+async function withAccountServe(options, fn, { hostFor = configDir => require('./codeagent-serve-host').runningHost(configDir) } = {}) {
+  let host = null;
+  try { host = options && options.configDir ? hostFor(options.configDir) : null; } catch { host = null; }
+  if (host && host.running && host.port && host.token) {
+    host.retain();
+    try {
+      const started = Date.now();
+      const health = await request(host.port, host.token, HEALTH_PATH, { timeoutMs: 2000 });
+      if (health.status && health.status < 500) {
+        const result = await fn({ port: host.port, get: (pathname, opts) => getJson(host.port, host.token, pathname, opts) });
+        if (result && result.ok) return { ...result, readyMs: Date.now() - started, reused: true };
+      }
+    } catch { /* 退回临时 serve */ } finally { host.release(); }
+  }
+  return withTempServe(options, fn);
+}
+
+async function readAccount(options, deps) {
+  return withAccountServe(options, async ({ get }) => {
     const providers = await get('/api/v2/config/providers');
     if (!providers.ok) return { ok: false, error: `读模型清单失败：${providers.error}` };
     const parsed = parseProviders(providers.data);
@@ -215,7 +291,7 @@ async function readAccount(options) {
     }
     return { ok: true, source: 'serve', models: [...new Set(parsed.models.map(m => m.id))], details: parsed.models, credit: parsed.credit,
       discount: parsed.discount, quotas, at: new Date().toISOString(), skipped: parsed.skipped };
-  });
+  }, deps);
 }
 
 // 换成 /model 菜单用量快照的格式（core/codeagent-usage-menu.js recordUsage），额度条和模型下拉不用分两套显示：
@@ -287,9 +363,11 @@ function shutdownTempServes({ killSync = killServeSync } = {}) {
 }
 // 只给测试用：同一进程里还要继续测别的。
 function resetTempServeShutdownForTest() { shuttingDown = false; }
+// 正在跑的临时 serve 的 PID（关会话补杀进程树时作为保护名单，绝不误杀）。
+function tempServePids() { return [...activeServes.keys()]; }
 
 // 额度读取（2026-11-05 用户定：放开）：所有电脑都可经临时 serve 读额度，AI_HUB_CODEAGENT_SERVE=0 可关。
 // 选模型、启动传参仍跟 serveEnabled 走，不受这里影响。
 function quotaReadEnabled(env = process.env) { return env.AI_HUB_CODEAGENT_SERVE !== '0'; }
 
-module.exports = { spawnServe, serveEnv, killServeSync, killTree, serveEnabled, quotaReadEnabled, shutdownTempServes, resetTempServeShutdownForTest, withTempServe, request, getJson, freePort, portOwner, HEALTH_PATH, parseProviders, parseQuota, readAccount, toUsageSnapshot };
+module.exports = { spawnServe, serveEnv, prepareShadowHome, applyShadowHome, stripMcpServers, withAccountServe, tempServePids, SHADOW_DIR_NAME, killServeSync, killTree, serveEnabled, quotaReadEnabled, shutdownTempServes, resetTempServeShutdownForTest, withTempServe, request, getJson, freePort, portOwner, HEALTH_PATH, parseProviders, parseQuota, readAccount, toUsageSnapshot };

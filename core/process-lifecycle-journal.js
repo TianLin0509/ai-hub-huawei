@@ -131,14 +131,41 @@ function installProcessLifecycleJournal(options = {}) {
     return record;
   }
 
+  // 定时心跳走异步写（2026-11-23）：每 10 秒一次的同步写在磁盘忙时会把主进程卡住数百毫秒；
+  // 退出、崩溃这类事件发生时的心跳仍用同步写，保证落盘。
+  // 定时写先写临时文件再改名；改名前后都看同步心跳有没有写过（syncSeq 变了）：
+  // 写过就放弃这次旧内容，若改名已经发出则用最近一次同步心跳补写，事件心跳（如 before-quit）不会被定时心跳盖掉。
+  let heartbeatWriting = false, syncSeq = 0, lastSyncText = null;
+  function writeHeartbeatAsync(reason = 'heartbeat') {
+    if (!fsRef.promises) return writeHeartbeat(reason);
+    if (heartbeatWriting) return null; // 上一次还没写完：跳过这一轮
+    const heartbeat = baseRecord(reason, { lastEvent: state.lastEvent, ...processSnapshot() });
+    if (!safeMkdir()) return heartbeat;
+    heartbeatWriting = true;
+    const seq = syncSeq, tmp = `${paths.heartbeatPath}.${process.pid}.tmp`;
+    (async () => {
+      await fsRef.promises.writeFile(tmp, JSON.stringify(heartbeat, null, 2), 'utf8');
+      if (seq !== syncSeq) { await fsRef.promises.unlink(tmp).catch(() => {}); return; }
+      await fsRef.promises.rename(tmp, paths.heartbeatPath);
+      if (seq !== syncSeq && lastSyncText != null) {
+        try { fsRef.writeFileSync(paths.heartbeatPath, lastSyncText, 'utf8'); } catch (error) { lastWriteError = error; }
+      }
+    })()
+      .catch(error => { lastWriteError = error; })
+      .finally(() => { heartbeatWriting = false; });
+    return heartbeat;
+  }
+
   function writeHeartbeat(reason = 'heartbeat') {
     const snapshot = processSnapshot();
     const heartbeat = baseRecord(reason, {
       lastEvent: state.lastEvent,
       ...snapshot,
     });
+    syncSeq += 1;
     try {
-      if (safeMkdir()) fsRef.writeFileSync(paths.heartbeatPath, JSON.stringify(heartbeat, null, 2), 'utf8');
+      lastSyncText = JSON.stringify(heartbeat, null, 2);
+      if (safeMkdir()) fsRef.writeFileSync(paths.heartbeatPath, lastSyncText, 'utf8');
     } catch (error) {
       lastWriteError = error;
     }
@@ -236,7 +263,7 @@ function installProcessLifecycleJournal(options = {}) {
   });
 
   try {
-    heartbeatTimer = setIntervalFn(() => writeHeartbeat('heartbeat'), heartbeatMs);
+    heartbeatTimer = setIntervalFn(() => writeHeartbeatAsync('heartbeat'), heartbeatMs);
     if (heartbeatTimer && typeof heartbeatTimer.unref === 'function') heartbeatTimer.unref();
   } catch (error) {
     lastWriteError = error;

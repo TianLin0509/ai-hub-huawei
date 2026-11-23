@@ -5,6 +5,10 @@ const {EventEmitter}=require('events');
 const {UUID,isAntigravity}=require('./antigravity-config');
 const {parseAntigravityTranscriptToTurns,hash}=require('./antigravity-transcript-parser');
 const STOP_FLUSH_GRACE_MS=20000;
+// 从字节位置 pos 读 n 个字节（事件记录增量续读用）。
+function readRange(file,pos,n){const fd=fs.openSync(file,'r');try{const b=Buffer.alloc(n);const got=fs.readSync(fd,b,0,n,pos);return b.subarray(0,got);}finally{fs.closeSync(fd);}}
+function readHeadHex(file,len){const n=Math.min(64,len||0);return n>0?readRange(file,0,n).toString('hex'):'';}
+function statIdentity(st){return `${st.dev||0}:${st.ino||0}:${Math.round(st.birthtimeMs||0)}`;}
 const EVENTS=['turn-complete','progress-update','turn-started','turn-aborted','turn-error','session-bound','prompt-submitted','background-work-changed','context-window-observed'];
 class AntigravityTap extends EventEmitter {
   constructor(){super();this._bound=new Map();}
@@ -34,19 +38,32 @@ class AntigravityTap extends EventEmitter {
   }
   _poll(s){
     try{
-      if(fs.existsSync(s.antigravityEventsFile) && fs.statSync(s.antigravityEventsFile).size!==s.bytes){
-        const raw=fs.readFileSync(s.antigravityEventsFile,'utf8');
-        if(raw.length<s.offset)throw Error('Antigravity 事件记录意外被截断');
-        if(!s.offset)s.bytes=0;
-        const end=raw.lastIndexOf('\n')+1;
-        // Advance past each line before handling it: one bad line must not make
-        // the next poll replay the lines before it (a second turn-started).
-        while(s.offset<end){
-          const next=raw.indexOf('\n',s.offset)+1,line=raw.slice(s.offset,next-1);
-          s.offset=next;s.bytes=(s.bytes||0)+Buffer.byteLength(line,'utf8')+1;
-          if(!line.trim())continue;
-          try{this._event(s,JSON.parse(line));}catch(error){this._fail(s,error);}
+      const st=fs.existsSync(s.antigravityEventsFile)?fs.statSync(s.antigravityEventsFile):null;
+      if(st){
+        const size=st.size,fileId=statIdentity(st),from=s.bytes||0;
+        let reset=false;
+        if(size<from)reset=true;
+        else if(s.fileId && fileId!==s.fileId)reset=true;
+        else if(from>0 && s.headSig && st.mtimeMs!==s.mtimeMs && readHeadHex(s.antigravityEventsFile,s.headSig.length/2)!==s.headSig)reset=true;
+        if(reset){s.bytes=0;s.offset=0;s.headSig=null;}
+        const curFrom=s.bytes||0;
+        if(size>curFrom){
+          // 每 400ms 一轮：只读上次读到的字节位置之后新增的部分，截断或同尺寸轮转时自动归零重读（2026-11-23 开销优化）。
+          const buf=readRange(s.antigravityEventsFile,curFrom,size-curFrom);
+          const end=buf.lastIndexOf(0x0a)+1;
+          let pos=0;
+          // Advance past each line before handling it: one bad line must not make
+          // the next poll replay the lines before it (a second turn-started).
+          while(pos<end){
+            const next=buf.indexOf(0x0a,pos)+1,line=buf.subarray(pos,next-1).toString('utf8');
+            pos=next;s.bytes=curFrom+pos;s.offset=(s.offset||0)+line.length+1;
+            if(!line.trim())continue;
+            try{this._event(s,JSON.parse(line));}catch(error){this._fail(s,error);}
+          }
+          s.bytes=curFrom+pos;
         }
+        s.fileId=fileId;s.mtimeMs=st.mtimeMs;
+        if((s.bytes||0)>0 && (!s.headSig || (s.headSig.length<128 && size>s.headSig.length/2)))s.headSig=readHeadHex(s.antigravityEventsFile,size);
       }
       this._read(s);
       if(s.pendingStop)this._finishStop(s);

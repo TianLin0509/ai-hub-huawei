@@ -16,13 +16,14 @@ const { spawnSync, execFile } = require('child_process');
 
 const START_TOLERANCE_MS = 5000;
 const RECENT_KEEP = 30;
-const DEFAULT_LIMITS = { edge: 1 };
+// codeagent-print：后台 CodeAgent 单次问答（起名等，2026-11-23）。同时最多 2 个，超时按 PID 结束整棵树，Hub 重启按 PID + 启动时间清遗留。
+const DEFAULT_LIMITS = { edge: 1, 'codeagent-print': 2 };
 const DEFAULT_WATCH_MS = 15000;
 const LOW_MEM_BYTES = 1.2 * 1024 ** 3;
 const LOW_MEM_RATIO = 0.08;
 
 function envLimit(env, kind, fallback) {
-  const n = Number(env[`CLAUDE_HUB_${String(kind).toUpperCase()}_MAX`]);
+  const n = Number(env[`CLAUDE_HUB_${String(kind).toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_MAX`]);
   return Number.isInteger(n) && n > 0 && n <= 8 ? n : fallback;
 }
 

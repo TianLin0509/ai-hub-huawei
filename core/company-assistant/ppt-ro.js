@@ -6,7 +6,12 @@ async function main() {
   const dir = process.env.CLAUDE_HUB_ASSISTANT_DIR;
   if (!dir) throw new Error('请从助理工作目录调用 ppt-ro.cmd');
   const settingsFile = process.env.CLAUDE_HUB_ASSISTANT_SETTINGS || path.join(dir, 'settings.json');
-  const a = { dir, now: Date.now, changed() {}, settings() { try { return JSON.parse(fs.readFileSync(settingsFile, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return {}; throw e; } } };
+  const a = { dir, now: Date.now, changed() {}, settings() {
+    let settings = {};
+    try { settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    const workDir = process.env.CLAUDE_HUB_PPT_WORK_DIR;
+    return workDir ? { ...settings, ppt: { ...settings.ppt, workDir } } : settings;
+  } };
   const [op = 'status', ...rest] = process.argv.slice(2);
   let args = {};
   if (op === 'search') args = { query: rest.join(' ') };

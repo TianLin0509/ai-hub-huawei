@@ -43,7 +43,7 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
     page = document.createElement('section'); page.id = 'company-ppt-page'; page.className = 'company-ppt-page'; page.dataset.view = 'home'; page.hidden = true; page.setAttribute('aria-label', 'PPT 素材工作台');
     // 版式按定稿 CDCCBCC · PPT C（2026-11-04 换皮）：首屏居中检索，有结果后左结果右详情，转字三步。
     // 全部 data-ppt* 钩子与原逻辑不变；data-view / data-step 只给样式用。
-    page.innerHTML = `<header class="pptw-head"><h1>PPT</h1><div class="pptw-tabs" role="tablist" aria-label="PPT 功能"><button type="button" role="tab" class="pptw-tab on" data-ppt-tab="find" aria-selected="true">找页</button><button type="button" role="tab" class="pptw-tab" data-ppt-tab="map" aria-selected="false">库地图</button><button type="button" role="tab" class="pptw-tab" data-ppt-tab="materials" aria-selected="false">素材</button><button type="button" role="tab" class="pptw-tab" data-ppt-tab="make" aria-selected="false">做页</button></div><span class="pptw-sub" data-ppt-sub>AI 帮你找讲过的原页，把图片变成可编辑页</span><div class="pptw-head-right" data-ppt-head-slot><details class="pptw-settings"><summary>素材库设置</summary><div class="pptw-settings-pop"><b>素材文件夹</b><div data-ppt-roots></div><p class="pptw-hint">旧的 Hub 索引保留可查；新增素材文件夹后，请点「更新索引」。</p><div class="pptw-actions"><button type="button" data-ppt="folders">选择素材文件夹…</button><button type="button" data-ppt="index">更新索引</button><button type="button" data-ppt="refresh">重新检查</button><button type="button" data-ppt="doctor">选择 Doctor 程序…</button><button type="button" data-ppt="pick-index">选择已有索引…</button><button type="button" data-ppt="doctor-install">一键安装 / 升级 Doctor（内源优先）</button><button type="button" data-ppt="download">阿里云镜像下载（备用）</button><button type="button" data-ppt="download-backup">GitHub 备用</button></div><p class="dl-src" data-dl-source="ppt-doctor"></p></div></details><div class="pptw-status" data-ppt-status role="status"></div></div></header>
+    page.innerHTML = `<header class="pptw-head"><h1>PPT</h1><div class="pptw-tabs" role="tablist" aria-label="PPT 功能"><button type="button" role="tab" class="pptw-tab on" data-ppt-tab="find" aria-selected="true">找页</button><button type="button" role="tab" class="pptw-tab" data-ppt-tab="map" aria-selected="false">库地图</button><button type="button" role="tab" class="pptw-tab" data-ppt-tab="materials" aria-selected="false">素材</button><button type="button" role="tab" class="pptw-tab" data-ppt-tab="make" aria-selected="false">做页</button></div><span class="pptw-sub" data-ppt-sub>AI 帮你找讲过的原页，把图片变成可编辑页</span><div class="pptw-head-right" data-ppt-head-slot><details class="pptw-settings"><summary>素材库设置</summary><div class="pptw-settings-pop"><b>PPT 工作目录 <span tabindex="0" role="img" aria-label="目录说明" title="优先使用单独选择的 PPT 目录；未选择时依次跟随 Hub 工作文件根目录、新建会话默认工作目录（环境变量优先），都未设置则保持原位置。新任务和缓存使用新目录，进行中的任务和旧文件保留原处，不自动搬迁。PPT Doctor 程序安装目录保持不变。">ⓘ</span></b><div data-ppt-work-dir class="pptw-hint"></div><input type="text" data-ppt-work-input aria-label="PPT 工作目录" spellcheck="false"><div class="pptw-actions"><button type="button" data-ppt="work-dir-save">保存</button><button type="button" data-ppt="work-dir">选择…</button><button type="button" data-ppt="work-dir-reset">跟随工作根</button></div><div data-ppt-work-dir-error role="status"></div><b>素材文件夹</b><div data-ppt-roots></div><p class="pptw-hint">旧的 Hub 索引保留可查；新增素材文件夹后，请点「更新索引」。</p><div class="pptw-actions"><button type="button" data-ppt="folders">选择素材文件夹…</button><button type="button" data-ppt="index">更新索引</button><button type="button" data-ppt="refresh">重新检查</button><button type="button" data-ppt="doctor">选择 Doctor 程序…</button><button type="button" data-ppt="pick-index">选择已有索引…</button><button type="button" data-ppt="doctor-install">一键安装 / 升级 Doctor（内源优先）</button><button type="button" data-ppt="download">阿里云镜像下载（备用）</button><button type="button" data-ppt="download-backup">GitHub 备用</button></div><p class="dl-src" data-dl-source="ppt-doctor"></p></div></details><div class="pptw-status" data-ppt-status role="status"></div></div></header>
       <div class="pptw-scroll"><div class="pptw-body">
       <div class="pptw-guide-slot" data-ppt-guide-slot></div>
       <div class="pptw-tool-hint" data-ppt-tool-hint></div>
@@ -108,6 +108,13 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
     if (upgrade) statusEl.innerHTML = `<span>检测到旧版 ${esc(p.installedVersion || '版本未知')}，需升级</span><button type="button" class="pptw-btn sec" data-ppt="doctor-install">一键升级</button><span role="img" aria-label="升级说明" title="${esc(p.error || '此版本缺少 Hub 联动能力，请升级 PPT Doctor。')}">ⓘ</span>`;
     if (p.error && !upgrade) void sourceView.fill(statusEl, { ipcRenderer });
     if (!p.error && noIndex) statusEl.innerHTML = `<span class="pptw-guide-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l9 5v8l-9 5-9-5V8z"/><path d="M12 8v8M8 10v4M16 10v4" class="cut"/></svg></span><div class="pptw-guide-copy"><strong>${busy ? '正在建立素材索引' : '还没有可检索的素材索引'}</strong><p>${busy ? esc(p.indexing.message || '建好后就能找页，请稍等。') : '先选择存放 PPT 的素材文件夹，选完会自动建立索引。'}</p></div><div class="pptw-guide-actions"><button type="button" class="pptw-btn pri" data-ppt="folders"${busy ? ' disabled' : ''}>选择素材文件夹…</button></div>`;
+    page.querySelector('[data-ppt-work-dir]').textContent = p.workDir?.path || '';
+    page.querySelector('[data-ppt-work-dir-error]').textContent = p.workDirError || '';
+    const workInput = page.querySelector('[data-ppt-work-input]');
+    if (!workInput.dataset.loaded) {
+      workInput.value = p.workDir?.from === 'ppt' ? p.workDir.path : '';
+      workInput.placeholder = p.workDir?.path || '跟随工作根'; workInput.dataset.loaded = '1';
+    }
     page.querySelector('[data-ppt-roots]').textContent = (p.roots || []).join('；') || '尚未指定素材文件夹';
     page.querySelector('[data-ppt="index"]').disabled = busy || !p.roots?.length;
     page.querySelector('[data-ppt="folders"]').disabled = busy;
@@ -356,6 +363,16 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
     }, 1500);
   }
   async function action(name, button) {
+    if (['work-dir', 'work-dir-save', 'work-dir-reset'].includes(name)) {
+      const error = page.querySelector('[data-ppt-work-dir-error]'); error.textContent = ''; button.disabled = true;
+      try {
+        const r = await call(name === 'work-dir' ? 'ppt-pick-work-dir' : name === 'work-dir-save' ? 'ppt-set-work-dir' : 'ppt-reset-work-dir',
+          { path: page.querySelector('[data-ppt-work-input]').value });
+        if (!r.canceled) { delete page.querySelector('[data-ppt-work-input]').dataset.loaded; renderStatus(r.ppt); notice('PPT 工作目录已保存，新任务起生效'); }
+      } catch (e) { error.textContent = e.message; }
+      finally { button.disabled = false; }
+      return;
+    }
     if (name === 'select') { selectedId = button.dataset.id; userPicked = true; drawResults(); return; }
     if (name === 'search-mode' || name === 'convert-mode') { mode(name === 'convert-mode'); return; }
     if (name === 'lookup') {

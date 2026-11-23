@@ -182,15 +182,31 @@ function startMainCpuProfiler({ env = process.env, dataDir, logger = console } =
     const cpuStart = process.cpuUsage();
     const memStart = process.memoryUsage();
     stall.start();
+    // 垃圾回收停顿：只记 ≥20 ms 的，带回收类型（kind：1 小回收 / 2 大回收 / 4 增量标记 / 8 弱回调）与原因标记（flags）。
+    const gcPauses = [];
+    let gcObserver = null;
+    try {
+      const { PerformanceObserver } = require('perf_hooks');
+      gcObserver = new PerformanceObserver(list => {
+        for (const e of list.getEntries()) if (e.duration >= 20) gcPauses.push({ at: Math.round(require('perf_hooks').performance.timeOrigin + e.startTime), ms: Math.round(e.duration), kind: e.detail?.kind ?? e.kind, flags: e.detail?.flags ?? e.flags });
+      });
+      gcObserver.observe({ entryTypes: ['gc'] });
+    } catch {}
     const ipcAudit = createIpcAudit();
     ipcAudit.start();
+    // HUB_MAIN_HEAP_SAMPLE=1：同时做分配采样（哪段代码在大量分配内存、引发长时间垃圾回收），另存 .heapprofile。
+    const heapSample = env.HUB_MAIN_HEAP_SAMPLE === '1';
+    let heapProfile = null;
     post('Profiler.enable')
       .then(() => post('Profiler.setSamplingInterval', { interval: options.samplingIntervalUs }))
+      .then(() => heapSample ? post('HeapProfiler.startSampling', { samplingInterval: 32768 }) : null)
       .then(() => post('Profiler.start'))
       .then(() => new Promise(resolve => setTimeout(resolve, options.durationMs)))
+      .then(() => heapSample ? post('HeapProfiler.stopSampling').then(r => { heapProfile = r.profile; }) : null)
       .then(() => post('Profiler.stop'))
       .then(({ profile }) => {
         const stalls = stall.stop();
+        try { gcObserver?.disconnect(); } catch {}
         const spawns = spawnAudit.stop();
         const ipc = ipcAudit.stop();
         histogram?.disable();
@@ -199,6 +215,7 @@ function startMainCpuProfiler({ env = process.env, dataDir, logger = console } =
         fs.mkdirSync(outDir, { recursive: true });
         const base = path.join(outDir, `main-cpu-profile-${process.pid}-${startedAt}`);
         fs.writeFileSync(base + '.cpuprofile', JSON.stringify(profile));
+        if (heapProfile) fs.writeFileSync(base + '.heapprofile', JSON.stringify(heapProfile));
         const ms = value => Math.round(value / 1e6 * 10) / 10;
         fs.writeFileSync(base + '.json', JSON.stringify({
           pid: process.pid,
@@ -208,6 +225,7 @@ function startMainCpuProfiler({ env = process.env, dataDir, logger = console } =
           cpuSystemMs: Math.round(cpu.system / 1000),
           cpuPercentOfOneCore: Math.round((cpu.user + cpu.system) / 10 / wallMs),
           stallsOver50ms: stalls,
+          gcPausesOver20ms: gcPauses,
           spawns,
           ipc,
           loopDelay: histogram ? {

@@ -1,6 +1,6 @@
 'use strict';
 // 子 Agent 进度一行字的主进程部分（2026-10-29）：只盯渲染进程正在卡片视图里看的那一个会话，
-// 每 2 秒按 core/subagent-progress.js 读一次（文件没变就复用缓存，只读尾部），结果有变化才推给界面。
+// 每 2 秒按 core/subagent-progress.js 异步读一次（文件没变就复用缓存，只读尾部），结果有变化才推给界面。
 // 只做 Claude 家族（CodeAgent 是重点，Claude 记录格式相同顺带支持）；没有记录路径的 CodeAgent 会话
 // 按 receipt-reader 的办法到号的配置目录里找：原生 id 对应的文件优先，否则取最近改过的一份。
 const fs = require('node:fs');
@@ -41,17 +41,21 @@ function createSubagentProgressService({ getSession, sendToRenderer = () => {}, 
     sendToRenderer('subagent-progress:changed', { sessionId, progress: progress || null });
   }
 
-  function tick() {
+  // 读记录是异步的（core/subagent-progress.js）；上一轮没读完就跳过这一轮，读完时用户已换了会话就不推。
+  let reading = false;
+  async function tick() {
     const id = watched;
-    if (!id) return;
+    if (!id || reading) return;
+    reading = true;
     try {
       const session = getSession(id);
       if (!session || !isClaudeFamily(session.kind)) { publish(id, null); return; }
       const file = transcriptOf(session);
-      publish(id, file ? reader.read(file) : null);
+      const progress = file ? await reader.read(file) : null;
+      if (watched === id) publish(id, progress);
     } catch (e) {
       logger.warn?.('[subagent-progress] 读取失败：', e && e.message);
-    }
+    } finally { reading = false; }
   }
 
   function watch(sessionId) {
@@ -59,8 +63,8 @@ function createSubagentProgressService({ getSession, sendToRenderer = () => {}, 
     if (next === watched) return;
     watched = next; lastKey = '';
     if (!next) { if (timer) clearInterval(timer); timer = null; return; }
-    tick();
-    if (!timer) { timer = setInterval(tick, pollMs); timer.unref?.(); }
+    void tick();
+    if (!timer) { timer = setInterval(() => void tick(), pollMs); timer.unref?.(); }
   }
   function stop() { watch(null); }
   function registerIpc(ipcMain) {

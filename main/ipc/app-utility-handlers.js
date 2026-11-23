@@ -153,7 +153,16 @@ function registerAppUtilityIpc(ipcMain, deps) {
   const systemTelemetry = deps.systemTelemetry || createSystemTelemetry();
   const clashDelay = deps.clashDelay || createClashVergeDelayReader();
   const liveTelemetry = deps.liveTelemetry || createLiveResourceTelemetry();
-  ipcMain.handle('get-network-transfer-usage', () => liveTelemetry.sampleNetwork());
+  // 低开销模式（2026-11-23）：「底栏网速与显卡读数」关着时不问网速——常驻的读网卡 PowerShell 随之停掉（约 150 MB），
+  // 只回本机 IP（读系统接口，不起进程）；显卡读数同样跳过，不再每 10 秒跑 nvidia-smi。
+  const liveMeterOn = () => require('../../core/optional-features').backgroundOn('liveMeter');
+  ipcMain.handle('get-network-transfer-usage', () => {
+    if (liveMeterOn()) return liveTelemetry.sampleNetwork();
+    try { liveTelemetry.dispose?.(); } catch {}
+    let ips = [];
+    try { ips = require('../../core/live-resource-telemetry.js').localAddresses(systemOs.networkInterfaces()); } catch {}
+    return { status: 'off', ips };
+  });
   ipcMain.handle('get-resource-top-processes', () => liveTelemetry.sampleProcesses());
 
   ipcMain.handle('is-window-focused', () => {
@@ -182,10 +191,11 @@ function registerAppUtilityIpc(ipcMain, deps) {
     const coreUsage = sampleSystemResourceUsage();
     // Reuse the bounded GPU (10 s) and disk (60 s) caches for the compact footer.
     if (options.extended === false) {
+      const meter = liveMeterOn();
       const [gpu, disk] = await Promise.allSettled([
-        systemTelemetry.sampleGpu?.(), systemTelemetry.sampleDisk?.(),
+        meter ? systemTelemetry.sampleGpu?.() : null, systemTelemetry.sampleDisk?.(),
       ]);
-      return { ...coreUsage, gpu: gpu.status === 'fulfilled' ? gpu.value || null : null,
+      return { ...coreUsage, gpu: !meter ? { off: true } : gpu.status === 'fulfilled' ? gpu.value || null : null,
         disk: disk.status === 'fulfilled' ? disk.value || null : null };
     }
     try {

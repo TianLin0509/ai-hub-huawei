@@ -197,7 +197,7 @@ test('实际助理、PPT、会议室、论坛、群聊与产物入口接线；�
   const { randomUUID } = require('node:crypto'), id = randomUUID();
   const oldMeeting = path.join(old, 'workspace', 'meetings', id);
   fs.mkdirSync(oldMeeting, { recursive: true }); fs.writeFileSync(path.join(oldMeeting, 'meeting.json'), JSON.stringify({ id, title: '旧会议', state: 'ended', events: [], answers: [] }));
-  const make = () => new (require('../core/company-assistant/service').CompanyAssistant)({ dataDir, noTools: true, noTimer: true, bus: { latest: () => [] }, welinkRun: async () => ({ code: 0, stdout: '{}' }), getSession: () => null, powerSaveBlocker: false, meetingAsr: { status: () => ({ ready: false }), close() {} } });
+  const make = () => new (require('../core/company-assistant/service').CompanyAssistant)({ dataDir, noTools: true, noTimer: true, bus: { latest: () => [] }, welinkRun: async () => ({ code: 0, stdout: '{}' }), getSession: () => null, powerSaveBlocker: false, meetingAsr: { status: () => ({ ready: false }), close() {} }, pptHubRoots: () => require('../core/company-assistant/ppt-work-dir').liveHubRoots() });
   const a = make();
   assert.equal(a.workspace, path.join(old, 'workspace')); assert.equal(a.pptWorkspace, path.join(old, 'ppt-workspace'));
   assert.equal(a.rooms.home(), path.join(old, 'meeting-room'));
@@ -205,7 +205,7 @@ test('实际助理、PPT、会议室、论坛、群聊与产物入口接线；�
   const b = make();
   assert.equal(b.dir, old, '配置和状态不改位置');
   assert.equal(b.workspace, path.join(chosen, 'assistant-workspace'));
-  assert.equal(b.pptWorkspace, path.join(chosen, 'ppt-workspace'));
+  assert.equal(b.pptWorkspace, path.join(chosen, 'ppt', 'ppt-workspace'));
   assert.equal(b.rooms.home(), path.join(chosen, 'meeting-room'));
   assert.equal(b.meetings.root, path.join(chosen, 'assistant-workspace', 'meetings'));
   assert.equal(b.meetings.load(id).title, '旧会议');

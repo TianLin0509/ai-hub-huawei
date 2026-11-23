@@ -110,6 +110,16 @@ function acquireHost(options) {
   return host;
 }
 
+// 这个账号此刻已经在跑、可直接借用的共享 serve（读额度用）；没有或还在启动返回 null。
+function runningHost(configDir) {
+  const host = hosts.get(hostKey(configDir));
+  return host && !host.stopped && host.running ? host : null;
+}
+// 所有共享 serve 的进程号：关会话补杀进程树时放进保护名单，同账号其他会话还在用的 serve 绝不误杀。
+function livePids() {
+  return [...hosts.values()].map(host => Number(host.pid)).filter(pid => pid > 0);
+}
+
 function shutdownHosts() {
   const running = [...hosts.values()];
   hosts.clear();
@@ -117,4 +127,4 @@ function shutdownHosts() {
   return running.length;
 }
 
-module.exports = { ServeHost, acquireHost, shutdownHosts, IDLE_CLOSE_MS };
+module.exports = { ServeHost, acquireHost, runningHost, livePids, shutdownHosts, IDLE_CLOSE_MS };

@@ -89,6 +89,7 @@ class AcpSession extends EventEmitter {
     if (!saved) return;
     this.saved = saved;
     this.history = new Map(saved.turns.map(turn => [turn.id, turn]));
+    this.trimmedTurns = 0; this.trimHistory();
     this.receipts = new Map(saved.receipts || []);
     if (saved.submission) this.runtime.submission = saved.submission;
     this.promptQueue.restore(saved.pendingPrompts);
@@ -457,6 +458,7 @@ class AcpSession extends EventEmitter {
       throw storageError;
     }
     this.completed.set(active.turnId, { text: this.finalText(), status, completedAt, error });
+    this.trimHistory();
     this.backstage.completed(turn,nativeResult);
     this.apply({ type: 'completed', threadId: this.threadId, turn: { id: active.turnId, status, ...(error ? { error: { message: error } } : {}) } });
     this.lifecycle(status === 'completed' ? 'turn-complete' : status === 'interrupted' ? 'turn-aborted' : 'turn-error',
@@ -483,8 +485,13 @@ class AcpSession extends EventEmitter {
     turnId: this.active?.turnId || this.runtime.turnId, phase: 'message', ts: item.hubStartedAt })); }
   readTranscript(options = {}) {
     if (options.limit === 0) return [];
-    let turns = options.turnId ? [this.history.get(options.turnId)].filter(Boolean)
-      : options.latestTurn ? [...this.history.values()].slice(-1) : [...this.history.values()];
+    const needFull = (this.trimmedTurns || 0) > 0 && !options.latestTurn && (
+      options.turnId ? !this.history.has(options.turnId)
+        : (!Number.isFinite(options.limit) || options.fromTail === false || options.limit > this.history.size));
+    const sourceTurns = needFull ? this.fullHistory() : [...this.history.values()];
+    const turnById = needFull ? new Map(sourceTurns.map(turn => [turn.id, turn])) : this.history;
+    let turns = options.turnId ? [turnById.get(options.turnId)].filter(Boolean)
+      : options.latestTurn ? sourceTurns.slice(-1) : sourceTurns;
     // Each ACP turn has at least its user card. Select candidate turns before
     // converting large tool histories; slicing cards afterwards is too late.
     if(Number.isFinite(options.limit) && options.limit>0) turns = options.fromTail===false
@@ -493,7 +500,7 @@ class AcpSession extends EventEmitter {
       turns.map(turn => turn.id === this.active?.turnId ? { ...turn, items: [...this.items.values()] } : turn))
       .map(card => ({ ...card, source: BACKEND, kind: this.options.kind,
         ...(card.role==='assistant' ? (()=>{
-          const turn=this.history.get(card.providerTurnId),context=turn?.contextUsage;
+          const turn=turnById.get(card.providerTurnId),context=turn?.contextUsage;
           return {...(turn?.model ? {model:turn.model}:{}),...(context ? {usage:{...card.usage,context_tokens:context.used,context_window:context.size}}:{})};
         })():{}),
         ...(card.toolCalls ? {toolCalls:card.toolCalls.map(tool=>({
@@ -504,8 +511,12 @@ class AcpSession extends EventEmitter {
   }
   readToolResult({threadId,turnId,itemId}) {
     if(threadId!==this.threadId)throw new Error('工具详情不属于当前原生会话');
+    let turn = turnId === this.active?.turnId ? null : this.history.get(turnId);
+    if (turnId !== this.active?.turnId && !turn && (this.trimmedTurns || 0) > 0) {
+      turn = this.fullHistory().find(t => t.id === turnId) || null;
+    }
     const item=turnId===this.active?.turnId ? this.items.get(itemId)
-      : this.history.get(turnId)?.items.find(item=>item.id===itemId);
+      : turn?.items.find(item=>item.id===itemId);
     if(!item || item.type!=='acpTool')throw new Error('工具详情不存在，请重新载入会话');
     const result=item.result ?? item.content ?? item.error;
     return typeof result==='string' ? result : result==null ? '' : JSON.stringify(result,null,2);
@@ -638,6 +649,29 @@ class AcpSession extends EventEmitter {
       if (timeoutMs) timer = setTimeout(() => { clean(); reject(new Error('ACP 尚未确认结束')); }, timeoutMs);
     });
   }
+  // 内存里只留最近若干轮（core/native-history-cap.js）；完整历史仍在历史库里，分叉时从库里取全量。
+  // trimmedTurns 记丢了几轮，按轮次序号定位（GLM 分叉）时补回去。
+  trimHistory() {
+    const cap = require('./native-history-cap');
+    const n = cap.trimTurnMap(this.history, { skip: this.active?.turnId || this.runtime.turnId });
+    if (n) this.trimmedTurns = (this.trimmedTurns || 0) + n;
+    for (const id of [...this.completed.keys()]) if (this.completed.size > cap.KEEP && !this.history.has(id)) this.completed.delete(id);
+    return n;
+  }
+  fullHistory() {
+    if (!this.trimmedTurns) return [...this.history.values()];
+    try {
+      const saved = this.historyStore()?.read(() => {});
+      if (saved?.turns?.length) {
+        const live = new Map(this.history);
+        const ordered = saved.turns.map(turn => live.get(turn.id) || turn);
+        const savedIds = new Set(saved.turns.map(turn => turn.id));
+        for (const turn of live.values()) if (!savedIds.has(turn.id)) ordered.push(turn);
+        return ordered;
+      }
+    } catch { /* 历史库读不了：退回内存里的近期轮次 */ }
+    return [...this.history.values()];
+  }
   async reconcile() { if (this.runtime.connection !== 'connected') throw new Error('ACP 需恢复连接'); return this.runtime; }
   async fork() {
     await this.start();
@@ -645,12 +679,12 @@ class AcpSession extends EventEmitter {
     let result;
     if(this.options.kind==='qwen') result=await this.client.request('qwen/control/session/branch',{sessionId:this.threadId});
     else if(this.capabilities.sessionCapabilities?.fork) result=await this.client.request('session/fork',{sessionId:this.threadId,cwd:this.options.cwd,modelId:this.currentModel,
-      ...(this.options.kind==='glm'?{target:{kind:'turn',turnIndex:Math.max(0,this.history.size-1)}}:{})});
+      ...(this.options.kind==='glm'?{target:{kind:'turn',turnIndex:Math.max(0,this.history.size+(this.trimmedTurns||0)-1)}}:{})});
     else throw new Error('当前原生 Harness 不支持分叉');
     const sessionId=result.sessionId || result.newSessionId || result.forkedSessionId;
     if(!sessionId || sessionId===this.threadId)throw new Error('原生分叉未返回独立会话');
     this.persist();
-    return {sessionId,home:this.options.home,history:[...this.history.values()]};
+    return {sessionId,home:this.options.home,history:this.fullHistory()};
   }
   async reconnect() {
     if (this.active && this.runtime.connection === 'connected') throw new Error('当前 ACP 仍在执行，不重复启动');

@@ -60,6 +60,7 @@ class RoomOfflineRetry {
   async tick(history, live, now) {
     const epoch = this.epoch;
     let tasks = this.tasks().map(t => ({ ...t }));
+    const before = JSON.stringify(tasks);
     const s = live.schedule, d = new Date(now), [h, m, sec] = s.openTime.split(':').map(Number);
     const open = new Date(d.getFullYear(), d.getMonth(), d.getDate(), h, m, sec).getTime();
     const target = S.targetDateFor(open, s.advanceDays), key = stamp(open).slice(0, 10) + ':' + target;
@@ -69,7 +70,9 @@ class RoomOfflineRetry {
     if (now >= open && networkError(last) && !tasks.some(t => t.key === key) && !history.some(r => r.日期 === target && success(r))) {
       tasks.push({ key, target, open, deadline: open + WINDOW_MS, record: last, firstId: idOf(last), lastId: idOf(last), attempts: 0, phase: 'waiting', resume: false, lastProbe: 0 });
     }
-    this.save(tasks);
+    // 没有变化就不写盘（2026-11-23）：会议室巡检每 15 秒一轮，原来每轮都同步改名替换 state.json，
+    // 文件被杀毒或索引短暂占用时，改名重试会把主进程卡住数百毫秒到数秒。
+    if (JSON.stringify(tasks) !== before) this.save(tasks);
     try {
       for (const t of tasks) {
         if (epoch !== this.epoch || this.closed) return;
@@ -127,7 +130,7 @@ class RoomOfflineRetry {
           await this.rooms.command('once', {}, { user: true, internal: true });
         }
       }
-    } finally { if (epoch === this.epoch) this.save(tasks); this.schedule(); }
+    } finally { if (epoch === this.epoch && JSON.stringify(tasks) !== before) this.save(tasks); this.schedule(); }
   }
 }
 module.exports = { RoomOfflineRetry, networkError, WINDOW_MS, PROBE_MS, MAX_ATTEMPTS };

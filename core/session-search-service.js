@@ -54,6 +54,8 @@ class SessionSearchService {
     // 仍可用 idleMs / HUB_SESSION_SEARCH_IDLE_MS 设一个正数恢复空闲退出（测试用）。
     const idleMs = Number(options.idleMs ?? process.env.HUB_SESSION_SEARCH_IDLE_MS ?? 0);
     this._idleMs = Number.isFinite(idleMs) && idleMs > 0 ? idleMs : 0;
+    // 低开销模式（2026-11-23 P1 L4）运行期改空闲退出时长；关掉时回到这里的原值。
+    this._baseIdleMs = this._idleMs;
     this._idleTimer = null;
     this._idleStopping = null;
     this._childBusy = false;
@@ -131,6 +133,14 @@ class SessionSearchService {
 
   _touchPendingRequests() {
     for (const [id, pending] of this._pending) this._armRequestTimeout(id, pending);
+  }
+
+  // 低开销模式 L4：ms 为正数时空闲这么久就退出子进程（下次搜索自动拉起）；null 恢复原策略。
+  setIdleExitMs(ms) {
+    const n = Number(ms);
+    this._idleMs = ms != null && Number.isFinite(n) && n > 0 ? n : this._baseIdleMs;
+    this._armIdleTimer();
+    return this._idleMs;
   }
 
   _armIdleTimer() {
@@ -392,6 +402,17 @@ class SessionSearchService {
     this._reconcileTimer = setInterval(reconcile, this._reconcileMs);
     this._reconcileTimer.unref?.();
     reconcile();
+  }
+
+  // 低开销模式关掉「后台会话搜索索引」时：停掉定时对账和目录监听，排队的增量也丢掉；
+  // 搜索子进程照常按空闲计时自己退出。用户搜索时 search() 自带的刷新照样把索引补到最新。
+  stopMaintenance() {
+    clearInterval(this._maintenanceTimer); this._maintenanceTimer = null;
+    clearInterval(this._reconcileTimer); this._reconcileTimer = null;
+    clearTimeout(this._queueTimer); this._queueTimer = null;
+    for (const watcher of this._watchers.values()) watcher.close();
+    this._watchers.clear(); this._queuedSources.clear(); this._queuedSnapshot = null;
+    this._armIdleTimer();
   }
 
   _watchSourceRoots(roots, getSnapshot) {

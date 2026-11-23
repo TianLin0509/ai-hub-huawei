@@ -48,7 +48,7 @@ class PptImgtext {
   }
   async start(image) {
     image = imageFile(image);
-    const id = randomUUID(), workdir = path.join(this.a.dir, 'ppt-imgtext', id);
+    const id = randomUUID(), workdir = path.join(require('./ppt-work-dir').workDir(this.a, { writable: true }), 'ppt-imgtext', id);
     const job = { id, image, workdir, state: 'seeding', step: '正在识别文字，通常数十秒', builds: 0, startedAt: this.a.now() };
     this.jobs.set(id, job); this.a.changed();
     // No completed output is removed when a new task starts.
@@ -164,7 +164,7 @@ class PptImgtext {
 async function lookupFrame(ppt, { imagePath, limit = 5 } = {}) {
   const image = imageFile(imagePath);
   if (!Number.isInteger(limit) || limit < 1 || limit > 10) throw new Error('候选页数需要1–10');
-  const workdir = path.join(ppt.a.dir, 'ppt-frame-lookup', randomUUID());
+  const workdir = path.join(require('./ppt-work-dir').workDir(ppt.a, { writable: true }), 'ppt-frame-lookup', randomUUID());
   const seed = await ppt.doctor.call('imgtext-seed', { image, workdir });
   const document = JSON.parse(fs.readFileSync(seed.seed, 'utf8'));
   const lines = (document.elements || []).filter(e => e.type === 'text' && typeof e.text === 'string' && e.text.trim()).sort((a, b) => (a.bbox?.[1] || 0) - (b.bbox?.[1] || 0));

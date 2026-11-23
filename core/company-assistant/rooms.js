@@ -185,13 +185,27 @@ class RoomBooking {
     this.child = null;
     return { stopped: true };
   }
+  // 15 秒巡检只在有事可做时才跑（2026-11-23 开销优化）：组件装过（有控制状态或抢订历史、记住了 exe）、
+  // 自动抢订开着、正在准备组件、或有补抢在等。都没有时（没用过会议室的人）不再每 15 秒读写状态、刷新界面；
+  // 之后一旦装组件、开抢、打开会议室页看状态，就由 wakeTimer() 按需拉起。
+  needsTimer() {
+    if (this.starting || this.child || this.settings().enabled || this.offlineRetry.active() || this.saved()) return true;
+    try { return fs.existsSync(this.file('hub-control', 'status.json')) || fs.existsSync(this.file('booking_history.json')); }
+    catch { return false; }
+  }
   start() {
     if (this.off) return;
     this.offlineRetry.start();
-    if (this.deps.noTimer || this.timer) return;
+    this.wakeTimer();
+  }
+  wakeTimer() {
+    if (this.off || this.deps.noTimer || this.timer || !this.needsTimer()) return;
     this.timer = setInterval(() => { void this.tick().catch(e => { this.error = e.message; this.a.changed(); }); }, 15000);
   }
-  close() { clearInterval(this.timer); this.timer = null; this.offlineRetry.close(); }
+  stopTimer() { clearInterval(this.timer); this.timer = null; }
+  // 关 Hub 时只停 Hub 自己的定时器，不结束会议室组件进程：组件是常驻的抢订守护，Hub 退出后照样按放号时刻抢，
+  // 结束它会让已经安排好的抢订落空。真正要停组件走 shutdown()（「可选功能」里关掉会议室时，按进程号核对后结束）。
+  close() { this.stopTimer(); this.offlineRetry.close(); }
   readHistory() {
     const history = readJson(this.file('booking_history.json'), []);
     if (!Array.isArray(history)) throw new Error('秘书历史格式不正确，已保留之前的结果');
@@ -213,6 +227,7 @@ class RoomBooking {
   useExecutable(exePath) {
     if (!/\.exe$/i.test(exePath) || !fs.existsSync(exePath)) throw new Error('请选择已安装的秘书终结者 exe');
     this.a.setSettings({ rooms: { exePath, home: path.dirname(exePath), enabled: false } });
+    this.wakeTimer();
     this.error = ''; return this.status();
   }
   baselineHistory() {
@@ -261,7 +276,7 @@ class RoomBooking {
       }
       await (this.deps.roomKill || component.killTree)(child);
       throw new Error('会议室组件准备超时，本次后台进程已关闭；请稍后重试');
-    })().catch(error => { this.preparationError = error.message; throw error; }).finally(() => { this.starting = null; this.a.changed(); });
+    })().catch(error => { this.preparationError = error.message; throw error; }).finally(() => { this.starting = null; this.wakeTimer(); this.a.changed(); });
     this.a.changed();
     return this.starting;
   }
@@ -288,6 +303,7 @@ class RoomBooking {
         if (result.requestId !== id) throw new Error('秘书回执编号不一致');
         if (!result.ok) throw new Error(result.error || '秘书未执行这项操作');
         if (!internal && (op === 'start' || op === 'pause')) this.a.setSettings({ rooms: { enabled: op === 'start' } });
+        this.wakeTimer();
         this.error = ''; this.a.changed(); return { ...this.status(), ...result, connected: true };
       }
       await new Promise(r => setTimeout(r, 200));
@@ -370,6 +386,9 @@ class RoomBooking {
   }
   async tick() {
     if (this.off || this.ticking || !this.home()) return;
+    // 没装组件、没开抢、没有补抢在等：这一轮什么都不读写，并停掉 15 秒巡检（有事时 wakeTimer 再拉起）。
+    if (!this.needsTimer()) { this.stopTimer(); return; }
+    this.wakeTimer();
     this.ticking = true;
     try {
       const now = this.a.now(), d = new Date(now), minute = d.getHours() * 60 + d.getMinutes();

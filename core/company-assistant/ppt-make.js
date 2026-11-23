@@ -102,7 +102,7 @@ function waitingText(chat, now) {
 
 class PptMake {
   constructor(ppt) { this.ppt = ppt; this.a = ppt.a; this.jobs = new Map(); this.pack = null; }
-  dir() { return path.join(this.a.dir, 'ppt-make'); }
+  dir() { return path.join(require('./ppt-work-dir').workDir(this.a, { writable: true }), 'ppt-make'); }
   listSkeletons() { return listSkeletons(); }
   skeleton(id) {
     const found = this.listSkeletons().find(s => s.id === id);
@@ -124,13 +124,14 @@ class PptMake {
     return shapes.get(name);
   }
   // 生成一页并落盘。样例单独放 examples 子目录，不挤占用户生成的那 30 个。
-  render(spec, { name = '', example = false } = {}) {
+  render(spec, { name = '', example = false, workDir = this.dir() } = {}) {
     let built;
     // 页面说明可能来自别的 AI：结构不对时引擎报的是程序错误，换成用户能照着改的话。
     try { built = engine.build(spec, { materials: n => this.material(n) }); }
     catch (error) { throw new Error(`页面说明的结构不对（${error.message}），请对照骨架示意内容的写法检查`); }
     const { buffer, reports } = built;
-    const dir = example ? path.join(this.dir(), 'examples') : this.dir();
+    require('./ppt-work-dir').ensureWritable(workDir);
+    const dir = example ? path.join(workDir, 'examples') : workDir;
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, `${stamp(new Date())}-${fileName(name || spec.title)}.pptx`);
     fs.writeFileSync(file, buffer);
@@ -140,13 +141,13 @@ class PptMake {
 
   job(id) { const job = this.jobs.get(id); if (!job) throw new Error('找不到这次做页任务，请重新生成'); return job; }
   add(fields) {
-    const job = { id: randomUUID(), startedAt: this.a.now(), submits: 0, rev: 0, error: '', ...fields };
+    const job = { id: randomUUID(), startedAt: this.a.now(), submits: 0, rev: 0, error: '', workDir: this.dir(), ...fields };
     this.jobs.set(job.id, job);
     while (this.jobs.size > KEEP_FILES) { const old = [...this.jobs.values()].find(j => !ACTIVE.includes(j.state)); if (!old) break; this.jobs.delete(old.id); }
     return job;
   }
   apply(job, spec) {
-    const r = this.render(spec, { example: job.kind === 'example' });
+    const r = this.render(spec, { example: job.kind === 'example', workDir: job.workDir });
     Object.assign(job, { spec, path: r.path, report: r.report, rev: job.rev + 1, error: '' });
   }
   // 「复制写法说明」：给没有 Hub 工具的 AI（网页版对话、别的模型）用，让它只回一个 JSON，用户再粘回来生成。
@@ -182,6 +183,7 @@ class PptMake {
     return { ok: true, job: { ...job } };
   }
   start({ skeletonId, brief } = {}) {
+    const workDir = this.dir();
     const sk = this.skeleton(skeletonId);
     brief = String(brief || '').trim();
     if (!brief) throw new Error('先写一句这页要讲什么，或贴上材料');
@@ -195,13 +197,14 @@ class PptMake {
       '提交：ppt_make(jobId, spec)，spec 是页面说明对象。返回的 warnings 非空时按提醒修改后再提交一次，最多修改两轮。最后用两三句话说明这页怎么论证，并列出待补的数字和待贴图位。',
     ].join('\n');
     const chat = this.a.ask(prompt, { entry: 'ppt', featureAgent: 'pptMake', taskTitle: 'PPT 做页 · ' + sk.name.slice(0, 18) });
-    const job = this.add({ id, kind: 'make', skeletonId: sk.id, skeleton: sk.name, brief, chatId: chat.id, state: 'waiting_agent' });
+    const job = this.add({ id, workDir, kind: 'make', skeletonId: sk.id, skeleton: sk.name, brief, chatId: chat.id, state: 'waiting_agent' });
     this.a.changed();
     return { ok: true, job: { ...job } };
   }
   // 「自动选骨架」（2026-11-12）：用户只写一段描述，助理从骨架目录里挑几个论证方式不同的，各写一版。
   // 每一版就是一个普通做页任务（生成、预览、打开、插入都走原来的路），用 groupId 串成一组，页面上并排成方案 A/B/C。
   startAuto({ brief, count } = {}) {
+    const workDir = this.dir();
     brief = String(brief || '').trim();
     if (!brief) throw new Error('先写一句这页要讲什么，或贴上材料');
     const n = Math.min(4, Math.max(2, Number(count) || 3)), groupId = randomUUID();
@@ -223,7 +226,7 @@ class PptMake {
       `最后用几句话说明 ${n} 版各自怎么论证、你推荐哪一版，并列出待补的数字和待贴图位。`,
     ].join('\n');
     const chat = this.a.ask(prompt, { entry: 'ppt', featureAgent: 'pptMake', taskTitle: 'PPT 做页 · 自动选骨架' });
-    const jobs = ids.map((id, i) => this.add({ id, kind: 'make', groupId, variant: label(i), skeletonId: '', skeleton: label(i), brief, chatId: chat.id, state: 'waiting_agent' }));
+    const jobs = ids.map((id, i) => this.add({ id, workDir, kind: 'make', groupId, variant: label(i), skeletonId: '', skeleton: label(i), brief, chatId: chat.id, state: 'waiting_agent' }));
     this.a.changed();
     return { ok: true, groupId, jobs: jobs.map(job => ({ ...job })) };
   }

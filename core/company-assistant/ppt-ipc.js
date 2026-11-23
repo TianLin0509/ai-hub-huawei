@@ -3,6 +3,25 @@ const path = require('node:path');
 
 function createPptHandlers(service) {
   return {
+    'ppt-set-work-dir': request => {
+      service.setSettings({ ppt: { workDir: request?.path } });
+      return { ok: true, ppt: service.ppt.status() };
+    },
+    'ppt-pick-work-dir': async () => {
+      const { dialog } = require('electron');
+      const r = await dialog.showOpenDialog({ title: '选择 PPT 工作目录', properties: ['openDirectory', 'createDirectory'] });
+      if (r.canceled || !r.filePaths[0]) return { ok: true, canceled: true };
+      service.setSettings({ ppt: { workDir: r.filePaths[0] } });
+      return { ok: true, ppt: service.ppt.status() };
+    },
+    'ppt-reset-work-dir': () => {
+      // 跟随目录同样先验可写，不把错误推迟到做页时。
+      const settings = service.settings();
+      const a = { dir: service.dir, settings: () => ({ ...settings, ppt: { ...settings.ppt, workDir: '' } }) };
+      require('./ppt-work-dir').ensureWritable(require('./ppt-work-dir').workDir(a));
+      service.setSettings({ ppt: { workDir: '' } });
+      return { ok: true, ppt: service.ppt.status() };
+    },
     'ppt-status': async () => ({ ok: true, ppt: await service.ppt.refresh({ force: true }) }),
     'ppt-search': request => {
       const folder = String(request?.folder || '');

@@ -11,6 +11,12 @@
 const ERROR_LINE = /^\s*(?:API\s*Error\b|Error:\s*模\s*型\s)/i;
 
 const KINDS = [
+  // 请求太大（413，2026-11-23 WeLink 反馈 v5.6.91 Codex 走公司模型）：「unexpected status 413 Payload Too Large: 公司模型上游返回 HTTP 413（请求太大…）」。
+  // 上下文超过了网关收的上限，原样重发还是 413，所以不给「重试」「换模型」，只给压缩和新开会话；一行标题加按钮，不加说明段。
+  // 排最前：「公司模型上游」「网关」等字样不能先落到「服务连不上」。
+  { kind: 'too-large', test: /(?:status|HTTP|Error:?)\s*413(?!\d)|payload\s*too\s*large|request[\s_]*(?:entity[\s_]*)?too[\s_]*large|请求太大/i,
+    title: '上下文太长，公司模型拒收', detail: '', actions: ['compact', 'new-session'],
+    labels: { compact: '压缩后继续', 'new-session': '新开会话接着聊' } },
   // API 网关（2026-11-20）：本机代理已把网关报错翻成「API 网关：…」开头的人话（core/api-gateway-errors.js 的 ERROR_PREFIX），
   // 这几类要先认，否则「网关」二字会落到下面的「服务连不上 / 网络波动」，key 无效会落到「登录过期 → 账号页」。
   { kind: 'gateway-key', test: /API 网关：key 无效/,
@@ -56,10 +62,32 @@ function askHubReady(win = typeof window !== 'undefined' ? window : null) {
   return !!(win && typeof win.__hubHelpAsk?.ask === 'function');
 }
 
-function renderHelp(info, escapeHtml, { askHub = askHubReady() } = {}) {
-  const buttons = info.actions.map(action => `<button type="button" class="teh-btn" data-teh="${action}">${escapeHtml(ACTION_LABELS[action])}</button>`).join('')
+// 会话后端能不能压缩上下文：Claude 系、Codex、DSH、pi 有 /compact，公司 CodeAgent 是 Claude Code 内核也有；其余（Gemini、Kimi 等）没有。
+// 认不出会话类型时返回 null，调用方保持原有按钮。
+function supportsCompact(session) {
+  const kind = String(session?.kind || '');
+  if (!kind) return null;
+  if (require('../core/ai-kinds').isCodeAgentKind(kind)) return true;
+  return ['claude', 'codex', 'dsh', 'pi'].includes(require('../core/composer-slash-family').slashFamily(session));
+}
+
+// 按会话能力去掉做不到的按钮：不支持 /compact 的后端只留其余出口。
+function actionsFor(info, session) {
+  return supportsCompact(session) === false ? info.actions.filter(action => action !== 'compact') : info.actions.slice();
+}
+
+function renderHelp(info, escapeHtml, { askHub = askHubReady(), session = null } = {}) {
+  const label = action => (info.labels && info.labels[action]) || ACTION_LABELS[action];
+  const buttons = actionsFor(info, session).map(action => `<button type="button" class="teh-btn" data-teh="${action}">${escapeHtml(label(action))}</button>`).join('')
     + (askHub ? `<button type="button" class="teh-btn" data-teh="ask-hub" title="照使用说明书马上告诉你这是什么问题、下一步怎么做（不开新会话，只读）">${escapeHtml(ACTION_LABELS['ask-hub'])}</button>` : '');
+  // 没有说明段的类（请求太大）：标题和按钮排成一行。
+  if (!info.detail) return `<div class="teh-row"><div class="teh-title">${escapeHtml(info.title)}</div><div class="teh-actions">${buttons}</div></div>`;
   return `<div class="teh-title">${escapeHtml(info.title)}</div><div class="teh-detail">${escapeHtml(info.detail)}</div><div class="teh-actions">${buttons}</div>`;
+}
+
+function sessionOf(card, win = typeof window !== 'undefined' ? window : null) {
+  const id = card?.dataset?.sessionId || win?.activeSessionId || '';
+  try { return (id && typeof win?.__hubSessionBasics === 'function' && win.__hubSessionBasics(id)) || null; } catch { return null; }
 }
 
 // 正文里最后一段是报错时才处理：回答中间引用报错原文的不算。
@@ -77,7 +105,7 @@ function enhanceCard(card) {
   help.dataset.errorKind = info.kind;
   help.setAttribute('role', 'status');
   help.dataset.copyExclude = '';
-  help.innerHTML = renderHelp(info, s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])))
+  help.innerHTML = renderHelp(info, s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])), { askHub: askHubReady(), session: sessionOf(card, doc.defaultView) })
     // 右上角悬停才出现的「问问 Agent」「一键反馈」（5.5.24，renderer/hub-error-card.js）。
     // 「问问 Hub」已在上面的常显按钮里，悬停求助区不再重复。
     + require('./hub-error-card').assistHtml({ area: 'model-service', title: info.title, symptom: info.detail, details: last.textContent.trim() }, { askHub: false });
@@ -115,11 +143,28 @@ function runAction(action, { card, document: doc, window: win, ipcRenderer }) {
     else win.__hubFeedback?.open?.();
     return true;
   }
-  if (action === 'new-session') { win.LaunchCenter?.open?.('session', { kind: 'codeagent' }); return true; }
-  if (action === 'compact') {
-    const sessionId = card.dataset.sessionId || win.activeSessionId;
-    if (sessionId && ipcRenderer) void ipcRenderer.invoke('session:send-prompt', { sessionId, text: '/compact', clientSubmissionId: require('node:crypto').randomUUID() });
+  // 新开会话：沿用报错会话的类型和工作目录（同「在原目录新建会话」）；认不出会话时照旧开 CodeAgent。
+  if (action === 'new-session') {
+    const session = sessionOf(card, win);
+    const kind = String(session?.kind || '').replace(/-resume$/, '') || 'codeagent';
+    win.LaunchCenter?.open?.('session', { kind, ...(session?.cwd ? { workspace: { path: session.cwd, label: session.workspaceLabel || session.title || '' } } : {}) });
     return true;
+  }
+  if (action === 'compact') {
+    // 等发送结果：CLI 还没就绪时等它（waitForCliReady，和「重启会话并重发」同一参数）；没发出去就用错误轻提示说一行，不静默。
+    // 返回这次发送的 Promise（始终 resolve 成 true / false），点击处理不用等它。
+    const sessionId = card.dataset.sessionId || win.activeSessionId;
+    const fail = reason => {
+      const message = `压缩没有发出去：${reason}。可以点「新开会话接着聊」`;
+      if (typeof win.HubErrorCard?.showErrorToast === 'function') win.HubErrorCard.showErrorToast(message, { area: 'model-service', sessionId: sessionId || '' });
+      else if (typeof win.showToast === 'function') win.showToast(message, 'error');
+      return false;
+    };
+    if (!sessionId || !ipcRenderer) return Promise.resolve(fail('认不出是哪个会话'));
+    return Promise.resolve()
+      .then(() => ipcRenderer.invoke('session:send-prompt', { sessionId, text: '/compact', clientSubmissionId: require('node:crypto').randomUUID(), waitForCliReady: true }))
+      .then(sent => (!sent || (sent.ok === false && !sent.unconfirmed) ? fail(sent?.message || sent?.error || '原因不明') : true))
+      .catch(error => fail(error?.message || String(error)));
   }
   return false;
 }
@@ -133,4 +178,4 @@ function install({ document: doc, window: win, ipcRenderer }) {
   });
 }
 
-module.exports = { classifyError, isErrorLine, enhanceCard, renderHelp, runAction, install, ACTION_LABELS };
+module.exports = { classifyError, isErrorLine, enhanceCard, renderHelp, runAction, install, supportsCompact, actionsFor, ACTION_LABELS };

@@ -54,3 +54,23 @@
 .mr-spinner { width: 14px; height: 14px; border: 2px solid var(--border-subtle); border-top-color: var(--brand); border-radius: 50%; animation: mr-spin .8s linear infinite; }
 @keyframes mr-spin { to { transform: rotate(360deg); } }
 #sidebar-strip .strip-resources { cursor: pointer; }
+/* 低开销模式（2026-11-23 P1）：面板顶部一行紧凑横条 + 状态条内存旁的「省」徽章。只用现有设计变量。 */
+.mr-lowoverhead { display: flex; align-items: center; gap: 8px; min-height: 30px; margin: 0 16px 10px; padding: 4px 10px; border: 1px solid var(--border-subtle); border-radius: 8px; font-size: 12px; }
+.mr-lowoverhead.on { border-color: var(--brand-tint, var(--border-subtle)); background: var(--brand-tint, transparent); }
+.lo-switch { display: inline-flex; align-items: center; gap: 8px; color: var(--fg-default); font-weight: 500; cursor: pointer; user-select: none; }
+.lo-switch input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.lo-track { position: relative; flex: none; width: 28px; height: 16px; border-radius: 8px; background: var(--border-subtle); transition: background .15s; }
+.lo-track::after { content: ''; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px #0003; transition: transform .15s; }
+.lo-switch input:checked + .lo-track { background: var(--brand); }
+.lo-switch input:checked + .lo-track::after { transform: translateX(12px); }
+.lo-switch input:focus-visible + .lo-track { outline: 2px solid var(--brand); outline-offset: 2px; }
+.lo-keep { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; color: var(--fg-muted); }
+.lo-keepalive { height: 24px; padding: 0 6px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--surface-overlay); color: var(--fg-default); font: inherit; font-size: 12px; }
+#sidebar-strip .strip-low-overhead { display: inline-flex; align-items: center; justify-content: center; flex: none; height: 16px; min-width: 16px; padding: 0 4px; border-radius: 4px; background: var(--brand-tint); color: var(--brand-text, var(--brand)); font-size: 10px; font-weight: 600; line-height: 1; cursor: pointer; }
+.cfg-low-overhead-field { margin: 0 0 16px; }
+.cfg-low-overhead-field .config-toggle-row { margin-bottom: 6px; }
+.cfg-low-overhead-field .config-toggle-row strong { display: inline-flex; align-items: center; gap: 4px; }
+.cfg-low-overhead-keep { display: flex; align-items: center; gap: 8px; margin: 0 0 0 24px; }
+.cfg-low-overhead-keep[hidden] { display: none; }
+.cfg-low-overhead-keep label { color: var(--fg-muted); font-size: 12px; }
+.cfg-low-overhead-keep select { width: auto; min-width: 72px; height: 28px; padding: 0 6px; border: 1px solid var(--border-subtle); border-radius: 6px; background: var(--surface-overlay); color: var(--fg-default); font: inherit; font-size: 12px; }

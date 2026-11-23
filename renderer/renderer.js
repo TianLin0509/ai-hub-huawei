@@ -1075,8 +1075,17 @@ const sidebarFoldersController = require('./sidebar-folders').createSidebarFolde
 });
 void sidebarFoldersController.refresh();
 window.addEventListener('focus', () => { void sidebarFoldersController.refresh(); });
+// 低开销模式（2026-11-23 P1）：状态条「省」徽章、内存面板顶部横条、设置「常用」、终端（L5）、后台刷新（L6）共用一份状态。
+const lowOverheadUi = require('./low-overhead-ui');
+const lowOverheadStore = lowOverheadUi.createLowOverheadStore({
+  invoke: (channel, payload) => ipcRenderer.invoke(channel, payload),
+  subscribe: fn => ipcRenderer.on('low-overhead:changed', (_event, payload) => fn(payload)),
+});
+const lowOverheadTerminalTuner = lowOverheadUi.createTerminalTuner();
+window.__hubLowOverhead = lowOverheadStore;   // 启动中心（workspace-controller.js，L2）读它决定 CodeAgent 新会话默认走卡片
 const sessionListRenderer = createSessionListRenderer({
   sidebarFolders: sidebarFoldersController,
+  getLowOverhead: () => lowOverheadStore.get(),
   // 会话 logo 右下角的订阅账号序号：与底栏额度的 1/2 同一顺序；只有一个账号时不显示。
   subscriptionAccount: s => {
     try {
@@ -1132,7 +1141,19 @@ const memoryReleasePanel = require('./memory-release-panel').attachMemoryRelease
   onOpen: () => diskReleasePanel?.close(),
   request: () => ipcRenderer.invoke('get-memory-release-plan'),
   execute: keys => ipcRenderer.invoke('execute-memory-release', { keys }),
+  lowOverhead: lowOverheadStore,
+  onLowOverheadError: message => showToast(message, 'error'),
 });
+// 入口只在内存面板顶部与设置「资源与后台」顶行（P1 v2：不再往已满的「常用」页加控件）。
+// L5：低开销模式下只有当前及分屏可见的终端闪光标；分屏切回单屏、换副屏时也要重算（Gemini P2-2）。
+function applyLowOverheadTerminals(state = lowOverheadStore.get()) {
+  lowOverheadTerminalTuner.apply(terminalCache, state, sid => sid === activeSessionId || !!sessionSplit?.isVisible(sid));
+}
+lowOverheadStore.onChange(state => {
+  applyLowOverheadTerminals(state);
+  renderSidebarStrip();
+});
+void lowOverheadStore.refresh();
 diskReleasePanel = require('./disk-release-panel').attachDiskReleasePanel({
   document, escapeHtml,
   onOpen: () => memoryReleasePanel?.close(),
@@ -1715,8 +1736,8 @@ function getOrCreateTerminal(sessionId) {
     lineHeight: isNativeAgent(sessions.get(sessionId)) ? 1.16 : 1.04,
     fontFamily: "'Cascadia Code', 'Consolas', 'Courier New', monospace",
     fontWeight: isCodexKind(sessions.get(sessionId)?.kind) ? '500' : 'normal',
-    cursorBlink: true,
-    scrollback: 10000,
+    // 低开销模式（L5）开着时新终端回滚 3000 行；关闭时就是原来的 10000 行、光标闪烁。
+    ...lowOverheadUi.initialTerminalOptions(lowOverheadStore.get()),
     allowProposedApi: true,
     // Tells xterm the PTY backend is conpty so it parses native wrap sequences
     // (Windows 11 build >= 21376) and sets isWrapped correctly. Without this
@@ -2520,6 +2541,8 @@ function showTerminal(sessionId, opts = { focus: true }) {
   }
 
   const cached = getOrCreateTerminal(sessionId);
+  // L5：低开销模式下只有当前（及分屏可见）的终端闪光标；关闭且从没开过时不碰任何终端。
+  lowOverheadTerminalTuner.apply(terminalCache, lowOverheadStore.get(), sid => sid === sessionId || !!sessionSplit?.isVisible(sid));
   const mountTarget = opts && opts.mountTarget ? opts.mountTarget : terminalPanelEl;
   const embedded = mountTarget !== terminalPanelEl;
   if (embedded) { cached._codexBackstage?.setVisible(false);cached._backstageReadable=false; }
@@ -5011,6 +5034,11 @@ async function restartSessionInPlace(sessionId) {
 }
 // 报错卡「重启会话」一键修（renderer/hub-error-card.js）走同一条路。
 window.__hubRestartSessionInPlace = restartSessionInPlace;
+// 报错卡（renderer/turn-error-help.js）按会话类型决定给不给「压缩后继续」、新开会话沿用哪种类型和目录；只给这几个字段。
+window.__hubSessionBasics = sessionId => {
+  const s = sessions.get(sessionId);
+  return s ? { kind: s.kind, cwd: s.cwd || '', workspaceLabel: s.workspaceLabel || '', title: s.title || '', ccSessionId: s.ccSessionId || '', codexSid: s.codexSid || '' } : null;
+};
 // 反馈只诊断当前聚焦的会话，不扫其他会话的内容。
 window.__hubFeedbackSessionId = () => getFocusedSessionId();
 // 报错旁的「去后台」（renderer/hub-error-card.js known:open-backstage）：切到这个会话并打开后台终端，和点顶栏「后台」同一条路。
@@ -8875,6 +8903,20 @@ ipcRenderer.on('codeagent-launch-phase', (_event, payload = {}) => {
 
 require('./sticky-notice').registerModelCreationConfirmation(ipcRenderer, document);
 
+// 会话已建成、附属步骤没成（新建弹窗发来，renderer/session-create-outcome.js 出文案）：一次性一行提示，按钮紧跟文字。
+ipcRenderer.on('session-create-followup', (_event, payload = {}) => {
+  require('./session-create-toast').showCreateFollowupToast(document, { sessionId: payload.sessionId, message: payload.message,
+    actions: payload.actions, onAction: async (action, sessionId) => {
+      if (action === 'open-session') {
+        if (!sessions.has(sessionId)) throw new Error('会话已关闭');
+        await selectSession(sessionId, { splitBypass: true });
+      } else if (action === 'proxy-restart') {
+        const result = await ipcRenderer.invoke('company-proxy:restart');
+        if (!result || result.ok === false) throw new Error((result && result.error) || '没重启成功');
+      }
+    } });
+});
+
 ipcRenderer.on('session-notice', (_event, payload = {}) => {
   if (!payload || !payload.message) return;
   const session = payload.sessionId ? sessions.get(payload.sessionId) : null;
@@ -9725,6 +9767,8 @@ const configModal = createConfigModalController({
 });
 // 助理桌宠：配置里的开关与角色，以及「点桌宠打开助理」的入口事件（hub-pet:open-assistant）。
 try { require('./hub-pet/hub-settings.js').mountHubPetSettings({ document, window, ipcRenderer }); } catch (error) { console.warn('[hub-pet] settings mount failed:', error && error.message); }
+// 设置「资源与后台」页（低开销模式总开关、各后台功能的开关与当前占用）、底栏「网速 关」入口、老用户升级的一次性提示。
+try { require('./background-features.js').mountBackgroundFeatures({ document, window, ipcRenderer, openConfigModal: options => configModal.open(options), showMessage: message => showToast(message) }); } catch (error) { console.warn('[background-features] mount failed:', error && error.message); }
 const accountCenterPanel = require('../core/distribution').target === 'company'
   ? require('./codeagent-accounts-page').createCodeagentAccountsPage({
     document, window, ipcRenderer, configModal,
@@ -11116,12 +11160,14 @@ sessionSplit = require('./session-split').createSessionSplit({
     alert: message => require('./ui-feedback').showHubAlert(message),
     onFocus: id => {
       ipcRenderer.send('focus-session', { sessionId: id });
+      applyLowOverheadTerminals();
       completionNotificationToggle?.refreshTarget();
       scheduleAppToolbarRefresh();
     },
     resize: () => {
       const cached = terminalCache.get(activeSessionId);
       if (cached) scheduleFitAndResizeTerminal(activeSessionId, cached);
+      applyLowOverheadTerminals();   // 单屏 / 双屏切换都会走到这里
     },
   },
 });
@@ -11334,9 +11380,13 @@ sessionImmersive = require('./session-immersive').createSessionImmersiveControll
   renderSessionList();
   if (homeWorkbench) homeWorkbench.render();
   refreshSystemResourceUsage();
-  setInterval(refreshSystemResourceUsage, 5000);
+  // L6：状态条资源与出口信息的周期刷新；正常模式就是原来的 5 秒 / 15 秒，低开销模式放慢 4 倍。
+  const resourceTicker = lowOverheadUi.createAdaptiveInterval(refreshSystemResourceUsage, 5000, () => lowOverheadStore.get());
+  const proxyTicker = lowOverheadUi.createAdaptiveInterval(refreshHubProxyInfo, 15000, () => lowOverheadStore.get());
+  resourceTicker.start();
   refreshHubProxyInfo();
-  setInterval(refreshHubProxyInfo, 15000);
+  proxyTicker.start();
+  lowOverheadStore.onChange(() => { resourceTicker.reset(); proxyTicker.reset(); });
   traceRendererStartup('renderSessionList done');
   ipcRenderer.send('renderer-sidebar-ready');
   traceRendererStartup('renderer-sidebar-ready sent');

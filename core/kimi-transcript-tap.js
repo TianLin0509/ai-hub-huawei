@@ -331,8 +331,20 @@ class KimiTap extends EventEmitter {
   }
 
   async _readIndex() {
+    // 每 350ms 一轮：索引文件大小和修改时间都没变就直接用上次解析的结果，不再整份重读（2026-11-23 开销优化）。
+    // 只缓存索引本身；候选会话的 wire 修改时间每轮照样现查，绑定判断不变。
+    let sig;
+    try { const st = await fs.promises.stat(this.indexPath); sig = `${st.size}:${st.mtimeMs}`; } catch { this._indexCache = null; return []; }
+    if (this._indexCache && this._indexCache.sig === sig) { this._indexReuse = (this._indexReuse || 0) + 1; return this._indexCache.entries.map(e => ({ ...e })); }
+    const entries = await this._parseIndex();
+    if (entries === null) { this._indexCache = null; return []; }
+    this._indexCache = { sig, entries };
+    return entries.map(e => ({ ...e }));
+  }
+
+  async _parseIndex() {
     let text;
-    try { text = await fs.promises.readFile(this.indexPath, 'utf8'); } catch { return []; }
+    try { text = await fs.promises.readFile(this.indexPath, 'utf8'); } catch { return null; }
     const bySid = new Map();
     for (const record of parseJsonl(text)) {
       if (!record || typeof record.sessionId !== 'string' || typeof record.sessionDir !== 'string') continue;

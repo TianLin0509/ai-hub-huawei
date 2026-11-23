@@ -2,7 +2,7 @@
 // PPT 库地图（r28g，2026-11-17 选定树形目录）：后台增量分类 + 树形目录 + 用户改名 / 拖动 + 抽查 50 页。
 // 流程：读索引目录（catalog，只读）→ 按文件增量（没变的文件不读页）→ 读页 → 规则先判、拿不准的交低档模型（ppt-map.js）→ 存本机。
 // 文件按组处理（约 200 页一组），每组判完立即落盘：取消、关 Hub 都不丢已判完的部分，下次只做剩下的。
-// 存储都在 <Hub 数据目录>/company-assistant/ppt-map/：labels.json（逐页缓存）、map.json（树用的结果）、edits.json（用户改名与拖动）、review.json（抽查）。
+// 存储都在 PPT 工作目录/ppt-map/：labels.json（逐页缓存）、map.json（树用的结果）、edits.json（用户改名与拖动）、review.json（抽查）。
 // 用户改动单独存，分类只写 map.json，所以增量分类永远不会覆盖用户的改动。
 const fs = require('node:fs');
 const path = require('node:path');
@@ -28,7 +28,7 @@ function writeJson(file, value) {
 class PptMap {
   constructor(library, deps = {}) {
     this.lib = library; this.deps = deps;
-    this.dir = path.join(library.a.dir, 'ppt-map');
+    this.dir = path.join(require('./ppt-work-dir').workDir(library.a), 'ppt-map');
     this.store = new M.LabelStore(path.join(this.dir, 'labels.json'));
     this.map = readJson(this.file('map.json'), null) || { files: {} };
     this.edits = this.normEdits(readJson(this.file('edits.json'), {}));
@@ -47,7 +47,7 @@ class PptMap {
     if (this.deps.pptMapChannel) return this.deps.pptMapChannel;
     if (!this.defaultChannel) {
       const models = [this.lib.config().mapModel].filter(Boolean);
-      this.defaultChannel = require('./ppt-map-model').createCodeAgentChannel({ dataDir: this.lib.a.dir, choiceDataDir: this.lib.a.deps?.dataDir, models });
+      this.defaultChannel = require('./ppt-map-model').createCodeAgentChannel({ dataDir: this.lib.a.dir, cwdRoot: path.dirname(this.dir), choiceDataDir: this.lib.a.deps?.dataDir, models });
     }
     return this.defaultChannel;
   }
@@ -69,6 +69,16 @@ class PptMap {
   // ---- 增量分类
   start({ force = false } = {}) {
     if (this.running) return this.state();
+    const dir = path.join(require('./ppt-work-dir').workDir(this.lib.a, { writable: true }), 'ppt-map');
+    if (dir !== this.dir) {
+      this.dir = dir;
+      this.store = new M.LabelStore(path.join(dir, 'labels.json'));
+      this.map = readJson(this.file('map.json'), null) || { files: {} };
+      this.edits = this.normEdits(readJson(this.file('edits.json'), {}));
+      this.review = readJson(this.file('review.json'), null);
+      this.defaultChannel = null;
+      this.reindex();
+    }
     if (!this.lib.sources().length) throw new Error('还没有 PPT 文字索引：先在这里点「先建索引」，建好后库地图会自动更新');
     this.abort = new AbortController();
     this.job = { state: 'running', phase: '读取素材目录', startedAt: this.now(), filesTotal: 0, filesTodo: 0, filesDone: 0, pagesDone: 0, modelCalls: 0, modelPages: 0, modelFailedBatches: 0, modelError: '', ruleOnly: false, reason: '', errors: [] };

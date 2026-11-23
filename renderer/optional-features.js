@@ -52,10 +52,12 @@
       <div class="au-head"><div class="au-title"><strong>可选功能</strong><span>默认都关着，用到哪个开哪个；关掉后后台不再为它花时间，左侧导航也不再显示它</span></div>
         <button type="button" class="au-close" data-of="close" title="关闭">✕</button></div>
       <div class="au-body"><div data-of="items"></div><div class="of-err" data-of="err" hidden></div></div>
-      <div class="au-foot"><button type="button" class="au-btn primary" data-of="close">完成</button></div>`;
+      <div class="au-foot"><button type="button" class="au-btn" data-of="resources" title="低开销模式总开关，以及各项后台功能当前占了多少内存和 CPU">资源与后台…</button><button type="button" class="au-btn primary" data-of="close">完成</button></div>`;
     document.body.appendChild(dialog);
     dialog.addEventListener('click', event => {
       if (event.target.closest('[data-of="close"]')) { dialog.close(); return; }
+      // 低开销模式（2026-11-23）：设置「资源与后台」页（renderer/background-features.js）。
+      if (event.target.closest('[data-of="resources"]')) { dialog.close(); void window.__hubBackgroundFeatures?.open(); return; }
       if (event.target.closest('[data-of="pet-settings"]')) { event.preventDefault(); dialog.close(); window.dispatchEvent(new CustomEvent('hub-pet:open-assistant', { detail: { settingsTab: 'pet' } })); }
     });
     dialog.addEventListener('change', async event => {

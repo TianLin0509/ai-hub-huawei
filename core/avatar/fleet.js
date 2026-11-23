@@ -33,8 +33,12 @@ class FleetService {
   owner() { return this.legacy.owner(); }
   need() { const o = this.owner(); if (!o) throw new Error('还没确认 WeLink 登录，请先在助理页登录'); return o; }
   changed() { try { this.d.onChanged?.(); } catch { /* 页面没开 */ } }
-  start() { if (this.d.noTimer || this.timer) return; this.timer = setInterval(() => { void this.tick().catch(e => { this.lastError = e.message; }); }, TICK_MS); this.timer.unref?.(); }
-  close() { clearInterval(this.timer); this.timer = null; }
+  // 30 秒巡检（2026-11-23 开销优化）：一个分身都没有时巡检自己停下，不再每 30 秒读一遍配置；
+  // 新建分身（任何写回 fleet.json 的操作）时由 saveFleet 重新拉起。没有分身本来就不列最近会话、不读群。
+  start() { this.started = true; this.armTimer(); }
+  armTimer() { if (this.d.noTimer || this.timer || !this.started) return; this.timer = setInterval(() => { void this.tick().catch(e => { this.lastError = e.message; }); }, TICK_MS); this.timer.unref?.(); }
+  idleStop() { clearInterval(this.timer); this.timer = null; }
+  close() { this.started = false; this.idleStop(); }
   pickAccount(model) {
     const rows = this.backends().rows.filter(r => r.pool && r.usable && (!model || r.models.some(m => m.toLowerCase() === model.toLowerCase())));
     return rows.sort((a, b) => (a.activeSessions || 0) - (b.activeSessions || 0))[0]?.id || '';
@@ -48,7 +52,7 @@ class FleetService {
     const saved = this.legacy.read(owner, 'fleet.json', null);
     return saved ? { version: 1, paused: false, avatars: [], ...saved } : this.migrate(owner);
   }
-  saveFleet(owner, fleet) { this.legacy.write(owner, 'fleet.json', fleet); }
+  saveFleet(owner, fleet) { this.legacy.write(owner, 'fleet.json', fleet); if (fleet?.avatars?.length) this.armTimer(); }
   state(owner, id) { return { cursor: {}, items: {}, log: [], stats: {}, session: null, memoryAt: 0, memoryLines: 0, ...this.legacy.read(owner, path.join('agents', id, 'state.json'), {}) }; }
   saveState(owner, id, st) { this.legacy.write(owner, path.join('agents', id, 'state.json'), st); }
   // 读最新、改、写回都在同一拍里完成：跨 await 不能拿着旧的整份数据写回，否则会盖掉期间别的操作。
@@ -197,7 +201,7 @@ class FleetService {
     if (this.ticking) return; this.ticking = true;
     try {
       const owner = this.owner(); if (!owner) return;
-      let fleet = this.fleet(owner); if (!fleet.avatars.length) return;
+      let fleet = this.fleet(owner); if (!fleet.avatars.length) { this.idleStop(); return; }
       await this.closeIdle(owner, fleet);
       fleet = this.fleet(owner); if (fleet.paused) return;
       const snap = this.snapshot();
@@ -535,6 +539,7 @@ class FleetService {
     const owner = this.owner();
     if (!owner) return { ok: true, available: false, reason: '还没确认 WeLink 登录，请先在助理页登录', beta: true };
     const fleet = this.fleet(owner), snap = this.snapshot(), login = this.login(), items = [], roster = this.legacy.roster(owner);
+    if (fleet.avatars.length) this.armTimer();   // 换了登录账号、新账号下有分身：打开页面时巡检恢复
     const avatars = fleet.avatars.map(av => {
       const st = this.state(owner, av.id), stats = st.stats.day === this.today() ? st.stats : {}, open = Object.values(st.items).filter(i => INBOX.has(i.state));
       for (const item of open) items.push({ ...item, avatarId: av.id, avatarName: av.name, prefixed: !!F.TEMPLATES[av.tpl]?.prefixed, prefix: av.prefix, flags: [...new Set([...(item.flags || []), ...R.decide(item, roster).flags])] });

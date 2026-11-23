@@ -7,8 +7,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const normalize = file => process.platform === 'win32' ? path.resolve(file).toLowerCase() : path.resolve(file);
 const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
 
-// The queue lives only below this Hub's data directory. Refuse junctions and
-// network paths rather than letting a queue consume unrelated directory data.
+// 队列放在选定的 PPT 工作目录；拒绝目录链接和网络路径。
 function ensureLocalDirectory(dir) {
   if (!path.isAbsolute(dir) || /^[/\\]{2}/.test(dir)) throw failure('DOCTOR_SPOOL_PATH', 'PPT Doctor 工作目录必须位于本机真实目录');
   const resolved = path.resolve(dir), parts = [];
@@ -37,10 +36,11 @@ async function executableMatches(pid, exe) {
 
 class PptDoctorServer {
   constructor(owner) { this.owner = owner; this.deps = owner.deps; this.sessions = new Map(); this.closed = false; }
-  session(exe, marker) {
+  session(exe, marker, workRoot = require('./ppt-work-dir').workDir(this.owner.a, { writable: true })) {
     const key = createHash('sha256').update(`${normalize(exe)}:${marker.exeSha256}`).digest('hex');
-    if (!this.sessions.has(key)) this.sessions.set(key, { exe, spool: path.join(this.owner.a.dir, 'ppt-doctor', 'servers', key), child: null, server: null, starting: null, verified: null, abandoned: new Map(), cleanupTimer: null, cleanupLoaded: false });
-    return this.sessions.get(key);
+    const sessionKey = `${normalize(workRoot)}:${key}`;
+    if (!this.sessions.has(sessionKey)) this.sessions.set(sessionKey, { exe, workRoot, spool: path.join(workRoot, 'ppt-doctor', 'servers', key), child: null, server: null, starting: null, verified: null, abandoned: new Map(), cleanupTimer: null, cleanupLoaded: false });
+    return this.sessions.get(sessionKey);
   }
   loadAbandoned(s) {
     if (s.cleanupLoaded) return;
@@ -121,7 +121,7 @@ class PptDoctorServer {
     let spawned = false;
     const startChild = () => {
       let process;
-      try { process = (this.deps.pptDoctorSpawn || spawn)(s.exe, [...(this.deps.pptDoctorArgs || []), '--hub', 'serve', '--spool', s.spool], { windowsHide: true, shell: false, env: { ...this.owner.env }, stdio: 'ignore' }); }
+      try { process = (this.deps.pptDoctorSpawn || spawn)(s.exe, [...(this.deps.pptDoctorArgs || []), '--hub', 'serve', '--spool', s.spool], { windowsHide: true, shell: false, cwd: s.workRoot !== this.owner.a.dir ? s.workRoot : undefined, env: this.owner.runtimeEnv(s.workRoot), stdio: 'ignore' }); }
       catch (error) { throw failure('DOCTOR_SERVER_START_FAILED', 'PPT Doctor 常驻服务启动失败：' + error.message); }
       const child = { process, done: false, error: null }; s.child = child;
       process.once('error', error => { child.done = true; child.error = error; });
@@ -144,7 +144,7 @@ class PptDoctorServer {
     throw failure('DOCTOR_SERVER_START_FAILED', 'PPT Doctor 常驻服务尚未就绪');
   }
   async call(exe, marker, action, request, options) {
-    const s = this.session(exe, marker);
+    const s = this.session(exe, marker, options.workRoot);
     // Only failure before atomic enqueue may fall back to the one-shot protocol.
     try { await this.ensureStarted(s); }
     catch (error) { error.beforeEnqueue = true; throw error; }

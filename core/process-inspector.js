@@ -159,7 +159,11 @@ function createProcessInspector(options = {}) {
     });
 
     const stdout = String((result && result.stdout) || '').trim();
-    if (!stdout) throw new Error('process enumeration returned empty output');
+    // 空输出时把 PowerShell 的报错首行带上（2026-11-23 黄区插件去重学习 3/3 只留下这一句，查不出原因）。
+    if (!stdout) {
+      const why = String((result && result.stderr) || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+      throw new Error('process enumeration returned empty output' + (why ? `: ${why}` : ''));
+    }
 
     const parsed = JSON.parse(stdout);
     const processes = toArray(parsed && parsed.processes)

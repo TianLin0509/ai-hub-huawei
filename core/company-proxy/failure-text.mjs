@@ -27,8 +27,11 @@ export function failureStep(code = '') {
 // "Please run /login" to any 401/403; that would start an Anthropic login, which does not help here.
 const HTTP_MEANING = status => status === 400 ? '请求格式不被接受' : status === 401 ? '公司服务不认这次登录'
   : status === 403 ? '公司服务拒绝了这次调用，常见是登录已在别处失效、账号没有这个模型的权限或额度用完'
-  : status === 404 ? '接口地址不对' : status === 413 ? '请求太大' : status === 429 ? '限流' : status >= 500 ? '公司服务端出错' : '请求被拒绝';
-const HTTP_ADVICE = status => status === 401 ? '打开 CodeAgent 重新登录一下；不用在 Claude Code 里运行 /login。'
+  : status === 404 ? '接口地址不对' : status === 413 ? '请求太大，上下文太长，公司模型拒收' : status === 429 ? '限流' : status >= 500 ? '公司服务端出错' : '请求被拒绝';
+// 413: the conversation has grown past what the company gateway accepts; resending the same request fails again,
+// so the advice points at shrinking the context instead of retrying.
+const HTTP_ADVICE = status => status === 413 ? '压缩上下文后继续，或新开会话接着聊。'
+  : status === 401 ? '打开 CodeAgent 重新登录一下；不用在 Claude Code 里运行 /login。'
   : status === 403 ? '先在 CodeAgent 里用同一个模型发一句试试，不行就重新登录 CodeAgent；不用在 Claude Code 里运行 /login。' : '';
 
 /** Before the stream: the provider threw. -> plain words with the step and a short code. */

@@ -86,8 +86,8 @@ class CompanyAiTasks {
 async function closeOwnedSession(manager,id,{prepareSweep=require('./session-close-sweep').prepareCloseSweep}={}) {
   // 关之前记下整棵进程树，关完补杀 MCP 插件等孤儿（2026-11-19，core/session-close-sweep.js）。
   let sweep=null; try { sweep=await prepareSweep(manager,id); } catch { sweep=null; }
-  const result=await manager.closeSessionRecoverably(id,{reason:'company-ai-complete'});
-  if(result?.ok===false && manager.getSession(id)) manager.closeSession(id);
+  const result=await manager.closeSessionRecoverably(id,{reason:'company-ai-complete',treeSweepArranged:!!sweep}); // 已自己安排补杀，通用补杀不再重复
+  if(result?.ok===false && manager.getSession(id)) manager.closeSession(id,{treeSweepArranged:!!sweep});
   if(manager.getSession(id)) throw Error('CodeAgent 任务会话尚未关闭');
   try { sweep?.schedule(); } catch { /* 补杀安排不上不影响关闭 */ }
 }

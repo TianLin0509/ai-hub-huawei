@@ -130,16 +130,23 @@
     }, 80);
     session.clean(() => { clearInterval(tick); clearInterval(fadeTimer); video.pause(); video.removeAttribute('src'); video.load(); });
     video.addEventListener('playing', () => { if (session.active()) { el.dataset.phase = 'playing'; session.deadline(10000); } });
+    // 2026-11-23：只有声音、画面解不出来（公司电脑关 GPU 时 HEVC 视频就是这样）不会触发 error，屏幕黑着只剩字幕。
+    // 开播 1 秒还没有画面就当放不出来处理，并自动去下兼容版（2.0.1 起原作两套改成 H.264）。
+    video.addEventListener('playing', () => setTimeout(() => {
+      if (!session.active()) return;
+      const frames = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality().totalVideoFrames : 1;
+      if (video.videoWidth === 0 || frames === 0) fallback('no-picture');
+    }, 1000), { once: true });
     video.addEventListener('timeupdate', () => {
       if (!session.active()) return;
       session.deadline(10000);
       if (video.duration && video.duration - video.currentTime < 0.6) fadeOut(500);
     });
     video.addEventListener('ended', () => fadeOut(200));
-    const fallback = () => {
+    const fallback = reason => {
       if (!session.active()) return;
-      console.warn('[boot-splash] 开场视频放不出来，改播群星', video.error?.code);
-      session.finish(false); fallbackNotice();
+      console.warn('[boot-splash] 开场视频放不出来，改播群星', reason === 'no-picture' ? reason : video.error?.code);
+      session.finish(false); fallbackNotice(spec);
       void play({ id: 'galaxy-constellation', who: 'hub', anim: 'galaxy', weather: 'stars', src: 'assets/boot-splash/galaxy-constellation.webp' }, opts);
     };
     video.addEventListener('error', fallback);
@@ -165,13 +172,34 @@
     return { src: blob, release: () => URL.revokeObjectURL(blob) };
   }
   // 保留主干的视频失败提示，自动退回群星时说明原因。
-  function fallbackNotice() {
+  // 下载过的视频有兼容新版时（目录版本更高），提示里给一个「下载兼容版」按钮：大文件只在用户点了以后才下（2026-11-23 定）。
+  function fallbackNotice(spec) {
     if (document.getElementById('boot-splash-fallback')) return;
     const tip = document.createElement('div');
     tip.id = 'boot-splash-fallback'; tip.className = 'boot-splash-toast'; tip.setAttribute('role', 'status');
-    tip.innerHTML = '<b>这段开场视频在本机放不出来</b><span>多半是这台电脑缺少该视频格式的解码，已临时改播群星；可以在开场动画里换一套。</span>';
+    const say = (title, text, ms, button) => {
+      tip.innerHTML = `<b>${title}</b><span>${text}</span>${button ? `<button type="button" class="appearance-btn primary" data-bsp-repair>${button}</button>` : ''}`;
+      clearTimeout(tip._t); tip._t = setTimeout(() => tip.remove(), ms);
+    };
+    say('这段开场视频在本机放不出画面', '这台电脑解码不了它的视频格式，已临时改播群星。', 9000);
     document.body.appendChild(tip);
-    setTimeout(() => tip.remove(), 9000);
+    if (!spec || spec.bundled || !spec.id) return;
+    void (async () => {
+      try {
+        const snap = await ipcRenderer.invoke('boot-splash:check');
+        const it = snap.items.find(i => i.id === spec.id);
+        if (!it || !it.update) { say('这段开场视频在本机放不出画面', '这台电脑解码不了它的视频格式，已临时改播群星；可以在开场动画里换一套。', 9000); return; }
+        say('有本机能放的兼容版', `「${esc(it.name)}」已出兼容新版（${kb(it.bytes)}），点下面按钮下载；不点就继续播群星。`, 30000, `下载兼容版 ${kb(it.bytes)}`);
+        tip.addEventListener('click', async e => {
+          if (!e.target.closest('[data-bsp-repair]')) return;
+          say('正在下载兼容版', `「${esc(it.name)}」正在后台下载，可以继续用 Hub…`, 180000);
+          const after = await ipcRenderer.invoke('boot-splash:download', spec.id).catch(() => null);
+          const done = after && after.items.find(i => i.id === spec.id);
+          if (done && done.installed && !done.update) say('兼容版已下好', `「${esc(done.name)}」下次启动就能正常播放，也可以在开场动画里点「预览」马上看。`, 12000);
+          else say('兼容版没下成', '稍后在开场动画里点这一套的「更新」重试；现在先播群星。', 12000);
+        });
+      } catch (_) { say('这段开场视频在本机放不出画面', '已临时改播群星；可以在开场动画里换一套。', 9000); }
+    })();
   }
   function stop() { layer?.finish(); }
   async function markHintSeen() { try { await ipcRenderer.invoke('boot-splash:save', { hintSeen: true }); } catch (_) {} }
@@ -201,7 +229,8 @@
   function card(it, full) {
     const current = data.preferences.selected === it.id, st = data.state || {}, active = st.activeId === it.id;
     const tag = current ? '<i class="bsp-tag on">正在使用</i>' : it.installed ? `<i class="bsp-tag">${it.bundled ? '内置' : '已下载'}</i>` : `<i class="bsp-tag dl">可下载${it.bytes ? ' ' + kb(it.bytes) : ''}</i>`;
-    const action = current ? `<button class="appearance-btn" data-preview="${it.id}">预览</button>`
+    const action = it.update ? `<button class="appearance-btn primary" data-get="${it.id}" ${st.activeId ? 'disabled' : ''}>${active ? '更新中…' : '更新'}</button>`
+      : current ? `<button class="appearance-btn" data-preview="${it.id}">预览</button>`
       : it.installed ? `<button class="appearance-btn primary" data-use="${it.id}">使用</button>`
         : `<button class="appearance-btn" data-get="${it.id}" ${st.activeId ? 'disabled' : ''}>${active ? '下载中…' : '下载并使用'}</button>`;
     return `<div class="bsp-card${current ? ' current' : ''}${it.anim === 'video' ? ' orig' : ''}"><button class="bsp-thumb" data-${it.installed ? 'preview' : 'get'}="${it.id}" title="${it.installed ? '点击预览' : '点击下载并使用'}"><img src="${esc(it.thumb)}" alt="">${it.recommend ? '<em class="bsp-pick">★ 推荐</em>' : ''}${tag}<span${it.credit ? ` title="原作：${esc(it.credit)}，${esc(it.creditUrl || '')}"` : ''}>${it.credit ? '原作 · ' + esc(it.credit.split(' · ')[0]) + ' · 有声' : ANIM_NAME[it.anim] || ''}</span></button><div class="bsp-meta"><strong title="${esc(it.name)}">${esc(full ? it.name : it.name.replace(/^.+? · /, ''))}</strong>${action}</div></div>`;

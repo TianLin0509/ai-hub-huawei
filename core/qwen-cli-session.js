@@ -96,6 +96,7 @@ class QwenCliSession extends EventEmitter {
       if(!text.trim())return;
       this.hookTurn={id:randomUUID(),at,text,submissionId:this.pending?.text===text?this.pending.id:null};
       this.hookTurns.push(this.hookTurn);
+      require('./native-history-cap').trimTail(this.hookTurns);   // 提交钩子轮次只留最近若干条（只用来认领近期记录）
       this.bindRecord(this.records.at(-1));
       this.apply({state:'running',turnId:this.hookTurn.id});
       this.lifecycle('prompt-submitted',{text,submittedAt:at,clientSubmissionId:this.pending?.text===text?this.pending.id:null});
@@ -139,27 +140,41 @@ class QwenCliSession extends EventEmitter {
     this.apply({state:'interrupted',completedAt});this.lifecycle('turn-aborted',this.lastOutcome);
     this.hookTurn=null;this.changed();
   }
+  _applyTranscriptRow(records, row, { trim = false, live = false } = {}){
+    if(row.sessionId!==this.threadId && this.threadId)return;
+    const parts=row.message?.parts;if(!Array.isArray(parts))return;
+    if(row.type==='user' && row.provenance==='real_user'){
+      records.push({userMessageId:row.uuid,text:parts.filter(p=>p.text).map(p=>p.text).join('\n'),createdAt:Date.parse(row.timestamp),status:'running',accepted:true});
+      if(trim && require('./native-history-cap').trimRecords(records))this._trimmedRecords=true;   // 内存只留最近若干轮，原文仍在千问记录里
+    }
+    const record=records.at(-1);if(!record)return;
+    this.bindRecord(record);
+    if(live && row.type==='assistant'&&row.model&&row.model!==this.currentModel){this.currentModel=row.model;this.emit('bound',{threadId:this.threadId,model:row.model});}
+    // Tool results arrive as their own rows; each assistant row is one API
+    // response stamped when it ends, which the card's speed timing needs.
+    const usage=row.usageMetadata;
+    if(row.type==='assistant' || row.type==='user' || row.type==='tool_result')captureClaudeMessage(record,{...row,
+      type:row.type==='tool_result'?'user':row.type,message:{...row.message,
+      ...(row.type==='assistant'?{id:row.uuid}:{}),
+      ...(row.type==='assistant'&&usage?{usage:{input_tokens:usage.promptTokenCount,output_tokens:usage.candidatesTokenCount}}:{}),
+      content:parts.map(p=>p.functionCall?{type:'tool_use',id:p.functionCall.id,name:p.functionCall.name,input:p.functionCall.args}
+        :p.functionResponse?{type:'tool_result',tool_use_id:p.functionResponse.id,content:JSON.stringify(p.functionResponse.response)}
+        :p.thought?{type:'thinking',thinking:p.text||''}:{type:'text',text:p.text||''})}});
+  }
+  _readFullRecords(){
+    const full=[];
+    for(const line of fs.readFileSync(this.transcriptPath,'utf8').split('\n')){
+      if(!line.trim())continue;
+      let row;try{row=JSON.parse(line);}catch{continue;}
+      this._applyTranscriptRow(full,row,{trim:false,live:false});
+    }
+    return full;
+  }
   loadTranscript(file){
     if(!file || !path.resolve(file).startsWith(path.resolve(this.options.home)+path.sep))throw new Error('千问记录路径越界');
-    this.transcriptTail?.close();this.records=[];this.transcriptPath=file;
+    this.transcriptTail?.close();this.records=[];this._trimmedRecords=false;this.transcriptPath=file;
     this.transcriptTail=new JsonlTail(file,row=>{
-      if(row.sessionId!==this.threadId && this.threadId)return;
-      const parts=row.message?.parts;if(!Array.isArray(parts))return;
-      if(row.type==='user' && row.provenance==='real_user')this.records.push({userMessageId:row.uuid,
-        text:parts.filter(p=>p.text).map(p=>p.text).join('\n'),createdAt:Date.parse(row.timestamp),status:'running',accepted:true});
-      const record=this.records.at(-1);if(!record)return;
-      this.bindRecord(record);
-      if(row.type==='assistant'&&row.model&&row.model!==this.currentModel){this.currentModel=row.model;this.emit('bound',{threadId:this.threadId,model:row.model});}
-      // Tool results arrive as their own rows; each assistant row is one API
-      // response stamped when it ends, which the card's speed timing needs.
-      const usage=row.usageMetadata;
-      if(row.type==='assistant' || row.type==='user' || row.type==='tool_result')captureClaudeMessage(record,{...row,
-        type:row.type==='tool_result'?'user':row.type,message:{...row.message,
-        ...(row.type==='assistant'?{id:row.uuid}:{}),
-        ...(row.type==='assistant'&&usage?{usage:{input_tokens:usage.promptTokenCount,output_tokens:usage.candidatesTokenCount}}:{}),
-        content:parts.map(p=>p.functionCall?{type:'tool_use',id:p.functionCall.id,name:p.functionCall.name,input:p.functionCall.args}
-          :p.functionResponse?{type:'tool_result',tool_use_id:p.functionResponse.id,content:JSON.stringify(p.functionResponse.response)}
-          :p.thought?{type:'thinking',thinking:p.text||''}:{type:'text',text:p.text||''})}});
+      this._applyTranscriptRow(this.records,row,{trim:true,live:true});
       this.changed();
     },{onError:error=>{if(error.code!=='ENOENT')this.emit('action-error','千问记录读取失败：'+error.message);}});
     this.transcriptTail.start().catch(error=>this.fail(error));
@@ -184,7 +199,13 @@ class QwenCliSession extends EventEmitter {
     return promise;
   }
   readTranscript(options={}){
-    const records=options.turnId?this.records.filter(r=>r.turnId===options.turnId):this.records;
+    let source=this.records;
+    if(this._trimmedRecords && this.transcriptPath && !options.latestTurn && fs.existsSync(this.transcriptPath)){
+      const needFull=options.turnId ? !this.records.some(r=>r.turnId===options.turnId)
+        : (!Number.isFinite(options.limit) || options.fromTail===false || options.limit>this.records.length);
+      if(needFull){try{source=this._readFullRecords();}catch{/* 文件不可读时退回内存近期轮次 */}}
+    }
+    const records=options.turnId?source.filter(r=>r.turnId===options.turnId):source;
     const cards=claudeTranscriptTurns(options.latestTurn?records.slice(-1):records).map(card=>{
       const record=records.find(r=>r.userMessageId===(card.userMessageId||card.id));
       const identity={providerTurnId:record?.turnId||null,clientSubmissionId:record?.submissionId||null};
@@ -194,7 +215,7 @@ class QwenCliSession extends EventEmitter {
     });
     return Number.isFinite(options.limit)?options.fromTail===false?cards.slice(0,options.limit):cards.slice(-options.limit):cards;
   }
-  blocks(){return this.readTranscript().filter(c=>c.role==='assistant').slice(-1).map(c=>({type:'text',text:c.text||''}));}
+  blocks(){return this.readTranscript({latestTurn:true}).filter(c=>c.role==='assistant').slice(-1).map(c=>({type:'text',text:c.text||''}));}
   finalText(){return this.blocks().map(b=>b.text).join('\n');}
   async configure({model,effort}={}, {timeoutMs=10000}={}){
     await this.start();

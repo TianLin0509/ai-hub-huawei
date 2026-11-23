@@ -59,6 +59,10 @@ function createHubPetController({
   inMeeting = () => false,
   // r27d：isQuotaLow() → 当前账号额度是否快用完（main.js 按账号用量读数判断，每次轮询都问，切号/重置后自动熄）。
   isQuotaLow = () => false,
+  // softGpu() → 本次启动是否关了硬件加速（core/gpu-mode.js 判定，main-bootstrap 记在 process 上）。
+  softGpu = () => !!process.__hubGpuDisabledReason,
+  // lowOverhead() → 低开销模式是否开着（2026-11-23 P1 L3）：开着时渲染端静默省电，提醒气泡照常。
+  lowOverhead = () => false,
   canShow = () => true, debug = false, watchFullscreen = true,
   logger = console, now = () => Date.now(),
   fetchImpl = globalThis.fetch, roleSources = null, autoRoleDelayMs = 2500,
@@ -319,6 +323,10 @@ function createHubPetController({
       lamps: follow ? sessionLamps(snap.finished) : [], dotTones: snap.dotTones, meeting: meetingNow(), quotaLow,
       dots: snap.dots, quiet: !gate([]).ok, sequences: (roles.meta(role) && roles.meta(role).sequences) || [], clipped: (roles.meta(role) && roles.meta(role).clipped) || {},
       night: pose === 'sleep', edge: edgeCut(),
+      // 软件渲染（启动时关了硬件加速）：渲染端据此降帧、停无限循环动画（2026-11-23 开销优化）。
+      softGpu: softGpu() === true,
+      // 低开销模式：空闲不排帧、停装饰循环动画；只有开着时才带这个字段，关闭时状态和原来逐字节一致。
+      ...(lowOverhead() === true ? { lowPower: true } : {}),
     };
     const key = JSON.stringify(state);
     if (key !== lastSent) { lastSent = key; send('hub-pet:state', state); }
@@ -1433,7 +1441,10 @@ function createHubPetController({
     if (debug) ipcMain.removeHandler?.('hub-pet:debug');
   }
 
-  return { start, stop, dispose, setSignal, setSettings, setProfile, celebrate, petted, roleList, notify, routeDesktopNotice, canNotify, sessionSeen, announceUpdate, isActive: () => enabled() && started && alive(), getWindow: () => win, getWindows: () => [win, menuWin].filter(Boolean), getSettings: () => settings.get(), _evaluate: evaluate, _speech: speech, _roles: roles, _reply: reply, _chatterTrack: chatterTrack,
+  // 低开销模式切换后立即重发一次状态（没开桌宠或还没启动时什么都不做）。
+  function refreshLowOverhead() { if (enabled() && started && alive()) evaluate(); }
+
+  return { start, stop, dispose, refreshLowOverhead, setSignal, setSettings, setProfile, celebrate, petted, roleList, notify, routeDesktopNotice, canNotify, sessionSeen, announceUpdate, isActive: () => enabled() && started && alive(), getWindow: () => win, getWindows: () => [win, menuWin].filter(Boolean), getSettings: () => settings.get(), _evaluate: evaluate, _speech: speech, _roles: roles, _reply: reply, _chatterTrack: chatterTrack,
     _restoreRememberedRole: restoreRememberedRole, _autoRole: () => ({ ...autoRole }) };
 }
 

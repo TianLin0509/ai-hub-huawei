@@ -14,6 +14,15 @@ test('401 / 403 分开讲，都提示不用在 Claude Code 里 /login', async ()
   assert.match(m403, /先在 CodeAgent 里用同一个模型发一句试试.*不用在 Claude Code 里运行 \/login/);
   assert.match(upstreamHttpMessage(401), /公司服务不认这次登录.*重新登录.*不用在 Claude Code 里运行 \/login/);
   assert.equal(upstreamHttpMessage(500), '公司模型上游返回 HTTP 500（公司服务端出错）。');
+  assert.equal(upstreamHttpMessage(429), '公司模型上游返回 HTTP 429（限流）。');
+});
+
+// 2026-11-23 WeLink 反馈：413 是上下文太长，原样重发还是 413，所以说清原因、给压缩和新开会话两个出口，不提重试。
+test('413 讲成上下文太长，给压缩 / 新开会话，不建议重试', async () => {
+  const { upstreamHttpMessage } = await load('failure-text.mjs');
+  const m = upstreamHttpMessage(413);
+  assert.equal(m, '公司模型上游返回 HTTP 413（请求太大，上下文太长，公司模型拒收）。压缩上下文后继续，或新开会话接着聊。');
+  assert.doesNotMatch(m, /重试|换模型/);
 });
 
 test('上游错误体：多种字段、只有错误码、网页回包都能说出一句；地址与主机名照旧去掉', async () => {

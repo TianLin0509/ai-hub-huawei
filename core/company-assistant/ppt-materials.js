@@ -199,12 +199,16 @@ class PptMaterials {
     this.lib = library; this.deps = deps; this.env = deps.pptEnv || process.env;
     this.cache = null; this.busy = false; this.installing = null; this.latest = null;
   }
-  teamPackDir() { return path.join(this.lib.a.dir, 'ppt-team-materials'); }
-  teamPackFile() { return path.join(this.teamPackDir(), TEAM_PACK_FILE); }
+  teamPackDir() { return path.join(require('./ppt-work-dir').workDir(this.lib.a), 'ppt-team-materials'); }
+  teamPackFile() {
+    const current = path.join(this.teamPackDir(), TEAM_PACK_FILE);
+    return fs.existsSync(current) ? current : require('./ppt-work-dir').previousWorkDirs(this.lib.a)
+      .map(root => path.join(root, 'ppt-team-materials', TEAM_PACK_FILE)).find(file => fs.existsSync(file)) || current;
+  }
   teamPack() {
     let installed = null;
     if (fs.existsSync(this.teamPackFile())) {
-      try { installed = JSON.parse(fs.readFileSync(path.join(this.teamPackDir(), 'installed.json'), 'utf8')); } catch { installed = { version: '0.0.0' }; }
+      try { installed = JSON.parse(fs.readFileSync(path.join(path.dirname(this.teamPackFile()), 'installed.json'), 'utf8')); } catch { installed = { version: '0.0.0' }; }
     }
     return { installed: installed?.version || null, items: installed?.items || 0, latest: this.latest, update: Boolean(installed && this.latest && newerVersion(this.latest, installed.version)) };
   }
@@ -223,6 +227,7 @@ class PptMaterials {
     return this.installing;
   }
   async downloadTeamPack() {
+    const dir = path.join(require('./ppt-work-dir').workDir(this.lib.a, { writable: true }), 'ppt-team-materials');
     let { base, manifest, fallback } = await teamPackManifest(this.deps);
     const fetch = require('../own-gate').gatedFetch(require('./fetch-util').resolveFetch(this.deps.pptDownloadFetch));
     // 公开版内源优先（r21）：openx 上有 pptutor-materials-<版本>.zip 且校验对就用它，否则照旧走原下载源；成员版不试内源。
@@ -237,7 +242,7 @@ class PptMaterials {
     if (!archive) archive = await teamPackArchive(fetch, manifest, [base, ...packSources(this.deps).filter(u => u !== base)], onProgress,
       openxOn ? require('../app-update/openx-source').lastReason() || '内源下载失败' : null);
     bus.emit('ppt-materials', { phase: 'verifying', message: '正在校验并读取素材…' });
-    const dir = this.teamPackDir(), stamp = `${process.pid}-${Date.now()}`;
+    const stamp = `${process.pid}-${Date.now()}`;
     // 临时文件不用 .pptx 后缀（5.6.2）：公司电脑的文档安全软件会扫描并占住新写出的 Office 文件，
     // 紧跟着的改名、删除报 EPERM（2026-11-11 用户截图）。清理一律尽力而为，删不掉的留给下次。
     const zipTmp = path.join(dir, `download-${stamp}.zip`), packTmp = path.join(dir, `download-${stamp}.part`);
@@ -255,7 +260,7 @@ class PptMaterials {
       if (!items) throw new Error('团队素材包里没有读到素材，请重试');
       // 换掉旧文件：旧素材包正被 PowerPoint 或安全软件占着时改名会报 EPERM/EBUSY，隔半秒再试，最多约 5 秒。
       for (let attempt = 0; ; attempt += 1) {
-        try { fs.renameSync(packTmp, this.teamPackFile()); break; }
+        try { fs.renameSync(packTmp, path.join(dir, TEAM_PACK_FILE)); break; }
         catch (error) {
           if (!['EPERM', 'EBUSY', 'EACCES'].includes(error.code)) throw error;
           if (attempt >= 10) throw new Error('团队素材包已下载好，但素材文件正被别的程序占用（PowerPoint 开着它，或安全软件在扫描），没能换上；请关掉用到素材包的 PPT 后再点一次下载');

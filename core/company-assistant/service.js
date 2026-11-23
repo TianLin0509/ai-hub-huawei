@@ -219,7 +219,7 @@ class CompanyAssistant {
   set queue(value) { this.lanes.chat.queue = value; }
   get job() { return this.lanes.chat.job; }
   set job(value) { this.lanes.chat.job = value; }
-  get pptWorkspace() { return require('../work-file-root').directory('ppt-workspace', path.join(this.dir, 'ppt-workspace')); }
+  get pptWorkspace() { return path.join(require('./ppt-work-dir').workDir(this), 'ppt-workspace'); }
 
   // ---- 本地文件（只在这台电脑的 Hub 数据目录里） ----
   file(name) { return path.join(name === 'settings.json' ? this.defaultDir : this.dir, name); }
@@ -294,6 +294,7 @@ class CompanyAssistant {
     if (Array.isArray(patch.chips)) next.chips = patch.chips.filter(c => c && String(c.text || '').trim()).slice(0, 12).map(c => ({ label: String(c.label || c.text).trim().slice(0, 16), text: String(c.text).trim().slice(0, 2000) }));
     if (patch.ppt && typeof patch.ppt === 'object') {
       next.ppt = { ...(s.ppt || {}) };
+      if ('workDir' in patch.ppt) next.ppt.workDir = require('./ppt-work-dir').validateWorkDir(patch.ppt.workDir, this);
       for (const key of ['db', 'python', 'doctorExe']) if (key in patch.ppt) next.ppt[key] = String(patch.ppt[key] || '').trim();
       if ('roots' in patch.ppt) {
         if (!Array.isArray(patch.ppt.roots) || patch.ppt.roots.length > 3 || patch.ppt.roots.some(p => typeof p !== 'string' || !path.isAbsolute(p))) throw new Error('PPT 索引请选择最多 3 个绝对路径的文件夹');
@@ -663,12 +664,19 @@ class CompanyAssistant {
     // 作答对照评测（只读本机快照，用 CodeAgent 无头模式比较现版与新版提问；结果只留本机，summary.json 只有数字）。
     const bench = ['@echo off', 'set ELECTRON_RUN_AS_NODE=1', `set "CLAUDE_HUB_ASSISTANT_DIR=${this.dir}"`, `set "CLAUDE_HUB_ASSISTANT_SETTINGS=${this.file('settings.json')}"`, `"${exe}" "${path.join(__dirname, 'answer-bench.js')}" %*`];
     fs.writeFileSync(path.join(this.workspace, 'assistant-bench.cmd'), bench.join('\r\n') + '\r\n', 'utf8');
+    // PPT 目录失败只影响 PPT，不能挡住助理的普通问答。
+    try { this.preparePptWorkspace(); this.pptWorkDirError = ''; }
+    catch (error) { this.pptWorkDirError = error.message; }
+  }
+  preparePptWorkspace() {
     const ppt = this.pptWorkspace;
+    require('./ppt-work-dir').ensureWritable(path.dirname(ppt));
     fs.mkdirSync(path.join(ppt, 'skills'), { recursive: true });
     fs.writeFileSync(path.join(ppt, 'skills', 'ppt-search.md'), PPT_INSTRUCTIONS + '\n', 'utf8');
     fs.writeFileSync(path.join(ppt, 'skills', 'ppt-make.md'), PPT_MAKE_INSTRUCTIONS + '\n', 'utf8');
     fs.writeFileSync(path.join(ppt, 'CLAUDE.md'), '# PPT 素材助理\n\n每次提问的开头附有完整规则，以提问里的规则为准。只读，数据只留在这台电脑。\n', 'utf8');
-    const pptLines = ['@echo off', 'set ELECTRON_RUN_AS_NODE=1', `set "CLAUDE_HUB_ASSISTANT_DIR=${this.dir}"`, `set "CLAUDE_HUB_ASSISTANT_SETTINGS=${this.file('settings.json')}"`, `"${exe}" "${path.join(__dirname, 'ppt-ro.js')}" %*`];
+    const exe = this.deps.nodeExecutable || process.execPath;
+    const pptLines = ['@echo off', 'set ELECTRON_RUN_AS_NODE=1', `set "CLAUDE_HUB_ASSISTANT_DIR=${this.dir}"`, `set "CLAUDE_HUB_PPT_WORK_DIR=${path.dirname(ppt)}"`, `set "CLAUDE_HUB_ASSISTANT_SETTINGS=${this.file('settings.json')}"`, `"${exe}" "${path.join(__dirname, 'ppt-ro.js')}" %*`];
     fs.writeFileSync(path.join(ppt, 'ppt-ro.cmd'), pptLines.join('\r\n') + '\r\n', 'utf8');
   }
   instructions(toolset = 'desk') {
@@ -1618,10 +1626,11 @@ class CompanyAssistant {
   workspaceFor(toolset) { return toolset === 'ppt' ? this.pptWorkspace : this.workspace; }
   async openPooled(toolset, featureAgent = toolset === 'ppt' ? 'ppt' : 'assistant') {
     this.prepareWorkspace();
+    if (toolset === 'ppt') this.preparePptWorkspace?.();
     if (this.toolsReady) await this.toolsReady;
     const id = randomUUID();
     // 先登记：建会话时 extraMcpProvider 就要按用途挂工具。
-    this.pool.set(id, { toolset, featureAgent, createdAt: this.now() });
+    this.pool.set(id, { toolset, featureAgent, cwd: this.workspaceFor(toolset), createdAt: this.now() });
     let created;
     // 助理问答的思考档（2026-11-07）：公司 GLM 一问要 45–60 秒，大半花在想上；设置 answerEffort（low/medium/high/max）时开会话带 --effort，空 = 账号默认。
     const effort = toolset === 'desk' || toolset === 'phone' ? this.settings().answerEffort : '';
@@ -1642,7 +1651,8 @@ class CompanyAssistant {
       // 初始化或其他工作仍在运行的预热会话留给清扫器，不能为取下一问把它关掉。
       if (this.sessionBusy(warm)) return this.openPooled(toolset, featureAgent);
       delete this.warm[toolset];
-      if (!this.warmUnavailable(warm) && this.toolsetFor(warm) === toolset && (!featureAgent || this.pool.get(warm)?.featureAgent === featureAgent) && !this.staleModel(warm)) return warm;
+      if (!this.warmUnavailable(warm) && this.toolsetFor(warm) === toolset && (!featureAgent || this.pool.get(warm)?.featureAgent === featureAgent) && !this.staleModel(warm)
+        && (toolset !== 'ppt' || this.pool.get(warm)?.cwd === this.pptWorkspace)) return warm;
       this.retire(warm);
     }
     return this.openPooled(toolset, featureAgent);

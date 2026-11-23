@@ -449,6 +449,24 @@ async function _saveImplAsync(state, { strict = false } = {}) {
 // writes the newest pending state, and flushPending() bypasses the wait.
 const SAVE_DELAY_MS = 500;
 const SAVE_MIN_INTERVAL_MS = 2000;
+// 低开销模式（2026-11-23 P1 L6）运行期把最短间隔放宽到 5 秒；关掉恢复 2 秒。退出前 flushPending 照常立刻刷盘。
+let saveMinIntervalMs = SAVE_MIN_INTERVAL_MS;
+// 已挂着的保存按新间隔重排（Codex 非阻断 / Gemini 建议）：从 5 秒切回 2 秒时，当次待存的状态不再多等 3 秒。
+// 只提前、不推后：新间隔更长时已挂的那次照旧按原时刻落盘。
+let saveDebounceDueAt = 0;
+function setSaveMinInterval(ms) {
+  const n = Number(ms);
+  saveMinIntervalMs = Number.isFinite(n) && n >= SAVE_DELAY_MS ? n : SAVE_MIN_INTERVAL_MS;
+  if (saveDebounceTimer && _pendingState) {
+    const dueAt = Math.max(Date.now(), _lastSaveStartedAt + saveMinIntervalMs);
+    if (dueAt < saveDebounceDueAt) {
+      clearTimeout(saveDebounceTimer);
+      saveDebounceTimer = null;
+      _armSave(dueAt - Date.now());
+    }
+  }
+  return saveMinIntervalMs;
+}
 let saveDebounceTimer = null;
 let _lastSaveStartedAt = 0;
 let _pendingState = null;
@@ -470,14 +488,19 @@ function save(state, { sync = false } = {}) {
     return;
   }
   if (saveDebounceTimer) return;
-  const delay = Math.max(SAVE_DELAY_MS, _lastSaveStartedAt + SAVE_MIN_INTERVAL_MS - Date.now());
+  _armSave(Math.max(SAVE_DELAY_MS, _lastSaveStartedAt + saveMinIntervalMs - Date.now()));
+}
+
+function _armSave(delay) {
+  saveDebounceDueAt = Date.now() + Math.max(0, delay);
   saveDebounceTimer = setTimeout(() => {
     const s = _pendingState;
     _pendingState = null;
     saveDebounceTimer = null;
+    saveDebounceDueAt = 0;
     _lastSaveStartedAt = Date.now();
     _enqueueSave(s);
-  }, delay);
+  }, Math.max(0, delay));
 }
 
 async function flushPending() {
@@ -524,6 +547,9 @@ function commitTitle({ type, id, base, getBase = () => base, title, writeBackup,
 }
 
 module.exports = {
+  setSaveMinInterval,
+  getSaveMinInterval: () => saveMinIntervalMs,
+  _pendingSaveDueAt: () => (saveDebounceTimer ? saveDebounceDueAt : 0),
   load,
   loadAndSelfHeal,
   save,

@@ -9,6 +9,7 @@
   const companyApiBackend = Object.create(null);
   // 启动中心模型卡（renderer/launch-model-cards.js）：每个工具保存的来源、本次打开里点选的卡、反代状态。
   const modelCards = require('./launch-model-cards');
+  const createOutcome = require('./session-create-outcome');
   const companyProvider = Object.create(null);
   const companyPick = Object.create(null);
   let companyProxyStatus = null;
@@ -300,6 +301,11 @@
   // 当前选择，避免把用户刚选的值改掉。
   let tuningTouchedByUser = false;
   let codeagentRunMode = 'pty';
+  // 低开销模式（2026-11-23 P1 L2）：开着时 CodeAgent 新会话默认走 serve（卡片、共享进程）；
+  // 这次打开面板里用户亲手改过运行方式就听他的。关闭时就是保存的值，和原来一样。
+  let codeagentRunModeExplicit = false;
+  const effectiveCodeagentRunMode = () => require('../core/low-overhead-policy')
+    .codeagentRunModeFor(codeagentRunMode, window.__hubLowOverhead?.get?.(), { explicit: codeagentRunModeExplicit });
   // Claude Code、DSH 的卡片试点：只给经本机反代的公司模型和 API 网关线路。
   let cardRunModes = {};
   const cardRunEligible = (kind = selectedKind) => ['claude', 'deepseek-acp'].includes(kind) && companyApiKind(kind)
@@ -1370,6 +1376,12 @@
     if (note) { note.dataset.hintLevel = 'status'; note.hidden = !reset || reset.hidden; }
   }
 
+  // 低开销模式在别处切了（含启动时主进程推来的真值）：启动中心开着就当场重画运行方式（Gemini P2-1）。
+  // 本文件比 renderer.js 先加载，共享状态（window.__hubLowOverhead）要等页面解析完才有。
+  const subscribeLowOverhead = () => { try { window.__hubLowOverhead?.onChange?.(() => { try { paintRunMode(); } catch { /* 启动中心还没建好 */ } }); } catch { /* 没有低开销模块 */ } };
+  if (window.__hubLowOverhead) subscribeLowOverhead();
+  else document.addEventListener('DOMContentLoaded', subscribeLowOverhead, { once: true });
+
   function paintRunMode() {
     const field = document.getElementById('new-session-run-mode-field');
     const select = document.getElementById('new-session-run-mode');
@@ -1390,10 +1402,12 @@
         : `PTY：一直开着真实终端，和现在一样。之后新建的 ${name} 会话都用它。`, { label: fieldHint.fieldLabel(field) });
       return;
     }
-    select.value = codeagentRunMode;
-    fieldHint.setFieldHint(note, codeagentRunMode === 'serve'
+    const runMode = effectiveCodeagentRunMode();
+    const lowOverheadNote = runMode !== codeagentRunMode ? '低开销模式开着：这次默认用卡片（多个会话共用一个后台进程）。' : '';
+    select.value = runMode;
+    fieldHint.setFieldHint(note, lowOverheadNote + (runMode === 'serve'
       ? 'ACP 试点：平时看卡片，点「后台」才打开真实终端，关掉终端 AI 继续跑。之后新建的 CodeAgent 会话都用它。试点暂不支持思考强度和 Hub 自带的 MCP 工具，需要时请用 PTY。'
-      : 'PTY：一直开着真实终端，和现在一样。之后新建的 CodeAgent 会话都用它。', { label: fieldHint.fieldLabel(field) });
+      : 'PTY：一直开着真实终端，和现在一样。之后新建的 CodeAgent 会话都用它。'), { label: fieldHint.fieldLabel(field) });
   }
 
   function paintTuning() {
@@ -1917,6 +1931,7 @@
     for (const kind of Object.keys(companyPick)) delete companyPick[kind];
     accountNotice = '';
     tuningTouchedByUser = false;
+    codeagentRunModeExplicit = false;
     modelTouchedByUser = false;
     permissionPick = Object.create(null);
     const details = document.getElementById('new-session-tuning-details');
@@ -2189,7 +2204,7 @@
     // 明确选了「跟随 CodeAgent」：主进程不套 Hub 默认模型；没点选时由主进程按 Hub 默认 / 账号默认定（和下拉显示同一口径）。
     if (selectedKind === 'codeagent' && !modelTouchedByUser && codeagentFollowCli) opts.codeagentFollowCli = true;
     if (permissionModes.supportsSwitch(selectedKind)) opts.permissionMode = currentPermissionMode();
-    if (selectedKind === 'codeagent' && codeagentRunMode === 'serve') opts.codeagentRunMode = 'serve';
+    if (selectedKind === 'codeagent' && effectiveCodeagentRunMode() === 'serve') opts.codeagentRunMode = 'serve';
     if (cardRunEligible() && cardRunModes[selectedKind] === 'card') opts.cardRunMode = 'card';
     if (selectedKind === 'codeagent' && codeagentPoolRequested()) {
       opts.codeagentAccount = 'pool';
@@ -2250,14 +2265,36 @@
       if (submit) submit.textContent = '检查账号并启动…';
       // 公司模型反代还没就绪（刚启动或首次签名初始化）：主进程会等它准备好再建会话，按钮上说一声。
       if (submit && companyApiKind(selectedKind) && companyPick[selectedKind]?.source === 'company' && companyProxyStatus?.state !== 'running') submit.textContent = '公司模型准备中（首次约 10–20 秒）…';
-      const session = await createSession(selectedKind, { workspace, opts: tuningOpts() });
-      require('./codeagent-preference').rememberKind(selectedKind);
-      require('./launch-last-workspace').remember(localStorage, { mode: workspaceMode, workspace });
-      if (permissionModes.supportsSwitch(selectedKind)) lastPermission.remember(localStorage, selectedKind, currentPermissionMode());
+      // 会话建没建成以「拿到会话」为准（session-create-outcome.js）：创建调用报错、但已收到带本次请求标识的
+      // session-created 事件，也算建成；之后的附属步骤没成只给一行提示，不再报「创建失败」。
+      const createRequestId = createOutcome.newCreateRequestId(window.crypto);
+      const createdEvents = [];
+      const onCreated = (_event, payload) => { if (payload && payload.createRequestId === createRequestId) createdEvents.push(payload); };
+      ipcRenderer.on('session-created', onCreated);
+      let session, followup = null;
+      try { session = await createSession(selectedKind, { workspace, opts: { ...tuningOpts(), createRequestId } }); }
+      catch (error) {
+        session = createOutcome.matchCreatedSession(createdEvents, createRequestId);
+        if (!session) throw error;
+        followup = { step: 'launch', error };
+      } finally { ipcRenderer.removeListener('session-created', onCreated); }
+      try {
+        require('./codeagent-preference').rememberKind(selectedKind);
+        require('./launch-last-workspace').remember(localStorage, { mode: workspaceMode, workspace });
+        if (permissionModes.supportsSwitch(selectedKind)) lastPermission.remember(localStorage, selectedKind, currentPermissionMode());
+      } catch (error) { followup = followup || { step: 'remember', error }; }
+      if (!followup && session && session.createWarning) {
+        followup = { step: session.createWarning.step || 'launch', error: new Error(session.createWarning.message || String(session.createWarning)) };
+      }
       closeNewSessionModal();
+      if (followup) {
+        const outcome = createOutcome.classifyCreateOutcome({ session, followup });
+        console.warn('[new-session] created with follow-up failure:', followup.step, followup.error);
+        ipcRenderer.emit('session-create-followup', {}, { sessionId: session.id, message: outcome.message, actions: outcome.actions });
+      }
       return session;
     } catch (error) {
-      setError(`创建失败：${error && error.message ? error.message : String(error)}`);
+      setError(createOutcome.classifyCreateOutcome({ error }).message);
       return null;
     } finally {
       submitting = false;
@@ -2534,10 +2571,13 @@
           return;
         }
         const previous = codeagentRunMode;
+        const previousExplicit = codeagentRunModeExplicit;
+        codeagentRunModeExplicit = true;
         codeagentRunMode = runModeSelect.value === 'serve' ? 'serve' : 'pty';
         paint();
         const result = await ipcRenderer.invoke('session:set-codeagent-run-mode', { mode: codeagentRunMode }).catch(error => ({ ok: false, error: error.message }));
-        if (!result?.ok) { codeagentRunMode = previous; setError(`保存运行方式失败：${result?.error || '未知错误'}`); paint(); }
+        // 保存失败：保存值和「这次亲手选过」一起回滚，下拉框回到真正会生效的方式（Gemini P2-1）。
+        if (!result?.ok) { codeagentRunMode = previous; codeagentRunModeExplicit = previousExplicit; setError(`保存运行方式失败：${result?.error || '未知错误'}`); paint(); }
       });
     }
     const permissionSelect = document.getElementById('new-session-permission');

@@ -15,6 +15,11 @@ class PptDoctor {
     this.server = new (require('./ppt-doctor-server').PptDoctorServer)(this);
   }
   config() { return this.a.settings().ppt || {}; }
+  runtimeEnv(root) {
+    if (root === this.a.dir) return { ...this.env };
+    const temp = path.join(root, 'ppt-temp'); fs.mkdirSync(temp, { recursive: true });
+    return { ...this.env, TEMP: temp, TMP: temp, TMPDIR: temp };
+  }
   // 2026-11-07：装了多份时由自动发现（core/tool-discovery）按版本选；用户指定的程序被卸载 / 移动时不再一直报错，回到扫描。
   async discover() {
     const override = this.config().doctorExe || this.env.PPT_DOCTOR_EXE;
@@ -44,6 +49,8 @@ class PptDoctor {
   async call(action, request = {}, options = {}) {
     if (!ACTIONS.has(action)) throw failure('DOCTOR_ACTION', '不支持的 PPT Doctor 操作');
     if (this.closed) throw failure('DOCTOR_CLOSED', 'PPT Doctor 调用已关闭');
+    // 调用开始时固定路径；修改设置不会把已经入队的任务转到别的盘。
+    options = { ...options, workRoot: require('./ppt-work-dir').workDir(this.a, { writable: true }) };
     const exe = await this.discover();
     const marker = this.deps.pptDoctorTrustedExecutable ? this.deps.pptDoctorCapability : await require('./ppt-doctor-discovery').capability(exe);
     if (!this.deps.pptDoctorTrustedExecutable && !marker) {
@@ -67,7 +74,7 @@ class PptDoctor {
   }
   async callOnce(exe, action, request, options) {
     if (this.closed) throw failure('DOCTOR_CLOSED', 'PPT Doctor 调用已关闭');
-    const root = path.join(this.a.dir, 'ppt-doctor', 'requests');
+    const root = path.join(options.workRoot || require('./ppt-work-dir').workDir(this.a, { writable: true }), 'ppt-doctor', 'requests');
     fs.mkdirSync(root, { recursive: true });
     const dir = path.join(root, randomUUID()); fs.mkdirSync(dir);
     const input = path.join(dir, 'request.json'), output = path.join(dir, 'response.json'), progress = path.join(dir, 'progress.json');
@@ -85,7 +92,7 @@ class PptDoctor {
           if (settled) return; settled = true; clearTimeout(timer); clearInterval(poll);
           void this.kill(child).then(() => reject(error), killError => reject(failure(error.code, error.message + '；结束进程失败：' + killError.message)));
         };
-        try { child = (this.deps.pptDoctorSpawn || spawn)(exe, args, { windowsHide: true, shell: false, env: { ...this.env }, stdio: 'ignore' }); }
+        try { child = (this.deps.pptDoctorSpawn || spawn)(exe, args, { windowsHide: true, shell: false, cwd: options.workRoot && options.workRoot !== this.a.dir ? options.workRoot : undefined, env: this.runtimeEnv(options.workRoot || this.a.dir), stdio: 'ignore' }); }
         catch (error) { finish(error); return; }
         this.children.add(child);
         child.once('error', error => finish(failure('DOCTOR_START_FAILED', 'PPT Doctor 未能启动：' + error.message)));

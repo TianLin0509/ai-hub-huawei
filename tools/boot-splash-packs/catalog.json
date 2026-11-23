@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "version": "2.0.0",
+ "version": "2.0.1",
  "packs": [
   {
    "id": "claude-01",
@@ -686,10 +686,10 @@
   },
   {
    "id": "claude-orig",
-   "version": "2.0.0",
-   "file": "claude-orig-2.0.0.mp4",
-   "bytes": 44075850,
-   "sha256": "2c5a090fb589ed517cc95f749e582f9f6e5eda7b5af8ddc736b48625e74a05fe",
+   "version": "2.0.1",
+   "file": "claude-orig-2.0.1.mp4",
+   "bytes": 39723734,
+   "sha256": "8354e52f58e555a66badc9b82c58d906a57822c6504ed94dcab2ce6d5ee31932",
    "name": "Claude · 原作·月下持剑",
    "who": "claude",
    "anim": "video",
@@ -697,10 +697,10 @@
   },
   {
    "id": "codex-orig",
-   "version": "2.0.0",
-   "file": "codex-orig-2.0.0.mp4",
-   "bytes": 45003445,
-   "sha256": "c58a9b8a0bfdd253d0b02b1de10a839965c2211980c0f7e95cc03c06ab910eec",
+   "version": "2.0.1",
+   "file": "codex-orig-2.0.1.mp4",
+   "bytes": 38170869,
+   "sha256": "330343ad4641ad5995cdebe5019a6188cd01b9ce45806e3489a3b1a8646e6681",
    "name": "Codex · 原作·星空龙娘",
    "who": "codex",
    "anim": "video",

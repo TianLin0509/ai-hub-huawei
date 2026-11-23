@@ -24,6 +24,10 @@ function createAutoTitleManager(deps) {
     sessionManager,
     workspaceService,
   } = deps;
+  // 单测注入：起名子进程、生命周期管家、CodeAgent 配置（默认用真实的）。
+  const spawnTitle = deps.spawnImpl || spawn;
+  const titleLifecycle = () => deps.childLifecycle || require('../core/child-lifecycle').getChildLifecycle();
+  const titleConfig = () => (deps.resolveCodeAgentConfig || require('../core/codeagent-config').resolveCodeAgentConfig)(process.env);
 
   const autoTitleInFlight = new Set();
   const autoMeetingTitleInFlight = new Set();
@@ -135,8 +139,8 @@ function createAutoTitleManager(deps) {
     return Promise.race([run, late]).catch(() => '').finally(done);
   }
   function runTitleViaCodeAgent(text, scope, timeoutMs) {
-    const { resolveCodeAgentConfig, commandHead, DEFAULT_MODEL } = require('../core/codeagent-config');
-    const config = resolveCodeAgentConfig(process.env);
+    const { commandHead, DEFAULT_MODEL } = require('../core/codeagent-config');
+    const config = titleConfig();
     // 起名只需要问题的大意：压成一行并去掉 cmd 会解释的字符，作为单个参数安全地穿过 .bat 包装。
     const brief = String(text || '').replace(/[\r\n\t]+/g, ' ').replace(/["%^&|<>`]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 300);
     if (!brief) return Promise.resolve('');
@@ -151,25 +155,55 @@ function createAutoTitleManager(deps) {
     const cwd = path.join(os.tmpdir(), 'ai-hub-auto-title');
     try { require('fs').mkdirSync(cwd, { recursive: true }); } catch {}
     const head = /^[A-Za-z0-9_.-]+$/.test(config.command) ? config.command : `"${config.command}"`;
-    const line = `${head} --print --output-format text --disable-update --skip-safe-check --no-session-persistence --effort low --model ${DEFAULT_MODEL} "${ask}"`;
+    // 起名是纯文字问答：--bare 等精简参数不起插件、不跑 hook、不开工具（core/codeagent-print-args.js，黄区实测子进程 36 → 3）。
+    const printArgs = require('../core/codeagent-print-args');
+    const mcpFile = printArgs.emptyMcpConfigFile(cwd);
+    const lineFor = mode => {
+      const lean = mode === 'legacy'
+        ? ''
+        : printArgs.leanPrintArgs({ bare: mode === 'full', mcpConfigFile: mcpFile }).map(a => (a === '' ? '""' : /\s/.test(a) ? `"${a}"` : a)).join(' ');
+      return `${head} --print --output-format text --disable-update --skip-safe-check --no-session-persistence ${lean ? lean + ' ' : ''}--effort low --model ${DEFAULT_MODEL} "${ask}"`;
+    };
     void commandHead;
+    return runTitleChild(lineFor('full'), { cwd, env, timeoutMs }).then(r => {
+      // 旧版 CodeAgent 不认 --bare：先去掉 --bare 保留其余精简参数重试一次；若其它精简参数也不认，直接退回原参数。
+      const diag = `${r.err || ''}\n${r.out || ''}`;
+      if (r.code !== 0 && printArgs.isUnknownBareError(diag)) {
+        return runTitleChild(lineFor('no-bare'), { cwd, env, timeoutMs }).then(r2 => (
+          r2.code !== 0 && printArgs.isUnknownLeanOptionError(`${r2.err || ''}\n${r2.out || ''}`)
+            ? runTitleChild(lineFor('legacy'), { cwd, env, timeoutMs })
+            : r2
+        ));
+      }
+      if (r.code !== 0 && printArgs.isUnknownLeanOptionError(diag)) {
+        return runTitleChild(lineFor('legacy'), { cwd, env, timeoutMs });
+      }
+      return r;
+    }).then(({ code, out, err }) => {
+      if (code !== 0) console.warn('[auto-title] codeagent exited ' + code + ': ' + String(err || out).trim().slice(-300));
+      return code === 0 ? cleanCodeAgentTitle(out) : '';
+    });
+  }
+  // 起一次起名子进程：先向生命周期管家要 codeagent-print 名额并登记 PID（超时强收整棵树、Hub 重启清遗留，core/child-lifecycle.js）。
+  async function runTitleChild(line, { cwd, env, timeoutMs }) {
+    const lifecycle = titleLifecycle();
+    let release = () => {};
+    try { release = await lifecycle.acquire('codeagent-print', { purpose: 'auto-title', waitMs: timeoutMs }); }
+    catch (error) { return { code: -1, out: '', err: error.message }; }
     return new Promise(resolve => {
-      let out = '';
+      let out = '', err = '', regId = '', settled = false;
+      const finish = result => { if (settled) return; settled = true; if (regId) lifecycle.unregister(regId); release(); resolve(result); };
       let child;
-      try { child = spawn(line, { cwd, env, shell: true, windowsHide: true }); }
-      catch (error) { console.warn('[auto-title] codeagent spawn failed:', error.message); resolve(''); return; }
+      try { child = spawnTitle(line, { cwd, env, shell: true, windowsHide: true }); }
+      catch (error) { console.warn('[auto-title] codeagent spawn failed:', error.message); finish({ code: -1, out: '', err: error.message }); return; }
+      regId = lifecycle.register({ pid: child.pid, kind: 'codeagent-print', purpose: 'auto-title', maxLifeMs: timeoutMs + 15000 });
       // shell:true 时根是 cmd，真正的 CLI 和它拉起的插件在下面：超时按 PID 结束整棵树（2026-11-19，以前只杀 cmd，CLI 成孤儿）。
       const killTree = () => { if (!require('../core/child-lifecycle').defaultKillTree(child.pid)) { try { child.kill(); } catch {} } };
       const timer = setTimeout(killTree, timeoutMs);
       child.stdout.on('data', d => { out += d; if (out.length > 20000) out = out.slice(-20000); });
-      let err = '';
       child.stderr.on('data', d => { err = (err + d).slice(-2000); });
-      child.on('error', () => {});
-      child.on('close', code => {
-        clearTimeout(timer);
-        if (code !== 0) console.warn('[auto-title] codeagent exited ' + code + ': ' + String(err || out).trim().slice(-300));
-        resolve(code === 0 ? cleanCodeAgentTitle(out) : '');
-      });
+      child.on('error', error => { clearTimeout(timer); finish({ code: -1, out, err: err || error.message }); });
+      child.on('close', code => { clearTimeout(timer); finish({ code, out, err }); });
     });
   }
 
@@ -359,6 +393,7 @@ function createAutoTitleManager(deps) {
   return {
     cleanCodeAgentTitle,
     generateTitleViaCodeAgent,
+    runTitleViaCodeAgent,
     fallbackMeetingTitleFromPrompt,
     fallbackSessionTitleFromPrompt,
     isGenericAutoMeetingTitle,

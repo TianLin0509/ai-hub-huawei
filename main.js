@@ -118,6 +118,8 @@ const {
   collectProtectedSessionIds,
   createSessionAutoSuspendScheduler,
 } = require('./main/session-auto-suspend.js');
+// 低开销模式的会话与运行期节能（2026-11-23 P1 v2，L1–L6）：跟随 optionalFeatures 的总开关，建窗前初始化（见 low-overhead:set 旁）。
+let lowOverheadController = null;
 const { createAutoTitleManager } = require('./main/auto-title-manager.js');
 const {
   parseCodexUsage,
@@ -1803,6 +1805,8 @@ function createWindow() {
         noticeBus: require('./core/company-assistant/notice-bus').noticeBus(),
         // 等级联动（2026-11-12）：桌宠身上的等级与特效来自「个人」页；摸桌宠记一次亲密度。
         getProfile: () => profileController?.brief() || null,
+        // 低开销模式（2026-11-23 P1 L3）：开着时桌宠静默省电，提醒气泡照常。
+        lowOverhead: () => lowOverheadController?.isEnabled() === true,
         onPetted: () => { try { profileController?.notePet(); } catch { /* 个人页没启动 */ } },
         isAssistantBusy: () => {
           for (const s of sessionManager.sessions.values()) {
@@ -1913,6 +1917,8 @@ function createWindow() {
   mainWindow.webContents.once('did-finish-load', showMainWindow);
   mainWindow.webContents.on('did-finish-load', () => {
     traceStartup('did-finish-load');
+    // 低开销模式：页面每次加载完主动推一次真值，界面上的开关、「省」徽章、终端与轮询不会停在默认的「关」（Codex R2）。
+    try { sendToRenderer('low-overhead:changed', lowOverheadState()); } catch { /* 窗口刚关 */ }
     if (bootState.storageWriteError && ['EPERM', 'EBUSY', 'EACCES'].includes(bootState.storageWriteError.code)
         && !global.__bootStorageRetryStarted) {
       global.__bootStorageRetryStarted = true;
@@ -2157,8 +2163,8 @@ function registerSessionForTap(session) {
   sessionUsageService.bind(session);
   if (['codex-app-server','acp','claude-stream-json'].includes(session?.runtimeBackend)) return;
   if (!session || !session.id) return;
-  try {
-    transcriptTap.registerSession(session.id, session.transcriptKind || session.kind, {
+  // 返回值：登记没成时为 { ok: false, step: 'tap', message }，新建流程据此给一行提示（main/session-tap-register.js）。
+  const tap = require('./main/session-tap-register').registerTranscriptTap(transcriptTap, session, () => ({
       cwd: session.cwd,
       transcriptPath: session.transcriptPath || undefined,
       sessionsRoot: session.codexSessionsRoot || undefined,
@@ -2171,22 +2177,18 @@ function registerSessionForTap(session) {
       registeredAt: session.createdAt || Date.now(),
       allowMtimeFallback: !!session.codexAllowMtimeFallback,
       requirePromptMatch: !!session.meetingId,
-    });
-    if (session.meetingId && session.codexSwitchStatus?.status !== 'switching'
-        && groupChatDispatcher && typeof groupChatDispatcher.recoverSession === 'function') {
-      const timer = setTimeout(() => {
-        groupChatDispatcher.recoverSession(session.id).catch((error) => {
-          console.warn('[groupchat] resumed-session recovery failed:', error && error.message);
-        });
-      }, 1200);
-      timer.unref?.();
-    }
+    }));
+  if (!tap.ok) return tap;
+  if (session.meetingId && session.codexSwitchStatus?.status !== 'switching'
+      && groupChatDispatcher && typeof groupChatDispatcher.recoverSession === 'function') {
+    const timer = setTimeout(() => {
+      groupChatDispatcher.recoverSession(session.id).catch((error) => {
+        console.warn('[groupchat] resumed-session recovery failed:', error && error.message);
+      });
+    }, 1200);
+    timer.unref?.();
   }
-  catch (e) {
-    // silent-failure-hunter L2（2026-05-04 maintainer）：注册失败 → watcher 收不到 turn-complete L1
-    //   信号 → 群聊等到 180s 软提醒才感知该家"卡住"。日志方便定位根因。
-    console.warn('[tap] registerSession failed for', session.id.slice(0, 8), session.kind, ':', e && e.message);
-  }
+  return tap;
 }
 
 const { isPtyCodexSession, createCodexPtyHookHandler } = require('./main/codex-pty-hook.js');
@@ -2969,7 +2971,11 @@ const teamAccess = { assert() { throw new Error('该功能未启用'); } };
 const optionalFeatures = require('./core/optional-features').createOptionalFeatures({
   dataDir: getHubDataDir(),
   defaults: process.env.CLAUDE_HUB_DATA_DIR ? { assistant: process.env.CLAUDE_HUB_COMPANY_ASSISTANT === '1', forum: process.env.CLAUDE_HUB_COMPANY_FORUM === '1', attendance: process.env.CLAUDE_HUB_COMPANY_ATTENDANCE === '1', w3: process.env.CLAUDE_HUB_COMPANY_W3 === '1' } : {},
+  // 低开销模式（2026-11-23）：正式实例判定新装 / 升级；隔离测试实例按老行为，测新装路径时设 CLAUDE_HUB_E2E_FRESH_INSTALL=1。
+  detectFreshInstall: !isIsolatedHub() || process.env.CLAUDE_HUB_E2E_FRESH_INSTALL === '1',
 });
+require('./core/optional-features').registerActive(optionalFeatures);
+console.log(`[low-overhead] 判定=${optionalFeatures.installKind()} 低开销模式=${optionalFeatures.lowOverhead() ? '开' : '关'}`);
 // 关窗口最小化到托盘（2026-11-12）：开关也放「可选功能」，默认关。
 var trayController = null;
 // 界面语言（2026-11-20）：默认中文，设置里选 English 才切英文；对话框/菜单/托盘/通知统一按词典翻译（main/i18n-main.js）。
@@ -3019,9 +3025,26 @@ function optionalFeatureList() {
   if (companyW3Service) out.push({ id: 'w3', ...CATALOG.w3, on: optionalFeatures.get('w3'), navHidden: optionalFeatures.navHidden('w3') });
   if (companyAssistantService?.rooms) out.push({ id: 'rooms', ...CATALOG.rooms, on: optionalFeatures.get('rooms'), navHidden: optionalFeatures.navHidden('rooms') });
   if (hubPetController && require('./core/distribution').featureEnabled('hubPet')) out.push({ id: 'pet', ...CATALOG.pet, on: !!hubPetController.getSettings().enabled });
+  // 低开销模式新纳入开关的三项（2026-11-23）：底栏读数、搜索索引所有版本都有；额度刷新只在有 CodeAgent 的版本出现。
+  out.push({ id: 'liveMeter', ...CATALOG.liveMeter, on: optionalFeatures.get('liveMeter') });
+  out.push({ id: 'searchIndex', ...CATALOG.searchIndex, on: optionalFeatures.get('searchIndex') });
+  if (require('./core/distribution').kindAllowed('codeagent')) out.push({ id: 'quotaRefresh', ...CATALOG.quotaRefresh, on: optionalFeatures.get('quotaRefresh') });
   if (trayController) out.push({ id: 'tray', ...CATALOG.tray, on: optionalFeatures.get('tray') });
   out.push({ id: 'multiOpen', ...CATALOG.multiOpen, on: optionalFeatures.get('multiOpen') });
+  const { BACKGROUND_IDS } = require('./core/optional-features');
+  for (const item of out) item.background = BACKGROUND_IDS.includes(item.id);
   return out;
+}
+// enabled 与 on 同值（P1 的界面读 enabled）；keepAlive＝开着时保活几个会话（1–3，默认 2）。
+function lowOverheadState() {
+  const on = optionalFeatures.lowOverhead();
+  return { on, enabled: on, keepAlive: optionalFeatures.lowOverheadKeepAlive(), hintPending: optionalFeatures.lowOverheadHintPending(), installKind: optionalFeatures.installKind() };
+}
+function broadcastOptionalFeatures() {
+  const list = optionalFeatureList();
+  sendToRenderer('optional-features:changed', list);
+  sendToRenderer('low-overhead:changed', lowOverheadState());
+  return list;
 }
 ipcMain.handle('optional-features:list', () => optionalFeatureList());
 // CodeAgent 自己的完成提醒（反馈 1ce04c14；11-20 改三档）：默认 auto＝Hub 回执或桌宠在提醒时关掉 CodeAgent 自己的，可改回。
@@ -3034,10 +3057,15 @@ ipcMain.handle('codeagent-cli-notify:set', (_event, request = {}) => {
   try { require('./core/codeagent-cli-notify').setMode(String(request.mode || '')); return codeagentCliNotifyReply(); }
   catch (error) { return { ok: false, error: error.message }; }
 });
-ipcMain.handle('optional-features:set', async (_event, request = {}) => {
-  try {
-    const id = String(request.id || ''), on = request.on === true;
-    if (id === 'pet') {
+// 开或关一项可选功能 / 后台功能，并让它当场生效。单项开关和低开销模式总开关共用；做不到时抛出原因（界面原样显示）。
+async function applyOptionalFeature(id, on) {
+    if (id === 'liveMeter' || id === 'quotaRefresh') {
+      // 底栏读数下一次心跳（5 秒内）按新开关取数；额度刷新下一轮按新开关决定跑不跑。
+      optionalFeatures.set(id, on);
+    } else if (id === 'searchIndex') {
+      optionalFeatures.set('searchIndex', on);
+      if (on) startSessionSearchBackground(); else sessionSearchService.stopMaintenance();
+    } else if (id === 'pet') {
       if (!hubPetController) throw new Error('这个版本没有桌宠');
       hubPetController.setSettings({ enabled: on });
     } else if (id === 'assistant' && companyAssistantService) {
@@ -3070,9 +3098,89 @@ ipcMain.handle('optional-features:set', async (_event, request = {}) => {
     } else if (id === 'multiOpen') {
       optionalFeatures.set('multiOpen', on);
     } else throw new Error('这个版本没有这项功能');
-    const list = optionalFeatureList();
-    sendToRenderer('optional-features:changed', list);
-    return { ok: true, list };
+}
+ipcMain.handle('optional-features:set', async (_event, request = {}) => {
+  try {
+    await applyOptionalFeature(String(request.id || ''), request.on === true);
+    return { ok: true, list: broadcastOptionalFeatures(), lowOverhead: lowOverheadState() };
+  } catch (error) { return { ok: false, error: error.message }; }
+});
+// 低开销模式总开关（2026-11-23）：开＝逐项关掉所有开着的后台功能（关不掉的如实列出原因）；
+// 关＝恢复底栏读数、搜索索引、额度刷新这三项老行为，助理等可选功能保持原样。
+ipcMain.handle('low-overhead:state', () => ({ ok: true, ...lowOverheadState() }));
+// 请求 { on?, enabled?, keepAlive? }（2026-11-23 P1 v2）：只带 keepAlive 时只改保活数、不动模式；
+// 带 on / enabled 时先按原逻辑切模式，再让会话与运行期节能（L1–L6）跟上真值——partial 时模式没变，节能也不变。
+ipcMain.handle('low-overhead:set', async (_event, request = {}) => {
+  const req = request && typeof request === 'object' ? request : {};
+  const wantOn = typeof req.on === 'boolean' ? req.on : typeof req.enabled === 'boolean' ? req.enabled : null;
+  try {
+    if (req.keepAlive != null) optionalFeatures.setLowOverheadKeepAlive(req.keepAlive);
+    if (wantOn === null) {
+      lowOverheadController?.sync();
+      const state = lowOverheadState();
+      sendToRenderer('low-overhead:changed', state);
+      return { ok: true, partial: false, failed: [], message: '', ...state, lowOverhead: state };
+    }
+    // 逐项处理；有一项没处理成（例如会议室组件退不掉、会议正在采集）就不把模式记成已切换（core/optional-features.js）。
+    const r = await require('./core/optional-features').switchLowOverhead({ features: optionalFeatures, list: optionalFeatureList(), apply: applyOptionalFeature, on: wantOn });
+    console.log(`[low-overhead] ${wantOn ? '开启' : '关闭'}：处理 ${r.handled} 项${r.message ? '；' + r.message : ''}`);
+    lowOverheadController?.sync();
+    const list = broadcastOptionalFeatures();
+    const state = lowOverheadState();
+    return { ok: true, partial: r.partial, failed: r.failed, message: r.message, list, ...state, lowOverhead: state };
+  } catch (error) {
+    const state = lowOverheadState();
+    return { ok: false, error: error && error.message ? error.message : String(error), ...state, lowOverhead: state };
+  }
+});
+// 建窗前就按持久化真值初始化（Codex R2）：L4/L6/L3 立即按模式运行，界面任何时刻问 low-overhead:state 都是真值。
+lowOverheadController = require('./main/low-overhead-controller.js').createLowOverheadController({
+  getMode: () => ({ on: optionalFeatures.lowOverhead(), keepAlive: optionalFeatures.lowOverheadKeepAlive() }),
+  sessionManager,
+  stateStore,
+  getSearchService: () => sessionSearchService,
+  getPetController: () => hubPetController,
+  getProtectedSessionIds: () => collectProtectedSessionIds({
+    agentLeagueBridge, groupChatDispatcher, loopEngine: global.__loopEngine, meetingManager, studyBridge,
+  }),
+  // 组队负责人与成员由组队流程自己休眠和唤醒，软上限不碰。
+  isExemptSession: sessionId => !!(global.__teamService?.teamOfMember?.(sessionId) || global.__teamService?.teamOfLead?.(sessionId)),
+  onSoftCapSuspend: ({ requested, keepAlive }) => {
+    const names = requested.filter(r => !HUB_PET_ASSISTANT_PURPOSES.has(r.purpose)).map(r => `「${r.title || '未命名会话'}」`).join('、');
+    if (names) sendToRenderer('session-notice', { level: 'info', message: `低开销模式：只保活最近 ${keepAlive} 个会话，已休眠 ${names}，点会话即可恢复、记录都在。` });
+  },
+  logger: console,
+});
+try { lowOverheadController.start(); }
+catch (error) { console.warn('[low-overhead] start failed:', error && error.message); }
+ipcMain.handle('low-overhead:dismiss-hint', () => { optionalFeatures.dismissLowOverheadHint(); sendToRenderer('low-overhead:changed', lowOverheadState()); return { ok: true }; });
+// 「资源与后台」页的当前占用：只在页面开着时按需采样（两次采样之间才算得出 CPU），不常驻。
+let resourceUsageInspector = null;
+ipcMain.handle('resource-usage:snapshot', async () => {
+  try {
+    if (!resourceUsageInspector) resourceUsageInspector = require('./core/process-inspector').createProcessInspector({ logger: console, ttlMs: 2000 });
+    const snapshot = await resourceUsageInspector.snapshot({ force: true });
+    const attribution = require('./core/resource-attribution');
+    const byPid = new Map();
+    // 各窗口的渲染进程按页面地址归类：桌宠窗口归桌宠，公司网页的隐藏窗口归公司网页取数，其余算 Hub 本体。
+    try {
+      for (const wc of require('electron').webContents.getAllWebContents()) {
+        const pid = wc.getOSProcessId?.();
+        if (!pid) continue;
+        const url = String(wc.getURL?.() || '');
+        if (/hub-pet[\\/]/.test(url)) byPid.set(pid, 'pet');
+        else if (/^https?:/i.test(url) && !/^https?:\/\/(127\.0\.0\.1|localhost)[:/]/i.test(url)) byPid.set(pid, 'companyWeb');
+      }
+    } catch (_) {}
+    const searchPid = sessionSearchService?._child?.pid;
+    if (searchPid) byPid.set(Number(searchPid), 'searchIndex');
+    try { const helper = companyAssistantService?.rooms?.helper?.(); if (helper?.pid) byPid.set(Number(helper.pid), 'rooms'); } catch (_) {}
+    const rows = attribution.treeRows(snapshot, process.pid);
+    // 会议室组件由 Hub 拉起后脱离了进程树（独立常驻）：登记过就单独补进来。
+    for (const [pid, group] of byPid) if (group === 'rooms' && !rows.some(r => r.pid === pid) && snapshot.byPid.get(pid)) rows.push({ ...snapshot.byPid.get(pid), ppid: process.pid });
+    const result = attribution.attribute(rows, { rootPid: process.pid, cpuWindowMs: snapshot.cpuWindowMs, cpuCount: snapshot.cpuCount,
+      known: { byPid, exeName: path.basename(process.execPath).toLowerCase() } });
+    return { ok: true, sampledAt: snapshot.sampledAt, ...result };
   } catch (error) { return { ok: false, error: error.message }; }
 });
 // 外部工具自动发现与多版本选择（2026-11-07，5.5.24）：CodeAgent 在这里注册，welink-cli / PPT Doctor 由公司助理注册。
@@ -3110,6 +3218,8 @@ try {
     companyAssistantService = new CompanyAssistant({
       getMeetingAskAside: () => askAsideService,
       toolDiscovery,
+      // PPT 工作目录跟随 Hub 工作根：只有生产实例注入，测试与隔离实例不读本机真实设置。
+      pptHubRoots: () => require('./core/company-assistant/ppt-work-dir').liveHubRoots(),
       assertTeamAccess: () => teamAccess.assert(),
       dataDir: getHubDataDir(),
       noTimer: process.env.CLAUDE_HUB_ASSISTANT_TIMER === '0',
@@ -3782,20 +3892,32 @@ async function waitForSearchFirstBuildIdle() {
   searchEventLog('search-index-first-build-start', { waitedSec: Math.round(waited.waitedMs / 1000), idleSec: waited.idleSec, ...(waited.stopped ? { by: 'user-search' } : {}) });
   sessionSearchService.releaseBackground();
 }
-const sessionSearchPrewarmTimer = setTimeout(() => {
+// 低开销模式（2026-11-23）：「后台会话搜索索引」关着时不预热、不监听、不跟着会话完成增量更新；
+// 用户搜索时 search() 自带的刷新照样建索引。设置页里打开时调 startSessionSearchBackground() 当场接上。
+let sessionSearchBackgroundStarting = false;
+function startSessionSearchBackground() {
+  if (sessionSearchBackgroundStarting) return;
+  sessionSearchBackgroundStarting = true;
   void (async () => {
     await waitForSearchFirstBuildIdle();
     await waitForSearchIdle();
+    if (!optionalFeatures.get('searchIndex')) return;
     sessionSearchService.startMaintenance(buildSessionSearchSnapshot);
   })().catch(error => {
     console.warn('[session-search] background maintenance failed:', error && error.message);
-  });
+  }).finally(() => { sessionSearchBackgroundStarting = false; });
+}
+const sessionSearchPrewarmTimer = setTimeout(() => {
+  if (optionalFeatures.get('searchIndex')) startSessionSearchBackground();
+  else searchEventLog('search-index-background-off', {});
 }, sessionSearchPrewarmDelayMs);
 sessionSearchPrewarmTimer.unref?.();
 // Persistent source watchers cover external CLI saves too. Semantic events
 // coalesce into the same background queue; the engine owns the shared writer lease.
 for (const event of ['turn-complete', 'prompt-submitted', 'turn-aborted', 'turn-error', 'session-bound']) {
-  transcriptTap.on(event, payload => sessionSearchService.queueRefresh(buildSessionSearchSnapshot, payload?.hubSessionId || event));
+  transcriptTap.on(event, payload => {
+    if (optionalFeatures.get('searchIndex')) sessionSearchService.queueRefresh(buildSessionSearchSnapshot, payload?.hubSessionId || event);
+  });
 }
 transcriptTap.on('prompt-submitted', () => { lastPromptSubmittedAt = Date.now(); });
 
@@ -5812,6 +5934,7 @@ async function runFinalShutdownCleanup() {
   hubPetController = null;
   capture('completion-notifier', () => completionNotifier.dispose());
   capture('session-auto-suspend', () => sessionAutoSuspendScheduler?.stop());
+  capture('low-overhead', () => lowOverheadController?.stop());
   capture('claude-hook-watchdog', () => claudeHookWatchdog?.stop());
   capture('codeagent-settings-watch', () => codeagentSettingsWatch?.stop());
   claudeHookWatchdog = null;
@@ -5871,7 +5994,8 @@ async function runFinalShutdownCleanup() {
     console.warn('[群聊] meeting-store flush failed:', err.message);
   }
   try {
-    sessionStore.flushAll();
+    // 先等在途的异步保存结束再写最终快照（core/session-store.js flushAll）。
+    await sessionStore.flushAll();
     console.log('[hub] session-store flushed on quit');
   } catch (err) {
     errors.push({ label: 'session-store', message: err && err.message ? err.message : String(err) });

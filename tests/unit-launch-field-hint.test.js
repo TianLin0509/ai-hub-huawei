@@ -84,7 +84,7 @@ test('悬停卡位置：prefer=top 先放上方，不盖住标签下的下拉框
 
 test('启动中心接线：运行方式、权限模式、账号、消费通道、pi 的纯说明都走字段说明规则', () => {
   const wc = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'workspace-controller.js'), 'utf8');
-  assert.match(wc, /fieldHint\.setFieldHint\(note, codeagentRunMode === 'serve'/);
+  assert.match(wc, /fieldHint\.setFieldHint\(note, lowOverheadNote \+ \(runMode === 'serve'/); // 低开销模式（P1 L2）在说明前补一句
   assert.match(wc, /fieldHint\.setIconHint\(fieldHint\.fieldLabel\(field\), desc\?\.textContent/);
   assert.match(wc, /fieldHint\.setFieldHint\(accountNote, text, \{ level/);
   assert.match(wc, /fieldHint\.setFieldHint\(routeNote,/);

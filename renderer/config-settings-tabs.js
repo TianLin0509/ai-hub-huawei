@@ -14,9 +14,12 @@ const TABS = [
   { id: 'advanced', label: '高级' },
   // 2026-11-22：工作台服务器监控单独一页（原来和工作目录、组队挤在「高级」，1440×900 下超出一屏 136px）。
   { id: 'server', label: '服务器监控' },
+  // 2026-11-23 低开销模式：后台功能的开关与当前占用单独一页（renderer/background-features.js）。
+  { id: 'resources', label: '资源与后台' },
 ];
 // 先匹配先得：桌宠段落里也有 .config-operations-card，所以 pet 要排在 server 前面。
 const RULES = [
+  ['resources', '#cfg-background-section'],
   ['agents', '#cfg-feature-agents'],
   ['shared', '.hub-feature-search, .cfg-tabs'],
   ['pet', '#cfg-hub-pet, #cfg-notify-mode-section'],

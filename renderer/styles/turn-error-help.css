@@ -3,6 +3,9 @@
 .turn-error-help .teh-title { font-size: 14px; font-weight: 600; color: var(--fg-strong); }
 .turn-error-help .teh-detail { margin-top: 4px; font-size: 13px; line-height: 1.6; color: var(--fg-muted); }
 .turn-error-help .teh-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+/* 只有一句标题的类（请求太大）：标题和按钮同一行，窄了再折行。 */
+.turn-error-help .teh-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.turn-error-help .teh-row .teh-actions { margin-top: 0; }
 .turn-error-help .teh-btn { padding: 4px 12px; border: 1px solid var(--border-subtle); border-radius: 999px; background: transparent; color: var(--fg-strong); font: inherit; font-size: 12px; cursor: pointer; }
 .turn-error-help .teh-btn:first-child { background: var(--brand); border-color: var(--brand); color: #fff; }
 .turn-error-help .teh-btn:hover { border-color: var(--brand); }

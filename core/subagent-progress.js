@@ -184,79 +184,83 @@ function subagentDirOf(transcriptPath) {
   return path.join(dir, base, 'subagents');
 }
 
-function readSlice(fsImpl, file, start, len) {
-  const fd = fsImpl.openSync(file, 'r');
+// 读文件一律异步（2026-11-23）：服务每 2 秒读一次正在看的会话，会话在跑时记录一直在长、缓存每轮都失效，
+// 原来同步读尾部 256 KB 会让主进程跟着磁盘一起等（杀毒扫描刚写过的文件时单次可达数百毫秒）。
+async function readSlice(fsImpl, file, start, len) {
+  const handle = await fsImpl.promises.open(file, 'r');
   try {
     const buf = Buffer.alloc(len);
-    const n = fsImpl.readSync(fd, buf, 0, len, start);
-    return buf.subarray(0, n).toString('utf8');
-  } finally { fsImpl.closeSync(fd); }
+    const { bytesRead } = await handle.read(buf, 0, len, start);
+    return buf.subarray(0, bytesRead).toString('utf8');
+  } finally { await handle.close(); }
 }
-function readTail(fsImpl, file, size, maxBytes) {
+async function readTail(fsImpl, file, size, maxBytes) {
   const len = Math.min(size, maxBytes);
-  return { text: readSlice(fsImpl, file, size - len, len), fromStart: len === size };
+  return { text: await readSlice(fsImpl, file, size - len, len), fromStart: len === size };
 }
 
 /**
  * 带缓存的读取器：同一份文件修改时间和大小都没变就复用上次的解析结果。
- * read(transcriptPath) → buildSubagentProgress 的结果或 null；任何读不到的文件都当作不存在，不抛错。
+ * await read(transcriptPath) → buildSubagentProgress 的结果或 null；任何读不到的文件都当作不存在，不抛错。
  */
 function createSubagentProgressReader({ fsImpl = fs, now = () => Date.now() } = {}) {
   const cache = new Map();   // 文件路径 → { mtimeMs, size, value }
-  function cached(file, st, compute) {
+  const P = fsImpl.promises;
+  async function cached(file, st, compute) {
     const hit = cache.get(file);
     if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.value;
-    const value = compute();
+    const value = await compute();
     cache.set(file, { mtimeMs: st.mtimeMs, size: st.size, value, head: hit && hit.head });
     return value;
   }
-  function headTs(file, st) {
+  async function headTs(file, st) {
     const hit = cache.get(file);
     if (hit && hit.head !== undefined) return hit.head;
     let ts = null;
-    try { const r = parseJsonl(readSlice(fsImpl, file, 0, Math.min(st.size, HEAD_BYTES))).find(x => tsOf(x) != null); ts = r ? tsOf(r) : null; } catch { ts = null; }
-    if (hit) hit.head = ts; else cache.set(file, { mtimeMs: null, size: null, value: null, head: ts });
+    try { const r = parseJsonl(await readSlice(fsImpl, file, 0, Math.min(st.size, HEAD_BYTES))).find(x => tsOf(x) != null); ts = r ? tsOf(r) : null; } catch { ts = null; }
+    const entry = cache.get(file);
+    if (entry) entry.head = ts; else cache.set(file, { mtimeMs: null, size: null, value: null, head: ts });
     return ts;
   }
   // 同名 .meta.json：toolUseId 用来和主记录配对；新版 Claude Code 结束后还会写 finished:true。按修改时间缓存。
-  function metaOf(file) {
+  async function metaOf(file) {
     const metaFile = file.replace(/\.jsonl$/i, '.meta.json');
-    let st; try { st = fsImpl.statSync(metaFile); } catch { return { toolUseId: null, finished: false }; }
-    return cached(`${metaFile}#meta`, st, () => {
+    let st; try { st = await P.stat(metaFile); } catch { return { toolUseId: null, finished: false }; }
+    return cached(`${metaFile}#meta`, st, async () => {
       try {
-        const meta = JSON.parse(fsImpl.readFileSync(metaFile, 'utf8'));
+        const meta = JSON.parse(await P.readFile(metaFile, 'utf8'));
         return { toolUseId: typeof meta.toolUseId === 'string' ? meta.toolUseId : null, finished: meta.finished === true };
       } catch { return { toolUseId: null, finished: false }; }
     });
   }
-  function read(transcriptPath) {
+  async function read(transcriptPath) {
     if (!transcriptPath) return null;
     let main = null;
     try {
-      const st = fsImpl.statSync(transcriptPath);
-      main = cached(transcriptPath, st, () => {
-        const { text, fromStart } = readTail(fsImpl, transcriptPath, st.size, MAIN_TAIL_BYTES);
+      const st = await P.stat(transcriptPath);
+      main = await cached(transcriptPath, st, async () => {
+        const { text, fromStart } = await readTail(fsImpl, transcriptPath, st.size, MAIN_TAIL_BYTES);
         return summarizeMainRecords(parseJsonl(text, { fromStart }));
       });
     } catch { main = null; }
     const dir = subagentDirOf(transcriptPath);
     let names = [];
-    try { names = fsImpl.readdirSync(dir).filter(n => /\.jsonl$/i.test(n)); } catch { names = []; }
+    try { names = (await P.readdir(dir)).filter(n => /\.jsonl$/i.test(n)); } catch { names = []; }
     const stats = [];
     for (const name of names) {
       const file = path.join(dir, name);
-      try { const st = fsImpl.statSync(file); stats.push({ name, file, st }); } catch { /* 刚被删 */ }
+      try { const st = await P.stat(file); stats.push({ name, file, st }); } catch { /* 刚被删 */ }
     }
     stats.sort((a, b) => b.st.mtimeMs - a.st.mtimeMs);
     const files = [];
     for (const { name, file, st } of stats.slice(0, MAX_SUB_FILES)) {
       try {
-        const sum = cached(file, st, () => {
-          const { text, fromStart } = readTail(fsImpl, file, st.size, SUB_TAIL_BYTES);
+        const sum = await cached(file, st, async () => {
+          const { text, fromStart } = await readTail(fsImpl, file, st.size, SUB_TAIL_BYTES);
           return summarizeSubagentRecords(parseJsonl(text, { fromStart }));
         });
-        const meta = metaOf(file);
-        files.push({ name, toolUseId: meta.toolUseId, firstTs: headTs(file, st), mtimeMs: st.mtimeMs, ...sum, done: sum.done || meta.finished });
+        const meta = await metaOf(file);
+        files.push({ name, toolUseId: meta.toolUseId, firstTs: await headTs(file, st), mtimeMs: st.mtimeMs, ...sum, done: sum.done || meta.finished });
       } catch { /* 读不到的文件当作不存在 */ }
     }
     const live = new Set([transcriptPath, ...stats.map(s => s.file)]);

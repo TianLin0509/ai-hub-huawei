@@ -75,13 +75,19 @@ function preferredOrder({ preferred = '', env = process.env, edition = 'member' 
 const supports = (help, flag) => !!help && help.includes(flag);
 // 关不掉工具（--help 没探测到 --tools）就不用这个引擎答：答疑必须只读，宁可换下一家。
 const readOnlyCapable = help => supports(help, '--tools');
-function codeAgentArgs(model, help) {
+// lean（2026-11-23 黄区实测 Probe 7B E4）：再加 --bare 与空的 --mcp-config，不起插件、不跑 hook，子进程 36 → 3。
+// 只在 --help 里有这两个参数时加（旧版不认就不传）；--bare 只在指定了模型时加（未指定时沿用 CLI 自己的默认，不冒险）。
+function codeAgentArgs(model, help, { lean = false, mcpConfigFile = '' } = {}) {
   const a = ['-p', '--model', model];
+  if (lean && model && supports(help, '--bare')) a.push('--bare');
   if (supports(help, '--output-format')) a.push('--output-format', 'json');
   if (supports(help, '--effort')) a.push('--effort', 'low');
   if (supports(help, '--tools')) a.push('--tools', '');
   if (supports(help, '--permission-mode')) a.push('--permission-mode', 'default');
-  if (supports(help, '--strict-mcp-config')) a.push('--strict-mcp-config');
+  if (supports(help, '--strict-mcp-config')) {
+    a.push('--strict-mcp-config');
+    if (lean && mcpConfigFile && supports(help, '--mcp-config')) a.push('--mcp-config', mcpConfigFile);
+  }
   if (supports(help, '--no-session-persistence')) a.push('--no-session-persistence');
   if (supports(help, '--max-turns')) a.push('--max-turns', '1');
   if (supports(help, '--disable-update')) a.push('--disable-update');
@@ -165,9 +171,9 @@ function createHelpAskEngine({ dataDir, edition = 'public', env = process.env, g
     try { require('../codeagent-launch-env').applyAccountEnv(e, { configDirEnv: config.configDirEnv, configDir: config.configDir }); } catch { /* 按 CLI 默认账号 */ }
     const help = await helpOf('codeagent', command, e, ctx);
     if (!readOnlyCapable(help)) throw new Error('CodeAgent 没探测到只读参数（--tools），为安全起见这次不用它答');
-    const model = defaultModel('codeagent'), args = codeAgentArgs(model, help);
+    const model = defaultModel('codeagent'), args = codeAgentArgs(model, help, { lean: true, mcpConfigFile: require('../codeagent-print-args').emptyMcpConfigFile(cwd) });
     if (!model) args.splice(args.indexOf('--model'), 2); // 未确定模型时沿用 CLI，不强塞旧候选。
-    const r = await runOnce({ command, args, input: prompt, cwd, env: e, timeoutMs: left(ctx), signal: ctx.signal, onActivity: ctx.onActivity });
+    const r = await runOnce({ command, args, input: prompt, cwd, env: e, timeoutMs: left(ctx), signal: ctx.signal, onActivity: ctx.onActivity, lifecycle: 'help-ask' });
     if (stopped(r, ctx)) throw Object.assign(new Error('stopped'), { stopped: true });
     let text = '', lastError = '';
     try { text = r.code === 0 ? cleanAnswer(replyText(r.stdout)) : ''; } catch (error) { lastError = error.message; }

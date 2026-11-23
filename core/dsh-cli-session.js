@@ -153,7 +153,7 @@ class DshCliSession extends EventEmitter {
     if (row.type === 'bound') {
       if (!this.threadId && this.options.resumeId && row.sessionId !== this.options.resumeId) throw new Error('DSH 恢复身份不一致，消息未发送');
       if (path.resolve(row.cwd || '') !== path.resolve(this.options.cwd)) throw new Error('DSH 工作目录不一致');
-      this.threadId = row.sessionId; this.records = []; this.seen = new Set();
+      this.threadId = row.sessionId; this.records = []; this.seen = new Set(); this.seenFloor = 0; this._trimmedRecords = false;
       this.routeChecked = false; this.lastOutcome = null; this.activeTurn = null;
       this.runtime = { ...this.runtime, turnId: null };
       if (this.pending) { clearTimeout(this.pending.timer); this.pending.resolve({ ok: false, sendStatus: 'stuck', unconfirmed: true }); this.pending = null; }
@@ -212,9 +212,21 @@ class DshCliSession extends EventEmitter {
     }
     if (!this.closed) throw new Error('DSH 输入界面尚未就绪，消息未发送');
   }
+  // 去重用的事件序号表只增不减（每个流式事件一条）：超过 SEEN_KEEP 条时，数字序号只留最近一半，
+  // 更老的用「低水位」判定为已见过（序号在同一会话里递增，重放从头开始，低于水位的必然处理过）。
+  trimSeen() {
+    const SEEN_KEEP = 20000;
+    if (this.seen.size <= SEEN_KEEP) return;
+    const nums = [...this.seen].filter(n => typeof n === 'number').sort((a, b) => a - b);
+    if (nums.length < SEEN_KEEP / 2) return;
+    const floor = nums[nums.length - Math.floor(SEEN_KEEP / 2)];
+    for (const n of nums) { if (n >= floor) break; this.seen.delete(n); }
+    this.seenFloor = Math.max(this.seenFloor || 0, floor);
+  }
   event(event, replay = false) {
-    if (this.seen.has(event.seq)) return;
+    if (this.seen.has(event.seq) || (typeof event.seq === 'number' && event.seq < (this.seenFloor || 0))) return;
     this.seen.add(event.seq);
+    this.trimSeen();
     const d = event.data || {}, at = Number(event.time) || Date.parse(event.time) || Date.now();
     if (event.type === 'turn/start') {
       this.activeTurn = String(d.turn);
@@ -230,6 +242,7 @@ class DshCliSession extends EventEmitter {
       this.records.push({ userMessageId: d.id || String(event.seq), turnId: this.activeTurn,
         text, createdAt: at, accepted: true, status: 'running',
         submissionId: pending?.id || steered?.id, ...(steer ? { steer: true } : {}) });
+      if (!replay && !this._noTrim && require('./native-history-cap').trimRecords(this.records)) this._trimmedRecords = true;   // 内存只留最近若干轮，回放与全量历史不裁
       if (!replay) {
         this.lifecycle('prompt-submitted', { text, submittedAt: at, clientSubmissionId: pending?.id || steered?.id });
         if (pending) { clearTimeout(pending.timer); this.pending = null;
@@ -388,7 +401,19 @@ class DshCliSession extends EventEmitter {
     return receipt;
   }
   readTranscript(options = {}) {
-    let records = options.turnId ? this.records.filter(r => r.turnId === options.turnId) : this.records;
+    let source = this.records;
+    if (this._trimmedRecords && this.log && !options.latestTurn && fs.existsSync(this.log)) {
+      const needFull = options.turnId ? !this.records.some(r => r.turnId === options.turnId)
+        : (!Number.isFinite(options.limit) || options.fromTail === false || options.limit > this.records.length);
+      if (needFull) {
+        try {
+          const diskRecords = readDshCliRecords(this.log).records;
+          const liveIds = new Set(this.records.map(r => r.userMessageId));
+          source = [...diskRecords.filter(r => !liveIds.has(r.userMessageId)), ...this.records];
+        } catch { /* 文件不可读时退回内存近期轮次 */ }
+      }
+    }
+    let records = options.turnId ? source.filter(r => r.turnId === options.turnId) : source;
     if (options.latestTurn) records = records.slice(-1);
     const cards = claudeTranscriptTurns(records).map(card => {
       const record = records.find(r => r.userMessageId === (card.userMessageId || card.id));
@@ -399,7 +424,7 @@ class DshCliSession extends EventEmitter {
     });
     return Number.isFinite(options.limit) ? options.fromTail === false ? cards.slice(0, options.limit) : cards.slice(-options.limit) : cards;
   }
-  blocks() { return this.readTranscript().filter(c => c.role === 'assistant').slice(-1).map(c => ({ type: 'text', text: c.text || '' })); }
+  blocks() { return this.readTranscript({ latestTurn: true }).filter(c => c.role === 'assistant').slice(-1).map(c => ({ type: 'text', text: c.text || '' })); }
   finalText() { return this.blocks().map(b => b.text).join('\n'); }
   async readOutcome(turnId) { return this.lastOutcome?.turnId === turnId ? this.lastOutcome : null; }
   async reconcile() { if (this.runtime.connection !== 'connected') throw new Error('请先恢复 DSH CLI'); return this.runtime; }
@@ -484,20 +509,23 @@ class DshCliSession extends EventEmitter {
   dispose() { clearTimeout(this.startTimer); this.tail?.close(); this.prefWatcher?.close(); }
   kill() { if (this.closed) return; this.closed = true; this.fail(new Error('DSH CLI 已关闭')); this.dispose(); this.pty?.kill(); }
 }
-function readDshCliTranscript(file, options = {}) {
+function readDshCliRecords(file) {
   const view = Object.create(DshCliSession.prototype);
   EventEmitter.call(view);
   // 回放会走到用量、后台任务的记账（request/context、job/*）：这几项也要有初值，否则休眠会话的卡片整份读不出来。
-  Object.assign(view, { options: {}, records: [], runtime: {}, seen: new Set(), contentRevision: 0, pendingSteers: [],
+  Object.assign(view, { options: {}, records: [], runtime: {}, seen: new Set(), seenFloor: 0, contentRevision: 0, pendingSteers: [],
     usageTotals: { input: 0, output: 0, cached: 0, total: 0 }, contextWindow: null, contextUsed: null, jobs: new Map() });
   for (const line of fs.readFileSync(file, 'utf8').split('\n')) {
     if (!line.trim()) continue;
     let row; try { row = JSON.parse(line); } catch { continue; }
     if (row.type === 'bound') {
-      view.threadId = row.sessionId; view.records = []; view.seen = new Set();
+      view.threadId = row.sessionId; view.records = []; view.seen = new Set(); view.seenFloor = 0;
       for (const event of row.events || []) view.event(event, true);
     } else if (row.type === 'event' && row.sessionId === view.threadId) view.event(row.event, true);
   }
-  return view.readTranscript(options);
+  return view;
+}
+function readDshCliTranscript(file, options = {}) {
+  return readDshCliRecords(file).readTranscript(options);
 }
 module.exports = { DshCliSession, readDshCliTranscript };

@@ -1,6 +1,6 @@
 {
  "$comment": "设置页搜索与 Ctrl+K 命令面板用的功能/设置索引，由 tools/help-manual/build-help-manual.js 从界面代码生成，不要手改。",
- "version": "5.6.88",
+ "version": "5.6.94",
  "items": [
   {
    "id": "f001",
@@ -890,6 +890,76 @@
   },
   {
    "id": "f057",
+   "kind": "optional",
+   "name": "底栏网速与显卡读数",
+   "where": "设置 → 🧩 可选功能",
+   "desc": "左下角的 ↓↑ 实时网速和 GPU 占用；CPU、内存读数不受影响",
+   "steps": [
+    {
+     "click": "#options-optional-features"
+    },
+    {
+     "highlight": {
+      "selector": ".optional-features-dialog .of-item",
+      "text": "底栏网速与显卡读数"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f058",
+   "kind": "optional",
+   "name": "后台会话搜索索引",
+   "where": "设置 → 🧩 可选功能",
+   "desc": "启动后趁电脑空闲给历史会话建搜索索引，之后跟着新会话自动更新，搜索时立刻出结果",
+   "steps": [
+    {
+     "click": "#options-optional-features"
+    },
+    {
+     "highlight": {
+      "selector": ".optional-features-dialog .of-item",
+      "text": "后台会话搜索索引"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f059",
+   "kind": "optional",
+   "name": "CodeAgent 多账号额度自动刷新",
+   "where": "设置 → 🧩 可选功能",
+   "desc": "有两个以上 CodeAgent 账号时，每 15 分钟把各号的剩余额度读一遍",
+   "steps": [
+    {
+     "click": "#options-optional-features"
+    },
+    {
+     "highlight": {
+      "selector": ".optional-features-dialog .of-item",
+      "text": "CodeAgent 多账号额度自动刷新"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f060",
+   "kind": "config-section",
+   "name": "低开销模式 / 资源与后台",
+   "where": "设置 → ⚙️ 设置 → 资源与后台",
+   "desc": "一键关掉所有后台功能只留会话（新装默认开）；每项后台功能的开关和当前占用的内存、进程数、CPU",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": "#cfg-background-section"
+    }
+   ]
+  },
+  {
+   "id": "f061",
    "kind": "page-setting",
    "name": "公司域名",
    "where": "考勤 → 设置",
@@ -920,7 +990,7 @@
    ]
   },
   {
-   "id": "f058",
+   "id": "f062",
    "kind": "page-setting",
    "name": "核心工作时间",
    "where": "考勤 → 设置",
@@ -951,7 +1021,7 @@
    ]
   },
   {
-   "id": "f059",
+   "id": "f063",
    "kind": "page-setting",
    "name": "考勤页",
    "where": "考勤 → 设置",
@@ -982,7 +1052,7 @@
    ]
   },
   {
-   "id": "f060",
+   "id": "f064",
    "kind": "page-setting",
    "name": "每天自动读取一次",
    "where": "考勤 → 设置",

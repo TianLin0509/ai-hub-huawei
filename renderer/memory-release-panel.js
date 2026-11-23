@@ -16,7 +16,8 @@ const SECTIONS = [
   { tier: 'info', title: '正在使用 · 只显示', hint: '正在工作的会话、Hub 窗口本身和其他程序，不提供一键操作' },
 ];
 
-function attachMemoryReleasePanel({ document: doc, request, execute, escapeHtml, onOpen }) {
+// lowOverhead（可选）：renderer/low-overhead-ui.js 的共享状态。给了就在面板最上方放「低开销模式」横条（2026-11-23 P1）。
+function attachMemoryReleasePanel({ document: doc, request, execute, escapeHtml, onOpen, lowOverhead = null, onLowOverheadError = null }) {
   const strip = doc.getElementById('sidebar-strip');
   if (!strip) return null;
   const esc = escapeHtml;
@@ -34,9 +35,34 @@ function attachMemoryReleasePanel({ document: doc, request, execute, escapeHtml,
   let lastResult = null;
   let epoch = 0;
 
+  const lowRow = () => (lowOverhead ? require('./low-overhead-ui').panelRowHtml(lowOverhead.get()) : '');
   const head = () => '<div class="mr-head"><strong>内存与进程</strong><span class="mr-head-actions">'
     + '<button type="button" class="mr-link" data-mr-rescan="true">重新扫描</button>'
-    + '<button type="button" class="mr-close" data-mr-close="true" aria-label="关闭">×</button></span></div>';
+    + '<button type="button" class="mr-close" data-mr-close="true" aria-label="关闭">×</button></span></div>' + lowRow();
+
+  // 低开销模式在别处（设置「资源与后台」）切了，或这里没切成要回滚：只换横条，不打断扫描和勾选；
+  // 换完把键盘焦点放回原来那个控件（开关 / 保活下拉），键盘用户不会丢位置。
+  function repaintLowRow() {
+    const current = panel.querySelector('[data-mr-lowoverhead]');
+    if (!current) return;
+    const tpl = doc.createElement('template');
+    tpl.innerHTML = lowRow();
+    const next = tpl.content.firstElementChild;
+    if (!next) return;
+    const active = doc.activeElement;
+    const focusKey = active && current.contains(active) ? (active.matches('[data-mr-lo-keep]') ? '[data-mr-lo-keep]' : '[data-mr-lo-toggle]') : '';
+    current.replaceWith(next);
+    if (focusKey) (next.querySelector(focusKey) || next.querySelector('[data-mr-lo-toggle]'))?.focus?.();
+  }
+  // 状态真变了才会触发（store 去重），成功切换时只在这里重画一次。
+  lowOverhead?.onChange?.(() => repaintLowRow());
+  async function setLowOverhead(patch) {
+    const result = await lowOverhead.set(patch).catch(error => ({ ok: false, error: error.message }));
+    if (!result || !result.ok) onLowOverheadError?.(`低开销模式保存失败：${result?.error || '未知错误'}`);
+    else if (result.partial) onLowOverheadError?.(result.message || '有几项后台功能没处理成，低开销模式没有切换');
+    // 失败或部分失败时状态没变、不会收到变化通知：按真值把开关拨回去。
+    if (!result || !result.ok || result.partial) repaintLowRow();
+  }
 
   function position() {
     if (panel.hidden) return;
@@ -189,8 +215,17 @@ function attachMemoryReleasePanel({ document: doc, request, execute, escapeHtml,
     event.preventDefault();
     if (panel.hidden) open(); else close();
   });
+  // 「省」徽章是 role=button：回车、空格同样打开面板（Gemini P2-3）。
+  strip.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    if (!event.target.closest?.('.strip-low-overhead')) return;
+    event.preventDefault();
+    if (panel.hidden) open(); else close();
+  });
 
   panel.addEventListener('change', event => {
+    if (lowOverhead && event.target.closest('[data-mr-lo-toggle]')) { void setLowOverhead({ on: event.target.checked }); return; }
+    if (lowOverhead && event.target.closest('[data-mr-lo-keep]')) { void setLowOverhead({ keepAlive: Number(event.target.value) }); return; }
     const box = event.target.closest('[data-mr-key]');
     if (!box) return;
     selected.set(box.dataset.mrKey, box.checked);

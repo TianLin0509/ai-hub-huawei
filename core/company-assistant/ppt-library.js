@@ -25,27 +25,31 @@ class PptLibrary {
     this.map = new (require('./ppt-map-job').PptMap)(this, deps); // 库地图 Tab（r28g）
     this.references = new Map(); this.traces = new Map(); this.activeChat = '';
     this.taskResults = new Map(); this.taskReports = new Map(); this.taskEvidence = new Map(); this.activeTask = null; this.indexJob = null; this.indexChild = null;
-    try { this.indexState = JSON.parse(fs.readFileSync(path.join(this.a.dir, 'ppt-index-state.json'), 'utf8')); }
+    try { this.indexState = JSON.parse(fs.readFileSync(path.join(this.workDir(), 'ppt-index-state.json'), 'utf8')); }
     catch { this.indexState = { state: 'idle' }; }
     if (this.indexState.state === 'indexing') this.indexState = { ...this.indexState, state: 'interrupted', error: '上次更新被中断，可继续更新' };
   }
   config() { return this.a.settings().ppt || {}; }
+  workDir(writable = false) { return require('./ppt-work-dir').workDir(this.a, { writable }); }
   legacy() { return this.config().legacyPython === true; }
   lookupFrame(args) { return require('./ppt-imgtext').lookupFrame(this, args); }
   db() {
     return this.config().db || this.env.PPTUTOR_DB || (this.env.PPTX_FINDER_DATA_DIR && path.join(this.env.PPTX_FINDER_DATA_DIR, 'index.db'))
       || path.join(this.env.LOCALAPPDATA || path.join(require('node:os').homedir(), 'AppData', 'Local'), 'pptx-finder', 'index.db');
   }
-  ownedDb() { return path.join(this.a.dir, 'ppt-index', 'index.db'); }
+  ownedDb() { return path.join(this.workDir(), 'ppt-index', 'index.db'); }
   sources() {
-    const entries = [{ db: this.ownedDb(), label: 'Hub 素材目录', kind: 'hub' }, { db: this.db(), label: 'PPT Doctor 索引', kind: 'doctor' }];
+    const entries = [{ db: this.ownedDb(), label: 'Hub 素材目录', kind: 'hub' },
+      ...require('./ppt-work-dir').previousWorkDirs(this.a).map(dir => ({ db: path.join(dir, 'ppt-index', 'index.db'), label: '原 Hub 素材目录', kind: 'hub' })),
+      { db: this.db(), label: 'PPT Doctor 索引', kind: 'doctor' }];
     const seen = new Set();
     return entries.filter(s => { const key = normalizedPath(s.db); if (seen.has(key) || !fs.existsSync(s.db)) return false; seen.add(key); return true; }).map(s => ({ ...s, id: sourceId(s.db) }));
   }
   status() {
     const roots = this.config().roots || [];
     const folders = [...new Set([...roots, ...[...(this.documents?.values() || [])].map(d => path.dirname(d.path))])].sort();
-    return { ...this.current, db: this.db(), roots, folders, sources: this.current.sources || this.sources(), indexing: this.indexState };
+    const work = require('./ppt-work-dir').resolveWorkDir(this.a);
+    return { ...this.current, workDir: work, workDirError: this.a.pptWorkDirError || '', db: this.db(), roots, folders, sources: this.current.sources || this.sources(), indexing: this.indexState };
   }
   // chatId：界面问的是哪一条（job.id 是内部任务号）。Agent 每次 ppt_find / ppt_read / report 都记一笔「轨迹」，
   // PPT 页把它画成「AI 正在做什么」（2026-11-08 用户：Agent 检索要让人感知到），全是真实调用，不编造。
@@ -68,9 +72,11 @@ class PptLibrary {
   }
   // 检索结果与素材共用一个带缓存的版式绘制器。调用方负责只传自己认得的文件。
   previewScene(file, page) {
-    if (!this.previewer) {
+    const root = this.workDir(true);
+    if (!this.previewer || this.previewRoot !== root) {
+      this.previewRoot = root;
       const { createSlidePreviewer, electronShrinker } = require('./ppt-slide-preview');
-      this.previewer = createSlidePreviewer({ cacheDir: path.join(this.a.dir, 'ppt-preview-cache'), shrinkImage: this.deps.pptPreviewShrink === undefined ? electronShrinker() : this.deps.pptPreviewShrink });
+      this.previewer = createSlidePreviewer({ cacheDir: path.join(root, 'ppt-preview-cache'), shrinkImage: this.deps.pptPreviewShrink === undefined ? electronShrinker() : this.deps.pptPreviewShrink });
     }
     return this.previewer.scene(file, Number(page));
   }
@@ -78,10 +84,12 @@ class PptLibrary {
   takeTaskResult(id) { const result = this.taskResults.get(id) || []; this.taskResults.delete(id); if (this.activeTask === id) { this.activeTask = null; this.taskEvidence.clear(); } return result; }
   // Python cannot read an Electron asar. Materialize the shipped, allowlisted files by content hash.
   runtime() {
-    if (this.materialized) return this.materialized;
+    const root = this.workDir(true);
+    if (this.materialized && this.runtimeRoot === root) return this.materialized;
+    this.runtimeRoot = root;
     const source = path.join(__dirname, 'pptutor'), hash = crypto.createHash('sha256');
     const files = FILES.map(name => { const bytes = fs.readFileSync(path.join(source, name)); hash.update(name).update(bytes); return { name, bytes }; });
-    const dir = path.join(this.a.dir, 'ppt-runtime', hash.digest('hex').slice(0, 16));
+    const dir = path.join(root, 'ppt-runtime', hash.digest('hex').slice(0, 16));
     for (const { name, bytes } of files) {
       const dest = path.join(dir, name); fs.mkdirSync(path.dirname(dest), { recursive: true });
       if (!fs.existsSync(dest) || !fs.readFileSync(dest).equals(bytes)) fs.writeFileSync(dest, bytes);
@@ -308,14 +316,15 @@ class PptLibrary {
     if (this.indexJob) return this.status();
     const roots = this.config().roots || [];
     if (!Array.isArray(roots) || roots.length < 1 || roots.length > 3 || roots.some(r => typeof r !== 'string' || !path.isAbsolute(r))) throw new Error('请先选择 1–3 个素材文件夹');
+    const workDir = this.workDir(true);
     this.indexState = { state: 'indexing', startedAt: this.a.now(), scanned: 0, indexed: 0, unchanged: 0, failed: 0, skippedPpt: 0 };
     this.a.changed();
-    this.indexJob = this.runPython({ db: this.legacy() ? this.ownedDb() : this.db(), roots }, { index: true, onProgress: p => { this.indexState = { ...this.indexState, ...p, state: 'indexing' }; this.a.changed(); } })
+    this.indexJob = this.runPython({ db: this.legacy() || workDir !== this.a.dir ? path.join(workDir, 'ppt-index', 'index.db') : this.db(), roots }, { index: true, onProgress: p => { this.indexState = { ...this.indexState, ...p, state: 'indexing' }; this.a.changed(); } })
       .then(result => { this.indexState = { ...this.indexState, ...result, state: result.complete ? 'done' : 'partial', completedAt: this.a.now() }; })
       .catch(error => { this.indexState = { ...this.indexState, state: 'error', error: error.message, completedAt: this.a.now() }; })
       .finally(async () => {
         this.indexChild = null; this.indexJob = null;
-        try { fs.mkdirSync(this.a.dir, { recursive: true }); fs.writeFileSync(path.join(this.a.dir, 'ppt-index-state.json'), JSON.stringify(this.indexState)); }
+        try { fs.writeFileSync(path.join(workDir, 'ppt-index-state.json'), JSON.stringify(this.indexState)); }
         catch (error) { this.indexState.error = '索引进度没有保存：' + error.message; }
         await this.refresh({ force: true }); this.a.changed();
       });

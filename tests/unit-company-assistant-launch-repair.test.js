@@ -35,7 +35,8 @@ test('1 守护独立于助理启动，暂停助理保留已启用的守护，定
   let intervals = 0;
   t.mock.method(global, 'setInterval', () => ++intervals);
   t.mock.method(global, 'clearInterval', () => {});
-  const booking = new RoomBooking({}, {});
+  // 2026-11-23：15 秒巡检只在有事可做时建（见 rooms.js needsTimer）；这里用「自动抢订开着」的桩验证不重复建。
+  const booking = new RoomBooking({ settings: () => ({ rooms: { enabled: true } }), state: () => ({}) }, {});
   booking.start(); booking.start(); assert.equal(intervals, 1);
   booking.close(); assert.equal(booking.offlineRetry.closed, true);
   booking.start(); booking.start(); assert.equal(intervals, 2);

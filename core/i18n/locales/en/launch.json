@@ -582,5 +582,21 @@
   "正在打开登录页…": "Opening the sign-in page…",
   "守护运行中，先停止守护再登录": "Guard is running; stop it before signing in",
   "正在处理上一步，稍等": "Finishing the previous step, please wait",
-  "正在读取配置…": "Loading settings…"
+  "正在读取配置…": "Loading settings…",
+  "底栏网速与显卡读数": "Status bar network speed and GPU readings",
+  "左下角的 ↓↑ 实时网速和 GPU 占用；CPU、内存读数不受影响": "Live ↓↑ network speed and GPU usage in the bottom-left corner; CPU and memory readings are not affected",
+  "开着时常驻一个 PowerShell 读网卡（约 150 MB 内存），每 10 秒运行一次 nvidia-smi 读显卡": "While on, a resident PowerShell reads the network adapters (about 150 MB of memory) and nvidia-smi runs every 10 seconds to read the GPU",
+  "后台会话搜索索引": "Background session search index",
+  "启动后趁电脑空闲给历史会话建搜索索引，之后跟着新会话自动更新，搜索时立刻出结果": "After startup, builds a search index of past sessions while the computer is idle and keeps it updated with new sessions, so searches return results instantly",
+  "第一次要扫描全部会话记录（记录多时要几分钟，磁盘和 CPU 都会忙），之后常驻一个搜索进程并监听会话目录。关着时搜索照样能用，第一次搜时当场建索引": "The first run scans all session records (several minutes with many records, keeping the disk and CPU busy); afterwards a search process stays resident and watches the session folders. When off, search still works and builds the index on your first search",
+  "CodeAgent 多账号额度自动刷新": "CodeAgent multi-account quota auto-refresh",
+  "有两个以上 CodeAgent 账号时，每 15 分钟把各号的剩余额度读一遍": "With two or more CodeAgent accounts, reads the remaining quota of each account every 15 minutes",
+  "每读一个号临时起一个 CodeAgent 后台进程（约 0.5 GB 内存），读完即关。关着时额度面板里手动刷新照样能用": "Each account read starts a temporary CodeAgent background process (about 0.5 GB of memory) that closes when done. When off, manual refresh in the quota panel still works",
+  "资源与后台": "Resources & background",
+  "低开销模式总开关，以及各项后台功能当前占了多少内存和 CPU": "The low-overhead mode switch, and how much memory and CPU each background feature is using right now",
+  "资源与后台…": "Resources & background…",
+  "{0}没关上（{1}）": "{0} could not be turned off ({1})",
+  "{0}没开上（{1}）": "{0} could not be turned on ({1})",
+  "{0}，低开销模式保持开": "{0}; low-overhead mode stays on",
+  "{0}，低开销模式保持关": "{0}; low-overhead mode stays off"
 }

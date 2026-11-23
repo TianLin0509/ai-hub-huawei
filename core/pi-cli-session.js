@@ -24,6 +24,7 @@ function capturePiMessage(view, message, uuid) {
   const iso = new Date(at).toISOString();
   if (message.role === 'user') {
     view.records.push({ userMessageId: uuid, turnId: uuid, text: userText(message.content), createdAt: at, accepted: true, status: 'running' });
+    if (!view._noTrim && require('./native-history-cap').trimRecords(view.records)) view._trimmedRecords = true;   // 内存只留最近若干轮，离线全量回放不裁
     return;
   }
   const record = view.records.at(-1);
@@ -127,7 +128,7 @@ class PiCliSession extends EventEmitter {
   bind(row) {
     if (this.options.resumeId && !this.threadId && row.sessionId !== this.options.resumeId) throw new Error('pi 恢复身份不一致，消息未发送');
     this.threadId = row.sessionId; this.sessionFile = row.sessionFile || null;
-    this.records = []; this.seq = 0;
+    this.records = []; this.seq = 0; this._trimmedRecords = false;
     if (modelName(row.model)) this.currentModel = modelName(row.model);
     if (row.thinking) this.currentEffort = row.thinking;
     // 恢复的会话：把 pi 会话文件里已有的消息补进卡片。
@@ -240,7 +241,20 @@ class PiCliSession extends EventEmitter {
     return receipt;
   }
   readTranscript(options = {}) {
-    let records = options.turnId ? this.records.filter(r => r.turnId === options.turnId) : this.records;
+    let source = this.records;
+    if (this._trimmedRecords && this.sessionFile && !options.latestTurn && fs.existsSync(this.sessionFile)) {
+      const needFull = options.turnId ? !this.records.some(r => r.turnId === options.turnId)
+        : (!Number.isFinite(options.limit) || options.fromTail === false || options.limit > this.records.length);
+      if (needFull) {
+        try {
+          const diskRecords = readPiCliRecords(this.sessionFile).records;
+          const liveIds = new Set(this.records.map(r => r.userMessageId));
+          const minLiveAt = this.records.length ? Math.min(...this.records.map(r => r.createdAt || Infinity)) : Infinity;
+          source = [...diskRecords.filter(r => !liveIds.has(r.userMessageId) && (r.createdAt || 0) < minLiveAt), ...this.records];
+        } catch { /* 文件不可读时退回内存近期轮次 */ }
+      }
+    }
+    let records = options.turnId ? source.filter(r => r.turnId === options.turnId) : source;
     if (options.latestTurn) records = records.slice(-1);
     // 流式中的半截回复：pi 每 250ms 报一次全文，放成一条临时的 assistant 消息。
     for (const record of records) {
@@ -258,7 +272,7 @@ class PiCliSession extends EventEmitter {
     });
     return Number.isFinite(options.limit) ? options.fromTail === false ? cards.slice(0, options.limit) : cards.slice(-options.limit) : cards;
   }
-  blocks() { return this.readTranscript().filter(c => c.role === 'assistant').slice(-1).map(c => ({ type: 'text', text: c.text || '' })); }
+  blocks() { return this.readTranscript({ latestTurn: true }).filter(c => c.role === 'assistant').slice(-1).map(c => ({ type: 'text', text: c.text || '' })); }
   finalText() { return this.blocks().map(b => b.text).join('\n'); }
   async readOutcome(turnId) { return this.lastOutcome?.turnId === turnId ? this.lastOutcome : null; }
   async reconcile() { if (this.runtime.connection !== 'connected') throw new Error('请先恢复 pi 会话'); return this.runtime; }
@@ -297,12 +311,15 @@ class PiCliSession extends EventEmitter {
 }
 
 // 休眠会话读历史：直接读 pi 的会话文件。
-function readPiCliTranscript(file, options = {}) {
+function readPiCliRecords(file) {
   const view = Object.create(PiCliSession.prototype);
   EventEmitter.call(view);
-  Object.assign(view, { options: {}, records: [], runtime: {}, pendingSteers: [], currentModel: '', usageTotals: { input: 0, output: 0, cached: 0, total: 0 } });
+  Object.assign(view, { options: {}, records: [], runtime: {}, pendingSteers: [], currentModel: '', _noTrim: true, usageTotals: { input: 0, output: 0, cached: 0, total: 0 } });
   for (const item of readPiSessionMessages(file).messages) capturePiMessage(view, item.message, item.uuid);
   for (const record of view.records) if (record.status === 'running') record.status = 'completed';
-  return view.readTranscript(options);
+  return view;
+}
+function readPiCliTranscript(file, options = {}) {
+  return readPiCliRecords(file).readTranscript(options);
 }
 module.exports = { PiCliSession, readPiCliTranscript, readPiSessionMessages, capturePiMessage };

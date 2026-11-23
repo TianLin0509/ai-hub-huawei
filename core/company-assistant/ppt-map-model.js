@@ -10,8 +10,17 @@ const DEFAULT_MODELS = ['deepseek-v4.1-flash-1017', 'GLM-5.2-WX-Auto'];
 const BATCH_TIMEOUT_MS = 4 * 60000;
 
 // 起一次 codeagent：cmd 的 call 让 .cmd/.bat 包装设好证书与代理（同 codeagent-serve）。返回 { code, stdout, stderr, timedOut, aborted }。
-function runOnce({ command, args, input = '', cwd, env, timeoutMs, signal, onActivity = () => {}, spawnImpl = spawn }) {
-  let stdout = '', stderr = '';
+// lifecycle：给了用途名（如 'help-ask'）就把这个子进程登记到生命周期管家的 codeagent-print 类（core/child-lifecycle.js）：
+// 超时没收掉的按 PID 结束整棵树，Hub 崩了下次启动按 PID + 启动时间清遗留。只登记、不排名额（答疑等是用户在等的事）。
+function runOnce({ command, args, input = '', cwd, env, timeoutMs, signal, onActivity = () => {}, spawnImpl = spawn, lifecycle = '', childLifecycle = null }) {
+  let stdout = '', stderr = '', regId = '', registry = null, childPid = 0;
+  // 进程还活着（超时收尾没收掉）就留着登记，交给生命周期管家的看门狗到点强收；已退出才注销。
+  const unregister = () => {
+    if (!regId || !registry) return;
+    if (childPid && require('../child-lifecycle').pidAlive(childPid)) return;
+    try { registry.unregister(regId); } catch { /* 登记表写不了不影响结果 */ }
+    regId = '';
+  };
   return withDeadline(({ signal: requestSignal }) => new Promise(resolve => {
     const head = /^[A-Za-z0-9_.-]+$/.test(command) ? command : `"${path.normalize(String(command).replace(/"/g, ''))}"`;
     const line = [head, ...args.map(a => /^[A-Za-z0-9_.=:,-]+$/.test(a) ? a : `"${String(a).replace(/"/g, '')}"`)].join(' ');
@@ -21,6 +30,13 @@ function runOnce({ command, args, input = '', cwd, env, timeoutMs, signal, onAct
         ? spawnImpl('cmd.exe', ['/d', '/s', '/c', `"call ${line}"`], { cwd, env, windowsHide: true, windowsVerbatimArguments: true })
         : spawnImpl('/bin/sh', ['-c', line], { cwd, env, windowsHide: true });
     } catch (error) { resolve({ code: -1, stdout: '', stderr: error.message }); return; }
+    if (lifecycle && child && child.pid) {
+      try {
+        registry = childLifecycle || require('../child-lifecycle').getChildLifecycle();
+        childPid = child.pid;
+        regId = registry.register({ pid: child.pid, kind: 'codeagent-print', purpose: String(lifecycle), maxLifeMs: (Number(timeoutMs) || 60000) + 15000 });
+      } catch { registry = null; regId = ''; }
+    }
     const completion = waitForProcess(child, { signal: requestSignal, onActivity });
     child.stdout?.on('data', d => { stdout += d; });
     child.stderr?.on('data', d => { stderr += d; });
@@ -28,7 +44,8 @@ function runOnce({ command, args, input = '', cwd, env, timeoutMs, signal, onAct
       error => resolve({ code: null, stdout, stderr: stderr + error.message, timedOut: !!error.timedOut, aborted: !!signal?.aborted }));
     child.stdin?.on?.('error', () => { /* EPIPE 以退出结果为准 */ });
     try { child.stdin?.end(input); } catch { /* 进程已退出 */ }
-  }), { signal, timeoutMs }).catch(error => ({ code: null, stdout, stderr: stderr + error.message, timedOut: !!error.timedOut, aborted: !!signal?.aborted }));
+  }), { signal, timeoutMs }).catch(error => ({ code: null, stdout, stderr: stderr + error.message, timedOut: !!error.timedOut, aborted: !!signal?.aborted }))
+    .finally(unregister);
 }
 
 // 回复取正文：--output-format json 时是一个 result 事件；不认这个参数的旧版直接是正文。
@@ -46,11 +63,11 @@ function replyText(stdout) {
 
 const short = (s, n = 160) => { const t = String(s || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n) + '…' : t; };
 
-function createCodeAgentChannel({ dataDir, choiceDataDir = dataDir, models = [], env = process.env, timeoutMs = BATCH_TIMEOUT_MS, spawnImpl = spawn, findCommand = null, resolveConfig = null } = {}) {
+function createCodeAgentChannel({ dataDir, choiceDataDir = dataDir, cwdRoot = dataDir, models = [], env = process.env, timeoutMs = BATCH_TIMEOUT_MS, spawnImpl = spawn, findCommand = null, resolveConfig = null } = {}) {
   const wanted = [...new Set([...models.filter(Boolean), ...DEFAULT_MODELS])];
   let selectedFailure = null;
   let help = null, picked = '', tried = new Set(), lastReason = '';
-  const cwd = path.join(dataDir, 'ppt-map', 'agent-cwd');
+  const cwd = path.join(cwdRoot, 'ppt-map', 'agent-cwd');
   function launch() {
     const found = (findCommand || (c => require('../community-setup').findCommand(c, env)))('codeagent');
     if (!found) return { ok: false, reason: '这台电脑没找到 CodeAgent 命令行，先只用规则分类' };
@@ -69,6 +86,8 @@ function createCodeAgentChannel({ dataDir, choiceDataDir = dataDir, models = [],
     if (supports('--effort')) a.push('--effort', 'low');
     if (supports('--max-turns')) a.push('--max-turns', '1');
     if (supports('--disable-update')) a.push('--disable-update');
+    // 分类是纯文字问答：--help 探测到时加精简参数（--bare、空 MCP 配置、关工具），不起插件、不跑 hook（core/codeagent-print-args.js）。
+    if (help) a.push(...require('../codeagent-print-args').leanPrintArgs({ help, mcpConfigFile: require('../codeagent-print-args').emptyMcpConfigFile(cwd) }));
     return a;
   }
   async function probe({ signal } = {}) {
@@ -112,7 +131,7 @@ function createCodeAgentChannel({ dataDir, choiceDataDir = dataDir, models = [],
     for (const model of order) {
       if (signal?.aborted) throw Object.assign(new Error('已取消'), { aborted: true });
       onAttempt?.();  // 每真起一次模型进程记一次（候选重试也算），额度提示不少报
-      const r = await runOnce({ command: l.command, args: args(model), input: prompt, cwd, env: l.env, timeoutMs, signal, spawnImpl });
+      const r = await runOnce({ command: l.command, args: args(model), input: prompt, cwd, env: l.env, timeoutMs, signal, spawnImpl, lifecycle: 'ppt-map' });
       if (r.aborted) throw Object.assign(new Error('已取消'), { aborted: true });
       let text = '';
       lastError = '';

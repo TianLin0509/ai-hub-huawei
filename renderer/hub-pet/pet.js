@@ -1,6 +1,7 @@
 'use strict';
 // 助理桌宠的渲染端：所有动作都是「连续变换 + 逐帧硬切的帧序列」，由一个按需降频的 rAF 循环驱动。
 // - 有动作（拖动、跳、回弹、换姿态、播放序列）时每帧刷新；只剩呼吸时降到 20 帧/秒，打盹 12 帧/秒；
+//   软件渲染的电脑空闲降到 6 帧/秒、打盹静止；安静档或系统「减少动态效果」时不呼吸、空闲不排帧（见 pet-motion.js calmDelay）；
 // - 窗口不可见（最小化、被系统判定遮挡）时整个循环停下；
 // - 只写 transform / opacity / background-position，不触发排版。
 // 姿态和说话由主进程决定（main/hub-pet-controller.js），这里只负责「怎么演」。
@@ -264,7 +265,8 @@
     renderProps();
 
     arousal = M.approach(arousal, AROUSAL[pose] ?? 0.25, dt, 500);
-    const br = M.breathStep(phase, dt / 1000, arousal);
+    // 安静档、减少动态效果、软件渲染下打盹：身体停在静止帧，不呼吸（呼吸是空闲时唯一持续要重绘的东西）。
+    const br = breathStill() ? { phase, sx: 1, sy: 1 } : M.breathStep(phase, dt / 1000, arousal);
     phase = br.phase;
     let sx = br.sx, sy = br.sy, rot = 0, y = 0, x = 0;
 
@@ -369,9 +371,16 @@
   function schedule(busy) {
     if (raf || timer || document.visibilityState === 'hidden') return;
     if (busy) { raf = requestAnimationFrame(frame); return; }
-    const fps = CALM_FPS[pose] || 20;
-    timer = setTimeout(() => { timer = 0; if (document.visibilityState !== 'hidden') raf = requestAnimationFrame(frame); }, 1000 / fps);
+    const delay = M.calmDelay({ pose, calmFps: CALM_FPS, soft: softGpu(), still: stillMode(), t: now(), nextGestureAt, nextYawnAt });
+    if (delay == null) return;   // 静止：等状态、动作或可见性变化时 wake() 再起
+    timer = setTimeout(() => { timer = 0; if (document.visibilityState !== 'hidden') raf = requestAnimationFrame(frame); }, delay);
   }
+  // 软件渲染（主进程按兼容渲染开关告知）与「静止档」（安静档或系统减少动态效果）。
+  function softGpu() { return state.softGpu === true; }
+  // 低开销模式（主进程 state.lowPower）与安静档同样静止：空闲不呼吸、不排帧；气泡、圆点、会话灯照常。
+  function lowPower() { return state.lowPower === true; }
+  function stillMode() { return state.mode === 'quiet' || reducedMotion.matches || lowPower(); }
+  function breathStill() { return stillMode() || (softGpu() && pose === 'sleep'); }
 
   function wake() {
     if (timer) { clearTimeout(timer); timer = 0; }
@@ -1117,7 +1126,7 @@
     // 换形象，或同一形象更新到新版本，都按换形象处理：重新量轮廓、预载新图、重新摆姿态。
     const roleChanged = next.role !== state.role || (next.roleVersion || null) !== (state.roleVersion || null);
     const prevDock = state.dock;
-    state = { ...state, ...next };
+    state = M.mergeMainState(state, next);   // lowPower 按本条消息归一化：省略＝关，关掉低开销当场恢复
     if (prevDock !== state.dock || roleChanged) {
       document.body.classList.toggle('dock-right', state.dock === 'right');
       document.body.classList.toggle('dock-left', state.dock === 'left');
@@ -1137,6 +1146,7 @@
     showLamps(state.peeking || state.mode === 'quiet' ? [] : state.lamps);   // 全屏、安静档不亮会话灯（r27d）
     showBusy(Number(state.running) || 0);
     document.body.classList.toggle('meeting', state.meeting === true && !state.peeking);
+    document.body.classList.toggle('soft-gpu', M.decorStill({ softGpu: softGpu(), lowPower: lowPower() }));   // pet.css：软件渲染或低开销时停掉无限循环的装饰动画
     updateProp();
     showGrowth(state.growth);
     layoutOverlays();
@@ -1170,6 +1180,7 @@
   // 系统「减少动态效果」告诉主进程：开着时不在任务栏上走动。
   const sendPrefs = () => api.prefs?.({ reducedMotion: reducedMotion.matches });
   reducedMotion.addEventListener?.('change', sendPrefs);
+  reducedMotion.addEventListener?.('change', () => wake());   // 关掉「减少动态效果」后恢复呼吸
   sendPrefs();
 
   window.__hubPetDebug = () => ({ card: cardId ? { id: cardId, title: card.title.textContent, kind: card.kind.textContent, cta: card.cta.textContent, count: card.count.textContent, bad: card.el.classList.contains('bad') } : null,
@@ -1180,6 +1191,6 @@
     // r27f：快捷钮、鼠标靠近、钟摆、抱抱、走动、坐下、下一次小动作还有多久、最近一种新动作
     quick: quickEl.hidden || quickEl.style.visibility === 'hidden' ? null : (() => { const r = quickEl.getBoundingClientRect(); return { col: quickEl.classList.contains('col'), left: r.left, top: r.top, right: r.right, bottom: r.bottom, n: quickN.hidden ? 0 : quickN.textContent, buttons: [...quickEl.querySelectorAll('[data-q]')].map(b => { const x = b.getBoundingClientRect(); return { q: b.dataset.q, left: x.left, top: x.top, right: x.right, bottom: x.bottom }; }) }; })(),
     near: nearSide, nearTurn, swing: { ...swing }, swingPeak, hug: hugging, hugK, walking: !!walking, sitting, sitK, lively: lively(), gestureIn: Math.round(nextGestureAt - now()), lastMove, flying: !!flying, hops: hops.length,
-    dotText: dotEl.hidden ? '' : dotEl.textContent, meeting: document.body.classList.contains('meeting'), ask: !askEl.hidden, askNote: askNote.textContent, panel: panelEl.hidden ? null : panelList.textContent, box, edge: state.edge, size: getComputedStyle(document.documentElement).getPropertyValue('--body').trim(), pose, layers: visual ? [visual.key] : [], opacities: visual ? [1] : [], domLayers: layersEl.children.length, frame: visual ? visual.shown : -1, swapping: !!pendingSwap, fps: raf ? 'raf' : timer ? 'timer' : 'stopped', bubble: bubbleId, bubbleText: bubbleId ? bubbleText.textContent : '', bubbleTag: bubbleKind.hidden ? '' : bubbleKind.textContent, chips: bubbleId ? Array.from(chipsEl.querySelectorAll('.chip')).map(el => el.textContent) : [], dots: lastDots, transform: bodyEl.style.transform });
+    dotText: dotEl.hidden ? '' : dotEl.textContent, meeting: document.body.classList.contains('meeting'), ask: !askEl.hidden, askNote: askNote.textContent, panel: panelEl.hidden ? null : panelList.textContent, box, edge: state.edge, size: getComputedStyle(document.documentElement).getPropertyValue('--body').trim(), pose, layers: visual ? [visual.key] : [], opacities: visual ? [1] : [], domLayers: layersEl.children.length, frame: visual ? visual.shown : -1, swapping: !!pendingSwap, fps: raf ? 'raf' : timer ? 'timer' : 'stopped', softGpu: softGpu(), still: stillMode(), bubble: bubbleId, bubbleText: bubbleId ? bubbleText.textContent : '', bubbleTag: bubbleKind.hidden ? '' : bubbleKind.textContent, chips: bubbleId ? Array.from(chipsEl.querySelectorAll('.chip')).map(el => el.textContent) : [], dots: lastDots, transform: bodyEl.style.transform });
   api.ready();
 })();

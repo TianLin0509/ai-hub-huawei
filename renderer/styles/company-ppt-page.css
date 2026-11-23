@@ -40,6 +40,9 @@
 .pptw-settings-pop{position:absolute;right:0;top:40px;z-index:30;width:440px;padding:16px;border-radius:var(--hw-r-md);background:var(--hw-surface);box-shadow:var(--hw-e3);font-size:var(--hw-fs-13)}
 .pptw-settings-pop b{display:block;font-weight:600;margin-bottom:4px}
 .pptw-settings-pop [data-ppt-roots]{color:var(--hw-text-2);overflow-wrap:anywhere}
+.pptw-settings-pop [data-ppt-work-dir]{overflow-wrap:anywhere}
+.pptw-settings-pop [data-ppt-work-input]{width:100%;box-sizing:border-box;margin:4px 0;padding:6px;color:var(--hw-text-1);background:var(--hw-bg);border:1px solid var(--hw-border);border-radius:4px}
+.pptw-settings-pop [data-ppt-work-dir-error]{color:var(--hw-danger);overflow-wrap:anywhere}
 .pptw-hint{margin:8px 0 0;font-size:var(--hw-fs-12);color:var(--hw-text-3)}
 .pptw-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
 

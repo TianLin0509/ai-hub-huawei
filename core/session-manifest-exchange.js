@@ -64,8 +64,46 @@ function createSessionManifestExchange(options = {}) {
     return { pid, appVersion, writtenAt: now(), sessions: describeSessions() };
   }
 
+  // 代次：每次即时同步写加一。在途的定时异步写看到代次变了就不再改名；改名已发出则用即时写的内容补写回去，
+  // 点按钮时写下的最新清单不会被更早开始的定时写盖掉（2026-11-23 复审）。
+  let manifestGeneration = 0, lastSyncManifest = null;
   function writeManifest() {
-    try { writeAtomic(manifestPath(diagnosticsDir, pid), JSON.stringify(snapshot())); } catch { /* 下一轮再写 */ }
+    manifestGeneration += 1;
+    try { lastSyncManifest = JSON.stringify(snapshot()); writeAtomic(manifestPath(diagnosticsDir, pid), lastSyncManifest); } catch { /* 下一轮再写 */ }
+  }
+
+  // 定时轮询走异步读写（2026-11-23）：每 10 秒一次的清单改名替换、每 2 秒一次的收件目录检查原来都是同步的，
+  // 文件被杀毒或索引短暂占用时，改名重试会把主进程卡住数百毫秒到数秒。点按钮时的即时写入仍用同步版本。
+  let manifestWriting = false, stopped = false;
+  async function writeManifestAsync() {
+    if (manifestWriting) return;
+    manifestWriting = true;
+    try {
+      const generation = manifestGeneration;
+      const file = manifestPath(diagnosticsDir, pid), tmp = `${file}.${pid}.async.tmp`;
+      await fsApi.promises.mkdir(path.dirname(file), { recursive: true });
+      await fsApi.promises.writeFile(tmp, JSON.stringify(snapshot()));
+      // 已停止：不再发布清单（停止时删掉的文件不能被这次在途的写复活）。
+      if (stopped || generation !== manifestGeneration) { await fsApi.promises.unlink(tmp).catch(() => {}); return; }
+      await fsApi.promises.rename(tmp, file);
+      if (!stopped && generation !== manifestGeneration && lastSyncManifest != null) {
+        try { writeAtomic(file, lastSyncManifest); } catch { /* 下一轮再写 */ }
+      }
+      // 改名发出后才停止：停止时的删除可能先于这次改名完成，补删一次。
+      if (stopped) { try { fsApi.unlinkSync(file); } catch { /* 已删 */ } }
+    } catch { /* 下一轮再写 */ }
+    finally { manifestWriting = false; }
+  }
+
+  let inboxChecking = false;
+  async function pollInbox() {
+    if (inboxChecking) return;
+    inboxChecking = true;
+    try {
+      // 收件目录平时不存在或为空，异步看一眼；真有请求才进入同步处理（很少发生）。
+      const entries = await fsApi.promises.readdir(ownInbox).catch(() => []);
+      if (!stopped && entries.some(name => name.endsWith('.json'))) processInbox();
+    } finally { inboxChecking = false; }
   }
 
   function processInbox() {
@@ -112,14 +150,16 @@ function createSessionManifestExchange(options = {}) {
   }
 
   function start() {
-    writeManifest();
-    manifestTimer = setInterval(writeManifest, manifestMs);
-    inboxTimer = setInterval(processInbox, inboxMs);
+    stopped = false;
+    void writeManifestAsync();
+    manifestTimer = setInterval(() => void writeManifestAsync(), manifestMs);
+    inboxTimer = setInterval(() => void pollInbox(), inboxMs);
     manifestTimer.unref?.();
     inboxTimer.unref?.();
   }
 
   function stop() {
+    stopped = true;
     clearInterval(manifestTimer);
     clearInterval(inboxTimer);
     try { fsApi.unlinkSync(manifestPath(diagnosticsDir, pid)); } catch { /* ignore */ }

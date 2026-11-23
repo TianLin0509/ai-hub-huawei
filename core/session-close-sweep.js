@@ -34,4 +34,62 @@ async function prepareCloseSweep(manager, id, { inspect = getInspector, platform
   return { before, schedule: () => sweeper.schedule(before, `session=${String(id).slice(0, 8)}`) };
 }
 
-module.exports = { prepareCloseSweep, KINDS };
+// ---------------------------------------------------------------- 所有关闭 / 休眠路径通用（2026-11-23）
+// 内存压力休眠都漏了。会话管理器在这些路径结束 CodeAgent 终端前调用 plan()：
+//   - 最近一次进程快照（任一检查器的缓存）里有这个会话的根、且根的启动时间对得上本会话：同步取整棵树，照常立刻结束；
+//     快照之后才派生的插件，只要父进程在树里，补杀时一并算上（session-tree-sweep.js residualTargets 第 2 条）；
+//   - 缓存里没有：现拍一张（最多等 timeoutMs），拍完再结束——关闭 / 休眠最多晚这么一会儿，换来孤儿不再漏网。
+// 关完 delayMs（默认 8 秒）后重新枚举，PID + 启动时间都对得上的残余按 PID 结束。保护名单（Hub 自己、其他会话的根、
+// 同账号共享 serve 和临时 serve）里的绝不碰；从不按命令行或进程名匹配。
+const ROOT_START_SLACK_MS = 120000;
+function createExitTreeSweep({ inspectors = () => [getInspector()], protect = () => [process.pid], platform = process.platform,
+  timeoutMs = SNAPSHOT_TIMEOUT_MS, log = line => console.info('[session-close-sweep]', line), sweeperOptions = {} } = {}) {
+  const list = () => { try { return (inspectors() || []).filter(i => i && typeof i.snapshot === 'function'); } catch { return []; } };
+  // 快照里的根是不是本会话的那个进程：会话开始前就已存在的同号进程（PID 复用）不算。
+  const rootMatches = (snap, rootPid, startedAt) => {
+    const row = snap && (snap.byPid instanceof Map ? snap.byPid.get(rootPid) : (snap.processes || []).find(p => p && p.pid === rootPid));
+    if (!row) return false;
+    const at = Number(row.startedAt) || 0;
+    return !(at > 0 && Number(startedAt) > 0 && at < Number(startedAt) - ROOT_START_SLACK_MS);
+  };
+  function fromCache(rootPid, startedAt) {
+    let best = null;
+    for (const ins of list()) {
+      let snap = null;
+      try { snap = typeof ins.getCached === 'function' ? ins.getCached() : null; } catch { snap = null; }
+      if (!snap || !rootMatches(snap, rootPid, startedAt)) continue;
+      if (!best || (Number(snap.sampledAt) || 0) > (Number(best.sampledAt) || 0)) best = snap;
+    }
+    const before = best ? captureTree(best, rootPid) : [];
+    return before.length >= 2 ? before : null;
+  }
+  async function fresh(rootPid, startedAt) {
+    const ins = list()[0];
+    if (!ins) return [];
+    let snap = null;
+    try {
+      snap = await Promise.race([ins.snapshot({ force: true }), new Promise(r => { const t = setTimeout(() => r(null), timeoutMs); t.unref?.(); })]);
+    } catch { snap = null; }
+    return snap && rootMatches(snap, rootPid, startedAt) ? captureTree(snap, rootPid) : [];
+  }
+  // 返回 null（不补杀，照常结束）、{ before }（同步拿到，立刻结束）或 { pending: Promise<before[]> }（等快照再结束）。
+  function plan(rootPid, { startedAt = 0 } = {}) {
+    const root = Number(rootPid) || 0;
+    if (platform !== 'win32' || !(root > 0)) return null;
+    const cached = fromCache(root, startedAt);
+    if (cached) return { before: cached };
+    if (!list().length) return null;
+    return { pending: fresh(root, startedAt).catch(() => []) };
+  }
+  function schedule(before, { rootPid = 0, label = '' } = {}) {
+    if (!before || before.length < 2) return false; // 只有根自己：node-pty 收得掉，不用补
+    const ins = list()[0];
+    if (!ins) return false;
+    const sweeper = createTreeSweeper({ inspector: ins, log, ...sweeperOptions,
+      protect: () => { let pids = []; try { pids = protect() || []; } catch { pids = [process.pid]; } return pids.map(Number).filter(pid => pid > 0 && pid !== Number(rootPid)); } });
+    return sweeper.schedule(before, label);
+  }
+  return { plan, schedule };
+}
+
+module.exports = { prepareCloseSweep, createExitTreeSweep, getInspector, KINDS, ROOT_START_SLACK_MS };

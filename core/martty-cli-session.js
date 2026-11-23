@@ -67,7 +67,7 @@ class MarttyCliSession extends AcpSession {
           const error=new Error('CLI 已切换会话，旧提交未确认');
           this.active?.reject(error);this.active=null;
           if(this.pending){clearTimeout(this.pending.timer);this.pending.reject(error);this.pending=null;}
-          this.requests.clear();this.history.clear();this.items.clear();
+          this.requests.clear();this.history.clear();this.items.clear();this.trimmedTurns=0;
           this.runtime=require('./codex-native-runtime').createNativeRuntime(this.runtime.epoch+1);
         }
         this.threadId=sid;this.configOptions=m.result.configOptions||[];

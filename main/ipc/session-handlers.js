@@ -184,7 +184,7 @@ function registerSessionIpc(ipcMain, deps) {
       const started = Date.now();
       let checked = started;
       return ensureLaunchAuth(kind,opts).then(()=>require('../../core/codeagent-capabilities').prepareForKind(kind)).then(()=>{ checked = Date.now(); return createResolvedSession(kind,opts); })
-        .then(session => { recordLaunchTiming({kind, checksMs:checked-started, createMs:Date.now()-checked, ok:true}); return session; },
+        .then(session => { recordLaunchTiming({kind, checksMs:checked-started, createMs:Date.now()-checked, ok:true, sessionId:session?.id || null}); return session; },
           error => { recordLaunchTiming({kind, checksMs:Date.now()-started, ok:false, code:error?.code || null}); throw error; });
     }
     return createResolvedSession(kind, opts);
@@ -221,12 +221,23 @@ function registerSessionIpc(ipcMain, deps) {
       contextLabel: opts.modelCreationContext || (opts.title ? `新建会话 ${opts.title}` : '新建会话'),
       requestConfirmation: requestModelConfirmation, sendToRenderer,
       create: (runtimeKind, launchOpts) => {
+        // 会话进程已建好后的登记步骤没成，不能让整次创建报「创建失败」（会话已在侧栏、用户会重复点）：
+        // 照常通知界面，并把没成的一步带回，由界面给一行提示（renderer/session-create-outcome.js）。
+        // createRequestId 是新建弹窗这次请求的标识，不交给会话本身，只随 session-created 事件带回，界面据此认出「这次建的那个」。
+        const { createRequestId, ...sessionOpts } = launchOpts;
         const created = session => {
-          registerSessionForTap(session);
-          sendToRenderer('session-created', { session });
-          return session;
+          let createWarning = null;
+          try {
+            const tap = registerSessionForTap(session);
+            if (tap && tap.ok === false) createWarning = { step: tap.step || 'tap', message: tap.message || '未知原因' };
+          } catch (error) {
+            createWarning = { step: 'tap', message: error?.message || String(error) };
+            console.warn('[create-session] tap register failed:', error);
+          }
+          sendToRenderer('session-created', { session, ...(createRequestId ? { createRequestId } : {}) });
+          return createWarning ? { ...session, createWarning } : session;
         };
-        const result = sessionManager.createSession(runtimeKind, launchOpts);
+        const result = sessionManager.createSession(runtimeKind, sessionOpts);
         return result?.then ? result.then(created) : created(result);
       },
     });
@@ -968,7 +979,8 @@ function registerSessionIpc(ipcMain, deps) {
   if (require('../../core/distribution').kindAllowed('codeagent') && (quotaAutoMs > 0
     || (!process.env.CLAUDE_HUB_DATA_DIR && process.env.CLAUDE_HUB_E2E !== '1' && !process.env.NODE_TEST_CONTEXT))) {
     quotaAutoRefresh = require('../../core/codeagent-quota-auto-refresh').createQuotaAutoRefresh({
-      run: () => quotaPanel.refreshDue(),
+      // 低开销模式（2026-11-23）：设置页「资源与后台」关了这项就跳过这一轮，不起临时 serve；手动刷新不受影响。
+      run: async () => (require('../../core/optional-features').backgroundOn('quotaRefresh') ? quotaPanel.refreshDue() : { skipped: 'off' }),
       log: entry => { try { require('../../core/codeagent-models').appendModelLog(require('../../core/data-dir').getHubDataDir(), entry); } catch { /* 日志写不了不影响读取 */ } },
       ...(quotaAutoMs > 0 ? { intervalMs: quotaAutoMs, firstDelayMs: quotaAutoMs } : {}),
     });

@@ -83,8 +83,10 @@ function _sanitizeConnectionIssueAck(value) {
   };
 }
 
-function _buildSessionPayload(hubId, data) {
-  data = preserveTitleMetadata(data, loadSessionFile(hubId));
+// existing：磁盘上的旧记录。同步保存时当场读；异步保存由调用方先用异步读取拿到再传进来，
+// 不在主进程里同步读刚被改名替换过的文件（2026-11-23：12 个会话同时干活时，这一处同步读单次卡主进程 0.9–1.7 秒）。
+function _buildSessionPayload(hubId, data, existing = loadSessionFile(hubId)) {
+  data = preserveTitleMetadata(data, existing);
   data = preserveActivity(hubId, data);
   data = migrateLegacyBranchSessionMeta(data);
   const now = Date.now();
@@ -213,25 +215,43 @@ function _tempPath(hubId) {
   return `${sessionFilePath(hubId)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
 }
 
-function saveSessionFile(hubId, data) {
+function saveSessionFile(hubId, data, { ownAsyncOk = false } = {}) {
   ensureDir();
   const payload = _buildSessionPayload(hubId, data);
   const tmp = _tempPath(hubId);
   try {
     fs.writeFileSync(tmp, JSON.stringify(payload));
-    return withTitleBackupWrite(sessionFilePath(hubId), Object.hasOwn(data, 'titleRevision') ? data.titleRevision : payload.titleRevision, () => fs.renameSync(tmp, sessionFilePath(hubId)));
+    return withTitleBackupWrite(sessionFilePath(hubId), Object.hasOwn(data, 'titleRevision') ? data.titleRevision : payload.titleRevision, () => fs.renameSync(tmp, sessionFilePath(hubId)), { ownAsyncOk });
   } finally {
     try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
   }
 }
 
+// 退出落盘的代次（2026-11-23 复审）：flushAll 开始时加一。代次变了的异步写不再改名发布（返回 SUPERSEDED，调用方不把它当作已保存）；
+// 若改名已经发出、晚于退出写才落地，就用退出时写下的内容再同步补写一次。这样即使等满超时，旧快照也盖不掉退出快照。
+const SUPERSEDED = Symbol('session-write-superseded');
+let _flushGeneration = 0;
+// hubId → { text, generation }：最近一次退出落盘写下的内容和那次落盘的代次。不在下一次落盘开始时清空——
+// before-quit 与 will-quit 可能连着落盘两次，第二次没写到的会话仍要拿第一次的快照补写（2026-11-23 第三轮复审）。
+const _finalTexts = new Map();
 async function saveSessionFileAsync(hubId, data) {
+  const generation = _flushGeneration;
   await fs.promises.mkdir(sessionsDir(), { recursive: true });
-  const payload = _buildSessionPayload(hubId, data);
+  const payload = _buildSessionPayload(hubId, data, await loadSessionFileAsync(hubId));
   const tmp = _tempPath(hubId);
+  let superseded = false;
   try {
     await fs.promises.writeFile(tmp, JSON.stringify(payload));
-    return await withTitleBackupWriteAsync(sessionFilePath(hubId), Object.hasOwn(data, 'titleRevision') ? data.titleRevision : payload.titleRevision, () => fs.promises.rename(tmp, sessionFilePath(hubId)));
+    const result = await withTitleBackupWriteAsync(sessionFilePath(hubId), Object.hasOwn(data, 'titleRevision') ? data.titleRevision : payload.titleRevision, async () => {
+      if (generation !== _flushGeneration) { superseded = true; return SUPERSEDED; }
+      await fs.promises.rename(tmp, sessionFilePath(hubId));
+      // 只用比这个写晚开始的那次落盘留下的快照（代次更大），更早的快照可能比这个写还旧。
+      const final = _finalTexts.get(hubId);
+      if (generation !== _flushGeneration && final && final.generation > generation) {
+        try { fs.writeFileSync(sessionFilePath(hubId), final.text); } catch (e) { console.warn(`[session-store] restore final ${hubId} failed:`, e.message); }
+      }
+    });
+    return superseded ? SUPERSEDED : result;
   } finally {
     try { await fs.promises.unlink(tmp); } catch {}
   }
@@ -250,6 +270,22 @@ function loadSessionFile(hubId, {strict = false, raw = false} = {}) {
     return raw ? obj : migrateLegacyBranchSessionMeta(obj);
   } catch (e) {
     if(strict && e.code!=='ENOENT')throw e;
+    if (e.code !== 'ENOENT') console.warn(`[session-store] load ${hubId} failed:`, e.message);
+    return null;
+  }
+}
+
+// loadSessionFile 的异步版本：读盘交给后台线程，解析与校验规则相同（非严格模式）。
+async function loadSessionFileAsync(hubId) {
+  try {
+    const obj = JSON.parse(await fs.promises.readFile(sessionFilePath(hubId), 'utf-8'));
+    if (obj.schemaVersion !== SCHEMA_VERSION) {
+      console.warn(`[session-store] schema mismatch for ${hubId}: ${obj.schemaVersion}`);
+      return null;
+    }
+    if (typeof obj.updatedAt !== 'number') obj.updatedAt = obj.savedAt || 0;
+    return migrateLegacyBranchSessionMeta(obj);
+  } catch (e) {
     if (e.code !== 'ENOENT') console.warn(`[session-store] load ${hubId} failed:`, e.message);
     return null;
   }
@@ -307,7 +343,8 @@ function withWriteLock(hubId, write) {
 function _enqueueWrite(hubId, snap, { strict = false } = {}) {
   const task = withWriteLock(hubId, async () => {
     if (_isRemoved(hubId) || _releasedWrites.has(hubId)) return;
-    await saveSessionFileAsync(hubId, snap);
+    // 被退出落盘取代的写不算保存成功，待写保留给退出写。
+    if (await saveSessionFileAsync(hubId, snap) === SUPERSEDED) return;
     if (_dirty.get(hubId) === snap) _dirty.delete(hubId);
   });
   return strict ? task : task.catch(() => {});
@@ -357,15 +394,33 @@ function markDirtyImmediate(hubId, data) {
   return _enqueueWrite(hubId, data);
 }
 
+// 退出时落盘：先等在途的异步写结束（最多 FLUSH_WAIT_MS），再同步写最新快照，避免较旧的异步写在退出写之后改名、
+// 把文件改回旧内容（2026-11-23 审查）。写失败的条目留在 _dirty 里，不当作已保存。
+// 没有在途写时整个过程同步完成，老调用方不 await 也照旧。
+const FLUSH_WAIT_MS = 3000;
+function _flushDirtySync() {
+  for (const [id, snap] of [..._dirty]) {
+    if (_isRemoved(id)) { _dirty.delete(id); continue; }  // 退出时也别复活已删条目
+    try {
+      // 代次已加一，本进程在途的异步写都已作废：它们拿着的标题锁不必等。
+      saveSessionFile(id, snap, { ownAsyncOk: true });
+      try { _finalTexts.set(id, { text: fs.readFileSync(sessionFilePath(id), 'utf-8'), generation: _flushGeneration }); } catch { /* 读不到就不做补写 */ }
+      if (_dirty.get(id) === snap) _dirty.delete(id);
+    }
+    catch (e) { console.warn(`[session-store] flushAll ${id} failed:`, e.message); }
+  }
+}
 function flushAll() {
   for (const [, t] of _timers) clearTimeout(t);
   _timers.clear();
-  for (const [id, snap] of _dirty) {
-    if (_isRemoved(id)) continue;  // 退出时也别复活已删条目
-    try { saveSessionFile(id, snap); }
-    catch (e) { console.warn(`[session-store] flushAll ${id} failed:`, e.message); }
-  }
-  _dirty.clear();
+  _flushGeneration += 1;
+  if (!_writeChains.size) { _flushDirtySync(); return Promise.resolve(); }
+  let timer;
+  const waited = Promise.race([
+    Promise.allSettled([..._writeChains.values()]),
+    new Promise(resolve => { timer = setTimeout(resolve, FLUSH_WAIT_MS); }),
+  ]).finally(() => clearTimeout(timer));
+  return waited.then(() => { _flushDirtySync(); });
 }
 
 // Confirmation boundary: wait behind older writes and propagate actual I/O

@@ -30,7 +30,9 @@ async function run(selected, prompt, { dataDir, signal, timeoutMs = 60000, env =
       if (selected.model) args.splice(1, 0, '--model', selected.model);
     } else {
       if (!engine.readOnlyCapable(help)) throw new Error('所选后端不能关闭工具，请恢复默认');
-      args = kind === 'codeagent' ? engine.codeAgentArgs(selected.model, help) : engine.claudeArgs(help, { model: selected.model });
+      // CodeAgent 指定了模型、没指定供应商时走精简参数（--bare + 空 MCP 配置，core/codeagent-print-args.js）；指定供应商要读 --settings，不加 --bare。
+      args = kind === 'codeagent' ? engine.codeAgentArgs(selected.model, help, { lean: !selected.codeagentModelProvider, mcpConfigFile: require('./codeagent-print-args').emptyMcpConfigFile(cwd) })
+        : engine.claudeArgs(help, { model: selected.model });
       // 空模型表示沿用 CLI 当前默认，不能传一个空 --model。
       if (kind === 'codeagent' && !selected.model) args.splice(args.indexOf('--model'), 2);
       if (kind === 'codeagent' && selected.codeagentModelProvider) {
@@ -40,7 +42,7 @@ async function run(selected, prompt, { dataDir, signal, timeoutMs = 60000, env =
         args.push('--settings', providerFile);
       }
     }
-    const r = await runOnce({ command, args, input: prompt, cwd, env: launchEnv, signal, timeoutMs, onActivity });
+    const r = await runOnce({ command, args, input: prompt, cwd, env: launchEnv, signal, timeoutMs, onActivity, ...(kind === 'codeagent' ? { lifecycle: 'feature-agent' } : {}) });
     if (r.aborted || signal?.aborted) throw new Error('已取消');
     if (r.timedOut) throw Object.assign(new Error('所选模型回答超时'), { timedOut: true });
     const raw = kind === 'codex' && fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : r.stdout;

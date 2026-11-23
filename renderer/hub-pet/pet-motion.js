@@ -135,7 +135,33 @@
     return { x: 0, y: -2.2 * Math.abs(step), rot: 2.4 * step + 2 * dir, sx: 1, sy: 1 + 0.015 * Math.abs(step) };
   }
 
-  const api = { IDLE_MOVES, approach, breathStep, clamp, crouchAt, easeInOut, easeOutBack, easeOutCubic, frameRange, gesturePlaylist, hopAt, pendulumStep, pingPong, pivotOffset, playlistFrame, sheetPosition, squashAt, walkGait };
+  // 空闲时下一帧隔多久（毫秒）；返回 null 表示不再排下一帧，等状态或动作事件叫醒（2026-11-23 开销优化）。
+  // - 正常显卡：照旧按 calmFps（呼吸 20 帧/秒、打盹 12 帧/秒、打字 30 帧/秒）；
+  // - 软件渲染（关了硬件加速）：透明窗每帧都由 CPU 合成，空闲、犯困、躲边降到 6 帧/秒，打盹停在静止帧；
+  // - 安静档或系统「减少动态效果」：不再呼吸。待机只在下一次小动作、犯困只在下一次哈欠时醒一次，躲边、打盹直接停下。
+  // 打字、开心等姿态不受影响（打字的爪子循环靠这个定时器推进）。
+  const SOFT_GPU_FPS = 6;
+  function calmDelay({ pose, calmFps = {}, soft = false, still = false, t = 0, nextGestureAt = 0, nextYawnAt = 0 }) {
+    const resting = pose === 'idle' || pose === 'tired' || pose === 'peek' || pose === 'sleep';
+    if (still && resting) {
+      const due = pose === 'idle' ? nextGestureAt : pose === 'tired' ? nextYawnAt : 0;
+      return due ? Math.max(250, due - t) : null;
+    }
+    if (soft && resting) return pose === 'sleep' ? null : 1000 / SOFT_GPU_FPS;
+    return 1000 / (calmFps[pose] || 20);
+  }
+
+  // 合并主进程发来的完整状态（2026-11-23 低开销模式 L3，Codex R1 / Gemini P0-3）：
+  // 主进程只在低开销开着时带 lowPower:true，关掉时省略这个字段（默认关闭时消息逐字节不变）；
+  // 所以这里每次都按本条消息归一化，省略＝关，同一窗口开→关→开→关都能当场恢复。
+  function mergeMainState(prev, next) {
+    const incoming = next && typeof next === 'object' ? next : {};
+    return { ...(prev || {}), ...incoming, lowPower: incoming.lowPower === true };
+  }
+  // 低开销与软件渲染一样停掉无限循环的装饰动画（pet.css 的 body.soft-gpu）。
+  const decorStill = ({ softGpu = false, lowPower = false } = {}) => softGpu === true || lowPower === true;
+
+  const api = { IDLE_MOVES, SOFT_GPU_FPS, approach, breathStep, calmDelay, decorStill, mergeMainState, clamp, crouchAt, easeInOut, easeOutBack, easeOutCubic, frameRange, gesturePlaylist, hopAt, pendulumStep, pingPong, pivotOffset, playlistFrame, sheetPosition, squashAt, walkGait };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.HubPetMotion = api;
 })(typeof window !== 'undefined' ? window : globalThis);

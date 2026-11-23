@@ -765,5 +765,9 @@
   "正在打开真实终端": "Opening the real terminal",
   "第一次需要几秒，之后 3 分钟内再开是秒开": "The first open takes a few seconds. Reopening within 3 minutes is instant.",
   "还在连接，可以先回卡片继续对话": "Still connecting. You can go back to the cards and keep chatting.",
-  "停止失败": "Stop failed"
+  "停止失败": "Stop failed",
+  "打开会话": "Open session",
+  "没重启成功": "Restart failed",
+  "低开销模式：网速和显卡读数没开（省一个常驻的 PowerShell 和定时的 nvidia-smi）。点一下到「设置 → 资源与后台」打开": "Low-overhead mode: network speed and GPU readings are off (saves a resident PowerShell and periodic nvidia-smi runs). Click to turn them on in Settings → Resources & background",
+  "网速 关": "Net off"
 }

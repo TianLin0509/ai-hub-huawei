@@ -100,7 +100,8 @@ function localAddresses(interfaces = {}) {
 }
 
 function createLiveResourceTelemetry(options = {}) {
-  const networkInterfaces = options.networkInterfaces || (() => os.networkInterfaces());
+  // 默认读带 30 秒缓存的网卡清单：同步枚举网卡在装了 VPN 的电脑上一次几十毫秒（core/network-interfaces-cache.js）。
+  const networkInterfaces = options.networkInterfaces || require('./network-interfaces-cache').cachedNetworkInterfaces;
   const addresses = () => { try { return localAddresses(networkInterfaces()); } catch { return []; } };
   const run = options.execFile || promisify(execFile);
   const spawnProcess = options.spawn || spawn;
