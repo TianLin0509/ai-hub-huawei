@@ -381,9 +381,10 @@
       <div class="appearance-foot">${progress}<span class="appearance-feedback" role="status">${status}</span><button class="appearance-btn primary" data-action="close">完成</button></div>`;
     if (dialog.querySelector('[data-dl-source]')) void require('./download-source-view').fill(dialog).catch(() => {});
   }
-  async function refresh() { data = await ipcRenderer.invoke('boot-splash:get'); render(); }
+  async function refresh() { data = await ipcRenderer.invoke('boot-splash:get'); syncSettings(); render(); }
   async function openPicker() {
     data = await ipcRenderer.invoke('boot-splash:get');
+    syncSettings();
     if (!dialog) {
       dialog = document.createElement('dialog'); dialog.className = 'appearance-dialog boot-splash-dialog'; dialog.id = 'boot-splash-dialog';
       dialog.setAttribute('aria-label', '开场动画');
@@ -424,7 +425,44 @@
     if (!dialog.open) dialog.showModal();
   }
   ipcRenderer.on('boot-splash:state', (_e, state) => { if (data) { data.state = state; if (dialog?.open) render(); } });
-  ipcRenderer.on('boot-splash:changed', (_e, next) => { data = next; if (dialog?.open) render(); });
+  ipcRenderer.on('boot-splash:changed', (_e, next) => { data = next; syncSettings(); if (dialog?.open) render(); });
+
+  // 复用同一份播放偏好与播放器；手动重播不调用 startup，不消耗「每天第一次」或改动频率。
+  const frequency = document.getElementById('cfg-boot-splash-frequency');
+  const replay = document.getElementById('cfg-boot-splash-play');
+  const settingsStatus = document.getElementById('cfg-boot-splash-status');
+  function settingsError(error) {
+    if (!settingsStatus) return;
+    settingsStatus.textContent = error ? `启动动画：${error.message || error}，请重试。` : '';
+    settingsStatus.hidden = !error;
+  }
+  function syncSettings() {
+    if (frequency && data) { frequency.value = data.preferences.frequency; frequency.disabled = false; }
+    if (replay && data) replay.disabled = false;
+  }
+  require('./launch-field-hint').setIconHint(document.getElementById('cfg-boot-splash-label'),
+    '默认每天第一次启动时播放，修改后立即保存。现在播放一次只重播当前动画，不改变启动频率；点击画面或按 Esc 可跳过。更换动画可选其他款式。');
+  frequency?.addEventListener('change', async () => {
+    frequency.disabled = true; settingsError(null);
+    try { data = await ipcRenderer.invoke('boot-splash:save', { frequency: frequency.value }); }
+    catch (error) { settingsError(error); }
+    finally { syncSettings(); render(); }
+  });
+  replay?.addEventListener('click', async () => {
+    replay.disabled = true; settingsError(null);
+    try {
+      data = await ipcRenderer.invoke('boot-splash:get');
+      const current = data.items.find(it => it.id === data.preferences.selected);
+      if (!current?.src) throw new Error('当前动画不可用，请更换动画');
+      await play(current);
+    } catch (error) { settingsError(error); }
+    finally { syncSettings(); }
+  });
+  document.getElementById('cfg-boot-splash-picker')?.addEventListener('click', () => {
+    settingsError(null);
+    void openPicker().catch(settingsError);
+  });
+  void refresh().catch(settingsError);
 
   document.getElementById('options-boot-splash')?.addEventListener('click', e => {
     e.stopPropagation();

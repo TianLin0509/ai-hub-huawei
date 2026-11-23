@@ -52,7 +52,7 @@ function createAskAsideUi({ document, ipcRenderer, getSession, getTitle = s => s
   let stick = true;
   const atBottom = () => body.scrollHeight - body.scrollTop - body.clientHeight < 40;
   const toBottom = () => { body.scrollTop = body.scrollHeight; };
-  const expanded = new Set(), watching = new Set(), refilled = new Set();
+  const expanded = new Set(), watching = new Set(), refilled = new Set(), dismissed = new Set();
   const call = async (method, args) => { const r = await ipcRenderer.invoke('ask-aside:' + method, args); if (!r || !r.ok) throw new Error(r?.error || '问一下没有响应'); return r.result; };
 
   // 位置贴着会话区：上沿与会话区对齐，下沿在状态栏之上，右侧留 12px。
@@ -101,12 +101,12 @@ function createAskAsideUi({ document, ipcRenderer, getSession, getTitle = s => s
       qa.append(waitBlock({ thinking: false, title: queuePos > 1 ? `正在排队，前面还有 ${queuePos - 1} 个问题` : '正在排队，马上开始', small: '前面的问题答完后自动开始' }));
     } else if (item.status === 'running') {
       // 后台答完才整段给出（公司回执：CodeAgent 没有真流式），所以只有「思考中」→ 整段回答，不做逐字。
-      qa.append(waitBlock({ thinking: true, title: '正在读这个会话的上下文', small: `通常 ${waitText(item.engine)}，会话照常运行`, since: item.startedAt || item.at }));
+      qa.append(waitBlock({ thinking: true, title: '正在读这个会话的上下文', small: `通常 ${waitText(item.engine)}，连续 90 秒无输出会停止，会话照常运行`, since: item.startedAt || item.at }));
     } else {
       if (item.a) qa.append(renderAnswer(item));
       if (item.status === 'error') {
-        const err = el('div', 'ask-err'); const t = el('div', 't', `没问成：${item.error || '原因未知'}`);
-        if (refilled.has(item.id)) t.append(el('small', '', '问题已放回输入框，恢复会话后再点「提问」。'));
+        const err = el('div', 'ask-err'); const t = el('div', 't', item.cancelled ? '已取消，可以继续问下一题' : `没问成：${item.error || '原因未知'}`);
+        if (refilled.has(item.id)) t.append(el('small', '', '可直接点「重试」，或在输入框里修改后提问。'));
         err.append(icon('warn'), t); qa.append(err);
       }
       if (item.a) {
@@ -116,6 +116,15 @@ function createAskAsideUi({ document, ipcRenderer, getSession, getTitle = s => s
         if (fold) { const more = el('button', 'ask-more', '展开'); more.type = 'button'; more.hidden = true; more.dataset.more = item.id; meta.append(more); }
         qa.append(meta);
       }
+    }
+    if (['queued', 'running', 'error'].includes(item.status) && !dismissed.has(item.id)) {
+      const actions = el('div', 'row');
+      const action = (label, kind) => {
+        const b = el('button', 'btn btn-sm', label); b.type = 'button'; b.dataset.askAction = kind; b.dataset.id = item.id; return b;
+      };
+      if (item.status === 'error') actions.append(action('重试', 'retry'));
+      if (!item.cancelled) actions.append(action('取消', item.status === 'error' ? 'dismiss' : 'cancel'));
+      qa.append(actions);
     }
     return qa;
   }
@@ -142,7 +151,7 @@ function createAskAsideUi({ document, ipcRenderer, getSession, getTitle = s => s
       const was = prev.get(item.id);
       if (item.status === 'error' && watching.has(item.id) && (was === 'queued' || was === 'running')) {
         watching.delete(item.id);
-        if (!input.value.trim()) { input.value = item.q; refilled.add(item.id); }
+        if (!item.cancelled && !input.value.trim()) { input.value = item.q; refilled.add(item.id); }
       }
       if (item.status === 'done') watching.delete(item.id);
     }
@@ -196,7 +205,7 @@ function createAskAsideUi({ document, ipcRenderer, getSession, getTitle = s => s
   }
   function open() {
     const session = getSession(); if (!session) return;
-    if (sessionId !== session.id) { sessionId = session.id; state = null; input.value = ''; expanded.clear(); refilled.clear(); body.replaceChildren(); }
+    if (sessionId !== session.id) { sessionId = session.id; state = null; input.value = ''; expanded.clear(); refilled.clear(); dismissed.clear(); body.replaceChildren(); }
     place();
     drawer.hidden = false; button.classList.add('on'); button.setAttribute('aria-pressed', 'true');
     if (!panelObserver && typeof document.defaultView?.ResizeObserver === 'function') {
@@ -215,6 +224,24 @@ function createAskAsideUi({ document, ipcRenderer, getSession, getTitle = s => s
   input.addEventListener('blur', () => box.classList.remove('is-focus'));
   drawer.addEventListener('keydown', event => { if (event.key === 'Escape') { event.stopPropagation(); hide(); } });
   body.addEventListener('click', event => {
+    const action = event.target.closest?.('[data-ask-action]');
+    if (action) {
+      const item = state?.items.find(item => item.id === action.dataset.id);
+      if (!item) return;
+      if (action.dataset.askAction === 'retry') { input.value = item.q; void ask(); }
+      else if (action.dataset.askAction === 'dismiss') {
+        dismissed.add(item.id); refilled.delete(item.id);
+        if (input.value.trim() === item.q) input.value = '';
+        paint(state);
+      }
+      else {
+        const sid = sessionId;
+        action.disabled = true;
+        void call('cancel', { sessionId: sid, id: item.id }).then(() => { if (sid === sessionId) return refresh(); })
+          .catch(error => { hint.className = 'warn'; hint.textContent = error.message; action.disabled = false; });
+      }
+      return;
+    }
     const more = event.target.closest && event.target.closest('[data-more]');
     if (!more) return;
     expanded.add(more.dataset.more); if (state) paint(state);

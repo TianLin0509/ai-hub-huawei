@@ -145,7 +145,8 @@ function attachHelpAsk({ document: doc, ipcRenderer, openPath = p => doc.default
       const err = el('div', 'ask-err'); err.append(iconEl('warn'));
       const t = el('div', 't'); t.append(doc.createTextNode(item.cancelled ? '已取消' : '没答出来'), el('small', '', item.error));
       const actions = el('div', 'ha-actions');
-      actions.append(btn('btn', '再问一次', () => void submit(item.q)));
+      actions.append(btn('btn', '重试', () => void submit(item.q)));
+      if (item.timedOut) actions.append(btn('btn', '取消', () => { item.timedOut = false; render(); }));
       if (!item.cancelled) actions.append(btn('btn', '一键反馈', () => feedbackLink(item).click()));
       t.append(actions); err.append(t); qa.append(err);
     } else {
@@ -201,6 +202,7 @@ function attachHelpAsk({ document: doc, ipcRenderer, openPath = p => doc.default
     if (r && r.ok) Object.assign(item, { a: r.answer, engineLabel: r.engineLabel, ms: r.ms });
     else {
       item.error = (r && r.error) || '没有响应';
+      item.timedOut = !!r?.timedOut;
       if (r && r.needSetup) await refresh();
     }
     sending = false;

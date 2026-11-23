@@ -15,8 +15,10 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { withDeadline, waitForProcess, killProcessTree, cancelled } = require('../../core/help-ask/request-lifecycle');
 
 const TIMEOUT_MS = 120000;
+const IDLE_MS = 90000;
 const MAX_ITEMS = 200;
 const MAX_UNCOLLECTED_MEETING_RESULTS = 200; // Per meeting within one source-session file.
 const MAX_PENDING = 20;
@@ -90,8 +92,8 @@ function sessionModel(session, configDir) {
 // 跑一次后台问答。返回 { answer, truncated }；失败抛错（error.answer 带已收到的部分）。
 function runAsk({ config, cwd, ccSessionId, question, context = '', responseHint = '', model = '', env = process.env, onChunk = () => {},
   spawnFn = require('node:child_process').spawn, platform = process.platform,
-  killTree = pid => require('node:child_process').execFile('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => {}),
-  timeoutMs = TIMEOUT_MS, signal = null, mode = DEFAULT_MODE }) {
+  killTree = null,
+  timeoutMs = TIMEOUT_MS, idleMs = IDLE_MS, signal = null, onActivity = () => {}, mode = DEFAULT_MODE }) {
   if (!UUID_RE.test(String(ccSessionId || ''))) return Promise.reject(new Error('会话记录编号无效'));
   const label = config.flavor === 'claude' ? 'Claude Code' : 'CodeAgent';
   const args = buildArgs(ccSessionId, { model, flavor: config.flavor });
@@ -108,7 +110,7 @@ function runAsk({ config, cwd, ccSessionId, question, context = '', responseHint
   }
   const head = /^[A-Za-z0-9_.-]+$/.test(config.command) ? config.command : `"${path.normalize(String(config.command).replace(/"/g, ''))}"`;
   const opts = { cwd, env: childEnv(env, config), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] };
-  return new Promise((resolve, reject) => {
+  return withDeadline(({ signal: requestSignal, onActivity: activity }) => new Promise((resolve, reject) => {
     let child;
     try {
       child = platform === 'win32'
@@ -117,20 +119,9 @@ function runAsk({ config, cwd, ccSessionId, question, context = '', responseHint
         ? spawnFn('cmd.exe', ['/d', '/s', '/c', `"call ${head} ${args.map(arg => /[\s()]/.test(arg) ? `"${arg}"` : arg).join(' ')}"`], { ...opts, windowsVerbatimArguments: true })
         : spawnFn(config.command, args, opts);
     } catch (error) { reject(new Error(`启动 ${label} 失败：${error.message}`)); return; }
-    let out = '', err = '', truncated = false, settled = false, reason = '';
-    const stop = why => {
-      if (settled || reason) return;
-      reason = why;
-      try { platform === 'win32' && child.pid ? killTree(child.pid) : child.kill(); } catch { /* 已退出 */ }
-    };
-    const timer = setTimeout(() => stop(`超过 ${Math.round(timeoutMs / 1000)} 秒没答完，已停止`), timeoutMs);
-    const onAbort = () => stop('Hub 正在关闭，已停止');
-    signal?.addEventListener?.('abort', onAbort, { once: true });
-    const finish = (error, value) => {
-      if (settled) return; settled = true; clearTimeout(timer);
-      signal?.removeEventListener?.('abort', onAbort);
-      error ? reject(error) : resolve(value);
-    };
+    let out = '', err = '', truncated = false;
+    const completion = waitForProcess(child, { signal: requestSignal, onActivity: () => { activity(); onActivity(); },
+      kill: () => killTree && platform === 'win32' ? killTree(child.pid) : killProcessTree(child, platform) });
     child.stdout.setEncoding?.('utf8');
     child.stderr.setEncoding?.('utf8');
     child.stdout.on('data', chunk => {
@@ -140,20 +131,18 @@ function runAsk({ config, cwd, ccSessionId, question, context = '', responseHint
       onChunk(cleanAnswer(out));
     });
     child.stderr.on('data', chunk => { err = (err + chunk).slice(-2000); });
-    child.on('error', error => finish(new Error(`启动 ${label} 失败：${error.message}`)));
-    child.on('close', code => {
+    completion.then(code => {
       const answer = cleanAnswer(out);
-      if (reason) return finish(Object.assign(new Error(reason), { answer, truncated }));
       if (code !== 0) {
         const detail = cleanAnswer(err || out).split('\n').filter(Boolean).slice(-2).join(' ').slice(0, 300);
-        return finish(Object.assign(new Error(`${label} 没有答完（退出码 ${code}）${detail ? '：' + detail : ''}`), { answer, truncated }));
+        return reject(Object.assign(new Error(`${label} 没有答完（退出码 ${code}）${detail ? '：' + detail : ''}`), { answer, truncated }));
       }
-      if (!answer) return finish(new Error(`${label} 没有返回内容`));
-      finish(null, { answer, truncated });
-    });
+      if (!answer) return reject(new Error(`${label} 没有返回内容`));
+      resolve({ answer, truncated });
+    }, error => reject(Object.assign(error, { answer: cleanAnswer(out), truncated })));
     child.stdin.on('error', () => { /* 进程先退出时写入会报 EPIPE，以退出结果为准 */ });
     child.stdin.end(Buffer.from(stdinText, 'utf8'));
-  });
+  }), { signal, timeoutMs, idleMs });
 }
 
 function createAskAsideService({ sessionManager, getHubDataDir, sendToRenderer = () => {}, getSessionMetadata = () => null,
@@ -168,8 +157,9 @@ function createAskAsideService({ sessionManager, getHubDataDir, sendToRenderer =
     return (account && (account.note || pool.label(account))) || '号池账号';
   },
   resolveMode = () => resolveAskMode(), run = runAsk, runCodex = options => require('../../core/ask-aside-codex').askCodexSide(options),
-  now = Date.now, logger = console }) {
+  now = Date.now, logger = console, idleMs = IDLE_MS, timeoutMs = TIMEOUT_MS, codexTimeoutMs = 300000, dshTimeoutMs = 180000, cleanupMs = 5000 }) {
   const cache = new Map(), chains = new Map(), jobs = new Set();
+  const requests = new Map();
   const abort = new AbortController();
   let running = 0;
   const waiters = [];
@@ -303,6 +293,14 @@ function createAskAsideService({ sessionManager, getHubDataDir, sendToRenderer =
   function ask({ sessionId: sid, question } = {}) {
     return enqueue({ sid, question });
   }
+  function cancel({ sessionId: sid, id } = {}) {
+    const item = data(sid).items.find(item => item.id === id && !item.meetingId);
+    if (!item || !['queued', 'running'].includes(item.status)) return false;
+    requests.get(id)?.abort(cancelled());
+    Object.assign(item, { status: 'error', cancelled: true, error: '已取消，可以继续问下一题' });
+    publish(sid);
+    return true;
+  }
   // Internal only. Meeting data never enters the public ask IPC argument surface.
   function askMeeting({ sessionId: sid, meetingId, questionId, question, context, responseHint = '' } = {}) {
     if (!UUID_RE.test(String(meetingId || '')) || !UUID_RE.test(String(questionId || ''))) throw new Error('会议问题编号无效');
@@ -337,29 +335,39 @@ function createAskAsideService({ sessionManager, getHubDataDir, sendToRenderer =
     const item = { id: randomUUID(), q, a: '', at: new Date(now()).toISOString(), wall_s: 0, status: 'queued', error: '', truncated: false, engine: first.engine,
       ...(meetingId ? { meetingId, questionId, contextChars: context.length } : {}) };
     saved.items.push(item);
+    const controller = new AbortController();
+    requests.set(item.id, controller);
     publish(sid);
     const frozen = meetingId ? { ...first, config: { ...first.config } } : null;
     // 同一会话按顺序答，避免同一账号上同时起太多进程；全机最多 MAX_RUNNING 个。
     const job = (chains.get(sid) || Promise.resolve()).then(async () => {
       const acquired = await slot();
       const started = now();
+      const onShutdown = () => controller.abort(cancelled('Hub 正在关闭，提问已中断，可重试'));
       try {
         if (!acquired || abort.signal.aborted) throw new Error('Hub 正在关闭');
+        if (controller.signal.aborted) throw controller.signal.reason;
+        abort.signal.addEventListener('abort', onShutdown, { once: true });
         const current = frozen || target(sid);
         if (!current.supported) throw new Error(current.reason);
         if (frozen && current.engine !== 'codex' && (!fs.existsSync(current.config.configDir) || !fs.existsSync(current.cwd)
           || !hasHistory(current.ccSessionId, current.cwd, current.config.configDir))) throw new Error('原会议账号目录或会话记录已不可用，请检查后重试');
         item.status = 'running'; item.startedAt = new Date(now()).toISOString(); publish(sid);
         // text 输出答完才一次性给出，不推中间片段（公司回执：没有真流式）。
-        const result = current.engine === 'dsh' ? await current.entry.pty.askSide(q)
-          : current.engine === 'codex' ? await runCodex({ session: current.session, question: q, env: current.env, now, ...(meetingId ? { context, responseHint } : {}) })
-          : await run({ mode: frozen ? mode : resolveMode(), config: current.config, cwd: current.cwd, ccSessionId: current.ccSessionId,
-            model: current.model, question: q, ...(current.env ? { env: current.env } : {}), ...(meetingId ? { context, responseHint } : {}), signal: abort.signal });
+        const result = await withDeadline(({ signal, onActivity }) => current.engine === 'dsh' ? current.entry.pty.askSide(q, { signal })
+          : current.engine === 'codex' ? runCodex({ session: current.session, question: q, env: current.env, now, signal, onActivity, ...(meetingId ? { context, responseHint } : {}) })
+          : run({ mode: frozen ? mode : resolveMode(), config: current.config, cwd: current.cwd, ccSessionId: current.ccSessionId,
+            model: current.model, question: q, ...(current.env ? { env: current.env } : {}), ...(meetingId ? { context, responseHint } : {}), signal, onActivity }),
+          { signal: controller.signal, idleMs, timeoutMs: current.engine === 'codex' ? codexTimeoutMs : current.engine === 'dsh' ? dshTimeoutMs : timeoutMs, cleanupMs });
+        if (controller.signal.aborted) throw controller.signal.reason;
         if (abort.signal.aborted) throw Object.assign(new Error('Hub 正在关闭，提问已中断，可重试'), { answer: result.answer, truncated: result.truncated });
         Object.assign(item, { a: result.answer, truncated: !!result.truncated, status: 'done', error: '' });
       } catch (error) {
-        Object.assign(item, { status: 'error', error: error.message, a: error.answer || item.a || '', truncated: !!error.truncated });
+        Object.assign(item, { status: 'error', error: error.message, a: error.answer || item.a || '', truncated: !!error.truncated,
+          timedOut: !!error.timedOut, timeoutKind: error.timeoutKind || '', cancelled: !!error.cancelled });
       } finally {
+        abort.signal.removeEventListener('abort', onShutdown);
+        requests.delete(item.id);
         if (acquired) release();
         item.wall_s = Math.round((now() - started) / 100) / 10;
         try { publish(sid); } catch (error) { logger.error('[ask-aside]', error.message); }
@@ -370,14 +378,15 @@ function createAskAsideService({ sessionManager, getHubDataDir, sendToRenderer =
     job.finally(() => { jobs.delete(job); if (chains.get(sid) === job) chains.delete(sid); });
     return { id: item.id, status: 'queued' };
   }
-  return { ask, list, support, askMeeting, meetingResult, acknowledgeMeetingResult,
+  return { ask, cancel, list, support, askMeeting, meetingResult, acknowledgeMeetingResult,
     async dispose() { abort.abort(); waiters.splice(0).forEach(resolve => resolve(false)); await Promise.allSettled([...jobs]); },
     async drain() { await Promise.allSettled([...jobs]); } };
 }
 
 function registerAskAsideIpc(ipcMain, service) {
-  for (const method of ['list', 'ask', 'support']) ipcMain.handle('ask-aside:' + method, async (_event, request = {}) => {
-    try { return { ok: true, result: await service[method](method === 'ask' ? { sessionId: request.sessionId, question: request.question } : request.sessionId) }; }
+  for (const method of ['list', 'ask', 'support', 'cancel']) ipcMain.handle('ask-aside:' + method, async (_event, request = {}) => {
+    try { return { ok: true, result: await service[method](method === 'ask' ? { sessionId: request.sessionId, question: request.question }
+      : method === 'cancel' ? { sessionId: request.sessionId, id: request.id } : request.sessionId) }; }
     catch (error) { return { ok: false, error: error.message }; }
   });
 }

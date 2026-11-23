@@ -24,6 +24,7 @@ function compactFeedback({ info = {}, description = '', contact = '', logsDir, n
     `版本：${info.productName || 'AI Hub'} ${info.edition || ''} v${info.version || '?'}`.replace(/\s+/g, ' '),
     `系统：${info.platform || process.platform}`];
   if (info.runtime) head.push(`运行快照：${info.runtime}`);
+  if (info.mcpDiagnostics) head.push(`MCP 诊断：${info.mcpDiagnostics}`);
   if (contact) head.push(`联系方式：${contact}`);
   head.push(`时间：${new Date(now).toLocaleString('zh-CN', { hour12: false })}`, '', '问题描述：');
   const headText = redact(head.join('\n'), redactOpts);

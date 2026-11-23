@@ -69,14 +69,20 @@ function askAside(ctx, getRoot, append) {
     load('@deepseek-ai/dsh-llm/lib/index.js'),
   ]);
   const busy = new Set();
+  const controllers = new Map();
   const answer = async ({ id, question, timeoutMs }) => {
     const reply = row => append({ type: 'btw', id, ...row });
+    const controller = new AbortController();
+    controllers.set(id, controller);
+    const timer = setTimeout(() => controller.abort(), Math.max(10000, Number(timeoutMs) || 180000));
+    const signal = controller.signal;
     try {
       const agent = getRoot();
       if (!agent) return reply({ error: 'DSH 会话还没就绪，请等首轮开始后再问' });
       const llm = ctx.get('llm');
       if (typeof llm?.stream !== 'function') return reply({ error: 'DSH 模型服务不可用' });
       const [side, live, dshLlm] = await libs();
+      signal.throwIfAborted();
       const session = agent.session;
       const derive = () => side.splitUnresolvedToolCalls(session.deriveMessages(), side.openStepToolCallIds(live.snapshotLiveSessionEvents(session)));
       let history = derive();
@@ -84,6 +90,7 @@ function askAside(ctx, getRoot, append) {
       // 就答成了 OK）。主会话已经停下却还停在用户请求上，就最多等 3 秒让历史跟上。
       for (let i = 0; i < 30 && history.messages.at(-1)?.role === 'user' && agent.status !== 'running'; i++) {
         await new Promise(resolve => setTimeout(resolve, 100));
+        signal.throwIfAborted();
         history = derive();
       }
       const header = session.requestHeader?.();
@@ -96,7 +103,6 @@ function askAside(ctx, getRoot, append) {
         ? '（上面最后那条用户请求主会话还在处理，这里不要回答或继续它；只回答下面的旁支问题。）\n' : '';
       const messages = [...history.messages, dshLlm.createUserMessage({
         content: [{ type: 'text', text: side.wrapSideQuestion(note + SHORT + String(question), history.pending) }], source: { kind: 'dsh-tui-btw' } })];
-      const signal = AbortSignal.timeout(Math.max(10000, Number(timeoutMs) || 180000));
       const options = {
         provider: config.provider ?? agent.options?.provider, model: config.model ?? agent.options?.model, messages,
         ...(!messages.some(m => m.role === 'system') && typeof header?.system === 'string' && { system: header.system }),
@@ -111,11 +117,17 @@ function askAside(ctx, getRoot, append) {
       // 模型服务偶发超时或断连（2026-11-07 实测 10 秒报 Request timed out）：只对这类错误自动再问一次。
       if (!outcome.answer && !signal.aborted && /timed? ?out|ECONNRESET|socket hang up|fetch failed|network/i.test(outcome.error || '')) outcome = await once();
       reply(outcome.answer ? { answer: outcome.answer } : { error: signal.aborted ? 'DSH 超时没答完，已停止' : (outcome.error || 'DSH 没有给出回答') });
-    } catch (error) { reply({ error: error?.message || String(error) }); }
+    } catch (error) { reply({ error: signal.aborted ? 'DSH 旁问已取消或超时' : (error?.message || String(error)) }); }
+    finally { clearTimeout(timer); controllers.delete(id); }
   };
   const poll = setInterval(() => {
     let names; try { names = fs.readdirSync(dir); } catch { return; }
     for (const name of names) {
+      if (name.endsWith('.cancel.json')) {
+        controllers.get(name.slice(0, -'.cancel.json'.length))?.abort();
+        try { fs.unlinkSync(path.join(dir, name)); } catch { /* 已清理 */ }
+        continue;
+      }
       if (!name.endsWith('.ask.json') || busy.has(name)) continue;
       const file = path.join(dir, name);
       let request; try { request = JSON.parse(fs.readFileSync(file, 'utf8')); fs.unlinkSync(file); } catch { continue; }
@@ -123,5 +135,5 @@ function askAside(ctx, getRoot, append) {
       answer(request).finally(() => busy.delete(name));
     }
   }, 150);
-  ctx.effect(() => () => clearInterval(poll));
+  ctx.effect(() => () => { clearInterval(poll); for (const controller of controllers.values()) controller.abort(); });
 }

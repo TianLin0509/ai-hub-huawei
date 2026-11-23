@@ -139,6 +139,18 @@ function seedFleet(dataDir, now, snap) {
         result.checks.push('运行记录、生效范围、上下文、后端四个页签各一屏；界面上没有自动发选项');
         await click('#avatar-page [data-av="pause-all"]'); await until(`(document.querySelector('.avx-bn.r')?.textContent||'').includes('全部分身已暂停')`);
         await shot('10-paused'); result.checks.push('一键全部暂停有醒目提示');
+        // 无成功记录的供应商错误只能去设置；不能给一个点了必然失败的恢复按钮。
+        const routeStateFile = path.join(dataDir, 'avatar', h16(ME), 'agents', 'vqa', 'state.json');
+        const routeState = JSON.parse(fs.readFileSync(routeStateFile, 'utf8'));
+        routeState.lastError = '供应商 bad 的接口不接受对话请求（405）';
+        routeState.providerRepair = { account: 'personal', canUseManual: false };
+        fs.writeFileSync(routeStateFile, JSON.stringify(routeState));
+        await click('#btn-home'); await click('#btn-avatar'); await click('#avatar-page .avx-row[data-id="vqa"]');
+        await until(`!!document.querySelector('#avatar-page [data-av="provider-settings"]')`);
+        assert.equal(await c.eval(`document.querySelectorAll('#avatar-page [data-av="repair-provider"]').length`), 0);
+        await click('#avatar-page [data-av="provider-settings"]');
+        await until(`document.getElementById('avatar-page').hidden && !!document.querySelector('#company-assistant-page [data-model-choice]')`);
+        result.checks.push('分身无手动成功记录时只显示设置入口，点击后收起分身并打开助理模型页');
       }
       await stop();
     }

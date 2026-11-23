@@ -41,7 +41,8 @@ function lastModel(dataDir, account) { return lastEntry(dataDir, account).model;
 function rememberModel(dataDir, account, model, now = Date.now()) {
   if (!dataDir || !model) return false;
   const all = readAll(dataDir);
-  all[String(account || 'personal')] = { model: String(model), at: new Date(now).toISOString() };
+  const key = String(account || 'personal');
+  all[key] = { ...all[key], model: String(model), at: new Date(now).toISOString() };
   const file = path.join(dataDir, FILE), tmp = file + '.tmp';
   fs.mkdirSync(dataDir, { recursive: true });
   fs.writeFileSync(tmp, JSON.stringify(all, null, 2) + '\n', 'utf8');

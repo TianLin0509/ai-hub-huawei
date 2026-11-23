@@ -3,20 +3,16 @@
 // 进程全部隐藏窗口（windowsHide）；超时或取消时结束整个进程树。只发页文字的前 600 字，结果只留本机。
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawn, execFile } = require('node:child_process');
+const { spawn } = require('node:child_process');
+const { withDeadline, waitForProcess } = require('../help-ask/request-lifecycle');
 
 const DEFAULT_MODELS = ['deepseek-v4.1-flash-1017', 'GLM-5.2-WX-Auto'];
 const BATCH_TIMEOUT_MS = 4 * 60000;
 
-function killTree(child) {
-  if (!child?.pid) return;
-  if (process.platform === 'win32') execFile('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {});
-  else { try { child.kill('SIGKILL'); } catch { /* 已退出 */ } }
-}
-
 // 起一次 codeagent：cmd 的 call 让 .cmd/.bat 包装设好证书与代理（同 codeagent-serve）。返回 { code, stdout, stderr, timedOut, aborted }。
-function runOnce({ command, args, input = '', cwd, env, timeoutMs, signal, spawnImpl = spawn }) {
-  return new Promise(resolve => {
+function runOnce({ command, args, input = '', cwd, env, timeoutMs, signal, onActivity = () => {}, spawnImpl = spawn }) {
+  let stdout = '', stderr = '';
+  return withDeadline(({ signal: requestSignal }) => new Promise(resolve => {
     const head = /^[A-Za-z0-9_.-]+$/.test(command) ? command : `"${path.normalize(String(command).replace(/"/g, ''))}"`;
     const line = [head, ...args.map(a => /^[A-Za-z0-9_.=:,-]+$/.test(a) ? a : `"${String(a).replace(/"/g, '')}"`)].join(' ');
     let child;
@@ -25,17 +21,14 @@ function runOnce({ command, args, input = '', cwd, env, timeoutMs, signal, spawn
         ? spawnImpl('cmd.exe', ['/d', '/s', '/c', `"call ${line}"`], { cwd, env, windowsHide: true, windowsVerbatimArguments: true })
         : spawnImpl('/bin/sh', ['-c', line], { cwd, env, windowsHide: true });
     } catch (error) { resolve({ code: -1, stdout: '', stderr: error.message }); return; }
-    let stdout = '', stderr = '', timedOut = false, aborted = false, done = false;
-    const finish = result => { if (done) return; done = true; clearTimeout(timer); signal?.removeEventListener?.('abort', onAbort); resolve(result); };
-    const timer = setTimeout(() => { timedOut = true; killTree(child); }, timeoutMs);
-    const onAbort = () => { aborted = true; killTree(child); };
-    if (signal?.aborted) onAbort(); else signal?.addEventListener?.('abort', onAbort);
+    const completion = waitForProcess(child, { signal: requestSignal, onActivity });
     child.stdout?.on('data', d => { stdout += d; });
     child.stderr?.on('data', d => { stderr += d; });
-    child.on('error', error => finish({ code: -1, stdout, stderr: stderr + error.message, timedOut, aborted }));
-    child.on('close', code => finish({ code, stdout, stderr, timedOut, aborted }));
+    completion.then(code => resolve({ code, stdout, stderr, timedOut: false, aborted: false }),
+      error => resolve({ code: null, stdout, stderr: stderr + error.message, timedOut: !!error.timedOut, aborted: !!signal?.aborted }));
+    child.stdin?.on?.('error', () => { /* EPIPE 以退出结果为准 */ });
     try { child.stdin?.end(input); } catch { /* 进程已退出 */ }
-  });
+  }), { signal, timeoutMs }).catch(error => ({ code: null, stdout, stderr: stderr + error.message, timedOut: !!error.timedOut, aborted: !!signal?.aborted }));
 }
 
 // 回复取正文：--output-format json 时是一个 result 事件；不认这个参数的旧版直接是正文。

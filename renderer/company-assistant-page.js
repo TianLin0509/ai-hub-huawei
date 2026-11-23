@@ -435,7 +435,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
         meta = `${c.answeredAt ? `<time>${when(c.answeredAt)}</time>` : ''}${c.answeredAt && (c.startedAt || c.askedAt) ? `<span>用时 ${secondsText(c.answeredAt - (c.startedAt || c.askedAt))}${c.startedAt && c.answeringAt ? `（准备 ${secondsText(c.answeringAt - c.startedAt)} · 回答 ${secondsText(c.answeredAt - c.answeringAt)}）` : ''}</span>` : ''}`;
       } else if (c.state === 'error') {
         const why = c.stopped ? '已停止这一问' : `没答上：${esc(c.error || '原因未知')}`;
-        answer = `<div class="ca-turn-error${c.stopped ? ' is-stopped' : ''}"><span>${why}</span><button type="button" class="ca-btn small" data-ca="retry:${esc(id)}">重问</button></div>${!c.stopped && window.HubErrorCard ? window.HubErrorCard.knownHtml({ area: 'codeagent', title: c.error || '助理没答上', details: c.error || '' }) : ''}`;
+        answer = `<div class="ca-turn-error${c.stopped ? ' is-stopped' : ''}"><span>${why}</span>${c.providerRepair ? c.providerRepair.canUseManual ? `<button type="button" class="ca-btn small" data-ca="repair-provider:${esc(id)}">改用手动会话在用的供应商</button>` : '<button type="button" class="ca-btn small" data-ca="settings-tab:model">选择模型与供应商</button>' : ''}<button type="button" class="ca-btn small" data-ca="retry:${esc(id)}">重问</button></div>${!c.stopped && window.HubErrorCard ? window.HubErrorCard.knownHtml({ area: 'codeagent', title: c.error || '助理没答上', details: c.error || '' }) : ''}`;
         meta = c.askedAt ? `<time>${when(c.askedAt)}</time>` : '';
       } else {
         // 三段：排队 → CodeAgent 准备中（开会话、送入问题，通常 10–20 秒）→ 正在查（问题已送进去）。
@@ -613,6 +613,14 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     }
     if (verb === 'source') return openSource(arg, button.dataset.sourceDay);
     if (verb === 'retry') { await call('retry-chat', { id: arg }); await load(); return; }
+    if (verb === 'repair-provider') {
+      const chat = data.chat?.find(c => c.id === arg);
+      button.disabled = true;
+      try { await call('set-model-choice', { account: chat?.providerRepair?.account || 'personal', useManual: true }); showMessage?.('已改用手动会话成功使用的供应商，可点重问'); }
+      catch (error) { showMessage?.(error.message); }
+      finally { button.disabled = false; }
+      return;
+    }
     if (verb === 'stop') {
       button.disabled = true; button.textContent = '正在停止…';
       try { await call('stop-chat', { id: arg }); } catch (error) { showMessage?.('没停下：' + error.message); }
@@ -707,7 +715,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     } catch (error) { if (msg) msg.textContent = '没成功：' + error.message; } finally { if (button) button.disabled = false; }
   }
 
-  const TABS = [['brief', '简报与提醒'], ['welink', 'WeLink 与邮箱'], ['phone', '手机'], ['pet', '桌宠']];
+  const TABS = [['brief', '简报与提醒'], ['model', '模型与供应商'], ['welink', 'WeLink 与邮箱'], ['phone', '手机'], ['pet', '桌宠']];
   let phoneTimer = null, phoneData = null;
 
   // 「手机」页（2026-10-18）：在手机 WeLink 的专用群里和助理对话。群由用户自己在手机上建，这里只选群、开关和看往来。
@@ -883,6 +891,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
         <button type="button" class="ca-btn small" data-ca="close-panel">关闭</button></div>
       <div class="ca-tab-body" data-tab="${current}">${current === 'brief' ? briefTab() : current === 'welink' ? welinkTab() : current === 'pet' ? '<div data-slot="pet-tab"></div>' : ''}</div></div>`;
     if (current !== 'phone') { clearInterval(phoneTimer); phoneTimer = null; }
+    if (current === 'model') { void mountModelTab(panel); return; }
     if (current === 'phone') { void mountPhoneTab(panel); return; }
     if (current === 'pet') {
       const host = panel.querySelector('[data-slot="pet-tab"]');
@@ -908,6 +917,29 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
         panel.hidden = true; panel.innerHTML = ''; panel.dataset.kind = ''; await load(); showMessage?.('助理设置已保存');
       } catch (error) { e.target.disabled = false; showMessage?.('没有保存：' + error.message); }
     };
+  }
+
+  async function mountModelTab(panel, account = 'personal') {
+    const host = panel.querySelector('.ca-tab-body');
+    host.textContent = '正在读取模型与供应商…';
+    try {
+      const info = await call('model-settings', { account });
+      if (panel.dataset.tab !== 'model' || panel.hidden) return;
+      const choices = require('../core/codeagent-model-choice');
+      const selected = info.choice ? choices.choiceValue({ id: info.choice.model, ...info.choice, provider: info.choice.codeagentModelProvider,
+        providerLabel: info.choice.codeagentModelProviderLabel, menuLabel: info.choice.codeagentModelMenuLabel }) : '';
+      host.innerHTML = `<fieldset><legend>助理与分身的模型</legend>${info.accounts?.length > 1 ? `<label>账号<select data-model-account>${info.accounts.map(a => `<option value="${esc(a.id)}"${a.id === account ? ' selected' : ''}>${esc(a.label)}</option>`).join('')}</select></label>` : ''}<label>模型与供应商 <span title="默认保持原有模型；目标模型有多个同名供应商时，沿用手动会话成功用过的供应商。单独选择后按所选组合运行。分身明确指定其他模型时保留该模型。" aria-label="选择规则">ⓘ</span><select data-model-choice><option value="">沿用默认模型，同名时用手动供应商</option>${info.options.filter(o => o.provider).map(o => `<option value="${esc(choices.choiceValue(o))}"${choices.choiceValue(o) === selected ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select></label></fieldset>
+        ${info.manual ? `<p>手动会话：${esc(info.manual.model)} · ${esc(info.manual.codeagentModelProviderLabel || info.manual.codeagentModelProvider)}</p>` : ''}
+        <div class="ca-row"><button class="ca-btn primary" type="button" data-model-save>保存</button><span data-model-message role="status"></span></div>`;
+      const accountInput = host.querySelector('[data-model-account]');
+      if (accountInput) accountInput.onchange = () => { void mountModelTab(panel, accountInput.value); };
+      host.querySelector('[data-model-save]').onclick = async e => {
+        e.target.disabled = true;
+        try { await call('set-model-choice', { account, value: host.querySelector('[data-model-choice]').value }); host.querySelector('[data-model-message]').textContent = '已保存，下次任务起生效'; }
+        catch (error) { host.querySelector('[data-model-message]').textContent = error.message; }
+        finally { e.target.disabled = false; }
+      };
+    } catch (error) { if (panel.dataset.tab === 'model') host.textContent = error.message; }
   }
 
   const onResize = () => place();

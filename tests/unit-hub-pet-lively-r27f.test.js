@@ -132,10 +132,10 @@ test('全屏检测进程顺带读前台窗口：W win / W desk 行解析，坏�
   assert.equal(w.foreground().kind, 'desk');
   w._handleLine('W win 5 5 5 5');
   assert.equal(w.foreground().kind, 'unknown');
-  w._handleLine('3');   // 全屏状态行照常
+  w._handleLine('F win 0 0 1920 1080 0 0 1920 1080');
   assert.equal(w.isFullscreen(), true);
   assert.match(buildScript(1, 1, { foreground: true }), /GetForegroundWindow/);
-  assert.doesNotMatch(buildScript(1, 1), /GetForegroundWindow/, '不开 foreground 时脚本不变');
+  assert.match(buildScript(1, 1), /GetForegroundWindow/, '全屏始终核对前台窗口，foreground 只控制窗口避让读数');
 });
 
 // ---------- 渲染端动作 ----------

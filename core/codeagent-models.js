@@ -593,7 +593,7 @@ function settingsProviderModels(configDir, fsModule = fs) {
     const caps = entry.modelCapabilities && typeof entry.modelCapabilities === 'object' && !Array.isArray(entry.modelCapabilities) ? Object.keys(entry.modelCapabilities) : [];
     for (const raw of [...PROVIDER_MODEL_KEYS.map(key => entry[key]), ...caps]) {
       const id = clean(typeof raw === 'string' ? raw : '');
-      if (!isSafeModelId(id) || visionOnly.has(id.toLowerCase()) || out.some(row => row.id.toLowerCase() === id.toLowerCase())) continue;
+      if (!isSafeModelId(id) || visionOnly.has(id.toLowerCase()) || out.some(row => row.id.toLowerCase() === id.toLowerCase() && row.providerName === clean(name).slice(0, 60))) continue;
       out.push({ id, providerName: clean(name).slice(0, 60) });
     }
   }
@@ -624,9 +624,10 @@ function modelOptions(dataDir, { configDir = null, accountKey = 'personal', incl
     || !ids.has(option.id.toLowerCase() + '-auto'));
   // 自配模型里 serve / 菜单清单没有的，排在后面；选它照常走 CodeAgent 自己的 /model 菜单确认，菜单里也没有会就地报失败。
   for (const row of settingsProviderModels(configDir)) {
-    if (ids.has(row.id.toLowerCase())) continue;
+    if (listed.some(option => option.id.toLowerCase() === row.id.toLowerCase() && option.provider === row.providerName)) continue;
+    // 清单只有模型名时也保留自配供应商，避免同名线路被第一条吞掉。
     ids.add(row.id.toLowerCase());
-    listed.push({ id: row.id, label: row.providerName ? `${row.id} · ${row.providerName}` : row.id, source: 'settings',
+    listed.push({ id: row.id, label: row.providerName ? `${row.id} · ${row.providerName}` : row.id, source: 'settings', provider: row.providerName, providerLabel: row.providerName, menuLabel: row.id,
       description: `CodeAgent 配置里自配的模型${row.providerName ? `（供应商 ${row.providerName}）` : ''}，账号清单里还没读到` });
   }
   // 没有权限 / 用不了的模型（2026-11-19 反馈 3b805ace、群里两次「模型列表只保留能用的」）：不删，排到最后、标 unavailable 并写明原因，

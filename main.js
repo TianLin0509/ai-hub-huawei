@@ -965,6 +965,15 @@ async function observeCodeAgentModel(hubSessionId, ev, transcriptPath, source = 
       });
     };
     const observed = session && modelId ? codeAgentModels.observeModel(session, modelId, { at: modelAt, resolveSwitch, followActual: true }) : null;
+    try {
+      if (source === 'turn-complete' && !session.purpose && !session.autonomous && !observed?.mismatch
+        && !require('./core/company-assistant/turn-api-error').lastApiError(file)) {
+        const configDir = session.codeagentConfigDir || require('./core/codeagent-config').resolveCodeAgentConfig(process.env).configDir;
+        let settings = {}; try { settings = JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf8')); } catch { /* 无配置时只认明确的会话线路。 */ }
+        require('./core/codeagent-assistant-route').rememberSuccess(getHubDataDir(), session, last, {
+          options: codeAgentModels.modelOptions(getHubDataDir(), { configDir, accountKey: session.codeagentPoolAccount || 'personal' }), settings });
+      }
+    } catch (error) { console.warn('[codeagent-model] 保存手动成功线路失败：' + error.message); }
     if (observed || !modelId) {
       codeAgentModels.appendModelLog(getHubDataDir(), {
         event: 'observe', via: source, session: String(hubSessionId || '').slice(0, 8),
@@ -4980,6 +4989,9 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
           // 隔离实例（E2E）存到自己的数据目录，不写进真实的「下载」文件夹。
           downloadsDir: () => isIsolatedHub() ? path.join(getHubDataDir(), 'downloads') : app.getPath('downloads'),
           // edition 带上「·成员版 / ·公开版」并另带 target（r42 与阿里云侧约定）：阿里云据此拒收新版成员版，旧客户端不受影响。
+          collectMcpDiagnostics: sessionId => require('./core/codeagent-mcp-diagnostics').collectSessionMcpDiagnostics({
+            session: sessionManager.sessions.get(sessionId), homeDir: process.env.USERPROFILE || process.env.HOME || '',
+            personalDir: require('./core/codeagent-config').resolveCodeAgentConfig(process.env).configDir }),
           info: () => ({ productName: distribution.productName, target: distribution.target || '',
             edition: (distribution.editionBadge || distribution.target || '') + (feedbackEdition ? (feedbackEdition === 'member' ? '·成员版' : '·公开版') : ''),
             version: distribution.editionVersion || app.getVersion(), electron: process.versions.electron, platform: `${process.platform} ${require('os').release()}`,

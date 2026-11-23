@@ -155,7 +155,7 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     const body = { inbox: () => inbox(a), log: () => logs(a), scope: () => scope(a), ctx: () => context(a), back: () => backend(a) }[tab]();
     return `<section class="avx-detail"><div class="avx-dh"><h2>${esc(a.name)}</h2><span class="avx-ch ${{ on: 'g', error: 'r', paused: 'r', waiting: 'w' }[a.state.code] || ''}">${esc(a.state.text)}</span><span class="avx-ch b">${esc(modeText(a))}</span>
       <div class="avx-right"><button class="avx-btn s" data-av="open-session">打开会话</button><button class="avx-btn s" data-av="toggle">${a.enabled ? '暂停这个分身' : '恢复'}</button><button class="avx-btn s d" data-av="remove">删除</button></div></div>
-      ${a.state.error ? `<div class="avx-bn r slim">${esc(a.state.error)}</div>` : ''}
+      ${a.state.error ? `<div class="avx-bn r slim">${esc(a.state.error)}${a.state.providerRepair ? a.state.providerRepair.canUseManual ? `<button class="avx-btn s" data-av="repair-provider" data-account="${esc(a.state.providerRepair.account)}">改用手动会话在用的供应商</button>` : '<button class="avx-btn s" data-av="provider-settings">选择模型与供应商</button>' : ''}</div>` : ''}
       <nav class="avx-tabs">${tabs.map(([k, n]) => `<button class="${tab === k ? 'on' : ''}" data-av="tab" data-k="${k}">${n}${k === 'inbox' && a.pending ? `<em>${a.pending}</em>` : ''}</button>`).join('')}</nav><div class="avx-body ${tab === 'log' ? 'col' : ''}">${body}</div></section>`;
   }
   function inbox(a) {
@@ -235,6 +235,14 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
   }
   async function act(b) {
     const op = b.dataset.av, a = b.dataset.a, i = b.dataset.i, payload = { avatarId: a, itemId: i };
+    if (op === 'provider-settings') { close(); window.dispatchEvent(new CustomEvent('hub-pet:open-assistant', { detail: { settingsTab: 'model' } })); return; }
+    if (op === 'repair-provider') {
+      b.disabled = true;
+      const r = await ipcRenderer.invoke('company-assistant:set-model-choice', { account: b.dataset.account || 'personal', useManual: true });
+      if (!r?.ok) { b.disabled = false; throw new Error(r?.error || '供应商没有切换'); }
+      if (cur()?.backend?.model && !(await save({ backend: { ...cur().backend, model: '' } }))) return;
+      flash('已改用手动会话成功使用的供应商，下次任务起生效'); return;
+    }
     if (op === 'sel') { sel = b.dataset.id; tab = 'inbox'; logPage = 0; logPick = -1; render(); return; }
     if (op === 'tab') { tab = b.dataset.k; logPage = 0; logPick = -1; if (['scope', 'ctx'].includes(tab)) void loadTargets(); render(); return; }
     if (op === 'item') { itemSel[b.dataset.k] = b.dataset.id; render(); return; }

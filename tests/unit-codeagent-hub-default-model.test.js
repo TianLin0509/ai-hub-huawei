@@ -75,8 +75,9 @@ test('session-manager：没明确选模型的新会话先用 Hub 默认；明确
   assert.match(block, /!opts\.codeagentFollowCli/);
   assert.match(block, /!HUB_DEFAULT_SKIP_PURPOSES\.includes\(opts\.purpose\)/);
   assert.match(block, /freshLaunch/);
-  // 自动会话（助理、热帖整理）的选型目标先取 Hub 默认
-  assert.match(source, /const target = hubDefaultTarget \|\| \(codeagentPool/);
+  // 自动会话仍先取 Hub 默认；成功记录只给同名目标消歧，显式设置可改模型。
+  assert.match(source, /const defaultTarget = hubDefaultTarget \|\| \(codeagentPool/);
+  assert.match(source, /const target = assistantRoute\?\.model \|\| defaultTarget/);
 });
 
 test('Codex 审查补点：停用供应商不误伤别家同名可用模型；Hub 默认被判用不了时不套', t => {

@@ -21,7 +21,7 @@ const RULES = [
   ['notify', '.config-notification-title, #config-notification-card'],
   ['server', '.config-operations-title, .config-operations-card'],
   ['advanced', '#cfg-team-auto-approve-field, #cfg-work-file-root-field'],
-  ['display', '.config-reading-title, #cfg-card-font-size, #cfg-composer-enter-field, #cfg-workspace-root-field, #cfg-codeagent-quota-placement-field'],
+  ['display', '#cfg-boot-splash-field, .config-reading-title, #cfg-card-font-size, #cfg-composer-enter-field, #cfg-workspace-root-field, #cfg-codeagent-quota-placement-field'],
   ['general', '.company-api-settings-entry, .config-language-field, #cfg-model-unavailable-policy, #cfg-proxy, #btn-config-accounts, .config-hint'],
 ];
 
@@ -53,6 +53,17 @@ function createSettingsTabs({ document, window }) {
   const teamField = document.getElementById('cfg-team-auto-approve-field');
   const teamNote = teamField?.querySelector('small');
   if (teamNote) setFieldHint(teamNote, teamNote.textContent, { label: teamField.querySelector('strong') });
+  // 外观页新增启动动画入口后仍保持一屏：静态说明收进 ⓘ，工作目录等动态状态照常就地显示。
+  const readingGrid = document.getElementById('cfg-card-font-size')?.closest('.config-reading-grid');
+  const readingNote = readingGrid?.nextElementSibling;
+  if (readingNote?.classList.contains('config-reading-note')) {
+    setFieldHint(readingNote, readingNote.textContent, { label: readingGrid.querySelector('label') });
+  }
+  for (const id of ['cfg-composer-enter-field', 'cfg-codeagent-quota-placement-field']) {
+    const field = document.getElementById(id);
+    const note = field?.querySelector('.config-reading-note');
+    if (note) setFieldHint(note, note.textContent, { label: field.querySelector('label') });
+  }
   const bar = document.createElement('div');
   bar.className = 'cfg-tabs';
   bar.id = 'cfg-tabs';

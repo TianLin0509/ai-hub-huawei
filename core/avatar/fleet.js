@@ -26,7 +26,7 @@ class FleetService {
   constructor(deps) {
     this.d = deps; this.now = deps.now || (() => Date.now());
     this.legacy = new AvatarService({ dataDir: deps.dataDir, getAssistant: deps.getAssistant, runAi: deps.runAi, now: this.now, noTimer: true });
-    this.sessions = new AgentSessions({ createSession: deps.createSession, sendPrompt: deps.sendPrompt, lastFinal: deps.lastFinal, getSession: deps.getSession, closeSession: deps.closeSession, pollMs: deps.pollMs, now: this.now, pickAccount: model => this.pickAccount(model) });
+    this.sessions = new AgentSessions({ dataDir: deps.dataDir, createSession: deps.createSession, sendPrompt: deps.sendPrompt, lastFinal: deps.lastFinal, getSession: deps.getSession, closeSession: deps.closeSession, pollMs: deps.pollMs, now: this.now, pickAccount: model => this.pickAccount(model) });
     this.timer = null; this.ticking = false; this.running = new Set(); this.sending = new Set(); this.live = new Map(); this.hotAt = 0; this.prep = null; this.readError = ''; this.lastError = ''; this.recovered = new Set();
   }
   assistant() { return this.legacy.assistant(); }
@@ -336,6 +336,7 @@ class FleetService {
         }
         if (st.session?.id === session.id) st.session = { ...st.session, questions: (st.session.questions || 0) + pending.length, lastAt: this.now() };
         st.lastError = '';
+        st.providerRepair = null;
       });
     } catch (e) {
       if (this.exists(owner, id)) {
@@ -346,6 +347,7 @@ class FleetService {
             if (item.tries >= 2) { Object.assign(item, { state: 'remind', why: '分身没处理成：' + short(e.message, 80) }); this.note(st, item, 'remind', '等你处理', item.why); } else item.state = 'new';
           }
           st.lastError = short(e.message, 160);
+          st.providerRepair = e.providerRepair || null;
           if (!e.restart) return '';
           const sid = st.session?.id || ''; st.session = null; return sid;
         });
@@ -538,7 +540,7 @@ class FleetService {
       for (const item of open) items.push({ ...item, avatarId: av.id, avatarName: av.name, prefixed: !!F.TEMPLATES[av.tpl]?.prefixed, prefix: av.prefix, flags: [...new Set([...(item.flags || []), ...R.decide(item, roster).flags])] });
       const working = Object.values(st.items).filter(i => ['new', 'drafting'].includes(i.state)).length;
       const code = fleet.paused ? 'paused' : !av.enabled ? 'off' : !login.ok ? 'waiting' : st.lastError ? 'error' : 'on';
-      return { ...av, state: { code, text: { paused: '已暂停', off: '已暂停', waiting: '等 WeLink 登录', error: '遇到问题', on: this.running.has(av.id) || working ? '处理中' : '运行中' }[code], error: st.lastError || '' }, pending: open.length, working,
+      return { ...av, state: { code, text: { paused: '已暂停', off: '已暂停', waiting: '等 WeLink 登录', error: '遇到问题', on: this.running.has(av.id) || working ? '处理中' : '运行中' }[code], error: st.lastError || '', providerRepair: st.providerRepair || null }, pending: open.length, working,
         stats: { read: stats.read || 0, model: stats.model || 0, ready: stats.ready || 0, remind: stats.remind || 0, sent: stats.sent || 0 }, memoryLines: st.memoryLines || 0, examples: exampleCount(path.join(this.home(owner, av.id), 'work', 'examples.md')),
         session: { id: st.session?.id || '', alive: this.sessions.alive(st.session?.id), questions: st.session?.questions || 0 }, log: st.log.slice(0, 80),
         owners: Object.fromEntries((av.targets || []).map(t => [t.id, F.ownerOf(fleet.avatars, av, t)])) };

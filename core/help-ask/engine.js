@@ -13,10 +13,12 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { withDeadline } = require('./request-lifecycle');
 
 const ENGINES = ['codeagent', 'claude', 'codex'];
 const LABEL = { codeagent: 'CodeAgent', claude: 'Claude Code', codex: 'Codex' };
 const TOTAL_MS = 60000;
+const IDLE_MS = 45000; // 保留原有一分钟总上限，静默更早退出。
 const MAX_QUESTION = 2000;
 const MAX_HISTORY = 3;
 const MAX_ANSWER = 20000;
@@ -112,7 +114,7 @@ function createHelpAskEngine({ dataDir, edition = 'public', env = process.env, g
   replyText = require('../company-assistant/ppt-map-model').replyText,
   codexMcpNames = e => require('../ask-aside-codex').configuredMcpNames([path.join(e.CODEX_HOME || path.join(os.homedir(), '.codex'), 'config.toml')]),
   readManual = file => fs.readFileSync(file, 'utf8'), manualPath = () => manualFile(edition),
-  now = Date.now, totalMs = TOTAL_MS } = {}) {
+  now = Date.now, totalMs = TOTAL_MS, idleMs = IDLE_MS } = {}) {
   const cwd = require('../work-file-root').directory('help-workspace', path.join(dataDir, 'help-ask', 'cwd'));
   const helpCache = new Map(); // 引擎 → --help 文本（看支持哪些参数）
 
@@ -129,7 +131,7 @@ function createHelpAskEngine({ dataDir, edition = 'public', env = process.env, g
     const first = engines.find(e => e.available);
     const file = manualPath();
     return { engines: engines.map(({ id, label, available }) => ({ id, label, available })), engine: first ? first.id : null,
-      engineLabel: first ? first.label : '', manual: !!file, manualPath: file, edition, totalSeconds: Math.round(totalMs / 1000) };
+      engineLabel: first ? first.label : '', manual: !!file, manualPath: file, edition, totalSeconds: Math.round(totalMs / 1000), idleSeconds: Math.round(idleMs / 1000) };
   }
 
   // 每次子进程的时限 = 剩下的总时间（再多给 2 秒，让总时限的取消先到，统一按「超时」收尾）。
@@ -139,7 +141,7 @@ function createHelpAskEngine({ dataDir, edition = 'public', env = process.env, g
   async function helpOf(id, command, launchEnv, ctx) {
     if (helpCache.has(id)) return helpCache.get(id);
     const args = id === 'codex' ? ['exec', '--help'] : ['--help'];
-    const r = await runOnce({ command, args, cwd, env: launchEnv, timeoutMs: left(ctx), signal: ctx.signal });
+    const r = await runOnce({ command, args, cwd, env: launchEnv, timeoutMs: left(ctx), signal: ctx.signal, onActivity: ctx.onActivity });
     if (stopped(r, ctx)) throw Object.assign(new Error('stopped'), { stopped: true });
     const text = String(r.stdout || '') + String(r.stderr || '');
     if (/-p\b|--print|exec/.test(text)) helpCache.set(id, text);
@@ -162,7 +164,7 @@ function createHelpAskEngine({ dataDir, edition = 'public', env = process.env, g
     if (!readOnlyCapable(help)) throw new Error('CodeAgent 没探测到只读参数（--tools），为安全起见这次不用它答');
     let lastError = '';
     for (const model of CODEAGENT_MODELS) {
-      const r = await runOnce({ command, args: codeAgentArgs(model, help), input: prompt, cwd, env: e, timeoutMs: left(ctx), signal: ctx.signal });
+      const r = await runOnce({ command, args: codeAgentArgs(model, help), input: prompt, cwd, env: e, timeoutMs: left(ctx), signal: ctx.signal, onActivity: ctx.onActivity });
       if (stopped(r, ctx)) throw Object.assign(new Error('stopped'), { stopped: true });
       let text = '';
       lastError = '';
@@ -184,7 +186,7 @@ function createHelpAskEngine({ dataDir, edition = 'public', env = process.env, g
     let settingsFile = '';
     try { settingsFile = path.join(dataDir, 'help-ask', 'claude-settings.json'); fs.writeFileSync(settingsFile, JSON.stringify({ outputStyle: 'default' })); } catch { settingsFile = ''; }
     const args = claudeArgs(help, { model: String(env.AI_HUB_HELP_ASK_CLAUDE_MODEL || '').trim(), settingsFile });
-    const r = await runOnce({ command, args, input: prompt, cwd, env: e, timeoutMs: left(ctx), signal: ctx.signal });
+    const r = await runOnce({ command, args, input: prompt, cwd, env: e, timeoutMs: left(ctx), signal: ctx.signal, onActivity: ctx.onActivity });
     if (stopped(r, ctx)) throw Object.assign(new Error('stopped'), { stopped: true });
     if (r.code === 0 && cleanAnswer(r.stdout)) return { answer: cleanAnswer(r.stdout), model: '' };
     throw Object.assign(new Error(failText('Claude Code', r)), { timedOut: !!r.timedOut });
@@ -195,7 +197,7 @@ function createHelpAskEngine({ dataDir, edition = 'public', env = process.env, g
     let names = [];
     try { names = codexMcpNames(env) || []; } catch { names = []; }
     try {
-      const r = await runOnce({ command, args: codexArgs(out, names), input: prompt, cwd, env: childEnv(env), timeoutMs: left(ctx), signal: ctx.signal });
+      const r = await runOnce({ command, args: codexArgs(out, names), input: prompt, cwd, env: childEnv(env), timeoutMs: left(ctx), signal: ctx.signal, onActivity: ctx.onActivity });
       if (stopped(r, ctx)) throw Object.assign(new Error('stopped'), { stopped: true });
       let text = '';
       try { text = fs.readFileSync(out, 'utf8'); } catch { /* 没写出来 */ }
@@ -215,32 +217,28 @@ function createHelpAskEngine({ dataDir, edition = 'public', env = process.env, g
     const prompt = buildPrompt({ manual: readManual(file), question: q, history });
     fs.mkdirSync(cwd, { recursive: true });
     const t0 = now();
-    const controller = new AbortController();
-    let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; controller.abort(); }, totalMs);
-    const onCancel = () => controller.abort();
-    if (signal?.aborted) controller.abort(); else signal?.addEventListener?.('abort', onCancel, { once: true });
-    const ctx = { signal: controller.signal, deadline: t0 + totalMs };
     const tried = [];
     try {
-      for (const e of engines) {
-        if (controller.signal.aborted) break;
-        try {
-          const r = e.id === 'codeagent' ? await runCodeAgent(e.command, prompt, ctx)
-            : e.id === 'claude' ? await runClaude(e.command, prompt, ctx) : await runCodex(e.command, prompt, ctx);
-          return { ok: true, answer: r.answer, engine: e.id, engineLabel: e.label, model: r.model, ms: now() - t0, tried };
-        } catch (error) {
-          if (error && error.stopped) break;
-          tried.push({ engine: e.id, label: e.label, error: String(error && error.message || error) });
-          if (error && error.timedOut) { timedOut = true; break; } // 超时不再换下一个引擎
+      return await withDeadline(async ({ signal: requestSignal, onActivity }) => {
+        const ctx = { signal: requestSignal, onActivity, deadline: t0 + totalMs };
+        for (const e of engines) {
+          if (requestSignal.aborted) break;
+          try {
+            const r = e.id === 'codeagent' ? await runCodeAgent(e.command, prompt, ctx)
+              : e.id === 'claude' ? await runClaude(e.command, prompt, ctx) : await runCodex(e.command, prompt, ctx);
+            return { ok: true, answer: r.answer, engine: e.id, engineLabel: e.label, model: r.model, ms: now() - t0, tried };
+          } catch (error) {
+            if (error && error.stopped) break;
+            tried.push({ engine: e.id, label: e.label, error: String(error && error.message || error) });
+            if (error && error.timedOut) throw error; // 超时不再换下一个引擎
+          }
         }
-      }
-      if (timedOut) return { ok: false, timedOut: true, error: `这次没答上来：${Math.round(totalMs / 1000)} 秒内没答完。可以换个问法再问，或一键反馈给维护人`, tried, ms: now() - t0 };
-      if (controller.signal.aborted) return { ok: false, cancelled: true, error: '已取消', tried, ms: now() - t0 };
-      return { ok: false, error: tried.map(t => t.error).join('；') || '没有可用的回答', tried, ms: now() - t0 };
-    } finally {
-      clearTimeout(timer);
-      signal?.removeEventListener?.('abort', onCancel);
+        if (requestSignal.aborted) throw requestSignal.reason;
+        return { ok: false, error: tried.map(t => t.error).join('；') || '没有可用的回答', tried, ms: now() - t0 };
+      }, { signal, timeoutMs: totalMs, idleMs });
+    } catch (error) {
+      return { ok: false, timedOut: !!error.timedOut, timeoutKind: error.timeoutKind || '', cancelled: !!signal?.aborted,
+        error: error.timedOut ? `这次没答上来：${error.message}` : error.message, tried, ms: now() - t0 };
     }
   }
 

@@ -19,6 +19,8 @@ function registerCompanyAssistantIpc(ipcMain, service) {
     'digest-notice': request => service.digestNotice(String(request?.id || '')),
     source: request => service.sourceContext(String(request?.source || ''), request?.day),
     'set-settings': request => ({ ok: true, settings: service.setSettings(request || {}) }),
+    'model-settings': request => service.modelSettings(request?.account || 'personal'),
+    'set-model-choice': request => service.setModelChoice(request || {}),
     memory: request => service.memory.execute(request || { op: 'list' }, { fromSettings: true }),
     login: async request => ({ ok: true, flow: await service.login({ restart: !!request?.restart, clean: !!request?.clean }) }),
     // 2026-11-19：设置里「退出 WeLink 登录」——清掉本机 welink-cli 凭据并停掉自动续期。

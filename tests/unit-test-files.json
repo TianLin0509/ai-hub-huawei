@@ -1,4 +1,6 @@
 [
+  "tests/unit-codeagent-member-mcp.test.js",
+  "tests/unit-assistant-provider-route.test.js",
   "tests/unit-own-api-secrets.test.js",
   "tests/unit-capability-market-visibility.test.js",
   "tests/unit-codeagent-market.test.js",
@@ -128,6 +130,7 @@
   "tests/unit-dsh-branch-cards.test.js",
   "tests/unit-dsh-asar-unpack.test.js",
   "tests/unit-ask-aside-engines.test.js",
+  "tests/unit-ask-timeout.test.js",
   "tests/unit-help-ask.test.js",
   "tests/unit-feature-search.test.js",
   "tests/unit-claude-prefix-fork.test.js",
@@ -349,6 +352,7 @@
   "tests/unit-rsi-rail-width.test.js",
   "tests/unit-session-recovery-rsi-z.test.js",
   "tests/unit-boot-splash.test.js",
+  "tests/unit-pet-fullscreen-watch.test.js",
   "tests/unit-codeagent-serve-session.test.js",
   "tests/unit-card-relay-pilot.test.js",
   "tests/unit-f2b-file-image.test.js"

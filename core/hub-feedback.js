@@ -137,6 +137,7 @@ function collectBundle({ info = {}, description = '', contact = '', logsDir, dat
     `版本：${info.productName || 'AI Hub'} ${info.edition || ''} v${info.version || '?'}`.replace(/\s+/g, ' '),
     `Electron：${info.electron || process.versions.electron || '?'} · 系统：${info.platform || `${process.platform} ${os.release()}`}`,
     info.runtime ? `运行快照：${info.runtime}` : '',
+    info.mcpDiagnostics ? `MCP 诊断：${info.mcpDiagnostics}` : '',
     contact ? `联系方式：${contact}` : '',
     '',
     '## 问题描述',
@@ -145,6 +146,7 @@ function collectBundle({ info = {}, description = '', contact = '', logsDir, dat
   ].filter(x => x !== '');
   items.push({ name: '版本与系统信息', detail: head[2] });
   if (info.runtime) items.push({ name: '运行快照', detail: info.runtime });
+  if (info.mcpDiagnostics) items.push({ name: '本会话 MCP 诊断', detail: info.mcpDiagnostics });
   const headText = redact(head.join('\n'), redactOpts);
   const parts = [headText];
   const reserve = 512; // 给末尾「已裁剪」说明留的位置

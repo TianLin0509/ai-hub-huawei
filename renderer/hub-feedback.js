@@ -101,7 +101,7 @@
     desc.focus();
     if (text) { const at = desc.value.indexOf('（可以在这里补一句'); if (at >= 0) desc.setSelectionRange(at, desc.value.indexOf('）', at) + 1); }
     try {
-      const p = await ipcRenderer.invoke('hub-feedback:preview', {});
+      const p = await ipcRenderer.invoke('hub-feedback:preview', { sessionId: window.__hubFeedbackSessionId?.() || null });
       if (!contactEdited && !sending && p && typeof p.contact === 'string') dialog.querySelector('[data-hf="contact"]').value = p.contact;
       const items = (p && p.items) || [];
       const diag = await diagnosis();

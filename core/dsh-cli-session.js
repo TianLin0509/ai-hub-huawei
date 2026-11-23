@@ -92,19 +92,29 @@ class DshCliSession extends EventEmitter {
     return ready;
   }
   // 不经 TUI 输入框，主会话正在跑也能问；同一会话的问题由调用方按顺序发。
-  askSide(question, { timeoutMs = 180000 } = {}) {
+  askSide(question, { timeoutMs = 180000, signal } = {}) {
+    if (signal?.aborted) return Promise.reject(signal.reason);
     if (this.closed || this.runtime.connection !== 'connected') return Promise.reject(new Error('DSH 终端未连接，请先恢复会话'));
     if (!this.threadId) return Promise.reject(new Error('DSH 还没有会话记录，请等首轮开始后再问'));
     const id = randomUUID();
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => { this.sideAsks.delete(id); reject(new Error(`DSH 超过 ${Math.round(timeoutMs / 1000)} 秒没答完`)); }, timeoutMs + 5000);
-      this.sideAsks.set(id, { resolve, reject, timer });
+      const file = path.join(this.askDir, id + '.ask.json');
+      const cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', onAbort); this.sideAsks.delete(id); };
+      const stop = error => {
+        // 只取消这条 HTTP 旁问；主 DSH 终端继续运行。
+        try { fs.unlinkSync(file); } catch { /* 观察插件可能已经取走 */ }
+        try { fs.writeFileSync(path.join(this.askDir, id + '.cancel.json'), '{}', 'utf8'); } catch { /* 终端已退出 */ }
+        cleanup(); reject(error);
+      };
+      const onAbort = () => stop(signal.reason);
+      const timer = setTimeout(() => stop(new Error(`DSH 超过 ${Math.round(timeoutMs / 1000)} 秒没答完`)), timeoutMs + 5000);
+      this.sideAsks.set(id, { resolve: value => { cleanup(); resolve(value); }, reject: error => { cleanup(); reject(error); }, timer });
+      signal?.addEventListener('abort', onAbort, { once: true });
       try {
         fs.mkdirSync(this.askDir, { recursive: true });
-        const file = path.join(this.askDir, id + '.ask.json');
         fs.writeFileSync(file + '.tmp', JSON.stringify({ id, question: String(question), timeoutMs }), 'utf8');
         fs.renameSync(file + '.tmp', file);
-      } catch (error) { clearTimeout(timer); this.sideAsks.delete(id); reject(error); }
+      } catch (error) { cleanup(); reject(error); }
     });
   }
   settleSideAsk(row) {

@@ -92,7 +92,9 @@ test('models the user configured under enterprise.providers are added after the 
     'team-b': { mainModel: 'glm-5.3-flash', modelCapabilities: { 'minimax-m3-int': { contextWindow: 200000 } } },
   } } }));
   const options = models.modelOptions(data, { configDir: cac });
-  assert.deepEqual(options.map(o => o.id), [...served, 'kimi-k3-mini', 'dsr2-think', 'minimax-m3-int'], 'serve order first, then configured extras, no duplicates, no vision-only model');
+  assert.deepEqual(options.map(o => o.id), [...served, 'dsv4-dspark', 'kimi-k3-mini', 'dsr2-think', 'glm-5.3-flash', 'minimax-m3-int'], '先列 serve 清单，再列各自配供应商；同名但供应商不同的项保留，视觉专用模型不列入');
+  assert.equal(options.find(o => o.id === 'dsv4-dspark' && o.source === 'settings').provider, 'team-a');
+  assert.equal(options.find(o => o.id === 'glm-5.3-flash' && o.source === 'settings').provider, 'team-b');
   const extra = options.find(o => o.id === 'kimi-k3-mini');
   assert.equal(extra.source, 'settings'); assert.equal(extra.label, 'kimi-k3-mini · team-a');
   assert.ok(!JSON.stringify(options).includes('x.invalid') && !JSON.stringify(options).includes('xxx'), 'never copies endpoints or keys');

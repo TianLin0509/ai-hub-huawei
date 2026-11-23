@@ -649,7 +649,7 @@ function buildCodeAgentPtyLaunch(id, kind, opts, cwd, env, config, auth = null, 
   const mcpPaths = singleCodeAgentMcpConfig(id, [...(mcp.configPaths || []), ...(memberMcp && memberMcp.file ? [memberMcp.file] : [])], hubDataDir);
   if (mcpPaths.length) args.push('--mcp-config', ...mcpPaths);
   if (mcp.profile !== 'full') args.push('--strict-mcp-config');
-  syncCodeAgentProjectMcp(cwd, bridge && !extraOnly ? null : opts.mcpConfigFile, hubDataDir);
+  syncCodeAgentProjectMcp(cwd, opts.purpose === 'company-assistant' ? mcpPaths[0] : bridge && !extraOnly ? null : opts.mcpConfigFile, hubDataDir);
   for (const dir of claudeNativeAddDirs(bridgeSettings ? [...claudeNativeAddDirs(opts.addDirs), ...(bridgeSettings.codeRoots || [])] : opts.addDirs)) args.push('--add-dir', dir);
   let sessionId = null;
   let identity = [];
@@ -2010,15 +2010,26 @@ class SessionManager extends EventEmitter {
       // 个人账号一律选它纠正后的默认模型：新开时它就是指定模型（上面已核对），恢复时按此刻的默认照常起，不选回当初的模型。
       // 号的权限清单探测过且只有一个模型时就选它，不管 settings.json 写的什么（2026-10-20 公司真机：CodeAgent 启动时把默认模型写回 deepseek）。
       const pool = require('./codeagent-pool');
-      const target = hubDefaultTarget || (codeagentPool ? codeAgentRouteModel(opts) || codeagentPool.model
+      const defaultTarget = hubDefaultTarget || (codeagentPool ? codeAgentRouteModel(opts) || codeagentPool.model
           || pool.strictDefaultModel(pool.readSettingsModel(codeagentPool.account.dir), codeagentPool.account.models, { authoritative: !!codeagentPool.account.modelsAuthoritative }).model || ''
         : codeAgentExpectedModel({}, { configDir: codeagentConfig.configDir, single: true }));
+      const assistantRoute = ['company-assistant', 'avatar-agent'].includes(opts.purpose)
+        ? require('./codeagent-assistant-route').choose(getHubDataDir(), codeagentPool ? codeagentPool.account.id : 'personal', defaultTarget,
+          { configDir: codeagentConfig.configDir, explicitModel: codeAgentRouteModel(opts) }) : null;
+      if (assistantRoute) opts = { ...opts, ...require('./codeagent-model-choice').routeFields(assistantRoute) };
+      const target = assistantRoute?.model || defaultTarget;
       // 不需要或暂时不该开菜单时直接发问题（2026-10-21 同事公司 Hub：自动选模型 13 次全失败、每次都耽误发问题）：
       // 恢复的会话上一轮就是目标模型作答、这个号连续 3 次没选成（4 小时熔断）。见 core/codeagent-auto-pick.js。
       // 配置里写的默认模型不再作为跳过的依据（2026-10-22 用户：明明是 DeepSeek 号却按 GLM 起来，写着的值不可信）。
       let skip = null;
+      // 指定供应商仍服从四小时熔断；此时未确认线路，不能冒用 CLI 当前供应商直接发问。
+      if (opts.codeagentModelProvider) {
+        const open = require('./codeagent-auto-pick').openFor(getHubDataDir(), codeagentPool ? codeagentPool.account.id : 'personal');
+        if (open) throw Object.assign(new Error(`这个账号自动选择模型已暂停，${new Date(open.until).toLocaleString('zh-CN', { hour12: false })} 前不再自动选供应商。请先在手动会话选择供应商并成功回答后再试`),
+          { code: 'CODEAGENT_MODEL_PICK_BREAKER_OPEN', notSent: true });
+      }
       try {
-        skip = require('./codeagent-auto-pick').skipReason({ dataDir: getHubDataDir(), account: codeagentPool ? codeagentPool.account.id : 'personal',
+        skip = opts.codeagentModelProvider ? null : require('./codeagent-auto-pick').skipReason({ dataDir: getHubDataDir(), account: codeagentPool ? codeagentPool.account.id : 'personal',
           isPool: !!codeagentPool, target, freshLaunch, actualModel: opts.codeagentActualModel || '' });
       } catch (error) { console.warn('[codeagent] 自动选模型的跳过判断出错，照常选：' + error.message); }
       if (skip) {

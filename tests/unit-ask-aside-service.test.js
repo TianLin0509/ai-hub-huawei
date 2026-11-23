@@ -112,7 +112,7 @@ test('会议上下文独立分区经stdin传递，公开IPC拒绝内部入口且
   await assert.rejects(runAsk({ config: config(tmp(t)), cwd: '.', ccSessionId: CC, question: 'q', context, spawnFn, mode: { input: 'arg' } }), /标准输入.*完整材料/);
   const handlers = new Map(), received = [];
   registerAskAsideIpc({ handle: (name, handler) => handlers.set(name, handler) }, { ask: request => { received.push(request); return {}; }, list() {}, support() {} });
-  assert.deepEqual([...handlers.keys()], ['ask-aside:list', 'ask-aside:ask', 'ask-aside:support']);
+  assert.deepEqual([...handlers.keys()], ['ask-aside:list', 'ask-aside:ask', 'ask-aside:support', 'ask-aside:cancel']);
   await handlers.get('ask-aside:ask')(null, meetingRequest());
   assert.deepEqual(received, [{ sessionId: 's1', question: '结论是什么？' }]);
 });

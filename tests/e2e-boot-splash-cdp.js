@@ -173,6 +173,43 @@ async function main() {
     await wait('!!document.getElementById("options-boot-splash")', 20000);
     await pause(1500);
     assert.ok(!(await cdp.eval('!!document.getElementById("boot-splash-layer")')), '隔离实例默认不播');
+    // 9. 设置 → 外观与输入：频率直接可见，关掉自动播放后仍可重播，Esc 回到原页签。
+    await click('#btn-options');
+    await wait('document.getElementById("options-settings").getBoundingClientRect().width > 0');
+    await click('#options-settings');
+    await wait('!document.getElementById("config-modal").classList.contains("hidden")');
+    await click('#cfg-tab-display');
+    await wait('!document.getElementById("cfg-boot-splash-frequency").disabled');
+    assert.equal(await cdp.eval('document.getElementById("cfg-boot-splash-frequency").value'), 'always', '沿用已保存的频率');
+    assert.ok(await cdp.eval('!!document.querySelector("#cfg-boot-splash-label .field-hint-icon[aria-label]")'), '说明用 ⓘ');
+    // 同时检查桌面与公司笔记本的小分辨率，频率行不挤出横向滚动。
+    for (const [width, height] of [[1440, 900], [1024, 640]]) {
+      await cdp.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+      await pause(150);
+      const overflow = await cdp.eval(`(() => { const view = document.getElementById('config-main-view'); const row = document.querySelector('.cfg-boot-splash-row'); return [view.scrollHeight - view.clientHeight, row.scrollWidth - row.clientWidth]; })()`);
+      await shot(`09-设置外观-${width}x${height}`);
+      assert.ok(overflow.every(n => n <= 2), `外观页一屏且不横向溢出 ${width}×${height}: ${overflow}`);
+    }
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false });
+    await cdp.eval(`(() => { const s = document.getElementById('cfg-boot-splash-frequency'); s.value = 'off'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await wait(`require('electron').ipcRenderer.invoke('boot-splash:get').then(s => s.preferences.frequency === 'off')`);
+    const beforeReplay = await prefs();
+    await click('#cfg-boot-splash-play');
+    await wait('!!document.getElementById("boot-splash-layer")');
+    await shot('10-设置手动重播');
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
+    await wait('!document.getElementById("boot-splash-layer")', 2000);
+    assert.deepEqual(await prefs(), beforeReplay, '重播不改变频率、当前款式、日期或首次提示');
+    assert.equal(await cdp.eval('window.__hubSettingsTabs.active'), 'display');
+    await click('#cfg-boot-splash-picker');
+    await wait('document.getElementById("boot-splash-dialog").open');
+    await click('#boot-splash-dialog [data-action="close"]');
+    await gracefulQuit(hub); cdp = null; hub = null;
+    await open(env, 'boot-splash-off');
+    await wait('!!document.getElementById("cfg-boot-splash-frequency") && !document.getElementById("cfg-boot-splash-frequency").disabled');
+    assert.equal((await prefs()).frequency, 'off');
+    assert.ok(!(await cdp.eval('!!document.getElementById("boot-splash-layer")')), '关闭频率在重启后保留，不自动播放');
     console.log(JSON.stringify({ ok: true, fit, fitCodex, shots }, null, 1));
   } finally {
     if (hub) await gracefulQuit(hub).catch(() => {});

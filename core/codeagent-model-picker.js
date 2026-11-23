@@ -192,8 +192,8 @@ function truncatedRows(rows, label) {
 // 搜索与翻页用：名字完全相同（不分大小写）优先，其次唯一命中的截断名。
 function locateLabel(rows, label, route = {}) {
   if (route.provider) return findTarget({ rows }, label, route);
-  const exact = (rows || []).findIndex(row => exactLabel(row.label, label));
-  if (exact >= 0) return exact;
+  const exact = (rows || []).filter(row => exactLabel(row.label, label));
+  if (exact.length) return findTarget({ rows }, label);
   const cut = truncatedRows(rows, label);
   return cut.length === 1 ? cut[0] : -1;
 }
@@ -230,9 +230,15 @@ function findTarget(picker, label, { provider = '', providerLabel = '' } = {}) {
   }
   const cut = truncatedRows(picker.rows, label);
   if (cut.length) return cut.length === 1 ? cut[0] : -1;
-  const prefix = picker.rows.findIndex(row => squash(row.label).startsWith(want));
-  if (prefix >= 0) return prefix;
-  return picker.rows.findIndex(row => squash(row.text).includes(want));
+  const unique = indexes => {
+    if (indexes.length === 1) return indexes[0];
+    const group = defaultGroup(picker);
+    const preferred = group ? indexes.filter(index => groupMatches(picker.rows[index], group)) : [];
+    return preferred.length === 1 ? preferred[0] : -1;
+  };
+  const prefix = picker.rows.map((row, index) => squash(row.label).startsWith(want) ? index : -1).filter(index => index >= 0);
+  if (prefix.length) return unique(prefix);
+  return unique(picker.rows.map((row, index) => squash(row.text).includes(want) ? index : -1).filter(index => index >= 0));
 }
 
 function confirmationSeen(lines, label) {
@@ -305,7 +311,8 @@ async function openSessionScreen(manager, sid) {
 function readModelKey(file) {
   try {
     const value = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));
-    return { exists: true, model: value && typeof value.model === 'string' ? value.model : undefined };
+    return { exists: true, model: value && typeof value.model === 'string' ? value.model : undefined,
+      provider: value?.provider, activeProvider: value?.enterprise?.activeProvider };
   } catch (error) { return { exists: !(error && error.code === 'ENOENT'), model: undefined, unreadable: !(error && error.code === 'ENOENT') }; }
 }
 function snapshotDefaults(configDir) {
@@ -318,7 +325,8 @@ function normalizeConfigDir(dir) {
   const resolved = path.resolve(String(dir));
   try { return fs.realpathSync.native(resolved); } catch { return resolved; }
 }
-// 只把这次被菜单改掉的 model 键改回去，其余内容原样保留。
+const sameDefaults = (a, b) => a.model === b.model && a.provider === b.provider && a.activeProvider === b.activeProvider;
+// 菜单会同时改模型和供应商；自动会话选完恢复这三个字段，其余配置原样保留。
 // 原来没有这份文件、CodeAgent 新建了它并写了 model：只去掉 model 键。
 function restoreDefaults(snapshot) {
   const restored = [];
@@ -328,9 +336,11 @@ function restoreDefaults(snapshot) {
     try { raw = fs.readFileSync(before.file, 'utf8'); } catch { continue; }
     let value;
     try { value = JSON.parse(raw.replace(/^﻿/, '')); } catch { continue; }
-    const now = value && typeof value.model === 'string' ? value.model : undefined;
-    if (now === before.model) continue;
+    if (sameDefaults(readModelKey(before.file), before)) continue;
     if (before.model === undefined) delete value.model; else value.model = before.model;
+    if (before.provider === undefined) delete value.provider; else value.provider = before.provider;
+    if (before.activeProvider === undefined) { if (value.enterprise) delete value.enterprise.activeProvider; }
+    else { value.enterprise = value.enterprise || {}; value.enterprise.activeProvider = before.activeProvider; }
     const temp = `${before.file}.hub-model-${process.pid}.tmp`;
     // Windows 上 CLI 或杀毒正读着 settings.json 时覆盖改名会短暂 EPERM：有界重试，否则用户的默认模型会被留成菜单改过的值。
     try { fs.writeFileSync(temp, JSON.stringify(value, null, 2) + '\n', 'utf8'); require('./claude-project-trust').renameWithRetrySync(temp, before.file, { retries: process.platform === 'win32' ? 20 : 0, retryCodes: new Set(['EPERM', 'EBUSY']) }); restored.push(path.basename(before.file)); }
@@ -350,12 +360,12 @@ async function guardDefaults(snapshot, { durationMs = 3500, intervalMs = 150, on
     for (const before of snapshot) {
       if (before.unreadable) continue;
       const now = readModelKey(before.file);
-      if (!now.exists || now.unreadable || now.model === before.model) continue;
+      if (!now.exists || now.unreadable || sameDefaults(now, before)) continue;
       // 改回失败（文件被占用、权限等）不能停在被改后的值：记下原因，下一拍接着重试，看守结束时仍没改回就由 verified:false 报出。
       let done = [], error = '';
       try { done = restoreDefaults([before]); } catch (e) { error = e && e.message ? e.message : String(e); }
-      const after = readModelKey(before.file).model;
-      const change = { file: path.basename(before.file), written: now.model, restoredTo: before.model, ok: after === before.model, ...(error ? { error } : {}) };
+      const after = readModelKey(before.file);
+      const change = { file: path.basename(before.file), written: now.model, restoredTo: before.model, ok: sameDefaults(after, before), ...(error ? { error } : {}) };
       changes.push(change);
       if (done.length) restored.add(change.file);
       try { onChange && onChange(change); } catch { /* 只是记日志 */ }
@@ -363,7 +373,7 @@ async function guardDefaults(snapshot, { durationMs = 3500, intervalMs = 150, on
     if (Date.now() >= deadline) break;
     await sleep(intervalMs);
   }
-  const verified = snapshot.every(before => before.unreadable || !readModelKey(before.file).exists || readModelKey(before.file).model === before.model);
+  const verified = snapshot.every(before => before.unreadable || !readModelKey(before.file).exists || sameDefaults(readModelKey(before.file), before));
   const main = snapshot.find(before => path.basename(before.file) === 'settings.json');
   return { restored: [...restored], changes, verified, before: main ? main.model : undefined, after: main ? readModelKey(main.file).model : undefined };
 }
@@ -521,6 +531,9 @@ async function findOffscreenTarget({ picker, screen, manager, sid, label, route 
     onSearchFrame(stable.lines);
     let searched = { value: stable.value?.picker || null };
     let found = searched.value && locateLabel(searched.value.rows, label, route);
+    if (!route.provider && searched.value?.rows.filter(row => exactLabel(row.label, label)).length > 1 && found < 0) {
+      return { error: `多个供应商都有 ${label}，请在助理设置或模型列表中选择供应商`, requiresGroupSelection: true };
+    }
     if (Number.isInteger(found) && found >= 0) {
       picker = searched.value;
       let searchSteps = 0;
@@ -695,7 +708,19 @@ async function pickModel({ manager, sid, kind, modelId, provider = '', providerL
     if (first && (picker.rows[0].number ?? 1) !== 1) return fail(`模型菜单没有从第 1 项列起（第一行是 ${picker.rows[0].number}. ${picker.rows[0].label}），没有选`);
     if (first) label = picker.rows[0].label;
     let target = first ? 0 : findTarget(picker, label, route);
-    if (!first && !provider && picker.rows.filter(row => exactLabel(row.label, label)).length > 1) {
+    if (!provider && dataDir) {
+      const accountKey = manager.getSession?.(sid)?.codeagentPoolAccount || 'personal';
+      const candidates = require('./codeagent-models').modelOptions(dataDir, { configDir, accountKey }).filter(o => exactLabel(o.id, first ? label : modelId));
+      if (new Set(candidates.map(o => o.provider).filter(Boolean)).size > 1) {
+        // 完整清单已知同名多供应商，即使当前屏只露出一组，也不能取它。
+        const group = defaultGroup(picker);
+        if (!group) return { ...(await fail(`多个供应商都有 ${modelId}，请在助理设置或模型列表中选择供应商`)), requiresGroupSelection: true };
+        route.provider = group;
+        target = findTarget(picker, label, route);
+      }
+    }
+    if (!provider && picker.rows.filter(row => exactLabel(row.label, label)).length > 1) {
+      target = findTarget(picker, label, route);
       if (target < 0) return { ...(await fail(`多个分组都有 ${modelId}，无法确认账号默认分组，请在模型列表中重新选择带分组的项`)), requiresGroupSelection: true };
       route.provider = picker.rows[target].group;
     }
@@ -721,7 +746,7 @@ async function pickModel({ manager, sid, kind, modelId, provider = '', providerL
           } catch { /* 搜索画面附件失败不影响本次选择。 */ }
         },
         log: fields => require('./codeagent-models').appendModelLog(dataDir, { session: String(sid).slice(0, 8), model: modelId, ...fields }) });
-      if (found.error) return fail(found.error);
+      if (found.error) return { ...(await fail(found.error)), ...(found.requiresGroupSelection ? { requiresGroupSelection: true } : {}) };
       picker = found.picker; target = found.target;
     }
     if (target < 0 && truncatedRows(picker.rows, label).length > 1) {
@@ -770,7 +795,8 @@ async function pickModel({ manager, sid, kind, modelId, provider = '', providerL
     }
     const ready = await waitForInput(screen);
     if (!ready.value) return { ...(await fail('选中后未确认恢复普通输入框')), restored, defaults };
-    return { ok: true, mode, confirmed: !!echo, restored, defaults, ...(keepDefault ? { keptDefault: true } : {}), ...(first ? { picked: label } : {}) };
+    return { ok: true, mode, confirmed: !!echo, restored, defaults, provider: route.provider || picker.rows[target].group || '',
+      ...(keepDefault ? { keptDefault: true } : {}), ...(first ? { picked: label } : {}) };
   }
   try {
     result = await choose();

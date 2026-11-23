@@ -1534,6 +1534,35 @@ class CompanyAssistant {
     if (!meta) return null;
     return this.deps.readTurnApiError ? this.deps.readTurnApiError(meta) : require('./turn-api-error').lastApiError(meta.transcriptPath);
   }
+  modelSettings(account = 'personal') {
+    const dataDir = this.deps.dataDir, routes = require('../codeagent-assistant-route');
+    const accounts = [{ id: 'personal', label: '个人账号' }, ...require('../codeagent-pool').readRegistry(dataDir).accounts.map((a, i) => ({ id: a.id, label: a.note || `号池账号 ${i + 1}` }))];
+    if (!accounts.some(a => a.id === account)) throw new Error('该账号已不在本机号池中，请重新选择');
+    const configDir = account === 'personal' ? require('../codeagent-config').resolveCodeAgentConfig(process.env).configDir
+      : require('../codeagent-pool').accountDir(dataDir, account);
+    const options = routes.modelOptions(dataDir, account, configDir);
+    return { ok: true, account, accounts, choice: routes.preference(dataDir, account), manual: routes.lastSuccessful(dataDir, account), options };
+  }
+  setModelChoice({ account = 'personal', value = '', useManual = false } = {}) {
+    const routes = require('../codeagent-assistant-route');
+    const info = this.modelSettings(account);
+    let choice = null;
+    if (value) {
+      const hit = info.options.find(o => require('../codeagent-model-choice').choiceValue(o) === value);
+      if (!hit?.provider) throw new Error('该模型的供应商尚未确认，请先在手动会话里成功回答一次');
+      choice = { model: hit.id, ...require('../codeagent-model-choice').routeFields(hit) };
+    } else if (useManual) {
+      if (!info.manual) throw new Error('还没有成功的手动会话记录，请先在手动会话里完成一次对话');
+      choice = info.manual; // 点恢复按钮本身就是用户明确选用这个组合。
+    }
+    routes.setPreference(this.deps.dataDir, account, choice);
+    // 已在回答的会话保留；闲置预热会话换新后才会用到新线路。
+    for (const [toolset, id] of Object.entries(this.warm)) {
+      if (!this.sessionBusy(id)) { delete this.warm[toolset]; this.retire(id); }
+    }
+    this.changed();
+    return this.modelSettings(account);
+  }
   lastFinal(id) {
     const meta = this.deps.getSession(id) || this.deps.getSessionMetadata?.(id);
     const records = meta && this.deps.readFinals ? this.deps.readFinals(meta) : [];
@@ -1672,6 +1701,9 @@ class CompanyAssistant {
     const info = this.deps.getSession(id);
     if (!info) return false;
     if (info.modelConfirmationRequired) return true;
+    const routes = require('../codeagent-assistant-route');
+    const route = routes.choose(this.deps.dataDir, info.codeagentPoolAccount || 'personal', info.currentModel?.id || info.fixedModel || '', { configDir: info.codeagentConfigDir });
+    if (!routes.matchesSession(info, route)) return true;
     if (!info.fixedModel || info.modelPinSource === 'user') return false;
     try { return !!require('../codeagent-model-replacements').replacementFor(this.deps.dataDir || require('../data-dir').getHubDataDir(), info.fixedModel); }
     catch { return false; }
@@ -1964,8 +1996,12 @@ class CompanyAssistant {
       if (err && err.id !== job.apiErrorBaseline) {
         if (job.apiError?.id !== err.id) job.apiError = { id: err.id, at: this.now() };
         if (this.now() - job.apiError.at >= UNMARKED_GRACE_MS) {
-          const d = require('./turn-api-error').describe(err.text);
-          this.failJob(job, `${d.kind}，这一问没答完（${d.detail}）。限流时等一两分钟再重试；登录或额度问题请打开助理会话处理后重试`);
+          const d = require('./turn-api-error').describe(err.text, this.deps.getSession(job.sessionId) || {});
+          if (d.routeRejected) job.providerRepair = require('../codeagent-assistant-route').repairAction(this.deps.dataDir, d.account);
+          const hint = d.routeRejected ? job.providerRepair.canUseManual ? '可改用手动会话在用的供应商，或在助理设置中选择模型与供应商'
+            : '尚无手动会话成功记录，请在助理设置中选择模型与供应商'
+            : '限流时等一两分钟再重试；登录或额度问题请打开助理会话处理后重试';
+          this.failJob(job, `${d.kind}，这一问没答完（${d.detail}）。${hint}`);
         }
         return;
       }
@@ -2035,7 +2071,7 @@ class CompanyAssistant {
     const lane = this.lanes[job.lane || this.laneOf(job)];
     if (lane && lane.job === job) lane.job = null;
     if (job.sessionId && !job.teamOwner && this.pool.has(job.sessionId)) this.keepLast(job.lane || this.laneOf(job), job.sessionId);
-    if (job.type === 'chat') this.patchChat(job.chatId, { state: 'error', error: message, ...(stopped ? { stopped: true } : {}) });
+    if (job.type === 'chat') this.patchChat(job.chatId, { state: 'error', error: message, ...(job.providerRepair ? { providerRepair: job.providerRepair } : {}), ...(stopped ? { stopped: true } : {}) });
     else if (job.type === 'reply-review') this.finishReplyReview(job, '', message);
     else this.finishBrief(job, '', message);
     this.changed();

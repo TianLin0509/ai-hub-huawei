@@ -32,6 +32,7 @@ test('设置弹窗：直接子元素按类归到页签，小节标题跟下一�
     { id: 'cfg-notify-mode-section' },
     { cls: ['config-section-label', 'config-notification-title'] },
     { id: 'config-notification-card' },
+    { id: 'cfg-boot-splash-field' },
     { cls: ['config-section-label', 'config-reading-title'] },
     { cls: ['config-reading-grid'], kids: [{ id: 'cfg-card-font-size' }] },
     { cls: ['config-reading-note'] },
@@ -44,7 +45,7 @@ test('设置弹窗：直接子元素按类归到页签，小节标题跟下一�
   ].map(fakeEl);
   assert.deepEqual(classifyChildren(kids), [
     'general', 'shared', 'shared', 'general', 'general', 'pet', 'general', 'server', 'server', 'pet',
-    'notify', 'notify', 'display', 'display', 'display', 'display', 'display', 'advanced', 'advanced', 'general', 'general',
+    'notify', 'notify', 'display', 'display', 'display', 'display', 'display', 'display', 'advanced', 'advanced', 'general', 'general',
   ]);
 });
 

@@ -4997,6 +4997,8 @@ async function restartSessionInPlace(sessionId) {
 }
 // 报错卡「重启会话」一键修（renderer/hub-error-card.js）走同一条路。
 window.__hubRestartSessionInPlace = restartSessionInPlace;
+// 反馈只诊断当前聚焦的会话，不扫其他会话的内容。
+window.__hubFeedbackSessionId = () => getFocusedSessionId();
 // 报错旁的「去后台」（renderer/hub-error-card.js known:open-backstage）：切到这个会话并打开后台终端，和点顶栏「后台」同一条路。
 window.__hubOpenBackstage = async sessionId => {
   if (!sessionId || !sessions.has(sessionId)) return { ok: false };

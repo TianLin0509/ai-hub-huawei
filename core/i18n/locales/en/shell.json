@@ -464,5 +464,12 @@
   "自己挑几个 AI，同场讨论、对比看法。": "Pick several AIs to discuss together and compare views.",
   "运行方式": "Run mode",
   "PTY（默认）": "PTY (default)",
-  "ACP 试点": "ACP pilot"
+  "ACP 试点": "ACP pilot",
+  "启动动画": "Startup animation",
+  "每天第一次启动时播放": "Play on the first launch each day",
+  "每次启动都播放": "Play on every launch",
+  "不播放": "Do not play",
+  "现在播放一次": "Play once now",
+  "更换动画…": "Change animation…",
+  "默认每天第一次启动时播放，修改后立即保存。现在播放一次只重播当前动画，不改变启动频率；点击画面或按 Esc 可跳过。更换动画可选其他款式。": "By default, the animation plays on the first launch each day. Changes are saved immediately. Play once now replays the current animation without changing the startup frequency; click or press Esc to skip. Use Change animation to choose another style."
 }

@@ -970,6 +970,19 @@
             <p class="config-notification-status" id="config-notification-status" aria-live="polite"></p>
             <p class="config-reading-note">首次使用：在「权限 → 飞书 CLI」完成授权，并确保机器人已加入目标会话。测试通知可在保存前直接发送。</p>
           </div>
+          <div class="config-field" id="cfg-boot-splash-field">
+            <label for="cfg-boot-splash-frequency" id="cfg-boot-splash-label">启动动画</label>
+            <div class="cfg-boot-splash-row">
+              <select id="cfg-boot-splash-frequency" disabled>
+                <option value="daily">每天第一次启动时播放</option>
+                <option value="always">每次启动都播放</option>
+                <option value="off">不播放</option>
+              </select>
+              <button type="button" class="config-test-btn" id="cfg-boot-splash-play" disabled>现在播放一次</button>
+              <button type="button" class="config-test-btn" id="cfg-boot-splash-picker">更换动画…</button>
+            </div>
+            <p class="config-reading-note" id="cfg-boot-splash-status" role="status" hidden></p>
+          </div>
           <div class="config-section-label config-reading-title">
             <span>普通会话卡片</span>
             <span>调整后立即预览</span>

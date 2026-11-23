@@ -1334,7 +1334,7 @@ function registerSessionIpc(ipcMain, deps) {
     // 启动和原地重拉时选具体模型也一样（2026-11-08 公司实测：菜单把 deepseek-v4.1-flash-1017 显示成截断名、没选上，
     // 「问问 Agent」新建的会话首句被退回、会话页空着）：输入框能用就先用 CLI 当前模型把首句发出去，提示一句没切到哪个模型。
     const startupPick = reason === 'launch' || reason === 'relaunch';
-    let fallback = !selectedProvider && !result.ok && (automatic || pickFirst || startupPick) && (result.inputReady || result.inputUsable);
+    let fallback = !selectedProvider && !result.requiresGroupSelection && !result.ok && (automatic || pickFirst || startupPick) && (result.inputReady || result.inputUsable);
     if (fallback && session.fixedModel) {
       const pin = require('../../core/session-model-pin');
       const known = guard.permittedModels(session, configDir, { dataDir });
@@ -1391,7 +1391,7 @@ function registerSessionIpc(ipcMain, deps) {
       catch (error) { console.warn('[codeagent] 记住这次选的模型失败：' + error.message); }
     }
     if (result.ok) {
-      const updated = sessionManager.updateSessionMeta(sessionId, { currentModel: { id: picked, displayName: codeagentModels.modelLabel(picked) }, codeagentRequestedModel: undefined, codeagentModelPick: false,
+      const updated = sessionManager.updateSessionMeta(sessionId, { ...(result.provider ? { codeagentModelProvider: result.provider } : {}), currentModel: { id: picked, displayName: codeagentModels.modelLabel(picked) }, codeagentRequestedModel: undefined, codeagentModelPick: false,
         // 用户明确选中过的模型：CLI 自己退出、Hub 原地重拉时据此再选一次（core/session-manager.js 的 relaunch）。
         codeagentUserModel: picked, fixedModel: picked, ...(reason === 'switch' ? { modelConfirmationRequired: false, modelUnavailableReason: '' } : {}), modelPinSource: reason === 'switch' ? 'user' : session.modelPinSource || 'created',
         ...(reason === 'switch' ? { modelChange: null } : {}) });

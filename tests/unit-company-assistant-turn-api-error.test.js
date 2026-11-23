@@ -92,6 +92,27 @@ test('发问前会话里已有的旧报错不算这一问的结果', async t => 
   assert.equal(f.a.chat().find(c => c.id === item.id).state, 'running', '旧报错是基线，继续等这一问的回答');
 });
 
+test('405 给出实际供应商、地址和恢复动作；一键恢复不会自动重发问题', async t => {
+  const f = fixture(t);
+  const item = f.a.ask('测试供应商'); await f.settle();
+  const s = f.sessions.get(f.prompts[0].id);
+  s.codeagentModelProvider = 'bad'; s.codeagentConfigDir = path.join(f.root, 'bad-config');
+  fs.mkdirSync(s.codeagentConfigDir);
+  fs.writeFileSync(path.join(s.codeagentConfigDir, 'settings.json'), JSON.stringify({ enterprise: { providers: { bad: { apiBaseUrl: 'https://bad.example.test/v1' } } } }));
+  write(s.transcriptPath, [apiErrorRow(f.now() + 2000, 'API Error: 405 Method Not Allowed', 405)]);
+  await f.a.collectJob('chat'); f.advance(9000); await f.a.collectJob('chat');
+  const row = f.a.chat().find(c => c.id === item.id);
+  assert.match(row.error, /bad.*https:\/\/bad.example.test\/v1.*不接受对话请求/);
+  assert.deepEqual(row.providerRepair, { account: 'personal', canUseManual: false });
+  assert.throws(() => f.a.setModelChoice({ useManual: true }), /先在手动会话/);
+  const route = require('../core/codeagent-assistant-route');
+  route.rememberSuccess(f.root, { kind: 'codeagent', currentModel: { id: 'custom' }, codeagentModelProvider: 'good' },
+    { model: 'custom', text: '成功', stopReason: 'end_turn', ts: f.now() });
+  f.a.setModelChoice({ useManual: true });
+  assert.equal(route.choose(f.root).codeagentModelProvider, 'good');
+  assert.equal(f.prompts.length, 1);
+});
+
 test('CLI 一启动就退回 PowerShell：第一次没就绪就报失败，不白等 5 分钟', async t => {
   const f = fixture(t);
   let sends = 0;
