@@ -1,4 +1,6 @@
 [
+  "tests/unit-capability-market-visibility.test.js",
+  "tests/unit-codeagent-market.test.js",
   "tests/unit-transcript-lookup-cache.test.js",
   "tests/unit-shortcut-backup-prune.test.js",
   "tests/unit-account-quota-panel-refresh.test.js",

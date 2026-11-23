@@ -5,6 +5,9 @@ function registerCapabilityIpc(ipcMain,service) {
     catch(error){return {ok:false,error:error.message};}
   });
   handle('catalog',r=>service.catalog(r.refresh===true));
+  handle('market-status',()=>service.market.status());
+  handle('market',()=>service.market.list());
+  handle('market-install',r=>service.market.install(r.id));
   handle('update-note',r=>service.updateNote(r));
   handle('sharing-plan',()=>service.sharingPlan());
   handle('share-skills',r=>{if(typeof r.token!=='string')throw Error('请先预览补齐计划');return service.shareSkills(r.token);});

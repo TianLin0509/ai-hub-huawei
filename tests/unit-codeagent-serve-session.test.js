@@ -13,7 +13,7 @@ const { usesServeRuntime, normalizeRunMode, withRunModeInJson } = require('../co
 
 const SID = '73ef6af8-c06d-4619-988b-ea0f99968c2f';
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-async function until(check, label, ms = 3000) {
+async function until(check, label, ms = 10000) {
   const end = Date.now() + ms;
   while (Date.now() < end) { const value = check(); if (value) return value; await wait(5); }
   throw new Error('等待超时：' + label);

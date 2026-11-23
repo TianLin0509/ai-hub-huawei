@@ -10,6 +10,17 @@ class CapabilityService {
   constructor({sessionManager, dataDir, homeDir = process.env.CLAUDE_HUB_HOME_DIR || os.homedir()}) {
     Object.assign(this,{sessionManager,dataDir,homeDir});
     this.cache=null; this.pending=null; this.catalogGeneration=0;
+    const { CodeAgentMarket } = require('./codeagent-market');
+    const config = () => ({ ...require('./codeagent-config').resolveCodeAgentConfig(), configDir: this.codeagentConfigDir() });
+    this.market = new CodeAgentMarket({ config,
+      available: () => {
+        const edition = require('./distribution');
+        return (!edition.community || edition.target === 'company') && edition.kindAllowed('codeagent')
+          && !!require('./codeagent-config').commandFile(config().command);
+      },
+      catalog: () => this.catalog(true),
+      invalidate: () => { this.cache = null; this.catalogGeneration++; },
+    });
   }
   // CodeAgent 的配置目录跟启动 CLI 用的同一个（AI_HUB_CODEAGENT_CONFIG_DIR 或 Hub 设置；Hub 继承来的 CODEAGENT3_CONFIG_DIR 只在注册表里也这样设且不在号池时才用；默认 ~/.cac）。
   // 没有另外指定时跟着本服务的 home 走（隔离实例和测试用 CLAUDE_HUB_HOME_DIR，不读真实 ~/.cac）。

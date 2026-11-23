@@ -1,10 +1,12 @@
 'use strict';
 // 只保留部分 AI 的发行版（公司纯净版）只按这些 AI 筛选和对比。
 const {getKindLabel}=require('../core/ai-kinds');
-const ALL_AI_KINDS=require('../core/ai-kinds').ALL_AI_KINDS.filter(require('../core/distribution').kindAllowed);
+const distribution=require('../core/distribution');
+const ALL_AI_KINDS=require('../core/ai-kinds').ALL_AI_KINDS.filter(distribution.kindAllowed);
 const {coverage,related,isActive}=require('../core/capability-view-model');
 const {presentation,mcpSharing,ORIGINS}=require('../core/capability-presentation');
 const { SERVICES } = require('../core/tool-account-catalog');
+const { iconHintHtml } = require('./launch-field-hint');
 const TYPE_LABEL={skill:'技能',mcp:'MCP 连接',plugin:'插件',command:'命令',tool:'工具'};
 const ICON={skill:'<path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1L3.2 9.4l6.1-.9Z"/>',
   mcp:'<rect x="7" y="7" width="10" height="10" rx="3"/><path d="M9 3v4m6-4v4M9 17v4m6-4v4M3 9h4m-4 6h4m10-6h4m-4 6h4"/>',
@@ -14,9 +16,43 @@ const svg=(type)=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" st
 function createCapabilityPanel({document,ipcRenderer,escapeHtml:esc,getActiveSessionId}) {
   let page,catalog=null,runtime=null,tab='catalog',agent='all',type='all',query='',scope='active',selected='',sessionId='',busy=false,error='',epoch=0;
   let sharing=null,shareBusy=false,notice='',origin='all',noteEdit=null,noteBusy=false;
+  let market=null,marketPage=0,marketQuery='',marketType='all',marketPageSize=1,marketAvailable=false;
+  const marketStates=new Map();
   const label=id=>getKindLabel(id) || id;
   const button=(text,attrs,cls='')=>`<button type="button" class="cp-button ${cls}" ${attrs}>${text}</button>`;
   const badge=(text,cls='')=>`<span class="cp-badge ${cls}">${esc(text)}</span>`;
+  const tabs=()=>`<nav class="cp-tabs" aria-label="能力视图">${[['catalog','能力库'],['coverage','AI 覆盖对比'],['runtime','当前会话'],...(marketAvailable?[['market','AI 市场']]:[])].map(([id,name])=>button(name,`data-cp-tab="${id}" aria-pressed="${tab===id}"`,tab===id?'selected':'')).join('')}</nav>`;
+  function marketView(){
+    const rows=(market?.rows || []).filter(row=>(marketType==='all'||marketType===row.type)&&(!marketQuery||`${row.name} ${row.description} ${row.author}`.toLowerCase().includes(marketQuery.toLowerCase())));
+    // 分页容量由渲染后的列表实际高度确定，不再估算整页要扣掉多少空间。
+    const pageSize=marketPageSize;
+    const pages=Math.max(1,Math.ceil(rows.length/pageSize));marketPage=Math.min(marketPage,pages-1);
+    const installing=[...marketStates.values()].some(state=>state.busy);
+    return `<div class="cp-market-heading"><h2>AgentCenter ${iconHintHtml('公司 AI 市场\n读取 CodeAgent 的本机 aimarket 副本，安装由 CodeAgent 在后台完成。\n安装到个人 CodeAgent 配置目录；新开个人 CodeAgent 会话使用，号池会话需在对应账号另行安装。\n本机副本不代表市场全量，条目与版本以 CodeAgent 同步结果为准。')}</h2></div>
+      <div class="cp-toolbar"><label class="cp-search"><span aria-hidden="true">⌕</span><input id="cp-market-search" type="search" placeholder="搜索市场名称、功能或作者…" aria-label="搜索 AI 市场" value="${esc(marketQuery)}"></label><select id="cp-market-type" aria-label="市场类型">${[['all','全部类型'],['skill','技能'],['plugin','插件'],['mcp','MCP']].map(([id,name])=>`<option value="${id}" ${marketType===id?'selected':''}>${name}</option>`).join('')}</select><span>${rows.length} 项</span></div>
+      ${busy?'<p class="cp-progress" role="status">正在读取本机 AI 市场…</p>':''}${error?`<p class="cp-notice warn" role="alert">${esc(error)}</p>`:''}${market?.reason?`<p class="cp-notice" role="status">${esc(market.reason)}</p>`:''}
+      <div class="cp-market-list" aria-label="AI 市场条目">${rows.slice(marketPage*pageSize,(marketPage+1)*pageSize).map(row=>{
+        const state=marketStates.get(row.id),installed=row.installed;
+        const hint=installed?(state?.message || '已安装，新开 CodeAgent 会话即可使用'):'';
+        return `<article class="cp-market-row"><span class="cp-glyph ${row.type}">${svg(row.type)}</span><div class="cp-market-copy"><div class="cp-market-title"><strong>${esc(row.name)}</strong><small>${esc(TYPE_LABEL[row.type])} · ${esc(row.version || '版本未提供')} · ${esc(row.author || '作者未提供')}</small></div><p title="${esc(row.description)}">${esc(row.description || '暂无简介')}</p></div><div class="cp-market-action">${button(installed?'已安装':state?.busy?'安装中…':state?.error?'重试':'安装',`data-cp-install="${esc(row.id)}" ${installed?`aria-disabled="true" data-hub-tip-focus="1" title="${esc(hint)}"`:installing?'disabled':''}`,installed?'':'selected')}${!installed&&(state?.error||state?.message)?`<small role="status" ${state.error?'class="cp-market-error"':''} title="${esc(state.error||state.message)}">${esc(state.error||state.message)}</small>`:''}</div></article>`;
+      }).join('')}${!rows.length&&!busy&&!market?.reason&&!error?'<p class="cp-empty">没有匹配的市场条目，请换个关键词。</p>':''}</div>
+      <footer class="cp-market-pagination">${button('上一页',`data-cp-market-page="-1" ${marketPage===0?'disabled':''}`)}<span>第 ${marketPage+1} / ${pages} 页</span>${button('下一页',`data-cp-market-page="1" ${marketPage>=pages-1?'disabled':''}`)}</footer>`;
+  }
+  async function installMarket(id){
+    if(market?.rows.find(row=>row.id===id)?.installed)return;
+    if([...marketStates.values()].some(state=>state.busy))return;
+    marketStates.set(id,{busy:true});render();
+    try{
+      const response=await ipcRenderer.invoke('capabilities:market-install',{id});
+      if(!response?.ok)throw Error(response?.error || '安装失败，请重试');
+      marketStates.set(id,{message:response.data.message || '已安装，新开 CodeAgent 会话即可使用'});
+      if(response.data.installed){const row=market?.rows.find(row=>row.id===id);if(row)row.installed=true;}
+      // 更新能力库缓存，切回能力库就能看到刚装好的条目。
+      const updated=await ipcRenderer.invoke('capabilities:catalog',{refresh:true});
+      if(updated?.ok)catalog=updated.data;
+    }catch(e){marketStates.set(id,{error:e.message});}
+    finally{if(!page.hidden)render();}
+  }
   function position(){const rail=document.getElementById('scene-rail')?.getBoundingClientRect();if(page&&rail){const sessionEdge=document.getElementById('session-sidebar')?.getBoundingClientRect().left;page.style.left=(sessionEdge??rail.right)+'px';page.style.top=rail.top+'px';}}
   const inScope=r=>scope==='all'||scope==='active'&&isActive(r)||scope==='shared'&&r.shared||scope==='conflict'&&r.conflict||scope==='disabled'&&r.sources.some(s=>s.enabled===false||s.missing);
   function rows(){
@@ -67,6 +103,15 @@ function createCapabilityPanel({document,ipcRenderer,escapeHtml:esc,getActiveSes
   }
   function render(){
     if(!page)return;
+    page.classList.toggle('cp-market-mode',tab==='market');
+    if(tab==='market'){
+      page.innerHTML=`<header class="cp-header">${tabs()}<div class="cp-actions">${button(busy?'读取中…':'刷新','data-cp-action="refresh" '+(busy?'disabled':''))}${button('返回','data-cp-action="close"')}</div></header><div class="cp-scroll">${marketView()}</div>`;
+      position();
+      const list=page.querySelector('.cp-market-list'),row=page.querySelector('.cp-market-row');
+      const size=Math.max(1,Math.floor(list.getBoundingClientRect().height/(row?.getBoundingClientRect().height || 56)));
+      if(size!==marketPageSize){marketPageSize=size;render();}
+      return;
+    }
     const visible=rows(),all=catalog?.rows || [],active=visible.find(r=>r.id===selected) || visible[0];
     if(active)selected=active.id;
     const counts=t=>(tab==='runtime'?(runtime?.rows || []):all.filter(isActive)).filter(r=>r.type===t).length;
@@ -76,7 +121,7 @@ function createCapabilityPanel({document,ipcRenderer,escapeHtml:esc,getActiveSes
     const filtersOpen=page.querySelector('.cp-filter-disclosure')?.open || false;
     page.innerHTML=`<header class="cp-header"><div><div class="cp-eyebrow">AI HUB / CAPABILITIES</div><h1>技能与工具 <span>找到能力，看清每个 AI 的准备情况</span></h1></div><div class="cp-actions">${button('补齐共享技能','data-cp-action="share-preview" '+(shareBusy?'disabled':''))}${button(busy?'读取中…':'刷新','data-cp-action="refresh" '+(busy?'disabled':''))}${button('返回','data-cp-action="close"')}</div></header>
       <div class="cp-scroll"><div class="cp-summary"><div class="cp-summary-intro"><span class="cp-summary-symbol">${svg('plugin')}</span><div><strong>能力中心</strong><p>公共资源，各有专长。<br>从安装来源到会话回执，都有据可查。</p></div></div>${[['skill',counts('skill'),'工作流与专业知识'],['mcp',counts('mcp'),'连接工具与外部服务'],['plugin',counts('plugin'),'成套扩展与集成']].map(([t,n,sub])=>`<button type="button" class="cp-stat" data-cp-type="${t}"><span>${svg(t)}${TYPE_LABEL[t]}</span><strong>${n}</strong><small>${inactive(t)?`${sub} · 另有 ${inactive(t)} 项已停用`:sub}</small></button>`).join('')}</div>
-      <nav class="cp-tabs" aria-label="能力视图">${[['catalog','能力库'],['coverage','AI 覆盖对比'],['runtime','当前会话']].map(([id,name])=>button(name,`data-cp-tab="${id}" aria-pressed="${tab===id}"`,tab===id?'selected':'')).join('')}<span>${catalog?`扫描于 ${esc(new Date(catalog.generatedAt).toLocaleTimeString())}`:'尚未扫描'}</span></nav>
+      ${tabs()}
       ${sharingView()}${notice?`<div class="cp-notice" role="status">${esc(notice)}</div>`:''}
       <div class="cp-types" aria-label="能力类型">${[['all','全部'],...Object.entries(TYPE_LABEL).filter(([k])=>tab==='runtime'||['skill','mcp','plugin'].includes(k))].map(([id,name])=>button(`${id==='all'?'':svg(id)}${esc(name)}`,`data-cp-type="${id}" aria-pressed="${type===id}"`,type===id?'selected':'')).join('')}</div>
       ${tab==='catalog'?`<div class="cp-agents" aria-label="按 AI 筛选">${[['all','全部 AI'],...ALL_AI_KINDS.map(a=>[a,label(a)])].map(([id,name])=>button(`<span class="cp-agent-dot ${id}">${id==='all'?'◈':esc(name.slice(0,1))}</span>${esc(name)}<small>${all.filter(r=>inScope(r)&&(id==='all'||r.agents.includes(id))).length}</small>`,`data-cp-agent="${id}" aria-pressed="${agent===id}"`,agent===id?'selected':'')).join('')}</div>`:
@@ -103,6 +148,22 @@ function createCapabilityPanel({document,ipcRenderer,escapeHtml:esc,getActiveSes
   async function refresh(force=false){
     const ticket=++epoch;busy=true;error='';if(tab==='runtime')runtime=null;render();
     try {
+      // 非公司公开版不探测公司市场；其他环境先轻量探测，不扫描清单或启动 CLI。
+      marketAvailable=false;
+      if(!distribution.community||distribution.target==='company'){
+        const status=await ipcRenderer.invoke('capabilities:market-status').catch(()=>null);
+        if(ticket!==epoch||page.hidden)return;
+        marketAvailable=status?.ok===true&&status.data?.available===true;
+      }
+      if(tab==='market'&&!marketAvailable)tab='catalog';
+      if(tab==='market'){
+        const response=await ipcRenderer.invoke('capabilities:market');
+        if(ticket!==epoch||page.hidden)return;
+        if(!response?.ok)throw Error(response?.error || '市场读取失败');
+        market=response.data;
+        if(market?.available!==true){marketAvailable=false;tab='catalog';return refresh(force);}
+        return;
+      }
       const response=await ipcRenderer.invoke('capabilities:catalog',{refresh:force});
       if(ticket!==epoch||page.hidden)return;
       if(!response?.ok)throw Error(response?.error || '能力目录读取失败');
@@ -145,13 +206,19 @@ function createCapabilityPanel({document,ipcRenderer,escapeHtml:esc,getActiveSes
   }
   function close(){if(!page)return;page.hidden=true;epoch++;busy=false;document.body.classList.remove('capabilities-open');document.getElementById('btn-rail-capabilities')?.setAttribute('aria-expanded','false');window.hubWorkspaces?.panelClosed('capabilities');}
   async function open(options = {}){
-    if (options.tab === 'runtime' || options.tab === 'catalog' || options.tab === 'coverage') {
+    marketAvailable=false;
+    if(tab==='market')tab='catalog';
+    if (['runtime','catalog','coverage','market'].includes(options.tab)) {
       tab = options.tab; runtime = null; sessionId = getActiveSessionId() || ''; selected = '';
     } else if (tab === 'runtime') { tab = 'catalog'; runtime = null; }
     if(!page){
       page=document.createElement('section');page.id='capability-page';page.className='cp-page';page.setAttribute('aria-label','技能与工具');document.body.appendChild(page);
+      // 嵌入资源页和调整窗口都会改变列表高度，按真实容器重新分页。
+      if(window.ResizeObserver)new window.ResizeObserver(()=>{if(tab==='market'&&!page.hidden)render();}).observe(page);
       page.addEventListener('click',e=>{
         const b=e.target.closest('button');if(!b)return;
+        if(b.dataset.cpInstall){void installMarket(b.dataset.cpInstall);return;}
+        if(b.dataset.cpMarketPage){marketPage+=Number(b.dataset.cpMarketPage);render();return;}
         if(b.dataset.cpAction==='close'){close();document.getElementById('btn-rail-capabilities')?.focus();return;}
         if(b.dataset.cpAction==='refresh'){runtime=null;void refresh(true);return;}
         if(b.dataset.cpAction==='share-preview'){void share('sharing-plan');return;}
@@ -168,15 +235,15 @@ function createCapabilityPanel({document,ipcRenderer,escapeHtml:esc,getActiveSes
         if(b.dataset.cpRow){noteEdit=null;selected=b.dataset.cpRow;const scroll=page.querySelector('.cp-scroll').scrollTop;render();page.querySelector('.cp-scroll').scrollTop=scroll;page.querySelector(`[data-cp-row="${CSS.escape(selected)}"]`)?.focus({preventScroll:true});}
       });
       page.addEventListener('submit',e=>{if(e.target.id==='cp-note-form'){e.preventDefault();void saveNote();}});
-      page.addEventListener('input',e=>{if(e.target.id==='cp-note-summary'&&noteEdit){noteEdit.summary=e.target.value;return;}if(e.target.id==='cp-search'){const pos=e.target.selectionStart;query=e.target.value;render();const input=page.querySelector('#cp-search');input.focus({preventScroll:true});input.setSelectionRange(pos,pos);}});
-      page.addEventListener('change',e=>{if(e.target.id==='cp-note-origin'&&noteEdit){noteEdit.origin=e.target.value;return;}if(e.target.id==='cp-type')type=e.target.value;else if(e.target.id==='cp-scope')scope=e.target.value;else if(e.target.id==='cp-session'){sessionId=e.target.value;runtime=null;void refresh();return;}else return;selected='';render();});
+      page.addEventListener('input',e=>{if(e.target.id==='cp-market-search'){marketQuery=e.target.value;marketPage=0;render();page.querySelector('#cp-market-search').focus({preventScroll:true});return;}if(e.target.id==='cp-note-summary'&&noteEdit){noteEdit.summary=e.target.value;return;}if(e.target.id==='cp-search'){const pos=e.target.selectionStart;query=e.target.value;render();const input=page.querySelector('#cp-search');input.focus({preventScroll:true});input.setSelectionRange(pos,pos);}});
+      page.addEventListener('change',e=>{if(e.target.id==='cp-market-type'){marketType=e.target.value;marketPage=0;render();return;}if(e.target.id==='cp-note-origin'&&noteEdit){noteEdit.origin=e.target.value;return;}if(e.target.id==='cp-type')type=e.target.value;else if(e.target.id==='cp-scope')scope=e.target.value;else if(e.target.id==='cp-session'){sessionId=e.target.value;runtime=null;void refresh();return;}else return;selected='';render();});
     }
     page.hidden=false;document.body.classList.add('capabilities-open');document.getElementById('btn-rail-capabilities')?.setAttribute('aria-expanded','true');
     await refresh();
   }
   document.addEventListener('click',e=>{if(e.target.closest('[data-action="open-capabilities"]')){if(page&&!page.hidden)close();else void open();}else if(e.target.closest('#scene-rail button')&&page&&!page.hidden)close();});
   document.addEventListener('keydown',e=>{if(e.key==='Escape'&&page&&!page.hidden){close();document.getElementById('btn-rail-capabilities')?.focus();}});
-  window.addEventListener('resize',position);
+  window.addEventListener('resize',()=>{position();if(tab==='market'&&page&&!page.hidden)render();});
   ipcRenderer.on('session-closed',(_event,event)=>{if(page&&!page.hidden&&event?.sessionId===sessionId){runtime=null;epoch++;busy=false;error='会话已关闭，原生加载回执已失效。';render();}});
   ipcRenderer.on('session-updated',(_event,{session}={})=>{
     if(!page||page.hidden||!runtime||session?.id!==sessionId)return;
