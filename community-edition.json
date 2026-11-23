@@ -58,15 +58,8 @@
     ],
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
-  "releaseNotes": [
-    "修复：推荐里的有声开场动画（如 Claude 原作·月下持剑、掌心法阵·有声）下载后被播成群星；放不出时会提示原因",
-    "「问问 Hub」能回答 Hub 自己的配置存在哪、怎么重置、工作目录在哪改等问题；会话输入框可以拖高，也能展开成大输入框",
-    "带前缀的模型名（如 provider/模型）在前台也能切换，显示跟随实际在用的模型；已装旧版 PPT Doctor 时提示升级，不再当成没装",
-    "启动动画不再遮住右上角的最小化和关闭按钮，播放时界面不卡，按 Esc 或点击可随时跳过",
-    "CodeAgent 在非公司可信仓目录被风控时，会话里会说明原因，并给「换到可信仓目录新建会话」按钮",
-    "Hub 默认端口被 Windows 系统保留（常见于开了 Hyper-V、WSL 的电脑）时自动换到空闲端口，修复「后台在跑、前台没有输出」"
-  ],
-  "version": "5.6.93",
+  "releaseNotes": [],
+  "version": "5.6.94",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false
