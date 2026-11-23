@@ -4,7 +4,7 @@
 // conventions. Capture the destination before async work: the DOM is reused
 // when the user switches rooms.
 function mountGroupComposerTools({ toolbar, input, getMeeting, referenceSession,
-  appendText, droppedFilePath, formatFilePaths, onDraft, onHistory, onExpand, ipcRenderer, onOtherTarget, onError }) {
+  appendText, droppedFilePath, onDraft, onHistory, onExpand, ipcRenderer, onOtherTarget, onError }) {
   const document = input.ownerDocument;
   const add = (className, label, title, action) => {
     const button = document.createElement('button');

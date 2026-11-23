@@ -355,5 +355,6 @@
   "tests/unit-pet-fullscreen-watch.test.js",
   "tests/unit-codeagent-serve-session.test.js",
   "tests/unit-card-relay-pilot.test.js",
-  "tests/unit-f2b-file-image.test.js"
+  "tests/unit-f2b-file-image.test.js",
+  "tests/unit-groupchat-enter-extract.test.js"
 ]

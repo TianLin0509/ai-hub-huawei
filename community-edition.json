@@ -59,11 +59,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "助理和分身遇到同名模型挂在多个供应商时，沿用手动会话成功过的那个，报 405/404 时写清是哪个供应商并给恢复入口；Hub 启动的 CodeAgent 也会带上 read-KIA 插件（包括只登记在项目目录里的），一键反馈会列出本会话加载的插件",
-    "桌宠只在前台窗口真正全屏时躲边，退出全屏约 3 秒回来；设置→外观与输入可以重播启动动画",
-    "「问一下」提问后若 90 秒没有任何输出会停下并给出重试和取消，排在后面的问题会自动接着发"
+    "修复 AI 群聊按回车变成换行、消息发不出去的问题（v5.6.82 起）；成员已答完但卡片仍显示「还没交」时，卡片上直接给「提取」，从会话记录取回回答"
   ],
-  "version": "5.6.90",
+  "version": "5.6.91",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

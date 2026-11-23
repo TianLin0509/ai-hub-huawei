@@ -17,7 +17,7 @@ function registerGroupchatRecoveryIpc(ipcMain, deps) {
     transcriptTap,
   } = deps;
 
-  ipcMain.handle('groupchat-manual-extract', async (_e, { meetingId, sid, sincePromptTs, turnNum } = {}) => {
+  ipcMain.handle('groupchat-manual-extract', async (_e, { meetingId, sid, sincePromptTs, turnNum, answerFileFallback } = {}) => {
     if (!sid) return { ok: false, reason: 'missing_sid' };
 
     const session = sessionManager.getSession(sid);
@@ -47,6 +47,9 @@ function registerGroupchatRecoveryIpc(ipcMain, deps) {
         return { ok: false, reason: 'meeting_state_unavailable', detail: '群聊状态不可用（meeting 不存在或状态文件读取失败），无法定位轮次写回。' };
       }
     }
+    // 「提取」按钮（answerFileFallback='transcript'）：回答文件仍然没有内容时，改从本轮会话记录取最终回复，
+    // 写进这份回答文件——卡片正文照旧只来自回答文件。
+    let answerFallbackEntry = null;
     if(orch && require('../../core/group-answer-files').enabled(meeting)) {
       const n=requestedTurn || orch.state.currentTurn;
       const entry=orch.answerFileFor?.(n,sid);
@@ -56,8 +59,9 @@ function registerGroupchatRecoveryIpc(ipcMain, deps) {
         sendToRenderer('groupchat:answer-file',{meetingId,revision:orch.state.revision});
         if(entry.readError)return {ok:false,reason:'answer_file_unreadable',detail:`回答文件暂时读不到：${entry.readError}。已保留上次读到的原文，可再次重新提取。`};
         const message=orch.state.messages.find(m=>m.sid===sid && Number(m.turnNum)===Number(n) && m.role==='assistant');
-        if(!message?.content?.trim())return {ok:false,reason:'answer_file_missing',detail:'本轮回答文件还没有内容，未重新发送任务。'};
-        return {ok:true,text:message.content,source:'answer_file',mode:'answer_file_recollect'};
+        if(message?.content?.trim())return {ok:true,text:message.content,source:'answer_file',mode:'answer_file_recollect'};
+        if(answerFileFallback!=='transcript' || entry.kind!=='plain' || !entry.ready)return {ok:false,reason:'answer_file_missing',detail:'本轮回答文件还没有内容，未重新发送任务。'};
+        answerFallbackEntry=entry;
       }
     }
     if (orch && require('../../core/dev-file-workflow').enabled(meeting)) {
@@ -201,6 +205,23 @@ function registerGroupchatRecoveryIpc(ipcMain, deps) {
         extractMode,
         detail,
       };
+    }
+
+    if (answerFallbackEntry) {
+      // 写回答文件（先写临时文件再改名，读的一方不会读到半截）；随后按文件核对一次并通知界面。
+      try {
+        const fsMod = require('node:fs'), pathMod = require('node:path');
+        fsMod.mkdirSync(pathMod.dirname(answerFallbackEntry.ready), { recursive: true });
+        const tmp = answerFallbackEntry.ready + '.' + process.pid + '.tmp';
+        fsMod.writeFileSync(tmp, `${String(extracted.text).trim()}\n`, 'utf8');
+        fsMod.renameSync(tmp, answerFallbackEntry.ready);
+        delete answerFallbackEntry.sig;
+        require('../../core/group-answer-files').reconcile(orch);
+        sendToRenderer('groupchat:answer-file', { meetingId, revision: orch.state.revision });
+      } catch (error) {
+        return { ok: false, reason: 'answer_file_write_failed', detail: '已从会话记录取到回答，但写入回答文件失败：' + error.message };
+      }
+      return { ok: true, text: extracted.text, source: extracted.source, mode: 'answer_file_from_transcript', extractMode: extracted.extractMode || null };
     }
 
     // watcher settle 只允许作用于"当前进行中的轮"：用户点旧轮的「重新提取」时，

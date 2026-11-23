@@ -2336,6 +2336,16 @@ if (typeof document !== 'undefined') (function () {
   // Markdown answers (core/group-answer-files.js): a member's card shows the file
   // it wrote, or that it has not handed one in yet. No transcript states here —
   // problems show on the member's session in the sidebar.
+  // 这位成员本轮是否还在干活（还在干活时不给「提取」，免得拿到半截回答）。
+  function _gcAnswerMemberRunning(meeting, message) {
+    const state = _gcPanelState[meeting?.id];
+    if (!state) return true;
+    const n = Number(message.turnNum);
+    const status = (Array.isArray(state.turns) ? state.turns : []).find(t => t && Number(t.n) === n)?.byStatus?.[message.sid];
+    if (status) return _turnStatusBucket(status) === 'running';
+    return !!state.currentMode && state.currentMode !== 'idle' && Number(state.currentTurn) === n;
+  }
+
   function _renderAnswerCard(message, meeting, memberBySid) {
     // 回答卡片还没有内容、但这一轮已报错：直接写出报错摘要（如模型不存在、额度用尽），旁观时能看懂为什么没交。
     function _gcAnswerFailureText(message) {
@@ -2364,7 +2374,12 @@ if (typeof document !== 'undefined') (function () {
     // the existing explicit resend for completed answers stays in 更多.
     const resend = message.sid ? `<button type="button" class="mr-gc-retry-btn" data-gc-resend-member="${escapeHtml(message.sid)}" data-gc-retry-turn="${escapeHtml(message.turnNum || '')}" title="把本轮问题重新发给这位成员；它写好回答文件后卡片自动更新">重新发送</button>` : '';
     const recollect = answer?.readError && message.sid ? `<button type="button" class="mr-gc-recollect-btn" data-gc-sync-answer="${escapeHtml(message.sid)}" data-gc-sync-turn="${escapeHtml(message.turnNum || '')}" title="只重新读取本轮回答文件，不重发任务">重新提取</button>` : '';
-    const inspect = message.sid ? `${recollect}${message.sourcePrompt ? `<button type="button" data-gc-copy-prompt="${escapeHtml(message.id || '')}">复制本轮 Prompt</button>` : ''}<button type="button" data-gc-open-cli="${escapeHtml(message.sid)}">打开 ${escapeHtml(slot?.displayLabel || slot?.kind || message.speaker || '成员')} CLI</button>` : '';
+    // 「还没交」但这位成员本轮已经停下（已完成 / 报错 / 超时等）：给「提取」——先重读回答文件，
+    // 还是没有就从它本轮的会话记录里取最终回复写进回答文件（2026-11-23 维护人实测：成员答完了，
+    // 卡片停在「还没交」，状态条按「已完成」也不给提取，用户没有任何办法把回答拿回来）。
+    const extract = !text.trim() && !answer?.readError && message.sid && !_gcAnswerMemberRunning(meeting, message)
+      ? `<button type="button" class="mr-gc-recollect-btn" data-gc-sync-answer="${escapeHtml(message.sid)}" data-gc-sync-turn="${escapeHtml(message.turnNum || '')}" data-gc-sync-fallback="transcript" title="先重读回答文件；没有文件时从该成员本轮的会话记录提取最终回复，不重发任务">提取</button>` : '';
+    const inspect = message.sid ? `${recollect}${extract}${message.sourcePrompt ? `<button type="button" data-gc-copy-prompt="${escapeHtml(message.id || '')}">复制本轮 Prompt</button>` : ''}<button type="button" data-gc-open-cli="${escapeHtml(message.sid)}">打开 ${escapeHtml(slot?.displayLabel || slot?.kind || message.speaker || '成员')} CLI</button>` : '';
     const unread = !!text.trim() && answer?.state !== 'draft';
     return `
       <article ${journal.attributes(meeting, message, escapeHtml, { defaultMinimized: OrchUI.defaultMinimized(meeting, message) })} class="mr-gc-msg ai${slot ? ` slot-${(slot.slotIndex || 0) + 1}` : ''}${text.trim() ? '' : ' answer-missing'}" data-gc-msg-id="${escapeHtml(message.id || '')}" data-user-question="false" data-source-sid="${escapeHtml(message.sid || '')}" data-read-turn="${escapeHtml(message.turnNum || '')}" data-unread-answer="${unread}" data-phase="message" data-answer-state="${escapeHtml(answer ? answer.state : 'none')}">
@@ -3524,6 +3539,7 @@ if (typeof document !== 'undefined') (function () {
         sid,
         turnNum: Number.isFinite(turnRaw) ? turnRaw : undefined,
         sincePromptTs: _gcTurnStartTs[meeting.id] || 0,
+        ...(btn.getAttribute('data-gc-sync-fallback') === 'transcript' ? { answerFileFallback: 'transcript' } : {}),
       };
       const r = await ipcRenderer.invoke('groupchat-manual-extract', payload);
       if (!r || !r.ok) {
@@ -5280,8 +5296,9 @@ if (typeof document !== 'undefined') (function () {
           toolbar: tuning.querySelector('.fi-bridge-toolbar'), input: inputBox,
           getMeeting: () => meetingData[activeMeetingId],
           referenceSession: referenceSessionIntoInput,
+          // 只传 renderer.js 里确实定义在全局的函数：a5eda3fb8 删了全局 formatPastedFilePaths，
+          // 这里还在引用，整段输入框初始化抛错 → 回车发送监听没挂上（v5.6.82–v5.6.90 回车变换行）。
           appendText: appendToContenteditable, droppedFilePath,
-          formatFilePaths: formatPastedFilePaths,
           ipcRenderer, onOtherTarget: _savePreparedAttachmentsToDraft,
           onError: error => window.__hubToast?.('添加附件失败：' + error.message),
           onDraft: id => _setInputDraft(id, inputBox.innerText || ''),
