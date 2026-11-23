@@ -22,6 +22,7 @@ function createCapabilityPanel({document,ipcRenderer,escapeHtml:esc,getActiveSes
   let sharing=null,shareBusy=false,notice='',origin='all',noteEdit=null,noteBusy=false;
   let market=null,marketPage=0,marketQuery='',marketType='all',marketPageSize=1,marketAvailable=false;
   let byIdOpen=false,byIdType='skill',byIdValue='',byIdBusy=false,byIdResult=null;
+  let mcpToggleBusy='';
   const marketStates=new Map();
   const label=id=>getKindLabel(id) || id;
   const button=(text,attrs,cls='')=>`<button type="button" class="cp-button ${cls}" ${attrs}>${text}</button>`;
@@ -82,7 +83,7 @@ function createCapabilityPanel({document,ipcRenderer,escapeHtml:esc,getActiveSes
     }catch(e){error='无法打开 AgentCenter：'+e.message;if(!page.hidden)render();}
   }
   function position(){const rail=document.getElementById('scene-rail')?.getBoundingClientRect();if(page&&rail){const sessionEdge=document.getElementById('session-sidebar')?.getBoundingClientRect().left;page.style.left=(sessionEdge??rail.right)+'px';page.style.top=rail.top+'px';}}
-  const inScope=r=>scope==='all'||scope==='active'&&isActive(r)||scope==='shared'&&r.shared||scope==='conflict'&&r.conflict||scope==='disabled'&&r.sources.some(s=>s.enabled===false||s.missing);
+  const inScope=r=>scope==='all'||scope==='active'&&isActive(r)||scope==='shared'&&r.shared||scope==='conflict'&&r.conflict||scope==='disabled'&&(r.hubEnabled===false||r.sources.some(s=>s.enabled===false||s.missing));
   function rows(){
     let result=tab==='runtime'?(runtime?.rows || []):(catalog?.rows || []);
     if(tab==='runtime')result=result.map(r=>{
@@ -98,8 +99,28 @@ function createCapabilityPanel({document,ipcRenderer,escapeHtml:esc,getActiveSes
     if(noteEdit?.id!==r.id)return button('编辑简述与来源','data-cp-action="note-edit" '+(noteBusy?'disabled':''),'cp-note-edit');
     return `<form class="cp-note-form" id="cp-note-form"><label for="cp-note-summary">一句话说明用途</label><textarea id="cp-note-summary" maxlength="180" placeholder="留空则使用默认说明" ${noteBusy?'disabled':''}>${esc(noteEdit.summary)}</textarea><label for="cp-note-origin">来源类别</label><select id="cp-note-origin" ${noteBusy?'disabled':''}>${[['auto','自动识别'],['self','自建'],['external','外部导入'],['unknown','来源待确认']].map(([k,v])=>`<option value="${k}" ${noteEdit.origin===k?'selected':''}>${v}</option>`).join('')}</select><p class="cp-fine">只保存 Hub 展示信息，不改技能正文、MCP 连接或插件开关。</p><div class="cp-actions"><button type="submit" class="cp-button selected" ${noteBusy?'disabled':''}>${noteBusy?'保存中…':'保存'}</button>${button('取消','data-cp-action="note-cancel" '+(noteBusy?'disabled':''))}</div></form>`;
   }
+  const marketBadge=r=>r.market==='aimarket'?badge('AI 市场','shared'):'';
+  // AI 市场下载的 MCP：开关只存 Hub 设置，新开或重启会话时临时注入。
+  function marketMcpToggle(r){
+    if(r.market!=='aimarket')return '';
+    const on=r.hubEnabled!==false;
+    const off=r.hubToggle&&!r.hubToggle.supported;
+    return `<div class="cp-market-mcp-toggle"><span>在 Hub 会话中启用</span>${button(mcpToggleBusy===r.name?'保存中…':on?'已开启':'已关闭',`role="switch" aria-checked="${on}" data-cp-mcp-toggle="${esc(r.name)}" ${mcpToggleBusy||off?'disabled':''}`,on?'selected':'')}${iconHintHtml('下次新开或重启会话生效。\n开关只存在 Hub 自己的设置里，不改 CodeAgent 的配置文件；关掉后 Hub 启动 CodeAgent 时不带这个 MCP。')}${off?`<small class="cp-market-mcp-off" role="status">${esc(r.hubToggle.reason)}</small>`:''}</div>`;
+  }
+  async function toggleMarketMcp(name,enabled){
+    if(mcpToggleBusy)return;
+    mcpToggleBusy=name;error='';notice='';render();
+    try{
+      const response=await ipcRenderer.invoke('capabilities:market-mcp-toggle',{name,enabled});
+      if(!response?.ok)throw Error(response?.error||'开关保存失败');
+      for(const row of catalog?.rows||[])if(row.type==='mcp'&&row.name===name&&row.market==='aimarket')row.hubEnabled=enabled;
+      notice=`已${enabled?'开启':'关闭'} ${name}，下次新开或重启会话生效。`;
+    }catch(e){error=e.message;}
+    finally{mcpToggleBusy='';if(!page.hidden)render();}
+  }
   function status(r){
     if(tab==='runtime')return badge(r.status,/失败|禁用|未知|未启动|需要授权|未确认|取消/.test(r.status)?'warn':'native');
+    if(r.market==='aimarket'&&r.hubEnabled===false)return badge('Hub 已关闭','muted');
     if(agent!=='all'&&tab==='catalog'){const c=coverage(r,agent);return badge(c.label,c.tone);}
     const src=r.sources.filter(s=>agent==='all'||s.agent===agent);
     if(src.some(s=>s.missing))return badge('安装待核对','warn');
@@ -124,8 +145,8 @@ function createCapabilityPanel({document,ipcRenderer,escapeHtml:esc,getActiveSes
     const sources=r.sources || [];
     const deps = r.accountDependency;
     const accountInfo = deps ? `<div class="cp-sharing-hint"><h4>账号与登录</h4><p>${esc(deps.services.map(id => SERVICES[id]?.name || id).join('、') || (deps.state === 'unknown' ? '账号依赖待核对' : '此工具本身无需额外登录'))}</p>${(deps.services.length || deps.state === 'unknown') && require('../core/distribution').featureEnabled('accounts') ? button('在账号页查看接入状态', 'data-cp-action="accounts"') : ''}<small>本机登记不等于授权有效；共享登录状态在账号页核对。</small></div>` : '';
-    return `<div class="cp-detail-head"><span class="cp-glyph ${r.type}">${svg(r.type)}</span>${badge(TYPE_LABEL[r.type] || r.type)}${status(r)}${originBadge(r)}</div><h2>${esc(r.displayName||r.name)}</h2><p class="cp-description">${esc(r.summary || '尚无用途说明')}</p><p class="cp-caption">${esc(r.summarySource||'')}</p>
-      ${tab!=='runtime'?`<div class="cp-origin-detail"><strong>${esc(r.origin?.label||'来源待确认')}</strong><p>${esc(r.origin?.evidence||'未提供来源信息')}</p>${noteForm(r)}</div><details class="cp-original"><summary>原始名称与说明</summary><code>${esc(r.name)}</code><p>${esc(r.description||'原条目未提供说明')}</p></details>${r.type==='mcp'?`<div class="cp-sharing-hint"><h4>${esc(mcpSharing(r).title)}</h4><p>${esc(mcpSharing(r).text)}</p><small>此处为共享建议，未向其他 AI 写入连接配置。</small></div>`:''}`:''}
+    return `<div class="cp-detail-head"><span class="cp-glyph ${r.type}">${svg(r.type)}</span>${badge(TYPE_LABEL[r.type] || r.type)}${status(r)}${originBadge(r)}${tab!=='runtime'?marketBadge(r):''}</div><h2>${esc(r.displayName||r.name)}</h2><p class="cp-description">${esc(r.summary || '尚无用途说明')}</p><p class="cp-caption">${esc(r.summarySource||'')}</p>
+      ${tab!=='runtime'?marketMcpToggle(r):''}${tab!=='runtime'?`<div class="cp-origin-detail"><strong>${esc(r.origin?.label||'来源待确认')}</strong><p>${esc(r.origin?.evidence||'未提供来源信息')}</p>${noteForm(r)}</div><details class="cp-original"><summary>原始名称与说明</summary><code>${esc(r.name)}</code><p>${esc(r.description||'原条目未提供说明')}</p></details>${r.type==='mcp'?`<div class="cp-sharing-hint"><h4>${esc(mcpSharing(r).title)}</h4><p>${esc(mcpSharing(r).text)}</p><small>此处为共享建议，未向其他 AI 写入连接配置。</small></div>`:''}`:''}
       ${accountInfo}${r.conflict?'<div class="cp-notice warn">同名入口的正文不同。可能是专用适配，请核对后再统一。</div>':''}
       ${tab!=='runtime'?`<h4>AI 覆盖</h4><div class="cp-chips">${r.agents.map(a=>{const c=coverage(r,a);return badge(label(a)+' · '+c.label,c.tone);}).join('')}</div><p class="cp-fine">按本地目录和配置发现；不代表正在运行的会话已加载。</p>${connections(r)}<details class="cp-sources"><summary>来源与配置 · ${sources.length} 处</summary>${sources.map(s=>`<div class="cp-source"><div><strong>${esc(label(s.agent))}</strong>${badge(s.enabled===false?'已禁用':s.missing?'未找到安装记录':'已登记',s.missing?'warn':'')}</div><small>${esc(s.scope==='shared'?'公共技能目录':s.scope==='user'?'用户目录':s.scope==='system'?'系统技能':s.scope==='plugin'?'插件提供':String(s.scope).startsWith('profile:')?'会话账号的配置目录':String(s.scope).startsWith('project:')?'项目级 · '+String(s.scope).slice(8):s.scope)}</small><code>${esc(s.path)}</code>${s.realPath&&s.realPath!==s.path?`<small>指向</small><code>${esc(s.realPath)}</code>`:''}${s.version?`<small>版本 ${esc(s.version)}</small>`:''}${s.transport?`<small>连接方式 ${esc(s.transport)}</small>`:''}</div>`).join('')}</details><div class="cp-next"><h4>如何使用</h4><p>${r.type==='skill'?'在支持此入口的 AI 中描述任务，或明确点名技能。技能正文通常按需读取。':r.type==='mcp'?'在对应客户端完成连接和授权，再到“当前会话”核对连接状态。':'在对应客户端的插件管理中启用；安装与授权分别生效。'}</p>${r.type==='mcp'?button('查看账号与权限','data-cp-action="accounts"'):''}</div>`:`<div class="cp-notice">${esc(runtime?.note || '当前原生连接报告的能力。')}</div><h4>确认时间</h4><p>${esc(new Date(runtime?.observedAt || Date.now()).toLocaleString())}</p>`}`;
   }
@@ -156,11 +177,11 @@ function createCapabilityPanel({document,ipcRenderer,escapeHtml:esc,getActiveSes
       tab==='runtime'?`<div class="cp-session"><label for="cp-session">查看会话</label><select id="cp-session"><option value="">选择一个已打开的会话</option>${(catalog?.sessions || []).map(s=>`<option value="${esc(s.id)}" ${sessionId===s.id?'selected':''}>${esc(label(s.kind)+' · '+s.title)}</option>`).join('')}</select><span>MCP 档位 <b>${esc(runtime?.profile || '未确认')}</b></span></div>`:''}
       <div class="cp-toolbar"><label class="cp-search"><span aria-hidden="true">⌕</span><input id="cp-search" type="search" placeholder="搜索名称或功能…" aria-label="搜索能力" value="${esc(query)}"></label>${tab!=='runtime'?`<select id="cp-scope" aria-label="范围">${[['active','已启用'],['all','全部（含停用）'],['shared','公共技能'],['conflict','同名差异'],['disabled','禁用 / 待核对']].map(([k,v])=>`<option value="${k}" ${scope===k?'selected':''}>${v}</option>`).join('')}</select>`:''}<span>${visible.length} 项</span></div>
       ${tab!=='runtime'?`<nav class="cp-origins" aria-label="按创建来源筛选">${[['all','全部来源'],...Object.entries(ORIGINS)].map(([id,name])=>button(esc(name),`data-cp-origin="${id}" aria-pressed="${origin===id}"`,origin===id?'selected':'')).join('')}<span>自建与外部导入按来源区分，和是否共享无关</span></nav>`:''}
-      ${error?`<div class="cp-notice warn" role="alert">${esc(error)}</div>`:''}${busy?'<div class="cp-progress" role="status">正在读取能力信息…</div>':''}
+      ${error?`<div class="cp-notice warn" role="alert">${esc(error)}</div>`:''}${tab!=='runtime'&&catalog?.marketMcpError?`<div class="cp-notice warn" role="alert">${esc(catalog.marketMcpError)}</div>`:''}${busy?'<div class="cp-progress" role="status">正在读取能力信息…</div>':''}
       ${tab==='runtime' && (!sessionId||runtime?.unknown)?`<div class="cp-notice">${esc(runtime?.unknown || '选择已打开的会话查看确认回执。此操作不会创建会话或启动 AI。')}</div>`:''}
       ${tab==='runtime'&&runtime?.note?`<p class="cp-runtime-note">${esc(runtime.note)}</p>`:''}
       ${(tab==='runtime'?runtime?.warnings:catalog?.warnings)?.length?`<details class="cp-warnings"><summary>部分信息未能读取 · ${(tab==='runtime'?runtime.warnings:catalog.warnings).length} 项</summary>${(tab==='runtime'?runtime.warnings:catalog.warnings).map(w=>`<p>${esc(w)}</p>`).join('')}</details>`:''}
-      ${tab==='coverage'?matrix(visible):''}<div class="cp-content ${tab==='coverage'?'cp-coverage-detail':''}">${tab==='coverage'?'':`<div class="cp-list" aria-label="能力列表">${visible.length?visible.map(r=>`<button type="button" class="cp-row ${r.id===active?.id?'selected':''}" data-cp-row="${esc(r.id)}" aria-pressed="${r.id===active?.id}"><span class="cp-glyph ${r.type}">${svg(r.type)}</span><span class="cp-row-copy"><span class="cp-row-title"><strong>${esc(r.displayName||r.name)}</strong>${originBadge(r)}</span><small class="cp-row-summary">${esc(r.summary || '尚无用途说明')}</small></span><span class="cp-row-meta">${status(r)}${r.conflict?badge('同名差异','warn'):''}<small>${tab==='runtime'?esc(TYPE_LABEL[r.type]):r.agents.map(a=>esc(label(a))).join(' · ')}</small></span></button>`).join(''):`<div class="cp-empty">${svg('skill')}<h3>${busy?'正在发现能力':'这里还没有匹配的能力'}</h3><p>${query?'试试更短的关键词，或切换筛选条件。':tab==='runtime'?'本地登记请在能力库查看；本类会话状态可能未报告。':'此客户端暂未发现对应入口；加载状态仍以会话回执为准。'}</p></div>`}</div>`}<aside class="cp-detail" aria-label="能力详情">${detail(active)}</aside></div>
+      ${tab==='coverage'?matrix(visible):''}<div class="cp-content ${tab==='coverage'?'cp-coverage-detail':''}">${tab==='coverage'?'':`<div class="cp-list" aria-label="能力列表">${visible.length?visible.map(r=>`<button type="button" class="cp-row ${r.id===active?.id?'selected':''}" data-cp-row="${esc(r.id)}" aria-pressed="${r.id===active?.id}"><span class="cp-glyph ${r.type}">${svg(r.type)}</span><span class="cp-row-copy"><span class="cp-row-title"><strong>${esc(r.displayName||r.name)}</strong>${originBadge(r)}${tab!=='runtime'?marketBadge(r):''}</span><small class="cp-row-summary">${esc(r.summary || '尚无用途说明')}</small></span><span class="cp-row-meta">${status(r)}${r.conflict?badge('同名差异','warn'):''}<small>${tab==='runtime'?esc(TYPE_LABEL[r.type]):r.agents.map(a=>esc(label(a))).join(' · ')}</small></span></button>`).join(''):`<div class="cp-empty">${svg('skill')}<h3>${busy?'正在发现能力':'这里还没有匹配的能力'}</h3><p>${query?'试试更短的关键词，或切换筛选条件。':tab==='runtime'?'本地登记请在能力库查看；本类会话状态可能未报告。':'此客户端暂未发现对应入口；加载状态仍以会话回执为准。'}</p></div>`}</div>`}<aside class="cp-detail" aria-label="能力详情">${detail(active)}</aside></div>
       <details class="cp-help"><summary>技能、连接和插件有什么区别？</summary><p>技能是完成任务的方法和辅助文件；MCP 是 AI 调用工具和服务的连接；插件把相关技能和连接打包在一起。</p><p>能力库展示本机配置，AI 覆盖对比展示入口差异，当前会话展示原生客户端的回执。App 账号技能、云端连接器与本机 CLI 配置不一定同步。安装、启用、连接成功和实际使用是不同状态。</p></details><footer class="cp-footer">本机目录与已打开项目的配置 · 不包含完整云端市场 · 已登记不等于当前会话可用</footer></div>`;
     const advanced=[page.querySelector('.cp-agents'),page.querySelector('.cp-origins')].filter(Boolean);
     if(advanced.length){
@@ -246,6 +267,7 @@ function createCapabilityPanel({document,ipcRenderer,escapeHtml:esc,getActiveSes
       page.addEventListener('click',e=>{
         const b=e.target.closest('button');if(!b)return;
         if(b.dataset.cpInstall){void installMarket(b.dataset.cpInstall);return;}
+        if(b.dataset.cpMcpToggle){void toggleMarketMcp(b.dataset.cpMcpToggle,b.getAttribute('aria-checked')!=='true');return;}
         if(b.dataset.cpAction==='market-by-id'){byIdOpen=!byIdOpen;render();if(byIdOpen)page.querySelector('#cp-market-id')?.focus();return;}
         if(b.dataset.cpAction==='market-browse'){void browseMarket();return;}
         if(b.dataset.cpMarketPage){marketPage+=Number(b.dataset.cpMarketPage);render();return;}

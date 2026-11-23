@@ -76,9 +76,9 @@ class CapabilityService {
     const key=JSON.stringify(projects);
     if(this.pending) {
       const pendingKey=this.pendingKey,generation=this.pendingGeneration,data=await this.pending;
-      return pendingKey===key && generation===this.catalogGeneration ? {...data,sessions:this.sessions()} : this.catalog(refresh);
+      return pendingKey===key && generation===this.catalogGeneration ? this.withHubState(data) : this.catalog(refresh);
     }
-    if(!refresh && this.cache?.key===key && Date.now()-this.cache.at<30000)return {...this.cache.data,sessions:this.sessions()};
+    if(!refresh && this.cache?.key===key && Date.now()-this.cache.at<30000)return this.withHubState(this.cache.data);
     this.pendingKey=key;
     const generation=this.catalogGeneration;this.pendingGeneration=generation;
     this.pending=new Promise((resolve,reject)=>{
@@ -94,7 +94,33 @@ class CapabilityService {
     try {data=await this.pending;if(generation===this.catalogGeneration)this.cache={key,at:Date.now(),data};}
     finally {this.pending=null;}
     if(generation!==this.catalogGeneration)return this.catalog(true);
-    return {...data,sessions:this.sessions()};
+    return this.withHubState(data);
+  }
+  // AI 市场 MCP 的 Hub 开关不进扫描缓存：切换后立即可见，不用重扫磁盘。
+  withHubState(data) {
+    const market=require('./codeagent-market-mcp');
+    const hasMarket=(data.rows||[]).some(r=>r.type==='mcp'&&r.sources?.some(s=>s.market==='aimarket'));
+    const flagSupported=hasMarket?this.marketFlagSupport():null;
+    const rows=market.decorateCatalogRows(data.rows,this.dataDir,{flagSupported});
+    const error=hasMarket?market.loadSettings(this.dataDir).error:'';
+    return {...data,rows,warnings:error?[error,...(data.warnings||[])]:data.warnings,...(error?{marketMcpError:error}:{}),sessions:this.sessions()};
+  }
+  // 本机 CodeAgent 认不认 --disabled-mcp-servers（读 --help 缓存）；还没读到时后台读，读到前不置灰。
+  marketFlagSupport() {
+    try {
+      const command=this.market.config().command;
+      const supported=require('./codeagent-market-mcp').disableFlagSupport(command);
+      if(supported===null)void require('./codeagent-capabilities').prepare(command);
+      return supported;
+    } catch { return null; }
+  }
+  // 只写 Hub 自己的设置；下次新开或重启 CodeAgent 会话时生效，不改 CodeAgent 的配置文件。
+  async setMarketMcpEnabled({name,enabled}={}) {
+    const catalog=await this.catalog();
+    const row=catalog.rows.find(r=>r.type==='mcp'&&r.name===name&&r.market==='aimarket');
+    if(!row)throw Error('这个 MCP 不在 AI 市场的安装登记里，请刷新后重试');
+    if(row.hubToggle&&!row.hubToggle.supported)throw Error(row.hubToggle.reason);
+    return require('./codeagent-market-mcp').setMarketMcpEnabled(this.dataDir,name,enabled);
   }
   async runtime(sessionId) {
     const manager=this.sessionManager, session=manager.getSession(sessionId);

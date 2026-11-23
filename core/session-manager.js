@@ -647,6 +647,7 @@ function buildCodeAgentPtyLaunch(id, kind, opts, cwd, env, config, auth = null, 
   let memberMcp = null;
   let bridgeTrim = null;
   let bridgeSettings = null;
+  let marketMcpNotice = '';
   const mcpPaths = singleCodeAgentMcpConfig(id, [...(mcp.configPaths || []), ...(memberMcp && memberMcp.file ? [memberMcp.file] : [])], hubDataDir);
   if (mcpPaths.length) args.push('--mcp-config', ...mcpPaths);
   if (mcp.profile !== 'full') args.push('--strict-mcp-config');
@@ -703,7 +704,7 @@ function buildCodeAgentPtyLaunch(id, kind, opts, cwd, env, config, auth = null, 
   const resumeHistoryMissing = !!opts.resumeCCSessionId && !opts.forkCCSessionId && isUuid(opts.resumeCCSessionId) && identity.length === 0;
   if (resumeHistoryMissing) console.warn(`[codeagent] ${String(id || '').slice(0, 8)} resume requested for ${String(opts.resumeCCSessionId).slice(0, 8)} but no history found under ${config.configDir}; starting a new conversation`);
   return { cmd, sessionId, ...pin, requiresMenu: !!requestedModel && !(settingsFile && launchArgs.includes('--settings')),
-    ...(resumeHistoryMissing ? { resumeHistoryMissing: true } : {}), model: requestedModel,
+    ...(resumeHistoryMissing ? { resumeHistoryMissing: true } : {}), ...(marketMcpNotice ? { marketMcpNotice } : {}), model: requestedModel,
     // 按 bypass 档启动：第一次用这个档的配置目录会弹「Bypass Permissions mode」确认框，启动后自动选 Yes（见 _createSession）。
     bypassLaunch: permissionMode === 'bypassPermissions' && launchArgs.includes('--permission-mode'),
     settingsModel: settingsFile && launchArgs.includes('--settings') ? settingsModel : '', ...(memberMcpLearn ? { memberMcpLearn } : {}),
@@ -3260,6 +3261,9 @@ class SessionManager extends EventEmitter {
       setTimeout(() => this.emit('session-notice', { sessionId: id, level: 'warning', persistent: true,
         message: codeAgentPermissionDroppedMessage(codeagentLaunch.permissionModeDropped) }), 0);
     }
+    if (codeagentLaunch && codeagentLaunch.marketMcpNotice) {
+      setTimeout(() => this.emit('session-notice', { sessionId: id, level: 'warning', persistent: true, message: codeagentLaunch.marketMcpNotice }), 0);
+    }
     if (codeagentLaunch && codeagentLaunch.resumeHistoryMissing) {
       setTimeout(() => this.emit('session-notice', { sessionId: id, level: 'warning',
         message: '没有找到这个会话之前的对话记录（可能已被清理或配置目录换过），这次是一段新对话，AI 不记得之前聊过的内容。' }), 0);
@@ -4751,6 +4755,7 @@ try {
       relaunchBypass = launch.bypassLaunch === true;
       if (launch.permissionModeDropped) this.emit('session-notice', { sessionId, level: 'warning', persistent: true,
         message: codeAgentPermissionDroppedMessage(launch.permissionModeDropped) });
+      if (launch.marketMcpNotice) this.emit('session-notice', { sessionId, level: 'warning', persistent: true, message: launch.marketMcpNotice });
       if (launch.memberMcpLearn) scheduleNativeMcpLearn(this, sessionId, Number(s.pty?.pid), launch.memberMcpLearn);
       Object.assign(s.info, { ccSessionId: undefined, transcriptPath: undefined, codeagentIdentityPending: true, codeagentModelPick: false });
       cmd = launch.cmd;

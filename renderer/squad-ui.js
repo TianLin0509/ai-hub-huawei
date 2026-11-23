@@ -35,6 +35,10 @@ function headerButton(meeting) {
   return `<button type="button" class="mr-header-btn${on ? ' active' : ''}" id="mr-btn-squad" aria-pressed="${on}" title="${on ? '小队模式已开启：你只和负责人说话，成员做完自动交回负责人' : '开启小队模式：设一位负责人拆任务、派给成员，成员做完自动交回'}">${on ? '小队 · 负责人 ' + esc(view(meeting).leaderLabel || '') : '小队模式'}</button>`;
 }
 
+// 🖼 = 确定能看图（按后端与模型的已知能力；拿不准的不标，公司模型默认不标）。
+const canSeeImages = m => require('../core/image-input-support').imageInputSupport(m) === true;
+const IMAGE_MARK = '<span class="mr-squad-img" title="能看图：可以直接发图片给它">🖼 可看图</span>';
+
 function closePopover() { document.getElementById('mr-squad-pop')?.remove(); }
 
 // setParticipants(indexes)：沿用群聊点亮头像的入口，开启时只亮负责人，关闭时恢复原来的头像。
@@ -54,8 +58,10 @@ async function openSettings(meeting, anchor, { setParticipants, onError = () => 
     <p class="mr-squad-intro">设一位负责人：你只和负责人对话，它拆任务、按顺序或同时派给成员，成员做完自动交回，负责人再叫下一位。</p>
     ${list.length < 2 ? '<p class="mr-squad-warn">小队至少要两位成员。先点顶栏「+ 成员」再加一位。</p>' : ''}
     <label class="mr-squad-field">负责人
-      <select data-squad-leader>${list.map(m => `<option value="${esc(m.memberId)}"${m.memberId === leaderId ? ' selected' : ''}>${esc(m.label)}${m.kind ? '（' + esc(m.kind) + (m.model ? ' / ' + esc(m.model) : '') + '）' : ''}</option>`).join('')}</select>
+      <select data-squad-leader>${list.map(m => `<option value="${esc(m.memberId)}"${m.memberId === leaderId ? ' selected' : ''}>${esc(m.label)}${m.kind ? '（' + esc(m.kind) + (m.model ? ' / ' + esc(m.model) : '') + '）' : ''}${canSeeImages(m) ? ' · 🖼 可看图' : ''}</option>`).join('')}</select>
     </label>
+    ${list.length ? `<div class="mr-squad-roster" aria-label="小队成员">${list.map(m => `<span class="mr-squad-member">${esc(m.label)}${canSeeImages(m) ? IMAGE_MARK : ''}</span>`).join('')}</div>
+    <p class="mr-squad-img-note">🖼 = 能看图（按模型已知能力判断）；没标的成员收到图片时只看到文件路径，公司模型默认不标。</p>` : ''}
     <label class="mr-squad-field">负责人最多连续派工几轮（到了先停下问你，防止空转耗额度）
       <input type="number" min="1" max="20" step="1" data-squad-rounds value="${esc(cfg.maxRounds || 6)}">
     </label>
@@ -141,4 +147,18 @@ function dispatchLabel(message) {
   return null;
 }
 
-module.exports = { PLACEHOLDER, load, view, enabled, onChange, headerButton, openSettings, closePopover, renderStrip, dispatchLabel };
+// 发图前提示：小队里不能确定能看图的成员（含负责人）。返回一行提示，没有就返回空串。
+// 先看有没有图片；有图但小队状态还没加载（刚打开群就发）时先读一次，不漏提示。
+async function imageWarning(meeting, text) {
+  if (!meeting || !meeting.groupChat || conflict(meeting)) return '';
+  let images = [];
+  try { images = require('../core/acp-attachments').imagePaths(text); } catch { images = []; }
+  if (!images.length) return '';
+  if (!view(meeting)) await load(meeting.id);
+  if (!enabled(meeting)) return '';
+  const blind = (view(meeting)?.members || []).filter(m => !canSeeImages(m)).map(m => m.label);
+  return blind.length ? `这条带图片：${blind.join('、')} 不确定能看图，只会收到图片文件路径；标 🖼 的成员能直接看图。` : '';
+}
+
+module.exports = {
+  imageWarning, canSeeImages, PLACEHOLDER, load, view, enabled, onChange, headerButton, openSettings, closePopover, renderStrip, dispatchLabel };

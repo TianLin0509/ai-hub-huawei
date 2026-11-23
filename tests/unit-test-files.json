@@ -93,6 +93,8 @@
   "tests/unit-company-rooms-page.test.js",
   "tests/unit-codeagent-skills.test.js",
   "tests/unit-codeagent-mcp-catalog.test.js",
+  "tests/unit-codeagent-market-mcp.test.js",
+  "tests/unit-image-input-support.test.js",
   "tests/unit-credential-hints.test.js",
   "tests/unit-composer-slash-picker.test.js",
   "tests/unit-codeagent-accounts-page.test.js",

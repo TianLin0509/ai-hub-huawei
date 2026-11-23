@@ -4,6 +4,7 @@ const ORIGINS={self:'自建',external:'外部导入',unknown:'来源待确认',m
 function sourceOrigin(row,source){
   if(['self','external'].includes(source.declaredOrigin))return {kind:source.declaredOrigin,evidence:'技能元数据显式声明'};
   if(source.scope==='system')return {kind:'external',evidence:'客户端内置技能'};
+  if(source.market==='aimarket')return {kind:'external',evidence:'AI 市场下载（CodeAgent 的市场安装登记）'};
   const plugin=source.plugin||(row.type==='plugin'?row.name:'');
   const market=plugin.includes('@')?plugin.slice(plugin.lastIndexOf('@')+1):'';
   if(market==='personal')return {kind:'self',evidence:'个人插件目录 personal（表示自建封装，不代表所有组件均为原创）'};
@@ -13,7 +14,9 @@ function sourceOrigin(row,source){
 function presentation(row,note={}){
   note=note&&typeof note==='object'?note:{};
   const customSummary=typeof note.summary==='string'?note.summary.trim().slice(0,180):'';
-  const origins=(row.sources||[]).map(s=>sourceOrigin(row,s));
+  let origins=(row.sources||[]).map(s=>sourceOrigin(row,s));
+  // 市场登记已说明来源，同一条目在 .cac.json 里的启动配置不再算“来源待确认”。
+  if((row.sources||[]).some(s=>s.market==='aimarket'))origins=origins.filter(o=>o.kind!=='unknown');
   const kinds=new Set(origins.map(s=>s.kind));
   let kind=kinds.size===1?[...kinds][0]:kinds.size?'mixed':'unknown';
   let evidence=[...new Set(origins.map(s=>s.evidence))].join('；');

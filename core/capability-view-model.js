@@ -19,6 +19,8 @@ function coverage(row, agent) {
 // Headline counts and the default list only include rows with at least one installed, enabled entry;
 // disabled leftovers and flag-only plugins stay reachable through the explicit scope filters.
 function isActive(row) {
+  // 在 Hub 里关掉的 AI 市场 MCP 不算已启用。
+  if (row.market === 'aimarket' && row.hubEnabled === false) return false;
   return (row.sources || []).some(s => !s.missing && s.enabled !== false);
 }
 function related(rows, row) {

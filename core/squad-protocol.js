@@ -3,6 +3,7 @@
 // 负责人在回答末尾写派工块，Hub 按块叫醒成员；成员做完 Hub 自动交回负责人。
 // 纯文字、不依赖 MCP，任何 CLI 成员都能用。这里只放纯函数，状态与派发在 main/groupchat/squad-engine.js。
 
+const { imageInputSupport } = require('./image-input-support');
 const DEFAULT_MAX_ROUNDS = 6;
 const MAX_TASKS_PER_ROUND = 8;
 const HEADER_RE = /^\s*[【\[]\s*派工\s*[·・:：\-\s]?\s*(依次|顺序|串行|同时|并行)?\s*[】\]]\s*$/;
@@ -82,7 +83,8 @@ function parseDispatch(text, resolve) {
 
 function rosterLines(members, leaderMemberId) {
   return members.filter(m => m.memberId !== leaderMemberId)
-    .map(m => `- @${m.memberId}：${m.label}${m.kind ? `（${m.kind}${m.model ? ' / ' + m.model : ''}）` : ''}`);
+    // 能看图的成员标出来，用户发了图片时负责人好把看图的活派给他。
+    .map(m => `- @${m.memberId}：${m.label}${m.kind ? `（${m.kind}${m.model ? ' / ' + m.model : ''}）` : ''}${imageInputSupport(m) === true ? '，能看图' : ''}`);
 }
 
 function leaderPrompt(userText, { members = [], leaderMemberId = '', maxRounds = DEFAULT_MAX_ROUNDS } = {}) {

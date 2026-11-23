@@ -4422,6 +4422,10 @@ if (typeof document !== 'undefined') (function () {
 
   function triggerGroupChat(meeting, opts = {}) {
     const mid = meeting.id;
+    // 小队里发图片：不确定能看图的成员一行提示（照常发送，不拦）。
+    SquadUI.imageWarning(meeting, opts.userInput || '')
+      .then(imageHint => { if (imageHint && activeMeetingId === mid) _showGcEscapeNotice(imageHint, 'warn'); })
+      .catch(error => console.warn('[squad] image hint failed:', error.message));
     const cached = _gcPanelState[mid];
     _gcTurnStartTs[mid] = Date.now();
     // 抢占式连发代际：每次发送自增；clearOptimistic 只认最新代际，避免连发时「旧轮 invoke

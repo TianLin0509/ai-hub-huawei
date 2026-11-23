@@ -61,6 +61,10 @@
 .mr-squad-pop h3 { margin: 0 0 4px; font-size: 15px; }
 .mr-squad-intro, .mr-squad-notes { color: var(--fg-muted); line-height: 1.6; margin: 0 0 8px; }
 .mr-squad-notes { padding-left: 18px; font-size: 12px; }
+.mr-squad-roster { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 6px; }
+.mr-squad-member { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid var(--border, rgba(127,127,127,.3)); border-radius: 6px; font-size: 12px; }
+.mr-squad-img { font-size: 11px; color: var(--accent, #3478f6); white-space: nowrap; }
+.mr-squad-img-note { color: var(--fg-muted); font-size: 11px; line-height: 1.5; margin: 0 0 8px; }
 .mr-squad-warn, .mr-squad-error { color: var(--status-danger, #d1372b); margin: 4px 0; }
 .mr-squad-field { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; color: var(--fg-muted); }
 .mr-squad-field select, .mr-squad-field input {

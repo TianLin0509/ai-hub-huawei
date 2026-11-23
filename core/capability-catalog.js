@@ -230,6 +230,14 @@ function collectCapabilities({ homeDir, dataDir, projects = [], codeagentConfigD
     const states = stateFiles.filter(f=>fs.existsSync(f)).map(file=>({file,data:json(file,STATE_MAX_MB)}));
     caScanned.set(key, states);
     for (const {file,data} of states) mcpEntries({mcpServers:data.mcpServers || {}},file,'codeagent',scope);
+    // AI 市场下载的 MCP 另记在 inner-installed.json（2026-11-24 公司真机核对，见 codeagent-market-mcp.js）。
+    // 这里标出来源；登记了却在 .cac.json 里找不到启动方式的，标成安装待核对。
+    const market = require('./codeagent-market-mcp').readMarketMcpRegistry(dir);
+    if (market.error) warnings.push(`${market.file}：${market.error}`);
+    const configured = new Set(states.flatMap(({data})=>data.mcpServers && typeof data.mcpServers==='object' ? Object.keys(data.mcpServers) : []));
+    for (const item of market.rows)
+      add('mcp',item.name,'AI 市场下载的 MCP',{agent:'codeagent',scope,path:market.file,market:'aimarket',enabled:true,
+        missing:!configured.has(item.name),version:item.version || null,installedAt:item.installedAt || null});
     if (fs.existsSync(dir)) {
       scanSkills(path.join(dir,'skills'),['codeagent'],scope);
       // 按 ID 装的 Agent / 命令使用 CLI 的 Markdown 目录，按文件名登记，正文不传给界面。
