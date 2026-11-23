@@ -103,6 +103,9 @@ let chain = Promise.resolve();
 // 正在跑的临时 serve（pid → 端口）。Hub 退出时 Windows 不会带走子进程，要主动结束（2026-11-05 审查）。
 const activeServes = new Map();
 let shuttingDown = false;
+// Windows 分层 Job Object 第 3 层（2026-11-23 P2）：每个临时 serve 一个盒子（temp-serve:<pid>:<代>），用完连脱离的 bun 一起结束。
+const tempServeJobs = new Map(); // pid → 盒子 key
+const jobQos = () => require('./win32-job-qos').getWin32JobQos();
 
 function withTempServe(options, fn) {
   const task = () => runTempServe(options, fn);
@@ -178,9 +181,12 @@ async function runTempServe({ command, configDirEnv, configDir, cwd, env = proce
   // 影子用户目录只换给这一个临时进程；--config-dir 显式指向原账号目录，个人号凭据仍从真实的 ~/.cac 读。
   let shadow = '';
   try { shadow = shadowHome ? shadowHome({ env, dataDir, configDir }) : ''; } catch { shadow = ''; }
+  const spawnedFrom = Date.now();
   try { proc = spawnImpl({ command, port, token, configDir, cwd: cwd || configDir, env: applyShadowHome(serveEnv(env, { configDirEnv, configDir }), shadow) }); }
   catch (error) { return { ok: false, error: `启动 CodeAgent serve 失败：${error.message}` }; }
   if (proc.pid) activeServes.set(proc.pid, port);
+  const jobKey = proc.pid ? jobQos().assign(`temp-serve:${proc.pid}`, proc.pid, { minStartMs: spawnedFrom - 1000, maxStartMs: Date.now() + 2000, layer: 'temp-serve' }) : '';
+  if (jobKey) tempServeJobs.set(proc.pid, jobKey);
   let exited = false, exitCode = null, spawnError = '';
   const exitPromise = new Promise(resolve => {
     proc.once('exit', code => { exited = true; exitCode = code; resolve(); });
@@ -201,6 +207,9 @@ async function runTempServe({ command, configDirEnv, configDir, cwd, env = proce
     return { ok: false, error: error && error.message ? error.message : String(error) };
   } finally {
     if (proc.pid) activeServes.delete(proc.pid);
+    // 先整盒结束（含脱离父进程的 bun），原来的按进程树 + 端口结束照旧兜底。
+    // 最多等 3 秒，超时照常走下面的进程树 + 端口结束（盒子在后台继续收）。
+    if (jobKey) { tempServeJobs.delete(proc.pid); await Promise.resolve(jobQos().terminate(jobKey, { timeoutMs: 3000 })).catch(() => null); }
     if (!exited) {
       await killTree(proc.pid);
       await Promise.race([exitPromise, new Promise(r => setTimeout(r, 5000))]);
@@ -358,6 +367,9 @@ function shutdownTempServes({ killSync = killServeSync } = {}) {
   shuttingDown = true;
   const running = [...activeServes];
   activeServes.clear();
+  // 盒子尽力结束（异步）；Hub 进程退出时内核关掉句柄同样会结束盒里进程。同步结束照旧。
+  for (const key of tempServeJobs.values()) jobQos().terminate(key).catch(() => null);
+  tempServeJobs.clear();
   for (const [pid, port] of running) killSync(pid, port);
   return running.length;
 }
@@ -370,4 +382,4 @@ function tempServePids() { return [...activeServes.keys()]; }
 // 选模型、启动传参仍跟 serveEnabled 走，不受这里影响。
 function quotaReadEnabled(env = process.env) { return env.AI_HUB_CODEAGENT_SERVE !== '0'; }
 
-module.exports = { spawnServe, serveEnv, prepareShadowHome, applyShadowHome, stripMcpServers, withAccountServe, tempServePids, SHADOW_DIR_NAME, killServeSync, killTree, serveEnabled, quotaReadEnabled, shutdownTempServes, resetTempServeShutdownForTest, withTempServe, request, getJson, freePort, portOwner, HEALTH_PATH, parseProviders, parseQuota, readAccount, toUsageSnapshot };
+module.exports = { tempServeJobKeys: () => [...tempServeJobs.values()], spawnServe, serveEnv, prepareShadowHome, applyShadowHome, stripMcpServers, withAccountServe, tempServePids, SHADOW_DIR_NAME, killServeSync, killTree, serveEnabled, quotaReadEnabled, shutdownTempServes, resetTempServeShutdownForTest, withTempServe, request, getJson, freePort, portOwner, HEALTH_PATH, parseProviders, parseQuota, readAccount, toUsageSnapshot };

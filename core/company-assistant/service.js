@@ -1666,6 +1666,9 @@ class CompanyAssistant {
     // 新建时 CLI 尚未接管终端，短暂留在 PowerShell 属于正常启动过程。
     const meta = this.pool.get(id);
     if (meta && this.now() - meta.createdAt < PREWARM_START_GRACE_MS) return false;
+    // CodeAgent-Lite（共享 serve）没有自己的终端：不拿卡片文字去认 PowerShell 提示符；过了启动宽限期仍断开就判不可用，换新会话。
+    const info = this.deps.getSession(id);
+    if (info?.codeagentRunMode === 'serve') return info.nativeRuntime?.connection === 'disconnected';
     // PTY 的 PowerShell 还活着并不代表 CodeAgent 还在；复用已有宿主提示符判定，不把历史提示符当退出。
     try {
       const screen = this.deps.readTerminalScreen?.(id);

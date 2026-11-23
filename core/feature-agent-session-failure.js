@@ -8,7 +8,13 @@ function createReader(deps = {}) {
     read(id, baseline = null) {
       const meta = deps.getSession?.(id);
       if (!meta) { monitors.delete(id); return ''; }
-      for (const issue of [meta.connectionIssue, meta.nativeActionError, meta.nativeRuntime?.error]) if (issue && login(issue)) return message;
+      // 共享 serve（CodeAgent-Lite）没有终端横幅可看，鉴权与限流错误只出现在原生运行时字段里：一并检查，明确失败就不空等。
+      for (const issue of [meta.connectionIssue, meta.nativeActionError, meta.nativeRuntime?.error, meta.nativeRuntime?.reason]) {
+        if (!issue) continue;
+        const text = typeof issue === 'string' ? issue : String(issue.message || issue.reason || issue.text || '');
+        if (login(issue) || (text && login(text))) return message;
+        if (text && /\b429\b|rate.?limit|too many requests|额度已用完|请求过多/i.test(text)) return 'Agent 额度已用完或请求过多（429），请稍后重试或换个账号';
+      }
       const error = deps.readTurnApiError ? deps.readTurnApiError(meta) : require('./company-assistant/turn-api-error').lastApiError(meta.transcriptPath);
       if (error && error.id !== baseline && (login(error.text) || /\b401\b|未登录|登录过期|认证失败/i.test(error.text))) return message;
       if (!deps.readTerminalScreen) return '';

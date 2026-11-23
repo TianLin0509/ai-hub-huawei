@@ -52,6 +52,8 @@
     'deepseek-claude': 'DeepSeek · Claude Code',
     kimi: 'Kimi Code · K3',
     codeagent: 'CodeAgent · 公司内网',
+    // CodeAgent-Lite：启动中心的独立入口，底层仍建 codeagent 会话、固定走共享 serve（core/codeagent-run-mode.js）。
+    'codeagent-lite': 'CodeAgent-Lite · 省内存',
     powershell: 'PowerShell',
   };
 
@@ -185,6 +187,17 @@
     if (DEEPSEEK_PANEL_KINDS.has(kind)) return 'deepseek-acp';
     return KIND_LABELS[kind] ? kind : null;
   }
+  // CodeAgent-Lite 与 CodeAgent 共用账号、号池、模型目录、权限与安装检测：选中 Lite 时 selectedKind 仍是 'codeagent'，
+  // 只用 codeagentLite 标出入口；于是所有 CodeAgent 分支原样生效，差别只在运行方式固定 serve、不带思考强度。
+  const isCodeagentPanelKind = kind => kind === 'codeagent' || kind === 'codeagent-lite';
+  function applyLaunchKind(kind) {
+    const key = panelKind(kind);
+    codeagentLite = key === 'codeagent-lite';
+    selectedKind = codeagentLite ? 'codeagent' : key;
+    return selectedKind;
+  }
+  // 启动中心按钮与「记住上次类型」用的键：Lite 入口单独记，其余同 selectedKind。
+  const launchKindKey = () => (codeagentLite && selectedKind === 'codeagent' ? 'codeagent-lite' : selectedKind);
   // 缺 Key 的一条：置灰并写原因。读不到配置时不预判（创建时主进程会如实报错）。
   function deepseekRouteStatus(route) {
     const entry = deepseekRoutes && deepseekRoutes[route];
@@ -301,6 +314,7 @@
   // 当前选择，避免把用户刚选的值改掉。
   let tuningTouchedByUser = false;
   let codeagentRunMode = 'pty';
+  let codeagentLite = false;
   // 低开销模式（2026-11-23 P1 L2）：开着时 CodeAgent 新会话默认走 serve（卡片、共享进程）；
   // 这次打开面板里用户亲手改过运行方式就听他的。关闭时就是保存的值，和原来一样。
   let codeagentRunModeExplicit = false;
@@ -503,6 +517,9 @@
   let scratchRoot = '';
   let workspaceRoot = '';
   let flatWorkRoot = false;
+  let rootDisk = null;
+  let rootEditing = false;
+  const defaultRootFooter = require('./default-root-footer');
   let archiveModalEl = null;
   let archiveContext = null;
   let archiveParent = null;
@@ -962,6 +979,7 @@
       scratchRoot = (listing && listing.scratchRoot) || scratchRoot;
       workspaceRoot = (listing && listing.root) || workspaceRoot;
       flatWorkRoot = !!(listing && listing.flatRoot);
+      rootDisk = await ipcRenderer.invoke('workspace:root-disk').catch(() => null);
       recommendedItems = ((listing && listing.recommended) || [])
         .filter(item => item && item.path);
       recentItems = ((listing && listing.items) || [])
@@ -1382,12 +1400,28 @@
   if (window.__hubLowOverhead) subscribeLowOverhead();
   else document.addEventListener('DOMContentLoaded', subscribeLowOverhead, { once: true });
 
+  // 一行放得下（1024 宽也不折行）；完整说明放在悬停提示里。
+  const LITE_NOTE = '轻量共享模式：与 CodeAgent 共用账号与权限，多会话共用一个后台进程，省内存。';
+  const LITE_NOTE_FULL = '轻量共享模式：与 CodeAgent 共用同一账号与权限，多会话共用一个后台进程，大幅省内存；点「后台」可按需打开终端，暂不支持思考强度。';
   function paintRunMode() {
     const field = document.getElementById('new-session-run-mode-field');
     const select = document.getElementById('new-session-run-mode');
     const note = document.getElementById('new-session-run-mode-note');
     if (!field || !select) return;
     const cardKind = cardRunEligible();
+    if (selectedKind === 'codeagent' && codeagentLite) {
+      // Lite 本身就是轻量共享方式：不给运行方式下拉，只留一句说明。
+      field.hidden = true;
+      select.value = 'serve';
+      if (note) {
+        note.hidden = false;
+        // 运行方式下拉已隐藏，说明不进 ⓘ（标签看不见），直接留在原位显示。
+        fieldHint.setFieldHint(note, LITE_NOTE, { level: 'status', label: fieldHint.fieldLabel(field) });
+        note.title = LITE_NOTE_FULL;
+      }
+      return;
+    }
+    if (note) note.removeAttribute('title');
     const show = selectedKind === 'codeagent' || cardKind;
     field.hidden = !show;
     if (note) note.hidden = !show;
@@ -1406,7 +1440,7 @@
     const lowOverheadNote = runMode !== codeagentRunMode ? '低开销模式开着：这次默认用卡片（多个会话共用一个后台进程）。' : '';
     select.value = runMode;
     fieldHint.setFieldHint(note, lowOverheadNote + (runMode === 'serve'
-      ? 'ACP 试点：平时看卡片，点「后台」才打开真实终端，关掉终端 AI 继续跑。之后新建的 CodeAgent 会话都用它。试点暂不支持思考强度和 Hub 自带的 MCP 工具，需要时请用 PTY。'
+      ? '轻量共享（CodeAgent-Lite）：平时看卡片，点「后台」才打开真实终端，关掉终端 AI 继续跑。之后新建的 CodeAgent 会话都用它。暂不支持思考强度，需要时请用 PTY。'
       : 'PTY：一直开着真实终端，和现在一样。之后新建的 CodeAgent 会话都用它。'), { label: fieldHint.fieldLabel(field) });
   }
 
@@ -1549,7 +1583,8 @@
     const codexTierField = document.getElementById('new-session-codex-tier-field');
     const codexTierSelect = document.getElementById('new-session-codex-tier');
 
-    const showEffort = EFFORT_KINDS.has(selectedKind) && EFFORT_PICKER;
+    // EFFORT_KINDS 不含 codeagent-lite：Lite 的共享 serve 不支持思考强度，不给无效档位。
+    const showEffort = EFFORT_KINDS.has(selectedKind) && EFFORT_PICKER && !(selectedKind === 'codeagent' && codeagentLite);
     const showMcp = MCP_KINDS.has(selectedKind);
     const showFast = FAST_KINDS.has(selectedKind);
     const showCodexTier = CODEX_TIER_KINDS.has(selectedKind);
@@ -1592,7 +1627,11 @@
 
     if (note) {
       const lines = [];
-      if (selectedKind === 'codeagent') lines.push(modelTouchedByUser
+      // Lite 走共享 serve：模型随建会话直接指定，不经过 CLI 的模型菜单。
+      if (selectedKind === 'codeagent' && codeagentLite) lines.push(modelTouchedByUser
+        ? '新会话直接用所选模型，不经过模型菜单。'
+        : codeagentDefaultModel ? `用这个号的默认模型 ${codeagentModelLabel(codeagentDefaultModel)}。` : '用这个号的默认模型。');
+      else if (selectedKind === 'codeagent') lines.push(modelTouchedByUser
         ? '启动后会在 CodeAgent 的模型菜单里切到所选模型（第一次要多等一会），之后这个号默认就用它。'
         : codeagentDefaultModel ? `用这个号的默认模型 ${codeagentModelLabel(codeagentDefaultModel)}，启动后不切换。`
         : '启动后在模型菜单里选第一个模型，之后这个号默认就用它。');
@@ -1739,10 +1778,10 @@
   function paint() {
     if (!menuEl) return;
     menuEl.querySelectorAll('.new-session-option').forEach(button => {
-      const selected = button.dataset.kind === (DEEPSEEK_PANEL_KINDS.has(selectedKind) ? 'deepseek' : selectedKind);
+      const selected = button.dataset.kind === (DEEPSEEK_PANEL_KINDS.has(selectedKind) ? 'deepseek' : launchKindKey());
       button.classList.toggle('selected', selected);
       button.setAttribute('aria-pressed', selected ? 'true' : 'false');
-      if (button.dataset.kind === 'codeagent' && codeagentSetup.current) {
+      if (isCodeagentPanelKind(button.dataset.kind) && codeagentSetup.current) {
         let badge = button.querySelector('.company-cli-status');
         if (!badge) { badge = document.createElement('small'); badge.className = 'company-cli-status'; button.append(badge); }
         badge.textContent = codeagentSetup.current.installed ? '' : '未安装'; badge.hidden = codeagentSetup.current.installed;
@@ -1808,6 +1847,7 @@
       summary.innerHTML = `<bdi>${escapeHtml(summaryText())}</bdi>`;
       summary.title = summaryTitle();
     }
+    paintRootFooter();
     const submit = document.getElementById('new-session-submit');
     if (submit) submit.disabled = submitting || accountSaving || (selectedKind === 'codex' && !!accountReadError)
       || codeagentSelectionUnavailable()
@@ -1830,11 +1870,12 @@
   function tuningTag() {
     const options = launchModelOptions(selectedKind);
     if (options.length === 0) return '';
-    const effortTag = EFFORT_PICKER ? ` · ${selectedEffort}` : '';
+    // Lite 不带思考强度，摘要里也不写。
+    const effortTag = EFFORT_PICKER && !(selectedKind === 'codeagent' && codeagentLite) ? ` · ${selectedEffort}` : '';
     // 显示的是 Hub 默认模型时，摘要也写它（和下拉、启动同一口径）。
     const hubTag = selectedKind === 'codeagent' && !modelTouchedByUser && !codeagentFollowCli ? codeagentHubDefaultOption(options) : null;
     if (hubTag) return `${hubTag.label}${effortTag}`;
-    if (selectedKind === 'codeagent' && !modelTouchedByUser) return codeagentDefaultModel ? `${codeagentModelLabel(codeagentDefaultModel)}${effortTag}` : (EFFORT_PICKER ? selectedEffort : '');
+    if (selectedKind === 'codeagent' && !modelTouchedByUser) return codeagentDefaultModel ? `${codeagentModelLabel(codeagentDefaultModel)}${effortTag}` : (effortTag ? selectedEffort : '');
     const model = options.find(option => option.id === selectedModel && (!selectedCodeagentRoute.codeagentModelProvider || option.provider === selectedCodeagentRoute.codeagentModelProvider));
     const modelLabel = model ? model.label : selectedModel;
     if (selectedKind === 'codex') {
@@ -1845,7 +1886,7 @@
   }
 
   function summaryText() {
-    const parts = [KIND_LABELS[selectedKind] || selectedKind];
+    const parts = [KIND_LABELS[launchKindKey()] || selectedKind];
     if (selectedKind === 'gemini') {const p=antigravityAccounts.find(x=>x.id===antigravityAccountId);parts.push(p?(p.email||p.label||p.id):'读取账号中');}
     if (selectedKind === 'codex' && !companyApiKind(selectedKind) && codexBackend !== 'api') {const p=codexAccounts.find(x=>x.id===codexAccountId);parts.push(p?(p.email||p.label||p.id):'读取账号中');}
     if (selectedKind === 'codeagent' && codeagentUsesPool()) {
@@ -1869,8 +1910,44 @@
     if (tuning) parts.push(tuning);
     const target = targetPathPreview();
     if (workspaceMode === 'existing' && existingWorkspace) parts.push(workspaceTierLabel(existingWorkspace.tier));
-    parts.push(target ? compactPath(target, 46) : '请选择目录');
+    // 默认工作目录模式下路径由旁边的可点按钮显示，这里不重复。
+    if (!rootEditable()) parts.push(target ? compactPath(target, 46) : '请选择目录');
     return parts.join(' · ');
+  }
+
+  // 「默认工作目录」模式下，底栏的路径单独做成按钮：点开选文件夹并保存为默认工作目录。
+  function rootEditable() { return workspaceMode === 'default'; }
+
+  function paintRootFooter() {
+    const button = document.getElementById('new-session-root-edit');
+    const info = document.getElementById('new-session-root-info');
+    const disk = document.getElementById('new-session-root-disk');
+    const editable = rootEditable();
+    if (button) {
+      button.hidden = !editable;
+      button.disabled = rootEditing;
+      const target = targetPathPreview();
+      button.innerHTML = `<bdi>${escapeHtml(rootEditing ? '正在选择文件夹…' : compactPath(target, 46))}</bdi>`;
+      button.title = `点这里修改默认工作目录 · 现在是 ${target}`;
+      button.setAttribute('aria-label', `修改默认工作目录，现在是 ${target}`);
+    }
+    if (info) info.hidden = !editable;
+    const hint = editable ? defaultRootFooter.diskHint(rootDisk) : '';
+    if (disk) { disk.textContent = hint; disk.hidden = !hint; }
+  }
+
+  async function editDefaultRoot() {
+    if (rootEditing) return;
+    rootEditing = true; setError(''); paintRootFooter();
+    try {
+      const result = await defaultRootFooter.changeDefaultRoot(ipcRenderer);
+      if (result.ok) await loadRecent();
+      else if (!result.canceled) setError(result.message);
+    } catch (error) {
+      setError(`默认工作目录没改成：${(error && error.message) || error}。可在设置 → 新建会话默认工作目录里再试。`);
+    } finally {
+      rootEditing = false; paint();
+    }
   }
 
   function summaryTitle() {
@@ -1937,8 +2014,8 @@
     const details = document.getElementById('new-session-tuning-details');
     if (details) details.open = false;
     const { kindAllowed } = require('../core/distribution');
-    selectedKind = [panelKind(options.kind), window.__lanPoolConnected ? 'claude' : '', panelKind(require('./codeagent-preference').preferredKind(Object.keys(KIND_LABELS).filter(kindAllowed)))]
-      .find(kind => kind && kindAllowed(kind)) || require('./codeagent-preference').preferredKind(Object.keys(KIND_LABELS).filter(kindAllowed));
+    applyLaunchKind([panelKind(options.kind), window.__lanPoolConnected ? 'claude' : '', panelKind(require('./codeagent-preference').preferredKind(Object.keys(KIND_LABELS).filter(kindAllowed)))]
+      .find(kind => kind && kindAllowed(kind)) || require('./codeagent-preference').preferredKind(Object.keys(KIND_LABELS).filter(kindAllowed)));
     if (selectedKind === 'codeagent' && (options.codeagentPoolPick || options.codeagentAccount === 'personal')) {
       codeagentAccount = options.codeagentPoolPick ? 'pool-manual' : 'personal';
       codeagentPoolPick = options.codeagentPoolPick || '';
@@ -1996,7 +2073,7 @@
     // this controller without going through the unified launcher. Always reset
     // the shell to the session intent before focusing the selected provider.
     window.dispatchEvent(new CustomEvent('launch-center:session-opened'));
-    const selected = menuEl.querySelector(`.new-session-option[data-kind="${DEEPSEEK_PANEL_KINDS.has(selectedKind) ? 'deepseek' : selectedKind}"]`);
+    const selected = menuEl.querySelector(`.new-session-option[data-kind="${DEEPSEEK_PANEL_KINDS.has(selectedKind) ? 'deepseek' : launchKindKey()}"]`);
     if (selected) selected.focus();
     void loadRecent().then(paint);
     // 每次打开都向当前 CLI 目录服务取一次（main 有短 TTL），不把模型表冻结到 Hub 启动时。
@@ -2205,6 +2282,8 @@
     if (selectedKind === 'codeagent' && !modelTouchedByUser && codeagentFollowCli) opts.codeagentFollowCli = true;
     if (permissionModes.supportsSwitch(selectedKind)) opts.permissionMode = currentPermissionMode();
     if (selectedKind === 'codeagent' && effectiveCodeagentRunMode() === 'serve') opts.codeagentRunMode = 'serve';
+    // CodeAgent-Lite 入口：固定共享 serve，不带思考强度（serve 不支持）。
+    if (selectedKind === 'codeagent' && codeagentLite) { opts.codeagentRunMode = 'serve'; delete opts.effort; }
     if (cardRunEligible() && cardRunModes[selectedKind] === 'card') opts.cardRunMode = 'card';
     if (selectedKind === 'codeagent' && codeagentPoolRequested()) {
       opts.codeagentAccount = 'pool';
@@ -2279,7 +2358,7 @@
         followup = { step: 'launch', error };
       } finally { ipcRenderer.removeListener('session-created', onCreated); }
       try {
-        require('./codeagent-preference').rememberKind(selectedKind);
+        require('./codeagent-preference').rememberKind(launchKindKey());
         require('./launch-last-workspace').remember(localStorage, { mode: workspaceMode, workspace });
         if (permissionModes.supportsSwitch(selectedKind)) lastPermission.remember(localStorage, selectedKind, currentPermissionMode());
       } catch (error) { followup = followup || { step: 'remember', error }; }
@@ -2353,6 +2432,9 @@
       const grid = menuEl.querySelector('.session-kind-grid');
       const button = grid && grid.querySelector('.new-session-option[data-kind="codeagent"]');
       if (grid && button && grid.firstElementChild !== button) grid.insertBefore(button, grid.firstElementChild);
+      // Lite 紧跟在 CodeAgent 后面；默认选中的仍是 CodeAgent（preferredKind 只在用户用过 Lite 后才回到它）。
+      const lite = grid && grid.querySelector('.new-session-option[data-kind="codeagent-lite"]');
+      if (button && lite && button.nextElementSibling !== lite) button.after(lite);
     });
 
     document.getElementById('new-session-account')?.addEventListener('change', async event => {
@@ -2406,7 +2488,7 @@
     menuEl.querySelectorAll('.new-session-option').forEach(button => {
       button.addEventListener('click', () => {
         rememberTuning(selectedKind);
-        selectedKind = panelKind(button.dataset.kind) || 'claude';
+        if (!applyLaunchKind(button.dataset.kind)) applyLaunchKind('claude');
         tuningTouchedByUser = tuningMemory.has(selectedKind);
         applyTuningMemory(selectedKind);
         setError('');
@@ -2605,6 +2687,7 @@
     }
     const pick = document.getElementById('new-session-pick-path');
     if (pick) pick.addEventListener('click', () => void chooseExistingPath());
+    document.getElementById('new-session-root-edit')?.addEventListener('click', () => void editDefaultRoot());
     const submit = document.getElementById('new-session-submit');
     if (submit) submit.addEventListener('click', () => void submitNewSession());
     for (const id of ['new-session-close', 'new-session-cancel']) {

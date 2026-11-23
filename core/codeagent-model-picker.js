@@ -668,6 +668,24 @@ async function pickModel({ manager, sid, kind, modelId, provider = '', providerL
   let attempted = false, result, menu = null, usage = null;
   // 失败时把当时的画面带回去，写进数据目录方便排查（公司电脑上的菜单长相我们看不到）。
   const fail = async message => ({ ok: false, message, screen: await screen.lines().catch(() => []) });
+  const nameMatch = require('./model-name-match');
+  const accountKey = () => manager.getSession?.(sid)?.codeagentPoolAccount || 'personal';
+  const log = fields => require('./codeagent-models').appendModelLog(dataDir, { session: String(sid).slice(0, 8), model: modelId, ...fields });
+  let substituted = null, catalogCache = null;
+  // 已知目录：账号 serve 清单里的 id ↔ 菜单显示名；读不到就当空目录。
+  const catalogRows = () => {
+    if (catalogCache) return catalogCache;
+    try { catalogCache = (require('./codeagent-models').readModelCatalog(dataDir, { configDir, accountKey: accountKey() })?.details || []).filter(row => row && row.id && row.label); }
+    catch { catalogCache = []; }
+    return catalogCache;
+  };
+  // 上次读全的菜单（只用于菜单一屏放不下时找写法），加上目录里的显示名。
+  const knownMenuNames = () => {
+    let cached = [];
+    try { cached = dataDir ? require('./codeagent-models').readMenu(dataDir, accountKey()) : []; } catch { cached = []; }
+    return [...new Set([...cached, ...catalogRows().map(row => row.label)])];
+  };
+  const idForLabel = name => (catalogRows().find(row => exactLabel(row.label, name)) || {}).id || name;
   async function openMenu() {
     let sent = await sendToPty(sid, '/model', kind, { codeagentModelPick: true });
     // 补全只接受了命令文本时可补回车，菜单已开则绝不补。
@@ -725,6 +743,12 @@ async function pickModel({ manager, sid, kind, modelId, provider = '', providerL
     // 选第一个：认出的第一行得是菜单的第 1 项（滚动过的菜单看不到第 1 项，不猜）。光标不一定停在第 1 项（会停在上次的模型上），照常按方向键挪过去。
     if (first && (picker.rows[0].number ?? 1) !== 1) return fail(`模型菜单没有从第 1 项列起（第一行是 ${picker.rows[0].number}. ${picker.rows[0].label}），没有选`);
     if (first) label = picker.rows[0].label;
+    // 同一模型的不同写法（线路前缀、内部 id、菜单显示名）：菜单里没有原样的这一行时，先按统一对照换成菜单上的写法（core/model-name-match.js）。
+    if (!first && !picker.rows.some(row => exactLabel(row.label, label)) && !aliasRows(picker.rows, label).length && !truncatedRows(picker.rows, label).length) {
+      const same = nameMatch.resolveName(label, picker.rows.map(row => row.label), { catalog: catalogRows() });
+      const known = same.index >= 0 || picker.complete ? same : nameMatch.resolveName(label, knownMenuNames(), { catalog: catalogRows() });
+      if (known.index >= 0) { log({ event: 'name-match', from: label, to: known.name, kind: known.kind }); label = known.name; }
+    }
     let target = first ? 0 : findTarget(picker, label, route);
     if (!first && target >= 0 && !picker.complete && !exactLabel(picker.rows[target].label, label)
       && bareLabel(picker.rows[target].label) === bareLabel(label)) target = -1;
@@ -748,8 +772,7 @@ async function pickModel({ manager, sid, kind, modelId, provider = '', providerL
       if (target < 0) return { ...(await fail(`多个分组都有 ${modelId}，无法确认账号默认分组，请在模型列表中重新选择带分组的项`)), requiresGroupSelection: true };
       route.provider = picker.rows[target].group;
     }
-    if (target < 0 && !first) {
-      const found = await findOffscreenTarget({ picker, screen, manager, sid, label, route,
+    const searchOffscreen = () => findOffscreenTarget({ picker, screen, manager, sid, label, route,
         reopenMenu: async () => {
           if (!(await closeModelMenu({ readLines: () => screen.lines(), write: key => manager.writeToSession(sid, key) })).ok) return { value: null };
           if (await openMenu()) return { value: null };
@@ -769,14 +792,40 @@ async function pickModel({ manager, sid, kind, modelId, provider = '', providerL
             fs.writeFileSync(file, `${new Date().toISOString()} switch-search ${modelId}\n\n${lines.join('\n')}\n`, 'utf8');
           } catch { /* 搜索画面附件失败不影响本次选择。 */ }
         },
-        log: fields => require('./codeagent-models').appendModelLog(dataDir, { session: String(sid).slice(0, 8), model: modelId, ...fields }) });
+        log });
+    if (target < 0 && !first) {
+      const found = await searchOffscreen();
       if (found.error) return { ...(await fail(found.error)), ...(found.requiresGroupSelection ? { requiresGroupSelection: true } : {}) };
       picker = found.picker; target = found.target;
     }
     if (target < 0 && truncatedRows(picker.rows, label).length > 1) {
       return fail(`模型菜单里有几行截断的名字都像 ${modelId}（${truncatedRows(picker.rows, label).map(index => picker.rows[index].label).join('、')}），分不清是哪一个，没有选`);
     }
-    if (target < 0) return fail(`模型菜单里没有 ${modelId}（菜单里有：${picker.rows.map(row => row.label).join('、')}）` );
+    // 精确查不到：只在同家族、同版本号、Auto 一致的候选里挑唯一最接近的一个，由调用方在界面说明「已改用 X」。
+    // 同版本多条线路分不出（没指定线路）、或同家族只有别的版本：不选，带 nameFallback 由调用方沿用账号默认模型并说明一行。
+    // 完全没有同家族候选才是普通的「菜单里没有」，报错并列出可选项。
+    let nameFallback = '';
+    if (target < 0 && !first) {
+      const pool = picker.complete ? picker.rows.map(row => row.label) : [...new Set([...picker.rows.map(row => row.label), ...knownMenuNames()])];
+      const near = nameMatch.resolveName(label, pool, { catalog: catalogRows(), allowSimilar: true });
+      if (near.index >= 0 && !exactLabel(near.name, label)) {
+        log({ event: 'name-match', from: label, to: near.name, kind: near.kind });
+        if (near.kind === 'similar') substituted = { from: modelId, to: near.name };
+        label = near.name;
+        target = picker.rows.findIndex(row => exactLabel(row.label, label) && groupMatches(row, route.provider, route.providerLabel));
+        if (target < 0 && !picker.complete) {
+          const found = await searchOffscreen();
+          if (!found.error && found.target >= 0) { picker = found.picker; target = found.target; }
+        }
+      } else if (near.kind === 'ambiguous' || (near.sameFamily || []).length) {
+        nameFallback = nameMatch.fallbackNote(modelId, near);
+        log({ event: 'name-match', from: label, result: near.kind === 'ambiguous' ? 'ambiguous' : 'other-version-only' });
+      }
+    }
+    if (target < 0) {
+      const options = picker.complete ? picker.rows.map(row => row.label) : [...new Set([...picker.rows.map(row => row.label), ...knownMenuNames()])];
+      return { ...(await fail(`模型菜单里没有 ${modelId}（菜单里有：${options.join('、')}）`)), ...(nameFallback ? { nameFallback } : {}) };
+    }
     if (picker.cursor < 0) {
       manager.writeToSession(sid, '\x1b[B');
       const focused = await waitForPickerChange(screen, pickerSignature(picker), MODEL_SEARCH_WAIT_MS);
@@ -820,7 +869,8 @@ async function pickModel({ manager, sid, kind, modelId, provider = '', providerL
     const ready = await waitForInput(screen);
     if (!ready.value) return { ...(await fail('选中后未确认恢复普通输入框')), restored, defaults };
     return { ok: true, mode, confirmed: !!echo, restored, defaults, provider: route.provider || picker.rows[target].group || '',
-      ...(keepDefault ? { keptDefault: true } : {}), ...(first ? { picked: label } : {}) };
+      ...(keepDefault ? { keptDefault: true } : {}), ...(first ? { picked: label } : {}),
+      ...(substituted ? { substituted: { ...substituted, id: idForLabel(substituted.to) } } : {}) };
   }
   try {
     result = await choose();
@@ -855,7 +905,7 @@ async function pickModel({ manager, sid, kind, modelId, provider = '', providerL
   if (usage) result = { ...result, usage };
   if (!result.ok && !result.loginRequired) {
     require('./codeagent-models').appendModelLog(dataDir, { event: 'pick-menu-failed', session: String(sid).slice(0, 8), model: modelId, error: result.message });
-    result = { ...result, technicalReason: result.message, message: result.requiresGroupSelection ? result.message : `这个账号在 CodeAgent 模型菜单里选不了 ${modelId}` };
+    result = { ...result, technicalReason: result.message, message: result.requiresGroupSelection ? result.message : result.nameFallback || `这个账号在 CodeAgent 模型菜单里选不了 ${modelId}` };
   }
   return menu ? { ...result, menu } : result;
 }

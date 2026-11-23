@@ -157,7 +157,7 @@ function _buildSessionPayload(hubId, data, existing = loadSessionFile(hubId)) {
     // 号池会话用的是号池里哪个号（core/codeagent-pool.js）；恢复时回到同一个号的配置目录。
     codeagentPoolAccount: typeof data.codeagentPoolAccount === 'string' ? data.codeagentPoolAccount : null,
     codeagentConfigDir: typeof data.codeagentConfigDir === 'string' ? data.codeagentConfigDir : null,
-    ...(data.codeagentRunMode === 'serve' ? { codeagentRunMode: 'serve' } : {}),
+    ...(data.codeagentRunMode === 'serve' ? { codeagentRunMode: 'serve', ...(data.codeagentLiteFeature === true ? { codeagentLiteFeature: true } : {}) } : {}),
     // 卡片试点：Hub 重启后回到卡片方式，不记「当时开着终端」。
     ...(data.cardRunMode === 'card' ? { cardRunMode: 'card', ...(typeof data.cardScope === 'string' && /^[a-f0-9]{24}$/.test(data.cardScope) ? { cardScope: data.cardScope } : {}) } : {}),
     codeagentPoolLabel: typeof data.codeagentPoolLabel === 'string' ? data.codeagentPoolLabel : null,
@@ -185,6 +185,9 @@ function _buildSessionPayload(hubId, data, existing = loadSessionFile(hubId)) {
       : null,
     branchAutoTitlePending: !!data.branchAutoTitlePending,
     purpose: data.purpose || null,
+    // 后台功能会话的功能选型（core/feature-agent-choice.js）：恢复后据此判断选型是否变了、要不要换会话。
+    ...(typeof data.featureAgent === 'string' && /^[A-Za-z]{1,32}$/.test(data.featureAgent)
+      ? { featureAgent: data.featureAgent, featureAgentChoice: typeof data.featureAgentChoice === 'string' ? data.featureAgentChoice.slice(0, 2000) : '' } : {}),
     researchSessionId: data.researchSessionId || null,
     hiddenFromSidebar: !!data.hiddenFromSidebar,
     meetingId: data.meetingId || null,

@@ -3,8 +3,10 @@
 const routes = require('./codeagent-assistant-route');
 const ONESHOT = ['codeagent', 'claude', 'codex'];
 // 会话功能依赖任务文件和受控 MCP。其他 CLI 尚无等价的工具边界，不提供会话选项。
-const SESSION = ['codeagent'];
-const ALL_BACKENDS = [...ONESHOT, 'deepseek-acp', 'qwen', 'glm'];
+// CodeAgent-Lite：同一个 CodeAgent（账号、模型、MCP 全同），只是固定走多会话共用的 serve 后台进程，省内存。
+const SESSION = ['codeagent', 'codeagent-lite'];
+const LITE = 'codeagent-lite';
+const ALL_BACKENDS = ['codeagent', LITE, 'claude', 'codex', 'deepseek-acp', 'qwen', 'glm'];
 const FEATURES = [
   { id: 'help', label: '问问 Hub', kinds: ONESHOT, defaultText: '按发行版自动选用可用 CLI' },
   { id: 'pptMap', label: 'PPT 库地图', kinds: ONESHOT, defaultText: 'CodeAgent · DeepSeek Flash → GLM Auto' },
@@ -18,13 +20,13 @@ const FEATURES = [
   { id: 'meeting', label: '会议理解 / 问答', kinds: SESSION, defaultText: '会议中所选引擎' },
   { id: 'text', label: '草稿整理 / 团队文字任务', kinds: SESSION, defaultText: 'CodeAgent · 启动默认模型' },
 ];
-const LABELS = { codeagent: 'CodeAgent', claude: 'Claude', codex: 'Codex', 'deepseek-acp': 'DSH', qwen: 'Qwen Code', glm: 'ZCode' };
+const LABELS = { codeagent: 'CodeAgent', [LITE]: 'CodeAgent-Lite（省内存）', claude: 'Claude', codex: 'Codex', 'deepseek-acp': 'DSH', qwen: 'Qwen Code', glm: 'ZCode' };
 function feature(id) { const row = FEATURES.find(f => f.id === id); if (!row) throw new Error('未知功能'); return row; }
 function catalog(dataDir, { env = process.env, findCommand = require('./community-setup').findCommand } = {}) {
   const models = require('./model-options');
   const config = require('./hub-config').getConfig();
   const codexHome = env.CODEX_HOME || require('./codex-usage-scope').resolveCodexUsageScope(config, { hubDataDir: dataDir }).home;
-  return ALL_BACKENDS.map(kind => {
+  const rows = ALL_BACKENDS.filter(kind => kind !== LITE).map(kind => {
     let options = [], available = false;
     try {
       require('./company-ai-policy').assertKind(kind);
@@ -40,6 +42,10 @@ function catalog(dataDir, { env = process.env, findCommand = require('./communit
     const defaultModel = config.defaultModels?.[kind] || config.acp?.providers?.[kind]?.model || models.DEFAULT_MODEL_BY_KIND[kind] || '';
     return { kind, label: LABELS[kind], available, defaultModel, models: options };
   });
+  // Lite 的可用性、模型目录与默认模型完全沿用 CodeAgent，不另做配置。
+  const base = rows.find(row => row.kind === 'codeagent');
+  if (base) rows.splice(rows.indexOf(base) + 1, 0, { ...base, kind: LITE, label: LABELS[LITE], models: base.models.slice() });
+  return rows;
 }
 function resolve(dataDir, id, options = {}) {
   const f = feature(id), choice = routes.featurePreference(dataDir, id);
@@ -67,9 +73,17 @@ function session(dataDir, id, kind, opts, options) {
   const r = resolve(dataDir, id, options), selected = r.selected;
   if (!selected) return { kind, opts, warning: r.warning };
   const out = { ...opts, featureAgent: id, featureAgentChoice: JSON.stringify(selected), ...require('./codeagent-model-choice').routeFields(selected) };
+  const codeagentFamily = selected.kind === 'codeagent' || selected.kind === LITE;
   // 不把 CodeAgent 专用账号、模型字段带进其他后端。
-  if (selected.kind !== 'codeagent') for (const k of Object.keys(out)) if (/^codeagent/i.test(k)) delete out[k];
-  if (selected.model) { out.model = selected.model; out.fixedModel = selected.model; if (selected.kind === 'codeagent') out.codeagentRouteModel = selected.model; }
+  if (!codeagentFamily) for (const k of Object.keys(out)) if (/^codeagent/i.test(k)) delete out[k];
+  if (selected.model) { out.model = selected.model; out.fixedModel = selected.model; if (codeagentFamily) out.codeagentRouteModel = selected.model; }
+  if (selected.kind === LITE) {
+    // 底层仍建 codeagent 会话；显式放行共享 serve（core/codeagent-run-mode.js），serve 不支持思考强度。
+    out.codeagentRunMode = 'serve';
+    out.codeagentLiteFeature = true;
+    delete out.effort;
+    return { kind: 'codeagent', opts: out, warning: '' };
+  }
   return { kind: selected.kind, opts: out, warning: '' };
 }
 function assertSessionKind(kind, opts = {}) {
@@ -100,4 +114,4 @@ function state(dataDir, options) {
   };
   return { ok: true, backends, features: FEATURES.map(f => ({ ...f, defaultText: defaultLabel(f), ...resolve(dataDir, f.id, { backends }) })) };
 }
-module.exports = { FEATURES, LABELS, catalog, resolve, set, session, stale, state, assertSessionKind };
+module.exports = { FEATURES, LABELS, SESSION_KINDS: SESSION, catalog, resolve, set, session, stale, state, assertSessionKind };

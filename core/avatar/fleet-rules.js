@@ -159,18 +159,29 @@ function parseResults(raw) {
   return new Map(list.filter(r => r && typeof r.id === 'string').map(r => [r.id, r]));
 }
 // 模型的结果 → 这条事项的下一状态。程序校验不过的不进草稿，转成提醒交给本人。
+const EMPTY_DRAFT = '分身没写出可用的草稿';
 function applyResult(item, r, av) {
+  const check = reply => !reply ? EMPTY_DRAFT
+    : av.hideModel && SELF_ID.test(reply) ? '草稿提到了底层模型，已拦下'
+      : LEAK.test(reply) ? '草稿里出现了路径或密钥样式的内容，已拦下' : '';
   const reply = text(r?.reply, 800).trim(), conf = Math.max(0, Math.min(100, Number(r?.confidence) || 0));
   const out = { confidence: conf, basis: oneLine(r?.basis, 200), why: oneLine(r?.why, 200), draft: '', flags: (item.flags || []).filter(f => f !== 'commit') };
   const remind = why => ({ ...out, state: 'remind', why: why || out.why || '需要你看一下' });
-  if (!r) return remind('这条没有得到结果');
+  if (!r) return remind(item.asked ? '你让分身起草，但这次没拿到结果；可以再点一次，或在 WeLink 直接回复' : '这条没有得到结果');
+  // 本人点了「让分身起草」：只接受草稿；没写出来就把模型给的理由说清楚，不再悄悄回到原样的提醒或跳过。
+  if (item.asked) {
+    const bad = r.action === 'draft' ? check(reply) : '';
+    const reason = r.action !== 'draft' || bad === EMPTY_DRAFT ? (out.why || '没给原因') : bad;
+    if (r.action !== 'draft' || bad) return { ...remind(`你让分身起草，但它没写出可用的草稿：${reason}。可以补充资料后再点一次，或在 WeLink 直接回复`), asked: false };
+    if (R.commitRisk(reply)) out.flags.push('commit');
+    return { ...out, state: 'ready', draft: reply, why: out.why || '已按你的要求写好草稿，等你确认', asked: false };
+  }
   if (r.action === 'skip') return item.group ? { ...out, state: 'skipped', why: out.why || '不需要处理' } : remind(out.why || '分身判断不用回，你看一眼');
   // 动作设成「提醒」的范围不写草稿：在「为什么交给你」里说清怎么改，免得以为分身坏了。
   if (item.action === 'remind') return remind(`${out.why || '需要你看一下'}（这里的动作设的是「提醒」，不写草稿；要草稿到「生效范围」把动作改成「起草」）`);
   if (r.action === 'remind' || item.level < 3) return remind();
-  if (!reply) return remind(out.why || '分身没写出可用的草稿');
-  if (av.hideModel && SELF_ID.test(reply)) return remind('草稿提到了底层模型，已拦下');
-  if (LEAK.test(reply)) return remind('草稿里出现了路径或密钥样式的内容，已拦下');
+  const bad = check(reply);
+  if (bad) return remind(bad === EMPTY_DRAFT ? (out.why || bad) : bad);
   if (R.commitRisk(reply)) out.flags.push('commit');
   return { ...out, state: 'ready', draft: reply, why: out.why || '已写好草稿，等你确认' };
 }
@@ -223,7 +234,7 @@ function rulesMarkdown(av, { memoryLines = 0, sources: known = [] } = {}) {
     '- 资料里没有依据的事实不要说；不替本人承诺时间、排期和资源。',
     ...(av.hideModel ? ['- 不提自己用的是哪家模型或怎么实现的；被问到就说是本人的数字分身，具体实现不展开。'] : []), '',
     '## 输出', '只输出一个 JSON 数组，每条事项一项：', '{"id":"原样带回","action":"draft|remind|skip","reply":"草稿正文，action 为 draft 时必填，不写前缀","confidence":0到100,"basis":"依据哪条资料，一句话","why":"为什么这样处理，一句话"}', '',
-    'draft = 写好草稿等本人确认；remind = 需要本人亲自处理或你没把握；skip = 不用处理。allowed 只有 remind 时不要写 draft。'].join('\n');
+    'draft = 写好草稿等本人确认；remind = 需要本人亲自处理或你没把握；skip = 不用处理。allowed 只有 remind 时不要写 draft。', 'ownerAsked 为 true 的事项是本人点名要草稿：必须给 draft；资料不足就写一句稳妥的回复（如说明需要确认后答复），why 里写清缺什么。'].join('\n');
 }
 
 module.exports = { MARK, ACTIONS, LEVEL, KINDS, TEMPLATES, applyPatch, newAvatar, prefixOf, isOwnOutput, matchAvatar, routeMessage, ownerOf, noise, groupWorth, candidates, answeredAfter, gate, parseResults, applyResult, safeText, related, minePairs, rulesMarkdown };

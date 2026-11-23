@@ -5,6 +5,8 @@
 const { findCommand, PROVIDERS } = require('./community-setup');
 
 function requireCommand(provider, env = process.env) {
+  // CodeAgent-Lite 是同一个 CodeAgent CLI 的轻量共享方式，按 codeagent 检测。
+  if (provider === 'codeagent-lite') provider = 'codeagent';
   const command = findCommand(provider, env);
   if (!command) {
     const name = PROVIDERS.find(p => p.id === provider)?.name || provider;
@@ -18,7 +20,7 @@ function requireCommand(provider, env = process.env) {
 function assertProviderAvailable(kind, env = process.env) {
   if (!require('./distribution').community) return;
   if (env.CLAUDE_HUB_E2E_ALLOW_MISSING_CLI === '1') return;
-  const provider = String(kind || '').replace(/-resume$/, '');
+  const provider = String(kind || '').replace(/-(?:resume|lite)$/, '');
   if (!PROVIDERS.some(p => p.id === provider)) return;
   requireCommand(provider, env);
 }

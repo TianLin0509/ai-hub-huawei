@@ -38,7 +38,8 @@ function toolTitle(part) {
 class CodeAgentServeClient extends EventEmitter {
   constructor({ host, cwd, model = '', provider = '', permissionMode = 'bypassPermissions', title = '', systemPrompt = '' }) {
     super();
-    Object.assign(this, { host, cwd: canonicalDir(cwd), model, provider, permissionMode, title, systemPrompt });
+    // 供应商可能带分组后缀（providerId/group）：serve 只认 providerId。
+    Object.assign(this, { host, cwd: canonicalDir(cwd), model, provider: String(provider || '').split('/')[0], permissionMode, title, systemPrompt });
     this.query = '?directory=' + encodeURIComponent(this.cwd);
     this.sessionId = null;
     this.incoming = new Map();
@@ -66,6 +67,8 @@ class CodeAgentServeClient extends EventEmitter {
     return { agentCapabilities: { loadSession: true, promptCapabilities: { image: true } } };
   }
   call(method, pathname, body, timeoutMs = 20000) {
+    // 共享 serve 有新请求：低开销模式下若正节能调度，先同步恢复全速（core/codeagent-serve-host.js noteActivity）。
+    try { this.host?.noteActivity?.(); } catch { /* 不影响请求 */ }
     const data = body === undefined ? null : Buffer.from(JSON.stringify(body));
     return new Promise(resolve => {
       const req = http.request({ host: '127.0.0.1', port: this.host.port, path: pathname, method, timeout: timeoutMs,
@@ -274,6 +277,11 @@ class CodeAgentServeClient extends EventEmitter {
       this.pending.staleTail = false;
     }
     if (!this.pending && !['message.updated', 'session.status', 'session.idle'].includes(event.type)) return;
+    // 低开销模式 L7：转忙碌、要审批、要回答时唤醒共享 serve；其余事件（输出、答完）只刷新活动时间，2 分钟空闲从这时算起。
+    try {
+      if ((event.type === 'session.status' && p.status?.type === 'busy') || event.type === 'permission.asked' || event.type === 'question.asked') this.host?.noteActivity?.();
+      else this.host?.touchActivity?.();
+    } catch { /* 不影响事件处理 */ }
     switch (event.type) {
       case 'session.status':
         if (p.status?.type === 'busy') {

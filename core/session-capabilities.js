@@ -179,6 +179,8 @@ function buildSessionResumeMeta(session, overrides = {}) {
     bottomed: !!session.bottomed && !session.pinned,
     ccSessionId: session.ccSessionId || null,
     ...(session.codeagentRunMode ? { codeagentRunMode: session.codeagentRunMode } : {}),
+    ...(session.codeagentLiteFeature === true ? { codeagentLiteFeature: true } : {}),
+    ...(session.featureAgent ? { featureAgent: session.featureAgent, featureAgentChoice: session.featureAgentChoice || '' } : {}),
     ...(session.cardRunMode === 'card' ? { cardRunMode: 'card', cardTerminal: session.cardTerminal === true, ...(session.cardScope ? { cardScope: session.cardScope } : {}) } : {}),
     ...(session.runtimeBackend === 'claude-stream-json' ? {
       nativeConfig: session.nativeConfig || null,

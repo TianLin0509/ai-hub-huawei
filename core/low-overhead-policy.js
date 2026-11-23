@@ -6,13 +6,15 @@
 // 那个总开关），保活会话数也记在同一个 optional-features.json（lowOverheadKeepAlive，1 | 2 | 3，默认 2）。
 // 这里只放纯策略；状态对象统一为 { on, enabled: on, keepAlive }，两种写法都认。
 //
-// 六项策略：
+// 七项策略：
 //   L1 活跃会话保活软上限（main/low-overhead-controller.js 定时巡检，挑人用 pickSoftCapVictims）
 //   L2 新建 CodeAgent 会话优先走共享 serve（卡片），真实 HOME 不变
 //   L3 桌宠静默省电：空闲不排帧、停装饰循环动画，提醒气泡照常
 //   L4 历史搜索子进程空闲 10 分钟退出，下次搜索自动拉起
 //   L5 终端回滚 10000→3000 行，非当前终端不闪光标
 //   L6 非关键后台刷新放慢 4 倍，state.json 最短落盘间隔 2→5 秒（退出前照常立刻刷盘）
+//   L7 Windows EcoQoS（2026-11-23 P2）：答完、非当前、空闲满 2 分钟的会话整棵进程树，全部会话都空闲的共享 serve，
+//      空闲满 1 分钟的历史搜索子进程，改用节能调度；切过去、输入、转忙碌或待审批、关掉低开销模式时立刻恢复全速
 
 const KEEP_ALIVE_CHOICES = [1, 2, 3];
 const DEFAULT_KEEP_ALIVE = 2;
@@ -41,6 +43,10 @@ const LOW_SCROLLBACK = 3000;
 const BACKGROUND_SLOWDOWN = 4;
 const NORMAL_STATE_SAVE_MIN_MS = 2000;
 const LOW_STATE_SAVE_MIN_MS = 5000;
+// L7
+const ECO_QOS_IDLE_MS = 2 * 60 * 1000;
+const ECO_QOS_SEARCH_IDLE_MS = 60 * 1000;
+const ECO_BUSY_STATUSES = new Set([...BUSY_STATUSES, 'busy', 'dormant', 'closed']);
 
 const STRATEGY_LINES = [
   '活跃会话按上限自动休眠（正在回答、待审批、置顶的不动，点开即恢复）',
@@ -49,6 +55,7 @@ const STRATEGY_LINES = [
   '历史搜索进程空闲 10 分钟退出，下次搜索自动拉起',
   '终端回滚收敛到 3000 行，后台终端不闪光标',
   '后台状态刷新放慢 4 倍，状态存盘合并',
+  '空闲满 2 分钟的后台会话改用 Windows 节能调度，切回或输入时立即恢复全速',
 ];
 
 function normalizeKeepAlive(value) {
@@ -143,8 +150,54 @@ function terminalOptions(state, { active = true } = {}) {
 const backgroundIntervalMs = (baseMs, state) => (normalizeState(state).enabled ? baseMs * BACKGROUND_SLOWDOWN : baseMs);
 const stateSaveMinIntervalMs = state => (normalizeState(state).enabled ? LOW_STATE_SAVE_MIN_MS : NORMAL_STATE_SAVE_MIN_MS);
 
+// ── L7 ──────────────────────────────────────────────────────────────
+const ecoQosEnabled = state => normalizeState(state).enabled;
+
+// items：每个有进程盒子的会话一条 { sessionId, status, settled, pendingApproval, focused, exempt, idleMs, lastActivityAt }。
+// 返回 { targets, skipped }：targets 是该降速的会话；其余（含 skipped 原因）一律保持或恢复全速。
+function ecoQosSkipReason(item, { now = Date.now(), idleMs = ECO_QOS_IDLE_MS } = {}) {
+  if (!item || !item.sessionId) return 'invalid';
+  if (item.exempt) return 'external';
+  if (item.focused) return 'focused';
+  if (item.pendingApproval) return 'pending-approval';
+  if (item.settled === false || ECO_BUSY_STATUSES.has(String(item.status || ''))) return 'busy';
+  let idle = Number(item.idleMs);
+  if (!(Number.isFinite(idle) && idle >= 0)) {
+    const last = Number(item.lastActivityAt);
+    idle = last > 0 && Number.isFinite(now) ? now - last : NaN;
+  }
+  if (!Number.isFinite(idle)) return 'no-activity-time';
+  if (idle < idleMs) return 'recent';
+  return null;
+}
+function pickEcoQosTargets(items, options = {}) {
+  const now = Number(options.now) > 0 ? Number(options.now) : Date.now();
+  const idleMs = Number(options.idleMs) > 0 ? Number(options.idleMs) : ECO_QOS_IDLE_MS;
+  const targets = [], skipped = [];
+  for (const item of items || []) {
+    const why = ecoQosSkipReason(item, { now, idleMs });
+    if (why) skipped.push({ sessionId: item && item.sessionId, why });
+    else targets.push(item);
+  }
+  return { targets, skipped };
+}
+// 共享 serve：挂在它上面的会话全部在 targets 里、且它自己空闲满 2 分钟才降速；没有会话挂着时只看空闲时间。
+function ecoQosServeTarget(host, targetIds, { now = Date.now(), idleMs = ECO_QOS_IDLE_MS } = {}) {
+  if (!host || !host.jobKey || !host.running) return false;
+  const ids = Array.isArray(host.sessionIds) ? host.sessionIds : [];
+  if (!ids.every(id => targetIds.has(id))) return false;
+  const last = Number(host.lastActivityAt) || 0;
+  return last > 0 && now - last >= idleMs;
+}
+// 历史搜索子进程：没有在途请求、空闲满 1 分钟。
+function ecoQosSearchTarget(info, { now = Date.now(), idleMs = ECO_QOS_SEARCH_IDLE_MS } = {}) {
+  if (!info || !(Number(info.pid) > 0) || info.busy) return false;
+  const last = Number(info.lastRequestAt) || Number(info.startedAt) || 0;
+  return last > 0 && now - last >= idleMs;
+}
+
 // ⓘ 悬停说明：第一行是标题，其余每行一项（hub-tooltip 按「首行标题 + 条目」排版）。
-// 和主干「资源与后台」的说明合成一张卡：后台可选功能怎么处理 + 会话与运行期六项节能。
+// 和主干「资源与后台」的说明合成一张卡：后台可选功能怎么处理 + 会话与运行期七项节能。
 const BACKGROUND_LINES = [
   '打开：后台可选功能全部关掉，只留会话核心；哪项用到了，在它自己的页面上点「开启」',
   '关闭：底栏读数、搜索索引、额度刷新恢复老版本的行为，助理等可选功能保持原样',
@@ -168,6 +221,8 @@ module.exports = {
   BACKGROUND_SLOWDOWN,
   NORMAL_STATE_SAVE_MIN_MS,
   LOW_STATE_SAVE_MIN_MS,
+  ECO_QOS_IDLE_MS,
+  ECO_QOS_SEARCH_IDLE_MS,
   STRATEGY_LINES,
   normalizeKeepAlive,
   normalizeState,
@@ -180,5 +235,10 @@ module.exports = {
   terminalOptions,
   backgroundIntervalMs,
   stateSaveMinIntervalMs,
+  ecoQosEnabled,
+  ecoQosSkipReason,
+  pickEcoQosTargets,
+  ecoQosServeTarget,
+  ecoQosSearchTarget,
   strategyHint,
 };

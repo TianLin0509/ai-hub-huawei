@@ -210,7 +210,7 @@ function createCompanyAttendancePage({ document, window, ipcRenderer, closeOther
         tr += s.b - s.a < 90 ? `<span class="tx" style="left:${X((s.a + s.b) / 2)}">${clk(s.a)}–${clk(s.b)}</span>` : `<span class="tx" style="left:${X(s.a)}">${clk(s.a)}</span><span class="tx" style="left:${X(s.b)}">${clk(s.b)}</span>`;
       }
       const tags = [KIND[x.kind] ? `<span class="att-tag ${A.isWorkKind(x.kind) ? 'mute' : 'blue'}">${KIND[x.kind]}</span>` : '', x.leave >= 1320 ? '<span class="att-tag amber">22 点后离开</span>' : '', x.nightReturn ? '<span class="att-tag amber">凌晨回来过</span>' : '', x.manual ? '<span class="att-tag mute">有手动卡</span>' : '', x.flex && x.singlePunch ? '<span class="att-tag amber">缺卡 · 未计</span>' : '', x.coreLate ? '<span class="att-tag amber">核心时段后才到</span>' : '', x.coreEarly ? '<span class="att-tag amber">核心时段前离开</span>' : ''].join('');
-      h += `<div class="dd${x.date === drawer.focus ? ' hl' : ''}">${md(x.date)}<small>周${x.weekdayName}</small></div>${tr}</div><div class="hh">${signedNet(x)}</div><div class="tg">${tags}</div>`;
+      h += `<div class="dd${x.date === drawer.focus ? ' hl' : ''}">${md(x.date)}<small>周${x.weekdayName}</small></div>${tr}</div><div class="hh">${x.flex && x.singlePunch ? '缺卡' : signedNet(x)}</div><div class="tg">${tags}</div>`;
     }
     return h + '</div>';
   }

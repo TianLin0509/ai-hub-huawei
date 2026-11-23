@@ -328,7 +328,9 @@ function createResumeSessionHandler(deps) {
       ...(meta.codeagentPrefixFork ? { codeagentPrefixFork: meta.codeagentPrefixFork } : {}),
       ...(meta.codeagentPoolAccount && /^codeagent(?:-resume)?$/.test(meta.kind) ? { codeagentPoolAccount: meta.codeagentPoolAccount } : {}),
       ...(meta.codeagentConfigDir && /^codeagent(?:-resume)?$/.test(meta.kind) ? { codeagentConfigDir: meta.codeagentConfigDir } : {}),
-      ...(meta.codeagentRunMode === 'serve' && meta.ccSessionId && /^codeagent(?:-resume)?$/.test(meta.kind) ? { codeagentRunMode: 'serve' } : {}),
+      ...(meta.codeagentRunMode === 'serve' && meta.ccSessionId && /^codeagent(?:-resume)?$/.test(meta.kind) ? { codeagentRunMode: 'serve',
+        // 功能选了 CodeAgent-Lite 的后台会话：恢复时仍走共享 serve。
+        ...(meta.codeagentLiteFeature === true ? { codeagentLiteFeature: true } : {}) } : {}),
       ...(meta.cardRunMode === 'card' && /^(?:claude|deepseek-acp)(?:-resume)?$/.test(meta.kind) ? { cardRunMode: 'card',
         ...(meta.cardTerminal === true ? { cardTerminal: true } : {}), ...(meta.cardScope ? { cardScope: meta.cardScope } : {}),
         ...(/^deepseek-acp/.test(meta.kind) && meta.transcriptPath ? { dshTerminalLog: meta.transcriptPath } : {}) } : {}),
@@ -412,6 +414,8 @@ function createResumeSessionHandler(deps) {
         ? { contextEffectiveObservedAt: meta.contextEffectiveObservedAt }
         : {}),
       ...(meta.purpose ? { purpose: meta.purpose } : {}),
+      // 功能会话恢复后仍记得自己的功能选型（stale 判定不误触发换会话）。
+      ...(meta.featureAgent ? { featureAgent: meta.featureAgent, featureAgentChoice: meta.featureAgentChoice || '' } : {}),
       ...(meta.researchSessionId ? { researchSessionId: meta.researchSessionId } : {}),
       ...(meta.hiddenFromSidebar ? { hiddenFromSidebar: true } : {}),
       ...resumeOpts,

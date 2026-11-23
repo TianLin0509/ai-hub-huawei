@@ -77,7 +77,9 @@ function resolveCodeAgentPin(opts, { dataDir, configDir, command, pool = null, f
     : accounts.accountModels(configDir, undefined, accounts.personalModelsFile(dataDir));
   const list = known.models || [];
   const defaultModel = accounts.readSettingsModel(configDir);
-  const match = value => list.find(id => id.toLowerCase() === String(value || '').toLowerCase());
+  // 同一模型的不同写法（线路前缀、内部 id、菜单显示名）按统一对照认成清单里的那一个（core/model-name-match.js）。
+  const nameMatch = require('./model-name-match');
+  const match = value => list.find(id => id.toLowerCase() === String(value || '').toLowerCase()) || nameMatch.findSame(value, list) || undefined;
   const requested = require('./codeagent-launch-model').explicitModel(opts)
     || (opts.resumeCCSessionId || opts.forkCCSessionId ? opts.model : '');
   let fixedModel = opts.fixedModel || opts.codeagentUserModel || requested || defaultModel || '';
@@ -108,12 +110,15 @@ function resolveCodeAgentPin(opts, { dataDir, configDir, command, pool = null, f
   else if (!reason && fixedModel && !settingsSupported) reason = '当前 CLI 版本不支持 --settings，无法固定会话模型';
   let modelChange = null;
   if (reason) {
+    // 自动替代只用两种：已确认的账号默认模型（在清单里），或统一对照认定的唯一同版本替代（同家族、主小版本相同、Auto 一致）。
+    // 对照结果是 none / ambiguous（跨版本、多条线路同分）时不自取清单第一条：没有默认模型就停下，由用户选。
     const family = models.modelFamily(fixedModel), sameFamily = list.filter(id => family && models.modelFamily(id) === family);
-    const next = sameFamily.find(id => id.toLowerCase() === String(defaultModel).toLowerCase()) || sameFamily[0]
+    const confirmedDefault = sameFamily.find(id => id.toLowerCase() === String(defaultModel).toLowerCase() && id.toLowerCase() !== String(fixedModel).toLowerCase()) || '';
+    const next = nameMatch.resolveName(fixedModel, sameFamily, { allowSimilar: true }).name || confirmedDefault
       || (!known.authoritative && match(defaultModel) === match(fixedModel) && defaultModel);
     if (policy === 'stop-and-ask' || opts.modelConfirmationRequired) throw Object.assign(unavailableError(fixedModel, reason, list, next || match(defaultModel) || list[0]),
       { canChooseAlternative: settingsSupported && failureCode !== 'SETTINGS_WRITE_FAILED' });
-    if (!models.isSafeModelId(next)) throw unavailableError(fixedModel, reason + '，没有同家族可用替代模型，跨家族切换需要手动确认', list, match(defaultModel) || list[0]);
+    if (!models.isSafeModelId(next)) throw unavailableError(fixedModel, reason + '，没有同版本可替代的模型、账号也没有同家族的已确认默认模型，请选一个模型后继续（跨家族切换需要手动确认）', list, match(defaultModel) || '');
     modelChange = { from: fixedModel, to: next, reason, at: Date.now() };
     fixedModel = next;
   } else if (match(fixedModel)) fixedModel = match(fixedModel);

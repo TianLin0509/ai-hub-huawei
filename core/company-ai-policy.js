@@ -11,7 +11,7 @@ function assertKind(kind) {
 // Single-session CLI availability does not widen company automation or group membership.
 function taskKindAllowed(kind) {
   return distribution.kindAllowed(kind)
-    && (!companyOnly() || String(kind || '').replace(/-resume$/, '') === 'codeagent');
+    && (!companyOnly() || String(kind || '').replace(/-(?:resume|lite)$/, '') === 'codeagent');
 }
 function assertTaskKind(kind) {
   assertKind(kind);
@@ -22,7 +22,7 @@ function assertTaskKind(kind) {
 const COMPANY_GROUP_KINDS = ['codeagent', 'claude', 'codex', 'deepseek-acp'];
 function groupKindAllowed(kind) {
   return distribution.kindAllowed(kind)
-    && (!companyOnly() || COMPANY_GROUP_KINDS.includes(String(kind || '').replace(/-resume$/, '')));
+    && (!companyOnly() || COMPANY_GROUP_KINDS.includes(String(kind || '').replace(/-(?:resume|lite)$/, '')));
 }
 function assertGroupKind(kind) {
   assertKind(kind);

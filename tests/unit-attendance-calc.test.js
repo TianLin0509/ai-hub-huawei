@@ -250,3 +250,23 @@ test('周末、节假日加班扣午休和晚饭，和公司考勤系统一致',
   const hol = A.buildDays([card('2026-10-02', '09:06', '18:08')], { ...def, holidays: { '2026-10-02': true } })[0];
   assert.equal(hol.kind, 'holiday'); assert.equal(hol.ot, 452);
 });
+
+/* 2026-11-23 复查「每天工时像被取了绝对值」：v5.6.74 起每天的净加班带符号，计算、格式化、月合计都不取绝对值 */
+test('早走的工作日净加班为负：逐日、格式化和月合计都保留负号', () => {
+  const fixed = { rules: A.calcRules(A.rulesFromWorkTime({})) };
+  const flex = { rules: A.calcRules(A.rulesFromWorkTime({}, { on: true })) };
+  const recs = [card('2026-11-16', '09:00', '18:10'), card('2026-11-17', '09:00', '17:00'), card('2026-11-19', '10:00', '16:00')];
+  const nets = o => A.buildDays(recs, o).map(d => [d.date.slice(5), d.net]);
+  assert.deepEqual(nets(fixed), [['11-19', -30], ['11-17', -30], ['11-16', -20]]);
+  assert.deepEqual(nets(flex), [['11-19', -180], ['11-17', -60], ['11-16', -20]]);
+  assert.equal(A.fmtHm(-20), '−0h20'); assert.equal(A.fmtHm(-180), '−3h00'); assert.equal(A.fmtHm(90), '1h30');
+  assert.equal(A.monthReport(A.buildDays(recs, flex), '2026-11', '2026-11-23', flex).net, -260);
+  assert.equal(A.fmtHours(-260), '-4.3');
+});
+
+test('考勤页每天卡片和时间轴都显示带符号的净加班，不再用扣除前的加班', () => {
+  const src = require('fs').readFileSync(require('path').join(__dirname, '../renderer/company-attendance-page.js'), 'utf8');
+  assert.ok(!/'\+' \+ hm\(x\.ot\)/.test(src), 'v5.6.73 的写法：固定制每天显示「+扣除前加班」，早走也是正数');
+  assert.ok(!/Math\.abs\([^)]*\.net\b/.test(src), '净加班不取绝对值');
+  assert.equal((src.match(/signedNet\(x\)/g) || []).length, 2, '每天卡片、时间轴两处');
+});

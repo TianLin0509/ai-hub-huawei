@@ -282,7 +282,7 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
       return;
     }
     if (op === 'recall') { if (await run('正在撤回', 'recall', payload)) { notice = null; flash('已撤回'); render(); } return; }
-    if (['done', 'drop', 'remind-only', 'redraft'].includes(op)) { if (await run('正在处理', op, payload)) { delete edits[`${a}|${i}`]; delete ack[`${a}|${i}`]; if (op === 'redraft') flash('已交给分身重新起草'); render(); } return; }
+    if (['done', 'drop', 'remind-only', 'redraft'].includes(op)) { const r = await run('正在处理', op, payload); if (r) { delete edits[`${a}|${i}`]; delete ack[`${a}|${i}`]; if (op === 'redraft') flash(r.queued ? '分身正在处理别的消息，这条排在后面；写好会回到「待确认」，写不出也会说明原因' : '已交给分身起草，写好会回到「待确认」，写不出也会说明原因'); render(); } return; }
     if (op === 'log-filter') { logFilter = b.dataset.k; logPage = 0; logPick = -1; render(); return; }
     if (op === 'log-page') { logPage = Math.max(0, logPage + Number(b.dataset.d)); render(); return; }
     if (op === 'log-pick') { logPick = Number(b.dataset.i); render(); return; }

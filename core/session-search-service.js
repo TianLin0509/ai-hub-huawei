@@ -199,6 +199,7 @@ class SessionSearchService {
       });
     }
     this._child = child;
+    this._childStartedAt = Date.now();
     this._stats.workerRestarts += 1;
     try {
       child.send({ type: 'init', options: this._childData }, error => {
@@ -261,8 +262,18 @@ class SessionSearchService {
     this._pending.clear();
   }
 
+  // 低开销模式 L7（2026-11-23 P2）：新请求前同步通知（正节能调度时先恢复全速），以及判断「空闲满 1 分钟」用的只读信息。
+  setRequestHook(fn) { this._requestHook = typeof fn === 'function' ? fn : null; }
+  ecoInfo() {
+    const child = this._child;
+    return { pid: child && Number.isInteger(child.pid) ? child.pid : 0, startedAt: this._childStartedAt || 0, lastRequestAt: this._lastRequestAt || 0,
+      busy: !!(this._pending.size || this._maintenanceBusy || this._compactionBusy || this._queuedSnapshot || this._status.refreshing || this._childBusy) };
+  }
+
   _request(type, payload = {}) {
     if (this._idleStopping) return this._idleStopping.then(() => this._request(type, payload));
+    this._lastRequestAt = Date.now();
+    if (this._requestHook) { try { this._requestHook(); } catch { /* 不影响请求 */ } }
     clearTimeout(this._idleTimer);
     const id = ++this._nextId;
     return new Promise((resolve, reject) => {

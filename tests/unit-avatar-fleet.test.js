@@ -155,6 +155,10 @@ test('模型结果过不了程序校验就转提醒：提到底层模型、带�
   assert.equal(F.applyResult(item, { action: 'skip' }, av).state, 'skipped');
   assert.equal(F.applyResult({ ...item, group: false }, { action: 'skip' }, av).state, 'remind');
   assert.equal(F.applyResult(item, { action: 'draft', reply: '在设置页打开' }, av).state, 'ready');
+  const asked = { ...item, asked: true };
+  assert.match(F.applyResult(asked, { action: 'draft', reply: '' , why: '不确定' }, av).why, /没写出可用的草稿：不确定/);
+  assert.match(F.applyResult(asked, { action: 'draft', reply: '配置在 C:\\Users\\x\\a.json' }, av).why, /没写出可用的草稿：草稿里出现了路径/);
+  assert.match(F.applyResult(asked, null, av).why, /没拿到结果/);
 });
 
 test('会话失败两次转提醒，不丢消息；全部暂停后不读不发', async () => {
@@ -267,12 +271,33 @@ test('新分身接管范围后，同一消息只留一份待办', async () => {
   } finally { h.cleanup(); }
 });
 
-test('全部暂停时点重写不会反复调度', async () => {
-  const h = harness();
+test('暂停时点「让分身起草」直接说明原因，事项留在待确认，不悄悄排进永远不跑的队列', async () => {
+  for (const [pause, re] of [[s => s.pauseAll(true), /全部暂停/], [(s, id) => s.update(id, { enabled: false }), /已暂停/]]) {
+    const h = harness();
+    try {
+      const { av, item } = await readyItem(h); pause(h.service, av.id);
+      await assert.rejects(() => h.service.redraft(av.id, item.id), re); await h.settle();
+      assert.equal(h.service.state(ME, av.id).items[item.id].state, 'ready'); assert.equal(h.service.running.size, 0);
+    } finally { h.cleanup(); }
+  }
+});
+
+test('点名起草：模型只给提醒或跳过时，回到待确认并写清没起草的原因', async () => {
+  let mode = 'remind';
+  const h = harness({ reply: task => task.items.map(i => mode === 'draft' ? { id: i.id, action: 'draft', reply: '我确认后回复你。', why: '资料不足' } : { id: i.id, action: mode, why: '手册里没有这个问题的答案' }) });
   try {
-    const { av, item } = await readyItem(h); h.service.pauseAll(true);
-    await h.service.redraft(av.id, item.id); await h.settle();
-    assert.equal(h.service.state(ME, av.id).items[item.id].state, 'new'); assert.equal(h.service.running.size, 0);
+    const { av, item } = await readyItem(h);
+    assert.equal(item.state, 'remind');
+    const r = await h.service.redraft(av.id, item.id); assert.equal(r.queued, false); await h.settle();
+    assert.deepEqual(h.world.tasks.at(-1).items[0].allowed, ['draft']); assert.equal(h.world.tasks.at(-1).items[0].ownerAsked, true);
+    let now = h.service.status().items.find(i => i.id === item.id);
+    assert.equal(now.state, 'remind'); assert.match(now.why, /你让分身起草，但它没写出可用的草稿：手册里没有这个问题的答案/);
+    mode = 'skip'; await h.service.redraft(av.id, item.id); await h.settle();
+    now = h.service.status().items.find(i => i.id === item.id);
+    assert.equal(now.state, 'remind', '群里点名起草后模型说跳过，也不能从列表里消失'); assert.match(now.why, /没写出可用的草稿/);
+    mode = 'draft'; await h.service.redraft(av.id, item.id); await h.settle();
+    now = h.service.status().items.find(i => i.id === item.id);
+    assert.equal(now.state, 'ready'); assert.equal(now.draft, '我确认后回复你。'); assert.equal(h.service.state(ME, av.id).items[item.id].asked, false);
   } finally { h.cleanup(); }
 });
 

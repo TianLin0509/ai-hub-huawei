@@ -301,7 +301,7 @@ class FleetService {
   }
   material(owner, av, items) {
     const lines = this.knowledge(owner, av);
-    return { avatar: av.name, items: items.map(item => ({ id: item.id, where: item.group ? `群「${item.convName}」` : '私聊', who: item.who, isLeader: (item.flags || []).includes('leader'), atMe: !!item.atMe, allowed: item.level >= 3 ? ['draft', 'remind', 'skip'] : ['remind', 'skip'],
+    return { avatar: av.name, items: items.map(item => ({ id: item.id, where: item.group ? `群「${item.convName}」` : '私聊', who: item.who, isLeader: (item.flags || []).includes('leader'), atMe: !!item.atMe, allowed: item.asked ? ['draft'] : item.level >= 3 ? ['draft', 'remind', 'skip'] : ['remind', 'skip'], ...(item.asked ? { ownerAsked: true } : {}),
       incoming: F.safeText(item.text, 1200), history: this.messages(item.conv).slice(-20).map(m => `${m.displayTime || ''} ${m.sender}：${F.safeText(m.text || m.preview, 300)}`), related: F.related(lines, item.text, 12) })) };
   }
   async runAvatar(owner, id) {
@@ -348,7 +348,7 @@ class FleetService {
           for (const p of pending) {
             const item = st.items[p.id]; if (!item || item.state !== 'drafting') continue;
             item.tries = (item.tries || 0) + 1;
-            if (item.tries >= 2) { Object.assign(item, { state: 'remind', why: '分身没处理成：' + short(e.message, 80) }); this.note(st, item, 'remind', '等你处理', item.why); } else item.state = 'new';
+            if (item.tries >= 2) { Object.assign(item, { state: 'remind', asked: false, why: '分身没处理成：' + short(e.message, 80) }); this.note(st, item, 'remind', '等你处理', item.why); } else item.state = 'new';
           }
           st.lastError = short(e.message, 160);
           st.providerRepair = e.providerRepair || null;
@@ -448,8 +448,15 @@ class FleetService {
     const owner = this.need(), { st, item } = this.item(owner, avatarId, itemId);
     if (item.sensitive) throw new Error('这条涉及敏感内容，分身不起草，请你亲自回复');
     if (item.onlyNonText) throw new Error('对方发的是图片或文件，分身看不到内容');
-    Object.assign(item, { state: 'new', level: 3, action: 'draft', draft: '', tries: 0 }); this.saveState(owner, avatarId, st);
-    void this.runAvatar(owner, avatarId); return this.status();
+    // 以前暂停时也照收：事项转成「排队」后从待确认里消失、永远不处理，页面像没反应。
+    const fleet = this.fleet(owner), av = fleet.avatars.find(v => v.id === avatarId);
+    if (fleet.paused) throw new Error('分身已全部暂停，先在左侧点「全部恢复」再让它起草');
+    if (av && !av.enabled) throw new Error(`分身「${av.name}」已暂停，先点「恢复」再让它起草`);
+    // asked：本人点名要草稿。模型只能写草稿，写不出来要说明原因（见 fleet-rules.applyResult）。
+    Object.assign(item, { state: 'new', level: 3, action: 'draft', draft: '', tries: 0, asked: true }); this.saveState(owner, avatarId, st);
+    const queued = this.running.has(avatarId);
+    void this.runAvatar(owner, avatarId);
+    return { ...this.status(), queued };
   }
   repliedAlready(item) { return F.answeredAfter(this.messages(item.conv), item, { authorities: [] })?.by === 'me'; }
   // 发送前的检查：进队列时查一次，轮到真正执行时再查一次（排队期间可能暂停了、本人回了、对方被认出是上级）。

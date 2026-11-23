@@ -2764,6 +2764,10 @@ const lanPoolService = new (require('./main/lan-pool-service').LanPoolService)({
   // 共享停摆、地址变化、主机掉线或恢复：用会话提示条告诉用户，不让共享悄悄失效。
   onNotice: notice => sendToRenderer('session-notice', { message: notice.text, level: notice.persistent ? 'warning' : 'info', persistent: notice.persistent === true }),
 });
+// Windows 分层 Job Object + 低开销模式 EcoQoS（2026-11-23 P2，core/win32-job-qos.js）：CodeAgent 终端、共享 serve、临时 serve、
+// 后台 CodeAgent 单次问答各自装进独立的进程盒子，结束时连脱离父进程的孙进程一起收；Hub 被强杀时内核自动清盒。
+// Hub 自己不进任何盒子。AI_HUB_WIN32_JOB_OBJECT=0 / AI_HUB_WIN32_ECOQOS=0 可分别关掉。broker 按需启动、空闲 45 秒退出。
+const win32JobQos = require('./core/win32-job-qos').initWin32JobQos({ logger: console });
 // 后台子进程生命周期登记（2026-11-19，同事反馈后台 Edge 越开越多把内存撑满）：无头 Edge 起来就登记 PID、启动时间、用途；
 // 同时最多 1 个、多的排队，超时按 PID 强收整棵树，内存紧张先等或这次不开；Hub 退出时收掉，下次启动只清自己登记过的遗留（core/child-lifecycle.js）。
 const childLifecycle = require('./core/child-lifecycle').initChildLifecycle({ dataDir: getHubDataDir(), logger: console });
@@ -6182,3 +6186,6 @@ app.on('window-all-closed', () => {
 app.on('quit', () => {
   try { primeV8MemoryPoolForExit(); } catch (_) {}
 });
+// Windows 分层 Job Object 收尾放在全部 will-quit 之后（quit 晚于所有 will-quit，包括 whenReady 里后注册的那些）：
+// 共享 serve、临时 serve、子进程登记都收完了，再关 broker、清表并设终态屏障；盒子句柄随 Hub 进程退出由内核关闭。
+app.on('quit', () => { try { win32JobQos.shutdownSync(); } catch (_) {} });

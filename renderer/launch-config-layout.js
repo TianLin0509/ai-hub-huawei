@@ -83,7 +83,7 @@ function createLaunchConfigLayout({ document, ipcRenderer, escapeHtml: esc }) {
       let seg = select.parentElement.querySelector(`.lcc-seg[data-for="${id}"]`);
       const options = [...select.options].filter(o => !o.hidden);
       // CodeAgent 的模型下拉里带每个模型的今日用量（launch-select-popover 读 data-usage），保持下拉框。
-      const keepDropdown = id === 'new-session-model' && lastCtx?.kind === 'codeagent';
+      const keepDropdown = id === 'new-session-model' && (lastCtx?.kind === 'codeagent' || lastCtx?.kind === 'codeagent-lite');
       const use = !keepDropdown && !(field && field.hidden) && options.length >= 2 && options.length <= max;
       select.classList.toggle('lcc-hidden', use);
       if (!use) { if (seg) seg.hidden = true; continue; }

@@ -263,6 +263,7 @@
                       <button class="new-session-option" data-kind="glm" aria-pressed="false"><span class="ai-logo logo-glm"></span>智谱 · ZCode</button>
                       <button class="new-session-option" data-kind="pi" aria-pressed="false" title="开源终端编码 Agent pi：用 Hub 已有的 DeepSeek / 套餐 / 公司模型钥匙，或 pi 自己的登录"><span class="ai-logo logo-pi"></span>pi · 终端 Agent</button>
                       <button class="new-session-option" data-kind="codeagent" aria-pressed="false"><span class="ai-logo logo-codeagent"></span>CodeAgent · 公司内网</button>
+                      <button class="new-session-option" data-kind="codeagent-lite" aria-pressed="false" title="轻量共享模式：与 CodeAgent 共用账号与权限，多会话共用一个后台进程，大幅降低内存占用"><span class="ai-logo logo-codeagent"></span>CodeAgent-Lite · 省内存</button>
                       <button class="new-session-option" data-kind="gemini" aria-pressed="false"><span class="ai-logo logo-gemini"></span>Antigravity CLI</button>
                       <button class="new-session-option" data-kind="powershell" aria-pressed="false"><span class="ai-logo logo-powershell"></span>PowerShell</button>
                     </div>
@@ -279,7 +280,7 @@
                       <label class="session-tuning-field caa-account-field" id="new-session-company-account-field" for="new-session-company-account" hidden><span>账号</span><select id="new-session-company-account" data-account-list="1" aria-describedby="new-session-company-account-note" hidden></select><button id="new-session-company-account-choice" class="caa-account-control" type="button" data-select-for="new-session-company-account" aria-label="公司模型账号" aria-haspopup="listbox" aria-expanded="false" aria-describedby="new-session-company-account-note"></button></label>
                       <label class="session-tuning-field session-model-field" id="new-session-model-field" for="new-session-model"><span>模型</span><select id="new-session-model"></select></label>
                       <label class="session-tuning-field" id="new-session-effort-field" for="new-session-effort"><span id="new-session-effort-label">思考强度</span><select id="new-session-effort"></select></label>
-                      <label class="session-tuning-field" id="new-session-run-mode-field" for="new-session-run-mode" hidden><span>运行方式</span><select id="new-session-run-mode" aria-describedby="new-session-run-mode-note"><option value="pty">PTY（默认）</option><option value="serve">ACP 试点</option></select></label>
+                      <label class="session-tuning-field" id="new-session-run-mode-field" for="new-session-run-mode" hidden><span>运行方式</span><select id="new-session-run-mode" aria-describedby="new-session-run-mode-note"><option value="pty">PTY（默认）</option><option value="serve">轻量共享（CodeAgent-Lite）</option></select></label>
                       <div class="session-tuning-note" id="new-session-run-mode-note" role="status" hidden></div>
                       <label class="session-tuning-field" id="new-session-codex-tier-field" for="new-session-codex-tier" hidden><span>速度通道</span><select id="new-session-codex-tier"></select></label>
                       <label class="session-tuning-field" id="new-session-mcp-field" for="new-session-mcp" hidden><span>MCP 工具</span><select id="new-session-mcp"></select></label>
@@ -308,7 +309,7 @@
                     </div>
                     <div class="session-create-error" id="new-session-error" hidden></div>
                   </div>
-                  <div class="session-create-footer"><span id="new-session-summary">Claude Code · 新建临时 workspace</span><div><button type="button" class="session-create-cancel" id="new-session-cancel">取消</button><button type="button" class="session-create-submit" id="new-session-submit">创建会话</button></div></div>
+                  <div class="session-create-footer"><section class="session-footer-left" aria-label="新会话落点"><p class="session-footer-line"><span id="new-session-summary">Claude Code · 新建临时 workspace</span><button type="button" class="session-root-edit" id="new-session-root-edit" hidden></button><span class="session-root-info" id="new-session-root-info" tabindex="0" role="img" aria-label="默认工作目录说明" title="新建会话选「默认工作目录」时开在这里。点路径可选一个新文件夹，保存后下一个新会话生效；已有会话和旧文件不动。" hidden>ⓘ</span></p><p class="session-root-disk" id="new-session-root-disk" role="status" hidden></p></section><div><button type="button" class="session-create-cancel" id="new-session-cancel">取消</button><button type="button" class="session-create-submit" id="new-session-submit">创建会话</button></div></div>
                 </section>
                 <section class="launch-center-panel" id="launch-center-group-panel" data-launch-panel="group" role="tabpanel" aria-labelledby="launch-intent-group" hidden>
                   <div class="launch-center-panel-head"><strong id="launch-center-group-title">创建 AI 群聊</strong><span>模板、成员、模型与 Workspace 在本页一次完成</span></div>

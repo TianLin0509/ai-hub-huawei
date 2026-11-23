@@ -12,6 +12,9 @@ const RESUME_META_FIELDS = [
   'codexSid',
   'acpSid',
   'codeagentRunMode',
+  'codeagentLiteFeature',
+  'featureAgent',
+  'featureAgentChoice',
   'cardRunMode',
   'cardScope',
   'acpProfileId',
@@ -367,6 +370,10 @@ function handlePersistSessions(list, meetingList, deps, { deferStateSave = false
     if (authoritative?.codeagentForkSourceSessionId) session.codeagentForkSourceSessionId = authoritative.codeagentForkSourceSessionId;
     if (authoritative?.codeagentPrefixFork) session.codeagentPrefixFork = authoritative.codeagentPrefixFork;
     if (authoritative?.codeagentRouteModel) session.codeagentRouteModel = authoritative.codeagentRouteModel;
+    // 运行方式、Lite 标记与功能选型以主进程为准（渲染层漏带时 Hub 重启后会被当成 PTY 会话或选型已变）。
+    if (authoritative?.codeagentRunMode === 'serve') session.codeagentRunMode = 'serve';
+    if (authoritative?.codeagentLiteFeature === true) session.codeagentLiteFeature = true;
+    if (authoritative?.featureAgent) { session.featureAgent = authoritative.featureAgent; session.featureAgentChoice = authoritative.featureAgentChoice || ''; }
     for (const field of ['codeagentActualModel', 'codeagentRequestedModel', 'codeagentLaunchModel']) {
       if (authoritative?.[field]) session[field] = authoritative[field];
     }

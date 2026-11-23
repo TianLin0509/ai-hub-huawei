@@ -197,6 +197,8 @@ class AcpSession extends EventEmitter {
         if(!mode && this.options.permissionPolicy==='bypass')throw new Error('原生 Harness 未提供可确认的完全权限模式');
         if(mode)await this.configure({configId:mode.id,value:this.options.defaultMode},true);
       }
+      // CodeAgent serve 不回 configOptions：没设过模型时用连接上确定的模型，界面与旁问才读得到当前模型。
+      if (!this.currentModel && this.options.profileId === 'codeagent-serve' && typeof client?.model === 'string' && client.model) this.currentModel = client.model;
       this.bootstrapping = false;
       this.emit('bound', { threadId: sessionId, cwd: this.options.cwd, model: this.currentModel,
         capabilities: this.capabilities, configOptions: this.configOptions });

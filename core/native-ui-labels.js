@@ -3,7 +3,7 @@ function nativeUiLabel(session) {
   if (session?.cardRunMode === 'card' && session?.runtimeBackend === 'claude-stream-json') return 'Claude Code · 卡片试点';
   if (session?.cardRunMode === 'card' && session?.runtimeBackend === 'acp') return 'DSH · 卡片试点';
   if (session?.runtimeBackend === 'claude-stream-json') return 'Claude';
-  if (session?.codeagentRunMode === 'serve') return 'CodeAgent · ACP 试点';
+  if (session?.codeagentRunMode === 'serve') return 'CodeAgent-Lite';
   return session?.runtimeBackend==='acp'
     ? require('./ai-kinds').getKindLabel(String(session.kind || '').replace(/-resume$/,''))
     : 'Codex';

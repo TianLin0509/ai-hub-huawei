@@ -360,7 +360,7 @@ function registerSessionIpc(ipcMain, deps) {
 
   ipcMain.handle('codeagent-serve:terminal', async (_event, { sessionId, action, cols, rows } = {}) => {
     const driver = sessionManager.getNativeSession?.(sessionId);
-    if (!driver?.attachTerminal) return { ok: false, message: '这个会话不是 ACP 试点会话' };
+    if (!driver?.attachTerminal) return { ok: false, message: '这个会话没有可接的后台终端（只有 CodeAgent-Lite 与卡片会话支持）' };
     try {
       if (action === 'attach') return await driver.attachTerminal({ cols, rows });
       driver.detachTerminal();
@@ -1329,6 +1329,12 @@ function registerSessionIpc(ipcMain, deps) {
     // 选菜单第一个（手动新建、没明确选模型，2026-10-25）：实际选中的是菜单第 1 行那个模型。
     const pickFirst = codeagentPicker.isFirstMenuModel(modelId);
     let picked = pickFirst ? (result.ok && result.picked) || '' : modelId;
+    // 菜单里没有这个模型、按相近度改选了同家族的一个（core/model-name-match.js）：记成实际选中的那个，并在会话里说一行。
+    if (result.ok && result.substituted && !pickFirst) {
+      picked = result.substituted.id || result.substituted.to || modelId;
+      sendToRenderer('session-notice', { sessionId, level: 'warning',
+        message: require('../../core/model-name-match').substitutionNote(modelId, result.substituted.to) });
+    }
     const automatic = isAutomaticCodeAgent(session);
     // 自动选模型的熔断计数（core/codeagent-auto-pick.js）：自动会话启动时菜单没选成记一次失败；这个号上任何一次选成就清零。
     const breakerAccount = session.codeagentPoolAccount || 'personal';
@@ -1347,6 +1353,7 @@ function registerSessionIpc(ipcMain, deps) {
     // 「问问 Agent」新建的会话首句被退回、会话页空着）：输入框能用就先用 CLI 当前模型把首句发出去，提示一句没切到哪个模型。
     const startupPick = reason === 'launch' || reason === 'relaunch';
     let fallback = !selectedProvider && !result.requiresGroupSelection && !result.ok && (automatic || pickFirst || startupPick) && (result.inputReady || result.inputUsable);
+    let fallbackNoticed = false;
     if (fallback && session.fixedModel) {
       const pin = require('../../core/session-model-pin');
       const known = guard.permittedModels(session, configDir, { dataDir });
@@ -1369,8 +1376,10 @@ function registerSessionIpc(ipcMain, deps) {
           currentModel: { id: actual, displayName: codeagentModels.modelLabel(actual) }, codeagentModelPick: false });
         codeagentModels.appendModelLog(dataDir, { event: 'model-auto-switch', session: sessionId, ...change });
         sendToRenderer('session-notice', { sessionId, level: 'warning', persistent: true, message: pin.modelChangeMessage(change) });
+        fallbackNoticed = true;
       }
     }
+    // 回退的一行提示统一由启动选模型的调用方发（见下面 codeagent-model-pick 的处理）；这里已就固定模型改动发过提示时带回 fallbackNoticed，调用方不再重复。
     if (!result.ok && automatic && !fallback) {
       result = { ...result, message: `自动选模型没成功，模型菜单也没能关掉，为了不把问题打进菜单，这一轮没有发出去（原因：${result.message || '未知'}）` };
     }
@@ -1395,7 +1404,7 @@ function registerSessionIpc(ipcMain, deps) {
     }
     // 自动会话没人守着：菜单没选上但普通输入框已恢复时，照旧按 CLI 当前模型把活发出去（和改动前一样），失败只记在上面的 pick 日志里，不卡住这一轮。
     if (fallback) {
-      return { ...result, ok: true, fallback: 'cli-default-model' };
+      return { ...result, ok: true, fallback: 'cli-default-model', ...(fallbackNoticed ? { fallbackNoticed: true } : {}) };
     }
     // 留作默认的这次选择同时记成这个号的「上次」（带时间），下次新建和 CodeAgent 配置文件比先后（core/codeagent-launch-model.js）。
     if (result.ok && result.keptDefault && picked && !codeagentPicker.isFirstMenuModel(picked)) {
@@ -1536,9 +1545,11 @@ function registerSessionIpc(ipcMain, deps) {
           message: `没能自动选中 CodeAgent 模型菜单里的第一个模型（${result.message || '原因未知'}），这个会话沿用 CodeAgent 当前的模型；需要换的话在终端里 /model 选一次。` });
       } else if (result.fallback) {
         // 自动会话没人看，回退只记日志（runCodeAgentPick 的 pick 日志 fallback=send-with-cli-model）；用户会话提示一句。
-        if (!session || !isAutomaticCodeAgent(session)) {
+        // 同一次回退只发一条：菜单里没有可替代的同版本模型时用统一对照的说明（core/model-name-match.js fallbackNote）。
+        if ((!session || !isAutomaticCodeAgent(session)) && !result.fallbackNoticed) {
           sendToRenderer('session-notice', { sessionId, level: 'warning',
-            message: `没切到 ${modelId}，先用 CodeAgent 当前模型继续，第一条消息已照常发出（原因：${result.technicalReason || result.message || '未知'}）；需要换的话在终端里 /model 选一次。` });
+            message: result.nameFallback ? `${result.nameFallback}，第一条消息已照常发出。`
+              : `没切到 ${modelId}，先用 CodeAgent 当前模型继续，第一条消息已照常发出（原因：${result.technicalReason || result.message || '未知'}）；需要换的话在终端里 /model 选一次。` });
         }
       } else if (!result.ok) {
         // 真失败（菜单没关掉、输入框不能用）：第一条消息被退回，常驻提示讲清原因和下一步，不用一闪而过的提示。
@@ -1643,7 +1654,8 @@ function registerSessionIpc(ipcMain, deps) {
     try {
       result = await codeagentPicker.schedulePick(sessionId, async () => {
         const picked = await runCodeAgentPick(sessionId, modelId, 'switch', selection);
-        return launchChange && !picked?.ok ? settingsOnly(picked) : picked;
+        // 菜单里没有可替代的同版本模型时不把这个名字写进设置文件冒充成功：照实回报，会话沿用当前模型。
+        return launchChange && !picked?.ok && !picked?.nameFallback ? settingsOnly(picked) : picked;
       });
     } catch (error) {
       if (!launchChange) throw error;
@@ -1653,17 +1665,19 @@ function registerSessionIpc(ipcMain, deps) {
     if (!result || !result.ok) {
       return { ok: false, error: 'pick-failed', message: (result && result.message) || 'CodeAgent 没能切换模型' };
     }
+    // 菜单里没有所选模型、按统一对照改选了同版本的一个（core/model-name-match.js）：之后都按实际选中的记。
+    const chosen = result.substituted && typeof result.model === 'string' && result.model ? result.model : modelId;
     // After the native menu confirmed the provider, update only this session's
     // model overlay so its former model cannot override the next request.
-    const overlayUpdated = provider ? updateCodeAgentModelSettings(sessionId, session, modelId) : launchChange;
+    const overlayUpdated = provider || chosen !== modelId ? updateCodeAgentModelSettings(sessionId, session, chosen) : launchChange;
     // 菜单选中了、设置文件却没能改成新模型：去掉文件里的旧模型，免得下一问又按它发。
-    if (!overlayUpdated && result.mode !== 'settings-only') releaseCodeAgentLaunchModel(sessionId, `菜单已选 ${modelId}，换不成 CodeAgent 自己的写法`);
+    if (!overlayUpdated && result.mode !== 'settings-only') releaseCodeAgentLaunchModel(sessionId, `菜单已选 ${chosen}，换不成 CodeAgent 自己的写法`);
     // 记住这个号上次手动切到的模型，下次新建会话默认用它（core/codeagent-launch-model.js）。
-    try { if (result.mode !== 'settings-only') require('../../core/codeagent-launch-model').rememberModel(require('../../core/data-dir').getHubDataDir(), (session.info && session.info.codeagentPoolAccount) || session.codeagentPoolAccount || 'personal', modelId); }
+    try { if (result.mode !== 'settings-only') require('../../core/codeagent-launch-model').rememberModel(require('../../core/data-dir').getHubDataDir(), (session.info && session.info.codeagentPoolAccount) || session.codeagentPoolAccount || 'personal', chosen); }
     catch (error) { console.warn('[codeagent] 记住上次选的模型失败：' + error.message); }
-    models.expectModelSwitch(sessionId, modelId, { settingsOnly: result.mode === 'settings-only' });
+    models.expectModelSwitch(sessionId, chosen, { settingsOnly: result.mode === 'settings-only' });
     if (pausedFrom) {
-      try { require('../../core/codeagent-model-replacements').recordReplacement(require('../../core/data-dir').getHubDataDir(), pausedFrom, modelId); }
+      try { require('../../core/codeagent-model-replacements').recordReplacement(require('../../core/data-dir').getHubDataDir(), pausedFrom, chosen); }
       catch (error) { console.warn('[codeagent] 记住替代模型失败：' + error.message); }
     }
     sessionManager.updateSessionMeta(sessionId, { codeagentModelProvider: provider, codeagentModelProviderLabel: providerLabel, codeagentModelMenuLabel: menuLabel });
@@ -1671,7 +1685,7 @@ function registerSessionIpc(ipcMain, deps) {
     if (!selectedSession) return { ok: false, error: 'session-closed', message: '会话已关闭，本次选择未保存' };
     require('../../core/session-store').saveSessionFile(sessionId, selectedSession);
     // 回执：菜单关掉了；看到「Set model to …」时 confirmed=true。下一条回答再核对实际模型。
-    return { ok: true, model: { id: modelId, displayName: provider ? `${models.modelLabel(modelId)} · ${providerLabel || provider}` : models.modelLabel(modelId), ...(provider ? { provider, providerLabel } : {}) }, mode: result.mode, confirmed: !!result.confirmed,
+    return { ok: true, model: { id: chosen, displayName: provider ? `${models.modelLabel(chosen)} · ${providerLabel || provider}` : models.modelLabel(chosen), ...(provider ? { provider, providerLabel } : {}) }, mode: result.mode, confirmed: !!result.confirmed,
       ...(result.mode === 'settings-only' ? { message: result.message } : {}) };
   }
   ipcMain.handle('codeagent:switch-model', (_event, payload) => switchCodeAgentModel(payload));

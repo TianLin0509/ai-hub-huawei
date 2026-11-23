@@ -17,7 +17,7 @@
     .fa-group-tabs button { padding:5px 14px; border:0; border-radius:6px; background:transparent; color:inherit; cursor:pointer; }
     .fa-group-tabs button[aria-selected=true] { color:var(--brand,#3478f6); background:var(--brand-tint,#eaf2ff); }
     #config-modal:has(#cfg-tab-agents[aria-selected=true]) .config-modal-content { max-width:1000px; width:calc(100vw - 80px); }
-    .fa-row { display:grid; grid-template-columns:minmax(155px,1fr) 175px minmax(0,1.6fr) 66px; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border-subtle,#dfe3ea); }
+    .fa-row { display:grid; grid-template-columns:minmax(155px,1fr) 192px minmax(0,1.6fr) 66px; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--border-subtle,#dfe3ea); }
     .fa-row label { font-size:13px; margin:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .fa-row select { width:100%; min-width:0; height:32px; padding:0 7px; color:var(--text-primary,#242a33); background:var(--bg-input,#fff); border:1px solid var(--border-subtle,#dfe3ea); border-radius:6px; font:12px 'Microsoft YaHei',sans-serif; }
     .fa-reset,.fa-entry { border:0; border-radius:5px; color:var(--brand,#3478f6); background:transparent; padding:5px 6px; cursor:pointer; white-space:nowrap; font:12px 'Microsoft YaHei',sans-serif; }
@@ -28,7 +28,7 @@
     .fa-popup { position:fixed; z-index:10020; width:min(720px,calc(100vw - 32px)); padding:16px; border:1px solid var(--border-subtle,#dfe3ea); border-radius:10px; background:var(--bg-primary,#fff); color:var(--text-primary,#242a33); box-shadow:0 8px 32px #0002; }
     .fa-popup header { display:flex; justify-content:space-between; align-items:center; }
     .fa-popup header button { border:0; background:transparent; color:inherit; cursor:pointer; }
-    .fa-popup .fa-row { grid-template-columns:120px 140px minmax(180px,1fr) 66px; }
+    .fa-popup .fa-row { grid-template-columns:120px 192px minmax(180px,1fr) 66px; }
     #cfg-feature-agents [role=status] { font-size:12px; min-height:18px; }
   `;
   document.head.append(style);

@@ -20,10 +20,10 @@ function readMarker(file = MARKER_FILE) {
 const marker = readMarker();
 const community = !!marker;
 // 发行目标可以只保留部分 AI（target.json 的 kinds，例如公司纯净版只留 CodeAgent）；没写就全部保留。
-// 恢复类 kind（codeagent-resume）跟随它的本体。
+// 恢复类 kind（codeagent-resume）与轻量入口（codeagent-lite）跟随它的本体。
 function makeKindFilter(kinds) {
   const list = Array.isArray(kinds) && kinds.length ? Object.freeze(kinds.map(String)) : null;
-  return { allowedKinds: list, kindAllowed: kind => !list || list.includes(String(kind || '').replace(/-resume$/, '')) };
+  return { allowedKinds: list, kindAllowed: kind => !list || list.includes(String(kind || '').replace(/-(?:resume|lite)$/, '')) };
 }
 const { allowedKinds, kindAllowed } = makeKindFilter(marker && marker.kinds);
 

@@ -863,10 +863,11 @@ test('identically named model notices remain separate for two sessions', async (
 });
 
 
-test('automatic replacement prefers a same-family model over an unrelated account default', t => {
+// 2026-11-23 收紧（core/model-name-match.js）：跨版本不自动替换；默认模型跨家族也不自动换，停下让用户选。
+test('automatic replacement neither crosses versions nor jumps to an unrelated account default', t => {
   const f = fixture(t, { ids: [NEXT, 'MiniMax-M2.7'] });
   f.write(path.join(f.configDir, 'settings.json'), { model: 'MiniMax-M2.7' });
-  assert.equal(f.launch('same-family', { fixedModel: OLD }).fixedModel, NEXT);
+  assert.throws(() => f.launch('same-family', { fixedModel: OLD }), error => error.code === 'SESSION_MODEL_UNAVAILABLE');
 });
 
 for (const action of ['confirm', 'cancel']) test(`sleeping team member model confirmation is visible to the lead (${action})`, async t => {

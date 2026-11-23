@@ -10819,6 +10819,9 @@ function persistWorkscene(flush = false) {
         ...(s.codeagentPrefixFork ? { codeagentPrefixFork: s.codeagentPrefixFork } : {}),
         ...(s.codeagentConfigDir ? { codeagentConfigDir: s.codeagentConfigDir } : {}),
         ...(s.codeagentRunMode ? { codeagentRunMode: s.codeagentRunMode } : {}),
+        // 功能选了 CodeAgent-Lite 的后台会话：Lite 标记与功能选型随会话落盘，重启后仍走共享 serve、不被当成选型已变。
+        ...(s.codeagentLiteFeature === true ? { codeagentLiteFeature: true } : {}),
+        ...(s.featureAgent ? { featureAgent: s.featureAgent, featureAgentChoice: s.featureAgentChoice || '' } : {}),
         ...(s.codeagentPoolAccount ? { codeagentPoolAccount: s.codeagentPoolAccount, codeagentPoolLabel: s.codeagentPoolLabel || '' } : {}),
         ...(s.companyRoute ? { companyRoute: s.companyRoute } : {}),
         ...(s.companyUpstream ? { companyUpstream: s.companyUpstream } : {}),
@@ -11266,6 +11269,8 @@ sessionImmersive = require('./session-immersive').createSessionImmersiveControll
         ...(meta.codeagentPrefixFork ? { codeagentPrefixFork: meta.codeagentPrefixFork } : {}),
         ...(meta.codeagentConfigDir ? { codeagentConfigDir: meta.codeagentConfigDir } : {}),
         ...(meta.codeagentRunMode ? { codeagentRunMode: meta.codeagentRunMode } : {}),
+        ...(meta.codeagentLiteFeature === true ? { codeagentLiteFeature: true } : {}),
+        ...(meta.featureAgent ? { featureAgent: meta.featureAgent, featureAgentChoice: meta.featureAgentChoice || '' } : {}),
         ...(meta.codeagentPoolAccount ? { codeagentPoolAccount: meta.codeagentPoolAccount, codeagentPoolLabel: meta.codeagentPoolLabel || '' } : {}),
         ...(meta.companyRoute ? { companyRoute: meta.companyRoute } : {}),
         ...(meta.companyUpstream ? { companyUpstream: meta.companyUpstream } : {}),

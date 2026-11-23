@@ -27,7 +27,31 @@ const { promisify } = require('util');
 const execFileAsync = promisify(execFileCallback);
 
 const HUB_ROOT = path.resolve(__dirname, '..', '..');
-const ELECTRON_EXE = path.join(HUB_ROOT, 'node_modules', 'electron', 'dist', 'electron.exe');
+const ELECTRON_REL = path.join('node_modules', 'electron', 'dist', process.platform === 'win32' ? 'electron.exe' : 'electron');
+
+// git worktree 里 node_modules 可能没链或链坏：hub-launcher 只用 Node 内置模块，测试照常加载，
+// 但 spawn 一个不存在的 exe 在 Windows 上只表现为「没有 PID」。按 显式环境变量 → 本工作树 → 主仓库 逐级找。
+function resolveElectronExe(root = HUB_ROOT, env = process.env) {
+  const candidates = [];
+  if (env.HUB_TEST_ELECTRON_EXE) candidates.push(env.HUB_TEST_ELECTRON_EXE);
+  candidates.push(path.join(root, ELECTRON_REL));
+  try {
+    // .git 是文件（worktree）时指向 <主仓库>/.git/worktrees/<名>；commondir 指回 <主仓库>/.git
+    const dotGit = path.join(root, '.git');
+    if (fs.statSync(dotGit).isFile()) {
+      const m = /^gitdir:\s*(.+)$/m.exec(fs.readFileSync(dotGit, 'utf8'));
+      if (m) {
+        const gitDir = path.resolve(root, m[1].trim());
+        let common = gitDir;
+        try { common = path.resolve(gitDir, fs.readFileSync(path.join(gitDir, 'commondir'), 'utf8').trim()); } catch {}
+        candidates.push(path.join(path.dirname(common), ELECTRON_REL));
+      }
+    }
+  } catch {}
+  return candidates.find(p => { try { return fs.statSync(p).isFile(); } catch { return false; } }) || path.join(root, ELECTRON_REL);
+}
+
+const ELECTRON_EXE = resolveElectronExe();
 const PARENT_CONTROL_ENV_KEYS = new Set([
   'CLAUDECODE',
   'CLAUDE_HUB_PORT',
@@ -167,9 +191,10 @@ function _httpGetJson(url, timeoutMs = 1500) {
     .then(response => JSON.parse(response.body)).catch(() => null);
 }
 
-async function _waitForCDP(port, timeoutMs = 30000) {
+// shouldStop：进程已退出或 spawn 出错时立刻放弃，不白等到超时（启动即崩时每次省 90 秒）
+async function _waitForCDP(port, timeoutMs = 30000, shouldStop = () => false) {
   const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+  while (Date.now() < deadline && !shouldStop()) {
     const ver = await _httpGetJson(`http://127.0.0.1:${port}/json/version`);
     if (ver && ver.webSocketDebuggerUrl) return ver;
     await _waitMs(300);
@@ -349,7 +374,14 @@ async function launchIsolatedHub({
   child.on('error', (error) => { spawnError = error; });
 
   const pid = child.pid;
-  if (!pid) throw new Error(`[${label}] spawn failed, no PID`);
+  if (!pid) {
+    // error 事件异步到达；等一拍拿到真实错误码（多为 ENOENT：exe 或 cwd 不存在）
+    await new Promise(r => setImmediate(r));
+    const exists = p => { try { fs.statSync(p); return 'yes'; } catch { return 'NO'; } };
+    throw new Error(`[${label}] spawn failed, no PID: ${spawnError ? (spawnError.code || spawnError.message) : 'unknown'}`
+      + ` | exe=${executablePath} (exists=${exists(executablePath)}) | cwd=${cwd} (exists=${exists(cwd)})`
+      + ' | 工作树缺 node_modules 时可链到主仓库，或设 HUB_TEST_ELECTRON_EXE');
+  }
   // Test Hubs yield the CPU to the person using the production Hub. Children
   // (renderers, CLI fixtures) inherit a below-normal priority class on Windows.
   if (process.env.HUB_TEST_PRIORITY !== 'normal' && os.constants.priority) {
@@ -378,7 +410,7 @@ async function launchIsolatedHub({
   });
 
   // 等 CDP ready（最长 90s：发版机同时跑多个任务时，冷启动超过 30s 是常态）
-  const ver = await _waitForCDP(port, 90000);
+  const ver = await _waitForCDP(port, 90000, () => !!spawnError || exited);
   if (spawnError || exited) {
     const termination = exited ? null : await _terminateSpawnedChild(child);
     const err = new Error(`[${label}] hub exited before CDP ready (code=${exitCode}, signal=${exitSignal || 'none'}): ${spawnError ? spawnError.message : 'early exit'}`);
@@ -574,6 +606,8 @@ module.exports = {
   _verifyCdpPortOwner,
   _waitForCdpPortOwner,
   _waitMs,  // 给 e2e 用
+  _waitForCDP,
+  resolveElectronExe,
   _private: {
     hubHasExited,
     requireCleanHubExit,

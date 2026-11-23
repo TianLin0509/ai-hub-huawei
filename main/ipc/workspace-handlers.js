@@ -330,6 +330,15 @@ function registerWorkspaceIpc(ipcMain, deps) {
     return result.filePaths[0];
   });
 
+  // 新建会话底栏：默认工作目录所在盘的使用率，满了就提示可以改到别的盘。只读 statfs，不扫目录。
+  ipcMain.handle('workspace:root-disk', async () => {
+    const { driveRoot, fullDrives } = require('../../core/hub-pet/disk-watch.js');
+    const drive = driveRoot(workspaceService.getWorkspaceRoot());
+    if (!drive) return null;
+    const [hit] = await fullDrives([drive], { warnPct: 0 });
+    return hit || null;
+  });
+
   ipcMain.handle('workspace:pick-archive-parent', async () => {
     const result = await dialog.showOpenDialog({
       title: '选择正式项目所在文件夹',

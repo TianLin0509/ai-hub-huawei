@@ -60,6 +60,7 @@ const {
 // 代价很小：每会话一个字符串，远低于多留一个 xterm + WebGL 实例。
 const RING_BUFFER_BYTES = 1024 * 1024;
 const { TerminalRingBuffer } = require('./terminal-ring-buffer');
+const ptyJobForAllKinds = () => String(process.env.AI_HUB_WIN32_JOB_PTY || '').toLowerCase() === 'all';
 const TERMINAL_RING = Symbol('terminalRing');
 // Swap a session entry's `ringBuffer` string for an accessor backed by a
 // TerminalRingBuffer, keeping its current contents. Readers and assignments
@@ -721,7 +722,7 @@ function createCodeAgentServeDriver({ id, opts, cwd, env, config, launch, ptyMod
   const head = /^[A-Za-z0-9_.-]+$/.test(config.command) ? config.command : `"${path.normalize(String(config.command).replace(/"/g, ''))}"`;
   const quote = value => (/^[A-Za-z0-9_.:\\/=-]+$/.test(value) ? value : `"${String(value).replace(/"/g, '')}"`);
   try { return new (require('./codeagent-serve-session').CodeAgentServeSession)({
-    id, kind: 'codeagent', cwd, host, model: launch.fixedModel || launch.model || opts.model || '', provider: opts.codeagentModelProvider || '',
+    id, kind: 'codeagent', cwd, host, model: launch.fixedModel || launch.model || opts.codeagentRouteModel || opts.model || '', provider: String(opts.codeagentModelProvider || '').split('/')[0],
     permissionMode: require('./permission-modes').normalize('codeagent', opts.permissionMode) || 'bypassPermissions',
     title: opts.title || '', systemPrompt, profileId: 'codeagent-serve', resumeId: opts.resumeCCSessionId || opts.acpSid || undefined,
     restoredRuntime: opts.nativeRuntime, storeDir: path.join(dataDir, 'acp-history'), launch: { env: terminalEnv },
@@ -1573,6 +1574,8 @@ class SessionManager extends EventEmitter {
   _shutdownDrainedSessions = new Map();
   _ptyTerminationRequests = new WeakSet();
   _ptyTerminationOwners = new WeakMap();
+  // Windows 分层 Job Object 第 1 层（2026-11-23 P2，core/win32-job-qos.js）：PTY 对象 → 这一代会话的盒子 key。
+  _ptyJobKeys = new WeakMap();
   _shutdownTimedOutPtys = new WeakSet();
 
   // Injected by main: the chosen hook HTTP port + per-launch auth token.
@@ -2737,6 +2740,7 @@ class SessionManager extends EventEmitter {
       // can follow it. Bind only this PTY generation once the PID is known.
       queueMicrotask(() => {
         if (this.sessions.get(id)?.pty !== ptyProcess) return;
+        if (isCodeAgent || ptyJobForAllKinds()) this._bindPtyJob(id, ptyProcess, owner);
         try { this._refreshOpenIdentity(id); }
         catch (error) { console.error('[session-owner] deferred PID binding failed:', error.message); }
         if (codeagentLaunch?.memberMcpLearn) {
@@ -2830,7 +2834,7 @@ class SessionManager extends EventEmitter {
       status: 'idle',
       ...(isNativeCodex ? {runtimeBackend:'codex-app-server',nativeRuntime:ptyProcess.runtime,
         codexApprovalPolicy:opts.approvalPolicy || codexNativePermission(kind, opts).approval,codexSandbox:opts.sandbox || codexNativePermission(kind, opts).sandbox} : {}),
-      ...(isCodeAgentServe ? { codeagentRunMode: 'serve' } : {}),
+      ...(isCodeAgentServe ? { codeagentRunMode: 'serve', ...(opts.codeagentLiteFeature === true ? { codeagentLiteFeature: true } : {}) } : {}),
       ...(isCardSession ? { cardRunMode: 'card', cardTerminal: opts.cardTerminal === true, ...(dshCardScope ? { cardScope: dshCardScope } : {}) } : {}),
       ...(isAcp ? {runtimeBackend:'acp',nativeRuntime:ptyProcess.runtime,acpSid:opts.acpSid || opts.resumeCCSessionId || null,
         cliRuntime:isProviderCli?{...ptyProcess.runtime,source:'provider-cli',observedAt:Date.now()}:null,
@@ -3098,6 +3102,8 @@ class SessionManager extends EventEmitter {
 
     ptyProcess.onExit((exitInfo) => {
       codexEditorInput?.dispose();
+      // 根进程已确认退出，再结束这一代的盒子、收掉脱离的孙进程（node-pty 要求 kill 之前不先结束它的进程，见 disposeGracefully）。
+      this._releasePtyJob(ptyProcess);
       if (isNativeClaude && !ptyProcess.closed) {
         // Keep the managed session and its unknown receipt available for explicit recovery.
         return;
@@ -3675,6 +3681,35 @@ class SessionManager extends EventEmitter {
       throw error;
     }
   }
+
+  // ── Windows 分层 Job Object 第 1 层（2026-11-23 P2）──────────────────────────────
+  // 每个真实 PTY 会话一个盒子，key 为 pty:<会话>:<代>；共享 serve、ACP 卡片会话不走这条启动路径，从不进这一层。
+  // 默认只给 CodeAgent 终端（与关闭补杀 session-close-sweep 同范围）：其他 CLI 登录时拉起的浏览器、命令行里打开的 VS Code
+  // 都是它的子进程，进盒后关会话会被一起结束，属于行为变化。AI_HUB_WIN32_JOB_PTY=all 可放开到全部 PTY 会话。
+  _bindPtyJob(sessionId, ptyProcess, owner) {
+    const qos = require('./win32-job-qos').getWin32JobQos();
+    if (!qos.enabled() || this._ptyJobKeys.has(ptyProcess)) return '';
+    // 双保险：进程号是共享 serve 或临时 serve 的（ACP 会话的 pid 就是共享 serve），绝不放进第 1 层。
+    const shared = [...require('./codeagent-serve-host').livePids(), ...require('./codeagent-serve').tempServePids()];
+    if (shared.includes(Number(owner.pid))) return '';
+    // observedAt 是看到这个 pid 的时刻，进程不可能晚于这一刻出生：作为出生时间上界（broker 严格核对，晚 1 毫秒出生也拒绝）。
+    const key = qos.assign(`pty:${sessionId}`, owner.pid, { maxStartMs: owner.observedAt, layer: 'pty' });
+    if (key) this._ptyJobKeys.set(ptyProcess, key);
+    return key;
+  }
+  _releasePtyJob(ptyProcess) {
+    const key = this._ptyJobKeys.get(ptyProcess);
+    if (!key) return false;
+    this._ptyJobKeys.delete(ptyProcess);
+    require('./win32-job-qos').getWin32JobQos().terminate(key).catch(() => {});
+    return true;
+  }
+  ptyJobKey(sessionId) {
+    const pty = this.sessions.get(sessionId)?.pty;
+    return (pty && this._ptyJobKeys.get(pty)) || '';
+  }
+  // 低开销模式 EcoQoS 即时唤醒（main/low-overhead-controller.js 装）：切到会话、向它输入时同步调用。
+  setEcoWake(fn) { this._ecoWake = typeof fn === 'function' ? fn : null; }
 
   // 关闭 / 休眠 CodeAgent 终端时补杀进程树残余（2026-11-23，core/session-close-sweep.js createExitTreeSweep）。
   // main 装上 sweeper 才生效；单测和公开版不装时照旧直接结束。Hub 退出走 _terminatePty，不经这里。
@@ -4278,6 +4313,7 @@ try {
   }
 
   writeToSession(sessionId, data) {
+    if (this._ecoWake) { try { this._ecoWake(sessionId); } catch { /* 唤醒失败不影响输入 */ } }
     const s = this.sessions.get(sessionId);
     if (s?.info.runtimeBackend === 'claude-stream-json') {
       if (data === '\u0003') {
@@ -4399,6 +4435,7 @@ try {
     // 这次切过来的时刻（2026-11-23 低开销模式 L1）：焦点保护的 30 分钟从这里和上次输入输出中较晚的算起，
     // 刚点开阅读的旧会话不会被立即休眠。
     this.focusedAt = sessionId ? Date.now() : 0;
+    if (sessionId && this._ecoWake) { try { this._ecoWake(sessionId); } catch { /* 唤醒失败不影响切换 */ } }
     // 切到某个会话时，把它在后台合并期间攒着的终端输出立即推上去（main.js 接）。
     try { this.onFocusChanged?.(sessionId); } catch { /* 推送失败不影响切换 */ }
   }
@@ -4920,6 +4957,7 @@ try {
       // 千问 / GLM 走终端时没有 runtimeBackend，卡片提示（如 Token Plan 改道说明）也要随更新送到界面。
       ...(isAcpKind(info.kind) ? {cliRuntime:info.cliRuntime||null,nativeActionError:info.nativeActionError || null} : {}),
       ...(isCodeAgentKind(info.kind) ? { codeagentRunMode: info.codeagentRunMode === 'serve' ? 'serve' : 'pty' } : {}),
+      ...(info.codeagentLiteFeature === true ? { codeagentLiteFeature: true } : {}),
       ...(require('./card-run-mode').supportsCardKind(info.kind) ? { cardRunMode: info.cardRunMode === 'card' ? 'card' : 'pty', cardTerminal: info.cardTerminal === true } : {}),
       ...(isAcpKind(info.kind) || info.codeagentRunMode === 'serve' ? {acpSid:info.acpSid,acpProfileId:info.acpProfileId,
         acpCapabilities:info.acpCapabilities,acpConfigOptions:info.acpConfigOptions} : {}),

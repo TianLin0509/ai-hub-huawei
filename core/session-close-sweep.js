@@ -16,12 +16,26 @@ function getInspector() {
   return inspector;
 }
 
+// 会话的 pty.pid 指向共享后台进程（CodeAgent-Lite 的共享 serve、App Server、stream-json 等）时不能按进程树补杀：
+// 那棵树属于同账号的所有会话，杀掉会拖垮其他还在用的会话（与 session-manager _terminateWithTreeSweep 同一口径）。
+function sharedRuntime(entry) {
+  const backend = entry?.info?.runtimeBackend;
+  return entry?.info?.codeagentRunMode === 'serve' || ['codex-app-server', 'claude-stream-json'].includes(backend)
+    || (backend === 'acp' && !entry?.pty?.isCliProvider);
+}
+// 补杀保护名单：Hub 自己、其他会话的根、所有共享 serve（含本会话借用的那个）。
+function protectedPids(manager, rootPid) {
+  let serve = [];
+  try { serve = require('./codeagent-serve-host').livePids(); } catch { serve = []; }
+  return [process.pid, ...(manager?.listLivePtyPids?.() || []).filter(pid => pid !== rootPid), ...serve];
+}
+
 // 返回 { schedule() }：关会话之后调用 schedule() 安排补杀。拍不到快照、不是 CodeAgent 会话时返回 null（照常关、不补杀）。
 async function prepareCloseSweep(manager, id, { inspect = getInspector, platform = process.platform, timeoutMs = SNAPSHOT_TIMEOUT_MS, log = line => console.info('[session-close-sweep]', line) } = {}) {
   if (platform !== 'win32') return null;
   const entry = manager?.sessions?.get?.(id);
   const rootPid = Number(entry?.pty?.pid) || 0;
-  if (!rootPid || !KINDS.test(String(entry?.info?.kind || ''))) return null;
+  if (!rootPid || !KINDS.test(String(entry?.info?.kind || '')) || sharedRuntime(entry)) return null;
   const ins = inspect();
   let snap = null;
   try {
@@ -30,7 +44,7 @@ async function prepareCloseSweep(manager, id, { inspect = getInspector, platform
   const before = snap ? captureTree(snap, rootPid) : [];
   if (before.length < 2) return null; // 只有根自己：node-pty 收得掉，不用补
   const sweeper = createTreeSweeper({ inspector: ins, log,
-    protect: () => [process.pid, ...(manager.listLivePtyPids?.() || []).filter(pid => pid !== rootPid)] });
+    protect: () => protectedPids(manager, rootPid) });
   return { before, schedule: () => sweeper.schedule(before, `session=${String(id).slice(0, 8)}`) };
 }
 
@@ -92,4 +106,4 @@ function createExitTreeSweep({ inspectors = () => [getInspector()], protect = ()
   return { plan, schedule };
 }
 
-module.exports = { prepareCloseSweep, createExitTreeSweep, getInspector, KINDS, ROOT_START_SLACK_MS };
+module.exports = { prepareCloseSweep, createExitTreeSweep, getInspector, sharedRuntime, protectedPids, KINDS, ROOT_START_SLACK_MS };

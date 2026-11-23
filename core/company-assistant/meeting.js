@@ -362,7 +362,7 @@ class MeetingCompanion {
   // 这场会议理解会话用的终端和模型。key 变了就换会话（shouldRotate）。
   engineFor(m) {
     const selected = require('../feature-agent-choice').resolve(this.a.deps?.dataDir, 'meeting').selected;
-    if (selected) return { harness: selected.kind, model: selected.model, key: JSON.stringify(selected), label: require('../feature-agent-choice').LABELS[selected.kind], choice: selected };
+    if (selected) return { harness: selected.kind, model: selected.model, key: JSON.stringify(selected), label: selected.kind === 'codeagent-lite' ? 'CodeAgent-Lite' : require('../feature-agent-choice').LABELS[selected.kind], choice: selected };
     if (!this.deps.meetingTerminals) { const model = selectedModel(m, this.deps); return { harness: 'codeagent', model, key: model, label: 'CodeAgent' }; }
     const e = engine.choose(m, this.terminals(), m.speed || 'normal', this.deps.meetingDefaultEngine?.() || '');
     return { harness: e.harness, model: e.model, key: e.id, label: e.label };

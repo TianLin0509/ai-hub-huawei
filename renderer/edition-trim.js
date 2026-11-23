@@ -9,7 +9,8 @@
     document.querySelectorAll('.new-session-option[data-kind]').forEach(button => {
       // The existing DeepSeek card launches DSH; its historical data-kind is
       // retained because the launch controller uses it as a presentation alias.
-      const kind = button.dataset.kind === 'deepseek' ? 'deepseek-acp' : button.dataset.kind;
+      // CodeAgent-Lite 入口跟随 CodeAgent：允许 CodeAgent 的发行版一并保留它。
+      const kind = button.dataset.kind === 'deepseek' ? 'deepseek-acp' : button.dataset.kind === 'codeagent-lite' ? 'codeagent' : button.dataset.kind;
       if (!kindAllowed(kind)) button.remove();
       else if (kind === 'deepseek-acp' && require('../core/distribution').target === 'company') {
         button.lastChild.textContent = 'DSH';

@@ -21,6 +21,13 @@ const DEFAULT_LIMITS = { edge: 1, 'codeagent-print': 2 };
 const DEFAULT_WATCH_MS = 15000;
 const LOW_MEM_BYTES = 1.2 * 1024 ** 3;
 const LOW_MEM_RATIO = 0.08;
+// Windows 分层 Job Object 第 3 层（2026-11-23 P2，core/win32-job-qos.js）：这些类的子进程起来就各自装进一个盒子（task:<登记号>:<代>），
+// 结束时连脱离父进程的孙进程一起收；原来按 PID 结束进程树照旧兜底。
+// 无头 Edge 不进盒：嵌套盒里 Edge 本身工作正常（tests/unit-win32-job-qos.test.js 实测 15 个进程、调试端口正常），但 main/edge-headless.js
+// 会在启动进程退出后改认接手的浏览器进程（先注销启动进程那条再登记新的），浏览器进程就在启动进程的盒子里，注销时结束盒子会把正在用的浏览器一起结束。
+const DEFAULT_JOB_KINDS = ['codeagent-print'];
+const JOB_EXIT_POLL_MS = 2000;
+const JOB_EXIT_WAIT_MS = 10 * 60000;
 
 function envLimit(env, kind, fallback) {
   const n = Number(env[`CLAUDE_HUB_${String(kind).toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_MAX`]);
@@ -61,7 +68,29 @@ function removeDir(dir) {
 }
 
 function createChildLifecycle({ dataDir = '', env = process.env, limits = {}, now = () => Date.now(), killTree = defaultKillTree, probeStarts = defaultProbeStarts,
-  freeMem = () => os.freemem(), totalMem = () => os.totalmem(), watchMs = DEFAULT_WATCH_MS, logger = console, hubPid = process.pid } = {}) {
+  freeMem = () => os.freemem(), totalMem = () => os.totalmem(), watchMs = DEFAULT_WATCH_MS, logger = console, hubPid = process.pid,
+  jobQos = () => require('./win32-job-qos').getWin32JobQos(), jobKinds = DEFAULT_JOB_KINDS } = {}) {
+  const jobKindSet = new Set(jobKinds || []);
+  const jobWatchTimers = new Set();
+  const qos = () => { try { return (typeof jobQos === 'function' ? jobQos() : jobQos) || null; } catch { return null; } };
+  // 结束盒子：根进程已退出立刻结束；还活着（调用方拿到结果先注销）就等它自己退出再结束，最多等 JOB_EXIT_WAIT_MS。
+  function endJob(e, { now: immediate = false } = {}) {
+    const key = e && e.jobKey;
+    if (!key) return;
+    e.jobKey = '';
+    const q = qos();
+    if (!q) return;
+    if (immediate || !pidAlive(e.pid)) { q.terminate(key).catch(() => null); return; }
+    const until = now() + JOB_EXIT_WAIT_MS;
+    const timer = setInterval(() => {
+      if (pidAlive(e.pid) && now() < until) return;
+      clearInterval(timer);
+      jobWatchTimers.delete(timer);
+      q.terminate(key).catch(() => null);
+    }, JOB_EXIT_POLL_MS);
+    timer.unref?.();
+    jobWatchTimers.add(timer);
+  }
   // 每个 Hub 实例只写自己名下的一份（审查 P2-2：原来共用一个文件、各拿旧快照整份覆盖，A/B 双开会稳定丢掉对方的 Edge 登记）。
   // 启动清理时扫目录里所有份，外加旧版的单文件 runtime/child-registry.json。
   const dir = dataDir ? path.join(dataDir, 'runtime', 'child-registry') : '';
@@ -107,7 +136,9 @@ function createChildLifecycle({ dataDir = '', env = process.env, limits = {}, no
   function register({ pid, kind = 'process', purpose = '', owner = '', userDataDir = '', maxLifeMs = 0, startedAt = now() } = {}) {
     if (!Number.isInteger(pid) || pid <= 0) return '';
     const id = `${kind}-${hubPid}-${++seq}`;
-    entries.set(id, { id, pid, kind, purpose, owner, userDataDir, startedAt, deadlineAt: maxLifeMs > 0 ? startedAt + maxLifeMs : 0 });
+    const entry = { id, pid, kind, purpose, owner, userDataDir, startedAt, deadlineAt: maxLifeMs > 0 ? startedAt + maxLifeMs : 0, jobKey: '' };
+    if (jobKindSet.has(kind)) { try { entry.jobKey = qos()?.assign(`task:${id}`, pid, { expectedStartMs: startedAt, maxStartMs: now() + 2000, layer: 'task' }) || ''; } catch { entry.jobKey = ''; } }
+    entries.set(id, entry);
     persist();
     ensureWatch();
     return id;
@@ -116,6 +147,7 @@ function createChildLifecycle({ dataDir = '', env = process.env, limits = {}, no
     const e = entries.get(id);
     if (!e) return false;
     entries.delete(id);
+    endJob(e);
     note(e, reason);
     persist();
     return true;
@@ -125,6 +157,7 @@ function createChildLifecycle({ dataDir = '', env = process.env, limits = {}, no
   function reclaim(id, reason = '回收') {
     const e = entries.get(id);
     if (!e) return false;
+    endJob(e, { now: true });
     const killed = pidAlive(e.pid) ? killTree(e.pid) : false;
     if (pidAlive(e.pid) && !killed) {
       e.failedAt = now(); e.deadlineAt = e.deadlineAt || now();
@@ -244,12 +277,14 @@ function createChildLifecycle({ dataDir = '', env = process.env, limits = {}, no
   // Hub 退出时同步收尾：自己登记的全部按 PID 结束。
   function shutdownSync() {
     for (const id of [...entries.keys()]) reclaim(id, 'Hub 退出');
+    for (const timer of jobWatchTimers) clearInterval(timer);
+    jobWatchTimers.clear();
     if (watchTimer) { clearInterval(watchTimer); watchTimer = null; }
   }
 
   function status() {
     const t = now();
-    const active = [...entries.values()].map(e => ({ pid: e.pid, kind: e.kind, purpose: e.purpose, owner: e.owner, ageSec: Math.round((t - e.startedAt) / 1000), deadlineInSec: e.deadlineAt ? Math.round((e.deadlineAt - t) / 1000) : null }));
+    const active = [...entries.values()].map(e => ({ pid: e.pid, kind: e.kind, purpose: e.purpose, owner: e.owner, jobKey: e.jobKey || '', ageSec: Math.round((t - e.startedAt) / 1000), deadlineInSec: e.deadlineAt ? Math.round((e.deadlineAt - t) / 1000) : null }));
     const queued = {}, used = {};
     for (const [k, s] of slots) { queued[k] = s.queue.length; used[k] = s.used; }
     return { ok: true, limits: { ...lim }, used, queued, active, recent: recent.slice(0, 10), memory: memory() };

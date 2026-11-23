@@ -21,6 +21,7 @@ const STALL_MS = 10 * 60 * 1000;
 const MISSING_ALERT_MS = 3 * 60 * 1000;
 const RETRY_BACKOFF_MS = [60 * 1000, 3 * 60 * 1000, 10 * 60 * 1000];
 const { PERSONAL_ACCOUNT_ID, PERSONAL_SHARED_NOTE } = require('./codeagent-accounts');
+const MemberWorktree = require('./member-worktree');
 const RESTART_COOLDOWN_MS = 30 * 60 * 1000;
 const NOWAKE_MAX_AGE_MS = 20 * 60 * 1000;
 const NOWAKE_MAX_COUNT = 8;
@@ -63,6 +64,7 @@ function createTeamService(deps) {
     memInfo = () => { const os = require('node:os'); return { free: os.freemem(), total: os.totalmem() }; },
   } = deps;
   // 主进程传 autoApproveLeadsDefault=true（默认开）；单测等未传时保持人工批准。
+  const prepareWorktree = deps.prepareWorktree || MemberWorktree.prepareMemberWorktree;
   const autoApproveLeads = () => (getConfig()?.team?.autoApproveLeads ?? deps.autoApproveLeadsDefault) === true;
   const antiStall = () => getConfig()?.team?.antiStall !== false;
   const teams = new Map();
@@ -219,6 +221,11 @@ function createTeamService(deps) {
   const reviveOf = (team, id) => team.revive?.[id] || { at: 0, failures: 0, error: '' };
   function setRevive(team, id, rec) { team.revive ||= {}; team.revive[id] = rec; }
   function clearRevive(team, id) { if (!team.revive?.[id]) return false; delete team.revive[id]; return true; }
+  function runtimeIssue(sid) {
+    const s = sid && sessionManager.getSession(sid);
+    if (!s) return null;
+    try { return require('../../core/session-runtime-issue').sessionRuntimeIssue(s); } catch { return null; }
+  }
   function sessionState(sid) {
     const s = sessionManager.getSession(sid);
     if (modelWaitFor(sid)) return 'waiting-model';
@@ -290,12 +297,13 @@ function createTeamService(deps) {
         if(model&&!require('../../core/codeagent-models').isSafeModelId(model))throw Error(`第 ${i+1} 人的模型名称无效`);
         // Valid model intent is resolved by the shared creation policy after approval.
         // Account availability and model syntax are still checked before approval.
-        if(model)model=(row.models || []).find(m=>m.toLowerCase()===model.toLowerCase()) || model;
+        // 同一模型的不同写法（线路前缀、内部 id、菜单显示名）换成账号清单里的写法（core/model-name-match.js）。
+        if(model)model=require('../../core/model-name-match').findSame(model,row.models || []) || model;
       }
       const cwd = String(raw?.cwd || '').trim();
       if (cwd && !fs.existsSync(cwd)) throw Error(`第 ${i + 1} 人的工作目录不存在：${cwd}`);
       return { role, task, kind, account, cwd, title: String(raw?.title || role).trim().slice(0, 40), model,
-        ...(raw?.fresh === true ? { fresh: true } : {}) };
+        ...(raw?.fresh === true ? { fresh: true } : {}), ...(raw?.worktree === false ? { worktree: false } : {}) };
     }) };
   }
   async function propose(callerSid, args) {
@@ -399,18 +407,38 @@ function createTeamService(deps) {
     }
     save(team);
     const lead = sessionManager.getSession(leadSid);
-    const created = [], failed = [];
+    const created = [], failed = [], modelFallbacks = [];
     for (const spec of plan.members) {
       if (frozen) break; // 未启动的名额留 creating，重启时转 interrupted 并通知负责人。
       const memberId = spec.memberId;
       const member = team.members.find(m => m.memberId === memberId);
       try {
         // 未选模型时沿用所选账号的默认模型；个人账号和普通个人会话走同一条启动路径。
-        const opts = { cwd: spec.cwd || lead?.cwd || undefined, title: spec.title, workspaceLabel: spec.title, openInBackground: true,
+        const baseCwd = spec.cwd || lead?.cwd || undefined;
+        // 工作目录是 git 仓库主目录时替成员建独立 worktree；同步预检不命中的成员不进异步流程，开工时序不变。
+        const worktree = (!deps.prepareWorktree && !MemberWorktree.mayNeedWorktree({ cwd: baseCwd, enabled: spec.worktree })) ? null
+          : await prepareWorktree({ cwd: baseCwd, memberId, leadSid, enabled: spec.worktree, now: now() }).catch(error => ({ error: error.message, repo: baseCwd }));
+        // 建好就落盘：进程这时退出，重启后也知道这份 worktree 属于谁（Codex 审查 P2）。
+        if (worktree) { member.worktree = worktree; spec.worktreeInfo = worktree; save(team); }
+        // 等 git 期间 Hub 开始关闭：不再建会话，名额留 creating，重启时按 interrupted 通知负责人（Codex 审查 P1）。
+        if (frozen) break;
+        const opts = { cwd: worktree?.path || baseCwd, title: spec.title, workspaceLabel: spec.title, openInBackground: true,
           ...(spec.account === PERSONAL_ACCOUNT_ID ? { codeagentAccount: 'personal' } : { codeagentAccount: 'pool', codeagentPoolPick: spec.account }),
           modelCreationContext: `负责人 ${lead?.title || leadSid} / 新成员 ${spec.title || spec.role}` };
         if (spec.model) { opts.model = spec.model; opts.codeagentModelPick = true; }
-        const session = await createSession({ kind: spec.kind, opts });
+        let session;
+        try { session = await createSession({ kind: spec.kind, opts }); }
+        catch (error) {
+          // 指定的模型没选上不让成员缺席：退回账号默认模型再建一次，并给负责人一行说明；默认模型也建不成才算失败。
+          // 只有明确的「模型不可用」才退回默认模型；登录、CLI 启动、目录与权限等错误原样报出。
+          // 用户在模型确认里点了取消（或确认界面中途丢失）是明确的「不建」，照旧不建。
+          if (!spec.model || frozen || error?.notCreated || error?.stopped || !modelUnavailable(error)) throw error;
+          const { model: _model, codeagentModelPick: _pick, ...plain } = opts;
+          session = await createSession({ kind: spec.kind, opts: plain });
+          modelFallbacks.push(`${spec.title}：模型 ${spec.model} 没选上（${String(error?.message || error).slice(0, 120)}），已用账号默认模型建会话`);
+          spec.model = ''; member.model = '';
+          if (session?.id) sendToRenderer('session-notice', { sessionId: session.id, level: 'warning', message: modelFallbacks[modelFallbacks.length - 1] });
+        }
         if (!session?.id) throw Error('Hub 没返回新会话');
         const account = spec.account || session.codeagentPoolAccount;
         const actualModel = session.fixedModel || session.currentModel?.id || spec.model;
@@ -431,8 +459,15 @@ function createTeamService(deps) {
     const roster = created.map(m => `${m.memberId} ${m.title}`).join('、');
     const sharedAccountNote = created.some(m => m.account === PERSONAL_ACCOUNT_ID) ? `用个人账号的成员：${PERSONAL_SHARED_NOTE}。同时最多 ${PERSONAL_MEMBER_LIMIT} 位在干活，其余自动排队。` : '';
     enqueue(team, 'hub', LEAD, `${byRule ? '已按规则自动批准' : approver + '批准了'}招人计划 ${plan.id}${note ? '（备注：' + note + '）' : ''}。已建成员：${roster || '无'}。` +
-      (failed.length ? `未建成：${failed.join('；')}。` : '') + '已创建成员的开工任务已排队；用 status 查看全队状态。' + sharedAccountNote, { wake: true });
-    return { ok: true, status: 'approved', created: created.map(m => m.memberId), failed, ...(sharedAccountNote ? { sharedAccountNote } : {}) };
+      (failed.length ? `未建成：${failed.join('；')}。` : '') + (modelFallbacks.length ? `模型退回默认：${modelFallbacks.join('；')}。` : '') + '已创建成员的开工任务已排队；用 status 查看全队状态。' + sharedAccountNote, { wake: true });
+    return { ok: true, status: 'approved', created: created.map(m => m.memberId), failed, ...(modelFallbacks.length ? { modelFallbacks } : {}), ...(sharedAccountNote ? { sharedAccountNote } : {}) };
+  }
+
+  // 建会话时明确因模型本身不可用而失败：固定模型判定不可用（session-model-pin），或号上没有这个模型的权限。
+  // 选模型熔断（CODEAGENT_MODEL_PICK_BREAKER_OPEN）是账号连续选模型失败后的暂停，不是模型不可用，原样报出。
+  function modelUnavailable(error) {
+    if (error?.code === 'SESSION_MODEL_UNAVAILABLE') return true;
+    return /没有所选模型的权限|没有 \S+ 的权限/.test(String(error?.message || ''));
   }
 
   function kickoff(team, member, spec, plan) {
@@ -442,6 +477,7 @@ function createTeamService(deps) {
       `团队目标：${plan.goal}`,
       `你的任务：${spec.task}`,
       '',
+      ...MemberWorktree.kickoffLines(member.worktree),
       '通信规矩：',
       `- 向负责人汇报：\`"${cmd}" send --to lead --message "结论 + 文件路径"\`。默认留言，攒满 8 条或最老一条超过 20 分钟时负责人空闲就会收到；卡住、失败、要拍板或影响别人判断的发现，加 \`--wake\`。`,
       ...(antiStall() ? [`- 任务做完、交可验收的结果时加 \`--deliver\`（\`"${cmd}" send --to lead --deliver --message "…"\`）：负责人收到并处理完后，Hub 让你离队休眠、腾出内存；要返工负责人直接发消息，Hub 会叫醒你接着干。汇报进度、提问、卡住时不加。`] : []),
@@ -997,13 +1033,22 @@ function createTeamService(deps) {
       you: member.memberId, leadSid: team.leadSid,
       members: [{ memberId: LEAD, title: sessionManager.getSession(team.leadSid)?.title || '负责人', state: sessionState(team.leadSid), reason: modelWaitFor(team.leadSid)?.reason || '', runtime: runtimeOf(team.leadSid) }]
         .concat((team.members || []).map(m => ({ memberId: m.memberId, title: m.title, role: m.role, kind: m.kind, account: m.account, ...(m.model ? { model: m.model } : {}), runtime: runtimeOf(m.sid), status: m.status, state: m.status === 'dismissed' ? 'dismissed' : sessionState(m.sid), reason: modelWaitFor(m.sid)?.reason || '',
-          ...(m.deliveredAt ? { delivered: true } : {}), ...(m.dismissReason ? { dismissReason: m.dismissReason } : {}) }))),
+          ...(m.deliveredAt ? { delivered: true } : {}), ...(m.dismissReason ? { dismissReason: m.dismissReason } : {}),
+          ...memberExtras(m) }))),
       plans: member.memberId === LEAD ? (team.plans || []).map(p => ({ id: p.id, status: p.status, size: p.members.length, note: p.note || '' })) : undefined,
       grants: team.grants,
       messages: mine.map(m => deliveryView(team, m)),
       pendingForYou: mine.filter(m => m.to === member.memberId && ['queued', 'sending', 'waiting-model', 'unconfirmed'].includes(m.state)).map(m => ({ ...deliveryView(team, m), text: m.text, sourceId: m.sourceId, bodyPath: m.bodyPath, wake: m.wake !== false })),
       undelivered: mine.filter(m => m.from === member.memberId && ['queued', 'sending', 'waiting-model', 'failed', 'unconfirmed'].includes(m.state)).map(m => ({ ...deliveryView(team, m), text: m.text.slice(0, 200), error: m.error || '' })),
     };
+  }
+  function memberExtras(m) {
+    const out = {};
+    const issue = m.status !== 'dismissed' && runtimeIssue(m.sid);
+    if (issue) out.error = `${issue.label}：${issue.message}`;
+    if (m.worktree?.path) out.worktree = { path: m.worktree.path, branch: m.worktree.branch, base: m.worktree.base };
+    else if (m.worktree?.error) out.worktreeError = m.worktree.error;
+    return out;
   }
   function runtimeOf(sid) {
     const s = sessionManager.getSession(sid);

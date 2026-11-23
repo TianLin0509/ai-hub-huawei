@@ -3,10 +3,15 @@
   "tests/unit-ppt-work-dir.test.js",
   "tests/unit-feature-agent-safety.test.js",
   "tests/unit-feature-agent-choice.test.js",
+  "tests/unit-codeagent-lite.test.js",
+  "tests/unit-codeagent-lite-persist.test.js",
+  "tests/unit-session-close-sweep.test.js",
   "tests/unit-codeagent-member-mcp.test.js",
   "tests/unit-overhead-p0a-codeagent.test.js",
   "tests/unit-overhead-p0b-hubh.test.js",
   "tests/unit-low-overhead-mode-p1.test.js",
+  "tests/unit-win32-job-qos.test.js",
+  "tests/unit-p2-layered-job-eco.test.js",
   "tests/unit-assistant-provider-route.test.js",
   "tests/unit-own-api-secrets.test.js",
   "tests/unit-capability-market-visibility.test.js",
@@ -77,6 +82,7 @@
   "tests/unit-company-meeting-speed.test.js",
   "tests/unit-company-team-accounts.test.js",
   "tests/unit-company-team-service.test.js",
+  "tests/unit-company-team-member-worktree.test.js",
   "tests/unit-company-team-wiring.test.js",
   "tests/unit-group-answer-recovery.test.js",
   "tests/unit-renderer-crash-recovery.test.js",
@@ -367,5 +373,6 @@
   "tests/unit-groupchat-enter-extract.test.js",
   "tests/unit-groupchat-answer-card-r13.test.js",
   "tests/unit-main-thread-periodic-io.test.js",
-  "tests/unit-low-overhead-mode.test.js"
+  "tests/unit-low-overhead-mode.test.js",
+  "tests/unit-release-smoke-20261123.test.js"
 ]

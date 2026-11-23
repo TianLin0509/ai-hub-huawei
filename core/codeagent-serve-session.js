@@ -64,7 +64,7 @@ class CodeAgentServeSession extends AcpSession {
   async configure({ model, effort } = {}, starting = false) {
     if (!starting) await this.start();
     if (this.active) throw new Error('请等待当前轮次结束后修改模型');
-    if (effort && !starting) throw new Error('ACP 试点暂不支持切换思考强度，请用 PTY 方式');
+    if (effort && !starting) throw new Error('CodeAgent-Lite 暂不支持切换思考强度，请用 PTY 方式');
     if (model) {
       if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(model)) throw new Error('模型名称无效');
       if (this.client.model !== model) { this.client.model = model; this.client.provider = ''; await this.client._resolveProvider(); }

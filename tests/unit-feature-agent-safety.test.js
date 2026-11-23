@@ -7,7 +7,8 @@ function temp(t) { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'feature-ag
 test('工具会话不提供未受控的后端，旧选择回默认且保留恢复提示', t => {
   const dir = temp(t), ids = ['assistant', 'ppt', 'pptMake', 'pptImgtext', 'avatar', 'forum', 'meeting', 'text'];
   for (const id of ids) for (const kind of ['claude', 'codex', 'deepseek-acp', 'qwen', 'glm']) {
-    assert.deepEqual(choices.FEATURES.find(f => f.id === id).kinds, ['codeagent']);
+    // 会话功能只开放 CodeAgent 及其省内存方式 CodeAgent-Lite（同一 CLI、同一受控 MCP，2026-11-23）。
+    assert.deepEqual(choices.FEATURES.find(f => f.id === id).kinds, ['codeagent', 'codeagent-lite']);
     assert.throws(() => choices.set(dir, id, { kind, model: '' }, { backends: [{ kind, available: true, models: [] }] }));
     routes.setFeaturePreference(dir, id, { kind, model: '' });
     const opts = { purpose: 'company-assistant', autonomous: true };

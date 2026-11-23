@@ -204,7 +204,7 @@ function pickAccount(accounts, { model = '' } = {}) {
   if (!usable.length) return null;
   const wanted = String(model || '').toLowerCase();
   const fit = a => !wanted ? (a.modelsAuthoritative && a.models.length ? 0 : 1)
-    : a.models.some(m => m.toLowerCase() === wanted) ? 0 : a.modelsAuthoritative ? 2 : 1;
+    : a.models.some(m => m.toLowerCase() === wanted || require('./model-name-match').sameModel(m, model)) ? 0 : a.modelsAuthoritative ? 2 : 1;
   const candidates = usable.filter(a => fit(a) < 2);
   if (!candidates.length) return null;
   const switchedBusy = a => (!wanted && a.routeSwitched && a.activeSessions > 0 ? 1 : 0);
@@ -222,7 +222,7 @@ function pickAutoChoice(accounts, personal, { model = '' } = {}) {
   if (account) return { account };
   if (!personal || personal.state !== 'ready' || personal.avoid) return null;
   const wanted = String(model || '').toLowerCase();
-  if (wanted && personal.modelsAuthoritative && !(personal.models || []).some(m => String(m).toLowerCase() === wanted)) return null;
+  if (wanted && personal.modelsAuthoritative && !(personal.models || []).some(m => String(m).toLowerCase() === wanted || require('./model-name-match').sameModel(m, model))) return null;
   return { personal: true };
 }
 
