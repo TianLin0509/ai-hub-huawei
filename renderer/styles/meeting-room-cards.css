@@ -331,6 +331,14 @@ body.mr-card-compare-on .mr-ft.compare-selected:hover {
   color: var(--text-secondary, var(--fg-muted));
   font-size: 11px;
 }
+/* 本轮进度紧凑版：消息区上方一行，不挤占阅读区 */
+.mr-turn-lane.is-compact { display: flex; align-items: center; gap: 10px; margin: 6px 14px 2px; padding: 4px 8px; }
+.mr-turn-lane.is-compact .mr-turn-lane-head { margin-bottom: 0; flex: 0 0 auto; gap: 6px; }
+.mr-turn-lane.is-compact .mr-turn-lane-grid { display: flex; flex-wrap: nowrap; gap: 6px; min-width: 0; overflow: hidden; flex: 1; }
+.mr-turn-lane.is-compact .mr-turn-lane-item { min-height: 26px; padding: 2px 6px; gap: 5px; flex: 0 1 auto; }
+.mr-turn-lane.is-compact .mr-turn-lane-item img { width: 18px; height: 18px; flex-basis: 18px; }
+.mr-turn-lane.is-compact .mr-turn-lane-main { flex-direction: row; gap: 4px; align-items: baseline; }
+.mr-turn-lane.is-compact .mr-turn-lane-name { max-width: 9em; }
 .mr-turn-lane-item.is-done { border-color: rgba(var(--rgb-success), 0.34); background: rgba(var(--rgb-success), 0.07); }
 .mr-turn-lane-item.is-running { border-color: rgba(var(--rgb-info), 0.34); background: rgba(var(--rgb-info), 0.08); }
 .mr-turn-lane-item.is-warn { border-color: rgba(var(--rgb-danger), 0.36); background: rgba(var(--rgb-danger), 0.08); }

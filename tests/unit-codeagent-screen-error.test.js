@@ -2,6 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { createScreenErrorWatch, findScreenErrors, describeScreenError } = require('../core/codeagent-screen-error');
+const { classifyModelRevocation } = require('../core/codeagent-model-revoked');
 
 // 2026-11-17 反馈里的真实屏幕（CodeAgent 1.2615.02.03），节选。
 const SAMPLE = [
@@ -100,4 +101,19 @@ test('an error first seen while idle stays baseline for the next turn', async ()
   entry.agentTurnActive = true; entry.lastOutputAt = 2;
   await watch.tick();
   assert.strictEqual(finished.length, 0);
+});
+
+test('model permission revocation rules cover Chinese and English CLI wording', () => {
+  const samples = [
+    'SessionRequestError 当前模型 GLM-5.2-WX-Auto 可能已经升级或被调整了权限，请更换模型',
+    'SessionRequestError model GLM-5.2-WX-Auto is no longer available for this account: permission denied',
+    'SessionRequestError 模型 GLM-5.2-WX-Auto 已下线，请选择可用模型',
+  ];
+  for (const text of samples) assert.equal(classifyModelRevocation(text, { source: 'codeagent-screen-error' })?.kind, 'model-revoked');
+});
+
+test('ordinary assistant text quoting the warning cannot trigger model recovery', () => {
+  assert.equal(classifyModelRevocation('用户粘贴：当前模型可能已经升级或被调整了权限。', { source: 'assistant', role: 'assistant' }), null);
+  assert.equal(classifyModelRevocation('当前模型可能已经升级或被调整了权限。', { source: 'transcript', role: 'assistant' }), null);
+  assert.equal(classifyModelRevocation('SessionRequestError 工具配置失败，请检查工作区。', { source: 'codeagent-screen-error' }), null);
 });

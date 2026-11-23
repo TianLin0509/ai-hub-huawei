@@ -361,6 +361,8 @@ class MeetingCompanion {
   }
   // 这场会议理解会话用的终端和模型。key 变了就换会话（shouldRotate）。
   engineFor(m) {
+    const selected = require('../feature-agent-choice').resolve(this.a.deps?.dataDir, 'meeting').selected;
+    if (selected) return { harness: selected.kind, model: selected.model, key: JSON.stringify(selected), label: require('../feature-agent-choice').LABELS[selected.kind], choice: selected };
     if (!this.deps.meetingTerminals) { const model = selectedModel(m, this.deps); return { harness: 'codeagent', model, key: model, label: 'CodeAgent' }; }
     const e = engine.choose(m, this.terminals(), m.speed || 'normal', this.deps.meetingDefaultEngine?.() || '');
     return { harness: e.harness, model: e.model, key: e.id, label: e.label };
@@ -445,7 +447,11 @@ class MeetingCompanion {
     await this.tools.start(); this.tools.bind(this.load(id));
     if (!this.deps.getSession(sid)) {
       if (this.deps.getSessionMetadata?.(sid)) await this.deps.resumeSession?.(sid);
-      else await this.deps.createSession(picked.harness, { id: sid, cwd: this.dir(id), title: lane.title + ' · ' + m.title, purpose: 'company-assistant', autonomous: true, noInheritCursor: true, ...(picked.model ? { model: picked.model } : {}) });
+      else {
+        const chosen = require('../feature-agent-choice').session(this.a.deps?.dataDir, 'meeting', picked.harness,
+          { id: sid, cwd: this.dir(id), title: lane.title + ' · ' + m.title, purpose: 'company-assistant', autonomous: true, noInheritCursor: true, ...(picked.model ? { model: picked.model } : {}) });
+        await this.deps.createSession(chosen.kind, chosen.opts);
+      }
     }
     m = this.load(id); m[lane.model] = model; m[lane.protocol] = 2; if (slot === 'job') m.engineLabel = picked.label;
     if (m[lane.agent]?.state === 'error') m[lane.prime] = true;
@@ -636,11 +642,14 @@ class MeetingCompanion {
     const job = m[slot]; if (!job) return;
     if (slot === 'questionJob' && job.engine === 'ask-aside') return this.collectAside(m);
     const lane = this.lane(slot), sid = job.sessionId || m[lane.sid];
+    const answer = this.a.lastFinal(sid);
+    const marked = answer?.id && answer.id !== job.baseline && answer.text?.includes(job.token);
+    const gone = marked ? '' : this.a.sessionGone?.(sid);
+    if (gone) { this.fail(m.id, new Error(gone), slot); return; }
     if (this.a.sessionBusy(sid)) {
       if (this.now() - job.sentAt > 24 * 60000) { m[lane.error] = `${lane.title}仍在处理，已等待超过 24 分钟；采集继续，可打开会话检查。`; this.save(m); }
       return;
     }
-    const answer = this.a.lastFinal(sid);
     if (answer?.id && answer.id !== job.baseline && answer.text?.includes(job.token)) {
       const text = answer.text.replace(new RegExp(`\\[?\\s*会议回执\\s*[:：]\\s*${job.token}\\s*\\]?`, 'g'), '').trim();
       if (!text) { this.fail(m.id, new Error(`${lane.title}返回了空回复；采集继续，可重试。`), slot); return; }

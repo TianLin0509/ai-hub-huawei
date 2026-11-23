@@ -62,16 +62,27 @@ function createSquadEngine(deps) {
       if (orch && turnNum) orch.appendSystemNote(turnNum, text, { kind: 'squad' });
     } catch (error) { logger.warn?.('[squad] note failed:', error.message); }
   }
-  function textOf(result, sid) {
-    const item = (result?.results || []).find(r => r && r.sid === sid);
-    return item && ['completed', 'manual_extracted'].includes(item.status || 'completed') ? String(item.text || '') : '';
+  // 群聊卡片上的正文（回答文件）优先：成员把详细回答和派工块写进回答文件、聊天里只给摘要时，
+  // 也按群里看到的那份来读；卡片还没内容才退回聊天里的最终回复。
+  function cardText(id, result, sid) {
+    try {
+      const n = Number(result?.turnNum);
+      const msg = n && (getOrchestrator(id)?.state?.messages || []).find(m => m && m.role === 'assistant'
+        && m.sid === sid && Number(m.turnNum) === n && !m.supplementReply && m.status !== 'progress_update');
+      return String(msg?.content || '').trim();
+    } catch { return ''; }
   }
-  function failed(result, sid) {
+  function textOf(result, sid, id) {
+    const item = (result?.results || []).find(r => r && r.sid === sid);
+    if (!item || !['completed', 'manual_extracted'].includes(item.status || 'completed')) return '';
+    return (id && cardText(id, result, sid)) || String(item.text || '');
+  }
+  function failed(result, sid, id) {
     if (!result || result.status !== 'completed') return result?.reason || result?.status || '派发失败';
     if (result.interrupted) return '已停止';
     const item = (result.results || []).find(r => r && r.sid === sid);
     if (!item) return '没有收到回答';
-    if (['completed', 'manual_extracted'].includes(item.status || 'completed') && String(item.text || '').trim()) return '';
+    if (['completed', 'manual_extracted'].includes(item.status || 'completed') && textOf(result, sid, id).trim()) return '';
     if (['completed', 'manual_extracted'].includes(item.status || 'completed')) return '交回的内容是空的';
     return item.reason || item.status || '没有收到回答';
   }
@@ -174,7 +185,7 @@ function createSquadEngine(deps) {
       if (!meeting) return;
       const list = members(meeting);
       const leader = list.find(m => m.memberId === run.leaderMemberId);
-      const leaderFailure = leader ? failed(result, leader.sid) : '负责人不在群里';
+      const leaderFailure = leader ? failed(result, leader.sid, id) : '负责人不在群里';
       if (leaderFailure) {
         run.status = 'error';
         run.note = leaderFailure === 'cli_not_ready'
@@ -192,7 +203,7 @@ function createSquadEngine(deps) {
         const hit = r.targets[0];
         return hit && hit.memberId !== leader.memberId ? { memberId: hit.memberId, label: hit.label || hit.displayName } : null;
       };
-      const plan = run.round >= run.maxRounds ? null : P.parseDispatch(textOf(result, leader.sid), resolve);
+      const plan = run.round >= run.maxRounds ? null : P.parseDispatch(textOf(result, leader.sid, id), resolve);
       if (plan && plan.skipped.length) {
         note(id, run.turnNum, `派工里的 @${plan.skipped.join('、@')} 没对上群成员或没写任务，已跳过。`);
       }
@@ -228,7 +239,7 @@ function createSquadEngine(deps) {
       const settle = (tasks, res) => {
         for (const task of tasks) {
           const member = list.find(m => m.memberId === task.memberId);
-          const reason = res ? failed(res, member && member.sid) : '已停止';
+          const reason = res ? failed(res, member && member.sid, id) : '已停止';
           outcomes.push({ memberId: task.memberId, label: task.label, ok: !reason, reason });
           const step = run.steps.find(s => s.memberId === task.memberId);
           if (step) step.state = reason ? (run.abort ? 'stopped' : 'failed') : 'done';

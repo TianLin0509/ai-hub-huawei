@@ -26,7 +26,7 @@ class FleetService {
   constructor(deps) {
     this.d = deps; this.now = deps.now || (() => Date.now());
     this.legacy = new AvatarService({ dataDir: deps.dataDir, getAssistant: deps.getAssistant, runAi: deps.runAi, now: this.now, noTimer: true });
-    this.sessions = new AgentSessions({ dataDir: deps.dataDir, createSession: deps.createSession, sendPrompt: deps.sendPrompt, lastFinal: deps.lastFinal, getSession: deps.getSession, closeSession: deps.closeSession, pollMs: deps.pollMs, now: this.now, pickAccount: model => this.pickAccount(model) });
+    this.sessions = new AgentSessions({ dataDir: deps.dataDir, createSession: deps.createSession, sendPrompt: deps.sendPrompt, lastFinal: deps.lastFinal, getSession: deps.getSession, closeSession: deps.closeSession, readTerminalScreen: deps.readTerminalScreen, pollMs: deps.pollMs, now: this.now, pickAccount: model => this.pickAccount(model) });
     this.timer = null; this.ticking = false; this.running = new Set(); this.sending = new Set(); this.live = new Map(); this.hotAt = 0; this.prep = null; this.readError = ''; this.lastError = ''; this.recovered = new Set();
   }
   assistant() { return this.legacy.assistant(); }

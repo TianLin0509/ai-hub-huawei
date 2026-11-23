@@ -1322,6 +1322,7 @@ class GroupChatOrchestrator {
     const providerTurnIdBy = isExistingTurn && turn.providerTurnIdBy && typeof turn.providerTurnIdBy === 'object' ? turn.providerTurnIdBy : {};
     const failureBy = isExistingTurn && turn.failureBy && typeof turn.failureBy === 'object' ? turn.failureBy : {};
     const runId = String(opts.runId || (this.state.activeRun && this.state.activeRun.runId) || (turn && turn.runId) || '');
+    for (const r of results) if (r && r.sid) this._fillAnswerFromChat(turnNum, r.sid, r.text, r.status);
     // 一位 AI 先完成、其他成员仍在跑时，patchTurnResult 会先把可用结果写进 messages。
     // 完整 turn 尚未建立时从这些持久消息恢复合并基线，避免最后一个成员结算时把
     // 先到结果（尤其手动同步救回的结果）覆盖或清空。
@@ -1596,6 +1597,25 @@ class GroupChatOrchestrator {
     this._saveState('answer_file_registered', { turnNum, sid });
   }
   answerFileFor(turnNum, sid) { return this.state.answerFiles?.[String(Number(turnNum))]?.[sid] || null; }
+  // 成员本轮正常答完但没写回答文件：把聊天里的最终回复落成回答文件并立即应用到卡片，
+  // 免得流式时看得到的正文在结算瞬间变回「还没交」，小队与下一轮上下文也拿得到这份回答。
+  _fillAnswerFromChat(turnNum, sid, text, status) {
+    if ((status || 'completed') !== 'completed' || !String(text || '').trim()) return false;
+    const entry = this.answerFileFor(turnNum, sid);
+    if (!entry || entry.kind !== 'plain') return false;
+    try {
+      const GroupAnswers = require('./group-answer-files');
+      if (!GroupAnswers.fillFromChat(entry, text)) return false;
+      const got = GroupAnswers.read(entry);
+      if (!got) return false;
+      this.applyAnswerFile(turnNum, sid, got);
+      entry.sig = GroupAnswers.signature(entry);
+      return true;
+    } catch (error) {
+      console.warn('[group-chat] 聊天回复写入回答文件失败:', error && error.message);
+      return false;
+    }
+  }
   applyAnswerFile(turnNum, sid, { state, outcome = null, text, hash, readError = null }) {
     const entry = this.answerFileFor(turnNum, sid);
     if (!entry || (entry.hash === hash && entry.state === state && entry.outcome === outcome && (entry.readError || null) === readError)) return false;
@@ -1653,6 +1673,7 @@ class GroupChatOrchestrator {
     const attemptIdBy = pending ? {} : (turn.attemptIdBy = turn.attemptIdBy || {});
     const providerTurnIdBy = pending ? {} : (turn.providerTurnIdBy = turn.providerTurnIdBy || {});
     const failureBy = pending ? {} : (turn.failureBy = turn.failureBy || {});
+    this._fillAnswerFromChat(turnNum, sid, text, status);
     let msg = this.state.messages.find(m => m && Number(m.turnNum) === Number(turnNum)
       && m.role === 'assistant' && m.sid === sid && !m.supplementReply && !isProgressUpdateMessage(m));
     if (status === 'handed_off' && !String(text || '').trim()

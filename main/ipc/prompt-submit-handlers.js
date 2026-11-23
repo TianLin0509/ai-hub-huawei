@@ -575,8 +575,21 @@ function registerPromptSubmitIpc(ipcMain, deps) {
     });
   });
 
+  // 模型在一轮已经提交后才被收回时，原有回执不会再走“未发送补发”路径。
+  // 切换模型确认完成后，用新的提交编号重发内存里的最后一条正文，避免复用旧回执。
+  async function resendAfterModelSwitch(sessionId, options = {}) {
+    const kind = resolveKind(sessionId);
+    const prompt = lastPromptBySid.get(sessionId);
+    if (!kind || !prompt) return { ok: false, notSent: true, error: 'no-prompt' };
+    const clientSubmissionId = typeof options.clientSubmissionId === 'string' && options.clientSubmissionId
+      ? options.clientSubmissionId : `model-revoked-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return submitPrompt(null, { sessionId, text: prompt, clientSubmissionId, waitForCliReady: true,
+      waitForModelConfirmation: false, preserveInput: true });
+  }
+
   return {
     submitPrompt,
+    resendAfterModelSwitch,
     isAssistantSubmissionPending:sessionId=>assistantSubmissions.has(sessionId),
     dispose() {
       nativeDraftStore?.close();

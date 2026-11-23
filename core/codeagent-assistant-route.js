@@ -91,4 +91,11 @@ function connection(configDir, provider = '') {
     return { provider: id, address: /^https?:$/.test(u.protocol) ? u.origin + u.pathname : '' };
   } catch { return { provider: id, address: '' }; }
 }
-module.exports = { choose, preference, setPreference, lastSuccessful, rememberSuccess, connection, modelOptions, matchesSession, repairAction };
+// 功能选型复用这份账号线路文件；旧助理设置继续由原接口管理。
+function featurePreference(dataDir, feature) { return read(dataDir).featureChoices?.[feature] || null; }
+function setFeaturePreference(dataDir, feature, choice) {
+  const choices = { ...read(dataDir).featureChoices };
+  if (choice) choices[feature] = choice; else delete choices[feature];
+  write(dataDir, 'personal', { featureChoices: choices });
+}
+module.exports = { choose, preference, setPreference, lastSuccessful, rememberSuccess, connection, modelOptions, matchesSession, repairAction, featurePreference, setFeaturePreference };

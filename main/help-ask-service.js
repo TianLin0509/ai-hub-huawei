@@ -19,7 +19,7 @@ function createHelpAskService({ getHubDataDir, distribution = require('../core/d
   createEngine = options => require('../core/help-ask/engine').createHelpAskEngine(options), env = process.env, logger = console } = {}) {
   const dataDir = getHubDataDir();
   const edition = editionOf(distribution);
-  const engine = createEngine({ dataDir, edition, env, getPreferred: () => getConfig()?.helpAsk?.engine || '' });
+  const engine = createEngine({ dataDir, edition, env, getConfig, getPreferred: () => getConfig()?.helpAsk?.engine || '' });
   const dir = path.join(dataDir, 'help-ask');
   let running = null;
 

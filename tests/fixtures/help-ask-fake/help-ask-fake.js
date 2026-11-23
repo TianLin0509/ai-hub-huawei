@@ -18,9 +18,13 @@ if (args[0] === '--help') {
   process.stdin.on('end', () => {
     const readOnly = args.includes('--tools') && args[args.indexOf('--tools') + 1] === '' && args.includes('--strict-mcp-config');
     if (!readOnly) return reply({ type: 'result', is_error: true, result: '测试替身：没收到只读参数' });
+    const model = args.includes('--model') ? args[args.indexOf('--model') + 1] : 'CLI 默认';
+    if (model === 'fixture-auth-failure') return reply({ type: 'result', is_error: true, result: 'Not logged in: fixture auth failure' });
     const q = (/【用户问题】\n([\s\S]*)$/.exec(input) || [])[1] || '';
+    if (model === 'fixture-model-denied' || q.includes('换模型仍失败出口')) return reply({ type: 'result', is_error: true,
+      result: `您当前的模型 ${model} 可能已经升级或被调整了权限` });
     const hasManual = input.includes('【使用说明书开始】') && input.includes('## 2. 界面地图');
-    const answer = `【测试替身】${hasManual ? '已收到说明书' : '没收到说明书'}，只读参数已带上。你问的是：${q.trim()}\n\n设置菜单 →「⚙️ 设置」→「回车键」。`;
+    const answer = `【测试替身】${hasManual ? '已收到说明书' : '没收到说明书'}，只读参数已带上，模型：${model}。你问的是：${q.trim()}\n\n设置菜单 →「⚙️ 设置」→「回车键」。`;
     setTimeout(() => reply({ type: 'result', is_error: false, result: answer }), 2500);
   });
 } else {

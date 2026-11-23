@@ -142,4 +142,18 @@ function reconcile(orch,{changedPaths=null}={}) {
   return changed;
 }
 
-module.exports = { enabled, legacyWorkflow, entryFor, instruction, read, reconcile, RECENT_TURNS };
+// 普通回答：成员本轮正常答完、却没写回答文件时，把它在聊天里的最终回复写成回答文件，
+// 卡片正文仍只来自文件。已有内容或暂时读不出的文件一律不动。返回是否写入了文件。
+function fillFromChat(entry, text) {
+  const body = String(text || '').trim();
+  if (!entry || entry.kind !== 'plain' || !entry.ready || !body) return false;
+  try { if (readText(entry.ready)) return false; } catch { return false; }
+  fs.mkdirSync(path.dirname(entry.ready), { recursive: true });
+  const tmp = `${entry.ready}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, `${body}
+`, 'utf8');
+  fs.renameSync(tmp, entry.ready);
+  delete entry.sig;
+  return true;
+}
+module.exports = { enabled, legacyWorkflow, entryFor, instruction, read, reconcile, fillFromChat, signature, RECENT_TURNS };

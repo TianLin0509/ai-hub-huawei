@@ -1658,6 +1658,7 @@ class SessionManager extends EventEmitter {
   }
 
   createSession(kind = 'powershell', opts = {}) {
+    require('./feature-agent-choice').assertSessionKind(kind, opts);
     require('./company-ai-policy').assertKind(kind);
     // 群聊成员没有人盯着终端：权限模式只给用户自己开的会话，群聊（含从普通会话分支到群聊）一律走缺省旁路。
     if (opts && opts.meetingId && opts.permissionMode) { opts = { ...opts }; delete opts.permissionMode; }
@@ -1820,6 +1821,7 @@ class SessionManager extends EventEmitter {
   }
 
   _createSession(kind = 'powershell', opts = {}) {
+    require('./feature-agent-choice').assertSessionKind(kind, opts);
     if (this._isShuttingDown || this.restartPending) {
       throw new Error('Hub is shutting down; refusing to create a new PTY');
     }
@@ -2013,7 +2015,7 @@ class SessionManager extends EventEmitter {
       const defaultTarget = hubDefaultTarget || (codeagentPool ? codeAgentRouteModel(opts) || codeagentPool.model
           || pool.strictDefaultModel(pool.readSettingsModel(codeagentPool.account.dir), codeagentPool.account.models, { authoritative: !!codeagentPool.account.modelsAuthoritative }).model || ''
         : codeAgentExpectedModel({}, { configDir: codeagentConfig.configDir, single: true }));
-      const assistantRoute = ['company-assistant', 'avatar-agent'].includes(opts.purpose)
+      const assistantRoute = ['company-assistant', 'avatar-agent'].includes(opts.purpose) && !opts.featureAgentChoice
         ? require('./codeagent-assistant-route').choose(getHubDataDir(), codeagentPool ? codeagentPool.account.id : 'personal', defaultTarget,
           { configDir: codeagentConfig.configDir, explicitModel: codeAgentRouteModel(opts) }) : null;
       if (assistantRoute) opts = { ...opts, ...require('./codeagent-model-choice').routeFields(assistantRoute) };
@@ -2848,6 +2850,7 @@ class SessionManager extends EventEmitter {
       // switch into a newly-created session.
       completionNotificationEnabled: opts.completionNotificationEnabled === true,
       ...(opts.purpose ? { purpose: String(opts.purpose) } : {}),
+      ...(opts.featureAgent ? { featureAgent: opts.featureAgent, featureAgentChoice: opts.featureAgentChoice } : {}),
       ...(writingContextWarning ? { writingContextWarning } : {}),
       ...(hubRulesSystem ? { hubRulesSystem: SessionManager.hubRulesRecord(hubRulesSystem) } : {}),
       ...(opts.researchSessionId ? { researchSessionId: String(opts.researchSessionId) } : {}),
@@ -4961,6 +4964,7 @@ try {
       ...(info.provider ? { provider: info.provider } : {}),
       ...(info.nativeSession ? { nativeSession: info.nativeSession } : {}),
       ...(info.purpose ? { purpose: info.purpose } : {}),
+      ...(info.featureAgent ? { featureAgent: info.featureAgent, featureAgentChoice: info.featureAgentChoice } : {}),
       writingContextWarning: info.writingContextWarning || null,
       userContextWarning: info.userContextWarning || null,
       ...(info.researchSessionId ? { researchSessionId: info.researchSessionId } : {}),

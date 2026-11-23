@@ -53,7 +53,7 @@ function render(row,meeting,onRefresh,onError) {
         if(!row.isConnected || !row.getClientRects().length || row.dataset.deliveryMeeting!==id)return;
         const result=await window.FileManagerPanel.open({cwd:r.dir,label:'工作流交付'});if(!result?.ok)throw new Error(result?.error || '打开失败');return;
       }
-      if(b.dataset.delivery==='cancel' && !window.confirm('结束本次任务？已交付文件与记录会保留，之后可输入新目标。'))return;
+      if(b.dataset.delivery==='cancel' && !await require('./ui-feedback').confirmHubAction('已交付文件与记录会保留，之后可输入新目标。',{title:'结束本次任务？',acceptLabel:'结束任务',danger:true}))return;
       const result=await ipcRenderer.invoke('delivery:'+b.dataset.delivery,{meetingId:id});if(!result.ok)throw new Error(result.error || '工作流操作失败');
       states.delete(id);onRefresh(id);
     }catch(e){
@@ -63,7 +63,7 @@ function render(row,meeting,onRefresh,onError) {
   }));
   row.querySelectorAll('[data-delivery-skip]').forEach(b=>b.addEventListener('click',async()=>{
     if(busy.has(id))return;
-    if(b.dataset.skipEnds==='true' && !window.confirm('跳过本步负责人会结束本次任务，不会合并。已交付的文件保留。确定吗？'))return;
+    if(b.dataset.skipEnds==='true' && !await require('./ui-feedback').confirmHubAction('跳过本步负责人会结束本次任务，不会合并。已交付的文件保留。',{title:'跳过负责人？',acceptLabel:'跳过并结束',danger:true}))return;
     busy.add(id);b.disabled=true;
     try{const r=await ipcRenderer.invoke('delivery:skip',{meetingId:id,memberId:b.dataset.deliverySkip});if(!r.ok)throw new Error(r.error || '跳过失败');states.delete(id);}
     catch(e){onError(e.message);}finally{busy.delete(id);onRefresh(id);}

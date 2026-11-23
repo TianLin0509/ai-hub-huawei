@@ -47,10 +47,10 @@ function mountGroupComposerPopovers(rail) {
   rail.insertBefore(models, members.button);
   function refreshModels() {
     const pairs = [...members.panel.querySelector('.mr-input-tuning-members').children];
-    const separateRow = pairs.length > 3;
-    rail.classList.toggle('models-on-own-row', separateRow);
-    if (separateRow) rail.parentNode.append(models);
-    else rail.insertBefore(models, members.button);
+    // 超过 3 位成员时不再单拆一行平铺模型芯片（输入区会叠到 4 层），改在「AI 设置」气泡里看和切换。
+    models.hidden = pairs.length > 3;
+    rail.classList.remove('models-on-own-row');
+    if (models.parentNode !== rail) rail.insertBefore(models, members.button);
     const key = pairs.map(pair => pair.dataset.sid).join('|');
     if (models.dataset.key !== key) {
       models.dataset.key = key; models.replaceChildren();

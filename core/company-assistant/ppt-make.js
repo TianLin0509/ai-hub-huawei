@@ -194,7 +194,7 @@ class PptMake {
       ...guideLines(sk),
       '提交：ppt_make(jobId, spec)，spec 是页面说明对象。返回的 warnings 非空时按提醒修改后再提交一次，最多修改两轮。最后用两三句话说明这页怎么论证，并列出待补的数字和待贴图位。',
     ].join('\n');
-    const chat = this.a.ask(prompt, { entry: 'ppt', taskTitle: 'PPT 做页 · ' + sk.name.slice(0, 18) });
+    const chat = this.a.ask(prompt, { entry: 'ppt', featureAgent: 'pptMake', taskTitle: 'PPT 做页 · ' + sk.name.slice(0, 18) });
     const job = this.add({ id, kind: 'make', skeletonId: sk.id, skeleton: sk.name, brief, chatId: chat.id, state: 'waiting_agent' });
     this.a.changed();
     return { ok: true, job: { ...job } };
@@ -222,7 +222,7 @@ class PptMake {
       PPT_MAKE_INSTRUCTIONS,
       `最后用几句话说明 ${n} 版各自怎么论证、你推荐哪一版，并列出待补的数字和待贴图位。`,
     ].join('\n');
-    const chat = this.a.ask(prompt, { entry: 'ppt', taskTitle: 'PPT 做页 · 自动选骨架' });
+    const chat = this.a.ask(prompt, { entry: 'ppt', featureAgent: 'pptMake', taskTitle: 'PPT 做页 · 自动选骨架' });
     const jobs = ids.map((id, i) => this.add({ id, kind: 'make', groupId, variant: label(i), skeletonId: '', skeleton: label(i), brief, chatId: chat.id, state: 'waiting_agent' }));
     this.a.changed();
     return { ok: true, groupId, jobs: jobs.map(job => ({ ...job })) };

@@ -122,7 +122,11 @@ ${String(dialogue || '（没有）').slice(-8000)}`;
 // 嵌套在 Hub 里启动 CLI 时，去掉会让它误以为是子会话、或把 hook 投回 Hub 的变量（同 core/hub-assistant/podcast/script.js）。
 const STRIP = ['CLAUDECODE', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_HUB_PORT', 'CLAUDE_HUB_TOKEN', 'CLAUDE_HUB_SESSION_ID', 'CODEAGENT_HUB_PORT', 'CODEAGENT_HUB_TOKEN', 'CODEAGENT_HUB_SESSION_ID'];
 function haikuSummarizer({ model = 'haiku', timeoutMs = 90000, spawnImpl = spawn } = {}) {
-  return prompt => new Promise((resolve, reject) => {
+  return prompt => {
+    const dataDir = require('../core/data-dir').getHubDataDir();
+    const selected = require('../core/feature-agent-choice').resolve(dataDir, 'progress').selected;
+    if (selected) return require('../core/feature-agent-run').run(selected, prompt, { dataDir, timeoutMs });
+    return new Promise((resolve, reject) => {
     require('../core/company-ai-policy').assertExternalAiAllowed();
     const env = { ...process.env }; for (const k of STRIP) delete env[k];
     const bin = require('../core/account-adapters').resolveClaudeExe(env);
@@ -142,7 +146,8 @@ function haikuSummarizer({ model = 'haiku', timeoutMs = 90000, spawnImpl = spawn
     child.on('error', e => { clearTimeout(timer); reject(e); });
     child.on('close', code => { clearTimeout(timer); code === 0 && out.trim() ? resolve(out) : reject(new Error('代写失败：' + (err || out).slice(0, 200))); });
     child.stdin.end(prompt, 'utf8');
-  });
+    });
+  };
 }
 // 模型偶尔会带上回复格式里的标记，只留第一句正文。
 function tidyGhost(text) {

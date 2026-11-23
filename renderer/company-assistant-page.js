@@ -928,14 +928,14 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       const choices = require('../core/codeagent-model-choice');
       const selected = info.choice ? choices.choiceValue({ id: info.choice.model, ...info.choice, provider: info.choice.codeagentModelProvider,
         providerLabel: info.choice.codeagentModelProviderLabel, menuLabel: info.choice.codeagentModelMenuLabel }) : '';
-      host.innerHTML = `<fieldset><legend>助理与分身的模型</legend>${info.accounts?.length > 1 ? `<label>账号<select data-model-account>${info.accounts.map(a => `<option value="${esc(a.id)}"${a.id === account ? ' selected' : ''}>${esc(a.label)}</option>`).join('')}</select></label>` : ''}<label>模型与供应商 <span title="默认保持原有模型；目标模型有多个同名供应商时，沿用手动会话成功用过的供应商。单独选择后按所选组合运行。分身明确指定其他模型时保留该模型。" aria-label="选择规则">ⓘ</span><select data-model-choice><option value="">沿用默认模型，同名时用手动供应商</option>${info.options.filter(o => o.provider).map(o => `<option value="${esc(choices.choiceValue(o))}"${choices.choiceValue(o) === selected ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select></label></fieldset>
+      host.innerHTML = `<div id="fa-assistant-settings" data-feature-agents="assistant,avatar"></div><fieldset><legend>CodeAgent 默认模型与供应商</legend>${info.accounts?.length > 1 ? `<label>账号<select data-model-account>${info.accounts.map(a => `<option value="${esc(a.id)}"${a.id === account ? ' selected' : ''}>${esc(a.label)}</option>`).join('')}</select></label>` : ''}<label>模型与供应商 <select data-model-choice><option value="">沿用默认模型，同名时用手动供应商</option>${info.options.filter(o => o.provider).map(o => `<option value="${esc(choices.choiceValue(o))}"${choices.choiceValue(o) === selected ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}</select></label></fieldset>
         ${info.manual ? `<p>手动会话：${esc(info.manual.model)} · ${esc(info.manual.codeagentModelProviderLabel || info.manual.codeagentModelProvider)}</p>` : ''}
         <div class="ca-row"><button class="ca-btn primary" type="button" data-model-save>保存</button><span data-model-message role="status"></span></div>`;
       const accountInput = host.querySelector('[data-model-account]');
       if (accountInput) accountInput.onchange = () => { void mountModelTab(panel, accountInput.value); };
       host.querySelector('[data-model-save]').onclick = async e => {
         e.target.disabled = true;
-        try { await call('set-model-choice', { account, value: host.querySelector('[data-model-choice]').value }); host.querySelector('[data-model-message]').textContent = '已保存，下次任务起生效'; }
+        try { await call('set-model-choice', { account, value: host.querySelector('[data-model-choice]').value }); void window.__featureAgents?.refresh(); host.querySelector('[data-model-message]').textContent = '已保存，下次任务起生效'; }
         catch (error) { host.querySelector('[data-model-message]').textContent = error.message; }
         finally { e.target.disabled = false; }
       };

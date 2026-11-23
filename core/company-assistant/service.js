@@ -1496,15 +1496,16 @@ class CompanyAssistant {
     if (auth.state !== 'online' || auth.login?.ok !== true || auth.login.uid !== job.teamOwner)
       throw new Error('团队分析绑定的 WeLink 账号已退出或改变，请用当前账号重新采集分析。');
   }
-  ask(text, { via = '', entry = '', teamOwner = '', taskTitle = '' } = {}) {
+  ask(text, { via = '', entry = '', teamOwner = '', taskTitle = '', featureAgent = '' } = {}) {
     if (this.closed) throw new Error('Hub 正在关闭，请重新打开后重试');
     const q = String(text || '').trim();
     if (!q) throw new Error('问题是空的');
     this.verifyTeamOwner({ teamOwner });
-    const item = { id: randomUUID(), q, state: 'queued', askedAt: this.now(), ...(via === 'phone' || via === 'pet' ? { via } : {}), ...(entry === 'ppt' ? { entry } : {}), ...(teamOwner ? { teamOwner } : {}), ...(taskTitle ? { taskTitle } : {}) };
+    const feature = entry === 'ppt' && ['pptMake', 'pptImgtext'].includes(featureAgent) ? { featureAgent } : {};
+    const item = { id: randomUUID(), q, state: 'queued', askedAt: this.now(), ...feature, ...(via === 'phone' || via === 'pet' ? { via } : {}), ...(entry === 'ppt' ? { entry } : {}), ...(teamOwner ? { teamOwner } : {}), ...(taskTitle ? { taskTitle } : {}) };
     this.saveChat([...this.chat(), item]);
     const notes = via === 'phone' ? PHONE_NOTE : '';
-    this.enqueue({ type: 'chat', chatId: item.id, prompt: notes ? notes + '\n\n' + q : q, ...(via === 'phone' ? { via } : {}), ...(entry === 'ppt' ? { entry } : {}), ...(teamOwner ? { teamOwner } : {}) });
+    this.enqueue({ type: 'chat', chatId: item.id, ...feature, prompt: notes ? notes + '\n\n' + q : q, ...(via === 'phone' ? { via } : {}), ...(entry === 'ppt' ? { entry } : {}), ...(teamOwner ? { teamOwner } : {}) });
     if (entry === 'ppt') this.startPptCollector();
     this.changed();
     return item;
@@ -1519,7 +1520,7 @@ class CompanyAssistant {
   retryChat(id) {
     const item = this.chat().find(c => c.id === id);
     if (!item) throw new Error('这条对话已经不在了');
-    return this.ask(item.q, { via: item.via, entry: item.entry, teamOwner: item.teamOwner, taskTitle: item.taskTitle });
+    return this.ask(item.q, { via: item.via, entry: item.entry, teamOwner: item.teamOwner, taskTitle: item.taskTitle, featureAgent: item.featureAgent });
   }
   laneOf(job) { return job.type === 'brief' || job.type === 'reply-review' ? 'brief' : job.entry === 'ppt' ? 'ppt' : 'chat'; }
   toolsetOf(job) { return job.type === 'brief' || job.type === 'reply-review' ? 'brief' : job.entry === 'ppt' ? 'ppt' : job.via === 'phone' ? 'phone' : 'desk'; }
@@ -1570,9 +1571,11 @@ class CompanyAssistant {
   }
   // 这一问的会话还在不在（审计 A3-17：以前 CodeAgent 退出后还要空等 12–24 分钟才报「没给出回答」）。
   // 返回给用户看的原因；还在、或说不准时返回空串（说不准的照旧按时限等）。
-  sessionGone(id) {
+  sessionGone(id, apiErrorBaseline = null) {
     if (!id) return '';
     if (!this.deps.getSession(id)) return '助理会话已经关掉了，这一问没答完；可以重问';
+    const auth = (this.launchFailures ||= require('../feature-agent-session-failure').createReader(this.deps)).read(id, apiErrorBaseline);
+    if (auth) return auth;
     if (this.deps.isSessionProcessAlive?.(id) === false) return '助理会话的 CodeAgent 进程已退出，这一问没答完；可以重问';
     return '';
   }
@@ -1613,32 +1616,36 @@ class CompanyAssistant {
     return label && brief ? label + ' · ' + brief : '';
   }
   workspaceFor(toolset) { return toolset === 'ppt' ? this.pptWorkspace : this.workspace; }
-  async openPooled(toolset) {
+  async openPooled(toolset, featureAgent = toolset === 'ppt' ? 'ppt' : 'assistant') {
     this.prepareWorkspace();
     if (this.toolsReady) await this.toolsReady;
     const id = randomUUID();
     // 先登记：建会话时 extraMcpProvider 就要按用途挂工具。
-    this.pool.set(id, { toolset, createdAt: this.now() });
+    this.pool.set(id, { toolset, featureAgent, createdAt: this.now() });
     let created;
     // 助理问答的思考档（2026-11-07）：公司 GLM 一问要 45–60 秒，大半花在想上；设置 answerEffort（low/medium/high/max）时开会话带 --effort，空 = 账号默认。
     const effort = toolset === 'desk' || toolset === 'phone' ? this.settings().answerEffort : '';
-    try { created = await this.deps.createSession('codeagent', { id, cwd: this.workspaceFor(toolset), title: TITLES[toolset] || TITLES.desk, purpose: PURPOSE, autonomous: true, noInheritCursor: true, ...(effort ? { effort } : {}) }); }
+    try {
+      const picked = require('../feature-agent-choice').session(this.deps.dataDir, featureAgent, 'codeagent',
+        { id, cwd: this.workspaceFor(toolset), title: TITLES[toolset] || TITLES.desk, purpose: PURPOSE, autonomous: true, noInheritCursor: true, ...(effort ? { effort } : {}) });
+      created = await this.deps.createSession(picked.kind, picked.opts);
+    }
     catch (error) { this.pool.delete(id); throw error; }
     if (!created || created.id !== id) { this.pool.delete(id); throw new Error('助理会话没能打开'); }
     return id;
   }
-  async takeSession(toolset) {
+  async takeSession(toolset, featureAgent) {
     if (this.warming[toolset]) await this.warming[toolset];
     this.retireExpiredWarm();
     const warm = this.warm[toolset];
     if (warm) {
       // 初始化或其他工作仍在运行的预热会话留给清扫器，不能为取下一问把它关掉。
-      if (this.sessionBusy(warm)) return this.openPooled(toolset);
+      if (this.sessionBusy(warm)) return this.openPooled(toolset, featureAgent);
       delete this.warm[toolset];
-      if (!this.warmUnavailable(warm) && this.toolsetFor(warm) === toolset && !this.staleModel(warm)) return warm;
+      if (!this.warmUnavailable(warm) && this.toolsetFor(warm) === toolset && (!featureAgent || this.pool.get(warm)?.featureAgent === featureAgent) && !this.staleModel(warm)) return warm;
       this.retire(warm);
     }
-    return this.openPooled(toolset);
+    return this.openPooled(toolset, featureAgent);
   }
   cliBackAtShell(id) {
     try { return require('../host-shell-detector').detectHostShellTakeover(this.deps.readTerminalScreen?.(id)?.text || ''); }
@@ -1701,6 +1708,9 @@ class CompanyAssistant {
     const info = this.deps.getSession(id);
     if (!info) return false;
     if (info.modelConfirmationRequired) return true;
+    const feature = this.pool?.get(id)?.featureAgent || (this.toolsetFor?.(id) === 'ppt' ? 'ppt' : 'assistant');
+    if (require('../feature-agent-choice').stale(this.deps.dataDir, feature, info)) return true;
+    if (info.featureAgentChoice) return false;
     const routes = require('../codeagent-assistant-route');
     const route = routes.choose(this.deps.dataDir, info.codeagentPoolAccount || 'personal', info.currentModel?.id || info.fixedModel || '', { configDir: info.codeagentConfigDir });
     if (!routes.matchesSession(info, route)) return true;
@@ -1867,6 +1877,12 @@ class CompanyAssistant {
     this.verifyTeamOwner({ teamOwner: owner });
     const key = createHash('sha256').update(owner).digest('hex');
     let id = this.state().teamSessionIds?.[key];
+    const meta = id && (this.deps.getSession(id) || this.deps.getSessionMetadata?.(id));
+    if (meta && require('../feature-agent-choice').stale(this.deps.dataDir, 'assistant', meta)) {
+      if (this.sessionBusy(id)) throw new Error('上一轮团队分析还在回答，答完后使用新模型');
+      await this.deps.closeSession?.(id);
+      id = null;
+    }
     if (id && this.deps.getSession(id)) return id;
     if (id && this.deps.getSessionMetadata?.(id)) {
       try { await this.deps.resumeSession(id); } catch { /* Create a fresh isolated session if the old one cannot resume. */ }
@@ -1878,7 +1894,8 @@ class CompanyAssistant {
     fs.mkdirSync(cwd, { recursive: true });
     // Register before creation: extraMcpProvider runs while creating the session.
     this.saveState({ teamSessionIds: { ...this.state().teamSessionIds, [key]: id } });
-    const created = await this.deps.createSession('codeagent', { id, cwd, title: '团队关注分析', purpose: PURPOSE, autonomous: true, noInheritCursor: true });
+    const picked = require('../feature-agent-choice').session(this.deps.dataDir, 'assistant', 'codeagent', { id, cwd, title: '团队关注分析', purpose: PURPOSE, autonomous: true, noInheritCursor: true });
+    const created = await this.deps.createSession(picked.kind, picked.opts);
     if (!created || created.id !== id) throw new Error('团队分析会话没能打开');
     return id;
   }
@@ -1895,7 +1912,7 @@ class CompanyAssistant {
       if (job.type === 'chat') { this.patchChat(job.chatId, { state: 'running', startedAt: this.now() }); this.changed(); }
       if (!job.teamOwner) await this.ensureToolsReady();
       const toolset = job.teamOwner ? null : this.toolsetOf(job);
-      const id = job.teamOwner ? await this.ensureTeamSession(job.teamOwner) : await this.takeSession(toolset);
+      const id = job.teamOwner ? await this.ensureTeamSession(job.teamOwner) : await this.takeSession(toolset, job.featureAgent);
       if (this.closed) throw new Error('Hub 正在关闭，请重新打开后重试');
       // 开会话期间用户点了「停止这一问」：不再发问；开好的会话留作下一问的预开会话。
       if (job.stopped) {
@@ -1949,6 +1966,8 @@ class CompanyAssistant {
   async sendWhenReady(job, id, prompt) {
     const since = this.now();
     for (;;) {
+      const knownFailure = this.sessionGone?.(id, job.apiErrorBaseline);
+      if (knownFailure) throw new Error(knownFailure);
       const receipt = await this.deps.sendPrompt(id, prompt, randomUUID());
       if (!receipt?.notSent || receipt.error !== 'cli-not-ready' || job.stopped || this.closed) return receipt;
       if (job.notReadySince == null) {
@@ -1957,7 +1976,7 @@ class CompanyAssistant {
         this.changed();
       }
       const tail = receipt.terminalLastLine ? `；终端最后一行：${require('../env-check').sanitize(receipt.terminalLastLine).slice(-240)}` : '';
-      const gone = this.sessionGone(id);
+      const gone = this.sessionGone(id, job.apiErrorBaseline);
       if (gone) throw new Error(gone + tail);
       // CLI 一启动就退回了 PowerShell（参数不认、版本不兼容、崩溃）：终端已经是命令提示符，再等也等不到输入框（F7 复现：白等满 5 分钟）。
       if (this.cliBackAtShell(id)) throw new Error(`CodeAgent 启动后就退出了，这一问没有发出${tail || ''}；请打开助理会话看终端里的报错，处理后可以重问`);
@@ -1986,7 +2005,7 @@ class CompanyAssistant {
     // 带本问回执标记的回答：答完了，会话状态还没报空闲也直接收（省掉收工后的轮询等待）。
     const marked = !!(fresh && job.token && String(fresh.text).includes(job.token));
     // 会话没了（关掉了、CodeAgent 进程退出）：已经写出的回答照原判定收下，没有回答就立刻报失败并说明原因。
-    const gone = marked ? '' : this.sessionGone(job.sessionId);
+    const gone = marked ? '' : this.sessionGone(job.sessionId, job.apiErrorBaseline);
     if (gone && !fresh) { this.failJob(job, gone); return; }
     // 这一轮以模型接口报错收场（401 / 429 / 额度）：CLI 已停下、不会再答，立刻说明原因（以前 PPT 做页要空等 25 分钟）。
     // 和没写标记的回答一样稳定 8 秒再判，避开 CLI 写完报错又自己重试的间隙。

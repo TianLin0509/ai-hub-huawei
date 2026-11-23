@@ -46,6 +46,8 @@ if (typeof document !== 'undefined') (function () {
   const ConversationControls = require('./conversation-workflow-controls.js');
   const ConversationRelay = require('./conversation-relay.js');
   const OrchUI = require('./orchestration-ui.js');
+  const AnswerCardState = require('./groupchat-answer-card-state.js');
+  const _gcSoftBanner = require('./groupchat-soft-banner.js').createSoftBannerStore();
   // 小队模式（2026-11-19）：负责人派工、成员做完自动交回。状态变了就重画顶栏、进度条和群聊记录。
   const SquadUI = require('./squad-ui.js');
   SquadUI.onChange(meetingId => {
@@ -1860,14 +1862,7 @@ if (typeof document !== 'undefined') (function () {
     };
   }
 
-  function _turnStatusBucket(status) {
-    if (status === 'completed' || status === 'manual_extracted') return 'done';
-    if (status === 'thinking' || status === 'streaming' || status === 'soft_alert' || status === 'queued'
-        || status === 'awaiting_binding' || status === 'awaiting_final_text' || status === 'recovering') return 'running';
-    if (status === 'errored' || status === 'timeout' || status === 'send_stuck' || status === 'transport_lost') return 'warn';
-    if (status === 'off' || status === 'absent' || status === 'superseded' || status === 'interrupted') return 'muted';
-    return 'idle';
-  }
+  function _turnStatusBucket(status) { return AnswerCardState.statusBucket(status); }
 
   function _renderTurnProgressLane(state, meeting, viewingTurnN) {
     if (!meeting || !meeting.groupChat) return '';
@@ -2333,22 +2328,13 @@ if (typeof document !== 'undefined') (function () {
     return r.length > 60 ? r.slice(0, 60) + '…' : r;
   }
 
-  // Markdown answers (core/group-answer-files.js): a member's card shows the file
-  // it wrote, or that it has not handed one in yet. No transcript states here —
-  // problems show on the member's session in the sidebar.
-  // 这位成员本轮是否还在干活（还在干活时不给「提取」，免得拿到半截回答）。
-  function _gcAnswerMemberRunning(meeting, message) {
-    const state = _gcPanelState[meeting?.id];
-    if (!state) return true;
-    const n = Number(message.turnNum);
-    const status = (Array.isArray(state.turns) ? state.turns : []).find(t => t && Number(t.n) === n)?.byStatus?.[message.sid];
-    if (status) return _turnStatusBucket(status) === 'running';
-    return !!state.currentMode && state.currentMode !== 'idle' && Number(state.currentTurn) === n;
-  }
-
-  function _renderAnswerCard(message, meeting, memberBySid) {
+  function _renderAnswerCard(message, meeting, memberBySid, opts = {}) {
     // 回答卡片还没有内容、但这一轮已报错：直接写出报错摘要（如模型不存在、额度用尽），旁观时能看懂为什么没交。
     function _gcAnswerFailureText(message) {
+      const session = typeof sessions !== 'undefined' && sessions.get(message?.sid);
+      if (session?.modelConfirmationRequired && session?.modelUnavailableReason) {
+        return '模型无权限，点右上角“需要换个模型”选择可用模型后继续。';
+      }
       const failure = message && message.failure && typeof message.failure === 'object' ? message.failure : null;
       if (!failure && message?.status !== 'errored') return '';
       const label = _gcFailReasonLabel(failure || message.statusReason) || '本轮异常结束';
@@ -2360,33 +2346,47 @@ if (typeof document !== 'undefined') (function () {
     // Unregistered messages (history before the switch, legacy fallbacks) keep their stored text;
     // registered members only ever get content from their file.
     const answer = message.answer || null, text = String(message.content || '');
+    const failureText = text.trim() ? '' : _gcAnswerFailureText(message);
+    const p = AnswerCardState.plan({ message, opts, state: _gcPanelState[meeting?.id], failureText, modelRevoked: !!session?.modelConfirmationRequired });
     const badge = !answer ? '' : answer.readError ? '待确认 · 读取失败' : answer.state === 'draft' ? '草稿' : answer.outcome === 'rework' ? '需返工' : answer.outcome === 'blocked' ? '阻塞' : '';
-    const body = text.trim()
+    const activity = p.running ? require('./conversation-message-view').renderSequenceActivity(message.displayMessages, escapeHtml) : '';
+    const body = p.body === 'text'
       ? `<div class="mr-gc-md">${require('./conversation-message-view').renderMessageBody(text, { isUser: false, escapeHtml,
         renderMarkdown: t => _renderMarkdown(t, session?.cwd || meeting.workspace || _activeMeetingCwd()), foldLong: false })}</div>`
-      : `<div class="mr-gc-md mr-gc-empty-placeholder">${escapeHtml(_gcAnswerFailureText(message) || '还没交')}</div>`;
+      : p.body === 'running' ? `<span class="mr-gc-waiting">${escapeHtml(AnswerCardState.waitingText(p.status))}</span>`
+      : `<div class="mr-gc-md mr-gc-empty-placeholder">${escapeHtml({
+        stuck: 'Prompt 已进入 CLI 输入框，但尚未检测到 Agent 开工。Hub 已自动补按 Enter；仍未恢复时可点「再次发送」。',
+        failure: failureText,
+        waiting: '需要审批或回答问题，请打开该成员的 CLI 处理。',
+      }[p.body] || '还没交')}</div>`;
     const journal = require('./groupchat-journal');
-    const copy = text.trim() ? '<button type="button" class="mr-gc-copy-btn" data-gc-copy-message="1" title="复制此条消息" aria-label="复制此条消息">📋</button>' : '';
-    const prompt = message.sourcePrompt ? `<button type="button" class="mr-gc-prompt-btn" data-gc-view-prompt="${escapeHtml(message.id || '')}" title="查看本轮发给该 AI 的 prompt">查看本轮输入</button>` : '';
+    const sid = escapeHtml(message.sid || ''), turnAttr = escapeHtml(message.turnNum || ''), msgId = escapeHtml(message.id || '');
+    const memberName = slot?.displayLabel || slot?.kind || message.speaker || '成员';
+    const resend = label => `<button type="button" class="mr-gc-retry-btn${label === '重试' ? ' is-failure' : ''}" data-gc-resend-member="${sid}" data-gc-retry-turn="${turnAttr}" title="把本轮问题重新发给这位成员；它写好回答文件后卡片自动更新">${label}</button>`;
+    // 「提取」：先重读回答文件，还是没有就从它本轮的会话记录里取最终回复写进回答文件
+    // （2026-11-23 维护人实测：成员答完了，卡片停在「还没交」，用户没有任何办法把回答拿回来）。
+    const buttons = {
+      submitAgain: `<button type="button" class="mr-gc-retry-btn is-submit" data-gc-escape="resend-prompt" data-gc-sid="${sid}" data-gc-retry-turn="${turnAttr}" title="再次提交已进入 CLI 输入框的完整 prompt">再次发送</button>`,
+      recollect: `<button type="button" class="mr-gc-recollect-btn" data-gc-sync-answer="${sid}" data-gc-sync-turn="${turnAttr}" title="只重新读取本轮回答文件，不重发任务">重新提取</button>`,
+      extract: `<button type="button" class="mr-gc-recollect-btn" data-gc-sync-answer="${sid}" data-gc-sync-turn="${turnAttr}" data-gc-sync-fallback="transcript" title="先重读回答文件；没有文件时从该成员本轮的会话记录提取最终回复，不重发任务">提取</button>`,
+      retryFailed: resend('重试'),
+      resend: resend('重新发送'),
+      openCli: `<button type="button" data-gc-open-cli="${sid}" title="${escapeHtml(`打开 ${memberName} 的 CLI`)}">打开 CLI</button>`,
+      viewPrompt: `<button type="button" class="mr-gc-prompt-btn" data-gc-view-prompt="${msgId}" title="查看本轮发给该 AI 的 prompt">查看本轮输入</button>`,
+      copyPrompt: `<button type="button" data-gc-copy-prompt="${msgId}">复制本轮 Prompt</button>`,
+      modelChange: `<button type="button" class="mr-gc-retry-btn is-failure" data-gc-model-revoked="${sid}">点此换模型</button>`,
+    };
+    const html = keys => keys.map(key => buttons[key] || '').join('');
+    const copy = p.hasText ? '<button type="button" class="mr-gc-copy-btn" data-gc-copy-message="1" title="复制此条消息" aria-label="复制此条消息">📋</button>' : '';
     const time = _formatGroupChatTime(answer?.at || message.createdAt);
     const kindCls = slot && slot.kind ? ` ai-name-${slot.kind}` : '';
-    // Missing output is not proof of failed submission. Default to inspection;
-    // the existing explicit resend for completed answers stays in 更多.
-    const resend = message.sid ? `<button type="button" class="mr-gc-retry-btn" data-gc-resend-member="${escapeHtml(message.sid)}" data-gc-retry-turn="${escapeHtml(message.turnNum || '')}" title="把本轮问题重新发给这位成员；它写好回答文件后卡片自动更新">重新发送</button>` : '';
-    const recollect = answer?.readError && message.sid ? `<button type="button" class="mr-gc-recollect-btn" data-gc-sync-answer="${escapeHtml(message.sid)}" data-gc-sync-turn="${escapeHtml(message.turnNum || '')}" title="只重新读取本轮回答文件，不重发任务">重新提取</button>` : '';
-    // 「还没交」但这位成员本轮已经停下（已完成 / 报错 / 超时等）：给「提取」——先重读回答文件，
-    // 还是没有就从它本轮的会话记录里取最终回复写进回答文件（2026-11-23 维护人实测：成员答完了，
-    // 卡片停在「还没交」，状态条按「已完成」也不给提取，用户没有任何办法把回答拿回来）。
-    const extract = !text.trim() && !answer?.readError && message.sid && !_gcAnswerMemberRunning(meeting, message)
-      ? `<button type="button" class="mr-gc-recollect-btn" data-gc-sync-answer="${escapeHtml(message.sid)}" data-gc-sync-turn="${escapeHtml(message.turnNum || '')}" data-gc-sync-fallback="transcript" title="先重读回答文件；没有文件时从该成员本轮的会话记录提取最终回复，不重发任务">提取</button>` : '';
-    const inspect = message.sid ? `${recollect}${extract}${message.sourcePrompt ? `<button type="button" data-gc-copy-prompt="${escapeHtml(message.id || '')}">复制本轮 Prompt</button>` : ''}<button type="button" data-gc-open-cli="${escapeHtml(message.sid)}">打开 ${escapeHtml(slot?.displayLabel || slot?.kind || message.speaker || '成员')} CLI</button>` : '';
-    const unread = !!text.trim() && answer?.state !== 'draft';
+    const unread = p.hasText && answer?.state !== 'draft';
     return `
-      <article ${journal.attributes(meeting, message, escapeHtml, { defaultMinimized: OrchUI.defaultMinimized(meeting, message) })} class="mr-gc-msg ai${slot ? ` slot-${(slot.slotIndex || 0) + 1}` : ''}${text.trim() ? '' : ' answer-missing'}" data-gc-msg-id="${escapeHtml(message.id || '')}" data-user-question="false" data-source-sid="${escapeHtml(message.sid || '')}" data-read-turn="${escapeHtml(message.turnNum || '')}" data-unread-answer="${unread}" data-phase="message" data-answer-state="${escapeHtml(answer ? answer.state : 'none')}">
+      <article ${journal.attributes(meeting, message, escapeHtml, { defaultMinimized: OrchUI.defaultMinimized(meeting, message) })} class="mr-gc-msg ai${slot ? ` slot-${(slot.slotIndex || 0) + 1}` : ''}${p.hasText ? '' : ' answer-missing'}${p.running ? ' pending' : ''}${p.sendStuck ? ' send-stuck' : ''}" data-gc-msg-id="${msgId}" data-user-question="false" data-source-sid="${sid}" data-read-turn="${turnAttr}" data-unread-answer="${unread}" data-phase="message" data-answer-state="${escapeHtml(answer ? answer.state : 'none')}" data-answer-running="${p.running}">
         ${_renderGroupAvatar(slot, false)}
         <div class="mr-gc-msg-body">
-          <div class="mr-gc-meta"><span class="mr-gc-name${kindCls}">${escapeHtml(message.speaker || (slot && slot.displayLabel) || 'AI')}</span>${OrchUI.roleBadge(meeting, message, escapeHtml)}${badge ? `<span class="mr-gc-to-badge" title="${escapeHtml(answer?.readError || '')}">${escapeHtml(badge)}</span>` : ''}${time ? `<span>${escapeHtml(time)}</span>` : ''}${OrchUI.peek(meeting, message, escapeHtml)}${journal.actions({ copy, prompt, retry: text.trim() ? resend : '', submit: text.trim() ? recollect : inspect, minimize: true })}</div>
-          <div class="mr-gc-bubble-row"><div class="mr-gc-bubble"><div class="gc-journal-reading">${journal.disclosure()}<div class="gc-journal-text">${body}</div></div></div></div>
+          <div class="mr-gc-meta"><span class="mr-gc-name${kindCls}">${escapeHtml(message.speaker || (slot && slot.displayLabel) || 'AI')}</span>${OrchUI.roleBadge(meeting, message, escapeHtml)}${activity}${badge ? `<span class="mr-gc-to-badge" title="${escapeHtml(answer?.readError || '')}">${escapeHtml(badge)}</span>` : ''}${time ? `<span>${escapeHtml(time)}</span>` : ''}${p.statusText ? `<span class="mr-gc-answer-status">${escapeHtml(p.statusText)}</span>` : ''}${OrchUI.peek(meeting, message, escapeHtml)}${journal.actions({ copy, prompt: html(p.more), retry: html([p.retry].filter(Boolean)), submit: html(p.exposed), minimize: true })}</div>
+          <div class="mr-gc-bubble-row"><div class="mr-gc-bubble"><div class="gc-journal-reading">${journal.disclosure()}<div class="gc-journal-text">${body}</div></div>${p.cursor ? '<span class="mr-ft-cursor"></span>' : ''}</div></div>
         </div>
       </article>`;
   }
@@ -2397,7 +2397,7 @@ if (typeof document !== 'undefined') (function () {
     const renderMarkdown = text => _renderMarkdown(text, sourceSession?.cwd || meeting.workspace || _activeMeetingCwd());
     if (!message) return '';
     if (message.role === 'assistant' && !message.systemNote && !message.supplementReply && !message.committeeAct && GroupAnswers.enabled(meeting)) {
-      return _renderAnswerCard(message, meeting, memberBySid);
+      return _renderAnswerCard(message, meeting, memberBySid, opts);
     }
     // 系统提示（循环自愈的每一次动作都会留一行）：不是谁的发言，不给气泡也不给重发按钮，
     // 只在时间线上留一条居中的细线 —— 但必须看得见，静默重试才是真正的损失。
@@ -2735,7 +2735,13 @@ if (typeof document !== 'undefined') (function () {
     }).join('');
     const pendingHtml = mode !== 'idle' ? _renderGroupChatPending(state, meeting, memberBySid) : '';
     const viewingTurnN = _gcViewingTurnN[meeting.id];
-    const progressLane = _renderTurnProgressLane(state, meeting, viewingTurnN);
+    const progressLaneFull = _renderTurnProgressLane(state, meeting, viewingTurnN);
+    // 本轮进度：本轮在跑或有成员异常时，在消息区上方常显一行紧凑版（谁在跑、谁卡住一眼可见）；
+    // 展开「群聊工具」时仍在工具区里看完整版。
+    const laneInline = !_gcToolsExpanded[meeting.id] && typeof viewingTurnN !== 'number'
+      && (mode !== 'idle' || /is-warn/.test(progressLaneFull));
+    const progressLane = laneInline ? '' : progressLaneFull;
+    const progressLaneCompact = laneInline ? progressLaneFull.replace('class="mr-turn-lane"', 'class="mr-turn-lane is-compact"') : '';
     const nextActions = _renderNextActionBar(state, meeting, viewingTurnN);
     const mobileWorkbench = _renderMobileWorkbench(meeting);
 
@@ -2786,6 +2792,7 @@ if (typeof document !== 'undefined') (function () {
             ${progressLane}
             ${mobileWorkbench}
           </div>
+          ${progressLaneCompact}
           <div class="mr-gc-messages">
             ${emptyHtml}
             ${messageHtml}
@@ -2857,7 +2864,7 @@ if (typeof document !== 'undefined') (function () {
     //   toolbar 已覆盖所有功能，删 cmd-bar 单一来源。
     const onboarding = (state.turns.length === 0 && mode === 'idle') ? _renderOnboarding(meeting) : '';
     // Stage 2 容错升级：软提醒 banner 容器
-    const softBanner = `<div id="mr-gc-soft-alert-banner" class="mr-gc-soft-alert-banner" style="display:none"></div>`;
+    const softBanner = _gcSoftBannerHtml(meeting.id, mode);
     // pilot redesign（2026-05-02）：废弃 pilotRecaps 卡片 + 主驾占位容器（AI 群聊不再桥接子会话私聊）。
     // H3 Phase 4(2026-05-05 maintainer): 同步刷新 header 进度条 + meta(每次 panel re-render)
     _updateHeaderProgress(meeting, state, mode, totalSec);
@@ -3163,21 +3170,24 @@ if (typeof document !== 'undefined') (function () {
   // T2（2026-05-04 maintainer）：单 slot 卡片的事件绑定独立成函数，让 partial-update 局部 patch 后只 rebind 单卡片。
   //   覆盖范围：① 卡片本体 click（focus session）② ↗ 展开按钮 ③ [data-gc-escape] 工具栏按钮组。
   //   不覆盖：soft-alert banner-close / mr-gc-ob-card（这些是 panel 级，由 _bindGcPanelEvents 管）。
+  // 横幅按群聊记住，整块重绘也照着画（见 groupchat-soft-banner.js）。
+  function _gcSoftBannerHtml(meetingId, mode) { return _gcSoftBanner.html(meetingId, mode); }
+  function _setGcSoftBanner(meetingId, entry) {
+    if (!meetingId) return false;
+    _gcSoftBanner.set(meetingId, entry);
+    if (meetingId !== activeMeetingId) return true;
+    return _gcSoftBanner.paint(meetingId, document.getElementById('mr-gc-soft-alert-banner'));
+  }
   function _showGcEscapeNotice(message, level = 'warn') {
-    const banner = document.getElementById('mr-gc-soft-alert-banner');
-    if (!banner) return false;
-    const cls = level === 'error' ? 'urgent' : 'warn';
-    banner.className = `mr-gc-soft-alert-banner ${cls}`;
-    banner.innerHTML = `
+    return _setGcSoftBanner(activeMeetingId, {
+      kind: 'notice', cls: level === 'error' ? 'urgent' : 'warn',
+      html: `
       <div class="mr-gc-soft-alert-msg">
         <strong>${escapeHtml(level === 'error' ? '操作失败' : '提示')}</strong>
         <span class="mr-gc-soft-alert-hint">${escapeHtml(message || '')}</span>
       </div>
-      <button class="mr-gc-soft-alert-close" data-gc-banner-close="1" title="关闭提示">×</button>`;
-    banner.style.display = 'flex';
-    const close = banner.querySelector('[data-gc-banner-close]');
-    if (close) close.addEventListener('click', () => { banner.style.display = 'none'; banner.innerHTML = ''; }, { once: true });
-    return true;
+      <button class="mr-gc-soft-alert-close" data-gc-banner-close="1" title="关闭提示">×</button>`,
+    });
   }
 
   function _bindSlotCardEvents(slotEl, meeting) {
@@ -3541,7 +3551,15 @@ if (typeof document !== 'undefined') (function () {
         sincePromptTs: _gcTurnStartTs[meeting.id] || 0,
         ...(btn.getAttribute('data-gc-sync-fallback') === 'transcript' ? { answerFileFallback: 'transcript' } : {}),
       };
-      const r = await ipcRenderer.invoke('groupchat-manual-extract', payload);
+      let r = await ipcRenderer.invoke('groupchat-manual-extract', payload);
+      // 成员会话已休眠时会话记录读不到：先唤醒它再提取一次（只唤醒，不重发任务）。
+      const dormant = typeof sessions !== 'undefined' && sessions.get(sid)?.status === 'dormant';
+      if ((!r || !r.ok) && dormant && payload.answerFileFallback && typeof window.resumeDormantSession === 'function') {
+        btn.textContent = '唤醒中';
+        try { await window.resumeDormantSession(sid); } catch {}
+        btn.textContent = '同步中';
+        r = await ipcRenderer.invoke('groupchat-manual-extract', payload);
+      }
       if (!r || !r.ok) {
         const detail = r && (r.detail || r.reason) ? (r.detail || r.reason) : 'unknown';
         _showGcEscapeNotice(`同步失败：${detail}`, 'error');
@@ -3616,7 +3634,7 @@ if (typeof document !== 'undefined') (function () {
         const args = { meetingId: meeting.id, sid, turnNum: Number.isFinite(turnNum) ? turnNum : undefined };
         result = await ipcRenderer.invoke('groupchat:resend-member', args);
         if (result?.reason === 'member_busy') {
-          if (!window.confirm('这位成员仍在运行或等待确认，再发一次可能让它重复做。确定重新发送本轮问题吗？')) return;
+          if (!await require('./ui-feedback').confirmHubAction('这位成员仍在运行或等待确认，再发一次可能让它重复做。', { title: '重新发送本轮问题？', acceptLabel: '仍然重新发送' })) return;
           result = await ipcRenderer.invoke('groupchat:resend-member', { ...args, force: true });
         }
         if (!result?.ok) throw new Error(result?.reason || '重新发送失败');
@@ -3953,6 +3971,18 @@ if (typeof document !== 'undefined') (function () {
       catch (error) { _showGcEscapeNotice(error.message, 'error'); }
       return;
     }
+    const modelRevokedBtn = _closestInPanel(ev.target, '[data-gc-model-revoked]', panel);
+    if (modelRevokedBtn) {
+      ev.preventDefault(); ev.stopPropagation();
+      const notice = document.querySelector('.hub-model-notice');
+      if (notice) {
+        notice.scrollIntoView({ block: 'nearest' });
+        notice.querySelector('select, button')?.focus();
+      } else {
+        _showGcEscapeNotice('模型权限已变化，请使用右上角的“需要换个模型”提示选择可用模型。', 'warning');
+      }
+      return;
+    }
     const promptCopyBtn = _closestInPanel(ev.target, '[data-gc-copy-prompt]', panel);
     if (promptCopyBtn) {
       ev.preventDefault(); ev.stopPropagation();
@@ -4054,11 +4084,7 @@ if (typeof document !== 'undefined') (function () {
 
     const bannerClose = _closestInPanel(ev.target, '[data-gc-banner-close]', panel);
     if (bannerClose) {
-      const banner = bannerClose.closest('#mr-gc-soft-alert-banner');
-      if (banner) {
-        banner.style.display = 'none';
-        banner.innerHTML = '';
-      }
+      if (bannerClose.closest('#mr-gc-soft-alert-banner')) _setGcSoftBanner(activeMeetingId, null);
       return;
     }
 
@@ -4877,23 +4903,15 @@ if (typeof document !== 'undefined') (function () {
     // === Phase 2: banner DOM 与 panel 重渲（仅 active）===
     if (meetingId !== activeMeetingId) return;
     _updateInputPreflight(meeting);
-    const banner = document.getElementById('mr-gc-soft-alert-banner');
-    if (banner) {
-      const levelLabel = level === 't2' ? '3 分钟' : '90 秒';
-      const hint = '尚未收到本轮结束确认，状态可能过期；请先查看对应 CLI，避免重复发送。';
-      banner.className = 'mr-gc-soft-alert-banner';
-      banner.innerHTML = `
+    const levelLabel = level === 't2' ? '3 分钟' : '90 秒';
+    const hint = '尚未收到本轮结束确认，状态可能过期；请先查看对应 CLI，避免重复发送。';
+    _setGcSoftBanner(meetingId, { kind: 'soft', cls: '', html: `
         <div class="mr-gc-soft-alert-msg">
           <strong>${escapeHtml(label || sid.slice(0, 8))}</strong> 已等待 <strong>${levelLabel}</strong>。
           <span class="mr-gc-soft-alert-hint">${hint}</span>
         </div>
         <button class="mr-gc-soft-alert-close" data-gc-banner-close="1" title="关闭提示">×</button>
-      `;
-      banner.style.display = 'flex';
-      banner.querySelectorAll('[data-gc-banner-close]').forEach(b => {
-        b.addEventListener('click', () => { banner.style.display = 'none'; banner.innerHTML = ''; }, { once: true });
-      });
-    }
+      ` });
     if (cached) {
       const panel = _ensureGcPanel();
       // 群聊弹顶 bug 修复（2026-06-05 maintainer）：soft-alert 90s/180s 触发时全量重渲
@@ -5506,6 +5524,24 @@ if (typeof document !== 'undefined') (function () {
     });
   }
 
+  // 与主进程派发同一套 @ 解析规则；点到人时返回被点名成员的名字，否则返回 null。
+  function _gcMentionTargets(raw, meeting, slots) {
+    try {
+      const counts = {}, seen = {};
+      for (const slot of slots) counts[slot.kind] = (counts[slot.kind] || 0) + 1;
+      const members = slots.map(slot => {
+        seen[slot.kind] = (seen[slot.kind] || 0) + 1;
+        const kindLabel = _KIND_LABELS[slot.kind] || slot.kind || 'AI';
+        const displayName = slot.displayLabel || slot.label || kindLabel;
+        const memberId = _memberIdForSlot(slot);
+        return { sid: slot.sid, index: slot.slotIndex, memberId, kind: slot.kind, displayName,
+          aliases: [memberId, displayName, kindLabel, slot.kind, `${kindLabel}${seen[slot.kind]}`, `${slot.kind}${seen[slot.kind]}`].filter(Boolean) };
+      });
+      const r = require('../core/group-mentions').parseGroupTargets(raw, members, meeting.participants);
+      return r.mentions.length ? r.targets.map(m => m.displayName) : null;
+    } catch { return null; }
+  }
+
   function _updateInputPreflight(meeting) {
     _updateInputTuning(meeting);
     const row = _ensureInputPreflightRow();
@@ -5604,7 +5640,14 @@ if (typeof document !== 'undefined') (function () {
           chips.push(`<span class="mr-input-preflight-chip clickable" data-dev-discuss="1" title="回到讨论阶段：之后发送走普通群聊、两位不改代码，直到你再次点「开工」"><span>阶段</span><strong>回到讨论</strong></span>`);
         }
       } else {
-        chips.push(_renderInputChip('目标', `${selected}/${total || selected || 0}`, selected === 0 ? 'warn' : ''));
+        // 输入框里 @ 点了名：发送时只发给被点名的成员，「目标」跟着改成点名人数。
+        const named = raw.includes('@') ? _gcMentionTargets(raw, current, slots) : null;
+        if (named) {
+          chips.push(_renderInputChip('目标', `${named.length}/${slots.length} · 点名`, 'accent'));
+          panelDetail = `点名发送给 ${named.slice(0, 3).join(' / ')}${named.length > 3 ? ` 等 ${named.length} 位` : ''}`;
+        } else {
+          chips.push(_renderInputChip('目标', `${selected}/${total || selected || 0}`, selected === 0 ? 'warn' : ''));
+        }
       }
     } else {
       const sel = document.getElementById('mr-input-target');
@@ -6529,7 +6572,7 @@ if (typeof document !== 'undefined') (function () {
     document.getElementById('mr-btn-close').addEventListener('click', async () => {
       const result = await ipcRenderer.invoke('close-meeting', meeting.id);
       if (result !== true) {
-        alert(result?.message || '删除会议室失败，请稍后重试。');
+        require('./ui-feedback').showHubAlert(result?.message || '删除会议室失败，请稍后重试。', { document });
         return;
       }
       closeMeetingPanel();

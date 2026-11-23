@@ -571,6 +571,7 @@
   "读不到 CodeAgent 版本": "Cannot read the CodeAgent version",
   "常用": "General",
   "外观与输入": "Display & input",
+  "功能使用的 Agent": "Feature agents",
   "桌宠与回执": "Pet & notifications",
   "服务器监控": "Server monitoring",
   "通知": "Notifications",

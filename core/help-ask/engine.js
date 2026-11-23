@@ -22,8 +22,7 @@ const IDLE_MS = 45000; // 保留原有一分钟总上限，静默更早退出。
 const MAX_QUESTION = 2000;
 const MAX_HISTORY = 3;
 const MAX_ANSWER = 20000;
-// CodeAgent 低档模型优先（省额度、快），不通再换；与库地图同一组候选。
-const CODEAGENT_MODELS = ['deepseek-v4.1-flash-1017', 'GLM-5.2-WX-Auto'];
+const modelChoice = require('./model-choice');
 
 function manualFile(edition, dir = __dirname) {
   const own = path.join(dir, edition === 'member' ? 'manual-member.md' : 'manual-public.md');
@@ -108,6 +107,7 @@ function codexArgs(outputFile, mcpNames = []) {
 }
 
 function createHelpAskEngine({ dataDir, edition = 'public', env = process.env, getPreferred = () => '',
+  getConfig = () => require('../hub-config').getConfig(),
   findCommand = (cmd, e) => require('../community-setup').findCommand(cmd, e),
   resolveCodeAgent = e => require('../codeagent-config').resolveCodeAgentConfig(e),
   runOnce = require('../company-assistant/ppt-map-model').runOnce,
@@ -117,6 +117,7 @@ function createHelpAskEngine({ dataDir, edition = 'public', env = process.env, g
   now = Date.now, totalMs = TOTAL_MS, idleMs = IDLE_MS } = {}) {
   const cwd = require('../work-file-root').directory('help-workspace', path.join(dataDir, 'help-ask', 'cwd'));
   const helpCache = new Map(); // 引擎 → --help 文本（看支持哪些参数）
+  const defaultModel = kind => modelChoice.defaultModel(dataDir, kind, { config: getConfig(), env, resolveCodeAgent });
 
   function detect() {
     return preferredOrder({ preferred: getPreferred(), env, edition }).map(id => {
@@ -130,8 +131,9 @@ function createHelpAskEngine({ dataDir, edition = 'public', env = process.env, g
     const engines = detect();
     const first = engines.find(e => e.available);
     const file = manualPath();
-    return { engines: engines.map(({ id, label, available }) => ({ id, label, available })), engine: first ? first.id : null,
-      engineLabel: first ? first.label : '', manual: !!file, manualPath: file, edition, totalSeconds: Math.round(totalMs / 1000), idleSeconds: Math.round(idleMs / 1000) };
+    const selection = require('../feature-agent-choice').resolve(dataDir, 'help');
+    return { selection, engines: engines.map(({ id, label, available }) => ({ id, label, available })), engine: selection.selected?.kind || (first ? first.id : null),
+      engineLabel: selection.selected ? LABEL[selection.selected.kind] : first ? first.label : '', manual: !!file, manualPath: file, edition, totalSeconds: Math.round(totalMs / 1000), idleSeconds: Math.round(idleMs / 1000) };
   }
 
   // 每次子进程的时限 = 剩下的总时间（再多给 2 秒，让总时限的取消先到，统一按「超时」收尾）。
@@ -162,18 +164,15 @@ function createHelpAskEngine({ dataDir, edition = 'public', env = process.env, g
     try { require('../codeagent-launch-env').applyAccountEnv(e, { configDirEnv: config.configDirEnv, configDir: config.configDir }); } catch { /* 按 CLI 默认账号 */ }
     const help = await helpOf('codeagent', command, e, ctx);
     if (!readOnlyCapable(help)) throw new Error('CodeAgent 没探测到只读参数（--tools），为安全起见这次不用它答');
-    let lastError = '';
-    for (const model of CODEAGENT_MODELS) {
-      const r = await runOnce({ command, args: codeAgentArgs(model, help), input: prompt, cwd, env: e, timeoutMs: left(ctx), signal: ctx.signal, onActivity: ctx.onActivity });
-      if (stopped(r, ctx)) throw Object.assign(new Error('stopped'), { stopped: true });
-      let text = '';
-      lastError = '';
-      try { text = r.code === 0 ? cleanAnswer(replyText(r.stdout)) : ''; } catch (error) { lastError = error.message; }
-      if (text) return { answer: text, model };
-      lastError = lastError || failText('CodeAgent', r);
-      if (r.timedOut) throw Object.assign(new Error(lastError), { timedOut: true }); // 超时不再换模型
-    }
-    throw new Error(lastError || 'CodeAgent 没有返回内容');
+    const model = defaultModel('codeagent'), args = codeAgentArgs(model, help);
+    if (!model) args.splice(args.indexOf('--model'), 2); // 未确定模型时沿用 CLI，不强塞旧候选。
+    const r = await runOnce({ command, args, input: prompt, cwd, env: e, timeoutMs: left(ctx), signal: ctx.signal, onActivity: ctx.onActivity });
+    if (stopped(r, ctx)) throw Object.assign(new Error('stopped'), { stopped: true });
+    let text = '', lastError = '';
+    try { text = r.code === 0 ? cleanAnswer(replyText(r.stdout)) : ''; } catch (error) { lastError = error.message; }
+    if (text) return { answer: text, model };
+    lastError = lastError || failText('CodeAgent', r);
+    throw Object.assign(new Error(lastError), { timedOut: !!r.timedOut, model });
   }
 
   async function runClaude(command, prompt, ctx) {
@@ -185,11 +184,12 @@ function createHelpAskEngine({ dataDir, edition = 'public', env = process.env, g
     if (!readOnlyCapable(help)) throw new Error('Claude Code 没探测到只读参数（--tools），为安全起见这次不用它答');
     let settingsFile = '';
     try { settingsFile = path.join(dataDir, 'help-ask', 'claude-settings.json'); fs.writeFileSync(settingsFile, JSON.stringify({ outputStyle: 'default' })); } catch { settingsFile = ''; }
-    const args = claudeArgs(help, { model: String(env.AI_HUB_HELP_ASK_CLAUDE_MODEL || '').trim(), settingsFile });
+    const model = defaultModel('claude') || String(env.AI_HUB_HELP_ASK_CLAUDE_MODEL || '').trim();
+    const args = claudeArgs(help, { model, settingsFile });
     const r = await runOnce({ command, args, input: prompt, cwd, env: e, timeoutMs: left(ctx), signal: ctx.signal, onActivity: ctx.onActivity });
     if (stopped(r, ctx)) throw Object.assign(new Error('stopped'), { stopped: true });
-    if (r.code === 0 && cleanAnswer(r.stdout)) return { answer: cleanAnswer(r.stdout), model: '' };
-    throw Object.assign(new Error(failText('Claude Code', r)), { timedOut: !!r.timedOut });
+    if (r.code === 0 && cleanAnswer(r.stdout)) return { answer: cleanAnswer(r.stdout), model };
+    throw Object.assign(new Error(failText('Claude Code', r)), { timedOut: !!r.timedOut, model });
   }
 
   async function runCodex(command, prompt, ctx) {
@@ -197,12 +197,14 @@ function createHelpAskEngine({ dataDir, edition = 'public', env = process.env, g
     let names = [];
     try { names = codexMcpNames(env) || []; } catch { names = []; }
     try {
-      const r = await runOnce({ command, args: codexArgs(out, names), input: prompt, cwd, env: childEnv(env), timeoutMs: left(ctx), signal: ctx.signal, onActivity: ctx.onActivity });
+      const model = defaultModel('codex'), args = codexArgs(out, names);
+      if (model) args.splice(1, 0, '--model', model);
+      const r = await runOnce({ command, args, input: prompt, cwd, env: childEnv(env), timeoutMs: left(ctx), signal: ctx.signal, onActivity: ctx.onActivity });
       if (stopped(r, ctx)) throw Object.assign(new Error('stopped'), { stopped: true });
       let text = '';
       try { text = fs.readFileSync(out, 'utf8'); } catch { /* 没写出来 */ }
-      if (r.code === 0 && cleanAnswer(text)) return { answer: cleanAnswer(text), model: '' };
-      throw Object.assign(new Error(failText('Codex', r)), { timedOut: !!r.timedOut });
+      if (r.code === 0 && cleanAnswer(text)) return { answer: cleanAnswer(text), model };
+      throw Object.assign(new Error(failText('Codex', r)), { timedOut: !!r.timedOut, model });
     } finally { try { fs.unlinkSync(out); } catch { /* 没有 */ } }
   }
 
@@ -215,35 +217,67 @@ function createHelpAskEngine({ dataDir, edition = 'public', env = process.env, g
     const engines = detect().filter(e => e.available);
     if (!engines.length) return { ok: false, needSetup: true, error: '这台电脑上还没有可用的 AI 命令行（CodeAgent、Claude Code 或 Codex）' };
     const prompt = buildPrompt({ manual: readManual(file), question: q, history });
+    const selection = require('../feature-agent-choice').resolve(dataDir, 'help');
     fs.mkdirSync(cwd, { recursive: true });
     const t0 = now();
     const tried = [];
+    let warning = selection.warning || '';
+    // 模型权限失败只换一次；再失败直接给界面出口，不叠加默认引擎链而反复请求。
+    async function retryModel(failed, error, ctx) {
+      tried.push({ engine: failed.kind, model: failed.model, error: String(error.message || error) });
+      const next = modelChoice.alternative(dataDir, failed, { env, findCommand, config: getConfig(), resolveCodeAgent });
+      if (!next) return { ok: false, error: `${tried.at(-1).error}；未找到其他可用模型，请选模型后重试`, warning, tried, ms: now() - t0 };
+      try {
+        const answer = await require('../feature-agent-run').run(next, prompt,
+          { dataDir, env, signal: ctx.signal, onActivity: ctx.onActivity, runOnce, findCommand, timeoutMs: left(ctx) });
+        return { ok: true, answer, engine: next.kind, engineLabel: LABEL[next.kind], model: next.model,
+          warning: `已改用 ${next.model}`, tried, ms: now() - t0 };
+      } catch (retryError) {
+        if (ctx.signal.aborted || retryError.stopped || retryError.aborted || retryError.timedOut) throw retryError;
+        tried.push({ engine: next.kind, model: next.model, error: String(retryError.message || retryError) });
+        return { ok: false, error: `${tried.at(-1).error}；自动换模型后仍未成功，请重试或选模型`, warning, tried, ms: now() - t0 };
+      }
+    }
     try {
       return await withDeadline(async ({ signal: requestSignal, onActivity }) => {
         const ctx = { signal: requestSignal, onActivity, deadline: t0 + totalMs };
+        if (selection.selected) {
+          const selected = selection.selected.model ? selection.selected : { ...selection.selected, model: defaultModel(selection.selected.kind) };
+          try {
+            const answer = await require('../feature-agent-run').run(selected, prompt,
+              { dataDir, env, signal: requestSignal, onActivity, runOnce, findCommand, timeoutMs: left(ctx) });
+            return { ok: true, answer, engine: selected.kind, engineLabel: LABEL[selected.kind], model: selected.model, ms: now() - t0, tried };
+          } catch (error) {
+            if (requestSignal.aborted || error.stopped || error.aborted || error.timedOut) throw error;
+            if (modelChoice.modelUnavailable(error)) return await retryModel(selected.model ? selected : { ...selected, model: defaultModel(selected.kind) }, error, ctx);
+            warning = `所选 ${LABEL[selected.kind] || selected.kind} 失败，已改用默认`;
+            tried.push({ engine: selected.kind, label: LABEL[selected.kind], error: String(error.message || error), selected: true });
+          }
+        }
         for (const e of engines) {
           if (requestSignal.aborted) break;
           try {
             const r = e.id === 'codeagent' ? await runCodeAgent(e.command, prompt, ctx)
               : e.id === 'claude' ? await runClaude(e.command, prompt, ctx) : await runCodex(e.command, prompt, ctx);
-            return { ok: true, answer: r.answer, engine: e.id, engineLabel: e.label, model: r.model, ms: now() - t0, tried };
+            return { ok: true, answer: r.answer, engine: e.id, engineLabel: e.label, model: r.model, warning, ms: now() - t0, tried };
           } catch (error) {
             if (error && error.stopped) break;
+            if (!requestSignal.aborted && !error?.timedOut && modelChoice.modelUnavailable(error)) return await retryModel({ kind: e.id, model: error.model || defaultModel(e.id) }, error, ctx);
             tried.push({ engine: e.id, label: e.label, error: String(error && error.message || error) });
             if (error && error.timedOut) throw error; // 超时不再换下一个引擎
           }
         }
         if (requestSignal.aborted) throw requestSignal.reason;
-        return { ok: false, error: tried.map(t => t.error).join('；') || '没有可用的回答', tried, ms: now() - t0 };
+        return { ok: false, error: tried.map(t => t.error).join('；') || '没有可用的回答', warning, tried, ms: now() - t0 };
       }, { signal, timeoutMs: totalMs, idleMs });
     } catch (error) {
       return { ok: false, timedOut: !!error.timedOut, timeoutKind: error.timeoutKind || '', cancelled: !!signal?.aborted,
-        error: error.timedOut ? `这次没答上来：${error.message}` : error.message, tried, ms: now() - t0 };
+        error: error.timedOut ? `这次没答上来：${error.message}` : error.message, warning, tried, ms: now() - t0 };
     }
   }
 
   return { state, ask, detect, _cwd: cwd };
 }
 
-module.exports = { ENGINES, LABEL, RULES, TOTAL_MS, CODEAGENT_MODELS, manualFile, buildPrompt, cleanAnswer, childEnv, preferredOrder, readOnlyCapable,
+module.exports = { ENGINES, LABEL, RULES, TOTAL_MS, manualFile, buildPrompt, cleanAnswer, childEnv, preferredOrder, readOnlyCapable,
   codeAgentArgs, claudeArgs, codexArgs, createHelpAskEngine };

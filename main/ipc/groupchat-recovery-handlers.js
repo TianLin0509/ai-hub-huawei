@@ -25,8 +25,9 @@ function registerGroupchatRecoveryIpc(ipcMain, deps) {
     const runtimeKind = session?.transcriptKind || kind;
     const nativeClaude = sessionManager.getNativeClaude?.(sid);
     const isNativeClaude = !!nativeClaude || session?.runtimeBackend === 'claude-stream-json';
-    const nativeCodex = sessionManager.getNativeCodex?.(sid);
-    const isNativeCodex = !!nativeCodex || session?.runtimeBackend === 'codex-app-server';
+    // ACP（DSH/Qwen/GLM/CodeAgent serve）与 CLI 提供方会话和 Codex 原生会话同一套回执接口，按同一路径读本轮结果。
+    const nativeCodex = sessionManager.getNativeSession?.(sid) || sessionManager.getNativeCodex?.(sid);
+    const isNativeCodex = !!nativeCodex || ['codex-app-server', 'acp'].includes(session?.runtimeBackend);
 
     // 2026-07-12 maintainer：轮次窗口改由 orchestrator 状态推导，不再信 renderer 的
     //   _gcTurnStartTs（那是"当前轮"的开始时间，对旧轮重提取完全错位；Hub 重启后是 0）。
@@ -127,7 +128,7 @@ function registerGroupchatRecoveryIpc(ipcMain, deps) {
       if (!record.finalText?.trim()) return {ok:false,reason:'native_empty_result',detail:'Claude 本轮已结束，但原生最终回答为空；未使用其他轮次内容填充。'};
       extracted={text:record.finalText,source:'claude-stream-json',extractMode:'native_submission'};
     } else if (isNativeCodex) {
-      if (!nativeCodex) return {ok:false,reason:'native_unavailable',detail:'请先打开该 Codex 成员会话，再核对本轮原生记录。'};
+      if (!nativeCodex) return {ok:false,reason:'native_unavailable',detail:'请先打开该成员会话，再核对本轮原生记录。'};
       const nativeTurnNum = requestedTurn || orchCurrentTurn;
       const identity = () => {
         const turn = orch?.state.turns?.find(t=>t.n === nativeTurnNum);
@@ -136,23 +137,23 @@ function registerGroupchatRecoveryIpc(ipcMain, deps) {
           turnId:turn?.providerTurnIdBy?.[sid] || pending?.providerTurnId};
       };
       const expected = identity(), epoch = nativeCodex.runtime.epoch, threadId = nativeCodex.threadId;
-      if (!expected.submissionId) return {ok:false,reason:'native_identity_unavailable',detail:'本轮缺少 Codex 原生提交身份；不会用最新回答覆盖本轮。'};
+      if (!expected.submissionId) return {ok:false,reason:'native_identity_unavailable',detail:'本轮缺少原生提交身份；不会用最新回答覆盖本轮。'};
       try {
         // A late ACK may only be recoverable from thread/read. Reconcile is
         // read-only and validates the original client ID and content digest.
         if (!expected.turnId && nativeCodex.runtime.submission?.id === expected.submissionId) await nativeCodex.reconcile();
         const receipt = nativeCodex.receipts.get(expected.submissionId)?.result;
         const providerTurnId = expected.turnId || (receipt?.clientSubmissionId === expected.submissionId && receipt?.threadId === threadId ? receipt.turnId : null);
-        if (!providerTurnId) return {ok:false,reason:'native_identity_unavailable',detail:'尚未找到本轮提交对应的 Codex 原生轮次，请先核对成员会话；未重新发送。'};
+        if (!providerTurnId) return {ok:false,reason:'native_identity_unavailable',detail:'尚未找到本轮提交对应的原生轮次，请先核对成员会话；未重新发送。'};
         const outcome = await nativeCodex.readOutcome(providerTurnId);
         if (nativeCodex.runtime.epoch !== epoch || nativeCodex.threadId !== threadId || identity().submissionId !== expected.submissionId) {
           return {ok:false,reason:'native_identity_changed',detail:'同步期间会话或派发身份已变化，请重新核对。'};
         }
         if (outcome?.turnId !== providerTurnId || outcome?.threadId !== threadId || outcome.status !== 'completed') {
-          return {ok:false,reason:'native_not_completed',detail:'Codex 本次提交尚无成功完成回执，请在成员会话核对；未使用其他轮次内容。'};
+          return {ok:false,reason:'native_not_completed',detail:'本次提交尚无成功完成回执，请在成员会话核对；未使用其他轮次内容。'};
         }
-        if (!outcome.text?.trim()) return {ok:false,reason:'native_empty_result',detail:'Codex 本轮已结束，但原生最终回答为空。'};
-        extracted={text:outcome.text,source:'codex-app-server',extractMode:'native_submission',providerTurnId};
+        if (!outcome.text?.trim()) return {ok:false,reason:'native_empty_result',detail:'本轮已结束，但原生最终回答为空。'};
+        extracted={text:outcome.text,source:session?.runtimeBackend === 'acp' ? 'acp' : nativeCodex?.isCliProvider ? 'provider-cli' : 'codex-app-server',extractMode:'native_submission',providerTurnId};
       } catch (error) { return {ok:false,reason:'extract_failed',detail:error.message}; }
     } else {
       try {
@@ -193,11 +194,11 @@ function registerGroupchatRecoveryIpc(ipcMain, deps) {
       const extractMode = extracted?.extractMode || null;
       let detail;
       if (extractMode === 'no_rollout_bound') {
-        detail = `Codex rollout 文件尚未绑定（kind=${kind}）。可能原因：（a）当天目录 ~/.codex/sessions/<今日>/ 还没新文件；（b）codex spawn 时的 cwd 与 rollout session_meta.cwd 不一致；（c）timestamp 超出绑定窗口 [-10s, +5min]。建议：等 5-10s（codex 通常 spawn 后才写 rollout 首行），或点"🔧 进 shell"看真实 PTY 输出确认 codex 是否真的启动了。`;
+        detail = `Codex rollout 文件尚未绑定（kind=${kind}）。可能原因：（a）当天目录 ~/.codex/sessions/<今日>/ 还没新文件；（b）codex spawn 时的 cwd 与 rollout session_meta.cwd 不一致；（c）timestamp 超出绑定窗口 [-10s, +5min]。建议：等 5-10s（codex 通常 spawn 后才写 rollout 首行），或点卡片上的「打开 CLI」看 codex 是否真的启动了。`;
       } else if (extractMode === 'no_task_complete_yet') {
-        detail = `Codex 已绑定 rollout 但${isLatestTurn ? '' : `第 ${requestedTurn} 轮窗口内`} task_complete 事件${isLatestTurn ? '尚未写入' : '未找到'}（kind=${kind}）。可能原因：（a）codex 仍在思考；（b）codex 在等 MCP 工具确认弹窗（如 ai-team team_respond），需要进 shell 点"Allow"；（c）codex 多 task 场景含 3s debounce，最后一个 task 完成后才 emit。建议：点"🔧 进 shell"看 codex 当前是否被 confirm 弹窗阻塞。`;
+        detail = `Codex 已绑定 rollout 但${isLatestTurn ? '' : `第 ${requestedTurn} 轮窗口内`} task_complete 事件${isLatestTurn ? '尚未写入' : '未找到'}（kind=${kind}）。可能原因：（a）codex 仍在思考；（b）codex 在等 MCP 工具确认弹窗（如 ai-team team_respond），需要打开成员 CLI 点"Allow"；（c）codex 多 task 场景含 3s debounce，最后一个 task 完成后才 emit。建议：点卡片上的「打开 CLI」看 codex 当前是否被确认弹窗阻塞。`;
       } else {
-        detail = `transcript 中没有可读的 last assistant 内容（kind=${kind}）。可能原因：CLI 还没真正回答 / transcript 路径未绑定 / Stop hook 没触发且 idle-timer 还没到期。建议稍等几秒重试，或点"🔧 进 shell"看真实 PTY 输出。`;
+        detail = `transcript 中没有可读的 last assistant 内容（kind=${kind}）。可能原因：CLI 还没真正回答 / transcript 路径未绑定 / Stop hook 没触发且 idle-timer 还没到期。建议稍等几秒重试，或点卡片上的「打开 CLI」看成员实际输出。`;
       }
       return {
         ok: false,

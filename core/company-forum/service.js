@@ -327,13 +327,21 @@ class CompanyForum {
   }
   async ensureSession() {
     let id = this.state().sessionId;
+    const meta = id && (this.deps.getSession(id) || this.deps.getSessionMetadata?.(id));
+    if (meta && require('../feature-agent-choice').stale(this.deps.dataDir, 'forum', meta)) {
+      if (this.sessionBusy(id)) throw new Error('上一轮汇总还在回答，答完后使用新模型');
+      await this.deps.closeSession?.(id);
+      id = null;
+      this.saveState({ sessionId: null, primed: null });
+    }
     if (id && this.deps.getSession(id)) return id;
     if (id && this.deps.getSessionMetadata?.(id)) {
       try { await this.deps.resumeSession(id); } catch { /* 恢复不了就新开 */ }
       if (this.deps.getSession(id)) return id;
     }
     id = randomUUID();
-    const created = await this.deps.createSession('codeagent', { id, cwd: this.workspace, title: '论坛热帖整理', purpose: PURPOSE, autonomous: true, noInheritCursor: true });
+    const picked = require('../feature-agent-choice').session(this.deps.dataDir, 'forum', 'codeagent', { id, cwd: this.workspace, title: '论坛热帖整理', purpose: PURPOSE, autonomous: true, noInheritCursor: true });
+    const created = await this.deps.createSession(picked.kind, picked.opts);
     if (!created || created.id !== id) throw new Error('整理会话没能打开');
     this.saveState({ sessionId: id, primed: null });
     return id;
@@ -344,6 +352,8 @@ class CompanyForum {
     this.pumping = true;
     try {
       const id = await this.ensureSession();
+      const auth = (this.launchFailures ||= require('../feature-agent-session-failure').createReader(this.deps)).read(id);
+      if (auth) throw new Error(auth);
       if (this.sessionBusy(id)) return; // 会话还在忙上一件事：下一轮再发
       const st = this.state();
       const prompt = st.primed === id ? job.prompt : INSTRUCTIONS + '\n\n---\n\n' + job.prompt;
@@ -361,9 +371,12 @@ class CompanyForum {
     const job = this.job;
     if (!job) return;
     if (!job.sentAt) { void this.pump(); return; }
-    if (this.sessionBusy(job.sessionId)) { if (this.now() - job.sentAt > JOB_TIMEOUT_MS * 2) this.finishSummary(job, '', '整理会话忙了太久'); return; }
     const final = this.lastFinal(job.sessionId);
-    if (final && final.id !== job.baseline && String(final.text || '').trim()) { this.finishSummary(job, final.text, null); return; }
+    const fresh = final && final.id !== job.baseline && String(final.text || '').trim();
+    const auth = fresh ? '' : (this.launchFailures ||= require('../feature-agent-session-failure').createReader(this.deps)).read(job.sessionId);
+    if (auth) { this.finishSummary(job, '', auth); return; }
+    if (this.sessionBusy(job.sessionId)) { if (this.now() - job.sentAt > JOB_TIMEOUT_MS * 2) this.finishSummary(job, '', '整理会话忙了太久'); return; }
+    if (fresh) { this.finishSummary(job, final.text, null); return; }
     if (this.now() - job.sentAt > JOB_TIMEOUT_MS) this.finishSummary(job, '', `整理会话 ${Math.round(JOB_TIMEOUT_MS / 60000)} 分钟没给出回答`);
   }
   finishSummary(job, text, error) {

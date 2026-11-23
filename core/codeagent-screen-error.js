@@ -8,6 +8,7 @@
 // 把报错原文交给界面显示。全屏界面会重绘旧报错，所以按「这条报错在屏幕上出现的次数变多」才算新的。
 // 新增屏幕匹配须有真实样本（项目规则）：只认 ERROR_HEADS 里列出的、有样本的报错标题。
 const { isCodeAgentKind } = require('./ai-kinds.js');
+const { classifyModelRevocation } = require('./codeagent-model-revoked.js');
 
 const CHECK_MS = 10_000;
 const HEAD_WORDS = /SessionRequestError/; // 原始输出里连这个词都没有就不必回放屏幕（省 CPU）
@@ -23,14 +24,18 @@ function findScreenErrors(rows) {
     const head = ERROR_HEADS.exec(strip(list[i]));
     if (!head) continue;
     const parts = [];
-    for (let j = i + 1; j < list.length && j <= i + 3; j++) {
+    // 模型权限提示在窄终端里会折成多行，错误块仍以空行或下一个错误标题结束。
+    for (let j = i + 1; j < list.length && j <= i + 8; j++) {
       const line = strip(list[j]);
       if (!line) { if (parts.length) break; continue; }
       if (ERROR_HEADS.test(line)) break;
       parts.push(line);
     }
     const message = parts.join(' ').replace(/\s+/g, ' ').trim().slice(0, 400);
-    if (message) out.push({ name: head[1], message });
+    if (message) {
+      const modelRevoked = classifyModelRevocation(`${head[1]} ${message}`, { source: 'codeagent-screen-error' });
+      out.push({ name: head[1], message, ...(modelRevoked ? { modelRevoked } : {}) });
+    }
   }
   return out;
 }
@@ -67,7 +72,7 @@ function createScreenErrorWatch({ manager, readScreen, renderRows, onError, inte
     if (!fresh) return;
     const failedAt = now(), message = describeScreenError(fresh);
     if (manager.noteAgentTurnFinished(sessionId, { failedAt, message })) {
-      try { onError({ sessionId, failedAt, kind: entry.info.kind, message, name: fresh.name }); } catch { /* 只影响提示 */ }
+      try { onError({ sessionId, failedAt, kind: entry.info.kind, message, name: fresh.name, modelRevoked: fresh.modelRevoked || null }); } catch { /* 只影响提示 */ }
     }
   }
   async function tick() {

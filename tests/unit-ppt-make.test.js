@@ -148,7 +148,7 @@ test('任务流：建任务 → 提问带骨架、材料和规则 → 模型提�
   const { job } = f.make.start({ skeletonId: sk.id, brief: '三项措施叠加，指标提升 XX%' });
   assert.equal(job.state, 'waiting_agent'); assert.equal(job.chatId, 'chat-1');
   const { text, options } = f.asks[0];
-  assert.deepEqual(options, { entry: 'ppt', taskTitle: 'PPT 做页 · ' + sk.name.slice(0, 18) });
+  assert.deepEqual(options, { entry: 'ppt', featureAgent: 'pptMake', taskTitle: 'PPT 做页 · ' + sk.name.slice(0, 18) });
   for (const part of ['做页任务', `jobId=${job.id}`, sk.name, sk.fit, sk.chain, '三项措施叠加，指标提升 XX%', PPT_MAKE_INSTRUCTIONS, JSON.stringify(sk.spec), 'ppt_make(jobId, spec)']) assert.ok(text.includes(part), '提问里带：' + part.slice(0, 20));
   assert.equal(f.make.status(job.id).state, 'waiting_agent');
 

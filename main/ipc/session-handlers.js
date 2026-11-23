@@ -1685,7 +1685,7 @@ function registerSessionIpc(ipcMain, deps) {
       // 每次被拦的提交只重拉一次；并发提交复用账号探测，不更改模型固定规则。
       return probeCodeAgentAccount(session.codeagentPoolAccount || 'personal').catch(() => []).then(models => {
         if (!valid()) throw stopped('会话或任务已变化，本条消息未发送。');
-        const available = error.reason === '模型请求已被拒绝' ? models.filter(id => id.toLowerCase() !== String(error.model).toLowerCase()) : models;
+        const available = (error.modelRevoked || error.reason === '模型请求已被拒绝') ? models.filter(id => id.toLowerCase() !== String(error.model).toLowerCase()) : models;
         return confirmSessionModel(sessionId, { ...error, message: error.message, availableModels: available, suggestedModel: available[0] || '' },
           { ...options, modelListRetried: true });
       });

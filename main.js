@@ -1173,6 +1173,30 @@ require('./core/cli-exit-watch').createCliExitWatch({
   },
 }).start();
 // CodeAgent 在终端里报了会话级错误（如部门模型管控 SessionRequestError），原生记录里没有：结束这一轮并把原文显示出来（core/codeagent-screen-error.js）。
+async function recoverCodeAgentModelRevocation({ sessionId, modelRevoked, message }) {
+  const session = sessionManager.getSession(sessionId);
+  if (!session || !modelRevoked || typeof sessionOperations?.confirmSessionModel !== 'function') return;
+  const model = session.fixedModel || session.currentModel?.id || modelRevoked.model || '';
+  const reason = modelRevoked.reason || '当前模型已不可用';
+  const error = Object.assign(require('./core/session-model-pin').unavailableError(model, reason, []), { modelRevoked: true });
+  const updated = sessionManager.updateSessionMeta(sessionId, {
+    modelConfirmationRequired: true,
+    modelUnavailableReason: `${reason}：${String(message || modelRevoked.text || '').slice(0, 240)}`,
+  });
+  if (updated) sendToRenderer('session-updated', { session: updated });
+  const requestId = `model-revoked-${sessionId}-${Date.now()}`;
+  try {
+    const result = await sessionOperations.confirmSessionModel(sessionId, error, { clientSubmissionId: requestId });
+    // 群聊/小队的等待状态由 session-model-wait 驱动成员卡片；没有可关联的
+    // 单条工作流消息时不擅自重发，避免把同一轮任务发两遍。
+    if (result?.ok && !session.meetingId && typeof promptOperations?.resendAfterModelSwitch === 'function') {
+      await promptOperations.resendAfterModelSwitch(sessionId, { clientSubmissionId: requestId + '-retry' });
+    }
+  } catch (recoveryError) {
+    console.warn('[codeagent] 模型权限恢复失败：' + recoveryError.message);
+  }
+}
+
 require('./core/codeagent-screen-error').createScreenErrorWatch({
   manager: sessionManager,
   readScreen: id => {
@@ -1181,8 +1205,9 @@ require('./core/codeagent-screen-error').createScreenErrorWatch({
     return text == null ? null : { text, cols: Number(entry?.pty?.cols) || 120, rows: Number(entry?.pty?.rows) || 30 };
   },
   renderRows: raw => require('./core/hub-phone/session-chat').renderRows(raw),
-  onError: ({ sessionId, failedAt, kind, message }) => {
+  onError: ({ sessionId, failedAt, kind, message, modelRevoked }) => {
     const session = sessionManager.getSession(sessionId);
+    if (modelRevoked) void recoverCodeAgentModelRevocation({ sessionId, modelRevoked, message });
     sendToRenderer('turn-failed-event', {
       hubSessionId: sessionId, transcriptPath: session ? session.transcriptPath : null, failedAt,
       meetingId: session ? session.meetingId : null, kind, signalSource: 'codeagent-screen-error', turnId: null,
@@ -3104,7 +3129,7 @@ try {
       // 助理会话的 CodeAgent 进程退出了，这一问立刻报失败（审计 A3-17，以前要空等 12–24 分钟）。
       isSessionProcessAlive: id => sessionProcessAlive(id),
       // CodeAgent 的原生记录是 Claude 格式，按 Claude 读最终回答；会议伴侣也可能开在 Codex 上（2026-11-08），按 Codex 读。
-      readFinals: meta => { const r = live.read({ ...meta, id: meta.id || meta.hubId, kind: /^codex/.test(String(meta.kind || '')) ? 'codex' : 'claude' }); return r && r.available ? r.records : []; },
+      readFinals: meta => require('./core/feature-agent-finals').read(meta, sessionManager, live),
       // 自动档跟随个人账号明确保存且仍在清单内的默认模型；未配置时沿用会议评测排序。
       meetingDefaultEngine: () => {
         const personalDir = require('./core/codeagent-config').resolveCodeAgentConfig(process.env).configDir;
@@ -3179,9 +3204,10 @@ if (require('./core/company-ai-policy').companyOnly()) {
     sendPrompt:(sessionId,text,clientSubmissionId)=>promptOperations.submitPrompt(null,{sessionId,text,clientSubmissionId,waitForCliReady:true}),
     lastFinal:id=>{
       const meta=sessionManager.getSession(id)||require('./core/session-store').loadSessionFile(id,{strict:true});
-      const result=meta&&live.read({...meta,id:meta.id||meta.hubId||id,kind:'claude'});
-      return result?.available ? result.records?.at(-1) : null;
+      return meta ? require('./core/feature-agent-finals').read({...meta,id},sessionManager,live).at(-1) || null : null;
     },
+    getSession:id=>sessionManager.getSession(id),
+    readTerminalScreen:id=>({text:sessionManager.getSessionBuffer(id)||''}),
     closeSession:id=>require('./core/company-ai-tasks').closeOwnedSession(sessionManager,id),
     onChanged:state=>sendToRenderer('company-ai:changed',state),
   });
@@ -3222,7 +3248,8 @@ try {
       dataDir: getHubDataDir(), getAssistant: () => companyAssistantService, runAi: runCompanyAi,
       createSession: (kind, opts) => sessionOperations.createSession({ kind, opts }),
       sendPrompt: (sessionId, text, clientSubmissionId) => promptOperations.submitPrompt(null, { sessionId, text, clientSubmissionId, waitForCliReady: true }),
-      lastFinal: id => { const meta = sessionManager.getSession(id); const result = meta && avatarHistory.read({ ...meta, id: meta.id || meta.hubId || id, kind: 'claude' }); return result?.available ? result.records?.at(-1) : null; },
+      lastFinal: id => { const meta = sessionManager.getSession(id); return meta ? require('./core/feature-agent-finals').read({ ...meta, id }, sessionManager, avatarHistory).at(-1) || null : null; },
+      readTerminalScreen: id => ({ text: sessionManager.getSessionBuffer(id) || '' }),
       getSession: id => sessionManager.getSession(id),
       closeSession: id => require('./core/company-ai-tasks').closeOwnedSession(sessionManager, id),
       listBackends: () => avatarIpc.listAvatarBackends({ dataDir: getHubDataDir(), sessionManager }),
@@ -3269,8 +3296,10 @@ try {
       getSessionMetadata: loadMeta,
       resumeSession: async id => { const meta = require('./core/session-store').loadSessionFile(id, { strict: true }); return meta ? resumeSession({ ...meta, hubId: id }) : null; },
       isAgentTurnActive: id => sessionManager.isAgentTurnActive(id),
-      readFinals: meta => { const r = live.read({ ...meta, id: meta.id || meta.hubId, kind: 'claude' }); return r && r.available ? r.records : []; },
+      readFinals: meta => require('./core/feature-agent-finals').read(meta, sessionManager, live),
       onChanged: () => sendToRenderer('company-forum:changed', {}),
+      readTerminalScreen: id => ({ text: sessionManager.getSessionBuffer(id) || '' }),
+      closeSession: id => require('./core/company-ai-tasks').closeOwnedSession(sessionManager, id),
     });
     if (optionalFeatures.get('forum')) companyForumService.start();
     require('./main/ipc/company-forum-handlers').registerCompanyForumIpc(ipcMain, companyForumService, { shell, browser: companyForumBrowser });

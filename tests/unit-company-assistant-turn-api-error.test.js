@@ -65,7 +65,7 @@ test('这一轮以接口报错收场：会话空闲稳定 8 秒后立刻报失�
   await f.settle();
   assert.equal(f.prompts.length, 1);
   const sid = f.prompts[0].id, file = f.sessions.get(sid).transcriptPath;
-  write(file, [userRow(f.now(), '做一页'), apiErrorRow(f.now() + 2000, 'Please run /login · API Error: 401 Authentication Fails (request_id: x)')]);
+  write(file, [userRow(f.now(), '做一页'), apiErrorRow(f.now() + 2000, 'API Error: 429 rate limited (request_id: x)')]);
   // 实测：CLI 以报错收场走 StopFailure，Hub 仍可能把会话当成在忙；报错判定不能被「在忙」挡住。
   f.deps.isAgentTurnActive = () => true;
   await f.a.collectJob('ppt');
@@ -74,8 +74,19 @@ test('这一轮以接口报错收场：会话空闲稳定 8 秒后立刻报失�
   await f.a.collectJob('ppt');
   const row = f.a.chat().find(c => c.id === item.id);
   assert.equal(row.state, 'error');
-  assert.match(row.error, /^模型账号鉴权失败（登录过期或密钥无效），这一问没答完（API Error: 401 Authentication Fails/);
-  assert.match(row.error, /打开助理会话处理后重试/);
+  assert.match(row.error, /^模型接口限流，这一问没答完（API Error: 429 rate limited/);
+  assert.match(row.error, /限流时等一两分钟再重试/);
+});
+
+test('明确 401 登录失效立即报错，不等稳定期或五分钟时限', async t => {
+  const f = fixture(t), item = f.a.ask('PPT 做页', { entry: 'ppt' });
+  await f.settle();
+  const sid = f.prompts[0].id, file = f.sessions.get(sid).transcriptPath;
+  write(file, [userRow(f.now(), '做一页'), apiErrorRow(f.now() + 2000, 'Please run /login · API Error: 401 Authentication Fails')]);
+  f.deps.isAgentTurnActive = () => true;
+  await f.a.collectJob('ppt');
+  const row = f.a.chat().find(c => c.id === item.id);
+  assert.equal(row.state, 'error'); assert.match(row.error, /尚未登录或授权已失效/); assert.match(row.error, /账号页重新登录后重试/);
 });
 
 test('发问前会话里已有的旧报错不算这一问的结果', async t => {

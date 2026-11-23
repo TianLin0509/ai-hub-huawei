@@ -135,6 +135,7 @@ function attachHelpAsk({ document: doc, ipcRenderer, openPath = p => doc.default
   function renderItem(item) {
     const qa = el('div', 'ask-qa');
     const q = el('div', 'ask-q'); q.append(el('p', '', item.q)); qa.append(q);
+    if (item.warning) { const warning = el('p', 'ha-fallback-notice', item.warning); warning.setAttribute('role', 'status'); qa.append(warning); }
     if (item.pending) {
       const wait = el('div', 'ask-wait hw-sweep');
       const dots = el('span', 'dots'); dots.append(el('i'), el('i'), el('i'));
@@ -146,6 +147,11 @@ function attachHelpAsk({ document: doc, ipcRenderer, openPath = p => doc.default
       const t = el('div', 't'); t.append(doc.createTextNode(item.cancelled ? '已取消' : '没答出来'), el('small', '', item.error));
       const actions = el('div', 'ha-actions');
       actions.append(btn('btn', '重试', () => void submit(item.q)));
+      if (!item.cancelled) {
+        const choose = btn('btn', '选模型', () => {});
+        choose.dataset.featureAgent = 'help';
+        actions.append(choose);
+      }
       if (item.timedOut) actions.append(btn('btn', '取消', () => { item.timedOut = false; render(); }));
       if (!item.cancelled) actions.append(btn('btn', '一键反馈', () => feedbackLink(item).click()));
       t.append(actions); err.append(t); qa.append(err);
@@ -199,6 +205,7 @@ function attachHelpAsk({ document: doc, ipcRenderer, openPath = p => doc.default
     try { r = await ipcRenderer.invoke('help-ask:ask', { question: q, history }); } catch (error) { r = { ok: false, error: error.message }; }
     if (item.cancelled) return; // 已取消：旧进程收尾的结果不再显示，名额早已放开
     item.pending = false;
+    item.warning = r?.warning || '';
     if (r && r.ok) Object.assign(item, { a: r.answer, engineLabel: r.engineLabel, ms: r.ms });
     else {
       item.error = (r && r.error) || '没有响应';

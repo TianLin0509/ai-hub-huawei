@@ -420,6 +420,16 @@ function buildConfigJsonUpdate(existing, newConfig) {
 }
 
 function registerConfigIpc(ipcMain, deps) {
+  const featureAgents = require('../../core/feature-agent-choice');
+  const featureDataDir = () => require('../../core/data-dir').getHubDataDir();
+  ipcMain.handle('feature-agents:get', () => featureAgents.state(featureDataDir()));
+  ipcMain.handle('feature-agents:set', (_event, request = {}) => {
+    try {
+      featureAgents.set(featureDataDir(), request.feature, request.choice || null);
+      deps.sendToRenderer?.('feature-agents:changed', { feature: request.feature });
+      return featureAgents.state(featureDataDir());
+    } catch (error) { return { ok: false, error: error.message }; }
+  });
   const {
     attachCodexUsageScope,
     clearCodexJsonlCache,

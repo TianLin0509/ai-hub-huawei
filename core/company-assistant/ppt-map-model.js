@@ -46,8 +46,9 @@ function replyText(stdout) {
 
 const short = (s, n = 160) => { const t = String(s || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n) + '…' : t; };
 
-function createCodeAgentChannel({ dataDir, models = [], env = process.env, timeoutMs = BATCH_TIMEOUT_MS, spawnImpl = spawn, findCommand = null, resolveConfig = null } = {}) {
+function createCodeAgentChannel({ dataDir, choiceDataDir = dataDir, models = [], env = process.env, timeoutMs = BATCH_TIMEOUT_MS, spawnImpl = spawn, findCommand = null, resolveConfig = null } = {}) {
   const wanted = [...new Set([...models.filter(Boolean), ...DEFAULT_MODELS])];
+  let selectedFailure = null;
   let help = null, picked = '', tried = new Set(), lastReason = '';
   const cwd = path.join(dataDir, 'ppt-map', 'agent-cwd');
   function launch() {
@@ -71,6 +72,9 @@ function createCodeAgentChannel({ dataDir, models = [], env = process.env, timeo
     return a;
   }
   async function probe({ signal } = {}) {
+    selectedFailure = null; // 用户再次启动库地图更新时才重新检测，不在每一批里重试坏线路。
+    const selected = require('../feature-agent-choice').resolve(choiceDataDir, 'pptMap').selected;
+    if (selected) return { available: true, model: selected.model || selected.kind, reason: '' };
     const l = launch();
     if (!l.ok) { lastReason = l.reason; return { available: false, reason: l.reason }; }
     tried.clear(); // 每次更新库地图都重新试候选模型：上次不通、这次可能已开通
@@ -84,6 +88,19 @@ function createCodeAgentChannel({ dataDir, models = [], env = process.env, timeo
     return { available: true, model: picked || wanted[0], reason: '' };
   }
   async function run(prompt, { signal, onAttempt } = {}) {
+    const selected = require('../feature-agent-choice').resolve(choiceDataDir, 'pptMap').selected;
+    if (selected) {
+      const key = JSON.stringify(selected);
+      if (selectedFailure?.key === key) throw Object.assign(new Error(selectedFailure.reason), { channelDown: true });
+      onAttempt?.();
+      try { return await require('../feature-agent-run').run(selected, prompt, { dataDir, env, signal, timeoutMs }); }
+      catch (error) {
+        if (signal?.aborted || error.aborted) throw Object.assign(error, { aborted: true });
+        lastReason = `所选 ${require('../feature-agent-choice').LABELS[selected.kind] || selected.kind} 失败，本次改用规则分类：${error.message}`;
+        selectedFailure = { key, reason: lastReason };
+        throw Object.assign(new Error(lastReason), { channelDown: true });
+      }
+    }
     const l = launch();
     if (!l.ok) throw Object.assign(new Error(l.reason), { channelDown: true });
     fs.mkdirSync(cwd, { recursive: true });
@@ -109,7 +126,10 @@ function createCodeAgentChannel({ dataDir, models = [], env = process.env, timeo
     lastReason = `CodeAgent 调不通（试了 ${wanted.join('、')}）：${lastError}`;
     throw Object.assign(new Error(lastReason), { channelDown: true });
   }
-  return { probe, run, model: () => picked, reason: () => lastReason };
+  return { probe, run, model: () => {
+    const selected = require('../feature-agent-choice').resolve(choiceDataDir, 'pptMap').selected;
+    return selected ? selected.model || selected.kind : picked;
+  }, reason: () => lastReason };
 }
 
 module.exports = { createCodeAgentChannel, runOnce, replyText, DEFAULT_MODELS };

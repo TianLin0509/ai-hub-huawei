@@ -30,15 +30,16 @@ class AgentSessions {
     const routes = require('../codeagent-assistant-route');
     const route = meta && this.d.dataDir ? routes.choose(this.d.dataDir, meta.codeagentPoolAccount || 'personal', meta.currentModel?.id || meta.fixedModel || '',
       { configDir: meta.codeagentConfigDir, explicitModel: av.backend?.model || '' }) : null;
-    const sameRoute = routes.matchesSession(meta, route);
+    const sameRoute = !require('../feature-agent-choice').stale(this.d.dataDir, 'avatar', meta) && (meta?.featureAgentChoice || routes.matchesSession(meta, route));
     if (session?.id && this.alive(session.id) && sameRoute && (session.questions || 0) < MAX_QUESTIONS) return session;
     if (this.starting.has(av.id)) return this.starting.get(av.id);
     const work = (async () => {
       if (session?.id && !(await this.close(session.id))) throw new Error('上一个分身会话还没关掉，下一轮再试');
       const id = randomUUID();
       const addDirs = (av.sources || []).map(s => (s.type === 'dir' ? s.path : require('node:path').dirname(s.path)));
-      const created = await this.d.createSession('codeagent', { id, cwd, title: `分身 · ${av.name}`, purpose: PURPOSE, autonomous: true, noInheritCursor: true, openInBackground: true,
+      const picked = require('../feature-agent-choice').session(this.d.dataDir, 'avatar', 'codeagent', { id, cwd, title: `分身 · ${av.name}`, purpose: PURPOSE, autonomous: true, noInheritCursor: true, openInBackground: true,
         ...(addDirs.length ? { addDirs: [...new Set(addDirs)] } : {}), ...backendOptions(av.backend, this.d.pickAccount) });
+      const created = await this.d.createSession(picked.kind, picked.opts);
       if (created?.ok === false) throw new Error(created.message || created.error || '分身会话没有启动');
       return { id, questions: 0, startedAt: this.now(), lastAt: this.now() };
     })();
@@ -52,14 +53,19 @@ class AgentSessions {
     const broken = message => Object.assign(new Error(message), { restart: true });
     const errors = require('../company-assistant/turn-api-error');
     const baseline = errors.lastApiError(this.d.getSession(session.id)?.transcriptPath)?.id;
+    const failures = require('../feature-agent-session-failure').createReader(this.d);
     let apiError = null;
     let sent;
+    const initialFailure = failures.read(session.id, baseline);
+    if (initialFailure) throw broken(initialFailure);
     try { sent = await this.d.sendPrompt(session.id, prompt, token); } catch (e) { throw broken(e.message); }
     if (sent?.ok === false || sent?.notSent || sent?.stopped) throw broken(sent.message || sent.error || '分身会话没有收到任务');
     while (this.now() < until) {
       if (!this.d.getSession(session.id)) throw broken('分身会话已关闭');
       const final = this.d.lastFinal(session.id);
       if (final?.text?.includes(marker)) return final.text.replace(marker, '').trim();
+      const launchFailure = failures.read(session.id, baseline);
+      if (launchFailure) throw broken(launchFailure);
       const meta = this.d.getSession(session.id), err = errors.lastApiError(meta?.transcriptPath);
       if (err && err.id !== baseline) {
         if (apiError?.id !== err.id) apiError = { id: err.id, at: this.now() };

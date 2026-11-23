@@ -7,6 +7,7 @@
 (function settingsTabsModule() {
 const TABS = [
   { id: 'general', label: '常用' },
+  { id: 'agents', label: '功能使用的 Agent' },
   { id: 'display', label: '外观与输入' },
   { id: 'pet', label: '桌宠与回执' },
   { id: 'notify', label: '通知' },
@@ -16,6 +17,7 @@ const TABS = [
 ];
 // 先匹配先得：桌宠段落里也有 .config-operations-card，所以 pet 要排在 server 前面。
 const RULES = [
+  ['agents', '#cfg-feature-agents'],
   ['shared', '.hub-feature-search, .cfg-tabs'],
   ['pet', '#cfg-hub-pet, #cfg-notify-mode-section'],
   ['notify', '.config-notification-title, #config-notification-card'],

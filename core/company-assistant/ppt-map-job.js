@@ -47,7 +47,7 @@ class PptMap {
     if (this.deps.pptMapChannel) return this.deps.pptMapChannel;
     if (!this.defaultChannel) {
       const models = [this.lib.config().mapModel].filter(Boolean);
-      this.defaultChannel = require('./ppt-map-model').createCodeAgentChannel({ dataDir: this.lib.a.dir, models });
+      this.defaultChannel = require('./ppt-map-model').createCodeAgentChannel({ dataDir: this.lib.a.dir, choiceDataDir: this.lib.a.deps?.dataDir, models });
     }
     return this.defaultChannel;
   }

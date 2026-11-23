@@ -17,13 +17,16 @@ const CODEAGENT_HELP = '-p, --print --model --output-format --effort --tools --p
 const CLAUDE_HELP = '-p, --print --tools --permission-mode --strict-mcp-config --no-session-persistence --max-turns --settings';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-function engineWith(t, { found = {}, run, edition = 'member', env = {}, totalMs } = {}) {
+function engineWith(t, { found = {}, run, edition = 'member', env = {}, totalMs, models = [], current = '', config = {} } = {}) {
   const dataDir = tmp(t);
+  const personal = path.join(dataDir, 'personal'); fs.mkdirSync(personal);
+  fs.writeFileSync(path.join(personal, 'settings.json'), JSON.stringify({ model: current }));
+  if (models.length) require('../core/codeagent-models').recordMenu(dataDir, models, { complete: true });
   const calls = [];
   const engine = createHelpAskEngine({
-    dataDir, edition, env: { ...env }, totalMs,
+    dataDir, edition, env: { ...env, AI_HUB_CODEAGENT_CONFIG_DIR: personal }, totalMs, getConfig: () => config,
     findCommand: id => found[id] || null,
-    resolveCodeAgent: () => ({ command: found.codeagent }),
+    resolveCodeAgent: () => ({ command: found.codeagent, configDir: personal }),
     codexMcpNames: () => ['wireless', 'bad name'],
     runOnce: async opts => {
       calls.push(opts);
@@ -71,19 +74,90 @@ test('一个 AI 命令行都没有：不起进程，回 needSetup 让界面就�
   assert.equal(calls.length, 0);
 });
 
-test('成员版 CodeAgent：低档模型先上，快速失败才换下一个模型；说明书和问题经标准输入传；--help 只探测一次', async t => {
+test('成员版 CodeAgent：跟随新建会话默认，模型权限失败后从账号清单换一次；说明书和问题经标准输入传', async t => {
   let n = 0;
   const { engine, calls, dataDir } = engineWith(t, { found: { codeagent: 'C:/x/codeagent.cmd' },
+    current: 'GLM-5.2-WX-Auto', models: ['GLM-5.2-WX-Auto', 'fixture-next'],
+    config: { defaultModels: { codeagent: 'fixture-next' } },
     run: () => (++n === 1 ? { code: 1, stderr: '模型不存在' } : { code: 0, stdout: JSON.stringify({ type: 'result', result: '设置菜单 →「⚙️ 设置」' }) }) });
   const r = await engine.ask({ question: '回车想换行在哪改？' });
   assert.equal(r.ok, true); assert.equal(r.engine, 'codeagent'); assert.equal(r.model, 'GLM-5.2-WX-Auto');
   const asks = calls.filter(c => c.args[0] === '-p');
-  assert.deepEqual(asks.map(c => c.args[2]), ['deepseek-v4.1-flash-1017', 'GLM-5.2-WX-Auto']);
+  assert.deepEqual(asks.map(c => c.args[2]), ['fixture-next', 'GLM-5.2-WX-Auto']);
+  assert.equal(r.warning, '已改用 GLM-5.2-WX-Auto');
   assert.match(asks[0].input, /【使用说明书开始】[\s\S]*## 2\. 界面地图[\s\S]*【使用说明书结束】/);
   assert.match(asks[0].input, /【用户问题】\n回车想换行在哪改？/);
   assert.equal(asks[0].cwd, path.join(dataDir, 'help-ask', 'cwd'), '工作目录是 Hub 数据目录下的空文件夹，不是用户项目');
   await engine.ask({ question: '再问一次' });
-  assert.equal(calls.filter(c => c.args[0] === '--help').length, 1, '--help 结果缓存');
+  assert.equal(calls.filter(c => c.args[0] === '--help').length, 2, '默认引擎缓存 --help；替代模型独立只读探测一次');
+});
+
+test('没有功能覆盖时每次重新读新建会话默认；没设 Hub 默认则跟随 CLI，未知清单不写死旧模型', async t => {
+  const config = { defaultModels: { codeagent: 'fixture-new' } };
+  const { engine, calls } = engineWith(t, { found: { codeagent: 'fixture' }, current: 'fixture-cli',
+    models: ['fixture-cli', 'fixture-new'], config });
+  await engine.ask({ question: '问题一' });
+  config.defaultModels.codeagent = 'fixture-cli'; await engine.ask({ question: '问题二' });
+  delete config.defaultModels.codeagent; await engine.ask({ question: '问题三' });
+  assert.deepEqual(calls.filter(c => c.input).map(c => c.args[c.args.indexOf('--model') + 1]), ['fixture-new', 'fixture-cli', 'fixture-cli']);
+  const unknown = engineWith(t, { found: { codeagent: 'fixture' }, current: 'fixture-unknown' });
+  await unknown.engine.ask({ question: '权限清单尚未读到' });
+  assert.equal(unknown.calls.find(c => c.input).args[2], 'fixture-unknown');
+});
+
+test('Claude 和 Codex 默认同样读取新建会话设置', async t => {
+  for (const [kind, model] of [['claude', 'claude-haiku-4-5'], ['codex', 'gpt-5.4']]) {
+    const { engine, calls } = engineWith(t, { edition: 'public', found: { [kind]: kind }, config: { defaultModels: { [kind]: model } },
+      run: spec => { if (kind === 'codex') fs.writeFileSync(spec.args[spec.args.indexOf('--output-last-message') + 1], '答案'); return { code: 0, stdout: '答案' }; } });
+    const result = await engine.ask({ question: '设置在哪' });
+    assert.equal(result.ok, true); assert.equal(result.model, model);
+    const ask = calls.find(c => c.input); assert.equal(ask.args[ask.args.indexOf('--model') + 1], model);
+  }
+});
+
+test('同事中文模型权限报错只重试一次；替代也失败时不再走其他引擎', async t => {
+  const { engine, calls } = engineWith(t, { found: { codeagent: 'fixture', claude: 'claude' }, current: 'GLM-5.2-WX-Auto',
+    models: ['GLM-5.2-WX-Auto', 'fixture-next', 'fixture-third'],
+    run: () => ({ code: 0, stdout: JSON.stringify({ type: 'result', is_error: true, result: '您当前的模型 GLM-5.2-WX-Auto 可能已经升级或被调整了权限' }) }) });
+  const result = await engine.ask({ question: '权限错误' });
+  assert.equal(result.ok, false); assert.match(result.error, /请重试或选模型/);
+  assert.deepEqual(calls.filter(c => c.input).map(c => c.args[2]), ['GLM-5.2-WX-Auto', 'fixture-next']);
+});
+
+test('权限清单没有其他模型时直接给选模型出口；网络错误不冒充权限错误', async t => {
+  const { engine, calls } = engineWith(t, { found: { codeagent: 'fixture' }, current: 'fixture-only', models: ['fixture-only'],
+    run: () => ({ code: 1, stderr: 'model not found' }) });
+  const result = await engine.ask({ question: '只有一个模型' });
+  assert.match(result.error, /未找到其他可用模型/); assert.equal(calls.filter(c => c.input).length, 1);
+  const classify = require('../core/help-ask/model-choice').modelUnavailable;
+  for (const error of ['Not logged in', '401 Unauthorized', 'network timeout', 'rate limit', '403 Forbidden']) assert.equal(classify(Error(error)), false, error);
+  for (const error of ['model_not_found', 'You do not have access to model X', '当前模型无权限']) assert.equal(classify(Error(error)), true, error);
+});
+
+test('功能显式模型仍优先；失败替代跳过已知不可用模型，不改用户默认或功能选择', async t => {
+  const choice = { kind: 'codeagent', model: 'fixture-explicit' };
+  t.mock.method(require('../core/feature-agent-choice'), 'resolve', () => ({ selected: choice }));
+  const config = { defaultModels: { codeagent: 'fixture-blocked' } };
+  const { engine, calls, dataDir } = engineWith(t, { found: { codeagent: 'fixture' }, config,
+    current: 'fixture-cli', models: ['fixture-explicit', 'fixture-blocked', 'fixture-cli'],
+    run: spec => spec.args[2] === 'fixture-explicit' ? { code: 1, stderr: 'model unavailable' } : { code: 0, stdout: JSON.stringify({ type: 'result', result: '替代回答' }) } });
+  require('../core/codeagent-quota').markModelAvoid(dataDir, 'personal', { model: 'fixture-blocked', reason: 'model-config' });
+  const result = await engine.ask({ question: '显式选择' });
+  assert.equal(result.ok, true); assert.equal(result.warning, '已改用 fixture-cli');
+  const asks = calls.filter(c => c.input);
+  assert.deepEqual(asks.map(c => c.args[2]), ['fixture-explicit', 'fixture-cli']);
+  for (const call of asks) { assert.equal(call.args[call.args.indexOf('--tools') + 1], ''); assert.ok(call.args.includes('--strict-mcp-config')); }
+  assert.deepEqual(choice, { kind: 'codeagent', model: 'fixture-explicit' });
+  assert.equal(config.defaultModels.codeagent, 'fixture-blocked');
+});
+
+test('替代模型与首请求共用总时限，到点停止且没有第三次调用', async t => {
+  let n = 0;
+  const { engine, calls } = engineWith(t, { totalMs: 200, found: { codeagent: 'fixture' }, current: 'fixture-first', models: ['fixture-first', 'fixture-next', 'fixture-third'],
+    run: opts => ++n === 1 ? { code: 1, stderr: 'model unavailable' } : hang(opts) });
+  const result = await engine.ask({ question: '替代超时' });
+  assert.equal(result.timedOut, true); assert.equal(calls.filter(c => c.input).length, 2);
+  assert.ok(calls.filter(c => c.input).every(c => c.signal.aborted));
 });
 
 test('公开版先用 Claude Code；它快速失败再换 Codex（MCP 逐个关掉）', async t => {
