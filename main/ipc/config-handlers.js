@@ -502,6 +502,7 @@ function registerConfigIpc(ipcMain, deps) {
         const profile = request.profileId ? require('../../core/cli-api-profiles').profiles(raw, kind).find(p => p.id === request.profileId) : null;
         if (request.profileId && !profile) return { ok: false, error: '这个 API 账号已不存在，请重新打开设置再试。' };
         const stored = profile || companyApi.connection(raw, kind);
+        if (!String(request.apiKey || '').trim()) require('../../core/own-api-secrets').assertReadable(stored);
         const base = companyApi.baseUrl(request.baseURL);
         // 已保存的 Key 只发往它保存时的地址（Codex 审查 P1）：地址改了就要重新粘贴 Key，免得把 Key 发到别处。
         const same = (a, b) => String(a || '').replace(/\/+$/, '').toLowerCase() === String(b || '').replace(/\/+$/, '').toLowerCase();

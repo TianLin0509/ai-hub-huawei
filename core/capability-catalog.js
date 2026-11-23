@@ -232,6 +232,22 @@ function collectCapabilities({ homeDir, dataDir, projects = [], codeagentConfigD
     for (const {file,data} of states) mcpEntries({mcpServers:data.mcpServers || {}},file,'codeagent',scope);
     if (fs.existsSync(dir)) {
       scanSkills(path.join(dir,'skills'),['codeagent'],scope);
+      // 按 ID 装的 Agent / 命令使用 CLI 的 Markdown 目录，按文件名登记，正文不传给界面。
+      function markdownItems(root, type, prefix = '', depth = 0) {
+        for(const entry of entries(root)) {
+          const file=path.join(root,entry.name);
+          if(entry.isDirectory()&&depth<1){markdownItems(file,type,prefix+entry.name+':',depth+1);continue;}
+          if(!entry.isFile()||!entry.name.endsWith('.md'))continue;
+          const body=text(file);
+          if(body===null)continue;
+          const front=body.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)?.[1] || '';
+          const name=front.match(/^name:\s*(.+)$/m)?.[1]?.trim().replace(/^['"]|['"]$/g,'') || prefix+entry.name.slice(0,-3);
+          const description=front.match(/^description:\s*(.+)$/m)?.[1]?.trim().replace(/^['"]|['"]$/g,'') || '';
+          add(type,name,description,{agent:'codeagent',scope,path:file,enabled:true});
+        }
+      }
+      markdownItems(path.join(dir,'agents'),'agent');
+      markdownItems(path.join(dir,'commands'),'command');
       // 从 AI Marketplace 装的技能可能再套一层（<市场>/<技能>/SKILL.md）。
       for (const entry of entries(path.join(dir,'skills'))) {
         const sub=path.join(dir,'skills',entry.name);

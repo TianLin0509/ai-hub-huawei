@@ -48,8 +48,8 @@
     dialog.showModal();
     return dialog;
   }
-  function heading(title, hint) {
-    return `<header><div><h2>${esc(title)}</h2><p>${esc(hint)}</p></div><button type="button" class="company-api-close" aria-label="关闭">×</button></header>`;
+  function heading(title, hint, hover = false) {
+    return `<header><div><h2>${esc(title)}${hover ? require('./launch-field-hint').iconHintHtml(hint) : ''}</h2>${!hover && hint ? `<p>${esc(hint)}</p>` : ''}</div><button type="button" class="company-api-close" aria-label="关闭">×</button></header>`;
   }
   function bindClose(target) { target.querySelector('.company-api-close').onclick = close; }
   // 启动中心徽标（2026-11-20，HUB-H 第一期）：先画定位中心的缓存结论（harness:peek-all，不起进程，1 秒内出），
@@ -541,8 +541,9 @@
     const profiles = kind === 'deepseek-acp' ? [] : value.apiProfiles || [];
     const profileId = viewProfile[kind] ?? value.selectedProfileId ?? '';
     const editing = profiles.find(profile => profile.id === profileId);
-    const own = editing || (profileId === 'new' ? {} : value.backend === 'proxy' ? {} : value);
-    target.innerHTML = heading('自有 API', '每个工具可用公司模型、部门 API 网关，或填写自己的接口；留空沿用 CLI 本机登录与配置。')
+    const own = editing || (profileId === 'new' ? {} : value.backend === 'proxy' ? value.ownConnection || {} : value);
+    const needsKey = !!own.apiKeyNeedsInput;
+    target.innerHTML = heading('自有 API', '每个工具可用公司模型、部门 API 网关，或填写自己的接口；留空沿用 CLI 本机登录与配置。', true)
       + `<nav aria-label="API 工具">${KINDS.map(id => `<button type="button" data-api-kind="${id}" aria-pressed="${id === kind}">${LABELS[id]}</button>`).join('')}</nav>`
       + modeSwitch(mode);
     bindClose(target);
@@ -553,16 +554,14 @@
     if (mode === 'gateway') { renderGateway(target, kind, value); return; }
     target.insertAdjacentHTML('beforeend', `<form data-api-form>${kind !== 'deepseek-acp' ? `<label>API 账号<select data-api-profile><option value="">当前接口 / 本机配置</option>${profiles.map(profile => `<option value="${esc(profile.id)}"${profileId === profile.id ? ' selected' : ''}>${esc(profile.label)}</option>`).join('')}<option value="new"${profileId === 'new' ? ' selected' : ''}>＋ 添加 API 账号</option></select></label>` : ''}`
       + (profileId ? `<label>账号名称<input name="label" value="${esc(editing?.label)}" maxlength="80" required placeholder="例如：供应商 A · 账号 1"></label>` : '')
-      + `<label>接口地址<input name="baseURL" type="url" value="${esc(own.baseURL)}" placeholder="留空沿用本机配置" autocomplete="off" spellcheck="false"></label>`
-      + `<label><span>API Key${require('./launch-field-hint').iconHintHtml(require('./credential-hints').ownApiKey())}</span><input name="apiKey" type="password" placeholder="${own.apiKeySet ? '已保存；留空保留原 Key' : '可选；留空沿用本机登录'}" autocomplete="off" spellcheck="false"></label>`
+      + `<label class="own-api-wide">接口地址<input name="baseURL" type="url" value="${esc(own.baseURL)}" placeholder="留空沿用本机配置" autocomplete="off" spellcheck="false"></label>`
+      + `<label class="own-api-wide"><span>API Key${require('./launch-field-hint').iconHintHtml(require('./credential-hints').ownApiKey())}</span><input name="apiKey" type="password" ${needsKey ? 'required' : ''} placeholder="${needsKey ? '请重新粘贴此接口的 Key' : own.apiKeySet ? '已保存；留空保留原 Key' : '可选；留空沿用本机登录'}" autocomplete="off" spellcheck="false"></label>`
       + `<label>模型<input name="model" value="${esc(own.model)}" placeholder="${kind === 'deepseek-acp' ? '必填；点「测试连接」从列表里选' : '留空沿用 CLI 配置的模型'}" autocomplete="off" spellcheck="false"></label><label data-own-model-pick hidden>接口上的模型<select data-own-model-select></select></label>`
       + (kind === 'codex' ? `<label>接口协议<select name="wireApi"><option value="responses"${own.wireApi === 'chat' ? '' : ' selected'}>responses（默认）</option><option value="chat"${own.wireApi === 'chat' ? ' selected' : ''}>chat</option></select></label>` : '')
-      + (kind === 'deepseek-acp' ? '<p class="company-api-note">填 OpenAI 兼容接口（如部门自有模型平台，地址一般以 /v1 结尾）、Key 和模型名，DSH 直连这个接口，不走公司模型和 API 网关。先点「测试连接」核对地址和 Key，并从列表里选模型。部门发的是 API 网关 key 时，用上面的「API 网关」更省事。</p>'
-        : '<p class="company-api-note">Key 仅保存在本机配置中，重新打开时不会显示。进行中的会话保持原配置。可先点「测试连接」核对地址和 Key。</p>')
-      + '<p class="company-api-message" role="status" aria-live="polite"></p><div class="company-api-own-hint" data-own-hint hidden></div><footer>'
+      + `<p class="company-api-message" role="status" aria-live="polite">${needsKey ? 'Key 无法解密，请补填后保存并继续。' : ''}</p><div class="company-api-own-hint" data-own-hint hidden></div><footer>`
       + '<button type="button" data-api-action="own-test">测试连接</button>'
       + (editing ? '<button type="button" data-api-action="profile-delete">删除此账号</button>' : '')
-      + `<button type="button" data-api-action="local">${kind === 'deepseek-acp' ? '清空自有接口' : '沿用本机配置'}</button><button type="button" data-api-action="close">取消</button><button type="submit" class="primary">${editing ? '保存修改' : '保存配置'}</button></footer></form>`);
+      + `<button type="button" data-api-action="local">${kind === 'deepseek-acp' ? '清空自有接口' : '沿用本机配置'}</button><button type="button" data-api-action="close">取消</button><button type="submit" class="primary">${needsKey ? '保存并继续' : editing ? '保存修改' : '保存配置'}</button></footer></form>`);
     target.querySelector('[data-api-action="close"]').onclick = close;
     const profileSelect = target.querySelector('[data-api-profile]');
     if (profileSelect) profileSelect.onchange = () => { viewProfile[kind] = profileSelect.value; render(kind); };
@@ -617,16 +616,15 @@
           dialog.querySelector('form [role="status"]').textContent = '已保存。新建会话使用此 API 账号。';
           return;
         }
-        form.elements.apiKey.value = '';
-        form.elements.apiKey.required = false;
-        form.elements.apiKey.placeholder = result.providers?.[kind]?.apiKeySet ? '已保存；留空保留原 Key' : '可选；留空沿用本机登录';
-        status.textContent = kind === 'deepseek-acp' ? (result.providers?.[kind]?.backend === 'api' ? `已保存。新建 DSH 会话直连这个接口（${result.providers[kind].model || '未填模型'}）。` : '已清空 DSH 自有接口。')
+        render(kind);
+        dialog.querySelector('form [role="status"]').textContent = kind === 'deepseek-acp' ? (result.providers?.[kind]?.backend === 'api' ? `已保存。新建 DSH 会话直连这个接口（${result.providers[kind].model || '未填模型'}）。` : '已清空 DSH 自有接口。')
           : '已保存。新建会话使用这些设置。';
       } catch (error) { status.textContent = '保存失败：' + error.message; }
       finally { save.disabled = false; }
     };
   }
-  async function open(kind = 'claude') {
+  async function open(kind = 'claude', profileId) {
+    if (profileId !== undefined) { viewProfile[kind] = profileId; viewMode[kind] = 'own'; }
     const target = makeDialog();
     target.innerHTML = heading('自有 API', '正在读取配置…');
     bindClose(target);

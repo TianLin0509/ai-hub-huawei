@@ -108,17 +108,22 @@ test('resume failure buttons read history without waking CLI and open a separate
   const nodes = [];
   const node = () => { const n = { classList: { add() {}, remove() {} }, style: {}, children: [],
     append(...items) { this.children.push(...items); }, appendChild(x) { this.append(x); }, setAttribute() {},
-    addEventListener(type, fn) { this[type] = fn; }, remove() { this.removed = true; } }; nodes.push(n); return n; };
+    isConnected: true, addEventListener(type, fn) { this[type] = fn; }, remove() { this.removed = true; this.isConnected = false; } }; nodes.push(n); return n; };
   const panel = node(), overlay = node(); let read = 0, opened;
   const ctx = { document: { createElement: node, getElementById: () => overlay }, terminalPanelEl: panel, emptyStateEl: node(), activeSessionId: 'old',
+    sessionOpenIntent: 1, sessions: new Map([['old', { status: 'dormant' }]]),
     suspendInactiveTerminalRenderers() {}, preserveAndClearTerminalPanel() {}, applyViewMode() {},
     loadSessionHistoryToOverlay: async id => { assert.equal(id, 'old'); read++; }, sessionModelId() {},
-    ipcRenderer: {}, require: () => ({ mountPiRouteKeyFix: async () => {} }),
+    ipcRenderer: { invoke: async () => ({ canRetry: false }) }, require: () => ({ mountPiRouteKeyFix: async () => {} }),
     window: { WorkspaceController: { openNewSessionModal: opts => { opened = opts; } } } };
   vm.runInNewContext(text.slice(start, end), ctx);
   ctx.showDormantResumePlaceholder({ id: 'old', kind: 'codeagent' }, new Error('resume failed'));
-  const history = nodes.find(n => n.textContent === '查看已有历史'), fresh = nodes.find(n => n.textContent === '新建会话（保留此会话）');
+  const history = nodes.find(n => n.textContent === '查看已有历史');
+  await history.click();
+  // 看过历史后重新选择会话，才能点击当前页面上的新建按钮。
+  ctx.showDormantResumePlaceholder({ id: 'old', kind: 'codeagent' }, new Error('resume failed'));
+  const fresh = nodes.findLast(n => n.textContent === '在原目录新建会话');
   assert.ok(history); assert.ok(fresh);
-  await history.click(); fresh.click();
+  fresh.click();
   assert.equal(read, 1); assert.equal(opened.kind, 'codeagent');
 });

@@ -1406,12 +1406,17 @@ function showDormantResumePlaceholder(session, error = null, { checking = false,
   const title = document.createElement('strong');
   title.textContent = timedOut ? '唤醒没有完成' : error ? '会话唤醒失败' : checking ? '正在检查会话…' : '正在唤醒会话…';
   const detail = document.createElement('span');
-  detail.textContent = error
-    ? `${String(error && error.message || error).replace(/[。.!！?？]+$/, '')}。再次点击左侧会话可重试。`
+  detail.textContent = error || timedOut ? 'ⓘ'
     : `${session.title || 'Session'} · ${checking ? '正在确认会话可用' : '正在恢复原生 CLI 与历史上下文'}`;
+  if (error || timedOut) {
+    detail.title = error ? String(error.message || error)
+      : '原唤醒可能仍在进行，结束前不能重试。可以先查看历史，或在原目录新建会话（不继承对话内容）。';
+    detail.setAttribute('aria-label', '唤醒说明');
+    detail.tabIndex = 0;
+  }
   copy.append(title);
-  if (!timedOut) copy.append(detail);
-  if (!timedOut) panel.append(spinner);
+  copy.append(detail);
+  if (!error && !timedOut) panel.append(spinner);
   panel.append(copy);
   terminalPanelEl.appendChild(panel);
   // pi 会话存的线路缺钥匙（r39 审查）：就地补 Key，保存后直接重新唤醒，不让用户去设置页找。
@@ -1419,33 +1424,48 @@ function showDormantResumePlaceholder(session, error = null, { checking = false,
     const retry = document.createElement('button');
     retry.className = 'hub-button';
     retry.textContent = '重试';
+    retry.hidden = true;
     retry.addEventListener('click', () => {
-      if (activeSessionId === session.id) void selectSession(session.id, { resumeRetry: true });
+      if (retry.disabled || retry.hidden || !panel.isConnected || activeSessionId !== session.id) return;
+      retry.disabled = true;
+      void selectSession(session.id, { resumeRetry: true });
     });
     const history = document.createElement('button');
     history.className = 'hub-button';
     history.textContent = '查看已有历史';
     history.addEventListener('click', () => {
-      if (activeSessionId !== session.id) return;
-      // Reading the transcript is independent of starting a CLI writer.
+      if (!panel.isConnected || activeSessionId !== session.id) return;
+      // 看历史也是新的选择意图，迟到的唤醒结果不能再抢回界面。
+      const historyIntent = ++sessionOpenIntent;
       panel.remove();
       applyViewMode('card', { remember: false });
       if (overlay) overlay.classList.remove('hidden');
       void loadSessionHistoryToOverlay(session.id).catch(err => {
-        if (activeSessionId === session.id) showDormantResumePlaceholder(session, err);
+        if (activeSessionId === session.id && sessionOpenIntent === historyIntent) showDormantResumePlaceholder(session, err);
       });
     });
     const fresh = document.createElement('button');
     fresh.className = 'hub-button';
-    fresh.textContent = timedOut ? '新开会话接着聊' : '新建会话（保留此会话）';
-    fresh.addEventListener('click', () => window.WorkspaceController.openNewSessionModal({ kind: session.kind,
-      ...(session.cwd ? { workspace: { path: session.cwd, label: session.workspaceLabel || session.title || '' } } : {}) }));
+    fresh.textContent = '在原目录新建会话';
+    fresh.title = '在原工作目录创建独立会话，不继承对话内容';
+    fresh.addEventListener('click', () => {
+      if (!panel.isConnected || activeSessionId !== session.id) return;
+      ++sessionOpenIntent;
+      window.WorkspaceController.openNewSessionModal({ kind: session.kind,
+        ...(session.cwd ? { workspace: { path: session.cwd, label: session.workspaceLabel || session.title || '' } } : {}) });
+    });
     const actions = document.createElement('div');
     actions.className = 'session-resume-actions';
     actions.append(retry);
-    if (!timedOut) actions.append(history);
+    actions.append(history);
     actions.append(fresh);
     copy.append(actions);
+    // 只做一次状态确认，不轮询、不取消未知进程。迟到回包不能改动已离开的页面。
+    void ipcRenderer.invoke('resume-session:status', session.id).then(status => {
+      if (panel.isConnected && activeSessionId === session.id && sessions.get(session.id)?.status === 'dormant') {
+        retry.hidden = status?.canRetry !== true;
+      }
+    }).catch(() => {});
     if (!timedOut) void require('./pi-route-key-fix').mountPiRouteKeyFix(copy, { session, modelId: sessionModelId(session), ipc: ipcRenderer, replaceEl: detail,
       onRetry: () => selectSession(session.id) }).catch(err => console.warn('[pi-route-key-fix]', err && err.message));
   }
@@ -6612,6 +6632,16 @@ async function selectSession(id, opts = {}) {
   // CLI restart never looks like a dropped click.
   if (session.status === 'dormant') {
     if (opts.inspectOnly) return;
+    if (opts.resumeRetry) {
+      // 防止按钮状态过期或连续点击；确认完成前不重置超时时钟。
+      let retryStatus;
+      try { retryStatus = await ipcRenderer.invoke('resume-session:status', id); } catch {}
+      if (intent !== sessionOpenIntent || activeSessionId !== id) return;
+      if (!retryStatus?.canRetry || _pendingDormantResumes.has(id)) {
+        showDormantResumePlaceholder(session, null, { timedOut: true });
+        return;
+      }
+    }
     // 重选侧栏保留原来的超时结果；只有显式重试才重新计时。
     if (dormantResumeWatch.isTimedOut(id) && !opts.resumeRetry) {
       const pending = _pendingDormantResumes.get(id);
@@ -10123,7 +10153,7 @@ ipcRenderer.on('session-created', async (_e, { session }) => {
   }
   // 手机拍图在后台创建或唤醒；只在用户已经选中它时切入，保留其他会话的输入。
   if (session.purpose === 'hub-photo-assistant') {
-    if (wasDormant && activeSessionId === session.id) {
+    if (wasDormant && !resumeAbandoned && activeSessionId === session.id) {
       await selectSession(session.id, { forceScrollBottom: pendingResume?.forceScrollBottom === true });
     }
     scheduleSessionListRender();
@@ -10147,7 +10177,7 @@ ipcRenderer.on('session-created', async (_e, { session }) => {
   if (session.meetingId) {
     // A member explicitly opened while dormant needs its standalone surface
     // mounted after resume. Background group wakes must never steal selection.
-    if (wasDormant && activeSessionId === session.id) {
+    if (wasDormant && !resumeAbandoned && activeSessionId === session.id) {
       await selectSession(session.id, { forceScrollBottom: pendingResume?.forceScrollBottom === true });
     }
     scheduleSessionListRender();
@@ -10866,7 +10896,7 @@ async function resumeDormantSession(hubId, opts = {}) {
     // Dormant wake, workspace archive and right-click Restart share one exact
     // provider-native metadata contract.  This prevents Codex-only fields such
     // as profile / MCP policy / rollout root from disappearing on one path.
-    pendingResume.promise = ipcRenderer.invoke('resume-session', buildSessionResumeMeta(dormant));
+    pendingResume.promise = ipcRenderer.invoke('resume-session', buildSessionResumeMeta(dormant), { retry: opts.resumeRetry === true });
     resumed = await pendingResume.promise;
     if (!resumed || resumed.id !== hubId) throw new Error('会话未能启动，原有记录已保留。请重试或新建会话。');
   } catch (error) {

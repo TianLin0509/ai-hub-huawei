@@ -437,6 +437,7 @@
   "共享号池": "Shared account pool",
   "公司模型": "Company model",
   "自有接口默认模型": "Own API default model",
+  "Key 无法解密，点此补填": "Key could not be decrypted. Click to enter it again.",
   "沿用本机 CLI 配置": "Use local CLI settings",
   "自有接口": "Own API",
   "CLI 默认": "CLI default",

@@ -24,7 +24,7 @@ function registerLanPoolIpc(ipcMain, { service, readConfig, saveConfig, clearCon
   handle('dashboard', () => service.dashboard());
   handle('refresh', async () => { await service.snapshot({ force: true }); return service.settings(); });
   handle('disconnect', async () => {
-    const current = pool.read(service.dataDir), previous = current.client?.previous;
+    const current = pool.read(service.dataDir), previous = pool.openPrevious(current.client?.previous);
     const raw = readConfig(); const next = { ...raw, providers: { ...raw.providers }, acp: { ...raw.acp } };
     if (previous) {
       for (const kind of ['claude', 'codex']) if (next.providers[kind]?.backend === 'proxy') {

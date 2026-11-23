@@ -7,7 +7,7 @@
 //   会议室：组件用 Edge / Chrome 打开登录页，登录状态在 <会议室数据目录>\browser_profile（room-component/engine.py），Cookie 由浏览器按 Windows 账户加密。
 //   邮箱密码：Electron safeStorage（Windows 即 DPAPI）密文写在 <Hub 数据目录>\claude-mailboxes.json（core/claude-mailbox-vault.js）。
 //   API 网关 key：safeStorage 密文写在 <Hub 数据目录>\api-gateway\gateway.json，明文只在主进程内存、经环境变量交给本机反代（core/api-gateway.js）。
-//   自有 API Key：写在 <Hub 数据目录>\config.json 的 providers.<工具>.api_key，未加密（core/company-api-config.js）。
+//   自有 API Key：config.json 与 connection.json 用 safeStorage 加密；Codex 的 auth.json 由原生 CLI 读取，仍为明文。
 const path = require('path');
 
 function hubDataDir() {
@@ -42,7 +42,11 @@ function gatewayKey(dataDir = hubDataDir()) {
 
 function ownApiKey(dataDir = hubDataDir()) {
   return ['API Key 存在哪',
-    `写在本机 AI Hub 设置文件 ${path.join(dataDir, 'config.json')} 里，没有加密。`,
+    `用 Electron safeStorage 按 Windows 账户加密（DPAPI），保存在本机 ${path.join(dataDir, 'config.json')}（备份为 config.json.bak）；cli-api-profiles 下 connection.json 同样加密。`,
+    '旧配置及备份在加密与保存成功后清除明文字段；旧快照按读取迁移，未读取的历史快照保留原状。',
+    '内网共享池切换前备份位于 lan-pool/settings.json，其中的自有接口 Key 同样加密，断开时恢复。旧明文快照迁移失败仍可恢复，下次再迁；新建快照加密失败则停止启动并提示。',
+    'Codex CLI 必须读取的 auth.json 仍存明文 Key（cli-api-profiles 或 codex-api-profile 目录）；Claude Code 和 DSH 通过进程环境变量接收 Key。',
+    '换电脑、换 Windows 账户或密文损坏导致解不开时，请在此处补填 Key，点「保存并继续」。',
     '只发给上面填的接口地址，AI Hub 不发往别处。'].join('\n');
 }
 

@@ -164,19 +164,87 @@ test('host sharing can always be stopped after its network interface disappears'
 });
 
 test('connecting and disconnecting restores previous API configuration and preserves later manual API edits', async t => {
+  t.mock.method(require('../core/own-api-secrets'), 'safeStorage', () => require('./helpers/fake-safe-storage'));
   const f = await fixture(t), dir = temp(t), handlers = new Map();
-  let config = { providers: { claude: { backend: 'api', base_url: 'https://example.test', api_key: 'synthetic-old-key', model: 'synthetic-previous-model' } } };
+  let config = { providers: { claude: { backend: 'api', base_url: 'https://example.test', api_key: 'synthetic-old-key', model: 'synthetic-previous-model',
+    api_profiles: [{ id: 'one', apiKey: 'synthetic-one-key' }, { id: 'two', apiKey: 'synthetic-two-key' }] },
+    codex: { backend: 'api', api_key: 'synthetic-codex-key', own_api: { api_key: 'synthetic-stash-key' } } },
+    acp: { companyApi: { baseURL: 'https://dsh.test', apiKey: 'synthetic-dsh-key', model: 'synthetic-dsh-model' } } };
   const previous = JSON.stringify(config.providers.claude);
+  const previousDsh = { ...config.acp.companyApi };
   const proxyService = { syncWithConfig: async () => {}, state: 'stopped' };
   const service = new LanPoolService({ dataDir: dir, proxyService });
   require('../main/ipc/lan-pool-handlers').registerLanPoolIpc({ handle: (name, fn) => handlers.set(name, fn) }, { service,
     readConfig: () => config, saveConfig: v => { config = v; }, clearConfig() {}, changed() {}, proxyService });
   const connected = await handlers.get('lan-pool:connect')({}, { address: f.origin, key: f.a.secret }); assert.equal(connected.ok, true);
   assert.equal(config.providers.claude.backend, 'proxy'); assert.equal(service.clientProxyStatus().shared, true);
+  const disk = fs.readFileSync(path.join(dir, 'lan-pool', 'settings.json'), 'utf8');
+  for (const secret of ['synthetic-old-key', 'synthetic-one-key', 'synthetic-two-key', 'synthetic-codex-key', 'synthetic-stash-key', 'synthetic-dsh-key']) assert.equal(disk.includes(secret), false);
+  assert.match(disk, /encrypted_api_key/); assert.match(disk, /encryptedApiKey/);
   config.providers.codex = { backend: 'api', base_url: 'https://manual.example.test', api_key: 'synthetic-new-key' };
   const disconnected = await handlers.get('lan-pool:disconnect')({}); assert.equal(disconnected.ok, true);
-  assert.equal(JSON.stringify(config.providers.claude), previous); assert.equal(config.providers.codex.api_key, 'synthetic-new-key');
-  assert.equal(service.client(), null); assert.equal(config.acp.companyApi, undefined);
+  assert.deepEqual(config.providers.claude, JSON.parse(previous)); assert.equal(config.providers.codex.api_key, 'synthetic-new-key');
+  assert.equal(service.client(), null); assert.deepEqual(config.acp.companyApi, previousDsh);
+});
+
+test('共享恢复点直接经 service.connect 保存也加密，重连保留原恢复点且不泄露 Key', async t => {
+  t.mock.method(require('../core/own-api-secrets'), 'safeStorage', () => require('./helpers/fake-safe-storage'));
+  const f = await fixture(t), dir = temp(t);
+  const service = new LanPoolService({ dataDir: dir, proxyService: { state: 'stopped' } });
+  const previous = { claude: { api_key: 'fixture-lan-original', api_profiles: [{ apiKey: 'fixture-lan-second' }] },
+    codex: { api_key: 'fixture-lan-codex', own_api: { api_key: 'fixture-lan-codex-stash' } },
+    dsh: { apiKey: 'fixture-lan-dsh', own_api: { api_key: 'fixture-lan-stash' } } };
+  await service.connect({ address: f.origin, key: f.a.secret }, { previous });
+  await service.connect({ address: f.origin, key: f.b.secret }, { previous: { claude: { api_key: 'fixture-lan-replacement' } } });
+  const disk = fs.readFileSync(path.join(dir, 'lan-pool', 'settings.json'), 'utf8');
+  assert.doesNotMatch(disk, /fixture-lan-/);
+  assert.deepEqual(pool.openPrevious(pool.read(dir).client.previous), previous);
+  assert.equal(previous.claude.api_key, 'fixture-lan-original');
+});
+
+test('共享池加密不可用时不落盘、不切换本机线路，保留原配置', async t => {
+  t.mock.method(require('../core/own-api-secrets'), 'safeStorage', () => null);
+  const f = await fixture(t), dir = temp(t), handlers = new Map();
+  pool.write(dir, { host: { enabled: false, members: [] }, client: null });
+  const file = path.join(dir, 'lan-pool', 'settings.json'), previousDisk = fs.readFileSync(file, 'utf8');
+  const config = { providers: { claude: { backend: 'api', api_key: 'fixture-lan-original' } } };
+  let saves = 0;
+  const service = new LanPoolService({ dataDir: dir, proxyService: { state: 'stopped' } });
+  require('../main/ipc/lan-pool-handlers').registerLanPoolIpc({ handle: (name, fn) => handlers.set(name, fn) }, {
+    service, readConfig: () => config, saveConfig: () => { saves++; }, clearConfig() {}, changed() {}, proxyService: { syncWithConfig() {} },
+  });
+  const result = await handlers.get('lan-pool:connect')({}, { address: f.origin, key: f.a.secret });
+  assert.equal(result.ok, false); assert.match(result.error, /加密不可用/);
+  assert.equal(saves, 0); assert.equal(config.providers.claude.backend, 'api');
+  assert.equal(fs.readFileSync(file, 'utf8'), previousDisk);
+});
+
+test('共享池旧明文恢复点可断开恢复；后续任何共享设置写入都清除旧明文字段', t => {
+  t.mock.method(require('../core/own-api-secrets'), 'safeStorage', () => require('./helpers/fake-safe-storage'));
+  const dir = temp(t);
+  const previous = { claude: { api_key: 'fixture-old-lan-key' }, codex: null, dsh: { apiKey: 'fixture-old-lan-dsh' } };
+  const state = { client: { enabled: true, previous } };
+  const file = path.join(dir, 'lan-pool', 'settings.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(state));
+  assert.deepEqual(pool.openPrevious(pool.read(dir).client.previous), previous);
+  assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /fixture-old-lan-/);
+  pool.write(dir, pool.read(dir));
+  assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /fixture-old-lan-/);
+  assert.deepEqual(pool.openPrevious(pool.read(dir).client.previous), previous);
+});
+
+test('非 Electron 进程读取共享状态不解密恢复点、不误报补 Key，也不改动密文', t => {
+  const secrets = require('../core/own-api-secrets');
+  t.mock.method(secrets, 'safeStorage', () => require('./helpers/fake-safe-storage'));
+  const dir = temp(t);
+  pool.write(dir, { client: { enabled: true, address: 'http://10.0.0.1:18766', key: 'a'.repeat(48),
+    previous: { claude: { backend: 'api', api_key: 'fixture-node-read-key' } } } });
+  const file = path.join(dir, 'lan-pool', 'settings.json'), before = fs.readFileSync(file, 'utf8');
+  t.mock.method(secrets, 'safeStorage', () => null);
+  const view = pool.publicSettings(dir);
+  assert.deepEqual(view.client, { address: 'http://10.0.0.1:18766', connected: true, keySet: true });
+  assert.doesNotMatch(JSON.stringify(view), /apiKeyNeedsInput|api_keyNeedsInput|fixture-node-read-key|encrypted_api_key/);
+  assert.equal(fs.readFileSync(file, 'utf8'), before);
 });
 
 test('Claude and Codex routes use the LAN host and bypass system proxies; DSH uses the same dedicated key', t => {

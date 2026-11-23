@@ -1,4 +1,5 @@
 [
+  "tests/unit-own-api-secrets.test.js",
   "tests/unit-capability-market-visibility.test.js",
   "tests/unit-codeagent-market.test.js",
   "tests/unit-transcript-lookup-cache.test.js",
@@ -7,6 +8,7 @@
   "tests/unit-team-port-r10.test.js",
   "tests/unit-codeagent-new-model.test.js",
   "tests/unit-dormant-resume-timeout.test.js",
+  "tests/unit-dormant-resume-exits.test.js",
   "tests/unit-codeagent-resume-model.test.js",
   "tests/unit-r9-ui-small.test.js",
   "tests/unit-f2-backdrop-image-pet.test.js",

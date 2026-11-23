@@ -113,4 +113,4 @@ function createCodeAgentSetup({ document, ipcRenderer }) {
   const api = { refresh, accept, showGuide, get current() { return current; }, subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); } };
   instances.set(document, api); return api;
 }
-module.exports = { createCodeAgentSetup };
+module.exports = { createCodeAgentSetup, OFFICIAL_INSTALL_URL };

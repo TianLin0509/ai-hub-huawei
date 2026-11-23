@@ -57,14 +57,24 @@ function loadConfigJson() {
   const configPath = path.join(getHubDataDir(), 'config.json');
   try {
     const raw = fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, '');
-    return JSON.parse(raw);
+    return openConfigJson(JSON.parse(raw));
   } catch (error) {
     // 主文件损坏（不是不存在）时回退到上一次保存前留下的 .bak，免得设置全回到默认。
     if (error.code !== 'ENOENT') {
-      try { return JSON.parse(fs.readFileSync(configPath + '.bak', 'utf8').replace(/^﻿/, '')); } catch { /* 没有可用备份 */ }
+      try { return openConfigJson(JSON.parse(fs.readFileSync(configPath + '.bak', 'utf8').replace(/^﻿/, ''))); } catch { /* 没有可用备份 */ }
     }
     return {};
   }
+}
+
+function openConfigJson(raw) {
+  const secrets = require('./own-api-secrets');
+  const opened = secrets.openConfig(raw);
+  if (secrets.hasPlaintext(raw)) {
+    // 仅在加密及原子保存成功后清除明文；系统暂不可加密时保留原文件，保存仍会明确报错。
+    try { saveConfig(opened); } catch { /* 不把迁移失败当成空配置 */ }
+  }
+  return opened;
 }
 
 /**
@@ -78,12 +88,14 @@ function loadConfigJson() {
  */
 function readConfigJsonForUpdate() {
   try {
-    return JSON.parse(fs.readFileSync(getConfigPath(), 'utf8').replace(/^﻿/, ''));
+    return openConfigJson(JSON.parse(fs.readFileSync(getConfigPath(), 'utf8').replace(/^﻿/, '')));
   } catch (error) {
     if (error && error.code === 'ENOENT') return {};
     if (error instanceof SyntaxError) {
       const recovered = loadConfigJson();
-      require('./atomic-write').writeFileAtomic(fs, getConfigPath(), JSON.stringify(recovered, null, 2));
+      // 只修复主文件；备份中的旧 Key 已由读取迁移处理，无 Key 的备份保留原字节及 BOM。
+      const sealed = require('./own-api-secrets').sealConfig(recovered);
+      require('./atomic-write').writeFileAtomic(fs, getConfigPath(), JSON.stringify(sealed, null, 2));
       clearConfigCache();
       return recovered;
     }
@@ -223,7 +235,15 @@ function clearConfigCache() {
 function saveConfig(config) {
   const configPath = path.join(getHubDataDir(), 'config.json');
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
-  require('./atomic-write').writeFileAtomic(fs, configPath, JSON.stringify(config, null, 2), { backup: true });
+  const secrets = require('./own-api-secrets');
+  const text = JSON.stringify(secrets.sealConfig(config), null, 2);
+  const write = require('./atomic-write').writeFileAtomic;
+  // 备份也走同一存储边界，避免迁移时把旧明文复制进 .bak。
+  let previous = text;
+  try { previous = JSON.stringify(secrets.sealConfig(JSON.parse(fs.readFileSync(configPath, 'utf8').replace(/^\uFEFF/, ''))), null, 2); }
+  catch (error) { if (!(error instanceof SyntaxError) && error.code !== 'ENOENT') throw error; }
+  write(fs, configPath + '.bak', previous);
+  write(fs, configPath, text);
   clearConfigCache();
 }
 

@@ -288,10 +288,9 @@ async function main() {
         fs.writeFileSync(path.join(out, `${stamp}-owndsh-proxy-ownN.log`), log.split(KEY).join('<KEY>')); } catch { /* not started */ }
       // 整个隔离测试目录（数据、home、会话记录、日志、配置）里都不该出现明文 key。
       report.plainKeyFiles = [];
-      // 自有接口的 Key 按设计存在主配置和自有 API 账号的落盘版本里（与 Claude Code / Codex 的自有接口一致）；其余位置一律不许出现。
-      const ALLOWED_KEY_FILE = /^data[\\/](config\.json(\.[\w.-]+)?|cli-api-profiles[\\/].+[\\/]connection\.json)$/;
+      // DSH 通过环境变量接收 Key；主配置、连接快照和备份现在都加密，不再豁免明文。
       const scan = dir => { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const f = path.join(dir, e.name);
-        if (e.isDirectory()) scan(f); else { try { if (fs.statSync(f).size < 50e6 && fs.readFileSync(f).includes(KEY) && !ALLOWED_KEY_FILE.test(path.relative(root, f))) report.plainKeyFiles.push(path.relative(root, f)); } catch { /* 占用中的文件跳过 */ } } } };
+        if (e.isDirectory()) scan(f); else { try { if (fs.statSync(f).size < 50e6 && fs.readFileSync(f).includes(KEY)) report.plainKeyFiles.push(path.relative(root, f)); } catch { /* 占用中的文件跳过 */ } } } };
       try { scan(root); } catch (error) { report.scanError = String(error.message); }
     }
     gw.server.close();

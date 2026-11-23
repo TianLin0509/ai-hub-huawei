@@ -29,14 +29,19 @@ function clock() {
 
 function rendererFixture() {
   const time = clock(), request = deferred(), ui = [];
+  const requests = [request];
   let invokes = 0;
   const dormant = { id: 'wake-test', kind: 'codeagent', status: 'dormant', transcriptPath: 'saved.jsonl' };
   const ctx = {
     sessions: new Map([[dormant.id, dormant]]), _pendingDormantResumes: new Map(), activeSessionId: dormant.id, sessionOpenIntent: 1,
     paintSidebarResumePending() {}, scheduleSessionListRender() {}, buildSessionResumeMeta: s => ({ hubId: s.id }),
     selectSession(id) { assert.equal(ctx.sessions.get(id).status, 'idle'); ui.push('live'); },
-    showDormantResumePlaceholder(_session, _error, opts) { ui.push(opts.timedOut ? 'timeout' : 'waiting'); },
-    ipcRenderer: { invoke() { invokes++; return request.promise; } },
+    showDormantResumePlaceholder(_session, error, opts = {}) { ui.push(opts.timedOut ? 'timeout' : error ? 'failed' : 'waiting'); },
+    ipcRenderer: { invoke(channel) {
+      if (channel === 'resume-session:status') return Promise.resolve({ canRetry: true });
+      if (channel === 'session:open-status') return Promise.resolve({ available: true });
+      return (requests[invokes++] || request).promise;
+    } },
   };
   // 使用产品里的回调，核对超时确实停止侧栏等待并就地显示出路。
   const start = source.indexOf('const dormantResumeWatch = ');
@@ -50,7 +55,7 @@ function rendererFixture() {
   ctx.ipcRenderer.send = () => {};
   vm.runInNewContext("async function selectDormant(opts = {}) { const id = 'wake-test'; const intent = ++sessionOpenIntent; const session = sessions.get(id);\n"
     + source.slice(selectStart, selectEnd) + '\n}', ctx);
-  return { ctx, time, request, ui, dormant, get invokes() { return invokes; } };
+  return { ctx, time, request, requests, ui, dormant, get invokes() { return invokes; } };
 }
 
 test('唤醒在 90 秒到期停止等待，重复选择不延后截止时间', async () => {
@@ -79,11 +84,10 @@ test('90 秒内成功清除计时，回包先到也移除等待提示', async ()
   assert.equal(f.ctx.sessions.get(f.dormant.id).transcriptPath, 'saved.jsonl');
 });
 
-test('超时重试仍复用原请求，迟到成功清除提示且不启动第二次', async () => {
+test('超时后普通重复唤醒仍复用原请求，迟到成功清除提示且不启动第二次', async () => {
   const f = rendererFixture();
   const pending = f.ctx.resumeDormantSession(f.dormant.id, { selectIntent: 1 });
   f.time.tick(90_000);
-  f.ctx.dormantResumeWatch.start(f.dormant.id, { restart: true });
   const retry = f.ctx.resumeDormantSession(f.dormant.id, { selectIntent: 2 });
   f.ctx.sessionOpenIntent = 2;
   f.request.resolve({ id: f.dormant.id });
@@ -104,6 +108,36 @@ test('超时后用户切走，迟到结果只更新会话状态', async () => {
   await pending;
   assert.deepEqual(f.ui, []);
   assert.equal(f.ctx.sessions.get(f.dormant.id).status, 'idle');
+});
+
+test('旧请求尚未结束时显式重试不重置超时、不再等待原请求', async () => {
+  const f = rendererFixture();
+  const pending = f.ctx.resumeDormantSession(f.dormant.id, { selectIntent: 1 });
+  f.time.tick(90_000);
+  await f.ctx.selectDormant({ resumeRetry: true });
+  assert.equal(f.invokes, 1);
+  assert.equal(f.ctx.dormantResumeWatch.isTimedOut(f.dormant.id), true);
+  assert.equal(f.time.size, 0);
+  f.request.resolve({ id: f.dormant.id });
+  await pending;
+});
+
+test('旧请求失败后连续点重试只发一个新请求，切走后新请求成功不抢焦点', async () => {
+  const f = rendererFixture();
+  const old = f.ctx.resumeDormantSession(f.dormant.id, { selectIntent: 1 });
+  f.time.tick(90_000);
+  f.request.reject(new Error('明确启动失败'));
+  await assert.rejects(old, /明确启动失败/);
+  const next = deferred(); f.requests.push(next);
+  await Promise.all([f.ctx.selectDormant({ resumeRetry: true }), f.ctx.selectDormant({ resumeRetry: true })]);
+  assert.equal(f.invokes, 2, '第一次失败，加一次真正的新请求');
+  assert.equal(f.ctx.dormantResumeWatch.isTimedOut(f.dormant.id), false);
+  f.ctx.activeSessionId = 'other';
+  f.ctx.sessionOpenIntent++;
+  next.resolve({ id: f.dormant.id });
+  await f.ctx.resumeDormantSession(f.dormant.id);
+  assert.equal(f.ctx.sessions.get(f.dormant.id).status, 'idle');
+  assert.equal(f.ui.includes('live'), false);
 });
 
 test('占用状态检查卡住也在 90 秒超时，检查迟到不重新转圈', async () => {
@@ -134,7 +168,7 @@ test('超时后重选侧栏仍保留出路，迟到成功按最新选择接回',
   assert.deepEqual(f.ui, ['timeout', 'timeout', 'live']);
 });
 
-test('本 Hub 的启动预约允许重试，其他 Hub 的占用仍被拒绝', () => {
+test('本 Hub 的启动预约允许普通重选，其他 Hub 的占用仍被拒绝', () => {
   const text = fs.readFileSync(path.join(__dirname, '../main/ipc/session-handlers.js'), 'utf8');
   const start = text.indexOf("  ipcMain.handle('session:open-status'");
   const end = text.indexOf('  const claudeModelPreferenceGuards', start);
@@ -162,26 +196,29 @@ test('本 Hub 的启动预约允许重试，其他 Hub 的占用仍被拒绝', (
   assert.equal(handler(null, 'wake').available, true);
 });
 
-test('超时占位只显示简短提示和两个可用按钮，复用原新会话入口', () => {
+test('超时占位保留历史和如实的新建入口，在途唤醒不提供重试', async () => {
   const nodes = [];
   const node = () => { const n = { classList: { add() {}, remove() {} }, style: {}, children: [],
     append(...items) { this.children.push(...items); }, appendChild(item) { this.append(item); }, setAttribute() {},
-    addEventListener(type, handler) { this[type] = handler; } }; nodes.push(n); return n; };
+    isConnected: true, addEventListener(type, handler) { this[type] = handler; } }; nodes.push(n); return n; };
   const terminal = node(); let retried, opened;
-  const ctx = { terminalPanelEl: terminal, emptyStateEl: node(), activeSessionId: 'old',
+  const ctx = { terminalPanelEl: terminal, emptyStateEl: node(), activeSessionId: 'old', sessionOpenIntent: 1,
+    sessions: new Map([['old', { status: 'dormant' }]]), ipcRenderer: { invoke: async () => ({ canRetry: false }) },
     document: { createElement: node, getElementById: () => null }, suspendInactiveTerminalRenderers() {}, preserveAndClearTerminalPanel() {},
     selectSession: (id, opts) => { retried = { id, opts }; },
     window: { WorkspaceController: { openNewSessionModal: opts => { opened = opts; } } } };
   vm.runInNewContext(section('function showDormantResumePlaceholder(', '\nconst wakeDormantMeetingMembers'), ctx);
   ctx.showDormantResumePlaceholder({ id: 'old', kind: 'codeagent', cwd: 'D:/fixture-work' }, null, { timedOut: true });
+  await Promise.resolve();
   const panel = terminal.children[0], copy = panel.children[0];
   assert.equal(panel.children.length, 1, '超时不挂载转圈元素');
   assert.equal(copy.children[0].textContent, '唤醒没有完成');
-  assert.equal(copy.children.length, 2, '没有常驻长说明');
-  const [retry, fresh] = copy.children[1].children;
-  assert.equal(retry.textContent, '重试'); assert.equal(fresh.textContent, '新开会话接着聊');
+  assert.equal(copy.children.length, 3, '说明收进 ⓘ');
+  const [retry, history, fresh] = copy.children[2].children;
+  assert.equal(retry.hidden, true); assert.equal(history.textContent, '查看已有历史');
+  assert.equal(fresh.textContent, '在原目录新建会话');
   retry.click(); fresh.click();
-  assert.equal(retried.id, 'old'); assert.equal(retried.opts.resumeRetry, true);
+  assert.equal(retried, undefined, '隐藏的重试不能触发旧请求等待');
   assert.equal(opened.kind, 'codeagent'); assert.equal(opened.workspace.path, 'D:/fixture-work');
 });
 
@@ -199,7 +236,7 @@ function mainFixture(t, { auth, launch } = {}) {
   return { resume, live, events, get creates() { return creates; } };
 }
 
-test('主进程在认证和启动阶段都复用原任务，重试已运行会话只接回', async t => {
+test('主进程在认证和启动阶段都复用普通唤醒，普通重选已运行会话只接回', async t => {
   const auth = deferred(), launch = deferred();
   const f = mainFixture(t, { auth: () => auth.promise, launch: () => launch.promise });
   const meta = { hubId: 'main-wake', kind: 'powershell' };

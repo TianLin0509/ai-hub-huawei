@@ -71,9 +71,9 @@ function registerSessionIpc(ipcMain, deps) {
   ipcMain.handle('hub:feedback-ping', () => ({ok:true}));
   ipcMain.handle('session:open-status', (_event, sessionId, options = {}) => {
     const owner = sessionManager._openOwners?.()?.owner(sessionId, true);
-    // 本 Hub 的启动预约仍在进行时允许重试；resume-session 会复用原启动任务。
+    // 本 Hub 的预约允许普通重复选择；显式重试另由 resume-session:status 判断。
     if (!owner || owner.pid === process.pid) {
-      // 重试先核对运行表：进程已启动但原回包尚未完成时，直接接回已有会话。
+      // 重选时核对运行表：进程已启动但原回包尚未完成时，直接接回已有会话。
       const live = options.reconcile ? sessionManager.getSession(sessionId) : null;
       if (live) sendToRenderer('session-created', { session: live });
       return {available:true};

@@ -7,7 +7,11 @@
 - 会话、草稿、日志、配置：`%USERPROFILE%\.ai-hub-community`（可用 `CLAUDE_HUB_DATA_DIR` 另指）。
 - CLI 凭据由你自己的 Claude / Codex / Gemini / Kimi CLI 管理。账号中心只读取必要的登录状态，并对身份做脱敏显示。
 - 网页账号登录使用 Hub 数据目录下的专用浏览器目录。
-- API Key 存在本机配置里，没有加密。这个目录不是可以公开分享的备份包，不要提交到 Git 或发给别人。
+- API 网关 Key 用 Electron safeStorage（Windows 下绑定当前 Windows 账户）加密后存在数据目录的 `api-gateway/gateway.json`，界面不回显完整 Key；请求模型时仍需把必要凭据交给所配置的服务。
+- 「自有接口」Key 同样用 Electron safeStorage（Windows 下为 DPAPI，绑定当前 Windows 账户）加密，保存在 `config.json`、`config.json.bak` 和 `cli-api-profiles/<工具>/<账号>/<修订>/connection.json` 连接快照中。旧配置和备份在加密与保存成功后清除明文字段；旧快照按读取迁移，未读取的历史快照保留原状。系统加密不可用或保存失败时，原文件保留，不降级为明文保存。
+- 切换到内网共享池前的接口备份位于 `lan-pool/settings.json`，其中的自有接口 Key 同样加密，断开共享时恢复。旧明文快照迁移写回失败时保留原文件，继续恢复原会话，下次读取再迁移；新建快照必须加密保存成功，否则停止启动并提示。
+- 连接快照 `connection.json` 由 Hub 读取，不需要明文交给 CLI。Codex CLI 必须读取的 `auth.json` 仍存明文 Key，位于 `cli-api-profiles/codex/<账号>/<修订>` 或 `codex-api-profile` 目录。Claude Code、DSH 通过启动进程的环境变量接收 Key；CLI 自己保存的登录态仍由各自工具管理。
+- 换机、换 Windows 账户或密文损坏导致 Key 无法解密时，界面会提示在对应账号补 Key，并提供「保存并继续」。整个数据目录都不是可以公开分享的备份包，不要提交到 Git 或发给别人；请求模型时仍需把必要凭据交给所配置的服务。
 - 本地历史搜索与记忆文件库按你的操作读取本机的对话与文件。调用模型时，你选中的消息和文件会发给对应的 AI 提供方。
 
 ## Hub 写入 CLI 配置的内容

@@ -45,6 +45,10 @@ function createResumeSessionHandler(deps) {
 
   async function openSession(meta, runtimeOptions = {}) {
     if (!meta || !meta.hubId) return null;
+    // 能力探测也属于本次唤醒；在途登记覆盖它，不能在探测期间误报可重试。
+    if (require('../../core/cli-capabilities').providerForKind(meta.kind)) {
+      await require('../../core/codeagent-capabilities').prepareForKind(meta.kind);
+    }
     // 只消费本次调用提供的覆盖，磁盘里的历史选型标记不代表新的操作意图。
     const launchOverrides = meta.launchOverrides;
     let codeagentModelPick = false;
@@ -461,10 +465,22 @@ function createResumeSessionHandler(deps) {
   }
 
   const pendingResumes = new Map();
-  return function resumeSession(meta, runtimeOptions = {}) {
+  function getStatus(id) {
+    if (!id) return { state: 'unknown', canRetry: false };
+    if (pendingResumes.has(id)) return { state: 'pending', canRetry: false };
+    if (sessionManager.getSession(id)) return { state: 'live', canRetry: false };
+    // 包括本 Hub 其他入口的启动预约：只有没有写入者和预约时才允许重发。
+    if (sessionManager._openOwners?.()?.owner(id, true)) return { state: 'occupied', canRetry: false };
+    return { state: 'ready', canRetry: true };
+  }
+  function resumeSession(meta, runtimeOptions = {}) {
     const id = meta?.hubId;
     if (!id) return Promise.resolve(null);
-    // 超时和重试不取消旧任务：先复用在途启动，再核对运行表，最后才允许新建进程。
+    // 查询与点击之间可能有其他入口启动；在同一主进程栈内再次核对并登记，禁止重复写入。
+    if (runtimeOptions.retry === true && !getStatus(id).canRetry) {
+      return Promise.reject(new Error('原唤醒尚未结束或会话已打开，请查看已有历史。'));
+    }
+    // 普通重复唤醒仍复用原任务；显式重试只能创建新的唤醒请求。
     if (pendingResumes.has(id)) return pendingResumes.get(id);
     const live = sessionManager.getSession(id);
     if (live) {
@@ -477,16 +493,18 @@ function createResumeSessionHandler(deps) {
     });
     pendingResumes.set(id, pending);
     return pending;
-  };
+  }
+  resumeSession.getStatus = getStatus;
+  return resumeSession;
 }
 
 function registerResumeSessionIpc(ipcMain, deps) {
   const resumeSession = typeof deps.resumeSession === 'function'
     ? deps.resumeSession
     : createResumeSessionHandler(deps);
-  ipcMain.handle('resume-session', (_event, meta) => (require('../../core/cli-capabilities').providerForKind(meta?.kind)
-    ? require('../../core/codeagent-capabilities').prepareForKind(meta.kind).then(() => resumeSession(meta))
-    : resumeSession(meta)));
+  ipcMain.handle('resume-session:status', (_event, id) => resumeSession.getStatus?.(id)
+    || { state: 'unknown', canRetry: false });
+  ipcMain.handle('resume-session', (_event, meta, options = {}) => resumeSession(meta, { retry: options.retry === true }));
   return { resumeSession };
 }
 

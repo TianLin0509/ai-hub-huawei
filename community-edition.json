@@ -59,9 +59,10 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "能力中心新增「AI 市场」页签：浏览公司 AgentCenter 市场里的技能、插件、MCP，点「安装」由 Hub 在后台装好，新开 CodeAgent 会话即可使用"
+    "AI 市场可按 ID 安装技能、MCP、插件、Agent、命令，并能一键打开 AgentCenter 网页找条目；「问问 Hub」与说明书里 22 条过时答复已按当前版本统一",
+    "唤醒失败或超时后始终可查看历史，「重试」只在确认没有进行中的唤醒时真正重发；自有接口的 API Key 改为按 Windows 账户加密保存（旧配置自动迁移）"
   ],
-  "version": "5.6.88",
+  "version": "5.6.89",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

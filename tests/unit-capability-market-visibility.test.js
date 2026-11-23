@@ -10,23 +10,25 @@ const { createRequire } = require('node:module');
 function panelFixture({ edition, probe }) {
   const filename = path.join(__dirname, '../renderer/capability-panel.js'), localRequire = createRequire(filename);
   const classes = { add() {}, remove() {}, toggle() {} };
+  const listeners = {}, externalUrls = [];
   let page;
   const doc = { addEventListener() {}, getElementById() { return null; }, body: { classList: classes, appendChild() {} },
-    createElement() { return page = { classList: classes, style: {}, setAttribute() {}, addEventListener() {},
+    createElement() { return page = { classList: classes, style: {}, setAttribute() {}, addEventListener(name, fn) { listeners[name] = fn; },
       querySelector(selector) { return selector === '.cp-scroll' ? { scrollTop: 0 } : null; }, innerHTML: '', hidden: false }; } };
   const calls = [];
-  const ipcRenderer = { on() {}, async invoke(channel) {
+  const ipcRenderer = { on() {}, async invoke(channel, payload) {
     calls.push(channel);
     if (channel === 'capabilities:market-status') return probe();
     if (channel === 'capabilities:catalog') return { ok: true, data: { rows: [], sessions: [], generatedAt: 0 } };
+    if (channel === 'open-external-url') { externalUrls.push(payload);return { success: true }; }
     throw Error('非预期 IPC：' + channel);
   } };
-  const context = { module: { exports: {} }, window: { addEventListener() {} },
+  const context = { module: { exports: {} }, window: { addEventListener() {} }, URL,
     require: name => name === '../core/distribution' ? { ...edition, kindAllowed: () => true } : localRequire(name) };
   vm.runInNewContext(fs.readFileSync(filename, 'utf8'), context, { filename });
   const panel = context.module.exports.createCapabilityPanel({ document: doc, ipcRenderer,
     escapeHtml: value => String(value || ''), getActiveSessionId: () => '' });
-  return { panel, calls, html: () => page.innerHTML };
+  return { panel, calls, externalUrls, click: action => listeners.click({ target: { closest: () => ({ dataset: { cpAction: action } }) } }), html: () => page.innerHTML };
 }
 
 test('公司版先探测：未收到可用结果不渲染页签，确认 CodeAgent 可用才出现', async () => {
@@ -64,4 +66,11 @@ test('面板关闭后到达的探测回执不更新已关闭页面', async () =>
   reply({ ok: true, data: { available: true } });await pending;
   assert.doesNotMatch(fixture.html(), /data-cp-tab="market"/);
   assert.equal(fixture.calls.length, 1);
+});
+
+test('打开 AgentCenter 复用已批准的官方入口与系统外链 IPC', async () => {
+  const fixture=panelFixture({edition:{community:true,target:'company'},probe:()=>({ok:true,data:{available:true}})});
+  await fixture.panel.open();fixture.click('market-browse');
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(fixture.externalUrls,[new URL(require('../renderer/codeagent-setup').OFFICIAL_INSTALL_URL).origin]);
 });

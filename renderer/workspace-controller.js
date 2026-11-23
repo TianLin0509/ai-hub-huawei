@@ -1308,6 +1308,11 @@
     const id = card.dataset.modelCard;
     if (id === 'gw-setup') { const g = gatewaySetup(); if (g.isOpen) g.close(); else void g.open(); return; }
     const apiProfile = companyProvider[kind]?.apiProfiles?.find(item => id === 'api:' + item.id);
+    // 解密失败时直接定位到这个账号补 Key，保留启动中心的目录及其他选择。
+    if (apiProfile?.apiKeyNeedsInput || (id === 'own' && companyProvider[kind]?.apiKeyNeedsInput && !companyProvider[kind]?.apiProfiles?.length)) {
+      void window.__companyApiOpen?.(kind, apiProfile?.id || '');
+      return;
+    }
     companyPick[kind] = apiProfile ? { source: 'api', profileId: apiProfile.id, model: apiProfile.model }
       : id === 'own' ? { source: 'own', model: '' } : id.startsWith('gw:') ? { source: 'gateway', model: id.slice(3) } : { source: 'company', model: id };
     selectedModel = companyPickModel(kind);

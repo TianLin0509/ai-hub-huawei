@@ -6,6 +6,7 @@ const policy = require('../core/company-ai-policy');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+test.beforeEach(t => t.mock.method(require('../core/own-api-secrets'), 'safeStorage', () => require('./helpers/fake-safe-storage')));
 
 function addApiProfile(raw, kind, label, overrides = {}) {
   return api.withSettings(raw, { kind, profileAction: 'save', label, baseURL: 'https://api.example.test/v1',

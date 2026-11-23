@@ -1,5 +1,10 @@
 {
   "唤醒没有完成": "The session hasn't finished waking",
+  "唤醒说明": "About waking this session",
+  "原唤醒可能仍在进行，结束前不能重试。可以先查看历史，或在原目录新建会话（不继承对话内容）。": "The original wake request may still be running. Retry is available only after it ends. View saved history or create a new session in the original folder (without conversation context).",
+  "在原目录新建会话": "New session in original folder",
+  "在原工作目录创建独立会话，不继承对话内容": "Create a separate session in the original working folder, without conversation context",
+  "原唤醒尚未结束或会话已打开，请查看已有历史。": "The original wake request is still running or the session is already open. View saved history.",
   "新开会话接着聊": "Continue in a new session",
   "CodeAgent 消息对账失败，请在后台终端查看。": "Could not reconcile CodeAgent messages. Check the background terminal.",
   "CodeAgent 状态对账失败，请在后台终端查看。": "Could not reconcile the CodeAgent session status. Check the background terminal.",

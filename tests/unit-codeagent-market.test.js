@@ -184,10 +184,80 @@ test('安装并发时不重复写配置，超时后终止假 CLI 并给可重试
 test('IPC 市场列表、安装以及异常都保持统一响应格式', async () => {
   const handlers = new Map();
   require('../main/ipc/capability-handlers').registerCapabilityIpc({ handle: (name, fn) => handlers.set(name, fn) }, {
-    market: { status: () => ({ available: true }), list: async () => ({ rows: [] }), install: async id => { if (id !== 'skill:one') throw Error('请选择市场条目');return { installed: true }; } },
+    market: { status: () => ({ available: true }), list: async () => ({ rows: [] }), install: async id => { if (id !== 'skill:one') throw Error('请选择市场条目');return { installed: true }; },
+      installById: async input => ({ installed: input.type==='mcp'&&input.id==='one@1.2' }) },
   });
   assert.deepEqual(await handlers.get('capabilities:market-status')(), { ok: true, data: { available: true } });
   assert.deepEqual(await handlers.get('capabilities:market')(), { ok: true, data: { rows: [] } });
   assert.equal((await handlers.get('capabilities:market-install')(null, { id: 'skill:one' })).data.installed, true);
   assert.equal((await handlers.get('capabilities:market-install')(null, {})).ok, false);
+  assert.equal((await handlers.get('capabilities:market-install-by-id')(null, {type:'mcp',id:'one@1.2'})).data.installed,true);
+});
+
+test('按 ID 安装五类命令：MCP 保留版本，非法 ID 和类型在启动前拒绝', () => {
+  const commands = { skill: ['skills','add','entry','--scope','global'], mcp: ['mcp','add','entry@1.2','--scope','user'],
+    plugin: ['plugin','add','entry'], agent: ['agents','add','entry'], command: ['command','add','entry'] };
+  for(const [type, expected] of Object.entries(commands)) {
+    const args=market.installByIdArgs(type,type==='mcp'?'entry@1.2':'entry');assert.deepEqual(args,expected);
+    let launched=false;
+    market.launchMarketCommand('fake.cmd',args,{}, { platform:'win32',spawnImpl:(_file,_args,options)=>{launched=true;assert.equal(options.windowsHide,true);} });
+    assert.equal(launched,true);
+  }
+  for(const id of ['', '--help', '../entry', 'entry & calc', 'entry%PATH%', 'entry\nnext', 'x'.repeat(251)])
+    assert.throws(()=>market.installByIdArgs('skill',id),/ID/);
+  assert.throws(()=>market.installByIdArgs('constructor','entry'),/请选择/);
+});
+
+test('没有市场副本也能用假 CLI 安装五类能力，安装后目录读回包含 Agent 和命令', async t => {
+  if(process.platform!=='win32'){t.skip('Windows CLI 包装器');return;}
+  const f=fixture(t);fs.unlinkSync(f.manifest);
+  const script=path.join(f.root,'byid-cli.cjs'),command=path.join(f.root,'byid-codeagent.cmd');
+  fs.writeFileSync(script,`const fs=require('fs'),path=require('path');const [kind,op,raw]=process.argv.slice(2),id=raw.split('@')[0],dir=process.env.CODEAGENT3_CONFIG_DIR;
+if(kind==='skills'){const p=path.join(dir,'skills',id);fs.mkdirSync(p,{recursive:true});fs.writeFileSync(path.join(p,'SKILL.md'),'---\\nname: '+id+'\\ndescription: 已装技能\\n---\\n');}
+if(kind==='mcp')fs.writeFileSync(path.join(dir,'.cac.json'),JSON.stringify({mcpServers:{[id]:{command:'fake'}}}));
+if(kind==='agents'||kind==='command'){const p=path.join(dir,kind==='agents'?'agents':'commands');fs.mkdirSync(p,{recursive:true});fs.writeFileSync(path.join(p,id+'.md'),'---\\nname: '+id+'\\ndescription: 已装扩展\\n---\\n');}
+if(kind==='plugin'){fs.writeFileSync(path.join(dir,'settings.json'),JSON.stringify({enabledPlugins:{[id+'@aimarket']:true}}));const p=path.join(dir,'plugins','cache','aimarket',id,'1','.cac-plugin');fs.mkdirSync(p,{recursive:true});fs.writeFileSync(path.join(p,'plugin.json'),JSON.stringify({name:id}));}
+console.log('installed');`);
+  fs.writeFileSync(command,'@echo off\r\n"'+process.execPath+'" "'+script+'" %*\r\n');
+  const scan=async()=>collectCapabilities({homeDir:path.dirname(f.configDir),dataDir:path.join(f.root,'data'),codeagentConfigDir:f.configDir});
+  let invalidations=0;
+  const service=new market.CodeAgentMarket({available:()=>true,config:()=>({command,configDir:f.configDir,configDirEnv:'CODEAGENT3_CONFIG_DIR'}),
+    catalog:scan,invalidate:()=>invalidations++});
+  for(const type of ['skill','mcp','plugin','agent','command']) {
+    const result=await service.installById({type,id:'byid-'+type+(type==='mcp'?'@1.2':'')});
+    assert.equal(result.installed,true,type);
+  }
+  assert.equal(invalidations,5);
+  assert.ok((await scan()).rows.some(row=>row.type==='agent'&&row.name==='byid-agent'));
+  assert.ok((await scan()).rows.some(row=>row.type==='command'&&row.name==='byid-command'));
+});
+
+test('按 ID 安装的失败可重试，非法输入不读配置；与清单安装共用安装锁', async t => {
+  const f=fixture(t);let fail=true,calls=0,done;
+  const service=new market.CodeAgentMarket({available:()=>true,config:()=>({command:'fake',configDir:f.configDir}),
+    catalog:async()=>({rows:[]}),invalidate(){},run:async()=>{calls++;if(fail)throw Error('network ECONNREFUSED');}});
+  await assert.rejects(service.installById({type:'skill',id:'bad & id'}),/ID/);assert.equal(calls,0);
+  await assert.rejects(service.installById({type:'skill',id:'brief'}),/公司内网/);
+  fail=false;await service.installById({type:'skill',id:'brief'});assert.equal(calls,2);
+  service.run=()=>new Promise(resolve=>{done=resolve;});
+  const pending=service.installById({type:'skill',id:'brief'});
+  await assert.rejects(service.install('mcp:search'),/正在安装/);
+  while(!done)await new Promise(resolve=>setImmediate(resolve));done({});await pending;
+});
+
+test('本机清单为空或全部已装时显示找 ID 的提示，仍有可装条目时正常列出', () => {
+  const {marketSourceHint}=require('../renderer/capability-panel');
+  const expected='本机市场副本只有已装条目；去 AgentCenter 找，按 ID 安装';
+  assert.equal(marketSourceHint([]),expected);
+  assert.equal(marketSourceHint([{installed:true},{installed:true}]),expected);
+  assert.equal(marketSourceHint([{installed:true},{installed:false}]),'');
+});
+
+test('按 ID 指定版本时，即使已有同名 MCP 也执行带版本的安装', async t => {
+  const f=fixture(t);let invoked;
+  const rows=[{type:'mcp',name:'search',sources:[{agent:'codeagent',scope:'user',path:path.join(f.configDir,'.cac.json')}]}];
+  const service=new market.CodeAgentMarket({available:()=>true,config:()=>({command:'fake',configDir:f.configDir}),
+    catalog:async()=>({rows}),invalidate(){},run:async(_command,args)=>{invoked=args;}});
+  await service.installById({type:'mcp',id:'search@2.0'});
+  assert.deepEqual(invoked,['mcp','add','search@2.0','--scope','user']);
 });

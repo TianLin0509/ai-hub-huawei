@@ -57,6 +57,13 @@ async function main() {
   try {
     [host, hc] = await launch(hostData, 'lan-host'); [client, cc] = await launch(clientData, 'lan-client');
     result.pids = [host.pid, client.pid];
+    // 真实 Electron safeStorage：先保存两组自有接口，随后经共享连接界面保存及恢复切换前配置。
+    const ownKeys = ['synthetic-before-lan-a', 'synthetic-before-lan-b'];
+    for (let i = 0; i < ownKeys.length; i++) {
+      const saved = await cc.eval(`ipcRenderer.invoke('company-api:save',${JSON.stringify({ kind: 'claude', profileAction: 'save',
+        label: '切换前账号' + i, baseURL: 'https://fixture.example.test', apiKey: ownKeys[i], model: 'fixture/model-' + i })})`);
+      check('共享前自有接口账号保存 ' + i, saved.ok);
+    }
     await click(hc, '#btn-options'); await click(hc, '#options-settings'); await click(hc, '#lan-pool-settings-open');
     await click(hc, '[data-lan-tab="host"]'); const port = await freePort();
     await fill(hc, '[data-lan-host] [name=port]', port); await fill(hc, '[data-lan-host] [name=bindAddress]', '127.0.0.1'); await click(hc, '[data-lan-host] [type=submit]');
@@ -80,6 +87,8 @@ async function main() {
     await click(cc, '[data-lan-connect] [type=submit]');
     await until(cc, 'document.querySelector("#lan-pool-dialog [role=status]")?.textContent.startsWith("已连接")', 'client connected');
     await until(cc, '!!document.querySelector("[data-lan-client-state=online]")', 'client online card');
+    const restorePoint = fs.readFileSync(path.join(clientData, 'lan-pool', 'settings.json'), 'utf8');
+    check('共享恢复点的两组自有 Key 均以真实 DPAPI 密文落盘', ownKeys.every(key => !restorePoint.includes(key)) && restorePoint.includes('encryptedApiKey'));
     await shot(cc, '同事已连接');
     check('同事无 CodeAgent 凭据也可连接', !fs.existsSync(path.join(root, 'client/codeagent/.credentials.json')));
     const snapshot = await cc.eval('ipcRenderer.invoke("codeagent:quota-panel")');
@@ -176,6 +185,13 @@ async function main() {
     await until(cc, '!!document.querySelector("[data-lan-client-state=revoked]")', 'client revoked card');
     await shot(cc, '同事口令撤销提示');
     const horizontal = await cc.eval('document.documentElement.scrollWidth>innerWidth'); check('1440 宽度无整页横向溢出', !horizontal);
+    const disconnected = await cc.eval('ipcRenderer.invoke("lan-pool:disconnect")');
+    const restored = await cc.eval('ipcRenderer.invoke("company-api:get")');
+    check('断开共享恢复两组原自有接口且 Key 可解密', disconnected.ok && restored.providers.claude.backend === 'api'
+      && restored.providers.claude.apiProfiles.length === 2 && restored.providers.claude.apiProfiles.every(profile => profile.apiKeySet && !profile.apiKeyNeedsInput));
+    check('断开后主配置及备份均无自有 Key 明文', ['config.json', 'config.json.bak'].every(name => {
+      const text = fs.readFileSync(path.join(clientData, name), 'utf8'); return ownKeys.every(key => !text.includes(key));
+    }));
     result.ok = true;
   } catch (error) {
     if (cc) {

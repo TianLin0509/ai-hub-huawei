@@ -167,16 +167,16 @@ function cardsFor(kind, provider, status, pick, { codeagentInstalled = null } = 
       : provider.own || { backend: provider.backend === 'api' ? 'api' : 'local', model: provider.model || '' };
     const api = own.backend === 'api';
     cards.push({ id: 'own', name: api ? (own.model || '自有接口默认模型') : '沿用本机 CLI 配置', detail: '', source: 'own',
-      sourceText: api ? '自有接口' : 'CLI 默认', state: 'ready', statusText: api ? '用你在「自有 API」里填的接口' : '用这台电脑上 CLI 自己的配置',
+      sourceText: api ? '自有接口' : 'CLI 默认', state: api && provider.apiKeyNeedsInput ? 'needs' : 'ready', statusText: api && provider.apiKeyNeedsInput ? 'Key 无法解密，点此补填' : api ? '用你在「自有 API」里填的接口' : '用这台电脑上 CLI 自己的配置',
       tip: api ? '经你自己的接口地址和 Key，不走公司模型。' : '不经 Hub 改接口，CLI 用它本机的登录和模型设置。', checked: pick?.source === 'own' });
     for (const profile of provider.apiProfiles || []) cards.push({ id: 'api:' + profile.id, profileId: profile.id,
-      name: profile.label, detail: profile.model, source: 'api', sourceText: '自有 API', state: 'ready',
-      statusText: profile.baseURL, tip: profile.baseURL,
+      name: profile.label, detail: profile.model, source: 'api', sourceText: '自有 API', state: profile.apiKeyNeedsInput ? 'needs' : 'ready',
+      statusText: profile.apiKeyNeedsInput ? 'Key 无法解密，点此补填' : profile.baseURL, tip: profile.baseURL,
       checked: pick?.source === 'api' && pick.profileId === profile.id });
   } else if (provider.own?.backend === 'api') {
     // DSH 只有填过自有接口才有自有卡（公司版 DSH 没有可沿用的本机配置）。
-    cards.push({ id: 'own', name: provider.own.model || '自有接口', detail: '', source: 'own', sourceText: '自有接口', state: 'ready',
-      statusText: '用你在「自有 API」里填的接口', tip: '直连你自己的 OpenAI 兼容接口和 Key，不走公司模型和 API 网关。', checked: pick?.source === 'own' });
+    cards.push({ id: 'own', name: provider.own.model || '自有接口', detail: '', source: 'own', sourceText: '自有接口', state: provider.apiKeyNeedsInput ? 'needs' : 'ready',
+      statusText: provider.apiKeyNeedsInput ? 'Key 无法解密，点此补填' : '用你在「自有 API」里填的接口', tip: '直连你自己的 OpenAI 兼容接口和 Key，不走公司模型和 API 网关。', checked: pick?.source === 'own' });
   }
   // 正走 API 网关的工具，网关模型卡排在最前；否则排在公司模型后面。
   // 走 API 网关的用户多半没有 CodeAgent：公司模型此刻用不了就不显示那两张卡，免得一屏「公司上游信息不全」（E2E 截图发现）。

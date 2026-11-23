@@ -112,6 +112,44 @@ const p=path.join(dir,'skills',a[2]);fs.mkdirSync(p,{recursive:true});fs.writeFi
     await click('[data-cp-action=refresh]');
     await until('document.querySelector("#capability-page")?.textContent.includes("还没有 AI 市场副本")', '缺失市场说明');
     checks.push('无市场副本时在原页给出下一步，无报错弹窗');
+    await click('[data-cp-action=market-by-id]');
+    await click('#cp-market-id');await cdp.send('Input.insertText',{text:'from-agentcenter'});
+    fs.writeFileSync(path.join(config,'fail-once'),'1');
+    await click('#cp-market-id-form button[type=submit]');
+    await until('document.querySelector("#cp-market-id-form button[type=submit]")?.textContent === "重试"','按 ID 安装失败提示');
+    assert.match(await cdp.eval('document.querySelector(".cp-market-id-result").textContent'),/公司内网/);
+    await click('#cp-market-id-form button[type=submit]');
+    await until('document.querySelector("#cp-market-id-form button[type=submit]")?.textContent === "安装" && document.querySelector(".cp-market-id-result")?.textContent.includes("已安装")','按 ID 重试安装未收录条目');
+    assert.ok(fs.existsSync(path.join(config,'skills','from-agentcenter','SKILL.md')));
+    checks.push('无市场副本时真实点击按 ID 安装，失败重试后新条目落地');
+    await click('[data-cp-tab=catalog]');
+    await until('document.querySelector("#capability-page")?.textContent.includes("from-agentcenter")','按 ID 安装后刷新能力库');
+    await click('[data-cp-tab=market]');await until('!document.querySelector("#capability-page .cp-progress")','返回市场');
+    // 两个已装插件模拟黄区真实副本，不连接真实公司账号。
+    const pluginNames=['codebase-win','developer-test-agent'];
+    for(const name of pluginNames){const p=path.join(config,'plugins','cache','aimarket',name,'1','.cac-plugin');fs.mkdirSync(p,{recursive:true});fs.writeFileSync(path.join(p,'plugin.json'),JSON.stringify({name}));}
+    fs.writeFileSync(path.join(config,'settings.json'),JSON.stringify({enabledPlugins:Object.fromEntries(pluginNames.map(name=>[name+'@aimarket',true]))}));
+    fs.writeFileSync(manifest,JSON.stringify({plugins:pluginNames.map(name=>({name,version:'1.0',description:'模拟黄区已经安装的插件',author:'团队市场'}))}));
+    // 清空此前的搜索条件，再刷新本机副本。
+    await click('#cp-market-search');
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'a',code:'KeyA',windowsVirtualKeyCode:65,modifiers:2});
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Backspace',windowsVirtualKeyCode:8});
+    await cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Backspace',windowsVirtualKeyCode:8});
+    await click('[data-cp-action=refresh]');
+    await until('document.querySelectorAll(".cp-market-row").length === 2 && !document.querySelector("#capability-page .cp-progress")','两个已装插件副本');
+    assert.match(await cdp.eval('document.querySelector(".cp-market-source-hint").textContent'),/本机市场副本只有已装条目/);
+    checks.push('两个条目全部已装时给出打开 AgentCenter、复制 ID 安装的就地提示');
+    // 只截获外链提交，避免验收在用户桌面弹出系统浏览器。
+    await cdp.eval('window.__marketOriginalInvoke=ipcRenderer.invoke;window.__marketOpenedUrl=null;ipcRenderer.invoke=function(channel,...args){if(channel==="open-external-url"){window.__marketOpenedUrl=args[0];return Promise.resolve({success:true});}return window.__marketOriginalInvoke.call(this,channel,...args);};true');
+    await click('[data-cp-action=market-browse]');
+    assert.equal(await cdp.eval('window.__marketOpenedUrl'),new URL(require('../renderer/codeagent-setup').OFFICIAL_INSTALL_URL).origin);
+    await cdp.eval('ipcRenderer.invoke=window.__marketOriginalInvoke;delete window.__marketOriginalInvoke;true');
+    checks.push('打开 AgentCenter 按钮提交正确外链（浏览器调用已截获，未启动真实系统浏览器）');
+    report.byIdLayout=await cdp.eval('(()=>{const e=document.querySelector("#capability-page .cp-scroll");return{scrollHeight:e.scrollHeight,clientHeight:e.clientHeight,formVisible:!!document.querySelector("#cp-market-id-form"),rows:document.querySelectorAll(".cp-market-row").length};})()');
+    assert.ok(report.byIdLayout.scrollHeight<=report.byIdLayout.clientHeight+1,JSON.stringify(report.byIdLayout));
+    const byIdShot=await cdp.send('Page.captureScreenshot',{format:'png'});
+    fs.writeFileSync(screenshotPath,Buffer.from(byIdShot.data,'base64'));
     report.ok = true;
   } catch (error) {
     report.ok = false;report.error = error.stack;

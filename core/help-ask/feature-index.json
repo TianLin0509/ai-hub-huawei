@@ -1,6 +1,6 @@
 {
  "$comment": "设置页搜索与 Ctrl+K 命令面板用的功能/设置索引，由 tools/help-manual/build-help-manual.js 从界面代码生成，不要手改。",
- "version": "5.6.77",
+ "version": "5.6.88",
  "items": [
   {
    "id": "f001",
@@ -247,7 +247,7 @@
    "kind": "menu",
    "name": "检查更新",
    "where": "设置菜单",
-   "desc": "手动检查并安装新版本（末位小版本不弹窗，要在这里点）",
+   "desc": "查看更新状态或手动安装新版本；末位小版本通常后台下载，关闭后替换、下次打开生效",
    "steps": [
     {
      "click": "#options-check-update"

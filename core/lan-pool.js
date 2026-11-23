@@ -16,7 +16,15 @@ function read(dataDir) {
   let text;
   try { text = fs.readFileSync(file(dataDir), 'utf8'); }
   catch (e) { if (e.code === 'ENOENT') return empty(); throw new Error('共享配置读取失败：' + e.message); }
-  try { const v = JSON.parse(text); if (v && typeof v === 'object') return v; throw new Error('not an object'); }
+  try {
+    const v = JSON.parse(text);
+    if (!v || typeof v !== 'object') throw new Error('not an object');
+    if (v.client?.previous && require('./own-api-secrets').hasPlaintext(previousConfig(v.client.previous))) {
+      // 已有恢复点也按读取迁移；暂不可加密时保留原文件，不能影响现有共享连接的状态读取。
+      try { return write(dataDir, v); } catch { /* 下次可加密、可写时再迁移 */ }
+    }
+    return v;
+  }
   catch {
     // A damaged settings file must not block the host's own company-model sessions.
     // Keep the bytes for inspection and continue with sharing switched off.
@@ -26,7 +34,19 @@ function read(dataDir) {
     return empty();
   }
 }
+// 共享池的恢复点沿用旧结构，但其中自有接口 Key 走与主配置相同的存储边界。
+function previousConfig(previous) { return { providers: { claude: previous.claude, codex: previous.codex }, acp: { companyApi: previous.dsh } }; }
+function mapPrevious(previous, transform) {
+  if (!previous || typeof previous !== 'object') return previous;
+  const config = transform(previousConfig(previous));
+  return { ...previous, ...(previous.claude ? { claude: config.providers.claude } : {}),
+    ...(previous.codex ? { codex: config.providers.codex } : {}), ...(previous.dsh ? { dsh: config.acp.companyApi } : {}) };
+}
+function openPrevious(previous) { return mapPrevious(previous, require('./own-api-secrets').openConfig); }
 function write(dataDir, next) {
+  // 覆盖直接 service.connect、重新连接及失败回滚等全部写入入口，不能只在 IPC 加密。
+  if (next.client?.previous) next = { ...next, client: { ...next.client,
+    previous: mapPrevious(next.client.previous, require('./own-api-secrets').sealConfig) } };
   fs.mkdirSync(path.dirname(file(dataDir)), { recursive: true });
   const tmp = file(dataDir) + '.' + crypto.randomBytes(6).toString('hex') + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(next, null, 2), { encoding: 'utf8', mode: 0o600 });
@@ -155,5 +175,5 @@ async function fetchSnapshot(client, { timeoutMs = 5000 } = {}) {
       : e.code === 'ECONNREFUSED' ? '主机在线但没有开启共享（或 Hub 未运行）' : '无法连接共享主机，请确认主机开机、Hub 在运行，以及主机地址没有变化')));
   });
 }
-module.exports = { VERSION, DEFAULT_PORT, read, write, address, port, bindAddress, addMember, revoke, authenticate, publicSettings, quotaSnapshot, fetchSnapshot, isPrivateAddress, localAddresses, formatInvite, parseInvite };
+module.exports = { VERSION, DEFAULT_PORT, read, write, openPrevious, address, port, bindAddress, addMember, revoke, authenticate, publicSettings, quotaSnapshot, fetchSnapshot, isPrivateAddress, localAddresses, formatInvite, parseInvite };
 Object.defineProperty(module.exports, 'MODEL_IDS', { enumerable: true, get: modelIds });

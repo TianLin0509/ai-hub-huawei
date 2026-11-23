@@ -14,6 +14,8 @@ function parseMarketplace(data) {
     catch { throw Object.assign(Error('本机 AI 市场清单格式无效，请在 CodeAgent 中更新市场后重试'), { code: 'MARKET_JSON_INVALID' }); }
   }
   const rows = new Map();
+  // 条目没写作者时用市场顶层 owner（真机清单只在顶层写 owner）。
+  const owner = data && typeof data === 'object' && !Array.isArray(data) ? (text(data.owner, 160) || text(data.owner?.name, 160)) : '';
   let count = 0;
   function add(item, fallback) {
     if (++count > MAX_MARKET_ITEMS) throw Error('本机 AI 市场清单超过 5000 条，未展示不完整列表；请在 CodeAgent 中更新或缩小市场副本后刷新');
@@ -27,7 +29,7 @@ function parseMarketplace(data) {
     if (typeof installId !== 'string' || installId.length > 250) return;
     if (!type || !validSkillId(installId) || !name) return;
     const id = type + ':' + installId;
-    const author = text(item.author, 160) || text(item.author?.name, 160);
+    const author = text(item.author, 160) || text(item.author?.name, 160) || owner;
     rows.set(id, { id, installId, name, type, version: text(item.version, 80),
       description: text(item.description) || text(item.summary), author });
   }
@@ -62,7 +64,10 @@ async function readMarketplace(configDir, { fsModule = fs } = {}) {
 
 function isMarketInstalled(item, rows, configDir) {
   const aliases = new Set([item.name, item.installId, item.installId.replace(/@[^@]+$/, '')]);
-  if (item.type === 'plugin') aliases.add(item.installId + '@aimarket');
+  if (item.type === 'plugin') {
+    aliases.add(item.installId + '@aimarket');
+    aliases.add(item.installId.replace(/@[^@]+$/, '') + '@aimarket');
+  }
   return rows.some(row => row.type === item.type && aliases.has(row.name) && row.sources?.some(source => {
     if (source.agent !== 'codeagent' || source.scope !== 'user' || source.missing || !source.path) return false;
     // 单独的启用开关可能是卸载后残留，插件要读到落地目录才显示已安装。
@@ -82,11 +87,24 @@ function installArgs(item) {
   throw Error('这个市场条目暂不支持安装');
 }
 
+function installByIdArgs(type, id) {
+  if (!validSkillId(id) || id.length > 250) throw Error('ID 只允许字母、数字和 . _ - @，可填写 ID@版本，最长 250 字符');
+  if (type === 'skill') return ['skills', 'add', id, '--scope', 'global'];
+  if (type === 'mcp') return ['mcp', 'add', id, '--scope', 'user'];
+  if (type === 'plugin') return ['plugin', 'add', id];
+  if (type === 'agent') return ['agents', 'add', id];
+  if (type === 'command') return ['command', 'add', id];
+  throw Error('请选择技能、MCP、插件、Agent 或命令');
+}
+
 function launchMarketCommand(command, args, options, { platform = process.platform, spawnImpl = spawn } = {}) {
   // Windows 的 CodeAgent 是 bat/cmd 包装器，参数必须先按允许的命令逐项核验。
-  const type = { skills: 'skill', plugin: 'plugin', mcp: 'mcp' }[args[0]];
-  const id = type === 'plugin' ? args[2]?.replace(/@aimarket$/, '') : args[2];
-  if (!type || JSON.stringify(args) !== JSON.stringify(installArgs({ type, installId: id }))) throw Error('不允许的市场安装参数');
+  const kinds = { skills: 'skill', plugin: 'plugin', mcp: 'mcp', agents: 'agent', command: 'command' };
+  const type = typeof args[0] === 'string' && Object.hasOwn(kinds, args[0]) ? kinds[args[0]] : null;
+  if (!type) throw Error('不允许的市场安装参数');
+  const allowed = [installByIdArgs(type, args[2])];
+  if (type === 'plugin' && args[1] === 'install') allowed.push(installArgs({ type, installId: args[2]?.replace(/@aimarket$/, '') }));
+  if (!allowed.some(value => JSON.stringify(args) === JSON.stringify(value))) throw Error('不允许的市场安装参数');
   if (typeof command !== 'string' || !command || /[\r\n"`$;&|<>%!?^]/.test(command)) throw Error('CodeAgent 命令路径无效');
   if (platform !== 'win32') return spawnImpl(command, args, { ...options, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
   const head = /^[A-Za-z0-9_.-]+$/.test(command) ? command : '"' + path.normalize(command) + '"';
@@ -118,24 +136,38 @@ class CodeAgentMarket {
     try {
       const config = this.config(), items = await readMarketplace(config.configDir), catalog = await this.catalog();
       return { available: true, rows: items.map(item => ({ ...item, installed: isMarketInstalled(item, catalog.rows, config.configDir) })),
-        reason: items.length ? '' : '本机市场副本没有可识别的技能、插件或 MCP，请在 CodeAgent 中更新市场后刷新' };
+        reason: '' };
     } catch (error) { return { available: true, rows: [], reason: error.message }; }
   }
   async install(id) {
-    if (!this.available()) throw Error('当前环境无法使用公司 AI 市场，请先安装 CodeAgent');
     if (typeof id !== 'string') throw Error('请选择市场条目');
+    return this.installItem(async config => {
+      const items = await readMarketplace(config.configDir), item = items.find(row => row.id === id);
+      if (!item) throw Error('市场条目已变化，请刷新后重试');
+      return item;
+    }, installArgs);
+  }
+  async installById({ type, id } = {}) {
+    const args = installByIdArgs(type, id);
+    return this.installItem(async () => ({ type, id: type + ':' + id, name: id.split('@')[0], installId: id, versionRequested: id.includes('@') }), () => args);
+  }
+  // 清单安装和按 ID 安装共用同一个安装锁及执行闭环。
+  async installItem(findItem, makeArgs) {
+    if (!this.available()) throw Error('当前环境无法使用公司 AI 市场，请先安装 CodeAgent');
     if (this.busy) throw Error('另一个条目正在安装，请等它结束后重试');
     this.busy = true;
     try {
-      const config = this.config(), items = await readMarketplace(config.configDir), item = items.find(row => row.id === id);
-      if (!item) throw Error('市场条目已变化，请刷新后重试');
+      const config = this.config(), item = await findItem(config);
       const catalog = await this.catalog();
-      if (isMarketInstalled(item, catalog.rows, config.configDir)) return { installed: true, alreadyInstalled: true };
+      // 显式指定版本时必须交给 CLI 处理，不能因为已有同名条目而跳过。
+      if (!item.versionRequested && isMarketInstalled(item, catalog.rows, config.configDir)) return { installed: true, alreadyInstalled: true };
       const env = { ...this.env, [config.configDirEnv]: config.configDir };
       // 不继承父会话的 hook 回调，避免安装过程误报当前会话状态。
       for (const key of Object.keys(env)) if (/^CLAUDE_HUB_(?:SESSION_ID|PORT|TOKEN)$|^CODEAGENT_HUB_/.test(key)) delete env[key];
       require('./codeagent-launch-env').applyAccountEnv(env, config);
-      try { await this.run(config.command, installArgs(item), { cwd: config.configDir, env, windowsHide: true }, { launch: launchMarketCommand }); }
+      // 尚未生成本机市场副本时也能安装；只准备 CLI 自己的配置目录。
+      await fs.mkdir(config.configDir, { recursive: true });
+      try { await this.run(config.command, makeArgs(item), { cwd: config.configDir, env, windowsHide: true }, { launch: launchMarketCommand }); }
       catch (error) { throw Error(installFailure(error)); }
       this.invalidate();
       const updated = await this.catalog();
@@ -144,4 +176,4 @@ class CodeAgentMarket {
     } finally { this.busy = false; }
   }
 }
-module.exports = { MAX_MARKET_BYTES, MAX_MARKET_ITEMS, parseMarketplace, readMarketplace, isMarketInstalled, installArgs, launchMarketCommand, installFailure, CodeAgentMarket };
+module.exports = { MAX_MARKET_BYTES, MAX_MARKET_ITEMS, parseMarketplace, readMarketplace, isMarketInstalled, installArgs, installByIdArgs, launchMarketCommand, installFailure, CodeAgentMarket };

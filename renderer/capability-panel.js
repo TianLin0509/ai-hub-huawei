@@ -7,7 +7,11 @@ const {coverage,related,isActive}=require('../core/capability-view-model');
 const {presentation,mcpSharing,ORIGINS}=require('../core/capability-presentation');
 const { SERVICES } = require('../core/tool-account-catalog');
 const { iconHintHtml } = require('./launch-field-hint');
-const TYPE_LABEL={skill:'技能',mcp:'MCP 连接',plugin:'插件',command:'命令',tool:'工具'};
+const { OFFICIAL_INSTALL_URL } = require('./codeagent-setup');
+const TYPE_LABEL={skill:'技能',mcp:'MCP 连接',plugin:'插件',agent:'Agent',command:'命令',tool:'工具'};
+function marketSourceHint(rows = []) {
+  return !rows.length||rows.every(row=>row.installed)?'本机市场副本只有已装条目；去 AgentCenter 找，按 ID 安装':'';
+}
 const ICON={skill:'<path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1L3.2 9.4l6.1-.9Z"/>',
   mcp:'<rect x="7" y="7" width="10" height="10" rx="3"/><path d="M9 3v4m6-4v4M9 17v4m6-4v4M3 9h4m-4 6h4m10-6h4m-4 6h4"/>',
   plugin:'<path d="M9 3H4v6h2a3 3 0 1 1 0 6H4v6h5v-2a3 3 0 1 1 6 0v2h5v-6h-2a3 3 0 1 1 0-6h2V3h-5v2a3 3 0 1 1-6 0Z"/>',
@@ -17,6 +21,7 @@ function createCapabilityPanel({document,ipcRenderer,escapeHtml:esc,getActiveSes
   let page,catalog=null,runtime=null,tab='catalog',agent='all',type='all',query='',scope='active',selected='',sessionId='',busy=false,error='',epoch=0;
   let sharing=null,shareBusy=false,notice='',origin='all',noteEdit=null,noteBusy=false;
   let market=null,marketPage=0,marketQuery='',marketType='all',marketPageSize=1,marketAvailable=false;
+  let byIdOpen=false,byIdType='skill',byIdValue='',byIdBusy=false,byIdResult=null;
   const marketStates=new Map();
   const label=id=>getKindLabel(id) || id;
   const button=(text,attrs,cls='')=>`<button type="button" class="cp-button ${cls}" ${attrs}>${text}</button>`;
@@ -27,18 +32,21 @@ function createCapabilityPanel({document,ipcRenderer,escapeHtml:esc,getActiveSes
     // 分页容量由渲染后的列表实际高度确定，不再估算整页要扣掉多少空间。
     const pageSize=marketPageSize;
     const pages=Math.max(1,Math.ceil(rows.length/pageSize));marketPage=Math.min(marketPage,pages-1);
-    const installing=[...marketStates.values()].some(state=>state.busy);
+    const installing=byIdBusy||[...marketStates.values()].some(state=>state.busy);
+    const sourceHint=!busy&&market?marketSourceHint(market.rows):'';
     return `<div class="cp-market-heading"><h2>AgentCenter ${iconHintHtml('公司 AI 市场\n读取 CodeAgent 的本机 aimarket 副本，安装由 CodeAgent 在后台完成。\n安装到个人 CodeAgent 配置目录；新开个人 CodeAgent 会话使用，号池会话需在对应账号另行安装。\n本机副本不代表市场全量，条目与版本以 CodeAgent 同步结果为准。')}</h2></div>
-      <div class="cp-toolbar"><label class="cp-search"><span aria-hidden="true">⌕</span><input id="cp-market-search" type="search" placeholder="搜索市场名称、功能或作者…" aria-label="搜索 AI 市场" value="${esc(marketQuery)}"></label><select id="cp-market-type" aria-label="市场类型">${[['all','全部类型'],['skill','技能'],['plugin','插件'],['mcp','MCP']].map(([id,name])=>`<option value="${id}" ${marketType===id?'selected':''}>${name}</option>`).join('')}</select><span>${rows.length} 项</span></div>
+      <div class="cp-toolbar"><label class="cp-search"><span aria-hidden="true">⌕</span><input id="cp-market-search" type="search" placeholder="搜索本机市场副本…" aria-label="搜索 AI 市场" value="${esc(marketQuery)}"></label>${button('按 ID 安装',`data-cp-action="market-by-id" aria-expanded="${byIdOpen}"`)}<span class="cp-market-browse">${button('打开 AgentCenter','data-cp-action="market-browse"')}${iconHintHtml('在网页里找到条目，复制它的 ID 回来按 ID 安装')}</span><select id="cp-market-type" aria-label="市场类型">${[['all','全部类型'],['skill','技能'],['plugin','插件'],['mcp','MCP']].map(([id,name])=>`<option value="${id}" ${marketType===id?'selected':''}>${name}</option>`).join('')}</select><span>${rows.length} 项</span></div>
+      ${byIdOpen?`<form id="cp-market-id-form" class="cp-market-id-form"><label for="cp-market-id">按 ID 安装 ${iconHintHtml('从 AgentCenter 复制条目的 ID，支持 ID@版本。安装到个人 CodeAgent 配置，新开个人会话核对。')}</label><select id="cp-market-id-type" aria-label="按 ID 安装类型" ${installing?'disabled':''}>${[['skill','技能'],['mcp','MCP'],['plugin','插件'],['agent','Agent'],['command','命令']].map(([id,name])=>`<option value="${id}" ${byIdType===id?'selected':''}>${name}</option>`).join('')}</select><input id="cp-market-id" type="text" maxlength="250" required aria-label="市场条目 ID" placeholder="ID 或 ID@版本" value="${esc(byIdValue)}" ${installing?'disabled':''}><button type="submit" class="cp-button selected" ${installing?'disabled':''}>${byIdBusy?'安装中…':byIdResult?.error?'重试':'安装'}</button>${byIdResult?`<span class="cp-market-id-result ${byIdResult.error?'cp-market-error':''}" role="status" title="${esc(byIdResult.error||byIdResult.message)}">${esc(byIdResult.error||byIdResult.message)}</span>`:''}</form>`:''}
       ${busy?'<p class="cp-progress" role="status">正在读取本机 AI 市场…</p>':''}${error?`<p class="cp-notice warn" role="alert">${esc(error)}</p>`:''}${market?.reason?`<p class="cp-notice" role="status">${esc(market.reason)}</p>`:''}
-      <div class="cp-market-list" aria-label="AI 市场条目">${rows.slice(marketPage*pageSize,(marketPage+1)*pageSize).map(row=>{
+      ${sourceHint?`<p class="cp-market-source-hint" role="status">${esc(sourceHint)}</p>`:''}<div class="cp-market-list" aria-label="AI 市场条目">${rows.slice(marketPage*pageSize,(marketPage+1)*pageSize).map(row=>{
         const state=marketStates.get(row.id),installed=row.installed;
         const hint=installed?(state?.message || '已安装，新开 CodeAgent 会话即可使用'):'';
         return `<article class="cp-market-row"><span class="cp-glyph ${row.type}">${svg(row.type)}</span><div class="cp-market-copy"><div class="cp-market-title"><strong>${esc(row.name)}</strong><small>${esc(TYPE_LABEL[row.type])} · ${esc(row.version || '版本未提供')} · ${esc(row.author || '作者未提供')}</small></div><p title="${esc(row.description)}">${esc(row.description || '暂无简介')}</p></div><div class="cp-market-action">${button(installed?'已安装':state?.busy?'安装中…':state?.error?'重试':'安装',`data-cp-install="${esc(row.id)}" ${installed?`aria-disabled="true" data-hub-tip-focus="1" title="${esc(hint)}"`:installing?'disabled':''}`,installed?'':'selected')}${!installed&&(state?.error||state?.message)?`<small role="status" ${state.error?'class="cp-market-error"':''} title="${esc(state.error||state.message)}">${esc(state.error||state.message)}</small>`:''}</div></article>`;
-      }).join('')}${!rows.length&&!busy&&!market?.reason&&!error?'<p class="cp-empty">没有匹配的市场条目，请换个关键词。</p>':''}</div>
+      }).join('')}${!rows.length&&!busy&&!market?.reason&&!error&&!sourceHint?'<p class="cp-empty">没有匹配的市场条目，请换个关键词。</p>':''}</div>
       <footer class="cp-market-pagination">${button('上一页',`data-cp-market-page="-1" ${marketPage===0?'disabled':''}`)}<span>第 ${marketPage+1} / ${pages} 页</span>${button('下一页',`data-cp-market-page="1" ${marketPage>=pages-1?'disabled':''}`)}</footer>`;
   }
   async function installMarket(id){
+    if(byIdBusy)return;
     if(market?.rows.find(row=>row.id===id)?.installed)return;
     if([...marketStates.values()].some(state=>state.busy))return;
     marketStates.set(id,{busy:true});render();
@@ -52,6 +60,26 @@ function createCapabilityPanel({document,ipcRenderer,escapeHtml:esc,getActiveSes
       if(updated?.ok)catalog=updated.data;
     }catch(e){marketStates.set(id,{error:e.message});}
     finally{if(!page.hidden)render();}
+  }
+  async function installByIdMarket(){
+    if(byIdBusy||[...marketStates.values()].some(state=>state.busy))return;
+    byIdBusy=true;byIdResult=null;render();
+    try{
+      const response=await ipcRenderer.invoke('capabilities:market-install-by-id',{type:byIdType,id:byIdValue.trim()});
+      if(!response?.ok)throw Error(response?.error || '安装失败，请重试');
+      byIdResult={message:response.data.message || '已安装，新开 CodeAgent 会话即可使用'};
+      const updated=await ipcRenderer.invoke('capabilities:catalog',{refresh:true});
+      if(updated?.ok)catalog=updated.data;
+      const local=await ipcRenderer.invoke('capabilities:market');
+      if(local?.ok)market=local.data;
+    }catch(e){byIdResult={error:e.message};}
+    finally{byIdBusy=false;if(!page.hidden)render();}
+  }
+  async function browseMarket(){
+    try{
+      const response=await ipcRenderer.invoke('open-external-url',new URL(OFFICIAL_INSTALL_URL).origin);
+      if(!response?.success)throw Error('系统浏览器没有打开，请稍后重试');
+    }catch(e){error='无法打开 AgentCenter：'+e.message;if(!page.hidden)render();}
   }
   function position(){const rail=document.getElementById('scene-rail')?.getBoundingClientRect();if(page&&rail){const sessionEdge=document.getElementById('session-sidebar')?.getBoundingClientRect().left;page.style.left=(sessionEdge??rail.right)+'px';page.style.top=rail.top+'px';}}
   const inScope=r=>scope==='all'||scope==='active'&&isActive(r)||scope==='shared'&&r.shared||scope==='conflict'&&r.conflict||scope==='disabled'&&r.sources.some(s=>s.enabled===false||s.missing);
@@ -123,7 +151,7 @@ function createCapabilityPanel({document,ipcRenderer,escapeHtml:esc,getActiveSes
       <div class="cp-scroll"><div class="cp-summary"><div class="cp-summary-intro"><span class="cp-summary-symbol">${svg('plugin')}</span><div><strong>能力中心</strong><p>公共资源，各有专长。<br>从安装来源到会话回执，都有据可查。</p></div></div>${[['skill',counts('skill'),'工作流与专业知识'],['mcp',counts('mcp'),'连接工具与外部服务'],['plugin',counts('plugin'),'成套扩展与集成']].map(([t,n,sub])=>`<button type="button" class="cp-stat" data-cp-type="${t}"><span>${svg(t)}${TYPE_LABEL[t]}</span><strong>${n}</strong><small>${inactive(t)?`${sub} · 另有 ${inactive(t)} 项已停用`:sub}</small></button>`).join('')}</div>
       ${tabs()}
       ${sharingView()}${notice?`<div class="cp-notice" role="status">${esc(notice)}</div>`:''}
-      <div class="cp-types" aria-label="能力类型">${[['all','全部'],...Object.entries(TYPE_LABEL).filter(([k])=>tab==='runtime'||['skill','mcp','plugin'].includes(k))].map(([id,name])=>button(`${id==='all'?'':svg(id)}${esc(name)}`,`data-cp-type="${id}" aria-pressed="${type===id}"`,type===id?'selected':'')).join('')}</div>
+      <div class="cp-types" aria-label="能力类型">${[['all','全部'],...Object.entries(TYPE_LABEL).filter(([k])=>tab==='runtime'||['skill','mcp','plugin'].includes(k)||['agent','command'].includes(k)&&all.some(r=>r.type===k))].map(([id,name])=>button(`${id==='all'?'':svg(id)}${esc(name)}`,`data-cp-type="${id}" aria-pressed="${type===id}"`,type===id?'selected':'')).join('')}</div>
       ${tab==='catalog'?`<div class="cp-agents" aria-label="按 AI 筛选">${[['all','全部 AI'],...ALL_AI_KINDS.map(a=>[a,label(a)])].map(([id,name])=>button(`<span class="cp-agent-dot ${id}">${id==='all'?'◈':esc(name.slice(0,1))}</span>${esc(name)}<small>${all.filter(r=>inScope(r)&&(id==='all'||r.agents.includes(id))).length}</small>`,`data-cp-agent="${id}" aria-pressed="${agent===id}"`,agent===id?'selected':'')).join('')}</div>`:
       tab==='runtime'?`<div class="cp-session"><label for="cp-session">查看会话</label><select id="cp-session"><option value="">选择一个已打开的会话</option>${(catalog?.sessions || []).map(s=>`<option value="${esc(s.id)}" ${sessionId===s.id?'selected':''}>${esc(label(s.kind)+' · '+s.title)}</option>`).join('')}</select><span>MCP 档位 <b>${esc(runtime?.profile || '未确认')}</b></span></div>`:''}
       <div class="cp-toolbar"><label class="cp-search"><span aria-hidden="true">⌕</span><input id="cp-search" type="search" placeholder="搜索名称或功能…" aria-label="搜索能力" value="${esc(query)}"></label>${tab!=='runtime'?`<select id="cp-scope" aria-label="范围">${[['active','已启用'],['all','全部（含停用）'],['shared','公共技能'],['conflict','同名差异'],['disabled','禁用 / 待核对']].map(([k,v])=>`<option value="${k}" ${scope===k?'selected':''}>${v}</option>`).join('')}</select>`:''}<span>${visible.length} 项</span></div>
@@ -218,6 +246,8 @@ function createCapabilityPanel({document,ipcRenderer,escapeHtml:esc,getActiveSes
       page.addEventListener('click',e=>{
         const b=e.target.closest('button');if(!b)return;
         if(b.dataset.cpInstall){void installMarket(b.dataset.cpInstall);return;}
+        if(b.dataset.cpAction==='market-by-id'){byIdOpen=!byIdOpen;render();if(byIdOpen)page.querySelector('#cp-market-id')?.focus();return;}
+        if(b.dataset.cpAction==='market-browse'){void browseMarket();return;}
         if(b.dataset.cpMarketPage){marketPage+=Number(b.dataset.cpMarketPage);render();return;}
         if(b.dataset.cpAction==='close'){close();document.getElementById('btn-rail-capabilities')?.focus();return;}
         if(b.dataset.cpAction==='refresh'){runtime=null;void refresh(true);return;}
@@ -234,9 +264,9 @@ function createCapabilityPanel({document,ipcRenderer,escapeHtml:esc,getActiveSes
         if(b.dataset.cpType){type=b.dataset.cpType;selected='';render();return;}
         if(b.dataset.cpRow){noteEdit=null;selected=b.dataset.cpRow;const scroll=page.querySelector('.cp-scroll').scrollTop;render();page.querySelector('.cp-scroll').scrollTop=scroll;page.querySelector(`[data-cp-row="${CSS.escape(selected)}"]`)?.focus({preventScroll:true});}
       });
-      page.addEventListener('submit',e=>{if(e.target.id==='cp-note-form'){e.preventDefault();void saveNote();}});
-      page.addEventListener('input',e=>{if(e.target.id==='cp-market-search'){marketQuery=e.target.value;marketPage=0;render();page.querySelector('#cp-market-search').focus({preventScroll:true});return;}if(e.target.id==='cp-note-summary'&&noteEdit){noteEdit.summary=e.target.value;return;}if(e.target.id==='cp-search'){const pos=e.target.selectionStart;query=e.target.value;render();const input=page.querySelector('#cp-search');input.focus({preventScroll:true});input.setSelectionRange(pos,pos);}});
-      page.addEventListener('change',e=>{if(e.target.id==='cp-market-type'){marketType=e.target.value;marketPage=0;render();return;}if(e.target.id==='cp-note-origin'&&noteEdit){noteEdit.origin=e.target.value;return;}if(e.target.id==='cp-type')type=e.target.value;else if(e.target.id==='cp-scope')scope=e.target.value;else if(e.target.id==='cp-session'){sessionId=e.target.value;runtime=null;void refresh();return;}else return;selected='';render();});
+      page.addEventListener('submit',e=>{if(e.target.id==='cp-market-id-form'){e.preventDefault();void installByIdMarket();return;}if(e.target.id==='cp-note-form'){e.preventDefault();void saveNote();}});
+      page.addEventListener('input',e=>{if(e.target.id==='cp-market-id'){byIdValue=e.target.value;byIdResult=null;return;}if(e.target.id==='cp-market-search'){marketQuery=e.target.value;marketPage=0;render();page.querySelector('#cp-market-search').focus({preventScroll:true});return;}if(e.target.id==='cp-note-summary'&&noteEdit){noteEdit.summary=e.target.value;return;}if(e.target.id==='cp-search'){const pos=e.target.selectionStart;query=e.target.value;render();const input=page.querySelector('#cp-search');input.focus({preventScroll:true});input.setSelectionRange(pos,pos);}});
+      page.addEventListener('change',e=>{if(e.target.id==='cp-market-id-type'){byIdType=e.target.value;byIdResult=null;return;}if(e.target.id==='cp-market-type'){marketType=e.target.value;marketPage=0;render();return;}if(e.target.id==='cp-note-origin'&&noteEdit){noteEdit.origin=e.target.value;return;}if(e.target.id==='cp-type')type=e.target.value;else if(e.target.id==='cp-scope')scope=e.target.value;else if(e.target.id==='cp-session'){sessionId=e.target.value;runtime=null;void refresh();return;}else return;selected='';render();});
     }
     page.hidden=false;document.body.classList.add('capabilities-open');document.getElementById('btn-rail-capabilities')?.setAttribute('aria-expanded','true');
     await refresh();
@@ -254,4 +284,4 @@ function createCapabilityPanel({document,ipcRenderer,escapeHtml:esc,getActiveSes
   });
   return {open,close};
 }
-module.exports={createCapabilityPanel};
+module.exports={createCapabilityPanel,marketSourceHint};

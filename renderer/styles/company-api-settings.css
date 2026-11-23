@@ -57,3 +57,11 @@
 .company-api-dialog .company-api-own-hint p{margin:0 0 6px}
 /* 「自有 API」内容比一屏高时（1440×900 实测 899 > 852），底部「保存配置」被挤到下面要滚动才看见：底栏贴底常驻（2026-11-21） */
 #company-api-dialog footer{position:sticky;bottom:0;z-index:1;margin-bottom:calc(-1 * var(--hw-sp-6,24px));padding:var(--hw-sp-3,12px) 0 var(--hw-sp-6,24px);background:var(--hw-surface,#fff)}
+/* 自有接口按输入关系并排：账号与名称、模型与协议同排，地址和 Key 独占一排，一 Tab 一屏。 */
+#company-api-dialog [data-api-form]{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 16px}
+#company-api-dialog [data-api-form]>label{min-width:0;margin:0}
+#company-api-dialog [data-api-form] input,#company-api-dialog [data-api-form] select{height:40px;margin-top:6px}
+#company-api-dialog [data-api-form]>.own-api-wide,#company-api-dialog [data-api-form]>p,#company-api-dialog [data-api-form]>div,#company-api-dialog [data-api-form]>footer{grid-column:1/-1}
+#company-api-dialog [data-api-form] [hidden]{display:none!important}
+#company-api-dialog [data-api-form]>.company-api-message{margin:0;min-height:22px}
+#company-api-dialog [data-api-form]>footer{position:static;margin:0;padding:0}
