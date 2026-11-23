@@ -59,7 +59,7 @@ function fireHook(event, name, extra = {}) {
 }
 if (!isProbe) fireHook('SessionStart', 'session-start');
 
-function accountModels() {
+function accountModels(menu = false) {
   let accountId = '';
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(configDir, '.credentials.json'), 'utf8'));
@@ -67,7 +67,8 @@ function accountModels() {
     accountId = String(entry && entry.accountId || '');
   } catch { /* 没登录 */ }
   // CODEAGENT_POOL_FAKE_MODELS=a,b,c：这个号的模型清单（serve 和 /model 菜单同一份），用来测长清单。
-  const listed = String(process.env.CODEAGENT_POOL_FAKE_MODELS || '').split(',').map(m => m.trim()).filter(Boolean);
+  // 模拟 serve 报短名称、原生菜单带线路前缀的公司环境。
+  const listed = String(menu && process.env.CODEAGENT_POOL_FAKE_MENU_MODELS || process.env.CODEAGENT_POOL_FAKE_MODELS || '').split(',').map(m => m.trim()).filter(Boolean);
   if (listed.length) return listed;
   return /^z/i.test(accountId) ? ['deepseek-v4-flash-0731'] : ['GLM-5.2-WX-Auto'];
 }
@@ -101,7 +102,7 @@ if (args[0] === 'serve') {
 const out = text => process.stdout.write(text);
 const prompt = () => out('\x1b[2J\x1b[H  CodeAgent (fake)\r\n\r\n> Anything I can assist you with?\r\n');
 function menu() {
-  const models = accountModels();
+  const models = accountModels(true);
   out('\x1b[2J\x1b[H  Select model    ✕\r\n\r\n  Built-in\r\n');
   models.forEach((m, i) => out(`  ${i === 0 ? '❯' : ' '}  ${i + 1}. ${m}${i === 0 ? ' default ✓' : ''}   0x\r\n`));
   out('\r\n  Navigate ↑ ↓ | Select enter | Back esc\r\n');
@@ -144,7 +145,7 @@ function launchSettingsModel() {
 }
 let sessionModel = launchSettingsModel(), menuOpen = false, menuCursor = 0, pendingEsc = null, pendingKeys = '';
 function drawMenu() {
-  const models = accountModels();
+  const models = accountModels(true);
   out('\x1b[2J\x1b[H  Select model    ✕\r\n\r\n  Built-in\r\n');
   models.forEach((m, i) => out(`  ${i === menuCursor ? '❯' : ' '}  ${i + 1}. ${m}${i === 0 ? ' default ✓' : ''}   0x\r\n`));
   out('\r\n  Navigate ↑ ↓ | Select enter | Back esc\r\n');
@@ -163,7 +164,7 @@ function handleKeys(chunk) {
       pendingKeys = partial[0]; keys = keys.slice(0, partial.index);
       pendingEsc = setTimeout(() => { pendingEsc = null; pendingKeys = ''; menuOpen = false; prompt(); }, 150);
     }
-    const models = accountModels();
+    const models = accountModels(true);
     for (const key of keys.match(/\x1b\[[AB]|\x1b|\r|\n|./gs) || []) {
       if (key === '\x1b[B') { menuCursor = Math.min(models.length - 1, menuCursor + 1); drawMenu(); }
       else if (key === '\x1b[A') { menuCursor = Math.max(0, menuCursor - 1); drawMenu(); }

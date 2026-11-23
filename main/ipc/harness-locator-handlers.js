@@ -33,7 +33,7 @@ function makePick(locator, showOpenDialog) {
   };
 }
 
-function registerHarnessLocatorIpc(ipcMain, { locator = locatorApi.get(), send = () => {}, showOpenDialog, installTool } = {}) {
+function registerHarnessLocatorIpc(ipcMain, { locator = locatorApi.get(), send = () => {}, showOpenDialog, installTool, portDiagnosis = () => '' } = {}) {
   locator.onChange((id, result) => send('harness:changed', { id, result }));
   const pick = makePick(locator, showOpenDialog);
   const wrap = fn => async (_event, request = {}) => {
@@ -46,7 +46,7 @@ function registerHarnessLocatorIpc(ipcMain, { locator = locatorApi.get(), send =
   ipcMain.handle('harness:pick-path', wrap(r => pick(checkedId(r))));
   ipcMain.handle('harness:set-path', wrap(r => locator.setManualPath(checkedId(r), String(r.path || ''))));
   ipcMain.handle('harness:clear-path', wrap(r => locator.clearManualPath(checkedId(r))));
-  ipcMain.handle('harness:diagnosis', wrap(r => ({ text: locator.diagnosisText(Array.isArray(r.ids) ? r.ids : undefined, { sanitize: true }) })));
+  ipcMain.handle('harness:diagnosis', wrap(r => ({ text: [locator.diagnosisText(Array.isArray(r.ids) ? r.ids : undefined, { sanitize: true }), portDiagnosis()].filter(Boolean).join('\n') })));
   ipcMain.handle('harness:apply-fix', wrap(r => applyFix(locator, { ...r, id: checkedId(r) }, { pick, installTool })));
 }
 

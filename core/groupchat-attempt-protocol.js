@@ -128,6 +128,11 @@ function classifyProviderFailure(input = {}) {
 
   const definitions = [
     {
+      code: 'trusted_repo_required', category: 'policy', retryable: false, autoRetry: false,
+      action: 'choose_trusted_repo', summary: '当前目录不在公司可信仓，CodeAgent 被风控',
+      patterns: [/^trusted_repo_required$/],
+    },
+    {
       code:'submission_unknown', category:'reconciliation', retryable:false, autoRetry:false,
       action:'reconcile_native_history', summary:'本条提交待核对',
       patterns:[/CLAUDE_SUBMISSION_(?:UNKNOWN|TIMEOUT)/, /Claude submission requires reconciliation/i,

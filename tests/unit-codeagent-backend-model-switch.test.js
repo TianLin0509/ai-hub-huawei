@@ -10,6 +10,40 @@ const models = require('../core/codeagent-models');
 const CATALOG = ['GLM-5.3-Auto(Volcano-MaaS)', 'GLM-5.2-Auto(Tencent-MaaS)', 'GLM-5.3-Auto(Baidu-MaaS)',
   'maas-glm-5.2-volcengine-codeagent', 'maas-DeepSeek-V4.1'].map(id => ({ id }));
 
+test('会话记录里的实际模型去前缀后唯一对应账号清单，同版本不同型号也同步', () => {
+  const options = ['ascend/glm-5.3-flash', 'ascend/glm-5.3-pro'].map(id => ({ id }));
+  const resolveSwitch = actual => models.resolveObservedSwitch(actual, { options });
+  assert.equal(resolveSwitch('glm-5.3-flash'), 'ascend/glm-5.3-flash');
+  assert.equal(models.resolveObservedSwitch('ascend/glm-5.3-flash', { options: ['glm-5.3-flash'] }), 'glm-5.3-flash');
+  assert.equal(models.resolveObservedSwitch('glm-5.3-flash', { options: ['ascend/glm-5.3-flash', 'provider/glm-5.3-flash'], defaultModel: 'ascend/glm-5.3-flash' }), '');
+  const session = { id: 'prefix-switch', kind: 'codeagent', fixedModel: 'ascend/glm-5.3-pro', currentModel: { id: 'ascend/glm-5.3-pro' } };
+  const result = models.observeModel(session, 'glm-5.3-flash', { resolveSwitch, followActual: true });
+  assert.equal(result.fields.currentModel.id, 'ascend/glm-5.3-flash');
+  assert.equal(result.fields.fixedModel, 'ascend/glm-5.3-flash');
+  assert.equal(result.fields.actualModel.id, 'glm-5.3-flash');
+  assert.equal(result.mismatch, null);
+});
+
+test('手动切换后回答记录补上前缀时不误报失败，其他线路同名模型仍核对完整名称', () => {
+  const session = { id: 'prefix-confirm', kind: 'codeagent', fixedModel: 'glm-5.3-flash', currentModel: { id: 'glm-5.3-flash' } };
+  models.expectModelSwitch(session.id, 'glm-5.3-flash');
+  const result = models.observeModel(session, 'ascend/glm-5.3-flash', { resolveSwitch: actual => models.resolveObservedSwitch(actual, { options: ['glm-5.3-flash'] }), followActual: true });
+  assert.equal(result.mismatch, null);
+  models.expectModelSwitch(session.id, 'ascend/glm-5.3-flash');
+  const other = models.observeModel(session, 'provider/glm-5.3-flash', { resolveSwitch: actual => models.resolveObservedSwitch(actual, { options: ['ascend/glm-5.3-flash', 'provider/glm-5.3-flash'] }), followActual: true });
+  assert.ok(other.mismatch);
+});
+
+test('同版本的旧后端别名不会跟随其他会话改过的账号默认模型', () => {
+  const id = 'maas-glm-5.2-volcengine-codeagent';
+  const session = { id: 'same-version-alias', kind: 'codeagent', fixedModel: id, currentModel: { id } };
+  const result = models.observeModel(session, 'maas-glm-5-2-260617', {
+    resolveSwitch: () => 'GLM-5.2-Auto(Tencent-MaaS)', followActual: true,
+  });
+  assert.equal(result.fields.currentModel, undefined);
+  assert.equal(result.fields.fixedModel, undefined);
+});
+
 test('model versions are read after the family name; date-like or missing versions stay unknown', () => {
   assert.equal(models.modelVersion('maas-glm-5-3-260814'), '5.3');
   assert.equal(models.modelVersion('maas-glm-5.2-volcengine-codeagent'), '5.2');

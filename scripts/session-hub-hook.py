@@ -28,7 +28,9 @@ sid = os.environ.get('CLAUDE_HUB_SESSION_ID', '')
 if not sid:
     sys.exit(0)
 
-port = os.environ.get('CLAUDE_HUB_PORT', '3456')
+port = os.environ.get('CLAUDE_HUB_PORT', '')
+if not port:
+    sys.exit(0)
 token = os.environ.get('CLAUDE_HUB_TOKEN', '')
 event = sys.argv[1] if len(sys.argv) > 1 else 'stop'
 

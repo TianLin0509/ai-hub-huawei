@@ -21,6 +21,8 @@ test('安装版布局：从 app.asar.unpacked 加载 server.mjs，core 里留在
   fs.mkdirSync(asar, { recursive: true });
   for (const name of fs.readdirSync(join(ROOT, 'core'))) if (name.endsWith('.js')) fs.copyFileSync(join(ROOT, 'core', name), join(asar, name));
   assert.equal(fs.existsSync(join(unpacked, 'api-gateway-errors.js')), false, '解包目录旁边确实没有 api-gateway-errors.js');
+  assert.equal(fs.existsSync(join(unpacked, 'port-fallback.js')), false, '共享模块入口仍在 asar 中');
+  assert.equal(fs.existsSync(join(unpacked, 'company-proxy', 'port-fallback.cjs')), true, '独立反代需要的绑定实现随反代解包');
 
   const server = await import(pathToFileURL(join(unpacked, 'company-proxy', 'server.mjs')).href);
   assert.equal(typeof server.main, 'function', 'server.mjs 能加载');

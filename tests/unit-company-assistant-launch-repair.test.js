@@ -129,7 +129,9 @@ test('4 无安装器或安装失败保留下一步，不报 npm 手工安装', a
 function pptContext() {
   const nodes = new Map(), notices = [], calls = [];
   const node = key => { if (!nodes.has(key)) nodes.set(key, { value: '', textContent: '', dataset: {}, style: {}, classList: { toggle() {} }, removeAttribute() {}, append(child) { this.child = child; } }); return nodes.get(key); };
-  const context = { page: { querySelector: node }, esc, toolHint() {}, window: {}, notice: text => notices.push(text), call: async op => calls.push(op) };
+  const context = { page: { querySelector: node, dataset: {}, hidden: false }, status: null, esc, toolHint() {}, window: {},
+    sourceView: { slotHtml: () => '' }, libraryMap: { show: () => calls.push('map-show') },
+    notice: text => notices.push(text), call: async op => calls.push(op) };
   vm.createContext(context);
   vm.runInContext(section(ppt, '  function renderStatus(p) {', '  const folder ='), context);
   vm.runInContext(section(ppt, '  async function search(withAgent) {', '  const PHASES'), context);
@@ -147,6 +149,20 @@ test('5 Doctor 就绪但无索引：正文显示选素材按钮，检索不调�
   assert.match(status.innerHTML, /disabled/); await context.search(true); assert.match(notices.at(-1), /正在建立/);
   context.renderStatus({ available: true, pages: 20, files: 2 });
   assert.equal(nodes.get('[data-ppt-head-slot]').child, status);
+});
+
+test('旧 Doctor 在页头提示版本与升级，详细说明收起；升级后恢复当前库地图', () => {
+  const { context, nodes, calls } = pptContext();
+  context.renderStatus({ state: 'upgrade', available: false, installedVersion: '1.8.2', error: '版本太旧，和 Hub 联动不上' });
+  const status = nodes.get('[data-ppt-status]');
+  assert.equal(nodes.get('[data-ppt-head-slot]').child, status);
+  assert.match(status.innerHTML, /检测到旧版 1\.8\.2，需升级/);
+  assert.match(status.innerHTML, /data-ppt="doctor-install">一键升级/);
+  assert.match(status.innerHTML, /aria-label="升级说明".*ⓘ/);
+  assert.doesNotMatch(status.innerHTML, /pptw-guide-copy|<p>/);
+  context.page.dataset.tab = 'map';
+  context.renderStatus({ state: 'ready', available: true, pages: 20, files: 2 });
+  assert.deepEqual(calls, ['map-show']);
 });
 
 function chatContext(row) {

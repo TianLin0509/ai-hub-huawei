@@ -2332,6 +2332,8 @@ if (typeof document !== 'undefined') (function () {
     // 回答卡片还没有内容、但这一轮已报错：直接写出报错摘要（如模型不存在、额度用尽），旁观时能看懂为什么没交。
     function _gcAnswerFailureText(message) {
       const session = typeof sessions !== 'undefined' && sessions.get(message?.sid);
+      const trustedRepo = require('./codeagent-trusted-repo');
+      if (trustedRepo.isBlocked(session, message)) return trustedRepo.MESSAGE;
       if (session?.modelConfirmationRequired && session?.modelUnavailableReason) {
         return '模型无权限，点右上角“需要换个模型”选择可用模型后继续。';
       }
@@ -2343,14 +2345,16 @@ if (typeof document !== 'undefined') (function () {
     }
     const slot = memberBySid[message.sid];
     const session = typeof sessions !== 'undefined' && sessions.get(message.sid);
+    const trustedRepo = require('./codeagent-trusted-repo');
+    const trustedRepoRequired = trustedRepo.isBlocked(session, message);
     // Unregistered messages (history before the switch, legacy fallbacks) keep their stored text;
     // registered members only ever get content from their file.
     const answer = message.answer || null, text = String(message.content || '');
     const failureText = text.trim() ? '' : _gcAnswerFailureText(message);
-    const p = AnswerCardState.plan({ message, opts, state: _gcPanelState[meeting?.id], failureText, modelRevoked: !!session?.modelConfirmationRequired });
+    const p = AnswerCardState.plan({ message, opts, state: _gcPanelState[meeting?.id], failureText, modelRevoked: !!session?.modelConfirmationRequired, trustedRepoRequired });
     const badge = !answer ? '' : answer.readError ? '待确认 · 读取失败' : answer.state === 'draft' ? '草稿' : answer.outcome === 'rework' ? '需返工' : answer.outcome === 'blocked' ? '阻塞' : '';
     const activity = p.running ? require('./conversation-message-view').renderSequenceActivity(message.displayMessages, escapeHtml) : '';
-    const body = p.body === 'text'
+    const body = (trustedRepoRequired && text.trim() ? `<div class="mr-gc-empty-placeholder">${escapeHtml(trustedRepo.MESSAGE)}</div>` : '') + (p.body === 'text'
       ? `<div class="mr-gc-md">${require('./conversation-message-view').renderMessageBody(text, { isUser: false, escapeHtml,
         renderMarkdown: t => _renderMarkdown(t, session?.cwd || meeting.workspace || _activeMeetingCwd()), foldLong: false })}</div>`
       : p.body === 'running' ? `<span class="mr-gc-waiting">${escapeHtml(AnswerCardState.waitingText(p.status))}</span>`
@@ -2358,7 +2362,7 @@ if (typeof document !== 'undefined') (function () {
         stuck: 'Prompt 已进入 CLI 输入框，但尚未检测到 Agent 开工。Hub 已自动补按 Enter；仍未恢复时可点「再次发送」。',
         failure: failureText,
         waiting: '需要审批或回答问题，请打开该成员的 CLI 处理。',
-      }[p.body] || '还没交')}</div>`;
+      }[p.body] || '还没交')}</div>`);
     const journal = require('./groupchat-journal');
     const sid = escapeHtml(message.sid || ''), turnAttr = escapeHtml(message.turnNum || ''), msgId = escapeHtml(message.id || '');
     const memberName = slot?.displayLabel || slot?.kind || message.speaker || '成员';
@@ -2375,6 +2379,7 @@ if (typeof document !== 'undefined') (function () {
       viewPrompt: `<button type="button" class="mr-gc-prompt-btn" data-gc-view-prompt="${msgId}" title="查看本轮发给该 AI 的 prompt">查看本轮输入</button>`,
       copyPrompt: `<button type="button" data-gc-copy-prompt="${msgId}">复制本轮 Prompt</button>`,
       modelChange: `<button type="button" class="mr-gc-retry-btn is-failure" data-gc-model-revoked="${sid}">点此换模型</button>`,
+      trustedRepo: `<button type="button" class="mr-gc-retry-btn is-failure" data-gc-trusted-repo="${sid}">${trustedRepo.ACTION}</button>`,
     };
     const html = keys => keys.map(key => buttons[key] || '').join('');
     const copy = p.hasText ? '<button type="button" class="mr-gc-copy-btn" data-gc-copy-message="1" title="复制此条消息" aria-label="复制此条消息">📋</button>' : '';
@@ -2394,6 +2399,8 @@ if (typeof document !== 'undefined') (function () {
   function _renderGroupChatMessage(message, meeting, memberBySid, opts = {}) {
     if (!OrchUI.messageVisible(meeting, message)) return '';
     const sourceSession = typeof sessions !== 'undefined' && sessions.get(message.sid);
+    const trustedRepo = require('./codeagent-trusted-repo');
+    const trustedRepoRequired = message.role === 'assistant' && trustedRepo.isBlocked(sourceSession, message);
     const renderMarkdown = text => _renderMarkdown(text, sourceSession?.cwd || meeting.workspace || _activeMeetingCwd());
     if (!message) return '';
     if (message.role === 'assistant' && !message.systemNote && !message.supplementReply && !message.committeeAct && GroupAnswers.enabled(meeting)) {
@@ -2430,7 +2437,7 @@ if (typeof document !== 'undefined') (function () {
     //   组件内统一防御：settle 态（errored/absent/superseded）一律不算 pending，
     //   不依赖调用方各自清 pending flag（多方审查加固）。
     const _isSettledStatus = _isGcSettledStatus(status);
-    const isPending = !!opts.pending && !_isSettledStatus;
+    const isPending = !trustedRepoRequired && !!opts.pending && !_isSettledStatus;
     const cancelling = isPending && sessions.get(message.sid)?.nativeRuntime?.cancellation?.status === 'pending';
     const failureCode = String((message.failure && message.failure.code) || message.statusReason || '');
     const nativeSession=sessions.get(message.sid), nativeRuntime=nativeSession?.nativeRuntime;
@@ -2447,7 +2454,7 @@ if (typeof document !== 'undefined') (function () {
             : failureCode === 'response_timeout' ? '待确认 · 等待超时'
               : failureCode === 'runtime_exited' ? '运行退出'
                 : '本轮失败';
-    const statusText = sendStuck ? '输入未提交'
+    const statusText = trustedRepoRequired ? '目录受限' : sendStuck ? '输入未提交'
       : status === 'errored' ? failureStatusText
       : cancelling ? '正在停止'
       : status === 'awaiting_binding' ? '已开工 · 等绑定'
@@ -2477,7 +2484,11 @@ if (typeof document !== 'undefined') (function () {
     //   按 status 给占位文案 + 失败原因，让用户知道发生了什么、下一步点哪里。
     //   settle 态即使被调用方标了 empty 也不显示"思考中"——已经结束的轮不存在"思考中"。
     let body;
-    if (!isUser && Array.isArray(message.displayMessages) && message.displayMessages.length) {
+    if (trustedRepoRequired) {
+      body = `<div class="mr-gc-md mr-gc-empty-placeholder">${escapeHtml(trustedRepo.MESSAGE)}</div>`
+        + (hasContent ? `<div class="mr-gc-md">${require('./conversation-message-view').renderMessageBody(contentStr,
+          { isUser: false, escapeHtml, renderMarkdown, foldLong: false })}</div>` : '');
+    } else if (!isUser && Array.isArray(message.displayMessages) && message.displayMessages.length) {
       body = require('./conversation-message-view').renderMessageSequence(message.displayMessages,
         {escapeHtml,renderMarkdown,plainProgress:DevFile.enabled(meeting),activityInHeader:true,foldLong:false});
     } else if (sendStuck && !hasContent) {
@@ -2562,7 +2573,9 @@ if (typeof document !== 'undefined') (function () {
     const submitAgainAction = (!isUser && message.sid && sendStuck)
       ? `<button type="button" class="mr-gc-retry-btn is-submit" data-gc-escape="resend-prompt" data-gc-sid="${escapeHtml(message.sid)}" data-gc-retry-turn="${escapeHtml(message.turnNum || '')}" title="再次提交已进入 CLI 输入框的完整 prompt">再次发送</button>`
       : '';
-    const retryParticipantAction = (failureCode !== 'submission_unknown' && meeting.scene !== 'dev' && !isUser && message.sid && !message.committeeAct && !isPending && !sendStuck)
+    const retryParticipantAction = trustedRepoRequired
+      ? `<button type="button" class="mr-gc-retry-btn is-failure" data-gc-trusted-repo="${escapeHtml(message.sid)}">${trustedRepo.ACTION}</button>`
+      : (failureCode !== 'submission_unknown' && meeting.scene !== 'dev' && !isUser && message.sid && !message.committeeAct && !isPending && !sendStuck)
       ? `<button type="button" class="mr-gc-retry-btn${status === 'completed' || status === 'manual_extracted' ? '' : ' is-failure'}" data-gc-retry-answer="${escapeHtml(message.sid)}" data-gc-retry-turn="${escapeHtml(message.turnNum || '')}" title="让该成员重新回答本轮问题">${status === 'completed' || status === 'manual_extracted' ? '重答' : '重试'}</button>`
       : '';
     // 派发卡片是流程自己发的，不给「作为新一轮重发/放回输入框」——那两个按钮的语义是
@@ -3969,6 +3982,15 @@ if (typeof document !== 'undefined') (function () {
       ev.preventDefault(); ev.stopPropagation();
       try { await _openConversationCli(meeting, { sid: cliBtn.getAttribute('data-gc-open-cli') }); }
       catch (error) { _showGcEscapeNotice(error.message, 'error'); }
+      return;
+    }
+    const trustedRepoBtn = _closestInPanel(ev.target, '[data-gc-trusted-repo]', panel);
+    if (trustedRepoBtn) {
+      ev.preventDefault(); ev.stopPropagation();
+      trustedRepoBtn.disabled = true;
+      try { await require('./codeagent-trusted-repo').openSession(window); }
+      catch (error) { _showGcEscapeNotice('选择目录失败：' + error.message, 'error'); }
+      finally { trustedRepoBtn.disabled = false; }
       return;
     }
     const modelRevokedBtn = _closestInPanel(ev.target, '[data-gc-model-revoked]', panel);
@@ -5957,65 +5979,10 @@ if (typeof document !== 'undefined') (function () {
   function _openLongInputEditor(meeting) {
     const current = meeting || meetingData[activeMeetingId];
     if (!current) return;
-    const existing = document.getElementById('mr-input-editor-overlay');
-    if (existing) existing.remove();
-    const overlay = document.createElement('div');
-    overlay.id = 'mr-input-editor-overlay';
-    overlay.className = 'mr-input-editor-overlay';
-    overlay.innerHTML = `
-      <div class="mr-input-editor" role="dialog" aria-modal="true" aria-label="展开编辑">
-        <div class="mr-input-editor-head">
-          <strong>展开编辑</strong>
-          <span id="mr-input-editor-count">0 字</span>
-        </div>
-        <textarea id="mr-input-editor-textarea" class="mr-input-editor-textarea" spellcheck="false"></textarea>
-        <div class="mr-input-editor-actions">
-          <button type="button" class="mr-input-editor-btn" data-action="cancel">取消</button>
-          <button type="button" class="mr-input-editor-btn primary" data-action="apply">应用</button>
-          <button type="button" class="mr-input-editor-btn send" data-action="send">发送</button>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(overlay);
-    const textarea = overlay.querySelector('#mr-input-editor-textarea');
-    const countEl = overlay.querySelector('#mr-input-editor-count');
-    const updateCount = () => {
-      if (countEl) countEl.textContent = `${textarea.value.length} 字`;
-    };
-    const applyText = () => {
-      _setMeetingInputText(current.id, textarea.value);
-      _updateInputPreflight(current);
-    };
-    const close = () => {
-      overlay.remove();
-      document.removeEventListener('keydown', onKeydown);
-    };
-    const onKeydown = (ev) => {
-      if (ev.key === 'Escape') close();
-    };
-    textarea.value = _getInputText();
-    updateCount();
-    textarea.addEventListener('input', updateCount);
-    overlay.querySelectorAll('[data-action]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const action = btn.getAttribute('data-action');
-        if (action === 'cancel') {
-          close();
-          return;
-        }
-        applyText();
-        close();
-        if (action === 'send') {
-          const sendBtn = document.getElementById('mr-send-btn');
-          if (sendBtn) sendBtn.click();
-        }
-      });
+    require('./long-input-editor').openLongInputEditor({ document, text: _getInputText(),
+      onApply: text => { _setMeetingInputText(current.id, text); _updateInputPreflight(current); },
+      onSend: () => document.getElementById('mr-send-btn')?.click(),
     });
-    overlay.addEventListener('mousedown', (ev) => {
-      if (ev.target === overlay) close();
-    });
-    document.addEventListener('keydown', onKeydown);
-    setTimeout(() => textarea.focus(), 0);
   }
 
   // 2026-05-05 maintainer：用户提问 banner 的"进行中轮"缓存。

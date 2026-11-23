@@ -44,7 +44,7 @@ function registerEnvCheckIpc(ipcMain, deps) {
     if (running && running.fresh) return running;
     const job = envCheck.runEnvCheck({ ...context(), locateFresh: fresh }).then(result => {
       last = result;
-      return { ok: true, ...result, features: require('../../core/feature-readiness').featureReadiness(result.items), report: envCheck.formatReport(result) };
+      return { ok: true, ...result, features: require('../../core/feature-readiness').featureReadiness(result.items), report: [envCheck.formatReport(result), deps.portDiagnosis?.()].filter(Boolean).join('\n') };
     }).catch(error => ({ ok: false, error: error.message })).finally(() => { if (running === job) running = null; });
     job.fresh = fresh;
     running = job;

@@ -62,6 +62,26 @@ test('旧Doctor没有能力标记时不启动，避免未知参数打开GUI', as
   const { doctor, seen } = fixture({ pptDoctorTrustedExecutable: false });
   const status = await doctor.status(); assert.equal(status.state, 'upgrade'); assert.equal(seen.length, 0);
 });
+
+test('自动发现过滤旧版后仍识别已安装，读出版本提示升级且不启动旧程序', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-ppt-old-discovery-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const exe = path.join(dir, 'PPT-Doctor.exe'); fs.writeFileSync(exe, '旧版夹具');
+  fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ version: '1.8.2' }));
+  const doctor = new PptDoctor({ dir, settings: () => ({ ppt: {} }) }, {
+    pptEnv: {}, pptDoctorCandidates: [exe],
+    toolDiscovery: { has: () => true, list: async () => ({ current: null }) },
+    pptDoctorSpawn: () => assert.fail('不能启动旧版 GUI'),
+  });
+  t.after(() => doctor.close());
+  const status = await doctor.status();
+  assert.equal(status.state, 'upgrade'); assert.equal(status.installed, true);
+  assert.equal(status.installedVersion, '1.8.2'); assert.match(status.error, /1\.8\.2/);
+  // 有兼容的自动发现结果时仍优先用兼容项。
+  const compatible = path.join(dir, 'new', 'PPT-Doctor.exe'); fs.mkdirSync(path.dirname(compatible)); fs.writeFileSync(compatible, '新版');
+  doctor.deps.toolDiscovery.list = async () => ({ current: { path: compatible } });
+  assert.equal(await doctor.discover(), compatible);
+});
 test('Doctor能力标记必须匹配程序名和SHA256，升级后缓存不能误认旧程序', async () => {
   const { capability } = require('../core/company-assistant/ppt-doctor-discovery');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'doctor-marker-')), exe = path.join(dir, 'PPT-Doctor.exe');

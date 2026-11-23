@@ -175,6 +175,7 @@ function registerAppUtilityIpc(ipcMain, deps) {
   ipcMain.handle('get-hook-status', () => ({
     up: deps.getHookPort() !== null,
     port: deps.getHookPort(),
+    message: deps.portDiagnosis?.() || '',
   }));
 
   ipcMain.handle('get-system-resource-usage', async (_event, options = {}) => {

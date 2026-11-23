@@ -56,7 +56,7 @@ test('upgrade requirements take precedence over a repeated id', () => {
   }), '需 2.1.280+');
 });
 
-test('rendered model rows omit repeated id spans and retain distinct ids and upgrade hints', async () => {
+for (const condition of ['manual', 'automatic', 'pending']) test(`模型菜单灰显条件、编号与升级提示：${condition}`, async () => {
   // Exercise the menu markup with minimal DOM interfaces; no Electron process is started.
   const document = {
     createElement() {
@@ -79,11 +79,14 @@ test('rendered model rows omit repeated id spans and retain distinct ids and upg
     { label: 'Example-Model', id: 'example-model' },
     { label: 'Friendly Model', id: 'distinct-model' },
     { label: 'Blocked-Model', id: 'blocked-model', disabled: true, upgradeTo: '2.1.280' },
+    { label: 'ascend/glm-5.3-flash', id: 'ascend/glm-5.3-flash' },
+    { label: 'Unavailable-Model', id: 'unavailable-model', unavailable: true, unavailableReason: '供应商当前不可用' },
   ];
   const session = { kind: 'codeagent', currentModel: { id: 'example-model' } };
+  if (condition === 'pending') session._modelSwitchPending = { id: 'another-model' };
   const controller = createModelUiController({
     document,
-    ipcRenderer: { invoke: async () => ({ options }) },
+    ipcRenderer: { invoke: async () => ({ options, automatic: condition === 'automatic' }) },
     sessions: new Map([['test-session', session]]),
     terminalPanelEl: {},
     getActiveSessionId: () => 'test-session',
@@ -92,11 +95,17 @@ test('rendered model rows omit repeated id spans and retain distinct ids and upg
   });
   await controller.showModelPicker(document.createElement('span'), 'test-session');
   const rows = document.body.children[0].children.filter(child => child.dataset.modelId);
-  assert.equal(rows.length, 3);
+  assert.equal(rows.length, 5);
   assert.match(rows[0].innerHTML, /model-picker-label">Example-Model<\/span>/);
   assert.doesNotMatch(rows[0].innerHTML, /model-picker-id/);
   assert.match(rows[1].innerHTML, /model-picker-id">distinct-model<\/span>/);
   assert.match(rows[2].innerHTML, /model-picker-id">需 2\.1\.280\+<\/span>/);
   assert.match(rows[2].className, /disabled/);
   assert.match(rows[2].title, /需要 Claude Code 2\.1\.280\+/);
+  for (const i of [0, 1, 3]) {
+    if (condition === 'manual') assert.doesNotMatch(rows[i].className, /disabled/);
+    else assert.match(rows[i].className, /disabled/);
+  }
+  assert.match(rows[4].className, /disabled/);
+  assert.equal(rows[4].title, '供应商当前不可用');
 });

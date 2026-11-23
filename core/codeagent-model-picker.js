@@ -23,6 +23,10 @@ const MODEL_WORDS = /\b(?:GLM|MiniMax|DeepSeek|Qwen|Kimi)(?=[\d\W]|$)|\b(?:Defau
 const SESSION_ONLY_KEY = /(?:^|[\s·|])([a-z])\s+to\s+use\s+(?:this|for this)\s+session\s+only/i;
 
 const squash = value => String(value || '').toLowerCase().replace(/[^a-z0-9一-鿿]+/g, '');
+// 菜单可能显示 ascend/ 等线路前缀；完整名称优先，去前缀后必须唯一。
+const bareLabel = value => String(value || '').trim().split('/').pop().toLowerCase();
+const aliasRows = (rows, label) => (rows || []).reduce((hits, row, index) =>
+  bareLabel(row.label) === bareLabel(label) ? [...hits, index] : hits, []);
 // 行里第一段（两个以上空格或「·」之前）是模型名，后面是说明。CodeAgent 在当前默认模型后面标「default ✓」。
 const rowLabel = text => String(text || '').replace(/[\u2580-\u259f]/g, '').split(/\s{2,}|\s+·\s+/)[0].replace(/\s*[✔✓]\s*$/, '').replace(/\s+default$/, '').trim();
 
@@ -187,13 +191,16 @@ function promptInputAvailable(lines) {
 // 规则与用量表共用（codeagent-usage-menu truncatedNameMatches）。只命中唯一一行才选；几行同前缀分不清就不选，免得误选。
 function truncatedRows(rows, label) {
   const { truncatedNameMatches } = require('./codeagent-usage-menu');
-  return (rows || []).reduce((hits, row, index) => truncatedNameMatches(row.label, label) ? [...hits, index] : hits, []);
+  return (rows || []).reduce((hits, row, index) => truncatedNameMatches(row.label, label)
+    || truncatedNameMatches(bareLabel(row.label), bareLabel(label)) ? [...hits, index] : hits, []);
 }
 // 搜索与翻页用：名字完全相同（不分大小写）优先，其次唯一命中的截断名。
 function locateLabel(rows, label, route = {}) {
   if (route.provider) return findTarget({ rows }, label, route);
   const exact = (rows || []).filter(row => exactLabel(row.label, label));
   if (exact.length) return findTarget({ rows }, label);
+  const aliases = aliasRows(rows, label);
+  if (aliases.length) return aliases.length === 1 ? aliases[0] : -1;
   const cut = truncatedRows(rows, label);
   return cut.length === 1 ? cut[0] : -1;
 }
@@ -203,6 +210,8 @@ function groupMatches(row, provider = '', providerLabel = '') {
   if (!provider) return true;
   const group = squash(row.group);
   const candidates = [provider, providerLabel, String(provider).split('/').pop(), String(providerLabel).split('/').pop()].map(squash).filter(Boolean);
+  const prefix = String(row.label || '').split('/').slice(0, -1).join('/');
+  if (prefix && candidates.includes(squash(prefix))) return true;
   return !!group && (candidates.includes(group) || provider === 'w3' && /^(?:builtin|内置)$/.test(group));
 }
 
@@ -228,6 +237,8 @@ function findTarget(picker, label, { provider = '', providerLabel = '' } = {}) {
     const preferred = group ? exact.filter(index => groupMatches(picker.rows[index], group)) : [];
     return preferred.length === 1 ? preferred[0] : -1;
   }
+  const aliases = aliasRows(picker.rows, label);
+  if (aliases.length) return aliases.length === 1 ? aliases[0] : -1;
   const cut = truncatedRows(picker.rows, label);
   if (cut.length) return cut.length === 1 ? cut[0] : -1;
   const unique = indexes => {
@@ -531,6 +542,8 @@ async function findOffscreenTarget({ picker, screen, manager, sid, label, route 
     onSearchFrame(stable.lines);
     let searched = { value: stable.value?.picker || null };
     let found = searched.value && locateLabel(searched.value.rows, label, route);
+    if (found >= 0 && searched.value && !searched.value.complete && !exactLabel(searched.value.rows[found]?.label, label)
+      && bareLabel(searched.value.rows[found]?.label) === bareLabel(label)) found = -1;
     if (!route.provider && searched.value?.rows.filter(row => exactLabel(row.label, label)).length > 1 && found < 0) {
       return { error: `多个供应商都有 ${label}，请在助理设置或模型列表中选择供应商`, requiresGroupSelection: true };
     }
@@ -570,9 +583,12 @@ async function findOffscreenTarget({ picker, screen, manager, sid, label, route 
     picker = focused.value;
   }
   // 截断名要翻完整个列表才知道是不是唯一：一路记下命中的行，完全同名的随时优先；翻到底只有一行时再按上键退回去。
-  const seen = new Set(), truncated = new Set(), limit = picker.total || MODEL_SCROLL_LIMIT;
+  const seen = new Set(), truncated = new Set(), aliases = new Set(), limit = picker.total || MODEL_SCROLL_LIMIT;
   const identityOf = row => JSON.stringify([row.number, row.label]);
-  const noteTruncated = () => { for (const index of truncatedRows(picker.rows, label)) if (groupMatches(picker.rows[index], route.provider, route.providerLabel)) truncated.add(identityOf(picker.rows[index])); };
+  const noteTruncated = () => {
+    for (const index of truncatedRows(picker.rows, label)) if (groupMatches(picker.rows[index], route.provider, route.providerLabel)) truncated.add(identityOf(picker.rows[index]));
+    for (const index of aliasRows(picker.rows, label)) if (groupMatches(picker.rows[index], route.provider, route.providerLabel)) aliases.add(identityOf(picker.rows[index]));
+  };
   let steps = 0;
   while (steps < limit) {
     const row = picker.rows[picker.cursor], identity = identityOf(row);
@@ -588,11 +604,12 @@ async function findOffscreenTarget({ picker, screen, manager, sid, label, route 
   }
   if (exactLabel(picker.rows[picker.cursor]?.label, label) && groupMatches(picker.rows[picker.cursor], route.provider, route.providerLabel)) { log({ event: 'switch-scroll', steps, result: 'found' }); return { picker, target: picker.cursor }; }
   noteTruncated();
-  if (truncated.size === 1) {
-    const [only] = truncated;
+  const candidates = aliases.size ? aliases : truncated;
+  if (candidates.size === 1 && steps < limit) {
+    const [only] = candidates;
     for (let back = 0; back <= steps + 1; back += 1) {
       const row = picker.rows[picker.cursor];
-      if (row && identityOf(row) === only) { log({ event: 'switch-scroll', steps, back, result: 'found-truncated' }); return { picker, target: picker.cursor }; }
+      if (row && identityOf(row) === only) { log({ event: 'switch-scroll', steps, back, result: aliases.size ? 'found-alias' : 'found-truncated' }); return { picker, target: picker.cursor }; }
       const before = pickerSignature(picker);
       manager.writeToSession(sid, '[A');
       const next = await waitForPickerChange(screen, before, MODEL_SEARCH_WAIT_MS);
@@ -601,6 +618,7 @@ async function findOffscreenTarget({ picker, screen, manager, sid, label, route 
     }
   }
   log({ event: 'switch-scroll', steps, result: truncated.size > 1 ? 'ambiguous-truncated' : 'not-found', ...(truncated.size ? { truncated: truncated.size } : {}) });
+  if (aliases.size > 1) return { error: `多个线路都有 ${label}，请重新选择带完整前缀或供应商的模型`, requiresGroupSelection: true };
   return { picker, target: -1 };
 }
 
@@ -708,6 +726,12 @@ async function pickModel({ manager, sid, kind, modelId, provider = '', providerL
     if (first && (picker.rows[0].number ?? 1) !== 1) return fail(`模型菜单没有从第 1 项列起（第一行是 ${picker.rows[0].number}. ${picker.rows[0].label}），没有选`);
     if (first) label = picker.rows[0].label;
     let target = first ? 0 : findTarget(picker, label, route);
+    if (!first && target >= 0 && !picker.complete && !exactLabel(picker.rows[target].label, label)
+      && bareLabel(picker.rows[target].label) === bareLabel(label)) target = -1;
+    if (!first && !picker.rows.some(row => exactLabel(row.label, label)) && aliasRows(picker.rows, label)
+      .filter(index => groupMatches(picker.rows[index], route.provider, route.providerLabel)).length > 1) {
+      return { ...(await fail(`多个线路都有 ${modelId}，请重新选择带完整前缀或供应商的模型`)), requiresGroupSelection: true };
+    }
     if (!provider && dataDir) {
       const accountKey = manager.getSession?.(sid)?.codeagentPoolAccount || 'personal';
       const candidates = require('./codeagent-models').modelOptions(dataDir, { configDir, accountKey }).filter(o => exactLabel(o.id, first ? label : modelId));

@@ -1,4 +1,5 @@
 [
+  "tests/unit-port-fallback.test.js",
   "tests/unit-feature-agent-safety.test.js",
   "tests/unit-feature-agent-choice.test.js",
   "tests/unit-codeagent-member-mcp.test.js",
@@ -354,6 +355,7 @@
   "tests/unit-rsi-rail-width.test.js",
   "tests/unit-session-recovery-rsi-z.test.js",
   "tests/unit-boot-splash.test.js",
+  "tests/unit-boot-splash-renderer.test.js",
   "tests/unit-pet-fullscreen-watch.test.js",
   "tests/unit-codeagent-serve-session.test.js",
   "tests/unit-card-relay-pilot.test.js",

@@ -34,7 +34,8 @@ async function shortcutPaths(env, execFn = exec) {
 async function candidates(env = process.env, deps = {}) {
   if (deps.pptDoctorCandidates) return deps.pptDoctorCandidates;
   const fromRegistry = process.platform === 'win32' ? await registryPaths(deps.pptDoctorExec) : [];
-  const defaults = names(path.join(env.LOCALAPPDATA || '', 'Programs/PPT-Doctor'));
+  const defaults = [...names(path.join(env.LOCALAPPDATA || '', 'Programs/PPT-Doctor')),
+    ...[env.ProgramFiles, env['ProgramFiles(x86)']].filter(Boolean).flatMap(base => names(path.join(base, 'PPT-Doctor')))];
   let shortcuts = [];
   if (![...fromRegistry, ...defaults].some(file => fs.existsSync(file)) && process.platform === 'win32') {
     try { shortcuts = await shortcutPaths(env, deps.pptDoctorExec); }

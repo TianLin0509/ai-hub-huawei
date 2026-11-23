@@ -1,7 +1,8 @@
 /* 开场动画（2026-11-22）：播放层盖在最上面；选择面板沿用外观面板（appearance-dialog）的头、页签、按钮与底栏。 */
-.boot-splash-layer{position:fixed;inset:0;z-index:2147483000;background:#040405;cursor:pointer;user-select:none}
+.boot-splash-layer{position:fixed;inset:var(--app-toolbar-h,44px) 0 0;z-index:2147483000;background:#040405;cursor:pointer;user-select:none;-webkit-app-region:no-drag}
 .boot-splash-layer canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
-.boot-splash-skip{position:absolute;top:44px;right:22px;padding:5px 14px;border:0;border-radius:999px;background:rgba(255,255,255,.12);color:rgba(255,255,255,.82);font:inherit;font-size:12.5px;cursor:pointer}
+.boot-splash-skip{position:absolute;top:16px;right:22px;padding:5px 14px;border:0;border-radius:999px;background:rgba(255,255,255,.12);color:rgba(255,255,255,.82);font:inherit;font-size:12.5px;cursor:pointer}
+.boot-splash-poster{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
 .boot-splash-skip:hover{background:rgba(255,255,255,.22);color:#fff}
 .boot-splash-hint{position:absolute;right:22px;bottom:22px;padding:8px 16px;border:1px solid rgba(255,255,255,.28);border-radius:999px;background:rgba(10,10,16,.55);color:#fff;font:inherit;font-size:13px;cursor:pointer;backdrop-filter:blur(6px)}
 .boot-splash-hint:hover{background:rgba(255,255,255,.18)}

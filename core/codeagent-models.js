@@ -311,6 +311,9 @@ function resolveObservedSwitch(actualId, { options = [], defaultModel = '' } = {
   const ids = [...new Set((Array.isArray(options) ? options : []).map(option => clean(option && (option.id ?? option))).filter(isSafeModelId))];
   const exact = ids.find(other => other.toLowerCase() === id.toLowerCase());
   if (exact) return exact;
+  const bare = value => value.split('/').pop().toLowerCase();
+  const aliases = ids.filter(other => bare(other) === bare(id));
+  if (aliases.length) return aliases.length === 1 ? aliases[0] : '';
   if (!family || !version) return '';
   const candidates = ids.filter(other => modelFamily(other) === family && modelVersion(other) && !versionsDiffer(modelVersion(other), version));
   const preferred = candidates.find(other => other.toLowerCase() === clean(defaultModel).toLowerCase());
@@ -329,8 +332,14 @@ function observeModel(session, value, { at = Date.now(), resolveSwitch = null, f
   // consume this request or replace the model before the next real answer.
   if (pending && (!Number.isFinite(at) || at < pending.after)) return null;
   if (settingsOnly && (!Number.isFinite(at) || at < settingsOnly.after)) return null;
+  // 回答记录可能补上线路前缀；账号清单唯一对回所选项时，不误报切换失败。
+  const observedMatches = wanted => {
+    if (wanted.toLowerCase() === normalizeModel(id).toLowerCase()) return true;
+    if (wanted.split('/').pop().toLowerCase() !== id.split('/').pop().toLowerCase() || typeof resolveSwitch !== 'function') return false;
+    try { return clean(resolveSwitch(id)).toLowerCase() === wanted.toLowerCase(); } catch { return false; }
+  };
   const settingsOnlyVerification = settingsOnly ? { requested: settingsOnly.model, actual: id,
-    result: settingsOnly.model.toLowerCase() === normalizeModel(id).toLowerCase() ? 'match' : 'mismatch' } : null;
+    result: observedMatches(settingsOnly.model) ? 'match' : 'mismatch' } : null;
   pendingSettingsOnly.delete(sessionId);
   const current = session.currentModel && typeof session.currentModel === 'object' ? session.currentModel : {};
   const currentId = clean(session.fixedModel || current.id);
@@ -340,7 +349,7 @@ function observeModel(session, value, { at = Date.now(), resolveSwitch = null, f
   const sameFamily = !!modelFamily(id) && modelFamily(id) === modelFamily(currentId);
   const expected = pending?.auto ? null : pending?.model;
   pendingModelSwitches.delete(sessionId);
-  const switchMismatch = expected && expected.toLowerCase() !== normalizeModel(id).toLowerCase();
+  const switchMismatch = expected && !observedMatches(expected);
   let mismatch = null;
   let backendSwitch = null;
   // 2026-11-19 反馈（5.6.2 用户）：在后台（终端里 /model）把 maas-glm-5.2… 换成 GLM-5.3 后，回答已是 maas-glm-5-3-…，
@@ -383,8 +392,12 @@ function observeModel(session, value, { at = Date.now(), resolveSwitch = null, f
     // Keep an Auto/menu alias when it describes this backend. A backend-only
     // name cannot be used as a launch argument unless the account catalog maps it.
     let target = sameId || sameFamily && (isAutoModel(currentId) || !versionsDiffer(modelVersion(currentId), modelVersion(id))) ? currentId : '';
-    if (!target && typeof resolveSwitch === 'function') {
-      try { target = clean(resolveSwitch(id)); } catch { target = ''; }
+    if (typeof resolveSwitch === 'function' && (!target || !sameId && sameFamily && !isAutoModel(currentId))) {
+      try {
+        const resolved = clean(resolveSwitch(id));
+        // 同版本别名仍沿用原显示；清单里的完整名称或去前缀名称明确相同时才跟随。
+        if (!target || resolved && resolved.split('/').pop().toLowerCase() === id.split('/').pop().toLowerCase()) target = resolved;
+      } catch { /* 对不回账号清单时保留原有别名。 */ }
     }
     Object.assign(fields, require('./session-actual-model').actualModelFields(session, id, target));
     if (target && target !== currentId) {

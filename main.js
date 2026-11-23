@@ -531,13 +531,8 @@ async function readLastUserMessage(transcriptPath) {
   return null;
 }
 
-// Hook server picks the first free port in this range.
-const HOOK_PORT_CANDIDATES = [
-  3456, 3457, 3458, 3459, 3460,
-  3461, 3462, 3463, 3464, 3465,
-  3466, 3467, 3468, 3469, 3470,
-  3471, 3472, 3473, 3474, 3475,
-];
+const { listenWithPortFallback, fallbackMessage } = require('./core/port-fallback');
+let hookBinding = { port: null, failures: [] };
 // Random per-launch token; hook POSTs must carry it. Stops any other local
 // process from forging unread bumps.
 const HOOK_TOKEN = crypto.randomBytes(16).toString('hex');
@@ -1205,13 +1200,17 @@ require('./core/codeagent-screen-error').createScreenErrorWatch({
     return text == null ? null : { text, cols: Number(entry?.pty?.cols) || 120, rows: Number(entry?.pty?.rows) || 30 };
   },
   renderRows: raw => require('./core/hub-phone/session-chat').renderRows(raw),
-  onError: ({ sessionId, failedAt, kind, message, modelRevoked }) => {
+  onError: ({ sessionId, failedAt, kind, message, modelRevoked, trustedRepoRequired }) => {
     const session = sessionManager.getSession(sessionId);
-    if (modelRevoked) void recoverCodeAgentModelRevocation({ sessionId, modelRevoked, message });
+    if (trustedRepoRequired) {
+      // 屏幕报错不进入原生记录；显式结束群聊成员的等待，卡片持久化目录限制原因。
+      try { groupChatDispatcher?.getActiveWatchers().get(sessionId)?.markErrored('trusted_repo_required'); }
+      catch (error) { console.warn('[codeagent] 群聊可信仓错误结算失败：' + error.message); }
+    } else if (modelRevoked) void recoverCodeAgentModelRevocation({ sessionId, modelRevoked, message });
     sendToRenderer('turn-failed-event', {
       hubSessionId: sessionId, transcriptPath: session ? session.transcriptPath : null, failedAt,
       meetingId: session ? session.meetingId : null, kind, signalSource: 'codeagent-screen-error', turnId: null,
-      message, occurrenceId: `codeagent-screen-error:${sessionId}:${failedAt}`,
+      message, trustedRepoRequired: !!trustedRepoRequired, occurrenceId: `codeagent-screen-error:${sessionId}:${failedAt}`,
     });
     petTurnFailed(sessionId, failedAt, message);
   },
@@ -1593,6 +1592,9 @@ ipcMain.handle('debug:window-shape', () => {
     nativeTitleBar: !!mainWindow._hubNativeTitleBar,
     maximized: mainWindow.isMaximized(),
     overlay: lastAppliedTitleBarOverlay,
+    // 截屏黑屏排查：只读回报主窗口状态，不改用户的渲染或防截屏设置。
+    contentProtected: mainWindow.isContentProtected(),
+    backgroundColor: mainWindow.getBackgroundColor(),
   };
 });
 
@@ -1927,7 +1929,7 @@ function createWindow() {
       };
       setTimeout(retry, 5000).unref();
     }
-    sendToRenderer('hook-status', { up: hookPort !== null, port: hookPort });
+    sendToRenderer('hook-status', { up: hookPort !== null, port: hookPort, message: fallbackMessage(hookBinding) });
     if (hubRestart.bootToken && !global.__loopResumeScanned) {
       global.__loopResumeScanned = true;
       // Keep the scanner available for future user-created workflows, while
@@ -3090,7 +3092,7 @@ try {
     if (id !== 'codeagent' || !toolDiscovery) return;
     try { toolDiscovery.store.setChoice('codeagent', file); require('./core/codeagent-config').setDiscoveredCommand(file || ''); } catch (_) {}
   };
-  require('./main/ipc/harness-locator-handlers').registerHarnessLocatorIpc(ipcMain, { locator, send: sendToRenderer, installTool: harness.installTool });
+  require('./main/ipc/harness-locator-handlers').registerHarnessLocatorIpc(ipcMain, { locator, send: sendToRenderer, installTool: harness.installTool, portDiagnosis: () => fallbackMessage(hookBinding) });
   locator.start();
 } catch (error) { console.error('[harness-locator] 定位中心未启动：', error.message); }
 // CodeAgent 一键安装 / 升级（2026-11-16）：没装或太旧时，界面上的「一键安装 / 一键升级」都走这里。
@@ -3851,6 +3853,7 @@ registerAppUtilityIpc(ipcMain, {
   crypto,
   fs,
   getHookPort: () => hookPort,
+  portDiagnosis: () => fallbackMessage(hookBinding),
   getMainWindow: () => mainWindow,
   getNetworkEgressStatus: options => networkEgressMonitor.getStatus(options),
   acknowledgeNetworkEgressChange: () => networkEgressMonitor.acknowledgeForeignChange(),
@@ -3915,6 +3918,7 @@ const firstRunEnvCheck = require('./main/ipc/env-check-handlers').registerEnvChe
   ...(require('./core/distribution').updateConfig ? { appUpdate: () => appUpdateControllerRef } : {}),
   getConfig: () => require('./core/hub-config').getConfig(),
   locator: () => require('./core/harness-locator').get(),
+  portDiagnosis: () => fallbackMessage(hookBinding),
   openExternal: url => shell.openExternal(url),
   openPath: dir => shell.openPath(dir),
   discoverAttendanceDomain: () => {
@@ -4387,26 +4391,17 @@ const hookServer = http.createServer((req, res) => {
   });
 });
 
-// Try candidate ports in order; return the first that listens successfully.
-// Any bind error on a candidate (EADDRINUSE, EACCES, EPERM, …) falls through
-// to the next; only when all candidates fail do we give up.
-function listenWithFallback() {
-  return new Promise((resolve) => {
-    let idx = 0;
-    const tryNext = () => {
-      if (idx >= HOOK_PORT_CANDIDATES.length) return resolve(null);
-      const port = HOOK_PORT_CANDIDATES[idx++];
-      hookServer.removeAllListeners('error');
-      hookServer.removeAllListeners('listening');
-      hookServer.once('error', (e) => {
-        console.warn(`[群聊] hook server bind failed on :${port} (${e.code}): ${e.message}`);
-        tryNext();
-      });
-      hookServer.once('listening', () => resolve(port));
-      hookServer.listen(port, '127.0.0.1');
-    };
-    tryNext();
-  });
+// 原端口段耗尽后在同一个服务上请求系统分配，所有回调地址使用最终绑定值。
+async function listenWithFallback() {
+  try {
+    hookBinding = await listenWithPortFallback(hookServer);
+    if (hookBinding.fallback) console.warn(`[hook] ${hookBinding.message}`);
+    return hookBinding.port;
+  } catch (error) {
+    hookBinding = { port: null, failures: error.portFailures || [] };
+    console.warn(`[hook] 状态回报端口绑定失败（${error.code || 'UNKNOWN'}）：${error.message}`);
+    return null;
+  }
 }
 
 // --- Account usage cache ---
@@ -5029,7 +5024,7 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
               const list = [...(sessionManager?.sessions?.values?.() || [])];
               const kinds = {}; for (const e of list) { const k = e?.info?.kind || e?.kind || '?'; kinds[k] = (kinds[k] || 0) + 1; }
               const os = require('os'), mb = n => Math.round(n / 1048576);
-              return `会话 ${list.length} 个（${Object.entries(kinds).map(([k, n]) => `${k} ${n}`).join('、') || '无'}）· 主进程内存 ${mb(process.memoryUsage().rss)} MB · 系统剩余 ${mb(os.freemem())}/${mb(os.totalmem())} MB · 已运行 ${Math.round(process.uptime() / 60)} 分钟`;
+              return `${fallbackMessage(hookBinding)} · 会话 ${list.length} 个（${Object.entries(kinds).map(([k, n]) => `${k} ${n}`).join('、') || '无'}）· 主进程内存 ${mb(process.memoryUsage().rss)} MB · 系统剩余 ${mb(os.freemem())}/${mb(os.totalmem())} MB · 已运行 ${Math.round(process.uptime() / 60)} 分钟`;
             } catch (e) { return '读取失败：' + e.message; } })() }) });
         registerHubFeedbackIpc(ipcMain, feedbackService);
         // AI_HUB_FEEDBACK_RETRY_MS 只供隔离 E2E 缩短补发间隔；正常每 10 分钟一轮、启动 1 分钟后先试一次。
@@ -5709,7 +5704,7 @@ app.whenReady().then(async () => {
     console.warn('[群聊] hook server failed to bind — falling back to silence detection');
   }
   traceStartup(`hook listen done (${hookPort || 'none'})`);
-  sendToRenderer('hook-status', { up: hookPort !== null, port: hookPort });
+  sendToRenderer('hook-status', { up: hookPort !== null, port: hookPort, message: fallbackMessage(hookBinding) });
 
   // 2026-06-05 联邦记忆下线：claude-memory-loader 只做 readFileSync，无需预热
 

@@ -28,6 +28,7 @@ import { KIND, createClaudeAdapter, createCodexAdapter, createDshAdapter, collec
 import { createGatewayProvider } from './gateway-provider.mjs';
 // 公司模型目录（和 CodeAgent 同一个目录接口，按账号拉）：CommonJS，Hub 主进程也用同一份解析与匹配规则。
 const modelCatalog = createRequire(import.meta.url)('./model-catalog.cjs');
+const { listenWithPortFallback } = createRequire(import.meta.url)('./port-fallback.cjs');
 
 export const VERSION = 'company-model-proxy 1.0';
 const SAFE_CODE = /^[A-Za-z0-9_ .:\-]{1,120}$/;
@@ -641,12 +642,9 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
       if (!res.headersSent) json(res, 400, { error: { type: 'invalid_request_error', message: 'Malformed request' } }); else res.destroy();
     }
   });
-  let address;
-  try { address = await proxy.listen(opts.port); }
-  catch (error) {
-    if (opts.port && error?.code === 'EADDRINUSE') { log(`port ${opts.port} busy, using a free port`); address = await proxy.listen(0); }
-    else throw error;
-  }
+  const binding = await listenWithPortFallback(proxy.server, { ports: [opts.port] });
+  const address = { port: binding.port };
+  if (binding.fallback) log(binding.message);
   opts.port = address.port;
   const statePath = join(workDir, 'proxy-state.json');
   await writeFile(statePath, JSON.stringify({ version: VERSION, pid: process.pid, port: address.port, mock: opts.mock, ready: startup.ready, started: stats.started }, null, 2), 'utf8');

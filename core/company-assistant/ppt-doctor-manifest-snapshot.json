@@ -1,11 +1,11 @@
 {
-  "version": "2.1.9",
-  "notes": "PPT Doctor v2.1.9 full",
+  "version": "2.1.11",
+  "notes": "PPT Doctor v2.1.11 full",
   "edition": "full",
   "entry": "PPT-Doctor.exe",
   "build": {
-    "commit": "252f4d547038aaf14ff34b68713d8e5da3e5a4ef",
-    "built_at": "2026-11-22T12:45:08+0000"
+    "commit": "ce024e980050b6df4962d6d2ba2e81046fc6d8bc",
+    "built_at": "2026-11-23T10:40:35+0000"
   },
   "full": {
     "version": "2.0.7",

@@ -1577,6 +1577,8 @@ class SessionManager extends EventEmitter {
     const teamToken = this.teamTokenFor?.(id);
     if (teamToken) sessionEnv.CLAUDE_HUB_TEAM_TOKEN = teamToken;
     else delete sessionEnv.CLAUDE_HUB_TEAM_TOKEN;
+    // 只注入本实例实际监听的端口，启动失败时清掉父 Hub 遗留的地址。
+    delete sessionEnv.CLAUDE_HUB_PORT;
     if (this.hookPort) sessionEnv.CLAUDE_HUB_PORT = String(this.hookPort);
     if (this.hookToken) sessionEnv.CLAUDE_HUB_TOKEN = this.hookToken;
   }

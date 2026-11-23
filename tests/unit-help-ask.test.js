@@ -241,6 +241,8 @@ test('主进程服务：取消后马上能问下一题，旧问答的收尾不�
 test('提示词：规则在前、追问只带最近 3 轮、子进程不带 Hub 会话变量', () => {
   const p = buildPrompt({ manual: 'M', question: 'Q', history: [1, 2, 3, 4].map(i => ({ q: 'q' + i, a: 'a' + i })) });
   assert.match(p, /^你是「AI HUB-H」/);
+  assert.match(p, /优先按 Hub 说明书回答 AI Hub 自身的设置与数据目录/);
+  assert.match(p, /只有明确询问 CodeAgent 等 CLI 自身配置时才回答该工具/);
   assert.ok(!p.includes('q1') && p.includes('q2') && p.includes('q4'));
   const env = childEnv({ CLAUDE_HUB_SESSION_ID: 'x', CLAUDE_HUB_TOKEN: 'y', CODEAGENT_HUB_X: 'z', PATH: 'p' });
   assert.deepEqual(Object.keys(env), ['PATH']);

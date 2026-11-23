@@ -191,7 +191,7 @@ test('PPT Doctor：指定的程序被卸载后回到自动发现，不再一直�
   const doctor = new PptDoctor({ dir: root, settings: () => ({ ppt: { doctorExe: path.join(root, 'gone', 'PPT-Doctor.exe') } }) }, { toolDiscovery });
   try { assert.equal(await doctor.discover(), found); assert.deepEqual(asked, ['ppt-doctor']); }
   finally { doctor.close(); }
-  const none = new PptDoctor({ dir: root, settings: () => ({ ppt: { doctorExe: path.join(root, 'gone', 'PPT-Doctor.exe') } }) }, { toolDiscovery: { has: () => true, list: async () => ({ current: null }) } });
+  const none = new PptDoctor({ dir: root, settings: () => ({ ppt: { doctorExe: path.join(root, 'gone', 'PPT-Doctor.exe') } }) }, { pptDoctorCandidates: [], toolDiscovery: { has: () => true, list: async () => ({ current: null }) } });
   try { await assert.rejects(none.discover(), e => e.code === 'DOCTOR_NOT_FOUND' && /已经不在/.test(e.message)); }
   finally { none.close(); }
 });

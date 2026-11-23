@@ -2,7 +2,7 @@
 // PPT 页「库地图」Tab（r28g，2026-11-17 选定树形目录）：左树（主题 → 材料类型 → 文件，可切按页面类型），中间选中节点的页，右侧原页预览。
 // 一屏不滚动：树和页列表都按可用高度算每页条数并翻页。首次进入自动在后台增量分类；进度、耗时、模型次数用人话显示，随时可取消。
 // 节点可改名、文件可拖到别的节点（右侧也有「移到」下拉，不会拖也能改）；改动单独存，下次分类不覆盖。「抽查 50 页」逐页判对错得准确率。
-function createPptMap({ root, ipcRenderer, notice, openPage }) {
+function createPptMap({ root, ipcRenderer, notice, openPage, doctorState = () => '' }) {
   const { pathToFileURL } = require('node:url');
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const fileUrl = file => { try { return file ? pathToFileURL(file).href : ''; } catch { return ''; } };
@@ -350,6 +350,19 @@ function createPptMap({ root, ipcRenderer, notice, openPage }) {
   const onResize = () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (!shown || mode !== 'map') return; drawTree(); if (listSizeNow() !== listSize) { listPage = 0; void loadPages().catch(() => {}); } }, 120); };
   return {
     async show() {
+      const upgrade = doctorState() === 'upgrade';
+      root.dataset.doctorUpgrade = String(upgrade);
+      if (upgrade) {
+        // 页头已提供升级按钮，旧版不再自动扫描和展开重复的技术错误。
+        shown = false; clearTimeout(pollTimer);
+        window.removeEventListener('resize', onResize); document.removeEventListener('keydown', onKey);
+        root.dataset.empty = '1';
+        $('[data-pptg-body]').hidden = true; $('[data-pptg-review]').hidden = true;
+        $('[data-pptg-warn]').hidden = true; $('[data-pptg-status]').textContent = '';
+        const guide = $('[data-pptg-guide]'); guide.hidden = false;
+        guide.innerHTML = '<p class="pptw-empty">库地图暂不可用</p>';
+        return;
+      }
       shown = true; window.addEventListener('resize', onResize); document.addEventListener('keydown', onKey);
       void tick();
     },

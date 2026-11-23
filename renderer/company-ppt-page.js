@@ -70,7 +70,7 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
     page.querySelector('.pptw-settings')?.addEventListener('toggle', event => { if (event.currentTarget.open) void sourceView.fill(event.currentTarget, { ipcRenderer }); });
     materials = require('./company-ppt-materials').createPptMaterials({ root: page.querySelector('[data-ppt-materials-panel]'), ipcRenderer, notice, doctorState: () => status?.state || '' });
     make = require('./company-ppt-make').createPptMake({ root: page.querySelector('[data-ppt-make-panel]'), ipcRenderer, notice, hasSession, openSession: openSession ? id => { close(); return openSession(id); } : null });
-    libraryMap = require('./company-ppt-map').createPptMap({ root: page.querySelector('[data-ppt-map-panel]'), ipcRenderer, notice, openPage: id => call('ppt-open', { id }) });
+    libraryMap = require('./company-ppt-map').createPptMap({ root: page.querySelector('[data-ppt-map-panel]'), ipcRenderer, notice, openPage: id => call('ppt-open', { id }), doctorState: () => status?.state || '' });
     page.querySelector('.pptw-tabs').addEventListener('click', e => { const t = e.target.closest('[data-ppt-tab]'); if (t) tab(t.dataset.pptTab); });
     page.querySelector('[data-ppt-form]').addEventListener('submit', e => { e.preventDefault(); void search(true); }); // 回车与「AI 找页」：AI 检索 + 关键词即时命中
     page.querySelector('[data-ppt-folder]').addEventListener('change', () => { drawResults(); if (page.querySelector('[data-ppt-query]').value.trim()) void search(false); });
@@ -91,19 +91,22 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
     Object.assign(page.style, { left: (rail?.getBoundingClientRect().right || 0) + 'px', top: (bar?.getBoundingClientRect().bottom || 0) + 'px', bottom: (footer?.getBoundingClientRect().height || 0) + 'px' });
   }
   function renderStatus(p) {
+    const wasUpgrade = status?.state === 'upgrade';
     status = p; const at = p.indexUpdatedAt ? new Date(p.indexUpdatedAt < 1e12 ? p.indexUpdatedAt * 1000 : p.indexUpdatedAt).toLocaleString('zh-CN') : '尚未更新';
     const busy = p.indexing?.state === 'indexing';
     const noIndex = !p.available || !p.pages;
-    const guide = !!p.error || noIndex;
+    const upgrade = p.state === 'upgrade';
+    const guide = !upgrade && (!!p.error || noIndex);
     const statusEl = page.querySelector('[data-ppt-status]');
     statusEl.dataset.state = busy ? 'indexing' : p.state || (p.available ? 'ready' : 'missing');
-    // 正常时是页头右侧的状态胶囊；Doctor 缺失 / 需升级 / 出错时移到正文顶部，变成引导卡（同一个节点，检索区照常可用）。
+    // 旧版在页头就地提示升级；缺失或出错时移到正文顶部引导，检索区照常可用。
     page.querySelector(guide ? '[data-ppt-guide-slot]' : '[data-ppt-head-slot]').append(statusEl);
     statusEl.classList.toggle('pptw-guide', guide);
     if (p.error) statusEl.removeAttribute('title');
     const download = ['missing', 'upgrade'].includes(p.state);
     statusEl.innerHTML = p.error ? `<span class="pptw-guide-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l9 5v8l-9 5-9-5V8z"/><path d="M12 8v8M8 10v4M16 10v4" class="cut"/></svg></span><div class="pptw-guide-copy"><strong>${esc(p.error)}</strong><p>PPT 检索和图片转可编辑都靠 PPT Doctor 在本机运行。</p></div>${window.HubErrorCard ? window.HubErrorCard.knownHtml({ area: 'ppt-doctor', title: p.error, details: p.detail || p.error }) + window.HubErrorCard.assistHtml({ area: 'ppt-doctor', title: p.error, details: p.detail || p.error }) : ''}${download ? '<div class="pptw-guide-actions"><button type="button" class="pptw-btn pri" data-ppt="doctor-install">' + (p.state === 'upgrade' ? '一键升级 Doctor' : '一键安装 Doctor') + '（内源优先）</button><button type="button" class="pptw-btn sec" data-ppt="download">阿里云镜像（备用）</button><button type="button" class="pptw-btn sec" data-ppt="download-backup">GitHub 备用</button><button type="button" class="pptw-btn ghost" data-ppt="doctor">已有程序，手动指定</button></div>' + sourceView.slotHtml('ppt-doctor', 'div') : ''}` : `<i class="pptw-dot" aria-hidden="true"></i><span>${p.doctorVersion ? 'PPT Doctor ' + esc(p.doctorVersion) : 'PPT Doctor'} · ${p.available ? `${p.files || 0}份文稿 / ${p.pages || 0}页 · 索引更新 ${esc(at)}` : '请选择素材文件夹并更新索引'}${busy ? `<br>${esc(p.indexing.message || '正在更新索引…')}` : ''}</span>`;
-    if (p.error) void sourceView.fill(statusEl, { ipcRenderer });
+    if (upgrade) statusEl.innerHTML = `<span>检测到旧版 ${esc(p.installedVersion || '版本未知')}，需升级</span><button type="button" class="pptw-btn sec" data-ppt="doctor-install">一键升级</button><span role="img" aria-label="升级说明" title="${esc(p.error || '此版本缺少 Hub 联动能力，请升级 PPT Doctor。')}">ⓘ</span>`;
+    if (p.error && !upgrade) void sourceView.fill(statusEl, { ipcRenderer });
     if (!p.error && noIndex) statusEl.innerHTML = `<span class="pptw-guide-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l9 5v8l-9 5-9-5V8z"/><path d="M12 8v8M8 10v4M16 10v4" class="cut"/></svg></span><div class="pptw-guide-copy"><strong>${busy ? '正在建立素材索引' : '还没有可检索的素材索引'}</strong><p>${busy ? esc(p.indexing.message || '建好后就能找页，请稍等。') : '先选择存放 PPT 的素材文件夹，选完会自动建立索引。'}</p></div><div class="pptw-guide-actions"><button type="button" class="pptw-btn pri" data-ppt="folders"${busy ? ' disabled' : ''}>选择素材文件夹…</button></div>`;
     page.querySelector('[data-ppt-roots]').textContent = (p.roots || []).join('；') || '尚未指定素材文件夹';
     page.querySelector('[data-ppt="index"]').disabled = busy || !p.roots?.length;
@@ -112,6 +115,7 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
     const optionsHtml = '<option value="">全部素材文件夹</option>' + folders.map(folder => `<option value="${esc(folder)}">${esc(folder)}</option>`).join('');
     if (select.dataset.options !== optionsHtml) { select.innerHTML = optionsHtml; select.dataset.options = optionsHtml; select.value = previous; } // 轮询时列表没变就不重建，展开的下拉框不会被收起
     if (!p.error) statusEl.title = statusEl.textContent.trim();
+    if (!page.hidden && page.dataset.tab === 'map' && wasUpgrade !== upgrade) void libraryMap.show();
     void toolHint();
   }
   const folder = () => page.querySelector('[data-ppt-folder]').value;

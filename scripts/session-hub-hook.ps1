@@ -91,7 +91,7 @@ if (-not $sessionId -or $HookEvent -eq 'tool-use') { exit 0 }
 
 try {
   $port = $env:CLAUDE_HUB_PORT
-  if (-not $port) { $port = '3456' }
+  if (-not $port) { exit 0 }
   $stdin = [Console]::OpenStandardInput()
   $buffer = New-Object System.IO.MemoryStream
   $stdin.CopyTo($buffer)

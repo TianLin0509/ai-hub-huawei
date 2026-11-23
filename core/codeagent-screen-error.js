@@ -6,13 +6,14 @@
 //   部门已启用外部模型管控，外部模型不可用。请联系部门管理员关闭管控，或申请开通内部模型。 [SessionRequestError_002]
 // 主进程定时读回合进行中的 CodeAgent 屏幕：出现一条新的这种报错（上一次读屏时还没有），就结束这一轮，
 // 把报错原文交给界面显示。全屏界面会重绘旧报错，所以按「这条报错在屏幕上出现的次数变多」才算新的。
-// 新增屏幕匹配须有真实样本（项目规则）：只认 ERROR_HEADS 里列出的、有样本的报错标题。
+// 可信仓限制暂无 CLI 原文：只在明确的错误标题下按关键词兜底，普通回答不参与匹配。
 const { isCodeAgentKind } = require('./ai-kinds.js');
-const { classifyModelRevocation } = require('./codeagent-model-revoked.js');
+const { classifyCodeAgentError } = require('./codeagent-model-revoked.js');
 
 const CHECK_MS = 10_000;
-const HEAD_WORDS = /SessionRequestError/; // 原始输出里连这个词都没有就不必回放屏幕（省 CPU）
+const HEAD_WORDS = /SessionRequestError|可信仓|信任|风控|trusted\s+(?:repo|directory)/i;
 const ERROR_HEADS = /^\s*[✗✘×]\s*(SessionRequestError)\s*$/;
+const POLICY_HEAD = /^\s*(?:[✗✘×]\s*|(?:error|错误|失败)\s*[:：]\s*)(.*)$/i;
 
 const strip = row => String(row || '').replace(/^\s*[│┃|]\s?/, '').replace(/\s*[│┃|]\s*$/, '').trim();
 
@@ -20,28 +21,41 @@ const strip = row => String(row || '').replace(/^\s*[│┃|]\s?/, '').replace(/
 function findScreenErrors(rows) {
   const list = Array.isArray(rows) ? rows : [];
   const out = [];
+  let inCodeBlock = false;
   for (let i = 0; i < list.length; i++) {
-    const head = ERROR_HEADS.exec(strip(list[i]));
-    if (!head) continue;
-    const parts = [];
+    const row = strip(list[i]);
+    if (/^\s*```/.test(row)) { inCodeBlock = !inCodeBlock; continue; }
+    if (inCodeBlock || /^\s*>/.test(row)) continue;
+    const head = ERROR_HEADS.exec(row);
+    const policyHead = !head && POLICY_HEAD.exec(row);
+    if (!head && !policyHead) continue;
+    // 独立错误只读取限制本身；测试失败清单等普通内容不能吸入后面的讲解。
+    if (policyHead?.[1] && classifyCodeAgentError(policyHead[1])?.kind !== 'trusted-repo-required'
+        && !/^(?:[A-Za-z][\w-]*(?:Error|Exception)(?:_\d+)?|风控(?:错误|拦截))$/.test(policyHead[1])) continue;
+    const parts = policyHead?.[1] ? [policyHead[1]] : [];
     // 模型权限提示在窄终端里会折成多行，错误块仍以空行或下一个错误标题结束。
     for (let j = i + 1; j < list.length && j <= i + 8; j++) {
       const line = strip(list[j]);
       if (!line) { if (parts.length) break; continue; }
-      if (ERROR_HEADS.test(line)) break;
+      if (ERROR_HEADS.test(line) || POLICY_HEAD.test(line)) break;
       parts.push(line);
     }
     const message = parts.join(' ').replace(/\s+/g, ' ').trim().slice(0, 400);
     if (message) {
-      const modelRevoked = classifyModelRevocation(`${head[1]} ${message}`, { source: 'codeagent-screen-error' });
-      out.push({ name: head[1], message, ...(modelRevoked ? { modelRevoked } : {}) });
+      const name = head ? head[1] : 'TrustedRepoError';
+      const classified = classifyCodeAgentError(`${name} ${message}`, { source: 'codeagent-screen-error' });
+      if (!head && classified?.kind !== 'trusted-repo-required') continue;
+      const modelRevoked = classified?.kind === 'model-revoked' ? classified : null;
+      const trustedRepoRequired = classified?.kind === 'trusted-repo-required' ? classified : null;
+      out.push({ name, message, ...(modelRevoked ? { modelRevoked } : {}), ...(trustedRepoRequired ? { trustedRepoRequired } : {}) });
     }
   }
   return out;
 }
 
 /** 给用户看的一句话：原文加上「这是公司侧的限制」之类的处理提示。 */
-function describeScreenError({ name, message }) {
+function describeScreenError({ name, message, trustedRepoRequired }) {
+  if (trustedRepoRequired) return trustedRepoRequired.reason;
   const policy = /外部模型管控|不允许使用外部模型|内部模型/.test(message);
   const hint = policy ? '这是公司侧的模型管控，Hub 绕不过去：请联系部门管理员关闭管控，或在 CodeAgent 里换成允许使用的内部模型后再发。'
     : '这一轮没有发到模型，请按提示处理后再发。';
@@ -72,7 +86,7 @@ function createScreenErrorWatch({ manager, readScreen, renderRows, onError, inte
     if (!fresh) return;
     const failedAt = now(), message = describeScreenError(fresh);
     if (manager.noteAgentTurnFinished(sessionId, { failedAt, message })) {
-      try { onError({ sessionId, failedAt, kind: entry.info.kind, message, name: fresh.name, modelRevoked: fresh.modelRevoked || null }); } catch { /* 只影响提示 */ }
+      try { onError({ sessionId, failedAt, kind: entry.info.kind, message, name: fresh.name, modelRevoked: fresh.modelRevoked || null, trustedRepoRequired: fresh.trustedRepoRequired || null }); } catch { /* 只影响提示 */ }
     }
   }
   async function tick() {

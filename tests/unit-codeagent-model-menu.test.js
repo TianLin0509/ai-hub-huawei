@@ -1215,6 +1215,21 @@ test('captured single-model viewport is incomplete because its scrollbar is visi
   assert.equal(picker.parsePicker(counted).complete, false);
 });
 
+for (const wrap of [false, true]) test(`带前缀的滚动清单完整遍历后才选唯一项，循环滚动=${wrap}`, async t => {
+  const f = scrollingPicker(t, { ids: ['GLM-5.2-WX-Auto', 'ascend/' + SCROLL_TARGET, 'MiniMax-M2.7'], wrap });
+  const result = await f.run();
+  assert.equal(result.ok, true, result.technicalReason);
+  assert.equal(f.selected(), 'ascend/' + SCROLL_TARGET);
+});
+
+test('带前缀的滚动清单有两个同名项时不按回车', async t => {
+  const f = scrollingPicker(t, { ids: ['GLM-5.2-WX-Auto', 'ascend/' + SCROLL_TARGET, 'provider/' + SCROLL_TARGET] });
+  const result = await f.run();
+  assert.equal(result.ok, false); assert.equal(result.requiresGroupSelection, true);
+  assert.equal(f.selected(), null);
+  assert.equal(f.writes.some(([key]) => key === '\r'), false);
+});
+
 test('one visible model can be searched without writing a partial full-list cache', async t => {
   const f = scrollingPicker(t, { searchWorks: true });
   models.recordMenu(f.dir, ['GLM-5.2-WX-Auto', SCROLL_TARGET], { complete: true });

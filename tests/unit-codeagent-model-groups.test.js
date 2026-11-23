@@ -13,6 +13,23 @@ const serve = require('../core/codeagent-serve');
 const ui = require('../renderer/model-ui');
 const FOOTER = 'Navigate ↑ ↓ | Select enter | Back esc';
 const ID = 'deepseek4.1';
+
+test('带线路前缀的模型完整名称优先，去前缀后只选唯一项', () => {
+  const rows = ids => ({ rows: ids.map(label => ({ label, text: label })) });
+  const menu = rows(['ascend/glm-5.3-flash', 'provider/deepseek-v4.1-flash']);
+  assert.equal(picker.findTarget(menu, 'glm-5.3-flash'), 0);
+  assert.equal(picker.findTarget(menu, 'GLM-5.3-FLASH'), 0);
+  assert.equal(picker.findTarget(menu, 'ascend/glm-5.3-flash'), 0);
+  assert.equal(picker.findTarget(menu, 'glm-5.3-flash', { provider: 'ascend' }), 0);
+  assert.equal(picker.findTarget(rows(['glm-5.3-flash']), 'ascend/glm-5.3-flash'), 0);
+  const ambiguous = rows(['ascend/glm-5.3-flash', 'provider/glm-5.3-flash']);
+  assert.equal(picker.findTarget(ambiguous, 'glm-5.3-flash'), -1);
+  assert.equal(picker.findTarget(ambiguous, 'ascend/glm-5.3-flash'), 0);
+  assert.equal(picker.findTarget(ambiguous, 'glm-5.3-flash', { provider: 'provider' }), 1);
+  assert.equal(picker.findTarget(rows(['ascend/glm-5.3-flash', 'glm-5.3-flash']), 'glm-5.3-flash'), 1);
+  assert.equal(picker.findTarget(rows(['ascend/deepseek-v4.1-flash-10…']), 'deepseek-v4.1-flash-1017'), 0);
+  assert.equal(picker.findTarget(rows(['ascend/deepseek-v4.1-flash-10…', 'provider/deepseek-v4.1-flash-10…']), 'deepseek-v4.1-flash-1017'), -1);
+});
 function grouped(cursor = 1) {
   return ['Select model', '模型名称  Credit消耗系数  Token用量/配额', 'max',
     `${cursor === 1 ? '❯' : ' '} 1. ${ID}   0x   Day 1M/100M`, 'free',

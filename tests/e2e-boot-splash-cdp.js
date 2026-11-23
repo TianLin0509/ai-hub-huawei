@@ -67,7 +67,9 @@ async function main() {
     await wait('!!document.getElementById("boot-splash-layer")', 20000);
     assert.ok(await cdp.eval('!!document.querySelector(".boot-splash-hint")'), '播放时要有「点这里更换开场动画」');
     const shape = () => cdp.eval(`require('electron').ipcRenderer.invoke('debug:window-shape')`);
-    assert.equal((await shape()).overlay?.symbolColor, '#040405', '播放时右上角三个窗口按钮隐去（和动画底色一样）');
+    await wait('document.getElementById("boot-splash-layer")?.dataset.renderer === "worker"');
+    assert.notEqual((await shape()).overlay?.symbolColor, '#040405', '播放时保留标题栏按钮的主题颜色');
+    assert.ok(await cdp.eval(`(() => { const r = document.getElementById('boot-splash-layer').getBoundingClientRect(); return r.top >= 44 && r.bottom <= innerHeight + 1 && !document.elementFromPoint(innerWidth - 20, 20)?.closest('.boot-splash-layer'); })()`), '动画不覆盖标题栏控制区');
     await pause(1500); await shot('01-群星播放中');
     await wait('!document.getElementById("boot-splash-layer")', 8000);
     await wait('!!document.getElementById("boot-splash-toast")', 3000);

@@ -590,3 +590,12 @@
 .card-quote-float[hidden] { display: none; }
 .card-quote-float:hover { filter: brightness(1.08); }
 .context-menu .context-menu-item[hidden] { display: none; }
+
+/* 上边沿保留足够命中区，说明仅悬停时显示。 */
+.composer-resize-handle { position: absolute; top: -4px; left: 12px; right: 12px; height: 9px; z-index: 5; cursor: ns-resize; touch-action: none; }
+.composer-resize-handle::after { content: ''; position: absolute; top: 4px; left: 40%; right: 40%; height: 2px; background: var(--border-subtle); border-radius: 2px; }
+.composer-resize-handle:hover::after, .composer-resize-handle:focus-visible::after { background: var(--accent-blue, var(--link)); }
+.composer-expand-editor { flex: none; }
+
+.codeagent-trusted-repo-notice { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 10px 16px; color: var(--text-primary); font-size: 13px; }
+.codeagent-trusted-repo-notice button { border: 1px solid var(--border-subtle); border-radius: 4px; padding: 4px 8px; background: var(--bg-secondary); color: var(--link); cursor: pointer; }

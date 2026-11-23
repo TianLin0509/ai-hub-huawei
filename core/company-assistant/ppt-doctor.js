@@ -23,7 +23,9 @@ class PptDoctor {
     if (discovery?.has?.('ppt-doctor')) {
       const summary = await discovery.list('ppt-doctor');
       if (summary.current?.path) return summary.current.path;
-    } else {
+    }
+    // 自动发现只选择兼容版本；没有兼容项时仍找出旧安装，交给能力检查提示升级。
+    {
       const candidates = await require('./ppt-doctor-discovery').candidates(this.env, this.deps);
       const found = candidates.find(file => path.isAbsolute(file) && fs.existsSync(file));
       if (found) return found;
@@ -35,7 +37,7 @@ class PptDoctor {
     if (!force && this.cached && Date.now() - this.cached.checkedAt < 60000) return this.cached;
     if (this.checking) return this.checking;
     this.checking = this.call('status', { ...(this.config().db ? { db: this.config().db } : {}), includePaths: true }).then(result => (this.cached = { ...result, installed: true, state: result.available === false ? 'empty' : 'ready', checkedAt: Date.now() }))
-      .catch(error => (this.cached = { ok: false, available: false, state: error.code === 'DOCTOR_NOT_FOUND' ? 'missing' : error.code === 'DOCTOR_UPGRADE_REQUIRED' ? 'upgrade' : 'error', code: error.code || 'DOCTOR_ERROR', error: error.message, installedVersion: error.installedVersion || '', downloadUrl: error.downloadUrl || DOWNLOAD_URL, checkedAt: Date.now() }))
+      .catch(error => (this.cached = { ok: false, available: false, installed: error.code === 'DOCTOR_UPGRADE_REQUIRED', state: error.code === 'DOCTOR_NOT_FOUND' ? 'missing' : error.code === 'DOCTOR_UPGRADE_REQUIRED' ? 'upgrade' : 'error', code: error.code || 'DOCTOR_ERROR', error: error.message, installedVersion: error.installedVersion || '', downloadUrl: error.downloadUrl || DOWNLOAD_URL, checkedAt: Date.now() }))
       .finally(() => { this.checking = null; });
     return this.checking;
   }
@@ -47,6 +49,7 @@ class PptDoctor {
     if (!this.deps.pptDoctorTrustedExecutable && !marker) {
       let installedVersion = '';
       try { installedVersion = String(JSON.parse(fs.readFileSync(path.join(path.dirname(exe), 'manifest.json'), 'utf8').replace(/^\uFEFF/, '')).version || '').slice(0, 32); } catch { /* 读不到版本号时只提示升级 */ }
+      if (!installedVersion) installedVersion = await require('../tool-discovery/tools').exeFileVersion(exe) || '';
       throw failure('DOCTOR_UPGRADE_REQUIRED', `已检测到 PPT Doctor${installedVersion ? ' ' + installedVersion : ''}，版本太旧，和 Hub 联动不上，点一键升级即可`, { downloadUrl: DOWNLOAD_URL, installedVersion });
     }
     if (this.closed) throw failure('DOCTOR_CLOSED', 'PPT Doctor 调用已关闭');

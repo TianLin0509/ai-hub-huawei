@@ -122,9 +122,11 @@ async function main() {
     fs.unlinkSync(path.join(doctorDir, 'hub-api.json')); await click('.pptw-settings summary'); await click('[data-ppt="refresh"]'); await wait('/升级/.test(document.querySelector("[data-ppt-status]").textContent)', 'upgrade preflight'); await shot('upgrade');
     result.checks.push('能力标记缺失：不启动旧Doctor并显示升级入口');
     await c.eval(`(()=>{const invoke=ipcRenderer.invoke.bind(ipcRenderer);window.__pptDownloadCalls=[];ipcRenderer.invoke=(channel,args)=>{if(channel==='company-assistant:ppt-download-doctor'){window.__pptDownloadCalls.push(args.source);return Promise.resolve(args.source==='mirror'?{ok:false,error:'镜像下载暂不可用（故障夹具），请使用GitHub备用'}:{ok:true})}return invoke(channel,args)}})()`);
-    await click('[data-ppt-status] [data-ppt="download"]'); await wait('/镜像下载暂不可用/.test(document.querySelector("[data-ppt-notice]").textContent)', 'mirror failure is visible');
+    // 升级提示保持一行；镜像和 GitHub 备用入口仍在素材库设置里。
+    if (!(await c.eval('!!document.querySelector(".pptw-settings[open]")'))) await click('.pptw-settings summary');
+    await click('.pptw-settings [data-ppt="download"]'); await wait('/镜像下载暂不可用/.test(document.querySelector("[data-ppt-notice]").textContent)', 'mirror failure is visible');
     assert.deepEqual(await c.eval('window.__pptDownloadCalls'), ['mirror']);
-    await click('[data-ppt-status] [data-ppt="download-backup"]'); assert.deepEqual(await c.eval('window.__pptDownloadCalls'), ['mirror', 'github']);
+    await click('.pptw-settings [data-ppt="download-backup"]'); assert.deepEqual(await c.eval('window.__pptDownloadCalls'), ['mirror', 'github']);
     result.checks.push('下载主入口明确走镜像；失败可见，用户点GitHub备用才切源（浏览器打开由夹具代替，解析镜像URL另有单测）');
     result.ok = true;
   } catch (error) {

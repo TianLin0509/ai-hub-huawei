@@ -3622,6 +3622,10 @@ ipcRenderer.on('turn-failed-event', (_event, payload) => {
   }
   session.runStartedAt = null;
   session.lastError = String(message || 'Codex turn failed').slice(0, 1000);
+  if (cliExited) {
+    session.codeagentTrustedRepoRequired = !!payload.trustedRepoRequired;
+    session.codeagentTrustedRepoFailedAt = payload.trustedRepoRequired ? at : null;
+  }
   clearSessionAttention(session);
   if (isCodexKind(session.kind)) clearCodexCardWorking(hubSessionId);
   observeSessionRuntime(session, {
@@ -3636,6 +3640,7 @@ ipcRenderer.on('turn-failed-event', (_event, payload) => {
     evidence: session.lastError,
   });
   _updateStreamingIndicator(hubSessionId);
+  if (payload.trustedRepoRequired) window.MeetingRoom?.refreshNativeCancellation?.(hubSessionId);
   scheduleSessionListRender();
   schedulePersist();
 });
@@ -3674,6 +3679,13 @@ ipcRenderer.on('turn-complete-event', async (_event, payload) => {
   } = payload || {};
 
   onReplyCompleteFromTranscriptEvent(payload);
+  const completedSession = sessions.get(hubSessionId);
+  if (completedSession?.codeagentTrustedRepoRequired && Number(completedAt) >= Number(completedSession.codeagentTrustedRepoFailedAt)) {
+    completedSession.codeagentTrustedRepoRequired = false;
+    completedSession.codeagentTrustedRepoFailedAt = null;
+    _updateStreamingIndicator(hubSessionId);
+    window.MeetingRoom?.refreshNativeCancellation?.(hubSessionId);
+  }
 
   if (!meetingId && window.WorkspaceController) {
     void window.WorkspaceController.maybePromptSessionArchive(hubSessionId);
@@ -4389,8 +4401,10 @@ function _updateStreamingIndicator(sessionId) {
   const overlay = document.getElementById('msg-overlay');
   if (!overlay) return;
   const sess = sessions.get(sessionId);
+  const trustedRepo = require('./codeagent-trusted-repo');
+  trustedRepo.renderNotice(document, overlay, sess, () => trustedRepo.openSession(window));
   // CodeAgent 首次准备还没做完（等用户点信任框可能超过「启动中」的 15 秒有效期）时，指示条照样留着并每秒刷新。
-  const isRunning = isSessionCardWorking(sess) || !!(sess && sess.codeagentLaunchPhase && sess.codeagentLaunchPhase.label);
+  const isRunning = !trustedRepo.isBlocked(sess) && (isSessionCardWorking(sess) || !!(sess && sess.codeagentLaunchPhase && sess.codeagentLaunchPhase.label));
   // 多方审查 P1 (DeepSeek + Claude 共识)：querySelector 不带 dataset 过滤会拿到
   // 别 session 残留的 indicator（1.5s 延迟移除期间），快速切 session 时新 session
   // 会"接管"旧 indicator 导致显示错乱或 timer 触发时误删新 session 的 indicator。
@@ -5896,6 +5910,16 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   // header 和输入栏让位。这两个值以前写死 43px/60px，而输入栏随任务预设 chips、
   // 预设预览、输入框增高能长到 220px —— 超出 60px 的部分就被卡片层盖住且点不到，
   // 用户看到的就是"卡片视图下输入框只剩两行"。这里把实测高度写回 CSS 变量。
+  const composerSize = require('./composer-size').mountComposerSize({ document, window, storage: localStorage,
+    host: bar, input: inputBox, before: sendBtn,
+    readText: () => readContenteditablePlainText(inputBox),
+    writeText: text => {
+      restoreComposerText(sessionId, inputBox, text);
+      saveFloatingInputDraft(sessionId, inputBox);
+      inputBox.dispatchEvent(new Event('input', { bubbles: true }));
+    },
+    onSend: () => sendBtn.click(),
+  });
   const chromeObserver = observeTerminalPanelChrome(panel, bar);
 
   // paste-sensitive TUI（claude/gemini/codex 等 9 家 AI CLI）会把紧贴到达的字符
@@ -6290,6 +6314,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       // A hidden contenteditable's innerText collapses to textContent, losing
       // DIV/BR line breaks. Input events already saved the visible draft.
       if (inputBox.getClientRects().length) saveFloatingInputDraft(sessionId, inputBox);
+      composerSize.dispose();
       voiceInput.dispose();
       composerTools.dispose();
       composerScene.dispose();

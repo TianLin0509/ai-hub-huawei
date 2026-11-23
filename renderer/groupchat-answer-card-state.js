@@ -47,13 +47,14 @@ function waitingText(status) {
  * 按钮键：submitAgain 再次发送 · recollect 重新提取 · extract 提取 · retryFailed 重试（报错时外露）
  *        resend 重新发送（收在「更多」）· openCli 打开 CLI · viewPrompt / copyPrompt
  *        modelChange 点此换模型（模型权限被收回时最先露出）
+ *        trustedRepo 换到可信仓目录新建会话（目录受限时优先处理）
  */
-function plan({ message, opts = {}, state, failureText = '', modelRevoked = false }) {
+function plan({ message, opts = {}, state, failureText = '', modelRevoked = false, trustedRepoRequired = false }) {
   const answer = message.answer || null;
   const hasText = !!String(message.content || '').trim();
   const status = String(opts.status || message.status || '');
-  const sendStuck = (opts.sendStatus || message.sendStatus) === 'stuck';
-  const running = !answer && memberRunning(state, message);
+  const sendStuck = !trustedRepoRequired && (opts.sendStatus || message.sendStatus) === 'stuck';
+  const running = !trustedRepoRequired && !answer && memberRunning(state, message);
   const hasSid = !!message.sid;
   const failureCode = String((message.failure && message.failure.code) || message.statusReason || '');
   const failed = !hasText && !!failureText;
@@ -64,13 +65,14 @@ function plan({ message, opts = {}, state, failureText = '', modelRevoked = fals
     : status === 'waiting' ? 'waiting' : running ? 'running' : 'missing';
   // 重新发送：成员已停下才给。缺回答不等于没收到任务，所以默认收进「更多」；
   // 本轮明确报错（且不是「提交待核对」）时直接露出「重试」。
-  const canResend = hasSid && !running && !sendStuck && failureCode !== 'submission_unknown';
+  const canResend = hasSid && !trustedRepoRequired && !running && !sendStuck && failureCode !== 'submission_unknown';
   // 模型权限被收回时先换模型，原样重试只会再失败一次。
   const retryFailed = canResend && !modelRevoked && !hasText && (failed || status === 'errored' || status === 'timeout');
   const readError = !!answer?.readError;
   const exposed = [];
   if (hasSid) {
-    if (modelRevoked) exposed.push('modelChange');
+    if (trustedRepoRequired) exposed.push('trustedRepo');
+    else if (modelRevoked) exposed.push('modelChange');
     if (sendStuck) exposed.push('submitAgain');
     if (readError) exposed.push('recollect');
     if (!hasText && !readError && !running && !sendStuck) exposed.push('extract');

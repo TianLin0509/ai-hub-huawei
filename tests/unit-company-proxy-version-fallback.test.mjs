@@ -47,3 +47,9 @@ test('findCodeAgentDir: the install dir Hub picked (AI_HUB_CODEAGENT_INSTALL_DIR
   // Not usable (no bin\codeagentcli.exe): the usual search order goes on.
   assert.equal(await findCodeAgentDir({ env: { AI_HUB_CODEAGENT_INSTALL_DIR: resolve('/gone') }, exists, fallback: standard, registry: async () => [] }), standard);
 });
+
+test('内部构建版本号段里带字母（1.2615.02.EA.40）也认作有效版本，非版本文本仍拒绝', async () => {
+  const { isSignerVersion } = await import('../core/company-proxy/version-format.mjs');
+  for (const v of ['1.2615.02.EA.40', '1.2615.02.02-01', '1.2615.02.03', '1.2']) assert.equal(isSignerVersion(v), true, v);
+  for (const v of ['', 'abc', '1', 'v1.2', '1.2615.02.EA.40 (codeAgentCLI)', '1..2']) assert.equal(isSignerVersion(v), false, v);
+});

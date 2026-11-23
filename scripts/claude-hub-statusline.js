@@ -26,9 +26,9 @@ process.stdin.on('end', () => {
 
 function main() {
   const sessionId = process.env.CLAUDE_HUB_SESSION_ID;
-  const port = process.env.CLAUDE_HUB_PORT || '3456';
+  const port = process.env.CLAUDE_HUB_PORT;
   const token = process.env.CLAUDE_HUB_TOKEN;
-  if (!sessionId || !token) return; // not launched from the hub — no-op
+  if (!sessionId || !token || !port) return; // not launched from the hub — no-op
 
   let data;
   try { data = JSON.parse(stdin); } catch { return; }
