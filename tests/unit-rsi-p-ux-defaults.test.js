@@ -172,7 +172,6 @@ test('检查更新旁的状态：已是最新 / 有新版本 / 正在下载 / �
   assert.equal(menuStatusText({ ...quiet, phase: 'downloading' }), '正在下载 v5.6.77');
   assert.equal(menuStatusText({ ...quiet, phase: 'ready' }), 'v5.6.77 已就绪，重启生效');
   assert.equal(menuStatusText(quiet, { labelVersion: '5.6.77' }), '当前 v5.6.76');
-  assert.equal(menuStatusText({ ...quiet, pinned: { version: '5.6.76' } }), '已固定在 v5.6.76');
   const src = read('renderer/app-update.js');
   assert.match(src, /require\('\.\/app-update-menu-status'\)\.menuStatusText\(state, \{ labelVersion: version \}\)/);
   assert.match(src, /paintMenuEntry\(item, version\);/);

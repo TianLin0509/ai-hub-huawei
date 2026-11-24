@@ -11,7 +11,7 @@ const good = (over = {}) => ({
   loginState: async () => 'ready', readModels: async () => ({ ok: true, models: ['GLM'] }),
   proxyEnabled: () => true, proxyReady: async () => ({ state: 'running', zone: { zone: 'green', text: '绿区' }, accounts: [], firstInit: { ran: true } }),
   hello: async () => ({ ok: true, model: 'GLM', answer: 'OK' }),
-  netPass: async () => ({ available: true, hosts: [{ state: 'ok', page: 'https://a/' }] }), systemProxy: async () => 'DIRECT', clockSkew: async () => 1000, ...over,
+  systemProxy: async () => 'DIRECT', clockSkew: async () => 1000, ...over,
 });
 const run = (over, mode, isCompany = true) => prep.createPrep({ isCompany, deps: good(over) }).run(mode);
 
@@ -30,7 +30,7 @@ test('什么时候显示：没做过全屏，指纹变了只同步，有遗留�
   assert.equal(prep.decide({ schema: prep.SCHEMA, fingerprint: fp, problems: [] }, { ...fp, size: 11 }), 'changed');
   assert.equal(prep.decide({ schema: prep.SCHEMA, fingerprint: null, problems: [] }, fp), 'changed', '后来才装上 CodeAgent');
   assert.equal(prep.decide({ schema: prep.SCHEMA, fingerprint: fp, problems: [] }, null), 'none', 'CodeAgent 不见了不在打开时打扰');
-  assert.equal(prep.decide({ schema: prep.SCHEMA, fingerprint: fp, problems: ['net-pass'] }, fp), 'remind');
+  assert.equal(prep.decide({ schema: prep.SCHEMA, fingerprint: fp, problems: ['login'] }, fp), 'remind');
 });
 test('全部顺利：真实问答通过，存下结果', async () => {
   let saved = null;
@@ -57,9 +57,9 @@ test('通道没起来：说清原因，问答等待；启动失败时试一次�
   const r = await run({ proxyReady: async () => ({ state: 'not-ready', message: '公司上游信息不全' }), proxyReload: async () => { reloads++; return { state: 'not-ready', message: '公司上游信息不全' }; } });
   assert.equal(reloads, 1); assert.equal(r.rows.proxy.status, 'bad'); assert.match(r.rows.proxy.detail, /信息不全/); assert.equal(r.rows.hello.status, 'hold');
 });
-test('被拦没放行成功给放行按钮；没开公司模型时相关项不适用；个人版没有公司项', async () => {
-  const blocked = await run({ netPass: async () => ({ available: true, hosts: [{ state: 'blocked', page: 'https://x/' }] }) });
-  assert.equal(blocked.rows['net-pass'].status, 'bad'); assert.equal(blocked.rows['net-pass'].fixes[0].act, 'open-gate');
+test('不再有下载服务器放行一项（R35）；没开公司模型时相关项不适用；个人版没有公司项', async () => {
+  const r0 = await run({});
+  assert.equal(r0.rows['net-pass'], undefined);
   const off = await run({ proxyEnabled: () => false });
   assert.equal(off.rows.hello.status, 'off'); assert.deepEqual(off.problems, []);
   const personal = await run({}, 'full', false);
@@ -89,9 +89,9 @@ test('可选工具已安装但有提醒时保留真实说明，不计入未就�
   assert.deepEqual(saved.problems, []); assert.deepEqual(r.problems, []);
 });
 test('CodeAgent 变化只重做受影响的项', async () => {
-  let net = 0;
-  const r = await run({ netPass: async () => { net++; return null; } }, 'changed');
-  assert.equal(net, 0);
+  let proxies = 0;
+  const r = await run({ systemProxy: async () => { proxies++; return 'DIRECT'; } }, 'changed');
+  assert.equal(proxies, 0);
   assert.deepEqual(Object.keys(r.rows).sort(), ['codeagent', 'login', 'hello', 'models', 'proxy', 'sign'].sort());
 });
 
@@ -105,28 +105,6 @@ test('CodeAgent 新装或更新后仍检查登录，未登录不能报同步成�
   assert.equal(reads, 0);
 });
 
-test('环境体检、登录和模型读取不等下载服务器放行', async () => {
-  let release, checked = 0, passed = false, loggedIn = 0, models = 0;
-  const gate = new Promise(resolve => { release = () => { passed = true; resolve(null); }; });
-  const pending = run({ netPass: () => gate, loginState: async () => { loggedIn++; return 'ready'; },
-    readModels: async () => { models++; return { ok: true, models: ['GLM'] }; }, envCheck: async () => {
-    checked++; assert.equal(passed, false);
-    return { ok: true, items: [{ id: 'app-update', status: 'ok', detail: '可用' }] };
-  } });
-  await new Promise(resolve => setImmediate(resolve));
-  assert.equal(checked, 1); assert.equal(loggedIn, 1); assert.equal(models, 1);
-  release();
-  const result = await pending;
-  assert.equal(checked, 1); assert.equal(result.rows['app-update'].status, 'ok');
-});
-
-test('放行失败也继续检查更新源，其余准备项照常结束', async () => {
-  let checked = false;
-  const result = await run({ netPass: async () => { throw new Error('网络错误'); },
-    envCheck: async () => { checked = true; return { ok: true, items: [{ id: 'app-update', status: 'bad', detail: '连不上' }] }; } });
-  assert.equal(checked, true); assert.equal(result.rows['net-pass'].status, 'warn');
-  assert.equal(result.rows['app-update'].status, 'bad'); assert.equal(result.rows.login.status, 'ok');
-});
 test('读模型太慢不拖住，默认模型不行换下一个；指纹读文件', async () => {
   let n = 0;
   const hit = await prep.helloAny({ port: 1, key: 'k', models: ['A', 'B'], ask: async ({ model }) => { n++; return model === 'B' ? { ok: true, model, answer: 'OK' } : { ok: false, error: 'no' }; } });

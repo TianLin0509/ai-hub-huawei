@@ -12,7 +12,7 @@ async function pass(url, { interactive = true } = {}) {
   try { return (await handler(String(url), { interactive })) || false; } catch { return false; }
 }
 const BLOCKED_TEXT = '下载服务器被公司网络的确认页拦住了：在弹出的放行页上点「放行」，放行后再点一次即可';
-const BLOCKED_QUIET_TEXT = '下载服务器被公司网络的确认页拦住了，需要先放行（设置里的「放行下载服务器」）';
+const BLOCKED_QUIET_TEXT = '下载服务器被公司网络的确认页拦住了，需要先放行（点主界面底栏的「一键放行」）';
 const PASSED_TEXT = '下载服务器已放行，请再点一次';
 // 跑一遍 run()；失败时逐个看这些地址所在的自家主机是不是被拦，放行成功就再跑一遍；被拦又没放行成，换成一句人话。
 async function withGate(urls, run, opts = {}) {

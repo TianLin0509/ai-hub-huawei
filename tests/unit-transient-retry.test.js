@@ -94,22 +94,6 @@ test('一键更新/组件目录的清单读取：503 自动再取一次成功；
   assert.equal(calls['https://gone/latest.json'], 1);
 });
 
-test('PPT Doctor 清单：连接被重置时换下一个镜像再取（主干的多镜像轮换兜住偶发错误）；打开下载页只调用一次', async () => {
-  const { downloadDoctor } = require('../core/company-assistant/ppt-doctor-download');
-  let gets = 0; const opened = [];
-  const r = await downloadDoctor('mirror', {
-    pptRetry: { minDelayMs: 5, maxDelayMs: 5 },
-    pptOpenExternal: async url => opened.push(url),
-    pptDownloadFetch: async (url, options) => {
-      if (options.method === 'HEAD') return { ok: true, status: 200, headers: { get: () => 'application/zip' } };
-      gets++;
-      if (gets === 1) throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } });
-      return jsonResponse({ version: '2.0.6' });
-    },
-  });
-  assert.equal(gets, 2); assert.equal(opened.length, 1); assert.equal(r.ok, true);
-});
-
 test('公司模型反代就绪探测：本机端口一时连不上时再读一次状态；并发读状态只跑一次', async () => {
   const { CompanyProxyService } = require('../main/company-proxy-service');
   const svc = new CompanyProxyService({ dataDir: require('node:os').tmpdir(), isEnabled: () => true, logger: { warn() {} } });

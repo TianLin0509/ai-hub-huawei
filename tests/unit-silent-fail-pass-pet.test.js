@@ -1,51 +1,15 @@
 'use strict';
 // 按钮静默失败收尾（2026-11-21）：
-// 1. 命令行安装区「打开放行页」：以前不管放没放行都直接重装一次，打不开时只看到「安装又失败一次」；
-//    现在没放行就不重装，在按钮旁写原因和下一步。
+// （原第 1 条「命令行安装区打开放行页」随下载只走内源删除，R35。）
 // 2. 桌宠设置：以前保存失败一律吞掉（写盘失败只记日志），开关看着变了、重启又回去；现在在开关旁写「没存上」的原因和下一步。
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const view = require('../renderer/cli-install-view');
 const { saveFailureText } = require('../renderer/hub-pet/pet-save-status');
 const { createSettingsStore } = require('../core/hub-pet/settings');
 const { mountPetSettingsTab } = require('../renderer/hub-pet/pet-settings-tab');
-
-test('放行页：放行成功才自动重试安装；打不开、被关掉、超时都不重试，并说清原因与下一步', () => {
-  assert.deepEqual(view.passOutcome({ passed: true }), { retry: true, note: '' });
-  const thrown = view.passOutcome(null, new Error('No handler registered'));
-  assert.equal(thrown.retry, false);
-  assert.match(thrown.note, /放行页没打开：No handler registered/);
-  assert.match(thrown.note, /再点一次「打开放行页」/);
-  assert.match(view.passOutcome(null).note, /没有收到结果/);
-  assert.match(view.passOutcome({ passed: false, error: '放行页地址无效' }).note, /放行页没打开：放行页地址无效/);
-  assert.match(view.passOutcome({ passed: false, timedOut: true }).note, /3 分钟还没放行/);
-  const closed = view.passOutcome({ passed: false, closed: true });
-  assert.equal(closed.retry, false);
-  assert.match(closed.note, /还没放行成功，所以这次没有重试安装/);
-});
-
-test('放行页：没放行的原因显示在「打开放行页」按钮旁，并做转义', () => {
-  const state = { available: true, catalog: [], tools: { claude: { phase: 'error', error: '下载被拦', blocked: 'https://m.example/x.tgz' } } };
-  const html = view.installBlockHtml('claude', state, { passNote: '放行页没打开：<坏>' });
-  const at = html.indexOf('data-cli-action="open-pass"');
-  const note = html.indexOf('cli-install-pass-note');
-  assert.ok(at > 0 && note > at, '原因紧跟在放行按钮那一段后面');
-  assert.match(html, /role="alert">放行页没打开：&lt;坏&gt;</);
-  assert.doesNotMatch(view.installBlockHtml('claude', state), /cli-install-pass-note/, '没有原因时不多一行');
-  // 已经不被拦了（例如重试后成功），旧原因不再显示
-  assert.doesNotMatch(view.installBlockHtml('claude', { ...state, tools: { claude: { phase: 'idle' } } }, { passNote: 'x' }), /cli-install-pass-note/);
-});
-
-test('放行页：启动中心安装弹窗按 passOutcome 决定是否重装，不再吞掉错误', () => {
-  const src = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'company-api-settings.js'), 'utf8');
-  const handler = src.slice(src.indexOf('[data-cli-action="open-pass"]'), src.indexOf('[data-cli-action="cancel"]'));
-  assert.match(handler, /cliView\.passOutcome\(opened, failure\)/);
-  assert.match(handler, /if \(outcome\.retry\) return void runInstall/);
-  assert.doesNotMatch(handler, /catch \(_\) \{\}/);
-});
 
 test('桌宠设置写盘失败：设置库记下原因，成功写一次就清掉', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pet-save-'));

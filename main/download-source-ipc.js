@@ -31,15 +31,15 @@ function registerDownloadSourceIpc(ipcMain, { fetchImpl, env = process.env } = {
     if (!pending) return sourceStatus.view('missing', { reason: '这个下载点还没登记内源' });
     let spec;
     try { spec = await pending; }
-    // r60：清单读不到（多半是公司网络拦了阿里云）和内源连不上是两回事，分开显示，免得误以为内源坏了。
+    // 清单读不到和内源连不上是两回事，分开显示，免得误以为内源坏了。
     catch (error) { return { ...sourceStatus.view('nolist', { reason: error && error.message ? error.message : String(error) }), point: String(point) }; }
     if (!spec) return sourceStatus.view('missing', { reason: '组件清单里没有这一项' });
     const fetch = typeof fetchImpl === 'function' ? fetchImpl : (...args) => require('electron').net.fetch(...args);
     const value = await sourceStatus.check(spec, { fetchImpl: fetch, env, fresh, ...(spec.timeoutMs ? { timeoutMs: spec.timeoutMs } : {}) });
-    return { ...value, point: String(point), ...(spec.order ? { order: spec.order } : {}) };
+    return { ...value, point: String(point) };
   }
   // 浏览器手动下载（r58）：内源上有这个文件（且不是分片）就在浏览器里打开内源地址，返回 { ok:true, via:'openx' }；
-  // 没有就返回 { ok:false }，界面照旧打开阿里云地址。地址只取内源接口给的、白名单域名内的 https 地址。
+  // 没有就返回 { ok:false, reason }（写成人话）。地址只取内源接口给的、白名单域名内的 https 地址。
   async function openInternal(point) {
     const pending = specOf(String(point || ''), true);
     if (!pending) return { ok: false, reason: '这个下载点还没登记内源' };
@@ -49,11 +49,10 @@ function registerDownloadSourceIpc(ipcMain, { fetchImpl, env = process.env } = {
     if (!item) return { ok: false, reason: '清单里没有安装包' };
     const openxSource = require('../core/app-update/openx-source');
     const fetch = typeof fetchImpl === 'function' ? fetchImpl : (...args) => require('electron').net.fetch(...args);
-    // R29：只走内源时用户点了就真的再连一次，失败原因写成人话（连不上 → 检查公司网络）。
-    const only = openxSource.onlyChannel(env);
-    if (only) openxSource.clearDown();
+    // 用户点了就真的再连一次，失败原因写成人话（连不上 → 检查公司网络）。
+    openxSource.clearDown();
     const hit = await openxSource.find({ file: item.file, version: item.version, release: item.release, strict: !!spec.strict, fetchImpl: fetch, env });
-    if (!hit || hit.urls) return { ok: false, reason: hit ? '内源上是分片包，请用一键更新' : only ? openxSource.userReason(openxSource.lastReason(), { file: item.file }) : openxSource.lastReason() };
+    if (!hit || hit.urls) return { ok: false, reason: hit ? '内源上是分片包，请用一键更新' : openxSource.userReason(openxSource.lastReason(), { file: item.file }) };
     await require('electron').shell.openExternal(hit.url);
     return { ok: true, via: 'openx', url: hit.url };
   }

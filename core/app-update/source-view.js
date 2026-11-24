@@ -14,4 +14,11 @@ function sourceText(row) {
   return `连不上：${row.reason || '连接失败'}`;
 }
 
-module.exports = { MEMBER_NOTE, sourceText };
+// 更新窗里「公司内源」那一行（R35）：可用 / 缺包 / 连不上，不可用时写清原因和下一步。
+function internalLine(row) {
+  if (row.ok || row.status === 'unknown' || row.status === 'off') return sourceText(row);
+  if (row.status === 'missing') return `缺包：内源上还没有${row.version ? ' v' + row.version + ' 的' : ''}更新包，可能还在同步，请过几分钟再试`;
+  return require('./openx-source').userReason(row.reason);
+}
+
+module.exports = { MEMBER_NOTE, sourceText, internalLine };

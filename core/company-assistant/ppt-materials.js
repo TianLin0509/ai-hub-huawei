@@ -12,17 +12,14 @@ const MARKER = 'PPT Doctor Material v1';
 // 团队素材包（2026-11-11）：和 PPT Doctor 的「团队素材包」组件同一份发布物（component.json + component.zip，
 // zip 里只有 team-materials.pptx）。Hub 自己下载后直接读，不需要先装 Doctor，也不需要 PowerPoint 导入。
 const TEAM_PACK_FILE = 'team-materials.pptx';
-// 成员版按这里的顺序（2026-11-16 定：成员版只走外网，顺序不变）；公开版内源生效时先试内源，再按 GitHub → 阿里云 排序（packSources）。
+// 下载只走公司内源（R29/R35）；这组地址只在内源不生效时（纯 Node 单测、测试注入）用于读清单和下载。
 const TEAM_PACK_SOURCES = Object.freeze([
   'https://dl.lt-stockpartner.tech/pptutor/materials/',
   'https://me.lt-stockpartner.tech/pptutor/materials/',
   'https://github.com/TianLin0509/PPTutor/releases/download/materials-v1.0.0/',
 ]);
 function packSources(deps = {}) {
-  const list = deps.pptTeamPackUrls || TEAM_PACK_SOURCES;
-  const env = (deps.openx && deps.openx.env) || process.env, openxSource = require('../app-update/openx-source');
-  if (deps.openx === false || !openxSource.enabled(env) || !openxSource.publicOrder(env)) return list;
-  return require('../app-update/downloader').orderSources(list.map(url => ({ url }))).map(s => s.url);
+  return deps.pptTeamPackUrls || TEAM_PACK_SOURCES;
 }
 const sha256 = buf => crypto.createHash('sha256').update(buf).digest('hex');
 // r59：边收边报进度（统一进度条要已下/总量/速度/来源）；没有回调或拿不到流时照旧一次读完。
@@ -32,7 +29,7 @@ async function readBody(response, onProgress, source, total) {
   const reader = response.body.getReader(), chunks = [];
   let received = 0, at = Date.now(), lastBytes = 0, speed = 0;
   const report = () => onProgress({ phase: 'downloading', received, total: size, speed, etaSec: speed > 0 && size ? Math.max(0, Math.round((size - received) / speed)) : null,
-    sourceId: source.id, sourceName: source.name, openxMiss: source.openxMiss || null });
+    sourceId: source.id, sourceName: source.name });
   report();
   for (;;) {
     const { done, value } = await reader.read();
@@ -58,10 +55,11 @@ function bundledTeamManifest() {
 
 // 依次试各下载源，取第一个给出有效清单的。
 async function teamPackManifest(deps = {}) {
-  // R29（2026-11-24）：只走内源时直接用程序自带的清单快照（发版时刷新），不去外网读清单；素材包只从内源下。
-  const onlySnap = deps.bundledTeamManifest !== undefined ? deps.bundledTeamManifest : bundledTeamManifest();
-  if (onlySnap && deps.openx !== false && require('../app-update/openx-source').onlyChannel((deps.openx && deps.openx.env) || process.env)) {
-    return { base: packSources(deps)[0], manifest: onlySnap, bundled: true };
+  // R29/R35：内源生效时只用程序自带的清单快照（发版时刷新），不去外网读清单；素材包只从内源下。
+  if (deps.openx !== false && require('../app-update/openx-source').active((deps.openx && deps.openx.env) || process.env)) {
+    const snap = deps.bundledTeamManifest !== undefined ? deps.bundledTeamManifest : bundledTeamManifest();
+    if (!snap) throw new Error('程序自带的团队素材包清单缺失，请更新 Hub 后再试');
+    return { base: packSources(deps)[0], manifest: snap, bundled: true };
   }
   const fetch = require('../own-gate').gatedFetch(require('./fetch-util').resolveFetch(deps.pptDownloadFetch));
   const { reasonOf } = require('../app-update/downloader');
@@ -77,27 +75,19 @@ async function teamPackManifest(deps = {}) {
       break;
     } catch (error) { reasons.push(reasonOf(error)); if (error.blocked || error.passed) gateNote = error.message; }
   }
-  // r60b（2026-11-20 绿区实测）：公司网络拦了阿里云时只剩 GitHub 上的旧清单（1.0.0），而内源上放的是新版（1.1.0）
-  // → 界面显示「内源暂缺」、装到旧包。程序自带一份阿里云清单快照：读到的清单比快照旧（或一个都读不到）就按快照去内源下，
-  // 内源也没下成时退回读到的旧清单（fallback），从原下载源装。
-  const snap = deps.bundledTeamManifest !== undefined ? deps.bundledTeamManifest : bundledTeamManifest();
-  const openxOn = deps.openx !== false && require('../app-update/openx-source').enabled((deps.openx && deps.openx.env) || process.env);
-  if (snap && openxOn && (!found || newerVersion(snap.version, found.manifest.version))) {
-    return { base: found ? found.base : packSources(deps)[0], manifest: snap, bundled: true, ...(found ? { fallback: found } : {}) };
-  }
   if (found) return found;
   // 被公司网络确认页拦住的，直接说放行的事（core/own-gate.js），不拿最后一个源的原因顶替。
   if (gateNote) throw new Error(gateNote);
   throw new Error(`团队素材包暂时下载不了：${reasons[reasons.length - 1]}。请检查网络后重试，或用「打开素材包…」打开同事发来的素材包文件`);
 }
 // 逐个源下载素材包文件，返回第一个 sha256 对得上的；都不行时说清原因。
-async function teamPackArchive(fetch, manifest, bases, onProgress = null, openxMiss = null) {
+async function teamPackArchive(fetch, manifest, bases, onProgress = null) {
   let mismatch = false, last = '';
   for (const base of bases) {
     try {
       const response = await fetch(new URL('component.zip', base).href, { signal: AbortSignal.timeout(180000) });
       if (!response.ok) { last = `HTTP ${response.status}`; continue; }
-      const archive = await readBody(response, onProgress, { id: hostOf(base), name: hostOf(base), openxMiss }, manifest.archive.size);
+      const archive = await readBody(response, onProgress, { id: hostOf(base), name: hostOf(base) }, manifest.archive.size);
       if (sha256(archive) === manifest.archive.hash) return archive;
       mismatch = true;
     } catch (error) { last = require('../app-update/downloader').reasonOf(error); }
@@ -108,23 +98,20 @@ async function teamPackArchive(fetch, manifest, bases, onProgress = null, openxM
 // 团队素材包在公司内源上的文件名（发版同步时按这个名字上传）。找不到、连不上、校验不对都返回 null，不报错。
 const openxPackFile = version => `pptutor-materials-${version}.zip`;
 async function teamPackFromOpenx(fetch, manifest, opts = {}) {
-  if (opts === false || !require('../app-update/openx-source').enabled((opts && opts.env) || process.env)) return null;
+  if (opts === false || !require('../app-update/openx-source').active((opts && opts.env) || process.env)) return null;
   const openxSource = require('../app-update/openx-source');
   const file = openxPackFile(manifest.version);
   let hit = null;
-  // R29：只走内源时没有别的源可退，完整地查（不设 6 秒上限），也不沿用「5 分钟内不再试」。
-  const only = openxSource.onlyChannel((opts && opts.env) || process.env);
   try {
-    if (only) openxSource.clearDown();
-    const args = { ...opts, file, version: manifest.version, release: `ppt-materials-${manifest.version}`, fetchImpl: fetch };
-    hit = await (only ? openxSource.find(args) : openxSource.findForDownload({ unknownBudgetMs: 6000, maxMs: 6000, ...args }));
+    openxSource.clearDown();
+    hit = await openxSource.find({ ...opts, file, version: manifest.version, release: `ppt-materials-${manifest.version}`, fetchImpl: fetch });
     if (!hit) return null;
     const response = await fetch(hit.url, { signal: AbortSignal.timeout(180000), redirect: 'error' });
     if (response.status >= 300 && response.status < 400) throw new Error(`HTTP ${response.status}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const archive = await readBody(response, opts && opts.onProgress, { id: 'openx', name: '公司内源' }, manifest.archive.size);
     if (sha256(archive) === manifest.archive.hash) return archive;
-  } catch (_) { /* 内源不可用：回原源（r59 起进度条会标「备用」并写原因） */ }
+  } catch (_) { /* 内源不可用：调用方报原因 */ }
   if (hit) openxSource.markBad(file);
   return null;
 }
@@ -237,25 +224,20 @@ class PptMaterials {
   }
   async downloadTeamPack() {
     const dir = path.join(require('./ppt-work-dir').workDir(this.lib.a, { writable: true }), 'ppt-team-materials');
-    let { base, manifest, fallback } = await teamPackManifest(this.deps);
+    const { base, manifest } = await teamPackManifest(this.deps);
     const fetch = require('../own-gate').gatedFetch(require('./fetch-util').resolveFetch(this.deps.pptDownloadFetch));
-    // 公开版内源优先（r21）：openx 上有 pptutor-materials-<版本>.zip 且校验对就用它，否则照旧走原下载源；成员版不试内源。
+    // 只走公司内源（R29/R35）：openx 上的 pptutor-materials-<版本>.zip，校验对才用；内源不生效（测试）时按给定源下。
     const bus = require('../app-update/progress-bus'), onProgress = p => bus.emit('ppt-materials', p);
     bus.emit('ppt-materials', { phase: 'connecting' });
-    const openxOn = this.deps.openx !== false && require('../app-update/openx-source').enabled((this.deps.openx && this.deps.openx.env) || process.env);
+    const openxOn = this.deps.openx !== false && require('../app-update/openx-source').active((this.deps.openx && this.deps.openx.env) || process.env);
     let archive = await teamPackFromOpenx(fetch, manifest, this.deps.openx === false ? false : { ...(this.deps.openx || {}), onProgress });
-    // 包文件按 给出清单的源 → 其余源（GitHub → 阿里云高速 → 阿里云）逐个试，都按选定清单的 sha256 核对；
-    // 某个源上包文件 404、断线或内容不对，换下一个源（2026-11-16 审查：原来只从给出清单的源取，失败就报错）。
-    // r60b：按快照没从内源下成，退回在线读到的（较旧的）清单，从原下载源装。
-    // R29：只走内源时不再从外网下载，直接说原因（连不上 → 检查公司网络）。
-    if (!archive && openxOn && require('../app-update/openx-source').onlyChannel((this.deps.openx && this.deps.openx.env) || process.env)) {
+    // 内源没下成直接说原因（连不上 → 检查公司网络），不再从别处下载。
+    if (!archive && openxOn) {
       const reason = require('../app-update/openx-source').userReason(require('../app-update/openx-source').lastReason() || '内源下载失败', { file: `pptutor-materials-${manifest.version}.zip` });
       bus.emit('ppt-materials', { phase: 'error', error: reason });
       throw new Error(`团队素材包暂时下载不了：${reason}`);
     }
-    if (!archive && fallback) ({ base, manifest } = fallback);
-    if (!archive) archive = await teamPackArchive(fetch, manifest, [base, ...packSources(this.deps).filter(u => u !== base)], onProgress,
-      openxOn ? require('../app-update/openx-source').lastReason() || '内源下载失败' : null);
+    if (!archive) archive = await teamPackArchive(fetch, manifest, [base, ...packSources(this.deps).filter(u => u !== base)], onProgress);
     bus.emit('ppt-materials', { phase: 'verifying', message: '正在校验并读取素材…' });
     const stamp = `${process.pid}-${Date.now()}`;
     // 临时文件不用 .pptx 后缀（5.6.2）：公司电脑的文档安全软件会扫描并占住新写出的 Office 文件，

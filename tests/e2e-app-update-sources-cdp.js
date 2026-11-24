@@ -51,10 +51,12 @@ async function runEdition(entryPath, edition) {
     const evidence = await cdp.eval(`(() => { const d=document.querySelector('.app-update-dialog[open]'); const row=d.querySelector('[data-source=openx]'); return { subtitle:d.querySelector('.au-title span').textContent, first:d.querySelector('.au-sources li').dataset.source, row:row.textContent, color:getComputedStyle(row.querySelector('.au-st')).color, phase:window.__appUpdate.state().phase, edition:window.__appUpdate.state().sourceEdition, viewport:innerWidth, pid:null }; })()`);
     assert.equal(evidence.first, 'openx');
     assert.equal(evidence.viewport, 1440);
-    assert.ok(evidence.subtitle.endsWith('内测先锋版 · ' + (edition === 'public' ? '公开版' : '成员版')));
-    assert.ok(evidence.row.includes('内源（公司内网）'));
-    // r56：成员版也真实探测（member-v<版本>），两个版本同一组可能结果。
-    assert.match(evidence.row, /可用，最新 v|连不上：|没有该版本|内源已关闭/);
+    // R35：副标题不再带「公开版 / 成员版」；更新窗只有一行「公司内源」，文案见 core/app-update/source-view.js internalLine。
+    assert.ok(evidence.subtitle.endsWith('内测先锋版'), evidence.subtitle);
+    assert.ok(evidence.row.startsWith('公司内源'), evidence.row);
+    assert.match(evidence.row, /可用，最新 v|连不上公司内源|缺包：|公司内源上暂时没有|内源已关闭|未生效/);
+    assert.equal(await cdp.eval(`document.querySelectorAll('.app-update-dialog[open] .au-sources li').length`), 1);
+    assert.doesNotMatch(await cdp.eval(`document.querySelector('.app-update-dialog[open]').textContent`), /外网源|阿里云|GitHub|放行下载服务器|抢先版/);
     assert.ok(!evidence.row.includes('暂不走内源'));
     evidence.pid = hub.pid;
     evidence.isolation = hub.identityVerified;

@@ -190,17 +190,13 @@ test('一键补齐默认不碰用户的全局 npm；明确点「装到我的全�
   const f = fixture(t);
   const calls = [];
   const prefix = path.join(f.root, 'npm-global');
-  // 用户自己装了一份缺插件的：默认的一键补齐走 Hub 自管目录（这里没有下载源，退到 Hub 目录里的 npm），用户目录不动。
+  // 用户自己装了一份缺插件的：默认的一键补齐只从公司内源装（R35 起不再退到 npm）；这里没有组件源，照实报错，不跑 npm、用户目录不动。
   f.core(f.npm); f.tui(f.npm, { peers: false });
   const env = f.env();
   const hub = await createCliInstaller({ env, npmRun: fakeNpm(calls, prefix) }).install('dsh');
-  assert.equal(hub.tools.dsh.phase, 'done', hub.tools.dsh.error);
-  const installs = calls.filter(a => a[0] === 'install');
-  assert.equal(installs.length, 1);
-  assert.equal(installs[0][2], path.join(f.root, 'tools', 'dsh', 'user-npm'));
-  assert.equal(calls.some(a => a[0] === 'prefix'), false);
+  assert.equal(hub.tools.dsh.phase, 'error');
+  assert.equal(calls.length, 0, '默认一键补齐不跑 npm');
   assert.equal(fs.existsSync(path.join(f.root, f.npm, 'node_modules', '@deepseek-ai', 'dsh-user-questions')), false, '用户目录没被改');
-  assert.equal(profile.diagnoseDshRuntime({}, env).source, 'hub', '装好后用 Hub 那份');
   // 「装到我的全局 npm」且用户已有一份：补进用户那个目录。
   calls.length = 0;
   const fix = await createCliInstaller({ env, npmRun: fakeNpm(calls, prefix) }).install('dsh', { repair: true, target: 'user-global' });
@@ -235,11 +231,17 @@ test('设置里指定了用户全局目录（缺 TUI）：默认「一键补齐�
   const before = fs.readdirSync(path.join(pinned, 'node_modules', '@deepseek-ai'));
   const entry = { cliRoot: pinned };
   assert.equal(profile.diagnoseDshRuntime(entry, env).state, 'configured-incomplete');
+  // R35：默认一键补齐只从内源装、不退到 npm；这里没有组件源，照实报错、不写用户目录。
   const r = await createCliInstaller({ env, getDshEntry: () => entry, npmRun: fakeNpm(calls, path.join(f.root, 'npm-global')) }).install('dsh');
-  assert.equal(r.tools.dsh.phase, 'done', r.tools.dsh.error);
-  const installs = calls.filter(a => a[0] === 'install');
-  assert.equal(installs.length, 1);
-  assert.equal(installs[0][installs[0].indexOf('--prefix') + 1], path.join(f.root, 'tools', 'dsh', 'user-npm'), '装进 Hub 自管目录');
+  assert.equal(r.tools.dsh.phase, 'error');
+  assert.equal(calls.length, 0);
+  assert.deepEqual(fs.readdirSync(path.join(pinned, 'node_modules', '@deepseek-ai')), before, '用户全局目录没被写入');
+  // Hub 自管目录里有一份完整的（真实环境由内源组件装进来）：识别和体检改用它。
+  const hubRoot = path.join(f.root, 'tools', 'dsh', 'user-npm');
+  const hubInstall = await require('../core/cli-tools/npm-fallback').installDshWithUserNpm({ env, run: fakeNpm(calls, path.join(f.root, 'npm-global')), targetRoot: hubRoot });
+  const registry = require('../core/cli-tools/registry'), installed = registry.readInstalled(path.join(f.root, 'tools'));
+  installed.tools.dsh = { version: hubInstall.version, dir: path.relative(path.join(f.root, 'tools'), hubRoot), installedAt: Date.now() };
+  registry.writeInstalled(path.join(f.root, 'tools'), installed);
   assert.deepEqual(fs.readdirSync(path.join(pinned, 'node_modules', '@deepseek-ai')), before, '用户全局目录没被写入');
   assert.equal(fs.existsSync(path.join(pinned, 'node_modules', '@deepseek-harness-tui')), false);
   const d = profile.diagnoseDshRuntime(entry, env);
@@ -326,10 +328,10 @@ test('「装到我的全局 npm」用 npm 全局模式，装完全局目录里�
   const bad = await createCliInstaller({ env: g.env(), npmRun: fakeNpm(calls2, prefix2, { noShim: true }) }).install('dsh', { repair: true, target: 'user-global' });
   assert.equal(bad.tools.dsh.phase, 'error');
   assert.match(bad.tools.dsh.error, /全局命令入口/);
-  // Hub 自管目录仍用局部模式，不带 --global。
+  // 默认一键补齐（Hub 自管目录）不跑 npm（R35：只从公司内源装）。
   const h = fixture(t), calls3 = [];
   await createCliInstaller({ env: h.env(), npmRun: fakeNpm(calls3, prefix) }).install('dsh');
-  assert.equal(calls3.find(a => a[0] === 'install').includes('--global'), false);
+  assert.equal(calls3.length, 0);
 });
 
 // r26a3 复审：A 或 B 里多装一个无关包、核心或界面包升级后，原会话要能恢复，旧拼接目录不能被按时间清掉。

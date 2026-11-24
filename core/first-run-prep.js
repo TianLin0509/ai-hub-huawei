@@ -27,7 +27,7 @@ function layout({ isCompany }) {
   return [
     ['工具', [['codeagent', 'CodeAgent'], ['claude', 'Claude'], ['codex', 'Codex'], ['dsh', 'DSH'], ['git-bash', 'Git Bash'], ['node', 'Node.js'], ['welink', 'WeLink'], ['ppt-doctor', 'PPT Doctor']]],
     ...company,
-    ['网络与更新', [['net-pass', '下载服务器放行'], ['app-update', '更新下载源'], ['sys-proxy', '系统代理']]],
+    ['网络与更新', [['app-update', '一键更新（公司内源）'], ['sys-proxy', '系统代理']]],
     ['本机条件', [['disk', '磁盘空间'], ['data-dir', '数据目录可写'], ['clock', '系统时间']]],
   ].map(([name, rows]) => ({ name, rows: rows.map(([id, label]) => ({ id, label })) }));
 }
@@ -118,14 +118,6 @@ function createPrep({ isCompany, deps, emit = () => {} }) {
     try { await limited(deps.discover(), 12000, null); } catch { /* 找不到时由体检那一行说明 */ }
     const hasCli = !!deps.codeagentFile();
 
-    const netPass = only ? Promise.resolve() : step('net-pass', 30000, async () => {
-      const s = await deps.netPass();
-      if (!s || !s.available) return { status: ST.off, detail: '这个版本不需要' };
-      const blocked = s.hosts.filter(h => h.state === 'blocked');
-      if (blocked.length) return { status: ST.bad, detail: '公司代理拦了下载服务器，自动放行没成功', fixes: blocked.slice(0, 1).map(h => ({ label: '打开放行页', act: 'open-gate', url: h.page })).concat(RECHECK) };
-      const failed = s.hosts.filter(h => h.state === 'error').length;
-      return failed ? { status: ST.warn, detail: `${s.hosts.length} 台里 ${failed} 台暂时连不上，更新时会自动换源`, fixes: [RECHECK] } : { status: ST.ok, detail: `${s.hosts.length} 台都能访问` };
-    });
     const env = (async () => {
       ENV_ROWS.forEach(id => set(id, ST.run, '检查中…'));
       let result = null;
@@ -184,7 +176,6 @@ function createPrep({ isCompany, deps, emit = () => {} }) {
     })();
 
     const network = only ? Promise.resolve() : Promise.all([
-      netPass,
       step('sys-proxy', 5000, async () => { const r = await deps.systemProxy(); return { status: ST.ok, detail: r === 'DIRECT' || !r ? '直连' : '使用系统代理，本机模型通道不经过它' }; }),
       step('clock', 8000, async () => {
         const skew = await deps.clockSkew();

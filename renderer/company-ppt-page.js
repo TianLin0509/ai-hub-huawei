@@ -9,7 +9,7 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   // 装了多个版本的 PPT Doctor（2026-11-07）：页头下方一行提示，点开是版本选择器（renderer/tool-version-picker.js）。
   const toolPicker = require('./tool-version-picker').createToolVersionPicker({ document, ipcRenderer });
-  // r58：PPT Doctor、识别组件、团队素材包的下载按钮旁都显示「下载源：公司内源」。
+  // r58：PPT Doctor、识别组件、团队素材包的下载按钮旁都显示公司内源状态。
   const sourceView = require('./download-source-view');
   async function toolHint() {
     const slot = page?.querySelector('[data-ppt-tool-hint]');
@@ -310,7 +310,7 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
     // 识别组件过旧（r54）：开工前或装配时发现，都只给一个【一键更新】；更新完自动接着做，不再给两个必然失败的重试按钮。
     const component = ['needs_component', 'updating'].includes(job.state), updating = job.state === 'updating';
     const componentActions = component ? `<button type="button" class="pptw-btn pri" data-ppt="conversion-update-component"${updating ? ' disabled' : ''}>${updating ? `正在更新${job.progress ? ' ' + Number(job.progress) + '%' : '…'}` : job.resume === 'build' ? '一键更新并继续' : '一键更新'}</button>` : '';
-    const doctorUpgrade = job.needsDoctorUpgrade ? '<button type="button" class="pptw-btn pri" data-ppt="doctor-install">一键升级 Doctor（内源优先）</button>' + sourceView.slotHtml('ppt-doctor', 'span') : '';
+    const doctorUpgrade = job.needsDoctorUpgrade ? '<button type="button" class="pptw-btn pri" data-ppt="doctor-install">一键升级 Doctor（公司内源）</button>' + sourceView.slotHtml('ppt-doctor', 'span') : '';
     const componentNote = component ? `${sourceView.slotHtml('ppt-ocr', 'span')}<span>只更新 PPT Doctor 的识别组件，不改动 Doctor 本体和素材库；更新完自动继续这张图${job.resume === 'build' ? '（沿用 CodeAgent 已提交的修正）' : ''}。</span>${updating ? require('./download-progress-view').html({ ...(job.download || {}), phase: job.download?.phase || 'connecting', message: job.download?.phase === 'downloading' ? '' : job.step }, { title: '更新识别组件' }) : ''}` : '';
     // 主区：画面 + 当前状态 + 可用操作。AI 处理中画面底部才有流光（只用于 AI 思考中）。
     page.querySelector('[data-ppt-conversion]').innerHTML = `<div class="pptw-conv-main" data-conversion-state="${esc(job.state)}"><div class="pptw-conv-stage${running && !updating ? ' pptw-thinking' : ''}">${preview ? `<img class="pptw-conversion-preview" src="${esc(preview)}" alt="图片转字近似预览">` : '<span class="pptw-empty">识别完成后在这里显示预览</span>'}</div><div class="pptw-conv-status"><b class="${job.state === 'error' ? 'is-error' : ''}">${esc(job.error || job.step || job.state)}</b>${r ? `<span>已生成可编辑PPT · ${esc(r.mode === 'image_fallback' ? 'OCR与图像算法处理，尚未经Agent看图核对' : 'Agent已提交差异')} · 预览为近似效果，需在PowerPoint中复核。</span>${r.pixel_gate?.passed === false ? '<span class="is-warn">质量检查尚未通过，请核对右侧复核项。</span>' : ''}` : ''}${componentNote}</div><div class="pptw-conv-actions">${r ? '<button type="button" class="pptw-btn pri" data-ppt="conversion-open">打开 PPT</button>' : ''}${componentActions}${doctorUpgrade}${recovery}${job.state === 'error' && job.seed && !job.needsDoctorUpgrade ?`<button type="button" class="pptw-btn ${job.needsOutputCheck ? 'sec' : 'pri'}" data-ppt="conversion-retry">${retryLabel}</button><button type="button" class="pptw-btn sec" data-ppt="conversion-fallback">${job.needsOutputCheck ? '已检查产物，用 OCR 初稿装配' : '先用 OCR 初稿装配'}</button>` : ''}</div></div>`;
@@ -320,7 +320,7 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
     page.querySelector('[data-ppt-conv-side]').innerHTML = items.length
       ? `<h3>复核项<span class="pptw-tag amber">${items.length} 项待看</span></h3><ul class="pptw-reviews">${items.map(t => `<li><i aria-hidden="true">!</i><span>${t}</span></li>`).join('')}</ul>`
       : component
-        ? `<h3>需要更新识别组件</h3><p>增强转字（CodeAgent 看图修正后装配可编辑 PPT）要用新版识别组件。这台电脑上的识别组件${job.component?.installed === false ? '还没装' : job.component?.version ? ' v' + esc(job.component.version) + ' 版本较旧' : '版本较旧'}。</p><p>点【${job.resume === 'build' ? '一键更新并继续' : '一键更新'}】后 Hub 自动下载（公司内源优先）、逐个文件校验后换上，完成后自动继续这张图，不用重新选图。</p>${job.error ? `<p class="is-error">${esc(job.error)}</p>` : ''}`
+        ? `<h3>需要更新识别组件</h3><p>增强转字（CodeAgent 看图修正后装配可编辑 PPT）要用新版识别组件。这台电脑上的识别组件${job.component?.installed === false ? '还没装' : job.component?.version ? ' v' + esc(job.component.version) + ' 版本较旧' : '版本较旧'}。</p><p>点【${job.resume === 'build' ? '一键更新并继续' : '一键更新'}】后 Hub 从公司内源自动下载、逐个文件校验后换上，完成后自动继续这张图，不用重新选图。</p>${job.error ? `<p class="is-error">${esc(job.error)}</p>` : ''}`
       : job.state === 'error'
         ? `<h3>没有完成</h3><p>${esc(job.error || '这一步没有完成')}</p>`
         : `<h3>处理进展${running ? '<span class="pptw-dots" aria-hidden="true"><i></i><i></i><i></i></span>' : ''}</h3><ol class="pptw-phases">${PHASES.map(([t, d], k) => `<li class="${k < phase || job.state === 'done' ? 'done' : k === phase ? 'now' : ''}"><b>${t}</b><small>${k === phase && running ? esc(job.step || d) : d}</small></li>`).join('')}</ol>`;
@@ -413,7 +413,7 @@ function createCompanyPptPage({ document, window, ipcRenderer, openSession, hasS
       let ok = false;
       try {
         const r = await ipcRenderer.invoke('components:doctor-install');
-        if (!r?.ok) { notice(r?.error || '安装未完成，可以重试或用镜像下载'); return; }
+        if (!r?.ok) { notice(r?.error || '安装未完成，可以重试'); return; }
         ok = true; bar({ ...(r.state || {}), phase: 'done', message: r.state?.message || 'PPT Doctor 已安装' }); notice('');
         const status = await call('ppt-status'); if (status?.ppt) renderStatus(status.ppt);
       } finally {

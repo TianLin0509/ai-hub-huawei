@@ -3,7 +3,6 @@ const { MeetingCapture } = require('./meeting-capture');
 const { meetingTemplate } = require('./company-meeting-template');
 const { flowEntries, flowStamp, meetingNavigation } = require('./company-meeting-flow');
 const { meetingAsrState } = require('./company-meeting-asr-state');
-const netPassView = require('./net-pass-view');
 function createCompanyMeetingPage({ document, window, call, markdown, openSession }) {
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const time = ms => `${String(Math.floor((ms || 0) / 60000)).padStart(2, '0')}:${String(Math.floor((ms || 0) / 1000) % 60).padStart(2, '0')}`;
@@ -213,12 +212,11 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
       if (el('history').dataset.html !== history) { el('history').innerHTML = history; el('history').dataset.html = history; }
       el('asr').textContent = asr.error || (asr.progress ? '正在安装本地转写组件，可以先录音，装好后自动补转写。' : asr.phase) || (asr.upgrade ? `本地转写可用（旧引擎，较慢）。升级到新引擎更快、中文更准，约 ${asr.sizeText}。` : asr.ready ? `本地转写已就绪 · ${asr.voiceprint ? '自动区分发言人 · ' : ''}CPU 模式` : `首次使用需下载本地转写组件（约 ${asr.sizeText || '300 MB'}，断了可续）；未安装也可先录音，之后补转写。`);
       asrBar(asr.progress);
-      renderAsrPass(asr);
       const speech = meetingAsrState(asr, m);
       el('setup-asr').textContent = speech.setupText;
       el('setup-asr-install').hidden = !speech.install;
       el('setup-asr-install').textContent = speech.installLabel;
-      // r58：本地转写包的下载源标识，最多每分钟刷新一次（render 很频繁）。
+      // r58：本地转写包的内源状态，最多每分钟刷新一次（render 很频繁）。
       if (!(Date.now() - Number(root.dataset.dlSourceAt || 0) < 60000)) { root.dataset.dlSourceAt = String(Date.now()); void require('./download-source-view').fill(root).catch(() => {}); }
       root.querySelectorAll('[data-act="install"]').forEach(button => { button.disabled = speech.installing; });
       if (asr.ready) el('record-only-confirm').hidden = true;
@@ -518,8 +516,6 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
     if(box.dataset.key===key||box.contains(document.activeElement))return; box.dataset.key=key; box.hidden=!list.length;
     box.innerHTML=list.length?`<p>发言人（按声音自动区分；改名后时间流和纪要都用新名字，同一人被分成两位时改成同一个名字）</p>`+list.map(s=>`<label>${esc(s.track==='mic'?'麦克风':'系统声音')} · ${s.n} 句<input data-speaker="${s.id}" maxlength="40" value="${esc(s.name)}" placeholder="发言人${s.id}"></label>`).join(''):'';
   }
-  // 下载被公司代理拦下时，就地给「放行下载服务器」按钮（renderer/net-pass-view.js，和一键更新共用）。
-  let netPass = null, netPassLast = null;
   const ipcRenderer = (() => { try { return require('electron').ipcRenderer; } catch { return null; } })();
   const modelSync = require('./company-meeting-models').createMeetingModelSync({ ipcRenderer,
     onUpdate: () => refresh(),
@@ -539,14 +535,6 @@ function createCompanyMeetingPage({ document, window, call, markdown, openSessio
     if (!asrBusSub && ipcRenderer) asrBusSub = require('./download-progress-view').subscribe('meeting-asr', p => asrBar(p), ipcRenderer);
     const html = progress ? require('./download-progress-view').html(progress, { title: '下载本地转写组件' }) : '';
     root.querySelectorAll('[data-asr-dlp]').forEach(host => { if (host.dataset.html !== html) { host.innerHTML = html; host.dataset.html = html; } });
-  }
-  function renderAsrPass(asr){
-    const slot=el('asr-pass'); if(!slot)return;
-    if(!asr.blocked||!ipcRenderer){slot.hidden=true;slot.innerHTML='';return;}
-    slot.hidden=false; netPassView.ensureCss();
-    if(!netPass){void ipcRenderer.invoke('net-pass:status',{refresh:true}).then(v=>{netPass=v||{hosts:[]};renderAsrPass(state?.asr||{});}).catch(()=>{});return;}
-    const html=netPassView.boxHtml(netPass,{last:netPassLast}); if(slot.dataset.html===html)return; slot.dataset.html=html; slot.innerHTML=html;
-    netPassView.bind(slot,{ipcRenderer,onUpdate:(next,last)=>{if(next)netPass=next;netPassLast=last;slot.dataset.html='';renderAsrPass(state?.asr||{});}});
   }
   // 纪要条目编号（[D2] 等）只给模型对齐用，界面不显示（core/company-assistant/meeting-minutes.js）。
   function plainMinutes(s){return String(s||'').replace(/^(\s*[-*]\s*)\[[TFDAQ]\d{1,3}\]\s*/gm,'$1');}

@@ -44,7 +44,7 @@ test('全都装好：各项为正常，版本和路径写进说明', async () =>
     codeagentVersion: async () => '1.2616.0.0', codeagentCommand: () => 'codeagent',
     resolveDsh: () => ({ root: 'C:\\dsh', modules: 'C:\\dsh\\node_modules' }),
     proxy: () => ({ enabled: true, status: { state: 'running', port: 18080 } }),
-    appUpdate: () => ({ probeSources: async () => ({ sources: [{ id: 'a', name: '阿里云', ok: true, version: '5.5.24' }, { id: 'g', name: 'GitHub', ok: true, version: '5.5.23' }] }) }),
+    appUpdate: () => ({ probeSources: async () => ({ sources: [{ id: 'openx-manifest', name: '公司内源', ok: true, version: '5.5.24' }] }) }),
   });
   const by = Object.fromEntries(r.items.map(i => [i.id, i]));
   for (const id of ['codeagent', 'claude', 'codex', 'dsh', 'git-bash', 'node', 'company-proxy', 'app-update', 'disk', 'data-dir']) assert.ok(by[id], '缺少 ' + id);
@@ -117,16 +117,17 @@ test('WeLink 与 PPT Doctor：没找到是红、登录过期是黄、PPT Doctor 
   assert.equal(by.welink.status, 'ok'); assert.equal(by['ppt-doctor'].status, 'ok'); assert.match(by['ppt-doctor'].detail, /2\.0\.6/);
 });
 
-test('更新源：全部连不上是红，一个连不上是黄；反代各状态', async () => {
+test('一键更新只看公司内源：读不到清单是红并提示查公司网络，读到是绿；反代各状态', async () => {
   const run = (sources, proxyStatus) => envCheck.runEnvCheck({ platform: 'linux', kindAllowed: () => false, setup: fakeSetup({ node: '/n' }), runVersion: async () => ({ ok: true, version: '22.0.0' }),
     appUpdate: () => ({ probeSources: async () => ({ sources }) }), proxy: () => proxyStatus });
-  let r = await run([{ name: 'A', ok: false, reason: '连接超时' }, { name: 'B', ok: false, blocked: true }], { enabled: false, status: { state: 'stopped' } });
+  let r = await run([{ id: 'openx-manifest', name: '公司内源', ok: false, reason: '连接超时' }], { enabled: false, status: { state: 'stopped' } });
   let by = Object.fromEntries(r.items.map(i => [i.id, i]));
-  assert.equal(by['app-update'].status, 'bad'); assert.match(by['app-update'].cause, /确认页/);
+  assert.equal(by['app-update'].status, 'bad'); assert.match(by['app-update'].cause, /公司网络/);
+  assert.doesNotMatch(JSON.stringify(by['app-update']), /下载源|阿里云|GitHub|放行/);
   assert.equal(by['company-proxy'].status, 'off');
-  r = await run([{ name: 'A', ok: true, version: '1.0.0' }, { name: 'B', ok: false, reason: '连接超时' }], { enabled: true, status: { state: 'failed', message: '没能启动' } });
+  r = await run([{ id: 'openx-manifest', name: '公司内源', ok: true, version: '1.0.0' }], { enabled: true, status: { state: 'failed', message: '没能启动' } });
   by = Object.fromEntries(r.items.map(i => [i.id, i]));
-  assert.equal(by['app-update'].status, 'warn');
+  assert.equal(by['app-update'].status, 'ok'); assert.match(by['app-update'].detail, /公司内源连得上 · 最新 v1\.0\.0/);
   assert.equal(by['company-proxy'].status, 'bad'); assert.equal(by['company-proxy'].fixes[0].act, 'proxy-restart');
   r = await run([], { enabled: true, status: { state: 'not-ready', code: 'INITIALIZING' } });
   by = Object.fromEntries(r.items.map(i => [i.id, i]));

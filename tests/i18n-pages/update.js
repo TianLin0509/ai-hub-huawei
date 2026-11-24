@@ -6,7 +6,6 @@ const expandToast = (msg, opts) => `(async () => { ${toast(msg, opts)}; await ne
 const closeToast = "document.getElementById('hub-err-toast')?.remove()";
 module.exports = {
   'update-panel': { open: 'window.__appUpdate && window.__appUpdate.open()', wait: 6000, close: closeDialog('dialog') },
-  'version-picker': { open: "document.getElementById('options-versions')?.click()", wait: 12000, close: closeDialog('dialog.vp-dialog') },
   'whats-new': { open: 'window.__whatsNew && window.__whatsNew.open()', wait: 1500, close: closeDialog('dialog') },
   'env-check': { open: 'window.__envCheck && window.__envCheck.open()', wait: 15000, close: closeDialog('dialog') },
   'env-components': { open: 'window.__componentCenter && window.__componentCenter.open()', wait: 6000, close: closeDialog('dialog') },

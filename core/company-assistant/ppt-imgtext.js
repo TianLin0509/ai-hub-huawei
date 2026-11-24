@@ -77,7 +77,7 @@ class PptImgtext {
     return this.snapshot(id);
   }
   async runUpdate(job) {
-    const off = this.ppt.ocr.onState?.(s => { if (job.state === 'updating') { job.step = s.message || job.step; job.progress = s.percent || 0; job.download = { phase: s.phase, received: s.received, total: s.total, speed: s.speed, etaSec: s.etaSec, sourceId: s.sourceId, sourceName: s.sourceName, openxMiss: s.openxMiss || null }; this.a.changed(); } });
+    const off = this.ppt.ocr.onState?.(s => { if (job.state === 'updating') { job.step = s.message || job.step; job.progress = s.percent || 0; job.download = { phase: s.phase, received: s.received, total: s.total, speed: s.speed, etaSec: s.etaSec, sourceId: s.sourceId, sourceName: s.sourceName }; this.a.changed(); } });
     let result;
     try { result = await this.ppt.ocr.install(); }
     catch (error) { result = { phase: 'error', error: error.message }; }

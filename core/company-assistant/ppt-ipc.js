@@ -58,7 +58,6 @@ function createPptHandlers(service) {
       service.setSettings({ ppt: { doctorExe: r.filePaths[0] } });
       return { ok: true, ppt: await service.ppt.refresh({ force: true }) };
     },
-    'ppt-download-doctor': request => require('./ppt-doctor-download').downloadDoctor(request?.source || 'mirror', service.deps),
     'ppt-pick-image': async () => {
       const { dialog } = require('electron');
       const r = await dialog.showOpenDialog({ title: '选择要转为可编辑PPT的图片', properties: ['openFile'], filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] }] });

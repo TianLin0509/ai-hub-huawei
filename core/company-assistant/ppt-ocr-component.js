@@ -15,7 +15,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { randomUUID } = require('node:crypto');
 
-// 成员版按这里的顺序（阿里云高速在前）；公开版内源生效时下载器先试内源，再按 GitHub → 阿里云 排序。
+// 下载只走公司内源（R29/R35）；这组地址只在内源不生效时（纯 Node 单测、测试注入）使用。
 const OCR_SOURCES = Object.freeze([
   'https://dl.lt-stockpartner.tech/pptutor/ocr/',
   'https://me.lt-stockpartner.tech/pptutor/ocr/',
@@ -48,10 +48,7 @@ function validManifest(m) {
 }
 
 function sources(deps = {}) {
-  const list = deps.urls || OCR_SOURCES;
-  const env = deps.env || process.env, openxSource = require('../app-update/openx-source');
-  if (deps.openx === false || !openxSource.enabled(env) || !openxSource.publicOrder(env)) return list;
-  return require('../app-update/downloader').orderSources(list.map(url => ({ url }))).map(s => s.url);
+  return deps.urls || OCR_SOURCES;
 }
 
 // R29 审查 #1：只走内源时读程序自带的清单快照（scripts/refresh-bundled-manifests.js 发版时刷新），不去外网读、不弹放行窗。
@@ -61,7 +58,7 @@ function bundledManifest(file = SNAPSHOT_FILE) {
 }
 
 async function fetchManifest(fetch, deps = {}) {
-  if (deps.openx !== false && require('../app-update/openx-source').onlyChannel(deps.env || process.env)) {
+  if (deps.openx !== false && require('../app-update/openx-source').active(deps.env || process.env)) {
     try { return bundledManifest(deps.snapshotFile); }
     catch (error) { throw new Error(`这个版本没带上识别组件清单（${error.code === 'ENOENT' ? '找不到清单文件' : error.message}），升级 Hub 后再试；一直如此请点「一键反馈」`); }
   }
@@ -147,7 +144,7 @@ function createOcrComponentInstaller(deps = {}) {
     const fetch = require('../own-gate').gatedFetch(require('./fetch-util').resolveFetch(deps.fetchImpl));
     const root = doctorDataDir(env), target = path.join(root, 'ocr');
     const job = path.join(root, '.hub-ocr-' + randomUUID());
-    set({ phase: 'checking', message: '正在读取识别组件清单…', error: null, received: 0, total: 0, percent: 0, speed: 0, etaSec: null, sourceId: null, sourceName: null, openxMiss: null });
+    set({ phase: 'checking', message: '正在读取识别组件清单…', error: null, received: 0, total: 0, percent: 0, speed: 0, etaSec: null, sourceId: null, sourceName: null });
     try {
       // 内源优先：读清单的同时先在后台探测内源版本列表，第一个请求就打到内源；随后下载包时内源状态已知。
       if (deps.openx !== false) require('../app-update/openx-source').prewarm({ ...(deps.openx || {}), env, fetchImpl: fetch });
@@ -161,7 +158,7 @@ function createOcrComponentInstaller(deps = {}) {
         openx: deps.openx === false ? false : { release: `ocr-${version}`, env, ...(deps.openx || {}) },   // 探测预算用内源默认的 3 秒
         expect: { file: openxFile(version), bytes: ar.size, sha256: ar.hash },
         dest: path.join(job, 'component.zip'), fetchImpl: fetch, signal,
-        onProgress: p => set({ received: p.received, total: p.total, speed: p.speed, etaSec: p.etaSec, sourceId: p.sourceId, sourceName: p.sourceName, openxMiss: p.openxMiss || null, percent: p.total ? Math.min(99, Math.floor(p.received / p.total * 100)) : 0,
+        onProgress: p => set({ received: p.received, total: p.total, speed: p.speed, etaSec: p.etaSec, sourceId: p.sourceId, sourceName: p.sourceName, percent: p.total ? Math.min(99, Math.floor(p.received / p.total * 100)) : 0,
           message: `正在下载识别组件 v${version} ${p.total ? Math.min(99, Math.floor(p.received / p.total * 100)) + '%' : ''}${p.sourceName ? '（' + p.sourceName + '）' : ''}` }) });
       if (!result.ok) throw new Error(result.cancelled ? '已取消' : '识别组件下载失败：' + (require('../app-update/bundled-catalog').onlyFailReason(result) || (result.attempts || []).map(a => `${a.name}：${a.reason}`).join('；')));
       if (signal.aborted) throw new Error('已取消');

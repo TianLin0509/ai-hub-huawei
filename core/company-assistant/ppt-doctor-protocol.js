@@ -6,7 +6,6 @@ const API_VERSION = 1;
 const DOWNLOAD_URL = 'https://me.lt-stockpartner.tech/pptutor/manifest.json';
 // 镜像下载按顺序试：高速下载镜像（2026-11-07，每 5 分钟从旧阿里云同步）→ 旧阿里云。
 const MIRROR_MANIFEST_URLS = Object.freeze(['https://dl.lt-stockpartner.tech/pptutor/manifest.json', DOWNLOAD_URL]);
-const GITHUB_DOWNLOAD_URL = 'https://github.com/TianLin0509/PPTutor/releases/latest';
 const READ_ONLY = new Set(['status', 'catalog', 'search', 'read', 'report']);
 const failure = (code, message, fields = {}) => Object.assign(new Error(message), { code, ...fields });
 const retryRead = fn => process.platform === 'win32' ? require('../fs-rename-retry').wrapSync(fn) : fn;
@@ -35,4 +34,4 @@ function validateResult(result, requestId, action, exitCode) {
   if (result.ok !== true) throw failure('DOCTOR_INVALID_RESPONSE', 'PPT Doctor 没有明确确认操作成功，请重试');
   return result;
 }
-module.exports = { API_VERSION, DOWNLOAD_URL, MIRROR_MANIFEST_URLS, GITHUB_DOWNLOAD_URL, READ_ONLY, failure, readJson, matchEnvelope, validateResult };
+module.exports = { API_VERSION, DOWNLOAD_URL, MIRROR_MANIFEST_URLS, READ_ONLY, failure, readJson, matchEnvelope, validateResult };

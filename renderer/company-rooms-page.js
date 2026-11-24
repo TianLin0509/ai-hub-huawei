@@ -328,13 +328,11 @@ function createCompanyRoomsPage({ document, window, ipcRenderer, closeOtherPanel
       const available = state.available || d.installed;
       // r59：统一进度条（进度、速度、剩余时间、来源）。
       const progress = d.phase === 'downloading' ? require('./download-progress-view').html({ ...d, total: d.total || d.bytes || 0 }, { title: '下载会议室组件' }) : '';
-      const blocked = d.attempts?.find(a => a.blocked && a.url);
       const message = state.error || d.error || (state.loginNeeded ? '会议室网页登录已失效，请重新登录。' : state.connected ? '控制组件需要更新，请停止任务后重新接通。' : state.preparing ? '正在准备组件，首次可能需要约 2 分钟。' : available ? '会议室组件已就绪，接通后即可操作。' : '首次使用需下载约 77 MB 的会议室组件，无需另外安装秘书终结者。');
-      connection.dataset.tone = state.error || d.error || state.loginNeeded || blocked ? 'warn' : 'info';
-      connection.innerHTML = `<span>${escape(message)}${progress}${blocked ? `<br>公司网络拦截了下载。<button type="button" class="cr-btn-sm" data-room-open-pass="${escape(blocked.url)}">打开放行页</button>` : ''}</span>${state.loginNeeded ? button('login', '打开登录', 'sec', 'cr-btn-sm') : available ? button('connect', '重新接通', 'sec', 'cr-btn-sm') : button('install', d.error ? '重新下载会议室组件' : '下载会议室组件', 'sec', 'cr-btn-sm')}`;
-      // r58：会议室组件还要下载时，旁边显示「下载源：公司内源」。
+      connection.dataset.tone = state.error || d.error || state.loginNeeded ? 'warn' : 'info';
+      connection.innerHTML = `<span>${escape(message)}${progress}</span>${state.loginNeeded ? button('login', '打开登录', 'sec', 'cr-btn-sm') : available ? button('connect', '重新接通', 'sec', 'cr-btn-sm') : button('install', d.error ? '重新下载会议室组件' : '下载会议室组件', 'sec', 'cr-btn-sm')}`;
+      // r58：会议室组件还要下载时，旁边显示公司内源状态。
       if (!d.installed) { connection.insertAdjacentHTML('beforeend', require('./download-source-view').slotHtml('room-runtime', 'span')); void require('./download-source-view').fill(connection, { ipcRenderer }); }
-      connection.querySelector('[data-room-open-pass]')?.addEventListener('click', event => { event.currentTarget.disabled = true; const b = event.currentTarget; void ipcRenderer.invoke('net-pass:open-window', b.dataset.roomOpenPass).then(() => window.__hubToast?.('放行页已打开：放行后回来点「重新下载」'), error => { b.disabled = false; window.__hubToast?.('放行页没打开：' + (error?.message || '未知原因')); }); });
     }
     if (tab === 'overview') {
       const tgt = effTarget(), after = `开放日 ${sched().advanceDays} 天后`;

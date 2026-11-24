@@ -37,7 +37,7 @@ async function main() {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}/`;
   const dataDir = path.join(fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'boot-splash-e2e-')), 'data');
-  const env = { AI_HUB_BOOT_SPLASH: '1', AI_HUB_OPENX_ONLY: '0', // 本地夹具源：关掉只走内源（R29）
+  const env = { AI_HUB_BOOT_SPLASH: '1', AI_HUB_OPENX: '0', // 本地夹具源：内源不生效，按夹具源走（R35）
     AI_HUB_BOOT_SPLASH_SOURCES: JSON.stringify([{ id: 'fixture', name: '本地夹具', manifest: base + 'catalog.json', files: base }]) };
   const shots = [];
   let hub, cdp;

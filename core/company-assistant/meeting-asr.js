@@ -51,10 +51,10 @@ class MeetingAsr {
     if (this.engine() === 'sensevoice') return this.status();
     this.closed = false; this.error = ''; this.blocked = false; this.phase = '准备下载本地转写组件';
     // r59：结构化进度给统一进度条（已下/总量/速度/剩余/来源），phase 文本照旧留给旧界面和日志。
-    this.progress = { phase: 'connecting', message: '正在连接下载源…' };
+    this.progress = { phase: 'connecting', message: '正在连接…' };
     this.installing = this.installPack()
       .then(() => { this.phase = ''; this.progress = null; })
-      .catch(e => { this.phase = ''; this.progress = null; this.error = e.blocked ? '下载被公司网络拦下了：先点下面「放行下载服务器」，放行后再点「重新安装」。' : '安装未完成，可重试：' + e.message; this.blocked = !!e.blocked; })
+      .catch(e => { this.phase = ''; this.progress = null; this.error = e.blocked ? '下载被公司网络拦下了：先点主界面底栏的「一键放行」，放行后再点「重新安装」。' : '安装未完成，可重试：' + e.message; this.blocked = !!e.blocked; })
       .finally(() => { this.installing = null; });
     return this.status();
   }
@@ -73,11 +73,11 @@ class MeetingAsr {
         if (this.closed) throw new Error('Hub 已关闭，安装已中断');
         this.abort = new AbortController();
         const result = await downloadWithFallback({ gate: true, sources: this.sources, version: this.pack.version, dest: file,
-          openx: { release: `meeting-asr-${this.pack.version}`, unknownBudgetMs: 6000, maxMs: 6000 }, fetchImpl: doFetch, signal: this.abort.signal,
+          openx: { release: `meeting-asr-${this.pack.version}` }, fetchImpl: doFetch, signal: this.abort.signal,
           expect: { file: part.file, bytes: part.size, sha256: part.sha256 },
           onProgress: p => { const got = done + p.received, rate = (fetched + p.received) / Math.max(1, (Date.now() - started) / 1000); this.phase = `下载本地转写组件 ${fmtBytes(got)} / ${fmtBytes(total)}${fetched + p.received > 2 * 1024 * 1024 ? ' · 还要' + minutes((total - got) / rate) : ''} · ${p.sourceName}`;
             this.progress = { phase: 'downloading', received: got, total, speed: p.speed, etaSec: fetched + p.received > 2 * 1024 * 1024 ? Math.round((total - got) / rate) : null,
-              sourceId: p.sourceId, sourceName: p.sourceName, openxMiss: p.openxMiss || null };
+              sourceId: p.sourceId, sourceName: p.sourceName };
             require('../app-update/progress-bus').emit('meeting-asr', this.progress); } });
         fetched += part.size;
         if (!result.ok) {

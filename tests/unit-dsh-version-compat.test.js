@@ -64,21 +64,15 @@ function mockNpm(f) {
   };
   return { calls, run };
 }
-test('DSH failed component route retries once via npm and keeps user registry/proxy settings', async t => {
+test('R35：DSH 组件下载失败不再自动改走 npm，照实报错、npm 一次都不启动', async t => {
   const f = fixture(t), m = mockNpm(f), states = [];
   const env = { ...process.env, AI_HUB_CLI_TOOLS_DIR: path.join(f.root, 'tools'), NPM_CONFIG_REGISTRY: 'https://user-source.invalid/', HTTPS_PROXY: 'http://user-proxy.invalid:8080' };
   const installer = createCliInstaller({ env, npmRun: m.run, onState: state => states.push(state) });
   const result = await installer.install('dsh');
-  assert.equal(result.tools.dsh.phase, 'done');
-  assert.equal(result.tools.dsh.source, 'user-npm');
-  assert.equal(states.some(s => s.tools.dsh.phase === 'npm-fallback'), true);
-  const target = path.join(env.AI_HUB_CLI_TOOLS_DIR, 'dsh', 'user-npm');
-  assert.deepEqual(m.calls.map(c => c.args), [ ['view', '@deepseek-ai/dsh', 'version'], ['view', '@deepseek-ai/dsh-tui@0.3.0', 'version', 'peerDependencies', '--json'], ['install', '--prefix', target, '@deepseek-ai/dsh@0.3.0', '@deepseek-ai/dsh-tui@0.3.0'] ]);
-  assert.equal(require('../core/cli-tools/registry').managedDshRoot(env), target);
-  assert.equal(m.calls.every(c => c.options.env === env), true);
-  assert.equal(env.NPM_CONFIG_REGISTRY, 'https://user-source.invalid/');
-  assert.equal((await installer.install('codex')).tools.codex.phase, 'error');
-  assert.equal(m.calls.length, 3, 'normal other CLI installation never changes route');
+  assert.equal(result.tools.dsh.phase, 'error');
+  assert.ok(result.tools.dsh.error);
+  assert.equal(states.some(s => s.tools.dsh.phase === 'npm-fallback'), false);
+  assert.equal(m.calls.length, 0, '不跑 npm');
 });
 test('explicit DSH repair fixes the user npm install directly, without a component mirror', async t => {
   const f = fixture(t), m = mockNpm(f);
@@ -253,7 +247,7 @@ test('missing dependency error includes paired-install hint and adjacent existin
 // 一行写清原因和能照抄的手动安装命令；版本取自程序自带的组件快照。
 test('only-internal-source: DSH missing on the internal source fails fast with a manual npm command, npm is never launched', async t => {
   const f = fixture(t), calls = [];
-  const env = { AI_HUB_CLI_TOOLS_DIR: path.join(f.root, 'tools'), AI_HUB_OPENX: '1', AI_HUB_OPENX_ONLY: '1', PATH: '', USERPROFILE: f.root, HOME: f.root };
+  const env = { AI_HUB_CLI_TOOLS_DIR: path.join(f.root, 'tools'), AI_HUB_OPENX: '1', PATH: '', USERPROFILE: f.root, HOME: f.root };
   require('../core/app-update/openx-source')._reset();
   t.after(() => require('../core/app-update/openx-source')._reset());
   const installer = createCliInstaller({ env, sources: [], npmRun: async args => { calls.push(args); return ''; }, nodeUsable: async () => ({ ok: true }),
@@ -293,7 +287,7 @@ test('R37 审查 #2：手动命令只收合法包名，版本用 semver 归一�
 
 test('R37 审查 #4：只走内源时是前置 Node 没装上，照实报 Node 的原因，不给 DSH 手动命令、也不跑 npm', async t => {
   const f = fixture(t), calls = [];
-  const env = { AI_HUB_CLI_TOOLS_DIR: path.join(f.root, 'tools'), AI_HUB_OPENX: '1', AI_HUB_OPENX_ONLY: '1', PATH: '', USERPROFILE: f.root, HOME: f.root };
+  const env = { AI_HUB_CLI_TOOLS_DIR: path.join(f.root, 'tools'), AI_HUB_OPENX: '1', PATH: '', USERPROFILE: f.root, HOME: f.root };
   require('../core/app-update/openx-source')._reset();
   t.after(() => require('../core/app-update/openx-source')._reset());
   const installer = createCliInstaller({ env, sources: [], npmRun: async args => { calls.push(args); return ''; },

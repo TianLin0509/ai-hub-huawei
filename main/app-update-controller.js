@@ -1,5 +1,5 @@
 'use strict';
-// 一键更新的主进程控制器（2026-10-13，公司版）：查版本 → 下载（多源自动切换）→ 暂存 → 用户点「立即重启」替换。
+// 一键更新的主进程控制器（2026-10-13，公司版）：查版本 → 从公司内源下载 → 暂存 → 用户点「立即重启」替换。
 // 只有发行目标写了 update（community-edition.json）才会创建；主仓库和公开社区版没有这个入口。
 // 状态全部推给渲染进程（app-update:state），界面照着画。
 const fs = require('fs');
@@ -18,8 +18,6 @@ const PERIODIC_CHECK_MS = 6 * 60 * 60 * 1000;
 const QUIET_OFF_FILE = 'quiet-updates-off.flag';
 // 上一轮升级留下的进度与标记，多久没动过算残留（r43）。
 const STALE_UPGRADE_MS = 10 * 60 * 1000;
-const canary = require('../core/app-update/canary');
-const catalogLib = require('../core/app-update/version-catalog');
 const openxSource = require('../core/app-update/openx-source');
 
 function resolveFetch(fetchImpl) {
@@ -31,7 +29,6 @@ function resolveFetch(fetchImpl) {
   return globalThis.fetch;
 }
 
-// 测试用 AI_HUB_UPDATE_SOURCES（JSON 数组）把源换成本机服务；否则用发行目标里写的。
 // 程序更新包的内源查找参数（r56）：公开版按文件名在公开版版本里找；成员版只精确查 member-v<版本>（strict）。
 function appOpenxOptions(version, editionOn = require('../core/app-update/openx-source').EDITION_ON) {
   if (editionOn) return {};
@@ -44,6 +41,7 @@ function portableZipName(installerFile, version) {
   return m && m[2] === String(version) ? `${m[1]}-${m[2]}-win-x64.zip` : installerFile;
 }
 
+// 测试用的更新源（R35）：内源生效时一律不用；单测直接传 config.sources，e2e 用 AI_HUB_UPDATE_SOURCES（JSON 数组）换成本机服务。
 function resolveSources(config, env) {
   if (env.AI_HUB_UPDATE_SOURCES) {
     const list = JSON.parse(env.AI_HUB_UPDATE_SOURCES);
@@ -55,9 +53,6 @@ function resolveSources(config, env) {
 }
 
 function createAppUpdateController({ app, config, dataDir, currentVersion, sendToRenderer = () => {}, logger = console,
-  // 自家阿里云被公司网络放行页拦住时：在看不见的窗口里自动放行一次再重试（core/net-unblock.js，2026-10-29 用户选默认开、无感）。
-  // unblock(url) → 是否点到了放行按钮；isOwnUrl(url) → 是不是自家地址（GitHub 被拦不碰）。
-  unblock = null, unblockInteractive = null, isOwnUrl = () => false, unblockPassed = () => {},
   // 内源版本清单验签用的公钥（只给单测换测试密钥；正式运行用 core/app-update/manifest-signing.js 内置公钥）。
   manifestPublicKey,
   env = process.env, fetchImpl, resourcesPath = process.resourcesPath, isPackaged = !!(app && app.isPackaged), spawnImpl = spawn,
@@ -74,28 +69,24 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   // 本机是不是免安装版（zip 解压即用，目录里没有卸载程序）：完整安装包会装到另一处，原目录仍是旧版（O②）。测试可注入。
   portableCopy = null }) {
   const productName = () => { try { return (config && config.productName) || (isPackaged && app && typeof app.getName === 'function' && app.getName()) || 'AI Hub'; } catch (_) { return 'AI Hub'; } };
-  // 老用户本机存的抢先版开关（它的源由外网源推出）也按「关」处理，不报错。版本清单只从内源读（签名清单，fetchManifest）。
-  const only = () => openxSource.onlyChannel(env);
+  // R29/R35（2026-11-24 用户定）：程序更新只走公司内源，版本清单只从内源读（签名清单，fetchManifest）；
+  // 只有测试（纯 Node 单测、AI_HUB_UPDATE_SOURCES 注入本机服务）才用 sources。
+  const only = () => openxSource.active(env);
   const effectiveSources = next => (only() ? [] : resolveSources(next, env));
-  const withPreview = base => (previewEnabled && !only() ? [...canary.previewSources(base), ...base] : base);
-  let baseSources = effectiveSources(config);
-  let previewEnabled = !only() && canary.read(dataDir).enabled === true;
-  let sources = withPreview(baseSources);
+  let sources = effectiveSources(config);
   let allowSame = !!(config && config.switchEdition);
-  const releasePage = only() ? '' : (config && config.releasePage) || '';
   const sourceEdition = openxSource.EDITION_ON ? '公开版' : '成员版';
   // r56：两个版本都真实探测内源；成员版只看 member-v<版本>（与下载时的 appOpenxOptions 同一口径）。
   const initialInternalSource = () => ({ id: 'openx', name: '内源（公司内网）', informational: true, ok: false, status: 'unknown', reason: '等待检查' });
   const probeInternalSource = async (version, file, timeoutMs) => openxSource.probe({ version, file, fetchImpl: resolveFetch(fetchImpl), env, timeoutMs,
     ...(openxSource.EDITION_ON ? {} : { strict: true, release: version ? openxSource.memberReleaseName(version) : undefined }) });
-  let state = { phase: 'idle', current: currentVersion, sourceEdition, internalSource: initialInternalSource(), sources: sources.map(s => ({ id: s.id, name: s.name })), releasePage, openxOnly: only(), previewSupported: !only(), canApply: isPackaged || env.AI_HUB_UPDATE_FORCE_APPLY === '1' };
+  let state = { phase: 'idle', current: currentVersion, sourceEdition, internalSource: initialInternalSource(), canApply: isPackaged || env.AI_HUB_UPDATE_FORCE_APPLY === '1' };
   let manifest = null, plan = null, abort = null, checkAbort = null, staged = null, checking = null, lastResult = null, timer = null;
   const quietTried = new Set();
   let skipQuitApply = false;
   const quietOffFile = () => path.join(stagingPaths(dataDir).root, QUIET_OFF_FILE);
-  const quietEnabled = () => { if (!quietDelivery && !(previewEnabled && canary.read(dataDir).enabled === true)) return false; try { return !fs.existsSync(quietOffFile()); } catch (_) { return true; } };
-  // rsi-e：外网清单（GitHub、阿里云）全部读不到时，再从公司内源读同一份 latest.json（core/app-update/openx-source.js fetchManifest）。
-  // 公司网络拦了阿里云、又没外网权限的同事以前「检查更新」永远报错；有任一外网源能读到时完全不走这里。
+  const quietEnabled = () => { if (!quietDelivery) return false; try { return !fs.existsSync(quietOffFile()); } catch (_) { return true; } };
+  // 从公司内源读签名的 latest.json（core/app-update/openx-source.js fetchManifest）；测试源已读到时不走这里。
   // 内源清单要验签、版本不低于当前，总共最多 8 秒（budgetMs 可再收紧，如环境体检只给剩余时间）。
   const withInternalManifest = async (results, signal, budgetMs) => {
     if (results.some(r => r.ok) || (signal && signal.aborted)) return results;
@@ -107,18 +98,16 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     }
     catch (error) { logger.warn?.('[app-update] 内源版本清单兜底出错：', error.message); return results; }
   };
-  // 只走内源时查不到清单：说清原因（连不上 → 检查公司网络；内源上还没有 → 稍后再试）。
+  // 查不到清单：说清原因（连不上 → 检查公司网络；内源上还没有 → 稍后再试）。
   const noManifestError = results => {
     const r = (results || []).find(x => x && x.id === 'openx-manifest');
     return '查不到新版本：' + openxSource.userReason(r ? r.reason : '内源连不上', { file: '版本清单' });
   };
-  // 只走内源时下载没成：说清原因，不再提发布页或别的下载源。
+  // 下载没成：说清原因和下一步。
   const openxOnlyDownloadError = result => {
     const a = ((result && result.attempts) || []).find(x => x && x.status === 'failed' && x.reason);
     return '更新包下载没有完成：' + (a ? a.reason : openxSource.userReason('内源连不上'));
   };
-  // 查版本时清单里就是这一版的源：下载先走它们，查不到或版本不同的源只留作后备，免得先报一次 404（旧 GitHub 库改私有后实测，2026-10-28）。
-  let confirmedIds = [];
 
   try { lastResult = takeLastResult(dataDir); } catch (error) { logger.warn?.('[app-update] 读取上次结果失败：', error.message); }
   // 关 Hub 时顺手替换没成（O）：这一版不再后台反复下、反复试，改由界面挂点提醒用户手动更新。
@@ -159,13 +148,8 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     try { return !require('../core/portable-desktop-shortcut').isInstalledCopy(process.execPath); } catch (_) { return false; }
   };
   state.portable = isPortable();
-  state.previewEnabled = previewEnabled;
-  // 固定版本（回退后）：自动更新与更新提醒暂停；回退没换上就清掉固定并告诉用户（version-catalog.js）。
-  let pinned = null, versionList = null;
-  try { const settled = catalogLib.settlePin(dataDir, currentVersion, lastResult); pinned = settled.pin; if (settled.failed) state.rollbackFailed = { version: settled.failed.version }; }
-  catch (error) { logger.warn?.('[app-update] 读取固定版本失败：', error.message); }
-  state.pinned = pinned;
-  try { const rr = catalogLib.readRestoreResult(dataDir); if (rr && Date.now() - Date.parse(rr.at) < 24 * 3600 * 1000) state.restoreResult = rr; } catch (_) {}
+  // R35：版本回退与「固定在当前版本」已随外网版本列表一起删掉；以前固定过版本的，清掉固定，恢复跟随最新版。
+  try { fs.rmSync(path.join(dataDir, 'app-update', 'pinned-version.json'), { force: true }); } catch (_) {}
 
   // 界面看到的 = 控制器状态 + 等待重启的状态（读不到就当没在等）。
   const view = () => { let wait = null; try { wait = restartWait() || null; } catch (_) {} return { ...state, restartWait: wait }; };
@@ -190,11 +174,6 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
 
   async function check({ silent = false, quietAllowed = silent } = {}) {
     if (checking) return checking;
-    // 固定在旧版时：后台不查、不提醒、不静默下载；用户在版本页点「回到最新版」才恢复。
-    if (pinned && silent) return state;
-    // An administrator may set the same local preference through the existing managed command facility.
-    const preferred = !only() && canary.read(dataDir).enabled === true;
-    if (preferred !== previewEnabled && !['downloading', 'ready'].includes(state.phase)) setPreviewEnabled(preferred);
     if (state.phase === 'ready' && state.quiet && silent) {
       let discarded = false;
       checking = revalidateQuiet().then(result => { discarded = result; return state; }).finally(() => { checking = null; checkAbort = null; });
@@ -207,27 +186,19 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       if (!silent) emit({ phase: 'checking', error: null });
       const fetchFn = resolveFetch(fetchImpl);
       checkAbort = new AbortController();
-      // R29：只走内源时不查外网清单，直接读内源上的签名清单；用户点「检查更新」要真的再连一次内源。
+      // 直接读内源上的签名清单；用户点「检查更新」要真的再连一次内源。
       if (only()) openxSource.clearDown();
       let results = only() ? [] : await checkManifests({ sources, fetchImpl: fetchFn, validate: validateManifest, signal: checkAbort.signal });
       if (checkAbort.signal.aborted) return emit({ phase: 'idle', error: null });
-      const blockedOwn = results.find(r => r.blocked && !r.ok && isOwnUrl(r.url));
-      if (blockedOwn && unblock && await tryUnblock(blockedOwn.url)) {
-        results = await checkManifests({ sources, fetchImpl: fetchFn, validate: validateManifest, signal: checkAbort.signal });
-        if (checkAbort.signal.aborted) return emit({ phase: 'idle', error: null });
-        // 放行成功：清掉放行器的连续失败计数（不然累计 3 次就进 30 分钟冷却）
-        if (results.some(r => r.ok && r.id === blockedOwn.id)) { try { unblockPassed(); } catch (_) {} }
-      }
       results = await withInternalManifest(results, checkAbort.signal);
       if (checkAbort.signal.aborted) return emit({ phase: 'idle', error: null });
-      const checks = results.map(r => ({ id: r.id, name: r.name, ok: r.ok, version: r.ok ? r.manifest.version : null, reason: r.reason || null,
-        ...(r.blocked ? { blocked: true, url: r.url } : {}) }));
+      const checks = results.map(r => ({ id: r.id, name: r.name, ok: r.ok, version: r.ok ? r.manifest.version : null, reason: r.reason || null }));
       const best = results.filter(r => r.ok).sort((a, b) => compareVersions(b.manifest.version, a.manifest.version))[0];
       const internalSource = await probeInternalSource(best?.manifest.version, best && [best.manifest.incremental?.file, best.manifest.incrementalDelta?.file, best.manifest.installer?.file].filter(Boolean));
       if (checkAbort.signal.aborted) return emit({ phase: 'idle', error: null });
       checks.unshift(internalSource);
       // R29 审查 #4：内源上最新的有效清单比本机还旧（本机装了更新的包）——就是已是最新，不报错。
-      const olderRow = !best && only() ? results.find(r => r && r.id === 'openx-manifest' && r.older) : null;
+      const olderRow = !best ? results.find(r => r && r.id === 'openx-manifest' && r.older) : null;
       if (olderRow) {
         manifest = null; plan = null;
         const row = checks.find(c => c.id === 'openx-manifest');
@@ -237,8 +208,6 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       if (!best) return emit({ phase: silent ? 'idle' : 'error', checks, internalSource, checkedAt: new Date().toISOString(),
         error: only() ? noManifestError(results) : '所有更新源都连不上，暂时查不到新版本', silentFailure: silent });
       manifest = best.manifest;
-      if (manifest.canary && manifest.version === currentVersion && previewEnabled) canary.write(dataDir, { releaseSha: manifest.canary.sha, releaseVersion: currentVersion });
-      confirmedIds = results.filter(r => r.ok && compareVersions(r.manifest.version, manifest.version) === 0).map(r => r.id);
       // 能核对本机文件时才走小包（开发运行、没打包又没指定 resources 时无从核对）。
       const resDir = isPackaged || env.AI_HUB_UPDATE_RESOURCES ? (env.AI_HUB_UPDATE_RESOURCES || resourcesPath) : null;
       let runtime;
@@ -270,7 +239,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       if (plan.kind === 'incremental' && resDir && state.canApply) { try { protectedDir = !canWriteDir(resDir); } catch (_) { protectedDir = false; } }
       plan = { ...plan, variant, asset, silent: unattended, ...(portableFull ? { portable: true } : {}), ...(protectedDir ? { protectedDir: true } : {}) };
       const checked = emit({ phase: plan.kind === 'none' ? 'none' : 'available', checks, internalSource, checkedAt: new Date().toISOString(), error: null,
-        latest: { version: manifest.version, notes: manifest.notes, publishedAt: manifest.publishedAt, sourceName: best.name, installer: manifest.installer, notify: isNotableUpdate(currentVersion, manifest.version), canary: manifest.canary || null },
+        latest: { version: manifest.version, notes: manifest.notes, publishedAt: manifest.publishedAt, sourceName: best.name, installer: manifest.installer, notify: isNotableUpdate(currentVersion, manifest.version) },
         plan: { kind: plan.kind, variant: plan.variant, reason: plan.reason, silent: plan.silent, bytes: plan.asset ? plan.asset.bytes : 0, file: plan.asset ? plan.asset.file : null,
           ...(plan.portable ? { portable: true } : {}), ...(plan.protectedDir ? { protectedDir: true } : {}) } });
       // quietPending（Codex 审查 P2-4）：这一版会不会由后台送达。界面据此决定小版本挂不挂点——送不到（下载失败、远程停更、
@@ -310,8 +279,6 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     emit({ quiet: true });
     try {
       const result = await download();
-      // 下载途中用户固定了版本（审查 P2-4）：下好的静默包直接丢弃，不留到退出时替换。
-      if (pinned) { staged = null; return void emit({ phase: 'idle', quiet: false, error: null }); }
       if (result.phase !== 'ready') { logger.warn?.('[app-update] 静默下载没有完成：', result.error || result.phase); emit({ phase: 'available', quiet: false, quietPending: false, error: null }); }
     } catch (error) {
       logger.warn?.('[app-update] 静默下载出错：', error.message);
@@ -339,7 +306,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   // 以前后者在关 Hub 时被丢掉，下次打开这一版已提醒过、红点也已消掉，就再也不提醒（群友：叉掉小窗后不再自动升）。
   // 不重开程序、不弹任何东西；失败时脚本自己回滚，下次打开时设置挂点提醒。受保护目录（要管理员授权）不在退出时换。
   function applyOnQuit() {
-    if (pinned || skipQuitApply || state.phase !== 'ready' || !quietEnabled() || !staged || staged.needsAdmin) return false;
+    if (skipQuitApply || state.phase !== 'ready' || !quietEnabled() || !staged || staged.needsAdmin) return false;
     if (!state.quiet && staged.installer) return false;
     // 远程总开关（清单 quiet:false，Codex 审查 P1）：退出时一律不自动换；用户点「立即重启」不受影响。
     if (manifest && manifest.quiet === false) return false;
@@ -381,11 +348,6 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     return emit({ quietEnabled: quietEnabled(), ...(quietEnabled() ? {} : { quietPending: false }) });
   }
 
-  async function tryUnblock(url) {
-    try { return !!(await unblock(url)); }
-    catch (error) { logger.warn?.('[app-update] 自动放行出错：', error.message); return false; }
-  }
-
   async function download(_afterRecheck = false) {
     if (!manifest || !plan || plan.kind === 'none') throw new Error('还没有可下载的新版本，请先检查更新');
     if (state.phase === 'downloading') return state;
@@ -396,40 +358,28 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     abort = new AbortController();
     emit({ phase: 'downloading', attempts: [], progress: { received: 0, total: asset.bytes }, error: null });
     let lastEmit = 0;
-    const ordered = [...sources.filter(s => confirmedIds.includes(s.id)), ...sources.filter(s => !confirmedIds.includes(s.id))];
-    // 程序更新包：两个版本都先走内源（r56，2026-11-19 用户定）。成员版只认内源上的 member-v<版本>（同名不同内容，
-    // 不与公开版混用），文件名、大小、sha256 都按清单核对；内源没有或不对就回到原顺序（阿里云高速 → 阿里云 → GitHub）。
-    const runDownload = () => downloadWithFallback({ sources: ordered, version: manifest.version, expect: asset, dest, fetchImpl: resolveFetch(fetchImpl), signal: abort.signal,
-      openx: { ...appOpenxOptions(manifest.version), ...(only() ? { env } : {}) },
+    // 程序更新包只从公司内源下（R29/R35），文件名、大小、sha256 都按清单核对；测试时按注入的源下。
+    const runDownload = () => downloadWithFallback({ sources, version: manifest.version, expect: asset, dest, fetchImpl: resolveFetch(fetchImpl), signal: abort.signal,
+      openx: { ...appOpenxOptions(manifest.version), env },
       onAttempt: attempts => emit({ attempts }),
       onProgress: progress => { const now = Date.now(); if (now - lastEmit > 200 || progress.received === progress.total) { lastEmit = now; emit({ progress }); } } });
-    let result = await runDownload();
-    const blockedOwn = !result.ok && !result.cancelled && (result.attempts || []).find(a => a.blocked && isOwnUrl(a.url));
-    if (blockedOwn && unblock && await tryUnblock(blockedOwn.url)) { result = await runDownload(); if (result.ok) { try { unblockPassed(); } catch (_) {} } }
-    // 下载是用户点的：后台放行没成功就在 Hub 里弹出放行页，放行后接着下（2026-11-08 用户定）。
-    const stillBlocked = !result.ok && !result.cancelled && (result.attempts || []).find(a => a.blocked && isOwnUrl(a.url));
-    // 后台静默下载不弹可见的放行窗口（Codex 审查 P2-3）：只有用户自己点的下载才弹。
-    if (stillBlocked && unblockInteractive && !state.quiet) {
-      try { await unblockInteractive(stillBlocked.url); } catch (error) { logger.warn?.('[app-update] 放行窗口出错：', error.message); }
-      result = await runDownload();
-      if (result.ok) { try { unblockPassed(); } catch (_) {} }
-    }
+    const result = await runDownload();
     abort = null;
-    // 查到新版后发布源又发了一版、旧版目录被删：所有源都回 404。重新查一次清单，换到新版本再下一次（只重试一次）。
-    if (!result.ok && !result.cancelled && !_afterRecheck && !manifest.rollback && (result.attempts || []).length && result.attempts.every(a => /HTTP 404/.test(a.reason || ''))) {
+    // 查到新版后又发了一版、旧版附件被删：回 404。重新查一次清单，换到新版本再下一次（只重试一次）。
+    if (!result.ok && !result.cancelled && !_afterRecheck && (result.attempts || []).length && result.attempts.every(a => /HTTP 404|没有这个文件|没有该版本/.test(a.raw || a.reason || ''))) {
       const triedFile = asset.file;
       emit({ phase: 'available' });
       await check({ silent: true, quietAllowed: false });
       if (plan && plan.kind !== 'none' && plan.asset && plan.asset.file !== triedFile) return download(true);
       if (plan?.variant === 'delta' && manifest.incremental) return downloadComplete('差量包暂时不可用，正在自动下载完整更新包');
-      return emit({ phase: 'error', attempts: result.attempts, error: result.openxOnly ? openxOnlyDownloadError(result) : '所有下载源都失败了。可以稍后再试，或打开发布页手动下载安装包。' });
+      return emit({ phase: 'error', attempts: result.attempts, error: result.openxOnly ? openxOnlyDownloadError(result) : '更新包下载没有完成，请稍后重试' });
     }
     if (!result.ok && !result.cancelled && plan.variant === 'delta' && manifest.incremental) {
       return downloadComplete('差量包下载或校验失败，正在自动下载完整更新包');
     }
     if (!result.ok) {
       return emit({ phase: result.cancelled ? 'available' : 'error', attempts: result.attempts,
-        error: result.cancelled ? null : result.openxOnly ? openxOnlyDownloadError(result) : '所有下载源都失败了。可以稍后再试，或打开发布页手动下载安装包。' });
+        error: result.cancelled ? null : result.openxOnly ? openxOnlyDownloadError(result) : '更新包下载没有完成，请稍后重试' });
     }
     try {
       if (plan.kind === 'incremental') {
@@ -455,10 +405,6 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       return emit({ phase: 'error', attempts: result.attempts, error: `更新包解开或校验失败：${error.message}` });
     }
     // 装在 Program Files 这类目录时，重启那一步 Windows 会弹一次管理员确认框：界面提前说一声（2026-10-30）。
-    if (previewEnabled && manifest.canary) {
-      const saved = canary.read(dataDir);
-      canary.write(dataDir, { releases: { ...(saved.releases || {}), [manifest.version]: manifest.canary.sha } });
-    }
     return emit({ phase: 'ready', attempts: result.attempts, readySource: result.source.name, needsAdmin: !!(staged && staged.needsAdmin) });
   }
 
@@ -469,96 +415,6 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       reason, bytes: plan.asset.bytes, file: plan.asset.file } });
     // The complete variant cannot recurse back into the delta fallback.
     return download(true);
-  }
-
-  // —— 版本选择与回退（2026-11-16）——
-  // 本机运行时；开发运行没有解包目录可读，原生依赖按参照版本算，免得全部被过滤掉。
-  function localRuntime(refNative) {
-    const resDir = isPackaged || env.AI_HUB_UPDATE_RESOURCES ? (env.AI_HUB_UPDATE_RESOURCES || resourcesPath) : null;
-    let rt; try { rt = currentRuntime({ resourcesPath: resDir }); } catch (_) { rt = { electron: process.versions.electron, native: {} }; }
-    return !resDir && refNative ? { ...rt, native: { ...refNative } } : rt;
-  }
-  // 版本列表：从各更新源（不含抢先版源）读 versions.json，第一个读得到的为准；只列与本机运行时一致的版本。
-  async function listVersions() {
-    const fetchFn = resolveFetch(fetchImpl);
-    const tried = [];
-    for (const src of baseSources) {
-      const url = catalogLib.versionsUrl(src.manifest);
-      try {
-        const res = await fetchFn(url, { cache: 'no-store' });
-        if (!res.ok) { tried.push(`${src.name}：HTTP ${res.status}`); continue; }
-        const versions = catalogLib.validateVersions(await res.text());
-        if (!versions.length) { tried.push(`${src.name}：列表是空的`); continue; }
-        let history = [];
-        try { history = require('../core/app-update/release-history').loadHistory(); } catch (_) {}
-        versionList = versions;
-        const catalog = catalogLib.buildCatalog(versions, { current: currentVersion, runtime: localRuntime(versions[0].runtime.native), history });
-        return { ok: true, current: currentVersion, source: src.name, ...catalog, pinned, backups: catalogLib.listBackups(dataDir).slice(0, 5) };
-      } catch (error) {
-        tried.push(`${src.name}：${error.message === 'fetch failed' ? '网络请求没有发出去' : error.message}`);
-      }
-    }
-    return { ok: false, current: currentVersion, pinned, items: [], hidden: [], backups: catalogLib.listBackups(dataDir).slice(0, 5),
-      error: baseSources.length ? `读不到版本列表（${tried.join('；')}）` : only() ? '版本选择暂不可用：公司内源上还没有版本列表，目前只能更新到最新版' : '这个版本没有配置更新源，不能选择版本' };
-  }
-  // 回退：先备份小文件，再下载目标版的完整更新包（不走差量）；下载好后由用户点「立即重启」换上。
-  async function rollbackTo(version) {
-    if (checking || ['downloading', 'ready', 'applying'].includes(state.phase)) throw new Error('正在检查或下载别的版本，先完成或取消再回退');
-    if (!versionList) await listVersions();
-    const entry = (versionList || []).find(v => v.version === version);
-    if (!entry) throw new Error(`镜像上找不到 v${version}`);
-    const target = catalogLib.targetManifest(entry);
-    const next = planUpdate(target, { version: currentVersion, runtime: localRuntime(entry.runtime.native), allowDowngrade: true });
-    if (next.kind !== 'incremental' || !next.downgrade) throw new Error(next.reason || `不能回退到 v${version}`);
-    // 另一个 Hub 开着同一份数据时不回退：备份拿不到一致快照、换程序时它也还在写（r16 返工2）。
-    catalogLib.assertNoOtherHub(dataDir);
-    const backup = catalogLib.backupForRollback(dataDir, { from: currentVersion, to: version });
-    manifest = target;
-    plan = { ...next, variant: 'complete', asset: entry.incremental, silent: false };
-    confirmedIds = [];
-    pinned = catalogLib.writePin(dataDir, { version, from: currentVersion, at: new Date().toISOString(), pending: true, backup: backup.dir,
-      supportsPin: (entry.capabilities || []).includes('version-pin') });
-    emit({ pinned, rollback: { version, backup: { dir: backup.dir, files: backup.files, bytes: backup.bytes } },
-      latest: { version, notes: entry.notes, publishedAt: entry.publishedAt, notify: false, rollback: true },
-      plan: { kind: plan.kind, variant: plan.variant, reason: plan.reason, silent: false, bytes: plan.asset.bytes, file: plan.asset.file, downgrade: true } });
-    const result = await download();
-    if (result.phase !== 'ready') { catalogLib.clearPin(dataDir); pinned = null; manifest = null; plan = null; emit({ pinned: null }); }
-    else if (previewEnabled) {
-      // 抢先版开着时，旧版会在后台静默下载最新版并在退出时自动升回去：旧包下好、换上之前替用户关掉抢先版（确认框已写明）。
-      previewEnabled = false; canary.write(dataDir, { enabled: false });
-      sources = baseSources;
-      emit({ previewEnabled: false, quietEnabled: quietEnabled() });
-    }
-    return view();
-  }
-  // 回到最新版：清掉固定，照常检查并下载最新版；下载好后用户点「立即重启」。
-  async function returnToLatest() {
-    if (['downloading', 'applying'].includes(state.phase)) throw new Error('正在下载，先完成或取消');
-    if (state.phase === 'ready') staged = null;
-    catalogLib.clearPin(dataDir); pinned = null;
-    manifest = null; plan = null;
-    emit({ pinned: null, rollback: null, phase: 'idle' });
-    const checked = await check({ silent: false, quietAllowed: false });
-    // 增量与完整安装包都接上现有下载流程（审查 P2-5）；下好后版本页给「立即重启 / 立即安装」。
-    if (checked.phase === 'available' && plan && ['incremental', 'full'].includes(plan.kind)) await download();
-    return view();
-  }
-  // 关掉「跟随最新版」但不回退：固定在当前版本，自动更新与提醒暂停。
-  // 后台静默下载在途就取消、已暂存的静默包丢弃（审查 P2-4）；用户自己点的下载不动。
-  function pinCurrent() {
-    pinned = catalogLib.writePin(dataDir, { version: currentVersion, from: currentVersion, at: new Date().toISOString(), manual: true, supportsPin: true });
-    if (state.quiet && state.phase === 'downloading' && abort) abort.abort();
-    if (state.quiet && state.phase === 'ready') { staged = null; return emit({ pinned, phase: 'idle', quiet: false, error: null }); }
-    return emit({ pinned });
-  }
-  // 一键还原：数据库可能正开着，登记后重启，下次启动在打开任何数据库前还原。
-  function restoreBackup(dir) {
-    catalogLib.assertNoOtherHub(dataDir);
-    const res = catalogLib.scheduleRestore(dataDir, dir);
-    // 还原要重启：这次退出不顺手替换（Codex 审查 P2-5），免得替换脚本和重启后的新进程撞在一起。
-    skipQuitApply = true;
-    setTimeout(() => { try { app.relaunch(); app.quit(); } catch (error) { logger.warn?.('[app-update] 还原后重启失败：', error.message); } }, 300);
-    return res;
   }
 
   function cancel() { if (abort) abort.abort(); if (checkAbort) checkAbort.abort(); return state; }
@@ -646,11 +502,10 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
   function useConfig(next) {
     if (state.phase === 'ready' && state.quiet) { staged = null; emit({ phase: 'idle', quiet: false }); }
     if (['downloading', 'ready'].includes(state.phase)) throw new Error('正在下载或已下载好别的版本，先完成或取消再换');
-    baseSources = effectiveSources(next);
-    sources = withPreview(baseSources);
+    sources = effectiveSources(next);
     allowSame = !!(next && next.switchEdition);
-    manifest = null; plan = null; confirmedIds = [];
-    return emit({ phase: 'idle', internalSource: initialInternalSource(), checks: [], attempts: [], sources: sources.map(s => ({ id: s.id, name: s.name })), latest: null, plan: null, error: null });
+    manifest = null; plan = null;
+    return emit({ phase: 'idle', internalSource: initialInternalSource(), checks: [], attempts: [], latest: null, plan: null, error: null });
   }
   function startBackgroundChecks() {
     if (!sources.length && !only()) return;
@@ -664,18 +519,7 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
 
   function dismissLastResult() { delete state.lastResult; return state; }
 
-  function setPreviewEnabled(on) {
-    if (checking || ['downloading', 'ready'].includes(state.phase)) throw new Error('更新正在进行，请完成或取消后再切换抢先版');
-    // R29：只走内源时没有抢先版清单，开关不生效（界面也不显示）。
-    if (only()) { previewEnabled = false; return emit({ previewEnabled: false, previewSupported: false }); }
-    previewEnabled = on === true;
-    canary.write(dataDir, { enabled: previewEnabled });
-    sources = withPreview(baseSources);
-    manifest = null; plan = null; confirmedIds = [];
-    return emit({ phase: 'idle', previewEnabled, quietEnabled: quietEnabled(), latest: null, plan: null, error: null });
-  }
-
-  // 环境体检用（5.5.24）：只看各更新源连不连得上、清单读不读得出，不改更新状态、不触发下载、不弹放行窗口。
+  // 环境体检用（5.5.24）：只看内源连不连得上、清单读不读得出，不改更新状态、不触发下载、不弹放行窗口。
   async function probeSources({ timeoutMs = 7000 } = {}) {
     const started = Date.now();
     // R29 审查 #5：体检要真的再连一次内源，不吃 5 分钟「连不上」的缓存。
@@ -691,13 +535,13 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
     const best = results.filter(r => r.ok).sort((a, b) => compareVersions(b.manifest.version, a.manifest.version))[0];
     const internalSource = await probeInternalSource(best?.manifest.version, best && [best.manifest.incremental?.file, best.manifest.incrementalDelta?.file, best.manifest.installer?.file].filter(Boolean), Math.max(1, timeoutMs - (Date.now() - started)));
     // 只走内源时内源清单比本机旧 = 已是最新，算连得上（R29 审查 #4）。
-    const olderOk = r => only() && !r.ok && r.older;
-    return { current: currentVersion, ...(only() ? { only: true } : {}), sources: [internalSource, ...results.map(r => ({ id: r.id, name: r.name, ok: r.ok || olderOk(r),
+    const olderOk = r => !r.ok && r.older;
+    return { current: currentVersion, sources: [internalSource, ...results.map(r => ({ id: r.id, name: r.name, ok: r.ok || olderOk(r),
       version: r.ok ? r.manifest.version : olderOk(r) ? r.version || null : null, reason: olderOk(r) ? null : r.reason || null, blocked: !!r.blocked }))] };
   }
 
-  // r58：程序更新与版本回退的下载源标识，和 download() 查内源的参数一致（appOpenxOptions）。
-  // 「app-update」看当前要下的包（还没检查过就看清单里的增量包）；「app-version:<版本>」看回退到该版本要下的完整更新包。
+  // r58：程序更新的下载源标识，和 download() 查内源的参数一致（appOpenxOptions）。
+  // 「app-update」看当前要下的包（还没检查过就看清单里的增量包）。
   {
     const pts = require('../core/app-update/download-points');
     const spec = (version, file) => {
@@ -710,21 +554,15 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
       const file = plan && plan.asset ? plan.asset.file : (manifest.incremental && manifest.incremental.file) || (manifest.installer && manifest.installer.file);
       return spec(manifest.version, file);
     });
-    // 「下载完整安装包」手动入口：先找内源上的安装包，没有再用阿里云地址（renderer/app-update.js manualDownload）。
+    // 「下载完整安装包」手动入口：在内源上找这一版的安装包（renderer/app-update.js manualDownload）。
     // 启动时的失败提示里也有这个按钮（O④），那时可能还没检查过：先静默查一次。免安装版找同版本的免安装包（zip）。
     pts.register('app-installer', async () => {
       if (!manifest) { try { await check({ silent: true, quietAllowed: false }); } catch (_) {} }
       if (!manifest || !manifest.installer) return null;
       return spec(manifest.version, isPortable() ? portableZipName(manifest.installer.file, manifest.version) : manifest.installer.file);
     });
-    pts.register('app-version:', async point => {
-      const version = String(point).slice('app-version:'.length);
-      if (!versionList) { try { await listVersions(); } catch (_) {} }
-      const entry = (versionList || []).find(v => v.version === version);
-      return entry && entry.incremental ? spec(version, entry.incremental.file) : null;
-    });
   }
-  return { check, probeSources, listVersions, rollbackTo, returnToLatest, restoreBackup, pinCurrent, download, cancel, apply, applyCancelled, applyOnQuit, setQuietEnabled, setPreviewEnabled, getState: () => state, view, startBackgroundChecks, useConfig, dismissLastResult, lastResult: () => lastResult,
+  return { check, probeSources, download, cancel, apply, applyCancelled, applyOnQuit, setQuietEnabled, getState: () => state, view, startBackgroundChecks, useConfig, dismissLastResult, lastResult: () => lastResult,
     dispose: () => { clearTimeout(timer); clearInterval(applyWatch); if (abort) abort.abort(); if (checkAbort) checkAbort.abort(); } };
 }
 
@@ -743,12 +581,6 @@ function registerAppUpdateIpc(ipcMain, controller, { gate = null } = {}) {
   });
   ipcMain.handle('app-update:dismiss-result', () => controller.dismissLastResult());
   ipcMain.handle('app-update:set-quiet', (_e, on) => controller.setQuietEnabled(on !== false));
-  ipcMain.handle('app-update:list-versions', () => controller.listVersions());
-  ipcMain.handle('app-update:rollback', (_e, version) => controller.rollbackTo(String(version || '')));
-  ipcMain.handle('app-update:return-latest', () => controller.returnToLatest());
-  ipcMain.handle('app-update:pin-current', () => controller.pinCurrent());
-  ipcMain.handle('app-update:restore-backup', (_e, dir) => controller.restoreBackup(String(dir || '')));
-  ipcMain.handle('app-update:set-preview', (_e, on) => controller.setPreviewEnabled(on === true));
 }
 
 module.exports = { createAppUpdateController, registerAppUpdateIpc, resolveSources, appOpenxOptions, portableZipName };

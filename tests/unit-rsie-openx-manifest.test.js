@@ -57,12 +57,12 @@ function openxFetch({ top = '5.6.80', releaseManifest = manifest(top), withLates
 function make(fetchImpl, env = {}) {
   return createAppUpdateController({ app: { quit() {} }, config: { sources: SOURCES, releasePage: '' }, dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'rsie-openx-')),
     currentVersion: '5.6.72', fetchImpl, isPackaged: false, logger: { warn() {} }, manifestPublicKey: TEST_PUB,
-    env: { AI_HUB_OPENX: '1', AI_HUB_OPENX_ONLY: '0', AI_HUB_UPDATE_RESOURCES: os.tmpdir(), AI_HUB_UPDATE_FORCE_APPLY: '1', ...env } });
+    env: { AI_HUB_OPENX: '1', AI_HUB_UPDATE_RESOURCES: os.tmpdir(), AI_HUB_UPDATE_FORCE_APPLY: '1', ...env } });
 }
 
 test.beforeEach(() => openxSource._reset());
 
-test('阿里云全被拦：从内源读到 v5.6.80 的版本清单，检查更新显示有新版而不是报错', async () => {
+test('从内源读到 v5.6.80 的版本清单，检查更新显示有新版而不是报错', async () => {
   const ox = openxFetch(); const urls = [];
   const c = make(async url => { url = String(url); urls.push(url); return ox(url) || blocked(); });
   await c.check({ silent: false, quietAllowed: false });
@@ -74,15 +74,6 @@ test('阿里云全被拦：从内源读到 v5.6.80 的版本清单，检查更�
   assert.ok(!urls.includes(FILE_HOST + 'member-latest.json'), '成员版专用版本不看');
 });
 
-test('外网清单能读到：完全不去内源取版本清单（行为和以前一样）', async () => {
-  const ox = openxFetch(); const urls = [];
-  const c = make(async url => { url = String(url); urls.push(url); if (url.endsWith('example.invalid/latest.json')) return json(manifest('5.6.80')); return ox(url) || blocked(); });
-  await c.check({ silent: false, quietAllowed: false });
-  assert.equal(c.getState().latest.version, '5.6.80');
-  assert.ok(!urls.some(u => u.startsWith(FILE_HOST) && u.endsWith('latest.json')), '没有读内源的 latest.json');
-  assert.ok(!c.getState().checks.some(r => r.id === 'openx-manifest'));
-});
-
 test('内源附带的清单版本号和版本名对不上：不采用，照旧提示更新源都连不上', async () => {
   const ox = openxFetch({ releaseManifest: manifest('5.6.99') });
   const c = make(async url => ox(String(url)) || blocked());
@@ -92,12 +83,12 @@ test('内源附带的清单版本号和版本名对不上：不采用，照旧�
   assert.match(s.checks.find(r => r.id === 'openx-manifest').reason, /不采用/);
 });
 
-test('内源还没附带清单（发版脚本没传）：行为和以前一样报「所有更新源都连不上」', async () => {
+test('内源还没附带清单（发版脚本没传）：报「查不到新版本」并写清原因', async () => {
   const ox = openxFetch({ withLatest: false });
   const c = make(async url => ox(String(url)) || blocked());
   await c.check({ silent: false, quietAllowed: false });
   assert.equal(c.getState().phase, 'error');
-  assert.match(c.getState().error, /所有更新源都连不上/);
+  assert.match(c.getState().error, /查不到新版本/);
 });
 
 test('内源清单兜底后点下载：更新包先从内源取（外网被拦也能下）', async () => {
@@ -105,8 +96,8 @@ test('内源清单兜底后点下载：更新包先从内源取（外网被拦�
   const c = make(async url => { url = String(url); urls.push(url); return ox(url) || blocked(); });
   await c.check({ silent: false, quietAllowed: false });
   // 下载器按进程环境判断内源开关（Electron 里默认开）；纯 Node 单测里显式打开。
-  const prev = process.env.AI_HUB_OPENX; process.env.AI_HUB_OPENX = '1'; const prevOnly = process.env.AI_HUB_OPENX_ONLY; process.env.AI_HUB_OPENX_ONLY = '0';
-  try { await c.download(); } finally { if (prevOnly === undefined) delete process.env.AI_HUB_OPENX_ONLY; else process.env.AI_HUB_OPENX_ONLY = prevOnly; if (prev === undefined) delete process.env.AI_HUB_OPENX; else process.env.AI_HUB_OPENX = prev; }
+  const prev = process.env.AI_HUB_OPENX; process.env.AI_HUB_OPENX = '1';
+  try { await c.download(); } finally { if (prev === undefined) delete process.env.AI_HUB_OPENX; else process.env.AI_HUB_OPENX = prev; }
   assert.ok(urls.includes(FILE_HOST + 'AIHubX-5.6.80-update.gz'), '向内源请求了更新包');
 });
 
@@ -161,10 +152,10 @@ test('签名有效但主版本只大 1（5.6.72 → 6.0.0）：采用', async ()
   assert.equal(s.latest.version, '6.0.0');
 });
 
-test('内源清单比当前版本旧（签名有效）：不采用，不会回退', async () => {
-  const { s, row } = await checkState(openxFetch({ top: '5.6.70' }));
-  assert.equal(s.phase, 'error');
-  assert.match(row.reason, /比当前 v5.6.72 还旧/);
+test('内源清单比当前版本旧（签名有效）：不采用、不会回退，显示已是最新', async () => {
+  const { s } = await checkState(openxFetch({ top: '5.6.70' }));
+  assert.equal(s.phase, 'none');
+  assert.equal(s.plan, null);
 });
 
 test('清单附件地址不在内源域名白名单：当作没有清单', async () => {
@@ -195,7 +186,7 @@ const hang = (counter) => (url, opts = {}) => new Promise((_, reject) => {
 
 test('总预算：内源列表半开不回，fetchManifest 按预算返回，不挂死', async () => {
   const t0 = Date.now();
-  const r = await openxSource.fetchManifest({ fetchImpl: hang(), validate: x => x, env: { AI_HUB_OPENX: '1', AI_HUB_OPENX_ONLY: '0' }, currentVersion: '5.6.72', publicKey: TEST_PUB, timeoutMs: 400 });
+  const r = await openxSource.fetchManifest({ fetchImpl: hang(), validate: x => x, env: { AI_HUB_OPENX: '1' }, currentVersion: '5.6.72', publicKey: TEST_PUB, timeoutMs: 400 });
   assert.equal(r.ok, false);
   assert.ok(Date.now() - t0 < 1500, `用了 ${Date.now() - t0} ms`);
 });
@@ -204,7 +195,7 @@ test('总预算：列表很快、清单下载半开不回，也按预算返回�
   const ox = openxFetch();
   const f = (url, opts) => url.endsWith('-latest.json') ? hang()(url, opts) : ox(url);
   const t0 = Date.now();
-  const r = await openxSource.fetchManifest({ fetchImpl: f, validate: x => x, env: { AI_HUB_OPENX: '1', AI_HUB_OPENX_ONLY: '0' }, currentVersion: '5.6.72', publicKey: TEST_PUB, timeoutMs: 400 });
+  const r = await openxSource.fetchManifest({ fetchImpl: f, validate: x => x, env: { AI_HUB_OPENX: '1' }, currentVersion: '5.6.72', publicKey: TEST_PUB, timeoutMs: 400 });
   assert.equal(r.ok, false);
   assert.match(r.reason, /秒内没读完/);
   assert.ok(Date.now() - t0 < 1500);
@@ -213,11 +204,11 @@ test('总预算：列表很快、清单下载半开不回，也按预算返回�
 
 test('内源刚连不上（5 分钟内）：直接跳过，不再发请求、不拖慢检查', async () => {
   const bad = async () => { throw new Error('ECONNREFUSED'); };
-  await openxSource.fetchManifest({ fetchImpl: bad, validate: x => x, env: { AI_HUB_OPENX: '1', AI_HUB_OPENX_ONLY: '0' }, publicKey: TEST_PUB });
+  await openxSource.fetchManifest({ fetchImpl: bad, validate: x => x, env: { AI_HUB_OPENX: '1' }, publicKey: TEST_PUB });
   assert.equal(openxSource.reachability(), 'down');
   const counter = { n: 0 };
   const t0 = Date.now();
-  const r = await openxSource.fetchManifest({ fetchImpl: hang(counter), validate: x => x, env: { AI_HUB_OPENX: '1', AI_HUB_OPENX_ONLY: '0' }, publicKey: TEST_PUB });
+  const r = await openxSource.fetchManifest({ fetchImpl: hang(counter), validate: x => x, env: { AI_HUB_OPENX: '1' }, publicKey: TEST_PUB });
   assert.equal(r.ok, false);
   assert.equal(counter.n, 0, '没有再发请求');
   assert.ok(Date.now() - t0 < 100);
@@ -232,7 +223,7 @@ test('环境体检：内源半开不回时，体检总时长不超出给定预�
 
 test('取消检查：外部 signal 中断后 fetchManifest 立即返回「已取消」', async () => {
   const ac = new AbortController();
-  const p = openxSource.fetchManifest({ fetchImpl: hang(), validate: x => x, env: { AI_HUB_OPENX: '1', AI_HUB_OPENX_ONLY: '0' }, publicKey: TEST_PUB, signal: ac.signal });
+  const p = openxSource.fetchManifest({ fetchImpl: hang(), validate: x => x, env: { AI_HUB_OPENX: '1' }, publicKey: TEST_PUB, signal: ac.signal });
   setTimeout(() => ac.abort(), 50);
   const t0 = Date.now();
   const r = await p;

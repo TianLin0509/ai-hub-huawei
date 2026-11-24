@@ -4,6 +4,7 @@
 const CSS = `
 #net-pass-global { display:inline-flex; align-items:center; gap:6px; flex:none; order:3; height:24px; padding:0 10px; border-radius:12px;
   border:1px solid var(--border-subtle, #d9d7e2); background:transparent; color:var(--fg-default, inherit); font:12px var(--font-sans, inherit); cursor:pointer; }
+#net-pass-global[hidden] { display:none; }
 #net-pass-global:hover { background:var(--surface-hover, #f1f0f5); }
 #net-pass-global:disabled { opacity:.6; cursor:default; }
 #net-pass-global .npg-dot { width:8px; height:8px; border-radius:50%; background:#9aa0ab; }
@@ -14,7 +15,7 @@ const CSS = `
 `;
 
 function view(status, running) {
-  if (running) return { state: 'running', text: '正在放行…', title: '正在把下载服务器、通道服务器和团队站点逐个放行' };
+  if (running) return { state: 'running', text: '正在放行…', title: '正在把通道服务器和团队站点逐个放行' };
   if (!status || !status.available) return null;
   const blocked = Array.isArray(status.blocked) ? status.blocked : [];
   if (blocked.length) return { state: 'blocked', text: '需要放行', title: `被公司网络拦着：${blocked.join('、')}。点一下全部放行（后台也会自动重试）` };

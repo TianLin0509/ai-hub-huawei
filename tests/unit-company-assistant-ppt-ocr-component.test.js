@@ -191,7 +191,7 @@ test('换入：旧组件被占用时等它空闲；一直占用就报人话且�
 });
 
 // 负责人 11-19：识别组件一键更新必须内源优先（openx → 原下载源），首个请求就打到内源。
-test('安装器内源优先：首个请求是内源版本列表，包从内源 ocr-<版本> 的 pptdoctor-ocr-<版本>.zip 取，不碰外网包；内源没有时回原下载源', async () => {
+test('安装器只走内源：清单用程序自带快照，包从内源 ocr-<版本> 的 pptdoctor-ocr-<版本>.zip 取，不碰外网；内源没有时说原因、不回外网（R35）', async () => {
   const openxSource = require('../core/app-update/openx-source');
   const release = fakeRelease({ 'pptdoctor-ocr.exe': 'new exe' });
   // 内源附件地址按内源配置的站点拼（附件在它的子域名下），测试里不写死内网域名。
@@ -208,7 +208,9 @@ test('安装器内源优先：首个请求是内源版本列表，包从内源 o
       if (body === undefined) return new Response('nf', { status: 404 });
       return new Response(body, { status: 200, headers: { 'content-length': String(Buffer.byteLength(body)) } });
     };
-    const installer = createOcrComponentInstaller({ env: { PPTX_FINDER_DATA_DIR: data, AI_HUB_OPENX: '1', AI_HUB_OPENX_ONLY: '0' }, urls: [A], fetchImpl, extract: fakeExtract });
+    const snapshotFile = path.join(data, 'snapshot.json');
+    fs.writeFileSync(snapshotFile, JSON.stringify(release.manifest));
+    const installer = createOcrComponentInstaller({ env: { PPTX_FINDER_DATA_DIR: data, AI_HUB_OPENX: '1' }, urls: [A], snapshotFile, fetchImpl, extract: fakeExtract });
     const r = await installer.install();
     return { r, calls, A, data };
   };
@@ -217,9 +219,10 @@ test('安装器内源优先：首个请求是内源版本列表，包从内源 o
   assert.ok(hit.calls[0].startsWith(openxSource.DEFAULT_API) && hit.calls[0].includes('by_project_id'), '第一个请求打到内源');
   assert.ok(hit.calls.includes(FILE)); assert.ok(!hit.calls.includes(hit.A + 'component.zip'), '内源命中时不下载外网包');
   assert.equal(JSON.parse(fs.readFileSync(path.join(hit.data, 'ocr', 'component.json'), 'utf8')).assistApiVersion, 1);
+  assert.ok(!hit.calls.includes(hit.A + 'component.json'), '清单用自带快照，不去外网读');
   const miss = await run([]);
-  assert.equal(miss.r.phase, 'done', miss.r.error); assert.ok(miss.calls[0].startsWith(openxSource.DEFAULT_API));
-  assert.ok(miss.calls.indexOf(miss.A + 'component.zip') > miss.calls.findIndex(u => u.includes('by_id?id=41')), '先查过内源，再回原下载源');
+  assert.notEqual(miss.r.phase, 'done'); assert.match(String(miss.r.error), /内源/);
+  assert.ok(!miss.calls.some(u => u.startsWith(miss.A)), '内源没有时不回外网');
   openxSource._reset();
 });
 

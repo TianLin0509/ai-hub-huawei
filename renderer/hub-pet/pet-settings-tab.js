@@ -29,7 +29,7 @@ function mountPetSettingsTab(container, { ipcRenderer, window, document }) {
   container.classList.add('pet-tab');
   container.innerHTML = '<p class="pet-tab-note">正在读取桌宠设置…</p>';
 
-  // r58：有可下载/可更新的形象时，显示「下载源：公司内源」。
+  // r58：有可下载/可更新的形象时，显示公司内源状态。
   const sourceView = require('../download-source-view');
   function render() {
     if (!data) return;

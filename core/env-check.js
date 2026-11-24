@@ -132,9 +132,6 @@ function probeList(ctx) {
   const installAct = isCompany ? { label: '去一键安装', act: 'open-cli-install' } : null;
   const probes = [];
   const add = (id, name, area, run) => probes.push({ id, name, area, run });
-  if (ctx.canary) for (const p of require('./canary-env-probes').probes(ctx)) {
-    add(p.id, p.name, p.area, async () => ({ id: p.id, name: p.name, area: p.area, ...await p.run() }));
-  }
 
   // WeLink、PPT Doctor 只在公司版助理存在时检测（没有助理的版本不出这两项）。
   if (assistant) {
@@ -174,7 +171,7 @@ function probeList(ctx) {
       const st = await doctor.status({ force: true });
       // status 里的 version 是 PPT Doctor 内置检索引擎的版本（如 0.4.0），程序版本在 doctorVersion；先认程序版本，和工具自动发现一致。
       const ver = st.doctorVersion || st.appVersion || st.version || '';
-      const download = { label: '下载 PPT Doctor', act: 'ppt-download' }, oneClick = label => ({ label, act: 'doctor-install' });
+      const oneClick = label => ({ label, act: 'doctor-install' });
       if (st.state === 'ready' || st.state === 'empty') {
         // 识别组件（r54）：图片转可编辑的增强转字要求新版识别组件。没装或太旧都在这一项给一键安装/更新（PPT 页开工前也会原地拦下）；
         // 老 Doctor 不报 ocr 字段时不判断。
@@ -192,17 +189,17 @@ function probeList(ctx) {
       if (st.state === 'missing') {
         return entry('ppt-doctor', 'PPT Doctor', 'ppt-doctor', STATUS.warn, '没装 PPT Doctor（用 PPT 素材库和图片转可编辑时才需要）', {
           installed: false,
-          cause: '在开始菜单、注册表和默认安装位置都没找到它。', steps: ['点「一键安装」，装好后会自动重新检测', '一键安装失败时再点「下载 PPT Doctor」手动安装'], fixes: [oneClick('一键安装'), download, RECHECK],
+          cause: '在开始菜单、注册表和默认安装位置都没找到它。', steps: ['点「一键安装」，装好后会自动重新检测'], fixes: [oneClick('一键安装'), RECHECK],
         });
       }
       if (st.state === 'upgrade') {
         return entry('ppt-doctor', 'PPT Doctor', 'ppt-doctor', STATUS.warn, st.incomplete ? `已检测到${(st.installedVersion || ver) ? ' v' + (st.installedVersion || ver) : ''}，安装不完整，和 Hub 联动不上`
           : `已检测到${(st.installedVersion || ver) ? ' v' + (st.installedVersion || ver) : ''}，版本太旧，和 Hub 联动不上`, {
-          cause: st.error || '装的 PPT Doctor 缺少和 Hub 联动所需的能力标记。', steps: ['点「一键升级」，不会动你原来的安装', '升级后会自动重新检测'], fixes: [oneClick('一键升级'), download, RECHECK], raw: st.error || '',
+          cause: st.error || '装的 PPT Doctor 缺少和 Hub 联动所需的能力标记。', steps: ['点「一键升级」，不会动你原来的安装', '升级后会自动重新检测'], fixes: [oneClick('一键升级'), RECHECK], raw: st.error || '',
         });
       }
       return entry('ppt-doctor', 'PPT Doctor', 'ppt-doctor', STATUS.warn, '找到了，但这次没能读出它的状态', {
-        cause: st.error || 'PPT Doctor 没有正常回应。', steps: ['稍后点「重新检测」', '一直这样就重新安装 PPT Doctor'], fixes: [RECHECK, download], raw: st.error || '',
+        cause: st.error || 'PPT Doctor 没有正常回应。', steps: ['稍后点「重新检测」', '一直这样就重新安装 PPT Doctor'], fixes: [RECHECK, oneClick('一键安装')], raw: st.error || '',
       });
     });
   }
@@ -242,7 +239,7 @@ function probeList(ctx) {
           steps: ['在命令行运行 codeagent update，或到软件中心下载最新安装包', '升级后点「重新检测」'], fixes: [...downloadFix, RECHECK],
         });
       }
-      return entry('codeagent', 'CodeAgent', 'codeagent', STATUS.ok, `v${version} · ${found}`, ctx.canary ? { fingerprint: { version, command: found } } : {});
+      return entry('codeagent', 'CodeAgent', 'codeagent', STATUS.ok, `v${version} · ${found}`);
     });
   }
 
@@ -417,34 +414,28 @@ function probeList(ctx) {
   }
 
   if (ctx.appUpdate) {
-    add('app-update', '一键更新下载源', 'app-update', async () => {
+    // 一键更新只走公司内源（R29/R35）：这一项只看内源上的版本清单读不读得到，读不到就说原因、下一步查公司网络。
+    const TITLE = '一键更新 · 公司内源';
+    add('app-update', TITLE, 'app-update', async () => {
       const controller = ctx.appUpdate();
-      if (!controller || typeof controller.probeSources !== 'function') return entry('app-update', '一键更新下载源', 'app-update', STATUS.off, '这个版本没有一键更新');
+      if (!controller || typeof controller.probeSources !== 'function') return entry('app-update', TITLE, 'app-update', STATUS.off, '这个版本没有一键更新');
       const r = await controller.probeSources({ timeoutMs: 7000 });
       const internal = r.sources.filter(s => s.informational);
-      const active = r.sources.filter(s => !s.informational);
+      const rows = r.sources.filter(s => !s.informational);
       const internalText = internal.map(s => `${s.name}：${require('./app-update/source-view').sourceText(s)}`).join('\n');
       const detail = text => [text, internalText].filter(Boolean).join('\n');
-      const ok = active.filter(s => s.ok), bad = active.filter(s => !s.ok);
+      const ok = rows.filter(s => s.ok), bad = rows.filter(s => !s.ok);
       const latest = ok.map(s => s.version).filter(Boolean).sort((a, b) => require('./app-update/manifest').compareVersions(b, a))[0];
-      const failText = bad.map(s => `${s.name}：${s.blocked ? '被公司网络的确认页挡住' : s.reason || '连不上'}`).join('；');
-      if (!active.length) return entry('app-update', '一键更新下载源', 'app-update', STATUS.off, detail('没有配置下载源'));
-      // R29 审查 #5：只走内源时说清是内源的问题、下一步查公司网络，不再提「所有下载源」和放行。
-      if (!ok.length && r.only) {
+      const failText = bad.map(s => `${s.name}：${s.reason || '连不上'}`).join('；');
+      if (!rows.length) return entry('app-update', TITLE, 'app-update', STATUS.off, detail('没有可查的版本清单'));
+      if (!ok.length) {
         const why = require('./app-update/openx-source').userReason(bad[0] && bad[0].reason, { file: '版本清单' });
-        return entry('app-update', '一键更新下载源', 'app-update', STATUS.bad, detail('读不到公司内源上的版本清单'), {
+        return entry('app-update', TITLE, 'app-update', STATUS.bad, detail('读不到公司内源上的版本清单'), {
           cause: why, steps: ['确认电脑连着公司网络（公司内网或 VPN）', '稍后点「重新检测」'], fixes: [{ label: '打开检查更新', act: 'open-update' }, RECHECK], raw: failText,
         });
       }
-      if (!ok.length) {
-        return entry('app-update', '一键更新下载源', 'app-update', STATUS.bad, detail('所有下载源都连不上'), {
-          cause: failText, steps: ['检查网络或代理', '被确认页挡住时，打开「检查更新」按提示放行', '稍后点「重新检测」'], fixes: [{ label: '打开检查更新', act: 'open-update' }, RECHECK], raw: failText,
-        });
-      }
-      const head = `${ok.map(s => s.name).join('、')} 连得上${latest ? ' · 最新 v' + latest : ''}`;
-      if (bad.length && !ctx.canary) return entry('app-update', '一键更新下载源', 'app-update', STATUS.warn, detail(`${head}；${failText}`), { cause: '有一个下载源连不上，更新会自动改用能连上的那个。', fixes: [RECHECK], raw: failText });
-      if (ctx.canary) return entry('app-update', '一键更新下载源', 'app-update', STATUS.ok, detail(head), { fingerprint: { available: ok.map(s => s.id), fallback: failText.slice(0, 200) } });
-      return entry('app-update', '一键更新下载源', 'app-update', STATUS.ok, detail(head));
+      const head = `公司内源连得上${latest ? ' · 最新 v' + latest : ''}`;
+      return entry('app-update', TITLE, 'app-update', STATUS.ok, detail(head));
     });
   }
 
@@ -482,10 +473,6 @@ function probeList(ctx) {
       const [row, located] = await Promise.all([legacy(), locateFor(ctx, 'node')]);
       return located ? { ...row, locate: located, extra: { ...(row.extra || {}), locate: located } } : row;
     };
-  }
-  if (ctx.canary) {
-    const required = new Set(['codeagent', 'codeagent-trust', 'codeagent-signer', 'company-model-config', 'company-proxy', 'attendance-domain', 'attendance-page', 'canary-pages', 'app-update', 'data-dir', 'disk']);
-    return probes.filter(p => required.has(p.id));
   }
   return probes;
 }

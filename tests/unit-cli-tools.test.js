@@ -497,29 +497,19 @@ test('the side-by-side folder name is a short fixed prefix plus a short random p
   for (const n of ['paired-0123456789ab', 'paired-0123456789ab.tmp-12345678', 'paired-0123456789ab.old-12345678', 'user-npm', 'notes', '.staging']) assert.ok(!ownedName(n), n);
 });
 
-test('install: a proxy block page on our host is auto-unblocked once and retried', async t => {
+test('install: a proxy block page is reported as an error with the blocked URL (no auto-unblock since R35)', async t => {
   const root = tempDir(t);
   const srv = await server(t, {});
   const pkg = await tgz(t, [{ name: 'package/claude.exe', data: Buffer.alloc(200000, 6) }]);
   const c = component('claude', '1.0.0', pkg, { install: { strip: 'package', bin: 'claude.exe' } });
   publish(srv, signed([c]), {});
-  let unblocked = false;
   srv.routes['/hub-update/components/' + c.files[0].url] = (req, res) => {
-    if (unblocked) { res.writeHead(200, { 'content-length': pkg.length }); res.end(pkg); return; }
     const page = Buffer.from('<!doctype html><html>风险提醒</html>');
     res.writeHead(200, { 'content-type': 'text/html', 'content-length': page.length }); res.end(page);
   };
-  const calls = [];
-  const { installer } = makeInstaller(srv, root, { extra: { unblock: async url => { calls.push(url); unblocked = true; return true; }, isOwnUrl: url => url.startsWith(srv.base) } });
-  const r = await installer.install('claude');
-  assert.equal(r.tools.claude.phase, 'done', r.tools.claude.error);
-  assert.equal(calls.length, 1);
-  // 放行器不认的地址：报错并把被拦的网址交给界面。
-  const root2 = tempDir(t);
-  unblocked = false;
-  const blocked = await makeInstaller(srv, root2).installer.install('claude');
+  const blocked = await makeInstaller(srv, root).installer.install('claude');
   assert.equal(blocked.tools.claude.phase, 'error');
-  assert.ok(blocked.tools.claude.blocked.startsWith(srv.base), 'the blocked URL is reported for the user');
+  assert.ok(blocked.tools.claude.blocked.startsWith(srv.base), 'the blocked URL is reported');
 });
 
 test('install: one install at a time, cancel works, and node is not installable on its own', async t => {
@@ -637,17 +627,14 @@ test('install dialog: plain-words progress for every phase, retry on failure, no
   assert.match(view.installBlockHtml('deepseek-acp', base), /没有 Node\.js 时另加约 30 MB/);
   const at = tool => view.installBlockHtml('claude', { ...base, busy: tool.phase === 'done' || tool.phase === 'error' ? null : 'claude', tools: { claude: tool } });
   assert.match(at({ phase: 'checking' }), /正在读取组件目录/);
-  const dl = at({ phase: 'downloading', received: 1024 * 1024, total: 4 * 1024 * 1024, sourceName: '阿里云', step: { index: 1, count: 2, name: 'Node.js 运行环境' } });
+  const dl = at({ phase: 'downloading', received: 1024 * 1024, total: 4 * 1024 * 1024, sourceName: '127.0.0.1', step: { index: 1, count: 2, name: 'Node.js 运行环境' } });
   // r59：统一进度条——标题带第几项，数字行「已下 / 总量 · 速度」，来源单独一个标签。
   assert.match(dl, /安装 Claude Code · 第 1\/2 项：Node\.js 运行环境/);
   assert.match(dl, /1\.0 MB \/ 4\.0 MB · 测速中/);
-  assert.match(dl, /来源 <b>阿里云<\/b>/);
+  assert.match(dl, /来源 <b>127\.0\.0\.1<\/b>/);
   const fast = at({ phase: 'downloading', received: 2 * 1024 * 1024, total: 4 * 1024 * 1024, speed: 1024 * 1024, etaSec: 2, sourceId: 'openx', sourceName: '公司内源' });
   assert.match(fast, /2\.0 MB \/ 4\.0 MB · 1\.0 MB\/s · 还要 2 秒/);
   assert.match(fast, /data-kind="internal">来源 <b>公司内源<\/b>/);
-  const miss = at({ phase: 'downloading', received: 1, total: 4, sourceId: 'aliyun', sourceName: '阿里云', openxMiss: '内源上没有这个文件' });
-  assert.match(miss, /data-kind="fallback">来源 <b>阿里云（备用）<\/b>/);
-  assert.match(miss, /没走公司内源：内源上没有这个文件/);
   assert.match(dl, /aria-valuenow="25"/);
   assert.match(dl, /data-cli-action="cancel"/);
   assert.doesNotMatch(dl, /data-cli-action="install"/);
@@ -657,10 +644,10 @@ test('install dialog: plain-words progress for every phase, retry on failure, no
   const done = at({ phase: 'done', received: 4, total: 4 });
   assert.match(done, /安装完成/);
   assert.doesNotMatch(done, /data-cli-action/);
-  const err = at({ phase: 'error', error: '阿里云：连接超时 <b>', blocked: 'https://m.example/x.tgz' });
-  assert.match(err, /安装没有成功：阿里云：连接超时 &lt;b&gt;/);
+  const err = at({ phase: 'error', error: '公司内源：连接超时 <b>', blocked: 'https://m.example/x.tgz' });
+  assert.match(err, /安装没有成功：公司内源：连接超时 &lt;b&gt;/);
   assert.match(err, />重试</);
-  assert.match(err, /data-cli-action="open-pass" data-url="https:\/\/m\.example\/x\.tgz"/);
+  assert.doesNotMatch(err, /open-pass|放行/, '下载只走内源（R35），不再有「打开放行页」');
   assert.match(at({ phase: 'cancelled' }), /已取消，可以重新安装/);
   const other = view.installBlockHtml('codex', { ...base, busy: 'claude', tools: { claude: { phase: 'downloading' } } });
   assert.match(other, /data-cli-action="install" disabled/);

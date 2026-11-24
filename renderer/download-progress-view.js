@@ -24,7 +24,6 @@ const CSS = `
 .dlp-src b { display: inline-flex; align-items: center; padding: 0 7px; border-radius: 999px; font-weight: 600; font-size: 11.5px;
   border: 1px solid var(--border-mid, #d6d9e0); color: var(--fg-default, #3a3f4c); background: var(--surface-raised, #fff); white-space: nowrap; }
 .dlp-src[data-kind="internal"] b { border-color: rgba(47, 138, 87, .5); color: #23774a; background: rgba(47, 138, 87, .1); }
-.dlp-src[data-kind="fallback"] b { border-color: rgba(194, 91, 18, .45); color: #a24d10; background: rgba(194, 91, 18, .08); }
 .dlp-note { margin-top: 4px; overflow-wrap: anywhere; }
 .dlp[data-phase="error"] .dlp-note { color: #a24d10; }
 `;
@@ -58,15 +57,12 @@ function sourceLabel(id, name) {
   if (id === 'local') return { text: '本机已下好', kind: 'local' };
   const raw = String(name || id || '').trim();
   if (!raw) return null;
-  // R29：只走内源后外部源不会出现；万一出现（排查开关关掉只走内源）只标「外部源」，不写具体站点名。
-  if (/[一-鿿]/.test(raw)) return { text: raw, kind: 'external' };   // 已经是中文名
-  if (/npmmirror|aliyuncs|aliyun|oss-cn|github/i.test(raw)) return { text: '外部源', kind: 'external' };
-  if (/registry\.npmjs|npmjs\.org/i.test(raw)) return { text: 'npm 官方', kind: 'external' };
+  // 只走内源（R29/R35）后只剩本机测试注入的源会走到这里：照原名显示。
   return { text: raw, kind: 'external' };
 }
 
 const ACTIVE_TEXT = {
-  connecting: '正在连接下载源…', checking: '正在读取组件目录…', verifying: '正在校验文件…', extracting: '正在解压并校验…',
+  connecting: '正在连接…', checking: '正在读取组件目录…', verifying: '正在校验文件…', extracting: '正在解压并校验…',
   installing: '正在安装…', probing: '正在试运行，确认能启动…', 'npm-fallback': '正在用 npm 安装…', applying: '正在换上新版本…',
 };
 const BUSY = new Set(['connecting', 'checking', 'downloading', 'verifying', 'extracting', 'installing', 'probing', 'npm-fallback', 'applying']);
@@ -86,10 +82,7 @@ function view(p = {}) {
     : (p.message || ACTIVE_TEXT[phase] || '');
   const step = p.step && p.step.count > 1 ? `第 ${p.step.index}/${p.step.count} 项` + (p.step.name ? `：${p.step.name}` : '') : '';
   const src = sourceLabel(p.sourceId, p.sourceName);
-  // 内源没命中、改走外部源（downloader 给 openxMiss）：来源标橙色「备用」，下面一行写明原因。
-  const miss = src && src.kind === 'external' && p.openxMiss ? String(p.openxMiss) : '';
-  if (miss) { src.kind = 'fallback'; src.text += '（备用）'; }
-  return { phase, percent, indeterminate: percent == null && BUSY.has(phase), nums, step, source: src, miss };
+  return { phase, percent, indeterminate: percent == null && BUSY.has(phase), nums, step, source: src };
 }
 
 // p：进度对象；opts.title 标题（如「下载 PPT Doctor」）；opts.note 额外一行（错误原因、提示）；opts.attrs 附加属性串。
@@ -100,7 +93,7 @@ function html(p = {}, opts = {}) {
   const pct = v.percent == null ? '' : `${v.percent >= 99.5 || v.percent === 0 ? Math.round(v.percent) : v.percent < 10 ? v.percent.toFixed(1) : Math.floor(v.percent)}%`;
   const width = v.percent == null ? 0 : v.percent.toFixed(1);
   const src = v.source ? `<span class="dlp-src" data-kind="${v.source.kind}">来源 <b>${esc(v.source.text)}</b></span>` : '';
-  const note = opts.note || (v.phase === 'error' ? p.error || p.message : v.miss ? `没走公司内源：${v.miss}` : '');
+  const note = opts.note || (v.phase === 'error' ? p.error || p.message : '');
   return `<div class="dlp" data-dlp data-phase="${esc(v.phase)}"${v.indeterminate ? ' data-indeterminate' : ''}${opts.attrs ? ' ' + opts.attrs : ''}>`
     + `${title || pct ? `<div class="dlp-head"><span class="dlp-title">${esc(title)}</span><span class="dlp-pct">${pct}</span></div>` : ''}`
     + `<div class="dlp-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"${v.percent == null ? '' : ` aria-valuenow="${Math.round(v.percent)}"`}><i style="width:${width}%"></i></div>`

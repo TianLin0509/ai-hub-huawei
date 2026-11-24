@@ -83,12 +83,12 @@ test('断了再装：已下好的分片不重下；坏分片重下', async t => 
   assert.ok(!log.includes('model.int8.onnx.000')); assert.ok(log.includes('model.int8.onnx.001'));
 });
 
-test('被公司代理拦成网页：报「放行下载服务器」，不算就绪', async t => {
+test('被公司代理拦成网页：提示点底栏「一键放行」，不算就绪', async t => {
   const root = tmp(t), { pack, served } = fakePack();
   const asr = new MeetingAsr(root, { pack, sources: [{ id: 'a', name: '测试源', files: 'https://x.test/{version}/' }], fetchImpl: fetcher(served, { block: true }), spawnImpl: fakeSpawn() });
   asr.install(); await until(() => !asr.installing);
   const s = asr.status();
-  assert.equal(s.ready, false); assert.equal(s.blocked, true); assert.match(s.error, /放行下载服务器/);
+  assert.equal(s.ready, false); assert.equal(s.blocked, true); assert.match(s.error, /一键放行/);
 });
 
 test('旧引擎（Whisper）已装：照常可用，并提示升级', t => {

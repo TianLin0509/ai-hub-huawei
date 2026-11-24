@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "version": "3.0.1",
+ "version": "3.0.2",
  "packs": [
   {
    "id": "claude-01",
@@ -730,10 +730,10 @@
   },
   {
    "id": "claude-draw",
-   "version": "3.0.1",
-   "file": "claude-draw-3.0.1.mp4",
-   "bytes": 1962819,
-   "sha256": "54d04b6f0049206576b736ed842c093fc4e41c1cf7717a9f3f5680112b31e122",
+   "version": "3.0.2",
+   "file": "claude-draw-3.0.2.mp4",
+   "bytes": 2156523,
+   "sha256": "c64f4dadcd1a3b48bc8a4981ce0cd82226d289c82c279b2d7a5233bf9beee204",
    "name": "Claude · 召唤师抽卡",
    "who": "claude",
    "anim": "video",
@@ -741,10 +741,10 @@
   },
   {
    "id": "codex-draw",
-   "version": "3.0.1",
-   "file": "codex-draw-3.0.1.mp4",
-   "bytes": 1997457,
-   "sha256": "89790eace593ab8829e696b6e5c3025199ccf403cab810f61966f1268e33cb4c",
+   "version": "3.0.2",
+   "file": "codex-draw-3.0.2.mp4",
+   "bytes": 2242599,
+   "sha256": "e167f4f1ba49324011fbd2c6950d3f023d823cdb71eea0f7d1c23187d3ea98f6",
    "name": "Codex · 召唤师抽卡",
    "who": "codex",
    "anim": "video",
@@ -752,10 +752,10 @@
   },
   {
    "id": "deepseek-draw",
-   "version": "3.0.1",
-   "file": "deepseek-draw-3.0.1.mp4",
-   "bytes": 1984764,
-   "sha256": "2e922fdf28d9596f99c78eb9875425e04015a590686b08f48dc8d378103c9702",
+   "version": "3.0.2",
+   "file": "deepseek-draw-3.0.2.mp4",
+   "bytes": 2186698,
+   "sha256": "5c702f7d75d260fefdae83ad0e8cc3bfa2bab7877776ecd7c73462a1fb67366d",
    "name": "DeepSeek · 召唤师抽卡",
    "who": "deepseek",
    "anim": "video",

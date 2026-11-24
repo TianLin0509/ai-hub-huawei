@@ -28,12 +28,14 @@ function fakeNet({ releases = [{ id: 1, version: 'v' + version }], down = false,
 function controller(net, isPublic) {
   openx.EDITION_ON = isPublic;
   return createAppUpdateController({ config: { sources }, currentVersion: '5.6.56', fetchImpl: net.fetchImpl,
-    dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'update-source-')), env: { AI_HUB_OPENX: '1', AI_HUB_OPENX_ONLY: '0' } });
+    dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'update-source-')),
+    // 版本清单用测试注入的本机源（AI_HUB_UPDATE_SOURCES），这里只测内源那一行的探测。
+    env: { AI_HUB_OPENX: '1', AI_HUB_UPDATE_SOURCES: JSON.stringify(sources) } });
 }
 test.beforeEach(() => openx._reset());
 test.afterEach(() => { openx.EDITION_ON = originalEdition; });
 
-test('成员版（r56）：内源行显示 member-v<版本> 的真实探测结果；只有公开版同名版本时显示没有该版本；外网源顺序保留', async () => {
+test('成员版（r56）：内源行显示 member-v<版本> 的真实探测结果；只有公开版同名版本时显示没有该版本', async () => {
   let net = fakeNet({ releases: [{ id: 2, version: 'v' + version }, { id: 3, version: 'member-v' + version }] });
   let c = controller(net, false);
   try {
@@ -41,7 +43,6 @@ test('成员版（r56）：内源行显示 member-v<版本> 的真实探测结�
     assert.equal(state.sourceEdition, '成员版');
     assert.equal(state.checks[0].id, 'openx');
     assert.equal(sourceText(state.internalSource), '可用，最新 v' + version);
-    assert.deepEqual(state.sources.map(s => s.id), ['external']);
     assert.deepEqual(net.calls.filter(url => url.includes('by_id')).map(url => url.split('=').pop()), ['3'], '只查 member 版本详情');
     assert.equal((await c.probeSources()).sources[0].ok, true);
   } finally { c.dispose(); }
@@ -71,12 +72,12 @@ test('公开版：窗口与体检均显示可用的目标版本，和下载器�
     assert.equal(probe.sources[0].ok, true);
     assert.equal(net.calls.filter(url => url.includes('by_project_id')).length, 1);
     assert.equal(net.calls.filter(url => url.includes('by_id')).length, 1);
-    assert.equal((await openx.find({ file, version, fetchImpl: net.fetchImpl, env: { AI_HUB_OPENX: '1', AI_HUB_OPENX_ONLY: '0' } })).releaseId, 1);
+    assert.equal((await openx.find({ file, version, fetchImpl: net.fetchImpl, env: { AI_HUB_OPENX: '1' } })).releaseId, 1);
     assert.equal(net.calls.filter(url => url.includes('by_id')).length, 1);
   } finally { c.dispose(); }
 });
 
-test('公开版：内源连不上显示原因，5 分钟失败缓存避免重复请求，外网仍可更新', async () => {
+test('公开版：内源连不上显示原因，5 分钟失败缓存避免重复请求', async () => {
   const net = fakeNet({ down: true });
   const c = controller(net, true);
   try {
@@ -102,7 +103,7 @@ test('公开版：缺少该版本或其程序附件显示没有该版本，不�
 
 test('内源探测有整体预算，慢网络和不响应取消的网络都按时返回', async () => {
   const started = Date.now();
-  const row = await openx.probe({ version, file, env: { AI_HUB_OPENX: '1', AI_HUB_OPENX_ONLY: '0' }, timeoutMs: 35, fetchImpl: () => new Promise(() => {}) });
+  const row = await openx.probe({ version, file, env: { AI_HUB_OPENX: '1' }, timeoutMs: 35, fetchImpl: () => new Promise(() => {}) });
   assert.ok(Date.now() - started < 500);
   assert.match(sourceText(row), /连不上：.*未完成探测/);
 });
@@ -141,23 +142,25 @@ function render(state, isPublic) {
       if (id === '../core/app-update/openx-config') return { enabledInEdition: isPublic };
       if (id === '../core/app-update/source-view') return require(id);
       if (id === 'electron') return { ipcRenderer: { on() {}, invoke: async k => k === 'app-update:get-state' ? state : null }, shell: {} };
-      if (id === './net-pass-view') return { ensureCss() {}, bind() {}, boxHtml() { return ''; } };
       if (id === './download-progress-view') return require('../renderer/download-progress-view');
       throw new Error(id);
     } };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../renderer/app-update.js'), 'utf8'), context);
   return new Promise(resolve => setImmediate(() => { context.window.__appUpdate.open(); resolve(dialog.innerHTML); }));
 }
-test('更新窗真实渲染：公开版/成员版副标题、灰色说明、连接错误转义、无版本与下载阶段内源均可见', async () => {
-  for (const [isPublic, internal] of [[false, { status: 'off', reason: MEMBER_NOTE }], [true, { status: 'failed', reason: '<错误>' }], [true, { status: 'missing', version }], [true, { ok: true, version }]]) {
+test('更新窗真实渲染（R35）：只有一行「公司内源」状态，写清原因和下一步；没有多源列表、版本类别、放行框、抢先版', async () => {
+  const { internalLine } = require('../core/app-update/source-view');
+  for (const internal of [{ status: 'failed', reason: '<错误>' }, { status: 'missing', version }, { ok: true, version }, { status: 'down', reason: '内源连不上：DNS 无法解析' }]) {
     const row = { id: 'openx', name: '内源（公司内网）', ...internal };
-    for (const phase of ['none', 'available', 'downloading', 'ready', 'error', 'error-check']) {
-      const html = await render({ phase: phase === 'error-check' ? 'error' : phase, current: version, latest: { version }, plan: { kind: 'full' }, internalSource: row,
-        checks: [row], sources: [{ id: 'external', name: '外网源' }], attempts: phase === 'error' ? [{ id: 'external', status: 'failed', reason: '失败' }] : [] }, isPublic);
-      assert.ok(html.includes('内测先锋版 · ' + (isPublic ? '公开版' : '成员版')));
+    for (const phase of ['none', 'available', 'error']) {
+      const html = await render({ phase, current: version, latest: { version }, plan: { kind: 'full' }, internalSource: row, checks: [row], attempts: [] }, true);
+      assert.ok(html.includes('内测先锋版'));
+      assert.equal((html.match(/data-source=/g) || []).length, 1, phase + ' 只有一行来源');
       assert.ok(html.includes('data-source="openx"'));
-      assert.ok(html.includes(sourceText(row).replace(/</g, '&lt;').replace(/>/g, '&gt;')));
-      if (!isPublic) assert.match(html, /class="idle" data-source="openx"/);
+      assert.ok(html.includes(internalLine(row).replace(/</g, '&lt;').replace(/>/g, '&gt;')), phase);
+      assert.doesNotMatch(html, /公开版|成员版|更新源|外网源|按顺序尝试|抢先版|放行下载服务器|data-au="preview"|只能更新到最新版/);
     }
   }
+  assert.match(internalLine({ status: 'missing', version }), /缺包.*请过几分钟再试/);
+  assert.match(internalLine({ status: 'down', reason: '内源连不上：DNS 无法解析' }), /连不上公司内源.*公司网络/);
 });

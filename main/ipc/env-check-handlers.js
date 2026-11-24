@@ -37,8 +37,7 @@ function registerEnvCheckIpc(ipcMain, deps) {
   });
 
   // fresh：「重新体检」为 true（定位中心真重测），打开体检为 false（复用 2 分钟内的结论）；不传按 true。
-  async function run({ canary = false, fresh = true } = {}) {
-    if (canary) return envCheck.runEnvCheck({ ...context(), canary: true });
+  async function run({ fresh = true } = {}) {
     fresh = fresh !== false;
     // 连点「重新体检」时共用进行中的那一次；进行中的是复用缓存的那种、这次要真重测时，等它结束再重测一轮。
     if (running && (!fresh || running.fresh)) return running;
@@ -110,12 +109,6 @@ function registerEnvCheckIpc(ipcMain, deps) {
         if (!restart) throw new Error('这个版本没有公司模型反代');
         await restart();
         return { ok: true, message: '已重新启动模型通道' };
-      }
-      if (act === 'ppt-download') {
-        // 镜像不可用时退到 GitHub 备用入口（和 PPT 页的两个下载按钮同一套地址）。
-        const { downloadDoctor } = require('../../core/company-assistant/ppt-doctor-download');
-        try { await downloadDoctor('mirror'); } catch { await downloadDoctor('github'); }
-        return { ok: true, message: '已在浏览器里打开下载地址' };
       }
       if (act === 'open-url') {
         const fix = item?.fixes?.find(f => f.act === 'open-url' && f.url === request.url) || item?.fixes?.find(f => f.act === 'open-url');

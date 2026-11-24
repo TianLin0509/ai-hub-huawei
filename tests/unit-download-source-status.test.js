@@ -22,7 +22,7 @@ function fakeNet({ releases = [], down = false } = {}) {
 }
 const FILE_SITE = require('../core/app-update/openx-config').fileSite;
 const pkg = name => ({ originalFileName: name, url: new URL('x/' + name, FILE_SITE).href });
-const env = { AI_HUB_OPENX: '1', AI_HUB_OPENX_ONLY: '0' };
+const env = { AI_HUB_OPENX: '1' };
 const fresh = () => { openxSource._reset(); sourceStatus._reset(); };
 
 test('内源有这个组件包：可用；版本名按 cli-<id>-<版本> 精确命中', async () => {
@@ -43,13 +43,14 @@ test('多文件组件只有一部分在内源：部分；全没有：缺包；�
   assert.equal(partial.total, 2);
   const missing = await sourceStatus.check({ items: [{ file: 'nope.zip', release: 'x-1' }] }, { fetchImpl: net.fetchImpl, env });
   assert.equal(missing.status, 'missing');
-  assert.match(missing.text, /本次走备用源/);
+  assert.match(missing.text, /暂缺这个包/);
+  assert.doesNotMatch(missing.text, /备用/);
   fresh();
   const down = await sourceStatus.check({ items }, { fetchImpl: fakeNet({ down: true }).fetchImpl, env });
   assert.equal(down.status, 'down');
 });
 
-test('内源关掉、公司内部渠道：分别显示「已关闭」「公司官方」', async () => {
+test('内源不生效、公司内部渠道：分别显示「未生效」「公司官方」', async () => {
   fresh();
   assert.equal((await sourceStatus.check({ files: ['a'] }, { fetchImpl: async () => json({}), env: { AI_HUB_OPENX: '0' } })).status, 'off');
   const internal = await sourceStatus.check({ internal: 'CodeAgent 官方渠道' }, { fetchImpl: null, env });
@@ -108,7 +109,7 @@ test('界面：标识一行带「内源」字样与状态，编号写在 data �
   const slot = view.slotHtml('cli:codex');
   assert.match(slot, /data-dl-source="cli:codex"/);
   assert.match(slot, /内源 · 检查中/);
-  assert.match(view.html({ status: 'ok', text: '公司内源 · 可用（优先从内源下载）' }), /内源 · 可用.*下载源：公司内源 · 可用/);
+  assert.match(view.html({ status: 'ok', text: '公司内源 · 可用' }), /内源 · 可用.*来源：公司内源 · 可用/);
   assert.match(view.html({ status: 'missing', text: 'x' }), /内源 · 缺包/);
   view._known.set('cli:codex', { status: 'ok', text: '公司内源 · 可用' });
   assert.match(view.slotHtml('cli:codex'), /data-status="ok"/);

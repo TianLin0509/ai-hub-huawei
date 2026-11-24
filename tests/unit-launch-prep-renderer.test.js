@@ -66,7 +66,6 @@ function page(file, invoke, distribution = {}) {
     if (name === '../core/first-run-prep') return { ...require('../core/first-run-prep'), readState: () => distribution.prepState || null };
     if (name === '../core/data-dir') return { getHubDataDir: () => 'unused' };
     if (name === './codeagent-setup') return { createCodeAgentSetup: () => ({ accept() {}, subscribe() {}, showGuide() { opened.push('bundled-guide'); } }) };
-    if (name === './net-pass-view') return { ensureCss() {}, boxHtml: () => '', bind() {} };
     if (name === './download-source-view') return { ensureCss() {}, slotHtml: () => '', html: () => '', fill: async () => [] };
     if (name === './download-progress-view') return { ensureCss() {}, html: () => '', mount: () => () => {}, subscribe: () => () => {} };
     if (name === './harness-view') return require('../renderer/harness-view');
@@ -242,45 +241,39 @@ test('首页安装失败就地提示，仍可重试', async () => {
   assert.match(note.textContent, /网络暂时连不上/); assert.equal(note.hidden, false); assert.equal(button.disabled, false);
 });
 
-test('增量更新失败且没有发布页时，使用完整安装包清单生成直链', async () => {
-  const f = await updatePage({ plan: { kind: 'incremental', file: 'Hub-update.gz' },
-    latest: { version: '1.0.1', sourceName: '源B', installer: { file: 'Hub-Setup-1.0.1.exe', bytes: 50000, sha256: 'a'.repeat(64) } } });
-  assert.match(f.dialog.innerHTML, /下载完整安装包/);
-  assert.doesNotMatch(f.dialog.innerHTML, /发布页/);
-  await f.clickManual();
-  assert.deepEqual(f.opened, ['https://b.example.invalid/v1.0.1/Hub-Setup-1.0.1.exe']);
-});
-
-async function updatePage(over = {}, config = {}) {
-  const state = { phase: 'error', current: '1.0.0', releasePage: '', latest: { version: '1.0.1', sourceName: '源B' },
-    plan: { kind: 'full', file: 'Hub-Setup-1.0.1.exe' }, error: '所有下载源都失败了。可以稍后再试，或打开发布页手动下载安装包。', ...over };
-  const f = page('app-update.js', name => name === 'app-update:get-state' ? state : null, {
-    updateConfig: { sources: [{ id: 'a', name: '源A', files: 'https://a.example.invalid/v{version}/' },
-      { id: 'b', name: '源B', files: 'https://b.example.invalid/v{version}/' }], ...config },
-  });
+// R35：完整安装包只从公司内源取，不再拼外网源直链、不再打开发布页。
+async function updatePage(over = {}, openResult = { ok: false, reason: '内源上没有' }) {
+  const state = { phase: 'error', current: '1.0.0', latest: { version: '1.0.1', installer: { file: 'Hub-Setup-1.0.1.exe', bytes: 50000, sha256: 'a'.repeat(64) } },
+    plan: { kind: 'full', file: 'Hub-Setup-1.0.1.exe' }, error: '更新包下载没有完成：连不上公司内源', ...over };
+  const f = page('app-update.js', name => name === 'app-update:get-state' ? state : name === 'download-source:open' ? openResult : null, { updateConfig: { sources: [] } });
   await settled(); f.window.__appUpdate.open();
   f.dialog = f.body.querySelector('dialog');
   f.clickManual = () => f.dialog.listeners.click({ target: { closest: () => ({ dataset: { au: 'manual' } }) } });
   return f;
 }
-test('更新没有发布页时，完整安装计划使用清单文件名和实际源生成直链', async () => {
-  const f = await updatePage();
-  assert.match(f.dialog.innerHTML, /下载完整安装包/);
-  assert.doesNotMatch(f.dialog.innerHTML, /发布页/);
+test('完整安装包按钮：先在内源上找这一版的安装包，找到就在浏览器里打开（主进程打开）', async () => {
+  const f = await updatePage({}, { ok: true, via: 'openx' });
+  assert.match(f.dialog.innerHTML, /下载完整安装包（公司内源）/);
+  assert.doesNotMatch(f.dialog.innerHTML, /发布页|内源优先|备用/);
   await f.clickManual();
-  assert.deepEqual(f.opened, ['https://b.example.invalid/v1.0.1/Hub-Setup-1.0.1.exe']);
+  assert.ok(f.calls.some(([name, args]) => name === 'download-source:open' && args.point === 'app-installer'));
+  assert.deepEqual(f.opened, []);
 });
-// O④（2026-11-20）：写了发布页也先找公司内源上的完整包，内源没有或连不上才打开发布页。
-test('有发布页时：按钮先找内源，找不到再打开发布页', async () => {
-  const f = await updatePage({ releasePage: 'https://example.invalid/releases' });
-  assert.match(f.dialog.innerHTML, /下载完整安装包（内源优先）/);
-  await f.clickManual(); assert.deepEqual(f.opened, ['https://example.invalid/releases']);
+test('内源上没有这一版的安装包：改开内源上最近的完整安装包（r27）', async () => {
+  const f = await updatePage({ fullPackage: { url: 'https://openx.example.invalid/files/Hub-Setup-1.0.0.exe', file: 'Hub-Setup-1.0.0.exe', version: '1.0.0' } });
+  await f.clickManual();
+  assert.deepEqual(f.opened, ['https://openx.example.invalid/files/Hub-Setup-1.0.0.exe']);
 });
-test('缺清单、缺下载源或仅有增量文件时，不显示无效下载按钮或发布页提示', async () => {
-  for (const [state, config] of [[{ latest: null }, {}], [{ plan: { kind: 'incremental', file: 'Hub-update.gz' } }, {}], [{}, { sources: [] }]]) {
-    const f = await updatePage(state, config);
+test('内源上都找不到：就地说明原因和下一步，不打开任何外网地址', async () => {
+  const f = await updatePage();
+  await f.clickManual();
+  assert.deepEqual(f.opened, []);
+  assert.match(f.body.querySelector('dialog').innerHTML, /公司内源上暂时找不到完整安装包.*公司网络/);
+});
+test('缺清单又没有内源完整包、或只有增量包：不显示无效的下载按钮', async () => {
+  for (const state of [{ latest: null, plan: null }, { latest: { version: '1.0.1' }, plan: { kind: 'incremental', file: 'Hub-update.gz' } }]) {
+    const f = await updatePage(state);
     assert.doesNotMatch(f.dialog.innerHTML, /data-au="manual"|发布页/);
     assert.match(f.dialog.innerHTML, /重试/);
-    await f.clickManual(); assert.deepEqual(f.opened, []);
   }
 });

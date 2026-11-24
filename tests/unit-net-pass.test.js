@@ -4,7 +4,6 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
 const ownHosts = require('../core/own-hosts');
 const { createNetPass } = require('../core/net-pass');
-const view = require('../renderer/net-pass-view');
 
 const config = { sources: [
   { id: 'aliyun-fast', name: '阿里云高速', mirror: true, manifest: 'https://dl.example.tech/hub-update/company/latest.json', files: 'https://dl.example.tech/hub-update/company/v{version}/' },
@@ -36,7 +35,6 @@ test('自动放行结束广播终态：弹窗不再停在两台可访问但仍�
   await np.passAll();
   assert.equal(events.at(-1).running, false);
   assert.ok(events.at(-1).hosts.every(h => h.state === 'ok'));
-  assert.doesNotMatch(view.boxHtml(events.at(-1)), /disabled|正在放行/);
 });
 
 test('放行过程中打开更新面板仍返回完整状态', async () => {
@@ -48,42 +46,6 @@ test('放行过程中打开更新面板仍返回完整状态', async () => {
   release();
   await run;
   assert.equal((await refresh).running, false);
-});
-
-test('放行文案区分成功、失败、超时和本来可访问', () => {
-  const status = { available: true, running: false, needed: false,
-    hosts: [{ name: 'mirror', state: 'ok' }] };
-  assert.match(view.boxHtml(status), /本来就可以访问/);
-  assert.match(view.boxHtml(status, { last: { results: [{ first: 'blocked', result: 'ok' }] } }), /放行成功/);
-  const blocked = { ...status, needed: true, hosts: [{ name: 'mirror', state: 'blocked' }] };
-  assert.match(view.boxHtml(blocked, { last: { results: [{ first: 'blocked', result: 'blocked' }] } }), /放行失败/);
-  assert.match(view.boxHtml(blocked, { last: { results: [{ result: 'blocked', timedOut: true }] } }), /放行超时/);
-  assert.match(view.boxHtml({ ...status, hosts: [{ name: 'mirror', state: 'error', reason: '连接超时' }] }, { last: { results: [] } }), /放行超时/);
-  const recovered = view.boxHtml({ ...status, results: [{ first: 'blocked', result: 'ok' }] },
-    { last: { error: true, results: [{ result: 'blocked', name: 'mirror' }] } });
-  assert.match(recovered, /放行成功/);
-  assert.doesNotMatch(recovered, /放行失败|np-need|data-np="open"/);
-});
-
-test('首次检查被拦、失败或超时，没有放行记录时不显示放行终态', () => {
-  for (const host of [{ state: 'blocked' }, { state: 'error', reason: 'offline' }, { state: 'error', reason: '连接超时' }]) {
-    const html = view.boxHtml({ available: true, needed: true, hosts: [{ name: 'mirror', ...host }] });
-    assert.match(html, /第一次使用请先放行/);
-    assert.doesNotMatch(html, /放行失败|放行超时|放行成功/);
-  }
-});
-
-test('后来已能访问时，旧失败或超时快照不再显示失败或手动放行入口', () => {
-  const status = { available: true, needed: false, hosts: [{ host: 'mirror', name: 'mirror', state: 'ok' }] };
-  for (const last of [
-    { error: true },
-    { results: [{ host: 'mirror', name: 'mirror', result: 'blocked', timedOut: true }] },
-    { results: [{ host: 'mirror', name: 'mirror', first: 'blocked', result: 'blocked' }] },
-  ]) {
-    const html = view.boxHtml(status, { last });
-    assert.match(html, /放行成功|本来就可以访问/);
-    assert.doesNotMatch(html, /放行失败|放行超时|np-need|data-np="open"/);
-  }
 });
 
 test('检查期间排队的多次放行不会同时打开同一主机的放行窗口', async () => {
@@ -116,18 +78,6 @@ test('检查期间排队的多次放行不会同时打开同一主机的放行�
   assert.equal(np.status().running, false);
 });
 
-test('IPC 放行失败恢复按钮并显示可重试文字', async () => {
-  let listener, update;
-  const button = { dataset: { np: 'run' }, disabled: false, textContent: '', closest: () => button };
-  const root = { dataset: {}, contains: () => true, addEventListener: (_event, fn) => { listener = fn; } };
-  view.bind(root, { ipcRenderer: { invoke: async () => { throw new Error('IPC unavailable'); } },
-    onUpdate: (next, last) => { update = { next, last }; } });
-  await listener({ target: button, preventDefault() {} });
-  assert.equal(button.disabled, false);
-  assert.match(button.textContent, /放行失败/);
-  assert.match(view.boxHtml({ available: true, hosts: [{ state: 'blocked' }] }, { last: update.last }), /放行失败/);
-});
-
 test('后台放行超时仍广播终态并保留超时原因', async () => {
   const events = [];
   const np = createNetPass({ hosts: ownHosts.downloadHosts(config), fetchImpl: async () => res(GATE),
@@ -142,10 +92,7 @@ test('服务器连接失败后也广播终态，按钮允许再次放行', async
   const np = createNetPass({ hosts: ownHosts.downloadHosts(config), fetchImpl: async () => { throw new Error('offline'); },
     onChange: s => events.push(s) });
   await np.passAll();
-  const html = view.boxHtml(events.at(-1));
   assert.equal(events.at(-1).running, false);
-  assert.match(html, /放行失败，请重试/);
-  assert.doesNotMatch(html, /disabled|正在放行/);
 });
 
 test('一个按钮放行两台：拦着的逐台开放行页，放行后都显示可以访问，并记住', async () => {
@@ -160,7 +107,6 @@ test('一个按钮放行两台：拦着的逐台开放行页，放行后都显�
   assert.deepEqual(opened, ['https://dl.example.tech/hub-update/api/feedback', 'https://me.example.tech/hub-update/api/feedback']);
   assert.deepEqual(r.results.map(x => x.result), ['ok', 'ok']);
   assert.equal(r.needed, false);
-  assert.match(view.boxHtml(events.at(-1)), /放行成功/);
   // 换个进程（重启 Hub）：记得放行过，查之前不再提醒
   const again = createNetPass({ hosts, dataDir, fetchImpl: async () => res(OWN) });
   assert.equal(again.status().needed, false);
@@ -174,20 +120,6 @@ test('后台放行没成功的给出浏览器打开；连不上不是放行能�
   const r = await np.passAll();
   assert.deepEqual(r.results.map(x => x.result), ['error', 'blocked']);
   assert.equal(r.needed, true);
-  const html = view.boxHtml(r, { last: r });
-  assert.match(html, /第一次使用请先放行下载服务器/);
-  assert.match(html, /打开放行页「阿里云」/);
-  assert.doesNotMatch(html, /打开放行页「阿里云高速」/);
-  assert.match(html, /连不上/);
-});
-
-test('都能访问时只显示一行和「重新放行」；没有自家主机时什么都不显示', async () => {
-  const np = createNetPass({ hosts: ownHosts.downloadHosts(config), fetchImpl: async () => res(OWN) });
-  await np.refresh();
-  const html = view.boxHtml(np.status());
-  assert.match(html, /np-line/); assert.match(html, /重新放行/); assert.doesNotMatch(html, /第一次使用/);
-  assert.equal(view.boxHtml(createNetPass({ hosts: [] }).status()), '');
-  assert.equal(view.boxHtml(null), '');
 });
 
 // 2026-11-08 事故：放行失败后给的是被拦的 .gz 地址，点开变成下载文件。放行一律开主机的放行小页面，放行窗口里不下载。

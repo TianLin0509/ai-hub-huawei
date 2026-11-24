@@ -44,7 +44,6 @@ function boot(initial, storage = new Map(), { invokes = [] } = {}) {
       if (k === '../core/distribution') return { updateConfig: { sources: [{ id: 'a', name: '源A', files: 'https://example.invalid/v{version}/' }] }, productName: 'test' };
       if (k === '../core/app-update/source-view' || k === '../core/app-update/openx-config' || k === '../core/app-update/downloader') return require(k.replace('..', path.join(__dirname, '..')));
       if (k === 'electron') return { ipcRenderer, shell: { openExternal() {} } };
-      if (k === './net-pass-view') return { boxHtml() { return ''; }, bind() {}, ensureCss() {} };
       if (k === './download-progress-view') return { html() { return ''; } };
       throw new Error(k);
     } };

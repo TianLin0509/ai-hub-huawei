@@ -1,7 +1,6 @@
 'use strict';
-const { DOWNLOAD_URL, MIRROR_MANIFEST_URLS, GITHUB_DOWNLOAD_URL } = require('./ppt-doctor-protocol');
-const { resolveFetch } = require('./fetch-util');
-const { reasonOf } = require('../app-update/downloader');
+// PPT Doctor 完整包地址解析（一键安装用）。浏览器手动下载（镜像 / GitHub 入口）已随下载源废弃删除（R35）。
+const { DOWNLOAD_URL } = require('./ppt-doctor-protocol');
 const validVersion = version => typeof version === 'string' && /^\d+\.\d+\.\d+(?:-[a-z0-9.-]+)?$/i.test(version);
 
 function archiveUrl(manifest, base = DOWNLOAD_URL) {
@@ -15,38 +14,4 @@ function archiveUrl(manifest, base = DOWNLOAD_URL) {
   return new URL(full.path, base).href;
 }
 
-async function downloadDoctor(source = 'mirror', deps = {}) {
-  if (require('../app-update/openx-source').onlyChannel(deps.env || process.env)) throw new Error('PPT Doctor 改为只从公司内源安装，请点「一键安装 / 升级 Doctor」');
-  if (!['mirror', 'github'].includes(source)) throw new Error('请选择镜像下载或 GitHub 备用入口');
-  let url = GITHUB_DOWNLOAD_URL;
-  if (source === 'mirror') {
-    const fetch = require('../own-gate').gatedFetch(resolveFetch(deps.pptDownloadFetch));
-    const bases = deps.pptMirrorUrls || MIRROR_MANIFEST_URLS;
-    const reasons = [];
-    url = null;
-    // 高速镜像排第一；读不到、或清单里那一版的安装包还没同步到，就换下一个镜像。
-    for (const base of bases) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 12000);
-      try {
-        const response = await fetch(base, { signal: controller.signal, redirect: 'error' });
-        if (!response.ok) throw new Error(`版本清单 HTTP ${response.status}`);
-        if (Number(response.headers.get('content-length')) > 2 * 1024 * 1024) throw new Error('版本清单过大');
-        const text = await response.text(); if (Buffer.byteLength(text, 'utf8') > 2 * 1024 * 1024) throw new Error('版本清单过大');
-        const manifest = JSON.parse(text.replace(/^\uFEFF/, ''));
-        // Layout is owned by PPT Doctor tools/mirror_release.py. No arbitrary URL
-        // from a remote JSON is passed to shell.openExternal.
-        const candidate = archiveUrl(manifest, base);
-        const archive = await fetch(candidate, { method: 'HEAD', signal: controller.signal, redirect: 'error' });
-        if (!archive.ok || /text\/html/i.test(archive.headers.get('content-type') || '')) throw new Error('对应版本的完整安装包暂不可用');
-        url = candidate;
-        break;
-      } catch (error) { reasons.push(reasonOf(error)); }
-      finally { clearTimeout(timer); }
-    }
-    if (!url) throw new Error('镜像下载暂不可用：' + (reasons[reasons.length - 1] || '未知原因') + '。请稍后重试，或使用 GitHub 备用入口');
-  }
-  await (deps.pptOpenExternal || (target => require('electron').shell.openExternal(target)))(url);
-  return { ok: true, source, url };
-}
-module.exports = { downloadDoctor, archiveUrl };
+module.exports = { archiveUrl };

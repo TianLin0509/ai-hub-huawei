@@ -19,7 +19,7 @@ const cleanupStart = source.indexOf('async function runFinalShutdownCleanup()');
 const cleanupEnd = source.indexOf("  capture('completion-notifier'", cleanupStart);
 assert.ok(cleanupStart > 0 && cleanupEnd > cleanupStart, '真实服务清理函数存在');
 const cleanupSource = source.slice(cleanupStart, cleanupEnd) + '\n  dbCleanup(); return { clean: errors.length === 0, errors };\n}';
-const beatQuitHook = source.match(/app\.on\('will-quit', \(\) => beats\.forEach\(b => b\.stop\(\)\)\);/)[0];
+// R35：下载主机放行心跳已删，main.js 里不再有 beats 的退出钩子。
 
 function setup(t, { veto = false, drainSafe = true, overlays = false } = {}) {
   const db = new DatabaseSync(':memory:');
@@ -70,7 +70,6 @@ function setup(t, { veto = false, drainSafe = true, overlays = false } = {}) {
     companyForumEdge: { close: async () => { await Promise.resolve(); stop('forum-edge'); } },
     accountCenter: { stopPump: () => stop('account-pump'), adapter: { dispose: () => stop('account-adapter') } },
     hubAccountsService: { stopAuto: () => stop('hub-accounts') },
-    beats: [{ stop: () => stop('heartbeat') }],
     hubPetController: { getWindows: () => overlays ? [pet, petMenu] : [], dispose: () => {
       stop('pet-dispose'); if (overlays) { pet.destroyed = true; petMenu.destroyed = true; }
     } },
@@ -90,7 +89,6 @@ function setup(t, { veto = false, drainSafe = true, overlays = false } = {}) {
   vm.runInContext(cleanupSource, context);
   vm.runInContext(source.slice(start, end), context);
   vm.runInContext(source.slice(closeStart, closeEnd), context);
-  vm.runInContext(beatQuitHook, context);
   main.on('closed', () => { context.mainWindow = null; });
   t.after(() => { try { db.close(); } catch {} });
   return { db, counts, stopped, order, app, main, context, pet, petMenu, notification, shutdown: () => context.beginGracefulHubShutdown('test-update') };
@@ -157,7 +155,7 @@ test('实际 app.quit 入口拒绝关闭时，代理、账号、心跳及桌宠�
   f.app.quit();
   const result = await f.context.shutdownDrainPromise;
   assert.equal(result.safeToQuit, true);
-  for (const name of ['model-confirmation', 'lan-pool', 'proxy', 'forum-edge', 'account-pump', 'account-adapter', 'hub-accounts', 'heartbeat', 'pet-dispose', 'notification-dispose']) {
+  for (const name of ['model-confirmation', 'lan-pool', 'proxy', 'forum-edge', 'account-pump', 'account-adapter', 'hub-accounts', 'pet-dispose', 'notification-dispose']) {
     assert.equal(f.stopped[name], 1, `${name} 仅在最终退出时清理一次`);
   }
   assert.equal(f.stopped['pet-close'], undefined, '桌宠没有被通用关窗确认提前关闭');

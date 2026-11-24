@@ -120,8 +120,8 @@ function sameRuntime(a, b) {
 // v3.1.3 起：只要清单里有 incrementalDelta，就先按它走小包（下载前核对 requires，对不上再回完整更新包）；
 // 无论从哪一版过来都直接升到最新版，不需要逐版升级。
 // allowSame（2026-10-28，core/edition-channel.js）：换成另一个版本的同版本号安装包时，版本号相同也照常更新。
-// allowDowngrade（2026-11-16，core/app-update/version-catalog.js）：用户在「版本」页签里挑旧版回退时放行降级；
-// 回退只用完整更新包（不走差量小包），运行时不一致的旧版不能回退。
+// allowDowngrade（2026-11-16）：原先给「版本」页签回退旧版用；R35 已删掉回退界面，现在只有测试会传。
+// 降级只用完整更新包（不走差量小包），运行时不一致的旧版不能降级。
 function planUpdate(manifest, { version, runtime, allowSame = false, allowDowngrade = false }) {
   const cmp = compareVersions(manifest.version, version);
   if (allowDowngrade && cmp < 0) {

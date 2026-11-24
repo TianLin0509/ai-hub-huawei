@@ -44,6 +44,6 @@ test('重查后版本没变：照旧报错，不循环', async () => {
   await c.check({ silent: true, quietAllowed: false });
   await c.download();
   assert.equal(c.getState().phase, 'error');
-  assert.match(c.getState().error, /所有下载源都失败了/);
+  assert.match(c.getState().error, /更新包下载没有完成/);
   assert.equal(urls.filter(u => u.endsWith('latest.json')).length, 2); // 首次检查 + 一次重查
 });

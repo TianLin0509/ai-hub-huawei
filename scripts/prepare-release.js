@@ -102,7 +102,7 @@ async function main(){
         requires:delta.requires.map(item=>({path:item.path,bytes:item.bytes,sha256:item.sha256})),
         ...(delta.schema===3?{schema:3,baseVersion:delta.baseVersion,resultAsar:{bytes:delta.resultAsar.bytes,sha256:delta.resultAsar.sha256}}:{})}}:{}),
       // 下一版据此判断哪些文件没变（公司版另存到 latest.json，客户端不用）。
-      // 这一版认识「固定版本」（core/app-update/version-catalog.js）：versions.json 照抄，版本页据此决定回退后能不能承诺固定。
+      // 「固定版本」能力标记：R35 起客户端已删掉版本页与固定版本，这里留着只为兼容还在用旧版的同事。
       capabilities:['version-pin'],
       filesIndex:packed.index,
       installer:{file:setup.name,bytes:setup.bytes,sha256:setup.sha256}};

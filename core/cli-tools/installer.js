@@ -1,7 +1,7 @@
 'use strict';
 // CLI 一键安装（2026-11-07 用户：没装 Claude Code / Codex / DSH 的同事，点一下就装好，不用去官网）。
 //
-// 流程：读组件目录（签名校验）→ 下载（多源依次试，每个源都核对字节数和 sha256，被公司网络放行页拦住就自动放行再试）
+// 流程：读组件目录（签名校验）→ 从公司内源下载（核对字节数和 sha256）
 // → 直接解压到 <数据目录>/tools/<组件>/<版本>/ → 核对主程序、试跑一次 --version → 写「装好了」标记 → 写 installed.json。
 // 不再「先解压到临时目录、再整体改名」（r31：公司电脑上安全软件扫描新 exe 时整个目录改不了名，一键安装卡在 EPERM）。
 // installed.json 才是「装好了」的判据（标记文件 .aihub-ready.json 是旁证）：没写进去的目录都是半成品，下次安装时清掉。
@@ -137,11 +137,11 @@ function attemptsText(attempts) {
 }
 
 function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, onState = () => {},
-  unblock = null, isOwnUrl = () => false, unblockPassed = () => {}, run = runVersion, nodeUsable = null,
+  run = runVersion, nodeUsable = null,
   idleTimeoutMs, connectTimeoutMs, logger = console, npmRun, getDshEntry = () => ({}), busyRetry = {},
   processLines = runningCommandLines } = {}) {
   const root = () => registry.toolsRoot(env);
-  let catalog = null, catalogAt = 0, catalogFrom = [], catalogNote = '';
+  let catalog = null, catalogAt = 0, catalogFrom = [];
   let busy = null, abort = null;
   const tools = {};
   for (const id of registry.IDS) tools[id] = { phase: 'idle' };
@@ -157,7 +157,6 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
       if (!git && installed.claude) advice = { claude: GIT_ADVICE };
     }
     return { available: sources.length > 0, busy, tools: JSON.parse(JSON.stringify(tools)), installed, advice, git,
-      catalogNote: catalogNote || null,
       catalog: catalog ? catalog.components.map(c => ({ id: c.id, name: c.name, version: c.version, license: c.license,
         bytes: c.files.reduce((n, f) => n + f.bytes, 0) })) : null };
   }
@@ -189,40 +188,25 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
     return profile.resolveDshCliRuntime(entry, env).root;
   }
 
-  async function tryUnblock(url) {
-    if (!unblock || !isOwnUrl(url)) return false;
-    try { const ok = !!(await unblock(url)); if (ok) { try { unblockPassed(); } catch (_) {} } return ok; }
-    catch (error) { logger.warn?.('[cli-tools] 自动放行出错：', error.message); return false; }
-  }
-
   async function loadCatalog(signal) {
     if (catalog && Date.now() - catalogAt < CATALOG_TTL_MS) return catalog;
     const validate = raw => catalogLib.validateCatalog(raw, key === undefined ? {} : { key });
-    // R29（2026-11-24）：只走内源时直接用随程序发布的签名目录快照（发版时刷新、同一把公钥验签），不去外网读目录；文件只从内源下。
-    if (require('../app-update/openx-source').onlyChannel(env)) {
+    // R29/R35：内源生效时只用随程序发布的签名目录快照（发版时刷新、同一把公钥验签），不去外网读目录；文件只从内源下。
+    // 内源不生效（纯 Node 单测、测试注入 AI_HUB_UPDATE_SOURCES）时读给定源上的目录。
+    if (require('../app-update/openx-source').active(env)) {
       const snap = bundledCatalog(validate);
-      if (snap) { catalog = snap; catalogAt = Date.now(); catalogFrom = sources; catalogNote = ''; return catalog; }
+      if (!snap) throw new Error('程序自带的组件目录缺失或校验没通过，请更新 Hub 后再试');
+      catalog = snap; catalogAt = Date.now(); catalogFrom = sources; return catalog;
     }
     if (!sources.length) throw new Error('这个版本没有配置组件下载源，暂不能一键安装');
     const fetchFn = resolveFetch(fetchImpl);
-    let results = await checkManifests({ sources, fetchImpl: fetchFn, validate, signal });
-    const blocked = results.find(r => !r.ok && r.blocked);
-    if (blocked && await tryUnblock(blocked.url)) results = await checkManifests({ sources, fetchImpl: fetchFn, validate, signal });
+    const results = await checkManifests({ sources, fetchImpl: fetchFn, validate, signal });
     const ok = results.filter(r => r.ok);
     if (!ok.length) {
       const why = results.map(r => `${r.name}：${r.reason}`).join('；');
-      // r60（2026-11-20 同事反馈）：公司网络有时把阿里云整个拦掉（403 / 确认页），目录读不到，内源上明明有包也装不了。
-      // 改用随程序发布的目录快照（同一把公钥验签）；文件照旧先从内源下、按目录核 sha256。快照每次发版时刷新。
       if (signal && signal.aborted) throw new Error('已取消');
-      const snap = bundledCatalog(validate);
-      if (snap) {
-        // 快照只缓存 1 分钟（在线目录是 10 分钟）：网络恢复或点「重测」后很快换回在线目录。
-        catalog = snap; catalogAt = Date.now() - CATALOG_TTL_MS + 60 * 1000; catalogFrom = sources; catalogNote = `在线下载源读不到组件目录（${why}），用程序自带的目录`;
-        return catalog;
-      }
       throw Object.assign(new Error(`读不到组件目录（${why}）`), { blocked: results.find(r => r.blocked)?.url || null });
     }
-    catalogNote = '';
     // 取发布时间最新的那份目录（高速镜像每 5 分钟才同步一次，刚发的组件可能只在旧服务器上）；一样新时按源的顺序。
     // 目录和它一样新的源排在前面下载；其余的源留作后备（文件可能还在）。
     const when = r => Date.parse(r.manifest.publishedAt) || 0;
@@ -265,11 +249,9 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
       const expect = { file: file.name, bytes: file.bytes, sha256: file.sha256 };
       const go = () => downloadWithFallback({ sources: list, version: component.version, openx: { release: `cli-${component.id}-${component.version}`, env }, expect, dest: download,
         fetchImpl: resolveFetch(fetchImpl), signal, idleTimeoutMs, connectTimeoutMs,
-        onProgress: p => progress({ phase: 'downloading', received: p.received, total: p.total, speed: p.speed, etaSec: p.etaSec, sourceId: p.sourceId, sourceName: p.sourceName, openxMiss: p.openxMiss || null }),
+        onProgress: p => progress({ phase: 'downloading', received: p.received, total: p.total, speed: p.speed, etaSec: p.etaSec, sourceId: p.sourceId, sourceName: p.sourceName }),
         onAttempt: attempts => progress({ attempts: attempts.map(a => ({ name: a.name, status: a.status, reason: a.reason, blocked: !!a.blocked, url: a.url })) }) });
-      let result = await go();
-      const blocked = !result.ok && !result.cancelled && (result.attempts || []).find(a => a.blocked);
-      if (blocked && await tryUnblock(blocked.url)) result = await go();
+      const result = await go();
       if (!result.ok) {
         if (result.cancelled) throw Object.assign(new Error('已取消'), { cancelled: true });
         const err = new Error(`${component.name}没下载成功（${attemptsText(result.attempts)}）`);
@@ -400,7 +382,7 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
     busy = id;
     abort = new AbortController();
     const signal = abort.signal;
-    set(id, { phase: 'checking', error: null, blocked: null, received: 0, total: 0, speed: 0, etaSec: null, sourceId: null, sourceName: null, openxMiss: null, files: 0, attempts: [], step: null });
+    set(id, { phase: 'checking', error: null, blocked: null, received: 0, total: 0, speed: 0, etaSec: null, sourceId: null, sourceName: null, files: 0, attempts: [], step: null });
     try { work: {
       // repair（「装到我的全局 npm」）：按界面包要求把配套版本以 npm 全局模式装进用户自己的目录（生成 dsh.cmd，终端里能直接用）。
       // 不带 repair 的默认动作永远装进 Hub 自管目录，与识别到哪个目录、设置里指定了哪个目录无关，绝不写用户目录
@@ -473,9 +455,8 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
           set(id, { phase: stopped ? 'cancelled' : 'error', error: stopped ? null
             : `${error.message}；按你的 npm 配置安装 pi 也没有成功：${String(npmError.stderr || npmError.message).slice(0, 800)}`, blocked: error.blocked || null });
         }
-      } else if (id === 'dsh' && !repair && !cancelled && require('../app-update/openx-source').onlyChannel(env)
-        && error.reasonText && error.componentId === 'dsh') {
-        // R37（2026-11-24）：只走公司内源时不落回 npm（公司内部 npm 源缺 DSH 同代插件，会卡到 npm 超时）。
+      } else if (id === 'dsh' && !repair && !cancelled && error.reasonText && error.componentId === 'dsh') {
+        // R37（2026-11-24）/ R35：下载只走公司内源，不落回 npm（公司内部 npm 源缺 DSH 同代插件，会卡到 npm 超时）。
         // 一行写清原因和能照抄的手动安装命令（版本取自程序自带的组件快照；体检认出缺哪些插件就只补那些）。
         let diagnosis = null;
         try { diagnosis = require('../dsh-cli-profile').diagnoseDshRuntime(getDshEntry() || {}, env); } catch (_) {}
@@ -483,21 +464,7 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
         const cmd = require('./npm-fallback').dshManualCommand({ catalogVersion: ver, diagnosis });
         set(id, { phase: 'error', blocked: error.blocked || null, manualCommand: cmd,
           error: `DSH 运行环境 ${ver || ''} 没能从公司内源装上（${error.reasonText || error.message}）。Hub 只从内源下载，不改走 npm；可先在终端手动安装：${cmd}，装好后点「重新检测」` });
-      } else if (id === 'dsh' && !repair && !cancelled && !require('../app-update/openx-source').onlyChannel(env) && !/签名|校验不一致|校验没通过|文件大小不对/.test(error.message)) {
-        // 只有不限内源时才落回 npm；只走内源时 Node 补装失败、DSH 试运行没过等落到最后的 else 照实报原因（R37 审查 #4）。
-        try {
-          const targetRoot = path.join(root(), 'dsh', 'user-npm');
-          const result = await require('./npm-fallback').installDshWithUserNpm({ env, signal, run: npmRun, targetRoot,
-            onProgress: patch => set(id, { ...patch, fallbackReason: error.message, step: null }) });
-          const installed = registry.readInstalled(root());
-          installed.tools.dsh = { version: result.version, dir: path.relative(root(), targetRoot), installedAt: Date.now() };
-          registry.writeInstalled(root(), installed);
-          set(id, { phase: 'done', error: null, blocked: null, version: result.version, source: result.source, finishedAt: Date.now() });
-        } catch (npmError) {
-          const stopped = signal.aborted || npmError.name === 'AbortError';
-          set(id, { phase: stopped ? 'cancelled' : 'error', error: stopped ? null
-            : `${error.message}；按你的 npm 配置重试也没有成功：${String(npmError.stderr || npmError.message).slice(0, 800)}`, blocked: error.blocked || null });
-        }
+      // R35：DSH 组件下载失败不再自动改走 npm（下载只走公司内源）；Node 补装失败、试运行没过等照实报原因（R37 审查 #4）。
       } else set(id, { phase: cancelled ? 'cancelled' : 'error', error: cancelled ? null : error.message, blocked: error.blocked || null });
     } finally {
       busy = null;

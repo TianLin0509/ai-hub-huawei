@@ -217,7 +217,7 @@ async function openHiddenGateWindow(BrowserWindow, url, { loadTimeoutMs = 20000,
 // 后台放行没成功时的第二步（2026-11-08 用户定：要么自动放行，要么在 Hub 里弹出网页）：在 Hub 自己的窗口里打开放行页，
 // 继续自动点放行按钮，用户也可以手动点。看到自家页面（已放行）就自动关窗。只在用户动手触发的流程里用，后台检查不弹窗。
 async function openVisibleGateWindow(BrowserWindow, url, { parent = null, show = true, timeoutMs = 180000, pollMs = 1500, afterClickMs = 3000, maxClicks = 3,
-  ownTitles = OWN_PAGE_TITLES, title = '放行下载服务器（页面上点「继续访问」或「接受」，放行后自动关闭）', post = null } = {}) {
+  ownTitles = OWN_PAGE_TITLES, title = '放行服务器（页面上点「继续访问」或「接受」，放行后自动关闭）', post = null } = {}) {
   // post：只有 POST 被拦时（GET 已通，打开放行页看到的是正常页），在窗口里对被拦的地址 POST 一次，拦截页才会出现；拿回 JSON 即已通。
   const result = { passed: false, clicked: false, closed: false, timedOut: false, text: null, error: null };
   if (!/^https?:\/\//i.test(String(url || ''))) return { ...result, error: '放行页地址无效' };

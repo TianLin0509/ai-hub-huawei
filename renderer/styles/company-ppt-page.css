@@ -62,6 +62,7 @@
 .pptw-guide-copy strong{display:block;font-size:var(--hw-fs-18);font-weight:600;line-height:1.4;color:var(--hw-text-1)}
 .pptw-guide-copy p{margin:4px 0 0;font-size:var(--hw-fs-13);color:var(--hw-text-2)}
 .pptw-guide-actions{grid-column:2;display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:12px}
+.pptw-status.pptw-guide>.dl-src{grid-column:2;margin:4px 0 0}
 .pptw-guide-actions .pptw-btn.ghost{margin-left:auto}
 
 /* 检索结果：左边一张大白卡（检索条、操作、结果网格），右边详情卡 */

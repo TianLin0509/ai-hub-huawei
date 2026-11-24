@@ -2,7 +2,7 @@
 // 启动中心「一键安装」的界面文字（2026-11-07）：把安装器状态（core/cli-tools/installer.js）翻成人话。
 // 只做纯函数，弹窗怎么接线见 renderer/company-api-settings.js。
 
-// r58：每个一键安装区块都带「下载源：公司内源」一行（renderer/download-source-view.js），点之前就能看到会不会走内源。
+// r58：每个一键安装区块都带一行公司内源状态（renderer/download-source-view.js），点之前就能看到会不会走内源。
 const sourceView = require('./download-source-view');
 // r59：进度统一用 renderer/download-progress-view.js（进度条 + 已下/总量 + 速度 + 剩余时间 + 来源）。
 const progressBar = require('./download-progress-view');
@@ -25,8 +25,7 @@ function progressView(tool) {
     case 'probing': return { text: `正在试运行，确认能启动…${step}`, percent, busy: true };
     case 'done': return { text: '安装完成', percent: 100, busy: false, done: true };
     case 'cancelled': return { text: '已取消，可以重新安装', percent: null, busy: false, retry: true };
-    case 'error': return { text: '安装没有成功：' + (t.error || '未知原因'), percent: null, busy: false, retry: true,
-      blocked: t.blocked || null };
+    case 'error': return { text: '安装没有成功：' + (t.error || '未知原因'), percent: null, busy: false, retry: true };
     default: return { text: '', percent: null, busy: false };
   }
 }
@@ -68,22 +67,8 @@ function gitBlockHtml(state) {
     + `<div class="cli-install-actions">${button}</div></div>`;
 }
 
-// 「打开放行页」的结果怎么说（2026-11-21）：以前不管放没放行都直接重装一次，没打开时用户只看到「安装又失败一次」。
-// opened：net-pass:open-window 的返回（{ passed, closed, timedOut, error }）；error：调用本身抛出的错误。
-// 返回 { retry, note }：retry 为真才自动重试安装；note 写在「打开放行页」按钮旁，说清原因和下一步。
-function passOutcome(opened, error) {
-  const again = '可以再点一次「打开放行页」，在页面上点「继续访问」或「接受」；放行后窗口会自己关，Hub 接着重试安装。';
-  if (error) return { retry: false, note: `放行页没打开：${(error && error.message) || error}。${again}` };
-  if (!opened) return { retry: false, note: `放行页没打开（Hub 没有收到结果）。${again}` };
-  if (opened.passed) return { retry: true, note: '' };
-  if (opened.error) return { retry: false, note: `放行页没打开：${opened.error}。${again}` };
-  if (opened.timedOut) return { retry: false, note: `放行页开了 3 分钟还没放行，窗口已自动关闭。${again}` };
-  return { retry: false, note: `放行页已关闭，但还没放行成功，所以这次没有重试安装。${again}` };
-}
-
-// 弹窗里的一键安装区块。state：cli-tools:state 的快照；没有下载源时返回空串，弹窗只留手动安装说明。
-// opts.passNote：上一次「打开放行页」没成功的原因（passOutcome 的 note），显示在放行按钮旁。
-function installBlockHtml(kind, state, opts = {}) {
+// 弹窗里的一键安装区块。state：cli-tools:state 的快照；这个版本没有一键安装时返回空串，弹窗只留手动安装说明。
+function installBlockHtml(kind, state) {
   const id = TOOL_FOR_KIND[kind];
   if (!id || !state || !state.available) return '';
   const tool = state.tools && state.tools[id];
@@ -97,14 +82,12 @@ function installBlockHtml(kind, state, opts = {}) {
     : view.busy ? '<button type="button" data-cli-action="cancel">取消</button>'
     : `<button type="button" class="primary" data-cli-action="install"${otherBusy ? ' disabled' : ''}>${label}</button>`;
   const bar = barHtml(tool, `安装 ${TOOL_NAMES[id]}`);
-  const passNote = view.blocked && opts.passNote ? `<p class="cli-install-note cli-install-pass-note" role="alert">${esc(opts.passNote)}</p>` : '';
-  const blocked = view.blocked ? `<p class="cli-install-note">公司网络拦截了下载。<button type="button" data-cli-action="open-pass" data-url="${esc(view.blocked)}">打开放行页</button>，放行后自动重试。</p>${passNote}` : '';
   const busyNote = otherBusy ? `<p class="cli-install-note">正在安装${esc(TOOL_NAMES[state.busy] || '其他组件')}，装完再装这个。</p>` : '';
   const git = id === 'claude' ? gitBlockHtml(state) : '';
   const advice = !git && view.done && state.advice && state.advice[id] ? `<p class="cli-install-note">${esc(state.advice[id])}</p>` : '';
   return `<div class="cli-install" data-cli-tool="${id}" data-cli-phase="${esc(tool && tool.phase || 'idle')}">${view.done ? '' : intro}${view.done || view.busy ? '' : sourceView.slotHtml('cli:' + id)}${bar}`
-    + `${view.busy || view.done ? '' : `<p class="cli-install-status" role="status" aria-live="polite">${esc(view.text)}</p>`}${blocked}${busyNote}${advice}`
+    + `${view.busy || view.done ? '' : `<p class="cli-install-status" role="status" aria-live="polite">${esc(view.text)}</p>`}${busyNote}${advice}`
     + `${button ? `<div class="cli-install-actions">${button}</div>` : ''}</div>${git}`;
 }
 
-module.exports = { TOOL_FOR_KIND, TOOL_NAMES, progressView, barHtml, installBlockHtml, gitBlockHtml, passOutcome };
+module.exports = { TOOL_FOR_KIND, TOOL_NAMES, progressView, barHtml, installBlockHtml, gitBlockHtml };

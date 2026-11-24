@@ -69,7 +69,7 @@ test('installer absent from both sources: terminal error is reported, no delta/n
   const f = fixture(t, true), { c, urls } = controller(f, { installer404: true });
   await c.check({ quietAllowed: false }); await c.download();
   assert.equal(c.view().phase, 'error');
-  assert.match(c.view().error, /所有下载源都失败/);
+  assert.match(c.view().error, /更新包下载没有完成/);
   assert(!urls.some(url => url.endsWith('.gz')));
   assert(c.view().attempts.every(row => /404/.test(row.reason)));
 });

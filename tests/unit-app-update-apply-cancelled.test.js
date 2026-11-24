@@ -157,7 +157,6 @@ function bootRenderer(initial, storage = new Map()) {
       if (k === '../core/distribution') return { updateConfig: { sources: [] }, productName: 'test' };
       if (k === '../core/app-update/source-view' || k === '../core/app-update/openx-config') return require(k);
       if (k === 'electron') return { ipcRenderer, shell: {} };
-      if (k === './net-pass-view') return { boxHtml() { return ''; }, bind() {}, ensureCss() {} };
       throw new Error(k);
     } };
   vm.runInNewContext(fs.readFileSync(file, 'utf8'), context, { filename: file });

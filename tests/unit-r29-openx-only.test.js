@@ -21,7 +21,7 @@ const ROOT = path.join(__dirname, '..');
 const API = openxSource.DEFAULT_API;
 const FILE_HOST = new URL('files/', openxConfig.fileSite).href;
 const ELECTRON = { electron: '41.2.0' };
-const ENV = { AI_HUB_OPENX: '1', AI_HUB_OPENX_ONLY: '1' };
+const ENV = { AI_HUB_OPENX: '1' };
 const json = obj => new Response(JSON.stringify(obj), { status: 200, headers: { 'content-type': 'application/json' } });
 // 自家下载服务器的主域名从发行配置里取（不在测试里写死域名）。
 const OWN_HOSTS = (() => {
@@ -38,14 +38,16 @@ const OLD_SOURCES = [
 
 test.beforeEach(() => { openxSource._reset(); sourceStatus._reset(); });
 
-test('配置：内源是唯一通道；排查开关、测试注入的本机源、内源关闭时才不生效', () => {
-  assert.equal(openxConfig.onlyChannel, true);
-  assert.equal(openxSource.onlyChannel({}, ELECTRON), true, 'Hub 程序里默认只走内源');
-  assert.equal(openxSource.onlyChannel({}, {}), false, '纯 Node（内源未启用）不生效');
-  assert.equal(openxSource.onlyChannel({ AI_HUB_OPENX: '0' }, ELECTRON), false, '内源关掉时不生效');
-  assert.equal(openxSource.onlyChannel({ AI_HUB_OPENX_ONLY: '0' }, ELECTRON), false);
-  assert.equal(openxSource.onlyChannel({ AI_HUB_UPDATE_SOURCES: '[]' }, ELECTRON), false, '测试把源换成本机服务时按测试给的源');
-  assert.equal(openxSource.onlyChannel({ AI_HUB_OPENX: '1', AI_HUB_OPENX_ONLY: '1' }, {}), true);
+test('配置（R35）：内源是唯一通道，没有开关；只有纯 Node 单测和测试注入的本机源不走内源', () => {
+  assert.equal('onlyChannel' in openxConfig, false, '配置里不再有「只走内源」开关');
+  assert.equal(typeof openxSource.onlyChannel, 'undefined');
+  assert.equal(typeof openxSource.publicOrder, 'undefined', '外网源排序已删');
+  assert.equal(openxSource.active({}, ELECTRON), true, 'Hub 程序里只走内源');
+  assert.equal(openxSource.active({ AI_HUB_OPENX_ONLY: '0' }, ELECTRON), true, '旧的 AI_HUB_OPENX_ONLY=0 回退已删，设了也不生效');
+  assert.equal(openxSource.active({}, {}), false, '纯 Node（单测）不生效');
+  assert.equal(openxSource.active({ AI_HUB_UPDATE_SOURCES: '[]' }, ELECTRON), false, '测试把源换成本机服务时按测试给的源');
+  assert.equal(openxSource.active({ AI_HUB_OPENX: '1' }, {}), true);
+  assert.equal(typeof require('../core/app-update/downloader').orderSources, 'undefined');
 });
 
 function payload() {
@@ -90,6 +92,19 @@ test('内源上没有这个包：不退到外网，唯一一条记录写明「�
   assert.ok(!net.urls.some(u => EXTERNAL.test(u)));
 });
 
+test('R35 审查：内源下载回 404，失败记录带原始原因，升级控制器据此自动重查清单', async () => {
+  const { body, expect } = payload();
+  const net = openxNet({ body });
+  const fetchImpl = async url => (String(url) === FILE_HOST + 'comp-1.0.0.zip' ? new Response('gone', { status: 404 }) : net.fetchImpl(url));
+  const r = await downloadWithFallback({ sources: OLD_SOURCES, version: '1.0.0', expect, dest: tmpDest(expect.file), fetchImpl, openx: { env: ENV, release: 'comp-1.0.0' } });
+  assert.equal(r.ok, false);
+  const a = r.attempts[r.attempts.length - 1];
+  assert.match(a.raw, /HTTP 404/);
+  assert.doesNotMatch(a.reason, /HTTP 404/, '给用户看的仍是人话');
+  const ctrl = fs.readFileSync(path.join(ROOT, 'main/app-update-controller.js'), 'utf8');
+  assert.match(ctrl, /a\.raw \|\| a\.reason/, '控制器按原始原因判断 404');
+});
+
 test('内源连不上：提示检查公司网络；再点一次会真的重连（不吃「5 分钟内不再试」）', async () => {
   const { body, expect } = payload();
   const down = openxNet({ down: true, body });
@@ -110,7 +125,7 @@ test('下载源标识：只走内源时只讲内源本身，不出现「本次�
     assert.doesNotMatch(v.text, /阿里云|GitHub|本次走|备用/, `${status}: ${v.text}`);
   }
   assert.match(sourceStatus.view('down', { env: ENV, reason: '超时没响应' }).text, /请确认电脑连着公司网络/);
-  assert.equal(sourceStatus.resultText({ ok: false, openxOnly: true }), '');
+  assert.equal(typeof sourceStatus.resultText, 'undefined', '「本次走某某」的文案已删');
 });
 
 test('失败原因翻成人话：连不上 / 没有包 / 校验没过 / 已关闭', () => {
@@ -146,26 +161,24 @@ function appNet({ down = false, top = '5.6.80' } = {}) {
   };
   return { fetchImpl, urls };
 }
-function makeController(fetchImpl, { preview = false } = {}) {
+function makeController(fetchImpl, { pinned = false } = {}) {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'r29-update-'));
-  // 老用户开过抢先版：本机留着 preview-updates.json。
-  if (preview) require('../core/app-update/canary').write(dataDir, { enabled: true });
+  // 老用户回退后固定过版本：本机留着 app-update/pinned-version.json。
+  if (pinned) { fs.mkdirSync(path.join(dataDir, 'app-update'), { recursive: true }); fs.writeFileSync(path.join(dataDir, 'app-update', 'pinned-version.json'), JSON.stringify({ version: '5.6.70', manual: true })); }
   return createAppUpdateController({ app: { quit() {} }, config: { sources: OLD_SOURCES, releasePage: 'https://github.com/x/y/releases' }, dataDir,
     currentVersion: '5.6.72', fetchImpl, isPackaged: false, logger: { warn() {}, info() {} }, manifestPublicKey: PUB,
     env: { ...ENV, AI_HUB_UPDATE_RESOURCES: os.tmpdir(), AI_HUB_UPDATE_FORCE_APPLY: '1' } });
 }
 
-test('老配置迁移：外网更新源、GitHub 发布页、抢先版开关都不再使用，界面状态里也没有', () => {
-  const c = makeController(appNet().fetchImpl, { preview: true });
+test('老配置迁移（R35）：外网更新源、发布页、抢先版、版本固定都不再使用；状态里没有这些字段', async () => {
+  const net = appNet();
+  const c = makeController(net.fetchImpl, { pinned: true });
   const s = c.getState();
-  assert.deepEqual(s.sources, []);
-  assert.equal(s.releasePage, '');
-  assert.equal(s.openxOnly, true);
-  assert.equal(s.previewSupported, false);
-  assert.equal(s.previewEnabled, false, '老用户开过的抢先版按关处理，不报错');
-  assert.doesNotThrow(() => c.setPreviewEnabled(true));
-  assert.equal(c.getState().previewEnabled, false);
-  assert.doesNotMatch(JSON.stringify(c.getState()), /阿里云|GitHub|github\.com|example\.invalid/);
+  for (const k of ['sources', 'releasePage', 'openxOnly', 'previewSupported', 'previewEnabled', 'pinned']) assert.equal(k in s, false, k);
+  for (const k of ['setPreviewEnabled', 'listVersions', 'rollbackTo', 'returnToLatest', 'pinCurrent', 'restoreBackup']) assert.equal(typeof c[k], 'undefined', k);
+  assert.doesNotMatch(JSON.stringify(s), /阿里云|GitHub|github\.com|example\.invalid/);
+  await c.check({ silent: true, quietAllowed: false });
+  assert.equal(c.getState().phase, 'available', '以前固定过版本的，后台检查照常查到新版');
 });
 
 test('检查更新：只读内源上的签名清单，外网清单一次都不请求', async () => {
@@ -202,19 +215,17 @@ test('下载更新包：只走内源；内源没有这个包时报原因，不�
   assert.ok(!net.urls.some(u => EXTERNAL.test(u)));
 });
 
-test('版本选择：内源上没有版本列表时说清楚，不去外网读', async () => {
-  const net = appNet();
-  const c = makeController(net.fetchImpl);
-  const r = await c.listVersions();
-  assert.equal(r.ok, false);
-  assert.match(r.error, /公司内源上还没有版本列表/);
-  assert.ok(!net.urls.some(u => EXTERNAL.test(u)));
+test('IPC（R35）：版本选择 / 回退 / 抢先版的通道已删，界面脚本也不在了', () => {
+  const handles = [];
+  require('../main/app-update-controller').registerAppUpdateIpc({ handle: name => handles.push(name) }, {});
+  for (const name of ['app-update:list-versions', 'app-update:rollback', 'app-update:return-latest', 'app-update:pin-current', 'app-update:restore-backup', 'app-update:set-preview']) assert.ok(!handles.includes(name), name);
+  for (const f of ['renderer/version-picker.js', 'core/app-update/version-catalog.js', 'core/app-update/canary.js']) assert.equal(fs.existsSync(path.join(ROOT, f)), false, f);
+  assert.doesNotMatch(fs.readFileSync(path.join(ROOT, 'renderer/index.html'), 'utf8'), /version-picker\.js/);
 });
 
-test('PPT Doctor 浏览器下载入口：只走内源时拒绝，指向一键安装', async () => {
-  const { downloadDoctor } = require('../core/company-assistant/ppt-doctor-download');
-  await assert.rejects(downloadDoctor('mirror', { env: ENV }), /只从公司内源安装/);
-  await assert.rejects(downloadDoctor('github', { env: ENV }), /只从公司内源安装/);
+test('PPT Doctor（R35）：浏览器下载入口（镜像 / GitHub）整条删除，只留一键安装', () => {
+  assert.equal(require('../core/company-assistant/ppt-doctor-download').downloadDoctor, undefined);
+  assert.doesNotMatch(fs.readFileSync(path.join(ROOT, 'renderer/company-ppt-page.js'), 'utf8'), /ppt-download-doctor|GitHub 备用/);
 });
 
 // ---------- 静态扫描：界面与英文词典 ----------
@@ -261,6 +272,22 @@ test('静态扫描：英文词典里与下载相关的「Alibaba Cloud / GitHub�
         if (!ALLOW.some(re => re.test(zh))) hits.push(`${f}: ${zh}`);
       }
     }
+  }
+  assert.deepEqual(hits, []);
+});
+
+// R35：界面与英文词典里不再出现已废弃的下载源说法（多源、源顺序、备用源、放行下载服务器、抢先版、版本回退、只能更新到最新版）。
+const DEAD_SOURCE_WORDS = /更新源|下载源|备用源|多个源|按顺序尝试|源顺序|放行下载服务器|下载服务器放行|抢先版|版本与回退|回退到|只能更新到最新版|内源优先|发布页|外部源/;
+test('静态扫描（R35）：界面代码和英文词典里不再出现已废弃下载源的说法', () => {
+  const hits = [];
+  for (const file of renderFiles()) {
+    stripComments(fs.readFileSync(file, 'utf8')).split('\n').forEach((line, i) => {
+      if (DEAD_SOURCE_WORDS.test(line)) hits.push(`${path.relative(ROOT, file)}:${i + 1} ${line.trim().slice(0, 120)}`);
+    });
+  }
+  const dir = path.join(ROOT, 'core/i18n/locales/en');
+  for (const f of fs.readdirSync(dir).filter(n => n.endsWith('.json'))) {
+    for (const zh of Object.keys(JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')))) if (DEAD_SOURCE_WORDS.test(zh)) hits.push(`${f}: ${zh}`);
   }
   assert.deepEqual(hits, []);
 });
@@ -407,21 +434,18 @@ test('内源上有效清单比本机还旧：显示「已是最新」，不报�
   assert.equal(row.ok, true);
   assert.equal(row.version, '5.6.71');
   const probe = await c.probeSources({ timeoutMs: 5000 });
-  assert.equal(probe.only, true);
   assert.ok(probe.sources.some(x => x.id === 'openx-manifest' && x.ok));
 });
 
-test('放行：只走内源时主进程不再把下载服务器交给放行 / 心跳，首次准备页校时改用内源；界面不再探测', () => {
+test('放行（R35）：下载服务器不再参与放行和心跳，首次准备页校时用内源；更新窗不再探测放行', () => {
   const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
-  assert.match(main, /hosts: openxOnly \? \[\] : ownHosts\.downloadHosts\(ownConfig\)/);
-  assert.match(main, /if \(!openxOnly && autoUnblock && /);
-  assert.match(fs.readFileSync(path.join(ROOT, 'main/ipc/first-run-handlers.js'), 'utf8'), /onlyChannel\(\) \? require\('\.\.\/\.\.\/core\/app-update\/openx-config'\)\.fileSite/);
-  for (const f of ['renderer/app-update.js', 'renderer/company-api-settings.js']) {
-    const src = fs.readFileSync(path.join(ROOT, f), 'utf8');
-    for (const line of src.split(/\r?\n/).filter(l => l.includes("invoke('net-pass:status'"))) assert.match(line, /openxOnly/, f + '：' + line.trim());
-  }
+  assert.match(main, /createNetPass\(\{ hosts: \[\],/);
+  assert.doesNotMatch(main, /downloadHosts\(|GateHeartbeat|openxOnly/);
+  assert.match(fs.readFileSync(path.join(ROOT, 'main/ipc/first-run-handlers.js'), 'utf8'), /const page = require\('\.\.\/\.\.\/core\/app-update\/openx-config'\)\.fileSite/);
+  for (const f of ['renderer/app-update.js', 'renderer/company-api-settings.js']) assert.doesNotMatch(fs.readFileSync(path.join(ROOT, f), 'utf8'), /net-pass:status|net-pass-view/, f);
+  assert.equal(fs.existsSync(path.join(ROOT, 'renderer/net-pass-view.js')), false);
   const { createNetPass } = require('../core/net-pass');
-  assert.equal(createNetPass({ hosts: [], fetchImpl: recorder().fetchImpl }).status().available, false, '没有下载服务器时底栏不显示放行');
+  assert.equal(createNetPass({ hosts: [], fetchImpl: recorder().fetchImpl }).status().available, false, '没有下载服务器时底栏不因下载显示放行');
 });
 
 test('环境体检：只走内源且内源读不到时，说内源和公司网络，不提「所有下载源」或放行', async () => {

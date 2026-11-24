@@ -21,7 +21,7 @@
   let tab = 'features', cliState = null, doctorState = null, ocrState = null, installing = new Set(), recheckOnFocus = false;
   const COMPONENTS = new Set(['codeagent', 'claude', 'codex', 'dsh', 'git-bash', 'node', 'welink', 'ppt-doctor']);
   const INSTALLABLE = new Set(['claude', 'codex', 'dsh']);
-  // r58：组件中心每个会下载的组件都显示「下载源：公司内源」（renderer/download-source-view.js）。
+  // r58：组件中心每个会下载的组件都显示公司内源状态（renderer/download-source-view.js）。
   const sourceView = require('./download-source-view');
   const SOURCE_LABEL = { 'ppt-doctor': 'PPT Doctor 本体', 'ppt-ocr': '识别组件' };
   const SOURCE_POINT = { claude: 'cli:claude', codex: 'cli:codex', dsh: 'cli:dsh', git: 'cli:git', 'git-bash': 'cli:git', codeagent: 'codeagent', welink: 'welink', pi: 'cli:pi', node: 'cli:node', 'ppt-doctor': ['ppt-doctor', 'ppt-ocr'] };
@@ -160,7 +160,7 @@
     const list = dialog.querySelector('[data-ec="list"]');
     dialog.querySelectorAll('[data-ec-tab]').forEach(el => { el.setAttribute('aria-selected', String(el.dataset.ecTab === tab)); });
     dialog.querySelector('[data-ec="intro"]').textContent = tab === 'features' ? '按你要用的功能检查依赖。点击下方组件即可安装或处理；组件就绪后仍需登录和真实请求验证。'
-      : tab === 'components' ? '在这里安装 CLI 和 PPT Doctor。公司内部软件使用内部安装入口；装好返回 Hub 后自动复检。' : '工具版本、公司模型状态、下载源和本机条件。检测不会自动安装或登录。';
+      : tab === 'components' ? '在这里安装 CLI 和 PPT Doctor。公司内部软件使用内部安装入口；装好返回 Hub 后自动复检。' : '工具版本、公司模型状态、公司内源和本机条件。检测不会自动安装或登录。';
     const items = (result?.items || []).filter(item => tab !== 'components' || COMPONENTS.has(item.id));
     if (!items.length) {
       list.innerHTML = running ? ['外部工具', '公司服务', '本机条件'].map(n => `<li class="ec-item ec-pending"><div class="ec-row"><span class="ec-dot"></span><div class="ec-main"><div class="ec-name">${n}</div><div class="ec-detail">检测中…</div></div></div></li>`).join('') : '<li class="ec-intro">暂无检测结果，点击「重新体检」继续。</li>';
@@ -325,9 +325,9 @@
       await run();
       return;
     }
-    const busy = { 'welink-find': '正在全盘找 welink-cli，最多约 2 分钟…', 'proxy-restart': '正在重新启动模型通道…', 'ppt-download': '正在打开下载地址…', 'welink-install': '正在安装 welink-cli…', 'doctor-install': '正在下载并安装 PPT Doctor，可能需要几分钟…', 'ocr-install': '正在更新识别组件（约 82 MB，公司内源优先），通常一两分钟…' }[act];
+    const busy = { 'welink-find': '正在全盘找 welink-cli，最多约 2 分钟…', 'proxy-restart': '正在重新启动模型通道…', 'welink-install': '正在安装 welink-cli…', 'doctor-install': '正在下载并安装 PPT Doctor，可能需要几分钟…', 'ocr-install': '正在从公司内源更新识别组件（约 82 MB），通常一两分钟…' }[act];
     if (busy) setMessage(busy);
-    if (act === 'open-url' || act === 'ppt-download') recheckOnFocus = true;
+    if (act === 'open-url') recheckOnFocus = true;
     const r = await ipcRenderer.invoke('env-check:fix', { id: item.id, act, url: fix.url || '' }).catch(error => ({ ok: false, error: error.message }));
     if (!r || r.ok === false) { setMessage((r && r.error) || '没做成', true); return; }
     setMessage(r.message || '');

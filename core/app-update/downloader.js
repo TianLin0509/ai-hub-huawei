@@ -266,12 +266,9 @@ async function downloadAll({ sources, version, expect, dest, fetchImpl, signal, 
   idleTimeoutMs = IDLE_TIMEOUT_MS, connectTimeoutMs = CONNECT_TIMEOUT_MS, openx = {} }) {
   const attempts = [];
   if (alreadyComplete(dest, expect)) return { ok: true, reused: true, source: { id: 'local', name: '本机已下好的文件' }, attempts };
-  // 公司内源优先（r21）：先按文件名去 openx 找同名附件，找到就先从那里下，仍按清单核对大小和 sha256。
-  // 内源没有、连不上、校验不对都静默落回下面的原下载源：失败的内源尝试不留在 attempts 里，
-  // 界面和「全部 404 就重查清单」「被拦就放行」这些判断看到的和以前完全一样。openx:false 关掉（单测用）。
+  // 内源不生效（纯 Node 单测、测试注入本机源、openx:false）时按调用方给的源逐个下。
   let openxNote = null;
-  // 成员版（内源不生效）：不探测、不改源顺序，和以前完全一样；公开版：内源 → GitHub → 阿里云。
-  const openxOn = openx !== false && openxSource.enabled((openx && openx.env) || process.env);
+  const openxOn = openx !== false && openxSource.active((openx && openx.env) || process.env);
   // 从内源下一次：成功返回结果；失败记下原因返回 null（取消时返回取消结果）。
   const viaOpenx = async hit => {
     const source = { id: 'openx', name: '公司内源' };
@@ -294,9 +291,9 @@ async function downloadAll({ sources, version, expect, dest, fetchImpl, signal, 
       return null;
     }
   };
-  if (openxOn && openxSource.onlyChannel((openx && openx.env) || process.env)) {
+  if (openxOn) {
     const failed = (reason, extra = {}) => {
-      const attempt = { id: 'openx', name: '公司内源', status: 'failed', reason: openxSource.userReason(reason, { file: expect.file }), ms: 0, ...extra };
+      const attempt = { id: 'openx', name: '公司内源', status: 'failed', reason: openxSource.userReason(reason, { file: expect.file }), raw: String(reason || ''), ms: 0, ...extra };
       attempts.push(attempt);
       onAttempt && onAttempt(attempts.map(a => ({ ...a })));
       return { ok: false, cancelled: false, attempts, openxOnly: true, openx: { status: 'failed', reason } };
@@ -311,57 +308,11 @@ async function downloadAll({ sources, version, expect, dest, fetchImpl, signal, 
     if (signal && signal.aborted) return { ok: false, cancelled: true, attempts, openxOnly: true };
     return failed(openxNote && openxNote.reason ? `内源下载失败：${openxNote.reason}` : '内源下载失败', { url: hit.url });
   }
-  if (openxOn) {
-    const hit = await openxSource.findForDownload({ ...openx, file: expect.file, version, fetchImpl, signal });
-    if (!hit) openxNote = { status: 'skipped', reason: openxSource.lastReason() };
-    else {
-      const r = await viaOpenx(hit);
-      if (r) return r;
-    }
-  }
-  // r59：内源没命中时，后面各源的进度带上 openxMiss（原因），统一进度条把来源标成「备用」并写明为什么没走内源。
-  const fallbackProgress = openxNote && onProgress ? p => onProgress({ ...p, openxMiss: openxNote.reason || (openxNote.status === 'failed' ? '内源下载失败' : '内源没有这个包') }) : onProgress;
-  const result = await downloadFromSources({ sources: openxOn && openxSource.publicOrder((openx && openx.env) || process.env) ? orderSources(sources) : sources, version, expect, dest, fetchImpl, signal, onProgress: fallbackProgress, onAttempt, idleTimeoutMs, connectTimeoutMs, attempts });
-  // r60：内源当时只是没在几秒内查完（不是连不上），备用源又全失败（如公司网络拦了阿里云）：等内源查完再试一次。
-  if (!result.ok && !result.cancelled && openxOn && openxNote && openxNote.status === 'skipped' && openxSource.reachability() !== 'down') {
-    const hit = await openxSource.find({ ...openx, file: expect.file, version, fetchImpl, signal }).catch(() => null);
-    if (hit) {
-      const before = attempts.length;
-      const r = await viaOpenx(hit);
-      // 成功时只留内源这一条（与内源第一次就命中时一致），前面失败的备用源记录不带出去。
-      if (r && r.ok) { attempts.splice(0, before); return { ...r, attempts: attempts.slice() }; }
-      if (r) return r;
-    } else openxNote = { status: 'skipped', reason: openxSource.lastReason() };
-  }
-  return openxNote ? { ...result, openx: openxNote } : result;
+  return downloadFromSources({ sources, version, expect, dest, fetchImpl, signal, onProgress, onAttempt, idleTimeoutMs, connectTimeoutMs, attempts });
 }
-// 公开版下载源顺序（2026-11-16 定）：公司内源 openx → GitHub → 其他官方源 → 阿里云（自家服务器只做最后兜底）。
-// 内源在 downloadAll 里单独先试；这里把调用方给的源按 GitHub / 其他 / 阿里云 三档稳定排序，同档保持原顺序。成员版不排序（内源照样先试）。
-// 自家阿里云服务器上的下载目录（和各组件源列表里的地址同一组前缀）。
-const OWN_MIRROR_PREFIXES = ['https://dl.lt-stockpartner.tech/hub-update/', 'https://dl.lt-stockpartner.tech/pptutor/',
-  'https://me.lt-stockpartner.tech/hub-update/', 'https://me.lt-stockpartner.tech/pptutor/'];
-const GITHUB_HOST = /(^|\.)(github\.com|githubusercontent\.com)$/i;
-function sourceHost(source) {
-  for (const u of [source.url, source.files, source.manifest]) {
-    try { if (u) return new URL(String(u).replace('{version}', '0')).hostname; } catch (_) {}
-  }
-  return '';
-}
-function sourceRank(source) {
-  const id = String(source.id || ''), host = sourceHost(source);
-  if (id === 'github' || GITHUB_HOST.test(host)) return 0;
-  if (/^aliyun/.test(id) || [source.url, source.files, source.manifest].some(u => u && OWN_MIRROR_PREFIXES.some(p => String(u).startsWith(p)))) return 2;
-  return 1;
-}
-// 下载源的人话名（r59 统一进度条用）：自家下载服务器 → 阿里云，GitHub → GitHub，其余用主机名。
+// 下载源的显示名（测试注入的源、进度条用）：主机名。
 function friendlySourceName(url) {
-  const u = String(url || '');
-  if (OWN_MIRROR_PREFIXES.some(p => u.startsWith(p))) return '阿里云';
-  let host = ''; try { host = new URL(u).hostname; } catch (_) { return ''; }
-  return GITHUB_HOST.test(host) ? 'GitHub' : host;
-}
-function orderSources(sources) {
-  return (sources || []).map((s, i) => ({ s, i, r: sourceRank(s) })).sort((a, b) => a.r - b.r || a.i - b.i).map(x => x.s);
+  try { return new URL(String(url || '')).hostname; } catch (_) { return ''; }
 }
 async function downloadFromSources({ sources, version, expect, dest, fetchImpl, signal, onProgress, onAttempt, idleTimeoutMs, connectTimeoutMs, attempts }) {
   for (const source of sources) {
@@ -385,4 +336,4 @@ async function downloadFromSources({ sources, version, expect, dest, fetchImpl, 
   return { ok: false, cancelled: !!(signal && signal.aborted), attempts };
 }
 
-module.exports = { friendlySourceName, orderSources, alreadyComplete, promote, checkManifests, downloadWithFallback, fileUrl, looksLikeWebPage, reasonOf, fmtBytes };
+module.exports = { friendlySourceName, alreadyComplete, promote, checkManifests, downloadWithFallback, fileUrl, looksLikeWebPage, reasonOf, fmtBytes };

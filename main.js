@@ -32,8 +32,6 @@ const { WorkspaceService, normalizeKey: normalizeWorkspaceKey } = require('./cor
 const stateStore = require('./core/state-store.js');
 const { primeV8MemoryPoolForExit } = require('./core/v8-exit-guard.js');
 const { getHubDataDir, isIsolatedHub, getMeetingWorkspaceDir } = require('./core/data-dir.js');
-// 版本回退后的「一键还原」（2026-11-16，core/app-update/version-catalog.js）：数据库打开前把登记过的备份拷回数据目录。
-try { const restored = require('./core/app-update/version-catalog.js').applyPendingRestore(getHubDataDir()); if (restored) console.log('[app-update] 回退备份还原：', JSON.stringify(restored)); } catch (error) { console.warn('[app-update] 回退备份还原失败：', error && error.message); }
 const {
   appendManagedLaunchAudit,
   inspectManagedLaunchAudit,
@@ -3018,7 +3016,6 @@ if (require('./core/distribution').featureEnabled('assistant')) try {
 } catch (error) { console.error('[assistant] service unavailable:', error.message); }
 let appUpdateControllerRef = null;
 function companyHubAdmin() { return null; }
-function heartbeatLinkRef() { return null; }
 // 公司版「助理」（2026-10-16）：每日简报 + 对话 + 6 条提醒，只读 WeLink，数据只留在本机 Hub 数据目录。
 let companyAssistantService = null, askAsideService = null;
 const teamAccess = { assert() { throw new Error('该功能未启用'); } };
@@ -4085,7 +4082,6 @@ registerWorkbenchOperationsIpc(ipcMain, {
 registerPathIpc(ipcMain);
 ipcMain.handle('community:setup', () => require('./core/community-setup').inspectSetupAsync({ packaged: app.isPackaged }));
 // 环境体检（5.5.24，main/ipc/env-check-handlers.js）：设置菜单「环境体检」一屏列出各外部工具与本机条件；各服务按需取，没有的项自动不出。
-let firstRunNetPass = null; // 放行模块在后面初始化，首次启动准备经它取
 const firstRunEnvCheck = require('./main/ipc/env-check-handlers').registerEnvCheckIpc(ipcMain, {
   dataDir: getHubDataDir,
   send: (channel, state) => sendToRenderer(channel, state),
@@ -4126,7 +4122,6 @@ require('./main/ipc/first-run-handlers').registerFirstRunIpc(ipcMain, {
   toolDiscovery: () => toolDiscovery,
   proxyService: companyProxyService,
   lanPool: () => lanPoolService,
-  netPass: () => firstRunNetPass,
   systemProxy: () => require('electron').session.defaultSession.resolveProxy('https://example.com/'),
   fetchImpl: (...args) => require('electron').net.fetch(...args),
 });
@@ -5060,34 +5055,27 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
           : netUnblock.openHiddenGateWindow(BrowserWindow, ownHosts.unblockPage(ownConfig, url)) });
       // 第二步放行（2026-11-08 用户定）：后台没成功就在 Hub 里弹出放行页，继续自动点，用户也能手动点。只在用户动手的流程里用。
       // 公开版：弹出的放行页只等用户自己点（maxClicks 0，看到自家页面照样自动关窗），2026-11-08 用户。
-      const gateVisible = page => netUnblock.openVisibleGateWindow(BrowserWindow, page, { parent: mainWindow || null, ...(autoUnblock ? {} : { maxClicks: 0, title: '放行下载服务器（在页面上点放行按钮，放行后自动关闭）' }) });
+      const gateVisible = page => netUnblock.openVisibleGateWindow(BrowserWindow, page, { parent: mainWindow || null, ...(autoUnblock ? {} : { maxClicks: 0, title: '放行服务器（在页面上点放行按钮，放行后自动关闭）' }) });
       const gatePageFor = url => {
         const text = String(url || '');
         if (!/^https?:\/\//i.test(text)) return '';
         if (ownHosts.isOwnUrl(text, ownConfig)) return ownHosts.unblockPage(ownConfig, text);
         try { return new URL(text).origin + '/'; } catch { return ''; }  // 别家地址也只开站点首页，绝不打开文件地址
       };
-      // 放行心跳的状态（net-unblock:state，诊断与测试用）。
-      let gateHeartbeats = [];
-      ipcMain.handle('net-unblock:state', () => ({ auto: autoUnblock, heartbeats: gateHeartbeats.map(b => ({ url: b.url, ...b.status() })) }));
-      // 「放行下载服务器」按钮（core/net-pass.js）：一次点击逐台放行全部自家下载主机，并提醒还没放行的新用户。
       try {
         const { createNetPass } = require('./core/net-pass');
-        const openxOnly = require('./core/app-update/openx-source').onlyChannel();
-        const netPass = createNetPass({ hosts: openxOnly ? [] : ownHosts.downloadHosts(ownConfig), dataDir: getHubDataDir(),
+        const netPass = createNetPass({ hosts: [], dataDir: getHubDataDir(),
           fetchImpl: (...args) => require('electron').net.fetch(...args),
-          // 公开版不在后台自动点：「放行下载服务器」直接弹出放行页让用户点。
+          // 公开版不在后台自动点：直接弹出放行页让用户点。
           openGate: autoUnblock ? page => netUnblock.openHiddenGateWindow(BrowserWindow, page) : null,
           openVisible: gateVisible,
           onChange: view => sendToRenderer('net-pass:state', view) });
-        firstRunNetPass = netPass;
         // 各下载功能失败时的统一放行入口（core/own-gate.js）：被拦才动手，成员版先后台自动点，不行或公开版弹出放行页。
         require('./core/own-gate').setHandler(async (url, opts) => {
           const r = await netPass.passUrl(url, opts);
           if (r === 'passed') { try { ownUnblocker.passed(); } catch (_) {} }
           return r;
         });
-        ipcMain.handle('net-pass:status', async (_e, opts) => { if (opts && opts.refresh) void netPass.refresh(); return netPass.status(); });
         // 主界面底栏的「一键放行」（2026-11-12 用户：统一入口放在主界面角落，一次放行全局共享）：
         const globalPassStatus = () => {
           const s = netPass.status();
@@ -5103,7 +5091,7 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
           globalPassing = (async () => {
             const steps = [];
             const all = await netPass.passAll().catch(e => ({ results: [], error: e.message }));
-            if (all.error) steps.push({ name: '下载服务器', ok: false, note: '放行出错：' + String(all.error).slice(0, 80) });
+            if (all.error) steps.push({ name: '通道服务器', ok: false, note: '放行出错：' + String(all.error).slice(0, 80) });
             if ((all.results || []).some(x => x.result === 'ok')) { try { ownUnblocker.passed(); } catch (_) {} }
             for (const r of all.results || []) steps.push({ name: r.name, ok: r.result === 'ok', note: r.result === 'ok' ? (r.first === 'blocked' ? '已放行' : '正常') : r.result === 'blocked' ? '还被拦着' : '连不上（不是放行问题）' });
             return { ok: steps.every(x => x.ok), steps, status: globalPassStatus() };
@@ -5124,23 +5112,6 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
         });
         // 启动后查一次（每台一个很小的网页请求）：新用户第一次打开更新或安装面板时，提醒已经准备好。
         setTimeout(() => { void netPass.refresh().catch(() => {}); }, 20000).unref?.();
-        // 放行心跳（成员版，2026-11-08 用户）：每台自家主机每分钟探一次放行小页（GET + POST 各一个很小的请求），
-        if (!openxOnly && autoUnblock && process.env.CLAUDE_HUB_GATE_HEARTBEAT !== '0') {
-          const { GateHeartbeat, probeOwnPage } = require('./core/net-gate-heartbeat');
-          const testMs = Number(process.env.CLAUDE_HUB_GATE_HEARTBEAT_MS);
-          const intervalMs = process.env.CLAUDE_HUB_DATA_DIR && testMs > 0 ? testMs : 60000;
-          const beats = ownHosts.downloadHosts(ownConfig).map(h => new GateHeartbeat({
-            url: h.page, passer: ownUnblocker, intervalMs,
-            probe: () => probeOwnPage((...args) => require('electron').net.fetch(...args), h.page),
-            // 公司联动弹窗里「网络放行」选了手动：心跳照探，但不自动点。
-            enabled: () => { const b = heartbeatLinkRef(); try { return !b || typeof b.settings !== 'function' || b.settings().autoGate !== false; } catch { return true; } },
-            onState: p => { if (p.state === 'ok') netPass.markOk(h.host); },
-            onPassed: () => { netPass.markOk(h.host); const b = heartbeatLinkRef(); if (b && typeof b.checkNow === 'function') void b.checkNow().catch(() => {}); },
-          }));
-          gateHeartbeats = beats;
-          app.whenReady().then(() => beats.forEach((b, i) => setTimeout(() => b.start(), i * 7000).unref?.()));
-          app.on('will-quit', () => beats.forEach(b => b.stop()));
-        }
       } catch (e) { console.warn('[net-pass] 放行按钮初始化失败：', e && e.message); }
       // 检查更新和反馈同时被拦时只开一个放行窗口：进行中的那次结果大家共用。
       // 按主机分开：两台同时被拦时各开各的放行页。
@@ -5155,7 +5126,6 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
         currentVersion: distribution.editionVersion || app.getVersion(), prepareLaunch: prepareHubLaunchClean,
         // 值得提醒的新版本（改了 x 或 y）由桌宠说一声；只改末位的照旧静默（2026-11-09）。
         sendToRenderer: (channel, payload) => { sendToRenderer(channel, payload); if (channel === 'app-update:state' && payload && payload.phase === 'available' && payload.latest && payload.latest.notify) { try { hubPetController?.announceUpdate?.(payload.latest.version); } catch (_) {} } },
-        unblock: unblockOwn, unblockInteractive: url => gateVisible(gatePageFor(url)), isOwnUrl: url => ownHosts.isOwnUrl(url, ownConfig), unblockPassed: () => ownUnblocker.passed(),
         restartWait: () => companyHubAdmin()?.restartWaitView?.() || null,
         // 替换脚本先结束而 Hub 没退出（r43）：公司版的等待重启同样放开。
         onApplyCancelled: reason => { try { Promise.resolve(companyHubAdmin()?.quitCancelled?.(reason)).catch(() => {}); } catch (_) {} } });
@@ -5165,9 +5135,9 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
       try {
         const { createCliInstaller } = require('./core/cli-tools/installer');
         const cliSources = require('./core/cli-tools/catalog').catalogSources({ config: distribution.updateConfig });
-        cliToolsInstallerRef = createCliInstaller({ sources: cliSources, unblock: unblockOwn, isOwnUrl: url => ownHosts.isOwnUrl(url, ownConfig),
+        cliToolsInstallerRef = createCliInstaller({ sources: cliSources,
           getDshEntry: () => getHubConfig().acp?.providers?.['deepseek-acp'] || {},
-          unblockPassed: () => ownUnblocker.passed(), onState: state => { sendToRenderer('cli-tools:state', state); try { require('./core/harness-locator').noteInstallState(state); } catch (_) {} } });
+          onState: state => { sendToRenderer('cli-tools:state', state); try { require('./core/harness-locator').noteInstallState(state); } catch (_) {} } });
         // 定位中心的「一键补齐」经这个安装器装（只装 Hub 自管目录）。
         try { require('./core/harness-locator').setInstaller(async req => { const st = await cliToolsInstallerRef.install(String(req.id || ''), {}); const t = st.tools[req.id] || {}; return { ok: t.phase === 'done', error: t.error || null }; }); } catch (_) {}
         // 启动 40 秒后在后台全局找一遍 Git Bash（隐藏的 PowerShell 读注册表和硬盘列表），新会话能用上别处装的 Git。
@@ -5274,31 +5244,6 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
       });
       app.whenReady().then(() => {
         appUpdate.startBackgroundChecks();
-        const preview = require('./core/app-update/canary');
-        const runner = preview.createCanaryRunner({ dataDir: getHubDataDir(), version: distribution.editionVersion || app.getVersion(),
-          runCheck: () => firstRunEnvCheck.run({ canary: true }),
-          zone: async () => {
-            const configured = require('./core/company-model-proxy').chosenZone(getHubDataDir()).zone;
-            const detected = configured ? null : await import('./core/company-proxy/upstream-profile.mjs').then(m => m.detectCodeAgentZone());
-            const zone = configured || companyProxyService.status()?.zone || detected?.zone || '';
-            return ({ green: '绿区', yellow: '黄区', blue: '蓝区' })[zone] || zone;
-          },
-          sendReport: async report => {
-            return false;
-          } });
-        let pending = false;
-        const tick = async () => {
-          if (pending || !preview.read(getHubDataDir()).enabled) return;
-          pending = true;
-          try {
-            const s = preview.read(getHubDataDir());
-            const installed = distribution.editionVersion || app.getVersion();
-            const releaseSha = s.releases?.[installed] || (s.releaseVersion === installed ? s.releaseSha : '');
-            if (releaseSha) await runner.run(releaseSha);
-          } catch (e) { console.warn('[preview] 后台体检等待重试：', e.message); }
-          finally { pending = false; }
-        };
-        app.once('will-quit', preview.scheduleChecks(tick));
       });
       app.on('will-quit', () => { try { appUpdate.applyOnQuit(); } catch (error) { console.warn('[app-update] 退出时替换出错：', error && error.message); } appUpdate.dispose(); });
     } catch (e) {

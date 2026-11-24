@@ -109,10 +109,10 @@ const KNOWN_ISSUES = [
     fix: '公司代理替换了网站证书。换到能直连的网络再试，或先在浏览器里打开一次这个地址完成放行。',
     action: null },
   { id: 'update-blocked', areas: ['app-update'],
-    // core/app-update/downloader.js「收到的是网页…可能被公司代理拦截」；renderer/app-update.js「被公司网络拦截了，可以手动放行」。
+    // core/app-update/downloader.js「收到的是网页…可能被公司代理拦截」；R35 起更新窗已没有逐个网址放行的按钮。
     test: /可能被公司代理拦截|被公司网络拦截/,
-    title: '更新源被公司网络拦住了',
-    fix: '在更新窗口里点被拦网址旁的「在浏览器打开」，在网页上点允许放行，回来点「重新检查」。',
+    title: '更新被公司网络拦住了',
+    fix: '更新只走公司内源：确认电脑连着公司网络（公司内网或 VPN），或点主界面底栏的「一键放行」，再点「重新检查」。',
     action: { label: '重新检查', act: 'known:update-check' } },
   { id: 'port-in-use',
     // main/lan-pool-service.js「共享端口已被其他程序占用；关闭共享后换一个端口」；core/company-proxy/server.mjs 遇 EADDRINUSE 换端口。

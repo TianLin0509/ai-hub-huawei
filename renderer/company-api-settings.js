@@ -1,18 +1,12 @@
 'use strict';
 
 (() => {
-  // R29：只走内源时不探测、不提示放行下载服务器（阿里云）。
-  const openxOnly = () => require('../core/app-update/openx-source').onlyChannel();
   const distribution = require('../core/distribution');
   if (distribution.target !== 'company') return;
   const { ipcRenderer, shell } = require('electron');
   const { KINDS, LABELS } = require('../core/company-api-config');
   const cliView = require('./cli-install-view');
-  // 一键安装前先提醒放行下载服务器（2026-11-07，renderer/net-pass-view.js）：只在还没放行时显示。
-  const netPassView = require('./net-pass-view');
-  let netPass = null, netPassLast = null;
   let cliState = null;
-  const cliPassNote = {};   // 「打开放行页」没成功的原因，按工具记，重画区块时还在
   let snapshot = null;
   let setup = null;
   let dialog = null;
@@ -136,25 +130,10 @@
   function renderCliBlock(target, kind) {
     const slot = target?.querySelector(`[data-cli-install="${kind}"]`);
     if (!slot) return;
-    const block = cliView.installBlockHtml(kind, cliState, { passNote: cliPassNote[kind] || '' });
-    // R29：组件只从公司内源下载，不经外网下载服务器，不再提醒放行。
-    const needPass = block && netPass && !openxOnly() && (netPass.needed || (netPassLast?.results || []).some(r => r.result === 'blocked'));
-    netPassView.ensureCss();
-    slot.innerHTML = (needPass ? netPassView.boxHtml(netPass, { last: netPassLast }) : '') + block;
+    slot.innerHTML = cliView.installBlockHtml(kind, cliState);
     void require('./download-source-view').fill(slot, { ipcRenderer });
-    netPassView.bind(slot, { ipcRenderer, onUpdate: (next, last) => { if (next) netPass = next; netPassLast = last; renderCliBlock(target, kind); } });
     slot.querySelector('[data-cli-action="install"]')?.addEventListener('click', () => void runInstall(target, kind));
     slot.querySelector('[data-cli-action="install-git"]')?.addEventListener('click', () => void runGitInstall(target, kind));
-    slot.querySelector('[data-cli-action="open-pass"]')?.addEventListener('click', async event => {
-      const button = event.currentTarget;
-      button.disabled = true; button.textContent = '正在打开放行页…';
-      let opened = null, failure = null;
-      try { opened = await ipcRenderer.invoke('net-pass:open-window', button.dataset.url); } catch (error) { failure = error; }
-      const outcome = cliView.passOutcome(opened, failure);
-      cliPassNote[kind] = outcome.note;
-      if (outcome.retry) return void runInstall(target, kind);
-      if (dialog === target) renderCliBlock(target, kind);
-    });
     for (const b of slot.querySelectorAll('[data-cli-action="cancel"]')) b.addEventListener('click', () => void ipcRenderer.invoke('cli-tools:cancel').catch(() => {}));
   }
   // Git for Windows（2026-11-07）：挂在 Claude Code 区块下面；主进程先全局找本机的 Git，没有才下载。
@@ -170,7 +149,6 @@
   }
   async function runInstall(target, kind) {
     const id = cliView.TOOL_FOR_KIND[kind];
-    cliPassNote[kind] = '';
     cliState = { ...cliState, busy: id, tools: { ...cliState?.tools, [id]: { phase: 'checking' } } };
     renderCliBlock(target, kind);
     let result;
@@ -213,7 +191,6 @@
       target.querySelector('[data-api-action="configure"]').onclick = () => void open(kind);
       renderCliBlock(target, kind);
       void loadCliState().then(() => { if (dialog === target) renderCliBlock(target, kind); });
-      if (!openxOnly()) void ipcRenderer.invoke('net-pass:status', { refresh: true }).then(v => { netPass = v; if (dialog === target) renderCliBlock(target, kind); }).catch(() => {});
       return;
     }
     target.innerHTML = heading(`安装 ${LABELS[kind]}`, '安装完成后可沿用本机配置，或填写自己的 API 接口。')
@@ -232,9 +209,8 @@
       finally { target.querySelector('[data-api-action="refresh"]')?.removeAttribute('disabled'); }
     };
     renderCliBlock(target, kind);
-    if (!openxOnly()) void ipcRenderer.invoke('net-pass:status', { refresh: true }).then(v => { netPass = v; if (dialog === target) renderCliBlock(target, kind); }).catch(() => {});
     // 读到安装器状态后再画一次。有一键安装时，手动步骤降为次要（「重新检测」不再是主按钮）；
-    // 没有下载源的版本这里保持空白，弹窗和以前一样。
+    // 没有一键安装的版本这里保持空白，弹窗和以前一样。
     void loadCliState().then(() => {
       if (dialog !== target) return;
       renderCliBlock(target, kind);
@@ -675,11 +651,6 @@
       if (form) refreshProxyBlocks(form);
     });
     // 安装进度推送：弹窗开着就就地刷新一键安装区块。
-    ipcRenderer.on('net-pass:state', (_event, state) => {
-      netPass = state;
-      const slot = dialog?.querySelector('[data-cli-install]');
-      if (slot) renderCliBlock(dialog, slot.dataset.cliInstall);
-    });
     ipcRenderer.on('cli-tools:state', (_event, state) => {
       if (!state) return;
       cliState = state;

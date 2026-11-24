@@ -218,7 +218,7 @@ function createBootSplashStore({ dataDir, assetsDir = path.join(__dirname, '..',
     checking = (async () => {
       notify({ phase: 'checking', error: null, checks: [], attempts: [], progress: null });
       // R29：只走内源时读程序自带的目录快照，不碰外网、不弹放行窗。
-      const results = require('./app-update/openx-source').onlyChannel(env) ? [require('./app-update/bundled-catalog').bundledCatalog(snapshotFile, validateCatalog)]
+      const results = require('./app-update/openx-source').active(env) ? [require('./app-update/bundled-catalog').bundledCatalog(snapshotFile, validateCatalog)]
         : await checkManifests({ sources, fetchImpl: boundedCatalogFetch(fetchImpl, catalogBodyTimeoutMs), validate: validateCatalog, gate: true });
       const best = results.filter(r => r.ok).sort((a, b) => compareVersion(b.manifest.version, a.manifest.version))[0];
       const checks = results.map(({ id, name, ok, reason, blocked, url }) => ({ id, name, ok, reason, blocked, url }));

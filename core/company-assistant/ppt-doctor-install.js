@@ -51,7 +51,7 @@ function installPlan(manifest, meta, installed = '') {
   if (installed && compareVersions(target, installed) < 0) return { refuse: true, target, files, floor };
   return { refuse: false, delta, target, files, floor };
 }
-const tooOld = (base, installed) => `下载源只有完整基线 v${base}，比本机已装的 v${installed} 旧，Hub 不会装回旧版`;
+const tooOld = (base, installed) => `公司内源上只有完整基线 v${base}，比本机已装的 v${installed} 旧，Hub 不会装回旧版`;
 
 function extractZip(zip, dest) {
   return new Promise((resolve, reject) => {
@@ -154,15 +154,14 @@ function createDoctorInstaller({ dataDir, onState = () => {}, configure, fetchIm
     const root = path.resolve(dataDir, 'tools', 'ppt-doctor');
     const job = path.join(root, 'install-' + randomUUID());
     let registered = false;
-    set({ phase: 'checking', message: '正在读取安装清单…', error: null, received: 0, total: 0, speed: 0, etaSec: null, sourceId: null, sourceName: null, openxMiss: null });
+    set({ phase: 'checking', message: '正在读取安装清单…', error: null, received: 0, total: 0, speed: 0, etaSec: null, sourceId: null, sourceName: null });
     try {
       await fs.mkdir(job, { recursive: true });
       let chosen = null, plan = null, refused = '';
       const failures = [];
       const installed = String(await Promise.resolve().then(installedVersion).catch(() => '') || '');
-      // r60：清单地址都读不到时（公司网络拦了阿里云），最后用程序自带的清单快照：完整包从内源下，按快照里的 sha256 核对。
-      // R29（2026-11-24）：只走内源时只用程序自带的清单快照（发版时刷新），不去外网读清单；完整包只从内源下。
-      const only = openxSource.onlyChannel(process.env);
+      // R29/R35：内源生效时只用程序自带的清单快照（发版时刷新），不去外网读清单；完整包只从内源下。
+      const only = openxSource.active(process.env);
       const tries = only && bundledManifest && sources.length && bundledManifest() ? [{ base: sources[0], bundled: true }]
         : [...sources.map(base => ({ base })), ...(bundledManifest && sources.length ? [{ base: sources[0], bundled: true }] : [])];
       const tried = new Set();
@@ -188,11 +187,10 @@ function createDoctorInstaller({ dataDir, onState = () => {}, configure, fetchIm
           // 下 600 MB 之前先判断：这个源最多只能装成比已装还旧的版本，就不下（自带清单快照没有文件表，只能装基线）。
           if (thisPlan.refuse) { refused = tooOld(meta.version, installed); continue; }
           tried.add(meta.sha256);
-          // 公司内源（r24）：公开版按文件名在 openx 找同名附件（大文件是 .000/.001… 分片），版本名固定为 ppt-doctor-<完整包版本>。
-          // 清单没给大小：内源命中就用内源附件的大小，外网 ZIP 的 HEAD 被拦、超时也不影响走内源（r24 审查阻断项）；
-          // 内源没有才问外网 HEAD。找内源总共最多等 6 秒；内容最终都按清单的 sha256 核对。
+          // 公司内源（r24）：按文件名在 openx 找同名附件（大文件是 .000/.001… 分片），版本名固定为 ppt-doctor-<完整包版本>。
+          // 清单没给大小：用内源附件的大小；内容最终都按清单的 sha256 核对。内源不生效（测试）时问给定地址 HEAD。
           const file = path.posix.basename(new URL(meta.url).pathname);
-          const openx = { release: `ppt-doctor-${meta.version}`, unknownBudgetMs: 6000, maxMs: 6000 };
+          const openx = { release: `ppt-doctor-${meta.version}` };
           const sane = n => Number.isSafeInteger(n) && n >= 1 && n <= 4 * 1024 ** 3;
           const externalSize = async () => {
             const head = await fetch(meta.url, { method: 'HEAD', signal: AbortSignal.any([signal, AbortSignal.timeout(12000)]), redirect: 'error' });
@@ -201,26 +199,23 @@ function createDoctorInstaller({ dataDir, onState = () => {}, configure, fetchIm
             return n;
           };
           let bytes = NaN;
-          if (openxSource.enabled(process.env)) {
-            if (only) openxSource.clearDown();
-            const hit = await (only ? openxSource.find({ release: openx.release, file, version: meta.version, fetchImpl: fetch, signal })
-              : openxSource.findForDownload({ ...openx, file, version: meta.version, fetchImpl: fetch, signal })).catch(() => null);
+          if (only) {
+            openxSource.clearDown();
+            const hit = await openxSource.find({ release: openx.release, file, version: meta.version, fetchImpl: fetch, signal }).catch(() => null);
             if (hit) bytes = await openxSource.headSize(hit, { fetchImpl: fetch, signal });
           }
           const sizedByOpenx = sane(bytes);
-          // 只走内源：内源上没有（或量不出大小）就直接说原因，不去外网量大小、不从外网下。
+          // 内源上没有（或量不出大小）就直接说原因，不去外网量大小、不从外网下。
           if (!sizedByOpenx && only) throw new Error(openxSource.userReason(openxSource.lastReason() || '内源上没有这个文件', { file }));
           if (!sizedByOpenx) bytes = await externalSize();
-          const fetchArchive = (n, viaOpenx) => {
-            set({ phase: 'downloading', message: '正在下载 PPT Doctor…', version: meta.version, latestVersion: meta.latestVersion, total: n, received: 0, speed: 0, etaSec: null, sourceId: null, sourceName: null, openxMiss: null });
+          const fetchArchive = n => {
+            set({ phase: 'downloading', message: '正在下载 PPT Doctor…', version: meta.version, latestVersion: meta.latestVersion, total: n, received: 0, speed: 0, etaSec: null, sourceId: null, sourceName: null });
             return download({ gate: true, sources: [{ id: 'doctor', name: require('../app-update/downloader').friendlySourceName(meta.url), url: meta.url }],
-              version: meta.version, openx: viaOpenx ? openx : false, expect: { file, bytes: n, sha256: meta.sha256 },
+              version: meta.version, openx, expect: { file, bytes: n, sha256: meta.sha256 },
               dest: path.join(job, 'package.zip'), fetchImpl: fetch, signal,
               onProgress: progress => set(progress) });
           };
-          let result = await fetchArchive(bytes, true);
-          // 大小取自内源、内源那份又不对：外网按自己 HEAD 到的大小再下一次（不让内源上的坏文件连累外网）。
-          if (!result.ok && !result.cancelled && sizedByOpenx && !only) result = await fetchArchive(await externalSize(), false);
+          const result = await fetchArchive(bytes);
           if (!result.ok) throw new Error(result.cancelled ? '已取消' : result.attempts.map(a => a.reason).join('；'));
           set({ source: result.source && result.source.name });
           chosen = { ...meta, base, manifest }; plan = thisPlan; break;

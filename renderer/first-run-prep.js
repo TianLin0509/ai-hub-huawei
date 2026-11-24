@@ -17,7 +17,6 @@
 
   async function doFix(fix, row) {
     if (fix.act === 'recheck') return rerun();
-    if (fix.act === 'open-gate') { await ipcRenderer.invoke('net-pass:open-window', fix.url); return rerun(); }
     if (fix.act === 'open-codeagent') {
       // 手动选 CodeAgent 只经定位中心记账（harness:pick-path / set-path），没通过试跑就在这一行说原因、不保存。
       const r = await require('./first-run-codeagent-pick').pickCodeAgent(ipcRenderer, fix);

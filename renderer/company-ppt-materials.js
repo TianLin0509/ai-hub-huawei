@@ -82,7 +82,7 @@ function createPptMaterials({ root, ipcRenderer, notice, doctorState = () => '' 
     const team = lib.teamPack || {}, teamBtn = $('[data-pptm-team]');
     teamBtn.hidden = !hasAny || Boolean(team.installed && !team.update);
     teamBtn.textContent = team.update ? `更新团队素材包（v${team.latest}）` : '下载团队素材包';
-    // r58：下载/更新团队素材包按钮旁显示「下载源：公司内源」。
+    // r58：下载/更新团队素材包按钮旁显示公司内源状态。
     const teamSrc = $('[data-pptm-team-src]'); if (teamSrc) { teamSrc.hidden = teamBtn.hidden; if (!teamBtn.hidden) void require('./download-source-view').fill(teamSrc, { ipcRenderer }).catch(() => {}); }
     pageSize = measure();
     const pages = Math.max(1, Math.ceil(data.total / pageSize));

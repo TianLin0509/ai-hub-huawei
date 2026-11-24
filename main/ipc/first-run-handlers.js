@@ -18,7 +18,7 @@ function cliFile(env = process.env) {
   return fs.existsSync(main) ? main : file;
 }
 
-function registerFirstRunIpc(ipcMain, { dataDir, isCompany, send, envCheck, toolDiscovery, proxyService, lanPool, netPass, systemProxy, fetchImpl }) {
+function registerFirstRunIpc(ipcMain, { dataDir, isCompany, send, envCheck, toolDiscovery, proxyService, lanPool, systemProxy, fetchImpl }) {
   const prep = require('../../core/first-run-prep');
   const proxy = () => require('../../core/company-model-proxy');
   const usesOwnProxy = () => { try { return !!proxyService?.isEnabled() && !lanPool?.()?.client()?.enabled; } catch { return false; } };
@@ -57,19 +57,10 @@ function registerFirstRunIpc(ipcMain, { dataDir, isCompany, send, envCheck, tool
       if (!endpoint?.port || !endpoint?.key) return { ok: false, error: '读不到本机连接信息' };
       return prep.helloAny({ port: endpoint.port, key: endpoint.key, models: proxy().MODEL_IDS });
     },
-    netPass: async () => {
-      const pass = netPass();
-      if (!pass) return null;
-      await pass.refresh({ force: true }).catch(() => {});
-      let status = pass.status();
-      if (status.hosts.some(h => h.state === 'blocked')) { await pass.passAll().catch(() => {}); status = pass.status(); }
-      return status;
-    },
     systemProxy: () => systemProxy(),
     clockSkew: async () => {
-      // R29 审查 #2：只走内源时用内源站点的时间对照，不再请求阿里云。
-      const openx = require('../../core/app-update/openx-source');
-      const page = openx.onlyChannel() ? require('../../core/app-update/openx-config').fileSite : netPass()?.status()?.hosts?.[0]?.page;
+      // 用公司内源站点的时间对照（R29/R35：下载只走内源）。
+      const page = require('../../core/app-update/openx-config').fileSite;
       if (!page || !fetchImpl) return null;
       const response = await fetchImpl(page, { method: 'HEAD' });
       const server = Date.parse(response.headers.get('date') || '');
