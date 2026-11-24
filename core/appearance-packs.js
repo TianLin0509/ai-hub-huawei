@@ -89,7 +89,8 @@ function boundedCatalogFetch(fetchImpl, timeoutMs = 12000) {
     } };
   };
 }
-function createAppearanceStore({ dataDir, bundledDir = path.join(__dirname, '../renderer/assets/appearance-packs'), sources = SOURCES, fetchImpl = globalThis.fetch, emit = () => {}, decodeImage, catalogBodyTimeoutMs = 12000 }) {
+function createAppearanceStore({ dataDir, bundledDir = path.join(__dirname, '../renderer/assets/appearance-packs'), sources = SOURCES, fetchImpl = globalThis.fetch, emit = () => {}, decodeImage, catalogBodyTimeoutMs = 12000,
+  snapshotFile = path.join(__dirname, 'appearance-catalog-snapshot.json'), env = process.env }) {
   const root = path.join(dataDir, 'appearance');
   const prefsFile = path.join(root, 'preferences.json');
   const customFile = path.join(root, 'custom.json');
@@ -151,7 +152,9 @@ function createAppearanceStore({ dataDir, bundledDir = path.join(__dirname, '../
     if (downloading) return state;
     checking = (async () => {
       notify({ phase: 'checking', error: null, checks: [], attempts: [], progress: null });
-      const results = await checkManifests({ sources, fetchImpl: boundedCatalogFetch(fetchImpl, catalogBodyTimeoutMs), validate: validateCatalog, gate: true });
+      // R29：只走内源时读程序自带的目录快照，不碰外网、不弹放行窗。
+      const results = require('./app-update/openx-source').onlyChannel(env) ? [require('./app-update/bundled-catalog').bundledCatalog(snapshotFile, validateCatalog)]
+        : await checkManifests({ sources, fetchImpl: boundedCatalogFetch(fetchImpl, catalogBodyTimeoutMs), validate: validateCatalog, gate: true });
       const best = results.filter(r => r.ok).sort((a, b) => compareVersion(b.manifest.version, a.manifest.version))[0];
       const checks = results.map(({ id, name, ok, reason, blocked, url }) => ({ id, name, ok, reason, blocked, url }));
       if (!best) return notify({ phase: 'error', checks, error: '暂时无法获取头像目录，已安装的头像仍可使用。可以稍后重试或导入头像包。' });
@@ -183,7 +186,7 @@ function createAppearanceStore({ dataDir, bundledDir = path.join(__dirname, '../
       const cancellableFetch = (url, options) => fetchImpl(url, { ...options, signal: AbortSignal.any([options.signal, activeAbort.signal]) });
       const result = await downloadWithFallback({ gate: true, sources, version: entry.version, openx: { release: `appearance-${entry.version}` }, expect: entry, dest, fetchImpl: cancellableFetch, signal: abort.signal,
         onProgress: progress => notify({ progress }), onAttempt: attempts => notify({ attempts }) });
-      if (!result.ok) return notify({ phase: result.cancelled ? 'cancelled' : 'error', error: result.cancelled ? '下载已取消，可以重新下载' : '下载失败，可重试；原有头像没有改变。' });
+      if (!result.ok) return notify({ phase: result.cancelled ? 'cancelled' : 'error', error: result.cancelled ? '下载已取消，可以重新下载' : (require('./app-update/bundled-catalog').onlyFailReason(result) || '下载失败，可重试') + '；原有头像没有改变。' });
       install(readJson(dest), entry);
       return notify({ phase: 'installed', error: null, installedId: id });
     })().catch(error => notify({ phase: 'error', error: error.message })).finally(() => { downloading = null; abort = null; });

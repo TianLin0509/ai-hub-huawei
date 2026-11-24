@@ -85,7 +85,8 @@ function localDay(now) {
 }
 
 function createBootSplashStore({ dataDir, assetsDir = path.join(__dirname, '..', 'renderer', 'assets', 'boot-splash'), sources = SOURCES,
-  fetchImpl = globalThis.fetch, emit = () => {}, now = () => Date.now(), catalogBodyTimeoutMs = 12000 } = {}) {
+  fetchImpl = globalThis.fetch, emit = () => {}, now = () => Date.now(), catalogBodyTimeoutMs = 12000,
+  snapshotFile = path.join(__dirname, 'boot-splash-catalog-snapshot.json'), env = process.env } = {}) {
   const root = path.join(dataDir, 'boot-splash');
   const prefsFile = path.join(root, 'preferences.json');
   const catalogFile = path.join(root, 'catalog.json');
@@ -210,7 +211,9 @@ function createBootSplashStore({ dataDir, assetsDir = path.join(__dirname, '..',
     if (downloading) return snapshot();
     checking = (async () => {
       notify({ phase: 'checking', error: null, checks: [], attempts: [], progress: null });
-      const results = await checkManifests({ sources, fetchImpl: boundedCatalogFetch(fetchImpl, catalogBodyTimeoutMs), validate: validateCatalog, gate: true });
+      // R29：只走内源时读程序自带的目录快照，不碰外网、不弹放行窗。
+      const results = require('./app-update/openx-source').onlyChannel(env) ? [require('./app-update/bundled-catalog').bundledCatalog(snapshotFile, validateCatalog)]
+        : await checkManifests({ sources, fetchImpl: boundedCatalogFetch(fetchImpl, catalogBodyTimeoutMs), validate: validateCatalog, gate: true });
       const best = results.filter(r => r.ok).sort((a, b) => compareVersion(b.manifest.version, a.manifest.version))[0];
       const checks = results.map(({ id, name, ok, reason, blocked, url }) => ({ id, name, ok, reason, blocked, url }));
       if (!best) { notify({ phase: 'error', checks, error: '暂时连不上开场动画目录，已有的开场动画照常可用，稍后可重试。' }); return snapshot(); }
@@ -235,7 +238,7 @@ function createBootSplashStore({ dataDir, assetsDir = path.join(__dirname, '..',
       const cancellableFetch = (url, options) => fetchImpl(url, { ...options, signal: AbortSignal.any([options.signal, activeAbort.signal]) });
       const result = await downloadWithFallback({ gate: true, sources, version: entry.version, openx: { release: `boot-splash-${entry.version}` }, expect: entry, dest, fetchImpl: cancellableFetch, signal: abort.signal,
         onProgress: progress => notify({ progress }), onAttempt: attempts => notify({ attempts }) });
-      if (!result.ok) { notify({ phase: result.cancelled ? 'cancelled' : 'error', activeId: null, failedId: id, error: result.cancelled ? '下载已取消' : '下载没成功，可以重试；正在用的开场动画不受影响。' }); return snapshot(); }
+      if (!result.ok) { notify({ phase: result.cancelled ? 'cancelled' : 'error', activeId: null, failedId: id, error: result.cancelled ? '下载已取消' : (require('./app-update/bundled-catalog').onlyFailReason(result) || '下载没成功，可以重试') + '；正在用的开场动画不受影响。' }); return snapshot(); }
       try { if (entry.anim === 'video') installVideo(dest, entry); else install(readJson(dest), entry); } finally { try { fs.unlinkSync(dest); } catch (_) {} }
       notify({ phase: 'installed', activeId: null, installedId: id, progress: null, error: null });
       return snapshot();

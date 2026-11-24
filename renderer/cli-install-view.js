@@ -91,7 +91,7 @@ function installBlockHtml(kind, state, opts = {}) {
   const entry = (state.catalog || []).find(c => c.id === id);
   const size = entry && entry.bytes ? `（约 ${Math.max(1, Math.round(entry.bytes / 1024 / 1024))} MB${id === 'dsh' ? '，没有 Node.js 时另加约 30 MB' : ''}）` : '';
   const otherBusy = state.busy && state.busy !== id;
-  const intro = `<p class="cli-install-intro">Hub 替你下载并装好 ${esc(TOOL_NAMES[id])}${esc(size)}：装在你自己的用户目录，不需要管理员权限，也不用去官网。先从公司内源下载，内源没有或连不上时自动改用阿里云。</p>`;
+  const intro = `<p class="cli-install-intro">Hub 替你下载并装好 ${esc(TOOL_NAMES[id])}${esc(size)}：装在你自己的用户目录，不需要管理员权限，也不用去官网。从公司内源下载，下载后核对 SHA-256；连不上时请确认电脑连着公司网络（公司内网或 VPN）。</p>`;
   const label = view.retry ? '重试' : '一键安装';
   const button = view.done ? ''
     : view.busy ? '<button type="button" data-cli-action="cancel">取消</button>'

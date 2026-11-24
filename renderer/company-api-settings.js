@@ -1,6 +1,8 @@
 'use strict';
 
 (() => {
+  // R29：只走内源时不探测、不提示放行下载服务器（阿里云）。
+  const openxOnly = () => require('../core/app-update/openx-source').onlyChannel();
   const distribution = require('../core/distribution');
   if (distribution.target !== 'company') return;
   const { ipcRenderer, shell } = require('electron');
@@ -135,7 +137,8 @@
     const slot = target?.querySelector(`[data-cli-install="${kind}"]`);
     if (!slot) return;
     const block = cliView.installBlockHtml(kind, cliState, { passNote: cliPassNote[kind] || '' });
-    const needPass = block && netPass && (netPass.needed || (netPassLast?.results || []).some(r => r.result === 'blocked'));
+    // R29：组件只从公司内源下载，不经外网下载服务器，不再提醒放行。
+    const needPass = block && netPass && !openxOnly() && (netPass.needed || (netPassLast?.results || []).some(r => r.result === 'blocked'));
     netPassView.ensureCss();
     slot.innerHTML = (needPass ? netPassView.boxHtml(netPass, { last: netPassLast }) : '') + block;
     void require('./download-source-view').fill(slot, { ipcRenderer });
@@ -210,7 +213,7 @@
       target.querySelector('[data-api-action="configure"]').onclick = () => void open(kind);
       renderCliBlock(target, kind);
       void loadCliState().then(() => { if (dialog === target) renderCliBlock(target, kind); });
-      void ipcRenderer.invoke('net-pass:status', { refresh: true }).then(v => { netPass = v; if (dialog === target) renderCliBlock(target, kind); }).catch(() => {});
+      if (!openxOnly()) void ipcRenderer.invoke('net-pass:status', { refresh: true }).then(v => { netPass = v; if (dialog === target) renderCliBlock(target, kind); }).catch(() => {});
       return;
     }
     target.innerHTML = heading(`安装 ${LABELS[kind]}`, '安装完成后可沿用本机配置，或填写自己的 API 接口。')
@@ -229,7 +232,7 @@
       finally { target.querySelector('[data-api-action="refresh"]')?.removeAttribute('disabled'); }
     };
     renderCliBlock(target, kind);
-    void ipcRenderer.invoke('net-pass:status', { refresh: true }).then(v => { netPass = v; if (dialog === target) renderCliBlock(target, kind); }).catch(() => {});
+    if (!openxOnly()) void ipcRenderer.invoke('net-pass:status', { refresh: true }).then(v => { netPass = v; if (dialog === target) renderCliBlock(target, kind); }).catch(() => {});
     // 读到安装器状态后再画一次。有一键安装时，手动步骤降为次要（「重新检测」不再是主按钮）；
     // 没有下载源的版本这里保持空白，弹窗和以前一样。
     void loadCliState().then(() => {

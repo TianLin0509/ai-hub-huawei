@@ -22,7 +22,7 @@ function fakeNet({ releases = [], down = false } = {}) {
 }
 const FILE_SITE = require('../core/app-update/openx-config').fileSite;
 const pkg = name => ({ originalFileName: name, url: new URL('x/' + name, FILE_SITE).href });
-const env = { AI_HUB_OPENX: '1' };
+const env = { AI_HUB_OPENX: '1', AI_HUB_OPENX_ONLY: '0' };
 const fresh = () => { openxSource._reset(); sourceStatus._reset(); };
 
 test('内源有这个组件包：可用；版本名按 cli-<id>-<版本> 精确命中', async () => {
@@ -43,7 +43,7 @@ test('多文件组件只有一部分在内源：部分；全没有：缺包；�
   assert.equal(partial.total, 2);
   const missing = await sourceStatus.check({ items: [{ file: 'nope.zip', release: 'x-1' }] }, { fetchImpl: net.fetchImpl, env });
   assert.equal(missing.status, 'missing');
-  assert.match(missing.text, /本次走阿里云/);
+  assert.match(missing.text, /本次走备用源/);
   fresh();
   const down = await sourceStatus.check({ items }, { fetchImpl: fakeNet({ down: true }).fetchImpl, env });
   assert.equal(down.status, 'down');
@@ -55,7 +55,8 @@ test('内源关掉、公司内部渠道：分别显示「已关闭」「公司�
   const internal = await sourceStatus.check({ internal: 'CodeAgent 官方渠道' }, { fetchImpl: null, env });
   assert.equal(internal.status, 'internal');
   assert.ok(internal.ok);
-  assert.match(internal.text, /不经阿里云/);
+  assert.match(internal.text, /（公司内网）/);
+  assert.doesNotMatch(internal.text, /阿里云/);
 });
 
 test('同一份结果 2 分钟内复用，不重复联网', async () => {
@@ -118,5 +119,6 @@ test('启动中心一键安装区块：点之前就带下载源标识，说明�
   const cli = require('../renderer/cli-install-view');
   const html = cli.installBlockHtml('codex', { available: true, tools: { codex: { phase: 'idle' } }, catalog: [{ id: 'codex', bytes: 181015521 }] });
   assert.match(html, /data-dl-source="cli:codex"/);
-  assert.match(html, /先从公司内源下载/);
+  assert.match(html, /从公司内源下载/);
+  assert.doesNotMatch(html, /阿里云|GitHub/, 'R29：说明里不再提外网源');
 });

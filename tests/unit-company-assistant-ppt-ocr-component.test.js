@@ -208,7 +208,7 @@ test('安装器内源优先：首个请求是内源版本列表，包从内源 o
       if (body === undefined) return new Response('nf', { status: 404 });
       return new Response(body, { status: 200, headers: { 'content-length': String(Buffer.byteLength(body)) } });
     };
-    const installer = createOcrComponentInstaller({ env: { PPTX_FINDER_DATA_DIR: data, AI_HUB_OPENX: '1' }, urls: [A], fetchImpl, extract: fakeExtract });
+    const installer = createOcrComponentInstaller({ env: { PPTX_FINDER_DATA_DIR: data, AI_HUB_OPENX: '1', AI_HUB_OPENX_ONLY: '0' }, urls: [A], fetchImpl, extract: fakeExtract });
     const r = await installer.install();
     return { r, calls, A, data };
   };

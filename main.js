@@ -3037,6 +3037,8 @@ require('./core/optional-features').registerActive(optionalFeatures);
 console.log(`[low-overhead] 判定=${optionalFeatures.installKind()} 低开销模式=${optionalFeatures.lowOverhead() ? '开' : '关'}`);
 // 关窗口最小化到托盘（2026-11-12）：开关也放「可选功能」，默认关。
 var trayController = null;
+// 社区统计（2026-11-24，main/community-service.js）：发送端与收件机本机的存储，下面建好后填进来。
+var communityServiceRef = null, communityHostRef = null;
 // 界面语言（2026-11-20）：默认中文，设置里选 English 才切英文；对话框/菜单/托盘/通知统一按词典翻译（main/i18n-main.js）。
 try {
   require('./main/i18n-main').installMainI18n({
@@ -3088,6 +3090,7 @@ function optionalFeatureList() {
   out.push({ id: 'liveMeter', ...CATALOG.liveMeter, on: optionalFeatures.get('liveMeter') });
   out.push({ id: 'searchIndex', ...CATALOG.searchIndex, on: optionalFeatures.get('searchIndex') });
   if (require('./core/distribution').kindAllowed('codeagent')) out.push({ id: 'quotaRefresh', ...CATALOG.quotaRefresh, on: optionalFeatures.get('quotaRefresh') });
+  // 社区统计不在可选功能里列出（2026-11-24）：开关在设置 › 高级 › 隐私 的「纯离线模式」，走 community:set-enabled。
   if (trayController) out.push({ id: 'tray', ...CATALOG.tray, on: optionalFeatures.get('tray') });
   out.push({ id: 'multiOpen', ...CATALOG.multiOpen, on: optionalFeatures.get('multiOpen') });
   const { BACKGROUND_IDS } = require('./core/optional-features');
@@ -3156,6 +3159,10 @@ async function applyOptionalFeature(id, on) {
       trayController.sync();
     } else if (id === 'multiOpen') {
       optionalFeatures.set('multiOpen', on);
+    } else if (id === 'community' && communityServiceRef) {
+      // 关掉立即停发；打开后首次心跳仍随机等 2–6 分钟。
+      optionalFeatures.set('community', on);
+      communityServiceRef.client.setEnabled(on);
     } else throw new Error('这个版本没有这项功能');
 }
 ipcMain.handle('optional-features:set', async (_event, request = {}) => {
@@ -5069,7 +5076,8 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
       // 「放行下载服务器」按钮（core/net-pass.js）：一次点击逐台放行全部自家下载主机，并提醒还没放行的新用户。
       try {
         const { createNetPass } = require('./core/net-pass');
-        const netPass = createNetPass({ hosts: ownHosts.downloadHosts(ownConfig), dataDir: getHubDataDir(),
+        const openxOnly = require('./core/app-update/openx-source').onlyChannel();
+        const netPass = createNetPass({ hosts: openxOnly ? [] : ownHosts.downloadHosts(ownConfig), dataDir: getHubDataDir(),
           fetchImpl: (...args) => require('electron').net.fetch(...args),
           // 公开版不在后台自动点：「放行下载服务器」直接弹出放行页让用户点。
           openGate: autoUnblock ? page => netUnblock.openHiddenGateWindow(BrowserWindow, page) : null,
@@ -5120,7 +5128,7 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
         // 启动后查一次（每台一个很小的网页请求）：新用户第一次打开更新或安装面板时，提醒已经准备好。
         setTimeout(() => { void netPass.refresh().catch(() => {}); }, 20000).unref?.();
         // 放行心跳（成员版，2026-11-08 用户）：每台自家主机每分钟探一次放行小页（GET + POST 各一个很小的请求），
-        if (autoUnblock && process.env.CLAUDE_HUB_GATE_HEARTBEAT !== '0') {
+        if (!openxOnly && autoUnblock && process.env.CLAUDE_HUB_GATE_HEARTBEAT !== '0') {
           const { GateHeartbeat, probeOwnPage } = require('./core/net-gate-heartbeat');
           const testMs = Number(process.env.CLAUDE_HUB_GATE_HEARTBEAT_MS);
           const intervalMs = process.env.CLAUDE_HUB_DATA_DIR && testMs > 0 ? testMs : 60000;
@@ -5223,6 +5231,24 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
         feedbackService.startRetry(retryMs > 0 ? { intervalMs: retryMs, firstDelayMs: retryMs } : undefined);
         app.on('will-quit', () => feedbackService.stopRetry());
       } catch (e) { console.warn('[hub-feedback] 一键反馈初始化失败：', e && e.message); }
+      // 社区统计·发送端（2026-11-24）：公司版每小时匿名报一次几个合计值；收件地址与一键反馈同一个来源，本机是收件机时走本地。
+      try {
+        const communityEdition = distribution.target === 'company' ? (distribution.featureEnabled('memberUpgrade') ? 'public' : 'member') : null;
+        const { createCommunityService } = require('./main/community-service');
+        communityServiceRef = createCommunityService({ dataDir: getHubDataDir(), edition: communityEdition,
+          version: distribution.editionVersion || app.getVersion(), profileController: () => profileController,
+          receiverAddress: communityEdition ? sharedFeedbackReceiverAddress() : null,
+          fetchImpl: (...args) => require('electron').net.fetch(...args),
+          isEnabled: () => optionalFeatures.get('community'),
+          setEnabledFlag: on => applyOptionalFeature('community', on).then(() => broadcastOptionalFeatures()),
+          getHost: () => communityHostRef, sendToRenderer,
+          // AI_HUB_COMMUNITY_PULSE_MS 只供隔离 E2E 缩短首次与之后的间隔；正式实例忽略。
+          clientOptions: isIsolatedHub() && Number(process.env.AI_HUB_COMMUNITY_PULSE_MS) > 0
+            ? { firstDelayMs: Number(process.env.AI_HUB_COMMUNITY_PULSE_MS), periodMs: Number(process.env.AI_HUB_COMMUNITY_PULSE_MS) } : {} });
+        communityServiceRef.registerIpc(ipcMain);
+        app.whenReady().then(() => communityServiceRef.start()).catch(() => {});
+        app.on('will-quit', () => communityServiceRef?.stop());
+      } catch (e) { console.warn('[community] 初始化失败：', e && e.message); }
       const sealedModules = require('./core/sealed-modules');
       const sealedMode = sealedModules.present();
       ipcMain.handle('edition:state', () => (sealedMode

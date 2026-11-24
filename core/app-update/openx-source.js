@@ -50,6 +50,29 @@ function enabled(env = process.env, versions = process.versions) {
   if (v === '1') return true;
   return !!(versions && versions.electron);
 }
+// 内源没有、连不上都直接报原因，不再落回阿里云 / GitHub / 官方源。内源本身关着（纯 Node 单测、AI_HUB_OPENX=0 排查）时不生效。
+// AI_HUB_OPENX_ONLY=0 关、=1 开（单测与排查用）；测试用 AI_HUB_UPDATE_SOURCES 把源换成本机服务时按测试给的源走。
+const ONLY_CHANNEL = !!(CONFIG && CONFIG.onlyChannel);
+function onlyChannel(env = process.env, versions = process.versions, configured = ONLY_CHANNEL) {
+  const v = String(env.AI_HUB_OPENX_ONLY || '').trim();
+  if (v === '0') return false;
+  if (v !== '1' && (!configured || env.AI_HUB_UPDATE_SOURCES)) return false;
+  return enabled(env, versions);
+}
+// 只走内源时给用户看的失败原因：写清是哪种问题、下一步做什么（不再建议去别处下载）。
+const NETWORK_HINT = '请确认电脑连着公司网络（公司内网或 VPN）后重试';
+function userReason(reason, { file = '' } = {}) {
+  const raw = String(reason || '').trim();
+  if (/已取消/.test(raw)) return '已取消';
+  // 清单读到了但签名缺失 / 不对 / 版本对不上：内源是连着的，不提示查网络（R29 审查 #3）。
+  if (/没有签名|签名不对|附带的清单|主版本跳得太多/.test(raw)) return `公司内源上的版本清单还在同步签名或没通过校验（${raw}），请稍后再试，或点下方「下载完整安装包」；一直如此请点「一键反馈」`;
+  if (/未启用|已关闭/.test(raw)) return '公司内源已关闭（排查开关 AI_HUB_OPENX=0），去掉这个开关后重启 Hub 再试';
+  if (/没有这个文件|没有该版本|HTTP 404|还没有附带版本清单|没找到|没有比当前更新/.test(raw)) return `公司内源上暂时没有${file ? `「${file}」` : '这个包'}，可能还在同步，请过几分钟再试；一直没有请点「一键反馈」告诉维护人`;
+  if (/校验/.test(raw)) return `从公司内源下载的${file ? `「${file}」` : '文件'}校验没通过，已丢弃，请重试；反复出现请点「一键反馈」`;
+  if (/连不上|超时|没响应|HTTP|ENOTFOUND|ECONN|网络|DNS|fetch failed|证书|代理|秒内/.test(raw) || !raw) return `连不上公司内源${raw ? `（${raw.replace(/^内源连不上[：:]?/, '').replace(/（5 分钟内自动重试）$/, '')}）` : ''}。${NETWORK_HINT}`;
+  return `从公司内源下载没有完成（${raw}）。${NETWORK_HINT}`;
+}
+
 // 内源之后的外网源要不要改顺序（GitHub 提到阿里云前）：只按发行版本定——公开版改，成员版保持原顺序（阿里云高速在前）。
 // AI_HUB_OPENX=1 只管开内源，不改顺序；AI_HUB_TEST_EDITION=public 仅供单测模拟公开版。
 function publicOrder(env = process.env, editionOn = EDITION_ON) {
@@ -335,6 +358,8 @@ async function fetchManifest({ fetchImpl, validate, signal, currentVersion, publ
     const releases = list.map(r => ({ ...r, appVersion: /^(\d+\.\d+\.\d+)(?:\s|$)/.exec(normVersion(r.version))?.[1] }))
       .filter(r => r.appVersion)
       .sort((a, b) => compareVersions(b.appVersion, a.appVersion));
+    // 某一版清单没签名、签名不对或版本对不上（如发版中途只传了一半）：记下原因，接着看更早的一版（R29 审查 #4）。
+    let skipped = '';
     for (const rec of releases.slice(0, 3)) {
       if (ac.signal.aborted) break;
       let packages = state.details.get(rec.id);
@@ -347,21 +372,22 @@ async function fetchManifest({ fetchImpl, validate, signal, currentVersion, publ
       const hit = pick(MANIFEST_FILE);
       if (!hit) continue;
       const sigHit = pick(MANIFEST_FILE + signing.SIG_FILE_SUFFIX);
-      if (!sigHit) return result(false, { reason: `内源 v${rec.appVersion} 的版本清单没有签名，不采用` });
+      if (!sigHit) { skipped = skipped || `内源 v${rec.appVersion} 的版本清单没有签名，不采用`; continue; }
       const [raw, sig] = await Promise.all([getText(safeUrl(hit.url)), getText(safeUrl(sigHit.url))]);
-      if (!signing.verifyManifest(raw, sig.toString('utf8'), publicKey)) return result(false, { reason: `内源 v${rec.appVersion} 的版本清单签名不对，不采用` });
+      if (!signing.verifyManifest(raw, sig.toString('utf8'), publicKey)) { skipped = skipped || `内源 v${rec.appVersion} 的版本清单签名不对，不采用`; continue; }
       const manifest = await validate(JSON.parse(raw.toString('utf8').replace(/^\uFEFF/, '')));
       const v = normVersion(manifest.version);
-      if (v !== rec.appVersion) return result(false, { reason: `内源 v${rec.appVersion} 附带的清单写的是 v${manifest.version}，不采用` });
+      if (v !== rec.appVersion) { skipped = skipped || `内源 v${rec.appVersion} 附带的清单写的是 v${manifest.version}，不采用`; continue; }
       if (currentVersion) {
         const cur = normVersion(currentVersion);
-        if (compareVersions(v, cur) < 0) return result(false, { reason: `内源清单 v${v} 比当前 v${cur} 还旧，不采用` });
+        // older：内源上最新的有效清单比本机还旧（本机装了更新的测试包等）——只走内源时按「已是最新」处理。
+        if (compareVersions(v, cur) < 0) return result(false, { reason: `内源清单 v${v} 比当前 v${cur} 还旧，不采用`, older: true, version: v });
         if (Number(v.split('.')[0]) > Number(cur.split('.')[0]) + 1) return result(false, { reason: `内源清单 v${v} 主版本跳得太多（当前 v${cur}），不采用` });
       }
       return result(true, { manifest, releaseVersion: String(rec.version || '') });
     }
     if (ac.signal.aborted) return result(false, { reason: signal && signal.aborted ? '已取消' : `${budget / 1000} 秒内没读完内源版本清单` });
-    return result(false, { reason: '内源上的程序版本还没有附带版本清单' });
+    return result(false, { reason: skipped || '内源上的程序版本还没有附带版本清单' });
   })().catch(error => {
     if (signal && signal.aborted) return result(false, { reason: '已取消' });
     if (ac.signal.aborted) return result(false, { reason: `${budget / 1000} 秒内没读完内源版本清单` });
@@ -428,4 +454,4 @@ const memberReleaseName = version => `${MEMBER_PREFIX}v${normVersion(version)}`;
 const isMemberRelease = name => String(name || '').trim().toLowerCase().startsWith(MEMBER_PREFIX);
 function _reset() { state = freshState(); }
 
-module.exports = { findLatestFull, fetchManifest, MANIFEST_BUDGET_MS, diagnostics, clearDown, EDITION_ON, publicOrder, releaseName, memberReleaseName, isMemberRelease, find, findForDownload, headSize, prewarm, probe, reachability, safeUrl, markBad, lastReason, enabled, normVersion, _reset, DEFAULT_API, PROJECT_ID, REACH_TIMEOUT_MS, UNKNOWN_BUDGET_MS };
+module.exports = { onlyChannel, userReason, NETWORK_HINT, findLatestFull, fetchManifest, MANIFEST_BUDGET_MS, diagnostics, clearDown, EDITION_ON, publicOrder, releaseName, memberReleaseName, isMemberRelease, find, findForDownload, headSize, prewarm, probe, reachability, safeUrl, markBad, lastReason, enabled, normVersion, _reset, DEFAULT_API, PROJECT_ID, REACH_TIMEOUT_MS, UNKNOWN_BUDGET_MS };

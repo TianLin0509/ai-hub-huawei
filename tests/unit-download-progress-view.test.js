@@ -18,8 +18,9 @@ test('进度条：百分比、已下/总量、速度、剩余时间、来源', (
 });
 
 test('来源名翻成人话；内源没命中时标「备用」并写原因', () => {
-  assert.deepEqual(view.sourceLabel('x', 'bucket.oss-cn-shanghai.aliyuncs.com'), { text: '阿里云', kind: 'external' });
-  assert.deepEqual(view.sourceLabel('github', 'github.com'), { text: 'GitHub', kind: 'external' });
+  // R29：外部站点不写具体名字，只标「外部源」（只走内源后正常不会出现）。
+  assert.deepEqual(view.sourceLabel('x', 'bucket.oss-cn-shanghai.aliyuncs.com'), { text: '外部源', kind: 'external' });
+  assert.deepEqual(view.sourceLabel('github', 'github.com'), { text: '外部源', kind: 'external' });
   assert.equal(view.sourceLabel('aliyun-fast', '阿里云高速').text, '阿里云高速');
   assert.equal(view.sourceLabel('local', '本机已下好的文件').text, '本机已下好');
   const miss = view.html({ phase: 'downloading', received: 1, total: 2, sourceId: 'aliyun', sourceName: '阿里云', openxMiss: '内源上没有这个文件' });

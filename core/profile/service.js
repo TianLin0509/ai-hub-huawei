@@ -1,6 +1,7 @@
 'use strict';
 // 「个人」页的数据内核（2026-11-12）：把每天的使用记成经验，算等级、成就、连续天数与桌宠亲密度。
-// 数据只存本机 <数据目录>/profile/profile.json，不上传、不做排行。主进程在各功能入口调 record()，页面读 snapshot()。
+// 数据存本机 <数据目录>/profile/profile.json，主进程在各功能入口调 record()，页面读 snapshot()。
+// 社区统计（2026-11-24，core/community/）每小时只取其中几个合计值匿名上报（等级、本周经验等），可在设置里关闭。
 const fs = require('node:fs');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
@@ -134,6 +135,8 @@ class Profile extends EventEmitter {
     this.settle();
     this.touch();
     this.emit('changed');
+    // 社区统计的「过去一小时亲自用过」：只认用户自己发消息、开会话。
+    if (type === 'prompt' || type === 'session') this.emit('used', type);
     return got;
   }
   useFeature(day, id) {

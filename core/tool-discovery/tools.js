@@ -76,10 +76,16 @@ function pptDoctorAdapter(service, { env = process.env } = {}) {
       // 测试用：直接信任指定的程序（与 PptDoctor 的 pptDoctorTrustedExecutable 一致）。
       const marker = deps.pptDoctorTrustedExecutable ? (deps.pptDoctorCapability || {}) : await discovery.capability(file);
       if (!marker) return { ok: false, reason: '缺少兼容的联动能力标记' };
-      const version = marker.version || marker.appVersion || (deps.pptDoctorTrustedExecutable ? null : await exeFileVersion(file));
+      // 标记和主程序对得上时直接用标记里的版本；对不上（R31：装了一半）时以主程序自身版本为准，且必须 ≥2.0.7（首个带 --hub）。
+      const version = (!marker.exeHashMismatch && (marker.doctorVersion || marker.version || marker.appVersion))
+        || (deps.pptDoctorTrustedExecutable ? null : await exeFileVersion(file));
+      if (marker.exeHashMismatch && (!version || require('./candidates').compareVersions(version, '2.0.7') < 0))
+        return { ok: false, reason: '主程序版本过旧或和联动能力标记对不上' };
       return { ok: true, version: version ? String(version) : null };
     },
     getConfigured: () => (service.settings().ppt || {}).doctorExe || '',
+    // Hub 一键装的那份不算用户指定：有更新的安装就自动换过去（R31）。
+    configuredByUser: () => !discovery.isHubInstall((service.settings().ppt || {}).doctorExe),
     setConfigured: file => service.setSettings({ ppt: { doctorExe: file || '' } }),
   };
 }

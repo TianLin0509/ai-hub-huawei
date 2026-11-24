@@ -59,9 +59,11 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "让 AI 做 PPT 时不再关掉你自己打开的 PPT：只关它自己打开的那份，正开着的同一文件直接复用"
+    "PPT Doctor 永远和 Hub 适配：自己升级没装完整时不再被判「版本太旧」，一键升级直接补到最新版，绝不装回旧版",
+    "社区（Beta）：左栏新增「社区」页，显示当前在线人数和排行榜（等级、本周活力、本周 Token、工作日连胜、成就），只用昵称和桌宠，每小时匿名同步一次；设置 › 高级 里可开启纯离线模式",
+    "下载和更新只走公司内源：程序更新、组件、PPT Doctor 都从内源取，界面不再出现阿里云和 GitHub；连不上时提示检查公司网络"
   ],
-  "version": "5.6.102",
+  "version": "5.6.103",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

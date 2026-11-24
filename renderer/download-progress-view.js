@@ -1,6 +1,6 @@
 'use strict';
 // 统一下载进度条（r59，2026-11-19）：所有「一键安装 / 下载组件 / 更新」用同一个样式——
-// 标题 + 百分比、进度条、「已下 / 总量 · 速度 · 还要多久」、来源标签（公司内源 / 阿里云 / GitHub …）。
+// 标题 + 百分比、进度条、「已下 / 总量 · 速度 · 还要多久」、来源标签（公司内源 / 本机已下好 …）。
 // 数据来自 core/app-update/downloader.js 的 onProgress（received、total、speed、etaSec、sourceId、sourceName），
 // 各下载模块原样透传到界面状态即可。只做纯函数 + 一次性注入样式，拼 HTML 字符串的页面直接调用 html()。
 // 中性：「公司内源」只在 sourceId === 'openx' 时出现，公开版下载器不会产生这个来源。
@@ -58,10 +58,9 @@ function sourceLabel(id, name) {
   if (id === 'local') return { text: '本机已下好', kind: 'local' };
   const raw = String(name || id || '').trim();
   if (!raw) return null;
-  if (/[一-鿿]/.test(raw)) return { text: raw, kind: 'external' };   // 已经是中文名（阿里云高速、阿里云镜像…）
-  if (/npmmirror/i.test(raw)) return { text: '阿里云 npm 镜像', kind: 'external' };
-  if (/aliyuncs|aliyun|oss-cn/i.test(raw)) return { text: '阿里云', kind: 'external' };
-  if (/github/i.test(raw)) return { text: 'GitHub', kind: 'external' };
+  // R29：只走内源后外部源不会出现；万一出现（排查开关关掉只走内源）只标「外部源」，不写具体站点名。
+  if (/[一-鿿]/.test(raw)) return { text: raw, kind: 'external' };   // 已经是中文名
+  if (/npmmirror|aliyuncs|aliyun|oss-cn|github/i.test(raw)) return { text: '外部源', kind: 'external' };
   if (/registry\.npmjs|npmjs\.org/i.test(raw)) return { text: 'npm 官方', kind: 'external' };
   return { text: raw, kind: 'external' };
 }

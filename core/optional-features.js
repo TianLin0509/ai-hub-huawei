@@ -25,6 +25,9 @@ const CATALOG = Object.freeze({
   // 低开销模式新纳入开关的三项：以前没有开关、一直在后台跑。老用户升级后保持开（行为不变），新装默认关。
   liveMeter: { name: '底栏网速与显卡读数', desc: '左下角的 ↓↑ 实时网速和 GPU 占用；CPU、内存读数不受影响', cost: '开着时常驻一个 PowerShell 读网卡（约 150 MB 内存），每 10 秒运行一次 nvidia-smi 读显卡' },
   searchIndex: { name: '后台会话搜索索引', desc: '启动后趁电脑空闲给历史会话建搜索索引，之后跟着新会话自动更新，搜索时立刻出结果', cost: '第一次要扫描全部会话记录（记录多时要几分钟，磁盘和 CPU 都会忙），之后常驻一个搜索进程并监听会话目录。关着时搜索照样能用，第一次搜时当场建索引' },
+  // 社区统计（2026-11-24）：默认开、不提示；不是后台开销，低开销模式与新装判定都不动它。
+  // settingsOnly：不在「可选功能」里列出，开关放在设置 › 高级 › 隐私 的「纯离线模式」（反着存：纯离线开＝本项关）。
+  community: { settingsOnly: true, name: '参与社区统计', desc: '每小时匿名报一次等级、本周经验与 Token 合计等几个数，用于左侧「社区」页的在线人数和排行榜；不含姓名、工号、对话和文件', cost: '几乎没有：每小时一个不到 1 KB 的内网请求，3 秒超时，失败不重试' },
   quotaRefresh: { name: 'CodeAgent 多账号额度自动刷新', desc: '有两个以上 CodeAgent 账号时，每 15 分钟把各号的剩余额度读一遍', cost: '每读一个号临时起一个 CodeAgent 后台进程（约 0.5 GB 内存），读完即关。关着时额度面板里手动刷新照样能用' },
 });
 
@@ -71,6 +74,7 @@ function createOptionalFeatures({ dataDir, logger = console, defaults = {}, dete
     assistant: defaults.assistant === true, forum: defaults.forum === true, attendance: defaults.attendance === true, w3: defaults.w3 === true,
     rooms: defaults.rooms !== false, tray: defaults.tray === true, multiOpen: defaults.multiOpen !== false,
     liveMeter: defaults.liveMeter !== false, searchIndex: defaults.searchIndex !== false, quotaRefresh: defaults.quotaRefresh !== false,
+    community: defaults.community !== false,
   };
   // 用户亲手关掉（或在「还没开启」页点了「不用，收起入口」）的功能，左侧导航不再显示它（2026-11-18 用户反馈）。
   // 只认用户自己的这一下：默认关着、从没碰过的功能照旧显示入口，点进去是说明页，新用户不会因为默认关着就找不到。

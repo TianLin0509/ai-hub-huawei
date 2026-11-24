@@ -238,7 +238,7 @@
   function settings() {
     const f = data.preferences.frequency;
     return `<div class="bsp-settings"><h3>什么时候播放</h3>${FREQ.map(([id, name, note]) => `<label class="bsp-radio"><input type="radio" name="bsp-freq" value="${id}" ${f === id ? 'checked' : ''}><span><b>${name}</b><small>${note}</small></span></label>`).join('')}
-      <h3>下载来源</h3><p>按需下载的开场动画优先从公司内源取，取不到再走阿里云；每套 50–150 KB。</p>${require('./download-source-view').slotHtml('boot-splash', 'div')}
+      <h3>下载来源</h3><p>按需下载的开场动画从公司内源取；每套 50–150 KB。</p>${require('./download-source-view').slotHtml('boot-splash', 'div')}
       <h3>关于「原作」开场</h3><p>Claude、Codex 页签里带「原作」的两套，来自 wynneceles 的开源项目 ai-boot-animations（github.com/wynneceles/ai-boot-animations），按 CC BY-NC-ND 4.0 原样收录、带原声，仅供非商业的个人使用；人物为网络流传的同人形象，著作权归原设计者。</p>
       <div class="bsp-row"><button class="appearance-btn" data-action="check">检查新的开场动画</button><button class="appearance-btn" data-preview="${esc(data.preferences.selected)}">预览当前开场动画</button></div></div>`;
   }

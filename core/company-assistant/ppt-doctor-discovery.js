@@ -44,6 +44,11 @@ async function candidates(env = process.env, deps = {}) {
   return [...new Set([...fromRegistry, ...defaults, ...shortcuts].filter(Boolean))];
 }
 
+// 联动能力标记 hub-api.json：协议版本和能力列表决定「能不能联动」。
+// R31（2026-11-24）：标记里的 exeSha256 和程序实际哈希对不上时不再判成「版本太旧」，而是带 exeHashMismatch 返回，
+// 由调用方实际调一次 status、按回执的 apiVersion 定。起因：公司电脑覆盖安装 v2.1.9 时 PPT-Doctor.exe 正被占用没换掉，
+// 其余文件（含标记）已是 2.1.9，Hub 按哈希判成「太旧」，一键升级反把它装回 2.0.7 完整基线。
+// 返回 null 只表示「没有可用的标记」（老版本没有 --hub，启动它会弹出界面），这时一律不启动。
 async function capability(executable) {
   const file = path.join(path.dirname(executable), 'hub-api.json');
   try {
@@ -52,15 +57,20 @@ async function capability(executable) {
     if (info.apiVersion !== 1 || String(info.executable).toLowerCase() !== path.basename(executable).toLowerCase()
         || !/^[a-f0-9]{64}$/i.test(info.exeSha256 || '') || !Array.isArray(info.capabilities) || !info.capabilities.includes('status')) return null;
     const exeStat = fs.statSync(executable), key = `${executable}:${exeStat.size}:${exeStat.mtimeMs}:${stat.size}:${stat.mtimeMs}:${info.exeSha256}`;
-    if (verified.has(key)) return info;
+    if (verified.has(key)) return verified.get(key);
     const hash = createHash('sha256');
     for await (const chunk of fs.createReadStream(executable)) hash.update(chunk);
-    if (hash.digest('hex') !== info.exeSha256.toLowerCase()) return null;
+    const match = hash.digest('hex') === info.exeSha256.toLowerCase();
     const after = fs.statSync(executable);
-    if (after.size !== exeStat.size || after.mtimeMs !== exeStat.mtimeMs) return null;
-    verified.set(key, true); while (verified.size > 8) verified.delete(verified.keys().next().value);
-    return info;
+    if (after.size !== exeStat.size || after.mtimeMs !== exeStat.mtimeMs) return null;   // 算哈希时程序正被替换：这一刻不判
+    const result = match ? info : { ...info, exeHashMismatch: true };
+    verified.set(key, result); while (verified.size > 8) verified.delete(verified.keys().next().value);
+    return result;
   } catch (error) { if (error.code !== 'ENOENT') console.warn('[ppt-doctor] 联动能力标记不可读：', error.message); return null; }
 }
 
-module.exports = { candidates, capability, registryPaths, shortcutPaths };
+// Hub 一键安装放在 <数据目录>/tools/ppt-doctor/install-<uuid>/ 下（ppt-doctor-install.js）。这份不算用户手动指定：
+// 本机另有更新的 PPT Doctor 时自动改用新的（R31：以前一键装的旧基线会一直压住用户后来自己升级的新版）。
+const isHubInstall = file => /[\\/]tools[\\/]ppt-doctor[\\/]install-[0-9a-f-]{36}[\\/]/i.test(String(file || ''));
+
+module.exports = { candidates, capability, registryPaths, shortcutPaths, isHubInstall };

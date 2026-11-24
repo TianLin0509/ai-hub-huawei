@@ -67,7 +67,9 @@ function registerFirstRunIpc(ipcMain, { dataDir, isCompany, send, envCheck, tool
     },
     systemProxy: () => systemProxy(),
     clockSkew: async () => {
-      const page = netPass()?.status()?.hosts?.[0]?.page;
+      // R29 审查 #2：只走内源时用内源站点的时间对照，不再请求阿里云。
+      const openx = require('../../core/app-update/openx-source');
+      const page = openx.onlyChannel() ? require('../../core/app-update/openx-config').fileSite : netPass()?.status()?.hosts?.[0]?.page;
       if (!page || !fetchImpl) return null;
       const response = await fetchImpl(page, { method: 'HEAD' });
       const server = Date.parse(response.headers.get('date') || '');

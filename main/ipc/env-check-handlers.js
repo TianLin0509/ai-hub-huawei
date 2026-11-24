@@ -14,6 +14,8 @@ function registerEnvCheckIpc(ipcMain, deps) {
       assistant.setSettings({ ppt: { doctorExe: exe } });
       assistant.ppt.doctor.cached = null;
     },
+    // R31：本机已装的版本，安装器据此绝不装回更旧的完整基线。
+    installedVersion: async () => (await deps.assistant()?.ppt?.doctor?.installedVersion?.()) || '',
   });
 
   const context = () => ({

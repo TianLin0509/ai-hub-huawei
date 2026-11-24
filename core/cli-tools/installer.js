@@ -192,8 +192,13 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
 
   async function loadCatalog(signal) {
     if (catalog && Date.now() - catalogAt < CATALOG_TTL_MS) return catalog;
-    if (!sources.length) throw new Error('这个版本没有配置组件下载源，暂不能一键安装');
     const validate = raw => catalogLib.validateCatalog(raw, key === undefined ? {} : { key });
+    // R29（2026-11-24）：只走内源时直接用随程序发布的签名目录快照（发版时刷新、同一把公钥验签），不去外网读目录；文件只从内源下。
+    if (require('../app-update/openx-source').onlyChannel(env)) {
+      const snap = bundledCatalog(validate);
+      if (snap) { catalog = snap; catalogAt = Date.now(); catalogFrom = sources; catalogNote = ''; return catalog; }
+    }
+    if (!sources.length) throw new Error('这个版本没有配置组件下载源，暂不能一键安装');
     const fetchFn = resolveFetch(fetchImpl);
     let results = await checkManifests({ sources, fetchImpl: fetchFn, validate, signal });
     const blocked = results.find(r => !r.ok && r.blocked);
@@ -253,7 +258,7 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
     try {
       const list = catalogLib.fileSources(component, file, catalogFrom);
       const expect = { file: file.name, bytes: file.bytes, sha256: file.sha256 };
-      const go = () => downloadWithFallback({ sources: list, version: component.version, openx: { release: `cli-${component.id}-${component.version}` }, expect, dest: download,
+      const go = () => downloadWithFallback({ sources: list, version: component.version, openx: { release: `cli-${component.id}-${component.version}`, env }, expect, dest: download,
         fetchImpl: resolveFetch(fetchImpl), signal, idleTimeoutMs, connectTimeoutMs,
         onProgress: p => progress({ phase: 'downloading', received: p.received, total: p.total, speed: p.speed, etaSec: p.etaSec, sourceId: p.sourceId, sourceName: p.sourceName, openxMiss: p.openxMiss || null }),
         onAttempt: attempts => progress({ attempts: attempts.map(a => ({ name: a.name, status: a.status, reason: a.reason, blocked: !!a.blocked, url: a.url })) }) });
@@ -437,7 +442,7 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
     } } catch (error) {
       const cancelled = error.cancelled || signal.aborted;
       // pi（r39）：组件目录里还没有 pi 或下载失败时，按用户自己的 npm 配置装进 Hub 自管目录（不改全局 npm）。
-      if (id === 'pi' && !cancelled && !/签名|校验不一致|文件大小不对/.test(error.message)) {
+      if (id === 'pi' && !cancelled && !/签名|校验不一致|校验没通过|文件大小不对/.test(error.message)) {
         const targetRoot = path.join(root(), 'pi', 'user-npm');
         try {
           // 后备也要先有够版本的 Node（r39 审查：以前只看文件和版本号就报装好，Node 不够或入口跑不起来也算成功）。
@@ -461,7 +466,7 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
           set(id, { phase: stopped ? 'cancelled' : 'error', error: stopped ? null
             : `${error.message}；按你的 npm 配置安装 pi 也没有成功：${String(npmError.stderr || npmError.message).slice(0, 800)}`, blocked: error.blocked || null });
         }
-      } else if (id === 'dsh' && !repair && !cancelled && !/签名|校验不一致|文件大小不对/.test(error.message)) {
+      } else if (id === 'dsh' && !repair && !cancelled && !/签名|校验不一致|校验没通过|文件大小不对/.test(error.message)) {
         try {
           const targetRoot = path.join(root(), 'dsh', 'user-npm');
           const result = await require('./npm-fallback').installDshWithUserNpm({ env, signal, run: npmRun, targetRoot,

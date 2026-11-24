@@ -25,7 +25,7 @@ const RULES = [
   ['pet', '#cfg-hub-pet, #cfg-notify-mode-section'],
   ['notify', '.config-notification-title, #config-notification-card'],
   ['server', '.config-operations-title, .config-operations-card'],
-  ['advanced', '#cfg-team-auto-approve-field, #cfg-work-file-root-field'],
+  ['advanced', '#cfg-team-auto-approve-field, #cfg-work-file-root-field, #cfg-community-offline-field'],
   ['display', '#cfg-boot-splash-field, .config-reading-title, #cfg-card-font-size, #cfg-composer-enter-field, #cfg-workspace-root-field, #cfg-codeagent-quota-placement-field'],
   ['general', '.company-api-settings-entry, .config-language-field, #cfg-model-unavailable-policy, #cfg-proxy, #btn-config-accounts, .config-hint'],
 ];

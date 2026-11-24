@@ -49,8 +49,11 @@ function registerDownloadSourceIpc(ipcMain, { fetchImpl, env = process.env } = {
     if (!item) return { ok: false, reason: '清单里没有安装包' };
     const openxSource = require('../core/app-update/openx-source');
     const fetch = typeof fetchImpl === 'function' ? fetchImpl : (...args) => require('electron').net.fetch(...args);
+    // R29：只走内源时用户点了就真的再连一次，失败原因写成人话（连不上 → 检查公司网络）。
+    const only = openxSource.onlyChannel(env);
+    if (only) openxSource.clearDown();
     const hit = await openxSource.find({ file: item.file, version: item.version, release: item.release, strict: !!spec.strict, fetchImpl: fetch, env });
-    if (!hit || hit.urls) return { ok: false, reason: hit ? '内源上是分片包，请用一键更新' : openxSource.lastReason() };
+    if (!hit || hit.urls) return { ok: false, reason: hit ? '内源上是分片包，请用一键更新' : only ? openxSource.userReason(openxSource.lastReason(), { file: item.file }) : openxSource.lastReason() };
     await require('electron').shell.openExternal(hit.url);
     return { ok: true, via: 'openx', url: hit.url };
   }

@@ -1,6 +1,6 @@
 {
  "$comment": "设置页搜索与 Ctrl+K 命令面板用的功能/设置索引，由 tools/help-manual/build-help-manual.js 从界面代码生成，不要手改。",
- "version": "5.6.94",
+ "version": "5.6.101",
  "items": [
   {
    "id": "f001",
@@ -746,6 +746,41 @@
   },
   {
    "id": "f049",
+   "kind": "config-section",
+   "name": "隐私",
+   "where": "设置 → ⚙️ 设置",
+   "desc": "",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": {
+      "selector": ".config-privacy-fold > summary",
+      "text": "隐私"
+     }
+    }
+   ]
+  },
+  {
+   "id": "f050",
+   "kind": "config",
+   "name": "纯离线模式：不向社区同步状态",
+   "where": "设置 → ⚙️ 设置 → 隐私",
+   "desc": "默认关，即匿名参与社区。开启后立即停止同步、也不再拉取榜单，社区页锁定；关闭后恢复。切换立即生效。",
+   "steps": [
+    {
+     "click": "#options-settings",
+     "unless": "#config-modal:not(.hidden) #config-main-view:not(.hidden)"
+    },
+    {
+     "highlight": "#cfg-community-offline"
+    }
+   ]
+  },
+  {
+   "id": "f051",
    "kind": "optional",
    "name": "助理",
    "where": "设置 → 🧩 可选功能",
@@ -763,7 +798,7 @@
    ]
   },
   {
-   "id": "f050",
+   "id": "f052",
    "kind": "optional",
    "name": "帖子",
    "where": "设置 → 🧩 可选功能",
@@ -781,7 +816,7 @@
    ]
   },
   {
-   "id": "f051",
+   "id": "f053",
    "kind": "optional",
    "name": "考勤",
    "where": "设置 → 🧩 可选功能",
@@ -799,7 +834,7 @@
    ]
   },
   {
-   "id": "f052",
+   "id": "f054",
    "kind": "optional",
    "name": "门户待办",
    "where": "设置 → 🧩 可选功能",
@@ -817,7 +852,7 @@
    ]
   },
   {
-   "id": "f053",
+   "id": "f055",
    "kind": "optional",
    "name": "会议室",
    "where": "设置 → 🧩 可选功能",
@@ -835,7 +870,7 @@
    ]
   },
   {
-   "id": "f054",
+   "id": "f056",
    "kind": "optional",
    "name": "关窗口时最小化到托盘",
    "where": "设置 → 🧩 可选功能",
@@ -853,7 +888,7 @@
    ]
   },
   {
-   "id": "f055",
+   "id": "f057",
    "kind": "optional",
    "name": "再打开 Hub 时提示切过去",
    "where": "设置 → 🧩 可选功能",
@@ -871,7 +906,7 @@
    ]
   },
   {
-   "id": "f056",
+   "id": "f058",
    "kind": "optional",
    "name": "桌宠",
    "where": "设置 → 🧩 可选功能",
@@ -889,7 +924,7 @@
    ]
   },
   {
-   "id": "f057",
+   "id": "f059",
    "kind": "optional",
    "name": "底栏网速与显卡读数",
    "where": "设置 → 🧩 可选功能",
@@ -907,7 +942,7 @@
    ]
   },
   {
-   "id": "f058",
+   "id": "f060",
    "kind": "optional",
    "name": "后台会话搜索索引",
    "where": "设置 → 🧩 可选功能",
@@ -925,7 +960,7 @@
    ]
   },
   {
-   "id": "f059",
+   "id": "f061",
    "kind": "optional",
    "name": "CodeAgent 多账号额度自动刷新",
    "where": "设置 → 🧩 可选功能",
@@ -943,7 +978,7 @@
    ]
   },
   {
-   "id": "f060",
+   "id": "f062",
    "kind": "config-section",
    "name": "低开销模式 / 资源与后台",
    "where": "设置 → ⚙️ 设置 → 资源与后台",
@@ -959,7 +994,7 @@
    ]
   },
   {
-   "id": "f061",
+   "id": "f063",
    "kind": "page-setting",
    "name": "公司域名",
    "where": "考勤 → 设置",
@@ -990,7 +1025,7 @@
    ]
   },
   {
-   "id": "f062",
+   "id": "f064",
    "kind": "page-setting",
    "name": "核心工作时间",
    "where": "考勤 → 设置",
@@ -1021,7 +1056,7 @@
    ]
   },
   {
-   "id": "f063",
+   "id": "f065",
    "kind": "page-setting",
    "name": "考勤页",
    "where": "考勤 → 设置",
@@ -1052,7 +1087,7 @@
    ]
   },
   {
-   "id": "f064",
+   "id": "f066",
    "kind": "page-setting",
    "name": "每天自动读取一次",
    "where": "考勤 → 设置",

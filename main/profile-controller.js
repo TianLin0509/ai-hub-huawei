@@ -61,7 +61,8 @@ function installProfileTap(ipcMain, { now = () => Date.now() } = {}) {
 
 // 历史用量：Token 账本里有用量的日期 + 每天新建的会话数（按会话文件的创建时间）。
 function readHistory(dataDir, dayKey) {
-  const out = { activeDays: [], sessionDays: {}, tokens: 0, hasLedger: false, models: [] };
+  // dayTokens：每天的 Token 合计（社区统计取本周合计用，不分工具、不分模型）。
+  const out = { activeDays: [], sessionDays: {}, tokens: 0, hasLedger: false, models: [], dayTokens: {} };
   const models = new Map();
   try {
     const ledger = JSON.parse(fs.readFileSync(path.join(dataDir, 'token-usage-ledger.json'), 'utf8'));
@@ -74,7 +75,7 @@ function readHistory(dataDir, dayKey) {
         const model = String(row[1] || row[0] || '其他').slice(0, 60);
         if (n > 0) models.set(model, (models.get(model) || 0) + n);
       }
-      if (sum > 0) { out.activeDays.push(day); out.tokens += sum; }
+      if (sum > 0) { out.activeDays.push(day); out.tokens += sum; out.dayTokens[day] = sum; }
     }
     out.models = [...models].map(([name, tokens]) => ({ name, tokens })).sort((a, b) => b.tokens - a.tokens).slice(0, 8);
   } catch { /* 还没有账本：只按会话文件回溯 */ }
@@ -95,7 +96,8 @@ function createProfileController({ ipcMain, tap, dataDir, sendToRenderer, getAss
   const identity = require('../core/profile/identity');
   const profile = new Profile({ dataDir });
   tap?.bind(profile);
-  let identityBusy = null, lastOpenDay = '', models = [];
+  let identityBusy = null, lastOpenDay = '', models = [], dayTokens = {}, lastUsedAt = 0;
+  profile.on('used', () => { lastUsedAt = Date.now(); });
 
   // 入口按钮和页面头像用当前桌宠的形象；没有桌宠的版本用名字里的字。
   const petInfo = () => { try { const pet = getPet(); if (!pet) return { available: false }; const st = pet.getSettings(); return { available: true, enabled: !!st.enabled, role: st.role || '' }; } catch { return { available: false }; } };
@@ -131,7 +133,7 @@ function createProfileController({ ipcMain, tap, dataDir, sendToRenderer, getAss
     // 账本要等首次统计才有：没有账本、也没有旧会话时先不结案，下次再试。
     const done = profile.state.backfill;
     if ((!done && (history.hasLedger || Object.keys(history.sessionDays).length)) || (done && !done.ledger && history.hasLedger)) profile.backfill({ ...history, ledger: history.hasLedger });
-    profile.setTokens(history.tokens); models = history.models;
+    profile.setTokens(history.tokens); models = history.models; dayTokens = history.dayTokens;
     try { if (getPet()?.isActive?.()) profile.petCompany(); } catch { /* 桌宠没开 */ }
   }
   function refreshIdentity({ force = false } = {}) {
@@ -181,6 +183,8 @@ function createProfileController({ ipcMain, tap, dataDir, sendToRenderer, getAss
     timer = setInterval(() => { try { syncHistory(); profile.save(); } catch { /* 下次再试 */ } void refreshIdentity(); }, 30 * 60000); timer.unref?.();
   }
   return { profile, start, refreshIdentity, syncHistory, brief: () => profile.brief(),
+    // 社区统计用：每天 Token 合计（随 30 分钟一次的历史同步更新，不另读账本）、最近一次亲自使用的时间、当前桌宠形象。
+    dayTokens: () => dayTokens, lastUsedAt: () => lastUsedAt, petRole: () => petInfo().role || '',
     // 桌宠被摸了一下。
     notePet: () => profile.record('pet'),
     noteFeature: id => profile.record('feature', { id }),

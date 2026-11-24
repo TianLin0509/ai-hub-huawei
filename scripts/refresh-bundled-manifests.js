@@ -6,6 +6,11 @@
 //   core/cli-tools/catalog-snapshot.json                     命令行组件目录（原样保存，带签名，Hub 用同一把公钥验签）
 //   core/company-assistant/ppt-doctor-manifest-snapshot.json PPT Doctor 清单（只留版本与完整包字段，去掉逐文件列表）
 //   core/company-assistant/ppt-materials-manifest-snapshot.json 团队素材包清单（r60b：阿里云被拦时 GitHub 上只有旧版清单）
+// R29（2026-11-24）：只走内源的客户端不再去外网读目录，下面四类也随程序带快照（原样保存，客户端按各自规则校验）：
+//   core/appearance-catalog-snapshot.json                    外观包目录
+//   core/hub-pet/catalog-snapshot.json                       桌宠形象目录
+//   core/boot-splash-catalog-snapshot.json                   开场动画目录
+//   core/company-assistant/ppt-ocr-manifest-snapshot.json    PPT 识别组件清单（含逐文件 sha256，解压后要逐个核对）
 // 读不到或校验不过就保留旧快照、不报错（快照旧一点只是装到稍旧的版本）。
 // 用法：node scripts/refresh-bundled-manifests.js [--check]   --check 只报告是否需要刷新，不写文件。
 const fs = require('node:fs');
@@ -16,6 +21,10 @@ const CLI_FILE = 'core/cli-tools/catalog-snapshot.json';
 const DOCTOR_FILE = 'core/company-assistant/ppt-doctor-manifest-snapshot.json';
 const NL = String.fromCharCode(10);
 const MATERIALS_FILE = 'core/company-assistant/ppt-materials-manifest-snapshot.json';
+const APPEARANCE_FILE = 'core/appearance-catalog-snapshot.json';
+const PET_FILE = 'core/hub-pet/catalog-snapshot.json';
+const BOOT_SPLASH_FILE = 'core/boot-splash-catalog-snapshot.json';
+const OCR_FILE = 'core/company-assistant/ppt-ocr-manifest-snapshot.json';
 
 async function getText(url, timeoutMs = 15000) {
   const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs), redirect: 'error', cache: 'no-store' });
@@ -69,10 +78,44 @@ async function materialsManifest(root) {
   throw new Error(`团队素材包清单读不到（${errors.join('；')}）`);
 }
 
+const lf = t => { t = t.split(String.fromCharCode(13) + NL).join(NL); return t.endsWith(NL) ? t : t + NL; };
+// 组件目录：逐个源读，校验通过的里面取版本最高的一份，原样保存。
+async function componentCatalog(root, { mod, file, label }) {
+  const m = require(path.join(root, mod));
+  const { compareVersions } = require(path.join(root, 'core/app-update/manifest'));
+  let best = null, bestText = '';
+  const errors = [];
+  for (const s of m.SOURCES) {
+    try {
+      const text = await getText(s.manifest);
+      const parsed = m.validateCatalog(JSON.parse(text));
+      if (!best || compareVersions(parsed.version, best.version) > 0) { best = parsed; bestText = text; }
+    } catch (error) { errors.push(`${s.name}：${error.message}`); }
+  }
+  if (!best) throw new Error(`${label}读不到（${errors.join('；')}）`);
+  return { file, content: lf(bestText), label: `${label} ${best.version}` };
+}
+const appearanceCatalog = root => componentCatalog(root, { mod: 'core/appearance-packs', file: APPEARANCE_FILE, label: '外观包目录' });
+const petCatalog = root => componentCatalog(root, { mod: 'core/hub-pet/role-packs', file: PET_FILE, label: '桌宠形象目录' });
+const bootSplashCatalog = root => componentCatalog(root, { mod: 'core/boot-splash', file: BOOT_SPLASH_FILE, label: '开场动画目录' });
+
+async function ocrManifest(root) {
+  const { OCR_SOURCES, validManifest } = require(path.join(root, 'core/company-assistant/ppt-ocr-component'));
+  const errors = [];
+  for (const base of OCR_SOURCES.filter(u => !u.includes('github.com'))) {
+    try {
+      const text = lf(await getText(new URL('component.json', base).href));
+      const m = validManifest(JSON.parse(text));
+      return { file: OCR_FILE, content: text, label: `PPT 识别组件清单 ${m.version}` };
+    } catch (error) { errors.push(error.message); }
+  }
+  throw new Error(`PPT 识别组件清单读不到（${errors.join('；')}）`);
+}
+
 // 返回内容有变化的快照 [{ file, content, label }]；读不到的写进 warnings，不抛错。
 async function fetchBundledManifests(root = ROOT) {
   const changed = [], warnings = [];
-  for (const get of [cliCatalog, doctorManifest, materialsManifest]) {
+  for (const get of [cliCatalog, doctorManifest, materialsManifest, appearanceCatalog, petCatalog, bootSplashCatalog, ocrManifest]) {
     try {
       const item = await get(root);
       let old = '';
@@ -87,7 +130,7 @@ function writeBundled(root, changed) {
   for (const item of changed) fs.writeFileSync(path.join(root, item.file), item.content, 'utf8');
 }
 
-module.exports = { fetchBundledManifests, writeBundled, CLI_FILE, DOCTOR_FILE, MATERIALS_FILE };
+module.exports = { fetchBundledManifests, writeBundled, CLI_FILE, DOCTOR_FILE, MATERIALS_FILE, APPEARANCE_FILE, PET_FILE, BOOT_SPLASH_FILE, OCR_FILE };
 
 if (require.main === module) {
   (async () => {

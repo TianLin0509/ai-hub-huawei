@@ -1,5 +1,4 @@
 'use strict';
-// 下载源标识（r58，2026-11-19）：每个会从阿里云下载的按钮旁边，先显示「公司内源」能不能给这个包。
 // 状态由主进程 download-source:status 算（core/app-update/source-status.js）；这里只负责画一行字和刷新。
 // 用法：在按钮附近放 <p data-dl-source="<下载点编号>"></p>，然后 DownloadSourceView.fill(容器)。
 const esc = value => String(value == null ? '' : value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -49,12 +48,12 @@ async function fill(root, { ipcRenderer = require('electron').ipcRenderer, fresh
     if (!slot.dataset.status) { slot.dataset.status = 'checking'; slot.innerHTML = html(known.get(point), point, slot.dataset.dlLabel || ''); }
     let status = null;
     try { status = await ipcRenderer.invoke('download-source:status', { point, fresh }); } catch (_) { status = null; }
-    if (!status || !status.status) status = { status: 'down', text: '公司内源 · 没查到状态，本次走阿里云' };
+    if (!status || !status.status) status = { status: 'down', text: '公司内源 · 没查到状态，请点「重测」' };
     known.set(point, status);
     if (!slot.isConnected && typeof document !== 'undefined') return status;
     slot.dataset.status = status.status;
     slot.innerHTML = html(status, point, slot.dataset.dlLabel || '');
-    slot.title = status.reason ? `内源：${status.reason}` : '先从公司内源下载；内源没有或连不上时自动改用阿里云，下载后都核对 SHA-256';
+    slot.title = status.reason ? `内源：${status.reason}` : status.only || status.status === 'internal' ? '从公司内源下载，下载后核对 SHA-256；连不上时请确认电脑连着公司网络' : '先从公司内源下载；内源没有或连不上时改用备用源，下载后都核对 SHA-256';
     return status;
   }));
 }

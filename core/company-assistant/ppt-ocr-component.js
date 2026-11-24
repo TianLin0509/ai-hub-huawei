@@ -54,7 +54,17 @@ function sources(deps = {}) {
   return require('../app-update/downloader').orderSources(list.map(url => ({ url }))).map(s => s.url);
 }
 
+// R29 审查 #1：只走内源时读程序自带的清单快照（scripts/refresh-bundled-manifests.js 发版时刷新），不去外网读、不弹放行窗。
+const SNAPSHOT_FILE = path.join(__dirname, 'ppt-ocr-manifest-snapshot.json');
+function bundledManifest(file = SNAPSHOT_FILE) {
+  return { base: OCR_SOURCES[0], manifest: validManifest(JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''))) };
+}
+
 async function fetchManifest(fetch, deps = {}) {
+  if (deps.openx !== false && require('../app-update/openx-source').onlyChannel(deps.env || process.env)) {
+    try { return bundledManifest(deps.snapshotFile); }
+    catch (error) { throw new Error(`这个版本没带上识别组件清单（${error.code === 'ENOENT' ? '找不到清单文件' : error.message}），升级 Hub 后再试；一直如此请点「一键反馈」`); }
+  }
   const { reasonOf } = require('../app-update/downloader');
   const reasons = []; let gateNote = '';
   for (const base of sources(deps)) {
@@ -153,7 +163,7 @@ function createOcrComponentInstaller(deps = {}) {
         dest: path.join(job, 'component.zip'), fetchImpl: fetch, signal,
         onProgress: p => set({ received: p.received, total: p.total, speed: p.speed, etaSec: p.etaSec, sourceId: p.sourceId, sourceName: p.sourceName, openxMiss: p.openxMiss || null, percent: p.total ? Math.min(99, Math.floor(p.received / p.total * 100)) : 0,
           message: `正在下载识别组件 v${version} ${p.total ? Math.min(99, Math.floor(p.received / p.total * 100)) + '%' : ''}${p.sourceName ? '（' + p.sourceName + '）' : ''}` }) });
-      if (!result.ok) throw new Error(result.cancelled ? '已取消' : '识别组件下载失败：' + (result.attempts || []).map(a => `${a.name}：${a.reason}`).join('；'));
+      if (!result.ok) throw new Error(result.cancelled ? '已取消' : '识别组件下载失败：' + (require('../app-update/bundled-catalog').onlyFailReason(result) || (result.attempts || []).map(a => `${a.name}：${a.reason}`).join('；')));
       if (signal.aborted) throw new Error('已取消');
       set({ phase: 'extracting', message: '正在解压并逐个校验识别组件文件…', source: result.source?.name || '' });
       const unpacked = path.join(job, 'ocr');
@@ -183,4 +193,4 @@ function createOcrComponentInstaller(deps = {}) {
   };
 }
 
-module.exports = { createOcrComponentInstaller, validManifest, verifyUnpacked, swapIn, fetchManifest, openxFile, OCR_SOURCES, APPROX_MB };
+module.exports = { createOcrComponentInstaller, bundledManifest, SNAPSHOT_FILE, validManifest, verifyUnpacked, swapIn, fetchManifest, openxFile, OCR_SOURCES, APPROX_MB };

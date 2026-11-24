@@ -21,6 +21,7 @@
 - GUI 验证：`node tests/e2e-community-cdp.js`。它创建临时 home/data、独立 CDP 和模拟 Claude CLI（`tests/fixtures/fake-claude.ps1`），用鼠标键盘操作；只关闭自己启动的进程。
 - 开箱即用（设计铁律）：用户第一次点开就能用。必需的输入先自动找（已有设置、其他功能存过的值、账号信息、本机环境），逐级兜底并记下共用；实在找不到，才在出错位置就地给输入框和一键「保存并继续」；提示写清下一步。验收用全新数据目录、什么都没配的状态走一遍首次使用路径，测试脚本不预填本该自动得到的值。
 - 不连累其他用户（核心主旨，2026-11-16）：为个别用户的环境问题（显卡、网络、权限等）做的修改，只在出问题的人身上生效（开关、兼容模式、仅在失败时触发的兜底），默认路径不动；交付时写明「默认用户行为是否变化」，并用默认配置回归一次。
+- 只走内源（R29，2026-11-24 用户定，优先于下一条）：AI HUB-H 的程序更新和所有组件下载只走公司内源 openx（`core/app-update/openx-config.js` 的 `onlyChannel`），内源没有或连不上就报原因并提示检查公司网络，不落回阿里云、GitHub 或官方源；界面不出现「阿里云」「GitHub」等通道字样（`tests/unit-r29-openx-only.test.js` 静态扫描）。下一条的顺序只在排查开关 `AI_HUB_OPENX_ONLY=0` 时生效。
 - 下载源顺序（2026-11-16 定）：成员版始终只走外网（GitHub / 阿里云），保持各组件原有顺序；公司内源 openx 只在公开版生效，公开版顺序为 公司内源 → GitHub → 阿里云（阿里云最后兜底），开关在 `core/app-update/openx-config.js`。Hub 升级和所有组件（外观包、角色包、运行时、语音包、PPT Doctor、命令行工具、素材包等）都按此。新增任何下载都走 `core/app-update/downloader.js` 的 `downloadWithFallback`（内源优先、排序、大小与 sha256 校验都在里面），不要自己写 fetch 直连下载，并在 `tests/download-points.json` 登记一行（下载什么、改前改后顺序）；`tests/unit-download-points-guard.test.js` 扫到未登记的下载地址或下载原语就失败。
 - 基础验证：`npm test`、`node scripts/audit-public.js`、改动文件 `node --check`。实际运行命令和失败也要记入报告。
 - 安装/构建只能用本副本独立的 node_modules；遇到 junction 不得 npm ci/install/dist。不得批量杀 electron.exe。

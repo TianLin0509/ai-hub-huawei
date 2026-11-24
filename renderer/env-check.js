@@ -25,7 +25,7 @@
   const sourceView = require('./download-source-view');
   const SOURCE_LABEL = { 'ppt-doctor': 'PPT Doctor 本体', 'ppt-ocr': '识别组件' };
   const SOURCE_POINT = { claude: 'cli:claude', codex: 'cli:codex', dsh: 'cli:dsh', git: 'cli:git', 'git-bash': 'cli:git', codeagent: 'codeagent', welink: 'welink', pi: 'cli:pi', node: 'cli:node', 'ppt-doctor': ['ppt-doctor', 'ppt-ocr'] };
-  const ACTIVE = new Set(['checking', 'downloading', 'extracting', 'verifying', 'installing', 'probing', 'npm-fallback']);
+  const ACTIVE = new Set(['checking', 'downloading', 'extracting', 'verifying', 'installing', 'probing', 'npm-fallback', 'applying']);
   // 本机 CLI 定位结论（2026-11-20，HUB-H 第一期）：体检行带 extra.locate 时画成结论卡（renderer/harness-view.js），
   // 选择文件、清掉手动路径、复制诊断经定位中心（renderer/harness-client.js → harness:* IPC）。
   const hxView = require('./harness-view');

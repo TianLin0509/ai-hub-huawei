@@ -11,7 +11,7 @@
   const { sourceText } = require('../core/app-update/source-view');
   const sourceEdition = require('../core/app-update/openx-config').enabledInEdition ? '公开版' : '成员版';
   const subtitle = `${productName}${distribution.editionBadge ? ' · ' + distribution.editionBadge : ''} · ${sourceEdition}`;
-  let state = null, dialog = null;
+  let state = null, dialog = null, manualError = '';
   let confirmInfo = null;
   // 放行下载服务器（2026-11-07，renderer/net-pass-view.js）：两台下载服务器一个按钮；新用户没放行时在弹窗里提醒。
   const netPassView = require('./net-pass-view');
@@ -104,9 +104,12 @@
   // 写了发布页的版本用发布页，否则用更新源上的安装包地址。以前写了发布页就直接打开发布页（外网），不先找内源。
   function manualDownload() {
     const portable = !!state?.portable;
-    const label = portable ? '下载新的免安装包（内源优先）' : '下载完整安装包（内源优先）';
+    const only = !!state?.openxOnly;
+    const label = only ? (portable ? '下载新的免安装包（公司内源）' : '下载完整安装包（公司内源）') : portable ? '下载新的免安装包（内源优先）' : '下载完整安装包（内源优先）';
     // r27：版本清单读不到（老版本、网络拦了外网源）时没有 latest：先用主进程在内源上找到的最近完整安装包（state.fullPackage）。
     if (!state?.latest && fullPackageUrl()) return { url: fullPackageUrl(), label: `下载完整安装包（内源 v${state.fullPackage.version}）`, direct: true };
+    // R29：只走内源时只给内源上的包：先按这一版的安装包名在内源上找（download-source:open），找不到再用最近的内源完整包。
+    if (only) return (state?.latest?.installer?.file || state?.plan?.kind === 'full' || fullPackageUrl()) ? { url: '', label, point: 'app-installer' } : null;
     if (state?.releasePage) return { url: state.releasePage, label, point: 'app-installer' };
     const file = state?.latest?.installer?.file || (state?.plan?.kind === 'full' ? state.plan.file : null);
     const source = distribution.updateConfig.sources?.find(s => s.files && s.name === state?.latest?.sourceName)
@@ -128,12 +131,18 @@
     const m = /^(.+)-Setup-(\d+\.\d+\.\d+)\.exe$/i.exec(String(file || ''));
     return m && m[2] === String(version) ? `${m[1]}-${m[2]}-win-x64.zip` : file;
   }
-  // 「去内源下载完整包」（O④）：先在浏览器里打开内源上的包；内源没有或连不上，打开阿里云地址；还没查到版本时先打开更新窗查一次。
+  // 「去内源下载完整包」（O④）：先在浏览器里打开内源上的包；内源没有或连不上：只走内源时用最近的内源完整包或说明原因（R29），否则打开备用地址；还没查到版本时先打开更新窗查一次。
   async function openManual() {
     const direct = manualDownload();
     if (direct && direct.direct) { shell.openExternal(direct.url); return true; }
     const viaOpenx = await ipcRenderer.invoke('download-source:open', { point: 'app-installer' }).catch(() => null);
     if (viaOpenx && viaOpenx.ok) return true;
+    if (state?.openxOnly) {
+      if (fullPackageUrl()) { shell.openExternal(fullPackageUrl()); return true; }
+      manualError = '公司内源上暂时找不到完整安装包' + (viaOpenx && viaOpenx.reason ? `（${viaOpenx.reason}）` : '') + '。请确认电脑连着公司网络（公司内网或 VPN）后重试';
+      openDialog();
+      return false;
+    }
     const manual = manualDownload();
     if (manual) { shell.openExternal(manual.url); return true; }
     openDialog(); void ipcRenderer.invoke('app-update:check');
@@ -237,15 +246,15 @@
     let body = versions, foot = '';
     const quietBox = s.quietFeature ? `<label class="au-quiet"><input type="checkbox" data-au="quiet"${s.quietEnabled === false ? '' : ' checked'}> 自动更新：小版本在后台下好；下好的更新在关闭 Hub 时换上，下次打开生效，不打断工作</label>` : '';
     if (s.phase === 'checking') {
-      body += '<div class="au-msg info">正在向各个更新源查询最新版本…</div>';
+      body += `<div class="au-msg info">${s.openxOnly ? '正在向公司内源查询最新版本…' : '正在向各个更新源查询最新版本…'}</div>`;
       foot = '<button class="au-btn" data-au="close">关闭</button>';
     } else if (s.phase === 'none') {
-      body += `<div class="au-msg ok">已是最新版本 v${esc(s.current)}。</div><div class="au-section">更新源</div><ul class="au-sources">${checkRows()}</ul>${allowBox()}`;
+      body += `<div class="au-msg ok">已是最新版本 v${esc(s.current)}。</div><div class="au-section">${s.openxOnly ? '下载来源' : '更新源'}</div><ul class="au-sources">${checkRows()}</ul>${allowBox()}`;
       foot = '<button class="au-btn" data-au="close">好的</button>';
     } else if (s.phase === 'available') {
       if (latest && latest.notes && latest.notes.length) body += `<div class="au-section">本次更新</div>${notesHtml(latest)}`;
       body += installHint(plan);
-      body += `<div class="au-section">更新源（按顺序尝试，失败自动换下一个）</div><ul class="au-sources">${(s.attempts && s.attempts.length) ? sourceRows() : checkRows()}</ul>${allowBox()}`;
+      body += `<div class="au-section">${s.openxOnly ? '下载来源' : '更新源（按顺序尝试，失败自动换下一个）'}</div><ul class="au-sources">${(s.attempts && s.attempts.length) ? sourceRows() : checkRows()}</ul>${allowBox()}`;
       // r27：这一版要完整安装包（本机太老、运行库变了）时，也给浏览器手动下载的入口。
       const manualA = (plan && (plan.portable || plan.protectedDir || plan.kind === 'full')) ? manualDownload() : null;
       foot = '<button class="au-btn" data-au="close">稍后</button>'
@@ -277,7 +286,7 @@
       body += `<div class="au-msg bad">${card ? card.assistHtml(ctx) : ''}${esc(error)}</div>${card ? card.knownHtml(ctx) : ''}`;
       if (plan && plan.portable) body += installHint(plan);
       body += fullPackageLine();
-      if (s.attempts?.length || s.checks?.length) body += `<div class="au-section">各下载源的结果</div><ul class="au-sources">${s.attempts?.length ? sourceRows() : checkRows()}</ul>`;
+      if (s.attempts?.length || s.checks?.length) body += `<div class="au-section">${s.openxOnly ? '公司内源的结果' : '各下载源的结果'}</div><ul class="au-sources">${s.attempts?.length ? sourceRows() : checkRows()}</ul>`;
       else if (s.checks && s.checks.length) body += `<div class="au-section">更新源</div><ul class="au-sources">${checkRows()}</ul>`;
       body += allowBox();
       foot = `${manual ? `<button class="au-btn" data-au="manual">${esc(manual.label)}</button>` : ''}<button class="au-btn" data-au="close">关闭</button><button class="au-btn primary" data-au="retry">重试</button>`;
@@ -285,10 +294,12 @@
       body += '<div class="au-msg info">点「检查更新」查询最新版本。</div>';
       foot = '<button class="au-btn" data-au="close">关闭</button><button class="au-btn primary" data-au="retry">检查更新</button>';
     }
-    if (['idle', 'none', 'available', 'error'].includes(s.phase)) body += netPassView.boxHtml(netPass, { last: netPassLast });
+    // R29：只走内源时更新不经过那几台外网下载服务器，不再显示「放行下载服务器」。
+    if (manualError) body += `<div class="au-msg bad" data-au-manual-error>${esc(manualError)}</div>`;
+    if (!s.openxOnly && ['idle', 'none', 'available', 'error'].includes(s.phase)) body += netPassView.boxHtml(netPass, { last: netPassLast });
     dialog.innerHTML = `<div class="au-head"><img src="../claude-wx.ico" alt=""><div class="au-title"><strong>软件更新</strong><span>${esc(subtitle)}</span></div>`
       + '<button class="au-close" data-au="close" aria-label="关闭">×</button></div>'
-      + `<div class="au-body">${body}${quietBox}<label class="au-quiet"><input type="checkbox" data-au="preview"${s.previewEnabled ? ' checked' : ''}> 抢先版：提前接收更新并在后台体检（默认关闭）</label></div><div class="au-foot">${foot}</div>`;
+      + `<div class="au-body">${body}${quietBox}${s.previewSupported === false ? '' : `<label class="au-quiet"><input type="checkbox" data-au="preview"${s.previewEnabled ? ' checked' : ''}> 抢先版：提前接收更新并在后台体检（默认关闭）</label>`}</div><div class="au-foot">${foot}</div>`;
     netPassView.bind(dialog, { ipcRenderer, onUpdate: (next, last) => { if (next) netPass = next; netPassLast = last; render(); } });
   }
 
@@ -303,7 +314,8 @@
     netPassView.ensureCss();
     render();
     if (!dialog.open) dialog.showModal();
-    void ipcRenderer.invoke('net-pass:status', { refresh: true }).then(v => { if (v) { netPass = v; if (dialog) render(); } }).catch(() => {});
+    // R29 审查 #2：只走内源时不再探测下载服务器（阿里云）。
+    if (!state?.openxOnly) void ipcRenderer.invoke('net-pass:status', { refresh: true }).then(v => { if (v) { netPass = v; if (dialog) render(); } }).catch(() => {});
   }
 
   async function onClick(event) {
@@ -313,6 +325,7 @@
       if (action === 'quiet') { await ipcRenderer.invoke('app-update:set-quiet', event.target.checked); return; }
       if (action === 'preview') { await ipcRenderer.invoke('app-update:set-preview', event.target.checked); await ipcRenderer.invoke('app-update:check'); return; }
       if (action === 'notes-more' || action === 'notes-less') { notesOpenFor = action === 'notes-more' ? String(state?.latest?.version || '') : ''; render(); return; }
+      if (action !== 'manual') manualError = '';
       if (action === 'close') { confirmInfo = null; dialog?.close(); }
       else if (action === 'retry') { await ipcRenderer.invoke('app-update:check'); }
       else if (action === 'download') {
@@ -328,7 +341,7 @@
         if (next && next.phase) update(next); else render();
       }
       else if (action === 'manual') {
-        // r58：先在浏览器里打开公司内源上的安装包；内源没有或连不上，再打开阿里云地址。
+        // r58：先在浏览器里打开公司内源上的安装包；内源没有或连不上：只走内源时说明原因（R29），否则再打开备用地址。
         if (manualDownload()) await openManual();
       }
       else if (action === 'allow-open') {

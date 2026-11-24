@@ -41,6 +41,7 @@
   <link rel="stylesheet" href="styles/company-attendance-page.css">
   <link rel="stylesheet" href="styles/company-w3-page.css">
   <link rel="stylesheet" href="styles/profile-page.css">
+  <link rel="stylesheet" href="styles/community-page.css">
   <link rel="stylesheet" href="styles/company-ppt-page.css">
   <link rel="stylesheet" href="styles/codeagent-accounts-page.css">
   <link rel="stylesheet" href="styles/account-token.css">
@@ -1052,6 +1053,14 @@
               <span><strong>负责人组队自动批准</strong><small>默认开：负责人提交招人计划后，账号和模型按号池校验通过即直接建成员，不用再到侧栏点「待批准」。关掉后回到人工批准。</small></span>
             </label>
           </div>
+          <!-- 纯离线模式（2026-11-24）：收在「高级」页最下方的「隐私」折叠里，默认关＝参与社区；切换立即生效（renderer/community-page.js 接线）。 -->
+          <details class="config-privacy-fold" id="cfg-community-offline-field" hidden>
+            <summary>隐私</summary>
+            <label class="config-toggle-row" for="cfg-community-offline">
+              <input type="checkbox" id="cfg-community-offline">
+              <span><strong>纯离线模式：不向社区同步状态（同时停用社区页）</strong><small>默认关，即匿名参与社区。开启后立即停止同步、也不再拉取榜单，社区页锁定；关闭后恢复。切换立即生效。</small></span>
+            </label>
+          </details>
           <button type="button" class="config-btn" id="btn-config-accounts">账号登录与接入配置 → 权限</button>
         </div>
 

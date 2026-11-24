@@ -196,7 +196,8 @@ function probeList(ctx) {
         });
       }
       if (st.state === 'upgrade') {
-        return entry('ppt-doctor', 'PPT Doctor', 'ppt-doctor', STATUS.warn, `已检测到${(st.installedVersion || ver) ? ' v' + (st.installedVersion || ver) : ''}，版本太旧，和 Hub 联动不上`, {
+        return entry('ppt-doctor', 'PPT Doctor', 'ppt-doctor', STATUS.warn, st.incomplete ? `已检测到${(st.installedVersion || ver) ? ' v' + (st.installedVersion || ver) : ''}，安装不完整，和 Hub 联动不上`
+          : `已检测到${(st.installedVersion || ver) ? ' v' + (st.installedVersion || ver) : ''}，版本太旧，和 Hub 联动不上`, {
           cause: st.error || '装的 PPT Doctor 缺少和 Hub 联动所需的能力标记。', steps: ['点「一键升级」，不会动你原来的安装', '升级后会自动重新检测'], fixes: [oneClick('一键升级'), download, RECHECK], raw: st.error || '',
         });
       }
@@ -428,6 +429,13 @@ function probeList(ctx) {
       const latest = ok.map(s => s.version).filter(Boolean).sort((a, b) => require('./app-update/manifest').compareVersions(b, a))[0];
       const failText = bad.map(s => `${s.name}：${s.blocked ? '被公司网络的确认页挡住' : s.reason || '连不上'}`).join('；');
       if (!active.length) return entry('app-update', '一键更新下载源', 'app-update', STATUS.off, detail('没有配置下载源'));
+      // R29 审查 #5：只走内源时说清是内源的问题、下一步查公司网络，不再提「所有下载源」和放行。
+      if (!ok.length && r.only) {
+        const why = require('./app-update/openx-source').userReason(bad[0] && bad[0].reason, { file: '版本清单' });
+        return entry('app-update', '一键更新下载源', 'app-update', STATUS.bad, detail('读不到公司内源上的版本清单'), {
+          cause: why, steps: ['确认电脑连着公司网络（公司内网或 VPN）', '稍后点「重新检测」'], fixes: [{ label: '打开检查更新', act: 'open-update' }, RECHECK], raw: failText,
+        });
+      }
       if (!ok.length) {
         return entry('app-update', '一键更新下载源', 'app-update', STATUS.bad, detail('所有下载源都连不上'), {
           cause: failText, steps: ['检查网络或代理', '被确认页挡住时，打开「检查更新」按提示放行', '稍后点「重新检测」'], fixes: [{ label: '打开检查更新', act: 'open-update' }, RECHECK], raw: failText,

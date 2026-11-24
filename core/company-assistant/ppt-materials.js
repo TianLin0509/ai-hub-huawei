@@ -58,6 +58,11 @@ function bundledTeamManifest() {
 
 // 依次试各下载源，取第一个给出有效清单的。
 async function teamPackManifest(deps = {}) {
+  // R29（2026-11-24）：只走内源时直接用程序自带的清单快照（发版时刷新），不去外网读清单；素材包只从内源下。
+  const onlySnap = deps.bundledTeamManifest !== undefined ? deps.bundledTeamManifest : bundledTeamManifest();
+  if (onlySnap && deps.openx !== false && require('../app-update/openx-source').onlyChannel((deps.openx && deps.openx.env) || process.env)) {
+    return { base: packSources(deps)[0], manifest: onlySnap, bundled: true };
+  }
   const fetch = require('../own-gate').gatedFetch(require('./fetch-util').resolveFetch(deps.pptDownloadFetch));
   const { reasonOf } = require('../app-update/downloader');
   const reasons = [];
@@ -107,8 +112,12 @@ async function teamPackFromOpenx(fetch, manifest, opts = {}) {
   const openxSource = require('../app-update/openx-source');
   const file = openxPackFile(manifest.version);
   let hit = null;
+  // R29：只走内源时没有别的源可退，完整地查（不设 6 秒上限），也不沿用「5 分钟内不再试」。
+  const only = openxSource.onlyChannel((opts && opts.env) || process.env);
   try {
-    hit = await openxSource.findForDownload({ unknownBudgetMs: 6000, maxMs: 6000, ...opts, file, version: manifest.version, release: `ppt-materials-${manifest.version}`, fetchImpl: fetch });
+    if (only) openxSource.clearDown();
+    const args = { ...opts, file, version: manifest.version, release: `ppt-materials-${manifest.version}`, fetchImpl: fetch };
+    hit = await (only ? openxSource.find(args) : openxSource.findForDownload({ unknownBudgetMs: 6000, maxMs: 6000, ...args }));
     if (!hit) return null;
     const response = await fetch(hit.url, { signal: AbortSignal.timeout(180000), redirect: 'error' });
     if (response.status >= 300 && response.status < 400) throw new Error(`HTTP ${response.status}`);
@@ -238,6 +247,12 @@ class PptMaterials {
     // 包文件按 给出清单的源 → 其余源（GitHub → 阿里云高速 → 阿里云）逐个试，都按选定清单的 sha256 核对；
     // 某个源上包文件 404、断线或内容不对，换下一个源（2026-11-16 审查：原来只从给出清单的源取，失败就报错）。
     // r60b：按快照没从内源下成，退回在线读到的（较旧的）清单，从原下载源装。
+    // R29：只走内源时不再从外网下载，直接说原因（连不上 → 检查公司网络）。
+    if (!archive && openxOn && require('../app-update/openx-source').onlyChannel((this.deps.openx && this.deps.openx.env) || process.env)) {
+      const reason = require('../app-update/openx-source').userReason(require('../app-update/openx-source').lastReason() || '内源下载失败', { file: `pptutor-materials-${manifest.version}.zip` });
+      bus.emit('ppt-materials', { phase: 'error', error: reason });
+      throw new Error(`团队素材包暂时下载不了：${reason}`);
+    }
     if (!archive && fallback) ({ base, manifest } = fallback);
     if (!archive) archive = await teamPackArchive(fetch, manifest, [base, ...packSources(this.deps).filter(u => u !== base)], onProgress,
       openxOn ? require('../app-update/openx-source').lastReason() || '内源下载失败' : null);

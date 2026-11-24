@@ -28,7 +28,7 @@ function fakeNet({ releases = [{ id: 1, version: 'v' + version }], down = false,
 function controller(net, isPublic) {
   openx.EDITION_ON = isPublic;
   return createAppUpdateController({ config: { sources }, currentVersion: '5.6.56', fetchImpl: net.fetchImpl,
-    dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'update-source-')), env: { AI_HUB_OPENX: '1' } });
+    dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'update-source-')), env: { AI_HUB_OPENX: '1', AI_HUB_OPENX_ONLY: '0' } });
 }
 test.beforeEach(() => openx._reset());
 test.afterEach(() => { openx.EDITION_ON = originalEdition; });
@@ -71,7 +71,7 @@ test('公开版：窗口与体检均显示可用的目标版本，和下载器�
     assert.equal(probe.sources[0].ok, true);
     assert.equal(net.calls.filter(url => url.includes('by_project_id')).length, 1);
     assert.equal(net.calls.filter(url => url.includes('by_id')).length, 1);
-    assert.equal((await openx.find({ file, version, fetchImpl: net.fetchImpl, env: { AI_HUB_OPENX: '1' } })).releaseId, 1);
+    assert.equal((await openx.find({ file, version, fetchImpl: net.fetchImpl, env: { AI_HUB_OPENX: '1', AI_HUB_OPENX_ONLY: '0' } })).releaseId, 1);
     assert.equal(net.calls.filter(url => url.includes('by_id')).length, 1);
   } finally { c.dispose(); }
 });
@@ -102,7 +102,7 @@ test('公开版：缺少该版本或其程序附件显示没有该版本，不�
 
 test('内源探测有整体预算，慢网络和不响应取消的网络都按时返回', async () => {
   const started = Date.now();
-  const row = await openx.probe({ version, file, env: { AI_HUB_OPENX: '1' }, timeoutMs: 35, fetchImpl: () => new Promise(() => {}) });
+  const row = await openx.probe({ version, file, env: { AI_HUB_OPENX: '1', AI_HUB_OPENX_ONLY: '0' }, timeoutMs: 35, fetchImpl: () => new Promise(() => {}) });
   assert.ok(Date.now() - started < 500);
   assert.match(sourceText(row), /连不上：.*未完成探测/);
 });

@@ -16,6 +16,7 @@ function archiveUrl(manifest, base = DOWNLOAD_URL) {
 }
 
 async function downloadDoctor(source = 'mirror', deps = {}) {
+  if (require('../app-update/openx-source').onlyChannel(deps.env || process.env)) throw new Error('PPT Doctor 改为只从公司内源安装，请点「一键安装 / 升级 Doctor」');
   if (!['mirror', 'github'].includes(source)) throw new Error('请选择镜像下载或 GitHub 备用入口');
   let url = GITHUB_DOWNLOAD_URL;
   if (source === 'mirror') {

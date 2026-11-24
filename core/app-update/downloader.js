@@ -294,6 +294,23 @@ async function downloadAll({ sources, version, expect, dest, fetchImpl, signal, 
       return null;
     }
   };
+  if (openxOn && openxSource.onlyChannel((openx && openx.env) || process.env)) {
+    const failed = (reason, extra = {}) => {
+      const attempt = { id: 'openx', name: '公司内源', status: 'failed', reason: openxSource.userReason(reason, { file: expect.file }), ms: 0, ...extra };
+      attempts.push(attempt);
+      onAttempt && onAttempt(attempts.map(a => ({ ...a })));
+      return { ok: false, cancelled: false, attempts, openxOnly: true, openx: { status: 'failed', reason } };
+    };
+    // 没有别的源可退：每次下载都真的再连一次，不沿用「5 分钟内不再试」和「上次校验没过」（那次多半是传输中断）。
+    openxSource.clearDown();
+    const hit = await openxSource.find({ ...openx, file: expect.file, version, fetchImpl, signal }).catch(error => { openxNote = { reason: reasonOf(error) }; return null; });
+    if (signal && signal.aborted) return { ok: false, cancelled: true, attempts, openxOnly: true };
+    if (!hit) return failed(openxNote ? openxNote.reason : openxSource.lastReason());
+    const r = await viaOpenx(hit);
+    if (r) return { ...r, openxOnly: true };
+    if (signal && signal.aborted) return { ok: false, cancelled: true, attempts, openxOnly: true };
+    return failed(openxNote && openxNote.reason ? `内源下载失败：${openxNote.reason}` : '内源下载失败', { url: hit.url });
+  }
   if (openxOn) {
     const hit = await openxSource.findForDownload({ ...openx, file: expect.file, version, fetchImpl, signal });
     if (!hit) openxNote = { status: 'skipped', reason: openxSource.lastReason() };

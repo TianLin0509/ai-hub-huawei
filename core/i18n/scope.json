@@ -5,6 +5,7 @@
    "renderer/index.html"
   ],
   "frame": [
+   "renderer/community-page.js",
    "renderer/context-menus.js",
    "renderer/format-time.js",
    "renderer/file-attachments.js",

@@ -32,7 +32,9 @@ function registerStaticDownloadPoints({ fetchImpl } = {}) {
     const { fullArchive } = require('../core/company-assistant/ppt-doctor-install');
     const fetch = gatedFetch(fetchImpl);
     let last = null;
-    for (const base of MIRROR_MANIFEST_URLS) {
+    // R29：只走内源时和安装时一样只用程序自带的清单快照，不去外网读清单。
+    const only = require('../core/app-update/openx-source').onlyChannel(process.env);
+    for (const base of only && require('../core/company-assistant/ppt-doctor-install').bundledDoctorManifest() ? [] : MIRROR_MANIFEST_URLS) {
       try {
         const res = await fetch(base, { signal: AbortSignal.timeout(12000), redirect: 'error' });
         if (!res.ok) throw new Error(`清单 HTTP ${res.status}`);

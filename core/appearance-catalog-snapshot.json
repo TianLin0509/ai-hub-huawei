@@ -1,0 +1,186 @@
+{
+  "schema": 1,
+  "version": "1.0.0",
+  "packs": [
+    {
+      "id": "anime-soft",
+      "name": "元气动漫",
+      "version": "1.0.0",
+      "description": "喜欢二次元、轻松陪伴",
+      "file": "anime-soft-1.0.0.json",
+      "bytes": 1186840,
+      "sha256": "640dfde7f92e0bd3f1864808fcf30c53d471ca104dbbec2f3e194da0fa5518d4"
+    },
+    {
+      "id": "anime-cool",
+      "name": "清爽少年",
+      "version": "1.0.0",
+      "description": "喜欢动漫男生与中性形象",
+      "file": "anime-cool-1.0.0.json",
+      "bytes": 1052047,
+      "sha256": "156223f02468a2bfc29e2c264a1b2bfd50c7db2e26e465da93a2a7705c807b55"
+    },
+    {
+      "id": "office-cats",
+      "name": "猫猫同事",
+      "version": "1.0.0",
+      "description": "猫派、日常办公",
+      "file": "office-cats-1.0.0.json",
+      "bytes": 986444,
+      "sha256": "b70b55d030146b10ee4f618673f5335c98cfd26a76f7bf051d56cc767bd1beec"
+    },
+    {
+      "id": "dog-team",
+      "name": "汪汪搭档",
+      "version": "1.0.0",
+      "description": "狗派、活泼团队",
+      "file": "dog-team-1.0.0.json",
+      "bytes": 1082213,
+      "sha256": "0628aeccaf96b2d18e8123f3cad647305f612fc6cd1b99b0a553d0f22c021e82"
+    },
+    {
+      "id": "forest-friends",
+      "name": "森林伙伴",
+      "version": "1.0.0",
+      "description": "喜欢自然、小动物",
+      "file": "forest-friends-1.0.0.json",
+      "bytes": 1081070,
+      "sha256": "88a207e4477872af22308d9fc6a8f21d03d12c1dc89fd68afe1f7945c8d0211f"
+    },
+    {
+      "id": "bird-club",
+      "name": "飞鸟俱乐部",
+      "version": "1.0.0",
+      "description": "鸟类爱好者、轻巧风格",
+      "file": "bird-club-1.0.0.json",
+      "bytes": 980178,
+      "sha256": "42b06794e25113eec0dcab3c1d767c7cbd7666de96031fa52c8f41035e21bda0"
+    },
+    {
+      "id": "sea-buddies",
+      "name": "海洋朋友",
+      "version": "1.0.0",
+      "description": "喜欢治愈、海洋生物",
+      "file": "sea-buddies-1.0.0.json",
+      "bytes": 885262,
+      "sha256": "78d97b032f2a73a573bf2b9784ad856ac175694e5a096761f9727354ec6404b2"
+    },
+    {
+      "id": "felt-plush",
+      "name": "毛毡玩偶",
+      "version": "1.0.0",
+      "description": "喜欢软萌与手作质感",
+      "file": "felt-plush-1.0.0.json",
+      "bytes": 1274889,
+      "sha256": "2e2f77d6681a3c766332b6c19f664f0ba21c2bc258e495bebb4c94bbc7813986"
+    },
+    {
+      "id": "clay-toys",
+      "name": "黏土小队",
+      "version": "1.0.0",
+      "description": "喜欢立体潮玩",
+      "file": "clay-toys-1.0.0.json",
+      "bytes": 1040079,
+      "sha256": "35d7187f0ab8d70296c4731ad460b477d4abc3ea0a6b9fa321827dea4913c459"
+    },
+    {
+      "id": "pixel-arcade",
+      "name": "像素街机",
+      "version": "1.0.0",
+      "description": "复古游戏玩家",
+      "file": "pixel-arcade-1.0.0.json",
+      "bytes": 1069186,
+      "sha256": "c69839f7643b9d211405825ad1c13f720147b1f0b0367102d3df3a821f064e76"
+    },
+    {
+      "id": "mecha-crew",
+      "name": "机甲驾驶舱",
+      "version": "1.0.0",
+      "description": "机甲、硬核科幻爱好者",
+      "file": "mecha-crew-1.0.0.json",
+      "bytes": 1116487,
+      "sha256": "27ae4c190162b57c7827595401736ce131ceea31ce4af40af212fe9265728c9a"
+    },
+    {
+      "id": "friendly-bots",
+      "name": "友善机器人",
+      "version": "1.0.0",
+      "description": "技术团队、全年龄办公",
+      "file": "friendly-bots-1.0.0.json",
+      "bytes": 948954,
+      "sha256": "7f6128569542cee099ae29236200d60ca7740f2ec799d81bbefc2a0656242f9a"
+    },
+    {
+      "id": "cyber-coders",
+      "name": "赛博工程师",
+      "version": "1.0.0",
+      "description": "喜欢科技与城市科幻",
+      "file": "cyber-coders-1.0.0.json",
+      "bytes": 1258746,
+      "sha256": "71d2adfe7d4c9830265230d2f89852361a8344c03cf3ba3eb5dc988b456aa649"
+    },
+    {
+      "id": "space-crew",
+      "name": "星际探索",
+      "version": "1.0.0",
+      "description": "航天、天文爱好者",
+      "file": "space-crew-1.0.0.json",
+      "bytes": 1336950,
+      "sha256": "d3704b50f9a17cdd045efb96c3ad6448d8fcb556b7688adb8addd83b7cad34b1"
+    },
+    {
+      "id": "three-kingdoms",
+      "name": "三国群英",
+      "version": "1.0.0",
+      "description": "历史、三国与策略爱好者",
+      "file": "three-kingdoms-1.0.0.json",
+      "bytes": 1222991,
+      "sha256": "f3db944c4e4150ad3ca206c1a5e7fbdb2da7dec57d269b624014ac662d61fc01"
+    },
+    {
+      "id": "tang-song",
+      "name": "唐宋风雅",
+      "version": "1.0.0",
+      "description": "文学、古典文化爱好者",
+      "file": "tang-song-1.0.0.json",
+      "bytes": 1323431,
+      "sha256": "9e6de61caa0637d1f40ce8380adaed21702d10c75d30faf7b064d783a105dd64"
+    },
+    {
+      "id": "science-pioneers",
+      "name": "科学先驱",
+      "version": "1.0.0",
+      "description": "科学史、计算机与工程爱好者",
+      "file": "science-pioneers-1.0.0.json",
+      "bytes": 1078767,
+      "sha256": "1e380015a1f22374f1042d6d5b4d3a1e85e6f4f30bab5124004ed12ee2d6c97c"
+    },
+    {
+      "id": "wuxia-heroes",
+      "name": "江湖侠客",
+      "version": "1.0.0",
+      "description": "武侠、国风幻想爱好者",
+      "file": "wuxia-heroes-1.0.0.json",
+      "bytes": 1266046,
+      "sha256": "1c075865bbc399b562b19c8e091b54aaacc1bdaa6b424b9e99e0ae3f994482b4"
+    },
+    {
+      "id": "geometric-studio",
+      "name": "几何工坊",
+      "version": "1.0.0",
+      "description": "偏好简洁、专业、无人物头像",
+      "file": "geometric-studio-1.0.0.json",
+      "bytes": 492051,
+      "sha256": "41f26141b66b3bc3e7ba9c8d1f6b2e725e6559a5260b96e51beaf40d851ee7d9"
+    },
+    {
+      "id": "ink-zen",
+      "name": "水墨留白",
+      "version": "1.0.0",
+      "description": "喜欢克制、安静与东方审美",
+      "file": "ink-zen-1.0.0.json",
+      "bytes": 886379,
+      "sha256": "c151b9d81acd059905b1931d22d12530f58afe03104fae4075f63a64fc44cdb8"
+    }
+  ]
+}

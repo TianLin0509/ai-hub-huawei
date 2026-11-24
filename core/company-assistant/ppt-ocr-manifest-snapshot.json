@@ -1,0 +1,683 @@
+{
+"version": "1.2.0",
+"files": {
+"_internal/_asyncio.pyd": {
+"hash": "c77de90cad749087a0c5dc5e19d78d24f6ef44e7e5ac19b8420cfc0cea62395d",
+"size": 74096
+},
+"_internal/_bz2.pyd": {
+"hash": "65f610646d10d5babea080e060d244b546ec52c54012e5e937dc72dcc2e2e7bc",
+"size": 86896
+},
+"_internal/_ctypes.pyd": {
+"hash": "0e56107a891100535f2da79d85a5ae65ff1227b4765bd108f8593ac1a1110d81",
+"size": 127480
+},
+"_internal/_decimal.pyd": {
+"hash": "aeacfead2befcc0768063a037bb64bd32109ae09cb144e5f571b04dd7965db9d",
+"size": 262000
+},
+"_internal/_elementtree.pyd": {
+"hash": "916becc22f36f983cfb4cda71d796dcffd717a7227f0a33940a897f166159904",
+"size": 66048
+},
+"_internal/_hashlib.pyd": {
+"hash": "03d233dbace599168eaffec823de6ed7beec8c2a4ebfe9b8a3d8e042a59af3ba",
+"size": 68976
+},
+"_internal/_lzma.pyd": {
+"hash": "e3deecc1f59a3b811c608861decd84de1e8df8bafd5e2b39188861318c5a38cf",
+"size": 161136
+},
+"_internal/_multiprocessing.pyd": {
+"hash": "2c636df7059cb0dd7e978dd735c7c5c8ddb09cf94754cf9e232296b96c5c545a",
+"size": 37368
+},
+"_internal/_overlapped.pyd": {
+"hash": "662126ff80c3a1b4cedf74074029c12ae4743e6d3b37376e39ac70aacb7d4d3c",
+"size": 57336
+},
+"_internal/_queue.pyd": {
+"hash": "48e76e0ad63f6932b4a77b5819f41c1e7595636ca8d9e824f0943a14b8bb5035",
+"size": 33784
+},
+"_internal/_socket.pyd": {
+"hash": "3efa4636cf9e350856f6927d67a4c2564bf9bd2758a00bbf17d3aece5b60016d",
+"size": 85496
+},
+"_internal/_ssl.pyd": {
+"hash": "0bc527d2dbc50009f43b2ed5d5982c4f63f4b647647ffa9eda612dcda80f6040",
+"size": 179432
+},
+"_internal/_wmi.pyd": {
+"hash": "a980f1e7a29842bd946863fc2693fbeb555a9dc0f9e1630dfed9a2fcdef3ece2",
+"size": 40304
+},
+"_internal/api-ms-win-core-console-l1-1-0.dll": {
+"hash": "0052515763a1a31d2527a2eb2523fb7b88d8e55c4e4da5ef352b565476bf21e0",
+"size": 19864
+},
+"_internal/api-ms-win-core-datetime-l1-1-0.dll": {
+"hash": "cc6c2fdf1c34fa82036165b111f91220bcf7e43aab79dfb284f982f0590bebb1",
+"size": 19352
+},
+"_internal/api-ms-win-core-debug-l1-1-0.dll": {
+"hash": "f9aaaabf78feb39a1d8e971f5ce047d1c4a896a80409b800f1f7112cdce420ed",
+"size": 19352
+},
+"_internal/api-ms-win-core-errorhandling-l1-1-0.dll": {
+"hash": "a0aa340274d4bb46b6d9547d647ab7dc16c229577bbab836e6a4f3307f310332",
+"size": 19376
+},
+"_internal/api-ms-win-core-fibers-l1-1-0.dll": {
+"hash": "938a52984e7e9ffeef350a794907639d453e346d5bdc0aec8c1360d040cc672a",
+"size": 22136
+},
+"_internal/api-ms-win-core-fibers-l1-1-1.dll": {
+"hash": "fc9d86cec621383eab636ebc87ddd3f5c19a3cb2a33d97be112c051d0b275429",
+"size": 22072
+},
+"_internal/api-ms-win-core-file-l1-1-0.dll": {
+"hash": "05b478718540a6f410a3ad859f7d5e56c223d6786eacc7e9bc80264f587fd0c7",
+"size": 22928
+},
+"_internal/api-ms-win-core-file-l1-2-0.dll": {
+"hash": "6878d8168d5cc159efe58f14e5ba10310d99b53ab8495521e54c966994dac50b",
+"size": 19344
+},
+"_internal/api-ms-win-core-file-l2-1-0.dll": {
+"hash": "b74aefd6fa638be3f415165c8109121a2093597421101abc312ee7ffa1130278",
+"size": 19336
+},
+"_internal/api-ms-win-core-handle-l1-1-0.dll": {
+"hash": "550b4f5ba95108b01a24f05496576a4e73642334a10dde61b09846e0efb9f260",
+"size": 19352
+},
+"_internal/api-ms-win-core-heap-l1-1-0.dll": {
+"hash": "eca63fc5c873ce8b36c507e2b9a88caaea9617c84669886b15f6bc38bd0024c6",
+"size": 19856
+},
+"_internal/api-ms-win-core-interlocked-l1-1-0.dll": {
+"hash": "2f2f9660f4ffa814f465676d5b9cb9bb70d0b7c5fc5eb14c34cfe94a50883b21",
+"size": 19368
+},
+"_internal/api-ms-win-core-kernel32-legacy-l1-1-1.dll": {
+"hash": "a9b13a1cd1b8c19b0c6b4afcd5bb0dd29c0e2288231ac9e6db8510094ce68ba6",
+"size": 22080
+},
+"_internal/api-ms-win-core-libraryloader-l1-1-0.dll": {
+"hash": "2f9c3b077da02c587964a59e9c4e2f383ff8357229eab4b4f04814df94d78ff0",
+"size": 19888
+},
+"_internal/api-ms-win-core-localization-l1-2-0.dll": {
+"hash": "6ed17fb3ca5156b39fbc1ef7d1eefa95e739857607de4cd8d41cecfcd1350705",
+"size": 21936
+},
+"_internal/api-ms-win-core-memory-l1-1-0.dll": {
+"hash": "76a3aa52d49dd0d8e0451f4045f4d8ba05d2332d0db2a39408b85cd2e43b84a3",
+"size": 19856
+},
+"_internal/api-ms-win-core-namedpipe-l1-1-0.dll": {
+"hash": "b1b2595494072a52f1fc44586debf52312eab1a245a7a16185d7b1af37b159a6",
+"size": 19360
+},
+"_internal/api-ms-win-core-processenvironment-l1-1-0.dll": {
+"hash": "bf11319eb6be15633e47ab8f247d1acc9a9ecdf37181fc0ddfe9388ab82ac90a",
+"size": 20424
+},
+"_internal/api-ms-win-core-processthreads-l1-1-0.dll": {
+"hash": "7646eba0c683fc3e1b00f0b3b2b5912621b2016a6ceb7d53181cd1c3fa64785a",
+"size": 21432
+},
+"_internal/api-ms-win-core-processthreads-l1-1-1.dll": {
+"hash": "4de821884cbef4182b29d8c33cfe13e43e130ad58ee1281679e8d40a2edcb8ea",
+"size": 19896
+},
+"_internal/api-ms-win-core-profile-l1-1-0.dll": {
+"hash": "4ca44ede30b46f1f23905cecfa27f0edb26ee960dba10f9bf8002d79ed77c3e5",
+"size": 18840
+},
+"_internal/api-ms-win-core-rtlsupport-l1-1-0.dll": {
+"hash": "09b7f0a7f68a12602e7f4dbd5a7f1cdfb3e93fd54326884e48f36e2e200acce9",
+"size": 19880
+},
+"_internal/api-ms-win-core-string-l1-1-0.dll": {
+"hash": "3eda46e395fad6ec222ab44188d6a46a468b0fd4aff28252938f4e6a9a3e3893",
+"size": 19352
+},
+"_internal/api-ms-win-core-synch-l1-1-0.dll": {
+"hash": "83c1df33df30df48ab161a5a1d6c3cb4bdaebff330ee6e81e871afe3990d7a65",
+"size": 21392
+},
+"_internal/api-ms-win-core-synch-l1-2-0.dll": {
+"hash": "e000c6685719c2b07355c1eddbfdae7c6794aa6c0ac883d34af33dfc8bf40779",
+"size": 19856
+},
+"_internal/api-ms-win-core-sysinfo-l1-1-0.dll": {
+"hash": "f5bf492fe568eb57d2e7111b1c3927f1ee897b5a1109bc68ebe011a2dfdef2fe",
+"size": 20376
+},
+"_internal/api-ms-win-core-sysinfo-l1-2-0.dll": {
+"hash": "2703635d835396afd0f138d7c73751afe7e33a24f4225d08c1690b0a371932c0",
+"size": 22080
+},
+"_internal/api-ms-win-core-timezone-l1-1-0.dll": {
+"hash": "630466fd77ac7009c947a8370a0d0c20652169824c54ddcb8c05e8df45e23197",
+"size": 19360
+},
+"_internal/api-ms-win-core-util-l1-1-0.dll": {
+"hash": "187d47ebcc1e96abe635f23c92d2c63fc8cd741fcb03fe2dd5fc3054cb3d6d92",
+"size": 19336
+},
+"_internal/api-ms-win-crt-conio-l1-1-0.dll": {
+"hash": "91f4db05c69c58ecb2493e30acc5297043c41b1ce6db50cee4e2922cd4bcd7f2",
+"size": 20368
+},
+"_internal/api-ms-win-crt-convert-l1-1-0.dll": {
+"hash": "e64fbac3491b4693e79a3f7b0db1d788f93608d3fc82133edf25a868c80d2153",
+"size": 23448
+},
+"_internal/api-ms-win-crt-environment-l1-1-0.dll": {
+"hash": "dd054e4de84144c2130fa8d28d563252a7c4089a58872e49d63bc43c9a1a3cb8",
+"size": 19872
+},
+"_internal/api-ms-win-crt-filesystem-l1-1-0.dll": {
+"hash": "966a7f15bfb2e0ff7888d583638ebd675d8f46b264194cf332f78140b7c129e1",
+"size": 21408
+},
+"_internal/api-ms-win-crt-heap-l1-1-0.dll": {
+"hash": "742bb9bf4c232f84ad8008af4af8eda7a1ec3eb76f05d9d7ebb95f6a5cabd2d8",
+"size": 20360
+},
+"_internal/api-ms-win-crt-locale-l1-1-0.dll": {
+"hash": "25905676b543c4f05e9dae135f929c03a57686a6941ce59be2b3450521feb943",
+"size": 19856
+},
+"_internal/api-ms-win-crt-math-l1-1-0.dll": {
+"hash": "08e34f12de24e89379a0533f21a23ce6fecbea05d4062796d4ffd4adc3012316",
+"size": 28552
+},
+"_internal/api-ms-win-crt-private-l1-1-0.dll": {
+"hash": "8ae3cdfd38f36e3cb5f3924cdf4cc575491fb3c1cca927f8b320071081ba31b0",
+"size": 71576
+},
+"_internal/api-ms-win-crt-process-l1-1-0.dll": {
+"hash": "c68a61c260454c0aeb051ddb2bed52cbca44b96d50046017cbc351b41f225dc0",
+"size": 20376
+},
+"_internal/api-ms-win-crt-runtime-l1-1-0.dll": {
+"hash": "4c787ff8d40bb803e75fe6218fec36a672cfa6cfc7f6e80e68a7eb0b77a10e5a",
+"size": 23960
+},
+"_internal/api-ms-win-crt-stdio-l1-1-0.dll": {
+"hash": "c7919be431ce2fa1906ff9eeb19e4cb19a30a4680107ef8737ce894654b21a5a",
+"size": 25480
+},
+"_internal/api-ms-win-crt-string-l1-1-0.dll": {
+"hash": "92f72f495a6897f7d7cf2c2064b2b65f6b4fbd4f30911a534a5cd0de73395ebe",
+"size": 25496
+},
+"_internal/api-ms-win-crt-time-l1-1-0.dll": {
+"hash": "46cb7b3a9f8aac5adcdbe23494e458f3195adf4b8ed1c71f2d934ddde651e57e",
+"size": 21896
+},
+"_internal/api-ms-win-crt-utility-l1-1-0.dll": {
+"hash": "111f6dd2e7247071a33d75bf98d521a8d09c4071f90483a82e6ed9af69bb52c4",
+"size": 19864
+},
+"_internal/base_library.zip": {
+"hash": "17de144926ed6211474aab3ac183719df76c8bf72b223b3bab8f8e03c404283c",
+"size": 1334834
+},
+"_internal/cv2/__init__.py": {
+"hash": "674817e87409bc589608ef9f4dd4c1a49f600b5e85ca8b106b3b0a9eab5c46cc",
+"size": 6811
+},
+"_internal/cv2/config-3.py": {
+"hash": "de28c7b5213cca148f09469916584611b3d66c1c8c432880259d6a3a92380213",
+"size": 748
+},
+"_internal/cv2/config.py": {
+"hash": "6c6367abce55995ae4a8d3c199420ec53afab287cb17dfc2f430378af75dd301",
+"size": 123
+},
+"_internal/cv2/cv2.pyd": {
+"hash": "441542da947fb1d51b4e1c4654ceb191bd7748f917a5f88dfeb50dc7d5221241",
+"size": 74742784
+},
+"_internal/cv2/gapi/__init__.py": {
+"hash": "74f5fd2a142a31b0a4707b70c0be3637f0fbf8a940eec4372e7ba87e5a5cedb8",
+"size": 10621
+},
+"_internal/cv2/load_config_py3.py": {
+"hash": "074dfaf20ac94f2ca3815393de3a394944470334c51a85b9521f452e0e17bb85",
+"size": 253
+},
+"_internal/cv2/mat_wrapper/__init__.py": {
+"hash": "c44707ea1c76f35518ae572b6c1989d76c2ada7e850432e41805dfe112d4e306",
+"size": 1164
+},
+"_internal/cv2/typing/__init__.py": {
+"hash": "f4ebe04c1351146012ba96d77591a759aaca499700905b4e051dfcffdcef3c92",
+"size": 5545
+},
+"_internal/cv2/utils/__init__.py": {
+"hash": "2b16990b35b569af1ca7239dc10f7b24ec62f27a46626b1e2f1271d2e1aa3554",
+"size": 344
+},
+"_internal/cv2/version.py": {
+"hash": "43e5d023a2bd42b9c66110be1bb0d25cb7788057e1b62f9f47c81cb8010d6d6f",
+"size": 96
+},
+"_internal/libcrypto-3.dll": {
+"hash": "ccfffddcd3defb8d899026298af9af43bc186130f8483d77e97c93233d5f27d7",
+"size": 5231472
+},
+"_internal/libffi-8.dll": {
+"hash": "eff52743773eb550fcc6ce3efc37c85724502233b6b002a35496d828bd7b280a",
+"size": 39696
+},
+"_internal/libssl-3.dll": {
+"hash": "007142039f04d04e0ed607bda53de095e5bc6a8a10d26ecedde94ea7d2d7eefe",
+"size": 794992
+},
+"_internal/msvcp140.dll": {
+"hash": "708dd7bbc7bd23bce9e93f7837a70c2dd7ad55cff43801e92c0f7fcd7dda47cd",
+"size": 549176
+},
+"_internal/MSVCP140_1.dll": {
+"hash": "b2113956aa3fcb9decfe65be1ee7829f8e3ae0899633ae89fe04888ada201594",
+"size": 27448
+},
+"_internal/numpy/_core/_multiarray_tests.cp312-win_amd64.pyd": {
+"hash": "47ff40012ce4bbb2c2b4f698fa60f0551d35d817a39316d022aefaaa48e1987e",
+"size": 65536
+},
+"_internal/numpy/_core/_multiarray_umath.cp312-win_amd64.pyd": {
+"hash": "63169915c2d78aba0984bd5e235a92936c319d228c35919a41758b20cd8683c1",
+"size": 3849216
+},
+"_internal/numpy/fft/_pocketfft_umath.cp312-win_amd64.pyd": {
+"hash": "440a855aba8838cd5c4e22b2618cd9f691aea11130261a9318cc48050e76720e",
+"size": 276480
+},
+"_internal/numpy/linalg/_umath_linalg.cp312-win_amd64.pyd": {
+"hash": "26315b00a500ebfa5723776853ba651e3cae05c22144f41305ba0cf3b29b9542",
+"size": 112128
+},
+"_internal/numpy/random/_bounded_integers.cp312-win_amd64.pyd": {
+"hash": "b15875ad2ded03fc5f555bf8d4781b526a070e9aed72b775499b875a9a6d4965",
+"size": 207360
+},
+"_internal/numpy/random/_common.cp312-win_amd64.pyd": {
+"hash": "eaf315793a49b211515951203a1a0e2d511af930e024b6c93dee7b3e5ab2aed3",
+"size": 167424
+},
+"_internal/numpy/random/_generator.cp312-win_amd64.pyd": {
+"hash": "f39f29e88e2aacc3b280d4c8a44a189a48722b1c7414de516d6d1c4d13b13495",
+"size": 587776
+},
+"_internal/numpy/random/_mt19937.cp312-win_amd64.pyd": {
+"hash": "d202ea26fd003eb916a640b2e931b20512f65aad0315f4f31d4e65c9d0e5f58e",
+"size": 89088
+},
+"_internal/numpy/random/_pcg64.cp312-win_amd64.pyd": {
+"hash": "c21833f36728e5aa2db7b5c2fb290f6e62143c0167a317126b4c7a31380d4917",
+"size": 100864
+},
+"_internal/numpy/random/_philox.cp312-win_amd64.pyd": {
+"hash": "e482e082620a583b6a0d01171147f6ff7cdee3b1d8f6d15e277ad6efbf14ee40",
+"size": 85504
+},
+"_internal/numpy/random/_sfc64.cp312-win_amd64.pyd": {
+"hash": "ebf00341da63fc784cc5e71e1497293cd3be45e921c88d002ed7340c019ebada",
+"size": 62464
+},
+"_internal/numpy/random/bit_generator.cp312-win_amd64.pyd": {
+"hash": "1c05dbf7c50d6a885e8f35fe360377368d12f4718ec0feb6125c71b8d16c20ea",
+"size": 165888
+},
+"_internal/numpy/random/mtrand.cp312-win_amd64.pyd": {
+"hash": "fa7cbd1e1aa591b3b7ea291d63aa5c49ed37383ea7655d96a2ff44c4f2e90fc3",
+"size": 492544
+},
+"_internal/numpy-2.5.2.dist-info/DELVEWHEEL": {
+"hash": "e99635f3ccc3001ca8024a9f38b47f2c2713868840e8dc4038b90ef29b42af1b",
+"size": 462
+},
+"_internal/numpy-2.5.2.dist-info/entry_points.txt": {
+"hash": "ec26fade0c8bdac211a6c1dd003a65eb16885b925395423e93fcaa115af4052c",
+"size": 220
+},
+"_internal/numpy-2.5.2.dist-info/INSTALLER": {
+"hash": "e6184ce10e266134fdcfa401e8f1a95005bcd4f18d16b62b757323e2833fe9a9",
+"size": 2
+},
+"_internal/numpy-2.5.2.dist-info/licenses/LICENSE.txt": {
+"hash": "a804dff0ead9fadc5293456410bcbfc32bf024be9c4513459663fb7b442d2341",
+"size": 45831
+},
+"_internal/numpy-2.5.2.dist-info/licenses/numpy/_core/include/numpy/libdivide/LICENSE.txt": {
+"hash": "d544761558b510866c21f7e8a2d5716fca76e0b98117e3b6b86314db7244d150",
+"size": 1039
+},
+"_internal/numpy-2.5.2.dist-info/licenses/numpy/_core/src/common/pythoncapi-compat/COPYING": {
+"hash": "aea41976c720f91bd19725c16916a1ace40eb1ea42620d340e587a5de4bbcea0",
+"size": 704
+},
+"_internal/numpy-2.5.2.dist-info/licenses/numpy/_core/src/highway/LICENSE": {
+"hash": "d208152e2777ffd0126eacc1bd21c0320d69e4e6b622d21a2a12a47e8ef73763",
+"size": 21155
+},
+"_internal/numpy-2.5.2.dist-info/licenses/numpy/_core/src/multiarray/dragon4_LICENSE.txt": {
+"hash": "b0fd592d4ead563148e3977e7b589169d46a5ef2ff133c755a81af880a3fc919",
+"size": 1441
+},
+"_internal/numpy-2.5.2.dist-info/licenses/numpy/_core/src/npysort/x86-simd-sort/LICENSE.md": {
+"hash": "a732977853530066790c42817087f4829b518dd98d340c916acbfd227e39d3cb",
+"size": 1542
+},
+"_internal/numpy-2.5.2.dist-info/licenses/numpy/_core/src/umath/svml/LICENSE": {
+"hash": "585483905b13d4b42f800c55ba99e89d6e2e33ccd5f503e201c07531d148ff41",
+"size": 1573
+},
+"_internal/numpy-2.5.2.dist-info/licenses/numpy/fft/pocketfft/LICENSE.md": {
+"hash": "8db000e158c162e7249787852d8c69764706502ccee725c06641b31c1e95c8af",
+"size": 1523
+},
+"_internal/numpy-2.5.2.dist-info/licenses/numpy/linalg/lapack_lite/LICENSE.txt": {
+"hash": "19060ef465e1797d682ee0fc3081bd25ab1395e995e43d25c9d13c95d9a3cd6b",
+"size": 2314
+},
+"_internal/numpy-2.5.2.dist-info/licenses/numpy/ma/LICENSE": {
+"hash": "d78dbb208b80d92b4d333e41a4baae50d12444f46e53199fa7726a91de6e2da7",
+"size": 1616
+},
+"_internal/numpy-2.5.2.dist-info/licenses/numpy/random/LICENSE.md": {
+"hash": "b4bc2f4fa1c95778f1ed3dd8f14706bece399475b978f9f34b5d3cd72521b48a",
+"size": 3582
+},
+"_internal/numpy-2.5.2.dist-info/licenses/numpy/random/src/distributions/LICENSE.md": {
+"hash": "cf5619f25b112d5ce7c896efffc8e610bcb345dfadcc19f2c1460aa48fff2c9e",
+"size": 2805
+},
+"_internal/numpy-2.5.2.dist-info/licenses/numpy/random/src/mt19937/LICENSE.md": {
+"hash": "92c10699884321f1c2947fe2a70ab23b0fbf1507f756d89dd08f38c61fc3d4fa",
+"size": 2986
+},
+"_internal/numpy-2.5.2.dist-info/licenses/numpy/random/src/pcg64/LICENSE.md": {
+"hash": "41190663b77bee5302386495a07b7eabfbfa571aa0ae2f11da6764162062fc4f",
+"size": 1176
+},
+"_internal/numpy-2.5.2.dist-info/licenses/numpy/random/src/philox/LICENSE.md": {
+"hash": "322ac46d870c8aeead6c53adcccc839296fb3c8e456eae155081297daf7f8013",
+"size": 1540
+},
+"_internal/numpy-2.5.2.dist-info/licenses/numpy/random/src/sfc64/LICENSE.md": {
+"hash": "28cad82ce1379dc529df30da78ec012d7d0d1d576b03ddcb93388aee53659f59",
+"size": 1253
+},
+"_internal/numpy-2.5.2.dist-info/licenses/numpy/random/src/splitmix64/LICENSE.md": {
+"hash": "454ec7350e478e037061850b67395753b425b1cb0a34bbc26290b020bf89d763",
+"size": 340
+},
+"_internal/numpy-2.5.2.dist-info/METADATA": {
+"hash": "9a895d801184d2176f926af84eb47f2db1af2756afac99d64a2bf482d5d5e024",
+"size": 6635
+},
+"_internal/numpy-2.5.2.dist-info/RECORD": {
+"hash": "78bccf9395473ef555780035001680c72f1eacb80cf7a4932602934fcd5badb3",
+"size": 87788
+},
+"_internal/numpy-2.5.2.dist-info/REQUESTED": {
+"hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+"size": 0
+},
+"_internal/numpy-2.5.2.dist-info/WHEEL": {
+"hash": "e743de01ba6503a3e4234858398a1e69c07d512d51e8482ec9f3a7b1c707d165",
+"size": 85
+},
+"_internal/numpy.libs/libscipy_openblas64_-327b2e0bcffce2882e0dc04cdeb4eaa6.dll": {
+"hash": "327b2e0bcffce2882e0dc04cdeb4eaa6382ed4dba29871b6176fa157782f484a",
+"size": 20495360
+},
+"_internal/numpy.libs/msvcp140-a4c2229bdc2a2a630acdc095b4d86008.dll": {
+"hash": "a4c2229bdc2a2a630acdc095b4d86008e5c3e3bc7773174354f3da4f5beb9cde",
+"size": 575056
+},
+"_internal/onnxruntime/capi/onnxruntime.dll": {
+"hash": "aa7737cc5c987286f09f6f12304fa786ea697b11b4ca7ab59a027ff4ce343a9c",
+"size": 19288928
+},
+"_internal/onnxruntime/capi/onnxruntime_providers_shared.dll": {
+"hash": "029af27204cff24103c5837a0eb507e4a31ef269116f400c6b25c5457ddc9a32",
+"size": 21856
+},
+"_internal/onnxruntime/capi/onnxruntime_pybind11_state.pyd": {
+"hash": "f514d95a3095e85a3708ba051f8747edd8e4b968fb7b86f6e3478e1df3292d76",
+"size": 19998048
+},
+"_internal/PIL/_avif.cp312-win_amd64.pyd": {
+"hash": "3c31d65c8b3b4c91ac2838d5c843a6b2479d775b6904fe654d60b56d41772411",
+"size": 7893504
+},
+"_internal/PIL/_imaging.cp312-win_amd64.pyd": {
+"hash": "7140f56d38dd6cd51512f8122386bcb914c5df2a82eb5f719c973527d9213cee",
+"size": 2662400
+},
+"_internal/PIL/_imagingcms.cp312-win_amd64.pyd": {
+"hash": "2640857cace64d69735bdcaa3987e9ad70f85168abc1a8662079c77ac44b5301",
+"size": 275456
+},
+"_internal/PIL/_imagingft.cp312-win_amd64.pyd": {
+"hash": "985228f6086171978abb5d04f2f625c489fdc9d7f0a92f2077a621ff184a599e",
+"size": 2250752
+},
+"_internal/PIL/_imagingtk.cp312-win_amd64.pyd": {
+"hash": "e1c87f73e96d2269395624d03b3808300f4b0f795f5fad1ecc3d1492e5dcc7c2",
+"size": 14336
+},
+"_internal/PIL/_webp.cp312-win_amd64.pyd": {
+"hash": "bb9c64d38a6e4857bd3358e14dbe6cf3a4593b1efcd1185fdba1ef8931550896",
+"size": 415744
+},
+"_internal/pyclipper/_pyclipper.cp312-win_amd64.pyd": {
+"hash": "19123cdf15a7cfc6611f69bd13214c817a15d995cedc4f3d4bc777eb39348baa",
+"size": 222720
+},
+"_internal/pyexpat.pyd": {
+"hash": "d615e193d1affcdbfe504e90d3621cbdcff94bf72b79d899126534507fd6d27a",
+"size": 205304
+},
+"_internal/python3.dll": {
+"hash": "fb975a606e7fbf74f64260e3f60c3490b4f74a183c0926fd6ed1ac4c52ac7b1c",
+"size": 70376
+},
+"_internal/python312.dll": {
+"hash": "9a0e3435aaa680d868150f87ab3e388ad2eebc22f87e036155c7b4eda8cd2120",
+"size": 6945272
+},
+"_internal/rapidocr_onnxruntime/__init__.py": {
+"hash": "25e7859135d306af5eb626086e2211a9b4da01cff1327beb0fb2298dcba33a51",
+"size": 143
+},
+"_internal/rapidocr_onnxruntime/cal_rec_boxes/__init__.py": {
+"hash": "485d5bca0cd84c80ea4576ff4ed5e906828851b287c581c746a9a272a7ce945c",
+"size": 104
+},
+"_internal/rapidocr_onnxruntime/cal_rec_boxes/main.py": {
+"hash": "d7cf9cb01f189a873cef9897150e379085608f9908a7288857ea2599ff7eee76",
+"size": 10493
+},
+"_internal/rapidocr_onnxruntime/ch_ppocr_cls/__init__.py": {
+"hash": "aeaf19b49fb6b5a361547544e7cb98972dd0b6756e9ad320d9fe7008891ae9b2",
+"size": 111
+},
+"_internal/rapidocr_onnxruntime/ch_ppocr_cls/text_cls.py": {
+"hash": "ead555ddeb7a8a0da067f4d2f9e2760e93db9e46d906888e0522277dda6620c8",
+"size": 4229
+},
+"_internal/rapidocr_onnxruntime/ch_ppocr_cls/utils.py": {
+"hash": "a6d3debaaf21b092731b20a249b816512070b8e932db7b0f15d5536dcda2328a",
+"size": 1025
+},
+"_internal/rapidocr_onnxruntime/ch_ppocr_det/__init__.py": {
+"hash": "8f33f181e76809c609ead8f5d44afed1e83f74e752239c0f30ca961fdf152e63",
+"size": 112
+},
+"_internal/rapidocr_onnxruntime/ch_ppocr_det/text_detect.py": {
+"hash": "fc9d63ba47940d3e5bfefe6738f310b583cd4de4708fefe114fce11236f2c199",
+"size": 4556
+},
+"_internal/rapidocr_onnxruntime/ch_ppocr_det/utils.py": {
+"hash": "0b3405390c37c7d6f0c9c7099eeec36b050b8e0dee7659fbd82a73bcbd265cd0",
+"size": 7930
+},
+"_internal/rapidocr_onnxruntime/ch_ppocr_rec/__init__.py": {
+"hash": "989f6e9e87508f91cdfc496c7c4ef7580bbb6cc1a0f87a90e139029d10970de0",
+"size": 117
+},
+"_internal/rapidocr_onnxruntime/ch_ppocr_rec/text_recognize.py": {
+"hash": "48d8656d11403d09b2ed32b65a686906b9502ca1a4e16a3934d91b35129d032a",
+"size": 4700
+},
+"_internal/rapidocr_onnxruntime/ch_ppocr_rec/utils.py": {
+"hash": "4a1dc2e8602d12374b12124bbe99a1b42080d72a337799760beaf0d51a32ca90",
+"size": 6907
+},
+"_internal/rapidocr_onnxruntime/config.yaml": {
+"hash": "bf94a1da4cba828e67b1d61e27cee14d9e7da27c9f272e04048a17e41ae97332",
+"size": 1221
+},
+"_internal/rapidocr_onnxruntime/main.py": {
+"hash": "156c49e683fddd26f04280f391f882b857a74d2f020497870f7dd8d850ed5a2c",
+"size": 12799
+},
+"_internal/rapidocr_onnxruntime/models/ch_PP-OCRv4_det_infer.onnx": {
+"hash": "d2a7720d45a54257208b1e13e36a8479894cb74155a5efe29462512d42f49da9",
+"size": 4745517
+},
+"_internal/rapidocr_onnxruntime/models/ch_PP-OCRv4_rec_infer.onnx": {
+"hash": "48fc40f24f6d2a207a2b1091d3437eb3cc3eb6b676dc3ef9c37384005483683b",
+"size": 10857958
+},
+"_internal/rapidocr_onnxruntime/models/ch_ppocr_mobile_v2.0_cls_infer.onnx": {
+"hash": "e47acedf663230f8863ff1ab0e64dd2d82b838fceb5957146dab185a89d6215c",
+"size": 585532
+},
+"_internal/rapidocr_onnxruntime/utils/__init__.py": {
+"hash": "2623808f8f540452cc02951858cb65ef5dacd615b5409ec6c970bc375b1f946d",
+"size": 619
+},
+"_internal/rapidocr_onnxruntime/utils/infer_engine.py": {
+"hash": "3e402c95026ab793533b0de296b0b7e897ad50618d089b2b2214bd90833c3f29",
+"size": 8152
+},
+"_internal/rapidocr_onnxruntime/utils/load_image.py": {
+"hash": "2335171bf0574b56fc4d6d7261bd9bf0dc955db6cec3b5aaf060d345256e65a4",
+"size": 3755
+},
+"_internal/rapidocr_onnxruntime/utils/logger.py": {
+"hash": "2efcad9f0f7afb77c6734d9ec2fcce60f3045b3e6ce7e4752f69ed9e1e647f17",
+"size": 510
+},
+"_internal/rapidocr_onnxruntime/utils/parse_parameters.py": {
+"hash": "a59078f844649e9b08638345a32cd3981a27fd731f4f844a1155f850cb7a6c9e",
+"size": 7476
+},
+"_internal/rapidocr_onnxruntime/utils/process_img.py": {
+"hash": "c54bfd7cb592e40c7be9042fce4a40e5fa5359e8c11a26c3492534065f42f236",
+"size": 2145
+},
+"_internal/rapidocr_onnxruntime/utils/vis_res.py": {
+"hash": "5225cfd945fd99968cfe2883960949e043d760a8d0dab92ec912e98b01e42205",
+"size": 5077
+},
+"_internal/rapidocr_onnxruntime-1.4.4.dist-info/entry_points.txt": {
+"hash": "b67da401ac093d142470cb61c3f9fbc484c635c022a67ff3629a6ed8b24ab17b",
+"size": 72
+},
+"_internal/rapidocr_onnxruntime-1.4.4.dist-info/INSTALLER": {
+"hash": "e6184ce10e266134fdcfa401e8f1a95005bcd4f18d16b62b757323e2833fe9a9",
+"size": 2
+},
+"_internal/rapidocr_onnxruntime-1.4.4.dist-info/METADATA": {
+"hash": "1ac15bed7c7fb77d3fac58c2aba0a4d3e2da48de5c65badd3503900acebcf1df",
+"size": 1264
+},
+"_internal/rapidocr_onnxruntime-1.4.4.dist-info/RECORD": {
+"hash": "1769c96c67b82b35cff24299852402bcd70e821372d8a9e98232dc5cc64c4dd2",
+"size": 3162
+},
+"_internal/rapidocr_onnxruntime-1.4.4.dist-info/REQUESTED": {
+"hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+"size": 0
+},
+"_internal/rapidocr_onnxruntime-1.4.4.dist-info/top_level.txt": {
+"hash": "c2eabcaf5c3656287e8d066e4bd33fbbe66a24a7f3390125942ebc56697c2a88",
+"size": 21
+},
+"_internal/rapidocr_onnxruntime-1.4.4.dist-info/WHEEL": {
+"hash": "b59a1e1a3b56c5645f769944ec4ddde3954f94b3509ef6ca8989f1ee0c00cbc0",
+"size": 92
+},
+"_internal/select.pyd": {
+"hash": "d4d7181b11db0bd22a6cd5cda6f8583d1f5c77615fd0a6ca33350619d6e0438a",
+"size": 33136
+},
+"_internal/shapely/_geometry_helpers.cp312-win_amd64.pyd": {
+"hash": "707cb47e19233d313681192f086b22268e72b98adcc21c41e131891c51569180",
+"size": 234496
+},
+"_internal/shapely/_geos.cp312-win_amd64.pyd": {
+"hash": "5de4fb9704e89549eab873cc7b0e92b49e602d407f61d8eb8d2575a67edd83cd",
+"size": 51200
+},
+"_internal/shapely/lib.cp312-win_amd64.pyd": {
+"hash": "13aa4a38abab3e313cd42704e258bbc40cb2a68b6820224b9508708d7863ae85",
+"size": 166912
+},
+"_internal/Shapely.libs/geos-bf067cd6ff74ee0ad5f3ff52c7ef08c9.dll": {
+"hash": "0948bdb5c70b82e5055b55e9419b78d68372b1d0ec877277fa6e79276f6299b9",
+"size": 2627584
+},
+"_internal/Shapely.libs/geos_c-6dd9fd915eef8a7928285416bef1e666.dll": {
+"hash": "6e65985b30831761887de3217853a720147626b18cb41668cd2bdc43d1bcded1",
+"size": 501760
+},
+"_internal/Shapely.libs/msvcp140-0fa7eb792d3fbcf2233e4ea47e9144b9.dll": {
+"hash": "0fa7eb792d3fbcf2233e4ea47e9144b9b1309ba8ed5d4731a72fffa8f4f556d6",
+"size": 557416
+},
+"_internal/ucrtbase.dll": {
+"hash": "dedb7611e1abc1ff3852dcac3d4c93a048d729e25b061973b9969f22698f14ca",
+"size": 1399656
+},
+"_internal/unicodedata.pyd": {
+"hash": "208ee1cd3cbad0828433ca7246b05be2b1ff5569983d27d296c0b38888585488",
+"size": 1140592
+},
+"_internal/vcruntime140.dll": {
+"hash": "c6e841078cd352299a58925991e2552f7251b046253ba895b3ad50cd5cd32ec6",
+"size": 116024
+},
+"_internal/vcruntime140_1.dll": {
+"hash": "b322e382ea249b50009f14a9a71ad16729eb6e4b58a8d3b3be6ac66ea6342a22",
+"size": 41272
+},
+"_internal/yaml/_yaml.cp312-win_amd64.pyd": {
+"hash": "4fd0e84f50261ed0886cffcdd8008b055af3352546e649c3d741b50eae1f9b5f",
+"size": 253952
+},
+"pptdoctor-ocr.exe": {
+"hash": "c327cdbda772f70d2cc9a42d098045f589191e3b8e0c3a25733330878b6d4b28",
+"size": 5455825
+}
+},
+"assistApiVersion": 1,
+"archive": {
+"name": "component.zip",
+"hash": "22aa5b9e5715dd7b40490e706733f2d073ef8c5b14ee447a5f6c72e90e80247c",
+"size": 85578815
+}
+}

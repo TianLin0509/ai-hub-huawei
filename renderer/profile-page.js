@@ -198,7 +198,7 @@ function cardHtml(vm) {
           <div><dt>开始使用</dt><dd>${esc(vm.firstDay || '今天')}</dd></div>
           ${vm.version ? `<div><dt>当前版本</dt><dd>v${esc(vm.version)}</dd></div>` : ''}
         </dl>
-        <p class="pf-privacy">这些信息只用来在这台电脑上显示你的名字，等级和成就也只存在本机，不上传、不做排行。</p>
+        <p class="pf-privacy">这些信息只用来在这台电脑上显示你的名字；等级和成就匿名参与社区统计，不想参与可在 设置 › 高级 开启纯离线模式。</p>
       </section>
       <div class="pf-card-right">
         <section class="pf-card pf-ladder">
@@ -219,7 +219,7 @@ function pageHtml(vm, selected, tab = 'home') {
   return `<header class="pf-head">
       <div class="pf-title"><h1>个人</h1><span class="pf-sub">每一次使用，都在积累</span></div>
       <div class="pf-tabs" role="tablist">${TABS.map(t => `<button type="button" role="tab" aria-selected="${t.id === tab}" class="${t.id === tab ? 'on' : ''}" data-pf-tab="${t.id}">${t.name}</button>`).join('')}</div>
-      <span class="pf-note">数据只留在这台电脑</span>
+      <span class="pf-note">姓名和工号只留在这台电脑</span>
     </header>
     <div class="pf-body pf-tab-${tab}">${body}</div>`;
 }
@@ -299,7 +299,7 @@ function createProfilePage({ document, window, ipcRenderer, closeOtherPanels = (
   const onResize = () => place();
   async function open(openTab) {
     build(); closeOtherPanels();
-    for (const name of ['__companyRoomsHide', '__companyMeetingHide', '__assistantHide', '__wirelessHide', '__companyAssistantHide', '__companyForumHide', '__companyPptHide', '__companyAttendanceHide', '__companyW3Hide', '__rulesHide', '__writingHide', '__xresearchHide', '__studyHide', '__ranHide']) window[name]?.();
+    for (const name of ['__companyRoomsHide', '__companyMeetingHide', '__assistantHide', '__wirelessHide', '__companyAssistantHide', '__companyForumHide', '__companyPptHide', '__companyAttendanceHide', '__companyW3Hide', '__rulesHide', '__writingHide', '__xresearchHide', '__studyHide', '__ranHide', '__communityHide']) window[name]?.();
     if (TABS.some(t => t.id === openTab)) tab = openTab;
     page.hidden = false; document.body.classList.add('profile-page-open'); place();
     nav()?.classList.add('active');

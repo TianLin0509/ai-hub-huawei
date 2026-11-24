@@ -88,7 +88,8 @@ test('Doctor能力标记必须匹配程序名和SHA256，升级后缓存不能�
   fs.writeFileSync(exe, 'version one');
   const marker = { apiVersion: 1, executable: 'PPT-Doctor.exe', exeSha256: require('node:crypto').createHash('sha256').update(fs.readFileSync(exe)).digest('hex'), capabilities: ['status', 'search'] };
   fs.writeFileSync(path.join(dir, 'hub-api.json'), JSON.stringify(marker)); assert.ok(await capability(exe));
-  fs.writeFileSync(exe, 'version two - changed bytes'); assert.equal(await capability(exe), null);
+  // R31：哈希对不上不再直接判死，带 exeHashMismatch 交给调用方实测 status；缓存不能把它误认成已验证。
+  fs.writeFileSync(exe, 'version two - changed bytes'); assert.equal((await capability(exe)).exeHashMismatch, true);
   fs.writeFileSync(path.join(dir, 'hub-api.json'), JSON.stringify({ ...marker, executable: 'Other.exe' })); assert.equal(await capability(exe), null);
 });
 test('多索引多组查询同时启动，保留部分失败；全失败和坏计划显式拒绝', async () => {

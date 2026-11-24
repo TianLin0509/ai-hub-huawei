@@ -9973,6 +9973,17 @@ try {
   window.__profileHide = () => profilePage.close();
   window.__profileOpen = () => profilePage.open();
 } catch (error) { console.warn('[profile] 个人页未启动：', error.message); }
+// 「社区」页（2026-11-24）：左栏「社区」分组里的入口，看在线人数和匿名排行榜；只在公司版启用。
+if (require('../core/distribution').target === 'company') {
+  try {
+    const communityPage = require('./community-page').createCommunityPage({
+      document, window, ipcRenderer,
+      closeOtherPanels: () => { window.hubWorkspaces?.close(); memoryPanel.close(); capabilityPanel.close(); accountCenterPanel.close(); },
+    });
+    window.__communityHide = () => communityPage.close();
+    window.__communityOpen = () => communityPage.open();
+  } catch (error) { console.warn('[community] 社区页未启动：', error.message); }
+}
 // AI 网页会话（2026-10-25）：启动中心「AI 网页」、侧栏「网页」分组、主区内嵌官网。打开前先回到主页收起其他视图。
 try {
   // 网页圆桌（2026-10-28）：用已登录的 AI 网页同题提问、互评、队长汇总；从侧栏「网页」分组或网页顶栏的圆桌按钮进入。
