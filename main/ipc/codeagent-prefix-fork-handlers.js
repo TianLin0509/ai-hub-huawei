@@ -181,7 +181,10 @@ function registerPrefixForkIpc(ipcMain, deps) {
       const opts = { ...plan.opts, codeagentPrefixFork: metadata, codeagentForkSourceSessionId: source.ccSessionId,
         codeagentModelPick: false, resumeCCSessionId: copied.newSessionId, resumeTranscriptPath: copied.file };
       delete opts.forkCCSessionId;
-      const session = await sessionManager.createSession('codeagent', opts);
+      // 模型不可用时和新建会话同一套处理（main/session-model-creation.js）：默认模型下线自动换推荐模型，指定的模型照旧确认。
+      const session = await require('../session-model-creation').createSessionWithModelPolicy({ kind: 'codeagent', opts,
+        contextLabel: opts.title ? `分支会话 ${opts.title}` : '分支会话', modelLabel: '原会话的模型', requestConfirmation: deps.requestModelConfirmation, sendToRenderer, dataDir,
+        create: (runtimeKind, launchOpts) => sessionManager.createSession(runtimeKind, launchOpts) });
       sessionCreated = true; log.preparedFileState = 'session-owned';
       registerSessionForTap(session);
       sendToRenderer('session-created', { session });
@@ -189,6 +192,7 @@ function registerPrefixForkIpc(ipcMain, deps) {
       return { ok: true, session };
     } catch (error) {
       if (error.code === 'SESSION_OCCUPIED') return fail('session-occupied', '会话已被 Hub 打开或占用，请关闭占用后重试');
+      if (error.code === 'SESSION_CREATION_CANCELLED') return fail('model-confirmation-cancelled', '已取消换模型，未创建分支');
       return fail('prefix-fork-failed', '分支创建失败，未启动源会话，请查看 Hub diagnostics 分支诊断');
     } finally {
       if (releaseSource) { try { releaseSource(); } catch { log.ownershipReleaseFailed = true; } }

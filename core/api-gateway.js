@@ -70,6 +70,8 @@ function read(dataDir) {
     groupExact: raw.groupExact === true,
     // 用户「对这个模型关闭思考」的模型（本机代理给它们的请求注入 chat_template_kwargs.enable_thinking=false）。
     noThinking: cleanModels(raw.noThinking),
+    // 用户手填、连通检测通过的模型（key 的模型表里没列、网关实际能用，例如带日期后缀的版本）。
+    customModels: cleanModels(raw.customModels).filter(id => !models.includes(id)),
   };
 }
 function normalizeBaseUrlSafe(value) { try { return normalizeBaseUrl(value); } catch { return DEFAULT_BASE_URL; } }
@@ -85,8 +87,35 @@ function decryptKey(dataDir, safeStorage) {
 function resolveModel(dataDir, model) {
   const view = read(dataDir);
   const value = String(model || '').trim();
-  if (value && (view.models.includes(value) || !view.models.length)) return value;
+  if (value && (view.models.includes(value) || view.customModels.includes(value) || !view.models.length)) return value;
   return view.model;
+}
+// 本机代理认的模型：key 的模型表 + 手填检测通过的。
+function allModels(dataDir) { const view = read(dataDir); return [...view.models, ...view.customModels]; }
+
+// 手填模型（2026-11-24）：先用一键体检同一套单模型试跑（一句话、带一个工具）测通，通过才记下。
+// 不通时返回网关口径的一句人话（core/api-gateway-errors.js），不记。
+const CUSTOM_LIMIT = 20;
+// 首字等待不低于 150 秒：网关排队时首字可到十几秒以上（实测 0.9–11.3 秒，排队 12–31 秒），等短了会把能用的模型误判成不通。
+// 只验连通、不验工具能力（同一模型调不调工具一次测不准）。
+async function addCustomModel(dataDir, model, { safeStorage, fetchImpl = globalThis.fetch, firstTimeoutMs = 150_000, totalTimeoutMs = 180_000 } = {}) {
+  const id = String(model || '').trim();
+  if (!cleanModels([id]).length) return { ok: false, code: 'bad_name', actions: [], message: '模型名格式不对：只能用字母、数字和 . _ : / -，不能有空格。' };
+  const view = read(dataDir);
+  if (view.models.includes(id) || view.customModels.includes(id)) return { ok: true, model: id, already: true };
+  const key = decryptKey(dataDir, safeStorage);
+  if (!key) return { ok: false, code: 'no_key', actions: ['rekey'], message: '还没保存部门 API key：先到设置里粘贴 key 并保存。' };
+  const r = await healthStore().probeModel({ baseURL: view.baseURL, apiKey: key, model: id, fetchImpl, firstTimeoutMs, totalTimeoutMs,
+    ctx: { usable: view.models, group: view.group }, noThinking: view.noThinking.includes(id) });
+  if (!r.ok) return { ok: false, code: r.error?.code || 'unknown', actions: r.error?.actions || [], message: r.error?.message || '这个模型没有连通。' };
+  const raw = readRaw(dataDir);
+  writeRaw(dataDir, { ...raw, customModels: cleanModels([...cleanModels(raw.customModels).filter(x => x !== id), id]).slice(-CUSTOM_LIMIT) });
+  return { ok: true, model: id, firstMs: r.firstMs };
+}
+function removeCustomModel(dataDir, model) {
+  const raw = readRaw(dataDir);
+  writeRaw(dataDir, { ...raw, customModels: cleanModels(raw.customModels).filter(x => x !== String(model || '')) });
+  return read(dataDir);
 }
 // 下拉框说明：能力以一键体检结果为准（首字、工具、思考、上下文），没体检过只写目录里的上下文。
 function modelChoices(dataDir) {
@@ -138,8 +167,10 @@ async function probe({ baseURL, apiKey, fetchImpl = globalThis.fetch, timeoutMs 
   let response;
   try {
     response = await fetchText(fetchImpl, base + '/models', { headers: { authorization: 'Bearer ' + apiKey, accept: 'application/json' } }, timeoutMs);
-  } catch {
-    return { ok: false, code: 'unreachable', title: '连不上网关', actions: ['retry', 'tutorial'], detail: '', message: `连不上网关：${Math.round(timeoutMs / 1000)} 秒内没有响应。常见原因是电脑不在公司内网（例如在家没连 VPN），或网关地址不对。连上内网后点「重试」。` };
+  } catch (error) {
+    // 超时与连接被拒分开说：被拒是立刻失败，不能写成「N 秒内没有响应」。
+    const timedOut = error?.name === 'AbortError';
+    return { ok: false, code: 'unreachable', title: '连不上网关', actions: ['retry', 'tutorial'], detail: '', message: `连不上网关：${timedOut ? `${Math.round(timeoutMs / 1000)} 秒内没有响应` : '连接被拒绝或找不到地址'}。常见原因是电脑不在公司内网（例如在家没连 VPN），或网关地址不对。连上内网后点「重试」。` };
   }
   const { text } = response;
   if (!response.ok) return { ok: false, ...explainHttp(response.status, text) };
@@ -257,5 +288,5 @@ function clear(dataDir) {
 }
 
 module.exports = { DEFAULT_BASE_URL, PREFERRED_MODEL, file, read, configured, decryptKey, resolveModel, modelChoices,
-  normalizeBaseUrl, normalizeKey, explainHttp, probe, usage, save, setModel, setThinking, clear,
+  normalizeBaseUrl, normalizeKey, explainHttp, probe, usage, save, setModel, setThinking, clear, allModels, addCustomModel, removeCustomModel,
   contextOf, firstTokenMs, chatOnly, catalogSummary, refreshCatalog, healthcheck, healthView };

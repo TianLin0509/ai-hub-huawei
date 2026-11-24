@@ -1053,3 +1053,39 @@ test('real dormant Main IPC and real card rendering share full-record and disabl
     assert.equal(denied.reason, 'experiment-disabled');
   }
 });
+
+// 分支也走新建会话的模型策略（main/session-model-creation.js）：原会话的模型下线、账号有明确推荐时自动换并给一次性提示。
+for (const which of ['ordinary', 'prefix']) test(`${which} fork with an unavailable source model switches to the recommended model`, async t => {
+  const f = fixture(t), handlers = new Map(), events = [], confirmations = [];
+  const original = f.manager.createSession.bind(f.manager);
+  f.manager.createSession = (kind, opts) => {
+    if (!opts.fixedModel) throw require('../core/session-model-pin').unavailableError('GLM-5.2', '账号的权威模型清单已不包含它', ['GLM-5.3', 'Qwen3-Coder'], 'GLM-5.3');
+    return original(kind, opts);
+  };
+  require('../main/ipc/session-handlers').registerSessionIpc({ handle: (name, fn) => handlers.set(name, fn), on() {} }, {
+    sessionManager: f.manager, dataDir: f.dataDir, prefixEnabled: () => true, getPersistedSessions: () => [],
+    sendToRenderer: (name, value) => events.push({ name, value }),
+    requestModelConfirmation: async payload => { confirmations.push(payload); return null; } });
+  const result = which === 'ordinary' ? await handlers.get('fork-session')(null, { sourceSessionId: HUB })
+    : await handlers.get('session:fork-before-turn')(null, { sourceSessionId: HUB, replyId: U2 + ':assistant' });
+  assert.equal(result.ok, true, JSON.stringify(result));
+  assert.equal(confirmations.length, 0);
+  assert.equal(f.calls.at(-1).opts.fixedModel, 'GLM-5.3');
+  const toast = events.filter(e => e.name === 'session-create-followup');
+  assert.equal(toast.length, 1);
+  assert.equal(toast[0].value.message, '原会话的模型 GLM-5.2 已不可用，已改用 GLM-5.3');
+  assert.equal(toast[0].value.sessionId, result.session.id);
+});
+
+test('a fork whose model has no explicit recommendation asks, and cancelling creates nothing', async t => {
+  const f = fixture(t), handlers = new Map(), confirmations = [];
+  f.manager.createSession = () => { throw require('../core/session-model-pin').unavailableError('GLM-5.2', 'x', ['Qwen3-Coder'], ''); };
+  require('../main/ipc/session-handlers').registerSessionIpc({ handle: (name, fn) => handlers.set(name, fn), on() {} }, {
+    sessionManager: f.manager, dataDir: f.dataDir, prefixEnabled: () => true, getPersistedSessions: () => [], sendToRenderer() {},
+    requestModelConfirmation: async payload => { confirmations.push(payload); return null; } });
+  const ordinary = await handlers.get('fork-session')(null, { sourceSessionId: HUB });
+  assert.equal(ordinary.ok, false); assert.equal(ordinary.error, 'fork-cancelled');
+  const prefix = await handlers.get('session:fork-before-turn')(null, { sourceSessionId: HUB, replyId: U2 + ':assistant' });
+  assert.equal(prefix.ok, false); assert.equal(prefix.reason, 'model-confirmation-cancelled');
+  assert.equal(confirmations.length, 2);
+});

@@ -11,11 +11,22 @@ const FAILURES = {
   'no-edge': { title: '这台电脑没找到 Edge 浏览器', why: () => '门户是在后台用无头 Edge 读的（不弹窗），没有 Edge 就读不了。', next: '安装或修复 Microsoft Edge 后点「重试」。', acts: ['retry', 'feedback'] },
   edge: { title: '后台浏览器没起来', why: r => '这次后台的无头 Edge 没能启动或中途断开（' + (r.error || '') + '）。', next: '点「重试」；连着几次都这样，点「一键反馈」，会带上门户日志。', acts: ['retry', 'feedback'] },
   login: { title: '门户停在登录页，后台没能自动登录', why: r => '后台浏览器借用你本机 Edge 的登录状态和公司电脑的免密登录；这次等了 45 秒仍停在' + (r.finalHost ? ' ' + r.finalHost : '登录页') + '。', next: '① 点「在浏览器打开门户」，确认不用输密码就能进首页（要输密码或扫码就先登录一次）；② 回来点「重试」。免密已开仍不行，点「一键反馈」。', acts: ['portal', 'retry', 'feedback'] },
-  unreachable: { title: '门户页面没打开', why: r => '后台浏览器停在' + (r.finalHost ? ' ' + r.finalHost : '空白页') + '，多半是公司网络、VPN 或代理这会儿连不上门户。', next: '点「在浏览器打开门户」看能不能打开：能打开就回来点「重试」，打不开先检查网络。', acts: ['portal', 'retry', 'feedback'] },
+  unreachable: { title: '门户页面没打开', why: r => netWhy(r) || '后台浏览器停在' + (r.finalHost && !/^chromewebdata$/.test(r.finalHost) ? ' ' + r.finalHost : '空白页') + '，多半是公司网络、VPN 或代理这会儿连不上门户。', next: '点「在浏览器打开门户」看能不能打开：能打开就回来点「重试」，打不开先检查网络。', acts: ['portal', 'retry', 'feedback'] },
   timeout: { title: '门户打开了，但读待办超时', why: () => '门户这会儿响应慢，查询没在 2 分钟内返回。', next: '过一两分钟点「重试」；连着几次都这样，点「一键反馈」。', acts: ['retry', 'feedback'] },
   query: { title: '门户的查询出错了', why: r => r.error || '', next: '点「重试」；连着几次都这样，点「一键反馈」，门户可能改版了。', acts: ['retry', 'feedback'] },
   other: { title: '这次没读到', why: r => r.error || '', next: '点「重试」；连着几次都这样，点「一键反馈」，会带上门户日志。', acts: ['retry', 'feedback'] },
 };
+// 后台浏览器停在 Edge 自己的「无法访问此页面」错误页时，按错误码说清是哪一类网络问题（2026-11-24；错误码由 company-edge-capture.js 读出）。
+function netWhy(r = {}) {
+  const c = String(r.netError || '');
+  if (!c && r.finalHost !== 'chromewebdata') return '';
+  const tail = c ? '（错误码 ' + c + '）' : '';
+  if (/^(DNS_PROBE|ERR_NAME_NOT_RESOLVED|ERR_NAME_RESOLUTION_FAILED)/.test(c)) return '这台电脑解析不了门户的地址' + tail + '，多半是没连上公司内网或 VPN。';
+  if (/^ERR_(PROXY|TUNNEL_CONNECTION_FAILED|MANDATORY_PROXY)/.test(c)) return '经代理连门户失败' + tail + '，多半是系统代理或公司安全客户端这会儿没生效。';
+  if (/^ERR_(CERT|SSL|BAD_SSL)/.test(c)) return '门户的证书校验没通过' + tail + '，多半是公司安全客户端的证书没装好或系统时间不对。';
+  if (/^ERR_INTERNET_DISCONNECTED/.test(c)) return '这台电脑现在没有网络' + tail + '。';
+  return '后台浏览器打不开门户，停在 Edge 的「无法访问此页面」' + tail + '，多半是公司网络、VPN 或代理这会儿连不上门户。';
+}
 // 备用登录（2026-11-20）：停在登录页时，再给一个「在 Hub 里登录一次门户」——Hub 自己的登录窗口，登录一次后先用它读。
 const HUB_LOGIN = { title: '门户停在登录页，后台没能自动登录', why: r => '后台浏览器借用你本机 Edge 的登录状态和公司电脑的免密登录；这次等了 45 秒仍停在' + (r.finalHost ? ' ' + r.finalHost : '登录页') + '（Edge 开着时常借不到登录状态）。',
   next: '点「在 Hub 里登录一次门户」，在弹出的窗口里登录一次，之后 Hub 自己记着这份登录读门户；也可以照旧在浏览器打开门户确认后点「重试」。', acts: ['hublogin', 'portal', 'retry', 'feedback'] };
@@ -244,4 +255,4 @@ function createCompanyW3Page({ document, window, ipcRenderer, closeOtherPanels =
   return { open, close, isOpen: () => !!page && !page.hidden };
 }
 
-module.exports = { createCompanyW3Page };
+module.exports = { createCompanyW3Page, failureOf, netWhy };

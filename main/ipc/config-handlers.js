@@ -427,7 +427,23 @@ function registerConfigIpc(ipcMain, deps) {
     try {
       featureAgents.set(featureDataDir(), request.feature, request.choice || null);
       deps.sendToRenderer?.('feature-agents:changed', { feature: request.feature });
+      // 选上或撤下部门 API key 时，本机反代按新设置起停（main.js isEnabled）。
+      void deps.companyProxyService?.syncWithConfig?.()?.catch?.(() => {});
       return featureAgents.state(featureDataDir());
+    } catch (error) { return { ok: false, error: error.message }; }
+  });
+  // 手填网关模型：先做一次轻量连通检测（一句话试跑），通了才记下并选用；不通返回一行原因（网关口径）。
+  ipcMain.handle('feature-agents:custom-model', async (_event, request = {}) => {
+    try {
+      const dir = featureDataDir();
+      const r = await require('../../core/api-gateway').addCustomModel(dir, request.model, { safeStorage: require('electron').safeStorage });
+      if (!r.ok) return { ok: false, code: r.code, error: r.message, actions: r.actions || [] };
+      // 本机反代没收到新模型表时不吞：照样选用（已测通），但告诉用户要重启 Hub 才生效。
+      const applied = await Promise.resolve(deps.companyProxyService?.applyGatewayChange?.()).catch(() => ({ gatewayStale: true }));
+      featureAgents.set(dir, request.feature || 'assistant', { kind: featureAgents.GATEWAY, model: r.model });
+      deps.sendToRenderer?.('feature-agents:changed', { feature: request.feature || 'assistant' });
+      return { ...featureAgents.state(dir), checked: { model: r.model, firstMs: r.firstMs || null, already: !!r.already },
+        ...(applied?.gatewayStale ? { warning: '已连通，但本机反代的模型表没刷新，重启 Hub 后生效' } : {}) };
     } catch (error) { return { ok: false, error: error.message }; }
   });
   const {

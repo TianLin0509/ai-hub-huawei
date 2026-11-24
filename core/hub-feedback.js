@@ -17,6 +17,9 @@ const LIFECYCLE_FILES = 3;
 const LIFECYCLE_LINES = 40;
 const LIFECYCLE_BYTES = 6 * 1024;
 const LOG_NAME = /\.(?:log|jsonl|txt)$/i;
+// 描述里点名的日志（如门户页反馈点名 company-w3.log）：排在最前，但只取最近这么多，不挤掉其余证据。
+const NAMED_LOG_LINES = 40;
+const NAMED_LOG_BYTES = 12 * 1024;
 
 const SECRET_RULES = [
   [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, '$1 <已隐去>'],
@@ -56,7 +59,9 @@ function tailLines(file, lines = LINES_PER_LOG, maxBytes = MAX_LOG_BYTES, fsModu
 }
 
 // 最近改过的日志（按修改时间倒序），只看 logs/ 这一层和下一层。
-function recentLogs(logsDir, fsModule = fs) {
+// mention：问题描述原文。描述里点名的日志（如门户页预填「日志附在下面的 company-w3.log 里」）排在最前、一定带上；
+// 否则一天只写几行的功能日志会被刷得勤的日志挤出前 8 份或整包上限（2026-11-24 门户反馈说附了日志却一行都没有）。
+function recentLogs(logsDir, fsModule = fs, { mention = '' } = {}) {
   const out = [];
   const visit = (dir, depth) => {
     let names = [];
@@ -69,7 +74,9 @@ function recentLogs(logsDir, fsModule = fs) {
     }
   };
   visit(logsDir, 0);
-  return out.sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, MAX_LOG_FILES);
+  const said = String(mention || '');
+  const named = l => !!said && said.includes(path.basename(l.file));
+  return out.sort((a, b) => (named(b) - named(a)) || (b.mtimeMs - a.mtimeMs)).slice(0, MAX_LOG_FILES);
 }
 
 function byteLen(s) { return Buffer.byteLength(String(s), 'utf8'); }
@@ -152,7 +159,15 @@ function collectBundle({ info = {}, description = '', contact = '', logsDir, dat
   const reserve = 512; // 给末尾「已裁剪」说明留的位置
   let total = byteLen(headText) + reserve;
   let trimmedLines = 0, trimmedFiles = 0;
-  const sources = [...extraSources(dataDir, fsModule), ...(logsDir ? recentLogs(logsDir, fsModule).map(l => ({ ...l, kind: 'log', lines: LINES_PER_LOG, bytes: MAX_LOG_BYTES })) : [])];
+  // 描述里点名的日志放在补充证据之前，先占预算（最多 NAMED_LOG_LINES 行 / NAMED_LOG_BYTES），其余照旧按新旧分配。
+  const logs = logsDir ? recentLogs(logsDir, fsModule, { mention: description }) : [];
+  const said = String(description || '');
+  const isNamed = l => !!said && said.includes(path.basename(l.file));
+  const sources = [
+    ...logs.filter(isNamed).map(l => ({ ...l, kind: 'log', lines: NAMED_LOG_LINES, bytes: NAMED_LOG_BYTES })),
+    ...extraSources(dataDir, fsModule),
+    ...logs.filter(l => !isNamed(l)).map(l => ({ ...l, kind: 'log', lines: LINES_PER_LOG, bytes: MAX_LOG_BYTES })),
+  ];
   for (const log of sources) {
     let rows;
     try { rows = tailLines(log.file, log.lines, log.bytes, fsModule); } catch { continue; }

@@ -67,10 +67,19 @@ function createModelCreationConfirmation({ sendToRenderer, onWait = () => {} }) 
   return { request, respond, cancelAll, cancelSession, attachRenderer };
 }
 
-function createSessionWithModelPolicy({ kind, opts, create, requestConfirmation, sendToRenderer, contextLabel = '新建会话', operation = 'create', canCreate = () => true }) {
+function readUnavailablePolicy() {
+  try { return pins.unavailablePolicy(require('../core/hub-config').getConfig().sessionModelUnavailablePolicy); }
+  catch { return pins.unavailablePolicy(); }
+}
+
+function createSessionWithModelPolicy({ kind, opts, create, requestConfirmation, sendToRenderer, contextLabel = '新建会话', operation = 'create', canCreate = () => true,
+  dataDir = null, getPolicy = readUnavailablePolicy, modelLabel = '默认模型' }) {
   if (!/^codeagent(?:-resume)?$/.test(kind)) return create(kind, opts);
   const launchOpts = { ...opts, modelCreationContext: contextLabel };
   const explicitModel = require('../core/codeagent-launch-model').explicitModel(launchOpts);
+  // 这次新建是否带着调用方指定的模型（用户在启动中心点选、复制来源会话的模型、调度方指定）：带着的不自动换，照旧确认。
+  const chosenModel = !!(opts.fixedModel || opts.codeagentUserModel || explicitModel);
+  const hubDataDir = () => dataDir || require('../core/data-dir').getHubDataDir();
   if (!launchOpts.fixedModel && explicitModel) {
     launchOpts.model = launchOpts.fixedModel = explicitModel;
     launchOpts.codeagentModelPick = true;
@@ -94,7 +103,31 @@ function createSessionWithModelPolicy({ kind, opts, create, requestConfirmation,
       notice(`${error.message} ${operation === 'resume' ? '恢复保持停止。' : '未创建会话。'}`);
       throw Object.assign(error, operation === 'resume' ? { stopped: true, notSent: true } : {});
     }
-    return Promise.resolve(requestConfirmation({ originalModel: error.model, reason: error.reason || '', suggestedModel: error.suggestedModel,
+    // 新建会话、模型只是账号默认推出来的（2026-11-24 用户决定）：默认模型下线时直接换成推荐模型创建，只给一行提示，不弹确认卡片。
+    // 推荐口径见 core/session-model-pin.js recommendedReplacement；替换记进 codeagent-model-replacements，之后的新建在启动前就直接用它，
+    // 同一替换只在第一次提示。设置里选了「停下来问我」（stop-and-ask）时照旧确认。
+    const autoModel = operation === 'create' && !chosenModel && getPolicy() !== 'stop-and-ask'
+      ? pins.recommendedReplacement(error.model, availableModels, error.suggestedModel) : '';
+    if (autoModel) {
+      const replacements = require('../core/codeagent-model-replacements');
+      let seen = false;
+      try { seen = replacements.replacementFor(hubDataDir(), error.model).toLowerCase() === autoModel.toLowerCase(); } catch { seen = false; }
+      try { replacements.recordReplacement(hubDataDir(), error.model, autoModel); }
+      catch (failure) { console.warn('[model-confirmation] 记住替代模型失败：', failure.message); }
+      const retryOpts = { ...launchOpts, model: autoModel, fixedModel: autoModel, modelPinSource: 'auto-switch', modelChange: null,
+        codeagentModelPick: false, modelConfirmationRequired: false, modelUnavailableReason: '' };
+      delete retryOpts._openLeaseNonce;
+      const announce = session => {
+        // 一次性一行轻提示（renderer/session-create-toast.js，约 10 秒自动消失），按钮「换一个」打开这个会话的模型菜单。
+        if (!seen && session?.id) sendToRenderer?.('session-create-followup', { sessionId: session.id, actions: ['pick-model'],
+          message: `${modelLabel} ${error.model} 已不可用，已改用 ${autoModel}` });
+        return session;
+      };
+      // 换上的模型也起不来时，下一轮带着 fixedModel，会走下面的确认卡片，不会反复自动换。
+      const retried = createSessionWithModelPolicy({ kind, opts: retryOpts, create, requestConfirmation, sendToRenderer, contextLabel, operation, canCreate, dataDir, getPolicy, modelLabel });
+      return retried?.then ? retried.then(announce) : announce(retried);
+    }
+    return Promise.resolve(requestConfirmation({ originalModel: error.model, reason: error.reason || '', suggestedModel: pins.recommendedReplacement(error.model, availableModels, error.suggestedModel) || error.suggestedModel,
       availableModels, contextLabel, operation, sessionId: operation === 'resume' ? launchOpts.id : undefined, creation: operation !== 'resume',
       message: `${contextLabel}：${error.message}` })).then(selected => {
       if (!selected) {
@@ -103,14 +136,14 @@ function createSessionWithModelPolicy({ kind, opts, create, requestConfirmation,
         throw Object.assign(new Error(message), { code: operation === 'resume' ? 'SESSION_MODEL_CONFIRMATION_CANCELLED' : 'SESSION_CREATION_CANCELLED', notCreated: true, notSent: true, stopped: true });
       }
       if (!availableModels.includes(selected)) throw new Error('所选模型不在本次可用清单内，未创建会话');
-      try { require('../core/codeagent-model-replacements').recordReplacement(require('../core/data-dir').getHubDataDir(), error.model, selected); }
+      try { require('../core/codeagent-model-replacements').recordReplacement(hubDataDir(), error.model, selected); }
       catch (failure) { console.warn('[model-confirmation] 记住替代模型失败：', failure.message); }
       const retryOpts = { ...launchOpts, model: selected, fixedModel: selected, codeagentUserModel: selected,
         modelPinSource: 'user', modelChange: null, codeagentModelPick: false, modelConfirmationRequired: false, modelUnavailableReason: '' };
       // A failed create released its lease; the retry must acquire a fresh one.
       delete retryOpts._openLeaseNonce;
       return createSessionWithModelPolicy({ kind, opts: retryOpts,
-        create, requestConfirmation, sendToRenderer, contextLabel, operation, canCreate });
+        create, requestConfirmation, sendToRenderer, contextLabel, operation, canCreate, dataDir, getPolicy, modelLabel });
     }).catch(failure => { throw Object.assign(failure, operation === 'resume' ? { stopped: true, notSent: true } : {}); });
   };
   try {

@@ -6,6 +6,9 @@ const ONESHOT = ['codeagent', 'claude', 'codex'];
 // CodeAgent-Lite：同一个 CodeAgent（账号、模型、MCP 全同），只是固定走多会话共用的 serve 后台进程，省内存。
 const SESSION = ['codeagent', 'codeagent-lite'];
 const LITE = 'codeagent-lite';
+// 部门 API key（网关）：只开放给助理。会话由 Claude Code 经本机反代的网关上游作答（core/assistant-gateway-route.js）。
+const gatewayRoute = () => require('./assistant-gateway-route');
+const GATEWAY = 'api-gateway';
 const ALL_BACKENDS = ['codeagent', LITE, 'claude', 'codex', 'deepseek-acp', 'qwen', 'glm'];
 const FEATURES = [
   { id: 'help', label: '问问 Hub', kinds: ONESHOT, defaultText: '按发行版自动选用可用 CLI' },
@@ -13,14 +16,26 @@ const FEATURES = [
   { id: 'ppt', label: 'PPT 找页', kinds: SESSION, defaultText: 'CodeAgent · 助理模型与供应商' },
   { id: 'pptMake', label: 'PPT 做页', kinds: SESSION, defaultText: 'CodeAgent · 助理模型与供应商' },
   { id: 'pptImgtext', label: 'PPT 图转字', kinds: SESSION, defaultText: 'CodeAgent · 助理模型与供应商' },
-  { id: 'assistant', label: '助理（电脑 / 手机 / 简报）', kinds: SESSION, defaultText: 'CodeAgent · 助理模型与供应商' },
+  { id: 'assistant', label: '助理（电脑 / 手机 / 简报）', kinds: [...SESSION, GATEWAY], defaultText: 'CodeAgent · 助理模型与供应商' },
   { id: 'avatar', label: '分身', kinds: SESSION, defaultText: 'CodeAgent · 分身指定或助理模型' },
   { id: 'forum', label: '论坛热帖汇总', kinds: SESSION, defaultText: 'CodeAgent · 启动默认模型' },
   { id: 'progress', label: '进展卡自动摘要', kinds: ONESHOT, defaultText: 'Claude · Haiku' },
   { id: 'meeting', label: '会议理解 / 问答', kinds: SESSION, defaultText: '会议中所选引擎' },
   { id: 'text', label: '草稿整理 / 团队文字任务', kinds: SESSION, defaultText: 'CodeAgent · 启动默认模型' },
 ];
-const LABELS = { codeagent: 'CodeAgent', [LITE]: 'CodeAgent-Lite（省内存）', claude: 'Claude', codex: 'Codex', 'deepseek-acp': 'DSH', qwen: 'Qwen Code', glm: 'ZCode' };
+const LABELS = { codeagent: 'CodeAgent', [LITE]: 'CodeAgent-Lite（省内存）', claude: 'Claude', codex: 'Codex', 'deepseek-acp': 'DSH', qwen: 'Qwen Code', glm: 'ZCode', [GATEWAY]: '部门 API key（网关）' };
+// 网关这一行：模型 = key 的对话模型表（附一键体检的说明）+ 手填检测通过的；allowCustom 让界面给出「手填模型」。
+function gatewayRow(dataDir, { env, findCommand }) {
+  const gw = require('./api-gateway');
+  let view = { models: [], customModels: [], model: '' }, models = [];
+  try {
+    view = gw.read(dataDir);
+    models = [...gw.modelChoices(dataDir).map(m => ({ id: m.id, label: m.note ? `${m.id} · ${m.note}` : m.id, ...(m.ok === false ? { unhealthy: true } : {}) })),
+      ...view.customModels.map(id => ({ id, label: `${id} · 手填`, custom: true }))];
+  } catch { models = []; }
+  const a = gatewayRoute().availability(dataDir, { env, findCommand });
+  return { kind: GATEWAY, label: LABELS[GATEWAY], available: a.available, reason: a.reason, defaultModel: view.model || '', models, allowCustom: true };
+}
 function feature(id) { const row = FEATURES.find(f => f.id === id); if (!row) throw new Error('未知功能'); return row; }
 function catalog(dataDir, { env = process.env, findCommand = require('./community-setup').findCommand } = {}) {
   const models = require('./model-options');
@@ -45,11 +60,17 @@ function catalog(dataDir, { env = process.env, findCommand = require('./communit
   // Lite 的可用性、模型目录与默认模型完全沿用 CodeAgent，不另做配置。
   const base = rows.find(row => row.kind === 'codeagent');
   if (base) rows.splice(rows.indexOf(base) + 1, 0, { ...base, kind: LITE, label: LABELS[LITE], models: base.models.slice() });
+  rows.push(gatewayRow(dataDir, { env, findCommand }));
   return rows;
 }
 function resolve(dataDir, id, options = {}) {
   const f = feature(id), choice = routes.featurePreference(dataDir, id);
-  if (!choice) return { choice: null, selected: null, warning: '' };
+  if (!choice) {
+    // 开箱即用：助理没选过、本机没有 CodeAgent、部门 key 已配好时默认走部门 key；有 CodeAgent 的保持原默认。
+    if (f.kinds.includes(GATEWAY) && gatewayRoute().autoDefault(dataDir, { backends: options.backends }))
+      return { choice: null, selected: { kind: GATEWAY, model: '' }, warning: '', auto: true };
+    return { choice: null, selected: null, warning: '' };
+  }
   if (!f.kinds.includes(choice.kind)) return { choice, selected: null, warning: '此功能尚不支持该后端的受控只读执行，本次沿用默认。' };
   const backends = options.backends || catalog(dataDir);
   const backend = backends.find(b => b.kind === choice.kind && b.available && f.kinds.includes(b.kind));
@@ -64,6 +85,7 @@ function set(dataDir, id, choice, options) {
     const normalized = { kind: choice.kind, model: choice.model || '', ...require('./codeagent-model-choice').routeFields(choice) };
     const backends = options?.backends || catalog(dataDir);
     const b = backends.find(b => b.kind === normalized.kind && b.available);
+    if (normalized.kind === GATEWAY && !b) throw new Error(backends.find(r => r.kind === GATEWAY)?.reason || '部门 API key 暂时用不了');
     if (!b || (normalized.model && !b.models.some(m => m.id === normalized.model && !m.unavailable && (!normalized.codeagentModelProvider || m.provider === normalized.codeagentModelProvider)))) throw new Error('所选后端或模型当前不可用，请恢复默认');
     routes.setFeaturePreference(dataDir, id, normalized);
   } else routes.setFeaturePreference(dataDir, id, null);
@@ -72,6 +94,15 @@ function set(dataDir, id, choice, options) {
 function session(dataDir, id, kind, opts, options) {
   const r = resolve(dataDir, id, options), selected = r.selected;
   if (!selected) return { kind, opts, warning: r.warning };
+  if (selected.kind === GATEWAY) {
+    // 不带 CodeAgent 专用字段；MCP 只挂助理自己的会话工具（none 档 + 严格模式），模型空时用网关默认模型。
+    const out = { ...opts, featureAgent: id, featureAgentChoice: JSON.stringify(selected), apiGatewayRoute: true, mcpProfile: 'none' };
+    for (const k of Object.keys(out)) if (/^codeagent/i.test(k)) delete out[k];
+    let model = selected.model;
+    if (!model) try { model = require('./api-gateway').read(dataDir).model; } catch { model = ''; }
+    if (model) { out.model = model; out.fixedModel = model; }
+    return { kind: 'claude', opts: out, warning: '' };
+  }
   const out = { ...opts, featureAgent: id, featureAgentChoice: JSON.stringify(selected), ...require('./codeagent-model-choice').routeFields(selected) };
   const codeagentFamily = selected.kind === 'codeagent' || selected.kind === LITE;
   // 不把 CodeAgent 专用账号、模型字段带进其他后端。
@@ -88,7 +119,7 @@ function session(dataDir, id, kind, opts, options) {
 }
 function assertSessionKind(kind, opts = {}) {
   if (opts.featureAgent && ['company-assistant', 'company-forum', 'company-ai', 'avatar-agent'].includes(opts.purpose)
-    && !/^codeagent(?:-resume)?$/.test(kind)) throw Object.assign(new Error('此功能尚不支持该后端的受控只读执行，请恢复默认'), { code: 'FEATURE_AGENT_UNSAFE_BACKEND', notSent: true });
+    && !/^codeagent(?:-resume)?$/.test(kind) && !gatewayRoute().allowedSession(kind, opts)) throw Object.assign(new Error('此功能尚不支持该后端的受控只读执行，请恢复默认'), { code: 'FEATURE_AGENT_UNSAFE_BACKEND', notSent: true });
 }
 function stale(dataDir, id, meta, options) {
   const selected = resolve(dataDir, id, options).selected;
@@ -101,6 +132,9 @@ function state(dataDir, options) {
   try { cliModel = JSON.parse(require('node:fs').readFileSync(require('node:path').join(require('./codeagent-config').resolveCodeAgentConfig().configDir, 'settings.json'), 'utf8')).model || ''; } catch { /* CLI 自选 */ }
   const assistant = routes.preference(dataDir), codeagentModel = assistant?.model || config.defaultModels?.codeagent || cliModel || 'CLI 当前模型';
   const defaultLabel = f => {
+    if (f.id === 'assistant' && resolve(dataDir, f.id, { backends }).auto) {
+      return `${LABELS[GATEWAY]} · ${backends.find(b => b.kind === GATEWAY)?.defaultModel || '网关默认模型'}`;
+    }
     if (['assistant', 'ppt', 'pptMake', 'pptImgtext'].includes(f.id)) return `CodeAgent · ${codeagentModel}`;
     if (f.id === 'forum' || f.id === 'text') return `CodeAgent · ${config.defaultModels?.codeagent || cliModel || 'CLI 当前模型'}`;
     if (f.id === 'help') {
@@ -114,4 +148,4 @@ function state(dataDir, options) {
   };
   return { ok: true, backends, features: FEATURES.map(f => ({ ...f, defaultText: defaultLabel(f), ...resolve(dataDir, f.id, { backends }) })) };
 }
-module.exports = { FEATURES, LABELS, SESSION_KINDS: SESSION, catalog, resolve, set, session, stale, state, assertSessionKind };
+module.exports = { FEATURES, LABELS, GATEWAY, SESSION_KINDS: SESSION, catalog, resolve, set, session, stale, state, assertSessionKind };

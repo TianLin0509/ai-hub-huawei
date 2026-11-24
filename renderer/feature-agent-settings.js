@@ -30,6 +30,12 @@
     .fa-popup header button { border:0; background:transparent; color:inherit; cursor:pointer; }
     .fa-popup .fa-row { grid-template-columns:120px 192px minmax(180px,1fr) 66px; }
     #cfg-feature-agents [role=status] { font-size:12px; min-height:18px; }
+    .fa-row .fa-hint { grid-column:1/-1; font-size:12px; color:var(--text-secondary,#5b6573); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .fa-row .fa-hint i { font-style:normal; cursor:help; color:var(--brand,#3478f6); margin-left:4px; }
+    .fa-row .fa-custom { grid-column:1/-1; display:flex; align-items:center; gap:6px; min-width:0; }
+    .fa-row .fa-custom[hidden] { display:none; }
+    .fa-row .fa-custom input { width:260px; height:30px; padding:0 8px; border:1px solid var(--border-subtle,#dfe3ea); border-radius:6px; font:12px 'Microsoft YaHei',sans-serif; color:var(--text-primary,#242a33); background:var(--bg-input,#fff); }
+    .fa-row .fa-custom [role=status] { font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
   `;
   document.head.append(style);
   function rows(host, ids) {
@@ -48,9 +54,9 @@
       const defaultBackend = f.id === 'meeting' ? '默认·会议所选' : `默认（当前：${f.defaultText.split(' · ')[0]}）`;
       const backendTitle = selected ? backend?.label || selected.kind : `默认（当前：${f.defaultText}）`;
       return `<div class="fa-row" data-fa-row="${f.id}"><label for="fa-backend-${host.id}-${f.id}">${esc(f.label)}</label>
-        <select data-fa-backend id="fa-backend-${host.id}-${f.id}" aria-label="${esc(f.label)}后端" title="${esc(backendTitle)}"><option value="" title="${esc(f.defaultText)}">${esc(defaultBackend)}</option>${backendOptions.map(b => `<option value="${esc(b.kind)}"${b.kind === selected?.kind ? ' selected' : ''}${b.available ? '' : ' disabled'}>${esc(b.label)}${b.available ? '' : '（不可用）'}</option>`).join('')}</select>
-        <select data-fa-model aria-label="${esc(f.label)}模型"${selected ? '' : ' disabled'}><option value="">默认（当前：${esc(backend?.defaultModel || f.defaultText)}）</option>${selected?.model && !models.some(m => choiceValues.choiceValue(m) === current) ? `<option selected value="${esc(current)}">${esc(selected.model)}（不可用）</option>` : ''}${models.map(m => `<option value="${esc(choiceValues.choiceValue(m))}"${choiceValues.choiceValue(m) === current ? ' selected' : ''}${m.unavailable ? ' disabled' : ''}>${esc(m.label || m.id)}</option>`).join('')}</select>
-        ${selected ? '<button class="fa-reset" data-fa-reset type="button">恢复默认</button>' : ''}${f.warning ? `<span class="fa-warning" role="status">${esc(f.warning)}</span>` : ''}</div>`;
+        <select data-fa-backend id="fa-backend-${host.id}-${f.id}" aria-label="${esc(f.label)}后端" title="${esc(backendTitle)}"><option value="" title="${esc(f.defaultText)}">${esc(defaultBackend)}</option>${backendOptions.map(b => `<option value="${esc(b.kind)}"${b.kind === selected?.kind ? ' selected' : ''}${b.available ? '' : ' disabled'}>${esc(b.label)}${b.available ? '' : `（${esc(b.reason || '不可用')}）`}</option>`).join('')}</select>
+        <select data-fa-model aria-label="${esc(f.label)}模型"${selected ? '' : ' disabled'}><option value="">默认（当前：${esc(backend?.defaultModel || f.defaultText)}）</option>${selected?.model && !models.some(m => choiceValues.choiceValue(m) === current) ? `<option selected value="${esc(current)}">${esc(selected.model)}（不可用）</option>` : ''}${models.map(m => `<option value="${esc(choiceValues.choiceValue(m))}"${choiceValues.choiceValue(m) === current ? ' selected' : ''}${m.unavailable ? ' disabled' : ''}>${esc(m.label || m.id)}</option>`).join('')}${backend?.allowCustom ? '<option value="__custom__">手填模型名…</option>' : ''}</select>
+        ${selected ? '<button class="fa-reset" data-fa-reset type="button">恢复默认</button>' : ''}${f.warning ? `<span class="fa-warning" role="status">${esc(f.warning)}</span>` : ''}${gatewayExtras(f, backend)}</div>`;
     }).join('') + '<div role="status" data-fa-message></div>';
     if (host.id === 'fa-assistant-settings') {
       const overridden = features.filter(f => f.selected).map(f => f.id === 'avatar' ? '分身' : '助理');
@@ -59,6 +65,33 @@
         note.textContent = `${overridden.join('、')}正在使用功能选型，下方供应商默认设置暂不生效。`; host.append(note);
       }
     }
+  }
+  // 部门 API key（网关）：一行提示（细节放 ⓘ）+ 手填模型框（先连通检测，通了才用）。
+  const GATEWAY_INFO = '选「部门 API key（网关）」后，助理改由本机 Claude Code 经 Hub 的本机反代连部门网关作答，不经 CodeAgent；'
+    + 'key 用设置里「API 网关」已保存的那把（Windows 账户加密，不落明文）。没装 CodeAgent、又保存过部门 key 时默认就用它。'
+    + '模型表来自网关；表里没有但网关能用的模型可以手填，先试跑一句测通再用。报错会写清原因并给出重填 key / 换模型按钮。';
+  function gatewayExtras(f, backend) {
+    if (!f.kinds.includes('api-gateway')) return '';
+    const on = f.selected?.kind === 'api-gateway';
+    const hint = `<span class="fa-hint">${on ? '正在用部门 API key 经本机反代作答，不经 CodeAgent' : '没有 CodeAgent 也能用：后端选「部门 API key（网关）」'}<i title="${esc(GATEWAY_INFO)}" aria-label="${esc(GATEWAY_INFO)}">ⓘ</i></span>`;
+    const custom = backend?.allowCustom ? `<div class="fa-custom" data-fa-custom hidden><input data-fa-custom-input maxlength="128" placeholder="模型名，例如 deepseek-v4.1-flash-1017" aria-label="手填模型名"><button type="button" class="fa-reset" data-fa-custom-check>检测并使用</button><span role="status" data-fa-custom-msg></span></div>` : '';
+    return hint + custom;
+  }
+  async function checkCustom(row) {
+    const input = row.querySelector('[data-fa-custom-input]'), msg = row.querySelector('[data-fa-custom-msg]'), btn = row.querySelector('[data-fa-custom-check]');
+    const model = input.value.trim();
+    if (!model) { msg.textContent = '先填模型名'; input.focus(); return; }
+    btn.disabled = true; msg.textContent = '正在试跑一句检测连通…';
+    try {
+      const r = await ipcRenderer.invoke('feature-agents:custom-model', { feature: row.dataset.faRow, model });
+      if (!r?.ok) { msg.textContent = r?.error || '没有连通'; msg.title = r?.error || ''; return; }
+      state = r; refresh();
+      const host = document.querySelector(`[data-fa-row="${row.dataset.faRow}"]`)?.parentElement;
+      const note = host?.querySelector('[data-fa-message]');
+      if (note && r.warning) note.textContent = r.warning;
+      else if (note) note.textContent = `已连通${r.checked?.firstMs ? `（首字 ${(r.checked.firstMs / 1000).toFixed(1)} 秒）` : ''}，下次提问起用 ${model}`;
+    } catch (error) { msg.textContent = error.message; }
+    finally { btn.disabled = false; }
   }
   async function load() {
     const result = await ipcRenderer.invoke('feature-agents:get');
@@ -89,6 +122,9 @@
     const row = event.target.closest('[data-fa-row]'); if (!row) return;
     if (event.target.matches('[data-fa-backend]')) {
       void save(row, event.target.value ? { kind: event.target.value, model: '' } : null);
+    } else if (event.target.matches('[data-fa-model]') && event.target.value === '__custom__') {
+      const box = row.querySelector('[data-fa-custom]');
+      if (box) { box.hidden = false; box.querySelector('input')?.focus(); }
     } else if (event.target.matches('[data-fa-model]')) {
       const choice = choiceValues.decodeChoice(event.target.value);
       void save(row, { kind: row.querySelector('[data-fa-backend]').value, model: choice.id, ...choiceValues.routeFields(choice) });
@@ -112,6 +148,8 @@
     const entry = event.target.closest('[data-feature-agent]');
     if (entry) { void open(entry.dataset.featureAgent.split(','), entry); return; }
     if (event.target.closest('[data-fa-close]')) { close(); return; }
+    const check = event.target.closest('[data-fa-custom-check]');
+    if (check) { void checkCustom(check.closest('[data-fa-row]')); return; }
     const reset = event.target.closest('[data-fa-reset]');
     if (reset) { void save(reset.closest('[data-fa-row]'), null); return; }
     if (popup && !popup.contains(event.target)) close();

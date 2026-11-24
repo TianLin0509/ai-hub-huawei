@@ -2734,8 +2734,10 @@ const usesGatewayRoute = () => { const c = getHubConfig();
     || (c.dshBackend === 'proxy' && c.dshUpstream === 'gateway'); };
 const companyProxyService = new (require('./main/company-proxy-service').CompanyProxyService)({
   dataDir: getHubDataDir(), safeStorage: require('electron').safeStorage,
-  isEnabled: () => getHubConfig().companyCli === true && (usesGatewayRoute() || (!require('./core/lan-pool').read(getHubDataDir()).client?.enabled
-    && (getHubConfig().companyProxyEnabled === true || require('./core/lan-pool').read(getHubDataDir()).host?.enabled === true))),
+  // 助理用部门 API key 时（core/assistant-gateway-route.js）也要本机反代常驻：网关上游只在本机反代里。
+  isEnabled: () => (getHubConfig().companyCli === true && (usesGatewayRoute() || (!require('./core/lan-pool').read(getHubDataDir()).client?.enabled
+    && (getHubConfig().companyProxyEnabled === true || require('./core/lan-pool').read(getHubDataDir()).host?.enabled === true))))
+    || require('./core/assistant-gateway-route').inUse(getHubDataDir()),
   // 换号、退回个人号、反代起不来：用会话提示条讲给用户听（renderer.js 的 session-notice）。
   // 换号/退回个人号是常驻提示条，用户手动关（只在每类第一次时弹，见 company-proxy-service）。
   onNotice: notice => sendToRenderer('session-notice', { message: notice.text, level: 'warning', persistent: notice.persistent === true }),
@@ -2797,7 +2799,7 @@ const sessionOperations = registerSessionIpc(ipcMain, {
   app,
   lanPoolService,
   ensureLaunchAuth: async (kind, opts) => {
-    if (require('./core/company-model-proxy').usesGateway(kind, getHubConfig())) {
+    if (require('./core/assistant-gateway-route').allowedSession(kind, opts || {}) || require('./core/company-model-proxy').usesGateway(kind, getHubConfig())) {
       // API 网关会话只要本机反代在跑；公司上游（CodeAgent）准备没准备好与它无关。网关自身的问题在对话里用白话报。
       const status = await companyProxyService.ensureRunning();
       if (status.state === 'failed' || status.state === 'stopped') throw new Error(status.message || '本机反代没有启动，API 网关会话暂时开不了');

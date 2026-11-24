@@ -15,9 +15,17 @@ const running = new Set();
 function killAll() { for (const h of running) { try { h.closeSync(); } catch { /* 已退 */ } } running.clear(); }
 // 登录页常要十几秒才自动跳回（真机见过登录页自身加载 25 秒），连续停留这么久才算真的要登录。
 const LOGIN_GRACE_MS = 45000;
+const START_WAIT_MS = 45000;
 const PAGE_STATE = `(() => { const t = document.body ? document.body.innerText : '';
   return { host: location.host, href: location.origin + location.pathname, ready: document.readyState,
-    hasPassword: !!document.querySelector('input[type=password]'), hasQr: /扫码登录|二维码/.test(t.slice(0, 3000)) }; })()`;
+    hasPassword: !!document.querySelector('input[type=password]'), hasQr: /扫码登录|二维码/.test(t.slice(0, 3000)),
+    errorPage: location.protocol === 'chrome-error:' || location.host === 'chromewebdata',
+    netError: (location.protocol === 'chrome-error:' || location.host === 'chromewebdata') ? ((t.match(/(?:^|[^A-Z_])((?:ERR|DNS_PROBE)_[A-Z_]+)/) || [])[1] || '') : '' }; })()`;
+// 停在 Edge 自己的「无法访问此页面」错误页（地址是 chrome-error://chromewebdata）：网络、代理、DNS、证书出了问题。
+// 先隔几秒重新打开一次（公司 VPN、代理偶尔闪断），还不行就直接报，不再空等到 2 分钟（2026-11-24 同事反馈「停在 chromewebdata」）。
+const ERROR_PAGE_MS = 8000;
+const ERROR_PAGE_RETRIES = 1;
+const netCode = (t) => String(t || '').replace(/^net::/, '').trim();
 
 // 复制本机 Edge 的登录状态。用 Edge 最近用的那个用户资料（Local State 里的 profile.last_used，公司账号常在「Profile 1」），
 // 找不到再用 Default；复制进临时目录的 Default。返回复制了哪个资料、Cookies 拿没拿到（Edge 开着时 Cookies 可能被占用），写进诊断。
@@ -51,11 +59,12 @@ async function getJson(url) { const r = await fetch(url, { signal: AbortSignal.t
 /* 返回 { ok, value, needsLogin, error, finalHost, tookMs, via:'edge' } */
 async function runInEdge({ url, readyUrl, script, accept = null, signal = null, timeoutMs = 120000, loginGraceMs = LOGIN_GRACE_MS, pollMs = 700, tag = 'hub-edge', logger = console, env = process.env } = {}) {
   const started = Date.now();
-  const result = { ok: false, via: 'edge', value: null, needsLogin: false, error: '', finalHost: '', tookMs: 0, loginCopy: null };
+  const result = { ok: false, via: 'edge', value: null, needsLogin: false, error: '', finalHost: '', netError: '', tookMs: 0, loginCopy: null };
   if (!findEdge(env)) { result.error = '本机没有找到 Edge'; return result; }
   let edge = null, ws = null, deadline = started + timeoutMs;
   try {
-    edge = await launchHeadlessEdge({ purpose: tag === 'hub-w3' ? '门户待办取数' : '内网页面取数', tag, env, logger, signal, maxLifeMs: timeoutMs + 60000, prepare: tmp => { result.loginCopy = copyLogin(tmp, env); } });
+    // 起 Edge 最多等 45 秒（默认 20 秒）：公司真机上全新资料第一次冷启动，调试端口 36 秒才出来（2026-11-24 探针）。
+    edge = await launchHeadlessEdge({ startWaitMs: START_WAIT_MS, purpose: tag === 'hub-w3' ? '门户待办取数' : '内网页面取数', tag, env, logger, signal, maxLifeMs: timeoutMs + 60000, prepare: tmp => { result.loginCopy = copyLogin(tmp, env); } });
     running.add(edge);
     deadline = Date.now() + timeoutMs; // 排队等名额的时间不算进取数期限（审查 #4）
     let page = null;
@@ -85,15 +94,25 @@ async function runInEdge({ url, readyUrl, script, accept = null, signal = null, 
       if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); }
     };
     await send('Page.enable');
-    await send('Page.navigate', { url });
+    const nav = await send('Page.navigate', { url });
+    result.netError = netCode(nav?.result?.errorText);
     // accept(value) 返回假表示页面还没准备好（比如单点登录还没跳完），过一会儿在同一页再执行一次。
-    let st = {}, loginSince = 0, lastError = '';
+    let st = {}, loginSince = 0, lastError = '', errorSince = 0, renav = 0;
     while (Date.now() < deadline && !result.ok) {
       await delay(pollMs);
       if (signal?.aborted) { lastError = '已取消'; break; }
       if (closed || edge.closed) { lastError = '和无头 Edge 的连接断了'; break; }
       st = (await send('Runtime.evaluate', { expression: PAGE_STATE, returnByValue: true }))?.result?.result?.value || {};
       result.finalHost = st.host || result.finalHost;
+      if (st.errorPage) {
+        if (st.netError) result.netError = st.netError;
+        errorSince = errorSince || Date.now();
+        if (Date.now() - errorSince < ERROR_PAGE_MS) continue;
+        if (renav < ERROR_PAGE_RETRIES) { renav += 1; errorSince = 0; await send('Page.navigate', { url }); continue; }
+        lastError = `页面没有打开（停在 Edge 的错误页${result.netError ? '，' + result.netError : ''}）`;
+        break;
+      }
+      errorSince = 0;
       // 到了目标页就不再按「二维码」字样判登录：门户首页顶栏自己就有二维码入口（真机上因此误判过）。
       const onTarget = readyUrl.test(String(st.href || ''));
       if (looksLikeLogin(st, onTarget)) {
@@ -129,4 +148,4 @@ async function runInEdge({ url, readyUrl, script, accept = null, signal = null, 
   return result;
 }
 
-module.exports = { runInEdge, looksLikeLogin, killAll, copyLogin, edgeProfileOf, LOGIN_GRACE_MS };
+module.exports = { runInEdge, looksLikeLogin, killAll, copyLogin, edgeProfileOf, LOGIN_GRACE_MS, PAGE_STATE };

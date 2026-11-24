@@ -29,7 +29,7 @@ function compactFeedback({ info = {}, description = '', contact = '', logsDir, n
   head.push(`时间：${new Date(now).toLocaleString('zh-CN', { hour12: false })}`, '', '问题描述：');
   const headText = redact(head.join('\n'), redactOpts);
   const errors = [];
-  for (const log of logsDir ? recentLogs(logsDir, fsModule) : []) {
+  for (const log of logsDir ? recentLogs(logsDir, fsModule, { mention: description }) : []) {
     let rows = [];
     try { rows = tailLines(log.file, 300, 256 * 1024, fsModule); } catch { continue; }
     for (let i = rows.length - 1; i >= 0 && errors.length < ERROR_LINES; i--) {

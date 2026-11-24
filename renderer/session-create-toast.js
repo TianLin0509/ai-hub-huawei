@@ -7,7 +7,7 @@
 const STACK_ID = 'session-create-toast-stack';
 const DEFAULT_MS = 10000;
 
-const ACTION_LABEL = { 'open-session': '打开会话', 'proxy-restart': '重新启动模型通道' };
+const ACTION_LABEL = { 'open-session': '打开会话', 'proxy-restart': '重新启动模型通道', 'pick-model': '换一个' };
 
 function stack(document) {
   let root = document.getElementById(STACK_ID);

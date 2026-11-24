@@ -343,7 +343,7 @@ class CompanyProxyService {
       const gateway = require('../core/api-gateway');
       const view = gateway.read(this.dataDir);
       const apiKey = view.keySet ? gateway.decryptKey(this.dataDir, this.safeStorage) : '';
-      return apiKey ? { baseURL: view.baseURL, apiKey, models: view.models, model: view.model,
+      return apiKey ? { baseURL: view.baseURL, apiKey, models: gateway.allModels(this.dataDir), model: view.model,
         firstTokenMs: gateway.firstTokenMs(this.dataDir), group: view.group || '', noThinking: view.noThinking || [] } : null;
     } catch (error) { this.logger.warn?.('[company-proxy] API gateway config unreadable: ' + error.message); return null; }
   }
@@ -357,7 +357,9 @@ class CompanyProxyService {
   }
 
   // API 网关的 Key / 地址 / 模型表改了：反代在跑就热更新（不重启，不打断别的会话）；没在跑按配置决定要不要起。
+  // 返回值里 gatewayStale=true 表示反代在跑但没收到新设置（新模型表要等反代下次启动才生效），调用方据此提示用户。
   async applyGatewayChange() {
+    let gatewayStale = false;
     if (this.child) {
       // 失败（极少见：本机反代正忙到 3 秒不响应）时：换 key / 模型不重启反代，免得打断别的会话，新设置在反代下次启动时生效；
       // 删除 key 则必须立刻生效，重启反代，不让它继续用已删的 key。
@@ -365,10 +367,11 @@ class CompanyProxyService {
       try { await this.request('/admin/gateway', { method: 'POST', body: settings || {} }); }
       catch (error) {
         this.logger.warn?.('[company-proxy] gateway hot update failed: ' + error.message);
-        if (!settings) await this.restart();
+        if (!settings) await this.restart(); else gatewayStale = true;
       }
     }
-    return this.syncWithConfig();
+    const status = await this.syncWithConfig();
+    return gatewayStale ? { ...status, gatewayStale } : status;
   }
 
   async restart() {

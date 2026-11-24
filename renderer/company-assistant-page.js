@@ -272,7 +272,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
   function onboarding() {
     if (!onboardingShown()) return '';
     const c = connectionState(data), ready = c.kind === 'online';
-    return `<article class="ca-onboarding" data-connection="${c.kind}"><h2>${esc(ready ? '正在获取今天的工作信息' : c.title)}</h2><p>${esc(c.detail)}</p><div class="ca-onboarding-steps" aria-label="接入进度"><span>${data.cliFound ? '✓' : '1'} 安装工具</span><span>${ready ? '✓' : '2'} 确认登录</span><span>${ready && data.refreshedAt ? '✓' : '3'} 获取工作信息</span></div>${c.action ? `<button type="button" class="ca-btn primary" data-ca="${c.action}">${esc(c.label)}</button>` : ''}${c.alt ? `<button type="button" class="ca-btn" data-ca="${c.alt}">${esc(c.altLabel)}</button>` : ''}${!data.cliFound ? '<button type="button" class="ca-btn" data-ca="pick-cli">手动选择…</button>' + installGuide() : ''}<p class="ca-note">${codeagentPref.detectedInstalled() === false ? '提问要靠本机 CodeAgent 回答，装好 CodeAgent 后才能提问。' : '接通前也可以直接提问，讨论已有的材料。'}</p>${!ready && ['missing', 'login', 'unknown'].includes(c.kind) && window.HubErrorCard ? window.HubErrorCard.assistHtml({ area: 'welink', title: c.title, symptom: c.detail, details: [c.title, c.detail, data.cliSearch?.error].filter(Boolean).join(' · ') }) : ''}</article>`;
+    return `<article class="ca-onboarding" data-connection="${c.kind}"><h2>${esc(ready ? '正在获取今天的工作信息' : c.title)}</h2><p>${esc(c.detail)}</p><div class="ca-onboarding-steps" aria-label="接入进度"><span>${data.cliFound ? '✓' : '1'} 安装工具</span><span>${ready ? '✓' : '2'} 确认登录</span><span>${ready && data.refreshedAt ? '✓' : '3'} 获取工作信息</span></div>${c.action ? `<button type="button" class="ca-btn primary" data-ca="${c.action}">${esc(c.label)}</button>` : ''}${c.alt ? `<button type="button" class="ca-btn" data-ca="${c.alt}">${esc(c.altLabel)}</button>` : ''}${!data.cliFound ? '<button type="button" class="ca-btn" data-ca="pick-cli">手动选择…</button>' + installGuide() : ''}<p class="ca-note">${codeagentPref.detectedInstalled() === false && !data.answerRoute ? '提问要靠本机 CodeAgent 回答，装好 CodeAgent 后才能提问；有部门 API key 的也可以在「⚙ Agent」里改用它。' : '接通前也可以直接提问，讨论已有的材料。'}</p>${!ready && ['missing', 'login', 'unknown'].includes(c.kind) && window.HubErrorCard ? window.HubErrorCard.assistHtml({ area: 'welink', title: c.title, symptom: c.detail, details: [c.title, c.detail, data.cliSearch?.error].filter(Boolean).join(' · ') }) : ''}</article>`;
   }
   // 扫码安全说明（2026-11-19，回应「扫码登录有信息安全顾虑」）：扫码授权的是什么、凭据存哪、怎么撤销。依据黄区真机 welink-cli 1.0.20。
   // 扫码面板和设置页各记各的展开状态：设置页默认收起，免得把下面的内容挤出一屏。
@@ -434,8 +434,9 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
         answer = `<div class="ca-answer">${tagSources(body(text, false), labelOf)}</div>${pptLinks}${coverageLine(coverage, id)}`;
         meta = `${c.answeredAt ? `<time>${when(c.answeredAt)}</time>` : ''}${c.answeredAt && (c.startedAt || c.askedAt) ? `<span>用时 ${secondsText(c.answeredAt - (c.startedAt || c.askedAt))}${c.startedAt && c.answeringAt ? `（准备 ${secondsText(c.answeringAt - c.startedAt)} · 回答 ${secondsText(c.answeredAt - c.answeringAt)}）` : ''}</span>` : ''}`;
       } else if (c.state === 'error') {
+        // 部门 API key（网关）报错另给「打开网关设置 / 换个模型」（core/assistant-gateway-route.js 的 actions），不套 CodeAgent 修复卡。
         const why = c.stopped ? '已停止这一问' : `没答上：${esc(c.error || '原因未知')}`;
-        answer = `<div class="ca-turn-error${c.stopped ? ' is-stopped' : ''}"><span>${why}</span>${c.providerRepair ? c.providerRepair.canUseManual ? `<button type="button" class="ca-btn small" data-ca="repair-provider:${esc(id)}">改用手动会话在用的供应商</button>` : '<button type="button" class="ca-btn small" data-ca="settings-tab:model">选择模型与供应商</button>' : ''}<button type="button" class="ca-btn small" data-ca="retry:${esc(id)}">重问</button></div>${!c.stopped && window.HubErrorCard ? window.HubErrorCard.knownHtml({ area: 'codeagent', title: c.error || '助理没答上', details: c.error || '' }) : ''}`;
+        answer = `<div class="ca-turn-error${c.stopped ? ' is-stopped' : ''}"><span>${why}</span>${c.providerRepair ? c.providerRepair.canUseManual ? `<button type="button" class="ca-btn small" data-ca="repair-provider:${esc(id)}">改用手动会话在用的供应商</button>` : '<button type="button" class="ca-btn small" data-ca="settings-tab:model">选择模型与供应商</button>' : ''}${(c.gatewayError?.actions || []).includes('gateway-settings') ? '<button type="button" class="ca-btn small" data-ca="gateway-settings">打开网关设置</button>' : ''}${(c.gatewayError?.actions || []).includes('model') ? '<button type="button" class="ca-btn small" data-ca="gateway-model">换个模型</button>' : ''}<button type="button" class="ca-btn small" data-ca="retry:${esc(id)}">重问</button></div>${!c.stopped && !c.gatewayError && window.HubErrorCard ? window.HubErrorCard.knownHtml({ area: 'codeagent', title: c.error || '助理没答上', details: c.error || '' }) : ''}`;
         meta = c.askedAt ? `<time>${when(c.askedAt)}</time>` : '';
       } else {
         // 三段：排队 → CodeAgent 准备中（开会话、送入问题，通常 10–20 秒）→ 正在查（问题已送进去）。
@@ -613,6 +614,8 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     }
     if (verb === 'source') return openSource(arg, button.dataset.sourceDay);
     if (verb === 'retry') { await call('retry-chat', { id: arg }); await load(); return; }
+    if (verb === 'gateway-settings') { window.__companyApiOpen?.('claude'); return; }
+    if (verb === 'gateway-model') { void window.__featureAgents?.open(['assistant'], button); return; }
     if (verb === 'repair-provider') {
       const chat = data.chat?.find(c => c.id === arg);
       button.disabled = true;

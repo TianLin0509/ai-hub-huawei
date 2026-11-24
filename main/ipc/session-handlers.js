@@ -284,8 +284,19 @@ function registerSessionIpc(ipcMain, deps) {
         sendToRenderer('session-created', { session });
         return { ok: true, session };
       };
-      const result = sessionManager.createSession(kind, preparedOpts);
-      return result?.then ? result.then(created) : created(result);
+      // 模型不可用时和新建会话同一套处理（main/session-model-creation.js）：默认模型下线自动换推荐模型，指定的模型照旧确认。
+      const cancelled = error => {
+        if (error?.code === 'SESSION_CREATION_CANCELLED') return { ok: false, error: 'fork-cancelled', message: error.message };
+        throw error;
+      };
+      let result;
+      try {
+        result = require('../session-model-creation').createSessionWithModelPolicy({ kind, opts: preparedOpts,
+          contextLabel: preparedOpts.title ? `分支会话 ${preparedOpts.title}` : '分支会话', modelLabel: '原会话的模型',
+          requestConfirmation: requestModelConfirmation, sendToRenderer, dataDir: deps.dataDir || null,
+          create: (runtimeKind, launchOpts) => sessionManager.createSession(runtimeKind, launchOpts) });
+      } catch (error) { return cancelled(error); }
+      return result?.then ? result.then(created, cancelled) : created(result);
     };
     if (plan.needsAcpFork) {
       return sessionManager.getNativeSession(source.id).fork()

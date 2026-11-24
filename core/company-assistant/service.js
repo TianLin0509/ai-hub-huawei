@@ -2028,7 +2028,11 @@ class CompanyAssistant {
       if (err && err.id !== job.apiErrorBaseline) {
         if (job.apiError?.id !== err.id) job.apiError = { id: err.id, at: this.now() };
         if (this.now() - job.apiError.at >= UNMARKED_GRACE_MS) {
-          const d = require('./turn-api-error').describe(err.text, this.deps.getSession(job.sessionId) || {});
+          const session = this.deps.getSession(job.sessionId) || {};
+          // 部门 API key 会话：网关口径的一行原因 + 下一步按钮（core/assistant-gateway-route.js），不套 CodeAgent 供应商的说法。
+          const gw = session.apiGatewayRoute ? require('../assistant-gateway-route').failure(err.text) : null;
+          if (gw) { job.gatewayError = gw; this.failJob(job, gw.line); return; }
+          const d = require('./turn-api-error').describe(err.text, session);
           if (d.routeRejected) job.providerRepair = require('../codeagent-assistant-route').repairAction(this.deps.dataDir, d.account);
           const hint = d.routeRejected ? job.providerRepair.canUseManual ? '可改用手动会话在用的供应商，或在助理设置中选择模型与供应商'
             : '尚无手动会话成功记录，请在助理设置中选择模型与供应商'
@@ -2103,7 +2107,10 @@ class CompanyAssistant {
     const lane = this.lanes[job.lane || this.laneOf(job)];
     if (lane && lane.job === job) lane.job = null;
     if (job.sessionId && !job.teamOwner && this.pool.has(job.sessionId)) this.keepLast(job.lane || this.laneOf(job), job.sessionId);
-    if (job.type === 'chat') this.patchChat(job.chatId, { state: 'error', error: message, ...(job.providerRepair ? { providerRepair: job.providerRepair } : {}), ...(stopped ? { stopped: true } : {}) });
+    const gatewayError = !stopped && (job.gatewayError || (String(message || '').startsWith(require('../assistant-gateway-route').LABEL + '：')
+      ? require('../assistant-gateway-route').failure(require('../api-gateway-errors').ERROR_PREFIX + String(message).slice(require('../assistant-gateway-route').LABEL.length + 1)) : null));
+    if (job.type === 'chat') this.patchChat(job.chatId, { state: 'error', error: message, ...(job.providerRepair ? { providerRepair: job.providerRepair } : {}),
+      ...(gatewayError ? { gatewayError: { actions: gatewayError.actions } } : {}), ...(stopped ? { stopped: true } : {}) });
     else if (job.type === 'reply-review') this.finishReplyReview(job, '', message);
     else this.finishBrief(job, '', message);
     this.changed();
@@ -2240,6 +2247,22 @@ class CompanyAssistant {
     return { ok: !snap.calendarNeedsSetup, output: D.short(r.stdout + r.stderr, 400), needsSetup: snap.calendarNeedsSetup };
   }
 
+  // 助理这次用什么作答（输入框状态行用）：部门 API key 时返回 { kind, model, auto }，其余（CodeAgent）返回 null。
+  // 判断要查本机命令，30 秒缓存一次，状态轮询不反复查。
+  answerRoute() {
+    const now = this.now();
+    if (this.answerRouteCache && now - this.answerRouteCache.at < 30000) return this.answerRouteCache.value;
+    let value = null;
+    try {
+      const route = require('../assistant-gateway-route'), pref = require('../codeagent-assistant-route').featurePreference(this.deps.dataDir, 'assistant');
+      if (pref ? pref.kind === route.KIND && route.availability(this.deps.dataDir).available : route.autoDefault(this.deps.dataDir)) {
+        value = { kind: route.KIND, label: route.LABEL, model: pref?.model || require('../api-gateway').read(this.deps.dataDir).model || '', auto: !pref };
+      }
+    } catch { value = null; }
+    this.answerRouteCache = { at: now, value };
+    return value;
+  }
+
   status() {
     const s = this.settings(), now = this.now(), day = D.dayKey(now), snap = this.visibleSnapshot?.day === day ? this.visibleSnapshot : this.snapshot(day), st = this.state();
     const next = this.nextBriefAt(s, now);
@@ -2248,7 +2271,7 @@ class CompanyAssistant {
       workDir: this.userWorkDir(),
       dataDirectory: { current: this.dir, default: this.defaultDir, requested: s.dataRoot || this.defaultDir, restartRequired: path.resolve(s.dataRoot || this.defaultDir) !== path.resolve(this.dir), error: this.dataRootError },
       chips: [...BUILTIN_CHIPS, ...s.chips.map(c => ({ ...c, custom: true }))],
-      cliFound: !!this.cli(), cliPath: this.cli() || '', cliVersion: this.cliVersion(), cliChoice: this.cliChoice(), cliSearch: this.cliSearch || { state: 'idle' }, cliInstall: this.cliInstaller.snapshot(), cliInstallAvailable: this.cliInstaller.available(), auth: this.auth.status(), login: this.auth.status().login || snap?.login || null, loginFlow: this.loginFlow, calendarNeedsSetup: !!snap?.calendarNeedsSetup, mailSetup: snap?.mailSetup || null,
+      answerRoute: this.answerRoute(), cliFound: !!this.cli(), cliPath: this.cli() || '', cliVersion: this.cliVersion(), cliChoice: this.cliChoice(), cliSearch: this.cliSearch || { state: 'idle' }, cliInstall: this.cliInstaller.snapshot(), cliInstallAvailable: this.cliInstaller.available(), auth: this.auth.status(), login: this.auth.status().login || snap?.login || null, loginFlow: this.loginFlow, calendarNeedsSetup: !!snap?.calendarNeedsSetup, mailSetup: snap?.mailSetup || null,
       counts: snap ? { meetings: (snap.meetings || []).length, calendar: (snap.calendar || []).length, messages: Object.values(snap.messages || {}).reduce((n, l) => n + l.length, 0), mails: (snap.mails || []).length } : null,
       refreshedAt: snap?.at || null, refreshing: !!this.refreshing, updating: snap?.updating || [], errors: snap?.errors || [], conversations: (snap?.conversations || []).slice(0, 60), scope: snap?.scope || null, nameResolution: snap?.nameResolution || null, meetingCoverage: snap?.meetingCoverage || null, calendarCoverage: snap?.calendarCoverage || null, mailCoverage: snap?.mailCoverage || null,
       brief: this.brief(day), nextBriefAt: next, replyReview: this.replyReviewStatus(), chat: this.chat().filter(c => { if (c.entry === 'ppt') return false; try { this.verifyTeamOwner(c); return true; } catch { return false; } }).slice(-60), job: this.job ? { type: this.job.type, sentAt: this.job.sentAt || null } : null,

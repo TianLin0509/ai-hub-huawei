@@ -8910,6 +8910,13 @@ ipcRenderer.on('session-create-followup', (_event, payload = {}) => {
       if (action === 'open-session') {
         if (!sessions.has(sessionId)) throw new Error('会话已关闭');
         await selectSession(sessionId, { splitBypass: true });
+      } else if (action === 'pick-model') {
+        // 默认模型下线、已自动换成推荐模型（main/session-model-creation.js）：打开这个会话自己输入框下方的模型菜单。
+        if (!sessions.has(sessionId)) throw new Error('会话已关闭');
+        await selectSession(sessionId, { splitBypass: true });
+        const chip = document.querySelector(`.floating-input-bar[data-session-id="${CSS.escape(sessionId)}"] .composer-model`);
+        if (!chip || chip.hidden) throw new Error('模型选择还没准备好');
+        chip.click();
       } else if (action === 'proxy-restart') {
         const result = await ipcRenderer.invoke('company-proxy:restart');
         if (!result || result.ok === false) throw new Error((result && result.error) || '没重启成功');

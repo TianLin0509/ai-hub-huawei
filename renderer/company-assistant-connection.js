@@ -33,7 +33,8 @@ function composerState(data = {}, { codeagentInstalled = null } = {}) {
     const text = (data.job.type === 'brief' ? '助理正在整理今天的摘要…' : '助理正在回答…') + (data.queued ? `（还有 ${data.queued} 个排队）` : '');
     return { text, busy: true, tone: '', action: '', label: '' };
   }
-  if (codeagentInstalled === false) {
+  // 助理用部门 API key 作答时不靠 CodeAgent（core/assistant-gateway-route.js），没装 CodeAgent 也能问。
+  if (codeagentInstalled === false && !data.answerRoute) {
     return { text: '还不能提问：这台电脑没找到 CodeAgent，助理靠它回答', busy: false, tone: 'bad', action: 'install-codeagent', label: '安装 CodeAgent' };
   }
   const c = connectionState(data);

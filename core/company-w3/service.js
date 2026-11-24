@@ -50,7 +50,7 @@ function failureKind(r = {}) {
 function scrubPaths(text) {
   // 先把 Users\用户名（含空格）整段换掉，再把剩下的路径换成占位。
   return String(text).replace(/(Users|用户)[\\/][^\\/'"）)，。\r\n]+/gi, '$1\\<用户>')
-    .replace(/[A-Za-z]:[\\/][^\s'"）)，。]*/g, '<路径>').replace(/\\\\[^\s'"）)，。]+/g, '<路径>');
+    .replace(/(?<![A-Za-z])[A-Za-z]:[\\/][^\s'"）)，。]*/g, '<路径>').replace(/\\\\[^\s'"）)，。]+/g, '<路径>');
 }
 // 登录窗口里判断「登录好了」：门户自己的账号查询返回了账号（同取数脚本的第一步）。
 const LOGIN_DONE_SCRIPT = `fetch('/next/service/rest/my/w3account/v1/account/zh?profile=1&version=1&usergroup=1', { headers: { 'X-Requested-With': 'XMLHttpRequest' }, credentials: 'include' })
@@ -173,7 +173,7 @@ class CompanyW3 {
           if (r.via === 'hub') entry.via = 'hub';
           if (complete) st.lastSuccessAt = at;
           else st.lastPartialAt = at;
-        } else entry = { at, reason, ok: false, needsLogin: !!r.needsLogin, tookMs: r.tookMs || 0, error: r.error || '门户没有返回账号信息', finalHost: r.finalHost || '', loginCopy: r.loginCopy || null };
+        } else entry = { at, reason, ok: false, needsLogin: !!r.needsLogin, tookMs: r.tookMs || 0, error: r.error || '门户没有返回账号信息', finalHost: r.finalHost || '', netError: r.netError || '', loginCopy: r.loginCopy || null };
         if (hubTried && entry) entry.hubTried = hubTried;
       }
       if (!entry.ok) entry.kind = failureKind(entry);
@@ -193,10 +193,11 @@ class CompanyW3 {
       fs.mkdirSync(dir, { recursive: true });
       try { if (fs.statSync(file).size > LOG_MAX_BYTES) fs.writeFileSync(file, fs.readFileSync(file, 'utf8').slice(-LOG_MAX_BYTES / 2).replace(/^[^\n]*\n/, ''), 'utf8'); } catch { /* 还没有日志 */ }
       const { at, reason, ok, kind, complete, tookMs, finalHost, loginCopy, needsLogin, via } = entry;
+      const netError = entry.netError || undefined;
       const hubTried = entry.hubTried ? scrubPaths(entry.hubTried).slice(0, 120) : undefined;
       // 异常文字里可能带本机路径（含用户名），落盘前换成占位并截短。
       const error = entry.error ? scrubPaths(entry.error).slice(0, 200) : entry.error;
-      fs.appendFileSync(file, JSON.stringify({ at, reason, ok, kind, complete, tookMs, error, finalHost, needsLogin, loginCopy, via, hubTried, domainFrom: this.settings().domainFrom }) + '\n', 'utf8');
+      fs.appendFileSync(file, JSON.stringify({ at, reason, ok, kind, complete, tookMs, error, finalHost, netError, needsLogin, loginCopy, via, hubTried, domainFrom: this.settings().domainFrom }) + '\n', 'utf8');
     } catch { /* 日志写不进不影响取数 */ }
   }
   snapshot() { return this.read('snapshot', null); }

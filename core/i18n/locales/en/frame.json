@@ -386,6 +386,8 @@
   "选项：": "Options:",
   "请在终端回答问题": "Answer the question in the terminal",
   "打开后台": "Open background",
+  "换一个": "Pick another",
+  "模型选择还没准备好": "Model picker is not ready yet",
   "会话已关闭": "Session closed",
   "等待授权：{0}": "Waiting for approval: {0}",
   "Codex 回复完成，等你继续": "Codex finished replying; your turn",

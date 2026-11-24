@@ -89,6 +89,14 @@ function classify({ status = 0, body = '', networkCode = '', model = '', group =
   if (status === 401 || RE.badKey.test(text)) {
     return out('bad_key', 'key 无效', 'key 无效：网关不认这个 key（复制不完整、已过期或被禁用）。请重新粘贴 key（要复制完整，通常以 sk- 开头）再试。', ['rekey', 'tutorial'], false, 401);
   }
+  // 405 要排在「没有权限」前面：Method Not Allowed 的原话里带 not allowed。多半是地址不是 OpenAI 兼容地址（少了 /v1 或填成了网页地址）。
+  if (status === 405) {
+    return out('method_not_allowed', '网关地址不对', '网关不接受这类请求（HTTP 405）：多半是网关地址填错了，要填到 /v1 这一级的接口地址。到设置里核对网关地址后重试。', ['rekey', 'tutorial'], false, 405);
+  }
+  // 413：这一问整体太大（带的材料或上下文超过网关收的上限），原样重发还是 413。
+  if (status === 413) {
+    return out('too_large', '请求太大', `这一问带的内容超过了网关一次能收的大小（HTTP 413）。请新开会话或少带些材料再问，也可以换个上下文更长的模型。${otherText}`, ['compact', 'switch-model'], false, 413);
+  }
   // New API 对目录里根本没有的模型也回「无可用渠道」：目录里没有它就按「已下线」讲。
   const gone = model && known?.length && !known.includes(model);
   if (RE.noChannel.test(text) && !gone) {

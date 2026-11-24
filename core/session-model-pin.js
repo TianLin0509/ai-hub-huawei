@@ -126,6 +126,17 @@ function resolveCodeAgentPin(opts, { dataDir, configDir, command, pool = null, f
     modelChange: modelChange || opts.modelChange || null, modelChanged: !!modelChange, settingsSupported };
 }
 
+// 默认模型不可用时替它挑的推荐模型（新建会话自动替换与确认卡片共用一个口径）：
+// 只认两种明确的推荐——统一模型名对照命中的同家族同版本那一个（core/model-name-match.js，不跨版本；多条线路同分算不明），
+// 或调用方给出、且在清单里的推荐模型（账号默认）。都没有返回 ''：不拿清单第一项凑数，由原来的确认或报错接手。
+function recommendedReplacement(from, available = [], suggested = '') {
+  const lower = value => String(value || '').toLowerCase();
+  const list = (Array.isArray(available) ? available : []).filter(id => models.isSafeModelId(id) && lower(id) !== lower(from));
+  if (!list.length) return '';
+  const same = require('./model-name-match').resolveName(from, list, { allowSimilar: true });
+  return same.name || list.find(id => lower(id) === lower(suggested)) || '';
+}
+
 function modelChangeMessage(change) {
   if (!change) return '';
   return change.from === change.to
@@ -133,4 +144,4 @@ function modelChangeMessage(change) {
     : `原模型 ${change.from} 不可用，已换成 ${change.to}（${change.reason}）。`;
 }
 
-module.exports = { captureSessionExecution, sameSessionExecution, unavailablePolicy, modelPinFields, migrateModelPin, unavailableError, resolveCodeAgentPin, modelChangeMessage };
+module.exports = { captureSessionExecution, sameSessionExecution, unavailablePolicy, modelPinFields, migrateModelPin, unavailableError, resolveCodeAgentPin, recommendedReplacement, modelChangeMessage };

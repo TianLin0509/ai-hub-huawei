@@ -219,7 +219,7 @@ test('#12 助理输入框按实际情况显示状态，不在什么都没接时�
   assert.match(pageSrc, /composerState\(data, \{ codeagentInstalled: codeagentPref\.detectedInstalled\(\) \}\)/);
   assert.match(pageSrc, /verb === 'install-codeagent'/);
   // 引导卡上「接通前也可以直接提问」在没装 CodeAgent 时改口，和输入框状态一致
-  assert.match(pageSrc, /codeagentPref\.detectedInstalled\(\) === false \? '提问要靠本机 CodeAgent 回答/);
+  assert.match(pageSrc, /codeagentPref\.detectedInstalled\(\) === false(?: && !data\.answerRoute)? \? '提问要靠本机 CodeAgent 回答/);
 });
 
 test('#13 主页「连接你的 AI」不再让人去设置页，和下面的 API key 卡说法一致', () => {

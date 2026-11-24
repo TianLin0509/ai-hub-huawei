@@ -3,6 +3,7 @@
   "tests/unit-ppt-work-dir.test.js",
   "tests/unit-feature-agent-safety.test.js",
   "tests/unit-feature-agent-choice.test.js",
+  "tests/unit-assistant-gateway-route.test.js",
   "tests/unit-codeagent-lite.test.js",
   "tests/unit-codeagent-lite-persist.test.js",
   "tests/unit-session-close-sweep.test.js",
@@ -257,6 +258,7 @@
   "tests/unit-title-backup-races.test.js",
   "tests/unit-title-lock-identity.test.js",
   "tests/unit-session-model-pin.test.js",
+  "tests/unit-session-model-default-auto-replace.test.js",
   "tests/unit-session-model-continue.test.js",
   "tests/unit-session-model-cache.test.js",
   "tests/unit-session-model-member-resume.test.js",
@@ -376,5 +378,6 @@
   "tests/unit-groupchat-answer-card-r13.test.js",
   "tests/unit-main-thread-periodic-io.test.js",
   "tests/unit-low-overhead-mode.test.js",
-  "tests/unit-release-smoke-20261123.test.js"
+  "tests/unit-release-smoke-20261123.test.js",
+  "tests/unit-company-w3-neterror-feedback.test.js"
 ]

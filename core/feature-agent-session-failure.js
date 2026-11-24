@@ -8,6 +8,14 @@ function createReader(deps = {}) {
     read(id, baseline = null) {
       const meta = deps.getSession?.(id);
       if (!meta) { monitors.delete(id); return ''; }
+      // 走部门 API key 的会话：401 是 key 的问题、不是 Agent 登录，先按网关口径给一行原因（core/assistant-gateway-route.js），
+      // 不落到下面的「Agent 尚未登录」。
+      if (meta.apiGatewayRoute) {
+        const last = deps.readTurnApiError ? deps.readTurnApiError(meta) : require('./company-assistant/turn-api-error').lastApiError(meta.transcriptPath);
+        const gw = last && last.id !== baseline ? require('./assistant-gateway-route').failure(last.text) : null;
+        // 只有 key / 地址这类重发也没用的才在这里收；限流、超时等交给助理按回合报错的稳定期再判。
+        if (gw?.actions.includes('gateway-settings')) return gw.line;
+      }
       // 共享 serve（CodeAgent-Lite）没有终端横幅可看，鉴权与限流错误只出现在原生运行时字段里：一并检查，明确失败就不空等。
       for (const issue of [meta.connectionIssue, meta.nativeActionError, meta.nativeRuntime?.error, meta.nativeRuntime?.reason]) {
         if (!issue) continue;

@@ -59,9 +59,12 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "修复使用子公司邮箱的同事打开门户、考勤等内网页面时地址拼错的问题"
+    "账号默认模型下线时，新建会话直接改用推荐模型并提示一行，不再弹窗确认",
+    "助理可以直接用部门 API key（走 API 网关），没有 CodeAgent 账号也能用；可手填模型名",
+    "门户打不开时按原因（网络、代理、证书）提示一行，不再长时间空转；一键反馈会带上门户日志",
+    "门户打不开时按原因提示一行"
   ],
-  "version": "5.6.99",
+  "version": "5.6.100",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

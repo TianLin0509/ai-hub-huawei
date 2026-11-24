@@ -1839,10 +1839,12 @@ class SessionManager extends EventEmitter {
     if (this._isShuttingDown || this.restartPending) {
       throw new Error('Hub is shutting down; refusing to create a new PTY');
     }
-    const apiLaunch = /^(?:claude|codex)(?:-resume)?$/.test(kind) ? require('./cli-api-profiles').prepareLaunch(kind, opts, {
+    // 助理走部门 API key（core/assistant-gateway-route.js）：这一个会话的 Claude Code 指向本机反代的网关上游，不读「自有 API」账号。
+    const gatewayRoute = require('./assistant-gateway-route').allowedSession(kind, opts);
+    const apiLaunch = !gatewayRoute && /^(?:claude|codex)(?:-resume)?$/.test(kind) ? require('./cli-api-profiles').prepareLaunch(kind, opts, {
       raw: require('./hub-config').readConfigJsonForUpdate(), dataDir: getHubDataDir(), values: getConfigValues(),
     }) : null;
-    const getLaunchValues = () => apiLaunch ? apiLaunch.values : getConfigValues();
+    const getLaunchValues = () => gatewayRoute ? require('./assistant-gateway-route').launchValues(getConfigValues()) : apiLaunch ? apiLaunch.values : getConfigValues();
     if (apiLaunch) opts = { ...opts, ...apiLaunch.meta, model: opts.model || apiLaunch.profile.model };
     let antigravityProfile = null;
     if (kind === 'gemini' || kind === 'gemini-resume') {
@@ -2131,6 +2133,9 @@ class SessionManager extends EventEmitter {
     if (isClaude) {
       const cv = getLaunchValues();
       applyClaudeSessionEnv(sessionEnv, cv, { sessionId: id, model: opts.model, companyProxyAccount: opts.companyProxyAccount });
+      // 助理走部门 key：Claude Code 默认把 401 也重试 10 次（假网关实测约 4 分钟才报出来），key 错时助理一直转圈。
+      // 只重试 2 次（同一实测 1 次重试 7 秒就报出），首字慢的重试仍由本机反代自己做。
+      if (gatewayRoute && !sessionEnv.CLAUDE_CODE_MAX_RETRIES) sessionEnv.CLAUDE_CODE_MAX_RETRIES = '2';
       opts = { ...opts, claudeConnectionValues: cv };
       if (apiLaunch) {
         sessionEnv.CLAUDE_CONFIG_DIR = apiLaunch.home;
@@ -2866,6 +2871,7 @@ class SessionManager extends EventEmitter {
       completionNotificationEnabled: opts.completionNotificationEnabled === true,
       ...(opts.purpose ? { purpose: String(opts.purpose) } : {}),
       ...(opts.featureAgent ? { featureAgent: opts.featureAgent, featureAgentChoice: opts.featureAgentChoice } : {}),
+      ...(gatewayRoute ? { apiGatewayRoute: true } : {}),
       ...(writingContextWarning ? { writingContextWarning } : {}),
       ...(hubRulesSystem ? { hubRulesSystem: SessionManager.hubRulesRecord(hubRulesSystem) } : {}),
       ...(opts.researchSessionId ? { researchSessionId: String(opts.researchSessionId) } : {}),
@@ -4817,7 +4823,9 @@ try {
       const effort = require('./cli-capabilities').claudeEffort(requestedEffort);
       const effortFlag = process.env.CLAUDE_HUB_NO_EFFORT_MAX === '1' || !effort ? '' : ` --effort ${effort}`;
       let fastFlag = '';
-      const cv = apiLaunch?.values || getConfigValues();
+      const relaunchValues = () => (require('./assistant-gateway-route').allowedSession(kind, s.info || {})
+        ? require('./assistant-gateway-route').launchValues(apiLaunch?.values || getConfigValues()) : apiLaunch?.values || getConfigValues());
+      const cv = relaunchValues();
       if (shouldUseClaudeFastSettings(cv, { fastMode: s.info && s.info.fastMode, autonomous })) {
         const fastSettingsPath = resolveAsarUnpacked('claude-subscription-fast-settings.json');
         fastFlag = ` --settings "${fastSettingsPath.replace(/\\/g, '\\\\')}"`;
@@ -4880,7 +4888,7 @@ try {
       if (s.info) s.info.hubRulesSystem = SessionManager.hubRulesRecord(relaunchRules);
       const rulesFlag = relaunchRules ? supportedClaudeFragment('--append-system-prompt-file', ` --append-system-prompt-file "${relaunchRules.file}"`) : '';
       const addDirFlag = supportedClaudeFragment('--add-dir', claudeNativeAddDirs([]).map(dir => ` --add-dir "${dir}"`).join(''));
-      const claudeModel = resolveClaudeLaunchModel(apiLaunch?.values || getConfigValues(), modelId);
+      const claudeModel = resolveClaudeLaunchModel(relaunchValues(), modelId);
       cmd = ` claude${claudeModel ? supportedClaudeFragment('--model', ' --model ' + quotePowerShellLiteral(claudeModel)) : ''}${effortFlag}${relaunchPermissionFlag}${supportedClaudeFragment('--settings', fastFlag)}${mcpFlag}${addDirFlag}${rulesFlag}${this._sceneRelaunchFlags(s, 'claude')}${supportedClaudeFragment('--settings', isolation)}\r\n`;
     } else if (deepseekClaude.isDeepSeekClaudeKind(kind)) {
       // PTY 的环境变量（接入端点、Key、模型名、配置目录）在会话创建时已经写好，原地重拉只需同一套参数。
@@ -5065,6 +5073,7 @@ try {
       ...(info.nativeSession ? { nativeSession: info.nativeSession } : {}),
       ...(info.purpose ? { purpose: info.purpose } : {}),
       ...(info.featureAgent ? { featureAgent: info.featureAgent, featureAgentChoice: info.featureAgentChoice } : {}),
+      ...(info.apiGatewayRoute ? { apiGatewayRoute: true } : {}),
       writingContextWarning: info.writingContextWarning || null,
       userContextWarning: info.userContextWarning || null,
       ...(info.researchSessionId ? { researchSessionId: info.researchSessionId } : {}),
