@@ -126,6 +126,8 @@ function createClaudeQuotaPrecompact({
     for (const profile of profiles() || []) {
       if (profile.id === current.id || !sameRoute(current, profile)) continue;
       if (isRiskFlagged(profile.id)) { skippedRisk++; continue; }
+      // 登录已失效或刷新未确认的号不接手会话（换过去也开不起来）。
+      if (broker.authBlocked?.(profile)) { failed++; continue; }
       try {
         // 候选账号沿用上次读数（账号只在 Hub 里用，过了重置时间按已重置算），不再逐个查询。
         const windows = allWindows((await broker.usage(profile, { maxAgeMs: Infinity, why: 'precompact-target' }))?.usage);

@@ -42,6 +42,16 @@ function write(p, data) {
   }
   const tmp = p + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8'); fs.renameSync(tmp, p);
 }
+// 会议会话跨轮复用：记下发问前最后一条接口报错，旧错不拦本轮；部门 API key 会话的网关报错稳定 8 秒就收场（core/feature-agent-session-failure.js）。
+function apiErrorId(self, sid) {
+  try { return require('./turn-api-error').lastApiError(self.a?.deps?.getSession?.(sid)?.transcriptPath)?.id || null; } catch { return null; }
+}
+function gatewayStall(self, sid, baseline) {
+  const deps = self.a?.deps;
+  if (!deps?.getSession?.(sid)?.apiGatewayRoute) return '';
+  return (self.gatewayFailures ||= require('../feature-agent-session-failure').createReader(deps, { settleMs: 8000 })).read(sid, baseline ?? null);
+}
+
 class MeetingCompanion {
   constructor(a, deps = {}) {
     this.a = a; this.deps = deps; this.root = path.join(a.workspace, 'meetings'); this.now = deps.now || (() => Date.now());
@@ -498,7 +508,7 @@ class MeetingCompanion {
   }
   newJob(m, kind, slot, extra = {}) {
     const sid = m[this.lane(slot).sid];
-    return { kind, sessionId: sid, token: randomUUID(), state: 'sending', baseline: this.a.lastFinal(sid)?.id || null, sentAt: this.now(), ...extra };
+    return { kind, sessionId: sid, token: randomUUID(), state: 'sending', baseline: this.a.lastFinal(sid)?.id || null, apiErrorBaseline: apiErrorId(this, sid), sentAt: this.now(), ...extra };
   }
   async send(id, job, prompt, slot = 'job') {
     const lane = this.lane(slot), latest = this.load(id);
@@ -644,7 +654,7 @@ class MeetingCompanion {
     const lane = this.lane(slot), sid = job.sessionId || m[lane.sid];
     const answer = this.a.lastFinal(sid);
     const marked = answer?.id && answer.id !== job.baseline && answer.text?.includes(job.token);
-    const gone = marked ? '' : this.a.sessionGone?.(sid);
+    const gone = marked ? '' : (this.a.sessionGone?.(sid, job.apiErrorBaseline ?? null) || gatewayStall(this, sid, job.apiErrorBaseline));
     if (gone) { this.fail(m.id, new Error(gone), slot); return; }
     if (this.a.sessionBusy(sid)) {
       if (this.now() - job.sentAt > 24 * 60000) { m[lane.error] = `${lane.title}仍在处理，已等待超过 24 分钟；采集继续，可打开会话检查。`; this.save(m); }

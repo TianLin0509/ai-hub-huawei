@@ -18,7 +18,7 @@ function loadUserContext(env, dataDir) {
   if (!home) return null;
   const source = path.join(home, '.agents', 'USER_CONTEXT.md');
   if (!fs.existsSync(source)) return null;
-  if (fs.statSync(source).size > 32768) throw new Error('个人基础规则超过 32 KB，请先精简：' + source);
+  // 不设大小上限：规则长短只影响篇幅。2026-11-11 规则长到 32.7 KB 时，旧的 32 KB 上限让所有 Claude 会话都开不出来。
   const content = fs.readFileSync(source, 'utf8');
   if (!content.trim()) throw new Error('个人基础规则为空：' + source);
   return { home, source, content, digest:hash(content) };

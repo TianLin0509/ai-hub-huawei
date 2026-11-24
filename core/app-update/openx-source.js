@@ -377,10 +377,55 @@ async function fetchManifest({ fetchImpl, validate, signal, currentVersion, publ
   }
 }
 
+// 内源上最近的完整安装包（r27，2026-11-24）：不依赖版本清单，直接在内源的程序版本里找 <名>-Setup-<版本>.exe
+// （免安装版找 <名>-<版本>-win-x64.zip）。版本清单读不到、增量包装不上、本机太老时，更新窗用它给「下载完整安装包」按钮。
+// 内源上多数版本只有增量包，完整包隔几版才发一次，所以按版本从新到旧逐个查详情，最多 MAX_DETAIL_QUERIES 个、总共约 6 秒。
+// 只给比当前版本新的包（给旧的等于让人降级）；member-* 版本不看；地址只取白名单域名内的 https 地址。
+const FULL_PACKAGE_RE = /^.+-Setup-(\d+\.\d+\.\d+)\.exe$/i;
+const PORTABLE_PACKAGE_RE = /^.+-(\d+\.\d+\.\d+)-win-x64\.zip$/i;
+async function findLatestFull({ fetchImpl, portable = false, currentVersion = '', env = process.env, api = DEFAULT_API, projectId = PROJECT_ID,
+  timeoutMs = REACH_TIMEOUT_MS, now = Date.now } = {}) {
+  const miss = reason => ({ ok: false, reason });
+  if (!enabled(env)) return miss('内源已关闭');
+  if (!api || !projectId || typeof fetchImpl !== 'function') return miss('未配置内源');
+  if (reachability({ now }) === 'down') return miss(downText());
+  const { compareVersions } = require('./manifest');
+  const deadline = now() + timeoutMs * 2;
+  let list;
+  try { list = await loadList({ fetchImpl, api, projectId, timeoutMs, now }); }
+  catch (error) { markDown(error, now); state.lastReason = `内源连不上：${errText(error)}`; return miss(`内源连不上：${errText(error)}`); }
+  const cur = normVersion(currentVersion);
+  const releases = list.filter(r => !isMemberRelease(r.version))
+    .map(r => ({ ...r, appVersion: /^(\d+\.\d+\.\d+)(?:\s|$)/.exec(normVersion(r.version))?.[1] }))
+    .filter(r => r.appVersion && (!cur || compareVersions(r.appVersion, cur) > 0))
+    .sort((a, b) => compareVersions(b.appVersion, a.appVersion));
+  const pattern = portable ? PORTABLE_PACKAGE_RE : FULL_PACKAGE_RE;
+  let queries = 0;
+  for (const rec of releases) {
+    let packages = state.details.get(rec.id);
+    if (!packages) {
+      if (queries >= MAX_DETAIL_QUERIES || now() > deadline) break;
+      queries += 1;
+      try {
+        const data = await getJson(fetchImpl, `${api}by_id?id=${encodeURIComponent(rec.id)}`, null, Math.max(1, Math.min(timeoutMs, deadline - now())));
+        packages = Array.isArray(data.binaryPackages) ? data.binaryPackages : [];
+        state.details.set(rec.id, packages);
+      } catch (error) { return miss(`内源版本详情没取到：${error && error.message ? error.message : error}`); }
+    }
+    for (const p of packages) {
+      const file = String((p && p.originalFileName) || '');
+      const m = pattern.exec(file);
+      const url = m && m[1] === rec.appVersion ? safeUrl(p.url) : '';
+      if (url) return { ok: true, url, file, version: m[1], releaseId: rec.id, releaseVersion: String(rec.version || '') };
+    }
+  }
+  return miss(releases.length ? '内源上较新的版本里没找到完整安装包' : '内源上没有比当前更新的版本');
+}
+
 const releaseName = (kind, version) => `${kind}-${normVersion(version)}`;
 const MEMBER_PREFIX = 'member-';
 const memberReleaseName = version => `${MEMBER_PREFIX}v${normVersion(version)}`;
 const isMemberRelease = name => String(name || '').trim().toLowerCase().startsWith(MEMBER_PREFIX);
 function _reset() { state = freshState(); }
 
-module.exports = { fetchManifest, MANIFEST_BUDGET_MS, diagnostics, clearDown, EDITION_ON, publicOrder, releaseName, memberReleaseName, isMemberRelease, find, findForDownload, headSize, prewarm, probe, reachability, safeUrl, markBad, lastReason, enabled, normVersion, _reset, DEFAULT_API, PROJECT_ID, REACH_TIMEOUT_MS, UNKNOWN_BUDGET_MS };
+module.exports = { findLatestFull, fetchManifest, MANIFEST_BUDGET_MS, diagnostics, clearDown, EDITION_ON, publicOrder, releaseName, memberReleaseName, isMemberRelease, find, findForDownload, headSize, prewarm, probe, reachability, safeUrl, markBad, lastReason, enabled, normVersion, _reset, DEFAULT_API, PROJECT_ID, REACH_TIMEOUT_MS, UNKNOWN_BUDGET_MS };

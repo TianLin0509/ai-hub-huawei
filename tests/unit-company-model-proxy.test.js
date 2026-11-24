@@ -388,10 +388,12 @@ test('proxy process: three client protocols, session stickiness and 429 switch o
     assert.equal(limitedA.coolingUntil, null);
     assert.ok(limitedA.rateLimitedModels.some(x => x.model === 'GLM-5.2-WX' && x.until > Date.now()));
     assert.ok(status.router.events.some(e => e.type === 'switch' && e.to === 'bbbbbb2'));
-    // Every account limited: the client sees 429 with Retry-After, not a hang.
+    // Every account limited: the client sees an answer with Retry-After, not a hang. DSH gets 400 (it would retry a 429
+    // on its own on top of the router's switching); the real status stays in x-company-proxy-status.
     fs.writeFileSync(path.join(dataDir, 'company-model-proxy', 'mock-control.json'), JSON.stringify({ rateLimitedTokens: ['mock-token-aaaaaa1', 'mock-token-bbbbbb2', 'mock-token-personal'] }));
     r = await post('/v1/chat/completions', { model: 'GLM-5.2-WX', stream: true, messages: [{ role: 'user', content: 'x' }] }, 'sess2');
-    assert.equal(r.status, 429);
+    assert.equal(r.status, 400);
+    assert.equal(r.headers.get('x-company-proxy-status'), '429');
     assert.ok(Number(r.headers.get('retry-after')) > 0);
     await r.text();
     // Broken pool credentials: falls back to personal.
@@ -423,7 +425,9 @@ test('proxy process: a pinned session stays on its account through a 429 and say
     assert.equal(status.router.assignments.pinned, 'aaaaaa1', 'assignment keyed by the plain session tag');
     fs.writeFileSync(path.join(dataDir, 'company-model-proxy', 'mock-control.json'), JSON.stringify({ rateLimitedTokens: ['mock-token-aaaaaa1'] }));
     r = await post('pinned__pin_aaaaaa1');
-    assert.equal(r.status, 429);
+    // DSH（/v1/chat/completions）收到 400，原状态码 429 在 x-company-proxy-status（不让 DSH 再叠自己的重试）。
+    assert.equal(r.status, 400);
+    assert.equal(r.headers.get('x-company-proxy-status'), '429');
     assert.equal(r.headers.get('retry-after'), '30');
     assert.match((await r.json()).error.message, /号 1被限流，本会话固定用它，约 30 秒后恢复/);
     status = await (await fetch(base + '/admin/status', auth)).json();
@@ -439,7 +443,8 @@ test('proxy process: a pinned session stays on its account through a 429 and say
     assert.equal(r.status, 400);
     assert.match((await r.json()).error.message, /号 2没有 GLM-5\.2-WX 的权限/);
     r = await post('p3__pin_zzzzzz9');
-    assert.equal(r.status, 503);
+    assert.equal(r.status, 400);
+    assert.equal(r.headers.get('x-company-proxy-status'), '503');
     assert.match((await r.json()).error.message, /已不在号池里/);
   } finally {
     await stopProxy(child, base, key);
@@ -870,7 +875,7 @@ test('proxy service: model-scoped 429 does not pause the whole account; successf
   } finally { fs.rmSync(dataDir, { recursive: true, force: true }); }
 });
 
-test('sticky notice stays until closed and does not stack duplicates', () => {
+test('sticky notice is one compact line, closes on click and does not stack duplicates', () => {
   const { showStickyNotice, STACK_ID } = require('../renderer/sticky-notice.js');
   const byId = {};
   const make = tag => ({ tagName: tag, style: {}, dataset: {}, children: [], attrs: {}, listeners: {}, textContent: '', parent: null, id: '',
@@ -883,8 +888,10 @@ test('sticky notice stays until closed and does not stack duplicates', () => {
   showStickyNotice(document, '另一条', 'error');
   const stack = byId[STACK_ID];
   assert.equal(stack.children.length, 2);
-  assert.equal(first.children[0].textContent, '公司模型：换号了');
-  assert.equal(first.children[1].textContent, '知道了');
+  // 一行紧凑样式：正文第一行在 .hub-sticky-notice-line，完整文字在悬停 title；关闭按钮是「×」。
+  assert.equal(first.children[0].children[0].textContent, '公司模型：换号了');
+  assert.equal(first.title, '公司模型：换号了');
+  assert.equal(first.children[1].textContent, '×');
   first.children[1].listeners.click();
   assert.equal(stack.children.length, 1);
   const rendererSource = fs.readFileSync(path.join(__dirname, '..', 'renderer', 'renderer.js'), 'utf8');

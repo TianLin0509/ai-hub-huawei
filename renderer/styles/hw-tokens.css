@@ -15,8 +15,8 @@
   --hw-hit: #FFF1B8;         /* 检索命中词底色（只用于 PPT 检索） */
   /* 文字 */
   --hw-text-1: #182431;        /* 主文字 */
-  --hw-text-2: rgba(24,36,49,.66); /* 5.5.10：.62 在灰底上只有 4.3 左右，提到 .66 约 4.8（肉眼无差） */
-  --hw-text-3: rgba(24,36,49,.40);
+  --hw-text-2: rgba(24,36,49,.74); /* 2026-11-24：text-3 提到 .64 后，text-2 跟着深一档保留层级（各层底 6.2+） */
+  --hw-text-3: rgba(24,36,49,.64); /* 2026-11-24：.40 在所有浅底上只有 2.4，提到 .64（白底 4.8、输入槽 / 选中浅底 4.5） */
   --hw-text-on: #FFFFFF;
   --hw-on-tint: #FFFFFF;       /* 模块色（--hw-tint-*）上的字和图标：模块色不随主题变，字始终白 */
   /* 品牌与状态 */
@@ -26,7 +26,7 @@
   --hw-red: #CF0A2C;           /* 品牌红：只给录制、未读角标、关键告警 */
   --hw-red-soft: #FCE8EB;
   --hw-green: #3A9E42;  --hw-green-soft: #E6F4E7;
-  --hw-amber: #E8780C;  --hw-amber-soft: #FDF0E3;
+  --hw-amber: #A85000;  --hw-amber-soft: #FDF0E3; /* 2026-11-24：#E8780C 作字色在白底 / 琥珀浅底上只有 2.6–3.0，压深到 4.9+ */
   /* 流光两端色（问一下 / 卡片工作中）：蓝→红，各主题在文件末尾转引 */
   --hw-sweep-a: rgba(10,89,247,.55); --hw-sweep-b: rgba(207,10,44,.35);
   /* 模块面性图标底色（服务卡片） */
@@ -178,6 +178,7 @@
 /* frost：强调蓝 #6d8dff 偏亮，白字只有 3.0，按钮上的字改深色（画布色） */
 :root[data-theme='frost'] {
   --hw-text-on: var(--surface-canvas);
-  /* 冷杉的 --fg-muted 在输入槽 / 分段控件底（surface-3）上只有 4.23，往 --fg-default 提一档到约 5.1 */
-  --hw-text-2: color-mix(in srgb, var(--fg-muted) 85%, var(--fg-default));
+  /* 冷杉的说明文字（text-3）掺 --fg-faint 后只有 3.8–4.0，直接用 --fg-muted（各层底上 ≥4.7）；text-2 再往 --fg-default 提一档拉开层级 */
+  --hw-text-2: color-mix(in srgb, var(--fg-muted) 80%, var(--fg-default));
+  --hw-text-3: var(--fg-muted);
 }

@@ -139,4 +139,26 @@ function nativeKeys(kind, opts, env = process.env) {
   for (const field of ['acpSid','kimiSid','geminiChatId']) if (opts[field]) keys.push(kind.replace(/-resume$/, '') + ':' + field + ':' + opts[field]);
   return keys;
 }
-module.exports = {SessionOpenOwnership, nativeKeys, occupied, alive};
+// 协调库被另一个 Hub 进程占着写锁（SQLITE_BUSY，errcode 5）。2026-11-22 傍晚升级后旧 Hub 没退出，
+// 新旧两个 Hub 共用这一个库约 7 小时，新建会话 10 次报 ERR_SQLITE_ERROR（每次约 1.2 秒 = 1 秒忙等 + 检查）。
+function isOwnershipBusy(error) {
+  return error?.code === 'ERR_SQLITE_ERROR' && (Number(error.errcode) & 255) === 5;
+}
+// 登记打开会话时库忙：主线程上不能长时间同步等锁，改成异步隔一会儿再试（共约 2 秒），仍忙再报一句人话。
+// 只重试同步抛出的那一下（会话登记是建会话的第一步，之前没有任何副作用）。
+const BUSY_RETRY_DELAYS_MS = [200, 600, 1200];
+function retryWhenOwnershipBusy(run, { delays = BUSY_RETRY_DELAYS_MS, wait = ms => new Promise(resolve => setTimeout(resolve, ms)) } = {}) {
+  const attempt = index => {
+    try { return run(); }
+    catch (error) {
+      if (!isOwnershipBusy(error)) throw error;
+      if (index >= delays.length) {
+        throw Object.assign(new Error('会话登记库正被另一个 AI HUB 进程占用，稍后再试；若刚升级过，请确认旧版 Hub 已退出'),
+          { code: 'SESSION_OPEN_BUSY', errcode: error.errcode, cause: error.message });
+      }
+      return wait(delays[index]).then(() => attempt(index + 1));
+    }
+  };
+  return attempt(0);
+}
+module.exports = {SessionOpenOwnership, nativeKeys, occupied, alive, isOwnershipBusy, retryWhenOwnershipBusy, BUSY_RETRY_DELAYS_MS};

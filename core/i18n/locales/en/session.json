@@ -218,6 +218,17 @@
   "展开提示详情": "Expand notice details",
   "折叠提示详情": "Collapse notice details",
   "需要授权或回答问题": "Permission or an answer is needed",
+  "去后台": "Open console",
+  "允许": "Allow",
+  "允许且不再询问": "Allow, don't ask again",
+  "允许 {0}：{1}？": "Allow {0}: {1}?",
+  "允许 {0}？": "Allow {0}?",
+  "已发送，终端尚未确认": "Sent; the terminal has not confirmed yet",
+  "没有送达": "Not delivered",
+  "终端在等你选择": "The terminal is waiting for your choice",
+  "收起提示": "Hide notice",
+  "收起此提示，不会取消终端正在等待的操作": "Hide this notice; the pending terminal action is not cancelled",
+  "切到终端视图，在 CLI 原生界面里处理": "Switch to terminal view and handle it in the native CLI",
   "===== 第 {0} 轮 =====": "===== Turn {0} =====",
   "我：": "Me:",
   "· 全部": "· All",
@@ -512,5 +523,6 @@
   "（还有 {0} 条待处理）": " ({0} more pending)",
   "这条消息可能没送到：{0}。{1}，请先到终端看一眼是否已收到{2}": "This message may not have been delivered: {0}. {1}; check the terminal first to see whether it arrived{2}",
   "消息没发出去：{0}。{1}{2}": "Message not sent: {0}. {1}{2}",
-  "关闭这条提示": "Close this notice"
+  "关闭这条提示": "Close this notice",
+  "先别重复发送 ⓘ": "Don't resend yet ⓘ"
 }

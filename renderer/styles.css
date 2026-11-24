@@ -24,16 +24,53 @@
   box-shadow: 0 8px 32px #0006; z-index: 40; font-size: 13px;
 }
 .codex-native-controls[hidden] { display: none; }
-/* The native terminal already owns the question/approval UI. The handoff
-   panel belongs to card view; covering the TUI would hide its answer choices. */
+/* The native terminal already owns the question/approval UI. In card view the
+   waiting hint is one quiet line above the composer (renderer/pty-attention-controls.js):
+   small text chips, no overlay, nothing covering the conversation. */
 .pty-attention-controls { display: none; }
-.card-view-active .pty-attention-controls:not([hidden]) { display: block; }
+.card-view-active .pty-attention-controls:not([hidden]) { display: flex; }
 .split-secondary:not(.card-view-active) .pty-attention-controls { display: none; }
-.pty-attention-header { display: flex; align-items: center; gap: 8px; }
-.pty-attention-header strong { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.pty-attention-header button { flex: none; }
-.pty-attention-controls .pty-attention-header { position: sticky; top: 0; }
-.pty-attention-controls .pty-attention-detail[hidden] { display: none; }
+.pty-choice-inline {
+  align-items: center; gap: 6px; min-width: 0; margin: 0 2px 4px; padding: 0 2px;
+  font-size: 12px; line-height: 20px; color: var(--text-secondary, #8a919e);
+}
+/* 输入区高度是锁死的（fixed-session-layout.css），提示行跟快捷答复一样贴在输入框上沿外侧，不挤压输入框；
+   只有文字那么宽，底色同页面，不加阴影和边框。 */
+.terminal-panel .pty-choice-inline {
+  position: absolute; bottom: calc(100% + 4px); left: 0; z-index: 5;
+  width: max-content; max-width: 100%; box-sizing: border-box; margin: 0; padding: 1px 6px;
+  background: var(--bg-primary, #fff); border-radius: 10px;
+}
+/* CodeAgent-Lite 只有工具授权时，原生操作区也收成同样的一行小字（renderer/codex-native-controls.js renderQuietPermission）。 */
+:root body .codex-native-controls.native-controls-quiet {
+  bottom: calc(100% + 4px); right: auto; width: max-content; max-width: 100%; box-sizing: border-box;
+  padding: 1px 6px; font-size: 12px; line-height: 20px; color: var(--text-secondary, #8a919e);
+  background: var(--bg-primary, #fff); border: 0; border-radius: 10px; box-shadow: none;
+}
+.native-quiet-request { display: flex; align-items: center; gap: 4px; min-width: 0; }
+:root body .native-quiet-request + .native-quiet-request { border-top: 0; margin-top: 2px; padding-top: 0; }
+.native-quiet-request .native-quiet-question { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 2px; }
+:root body .codex-native-controls.native-controls-quiet button {
+  flex: none; margin: 0; padding: 0 7px; height: 20px; min-height: 0; line-height: 18px; font-size: 12px;
+  color: inherit; background: transparent; border: 1px solid var(--border-color, #d5d9e0); border-radius: 10px;
+}
+:root body .codex-native-controls.native-controls-quiet button[data-kind='allow_once'] { color: var(--accent, #3478f6); border-color: currentColor; }
+.native-quiet-request .codex-native-error:empty { display: none; }
+.pty-choice-inline .pty-choice-question { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pty-choice-inline .pty-choice-options { display: inline-flex; flex: none; gap: 4px; }
+.pty-choice-inline .pty-choice-options[hidden] { display: none; }
+.pty-choice-inline button {
+  flex: none; margin: 0; padding: 0 7px; height: 20px; min-height: 0; line-height: 18px; font-size: 12px;
+  color: inherit; background: transparent; border: 1px solid transparent; border-radius: 10px; cursor: pointer; box-shadow: none;
+}
+.pty-choice-inline button:hover:not(:disabled) { border-color: var(--border-color, #c9ced6); color: var(--text-primary, #2b2f36); }
+.pty-choice-inline button:disabled { opacity: .5; cursor: wait; }
+.pty-choice-inline .pty-choice-option { border-color: var(--border-color, #d5d9e0); }
+.pty-choice-inline .pty-choice-option[data-tone='allow'] { color: var(--accent, #3478f6); border-color: currentColor; }
+.pty-choice-inline .pty-choice-note:empty { display: none; }
+.pty-choice-inline .pty-choice-note { flex: none; color: #c98a2b; }
+.pty-choice-inline .pty-choice-backstage { opacity: .75; text-decoration: underline; text-underline-offset: 2px; padding: 0 3px; }
+.pty-choice-inline .pty-choice-close { opacity: .55; padding: 0 4px; }
 .acp-queued-preview { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; margin: 6px 0; }
 .codex-native-request + .codex-native-request { border-top: 1px solid #7777; margin-top: 14px; padding-top: 14px; }
 .codex-native-controls label { display: block; margin: 10px 0 6px; }

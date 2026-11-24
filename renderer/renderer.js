@@ -664,7 +664,7 @@ function saveFloatingInputDraft(sessionId, inputBox) {
 function clearFloatingInputDraft(sessionId) {
   if (sessionId) {
     try { require('./composer-codeagent-skills').clearSkillDraft(localStorage, sessionId); }
-    catch (error) { showToast('技能草稿清理失败：' + error.message, 'error'); }
+    catch (error) { showToast('技能草稿清理失败：' + error.message, 'error', { noticeKind: 'background' }); }
   }
   if (sessionId) floatingInputDrafts.delete(sessionId);
   if (sessionId) rawComposerDrafts.delete(sessionId);
@@ -675,7 +675,7 @@ function clearFloatingInputDraft(sessionId) {
   }
   if (sessionId) {
     try { localStorage.removeItem('hub.claude-native.draft.v1:' + sessionId); }
-    catch (error) { showToast('草稿清理失败：' + error.message, 'error'); }
+    catch (error) { showToast('草稿清理失败：' + error.message, 'error', { noticeKind: 'background' }); }
   }
 }
 
@@ -1410,7 +1410,7 @@ function paintSidebarResumePending(sessionId, pending) {
   }
 }
 
-function showDormantResumePlaceholder(session, error = null, { checking = false, timedOut = false } = {}) {
+function showDormantResumePlaceholder(session, error = null, { checking = false, timedOut = false, switching = false } = {}) {
   if (!terminalPanelEl || !session) return;
   suspendInactiveTerminalRenderers(null);
   terminalPanelEl.classList.remove('home-active');
@@ -1425,10 +1425,10 @@ function showDormantResumePlaceholder(session, error = null, { checking = false,
   spinner.setAttribute('aria-hidden', 'true');
   const copy = document.createElement('div');
   const title = document.createElement('strong');
-  title.textContent = timedOut ? '唤醒没有完成' : error ? '会话唤醒失败' : checking ? '正在检查会话…' : '正在唤醒会话…';
+  title.textContent = timedOut ? '唤醒没有完成' : error ? '会话唤醒失败' : switching ? '正在切换到终端方式…' : checking ? '正在检查会话…' : '正在唤醒会话…';
   const detail = document.createElement('span');
   detail.textContent = error || timedOut ? 'ⓘ'
-    : `${session.title || 'Session'} · ${checking ? '正在确认会话可用' : '正在恢复原生 CLI 与历史上下文'}`;
+    : `${session.title || 'Session'} · ${switching ? 'CodeAgent 轻享服务暂不可用，正在改用终端方式继续' : checking ? '正在确认会话可用' : '正在恢复原生 CLI 与历史上下文'}`;
   if (error || timedOut) {
     detail.title = error ? String(error.message || error)
       : '原唤醒可能仍在进行，结束前不能重试。可以先查看历史，或在原目录新建会话（不继承对话内容）。';
@@ -3644,7 +3644,7 @@ ipcRenderer.on('turn-failed-event', (_event, payload) => {
     session.lastRunDurationMs = at - runStartedAt;
   }
   session.runStartedAt = null;
-  session.lastError = String(message || 'Codex turn failed').slice(0, 1000);
+  session.lastError = String(message || '本轮执行失败（没有拿到具体原因）').slice(0, 1000);
   if (cliExited) {
     session.codeagentTrustedRepoRequired = !!payload.trustedRepoRequired;
     session.codeagentTrustedRepoFailedAt = payload.trustedRepoRequired ? at : null;
@@ -5037,10 +5037,17 @@ window.__hubRestartSessionInPlace = restartSessionInPlace;
 // 报错卡（renderer/turn-error-help.js）按会话类型决定给不给「压缩后继续」、新开会话沿用哪种类型和目录；只给这几个字段。
 window.__hubSessionBasics = sessionId => {
   const s = sessions.get(sessionId);
-  return s ? { kind: s.kind, cwd: s.cwd || '', workspaceLabel: s.workspaceLabel || '', title: s.title || '', ccSessionId: s.ccSessionId || '', codexSid: s.codexSid || '' } : null;
+  return s ? { kind: s.kind, cwd: s.cwd || '', workspaceLabel: s.workspaceLabel || '', title: s.title || '', ccSessionId: s.ccSessionId || '', codexSid: s.codexSid || '',
+    quotaAuto: require('./turn-error-help').quotaAutoText(s) } : null;
 };
 // 反馈只诊断当前聚焦的会话，不扫其他会话的内容。
 window.__hubFeedbackSessionId = () => getFocusedSessionId();
+// 一键反馈优先带哪些日志：正在看的页面（门户页开着时算门户）；停在会话上时才带会话类型，
+// 页面（门户、助理、主页等）开着时后台那个会话和这次问题无关。
+window.__hubFeedbackContext = () => {
+  const view = document.body.classList.contains('company-w3-page-open') ? '门户' : String(currentAppToolbarView() || '');
+  return require('../core/hub-feedback').feedbackContext({ view, kind: sessions.get(getFocusedSessionId())?.kind });
+};
 // 报错旁的「去后台」（renderer/hub-error-card.js known:open-backstage）：切到这个会话并打开后台终端，和点顶栏「后台」同一条路。
 window.__hubOpenBackstage = async sessionId => {
   if (!sessionId || !sessions.has(sessionId)) return { ok: false };
@@ -5744,8 +5751,10 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       saveFloatingInputDraft(sessionId, inputBox); inputBox.focus();
     },
   });
-  // PTY 会话等人操作时的提示条：只指路，不代答。
+  // PTY 会话等人操作时的一行小字：认出选择菜单就就地作答（主进程核对画面后按键），认不出才指去后台。
   const ptyAttention = require('./pty-attention-controls').createPtyAttentionControls({
+    invoke: (channel, payload) => ipcRenderer.invoke(channel, payload),
+    getSessionId: () => sessionId,
     onOpenTerminal: () => {
       if (pane.openTerminal) pane.openTerminal();
       else if (activeSessionId === sessionId) applyViewMode('pty');
@@ -5792,7 +5801,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
     const backgroundBusy = require('./session-background-tasks').isBackgroundPurpose(session.purpose) && isSessionCardWorking(session);
     const editable = backgroundBusy ? 'false' : 'true';
     if (inputBox.contentEditable !== editable) inputBox.contentEditable = editable;
-    const detailText = [backgroundBusy ? require('./session-background-tasks').BUSY_NOTICE : '', localHealth, status.detail, jobsText, hookWarning, writingWarning, userContextWarning, session.claudeSwitchStatus?.message].filter(Boolean).join(' · ');
+    const detailText = [backgroundBusy ? require('./session-background-tasks').BUSY_NOTICE : '', localHealth, status.detail, jobsText, hookWarning || writingWarning || userContextWarning ? '部分功能降级 ⓘ' : '', require('../core/notice-gate').switchStatusVisible(session.claudeSwitchStatus) ? session.claudeSwitchStatus.message : ''].filter(Boolean).join(' · ');
     const detail = detailText ? `· ${detailText}` : '';
     if (statusDetail.textContent !== detail) statusDetail.textContent = detail;
     statusDetail.hidden = !detail;
@@ -5804,7 +5813,8 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       statusAction.hidden = true;
       statusAction.dataset.actionKind = '';
     }
-    const statusTitle = [status.runtime.title, userContextWarning].filter(Boolean).join('\n');
+    // 降级说明不常驻（2026-11-24 提示大清理）：状态行只留「部分功能降级 ⓘ」几个字，完整原因悬停看。
+    const statusTitle = [status.runtime.title, status.retryNote, hookWarning, writingWarning, userContextWarning].filter(Boolean).join('\n');
     if (statusRow.title !== statusTitle) statusRow.title = statusTitle;
     ptyAttention.update(session, runtime);
 
@@ -6351,6 +6361,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
       claudeAccountChip.dispose();
       codexAccountChip.dispose();
       promptPolish.dispose();
+      ptyAttention.dispose();
       if (chromeObserver) chromeObserver.disconnect();
       // 输入栏拆掉后变量必须归零，否则卡片层会一直给一条不存在的栏留空白。
       if (panel && bar.parentNode === panel) panel.style.setProperty('--fi-bar-h', '0px');
@@ -8225,6 +8236,7 @@ ipcRenderer.on('codex-backstage-updated', (_event, event) => {
 });
 ipcRenderer.on('terminal-data', (_e, { sessionId, data, seq }) => {
   terminalWarmup.output(sessionId, data);
+  require('./pty-attention-controls').notePtyOutput(sessionId);
   noteStreamDisconnect(sessionId, data);
   const cached = terminalCache.get(sessionId);
   if (!cached) return;
@@ -8859,7 +8871,20 @@ function ptyToolQuestionText(toolName, toolInput) {
 // renderer 里有 14 处调用 showToast，却一直没有定义（调用即 ReferenceError，
 // 之前只在少见的原生分支里，没人撞上）。复用群聊分叉已有的轻提示。
 // 错误类（5.5.24）：2.6 秒来不及读，改成停留 8 秒、悬停不消失，带「详情」可展开成错误卡（含求助按钮）。
+// 提示闸门（core/notice-gate.js）：自动恢复、探测、后台任务、同会话同原因的重复提示都在这里拦下，只进日志。
+const noticeGate = require('../core/notice-gate').createNoticeGate({
+  log: (event, detail) => { try { ipcRenderer.send('notice-gate:muted', detail); } catch {} },
+});
+window.__hubNoticeGate = noticeGate;
+// 闸门自己出错时宁可多显示一条，也不能把真失败吞掉（fail-open）。
+function noticeGateAllows(notice) {
+  try { return noticeGate.decide(notice).show !== false; }
+  catch (error) { try { console.warn('[notice-gate] decide failed, showing notice:', error && error.message); } catch {} return true; }
+}
+
 function showToast(message, level, options = {}) {
+  // 渲染进程里直接调 showToast 的大多是用户刚点的按钮的结果，默认算 user-action；后台来源要显式带 noticeKind。
+  if ((level === 'error' || level === 'warning') && !noticeGateAllows({ message, level, sessionId: options.sessionId, noticeKind: options.noticeKind || 'user-action' })) return null;
   if (message === '已停止') return require('./composer-codeagent-input').showStopToast(document, message);
   // options.sessionId：这条报错属于哪个会话，提示上的「重启会话」「换模型」只作用在它上面（不猜当前会话）。
   if (level === 'error') {
@@ -8926,6 +8951,8 @@ ipcRenderer.on('session-create-followup', (_event, payload = {}) => {
 
 ipcRenderer.on('session-notice', (_event, payload = {}) => {
   if (!payload || !payload.message) return;
+  // 主进程推来的提示都是自动产生的：先过闸门（换模型卡片是真要用户选的，不拦）。
+  if (!payload.modelUnavailable && !noticeGateAllows(payload)) return;
   const session = payload.sessionId ? sessions.get(payload.sessionId) : null;
   const text = `${session && session.title ? session.title + '：' : ''}${payload.message}`;
   if (payload.modelUnavailable) {
@@ -8947,7 +8974,7 @@ ipcRenderer.on('session-notice', (_event, payload = {}) => {
       });
     }
   }
-  else showToast(text, payload.level);
+  else showToast(text, payload.level, { noticeKind: 'user-action', sessionId: payload.sessionId });
 });
 
 // PermissionRequest 不带工具参数（hook 边界的既有约定）；同一次调用的 PreToolUse
@@ -10419,13 +10446,16 @@ ipcRenderer.on('session-suspended', (_e, { sessionId, session }) => {
   clearTerminalActivitySession(sessionId);
   disposeCachedTerminal(sessionId);
   nativeDraftControllers.delete(sessionId);
-  if (activeSessionId === sessionId && _restartKeepOpen.has(sessionId)) {
+  // CodeAgent-Lite 改回终端（suspendReason=serve-fallback）：用户正看着它时同样原地保持，新终端建好后由 session-created 挂回；
+  // 已切去别处的不动画面（新会话后台接上）。
+  const serveFallbackKeepOpen = session?.suspendReason === 'serve-fallback' && !activeMeetingId;
+  if (activeSessionId === sessionId && (_restartKeepOpen.has(sessionId) || serveFallbackKeepOpen)) {
     // 用户正看着它点了重启：保持选中，主区显示「正在唤醒」，恢复后 session-created 按当前选中照常挂回（restartSessionInPlace）。
     local._resumePending = true;
     paintSidebarResumePending(sessionId, true);
     ipcRenderer.send('focus-session', { sessionId: null });
     cardMultiSelectController.setVisible(false);
-    showDormantResumePlaceholder(local);
+    showDormantResumePlaceholder(local, null, { switching: serveFallbackKeepOpen && !_restartKeepOpen.has(sessionId) });
   } else if (activeSessionId === sessionId) {
     activeSessionId = null;
     if (fileManagerPanel) fileManagerPanel.close();

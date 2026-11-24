@@ -1,13 +1,17 @@
 /* 模型服务报错的人话说明。颜色走主题变量，六个主题都能用。 */
-.turn-error-help { margin: 4px 0 8px; padding: 12px 14px; border: 1px solid var(--border-subtle); border-left: 3px solid var(--warning, #e8780c); border-radius: 10px; background: var(--surface-raised); }
-.turn-error-help .teh-title { font-size: 14px; font-weight: 600; color: var(--fg-strong); }
+/* 小而低调（2026-11-24 用户）：没有底色块和外框，只一条细色线加小字。 */
+.turn-error-help { margin: 4px 0 4px; padding: 1px 0 1px 8px; border-left: 2px solid var(--warning, #e8780c); background: transparent; }
+.turn-error-help.teh-auto { border-left-color: var(--border-subtle); }
+.turn-error-help .teh-title { font-size: 12.5px; font-weight: 500; color: var(--fg-strong); }
+.turn-error-help.teh-auto .teh-title { font-weight: 400; color: var(--fg-muted); }
+.turn-error-help .teh-info { margin-left: 6px; font-weight: 400; color: var(--fg-muted); cursor: help; }
 .turn-error-help .teh-detail { margin-top: 4px; font-size: 13px; line-height: 1.6; color: var(--fg-muted); }
 .turn-error-help .teh-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 /* 只有一句标题的类（请求太大）：标题和按钮同一行，窄了再折行。 */
 .turn-error-help .teh-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .turn-error-help .teh-row .teh-actions { margin-top: 0; }
-.turn-error-help .teh-btn { padding: 4px 12px; border: 1px solid var(--border-subtle); border-radius: 999px; background: transparent; color: var(--fg-strong); font: inherit; font-size: 12px; cursor: pointer; }
-.turn-error-help .teh-btn:first-child { background: var(--brand); border-color: var(--brand); color: #fff; }
+.turn-error-help .teh-btn { padding: 0 8px; line-height: 18px; border: 1px solid var(--border-subtle); border-radius: 999px; background: transparent; color: var(--fg-strong); font: inherit; font-size: 12px; cursor: pointer; }
+.turn-error-help .teh-btn:first-child { color: var(--brand); border-color: var(--brand); }
 .turn-error-help .teh-btn:hover { border-color: var(--brand); }
 .teh-raw { margin: 0 0 4px; font-size: 12px; color: var(--fg-muted); }
 .teh-raw > summary { cursor: pointer; user-select: none; }

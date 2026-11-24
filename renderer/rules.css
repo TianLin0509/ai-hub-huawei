@@ -25,14 +25,14 @@
 .rl-tab:hover { color: var(--fg-strong); }
 .rl-tab.active { color: var(--fg-strong); font-weight: 600; border-bottom-color: var(--brand); }
 .rl-spacer { flex: 1; }
-.rl-version { font-size: 11px; color: var(--fg-faint); margin-bottom: 12px; white-space: nowrap; }
+.rl-version { font-size: 11px; color: var(--fg-muted); margin-bottom: 12px; white-space: nowrap; }
 
 .rl-summary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 22px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-canvas); font-size: 13px; }
 .rl-summary:empty { display: none; }
 .rl-summary-label { font-weight: 600; color: var(--fg-strong); }
 .rl-chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px 2px 3px; border-radius: var(--radius-pill); border: 1px solid var(--border-subtle); background: var(--surface-raised); color: var(--fg-default); white-space: nowrap; }
 .rl-chip b { font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: var(--radius-pill); }
-.rl-chip.on b { background: var(--brand); color: var(--fg-inverse); }
+.rl-chip.on b { background: var(--brand); color: var(--hw-text-on, var(--fg-inverse)); }
 .rl-chip.off b { background: var(--surface-sunken); color: var(--fg-muted); border: 1px solid var(--border-subtle); }
 
 .rl-body { flex: 1; min-height: 0; overflow: auto; padding: 16px 22px 24px; }
@@ -71,7 +71,7 @@
 .rl-seg { display: inline-flex; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; }
 .rl-seg button { font: inherit; font-size: 12px; padding: 4px 12px; border: 0; background: var(--surface-sunken); color: var(--fg-muted); cursor: pointer; }
 .rl-seg button + button { border-left: 1px solid var(--border-subtle); }
-.rl-seg button.on { background: var(--brand); color: var(--fg-inverse); }
+.rl-seg button.on { background: var(--brand); color: var(--hw-text-on, var(--fg-inverse)); }
 .rl-seg button:disabled { opacity: .45; cursor: default; }
 
 .rl-doc { font-size: 14px; line-height: 1.75; color: var(--fg-default); max-width: 860px; }

@@ -104,9 +104,11 @@ test('其他状态码不受 413 规则影响', () => {
   assert.equal(kind('API Error: 400 {"error":{"message":"prompt is too long: 210000 tokens > 200000 maximum"}}'), 'context');
   const other = classifyError('API Error: 418 teapot');
   assert.deepEqual(other.actions, ['retry', 'model', 'feedback']);
-  // 有说明段的类照旧三段式显示，按钮文字不变。
+  // 有说明段的类也压成一行：说明进标题后的 ⓘ 悬停（隐藏的 .teh-detail 仍给求助按钮取文字），按钮文字不变。
   const html = require('../renderer/turn-error-help').renderHelp(classifyError('API Error prompt is too long'), String, { askHub: false });
-  assert.match(html, /teh-detail/);
+  assert.match(html, /class="teh-row"/);
+  assert.match(html, /class="teh-info" title="[^"]+"/);
+  assert.match(html, /class="teh-detail" hidden/);
   assert.match(html, /data-teh="compact">压缩上下文</);
 });
 

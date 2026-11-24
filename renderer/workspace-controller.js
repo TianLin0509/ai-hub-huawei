@@ -2282,8 +2282,12 @@
     if (selectedKind === 'codeagent' && !modelTouchedByUser && codeagentFollowCli) opts.codeagentFollowCli = true;
     if (permissionModes.supportsSwitch(selectedKind)) opts.permissionMode = currentPermissionMode();
     if (selectedKind === 'codeagent' && effectiveCodeagentRunMode() === 'serve') opts.codeagentRunMode = 'serve';
+    // 低开销模式隐式切来的 serve：账号的 serve 近期起不来时，主进程直接改走终端，不白等（core/codeagent-serve-fallback.js）。
+    if (selectedKind === 'codeagent' && opts.codeagentRunMode === 'serve' && !codeagentLite && codeagentRunMode !== 'serve') opts.lowOverheadServe = true;
     // CodeAgent-Lite 入口：固定共享 serve，不带思考强度（serve 不支持）。
     if (selectedKind === 'codeagent' && codeagentLite) { opts.codeagentRunMode = 'serve'; delete opts.effort; }
+    // 用户亲手点的 Lite：冷却期间也允许再试连一次。
+    if (selectedKind === 'codeagent' && codeagentLite) opts.explicitCodeagentLite = true;
     if (cardRunEligible() && cardRunModes[selectedKind] === 'card') opts.cardRunMode = 'card';
     if (selectedKind === 'codeagent' && codeagentPoolRequested()) {
       opts.codeagentAccount = 'pool';

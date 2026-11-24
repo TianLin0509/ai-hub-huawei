@@ -8,7 +8,9 @@
 //   一键反馈 20261102：「Error: 模型 "…" 不存在或配置有误，请检查模型配置」。
 // 其余英文形式来自同内核 CLI 的公开错误文档（401 登录失效、429 限流、5xx 服务异常、prompt is too long），公司真机出现新样本时补进来。
 // 网关名（成员版带品牌、公开版不带）与本机代理报错的中性前缀「API 网关：」，见 core/api-gateway-errors.js。
-const ERROR_LINE = /^\s*(?:API\s*Error\b|Error:\s*模\s*型\s)/i;
+// Claude 订阅额度用完时 CLI 只写一句「You've hit your 5-hour limit · resets 3:10am」「You've reached your Fable limit…」，
+// 不带 API Error 前缀（本机 2026-11-10～24 记录 227 次，是最常见的报错），也按报错认。
+const ERROR_LINE = /^\s*(?:API\s*Error\b|Error:\s*模\s*型\s|You[’']ve\s+(?:hit|reached)\s+your\s+[^\n]{0,40}\blimit\b)/i;
 
 const KINDS = [
   // 请求太大（413，2026-11-23 WeLink 反馈 v5.6.91 Codex 走公司模型）：「unexpected status 413 Payload Too Large: 公司模型上游返回 HTTP 413（请求太大…）」。
@@ -30,7 +32,7 @@ const KINDS = [
     title: '登录过期了', detail: '这个账号的登录已经失效，重新登录一次就好，刚才的对话不会丢。', actions: ['accounts', 'retry'] },
   { kind: 'model', test: /模\s*型[^\n]{0,100}(?:不\s*存\s*在|配\s*置\s*有\s*误)|model[^\n]{0,80}(?:not\s*found|does\s*not\s*exist|not\s*available)|无权限使用/i,
     title: '这个号用不了这个模型', detail: '要么是这个号没有这个模型的权限，要么模型名已经换了。换一个模型继续就行，对话不会丢。', actions: ['model', 'accounts'] },
-  { kind: 'quota', test: /token\s*消耗\s*过快|已\s*达\s*到[^\n]{0,20}上\s*限|额度|配额|余额|quota|credit|balance|insufficient|billing/i,
+  { kind: 'quota', test: /You[’']ve\s+(?:hit|reached)\s+your\s+[^\n]{0,40}\blimit\b|usage[\s-]*credits|token\s*消耗\s*过快|已\s*达\s*到[^\n]{0,20}上\s*限|额度|配额|余额|quota|credit|balance|insufficient|billing/i,
     title: '这个账号的额度用完了', detail: '可以换一个模型或账号继续，也可以等额度恢复（一般是第二天 0 点）。对话不会丢。', actions: ['model', 'accounts', 'retry'] },
   { kind: 'context', test: /prompt\s+is\s+too\s+long|context[_\s-]*(?:length|window|limit)|maximum\s+context|too\s+many\s+tokens|上下文[^\n]{0,20}(?:过长|超|太长)/i,
     title: '这个会话太长了', detail: '内容超过了模型一次能读的上限。压缩一下上下文再发，或者开一个新会话接着做。', actions: ['compact', 'new-session'] },
@@ -80,9 +82,10 @@ function renderHelp(info, escapeHtml, { askHub = askHubReady(), session = null }
   const label = action => (info.labels && info.labels[action]) || ACTION_LABELS[action];
   const buttons = actionsFor(info, session).map(action => `<button type="button" class="teh-btn" data-teh="${action}">${escapeHtml(label(action))}</button>`).join('')
     + (askHub ? `<button type="button" class="teh-btn" data-teh="ask-hub" title="照使用说明书马上告诉你这是什么问题、下一步怎么做（不开新会话，只读）">${escapeHtml(ACTION_LABELS['ask-hub'])}</button>` : '');
-  // 没有说明段的类（请求太大）：标题和按钮排成一行。
-  if (!info.detail) return `<div class="teh-row"><div class="teh-title">${escapeHtml(info.title)}</div><div class="teh-actions">${buttons}</div></div>`;
-  return `<div class="teh-title">${escapeHtml(info.title)}</div><div class="teh-detail">${escapeHtml(info.detail)}</div><div class="teh-actions">${buttons}</div>`;
+  // 一律一行：标题 + 按钮；说明不常驻，放进标题后的 ⓘ 悬停（2026-11-24 提示大清理）。隐藏的 .teh-detail 给「问问 Hub」「一键反馈」取文字。
+  const info_ = info.detail
+    ? `<span class="teh-info" title="${escapeHtml(info.detail)}" aria-label="${escapeHtml(info.detail)}">ⓘ<span class="teh-detail" hidden>${escapeHtml(info.detail)}</span></span>` : '';
+  return `<div class="teh-row"><div class="teh-title">${escapeHtml(info.title)}${info_}</div><div class="teh-actions">${buttons}</div></div>`;
 }
 
 function sessionOf(card, win = typeof window !== 'undefined' ? window : null) {
@@ -90,16 +93,71 @@ function sessionOf(card, win = typeof window !== 'undefined' ? window : null) {
   try { return (id && typeof win?.__hubSessionBasics === 'function' && win.__hubSessionBasics(id)) || null; } catch { return null; }
 }
 
+// 额度用完、但 Hub 已经在自动处理（2026-11-24 提示大清理）：原生 Claude 的额度等待会到点自动继续；
+// 开了「额度耗尽自动换号」的 PTY 会话会自己换号续跑。这时不是真失败：同会话只在第一张报错卡上说一行，之后静默。
+// 换号确认没有可用账号（waiting）或换号出错（attention、manual-failed）时返回空，按真失败显示。
+function quotaAutoText(session) {
+  if (!session) return '';
+  const wait = session.nativeRuntime && session.nativeRuntime.quotaWait;
+  if (wait && wait.status !== 'stale') {
+    const at = Number(wait.resetsAt) || 0;
+    const clock = at > 0 ? new Date(at).toTimeString().slice(0, 5) : '';
+    return wait.status === 'resuming' ? '额度已恢复，正在自动继续' : `额度用完，${clock ? clock + ' ' : '恢复后'}自动继续`;
+  }
+  if (session.claudeAutoSwitch === true) {
+    const status = session.claudeSwitchStatus && session.claudeSwitchStatus.status;
+    if (['waiting', 'attention', 'manual-failed', 'cancelled'].includes(status)) return '';
+    return ['switched', 'continued'].includes(status) ? '额度用完，已自动换号继续' : '额度用完，正在自动换号继续';
+  }
+  return '';
+}
+
+// 同会话同原因只说一次（2026-11-24 提示大清理）：账号状态类报错（额度、登录、key）同一会话里重复出现时，
+// 只有第一张卡说一行，之后的卡只留折叠的「原始报错」。按原因原文区分：额度到点重置后再撞墙（resets 时间不同）照样再说。
+// Hub 正在自动处理的额度用完不看原文，整个会话只说一次。记的是第一张卡的 turnId，同一张卡重绘照样显示。
+const ONCE_KINDS = new Set(['quota', 'auth', 'gateway-key', 'gateway-quota']);
+const onceShown = new Map();
+function firstInSession(card, key) {
+  const k = (card.dataset.sessionId || '') + '|' + key, turnId = card.dataset.turnId || '';
+  if (!onceShown.has(k)) { onceShown.set(k, turnId); return true; }
+  return onceShown.get(k) === turnId;
+}
+function collapseOnly(doc, last) {
+  const raw = doc.createElement('details');
+  raw.className = 'teh-raw';
+  raw.innerHTML = '<summary>原始报错</summary>';
+  last.parentNode.insertBefore(raw, last);
+  raw.append(last);
+  return true;
+}
+
 // 正文里最后一段是报错时才处理：回答中间引用报错原文的不算。
 function enhanceCard(card) {
   if (!card || !card.classList?.contains('turn-card') || !card.classList.contains('assistant')) return false;
-  if (card.querySelector('.turn-error-help')) return true;
+  if (card.querySelector('.turn-error-help, .teh-raw')) return true;
   const body = card.querySelector('.turn-body');
   const blocks = body ? [...body.querySelectorAll('p, pre')].filter(el => (el.textContent || '').trim()) : [];
   const last = blocks[blocks.length - 1];
   const info = last ? classifyError(last.textContent) : null;
   if (!info) return false;
   const doc = card.ownerDocument;
+  const session = sessionOf(card, doc.defaultView);
+  const auto = info.kind === 'quota' && session && session.quotaAuto;
+  if (auto) {
+    if (firstInSession(card, 'quota-auto')) {
+      // 一行，没有按钮：Hub 正在自己处理，用户什么都不用做。
+      const line = doc.createElement('div');
+      line.className = 'turn-error-help teh-auto';
+      line.dataset.errorKind = 'quota-auto';
+      line.dataset.copyExclude = '';
+      const row = doc.createElement('div'), title = doc.createElement('div');
+      row.className = 'teh-row'; title.className = 'teh-title'; title.textContent = String(auto);
+      row.append(title); line.append(row);
+      last.parentNode.insertBefore(line, last);
+    }
+    return collapseOnly(doc, last);
+  }
+  if (ONCE_KINDS.has(info.kind) && !firstInSession(card, info.kind + '|' + last.textContent.replace(/\s+/g, ' ').trim().slice(0, 200))) return collapseOnly(doc, last);
   const help = doc.createElement('div');
   help.className = 'turn-error-help';
   help.dataset.errorKind = info.kind;
@@ -178,4 +236,4 @@ function install({ document: doc, window: win, ipcRenderer }) {
   });
 }
 
-module.exports = { classifyError, isErrorLine, enhanceCard, renderHelp, runAction, install, supportsCompact, actionsFor, ACTION_LABELS };
+module.exports = { classifyError, isErrorLine, enhanceCard, quotaAutoText, renderHelp, runAction, install, supportsCompact, actionsFor, ACTION_LABELS };

@@ -35,11 +35,11 @@
   white-space: nowrap;
 }
 
-/* D — 聚焦搜索。搜索面板的浅色阅读主题独立于宿主主题。 */
+/* D — 聚焦搜索。搜索面板的浅色阅读主题独立于宿主主题。次要字 #6c657e 在面板各层浅底上 ≥4.7（2026-11-24 由 #7c748d 的 3.8–4.4 提上来）。 */
 .session-search-overlay {
   --bg-primary:#f8f6fb;--bg-secondary:#fff;--bg-tertiary:#f1edf7;
-  --text-primary:#302d45;--text-secondary:#625b76;--text-muted:#7c748d;
-  --fg-default:#413c52;--fg-muted:#7c748d;--fg-strong:#665087;--fg-faint:#a49baf;
+  --text-primary:#302d45;--text-secondary:#625b76;--text-muted:#6c657e;
+  --fg-default:#413c52;--fg-muted:#6c657e;--fg-strong:#665087;--fg-faint:#a49baf;
   --border:#e8e5ef;--accent-blue:#7660a4;--accent-green:#7660a4;
   --rgb-neutral:130,117,151;--rgb-success:118,96,164;--rgb-canvas:248,246,251;
   --turn-body-fg:#413c52;--turn-bg-user:transparent;--turn-bg-assistant:transparent;--turn-bg:transparent;
@@ -78,14 +78,14 @@
 .session-search-box:focus-within {box-shadow:inset 0 -2px #b6a3d2;}
 .session-search-box>svg {width:22px;height:22px;flex:none;color:#8e7caa;}
 .session-search-box input {min-width:0;width:100%;flex:1;outline:0 !important;border:0;padding:10px 0;background:transparent;color:#302d45;font-size:17px;}
-.session-search-box input::placeholder {color:#a79daf;}
+.session-search-box input::placeholder {color:var(--text-muted);}
 .session-search-key,.session-search-overlay kbd {font-family:"Cascadia Code",Consolas,monospace;}
 .session-search-key {flex:none;color:#9e93ad;font-size:11px;border:1px solid #e9e4ef;border-radius:5px;padding:3px 6px;}
 .session-search-provider-filters {display:flex;align-items:center;gap:7px;flex-wrap:wrap;padding:14px 24px 16px;}
 .session-search-chip {display:inline-flex;align-items:center;gap:6px;flex:none;min-height:29px;padding:4px 10px;border:1px solid transparent;border-radius:7px;color:#81758f;background:transparent;font-size:12px;white-space:nowrap;}
 .session-search-chip:hover {background:#f8f5fb;}
 .session-search-chip.active {color:#715597;background:#f1ebf8;border-color:#e5dbee;}
-.session-search-chip b {font-size:10px;font-weight:400;color:#8e829b;font-variant-numeric:tabular-nums;}
+.session-search-chip b {font-size:10px;font-weight:400;color:var(--text-muted);font-variant-numeric:tabular-nums;}
 .provider-dot {width:5px;height:5px;border-radius:50%;background:currentColor;flex:none;}
 .session-search-overlay .provider-codex {color:#618b79;}
 .session-search-overlay .provider-claude {color:#b28d74;}
@@ -106,7 +106,7 @@
 .session-search-filter option {color:#302d45;background:#fff;}
 .session-search-quick-filters .session-search-filter>span {display:none;}
 .session-search-quick-filters select {background:transparent;max-width:125px;}
-.session-search-filter-toggle {min-height:28px;white-space:nowrap;border:1px solid #e7e1ee;border-radius:6px;color:#8a7a9f;background:#fff;font-size:11px;padding:4px 9px;}
+.session-search-filter-toggle {min-height:28px;white-space:nowrap;border:1px solid #e7e1ee;border-radius:6px;color:var(--text-muted);background:#fff;font-size:11px;padding:4px 9px;}
 .session-search-filter-toggle.active,.session-search-filter-toggle[aria-expanded=true] {color:#715597;background:#f1ebf8;}
 .session-search-advanced {padding:15px 24px;background:#fcfafd;border-bottom:1px solid #e8e1f0;max-height:35vh;overflow:auto;}
 .session-search-agent-filters,.session-search-specific-providers {display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:10px;color:#8a7f97;font-size:11px;}
@@ -136,7 +136,7 @@
 .session-search-result.active .session-search-result-enter {visibility:visible;}
 .session-search-result mark,.session-search-preview-text mark {color:#715295;background:#e7dced;border-radius:2px;padding:0 1px;}
 .session-search-footer {display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 24px;border-top:1px solid #eeeaf4;color:#9b8fab;font-size:10px;background:#fdfcfe;}
-.session-search-footer kbd {border:1px solid #e9e3ee;border-radius:3px;padding:1px 4px;color:#8a7d99;background:#fff;font-size:9px;}
+.session-search-footer kbd {border:1px solid #e9e3ee;border-radius:3px;padding:1px 4px;color:var(--text-muted);background:#fff;font-size:9px;}
 .session-search-suggestions {display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;width:min(830px,calc(100% - 50px));margin:23px auto 0;color:#a092ae;font-size:11px;}
 .session-search-suggestions button {max-width:180px;border:1px solid #e0d8e8;border-radius:20px;padding:6px 13px;color:#92839f;background:transparent;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:11px;}
 .session-search-suggestions button:hover {background:#fff;color:#715597;}

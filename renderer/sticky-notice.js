@@ -54,20 +54,27 @@ function showStickyNotice(document, message, level = 'warning', options = {}) {
   item.dataset.noticeKey = key;
   item.dataset.level = level === 'error' ? 'error' : 'warning';
   item.setAttribute('role', level === 'error' ? 'alert' : 'status');
+  // 一行紧凑样式（2026-11-24 提示大清理）：只显示第一行，完整文字悬停看；细色条、无大阴影。
   Object.assign(item.style, {
-    display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '12px 12px 12px 14px', borderRadius: '10px',
+    display: 'flex', alignItems: 'center', gap: '6px', padding: '2px 4px 2px 8px', borderRadius: '6px',
     background: 'var(--hw-surface, #ffffff)', color: 'var(--hw-text-1, #182431)',
-    borderLeft: `4px solid ${level === 'error' ? 'var(--hw-red, #d63b3b)' : 'var(--hw-amber, #e8780c)'}`,
-    boxShadow: '0 8px 28px rgba(0,0,0,.18)', font: '13px/1.55 "Microsoft YaHei", "Segoe UI", sans-serif',
+    border: '1px solid var(--hw-line, rgba(24,36,49,.14))',
+    borderLeft: `2px solid ${level === 'error' ? 'var(--hw-red, #d63b3b)' : 'var(--hw-amber, #e8780c)'}`,
+    boxShadow: '0 1px 4px rgba(0,0,0,.08)', font: '12px/1.5 "Microsoft YaHei", "Segoe UI", sans-serif',
   });
+  item.title = text;
   const body = document.createElement('div');
   body.className = 'hub-sticky-notice-text';
-  Object.assign(body.style, { flex: '1', whiteSpace: 'pre-line', overflowWrap: 'anywhere', maxHeight: '40vh', overflowY: 'auto' });
-  body.textContent = text;
+  Object.assign(body.style, { flex: '1', minWidth: '0', display: 'flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' });
+  const line = document.createElement('span');
+  line.className = 'hub-sticky-notice-line';
+  Object.assign(line.style, { minWidth: '0', overflow: 'hidden', textOverflow: 'ellipsis' });
+  line.textContent = text.split(/\r?\n/)[0];
+  body.appendChild(line);
   const close = document.createElement('button');
   close.type = 'button';
   close.className = 'hub-sticky-notice-close';
-  close.textContent = '知道了';
+  close.textContent = '×';
   close.title = '关闭这条提示';
   Object.assign(close.style, {
     flex: 'none', border: '1px solid var(--hw-line, #d5dae0)', borderRadius: '6px', background: 'transparent',
@@ -90,6 +97,15 @@ function showStickyNotice(document, message, level = 'warning', options = {}) {
   }
   item.append(body, close);
   root.appendChild(item);
+  // 不常驻：没有要用户点的按钮的，15 秒后自己收起（悬停时不收）；带「登录」等按钮的留到用户处理。
+  const autoCloseMs = options.onClose ? 0 : (options.autoCloseMs ?? 15000);
+  if (autoCloseMs > 0) {
+    let timer = null;
+    const arm = () => { clearTimeout(timer); timer = setTimeout(() => { if (!item.dataset.action && item.isConnected !== false) item.remove(); }, autoCloseMs); timer?.unref?.(); };
+    item.addEventListener('mouseenter', () => clearTimeout(timer));
+    item.addEventListener('mouseleave', arm);
+    arm();
+  }
   return item;
 }
 

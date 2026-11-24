@@ -249,14 +249,21 @@ function applyCodexEnv(env, { dataDir, sessionId, model, projectDir, account, ga
 // 关掉服务后建智能体失败（「failed to create agent … tool-plugin-manager: waiting for pluginManager」），DSH 直接退出。
 const DSH_DISABLED = ['deepseek-account', 'llm-deepseek', 'llm-deepseek-account', 'web-search-deepseek', 'web-deepseek-api',
   'web-fetch-http', 'tool-web', 'otel', 'session-telemetry-otel', 'session-log-deepseek', 'plugin-package-inventory-deepseek', 'tool-plugin-manager'];
-function dshRoute({ dataDir, sessionId, model, account, gateway = false }) {
+function dshRoute({ dataDir, sessionId, model, account, gateway = false, midStreamRetry = false }) {
   const endpoint = requireEndpoint(dataDir, { gateway });
   const ids = gateway ? gatewayModelIds(dataDir) : companyModelIds(dataDir);
   const contextOf = id => (gateway ? gatewayConfig().contextOf(dataDir, id) : 128000);
   return {
     providerId: PROVIDER_ID, keyEnv: KEY_ENV, key: sessionKey(endpoint, sessionId, account, { gateway }), baseURL: origin(endpoint) + '/v1',
     model: launchModel(model, { gateway, dataDir }),
-    providerConfig: { api: 'openai-completions', baseURL: origin(endpoint) + '/v1', apiKeyEnv: KEY_ENV, retryPolicy: { mode: 'normal', maxRetries: 0 }, reasoning: 'high',
+    // 重试分两层（2026-11-24）：还没出字前的短暂失败只由反代自己重试（core/company-proxy/upstream-retry.mjs），
+    // 用完仍失败时反代回 DSH 不会再重试的状态码；已经出字后中途断流 / 超时，反代的错误帧带英文标记，
+    // 由 DSH 自带重试在同一轮里重跑这一步，最多 2 次。以前这里是 0 次：公司上游偶发一次断流就直接变成一轮报错。
+    // 只有终端模式（midStreamRetry）打开：它按每次尝试分开显示，失败那次的半截文字会被丢掉；卡片模式的 ACP 桥按
+    // 「轮次 + 步骤」给文字编号，重试时编号不变，Hub 卡片会把两次的半截文字拼在一起，所以保持 0 次。
+    // 网关路线也是 0 次：网关自己有长首包等待和重试，再叠 DSH 的重试最坏要等十几分钟。
+    providerConfig: { api: 'openai-completions', baseURL: origin(endpoint) + '/v1', apiKeyEnv: KEY_ENV,
+      retryPolicy: { mode: 'normal', maxRetries: !gateway && midStreamRetry ? 2 : 0 }, reasoning: 'high',
       models: ids.map(id => ({ id, contextWindow: contextOf(id), maxTokens: 16384, reasoningEfforts: { high: 'high' },
         compat: { supportsDeveloperRole: false, thinkingFormat: 'deepseek', supportsStore: false, maxTokensField: 'max_tokens' } })) },
     disabledPatches: DSH_DISABLED.map(id => ({ id, disabled: true })),

@@ -63,7 +63,7 @@ test('轻提示：已退出时主按钮是「重启会话并重发」，旁边�
     { sessionId: 's1', resendText: '帮我整理周报', terminalTail: ['Error: Effort level "max" is not available', 'PS ~>'] });
   assert.deepEqual(acts(el.innerHTML), [['known:session-restart-resend', '重启会话并重发'], ['known:session-restart', '只重启']]);
   assert.match(el.innerHTML, /class="hub-err-toast-btn primary" data-hub-err-act="known:session-restart-resend"/);
-  assert.match(el.innerHTML, /终端最后几行（退出原因）<\/span><pre>Error: Effort level &quot;max&quot; is not available\nPS ~&gt;<\/pre>/);
+  assert.match(el.innerHTML, /终端最后几行（退出原因）<\/summary><pre>Error: Effort level &quot;max&quot; is not available\nPS ~&gt;<\/pre>/);
   assert.equal(el._hubResendText, '帮我整理周报');
   assert.equal(el.dataset.sessionId, 's1');
 });

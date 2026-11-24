@@ -40,14 +40,15 @@ class CompanyAiTasks {
   }
   async execute(item) {
     const {job}=item,cwd=path.join(this.root,job.id),token=randomUUID(),marker=`[任务回执:${token}]`,until=Date.now()+item.timeoutMs;
-    const failures=require('./feature-agent-session-failure').createReader(this.d);
+    // 部门 API key 会话的网关报错稳定 8 秒仍没回答就收场（不空等到 10 分钟超时）；每个任务新开会话，没有旧错要排除。
+    const failures=require('./feature-agent-session-failure').createReader(this.d,{settleMs:8000});
     let checkedFinal=null;
     const check=()=>{
       if(item.cancelled||item.signal?.aborted||this.closed)throw Error('已取消 AI 任务');
       checkedFinal=job.state==='running'?this.d.lastFinal?.(job.sessionId):null;
       const auth=checkedFinal?.text?.includes(marker)?'':failures.read(job.sessionId);
       if(auth)throw Error(auth);
-      if(Date.now()>until)throw Error('CodeAgent 任务超时，原材料已保留，可重试');
+      if(Date.now()>until)throw Error(`${this.d.getSession?.(job.sessionId)?.apiGatewayRoute?require('./assistant-gateway-route').LABEL:'CodeAgent'} 任务超时，原材料已保留，可重试`);
     };
     const bounded=async work=>{
       let timer;
@@ -58,7 +59,8 @@ class CompanyAiTasks {
     try {
       check();job.state='starting';this.save(job);
       const picked=require('./feature-agent-choice').session(this.d.dataDir,'text','codeagent',{id:job.sessionId,cwd,title:'公司 AI · '+job.label,purpose:'company-ai',autonomous:true,noInheritCursor:true});
-      job.model=picked.opts.featureAgentChoice ? picked.opts.model||picked.kind : 'CodeAgent';
+      // 部门 API key 会话没指定模型时写「部门 API key（网关）」，不显示裸的 claude。
+      job.model=picked.opts.apiGatewayRoute ? picked.opts.model||require('./assistant-gateway-route').LABEL : picked.opts.featureAgentChoice ? picked.opts.model||picked.kind : 'CodeAgent';
       creation=Promise.resolve(this.d.createSession(picked.kind,picked.opts));
       const created=await bounded(creation);check();
       if(created?.ok===false)throw Error(created.message||created.error||'CodeAgent 会话创建失败');

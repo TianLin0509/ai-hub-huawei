@@ -2,7 +2,7 @@ import http from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import { Readable, Transform } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
-import { preStreamMessage, upstreamHttpMessage, safeUpstreamDetail, midStreamMessage, errorFrameFor } from './failure-text.mjs';
+import { preStreamMessage, upstreamHttpMessage, safeUpstreamDetail, midStreamMessage, midStreamRetryTag, errorFrameFor } from './failure-text.mjs';
 
 // Copies a stream into the response without letting a source failure destroy the response (unlike pipeline):
 // the caller still has to write the protocol's error frame after the headers.
@@ -32,7 +32,7 @@ const LEGAL_FINISH = new Set(['stop', 'length', 'tool_calls', 'content_filter', 
 const MAX_SSE_LINE = 16 * 1024 * 1024;
 export function chatStreamTracker({ requireDone = true } = {}) {
   const decoder = new StringDecoder('utf8');
-  const state = { finish: false, done: false, broken: false, doneLine: false };
+  const state = { finish: false, done: false, broken: false, doneLine: false, errorFrame: false };
   let line = '';
   const inspect = raw => {
     const text = raw.trim();
@@ -43,7 +43,7 @@ export function chatStreamTracker({ requireDone = true } = {}) {
     if (!data.includes('finish_reason') && !data.includes('"error"')) return;
     let event;
     try { event = JSON.parse(data); } catch { return; }
-    if (event && typeof event === 'object' && event.error) { state.broken = true; return; }
+    if (event && typeof event === 'object' && event.error) { state.broken = true; state.errorFrame = true; return; }
     for (const choice of Array.isArray(event?.choices) ? event.choices : []) {
       const reason = choice?.finish_reason;
       if (reason === null || reason === undefined) continue;
@@ -60,10 +60,12 @@ export function chatStreamTracker({ requireDone = true } = {}) {
     transform(chunk, encoding, done) { take(decoder.write(chunk)); done(null, chunk); },
     flush(done) {
       take(decoder.end() + '\n');
-      done(requireDone && !state.doneLine ? new Error('Upstream SSE ended before [DONE]') : null);
+      // 上游自己在流里发了错误帧再关流（不发 [DONE]）：那条错误帧已经原样交给客户端，是上游给的确定性原因，
+      // 反代不再追加第二条，更不标成「连接中断」让 DSH 白白重试（审查 P2-2）。
+      done(requireDone && !state.doneLine && !state.errorFrame ? new Error('Upstream SSE ended before [DONE]') : null);
     },
   });
-  return { stream, complete: () => state.finish && state.done && !state.broken };
+  return { stream, complete: () => state.finish && state.done && !state.broken, sawErrorFrame: () => state.errorFrame };
 }
 
 // Our own error responses (made by the proxy, already in plain words) carry this header and pass unchanged.
@@ -95,7 +97,8 @@ async function beforeAbort(operation, signal) {
 // provider.complete(body, { signal }) -> standard fetch Response (SSE on success)
 // It owns credentials, signature, upstream authentication and model access.
 export function createProxy({ provider, accessKey, maxBodyBytes = 4 * 1024 * 1024,
-  timeoutMs = 120000, maxDurationMs = Math.max(timeoutMs, 60 * 60 * 1000), onEvent = () => {}, protocolAdapters = {} }) {
+  timeoutMs = 120000, maxDurationMs = Math.max(timeoutMs, 60 * 60 * 1000), onEvent = () => {}, protocolAdapters = {},
+  noClientRetry = () => false }) {
   if (!provider?.complete || !provider?.listModels) throw new Error('Provider contract is required');
   if (typeof accessKey !== 'string' || accessKey.length < 16) throw new Error('Dedicated local key must have at least 16 characters');
   if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes <= 0) throw new Error('maxBodyBytes must be a positive safe integer');
@@ -111,7 +114,12 @@ export function createProxy({ provider, accessKey, maxBodyBytes = 4 * 1024 * 102
     // pumpStop also ends the copy when the client leaves after a complete answer, without aborting the upstream request.
     const pumpStop = new AbortController();
     aborter.signal.addEventListener('abort', () => pumpStop.abort(aborter.signal.reason), { once: true });
-    let streamComplete = () => false, closedAfterDone = false;
+    let streamComplete = () => false, closedAfterDone = false, sawUpstreamErrorFrame = () => false, pathname = '';
+    // 出字前的失败交给客户端时，noClientRetry(pathname) 为真的请求把 429 / 5xx 换成客户端不会再重试的 400（审查 P1）：
+    // 反代已经重试过（或本来就重试不好：未就绪、号被暂停、限流冷却），DSH 见到 429 / 5xx 还会按自己的重试再来几轮，
+    // 每轮反代又重试 3 次，叠起来要等好几分钟。原状态码放在 x-company-proxy-status 响应头里，人话原样不变。
+    const clientStatus = status => (status === 429 || status >= 500) && status !== 501 && noClientRetry(pathname) ? 400 : status;
+    const statusHeaders = (status, headers) => clientStatus(status) === status ? headers : { ...headers, 'x-company-proxy-status': String(status) };
     const clientGone = reason => {
       if (res.writableEnded || aborter.signal.aborted || closedAfterDone) return;
       if (streamComplete()) { closedAfterDone = true; pumpStop.abort(new Error('Client closed after [DONE]')); return; }
@@ -120,16 +128,16 @@ export function createProxy({ provider, accessKey, maxBodyBytes = 4 * 1024 * 102
     req.once('aborted', () => clientGone(new Error('Client request aborted')));
     res.once('close', () => clientGone(new Error('Client disconnected')));
     const sendJson = (status, value) => {
-      res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.writeHead(clientStatus(status), statusHeaders(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }));
       res.end(JSON.stringify(value));
     };
     // { type: 'error', error } satisfies both Anthropic and OpenAI-style clients.
     const fail = (status, type, message) => sendJson(status, { type: 'error', error: { type, message } });
     let timedOut = false, streamPath = '';
     // After headers are out: one protocol-defined error frame, then the end of the stream (never a fake success).
-    const failStream = message => {
+    const failStream = (message, retryTag = '') => {
       if (res.destroyed || res.writableEnded) return;
-      try { res.end(errorFrameFor(streamPath, message)); } catch { res.destroy(); }
+      try { res.end(errorFrameFor(streamPath, message, { retryTag })); } catch { res.destroy(); }
     };
     // 超时按「空闲」计（2026-11-20 一键反馈 v5.6.65）：以前 timeoutMs 是整个请求的总时限（15 分钟），
     // Codex 一轮长回答一直在正常输出，也会在第 900 秒被掐断（「回复中途超时断开」）。现在等回头和流式输出期间，
@@ -144,7 +152,7 @@ export function createProxy({ provider, accessKey, maxBodyBytes = 4 * 1024 * 102
         res.once('finish', () => { if (!req.complete) req.destroy(); });
         fail(504, 'timeout_error', preStreamMessage(null, { timedOut: true }));
       } else if (!res.writableEnded && !res.destroyed) {
-        if (streamPath) failStream(midStreamMessage(null, { timedOut: true })); else res.destroy();
+        if (streamPath) failStream(midStreamMessage(null, { timedOut: true }), midStreamRetryTag(null, { timedOut: true })); else res.destroy();
       }
     };
     let timer = setTimeout(onDeadline, timeoutMs);
@@ -158,7 +166,7 @@ export function createProxy({ provider, accessKey, maxBodyBytes = 4 * 1024 * 102
       timer.unref();
     };
     try {
-      const pathname = new URL(req.url, 'http://127.0.0.1').pathname;
+      pathname = new URL(req.url, 'http://127.0.0.1').pathname;
       const authorization = typeof req.headers.authorization === 'string' ? req.headers.authorization : '';
       const apiKey = typeof req.headers['x-api-key'] === 'string' ? req.headers['x-api-key'] : '';
       const actual = Buffer.from(authorization || (apiKey ? `Bearer ${apiKey}` : ''));
@@ -208,14 +216,14 @@ export function createProxy({ provider, accessKey, maxBodyBytes = 4 * 1024 * 102
         if (upstream.headers.get(OWN_RESPONSE_HEADER)) {
           const own = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' };
           const retry = upstream.headers.get('retry-after'); if (retry) own['retry-after'] = retry;
-          res.writeHead(upstream.status, own); res.end(Buffer.from(await upstream.arrayBuffer()));
+          res.writeHead(clientStatus(upstream.status), statusHeaders(upstream.status, own)); res.end(Buffer.from(await upstream.arrayBuffer()));
           notify({ type: 'request_finished', status: upstream.status });
           return;
         }
         let detail = '';
         try { detail = safeUpstreamDetail((await upstream.text()).slice(0, 4096)); } catch { /* no detail */ }
         const retry = upstream.headers.get('retry-after');
-        res.writeHead(upstream.status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...(retry ? { 'retry-after': retry } : {}) });
+        res.writeHead(clientStatus(upstream.status), statusHeaders(upstream.status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...(retry ? { 'retry-after': retry } : {}) }));
         res.end(JSON.stringify({ type: 'error', error: { type: upstream.status === 429 ? 'rate_limit_error' : upstream.status === 401 || upstream.status === 403 ? 'authentication_error' : 'api_error',
           message: upstreamHttpMessage(upstream.status, detail) } }));
         notify({ type: 'request_finished', status: upstream.status, ...(detail ? { detail } : {}) });
@@ -251,9 +259,11 @@ export function createProxy({ provider, accessKey, maxBodyBytes = 4 * 1024 * 102
       if ((headers['content-type'] || '').toLowerCase().startsWith('text/event-stream')) streamPath = pathname;
       if (upstream.body && upstream.ok && passthrough) {
         const tracker = chatStreamTracker();
-        streamComplete = tracker.complete;
+        streamComplete = tracker.complete; sawUpstreamErrorFrame = tracker.sawErrorFrame;
         const source = Readable.fromWeb(upstream.body);
-        source.once('error', error => tracker.stream.destroy(error)); // .pipe() does not forward source errors
+        // .pipe() does not forward source errors. After an upstream error frame the drop is just the upstream closing:
+        // end normally so the frame already written still reaches the client (destroy would discard it).
+        source.once('error', error => { if (tracker.sawErrorFrame()) tracker.stream.end(); else tracker.stream.destroy(error); });
         await pump(source.pipe(tracker.stream), res, pumpStop.signal, [source], touch);
       }
       else if (upstream.body) await pump(Readable.fromWeb(upstream.body), res, pumpStop.signal, [], touch);
@@ -275,7 +285,9 @@ export function createProxy({ provider, accessKey, maxBodyBytes = 4 * 1024 * 102
       }
       else if (!res.destroyed && !res.writableEnded) {
         // No synthetic success/[DONE] and no automatic replay; a client that is still there gets the reason.
-        if (streamPath && !aborter.signal.aborted) failStream(midStreamMessage(error));
+        // 上游已经发过一条错误帧（原样交给了客户端）之后连接才断：那条就是原因，不再追加、不标成可重试。
+        if (streamPath && !aborter.signal.aborted && sawUpstreamErrorFrame()) res.end();
+        else if (streamPath && !aborter.signal.aborted) failStream(midStreamMessage(error), midStreamRetryTag(error));
         else res.destroy();
       }
     } finally { clearTimeout(timer); clearTimeout(hardTimer); }

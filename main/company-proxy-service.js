@@ -45,6 +45,13 @@ function noticeKey(event) {
   return event.type;
 }
 
+// 给提示闸门（core/notice-gate.js）的分类：个人账号登录读不出来要用户去登录（blocking）；
+// 换号、退回个人号、限流冷却、反代收尾、号池账号登录失效（已换号）都已自动处理，只进日志（auto）。
+function noticeKindFor(event = {}) {
+  if (event.type === 'credential_failed') return event.account === 'personal' ? 'blocking' : 'auto';
+  return ['fallback_personal', 'rate_limited', 'proxy_draining'].includes(event.type) ? 'auto' : undefined;
+}
+
 class CompanyProxyService {
   constructor({ dataDir, isEnabled, onNotice = () => {}, onStatus = () => {}, logger = console, mock = process.env.AI_HUB_COMPANY_PROXY_MOCK === '1', safeStorage = null } = {}) {
     this.dataDir = dataDir;
@@ -360,6 +367,8 @@ class CompanyProxyService {
   // 返回值里 gatewayStale=true 表示反代在跑但没收到新设置（新模型表要等反代下次启动才生效），调用方据此提示用户。
   async applyGatewayChange() {
     let gatewayStale = false;
+    // 反代正在启动（例如刚把某个功能切到部门 key）：等它起好再热更新，免得把「还没起好」误报成要重启 Hub。
+    if (this.starting) await this.starting.catch(() => {});
     if (this.child) {
       // 失败（极少见：本机反代正忙到 3 秒不响应）时：换 key / 模型不重启反代，免得打断别的会话，新设置在反代下次启动时生效；
       // 删除 key 则必须立刻生效，重启反代，不让它继续用已删的 key。
@@ -404,4 +413,4 @@ class CompanyProxyService {
   }
 }
 
-module.exports = { CompanyProxyService, serverScript, systemCaArgs, noticeKey, NOTICE };
+module.exports = { CompanyProxyService, serverScript, systemCaArgs, noticeKey, noticeKindFor, NOTICE };

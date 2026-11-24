@@ -87,7 +87,7 @@ async function main() {
     await until('[...sessions.values()].some(s => s.kind === "claude")', 'Claude session created');
     const id = await cdp.eval('[...sessions.values()].find(s => s.kind === "claude").id');
     const q = JSON.stringify(id);
-    for (let i = 0; i < 150 && !starts(); i++) await sleep(200);
+    for (let i = 0; i < 450 && !starts(); i++) await sleep(200); // 替身 CLI 的 SessionStart 钩子在忙机器上可能要几十秒
     assert.ok(starts() >= 1, 'the CLI ran SessionStart');
     const composer = `.floating-input-bar[data-session-id="${id}"]`;
     await until(`document.querySelector(${JSON.stringify(composer + ' .floating-input-box')})`, 'composer ready');

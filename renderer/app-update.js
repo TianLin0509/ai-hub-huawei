@@ -105,6 +105,8 @@
   function manualDownload() {
     const portable = !!state?.portable;
     const label = portable ? '下载新的免安装包（内源优先）' : '下载完整安装包（内源优先）';
+    // r27：版本清单读不到（老版本、网络拦了外网源）时没有 latest：先用主进程在内源上找到的最近完整安装包（state.fullPackage）。
+    if (!state?.latest && fullPackageUrl()) return { url: fullPackageUrl(), label: `下载完整安装包（内源 v${state.fullPackage.version}）`, direct: true };
     if (state?.releasePage) return { url: state.releasePage, label, point: 'app-installer' };
     const file = state?.latest?.installer?.file || (state?.plan?.kind === 'full' ? state.plan.file : null);
     const source = distribution.updateConfig.sources?.find(s => s.files && s.name === state?.latest?.sourceName)
@@ -113,6 +115,14 @@
     const name = portable ? portableZip(file, state.latest.version) : file;
     return { url: require('../core/app-update/downloader').fileUrl(source, state.latest.version, name), label, point: 'app-installer' };
   }
+  // 主进程只放白名单域名内的 https 地址；这里再确认一次是 https。
+  function fullPackageUrl() { const u = String(state?.fullPackage?.url || ''); return u.toLowerCase().startsWith('https://') ? u : ''; }
+  // 内源完整包的一行说明（r27）：检查 / 下载失败时显示。
+  function fullPackageLine() {
+    const p = state?.fullPackage;
+    if (!p || !fullPackageUrl()) return '';
+    return `<div class="au-msg info" data-au-full>公司内源上有完整安装包 v${esc(p.version)}（${esc(p.file)}）：点「下载完整安装包」用浏览器下载，覆盖安装即可，设置和数据不会丢。</div>`;
+  }
   // 与主进程 portableZipName 同一规则（package.json build.win.artifactName）。
   function portableZip(file, version) {
     const m = /^(.+)-Setup-(\d+\.\d+\.\d+)\.exe$/i.exec(String(file || ''));
@@ -120,6 +130,8 @@
   }
   // 「去内源下载完整包」（O④）：先在浏览器里打开内源上的包；内源没有或连不上，打开阿里云地址；还没查到版本时先打开更新窗查一次。
   async function openManual() {
+    const direct = manualDownload();
+    if (direct && direct.direct) { shell.openExternal(direct.url); return true; }
     const viaOpenx = await ipcRenderer.invoke('download-source:open', { point: 'app-installer' }).catch(() => null);
     if (viaOpenx && viaOpenx.ok) return true;
     const manual = manualDownload();
@@ -234,7 +246,8 @@
       if (latest && latest.notes && latest.notes.length) body += `<div class="au-section">本次更新</div>${notesHtml(latest)}`;
       body += installHint(plan);
       body += `<div class="au-section">更新源（按顺序尝试，失败自动换下一个）</div><ul class="au-sources">${(s.attempts && s.attempts.length) ? sourceRows() : checkRows()}</ul>${allowBox()}`;
-      const manualA = (plan && (plan.portable || plan.protectedDir)) ? manualDownload() : null;
+      // r27：这一版要完整安装包（本机太老、运行库变了）时，也给浏览器手动下载的入口。
+      const manualA = (plan && (plan.portable || plan.protectedDir || plan.kind === 'full')) ? manualDownload() : null;
       foot = '<button class="au-btn" data-au="close">稍后</button>'
         + (plan && plan.portable ? (manualA ? `<button class="au-btn primary" data-au="manual">${esc(manualA.label)}</button>` : '')
           : `${manualA ? `<button class="au-btn" data-au="manual">${esc(manualA.label)}</button>` : ''}<button class="au-btn primary" data-au="download">下载更新</button>`);
@@ -263,10 +276,11 @@
       const ctx = { area: 'app-update', title: '一键更新没有完成', symptom: error, details: [error, ...reasons].join('\n') };
       body += `<div class="au-msg bad">${card ? card.assistHtml(ctx) : ''}${esc(error)}</div>${card ? card.knownHtml(ctx) : ''}`;
       if (plan && plan.portable) body += installHint(plan);
+      body += fullPackageLine();
       if (s.attempts?.length || s.checks?.length) body += `<div class="au-section">各下载源的结果</div><ul class="au-sources">${s.attempts?.length ? sourceRows() : checkRows()}</ul>`;
       else if (s.checks && s.checks.length) body += `<div class="au-section">更新源</div><ul class="au-sources">${checkRows()}</ul>`;
       body += allowBox();
-      foot = `${manual ? `<button class="au-btn" data-au="manual">${manual.label}</button>` : ''}<button class="au-btn" data-au="close">关闭</button><button class="au-btn primary" data-au="retry">重试</button>`;
+      foot = `${manual ? `<button class="au-btn" data-au="manual">${esc(manual.label)}</button>` : ''}<button class="au-btn" data-au="close">关闭</button><button class="au-btn primary" data-au="retry">重试</button>`;
     } else {
       body += '<div class="au-msg info">点「检查更新」查询最新版本。</div>';
       foot = '<button class="au-btn" data-au="close">关闭</button><button class="au-btn primary" data-au="retry">检查更新</button>';

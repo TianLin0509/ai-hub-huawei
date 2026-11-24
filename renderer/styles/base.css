@@ -627,7 +627,8 @@
 
   --fg-strong: #ffffff;
   --fg-default: #e8ecf2;
-  --fg-muted: #7f8a9a;
+  /* 次要文字原 #7f8a9a 在输入槽与选中浅底上只有 4.2，提到 #8a94a3（各层底上都 ≥4.7） */
+  --fg-muted: #8a94a3;
   --fg-faint: #4d5665;
 
   --brand: #6d8dff;
@@ -666,7 +667,8 @@
 
   /* 冷杉的 CTA 是蓝渐变，不是深色皮肤那颗浅药丸 */
   --cta-bg: linear-gradient(180deg, #7c98ff, #5f7fff);
-  --cta-fg: #ffffff;
+  /* 白字在这条蓝渐变上只有 2.7–3.5，改用画布深色（5.3–6.9），与 --hw-text-on 一致 */
+  --cta-fg: var(--surface-canvas);
   --cta-border: rgba(109, 141, 255, 0.55);
   --cta-bg-hover: linear-gradient(180deg, #8aa3ff, #6d8dff);
   --cta-bg-active: linear-gradient(180deg, #6d8dff, #5273f0);
@@ -674,7 +676,7 @@
   --session-active: rgba(74, 222, 128, 0.1);
   --session-waiting: rgba(109, 141, 255, 0.12);
 
-  --turn-meta-fg: #7f8a9a;
+  --turn-meta-fg: var(--fg-muted);
   --turn-body-fg: #e8ecf2;
   --tool-call-border: rgba(255, 255, 255, 0.1);
   --tool-call-name: #fbbf24;

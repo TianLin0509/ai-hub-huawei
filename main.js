@@ -558,6 +558,8 @@ const HUB_PET_ASSISTANT_PURPOSES = new Set(['company-assistant', 'hub-assistant'
 const sessionManager = new SessionManager();
 // 会话的 CLI 进程还在不在：true 在 / false 已退出 / null 说不准（会话没打开、没有进程号）。公司联动与助理共用。
 function sessionProcessAlive(id) {
+  // CodeAgent-Lite 正在改回终端：旧对象收尾、新进程未建的窗口里说不准，别让助理把它判死。
+  if (sessionManager.serveFallbackPending?.(id)) return null;
   const entry = sessionManager.sessions?.get?.(id);
   if (!entry) return null; // 会话已关闭由调用方单独判断
   if (entry.confirmedExit) return false;
@@ -591,6 +593,31 @@ transcriptTap.on('session-bound', event => {
   const session = sessionManager.getSession(event.hubSessionId);
   if (session) sessionUsageService.bind({ ...session, transcriptPath: event.transcriptPath || event.rolloutPath || session.transcriptPath });
 });
+// 提示闸门拦下的提示（renderer 的 core/notice-gate.js）：不打扰用户，只记进 window-events.log，诊断包里能看到。每小时最多记 300 行。
+let noticeMutedWindow = { start: 0, count: 0, overflow: new Map() };
+// 每小时最多逐条记 300 行；超出的按原因聚合计数，下一小时开头或退出时补 notice-muted-overflow 行（次数 + 最后一次时间和原文）。
+function flushNoticeMutedOverflow() {
+  const over = noticeMutedWindow.overflow;
+  if (!over || !over.size) return;
+  for (const [reason, v] of over) searchEventLog('notice-muted-overflow', { reason: reason.slice(0, 200), count: v.count, lastAt: new Date(v.lastAt).toISOString(), lastMessage: v.lastMessage });
+  over.clear();
+}
+app.once('will-quit', () => { try { flushNoticeMutedOverflow(); } catch { /* 退出时日志写不了就算了 */ } });
+ipcMain.on('notice-gate:muted', (_event, detail) => {
+  const now = Date.now();
+  if (now - noticeMutedWindow.start > 3600000) { flushNoticeMutedOverflow(); noticeMutedWindow = { start: now, count: 0, overflow: new Map() }; }
+  const d = detail && typeof detail === 'object' ? detail : {};
+  if (++noticeMutedWindow.count > 300) {
+    const over = noticeMutedWindow.overflow;
+    const reason = `${d.why || ''}|${d.sessionId || '-'}|${require('./core/notice-gate').normalizeReason(d.message).slice(0, 160)}`;
+    const v = over.get(reason) || { count: 0, lastAt: 0, lastMessage: '' };
+    v.count += 1; v.lastAt = now; v.lastMessage = String(d.message || '').slice(0, 300);
+    if (over.size < 500 || over.has(reason)) over.set(reason, v);
+    return;
+  }
+  searchEventLog('notice-muted', { why: String(d.why || ''), kind: String(d.kind || ''), level: String(d.level || ''), sessionId: String(d.sessionId || '').slice(0, 80), message: String(d.message || '').slice(0, 300) });
+});
+
 ipcMain.on('session-usage:watch', (_event, ids) => {
   if (!Array.isArray(ids)) return;
   for (const id of new Set(ids.filter(id => typeof id === 'string'))) {
@@ -699,10 +726,12 @@ const claudeAccountBroker = require('./core/claude-account-credentials').createC
   stateDir: path.join(getHubDataDir(), 'claude-account-refresh'),
   request: async (url, options = {}, profile) => {
     const response = await claudeAccountFetch(profile, url, { ...options, signal: AbortSignal.timeout(15_000) });
-    let data = null;
+    let data = null, errorCode = '';
     if (response.status === 200) data = await response.json();
+    // 失败时只取 OAuth 错误码（如 invalid_grant）进刷新日志，便于区分凭据作废和别的原因；正文不保留。
+    else { try { const body = await response.json(); errorCode = typeof body?.error === 'string' ? body.error : typeof body?.error?.type === 'string' ? body.error.type : ''; } catch {} }
     const retryAfter = response.headers.get('retry-after');
-    return { status: response.status, data, retryAfterMs: /^\d+$/.test(retryAfter || '')
+    return { status: response.status, data, errorCode, retryAfterMs: /^\d+$/.test(retryAfter || '')
       ? Number(retryAfter) * 1000 : Math.max(0, Date.parse(retryAfter) - Date.now()) || 0 };
   },
   // Request-free readings (status line, earlier answers) for the same account.
@@ -1262,7 +1291,7 @@ transcriptTap.on('turn-error', (ev) => {
       kind: session ? session.kind : null,
       signalSource: ev.signalSource || 'task_complete_error',
       turnId: ev.turnId || null,
-      message: ev.message || 'Codex turn failed',
+      message: ev.message || ev.reason || ev.error || '本轮执行失败（没有拿到具体原因）',
       errorInfo: ev.errorInfo || null,
       occurrenceId: ev.occurrenceId || null,
     });
@@ -1922,14 +1951,24 @@ function createWindow() {
     if (bootState.storageWriteError && ['EPERM', 'EBUSY', 'EACCES'].includes(bootState.storageWriteError.code)
         && !global.__bootStorageRetryStarted) {
       global.__bootStorageRetryStarted = true;
-      sendToRenderer('session-notice', { message: '数据文件暂时被占用，稍后自动重试', level: 'warning', persistent: true });
+      sendToRenderer('session-notice', { message: '数据文件暂时被占用，稍后自动重试', level: 'warning', persistent: true, noticeKind: 'auto' });
+      // 占用通常几秒就解除，只进日志；超过 60 秒仍写不进去（权限被拒、被别的程序长期锁住），升级成一行数据风险提示，恢复后再说一声。
+      const retryStartedAt = Date.now();
+      let escalated = false;
       const retry = async () => {
         try {
           await stateStore.saveForRestart({ version: 1, cleanShutdown: false, sessions: lastPersistedSessions,
             meetings: meetingManager.getAllMeetings(), immersiveByMeeting: _immersiveByMeeting });
-          sendToRenderer('session-notice', { message: '数据文件占用已解除，保存已恢复', level: 'info' });
+          sendToRenderer('session-notice', { message: '数据文件占用已解除，保存已恢复', level: 'info', noticeKind: escalated ? 'blocking' : 'recovered' });
         } catch (error) {
-          if (['EPERM', 'EBUSY', 'EACCES'].includes(error.code)) setTimeout(retry, 5000).unref();
+          if (['EPERM', 'EBUSY', 'EACCES'].includes(error.code)) {
+            if (!escalated && Date.now() - retryStartedAt >= 60000) {
+              escalated = true;
+              sendToRenderer('session-notice', { message: `数据文件持续写不进去（${error.code}），最近的改动还没保存；请关掉占用它的程序或检查权限，Hub 会继续重试`,
+                level: 'error', persistent: true, noticeKind: 'data-risk' });
+            }
+            setTimeout(retry, 5000).unref();
+          }
           else sendToRenderer('session-notice', { message: `数据保存失败：${error.message}`, level: 'error', persistent: true });
         }
       };
@@ -2667,9 +2706,46 @@ registerTranscriptIpc(ipcMain, transcriptIpcDeps);
 // build-injection IPC 历史用于 blackboard 用户输入合成注入子会话(meeting-blackboard.js)。
 // Module C 后 blackboard 已删除,该 handler 不再被任何前端代码调用,清理。
 
+// 新建与休眠恢复共用的启动前检查（2026-11-24 复审：恢复路径以前只查登录，部门 API key 会话恢复时不会拉起本机反代）。
+// 函数声明会提升；里面用到的 companyProxyService / lanPoolService / claudeAccountBroker 在调用时才读，届时都已初始化。
+async function ensureSessionLaunchAuth(kind, opts = {}) {
+  const featureGateway = require('./core/assistant-gateway-route').allowedSession(kind, opts || {});
+  if (featureGateway || require('./core/company-model-proxy').usesGateway(kind, getHubConfig())) {
+    // API 网关会话只要本机反代在跑；公司上游（CodeAgent）准备没准备好与它无关。网关自身的问题在对话里用白话报。
+    const status = await companyProxyService.ensureRunning();
+    if (status.state === 'failed' || status.state === 'stopped') throw new Error(status.message || '本机反代没有启动，API 网关会话暂时开不了');
+  } else if (require('./core/company-model-proxy').usesProxy(kind, getHubConfig())) {
+    if (lanPoolService.client()?.enabled) {
+      const shared = await lanPoolService.snapshot({ force: true });
+      if (!shared?.ready) throw new Error(lanPoolService.error || '共享主机模型服务尚未就绪');
+    } else {
+      const status = await companyProxyService.ensureReady();
+      if (status.state === 'failed' || status.state === 'not-ready') throw new Error(status.message || '公司模型反代还没准备好');
+    }
+  }
+  // Both checks are read-only; run them side by side. A login problem is
+  // reported ahead of a config problem, as when they ran one after another.
+  const [auth, namespace] = await Promise.allSettled([launchAuth.ensure(kind, opts), ensureCodexAccountNamespace(kind,opts)]);
+  if (auth.status === 'rejected') throw auth.reason;
+  if (namespace.status === 'rejected') throw namespace.reason;
+  // 部门 API key 的功能会话不用 Claude 订阅账号，不查订阅凭据。
+  if (!featureGateway && /^claude(?:-resume)?$/.test(kind) && (opts.claudeAccountSwitchable || opts.claudeAutoSwitch)
+    && !getHubConfig().companyCli && getHubConfig().claudeBackend !== 'api') {
+    const profile = require('./core/claude-subscription-profiles').profileForSession(
+      opts.claudeRuntimeHome ? { ...opts, claudeConfigDir: undefined } : opts, getHubConfig());
+    // 这台电脑还没有任何 Claude 账号登录过：交给 Claude CLI 自己的登录流程，不在这里拦（2026-10-28：
+    // 新装 Claude 的用户点新建会话只看到「Claude 登录或配置文件无法读取」，会话建不出来）。专用账号照旧严格核对。
+    if (profile.id === 'default' && require('./core/claude-subscription-profiles').firstLoginExempt(opts, getHubConfig())) return;
+    // 刷新已被登录服务拒绝的号：正在跑的会话照常用旧访问令牌到期，新会话不再开到这个号上。
+    const blocked = claudeAccountBroker.authBlocked(profile);
+    if (blocked?.code === 'CLAUDE_RELOGIN_REQUIRED') throw require('./core/claude-account-credentials').fail(blocked.code, `Claude 账号${blocked.message}`);
+    await claudeAccountBroker.getCredentials(profile);
+  }
+}
+
 const resumeSession = createResumeSessionHandler({
   requestModelConfirmation: sessionModelCreationConfirmation.request,
-  ensureLaunchAuth:async(kind,opts)=>{await launchAuth.ensure(kind,opts);await ensureCodexAccountNamespace(kind,opts);},
+  ensureLaunchAuth: ensureSessionLaunchAuth,
   async prepareAssistantResume(meta) {
     if (!assistantService) throw new Error('助理服务尚未就绪');
     assistantService.requireAssistantResume(meta);
@@ -2740,7 +2816,11 @@ const companyProxyService = new (require('./main/company-proxy-service').Company
     || require('./core/assistant-gateway-route').inUse(getHubDataDir()),
   // 换号、退回个人号、反代起不来：用会话提示条讲给用户听（renderer.js 的 session-notice）。
   // 换号/退回个人号是常驻提示条，用户手动关（只在每类第一次时弹，见 company-proxy-service）。
-  onNotice: notice => sendToRenderer('session-notice', { message: notice.text, level: 'warning', persistent: notice.persistent === true }),
+  // 自动处理好的只进日志，个人账号登录读不出来显式标 blocking（分类见 company-proxy-service 的 noticeKindFor）。
+  // 状态失败（failed / 非 INITIALIZING 的 not-ready，例如读不到 CodeAgent 版本）也显式标 blocking，不靠文字猜。
+  onNotice: notice => sendToRenderer('session-notice', { message: notice.text, level: 'warning', persistent: notice.persistent === true,
+    reasonKey: notice.type ? `company-proxy:${notice.type}:${notice.account || ''}` : undefined,
+    noticeKind: require('./main/company-proxy-service').noticeKindFor(notice) }),
   onStatus: status => {
     if (require('./core/lan-pool').read(getHubDataDir()).client?.enabled) {
       if (usesGatewayRoute()) sendToRenderer('company-proxy:status', { ...(lanPoolService.clientProxyStatus() || {}), gateway: status.gateway });
@@ -2749,12 +2829,12 @@ const companyProxyService = new (require('./main/company-proxy-service').Company
     sendToRenderer('company-proxy:status', status);
     if (status.state === 'failed' && status.message !== companyProxyFailureShown) {
       companyProxyFailureShown = status.message;
-      sendToRenderer('session-notice', { message: status.message, level: 'error' });
+      sendToRenderer('session-notice', { message: status.message, level: 'error', noticeKind: 'blocking' });
     } else if (status.state === 'not-ready' && status.code !== 'INITIALIZING' && status.message && status.message !== companyProxyFailureShown && usesCompanyUpstream()) {
       // INITIALIZING（准备上游、首次签名初始化）是几秒到几十秒的过渡状态，只在设置弹窗里显示，不弹常驻提示条。
       // 上游没就绪（比如签名缓存不在）：原因和处理办法较长，用常驻提示条讲清楚，不让它一闪而过。
       companyProxyFailureShown = status.message;
-      sendToRenderer('session-notice', { message: status.message, level: 'error', persistent: true });
+      sendToRenderer('session-notice', { message: status.message, level: 'error', persistent: true, noticeKind: 'blocking' });
     } else if (status.state === 'running') companyProxyFailureShown = '';
   },
 });
@@ -2764,7 +2844,8 @@ const lanPoolService = new (require('./main/lan-pool-service').LanPoolService)({
     sendToRenderer('company-proxy:status', lanPoolService.clientProxyStatus()
       ? { ...lanPoolService.clientProxyStatus(), gateway: companyProxyService.status().gateway } : companyProxyService.status()); },
   // 共享停摆、地址变化、主机掉线或恢复：用会话提示条告诉用户，不让共享悄悄失效。
-  onNotice: notice => sendToRenderer('session-notice', { message: notice.text, level: notice.persistent ? 'warning' : 'info', persistent: notice.persistent === true }),
+  onNotice: notice => sendToRenderer('session-notice', { message: notice.text, level: notice.persistent ? 'warning' : 'info', persistent: notice.persistent === true,
+    noticeKind: notice.noticeKind || 'auto' }),
 });
 // Windows 分层 Job Object + 低开销模式 EcoQoS（2026-11-23 P2，core/win32-job-qos.js）：CodeAgent 终端、共享 serve、临时 serve、
 // 后台 CodeAgent 单次问答各自装进独立的进程盒子，结束时连脱离父进程的孙进程一起收；Hub 被强杀时内核自动清盒。
@@ -2798,35 +2879,7 @@ const sessionOperations = registerSessionIpc(ipcMain, {
   cancelModelConfirmation: sessionModelCreationConfirmation.cancelSession,
   app,
   lanPoolService,
-  ensureLaunchAuth: async (kind, opts) => {
-    if (require('./core/assistant-gateway-route').allowedSession(kind, opts || {}) || require('./core/company-model-proxy').usesGateway(kind, getHubConfig())) {
-      // API 网关会话只要本机反代在跑；公司上游（CodeAgent）准备没准备好与它无关。网关自身的问题在对话里用白话报。
-      const status = await companyProxyService.ensureRunning();
-      if (status.state === 'failed' || status.state === 'stopped') throw new Error(status.message || '本机反代没有启动，API 网关会话暂时开不了');
-    } else if (require('./core/company-model-proxy').usesProxy(kind, getHubConfig())) {
-      if (lanPoolService.client()?.enabled) {
-        const shared = await lanPoolService.snapshot({ force: true });
-        if (!shared?.ready) throw new Error(lanPoolService.error || '共享主机模型服务尚未就绪');
-      } else {
-        const status = await companyProxyService.ensureReady();
-        if (status.state === 'failed' || status.state === 'not-ready') throw new Error(status.message || '公司模型反代还没准备好');
-      }
-    }
-    // Both checks are read-only; run them side by side. A login problem is
-    // reported ahead of a config problem, as when they ran one after another.
-    const [auth, namespace] = await Promise.allSettled([launchAuth.ensure(kind, opts), ensureCodexAccountNamespace(kind,opts)]);
-    if (auth.status === 'rejected') throw auth.reason;
-    if (namespace.status === 'rejected') throw namespace.reason;
-    if (/^claude(?:-resume)?$/.test(kind) && (opts.claudeAccountSwitchable || opts.claudeAutoSwitch)
-      && !getHubConfig().companyCli && getHubConfig().claudeBackend !== 'api') {
-      const profile = require('./core/claude-subscription-profiles').profileForSession(
-        opts.claudeRuntimeHome ? { ...opts, claudeConfigDir: undefined } : opts, getHubConfig());
-      // 这台电脑还没有任何 Claude 账号登录过：交给 Claude CLI 自己的登录流程，不在这里拦（2026-10-28：
-      // 新装 Claude 的用户点新建会话只看到「Claude 登录或配置文件无法读取」，会话建不出来）。专用账号照旧严格核对。
-      if (profile.id === 'default' && require('./core/claude-subscription-profiles').firstLoginExempt(opts, getHubConfig())) return;
-      await claudeAccountBroker.getCredentials(profile);
-    }
-  },
+  ensureLaunchAuth: ensureSessionLaunchAuth,
   prepareLaunchAuth:(kind,opts)=>launchAuth.precheck(kind,opts),
   getPersistedSessions: () => lastPersistedSessions,
   getTerminalOutputBatchStats: () => terminalOutputBatcher.snapshotStats(),
@@ -3632,7 +3685,7 @@ try {
     restartSession: (id, overrides, options) => sessionOperations.restartSession(id, overrides, options),
     readUsage: () => refreshTokenPlanUsage(true),
     // DeepSeek on Claude Code 是 PTY 会话，改道 / 等待提示经这里推到界面。
-    notify: (sessionId, message) => sendToRenderer('session-notice', { sessionId, message, level: 'warning' }),
+    notify: (sessionId, message, noticeKind) => sendToRenderer('session-notice', { sessionId, message, level: 'warning', noticeKind }),
   });
   // 新建 / 恢复时就改道或等待（额度已知用完）的提示，由 session-manager 发出。
   sessionManager.on('session-notice', event => sendToRenderer('session-notice', event));
@@ -3646,7 +3699,7 @@ try {
     quotaPlan: sessionId => claudeQuotaPrecompact?.planFor(sessionId) || null,
     afterQuotaCompact: sessionId => claudeQuotaPrecompact?.afterCompact(sessionId),
     quotaSkipped: async sessionId => claudeQuotaPrecompact?.skippedMarker(sessionId) === true,
-    notify: (sessionId, message, level) => sendToRenderer('session-notice', { sessionId, message, level }),
+    notify: (sessionId, message, level, noticeKind) => sendToRenderer('session-notice', { sessionId, message, level, noticeKind }),
     // CodeAgent 的上下文占用只在屏幕右侧 Stats 面板上：PTY 缓冲经无界面 xterm 回放成当前一屏。
     readCodeAgentRows: async sessionId => {
       const entry = sessionManager.sessions?.get?.(sessionId);
@@ -4824,8 +4877,18 @@ const accountProfileUsage = require('./main/usage/account-profile-usage').create
   refreshOtherCodex: options => codexOtherUsage.refresh(options),
 });
 ipcMain.handle('account-profile-usage', () => accountProfileUsage.list());
+// 推荐号跳过登录已失效、刷新未确认的号（core/claude-account-credentials.js authBlocked），不把新会话推到开不起来的号上。
+function claudeAccountsWithAuthState(accounts) {
+  const profiles = require('./core/claude-subscription-profiles');
+  return (accounts || []).map(row => {
+    if (row?.error) return row;
+    let blocked = null;
+    try { blocked = claudeAccountBroker.authBlocked(profiles.resolveProfile(getHubConfig(), row.profileId)); } catch {}
+    return blocked ? { ...row, error: blocked.message, errorCode: blocked.code } : row;
+  });
+}
 ipcMain.handle('claude:launch-ranking', () => require('./core/claude-launch-recommend').rankClaudeAccounts({
-  accounts: accountProfileUsage.list().claude, sessions: sessionManager.getAllSessions(),
+  accounts: claudeAccountsWithAuthState(accountProfileUsage.list().claude), sessions: sessionManager.getAllSessions(),
   flagged: new Set(accountProfileUsage.list().claude.map(a => a.profileId).filter(id => accountRiskStore.isFlagged('claude', id))) }));
 require('./main/ipc/account-risk-handlers').registerAccountRiskIpc(ipcMain, { store: accountRiskStore, sendToRenderer });
 ipcMain.handle('refresh-account-profile-usage', (_event, options = {}) => accountProfileUsage.refresh(options));

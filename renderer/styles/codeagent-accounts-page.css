@@ -49,7 +49,7 @@ svg.caa-i.caa-sm{width:14px;height:14px}svg.caa-i.caa-lg{width:20px;height:20px}
 .caa-hero-numbers{display:flex;align-items:flex-end;justify-content:space-between;gap:16px}
 .caa-stat-value{font-family:var(--hw-font-num);font-variant-numeric:tabular-nums;font-size:44px;font-weight:300;line-height:.95;letter-spacing:-1.5px;white-space:nowrap}
 .caa-stat-value small{font-size:16px;font-weight:400;color:var(--hw-text-2);letter-spacing:0;margin-left:8px}
-.caa-hero-sessions{display:flex;align-items:baseline;gap:6px;color:var(--hw-text-3);font-size:12px;white-space:nowrap}.caa-hero-sessions b{font-family:var(--hw-font-num);font-size:22px;font-weight:300;color:var(--hw-text-1)}
+.caa-hero-sessions{display:flex;align-items:baseline;gap:6px;color:var(--hw-text-2);font-size:12px;white-space:nowrap}.caa-hero-sessions b{font-family:var(--hw-font-num);font-size:22px;font-weight:300;color:var(--hw-text-1)}
 .caa-seg-bar{display:flex;height:8px;border-radius:4px;overflow:hidden;gap:2px;background:var(--hw-surface-3)}
 .caa-seg-bar i{display:block;height:100%;background:var(--hw-line-strong)}.caa-seg-bar .caa-ok{background:var(--hw-green)}.caa-seg-bar .caa-warn{background:var(--hw-amber)}
 .caa-legend{display:flex;gap:16px;font-size:12px;color:var(--hw-text-2);flex-wrap:wrap;margin-top:8px}.caa-legend span{display:inline-flex;align-items:center;gap:6px}.caa-legend i{width:8px;height:8px;border-radius:2px;background:var(--hw-line-strong)}.caa-legend .caa-ok{background:var(--hw-green)}.caa-legend .caa-warn{background:var(--hw-amber)}

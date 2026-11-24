@@ -185,17 +185,20 @@ function showForkToast(document, message, level) {
   if (!el) {
     el = document.createElement('div');
     el.id = 'gc-fork-toast';
+    // 小而低调（2026-11-24 用户：弹窗尽可能不显眼，很小的提示就可以）：右下角、小字、浅底细边，不压在输入框和对话上。
     Object.assign(el.style, {
-      position: 'fixed', left: '50%', bottom: '28px', transform: 'translateX(-50%)',
-      zIndex: '100000', maxWidth: 'min(520px, 90vw)', padding: '10px 15px',
-      borderRadius: '10px', color: '#f5f5f7',
-      font: '13px -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif',
-      boxShadow: '0 8px 28px rgba(0,0,0,.35)', pointerEvents: 'none',
+      position: 'fixed', right: '16px', bottom: '72px',
+      zIndex: '100000', maxWidth: 'min(360px, 60vw)', padding: '3px 10px',
+      borderRadius: '6px', border: '1px solid var(--border-subtle, rgba(24,36,49,.14))',
+      background: 'var(--hw-surface, #fff)', color: 'var(--fg-muted, #5e6d7e)',
+      font: '12px/1.5 "Microsoft YaHei", "Segoe UI", sans-serif', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+      boxShadow: '0 1px 4px rgba(0,0,0,.08)', pointerEvents: 'none',
     });
     document.body.appendChild(el);
   }
   el.textContent = message;
-  el.style.background = level === 'error' ? 'rgba(184, 47, 47, .96)' : 'rgba(34, 34, 38, .96)';
+  el.title = message;
+  el.style.borderLeft = level === 'error' ? '2px solid var(--hw-red, #cf0a2c)' : '1px solid var(--border-subtle, rgba(24,36,49,.14))';
   el.style.display = 'block';
   if (el._hideTimer) clearTimeout(el._hideTimer);
   el._hideTimer = setTimeout(() => { el.style.display = 'none'; }, 2600);

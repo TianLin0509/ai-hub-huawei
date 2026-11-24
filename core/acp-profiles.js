@@ -60,7 +60,7 @@ function buildAcpOptions(kind, opts, config, dataDir, baseEnv = process.env) {
   // 选了「自有接口」：用户自己的 OpenAI 兼容地址直连（2026-11-20），其余启动步骤与公司模型相同。
   const companyRoute = kind === 'deepseek-acp' && config.companyCli && config.dshBackend === 'proxy'
     ? require('./company-model-proxy').dshRoute({ dataDir, sessionId: opts.dshCardKeyTag || opts.id, model: opts.model || config.dshApiModel, account: opts.companyProxyAccount,
-      gateway: config.dshUpstream === 'gateway' })
+      gateway: config.dshUpstream === 'gateway', midStreamRetry: !!(opts.dshCliRuntime && !opts.dshCardAcp) })
     : kind === 'deepseek-acp' && config.companyCli && config.dshBackend === 'api'
       ? require('./company-model-proxy').dshOwnRoute({ baseURL: config.dshApiBaseUrl, apiKey: config.dshApiKey, model: config.dshApiModel }) : null;
   // 套餐额度用完且配了 DeepSeek Key 时，DeepSeek 旧 Harness 整条会话改走 DeepSeek 官方 API；千问 / GLM 等重置（core/token-plan-fallback.js）。

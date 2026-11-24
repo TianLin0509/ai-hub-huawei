@@ -394,7 +394,10 @@ function buildComposerStatusModel(session, options = {}) {
     const waited = apiRetry && !elapsed && submittedAt > 0 && now >= submittedAt ? formatRuntimeSeconds(now - submittedAt) : '';
     return {
       state,
-      text: apiRetry ? `${apiRetry}${elapsed || waited ? ' · 已等 '+(elapsed || waited) : ''}`
+      // 引擎自动重试中不写进状态行（2026-11-24 提示大清理：重试最后成功就什么都不显示，放弃了才由会话里的报错卡说一行）；
+      // 只保留「已等 N 秒」让人知道没卡住，重试详情放悬停（retryNote → 状态行 title）。
+      retryNote: apiRetry,
+      text: apiRetry ? `${provider} 正在工作${elapsed || waited ? ' · 已等 '+(elapsed || waited) : ''}`
         : truth.state === 'starting' && ['codex-app-server','claude-stream-json'].includes(session?.runtimeBackend)
         ? `${provider} ${['accepted','confirmed'].includes(session.nativeRuntime?.submission?.status || session.nativeRuntime?.submission?.sendStatus) ? '已收到 · 等待输出' : '正在提交'}${elapsed ? ' · '+elapsed : ''}`
         : elapsed ? `${provider} 正在工作 · ${elapsed}` : `${provider} 正在工作`,

@@ -3,8 +3,14 @@
 // 卡片、历史、权限、提问沿用 AcpSession；这里只多三件事：管理按需终端、serve 故障自动恢复、连续失败时请 Hub 改回 PTY。
 const { AcpSession } = require('./acp-session');
 const { CodeAgentServeClient, canonicalDir } = require('./codeagent-serve-client');
+const serveFallback = require('./codeagent-serve-fallback');
 
-const TERMINAL_KEEP_MS = 3 * 60_000; // 回到卡片后终端再留 3 分钟，来回看不用反复等连接。
+const TERMINAL_KEEP_MS = 3 * 60_000;
+const SERVE_HANDOVER = 'SERVE_FALLBACK_HANDOVER';
+function serveHandoverError(reason, cause) {
+  return Object.assign(new Error('CodeAgent 轻享服务暂不可用，正在改用终端方式，本条消息未发送' + (reason ? `（${reason}）` : '')),
+    { code: SERVE_HANDOVER, notSent: true, ...(cause ? { cause } : {}) });
+} // 回到卡片后终端再留 3 分钟，来回看不用反复等连接。
 const RECOVER_DELAY_MS = 1200;
 const RECOVER_WINDOW_MS = 5 * 60_000;
 const RECOVER_MAX = 3;
@@ -46,6 +52,45 @@ class CodeAgentServeSession extends AcpSession {
     };
   }
   print() { /* 后台显示的是真实终端，结构化输出只进卡片 */ }
+
+  // 首次连接（或重连）失败：记进账号冷却账本，请 Hub 无感改回终端方式；错误照原样抛给直接调用方。
+  async _start() {
+    try {
+      const result = await super._start();
+      this.everConnected = true;
+      serveFallback.clearCooldown(this.host?.configDir);
+      return result;
+    } catch (error) {
+      if (!this.closed && !this.fellBack) {
+        const reason = error?.message || String(error);
+        serveFallback.recordFailure(this.host?.configDir, reason);
+        this.fellBack = true;
+        this.fallbackReason = reason;
+        this.emit('serve-fallback', { reason, phase: this.everConnected ? 'runtime' : 'startup', hasThread: !!(this.threadId || this.options.resumeId),
+          pendingPrompts: this._snapshotPendingPrompts() });
+      }
+      throw error;
+    }
+  }
+  // 还没送进 serve、留在待发队列里的用户消息（回执里如实报数）。已提交、结果不明的轮次不在这里，绝不重发。
+  _snapshotPendingPrompts() {
+    const out = [];
+    for (const record of this.promptQueue?.records || []) {
+      if (this.promptQueue.launching === record) continue;
+      if (typeof record.text === 'string' && record.text.trim()) out.push({ id: record.id, text: record.text });
+    }
+    return out;
+  }
+  // 已经请 Hub 改回终端时，这条消息肯定没送进 serve：报「改道中、未发送」（notSent），
+  async send(text, options = {}) {
+    // 改道时旧对象会被关掉（closed），所以这里只看 fellBack。
+    if (this.fellBack) throw serveHandoverError(this.fallbackReason);
+    try { return await super.send(text, options); }
+    catch (error) {
+      if (this.fellBack && error?.notSent === true) throw serveHandoverError(this.fallbackReason, error);
+      throw error;
+    }
+  }
   acknowledge() {
     const unknown = this.runtime.submission?.status === 'unknown' ? this.runtime.submission : null;
     super.acknowledge();
@@ -61,20 +106,29 @@ class CodeAgentServeSession extends AcpSession {
   }
 
   // serve 的模型跟着每条消息走，不需要 ACP 配置项；思考强度第一期不开放，明确报错，不假装切换成功。
-  async configure({ model, effort } = {}, starting = false) {
+  async configure({ model, effort, provider = '' } = {}, starting = false) {
     if (!starting) await this.start();
     if (this.active) throw new Error('请等待当前轮次结束后修改模型');
     if (effort && !starting) throw new Error('CodeAgent-Lite 暂不支持切换思考强度，请用 PTY 方式');
+    let resolved = null;
     if (model) {
-      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(model)) throw new Error('模型名称无效');
-      if (this.client.model !== model) { this.client.model = model; this.client.provider = ''; await this.client._resolveProvider(); }
+      // 中途换只拦空值、控制字符和超长：显示名可能带括号或线路前缀，交给 switchModel 按清单认，解析出的 id 在那里再校验。
+      if (typeof model !== 'string' || !model.trim() || model.length > 164 || /[\x00-\x1f\x7f]/.test(model)) throw new Error('模型名称无效');
+      if (starting) {
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(model)) throw new Error('模型名称无效');
+        if (this.client.model !== model) { this.client.model = model; this.client.provider = ''; await this.client._resolveProvider(); }
+      } else {
+        // 会话中途换：以 serve 的模型清单为准，认不出就报错、保留原模型（core/codeagent-serve-client.js switchModel）。
+        resolved = await this.client.switchModel(model, provider);
+      }
       this.currentModel = this.client.model;
       this.options.model = this.client.model;
       this.options.provider = this.client.provider;
     }
     if (!this.bootstrapping) this.emit('bound', { threadId: this.threadId, model: this.currentModel, configOptions: [] });
     this.persist();
-    return { ok: true, modelId: this.currentModel, displayName: this.currentModel, effort: null, appliesOn: 'next-turn' };
+    return { ok: true, modelId: this.currentModel, displayName: resolved?.label || this.currentModel, effort: null, appliesOn: 'next-turn',
+      ...(resolved ? { provider: resolved.provider, providerLabel: resolved.providerLabel, matchKind: resolved.kind } : {}) };
   }
 
   // 在真实终端里已经答过的权限或提问，卡片上的按钮要同步收起。
@@ -93,7 +147,8 @@ class CodeAgentServeSession extends AcpSession {
     const fallBack = reason => {
       if (this.fellBack) return;
       this.fellBack = true;
-      this.emit('serve-fallback', { reason });
+      serveFallback.recordFailure(this.host?.configDir, reason);
+      this.emit('serve-fallback', { reason, phase: 'runtime', hasThread: !!this.threadId, pendingPrompts: this._snapshotPendingPrompts() });
     };
     try {
       do {
@@ -218,4 +273,4 @@ class CodeAgentServeSession extends AcpSession {
   }
 }
 
-module.exports = { CodeAgentServeSession, TERMINAL_KEEP_MS };
+module.exports = { CodeAgentServeSession, TERMINAL_KEEP_MS, SERVE_HANDOVER };

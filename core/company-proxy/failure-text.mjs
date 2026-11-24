@@ -10,6 +10,8 @@ const STEPS = [
   [/ACCESS_TOKEN|CREDENTIAL|LOGIN/, '读取登录信息（CodeAgent 登录可能过期，打开 CodeAgent 登录一下）'],
   [/IDENTITY/, '身份校验（向公司服务确认登录身份）'],
   [/SIGNATURE|SIGNER|KERNEL/, '请求签名（CodeAgent 签名模块）'],
+  [/FIRST_FRAME_TIMEOUT/, '等公司模型开始回答（连着但一直没有内容回来，已自动重试过）'],
+  [/STREAM_BROKEN_BEFORE_FIRST_FRAME|EMPTY_STREAM/, '接收公司模型的回答（还没回内容连接就断了或回了空内容，已自动重试过）'],
   [/TIMEOUT|DEADLINE/, '等待公司上游超时'],
   [/GENERATION_REQUEST_FAILED|L1_REQUEST_FAILED|DISPATCH/, '连接公司模型服务（网络或代理不通）'],
   [/MODEL_NOT_ALLOWED|MODEL_UNVERIFIED|MODEL_MAPPING/, '选择模型（这个模型不在公司可用清单里）'],
@@ -116,8 +118,16 @@ export function midStreamMessage(error, { timedOut = false } = {}) {
 export function anthropicErrorEvent(message, type = 'api_error') {
   return `event: error\ndata: ${JSON.stringify({ type: 'error', error: { type, message } })}\n\n`;
 }
-export function chatErrorFrame(message, type = 'upstream_error') {
-  return `data: ${JSON.stringify({ error: { type, message } })}\n\n`;
+// 中途断流、超时是短暂失败：给 DSH 的错误帧末尾带一个英文标记，DSH 自带的重试按它认出「连接中断 / 超时」，
+// 在同一轮里重跑这一步（它只认英文关键词：connection → TRANSPORT，timeout → TIMEOUT）。其他中途失败不带标记、不重试。
+export function midStreamRetryTag(error, { timedOut = false } = {}) {
+  if (timedOut) return 'timeout';
+  const raw = String(error?.message || error?.code || '');
+  if (/JSON/i.test(raw) || /tool/i.test(raw) || /stream error|Upstream stream error/i.test(raw)) return '';
+  return 'connection interrupted';
+}
+export function chatErrorFrame(message, type = 'upstream_error', { retryTag = '' } = {}) {
+  return `data: ${JSON.stringify({ error: { type, message: retryTag ? `${message} [${retryTag}]` : message } })}\n\n`;
 }
 export function responsesFailedEvent(message, response = {}, sequence = undefined) {
   const body = { type: 'response.failed', ...(sequence === undefined ? {} : { sequence_number: sequence }),
@@ -125,8 +135,8 @@ export function responsesFailedEvent(message, response = {}, sequence = undefine
   return `event: response.failed\ndata: ${JSON.stringify(body)}\n\n`;
 }
 /** The protocol-defined error frame for a path, used once the response has started. */
-export function errorFrameFor(pathname, message) {
+export function errorFrameFor(pathname, message, { retryTag = '' } = {}) {
   if (pathname === '/v1/messages') return anthropicErrorEvent(message);
   if (pathname === '/v1/responses') return responsesFailedEvent(message, { object: 'response' });
-  return chatErrorFrame(message);
+  return chatErrorFrame(message, 'upstream_error', { retryTag });
 }

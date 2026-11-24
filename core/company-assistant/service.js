@@ -1723,7 +1723,8 @@ class CompanyAssistant {
     if (info.modelConfirmationRequired) return true;
     const feature = this.pool?.get(id)?.featureAgent || (this.toolsetFor?.(id) === 'ppt' ? 'ppt' : 'assistant');
     if (require('../feature-agent-choice').stale(this.deps.dataDir, feature, info)) return true;
-    if (info.featureAgentChoice) return false;
+    // 功能选型只换了后端、没单独指定模型的（如一键全切 Lite），仍按助理设置的模型与供应商核对。
+    if (!require('../feature-agent-choice').inheritsAssistantChoice(info.featureAgentChoice)) return false;
     const routes = require('../codeagent-assistant-route');
     const route = routes.choose(this.deps.dataDir, info.codeagentPoolAccount || 'personal', info.currentModel?.id || info.fixedModel || '', { configDir: info.codeagentConfigDir });
     if (!routes.matchesSession(info, route)) return true;
@@ -2030,7 +2031,7 @@ class CompanyAssistant {
         if (this.now() - job.apiError.at >= UNMARKED_GRACE_MS) {
           const session = this.deps.getSession(job.sessionId) || {};
           // 部门 API key 会话：网关口径的一行原因 + 下一步按钮（core/assistant-gateway-route.js），不套 CodeAgent 供应商的说法。
-          const gw = session.apiGatewayRoute ? require('../assistant-gateway-route').failure(err.text) : null;
+          const gw = session.apiGatewayRoute ? require('../assistant-gateway-route').gatewayFailure(err.text) : null;
           if (gw) { job.gatewayError = gw; this.failJob(job, gw.line); return; }
           const d = require('./turn-api-error').describe(err.text, session);
           if (d.routeRejected) job.providerRepair = require('../codeagent-assistant-route').repairAction(this.deps.dataDir, d.account);

@@ -6,6 +6,7 @@ const { EventEmitter } = require('node:events');
 const { JsonlTail } = require('./jsonl-tail');
 const { captureClaudeMessage, claudeTranscriptTurns } = require('./claude-native-transcript');
 const paste = require('./pty-prompt-submit');
+const { dshTurnStatus, dshFailureText } = require('./dsh-turn-outcome');
 const textOf = content => (content || []).filter(b => b.type === 'text').map(b => b.text || '').join('\n');
 // The native question panel keeps stdin until the terminal answers it. The Hub
 // cannot answer for the user, so it publishes the question verbatim: the status
@@ -282,7 +283,9 @@ class DshCliSession extends EventEmitter {
           content: textOf(d.message?.content), is_error: d.isError === true }] } });
     } else if (record && event.type === 'turn/end') {
       const kind = d.reason?.kind;
-      const status = kind === 'completed' ? 'completed' : ['aborted', 'interrupted'].includes(kind) ? 'interrupted' : 'failed';
+      // 写到单步输出上限（max-tokens）算完成，不算失败；失败给一句人话（core/dsh-turn-outcome.js）。
+      const status = dshTurnStatus(kind);
+      const failure = status === 'failed' ? dshFailureText(d.reason?.error?.message, { kind }) : '';
       // A steered message opens another record inside the same native turn; the
       // turn's end settles every open record, not just the newest one.
       for (const item of this.records) if (item.turnId === String(d.turn) && item.status === 'running') {
@@ -291,9 +294,10 @@ class DshCliSession extends EventEmitter {
       record.status = status; record.completedAt = at;
       this.lastOutcome = { hubSessionId: this.options.id, threadId: this.threadId, turnId: String(d.turn),
         status, completedAt: at, signalSource: 'provider-cli', finality: 'provider_final', text: record.finalText,
-        ...(d.reason?.error?.message ? { reason: d.reason.error.message } : {}) };
+        ...(failure ? { reason: failure, message: failure } : {}),
+        ...(d.reason?.error?.message ? { rawReason: d.reason.error.message } : {}) };
       if (!replay) { this.apply({ state: status, completedAt: at,
-        reason: status === 'failed' ? (d.reason?.error?.message || '') : null });
+        reason: status === 'failed' ? failure : null });
         this.lifecycle(status === 'completed' ? 'turn-complete' : status === 'interrupted' ? 'turn-aborted' : 'turn-error', this.lastOutcome); }
     }
 

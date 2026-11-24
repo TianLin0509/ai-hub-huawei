@@ -21,6 +21,8 @@ class LaunchAuth {
     this.recoveryAt = new Map();
   }
   connection(kind, opts = {}) {
+    // 部门 API key 的功能会话走本机反代的网关上游，不用任何订阅账号登录（非公司版也不去查 Claude 订阅）。
+    if (require('./assistant-gateway-route').allowedSession(kind, opts || {})) return null;
     const base = String(kind || '').replace(/-resume$/, '');
     const config = this.getConfig();
     if (config.companyCli && ['claude', 'codex'].includes(base)) return null;

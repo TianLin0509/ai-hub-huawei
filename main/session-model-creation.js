@@ -85,7 +85,8 @@ function createSessionWithModelPolicy({ kind, opts, create, requestConfirmation,
     launchOpts.codeagentModelPick = true;
     launchOpts.modelPinSource = 'user';
   }
-  const notice = message => sendToRenderer?.('session-notice', { level: 'warning', persistent: true, message: `${contextLabel}：${message}` });
+  // 未创建、恢复保持停止、已取消这类提示是这次操作的最终结果，传 'blocking' 让提示闸门（core/notice-gate.js）放行。
+  const notice = (message, noticeKind) => sendToRenderer?.('session-notice', { level: 'warning', persistent: true, noticeKind, message: `${contextLabel}：${message}` });
   const created = session => {
     if (session?.modelChange && ['from', 'to', 'reason', 'at'].some(key => session.modelChange[key] !== launchOpts.modelChange?.[key])) {
       notice(pins.modelChangeMessage(session.modelChange));
@@ -96,11 +97,11 @@ function createSessionWithModelPolicy({ kind, opts, create, requestConfirmation,
     if (error.code !== 'SESSION_MODEL_UNAVAILABLE') throw error;
     const availableModels = [...new Set([...(error.availableModels || []), error.suggestedModel])].filter(models.isSafeModelId);
     if (error.canChooseAlternative === false) {
-      notice(`${error.message} 当前问题不能通过换模型解决，请升级 CLI 或修复会话设置文件后重试。未创建会话。`);
+      notice(`${error.message} 当前问题不能通过换模型解决，请升级 CLI 或修复会话设置文件后重试。未创建会话。`, 'blocking');
       throw Object.assign(error, operation === 'resume' ? { stopped: true, notSent: true } : {});
     }
     if (!availableModels.length || typeof requestConfirmation !== 'function') {
-      notice(`${error.message} ${operation === 'resume' ? '恢复保持停止。' : '未创建会话。'}`);
+      notice(`${error.message} ${operation === 'resume' ? '恢复保持停止。' : '未创建会话。'}`, 'blocking');
       throw Object.assign(error, operation === 'resume' ? { stopped: true, notSent: true } : {});
     }
     // 新建会话、模型只是账号默认推出来的（2026-11-24 用户决定）：默认模型下线时直接换成推荐模型创建，只给一行提示，不弹确认卡片。
@@ -132,7 +133,7 @@ function createSessionWithModelPolicy({ kind, opts, create, requestConfirmation,
       message: `${contextLabel}：${error.message}` })).then(selected => {
       if (!selected) {
         const message = operation === 'resume' ? '已取消恢复，原会话与待发任务保持停止。' : '已取消，未创建会话；需要时可重新发起创建。';
-        notice(message);
+        notice(message, 'blocking');
         throw Object.assign(new Error(message), { code: operation === 'resume' ? 'SESSION_MODEL_CONFIRMATION_CANCELLED' : 'SESSION_CREATION_CANCELLED', notCreated: true, notSent: true, stopped: true });
       }
       if (!availableModels.includes(selected)) throw new Error('所选模型不在本次可用清单内，未创建会话');

@@ -207,6 +207,10 @@ function _httpCloseTarget(url, timeoutMs = 1500) {
     .then(response => response.statusCode >= 200 && response.statusCode < 300);
 }
 
+// 发版冒烟在忙机器上跑（预检、其他会话同时占满 CPU）时，收尾和端口归属查询会慢几倍：
+// HUB_TEST_TIMEOUT_SCALE 只放宽收尾等待和端口归属查询的上限，判定条件不变。
+const TIMEOUT_SCALE = Math.min(5, Math.max(1, Number(process.env.HUB_TEST_TIMEOUT_SCALE) || 1));
+
 async function _verifyCdpPortOwner(port, expectedPid, execFile = execFileAsync, onDiagnostic = null) {
   const numericPort = Number(port);
   const numericPid = Number(expectedPid);
@@ -244,12 +248,12 @@ async function _verifyCdpPortOwner(port, expectedPid, execFile = execFileAsync, 
   // netstat is substantially faster and less prone to transient CIM provider
   // stalls than Get-NetTCPConnection on a machine with many short-lived E2E
   // Electron processes. Parse only LISTENING rows for this exact local port.
-  const netstatQuery = diagnostic ? { method: 'netstat', startedAt: Date.now(), timeoutMs: 3000, owners: [] } : null;
+  const netstatQuery = diagnostic ? { method: 'netstat', startedAt: Date.now(), timeoutMs: 3000 * TIMEOUT_SCALE, owners: [] } : null;
   if (diagnostic) diagnostic.queries.push(netstatQuery);
   try {
     const result = await execFile('netstat.exe', ['-ano', '-p', 'TCP'], {
       windowsHide: true,
-      timeout: 3000,
+      timeout: 3000 * TIMEOUT_SCALE,
       maxBuffer: 2 * 1024 * 1024,
     });
     const owners = String(result && result.stdout || '')
@@ -270,7 +274,7 @@ async function _verifyCdpPortOwner(port, expectedPid, execFile = execFileAsync, 
     `$owners = @(Get-NetTCPConnection -State Listen -LocalPort ${numericPort} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess)`,
     "[Console]::Out.Write(($owners -join ','))",
   ].join('; ');
-  const powershellQuery = diagnostic ? { method: 'powershell', startedAt: Date.now(), timeoutMs: 5000, owners: [] } : null;
+  const powershellQuery = diagnostic ? { method: 'powershell', startedAt: Date.now(), timeoutMs: 5000 * TIMEOUT_SCALE, owners: [] } : null;
   if (diagnostic) diagnostic.queries.push(powershellQuery);
   try {
     const result = await execFile('powershell.exe', [
@@ -279,7 +283,7 @@ async function _verifyCdpPortOwner(port, expectedPid, execFile = execFileAsync, 
       '-NonInteractive',
       '-Command',
       script,
-    ], { windowsHide: true, timeout: 5000, maxBuffer: 64 * 1024 });
+    ], { windowsHide: true, timeout: 5000 * TIMEOUT_SCALE, maxBuffer: 64 * 1024 });
     const owners = String(result && result.stdout || '')
       .split(',')
       .map(value => Number(value.trim()))
@@ -425,10 +429,14 @@ async function launchIsolatedHub({
     err.termination = termination;
     throw err;
   }
-  const identityVerified = await _waitForCdpPortOwner(port, pid, 15000); // 机器满载时 netstat 单次就要几秒
+  const identityVerified = await _waitForCdpPortOwner(port, pid, 15000 * TIMEOUT_SCALE); // 机器满载时 netstat 单次就要几秒
   if (!identityVerified) {
+    // 再查一次并把实际看到的占用者写进报错：区分「端口被别的进程占了」和「查询本身超时」
+    let seen = null;
+    await _verifyCdpPortOwner(port, pid, undefined, d => { seen = d; }).catch(() => {});
     const termination = await _terminateSpawnedChild(child);
-    const err = new Error(`[${label}] CDP port ${port} is not owned by spawned PID ${pid}; refusing to attach`);
+    const detail = seen ? ' (' + (seen.queries || []).map(q => `${q.method}:${q.outcome}${q.owners && q.owners.length ? '=' + q.owners.join('/') : ''}${q.elapsedMs != null ? '@' + q.elapsedMs + 'ms' : ''}`).join(', ') + ')' : '';
+    const err = new Error(`[${label}] CDP port ${port} is not owned by spawned PID ${pid}; refusing to attach${detail}`);
     err.logTail = logLines.slice(-30).join('\n');
     err.termination = termination;
     throw err;
@@ -494,7 +502,7 @@ function _assertCleanHubExit(hub, context) {
 // node-pty callbacks safely. The verifier must wait longer than that contract;
 // an 8s test timeout otherwise force-kills a healthy stress run mid-drain and
 // reports the harness timeout as a product crash.
-async function gracefulQuit(hub, { timeoutMs = 20_000, allowAlreadyExited = false, captureDiagnostics = false } = {}) {
+async function gracefulQuit(hub, { timeoutMs = 20_000 * TIMEOUT_SCALE, allowAlreadyExited = false, captureDiagnostics = false } = {}) {
   if (!hub) return { exitCode: null, exitSignal: null, forced: false };
   if (!hub.isAlive || !hub.isAlive()) {
     const cleanExit = _assertCleanHubExit(hub, 'exited before teardown');
@@ -505,8 +513,8 @@ async function gracefulQuit(hub, { timeoutMs = 20_000, allowAlreadyExited = fals
   }
   const ownerChecks = captureDiagnostics ? [] : null;
   if (!hub.identityVerified || !await (captureDiagnostics
-    ? _waitForCdpPortOwner(hub.port, hub.pid, 8000, _verifyCdpPortOwner, evidence => ownerChecks.push(evidence))
-    : _waitForCdpPortOwner(hub.port, hub.pid, 8000))) {
+    ? _waitForCdpPortOwner(hub.port, hub.pid, 8000 * TIMEOUT_SCALE, _verifyCdpPortOwner, evidence => ownerChecks.push(evidence))
+    : _waitForCdpPortOwner(hub.port, hub.pid, 8000 * TIMEOUT_SCALE))) {
     // The CDP listener can disappear a fraction before Electron emits `exit`.
     // Never attach to or close an unverified port, but allow the exact spawned
     // child a short window to finish a clean shutdown on its own.

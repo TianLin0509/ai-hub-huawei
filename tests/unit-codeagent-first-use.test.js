@@ -119,7 +119,8 @@ test('常驻提示里的登录和后台按钮可操作，重复提示不重复�
   const context = { document, sessions: new Map([['sid', { title: '会话' }]]),
     ipcRenderer: { on: (name, fn) => listeners.set(name, fn), invoke: async channel => { calls.push(channel); return { ok: true }; } },
     require: () => require('../renderer/sticky-notice.js'), selectSession: async (sid, opts) => calls.push([sid, opts.splitBypass]),
-    applyViewMode: mode => calls.push(mode), showToast: () => assert.fail('应为常驻提示') };
+    applyViewMode: mode => calls.push(mode), showToast: () => assert.fail('应为常驻提示'),
+    noticeGateAllows: (() => { const g = require('../core/notice-gate').createNoticeGate(); return n => g.decide(n).show; })() };
   const handler = read('renderer/renderer.js').match(/ipcRenderer.on\('session-notice',[\s\S]*?\n}\);/)[0];
   vm.runInNewContext(handler, context);
   const login = { message: '请先登录', sessionId: 'sid', persistent: true, action: 'codeagent-login' };
@@ -127,11 +128,12 @@ test('常驻提示里的登录和后台按钮可操作，重复提示不重复�
   listeners.get('session-notice')(null, login);
   const stack = document.getElementById(notices.STACK_ID);
   assert.equal(stack.children.length, 1);
-  assert.equal(stack.children[0].children[0].children.length, 1);
-  await stack.children[0].children[0].children[0].listeners.click();
+  // 正文是一行（第一个子节点）+ 紧跟的「登录」按钮，重复提示不再叠按钮。
+  assert.equal(stack.children[0].children[0].children.length, 2);
+  await stack.children[0].children[0].children[1].listeners.click();
   assert.deepEqual(calls, ['codeagent-pool:personal-login']);
   listeners.get('session-notice')(null, { message: '请确认目录信任', sessionId: 'sid', persistent: true, action: 'open-backstage' });
-  const button = stack.children[1].children[0].children[0];
+  const button = stack.children[1].children[0].children[1];
   assert.equal(button.textContent, '打开后台');
   await button.listeners.click();
   assert.deepEqual(calls.slice(1), [['sid', true], 'pty']);

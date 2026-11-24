@@ -6,7 +6,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
-const { redact, recentLogs, tailLines } = require('./hub-feedback');
+const { redact, recentLogs, sceneLogs, isPollLog, tailLines, POLL_LOG_LINES } = require('./hub-feedback');
 
 const MAINTAINER_WELINK = 'l00807938';
 // 单条聊天消息的上限没实测过：手机对话按 1500 字保守切（core/company-assistant/phone.js），这里一样；整条精简版最多两段。
@@ -15,10 +15,15 @@ const MAX_CHARS = 2 * CHUNK;
 const ERROR_LINE = /error|exception|fail|fatal|timeout|refused|denied|错误|失败|异常|超时|报错|拒绝|崩溃|闪退/i;
 const ERROR_LINES = 12;
 const LINE_MAX = 220;
+// 每份日志最多占几行，免得一份刷得勤的日志把 12 行占满（2026-11-24 四份反馈全是助理消息轮询日志）。
+// 和本次场景相关的日志排在最前、多给几行；没有报错行时带它最后 2 行，维护人至少能看到当时的状态。
+const PER_LOG = 4;
+const PER_SCENE_LOG = 6;
+const SCENE_TAIL = 2;
 const NOTE = '\n（完整诊断包已存在反馈人电脑的「下载」文件夹，需要时可以找对方要）';
 
 // 精简版：头部（版本、系统、运行快照、联系方式）+ 问题描述 + 最近日志里的报错行（新的优先，每行截到 220 字），总长 ≤ maxChars。
-function compactFeedback({ info = {}, description = '', contact = '', logsDir, now = Date.now(), maxChars = MAX_CHARS, fsModule = fs, redactOpts } = {}) {
+function compactFeedback({ info = {}, description = '', contact = '', logsDir, dataDir = logsDir ? path.dirname(logsDir) : '', scenes = [], now = Date.now(), maxChars = MAX_CHARS, fsModule = fs, redactOpts } = {}) {
   const desc = String(description || '').trim() || '（未填写）';
   const head = ['【AI HUB 一键反馈】',
     `版本：${info.productName || 'AI Hub'} ${info.edition || ''} v${info.version || '?'}`.replace(/\s+/g, ' '),
@@ -29,14 +34,27 @@ function compactFeedback({ info = {}, description = '', contact = '', logsDir, n
   head.push(`时间：${new Date(now).toLocaleString('zh-CN', { hour12: false })}`, '', '问题描述：');
   const headText = redact(head.join('\n'), redactOpts);
   const errors = [];
-  for (const log of logsDir ? recentLogs(logsDir, fsModule, { mention: description }) : []) {
+  const push = (name, raw) => {
+    const line = redact(raw, redactOpts).replace(/\s+/g, ' ').trim().slice(0, LINE_MAX);
+    if (line && !errors.some(e => e.line === line)) { errors.push({ name, line }); return true; }
+    return false;
+  };
+  // 顺序与整包一致：描述里点名的日志 → 场景相关日志 → 其余新的日志；同一份只读一次。
+  const said = String(description || '');
+  const recent = logsDir ? recentLogs(logsDir, fsModule, { mention: description, scenes }) : [];
+  const named = recent.filter(l => !!said && said.includes(path.basename(l.file))).map(l => ({ ...l, scene: true }));
+  const seen = new Set();
+  const once = l => { const k = path.resolve(l.file).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; };
+  const ordered = [...named, ...sceneLogs({ logsDir, dataDir, scenes, fsModule }).map(l => ({ ...l, scene: true })), ...recent].filter(once);
+  for (const log of ordered) {
     let rows = [];
     try { rows = tailLines(log.file, 300, 256 * 1024, fsModule); } catch { continue; }
-    for (let i = rows.length - 1; i >= 0 && errors.length < ERROR_LINES; i--) {
-      if (!ERROR_LINE.test(rows[i])) continue;
-      const line = redact(rows[i], redactOpts).replace(/\s+/g, ' ').trim().slice(0, LINE_MAX);
-      if (line && !errors.some(e => e.line === line)) errors.push({ name: log.name, line });
+    const cap = isPollLog(log.name) ? POLL_LOG_LINES : log.scene ? PER_SCENE_LOG : PER_LOG;
+    let took = 0;
+    for (let i = rows.length - 1; i >= 0 && errors.length < ERROR_LINES && took < cap; i--) {
+      if (ERROR_LINE.test(rows[i]) && push(log.name, rows[i])) took += 1;
     }
+    if (log.scene && !took) for (const r of rows.slice(-SCENE_TAIL).reverse()) { if (errors.length < ERROR_LINES) push(log.name, r); }
     if (errors.length >= ERROR_LINES) break;
   }
   const body = redact(desc, redactOpts);
@@ -44,7 +62,7 @@ function compactFeedback({ info = {}, description = '', contact = '', logsDir, n
   // 先保描述：描述太长就截描述、不带报错行；否则报错行从最旧的一行往外裁。
   if (body.length > room) return headText + '\n' + body.slice(0, Math.max(0, room - 12)) + '…（描述过长已截断）' + NOTE;
   const lines = errors.map(e => `[${e.name}] ${e.line}`);
-  const title = '\n\n最近报错（新的在前）：\n';
+  const title = '\n\n最近报错（和这次问题相关的日志在前）：\n';
   while (lines.length && headText.length + 1 + body.length + title.length + lines.join('\n').length > room) lines.pop();
   return headText + '\n' + body + (lines.length ? title + lines.join('\n') : '') + NOTE;
 }

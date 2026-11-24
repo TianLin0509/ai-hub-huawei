@@ -39,7 +39,32 @@ function createCodexNativeControls({ sessionId, invoke, document: doc = document
       buttons.forEach(b => { b.disabled = false; });
     }
   };
-  function renderRequest(request, epoch) {
+  // CodeAgent-Lite 的工具授权（2026-11-24 一键反馈 v5.6.99：深色大框太显眼）：一行小字 + 几个小按钮，详情放悬停提示。
+  const quietPermission = (session, request) => session?.codeagentRunMode === 'serve' && request.method === 'session/request_permission'
+    && !request.params?.toolCall?._meta?.qwenInteractionKind && (request.params?.options || []).length > 0;
+  function renderQuietPermission(request, epoch) {
+    const form = node('form', null, 'codex-native-request native-quiet-request');
+    form.dataset.requestId = String(request.id);
+    form.dataset.epoch = String(epoch);
+    const p = request.params || {};
+    const title = String(p.toolCall?.title || '工具');
+    const [tool, ...rest] = title.split(' · ');
+    const text = node('span', rest.length ? `允许 ${tool}：${rest.join(' · ')}？` : `允许 ${tool}？`, 'native-quiet-question');
+    text.title = p.toolCall?.rawInput ? JSON.stringify(p.toolCall.rawInput, null, 2) : title;
+    const error = node('span', '', 'codex-native-error');
+    error.setAttribute('role', 'status');
+    form.append(text);
+    for (const option of p.options) {
+      const b = node('button', option.kind === 'allow_once' ? '允许' : option.name || option.optionId, 'native-quiet-option');
+      b.type = 'button'; b.dataset.kind = option.kind || '';
+      b.addEventListener('click', () => action({ action:'reply', requestId:request.id, epoch, result:{outcome:{outcome:'selected',optionId:option.optionId}} }, form, error));
+      form.append(b);
+    }
+    form.append(error);
+    return form;
+  }
+  function renderRequest(request, epoch, session) {
+    if (quietPermission(session, request)) return renderQuietPermission(request, epoch);
     const form = node('form', null, 'codex-native-request');
     form.dataset.requestId = String(request.id);
     form.dataset.epoch = String(epoch);
@@ -316,7 +341,7 @@ function createCodexNativeControls({ sessionId, invoke, document: doc = document
     }
     for (const request of requests) {
       const key = JSON.stringify([runtime.epoch,request.id]);
-      if (!forms.has(key)) forms.set(key,renderRequest(request,runtime.epoch));
+      if (!forms.has(key)) forms.set(key,renderRequest(request,runtime.epoch,session));
       children.push(forms.get(key));
     }
     const focused = doc.activeElement;
@@ -327,6 +352,7 @@ function createCodexNativeControls({ sessionId, invoke, document: doc = document
     while (element.children.length > children.length) element.lastElementChild.remove();
     if (focused && element.contains(focused) && doc.activeElement !== focused) focused.focus();
     element.hidden = element.childElementCount === 0;
+    element.classList?.toggle('native-controls-quiet', element.childElementCount > 0 && [...element.children].every(child => child.classList?.contains('native-quiet-request')));
   }
   return { element, update };
 }

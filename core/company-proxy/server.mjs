@@ -26,6 +26,7 @@ import { createAccountRouter, PERSONAL } from './account-router.mjs';
 import { resolveUpstreamProfile, loadSigner, ProfileError, zoneFromLetter } from './upstream-profile.mjs';
 import { KIND, createClaudeAdapter, createCodexAdapter, createDshAdapter, collectAnthropicMessage } from './adapters.mjs';
 import { createGatewayProvider } from './gateway-provider.mjs';
+import { completeWithRetry } from './upstream-retry.mjs';
 // 公司模型目录（和 CodeAgent 同一个目录接口，按账号拉）：CommonJS，Hub 主进程也用同一份解析与匹配规则。
 const modelCatalog = createRequire(import.meta.url)('./model-catalog.cjs');
 const { listenWithPortFallback } = createRequire(import.meta.url)('./port-fallback.cjs');
@@ -473,7 +474,7 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
   configureGateway(gatewayFromEnv(env));
   // Key 读进内存后就从环境里删掉，之后反代再起的子进程（如签名初始化用的 CodeAgent CLI）不会继承它。
   delete env.AI_HUB_API_GATEWAY_KEY; delete process.env.AI_HUB_API_GATEWAY_KEY;
-  const stats = { started: stamp(), requests: 0, ok: 0, failed: 0, inFlight: 0, queued: 0, byKind: { claude: 0, codex: 0, dsh: 0 }, byModel: {}, lastError: null,
+  const stats = { started: stamp(), requests: 0, ok: 0, failed: 0, retries: 0, inFlight: 0, queued: 0, byKind: { claude: 0, codex: 0, dsh: 0 }, byModel: {}, lastError: null,
     gateway: { requests: 0, ok: 0, failed: 0, inFlight: 0, lastFirstMs: null } };
   let active = 0; const waiters = [];
   const acquire = () => active < opts.maxConcurrent ? (active++, Promise.resolve()) : new Promise(r => { stats.queued++; waiters.push(r); });
@@ -517,7 +518,10 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
       let held = true, handedOff = false;
       const done = () => { if (held) { held = false; stats.inFlight--; release(); } };
       try {
-        const response = await router.complete(body, { signal, sessionTag, kind, pin });
+        // 短暂失败（连不上、5xx、首帧前断流或假死）在这里重试，客户端看不到（upstream-retry.mjs）。
+        // 每次尝试用自己的 attemptSignal：首帧超时只中止这一次，用户取消照样传到底。
+        const response = await completeWithRetry(attemptSignal => router.complete(body, { signal: attemptSignal, sessionTag, kind, pin }), { signal,
+          onRetry: r => { stats.retries++; log(`${kind} ${body.model} upstream ${r.reason}; retry ${r.attempt} in ${r.delayMs}ms`); } });
         if (response.ok) stats.ok++; else { stats.failed++; stats.lastError = `upstream HTTP ${response.status}`; }
         log(`${kind} ${body.model} -> HTTP ${response.status} via ${router.accountFor(sessionTag) || '-'} in ${Date.now() - started}ms`);
         if (!response.body) return response;
@@ -552,7 +556,10 @@ export async function main(argv = process.argv.slice(2), { env = process.env } =
   } });
   const proxy = createProxy({ provider: gated, accessKey: key, timeoutMs: opts.timeoutMs, maxBodyBytes: 64 * 1024 * 1024,
     onEvent: e => { if (e.type !== 'request_finished') log(`proxy event ${e.type}`); else if (e.detail) log(`upstream HTTP ${e.status} reason: ${e.detail}`); },
-    protocolAdapters: { '/v1/messages': logged('claude', claude), '/v1/responses': logged('codex', codex), '/v1/chat/completions': logged('dsh', dsh) } });
+    protocolAdapters: { '/v1/messages': logged('claude', claude), '/v1/responses': logged('codex', codex), '/v1/chat/completions': logged('dsh', dsh) },
+    // DSH 走公司模型：出字前的失败反代已经重试过，交回时用 DSH 不会再重试的状态码（transport.mjs clientStatus）。
+    // 网关会话不动：网关有自己的首包等待和重试，DSH 网关路线的客户端重试是 0 次。
+    noClientRetry: pathname => pathname === '/v1/chat/completions' && !als.getStore()?.gateway });
   const keyBytes = Buffer.from(key);
   // Returns { sessionTag, pin } for a valid "<key>[.<tag>]" credential, otherwise null.
   const credential = req => {

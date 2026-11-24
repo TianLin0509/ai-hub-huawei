@@ -102,7 +102,8 @@ test('自动启动真实选型分支：默认模型不被手动记录覆盖，�
     const ctx = { opts: { purpose }, isCodeAgent: true, codeAgentReadOnly: () => true, codeagentPool: null, hubDefaultTarget: target,
       codeAgentRouteModel: () => '', getHubDataDir: () => dir, codeAgentExpectedModel: () => 'legacy', codeagentConfig: {}, id: 's', freshLaunch: true, console,
       require: name => name === './codeagent-pool' ? {} : name === './codeagent-auto-pick' ? { skipReason: () => { skipCalls++; return null; }, openFor: () => { openCalls++; return open; } }
-        : name === './codeagent-assistant-route' ? route : name === './codeagent-model-choice' ? require('../core/codeagent-model-choice') : {} };
+        : name === './codeagent-assistant-route' ? route : name === './codeagent-model-choice' ? require('../core/codeagent-model-choice')
+        : name === './feature-agent-choice' ? require('../core/feature-agent-choice') : {} };
     vm.runInNewContext(source.slice(begin, end), ctx);
     return { opts: ctx.opts, skipCalls, openCalls };
   };

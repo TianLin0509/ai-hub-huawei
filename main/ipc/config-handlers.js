@@ -432,16 +432,29 @@ function registerConfigIpc(ipcMain, deps) {
       return featureAgents.state(featureDataDir());
     } catch (error) { return { ok: false, error: error.message }; }
   });
+  // 一键预设：8 项会话类功能一键切 CodeAgent-Lite（省内存）或把 Lite 还原为默认（core/feature-agent-choice.js applyPreset）。
+  ipcMain.handle('feature-agents:preset', (_event, request = {}) => {
+    try {
+      const res = featureAgents.applyPreset(featureDataDir(), request.preset);
+      deps.sendToRenderer?.('feature-agents:changed', { preset: request.preset });
+      void deps.companyProxyService?.syncWithConfig?.()?.catch?.(() => {});
+      return { ...res.state, changed: res.changed, skipped: res.skipped };
+    } catch (error) { return { ok: false, error: error.message }; }
+  });
   // 手填网关模型：先做一次轻量连通检测（一句话试跑），通了才记下并选用；不通返回一行原因（网关口径）。
   ipcMain.handle('feature-agents:custom-model', async (_event, request = {}) => {
     try {
-      const dir = featureDataDir();
+      const dir = featureDataDir(), feature = request.feature || 'assistant';
+      // 先挡住：功能不支持部门 key、或还没存 key 时不试跑、不往网关配置里记手填模型。
+      if (!featureAgents.FEATURES.find(f => f.id === feature)?.kinds.includes(featureAgents.GATEWAY)) return { ok: false, error: '这个功能不支持部门 API key（网关）' };
+      const available = require('../../core/assistant-gateway-route').availability(dir);
+      if (!available.available) return { ok: false, error: available.reason, actions: ['gateway-settings'] };
       const r = await require('../../core/api-gateway').addCustomModel(dir, request.model, { safeStorage: require('electron').safeStorage });
       if (!r.ok) return { ok: false, code: r.code, error: r.message, actions: r.actions || [] };
-      // 本机反代没收到新模型表时不吞：照样选用（已测通），但告诉用户要重启 Hub 才生效。
+      // 先记下选型（反代据此决定要不要常驻），再把新模型表交给本机反代；反代没收到时不吞：照样选用（已测通），但告诉用户要重启 Hub 才生效。
+      featureAgents.set(dir, feature, { kind: featureAgents.GATEWAY, model: r.model });
       const applied = await Promise.resolve(deps.companyProxyService?.applyGatewayChange?.()).catch(() => ({ gatewayStale: true }));
-      featureAgents.set(dir, request.feature || 'assistant', { kind: featureAgents.GATEWAY, model: r.model });
-      deps.sendToRenderer?.('feature-agents:changed', { feature: request.feature || 'assistant' });
+      deps.sendToRenderer?.('feature-agents:changed', { feature });
       return { ...featureAgents.state(dir), checked: { model: r.model, firstMs: r.firstMs || null, already: !!r.already },
         ...(applied?.gatewayStale ? { warning: '已连通，但本机反代的模型表没刷新，重启 Hub 后生效' } : {}) };
     } catch (error) { return { ok: false, error: error.message }; }

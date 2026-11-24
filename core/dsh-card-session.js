@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const { AcpSession } = require('./acp-session');
 const { HostedAcpClient } = require('./dsh-card-host');
 const { readDshCliTranscript } = require('./dsh-cli-session');
+const { dshStopStatus, dshFailureText } = require('./dsh-turn-outcome');
 
 const RECOVER_DELAY_MS = 1200;
 const RECOVER_WINDOW_MS = 5 * 60_000;
@@ -21,6 +22,15 @@ class DshCardSession extends AcpSession {
       client.on('disconnect', error => { if (!client.released) setTimeout(() => this.recover(client, error), 0); });
       return client;
     };
+  }
+
+  // 写到单步输出上限（max_tokens）算完成；失败时把 DSH 原文换成一行人话（core/dsh-turn-outcome.js）。
+  finish(active, status, error, nativeResult) {
+    const stop = nativeResult && nativeResult.stopReason;
+    if (stop) status = dshStopStatus(stop);
+    if (status === 'failed') error = dshFailureText(stop === 'refusal' ? 'refusal' : error);
+    else if (status === 'completed') error = null;
+    return super.finish(active, status, error, nativeResult);
   }
 
   loadHistory() {

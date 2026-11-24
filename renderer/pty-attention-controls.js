@@ -1,80 +1,261 @@
 'use strict';
 
-// PTY 跑的 Claude / Codex 在等人操作（工具授权、提问、选项）时，卡片视图里
-// 给出一条提示和「到终端处理」按钮。
+// PTY 跑的 CLI（CodeAgent、Claude Code 等）在等人操作（工具授权、提问、选项）时，卡片视图里的一行小字提示。
 //
-// 第一版刻意不在卡片上直接作答：答案必须由 CLI 自己的界面接收。Hub 往 TUI 里
-// 模拟方向键 / 回车去替用户选，就是回到「盲发按键」的老路，选错了还没有回执。
-// 提示内容来自 hook（PermissionRequest、AskUserQuestion 的 PreToolUse、
-// Notification）或终端画面识别，只是把「卡在哪」告诉用户。
+// 2026-11-24 一键反馈 v5.6.99：原来是一块盖在输入框上方的深色浮层，只有「到终端处理」，必须切到后台选。
+// 现在：主进程读屏认出选择菜单（core/pty-choice-menu.js），这里画成一行小号选项，点了由主进程核对画面后按键；
+// 认不出的画面才退回一行「去后台处理」。信任目录、Bypass 警告这类 Hub 会自动确认的框不打扰；
+// 会话权限已是「全部放开」时，普通工具授权由主进程按设置直接允许，也不显示。
 
 const { RUNTIME_WAITING } = require('../core/session-runtime-truth.js');
 
-function createPtyAttentionControls({ onOpenTerminal } = {}) {
+const FAST_POLL_MS = 1200;
+const SLOW_POLL_MS = 4000;
+const FAST_POLLS = 12;
+const FALLBACK_AFTER = 3; // 连续几次认不出菜单才给「去后台处理」
+const AUTO_GRACE_MS = 8000; // 自动确认的框超过这么久还在，说明没点掉，交给用户
+// 终端输出停下这么久再读一次屏：菜单画完就停在那等人，正在输出的时候不读。
+const QUIET_MS = 700;
+const NOTE_HOLD_MS = 3000; // 「已发送未确认」、出错原因至少留这么久，不被下一次读屏抹掉
+const instances = new Set();
+
+// 终端有输出时由 renderer 调用：不依赖 hook 或状态识别，菜单一停稳就能在卡片上出现。
+// 浮动输入条换会话时整块重建：接入过文档、现在又离开的旧实例就此作废。
+function notePtyOutput(sessionId) {
+  for (const instance of [...instances]) {
+    if (instance.element.isConnected) instance.element.dataset.attached = '1';
+    else if (instance.element.dataset.attached === '1') { instance.dispose(); continue; }
+    instance.noteOutput(sessionId);
+  }
+}
+
+function createPtyAttentionControls({ onOpenTerminal, invoke, getSessionId } = {}) {
   const element = document.createElement('section');
-  element.className = 'pty-attention-controls codex-native-controls';
+  element.className = 'pty-attention-controls pty-choice-inline';
   element.hidden = true;
   element.setAttribute('aria-label', '终端等待操作');
-  const title = document.createElement('strong');
-  title.textContent = '终端在等你操作';
-  const header = document.createElement('div');
-  header.className = 'pty-attention-header';
-  const detail = document.createElement('div');
-  detail.className = 'pty-attention-detail';
-  detail.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;max-height:18vh;overflow:auto;margin:6px 0';
+  element.setAttribute('role', 'group');
+  const question = document.createElement('span');
+  question.className = 'pty-choice-question';
+  const options = document.createElement('span');
+  options.className = 'pty-choice-options';
+  const note = document.createElement('span');
+  note.className = 'pty-choice-note';
+  note.setAttribute('role', 'status');
   const open = document.createElement('button');
   open.type = 'button';
-  open.textContent = '到终端处理';
-  open.title = '切到终端视图，在 CLI 原生界面里回答或授权';
+  open.className = 'pty-choice-backstage';
+  open.textContent = '去后台';
+  open.title = '切到终端视图，在 CLI 原生界面里处理';
   open.addEventListener('click', () => { if (typeof onOpenTerminal === 'function') onOpenTerminal(); });
-  const collapse = document.createElement('button');
-  collapse.type = 'button';
-  collapse.className = 'pty-attention-collapse';
   const close = document.createElement('button');
   close.type = 'button';
-  close.className = 'pty-attention-close';
+  close.className = 'pty-choice-close';
   close.textContent = '×';
-  close.title = '关闭此提示，不会取消终端正在等待的操作';
-  close.setAttribute('aria-label', '关闭提示');
+  close.title = '收起此提示，不会取消终端正在等待的操作';
+  close.setAttribute('aria-label', '收起提示');
+  element.append(question, options, note, open, close);
+
   let currentKey = null;
   let dismissed = false;
-  let collapsed = false;
-  function paint() {
-    detail.hidden = collapsed;
-    collapse.textContent = collapsed ? '展开' : '折叠';
-    collapse.title = collapsed ? '展开提示详情' : '折叠提示详情';
-    collapse.setAttribute('aria-expanded', String(!collapsed));
-  }
-  collapse.addEventListener('click', () => { collapsed = !collapsed; paint(); });
+  let menu = null;
+  let misses = 0;
+  let polls = 0;
+  let timer = null;
+  let sending = false;
+  let waitingSince = 0;
+  let sessionId = null;
+  let fallbackText = '';
+  let hinted = false; // 由终端输出触发的读屏（不在「等待输入」状态里）
+  let quietTimer = null;
+  let lastSession = null;
+  let noteUntil = 0;
+  let disposed = false;
+
   close.addEventListener('click', () => { dismissed = true; element.hidden = true; });
-  header.append(title, open, collapse, close);
-  element.append(header, detail);
-  paint();
+
+  const noteHeld = () => !!note.textContent && Date.now() < noteUntil;
+  function setNote(text) {
+    note.textContent = text || '';
+    noteUntil = text ? Date.now() + NOTE_HOLD_MS : 0;
+    if (text) setTimeout(() => { if (!disposed && !noteHeld()) { note.textContent = ''; paint(); } }, NOTE_HOLD_MS + 50);
+  }
+  const clearNote = () => { if (!noteHeld()) note.textContent = ''; };
+  // 接入过文档、现在又离开（切了会话、输入条重建）的实例就此作废，不再后台读屏。
+  function detached() {
+    if (element.isConnected) { element.dataset.attached = '1'; return false; }
+    if (element.dataset.attached === '1') { dispose(); return true; }
+    return false;
+  }
+
+  const stop = () => { clearTimeout(timer); timer = null; };
+  const schedule = () => {
+    stop();
+    if (!currentKey) return;
+    timer = setTimeout(probe, polls < FAST_POLLS ? FAST_POLL_MS : SLOW_POLL_MS);
+  };
+  const visibleInCard = () => !!element.closest?.('.card-view-active');
+
+  function paint() {
+    if (dismissed) { element.hidden = true; return; }
+    if (!(menu && menu.options?.length) && noteHeld()) {
+      // 菜单已经收起或变了，但要让人看见刚才那次点击的结果
+      element.dataset.mode = 'note';
+      options.hidden = true;
+      element.hidden = false;
+      return;
+    }
+    if (!currentKey && !(hinted && menu)) { element.hidden = true; return; }
+    if (menu && menu.options?.length) {
+      element.dataset.mode = 'menu';
+      element.dataset.kind = menu.kind || '';
+      question.textContent = menu.question || '终端在等你选择';
+      question.title = menu.original || menu.question || '';
+      const sig = JSON.stringify([menu.signature, sending]);
+      if (options.dataset.sig !== sig) {
+        options.dataset.sig = sig;
+        options.replaceChildren(...menu.options.map(option => {
+          const b = document.createElement('button');
+          b.type = 'button';
+          b.className = 'pty-choice-option';
+          b.dataset.tone = option.tone || 'other';
+          b.dataset.key = option.key;
+          b.textContent = option.short || option.label;
+          b.title = `${option.key}. ${option.label}`;
+          b.disabled = sending;
+          b.addEventListener('click', () => choose(option));
+          return b;
+        }));
+      }
+      options.hidden = false;
+      element.hidden = false;
+      return;
+    }
+    if (currentKey && misses >= FALLBACK_AFTER) {
+      element.dataset.mode = 'fallback';
+      element.dataset.kind = '';
+      question.textContent = fallbackText || '终端在等你操作';
+      question.title = fallbackText || '';
+      options.hidden = true;
+      element.hidden = false;
+      return;
+    }
+    element.hidden = true;
+  }
+
+  async function probe() {
+    timer = null;
+    if (disposed || detached()) return;
+    if ((!currentKey && !hinted) || !sessionId || typeof invoke !== 'function') return;
+    // 不在卡片视图（用户正看着终端）一律不读屏、不代答，包括第一次
+    if (!visibleInCard()) { schedule(); return; }
+    const key = currentKey;
+    polls += 1;
+    let result = null;
+    try { result = await invoke('pty-choice:read', { sessionId }); } catch { result = null; }
+    if (key !== currentKey) return;
+    if (result?.busy) { schedule(); return; }
+    // 输出触发的读屏：没读到菜单就静静收起，不给「去后台」（不一定真的在等人）
+    if (!currentKey) {
+      const found = result?.ok && result.menu;
+      const next = found && found.options?.length && found.auto !== 'pending' ? found : null;
+      if (next?.signature !== menu?.signature) { dismissed = false; options.dataset.sig = ''; if (next) clearNote(); }
+      menu = next;
+      if (!menu) hinted = false;
+      paint();
+      return;
+    }
+    const found = result?.ok && result.menu;
+    if (found && found.auto === 'pending' && Date.now() - waitingSince < AUTO_GRACE_MS) {
+      menu = null; misses = 0;
+    } else if (found && found.options?.length) {
+      if (!menu || menu.signature !== found.signature) clearNote();
+      menu = found; misses = 0;
+    } else if (result?.autoAnswered) {
+      menu = null; misses = 0;
+    } else {
+      menu = null; misses += 1;
+    }
+    paint();
+    schedule();
+  }
+
+  async function choose(option) {
+    if (sending || !menu) return;
+    sending = true;
+    setNote('');
+    paint();
+    let result;
+    try { result = await invoke('pty-choice:answer', { sessionId, signature: menu.signature, key: option.key }); }
+    catch (error) { result = { ok: false, message: error.message }; }
+    sending = false;
+    if (result?.ok) {
+      setNote(result.confirmed ? '' : '已发送，终端尚未确认');
+      menu = null; misses = 0; polls = 0;
+      options.dataset.sig = '';
+    } else {
+      setNote(result?.message || '没有送达');
+      options.dataset.sig = '';
+    }
+    paint();
+    stop();
+    if (disposed) return;
+    if (!currentKey) hinted = true;
+    timer = setTimeout(probe, 500);
+  }
+
+  function noteOutput(sid) {
+    if (disposed || !sessionId || sid !== sessionId || typeof invoke !== 'function') return;
+    if (!lastSession || lastSession.agentRuntime !== 'pty' || lastSession.runtimeBackend) return;
+    if (currentKey || !visibleInCard()) return; // 等待状态有自己的轮询
+    clearTimeout(quietTimer);
+    quietTimer = setTimeout(() => { quietTimer = null; if (!currentKey && !sending) { hinted = true; polls = 1; probe(); } }, QUIET_MS);
+  }
 
   function update(session, runtime) {
+    if (disposed) return;
+    if (element.isConnected) element.dataset.attached = '1';
+    lastSession = session || null;
+    if (session) sessionId = session.id || session.hubId || (typeof getSessionId === 'function' ? getSessionId() : null);
     const waiting = !!session && session.agentRuntime === 'pty' && !session.runtimeBackend
       && runtime && runtime.state === RUNTIME_WAITING;
     if (!waiting) {
-      element.hidden = true;
-      currentKey = null;
-      dismissed = false;
+      if (currentKey) {
+        stop();
+        currentKey = null; menu = null; misses = 0; polls = 0; dismissed = false; clearNote();
+        // 刚离开等待（可能是在终端里答了，也可能状态识别先变了）：再读一次屏核对
+        if (session?.agentRuntime === 'pty' && !session.runtimeBackend) { hinted = true; timer = setTimeout(probe, 300); }
+      }
+      paint();
       return;
     }
+    hinted = false;
     const text = String(runtime.detail || '').trim() || '需要授权或回答问题';
-    // Repeated status heartbeats must not undo a user's dismissal. A new
-    // question/turn, or leaving and re-entering waiting, can notify again.
-    const key = JSON.stringify([session.id || session.hubId, runtime.turnId, runtime.reason, text]);
+    sessionId = session.id || session.hubId || (typeof getSessionId === 'function' ? getSessionId() : null);
+    // 同一道题的状态心跳不重置用户的收起；新的一轮或重新进入等待才重新提示。
+    const key = JSON.stringify([sessionId, runtime.turnId, runtime.reason, text]);
     if (key !== currentKey) {
       currentKey = key;
-      dismissed = false;
-      collapsed = false;
-      paint();
+      dismissed = false; menu = null; misses = 0; polls = 0; clearNote();
+      waitingSince = Date.now();
+      fallbackText = text;
+      options.dataset.sig = '';
+      stop();
+      timer = setTimeout(probe, 150);
     }
-    element.hidden = dismissed;
-    if (detail.textContent !== text) detail.textContent = text;
+    paint();
   }
 
-  return { element, update };
+  function dispose() {
+    disposed = true;
+    stop();
+    clearTimeout(quietTimer);
+    quietTimer = null;
+    instances.delete(instance);
+  }
+  const instance = { element, update, noteOutput, dispose };
+  instances.add(instance);
+  return instance;
 }
 
-module.exports = { createPtyAttentionControls };
+module.exports = { createPtyAttentionControls, notePtyOutput };

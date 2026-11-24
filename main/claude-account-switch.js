@@ -199,9 +199,12 @@ function createClaudeAccountSwitch({ sessionManager, broker, profiles, scopeFor,
         const oauth = readJson(path.join(profile.home, '.credentials.json')).claudeAiOauth;
         available = !!oauth?.accessToken && (Number(oauth.expiresAt) > now() || !!oauth.refreshToken);
       } catch { /* A missing account is shown explicitly as unavailable. */ }
+      // 刷新被拒、未确认且已过期的号，手动换号下拉框里同样标不可用，并写明原因。
+      const blocked = available && profile.id !== session.claudeProfile ? broker.authBlocked?.(profile) : null;
+      if (blocked) available = false;
       const routeCompatible = crossRouteAllowed() || network().sameRoute(account(session.claudeProfile || 'default'), profile);
       return { id: profile.id, label: profile.label || profile.id, current: profile.id === session.claudeProfile,
-        available: available && routeCompatible, reason: !routeCompatible ? '绑定不同出口，请用该账号新建会话' : available ? '' : '此账号尚未登录或登录已过期' };
+        available: available && routeCompatible, reason: !routeCompatible ? '绑定不同出口，请用该账号新建会话' : available ? '' : blocked?.message || '此账号尚未登录或登录已过期' };
     });
     return { ok: true, currentProfile: session.claudeProfile || 'default', canSwitch, accounts, autoSwitch: session.claudeAutoSwitch === true,
       reason: canSwitch ? '' : '此旧会话未启用独立账号切换；新建 Claude 订阅会话后即可使用',
@@ -361,6 +364,8 @@ function createClaudeAccountSwitch({ sessionManager, broker, profiles, scopeFor,
       const candidates = [];
       for (const profile of profiles()) {
         if (attempted.includes(profile.id) || isRiskFlagged(profile.id)) continue;
+        // 登录已失效或刷新未确认的号不当候选：缓存额度再多，换过去也开不起来。
+        if (broker.authBlocked?.(profile)) continue;
         if (!crossRouteAllowed() && !network().sameRoute(account(activeId), profile)) continue;
         try { candidates.push(await broker.usage(profile, { maxAgeMs: Infinity, why: 'wall-candidate' })); }
         catch (error) { candidates.push({ id: profile.id, ready: false, error: error.code }); }
@@ -517,7 +522,12 @@ function createClaudeAccountSwitch({ sessionManager, broker, profiles, scopeFor,
         if (prefreshEnabled()) void Promise.resolve().then(() => broker.prefresh?.(profiles())).catch(() => {});
         for (const session of sessionManager.getAllSessions()) {
           if (!managed(session) || pending.has(session.id)) continue;
-          void refresh(session).catch(error => publish(session.id, 'attention', error.message));
+          // 后台续期没成只挂一条状态；登录刷新未确认会自动复核，等待期间不挂。续期成功就撤掉这里挂过的旧提示，换号流程挂的不动。
+          void refresh(session).then(() => {
+            if (sessionManager.getSession(session.id)?.claudeSwitchStatus?.source === 'refresh') sessionManager.updateSessionMeta(session.id, { claudeSwitchStatus: null });
+          }, error => {
+            if (error?.code !== 'CLAUDE_REFRESH_UNCONFIRMED') publish(session.id, 'attention', error.message, { source: 'refresh' });
+          });
         }
       }, 30_000);
       timer.unref?.();

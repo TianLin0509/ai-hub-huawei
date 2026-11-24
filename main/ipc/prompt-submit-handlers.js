@@ -226,17 +226,31 @@ function registerPromptSubmitIpc(ipcMain, deps) {
 
   // 梦境索引只随用户亲手输入的消息附带（renderer 显式传 memoryIndex:true）；
   //   群聊派发、会议、扩展投研、定时任务等自动 prompt 一律原样发送。
-  function sendWithMemory(request, sessionId, text, kind, options) {
+  // CodeAgent-Lite 改回终端（SERVE_FALLBACK_HANDOVER）：带梦境索引的这层自己等改建完成，再用新提交编号整体重来一次，
+  // 让梦境索引的回执按新终端会话登记（不重贴第二份）；不带索引的由 sendToPty 内部重试。
+  async function sendWithMemory(request, sessionId, text, kind, options) {
     const memory = sessionManager.memoryService;
-    const send = body => groupChatWatcher.sendToPty(sessionId, body, kind, options);
-    if (request.memoryIndex !== true || !memory) return send(text);
-    return memory.withIndex(sessionId, text, kind, options, send);
+    if (request.memoryIndex !== true || !memory) return groupChatWatcher.sendToPty(sessionId, text, kind, options);
+    const once = opts => memory.withIndex(sessionId, text, kind, opts, body => groupChatWatcher.sendToPty(sessionId, body, kind, opts));
+    try { return await once({ ...options, serveFallbackOuterRetry: true }); }
+    catch (error) {
+      if (error?.code !== 'SERVE_FALLBACK_HANDOVER' || typeof sessionManager.waitServeFallback !== 'function') throw error;
+      const ok = await sessionManager.waitServeFallback(sessionId).catch(() => false);
+      if (!ok || !sessionManager.getSession(sessionId)) throw error;
+      return once(groupChatWatcher.serveFallbackRetryOptions(options, sessionId));
+    }
+  }
+  // 会话正从 CodeAgent-Lite 改回终端：先等改建完成，再按新会话做终端预检、建发送回执（等不到也照常往下走，由后面报错）。
+  async function awaitServeFallback(sessionId) {
+    if (!sessionId || !sessionManager.serveFallbackPending?.(sessionId)) return;
+    try { await sessionManager.waitServeFallback?.(sessionId); } catch { /* 照常往下走 */ }
   }
 
   const sendPrompt = async (_event, request = {}) => {
     const sessionId = typeof request.sessionId === 'string' ? request.sessionId : '';
     let text = typeof request.text === 'string' ? request.text : '';
     if (!sessionId || !text) return { ok: false, notSent: true, error: 'bad-request' };
+    await awaitServeFallback(sessionId);
     const kind = resolveKind(sessionId);
     if (!kind) return { ok: false, notSent: true, error: 'no-session' };
     const originalPrompt = text;
@@ -407,6 +421,7 @@ function registerPromptSubmitIpc(ipcMain, deps) {
       try { deps.onUserPrompt?.({ sessionId: request.sessionId, text: request.text }); }
       catch (error) { logger.warn?.('[prompt-submit] early title failed:', error && error.message); }
     }
+    await awaitServeFallback(request.sessionId);
     const session = sessionManager.getSession(request.sessionId);
     if (require('../../core/ai-kinds').isCodeAgentKind(session?.kind) && session.codeagentRunMode !== 'serve') {
       const input = await groupChatWatcher.codeAgentInputAction(request.sessionId, 'check', { preserveInput: request.preserveInput === true, allowUnready: request.waitForCliReady === true });

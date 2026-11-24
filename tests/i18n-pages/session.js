@@ -49,7 +49,8 @@ const gallery = `(() => {
   g.style.cssText = 'position:fixed;left:320px;top:70px;width:1000px;max-height:760px;overflow:auto;z-index:99999;background:var(--bg-primary,#fff);border:1px solid #888;padding:12px;display:flex;flex-direction:column;gap:10px';
   document.body.appendChild(g);
   const T = require('..' + '/core/session-runtime-truth.js');
-  const pty = require('..' + '/renderer/pty-attention-controls.js').createPtyAttentionControls({});
+  const pty = require('..' + '/renderer/pty-attention-controls.js').createPtyAttentionControls({ invoke: async () => ({ ok: true, menu: { kind: 'permission', question: 'Do you want to proceed?', signature: 'g1', options: [{ key: '1', label: 'Yes', short: '允许', tone: 'allow', selected: true }, { key: '2', label: "Yes, and don't ask again", short: '允许且不再询问', tone: 'always' }, { key: '3', label: 'No', short: '拒绝', tone: 'deny' }] } }) });
+  pty.element.classList.add('card-view-active'); pty.element.style.display = 'flex';
   g.appendChild(pty.element); pty.update({ id: 'g1', agentRuntime: 'pty' }, { state: T.RUNTIME_WAITING, detail: '' });
   const rs = require('..' + '/renderer/composer-resend-strip.js');
   const a = rs.createResendStrip(document, g, {}); if (!a.element.isConnected) g.appendChild(a.element); a.show({ text: 'x', reason: '', uncertain: true });

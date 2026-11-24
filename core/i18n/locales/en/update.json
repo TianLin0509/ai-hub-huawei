@@ -757,5 +757,12 @@
   "终端里还有没发出去的字": "There is unsent text in the terminal",
   "点「去后台」切到这个会话的后台终端，看一眼输入行：没用的字按退格删掉，或按回车把它发出去；处理完回到卡片再发送。": "Click \"Open console\" to open this session's terminal and check the input line: delete leftover text with Backspace, or press Enter to send it. Then return to the cards and send again.",
   "退出 AI Hub": "Quit AI Hub",
-  "取消": "Cancel"
+  "取消": "Cancel",
+  "额度已恢复，正在自动继续": "Quota restored, continuing automatically",
+  "恢复后": "after reset ",
+  "额度用完，{0}自动继续": "Quota used up, continues automatically {0}",
+  "额度用完，已自动换号继续": "Quota used up, switched account and continued",
+  "额度用完，正在自动换号继续": "Quota used up, switching account to continue",
+  "下载完整安装包（内源 v{0}）": "Download full installer (internal source v{0})",
+  "公司内源上有完整安装包 v{0}（{1}）：点「下载完整安装包」用浏览器下载，覆盖安装即可，设置和数据不会丢。": "A full installer v{0} ({1}) is available on the company internal source: click \"Download full installer\" to get it in your browser and install over the current version. Your settings and data are kept."
 }

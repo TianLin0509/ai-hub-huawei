@@ -237,7 +237,6 @@ function createHubRulesStore(options = {}) {
     if (context) {
       if (baseSha !== sha256(context.content)) throw new Error('规则文件在别处被改过，请先点「重新载入」再改');
       if (!text.trim()) throw new Error('个人基础规则不能为空');
-      if (Buffer.byteLength(text) > 32768) throw new Error('个人基础规则超过 32 KB，请先精简');
       // 保持原文件的换行风格；改之前先备份一份。
       const normalized = text.replace(/\r\n?/g, '\n');
       const output = /\r\n/.test(context.content) ? normalized.replace(/\n/g, '\r\n') : normalized;

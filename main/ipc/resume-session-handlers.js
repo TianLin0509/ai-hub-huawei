@@ -9,6 +9,25 @@ const { sessionModelId, claudeSessionAccountMeta } = require('../../core/session
 // 2026-10-28：与 session-manager 的 codeAgentReadOnly 同一份名单（core/auto-dispatch-rules.js），以前漏了 AI 自己建的 company-ai 文字任务会话。
 const AUTOMATIC_CODEAGENT_PURPOSES = new Set(require('../../core/auto-dispatch-rules.js').AUTO_PURPOSES);
 
+// 功能会话的身份字段（2026-11-24 三审）：渲染层传来的 meta / 启动覆盖里的一概不认，只认磁盘会话记录；
+// 网关标记更只由 assistant-gateway-route.resumeFields 按磁盘记录推出，不从任何传入值继承。
+const FEATURE_IDENTITY_FIELDS = ['featureAgent', 'featureAgentChoice', 'apiGatewayRoute'];
+function withoutFeatureIdentity(value) {
+  if (!value || typeof value !== 'object') return value;
+  const out = { ...value };
+  for (const key of FEATURE_IDENTITY_FIELDS) delete out[key];
+  return out;
+}
+// 磁盘记录是部门 API key 的功能会话时：给出恢复用的权威字段；部门 key 已删或本机用不了就直接拦下，不起一个注定失败的会话。
+function gatewayResumeAuthority(saved, dataDir) {
+  const route = require('../../core/assistant-gateway-route.js');
+  const fields = route.resumeFields(saved);
+  if (!fields) return null;
+  const available = route.availability(typeof dataDir === 'function' ? dataDir() : dataDir);
+  if (!available.available) throw Object.assign(new Error(`${route.LABEL}用不了：${available.reason}。请先在「设置 → API 网关」保存部门 key，再重开这个功能。`), { code: 'API_GATEWAY_KEY_MISSING', notSent: true });
+  return fields;
+}
+
 function createResumeSessionHandler(deps) {
   const {
     defaultCodexSessionsRoot,
@@ -38,6 +57,8 @@ function createResumeSessionHandler(deps) {
     requestModelConfirmation,
   } = deps;
 
+  const hubDataDir = () => (typeof getHubDataDir === 'function' ? getHubDataDir() : require('../../core/data-dir').getHubDataDir());
+
   function addCodexMcpEntry(resumeOpts, entry) {
     if (!entry) return;
     resumeOpts.codexMcpEntries = [...(resumeOpts.codexMcpEntries || []), entry];
@@ -45,6 +66,8 @@ function createResumeSessionHandler(deps) {
 
   async function openSession(meta, runtimeOptions = {}) {
     if (!meta || !meta.hubId) return null;
+    // 功能身份只认磁盘记录：先去掉渲染层传来的 featureAgent / 选型 / 网关标记（磁盘记录稍后合并时带回自己的）。
+    meta = { ...withoutFeatureIdentity(meta), ...(meta.launchOverrides ? { launchOverrides: withoutFeatureIdentity(meta.launchOverrides) } : {}) };
     // 能力探测也属于本次唤醒；在途登记覆盖它，不能在探测期间误报可重试。
     if (require('../../core/cli-capabilities').providerForKind(meta.kind)) {
       await require('../../core/codeagent-capabilities').prepareForKind(meta.kind);
@@ -55,12 +78,16 @@ function createResumeSessionHandler(deps) {
     const reservedId=meta.hubId;
     // Login may wait on an official CLI/browser. Do this before taking the
     // writer reservation, so the dormant card remains editable during login.
+    const savedAtAuth = require('../../core/session-store').loadSessionFile(reservedId,{strict:true});
+    // 部门 API key 的功能会话：恢复前就把权威网关字段交给登录检查，让它拉起本机反代（而不是去查全局 Claude / 公司上游）。
+    const gatewayAtAuth = gatewayResumeAuthority(savedAtAuth, hubDataDir);
     if (ensureLaunchAuth && !runtimeOptions.skipLaunchAuth) {
-      const authMeta=require('../../core/session-store').loadSessionFile(reservedId,{strict:true}) || meta;
-      Object.assign(authMeta, launchOverrides || {});
+      const authMeta={...(savedAtAuth ? { ...savedAtAuth, apiGatewayRoute: undefined } : meta), ...(launchOverrides || {}), ...(gatewayAtAuth || {})};
+      if (!gatewayAtAuth) delete authMeta.apiGatewayRoute;
       await ensureLaunchAuth(authMeta.kind || 'claude',{...authMeta,model:sessionModelId(authMeta)});
     }
-    const reservation=sessionManager.reserveSessionOpen?.(reservedId);
+    // 会话登记库短暂被占（另一个 Hub 正在写）时隔一会儿再试，不直接报数据库错误。
+    const reservation=await require('../../core/session-open-ownership').retryWhenOwnershipBusy(()=>sessionManager.reserveSessionOpen?.(reservedId));
     try {
     // This window may have been idle since before another Hub's last turn.
     // Resume the persisted authoritative identity, never its boot-time copy.
@@ -78,6 +105,10 @@ function createResumeSessionHandler(deps) {
       }
     }
     delete meta.launchOverrides;
+    // 网关标记不从磁盘或渲染层继承，只按磁盘记录重新推出（和登录检查用的是同一份记录规则）。
+    delete meta.apiGatewayRoute;
+    const gatewayResume = gatewayResumeAuthority(saved, hubDataDir);
+    if (gatewayResume) Object.assign(meta, gatewayResume);
     meta = { ...meta, ...require('../../core/session-model-pin').migrateModelPin(meta) };
     // Account switch (2026-10-28): reopen the same conversation in a new Claude
     // process under a new native session id (--resume <old> --fork-session), so
@@ -419,6 +450,8 @@ function createResumeSessionHandler(deps) {
       ...(meta.researchSessionId ? { researchSessionId: meta.researchSessionId } : {}),
       ...(meta.hiddenFromSidebar ? { hiddenFromSidebar: true } : {}),
       ...resumeOpts,
+      // 部门 API key 的功能会话：权威字段最后写，none 档 MCP 与网关标记不被任何恢复配置盖掉。
+      ...(gatewayResume || {}),
     } });
     registerSessionForTap(createdSession);
     // CodexTap can synchronously discover and publish a persisted rollout
@@ -469,10 +502,14 @@ function createResumeSessionHandler(deps) {
   }
 
   const pendingResumes = new Map();
+  // 判活只看真实的会话对象：CodeAgent-Lite 改回终端的过渡期里 getSession 仍返回过渡元数据（给后台消费者不断档），
+  // 但那时旧进程已收尾、新进程还没建，唤醒必须真正建出新会话（core/session-manager.js hasLiveSession）。
+  const liveSession = id => (typeof sessionManager.hasLiveSession === 'function'
+    ? (sessionManager.hasLiveSession(id) ? sessionManager.getSession(id) : null) : sessionManager.getSession(id));
   function getStatus(id) {
     if (!id) return { state: 'unknown', canRetry: false };
     if (pendingResumes.has(id)) return { state: 'pending', canRetry: false };
-    if (sessionManager.getSession(id)) return { state: 'live', canRetry: false };
+    if (liveSession(id)) return { state: 'live', canRetry: false };
     // 包括本 Hub 其他入口的启动预约：只有没有写入者和预约时才允许重发。
     if (sessionManager._openOwners?.()?.owner(id, true)) return { state: 'occupied', canRetry: false };
     return { state: 'ready', canRetry: true };
@@ -486,7 +523,7 @@ function createResumeSessionHandler(deps) {
     }
     // 普通重复唤醒仍复用原任务；显式重试只能创建新的唤醒请求。
     if (pendingResumes.has(id)) return pendingResumes.get(id);
-    const live = sessionManager.getSession(id);
+    const live = liveSession(id);
     if (live) {
       sendToRenderer('session-created', { session: live });
       return Promise.resolve(live);

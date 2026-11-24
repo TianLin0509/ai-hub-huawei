@@ -120,7 +120,9 @@ function deriveSessionRuntimeStatus(session, options = {}) {
   const contentAge = require('../core/native-feedback').nativeContentAge(session, now);
   if (contentAge) detail = [detail, contentAge].filter(Boolean).join(' · ');
   const compactDetail = detail.replace(/\s+/g, ' ');
-  const visibleDetail = [RUNTIME_STARTING, RUNTIME_RUNNING, RUNTIME_WAITING, RUNTIME_FAILED, RUNTIME_UNKNOWN].includes(state)
+  // 「暂时无法确认」的长说明不常驻（2026-11-24 提示大清理）：状态行只留一句，完整说明在悬停 title 里。
+  const visibleDetail = state === RUNTIME_UNKNOWN && truth.reason === 'observation-expired' ? '先别重复发送 ⓘ'
+    : [RUNTIME_STARTING, RUNTIME_RUNNING, RUNTIME_WAITING, RUNTIME_FAILED, RUNTIME_UNKNOWN].includes(state)
     ? contentAge && compactDetail.length > 180
       ? `${compactDetail.slice(0, 177 - contentAge.length)}… · ${contentAge}`
       : compactDetail.slice(0, 180)

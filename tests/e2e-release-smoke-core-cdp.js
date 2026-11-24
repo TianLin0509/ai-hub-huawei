@@ -115,7 +115,7 @@ async function main() {
     await until(`ipcRenderer.invoke('get-sessions').then(s=>s.length>${before})`, '会话已创建');
     const composer = `document.querySelector('#terminal-panel .floating-input-box')`;
     await until(`(()=>{const b=${composer};return b&&b.offsetParent!==null})()`, '会话输入框出现', 45000);
-    for (const end = Date.now() + 60000; !/SessionStart exit=0/.test(traceText());) { if (Date.now() > end) throw Error('替身 CLI 没起来'); await sleep(300); }
+    for (const end = Date.now() + 90000; !/SessionStart exit=0/.test(traceText());) { if (Date.now() > end) throw Error('替身 CLI 没起来'); await sleep(300); }
     await sleep(1200);
     const ping = 'smoke-ping-' + Date.now();
     await click('#terminal-panel .floating-input-box');

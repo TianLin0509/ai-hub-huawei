@@ -20,6 +20,54 @@ const LOG_NAME = /\.(?:log|jsonl|txt)$/i;
 // 描述里点名的日志（如门户页反馈点名 company-w3.log）：排在最前，但只取最近这么多，不挤掉其余证据。
 const NAMED_LOG_LINES = 40;
 const NAMED_LOG_BYTES = 12 * 1024;
+// 出问题时用户在哪（当前会话的类型、正在看的页面、描述里提到的功能）→ 优先带哪些日志。
+// 2026-11-24 WeLink 4 份一键反馈的日志摘录全被助理消息轮询日志占满，DSH、门户、桌宠日志一行没有，描述里也没点名日志。
+// 按日志文件名匹配，logs/ 和 diagnostics/ 两处都找。
+const SCENE_LOGS = {
+  dsh: /acp|dsh|company-model-proxy|company-proxy/i,
+  codex: /codex/i,
+  codeagent: /codeagent/i,
+  w3: /company-w3/i,
+  pet: /pet/i,
+};
+const SCENE_LOG_FILES = 4;
+// 轮询类日志隔一会儿就写一行，量大、对排查帮助小：每份最多带 2 行。
+const POLL_LOG = /message-round|message-refresh|company-assistant-welink|heartbeat/i;
+const POLL_LOG_LINES = 2;
+
+function sceneOfKind(kind) {
+  const base = String(kind || '').replace(/-resume$/, '');
+  if (base === 'dsh' || base === 'deepseek-acp') return 'dsh';
+  if (base === 'codex' || base === 'deepseek') return 'codex';
+  return base === 'codeagent' ? 'codeagent' : '';
+}
+// 返回相关场景列表，先看页面，再看描述里提到的功能，最后看当前会话类型。
+function feedbackScenes({ kind = '', view = '', description = '' } = {}) {
+  const out = [];
+  const add = s => { if (s && !out.includes(s)) out.push(s); };
+  const v = String(view || ''), d = String(description || '');
+  if (/门户|company-w3/i.test(v)) add('w3');
+  if (/桌宠|hub-pet/i.test(v)) add('pet');
+  if (/门户|company-w3/i.test(d)) add('w3');
+  if (/桌宠/.test(d)) add('pet');
+  if (/\bDSH\b/i.test(d)) add('dsh');
+  if (/\bcodex\b/i.test(d)) add('codex');
+  add(sceneOfKind(kind));
+  return out;
+}
+// 日志名命中第几个场景（scenes 已按「页面 > 描述 > 会话」排好），没命中返回 -1。
+function sceneRank(scenes) {
+  const res = (Array.isArray(scenes) ? scenes : []).map(s => SCENE_LOGS[s]).filter(Boolean);
+  return name => res.findIndex(re => re.test(String(name || '')));
+}
+function sceneTest(scenes) { const rank = sceneRank(scenes); return name => rank(name) >= 0; }
+// diagnostics/ 只取这两份（写入方已核对：不记对话正文和密钥），其余诊断文件不外发。
+const DIAG_SCENE_FILES = ['company-model-proxy.log', 'codex-runtime-broker.log'];
+// CodeAgent 切模型时存的终端整屏画面（codeagent-model-picker-*.txt）：上半屏可能是用户对话正文，脱敏处理不了，一律不带。
+const PRIVATE_LOG = /^codeagent-model-picker/i;
+// 界面打开反馈时的上下文：开着页面时只报页面，不带后台会话的类型（那个会话和这次问题无关）。
+function feedbackContext({ view = '', kind = '' } = {}) { const v = String(view || ''); return { view: v, kind: v ? '' : String(kind || '') }; }
+const isPollLog = name => POLL_LOG.test(String(name || ''));
 
 const SECRET_RULES = [
   [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, '$1 <已隐去>'],
@@ -61,22 +109,37 @@ function tailLines(file, lines = LINES_PER_LOG, maxBytes = MAX_LOG_BYTES, fsModu
 // 最近改过的日志（按修改时间倒序），只看 logs/ 这一层和下一层。
 // mention：问题描述原文。描述里点名的日志（如门户页预填「日志附在下面的 company-w3.log 里」）排在最前、一定带上；
 // 否则一天只写几行的功能日志会被刷得勤的日志挤出前 8 份或整包上限（2026-11-24 门户反馈说附了日志却一行都没有）。
-function recentLogs(logsDir, fsModule = fs, { mention = '' } = {}) {
+// scenes：feedbackScenes() 的结果，相关的日志紧随点名日志排在前面。
+function listLogs(dir, prefix, fsModule, maxDepth) {
   const out = [];
-  const visit = (dir, depth) => {
+  const visit = (d, depth) => {
     let names = [];
-    try { names = fsModule.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    try { names = fsModule.readdirSync(d, { withFileTypes: true }); } catch { return; }
     for (const e of names) {
-      const p = path.join(dir, e.name);
-      if (e.isDirectory()) { if (depth < 1) visit(p, depth + 1); continue; }
-      if (!LOG_NAME.test(e.name)) continue;
-      try { const st = fsModule.statSync(p); if (st.size > 0) out.push({ file: p, name: path.relative(logsDir, p).split(path.sep).join('/'), mtimeMs: st.mtimeMs, size: st.size }); } catch {}
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) { if (depth < maxDepth) visit(p, depth + 1); continue; }
+      if (!LOG_NAME.test(e.name) || PRIVATE_LOG.test(e.name)) continue;
+      try { const st = fsModule.statSync(p); if (st.size > 0) out.push({ file: p, name: prefix + path.relative(dir, p).split(path.sep).join('/'), mtimeMs: st.mtimeMs, size: st.size }); } catch {}
     }
   };
-  visit(logsDir, 0);
+  visit(dir, 0);
+  return out;
+}
+function recentLogs(logsDir, fsModule = fs, { mention = '', scenes = [] } = {}) {
   const said = String(mention || '');
   const named = l => !!said && said.includes(path.basename(l.file));
-  return out.sort((a, b) => (named(b) - named(a)) || (b.mtimeMs - a.mtimeMs)).slice(0, MAX_LOG_FILES);
+  const related = sceneTest(scenes);
+  const rank = l => named(l) ? 2 : related(l.name) ? 1 : 0;
+  return listLogs(logsDir, '', fsModule, 1).sort((a, b) => (rank(b) - rank(a)) || (b.mtimeMs - a.mtimeMs)).slice(0, MAX_LOG_FILES);
+}
+// 和本次场景相关的日志：logs/ 里的，加上 diagnostics/ 白名单里的（DSH 的 company-model-proxy.log、Codex 的 codex-runtime-broker.log）。
+// 先按场景优先级（页面 > 描述 > 会话），同一场景里新的优先。
+function sceneLogs({ logsDir, dataDir, scenes = [], fsModule = fs } = {}) {
+  if (!scenes.length) return [];
+  const rank = sceneRank(scenes);
+  const diag = dataDir ? listLogs(path.join(dataDir, 'diagnostics'), 'diagnostics/', fsModule, 0).filter(l => DIAG_SCENE_FILES.includes(path.basename(l.file))) : [];
+  const rows = [...(logsDir ? listLogs(logsDir, '', fsModule, 1) : []), ...diag].map(l => ({ ...l, rank: rank(l.name) })).filter(l => l.rank >= 0);
+  return rows.sort((a, b) => (a.rank - b.rank) || (b.mtimeMs - a.mtimeMs)).slice(0, SCENE_LOG_FILES);
 }
 
 function byteLen(s) { return Buffer.byteLength(String(s), 'utf8'); }
@@ -130,7 +193,7 @@ function extraSources(dataDir, fsModule = fs) {
 // info：{ productName, edition, version, electron, platform, dataDir }；返回 { text, items, meta }。
 // 整包不超过 MAX_TOTAL_BYTES：描述与环境信息先占位，其余按「更新结果 → 生命周期记录 → 日志（新的优先）」分配，
 // 每份只保留最新的若干行；被裁掉的行数写进预览和正文。
-function collectBundle({ info = {}, description = '', contact = '', logsDir, dataDir, fsModule = fs, now = Date.now(), redactOpts } = {}) {
+function collectBundle({ info = {}, description = '', contact = '', logsDir, dataDir, fsModule = fs, now = Date.now(), redactOpts, scenes = [] } = {}) {
   const items = [];
   let desc = String(description || '').trim() || '（未填写）';
   let descCut = 0;
@@ -159,15 +222,21 @@ function collectBundle({ info = {}, description = '', contact = '', logsDir, dat
   const reserve = 512; // 给末尾「已裁剪」说明留的位置
   let total = byteLen(headText) + reserve;
   let trimmedLines = 0, trimmedFiles = 0;
-  // 描述里点名的日志放在补充证据之前，先占预算（最多 NAMED_LOG_LINES 行 / NAMED_LOG_BYTES），其余照旧按新旧分配。
-  const logs = logsDir ? recentLogs(logsDir, fsModule, { mention: description }) : [];
+  // 描述里点名的日志和本次场景相关的日志放在补充证据之前，先占预算（每份最多 NAMED_LOG_LINES 行 / NAMED_LOG_BYTES），其余照旧按新旧分配；
+  // 轮询类日志每份最多 POLL_LOG_LINES 行。同一份文件只带一次。
+  const logs = logsDir ? recentLogs(logsDir, fsModule, { mention: description, scenes }) : [];
   const said = String(description || '');
   const isNamed = l => !!said && said.includes(path.basename(l.file));
+  // 公司模型诊断保留原来的 32 KB 窗口和标题：里面有 8~12 KB 的单行探测记录，窗口小了会被当半行丢掉。
+  const lead = l => l.name === 'diagnostics/company-model-proxy.log' ? { ...l, kind: 'company-proxy', lines: 40, bytes: 32 * 1024 }
+    : { ...l, kind: 'log', lines: isPollLog(l.name) ? POLL_LOG_LINES : NAMED_LOG_LINES, bytes: NAMED_LOG_BYTES };
+  const seen = new Set();
   const sources = [
-    ...logs.filter(isNamed).map(l => ({ ...l, kind: 'log', lines: NAMED_LOG_LINES, bytes: NAMED_LOG_BYTES })),
+    ...logs.filter(isNamed).map(lead),
+    ...sceneLogs({ logsDir, dataDir, scenes, fsModule }).map(lead),
     ...extraSources(dataDir, fsModule),
-    ...logs.filter(l => !isNamed(l)).map(l => ({ ...l, kind: 'log', lines: LINES_PER_LOG, bytes: MAX_LOG_BYTES })),
-  ];
+    ...logs.filter(l => !isNamed(l)).map(l => ({ ...l, kind: 'log', lines: isPollLog(l.name) ? POLL_LOG_LINES : LINES_PER_LOG, bytes: MAX_LOG_BYTES })),
+  ].filter(l => { const k = path.resolve(l.file).toLowerCase(); if (seen.has(k)) return false; seen.add(k); return true; });
   for (const log of sources) {
     let rows;
     try { rows = tailLines(log.file, log.lines, log.bytes, fsModule); } catch { continue; }
@@ -194,4 +263,4 @@ function collectBundle({ info = {}, description = '', contact = '', logsDir, dat
   return { text, items, chars: text.length, bytes: byteLen(text), trimmedLines, summary: String(description || '').trim().split(/\r?\n/)[0].slice(0, 120) };
 }
 
-module.exports = { collectBundle, redact, recentLogs, tailLines, fitTail, MAX_TOTAL_BYTES, MAX_TOTAL_CHARS };
+module.exports = { collectBundle, redact, recentLogs, sceneLogs, feedbackScenes, feedbackContext, isPollLog, tailLines, fitTail, MAX_TOTAL_BYTES, MAX_TOTAL_CHARS, POLL_LOG_LINES };

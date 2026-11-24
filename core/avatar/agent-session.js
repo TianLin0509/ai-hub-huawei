@@ -1,5 +1,5 @@
 'use strict';
-// 分身的常驻 CodeAgent 会话：每个分身一个，在侧栏「后台任务」里看得到。
+// 分身的常驻会话（CodeAgent，或用户选的部门 API key 网关）：每个分身一个，在侧栏「后台任务」里看得到。
 // 题目和资料放在分身自己的工作目录，会话里只发一句短指令；记忆都在文件里，所以会话随时可以换新。
 const { randomUUID } = require('node:crypto');
 
@@ -30,7 +30,7 @@ class AgentSessions {
     const routes = require('../codeagent-assistant-route');
     const route = meta && this.d.dataDir ? routes.choose(this.d.dataDir, meta.codeagentPoolAccount || 'personal', meta.currentModel?.id || meta.fixedModel || '',
       { configDir: meta.codeagentConfigDir, explicitModel: av.backend?.model || '' }) : null;
-    const sameRoute = !require('../feature-agent-choice').stale(this.d.dataDir, 'avatar', meta) && (meta?.featureAgentChoice || routes.matchesSession(meta, route));
+    const sameRoute = !require('../feature-agent-choice').stale(this.d.dataDir, 'avatar', meta) && (!require('../feature-agent-choice').inheritsAssistantChoice(meta?.featureAgentChoice) || routes.matchesSession(meta, route));
     if (session?.id && this.alive(session.id) && sameRoute && (session.questions || 0) < MAX_QUESTIONS) return session;
     if (this.starting.has(av.id)) return this.starting.get(av.id);
     const work = (async () => {
@@ -70,6 +70,9 @@ class AgentSessions {
       if (err && err.id !== baseline) {
         if (apiError?.id !== err.id) apiError = { id: err.id, at: this.now() };
         if (this.now() - apiError.at >= 8000) {
+          // 部门 API key 会话：按网关口径给一行人话，不套 CodeAgent 供应商的说法和修复卡。
+          const gw = meta?.apiGatewayRoute ? require('../assistant-gateway-route').gatewayFailure(err.text) : null;
+          if (gw) throw Object.assign(new Error(gw.line), { restart: true });
           const d = errors.describe(err.text, meta);
           throw Object.assign(new Error(`${d.kind}（${d.detail}）`), d.routeRejected ? { providerRepair: require('../codeagent-assistant-route').repairAction(this.d.dataDir, d.account) } : { restart: true });
         }

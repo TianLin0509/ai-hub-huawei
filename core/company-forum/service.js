@@ -32,6 +32,14 @@ const dayKey = (at = Date.now()) => { const d = new Date(at); return `${d.getFul
 const minutesOf = hhmm => { const [h, m] = String(hhmm).split(':').map(Number); return h * 60 + m; };
 const short = (s, n) => { s = String(s ?? '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n) + '…' : s; };
 
+// 部门 API key 会话的网关报错（限流、5xx 等）稳定 8 秒仍没回答就收场，不空等到超时（core/feature-agent-session-failure.js）。
+function failuresFor(self) { return (self.launchFailures ||= require('../feature-agent-session-failure').createReader(self.deps, { settleMs: 8000 })); }
+// 常驻会话复用：本轮发问前最后一条接口报错的编号，作为本轮的基线。
+function apiErrorId(self, id) {
+  const meta = id && (self.deps.getSession?.(id) || self.deps.getSessionMetadata?.(id));
+  try { return (self.deps.readTurnApiError ? self.deps.readTurnApiError(meta || {}) : require('../company-assistant/turn-api-error').lastApiError(meta?.transcriptPath))?.id || null; } catch { return null; }
+}
+
 class CompanyForum {
   constructor(deps) {
     this.deps = deps;
@@ -352,12 +360,15 @@ class CompanyForum {
     this.pumping = true;
     try {
       const id = await this.ensureSession();
-      const auth = (this.launchFailures ||= require('../feature-agent-session-failure').createReader(this.deps)).read(id);
+      // 常驻会话会复用：记下本轮之前最后一条接口报错，旧错（例如修好 key 之前的 401）不拦本轮。
+      const apiErrorBaseline = apiErrorId(this, id);
+      const auth = failuresFor(this).read(id, apiErrorBaseline);
       if (auth) throw new Error(auth);
       if (this.sessionBusy(id)) return; // 会话还在忙上一件事：下一轮再发
       const st = this.state();
       const prompt = st.primed === id ? job.prompt : INSTRUCTIONS + '\n\n---\n\n' + job.prompt;
       job.baseline = this.lastFinal(id)?.id || null;
+      job.apiErrorBaseline = apiErrorBaseline;
       job.sessionId = id;
       job.sentAt = this.now();
       const receipt = await this.deps.sendPrompt(id, prompt, randomUUID());
@@ -373,7 +384,7 @@ class CompanyForum {
     if (!job.sentAt) { void this.pump(); return; }
     const final = this.lastFinal(job.sessionId);
     const fresh = final && final.id !== job.baseline && String(final.text || '').trim();
-    const auth = fresh ? '' : (this.launchFailures ||= require('../feature-agent-session-failure').createReader(this.deps)).read(job.sessionId);
+    const auth = fresh ? '' : failuresFor(this).read(job.sessionId, job.apiErrorBaseline ?? null);
     if (auth) { this.finishSummary(job, '', auth); return; }
     if (this.sessionBusy(job.sessionId)) { if (this.now() - job.sentAt > JOB_TIMEOUT_MS * 2) this.finishSummary(job, '', '整理会话忙了太久'); return; }
     if (fresh) { this.finishSummary(job, final.text, null); return; }

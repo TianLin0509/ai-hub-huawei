@@ -67,8 +67,10 @@ function Invoke-Hook([string]$eventName, $payload) {
       $bytes = $utf8.GetBytes($json)
       $process.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
       $process.StandardInput.Close()
-      $process.WaitForExit(15000) | Out-Null
-      Write-Trace "$eventName exit=$($process.ExitCode) via=$(if ($bash) { 'bash' } else { 'cmd' })"
+      # Same 60 s budget as the real CLI's hook timeout; on a busy machine the hook's interpreter can take >15 s to start.
+      # Reading ExitCode of a still-running process throws, which used to kill this fake silently.
+      if ($process.WaitForExit(60000)) { $code = $process.ExitCode } else { $code = 'timeout'; try { $process.Kill() } catch {} }
+      Write-Trace "$eventName exit=$code via=$(if ($bash) { 'bash' } else { 'cmd' })"
       Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue
     }
   }

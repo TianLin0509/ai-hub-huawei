@@ -44,7 +44,7 @@
 .hub-dialog[data-hub-err-hover] { position: relative; }
 .hub-dialog-feedback-required .hub-err-assist { opacity: 1; }
 .turn-error-help { position: relative; }
-.turn-error-help .teh-title { padding-right: 168px; }
+.turn-error-help .teh-row { padding-right: 168px; }
 .turn-error-help > .hub-err-assist-host { position: absolute; top: 8px; right: 8px; }
 .turn-error-help:hover .hub-err-assist, .turn-error-help:focus-within .hub-err-assist { opacity: 1; }
 .au-msg.bad { position: relative; }
@@ -56,14 +56,16 @@
 #new-session-error:has(.hub-err-card) { padding: 0; border: 0; background: transparent; }
 
 /* 错误轻提示：底部居中，停留 8 秒、悬停时不消失；「详情」展开成错误卡。 */
-.hub-err-toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 100000; width: max-content; max-width: min(560px, 92vw);
-  padding: 10px 12px 10px 15px; border-radius: 10px; background: var(--hw-surface, #fff); color: var(--fg-strong, #182431);
-  border-left: 3px solid var(--hw-red, #cf0a2c); box-shadow: 0 8px 28px rgba(0,0,0,.18); font: 13px/1.55 var(--hw-font, "Microsoft YaHei", sans-serif); }
-.hub-err-toast-row { display: flex; align-items: flex-start; gap: 8px; }
-.hub-err-toast-text { flex: 1; white-space: pre-line; overflow-wrap: anywhere; max-height: 30vh; overflow: auto; }
+/* 小而低调（2026-11-24 用户：弹窗尽可能不显眼）：右下角、12px、细边浅影，不压在输入框和对话上。 */
+.hub-err-toast { position: fixed; right: 16px; bottom: 40px; z-index: 100000; width: max-content; max-width: min(460px, 70vw);
+  padding: 3px 6px 3px 10px; border-radius: 6px; background: var(--hw-surface, #fff); color: var(--fg-strong, #182431);
+  border: 1px solid var(--border-subtle, rgba(24,36,49,.14)); border-left: 2px solid var(--hw-red, #cf0a2c);
+  box-shadow: 0 1px 4px rgba(0,0,0,.08); font: 12px/1.5 var(--hw-font, "Microsoft YaHei", sans-serif); }
+.hub-err-toast-row { display: flex; align-items: center; gap: 6px; }
+.hub-err-toast-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hub-err-toast-btn { flex: none; padding: 0 8px; border: 1px solid var(--border-subtle, rgba(24,36,49,.16)); border-radius: 6px; background: transparent;
-  color: var(--fg-muted, #5e6d7e); font: inherit; font-size: 12px; line-height: 22px; cursor: pointer; }
-.hub-err-toast-btn.primary { background: var(--hw-brand, var(--brand, #0a59f7)); border-color: transparent; color: var(--hw-text-on, #fff); }
+  color: var(--fg-muted, #5e6d7e); font: inherit; font-size: 11.5px; line-height: 18px; cursor: pointer; }
+.hub-err-toast-btn.primary { background: transparent; border-color: var(--hw-brand, var(--brand, #0a59f7)); color: var(--hw-brand, var(--brand, #0a59f7)); }
 .hub-err-toast-btn:disabled { opacity: .7; cursor: default; }
 .hub-err-toast.expanded { width: min(560px, 92vw); }
 .hub-err-toast.expanded .hub-err-toast-text { display: none; }
@@ -87,7 +89,7 @@
 
 /* 「CLI 已退出」提示下列终端最后几行（2026-11-20）：等宽小字，最多 5 行，给用户和一键反馈看退出原因。 */
 .hub-err-toast-tail { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border-subtle, rgba(24,36,49,.16)); }
-.hub-err-toast-tail > span { color: var(--fg-muted, #5e6d7e); font-size: 12px; }
+.hub-err-toast-tail > summary { cursor: pointer; color: var(--fg-muted, #5e6d7e); font-size: 12px; }
 .hub-err-toast-tail pre { margin: 3px 0 0; max-height: 7.5em; overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; font: 11.5px/1.5 Consolas, "Microsoft YaHei", monospace; color: var(--fg-strong, #182431); }
 .hub-err-toast.expanded .hub-err-toast-tail { display: none; }
 .hub-err-toast-note { margin-top: 6px; color: var(--hw-warning, #b45309); font-size: 12px; line-height: 1.5; }

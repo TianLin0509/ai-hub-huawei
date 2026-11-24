@@ -6,22 +6,24 @@ const ONESHOT = ['codeagent', 'claude', 'codex'];
 // CodeAgent-Lite：同一个 CodeAgent（账号、模型、MCP 全同），只是固定走多会话共用的 serve 后台进程，省内存。
 const SESSION = ['codeagent', 'codeagent-lite'];
 const LITE = 'codeagent-lite';
-// 部门 API key（网关）：只开放给助理。会话由 Claude Code 经本机反代的网关上游作答（core/assistant-gateway-route.js）。
+// 部门 API key（网关）：8 项会话功能都可显式选（2026-11-24）；会话由 Claude Code 经本机反代的网关上游作答（core/assistant-gateway-route.js）。
+// 没选过时自动改走网关只对助理生效，其余 7 项默认仍是 CodeAgent。
 const gatewayRoute = () => require('./assistant-gateway-route');
 const GATEWAY = 'api-gateway';
+const SESSION_GW = [...SESSION, GATEWAY];
 const ALL_BACKENDS = ['codeagent', LITE, 'claude', 'codex', 'deepseek-acp', 'qwen', 'glm'];
 const FEATURES = [
   { id: 'help', label: '问问 Hub', kinds: ONESHOT, defaultText: '按发行版自动选用可用 CLI' },
   { id: 'pptMap', label: 'PPT 库地图', kinds: ONESHOT, defaultText: 'CodeAgent · DeepSeek Flash → GLM Auto' },
-  { id: 'ppt', label: 'PPT 找页', kinds: SESSION, defaultText: 'CodeAgent · 助理模型与供应商' },
-  { id: 'pptMake', label: 'PPT 做页', kinds: SESSION, defaultText: 'CodeAgent · 助理模型与供应商' },
-  { id: 'pptImgtext', label: 'PPT 图转字', kinds: SESSION, defaultText: 'CodeAgent · 助理模型与供应商' },
-  { id: 'assistant', label: '助理（电脑 / 手机 / 简报）', kinds: [...SESSION, GATEWAY], defaultText: 'CodeAgent · 助理模型与供应商' },
-  { id: 'avatar', label: '分身', kinds: SESSION, defaultText: 'CodeAgent · 分身指定或助理模型' },
-  { id: 'forum', label: '论坛热帖汇总', kinds: SESSION, defaultText: 'CodeAgent · 启动默认模型' },
+  { id: 'ppt', label: 'PPT 找页', kinds: SESSION_GW, defaultText: 'CodeAgent · 助理模型与供应商' },
+  { id: 'pptMake', label: 'PPT 做页', kinds: SESSION_GW, defaultText: 'CodeAgent · 助理模型与供应商' },
+  { id: 'pptImgtext', label: 'PPT 图转字', kinds: SESSION_GW, defaultText: 'CodeAgent · 助理模型与供应商' },
+  { id: 'assistant', label: '助理（电脑 / 手机 / 简报）', kinds: SESSION_GW, defaultText: 'CodeAgent · 助理模型与供应商' },
+  { id: 'avatar', label: '分身', kinds: SESSION_GW, defaultText: 'CodeAgent · 分身指定或助理模型' },
+  { id: 'forum', label: '论坛热帖汇总', kinds: SESSION_GW, defaultText: 'CodeAgent · 启动默认模型' },
   { id: 'progress', label: '进展卡自动摘要', kinds: ONESHOT, defaultText: 'Claude · Haiku' },
-  { id: 'meeting', label: '会议理解 / 问答', kinds: SESSION, defaultText: '会议中所选引擎' },
-  { id: 'text', label: '草稿整理 / 团队文字任务', kinds: SESSION, defaultText: 'CodeAgent · 启动默认模型' },
+  { id: 'meeting', label: '会议理解 / 问答', kinds: SESSION_GW, defaultText: '会议中所选引擎' },
+  { id: 'text', label: '草稿整理 / 团队文字任务', kinds: SESSION_GW, defaultText: 'CodeAgent · 启动默认模型' },
 ];
 const LABELS = { codeagent: 'CodeAgent', [LITE]: 'CodeAgent-Lite（省内存）', claude: 'Claude', codex: 'Codex', 'deepseek-acp': 'DSH', qwen: 'Qwen Code', glm: 'ZCode', [GATEWAY]: '部门 API key（网关）' };
 // 网关这一行：模型 = key 的对话模型表（附一键体检的说明）+ 手填检测通过的；allowCustom 让界面给出「手填模型」。
@@ -67,7 +69,7 @@ function resolve(dataDir, id, options = {}) {
   const f = feature(id), choice = routes.featurePreference(dataDir, id);
   if (!choice) {
     // 开箱即用：助理没选过、本机没有 CodeAgent、部门 key 已配好时默认走部门 key；有 CodeAgent 的保持原默认。
-    if (f.kinds.includes(GATEWAY) && gatewayRoute().autoDefault(dataDir, { backends: options.backends }))
+    if (id === 'assistant' && gatewayRoute().autoDefault(dataDir, { backends: options.backends }))
       return { choice: null, selected: { kind: GATEWAY, model: '' }, warning: '', auto: true };
     return { choice: null, selected: null, warning: '' };
   }
@@ -95,7 +97,7 @@ function session(dataDir, id, kind, opts, options) {
   const r = resolve(dataDir, id, options), selected = r.selected;
   if (!selected) return { kind, opts, warning: r.warning };
   if (selected.kind === GATEWAY) {
-    // 不带 CodeAgent 专用字段；MCP 只挂助理自己的会话工具（none 档 + 严格模式），模型空时用网关默认模型。
+    // 不带 CodeAgent 专用字段；MCP 只挂该功能自己注入的会话工具（none 档 + 严格模式），模型空时用网关默认模型。
     const out = { ...opts, featureAgent: id, featureAgentChoice: JSON.stringify(selected), apiGatewayRoute: true, mcpProfile: 'none' };
     for (const k of Object.keys(out)) if (/^codeagent/i.test(k)) delete out[k];
     let model = selected.model;
@@ -148,4 +150,49 @@ function state(dataDir, options) {
   };
   return { ok: true, backends, features: FEATURES.map(f => ({ ...f, defaultText: defaultLabel(f), ...resolve(dataDir, f.id, { backends }) })) };
 }
-module.exports = { FEATURES, LABELS, GATEWAY, SESSION_KINDS: SESSION, catalog, resolve, set, session, stale, state, assertSessionKind };
+// 会话的功能选型是否仍继承助理设置（assistantChoice）的模型与供应商：没有功能选型，或只把后端选成 CodeAgent / Lite、
+// 没单独指定模型和供应商（一键全切 Lite 写的就是这种）。选了别的后端或具体模型的，以功能选型为准。
+function inheritsAssistantChoice(raw) {
+  if (!raw) return true;
+  try {
+    const c = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return (c?.kind === 'codeagent' || c?.kind === LITE) && !c.model && !c.codeagentModelProvider;
+  } catch { return false; }
+}
+// 一键预设（设置 →「功能使用的 Agent」顶部）：
+//   codeagent-lite —— 默认或选了 CodeAgent 的会话类功能改走 CodeAgent-Lite（保留原来选好的模型与供应商）；选了其他后端（如部门 API key）的不动；
+//   reset-lite     —— 只把当前是 CodeAgent-Lite 的恢复默认，其他显式选型不动。
+const PRESETS = ['codeagent-lite', 'reset-lite'];
+function applyPreset(dataDir, preset, options = {}) {
+  if (!PRESETS.includes(preset)) throw new Error('未知的一键预设');
+  const targets = FEATURES.filter(f => f.kinds.includes(LITE));
+  let backends = null;
+  if (preset === 'codeagent-lite') {
+    backends = options.backends || catalog(dataDir);
+    const lite = backends.find(b => b.kind === LITE);
+    if (!lite?.available) throw new Error('本机 CodeAgent-Lite 暂不可用（未检测到可用的 CodeAgent），未做任何修改');
+  }
+  const plan = [], changed = [], skipped = [];
+  for (const f of targets) {
+    const current = routes.featurePreference(dataDir, f.id);
+    if (preset === 'codeagent-lite') {
+      if (!current || current.kind === 'codeagent') {
+        const { kind: _kind, ...rest } = current || {};
+        void _kind;
+        plan.push([f.id, current, { ...rest, kind: LITE, model: current?.model || '' }]);
+        changed.push(f.id);
+      } else if (current.kind !== LITE) skipped.push(f.id);
+    } else if (current?.kind === LITE) { plan.push([f.id, current, null]); changed.push(f.id); }
+  }
+  const done = [];
+  try {
+    for (const [id, previous, next] of plan) { routes.setFeaturePreference(dataDir, id, next); done.push([id, previous]); }
+  } catch (error) {
+    // 写到一半失败：已改的逐项还原，不留半截状态。
+    for (const [id, previous] of done.reverse()) { try { routes.setFeaturePreference(dataDir, id, previous); } catch { /* 尽力还原 */ } }
+    throw error;
+  }
+  const stateOptions = backends ? { ...options, backends } : options;
+  return { ok: true, preset, changed, skipped: preset === 'codeagent-lite' ? skipped : [], state: state(dataDir, stateOptions) };
+}
+module.exports = { FEATURES, LABELS, GATEWAY, SESSION_KINDS: SESSION, PRESETS, catalog, resolve, set, session, stale, state, assertSessionKind, applyPreset, inheritsAssistantChoice };

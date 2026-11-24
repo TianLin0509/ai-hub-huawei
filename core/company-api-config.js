@@ -169,7 +169,13 @@ function applyCompanyConfig(config, raw) {
   config.proxy = '';
   return config;
 }
-function assertLaunchConfigured(kind, config) {
+function assertLaunchConfigured(kind, config, opts = {}) {
+  // 功能会话走部门 API key（core/assistant-gateway-route.js）：启动值由 launchValues() 固定指向本机反代的网关上游，
+  // 与全局 Claude「自有 API」设置无关，不拿那边的残缺配置误杀；只要部门 key 还在。
+  if (opts && opts.apiGatewayRoute === true && require('./assistant-gateway-route').allowedSession(kind, opts)) {
+    if (!gatewayStore().configured(dataDir())) throw Object.assign(new Error('部门 API key 已不在了：请先在「设置 → API 网关」保存部门 key，再重开这个功能。'), { code: 'API_GATEWAY_KEY_MISSING', notSent: true });
+    return;
+  }
   kind = baseKind(kind);
   if (!isCompany() || !KINDS.includes(kind)) return;
   const gatewayReady = () => { if (!gatewayStore().configured(dataDir())) throw new Error('API 网关还没配置好：请到「设置 → 自有 API → API 网关」粘贴 key 并保存。'); };

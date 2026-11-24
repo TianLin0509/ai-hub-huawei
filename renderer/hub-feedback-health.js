@@ -5,10 +5,10 @@ function createHubFeedbackHealth({ ping, enabled, now = Date.now, schedule = set
   let timer = null, pending = false, pendingSince = 0, lastReply = 0, lastError = '', disposed = false;
   function text(at = now()) {
     if (disposed || !enabled()) return '';
-    if (lastError) return 'Hub 本地连接未确认';
-    if (pending && at - pendingSince >= 3000) return `Hub 本地应答已等待 ${Math.floor((at-pendingSince)/1000)} 秒`;
-    if (lastReply && at-lastReply < 10000) return 'Hub 本地有响应';
-    return '正在检测 Hub 本地响应';
+    // 体检结果只在真有问题时露面（2026-11-24 提示大清理）：「正在检测」「有响应」不占状态行，偶发一次没回也不提示。
+    if (pending && at - pendingSince >= 10000) return `Hub 本地应答已等待 ${Math.floor((at-pendingSince)/1000)} 秒`;
+    if (lastError && (!lastReply || at - lastReply >= 10000)) return 'Hub 本地连接未确认';
+    return '';
   }
   async function tick() {
     if (disposed) return;

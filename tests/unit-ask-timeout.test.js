@@ -142,9 +142,24 @@ test('DSH 观察插件收到取消文件后 abort 真实 HTTP 请求，不终止
 });
 
 // Windows 真实进程测试：覆盖 CodeAgent 的 cmd 包装、Codex 原生命令和问问 Hub 共用 runner。
+// 机器忙时用例可能失败，失败也不能留下假进程：假进程开着管道，整个测试文件就退不出去，后面的 npm test 全被卡住
+// （2026-11-24 两次全量卡住、一次发版预检失败）。所以收尾钩子最先登记，先取消请求，再按 PID 树强杀假进程，最后才删临时目录
+// （假进程的工作目录在里面，没杀掉时删目录会抛错，原先排在前面的删目录钩子一抛错，后面的杀进程钩子就不跑了）；用例自身限时 60 秒。
+const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
+const killTree = pid => { try { require('node:child_process').spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', timeout: 10000 }); } catch { /* 已退 */ } };
+async function waitUntil(check, ms) { for (const end = Date.now() + ms; !check() && Date.now() < end;) await sleep(50); return check(); }
 for (const engine of ['codeagent', 'codex', 'help']) for (const stop of ['timeout', 'cancel']) {
-  test(`${engine} ${stop}：真实子进程与孙进程全部退出`, { skip: process.platform !== 'win32' }, async t => {
-    const dir = tmp(t), file = path.join(dir, 'hang.js'), pids = path.join(dir, 'pids.json');
+  test(`${engine} ${stop}：真实子进程与孙进程全部退出`, { skip: process.platform !== 'win32', timeout: 60000 }, async t => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ask-timeout-')), file = path.join(dir, 'hang.js'), pids = path.join(dir, 'pids.json');
+    const readIds = () => { try { return JSON.parse(fs.readFileSync(pids, 'utf8')); } catch { return []; } };
+    const controller = new AbortController();
+    t.after(async () => {
+      if (!controller.signal.aborted) controller.abort(cancelled());
+      await waitUntil(() => fs.existsSync(pids), 5000); // 起得慢时 pid 文件可能这会儿才写出来
+      for (const pid of readIds()) if (alive(pid)) killTree(pid);
+      await waitUntil(() => !readIds().some(alive), 10000);
+      for (let i = 0; i < 20; i++) { try { fs.rmSync(dir, { recursive: true, force: true }); break; } catch { await sleep(250); } }
+    });
     fs.writeFileSync(file, [
       "const { spawn } = require('node:child_process');",
       "const child = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], { windowsHide: true, stdio: 'ignore' });",
@@ -153,7 +168,6 @@ for (const engine of ['codeagent', 'codex', 'help']) for (const stop of ['timeou
     ].join('\n'));
     const wrapper = path.join(dir, 'codeagent.cmd');
     fs.writeFileSync(wrapper, `@echo off\r\n"${process.execPath}" "${file}" %*\r\n`);
-    const controller = new AbortController();
     const timeoutMs = stop === 'timeout' ? 1500 : 20000;
     let running;
     if (engine === 'codeagent') running = runAsk({ config: { command: wrapper, configDir: dir }, cwd: dir, ccSessionId: CC, question: 'q', signal: controller.signal, timeoutMs });
@@ -162,11 +176,9 @@ for (const engine of ['codeagent', 'codex', 'help']) for (const stop of ['timeou
     else running = runOnce({ command: process.execPath, args: [file], cwd: dir, env: process.env, signal: controller.signal, timeoutMs });
     // 在等待启动时就绑定 rejection，避免取消与测试继续之间出现未处理的拒绝。
     const settled = running.then(value => ({ value }), error => ({ error }));
-    for (let i = 0; i < 100 && !fs.existsSync(pids); i++) await sleep(20);
-    assert.equal(fs.existsSync(pids), true, '真实 CLI 已启动');
-    const ids = JSON.parse(fs.readFileSync(pids, 'utf8'));
-    const alive = pid => { try { process.kill(pid, 0); return true; } catch { return false; } };
-    t.after(() => { for (const pid of ids) if (alive(pid)) process.kill(pid, 'SIGKILL'); });
+    // 起进程、杀进程树在机器忙时都慢：按条件轮询，到了就往下走。
+    assert.equal(await waitUntil(() => readIds().length === 2, 10000), true, '真实 CLI 已启动');
+    const ids = readIds();
     if (stop === 'cancel') controller.abort(cancelled());
     const result = await settled;
     if (engine === 'help') {
@@ -174,7 +186,7 @@ for (const engine of ['codeagent', 'codex', 'help']) for (const stop of ['timeou
       if (stop === 'timeout') assert.equal(result.value.aborted, false, '自身超时不能被库地图等调用方误判成用户取消');
     }
     else assert.equal(result.error[stop === 'timeout' ? 'timedOut' : 'cancelled'], true);
-    for (let i = 0; i < 100 && ids.some(alive); i++) await sleep(20);
+    await waitUntil(() => !ids.some(alive), 10000);
     assert.deepEqual(ids.map(alive), [false, false]);
   });
 }

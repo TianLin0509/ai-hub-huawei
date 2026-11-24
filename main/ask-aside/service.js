@@ -110,6 +110,22 @@ function runAsk({ config, cwd, ccSessionId, question, context = '', responseHint
   }
   const head = /^[A-Za-z0-9_.-]+$/.test(config.command) ? config.command : `"${path.normalize(String(config.command).replace(/"/g, ''))}"`;
   const opts = { cwd, env: childEnv(env, config), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] };
+  // 连接覆盖层（部门 API key 会话）：只给这一次问答用的临时 settings 文件，问完（含出错、超时）删掉。
+  let settingsFile = '';
+  if (config.flavor === 'claude' && config.settingsEnv) {
+    try {
+      const dir = config.settingsDir || require('node:os').tmpdir();
+      fs.mkdirSync(dir, { recursive: true });
+      settingsFile = path.join(dir, `ask-aside-${require('node:crypto').randomUUID()}.json`);
+      fs.writeFileSync(settingsFile, JSON.stringify({ env: config.settingsEnv }), { mode: 0o600 });
+    } catch (error) {
+      // 写到一半失败（例如磁盘满）不留空文件。
+      if (settingsFile) try { fs.rmSync(settingsFile, { force: true }); } catch { /* 留给下次清理 */ }
+      return Promise.reject(new Error(`准备 ${label} 连接设置失败：${error.message}`));
+    }
+    args.splice(args.indexOf('--output-format'), 0, '--settings', settingsFile);
+  }
+  const cleanup = () => { if (settingsFile) try { fs.rmSync(settingsFile, { force: true }); } catch { /* 留给下次清理 */ } };
   return withDeadline(({ signal: requestSignal, onActivity: activity }) => new Promise((resolve, reject) => {
     let child;
     try {
@@ -142,10 +158,11 @@ function runAsk({ config, cwd, ccSessionId, question, context = '', responseHint
     }, error => reject(Object.assign(error, { answer: cleanAnswer(out), truncated })));
     child.stdin.on('error', () => { /* 进程先退出时写入会报 EPIPE，以退出结果为准 */ });
     child.stdin.end(Buffer.from(stdinText, 'utf8'));
-  }), { signal, timeoutMs, idleMs });
+  }), { signal, timeoutMs, idleMs }).finally(cleanup);
 }
 
 function createAskAsideService({ sessionManager, getHubDataDir, sendToRenderer = () => {}, getSessionMetadata = () => null,
+  findCommand = (command, env) => require('../../core/community-setup').findCommand(command, env),
   resolveConfig = () => require('../../core/codeagent-config').resolveCodeAgentConfig(process.env),
   accountDir = id => require('../../core/codeagent-pool').accountDir(getHubDataDir(), id),
   hasHistory = (id, cwd, configDir) => !!require('../../core/claude-native-history').findNativeClaudeHistory(id, { cwd, env: { ...process.env, CLAUDE_CONFIG_DIR: configDir } }),
@@ -233,7 +250,13 @@ function createAskAsideService({ sessionManager, getHubDataDir, sendToRenderer =
     const configDir = env.CLAUDE_CONFIG_DIR || path.join(require('node:os').homedir(), '.claude');
     if (!hasHistory(ccSessionId, cwd, configDir)) return { supported: false, engine, reason: '没找到这个会话的记录，等它回答过一轮再问' };
     const model = [session.currentModel?.id, env.ANTHROPIC_MODEL].map(v => String(v || '').trim()).find(safeModelId) || '';
-    return { supported: true, reason: '', engine, config: { command: 'claude', flavor: 'claude', configDirEnv: 'CLAUDE_CONFIG_DIR', configDir },
+    // 与会话可用性检查同一套查找（~/.local/bin 等处也找得到）；查不到再交给 PATH。
+    let command = '';
+    try { command = findCommand('claude', env) || ''; } catch { command = ''; }
+    // 部门 API key（网关）会话：本机反代的连接变量用 --settings 覆盖层带上，用户 settings.json 里的 env 盖不掉它（core/claude-connection-settings.js）。
+    const settingsEnv = session.apiGatewayRoute ? require('../../core/claude-connection-settings').connectionEnv({ COMPANY_CLI: true, CLAUDE_BACKEND: 'proxy' }, env, model) : null;
+    return { supported: true, reason: '', engine, config: { command: command || 'claude', flavor: 'claude', configDirEnv: 'CLAUDE_CONFIG_DIR', configDir,
+      ...(settingsEnv ? { settingsEnv, settingsDir: path.join(getHubDataDir(), 'native-agent-settings') } : {}) },
       env, cwd, ccSessionId, model };
   }
   // 能不能问：CodeAgent 只要求会话有已落盘的记录，终端在不在运行都可以问。

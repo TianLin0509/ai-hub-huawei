@@ -61,7 +61,7 @@ class LanPoolService {
         message: this.error + (this.cached?.rows?.length ? '；保留上次额度读数' : ''),
         rows: (this.cached?.rows || []).map(r => ({ ...r, refresh: { status: 'failed' } })) };
       if (wasOnline) this.onNotice({ text: revoked ? '共享口令已被主机撤销，新建会话无法使用共享号池；请联系主机管理员，或在设置里断开共享。'
-        : '共享主机连不上（' + this.error + '）。Hub 每 30 秒自动重连，恢复后会提示。', persistent: revoked });
+        : '共享主机连不上（' + this.error + '）。Hub 每 30 秒自动重连。', persistent: revoked, noticeKind: revoked ? 'blocking' : 'auto' });
       this.onChanged(); return this.cached;
     }).finally(() => { if (this.pending === task) { this.fetchedAt = Date.now(); this.pending = null; } });
     this.pending = task; return task;
@@ -122,7 +122,7 @@ class LanPoolService {
         const next = available[0];
         this.addressChanged = { from: wanted, to: next, at: Date.now() };
         pool.write(this.dataDir, { ...pool.read(this.dataDir), host: { ...host, bindAddress: next } });
-        this.onNotice({ text: `本机内网地址从 ${wanted} 变成了 ${next}，共享已换到新地址。请把新地址发给同事（账号页 → 内网共享可复制）。`, persistent: true });
+        this.onNotice({ text: `本机内网地址从 ${wanted} 变成了 ${next}，共享已换到新地址。请把新地址发给同事（账号页 → 内网共享可复制）。`, persistent: true, noticeKind: 'blocking' });
         wanted = next;
       }
       if (this.gateway.server && this.gateway.host !== wanted) await this.gateway.stop();
@@ -137,7 +137,9 @@ class LanPoolService {
       this.hostErrorAt = Date.now();
       if (this.noticeShown !== this.hostError) {
         this.noticeShown = this.hostError;
-        this.onNotice({ text: '号池内网共享暂停：' + this.hostError + `。Hub 每 ${WATCH_MS / 1000} 秒自动重试，同事暂时连不上。`, persistent: true });
+        this.onNotice({ text: '号池内网共享暂停：' + this.hostError + `。Hub 每 ${WATCH_MS / 1000} 秒自动重试，同事暂时连不上。`, persistent: true,
+          // 端口被占用要用户换端口，自动重试解决不了；网卡暂不可用等网络恢复就好，只进日志。
+          noticeKind: error.code === 'EADDRNOTAVAIL' ? 'auto' : 'blocking' });
       }
       this.onChanged(); throw new Error(this.hostError);
     }

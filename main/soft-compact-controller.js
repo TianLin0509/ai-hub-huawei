@@ -113,8 +113,9 @@ function createSoftCompactController(deps = {}) {
     return codeagentState.get(id);
   };
   const short = id => String(id).slice(0, 8);
-  const notice = (sessionId, message, level = 'info') => {
-    try { notify?.(sessionId, message, level); } catch {}
+  // noticeKind 交给提示闸门（core/notice-gate.js）：自动继续没确认、发送失败是要用户核对的，显式标 blocking。
+  const notice = (sessionId, message, level = 'info', noticeKind) => {
+    try { notify?.(sessionId, message, level, noticeKind); } catch {}
   };
 
   function finish(sessionId, entry) {
@@ -142,11 +143,15 @@ function createSoftCompactController(deps = {}) {
       await new Promise(resolve => setTimeout(resolve, settleMs));
       if (isBusy(sessionId)) return null;
       try {
-        await sendToPty(sessionId, SKIP_CONTINUE_PROMPT, session.kind, {
+        const receipt = await sendToPty(sessionId, SKIP_CONTINUE_PROMPT, session.kind, {
           requireReady: false, clientSubmissionId: `soft-compact-skip-${now()}`,
         });
+        if (!receipt || receipt.ok === false || ['unknown', 'content-mismatch', 'rejected'].includes(receipt.status)) {
+          notice(sessionId, '额度情况已变化，这次不压缩也不换号，但自动继续未获确认；请看一下会话，必要时手动发「继续」。', 'warning', 'blocking');
+          return null;
+        }
         notice(sessionId, '额度情况已变化，这次不压缩也不换号，已让 AI 读进展卡接着做。');
-      } catch (error) { notice(sessionId, `额度情况已变化，自动继续发送失败：${error.message}。请手动发「继续」。`, 'warning'); }
+      } catch (error) { notice(sessionId, `额度情况已变化，自动继续发送失败：${error.message}。请手动发「继续」。`, 'warning', 'blocking'); }
       return null;
     };
     if (now() - (lastDone.get(sessionId) || -Infinity) < cooldownMs) return skipped('skipped: compacted within cooldown');
@@ -318,12 +323,12 @@ function createSoftCompactController(deps = {}) {
         requireReady: false, clientSubmissionId: `soft-compact-continue-${entry.startedAt}`,
       });
       if (!receipt || receipt.ok === false || ['unknown', 'content-mismatch', 'rejected'].includes(receipt.status)) {
-        notice(sessionId, '上下文已压缩，但自动继续未获确认；请看一下会话，必要时手动发「继续」。', 'warning');
+        notice(sessionId, '上下文已压缩，但自动继续未获确认；请看一下会话，必要时手动发「继续」。', 'warning', 'blocking');
         return;
       }
       notice(sessionId, `上下文已自动压缩（用时 ${seconds} 秒），已让 AI 读进展卡接着做。`);
     } catch (error) {
-      notice(sessionId, `上下文已压缩，自动继续发送失败：${error.message}。请手动发「继续」。`, 'warning');
+      notice(sessionId, `上下文已压缩，自动继续发送失败：${error.message}。请手动发「继续」。`, 'warning', 'blocking');
     }
   }
 

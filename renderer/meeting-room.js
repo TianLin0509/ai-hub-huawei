@@ -4929,12 +4929,11 @@ if (typeof document !== 'undefined') (function () {
     // === Phase 2: banner DOM 与 panel 重渲（仅 active）===
     if (meetingId !== activeMeetingId) return;
     _updateInputPreflight(meeting);
-    const levelLabel = level === 't2' ? '3 分钟' : '90 秒';
+    // 2026-11-24 提示大清理：AI 干 90 秒很正常，90 秒那档只改卡片状态、不弹横幅；3 分钟才弹一行，说明放悬停。
     const hint = '尚未收到本轮结束确认，状态可能过期；请先查看对应 CLI，避免重复发送。';
-    _setGcSoftBanner(meetingId, { kind: 'soft', cls: '', html: `
-        <div class="mr-gc-soft-alert-msg">
-          <strong>${escapeHtml(label || sid.slice(0, 8))}</strong> 已等待 <strong>${levelLabel}</strong>。
-          <span class="mr-gc-soft-alert-hint">${hint}</span>
+    if (level === 't2') _setGcSoftBanner(meetingId, { kind: 'soft', cls: '', html: `
+        <div class="mr-gc-soft-alert-msg" title="${hint}">
+          <strong>${escapeHtml(label || sid.slice(0, 8))}</strong> 已等待 <strong>3 分钟</strong>，先看看对应 CLI 再决定是否重发 ⓘ
         </div>
         <button class="mr-gc-soft-alert-close" data-gc-banner-close="1" title="关闭提示">×</button>
       ` });

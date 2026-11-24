@@ -184,7 +184,7 @@ function registerPrefixForkIpc(ipcMain, deps) {
       // 模型不可用时和新建会话同一套处理（main/session-model-creation.js）：默认模型下线自动换推荐模型，指定的模型照旧确认。
       const session = await require('../session-model-creation').createSessionWithModelPolicy({ kind: 'codeagent', opts,
         contextLabel: opts.title ? `分支会话 ${opts.title}` : '分支会话', modelLabel: '原会话的模型', requestConfirmation: deps.requestModelConfirmation, sendToRenderer, dataDir,
-        create: (runtimeKind, launchOpts) => sessionManager.createSession(runtimeKind, launchOpts) });
+        create: (runtimeKind, launchOpts) => require('../../core/session-open-ownership').retryWhenOwnershipBusy(() => sessionManager.createSession(runtimeKind, launchOpts)) });
       sessionCreated = true; log.preparedFileState = 'session-owned';
       registerSessionForTap(session);
       sendToRenderer('session-created', { session });

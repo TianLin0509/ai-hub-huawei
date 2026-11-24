@@ -9,6 +9,7 @@
   let dialog = null, sending = false, contactEdited = false, via = '', lastText = '';
   // WeLink 模式（2026-11-21）：公司内用户的反馈直接发到维护人 WeLink，内网收件机的发送与待发提示都隐藏。
   let wl = null;
+  let ctx = {};
   const TO_INTRANET = '发给维护人（公司内网），帮你排查问题';
   // 2026-11-20（HUB-H 第一期）：附上本机各 CLI 查过的位置和结论（定位中心打码后的文本，renderer/harness-client.js），
   // 维护人不用再来回问「装在哪、用的哪个 Node」。主进程还没有定位中心时不附，其他照旧。
@@ -88,6 +89,8 @@
   // 正在发送时不覆盖；用户已经写了内容且没发出去时也不覆盖，只把新的报错接在后面。
   async function open(prefill) {
     ensureDialog();
+    // 打开时记下当前会话类型和页面（对话框是模态的，之后不会变），发送时据此优先带相关日志。
+    try { ctx = window.__hubFeedbackContext?.() || {}; } catch { ctx = {}; }
     if (!sending) {
       dialog.querySelector('[data-hf="send"]').disabled = false;
       dialog.querySelector('[data-hf="send"]').textContent = '发送';
@@ -101,7 +104,7 @@
     desc.focus();
     if (text) { const at = desc.value.indexOf('（可以在这里补一句'); if (at >= 0) desc.setSelectionRange(at, desc.value.indexOf('）', at) + 1); }
     try {
-      const p = await ipcRenderer.invoke('hub-feedback:preview', { sessionId: window.__hubFeedbackSessionId?.() || null });
+      const p = await ipcRenderer.invoke('hub-feedback:preview', { sessionId: window.__hubFeedbackSessionId?.() || null, ...ctx });
       if (!contactEdited && !sending && p && typeof p.contact === 'string') dialog.querySelector('[data-hf="contact"]').value = p.contact;
       const items = (p && p.items) || [];
       const diag = await diagnosis();
@@ -146,7 +149,7 @@
   function welinkInput() {
     const desc = dialog.querySelector('[data-hf="desc"]').value;
     if (!desc.trim()) { message('warn', '请先写一句遇到了什么问题'); dialog.querySelector('[data-hf="desc"]').focus(); return null; }
-    return { description: desc, contact: dialog.querySelector('[data-hf="contact"]').value };
+    return { description: desc, contact: dialog.querySelector('[data-hf="contact"]').value, ...ctx };
   }
   const savedLine = r => r && r.savedTo ? `<br><small>完整诊断包存在：<span class="hf-path">${esc(r.savedTo)}</span> <a href="#" data-hf-open="${esc(r.savedTo)}">打开所在文件夹</a></small>` : '';
   async function sendWelink() {
@@ -197,7 +200,7 @@
     ipcRenderer.on('hub-feedback:progress', onProgress);
     let r;
     const full = require('./harness-view').appendDiagnosis(desc, await diagnosis());
-    try { r = await ipcRenderer.invoke('hub-feedback:send', { description: full, contact: dialog.querySelector('[data-hf="contact"]').value }); }
+    try { r = await ipcRenderer.invoke('hub-feedback:send', { description: full, contact: dialog.querySelector('[data-hf="contact"]').value, ...ctx }); }
     catch (error) { r = { ok: false, reason: error.message }; }
     finally { ipcRenderer.removeListener('hub-feedback:progress', onProgress); }
     sending = false;

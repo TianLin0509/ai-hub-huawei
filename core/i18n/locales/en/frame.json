@@ -771,5 +771,9 @@
   "打开会话": "Open session",
   "没重启成功": "Restart failed",
   "低开销模式：网速和显卡读数没开（省一个常驻的 PowerShell 和定时的 nvidia-smi）。点一下到「设置 → 资源与后台」打开": "Low-overhead mode: network speed and GPU readings are off (saves a resident PowerShell and periodic nvidia-smi runs). Click to turn them on in Settings → Resources & background",
-  "网速 关": "Net off"
+  "网速 关": "Net off",
+  "部分功能降级 ⓘ": "Some features degraded ⓘ",
+  "本轮执行失败（没有拿到具体原因）": "Turn failed (no specific reason was reported)",
+  "正在切换到终端方式…": "Switching to terminal mode…",
+  "CodeAgent 轻享服务暂不可用，正在改用终端方式继续": "CodeAgent Lite is unavailable; switching to terminal mode"
 }

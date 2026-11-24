@@ -478,7 +478,38 @@ function awaitCodeAgentSubmission(operation, options) {
 // original body stays in its suspended call; this cache holds its digest/result,
 // never a second replay job. A new physical session has a different owner.
 const modelSubmissionResults = new WeakMap();
+// CodeAgent-Lite 改回终端（core/codeagent-serve-session.js SERVE_FALLBACK_HANDOVER）：
+//   - 正在改建时到达的消息：等终端会话建好再按正常流程发送；
+//   - 发送当口 serve 刚好起不来：这条没送进 serve（notSent），等改建完成后用原文、新提交编号重新完整发送一次。
+//     规则 / 工作区规则回执按新会话重新登记（旧回执已标为失败），不会叠两份规则；新编号避开旧会话的回执与去重记录。
+// 只重来一次；改建失败或超时就把原错误交回调用方。
+const SERVE_HANDOVER = 'SERVE_FALLBACK_HANDOVER';
+function serveFallbackRetryOptions(options = {}, sid = '') {
+  const id = options.clientSubmissionId || options.submissionReceipt?.clientSubmissionId || '';
+  // 发送回执是按旧 serve 会话建的（只认原生确认）；改成终端会话后要认终端的 prompt-submitted，否则干等到超时报卡住。
+  const manager = _deps?.sessionManager;
+  if (options.submissionReceipt?.nativeOnly === true && sid && !manager?.getNativeSession?.(sid)) options.submissionReceipt.nativeOnly = false;
+  const next = { ...options, serveFallbackRetried: true, requireReady: true,
+    ...(id ? { clientSubmissionId: `${String(id).slice(0, 140)}-pty` } : {}) };
+  delete next.serveFallbackOuterRetry;
+  return next;
+}
 function sendToPty(sid, prompt, kind, options = {}) {
+  const manager = _deps.sessionManager;
+  if (!options.serveFallbackRetried && manager?.serveFallbackPending?.(sid)) {
+    return manager.waitServeFallback(sid).then(() => sendToPty(sid, prompt, manager.getSession?.(sid)?.kind || kind, serveFallbackRetryOptions(options, sid)));
+  }
+  const task = sendToPtyOnce(sid, prompt, kind, options);
+  // serveFallbackOuterRetry：外层（梦境索引等自带回执的包装）自己负责等改建后重试，这里原样抛出，免得外层回执错位。
+  if (options.serveFallbackRetried || options.serveFallbackOuterRetry || !isCodeAgentKind(kind) || typeof manager?.waitServeFallback !== 'function') return task;
+  return task.catch(async error => {
+    if (error?.code !== SERVE_HANDOVER) throw error;
+    const ok = await manager.waitServeFallback(sid);
+    if (!ok || !manager.getSession?.(sid)) throw error;
+    return sendToPty(sid, prompt, manager.getSession(sid)?.kind || kind, serveFallbackRetryOptions(options, sid));
+  });
+}
+function sendToPtyOnce(sid, prompt, kind, options = {}) {
   const manager = _deps.sessionManager;
   if (!isCodeAgentKind(kind) || options.codeagentModelPick || !options.clientSubmissionId) {
     return sendToPtyAttempt(sid, prompt, kind, options);
@@ -1607,6 +1638,8 @@ function checkHostShellTakeover(sid) {
 }
 
 module.exports = {
+  serveFallbackRetryOptions,
+  SERVE_FALLBACK_HANDOVER: SERVE_HANDOVER,
   drainSubmission: sid => promptSubmissionQueues.get(sid)?.catch(() => {}) || Promise.resolve(),
   init,
   waitCliReady,

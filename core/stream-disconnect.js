@@ -28,8 +28,26 @@ function compactDisconnectMessage(value) {
 // 生产界面剖析：这里占界面线程脚本时间的第一位）。
 const STREAM_DISCONNECT_KEYWORDS = /stream|error|fatal/i;
 
+// CLI 自己还在重试的行（Codex「stream disconnected … retrying 1/5 in 200ms」、Claude「Retrying in 3s · attempt 2/10」）
+// 不是断连：CLI 会自己接上，接不上时最后会再打一行不带 retrying 的报错。2026-11-24 盘点：这类行把正在自动重试的会话
+// 判成「会话已断开」，是输入框上方虚警的大头。
+const AUTO_RETRY_LINE = /\bretry(?:ing)?\b|\breconnect(?:ing)?\b|\battempt\s*\d+\s*\/\s*\d+|重试|重连/i;
+
+// 重试行本身，以及紧跟在「Reconnecting… 1/5」下面那行原因（新版 Codex 分两行画）都去掉。
+function dropAutoRetryLines(plain) {
+  const kept = [];
+  let afterRetry = false;
+  for (const line of plain.split('\n')) {
+    if (AUTO_RETRY_LINE.test(line)) { afterRetry = true; continue; }
+    if (afterRetry && line.trim()) { afterRetry = false; if (/^\s*[└│├]/.test(line)) continue; }
+    kept.push(line);
+  }
+  return kept.join('\n');
+}
+
 function detectInPlainText(plain) {
   if (!STREAM_DISCONNECT_KEYWORDS.test(plain)) return null;
+  if (AUTO_RETRY_LINE.test(plain)) plain = dropAutoRetryLines(plain);
   for (const pattern of STREAM_DISCONNECT_PATTERNS) {
     const match = pattern.exec(plain);
     if (!match) continue;

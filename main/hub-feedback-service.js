@@ -8,7 +8,9 @@
 // 阿里云路径被公司网络放行页拦住时，自动在看不见的窗口里放行一次再重发（core/net-unblock.js，只对自家地址）；内网路径不需要。
 const fs = require('node:fs');
 const path = require('node:path');
-const { collectBundle } = require('../core/hub-feedback');
+const { collectBundle, feedbackScenes } = require('../core/hub-feedback');
+// 出问题时的会话类型（kind）和页面（view）由界面随请求带来，据此优先带相关日志。
+const scenesOf = ({ kind = '', view = '', description = '' } = {}) => feedbackScenes({ kind, view, description });
 const { looksLikeWebPage } = require('../core/app-update/downloader');
 const { writeFileAtomic } = require('../core/atomic-write');
 
@@ -78,20 +80,21 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
   let mcpDiagnostics = '';
   let mcpRead = Promise.resolve();
   const bundleInfo = () => ({ ...info(), ...(mcpDiagnostics ? { mcpDiagnostics } : {}) });
-  function preview({ description = '', contact = '', sessionId = null } = {}) {
+  function preview({ description = '', contact = '', sessionId = null, kind = '', view = '' } = {}) {
+    const ctx = { kind, view };
     if (collectMcpDiagnostics) {
       const read = Promise.resolve().then(() => collectMcpDiagnostics(sessionId))
         .catch(() => '本会话加载的 MCP 插件名单：未确认（读取失败）');
       mcpRead = read;
       return read.then(text => {
         if (mcpRead === read) mcpDiagnostics = text;
-        return previewBundle(description, contact, text);
+        return previewBundle(description, contact, text, ctx);
       });
     }
-    return previewBundle(description, contact);
+    return previewBundle(description, contact, mcpDiagnostics, ctx);
   }
-  function previewBundle(description, contact, diagnostic = mcpDiagnostics) {
-    const b = collectBundle({ info: { ...bundleInfo(), mcpDiagnostics: diagnostic }, description, contact, logsDir, dataDir: path.dirname(logsDir), now: now() });
+  function previewBundle(description, contact, diagnostic = mcpDiagnostics, ctx = {}) {
+    const b = collectBundle({ info: { ...bundleInfo(), mcpDiagnostics: diagnostic }, description, contact, logsDir, dataDir: path.dirname(logsDir), now: now(), scenes: scenesOf({ ...ctx, description }) });
     return { ok: true, available: edition === 'member' || !!endpoint || !!receiverAddress, pending: outboxItems().length, items: b.items, chars: b.chars, contact: defaultContact() };
   }
 
@@ -425,12 +428,12 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
     } catch (error) { logger.warn?.('[hub-feedback] 本地保存失败：', error.message); return null; }
   }
 
-  async function send({ description = '', contact = '', onProgress: progress = onProgress } = {}) {
+  async function send({ description = '', contact = '', kind = '', view = '', onProgress: progress = onProgress } = {}) {
     if (!String(description).trim()) return { ok: false, reason: '请先写一句遇到了什么问题' };
     await mcpRead;
     saveContact({ contact });
     const i = bundleInfo();
-    const b = collectBundle({ info: i, description, contact, logsDir, dataDir: path.dirname(logsDir), now: now() });
+    const b = collectBundle({ info: i, description, contact, logsDir, dataDir: path.dirname(logsDir), now: now(), scenes: scenesOf({ kind, view, description }) });
     const body = { text: b.text, summary: b.summary, version: String(i.version || ''), edition: String(i.edition || ''), platform: String(i.platform || ''), contact: String(contact || ''), ...(i.target ? { target: String(i.target) } : {}) };
     if (await route() === 'intranet') {
       progress({ phase: 'intranet' });
@@ -500,21 +503,21 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
     try { cli = !!welink.hasCli(); } catch { /* 当没装 */ }
     return { ok: true, enabled: true, to: welink.to, cli };
   }
-  function compactFor(description, contact) {
-    return require('../core/hub-feedback-welink').compactFeedback({ info: bundleInfo(), description, contact, logsDir, now: now() });
+  function compactFor(description, contact, ctx = {}) {
+    return require('../core/hub-feedback-welink').compactFeedback({ info: bundleInfo(), description, contact, logsDir, now: now(), scenes: scenesOf({ ...ctx, description }) });
   }
-  function fullBundle(description, contact) {
-    return collectBundle({ info: bundleInfo(), description, contact, logsDir, dataDir: path.dirname(logsDir), now: now() }).text;
+  function fullBundle(description, contact, ctx = {}) {
+    return collectBundle({ info: bundleInfo(), description, contact, logsDir, dataDir: path.dirname(logsDir), now: now(), scenes: scenesOf({ ...ctx, description }) }).text;
   }
   // 一键发送：用本机 welink-cli 以用户自己的身份私聊维护人；长的切成两段。发不出去时界面引导改用「复制并打开 WeLink」。
-  async function sendWelink({ description = '', contact = '' } = {}) {
+  async function sendWelink({ description = '', contact = '', kind = '', view = '' } = {}) {
     if (!String(description).trim()) return { ok: false, reason: '请先写一句遇到了什么问题' };
     await mcpRead;
     if (!welink) return { ok: false, reason: '这个版本没有开 WeLink 反馈' };
     saveContact({ contact });
     const W = require('../core/hub-feedback-welink');
-    const text = compactFor(description, contact);
-    const savedTo = saveLocal(fullBundle(description, contact));
+    const text = compactFor(description, contact, { kind, view });
+    const savedTo = saveLocal(fullBundle(description, contact, { kind, view }));
     const hkey = 'w:' + now().toString(36) + Math.random().toString(36).slice(2, 6);
     const hbase = { summary: firstLine(description), via: 'welink' };
     let hasCli = false;
@@ -565,13 +568,13 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
     return { ok: true, via: 'welink', parts: parts.length, to: welink.to, savedTo };
   }
   // 复制并打开 WeLink：精简版写进剪贴板，再把 WeLink 桌面客户端打开（已开着就是切到前台）。用户自己搜维护人账号、粘贴发送。
-  async function copyOpenWelink({ description = '', contact = '' } = {}) {
+  async function copyOpenWelink({ description = '', contact = '', kind = '', view = '' } = {}) {
     if (!String(description).trim()) return { ok: false, reason: '请先写一句遇到了什么问题' };
     await mcpRead;
     if (!welink) return { ok: false, reason: '这个版本没有开 WeLink 反馈' };
     saveContact({ contact });
-    const text = compactFor(description, contact);
-    const savedTo = saveLocal(fullBundle(description, contact));
+    const text = compactFor(description, contact, { kind, view });
+    const savedTo = saveLocal(fullBundle(description, contact, { kind, view }));
     let copied = false;
     try { const c = await welink.writeClipboard(text); copied = !!(c && c.ok); } catch { /* 下面提示 */ }
     let opened = { ok: false, reason: '' };

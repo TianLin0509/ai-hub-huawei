@@ -180,6 +180,61 @@ class CodeAgentServeClient extends EventEmitter {
     const hit = models.find(item => item.id.toLowerCase() === this.model.toLowerCase());
     if (hit) { this.model = hit.id; this.provider = String(hit.provider).split('/')[0]; }
   }
+  // Lite 会话中途换模型：直接按 serve 自己的模型清单（/api/v2/config/providers）认名字，不读终端菜单。
+  // 名字写法不同（显示名、大小写、线路前缀、同版本相近名）走统一对照 core/model-name-match.js；
+  // 清单里没有就报一行人话、不改当前模型，免得消息悄悄按服务端默认模型发出去。
+  async switchModel(want, provider = '') {
+    const name = String(want || '').trim();
+    const route = String(provider || '').trim();
+    const res = await this.call('GET', '/api/v2/config/providers');
+    if (res.status < 200 || res.status >= 300 || !res.json) {
+      throw Object.assign(new Error(`读不到 CodeAgent 的模型清单（${res.status ? 'HTTP ' + res.status : res.text || '连接失败'}），模型没有切换，请稍后再试`), { code: 'model-list-unavailable' });
+    }
+    const all = require('./codeagent-serve').parseProviders(res.json).models;
+    const optionText = () => {
+      const options = [...new Set(all.map(m => m.label || m.id))];
+      return options.length ? `（可选：${options.slice(0, 12).join('、')}${options.length > 12 ? ' 等' : ''}）` : '';
+    };
+    // 指定了线路：只在这条线路里找；线路这次不可用就照实报，不悄悄换到别的线路。
+    const key = value => String(value || '').toLowerCase();
+    let pool = all;
+    if (route) {
+      pool = all.filter(m => key(m.provider) === key(route));
+      if (!pool.length && !route.includes('/')) pool = all.filter(m => key(m.provider).split('/')[0] === key(route));
+      if (!pool.length) throw Object.assign(new Error(`这个账号的 CodeAgent 这次没有报出线路 ${route}，模型没有切换，请换一个${optionText()}`), { code: 'model-route-unavailable' });
+    }
+    // 同一个 id 挂在多条线路下时按 id 去重后再认名字；没指定线路就用清单里排在前面的那条（与启动时一致）。
+    const entries = pool.filter((m, i) => pool.findIndex(x => key(x.id) === key(m.id)) === i);
+    const match = require('./model-name-match');
+    const catalog = entries.map(m => ({ id: m.id, label: m.label }));
+    const ids = entries.map(m => m.id), labels = entries.map(m => m.label || m.id);
+    let found = match.resolveName(name, ids, { catalog });
+    if (found.index < 0) found = match.resolveName(name, labels, { catalog });
+    let near = null;
+    if (found.index < 0) {
+      near = match.resolveName(name, ids, { catalog, allowSimilar: true });
+      if (near.index < 0 && near.kind !== 'ambiguous') {
+        const byLabel = match.resolveName(name, labels, { catalog, allowSimilar: true });
+        if (byLabel.index >= 0 || byLabel.kind === 'ambiguous') near = byLabel;
+      }
+      if (near.index >= 0) found = near;
+    }
+    if (found.index < 0) {
+      // 与 PTY 菜单同一口径（core/model-name-match.js fallbackNote）：同版本几条分不清、或同家族只有别的版本时不替换，保留当前模型并说明一行。
+      if (near && (near.kind === 'ambiguous' || (near.sameFamily || []).length)) {
+        const note = match.fallbackNote(name, near).replace('模型菜单里没有', '模型清单里没有').replace(/，沿用账号默认模型$/, '');
+        throw Object.assign(new Error(`${note}，模型没有切换（仍用 ${this.model || '当前模型'}），请直接选具体的一个`), { code: 'model-name-fallback', nameFallback: true });
+      }
+      throw Object.assign(new Error(all.length
+        ? `这个账号的 CodeAgent 模型清单里没有 ${name}，请换一个${optionText()}`
+        : `CodeAgent 这次没报出可用模型，没能切到 ${name}，请稍后再试或换一个`), { code: 'model-not-listed' });
+    }
+    const hit = entries[found.index];
+    if (!require('./model-id').isSafeModelId(hit.id)) throw Object.assign(new Error(`CodeAgent 清单里的模型名 ${hit.id} 无法使用，请换一个`), { code: 'model-not-listed' });
+    this.model = hit.id;
+    this.provider = String(hit.provider).split('/')[0];
+    return { id: hit.id, label: hit.label || hit.id, provider: hit.provider, providerLabel: hit.providerLabel || '', kind: found.kind };
+  }
   async _load(sessionId) {
     const res = await this.call('GET', `/api/v2/session/${encodeURIComponent(sessionId)}${this.query}`);
     if (res.status >= 300) throw new Error(`找不到 CodeAgent 会话：${res.status}`);

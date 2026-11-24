@@ -46,11 +46,13 @@ function createTokenPlanFallbackController(deps = {}) {
     if (fallback.isTokenPlanRouteProfile(session.acpProfileId)) return 'token-plan';
     return null;
   }
-  function notice(sessionId, message) {
+  // noticeKind（core/notice-gate.js）：'auto' 是已经自动改道或自动处理好的，只记日志不打扰；其余是要用户知道的。
+  function notice(sessionId, message, noticeKind = 'blocking') {
     try {
+      if (noticeKind === 'auto') { logger.log(`[token-plan-fallback] ${String(sessionId).slice(0, 8)} ${message}`); if (typeof notify === 'function') notify(sessionId, message, noticeKind); return; }
       const native = sessionManager.getNativeSession?.(sessionId);
       if (native) native.emit('action-error', message);
-      else if (typeof notify === 'function') notify(sessionId, message);
+      else if (typeof notify === 'function') notify(sessionId, message, noticeKind);
     } catch (error) { logger.warn('[token-plan-fallback] notice failed:', error.message); }
   }
   function routeFor(session) { return fallback.resolveRoute({ config: getConfig(), dataDir, kind: session?.kind, now: now() }); }
@@ -75,10 +77,11 @@ function createTokenPlanFallbackController(deps = {}) {
       const native = sessionManager.getNativeSession?.(sessionId);
       await native?.start?.();
       const model = native?.options?.model || session.currentModel?.displayName || session.currentModel?.id || '';
+      const waiting = target !== 'deepseek' && !!fallback.exhaustedUntil(dataDir, now());
       notice(sessionId, target === 'deepseek'
         ? fallback.deepseekRouteNotice(model, dataDir, now())
-        : fallback.exhaustedUntil(dataDir, now()) ? fallback.waitNotice(dataDir, { now: now() })
-          : `Token Plan 额度已恢复，本会话已切回套餐 · ${model}。`);
+        : waiting ? fallback.waitNotice(dataDir, { now: now() })
+          : `Token Plan 额度已恢复，本会话已切回套餐 · ${model}。`, waiting ? 'blocking' : 'auto');
       logger.log(`[token-plan-fallback] ${String(sessionId).slice(0, 8)} switched to ${target} (${model})`);
       return session;
     })().finally(() => switching.delete(sessionId));
@@ -147,7 +150,7 @@ function createTokenPlanFallbackController(deps = {}) {
       const receipt = await sendToPty(sessionId, CONTINUATION_NOTE + '\n\n' + prompt, session.kind, {
         requireReady: ptySession, clientSubmissionId: `token-plan-fallback-${now()}`,
       });
-      if (!receipt || receipt.ok === false) notice(sessionId, '已切到 DeepSeek API，但自动重发未获确认；请在卡片里核对后再决定是否手动重发。');
+      if (!receipt || receipt.ok === false) notice(sessionId, '已切到 DeepSeek API，但自动重发未获确认；请在卡片里核对后再决定是否手动重发。', 'blocking');
     } catch (error) {
       notice(sessionId, `已切到 DeepSeek API，自动重发失败：${error.message}。请手动重发上一条。`);
     }

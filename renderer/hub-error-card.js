@@ -318,6 +318,7 @@ function showErrorToast(doc, message, { area = 'toast', ms = 8000, sessionId = '
   el = doc.createElement('div');
   el.id = 'hub-err-toast';
   el.className = 'hub-err-toast';
+  el.title = text; // 一行显示放不下的全文悬停看
   el.setAttribute('role', 'alert');
   // 报错所属会话：一键动作（重启会话、换模型）经 closest('[data-session-id]') 只作用在它上面。
   if (sessionId) el.dataset.sessionId = String(sessionId);
@@ -349,7 +350,8 @@ function showErrorToast(doc, message, { area = 'toast', ms = 8000, sessionId = '
     + '<button type="button" class="hub-err-toast-btn" data-hub-err-toast="detail">详情</button>'
     + '<button type="button" class="hub-err-toast-btn" data-hub-err-toast="close" aria-label="关闭">×</button></div>'
     + caution
-    + (tail.length ? `<div class="hub-err-toast-tail"><span>终端最后几行（退出原因）</span><pre>${esc(tail.join('\n'))}</pre></div>` : '');
+    // 终端尾部默认折叠（2026-11-24 提示大清理：提示本身只留一行），点开才看。
+    + (tail.length ? `<details class="hub-err-toast-tail"><summary>终端最后几行（退出原因）</summary><pre>${esc(tail.join('\n'))}</pre></details>` : '');
   if (tail.length || resend) ms = Math.max(ms, 20000);
   let timer = null;
   const arm = () => { clearTimeout(timer); timer = setTimeout(() => { if (!el.classList.contains('expanded') && !el.classList.contains('pinned')) el.remove(); }, ms); };

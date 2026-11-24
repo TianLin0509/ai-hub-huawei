@@ -13,6 +13,10 @@ const PREFRESH_MIN_MS = 30 * 60_000;
 const PREFRESH_SPAN_MS = 30 * 60_000;
 const PREFRESH_GAP_MS = 3 * 60_000;
 const MAX_BACKOFF_MS = 30 * 60_000;
+// 上次刷新请求发出后没拿到确定答复（超时、进程被杀、返回不完整）时，隔这么久自动复核一次。
+const RECHECK_GAP_MS = 5 * 60_000;
+// 登录服务明确拒绝这张刷新凭据（凭据已作废），只有重新登录能恢复。
+const REJECTED_STATUSES = new Set([400, 401, 403]);
 
 function fail(code, message) { return Object.assign(new Error(message), { code }); }
 function readJson(file, optional = false) {
@@ -147,8 +151,21 @@ function createClaudeCredentialBroker({ request, stateDir, now = Date.now, onUsa
         if (Number(oauth.expiresAt) > now()) return credentials;
         throw fail('CLAUDE_AUTH_RATE_LIMIT', 'Claude 登录刷新正在退避，稍后再试');
       }
-      if (previous?.tokenHash === tokenHash) throw fail('CLAUDE_REFRESH_UNCONFIRMED', '上次登录刷新结果未确认，请先重新登录该账号');
+      if (previous?.tokenHash === tokenHash) {
+        // 2026-11-24 R25：旧版把「刷新被拒（400）」和「请求发出后没拿到答复」都留成同一个未确认标记，
+        // 之后每次新建会话都报「上次登录刷新结果未确认」，直到手动重登（11-15、11-16、11-23 共 15 次）。
+        // 现在分开：被拒就是确定失效，直接说要重新登录；没拿到答复的，访问令牌没过期就照常用，过期了隔 5 分钟自动复核一次——
+        // 上次其实已成功换过凭据的，这次会被登录服务拒绝，于是确定为需要重新登录；上次没送达的，这次就刷新成功。
+        if (previous.rejected) throw fail('CLAUDE_RELOGIN_REQUIRED', 'Claude 登录已失效（刷新被登录服务拒绝），请重新登录该账号');
+        if (Number(oauth.expiresAt) > now()) return credentials;
+        const waitMs = Number(previous.startedAt || 0) + RECHECK_GAP_MS - now();
+        if (waitMs > 0) {
+          throw fail('CLAUDE_REFRESH_UNCONFIRMED', `上次登录刷新结果未确认，约 ${Math.max(1, Math.ceil(waitMs / 60_000))} 分钟后自动复核；也可以直接重新登录该账号`);
+        }
+      }
       const failures = Number(previous?.failures) || 0;
+      // 复核请求遇到没发出去或限流时，原来的「未确认」不能丢：保留标记和最初的时间，退避结束后接着复核。
+      const unconfirmed = previous?.tokenHash === tokenHash ? { tokenHash, startedAt: Number(previous.startedAt) || now() } : {};
       // Persist uncertainty BEFORE issuing a rotating grant. A timeout/crash
       // must not repeatedly consume the same possibly superseded grant.
       atomicJson(marker, { tokenHash, startedAt: now(), failures });
@@ -163,18 +180,35 @@ function createClaudeCredentialBroker({ request, stateDir, now = Date.now, onUsa
         // The grant provably never left this machine (proxy/DNS/offline), so it
         // is still unused: wait a fixed minute instead of demanding a fresh login.
         // Not exponential, so a recovered network is usable again right away.
-        if (error.notSent) atomicJson(marker, { retryAfterAt: now() + 60_000, failures });
+        if (error.notSent) atomicJson(marker, { ...unconfirmed, retryAfterAt: now() + 60_000, failures });
         throw error;
       }
-      logRefresh(profile, reason, { status: response.status, ...(response.retryAfterMs ? { retryAfterMs: response.retryAfterMs } : {}) });
+      logRefresh(profile, reason, { status: response.status, ...(response.retryAfterMs ? { retryAfterMs: response.retryAfterMs } : {}),
+        ...(previous?.tokenHash === tokenHash ? { recheck: true } : {}),
+        ...(typeof response.errorCode === 'string' && response.errorCode ? { error: response.errorCode.slice(0, 60) } : {}) });
       if (response.status !== 200) {
+        if (response.status !== 429) {
+          // 等待期间别的进程（例如账号目录里的 Claude CLI）可能已经换过凭据：被拒是预期的，新凭据可用。
+          const current = readJson(file);
+          const latest = current.claudeAiOauth;
+          if (latest?.refreshToken && latest.refreshToken !== oauth.refreshToken) {
+            try { fs.unlinkSync(marker); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+            accessOnly(current);
+            return current;
+          }
+        }
+        if (REJECTED_STATUSES.has(response.status)) {
+          atomicJson(marker, { tokenHash, rejected: true, status: response.status, at: now(), failures });
+          throw fail('CLAUDE_RELOGIN_REQUIRED', 'Claude 登录已失效（刷新被登录服务拒绝），请重新登录该账号');
+        }
         if (response.status === 429) {
           // Exponential: a fixed 60 s retry keeps knocking during a long limit window.
           const wait = Math.max(Math.min(60_000 * 2 ** failures, MAX_BACKOFF_MS), Number(response.retryAfterMs) || 0);
-          atomicJson(marker, { retryAfterAt: now() + wait, failures: failures + 1 });
+          atomicJson(marker, { ...unconfirmed, retryAfterAt: now() + wait, failures: failures + 1 });
           throw fail('CLAUDE_AUTH_RATE_LIMIT', 'Claude 登录刷新暂时限流，稍后再试');
         }
-        throw fail('CLAUDE_RELOGIN_REQUIRED', 'Claude 登录刷新未成功，请核对该账号登录');
+        // 5xx 等：服务端出错，这张凭据是否已被消耗不确定，保留未确认标记，到点自动复核。
+        throw fail('CLAUDE_REFRESH_UNCONFIRMED', `Claude 登录服务暂时出错（HTTP ${response.status}），约 5 分钟后自动复核`);
       }
       const data = response.data;
       if (!data?.access_token || !Number.isFinite(data.expires_in) || data.expires_in <= 0) {
@@ -192,6 +226,25 @@ function createClaudeCredentialBroker({ request, stateDir, now = Date.now, onUsa
       fs.unlinkSync(marker);
       return next;
     });
+  }
+  // 不发请求、只看本地凭据和刷新标记：这个号现在能不能直接用来开会话或接手换号。
+  // 只报确定的问题（刷新被拒、未确认且访问令牌已过期、刷新凭据被清空），读不到文件等不确定情况不拦。
+  function authBlocked(profile) {
+    let oauth;
+    try { oauth = readJson(path.join(profile.home, '.credentials.json'), true)?.claudeAiOauth; } catch { return null; }
+    if (!oauth) return null;
+    if (!oauth.accessToken || oauth.refreshToken === '') return { code: 'CLAUDE_RELOGIN_REQUIRED', message: '需要重新登录' };
+    let marker = null;
+    try { marker = readJson(markerFor(profile), true); } catch {}
+    const sameGrant = !!oauth.refreshToken && marker?.tokenHash === fingerprint(oauth.refreshToken);
+    if (sameGrant && marker.rejected) return { code: 'CLAUDE_RELOGIN_REQUIRED', message: '登录已失效，需要重新登录' };
+    // 访问令牌已过期、刷新又在退避：现在拿它开会话一定失败，先跳过。
+    if (oauth.refreshToken && Number(oauth.expiresAt) <= now() && Number(marker?.retryAfterAt) > now()) return { code: 'CLAUDE_AUTH_RATE_LIMIT', message: '登录刷新正在退避，稍后再试' };
+    if (sameGrant) {
+      if (Number(oauth.expiresAt) <= now()) return { code: 'CLAUDE_REFRESH_UNCONFIRMED', message: '登录刷新结果未确认，正在等待自动复核' };
+    }
+    if (!oauth.refreshToken && Number(oauth.expiresAt) <= now()) return { code: 'CLAUDE_RELOGIN_REQUIRED', message: '登录已过期，需要重新登录' };
+    return null;
   }
   function getCredentials(profile, leadMs, reason) {
     const key = path.resolve(profile.home).toLowerCase();
@@ -217,7 +270,11 @@ function createClaudeCredentialBroker({ request, stateDir, now = Date.now, onUsa
       if (Number(oauth.expiresAt) > now() + lead) continue;
       const marker = readJson(markerFor(profile), true);
       // An unconfirmed marker only blocks the grant it was written for; a new login clears it.
-      if (Number(marker?.retryAfterAt) > now() || marker?.tokenHash === fingerprint(oauth.refreshToken)) continue;
+      // 未确认的号若当时没有会话在跑，没人会去复核它：访问令牌过期、等满 5 分钟后由这里的后台巡检代为复核。
+      // 被拒的号不再发请求；访问令牌还能用的未确认号也先不动。
+      if (Number(marker?.retryAfterAt) > now()) continue;
+      if (marker?.tokenHash === fingerprint(oauth.refreshToken)
+        && (marker.rejected || Number(oauth.expiresAt) > now() || Number(marker.startedAt || 0) + RECHECK_GAP_MS > now())) continue;
       lastPrefreshAt = now();
       try { await getCredentials(profile, lead, 'background'); return { id: profile.id, ok: true }; }
       catch (error) { return { id: profile.id, ok: false, code: error.code }; }
@@ -259,6 +316,7 @@ function createClaudeCredentialBroker({ request, stateDir, now = Date.now, onUsa
   }
   return {
     getCredentials,
+    authBlocked,
     prefresh,
     prefreshLead,
     // Best known reading without a request: the Hub cache (fed for free by every
@@ -282,4 +340,4 @@ function createClaudeCredentialBroker({ request, stateDir, now = Date.now, onUsa
   };
 }
 
-module.exports = { accessOnly, atomicJson, readJson, globalConfigPath, withDirectoryLocks, withCredentialLocks, createClaudeCredentialBroker, fail };
+module.exports = { RECHECK_GAP_MS, accessOnly, atomicJson, readJson, globalConfigPath, withDirectoryLocks, withCredentialLocks, createClaudeCredentialBroker, fail };

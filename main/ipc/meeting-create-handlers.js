@@ -190,7 +190,7 @@ function createMeetingSubAdder(deps) {
     await require('../../core/codeagent-capabilities').prepareForKind(kind);
     const session = await require('../session-model-creation').createSessionWithModelPolicy({ kind, opts: sessionOpts,
       contextLabel: `群聊 ${meeting?.title || meetingId} / ${sessionOpts.title || kind}`,
-      create: (runtimeKind, launchOpts) => sessionManager.createSession(runtimeKind, launchOpts),
+      create: (runtimeKind, launchOpts) => require('../../core/session-open-ownership').retryWhenOwnershipBusy(() => sessionManager.createSession(runtimeKind, launchOpts)),
       requestConfirmation: requestModelConfirmation, sendToRenderer,
     });
     if (!session) return null;

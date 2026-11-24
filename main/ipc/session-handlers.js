@@ -28,8 +28,10 @@ function isSafeNativeSessionId(value) {
 function waitForSessionGone(sessionManager, sessionId, { timeoutMs = 15000, intervalMs = 50 } = {}) {
   return new Promise((resolve) => {
     const deadline = Date.now() + timeoutMs;
+    // 过渡中的会话（CodeAgent-Lite 改回终端）getSession 仍有值，这里只看真实的会话对象是否已退出。
+    const live = () => (typeof sessionManager.hasLiveSession === 'function' ? sessionManager.hasLiveSession(sessionId) : !!sessionManager.getSession(sessionId));
     const check = () => {
-      if (!sessionManager.getSession(sessionId)) return resolve(true);
+      if (!live()) return resolve(true);
       if (Date.now() >= deadline) return resolve(false);
       setTimeout(check, intervalMs);
     };
@@ -150,7 +152,40 @@ function registerSessionIpc(ipcMain, deps) {
   const web = require('../../core/chatgpt-web-integration');
   ipcMain.handle('chatgpt-web:status', () => web.webStatus());
   ipcMain.handle('chatgpt-web:settings', () => web.openWebSettings());
-  const createSession = (arg) => {
+  // 用户在界面上手动新建（IPC create-session）不受暂停影响，成功一次即解除（core/session-start-backoff.js）。
+  const autoStartBackoff = require('../../core/session-start-backoff').createSessionStartBackoff({
+    onPause: ({ kind, reason, waitMs }) => {
+      console.warn(`[create-session] 自动新建 ${kind} 会话连续失败，暂停 ${Math.round(waitMs / 1000)} 秒：${reason}`);
+      try { sendToRenderer('session-notice', { level: 'error', noticeKind: 'blocking',
+        message: `后台自动新建 ${kind} 会话连续 3 次失败，已暂停重试：${reason}` }); } catch {}
+    },
+  });
+  const createAutoSession = (arg) => {
+    const kind = typeof arg === 'string' ? arg : arg?.kind;
+    // 同步/异步形态与 createSession 保持一致：同步抛出的照旧同步抛出，返回 Promise 的照旧返回 Promise。
+    let result;
+    // 正式环境（有启动前检查）建会话本来就返回 Promise，暂停和启动前的同步检查失败也一律用 Promise 拒绝，调用方 .catch 能接住。
+    try { autoStartBackoff.assertAllowed(kind); }
+    catch (error) { if (ensureLaunchAuth) return Promise.reject(error); throw error; }
+    try { result = createSession(arg, 'auto'); }
+    catch (error) { autoStartBackoff.failed(kind, error); if (ensureLaunchAuth) return Promise.reject(error); throw error; }
+    if (result && typeof result.then === 'function') {
+      return result.then(session => { autoStartBackoff.succeeded(kind); return session; },
+        error => { autoStartBackoff.failed(kind, error); throw error; });
+    }
+    autoStartBackoff.succeeded(kind);
+    return result;
+  };
+  const createSession = (arg, source = 'user') => {
+    const started = Date.now();
+    try { return createSessionChecked(arg, source, started); }
+    catch (error) {
+      const kind = (typeof arg === 'string' ? arg : arg?.kind) || 'powershell';
+      recordLaunchTiming({ kind, source, checksMs: Date.now() - started, ok: false, ...launchFailureFields(error) });
+      throw error;
+    }
+  };
+  const createSessionChecked = (arg, source, started) => {
     // Back-compat: legacy callers pass just a kind string; newer callers pass { kind, opts }.
     let kind;
     let opts;
@@ -179,16 +214,23 @@ function registerSessionIpc(ipcMain, deps) {
     // 社区版：缺少 CLI 先说清楚，再查登录（2026-10-28：没装 Claude 时，账号凭据检查先报「Claude 登录或配置文件无法读取」，
     // 盖过了「未找到 Claude Code CLI」，用户以为是登录问题）。session-manager 创建前同样检查一次。
     require('../../core/community-provider').assertProviderAvailable(kind || 'powershell');
-    require('../../core/company-api-config').assertLaunchConfigured(kind || 'powershell', require('../../core/hub-config').getConfig());
+    require('../../core/company-api-config').assertLaunchConfigured(kind || 'powershell', require('../../core/hub-config').getConfig(), opts || {});
     if (ensureLaunchAuth) {
-      const started = Date.now();
       let checked = started;
       return ensureLaunchAuth(kind,opts).then(()=>require('../../core/codeagent-capabilities').prepareForKind(kind)).then(()=>{ checked = Date.now(); return createResolvedSession(kind,opts); })
-        .then(session => { recordLaunchTiming({kind, checksMs:checked-started, createMs:Date.now()-checked, ok:true, sessionId:session?.id || null}); return session; },
-          error => { recordLaunchTiming({kind, checksMs:Date.now()-started, ok:false, code:error?.code || null}); throw error; });
+        .then(session => { if (source === 'user') autoStartBackoff.succeeded(kind); recordLaunchTiming({kind, source, checksMs:checked-started, createMs:Date.now()-checked, ok:true, sessionId:session?.id || null}); return session; },
+          error => { recordLaunchTiming({kind, source, checksMs:Date.now()-started, ok:false, ...launchFailureFields(error)}); throw error; });
     }
     return createResolvedSession(kind, opts);
   };
+  // 失败行一定带原因：没有错误码的普通 Error 也记下第一行原文（截 200 字）；SQLite 错误另记 errcode，
+  // 才分得清是锁忙（5）、损坏（11）还是别的。2026-11-11 的 24 次失败只记了 code:null，事后查不到原因。
+  function launchFailureFields(error) {
+    const message = String(error?.message || error || '').split(/\r?\n/)[0].slice(0, 200);
+    return { code: error?.code || null, message: message || null,
+      ...(Number.isInteger(error?.errcode) ? { errcode: error.errcode } : {}),
+      ...(error?.cause && typeof error.cause !== 'object' ? { cause: String(error.cause) } : {}) };
+  }
   // Where a launch spends its time: pre-launch checks versus building the session.
   function recordLaunchTiming(entry) {
     try {
@@ -237,7 +279,7 @@ function registerSessionIpc(ipcMain, deps) {
           sendToRenderer('session-created', { session, ...(createRequestId ? { createRequestId } : {}) });
           return createWarning ? { ...session, createWarning } : session;
         };
-        const result = sessionManager.createSession(runtimeKind, sessionOpts);
+        const result = require('../../core/session-open-ownership').retryWhenOwnershipBusy(() => sessionManager.createSession(runtimeKind, sessionOpts));
         return result?.then ? result.then(created) : created(result);
       },
     });
@@ -294,7 +336,7 @@ function registerSessionIpc(ipcMain, deps) {
         result = require('../session-model-creation').createSessionWithModelPolicy({ kind, opts: preparedOpts,
           contextLabel: preparedOpts.title ? `分支会话 ${preparedOpts.title}` : '分支会话', modelLabel: '原会话的模型',
           requestConfirmation: requestModelConfirmation, sendToRenderer, dataDir: deps.dataDir || null,
-          create: (runtimeKind, launchOpts) => sessionManager.createSession(runtimeKind, launchOpts) });
+          create: (runtimeKind, launchOpts) => require('../../core/session-open-ownership').retryWhenOwnershipBusy(() => sessionManager.createSession(runtimeKind, launchOpts)) });
       } catch (error) { return cancelled(error); }
       return result?.then ? result.then(created, cancelled) : created(result);
     };
@@ -379,6 +421,17 @@ function registerSessionIpc(ipcMain, deps) {
     } catch (error) { return { ok: false, message: error.message }; }
   });
 
+  // 卡片视图里直接回答终端选择菜单（core/pty-choice-menu.js）：读屏认菜单、核对后按键，认不出就不按。
+  const ptyChoice = require('../../core/pty-choice-menu').createPtyChoiceMenu(sessionManager);
+  ipcMain.handle('pty-choice:read', async (_event, { sessionId } = {}) => {
+    try { return await ptyChoice.read(sessionId); }
+    catch (error) { return { ok: false, reason: 'error', message: error.message }; }
+  });
+  ipcMain.handle('pty-choice:answer', async (_event, { sessionId, signature, key } = {}) => {
+    try { return await ptyChoice.answer(sessionId, { signature, key }); }
+    catch (error) { return { ok: false, reason: 'error', message: error.message }; }
+  });
+
   const cardRelay = new (require('../../core/card-relay').CardRelay)({
     sessions: { getRaw: id => sessionManager.sessions?.get(id), updateMeta: (id, fields) => sessionManager.updateSessionMeta(id, fields) },
     restart: id => restartAuthorizedSession(id, null, { relaunch: true, cardSwitch: true }),
@@ -401,16 +454,56 @@ function registerSessionIpc(ipcMain, deps) {
     }).catch(error => console.warn('[card-relay] 改回 PTY 失败：', error.message));
   });
 
-  // serve 连续恢复失败：把这个会话改回独立 PTY，用同一份记录继续。
-  sessionManager.on?.('codeagent-serve-fallback', ({ sessionId, reason }) => {
-    console.warn('[codeagent-serve] 改回 PTY：', sessionId, reason);
-    sessionManager.updateSessionMeta(sessionId, { codeagentRunMode: 'pty' });
-    Promise.resolve(restartAuthorizedSession(sessionId, null, { relaunch: true, serveFallback: true })).then(result => {
-      const ok = result && result.ok !== false;
-      sendToRenderer('session-notice', { sessionId: result?.id || sessionId, level: ok ? 'warning' : 'error', persistent: true,
-        message: ok ? 'CodeAgent 服务多次中断，这个会话已自动改回终端方式，历史和上下文都在。' : `自动改回终端失败：${result?.message || '未知错误'}，可从侧栏休眠后重新打开。` });
-    }).catch(error => console.warn('[codeagent-serve] 改回 PTY 失败：', error.message));
+  // CodeAgent-Lite（serve）起不来或连续断线：无感改回独立 PTY。
+  // 已有原生会话 ID 的按原历史恢复；首轮就没连上（还没有 ID）的用同一会话 ID、原启动参数原地改建终端会话。
+  // （core/group-chat-watcher.js sendToPty），这里不另行补发，避免规则回执错位或重复。
+  // 提示按提示闸门口径（core/notice-gate.js）：自动改道成功的不打扰（只进日志），用户亲手点 Lite 的给一行；改道失败才算真失败。
+  const SERVE_FALLBACK_NOTICE = 'CodeAgent 轻享服务暂不可用，已自动改用终端方式继续';
+  const serveFallbackNoticeKey = 'codeagent-serve-fallback';
+  sessionManager.on?.('codeagent-serve-fallback', (event = {}) => {
+    const { sessionId, reason } = event;
+    console.warn('[codeagent-serve] 改回 PTY：', sessionId, event.phase || 'runtime', reason);
+    const launchOpts = sessionManager.getServeLaunchOptions?.(sessionId) || null;
+    const explicit = launchOpts?.explicitCodeagentLite === true;
+    sessionManager.updateSessionMeta(sessionId, { codeagentRunMode: 'pty', codeagentLiteFeature: false, codeagentServeFallbackReason: String(reason || '').slice(0, 300) });
+    // 留在 serve 待发队列里、等你确认的消息不自动重发，回执里如实报数。
+    const pending = Array.isArray(event.pendingPrompts) ? event.pendingPrompts.length : 0;
+    let ok = false;
+    Promise.resolve().then(() => restartAuthorizedSession(sessionId, null, { relaunch: true, serveFallback: true, launchOpts })).then(result => {
+      ok = !!result && result.ok !== false;
+      const left = ok && pending > 0 ? `；有 ${pending} 条待发消息未自动发送，请重新发送` : '';
+      sendToRenderer('session-notice', { sessionId: result?.id || sessionId, level: ok ? 'info' : 'error', persistent: !ok, reasonKey: serveFallbackNoticeKey,
+        noticeKind: ok ? (explicit || left ? 'user-action' : 'auto') : 'blocking',
+        message: ok ? SERVE_FALLBACK_NOTICE + left : `CodeAgent 轻享服务暂不可用，自动改用终端方式失败：${result?.message || '未知错误'}，可新建会话重试` });
+    }).catch(error => console.warn('[codeagent-serve] 改回 PTY 失败：', error.message))
+      .finally(() => sessionManager.endServeFallback?.(sessionId, ok));
   });
+
+  // 首轮就没连上的 Lite 会话：按原启动参数、同一会话 ID 原地改建终端会话（session-manager replaceServeWithPty：
+  // 旧对象按休眠收尾，界面不收到「会话被删除」，草稿与侧栏位置保留、不抢焦点）。
+  function relaunchServeAsPty(old, options = {}) {
+    const base = options.launchOpts || {
+      cwd: old.cwd, title: old.title, model: sessionModelId(old), permissionMode: old.permissionMode, purpose: old.purpose,
+      featureAgent: old.featureAgent, featureAgentChoice: old.featureAgentChoice, autonomous: old.autonomous, noInheritCursor: old.noInheritCursor,
+      openInBackground: old.openInBackground, addDirs: old.addDirs, workspaceLabel: old.workspaceLabel, pinned: old.pinned, codeagentPoolAccount: old.codeagentPoolAccount,
+      ...require('../../core/codeagent-model-choice').routeFields(old),
+    };
+    const opts = { ...base, codeagentRunMode: 'pty' };
+    for (const key of ['codeagentLiteFeature', 'explicitCodeagentLite', 'lowOverheadServe', 'resumeCCSessionId', 'acpSid', 'nativeRuntime', '_openLeaseNonce', 'id']) delete opts[key];
+    for (const key of Object.keys(opts)) if (opts[key] === undefined) delete opts[key];
+    // 号池会话回到原来那个号，不重新挑号。
+    if (old.codeagentPoolAccount && !opts.codeagentPoolAccount) opts.codeagentPoolAccount = old.codeagentPoolAccount;
+    if (old.title) opts.title = old.title;
+    // 改建出来的会话在后台接上：用户正看着它时照常显示终端，切去别处的不被拉回来。
+    opts.openInBackground = true;
+    const kind = String(old.kind || 'codeagent').replace(/-resume$/, '');
+    lastResizeBySid.delete(old.id);
+    return Promise.resolve(sessionManager.replaceServeWithPty(old.id, kind, opts)).then(session => {
+      registerSessionForTap(session);
+      sendToRenderer('session-created', { session });
+      return session;
+    });
+  }
 
   ipcMain.handle('codex:native-action', async (_event, payload = {}) => {
     const native = sessionManager.getNativeSession?.(payload.sessionId) || sessionManager.getNativeCodex?.(payload.sessionId);
@@ -1466,7 +1559,11 @@ function registerSessionIpc(ipcMain, deps) {
     const activeSettings = sessionManager.sessions?.get(sessionId)?.codeagentSettingsActive;
     const settingsChange = activeSettings ? updateCodeAgentModelSettings(sessionId, session, target) : null;
     if (activeSettings && !settingsChange) return { ok: false, error: 'settings-update-failed', message: '无法更新这个会话正在使用的模型设置，本轮未重发' };
+    // Lite（serve）会话没有终端菜单：按 serve 模型清单直接切，不走 /model 读屏。
+    const serveFix = !settingsChange && session.codeagentRunMode === 'serve' && sessionManager.getNativeSession?.(sessionId)
+      ? await switchCodeAgentServeModel(sessionId, session, target, '') : null;
     const result = settingsChange ? { ok: true, model: target, mode: 'settings-only', confirmed: false }
+      : serveFix ? { ...serveFix, model: serveFix.model?.id || target }
       : await codeagentPicker.schedulePick(sessionId, () => runCodeAgentPick(sessionId, target, 'model-config-fix'));
     // result.fallback：菜单没选上、只是没把问题挡住（自动会话「能发就发」的老兜底）。这一条路不能算切成了——
     if (!result || !result.ok || result.fallback) {
@@ -1611,6 +1708,38 @@ function registerSessionIpc(ipcMain, deps) {
     } catch (error) { console.warn('[codeagent] 去掉会话设置文件里的旧模型失败：' + error.message); return false; }
   }
 
+  async function switchCodeAgentServeModel(sessionId, session, modelId, provider) {
+    const models = require('../../core/codeagent-models');
+    const dataDir = require('../../core/data-dir').getHubDataDir();
+    const native = sessionManager.getNativeSession(sessionId);
+    let result;
+    try { result = await native.configure({ model: modelId, provider }); }
+    catch (error) {
+      models.appendModelLog(dataDir, { event: 'serve-switch', session: String(sessionId).slice(0, 8), model: modelId, ok: false, code: error.code || '', error: error.message });
+      return { ok: false, error: error.code || 'serve-switch-failed', message: error.message };
+    }
+    const chosen = result.modelId || modelId;
+    // 会话因「原模型不可用」暂停时，这次切换就是给原模型选的替代：与 PTY 路径一样记下（core/codeagent-model-replacements.js）。
+    const pausedFrom = session.modelConfirmationRequired && session.fixedModel ? session.fixedModel : '';
+    models.appendModelLog(dataDir, { event: 'serve-switch', session: String(sessionId).slice(0, 8), model: modelId, ok: true, to: chosen, kind: result.matchKind || '' });
+    if (result.matchKind === 'similar') {
+      sendToRenderer('session-notice', { sessionId, level: 'warning', message: require('../../core/model-name-match').substitutionNote(modelId, result.displayName || chosen) });
+    }
+    const updated = sessionManager.updateSessionMeta(sessionId, { currentModel: { id: chosen, displayName: result.displayName || models.modelLabel(chosen) },
+      fixedModel: chosen, codeagentUserModel: chosen, modelPinSource: 'user', modelChange: null, modelConfirmationRequired: false, modelUnavailableReason: '',
+      codeagentModelProvider: result.provider || '', codeagentModelProviderLabel: result.providerLabel || '', codeagentModelMenuLabel: '' });
+    if (updated) sendToRenderer('session-updated', { session: updated });
+    try { require('../../core/codeagent-launch-model').rememberModel(dataDir, (session.info && session.info.codeagentPoolAccount) || session.codeagentPoolAccount || 'personal', chosen); }
+    catch (error) { console.warn('[codeagent] 记住上次选的模型失败：' + error.message); }
+    if (pausedFrom && pausedFrom !== chosen) {
+      try { require('../../core/codeagent-model-replacements').recordReplacement(dataDir, pausedFrom, chosen); }
+      catch (error) { console.warn('[codeagent] 记住替代模型失败：' + error.message); }
+    }
+    const saved = sessionManager.getSession(sessionId);
+    if (saved) require('../../core/session-store').saveSessionFile(sessionId, saved);
+    return { ok: true, model: { id: chosen, displayName: result.displayName || models.modelLabel(chosen) }, mode: 'session', confirmed: true };
+  }
+
   const pendingModelSelections = new Map();
   async function switchCodeAgentModel(payload = {}, options = {}) {
     const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : '';
@@ -1633,13 +1762,22 @@ function registerSessionIpc(ipcMain, deps) {
     if (!/^codeagent(?:-resume)?$/.test(String(session.kind || ''))) return { ok: false, error: 'not-codeagent', message: '只有 CodeAgent 会话走这条切换' };
     const models = require('../../core/codeagent-models');
     const requested = typeof payload.modelId === 'string' ? payload.modelId.trim() : '';
-    const modelId = models.normalizeModel(requested);
-    if (!requested || modelId.toLowerCase() !== requested.toLowerCase()) return { ok: false, error: 'invalid-model', message: `模型名不能用：${requested}` };
+    // Lite（serve）会话的候选来自 serve 自己的清单，qwen、kimi 等也是 CodeAgent 线路上的真模型：不套「别的 CLI 模型」归一，
+    // 只拦空值、控制字符和超长，名字交给 serve 清单去认（switchCodeAgentServeModel）。
+    const serveRuntime = session.codeagentRunMode === 'serve' && !!sessionManager.getNativeSession?.(sessionId);
+    const modelId = serveRuntime ? requested : models.normalizeModel(requested);
+    if (serveRuntime ? !requested || requested.length > 164 || /[\x00-\x1f\x7f]/.test(requested)
+      : !requested || modelId.toLowerCase() !== requested.toLowerCase()) return { ok: false, error: 'invalid-model', message: `模型名不能用：${requested}` };
     const recovery = payload.recovery === true && sessionManager.isAgentTurnActive?.(sessionId) === false;
     if (payload.recovery === true && !recovery) return { ok: false, error: 'busy', message: '当前回答仍在运行，请结束后再切换' };
     if (session.status === 'running' && !recovery && !(session.modelConfirmationRequired && sessionManager.isAgentTurnActive?.(sessionId) === false) && !(options.pendingConfirmation && pendingModelSelections.has(sessionId)
         && !sessionManager.isAgentTurnActive?.(sessionId))) return { ok: false, error: 'busy', message: '当前回答仍在运行，请结束后再切换' };
     if (codeagentPicker.isPicking(sessionId)) return { ok: false, error: 'busy', message: '正在切换模型，请稍候' };
+    // CodeAgent-Lite（共享 serve）会话没有可读的 TUI 菜单：以前也走 /model 读屏，「/model」被卡片当本地命令吃掉，
+    // 菜单永远不出现，日志报 pick-menu-failed「布局无法自动识别」（2026-11-24 WeLink 2 人反馈）。改为直接按 serve 的模型清单切。
+    if (serveRuntime) {
+      return switchCodeAgentServeModel(sessionId, session, modelId, typeof payload.provider === 'string' ? payload.provider.trim() : '');
+    }
     // 用 --settings 文件启动的会话（2026-10-30 5.3.12）：先把它自己的设置文件改成新模型，再照常在菜单里选。
     // 会话每次请求都重读配置；--settings 优先级最高，不改它的话菜单选的可能被它压回去。只在能换成 CodeAgent 自己的写法时改。
     // 会话因「原模型不可用」暂停时，这次切换就是用户给原模型选的替代：切成后记下，之后由默认模型推出的新会话直接用它。
@@ -1756,7 +1894,8 @@ function registerSessionIpc(ipcMain, deps) {
         for (const item of [...group.subscribers.values()]) {
           item.finish(failure || !item.valid() ? failure || stopped('会话或任务已变化，本条消息未发送。') : null, result);
         }
-        if (failure) sendToRenderer('session-notice', { sessionId, persistent: true, level: 'warning', message: failure.message });
+        // 模型确认后切换失败：本条消息没发出，是这一轮的最终结果，显式 blocking。
+        if (failure) sendToRenderer('session-notice', { sessionId, persistent: true, level: 'warning', noticeKind: 'blocking', message: failure.message });
       };
       group.task.then(result => settle(null, result), failure => settle(Object.assign(failure, { stopped: true, notSent: true })));
     }
@@ -1859,6 +1998,12 @@ function registerSessionIpc(ipcMain, deps) {
         .catch(error => ({ ok: false, error: 'native-reconnect-failed', message: error.message }));
     }
 
+    // CodeAgent-Lite 首轮就没连上：还没有原生会话可恢复（也还没拿到恢复能力），按原参数改建终端会话（同一会话 ID），
+    // 不再报「未绑定原生会话 ID」。已绑定的照旧走下面按原历史恢复。
+    if (options.serveFallback === true && /^codeagent(?:-resume)?$/.test(String(old.kind || ''))
+        && !nativeSessionIdentity(old) && !old.ccSessionId && !old.acpSid) {
+      return relaunchServeAsPty(old, options).catch(error => ({ ok: false, error: 'serve-fallback-failed', message: error?.message || String(error) }));
+    }
     if (supportsRecoverableSession(old)) {
       const identity = nativeSessionIdentity(old);
       if (!identity) {
@@ -1879,7 +2024,9 @@ function registerSessionIpc(ipcMain, deps) {
       // 随后旧进程退出又按「用户关闭」发出 session-closed，会话连卡片带记录一起被抹掉。
       // 改走休眠：群聊成员身份与卡片都保留，等收尾完成再按原会话恢复。
       if (options.guard && !options.guard()) return {ok:false,notSwitched:true,message:'会话状态已改变，未切换账号'};
-      const suspended = sessionManager.suspendSession(sessionId, { reason: options.reason === 'account-switch' ? 'account-switch' : 'restart', serveFallback: options.serveFallback === true });
+      // CodeAgent-Lite 改回终端也标 serve-fallback：界面对正看着的会话原地保持、显示「正在切换到终端方式」，和首轮改建一致。
+      const suspendReason = options.reason === 'account-switch' ? 'account-switch' : options.serveFallback === true && /^codeagent(?:-resume)?$/.test(String(old.kind || '')) ? 'serve-fallback' : 'restart';
+      const suspended = sessionManager.suspendSession(sessionId, { reason: suspendReason, serveFallback: options.serveFallback === true });
       if (!suspended || !suspended.ok) {
         return { ok: false, error: suspended?.error || 'restart-suspend-failed',
           message: `会话重启失败：${suspended?.message || '无法停止旧进程'}` };
@@ -1927,7 +2074,7 @@ function registerSessionIpc(ipcMain, deps) {
     return fresh;
   }
 
-  return { lastResizeBySid, createSession, restartSession, fixCodeAgentModel, confirmSessionModel };
+  return { lastResizeBySid, createSession: createAutoSession, restartSession, fixCodeAgentModel, confirmSessionModel };
 }
 
 module.exports = {

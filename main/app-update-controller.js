@@ -155,7 +155,24 @@ function createAppUpdateController({ app, config, dataDir, currentVersion, sendT
 
   // 界面看到的 = 控制器状态 + 等待重启的状态（读不到就当没在等）。
   const view = () => { let wait = null; try { wait = restartWait() || null; } catch (_) {} return { ...state, restartWait: wait }; };
-  const emit = patch => { state = { ...state, ...patch }; try { sendToRenderer('app-update:state', view()); } catch (_) {} return state; };
+  const emit = patch => { state = { ...state, ...patch }; if (needsFullPackage(state)) lookupFullPackage(); try { sendToRenderer('app-update:state', view()); } catch (_) {} return state; };
+  // r27（2026-11-24，WeLink 2 人：老版本找不到更新途径）：检查或下载失败、上次升级没成时（读到了版本清单、只是要完整包的，原有按钮已能下），
+  // 在后台从内源找最近一个比当前新的完整安装包（不依赖版本清单，openx-source.js findLatestFull），找到就放进 state.fullPackage，
+  // 更新窗和失败提示据此给「下载完整安装包」按钮。没找到不报错，1 分钟内不重找。
+  let fullLookup = null, fullTriedAt = 0;
+  function needsFullPackage(s) { return !s.fullPackage && (s.phase === 'error' || !!(s.lastResult && !s.lastResult.ok)); }
+  function lookupFullPackage() {
+    if (fullLookup || Date.now() - fullTriedAt < 60 * 1000) return;
+    fullTriedAt = Date.now();
+    fullLookup = openxSource.findLatestFull({ fetchImpl: resolveFetch(fetchImpl), portable: isPortable(), currentVersion, env })
+      .then(r => {
+        if (r && r.ok) emit({ fullPackage: { url: r.url, file: r.file, version: r.version, releaseId: r.releaseId } });
+        else logger.info?.('[app-update] 内源完整安装包未找到：' + (r && r.reason));
+      })
+      .catch(error => logger.warn?.('[app-update] 查内源完整安装包出错：', error.message))
+      .finally(() => { fullLookup = null; });
+  }
+  if (needsFullPackage(state)) lookupFullPackage();
 
   async function check({ silent = false, quietAllowed = silent } = {}) {
     if (checking) return checking;
