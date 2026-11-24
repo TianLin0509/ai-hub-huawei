@@ -1,5 +1,13 @@
 'use strict';
 
+// PowerPoint 只关自己打开的那一份（2026-11-24 同事反馈 AI 做 PPT 时把用户开着的 PPT 全关了；查证是模型写的导出脚本
+// 用 New-Object 连上了用户已开着的 PowerPoint，再无条件调用退出）。PowerPoint 是单实例，退出或结束进程会连带关掉用户的全部文稿。
+// 做页、找页规则和组队技能等共用这一条。
+const POWERPOINT_RULE = 'PowerPoint 底线：用户可能正开着别的 PPT，还有没保存的修改；PowerPoint 只有一个实例，脚本新建 PowerPoint.Application 拿到的往往就是用户开着的那个，退出它会关掉用户全部文稿。'
+  + '用脚本操作 PowerPoint 时：先记下已有的 PowerPoint 进程号；先遍历 $app.Presentations 按 FullName 找同一路径的文件，用户已开着就直接用它，不再打开也不关闭；'
+  + '找不到才用位置参数 $app.Presentations.Open(路径, -1, 0, 0) 在后台打开（不可改写、无标题、不显示窗口；PowerShell 里不能写命名参数），并在 finally 里只关闭自己打开的那一份；只有 PowerPoint 是本次新启动的进程、且关完后里面已没有任何演示文稿时才退出它。'
+  + '不按进程名结束 PowerPoint，不逐个关闭全部演示文稿，不对用户已开着的 PowerPoint 调用退出；文件被占用写不进去时换一个新文件名另存。';
+
 const PPT_INSTRUCTIONS = [
   'PPT 素材检索：围绕用户用途找原页。直接用 ppt_find、ppt_read、ppt_library，无需先查 WeLink；必须安装兼容的 PPT Doctor。缺索引或工具失败时说明原因与安装/设置入口。',
   '① 一次给 ppt_find 3–8 组短查询并行查，question 保留完整用途；标题词、正文机制词、英文缩写各至少一组，原关键词保留一路。同组词 AND、各组 OR；限制条件留到读页核实。limit=15。',
@@ -19,6 +27,7 @@ const PPT_MAKE_INSTRUCTIONS = [
   '⑤ 需要仿真曲线、示意图、截图的位置用 {"type":"image","placeholder":"要贴什么图"} 留图位，不要用文字硬凑。',
   '⑥ 用户要栏头、箭头、图元时先用 ppt_materials 查素材名，再用 {"type":"material","name":"…"} 放进去；一页装饰母题 1–2 种。素材自带的示意文字用 "text":["…","…"] 依次换成本页的词，没有合适的词就换一个不带文字的素材。',
   '⑦ 提交后若返回提醒（放不下、句号、母题过多），按提醒修改再提交一次。',
+  '⑧ 成品由 Hub 页面预览，不用脚本打开或截图检查。' + POWERPOINT_RULE,
 ].join('\n');
 
-module.exports = { PPT_INSTRUCTIONS, PPT_MAKE_INSTRUCTIONS };
+module.exports = { PPT_INSTRUCTIONS, PPT_MAKE_INSTRUCTIONS, POWERPOINT_RULE };

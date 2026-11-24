@@ -129,6 +129,7 @@
   "tests/unit-ppt-slide-preview.test.js",
   "tests/unit-ppt-materials.test.js",
   "tests/unit-ppt-make.test.js",
+  "tests/unit-ppt-close-only-own.test.js",
   "tests/unit-ppt-map.test.js",
   "tests/unit-ppt-map-job.test.js",
   "tests/unit-sweep-pulse.test.js",
