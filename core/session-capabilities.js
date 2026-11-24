@@ -216,6 +216,7 @@ function buildSessionResumeMeta(session, overrides = {}) {
     deepseekRoute: session.deepseekRoute || null,
     mcpProfile: session.mcpProfile || null,
     permissionMode: session.permissionMode || null,
+    workspaceGuard: session.workspaceGuard === true ? true : null,
     codexSpeedTier: session.codexSpeedTier || null,
     fastMode: session.fastMode === false ? false : null,
     antigravityProfile: session.antigravityProfile || null,

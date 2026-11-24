@@ -408,6 +408,7 @@ function createResumeSessionHandler(deps) {
       ...(meta.autonomous === true ? { autonomous: true } : {}),
       // 启动中心选的权限模式：休眠恢复、重启、切号重启都带回，不悄悄变回完全放开（主进程按 kind 白名单再核一次）。
       ...(meta.permissionMode && meta.autonomous !== true ? { permissionMode: meta.permissionMode } : {}),
+      ...(meta.workspaceGuard === true && meta.autonomous !== true ? { workspaceGuard: true } : {}),
       ...(meta.codexSpeedTier ? { codexSpeedTier: meta.codexSpeedTier } : {}),
       geminiChatId: isGemini ? (meta.geminiChatId || null) : null,
       ...(isGemini ? {antigravityProfile:meta.antigravityProfile || null,

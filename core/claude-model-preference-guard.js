@@ -47,7 +47,7 @@ function writeJsonAtomic(filePath, value, fsModule = fs) {
   const tempPath = `${filePath}.hub-model-restore-${process.pid}-${Date.now()}.tmp`;
   try {
     fsModule.writeFileSync(tempPath, JSON.stringify(value, null, 2) + '\n', 'utf8');
-    renameWithRetrySync(tempPath, filePath, { fsImpl: fsModule, retries: 8, retryDelayMs: 15 });
+    renameWithRetrySync(tempPath, filePath, { fsImpl: fsModule });
   } catch (error) {
     try { fsModule.unlinkSync(tempPath); } catch (_) {}
     throw error;

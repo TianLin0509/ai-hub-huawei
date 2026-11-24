@@ -248,3 +248,59 @@ test('missing dependency error includes paired-install hint and adjacent existin
   assert.match(html, /data-hub-err-act="known:dsh-repair"/);
   assert.match(html, /一键修复 DSH/);
 });
+
+// R37（2026-11-24）：只走公司内源时，DSH 内源没下到不再落回 npm（公司内部 npm 源缺 @deepseek-ai/dsh-terminal 等同代插件，会卡到超时），
+// 一行写清原因和能照抄的手动安装命令；版本取自程序自带的组件快照。
+test('only-internal-source: DSH missing on the internal source fails fast with a manual npm command, npm is never launched', async t => {
+  const f = fixture(t), calls = [];
+  const env = { AI_HUB_CLI_TOOLS_DIR: path.join(f.root, 'tools'), AI_HUB_OPENX: '1', AI_HUB_OPENX_ONLY: '1', PATH: '', USERPROFILE: f.root, HOME: f.root };
+  require('../core/app-update/openx-source')._reset();
+  t.after(() => require('../core/app-update/openx-source')._reset());
+  const installer = createCliInstaller({ env, sources: [], npmRun: async args => { calls.push(args); return ''; }, nodeUsable: async () => ({ ok: true }),
+    fetchImpl: async () => { throw new Error('fetch failed ENOTFOUND openx'); } });
+  const snap = JSON.parse(fs.readFileSync(path.join(__dirname, '../core/cli-tools/catalog-snapshot.json'), 'utf8').replace(/^\uFEFF/, ''));
+  const [core, tui] = snap.components.find(c => c.id === 'dsh').version.split('+tui.');
+  const r = (await installer.install('dsh')).tools.dsh;
+  assert.equal(r.phase, 'error');
+  assert.deepEqual(calls, [], 'npm must not be launched when only the internal source is allowed');
+  const cmd = `npm i -g @deepseek-ai/dsh@${core} @deepseek-harness-tui/dsh-tui@${tui} --registry=https://registry.npmjs.org`;
+  assert.equal(r.manualCommand, cmd);
+  assert.ok(r.error.includes('没能从公司内源装上') && r.error.includes(cmd), r.error);
+  assert.ok(!/\n/.test(r.error), 'one line');
+  // 定位中心「一键补齐」转述时原样给出，不截断成 npm 404 的说法
+  const { humanInstallError } = require('../main/ipc/harness-locator-handlers');
+  assert.equal(humanInstallError(r.error + ' HTTP 404'), r.error + ' HTTP 404');
+});
+
+test('manual DSH command: only the missing same-generation plugins, pinned to the installed core', () => {
+  assert.equal(npm.dshManualCommand({ catalogVersion: '0.2.1-rc.2+tui.0.16.1',
+    diagnosis: { state: 'incomplete', core: { version: '0.2.1-rc.2' }, missing: ['@deepseek-ai/dsh-terminal', '@deepseek-ai/cordis'] } }),
+  'npm i -g @deepseek-ai/dsh-terminal@0.2.1-rc.2 @deepseek-ai/cordis --registry=https://registry.npmjs.org');
+  assert.equal(npm.dshManualCommand({ catalogVersion: '0.2.1-rc.2+tui.0.16.1', diagnosis: { state: 'none', missing: [] } }),
+    'npm i -g @deepseek-ai/dsh@0.2.1-rc.2 @deepseek-harness-tui/dsh-tui@0.16.1 --registry=https://registry.npmjs.org');
+  assert.equal(npm.dshManualCommand({}), 'npm i -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui --registry=https://registry.npmjs.org');
+});
+
+// R37 审查（Antigravity）#2 #4
+test('R37 审查 #2：手动命令只收合法包名，版本用 semver 归一化后的值', () => {
+  assert.equal(npm.dshManualCommand({ catalogVersion: 'v0.2.1-rc.2+tui. 0.16.1 ',
+    diagnosis: { state: 'incomplete', core: { version: ' v0.2.1-rc.2' }, missing: ['@deepseek-ai/dsh-x; calc.exe', '@deepseek-ai/dsh-terminal', '$(whoami)'] } }),
+  'npm i -g @deepseek-ai/dsh-terminal@0.2.1-rc.2 --registry=https://registry.npmjs.org');
+  assert.equal(npm.dshManualCommand({ catalogVersion: 'v0.2.1-rc.2+tui. 0.16.1 ' }),
+    'npm i -g @deepseek-ai/dsh@0.2.1-rc.2 @deepseek-harness-tui/dsh-tui@0.16.1 --registry=https://registry.npmjs.org');
+  assert.equal(npm.dshManualCommand({ catalogVersion: '0.2.1;rm+tui.x&y' }), 'npm i -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui --registry=https://registry.npmjs.org');
+});
+
+test('R37 审查 #4：只走内源时是前置 Node 没装上，照实报 Node 的原因，不给 DSH 手动命令、也不跑 npm', async t => {
+  const f = fixture(t), calls = [];
+  const env = { AI_HUB_CLI_TOOLS_DIR: path.join(f.root, 'tools'), AI_HUB_OPENX: '1', AI_HUB_OPENX_ONLY: '1', PATH: '', USERPROFILE: f.root, HOME: f.root };
+  require('../core/app-update/openx-source')._reset();
+  t.after(() => require('../core/app-update/openx-source')._reset());
+  const installer = createCliInstaller({ env, sources: [], npmRun: async args => { calls.push(args); return ''; },
+    nodeUsable: async () => ({ ok: false, reason: '本机没有 Node.js 22' }), fetchImpl: async () => { throw new Error('fetch failed ENOTFOUND openx'); } });
+  const r = (await installer.install('dsh')).tools.dsh;
+  assert.equal(r.phase, 'error');
+  assert.deepEqual(calls, []);
+  assert.ok(!/npm i -g/.test(r.error) && !r.manualCommand, r.error);
+  assert.match(r.error, /Node/);
+});

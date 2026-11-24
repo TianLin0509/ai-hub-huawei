@@ -240,12 +240,12 @@ function loginState(statusText) {
 }
 // 同 parseJson，但先把长整数的消息编号改成字符串（JSON.parse 会把它们舍入成同一个数，相邻两条消息就分不清了）。
 function parseJsonBig(text) {
-  return parseJson(String(text || '').replace(/("(?:msgId|msg_id|messageId|message_id|maxMsgId|minMsgId|meetingId)"\s*:\s*)(\d{15,})/g, '$1"$2"'));
+  return parseJson(String(text || '').replace(/("(?:msgId|msg_id|messageId|message_id|messageID|maxMsgId|minMsgId|meetingId|groupId|group_id)"\s*:\s*)(\d{15,})/g, '$1"$2"'));
 }
 // 群的历史消息（im query-history-message）。字段依据公司真机回执 Q-1018-04：msgId（整型）、sender（账号）、content、contentType、serverSendTime。
 // msgId 是很长的整数，JSON.parse 会丢精度（游标就对不上了）：先把它们改成字符串再解析，比较大小用 BigInt。
 function groupMessages(text) {
-  const data = parseJson(String(text || '').replace(/("(?:msgId|msg_id|messageId)"\s*:\s*)(\d{15,})/g, '$1"$2"'));
+  const data = parseJsonBig(text);
   if (data == null) return null;
   const found = [];
   const walk = (v, depth) => {
@@ -455,6 +455,8 @@ const FRIENDLY = [
   [e => e.code === 'WELINK_TIMEOUT', e => { const s = /(\d+)\s*秒/.exec(e.message || ''); return `WeLink 这次响应太慢${s ? `（超过 ${s[1]} 秒）` : ''}，已跳过，稍后自动重试`; }],
   [e => e.code === 'WELINK_CLEANUP_TIMEOUT', () => 'WeLink 上一条查询还没退出，稍后自动重试'],
   [e => AUTH_FAILURE.test(e.message || ''), () => 'WeLink 登录已过期，Hub 正在自动续期；续上后再问一次即可'],
+  // R32：网关拒绝。换过工号（命令行还登着旧账号）最常见，其次是桌面端没登录；助理页 WeLink 一行会写明是哪种并给按钮。
+  [e => /proxy\s*failed/i.test(e.message || ''), () => 'WeLink 服务器拒绝了这次请求（proxy failed）：多半是 welink-cli 还登着旧账号、和电脑上的 WeLink 不是同一个账号。到助理页看 WeLink 一行，点「重新登录」'],
   [e => /\b(?:ECONNRESET|ETIMEDOUT|ECONNREFUSED|ENOTFOUND|EAI_AGAIN)\b|socket hang up|network error/i.test(e.message || ''), () => 'WeLink 网络暂时不通，Hub 稍后自动重试'],
   [e => /internal server error|service unavailable|bad gateway|gateway timeout|\bstatus\s+5\d\d\b/i.test(e.message || ''), () => 'WeLink 服务端暂时出错，稍后自动重试'],
 ];

@@ -34,6 +34,7 @@ const RESUME_META_FIELDS = [
   'fastMode',
   'autonomous',
   'permissionMode',
+  'workspaceGuard',
   'codexSpeedTier',
   'geminiChatId',
   'antigravityProfile',

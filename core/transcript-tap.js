@@ -573,41 +573,11 @@ function codexPromptMatchesExpected(userMessage, expectedPrompt) {
   return canonicalizeLongPromptForTuiCompare(msg) === expectedCanonical;
 }
 
-// 2026-05-14 maintainer：多 entry 合并版 — 修群聊只拿到 [3] recap 段的 bug。
-//   Claude CLI 把"1 个 user prompt + N 次工具调用"拆成 N+1 条 assistant entry，
-//   中间 stop_reason='tool_use'、末条 stop_reason='end_turn'。旧版
-//   readLastAssistantMessageFromClaudeTranscript 只读末条，导致首条 entry 的 text
-//   （三段式输出里就是 [1] plan）丢失。
-//   复用 parseClaudeTranscriptToTurns 的 _mergeConsecutiveAssistantTurns 把 N+1 条
-//   合并成 1 个 logical turn 后取 text。limit=1 + fromTail 让 parser 只解析末尾窗口，
-//   避免大 transcript 全量读。
-//   未完成轮（stop_reason 一直 'tool_use'）→ 合并器 acc 不 flush → turns 为空或末轮
-//   不存在 → 返回 null，与旧函数 null 兜底语义一致（不向群聊 emit 半截内容）。
-//   返回纯字符串（与旧函数同形），便于 4 处出口直接替换。
-async function readLastAssistantTurnMergedTextFromClaudeTranscript(transcriptPath) {
-  try {
-    const turns = parseClaudeTranscriptToTurns(transcriptPath, { limit: 1, fromTail: true });
-    const last = turns[turns.length - 1];
-    if (!last || last.role !== 'assistant') return null;
-    const text = typeof last.text === 'string' ? last.text.trim() : '';
-    return text || null;
-  } catch {
-    return null;
-  }
-}
-
-// 2026-05-05 maintainer：终态 stop_reason 过滤版本 — 用于 idle 兜底 emit。
-// 从尾部向前扫，找第一个 stop_reason ∈ {end_turn, max_tokens, refusal} 且 content
-// 含 text 块的 assistant message。
-// 与 readLastAssistantMessageFromClaudeTranscript 的区别：本函数会跳过 stop_reason='tool_use'
-// 等中间态行（这些行的 text 块是工具调用前的"我先读取..."类中间输出，不是本轮真答案）。
-// 返回 { text, stopReason } 或 null（找不到 terminal 行）。
-//
-// 2026-05-14 maintainer 升级：上述老版本只读末条 entry → 群聊丢 [1] plan。改为复用合并版
-// readLastAssistantTurnMergedTextFromClaudeTranscript 取整段 turn，stopReason 从
-// 合并后的 turn 取（_mergeConsecutiveAssistantTurns 已保证末条决定 stopReason）。
-// 终态过滤语义保留：未 flush 的 turn（stop_reason 一直 'tool_use'）合并器返回为空，
-// 这里的 null 兜底等价于"还没到终态"。
+// 读 Claude 记录里最后一轮已到终态的回答（idle 兜底 emit 用）。
+// 复用 parseClaudeTranscriptToTurns 把「1 个 user prompt + N 次工具调用」拆出的 N+1 条 assistant entry
+// 合并成 1 个 logical turn（只读末尾窗口），stopReason 取合并后 turn 的末条。
+// 未到终态（stop_reason 一直 'tool_use'）的 turn 合并器不 flush，返回 null，不向群聊 emit 半截内容。
+// 返回 { text, stopReason } 或 null。
 const _CLAUDE_TERMINAL_STOP_REASONS = new Set(['end_turn', 'max_tokens', 'refusal']);
 async function readLastTerminalAssistantTextFromClaudeTranscript(transcriptPath) {
   try {
@@ -623,56 +593,6 @@ async function readLastTerminalAssistantTextFromClaudeTranscript(transcriptPath)
     return { text, stopReason: last.stopReason };
   } catch {
     return null;
-  }
-}
-
-// Claude transcript JSONL 末尾读取。模式对称于 main.js:readLastUserMessage —
-// 从尾部 64KB 切块扫，找第一个完整 type:"assistant" 条目（最近一条），合并
-// message.content 里所有 text 块。
-async function readLastAssistantMessageFromClaudeTranscript(transcriptPath) {
-  const CHUNK = 65536;
-  let fh;
-  try {
-    fh = await fs.promises.open(transcriptPath, 'r');
-    const { size } = await fh.stat();
-    let pos = size;
-    let tail = '';
-    while (pos > 0) {
-      const readLen = Math.min(CHUNK, pos);
-      pos -= readLen;
-      const buf = Buffer.alloc(readLen);
-      await fh.read(buf, 0, readLen, pos);
-      tail = buf.toString('utf8') + tail;
-      const lines = tail.split('\n');
-      for (let i = lines.length - 1; i >= 0; i--) {
-        const line = lines[i].trim();
-        if (!line) continue;
-        let obj;
-        try { obj = JSON.parse(line); } catch { continue; }
-        if (obj?.type === 'assistant' && obj.message) {
-          const content = obj.message.content;
-          if (Array.isArray(content)) {
-            const parts = [];
-            for (const p of content) {
-              if (p && typeof p === 'object' && p.type === 'text' && typeof p.text === 'string') {
-                parts.push(p.text);
-              }
-            }
-            const joined = parts.join('').trim();
-            if (joined) return joined;
-          } else if (typeof content === 'string') {
-            if (content.trim()) return content.trim();
-          }
-        }
-      }
-      if (pos === 0) break;
-      tail = lines[0] || '';
-    }
-    return null;
-  } catch {
-    return null;
-  } finally {
-    try { await fh?.close(); } catch {}
   }
 }
 
@@ -2412,7 +2332,6 @@ module.exports = {
   CodexTap,           // 2026-05-04 codex equiv：单测注入 sessionsRoot 直测 4 态 extractMode
   GeminiTap,          // 2026-05-04 gemini equiv：单测注入 tmpRoot 直测 _bound 字段
   JsonlTail,
-  readLastAssistantMessageFromClaudeTranscript,
   readLastTerminalAssistantTextFromClaudeTranscript,
   readCodexUserMessageEvents,
   extractCodexSidFromRolloutPath,

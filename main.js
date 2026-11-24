@@ -10,9 +10,6 @@ const fs = require('fs');
 const crypto = require('crypto');
 const http = require('http');
 const os = require('os');
-// Freeze the running window's build before a later source-mode merge changes
-// files on disk, even if its first native session is opened much later.
-require('./core/runtime-build-info').runtimeBuildInfo();
 // Opt-in main-process CPU profile for isolated performance runs; inert unless
 // HUB_MAIN_CPU_PROFILE is set (see core/main-cpu-profiler.js).
 if (process.env.HUB_MAIN_CPU_PROFILE) {
@@ -5197,6 +5194,8 @@ require('./main/ipc/boot-splash-handlers').registerBootSplashIpc(ipcMain, { data
             const findCli = () => { try { return companyAssistantService?.cli?.() || W.resolveCli({}); } catch { return null; } };
             const writeClipboard = require('./core/verified-clipboard.js').createVerifiedClipboardWriter({ clipboard: require('electron').clipboard });
             return { to: FW.MAINTAINER_WELINK, hasCli: () => !!findCli(), parseJson: W.parseJson, writeClipboard,
+              // R32：WeLink 桌面端当前账号 vs welink-cli 的账号（只读本机两个小文件），对不上就不白发。
+              accounts: () => (companyAssistantService?.welinkAccounts ? companyAssistantService.welinkAccounts() : require('./core/company-assistant/welink-account').read({})),
               run: (args, opts) => companyAssistantService?.welink ? companyAssistantService.welink(args, opts) : W.run(args, { ...opts, cli: findCli() }),
               openDesktop: async () => {
                 const hit = await FW.findWelinkDesktop();
@@ -5922,8 +5921,6 @@ app.whenReady().then(async () => {
   }
   traceStartup(`hook listen done (${hookPort || 'none'})`);
   sendToRenderer('hook-status', { up: hookPort !== null, port: hookPort, message: fallbackMessage(hookBinding) });
-
-  // 2026-06-05 联邦记忆下线：claude-memory-loader 只做 readFileSync，无需预热
 
   // 2026-05-16 maintainer：写 per-PID 控制文件（含 hookPort + cdpPort + HOOK_TOKEN）。
   //   救援脚本 tools/hub-escape.ps1 通过 <dataDir>/control/<pid>.json 发现 Hub

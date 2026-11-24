@@ -146,7 +146,10 @@ function createProfileController({ ipcMain, tap, dataDir, sendToRenderer, getAss
       });
       if (!profile.state.identity) profile.setIdentity({ ...local, at: Date.now() });
       const welink = assistant && typeof assistant.rawWelink === 'function' ? args => assistant.rawWelink(args, { timeoutMs: 15000 }) : null;
-      const next = await identity.resolveIdentity({ cached: profile.state.identity, local, welink, force });
+      // 身份以 WeLink 桌面端当前账号为准（R32）：换了工号，存过的旧身份自动作废。
+      let clientAccount = '';
+      try { clientAccount = (assistant && typeof assistant.welinkAccounts === 'function' ? assistant.welinkAccounts() : require('../core/company-assistant/welink-account').read({}))?.client?.account || ''; } catch { /* 读不到就不比 */ }
+      const next = await identity.resolveIdentity({ cached: profile.state.identity, local, welink, force, clientAccount });
       profile.setIdentity(next);
       return next;
     })().catch(error => { console.error('[profile] 认人失败：', error.message); return profile.state.identity; }).finally(() => { identityBusy = null; });

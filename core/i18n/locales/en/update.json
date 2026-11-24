@@ -815,5 +815,19 @@
   "PPT Doctor 改为只从公司内源安装，请点「一键安装 / 升级 Doctor」": "PPT Doctor now installs only from the company internal mirror. Click \"One-click install / upgrade Doctor\"",
   "版本清单": "version manifest",
   "读不到公司内源上的版本清单": "Cannot read the version manifest from the company internal mirror",
-  "确认电脑连着公司网络（公司内网或 VPN）": "Make sure this computer is on the company network (intranet or VPN)"
+  "确认电脑连着公司网络（公司内网或 VPN）": "Make sure this computer is on the company network (intranet or VPN)",
+  "正在打开扫码…": "Opening the QR login…",
+  "没能开始登录": "Could not start the login",
+  "重新登录": "Sign in again",
+  "没能开始重新登录：": "Could not start signing in again: ",
+  "。可以到助理页 WeLink 一行点「清除并重新扫码」": ". You can click \"Clear and scan again\" on the WeLink row of the assistant page",
+  "WeLink 命令行还登着旧账号": "The WeLink command line is still signed in with the old account",
+  "（电脑上的 WeLink 是 {0}），一键发送会被拒收。": " (WeLink on this PC is {0}), so one-click sending will be rejected.",
+  "也可以直接点「复制并打开 WeLink」自己发。": "You can also click \"Copy and open WeLink\" and send it yourself.",
+  "（粘贴发给": " (paste it to",
+  "（电脑上的 WeLink 是 {0}），这条反馈发不出去。": " (WeLink on this PC is {0}), so this feedback cannot be sent.",
+  "不想现在登录：{0}{1}": "Not signing in now: {0}{1}",
+  "重新登录 WeLink 命令行": "Sign the WeLink command line in again",
+  "改用：{0}{1}": "Instead: {0}{1}",
+  "DSH 运行环境 {0} 没能从公司内源装上（{1}）。Hub 只从内源下载，不改走 npm；可先在终端手动安装：{2}，装好后点「重新检测」": "DSH runtime {0} could not be installed from the company internal source ({1}). Hub downloads only from the internal source and does not fall back to npm; you can install it manually in a terminal: {2}, then click \"Check again\""
 }

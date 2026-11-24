@@ -5930,7 +5930,7 @@ function mountFloatingInput(sessionId, termContainer, terminal, pane = {}) {
   bar._paintComposerClock = (session,now) => paintComposer(session,now,true);
   paintComposer(sessions.get(sessionId));
   inputBox.addEventListener('input', () => {
-    sendHint.hidden = bar.dataset.sharedRole === 'viewer' || stopBtn.classList.contains('visible')
+    sendHint.hidden = stopBtn.classList.contains('visible')
       || !contenteditableHasText(inputBox);
   });
 

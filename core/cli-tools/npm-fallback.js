@@ -141,4 +141,19 @@ async function installPiWithUserNpm({ env = process.env, signal, run = runNpm, o
   }
   return { version: PI_VERSION, prefix: targetRoot, source: 'user-npm', node };
 }
-module.exports = { npmInvocation, runNpm, killNpmTree, installDshWithUserNpm, installPiWithUserNpm, globalLayout };
+// R37（2026-11-24）：只走公司内源时 DSH 不再落回 npm（公司内部 npm 源缺 @deepseek-ai/dsh-terminal 等同代插件，npm 会卡到超时）。
+// 给用户一条能照抄的手动命令：体检认出缺哪几个同代插件就只补这几个（@deepseek-ai/dsh-* 钉到已装核心的版本），
+// 否则按程序自带组件快照里的版本装核心 + 界面包。走公网 npm 源，因为公司内部源本来就缺这些包（同事实测这样装好）。
+const PUBLIC_NPM_REGISTRY = 'https://registry.npmjs.org';
+function dshManualCommand({ catalogVersion = '', diagnosis = null } = {}) {
+  // 拼进给用户照抄的终端命令：版本只用 semver.valid 归一化后的值，包名只收合法 npm 包名（R37 审查 #2，防命令注入）。
+  const [rawCore, rawTui] = String(catalogVersion || '').split('+tui.');
+  const core = semver.valid(rawCore) || '', tui = semver.valid(rawTui) || '';
+  const coreVer = semver.valid(diagnosis && diagnosis.core && diagnosis.core.version) || core;
+  const missing = diagnosis && diagnosis.state === 'incomplete' && Array.isArray(diagnosis.missing)
+    ? diagnosis.missing.filter(name => typeof name === 'string' && /^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/i.test(name)) : [];
+  let pkgs = missing.map(name => (coreVer && (name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-')) ? name + '@' + coreVer : name));
+  if (!pkgs.length) pkgs = ['@deepseek-ai/dsh' + (core ? '@' + core : ''), '@deepseek-harness-tui/dsh-tui' + (tui ? '@' + tui : '')];
+  return `npm i -g ${pkgs.join(' ')} --registry=${PUBLIC_NPM_REGISTRY}`;
+}
+module.exports = { npmInvocation, runNpm, killNpmTree, installDshWithUserNpm, installPiWithUserNpm, globalLayout, dshManualCommand, PUBLIC_NPM_REGISTRY };

@@ -12,10 +12,12 @@ function localWelinkAccount(dataDir) {
   try {
     const auth = JSON.parse(fs.readFileSync(path.join(dataDir, 'company-assistant', 'auth.json'), 'utf8'));
     if (auth.state === 'online' && auth.login?.ok && clean(auth.login.uid)) return clean(auth.login.uid);
+    // R32 换过工号还没重新登录：以 WeLink 桌面端的新账号为准，不带出命令行里的旧工号。
+    if (auth.state === 'account-mismatch' && clean(auth.login?.clientAccount)) return clean(auth.login.clientAccount);
   } catch { /* 助理还没查过 WeLink */ }
   try {
     const identity = JSON.parse(fs.readFileSync(path.join(dataDir, 'profile', 'profile.json'), 'utf8')).identity;
-    if (identity?.from === 'welink') return clean(identity.uid);
+    if (identity?.from === 'welink' || identity?.from === 'welink-client') return clean(identity.uid);
   } catch { /* 本地身份可选 */ }
   return '';
 }

@@ -483,7 +483,7 @@ function registerSessionIpc(ipcMain, deps) {
   // 旧对象按休眠收尾，界面不收到「会话被删除」，草稿与侧栏位置保留、不抢焦点）。
   function relaunchServeAsPty(old, options = {}) {
     const base = options.launchOpts || {
-      cwd: old.cwd, title: old.title, model: sessionModelId(old), permissionMode: old.permissionMode, purpose: old.purpose,
+      cwd: old.cwd, title: old.title, model: sessionModelId(old), permissionMode: old.permissionMode, workspaceGuard: old.workspaceGuard === true, purpose: old.purpose,
       featureAgent: old.featureAgent, featureAgentChoice: old.featureAgentChoice, autonomous: old.autonomous, noInheritCursor: old.noInheritCursor,
       openInBackground: old.openInBackground, addDirs: old.addDirs, workspaceLabel: old.workspaceLabel, pinned: old.pinned, codeagentPoolAccount: old.codeagentPoolAccount,
       ...require('../../core/codeagent-model-choice').routeFields(old),
@@ -2064,6 +2064,7 @@ function registerSessionIpc(ipcMain, deps) {
       ...(old.claudeProfile ? {claudeProfile:old.claudeProfile,claudeConfigDir:old.claudeConfigDir} : {}),
       ...(old.mcpProfile ? { mcpProfile: old.mcpProfile } : {}),
       ...(old.permissionMode ? { permissionMode: old.permissionMode } : {}),
+      ...(old.workspaceGuard === true ? { workspaceGuard: true } : {}),
       ...(old.fastMode === false ? { fastMode: false } : {}),
       ...(old.codexSpeedTier ? { codexSpeedTier: old.codexSpeedTier } : {}),
       ...(typeof old.contextMax === 'number' ? { contextMax: old.contextMax } : {}),

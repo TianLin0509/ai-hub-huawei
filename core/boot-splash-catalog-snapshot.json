@@ -1,6 +1,6 @@
 {
  "schema": 1,
- "version": "2.0.1",
+ "version": "3.0.1",
  "packs": [
   {
    "id": "claude-01",
@@ -674,39 +674,6 @@
    "weather": "stars"
   },
   {
-   "id": "deepseek-dive",
-   "version": "2.0.0",
-   "file": "deepseek-dive-2.0.0.mp4",
-   "bytes": 8980377,
-   "sha256": "8f261195cc09caf9bf3ff5f69479d701977091080bd6cd0f370b93b91e775691",
-   "name": "DeepSeek · 深海魔法阵",
-   "who": "deepseek",
-   "anim": "video",
-   "weather": "stars"
-  },
-  {
-   "id": "claude-orig",
-   "version": "2.0.1",
-   "file": "claude-orig-2.0.1.mp4",
-   "bytes": 39723734,
-   "sha256": "8354e52f58e555a66badc9b82c58d906a57822c6504ed94dcab2ce6d5ee31932",
-   "name": "Claude · 原作·月下持剑",
-   "who": "claude",
-   "anim": "video",
-   "weather": "stars"
-  },
-  {
-   "id": "codex-orig",
-   "version": "2.0.1",
-   "file": "codex-orig-2.0.1.mp4",
-   "bytes": 38170869,
-   "sha256": "330343ad4641ad5995cdebe5019a6188cd01b9ce45806e3489a3b1a8646e6681",
-   "name": "Codex · 原作·星空龙娘",
-   "who": "codex",
-   "anim": "video",
-   "weather": "stars"
-  },
-  {
    "id": "deepseek-omni",
    "version": "2.0.0",
    "file": "deepseek-omni-2.0.0.mp4",
@@ -736,6 +703,72 @@
    "sha256": "3812b5f63ac555aa5898b1fe34ff8c12a93ab5254c850a0a5146062cb95ef3ec",
    "name": "Claude · 掌心法阵·有声",
    "who": "claude",
+   "anim": "video",
+   "weather": "stars"
+  },
+  {
+   "id": "codex-orig",
+   "version": "3.0.1",
+   "file": "codex-orig-3.0.1.mp4",
+   "bytes": 1958485,
+   "sha256": "6304795856636c92423e4c70a427e3f7fb492a0da6cca67f6cb117ba1e168e19",
+   "name": "Codex · 原作·星空龙娘",
+   "who": "codex",
+   "anim": "video",
+   "weather": "stars"
+  },
+  {
+   "id": "gemini-orig",
+   "version": "3.0.1",
+   "file": "gemini-orig-3.0.1.mp4",
+   "bytes": 1902453,
+   "sha256": "fb3f49a6dbf8818820f86b2b1e630596a8418b19a621884a980ea5bd632053e9",
+   "name": "Gemini · 原作·星夜双剑",
+   "who": "gemini",
+   "anim": "video",
+   "weather": "stars"
+  },
+  {
+   "id": "claude-draw",
+   "version": "3.0.1",
+   "file": "claude-draw-3.0.1.mp4",
+   "bytes": 1962819,
+   "sha256": "54d04b6f0049206576b736ed842c093fc4e41c1cf7717a9f3f5680112b31e122",
+   "name": "Claude · 召唤师抽卡",
+   "who": "claude",
+   "anim": "video",
+   "weather": "stars"
+  },
+  {
+   "id": "codex-draw",
+   "version": "3.0.1",
+   "file": "codex-draw-3.0.1.mp4",
+   "bytes": 1997457,
+   "sha256": "89790eace593ab8829e696b6e5c3025199ccf403cab810f61966f1268e33cb4c",
+   "name": "Codex · 召唤师抽卡",
+   "who": "codex",
+   "anim": "video",
+   "weather": "stars"
+  },
+  {
+   "id": "deepseek-draw",
+   "version": "3.0.1",
+   "file": "deepseek-draw-3.0.1.mp4",
+   "bytes": 1984764,
+   "sha256": "2e922fdf28d9596f99c78eb9875425e04015a590686b08f48dc8d378103c9702",
+   "name": "DeepSeek · 召唤师抽卡",
+   "who": "deepseek",
+   "anim": "video",
+   "weather": "stars"
+  },
+  {
+   "id": "deepseek-dive",
+   "version": "3.0.1",
+   "file": "deepseek-dive-3.0.1.mp4",
+   "bytes": 1965772,
+   "sha256": "40e7370f819eb75ac6048f4facada0664ea8ed66fccf2b5ffc998edccf22b103",
+   "name": "DeepSeek · 深海魔法阵",
+   "who": "deepseek",
    "anim": "video",
    "weather": "stars"
   }

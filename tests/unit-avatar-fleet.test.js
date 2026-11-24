@@ -31,12 +31,13 @@ function harness({ reply } = {}) {
         world.reads.push(args);
         if (world.limitOnce?.has(args[3])) { world.limitOnce.delete(args[3]); throw Object.assign(new Error('WeLink 限流，请稍后重试'), { code: 'WELINK_RATE_LIMITED' }); }
         if (world.failing?.has(args[3])) return { code: 1, stdout: '', stderr: 'no permission' };
+        if (world.historyRaw?.[args[3]]) return { code: 0, stdout: world.historyRaw[args[3]], stderr: '' }; // 原样回执（msgId 是不带引号的长整数）
         return { code: 0, stdout: JSON.stringify({ chatInfo: (world.history || {})[args[3]] || [] }), stderr: '' };
       }
       if (args[1] === 'query-recent-conversation') { world.lists = (world.lists || 0) + 1; return { code: 0, stdout: JSON.stringify({ conversation_info: world.recent || [] }), stderr: '' }; }
       if (args[0] === 'search') return { code: 0, stdout: '{}', stderr: '' };
       if (world.hold) await world.hold;
-      await opts.beforeRun?.(); world.sent.push({ args, opts }); return { code: 0, stdout: JSON.stringify({ code: 0, data: { msgId: '9001' } }), stderr: '' };
+      await opts.beforeRun?.(); world.sent.push({ args, opts }); return { code: 0, stdout: world.sendReceipt || JSON.stringify({ code: 0, data: { msgId: '9001' } }), stderr: '' };
     },
   };
   const service = new FleetService({ dataDir: dir, getAssistant: () => assistant, noTimer: true, now: () => world.now, pollMs: 1,
@@ -534,5 +535,106 @@ test('快通道：置顶会话排序不变也轮流读到，每轮只占 1 个�
     const flat = reads.flat();
     assert.ok(flat.includes('p1') && flat.includes('p2'), '两个置顶群都被看到');
     assert.ok(reads.every(r => r.filter(id => id.startsWith('p')).length <= 1), '每轮最多 1 个置顶');
+  } finally { h.cleanup(); }
+});
+
+// R36（2026-11-24 WeLink 反馈，v5.6.102）：「帮我盯消息」每条消息显示两次。
+// 真机 msgId 是超过 JS 安全整数的长整数：助理快照按 parseJsonBig 保留原样，分身增量读却用普通 JSON.parse，
+// 同一条消息拿到两个不同的编号，被当成两条并进同一件事（私聊把对方连发的每句都排两遍）。
+test('盯消息：快照和分身增量读到同一条消息只算一条；Hub 重启再读也只显示一次', async () => {
+  const h = harness({ reply: task => task.items.map(i => ({ id: i.id, action: 'remind', confidence: 70, why: '对方在等你回' })) }); const { service, world } = h;
+  try {
+    const at1 = world.now - 120000, at2 = world.now - 60000;
+    const raw = `{"respData":{"chatInfo":[{"at":false,"atAccountList":[],"content":"评审材料能先帮我看一下吗","contentType":"TEXT_MSG","msgId":7100000000000000003,"sender":"zhang","serverSendTime":${at1}},{"at":false,"atAccountList":[],"content":"今天下班前要交","contentType":"TEXT_MSG","msgId":7100000000000000006,"sender":"zhang","serverSendTime":${at2}}]},"resultCode":"0"}`;
+    // 助理快照走的是 queries.readJson → parseJsonBig，编号是原样字符串
+    world.messages.zhang = D.messages(welink.parseJsonBig(raw), P, ME);
+    assert.deepEqual(world.messages.zhang.map(m => m.key), ['7100000000000000003', '7100000000000000006']);
+    world.historyRaw = { zhang: raw };
+    const p2p = { target_account: 'zhang', native_name: '张三', recent_conversation_type: 'CHAT_TYPE_P2P_MSG' };
+    world.recent = [wideConv('g9'), p2p];
+    const av = await h.add({ tpl: 'watch' });
+    assert.equal(av.kind, 'all');
+    world.now += 121000; world.recent = [p2p, wideConv('g9')]; await h.tick();
+    assert.ok(world.reads.some(r => r[3] === 'zhang'), '分身自己增量读了这个私聊');
+    assert.equal(service.messages('zhang').length, 2, '两条消息不因编号写法不同变成四条');
+    const once = () => {
+      const items = service.status().items.filter(i => i.conv === 'zhang');
+      assert.equal(items.length, 1);
+      assert.equal(items[0].count, 2);
+      assert.equal(items[0].text, '评审材料能先帮我看一下吗\n今天下班前要交');
+      return items[0];
+    };
+    assert.equal(once().state, 'remind');
+    const fresh = world.tasks.at(-1).items[0];
+    assert.equal(fresh.history.filter(l => l.includes('今天下班前要交')).length, 1, '交给分身的上下文里每句也只出现一次');
+    // 重开页面 / Hub 重启：内存里的消息清空。对方又补了一句（只有分身增量读拿得到，快照里没有），
+    // 回执里还排在前面：同一件事仍只有一条、每句一次；下次增量读的起点是分身自己读到的最新原样编号。
+    const at3 = at2 + 1;
+    world.historyRaw.zhang = raw.replace('"chatInfo":[', `"chatInfo":[{"at":false,"atAccountList":[],"content":"材料在共享盘","contentType":"TEXT_MSG","msgId":7100000000000000009,"sender":"zhang","serverSendTime":${at3}},`);
+    service.live.clear(); service.wideOrder = null;
+    const turn = async order => { world.now += 121000; world.recent = order; await h.tick(); };
+    await turn([wideConv('g9'), p2p]);                    // 重启后第一轮只记顺序
+    await turn([p2p, wideConv('g9')]);                    // 从快照里的最新一条往后读，读到补的那句
+    assert.deepEqual(service.messages('zhang').map(m => m.key), ['7100000000000000003', '7100000000000000006', '7100000000000000009'], '按时间排');
+    // 同一毫秒的多条按编号大小排（回执逆序也一样），游标取到的才是真正最新的一条
+    assert.deepEqual(service.merge('tie', [{ key: '7100000000000000009', at: 5 }, { key: '7100000000000000006', at: 5 }]).map(m => m.key), ['7100000000000000006', '7100000000000000009']);
+    await turn([wideConv('g9'), p2p]);
+    const cursors = world.reads.filter(r => r[3] === 'zhang').slice(-2).map(r => r[r.indexOf('--message-id') + 1]);
+    assert.deepEqual(cursors, ['7100000000000000006', '7100000000000000009'], '第二次增量读的游标来自分身自己读到的原样编号');
+    const items = service.status().items.filter(i => i.conv === 'zhang');
+    assert.equal(items.length, 1);
+    assert.equal(items[0].text, '评审材料能先帮我看一下吗\n今天下班前要交\n材料在共享盘');
+  } finally { h.cleanup(); }
+});
+
+// R36 审查 #1：v5.6.102 存下的事项编号是四舍五入后的写法、正文拼了两遍。升级后没有新消息也自己恢复成一份；
+// 对方再发不另起一条；本人回过就结案。
+test('盯消息：升级前存下的四舍五入编号事项自愈，来新消息不重复，本人回复后结案', async () => {
+  const h = harness({ reply: task => task.items.map(i => ({ id: i.id, action: 'remind', confidence: 70, why: '对方在等你回' })) }); const { service, world } = h;
+  try {
+    const at1 = world.now - 120000, at2 = world.now - 60000;
+    const row = (id, text, at, sender = 'zhang') => `{"at":false,"atAccountList":[],"content":"${text}","contentType":"TEXT_MSG","msgId":${id},"sender":"${sender}","serverSendTime":${at}}`;
+    const snap = rows => D.messages(welink.parseJsonBig(`{"respData":{"chatInfo":[${rows.join(',')}]}}`), P, ME);
+    world.messages.zhang = snap([row('7100000000000000003', '评审材料能先帮我看一下吗', at1), row('7100000000000000006', '今天下班前要交', at2)]);
+    const av = await h.add({ tpl: 'watch' });
+    const ROUND = '7100000000000000000', oldId = `zhang:${ROUND}`;
+    service.mutate(ME, av.id, st => {
+      st.items = { [oldId]: { id: oldId, conv: 'zhang', convName: '张三', group: false, account: 'zhang', who: '张三', firstKey: ROUND, lastKey: ROUND, since: at1, at: at2, count: 3,
+        text: '评审材料能先帮我看一下吗\n今天下班前要交\n今天下班前要交', action: 'remind', level: 2, state: 'remind', why: '对方在等你回', flags: [], senders: ['zhang'], createdAt: at1 } };
+      st.cursor = { zhang: at2 };
+    });
+    await h.tick();
+    let items = service.status().items.filter(i => i.conv === 'zhang');
+    assert.equal(items.length, 1);
+    assert.deepEqual([items[0].id, items[0].lastKey, items[0].count, items[0].state], ['zhang:7100000000000000003', '7100000000000000006', 2, 'remind'], '没有新消息也改回原样编号、状态不变');
+    assert.equal(items[0].text, '评审材料能先帮我看一下吗\n今天下班前要交');
+    // 对方又发一句：并进同一件事，不另起一条
+    world.now += 30000;
+    world.messages.zhang = [...world.messages.zhang, ...snap([row('7100000000000000012', '在吗', world.now - 1000)])];
+    await h.tick();
+    items = service.status().items.filter(i => i.conv === 'zhang');
+    assert.equal(items.length, 1); assert.equal(items[0].count, 3);
+    // 旧编号事项（自愈前）本人已在 WeLink 回过：也能结案、不再允许发送
+    const legacy = { ...items[0], lastKey: ROUND, at: at2 };
+    world.now += 30000;
+    world.messages.zhang = [...world.messages.zhang, ...snap([row('7100000000000000015', '好的我看下', world.now - 1000, ME)])];
+    await h.tick();
+    assert.equal(service.status().items.filter(i => i.conv === 'zhang').length, 0, '本人回过就结案');
+    assert.equal(service.repliedAlready(legacy), true, '旧编号也认得出本人已回复');
+  } finally { h.cleanup(); }
+});
+
+// R36 审查 #2：发送回执里的消息编号是不带引号的长整数，撤回要用原样编号。
+test('发送回执的长整数编号原样保留，撤回对得上', async () => {
+  const h = harness(); const { service, world } = h;
+  try {
+    const av = await h.add(group());
+    world.now += 60000; world.messages.g1 = [msg('g1', 'zhang', '更新后启动中心看不到模型怎么办？', world.now)];
+    await h.tick();
+    const item = service.status().items[0];
+    world.sendReceipt = '{"code":0,"data":{"msgId":7300000000000000007}}';
+    assert.equal((await service.send(av.id, item.id, '先看账号页的模型清单')).canRecall, true);
+    await service.recall(av.id, item.id);
+    assert.deepEqual(world.sent[1].args.slice(-2), ['--message-id', '7300000000000000007']);
   } finally { h.cleanup(); }
 });

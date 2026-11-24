@@ -9,12 +9,6 @@
  *
  * Returns null on any failure (file missing, parse error, no assistant entry)
  * — caller should treat absence as non-fatal.
- *
- * Coexists with `core/transcript-tap.js:readLastAssistantMessageFromClaudeTranscript`
- * which returns only `string` text (used by 4 internal hooks for the
- * turn-complete event payload). This module returns the structured object
- * needed by spec 2's card view rendering. Dedup planned for spec 4+ (wrap
- * the legacy string function around this one and call `.text`).
  */
 
 const fs = require('node:fs');

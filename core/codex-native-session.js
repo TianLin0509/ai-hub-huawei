@@ -28,8 +28,7 @@ function acquire(options) {
   // A managed session must be able to retire its writer without affecting a
   // neighbour. Codex unsubscribe acknowledges detachment, but can retain the
   // loaded thread (and writer lock) for 30 minutes while its server stays alive.
-  // Only the legacy broker retains explicit process pooling.
-  const key = options.sharedBroker ? scopeKey(options) : scopeKey(options)+':'+randomUUID();
+  const key = scopeKey(options)+':'+randomUUID();
   let entry = pool.get(key);
   if (!entry || entry.client.closed) {
     const client = options.clientFactory ? options.clientFactory(options)
@@ -310,11 +309,8 @@ class CodexNativeSession extends EventEmitter {
       throw new Error('该 Codex 会话已在另一个 Hub 卡片中运行，请返回原会话');
     }
     if (method === 'thread/resume') {
-      // A shared broker is itself the single writer. Viewer Hub cards are
-      // subscribers to this instance, so the legacy cross-Hub card scan would
-      // reject the very sharing the broker guarantees. The durable SQLite
-      // lease below remains authoritative against an older live writer.
-      if (!this.options.sharedBroker) await assertNoOtherHubOwner(this.options,id);
+      // The durable SQLite lease below remains authoritative against an older live writer.
+      await assertNoOtherHubOwner(this.options,id);
       this.ownershipLease = claimThread(this.options,id,this.pid);
     }
     if (method === 'thread/resume') { entry.owners.set(id,this); threadOwners.set(ownerKey,this); }

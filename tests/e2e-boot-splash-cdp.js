@@ -1,6 +1,6 @@
 'use strict';
 // 开场动画（2026-11-22）真实 Hub 端到端：隔离数据目录 + 本地资源源。按用户路径走：
-// 第一次启动播群星（带「更换」提示）→ 播完弹提示 → 点提示打开面板 → 用内置 Codex 18 → 下载并使用 DeepSeek 05 →
+// 第一次启动播内置的 Claude 原作 lite（带「更换」提示，2026-11-24 起的默认）→ 播完弹提示 → 点提示打开面板 → 用内置 Codex 18 → 下载并使用 DeepSeek 05 →
 // 改成每次启动 → 预览后 Esc 跳过 → 重启后播 DeepSeek 05 → 不开测试开关的隔离实例不播。截图写到 HUB_E2E_ARTIFACT_DIR。
 const fs = require('node:fs');
 const path = require('node:path');
@@ -63,15 +63,18 @@ async function main() {
   };
   const prefs = () => cdp.eval(`require('electron').ipcRenderer.invoke('boot-splash:get').then(s => s.preferences)`);
   try {
-    // 1. 全新用户第一次启动：播群星，带「更换」提示
+    // 1. 全新用户第一次启动：播内置的 Claude 原作 lite（视频、原声、字幕、AI HUB 角标），带「更换」提示
     await open(env, 'boot-splash-1');
     await wait('!!document.getElementById("boot-splash-layer")', 20000);
     assert.ok(await cdp.eval('!!document.querySelector(".boot-splash-hint")'), '播放时要有「点这里更换开场动画」');
     const shape = () => cdp.eval(`require('electron').ipcRenderer.invoke('debug:window-shape')`);
-    await wait('document.getElementById("boot-splash-layer")?.dataset.renderer === "worker"');
+    await wait('(document.querySelector("#boot-splash-layer video")?.currentTime || 0) > 1.6', 20000);
+    assert.ok(await cdp.eval('(() => { const v = document.querySelector("#boot-splash-layer video"); return v.videoWidth === 1920 && v.getVideoPlaybackQuality().totalVideoFrames > 0; })()'), '内置视频真的有画面');
+    assert.equal(await cdp.eval('document.querySelector("#boot-splash-layer .boot-splash-sub").textContent'), 'I am Claude. Ask me anything.');
+    assert.ok(Number(await cdp.eval('getComputedStyle(document.querySelector("#boot-splash-layer .boot-splash-brand")).opacity')) > 0.9, 'AI HUB 角标叠在原作画面上');
     assert.notEqual((await shape()).overlay?.symbolColor, '#040405', '播放时保留标题栏按钮的主题颜色');
     assert.ok(await cdp.eval(`(() => { const r = document.getElementById('boot-splash-layer').getBoundingClientRect(); return r.top >= 44 && r.bottom <= innerHeight + 1 && !document.elementFromPoint(innerWidth - 20, 20)?.closest('.boot-splash-layer'); })()`), '动画不覆盖标题栏控制区');
-    await pause(1500); await shot('01-群星播放中');
+    await shot('01-默认Claude原作播放中');
     await wait('!document.getElementById("boot-splash-layer")', 8000);
     await wait('!!document.getElementById("boot-splash-toast")', 3000);
     assert.notEqual((await shape()).overlay?.symbolColor, '#040405', '播完窗口按钮还原成主题颜色');
@@ -84,15 +87,16 @@ async function main() {
     assert.equal(await cdp.eval('document.querySelector("#boot-splash-dialog .appearance-tabs button").dataset.tab'), 'mine');
     assert.equal(await cdp.eval('document.querySelector("#boot-splash-dialog [aria-selected=true]").dataset.tab'), 'mine');
     assert.deepEqual(await cdp.eval('[...document.querySelectorAll("#boot-splash-dialog .bsp-card [data-preview]")].filter(b => b.classList.contains("bsp-thumb")).map(b => b.dataset.preview)'),
-      ['galaxy-constellation', 'claude-18', 'codex-18', 'deepseek-18']);
+      ['galaxy-constellation', 'claude-orig', 'claude-18', 'codex-18', 'deepseek-18']);
+    assert.equal((await prefs()).selected, 'claude-orig', '默认开场是 Claude 原作');
     assert.equal((await prefs()).frequency, 'daily', '默认每天第一次启动播放');
-    // 「作者推荐」：三家各自 3 秒有声开场（排每家第一）+ 原作/深海
+    // 「作者推荐」：各家原作、召唤师抽卡、3 秒有声开场、深海，共 10 张
     await click('#boot-splash-dialog [data-tab="picks"]');
-    await wait('document.querySelectorAll("#boot-splash-dialog .bsp-grid.mine .bsp-card").length === 6');
+    await wait('document.querySelectorAll("#boot-splash-dialog .bsp-grid.mine .bsp-card").length === 10');
     assert.deepEqual(await cdp.eval('[...document.querySelectorAll("#boot-splash-dialog .bsp-grid.mine .bsp-thumb")].map(b => b.dataset.get || b.dataset.preview)'),
-      ['claude-omni', 'claude-orig', 'codex-omni', 'codex-orig', 'deepseek-omni', 'deepseek-dive']);
+      ['claude-orig', 'claude-draw', 'claude-omni', 'codex-orig', 'codex-draw', 'codex-omni', 'deepseek-draw', 'deepseek-omni', 'deepseek-dive', 'gemini-orig']);
     const fitPicks = await cdp.eval('(() => { const c = document.querySelector("#boot-splash-dialog .bsp-content"); return [c.scrollHeight, c.clientHeight]; })()');
-    assert.ok(fitPicks[0] <= fitPicks[1] + 1, '作者推荐 6 张一屏放下：' + fitPicks);
+    assert.ok(fitPicks[0] <= fitPicks[1] + 1, '作者推荐 10 张一屏放下：' + fitPicks);
     await shot('03b-作者推荐');
     const fit = await cdp.eval('(() => { const c = document.querySelector("#boot-splash-dialog .bsp-content"); return [c.scrollHeight, c.clientHeight]; })()');
     // 3. 用内置 Codex 18
@@ -131,31 +135,34 @@ async function main() {
     await click('#boot-splash-dialog [data-tab="mine"]');
     await wait('!!document.querySelector("#boot-splash-dialog .bsp-grid.mine [data-preview=\\"deepseek-05\\"]")');
     await shot('07c-已下载多了DeepSeek05');
-    // 6b. 原作视频：Claude 页签第一张是「原作」，一键下载并使用，预览时视频真的在走
-    const hasVideo = fs.existsSync(videoPacks) && fs.readdirSync(videoPacks).some(f => f.startsWith('claude-orig-'));
+    // 6b. 视频包：Claude 召唤师抽卡成片自带角标，不再叠；Gemini 页签下载原作 lite 并预览（AI HUB 角标叠上）
+    const hasVideo = fs.existsSync(videoPacks) && fs.readdirSync(videoPacks).some(f => f.startsWith('gemini-orig-'));
     if (hasVideo) {
       await click('#boot-splash-dialog [data-tab="claude"]');
-      await wait('document.querySelector("#boot-splash-dialog .bsp-grid .bsp-card")?.classList.contains("orig")');
-      await shot('07d-Claude页签原作在前');
-      await click('#boot-splash-dialog .appearance-btn[data-get="claude-orig"]');
+      await wait('!!document.querySelector("#boot-splash-dialog .appearance-btn[data-get=\\"claude-draw\\"]")');
+      await click('#boot-splash-dialog .appearance-btn[data-get="claude-draw"]');
       await wait('document.querySelector("#boot-splash-dialog .appearance-feedback")?.textContent.includes("已下载并设为开场动画")', 60000);
-      assert.equal((await prefs()).selected, 'claude-orig');
-      await click('#boot-splash-dialog .appearance-btn[data-preview="claude-orig"]');
-      await wait('(document.querySelector("#boot-splash-layer video")?.currentTime || 0) > 7.5', 15000);
+      await click('#boot-splash-dialog .appearance-btn[data-preview="claude-draw"]');
+      await wait('(document.querySelector("#boot-splash-layer video")?.currentTime || 0) > 1', 15000);
+      assert.ok(!(await cdp.eval('!!document.querySelector("#boot-splash-layer .boot-splash-brand")')), '抽卡成片自带角标，不再叠');
+      await shot('07d-预览Claude召唤师抽卡');
+      await click('#boot-splash-layer');
+      await wait('document.getElementById("boot-splash-dialog").open', 3000);
+      await click('#boot-splash-dialog [data-tab="gemini"]');
+      await wait('document.querySelector("#boot-splash-dialog .bsp-grid .bsp-card")?.classList.contains("orig")');
+      await shot('07e-Gemini页签');
+      await click('#boot-splash-dialog .appearance-btn[data-get="gemini-orig"]');
+      await wait('document.querySelector("#boot-splash-dialog .appearance-feedback")?.textContent.includes("已下载并设为开场动画")', 60000);
+      assert.equal((await prefs()).selected, 'gemini-orig');
+      assert.ok(served.includes('gemini-orig-3.0.1.mp4'), '从资源源下载 lite 视频');
+      await click('#boot-splash-dialog .appearance-btn[data-preview="gemini-orig"]');
+      await wait('(document.querySelector("#boot-splash-layer video")?.currentTime || 0) > 1', 15000);
       assert.equal(await cdp.eval('document.querySelector("#boot-splash-layer video").muted'), false, '原作带原声');
-      // 片段直接从「I am Claude」前（7.5 秒）起播；字幕照原作出现
-      await wait('(document.querySelector("#boot-splash-layer video")?.currentTime || 0) > 9.3', 15000);
-      assert.equal(await cdp.eval('document.querySelector("#boot-splash-layer .boot-splash-sub").textContent'), 'I am Claude. Ask me anything.');
-      assert.ok(Number(await cdp.eval('getComputedStyle(document.querySelector("#boot-splash-layer .boot-splash-sub")).opacity')) > 0.9, '字幕看得见');
-      assert.ok(Number(await cdp.eval('getComputedStyle(document.querySelector("#boot-splash-layer .boot-splash-brand")).opacity')) > 0.9, 'AI HUB 角标叠在原作画面上');
-      await shot('07e-原作预览中-字幕');
-      // 片段到 11 秒左右淡出结束，面板回来（不播到 22 秒，后面不再接别的）
-      await wait('!document.getElementById("boot-splash-layer")', 4000);
-      await wait('document.getElementById("boot-splash-dialog").open', 1500);
-      await click('#boot-splash-dialog .appearance-btn[data-preview="claude-orig"]');
-      await wait('(document.querySelector("#boot-splash-layer video")?.currentTime || 0) > 7.6', 15000);
-      await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 });
-      await wait('!document.getElementById("boot-splash-layer")', 2000);
+      assert.ok(await cdp.eval('document.querySelector("#boot-splash-layer video").getVideoPlaybackQuality().totalVideoFrames > 0'), 'Gemini 画面真的在走（已转 H.264）');
+      assert.ok(Number(await cdp.eval('getComputedStyle(document.querySelector("#boot-splash-layer .boot-splash-brand")).opacity')) > 0.9, 'AI HUB 角标叠在 Gemini 原作上');
+      await shot('07f-Gemini原作预览中');
+      // 3.6 秒的片段放完淡出，面板回来
+      await wait('!document.getElementById("boot-splash-layer")', 5000);
       await wait('document.getElementById("boot-splash-dialog").open', 1500);
     }
     await gracefulQuit(hub); cdp = null; hub = null;
@@ -163,9 +170,9 @@ async function main() {
     await open(env, 'boot-splash-2');
     await wait('!!document.getElementById("boot-splash-layer")', 20000);
     if (hasVideo) {
-      await wait('(document.querySelector("#boot-splash-layer video")?.currentTime || 0) > 8', 20000);
-      await shot('08-重启后播原作');
-      await click('#boot-splash-layer');
+      await wait('(document.querySelector("#boot-splash-layer video")?.currentTime || 0) > 1', 20000);
+      await shot('08-重启后播Gemini原作');
+      if (await cdp.eval('!!document.getElementById("boot-splash-layer")')) await click('#boot-splash-layer');   // 3 秒版可能已放完
     } else { await pause(1600); await shot('08-重启后播DeepSeek05'); }
     await wait('!document.getElementById("boot-splash-layer")', 8000);
     await pause(400);

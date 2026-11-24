@@ -598,5 +598,17 @@
   "{0}没关上（{1}）": "{0} could not be turned off ({1})",
   "{0}没开上（{1}）": "{0} could not be turned on ({1})",
   "{0}，低开销模式保持开": "{0}; low-overhead mode stays on",
-  "{0}，低开销模式保持关": "{0}; low-overhead mode stays off"
+  "{0}，低开销模式保持关": "{0}; low-overhead mode stays off",
+  "只允许 AI 改工作目录内的文件": "Only let the AI change files inside the work folder",
+  "只是提示 AI，拦不住它改别处的文件；重要代码请先提交或备份。": "This only tells the AI; it cannot stop it from changing files elsewhere. Commit or back up important code first.",
+  "这个 CodeAgent 会话是 Lite 模式，「只允许改工作目录内的文件」没有生效：AI 仍可能改到工作目录外的文件，重要代码请先提交或备份。": "This CodeAgent session runs in Lite mode, so \"Only let the AI change files inside the work folder\" is not in effect: the AI may still change files outside the work folder. Commit or back up important code first.",
+  "本机 CodeAgent 版本不认启动参数 --settings，「只允许改工作目录内的文件」没有生效：AI 仍可能改到工作目录外的文件，重要代码请先提交或备份。": "The CodeAgent installed here does not accept --settings, so \"Only let the AI change files inside the work folder\" is not in effect: the AI may still change files outside the work folder. Commit or back up important code first.",
+  "没读到群：{0}": "Could not read groups: {0}",
+  "读取超时（{0} 秒没有结果）": "Timed out (no result in {0} s)",
+  "先显示 {0} 读到的名单，正在后台刷新": "Showing the list read at {0}; refreshing in the background",
+  "先显示 {0} 读到的名单，刷新没成功：{1}": "Showing the list read at {0}; refresh failed: {1}",
+  "先显示 {0} 读到的名单，3 分钟还没刷新出来：到左侧「助理」页看 WeLink 是否在更新": "Showing the list read at {0}; still not refreshed after 3 minutes: check on the Assistant page that WeLink is updating",
+  "上次": "last time",
+  "已限制只能改工作区内的文件；AI 用命令行或脚本仍可能改到别处，重要代码请先提交或备份。": "Limited to files inside the work folder; the AI may still change files elsewhere through shell commands or scripts, so commit or back up important code first.",
+  "不勾时只是提示 AI，拦不住它改别处的文件；重要代码请先提交或备份。": "Unticked, this only tells the AI and cannot stop it from changing files elsewhere. Commit or back up important code first."
 }

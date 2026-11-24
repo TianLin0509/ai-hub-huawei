@@ -1354,6 +1354,31 @@
     if (!permissionModes.supportsSwitch(kind)) return permissionModes.DEFAULT_MODE;
     return permissionModes.normalize(kind, permissionPick[kind]) || lastPermission.recall(localStorage, kind);
   }
+  // 「只允许 AI 改工作目录内的文件」（core/workspace-guard.js，R34）：Claude / CodeAgent 终端会话能挂拦截，记住上次勾选；
+  // Codex、Lite 等拦不住的只显示一行小字，不给勾选框。
+  const workspaceGuard = require('../core/workspace-guard');
+  const GUARD_STORAGE_KEY = 'hub.launch.workspaceGuard.v1';
+  let guardPick = null;
+  function guardRemembered() { try { return localStorage.getItem(GUARD_STORAGE_KEY) === '1'; } catch { return false; } }
+  function guardAvailable() {
+    if (!workspaceGuard.supports(selectedKind)) return false;
+    return !(selectedKind === 'codeagent' && (codeagentLite || effectiveCodeagentRunMode() === 'serve'));
+  }
+  function guardChecked() { return guardAvailable() && (guardPick === null ? guardRemembered() : guardPick); }
+  function paintWorkspaceGuard() {
+    const box = document.getElementById('new-session-workspace-guard');
+    const field = document.getElementById('new-session-workspace-guard-field');
+    const input = document.getElementById('new-session-workspace-guard-input');
+    const noteEl = document.getElementById('new-session-workspace-guard-note');
+    if (!box) return;
+    const text = workspaceGuard.note(selectedKind, guardChecked(), { available: guardAvailable() });
+    box.hidden = !text;
+    if (!text) return;
+    if (field) field.hidden = !guardAvailable();
+    if (input) { input.checked = guardChecked(); input.disabled = submitting; }
+    // 窄窗口一行放不下时省略号截断，悬停看全文。
+    if (noteEl) { noteEl.textContent = text; noteEl.title = text; noteEl.dataset.tone = guardChecked() ? '' : 'warn'; }
+  }
   function paintPermission() {
     const field = document.getElementById('new-session-permission-field');
     const select = document.getElementById('new-session-permission');
@@ -1396,7 +1421,7 @@
 
   // 低开销模式在别处切了（含启动时主进程推来的真值）：启动中心开着就当场重画运行方式（Gemini P2-1）。
   // 本文件比 renderer.js 先加载，共享状态（window.__hubLowOverhead）要等页面解析完才有。
-  const subscribeLowOverhead = () => { try { window.__hubLowOverhead?.onChange?.(() => { try { paintRunMode(); } catch { /* 启动中心还没建好 */ } }); } catch { /* 没有低开销模块 */ } };
+  const subscribeLowOverhead = () => { try { window.__hubLowOverhead?.onChange?.(() => { try { paintRunMode(); paintWorkspaceGuard(); } catch { /* 启动中心还没建好 */ } }); } catch { /* 没有低开销模块 */ } };
   if (window.__hubLowOverhead) subscribeLowOverhead();
   else document.addEventListener('DOMContentLoaded', subscribeLowOverhead, { once: true });
 
@@ -1795,6 +1820,7 @@
 
     paintTuning();
     paintPermission();
+    paintWorkspaceGuard();
     // 账号下拉一更新就同步左栏：后面的代码偶尔在启动早期出错时，左栏也不会停在旧状态（2026-11-01 实测 5 次 1 次）。
     paintLaunchLayout();
 
@@ -2011,6 +2037,7 @@
     codeagentRunModeExplicit = false;
     modelTouchedByUser = false;
     permissionPick = Object.create(null);
+    guardPick = null;
     const details = document.getElementById('new-session-tuning-details');
     if (details) details.open = false;
     const { kindAllowed } = require('../core/distribution');
@@ -2281,6 +2308,7 @@
     // 明确选了「跟随 CodeAgent」：主进程不套 Hub 默认模型；没点选时由主进程按 Hub 默认 / 账号默认定（和下拉显示同一口径）。
     if (selectedKind === 'codeagent' && !modelTouchedByUser && codeagentFollowCli) opts.codeagentFollowCli = true;
     if (permissionModes.supportsSwitch(selectedKind)) opts.permissionMode = currentPermissionMode();
+    if (guardChecked()) opts.workspaceGuard = true;
     if (selectedKind === 'codeagent' && effectiveCodeagentRunMode() === 'serve') opts.codeagentRunMode = 'serve';
     // 低开销模式隐式切来的 serve：账号的 serve 近期起不来时，主进程直接改走终端，不白等（core/codeagent-serve-fallback.js）。
     if (selectedKind === 'codeagent' && opts.codeagentRunMode === 'serve' && !codeagentLite && codeagentRunMode !== 'serve') opts.lowOverheadServe = true;
@@ -2365,6 +2393,7 @@
         require('./codeagent-preference').rememberKind(launchKindKey());
         require('./launch-last-workspace').remember(localStorage, { mode: workspaceMode, workspace });
         if (permissionModes.supportsSwitch(selectedKind)) lastPermission.remember(localStorage, selectedKind, currentPermissionMode());
+        if (guardAvailable()) { if (guardChecked()) localStorage.setItem(GUARD_STORAGE_KEY, '1'); else localStorage.removeItem(GUARD_STORAGE_KEY); }
       } catch (error) { followup = followup || { step: 'remember', error }; }
       if (!followup && session && session.createWarning) {
         followup = { step: session.createWarning.step || 'launch', error: new Error(session.createWarning.message || String(session.createWarning)) };
@@ -2673,6 +2702,8 @@
         paint();
       });
     }
+    const guardInput = document.getElementById('new-session-workspace-guard-input');
+    if (guardInput) guardInput.addEventListener('change', () => { guardPick = guardInput.checked; paint(); });
     const permissionReset = document.getElementById('new-session-permission-reset');
     if (permissionReset) {
       permissionReset.addEventListener('click', () => {

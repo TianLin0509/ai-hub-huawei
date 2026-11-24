@@ -20,6 +20,7 @@ const Q = require('./queries');
 const Identity = require('./identity');
 const { recordMessageRound } = require('./message-round-log');
 const { WelinkGate, sharedWelinkGate, withWelinkPriority, WELINK_RATE_LIMITED, MESSAGE_ROUND_EXPIRED } = require('./welink-gate');
+const GATEWAY_REJECT = /proxy\s*failed|sign\/nonce\/timestamp/i;
 const { noticeBus } = require('./notice-bus');
 const { PhoneChannel, DEFAULT_PHONE, PHONE_NOTE, validateExtraIds } = require('./phone');
 const { HubTools } = require('./hub-tools');
@@ -425,6 +426,16 @@ class CompanyAssistant {
       }
     }, opts);
   }
+  // 换过工号（R32）：WeLink 桌面端当前账号 vs welink-cli 的账号。测试注入 deps.welinkAccounts；
+  // 用替身 welink-cli（deps.welinkRun，或 .js 脚本替身）时不读本机真实的桌面端文件，免得在装了 WeLink 的电脑上跑测试串号。
+  welinkAccounts(cliUid = '') {
+    if (this.deps.welinkAccounts) return this.deps.welinkAccounts(cliUid);
+    let standIn = !!this.deps.welinkRun;
+    if (!standIn) try { standIn = /\.[cm]?js$/i.test(this.cli() || ''); } catch { /* 找不到 CLI 照常读 */ }
+    if (standIn) return { client: null, cli: null, mismatch: null };
+    return require('./welink-account').read({ cliUid });
+  }
+  accountMismatch(cliUid = '') { try { return this.welinkAccounts(cliUid).mismatch; } catch { return null; } }
   welink(args, opts = {}) {
     return opts.priority ? withWelinkPriority(opts.priority, () => this.welinkUnlocked(args, opts)) : this.welinkUnlocked(args, opts);
   }
@@ -435,6 +446,9 @@ class CompanyAssistant {
       const maintained = await this.auth.check({ force: true, refresh: false });
       // Only replay read queries. A send/setup command may already have taken effect.
       if (maintained.login?.ok && !opts.sendGroup && !opts.sendUser && !opts.allowSetup) return this.rawWelink(args, opts);
+    } else if (args[0] !== 'auth' && GATEWAY_REJECT.test(result.stdout + '\n' + result.stderr)) {
+      // 网关拒绝（proxy failed / 取不到签名）：多半是换了工号或桌面端掉线，马上核对一次登录，界面随即给出原因和按钮。
+      void this.auth.check({ force: true, refresh: false }).catch(() => {});
     }
     return result;
   }

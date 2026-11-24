@@ -160,7 +160,7 @@ test('cli: --fresh reusing an output dir writes a catalog with only the --only c
   assert.match(both.err, /不能同时用/);
 });
 
-test('ci: this file is listed in tests/unit-test-files.json so npm test / CI runs it', () => {
-  const listed = require('./unit-test-files.json');
+test('ci: npm test / CI discovers this file', () => {
+  const listed = require('../scripts/unit-test-files').listUnitTests();
   assert.ok(listed.includes('tests/unit-cli-components-merge.test.js'));
 });

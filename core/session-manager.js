@@ -349,9 +349,13 @@ function createNativeClaudeDriver(id, kind, opts, cwd, env, legacy) {
   if (opts.meetingId || opts.autonomous === true) settings.push(ensureGroupChatSettings(hubDataDir));
   if (!legacy && shouldUseClaudeFastSettings(cv, opts)) settings.push(resolveAsarUnpacked('claude-subscription-fast-settings.json'));
   const connection = require('./claude-connection-settings').connectionSettings({ values: opts.claudeConnectionValues || cv, env, model: opts.model, cwd });
+  // 「只允许改工作目录内的文件」（core/workspace-guard.js）：hook 只写进本次启动的叠加文件。
+  const shared = require('./agent-user-context').claudeSharedConfig(env, hubDataDir);
+  const guard = require('./workspace-guard').settingsOverlay(kind, opts, { cwd, configDir: env.CLAUDE_CONFIG_DIR, env,
+    addDirs: [...claudeNativeAddDirs(opts.addDirs), ...(shared.autoMemoryDirectory ? [String(shared.autoMemoryDirectory)] : [])] });
   const settingsFile = prepareClaudeSettingsOverlay(settings, {
     directory: path.join(hubDataDir, 'native-agent-settings'), sessionId: id + '-' + require('crypto').randomUUID(),
-    overrides: { ...require('./agent-user-context').claudeSharedConfig(env,hubDataDir),fastMode: !legacy && shouldUseClaudeFastSettings(cv, opts),
+    overrides: { ...shared, ...(guard ? { hooks: require('./workspace-guard').mergeHooks(shared.hooks, guard.hooks) } : {}),fastMode: !legacy && shouldUseClaudeFastSettings(cv, opts),
       ...(opts.claudeSharedNetworkEnv ? { env: opts.claudeSharedNetworkEnv } : {}),
       ...(connection.env ? { env: { ...(opts.claudeSharedNetworkEnv || {}), ...connection.env } } : {}),
       ...(opts.claudeOutputStyle ? { outputStyle: String(opts.claudeOutputStyle) } : {}),
@@ -431,9 +435,10 @@ function buildClaudePtyLaunch(id, kind, opts, cwd, env, cv) {
   try { cliTheme = require('./cli-coldwhite-theme').ensureClaudeTheme(env, opts.hubUiTheme); }
   catch (error) { console.warn('[CLI theme] Claude:', error.message); }
   const connection = require('./claude-connection-settings').connectionSettings({ values: cv, env, model: opts.model, cwd });
+  const guard = require('./workspace-guard').settingsOverlay(kind, opts, { cwd, addDirs: claudeNativeAddDirs(opts.addDirs), configDir: env.CLAUDE_CONFIG_DIR, env });
   const settingsFile = prepareClaudeSettingsOverlay(settings, {
     directory: path.join(hubDataDir, 'native-agent-settings'), sessionId: id + '-' + require('crypto').randomUUID(),
-    overrides: { fastMode: fast, skipDangerousModePermissionPrompt: true, ...(cliTheme ? { theme: cliTheme } : {}),
+    overrides: { ...(guard || {}), fastMode: fast, skipDangerousModePermissionPrompt: true, ...(cliTheme ? { theme: cliTheme } : {}),
       ...((opts.claudeNetworkEnv || connection.env) ? { env: { ...(opts.claudeNetworkEnv || {}), ...(connection.env || {}) } } : {}) },
   });
   const args = buildClaudeNativeArgs({ model: opts.model, omitModel: cv.COMPANY_CLI && !opts.model,
@@ -537,11 +542,17 @@ function codeagentLaunchModel(model, { pool = null, dataDir } = {}) {
 }
 // 每个会话一份只写模型的启动设置；恢复前按最后实际回答更新，避免撤销终端选择。
 const LAUNCH_SETTINGS_DIR = 'codeagent-launch';
-function writeCodeAgentLaunchSettings(dataDir, id, model) {
+// hooks：「只允许改工作目录内的文件」的拦截条目（core/workspace-guard.js）。不传 = 沿用文件里已有的
+// （会话中途按实际回答改写模型时不能把拦截丢掉）；null = 去掉；对象 = 换成这一份。model 为空时不写模型、照旧继承。
+function writeCodeAgentLaunchSettings(dataDir, id, model, hooks) {
   const dir = path.join(dataDir, LAUNCH_SETTINGS_DIR);
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${String(id || 'session').replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
-  fs.writeFileSync(file + '.tmp', JSON.stringify({ model }), 'utf8');
+  let kept = hooks;
+  if (kept === undefined) {
+    try { kept = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, '')).hooks; } catch { kept = undefined; }
+  }
+  fs.writeFileSync(file + '.tmp', JSON.stringify({ ...(model ? { model } : {}), ...(kept && typeof kept === 'object' ? { hooks: kept } : {}) }), 'utf8');
   fs.renameSync(file + '.tmp', file);
   return file;
 }
@@ -654,7 +665,16 @@ function buildCodeAgentPtyLaunch(id, kind, opts, cwd, env, config, auth = null, 
   if (mcpPaths.length) args.push('--mcp-config', ...mcpPaths);
   if (mcp.profile !== 'full') args.push('--strict-mcp-config');
   syncCodeAgentProjectMcp(cwd, opts.purpose === 'company-assistant' ? mcpPaths[0] : bridge && !extraOnly ? null : opts.mcpConfigFile, hubDataDir);
-  for (const dir of claudeNativeAddDirs(bridgeSettings ? [...claudeNativeAddDirs(opts.addDirs), ...(bridgeSettings.codeRoots || [])] : opts.addDirs)) args.push('--add-dir', dir);
+  const launchAddDirs = claudeNativeAddDirs(bridgeSettings ? [...claudeNativeAddDirs(opts.addDirs), ...(bridgeSettings.codeRoots || [])] : opts.addDirs);
+  for (const dir of launchAddDirs) args.push('--add-dir', dir);
+  // 「只允许改工作目录内的文件」（core/workspace-guard.js）：拦截 hook 写进本会话的启动设置文件（Hub 数据目录），
+  // 不碰号的配置目录。有模型设置时同一份文件里一起写；没有时单独带一个只含 hook 的 --settings。
+  const guard = require('./workspace-guard').settingsOverlay('codeagent', opts, { cwd, addDirs: launchAddDirs, configDir: config.configDir, env });
+  let guardSettings = false;
+  try {
+    if (settingsFile) writeCodeAgentLaunchSettings(hubDataDir, id, settingsModel, guard ? guard.hooks : null);
+    else if (guard) { args.push('--settings', writeCodeAgentLaunchSettings(hubDataDir, id, '', guard.hooks)); guardSettings = true; }
+  } catch (error) { console.warn('[codeagent] 写工作目录限制失败：' + error.message); }
   let sessionId = null;
   let identity = [];
   if (opts.forkCCSessionId) {
@@ -711,7 +731,8 @@ function buildCodeAgentPtyLaunch(id, kind, opts, cwd, env, config, auth = null, 
     bypassLaunch: permissionMode === 'bypassPermissions' && launchArgs.includes('--permission-mode'),
     settingsModel: settingsFile && launchArgs.includes('--settings') ? settingsModel : '', ...(memberMcpLearn ? { memberMcpLearn } : {}),
     // 老版本 CodeAgent 不认 --permission-mode 时参数被去掉，会话按 CodeAgent 自己的配置跑：用户选了非默认档要告诉他。
-    ...(permissionMode !== 'bypassPermissions' && droppedFlags.includes('--permission-mode') ? { permissionModeDropped: permissionMode } : {}) };
+    ...(permissionMode !== 'bypassPermissions' && droppedFlags.includes('--permission-mode') ? { permissionModeDropped: permissionMode } : {}),
+    ...(guard ? { workspaceGuard: (settingsFile || guardSettings) && launchArgs.includes('--settings') ? 'on' : 'dropped' } : {}) };
 }
 
 // CodeAgent ACP 试点的会话对象：账号和模型沿用 PTY 启动算好的结果，只是不再常驻终端。
@@ -2977,6 +2998,8 @@ class SessionManager extends EventEmitter {
       // 启动中心选的权限模式（core/permission-modes.js）：落盘后恢复、重启、分支、原地重拉都沿用，不悄悄变回完全放开。
       ...(opts.autonomous !== true && require('./permission-modes').normalize(kind, opts.permissionMode)
         ? { permissionMode: opts.permissionMode } : {}),
+      // 「只允许改工作目录内的文件」（core/workspace-guard.js）：落盘后恢复、重启、原地重拉都沿用。
+      ...(opts.workspaceGuard === true && require('./workspace-guard').supports(kind) ? { workspaceGuard: true } : {}),
       // 记录经过 runtime 白名单归一化的 effort，让 resume / fork / relaunch
       // 沿用同一档位。不要直接存 opts.effort：否则非法 IPC 值虽然首次启动会
       // 回落，却会污染元数据并在后续恢复时再次扩散。
@@ -3316,6 +3339,12 @@ class SessionManager extends EventEmitter {
       // 用户选的权限约束没生效（CLI 实际权限可能比他选的高），提示闸门必须放行，不能按「版本」字样静默。
       setTimeout(() => this.emit('session-notice', { sessionId: id, level: 'warning', persistent: true, noticeKind: 'blocking',
         message: codeAgentPermissionDroppedMessage(codeagentLaunch.permissionModeDropped) }), 0);
+    }
+    // 勾了「只允许改工作目录内的文件」却没挂上拦截：Lite 模式（工具在 serve 进程里跑）或本机 CodeAgent 不认 --settings。
+    if (opts.workspaceGuard === true && (isCodeAgentServe || codeagentLaunch?.workspaceGuard === 'dropped')) {
+      setTimeout(() => this.emit('session-notice', { sessionId: id, level: 'warning', persistent: true,
+        message: isCodeAgentServe ? '这个 CodeAgent 会话是 Lite 模式，「只允许改工作目录内的文件」没有生效：AI 仍可能改到工作目录外的文件，重要代码请先提交或备份。'
+          : '本机 CodeAgent 版本不认启动参数 --settings，「只允许改工作目录内的文件」没有生效：AI 仍可能改到工作目录外的文件，重要代码请先提交或备份。' }), 0);
     }
     if (codeagentLaunch && codeagentLaunch.marketMcpNotice) {
       setTimeout(() => this.emit('session-notice', { sessionId: id, level: 'warning', persistent: true, message: codeagentLaunch.marketMcpNotice }), 0);
@@ -4861,6 +4890,7 @@ try {
         mcpProfile: s.info && s.info.mcpProfile, appendSystemPromptFile: relaunchRules ? relaunchRules.file : undefined,
         purpose: s.info && s.info.purpose,
         ...(s.info && s.info.permissionMode ? { permissionMode: s.info.permissionMode } : {}),
+        ...(s.info && s.info.workspaceGuard === true ? { workspaceGuard: true } : {}),
         codeagentModelPick: false,
       }, s.info && s.info.cwd, s.pty.options?.env || process.env, config, null, pool);
       s.codeagentSettingsActive = !!launch.settingsModel;
@@ -4967,19 +4997,30 @@ try {
       const connection = require('./claude-connection-settings').connectionSettings({
         values: cv, env: relaunchEnv, model: modelId, cwd: s.info?.cwd,
       });
+      // 「只允许改工作目录内的文件」：原地重拉同样带上拦截 hook；放行目录与这次实际 --add-dir 的一致（会话自带的、Hub 固定的、场景加的）。
+      const sceneAddDirs = (() => {
+        const scenes = require('./session-scenes');
+        if (!scenes.isScenePurpose(s.info && s.info.purpose)) return [];
+        try { return scenes.applySceneLaunch('claude', { purpose: s.info.purpose }, { dataDir: getHubDataDir() }).addDirs || []; } catch { return []; }
+      })();
+      const guard = require('./workspace-guard').settingsOverlay(kind, s.info || {}, { cwd: s.info && s.info.cwd,
+        addDirs: [...claudeNativeAddDirs(s.info && s.info.addDirs), ...sceneAddDirs], configDir: relaunchEnv.CLAUDE_CONFIG_DIR, env: relaunchEnv });
       if (connection.env) {
         require('./claude-connection-settings').assertSettingsSupport(connection, require('./cli-capabilities').filterArgs('claude', ['--settings', 'overlay.json']).args);
+        if (connection.notice) this.emit('session-notice', { sessionId, message: connection.notice, level: 'warning', persistent: true });
+      }
+      // 接入设置或拦截 hook 任一要写时，合成一份 --settings（群聊隔离文件也并进来），不再另带第二个 --settings。
+      if (connection.env || guard) {
         const files = [];
         if (meetingId || autonomous) files.push(ensureGroupChatSettings(getHubDataDir()));
         if (shouldUseClaudeFastSettings(cv, { fastMode: s.info?.fastMode, autonomous })) files.push(resolveAsarUnpacked('claude-subscription-fast-settings.json'));
         else if (s.info?.fastMode === false || assistantSettings) files.push(resolveAsarUnpacked('claude-subscription-standard-settings.json'));
         const file = require('./claude-native-launch').prepareClaudeSettingsOverlay(files, {
           directory: path.join(getHubDataDir(), 'native-agent-settings'), sessionId: sessionId + '-' + require('crypto').randomUUID(),
-          overrides: { env: connection.env, ...(assistantSettings ? { skipDangerousModePermissionPrompt: true } : {}) },
+          overrides: { ...(guard || {}), ...(connection.env ? { env: connection.env } : {}), ...(assistantSettings ? { skipDangerousModePermissionPrompt: true } : {}) },
         });
         fastFlag = ` --settings ${quotePowerShellLiteral(file)}`;
         isolation = '';
-        if (connection.notice) this.emit('session-notice', { sessionId, message: connection.notice, level: 'warning', persistent: true });
       }
       // 单人和群聊都沿用自己的 MCP 档位；群聊与 autonomous 额外恢复 research config。
       const mcpPlan = (meetingId || (autonomous && s.claudeMcpConfigFile))
@@ -5003,7 +5044,7 @@ try {
       const relaunchRules = this.hubRulesSystemPrompt({}, s.info && s.info.purpose);
       if (s.info) s.info.hubRulesSystem = SessionManager.hubRulesRecord(relaunchRules);
       const rulesFlag = relaunchRules ? supportedClaudeFragment('--append-system-prompt-file', ` --append-system-prompt-file "${relaunchRules.file}"`) : '';
-      const addDirFlag = supportedClaudeFragment('--add-dir', claudeNativeAddDirs([]).map(dir => ` --add-dir "${dir}"`).join(''));
+      const addDirFlag = supportedClaudeFragment('--add-dir', claudeNativeAddDirs(s.info && s.info.addDirs).map(dir => ` --add-dir "${dir}"`).join(''));
       const claudeModel = resolveClaudeLaunchModel(relaunchValues(), modelId);
       cmd = ` claude${claudeModel ? supportedClaudeFragment('--model', ' --model ' + quotePowerShellLiteral(claudeModel)) : ''}${effortFlag}${relaunchPermissionFlag}${supportedClaudeFragment('--settings', fastFlag)}${mcpFlag}${addDirFlag}${rulesFlag}${this._sceneRelaunchFlags(s, 'claude')}${supportedClaudeFragment('--settings', isolation)}\r\n`;
     } else if (deepseekClaude.isDeepSeekClaudeKind(kind)) {
@@ -5144,6 +5185,7 @@ try {
       ...(info.fastMode !== undefined ? { fastMode: info.fastMode } : {}),
       ...(info.autonomous !== undefined ? { autonomous: info.autonomous } : {}),
       ...(info.permissionMode ? { permissionMode: info.permissionMode } : {}),
+      ...(info.workspaceGuard === true ? { workspaceGuard: true } : {}),
       ...(info.effort !== undefined ? { effort: info.effort } : {}),
       ...(info.codexSpeedTier !== undefined ? { codexSpeedTier: info.codexSpeedTier } : {}),
       ...(info.geminiChatId !== undefined ? { geminiChatId: info.geminiChatId } : {}),

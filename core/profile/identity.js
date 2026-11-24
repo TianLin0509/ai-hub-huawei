@@ -78,12 +78,18 @@ async function welinkIdentity(welink) {
 }
 
 // 合并出最终身份并判断要不要再问 WeLink。
-async function resolveIdentity({ cached, local, welink, now = Date.now(), force = false }) {
+// clientAccount：WeLink 桌面端当前登录的账号（R32，换过工号的同事）。身份以它为准：
+// 存过的身份是别的账号 → 整条作废重问；welink-cli 还登着旧账号、问回来的是旧账号 → 不认，先只记账号，等本人重新登录后再补全。
+async function resolveIdentity({ cached, local, welink, now = Date.now(), force = false, clientAccount = '' }) {
   const base = { ...local };
+  const client = text(clientAccount, 40).toLowerCase();
+  const sameAs = uid => !client || !uid || require('../company-assistant/welink-account').same(uid, client);
+  if (cached && cached.uid && !sameAs(cached.uid)) { cached = null; force = true; }
   const fresh = cached && cached.from === 'welink' && now - (cached.at || 0) < REFRESH_MS;
   if (fresh && !force) return { ...base, ...cached };
   if (!welink || (!force && cached && cached.from !== 'welink' && now - (cached.triedAt || 0) < RETRY_MS)) return { ...base, ...(cached && cached.from === 'welink' ? cached : {}), triedAt: cached?.triedAt || 0, at: cached?.at || now };
   const w = await welinkIdentity(welink);
+  if (w && !sameAs(w.uid)) return { ...base, uid: text(clientAccount, 40), from: 'welink-client', staleCli: w.uid, triedAt: now, at: now };
   if (!w) return { ...base, ...(cached && cached.from === 'welink' ? cached : {}), triedAt: now, at: cached?.at || now };
   return { name: w.name || base.name, englishName: w.englishName, uid: w.uid, workId: w.workId || base.workId, dept: w.dept, deptPath: w.deptPath, title: w.title, email: w.email || base.email, from: 'welink', at: now, triedAt: now };
 }

@@ -208,7 +208,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     const loginText = online ? (auth.lastRenewAt ? '已连接 · 自动续期，上次 ' + clock(auth.lastRenewAt) : '已连接 · 自动维护登录') : connection.title;
     const phoneText = !p.groupId ? '未接通（可在设置·手机里接通）' : phone.lastError ? phone.lastError : !p.enabled ? '已暂停' : '已开启 · ' + (p.groupName || '群 ' + p.groupId.slice(-6));
     const rows = [
-      { name: 'WeLink', color: auth.state === 'renewing' ? 'run' : online ? 'ok' : 'warn', text: loginText, action: d.cliFound && auth.state === 'needs-scan' ? 'login' : 'settings-tab:welink' },
+      { name: 'WeLink', color: auth.state === 'renewing' ? 'run' : online ? 'ok' : 'warn', text: loginText, action: d.cliFound && auth.state === 'needs-scan' ? 'login' : d.cliFound && auth.state === 'account-mismatch' ? 'login-clean' : 'settings-tab:welink' },
       { name: '邮件日历', color: d.calendarNeedsSetup || coverages.some(([, c]) => c?.status === 'failed') ? 'warn' : coverages.every(([, c]) => c?.status === 'complete') ? 'ok' : '', text: mailText, action: 'settings-tab:welink' },
       { name: '手机对话', color: p.enabled && p.groupId && !phone.lastError ? 'ok' : phone.lastError ? 'warn' : '', text: phoneText, action: 'settings-tab:phone' },
     ];
@@ -540,6 +540,12 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
     if (detail.settingsTab) {
       if (gate && !gate.isOn()) { gate.peek(); await load().catch(() => {}); }
       openSettings(String(detail.settingsTab)); return;
+    }
+    // 一键反馈里点了「重新登录」（R32）：登录已在主进程开始，这里只负责把二维码面板亮出来。
+    if (detail.loginPanel) {
+      if (gate && !gate.isOn()) gate.peek();
+      const panel = page.querySelector('[data-slot="panel"]'); panel.dataset.kind = 'login';
+      await load(); return;
     }
     const input = page.querySelector('[data-slot="form"] textarea');
     const chip = detail.action ? (data?.chips || []).find(c => c.action === detail.action) : null;

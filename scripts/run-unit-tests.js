@@ -1,13 +1,13 @@
 'use strict';
 // Keep the explicit test selection outside cmd.exe's 8191-character command line.
-// Node launches the runner directly; test scope and runner options stay unchanged.
+// 测试文件自动发现（scripts/unit-test-files.js）；命令行额外给的文件也一起跑。
 // 2026-11-24：发版预检里整套单测 4 并发跑，机器忙时每趟都有 1 条不同的计时类测试超时，连挡 4 趟班次。
 // 首轮失败的测试文件，等首轮结束后逐个单独重跑一次；重跑仍失败才算失败（真回归每次都会挂）。
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const files = require('../tests/unit-test-files.json');
+const files = require('./unit-test-files').listUnitTests();
 const root = path.resolve(__dirname, '..');
 const extra = process.argv.slice(2);
 const reporter = './scripts/unit-failed-files-reporter.js';   // 相对 cwd；Windows 绝对路径会被当成 URL 协议

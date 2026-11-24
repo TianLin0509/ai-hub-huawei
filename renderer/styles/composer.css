@@ -3,65 +3,6 @@
    全部走 base.css 的 token，所以六套皮肤（含 T0 要加的 frost）都能直接生效，
    本文件一行都不碰 base.css。字号只用本轮允许的六档：10 / 11 / 11.5 / 12.5 / 13.5 / 15。 */
 
-/* Codex 共享会话 · 方案 A：操作权在会话内容顶部常驻。 */
-.codex-shared-status {
-  position: relative;
-  z-index: 72;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex: 0 0 auto;
-  min-height: 48px;
-  margin: 10px 16px 0;
-  padding: 8px 10px;
-  border: 1px solid rgba(var(--rgb-info), .34);
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--surface-overlay) 88%, var(--status-info-tint));
-  box-shadow: var(--shadow-sm);
-}
-.codex-shared-status[hidden] { display: none; }
-.codex-shared-status [hidden] { display: none !important; }
-.codex-shared-status-icon {
-  display: grid;
-  place-items: center;
-  flex: 0 0 24px;
-  color: var(--status-info);
-}
-.codex-shared-status-icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; }
-.codex-shared-status-copy { display: grid; flex: 1 1 auto; min-width: 0; gap: 1px; }
-.codex-shared-status-copy strong {
-  overflow: hidden;
-  color: var(--fg-strong);
-  font-size: 11.5px;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.codex-shared-status-copy small {
-  overflow: hidden;
-  color: var(--fg-muted);
-  font-size: 10px;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.codex-shared-status-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
-.codex-shared-status-actions button {
-  min-height: 28px;
-  padding: 4px 9px;
-  border: 1px solid var(--border-mid);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--fg-default);
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-}
-.codex-shared-status-actions button.primary { border-color: var(--brand); background: var(--brand); color: var(--brand-ink); }
-.codex-shared-status-actions button:disabled { opacity: .46; cursor: not-allowed; }
-.codex-shared-status-actions button:focus-visible { outline: 2px solid var(--status-info); outline-offset: 2px; }
-.codex-shared-status-feedback { flex: 0 1 auto; color: var(--status-warning); font-size: 10px; }
-
 /* A backend update is secondary information, outside the conversation stage. */
 .composer.has-backend-update-notice { position: relative; }
 .backend-update-notice { flex: 0 0 auto; margin-left: auto; }
@@ -84,35 +25,6 @@
 .backend-update-details p { margin: 6px 0; }
 .backend-update-details small { display: block; color: var(--fg-muted); font-size: 10px; }
 .backend-update-close { display: block; margin: 7px 0 0 auto; }
-.terminal-panel.shared-control-visible { --codex-shared-status-h: 58px; }
-.terminal-panel.shared-control-visible .msg-overlay {
-  top: calc(var(--term-header-h, 43px) + var(--codex-shared-status-h, 0px));
-}
-.terminal-panel.shared-control-visible .card-question-nav {
-  top: calc(var(--term-header-h, 43px) + var(--codex-shared-status-h, 0px) + 10px);
-}
-.floating-input-bar[data-shared-role='viewer'] .floating-input-send,
-.floating-input-bar[data-shared-role='viewer'] .composer-model,
-.floating-input-bar[data-shared-role='viewer'] .composer-thinking { opacity: .48; cursor: not-allowed; }
-
-@media (max-width: 640px) {
-  .codex-shared-status {
-    position: fixed;
-    top: calc(var(--app-toolbar-h, 44px) + 8px);
-    left: 10px;
-    right: 10px;
-    z-index: 119;
-    align-items: flex-start;
-    flex-wrap: wrap;
-    width: auto;
-    margin: 0;
-  }
-  .codex-shared-status-copy { min-width: calc(100% - 36px); }
-  .codex-shared-status-actions { margin-left: 34px; }
-  .codex-shared-status-feedback { flex-basis: 100%; margin-left: 34px; }
-  .terminal-panel.shared-control-visible { --codex-shared-status-h: 92px; }
-}
-
 .composer {
   display: flex;
   flex-direction: column;

@@ -68,17 +68,46 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
   // 后台刷新不清掉操作报错（发送失败的提示要留到下一次操作）。
   async function load({ soft = false } = {}) { try { accept(await call('status')); if (!soft) error = ''; } catch (e) { error = e.message; } if (!(soft && typing())) render(); }
   // 群/人名单：读不到时带原因（没登录、助理还没取到会话、取数出错）；向导或「范围」页开着且还没读到时每 5 秒再读一次，最多 3 分钟。
-  let targetsTimer = null, targetsTries = 0;
+  // R34（2026-11-24）：读过的名单先显示（主进程按账号缓存，stale = 当天快照还没出来、显示的是上次的），后台继续刷新；
+  // 正在读时写「正在读取…」，超时或出错写原因并给「重试」。
+  // targetsSeq：每次读取自增，过期的返回（切页签、点重试后旧请求才回来）直接丢掉，不覆盖新状态。
+  let targetsTimer = null, targetsTries = 0, targetsLoading = false, targetsFailed = '', targetsSeq = 0;
+  const stopTargets = () => { clearTimeout(targetsTimer); targetsTimer = null; targetsSeq++; targetsLoading = false; };
+  const TARGETS_TIMEOUT_MS = 20000;
   async function loadTargets(retry = false) {
-    if (!retry) targetsTries = 0;
-    try { targets = await call('targets'); }
-    catch (e) { targets = { groups: targets?.groups || [], people: targets?.people || [], ready: false, reason: e.message || '读群列表出错' }; }
-    render();
     clearTimeout(targetsTimer); targetsTimer = null;
-    const waiting = !!page && !page.hidden && (wiz?.step === 2 || ['scope', 'ctx'].includes(tab)) && !(targets?.groups || []).length;
+    const seq = ++targetsSeq;
+    if (!retry) targetsTries = 0;
+    targetsLoading = true;
+    if (!retry) render();
+    let timer = null;
+    try {
+      const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`读取超时（${TARGETS_TIMEOUT_MS / 1000} 秒没有结果）`)), TARGETS_TIMEOUT_MS); });
+      const next = await Promise.race([call('targets'), timeout]);
+      if (seq !== targetsSeq) return;
+      targets = next; targetsFailed = '';
+    } catch (e) {
+      if (seq !== targetsSeq) return;
+      targetsFailed = e.message || '读群列表出错';
+      targets = { groups: targets?.groups || [], people: targets?.people || [], ready: !!(targets?.groups?.length || targets?.people?.length), stale: !!targets?.groups?.length || !!targets?.people?.length, at: targets?.at || 0, reason: targetsFailed };
+    } finally { clearTimeout(timer); if (seq === targetsSeq) targetsLoading = false; }
+    if (!page || page.hidden) return;
+    render();
+    const waiting = !!page && !page.hidden && (wiz?.step === 2 || ['scope', 'ctx'].includes(tab)) && (!(targets?.groups || []).length || targets?.stale);
     if (waiting && targetsTries < 36) { targetsTries++; targetsTimer = setTimeout(() => void loadTargets(true), 5000); }
   }
-  const noGroupsText = () => (targets?.reason ? targets.reason : targets ? '还没读到群，正在自动刷新' : '正在读群列表…') + (targetsTries >= 36 ? '（3 分钟还没读到：到左侧「助理」页看 WeLink 是否在更新）' : '');
+  const noGroupsText = () => (targetsFailed ? `没读到群：${targetsFailed}` : targets?.reason ? targets.reason : targets ? '还没读到群，正在自动刷新' : '正在读取…') + (targetsTries >= 36 ? '（3 分钟还没读到：到左侧「助理」页看 WeLink 是否在更新）' : '');
+  const hhmm = at => { const d = new Date(at); return Number.isFinite(d.getTime()) && at ? `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : '上次'; };
+  // 名单上方的一行状态：正在读取 / 先显示上次的、后台刷新中 / 没读到的原因 + 重试。
+  function targetsBar() {
+    const retry = targetsLoading ? '' : '<button class="avx-btn s" data-av="targets-retry">重试</button>';
+    if (!targets && targetsLoading) return '<p class="avx-m">正在读取…</p>';
+    // 主进程带回的原因只要不是「还在等助理取数」（没登录、读出错）就照实写；轮询 3 分钟停了也说清楚，不再一直写「正在后台刷新」。
+    const failed = targetsFailed || (targets?.stale && targets.reasonKind && targets.reasonKind !== 'waiting' ? targets.reason : '');
+    if (targets?.stale) return `<p class="avx-m">先显示 ${esc(hhmm(targets.at))} 读到的名单，${failed ? `刷新没成功：${esc(failed)}` : !targetsLoading && !targetsTimer && targetsTries >= 36 ? '3 分钟还没刷新出来：到左侧「助理」页看 WeLink 是否在更新' : '正在后台刷新'}${targetsLoading ? '…' : ''} ${retry}</p>`;
+    if (!(targets?.groups || []).length && !(targets?.people || []).length && (targetsFailed || targets?.reason)) return `<p class="avx-m">${esc(noGroupsText())} ${retry}</p>`;
+    return '';
+  }
   async function run(label, op, payload) {
     busy = label; error = ''; render();
     try { const r = await call(op, payload); accept(r); return r; } catch (e) { error = e.message; return null; } finally { busy = ''; render(); }
@@ -185,12 +214,12 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
   }
   function scope(a) {
     const groups = targets?.groups || [], people = targets?.people || [], picked = id => a.targets.some(t => t.id === id), all = [...groups, ...people];
-    const pick = (rows, title) => `<h3>${title}</h3>${rows.length ? rows.map(x => `<label class="avx-li ck"><span><input type="checkbox" data-chg="target" data-id="${esc(x.id)}" ${picked(x.id) ? 'checked' : ''}> ${esc(x.name)}</span>${x.leader ? '<span class="avx-ch r">上级</span>' : ''}<small>${esc(x.title || (x.count ? `最近 ${x.count} 条` : ''))}</small></label>`).join('') : '<p class="avx-m">还没有读到，稍后再看。</p>'}`;
+    const pick = (rows, title) => `<h3>${title}</h3>${rows.length ? rows.map(x => `<label class="avx-li ck"><span><input type="checkbox" data-chg="target" data-id="${esc(x.id)}" ${picked(x.id) ? 'checked' : ''}> ${esc(x.name)}</span>${x.leader ? '<span class="avx-ch r">上级</span>' : ''}<small>${esc(x.title || (x.count ? `最近 ${x.count} 条` : ''))}</small></label>`).join('') : `<p class="avx-m">${targetsLoading && !targets ? '正在读取…' : '还没有读到，稍后再看。'}</p>`}`;
     return `<div class="avx-c2"><div class="avx-stack"><div class="avx-card"><h3>在哪里生效</h3><div class="avx-seg">${KINDS.map(([k, n]) => `<button class="${a.kind === k ? 'on' : ''}" data-av="kind" data-k="${k}">${n}</button>`).join('')}</div>
       ${a.kind === 'pick' ? `<table class="avx-t mt"><colgroup><col><col style="width:172px"><col style="width:104px"></colgroup><tr><th>目标</th><th>归属</th><th>动作</th></tr>${a.targets.length ? a.targets.map(t => `<tr><td title="${esc(t.name)}">${esc(t.name)}</td><td title="${esc(a.owners[t.id]?.text)}">${esc(a.owners[t.id]?.text)}</td><td class="vis">${actionSelect(t.action, `data-chg="target-action" data-id="${esc(t.id)}"`)}</td></tr>`).join('') : '<tr><td colspan="3">在右侧勾选群或人</td></tr>'}</table>` : `<div class="avx-line mt"><span class="avx-m">这个范围里的动作</span><div class="w120">${actionSelect(a.action, 'data-chg="action"')}</div></div>`}</div>
       <div class="avx-card"><h3>听谁的</h3><label class="avx-line"><input type="checkbox" data-chg="at" ${a.atOnly ? 'checked' : ''}> 群里只响应 @我</label>${chips(a, 'only', '只听这些人（不选就是所有人）', people)}${chips(a, 'skip', '不看这些群或人', all)}</div>
       <div class="avx-card grow tint"><h3>这样设置后</h3><p>${esc(scopeSummary(a))}</p><p class="avx-m">Beta 阶段不会自动发言。人事、密码、审批类消息只提醒，不交给模型。</p></div></div>
-      <div class="avx-card scroll" data-sc="pk">${a.kind === 'pick' ? pick(groups, '最近的群') + '<div class="gap"></div>' + pick(people, '最近联系的人') : '<h3>范围说明</h3><p class="avx-m">新建的群和新联系人会自动进入这个范围。</p><p class="avx-m">全部类范围跟随助理的消息刷新；想要更快响应，改成指定群或人，会每 30 秒读取一次。</p><p class="avx-m">一条消息只归一个分身：指定的人优先于指定的群，指定的优先于全部。</p>'}</div></div>`;
+      <div class="avx-card scroll" data-sc="pk">${a.kind === 'pick' ? targetsBar() + pick(groups, '最近的群') + '<div class="gap"></div>' + pick(people, '最近联系的人') : '<h3>范围说明</h3><p class="avx-m">新建的群和新联系人会自动进入这个范围。</p><p class="avx-m">全部类范围跟随助理的消息刷新；想要更快响应，改成指定群或人，会每 30 秒读取一次。</p><p class="avx-m">一条消息只归一个分身：指定的人优先于指定的群，指定的优先于全部。</p>'}</div></div>`;
   }
   function context(a) {
     const people = targets?.people || [];
@@ -218,7 +247,7 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     if (wiz.step === 1) return `<div class="avx-ov"><div class="avx-md">${title}<div class="avx-mb"><p class="avx-m">选一个最接近的用途，之后什么都能改。</p><div class="avx-tpls wide">${TEMPLATES.map(tplCard).join('')}</div></div></div></div>`;
     const need = wiz.tpl === 'qa' || wiz.tpl === 'blank', groups = targets?.groups || [], people = targets?.people || [], ready = !need || wiz.targets.length > 0, rows = data.backends.rows;
     const pill = (x, list, op) => `<button class="avx-pk ${list.some(t => t.id === x.id) ? 'on' : ''}" data-av="${op}" data-id="${esc(x.id)}" data-n="${esc(x.name)}" data-ty="${x.type}">${esc(x.name)}</button>`;
-    const scopeHtml = need ? `<h3>它管哪些群或人？</h3><label class="avx-lb">群</label><div class="avx-chips">${groups.map(x => pill(x, wiz.targets, 'wiz-target')).join('') || `<span class="avx-m">${esc(noGroupsText())}</span>`}</div>${wiz.tpl === 'blank' ? `<label class="avx-lb">人</label><div class="avx-chips">${people.map(x => pill(x, wiz.targets, 'wiz-target')).join('')}</div>` : ''}`
+    const scopeHtml = need ? `<h3>它管哪些群或人？</h3>${targets?.stale || targetsFailed ? targetsBar() : ''}<label class="avx-lb">群</label><div class="avx-chips">${groups.map(x => pill(x, wiz.targets, 'wiz-target')).join('') || `<span class="avx-m">${esc(noGroupsText())}</span>${!targetsLoading && (targetsFailed || targets?.reason) ? ' <button class="avx-btn s" data-av="targets-retry">重试</button>' : ''}`}</div>${wiz.tpl === 'blank' ? `<label class="avx-lb">人</label><div class="avx-chips">${people.map(x => pill(x, wiz.targets, 'wiz-target')).join('')}</div>` : ''}`
       : `<h3>它会管这些</h3><div class="avx-q">${wiz.tpl === 'watch' ? '全部会话。新建的群和新联系人自动包含。' : '所有私聊，以及群里 @我 的消息。'}</div><label class="avx-lb">不想让它看的群（可选）</label><div class="avx-chips">${groups.map(x => pill(x, wiz.skip, 'wiz-skip')).join('')}</div>`;
     return `<div class="avx-ov"><div class="avx-md">${title}<div class="avx-mb"><div class="avx-w2"><div>${scopeHtml}<p class="avx-m mt">${wiz.tpl === 'watch' ? '只提醒，不会替你发任何消息。' : '写好草稿后由你点发送，不会自动发言。'}</p></div>
       <div class="avx-card tint"><h3>已经替你配好</h3><div class="avx-li"><span>名字</span><small>${esc(wiz.name)}</small></div><div class="avx-li"><span>人设</span><small>${wiz.persona ? '你写的' : '从近期发言生成'}</small></div><div class="avx-li"><span>知识</span><small>${wiz.tpl === 'qa' ? '所选群的历史问答' : '最近的对话'}</small></div><div class="avx-li"><span>后端</span><small>${esc(rows.find(r => r.id === wiz.account)?.label || '自动选择')}</small></div><button class="avx-btn s mt" data-av="wiz-adv">${wiz.adv ? '收起高级设置' : '高级设置'}</button>
@@ -246,9 +275,10 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     if (op === 'sel') { sel = b.dataset.id; tab = 'inbox'; logPage = 0; logPick = -1; render(); return; }
     if (op === 'tab') { tab = b.dataset.k; logPage = 0; logPick = -1; if (['scope', 'ctx'].includes(tab)) void loadTargets(); render(); return; }
     if (op === 'item') { itemSel[b.dataset.k] = b.dataset.id; render(); return; }
+    if (op === 'targets-retry') { void loadTargets(); return; }
     if (op === 'new') { startWizard(); return; }
     if (op === 'tpl') { if (wiz) { const keep = wiz; startWizard(b.dataset.t); wiz.account = keep.account; } else startWizard(b.dataset.t); return; }
-    if (op === 'wiz-close') { wiz = null; render(); return; }
+    if (op === 'wiz-close') { wiz = null; if (!['scope', 'ctx'].includes(tab)) stopTargets(); render(); return; }
     if (op === 'wiz-back') { wiz.step = 1; render(); return; }
     if (op === 'wiz-adv') { wiz.adv = !wiz.adv; render(); return; }
     if (op === 'wiz-target' || op === 'wiz-skip') {
@@ -328,7 +358,7 @@ function createAvatarPage({ document, window, ipcRenderer, closeOtherPanels = ()
     build(); closeOtherPanels(); page.hidden = false; document.body.classList.add('avatar-page-open');
     window.setShellNavActive?.('avatar'); place(); render(); void load(); void loadTargets();
   }
-  function close() { if (!page || page.hidden) return; page.hidden = true; document.body.classList.remove('avatar-page-open'); }
+  function close() { stopTargets(); if (!page || page.hidden) return; page.hidden = true; document.body.classList.remove('avatar-page-open'); }
   const onChanged = () => { if (isOpen() && !busy) void load({ soft: true }); };
   ipcRenderer.on?.('avatar:changed', onChanged);
   return { open, close, isOpen, destroy() { close(); window.removeEventListener('resize', place); ipcRenderer.removeListener?.('avatar:changed', onChanged); page?.remove(); page = null; } };

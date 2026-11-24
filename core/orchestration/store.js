@@ -19,7 +19,7 @@ function atomicWrite(file, content) {
   const fd = fs.openSync(tmp, 'w');
   try { fs.writeFileSync(fd, content, 'utf8'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
   // Windows：读方（或杀毒扫描）开着账本时覆盖改名会短暂报 EPERM，按全局约定有界重试（同 web-risk-guard）。
-  renameWithRetrySync(tmp, file, { retries: 20 });
+  renameWithRetrySync(tmp, file);
 }
 function load(dataDir, meetingId) {
   try {

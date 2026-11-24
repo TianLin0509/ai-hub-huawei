@@ -5,12 +5,24 @@ const W = require('./welink');
 const D = require('./data');
 const { resolveNames } = require('./identity');
 
-async function runReadOnly(args, { run = W.run, cli = W.resolveCli({ configured: process.env.CLAUDE_HUB_WELINK_CONFIGURED || '' }), cacheDir = process.env.CLAUDE_HUB_ASSISTANT_DIR } = {}) {
+// R32：查询被网关拒成「proxy failed」时，给助理一句能转告本人的原因（换过工号最常见），别让它只会复述英文。
+function gatewayHint(result, accounts) {
+  if (!/proxy\s*failed/i.test(String(result.stdout || '') + String(result.stderr || ''))) return result;
+  let wrong = null;
+  try { wrong = accounts().mismatch; } catch { /* 读不到就按通用说法 */ }
+  const hint = wrong ? `[Hub] ${wrong.text}。请转告用户：到 Hub 助理页 WeLink 一行点「重新登录」，用新账号扫码后再查。`
+    : '[Hub] WeLink 服务器拒绝了这次请求（proxy failed）。常见原因：welink-cli 登着的账号和电脑上的 WeLink 不是同一个，或 WeLink 桌面端没登录。请转告用户到 Hub 助理页 WeLink 一行按提示处理。';
+  const err = String(result.stderr || '');
+  return { ...result, stderr: err + (err && !err.endsWith('\n') ? '\n' : '') + hint + '\n' };
+}
+
+async function runReadOnly(args, { run = W.run, cli = W.resolveCli({ configured: process.env.CLAUDE_HUB_WELINK_CONFIGURED || '' }), cacheDir = process.env.CLAUDE_HUB_ASSISTANT_DIR,
+  welinkAccounts = () => /\.[cm]?js$/i.test(String(cli || '')) ? {} : require('./welink-account').read({}) } = {}) {
   W.checkArgs(args);
   if (!args.includes('--help') && (args[0] === 'calendar' && args[1] === 'list' || args[0] === 'meeting' && args[1] === 'query-list'))
     throw new Error('按范围查询会议和日程请用本会话的 welink_meetings MCP；它统一处理日期边界、分页和时区。单场详情可用 meeting info 补查。');
   const execute = (a, opts = {}) => run(a, { cli, timeoutMs: 60000, ...opts, allowSetup: false });
-  const result = await execute(args);
+  const result = gatewayHint(await execute(args), welinkAccounts);
   if (Number(result.code || 0) !== 0 || args[0] !== 'im' || args[1] !== 'query-history-message') return result;
   const raw = W.parseJsonBig(result.stdout);
   if (!raw || (raw.resultCode !== undefined && String(raw.resultCode) !== '0') || (raw.code !== undefined && !['0', '200'].includes(String(raw.code)))) return result;

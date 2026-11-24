@@ -91,6 +91,14 @@ class PhoneChannel {
 
   // 本人账号：取数时 auth status 读到的 UID；群里只有它发的消息才交给助理。
   async me() {
+    // R32 换过工号：命令行还登着旧账号时不认旧账号（缓存的也不认），等本人在助理页重新登录。
+    const auth = this.a.auth?.status?.();
+    if (auth?.state === 'account-mismatch') throw new Error('WeLink 命令行还登着旧账号，手机对话暂停；在助理页点「重新登录」后自动恢复');
+    // 刚重新登录：登录守护里已是新账号，快照和 1 小时缓存可能还是旧的，以守护为准（审查 #6）。
+    if (auth?.state === 'online' && auth.login?.ok && auth.login.uid) {
+      if (this.state().me !== auth.login.uid) this.save({ me: auth.login.uid, meAt: this.now() });
+      return auth.login.uid;
+    }
     const snap = this.a.snapshot();
     if (snap?.login?.ok && snap.login.uid) return snap.login.uid;
     const st = this.state();

@@ -53,6 +53,8 @@ function registerHarnessLocatorIpc(ipcMain, { locator = locatorApi.get(), send =
 // 安装失败的原话翻成人话。黄区实测：npm 默认源走公司代理返回 407（代理要认证），同事终端里 npm 正常是因为终端配了代理账号。
 function humanInstallError(text) {
   const raw = String(text || '安装未完成');
+  // 已经写好原因和手动安装命令的（R37 只走内源时的 DSH）原样给出，不截断、不改写成 npm 的说法。
+  if (/npm i -g /.test(raw)) return raw;
   if (/(?:^|\D)407(?!\d)|Proxy Authentication/i.test(raw)) return '公司代理要求登录（407），Hub 连不上 npm 默认源；稍后再试，或联系管理员放行这台电脑的代理。原话：' + raw.slice(0, 160);
   if (/(?:^|\D)404(?!\d)|Not Found/i.test(raw)) return '下载源上没有这个包（404），公司内部 npm 源常缺 DSH 界面包和 pi。原话：' + raw.slice(0, 160);
   return raw;

@@ -4,26 +4,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const TRANSIENT_RENAME_CODES = new Set(['EACCES', 'EBUSY', 'EPERM']);
-const _renameSleepCell = new Int32Array(new SharedArrayBuffer(4));
-
-function renameWithRetrySync(source, target, options = {}) {
-  const fsImpl = options.fsImpl || fs;
-  // 调用方可收窄错误集合；既有调用仍沿用原来的三类临时占用错误。
-  const retryCodes = options.retryCodes || TRANSIENT_RENAME_CODES;
-  const retries = Number.isInteger(options.retries) ? Math.max(0, options.retries) : 80;
-  const retryDelayMs = Number.isFinite(options.retryDelayMs) ? Math.max(0, options.retryDelayMs) : 15;
-  const sleep = options.sleep || (ms => { if (ms > 0) Atomics.wait(_renameSleepCell, 0, 0, ms); });
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      fsImpl.renameSync(source, target);
-      return attempt;
-    } catch (error) {
-      // 进程级改名重试（core/fs-rename-retry.js）已经重试过的不再叠加。
-      if (!error || !retryCodes.has(error.code) || attempt >= retries || error.renameRetried !== undefined) throw error;
-      sleep(retryDelayMs);
-    }
-  }
+// 改名重试只有一层：转调进程级规则（core/fs-rename-retry.js），这里保留旧名字给既有调用方。
+function renameWithRetrySync(source, target, { fsImpl } = {}) {
+  return require('./fs-rename-retry').renameSync(source, target, fsImpl ? { fsImpl } : {});
 }
 
 // 让 Claude Code 不再对 Hub 新建的工作区弹「Quick safety check」信任框。
@@ -59,9 +42,6 @@ function ensureClaudeProjectTrusted(projectDir, options = {}) {
     stateFileName = null,
     fsImpl = fs,
     logger = console,
-    renameRetries,
-    renameRetryDelayMs,
-    renameSleep,
   } = options;
   const statePath = claudeStatePathFor(configDir, stateFileName || '.claude.json');
   const projectKey = toClaudeProjectKey(projectDir);
@@ -119,12 +99,7 @@ function ensureClaudeProjectTrusted(projectDir, options = {}) {
     fsImpl.mkdirSync(path.dirname(statePath), { recursive: true });
     try {
       fsImpl.writeFileSync(tmpPath, JSON.stringify(state, null, 2), 'utf8');
-      renameWithRetrySync(tmpPath, statePath, {
-        fsImpl,
-        retries: renameRetries,
-        retryDelayMs: renameRetryDelayMs,
-        sleep: renameSleep,
-      });
+      renameWithRetrySync(tmpPath, statePath, { fsImpl });
     } finally {
       try { if (fsImpl.existsSync(tmpPath)) fsImpl.unlinkSync(tmpPath); } catch {}
     }

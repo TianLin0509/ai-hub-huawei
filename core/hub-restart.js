@@ -53,7 +53,7 @@ class HubRestart {
     try { fs.writeFileSync(fd, JSON.stringify(this.plan, null, 2), 'utf8'); fs.fsyncSync(fd); }
     finally { fs.closeSync(fd); }
     // Windows：读方（或杀毒扫描）开着恢复文件时覆盖改名会短暂报 EPERM，按全局约定有界重试（同 web-risk-guard）。
-    renameWithRetrySync(tmp, file, { retries: 20 });
+    renameWithRetrySync(tmp, file);
     this.publish(this.snapshot());
   }
   snapshot() { return this.plan ? clone(this.plan) : null; }

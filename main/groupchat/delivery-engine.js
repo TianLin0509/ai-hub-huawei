@@ -8,7 +8,6 @@ const GATE_LIMIT=3;
 const {getSessionRuntimeTruth}=require('../../core/session-runtime-truth');
 const {SessionOpenOwnership}=require('../../core/session-open-ownership');
 const {renameWithRetrySync}=require('../../core/claude-project-trust');
-const RENAME_RETRY_CODES=new Set(['EPERM','EBUSY']); // 只重试短暂占用；EACCES 是真的没权限
 const terminal=r=>['done','cancelled'].includes(r?.status);
 function createDeliveryEngine({meetingManager,sessionManager,getHubDataDir,getDispatcher,ensureMemberReady,getMembers=()=>[],getAttemptEvidence=()=>null,sendToRenderer=()=>{},onStatus=()=>{},logger=console}) {
   const owners=new Map(),busy=new Set(),watching=new Set(),actions=new Set(),retiring=new Map(),activeDispatches=new Set(),gates=new Map();let timer=null,events=null,suspended=false,ownership=null;
@@ -33,7 +32,7 @@ function createDeliveryEngine({meetingManager,sessionManager,getHubDataDir,getDi
     const fd=fs.openSync(tmp,'wx');try{fs.writeFileSync(fd,JSON.stringify(run,null,2),'utf8');fs.fsyncSync(fd);}finally{fs.closeSync(fd);}
     try {
       // Windows：读 run.json 的一方还开着文件时，覆盖改名会短暂报 EPERM/EBUSY；按全局约定有界重试，只重试同一候选文件、不重跑状态更新。
-      renameWithRetrySync(tmp,record(id),{retries:process.platform==='win32'?20:0,retryCodes:RENAME_RETRY_CODES});
+      renameWithRetrySync(tmp,record(id));
     } catch(error) {
       try {fs.unlinkSync(tmp);}
       catch(cleanupError){if(cleanupError.code!=='ENOENT')logger.warn?.('[delivery] temporary save cleanup failed:',cleanupError);}

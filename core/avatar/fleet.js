@@ -97,7 +97,7 @@ class FleetService {
   merge(id, list) {
     const known = this.live.get(id) || new Map();
     for (const m of list || []) known.set(m.key, m);
-    const rows = [...known.values()].sort((a, b) => (a.at || 0) - (b.at || 0)).slice(-KEEP_LIVE);
+    const rows = [...known.values()].sort((a, b) => (a.at || 0) - (b.at || 0) || D.idCmp(a.key, b.key)).slice(-KEEP_LIVE);
     this.live.set(id, new Map(rows.map(m => [m.key, m])));
     return rows;
   }
@@ -146,7 +146,7 @@ class FleetService {
     let list;
     try {
       const r = await a.welink(['im', 'query-recent-conversation', '--count', String(WIDE_LIST)], { priority: 'background', timeoutMs: 20000 });
-      const raw = r.code === 0 ? welink.parseJson(r.stdout) : null;
+      const raw = r.code === 0 ? welink.parseJsonBig(r.stdout) : null;
       list = raw && D.conversationRecords(raw) !== null ? D.conversations(raw) : null;
       if (!list) { this.readError = welink.friendlyError(r.stderr || r.stdout || '读取最近会话失败'); return; }
     } catch (e) { this.readError = e.code === WELINK_RATE_LIMITED ? 'WeLink 限流，稍后自动继续' : e.message; return; }
@@ -189,7 +189,9 @@ class FleetService {
     const a = this.assistant(), newest = this.messages(conv.id).at(-1)?.key;
     const args = ['im', 'query-history-message', conv.group ? '--group-id' : '--user-account', conv.id, '--query-count', String(newest ? 50 : count), ...(newest ? ['--message-id', newest, '--query-direction', '1'] : [])];
     try {
-      const r = await a.welink(args, { priority: 'background', timeoutMs: 20000 }), raw = welink.parseJson(r.stdout);
+      // msgId 是超过 JS 安全整数的长整数，必须和助理快照一样按 parseJsonBig 原样保留：
+      // 用普通 JSON.parse 会被四舍五入成另一个编号，快照里那份和这里读到的同一条消息就成了两条（R36：盯消息每条显示两次），增量游标也会错位。
+      const r = await a.welink(args, { priority: 'background', timeoutMs: 20000 }), raw = welink.parseJsonBig(r.stdout);
       if (r.code !== 0 || !raw) { this.readError = welink.friendlyError(r.stderr || r.stdout || '读取消息失败'); return 'fail'; }
       this.merge(conv.id, D.messages(raw, conv, owner, { myName: this.myName(), names }));
       return 'ok';
@@ -256,6 +258,7 @@ class FleetService {
       const cursor = st.cursor[conv.id] ?? (av.createdAt - LOOKBACK_MS), fresh = list.filter(m => (m.at || 0) > cursor);
       for (const item of Object.values(st.items)) {
         if (item.conv !== conv.id || !OPEN.has(item.state)) continue;
+        if (this.heal(st, fleet, av, conv, list, item)) dirty = true;
         const done = F.answeredAfter(list, item, av);
         if (done) { item.state = 'answered'; this.note(st, item, 'answered', done.by === 'me' ? '你已回复' : `${done.by} 已回答`); dirty = true; }
       }
@@ -266,10 +269,10 @@ class FleetService {
       let hold = false;
       for (const c of F.candidates(av, fleet.avatars, conv, list, fresh)) {
         if (this.sending.has(c.id)) { hold = true; continue; }
-        const holder = fleet.avatars.filter(v => v.id !== av.id).map(v => ({ id: v.id, item: this.state(owner, v.id).items[c.id] })).find(x => x.item && x.item.state !== 'moved');
+        const holder = fleet.avatars.filter(v => v.id !== av.id).map(v => ({ id: v.id, item: findItem(this.state(owner, v.id).items, c) })).find(x => x.item && x.item.state !== 'moved');
         if (!holder) { this.upsert(st, c, roster); continue; }
         if (OPEN.has(holder.item.state)) { this.mutate(owner, holder.id, other => this.upsert(other, c, roster)); continue; }
-        const covered = holder.item.lastKey === c.lastKey || holder.item.state === 'sent' && (holder.item.sentAt || 0) >= (c.at || 0);
+        const covered = D.sameMsgKey(holder.item.lastKey, c.lastKey) || holder.item.state === 'sent' && (holder.item.sentAt || 0) >= (c.at || 0);
         if (!covered) this.upsert(st, c, roster);
       }
       if (hold) continue;
@@ -278,13 +281,39 @@ class FleetService {
     if (dirty) this.saveState(owner, av.id, st);
   }
   upsert(st, c, roster) {
-    const old = st.items[c.id];
-    if (old && old.lastKey === c.lastKey) return;
+    const old = this.claim(st, c);
+    if (old && D.sameMsgKey(old.lastKey, c.lastKey)) { if (old.id === c.id) Object.assign(old, contentOf(c)); return; }
     const g = F.gate(c, roster), item = { ...c, level: g.level, flags: g.flags, tries: 0, draft: '', why: '', createdAt: old?.createdAt || this.now() };
     if (g.level <= 1) { this.note(st, item, 'skip', '跳过', g.reason || '只看不处理'); return; }
     if (g.level === 2 && g.capped) { Object.assign(item, { state: 'remind', why: g.reason }); this.count(st, 'remind'); this.note(st, item, 'remind', '等你处理', g.reason); }
     else item.state = 'new';
     st.items[c.id] = item;
+  }
+
+  // ---- R36 旧数据自愈 ----
+  // v5.6.102 及以前，分身增量读把长整数消息编号四舍五入了，state.json 里事项的 id/firstKey/lastKey 可能是舍入后的写法，
+  // 正文里同一句还可能拼了两遍。现在消息表里全是原样编号：按同一条消息认回旧事项，改记到原样编号下，正文按现有消息重算。
+  // 正在起草或发送的先不动（它们按旧编号回写），下一轮再处理。
+  movable(item) { return item.state !== 'drafting' && !this.sending.has(item.id); }
+  rekey(st, item, c) {
+    if (item.id === c.id) return item;
+    delete st.items[item.id];
+    if (st.items[c.id]) return st.items[c.id]; // 升级后已按原样编号又生成过一份：留那份，旧的去掉
+    item.id = c.id; st.items[c.id] = item; return item;
+  }
+  claim(st, c) {
+    if (st.items[c.id]) return st.items[c.id];
+    const old = findItem(st.items, c);
+    if (!old) return null;
+    return this.movable(old) ? this.rekey(st, old, c) : old;
+  }
+  heal(st, fleet, av, conv, list, item) {
+    if (!this.movable(item) || list.some(m => m.key === item.lastKey) || !list.some(m => D.sameMsgKey(m.key, item.lastKey))) return false;
+    const since = list.filter(m => (m.at || 0) >= (item.since || item.at || 0));
+    const c = F.candidates(av, fleet.avatars, conv, list, since).find(x => D.sameMsgKey(x.firstKey, item.firstKey) || D.sameMsgKey(x.lastKey, item.lastKey));
+    if (!c) { item.lastKey = list.find(m => D.sameMsgKey(m.key, item.lastKey)).key; return true; } // 已有人接了等情况：只把编号对齐，后面照常结案
+    Object.assign(this.rekey(st, item, c), contentOf(c));
+    return true;
   }
 
   // ---- 交给分身会话 ----
@@ -491,7 +520,7 @@ class FleetService {
       let r;
       try { r = await a.welink(args, { ...(item.group ? { sendGroup: item.conv } : { sendUser: item.conv }), timeoutMs: 30000, priority: 'user', beforeRun }); }
       catch (e) { if (e.needAck) return { ok: false, needAck: true, error: e.message }; throw e; }
-      const receipt = welink.parseJson(r.stdout), code = receipt?.code ?? receipt?.resultCode ?? receipt?.error?.error_code;
+      const receipt = welink.parseJsonBig(r.stdout), code = receipt?.code ?? receipt?.resultCode ?? receipt?.error?.error_code;
       if (r.code !== 0 || receipt?.ok === false || receipt?.success === false || code !== undefined && !['0', '200'].includes(String(code))) throw new Error('没发出去：' + short(welink.friendlyError(receipt?.error?.error_msg || receipt?.message || r.stderr || r.stdout || '发送命令失败'), 160));
       const done = this.mutate(owner, avatarId, st => {
         const cur = st.items[itemId] || item, edited = !!cur.draft && R.clean(cur.draft) !== R.clean(body);
@@ -509,7 +538,7 @@ class FleetService {
     if (item.state !== 'sent') throw new Error('这条没有发出去');
     if (!item.messageId) throw new Error('WeLink 没返回消息编号，请到 WeLink 里手动撤回');
     const args = ['im', 'recall-message', item.group ? '--group-id' : '--user-account', item.conv, '--message-id', item.messageId];
-    const r = await a.welink(args, { recall: { conv: item.conv, messageId: item.messageId }, timeoutMs: 30000, priority: 'user' }), receipt = welink.parseJson(r.stdout), code = receipt?.code ?? receipt?.resultCode;
+    const r = await a.welink(args, { recall: { conv: item.conv, messageId: item.messageId }, timeoutMs: 30000, priority: 'user' }), receipt = welink.parseJsonBig(r.stdout), code = receipt?.code ?? receipt?.resultCode;
     if (r.code !== 0 || receipt?.ok === false || code !== undefined && !['0', '200'].includes(String(code))) throw new Error('撤回失败：' + short(welink.friendlyError(receipt?.message || r.stderr || r.stdout || '可能已超过撤回时限'), 120));
     this.mutate(owner, avatarId, st => {
       const cur = st.items[itemId]; if (cur) cur.state = 'recalled';
@@ -524,17 +553,50 @@ class FleetService {
   targets() {
     // 群/人名单来自助理的 WeLink 消息快照（2026-11-20：群友截图「还没读到群，请稍等」一直不变）。
     // 读不到时说清是哪一种：没登录 WeLink、助理还没取到会话、还是取数出错；界面据此提示并自动重试。
+    // R34（2026-11-24 WeLink 反馈「展示不了群和人，过一会儿出来了」）：当天快照要等助理整轮 WeLink 取数跑完才落盘，
+    // 新的一天或刚启动时要等几分钟。读到过的名单按账号存一份（targets-cache.json），当天快照还没有时先给上次的
+    // （没有缓存就找前几天的快照），标 stale 让界面写明「正在后台刷新」；当天快照一出来就换成新的。
     const owner0 = this.owner();
     if (!owner0) return { ok: true, groups: [], people: [], ready: false, reason: '还没确认 WeLink 登录：先到左侧「助理」页扫码登录，登录后这里会自动出现群' };
-    const snap0 = this.snapshot();
-    if (!snap0 || !Array.isArray(snap0.conversations) || !snap0.conversations.length) {
+    const owner = owner0, snap0 = this.snapshot();
+    // 当天快照也要是这个账号的：同一天切了号、旧号快照还在时，不能把旧号的名单当成新号的写进缓存。
+    const hasRows = snap => !!snap && (!snap.login?.uid || snap.login.uid === owner) && Array.isArray(snap.conversations) && snap.conversations.length > 0;
+    if (!hasRows(snap0)) {
       const login = this.login();
-      return { ok: true, groups: [], people: [], ready: false, reason: !login.ok ? `${login.reason}（到左侧「助理」页重新登录）`
-        : this.readError ? `读 WeLink 消息出错：${this.readError}` : '助理还没取到 WeLink 会话列表，一般 1 分钟内就有，这里会自动刷新' };
+      const reasonKind = !login.ok ? 'login' : this.readError ? 'error' : 'waiting';
+      const reason = reasonKind === 'login' ? `${login.reason}（到左侧「助理」页重新登录）`
+        : reasonKind === 'error' ? `读 WeLink 消息出错：${this.readError}` : '助理还没取到 WeLink 会话列表，一般 1 分钟内就有，这里会自动刷新';
+      const cached = this.cachedTargets(owner, hasRows);
+      if (cached) return { ok: true, ready: true, stale: true, at: cached.at, groups: cached.groups, people: cached.people, reason, reasonKind };
+      return { ok: true, groups: [], people: [], ready: false, reason, reasonKind };
     }
-    const owner = owner0, snap = snap0, roster = this.legacy.roster(owner), titles = this.legacy.read(owner, 'titles.json', {});
+    const { groups, people } = this.targetRows(owner, snap0);
+    const at = snap0.at || this.now();
+    try {
+      const old = this.legacy.read(owner, 'targets-cache.json', null);
+      if (!old || old.at !== at) this.legacy.write(owner, 'targets-cache.json', { at, groups, people });
+    } catch { /* 缓存写不了只影响下次的首屏 */ }
+    return { ok: true, ready: true, at, groups, people };
+  }
+  targetRows(owner, snap) {
+    const roster = this.legacy.roster(owner), titles = this.legacy.read(owner, 'titles.json', {});
     const rows = (snap?.conversations || []).map(c => ({ id: c.id, name: c.name || c.id, type: c.group ? 'group' : 'user', count: (snap.messages?.[c.id] || []).length, title: titles[c.id]?.title || '', leader: !!roster.people?.[c.id]?.protected }));
-    return { ok: true, ready: true, groups: rows.filter(r => r.type === 'group'), people: rows.filter(r => r.type === 'user') };
+    return { groups: rows.filter(r => r.type === 'group'), people: rows.filter(r => r.type === 'user') };
+  }
+  cachedTargets(owner, hasRows) {
+    try {
+      const saved = this.legacy.read(owner, 'targets-cache.json', null);
+      if (saved && Array.isArray(saved.groups) && (saved.groups.length || saved.people?.length)) return { at: saved.at || 0, groups: saved.groups, people: saved.people || [] };
+    } catch { /* 缓存坏了就当没有 */ }
+    try {
+      const a = this.assistant();
+      // 只翻最近 4 天（含今天）：快照文件带消息正文，可能很大，界面等待时每 5 秒会来读一次。
+      for (const day of (a?.snapshotDays?.() || []).slice(0, 4)) {
+        const old = a.snapshot(day);
+        if (hasRows(old) && old.login?.uid === owner) return { at: old.at || 0, ...this.targetRows(owner, old) };
+      }
+    } catch { /* 读不到前几天的快照就没有可先显示的 */ }
+    return null;
   }
   login() {
     const a = this.assistant(), auth = a?.auth?.status?.(), snap = this.snapshot();
@@ -560,6 +622,13 @@ class FleetService {
     return { ok: true, available: true, beta: true, paused: fleet.paused, login, snapAt: snap?.at || 0, readError: this.readError, lastError: this.lastError, prep: this.prep, avatars, items: items.sort((x, y) => (y.at || 0) - (x.at || 0)), backends: this.backends() };
   }
 }
+// 事项里随消息变化的部分（不含状态、草稿、理由）。
+function contentOf(c) {
+  const { firstKey, lastKey, since, at, count, text, sensitive, auto, hasNonText, onlyNonText, senders, atMe } = c;
+  return { firstKey, lastKey, since, at, count, text, sensitive, auto, hasNonText, onlyNonText, senders, atMe };
+}
+// 按原样编号找事项；找不到再认同会话、首条是同一条消息（四舍五入写法）的旧事项。
+function findItem(items, c) { return items[c.id] || Object.values(items).find(x => x.conv === c.conv && x.state !== 'moved' && D.sameMsgKey(x.firstKey, c.firstKey)) || null; }
 function findMessageId(v, depth = 0) {
   if (!v || typeof v !== 'object' || depth > 4) return '';
   for (const k of ['msgId', 'msg_id', 'messageId', 'message_id']) if (v[k] != null && String(v[k])) return String(v[k]);

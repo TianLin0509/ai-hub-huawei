@@ -132,6 +132,8 @@ function _buildSessionPayload(hubId, data, existing = loadSessionFile(hubId)) {
     autonomous: data.autonomous === true ? true : null,
     // 启动中心选的权限模式（core/permission-modes.js）：漏了它，从会话文件恢复时会悄悄变回完全放开。
     permissionMode: typeof data.permissionMode === 'string' ? data.permissionMode : null,
+    // 「只允许改工作目录内的文件」（core/workspace-guard.js）：漏了它，重启恢复后拦截会悄悄消失。
+    workspaceGuard: data.workspaceGuard === true ? true : null,
     // Codex service_tier 档：'inherit' 等于没选，不落盘（null）。
     // inherit is an explicit choice. Dropping it would make a resumed Codex
     // session fall back to Hub's Standard default and silently change speed.

@@ -45,7 +45,24 @@ class AuthKeeper {
     this.set({ state: 'online', login, error: '', renewCause: null, lastCheckAt: this.a.now(), scanAttempts: 0, notified: false, noticeId: '', lastOkAt: this.a.now(), lastOkUid: login?.uid || this.current.lastOkUid || null,
       ...(renewed ? { lastRenewAt: this.a.now() } : {}) });
   }
-  manualSucceeded(login) { this.online(login); }
+  manualSucceeded(login) { if (!this.wrongAccount(login, this.a.now())) this.online(login); }
+  // 换过工号（R32）：令牌有效但和 WeLink 桌面端当前账号不是同一个人，查询会被网关拒成「proxy failed」。
+  // 这时不续期（续的还是旧账号），停下来请本人清除旧登录后扫码；同一对账号只提醒一次。
+  wrongAccount(login, now) {
+    let wrong = null;
+    try { wrong = login?.ok ? this.a.accountMismatch?.(login.uid) : null; } catch { wrong = null; }
+    if (!wrong) return false;
+    const cause = { id: 'account-mismatch', title: wrong.text, text: `${wrong.text}。${wrong.next}`, client: wrong.client, cli: wrong.cli };
+    const same = this.current.state === 'account-mismatch' && this.current.renewCause?.client === wrong.client && this.current.renewCause?.cli === wrong.cli;
+    this.set({ state: 'account-mismatch', login: { ok: false, reason: 'account-mismatch', uid: login.uid, clientAccount: wrong.client, checkedAt: now }, error: '', renewCause: cause, lastCheckAt: now, lastOkUid: null,
+      ...(same ? {} : { notified: false, noticeId: '' }) });
+    if (!this.current.notified) {
+      const id = this.current.noticeId || 'welink-account-' + now;
+      this.set({ noticeId: id });
+      if (this.a.publish({ id, kind: 'welink-login', title: 'WeLink 命令行还登着旧账号', text: cause.text, at: now })) this.set({ notified: true });
+    }
+    return true;
+  }
   // 本人在设置里点了「退出 WeLink 登录」（2026-11-19）：停掉自动续期，不发「续期没成功」提醒，等本人再扫码（manualSucceeded 会恢复）。
   signedOut() {
     this.controller?.abort();
@@ -87,6 +104,8 @@ class AuthKeeper {
       if (result.code !== 0 && login.reason !== 'expired') login = { ...login, ok: false, reason: 'error',
         error: `登录状态查询失败（退出码 ${result.code}）${safeDiagnostic(result.stderr || result.stdout) ? '：' + safeDiagnostic(result.stderr || result.stdout) : ''}` };
       else if (login.reason === 'unknown') login.error = '无法识别 WeLink 登录状态输出，稍后自动重查';
+      // 换过工号（R32）：账号和桌面端对不上就停在这里，见 wrongAccount。
+      if (login.ok && this.wrongAccount(login, now)) return this.status();
       // A still-valid token renewed early must never turn into a scan request.
       const early = !!login.ok;
       if (login.ok) {

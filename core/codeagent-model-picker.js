@@ -354,7 +354,7 @@ function restoreDefaults(snapshot) {
     else { value.enterprise = value.enterprise || {}; value.enterprise.activeProvider = before.activeProvider; }
     const temp = `${before.file}.hub-model-${process.pid}.tmp`;
     // Windows 上 CLI 或杀毒正读着 settings.json 时覆盖改名会短暂 EPERM：有界重试，否则用户的默认模型会被留成菜单改过的值。
-    try { fs.writeFileSync(temp, JSON.stringify(value, null, 2) + '\n', 'utf8'); require('./claude-project-trust').renameWithRetrySync(temp, before.file, { retries: process.platform === 'win32' ? 20 : 0, retryCodes: new Set(['EPERM', 'EBUSY']) }); restored.push(path.basename(before.file)); }
+    try { fs.writeFileSync(temp, JSON.stringify(value, null, 2) + '\n', 'utf8'); require('./claude-project-trust').renameWithRetrySync(temp, before.file); restored.push(path.basename(before.file)); }
     finally { try { fs.unlinkSync(temp); } catch {} }
   }
   return restored;

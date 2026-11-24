@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { wrapSync, wrapAsync } = require('../core/fs-rename-retry');
+const { wrapSync, wrapAsync, renameSync, rename: renameAsync } = require('../core/fs-rename-retry');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-upgrade-first-use-'));
 process.env.CLAUDE_HUB_DATA_DIR = dir;
 const config = require('../core/hub-config');
@@ -44,28 +44,36 @@ test('配置真实读取失败仍抛错，不能把权限失败当默认配置�
   finally { fs.readFileSync = read; }
 });
 
-test('43: 同步重试不叠加，25.5 秒降为 0.3 秒', () => {
+test('43: 改名重试只有一层：已安装时直接调 fs，不叠加', () => {
   let calls = 0, waited = 0;
   const rename = wrapSync(() => { calls++; throw busy(); }, { sleep: ms => { waited += ms; } });
-  assert.throws(() => stateStore._private._renameWithRetrySync('source', 'target', {
-    rename, sleep: ms => { waited += ms; },
-  }), { code: 'EPERM' });
+  const fsImpl = { renameSync: rename };
+  // 走直接调用的路径（本进程已安装，或不是 Windows）：只调一次 fs，底层那层重试 20 次后抛出，不再叠加第二层。
+  assert.throws(() => renameSync('source', 'target', { fsImpl, platform: 'linux' }), { code: 'EPERM' });
   assert.equal(calls, 21);
   assert.equal(waited, 300);
 });
 
-test('43: 异步重试也识别已有标记，未包装的临时错误仍可恢复', async () => {
-  let calls = 0, outerWait = 0;
-  const rename = wrapAsync(async () => { calls++; throw busy(); }, { retries: 2, delayMs: 0 });
-  await assert.rejects(stateStore._private._renameWithRetryAsync('source', 'target', {
-    rename, sleep: async ms => { outerWait += ms; },
-  }), { code: 'EPERM' });
-  assert.equal(calls, 3);
-  assert.equal(outerWait, 0);
+test('43: 未安装的进程也按同一规则重试，EACCES 一并重试', async () => {
   let attempts = 0;
-  assert.equal(await stateStore._private._renameWithRetryAsync('source', 'target', {
-    rename: async () => { if (attempts++ < 2) throw busy(); }, sleep: async () => {},
-  }), 2);
+  const fsImpl = { renameSync() { if (attempts++ < 2) throw Object.assign(new Error('locked'), { code: 'EACCES' }); } };
+  renameSync('source', 'target', { fsImpl, platform: 'win32', delayMs: 0 });
+  assert.equal(attempts, 3);
+  let asyncAttempts = 0;
+  const asyncFs = { promises: { async rename() { if (asyncAttempts++ < 2) throw busy(); } } };
+  await renameAsync('source', 'target', { fsImpl: asyncFs, platform: 'win32', delayMs: 0 });
+  assert.equal(asyncAttempts, 3);
+  // 替身本身已带一层重试：外层看到 renameRetried 标记不再叠加。
+  let wrappedCalls = 0;
+  const wrapped = { renameSync: wrapSync(() => { wrappedCalls++; throw busy(); }, { retries: 2, sleep: () => {} }) };
+  assert.throws(() => renameSync('source', 'target', { fsImpl: wrapped, platform: 'win32', delayMs: 0 }), { code: 'EPERM' });
+  assert.equal(wrappedCalls, 3);
+  let asyncWrappedCalls = 0;
+  const asyncWrapped = { promises: { rename: wrapAsync(async () => { asyncWrappedCalls++; throw busy(); }, { retries: 2, delayMs: 0 }) } };
+  await assert.rejects(renameAsync('source', 'target', { fsImpl: asyncWrapped, platform: 'win32', delayMs: 0 }), { code: 'EPERM' });
+  assert.equal(asyncWrappedCalls, 3);
+  const denied = { renameSync() { throw Object.assign(new Error('nope'), { code: 'ENOENT' }); } };
+  assert.throws(() => renameSync('source', 'target', { fsImpl: denied, platform: 'win32', delayMs: 0 }), { code: 'ENOENT' });
 });
 
 test('43: 启动遇到独占改名失败仍返回状态与原因，解锁后重试保留磁盘记录', async () => {

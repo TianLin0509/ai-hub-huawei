@@ -1,5 +1,5 @@
 'use strict';
-// 开场动画（2026-11-22）：默认播 Hub 群星；随包带群星·星座和 Claude / Codex / DeepSeek 各一套（18 号「掌心魔法阵」）；
+// 开场动画（2026-11-22；11-24 起默认 Claude 原作 lite 并加 Gemini）：默认播 Hub 群星；随包带群星·星座和 Claude / Codex / DeepSeek 各一套（18 号「掌心魔法阵」）；
 // 其余 61 套做成资源包按需下载。下载机制照抄桌宠形象包（core/hub-pet/role-packs.js）：catalog.json + <id>-<version>.json，
 // 逐个核对字节数与 SHA-256，内源优先多源依次尝试；只在用户点「下载」时联网；失败不影响正在用的开场动画。
 // 包只是数据：一张 webp 图写到 <数据目录>/boot-splash/packs/<id>/image.webp，不执行、不解析任何别的内容。
@@ -15,19 +15,22 @@ const { boundedCatalogFetch, compareVersion } = require('./appearance-packs');
 const MAX_PACK_BYTES = 1024 * 1024;
 const MAX_IMAGE_BYTES = 640 * 1024;
 const MAX_VIDEO_BYTES = 96 * 1024 * 1024;
-const ID = /^(?:claude|codex|deepseek|galaxy)-[a-z0-9]{2,20}$/;
+const ID = /^(?:claude|codex|deepseek|gemini|galaxy)-[a-z0-9]{2,20}$/;
 const VERSION = /^\d{1,6}\.\d{1,6}\.\d{1,6}$/;
-const WHO = new Set(['claude', 'codex', 'deepseek', 'hub']);
+const WHO = new Set(['claude', 'codex', 'deepseek', 'gemini', 'hub']);
 const ANIM = new Set(['soft', 'rush', 'galaxy', 'video']);
 const WEATHER = new Set(['snow', 'rain', 'bokeh', 'dust', 'petals', 'sparks', 'stars', 'fireflies', 'embers']);
 const FREQUENCIES = Object.freeze(['daily', 'always', 'off']);
-const DEFAULT_ID = 'galaxy-constellation';
+// 2026-11-24：默认开场改为 Claude 原作 lite（随包内置，约 4.6 MB）；群星留作视频放不出画面时的兜底。
+const DEFAULT_ID = 'claude-orig';
+const FALLBACK_ID = 'galaxy-constellation';
 const DEFAULT_PREFERENCES = Object.freeze({ selected: DEFAULT_ID, frequency: 'daily' });
 // 2026-11-22 2.0.0 起目录里有 mp4 视频包，v5.6.79 及更早版本的校验会整份拒收 → 新目录改名 catalog-v2.json，旧 catalog.json 留给老版本。
+// 2026-11-24 3.0.0 加了 Gemini（旧版本不认这个角色，同样会整份拒收）→ 再改名 catalog-v3.json，catalog-v2.json 原样留给旧版本。
 const SOURCES = Object.freeze([
-  { id: 'aliyun-fast', name: '阿里云高速', manifest: 'https://dl.lt-stockpartner.tech/hub-update/boot-splash/catalog-v2.json', files: 'https://dl.lt-stockpartner.tech/hub-update/boot-splash/' },
-  { id: 'github', name: 'GitHub', manifest: 'https://github.com/TianLin0509/ai-hub-huawei/releases/download/boot-splash-v1/catalog-v2.json', files: 'https://github.com/TianLin0509/ai-hub-huawei/releases/download/boot-splash-v1/' },
-  { id: 'aliyun', name: '阿里云', manifest: 'https://me.lt-stockpartner.tech/hub-update/boot-splash/catalog-v2.json', files: 'https://me.lt-stockpartner.tech/hub-update/boot-splash/' },
+  { id: 'aliyun-fast', name: '阿里云高速', manifest: 'https://dl.lt-stockpartner.tech/hub-update/boot-splash/catalog-v3.json', files: 'https://dl.lt-stockpartner.tech/hub-update/boot-splash/' },
+  { id: 'github', name: 'GitHub', manifest: 'https://github.com/TianLin0509/ai-hub-huawei/releases/download/boot-splash-v1/catalog-v3.json', files: 'https://github.com/TianLin0509/ai-hub-huawei/releases/download/boot-splash-v1/' },
+  { id: 'aliyun', name: '阿里云', manifest: 'https://me.lt-stockpartner.tech/hub-update/boot-splash/catalog-v3.json', files: 'https://me.lt-stockpartner.tech/hub-update/boot-splash/' },
 ]);
 
 function isWebp(buf) {
@@ -102,7 +105,9 @@ function createBootSplashStore({ dataDir, assetsDir = path.join(__dirname, '..',
     let saved = {};
     try { saved = JSON.parse(fs.readFileSync(prefsFile, 'utf8')) || {}; } catch (_) {}
     return {
-      selected: typeof saved.selected === 'string' && ID.test(saved.selected) ? saved.selected : DEFAULT_ID,
+      // 旧版启动时会把默认值「群星」写进偏好；只有用户亲手选过（picked）才保留，否则跟着新默认走。
+      selected: typeof saved.selected === 'string' && ID.test(saved.selected) && (saved.picked || saved.selected !== FALLBACK_ID) ? saved.selected : DEFAULT_ID,
+      picked: !!saved.picked,
       frequency: FREQUENCIES.includes(saved.frequency) ? saved.frequency : DEFAULT_PREFERENCES.frequency,
       lastPlayedDay: typeof saved.lastPlayedDay === 'string' ? saved.lastPlayedDay : '',
       hintSeen: !!saved.hintSeen,
@@ -122,7 +127,8 @@ function createBootSplashStore({ dataDir, assetsDir = path.join(__dirname, '..',
     return index.map(base => {
       const installed = base.bundled ? null : installedInfo(base.id);
       const entry = catalog?.packs.find(p => p.id === base.id) || null;
-      const src = base.bundled ? `assets/boot-splash/${base.id}.webp` : installed ? pathToFileURL(installed.image).href + '?v=' + encodeURIComponent(installed.version) : null;
+      // 内置视频给 file 地址：界面按本地文件读进内存播放（安装版在 app.asar 里也能读）。
+      const src = base.bundled ? (base.anim === 'video' ? pathToFileURL(path.join(assetsDir, base.id + '.mp4')).href : `assets/boot-splash/${base.id}.webp`) : installed ? pathToFileURL(installed.image).href + '?v=' + encodeURIComponent(installed.version) : null;
       return {
         ...base, thumb: `assets/boot-splash/thumbs/${base.id}.webp`, src, installed: !!(base.bundled || installed),
         version: installed?.version || null, bytes: entry?.bytes || null,
@@ -131,7 +137,7 @@ function createBootSplashStore({ dataDir, assetsDir = path.join(__dirname, '..',
     });
   }
   function snapshot() {
-    const { lastPlayedDay, ...prefs } = preferences();
+    const { lastPlayedDay, picked, ...prefs } = preferences();
     return { preferences: prefs, items: items(), catalog, state: { ...state } };
   }
   function playable(id) {
@@ -145,7 +151,7 @@ function createBootSplashStore({ dataDir, assetsDir = path.join(__dirname, '..',
     const today = localDay(now());
     if (prefs.frequency === 'daily' && prefs.lastPlayedDay === today) return null;
     writePrefs({ ...prefs, lastPlayedDay: today });
-    const item = playable(prefs.selected) || playable(DEFAULT_ID);
+    const item = playable(prefs.selected) || playable(DEFAULT_ID) || playable(FALLBACK_ID);
     return item ? { ...item, showHint: true, firstHint: !prefs.hintSeen } : null;
   }
   function savePreferences(input = {}) {
@@ -153,7 +159,7 @@ function createBootSplashStore({ dataDir, assetsDir = path.join(__dirname, '..',
     const next = { ...prefs };
     if (input.selected !== undefined) {
       if (!playable(String(input.selected))) throw new Error('这一套开场动画还没下载，下载后再使用');
-      next.selected = String(input.selected);
+      next.selected = String(input.selected); next.picked = true;
     }
     if (input.frequency !== undefined) {
       if (!FREQUENCIES.includes(input.frequency)) throw new Error('播放频率无效');
@@ -250,4 +256,4 @@ function createBootSplashStore({ dataDir, assetsDir = path.join(__dirname, '..',
   return { snapshot, startup, savePreferences, check, download, install, cancel: () => abort?.abort(), root, get catalog() { return catalog; } };
 }
 
-module.exports = { DEFAULT_ID, DEFAULT_PREFERENCES, FREQUENCIES, SOURCES, validateCatalog, validatePack, createBootSplashStore };
+module.exports = { DEFAULT_ID, FALLBACK_ID, DEFAULT_PREFERENCES, FREQUENCIES, SOURCES, validateCatalog, validatePack, createBootSplashStore };

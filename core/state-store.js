@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const { getHubDataDir } = require('./data-dir');
+const { renameSync, rename } = require('./fs-rename-retry');
 const { acquireLock, acquireLockAsync, releaseLock, releaseLockAsync } = require('./file-lock');
 const { migrateLegacyBranchSessionMeta } = require('./session-title-guards');
 const { healPersistedBranchSessionTitles } = require('./branch-session-titles');
@@ -319,7 +320,7 @@ function _writeMergedToDisk(state) {
   const tmp = `${STATE_FILE}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
   try {
     fs.writeFileSync(tmp, _serializeState(state));
-    _renameWithRetrySync(tmp, STATE_FILE);
+    renameSync(tmp, STATE_FILE);
   } finally {
     try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch {}
   }
@@ -330,54 +331,9 @@ async function _writeMergedToDiskAsync(state) {
   const tmp = `${STATE_FILE}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
   try {
     await fs.promises.writeFile(tmp, _serializeState(state));
-    await _renameWithRetryAsync(tmp, STATE_FILE);
+    await rename(tmp, STATE_FILE);
   } finally {
     try { await fs.promises.unlink(tmp); } catch {}
-  }
-}
-
-const TRANSIENT_RENAME_CODES = new Set(['EACCES', 'EBUSY', 'EPERM']);
-const RENAME_RETRIES = 80;
-const RENAME_RETRY_DELAY_MS = 15;
-const _renameSleepCell = new Int32Array(new SharedArrayBuffer(4));
-
-function _isTransientRenameError(error) {
-  return !!error && TRANSIENT_RENAME_CODES.has(error.code);
-}
-
-function _renameWithRetrySync(source, target, options = {}) {
-  const rename = options.rename || fs.renameSync;
-  const retries = Number.isInteger(options.retries) ? Math.max(0, options.retries) : RENAME_RETRIES;
-  const retryDelayMs = Number.isFinite(options.retryDelayMs)
-    ? Math.max(0, options.retryDelayMs)
-    : RENAME_RETRY_DELAY_MS;
-  const sleep = options.sleep || (ms => { if (ms > 0) Atomics.wait(_renameSleepCell, 0, 0, ms); });
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      rename(source, target);
-      return attempt;
-    } catch (error) {
-      if (!_isTransientRenameError(error) || error.renameRetried != null || attempt >= retries) throw error;
-      sleep(retryDelayMs);
-    }
-  }
-}
-
-async function _renameWithRetryAsync(source, target, options = {}) {
-  const rename = options.rename || fs.promises.rename.bind(fs.promises);
-  const retries = Number.isInteger(options.retries) ? Math.max(0, options.retries) : RENAME_RETRIES;
-  const retryDelayMs = Number.isFinite(options.retryDelayMs)
-    ? Math.max(0, options.retryDelayMs)
-    : RENAME_RETRY_DELAY_MS;
-  const sleep = options.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      await rename(source, target);
-      return attempt;
-    } catch (error) {
-      if (!_isTransientRenameError(error) || error.renameRetried != null || attempt >= retries) throw error;
-      await sleep(retryDelayMs);
-    }
   }
 }
 
@@ -564,9 +520,4 @@ module.exports = {
   STATE_FILE,
   LOCK_FILE,
   CURRENT_VERSION,
-  _private: {
-    _isTransientRenameError,
-    _renameWithRetryAsync,
-    _renameWithRetrySync,
-  },
 };

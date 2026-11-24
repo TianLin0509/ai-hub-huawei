@@ -72,7 +72,6 @@ AI HUB 是一个 Windows 上的 Electron 桌面程序，把多个 AI 命令行�
 | `process-lifecycle-<pid>.jsonl`、`.heartbeat.json` | 进程生命周期，意外退出时能看到最后的心跳 |
 | `launch-timings.jsonl` | 会话启动各阶段耗时 |
 | `company-model-proxy.log` | 公司模型反代的输出与报错 |
-| `codex-runtime-broker.log` | Codex 运行时 |
 | `managed-cli-launches.jsonl` | Hub 启动过哪些 CLI、用的什么命令 |
 
 看日志的顺序：先按修改时间找最近的几份，再在里面找离报错时间最近的记录（日志多为 ISO 时间，注意时区，北京时间 = UTC+8）。

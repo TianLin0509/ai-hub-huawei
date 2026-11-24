@@ -47,5 +47,5 @@
 .bsp-pick{position:absolute;left:5px;top:5px;font-style:normal;font-size:10.5px;font-weight:600;color:#3a2a00;background:#f3c75a;border-radius:4px;padding:0 5px}
 .bsp-card.orig,.bsp-card:has(.bsp-pick){border-color:#d8b24a}
 .bsp-grid.mine .bsp-pick{font-size:11.5px;padding:1px 7px}
-.bsp-grid.mine.picks{grid-template-columns:repeat(3,minmax(0,1fr))}.bsp-grid.picks .bsp-meta{font-size:14px}
+.bsp-grid.mine.picks{grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}.bsp-grid.picks .bsp-meta{font-size:13.5px;flex-direction:column;align-items:stretch;gap:5px}.bsp-grid.picks .bsp-meta strong{text-align:center}
 .boot-splash-toast [data-bsp-repair]{justify-self:start;margin-top:6px}

@@ -501,7 +501,9 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
     if (await route() !== 'intranet') return { ok: true, enabled: false };
     let cli = false;
     try { cli = !!welink.hasCli(); } catch { /* 当没装 */ }
-    return { ok: true, enabled: true, to: welink.to, cli };
+    let mismatch = null;
+    try { const m = cli && welink.accounts ? welink.accounts().mismatch : null; mismatch = m ? { client: m.client, cli: m.cli } : null; } catch { /* 读不到不提示 */ }
+    return { ok: true, enabled: true, to: welink.to, cli, ...(mismatch ? { accountMismatch: mismatch } : {}) };
   }
   function compactFor(description, contact, ctx = {}) {
     return require('../core/hub-feedback-welink').compactFeedback({ info: bundleInfo(), description, contact, logsDir, now: now(), scenes: scenesOf({ ...ctx, description }) });
@@ -530,9 +532,21 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
       recordHistory(hkey, { ...hbase, status: 'failed', reason: W.SELF_SEND_REASON });
       return { ok: false, selfSend: true, reason: W.SELF_SEND_REASON, text, savedTo };
     };
-    // 复用 CLI 的登录状态解析；查不到账号时仍尝试发送，由服务端回执兜底。
-    // 总预算 3 秒且查到一次就记住：CLI 排队或限流时不能把普通用户的发送拖慢（Codex 审：最坏可多等 90 秒）。
-    try {
+    // R32 换过工号：WeLink 桌面端是新账号、welink-cli 还登着旧账号时，发出去会被网关拒成「proxy failed」。
+    // 先比一次两边的账号（只读两个本机小文件），对不上就直说原因，并给「重新登录」和复制兜底，不去白发。
+    let accounts = null;
+    try { accounts = welink.accounts ? welink.accounts() : null; } catch { accounts = null; }
+    if (accounts && accounts.mismatch) {
+      const m = accounts.mismatch;
+      recordHistory(hkey, { ...hbase, status: 'failed', reason: m.text });
+      logEvent({ via: 'welink', error: 'account-mismatch' });
+      return { ok: false, accountMismatch: { client: m.client, cli: m.cli }, reason: `${m.text}，这条反馈发不出去（WeLink 会拒收）`, text, savedTo };
+    }
+    // 是不是维护人自己：以 WeLink 桌面端当前账号为准，每次现读（换号后不沿用旧结论）；读不到才问 CLI 的登录状态。
+    // 问 CLI 时总预算 3 秒且查到一次就记住：CLI 排队或限流时不能把普通用户的发送拖慢（Codex 审：最坏可多等 90 秒）。
+    const me = String((accounts && accounts.client && accounts.client.account) || '').trim().toLowerCase();
+    if (me) { if (require('../core/company-assistant/welink-account').same(me, welink.to)) return selfSend(); }
+    else try {
       if (selfUid === undefined) {
         const status = await Promise.race([
           welink.run(['auth', 'status'], { timeoutMs: 3000 }),
@@ -558,6 +572,10 @@ function createHubFeedbackService({ endpoint, info, logsDir, fetchImpl, unblock 
         if (nice.clientDown) {
           recordHistory(hkey, { ...hbase, status: 'failed', reason: 'WeLink 客户端没打开或没登录' });
           return { ok: false, clientDown: true, reason: (i ? `前 ${i} 段已发出；` : '') + nice.reason, text, savedTo };
+        }
+        if (nice.gateway) {
+          recordHistory(hkey, { ...hbase, status: 'failed', reason: 'WeLink 拒收（proxy failed）' });
+          return { ok: false, gateway: true, reason: (i ? `前 ${i} 段已发出；` : '') + nice.reason, text, savedTo };
         }
         recordHistory(hkey, { ...hbase, status: 'failed', reason });
         return { ok: false, reason: (i ? `前 ${i} 段已发出，第 ${i + 1} 段没发出去：` : '') + reason, text, savedTo };

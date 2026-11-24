@@ -2,6 +2,7 @@
 // 「分身」Beta 的规则层：全部是纯函数，不调用模型，不读写文件。
 // 一条消息归哪个分身、能做到哪一步，都由这里决定；模型只负责判断和写内容，发不发由本人点。
 const R = require('./rules');
+const { sameMsgKey } = require('../company-assistant/data');
 
 const MARK = '🤖';
 const ACTIONS = Object.freeze(['watch', 'remind', 'draft']); // Beta 没有自动发
@@ -133,10 +134,12 @@ function candidates(av, avatars, conv, list, fresh) {
   return out.map(r => itemFrom(conv, r.msgs, list, r.action)).filter(item => !answeredAfter(list, item, av));
 }
 // 这件事之后本人或权威答疑人说过话，就算有人接了。
+// R36：v5.6.102 及以前存下的事项里，编号可能是四舍五入后的写法，按同一条消息认；
+// 认不出（消息已不在手上的这段里）就按时间看之后有没有人接，免得本人回过了旧事项也永不结案。
 function answeredAfter(list, item, av) {
-  const from = list.findIndex(m => m.key === item.lastKey);
-  if (from < 0) return null;
-  for (const m of list.slice(from + 1)) {
+  const from = list.findIndex(m => sameMsgKey(m.key, item.lastKey));
+  const after = from >= 0 ? list.slice(from + 1) : list.filter(m => (m.at || 0) > (item.at || 0));
+  for (const m of after) {
     if (m.mine) return { by: 'me', at: m.at || 0, text: clean(m.text).slice(0, 300) };
     if (item.group && has(av.authorities, m.account)) return { by: m.sender, at: m.at || 0, text: clean(m.text).slice(0, 300) };
   }

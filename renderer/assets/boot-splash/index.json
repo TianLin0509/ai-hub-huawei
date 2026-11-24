@@ -3,6 +3,117 @@
  "version": "1.0.0",
  "items": [
   {
+   "id": "codex-orig",
+   "name": "Codex · 原作·星空龙娘",
+   "who": "codex",
+   "anim": "video",
+   "weather": "stars",
+   "bundled": false,
+   "clip": {
+    "start": 0,
+    "fadeAt": 3.6,
+    "end": 3.9,
+    "subs": [
+     [
+      "All I lack... is your question.",
+      0.65,
+      3.6
+     ]
+    ]
+   },
+   "recommend": true,
+   "credit": "wynneceles · CC BY-NC-ND 4.0",
+   "creditUrl": "https://github.com/wynneceles/ai-boot-animations"
+  },
+  {
+   "id": "claude-orig",
+   "name": "Claude · 原作·月下持剑",
+   "who": "claude",
+   "anim": "video",
+   "weather": "stars",
+   "bundled": true,
+   "clip": {
+    "start": 0,
+    "fadeAt": 3.5,
+    "end": 3.8,
+    "subs": [
+     [
+      "I am Claude. Ask me anything.",
+      0.78,
+      3.75
+     ]
+    ]
+   },
+   "recommend": true,
+   "credit": "wynneceles · CC BY-NC-ND 4.0",
+   "creditUrl": "https://github.com/wynneceles/ai-boot-animations"
+  },
+  {
+   "id": "gemini-orig",
+   "name": "Gemini · 原作·星夜双剑",
+   "who": "gemini",
+   "anim": "video",
+   "weather": "stars",
+   "bundled": false,
+   "clip": {
+    "start": 0,
+    "fadeAt": 3.3,
+    "end": 3.6,
+    "subs": []
+   },
+   "credit": "wynneceles · CC BY-NC-ND 4.0",
+   "creditUrl": "https://github.com/wynneceles/ai-boot-animations",
+   "recommend": true
+  },
+  {
+   "id": "claude-draw",
+   "name": "Claude · 召唤师抽卡",
+   "who": "claude",
+   "anim": "video",
+   "weather": "stars",
+   "bundled": false,
+   "clip": {
+    "start": 0,
+    "fadeAt": 2.98,
+    "end": 3.281,
+    "subs": [],
+    "brand": false
+   },
+   "recommend": true
+  },
+  {
+   "id": "codex-draw",
+   "name": "Codex · 召唤师抽卡",
+   "who": "codex",
+   "anim": "video",
+   "weather": "stars",
+   "bundled": false,
+   "clip": {
+    "start": 0,
+    "fadeAt": 2.98,
+    "end": 3.281,
+    "subs": [],
+    "brand": false
+   },
+   "recommend": true
+  },
+  {
+   "id": "deepseek-draw",
+   "name": "DeepSeek · 召唤师抽卡",
+   "who": "deepseek",
+   "anim": "video",
+   "weather": "stars",
+   "bundled": false,
+   "clip": {
+    "start": 0,
+    "fadeAt": 2.98,
+    "end": 3.281,
+    "subs": [],
+    "brand": false
+   },
+   "recommend": true
+  },
+  {
    "id": "claude-omni",
    "name": "Claude · 掌心法阵·有声",
    "who": "claude",
@@ -66,62 +177,6 @@
    "recommend": true
   },
   {
-   "id": "codex-orig",
-   "name": "Codex · 原作·星空龙娘",
-   "who": "codex",
-   "anim": "video",
-   "weather": "stars",
-   "bundled": false,
-   "clip": {
-    "start": 8.0,
-    "fadeAt": 11.6,
-    "end": 11.9,
-    "subs": [
-     [
-      "Every answer... is already in my hand.",
-      3.2,
-      7.2
-     ],
-     [
-      "All I lack... is your question.",
-      8.65,
-      11.6
-     ]
-    ]
-   },
-   "recommend": true,
-   "credit": "wynneceles · CC BY-NC-ND 4.0",
-   "creditUrl": "https://github.com/wynneceles/ai-boot-animations"
-  },
-  {
-   "id": "claude-orig",
-   "name": "Claude · 原作·月下持剑",
-   "who": "claude",
-   "anim": "video",
-   "weather": "stars",
-   "bundled": false,
-   "clip": {
-    "start": 7.5,
-    "fadeAt": 10.9,
-    "end": 11.2,
-    "subs": [
-     [
-      "Under the moonlight... the blade awakens.",
-      4.087,
-      7.189
-     ],
-     [
-      "I am Claude. Ask me anything.",
-      8.281,
-      11.3
-     ]
-    ]
-   },
-   "recommend": true,
-   "credit": "wynneceles · CC BY-NC-ND 4.0",
-   "creditUrl": "https://github.com/wynneceles/ai-boot-animations"
-  },
-  {
    "id": "deepseek-dive",
    "name": "DeepSeek · 深海魔法阵",
    "who": "deepseek",
@@ -130,13 +185,13 @@
    "bundled": false,
    "clip": {
     "start": 0,
-    "fadeAt": 4.85,
-    "end": 5.05,
+    "fadeAt": 2.84,
+    "end": 3.14,
     "subs": [
      [
       "Every depth... I have already seen.",
-      2.25,
-      5.0
+      0.35,
+      3.09
      ]
     ]
    },

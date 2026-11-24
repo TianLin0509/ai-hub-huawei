@@ -17,8 +17,6 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { renameWithRetrySync } = require('./claude-project-trust');
-// 只重试短暂占用（EPERM/EBUSY）；EACCES 是真的没权限，重试只会拖慢报错。
-const RENAME_RETRY_CODES = new Set(['EPERM', 'EBUSY']);
 
 const FILE = 'web-risk.json';
 // Paused, not failed: a site that challenged automation is left alone this long.
@@ -106,7 +104,7 @@ function update(root, fn) {
     fs.writeFileSync(tmp, JSON.stringify(state), 'utf8');
     // Windows：读方（或杀毒扫描）开着 web-risk.json 时覆盖改名会短暂报 EPERM，按全局约定有界重试。
     // 只重试这一份快照、持着写锁，不重跑 fn（否则一次访问或租约会记两遍）。
-    renameWithRetrySync(tmp, file(root), { retries: process.platform === 'win32' ? 20 : 0, retryCodes: RENAME_RETRY_CODES });
+    renameWithRetrySync(tmp, file(root));
     return result;
   } catch (error) {
     failed = true;

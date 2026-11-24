@@ -127,6 +127,11 @@ function bundledCatalog(validate) {
   } catch (_) { return null; }
 }
 
+// 快照里的 DSH 条目（只读版本号给手动安装命令用，不拿它下载，所以不验签）。
+function bundledDsh() {
+  try { return bundledCatalog(raw => raw).components.find(c => c.id === 'dsh') || null; } catch (_) { return null; }
+}
+
 function attemptsText(attempts) {
   return (attempts || []).map(a => `${a.name}：${a.status === 'ok' ? '可用' : a.reason || '失败'}`).join('；');
 }
@@ -269,6 +274,8 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
         if (result.cancelled) throw Object.assign(new Error('已取消'), { cancelled: true });
         const err = new Error(`${component.name}没下载成功（${attemptsText(result.attempts)}）`);
         err.blocked = (result.attempts || []).find(a => a.blocked)?.url || null;
+        err.reasonText = attemptsText(result.attempts);
+        err.componentId = component.id;
         throw err;
       }
       // 下载器边下边算过 sha256；这里只是让界面停在「校验」一下，表示已核对。
@@ -466,7 +473,18 @@ function createCliInstaller({ sources = [], fetchImpl, env = process.env, key, o
           set(id, { phase: stopped ? 'cancelled' : 'error', error: stopped ? null
             : `${error.message}；按你的 npm 配置安装 pi 也没有成功：${String(npmError.stderr || npmError.message).slice(0, 800)}`, blocked: error.blocked || null });
         }
-      } else if (id === 'dsh' && !repair && !cancelled && !/签名|校验不一致|校验没通过|文件大小不对/.test(error.message)) {
+      } else if (id === 'dsh' && !repair && !cancelled && require('../app-update/openx-source').onlyChannel(env)
+        && error.reasonText && error.componentId === 'dsh') {
+        // R37（2026-11-24）：只走公司内源时不落回 npm（公司内部 npm 源缺 DSH 同代插件，会卡到 npm 超时）。
+        // 一行写清原因和能照抄的手动安装命令（版本取自程序自带的组件快照；体检认出缺哪些插件就只补那些）。
+        let diagnosis = null;
+        try { diagnosis = require('../dsh-cli-profile').diagnoseDshRuntime(getDshEntry() || {}, env); } catch (_) {}
+        const ver = (catalog && catalog.components.find(c => c.id === 'dsh') || bundledDsh() || {}).version || '';
+        const cmd = require('./npm-fallback').dshManualCommand({ catalogVersion: ver, diagnosis });
+        set(id, { phase: 'error', blocked: error.blocked || null, manualCommand: cmd,
+          error: `DSH 运行环境 ${ver || ''} 没能从公司内源装上（${error.reasonText || error.message}）。Hub 只从内源下载，不改走 npm；可先在终端手动安装：${cmd}，装好后点「重新检测」` });
+      } else if (id === 'dsh' && !repair && !cancelled && !require('../app-update/openx-source').onlyChannel(env) && !/签名|校验不一致|校验没通过|文件大小不对/.test(error.message)) {
+        // 只有不限内源时才落回 npm；只走内源时 Node 补装失败、DSH 试运行没过等落到最后的 else 照实报原因（R37 审查 #4）。
         try {
           const targetRoot = path.join(root(), 'dsh', 'user-npm');
           const result = await require('./npm-fallback').installDshWithUserNpm({ env, signal, run: npmRun, targetRoot,

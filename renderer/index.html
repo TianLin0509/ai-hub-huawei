@@ -295,7 +295,7 @@
                     <div class="session-tuning-note" id="new-session-company-account-note" role="status" hidden></div>
                     <details class="session-tuning-details" id="new-session-tuning-details" hidden><summary>配置说明</summary><div class="session-tuning-note" id="new-session-tuning-note" hidden></div></details>
                     </section>
-                    <div class="menu-group-label">工作目录</div>
+                    <div class="menu-group-label session-workspace-head"><span>工作目录</span><div class="session-workspace-guard" id="new-session-workspace-guard" hidden><label class="session-workspace-guard-toggle" id="new-session-workspace-guard-field"><input type="checkbox" id="new-session-workspace-guard-input"><span>只允许 AI 改工作目录内的文件</span></label><span class="session-workspace-guard-note" id="new-session-workspace-guard-note" role="status"></span></div></div>
                     <div class="session-workspace-grid" role="radiogroup" aria-label="选择工作目录方式">
                       <button type="button" class="session-workspace-choice selected" data-workspace-mode="default" role="radio" aria-checked="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M9 13h6"/></svg><span><strong>默认工作目录</strong><small>直接开在工作根，跨会话文件互相可见</small></span></button>
                       <button type="button" class="session-workspace-choice" data-workspace-mode="scratch" role="radio" aria-checked="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span><strong>临时目录</strong><small>随机新建一次性目录，与其它任务完全隔离</small></span></button>

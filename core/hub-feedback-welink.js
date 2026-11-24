@@ -131,6 +131,9 @@ const SELF_SEND_REASON = '你就是维护人，本机发给自己会被 WeLink �
 function friendlySendError(reason) {
   if (/not\s+allow\s+to\s+send\s+messages\s+to\s+self/i.test(String(reason || '')))
     return { clientDown: false, selfSend: true, reason: SELF_SEND_REASON };
+  // R32：网关拒收。换过工号（welink-cli 还登着旧账号）最常见；账号对得上时多半是桌面端刚掉线。
+  if (/proxy\s*failed/i.test(String(reason || '')))
+    return { clientDown: false, gateway: true, reason: 'WeLink 服务器拒收了这条消息（proxy failed）。常见原因：welink-cli 还登着旧账号、和电脑上的 WeLink 不是同一个账号（换过工号时会这样），或 WeLink 桌面端刚掉线。可以点「重新登录 WeLink 命令行」后再发，或先复制内容自己发' };
   return CLIENT_DOWN.test(String(reason || ''))
     ? { clientDown: true, reason: '电脑上的 WeLink 没打开或没登录（welink-cli 要靠它发消息）。请打开并登录 WeLink 后再点一次，或者直接点「复制并打开 WeLink」' }
     : { clientDown: false, reason };

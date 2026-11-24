@@ -127,7 +127,7 @@ async function assertNoOtherHubOwner(options,threadId,readSessions=readOtherHubS
     if (options.exclusiveSession && control.sessionExclusiveVersion === 1) { checkedPids.push(pid); continue; }
     const rows=await readSessions(control);
     checkedPids.push(pid);
-    const owner=rows.find(s=>!(options.sharedBroker && s.sharedRuntime===true) && (options.nativeProvider==='claude'
+    const owner=rows.find(s=>(options.nativeProvider==='claude'
       ? (s.kind==='claude'||s.kind==='claude-resume'||s.runtimeBackend==='claude-stream-json') && (s.ccSessionId===threadId||s.id===options.id)
       : (s.kind==='codex'||s.kind==='codex-resume') && (s.codexSid===threadId || s.id===options.id)));
     if(owner) {

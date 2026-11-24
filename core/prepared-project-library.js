@@ -2,7 +2,7 @@
 /**
  * 项目库：Hub 见过的目录里，哪些已经被 project-prep skill 整理成「可开并行群聊」的项目。
  *
- * 判据只有两条，和 renderer/dev-workspace-guard.js 的放行条件一致：
+ * 判据只有两条：
  *   1. `.git` 是**目录**（主工作树）。linked worktree 的 `.git` 是一个文件，
  *      那是 agent 干活用的临时目录，不是项目根 —— 列进去只会让「AI HUB」出现十几个重名项。
  *   2. `.agents/project.json` 存在且能解析。中文名取它的 `name` 字段，没有就用目录名。

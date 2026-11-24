@@ -89,6 +89,7 @@ function planSessionFork({ source, siblingPool = [], meeting = null, rendererTit
   // 分支（含 CodeAgent 截断分支）沿用源会话的权限模式，不悄悄变回完全放开。
   // 分支到群聊的成员没人盯终端，不带（createSession 对群聊成员也会再去掉一次）。
   if (source.permissionMode && source.autonomous !== true && !meeting) opts.permissionMode = source.permissionMode;
+  if (source.workspaceGuard === true && !meeting) opts.workspaceGuard = true;
   if (source.fastMode === false) opts.fastMode = false;
   if (source.codexSpeedTier) opts.codexSpeedTier = source.codexSpeedTier;
   if (typeof source.contextMax === 'number') opts.contextMax = source.contextMax;

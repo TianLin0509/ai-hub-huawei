@@ -274,7 +274,7 @@ test('L2：关闭时运行方式就是保存的值；开启默认 serve、亲手
   assert.match(js, /effectiveCodeagentRunMode\(\) === 'serve'\) opts\.codeagentRunMode = 'serve'/);
   assert.match(js, /const previousExplicit = codeagentRunModeExplicit;/);
   assert.match(js, /if \(!result\?\.ok\) \{ codeagentRunMode = previous; codeagentRunModeExplicit = previousExplicit;/, 'Gemini P2-1 ①');
-  assert.match(js, /window\.__hubLowOverhead\?\.onChange\?\.\(\(\) => \{ try \{ paintRunMode\(\); \}/, 'Gemini P2-1 ②');
+  assert.match(js, /window\.__hubLowOverhead\?\.onChange\?\.\(\(\) => \{ try \{ paintRunMode\(\);[^}]*\}/, 'Gemini P2-1 ②');   // R34 起回调里还会重画工作目录限制
   assert.match(js, /document\.addEventListener\('DOMContentLoaded', subscribeLowOverhead, \{ once: true \}\)/, '本文件先于 renderer.js 加载，等共享状态建好再订阅');
   const policySrc = read('core/low-overhead-policy.js') + read('main/low-overhead-controller.js') + read('renderer/low-overhead-ui.js');
   assert.doesNotMatch(policySrc, /USERPROFILE|HOMEDRIVE|shadow.?home/i, '低开销模式不碰 HOME');

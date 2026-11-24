@@ -19,6 +19,8 @@ function connectionState(data = {}) {
   const auth = data.auth || {}, login = auth.login;
   if (auth.state === 'online' && login?.ok) return { kind: 'online', title: 'WeLink 已连接', detail: '可以查询当前账号可见的工作信息。', action: 'refresh', label: '刷新工作信息' };
   if (auth.state === 'renewing') return { kind: 'renewing', title: '正在维护 WeLink 登录', detail: '正在尝试自动续期，结果会显示在这里。', action: '', label: '' };
+  // R32 换过工号：命令行的账号和 WeLink 桌面端对不上。先清掉旧登录再扫码（login-clean），不能只扫码——旧令牌会被原样续上。
+  if (auth.state === 'account-mismatch') return { kind: 'login', title: (auth.renewCause?.title || 'WeLink 命令行登着的账号和电脑上的 WeLink 不一致') + '，点这里重新登录', detail: auth.renewCause?.text || '先清掉命令行里旧账号的登录，再用手机 WeLink 扫码。', action: 'login-clean', label: '重新登录' };
   if (auth.state === 'signed-out') return { kind: 'login', title: '已退出 WeLink 登录', detail: '你在设置里退出了登录，助理暂停读取 WeLink。需要时扫码重新登录。', action: 'login', label: '扫码登录' };
   if (auth.state === 'needs-scan' || login?.reason === 'expired') return { kind: 'login', title: auth.state === 'needs-scan' ? '自动续期没成功，点这里扫码登录' : '登录 WeLink 后继续', detail: auth.renewCause?.text || '登录已失效或尚未登录，请用 WeLink 扫码确认。', action: 'login', label: '扫码登录' };
   // 认不出登录状态时也给扫码入口（2026-11-06）：以前只有「重新检查」，CLI 一改措辞就没法登录。

@@ -81,6 +81,24 @@
       try { require('electron').clipboard.writeText(lastText); copyBtn.textContent = copyBtn.hasAttribute('data-hf-self') ? '已复制' : '已复制，可以贴到 WeLink 发给维护人'; }
       catch { copyBtn.textContent = '复制失败，请打开上面的文件手动复制'; }
     });
+    // R32：失败提示旁的兜底入口——复制并打开 WeLink、重新登录 WeLink 命令行（清掉旧账号再扫码，二维码在助理页）。
+    const copyOpen = box.querySelector('[data-hf-copyopen]');
+    if (copyOpen) copyOpen.addEventListener('click', event => { event.preventDefault(); void copyOpenWelink(); });
+    const relogin = box.querySelector('[data-hf-relogin]');
+    if (relogin) relogin.addEventListener('click', async event => {
+      event.preventDefault();
+      relogin.disabled = true; relogin.textContent = '正在打开扫码…';
+      try {
+        const r = await ipcRenderer.invoke('company-assistant:login', { clean: true });
+        if (r && r.ok === false) throw new Error(r.error || '没能开始登录');
+        dialog.close();
+        // 交给助理页自己打开登录面板：面板收起过、停在设置页或助理功能没开时也能看到二维码（审查 #3）。
+        window.dispatchEvent(new CustomEvent('hub-pet:open-assistant', { detail: { loginPanel: true } }));
+      } catch (error) {
+        relogin.disabled = false; relogin.textContent = '重新登录';
+        window.__hubToast?.('没能开始重新登录：' + (error?.message || '未知原因') + '。可以到助理页 WeLink 一行点「清除并重新扫码」');
+      }
+    });
     const unblock = box.querySelector('[data-hf-unblock]');
     if (unblock) unblock.addEventListener('click', event => { event.preventDefault(); void ipcRenderer.invoke('net-pass:open-window', unblock.dataset.hfUnblock, { method: 'POST' }).catch(error => window.__hubToast?.('放行页没打开：' + (error?.message || '未知原因'))); });
   }
@@ -104,7 +122,7 @@
     desc.focus();
     if (text) { const at = desc.value.indexOf('（可以在这里补一句'); if (at >= 0) desc.setSelectionRange(at, desc.value.indexOf('）', at) + 1); }
     try {
-      const p = await ipcRenderer.invoke('hub-feedback:preview', { sessionId: window.__hubFeedbackSessionId?.() || null, ...ctx });
+      const p = await ipcRenderer.invoke('hub-feedback:preview', { sessionId: window.__hubFeedbackSessionId?.() || null, description: desc.value, ...ctx });
       if (!contactEdited && !sending && p && typeof p.contact === 'string') dialog.querySelector('[data-hf="contact"]').value = p.contact;
       const items = (p && p.items) || [];
       const diag = await diagnosis();
@@ -139,6 +157,8 @@
     q('wl-send').hidden = !wl.cli;
     q('wl-copy').classList.toggle('primary', !wl.cli);
     paintOutbox(outbox);
+    // R32：打开时就提示账号对不上，不用等点了发送才知道。
+    if (!sending && wl.cli && wl.accountMismatch) message('warn', `WeLink 命令行还登着旧账号 <b>${esc(wl.accountMismatch.cli)}</b>（电脑上的 WeLink 是 ${esc(wl.accountMismatch.client)}），一键发送会被拒收。<button type="button" class="au-btn small primary" data-hf-relogin>重新登录</button><br>也可以直接点「复制并打开 WeLink」自己发。`);
     if (!sending && !wl.cli) message('info', `这台电脑没装 welink-cli，点「复制并打开 WeLink」：内容会复制好并打开 WeLink，搜 <b>${esc(wl.to)}</b> 粘贴（Ctrl+V）发送即可。`);
   }
   function welinkBusy(on, btnName, label) {
@@ -170,7 +190,15 @@
       dialog.querySelector('[data-hf="desc"]').value = '';
       return;
     }
-    message('bad', `没发出去：${esc((r && r.reason) || '未知原因')}<br>可以点「复制并打开 WeLink」，粘贴发给 <b>${esc(wl.to)}</b>。${savedLine(r)}`);
+    // 发送失败一律写清原因，旁边直接给兜底：复制内容 / 复制并打开 WeLink；账号对不上或网关拒收时再给「重新登录」。
+    lastText = (r && r.text) || '';
+    const fallback = `${lastText ? ' <a href="#" data-hf-copy>复制内容</a> ·' : ''} <a href="#" data-hf-copyopen>复制并打开 WeLink</a>（粘贴发给 <b>${esc(wl.to)}</b>）`;
+    if (r && r.accountMismatch) {
+      message('bad', `WeLink 命令行还登着旧账号 <b>${esc(r.accountMismatch.cli)}</b>（电脑上的 WeLink 是 ${esc(r.accountMismatch.client)}），这条反馈发不出去。<button type="button" class="au-btn small primary" data-hf-relogin>重新登录</button><br>不想现在登录：${fallback}${savedLine(r)}`);
+      return;
+    }
+    const relogin = r && r.gateway ? ' <button type="button" class="au-btn small" data-hf-relogin>重新登录 WeLink 命令行</button>' : '';
+    message('bad', `没发出去：${esc((r && r.reason) || '未知原因')}${relogin}<br>改用：${fallback}${savedLine(r)}`);
   }
   async function copyOpenWelink() {
     if (sending) return;

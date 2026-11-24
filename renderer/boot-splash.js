@@ -9,7 +9,7 @@
   let version = '';
   try { version = require('../package.json').version; } catch (_) {}
   const PRODUCT = distribution.productName || 'AI Hub';
-  const TONE = { claude: ['rgba(255,150,70,.9)', '#ffb27a'], codex: ['rgba(90,220,240,.9)', '#8be9f5'], deepseek: ['rgba(110,150,255,.9)', '#9db4ff'], hub: ['rgba(200,210,255,.9)', '#cfd8ff'] };
+  const TONE = { claude: ['rgba(255,150,70,.9)', '#ffb27a'], codex: ['rgba(90,220,240,.9)', '#8be9f5'], deepseek: ['rgba(110,150,255,.9)', '#9db4ff'], gemini: ['rgba(170,140,255,.9)', '#c9b8ff'], hub: ['rgba(200,210,255,.9)', '#cfd8ff'] };
 
   /* ---------------- 播放层 ---------------- */
   const { canvasSize } = require('./boot-splash-draw');
@@ -105,7 +105,8 @@
     const video = el.querySelector('video'), sub = el.querySelector('.boot-splash-sub');
     const glow = (TONE[spec.who] || TONE.hub)[1];
     const logo = '<svg viewBox="0 0 64 56" aria-hidden="true"><rect x="4" y="2" width="56" height="40" rx="12" fill="#fff"/><rect x="12" y="38" width="10" height="14" rx="3" fill="#fff"/><rect x="27" y="38" width="10" height="14" rx="3" fill="#fff"/><rect x="42" y="38" width="10" height="14" rx="3" fill="#fff"/><path d="M17 15l7 7-7 7M47 15l-7 7 7 7" fill="none" stroke="#1d1f26" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-    el.insertAdjacentHTML('beforeend', `<div class="boot-splash-brand" style="--glow:${glow}">${logo}<div><b>${PRODUCT}</b><small>多 AI 协作工作台${version ? ' · v' + version : ''}</small></div></div>`);
+    // 召唤师抽卡这类自带 AI HUB 角标的成片（clip.brand === false）不再叠一个。
+    if (spec.clip?.brand !== false) el.insertAdjacentHTML('beforeend', `<div class="boot-splash-brand" style="--glow:${glow}">${logo}<div><b>${PRODUCT}</b><small>多 AI 协作工作台${version ? ' · v' + version : ''}</small></div></div>`);
     const clip = spec.clip || { start: 0, fadeAt: Infinity, end: Infinity, subs: [] };
     const resize = () => { sub.style.fontSize = Math.max(18, Math.min(el.clientWidth * 0.6 / 17, el.clientHeight * 0.09)) + 'px'; };
     resize(); window.addEventListener('resize', resize); session.clean(() => window.removeEventListener('resize', resize));
@@ -208,7 +209,7 @@
     if (document.getElementById('boot-splash-toast')) return;
     const tip = document.createElement('button');
     tip.type = 'button'; tip.id = 'boot-splash-toast'; tip.className = 'boot-splash-toast';
-    tip.innerHTML = '<b>开场动画可以换</b><span>Claude、Codex、DeepSeek 等 60 多套可选，点这里挑一套 ›</span>';
+    tip.innerHTML = '<b>开场动画可以换</b><span>Claude、Codex、DeepSeek、Gemini 等 70 多套可选，点这里挑一套 ›</span>';
     tip.addEventListener('click', () => { tip.remove(); void openPicker(); });
     document.body.appendChild(tip);
     void markHintSeen();
@@ -217,10 +218,10 @@
 
   /* ---------------- 选择面板 ---------------- */
   // 第一个页签「已下载」：本机已有的（内置的群星 + 三套掌心魔法阵，以及下载过的），打开面板默认停在这里。
-  const TABS = [['mine', '已下载'], ['picks', '作者推荐'], ['hub', '群星'], ['claude', 'Claude'], ['codex', 'Codex'], ['deepseek', 'DeepSeek'], ['settings', '播放设置']];
+  const TABS = [['mine', '已下载'], ['picks', '作者推荐'], ['hub', '群星'], ['claude', 'Claude'], ['codex', 'Codex'], ['deepseek', 'DeepSeek'], ['gemini', 'Gemini'], ['settings', '播放设置']];
   const ANIM_NAME = { soft: '柔光登场', rush: '冲击登场', galaxy: '群星登场', video: '有声视频' };
   const FREQ = [['daily', '每天第一次启动时播放', '默认。一天看一次，之后重启直接进入'], ['always', '每次启动都播放', '约 3 秒，点画面或按 Esc 随时跳过'], ['off', '不播放', '直接进入 Hub']];
-  const WHO_ORDER = { hub: 0, claude: 1, codex: 2, deepseek: 3 };
+  const WHO_ORDER = { hub: 0, claude: 1, codex: 2, deepseek: 3, gemini: 4 };
   const inTab = id => (id === 'picks' ? data.items.filter(i => i.recommend).sort((a, b) => WHO_ORDER[a.who] - WHO_ORDER[b.who])
     : id === 'mine' ? data.items.filter(i => i.installed).sort((a, b) => WHO_ORDER[a.who] - WHO_ORDER[b.who]) : data.items.filter(i => i.who === id).sort((a, b) => (!!b.recommend - !!a.recommend) || ((b.anim === 'video') - (a.anim === 'video'))));
   let dialog = null, data = null, tab = 'mine', message = '', busy = false;
@@ -238,8 +239,8 @@
   function settings() {
     const f = data.preferences.frequency;
     return `<div class="bsp-settings"><h3>什么时候播放</h3>${FREQ.map(([id, name, note]) => `<label class="bsp-radio"><input type="radio" name="bsp-freq" value="${id}" ${f === id ? 'checked' : ''}><span><b>${name}</b><small>${note}</small></span></label>`).join('')}
-      <h3>下载来源</h3><p>按需下载的开场动画从公司内源取；每套 50–150 KB。</p>${require('./download-source-view').slotHtml('boot-splash', 'div')}
-      <h3>关于「原作」开场</h3><p>Claude、Codex 页签里带「原作」的两套，来自 wynneceles 的开源项目 ai-boot-animations（github.com/wynneceles/ai-boot-animations），按 CC BY-NC-ND 4.0 原样收录、带原声，仅供非商业的个人使用；人物为网络流传的同人形象，著作权归原设计者。</p>
+      <h3>下载来源</h3><p>按需下载的开场动画从公司内源取；图片款每套 50–150 KB，有声视频款每套约 2–4 MB。</p>${require('./download-source-view').slotHtml('boot-splash', 'div')}
+      <h3>关于「原作」开场</h3><p>Claude、Codex、Gemini 页签里带「原作」的三套，来自 wynneceles 的开源项目 ai-boot-animations（github.com/wynneceles/ai-boot-animations），按 CC BY-NC-ND 4.0 收录、带原声，截取开机用的 3–4 秒片段，画面不做改动；仅供非商业的个人使用；人物为网络流传的同人形象，著作权归原设计者。</p>
       <div class="bsp-row"><button class="appearance-btn" data-action="check">检查新的开场动画</button><button class="appearance-btn" data-preview="${esc(data.preferences.selected)}">预览当前开场动画</button></div></div>`;
   }
   function render() {
@@ -247,7 +248,7 @@
     const st = data.state || {}, cur = data.items.find(i => i.id === data.preferences.selected);
     const mine = tab === 'mine' || tab === 'picks';
     const list = tab === 'settings' ? settings()
-      : `${tab === 'picks' ? '<p class="bsp-lead">三家的有声开场，带台词和字幕。每家第一个「掌心法阵·有声」约 3 秒，是 Hub 自制；Claude、Codex 的「原作」来自 wynneceles 的 ai-boot-animations（按 CC BY-NC-ND 4.0 原样收录），DeepSeek「深海魔法阵」也是 Hub 自制。</p>' : ''}${tab === 'mine' ? '<p class="bsp-lead">本机已有的开场动画，点图片全屏预览，点「使用」下次启动就播它。更多款式在右边的群星、Claude、Codex、DeepSeek 页签里，一键下载。</p>' : ''}<div class="bsp-grid${mine ? ' mine' : ''}${tab === 'picks' ? ' picks' : ''}">${inTab(tab).map(it => card(it, mine)).join('')}</div>`;
+      : `${tab === 'picks' ? '<p class="bsp-lead">各家的有声开场，带台词和字幕。Claude、Codex、Gemini 的「原作」来自 wynneceles 的 ai-boot-animations（CC BY-NC-ND 4.0）；「召唤师抽卡」「掌心法阵·有声」和 DeepSeek「深海魔法阵」是 Hub 自制。每套 3–4 秒。</p>' : ''}${tab === 'mine' ? '<p class="bsp-lead">本机已有的开场动画，点图片全屏预览，点「使用」下次启动就播它。更多款式在右边的群星、Claude、Codex、DeepSeek、Gemini 页签里，一键下载。</p>' : ''}<div class="bsp-grid${mine ? ' mine' : ''}${tab === 'picks' ? ' picks' : ''}">${inTab(tab).map(it => card(it, mine)).join('')}</div>`;
     const progress = st.activeId ? `<div class="appearance-download">${require('./download-progress-view').html({ ...(st.progress || {}), phase: st.progress && st.progress.total ? 'downloading' : 'connecting' }, { title: '下载开场动画' })}<button class="appearance-btn" data-action="cancel">取消</button></div>` : '';
     const status = st.error ? `<span class="bsp-error" role="alert">${esc(st.error)}</span>` : esc(message);
     dialog.innerHTML = `<div class="appearance-head"><div><strong>开场动画</strong><span>当前：${esc(cur ? cur.name : '群星')} · ${esc((FREQ.find(x => x[0] === data.preferences.frequency) || FREQ[0])[1])}</span></div><button class="appearance-close" data-action="close" aria-label="关闭">×</button></div>

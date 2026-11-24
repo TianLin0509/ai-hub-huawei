@@ -19,6 +19,6 @@ function configureProjectTools(kind,opts,cwd) {
   config.mcpServers={...config.mcpServers,hub_assistant:server};
   const temporary=file+'.'+process.pid+'.tmp';
   fs.writeFileSync(temporary,JSON.stringify(config,null,2),{encoding:'utf8',mode:0o600});
-  require('./atomic-rename').renameRetry(temporary,file);
+  require('../fs-rename-retry').renameSync(temporary,file);
 }
 module.exports={configureProjectTools};

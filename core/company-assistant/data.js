@@ -258,6 +258,13 @@ function replyTargetOf(content) {
 // 真机字段（Q-1018-04、Q-1018-10）：列表在 chatInfo 里；msgId（长整数）、sender（账号，和 auth status 的 UID 同格式）、content、contentType、
 // serverSendTime（毫秒）、at（这条有没有 @ 人）、atAccountList（被点名 @ 的账号；@所有人 时是空数组）。
 // names：账号 → 姓名（真机消息只有账号；私聊对方的姓名从会话列表拿）。自己发的显示「我」。
+// 消息编号比大小：长整数按 BigInt 比，不是纯数字的按字符串比。同一时刻的多条消息靠它排出先后。
+const idCmp = (a, b) => { try { const x = BigInt(a), y = BigInt(b); return x < y ? -1 : x > y ? 1 : 0; } catch { const s = String(a), t = String(b); return s < t ? -1 : s > t ? 1 : 0; } };
+// 同一条消息的两种写法：原样的长整数编号，和被普通 JSON.parse 四舍五入后的编号（R36：分身 v5.6.102 及以前存下的 state.json 里是后者）。
+// 只在其中一个本身就是舍入后的写法时才按舍入比；两个原样编号必须完全相同（相邻消息舍入后可能撞成同一个数）。只认 16 位以上的纯数字。
+const LONG_ID = /^\d{16,}$/;
+const sameMsgKey = (a, b) => { const s = String(a ?? ''), t = String(b ?? ''); return s === t || (LONG_ID.test(s) && LONG_ID.test(t) && (String(Number(s)) === s || String(Number(t)) === t) && Number(s) === Number(t)); };
+
 function messages(raw, conv, me, { myName = '', names = null } = {}) {
   const list = messageRecords(raw) || [];
   return list.map((m, i) => {
@@ -279,7 +286,7 @@ function messages(raw, conv, me, { myName = '', names = null } = {}) {
       displayTime: displayTime(at), timeStatus: time.status === 'known' ? 'known' : 'unknown', timeEvidence: time,
       mentionEvidence: { at: m.at ?? null, atself: atSelf ?? null, atAccountList: atList },
       preview: short(text, 200) || (contentType ? `［非文字消息 · ${contentType}］` : '［消息正文为空］') };
-  }).sort((a, b) => (a.at || 0) - (b.at || 0));
+  }).sort((a, b) => (a.at || 0) - (b.at || 0) || idCmp(a.key, b.key));
 }
 
 function mails(raw) {
@@ -454,4 +461,4 @@ function eventInRange(m, range) {
   return true;
 }
 
-module.exports = { DISPLAY_ZONE, dayKey, clock, displayTime, dateParts, timeValue, toMs, explicitBoolean, listIn, textOf, short, namesOf, messageRecords, conversationRecords, messageId, meetings, isCancelledMeeting, calendarEvents, isCancelledCalendarEvent, conversations, messages, mails, awaiting, reviewAnchor, relatedGroups, sourceIndex, todaysMeetings, unresolvedMeetings, eventTimeUnknown, eventInRange, mergeMeetings };
+module.exports = { idCmp, sameMsgKey, DISPLAY_ZONE, dayKey, clock, displayTime, dateParts, timeValue, toMs, explicitBoolean, listIn, textOf, short, namesOf, messageRecords, conversationRecords, messageId, meetings, isCancelledMeeting, calendarEvents, isCancelledCalendarEvent, conversations, messages, mails, awaiting, reviewAnchor, relatedGroups, sourceIndex, todaysMeetings, unresolvedMeetings, eventTimeUnknown, eventInRange, mergeMeetings };

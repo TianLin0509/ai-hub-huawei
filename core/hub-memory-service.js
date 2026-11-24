@@ -56,7 +56,7 @@ function atomicJSON(file, value) {
     fs.writeFileSync(tmp, JSON.stringify(value, null, 2), "utf8");
     // Windows readers can briefly deny replacement. Bound exceptional waiting
     // to 120 ms; never unlink the last good snapshot to force a replacement.
-    renameWithRetrySync(tmp, file, { retries: 8, retryDelayMs: 15 });
+    renameWithRetrySync(tmp, file);
   } catch (error) {
     try { fs.unlinkSync(tmp); } catch (cleanupError) {
       if (cleanupError.code !== "ENOENT") error.cleanupError = cleanupError;

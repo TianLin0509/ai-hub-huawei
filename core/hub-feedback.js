@@ -23,51 +23,76 @@ const NAMED_LOG_BYTES = 12 * 1024;
 // 出问题时用户在哪（当前会话的类型、正在看的页面、描述里提到的功能）→ 优先带哪些日志。
 // 2026-11-24 WeLink 4 份一键反馈的日志摘录全被助理消息轮询日志占满，DSH、门户、桌宠日志一行没有，描述里也没点名日志。
 // 按日志文件名匹配，logs/ 和 diagnostics/ 两处都找。
+// R37（2026-11-24 v5.6.102 反馈仍是助理轮询日志打头）：补齐分身、助理、PPT、更新、会议室、群聊等场景；
+// 轮询类日志在任何场景下都不算「相关」，一律排在最后、只带最近 2 行。
+// 名字匹配的是 logs/ 里的日志名，以及数据目录里本来就外发的补充证据（app-update/last-result.json、
+// diagnostics/process-lifecycle-*.jsonl、diagnostics/company-model-proxy.log）；不为场景新增外发别的文件。
 const SCENE_LOGS = {
   dsh: /acp|dsh|company-model-proxy|company-proxy/i,
   codex: /codex/i,
   codeagent: /codeagent/i,
   w3: /company-w3/i,
   pet: /pet/i,
+  // 助理（WeLink 消息、公司桥）：查询、执行、公司桥、文件这些非轮询日志
+  assistant: /company-(?:assistant-query|act|bridge|session-care|files|diag|gate)|net-unblock/i,
+  // 分身经助理的 WeLink 收发消息（core/avatar/service.js），logs/ 里没有自己的日志
+  avatar: /avatar|company-(?:assistant-query|act|bridge)/i,
+  ppt: /ppt|ocr/i,
+  update: /^app-update\/|net-unblock|process-lifecycle/i,
+  // AI 群聊（会话 kind=meeting、顶栏「群聊」）在 logs/ 里只写 codeagent-startup-blocks.log（core/group-chat-watcher.js）；
+  // 「会议室」页是公司订会议室，走助理共用的查询日志和放行日志（R37 审查 #5）。
+  meeting: /meeting|room|hub-gate|codeagent-startup-blocks|company-assistant-query|net-unblock/i,
+  group: /group|hub-gate|codeagent-startup-blocks/i,
 };
 const SCENE_LOG_FILES = 4;
 // 轮询类日志隔一会儿就写一行，量大、对排查帮助小：每份最多带 2 行。
 const POLL_LOG = /message-round|message-refresh|company-assistant-welink|heartbeat/i;
 const POLL_LOG_LINES = 2;
+function isPollLog(name) { return POLL_LOG.test(String(name || '')); }
 
 function sceneOfKind(kind) {
   const base = String(kind || '').replace(/-resume$/, '');
   if (base === 'dsh' || base === 'deepseek-acp') return 'dsh';
   if (base === 'codex' || base === 'deepseek') return 'codex';
+  if (base === 'meeting') return 'meeting';
   return base === 'codeagent' ? 'codeagent' : '';
 }
-// 返回相关场景列表，先看页面，再看描述里提到的功能，最后看当前会话类型。
+// 反馈入口所在的页面（renderer currentAppToolbarView 的名字，门户另记）→ 场景。
+const VIEW_SCENES = [[/门户|company-w3/i, 'w3'], [/桌宠|hub-pet/i, 'pet'], [/分身/, 'avatar'], [/助理/, 'assistant'], [/PPT/i, 'ppt'],
+  [/更新|升级/, 'update'], [/会议室/, 'meeting'], [/群聊/, 'group'], [/\bDSH\b/i, 'dsh'], [/CodeAgent/i, 'codeagent']];
+// 描述里提到的功能（含错误卡预填的「出错的功能区」）→ 场景。
+const DESC_SCENES = [[/门户|company-w3/i, 'w3'], [/桌宠/, 'pet'], [/\bDSH\b|公司模型反代/i, 'dsh'], [/\bcodex\b/i, 'codex'], [/CodeAgent/i, 'codeagent'],
+  [/分身/, 'avatar'], [/助理/, 'assistant'], [/PPT/i, 'ppt'], [/一键更新|更新|升级|安装包/, 'update'], [/会议室|会议/, 'meeting'], [/群聊/, 'group']];
+// 发送前追加的「本机 CLI 识别诊断」固定列出 Codex / CodeAgent / DSH，排查会话头写着会话类型：都不是用户说的功能，识别前去掉（R37 审查 #1）。
+const DIAG_HEAD = '## 本机 CLI 识别诊断';
+function userText(description) {
+  let d = String(description || '');
+  const at = d.indexOf(DIAG_HEAD);
+  if (at >= 0) d = d.slice(0, at);
+  return d.replace(/（来自排查会话[^）\n]*）/g, '');
+}
+// 返回相关场景列表，先看页面，再看「出错的功能区」那一行，再看描述其余部分，最后看当前会话类型。
 function feedbackScenes({ kind = '', view = '', description = '' } = {}) {
   const out = [];
   const add = s => { if (s && !out.includes(s)) out.push(s); };
-  const v = String(view || ''), d = String(description || '');
-  if (/门户|company-w3/i.test(v)) add('w3');
-  if (/桌宠|hub-pet/i.test(v)) add('pet');
-  if (/门户|company-w3/i.test(d)) add('w3');
-  if (/桌宠/.test(d)) add('pet');
-  if (/\bDSH\b/i.test(d)) add('dsh');
-  if (/\bcodex\b/i.test(d)) add('codex');
+  const v = String(view || ''), d = userText(description);
+  const area = /出错的功能区[：:]\s*([^\r\n]+)/.exec(d);
+  for (const [re, scene] of VIEW_SCENES) if (re.test(v)) add(scene);
+  if (area) for (const [re, scene] of DESC_SCENES) if (re.test(area[1])) add(scene);
+  for (const [re, scene] of DESC_SCENES) if (re.test(d)) add(scene);
   add(sceneOfKind(kind));
   return out;
 }
-// 日志名命中第几个场景（scenes 已按「页面 > 描述 > 会话」排好），没命中返回 -1。
+// 日志名命中第几个场景（scenes 已按「页面 > 描述 > 会话」排好），没命中或是轮询日志返回 -1。
 function sceneRank(scenes) {
   const res = (Array.isArray(scenes) ? scenes : []).map(s => SCENE_LOGS[s]).filter(Boolean);
-  return name => res.findIndex(re => re.test(String(name || '')));
+  return name => (isPollLog(name) ? -1 : res.findIndex(re => re.test(String(name || ''))));
 }
 function sceneTest(scenes) { const rank = sceneRank(scenes); return name => rank(name) >= 0; }
-// diagnostics/ 只取这两份（写入方已核对：不记对话正文和密钥），其余诊断文件不外发。
-const DIAG_SCENE_FILES = ['company-model-proxy.log', 'codex-runtime-broker.log'];
 // CodeAgent 切模型时存的终端整屏画面（codeagent-model-picker-*.txt）：上半屏可能是用户对话正文，脱敏处理不了，一律不带。
 const PRIVATE_LOG = /^codeagent-model-picker/i;
 // 界面打开反馈时的上下文：开着页面时只报页面，不带后台会话的类型（那个会话和这次问题无关）。
 function feedbackContext({ view = '', kind = '' } = {}) { const v = String(view || ''); return { view: v, kind: v ? '' : String(kind || '') }; }
-const isPollLog = name => POLL_LOG.test(String(name || ''));
 
 const SECRET_RULES = [
   [/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, '$1 <已隐去>'],
@@ -129,15 +154,16 @@ function recentLogs(logsDir, fsModule = fs, { mention = '', scenes = [] } = {}) 
   const said = String(mention || '');
   const named = l => !!said && said.includes(path.basename(l.file));
   const related = sceneTest(scenes);
-  const rank = l => named(l) ? 2 : related(l.name) ? 1 : 0;
+  // 点名 > 场景相关 > 其余 > 轮询类（不管多新都排最后，2026-11-24 R37）
+  const rank = l => named(l) ? 2 : related(l.name) ? 1 : isPollLog(l.name) ? -1 : 0;
   return listLogs(logsDir, '', fsModule, 1).sort((a, b) => (rank(b) - rank(a)) || (b.mtimeMs - a.mtimeMs)).slice(0, MAX_LOG_FILES);
 }
-// 和本次场景相关的日志：logs/ 里的，加上 diagnostics/ 白名单里的（DSH 的 company-model-proxy.log、Codex 的 codex-runtime-broker.log）。
-// 先按场景优先级（页面 > 描述 > 会话），同一场景里新的优先。
+// 和本次场景相关的日志：logs/ 里的，加上数据目录里本来就外发的补充证据（更新结果、生命周期记录、DSH 的 company-model-proxy.log）。
+// 先按场景优先级（页面 > 描述 > 会话），同一场景里新的优先。补充证据保留自己的 kind / 行数 / 字节窗口。
 function sceneLogs({ logsDir, dataDir, scenes = [], fsModule = fs } = {}) {
   if (!scenes.length) return [];
   const rank = sceneRank(scenes);
-  const diag = dataDir ? listLogs(path.join(dataDir, 'diagnostics'), 'diagnostics/', fsModule, 0).filter(l => DIAG_SCENE_FILES.includes(path.basename(l.file))) : [];
+  const diag = dataDir ? extraSources(dataDir, fsModule) : [];
   const rows = [...(logsDir ? listLogs(logsDir, '', fsModule, 1) : []), ...diag].map(l => ({ ...l, rank: rank(l.name) })).filter(l => l.rank >= 0);
   return rows.sort((a, b) => (a.rank - b.rank) || (b.mtimeMs - a.mtimeMs)).slice(0, SCENE_LOG_FILES);
 }
@@ -228,8 +254,7 @@ function collectBundle({ info = {}, description = '', contact = '', logsDir, dat
   const said = String(description || '');
   const isNamed = l => !!said && said.includes(path.basename(l.file));
   // 公司模型诊断保留原来的 32 KB 窗口和标题：里面有 8~12 KB 的单行探测记录，窗口小了会被当半行丢掉。
-  const lead = l => l.name === 'diagnostics/company-model-proxy.log' ? { ...l, kind: 'company-proxy', lines: 40, bytes: 32 * 1024 }
-    : { ...l, kind: 'log', lines: isPollLog(l.name) ? POLL_LOG_LINES : NAMED_LOG_LINES, bytes: NAMED_LOG_BYTES };
+  const lead = l => l.kind ? l : { ...l, kind: 'log', lines: isPollLog(l.name) ? POLL_LOG_LINES : NAMED_LOG_LINES, bytes: NAMED_LOG_BYTES };
   const seen = new Set();
   const sources = [
     ...logs.filter(isNamed).map(lead),
@@ -263,4 +288,4 @@ function collectBundle({ info = {}, description = '', contact = '', logsDir, dat
   return { text, items, chars: text.length, bytes: byteLen(text), trimmedLines, summary: String(description || '').trim().split(/\r?\n/)[0].slice(0, 120) };
 }
 
-module.exports = { collectBundle, redact, recentLogs, sceneLogs, feedbackScenes, feedbackContext, isPollLog, tailLines, fitTail, MAX_TOTAL_BYTES, MAX_TOTAL_CHARS, POLL_LOG_LINES };
+module.exports = { collectBundle, redact, recentLogs, sceneLogs, feedbackScenes, feedbackContext, isPollLog, SCENE_LOGS, tailLines, fitTail, MAX_TOTAL_BYTES, MAX_TOTAL_CHARS, POLL_LOG_LINES };
