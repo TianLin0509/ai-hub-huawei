@@ -21,7 +21,8 @@ const DEFAULT_DOMAIN = new URL('https://agent.huawei.com/').hostname.split('.').
 // 合作方员工的邮箱域名（2026-11-20 反馈：5.6.65 两个考勤页都报 ERR_NAME_NOT_RESOLVED）：邮箱挂在合作方域名下，
 // 但考勤、论坛、门户这些内网站点只在公司主域名下。公司电脑实测：hr.<合作方域名> 解析不到，hr.<主域名> 正常。
 // 按邮箱推出这类域名时一律换成主域名；用户手填的也照此纠正（以前存下的错值不用再去设置里改）。
-const PARTNER_MAIL = new Set(['h-partners.com']);
+// 2026-11-24 反馈：子公司员工邮箱在 hisilicon.com 下，门户被拼成 w3.hisilicon.com 打不开；同样换成主域名。
+const PARTNER_MAIL = new Set(['h-partners.com', 'hisilicon.com']);
 function siteDomain(d) { const n = normalizeDomain(d); return n && DEFAULT_DOMAIN && PARTNER_MAIL.has(n) ? DEFAULT_DOMAIN : n; }
 
 function readJson(file, fallback) { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } }

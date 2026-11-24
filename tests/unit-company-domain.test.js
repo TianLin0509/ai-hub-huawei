@@ -85,3 +85,10 @@ test('考勤地址解析不到：不来回换页，说清是没连内网还是�
   assert.doesNotMatch(e.error, /ERR_NAME|loading|https?:/);
   assert.equal(urls.length, 2);                           // 两个考勤页各试一次
 });
+
+test('子公司邮箱域名（hisilicon.com）也换成主域名，旧缓存与手填值一并纠正', () => {
+  assert.ok(D.PARTNER_MAIL.has('hisilicon.com'));
+  const sub = 'hisilicon.com';
+  assert.equal(D.companyDomainOf(['someone', sub].join('@')), D.DEFAULT_DOMAIN);
+  assert.equal(D.siteDomain('HiSilicon.com'), D.DEFAULT_DOMAIN);
+});
