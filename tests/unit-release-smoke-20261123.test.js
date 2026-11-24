@@ -116,3 +116,47 @@ test('等 CDP 时 Hub 已退出就立刻放弃，不等满超时', async () => {
   assert.equal(await _waitForCDP(1, 90000, () => true), null);
   assert.ok(Date.now() - t < 1000);
 });
+
+// ---- 2026-11-24 首班实测修复：预检同步阻塞时不再把已通过的路径误判超时 ----
+test('发版进程被同步预检卡住时，独立调度子进程照常计时，已通过的路径不被误判超时；调度跑在低优先级', async () => {
+  const entry = fixture();
+  const wrapper = path.join(entry, 'sched.js');
+  // 替身调度：用真 runSmoke 跑一条 3 秒超时的路径，参数格式和 release-smoke.js 命令行一致
+  fs.writeFileSync(wrapper, `const s=require(${JSON.stringify(path.resolve(__dirname, '../scripts/release-smoke'))});
+const dir=process.argv[process.argv.indexOf('--out')+1];
+s.runSmoke({entry:${JSON.stringify(entry)},dir,paths:[{id:'pass',name:'直接通过',script:'tests/pass.js',timeoutMs:3000}],findLeftovers:async()=>[]}).promise.then(r=>process.exitCode=r.ok?0:1);`);
+  const { runSmokeDetached } = require('../scripts/release-smoke');
+  const run = runSmokeDetached({ entry, dir: path.join(entry, 'run-detached'), script: wrapper });
+  if (process.platform === 'win32') assert.equal(os.getPriority(run.pid), os.constants.priority.PRIORITY_BELOW_NORMAL);
+  const until = Date.now() + 5000; while (Date.now() < until) { /* 模拟预检同步执行 5 秒，超过路径超时 */ }
+  const summary = await run.promise;
+  assert.equal(summary.ok, true, JSON.stringify(summary));
+  assert.equal(summary.results[0].attempts.length, 1);
+  assert.equal(summary.results[0].attempts[0].timedOut, false);
+});
+
+test('调度子进程没写出汇总就退出：判失败并指明调度日志；中途打断会结束调度子进程', async () => {
+  const entry = fixture();
+  const { runSmokeDetached } = require('../scripts/release-smoke');
+  const crash = path.join(entry, 'crash.js'); fs.writeFileSync(crash, 'process.exit(3)');
+  const bad = await runSmokeDetached({ entry, dir: path.join(entry, 'run-crash'), script: crash }).promise;
+  assert.equal(bad.ok, false);
+  assert.match(describe(bad), /冒烟调度进程异常结束.*release-smoke-scheduler\.log/);
+  const hang = path.join(entry, 'hang-sched.js'); fs.writeFileSync(hang, 'setTimeout(()=>{},60000)');
+  const run = runSmokeDetached({ entry, dir: path.join(entry, 'run-abort'), script: hang });
+  const t = Date.now();
+  run.abort();
+  assert.equal((await run.promise).ok, false);
+  assert.ok(Date.now() - t < 10000);
+});
+
+test('超时时区分「步骤都过了只是不退出」与「卡在某一步」，两种都判失败', () => {
+  const { looksPassed } = require('../scripts/release-smoke');
+  assert.equal(looksPassed('PASS 1 首页\nPASS 4 问问 Hub\n{"ok":true}'), true);
+  assert.equal(looksPassed('E2E group-enter-send: PASS'), true);
+  assert.equal(looksPassed('PASS 1 首页\nFAIL 3 新建普通会话'), false);
+  assert.equal(looksPassed('等待 CDP…'), false);
+  const mk = exitStuck => ({ dir: 'x', seconds: 1, ok: false, results: [{ name: '核心', ok: false, attempts: [{ ok: false, timedOut: true, exitStuck, seconds: 420, log: 'l', out: 'o', tmp: 't', tail: '' }] }] });
+  assert.match(describe(mk(true)), /步骤都过了，但 420 秒内进程没退出/);
+  assert.match(describe(mk(false)), /✗ 核心（420s，超时/);
+});

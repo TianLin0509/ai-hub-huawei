@@ -10,7 +10,7 @@
 //   node scripts/release-smoke.js --list          列出路径
 //   HUB_SMOKE_ENTRY=<另一份代码目录>              对另一份代码跑（默认本仓库）
 //
-// 发版时由 scripts/member-release.js 调用（runSmoke），不过就不发车、版本号不占用。
+// 发版时由 scripts/member-release.js 调用（runSmokeDetached：独立低优先级子进程），不过就不发车、版本号不占用。
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -18,15 +18,18 @@ const { spawn, execFile, execFileSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '..');
 
+// 单条路径的超时。正常 20～70 秒跑完；发版时和预检抢 CPU 会慢几倍，放宽到 7 分钟只拦真卡死。
+const STEP_TIMEOUT_MS = 420000;
+
 // name 是给人看的路径名；script 相对代码根目录；outEnv / outArg 指明该脚本把截图日志写到哪（统一引到本次运行目录，不写进仓库）。
 const PATHS = [
-  { id: 'core', name: '首页出来、设置页能开、新建普通会话回车发出、问问 Hub 发问', script: 'tests/e2e-release-smoke-core-cdp.js', outEnv: 'HUB_E2E_ARTIFACT_DIR', timeoutMs: 180000 },
-  { id: 'group-enter', name: '群聊回车发送、换行与提取回答', script: 'tests/e2e-group-enter-send-cdp.js', outEnv: 'HUB_ENTER_E2E_OUT', timeoutMs: 180000 },
-  { id: 'home-composer', name: '主页建群聊并发言、单会话输入框发送与长消息编辑', script: 'tests/e2e-home-mid-composer-cdp.js', outArg: '--out', timeoutMs: 180000 },
-  { id: 'boot-splash', name: '启动画面播放、跳过与重启后照常进入', script: 'tests/e2e-boot-splash-cdp.js', outEnv: 'HUB_E2E_ARTIFACT_DIR', timeoutMs: 240000 },
-  { id: 'first-run', name: '全新用户第一次打开：准备页自动进入主页，第二次不再等', script: 'tests/e2e-first-run-prep-cdp.js', outEnv: 'HUB_E2E_ARTIFACT_DIR', timeoutMs: 180000 },
-  { id: 'session-restart', name: '右键重启会话后聊天框和左栏还在、仍停在该会话', script: 'tests/e2e-session-restart-ui-cdp.js', outEnv: 'HUB_E2E_ARTIFACT_DIR', timeoutMs: 180000 },
-  { id: 'crash-recovery', name: '界面进程崩了自动重新载入、会话还在', script: 'tests/e2e-renderer-crash-recovery-cdp.js', outEnv: 'HUB_E2E_ARTIFACT_DIR', timeoutMs: 180000 },
+  { id: 'core', name: '首页出来、设置页能开、新建普通会话回车发出、问问 Hub 发问', script: 'tests/e2e-release-smoke-core-cdp.js', outEnv: 'HUB_E2E_ARTIFACT_DIR', timeoutMs: STEP_TIMEOUT_MS },
+  { id: 'group-enter', name: '群聊回车发送、换行与提取回答', script: 'tests/e2e-group-enter-send-cdp.js', outEnv: 'HUB_ENTER_E2E_OUT', timeoutMs: STEP_TIMEOUT_MS },
+  { id: 'home-composer', name: '主页建群聊并发言、单会话输入框发送与长消息编辑', script: 'tests/e2e-home-mid-composer-cdp.js', outArg: '--out', timeoutMs: STEP_TIMEOUT_MS },
+  { id: 'boot-splash', name: '启动画面播放、跳过与重启后照常进入', script: 'tests/e2e-boot-splash-cdp.js', outEnv: 'HUB_E2E_ARTIFACT_DIR', timeoutMs: STEP_TIMEOUT_MS },
+  { id: 'first-run', name: '全新用户第一次打开：准备页自动进入主页，第二次不再等', script: 'tests/e2e-first-run-prep-cdp.js', outEnv: 'HUB_E2E_ARTIFACT_DIR', timeoutMs: STEP_TIMEOUT_MS },
+  { id: 'session-restart', name: '右键重启会话后聊天框和左栏还在、仍停在该会话', script: 'tests/e2e-session-restart-ui-cdp.js', outEnv: 'HUB_E2E_ARTIFACT_DIR', timeoutMs: STEP_TIMEOUT_MS },
+  { id: 'crash-recovery', name: '界面进程崩了自动重新载入、会话还在', script: 'tests/e2e-renderer-crash-recovery-cdp.js', outEnv: 'HUB_E2E_ARTIFACT_DIR', timeoutMs: STEP_TIMEOUT_MS },
 ];
 
 function stamp(d = new Date()) {
@@ -73,6 +76,11 @@ async function checkTeardown(tmp, find, kill, pauseMs = 2000) {
   return { checked: true, leftovers: left };
 }
 
+// 各 e2e 脚本的收尾行不统一：有 PASS 行、没有 FAIL，或末尾 JSON 带 "ok":true，就算步骤都过了
+function looksPassed(tail) {
+  return !/\bFAIL\b|"ok"\s*:\s*false/.test(tail) && /\bPASS\b|"ok"\s*:\s*true/.test(tail);
+}
+
 function runOnce(p, { entry, dir, attempt, children, find = findLeftovers, kill = killTree, pauseMs }) {
   const out = path.join(dir, `${p.id}-${attempt}`);
   fs.mkdirSync(out, { recursive: true });
@@ -102,7 +110,9 @@ function runOnce(p, { entry, dir, attempt, children, find = findLeftovers, kill 
       let tail = '';
       try { tail = fs.readFileSync(log, 'utf8').split(/\r?\n/).filter(Boolean).slice(-6).join('\n'); } catch { /* 没日志 */ }
       if (dirty) tail += `\n[冒烟调度] 测试结束后还有 ${teardown.leftovers.length} 个进程没收干净（PID ${teardown.leftovers.join(',')}），已结束，按失败计`;
-      resolve({ ok: !timedOut && code === 0 && !dirty, code, timedOut, teardown, error: error && error.message,
+      // 超时时区分「步骤都 PASS 了、只是进程不退出」和「卡在某一步」，只影响提示，两种都判失败
+      const exitStuck = timedOut && looksPassed(tail);
+      resolve({ ok: !timedOut && code === 0 && !dirty, code, timedOut, exitStuck, teardown, error: error && error.message,
         seconds: Math.round((Date.now() - started) / 1000), log, out, tmp, tail });
     };
     child.on('error', error => { void done(null, error); });
@@ -150,6 +160,42 @@ function runSmoke({ entry = process.env.HUB_SMOKE_ENTRY || ROOT, only = null, jo
   return { promise, abort, dir };
 }
 
+// 发版用：调度放进独立的低优先级子进程跑。
+// 2026-11-24 首班实测：调度和预检同在发版进程里，预检同步执行约 4 分钟，期间事件循环停摆——
+// core 等 3 条 22～35 秒就全部 PASS 并退出，调度却要等预检结束才收到退出事件，计时器又先触发，被误判超时，重跑后总时长 353 秒。
+// 子进程有自己的事件循环，计时和收尾检查都按真实时间走；低优先级（Windows 下其后代 Electron 一并继承）让预检先用 CPU。
+function runSmokeDetached({ entry = ROOT, jobs = 3, dir = null, lowPriority = true, script = __filename } = {}) {
+  dir = path.resolve(dir || path.join(os.tmpdir(), `${stamp()}-hub-release-smoke`));
+  fs.mkdirSync(dir, { recursive: true });
+  // 各路径的隔离临时目录都建在这个短目录下（子进程的 TEMP），中途打断时整个删掉
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'hsr-'));
+  const fd = fs.openSync(path.join(dir, 'release-smoke-scheduler.log'), 'w');
+  const child = spawn(process.execPath, [script, '--out', dir, '--jobs', String(jobs)],
+    { cwd: entry, env: { ...process.env, HUB_SMOKE_ENTRY: entry, TEMP: tmpRoot, TMP: tmpRoot }, stdio: ['ignore', fd, fd], windowsHide: true });
+  fs.closeSync(fd);
+  if (lowPriority) { try { os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch { /* 调不了优先级就按普通跑 */ } }
+  let ended = false;
+  const promise = new Promise(resolve => {
+    const finish = error => {
+      if (ended) return;
+      ended = true;
+      let summary = null;
+      try { summary = JSON.parse(fs.readFileSync(path.join(dir, 'release-smoke-summary.json'), 'utf8')); } catch { /* 没写出汇总 */ }
+      if (!summary) summary = { ok: false, entry, dir, seconds: 0, results: [], error: `冒烟调度进程异常结束（${error ? error.message : '没有写出汇总'}），日志 ${path.join(dir, 'release-smoke-scheduler.log')}` };
+      try { fs.rmdirSync(tmpRoot); } catch { /* 有失败路径的数据留着排查 */ }
+      resolve(summary);
+    };
+    child.on('error', finish);
+    child.on('exit', () => finish());
+  });
+  const abort = () => {
+    if (ended) return;
+    killTree(child.pid);
+    try { fs.rmSync(tmpRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }); } catch { /* 文件仍被占用 */ }
+  };
+  return { promise, abort, dir, pid: child.pid };
+}
+
 function describe(summary) {
   const lines = [];
   for (const r of summary.results) {
@@ -157,13 +203,14 @@ function describe(summary) {
     const secs = r.attempts.map(a => a.seconds + 's').join(' + ');
     if (r.ok) lines.push(`  ✓ ${r.name}（${secs}${r.flaky ? '，首次失败、重跑通过' : ''}）`);
     else {
-      const why = last.timedOut ? '超时' : last.code !== 0 ? '退出码 ' + last.code : '测试 Hub 没收干净';
+      const why = last.exitStuck ? `步骤都过了，但 ${Math.round(STEP_TIMEOUT_MS / 1000)} 秒内进程没退出` : last.timedOut ? '超时' : last.code !== 0 ? '退出码 ' + last.code : '测试 Hub 没收干净';
       lines.push(`  ✗ ${r.name}（${secs}，${why}，重跑仍失败）`);
       lines.push(`      日志：${last.log}`);
       lines.push(`      截图：${last.out}；隔离 Hub 数据：${last.tmp}`);
       if (last.tail) lines.push(...last.tail.split('\n').map(l => '      | ' + l.slice(0, 240)));
     }
   }
+  if (summary.error) lines.push('  ✗ ' + summary.error);
   lines.push(`冒烟${summary.ok ? '全部通过' : '没通过'}：${summary.results.filter(r => r.ok).length}/${summary.results.length} 条路径，用时 ${summary.seconds} 秒，记录 ${path.join(summary.dir, 'release-smoke-summary.json')}`);
   return lines.join('\n');
 }
@@ -187,5 +234,5 @@ async function main() {
   process.exitCode = summary.ok ? 0 : 1;
 }
 
-module.exports = { PATHS, runSmoke, describe, findLeftovers, checkTeardown };
+module.exports = { PATHS, STEP_TIMEOUT_MS, runSmoke, runSmokeDetached, describe, looksPassed, findLeftovers, checkTeardown };
 if (require.main === module) main().catch(error => { console.error(error.stack || error.message); process.exitCode = 1; });

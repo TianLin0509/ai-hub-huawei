@@ -2,6 +2,7 @@
 // 会话卡片里的图片与 mermaid 图（反馈 24156241）：地址分类、本地图片限工作目录、mermaid 尺寸、网络图片取回。
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { holdEventLoop } = require('./helpers/hold-event-loop');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -180,7 +181,8 @@ test('Electron 一跳 fetch：跳转返回 3xx 与 location，不带 Cookie', as
   assert.equal(netApi.made[0].opts.redirect, 'manual'); assert.equal(netApi.made[0].opts.useSessionCookies, false);
 });
 
-test('Electron 一跳 fetch：超时时正在读的正文立即失败，请求被中止', async () => {
+test('Electron 一跳 fetch：超时时正在读的正文立即失败，请求被中止', async t => {
+  holdEventLoop(t);
   const netApi = fakeNet(req => {
     const res = fakeIncoming(200, { 'content-type': 'image/png' });
     req.emit('response', res); res.emit('data', Buffer.from([1, 2, 3])); // 之后再也不来数据

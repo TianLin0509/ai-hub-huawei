@@ -59,11 +59,9 @@
     "releasePage": "https://github.com/TianLin0509/ai-hub-huawei/releases"
   },
   "releaseNotes": [
-    "资源页可以看到从 AI 市场下载的 MCP，并能在 Hub 里开关（新开或重启会话生效）",
-    "小队里标出哪些成员能看图；把图片发给看不了图的成员时会提示",
-    "启动中心新增 CodeAgent-Lite 省内存入口"
+    "修复 Windows 进程收纳盒在慢机或杀毒扫描下的冷启动超时与重复编译，并避免共享 serve 退出时重复关盒"
   ],
-  "version": "5.6.97",
+  "version": "5.6.98",
   "upstreamVersion": "1.6.738",
   "upstreamCommit": "1762c396eee7fbfddee828a786db8ed2fba76004",
   "upstreamDirty": false

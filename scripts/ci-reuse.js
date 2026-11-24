@@ -4,6 +4,8 @@
 // - 若某个已成功的 CI 运行测过的提交是当前提交的祖先，且两者之间只改了发版文件（版本号、发布说明、安装文档），
 //   就复用那次的测试结果：分支/PR 运行直接跳过重活；标签运行只做打包、装机冒烟和发布。
 // 只看 GitHub 上真实成功的运行，不读任何本地记录；查不到或出错就照常完整验证。
+// 只复用 Node 版本相同的运行（2026-11-24）：CI 的 Node 由仓库根 .node-version 决定，那次运行所测提交里的该文件与当前不同就不复用；
+// 曾有 Node 22 上必现的 21 项取消，被 Node 24 时代的结果复用掩盖。
 const { execFileSync } = require('child_process');
 const fs = require('fs');
 
@@ -35,7 +37,7 @@ function modeFor(eventName, ref) {
   return eventName === 'push' ? 'quick' : 'full';
 }
 
-// runs: [{ id, headSha, event, status, conclusion, isTag, quick }]；git: { isAncestor(a,b), diffs(a,b) }
+// runs: [{ id, headSha, event, status, conclusion, isTag, quick }]；git: { isAncestor(a,b), diffs(a,b), nodeVersion(sha) }
 // mode 不是 quick 时，quick 运行没跑端到端和公开版测试，不能拿来复用。
 function decide({ head, isTag, currentRunId, runs, git, mode = isTag ? 'release' : 'quick' }) {
   // 2026-11-09：测试只在打标签前跑一次（发版脚本的本机预检），标签构建只打包、装机冒烟和发布。
@@ -51,6 +53,7 @@ function decide({ head, isTag, currentRunId, runs, git, mode = isTag ? 'release'
     if (r.id === currentRunId || r.status !== 'completed' || r.conclusion !== 'success') continue;
     if (mode !== 'quick' && r.quick) continue;
     if (distrusted.has(r.headSha)) continue;
+    if (git.nodeVersion && git.nodeVersion(r.headSha) !== git.nodeVersion(head)) continue;
     if (r.headSha !== head && !git.isAncestor(r.headSha, head)) continue;
     const check = r.headSha === head ? { ok: true } : onlyReleaseChanges(git.diffs(r.headSha, head));
     if (!check.ok) continue;
@@ -89,6 +92,9 @@ function main() {
       isAncestor(a, b) {
         try { sh('git', ['cat-file', '-e', a + '^{commit}']); } catch { return false; }
         try { sh('git', ['merge-base', '--is-ancestor', a, b]); return true; } catch { return false; }
+      },
+      nodeVersion(sha) {
+        try { return sh('git', ['show', `${sha}:.node-version`]).trim(); } catch { return ''; }
       },
       diffs(a, b) {
         const out = {};

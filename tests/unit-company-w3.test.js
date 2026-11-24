@@ -1,6 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { holdEventLoop } = require('./helpers/hold-event-loop');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -280,7 +281,8 @@ test('审查回归：取数途中关掉功能——取消取数，结果不写�
   assert.equal(bus.latest(5).length, 0);
 });
 
-test('审查回归：Edge 启动失败只报这次失败，不抛出到 Hub', async () => {
+test('审查回归：Edge 启动失败只报这次失败，不抛出到 Hub', async t => {
+  holdEventLoop(t);
   const { runInEdge } = require('../main/company-edge-capture');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'w3-fake-edge-'));
   const exe = path.join(root, 'Microsoft', 'Edge', 'Application');

@@ -57,8 +57,8 @@ class ServeHost extends EventEmitter {
     if (jobKey) this.jobKey = jobKey;
     proc.once('exit', () => {
       exited = true;
-      // 根进程退出：结束这一代的盒子，收掉脱离父进程的 bun / MCP 子进程。
-      if (jobKey) this._endJob(jobKey);
+      // 根进程退出：结束这一代的盒子，收掉脱离父进程的 bun / MCP 子进程（stop/restart 已结束过则不再重复调）。
+      if (jobKey && this.jobKey === jobKey) this._endJob(jobKey);
       if (this.proc !== proc) return;
       this.proc = null;
       if (!this.stopped) this.emit('exit', new Error('CodeAgent serve 已退出'));
@@ -71,7 +71,7 @@ class ServeHost extends EventEmitter {
       await new Promise(resolve => setTimeout(resolve, 250));
     }
     if (this.proc === proc) this.proc = null;
-    await this._endJob(jobKey, JOB_END_WAIT_MS);
+    if (jobKey && this.jobKey === jobKey) await this._endJob(jobKey, JOB_END_WAIT_MS);
     if (!exited) await serve.killTree(proc.pid);
     throw new Error(spawnError ? `启动 CodeAgent serve 失败：${spawnError}` : 'CodeAgent serve 未能就绪');
   }

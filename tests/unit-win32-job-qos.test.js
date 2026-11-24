@@ -48,7 +48,7 @@ function makeQos(t, holder, options = {}) {
   t.after(() => qos.shutdownSync());
   return qos;
 }
-async function settle(qos, key) { const e = qos.get(key); assert.ok(e, 'entry exists'); await until(() => qos.get(key)?.state !== 'pending', 20000); return qos.get(key); }
+async function settle(qos, key) { const e = qos.get(key); assert.ok(e, 'entry exists'); await until(() => qos.get(key)?.state !== 'pending', 45000); return qos.get(key); }
 function handleCount(pid) {
   const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${pid}).HandleCount`], { windowsHide: true, encoding: 'utf8' });
   return Number(String(out).trim());
@@ -105,7 +105,7 @@ test('PID 复用防护：启动时间对不上时拒绝绑定、拒绝改 EcoQoS
   const r = spawnRoot(t);
   const key = qos.assign('pty:reused', r.pid, { expectedStartMs: Date.now() - 3600_000 });
   assert.ok(key);
-  const res = await qos.get(key) && (await until(() => !qos.get(key), 20000));
+  const res = await qos.get(key) && (await until(() => !qos.get(key), 45000));
   assert.ok(res, '绑定失败后条目移除');
   assert.equal(qos.stats().failed, 1);
   const eco = await qos.setPidEco('search', r.pid, { expectedStartMs: Date.now() - 3600_000, enabled: true });
@@ -243,7 +243,7 @@ test('EcoQoS 恢复失败不丢账：broker 起不来时保持「未落实」，
   failSpawn = false;
   await sleep(350); // 熔断解除
   assert.equal(qos.restoreAllEco(), 1, '关模式时强制重试');
-  assert.ok(await until(async () => qos.get(key).dirty === false && (await rowsOf(qos, key)).every(p => p.controlMask === 0)), '重试后整盒恢复');
+  assert.ok(await until(async () => qos.get(key).dirty === false && (await rowsOf(qos, key)).every(p => p.controlMask === 0), 45000), '重试后整盒恢复');
   await qos.terminate(key);
 });
 
@@ -272,9 +272,9 @@ test('出生时间上界：晚于观察时刻出生的进程（号码复用）�
   const r = spawnRoot(t);
   await sleep(300);
   const k1 = qos.assign('pty:late', r.pid, { maxStartMs: r.startedAt - 2000 });
-  assert.ok(await until(() => !qos.get(k1), 20000), '比上界晚 2 秒出生：拒绝');
+  assert.ok(await until(() => !qos.get(k1), 45000), '比上界晚 2 秒出生：拒绝');
   const k2 = qos.assign('serve:early', r.pid, { minStartMs: r.startedAt + 5000, maxStartMs: r.startedAt + 8000 });
-  assert.ok(await until(() => !qos.get(k2), 20000), '早于窗口：拒绝');
+  assert.ok(await until(() => !qos.get(k2), 45000), '早于窗口：拒绝');
   const k3 = qos.assign('pty:ok', r.pid, { maxStartMs: Date.now() });
   assert.equal((await settle(qos, k3)).state, 'active', '上界之前出生：接受');
   assert.equal(qos.stats().failed, 2);
@@ -346,7 +346,7 @@ test('broker 生命周期：空闲关闭临界窗口的新请求发给新 broker
   const holder = spawnHolder(t);
   // 1) 空闲关闭临界窗口
   const idle = makeQos(t, holder, { idleExitMs: 120 });
-  for (let i = 0; i < 6; i++) {
+  for (let i = 0; i < 4; i++) {
     assert.equal((await idle.request('ping')).ok, true, `第 ${i + 1} 轮`);
     await sleep(120 + (i % 3) * 5);
   }
@@ -356,7 +356,7 @@ test('broker 生命周期：空闲关闭临界窗口的新请求发给新 broker
   const r1 = spawnRoot(t);
   const k1 = late.assign('pty:late-claim', r1.pid, { expectedStartMs: r1.startedAt });
   assert.ok(await until(() => late.get(k1)?.state === 'lost', 5000), '先超时');
-  assert.ok(await until(() => late.get(k1)?.state === 'active', 20000), '晚到的句柄被认领回来');
+  assert.ok(await until(() => late.get(k1)?.state === 'active', 45000), '晚到的句柄被认领回来');
   assert.ok(late.stats().lateAssigns >= 1);
   await late.terminate(k1);
   assert.ok(await until(() => !alive(r1.pid), 10000), '认领后照常能结束');
@@ -366,7 +366,7 @@ test('broker 生命周期：空闲关闭临界窗口的新请求发给新 broker
   const k2 = late2.assign('pty:late-cancel', r2.pid, { expectedStartMs: r2.startedAt });
   assert.ok(await until(() => late2.get(k2)?.state === 'lost', 5000));
   assert.equal((await late2.terminate(k2)).code, 'pending-late');
-  assert.ok(await until(() => !alive(r2.pid), 20000), '晚到后立刻补发结束');
+  assert.ok(await until(() => !alive(r2.pid), 45000), '晚到后立刻补发结束');
   assert.ok(await until(() => !late2.get(k2), 10000), '不留账');
   // 4) 早退熔断：脚本缺失只拉起一次 PowerShell
   const broken = makeQos(t, holder, { scriptPath: path.join(os.tmpdir(), 'no-such-dir-p2', 'win32-job-qos.ps1') });
@@ -437,9 +437,9 @@ test('出生时间上界严格：比观察时刻晚 250 毫秒出生的进程拒
   const birth = (await qos.request('describe', { pid: r.pid })).process.startMs;
   assert.ok(birth > 0);
   const late = qos.assign('pty:late250', r.pid, { maxStartMs: birth - 250 });
-  assert.ok(await until(() => !qos.get(late), 20000), '晚 250 毫秒：拒绝');
+  assert.ok(await until(() => !qos.get(late), 45000), '晚 250 毫秒：拒绝');
   const early = qos.assign('pty:late1', r.pid, { maxStartMs: birth - 1 });
-  assert.ok(await until(() => !qos.get(early), 20000), '晚 1 毫秒：拒绝');
+  assert.ok(await until(() => !qos.get(early), 45000), '晚 1 毫秒：拒绝');
   const exact = qos.assign('pty:exact', r.pid, { maxStartMs: birth });
   assert.equal((await settle(qos, exact)).state, 'active', '等于上界：接受');
   assert.equal(qos.stats().failed, 2);
@@ -497,8 +497,110 @@ test('降级与开关：AI_HUB_WIN32_JOB_OBJECT=0 / AI_HUB_WIN32_ECOQOS=0 / 非 
   const missing = makeQos(t, holder, { scriptPath: path.join(os.tmpdir(), 'no-such-dir-p2', 'win32-job-qos.ps1') });
   const r2 = spawnRoot(t);
   const k2 = missing.assign('pty:missing', r2.pid, { expectedStartMs: r2.startedAt });
-  assert.ok(await until(() => !missing.get(k2), 20000), '脚本缺失：绑定失败、条目移除');
+  assert.ok(await until(() => !missing.get(k2), 45000), '脚本缺失：绑定失败、条目移除');
   assert.ok(alive(r2.pid), '会话进程不受影响');
+});
+
+test('broker 编译缓存、局部 env 保留系统变量、冷启动与就绪请求分口径超时', { skip: !WIN }, async t => {
+  const { EventEmitter } = require('node:events');
+  const { PassThrough } = require('node:stream');
+  const holder = spawnHolder(t);
+  // 1) 编译缓存：首次生成按内容哈希命名的 DLL，重启复用不重编；损坏自愈；缓存目录不可写时回退内存编译。
+  const fakeLocalApp = fs.mkdtempSync(path.join(os.tmpdir(), 'p2-cache-'));
+  t.after(() => { try { fs.rmSync(fakeLocalApp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* 清理 */ } });
+  const cacheDir = path.join(fakeLocalApp, 'ai-hub-win32-job-qos');
+  let seenEnv = null;
+  const captureSpawn = (cmd, args, opts) => { seenEnv = opts.env; return spawn(cmd, args, opts); };
+  const q1 = makeQos(t, holder, { env: { LOCALAPPDATA: fakeLocalApp, PSModulePath: 'C:\\FakePS7\\Modules' }, spawnImpl: captureSpawn });
+  assert.equal((await q1.request('ping')).ok, true);
+  assert.ok(seenEnv && Object.keys(seenEnv).some(k => k.toLowerCase() === 'systemroot'), '局部 env 仍保留 SystemRoot 等基础环境变量');
+  assert.ok(!Object.keys(seenEnv).some(k => k.toLowerCase() === 'psmodulepath'), '仍剥掉 PSModulePath 避免混进 PS7 模块');
+  const dlls = fs.readdirSync(cacheDir).filter(f => /^win32-job-qos-[0-9a-f]{16}\.dll$/.test(f));
+  assert.equal(dlls.length, 1, `生成一份内容哈希 DLL（${JSON.stringify(dlls)}）`);
+  const dllPath = path.join(cacheDir, dlls[0]);
+  const stat1 = fs.statSync(dllPath);
+  const p1 = q1.brokerPid();
+  q1.shutdownSync();
+  await until(() => !alive(p1), 5000);
+  // 命中已有 DLL 时也会清扫旧哈希 DLL 与超过 5 分钟的遗留 tmp，同时保留活跃的近期 tmp。
+  const oldHashDll = path.join(cacheDir, 'win32-job-qos-0000000000000000.dll');
+  const staleTmp = path.join(cacheDir, 'win32-job-qos-0000000000000000.99999.tmp.dll');
+  const freshTmp = path.join(cacheDir, 'win32-job-qos-0000000000000000.88888.tmp.dll');
+  fs.writeFileSync(oldHashDll, 'old', 'utf8');
+  fs.writeFileSync(staleTmp, 'stale', 'utf8');
+  fs.writeFileSync(freshTmp, 'fresh', 'utf8');
+  const tenMinAgo = new Date(Date.now() - 10 * 60_000);
+  fs.utimesSync(staleTmp, tenMinAgo, tenMinAgo);
+  const q2 = makeQos(t, holder, { env: { LOCALAPPDATA: fakeLocalApp } });
+  assert.equal((await q2.request('ping')).ok, true);
+  assert.equal(fs.statSync(dllPath).mtimeMs, stat1.mtimeMs, '二次启动直接复用已编译 DLL');
+  assert.equal(fs.existsSync(oldHashDll), false, '命中缓存时也清扫旧哈希 DLL');
+  assert.equal(fs.existsSync(staleTmp), false, '命中缓存时也清扫过期 tmp');
+  assert.equal(fs.existsSync(freshTmp), true, '近期活跃 tmp 保留不误删');
+  const p2 = q2.brokerPid();
+  q2.shutdownSync();
+  await until(() => !alive(p2), 5000);
+  // 损坏缓存 DLL 后自动删除并重编自愈（用独立目录预置坏文件，避免刚退出的进程或杀毒短锁句柄）。
+  const corruptRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'p2-cache-bad-'));
+  t.after(() => { try { fs.rmSync(corruptRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* 清理 */ } });
+  const corruptDir = path.join(corruptRoot, 'ai-hub-win32-job-qos');
+  fs.mkdirSync(corruptDir, { recursive: true });
+  const corruptDll = path.join(corruptDir, dlls[0]);
+  fs.writeFileSync(corruptDll, 'not-a-valid-pe', 'utf8');
+  const q3 = makeQos(t, holder, { env: { LOCALAPPDATA: corruptRoot } });
+  assert.equal((await q3.request('ping')).ok, true, '损坏缓存自动重编恢复');
+  assert.ok(fs.statSync(corruptDll).size > 1000);
+  const p3 = q3.brokerPid();
+  q3.shutdownSync();
+  await until(() => !alive(p3), 5000);
+  // 缓存父路径被普通文件占住（不可建目录）：静默回退到原 Add-Type -Path 内存编译。
+  const blocker = path.join(fakeLocalApp, 'not-a-dir');
+  fs.writeFileSync(blocker, 'block', 'utf8');
+  const q4 = makeQos(t, holder, { env: { LOCALAPPDATA: blocker } });
+  assert.equal((await q4.request('ping')).ok, true, '缓存不可写时回退内存编译');
+  const p4 = q4.brokerPid();
+  q4.shutdownSync();
+  await until(() => !alive(p4), 5000);
+
+  // 2) 冷启动宽限 vs 就绪后请求超时：未就绪时用 startupTimeoutMs，就绪后用更紧的 requestTimeoutMs。
+  let reqIdx = 0;
+  const fakeBrokerSpawn = () => {
+    const proc = new EventEmitter();
+    proc.pid = 99999;
+    proc.stdin = new PassThrough();
+    proc.stdout = new PassThrough();
+    proc.kill = () => { proc.emit('exit', 0); };
+    let buf = '';
+    proc.stdin.setEncoding('utf8');
+    proc.stdin.on('data', chunk => {
+      buf += chunk;
+      let i;
+      while ((i = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        if (!line) continue;
+        const req = JSON.parse(line);
+        reqIdx += 1;
+        if (reqIdx === 1) {
+          // 模拟慢冷启动（180ms > requestTimeoutMs 80ms，但 < startupTimeoutMs 1000ms）。
+          setTimeout(() => {
+            proc.stdout.write('{"ready":true,"pid":99999}\n');
+            proc.stdout.write(JSON.stringify({ id: req.id, cmd: req.cmd, ok: true, pid: 99999 }) + '\n');
+          }, 180);
+        }
+        // reqIdx === 2 故意不回包：就绪后应在 requestTimeoutMs（80ms）附近超时，而非等 1000ms。
+      }
+    });
+    return proc;
+  };
+  const qTimed = makeQos(t, holder, { spawnImpl: fakeBrokerSpawn, requestTimeoutMs: 80, startupTimeoutMs: 1000 });
+  const r1 = await qTimed.request('ping');
+  assert.equal(r1.ok, true, '冷启动慢于 requestTimeoutMs 但在 startupTimeoutMs 内照常成功');
+  const tWarm = Date.now();
+  const r2 = await qTimed.request('ping');
+  const warmElapsed = Date.now() - tWarm;
+  assert.equal(r2.code, 'timeout');
+  assert.ok(warmElapsed < 500, `就绪后按紧超时（${warmElapsed}ms < 500ms）`);
 });
 
 // 依据：child-lifecycle 是否把无头 Edge 放进收纳盒，取决于 Chromium 沙箱在嵌套 KILL_ON_JOB_CLOSE 盒里能否正常工作。

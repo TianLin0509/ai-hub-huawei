@@ -2,6 +2,7 @@
 // 后台子进程生命周期登记（core/child-lifecycle.js）与分身会话关闭兜底（2026-11-19，后台 Edge 越开越多）。
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { holdEventLoop } = require('./helpers/hold-event-loop');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -204,7 +205,8 @@ function fakeEdgeEnv({ reclaimOk }) {
   const opts = { purpose: 't', edgePath: 'fake-msedge.exe', spawnFn: () => proc, lifecycle, startWaitMs: 30, logger: { warn() {}, info() {} } };
   return { proc, calls, opts };
 }
-test('审查 P2-3：Edge 结束失败时名额不交还，进程退出后才交还并删临时目录', async () => {
+test('审查 P2-3：Edge 结束失败时名额不交还，进程退出后才交还并删临时目录', async t => {
+  holdEventLoop(t);
   const { launchHeadlessEdge } = require('../main/edge-headless');
   const { proc, calls, opts } = fakeEdgeEnv({ reclaimOk: () => false });
   let tmp = '';
@@ -218,7 +220,8 @@ test('审查 P2-3：Edge 结束失败时名额不交还，进程退出后才交�
   proc.emit('exit', 1);
   assert.equal(calls.released, 1, '不重复交还');
 });
-test('审查 P2-3：结束成功、或进程本来就已退出，照常立即交还名额', async () => {
+test('审查 P2-3：结束成功、或进程本来就已退出，照常立即交还名额', async t => {
+  holdEventLoop(t);
   const { launchHeadlessEdge } = require('../main/edge-headless');
   for (const env of [fakeEdgeEnv({ reclaimOk: () => true }), (() => { const e = fakeEdgeEnv({ reclaimOk: () => false }); e.proc.exitCode = 0; return e; })()]) {
     await assert.rejects(launchHeadlessEdge(env.opts));

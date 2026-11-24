@@ -62,3 +62,24 @@ test('标签构建只打包：测试已由发版脚本的本机预检跑过', ()
   assert.equal(d.skipTests, true);
   assert.equal(d.skipPackage, false);
 });
+
+test('runs verified under a different Node version are not reused', () => {
+  const g = { ...git({ A: { 'package.json': versionDiff } }), nodeVersion: sha => (sha === 'A' ? '' : '24') };
+  const d = decide({ head: 'H', isTag: false, currentRunId: 9, runs: [run(1, 'A')], git: g });
+  assert.equal(d.skipTests, false);
+  const same = { ...g, nodeVersion: () => '24' };
+  assert.equal(decide({ head: 'H', isTag: false, currentRunId: 9, runs: [run(1, 'A')], git: same }).skipTests, true);
+});
+
+test('CI workflows take the Node version from .node-version', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const root = path.join(__dirname, '..');
+  assert.match(fs.readFileSync(path.join(root, '.node-version'), 'utf8'), /^\d+\s*$/);
+  for (const f of ['.github/workflows/ci.yml', '.github/workflows/meeting-flow-diagnostic.yml', 'tools/public-edition/overlay/.github/workflows/ci.yml']) {
+    if (!fs.existsSync(path.join(root, f))) continue; // 公开版裁掉了部分流程文件
+    const yml = fs.readFileSync(path.join(root, f), 'utf8');
+    assert.doesNotMatch(yml, /node-version:\s*\d/, f + ' 不另写 Node 版本');
+    assert.match(yml, /node-version-file:/, f);
+  }
+});

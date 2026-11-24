@@ -4,6 +4,7 @@
 // 两边都要守住：能起来（不因启动进程退出就判失败），不泛滥（名额仍是 1 个、结束时按真正的浏览器进程号收掉、认不出进程号就让它自己关）。
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { holdEventLoop } = require('./helpers/hold-event-loop');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -41,6 +42,7 @@ const c = spawn(process.execPath, [browserJs, '--user-data-dir=' + dir, mode], {
 setTimeout(() => process.exit(mode === 'noport' ? 7 : 0), mode === 'linger' ? 60000 : 300);`;
 
 function fixture(t) {
+  holdEventLoop(t); // 启动进程退出后，只剩 detached 的假浏览器和 unref 的轮询定时器
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'edge-relaunch-'));
   fs.writeFileSync(path.join(d, 'browser.js'), BROWSER_JS);
   fs.writeFileSync(path.join(d, 'launcher.js'), LAUNCHER_JS);

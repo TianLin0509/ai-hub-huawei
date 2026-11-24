@@ -4,6 +4,7 @@
 // 用小阈值模拟：持续出数据超过 timeoutMs 不断；停止出数据超过 timeoutMs 要断；超过绝对上限要断。
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { holdEventLoop } = require('./helpers/hold-event-loop');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -61,13 +62,15 @@ test('non-streaming: an upstream that keeps flowing past timeoutMs is collected 
   assert.equal(result.message.stop_reason, 'end_turn');
 });
 
-test('non-streaming: an upstream that goes silent for timeoutMs is aborted', { timeout: 20000 }, async () => {
+test('non-streaming: an upstream that goes silent for timeoutMs is aborted', { timeout: 20000 }, async t => {
+  holdEventLoop(t);
   const { result, error, ms } = await run({ timeoutMs: 300 }, upstream({ everyMs: 40, count: 30, stallAfter: 5 }));
   assert.ok(error, 'must fail, not return a partial message: ' + JSON.stringify(result?.message?.content));
   assert.ok(ms < 3000, 'ends soon after going silent: ' + ms);
 });
 
-test('non-streaming: the absolute cap still ends an upstream that never stops', { timeout: 20000 }, async () => {
+test('non-streaming: the absolute cap still ends an upstream that never stops', { timeout: 20000 }, async t => {
+  holdEventLoop(t);
   const { result, error, ms } = await run({ timeoutMs: 300, maxDurationMs: 700 }, upstream({ everyMs: 40, count: 1000 }));
   assert.ok(error, 'must fail, not return a partial message');
   assert.ok(ms >= 650 && ms < 3000, 'cut at the cap: ' + ms);

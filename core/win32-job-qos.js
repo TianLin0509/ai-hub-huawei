@@ -27,6 +27,7 @@ const { spawn } = require('node:child_process');
 
 const IDLE_EXIT_MS = 45_000;
 const REQUEST_TIMEOUT_MS = 20_000;
+const STARTUP_TIMEOUT_MS = 45_000;
 const START_TOLERANCE_MS = 10_000;
 const BROKER_RETRY_MS = 10 * 60_000;
 const DIRTY_RETRY_MS = 30_000;
@@ -48,6 +49,20 @@ function brokerScript(moduleDir = __dirname, resourcesPath = process.resourcesPa
   return exists(unpacked) ? unpacked : path.join(resourcesPath, 'scripts', 'win32-job-qos.ps1');
 }
 
+// 调用方传局部 env（如测试只覆写开关）不能把 LOCALAPPDATA / TEMP / SystemRoot 等 Windows 基础环境抹空；
+// 开关本身仍只看入参 env，spawn 进程再把 process.env 作为底座合入并去掉 PSModulePath。
+function mergeSpawnEnv(env) {
+  if (!env || env === process.env) return process.env;
+  const merged = { ...process.env };
+  const lowerKeys = new Map(Object.keys(merged).map(k => [k.toLowerCase(), k]));
+  for (const [k, v] of Object.entries(env)) {
+    const existing = lowerKeys.get(k.toLowerCase());
+    const targetKey = existing || k;
+    if (v === undefined) delete merged[targetKey];
+    else { merged[targetKey] = v; lowerKeys.set(k.toLowerCase(), targetKey); }
+  }
+  return merged;
+}
 function powershellPath(env) {
   try { return require('./windows-powershell').windowsPowerShellPath(env); } catch { return 'powershell.exe'; }
 }
@@ -61,13 +76,18 @@ const withTimeout = (promise, ms, code = 'wait-timeout') => (ms > 0
 
 function createWin32JobQos({
   platform = process.platform, env = process.env, ownerPid = process.pid, scriptPath = null,
-  idleExitMs = IDLE_EXIT_MS, requestTimeoutMs = REQUEST_TIMEOUT_MS, spawnImpl = spawn,
+  idleExitMs = IDLE_EXIT_MS, requestTimeoutMs = REQUEST_TIMEOUT_MS, startupTimeoutMs = null, spawnImpl = spawn,
   setPriority = os.setPriority, getPriority = os.getPriority, logger = console, now = Date.now,
   dirtyRetryMs = DIRTY_RETRY_MS, brokerRetryMs = BROKER_RETRY_MS, ecoCpuPercent = ECO_CPU_PERCENT, ecoCpuSampleMs = ECO_CPU_SAMPLE_MS,
 } = {}) {
   const jobsOn = platform === 'win32' && String(env.AI_HUB_WIN32_JOB_OBJECT ?? '') !== '0';
   const ecoOn = platform === 'win32' && String(env.AI_HUB_WIN32_ECOQOS ?? '') !== '0';
   const breakaway = String(env.AI_HUB_WIN32_JOB_BREAKAWAY ?? '') === '1';
+  // 冷启动（首次编译 C# 或杀毒扫描）单独给足宽限；broker 就绪后仍按 requestTimeoutMs 判定。
+  // 调用方显式把 requestTimeoutMs 调小（如超时晚到测试传 1ms）且没单设 startupTimeoutMs 时，按调用方的值生效。
+  const coldTimeoutMs = startupTimeoutMs != null
+    ? startupTimeoutMs
+    : (requestTimeoutMs < REQUEST_TIMEOUT_MS ? requestTimeoutMs : Math.max(requestTimeoutMs, STARTUP_TIMEOUT_MS));
   const PRIO = (os.constants && os.constants.priority) || {};
   const entries = new Map(); // key → job entry
   const pidEco = new Map();  // key → 独立进程的 EcoQoS 记录
@@ -103,9 +123,10 @@ function createWin32JobQos({
   function startBroker() {
     const file = scriptPath || brokerScript();
     let proc;
+    const spawnEnv = mergeSpawnEnv(env);
     try {
-      proc = spawnImpl(powershellPath(env), ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', file],
-        { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'], env: powershellEnv(env) });
+      proc = spawnImpl(powershellPath(spawnEnv), ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', file],
+        { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'], env: powershellEnv(spawnEnv) });
     } catch (error) {
       tripBreaker(error.message);
       return null;
@@ -176,6 +197,7 @@ function createWin32JobQos({
     b.idleTimer = null;
     const id = String(++seq);
     stats.requests += 1;
+    const timeoutMs = b.ready ? requestTimeoutMs : coldTimeoutMs;
     return new Promise(resolve => {
       const waiter = { cmd, resolve, timer: null, written: false, done: false, late: false, ...extra };
       waiter.timer = setTimeout(() => {
@@ -183,7 +205,7 @@ function createWin32JobQos({
         if (cmd === 'assign') waiter.late = true; else b.pending.delete(id);
         settle(waiter, { ok: false, code: 'timeout', written: waiter.written });
         armIdle(b);
-      }, requestTimeoutMs);
+      }, timeoutMs);
       waiter.timer.unref?.();
       b.pending.set(id, waiter);
       try {
@@ -472,4 +494,4 @@ function initWin32JobQos(options = {}) { if (shared) shared.shutdownSync(); shar
 function getWin32JobQos() { return shared || INERT; }
 function resetWin32JobQosForTest() { if (shared) shared.shutdownSync(); shared = null; }
 
-module.exports = { createWin32JobQos, initWin32JobQos, getWin32JobQos, resetWin32JobQosForTest, brokerScript, IDLE_EXIT_MS, START_TOLERANCE_MS };
+module.exports = { createWin32JobQos, initWin32JobQos, getWin32JobQos, resetWin32JobQosForTest, brokerScript, IDLE_EXIT_MS, REQUEST_TIMEOUT_MS, STARTUP_TIMEOUT_MS, START_TOLERANCE_MS };

@@ -60,11 +60,11 @@ async function ptyScenario(t, { jobs }) {
   const { ServeHost } = require('../core/codeagent-serve-host');
   const fake = fakeServeSpawner(dir, t);
   const host = new ServeHost({ command: 'fake', configDir: path.join(dir, 'acct'), cwd: dir, env: process.env, spawnImpl: fake.impl, idleCloseMs: 60_000 });
-  t.after(() => host.stopSync());
+  t.after(() => host.stop());
   await host.ensure();
   const serve = fake.spawned[0];
   assert.ok(await until(() => serve.kid() > 0));
-  if (jobs) assert.ok(await until(() => qos.get(host.jobKey)?.state === 'active', 20000), '共享 serve 进了第 2 层盒子');
+  if (jobs) assert.ok(await until(() => qos.get(host.jobKey)?.state === 'active', 45000), '共享 serve 进了第 2 层盒子');
 
   // 第 1 层：真 node-pty 终端
   const { SessionManager } = require('../core/session-manager');
@@ -74,7 +74,7 @@ async function ptyScenario(t, { jobs }) {
   const id = created.id;
   const entry = sm.sessions.get(id);
   const rootPid = entry.pty.pid;
-  if (jobs) assert.ok(await until(() => qos.get(sm.ptyJobKey(id))?.state === 'active', 20000), '终端进了第 1 层盒子');
+  if (jobs) assert.ok(await until(() => qos.get(sm.ptyJobKey(id))?.state === 'active', 45000), '终端进了第 1 层盒子');
   else { await sleep(1500); assert.equal(sm.ptyJobKey(id), ''); }
   const ptyKey = sm.ptyJobKey(id);
   // 在终端里用 Start-Process 拉起一个进程：它不挂在伪终端上，node-pty 关会话收不到它（就是要根治的孤儿）。
@@ -129,7 +129,7 @@ test('第 3 层真实：临时 serve 用完整盒结束（含脱离的孙进程�
   let inside = null;
   const result = await serveMod.withTempServe({ command: 'fake', configDir: dir, cwd: dir, spawnImpl: fake.impl, shadowHome: null, readyTimeoutMs: 15000 }, async () => {
     const keys = serveMod.tempServeJobKeys();
-    await until(() => keys.every(k => qos.get(k)?.state === 'active'), 20000);
+    await until(() => keys.every(k => qos.get(k)?.state === 'active'), 45000);
     inside = { keys, states: keys.map(k => qos.get(k)?.state), kid: fake.spawned[0].kid() };
     return { ok: true };
   });
@@ -194,8 +194,13 @@ test('第 2 层生命周期：ServeHost 起来绑 serve:<账号>，退出/重启
     assert.equal(host.jobKey, '');
     await host.ensure();
     const third = host.jobKey;
+    const thirdProc = procs[procs.length - 1];
     host.stopSync();
-    assert.ok(q.calls.some(c => c[0] === 'terminate' && c[1] === third), 'stopSync 也结束盒子');
+    const afterStopSync = q.calls.filter(c => c[0] === 'terminate' && c[1] === third).length;
+    assert.equal(afterStopSync, 1, 'stopSync 结束盒子一次');
+    // 进程异步晚到 exit 时不再重复结束同一代盒子（避免串扰后续测试或重复调用）。
+    thirdProc.emit('exit', 0);
+    assert.equal(q.calls.filter(c => c[0] === 'terminate' && c[1] === third).length, 1, 'stopSync 后晚到 exit 不重复结束盒子');
     // acquireHost / runningHost / listHosts
     const h2 = hostMod.acquireHost({ command: 'x', configDir: dir + '-2', cwd: os.tmpdir(), spawnImpl, jobQos: () => q });
     await h2.ensure();
