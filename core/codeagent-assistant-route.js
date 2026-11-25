@@ -54,7 +54,20 @@ function choose(dataDir, account = 'personal', target = '', { options = null, co
   return new Set(candidates.map(o => o.provider.toLowerCase())).size > 1
     && candidates.some(o => eq(o.provider, saved.codeagentModelProvider)) ? saved : null;
 }
-function matchesSession(session, route) {
+const routeKey = route => `${String(route?.model || '').toLowerCase()}|${String(route?.codeagentModelProvider || '').toLowerCase()}`;
+const deferredModel = session => String(session?.codeagentRouteDeferred || '').split('|')[0] || '';
+// 熔断期按 CLI 当前模型起的会话记着暂缓的是哪条线路（codeagentRouteDeferred）。只在下面几条都成立时仍算同一条线路，不每问重开：
+// 目标线路不为空且与记录一致；这个号的熔断还开着（要传 dataDir 才查得到，不传一律不认）；会话之后没有真换过模型或线路。
+// 熔断解除、会话里换了模型、线路被清掉，都判不匹配，让调用方换回按真实线路起的新会话（2026-11-25 复审 P1）。
+// A deferred route still matches only while the breaker is open, the route is unchanged and the session never switched model since.
+function deferredStillValid(session, route, dataDir) {
+  if (!route || !dataDir || session.codeagentRouteDeferred !== routeKey(route)) return false;
+  if (session.codeagentModelProvider || session.codeagentUserModel || session.codeagentBackendSwitch
+    || session.modelPinSource && session.modelPinSource !== 'created') return false;
+  try { return !!require('./codeagent-auto-pick').openFor(dataDir, session.codeagentPoolAccount || 'personal'); } catch { return false; }
+}
+function matchesSession(session, route, { dataDir = '' } = {}) {
+  if (session?.codeagentRouteDeferred) return deferredStillValid(session, route, dataDir);
   return !route || eq(session?.codeagentModelProvider, route.codeagentModelProvider)
     && [session?.currentModel?.id, session?.fixedModel, session?.codeagentUserModel].some(model => eq(model, route.model));
 }
@@ -98,4 +111,4 @@ function setFeaturePreference(dataDir, feature, choice) {
   if (choice) choices[feature] = choice; else delete choices[feature];
   write(dataDir, 'personal', { featureChoices: choices });
 }
-module.exports = { choose, preference, setPreference, lastSuccessful, rememberSuccess, connection, modelOptions, matchesSession, repairAction, featurePreference, setFeaturePreference };
+module.exports = { choose, preference, setPreference, lastSuccessful, rememberSuccess, connection, modelOptions, matchesSession, routeKey, deferredModel, repairAction, featurePreference, setFeaturePreference };

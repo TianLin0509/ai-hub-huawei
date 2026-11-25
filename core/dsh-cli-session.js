@@ -8,6 +8,15 @@ const { captureClaudeMessage, claudeTranscriptTurns } = require('./claude-native
 const paste = require('./pty-prompt-submit');
 const { dshTurnStatus, dshFailureText } = require('./dsh-turn-outcome');
 const textOf = content => (content || []).filter(b => b.type === 'text').map(b => b.text || '').join('\n');
+// 回执比对：DSH 记下的用户消息偶尔多出终端残留的几个字符前缀（本机真实记录 52 条里 1 条以 ';1_' 开头），
+// 或首尾空白被输入框收掉。只放宽这两种情况：前缀限 1～8 个 ASCII 可见字符（「同意」不会被认成「不同意」），正文本身必须一致。
+function sameSubmittedText(sent, seen) {
+  if (typeof sent !== 'string' || typeof seen !== 'string') return false;
+  if (sent === seen) return true;
+  const a = sent.trim(), b = seen.trim();
+  if (!a || !b) return false;
+  return a === b || (b.length > a.length && b.endsWith(a) && /^[!-~]{1,8}$/.test(b.slice(0, b.length - a.length)));
+}
 // The native question panel keeps stdin until the terminal answers it. The Hub
 // cannot answer for the user, so it publishes the question verbatim: the status
 // line names it and the "到终端处理" panel points at the right terminal.
@@ -234,7 +243,7 @@ class DshCliSession extends EventEmitter {
       if (!replay) { this.apply({ state: 'running', turnId: this.activeTurn }); this.lifecycle('turn-started', { startedAt: at }); }
     }
     if (event.type === 'user/message' && d.source?.kind === 'user') {
-      const text = textOf(d.content), pending = !replay && this.pending?.text === text ? this.pending : null;
+      const text = textOf(d.content), pending = !replay && sameSubmittedText(this.pending?.text, text) ? this.pending : null;
       const steered = replay ? null : this.takePendingSteer(text);
       // A message that lands while this very turn already has an open record is
       // an interjection, not the turn's opening prompt.
@@ -248,7 +257,7 @@ class DshCliSession extends EventEmitter {
         this.lifecycle('prompt-submitted', { text, submittedAt: at, clientSubmissionId: pending?.id || steered?.id });
         if (pending) { clearTimeout(pending.timer); this.pending = null;
           pending.resolve({ ok: true, sendStatus: 'ok', acknowledgementSource: 'provider-cli',
-            threadId: this.threadId, turnId: this.runtime.turnId, clientSubmissionId: pending.id }); }
+            threadId: this.threadId, turnId: this.runtime.turnId, acknowledgementTurnId: this.runtime.turnId, clientSubmissionId: pending.id }); }
       }
     }
     const record = this.records.at(-1);
@@ -359,7 +368,7 @@ class DshCliSession extends EventEmitter {
     if (!Array.isArray(this.pendingSteers) || !this.pendingSteers.length) return null;
     const cutoff = Date.now() - 10 * 60_000;
     this.pendingSteers = this.pendingSteers.filter(entry => entry.at >= cutoff);
-    const index = this.pendingSteers.findIndex(entry => entry.text === text);
+    const index = this.pendingSteers.findIndex(entry => sameSubmittedText(entry.text, text));
     return index < 0 ? null : this.pendingSteers.splice(index, 1)[0];
   }
   async send(text, options = {}) {
@@ -532,4 +541,4 @@ function readDshCliRecords(file) {
 function readDshCliTranscript(file, options = {}) {
   return readDshCliRecords(file).readTranscript(options);
 }
-module.exports = { DshCliSession, readDshCliTranscript };
+module.exports = { DshCliSession, readDshCliTranscript, sameSubmittedText };

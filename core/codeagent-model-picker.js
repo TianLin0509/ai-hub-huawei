@@ -526,7 +526,7 @@ async function collectModelMenu({ lines, readLines, write, revision, pause = sle
       modelsComplete: rows.every(row => tokens.get(row.label.toLowerCase())?.day) }, steps };
 }
 
-async function findOffscreenTarget({ picker, screen, manager, sid, label, route = {}, log, reopenMenu, onSearchFrame }) {
+async function findOffscreenTarget({ picker, screen, manager, sid, label, route = {}, log, reopenMenu, onSearchFrame, relaxUnique = null }) {
   const initial = modelMenuLines(await screen.lines());
   if (initial.some(line => /⌕/.test(line))) {
     const oldSearch = searchText(initial);
@@ -544,6 +544,14 @@ async function findOffscreenTarget({ picker, screen, manager, sid, label, route 
     let found = searched.value && locateLabel(searched.value.rows, label, route);
     if (found >= 0 && searched.value && !searched.value.complete && !exactLabel(searched.value.rows[found]?.label, label)
       && bareLabel(searched.value.rows[found]?.label) === bareLabel(label)) found = -1;
+    // 搜索结果里同名行只有一条、只是分组对不上（搜索结果常不带分组标题）：选它，并把目标分组改成这一行的，免得回车前的分组核对再拦下。
+    // 以前这里对不上就按 Esc 清搜索，新版 CodeAgent 上清不掉、重开菜单也失败（2026-11-25 同事日志 switch-search result=clear-failed）。
+    // Search results often carry no group heading: a single same-name row is taken and the route follows its group.
+    // 搜索结果总是「过滤过」，看不出有没有被滚走的行：只在账号清单里这个模型最多一个供应商时放宽（allSeen=false）。
+    if (!(found >= 0) && route.provider && searched.value && relaxUnique) {
+      const relaxed = relaxUnique(searched.value, { allSeen: false, stage: 'search' });
+      if (relaxed >= 0) found = relaxed;
+    }
     if (!route.provider && searched.value?.rows.filter(row => exactLabel(row.label, label)).length > 1 && found < 0) {
       return { error: `多个供应商都有 ${label}，请在助理设置或模型列表中选择供应商`, requiresGroupSelection: true };
     }
@@ -583,11 +591,18 @@ async function findOffscreenTarget({ picker, screen, manager, sid, label, route 
     picker = focused.value;
   }
   // 截断名要翻完整个列表才知道是不是唯一：一路记下命中的行，完全同名的随时优先；翻到底只有一行时再按上键退回去。
-  const seen = new Set(), truncated = new Set(), aliases = new Set(), limit = picker.total || MODEL_SCROLL_LIMIT;
+  // nameRows：指定线路时，一路上所有完全同名或截断名像它的行（不论分组）。翻完一圈线路里一行都没有时，交给 relaxUnique（allSeen）判定
+  // 能否按「整张菜单同名只有一行」选它（2026-11-25 公司实录滚动布局：一屏只显示一个模型，旧线路对不上新分组名，翻完照报「没有」）。
+  // nameRows: every same-name or truncated-lookalike row met while scrolling, any group; decided by relaxUnique once the list is fully traversed.
+  const seen = new Set(), truncated = new Set(), aliases = new Set(), nameRows = new Map(), limit = picker.total || MODEL_SCROLL_LIMIT;
   const identityOf = row => JSON.stringify([row.number, row.label]);
   const noteTruncated = () => {
     for (const index of truncatedRows(picker.rows, label)) if (groupMatches(picker.rows[index], route.provider, route.providerLabel)) truncated.add(identityOf(picker.rows[index]));
     for (const index of aliasRows(picker.rows, label)) if (groupMatches(picker.rows[index], route.provider, route.providerLabel)) aliases.add(identityOf(picker.rows[index]));
+    if (route.provider && relaxUnique) {
+      for (const row of picker.rows) if (exactLabel(row.label, label)) nameRows.set(identityOf(row), row);
+      for (const index of truncatedRows(picker.rows, label)) nameRows.set(identityOf(picker.rows[index]), picker.rows[index]);
+    }
   };
   let steps = 0;
   while (steps < limit) {
@@ -604,12 +619,17 @@ async function findOffscreenTarget({ picker, screen, manager, sid, label, route 
   }
   if (exactLabel(picker.rows[picker.cursor]?.label, label) && groupMatches(picker.rows[picker.cursor], route.provider, route.providerLabel)) { log({ event: 'switch-scroll', steps, result: 'found' }); return { picker, target: picker.cursor }; }
   noteTruncated();
-  const candidates = aliases.size ? aliases : truncated;
+  let candidates = aliases.size ? aliases : truncated, sameNameOnly = false;
+  // 带总数提示时要真走过这么多行才算翻完（光标停住不动不等于到底）。
+  if (!candidates.size && nameRows.size && steps < limit && (!picker.total || seen.size >= picker.total)) {
+    const rows = [...nameRows.values()], relaxed = relaxUnique({ rows }, { allSeen: true, stage: 'scroll' });
+    if (relaxed >= 0) { candidates = new Set([identityOf(rows[relaxed])]); sameNameOnly = true; }
+  }
   if (candidates.size === 1 && steps < limit) {
     const [only] = candidates;
     for (let back = 0; back <= steps + 1; back += 1) {
       const row = picker.rows[picker.cursor];
-      if (row && identityOf(row) === only) { log({ event: 'switch-scroll', steps, back, result: aliases.size ? 'found-alias' : 'found-truncated' }); return { picker, target: picker.cursor }; }
+      if (row && identityOf(row) === only) { log({ event: 'switch-scroll', steps, back, result: aliases.size ? 'found-alias' : sameNameOnly ? 'found-same-name-other-group' : 'found-truncated' }); return { picker, target: picker.cursor }; }
       const before = pickerSignature(picker);
       manager.writeToSession(sid, '[A');
       const next = await waitForPickerChange(screen, before, MODEL_SEARCH_WAIT_MS);
@@ -686,6 +706,37 @@ async function pickModel({ manager, sid, kind, modelId, provider = '', providerL
     return [...new Set([...cached, ...catalogRows().map(row => row.label)])];
   };
   const idForLabel = name => (catalogRows().find(row => exactLabel(row.label, name)) || {}).id || name;
+  // 这个模型在账号里已知的供应商（含暂不可用的、settings.json 自配的、目录里的），小写 id。
+  const knownProviders = name => {
+    const ids = new Set();
+    try {
+      for (const o of require('./codeagent-models').modelOptions(dataDir, { configDir, accountKey: accountKey(), includeUnavailable: true })) {
+        if (o.provider && (exactLabel(o.id, name) || exactLabel(o.menuLabel, name) || exactLabel(o.id, modelId))) ids.add(String(o.provider).toLowerCase());
+      }
+    } catch { /* 读不到清单就只看目录 */ }
+    for (const row of catalogRows()) {
+      if (row.provider && (exactLabel(row.label, name) || exactLabel(row.id, name) || exactLabel(row.id, modelId))) ids.add(String(row.provider).toLowerCase());
+    }
+    return ids;
+  };
+  // 指定了供应商、菜单（或搜索结果）里有同名行但分组对不上（没有分组标题，或标题写法和供应商 id 不同）时，
+  // 同时满足下面条件才选那一行：同名只有一行、没有截断名也像它、这一行的分组不是另一个已知供应商、
+  // 并且行已看全或账号里这个模型最多一个供应商。多条同名仍按分组挑，不猜。目标分组跟随这一行，返回值仍报入参供应商。
+  // 2026-11-25 同事反馈：菜单明明有 GLM-5.3-CodeAgent-Auto 却判「没有」、搜索清不掉，助理连续失败触发 4 小时熔断。
+  // A provider was given and the row exists but its group does not match: take the single same-name row only when it is
+  // unambiguous (no truncated lookalike, its group is not another known provider, rows fully seen or at most one known provider).
+  const relaxUnique = (menu, { allSeen = false, stage = 'menu' } = {}) => {
+    const rows = menu?.rows || [];
+    const same = rows.map((row, index) => exactLabel(row.label, label) ? index : -1).filter(index => index >= 0);
+    if (same.length !== 1) return -1;
+    if (truncatedRows(rows, label).some(index => !same.includes(index))) return -1;
+    const row = rows[same[0]], known = knownProviders(label), wanted = squash(provider), group = squash(row.group);
+    if (group && [...known].some(id => squash(id) === group && squash(id) !== wanted)) return -1;
+    if (!allSeen && known.size > 1) return -1;
+    log({ event: 'group-relaxed', stage, provider, group: row.group || '(无)', label: row.label, known: known.size });
+    route.provider = row.group || ''; route.providerLabel = '';
+    return same[0];
+  };
   async function openMenu() {
     let sent = await sendToPty(sid, '/model', kind, { codeagentModelPick: true });
     // 补全只接受了命令文本时可补回车，菜单已开则绝不补。
@@ -750,6 +801,17 @@ async function pickModel({ manager, sid, kind, modelId, provider = '', providerL
       if (known.index >= 0) { log({ event: 'name-match', from: label, to: known.name, kind: known.kind }); label = known.name; }
     }
     let target = first ? 0 : findTarget(picker, label, route);
+    // 指定了供应商、菜单里也有同名行，但分组对不上（菜单没有分组标题，或标题写法和供应商 id 不同）：
+    // 同名行只有一条、菜单的行确定看全了时就选它，记一行日志；多条同名仍按分组挑，不猜。
+    // 2026-11-25 同事反馈：菜单明明有 GLM-5.3-CodeAgent-Auto 却判「没有」，助理连续失败触发 4 小时熔断。
+    // Provider given and the menu has the same name, but the group does not match (no group headings, or a heading spelled differently
+    // from the provider id): pick it when it is the only same-name row and the menu is fully seen; several same-name rows still need the group.
+    if (!first && target < 0 && route.provider) {
+      // 只因别的行名字被截断而算「不完整」时，行是全的；带总数提示且行数不够的仍算没看全。
+      const allSeen = (picker.complete || picker.incompleteReason === 'truncated-label') && (!picker.total || picker.total === picker.rows.length);
+      const relaxed = relaxUnique(picker, { allSeen, stage: 'menu' });
+      if (relaxed >= 0) target = relaxed;
+    }
     if (!first && target >= 0 && !picker.complete && !exactLabel(picker.rows[target].label, label)
       && bareLabel(picker.rows[target].label) === bareLabel(label)) target = -1;
     if (!first && !picker.rows.some(row => exactLabel(row.label, label)) && aliasRows(picker.rows, label)
@@ -772,7 +834,7 @@ async function pickModel({ manager, sid, kind, modelId, provider = '', providerL
       if (target < 0) return { ...(await fail(`多个分组都有 ${modelId}，无法确认账号默认分组，请在模型列表中重新选择带分组的项`)), requiresGroupSelection: true };
       route.provider = picker.rows[target].group;
     }
-    const searchOffscreen = () => findOffscreenTarget({ picker, screen, manager, sid, label, route,
+    const searchOffscreen = () => findOffscreenTarget({ picker, screen, manager, sid, label, route, relaxUnique,
         reopenMenu: async () => {
           if (!(await closeModelMenu({ readLines: () => screen.lines(), write: key => manager.writeToSession(sid, key) })).ok) return { value: null };
           if (await openMenu()) return { value: null };
@@ -824,14 +886,16 @@ async function pickModel({ manager, sid, kind, modelId, provider = '', providerL
     }
     if (target < 0) {
       const options = picker.complete ? picker.rows.map(row => row.label) : [...new Set([...picker.rows.map(row => row.label), ...knownMenuNames()])];
-      return { ...(await fail(`模型菜单里没有 ${modelId}（菜单里有：${options.join('、')}）`)), ...(nameFallback ? { nameFallback } : {}) };
+      // 菜单里其实有同名（或截断名像它）、只是分组消歧没选：算匹配问题（menuMiss，不计熔断）；菜单里确实没有这个名字仍计熔断。
+      const sameName = picker.rows.some(row => exactLabel(row.label, label)) || truncatedRows(picker.rows, label).length > 0;
+      return { ...(await fail(`模型菜单里没有 ${modelId}（菜单里有：${options.join('、')}）`)), ...(sameName ? { menuMiss: true } : {}), ...(nameFallback ? { nameFallback } : {}) };
     }
     if (picker.cursor < 0) {
       manager.writeToSession(sid, '\x1b[B');
       const focused = await waitForPickerChange(screen, pickerSignature(picker), MODEL_SEARCH_WAIT_MS);
       if (!focused.value) return fail('无法确认模型列表的选中项，没有选择模型');
       picker = focused.value; target = findTarget(picker, label, route);
-      if (target < 0) return fail(`模型菜单里没有 ${modelId}`);
+      if (target < 0) return { ...(await fail(`模型菜单里没有 ${modelId}`)), ...(picker.rows.some(row => exactLabel(row.label, label)) ? { menuMiss: true } : {}) };
     }
     // 可见目标仍沿用行号差逐键移动；跨屏搜索/翻页已逐步确认。选择键之前再读一次光标，
     // 镜像尚未更新时不猜选中项，之后仍以 CLI 自己的回显核对结果。
@@ -868,7 +932,7 @@ async function pickModel({ manager, sid, kind, modelId, provider = '', providerL
     }
     const ready = await waitForInput(screen);
     if (!ready.value) return { ...(await fail('选中后未确认恢复普通输入框')), restored, defaults };
-    return { ok: true, mode, confirmed: !!echo, restored, defaults, provider: route.provider || picker.rows[target].group || '',
+    return { ok: true, mode, confirmed: !!echo, restored, defaults, provider: provider || route.provider || picker.rows[target].group || '',
       ...(keepDefault ? { keptDefault: true } : {}), ...(first ? { picked: label } : {}),
       ...(substituted ? { substituted: { ...substituted, id: idForLabel(substituted.to) } } : {}) };
   }

@@ -1044,10 +1044,10 @@ function createGroupChatDispatcher(deps) {
           t.promptSubmitSinceTs = Math.max(0, sendStartedAt - 1000);
           t.promptSubmittedAt = sendStartedAt;
           t.submissionAcknowledged = !!sendResult.acknowledgementSource;
-          t.providerTurnId = sendResult.acknowledgementTurnId || null;
+          t.providerTurnId = sendResult.acknowledgementTurnId || sendResult.turnId || null;
           _orch.setSendStatus(0, t.sid, sendResult.sendStatus || 'submitted', {
             acknowledgementSource: sendResult.acknowledgementSource,
-            providerTurnId: sendResult.acknowledgementTurnId,
+            providerTurnId: sendResult.acknowledgementTurnId || sendResult.turnId || null,
             userMessageId: sendResult.userMessageId,
             nativePromptFingerprint: sendResult.promptFingerprint,
             attemptId: t.attemptId,
@@ -1600,7 +1600,7 @@ function createGroupChatDispatcher(deps) {
           try {
             orch.setSendStatus(turnNum, t.sid, sendStatus || (ok ? 'submitted' : 'send_failed'), {
               acknowledgementSource: sendResult && sendResult.acknowledgementSource,
-              providerTurnId: sendResult && sendResult.acknowledgementTurnId,
+              providerTurnId: sendResult && (sendResult.acknowledgementTurnId || sendResult.turnId) || null,
               userMessageId: sendResult && sendResult.userMessageId,
               nativePromptFingerprint: sendResult && sendResult.promptFingerprint,
               providerThreadId: sendResult?.clientSubmissionId===t.attemptId ? sendResult.threadId : null,
@@ -1622,7 +1622,7 @@ function createGroupChatDispatcher(deps) {
                 sendStatus: sendStatus || 'ok',
                 acknowledgementSource: sendResult && sendResult.acknowledgementSource || null,
                 enterAttempts: Number(sendResult && sendResult.enterAttempts) || null,
-                providerTurnId: sendResult && sendResult.acknowledgementTurnId || null,
+                providerTurnId: sendResult && (sendResult.acknowledgementTurnId || sendResult.turnId) || null,
                 userMessageId: sendResult && sendResult.userMessageId || null,
                 ...(sendResult && sendResult.probeDiagnostics ? { probeDiagnostics: sendResult.probeDiagnostics } : {}),
               });
@@ -1651,7 +1651,7 @@ function createGroupChatDispatcher(deps) {
             t.promptSubmitSinceTs = Math.max(0, sendStartedAt - 1000);
             t.promptSubmittedAt = sendStartedAt;
             t.submissionAcknowledged = !!(sendResult && sendResult.acknowledgementSource);
-            t.providerTurnId = sendResult && sendResult.acknowledgementTurnId || null;
+            t.providerTurnId = sendResult && (sendResult.acknowledgementTurnId || sendResult.turnId) || null;
             t.attempt = t.attemptId ? orch.getAttempt(t.attemptId) : t.attempt;
             if (t.attempt && !silent) publishAttempt(meetingId, orch, t.attempt);
             sentTargets.push(t);

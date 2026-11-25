@@ -171,7 +171,7 @@ class PiCliSession extends EventEmitter {
       this.apply({ turnId: record.turnId });
       this.lifecycle('prompt-submitted', { text, submittedAt: record.createdAt, clientSubmissionId: record.submissionId });
       if (pending) { clearTimeout(pending.timer); this.pending = null;
-        pending.resolve({ ok: true, sendStatus: 'ok', acknowledgementSource: 'provider-cli', threadId: this.threadId, turnId: record.turnId, clientSubmissionId: pending.id }); }
+        pending.resolve({ ok: true, sendStatus: 'ok', acknowledgementSource: 'provider-cli', threadId: this.threadId, turnId: record.turnId, acknowledgementTurnId: record.turnId, clientSubmissionId: pending.id }); }
     } else {
       capturePiMessage(this, message, uuid);
       if (message.role === 'assistant') this.accountUsage(message.usage);

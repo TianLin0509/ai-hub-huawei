@@ -115,6 +115,7 @@ Hub 自带一张已知问题表 `core/known-issues.js`（报错卡片上的「�
 | 编号 | 现象 | 解法 |
 |---|---|---|
 | `welink-login-expired` | WeLink 登录过期 | 助理页「扫码登录」 |
+| `welink-proxy-unreachable` | 扫码登录报 `Could not connect to server (code=7)`、`Failed to connect to proxy.corp.example port 8080` | 连不上公司代理，与 WeLink 账号无关：确认在公司内网（在家先连 VPN）后点「重新获取二维码」；仍不行用「打开代理设置」（`ms-settings:network-proxy`）核对代理地址 |
 | `codeagent-missing` | 找不到 CodeAgent | 按首页「安装说明」安装后点「重新检测」 |
 | `codeagent-outdated` | CodeAgent 太旧，卡片显示不出回答 | `codeagent update` 后重启 Hub |
 | `cli-missing` | 找不到 Claude Code / Codex 等 | 安装对应 CLI，确认在 PATH 上 |
@@ -135,6 +136,7 @@ Hub 自带一张已知问题表 `core/known-issues.js`（报错卡片上的「�
 - **文件被占用（EBUSY / EPERM）**：多半是杀毒软件或另一个 Hub 窗口占着；先看任务管理器里是不是开了两个 Hub。
 - **更新后功能不对**：看 `app-update\last-result.json` 的 `ok`、`reason` 和版本号；增量更新只换 `app.asar` 和 `app.asar.unpacked`。
 - **会话卡片空白、后台有输出**：常见于 CLI 版本太旧或记录文件还没生成；看对应 CLI 版本和 `logs\codeagent-*.log`。
+- **WeLink 扫码登录 code=7**：curl 的「连不上主机」。原文里连的是 `proxy…`（如 `proxy.<公司域名> port 8080`）时，是这台电脑到公司代理这一段不通：不在内网、VPN 没连、或 Windows 代理地址不对。只出现在 `[WARN] Telemetry:` 行里的 code=7 是使用统计上报失败，不影响登录，不用处理。
 - **闪退**：先看 `diagnostics\fatal-*.txt` 最新一份，再看 `process-lifecycle-*.jsonl` 最后几行和 `logs\window-events.log`。
 
 ## 8. 写结论块的要求

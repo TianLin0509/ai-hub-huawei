@@ -112,7 +112,9 @@ test('自动启动真实选型分支：默认模型不被手动记录覆盖，�
     assert.equal(normal.opts.model, 'hub-default'); assert.equal(normal.opts.codeagentModelProvider, undefined); assert.equal(normal.skipCalls, 1);
     const r = run(purpose, ID);
     assert.equal(r.opts.model, ID); assert.equal(r.opts.codeagentModelProvider, 'good'); assert.equal(r.skipCalls, 0); assert.equal(r.openCalls, 1);
-    assert.throws(() => run(purpose, ID, { until: Date.now() + 3600000 }), err => err.code === 'CODEAGENT_MODEL_PICK_BREAKER_OPEN' && err.notSent);
+    // 熔断中不再拒绝启动：去掉供应商，和其他自动会话一样走跳过判断（按 CLI 当前模型发问）。
+    const opened = run(purpose, ID, { until: Date.now() + 3600000 });
+    assert.equal(opened.opts.codeagentModelProvider, undefined); assert.equal(opened.skipCalls, 1); assert.equal(opened.openCalls, 1);
   }
   const ordinary = run('forum'); assert.equal(ordinary.opts.model, 'hub-default'); assert.equal(ordinary.skipCalls, 1);
   route.setPreference(dir, 'personal', { model: ID, provider: 'good' });

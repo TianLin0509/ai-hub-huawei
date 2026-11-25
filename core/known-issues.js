@@ -35,6 +35,13 @@ const KNOWN_ISSUES = [
     action: { label: '一键修复 DSH', act: 'known:dsh-repair' },
     actionLabel: m => /桌面版不是终端版/.test(m.input) ? '一键安装终端版' : null,
     more: [{ label: '装到我的全局 npm', act: 'known:dsh-repair-global' }] },
+  { id: 'welink-proxy-unreachable', areas: ['welink', 'hub-alert', 'notice', 'toast'],
+    // 排在登录过期前面：自动续期因连不上代理失败时，提示同时含「自动续期没成功」和「连不上公司代理」，要给打开代理设置。
+    // 正则与 core/company-assistant/welink.js LOGIN_CAUSES proxy 保持一致：扫码登录时 welink-cli 报「Could not connect to server (code=7) … Failed to connect to proxy.corp.example」。
+    test: /连不上公司代理|Failed\s+to\s+connect\s+to\s+\S*proxy\S*|Could(?:\s+not|n'?t)\s+connect\s+to\s+(?:server|proxy)[^\r\n]*proxy|\bcode\s*=\s*7\b[^\r\n]*proxy|proxy[^\r\n]*\bcode\s*=\s*7\b/i,
+    title: '连不上公司代理，WeLink 登录发不出去',
+    fix: 'code=7 表示这台电脑连不上公司代理，和 WeLink 账号无关。先确认在公司内网（在家先连公司 VPN），再到助理页点「重新获取二维码」；仍不行，打开 Windows 代理设置核对代理地址。',
+    action: { label: '打开代理设置', act: 'known:open-proxy-settings' } },
   { id: 'welink-login-expired', areas: ['welink', 'hub-alert', 'notice', 'toast'],
     // core/company-assistant/welink.js「WeLink 登录已过期，Hub 正在自动续期」、service.js「WeLink 没登录或登录过期」、phone.js 同句。
     test: /WeLink\s*(?:没登录或)?登录(?:已)?过期|自动续期没成功|needs-scan/i,

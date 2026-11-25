@@ -1743,8 +1743,10 @@ class CompanyAssistant {
     // 功能选型只换了后端、没单独指定模型的（如一键全切 Lite），仍按助理设置的模型与供应商核对。
     if (!require('../feature-agent-choice').inheritsAssistantChoice(info.featureAgentChoice)) return false;
     const routes = require('../codeagent-assistant-route');
-    const route = routes.choose(this.deps.dataDir, info.codeagentPoolAccount || 'personal', info.currentModel?.id || info.fixedModel || '', { configDir: info.codeagentConfigDir });
-    if (!routes.matchesSession(info, route)) return true;
+    // 熔断期暂缓线路的会话按当时要选的模型查线路（它的当前模型是 CLI 当前模型，按它查会查不到线路）。
+    const target = routes.deferredModel(info) || info.currentModel?.id || info.fixedModel || '';
+    const route = routes.choose(this.deps.dataDir, info.codeagentPoolAccount || 'personal', target, { configDir: info.codeagentConfigDir });
+    if (!routes.matchesSession(info, route, { dataDir: this.deps.dataDir })) return true;
     if (!info.fixedModel || info.modelPinSource === 'user') return false;
     try { return !!require('../codeagent-model-replacements').replacementFor(this.deps.dataDir || require('../data-dir').getHubDataDir(), info.fixedModel); }
     catch { return false; }

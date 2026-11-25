@@ -2100,11 +2100,22 @@ class SessionManager extends EventEmitter {
       // 恢复的会话上一轮就是目标模型作答、这个号连续 3 次没选成（4 小时熔断）。见 core/codeagent-auto-pick.js。
       // 配置里写的默认模型不再作为跳过的依据（2026-10-22 用户：明明是 DeepSeek 号却按 GLM 起来，写着的值不可信）。
       let skip = null;
-      // 指定供应商仍服从四小时熔断；此时未确认线路，不能冒用 CLI 当前供应商直接发问。
+      // 指定供应商也服从四小时熔断：熔断期间不开菜单、不带供应商，和其他自动会话一样按 CLI 当前模型直接发问。
+      // 以前这里直接报错，助理每问一个新会话，熔断 4 小时里每一问都起不来（2026-11-25 同事反馈：助理更新后用不了）；
+      // 当前线路答不了时，作答里的接口错误照常由一键恢复线路的提示接住（core/company-assistant/turn-api-error.js）。
+      // While the breaker is open, a provider route is dropped and the session sends with the CLI's current model instead of failing to start.
       if (opts.codeagentModelProvider) {
         const open = require('./codeagent-auto-pick').openFor(getHubDataDir(), codeagentPool ? codeagentPool.account.id : 'personal');
-        if (open) throw Object.assign(new Error(`这个账号自动选择模型已暂停，${new Date(open.until).toLocaleString('zh-CN', { hour12: false })} 前不再自动选供应商。请先在手动会话选择供应商并成功回答后再试`),
-          { code: 'CODEAGENT_MODEL_PICK_BREAKER_OPEN', notSent: true });
+        if (open) {
+          try { require('./codeagent-models').appendModelLog(getHubDataDir(), { event: 'pick-skipped', session: String(id).slice(0, 8), purpose: opts.purpose,
+            model: target, provider: opts.codeagentModelProvider, reason: 'breaker-open-provider-dropped', until: new Date(open.until).toISOString() }); } catch { /* 只是日志 */ }
+          // 记下这次按哪条线路「暂缓」：预热复用、分身复用核对线路时认它，熔断期内不因供应商被摘掉而每问重开（core/codeagent-assistant-route.js matchesSession）。
+          opts = { ...opts, codeagentRouteDeferred: require('./codeagent-assistant-route').routeKey({ model: target, codeagentModelProvider: opts.codeagentModelProvider }),
+            codeagentModelProvider: undefined, codeagentModelProviderLabel: undefined, codeagentModelMenuLabel: undefined };
+          const until = new Date(open.until).toLocaleString('zh-CN', { hour12: false });
+          try { setTimeout(() => { try { this.emit('session-notice', { sessionId: id, level: 'warning',
+            message: `自动选模型暂停到 ${until}，这次没切到 ${target || '指定模型'}，先用 CodeAgent 当前模型作答。` }); } catch { /* 只是提示 */ } }, 0); } catch { /* 只是提示 */ }
+        }
       }
       try {
         skip = opts.codeagentModelProvider ? null : require('./codeagent-auto-pick').skipReason({ dataDir: getHubDataDir(), account: codeagentPool ? codeagentPool.account.id : 'personal',
@@ -3014,6 +3025,7 @@ class SessionManager extends EventEmitter {
         ? { codeagentActualModel: opts.codeagentActualModel.trim() } : {}),
       ...(isCodeAgent ? { codeagentConfigDir: codeagentConfig.configDir, codeagentIdentityPending: !codeagentLaunch.sessionId,
         ...require('./codeagent-model-choice').routeFields(opts),
+        ...(typeof opts.codeagentRouteDeferred === 'string' && opts.codeagentRouteDeferred ? { codeagentRouteDeferred: opts.codeagentRouteDeferred } : {}),
         codeagentForkSourceSessionId: opts.forkCCSessionId || opts.codeagentForkSourceSessionId || undefined,
         // Lite（serve）会话启动不开 /model 菜单（模型随每条消息带给 serve），不能留着「待选模型」标记，否则首条消息会去读屏。
         codeagentModelPick: !isCodeAgentServe && codeagentLaunch.requiresMenu } : {}),
@@ -4257,6 +4269,9 @@ try {
     const accounts = require('./codeagent-pool');
     const known = info.codeagentPoolAccount ? accounts.accountModels(config.configDir) : null;
     const pool = known ? { account: { models: known.models, modelsAuthoritative: known.authoritative } } : null;
+    // 自动会话启动选模型没成、已按 CLI 当前模型照常发（main/ipc/session-handlers.js runCodeAgentPick）：不再回头核固定模型、不再触发选模型，
+    // 否则首句又被「原模型不可用」挡住（2026-11-25 审查 P0）。
+    if (info.codeagentPickFallback) return;
     try {
       const requiresSelection = info.codeagentModelPick && !require('./codeagent-model-picker').isPicking(sessionId);
       const pin = pins.resolveCodeAgentPin({ ...info, ...pins.migrateModelPin(info) }, {

@@ -101,7 +101,7 @@ class QwenCliSession extends EventEmitter {
       this.apply({state:'running',turnId:this.hookTurn.id});
       this.lifecycle('prompt-submitted',{text,submittedAt:at,clientSubmissionId:this.pending?.text===text?this.pending.id:null});
       this.lifecycle('turn-started',{startedAt:at});
-      if(this.pending?.text===text){clearTimeout(this.pending.timer);this.pending.resolve({ok:true,sendStatus:'ok',acknowledgementSource:'qwen-cli',threadId:this.threadId,turnId:this.runtime.turnId,clientSubmissionId:this.pending.id});this.pending=null;}
+      if(this.pending?.text===text){clearTimeout(this.pending.timer);this.pending.resolve({ok:true,sendStatus:'ok',acknowledgementSource:'qwen-cli',threadId:this.threadId,turnId:this.runtime.turnId,acknowledgementTurnId:this.runtime.turnId,clientSubmissionId:this.pending.id});this.pending=null;}
     } else if(name==='PermissionRequest')this.apply({state:'waiting'});
     else if(name==='Stop' || name==='StopFailure') {
       if(!this.hookTurn)return;

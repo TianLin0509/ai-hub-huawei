@@ -306,7 +306,9 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       : noQrYet ? '正在向 WeLink 服务器要二维码…一般几秒就出来。'
       // 字符画已经输出完（进入等待扫码）却没能还原成二维码：同样提示改用链接，下面附上原样输出备查。
       : { waiting: f.garbled || (!f.qr && p.phase === 'waiting') ? '二维码显示失败，请用下方链接。' : '用手机 WeLink 扫下面的二维码；扫完这里会自动刷新。', finished: '登录命令已结束，正在核对登录状态…', ok: '' }[f.state] || '';
-    const nextLine = cause ? `<p class="ca-login-next">${esc(cause.next)}</p><p class="ca-note">原文：${esc(cause.line)}</p>`
+    // 连不上公司代理：下一步按钮就放在这行提示旁边（打开 Windows 的代理设置页）。
+    const proxyBtn = cause?.proxySettings ? ' <button type="button" class="ca-link" data-ca="open-proxy-settings">打开代理设置</button>' : '';
+    const nextLine = cause ? `<p class="ca-login-next"><span>${esc(cause.next)}</span>${proxyBtn}</p><p class="ca-note">原文：${esc(cause.line)}</p>`
       : failed ? '<p class="ca-login-next">点「重新获取二维码」再试一次。WeLink 同一时间只能登录在一台电脑上：如果你的 WeLink 正登录在另一台电脑，先在这台电脑的 WeLink 桌面端登录本人账号再扫码。</p>' : '';
     const tickLine = f.state === 'waiting' && !failed && p.phase === 'waiting' ? `<p class="ca-qr-status">等待扫码 · ${Number(p.elapsed) || 0} 秒</p>` : '';
     const link = !scanned && !failed && /^https:\/\//i.test(f.url || '') ? `<p class="ca-qr-link">二维码扫不出来？<button type="button" class="ca-link" data-ca="open-login-url">在浏览器打开</button></p>` : '';
@@ -646,6 +648,7 @@ function createCompanyAssistantPage({ document, window, ipcRenderer, openSession
       try { const r = await call('welink-logout'); showMessage?.(r.ok ? '已退出 WeLink 登录，本机凭据和 welink-cli 配置已清除；需要时扫码重新登录，之后如邮件、日历取不到再点一次「配置邮件和日历」' : '退出命令没成功：' + (r.output || '')); } catch (error) { showMessage?.('退出没成功：' + error.message); }
       await load(); const sp = page.querySelector('[data-slot="panel"]'); if (sp.dataset.kind === 'settings' && !sp.hidden) openSettings(); return;
     }
+    if (verb === 'open-proxy-settings') { await require('electron').shell.openExternal('ms-settings:network-proxy'); return; }
     if (verb === 'open-login-url') { const url = data.loginFlow?.url || ''; if (/^https:\/\//i.test(url)) await require('electron').shell.openExternal(url); return; }
     if (verb === 'close-panel') { closePanel(); return; }
     if (verb === 'settings') return openSettings();

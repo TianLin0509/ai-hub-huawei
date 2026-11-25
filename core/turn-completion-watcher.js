@@ -103,7 +103,7 @@ function createTurnCompletionWatcher(opts) {
     const retryableFailureCanRecover = result.status === 'errored'
       && result.failure && result.failure.retryable === true;
     const PATCHABLE_SIGNAL_SOURCES = new Set([
-      'codex-app-server', 'acp',
+      'codex-app-server', 'acp', 'provider-cli', 'qwen-cli',
       'stop_reason_terminal', 'stop_hook', 'idle_timer_terminal',
       'task_complete', 'item_completed_agent_message_final_answer',
       'claude_auto_extract_final_answer', 'codex_auto_extract_final_answer',
@@ -329,7 +329,8 @@ function createTurnCompletionWatcher(opts) {
     // Replay a stored engine outcome after subscription. It remains subject to
     // exactly the same attempt/thread-turn guards as the live event.
     observeNativeOutcome(event) {
-      if (!event || !['codex-app-server','acp'].includes(event.signalSource)) return false;
+      // provider-cli / qwen-cli：ACP 类 kind 跑在终端里时 CLI 自己报的回合结束（R38，DSH 小队成员）。
+      if (!event || !['codex-app-server','acp','provider-cli','qwen-cli'].includes(event.signalSource)) return false;
       if (event.status === 'completed' && onTurnComplete) onTurnComplete(event);
       else if (event.status === 'interrupted' && onTurnAborted) onTurnAborted(event);
       else if (event.status === 'failed' && onTurnError) onTurnError(event);

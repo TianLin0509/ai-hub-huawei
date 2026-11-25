@@ -1,6 +1,7 @@
 'use strict';
 
 const {
+  ACP_FINAL_SOURCES,
   attemptEventMatches,
   classifyProviderFailure,
   isAuthoritativeFinalSignal,
@@ -13,10 +14,12 @@ class GroupChatProviderAdapter {
     this.nativeOnly = options.nativeOnly === true;
     this.family = normalizeProviderFamily(kind);
     this.nativeSource = require('./acp-profiles').isAcpKind(kind) ? 'acp' : 'codex-app-server';
+    // ACP 类 kind 跑在终端里（DSH CLI、千问 CLI 等）时，回合事件来源是 provider-cli / qwen-cli，同样是权威信号。
+    this.nativeSources = this.nativeSource === 'acp' ? ACP_FINAL_SOURCES : new Set([this.nativeSource]);
   }
 
   match(attempt, event, options = {}) {
-    if (this.nativeOnly && event?.signalSource !== this.nativeSource) {
+    if (this.nativeOnly && !this.nativeSources.has(event?.signalSource)) {
       return {ok:false,reason:'native_lifecycle_required'};
     }
     return attemptEventMatches(attempt, event, {
@@ -36,7 +39,7 @@ class GroupChatProviderAdapter {
       return { accepted: false, reason: 'non_final_signal', identity };
     }
     const text = String(event.text || '').trim();
-    if (event.signalSource === this.nativeSource) {
+    if (this.nativeSources.has(event.signalSource)) {
       return {accepted:true,status:'completed',text,identity,emptyResult:!text};
     }
     // Only error/system envelopes are failure evidence. An assistant can

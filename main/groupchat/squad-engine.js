@@ -190,7 +190,7 @@ function createSquadEngine(deps) {
         run.status = 'error';
         run.note = leaderFailure === 'cli_not_ready'
           ? '负责人的 CLI 还没启动好，这句话没送到，小队已停下；等成员头像变绿后再发一次即可。'
-          : `负责人没有给出回答（${leaderFailure}），小队已停下；查看负责人会话后回话即可继续。`;
+          : `负责人没有给出回答（${P.reasonText(leaderFailure)}），小队已停下；查看负责人会话后回话即可继续。`;
         note(id, result?.turnNum || run.turnNum, run.note);
         emit(id);
         return;
@@ -243,6 +243,7 @@ function createSquadEngine(deps) {
           outcomes.push({ memberId: task.memberId, label: task.label, ok: !reason, reason });
           const step = run.steps.find(s => s.memberId === task.memberId);
           if (step) step.state = reason ? (run.abort ? 'stopped' : 'failed') : 'done';
+          if (reason && !run.abort && alive(id, run)) note(id, run.turnNum, P.memberFailureNote(task.label, reason));
         }
         emit(id);
       };
@@ -253,7 +254,10 @@ function createSquadEngine(deps) {
           const others = task => plan.tasks.filter(t => t !== task).map(t => `@${t.label}`);
           const inputs = Object.fromEntries(plan.tasks.map(task => [task.memberId,
             P.memberPrompt(task.task, { leaderLabel: run.leaderLabel, mode: 'parallel', others: others(task) })]));
-          settle(plan.tasks, await dispatch(plan.tasks, inputs, 0));
+          const res = await dispatch(plan.tasks, inputs, 0);
+          // 用户点了「停止本轮」：就地停下，不提示「没能交回」、不交回负责人。
+          if (res?.interrupted) { stop(id, { quiet: true }); return; }
+          settle(plan.tasks, res);
         } else {
           for (let i = 0; i < plan.tasks.length; i += 1) {
             if (!alive(id, run)) return;
@@ -262,8 +266,8 @@ function createSquadEngine(deps) {
             emit(id);
             const input = P.memberPrompt(task.task, { leaderLabel: run.leaderLabel, mode: 'sequential', index: i, total: plan.tasks.length });
             const res = await dispatch([task], { [task.memberId]: input }, i);
-            settle([task], res);
             if (res?.interrupted) { stop(id, { quiet: true }); return; }
+            settle([task], res);
           }
         }
       } catch (error) {
@@ -273,6 +277,7 @@ function createSquadEngine(deps) {
           outcomes.push({ memberId: task.memberId, label: task.label, ok: false, reason: error.message });
           const step = run.steps.find(s => s.memberId === task.memberId);
           if (step) step.state = 'failed';
+          if (alive(id, run)) note(id, run.turnNum, P.memberFailureNote(task.label, error.message));
         }
       }
       if (!alive(id, run)) return;

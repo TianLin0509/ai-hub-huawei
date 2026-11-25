@@ -398,7 +398,7 @@ test('一键全切 Lite 后助理 / 分身仍继承助理设置的模型与供�
   assert.equal(choice.inheritsAssistantChoice('坏的'), false);
   assert.match(read('core/session-manager.js'), /\['company-assistant', 'avatar-agent'\]\.includes\(opts\.purpose\) && require\('\.\/feature-agent-choice'\)\.inheritsAssistantChoice\(opts\.featureAgentChoice\)/);
   assert.match(read('core/company-assistant/service.js'), /if \(!require\('\.\.\/feature-agent-choice'\)\.inheritsAssistantChoice\(info\.featureAgentChoice\)\) return false;/);
-  assert.match(read('core/avatar/agent-session.js'), /inheritsAssistantChoice\(meta\?\.featureAgentChoice\) \|\| routes\.matchesSession\(meta, route\)/);
+  assert.match(read('core/avatar/agent-session.js'), /inheritsAssistantChoice\(meta\?\.featureAgentChoice\) \|\| routes\.matchesSession\(meta, route(?:, \{ dataDir: this\.d\.dataDir \})?\)/);
 });
 
 // ---------------------------------------------------------------- 一键预设

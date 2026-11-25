@@ -232,5 +232,10 @@
   "{0}（这里的动作设的是「提醒」，不写草稿；要草稿到「生效范围」把动作改成「起草」）": "{0} (this scope is set to Remind, so no draft is written; to get drafts, change the action to Draft under Scope)",
   "这次做页任务已取消，请重新生成": "This slide task was cancelled. Please generate it again.",
   "只有当前做页会话能提交这一轮页面内容": "Only the current slide-making session can submit content for this turn.",
-  "已停止这一问": "This question was stopped."
+  "已停止这一问": "This question was stopped.",
+  "连不上公司代理，二维码请求发不出去": "Can't reach the company proxy, so the QR code request can't go out",
+  "先确认这台电脑在公司内网（在家要先连公司 VPN），再点「重新获取二维码」；已连上仍不行，点旁边「打开代理设置」核对代理地址。": "Make sure this PC is on the company network (connect the company VPN first when at home), then click \"Get a new QR code\". If it still fails, click \"Open proxy settings\" next to this line and check the proxy address.",
+  "打开代理设置": "Open proxy settings",
+  "连不上公司代理，WeLink 登录发不出去": "Can't reach the company proxy, so WeLink sign-in can't go out",
+  "code=7 表示这台电脑连不上公司代理，和 WeLink 账号无关。先确认在公司内网（在家先连公司 VPN），再到助理页点「重新获取二维码」；仍不行，打开 Windows 代理设置核对代理地址。": "code=7 means this PC can't reach the company proxy; it is not a WeLink account problem. Make sure you are on the company network (connect the company VPN first when at home), then click \"Get a new QR code\" on the Assistant page. If it still fails, open Windows proxy settings and check the proxy address."
 }

@@ -1443,7 +1443,12 @@ function registerSessionIpc(ipcMain, deps) {
     // 自动选模型的熔断计数（core/codeagent-auto-pick.js）：自动会话启动时菜单没选成记一次失败；这个号上任何一次选成就清零。
     const breakerAccount = session.codeagentPoolAccount || 'personal';
     let breaker = null;
-    if (result.ok || automatic || pickFirst) {
+    // 菜单打开了、也读到了，只是 Hub 自己没在里面对上这一行（名字或分组对不上）：这是匹配问题，不是菜单操作失败，
+    // 不计入熔断——否则一次误判连续三问就把这个号的自动会话卡 4 小时（2026-11-25 同事反馈：助理更新后用不了）。
+    // A menu that opened and was read but where Hub could not match the row is a matching issue, not a menu failure: it does not count.
+    // menuMiss 只在菜单里有同名（或截断名像它）、却因分组消歧没选时才有；菜单里确实没有这个模型名照常计入熔断（3 次后跳过开菜单，省时间）。
+    const matchFailure = !result.ok && !!(result.menuMiss || result.requiresGroupSelection);
+    if ((result.ok || automatic || pickFirst) && !matchFailure) {
       try { breaker = require('../../core/codeagent-auto-pick').record(dataDir, breakerAccount, !!result.ok, { error: result.message || '' }); } catch { /* 计数失败不影响这一轮 */ }
     }
     if (breaker && breaker.opened) {
@@ -1456,7 +1461,11 @@ function registerSessionIpc(ipcMain, deps) {
     // 启动和原地重拉时选具体模型也一样（2026-11-08 公司实测：菜单把 deepseek-v4.1-flash-1017 显示成截断名、没选上，
     // 「问问 Agent」新建的会话首句被退回、会话页空着）：输入框能用就先用 CLI 当前模型把首句发出去，提示一句没切到哪个模型。
     const startupPick = reason === 'launch' || reason === 'relaunch';
-    let fallback = !selectedProvider && !result.requiresGroupSelection && !result.ok && (automatic || pickFirst || startupPick) && (result.inputReady || result.inputUsable);
+    // 指定了供应商的自动会话（助理、分身）启动时选不上也照常用 CLI 当前模型发出去：没人守着，宁可按当前线路作答，也不让每一问都失败（鲁棒优先）。
+    // 只限启动这一步（含选菜单第一个）：从错误卡片恢复、切换模型或线路（reason=switch）、按清单修复（model-config-fix）选不上时
+    // 不能当成功，否则会话还是原模型却报切换成功、没确认的模型被记成用户的选择。
+    // Fallback is limited to launch/relaunch and first-row picks; a failed switch, recovery or config fix is never reported as success.
+    let fallback = (automatic && startupPick || !selectedProvider && !result.requiresGroupSelection) && !result.ok && (startupPick || pickFirst) && (result.inputReady || result.inputUsable);
     let fallbackNoticed = false;
     if (fallback && session.fixedModel) {
       const pin = require('../../core/session-model-pin');
@@ -1466,12 +1475,20 @@ function registerSessionIpc(ipcMain, deps) {
           || (!codeagentModels.modelFamily(session.fixedModel) && String(actual).toLowerCase() !== String(session.fixedModel).toLowerCase())
           || pin.unavailablePolicy(require('../../core/hub-config').getConfig().sessionModelUnavailablePolicy) === 'stop-and-ask'
           || !codeagentModels.isSafeModelId(actual) || known.authoritative && !known.models.some(id => id.toLowerCase() === actual.toLowerCase())) {
-        fallback = false;
-        sessionManager.updateSessionMeta(sessionId, { codeagentModelPick: true, modelConfirmationRequired: true, modelUnavailableReason: '启动模型菜单未能选择原模型' });
-        result = { ...result, message: `原模型 ${session.fixedModel} 不可用，请手动选择可用模型后继续。` };
-        sendToRenderer('session-notice', { sessionId, level: 'error', persistent: true, modelUnavailable: true,
-          originalModel: session.fixedModel, suggestedModel: known.models.find(id => id.toLowerCase() === String(actual).toLowerCase()) || known.models[0] || '',
-          availableModels: known.models, message: result.message });
+        if (automatic) {
+          // 无人值守的自动会话（助理、分身等）：不停下来等人确认，照常按 CLI 当前模型发；记下已回退，
+          // 之后发消息前不再核固定模型、不再触发选模型（core/session-manager.js ensureSessionModelReady）。2026-11-25 审查 P0。
+          // Automatic sessions keep the fallback instead of waiting for a human, and later sends skip the model re-check.
+          sessionManager.updateSessionMeta(sessionId, { codeagentModelPick: false, codeagentPickFallback: true });
+          codeagentModels.appendModelLog(dataDir, { event: 'pick-fallback-kept', session: String(sessionId).slice(0, 8), want: session.fixedModel, actual: actual || '(空)' });
+        } else {
+          fallback = false;
+          sessionManager.updateSessionMeta(sessionId, { codeagentModelPick: true, modelConfirmationRequired: true, modelUnavailableReason: '启动模型菜单未能选择原模型' });
+          result = { ...result, message: `原模型 ${session.fixedModel} 不可用，请手动选择可用模型后继续。` };
+          sendToRenderer('session-notice', { sessionId, level: 'error', persistent: true, modelUnavailable: true,
+            originalModel: session.fixedModel, suggestedModel: known.models.find(id => id.toLowerCase() === String(actual).toLowerCase()) || known.models[0] || '',
+            availableModels: known.models, message: result.message });
+        }
       } else {
         const change = { from: session.fixedModel, to: actual, reason: '启动时的模型菜单未能选中原模型，改用账号当前模型', at: Date.now() };
         const file = require('path').join(dataDir, 'codeagent-launch', `${String(sessionId).replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
@@ -1495,7 +1512,7 @@ function registerSessionIpc(ipcMain, deps) {
         want: result.defaults.before || '(空)', now: result.defaults.after || '(空)', reason });
     }
     codeagentModels.appendModelLog(dataDir, { event: 'pick', session: String(sessionId).slice(0, 8), account: account.replace(/\s+/g, ''), reason, model: picked || modelId,
-      ok: result.ok, mode: result.mode, confirmed: result.confirmed, restored: (result.restored || []).join('+'), menu: (result.menu || []).join('+'), error: result.ok ? '' : result.technicalReason || result.message,
+      ok: result.ok, mode: result.mode, confirmed: result.confirmed, restored: (result.restored || []).join('+'), menu: (result.menu || []).join('+'), error: result.ok ? '' : result.technicalReason || result.message, ...(selectedProvider ? { provider: selectedProvider } : {}), ...(matchFailure ? { breaker: 'not-counted' } : {}),
       fallback: fallback ? 'send-with-cli-model' : '', failures: breaker && !result.ok ? breaker.failures : '' });
     // 菜单上方的用量表（Credit 三档 + 每个模型的 Token 用量）：按会话用的号记快照，额度条和模型下拉显示（core/codeagent-usage-menu.js）。
     if (result.usage) recordCodeAgentUsage(session.codeagentPoolAccount || 'personal', result.usage, { label: session.codeagentPoolAccount ? (session.codeagentPoolLabel || '') : '个人账号', source: `picker:${reason}` });
@@ -1516,7 +1533,8 @@ function registerSessionIpc(ipcMain, deps) {
       catch (error) { console.warn('[codeagent] 记住这次选的模型失败：' + error.message); }
     }
     if (result.ok) {
-      const updated = sessionManager.updateSessionMeta(sessionId, { ...(result.provider ? { codeagentModelProvider: result.provider } : {}), currentModel: { id: picked, displayName: codeagentModels.modelLabel(picked) }, codeagentRequestedModel: undefined, codeagentModelPick: false,
+      // 真选上了模型：熔断期留下的暂缓线路、启动回退标记都作废（core/codeagent-assistant-route.js matchesSession）。
+      const updated = sessionManager.updateSessionMeta(sessionId, { ...(result.provider ? { codeagentModelProvider: result.provider } : {}), currentModel: { id: picked, displayName: codeagentModels.modelLabel(picked) }, codeagentRequestedModel: undefined, codeagentRouteDeferred: undefined, codeagentPickFallback: undefined, codeagentModelPick: false,
         // 用户明确选中过的模型：CLI 自己退出、Hub 原地重拉时据此再选一次（core/session-manager.js 的 relaunch）。
         codeagentUserModel: picked, fixedModel: picked, ...(reason === 'switch' ? { modelConfirmationRequired: false, modelUnavailableReason: '' } : {}), modelPinSource: reason === 'switch' ? 'user' : session.modelPinSource || 'created',
         ...(reason === 'switch' ? { modelChange: null } : {}) });
@@ -1573,7 +1591,7 @@ function registerSessionIpc(ipcMain, deps) {
     }
     if (session.fixedModel) {
       const change = { from: previousModel, to: result.model || target, reason: '原模型请求被拒绝，已按可用模型清单修复', at: Date.now() };
-      sessionManager.updateSessionMeta(sessionId, { fixedModel: change.to, modelPinSource: 'auto-switch', modelChange: change,
+      sessionManager.updateSessionMeta(sessionId, { fixedModel: change.to, modelPinSource: 'auto-switch', modelChange: change, codeagentRouteDeferred: undefined,
         currentModel: { id: change.to, displayName: codeagentModels.modelLabel(change.to) }, codeagentModelPick: false });
       codeagentModels.appendModelLog(dataDir, { event: 'model-auto-switch', session: sessionId, ...change });
       sendToRenderer('session-notice', { sessionId, level: 'warning', persistent: true, message: pin.modelChangeMessage(change) });
@@ -1654,7 +1672,8 @@ function registerSessionIpc(ipcMain, deps) {
       } else if (result.fallback) {
         // 自动会话没人看，回退只记日志（runCodeAgentPick 的 pick 日志 fallback=send-with-cli-model）；用户会话提示一句。
         // 同一次回退只发一条：菜单里没有可替代的同版本模型时用统一对照的说明（core/model-name-match.js fallbackNote）。
-        if ((!session || !isAutomaticCodeAgent(session)) && !result.fallbackNoticed) {
+        // 指定了供应商的自动会话（助理、分身）没切到也说一行：用户在助理里选过线路，需要知道这次不是按它作答。
+        if ((!session || !isAutomaticCodeAgent(session) || session.codeagentModelProvider) && !result.fallbackNoticed) {
           sendToRenderer('session-notice', { sessionId, level: 'warning',
             message: result.nameFallback ? `${result.nameFallback}，第一条消息已照常发出。`
               : `没切到 ${modelId}，先用 CodeAgent 当前模型继续，第一条消息已照常发出（原因：${result.technicalReason || result.message || '未知'}）；需要换的话在终端里 /model 选一次。` });
@@ -1811,7 +1830,8 @@ function registerSessionIpc(ipcMain, deps) {
       result = settingsOnly({ message: error.message });
       codeagentPicker.resetFailure(sessionId);
     }
-    if (!result || !result.ok) {
+    // result.fallback：菜单没选上、只是按当前模型照常可用——不算切成了（同 fixCodeAgentModel）。
+    if (!result || !result.ok || result.fallback) {
       return { ok: false, error: 'pick-failed', message: (result && result.message) || 'CodeAgent 没能切换模型' };
     }
     // 菜单里没有所选模型、按统一对照改选了同版本的一个（core/model-name-match.js）：之后都按实际选中的记。

@@ -93,7 +93,8 @@ test('已知问题表：代码里的真实文案能命中对应条目', () => {
   assert.equal(id('hub-alert', '共享端口已被其他程序占用；关闭共享后换一个端口'), 'port-in-use');
   assert.equal(id('model-service', 'API Error token消耗过快， 已达到4亿上限'), 'codeagent-quota');
   assert.equal(id('session-create', '所选账号当前不可用，请到「账号」页登录或恢复使用后再试'), 'account-unavailable');
-  assert.ok(KNOWN_ISSUES.length >= 8 && KNOWN_ISSUES.length <= 16);
+  assert.equal(id('welink', '连不上公司代理，二维码请求发不出去 · HTTP request failed: Could not connect to server (code=7) | detail: Failed to connect to proxy.corp.example port 8080'), 'welink-proxy-unreachable');
+  assert.ok(KNOWN_ISSUES.length >= 8 && KNOWN_ISSUES.length <= 18);
 });
 
 test('已知问题表：功能区不符不套用；端口号能从报错里取出来；认不出返回 null', () => {

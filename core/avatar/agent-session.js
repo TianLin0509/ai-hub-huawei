@@ -28,9 +28,9 @@ class AgentSessions {
   async ensure(av, session, cwd) {
     const meta = session?.id && this.d.getSession(session.id);
     const routes = require('../codeagent-assistant-route');
-    const route = meta && this.d.dataDir ? routes.choose(this.d.dataDir, meta.codeagentPoolAccount || 'personal', meta.currentModel?.id || meta.fixedModel || '',
+    const route = meta && this.d.dataDir ? routes.choose(this.d.dataDir, meta.codeagentPoolAccount || 'personal', routes.deferredModel(meta) || meta.currentModel?.id || meta.fixedModel || '',
       { configDir: meta.codeagentConfigDir, explicitModel: av.backend?.model || '' }) : null;
-    const sameRoute = !require('../feature-agent-choice').stale(this.d.dataDir, 'avatar', meta) && (!require('../feature-agent-choice').inheritsAssistantChoice(meta?.featureAgentChoice) || routes.matchesSession(meta, route));
+    const sameRoute = !require('../feature-agent-choice').stale(this.d.dataDir, 'avatar', meta) && (!require('../feature-agent-choice').inheritsAssistantChoice(meta?.featureAgentChoice) || routes.matchesSession(meta, route, { dataDir: this.d.dataDir }));
     if (session?.id && this.alive(session.id) && sameRoute && (session.questions || 0) < MAX_QUESTIONS) return session;
     if (this.starting.has(av.id)) return this.starting.get(av.id);
     const work = (async () => {

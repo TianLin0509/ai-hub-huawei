@@ -1230,6 +1230,24 @@ test('带前缀的滚动清单有两个同名项时不按回车', async t => {
   assert.equal(f.writes.some(([key]) => key === '\r'), false);
 });
 
+// 2026-11-25 公司 CodeAgent 换模型名和分组后：记下的旧线路对不上任何分组，名字在菜单里只有一行时翻完整个列表再退回去选它；
+// 同名两行仍不猜（鲁棒优先；线路只用来区分同名的几行）。
+test('旧线路对不上任何分组：滚动清单里同名只有一行，翻完退回去选它', async t => {
+  const f = scrollingPicker(t);
+  const result = await f.run({ provider: 'old-line', providerLabel: '旧线路' });
+  assert.equal(result.ok, true, result.technicalReason || result.message);
+  assert.equal(f.selected(), SCROLL_TARGET);
+  assert.equal(result.provider, 'old-line');
+});
+
+test('旧线路对不上任何分组：滚动清单里同名两行时不按回车', async t => {
+  const f = scrollingPicker(t, { ids: ['GLM-5.2-WX-Auto', SCROLL_TARGET, 'MiniMax-M2.7', SCROLL_TARGET] });
+  const result = await f.run({ provider: 'old-line', providerLabel: '旧线路' });
+  assert.equal(result.ok, false);
+  assert.equal(f.selected(), null);
+  assert.equal(f.writes.some(([key]) => key === '\r'), false);
+});
+
 test('one visible model can be searched without writing a partial full-list cache', async t => {
   const f = scrollingPicker(t, { searchWorks: true });
   models.recordMenu(f.dir, ['GLM-5.2-WX-Auto', SCROLL_TARGET], { complete: true });

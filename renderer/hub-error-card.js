@@ -466,6 +466,7 @@ async function runKnownAction(act, button, { doc, win, ipcRenderer, closeOverlay
       setTimeout(() => button.closest?.('#hub-err-toast')?.remove(), 600);
       return done(label, 0);
     }
+    if (act === 'known:open-proxy-settings') { await require('electron').shell.openExternal('ms-settings:network-proxy'); return done(label, 0); }
     if (act === 'known:open-accounts') { closeOverlays(); doc.getElementById('btn-rail-accounts')?.click(); return done(label, 0); }
     if (act === 'known:welink-login') {
       closeOverlays();

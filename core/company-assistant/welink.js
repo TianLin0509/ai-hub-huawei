@@ -381,11 +381,16 @@ const LOGIN_CAUSES = Object.freeze([
     title: '这次扫码的授权已失效', next: '点「重新获取二维码」再扫一次，扫完记得在手机上点确认。' },
   { id: 'timeout', re: /QR\s+code\s+(?:scan\s+|login\s+)?time[d\s-]*out/i,
     title: '二维码超时了，没等到扫码', next: '点「重新获取二维码」，出码后尽快用手机 WeLink 扫。' },
+  // 连不上公司代理（2026-11-25 反馈，v5.6.103）：「HTTP request failed: Could not connect to server (code=7) | detail: Failed to connect to proxy.corp.example port 8080」。
+  // code=7 是 curl 的「连不上主机」；连的是代理时，问题在这台电脑到公司代理这一段（不在公司内网、VPN 没连、代理地址不对），不在 WeLink。
+  // 排在「拿不到二维码」「网络断了」前面：同一行里两者都有时，按更具体的代理说。Telemetry 上报行已在 dropNoise 去掉，不会误判。
+  { id: 'proxy', re: /Failed\s+to\s+connect\s+to\s+\S*proxy\S*|Could(?:\s+not|n'?t)\s+connect\s+to\s+(?:server|proxy)[^\r\n]*proxy|\bcode\s*=\s*7\b[^\r\n]*proxy|proxy[^\r\n]*\bcode\s*=\s*7\b/i,
+    title: '连不上公司代理，二维码请求发不出去', next: '先确认这台电脑在公司内网（在家要先连公司 VPN），再点「重新获取二维码」；已连上仍不行，点旁边「打开代理设置」核对代理地址。', action: 'login', proxySettings: true },
   { id: 'qr-request', re: /QR\s+code\s+request\s+failed|Failed\s+to\s+parse\s+QR\s+code\s+response|Invalid\s+QR\s+code\s+response/i,
     title: '没能从 WeLink 服务器拿到二维码', next: '多半是这台电脑没连上公司网络，或请求被公司代理拦了。确认已连公司网络后点「重新获取二维码」；仍不行点「一键反馈」。' },
   { id: 'agent', re: /Agent\s+login\s+failed|授权码登录失败/i,
     title: 'WeLink 服务器没接受这次登录', next: '点「重新获取二维码」再扫一次。连续不行时，常见原因是 WeLink 正登录在另一台电脑上，或账号还没开通 WeLink CLI；可点「一键反馈」带上日志。' },
-  { id: 'network', re: /Polling\s+error|Timeout\s+was\s+reached|Connection\s+timeout|Failed\s+to\s+resolve|Could\s+not\s+resolve|ECONNREFUSED|ETIMEDOUT|ECONNRESET/i,
+  { id: 'network', re: /Polling\s+error|Could\s+not\s+connect\s+to\s+server|\bcode\s*=\s*7\b|Timeout\s+was\s+reached|Connection\s+timeout|Failed\s+to\s+resolve|Could\s+not\s+resolve|ECONNREFUSED|ETIMEDOUT|ECONNRESET/i,
     title: '登录途中网络断了', next: '确认这台电脑连着公司网络，再点「重新获取二维码」。' },
 ]);
 // 登录原文要显示在界面、带进一键反馈：先抹掉令牌、签名、授权头和长串编码（Codex 复审：JSON 里带引号的字段、Bearer 也要抹）。
@@ -401,7 +406,7 @@ function loginDiagnosis(text) {
   const lines = dropNoise(text).split(/\r\n|\n|\r/).map(l => l.trim()).filter(Boolean);
   for (const c of LOGIN_CAUSES) {
     const line = lines.filter(l => c.re.test(l)).pop();
-    if (line) return { id: c.id, title: c.title, next: c.next, action: c.action || 'login', line: scrubLine(line).slice(0, 200) };
+    if (line) return { id: c.id, title: c.title, next: c.next, action: c.action || 'login', ...(c.proxySettings ? { proxySettings: true } : {}), line: scrubLine(line).slice(0, 200) };
   }
   return null;
 }

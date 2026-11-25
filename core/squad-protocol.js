@@ -123,13 +123,53 @@ function handbackPrompt(outcomes, { round = 1, maxRounds = DEFAULT_MAX_ROUNDS } 
   for (const item of outcomes) {
     lines.push(item.ok
       ? `- @${item.memberId} ${item.label}：已交回（回答见上方群聊记录）`
-      : `- @${item.memberId} ${item.label}：没有完成（${item.reason || '未拿到回答'}）`);
+      : `- @${item.memberId} ${item.label}：没有完成（${reasonText(item.reason)}）`);
   }
   lines.push('');
   lines.push(atLimit
     ? `已连续派工 ${maxRounds} 轮，到达本次上限，这次不能再派工。请直接给用户汇报：完成了什么、还差什么、建议下一步；用户回话后可以继续。`
     : '请验收：要返工或做下一步，就再写一个派工块（格式同前）；已经完成，就不写派工块，直接给用户最终答复。');
   return lines.join('\n');
+}
+
+// 成员没交回时的原因：派发层给的是内部代码，小队提示与交回负责人时换成一句人话（R38）。
+const REASON_TEXT = {
+  hard_timeout: '长时间没收到它答完的信号',
+  response_timeout: '长时间没收到它答完的信号',
+  cli_not_ready: '它的 CLI 还没启动好，任务没送到',
+  session_not_ready: '它的会话还没就绪，任务没送到',
+  submission_unknown: '没能确认它收到了任务',
+  send_exception: '任务发送出错',
+  send_failed: '任务发送出错',
+  superseded: '被新的一轮派发打断了',
+  provider_aborted: '它的这一轮被中断了',
+  provider_error: '它这一轮异常结束了',
+  runtime_exited: '它的 CLI 已退出',
+  network_interrupted: '网络连接中断',
+  provider_unavailable: '模型服务暂时不可用',
+  rate_limited: '请求触发限流',
+  quota_exceeded: '额度已用尽',
+  token_plan_quota: '套餐额度已用完，等重置',
+  token_plan_quota_rerouted: '套餐额度已用完，已改走 DeepSeek API',
+  auth_required: '登录或授权已失效',
+  context_limit: '上下文长度超限',
+  trusted_repo_required: '当前目录不在公司可信仓，被风控拦下',
+  stuck: '任务可能没送到，没收到它的确认',
+};
+// 派发层的原因可能是内部代码（response_timeout 等）或带本地路径的异常原文：
+// 认得的代码换成人话；不认得的代码、带路径的原文一律换成通用说法，不把英文代码和路径露给用户。
+function reasonText(reason) {
+  const raw = String(reason || '').trim();
+  if (!raw) return '没有收到回答';
+  if (REASON_TEXT[raw]) return REASON_TEXT[raw];
+  if (/^[A-Za-z][A-Za-z0-9_.:-]*$/.test(raw)) return '它这一轮异常结束了';
+  if (/[A-Za-z]:[\\/]|(?:^|\s)\/[^\s]+\/|\\\\/.test(raw) || !/[一-鿿]/.test(raw)) return '任务派发出错';
+  return raw.slice(0, 120);
+}
+
+// 成员没交回时写进群里的一行提示：写明是谁、什么原因，不让失败静默吞掉。
+function memberFailureNote(label, reason) {
+  return `小队成员 @${label} 的回答没能交回负责人：${reasonText(reason)}。`;
 }
 
 function dispatchNote(task) {
@@ -147,4 +187,6 @@ module.exports = {
   memberPrompt,
   handbackPrompt,
   dispatchNote,
+  reasonText,
+  memberFailureNote,
 };

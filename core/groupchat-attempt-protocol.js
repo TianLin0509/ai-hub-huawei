@@ -39,6 +39,11 @@ const CODEX_FINAL_SOURCES = new Set([
   'codex_auto_extract_final_answer',
 ]);
 
+// ACP 类 kind（deepseek-acp / qwen / glm / pi）的权威结束信号。原生 ACP 进程报 'acp'；
+// 同一 kind 跑在终端里时由 CLI 自己的回合事件报 'provider-cli'（DSH、GLM、pi）或 'qwen-cli'（千问）。
+// 三者都是 CLI 自己声明的回合结束，不是从屏幕猜的（R38：小队里 DSH 成员的回答因为只认 'acp' 被整条丢掉）。
+const ACP_FINAL_SOURCES = new Set(['acp', 'provider-cli', 'qwen-cli']);
+
 function cleanPart(value, fallback) {
   const text = String(value == null ? '' : value)
     .trim()
@@ -97,7 +102,7 @@ function normalizeEventTime(event = {}) {
 function isAuthoritativeFinalSignal(kind, signalSource) {
   const family = normalizeProviderFamily(kind);
   const source = String(signalSource || '').trim();
-  if (require('./acp-profiles').isAcpKind(kind)) return source === 'acp';
+  if (require('./acp-profiles').isAcpKind(kind)) return ACP_FINAL_SOURCES.has(source);
   if (family === 'claude') return CLAUDE_FINAL_SOURCES.has(source);
   if (family === 'codex') return CODEX_FINAL_SOURCES.has(source);
   // Gemini/Kimi taps emit turn-complete only after their provider-specific
@@ -271,6 +276,7 @@ function attemptEventMatches(attempt, event = {}, options = {}) {
 }
 
 module.exports = {
+  ACP_FINAL_SOURCES,
   ATTEMPT_HANDED_OFF,
   ATTEMPT_PREPARED,
   ATTEMPT_SUBMITTING,
